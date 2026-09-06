@@ -309,7 +309,8 @@ func TestUCICodebaseGraphAllActionsForwardOnlyAuthorizedTargets(t *testing.T) {
 			arguments["project"] = uciCodeIntelCompatibilityProject
 
 			response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_graph", arguments)
-			text, _ := requireUCICodeGraphResponse(t, response, fixture, fixture.refA, uci.QueryStatusOK)
+			text, payload := requireUCICodeGraphResponse(t, response, fixture, fixture.refA, uci.QueryStatusOK)
+			expected.Exposure = payload.Exposure
 			expectedJSON, err := json.Marshal(expected)
 			require.NoError(t, err)
 			assert.JSONEq(t, string(expectedJSON), text, "the adapter must release the application-owned graph response unchanged")
@@ -790,6 +791,18 @@ func TestUCICodebaseGraphDeniesForeignRevokedPrivateAndRetiredContextsBeforeAppl
 		require.Len(t, fixture.application.aliasCalls, 1)
 		assert.Empty(t, fixture.application.graphCalls(), "project evidence cannot select or widen a graph context")
 	})
+}
+
+func TestUCICodebaseGraphCheckoutWithoutViewFailsClosedWithoutExposure(t *testing.T) {
+	fixture := newUCICodeGraphFixture(t)
+	binding := uciCodeIntelCheckoutBinding(fixture.refA, nil)
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = binding
+	checkoutHandle := fixture.selectCheckout(t, fixture.clientA, binding)
+
+	response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_graph", uciCodeGraphArguments(checkoutHandle, uci.GraphActionExplain, fixture.refA))
+	requireUCICodeGraphSuppressed(t, response, fixture, uci.QueryStatusContextRequired, uci.QueryErrorContextRequired)
+	assert.Empty(t, fixture.application.graphCalls())
+	assert.Zero(t, fixture.exposureStore.exposureCount())
 }
 
 func TestUCICodebaseGraphRejectsUnknownLocatorAndEditArgumentsBeforeApplication(t *testing.T) {

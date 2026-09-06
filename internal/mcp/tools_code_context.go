@@ -26,14 +26,15 @@ const (
 // handle bytes and their bounded per-client registry.
 type CodebaseContextApplication interface {
 	Resolve(context.Context, uci.ResolveContextInput) (uci.AuthorizedContext, error)
+	Authorize(context.Context, uci.ResolveContextInput) (uci.AuthorizedContext, error)
 	List(context.Context, uci.ResolveContextInput) ([]uci.ContextRef, error)
 	Project(context.Context, uci.ContextRef) (map[string]string, error)
 }
 
-// codebaseContextIndexApplication is an optional capability needed only by the
-// registered-checkout bootstrap path. It is intentionally separate from the
-// published-View surface so query/read/graph applications do not gain a
-// no-View contract by accident.
+// codebaseContextIndexApplication authorizes registered checkout selectors for
+// selection and explicit checkout-handle use. It stays separate from the
+// published-View capability so no-View bootstrap selection never grants query,
+// read, or graph access.
 type codebaseContextIndexApplication interface {
 	ResolveIndexBinding(context.Context, uci.ResolveIndexBindingInput) (uci.AuthorizedIndexBinding, error)
 	AuthorizeIndexBinding(context.Context, uci.ResolveIndexBindingInput) (uci.AuthorizedIndexBinding, error)
@@ -63,6 +64,15 @@ func (application *UCIContextApplication) Resolve(ctx context.Context, input uci
 		return uci.AuthorizedContext{}, errors.New("UCI context application is not configured")
 	}
 	return application.resolver.Resolve(ctx, input)
+}
+
+// Authorize validates one explicit ContextRef without selecting it as the
+// caller's default context.
+func (application *UCIContextApplication) Authorize(ctx context.Context, input uci.ResolveContextInput) (uci.AuthorizedContext, error) {
+	if application == nil || application.resolver == nil {
+		return uci.AuthorizedContext{}, errors.New("UCI context application is not configured")
+	}
+	return application.resolver.Authorize(ctx, input)
 }
 
 func (application *UCIContextApplication) List(ctx context.Context, input uci.ResolveContextInput) ([]uci.ContextRef, error) {
@@ -291,7 +301,7 @@ func (s *Server) handleCodebaseContext(ctx context.Context, raw json.RawMessage)
 		if indexApplication, ok := application.(codebaseContextIndexApplication); ok {
 			if selector, selected := indexApplication.BoundSelector(input.ClientSessionID); selected {
 				if _, checkout := selector.Checkout(); checkout {
-					binding, err := indexApplication.ResolveIndexBinding(ctx, codebaseContextIndexInput(input, nil))
+					binding, err := indexApplication.ResolveIndexBinding(ctx, codebaseContextIndexInput(input, &selector))
 					if err != nil {
 						return "", codebaseContextApplicationError(err)
 					}
@@ -613,6 +623,91 @@ func codebaseContextCallerInput(ctx context.Context) (uci.ResolveContextInput, e
 	}, nil
 }
 
+// resolveCodebaseAuthorizedView resolves the current default only when a
+// handle is omitted. Explicit handles are authorization inputs, never selecting
+// inputs: a pinned handle authorizes its exact ContextRef, while a checkout
+// handle reloads its exact checkout/profile binding and authorizes that binding's
+// current ContextRef for this request.
+func (s *Server) resolveCodebaseAuthorizedView(ctx context.Context, contextHandle *string) (CodebaseContextApplication, uci.AuthorizedContext, uint64, uci.ContextErrorCode) {
+	input, err := codebaseContextCallerInput(ctx)
+	if err != nil {
+		return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
+	}
+
+	if contextHandle == nil {
+		application, epoch, found := s.codebaseContextApplicationSnapshot()
+		if !found {
+			return nil, uci.AuthorizedContext{}, 0, uci.ContextRequired
+		}
+		authorized, err := application.Resolve(ctx, input)
+		if err != nil {
+			return nil, uci.AuthorizedContext{}, 0, codebaseContextFailureCode(err)
+		}
+		if !s.codebaseContextEpochCurrent(epoch) {
+			return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
+		}
+		return application, authorized, epoch, ""
+	}
+
+	application, epoch, selector, found := s.codebaseContextSelectorForHandle(input.ClientSessionID, *contextHandle)
+	if !found {
+		return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
+	}
+	authorized, binding, contextCode := authorizeCodebaseExplicitSelector(ctx, application, input, selector)
+	if contextCode != "" {
+		if binding != nil && !s.codebaseContextHandleStillCurrent(input.ClientSessionID, *contextHandle, epoch, selector, binding) {
+			return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
+		}
+		return nil, uci.AuthorizedContext{}, 0, contextCode
+	}
+	if !s.codebaseContextHandleStillCurrent(input.ClientSessionID, *contextHandle, epoch, selector, binding) {
+		return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
+	}
+	return application, authorized, epoch, ""
+}
+
+func authorizeCodebaseExplicitSelector(ctx context.Context, application CodebaseContextApplication, input uci.ResolveContextInput, selector uci.IndexBindingSelector) (uci.AuthorizedContext, *uci.IndexBinding, uci.ContextErrorCode) {
+	if application == nil || selector.Validate() != nil {
+		return uci.AuthorizedContext{}, nil, uci.ContextMismatch
+	}
+
+	var (
+		ref     uci.ContextRef
+		binding *uci.IndexBinding
+	)
+	if pinned, ok := selector.Context(); ok {
+		ref = pinned
+	} else {
+		indexApplication, ok := application.(codebaseContextIndexApplication)
+		if !ok {
+			return uci.AuthorizedContext{}, nil, uci.ContextMismatch
+		}
+		authorizedBinding, err := indexApplication.AuthorizeIndexBinding(ctx, codebaseContextIndexInput(input, &selector))
+		if err != nil {
+			return uci.AuthorizedContext{}, nil, codebaseContextFailureCode(err)
+		}
+		current := authorizedBinding.Binding()
+		if !codebaseContextBindingMatchesSelector(current, selector) {
+			return uci.AuthorizedContext{}, nil, uci.ContextMismatch
+		}
+		binding = &current
+		if current.Context == nil {
+			return uci.AuthorizedContext{}, binding, uci.ContextRequired
+		}
+		ref = cloneCodebaseContextRef(*current.Context)
+	}
+
+	input.Ref = &ref
+	authorized, err := application.Authorize(ctx, input)
+	if err != nil {
+		return uci.AuthorizedContext{}, binding, codebaseContextFailureCode(err)
+	}
+	if !codebaseContextRefsEqual(authorized.Ref(), ref) {
+		return uci.AuthorizedContext{}, binding, uci.ContextMismatch
+	}
+	return authorized, binding, ""
+}
+
 type uciRequestIDContextKey struct{}
 
 func contextWithUCIRequestID(ctx context.Context, requestID any) context.Context {
@@ -737,22 +832,6 @@ func (s *Server) codebaseContextRegistryEpochCurrent(epoch uint64) bool {
 	s.codebaseContextMu.Lock()
 	defer s.codebaseContextMu.Unlock()
 	return s.codebaseContextEpoch == epoch
-}
-
-// codebaseContextRefForHandle preserves the existing View-only capability for
-// MCP query/read/graph helpers. Checkout-following handles have no synthetic
-// View; those tools stay unavailable until their own applications explicitly
-// support the no-View transition.
-func (s *Server) codebaseContextRefForHandle(clientSessionID, handle string) (CodebaseContextApplication, uint64, uci.ContextRef, bool) {
-	application, epoch, selector, found := s.codebaseContextSelectorForHandle(clientSessionID, handle)
-	if !found {
-		return nil, 0, uci.ContextRef{}, false
-	}
-	ref, pinned := selector.Context()
-	if !pinned {
-		return nil, 0, uci.ContextRef{}, false
-	}
-	return application, epoch, ref, true
 }
 
 func (s *Server) codebaseContextSelectorForHandle(clientSessionID, handle string) (CodebaseContextApplication, uint64, uci.IndexBindingSelector, bool) {
@@ -890,13 +969,21 @@ func (s *Server) codebaseContextHandleSelector(clientSessionID, handle string) (
 }
 
 func (s *Server) codebaseContextHandleCurrent(clientSessionID, handle string, epoch uint64, selector uci.IndexBindingSelector, binding uci.IndexBinding) bool {
-	if !codebaseContextBindingMatchesSelector(binding, selector) {
+	return s.codebaseContextHandleStillCurrent(clientSessionID, handle, epoch, selector, &binding)
+}
+
+func (s *Server) codebaseContextHandleStillCurrent(clientSessionID, handle string, epoch uint64, selector uci.IndexBindingSelector, binding *uci.IndexBinding) bool {
+	if selector.Validate() != nil {
 		return false
 	}
-	key, ok := codebaseContextSelectorKeyFor(selector)
-	if !ok {
+	if binding != nil {
+		if !codebaseContextBindingMatchesSelector(*binding, selector) {
+			return false
+		}
+	} else if _, pinned := selector.Context(); !pinned {
 		return false
 	}
+
 	s.codebaseContextMu.Lock()
 	defer s.codebaseContextMu.Unlock()
 	if s.codebaseContextEpoch != epoch {
@@ -907,11 +994,19 @@ func (s *Server) codebaseContextHandleCurrent(clientSessionID, handle string, ep
 		return false
 	}
 	entry, found := client.byHandle[handle]
-	if !found || entry.key != key {
+	if !found || !codebaseContextSelectorsEqual(entry.selector, selector) {
 		return false
 	}
-	s.codebaseContextSetEntryScope(client, handle, binding)
+	if binding != nil {
+		s.codebaseContextSetEntryScope(client, handle, *binding)
+	}
 	return true
+}
+
+func codebaseContextSelectorsEqual(left, right uci.IndexBindingSelector) bool {
+	leftKey, leftOK := codebaseContextSelectorKeyFor(left)
+	rightKey, rightOK := codebaseContextSelectorKeyFor(right)
+	return leftOK && rightOK && leftKey == rightKey
 }
 
 func (s *Server) codebaseContextScopeAdmitted(clientSessionID string, scope codebaseContextScopeKey, epoch uint64) bool {

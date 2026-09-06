@@ -310,6 +310,19 @@ func TestUCICodebaseReadDeniesForeignRevokedMismatchedAndPrivateContextsBeforeAp
 	})
 }
 
+func TestUCICodebaseReadCheckoutWithoutViewFailsClosedWithoutExposure(t *testing.T) {
+	fixture := newUCICodeReadFixture(t)
+	artifact := uciCodeReadArtifactFor(fixture.refA, uciCodeReadTestStoredArtifact, "fixture.StoredVersion")
+	binding := uciCodeIntelCheckoutBinding(fixture.refA, nil)
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = binding
+	checkoutHandle := fixture.selectCheckout(t, fixture.clientA, binding)
+
+	response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_read", uciCodeReadArguments(checkoutHandle, artifact))
+	requireUCICodeReadSuppressed(t, response, uci.QueryStatusContextRequired, uci.QueryErrorContextRequired, fixture, artifact.Excerpt)
+	assert.Empty(t, fixture.application.readCalls)
+	assert.Zero(t, fixture.exposureStore.exposureCount())
+}
+
 func TestUCICodebaseReadRejectsInvalidBoundsAndUnknownArgumentsBeforeApplication(t *testing.T) {
 	for _, test := range []struct {
 		name   string

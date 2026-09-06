@@ -47,7 +47,7 @@ func TestComposeUCIContextEnabledRejectsMissingDependencies(t *testing.T) {
 	require.False(t, workerUCIHasMCPTool(mcpServer, "codebase_context"))
 }
 
-func TestComposeUCIContextEnabledInstallsOnlyContextAndIndexCapabilities(t *testing.T) {
+func TestComposeUCIContextEnabledInstallsCompositeViewCapabilities(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
 	mcpServer := mcp.NewServer(mcp.ServerOptions{Version: "uci-context-enabled"})
 
@@ -57,9 +57,8 @@ func TestComposeUCIContextEnabledInstallsOnlyContextAndIndexCapabilities(t *test
 
 	require.NoError(t, err)
 	require.NotNil(t, composition)
-	require.True(t, workerUCIHasMCPTool(mcpServer, "codebase_context"))
-	for _, name := range []string{"codebase_search", "codebase_read", "codebase_graph", "codebase_status"} {
-		require.Falsef(t, workerUCIHasMCPTool(mcpServer, name), "context-only composition advertised %q", name)
+	for _, name := range []string{"codebase_context", "codebase_search", "codebase_read", "codebase_graph"} {
+		require.Truef(t, workerUCIHasMCPTool(mcpServer, name), "composite composition did not advertise %q", name)
 	}
 
 	query, err := composition.runtime.QueryCode(context.Background(), uci.AuthorizedContext{}, nil)

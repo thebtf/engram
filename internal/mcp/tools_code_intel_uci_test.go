@@ -218,6 +218,110 @@ func TestUCICodeIntelCompatibilitySearchAndStatusKeepClientContextsDistinct(t *t
 	assert.NotEqual(t, reusedA.Contexts, reusedB.Contexts)
 }
 
+func TestUCICodeIntelExplicitHandlesAuthorizeWithoutSelectingDefaults(t *testing.T) {
+	t.Run("pinned handle preserves checkout default", func(t *testing.T) {
+		fixture := newUCICodeIntelCompatibilityFixture(t)
+		pinnedHandle := fixture.selectContext(t, fixture.clientA, fixture.refA)
+		binding := uciCodeIntelCheckoutBinding(fixture.refA, &fixture.refA)
+		fixture.catalog.bindings[fixture.refA.CheckoutID] = binding
+		fixture.selectCheckout(t, fixture.clientA, binding)
+
+		resolvesBefore := len(fixture.application.resolveInputs)
+		authorizesBefore := len(fixture.application.authorizeInputs)
+		response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", uciCodeIntelCompatibilitySearchArguments(pinnedHandle, uciCodeIntelCompatibilityProject, 10))
+		requireUCICodeIntelQueryResponse(t, response, fixture.refA, uciCodeIntelCompatibilityBodyA, uciCodeIntelCompatibilityBodyB)
+		require.Len(t, fixture.application.resolveInputs, resolvesBefore, "explicit pinned handles must not select")
+		require.Len(t, fixture.application.authorizeInputs, authorizesBefore+2, "initial lookup and release must both non-selectingly authorize the pinned View")
+		for _, input := range fixture.application.authorizeInputs[authorizesBefore:] {
+			require.NotNil(t, input.Ref)
+			assert.Equal(t, fixture.refA, *input.Ref)
+			assert.Empty(t, input.Candidates)
+		}
+		selector, found := fixture.application.BoundSelector("mcp-client-a")
+		require.True(t, found)
+		_, following := selector.Checkout()
+		assert.True(t, following, "pinned-handle authorization must not replace a checkout default")
+	})
+
+	t.Run("checkout handle reloads current view without selecting", func(t *testing.T) {
+		fixture := newUCICodeIntelCompatibilityFixture(t)
+		binding := uciCodeIntelCheckoutBinding(fixture.refA, &fixture.refA)
+		fixture.catalog.bindings[fixture.refA.CheckoutID] = binding
+		checkoutHandle := fixture.selectCheckout(t, fixture.clientA, binding)
+
+		resolvesBefore := len(fixture.application.resolveInputs)
+		authorizesBefore := len(fixture.application.authorizeInputs)
+		indexAuthorizesBefore := len(fixture.application.authorizeIndexInputs)
+		response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", uciCodeIntelCompatibilitySearchArguments(checkoutHandle, uciCodeIntelCompatibilityProject, 10))
+		requireUCICodeIntelQueryResponse(t, response, fixture.refA, uciCodeIntelCompatibilityBodyA, uciCodeIntelCompatibilityBodyB)
+		require.Len(t, fixture.application.resolveInputs, resolvesBefore, "explicit checkout handles must not select")
+		require.Len(t, fixture.application.authorizeInputs, authorizesBefore+2)
+		require.Len(t, fixture.application.authorizeIndexInputs, indexAuthorizesBefore+2, "checkout binding must be reauthorized for lookup and release")
+		for _, input := range fixture.application.authorizeIndexInputs[indexAuthorizesBefore:] {
+			require.NotNil(t, input.Selector)
+			checkout, ok := input.Selector.Checkout()
+			require.True(t, ok)
+			assert.Equal(t, binding.Scope, checkout.Scope)
+			assert.Equal(t, binding.ProfileID, checkout.ProfileID)
+		}
+		selector, found := fixture.application.BoundSelector("mcp-client-a")
+		require.True(t, found)
+		checkout, following := selector.Checkout()
+		require.True(t, following)
+		assert.Equal(t, binding.Scope, checkout.Scope)
+	})
+
+	t.Run("unpublished checkout suppresses search without exposure", func(t *testing.T) {
+		fixture := newUCICodeIntelCompatibilityFixture(t)
+		binding := uciCodeIntelCheckoutBinding(fixture.refA, nil)
+		fixture.catalog.bindings[fixture.refA.CheckoutID] = binding
+		checkoutHandle := fixture.selectCheckout(t, fixture.clientA, binding)
+
+		response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", uciCodeIntelCompatibilitySearchArguments(checkoutHandle, uciCodeIntelCompatibilityProject, 10))
+		requireUCICodeIntelSuppressedQueryError(t, response, "CONTEXT_REQUIRED", fixture)
+		assert.Empty(t, fixture.application.searchCalls)
+		assert.Zero(t, fixture.exposureStore.exposureCount())
+	})
+}
+
+func TestUCICodeIntelEvictedHandleCannotReleaseQueryResults(t *testing.T) {
+	fixture := newUCICodeIntelCompatibilityFixture(t)
+	handle := fixture.selectContext(t, fixture.clientA, fixture.refA)
+	fixture.application.afterAliasResolution = func() {
+		fixture.server.codebaseContextMu.Lock()
+		if client := fixture.server.codebaseContextHandles["mcp-client-a"]; client != nil {
+			fixture.server.codebaseContextRemoveEntry(client, handle)
+		}
+		fixture.server.codebaseContextMu.Unlock()
+	}
+
+	response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", uciCodeIntelCompatibilitySearchArguments(handle, uciCodeIntelCompatibilityProject, 10))
+	requireUCICodeIntelSuppressedQueryError(t, response, "CONTEXT_MISMATCH", fixture)
+	require.Len(t, fixture.application.searchCalls, 1, "a handle evicted after lookup may not release its application result")
+	assert.Zero(t, fixture.exposureStore.exposureCount())
+}
+
+func TestUCICodeIntelCheckoutViewDriftCannotReleaseQueryResults(t *testing.T) {
+	fixture := newUCICodeIntelCompatibilityFixture(t)
+	binding := uciCodeIntelCheckoutBinding(fixture.refA, &fixture.refA)
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = binding
+	handle := fixture.selectCheckout(t, fixture.clientA, binding)
+	fixture.application.afterAliasResolution = func() {
+		moved := fixture.refA
+		moved.ViewID = "40000000-0000-4000-8000-000000000003"
+		moved.Generation++
+		fixture.catalog.records[moved.CheckoutID] = uci.ContextRecord{Ref: moved, AuthRealm: uciCodebaseContextTestRealm}
+		movedBinding := binding.Clone()
+		movedBinding.Context = &moved
+		fixture.catalog.bindings[moved.CheckoutID] = movedBinding
+	}
+
+	response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", uciCodeIntelCompatibilitySearchArguments(handle, uciCodeIntelCompatibilityProject, 10))
+	requireUCICodeIntelSuppressedQueryError(t, response, "CONTEXT_MISMATCH", fixture)
+	require.Len(t, fixture.application.searchCalls, 1)
+	assert.Zero(t, fixture.exposureStore.exposureCount())
+}
+
 func TestUCICodeIntelCompatibilityRefusesUnboundForeignAndConflictingSelectors(t *testing.T) {
 	fixture := newUCICodeIntelCompatibilityFixture(t)
 	handleA := fixture.selectContext(t, fixture.clientA, fixture.refA)
@@ -563,6 +667,41 @@ func (fixture *uciCodeIntelCompatibilityFixture) selectContext(t *testing.T, cli
 	t.Helper()
 	payload := decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, client, uciCodebaseContextSelectArgs(ref)))
 	return requireUCICodebaseContextPayload(t, fixture.uciCodebaseContextFixture, payload, map[bool]string{true: "agent-a-linked", false: "agent-b-linked"}[ref.CheckoutID == fixture.refA.CheckoutID], map[bool]string{true: "saved-a", false: "saved-b"}[ref.CheckoutID == fixture.refA.CheckoutID], ref.Generation)
+}
+
+func uciCodeIntelCheckoutBinding(ref uci.ContextRef, current *uci.ContextRef) uci.IndexBinding {
+	binding := uci.IndexBinding{
+		Scope: uci.IndexScope{
+			SourceID:      ref.SourceID,
+			CheckoutID:    ref.CheckoutID,
+			IncarnationID: uciCodebaseContextTestIncarnationA,
+		},
+		ProfileID:     ref.AnalysisProfileID,
+		LocalRootID:   uciCodebaseContextPrivateLocatorA,
+		WorkstationID: "keycard-a",
+	}
+	if current != nil {
+		contextRef := cloneCodebaseContextRef(*current)
+		binding.Context = &contextRef
+	}
+	return binding
+}
+
+func (fixture *uciCodeIntelCompatibilityFixture) selectCheckout(t *testing.T, client context.Context, binding uci.IndexBinding) string {
+	t.Helper()
+	payload := decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, client, map[string]any{
+		"action": "select",
+		"checkout": map[string]any{
+			"source_id":           binding.Scope.SourceID,
+			"checkout_id":         binding.Scope.CheckoutID,
+			"incarnation_id":      binding.Scope.IncarnationID,
+			"analysis_profile_id": binding.ProfileID,
+		},
+	}))
+	handle, ok := payload["context_handle"].(string)
+	require.True(t, ok)
+	require.NotEmpty(t, handle)
+	return handle
 }
 
 func uciCodeIntelCompatibilitySearchArguments(handle, project string, limit int) map[string]any {

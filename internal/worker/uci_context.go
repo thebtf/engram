@@ -14,16 +14,17 @@ import (
 // uciContextComposition holds the one shared context authority used by MCP and
 // private UCI gRPC calls for the lifetime of a worker.
 type uciContextComposition struct {
-	contextStore     *gormstore.UCIContextStore
-	authorizer       *gormstore.UCIContextAuthorizer
-	resolver         *uci.ContextResolver
-	application      *mcp.UCIContextApplication
-	projectionStore  *gormstore.UCIProjectionStore
-	runtime          grpcserver.ContextAwareUCIRuntime
-	handlePort       *mcp.UCIContextHandlePort
-	aliasResolver    *uci.AliasResolver
-	exposureRecorder *uci.ExposureRecorder
-	transport        grpcserver.UCITransport
+	contextStore       *gormstore.UCIContextStore
+	authorizer         *gormstore.UCIContextAuthorizer
+	resolver           *uci.ContextResolver
+	contextApplication *mcp.UCIContextApplication
+	application        *UCIApplication
+	projectionStore    *gormstore.UCIProjectionStore
+	runtime            grpcserver.ContextAwareUCIRuntime
+	handlePort         *mcp.UCIContextHandlePort
+	aliasResolver      *uci.AliasResolver
+	exposureRecorder   *uci.ExposureRecorder
+	transport          grpcserver.UCITransport
 }
 
 // composeUCIContext creates and installs the narrow UCI context capability.
@@ -42,7 +43,7 @@ func composeUCIContext(enabled bool, db *gormlib.DB, mcpServer *mcp.Server) (*uc
 	contextStore := gormstore.NewUCIContextStore(db)
 	authorizer := gormstore.NewUCIContextAuthorizer(contextStore)
 	resolver := uci.NewContextResolver(contextStore, authorizer, contextStore)
-	application, err := mcp.NewUCIContextApplication(resolver, contextStore)
+	contextApplication, err := mcp.NewUCIContextApplication(resolver, contextStore)
 	if err != nil {
 		return nil, fmt.Errorf("create UCI MCP context application: %w", err)
 	}
@@ -61,6 +62,22 @@ func composeUCIContext(enabled bool, db *gormlib.DB, mcpServer *mcp.Server) (*uc
 		return nil, fmt.Errorf("create UCI context handle port: %w", err)
 	}
 	aliasResolver := uci.NewAliasResolver(contextStore.LookupLegacyAliasRecords)
+	queryService := uci.NewQueryService(projectionStore)
+	graphService := uci.NewGraphService(projectionStore)
+	versionedReadService := uci.NewVersionedReadService(projectionStore)
+	indexStatusService := uci.NewIndexStatusService(projectionStore)
+	application, err := NewUCIApplication(
+		contextApplication,
+		aliasResolver,
+		queryService,
+		nil,
+		graphService,
+		versionedReadService,
+		indexStatusService,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create UCI application: %w", err)
+	}
 	exposureRecorder := uci.NewExposureRecorder(gormstore.NewUCIExposureStore(db), nil)
 	transport := grpcserver.NewContextAwareUCITransport(resolver, aliasResolver, runtime, handlePort)
 
@@ -68,15 +85,16 @@ func composeUCIContext(enabled bool, db *gormlib.DB, mcpServer *mcp.Server) (*uc
 	mcpServer.SetUCIExposureRecorder(exposureRecorder)
 
 	return &uciContextComposition{
-		contextStore:     contextStore,
-		authorizer:       authorizer,
-		resolver:         resolver,
-		application:      application,
-		projectionStore:  projectionStore,
-		runtime:          runtime,
-		handlePort:       handlePort,
-		aliasResolver:    aliasResolver,
-		exposureRecorder: exposureRecorder,
-		transport:        transport,
+		contextStore:       contextStore,
+		authorizer:         authorizer,
+		resolver:           resolver,
+		contextApplication: contextApplication,
+		application:        application,
+		projectionStore:    projectionStore,
+		runtime:            runtime,
+		handlePort:         handlePort,
+		aliasResolver:      aliasResolver,
+		exposureRecorder:   exposureRecorder,
+		transport:          transport,
 	}, nil
 }

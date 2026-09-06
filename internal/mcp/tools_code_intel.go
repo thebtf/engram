@@ -601,7 +601,7 @@ func (s *Server) handleUCICodebaseSearch(ctx context.Context, raw json.RawMessag
 			}
 		}
 	}
-	return s.releaseCodebaseQueryResponse(ctx, epoch, authorized, uci.ExposureOperationCodeSearch, response, func(candidate uci.QueryResponse) bool {
+	return s.releaseCodebaseQueryResponse(ctx, epoch, authorized, args.ContextHandle, uci.ExposureOperationCodeSearch, response, func(candidate uci.QueryResponse) bool {
 		return codebaseQueryResponseHasExactContext(candidate, authorized)
 	}, "codebase_search")
 }
@@ -652,6 +652,11 @@ func (s *Server) handleUCICodebaseStatus(ctx context.Context, raw json.RawMessag
 	if !s.codebaseContextEpochCurrent(epoch) {
 		return "", codebaseContextClosedError(uci.ContextMismatch)
 	}
+	reauthorized, contextCode := s.reauthorizeCodebaseContext(ctx, epoch, authorized, args.ContextHandle)
+	if contextCode != "" {
+		return "", codebaseContextClosedError(contextCode)
+	}
+	authorized = reauthorized
 	snapshot.EvidenceRecorder = s.codebaseExposureRecorderHealth()
 
 	encoded, err := json.Marshal(codebaseStatusResponse{
@@ -682,6 +687,7 @@ func (s *Server) releaseCodebaseQueryResponse(
 	ctx context.Context,
 	epoch uint64,
 	authorized uci.AuthorizedContext,
+	contextHandle *string,
 	operation uci.ExposureOperation,
 	response uci.QueryResponse,
 	matches func(uci.QueryResponse) bool,
@@ -691,7 +697,7 @@ func (s *Server) releaseCodebaseQueryResponse(
 		return codebaseSearchContextRefusal(uci.ContextMismatch)
 	}
 
-	reauthorized, contextCode := s.reauthorizeCodebaseContext(ctx, epoch, authorized)
+	reauthorized, contextCode := s.reauthorizeCodebaseContext(ctx, epoch, authorized, contextHandle)
 	if contextCode != "" {
 		return codebaseSearchContextRefusal(contextCode)
 	}
@@ -733,23 +739,41 @@ func (s *Server) releaseCodebaseQueryResponse(
 	return string(encoded), nil
 }
 
-func (s *Server) reauthorizeCodebaseContext(ctx context.Context, epoch uint64, authorized uci.AuthorizedContext) (uci.AuthorizedContext, uci.ContextErrorCode) {
+func (s *Server) reauthorizeCodebaseContext(ctx context.Context, epoch uint64, authorized uci.AuthorizedContext, contextHandle *string) (uci.AuthorizedContext, uci.ContextErrorCode) {
 	input, err := codebaseContextCallerInput(ctx)
 	if err != nil {
 		return uci.AuthorizedContext{}, uci.ContextMismatch
 	}
 	want := authorized.Ref()
-	input.Ref = &want
 	application, currentEpoch, found := s.codebaseContextApplicationSnapshot()
 	if !found || currentEpoch != epoch {
 		return uci.AuthorizedContext{}, uci.ContextMismatch
 	}
 
-	reauthorized, err := application.Resolve(ctx, input)
-	if err != nil {
-		return uci.AuthorizedContext{}, codebaseContextFailureCode(err)
+	if contextHandle == nil {
+		input.Ref = &want
+		reauthorized, err := application.Authorize(ctx, input)
+		if err != nil {
+			return uci.AuthorizedContext{}, codebaseContextFailureCode(err)
+		}
+		if !codebaseContextRefsEqual(reauthorized.Ref(), want) || !s.codebaseContextEpochCurrent(epoch) {
+			return uci.AuthorizedContext{}, uci.ContextMismatch
+		}
+		return reauthorized, ""
 	}
-	if codebaseContextKey(reauthorized.Ref()) != codebaseContextKey(want) || !s.codebaseContextEpochCurrent(epoch) {
+
+	_, handleEpoch, selector, found := s.codebaseContextSelectorForHandle(input.ClientSessionID, *contextHandle)
+	if !found || handleEpoch != epoch {
+		return uci.AuthorizedContext{}, uci.ContextMismatch
+	}
+	reauthorized, binding, contextCode := authorizeCodebaseExplicitSelector(ctx, application, input, selector)
+	if contextCode != "" || !codebaseContextRefsEqual(reauthorized.Ref(), want) {
+		if contextCode == "" {
+			contextCode = uci.ContextMismatch
+		}
+		return uci.AuthorizedContext{}, contextCode
+	}
+	if !s.codebaseContextHandleStillCurrent(input.ClientSessionID, *contextHandle, epoch, selector, binding) {
 		return uci.AuthorizedContext{}, uci.ContextMismatch
 	}
 	return reauthorized, ""
@@ -794,42 +818,9 @@ func (s *Server) codebaseExposureRecorderHealth() CodebaseEvidenceRecorderHealth
 }
 
 func (s *Server) resolveCodebaseIntelligenceContext(ctx context.Context, contextHandle *string) (CodebaseIntelligenceApplication, uci.AuthorizedContext, uint64, uci.ContextErrorCode) {
-	input, err := codebaseContextCallerInput(ctx)
-	if err != nil {
-		return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
-	}
-
-	var (
-		application CodebaseContextApplication
-		epoch       uint64
-		expected    *uci.ContextRef
-	)
-	if contextHandle != nil {
-		var ref uci.ContextRef
-		var found bool
-		application, epoch, ref, found = s.codebaseContextRefForHandle(input.ClientSessionID, *contextHandle)
-		if !found {
-			return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
-		}
-		expected = &ref
-		input.Ref = expected
-	} else {
-		var found bool
-		application, epoch, found = s.codebaseContextApplicationSnapshot()
-		if !found {
-			return nil, uci.AuthorizedContext{}, 0, uci.ContextRequired
-		}
-	}
-
-	authorized, err := application.Resolve(ctx, input)
-	if err != nil {
-		return nil, uci.AuthorizedContext{}, 0, codebaseContextFailureCode(err)
-	}
-	if !s.codebaseContextEpochCurrent(epoch) {
-		return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
-	}
-	if expected != nil && codebaseContextKey(authorized.Ref()) != codebaseContextKey(*expected) {
-		return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
+	application, authorized, epoch, contextCode := s.resolveCodebaseAuthorizedView(ctx, contextHandle)
+	if contextCode != "" {
+		return nil, uci.AuthorizedContext{}, 0, contextCode
 	}
 	intelligence, ok := application.(CodebaseIntelligenceApplication)
 	if !ok {

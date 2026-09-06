@@ -161,10 +161,13 @@ func (s *Server) handleCodebaseRead(ctx context.Context, raw json.RawMessage) (s
 		}
 		return "", errors.New("codebase_read: UCI application unavailable")
 	}
+	if !codebaseQueryResponseHasExactContext(response, authorized) {
+		return codebaseSearchContextRefusal(uci.ContextMismatch)
+	}
 	if !s.codebaseContextEpochCurrent(epoch) {
 		return codebaseSearchContextRefusal(uci.ContextMismatch)
 	}
-	return s.releaseCodebaseQueryResponse(ctx, epoch, authorized, uci.ExposureOperationVersionedRead, response, func(candidate uci.QueryResponse) bool {
+	return s.releaseCodebaseQueryResponse(ctx, epoch, authorized, args.ContextHandle, uci.ExposureOperationVersionedRead, response, func(candidate uci.QueryResponse) bool {
 		return validCodebaseReadPreExposureResponse(candidate, authorized, input)
 	}, "codebase_read")
 }
@@ -243,44 +246,9 @@ func validCodebaseReadContentDigest(value string) bool {
 }
 
 func (s *Server) resolveCodebaseReadContext(ctx context.Context, contextHandle *string) (CodebaseReadApplication, uci.AuthorizedContext, uint64, uci.ContextErrorCode) {
-	input, err := codebaseContextCallerInput(ctx)
-	if err != nil {
-		return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
-	}
-
-	var (
-		application CodebaseContextApplication
-		epoch       uint64
-		expected    *uci.ContextRef
-	)
-	if contextHandle != nil {
-		var (
-			ref   uci.ContextRef
-			found bool
-		)
-		application, epoch, ref, found = s.codebaseContextRefForHandle(input.ClientSessionID, *contextHandle)
-		if !found {
-			return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
-		}
-		expected = &ref
-		input.Ref = expected
-	} else {
-		var found bool
-		application, epoch, found = s.codebaseContextApplicationSnapshot()
-		if !found {
-			return nil, uci.AuthorizedContext{}, 0, uci.ContextRequired
-		}
-	}
-
-	authorized, err := application.Resolve(ctx, input)
-	if err != nil {
-		return nil, uci.AuthorizedContext{}, 0, codebaseContextFailureCode(err)
-	}
-	if !s.codebaseContextEpochCurrent(epoch) {
-		return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
-	}
-	if expected != nil && codebaseContextKey(authorized.Ref()) != codebaseContextKey(*expected) {
-		return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
+	application, authorized, epoch, contextCode := s.resolveCodebaseAuthorizedView(ctx, contextHandle)
+	if contextCode != "" {
+		return nil, uci.AuthorizedContext{}, 0, contextCode
 	}
 	reader, ok := application.(CodebaseReadApplication)
 	if !ok {

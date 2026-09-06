@@ -285,7 +285,7 @@ func (s *Server) handleCodebaseGraph(ctx context.Context, raw json.RawMessage) (
 		return codebaseSearchContextRefusal(uci.ContextMismatch)
 	}
 	if response.Status == uci.QueryStatusContextRequired || response.Status == uci.QueryStatusForbidden {
-		return s.releaseCodebaseQueryResponse(operationCtx, epoch, authorized, uci.ExposureOperationCodeGraph, response, func(candidate uci.QueryResponse) bool {
+		return s.releaseCodebaseQueryResponse(operationCtx, epoch, authorized, args.ContextHandle, uci.ExposureOperationCodeGraph, response, func(candidate uci.QueryResponse) bool {
 			return validCodebaseGraphPreExposureResponse(candidate, authorized, input)
 		}, "codebase_graph")
 	}
@@ -301,7 +301,7 @@ func (s *Server) handleCodebaseGraph(ctx context.Context, raw json.RawMessage) (
 			}
 		}
 	}
-	return s.releaseCodebaseQueryResponse(operationCtx, epoch, authorized, uci.ExposureOperationCodeGraph, response, func(candidate uci.QueryResponse) bool {
+	return s.releaseCodebaseQueryResponse(operationCtx, epoch, authorized, args.ContextHandle, uci.ExposureOperationCodeGraph, response, func(candidate uci.QueryResponse) bool {
 		return validCodebaseGraphPreExposureResponse(candidate, authorized, input)
 	}, "codebase_graph")
 }
@@ -639,44 +639,9 @@ func codebaseGraphRelationNames() []string {
 }
 
 func (s *Server) resolveCodebaseGraphContext(ctx context.Context, contextHandle *string) (CodebaseGraphApplication, uci.AuthorizedContext, uint64, uci.ContextErrorCode) {
-	input, err := codebaseContextCallerInput(ctx)
-	if err != nil {
-		return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
-	}
-
-	var (
-		application CodebaseContextApplication
-		epoch       uint64
-		expected    *uci.ContextRef
-	)
-	if contextHandle != nil {
-		var (
-			ref   uci.ContextRef
-			found bool
-		)
-		application, epoch, ref, found = s.codebaseContextRefForHandle(input.ClientSessionID, *contextHandle)
-		if !found {
-			return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
-		}
-		expected = &ref
-		input.Ref = expected
-	} else {
-		var found bool
-		application, epoch, found = s.codebaseContextApplicationSnapshot()
-		if !found {
-			return nil, uci.AuthorizedContext{}, 0, uci.ContextRequired
-		}
-	}
-
-	authorized, err := application.Resolve(ctx, input)
-	if err != nil {
-		return nil, uci.AuthorizedContext{}, 0, codebaseContextFailureCode(err)
-	}
-	if !s.codebaseContextEpochCurrent(epoch) {
-		return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
-	}
-	if expected != nil && codebaseContextKey(authorized.Ref()) != codebaseContextKey(*expected) {
-		return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
+	application, authorized, epoch, contextCode := s.resolveCodebaseAuthorizedView(ctx, contextHandle)
+	if contextCode != "" {
+		return nil, uci.AuthorizedContext{}, 0, contextCode
 	}
 	graph, ok := application.(CodebaseGraphApplication)
 	if !ok {

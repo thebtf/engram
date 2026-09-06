@@ -963,6 +963,13 @@ func (application *uciAuthorizationMatrixApplication) Resolve(ctx context.Contex
 	return application.afterSuccessfulResolve(resolved, err)
 }
 
+func (application *uciAuthorizationMatrixApplication) Authorize(ctx context.Context, input uci.ResolveContextInput) (uci.AuthorizedContext, error) {
+	application.mu.Lock()
+	resolver := application.resolver
+	application.mu.Unlock()
+	return application.afterSuccessfulResolve(resolver.Authorize(ctx, input))
+}
+
 func (application *uciAuthorizationMatrixApplication) afterSuccessfulResolve(resolved uci.AuthorizedContext, err error) (uci.AuthorizedContext, error) {
 	if err != nil {
 		return resolved, err

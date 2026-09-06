@@ -262,14 +262,20 @@ func TestUCICodebaseContextSelectsRegisteredCheckoutWithoutView(t *testing.T) {
 	published.Context = &fixture.refA
 	fixture.catalog.bindings[fixture.refA.CheckoutID] = published
 	followed := decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, fixture.clientA, map[string]any{
-		"action":         "select",
-		"context_handle": handle,
+		"action": "resolve",
 	}))
 	require.Equal(t, handle, followed["context_handle"])
 	require.Equal(t, "checkout", followed["binding_kind"])
 	contextPayload, ok := followed["context"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, fixture.refA.ViewID, contextPayload["view_id"])
+	require.NotEmpty(t, fixture.application.resolveIndexInputs)
+	boundInput := fixture.application.resolveIndexInputs[len(fixture.application.resolveIndexInputs)-1]
+	require.NotNil(t, boundInput.Selector, "action=resolve must forward the already-selected checkout selector")
+	checkout, ok := boundInput.Selector.Checkout()
+	require.True(t, ok)
+	require.Equal(t, bootstrap.Scope, checkout.Scope)
+	require.Equal(t, bootstrap.ProfileID, checkout.ProfileID)
 }
 
 func uciCodebaseContextClient(sessionID, keycardID, principal string) context.Context {
@@ -432,8 +438,11 @@ type uciCodebaseContextApplicationFake struct {
 	authorizer *uciCodebaseContextAuthorizerFake
 	projection *uciCodebaseContextProjectionFake
 
-	resolveInputs []uci.ResolveContextInput
-	listInputs    []uci.ResolveContextInput
+	resolveInputs        []uci.ResolveContextInput
+	authorizeInputs      []uci.ResolveContextInput
+	resolveIndexInputs   []uci.ResolveIndexBindingInput
+	authorizeIndexInputs []uci.ResolveIndexBindingInput
+	listInputs           []uci.ResolveContextInput
 }
 
 func (application *uciCodebaseContextApplicationFake) Resolve(ctx context.Context, input uci.ResolveContextInput) (uci.AuthorizedContext, error) {
@@ -456,7 +465,13 @@ func (application *uciCodebaseContextApplicationFake) Resolve(ctx context.Contex
 	return application.resolver.Resolve(ctx, input)
 }
 
+func (application *uciCodebaseContextApplicationFake) Authorize(ctx context.Context, input uci.ResolveContextInput) (uci.AuthorizedContext, error) {
+	application.authorizeInputs = append(application.authorizeInputs, input)
+	return application.resolver.Authorize(ctx, application.withRealm(input))
+}
+
 func (application *uciCodebaseContextApplicationFake) ResolveIndexBinding(ctx context.Context, input uci.ResolveIndexBindingInput) (uci.AuthorizedIndexBinding, error) {
+	application.resolveIndexInputs = append(application.resolveIndexInputs, uciCodebaseContextCloneIndexInput(input))
 	if input.AuthRealm == "" {
 		input.AuthRealm = application.realm
 	}
@@ -464,10 +479,20 @@ func (application *uciCodebaseContextApplicationFake) ResolveIndexBinding(ctx co
 }
 
 func (application *uciCodebaseContextApplicationFake) AuthorizeIndexBinding(ctx context.Context, input uci.ResolveIndexBindingInput) (uci.AuthorizedIndexBinding, error) {
+	application.authorizeIndexInputs = append(application.authorizeIndexInputs, uciCodebaseContextCloneIndexInput(input))
 	if input.AuthRealm == "" {
 		input.AuthRealm = application.realm
 	}
 	return application.resolver.AuthorizeIndexBinding(ctx, input)
+}
+
+func uciCodebaseContextCloneIndexInput(input uci.ResolveIndexBindingInput) uci.ResolveIndexBindingInput {
+	copy := input
+	if input.Selector != nil {
+		selector := input.Selector.Clone()
+		copy.Selector = &selector
+	}
+	return copy
 }
 
 func (application *uciCodebaseContextApplicationFake) BoundSelector(clientSessionID string) (uci.IndexBindingSelector, bool) {
