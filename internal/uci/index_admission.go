@@ -245,7 +245,12 @@ func (frame IndexAdmissionFrame) ReferenceBindings() (IndexAdmissionReferenceBin
 // payload larger than the per-frame cap are rejected.
 func DecodeIndexAdmissionFrame(encoded []byte) (IndexAdmissionFrame, error) {
 	if len(encoded) > IndexAdmissionMaxEncodedFrameBytes {
-		return IndexAdmissionFrame{}, fmt.Errorf("uci index admission: frame exceeds %d-byte cap", IndexAdmissionMaxEncodedFrameBytes)
+		return IndexAdmissionFrame{}, newIndexCapacityError(
+			IndexCapacityScopeAdmissionFrame,
+			IndexCapacityResourceEncodedBytes,
+			uint64(len(encoded)),
+			uint64(IndexAdmissionMaxEncodedFrameBytes),
+		)
 	}
 	if err := indexAdmissionRejectDuplicateJSONKeys(encoded); err != nil {
 		return IndexAdmissionFrame{}, err
@@ -282,7 +287,12 @@ func EncodeIndexAdmissionFrame(frame IndexAdmissionFrame) ([]byte, error) {
 		return nil, fmt.Errorf("uci index admission: encode frame: %w", err)
 	}
 	if len(encoded) > IndexAdmissionMaxEncodedFrameBytes {
-		return nil, fmt.Errorf("uci index admission: frame exceeds %d-byte cap", IndexAdmissionMaxEncodedFrameBytes)
+		return nil, newIndexCapacityError(
+			IndexCapacityScopeAdmissionFrame,
+			IndexCapacityResourceEncodedBytes,
+			uint64(len(encoded)),
+			uint64(IndexAdmissionMaxEncodedFrameBytes),
+		)
 	}
 	return encoded, nil
 }
@@ -375,18 +385,35 @@ func ValidateIndexAdmissionFramesForBinding(frames []IndexAdmissionFrame, bindin
 // admission catalog.
 func ValidateIndexAdmissionPayloads(payloads [][]byte) error {
 	if len(payloads) > IndexAdmissionMaxFrames {
-		return fmt.Errorf("uci index admission: frame count exceeds %d", IndexAdmissionMaxFrames)
+		return newIndexCapacityError(
+			IndexCapacityScopeAdmissionBuild,
+			IndexCapacityResourceFrames,
+			uint64(len(payloads)),
+			uint64(IndexAdmissionMaxFrames),
+		)
 	}
 	frames := make([]IndexAdmissionFrame, 0, len(payloads))
-	total := 0
+	var total uint64
 	for _, payload := range payloads {
-		if len(payload) > IndexAdmissionMaxEncodedFrameBytes {
-			return fmt.Errorf("uci index admission: frame exceeds %d-byte cap", IndexAdmissionMaxEncodedFrameBytes)
+		payloadBytes := uint64(len(payload))
+		if payloadBytes > uint64(IndexAdmissionMaxEncodedFrameBytes) {
+			return newIndexCapacityError(
+				IndexCapacityScopeAdmissionFrame,
+				IndexCapacityResourceEncodedBytes,
+				payloadBytes,
+				uint64(IndexAdmissionMaxEncodedFrameBytes),
+			)
 		}
-		if len(payload) > IndexAdmissionMaxTotalEncodedBytes-total {
-			return fmt.Errorf("uci index admission: total payload exceeds %d-byte cap", IndexAdmissionMaxTotalEncodedBytes)
+		if required := indexCapacityAdd(total, payloadBytes); required > uint64(IndexAdmissionMaxTotalEncodedBytes) {
+			return newIndexCapacityError(
+				IndexCapacityScopeAdmissionBuild,
+				IndexCapacityResourceEncodedBytes,
+				required,
+				uint64(IndexAdmissionMaxTotalEncodedBytes),
+			)
+		} else {
+			total = required
 		}
-		total += len(payload)
 		frame, err := DecodeIndexAdmissionFrame(payload)
 		if err != nil {
 			return err
@@ -653,7 +680,12 @@ func NewIndexAdmissionArtifactFromGo(sourceID string, profile IndexAdmissionArti
 		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Go artifact requires Go profile")
 	}
 	if len(source) > IndexAdmissionMaxArtifactBodyBytes {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: artifact body exceeds %d-byte cap", IndexAdmissionMaxArtifactBodyBytes)
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceArtifactBodyBytes,
+			uint64(len(source)),
+			uint64(IndexAdmissionMaxArtifactBodyBytes),
+		)
 	}
 	contentDigest := indexAdmissionDigestBytes(source)
 	if extracted.Proof.ContentDigest != contentDigest {
@@ -777,7 +809,12 @@ func NewIndexAdmissionArtifactFromGo(sourceID string, profile IndexAdmissionArti
 // no resolved graph edges: grammar-only references have no proven target.
 func NewIndexAdmissionArtifactFromTreeSitter(sourceID string, profile IndexAdmissionArtifactProfile, source []byte, extracted TreeSitterArtifact) (IndexAdmissionArtifact, error) {
 	if len(source) > IndexAdmissionMaxArtifactBodyBytes {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: artifact body exceeds %d-byte cap", IndexAdmissionMaxArtifactBodyBytes)
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceArtifactBodyBytes,
+			uint64(len(source)),
+			uint64(IndexAdmissionMaxArtifactBodyBytes),
+		)
 	}
 	expectedLanguage, err := indexAdmissionTreeSitterLanguage(extracted.Language)
 	if err != nil {
@@ -908,11 +945,37 @@ func indexAdmissionCanonicalizeFrame(frame *IndexAdmissionFrame) error {
 	if !canonicalContextUUID(frame.Profile.ID) {
 		return fmt.Errorf("uci index admission: invalid profile ID")
 	}
-	if len(frame.Artifacts) > indexAdmissionMaxArtifactsPerFrame ||
-		len(frame.Memberships) > indexAdmissionMaxMembershipsPerFrame ||
-		len(frame.Deletions) > indexAdmissionMaxDeletionsPerFrame ||
-		len(frame.EdgeReplacements) > indexAdmissionMaxEdgeReplacementsPerFrame {
-		return fmt.Errorf("uci index admission: frame collection exceeds limit")
+	if len(frame.Artifacts) > indexAdmissionMaxArtifactsPerFrame {
+		return newIndexCapacityError(
+			IndexCapacityScopeAdmissionFrame,
+			IndexCapacityResourceArtifacts,
+			uint64(len(frame.Artifacts)),
+			uint64(indexAdmissionMaxArtifactsPerFrame),
+		)
+	}
+	if len(frame.Memberships) > indexAdmissionMaxMembershipsPerFrame {
+		return newIndexCapacityError(
+			IndexCapacityScopeAdmissionFrame,
+			IndexCapacityResourceMemberships,
+			uint64(len(frame.Memberships)),
+			uint64(indexAdmissionMaxMembershipsPerFrame),
+		)
+	}
+	if len(frame.Deletions) > indexAdmissionMaxDeletionsPerFrame {
+		return newIndexCapacityError(
+			IndexCapacityScopeAdmissionFrame,
+			IndexCapacityResourceDeletions,
+			uint64(len(frame.Deletions)),
+			uint64(indexAdmissionMaxDeletionsPerFrame),
+		)
+	}
+	if len(frame.EdgeReplacements) > indexAdmissionMaxEdgeReplacementsPerFrame {
+		return newIndexCapacityError(
+			IndexCapacityScopeAdmissionFrame,
+			IndexCapacityResourceEdgeReplacements,
+			uint64(len(frame.EdgeReplacements)),
+			uint64(indexAdmissionMaxEdgeReplacementsPerFrame),
+		)
 	}
 
 	if frame.Artifacts == nil {
@@ -994,7 +1057,12 @@ func indexAdmissionCanonicalizeFrame(frame *IndexAdmissionFrame) error {
 			return fmt.Errorf("uci index admission: duplicate edge replacement path")
 		}
 		if len(replacement.Edges) > indexAdmissionMaxEdgesPerReplacement {
-			return fmt.Errorf("uci index admission: edge replacement exceeds limit")
+			return newIndexCapacityError(
+				IndexCapacityScopeEdgeReplacement,
+				IndexCapacityResourceEdges,
+				uint64(len(replacement.Edges)),
+				uint64(indexAdmissionMaxEdgesPerReplacement),
+			)
 		}
 		if replacement.Edges == nil {
 			replacement.Edges = []IndexAdmissionEdge{}
@@ -1024,17 +1092,48 @@ func indexAdmissionCanonicalizeArtifact(artifact IndexAdmissionArtifact) (IndexA
 	if artifact.Status != IndexAdmissionArtifactComplete && artifact.Status != IndexAdmissionArtifactPartial {
 		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: unsupported artifact status")
 	}
-	if artifact.Body == nil || len(artifact.Body) > IndexAdmissionMaxArtifactBodyBytes {
+	if artifact.Body == nil {
 		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: invalid artifact body")
 	}
-	if artifact.ContentDigest != indexAdmissionDigestBytes(artifact.Body) {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: artifact body digest mismatch")
+	if len(artifact.Body) > IndexAdmissionMaxArtifactBodyBytes {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceArtifactBodyBytes,
+			uint64(len(artifact.Body)),
+			uint64(IndexAdmissionMaxArtifactBodyBytes),
+		)
 	}
-	if len(artifact.Definitions) > indexAdmissionMaxDefinitionsPerArtifact ||
-		len(artifact.References) > indexAdmissionMaxReferencesPerArtifact ||
-		len(artifact.Chunks) > indexAdmissionMaxChunksPerArtifact ||
-		len(artifact.Diagnostics) > indexAdmissionMaxDiagnosticsPerArtifact {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: artifact fact collection exceeds limit")
+	if len(artifact.Definitions) > indexAdmissionMaxDefinitionsPerArtifact {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceDefinitions,
+			uint64(len(artifact.Definitions)),
+			uint64(indexAdmissionMaxDefinitionsPerArtifact),
+		)
+	}
+	if len(artifact.References) > indexAdmissionMaxReferencesPerArtifact {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceReferences,
+			uint64(len(artifact.References)),
+			uint64(indexAdmissionMaxReferencesPerArtifact),
+		)
+	}
+	if len(artifact.Chunks) > indexAdmissionMaxChunksPerArtifact {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceChunks,
+			uint64(len(artifact.Chunks)),
+			uint64(indexAdmissionMaxChunksPerArtifact),
+		)
+	}
+	if len(artifact.Diagnostics) > indexAdmissionMaxDiagnosticsPerArtifact {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceDiagnostics,
+			uint64(len(artifact.Diagnostics)),
+			uint64(indexAdmissionMaxDiagnosticsPerArtifact),
+		)
 	}
 	if artifact.Definitions == nil {
 		artifact.Definitions = []IndexAdmissionDefinition{}
@@ -1217,11 +1316,16 @@ func indexAdmissionValidateEdgeShape(edge IndexAdmissionEdge) error {
 
 func indexAdmissionCanonicalizeFrames(frames []IndexAdmissionFrame) ([]IndexAdmissionFrame, error) {
 	if len(frames) > IndexAdmissionMaxFrames {
-		return nil, fmt.Errorf("uci index admission: frame count exceeds %d", IndexAdmissionMaxFrames)
+		return nil, newIndexCapacityError(
+			IndexCapacityScopeAdmissionBuild,
+			IndexCapacityResourceFrames,
+			uint64(len(frames)),
+			uint64(IndexAdmissionMaxFrames),
+		)
 	}
 	canonical := make([]IndexAdmissionFrame, len(frames))
 	var profileID string
-	total := 0
+	var total uint64
 	for index, frame := range frames {
 		value, err := frame.Canonicalize()
 		if err != nil {
@@ -1231,10 +1335,16 @@ func indexAdmissionCanonicalizeFrames(frames []IndexAdmissionFrame) ([]IndexAdmi
 		if err != nil {
 			return nil, err
 		}
-		if frameBytes > IndexAdmissionMaxTotalEncodedBytes-total {
-			return nil, fmt.Errorf("uci index admission: total payload exceeds %d-byte cap", IndexAdmissionMaxTotalEncodedBytes)
+		if required := indexCapacityAdd(total, uint64(frameBytes)); required > uint64(IndexAdmissionMaxTotalEncodedBytes) {
+			return nil, newIndexCapacityError(
+				IndexCapacityScopeAdmissionBuild,
+				IndexCapacityResourceEncodedBytes,
+				required,
+				uint64(IndexAdmissionMaxTotalEncodedBytes),
+			)
+		} else {
+			total = required
 		}
-		total += frameBytes
 		if index == 0 {
 			profileID = value.Profile.ID
 		} else if value.Profile.ID != profileID {
@@ -1251,7 +1361,12 @@ func indexAdmissionCanonicalFrameEncodedSize(frame IndexAdmissionFrame) (int, er
 		return 0, fmt.Errorf("uci index admission: encode canonical frame: %w", err)
 	}
 	if len(encoded) > IndexAdmissionMaxEncodedFrameBytes {
-		return 0, fmt.Errorf("uci index admission: frame exceeds %d-byte cap", IndexAdmissionMaxEncodedFrameBytes)
+		return 0, newIndexCapacityError(
+			IndexCapacityScopeAdmissionFrame,
+			IndexCapacityResourceEncodedBytes,
+			uint64(len(encoded)),
+			uint64(IndexAdmissionMaxEncodedFrameBytes),
+		)
 	}
 	return len(encoded), nil
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -249,6 +250,138 @@ type IndexPublishedView struct {
 	PublishedAt    time.Time
 }
 
+// IndexCapacityCode is the closed outcome vocabulary for capacity refusals.
+type IndexCapacityCode string
+
+const (
+	// IndexCapacityExceeded means a complete v1 record or build exceeds an existing bound.
+	IndexCapacityExceeded IndexCapacityCode = "INDEX_CAPACITY_EXCEEDED"
+)
+
+// IndexCapacityScope identifies the bounded layer that refused complete input.
+type IndexCapacityScope string
+
+const (
+	IndexCapacityScopeAdmissionFrame   IndexCapacityScope = "ADMISSION_FRAME"
+	IndexCapacityScopeAdmissionBuild   IndexCapacityScope = "ADMISSION_BUILD"
+	IndexCapacityScopeArtifact         IndexCapacityScope = "ARTIFACT"
+	IndexCapacityScopeEdgeReplacement  IndexCapacityScope = "EDGE_REPLACEMENT"
+	IndexCapacityScopePublicationPart  IndexCapacityScope = "PUBLICATION_PART"
+	IndexCapacityScopePublicationBuild IndexCapacityScope = "PUBLICATION_BUILD"
+)
+
+// IndexCapacityResource identifies the bounded quantity that exceeded its limit.
+type IndexCapacityResource string
+
+const (
+	IndexCapacityResourceEncodedBytes      IndexCapacityResource = "ENCODED_BYTES"
+	IndexCapacityResourceFrames            IndexCapacityResource = "FRAMES"
+	IndexCapacityResourceParts             IndexCapacityResource = "PARTS"
+	IndexCapacityResourceArtifacts         IndexCapacityResource = "ARTIFACTS"
+	IndexCapacityResourceMemberships       IndexCapacityResource = "MEMBERSHIPS"
+	IndexCapacityResourceDeletions         IndexCapacityResource = "DELETIONS"
+	IndexCapacityResourceEdgeReplacements  IndexCapacityResource = "EDGE_REPLACEMENTS"
+	IndexCapacityResourceEdges             IndexCapacityResource = "EDGES"
+	IndexCapacityResourceArtifactBodyBytes IndexCapacityResource = "ARTIFACT_BODY_BYTES"
+	IndexCapacityResourceDefinitions       IndexCapacityResource = "DEFINITIONS"
+	IndexCapacityResourceReferences        IndexCapacityResource = "REFERENCES"
+	IndexCapacityResourceChunks            IndexCapacityResource = "CHUNKS"
+	IndexCapacityResourceDiagnostics       IndexCapacityResource = "DIAGNOSTICS"
+	IndexCapacityResourceManifestEntries   IndexCapacityResource = "MANIFEST_ENTRIES"
+)
+
+// IndexCapacityError is a typed, non-diagnostic capacity refusal. Its facts
+// identify only a closed resource and its bounded requirement; they carry no
+// source path, source bytes, graph content, or authority context.
+type IndexCapacityError struct {
+	scope    IndexCapacityScope
+	resource IndexCapacityResource
+	required uint64
+	limit    uint64
+}
+
+// Code returns the closed capacity outcome.
+func (err *IndexCapacityError) Code() IndexCapacityCode {
+	if err == nil || !err.valid() {
+		return ""
+	}
+	return IndexCapacityExceeded
+}
+
+// Scope returns the bounded layer that refused the complete input.
+func (err *IndexCapacityError) Scope() IndexCapacityScope {
+	if err == nil || !err.valid() {
+		return ""
+	}
+	return err.scope
+}
+
+// Resource returns the closed resource that exceeded its existing limit.
+func (err *IndexCapacityError) Resource() IndexCapacityResource {
+	if err == nil || !err.valid() {
+		return ""
+	}
+	return err.resource
+}
+
+// Required returns the complete input requirement that exceeded Limit.
+func (err *IndexCapacityError) Required() uint64 {
+	if err == nil || !err.valid() {
+		return 0
+	}
+	return err.required
+}
+
+// Limit returns the existing bound that the complete input exceeded.
+func (err *IndexCapacityError) Limit() uint64 {
+	if err == nil || !err.valid() {
+		return 0
+	}
+	return err.limit
+}
+
+// Error exposes only the closed outcome code.
+func (err *IndexCapacityError) Error() string {
+	return string(err.Code())
+}
+
+// IsIndexCapacityError classifies typed capacity refusals without matching text.
+func IsIndexCapacityError(err error) bool {
+	var capacity *IndexCapacityError
+	return errors.As(err, &capacity) && capacity.valid()
+}
+
+func newIndexCapacityError(scope IndexCapacityScope, resource IndexCapacityResource, required, limit uint64) *IndexCapacityError {
+	return &IndexCapacityError{scope: scope, resource: resource, required: required, limit: limit}
+}
+
+func (err *IndexCapacityError) valid() bool {
+	return err != nil && err.scope.valid() && err.resource.valid() && err.limit > 0 && err.required > err.limit
+}
+
+func (scope IndexCapacityScope) valid() bool {
+	switch scope {
+	case IndexCapacityScopeAdmissionFrame, IndexCapacityScopeAdmissionBuild, IndexCapacityScopeArtifact,
+		IndexCapacityScopeEdgeReplacement, IndexCapacityScopePublicationPart, IndexCapacityScopePublicationBuild:
+		return true
+	default:
+		return false
+	}
+}
+
+func (resource IndexCapacityResource) valid() bool {
+	switch resource {
+	case IndexCapacityResourceEncodedBytes, IndexCapacityResourceFrames, IndexCapacityResourceParts,
+		IndexCapacityResourceArtifacts, IndexCapacityResourceMemberships, IndexCapacityResourceDeletions,
+		IndexCapacityResourceEdgeReplacements, IndexCapacityResourceEdges, IndexCapacityResourceArtifactBodyBytes,
+		IndexCapacityResourceDefinitions, IndexCapacityResourceReferences, IndexCapacityResourceChunks,
+		IndexCapacityResourceDiagnostics, IndexCapacityResourceManifestEntries:
+		return true
+	default:
+		return false
+	}
+}
+
 // IndexPublicationLimits bounds work retained by one staging build.
 type IndexPublicationLimits struct {
 	LeaseTTL           time.Duration
@@ -274,6 +407,92 @@ func DefaultIndexPublicationLimits() IndexPublicationLimits {
 		MaxEdges:           5_000_000,
 		MaxArtifactBytes:   IndexAdmissionMaxArtifactBodyBytes,
 	}
+}
+
+// ValidateIndexPublicationParts checks the canonical staged publication form
+// against an already-selected v1 policy without changing any policy bound.
+// It deliberately validates a different byte representation than admission:
+// source bodies are covered by admission payload limits, while this form carries
+// immutable proofs, memberships, and complete edge replacements.
+func ValidateIndexPublicationParts(parts []IndexPart, limits IndexPublicationLimits) error {
+	if !indexPublicationLimitsValid(limits) {
+		return fmt.Errorf("uci publication: invalid publication limits")
+	}
+	if uint64(len(parts)) > uint64(limits.MaxParts) {
+		return newIndexCapacityError(
+			IndexCapacityScopePublicationBuild,
+			IndexCapacityResourceParts,
+			uint64(len(parts)),
+			uint64(limits.MaxParts),
+		)
+	}
+
+	var totalBytes, memberships, edges uint64
+	for index, part := range parts {
+		normalized, err := normalizeIndexPart(part)
+		if err != nil {
+			return fmt.Errorf("uci publication: normalize part %d: %w", index, err)
+		}
+		encoded, err := json.Marshal(normalized)
+		if err != nil {
+			return fmt.Errorf("uci publication: encode part %d: %w", index, err)
+		}
+		partBytes := uint64(len(encoded))
+		if partBytes > uint64(limits.MaxPartBytes) {
+			return newIndexCapacityError(
+				IndexCapacityScopePublicationPart,
+				IndexCapacityResourceEncodedBytes,
+				partBytes,
+				uint64(limits.MaxPartBytes),
+			)
+		}
+		if required := indexCapacityAdd(totalBytes, partBytes); required > uint64(limits.MaxBuildBytes) {
+			return newIndexCapacityError(
+				IndexCapacityScopePublicationBuild,
+				IndexCapacityResourceEncodedBytes,
+				required,
+				uint64(limits.MaxBuildBytes),
+			)
+		} else {
+			totalBytes = required
+		}
+		if required := indexCapacityAdd(memberships, uint64(len(normalized.Memberships))); required > limits.MaxManifestEntries {
+			return newIndexCapacityError(
+				IndexCapacityScopePublicationBuild,
+				IndexCapacityResourceManifestEntries,
+				required,
+				limits.MaxManifestEntries,
+			)
+		} else {
+			memberships = required
+		}
+		for _, replacement := range normalized.EdgeReplacements {
+			if required := indexCapacityAdd(edges, uint64(len(replacement.Edges))); required > limits.MaxEdges {
+				return newIndexCapacityError(
+					IndexCapacityScopePublicationBuild,
+					IndexCapacityResourceEdges,
+					required,
+					limits.MaxEdges,
+				)
+			} else {
+				edges = required
+			}
+		}
+	}
+	return nil
+}
+
+func indexPublicationLimitsValid(limits IndexPublicationLimits) bool {
+	return limits.LeaseTTL > 0 && limits.MaxPartBytes > 0 && limits.MaxParts > 0 &&
+		limits.MaxBuildBytes > 0 && limits.MaxManifestEntries > 0 && limits.MaxEdges > 0 &&
+		limits.MaxArtifactBytes > 0
+}
+
+func indexCapacityAdd(current, additional uint64) uint64 {
+	if ^uint64(0)-current < additional {
+		return ^uint64(0)
+	}
+	return current + additional
 }
 
 // IndexStore owns the fenced durable publication state machine.

@@ -753,6 +753,44 @@ func TestCodebaseStatusBarrierFailsClosedForFailedRun(t *testing.T) {
 	require.Zero(t, proxyCalls, "failed local barrier must not proxy stale server evidence")
 }
 
+func TestCodebaseStatusKeepsCapacityFailureClosedWithoutStaleFreshness(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	capacityErr := uci.ValidateIndexAdmissionPayloads(make([][]byte, uci.IndexAdmissionMaxFrames+1))
+	require.True(t, uci.IsIndexCapacityError(capacityErr))
+	core := &fakeCore{
+		indexErr:       capacityErr,
+		statusResponse: json.RawMessage(`{"freshness":{"state":"observed_current"}}`),
+	}
+	mod := newTestModule(core)
+	h := moduletest.New(t)
+	require.NoError(t, h.Register(mod))
+	h.Freeze()
+	p := testProjectContext("proj-capacity-status", t.TempDir())
+	ctx := testTransportContext(p)
+
+	_, err := h.CallToolWithProject(ctx, p, "codebase_index", testIndexArgs(p))
+	require.NoError(t, err)
+	drainIndex(t, h, p)
+	_, proxyCallsBeforeTerminalStatus := core.callCounts()
+
+	raw, err := h.CallToolWithProject(ctx, p, "codebase_status", testStatusArgs(p))
+	require.NoError(t, err)
+	var status map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(raw, &status))
+	var state, code string
+	require.NoError(t, json.Unmarshal(status["status"], &state))
+	require.NoError(t, json.Unmarshal(status["error"], &code))
+	require.Equal(t, "error", state)
+	require.Equal(t, string(uci.IndexCapacityExceeded), code)
+	_, hasFreshness := status["freshness"]
+	require.False(t, hasFreshness, "capacity failure must not merge a retained View into observed_current")
+	var countsAvailable bool
+	require.NoError(t, json.Unmarshal(status["server_counts_available"], &countsAvailable))
+	require.False(t, countsAvailable)
+	_, proxyCallsAfterTerminalStatus := core.callCounts()
+	require.Equal(t, proxyCallsBeforeTerminalStatus, proxyCallsAfterTerminalStatus, "capacity failure must not proxy stale server status")
+}
+
 func TestCodebaseToolsRejectMissingTransportSessionWithoutEnvironmentFallback(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
 	core := &fakeCore{}

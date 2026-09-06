@@ -180,12 +180,11 @@ const (
 )
 
 type uciPreparedAdmissionFile struct {
-	path         string
-	membership   uci.IndexAdmissionMembership
-	artifact     *uci.IndexAdmissionArtifact
-	emitArtifact bool
-	edges        []uci.IndexAdmissionEdge
-	errors       []string
+	path       string
+	membership uci.IndexAdmissionMembership
+	artifact   *uci.IndexAdmissionArtifact
+	edges      []uci.IndexAdmissionEdge
+	errors     []string
 }
 
 type uciPreparedAdmissionPlan struct {
@@ -194,6 +193,21 @@ type uciPreparedAdmissionPlan struct {
 	coverage uci.IndexCoverage
 	errors   []string
 	uploaded int
+}
+
+type uciPreparedAdmissionRecordKind uint8
+
+const (
+	uciPreparedAdmissionArtifactRecord uciPreparedAdmissionRecordKind = iota + 1
+	uciPreparedAdmissionMembershipRecord
+	uciPreparedAdmissionEdgeReplacementRecord
+)
+
+// uciPreparedAdmissionRecord holds one complete logical v1 record. Packing
+// may change only which frame contains this record; it never splits or drops it.
+type uciPreparedAdmissionRecord struct {
+	kind uciPreparedAdmissionRecordKind
+	file *uciPreparedAdmissionFile
 }
 
 func (collaborator *UCIPreparedIndexCollaborator) prepareAdmissionPlan(ctx context.Context, local uciPreparedLocalTarget, scan uci.ScannerResult) (uciPreparedAdmissionPlan, error) {
@@ -231,26 +245,9 @@ func (collaborator *UCIPreparedIndexCollaborator) prepareAdmissionPlan(ctx conte
 		return uciPreparedAdmissionPlan{}, err
 	}
 
-	var frames []uci.IndexAdmissionFrame
-	for {
-		var dropped uint64
-		frames, prepared, dropped, err = uciPreparedPackFrames(local.binding.ProfileID, prepared)
-		if err != nil {
-			return uciPreparedAdmissionPlan{}, err
-		}
-		if ^uint64(0)-unresolved < dropped {
-			return uciPreparedAdmissionPlan{}, fmt.Errorf("uci prepared index: unresolved reference count overflow")
-		}
-		unresolved += dropped
-
-		discarded := uciPreparedDiscardUnavailableEdges(prepared)
-		if discarded == 0 {
-			break
-		}
-		if ^uint64(0)-unresolved < discarded {
-			return uciPreparedAdmissionPlan{}, fmt.Errorf("uci prepared index: unresolved reference count overflow")
-		}
-		unresolved += discarded
+	frames, payloads, err := uciPreparedPackFrames(local.binding.ProfileID, prepared)
+	if err != nil {
+		return uciPreparedAdmissionPlan{}, err
 	}
 
 	coverage, err := uciPreparedCoverageForFiles(scan.Coverage, prepared)
@@ -265,24 +262,15 @@ func (collaborator *UCIPreparedIndexCollaborator) prepareAdmissionPlan(ctx conte
 		return uciPreparedAdmissionPlan{}, fmt.Errorf("uci prepared index: validate complete packed build: %w", err)
 	}
 
-	payloads := make([][]byte, 0, len(frames))
 	artifactIDs := make(map[string]struct{})
 	errors := make([]string, 0)
 	for _, preparedFile := range prepared {
 		errors = append(errors, preparedFile.errors...)
 	}
-	for index, frame := range frames {
-		encoded, err := uci.EncodeIndexAdmissionFrame(frame)
-		if err != nil {
-			return uciPreparedAdmissionPlan{}, fmt.Errorf("uci prepared index: encode frame %d: %w", index, err)
-		}
-		payloads = append(payloads, encoded)
+	for _, frame := range frames {
 		for _, artifact := range frame.Artifacts {
 			artifactIDs[artifact.ArtifactID] = struct{}{}
 		}
-	}
-	if err := uci.ValidateIndexAdmissionPayloads(payloads); err != nil {
-		return uciPreparedAdmissionPlan{}, fmt.Errorf("uci prepared index: validate packed frames: %w", err)
 	}
 
 	sort.Strings(errors)
@@ -315,16 +303,14 @@ func (collaborator *UCIPreparedIndexCollaborator) prepareAdmissionFile(ctx conte
 		prepared.errors = append(prepared.errors, file.Path+": source is unreadable")
 		return prepared, nil
 	case uci.IndexFilePresent:
-		if len(file.Body) > uci.IndexAdmissionMaxArtifactBodyBytes {
-			prepared.membership.State = uci.IndexAdmissionMembershipUnsupported
-			prepared.errors = append(prepared.errors, file.Path+": source exceeds the safe admission body limit")
-			return prepared, nil
-		}
 		switch path.Ext(file.Path) {
 		case ".go":
 			extracted := uci.ExtractGo(file.Body, collaborator.goProfile)
 			artifact, err := uci.NewIndexAdmissionArtifactFromGo(sourceID, goProfile, file.Body, extracted)
 			if err != nil {
+				if uci.IsIndexCapacityError(err) {
+					return uciPreparedAdmissionFile{}, err
+				}
 				return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: normalize Go source %q: %w", file.Path, err)
 			}
 			artifactID := artifact.ArtifactID
@@ -381,6 +367,9 @@ func (collaborator *UCIPreparedIndexCollaborator) prepareTreeSitterAdmissionFile
 	}
 	artifact, err := uci.NewIndexAdmissionArtifactFromTreeSitter(sourceID, profile, file.Body, parsed)
 	if err != nil {
+		if uci.IsIndexCapacityError(err) {
+			return uciPreparedAdmissionFile{}, err
+		}
 		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: %s for %q: %w", uciPreparedTreeSitterProtocolMessage, file.Path, err)
 	}
 	artifactID := artifact.ArtifactID
@@ -415,240 +404,129 @@ func uciPreparedExcludedMembershipState(exclusion uci.ScannerExclusion) uci.Inde
 	return uci.IndexAdmissionMembershipExcluded
 }
 
-func uciPreparedPackFrames(profileID string, files []uciPreparedAdmissionFile) ([]uci.IndexAdmissionFrame, []uciPreparedAdmissionFile, uint64, error) {
-	files = append([]uciPreparedAdmissionFile(nil), files...)
-	var dropped uint64
-	for {
-		uciPreparedAssignArtifactOwners(files)
-		frames, packed, attemptDropped, totalBytes, err := uciPreparedPackFrameAttempt(profileID, files)
-		if err != nil {
-			return nil, nil, 0, err
-		}
-		if ^uint64(0)-dropped < attemptDropped {
-			return nil, nil, 0, fmt.Errorf("uci prepared index: unresolved reference count overflow")
-		}
-		dropped += attemptDropped
-		files = packed
-		if len(frames) <= uci.IndexAdmissionMaxFrames && totalBytes <= uci.IndexAdmissionMaxTotalEncodedBytes {
-			return frames, files, dropped, nil
-		}
-
-		artifactIndex := uciPreparedLastRetainedArtifact(files)
-		if artifactIndex < 0 {
-			return nil, nil, 0, fmt.Errorf("uci prepared index: membership metadata exceeds admission frame or total limits")
-		}
-		artifactID := files[artifactIndex].artifact.ArtifactID
-		var capacityDropped uint64
-		files, capacityDropped = uciPreparedMarkArtifactUnsupported(files, artifactID, "source exceeds aggregate admission capacity")
-		if ^uint64(0)-dropped < capacityDropped {
-			return nil, nil, 0, fmt.Errorf("uci prepared index: unresolved reference count overflow")
-		}
-		dropped += capacityDropped
+func uciPreparedPackFrames(profileID string, files []uciPreparedAdmissionFile) ([]uci.IndexAdmissionFrame, [][]byte, error) {
+	records, err := uciPreparedAdmissionRecords(files)
+	if err != nil {
+		return nil, nil, err
 	}
-}
-
-func uciPreparedPackFrameAttempt(profileID string, files []uciPreparedAdmissionFile) ([]uci.IndexAdmissionFrame, []uciPreparedAdmissionFile, uint64, int, error) {
 	newFrame := func() uci.IndexAdmissionFrame {
 		return uci.IndexAdmissionFrame{
 			Version: uci.IndexAdmissionFrameVersion,
 			Profile: uci.IndexAdmissionProfile{ID: profileID},
 		}
 	}
-	if len(files) == 0 {
-		frame := newFrame()
-		encoded, err := uci.EncodeIndexAdmissionFrame(frame)
-		if err != nil {
-			return nil, nil, 0, 0, fmt.Errorf("uci prepared index: encode empty frame: %w", err)
-		}
-		return []uci.IndexAdmissionFrame{frame}, files, 0, len(encoded), nil
-	}
 
 	frames := make([]uci.IndexAdmissionFrame, 0, 1)
 	current := newFrame()
-	var dropped uint64
-	for index := range files {
+	for _, record := range records {
 		for {
-			candidate := uciPreparedAppendAdmissionFile(current, files[index])
-			if _, err := uci.EncodeIndexAdmissionFrame(candidate); err == nil {
-				current = candidate
+			err := uciPreparedTryAppendAdmissionRecord(&current, record)
+			if err == nil {
 				break
-			} else if !uciPreparedFrameCapacityError(err) {
-				return nil, nil, 0, 0, fmt.Errorf("uci prepared index: pack %q: %w", files[index].path, err)
 			}
-			if len(current.Memberships) != 0 {
-				frames = append(frames, current)
-				current = newFrame()
-				continue
+			if !uci.IsIndexCapacityError(err) {
+				return nil, nil, fmt.Errorf("uci prepared index: pack admission record: %w", err)
 			}
-
-			fitted, fileDropped, err := uciPreparedFitAdmissionFile(current, files[index])
-			if err != nil {
-				return nil, nil, 0, 0, err
+			if uciPreparedFrameEmpty(current) {
+				return nil, nil, err
 			}
-			if ^uint64(0)-dropped < fileDropped {
-				return nil, nil, 0, 0, fmt.Errorf("uci prepared index: unresolved reference count overflow")
-			}
-			dropped += fileDropped
-			files[index] = fitted
+			frames = append(frames, current)
+			current = newFrame()
 		}
 	}
 	frames = append(frames, current)
+	payloads, err := uciPreparedEncodeFrames(frames)
+	if err != nil {
+		return nil, nil, err
+	}
+	return frames, payloads, nil
+}
 
-	totalBytes := 0
-	for index, frame := range frames {
+func uciPreparedAdmissionRecords(files []uciPreparedAdmissionFile) ([]uciPreparedAdmissionRecord, error) {
+	records := make([]uciPreparedAdmissionRecord, 0, len(files)*3)
+	artifacts := make(map[string]*uci.IndexAdmissionArtifact, len(files))
+	for index := range files {
+		file := &files[index]
+		if file.membership.State != uci.IndexAdmissionMembershipPresent || file.artifact == nil {
+			continue
+		}
+		if owner, found := artifacts[file.artifact.ArtifactID]; found {
+			if owner.ContentDigest != file.artifact.ContentDigest || owner.FactsDigest != file.artifact.FactsDigest {
+				return nil, fmt.Errorf("uci prepared index: matching artifact identity has different facts")
+			}
+			continue
+		}
+		artifacts[file.artifact.ArtifactID] = file.artifact
+		records = append(records, uciPreparedAdmissionRecord{
+			kind: uciPreparedAdmissionArtifactRecord,
+			file: file,
+		})
+	}
+	for index := range files {
+		records = append(records, uciPreparedAdmissionRecord{
+			kind: uciPreparedAdmissionMembershipRecord,
+			file: &files[index],
+		})
+	}
+	for index := range files {
+		records = append(records, uciPreparedAdmissionRecord{
+			kind: uciPreparedAdmissionEdgeReplacementRecord,
+			file: &files[index],
+		})
+	}
+	return records, nil
+}
+
+func uciPreparedTryAppendAdmissionRecord(frame *uci.IndexAdmissionFrame, record uciPreparedAdmissionRecord) error {
+	if frame == nil || record.file == nil {
+		return fmt.Errorf("uci prepared index: invalid admission record")
+	}
+	artifacts := len(frame.Artifacts)
+	memberships := len(frame.Memberships)
+	replacements := len(frame.EdgeReplacements)
+	switch record.kind {
+	case uciPreparedAdmissionArtifactRecord:
+		if record.file.artifact == nil {
+			return fmt.Errorf("uci prepared index: artifact record is missing its artifact")
+		}
+		frame.Artifacts = append(frame.Artifacts, *record.file.artifact)
+	case uciPreparedAdmissionMembershipRecord:
+		frame.Memberships = append(frame.Memberships, record.file.membership)
+	case uciPreparedAdmissionEdgeReplacementRecord:
+		frame.EdgeReplacements = append(frame.EdgeReplacements, uci.IndexAdmissionEdgeReplacement{
+			SourcePath: record.file.path,
+			Edges:      record.file.edges,
+		})
+	default:
+		return fmt.Errorf("uci prepared index: unsupported admission record")
+	}
+	if _, err := uci.EncodeIndexAdmissionFrame(*frame); err == nil {
+		return nil
+	} else {
+		frame.Artifacts = frame.Artifacts[:artifacts]
+		frame.Memberships = frame.Memberships[:memberships]
+		frame.EdgeReplacements = frame.EdgeReplacements[:replacements]
+		return err
+	}
+}
+
+func uciPreparedFrameEmpty(frame uci.IndexAdmissionFrame) bool {
+	return len(frame.Artifacts) == 0 && len(frame.Memberships) == 0 && len(frame.Deletions) == 0 && len(frame.EdgeReplacements) == 0
+}
+
+func uciPreparedEncodeFrames(frames []uci.IndexAdmissionFrame) ([][]byte, error) {
+	payloads := make([][]byte, 0, len(frames))
+	for _, frame := range frames {
 		encoded, err := uci.EncodeIndexAdmissionFrame(frame)
 		if err != nil {
-			return nil, nil, 0, 0, fmt.Errorf("uci prepared index: encode packed frame %d: %w", index, err)
+			return nil, err
 		}
-		if len(encoded) > uci.IndexAdmissionMaxTotalEncodedBytes-totalBytes {
-			totalBytes = uci.IndexAdmissionMaxTotalEncodedBytes + 1
-			break
-		}
-		totalBytes += len(encoded)
+		payloads = append(payloads, encoded)
 	}
-	return frames, files, dropped, totalBytes, nil
-}
-
-func uciPreparedAssignArtifactOwners(files []uciPreparedAdmissionFile) {
-	owners := make(map[string]struct{})
-	for index := range files {
-		files[index].emitArtifact = false
-		if files[index].membership.State != uci.IndexAdmissionMembershipPresent || files[index].artifact == nil {
-			continue
-		}
-		artifactID := files[index].artifact.ArtifactID
-		if _, found := owners[artifactID]; found {
-			continue
-		}
-		owners[artifactID] = struct{}{}
-		files[index].emitArtifact = true
+	if err := uci.ValidateIndexAdmissionPayloads(payloads); err != nil {
+		return nil, err
 	}
-}
-
-func uciPreparedLastRetainedArtifact(files []uciPreparedAdmissionFile) int {
-	for index := len(files) - 1; index >= 0; index-- {
-		if files[index].emitArtifact && files[index].artifact != nil {
-			return index
-		}
-	}
-	return -1
-}
-
-func uciPreparedMarkArtifactUnsupported(files []uciPreparedAdmissionFile, artifactID, reason string) ([]uciPreparedAdmissionFile, uint64) {
-	var dropped uint64
-	for index := range files {
-		if files[index].artifact == nil || files[index].artifact.ArtifactID != artifactID {
-			continue
-		}
-		dropped += uint64(len(files[index].edges))
-		files[index] = uciPreparedUnsupportedFile(files[index], files[index].path+": "+reason)
-	}
-	return files, dropped
-}
-
-func uciPreparedFitAdmissionFile(frame uci.IndexAdmissionFrame, prepared uciPreparedAdmissionFile) (uciPreparedAdmissionFile, uint64, error) {
-	edges := append([]uci.IndexAdmissionEdge(nil), prepared.edges...)
-	sort.Slice(edges, func(left, right int) bool {
-		return edges[left].EdgeKey < edges[right].EdgeKey
-	})
-	withoutEdges := prepared
-	withoutEdges.edges = nil
-	if _, err := uci.EncodeIndexAdmissionFrame(uciPreparedAppendAdmissionFile(frame, withoutEdges)); err == nil {
-		fitCount := 0
-		low, high := 0, len(edges)
-		for low <= high {
-			middle := low + (high-low)/2
-			candidate := prepared
-			candidate.edges = edges[:middle]
-			if _, err := uci.EncodeIndexAdmissionFrame(uciPreparedAppendAdmissionFile(frame, candidate)); err == nil {
-				fitCount = middle
-				low = middle + 1
-			} else if uciPreparedFrameCapacityError(err) {
-				high = middle - 1
-			} else {
-				return uciPreparedAdmissionFile{}, 0, fmt.Errorf("uci prepared index: pack %q: %w", prepared.path, err)
-			}
-		}
-		prepared.edges = append([]uci.IndexAdmissionEdge(nil), edges[:fitCount]...)
-		dropped := uint64(len(edges) - fitCount)
-		if dropped != 0 {
-			prepared.errors = append(prepared.errors, prepared.path+": Go call resolution exceeds the safe admission frame limit")
-		}
-		return prepared, dropped, nil
-	} else if !uciPreparedFrameCapacityError(err) {
-		return uciPreparedAdmissionFile{}, 0, fmt.Errorf("uci prepared index: pack %q: %w", prepared.path, err)
-	}
-	if prepared.artifact == nil || !prepared.emitArtifact {
-		return uciPreparedAdmissionFile{}, 0, fmt.Errorf("uci prepared index: membership %q cannot fit a frame", prepared.path)
-	}
-	return uciPreparedUnsupportedFile(prepared, prepared.path+": safe encoded artifact cannot fit a frame"), uint64(len(edges)), nil
-}
-
-func uciPreparedAppendAdmissionFile(frame uci.IndexAdmissionFrame, prepared uciPreparedAdmissionFile) uci.IndexAdmissionFrame {
-	copy := frame.Clone()
-	if prepared.artifact != nil && prepared.emitArtifact && !uciPreparedFrameHasArtifact(copy, prepared.artifact.ArtifactID) {
-		copy.Artifacts = append(copy.Artifacts, *prepared.artifact)
-	}
-	copy.Memberships = append(copy.Memberships, prepared.membership)
-	copy.EdgeReplacements = append(copy.EdgeReplacements, uci.IndexAdmissionEdgeReplacement{
-		SourcePath: prepared.path,
-		Edges:      append([]uci.IndexAdmissionEdge(nil), prepared.edges...),
-	})
-	return copy
-}
-
-func uciPreparedFrameHasArtifact(frame uci.IndexAdmissionFrame, artifactID string) bool {
-	for _, artifact := range frame.Artifacts {
-		if artifact.ArtifactID == artifactID {
-			return true
-		}
-	}
-	return false
-}
-
-func uciPreparedUnsupportedFile(prepared uciPreparedAdmissionFile, message string) uciPreparedAdmissionFile {
-	prepared.artifact = nil
-	prepared.emitArtifact = false
-	prepared.edges = nil
-	prepared.membership.State = uci.IndexAdmissionMembershipUnsupported
-	prepared.membership.ArtifactID = nil
-	prepared.errors = append(prepared.errors, message)
-	return prepared
-}
-
-func uciPreparedFrameCapacityError(err error) bool {
-	return err != nil && (strings.Contains(err.Error(), "frame exceeds") ||
-		strings.Contains(err.Error(), "frame collection exceeds limit") ||
-		strings.Contains(err.Error(), "edge replacement exceeds limit"))
-}
-
-func uciPreparedDiscardUnavailableEdges(files []uciPreparedAdmissionFile) uint64 {
-	artifactByPath := make(map[string]string, len(files))
-	for _, prepared := range files {
-		if prepared.membership.State == uci.IndexAdmissionMembershipPresent && prepared.artifact != nil {
-			artifactByPath[prepared.path] = prepared.artifact.ArtifactID
-		}
-	}
-
-	var dropped uint64
-	for index := range files {
-		prepared := &files[index]
-		if prepared.membership.State != uci.IndexAdmissionMembershipPresent || prepared.artifact == nil {
-			dropped += uint64(len(prepared.edges))
-			prepared.edges = nil
-			continue
-		}
-		retained := make([]uci.IndexAdmissionEdge, 0, len(prepared.edges))
-		for _, edge := range prepared.edges {
-			if edge.SourceArtifactID != prepared.artifact.ArtifactID || edge.Target == nil || artifactByPath[edge.Target.PathKey] != edge.Target.ArtifactID {
-				dropped++
-				continue
-			}
-			retained = append(retained, edge)
-		}
-		prepared.edges = retained
-	}
-	return dropped
+	return payloads, nil
 }
 
 func uciPreparedAddResolvedGoCallEdges(files []uciPreparedAdmissionFile) (uint64, error) {
@@ -948,6 +826,7 @@ func (plan uciPreparedAdmissionPlan) publication() (uciPreparedPublication, erro
 		memberships:  make([]uci.IndexMembership, 0),
 		replacements: make([]uci.IndexEdgeReplacement, 0),
 	}
+	parts := make([]uci.IndexPart, 0, len(plan.frames))
 	seenMemberships := make(map[string]struct{})
 	seenReplacements := make(map[string]struct{})
 	for frameIndex, frame := range plan.frames {
@@ -955,6 +834,7 @@ func (plan uciPreparedAdmissionPlan) publication() (uciPreparedPublication, erro
 		if err != nil {
 			return uciPreparedPublication{}, fmt.Errorf("uci prepared index: derive publication part %d: %w", frameIndex, err)
 		}
+		parts = append(parts, part)
 		for _, membership := range part.Memberships {
 			if _, found := seenMemberships[membership.PathKey]; found {
 				return uciPreparedPublication{}, fmt.Errorf("uci prepared index: duplicate packed membership %q", membership.PathKey)
@@ -973,6 +853,9 @@ func (plan uciPreparedAdmissionPlan) publication() (uciPreparedPublication, erro
 			publication.edgeCount += uint64(len(replacement.Edges))
 			publication.replacements = append(publication.replacements, replacement)
 		}
+	}
+	if err := uci.ValidateIndexPublicationParts(parts, uci.DefaultIndexPublicationLimits()); err != nil {
+		return uciPreparedPublication{}, fmt.Errorf("uci prepared index: validate publication parts: %w", err)
 	}
 	manifestDigest, err := uci.DigestIndexManifest(publication.memberships)
 	if err != nil {

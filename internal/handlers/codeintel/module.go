@@ -886,7 +886,9 @@ func (m *Module) logIndexFailure(request indexRunRequest, state *indexState, tar
 
 func (m *Module) failedIndexState(request indexRunRequest, state *indexState, err error) *indexState {
 	diagnostic := err.Error()
-	if request.origin == indexRunAutomatic {
+	if uci.IsIndexCapacityError(err) {
+		diagnostic = string(uci.IndexCapacityExceeded)
+	} else if request.origin == indexRunAutomatic {
 		diagnostic = automaticIndexFailureDiagnostic
 	}
 	return &indexState{Status: statusError, RunID: state.RunID, StartedAt: state.StartedAt, Err: diagnostic}
@@ -1054,6 +1056,7 @@ func (m *Module) handleStatus(ctx context.Context, p muxcore.ProjectContext, arg
 	}
 
 	result := map[string]any{"status": "never_indexed"}
+	capacityFailure := false
 	var barrierSnapshot indexRunSnapshot
 	var barrierOutcome indexBarrierOutcome
 	if afterBarrier != nil {
@@ -1079,6 +1082,15 @@ func (m *Module) handleStatus(ctx context.Context, p muxcore.ProjectContext, arg
 		if state.Err != "" {
 			result["error"] = state.Err
 		}
+		capacityFailure = state.Status == statusError && state.Err == string(uci.IndexCapacityExceeded)
+	}
+	if capacityFailure {
+		result["server_counts_available"] = false
+		out, marshalErr := json.Marshal(result)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("codebase_status: marshal: %w", marshalErr)
+		}
+		return out, nil
 	}
 	if afterBarrier != nil {
 		refreshed, refreshErr := m.core.ResolveIndexTarget(ctx, p, contextHandle)

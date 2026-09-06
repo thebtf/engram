@@ -2,7 +2,10 @@ package uci
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -374,6 +377,114 @@ func TestIndexAdmissionBuildValidationRejectsMissingMismatchedAndDuplicateGlobal
 		if err := ValidateIndexAdmissionFrames([]IndexAdmissionFrame{sourceFrame, targetFrame, duplicate}); err == nil {
 			t.Fatal("ValidateIndexAdmissionFrames() accepted duplicate membership across frames")
 		}
+	})
+}
+
+func TestIndexAdmissionCapacityErrorsAreTyped(t *testing.T) {
+	requireCapacity := func(t *testing.T, err error, scope IndexCapacityScope, resource IndexCapacityResource, required, limit uint64) {
+		t.Helper()
+		var capacity *IndexCapacityError
+		if !errors.As(err, &capacity) {
+			t.Fatalf("error type = %T (%v), want *IndexCapacityError", err, err)
+		}
+		if capacity.Code() != IndexCapacityExceeded || capacity.Error() != string(IndexCapacityExceeded) {
+			t.Fatalf("capacity code = %q / %q, want %q", capacity.Code(), capacity.Error(), IndexCapacityExceeded)
+		}
+		if capacity.Scope() != scope || capacity.Resource() != resource || capacity.Required() != required || capacity.Limit() != limit {
+			t.Fatalf("capacity facts = (%q, %q, %d, %d), want (%q, %q, %d, %d)", capacity.Scope(), capacity.Resource(), capacity.Required(), capacity.Limit(), scope, resource, required, limit)
+		}
+	}
+
+	t.Run("body below nominal cap that cannot fit JSON", func(t *testing.T) {
+		source := []byte("package sample\n//" + strings.Repeat("x", IndexAdmissionMaxArtifactBodyBytes-32))
+		artifact := indexAdmissionTestArtifact(t, indexAdmissionTestSourceA, source)
+		artifactID := artifact.ArtifactID
+		frame := IndexAdmissionFrame{
+			Version:   IndexAdmissionFrameVersion,
+			Profile:   IndexAdmissionProfile{ID: indexAdmissionTestProfile},
+			Artifacts: []IndexAdmissionArtifact{artifact},
+			Memberships: []IndexAdmissionMembership{{
+				PathKey:     "large.go",
+				DisplayPath: "large.go",
+				Mode:        "100644",
+				State:       IndexAdmissionMembershipPresent,
+				ArtifactID:  &artifactID,
+			}},
+		}
+		_, err := EncodeIndexAdmissionFrame(frame)
+		if err == nil {
+			t.Fatal("EncodeIndexAdmissionFrame() accepted a JSON-unrepresentable artifact")
+		}
+		var capacity *IndexCapacityError
+		if !errors.As(err, &capacity) {
+			t.Fatalf("EncodeIndexAdmissionFrame() error = %T (%v), want *IndexCapacityError", err, err)
+		}
+		requireCapacity(t, err, IndexCapacityScopeAdmissionFrame, IndexCapacityResourceEncodedBytes, capacity.Required(), uint64(IndexAdmissionMaxEncodedFrameBytes))
+	})
+
+	t.Run("frame count", func(t *testing.T) {
+		err := ValidateIndexAdmissionPayloads(make([][]byte, IndexAdmissionMaxFrames+1))
+		requireCapacity(t, err, IndexCapacityScopeAdmissionBuild, IndexCapacityResourceFrames, uint64(IndexAdmissionMaxFrames+1), uint64(IndexAdmissionMaxFrames))
+	})
+
+	t.Run("aggregate encoded bytes", func(t *testing.T) {
+		memberships := make([]IndexAdmissionMembership, 0, 100)
+		for index := range cap(memberships) {
+			suffix := fmt.Sprintf("-%03d.go", index)
+			pathKey := strings.Repeat("a", 3_900-len(suffix)) + suffix
+			memberships = append(memberships, IndexAdmissionMembership{
+				PathKey:     pathKey,
+				DisplayPath: pathKey,
+				Mode:        "100644",
+				State:       IndexAdmissionMembershipUnsupported,
+			})
+		}
+		payload, err := EncodeIndexAdmissionFrame(IndexAdmissionFrame{
+			Version:     IndexAdmissionFrameVersion,
+			Profile:     IndexAdmissionProfile{ID: indexAdmissionTestProfile},
+			Memberships: memberships,
+		})
+		if err != nil {
+			t.Fatalf("EncodeIndexAdmissionFrame() error = %v", err)
+		}
+		count := IndexAdmissionMaxTotalEncodedBytes/len(payload) + 1
+		if count > IndexAdmissionMaxFrames {
+			t.Fatalf("payload count %d unexpectedly exceeds frame cap", count)
+		}
+		payloads := make([][]byte, count)
+		for index := range payloads {
+			payloads[index] = payload
+		}
+		err = ValidateIndexAdmissionPayloads(payloads)
+		requireCapacity(t, err, IndexCapacityScopeAdmissionBuild, IndexCapacityResourceEncodedBytes, uint64(count*len(payload)), uint64(IndexAdmissionMaxTotalEncodedBytes))
+	})
+
+	t.Run("complete edge replacement", func(t *testing.T) {
+		frame := IndexAdmissionFrame{
+			Version: IndexAdmissionFrameVersion,
+			Profile: IndexAdmissionProfile{ID: indexAdmissionTestProfile},
+			EdgeReplacements: []IndexAdmissionEdgeReplacement{{
+				SourcePath: "source.go",
+				Edges:      make([]IndexAdmissionEdge, indexAdmissionMaxEdgesPerReplacement+1),
+			}},
+		}
+		_, err := EncodeIndexAdmissionFrame(frame)
+		requireCapacity(t, err, IndexCapacityScopeEdgeReplacement, IndexCapacityResourceEdges, uint64(indexAdmissionMaxEdgesPerReplacement+1), uint64(indexAdmissionMaxEdgesPerReplacement))
+	})
+
+	t.Run("canonical publication part", func(t *testing.T) {
+		part, err := indexAdmissionTestFrame(t).PublicationPart()
+		if err != nil {
+			t.Fatalf("PublicationPart() error = %v", err)
+		}
+		limits := DefaultIndexPublicationLimits()
+		limits.MaxPartBytes = 1
+		err = ValidateIndexPublicationParts([]IndexPart{part}, limits)
+		var capacity *IndexCapacityError
+		if !errors.As(err, &capacity) {
+			t.Fatalf("ValidateIndexPublicationParts() error = %T (%v), want *IndexCapacityError", err, err)
+		}
+		requireCapacity(t, err, IndexCapacityScopePublicationPart, IndexCapacityResourceEncodedBytes, capacity.Required(), 1)
 	})
 }
 

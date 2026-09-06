@@ -257,6 +257,10 @@ func TestUCIPreparedIndexPublishesGoFramesAndReplaysExactInputs(t *testing.T) {
 			State:     uci.IndexFileExcluded,
 			Exclusion: uci.ScannerExclusionProtected,
 		},
+		{
+			Path:  "unreadable.go",
+			State: uci.IndexFileUnreadable,
+		},
 	}
 	fixture.scanner.result.Coverage.ExcludedFiles = 1
 
@@ -269,6 +273,7 @@ func TestUCIPreparedIndexPublishesGoFramesAndReplaysExactInputs(t *testing.T) {
 	require.Equal(t, []string{
 		"notes.txt: source language is unsupported",
 		"protected.go: source is excluded",
+		"unreadable.go: source is unreadable",
 	}, first.Errors)
 	require.Equal(t, 1, fixture.scanner.calls)
 	require.Equal(t, fixture.root, fixture.scanner.root)
@@ -286,20 +291,22 @@ func TestUCIPreparedIndexPublishesGoFramesAndReplaysExactInputs(t *testing.T) {
 	expectedArtifactID, err := uci.DeriveIndexAdmissionArtifactID(preparedSourceID, frame.Artifacts[0].ContentDigest, frame.Artifacts[0].Profile)
 	require.NoError(t, err)
 	require.Equal(t, expectedArtifactID, frame.Artifacts[0].ArtifactID)
-	require.Len(t, frame.Memberships, 3)
+	require.Len(t, frame.Memberships, 4)
 	preparedRequireMembership(t, frame, "call.go", uci.IndexAdmissionMembershipPresent, true)
 	preparedRequireMembership(t, frame, "notes.txt", uci.IndexAdmissionMembershipUnsupported, false)
 	preparedRequireMembership(t, frame, "protected.go", uci.IndexAdmissionMembershipProtected, false)
-	require.Len(t, frame.EdgeReplacements, 3)
+	preparedRequireMembership(t, frame, "unreadable.go", uci.IndexAdmissionMembershipUnreadable, false)
+	require.Len(t, frame.EdgeReplacements, 4)
 	part, err := frame.PublicationPart()
 	require.NoError(t, err)
-	require.Len(t, part.EdgeReplacements, 3)
+	require.Len(t, part.EdgeReplacements, 4)
 	callEdge := preparedRequireResolvedCall(t, part, "call.go")
 	require.Equal(t, "func:Caller", *callEdge.SourceSymbolKey)
 	require.Equal(t, "func:Target", *callEdge.Target.SymbolKey)
 	coverage := preparedCoverage(t, fixture.client.finalRequests[0])
 	require.Equal(t, uci.IndexCoveragePartial, coverage.Lexical)
 	require.Equal(t, uint64(2), coverage.ExcludedFiles)
+	require.Equal(t, uint64(1), coverage.UnreadableFiles)
 
 	state, found, err := fixture.registry.Snapshot(context.Background(), preparedCheckoutID)
 	require.NoError(t, err)
@@ -662,15 +669,17 @@ func TestUCIPreparedIndexPacksGloballyValidCrossFrameGoCall(t *testing.T) {
 	require.Len(t, frames, 2)
 	require.NoError(t, uci.ValidateIndexAdmissionFramesForBinding(frames, fixture.target.Binding))
 
-	sourceFrame := preparedFrameIndex(t, frames, "call.go")
-	targetFrame := preparedFrameIndex(t, frames, "target.go")
-	require.NotEqual(t, sourceFrame, targetFrame)
-	rawEdge := preparedResolvedAdmissionCall(t, frames[sourceFrame], "call.go")
+	sourceArtifactFrame := preparedArtifactFrameIndex(t, frames, "call.go")
+	targetArtifactFrame := preparedArtifactFrameIndex(t, frames, "target.go")
+	require.NotEqual(t, sourceArtifactFrame, targetArtifactFrame)
+	sourceEdgeFrame := preparedEdgeReplacementFrameIndex(t, frames, "call.go")
+	require.NotEqual(t, sourceArtifactFrame, sourceEdgeFrame)
+	rawEdge := preparedResolvedAdmissionCall(t, frames[sourceEdgeFrame], "call.go")
 	require.NotNil(t, rawEdge.SourceSymbolKey)
 	require.Equal(t, "func:Caller", *rawEdge.SourceSymbolKey)
 	require.NotNil(t, rawEdge.Target)
 	require.Equal(t, "target.go", rawEdge.Target.PathKey)
-	publicationPart, err := frames[sourceFrame].PublicationPart()
+	publicationPart, err := frames[sourceEdgeFrame].PublicationPart()
 	require.NoError(t, err)
 	publishedEdge := preparedPublicationEdge(t, publicationPart, "call.go", rawEdge.EdgeKey)
 	expectedReferenceID, err := uci.DeriveIndexAdmissionReferenceSiteID(rawEdge.SourceArtifactID, rawEdge.Evidence.ReferenceSiteKey)
@@ -694,7 +703,7 @@ func TestUCIPreparedIndexLeavesAmbiguousGoCallsUnresolved(t *testing.T) {
 	_, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
 	require.NoError(t, err)
 	frames := preparedFrames(t, fixture.client.stagePayloadSets[0])
-	callerFrame := preparedFrameIndex(t, frames, "caller.go")
+	callerFrame := preparedEdgeReplacementFrameIndex(t, frames, "caller.go")
 	for _, replacement := range frames[callerFrame].EdgeReplacements {
 		if replacement.SourcePath == "caller.go" {
 			require.Empty(t, replacement.Edges)
@@ -714,7 +723,7 @@ func TestUCIPreparedIndexLeavesOwnerlessGoCallsUnresolved(t *testing.T) {
 	_, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
 	require.NoError(t, err)
 	frames := preparedFrames(t, fixture.client.stagePayloadSets[0])
-	initializerFrame := preparedFrameIndex(t, frames, "initializer.go")
+	initializerFrame := preparedEdgeReplacementFrameIndex(t, frames, "initializer.go")
 	for _, replacement := range frames[initializerFrame].EdgeReplacements {
 		if replacement.SourcePath == "initializer.go" {
 			require.Empty(t, replacement.Edges)
@@ -961,6 +970,33 @@ func preparedFrameIndex(t *testing.T, frames []uci.IndexAdmissionFrame, path str
 	return -1
 }
 
+func preparedArtifactFrameIndex(t *testing.T, frames []uci.IndexAdmissionFrame, path string) int {
+	t.Helper()
+	artifact := preparedArtifactForPath(t, frames, path)
+	for frameIndex, frame := range frames {
+		for _, candidate := range frame.Artifacts {
+			if candidate.ArtifactID == artifact.ArtifactID {
+				return frameIndex
+			}
+		}
+	}
+	require.Failf(t, "artifact missing", "path %q has no admitted artifact frame", path)
+	return -1
+}
+
+func preparedEdgeReplacementFrameIndex(t *testing.T, frames []uci.IndexAdmissionFrame, path string) int {
+	t.Helper()
+	for frameIndex, frame := range frames {
+		for _, replacement := range frame.EdgeReplacements {
+			if replacement.SourcePath == path {
+				return frameIndex
+			}
+		}
+	}
+	require.Failf(t, "edge replacement missing", "path %q has no edge replacement", path)
+	return -1
+}
+
 func preparedResolvedAdmissionCall(t *testing.T, frame uci.IndexAdmissionFrame, sourcePath string) uci.IndexAdmissionEdge {
 	t.Helper()
 	for _, replacement := range frame.EdgeReplacements {
@@ -1001,7 +1037,30 @@ func preparedRequireNoPublication(t *testing.T, fixture preparedIndexFixture) {
 	require.Zero(t, fixture.client.finalizeCalls)
 }
 
-func TestUCIPreparedIndexExcludesGoArtifactWhoseSafeFrameCannotFit(t *testing.T) {
+func preparedRequireCapacityFailureBeforeBegin(t *testing.T, fixture preparedIndexFixture, result *engramcore.IndexResult, err error, scope uci.IndexCapacityScope, resource uci.IndexCapacityResource) *uci.IndexCapacityError {
+	t.Helper()
+	require.Nil(t, result)
+	var capacity *uci.IndexCapacityError
+	require.ErrorAs(t, err, &capacity)
+	require.Equal(t, uci.IndexCapacityExceeded, capacity.Code())
+	require.Equal(t, string(uci.IndexCapacityExceeded), err.Error())
+	require.Equal(t, scope, capacity.Scope())
+	require.Equal(t, resource, capacity.Resource())
+	require.Greater(t, capacity.Required(), capacity.Limit())
+	require.Equal(t, 1, fixture.scanner.calls)
+	require.Empty(t, fixture.client.beginRequests)
+	require.Zero(t, fixture.client.stageCalls)
+	require.Zero(t, fixture.client.finalizeCalls)
+	require.Equal(t, fixture.parent, *fixture.target.Binding.Context)
+	state, found, snapshotErr := fixture.registry.Snapshot(context.Background(), preparedCheckoutID)
+	require.NoError(t, snapshotErr)
+	require.True(t, found)
+	require.Zero(t, state.LastReconciledSequence)
+	require.NotEmpty(t, state.DirtyPaths)
+	return capacity
+}
+
+func TestUCIPreparedIndexRefusesGoArtifactWhoseSafeFrameCannotFit(t *testing.T) {
 	fixture := newPreparedIndexFixture(t)
 	fixture.scanner.result.Files = []uci.ScannerFile{{
 		Path:  "large.go",
@@ -1010,17 +1069,108 @@ func TestUCIPreparedIndexExcludesGoArtifactWhoseSafeFrameCannotFit(t *testing.T)
 	}}
 
 	result, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	preparedRequireCapacityFailureBeforeBegin(t, fixture, result, err, uci.IndexCapacityScopeAdmissionFrame, uci.IndexCapacityResourceEncodedBytes)
+}
+
+func TestUCIPreparedIndexRefusesAggregateCapacityBeforePublishing(t *testing.T) {
+	fixture := newPreparedIndexFixture(t)
+	padding := strings.Repeat("x", 400_000)
+	files := make([]uci.ScannerFile, 0, 32)
+	for index := range 32 {
+		files = append(files, uci.ScannerFile{
+			Path:  fmt.Sprintf("large-%02d.go", index),
+			State: uci.IndexFilePresent,
+			Body:  []byte(fmt.Sprintf("package sample\nfunc F%d() {}\n//%s\n", index, padding)),
+		})
+	}
+	fixture.scanner.result.Files = files
+
+	result, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	capacity := preparedRequireCapacityFailureBeforeBegin(t, fixture, result, err, uci.IndexCapacityScopeAdmissionBuild, uci.IndexCapacityResourceEncodedBytes)
+	require.Equal(t, uint64(uci.IndexAdmissionMaxTotalEncodedBytes), capacity.Limit())
+}
+
+func TestUCIPreparedIndexRefusesOversizedCallCorpusBeforePublishing(t *testing.T) {
+	fixture := newPreparedIndexFixture(t)
+	const calls = 4_097
+	fixture.scanner.result.Files = []uci.ScannerFile{
+		{
+			Path:  "caller.go",
+			State: uci.IndexFilePresent,
+			Body:  []byte("package sample\nfunc Caller() {\n" + strings.Repeat("\tTarget()\n", calls) + "}\n"),
+		},
+		{
+			Path:  "target.go",
+			State: uci.IndexFilePresent,
+			Body:  []byte("package sample\nfunc Target() {}\n"),
+		},
+	}
+
+	result, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	preparedRequireCapacityFailureBeforeBegin(t, fixture, result, err, uci.IndexCapacityScopeAdmissionFrame, uci.IndexCapacityResourceEncodedBytes)
+}
+
+func TestUCIPreparedIndexPacksCompleteRecordsWithoutLoss(t *testing.T) {
+	fixture := newPreparedIndexFixture(t)
+	const calls = 1_400
+	caller := "package sample\nfunc Caller() {\n" + strings.Repeat("\tTarget()\n", calls) + "}\n//" + strings.Repeat("x", 250_000) + "\n"
+	alias := "package sample\nfunc Alias() {}\n"
+	fixture.scanner.result.Files = []uci.ScannerFile{
+		{Path: "caller.go", State: uci.IndexFilePresent, Body: []byte(caller)},
+		{Path: "target.go", State: uci.IndexFilePresent, Body: []byte("package sample\nfunc Target() {}\n")},
+		{Path: "alias-a.go", State: uci.IndexFilePresent, Body: []byte(alias)},
+		{Path: "alias-b.go", State: uci.IndexFilePresent, Body: []byte(alias)},
+	}
+
+	result, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
 	require.NoError(t, err)
-	require.Zero(t, result.Uploaded)
-	require.Contains(t, result.Errors, "large.go: safe encoded artifact cannot fit a frame")
+	require.Equal(t, fixture.published, result.Context)
+	require.Equal(t, 3, result.Uploaded)
+	require.Empty(t, result.Errors)
 	require.Len(t, fixture.client.stagePayloadSets, 1)
-	frame, err := uci.DecodeIndexAdmissionFrame(fixture.client.stagePayloadSets[0][0])
-	require.NoError(t, err)
-	preparedRequireMembership(t, frame, "large.go", uci.IndexAdmissionMembershipUnsupported, false)
-	require.Empty(t, frame.Artifacts)
+	require.Len(t, fixture.client.finalRequests, 1)
+	frames := preparedFrames(t, fixture.client.stagePayloadSets[0])
+	require.NoError(t, uci.ValidateIndexAdmissionFramesForBinding(frames, fixture.target.Binding))
+
+	memberships := make(map[string]uci.IndexAdmissionMembership)
+	artifacts := make(map[string]struct{})
+	edgeKeys := make(map[string]struct{})
+	replacements := 0
+	for _, frame := range frames {
+		for _, artifact := range frame.Artifacts {
+			artifacts[artifact.ArtifactID] = struct{}{}
+		}
+		for _, membership := range frame.Memberships {
+			memberships[membership.PathKey] = membership
+		}
+		for _, replacement := range frame.EdgeReplacements {
+			if replacement.SourcePath != "caller.go" {
+				continue
+			}
+			replacements++
+			for _, edge := range replacement.Edges {
+				require.NotNil(t, edge.Target)
+				require.Equal(t, "target.go", edge.Target.PathKey)
+				edgeKeys[edge.EdgeKey] = struct{}{}
+			}
+		}
+	}
+	require.Len(t, memberships, 4)
+	for _, path := range []string{"caller.go", "target.go", "alias-a.go", "alias-b.go"} {
+		membership, found := memberships[path]
+		require.True(t, found)
+		require.Equal(t, uci.IndexAdmissionMembershipPresent, membership.State)
+		require.NotNil(t, membership.ArtifactID)
+	}
+	require.Equal(t, *memberships["alias-a.go"].ArtifactID, *memberships["alias-b.go"].ArtifactID)
+	require.Len(t, artifacts, 3)
+	require.Equal(t, 1, replacements)
+	require.Len(t, edgeKeys, calls)
+	callerArtifactFrame := preparedArtifactFrameIndex(t, frames, "caller.go")
+	callerEdgeFrame := preparedEdgeReplacementFrameIndex(t, frames, "caller.go")
+	require.NotEqual(t, callerArtifactFrame, callerEdgeFrame)
 	coverage := preparedCoverage(t, fixture.client.finalRequests[0])
-	require.Equal(t, uci.IndexCoveragePartial, coverage.Lexical)
-	require.Equal(t, uint64(1), coverage.ExcludedFiles)
+	require.Zero(t, coverage.UnresolvedReferences)
 }
 
 func TestUCIPreparedIndexPublishesTreeSitterFactsWithPinnedProfile(t *testing.T) {
@@ -1236,15 +1386,26 @@ func preparedTreeSitterSpan(source []byte, start, end int) uci.IndexSpan {
 
 func preparedArtifactForPath(t *testing.T, frames []uci.IndexAdmissionFrame, path string) uci.IndexAdmissionArtifact {
 	t.Helper()
+	var artifactID string
 	for _, frame := range frames {
 		for _, membership := range frame.Memberships {
-			if membership.PathKey != path || membership.ArtifactID == nil {
-				continue
+			if membership.PathKey == path && membership.ArtifactID != nil {
+				artifactID = *membership.ArtifactID
+				break
 			}
-			for _, artifact := range frame.Artifacts {
-				if artifact.ArtifactID == *membership.ArtifactID {
-					return artifact
-				}
+		}
+		if artifactID != "" {
+			break
+		}
+	}
+	if artifactID == "" {
+		require.Failf(t, "artifact missing", "path %q has no admitted artifact", path)
+		return uci.IndexAdmissionArtifact{}
+	}
+	for _, frame := range frames {
+		for _, artifact := range frame.Artifacts {
+			if artifact.ArtifactID == artifactID {
+				return artifact
 			}
 		}
 	}
