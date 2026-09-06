@@ -1442,7 +1442,7 @@ func (fixture *uciPublicationFixture) describeArtifact(t *testing.T, sourceID st
 func (fixture *uciPublicationFixture) newPublisher(t *testing.T, db *gormlib.DB) ucidomain.IndexStore {
 	t.Helper()
 
-	publisher, err := NewUCIProjectionStore(db).Publisher(fixture.authorizer, fixture.limits)
+	publisher, err := NewUCIProjectionStore(db).Publisher(fixture.authorizer, ucidomain.IndexPublicationConfig{Limits: fixture.limits})
 	require.NoError(t, err)
 	return publisher
 }

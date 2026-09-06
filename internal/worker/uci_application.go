@@ -101,9 +101,8 @@ func (application *UCIApplication) ResolveLegacyProject(ctx context.Context, _ u
 	})
 }
 
-// SearchCodebase executes FTS inside the already-authorized immutable View.
-// The optional semantic service is selected only when it has been explicitly
-// supplied by a future provider composition.
+// SearchCodebase executes retrieval inside the already-authorized immutable View.
+// The shared semantic service degrades to lexical until exact profile coverage is complete.
 func (application *UCIApplication) SearchCodebase(ctx context.Context, authorized uci.AuthorizedContext, input mcp.CodebaseSearchInput) (uci.QueryResponse, error) {
 	if application == nil || application.queryService == nil {
 		return uci.QueryResponse{}, errors.New("UCI application query service is not configured")
@@ -186,6 +185,7 @@ func (application *UCIApplication) CodebaseStatus(ctx context.Context, authorize
 	return mcp.CodebaseStatusSnapshot{
 		TotalChunks:    totalChunks,
 		EmbeddedChunks: embeddedChunks,
+		Embedding:      snapshot.Embedding,
 	}, nil
 }
 

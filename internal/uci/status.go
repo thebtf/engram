@@ -216,35 +216,111 @@ func (job IndexStatusJob) Validate() error {
 	return nil
 }
 
+// EmbeddingStatus reports the exact configured-profile enrichment state for
+// one selected View. Its candidate denominator is independent of query filters
+// and publication-owned coverage.
+type EmbeddingStatus struct {
+	EmbeddingProfileID *string
+	Coverage           IndexCoverageState
+	TotalCandidates    uint64
+	ReadyCandidates    uint64
+	PendingJobs        uint64
+	JobState           *IndexStatusJobState
+	ErrorCode          *EmbeddingFailureCode
+	RetryAfter         *time.Time
+}
+
+func (status EmbeddingStatus) clone() EmbeddingStatus {
+	copy := status
+	if status.EmbeddingProfileID != nil {
+		profileID := *status.EmbeddingProfileID
+		copy.EmbeddingProfileID = &profileID
+	}
+	if status.JobState != nil {
+		jobState := *status.JobState
+		copy.JobState = &jobState
+	}
+	if status.ErrorCode != nil {
+		errorCode := *status.ErrorCode
+		copy.ErrorCode = &errorCode
+	}
+	if status.RetryAfter != nil {
+		retryAfter := status.RetryAfter.UTC()
+		copy.RetryAfter = &retryAfter
+	}
+	return copy
+}
+
+func (status EmbeddingStatus) Validate() error {
+	if !isIndexCoverageState(status.Coverage) || status.ReadyCandidates > status.TotalCandidates {
+		return fmt.Errorf("uci embedding status: invalid coverage counts")
+	}
+	if status.EmbeddingProfileID == nil {
+		if status.Coverage != IndexCoverageUnavailable || status.TotalCandidates != 0 || status.ReadyCandidates != 0 || status.PendingJobs != 0 || status.JobState != nil || status.ErrorCode != nil || status.RetryAfter != nil {
+			return fmt.Errorf("uci embedding status: unavailable profile has state")
+		}
+		return nil
+	}
+	if !canonicalContextUUID(*status.EmbeddingProfileID) {
+		return fmt.Errorf("uci embedding status: invalid profile")
+	}
+	if status.JobState != nil && !status.JobState.valid() {
+		return fmt.Errorf("uci embedding status: invalid job state")
+	}
+	if status.ErrorCode != nil && !status.ErrorCode.valid() {
+		return fmt.Errorf("uci embedding status: invalid error code")
+	}
+	if status.RetryAfter != nil && status.RetryAfter.IsZero() {
+		return fmt.Errorf("uci embedding status: invalid retry time")
+	}
+	if status.PendingJobs > 0 && (status.JobState == nil || !status.JobState.pending()) {
+		return fmt.Errorf("uci embedding status: pending jobs lack a pending state")
+	}
+	if status.Coverage == IndexCoverageComplete {
+		if status.TotalCandidates == 0 || status.ReadyCandidates != status.TotalCandidates || status.PendingJobs != 0 || status.JobState == nil || *status.JobState != IndexStatusJobSucceeded || status.ErrorCode != nil || status.RetryAfter != nil {
+			return fmt.Errorf("uci embedding status: complete coverage lacks exact completion proof")
+		}
+	}
+	if status.TotalCandidates == 0 && status.ReadyCandidates != 0 {
+		return fmt.Errorf("uci embedding status: empty denominator has ready candidates")
+	}
+	if status.ErrorCode != nil && *status.ErrorCode == EmbeddingFailureNoCandidates && (status.TotalCandidates != 0 || status.ReadyCandidates != 0 || status.Coverage != IndexCoverageUnavailable || status.JobState == nil || *status.JobState != IndexStatusJobSucceeded) {
+		return fmt.Errorf("uci embedding status: no-candidates state is invalid")
+	}
+	return nil
+}
+
 // IndexStatusSnapshot is a storage-agnostic, exact-View status read. All
 // counts are scoped through Context before they are calculated.
 type IndexStatusSnapshot struct {
-	Context             ContextRef
-	SourceState         IndexStatusSourceState
-	CheckoutState       IndexStatusCheckoutState
-	ViewState           IndexStatusViewState
-	CurrentViewRelation IndexStatusCurrentViewRelation
-	Dirty               bool
-	ObservedFSSeq       int64
-	Coverage            IndexCoverage
-	PublishedAt         time.Time
-	ScanStartedAt       time.Time
-	ScanCompletedAt     time.Time
-	ChunkCount          uint64
-	ReadyEmbeddingCount uint64
-	PendingJobCount     uint64
-	RelevantJob         *IndexStatusJob
-	Freshness           QueryFreshness
+	Context                    ContextRef
+	SourceState                IndexStatusSourceState
+	CheckoutState              IndexStatusCheckoutState
+	ViewState                  IndexStatusViewState
+	CurrentViewRelation        IndexStatusCurrentViewRelation
+	Dirty                      bool
+	ObservedFSSeq              int64
+	Coverage                   IndexCoverage
+	PublishedAt                time.Time
+	ScanStartedAt              time.Time
+	ScanCompletedAt            time.Time
+	ChunkCount                 uint64
+	ReadyEmbeddingCount        uint64
+	PendingPublicationJobCount uint64
+	PublicationJob             *IndexStatusJob
+	Embedding                  EmbeddingStatus
+	Freshness                  QueryFreshness
 }
 
 // Clone returns a defensive copy of the status snapshot.
 func (snapshot IndexStatusSnapshot) Clone() IndexStatusSnapshot {
 	copy := snapshot
 	copy.Context = snapshot.Context.clone()
-	if snapshot.RelevantJob != nil {
-		job := snapshot.RelevantJob.clone()
-		copy.RelevantJob = &job
+	if snapshot.PublicationJob != nil {
+		job := snapshot.PublicationJob.clone()
+		copy.PublicationJob = &job
 	}
+	copy.Embedding = snapshot.Embedding.clone()
 	return copy
 }
 
@@ -275,15 +351,18 @@ func (snapshot IndexStatusSnapshot) Validate() error {
 	if !isIndexCoverageState(snapshot.Coverage.Structural) || !isIndexCoverageState(snapshot.Coverage.Lexical) || !isIndexCoverageState(snapshot.Coverage.Vector) {
 		return fmt.Errorf("uci index status: invalid coverage")
 	}
-	if snapshot.RelevantJob != nil {
-		if err := snapshot.RelevantJob.Validate(); err != nil {
+	if snapshot.PublicationJob != nil {
+		if err := snapshot.PublicationJob.Validate(); err != nil {
 			return err
 		}
 	}
-	if snapshot.PendingJobCount > 0 {
-		if snapshot.RelevantJob == nil || !snapshot.RelevantJob.State.pending() {
-			return fmt.Errorf("uci index status: pending job count lacks a pending relevant job")
+	if snapshot.PendingPublicationJobCount > 0 {
+		if snapshot.PublicationJob == nil || !snapshot.PublicationJob.State.pending() {
+			return fmt.Errorf("uci index status: pending publication jobs lack a pending publication state")
 		}
+	}
+	if err := snapshot.Embedding.Validate(); err != nil {
+		return err
 	}
 	if err := snapshot.Freshness.Validate(); err != nil {
 		return fmt.Errorf("uci index status: invalid freshness: %w", err)
@@ -302,7 +381,7 @@ func (snapshot IndexStatusSnapshot) Validate() error {
 		if snapshot.CurrentViewRelation != IndexStatusCurrentViewSelected {
 			return fmt.Errorf("uci index status: published view is not the checkout current pointer")
 		}
-		if snapshot.CheckoutState == IndexStatusCheckoutCatchingUp || snapshot.PendingJobCount > 0 {
+		if snapshot.CheckoutState == IndexStatusCheckoutCatchingUp || snapshot.PendingPublicationJobCount > 0 {
 			return snapshot.validateFreshness(QueryFreshnessCatchingUp, QueryFreshnessWatchWatermark, QueryEnrichmentPending, nil, QueryFreshnessDispositionStale, disposition)
 		}
 		zero := int64(0)
@@ -330,21 +409,28 @@ func (snapshot IndexStatusSnapshot) validateFreshness(
 	return nil
 }
 
-// IndexStatusStore loads a snapshot from the already-authorized exact View. It
-// must not resolve a new context or substitute a checkout current View.
+// IndexStatusStore loads a snapshot from the already-authorized exact View.
+// It must not resolve a new context or substitute a checkout current View.
 type IndexStatusStore interface {
-	LoadIndexStatus(context.Context, AuthorizedContext) (IndexStatusSnapshot, error)
+	LoadIndexStatus(context.Context, AuthorizedContext, *VectorProfile) (IndexStatusSnapshot, error)
 }
 
 // IndexStatusService validates storage results and owns the explicit
 // read-your-save capability boundary.
 type IndexStatusService struct {
-	store IndexStatusStore
+	store   IndexStatusStore
+	profile *VectorProfile
 }
 
-// NewIndexStatusService creates a service for one injected exact-View store.
-func NewIndexStatusService(store IndexStatusStore) *IndexStatusService {
-	return &IndexStatusService{store: store}
+// NewIndexStatusService creates a service for one injected exact-View store
+// and an optional configured vector profile.
+func NewIndexStatusService(store IndexStatusStore, profile *VectorProfile) *IndexStatusService {
+	service := &IndexStatusService{store: store}
+	if profile != nil {
+		profileCopy := *profile
+		service.profile = &profileCopy
+	}
+	return service
 }
 
 // Status returns real durable status for an empty barrier token. A nonempty
@@ -368,7 +454,7 @@ func (service *IndexStatusService) Status(ctx context.Context, authorized Author
 		return IndexStatusSnapshot{}, NewIndexStatusError(IndexStatusBarrierUnavailable, ErrIndexStatusBarrierUnavailable)
 	}
 
-	snapshot, err := service.store.LoadIndexStatus(ctx, authorized)
+	snapshot, err := service.store.LoadIndexStatus(ctx, authorized, service.profile)
 	if err != nil {
 		return IndexStatusSnapshot{}, err
 	}

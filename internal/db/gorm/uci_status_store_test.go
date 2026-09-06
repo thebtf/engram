@@ -47,8 +47,24 @@ func TestUCIStatusStoreReadsExactViewLifecycleAndScopedCounts(t *testing.T) {
 	var readyEmbeddingRows int64
 	require.NoError(t, fixture.db.Model(&UCIEmbedding{}).Where("source_id = ? AND status = ?", fixture.source.SourceID, UCIEmbeddingReady).Count(&readyEmbeddingRows).Error)
 	require.Equal(t, int64(1), readyEmbeddingRows, "two scoped chunks deliberately reuse one compatible embedding")
+	var embeddingProfile UCIEmbeddingProfile
+	require.NoError(t, fixture.db.Where(
+		"analysis_profile_id = ? AND provider_ref = ? AND model = ? AND dimension = ? AND preprocessing_revision = ? AND include_relative_path = ?",
+		fixture.profile.ProfileID,
+		semanticProfile.ProviderRef,
+		semanticProfile.Model,
+		semanticProfile.Dimension,
+		semanticProfile.PreprocessingRevision,
+		semanticProfile.IncludeRelativePath,
+	).First(&embeddingProfile).Error)
+	readyEmbedding := ucidomain.EmbeddingStatus{
+		EmbeddingProfileID: &embeddingProfile.EmbeddingProfileID,
+		Coverage:           ucidomain.IndexCoveragePartial,
+		TotalCandidates:    2,
+		ReadyCandidates:    2,
+	}
 
-	current, err := store.LoadIndexStatus(ctx, initialAuthorized)
+	current, err := store.LoadIndexStatus(ctx, initialAuthorized, &semanticProfile)
 	require.NoError(t, err)
 	require.Equal(t, initial.Context, current.Context)
 	require.Equal(t, ucidomain.IndexStatusSourceActive, current.SourceState)
@@ -63,6 +79,7 @@ func TestUCIStatusStoreReadsExactViewLifecycleAndScopedCounts(t *testing.T) {
 	require.Equal(t, uint64(2), current.ChunkCount)
 	require.Equal(t, uint64(2), current.ReadyEmbeddingCount)
 	require.Equal(t, initialDraft.coverage, current.Coverage)
+	require.Equal(t, readyEmbedding, current.Embedding)
 	requireUCIStatusStoreFreshness(t, current.Freshness, ucidomain.QueryFreshnessObservedCurrent, ucidomain.QueryFreshnessWatchWatermark, ucidomain.QueryEnrichmentCurrent, 17, &[]int64{0}[0])
 
 	siblingArtifact := fixture.admitArtifact(t, fixture.source.SourceID, "status-sibling", "func StatusSibling() {}\n", UCIParseArtifactComplete)
@@ -77,10 +94,11 @@ func TestUCIStatusStoreReadsExactViewLifecycleAndScopedCounts(t *testing.T) {
 	siblingCandidate := uciSemanticCandidateAtPath(t, fixture.projection, siblingAuthorized, "sibling.go", siblingArtifact.Artifact.ArtifactID)
 	require.NoError(t, fixture.projection.StoreCandidateEmbedding(ctx, siblingAuthorized, semanticProfile, siblingCandidate, uciSemanticVector(0, 1)))
 
-	isolated, err := store.LoadIndexStatus(ctx, initialAuthorized)
+	isolated, err := store.LoadIndexStatus(ctx, initialAuthorized, &semanticProfile)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), isolated.ChunkCount, "another checkout's chunks must not contribute")
 	require.Equal(t, uint64(2), isolated.ReadyEmbeddingCount, "another checkout's ready embeddings must not contribute")
+	require.Equal(t, readyEmbedding, isolated.Embedding, "another checkout's embeddings must not contribute to the selected View")
 
 	queuedJobID := uuid.NewString()
 	checkoutID := fixture.checkout.CheckoutID
@@ -93,7 +111,7 @@ func TestUCIStatusStoreReadsExactViewLifecycleAndScopedCounts(t *testing.T) {
 		JobID:                queuedJobID,
 		SourceID:             fixture.source.SourceID,
 		CheckoutID:           &checkoutID,
-		JobKind:              "embed",
+		JobKind:              string(ucidomain.IndexJobReconcile),
 		InputFingerprint:     "status-queued-" + fixture.token,
 		TargetGeneration:     &targetGeneration,
 		State:                UCIJobQueued,
@@ -106,12 +124,13 @@ func TestUCIStatusStoreReadsExactViewLifecycleAndScopedCounts(t *testing.T) {
 		UpdatedAt:            now,
 	}).Error)
 
-	catchingUp, err := store.LoadIndexStatus(ctx, initialAuthorized)
+	catchingUp, err := store.LoadIndexStatus(ctx, initialAuthorized, &semanticProfile)
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), catchingUp.PendingJobCount)
-	require.NotNil(t, catchingUp.RelevantJob)
-	require.Equal(t, ucidomain.IndexStatusJobQueued, catchingUp.RelevantJob.State)
-	require.Equal(t, &targetGeneration, catchingUp.RelevantJob.TargetGeneration)
+	require.Equal(t, uint64(1), catchingUp.PendingPublicationJobCount)
+	require.NotNil(t, catchingUp.PublicationJob)
+	require.Equal(t, ucidomain.IndexStatusJobQueued, catchingUp.PublicationJob.State)
+	require.Equal(t, &targetGeneration, catchingUp.PublicationJob.TargetGeneration)
+	require.Equal(t, readyEmbedding, catchingUp.Embedding, "publication progress must not alter profile-scoped embedding coverage")
 	requireUCIStatusStoreFreshness(t, catchingUp.Freshness, ucidomain.QueryFreshnessCatchingUp, ucidomain.QueryFreshnessWatchWatermark, ucidomain.QueryEnrichmentPending, 17, nil)
 
 	require.NoError(t, fixture.db.Model(&UCIJob{}).Where("job_id = ?", queuedJobID).Update("state", UCIJobObsolete).Error)
@@ -134,24 +153,30 @@ func TestUCIStatusStoreReadsExactViewLifecycleAndScopedCounts(t *testing.T) {
 	_, currentPublished := fixture.publish(t, fixture.publisher, fixture.caller("status-current"), "status-current", fixture.checkout, fixture.profile.ProfileID, uciPublicationParent(initial), ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile, currentDraft)
 	currentAuthorized := uciStatusStoreAuthorize(t, fixture, currentPublished.Context)
 
-	historical, err := store.LoadIndexStatus(ctx, initialAuthorized)
+	historical, err := store.LoadIndexStatus(ctx, initialAuthorized, &semanticProfile)
 	require.NoError(t, err)
 	require.Equal(t, ucidomain.IndexStatusViewSuperseded, historical.ViewState)
 	require.Equal(t, ucidomain.IndexStatusCurrentViewDifferent, historical.CurrentViewRelation)
 	require.Equal(t, uint64(2), historical.ChunkCount, "historical status must retain the selected View's temporal membership count")
 	require.Equal(t, uint64(2), historical.ReadyEmbeddingCount, "historical status must retain the selected View's compatible embedding count")
+	require.Equal(t, readyEmbedding, historical.Embedding, "historical status must retain the selected View's profile-scoped embedding coverage")
 	requireUCIStatusStoreFreshness(t, historical.Freshness, ucidomain.QueryFreshnessHistorical, ucidomain.QueryFreshnessPinnedHistory, ucidomain.QueryEnrichmentCurrent, 17, nil)
 
-	partial, err := store.LoadIndexStatus(ctx, currentAuthorized)
+	partial, err := store.LoadIndexStatus(ctx, currentAuthorized, &semanticProfile)
 	require.NoError(t, err)
 	require.Equal(t, ucidomain.IndexStatusViewPublished, partial.ViewState)
 	require.Equal(t, ucidomain.IndexStatusCurrentViewSelected, partial.CurrentViewRelation)
 	require.Equal(t, currentDraft.coverage, partial.Coverage)
 	require.Equal(t, uint64(1), partial.ChunkCount)
 	require.Equal(t, uint64(0), partial.ReadyEmbeddingCount)
+	require.Equal(t, ucidomain.EmbeddingStatus{
+		EmbeddingProfileID: &embeddingProfile.EmbeddingProfileID,
+		Coverage:           ucidomain.IndexCoveragePartial,
+		TotalCandidates:    1,
+	}, partial.Embedding)
 	requireUCIStatusStoreFreshness(t, partial.Freshness, ucidomain.QueryFreshnessObservedCurrent, ucidomain.QueryFreshnessWatchWatermark, ucidomain.QueryEnrichmentCurrent, 23, &[]int64{0}[0])
 
-	service := ucidomain.NewIndexStatusService(store)
+	service := ucidomain.NewIndexStatusService(store, &semanticProfile)
 	_, err = service.Status(ctx, currentAuthorized, "server-issued-barrier")
 	require.ErrorIs(t, err, ucidomain.ErrIndexStatusBarrierUnavailable)
 	var statusErr *ucidomain.IndexStatusError
@@ -159,14 +184,14 @@ func TestUCIStatusStoreReadsExactViewLifecycleAndScopedCounts(t *testing.T) {
 	require.Equal(t, ucidomain.IndexStatusBarrierUnavailable, statusErr.Code())
 
 	require.NoError(t, fixture.db.Model(&UCISource{}).Where("source_id = ?", fixture.source.SourceID).Update("state", UCISourceOffline).Error)
-	sourceOffline, err := store.LoadIndexStatus(ctx, currentAuthorized)
+	sourceOffline, err := store.LoadIndexStatus(ctx, currentAuthorized, &semanticProfile)
 	require.NoError(t, err)
 	require.Equal(t, ucidomain.IndexStatusSourceOffline, sourceOffline.SourceState)
 	requireUCIStatusStoreFreshness(t, sourceOffline.Freshness, ucidomain.QueryFreshnessOffline, ucidomain.QueryFreshnessNone, ucidomain.QueryEnrichmentUnavailable, 23, nil)
 
 	require.NoError(t, fixture.db.Model(&UCISource{}).Where("source_id = ?", fixture.source.SourceID).Update("state", UCISourceActive).Error)
 	require.NoError(t, fixture.db.Model(&UCICheckout{}).Where("checkout_id = ?", fixture.checkout.CheckoutID).Update("state", UCICheckoutOffline).Error)
-	checkoutOffline, err := store.LoadIndexStatus(ctx, currentAuthorized)
+	checkoutOffline, err := store.LoadIndexStatus(ctx, currentAuthorized, &semanticProfile)
 	require.NoError(t, err)
 	require.Equal(t, ucidomain.IndexStatusSourceActive, checkoutOffline.SourceState)
 	require.Equal(t, ucidomain.IndexStatusCheckoutOffline, checkoutOffline.CheckoutState)
@@ -184,7 +209,7 @@ func TestUCIStatusStoreReturnsClosedNotFoundForMismatchedTuple(t *testing.T) {
 	}
 	authorized := uciStatusStoreAuthorize(t, fixture, ref)
 
-	_, err := NewUCIProjectionStore(fixture.db).LoadIndexStatus(context.Background(), authorized)
+	_, err := NewUCIProjectionStore(fixture.db).LoadIndexStatus(context.Background(), authorized, nil)
 	require.ErrorIs(t, err, ucidomain.ErrIndexStatusNotFound)
 	var statusErr *ucidomain.IndexStatusError
 	require.True(t, errors.As(err, &statusErr))

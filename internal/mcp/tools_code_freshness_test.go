@@ -56,11 +56,23 @@ type uciFreshnessFixture struct {
 }
 
 type uciFreshnessStatusPayload struct {
-	Context          uci.QueryContextRef            `json:"context"`
-	TotalChunks      int64                          `json:"total_chunks"`
-	EmbeddedChunks   int64                          `json:"embedded_chunks"`
-	EvidenceRecorder CodebaseEvidenceRecorderHealth `json:"evidence_recorder"`
-	Freshness        uci.QueryFreshness             `json:"freshness"`
+	Context          uci.QueryContextRef                `json:"context"`
+	TotalChunks      int64                              `json:"total_chunks"`
+	EmbeddedChunks   int64                              `json:"embedded_chunks"`
+	EvidenceRecorder CodebaseEvidenceRecorderHealth     `json:"evidence_recorder"`
+	Freshness        uci.QueryFreshness                 `json:"freshness"`
+	Embedding        uciFreshnessEmbeddingStatusPayload `json:"embedding"`
+}
+
+type uciFreshnessEmbeddingStatusPayload struct {
+	EmbeddingProfileID *string                   `json:"embedding_profile_id"`
+	Coverage           uci.IndexCoverageState    `json:"coverage"`
+	TotalCandidates    uint64                    `json:"total_candidates"`
+	ReadyCandidates    uint64                    `json:"ready_candidates"`
+	PendingJobs        uint64                    `json:"pending_jobs"`
+	JobState           *uci.IndexStatusJobState  `json:"job_state"`
+	ErrorCode          *uci.EmbeddingFailureCode `json:"error_code"`
+	RetryAfter         *time.Time                `json:"retry_after"`
 }
 
 func newUCIFreshnessFixture(t *testing.T) *uciFreshnessFixture {
@@ -243,6 +255,46 @@ func TestUCIFreshnessPublicStatesAreScopedAndClosed(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUCIFreshnessEmbeddingPendingDoesNotDelaySourceBarrier(t *testing.T) {
+	fixture := newUCIFreshnessFixture(t)
+	target := fixture.refA
+	handle := fixture.selectContext(t, fixture.clientA, target)
+	profileID := "55555555-5555-4555-8555-555555555555"
+	jobState := uci.IndexStatusJobQueued
+	snapshot := fixture.application.statusSnapshots[target.CheckoutID]
+	snapshot.Embedding = uci.EmbeddingStatus{
+		EmbeddingProfileID: &profileID,
+		Coverage:           uci.IndexCoveragePartial,
+		TotalCandidates:    17,
+		ReadyCandidates:    2,
+		PendingJobs:        1,
+		JobState:           &jobState,
+	}
+	fixture.application.statusSnapshots[target.CheckoutID] = snapshot
+	want := uciFreshnessBarrierSatisfied(target.Generation, 25)
+	fixture.application.setPlan(target, uciFreshnessBarrierA, uciFreshnessTestPlan{freshness: want})
+
+	status := requireUCIFreshnessStatus(t, callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_status", uciFreshnessStatusArguments(handle, uciFreshnessBarrierA, 25)), target, want)
+	require.NotNil(t, status.Embedding.EmbeddingProfileID)
+	assert.Equal(t, profileID, *status.Embedding.EmbeddingProfileID)
+	assert.Equal(t, uci.IndexCoveragePartial, status.Embedding.Coverage)
+	assert.Equal(t, uint64(17), status.Embedding.TotalCandidates)
+	assert.Equal(t, uint64(2), status.Embedding.ReadyCandidates)
+	assert.Equal(t, uint64(1), status.Embedding.PendingJobs)
+	require.NotNil(t, status.Embedding.JobState)
+	assert.Equal(t, uci.IndexStatusJobQueued, *status.Embedding.JobState)
+	assert.Equal(t, uci.QueryFreshnessObservedCurrent, status.Freshness.State)
+	require.NotNil(t, status.Freshness.Barrier)
+	assert.Equal(t, uci.QueryBarrierSatisfied, status.Freshness.Barrier.State)
+
+	freshnessCalls := fixture.application.freshnessCalls()
+	require.Len(t, freshnessCalls, 1)
+	assert.Equal(t, target, freshnessCalls[0].ref)
+	assert.Equal(t, uciFreshnessBarrierA, freshnessCalls[0].token)
+	require.Len(t, fixture.application.statusCalls, 1)
+	assert.Equal(t, target, fixture.application.statusCalls[0])
 }
 
 func TestUCIFreshnessAfterBarrierStaysOnAuthorizedCheckout(t *testing.T) {

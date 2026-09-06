@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,6 +63,7 @@ type uciCodeIntelCompatibilityApplication struct {
 	searchCalls          []uciCodeIntelCompatibilitySearchCall
 	statusCalls          []uci.ContextRef
 	afterAliasResolution func()
+	afterStatus          func()
 }
 
 var (
@@ -96,6 +98,7 @@ func newUCICodeIntelCompatibilityFixture(t *testing.T) *uciCodeIntelCompatibilit
 			contextFixture.refA.CheckoutID: {
 				TotalChunks:    17,
 				EmbeddedChunks: 11,
+				Embedding:      uci.EmbeddingStatus{Coverage: uci.IndexCoverageUnavailable},
 				EvidenceRecorder: CodebaseEvidenceRecorderHealth{
 					State:           "healthy",
 					LastFailureCode: "NONE",
@@ -104,6 +107,7 @@ func newUCICodeIntelCompatibilityFixture(t *testing.T) *uciCodeIntelCompatibilit
 			contextFixture.refB.CheckoutID: {
 				TotalChunks:    31,
 				EmbeddedChunks: 19,
+				Embedding:      uci.EmbeddingStatus{Coverage: uci.IndexCoverageUnavailable},
 				EvidenceRecorder: CodebaseEvidenceRecorderHealth{
 					State:           "degraded",
 					LastFailureCode: "COMPLETION_EVIDENCE_UNAVAILABLE",
@@ -153,6 +157,9 @@ func (application *uciCodeIntelCompatibilityApplication) CodebaseStatus(_ contex
 	snapshot, found := application.statusSnapshots[ref.CheckoutID]
 	if !found {
 		return CodebaseStatusSnapshot{}, errors.New("status fixture is not mapped to the authorized checkout")
+	}
+	if application.afterStatus != nil {
+		application.afterStatus()
 	}
 	return snapshot, nil
 }
@@ -216,6 +223,78 @@ func TestUCICodeIntelCompatibilitySearchAndStatusKeepClientContextsDistinct(t *t
 		"path_prefix": uciCodeIntelCompatibilityPathPrefix,
 	}), fixture.refB, uciCodeIntelCompatibilityBodyB, uciCodeIntelCompatibilityBodyA)
 	assert.NotEqual(t, reusedA.Contexts, reusedB.Contexts)
+}
+
+func TestUCICodeIntelStatusSerializesClosedEmbeddingStatus(t *testing.T) {
+	fixture := newUCICodeIntelCompatibilityFixture(t)
+	handle := fixture.selectContext(t, fixture.clientA, fixture.refA)
+	profileID := "55555555-5555-4555-8555-555555555555"
+	jobState := uci.IndexStatusJobRetryScheduled
+	errorCode := uci.EmbeddingFailureProviderUnavailable
+	retryAfter := time.Date(2026, time.September, 6, 2, 3, 4, 0, time.UTC)
+	snapshot := fixture.application.statusSnapshots[fixture.refA.CheckoutID]
+	snapshot.Embedding = uci.EmbeddingStatus{
+		EmbeddingProfileID: &profileID,
+		Coverage:           uci.IndexCoveragePartial,
+		TotalCandidates:    17,
+		ReadyCandidates:    5,
+		PendingJobs:        1,
+		JobState:           &jobState,
+		ErrorCode:          &errorCode,
+		RetryAfter:         &retryAfter,
+	}
+	fixture.application.statusSnapshots[fixture.refA.CheckoutID] = snapshot
+
+	response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_status", map[string]any{"context_handle": handle})
+	text := uciCodeIntelToolText(t, response)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(text), &payload))
+	embeddingStatus, ok := payload["embedding"].(map[string]any)
+	require.True(t, ok)
+	require.Len(t, embeddingStatus, 8)
+	assert.Equal(t, profileID, embeddingStatus["embedding_profile_id"])
+	assert.Equal(t, string(uci.IndexCoveragePartial), embeddingStatus["coverage"])
+	assert.Equal(t, float64(17), embeddingStatus["total_candidates"])
+	assert.Equal(t, float64(5), embeddingStatus["ready_candidates"])
+	assert.Equal(t, float64(1), embeddingStatus["pending_jobs"])
+	assert.Equal(t, string(uci.IndexStatusJobRetryScheduled), embeddingStatus["job_state"])
+	assert.Equal(t, string(uci.EmbeddingFailureProviderUnavailable), embeddingStatus["error_code"])
+	assert.Equal(t, retryAfter.Format(time.RFC3339Nano), embeddingStatus["retry_after"])
+	assert.NotContains(t, text, "https://")
+	assert.NotContains(t, text, "api-key")
+	assert.Zero(t, fixture.exposureStore.exposureCount())
+	require.Len(t, fixture.application.statusCalls, 1)
+}
+
+func TestUCICodeIntelStatusReauthorizesBeforeEmbeddingSerialization(t *testing.T) {
+	fixture := newUCICodeIntelCompatibilityFixture(t)
+	handle := fixture.selectContext(t, fixture.clientA, fixture.refA)
+	profileID := "55555555-5555-4555-8555-555555555555"
+	jobState := uci.IndexStatusJobQueued
+	snapshot := fixture.application.statusSnapshots[fixture.refA.CheckoutID]
+	snapshot.Embedding = uci.EmbeddingStatus{
+		EmbeddingProfileID: &profileID,
+		Coverage:           uci.IndexCoveragePartial,
+		TotalCandidates:    1,
+		PendingJobs:        1,
+		JobState:           &jobState,
+	}
+	fixture.application.statusSnapshots[fixture.refA.CheckoutID] = snapshot
+	fixture.application.afterStatus = func() {
+		fixture.server.codebaseContextMu.Lock()
+		if client := fixture.server.codebaseContextHandles["mcp-client-a"]; client != nil {
+			fixture.server.codebaseContextRemoveEntry(client, handle)
+		}
+		fixture.server.codebaseContextMu.Unlock()
+	}
+
+	response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_status", map[string]any{"context_handle": handle})
+	requireUCICodeIntelSafeToolError(t, response, "CONTEXT_MISMATCH", fixture)
+	require.Len(t, fixture.application.statusCalls, 1)
+	assert.Zero(t, fixture.exposureStore.exposureCount())
+	raw, err := json.Marshal(response)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "embedding")
 }
 
 func TestUCICodeIntelExplicitHandlesAuthorizeWithoutSelectingDefaults(t *testing.T) {
@@ -778,6 +857,18 @@ func requireUCICodeIntelStatus(t *testing.T, response *Response, wantRef uci.Con
 	assert.Equal(t, float64(wantTotal), payload["total_chunks"])
 	assert.Equal(t, float64(wantEmbedded), payload["embedded_chunks"])
 
+	embedding, ok := payload["embedding"].(map[string]any)
+	require.True(t, ok, "status must retain typed embedding state")
+	require.Len(t, embedding, 8)
+	assert.Nil(t, embedding["embedding_profile_id"])
+	assert.Equal(t, string(uci.IndexCoverageUnavailable), embedding["coverage"])
+	assert.Equal(t, float64(0), embedding["total_candidates"])
+	assert.Equal(t, float64(0), embedding["ready_candidates"])
+	assert.Equal(t, float64(0), embedding["pending_jobs"])
+	assert.Nil(t, embedding["job_state"])
+	assert.Nil(t, embedding["error_code"])
+	assert.Nil(t, embedding["retry_after"])
+
 	recorder, ok := payload["evidence_recorder"].(map[string]any)
 	require.True(t, ok, "authorized status must retain secret-free recorder health")
 	require.Len(t, recorder, 2, "recorder health must expose only its public state and failure code")
@@ -876,6 +967,7 @@ func requireUCICodeIntelNoLeaks(t *testing.T, raw string, fixture *uciCodeIntelC
 		"total_chunks",
 		"embedded_chunks",
 		"evidence_recorder",
+		"embedding",
 		"edges",
 		"uci-exp_",
 		"private_locator",

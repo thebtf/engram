@@ -153,6 +153,13 @@ func TestUCIProjectionStoreSemanticMethodsKeepVectorsScopedAndCovered(t *testing
 	require.NotEqual(t, oldArtifact.Artifact.ArtifactID, complete.Candidates[0].Proof.ArtifactID)
 	require.NotEqual(t, siblingArtifact.Artifact.ArtifactID, complete.Candidates[0].Proof.ArtifactID)
 	require.Greater(t, complete.Candidates[0].Score, complete.Candidates[1].Score)
+	filteredSpec := uciSemanticSearchSpec()
+	filteredSpec.Filter.PathPrefix = "shared"
+	filtered, err := fixture.projection.SelectSemanticCandidates(ctx, currentAuthorized, profile, queryVector, filteredSpec)
+	require.NoError(t, err)
+	require.Equal(t, float64(1), filtered.VectorCoverage)
+	require.Len(t, filtered.Candidates, 1)
+	require.Equal(t, "shared/semantic.go", filtered.Candidates[0].RelativePath, "semantic ranking must apply the literal path prefix inside the selected View")
 
 	// The old and sibling vectors are both closer to queryVector than currentVector.
 	// Repeating the current-view query proves it ranks inside the View instead of taking

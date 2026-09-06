@@ -1351,11 +1351,9 @@ func (s *UCIProjectionStore) SelectSemanticCandidates(ctx context.Context, autho
 	if !coverageOK || coverage == ucidomain.IndexCoverageUnavailable {
 		return ucidomain.SemanticStoreResult{Coverage: ucidomain.IndexCoverageUnavailable}, nil
 	}
-	vectorState, vectorStateOK := parseUCIQueryCoverage(metadata.Vector)
-	if coverage != ucidomain.IndexCoverageComplete || !vectorStateOK || vectorState != ucidomain.IndexCoverageComplete {
+	if coverage != ucidomain.IndexCoverageComplete {
 		return ucidomain.SemanticStoreResult{Coverage: coverage, VectorCoverage: 0}, nil
 	}
-
 	coverageQuery, coverageArguments, err := buildUCISemanticCoverageSQL(ref, profile, spec)
 	if err != nil {
 		return ucidomain.SemanticStoreResult{}, err
@@ -1565,6 +1563,10 @@ func buildUCISemanticScopedCandidatesSQL(ref ucidomain.ContextRef, spec ucidomai
 			predicateArguments = append(predicateArguments, language)
 		}
 		conditions = append(conditions, "artifact.language IN ("+strings.Join(placeholders, ", ")+")")
+	}
+	if prefix := spec.Filter.PathPrefix; prefix != "" {
+		conditions = append(conditions, `(membership.display_path = ? OR membership.display_path LIKE ? ESCAPE '\')`)
+		predicateArguments = append(predicateArguments, prefix, escapeUCIQueryLike(prefix)+"/%")
 	}
 	arguments := []any{
 		ref.ViewID,
@@ -2610,20 +2612,29 @@ var (
 )
 
 type uciPublisher struct {
-	store      *UCIProjectionStore
-	authorizer ucidomain.ContextAuthorizer
-	limits     ucidomain.IndexPublicationLimits
+	store            *UCIProjectionStore
+	authorizer       ucidomain.ContextAuthorizer
+	limits           ucidomain.IndexPublicationLimits
+	embeddingProfile *ucidomain.VectorProfile
 }
 
 // Publisher creates the server-owned implementation of the fenced publication API.
-func (s *UCIProjectionStore) Publisher(authorizer ucidomain.ContextAuthorizer, limits ucidomain.IndexPublicationLimits) (ucidomain.IndexStore, error) {
+func (s *UCIProjectionStore) Publisher(authorizer ucidomain.ContextAuthorizer, config ucidomain.IndexPublicationConfig) (ucidomain.IndexStore, error) {
 	if err := s.requireDB("create publisher"); err != nil {
 		return nil, err
 	}
-	if authorizer == nil || !validUCIPublicationLimits(limits) {
+	if authorizer == nil || !validUCIPublicationLimits(config.Limits) {
 		return nil, errUCIPublicationRejected
 	}
-	return &uciPublisher{store: s, authorizer: authorizer, limits: limits}, nil
+	publisher := &uciPublisher{store: s, authorizer: authorizer, limits: config.Limits}
+	if config.EmbeddingProfile != nil {
+		if err := validateUCISemanticProfile(*config.EmbeddingProfile); err != nil {
+			return nil, errUCIPublicationRejected
+		}
+		profileCopy := *config.EmbeddingProfile
+		publisher.embeddingProfile = &profileCopy
+	}
+	return publisher, nil
 }
 
 func (publisher *uciPublisher) Begin(ctx context.Context, caller ucidomain.IndexCaller, input ucidomain.IndexBeginInput) (ucidomain.IndexBeginResult, error) {
@@ -3370,6 +3381,11 @@ func (publisher *uciPublisher) Finalize(ctx context.Context, caller ucidomain.In
 			"updated_at":       now,
 		}).Error; err != nil {
 			return fmt.Errorf("uci publication switch current pointer: %w", err)
+		}
+		if publisher.embeddingProfile != nil {
+			if err := enqueueUCIEmbeddingJob(ctx, tx, caller.AuthRealm, caller.Principal, view, *publisher.embeddingProfile); err != nil {
+				return fmt.Errorf("uci publication enqueue embedding: %w", err)
+			}
 		}
 		if current != nil {
 			if err := tx.WithContext(ctx).Model(&UCIView{}).Where("view_id = ?", current.ViewID).Updates(map[string]any{

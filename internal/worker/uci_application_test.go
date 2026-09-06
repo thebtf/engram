@@ -153,6 +153,14 @@ func TestUCIApplicationMCPUsesExactPostgreSQLViews(t *testing.T) {
 	require.Equal(t, fixture.current.Context.ViewID, statusResponse.Context.ViewID)
 	require.EqualValues(t, 3, statusResponse.TotalChunks)
 	require.EqualValues(t, 0, statusResponse.EmbeddedChunks)
+	require.Nil(t, statusResponse.Embedding.EmbeddingProfileID)
+	require.Equal(t, uci.IndexCoverageUnavailable, statusResponse.Embedding.Coverage)
+	require.Zero(t, statusResponse.Embedding.TotalCandidates)
+	require.Zero(t, statusResponse.Embedding.ReadyCandidates)
+	require.Zero(t, statusResponse.Embedding.PendingJobs)
+	require.Nil(t, statusResponse.Embedding.JobState)
+	require.Nil(t, statusResponse.Embedding.ErrorCode)
+	require.Nil(t, statusResponse.Embedding.RetryAfter)
 	require.Equal(t, uci.QueryFreshnessObservedCurrent, statusResponse.Freshness.State)
 	require.Equal(t, uci.QueryFreshnessWatchWatermark, statusResponse.Freshness.Method)
 	require.Equal(t, "healthy", statusResponse.EvidenceRecorder.State)
@@ -202,6 +210,8 @@ func TestUCIApplicationUsesConfiguredSharedEmbeddingClient(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
 	const model = "worker-uci-shared-embedding"
 	var providerCalls atomic.Int32
+	var corpusProviderInputs atomic.Int32
+	var queryProviderInputs atomic.Int32
 	provider := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodPost || request.URL.Path != "/v1/embeddings" {
 			t.Errorf("embedding request = %s %s, want POST /v1/embeddings", request.Method, request.URL.Path)
@@ -218,21 +228,30 @@ func TestUCIApplicationUsesConfiguredSharedEmbeddingClient(t *testing.T) {
 			http.Error(writer, "invalid embedding request", http.StatusBadRequest)
 			return
 		}
-		if payload.Model != model || payload.Dimensions != embedding.EmbeddingDim || len(payload.Input) != 1 {
+		if payload.Model != model || payload.Dimensions != embedding.EmbeddingDim || len(payload.Input) == 0 {
 			t.Errorf("embedding request payload = %#v", payload)
 			http.Error(writer, "unexpected embedding payload", http.StatusBadRequest)
 			return
 		}
 		providerCalls.Add(1)
-		vector := make([]float32, embedding.EmbeddingDim)
-		vector[0] = 1
-		writer.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(writer).Encode(map[string]any{
-			"data": []map[string]any{{
+		for _, input := range payload.Input {
+			if strings.Contains(input, `"content_digest"`) {
+				corpusProviderInputs.Add(1)
+			} else {
+				queryProviderInputs.Add(1)
+			}
+		}
+		data := make([]map[string]any, len(payload.Input))
+		for index := range payload.Input {
+			vector := make([]float32, embedding.EmbeddingDim)
+			vector[0] = 1
+			data[index] = map[string]any{
 				"embedding": vector,
-				"index":     0,
-			}},
-		}); err != nil {
+				"index":     index,
+			}
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(writer).Encode(map[string]any{"data": data}); err != nil {
 			t.Errorf("encode embedding response: %v", err)
 		}
 	}))
@@ -249,6 +268,9 @@ func TestUCIApplicationUsesConfiguredSharedEmbeddingClient(t *testing.T) {
 	composition, err := composeUCIContext(true, store.GetDB(), server, semantic)
 	require.NoError(t, err)
 	require.NotNil(t, composition.application.semanticService)
+	require.NotNil(t, composition.embeddingProfile)
+	require.Equal(t, semantic.profile, *composition.embeddingProfile)
+	require.NotNil(t, composition.embeddingWorker)
 
 	fixture := newWorkerUCIApplicationFixture(t, composition)
 	identity := auth.ClientWithPrincipal("read-write", fixture.workstationID, fixture.principal, auth.PrincipalKindAgent)
@@ -269,6 +291,88 @@ func TestUCIApplicationUsesConfiguredSharedEmbeddingClient(t *testing.T) {
 	require.NotNil(t, response.Items)
 	require.NotEmpty(t, *response.Items)
 	require.Equal(t, int32(1), providerCalls.Load())
+	status := workerUCIApplicationToolResponse(t, server, caller, "codebase_status", map[string]any{
+		"context_handle": handle,
+	})
+	statusText := workerUCIApplicationToolText(t, status)
+	var statusResponse workerUCIApplicationStatusResponse
+	require.NoError(t, json.Unmarshal([]byte(statusText), &statusResponse))
+	require.NotNil(t, statusResponse.Embedding.EmbeddingProfileID)
+	require.NotEqual(t, provider.URL, *statusResponse.Embedding.EmbeddingProfileID)
+	require.Equal(t, uci.IndexCoveragePartial, statusResponse.Embedding.Coverage)
+	require.EqualValues(t, 3, statusResponse.Embedding.TotalCandidates)
+	require.Zero(t, statusResponse.Embedding.ReadyCandidates)
+	require.EqualValues(t, 1, statusResponse.Embedding.PendingJobs)
+	require.NotNil(t, statusResponse.Embedding.JobState)
+	require.Equal(t, uci.IndexStatusJobQueued, *statusResponse.Embedding.JobState)
+	require.Nil(t, statusResponse.Embedding.ErrorCode)
+	require.Nil(t, statusResponse.Embedding.RetryAfter)
+	require.Equal(t, uci.QueryFreshnessObservedCurrent, statusResponse.Freshness.State)
+	require.NotContains(t, statusText, provider.URL)
+
+	ref := fixture.current.Context
+	authorized, err := composition.resolver.Authorize(context.Background(), uci.ResolveContextInput{
+		ClientSessionID: "worker-uci-embedding-status-" + uuid.NewString(),
+		AuthRealm:       string(auth.SourceClient),
+		Principal:       fixture.principal,
+		Ref:             &ref,
+	})
+	require.NoError(t, err)
+	workerContext, stopWorker := context.WithCancel(context.Background())
+	workerDone := make(chan error, 1)
+	go func() {
+		workerDone <- composition.embeddingWorker.Run(workerContext, "worker-uci-embedding-"+uuid.NewString())
+	}()
+	t.Cleanup(func() {
+		stopWorker()
+		select {
+		case workerErr := <-workerDone:
+			require.NoError(t, workerErr)
+		case <-time.After(5 * time.Second):
+			t.Error("UCI embedding worker did not join after cancellation")
+		}
+	})
+
+	require.Eventually(t, func() bool {
+		snapshot, statusErr := composition.projectionStore.LoadIndexStatus(context.Background(), authorized, composition.embeddingProfile)
+		return statusErr == nil && snapshot.Embedding.Coverage == uci.IndexCoverageComplete && snapshot.Embedding.ReadyCandidates == 3
+	}, 10*time.Second, 20*time.Millisecond, "runtime worker must populate every current-View corpus vector")
+
+	status = workerUCIApplicationToolResponse(t, server, caller, "codebase_status", map[string]any{"context_handle": handle})
+	statusText = workerUCIApplicationToolText(t, status)
+	var completedStatus workerUCIApplicationStatusResponse
+	require.NoError(t, json.Unmarshal([]byte(statusText), &completedStatus))
+	require.Equal(t, uci.IndexCoverageComplete, completedStatus.Embedding.Coverage)
+
+	require.EqualValues(t, 3, completedStatus.Embedding.TotalCandidates)
+	require.EqualValues(t, 3, completedStatus.Embedding.ReadyCandidates)
+	require.Zero(t, completedStatus.Embedding.PendingJobs)
+	require.NotNil(t, completedStatus.Embedding.JobState)
+	require.Equal(t, uci.IndexStatusJobSucceeded, *completedStatus.Embedding.JobState)
+	require.NotContains(t, statusText, provider.URL)
+
+	semanticSearch := workerUCIApplicationToolResponse(t, server, caller, "codebase_search", map[string]any{
+		"context_handle": handle,
+		"query":          "NoLexicalMatchToken",
+		"path_prefix":    "internal/",
+		"limit":          10,
+	})
+	semanticResponse := workerUCIApplicationQueryResponse(t, semanticSearch)
+	require.NoError(t, semanticResponse.Validate())
+	require.NotNil(t, semanticResponse.Retrieval)
+	require.Equal(t, uci.QueryRetrievalHybrid, semanticResponse.Retrieval.Mode)
+	require.NotNil(t, semanticResponse.Retrieval.VectorCoverage)
+	require.Equal(t, float64(1), *semanticResponse.Retrieval.VectorCoverage)
+	require.Empty(t, semanticResponse.Retrieval.DegradationReasons)
+	require.NotNil(t, semanticResponse.Items)
+	require.Len(t, *semanticResponse.Items, 2, "semantic retrieval must find in-prefix current chunks without a lexical match")
+	for _, item := range *semanticResponse.Items {
+		require.True(t, strings.HasPrefix(item.Path, "internal/"))
+		require.Contains(t, item.MatchSources, uci.QueryMatchVector)
+	}
+	require.Equal(t, int32(3), corpusProviderInputs.Load(), "the runtime producer must embed each current corpus input exactly once")
+	require.Equal(t, int32(2), queryProviderInputs.Load(), "the test performs one pre-coverage and one post-coverage query embedding")
+	require.Equal(t, int32(3), providerCalls.Load(), "the producer must batch the corpus into one request beside the two query embeddings")
 }
 
 func TestUCIApplicationGraphResponseKeepsNonconclusiveOutcomesExplicit(t *testing.T) {
@@ -429,12 +533,24 @@ type workerUCIApplicationArtifact struct {
 	proof      uci.IndexArtifactProof
 }
 
+type workerUCIApplicationEmbeddingStatusResponse struct {
+	EmbeddingProfileID *string                   `json:"embedding_profile_id"`
+	Coverage           uci.IndexCoverageState    `json:"coverage"`
+	TotalCandidates    uint64                    `json:"total_candidates"`
+	ReadyCandidates    uint64                    `json:"ready_candidates"`
+	PendingJobs        uint64                    `json:"pending_jobs"`
+	JobState           *uci.IndexStatusJobState  `json:"job_state"`
+	ErrorCode          *uci.EmbeddingFailureCode `json:"error_code"`
+	RetryAfter         *time.Time                `json:"retry_after"`
+}
+
 type workerUCIApplicationStatusResponse struct {
-	Context          uci.QueryContextRef                `json:"context"`
-	TotalChunks      int64                              `json:"total_chunks"`
-	EmbeddedChunks   int64                              `json:"embedded_chunks"`
-	EvidenceRecorder mcp.CodebaseEvidenceRecorderHealth `json:"evidence_recorder"`
-	Freshness        uci.QueryFreshness                 `json:"freshness"`
+	Context          uci.QueryContextRef                         `json:"context"`
+	TotalChunks      int64                                       `json:"total_chunks"`
+	EmbeddedChunks   int64                                       `json:"embedded_chunks"`
+	Embedding        workerUCIApplicationEmbeddingStatusResponse `json:"embedding"`
+	EvidenceRecorder mcp.CodebaseEvidenceRecorderHealth          `json:"evidence_recorder"`
+	Freshness        uci.QueryFreshness                          `json:"freshness"`
 }
 
 func newWorkerUCIApplicationFixture(t *testing.T, composition *uciContextComposition) workerUCIApplicationFixture {
@@ -485,7 +601,10 @@ func newWorkerUCIApplicationFixture(t *testing.T, composition *uciContextComposi
 		{SourcePath: "outside.go", Edges: []uci.IndexEdge{}},
 	}
 	firstPart := workerUCIApplicationPart([]workerUCIApplicationArtifact{alphaOld, beta, outside}, firstMemberships, firstReplacements)
-	publisher, err := composition.projectionStore.Publisher(composition.authorizer, uci.DefaultIndexPublicationLimits())
+	publisher, err := composition.projectionStore.Publisher(composition.authorizer, uci.IndexPublicationConfig{
+		Limits:           uci.DefaultIndexPublicationLimits(),
+		EmbeddingProfile: composition.embeddingProfile,
+	})
 	require.NoError(t, err)
 	caller := uci.IndexCaller{
 		AuthRealm:     string(auth.SourceClient),

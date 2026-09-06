@@ -3,12 +3,13 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/auth"
@@ -58,6 +59,8 @@ func TestComposeUCIContextEnabledInstallsCompositeViewCapabilities(t *testing.T)
 
 	require.NoError(t, err)
 	require.NotNil(t, composition)
+	require.Nil(t, composition.embeddingProfile)
+	require.Nil(t, composition.embeddingWorker)
 	require.NotNil(t, composition.application.semanticService)
 	for _, name := range []string{"codebase_context", "codebase_search", "codebase_read", "codebase_graph"} {
 		require.Truef(t, workerUCIHasMCPTool(mcpServer, name), "composite composition did not advertise %q", name)
@@ -189,6 +192,46 @@ func TestUCISemanticProfileUsesOpaqueCacheIdentity(t *testing.T) {
 	require.NoError(t, err)
 	clientProfile := newUCISemanticProfile(ctx, settings, sharedClient, uciSemanticPreprocessingRevision)
 	require.Equal(t, sharedClient.Model(), clientProfile.Model)
+	disabledConfig := newUCISemanticConfig(ctx, settings, sharedClient, nil)
+	require.Nil(t, disabledConfig.profilePtr)
+	require.Nil(t, disabledConfig.embedder)
+	configuredConfig := newUCISemanticConfig(ctx, settings, sharedClient, sharedClient)
+	require.NotNil(t, configuredConfig.profilePtr)
+	require.Equal(t, configuredConfig.profile, *configuredConfig.profilePtr)
+}
+
+type workerUCIEmbeddingWorkerFake struct {
+	started chan string
+	stopped chan struct{}
+}
+
+func (worker *workerUCIEmbeddingWorkerFake) Run(ctx context.Context, owner string) error {
+	worker.started <- owner
+	<-ctx.Done()
+	close(worker.stopped)
+	return nil
+}
+
+func TestServiceUCIEmbeddingWorkerJoinsOnShutdown(t *testing.T) {
+	rootCtx, cancel := context.WithCancel(context.Background())
+	worker := &workerUCIEmbeddingWorkerFake{started: make(chan string, 1), stopped: make(chan struct{})}
+	service := &Service{ctx: rootCtx, cancel: cancel}
+	service.startUCIEmbeddingWorker(worker)
+
+	select {
+	case owner := <-worker.started:
+		_, err := uuid.Parse(owner)
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("UCI embedding worker did not start")
+	}
+
+	require.NoError(t, service.Shutdown(context.Background()))
+	select {
+	case <-worker.stopped:
+	case <-time.After(time.Second):
+		t.Fatal("Service shutdown did not join the UCI embedding worker")
+	}
 }
 
 func workerUCIHasMCPTool(server *mcp.Server, name string) bool {
@@ -275,14 +318,17 @@ func openWorkerUCIContextCompositionStore(t *testing.T) *gormstore.Store {
 		}
 	})
 
-	config, err := pgx.ParseConfig(dsn)
+	parsedDSN, err := url.Parse(dsn)
 	require.NoError(t, err)
-	if config.RuntimeParams == nil {
-		config.RuntimeParams = make(map[string]string)
-	}
-	config.RuntimeParams["search_path"] = schema + ", public"
-	store, err := gormstore.NewStore(gormstore.Config{DSN: config.ConnString(), MaxConns: 2, LogLevel: logger.Silent})
+	require.NotEmpty(t, parsedDSN.Scheme, "worker UCI tests require a PostgreSQL URL DSN")
+	query := parsedDSN.Query()
+	query.Set("search_path", schema+", public")
+	parsedDSN.RawQuery = query.Encode()
+	store, err := gormstore.NewStore(gormstore.Config{DSN: parsedDSN.String(), MaxConns: 2, LogLevel: logger.Silent})
 	require.NoError(t, err)
+	var actualSchema string
+	require.NoError(t, store.GetDB().Raw(`SELECT current_schema()`).Scan(&actualSchema).Error)
+	require.Equal(t, schema, actualSchema, "worker UCI test pool must resolve its isolated schema before public")
 	t.Cleanup(func() {
 		if err := store.Close(); err != nil {
 			t.Errorf("close UCI worker composition store: %v", err)

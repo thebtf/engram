@@ -393,6 +393,14 @@ type IndexPublicationLimits struct {
 	MaxArtifactBytes   int64
 }
 
+// IndexPublicationConfig binds publication limits to an optional configured
+// corpus embedding profile. A nil profile leaves publication available without
+// creating a fictional provider obligation.
+type IndexPublicationConfig struct {
+	Limits           IndexPublicationLimits
+	EmbeddingProfile *VectorProfile
+}
+
 // DefaultIndexPublicationLimits returns the first-release production bounds.
 // Payload and artifact limits share the admission hard caps; manifest and edge
 // counts match the private transport bounds for the documented large-repository

@@ -24,8 +24,8 @@ func TestUCIIndexStatusValidatesClosedStatusAndFreshnessVocabularies(t *testing.
 				snapshot := uciIndexStatusTestSnapshot(ref)
 				targetGeneration := int64(8)
 				snapshot.CheckoutState = IndexStatusCheckoutCatchingUp
-				snapshot.PendingJobCount = 1
-				snapshot.RelevantJob = &IndexStatusJob{State: IndexStatusJobRunning, TargetGeneration: &targetGeneration}
+				snapshot.PendingPublicationJobCount = 1
+				snapshot.PublicationJob = &IndexStatusJob{State: IndexStatusJobRunning, TargetGeneration: &targetGeneration}
 				snapshot.Freshness = QueryFreshness{
 					State:  QueryFreshnessCatchingUp,
 					Method: QueryFreshnessWatchWatermark,
@@ -89,7 +89,7 @@ func TestUCIIndexStatusServiceReturnsEmptyTokenStatusFromExactStore(t *testing.T
 	ref := uciIndexStatusTestRef()
 	want := uciIndexStatusTestSnapshot(ref)
 	store := &uciIndexStatusTestStore{snapshot: want}
-	service := NewIndexStatusService(store)
+	service := NewIndexStatusService(store, nil)
 
 	got, err := service.Status(context.Background(), newAuthorizedContext(ref), "")
 	if err != nil {
@@ -109,7 +109,7 @@ func TestUCIIndexStatusServiceReturnsEmptyTokenStatusFromExactStore(t *testing.T
 func TestUCIIndexStatusServiceRefusesBarrierWithoutSyntheticAuthority(t *testing.T) {
 	ref := uciIndexStatusTestRef()
 	store := &uciIndexStatusTestStore{snapshot: uciIndexStatusTestSnapshot(ref)}
-	service := NewIndexStatusService(store)
+	service := NewIndexStatusService(store, nil)
 
 	_, err := service.Status(context.Background(), newAuthorizedContext(ref), "opaque-daemon-barrier")
 	if err == nil {
@@ -137,7 +137,7 @@ type uciIndexStatusTestStore struct {
 	authorized AuthorizedContext
 }
 
-func (store *uciIndexStatusTestStore) LoadIndexStatus(_ context.Context, authorized AuthorizedContext) (IndexStatusSnapshot, error) {
+func (store *uciIndexStatusTestStore) LoadIndexStatus(_ context.Context, authorized AuthorizedContext, _ *VectorProfile) (IndexStatusSnapshot, error) {
 	store.calls++
 	store.authorized = authorized
 	return store.snapshot.Clone(), store.err
@@ -177,6 +177,9 @@ func uciIndexStatusTestSnapshot(ref ContextRef) IndexStatusSnapshot {
 		ScanCompletedAt:     scanStartedAt.Add(30 * time.Second),
 		ChunkCount:          11,
 		ReadyEmbeddingCount: 7,
+		Embedding: EmbeddingStatus{
+			Coverage: IndexCoverageUnavailable,
+		},
 		Freshness: QueryFreshness{
 			State:          QueryFreshnessObservedCurrent,
 			Method:         QueryFreshnessWatchWatermark,

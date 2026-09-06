@@ -73,6 +73,7 @@ type CodebaseEvidenceRecorderHealth struct {
 type CodebaseStatusSnapshot struct {
 	TotalChunks      int64
 	EmbeddedChunks   int64
+	Embedding        uci.EmbeddingStatus
 	EvidenceRecorder CodebaseEvidenceRecorderHealth
 }
 
@@ -353,13 +354,37 @@ type codebaseStatusArgs struct {
 	hasContextHandle bool
 	hasAfterBarrier  bool
 }
+type codebaseEmbeddingStatusResponse struct {
+	EmbeddingProfileID *string                   `json:"embedding_profile_id"`
+	Coverage           uci.IndexCoverageState    `json:"coverage"`
+	TotalCandidates    uint64                    `json:"total_candidates"`
+	ReadyCandidates    uint64                    `json:"ready_candidates"`
+	PendingJobs        uint64                    `json:"pending_jobs"`
+	JobState           *uci.IndexStatusJobState  `json:"job_state"`
+	ErrorCode          *uci.EmbeddingFailureCode `json:"error_code"`
+	RetryAfter         *time.Time                `json:"retry_after"`
+}
 
 type codebaseStatusResponse struct {
-	Context          uci.QueryContextRef            `json:"context"`
-	TotalChunks      int64                          `json:"total_chunks"`
-	EmbeddedChunks   int64                          `json:"embedded_chunks"`
-	EvidenceRecorder CodebaseEvidenceRecorderHealth `json:"evidence_recorder"`
-	Freshness        *uci.QueryFreshness            `json:"freshness,omitempty"`
+	Context          uci.QueryContextRef             `json:"context"`
+	TotalChunks      int64                           `json:"total_chunks"`
+	EmbeddedChunks   int64                           `json:"embedded_chunks"`
+	Embedding        codebaseEmbeddingStatusResponse `json:"embedding"`
+	EvidenceRecorder CodebaseEvidenceRecorderHealth  `json:"evidence_recorder"`
+	Freshness        *uci.QueryFreshness             `json:"freshness,omitempty"`
+}
+
+func codebaseEmbeddingStatusResponseFrom(status uci.EmbeddingStatus) codebaseEmbeddingStatusResponse {
+	return codebaseEmbeddingStatusResponse{
+		EmbeddingProfileID: status.EmbeddingProfileID,
+		Coverage:           status.Coverage,
+		TotalCandidates:    status.TotalCandidates,
+		ReadyCandidates:    status.ReadyCandidates,
+		PendingJobs:        status.PendingJobs,
+		JobState:           status.JobState,
+		ErrorCode:          status.ErrorCode,
+		RetryAfter:         status.RetryAfter,
+	}
 }
 
 func decodeCodebaseSearchArgs(raw json.RawMessage) (codebaseSearchArgs, error) {
@@ -657,12 +682,11 @@ func (s *Server) handleUCICodebaseStatus(ctx context.Context, raw json.RawMessag
 		return "", codebaseContextClosedError(contextCode)
 	}
 	authorized = reauthorized
-	snapshot.EvidenceRecorder = s.codebaseExposureRecorderHealth()
-
 	encoded, err := json.Marshal(codebaseStatusResponse{
 		Context:          codebaseQueryContextRef(authorized.Ref()),
 		TotalChunks:      snapshot.TotalChunks,
 		EmbeddedChunks:   snapshot.EmbeddedChunks,
+		Embedding:        codebaseEmbeddingStatusResponseFrom(snapshot.Embedding),
 		EvidenceRecorder: snapshot.EvidenceRecorder,
 		Freshness:        freshness,
 	})

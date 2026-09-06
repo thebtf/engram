@@ -84,7 +84,7 @@ func SemanticEmbeddingInput(profile VectorProfile, candidate QueryCandidate) (st
 	if !candidate.Context.valid() || !validQueryCandidate(candidate) {
 		return "", "", fmt.Errorf("uci semantic: candidate is invalid")
 	}
-	if candidate.Text == "" || utf8.RuneCountInString(candidate.Text) > queryMaxExcerpt {
+	if candidate.Text == "" || len(candidate.Text) > indexAdmissionMaxTextBytes {
 		return "", "", fmt.Errorf("uci semantic: candidate text is outside the embedding bound")
 	}
 
@@ -266,11 +266,13 @@ func (service *SemanticService) availableResult(ref ContextRef, spec QuerySpec, 
 		}
 		continuation.Value = &token
 	}
+	degradation := make([]string, len(degradationReasons))
+	copy(degradation, degradationReasons)
 	response := queryAvailableResponse(ref, spec, coverage, items, warnings, truncated, continuation)
 	response.Retrieval = &QueryRetrieval{
 		Mode:               mode,
 		VectorCoverage:     vectorCoverage,
-		DegradationReasons: append([]string(nil), degradationReasons...),
+		DegradationReasons: degradation,
 	}
 	return QueryResult{Response: response}, nil
 }

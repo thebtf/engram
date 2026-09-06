@@ -19,6 +19,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/soheilhy/cmux"
 	httpSwagger "github.com/swaggo/http-swagger"
@@ -288,6 +289,24 @@ type projectReaperLifecycle interface {
 }
 
 type projectReaperFactory func(*gorm.Store) (projectReaperLifecycle, error)
+
+type uciEmbeddingWorkerRunner interface {
+	Run(context.Context, string) error
+}
+
+func (s *Service) startUCIEmbeddingWorker(worker uciEmbeddingWorkerRunner) {
+	if s == nil || worker == nil || s.ctx == nil || s.ctx.Err() != nil {
+		return
+	}
+	rootCtx := s.ctx
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		if err := worker.Run(rootCtx, uuid.NewString()); err != nil && !errors.Is(err, context.Canceled) {
+			log.Warn().Err(err).Msg("UCI embedding worker stopped")
+		}
+	}()
+}
 
 func defaultProjectReaperFactory(store *gorm.Store) (projectReaperLifecycle, error) {
 	return reaper.New(store.DB)
@@ -1254,6 +1273,7 @@ func (s *Service) initializeAsync() {
 			s.setInitError(fmt.Errorf("compose UCI context: %w", err))
 			return
 		}
+		s.startUCIEmbeddingWorker(uciContext.embeddingWorker)
 	}
 
 	// Rank-4: initialize the cross-encoder rerank client (optional — disabled if

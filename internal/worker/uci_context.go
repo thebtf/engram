@@ -25,8 +25,9 @@ const (
 // uciSemanticConfig binds the one profile-scoped semantic service constructed
 // with the UCI projection store during worker initialization.
 type uciSemanticConfig struct {
-	profile  uci.VectorProfile
-	embedder uci.SemanticEmbedder
+	profile    uci.VectorProfile
+	profilePtr *uci.VectorProfile
+	embedder   uci.SemanticEmbedder
 }
 
 func newUCISemanticConfig(
@@ -35,10 +36,10 @@ func newUCISemanticConfig(
 	profileClient *embedding.Client,
 	vectorClient *embedding.Client,
 ) uciSemanticConfig {
-	config := uciSemanticConfig{
-		profile: newUCISemanticProfile(ctx, resolver, profileClient, uciSemanticPreprocessingRevision),
-	}
+	profile := newUCISemanticProfile(ctx, resolver, profileClient, uciSemanticPreprocessingRevision)
+	config := uciSemanticConfig{profile: profile}
 	if vectorClient != nil {
+		config.profilePtr = &profile
 		config.embedder = vectorClient
 	}
 	return config
@@ -100,6 +101,8 @@ type uciContextComposition struct {
 	contextApplication *mcp.UCIContextApplication
 	application        *UCIApplication
 	projectionStore    *gormstore.UCIProjectionStore
+	embeddingProfile   *uci.VectorProfile
+	embeddingWorker    uciEmbeddingWorkerRunner
 	runtime            grpcserver.ContextAwareUCIRuntime
 	handlePort         *mcp.UCIContextHandlePort
 	aliasResolver      *uci.AliasResolver
@@ -134,9 +137,26 @@ func composeUCIContext(
 	}
 
 	projectionStore := gormstore.NewUCIProjectionStore(db)
-	publisher, err := projectionStore.Publisher(authorizer, uci.DefaultIndexPublicationLimits())
+	publisher, err := projectionStore.Publisher(authorizer, uci.IndexPublicationConfig{
+		Limits:           uci.DefaultIndexPublicationLimits(),
+		EmbeddingProfile: semantic.profilePtr,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("create UCI index publisher: %w", err)
+	}
+	var embeddingWorker uciEmbeddingWorkerRunner
+	if semantic.profilePtr != nil && semantic.embedder != nil {
+		worker, err := uci.NewEmbeddingWorker(
+			*semantic.profilePtr,
+			semantic.embedder,
+			projectionStore,
+			resolver,
+			uci.DefaultEmbeddingWorkerLimits(),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("create UCI embedding worker: %w", err)
+		}
+		embeddingWorker = worker
 	}
 	runtime, err := grpcserver.NewContextAwareUCIRuntime(contextStore, projectionStore, publisher)
 	if err != nil {
@@ -150,7 +170,7 @@ func composeUCIContext(
 	queryService := uci.NewQueryService(projectionStore)
 	graphService := uci.NewGraphService(projectionStore)
 	versionedReadService := uci.NewVersionedReadService(projectionStore)
-	indexStatusService := uci.NewIndexStatusService(projectionStore)
+	indexStatusService := uci.NewIndexStatusService(projectionStore, semantic.profilePtr)
 	semanticService := uci.NewSemanticService(semantic.profile, semantic.embedder, projectionStore, projectionStore)
 	application, err := NewUCIApplication(
 		contextApplication,
@@ -177,6 +197,8 @@ func composeUCIContext(
 		contextApplication: contextApplication,
 		application:        application,
 		projectionStore:    projectionStore,
+		embeddingProfile:   semantic.profilePtr,
+		embeddingWorker:    embeddingWorker,
 		runtime:            runtime,
 		handlePort:         handlePort,
 		aliasResolver:      aliasResolver,

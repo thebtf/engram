@@ -6306,6 +6306,83 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			},
 			Rollback: rollbackUCIFencedPublicationMigration173,
 		},
+		// Migration 174 binds durable embedding work to exact Views and vector profiles.
+		{
+			ID: "174_uci_embedding_jobs",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS target_view_id UUID`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS embedding_profile_id UUID`,
+					`UPDATE ci_jobs
+						SET state = 'obsolete', error_code = 'legacy_unbound', retry_after = NULL, lease_owner = NULL, lease_expiry = NULL, updated_at = now()
+						WHERE job_kind = 'embed'
+							AND (target_view_id IS NULL OR embedding_profile_id IS NULL)
+							AND state NOT IN ('succeeded', 'failed_terminal', 'cancelled', 'obsolete')`,
+					`DO $$
+					BEGIN
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_embed_target_scope_fkey' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_embed_target_scope_fkey
+								FOREIGN KEY (target_view_id, checkout_id, source_id, incarnation_id)
+								REFERENCES ci_views (view_id, checkout_id, source_id, incarnation_id);
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_embed_profile_fkey' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_embed_profile_fkey
+								FOREIGN KEY (embedding_profile_id) REFERENCES ci_embedding_profiles (embedding_profile_id);
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_embed_shape_chk' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_embed_shape_chk CHECK (
+								job_kind <> 'embed'
+								OR (
+									target_view_id IS NULL
+									AND embedding_profile_id IS NULL
+									AND state IN ('succeeded', 'failed_terminal', 'cancelled', 'obsolete')
+								)
+								OR (
+									target_view_id IS NOT NULL
+									AND embedding_profile_id IS NOT NULL
+									AND checkout_id IS NOT NULL
+									AND incarnation_id IS NOT NULL
+									AND profile_id IS NOT NULL
+									AND requested_by IS NOT NULL
+									AND target_generation IS NOT NULL
+									AND owner_epoch IS NOT NULL
+									AND publication_key IS NULL
+									AND expected_parent_view_id IS NULL
+									AND manifest_mode IS NULL
+									AND sealed_manifest IS NULL
+									AND finalize_binding_digest IS NULL
+									AND result_view_id IS NULL
+								)
+							);
+						END IF;
+					END $$`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS idx_ci_jobs_embed_target_profile_unique
+						ON ci_jobs (target_view_id, embedding_profile_id)
+						WHERE job_kind = 'embed' AND target_view_id IS NOT NULL AND embedding_profile_id IS NOT NULL`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS idx_ci_jobs_embed_running_source_profile_unique
+						ON ci_jobs (source_id, embedding_profile_id)
+						WHERE job_kind = 'embed' AND state = 'running' AND embedding_profile_id IS NOT NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_jobs_embed_claim
+						ON ci_jobs (state, retry_after, source_id, job_id)
+						WHERE job_kind = 'embed' AND embedding_profile_id IS NOT NULL`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 174: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackUCIEmbeddingJobsMigration174,
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
@@ -6449,6 +6526,13 @@ func rollbackUCIIndexProjectionMigration172(tx *gorm.DB) error {
 // rollbackUCIFencedPublicationMigration173 deliberately keeps published history and its
 // append-only staging evidence. A binary rollback cannot reconstruct a prior current View.
 func rollbackUCIFencedPublicationMigration173(tx *gorm.DB) error {
+	return nil
+}
+
+// rollbackUCIEmbeddingJobsMigration174 retains additive job bindings and
+// reusable vectors because a binary rollback cannot safely recreate a missing
+// exact-View completion proof.
+func rollbackUCIEmbeddingJobsMigration174(tx *gorm.DB) error {
 	return nil
 }
 

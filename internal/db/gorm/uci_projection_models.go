@@ -263,6 +263,7 @@ type UCIJob struct {
 	InputFingerprint      string      `gorm:"column:input_fingerprint;type:text;not null"`
 	OwnerEpoch            *int64      `gorm:"column:owner_epoch"`
 	TargetGeneration      *int64      `gorm:"column:target_generation"`
+	TargetViewID          *string     `gorm:"column:target_view_id;type:uuid"`
 	State                 UCIJobState `gorm:"column:state;type:text;not null"`
 	Attempt               int         `gorm:"column:attempt;not null"`
 	RetryAfter            *time.Time  `gorm:"column:retry_after;type:timestamptz"`
@@ -274,6 +275,7 @@ type UCIJob struct {
 	RequestedBy           *string     `gorm:"column:requested_by;type:text"`
 	IncarnationID         *string     `gorm:"column:incarnation_id;type:uuid"`
 	ProfileID             *string     `gorm:"column:profile_id;type:uuid"`
+	EmbeddingProfileID    *string     `gorm:"column:embedding_profile_id;type:uuid"`
 	ExpectedParentViewID  *string     `gorm:"column:expected_parent_view_id;type:uuid"`
 	ManifestMode          *string     `gorm:"column:manifest_mode;type:text"`
 	SealedManifest        *string     `gorm:"column:sealed_manifest;type:jsonb"`

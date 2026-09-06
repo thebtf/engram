@@ -14,7 +14,7 @@ var _ ucidomain.IndexStatusStore = (*UCIProjectionStore)(nil)
 // LoadIndexStatus loads exactly the already-authorized View. The query binds
 // Source, checkout, View, profile, and generation before temporal memberships,
 // chunks, embeddings, or jobs are counted.
-func (s *UCIProjectionStore) LoadIndexStatus(ctx context.Context, authorized ucidomain.AuthorizedContext) (ucidomain.IndexStatusSnapshot, error) {
+func (s *UCIProjectionStore) LoadIndexStatus(ctx context.Context, authorized ucidomain.AuthorizedContext, profile *ucidomain.VectorProfile) (ucidomain.IndexStatusSnapshot, error) {
 	if err := s.requireDB("load index status"); err != nil {
 		return ucidomain.IndexStatusSnapshot{}, err
 	}
@@ -40,7 +40,61 @@ func (s *UCIProjectionStore) LoadIndexStatus(ctx context.Context, authorized uci
 	if err != nil {
 		return ucidomain.IndexStatusSnapshot{}, ucidomain.NewIndexStatusError(ucidomain.IndexStatusUnavailable, err)
 	}
+	readiness, err := s.loadUCIEmbeddingReadiness(ctx, ref, profile)
+	if err != nil {
+		return ucidomain.IndexStatusSnapshot{}, ucidomain.NewIndexStatusError(ucidomain.IndexStatusUnavailable, err)
+	}
+	snapshot.Embedding, err = uciIndexEmbeddingStatus(readiness)
+	if err != nil {
+		return ucidomain.IndexStatusSnapshot{}, ucidomain.NewIndexStatusError(ucidomain.IndexStatusUnavailable, err)
+	}
+	if err := snapshot.Validate(); err != nil {
+		return ucidomain.IndexStatusSnapshot{}, ucidomain.NewIndexStatusError(ucidomain.IndexStatusUnavailable, err)
+	}
 	return snapshot, nil
+}
+
+func uciIndexEmbeddingStatus(readiness uciEmbeddingReadiness) (ucidomain.EmbeddingStatus, error) {
+	status := ucidomain.EmbeddingStatus{Coverage: ucidomain.IndexCoverageUnavailable}
+	if readiness.ProfileID == "" {
+		return status, nil
+	}
+
+	profileID := readiness.ProfileID
+	status.EmbeddingProfileID = &profileID
+	status.TotalCandidates = readiness.Total
+	status.ReadyCandidates = readiness.Ready
+	if readiness.JobState != nil {
+		jobState, err := uciIndexStatusJobState(string(*readiness.JobState))
+		if err != nil {
+			return ucidomain.EmbeddingStatus{}, err
+		}
+		status.JobState = &jobState
+		switch jobState {
+		case ucidomain.IndexStatusJobQueued, ucidomain.IndexStatusJobRunning, ucidomain.IndexStatusJobRetryScheduled:
+			status.PendingJobs = 1
+		}
+	}
+	if readiness.ErrorCode != nil {
+		code := ucidomain.EmbeddingFailureCode(*readiness.ErrorCode)
+		if !code.ValidForEmbeddingJob() {
+			return ucidomain.EmbeddingStatus{}, fmt.Errorf("uci projection index status: invalid embedding error code")
+		}
+		status.ErrorCode = &code
+	}
+	if readiness.RetryAfter != nil {
+		retryAfter := readiness.RetryAfter.UTC()
+		status.RetryAfter = &retryAfter
+	}
+	if readiness.complete() {
+		status.Coverage = ucidomain.IndexCoverageComplete
+	} else if readiness.Total > 0 {
+		status.Coverage = ucidomain.IndexCoveragePartial
+	}
+	if err := status.Validate(); err != nil {
+		return ucidomain.EmbeddingStatus{}, err
+	}
+	return status, nil
 }
 
 type uciIndexStatusRow struct {
@@ -165,6 +219,7 @@ func (s *UCIProjectionStore) loadUCIIndexStatusRow(ctx context.Context, ref ucid
 					AND pending_job.incarnation_id = selected_view.incarnation_id
 					AND pending_job.profile_id = selected_view.profile_id
 					AND pending_job.expected_parent_view_id = selected_view.view_id
+					AND pending_job.job_kind IN (?, ?, ?)
 					AND selected_view.view_state = ?
 					AND selected_view.current_view_id = selected_view.view_id
 					AND pending_job.state IN (?, ?, ?)
@@ -181,6 +236,7 @@ func (s *UCIProjectionStore) loadUCIIndexStatusRow(ctx context.Context, ref ucid
 				AND job.checkout_id = selected_view.checkout_id
 				AND job.incarnation_id = selected_view.incarnation_id
 				AND job.profile_id = selected_view.profile_id
+				AND job.job_kind IN (?, ?, ?)
 				AND (
 					job.expected_parent_view_id = selected_view.view_id
 					OR job.result_view_id = selected_view.view_id
@@ -204,10 +260,16 @@ func (s *UCIProjectionStore) loadUCIIndexStatusRow(ctx context.Context, ref ucid
 		UCIParseArtifactComplete,
 		UCIParseArtifactPartial,
 		UCIEmbeddingReady,
+		string(ucidomain.IndexJobInitial),
+		string(ucidomain.IndexJobReconcile),
+		string(ucidomain.IndexJobRecovery),
 		UCIViewPublished,
 		UCIJobQueued,
 		UCIJobRunning,
 		UCIJobRetryScheduled,
+		string(ucidomain.IndexJobInitial),
+		string(ucidomain.IndexJobReconcile),
+		string(ucidomain.IndexJobRecovery),
 		UCIJobQueued,
 		UCIJobRunning,
 		UCIJobRetryScheduled,
@@ -247,20 +309,21 @@ func uciIndexStatusSnapshotFromRow(ref ucidomain.ContextRef, row uciIndexStatusR
 	}
 
 	snapshot := ucidomain.IndexStatusSnapshot{
-		Context:             ref,
-		SourceState:         sourceState,
-		CheckoutState:       checkoutState,
-		ViewState:           viewState,
-		CurrentViewRelation: currentRelation,
-		Dirty:               row.Dirty,
-		ObservedFSSeq:       row.ObservedFSSeq,
-		Coverage:            coverage,
-		PublishedAt:         row.PublishedAt.UTC(),
-		ScanStartedAt:       row.ScanStartedAt.UTC(),
-		ScanCompletedAt:     row.ScanCompletedAt.UTC(),
-		ChunkCount:          uint64(row.ChunkCount),
-		ReadyEmbeddingCount: uint64(row.ReadyEmbeddingCount),
-		PendingJobCount:     uint64(row.PendingJobCount),
+		Context:                    ref,
+		SourceState:                sourceState,
+		CheckoutState:              checkoutState,
+		ViewState:                  viewState,
+		CurrentViewRelation:        currentRelation,
+		Dirty:                      row.Dirty,
+		ObservedFSSeq:              row.ObservedFSSeq,
+		Coverage:                   coverage,
+		PublishedAt:                row.PublishedAt.UTC(),
+		ScanStartedAt:              row.ScanStartedAt.UTC(),
+		ScanCompletedAt:            row.ScanCompletedAt.UTC(),
+		ChunkCount:                 uint64(row.ChunkCount),
+		ReadyEmbeddingCount:        uint64(row.ReadyEmbeddingCount),
+		PendingPublicationJobCount: uint64(row.PendingJobCount),
+		Embedding:                  ucidomain.EmbeddingStatus{Coverage: ucidomain.IndexCoverageUnavailable},
 	}
 	if row.JobState != nil {
 		jobState, err := uciIndexStatusJobState(*row.JobState)
@@ -271,7 +334,7 @@ func uciIndexStatusSnapshotFromRow(ref ucidomain.ContextRef, row uciIndexStatusR
 			return ucidomain.IndexStatusSnapshot{}, fmt.Errorf("uci projection index status: job target generation is invalid")
 		}
 		job := ucidomain.IndexStatusJob{State: jobState, TargetGeneration: cloneUCIOptionalInt64(row.JobTargetGeneration)}
-		snapshot.RelevantJob = &job
+		snapshot.PublicationJob = &job
 	} else if row.JobTargetGeneration != nil {
 		return ucidomain.IndexStatusSnapshot{}, fmt.Errorf("uci projection index status: job target has no job state")
 	}
@@ -395,7 +458,7 @@ func uciIndexStatusFreshness(snapshot ucidomain.IndexStatusSnapshot) ucidomain.Q
 			EnrichmentWatermark: watermark,
 		}
 	}
-	if snapshot.CheckoutState == ucidomain.IndexStatusCheckoutCatchingUp || snapshot.PendingJobCount > 0 {
+	if snapshot.CheckoutState == ucidomain.IndexStatusCheckoutCatchingUp || snapshot.PendingPublicationJobCount > 0 {
 		watermark.State = ucidomain.QueryEnrichmentPending
 		return ucidomain.QueryFreshness{
 			State:               ucidomain.QueryFreshnessCatchingUp,
