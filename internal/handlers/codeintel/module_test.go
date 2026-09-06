@@ -209,6 +209,33 @@ func testStatusArgsWithBarrier(contextHandle, token string, waitMS int64) json.R
 	return payload
 }
 
+func testStatusTextBlock(t *testing.T, text json.RawMessage) json.RawMessage {
+	t.Helper()
+	block, err := json.Marshal(struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}{Type: "text", Text: string(text)})
+	require.NoError(t, err)
+	return block
+}
+
+func testStatusContentEnvelope(t *testing.T, content []json.RawMessage, isError bool) json.RawMessage {
+	t.Helper()
+	envelope, err := json.Marshal(struct {
+		Content []json.RawMessage `json:"content"`
+		IsError bool              `json:"isError"`
+	}{Content: content, IsError: isError})
+	require.NoError(t, err)
+	return envelope
+}
+
+func testNestedStatusProxyPayload(t *testing.T, status json.RawMessage) json.RawMessage {
+	t.Helper()
+	inner := testStatusTextBlock(t, status)
+	envelope := testStatusContentEnvelope(t, []json.RawMessage{inner}, false)
+	return testStatusTextBlock(t, envelope)
+}
+
 // -----------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------
@@ -433,6 +460,43 @@ func TestCodebaseStatus_TransitionsRunningToIdle(t *testing.T) {
 	assert.Equal(t, "idle", finalStatus, "codebase_status must transition to idle after index completes")
 }
 
+func TestCodebaseStatusDecodesBoundedProxyPayloads(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	statusPayload := json.RawMessage(`{"total_chunks":17,"embedded_chunks":13,"last_indexed_at":"2026-09-06T00:00:00Z"}`)
+
+	for _, test := range []struct {
+		name          string
+		response      json.RawMessage
+		wantAvailable bool
+	}{
+		{name: "direct payload", response: statusPayload, wantAvailable: true},
+		{name: "nested gRPC MCP payload", response: testNestedStatusProxyPayload(t, statusPayload), wantAvailable: true},
+		{name: "over nested payload", response: testStatusTextBlock(t, testNestedStatusProxyPayload(t, statusPayload))},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mod := newTestModule(&fakeCore{statusResponse: test.response})
+			p := testProjectContext("proj-status-"+strings.ReplaceAll(test.name, " ", "-"), t.TempDir())
+			raw, err := mod.HandleTool(testTransportContext(p), p, "codebase_status", testStatusArgs(p))
+			require.NoError(t, err)
+			var status struct {
+				TotalChunks           int64  `json:"total_chunks"`
+				EmbeddedChunks        int64  `json:"embedded_chunks"`
+				ServerCountsAvailable bool   `json:"server_counts_available"`
+				ServerCountsError     string `json:"server_counts_error"`
+			}
+			require.NoError(t, json.Unmarshal(raw, &status))
+			if !test.wantAvailable {
+				require.False(t, status.ServerCountsAvailable)
+				require.Equal(t, "failed to parse server response", status.ServerCountsError)
+				return
+			}
+			require.True(t, status.ServerCountsAvailable)
+			require.Equal(t, int64(17), status.TotalChunks)
+			require.Equal(t, int64(13), status.EmbeddedChunks)
+		})
+	}
+}
+
 func TestCodebaseIndex_NoViewBindingsUseDistinctScopeKeys(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
 
@@ -581,6 +645,7 @@ func TestCodebaseStatusBarrierRefreshesNoViewTargetAfterPublication(t *testing.T
 		},
 	})
 	require.NoError(t, err)
+	statusResponse = testNestedStatusProxyPayload(t, statusResponse)
 	var isPublished atomic.Bool
 	initialBarrierResolved := make(chan struct{})
 	releaseIndex := make(chan struct{})
@@ -682,7 +747,7 @@ func TestCodebaseStatusBarrierFailsClosedForFailedRun(t *testing.T) {
 
 	raw, err = h.CallToolWithProject(ctx, p, "codebase_status", testStatusArgsWithBarrier(contextHandle, started.RunID, 500))
 	require.Nil(t, raw)
-	require.ErrorContains(t, err, "after_barrier run failed")
+	require.EqualError(t, err, "codebase_status: after_barrier run failed")
 	_, proxyCalls := core.callCounts()
 	require.Zero(t, proxyCalls, "failed local barrier must not proxy stale server evidence")
 }

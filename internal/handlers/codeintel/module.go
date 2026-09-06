@@ -35,6 +35,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -65,6 +66,8 @@ const (
 	indexRunRecordLimit                            = 256
 	indexRunTargetPathCount                  int64 = 1
 )
+
+var errInvalidServerStatusPayload = errors.New("failed to parse server response")
 
 // indexStateKey isolates daemon liveness and execution by the complete
 // server-authorized target identity. A publication from no View to a real View
@@ -512,18 +515,101 @@ func indexResultMatchesBinding(result *IndexResult, binding uci.IndexBinding) bo
 }
 
 func decodeServerStatusPayload(raw json.RawMessage) (map[string]json.RawMessage, error) {
-	var block struct {
-		Text string `json:"text"`
+	payload, err := decodeServerStatusObject(raw)
+	if err != nil {
+		return nil, errInvalidServerStatusPayload
 	}
-	if err := json.Unmarshal(raw, &block); err == nil && block.Text != "" {
-		raw = json.RawMessage(block.Text)
+	if serverStatusTextBlockPresent(payload) {
+		raw, err = unwrapServerStatusTextBlock(payload)
+		if err != nil {
+			return nil, errInvalidServerStatusPayload
+		}
+		payload, err = decodeServerStatusObject(raw)
+		if err != nil {
+			return nil, errInvalidServerStatusPayload
+		}
 	}
-
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &payload); err != nil || payload == nil {
-		return nil, fmt.Errorf("failed to parse server response")
+	if serverStatusContentEnvelopePresent(payload) {
+		raw, err = unwrapServerStatusContentEnvelope(payload)
+		if err != nil {
+			return nil, errInvalidServerStatusPayload
+		}
+		payload, err = decodeServerStatusObject(raw)
+		if err != nil {
+			return nil, errInvalidServerStatusPayload
+		}
+	}
+	if serverStatusTextBlockPresent(payload) || serverStatusContentEnvelopePresent(payload) {
+		return nil, errInvalidServerStatusPayload
 	}
 	return payload, nil
+}
+
+func decodeServerStatusObject(raw json.RawMessage) (map[string]json.RawMessage, error) {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil || payload == nil {
+		return nil, errInvalidServerStatusPayload
+	}
+	return payload, nil
+}
+
+func serverStatusTextBlockPresent(payload map[string]json.RawMessage) bool {
+	_, hasType := payload["type"]
+	_, hasText := payload["text"]
+	return hasType || hasText
+}
+
+func serverStatusContentEnvelopePresent(payload map[string]json.RawMessage) bool {
+	_, hasContent := payload["content"]
+	_, hasIsError := payload["isError"]
+	return hasContent || hasIsError
+}
+
+func unwrapServerStatusTextBlock(payload map[string]json.RawMessage) (json.RawMessage, error) {
+	if len(payload) != 2 {
+		return nil, errInvalidServerStatusPayload
+	}
+	rawType, hasType := payload["type"]
+	rawText, hasText := payload["text"]
+	if !hasType || !hasText {
+		return nil, errInvalidServerStatusPayload
+	}
+	var blockType, text string
+	if err := json.Unmarshal(rawType, &blockType); err != nil || blockType != "text" {
+		return nil, errInvalidServerStatusPayload
+	}
+	if err := json.Unmarshal(rawText, &text); err != nil || text == "" {
+		return nil, errInvalidServerStatusPayload
+	}
+	next := json.RawMessage(text)
+	if !json.Valid(next) {
+		return nil, errInvalidServerStatusPayload
+	}
+	return next, nil
+}
+
+func unwrapServerStatusContentEnvelope(payload map[string]json.RawMessage) (json.RawMessage, error) {
+	if len(payload) != 2 {
+		return nil, errInvalidServerStatusPayload
+	}
+	rawContent, hasContent := payload["content"]
+	rawIsError, hasIsError := payload["isError"]
+	if !hasContent || !hasIsError {
+		return nil, errInvalidServerStatusPayload
+	}
+	var isError *bool
+	if err := json.Unmarshal(rawIsError, &isError); err != nil || isError == nil || *isError {
+		return nil, errInvalidServerStatusPayload
+	}
+	var content []json.RawMessage
+	if err := json.Unmarshal(rawContent, &content); err != nil || len(content) != 1 {
+		return nil, errInvalidServerStatusPayload
+	}
+	var block map[string]json.RawMessage
+	if err := json.Unmarshal(content[0], &block); err != nil || block == nil {
+		return nil, errInvalidServerStatusPayload
+	}
+	return unwrapServerStatusTextBlock(block)
 }
 
 // -----------------------------------------------------------------------
