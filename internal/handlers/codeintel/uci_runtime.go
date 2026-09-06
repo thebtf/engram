@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -45,7 +46,6 @@ const (
 // a checkout and profile; this configuration only proves which local scanner
 // implementation is allowed to produce a publication for that selection.
 type UCIRuntimeConfig struct {
-	WorkstationID      string
 	ClientInstanceID   string
 	ParserBundleDigest uci.IndexDigest
 	GoProfile          uci.GoExtractionProfile
@@ -56,7 +56,6 @@ type UCIRuntimeConfig struct {
 // or client-request fallback.
 func RuntimeConfigFromEnvironment() UCIRuntimeConfig {
 	return UCIRuntimeConfig{
-		WorkstationID:      config.GetWorkstationID(),
 		ClientInstanceID:   os.Getenv(config.EnvClientInstanceID),
 		ParserBundleDigest: uci.IndexDigest(os.Getenv(EnvUCIParserBundleDigest)),
 		GoProfile: uci.GoExtractionProfile{
@@ -70,12 +69,13 @@ type uciRuntime struct {
 	core   *engramcore.Module
 	config UCIRuntimeConfig
 
-	stateMu   sync.RWMutex
-	started   bool
-	closed    bool
-	daemonCtx context.Context
-	db        *sql.DB
-	registry  *UCILocalRegistry
+	stateMu       sync.RWMutex
+	started       bool
+	closed        bool
+	workstationID string
+	daemonCtx     context.Context
+	db            *sql.DB
+	registry      *UCILocalRegistry
 
 	watcherMu sync.Mutex
 	watchers  map[string]uciRuntimeWatcher
@@ -133,9 +133,6 @@ func newUCIRuntime(core *engramcore.Module, configuration UCIRuntimeConfig) (*uc
 }
 
 func validateUCIRuntimeConfig(configuration UCIRuntimeConfig) error {
-	if !validUCIPreparedIndexIdentity(configuration.WorkstationID) {
-		return errors.New("uci runtime: workstation identity is invalid")
-	}
 	if !validUCIPreparedIndexIdentity(configuration.ClientInstanceID) {
 		return errors.New("uci runtime: client instance identity is invalid")
 	}
@@ -148,9 +145,10 @@ func validateUCIRuntimeConfig(configuration UCIRuntimeConfig) error {
 	return nil
 }
 
-// Start opens the local operational registry and installs the prepared
-// collaborator before codeintel can receive a request. The registry remains
-// daemon-local; it cannot select or authorize a server target.
+// Start opens the local operational registry before codeintel can receive a
+// request. The prepared collaborator is configured lazily from the first
+// server-authorized binding because the binding's workstation ID is the
+// authenticated keycard identity, not the machine-local WORKSTATION_ID value.
 func (runtimeState *uciRuntime) Start(deps module.ModuleDeps) error {
 	if runtimeState == nil {
 		return errors.New("uci runtime: unavailable")
@@ -181,27 +179,6 @@ func (runtimeState *uciRuntime) Start(deps module.ModuleDeps) error {
 		return fmt.Errorf("uci runtime: initialise local registry: %w", err)
 	}
 
-	collaborator, err := NewUCIPreparedIndexCollaborator(UCIPreparedIndexConfig{
-		WorkstationID:      runtimeState.config.WorkstationID,
-		ClientInstanceID:   runtimeState.config.ClientInstanceID,
-		ParserBundleDigest: runtimeState.config.ParserBundleDigest,
-		Registry:           registry,
-		Scanner:            newUCIRuntimeScanner(),
-		GoProfile:          runtimeState.config.GoProfile,
-	})
-	if err != nil {
-		_ = db.Close()
-		return fmt.Errorf("uci runtime: construct prepared index collaborator: %w", err)
-	}
-	if err := runtimeState.core.ConfigurePreparedIndexCollaborator(engramcore.PreparedIndexConfiguration{
-		WorkstationID:      runtimeState.config.WorkstationID,
-		ClientInstanceID:   runtimeState.config.ClientInstanceID,
-		ParserBundleDigest: string(runtimeState.config.ParserBundleDigest),
-	}, collaborator); err != nil {
-		_ = db.Close()
-		return fmt.Errorf("uci runtime: configure engramcore collaborator: %w", err)
-	}
-
 	runtimeState.daemonCtx = deps.DaemonCtx
 	runtimeState.db = db
 	runtimeState.registry = registry
@@ -209,9 +186,42 @@ func (runtimeState *uciRuntime) Start(deps module.ModuleDeps) error {
 	return nil
 }
 
-// The configured production profile is the existing Go extractor. A parser
-// worker/bundle for other languages is intentionally not inferred from source,
-// project state, or a latest-version lookup, so that runtime seam remains dark.
+func (runtimeState *uciRuntime) configureCollaboratorLocked(workstationID string) error {
+	if runtimeState.workstationID != "" {
+		if runtimeState.workstationID != workstationID {
+			return errors.New("uci runtime: server binding workstation changed")
+		}
+		return nil
+	}
+	if !validUCIPreparedIndexIdentity(workstationID) {
+		return errors.New("uci runtime: server binding workstation is invalid")
+	}
+	collaborator, err := NewUCIPreparedIndexCollaborator(UCIPreparedIndexConfig{
+		WorkstationID:      workstationID,
+		ClientInstanceID:   runtimeState.config.ClientInstanceID,
+		ParserBundleDigest: runtimeState.config.ParserBundleDigest,
+		Registry:           runtimeState.registry,
+		Scanner:            newUCIRuntimeScanner(),
+		GoProfile:          runtimeState.config.GoProfile,
+	})
+	if err != nil {
+		return fmt.Errorf("uci runtime: construct prepared index collaborator: %w", err)
+	}
+	if err := runtimeState.core.ConfigurePreparedIndexCollaborator(engramcore.PreparedIndexConfiguration{
+		WorkstationID:      workstationID,
+		ClientInstanceID:   runtimeState.config.ClientInstanceID,
+		ParserBundleDigest: string(runtimeState.config.ParserBundleDigest),
+	}, collaborator); err != nil {
+		return fmt.Errorf("uci runtime: configure engramcore collaborator: %w", err)
+	}
+	runtimeState.workstationID = workstationID
+	return nil
+}
+
+// The first installed vertical uses the existing Go extractor. Other bundled
+// parser languages remain unavailable until the parser worker is connected at
+// this same prepared-index boundary; callers must not infer support from the
+// installed artifact alone.
 
 func newUCIRuntimeScanner() *uci.Scanner {
 	return uci.NewScanner(
@@ -220,17 +230,52 @@ func newUCIRuntimeScanner() *uci.Scanner {
 		uci.ScannerPolicy{
 			IncludeUntracked: true,
 			ProtectedPaths: []string{
+				".agent",
 				".env",
 				".env.*",
-				"keys",
+				".cache",
+				"build",
+				"coverage",
 				"credentials",
+				"dist",
+				"keys",
+				"node_modules",
+				"target",
 				"transcripts",
+				"vendor",
 			},
-			SecretDetector: uci.ScannerSecretDetectorFunc(func(_ string, body []byte) bool {
-				return privacy.ContainsSecrets(string(body))
+			SecretDetector: uci.ScannerSecretDetectorFunc(func(filePath string, body []byte) bool {
+				return uciRuntimeProtectedSecretPath(filePath) || privacy.ContainsSecrets(string(body))
 			}),
 		},
 	)
+}
+
+func uciRuntimeProtectedSecretPath(filePath string) bool {
+	normalized := strings.ToLower(strings.ReplaceAll(filePath, "\\", "/"))
+	base := normalized
+	if separator := strings.LastIndexByte(normalized, '/'); separator >= 0 {
+		base = normalized[separator+1:]
+	}
+	return base == ".env" || strings.HasPrefix(base, ".env.") || base == "credentials" || base == "credentials.json" || base == "secrets" || base == "secrets.json"
+}
+
+func uciRuntimeFileLocatorPath(locator string) (string, error) {
+	parsed, err := url.Parse(locator)
+	if err != nil || parsed.Scheme != "file" || parsed.Opaque != "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("checkout locator is not a closed file URI")
+	}
+	if parsed.Host != "" && !strings.EqualFold(parsed.Host, "localhost") {
+		return "", errors.New("checkout locator host is unsupported")
+	}
+	decoded, err := url.PathUnescape(parsed.EscapedPath())
+	if err != nil || decoded == "" {
+		return "", errors.New("checkout locator path is invalid")
+	}
+	if runtime.GOOS == "windows" && len(decoded) >= 3 && decoded[0] == '/' && decoded[2] == ':' {
+		decoded = decoded[1:]
+	}
+	return uciRuntimeCanonicalPath(filepath.FromSlash(decoded))
 }
 
 // Prepare derives local correlation evidence only after the server has bound
@@ -247,8 +292,8 @@ func (runtimeState *uciRuntime) Prepare(ctx context.Context, target engramcore.R
 		return "", err
 	}
 
-	runtimeState.stateMu.RLock()
-	defer runtimeState.stateMu.RUnlock()
+	runtimeState.stateMu.Lock()
+	defer runtimeState.stateMu.Unlock()
 	if !runtimeState.started || runtimeState.closed || runtimeState.registry == nil || runtimeState.daemonCtx == nil {
 		return "", errors.New("uci runtime: unavailable")
 	}
@@ -257,15 +302,18 @@ func (runtimeState *uciRuntime) Prepare(ctx context.Context, target engramcore.R
 	if err := binding.Validate(); err != nil {
 		return "", fmt.Errorf("uci runtime: server binding is invalid: %w", err)
 	}
-	if binding.WorkstationID != runtimeState.config.WorkstationID {
-		return "", errors.New("uci runtime: server binding workstation does not match daemon configuration")
-	}
-	if !uciRuntimeSamePath(selectedRoot, requestedRoot) {
-		return "", errors.New("uci runtime: requested root does not match the selected session root")
-	}
-
 	evidence, err := runtimeState.currentWorktreeEvidence(ctx, selectedRoot)
 	if err != nil {
+		return "", err
+	}
+	if !uciRuntimeSamePath(requestedRoot, selectedRoot) && !uciRuntimeSamePath(requestedRoot, evidence.rootPath) {
+		return "", errors.New("uci runtime: requested root does not match the selected worktree")
+	}
+	locatorPath, err := uciRuntimeFileLocatorPath(binding.LocalRootID)
+	if err != nil || !uciRuntimeSamePath(locatorPath, evidence.rootPath) {
+		return "", errors.New("uci runtime: server-authorized checkout locator does not match the selected worktree")
+	}
+	if err := runtimeState.configureCollaboratorLocked(binding.WorkstationID); err != nil {
 		return "", err
 	}
 	if err := runtimeState.registry.RecordApprovedRoot(ctx, UCILocalApprovedRoot{
