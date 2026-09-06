@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -90,6 +91,13 @@ func TestUCIInstalledStandardClientsKeepDirtyViewsIsolated(t *testing.T) {
 		!result.Cleanup.FixtureRootRemoved ||
 		!result.Cleanup.LocalStateRootRemoved {
 		t.Fatal("installed acceptance did not close its child tree and disposable state")
+	}
+	receipt, receiptErr := BuildUCIInstalledReceipt(result)
+	if receiptErr != nil {
+		t.Fatalf("assemble installed receipt from current result: %v", receiptErr)
+	}
+	if _, receiptErr := EncodeUCIInstalledReceipt(receipt); receiptErr != nil {
+		t.Fatalf("encode installed receipt from current result: %v", receiptErr)
 	}
 }
 
@@ -592,4 +600,347 @@ func uciInstalledAcceptanceContains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestUCIInstalledReceiptContract(t *testing.T) {
+	t.Run("complete synthetic result is deterministic and redacted", func(t *testing.T) {
+		result := uciCompleteInstalledReceiptResult()
+		first, err := BuildUCIInstalledReceipt(result)
+		if err != nil {
+			t.Fatalf("build first receipt: %v", err)
+		}
+		second, err := BuildUCIInstalledReceipt(result)
+		if err != nil {
+			t.Fatalf("build second receipt: %v", err)
+		}
+		firstJSON, err := EncodeUCIInstalledReceipt(first)
+		if err != nil {
+			t.Fatalf("encode first receipt: %v", err)
+		}
+		secondJSON, err := EncodeUCIInstalledReceipt(second)
+		if err != nil {
+			t.Fatalf("encode second receipt: %v", err)
+		}
+		if string(firstJSON) != string(secondJSON) || !json.Valid(firstJSON) {
+			t.Fatal("receipt bytes are not deterministic valid JSON")
+		}
+
+		reordered := uciCompleteInstalledReceiptResult()
+		tools := reordered.ClientTranscripts[uciInstalledAcceptanceClientA].Tools
+		for left, right := 0, len(tools)-1; left < right; left, right = left+1, right-1 {
+			tools[left], tools[right] = tools[right], tools[left]
+		}
+		transcript := reordered.ClientTranscripts[uciInstalledAcceptanceClientA]
+		transcript.Tools = tools
+		reordered.ClientTranscripts[uciInstalledAcceptanceClientA] = transcript
+		reorderedReceipt, err := BuildUCIInstalledReceipt(reordered)
+		if err != nil {
+			t.Fatalf("build receipt with reordered tool surface: %v", err)
+		}
+		reorderedJSON, err := EncodeUCIInstalledReceipt(reorderedReceipt)
+		if err != nil {
+			t.Fatalf("encode receipt with reordered tool surface: %v", err)
+		}
+		if string(firstJSON) != string(reorderedJSON) {
+			t.Fatal("receipt retained unstable tool-list ordering")
+		}
+
+		for _, raw := range []string{
+			"postgres://fixture:secret@127.0.0.1/private_test",
+			`D:\private\uci-installed-root`,
+			"fixture source body must never be retained",
+			"fixture-token-must-never-be-retained",
+		} {
+			if strings.Contains(string(firstJSON), raw) {
+				t.Fatalf("receipt retained raw private input %q", raw)
+			}
+		}
+		if first.SchemaVersion != UCIInstalledReceiptSchemaVersion || first.Completion != uciInstalledReceiptCompletionVerified || first.Scope.Production != uciInstalledReceiptNotClaimed || first.Fixture.PrimarySourceDigest == "fixture source body must never be retained" {
+			t.Fatalf("receipt schema or redaction boundary = %#v", first)
+		}
+	})
+
+	t.Run("rejects incomplete unsafe and unstable result evidence", func(t *testing.T) {
+		tests := []struct {
+			name   string
+			mutate func(*uciInstalledAcceptanceResult)
+		}{
+			{
+				name: "missing candidate digest",
+				mutate: func(result *uciInstalledAcceptanceResult) {
+					artifact := result.Artifacts[uciInstalledAcceptanceArtifactParser]
+					artifact.CandidateSHA256 = ""
+					result.Artifacts[uciInstalledAcceptanceArtifactParser] = artifact
+				},
+			},
+			{
+				name: "missing fixture manifest digest",
+				mutate: func(result *uciInstalledAcceptanceResult) {
+					result.Fixture.ManifestDigest = ""
+				},
+			},
+			{
+				name: "false completion before cleanup",
+				mutate: func(result *uciInstalledAcceptanceResult) {
+					result.Cleanup.ProcessTreeClosed = false
+				},
+			},
+			{
+				name: "raw DSN in transcript",
+				mutate: func(result *uciInstalledAcceptanceResult) {
+					transcript := result.ClientTranscripts[uciInstalledAcceptanceClientA]
+					transcript.Tools = append(transcript.Tools, "postgres://fixture:secret@127.0.0.1/private_test")
+					result.ClientTranscripts[uciInstalledAcceptanceClientA] = transcript
+				},
+			},
+			{
+				name: "absolute private locator in transcript",
+				mutate: func(result *uciInstalledAcceptanceResult) {
+					transcript := result.ClientTranscripts[uciInstalledAcceptanceClientA]
+					transcript.Tools = append(transcript.Tools, `D:\private\uci-installed-root`)
+					result.ClientTranscripts[uciInstalledAcceptanceClientA] = transcript
+				},
+			},
+			{
+				name: "source body substituted for digest",
+				mutate: func(result *uciInstalledAcceptanceResult) {
+					result.Fixture.PrimarySourceDigest = "fixture source body must never be retained"
+				},
+			},
+			{
+				name: "unstable map key set",
+				mutate: func(result *uciInstalledAcceptanceResult) {
+					result.Artifacts["unexpected"] = result.Artifacts[uciInstalledAcceptanceArtifactServer]
+				},
+			},
+			{
+				name: "missing refusal outcome",
+				mutate: func(result *uciInstalledAcceptanceResult) {
+					delete(result.Refusals, "private")
+				},
+			},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				result := uciCompleteInstalledReceiptResult()
+				test.mutate(&result)
+				if _, err := BuildUCIInstalledReceipt(result); err == nil {
+					t.Fatal("receipt assembly accepted incomplete or unsafe evidence")
+				}
+			})
+		}
+	})
+
+	t.Run("rejects receipt tampering", func(t *testing.T) {
+		receipt, err := BuildUCIInstalledReceipt(uciCompleteInstalledReceiptResult())
+		if err != nil {
+			t.Fatalf("build receipt: %v", err)
+		}
+		tests := []struct {
+			name   string
+			mutate func(*UCIInstalledReceipt)
+		}{
+			{
+				name: "false completion",
+				mutate: func(receipt *UCIInstalledReceipt) {
+					receipt.Completion = "complete"
+				},
+			},
+			{
+				name: "candidate artifact mismatch",
+				mutate: func(receipt *UCIInstalledReceipt) {
+					receipt.Candidate.Artifacts[0].InstalledSHA256 = uciInstalledAcceptanceDigest("tampered installed artifact")
+				},
+			},
+			{
+				name: "unsupported production claim",
+				mutate: func(receipt *UCIInstalledReceipt) {
+					receipt.Scope.Production = "proven"
+				},
+			},
+			{
+				name: "watcher isolation mismatch",
+				mutate: func(receipt *UCIInstalledReceipt) {
+					receipt.Watcher.AfterDeleteB.ViewDigest = uciInstalledAcceptanceDigest("tampered linked view")
+				},
+			},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				mutated := receipt
+				mutated.Candidate.Artifacts = append([]UCIInstalledReceiptArtifactDigest(nil), receipt.Candidate.Artifacts...)
+				test.mutate(&mutated)
+				if err := ValidateUCIInstalledReceipt(mutated); err == nil {
+					t.Fatal("receipt validator accepted tampering")
+				}
+			})
+		}
+	})
+}
+
+func uciCompleteInstalledReceiptResult() uciInstalledAcceptanceResult {
+	fixture := uciInstalledAcceptanceFixture{
+		RelativePath:  `private/fixture-path-must-never-be-retained.go`,
+		SharedSymbol:  "fixture-token-must-never-be-retained",
+		PrimarySource: "fixture source body must never be retained",
+		LinkedSource:  "different fixture source body must never be retained",
+		PrimaryCallee: "PrimaryFixtureCallee",
+		LinkedCallee:  "LinkedFixtureCallee",
+	}
+	result := uciNewInstalledAcceptanceResult(uciInstalledAcceptanceRequest{
+		Version:               uciInstalledAcceptanceVersionV1,
+		InstallHarnessVersion: uciInstallHarnessVersionV1,
+		LoopbackHost:          "127.0.0.1",
+		Fixture:               fixture,
+	})
+	result.Artifacts = map[string]uciInstalledAcceptanceArtifact{
+		uciInstalledAcceptanceArtifactServer: {CandidateSHA256: uciInstalledAcceptanceDigest("candidate-server"), InstalledSHA256: uciInstalledAcceptanceDigest("candidate-server")},
+		uciInstalledAcceptanceArtifactDaemon: {CandidateSHA256: uciInstalledAcceptanceDigest("candidate-daemon"), InstalledSHA256: uciInstalledAcceptanceDigest("candidate-daemon")},
+		uciInstalledAcceptanceArtifactParser: {CandidateSHA256: uciInstalledAcceptanceDigest("candidate-parser"), InstalledSHA256: uciInstalledAcceptanceDigest("candidate-parser")},
+	}
+	result.Processes = uciInstalledAcceptanceProcesses{ServerPID: 101, DaemonPID: 102, ParserPID: 103}
+	result.Parser = uciInstalledAcceptanceParserEvidence{UsedInstalledArtifact: true, InvocationCount: 1, RequestDigest: uciInstalledAcceptanceDigest("installed-parser-request")}
+	result.ReservedLoopbackPorts = []int{33001, 33002}
+	result.SimultaneousAB = true
+
+	transcript := uciInstalledReceiptTestTranscript()
+	result.ClientTranscripts = map[string]uciInstalledAcceptanceClientTranscript{
+		uciInstalledAcceptanceClientA: transcript,
+		uciInstalledAcceptanceClientB: transcript,
+		uciInstalledAcceptanceClientC: transcript,
+	}
+	result.Bootstrap = uciInstalledAcceptanceBootstrap{
+		InitialViewAbsent: map[string]bool{uciInstalledAcceptanceClientA: true, uciInstalledAcceptanceClientB: true},
+		IndexStarted:      map[string]bool{uciInstalledAcceptanceClientA: true, uciInstalledAcceptanceClientB: true},
+		StatusStates:      map[string]string{uciInstalledAcceptanceClientA: "observed_current", uciInstalledAcceptanceClientB: "observed_current"},
+		BarrierStates:     map[string]string{uciInstalledAcceptanceClientA: "satisfied", uciInstalledAcceptanceClientB: "satisfied"},
+		UnboundClient:     uciInstalledAcceptanceClosedOutcome{Status: "context_required", ErrorCode: "CONTEXT_REQUIRED"},
+	}
+	result.Worktrees = uciInstalledAcceptanceWorktrees{
+		Registered:             map[string]bool{uciInstalledAcceptanceClientA: true, uciInstalledAcceptanceClientB: true},
+		UsedGitArgumentVectors: true,
+		LinkedGitFile:          true,
+		SameHead:               true,
+		PrimaryDirty:           true,
+		LinkedDirty:            true,
+		SharedHeadDigest:       uciInstalledAcceptanceDigest("shared-head"),
+		RelativePathDigest:     result.Fixture.RelativePathDigest,
+	}
+	primary := uciInstalledAcceptanceContext{
+		SourceDigest:   uciInstalledAcceptanceDigest("source"),
+		CheckoutDigest: uciInstalledAcceptanceDigest("checkout-primary"),
+		ViewDigest:     uciInstalledAcceptanceDigest("view-primary"),
+	}
+	linked := uciInstalledAcceptanceContext{
+		SourceDigest:   primary.SourceDigest,
+		CheckoutDigest: uciInstalledAcceptanceDigest("checkout-linked"),
+		ViewDigest:     uciInstalledAcceptanceDigest("view-linked"),
+	}
+	result.ClientContexts = map[string]uciInstalledAcceptanceContext{
+		uciInstalledAcceptanceClientA: primary,
+		uciInstalledAcceptanceClientB: linked,
+	}
+	primaryObservation := uciInstalledAcceptanceObservations{
+		SearchArtifactDigests: []string{result.Fixture.PrimarySourceDigest},
+		GraphCalleeDigests:    []string{result.Fixture.PrimaryCalleeDigest},
+		ReadArtifactDigests:   []string{result.Fixture.PrimarySourceDigest},
+	}
+	linkedObservation := uciInstalledAcceptanceObservations{
+		SearchArtifactDigests: []string{result.Fixture.LinkedSourceDigest},
+		GraphCalleeDigests:    []string{result.Fixture.LinkedCalleeDigest},
+		ReadArtifactDigests:   []string{result.Fixture.LinkedSourceDigest},
+	}
+	result.Observations = map[string]uciInstalledAcceptanceObservations{
+		uciInstalledAcceptanceClientA: primaryObservation,
+		uciInstalledAcceptanceClientB: linkedObservation,
+	}
+	result.Defaults = uciInstalledAcceptanceDefaults{
+		BeforeThirdClientViewDigests: map[string]string{uciInstalledAcceptanceClientA: primary.ViewDigest, uciInstalledAcceptanceClientB: linked.ViewDigest},
+		AfterThirdClientViewDigests:  map[string]string{uciInstalledAcceptanceClientA: primary.ViewDigest, uciInstalledAcceptanceClientB: linked.ViewDigest},
+	}
+	result.Refusals = map[string]uciInstalledAcceptanceClosedOutcome{
+		"denied":     {Status: "forbidden", ErrorCode: "PERMISSION_DENIED"},
+		"revoked":    {Status: "forbidden", ErrorCode: "PERMISSION_DENIED"},
+		"mismatched": {Status: "context_required", ErrorCode: "CONTEXT_MISMATCH"},
+		"private":    {Status: "context_required", ErrorCode: "CONTEXT_MISMATCH"},
+	}
+	result.Recorder = uciInstalledAcceptanceRecorder{
+		InitialUnavailable:            uciInstalledAcceptanceClosedOutcome{Status: "unavailable", ErrorCode: "EXPOSURE_UNAVAILABLE"},
+		HealthAfterInitialUnavailable: "unavailable",
+		FirstExposureDigest:           uciInstalledAcceptanceDigest("exposure"),
+		ExactRetryExposureDigest:      uciInstalledAcceptanceDigest("exposure"),
+		HealthBeforeMismatch:          "healthy",
+		HealthAfterMismatch:           "healthy",
+		Mismatch:                      uciInstalledAcceptanceClosedOutcome{Status: "unavailable", ErrorCode: "IDEMPOTENCY_MISMATCH"},
+	}
+	writeA := uciInstalledReceiptTestPublication(primary, "watcher-write-a", 2)
+	deleteA := uciInstalledReceiptTestPublication(primary, "watcher-delete-a", 3)
+	writeB := uciInstalledReceiptTestPublication(linked, "watcher-steady-b", 1)
+	writeB.ViewDigest = linked.ViewDigest
+	writeB.BarrierState = ""
+	result.Watcher = uciInstalledAcceptanceWatcher{
+		AfterWriteA:  writeA,
+		AfterDeleteA: deleteA,
+		AfterWriteB:  writeB,
+		AfterDeleteB: writeB,
+	}
+	restartPrimary := primary
+	restartPrimary.ViewDigest = deleteA.ViewDigest
+	restartLinked := linked
+	restartLinked.ViewDigest = writeB.ViewDigest
+	result.Restart = uciInstalledAcceptanceRestart{
+		BeforeProcesses:        result.Processes,
+		AfterProcesses:         uciInstalledAcceptanceProcesses{ServerPID: 201, DaemonPID: 202, ParserPID: 203},
+		BeforeProjectionCounts: uciInstalledAcceptanceProjectionCounts{Embeddings: 3, ChunkEmbeddings: 4, ResolvedEdges: 5},
+		AfterProjectionCounts:  uciInstalledAcceptanceProjectionCounts{Embeddings: 3, ChunkEmbeddings: 4, ResolvedEdges: 5},
+		ClientTranscripts: map[string]uciInstalledAcceptanceClientTranscript{
+			uciInstalledAcceptanceClientA: transcript,
+			uciInstalledAcceptanceClientB: transcript,
+			uciInstalledAcceptanceClientC: transcript,
+		},
+		BeforeClientContexts: map[string]uciInstalledAcceptanceContext{
+			uciInstalledAcceptanceClientA: restartPrimary,
+			uciInstalledAcceptanceClientB: restartLinked,
+		},
+		ClientContexts: map[string]uciInstalledAcceptanceContext{
+			uciInstalledAcceptanceClientA: restartPrimary,
+			uciInstalledAcceptanceClientB: restartLinked,
+			uciInstalledAcceptanceClientC: restartPrimary,
+		},
+		BeforeObservations: map[string]uciInstalledAcceptanceObservations{
+			uciInstalledAcceptanceClientA: primaryObservation,
+			uciInstalledAcceptanceClientB: linkedObservation,
+		},
+		Observations: map[string]uciInstalledAcceptanceObservations{
+			uciInstalledAcceptanceClientA: primaryObservation,
+			uciInstalledAcceptanceClientB: linkedObservation,
+		},
+	}
+	result.Cleanup = uciInstalledAcceptanceCleanup{
+		ProcessTreeClosed:     true,
+		InstallRootRemoved:    true,
+		FixtureRootRemoved:    true,
+		LocalStateRootRemoved: true,
+	}
+	return result
+}
+
+func uciInstalledReceiptTestTranscript() uciInstalledAcceptanceClientTranscript {
+	return uciInstalledAcceptanceClientTranscript{
+		UsedStdio: true,
+		Methods:   []string{"initialize", "notifications/initialized", "tools/list", "tools/call"},
+		Tools:     []string{"codebase_read", "codebase_graph", "codebase_search", "codebase_status", "codebase_index", "codebase_context"},
+	}
+}
+
+func uciInstalledReceiptTestPublication(context uciInstalledAcceptanceContext, viewSeed string, generation int64) uciInstalledAcceptancePublicationEvidence {
+	return uciInstalledAcceptancePublicationEvidence{
+		SourceDigest:   context.SourceDigest,
+		CheckoutDigest: context.CheckoutDigest,
+		ViewDigest:     uciInstalledAcceptanceDigest(viewSeed),
+		RunDigest:      uciInstalledAcceptanceDigest("run-" + viewSeed),
+		Generation:     generation,
+		FreshnessState: "observed_current",
+		BarrierState:   "satisfied",
+	}
 }

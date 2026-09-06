@@ -81,7 +81,9 @@ type uciInstalledAcceptanceFixture struct {
 }
 
 type uciInstalledAcceptanceResult struct {
+	AcceptanceVersion     string
 	InstallHarnessVersion string
+	Fixture               uciInstalledAcceptanceFixtureEvidence
 	Artifacts             map[string]uciInstalledAcceptanceArtifact
 	Processes             uciInstalledAcceptanceProcesses
 	RawServiceCallCount   int
@@ -633,7 +635,9 @@ func runUCIInstalledAcceptance(ctx context.Context, request uciInstalledAcceptan
 
 func uciNewInstalledAcceptanceResult(request uciInstalledAcceptanceRequest) uciInstalledAcceptanceResult {
 	return uciInstalledAcceptanceResult{
+		AcceptanceVersion:     request.Version,
 		InstallHarnessVersion: request.InstallHarnessVersion,
+		Fixture:               uciInstalledAcceptanceFixtureEvidenceFor(request.Fixture),
 		Artifacts:             make(map[string]uciInstalledAcceptanceArtifact),
 		LoopbackHost:          request.LoopbackHost,
 		ReservedLoopbackPorts: make([]int, 0),
