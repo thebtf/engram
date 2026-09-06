@@ -455,6 +455,9 @@ func TestUCIPublishSemanticNoOpReusesCurrentView(t *testing.T) {
 	firstBuild := fixture.begin(t, fixture.publisher, caller, "no-op-first", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
 	firstAcks := fixture.stageDraft(t, fixture.publisher, caller, firstBuild.Build, draft.parts)
 	firstManifest := fixture.manifest(t, firstAcks, draft)
+	firstManifest.Observation.ScanStart = firstManifest.Observation.ScanStart.Add(321 * time.Nanosecond)
+	firstManifest.Observation.ScanEnd = firstManifest.Observation.ScanEnd.Add(654 * time.Nanosecond)
+	require.NotZero(t, firstManifest.Observation.ScanStart.Nanosecond()%1_000, "fixture must exercise sub-microsecond PostgreSQL timestamp normalization")
 	first, err := fixture.publisher.Finalize(context.Background(), caller, ucidomain.IndexFinalizeInput{
 		Build:    firstBuild.Build,
 		Manifest: firstManifest,

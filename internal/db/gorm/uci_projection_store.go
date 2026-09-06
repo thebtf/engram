@@ -3467,8 +3467,8 @@ func loadUCIPublishedManifestForView(ctx context.Context, tx *gorm.DB, view UCIV
 }
 
 // matchesUCIPublishedViewManifest verifies that the sealed manifest is provenance
-// for this exact current View. Unlike semantic comparison, its scan timestamps must
-// match because they identify the View that the persisted job originally created.
+// for this exact current View. PostgreSQL stores timestamptz at microsecond
+// precision, so its reloaded scan window is compared within that storage unit.
 func matchesUCIPublishedViewManifest(view UCIView, job UCIJob, manifest ucidomain.IndexManifestCompletion) bool {
 	if !sameUCIPublicationStoredCoverage(view.CoverageJSON, manifest.Coverage) {
 		return false
@@ -3481,7 +3481,16 @@ func matchesUCIPublishedViewManifest(view UCIView, job UCIJob, manifest ucidomai
 		sameUCIOptionalString(view.HeadOID, manifest.Observation.HeadOID) &&
 		sameUCIOptionalString(view.ObjectFormat, manifest.Observation.ObjectFormat) &&
 		sameUCIOptionalString(view.RefLabel, manifest.Observation.RefLabel) &&
-		view.ScanStart.Equal(manifest.Observation.ScanStart) && view.ScanEnd.Equal(manifest.Observation.ScanEnd)
+		sameUCIPublicationStoredTimestamp(view.ScanStart, manifest.Observation.ScanStart) &&
+		sameUCIPublicationStoredTimestamp(view.ScanEnd, manifest.Observation.ScanEnd)
+}
+
+func sameUCIPublicationStoredTimestamp(stored, input time.Time) bool {
+	delta := stored.UTC().Sub(input.UTC())
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta < time.Microsecond
 }
 
 // sameUCIPublicationSemanticManifest excludes only the volatile scan window and
