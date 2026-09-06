@@ -162,9 +162,8 @@ func (application *UCIApplication) ReadCodebase(ctx context.Context, authorized 
 	return response, nil
 }
 
-// CodebaseStatus returns exact selected-View counts. Evidence-recorder health
-// remains its zero value here because MCP owns and overwrites that boundary
-// field at serialization time.
+// CodebaseStatus returns exact selected-View counts. MCP adds recorder health
+// from the same recorder that owns release-time evidence appends.
 func (application *UCIApplication) CodebaseStatus(ctx context.Context, authorized uci.AuthorizedContext) (mcp.CodebaseStatusSnapshot, error) {
 	if application == nil || application.indexStatusService == nil {
 		return mcp.CodebaseStatusSnapshot{}, errors.New("UCI application index status service is not configured")

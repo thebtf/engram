@@ -172,6 +172,7 @@ func composeUCIContext(
 	versionedReadService := uci.NewVersionedReadService(projectionStore)
 	indexStatusService := uci.NewIndexStatusService(projectionStore, semantic.profilePtr)
 	semanticService := uci.NewSemanticService(semantic.profile, semantic.embedder, projectionStore, projectionStore)
+	exposureRecorder := uci.NewExposureRecorder(gormstore.NewUCIExposureStore(db), nil)
 	application, err := NewUCIApplication(
 		contextApplication,
 		aliasResolver,
@@ -184,9 +185,8 @@ func composeUCIContext(
 	if err != nil {
 		return nil, fmt.Errorf("create UCI application: %w", err)
 	}
-	exposureRecorder := uci.NewExposureRecorder(gormstore.NewUCIExposureStore(db), nil)
-	transport := grpcserver.NewContextAwareUCITransport(resolver, aliasResolver, runtime, handlePort)
 
+	transport := grpcserver.NewContextAwareUCITransport(resolver, aliasResolver, runtime, handlePort)
 	mcpServer.SetCodebaseContextApplication(application)
 	mcpServer.SetUCIExposureRecorder(exposureRecorder)
 

@@ -687,7 +687,7 @@ func (s *Server) handleUCICodebaseStatus(ctx context.Context, raw json.RawMessag
 		TotalChunks:      snapshot.TotalChunks,
 		EmbeddedChunks:   snapshot.EmbeddedChunks,
 		Embedding:        codebaseEmbeddingStatusResponseFrom(snapshot.Embedding),
-		EvidenceRecorder: snapshot.EvidenceRecorder,
+		EvidenceRecorder: s.codebaseExposureRecorderHealth(),
 		Freshness:        freshness,
 	})
 	if err != nil {
