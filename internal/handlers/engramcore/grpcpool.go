@@ -215,19 +215,39 @@ func dialGRPC(addr, serverURL, token string) (*grpc.ClientConn, error) {
 	}
 
 	if token != "" {
-		opts = append(opts, grpc.WithUnaryInterceptor(tokenInterceptor(token)))
+		opts = append(opts,
+			grpc.WithUnaryInterceptor(tokenInterceptor(token)),
+			grpc.WithStreamInterceptor(tokenStreamInterceptor(token)),
+		)
 	}
 
 	return grpc.NewClient(addr, opts...)
 }
 
-// tokenInterceptor injects the Bearer token into every outgoing RPC. Ported
-// verbatim.
+// tokenInterceptor injects the Bearer token into every outgoing unary RPC.
 func tokenInterceptor(token string) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
-		return invoker(ctx, method, req, reply, cc, opts...)
+		return invoker(withAuthorization(ctx, token), method, req, reply, cc, opts...)
 	}
+}
+
+// tokenStreamInterceptor injects the Bearer token into every outgoing streaming RPC.
+func tokenStreamInterceptor(token string) grpc.StreamClientInterceptor {
+	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		return streamer(withAuthorization(ctx, token), desc, cc, method, opts...)
+	}
+}
+
+// withAuthorization replaces any caller-supplied authorization metadata while preserving all other outgoing context state.
+func withAuthorization(ctx context.Context, token string) context.Context {
+	values, ok := metadata.FromOutgoingContext(ctx)
+	if ok {
+		values = values.Copy()
+	} else {
+		values = metadata.MD{}
+	}
+	values.Set("authorization", "Bearer "+token)
+	return metadata.NewOutgoingContext(ctx, values)
 }
 
 // safeRemoteURL strips any embedded userinfo before the URL is written to
