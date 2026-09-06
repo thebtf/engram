@@ -3,6 +3,8 @@ package uci
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -286,6 +288,7 @@ var uciTreeSitterFixtures = []uciTreeSitterFixture{
 func TestUCITreeSitterWorkerHasBoundedProcessAPI(t *testing.T) {
 	var _ func(TreeSitterWorkerConfig) (*TreeSitterWorker, error) = NewTreeSitterWorker
 	var _ func(*TreeSitterWorker, context.Context, TreeSitterParseRequest) (TreeSitterArtifact, error) = (*TreeSitterWorker).Parse
+	var _ func(TreeSitterParseRequest) (IndexDigest, error) = TreeSitterWireRequestDigest
 
 	uciRequireTreeSitterStructFields(t, TreeSitterWorkerConfig{}, []uciTreeSitterTestField{
 		{name: "ExecutablePath", typ: reflect.TypeOf("")},
@@ -346,6 +349,80 @@ func TestUCITreeSitterWorkerHasBoundedProcessAPI(t *testing.T) {
 	} {
 		if resolution == "" {
 			t.Fatal("Tree-sitter resolution states must be explicit nonempty values")
+		}
+	}
+}
+
+func TestTreeSitterWireRequestDigestMatchesPreparedJSONLine(t *testing.T) {
+	request := TreeSitterParseRequest{
+		Language:   TreeSitterLanguageJavaScript,
+		ProfileKey: "javascript-tree-sitter-v1<&>\"",
+		Source:     []byte("// Café <&>\r\nconst quote = \"✓\";\n"),
+	}
+
+	first, err := TreeSitterWireRequestDigest(request)
+	if err != nil {
+		t.Fatalf("TreeSitterWireRequestDigest() error = %v", err)
+	}
+	second, err := TreeSitterWireRequestDigest(request)
+	if err != nil {
+		t.Fatalf("second TreeSitterWireRequestDigest() error = %v", err)
+	}
+	if first != second {
+		t.Fatalf("TreeSitterWireRequestDigest() is nondeterministic: first=%q second=%q", first, second)
+	}
+
+	requestLine, err := treeSitterPrepareWireRequest(request, treeSitterWorkerHardMaxInputBytes)
+	if err != nil {
+		t.Fatalf("treeSitterPrepareWireRequest() error = %v", err)
+	}
+	if !bytes.HasSuffix(requestLine, []byte{'\n'}) {
+		t.Fatalf("prepared request is not a JSON line: %q", requestLine)
+	}
+	sum := sha256.Sum256(requestLine)
+	want := IndexDigest("sha256:" + hex.EncodeToString(sum[:]))
+	if first != want {
+		t.Fatalf("TreeSitterWireRequestDigest() = %q, want SHA-256 of child stdin line %q", first, want)
+	}
+
+	for name, changed := range map[string]TreeSitterParseRequest{
+		"language": {Language: TreeSitterLanguageTypeScript, ProfileKey: request.ProfileKey, Source: request.Source},
+		"profile":  {Language: request.Language, ProfileKey: "javascript-tree-sitter-v2<&>\"", Source: request.Source},
+		"source":   {Language: request.Language, ProfileKey: request.ProfileKey, Source: []byte("// Café <&>\r\nconst quote = \"different\";\n")},
+	} {
+		got, err := TreeSitterWireRequestDigest(changed)
+		if err != nil {
+			t.Fatalf("%s TreeSitterWireRequestDigest() error = %v", name, err)
+		}
+		if got == first {
+			t.Fatalf("%s change did not alter digest %q", name, got)
+		}
+	}
+}
+
+func TestTreeSitterWireRequestDigestRejectsInvalidRequests(t *testing.T) {
+	valid := TreeSitterParseRequest{
+		Language:   TreeSitterLanguageJavaScript,
+		ProfileKey: "javascript-tree-sitter-v1",
+		Source:     []byte("const stable = true;\n"),
+	}
+	for name, request := range map[string]TreeSitterParseRequest{
+		"empty language":    {Language: "", ProfileKey: valid.ProfileKey, Source: valid.Source},
+		"invalid language":  {Language: TreeSitterLanguage("javascript\x00"), ProfileKey: valid.ProfileKey, Source: valid.Source},
+		"invalid profile":   {Language: valid.Language, ProfileKey: " profile", Source: valid.Source},
+		"malformed profile": {Language: valid.Language, ProfileKey: string([]byte{0xff}), Source: valid.Source},
+		"oversize source":   {Language: valid.Language, ProfileKey: valid.ProfileKey, Source: make([]byte, treeSitterWorkerHardMaxInputBytes+1)},
+	} {
+		_, err := TreeSitterWireRequestDigest(request)
+		if err == nil {
+			t.Fatalf("%s TreeSitterWireRequestDigest() error = nil", name)
+		}
+		if name == "oversize source" {
+			if !errors.Is(err, ErrTreeSitterInputLimit) {
+				t.Fatalf("%s error = %v, want ErrTreeSitterInputLimit", name, err)
+			}
+		} else if !errors.Is(err, ErrTreeSitterProtocol) {
+			t.Fatalf("%s error = %v, want ErrTreeSitterProtocol", name, err)
 		}
 	}
 }

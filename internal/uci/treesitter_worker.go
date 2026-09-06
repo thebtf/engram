@@ -207,24 +207,9 @@ func (worker *TreeSitterWorker) Parse(ctx context.Context, request TreeSitterPar
 	if err := ctx.Err(); err != nil {
 		return TreeSitterArtifact{}, err
 	}
-	if len(request.Source) > worker.config.MaxInputBytes {
-		return TreeSitterArtifact{}, fmt.Errorf("%w: %d source bytes exceeds %d", ErrTreeSitterInputLimit, len(request.Source), worker.config.MaxInputBytes)
-	}
-	if !treeSitterProfileKeyValid(request.ProfileKey) {
-		return TreeSitterArtifact{}, fmt.Errorf("%w: invalid profile key", ErrTreeSitterProtocol)
-	}
-
-	requestLine, err := treeSitterEncodeWireRequest(TreeSitterWorkerWireRequest{
-		Version:    TreeSitterWorkerProtocolVersion,
-		Language:   request.Language,
-		ProfileKey: request.ProfileKey,
-		Source:     request.Source,
-	})
+	requestLine, err := treeSitterPrepareWireRequest(request, worker.config.MaxInputBytes)
 	if err != nil {
-		return TreeSitterArtifact{}, fmt.Errorf("%w: encode request: %v", ErrTreeSitterProtocol, err)
-	}
-	if len(requestLine) > treeSitterWorkerHardMaxOutputBytes {
-		return TreeSitterArtifact{}, fmt.Errorf("%w: framed request exceeded hard cap", ErrTreeSitterInputLimit)
+		return TreeSitterArtifact{}, err
 	}
 
 	privateDirectory, err := os.MkdirTemp("", "engram-uci-parser-")
@@ -311,6 +296,46 @@ func (worker *TreeSitterWorker) Parse(ctx context.Context, request TreeSitterPar
 		return TreeSitterArtifact{}, err
 	}
 	return treeSitterFinalizeArtifact(request.Source, request.ProfileKey, artifact), nil
+}
+
+// TreeSitterWireRequestDigest returns the SHA-256 digest of the exact canonical
+// JSON line that Parse writes to the parser child for request.
+func TreeSitterWireRequestDigest(request TreeSitterParseRequest) (IndexDigest, error) {
+	requestLine, err := treeSitterPrepareWireRequest(request, treeSitterWorkerHardMaxInputBytes)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(requestLine)
+	return IndexDigest("sha256:" + hex.EncodeToString(sum[:])), nil
+}
+
+func treeSitterPrepareWireRequest(request TreeSitterParseRequest, maximumInputBytes int) ([]byte, error) {
+	if maximumInputBytes <= 0 || maximumInputBytes > treeSitterWorkerHardMaxInputBytes {
+		return nil, fmt.Errorf("%w: max input bytes must be within the hard cap", ErrTreeSitterProtocol)
+	}
+	if len(request.Source) > maximumInputBytes {
+		return nil, fmt.Errorf("%w: %d source bytes exceeds %d", ErrTreeSitterInputLimit, len(request.Source), maximumInputBytes)
+	}
+	if !treeSitterLanguageValid(request.Language) {
+		return nil, fmt.Errorf("%w: invalid language", ErrTreeSitterProtocol)
+	}
+	if !treeSitterProfileKeyValid(request.ProfileKey) {
+		return nil, fmt.Errorf("%w: invalid profile key", ErrTreeSitterProtocol)
+	}
+
+	requestLine, err := treeSitterEncodeWireRequest(TreeSitterWorkerWireRequest{
+		Version:    TreeSitterWorkerProtocolVersion,
+		Language:   request.Language,
+		ProfileKey: request.ProfileKey,
+		Source:     request.Source,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%w: encode request: %v", ErrTreeSitterProtocol, err)
+	}
+	if len(requestLine) > treeSitterWorkerHardMaxOutputBytes {
+		return nil, fmt.Errorf("%w: framed request exceeded hard cap", ErrTreeSitterInputLimit)
+	}
+	return requestLine, nil
 }
 
 func treeSitterEncodeWireRequest(request TreeSitterWorkerWireRequest) ([]byte, error) {
@@ -429,6 +454,19 @@ func treeSitterEnvironmentNameValid(name string) bool {
 			continue
 		}
 		return false
+	}
+	return true
+}
+
+func treeSitterLanguageValid(value TreeSitterLanguage) bool {
+	text := string(value)
+	if text == "" || len(text) > treeSitterWorkerMaxIdentifierBytes || !utf8.ValidString(text) || strings.TrimSpace(text) != text {
+		return false
+	}
+	for _, character := range text {
+		if character < 0x20 || character == 0x7f {
+			return false
+		}
 	}
 	return true
 }
