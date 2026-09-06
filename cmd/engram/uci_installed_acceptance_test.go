@@ -82,6 +82,7 @@ func TestUCIInstalledStandardClientsKeepDirtyViewsIsolated(t *testing.T) {
 	uciInstalledAcceptanceRequireDefaultIsolation(t, result)
 	uciInstalledAcceptanceRequireRefusals(t, result)
 	uciInstalledAcceptanceRequireRecorderBehavior(t, result)
+	uciInstalledAcceptanceRequireWatcherIsolation(t, result)
 	uciInstalledAcceptanceRequireRestartContinuity(t, request, result)
 
 	if !result.Cleanup.ProcessTreeClosed ||
@@ -134,7 +135,7 @@ func uciInstalledAcceptanceNewRequest(t *testing.T, testPostgresDSN string) uciI
 		LoopbackHost:              "127.0.0.1",
 		ReservedLoopbackPortCount: 2,
 		ReadinessTimeout:          10 * time.Second,
-		OperationTimeout:          45 * time.Second,
+		OperationTimeout:          3 * time.Minute,
 		Fixture: uciInstalledAcceptanceFixture{
 			RelativePath:  uciInstalledAcceptanceRelativePath,
 			SharedSymbol:  uciInstalledAcceptanceSharedSymbol,
@@ -471,6 +472,27 @@ func uciInstalledAcceptanceRequireRecorderBehavior(t *testing.T, result uciInsta
 	)
 }
 
+func uciInstalledAcceptanceRequireWatcherIsolation(t *testing.T, result uciInstalledAcceptanceResult) {
+	t.Helper()
+
+	initialA, initialAOK := result.ClientContexts[uciInstalledAcceptanceClientA]
+	initialB, initialBOK := result.ClientContexts[uciInstalledAcceptanceClientB]
+	writeA, deleteA := result.Watcher.AfterWriteA, result.Watcher.AfterDeleteA
+	writeB, deleteB := result.Watcher.AfterWriteB, result.Watcher.AfterDeleteB
+	if !initialAOK || !initialBOK ||
+		writeA.SourceDigest != initialA.SourceDigest || writeA.CheckoutDigest != initialA.CheckoutDigest || writeA.ViewDigest == initialA.ViewDigest ||
+		deleteA.SourceDigest != initialA.SourceDigest || deleteA.CheckoutDigest != initialA.CheckoutDigest || deleteA.ViewDigest == writeA.ViewDigest ||
+		writeA.Generation < 2 || deleteA.Generation <= writeA.Generation ||
+		writeA.FreshnessState != "observed_current" || writeA.BarrierState != "satisfied" ||
+		deleteA.FreshnessState != "observed_current" || deleteA.BarrierState != "satisfied" {
+		t.Fatal("installed watcher did not publish isolated write and delete Views for client A")
+	}
+	if writeB.SourceDigest != initialB.SourceDigest || writeB.CheckoutDigest != initialB.CheckoutDigest || writeB.ViewDigest != initialB.ViewDigest ||
+		deleteB != writeB || writeB.Generation < 1 || writeB.FreshnessState != "observed_current" {
+		t.Fatal("installed watcher changed client B while client A saved and deleted a file")
+	}
+}
+
 func uciInstalledAcceptanceRequireRestartContinuity(t *testing.T, request uciInstalledAcceptanceRequest, result uciInstalledAcceptanceResult) {
 	t.Helper()
 
@@ -501,14 +523,22 @@ func uciInstalledAcceptanceRequireRestartContinuity(t *testing.T, request uciIns
 	}
 
 	for _, client := range []string{uciInstalledAcceptanceClientA, uciInstalledAcceptanceClientB} {
-		beforeContext, beforeOK := result.ClientContexts[client]
+		beforeContext, beforeOK := result.Restart.BeforeClientContexts[client]
 		afterContext, afterOK := result.Restart.ClientContexts[client]
-		if !beforeOK || !afterOK ||
-			beforeContext.SourceDigest != afterContext.SourceDigest ||
-			beforeContext.CheckoutDigest != afterContext.CheckoutDigest ||
-			beforeContext.ViewDigest != afterContext.ViewDigest {
+		if !beforeOK || !afterOK || beforeContext != afterContext {
 			t.Fatal("standard MCP reconnect did not recover the correct selected context")
 		}
+		beforeObservation, beforeObservationOK := result.Restart.BeforeObservations[client]
+		afterObservation, afterObservationOK := result.Restart.Observations[client]
+		if !beforeObservationOK || !afterObservationOK || !uciInstalledAcceptanceSameObservations(beforeObservation, afterObservation) {
+			t.Fatal("standard MCP reconnect changed source observations")
+		}
+	}
+	if result.Restart.ClientContexts[uciInstalledAcceptanceClientC] != result.Restart.BeforeClientContexts[uciInstalledAcceptanceClientA] {
+		t.Fatal("restarted third client did not recover its requested primary checkout")
+	}
+	if result.Restart.BeforeProjectionCounts != result.Restart.AfterProjectionCounts {
+		t.Fatal("installed restart changed unchanged-input projection counts")
 	}
 
 	uciInstalledAcceptanceRequireOnlyViewDigests(

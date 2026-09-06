@@ -18,7 +18,6 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
-	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,10 +47,11 @@ const (
 )
 
 var (
-	errUCIInstalledAcceptanceNonTestPostgres                 = errors.New("UCI installed acceptance requires an explicit loopback test PostgreSQL database")
-	errUCIInstalledAcceptanceParserBoundary                  = errors.New("UCI installed acceptance parser boundary is not observable through the installed runtime")
-	errUCIInstalledAcceptanceBarrierBoundary                 = errors.New("UCI installed acceptance read-your-save barrier is not observable through the installed runtime")
-	errUCIInstalledAcceptanceNegativeRecorderRestartBoundary = errors.New("UCI installed acceptance authorization-negative, recorder, and restart matrix boundary follows successful public isolation")
+	errUCIInstalledAcceptanceNonTestPostgres      = errors.New("UCI installed acceptance requires an explicit loopback test PostgreSQL database")
+	errUCIInstalledAcceptanceParserBoundary       = errors.New("UCI installed acceptance parser boundary is not observable through the installed runtime")
+	errUCIInstalledAcceptanceBarrierBoundary      = errors.New("UCI installed acceptance read-your-save barrier is not observable through the installed runtime")
+	errUCIInstalledAcceptanceWatcherCanaryMissing = errors.New("installed standard MCP watcher search omitted the canary")
+	errUCIInstalledAcceptanceWatcherCanaryPresent = errors.New("installed standard MCP watcher delete still exposes the canary")
 )
 
 // uciInstalledAcceptanceRequest contains only disposable candidate source,
@@ -97,6 +97,7 @@ type uciInstalledAcceptanceResult struct {
 	Defaults              uciInstalledAcceptanceDefaults
 	Refusals              map[string]uciInstalledAcceptanceClosedOutcome
 	Recorder              uciInstalledAcceptanceRecorder
+	Watcher               uciInstalledAcceptanceWatcher
 	Restart               uciInstalledAcceptanceRestart
 	Cleanup               uciInstalledAcceptanceCleanup
 }
@@ -154,6 +155,27 @@ type uciInstalledAcceptanceObservations struct {
 	GraphCalleeDigests    []string
 	ReadArtifactDigests   []string
 }
+type uciInstalledAcceptanceProjectionCounts struct {
+	Embeddings      int64
+	ChunkEmbeddings int64
+	ResolvedEdges   int64
+}
+type uciInstalledAcceptancePublicationEvidence struct {
+	SourceDigest   string
+	CheckoutDigest string
+	ViewDigest     string
+	RunDigest      string
+	Generation     int64
+	FreshnessState string
+	BarrierState   string
+}
+
+type uciInstalledAcceptanceWatcher struct {
+	AfterWriteA  uciInstalledAcceptancePublicationEvidence
+	AfterDeleteA uciInstalledAcceptancePublicationEvidence
+	AfterWriteB  uciInstalledAcceptancePublicationEvidence
+	AfterDeleteB uciInstalledAcceptancePublicationEvidence
+}
 
 type uciInstalledAcceptanceDefaults struct {
 	BeforeThirdClientViewDigests map[string]string
@@ -182,9 +204,13 @@ type uciInstalledAcceptanceRecorder struct {
 type uciInstalledAcceptanceRestart struct {
 	BeforeProcesses          uciInstalledAcceptanceProcesses
 	AfterProcesses           uciInstalledAcceptanceProcesses
+	BeforeProjectionCounts   uciInstalledAcceptanceProjectionCounts
+	AfterProjectionCounts    uciInstalledAcceptanceProjectionCounts
 	UnchangedInputReembedded bool
 	ClientTranscripts        map[string]uciInstalledAcceptanceClientTranscript
+	BeforeClientContexts     map[string]uciInstalledAcceptanceContext
 	ClientContexts           map[string]uciInstalledAcceptanceContext
+	BeforeObservations       map[string]uciInstalledAcceptanceObservations
 	Observations             map[string]uciInstalledAcceptanceObservations
 }
 
@@ -237,14 +263,17 @@ func runUCIInstalledAcceptance(ctx context.Context, request uciInstalledAcceptan
 	var installation *uciInstallHarnessInstallation
 	var authority *uciInstalledAcceptanceAuthority
 	var reservations []*uciInstalledAcceptanceReservation
+	activeDaemonPID := 0
 	daemonControlRoot := filepath.Join(request.LocalStateRoot, "temp")
 	defer func() {
-		daemonPID := result.Processes.DaemonPID
-		if installation != nil && installation.tree != nil {
-			_ = installation.tree.Close()
-		}
+		daemonPID := activeDaemonPID
 		if stopErr := uciStopInstalledAcceptanceDaemon(daemonControlRoot, daemonPID); stopErr != nil {
 			err = errors.Join(err, stopErr)
+		}
+		if installation != nil && installation.tree != nil {
+			if closeErr := installation.tree.Close(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("close installed acceptance process tree: %w", closeErr))
+			}
 		}
 		daemonExited := true
 		if daemonPID > 0 {
@@ -407,6 +436,7 @@ func runUCIInstalledAcceptance(ctx context.Context, request uciInstalledAcceptan
 	if err != nil {
 		return result, err
 	}
+	activeDaemonPID = result.Processes.DaemonPID
 
 	clientBProcess, err := installation.Start(operationCtx, uciInstalledHarnessLaunchRequest{
 		Role:             "daemon",
@@ -442,6 +472,7 @@ func runUCIInstalledAcceptance(ctx context.Context, request uciInstalledAcceptan
 	}
 	result.Bootstrap.InitialViewAbsent[uciInstalledAcceptanceClientA] = selectedA.viewID == ""
 	result.Bootstrap.InitialViewAbsent[uciInstalledAcceptanceClientB] = selectedB.viewID == ""
+
 	if !result.Bootstrap.InitialViewAbsent[uciInstalledAcceptanceClientA] || !result.Bootstrap.InitialViewAbsent[uciInstalledAcceptanceClientB] {
 		return result, errors.New("installed UCI checkout selection was not View-free before the first index")
 	}
@@ -522,7 +553,82 @@ func runUCIInstalledAcceptance(ctx context.Context, request uciInstalledAcceptan
 		return result, fmt.Errorf("installed standard MCP third-client default isolation: %w", err)
 	}
 
-	return result, errUCIInstalledAcceptanceNegativeRecorderRestartBoundary
+	if err := uciExerciseInstalledAcceptanceRefusals(operationCtx, clientA, clientB, clientC, selectedA, selectedB, authority, &result); err != nil {
+		return result, fmt.Errorf("installed standard MCP authorization-negative matrix: %w", err)
+	}
+	recorderProcess, err := installation.Start(operationCtx, uciInstalledHarnessLaunchRequest{
+		Role:             "daemon",
+		WorkingDirectory: worktrees.primaryRoot,
+		Environment:      clientEnvironment,
+		WithStdio:        true,
+	})
+	if err != nil {
+		return result, err
+	}
+	recorderClient, err := newUCIInstalledAcceptanceMCPClient("client-recorder", recorderProcess)
+	if err != nil {
+		return result, err
+	}
+	if err := recorderClient.InitializeAndList(operationCtx); err != nil {
+		return result, err
+	}
+	if err := uciRequireInstalledAcceptanceTools(recorderClient.Transcript()); err != nil {
+		return result, err
+	}
+	recorderSelection, err := uciSelectInstalledAcceptanceCheckout(operationCtx, recorderClient, uciInstalledAcceptanceClientA, authority)
+	if err != nil {
+		return result, err
+	}
+	if err := uciExerciseInstalledAcceptanceRecorder(operationCtx, recorderClient, recorderSelection, authority, request.Fixture.SharedSymbol, &result); err != nil {
+		return result, fmt.Errorf("installed standard MCP recorder matrix: %w", err)
+	}
+	if err := recorderProcess.closePipes(); err != nil {
+		return result, fmt.Errorf("close installed recorder client: %w", err)
+	}
+	watcherPublications, watcherErr := uciExerciseInstalledAcceptanceWatcher(operationCtx, request.Fixture, worktrees, clientA, clientB, selectedA, selectedB, publications, &result)
+	if watcherErr != nil {
+		return result, fmt.Errorf("installed standard MCP watcher save-delete isolation: %w", watcherErr)
+	}
+	primaryWatcherPublication, primaryWatcherFound := watcherPublications[uciInstalledAcceptanceClientA]
+	linkedWatcherPublication, linkedWatcherFound := watcherPublications[uciInstalledAcceptanceClientB]
+	if !primaryWatcherFound || !linkedWatcherFound {
+		return result, errors.New("installed standard MCP watcher did not retain both publication baselines")
+	}
+	publications = watcherPublications
+	selectedA.viewID = primaryWatcherPublication.viewID
+	selectedA.runID = primaryWatcherPublication.runID
+	selectedB.viewID = linkedWatcherPublication.viewID
+	selectedB.runID = linkedWatcherPublication.runID
+
+	restartedInstallation, restartedDaemonPID, restartErr := uciRestartInstalledAcceptance(
+		operationCtx,
+		request,
+		candidates,
+		authority,
+		worktrees,
+		serverPort,
+		parserBundleDigest,
+		daemonControlRoot,
+		installation,
+		activeDaemonPID,
+		map[string]*uciInstalledAcceptanceMCPClient{
+			uciInstalledAcceptanceClientA: clientA,
+			uciInstalledAcceptanceClientB: clientB,
+			uciInstalledAcceptanceClientC: clientC,
+		},
+		map[string]uciInstalledAcceptanceSelection{
+			uciInstalledAcceptanceClientA: selectedA,
+			uciInstalledAcceptanceClientB: selectedB,
+		},
+		publications,
+		&result,
+	)
+	if restartErr != nil {
+		return result, fmt.Errorf("installed standard MCP restart matrix: %w", restartErr)
+	}
+	installation = restartedInstallation
+	activeDaemonPID = restartedDaemonPID
+	return result, nil
 }
 
 func uciNewInstalledAcceptanceResult(request uciInstalledAcceptanceRequest) uciInstalledAcceptanceResult {
@@ -547,9 +653,11 @@ func uciNewInstalledAcceptanceResult(request uciInstalledAcceptanceRequest) uciI
 		},
 		Refusals: make(map[string]uciInstalledAcceptanceClosedOutcome),
 		Restart: uciInstalledAcceptanceRestart{
-			ClientTranscripts: make(map[string]uciInstalledAcceptanceClientTranscript),
-			ClientContexts:    make(map[string]uciInstalledAcceptanceContext),
-			Observations:      make(map[string]uciInstalledAcceptanceObservations),
+			ClientTranscripts:    make(map[string]uciInstalledAcceptanceClientTranscript),
+			BeforeClientContexts: make(map[string]uciInstalledAcceptanceContext),
+			ClientContexts:       make(map[string]uciInstalledAcceptanceContext),
+			BeforeObservations:   make(map[string]uciInstalledAcceptanceObservations),
+			Observations:         make(map[string]uciInstalledAcceptanceObservations),
 		},
 	}
 }
@@ -777,25 +885,7 @@ func uciInstalledAcceptanceFileSHA256(path string) (string, error) {
 }
 
 func uciInstalledAcceptanceParserBundleDigest() string {
-	parts := []string{
-		"uci-tree-sitter-bundle/v1",
-		"github.com/tree-sitter/go-tree-sitter@v0.25.0",
-		"github.com/tree-sitter/tree-sitter-javascript@v0.25.0",
-		"github.com/tree-sitter/tree-sitter-typescript@v0.23.2",
-		"go=" + runtime.Version(),
-		"target=" + runtime.GOOS + "/" + runtime.GOARCH,
-	}
-	if build, ok := debug.ReadBuildInfo(); ok && build.GoVersion != "" {
-		parts = append(parts, "build-go="+build.GoVersion)
-	}
-	sort.Strings(parts)
-	digest := sha256.New()
-	for _, part := range parts {
-		length := uint32(len(part))
-		_, _ = digest.Write([]byte{byte(length >> 24), byte(length >> 16), byte(length >> 8), byte(length)})
-		_, _ = digest.Write([]byte(part))
-	}
-	return "sha256:" + hex.EncodeToString(digest.Sum(nil))
+	return string(uci.TreeSitterBundleDigest())
 }
 
 func uciCreateInstalledAcceptanceWorktrees(ctx context.Context, fixtureRoot string, fixture uciInstalledAcceptanceFixture, anchorProjectID string) (uciInstalledAcceptanceWorktreesFixture, uciInstalledAcceptanceWorktrees, error) {
@@ -1446,6 +1536,27 @@ func (err *uciInstalledAcceptanceMCPError) Error() string {
 		message += ": " + err.detail
 	}
 	return message
+}
+
+func uciInstalledAcceptanceStatusTool(ctx context.Context, client *uciInstalledAcceptanceMCPClient, arguments map[string]any) (json.RawMessage, error) {
+	var lastErr error
+	for range 3 {
+		payload, err := client.Tool(ctx, "codebase_status", arguments)
+		if err == nil {
+			return payload, nil
+		}
+		lastErr = err
+		var mcpErr *uciInstalledAcceptanceMCPError
+		if !errors.As(err, &mcpErr) || mcpErr.detail != "CONTEXT_MISMATCH" {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+	return nil, lastErr
 }
 
 func newUCIInstalledAcceptanceMCPClient(name string, process *uciStartedInstallHarnessProcess) (*uciInstalledAcceptanceMCPClient, error) {
@@ -2144,7 +2255,7 @@ func uciInstalledAcceptanceStringDigest(value string) string {
 
 const (
 	uciInstalledAcceptanceBarrierWaitMS          int64 = 30_000
-	uciInstalledAcceptanceQuiescenceObservations       = 3
+	uciInstalledAcceptanceQuiescenceObservations       = 15
 	uciInstalledAcceptanceQuiescencePollInterval       = 100 * time.Millisecond
 )
 
@@ -2161,8 +2272,9 @@ type uciInstalledAcceptanceStatus struct {
 		generation int64
 	}
 	freshness *struct {
-		state   string
-		barrier *struct {
+		state          string
+		pendingChanges *int64
+		barrier        *struct {
 			scope struct {
 				kind      string
 				pathCount int64
@@ -2190,8 +2302,9 @@ func uciDecodeInstalledAcceptanceStatus(payload json.RawMessage) (uciInstalledAc
 			Generation int64  `json:"generation"`
 		} `json:"context"`
 		Freshness *struct {
-			State   string `json:"state"`
-			Barrier *struct {
+			State          string `json:"state"`
+			PendingChanges *int64 `json:"pending_changes"`
+			Barrier        *struct {
 				Scope struct {
 					Kind      string `json:"kind"`
 					PathCount int64  `json:"path_count"`
@@ -2234,8 +2347,9 @@ func uciDecodeInstalledAcceptanceStatus(payload json.RawMessage) (uciInstalledAc
 	}
 	if wire.Freshness != nil {
 		status.freshness = &struct {
-			state   string
-			barrier *struct {
+			state          string
+			pendingChanges *int64
+			barrier        *struct {
 				scope struct {
 					kind      string
 					pathCount int64
@@ -2243,7 +2357,7 @@ func uciDecodeInstalledAcceptanceStatus(payload json.RawMessage) (uciInstalledAc
 				deadlineMS int64
 				state      string
 			}
-		}{state: wire.Freshness.State}
+		}{state: wire.Freshness.State, pendingChanges: wire.Freshness.PendingChanges}
 		if wire.Freshness.Barrier != nil {
 			status.freshness.barrier = &struct {
 				scope struct {
@@ -2284,8 +2398,8 @@ func uciInstalledAcceptanceStatusPublication(status uciInstalledAcceptanceStatus
 }
 
 func uciInstalledAcceptanceQuiescentPublication(status uciInstalledAcceptanceStatus, barrier uciInstalledAcceptancePublication) (uciInstalledAcceptancePublication, error) {
-	if status.status != "idle" || status.error != "" {
-		return uciInstalledAcceptancePublication{}, errors.New("installed standard MCP status is not a clean idle observation")
+	if status.status != "idle" || status.error != "" || status.freshness == nil || status.freshness.pendingChanges == nil || *status.freshness.pendingChanges != 0 {
+		return uciInstalledAcceptancePublication{}, errors.New("installed standard MCP status is not a clean zero-pending idle observation")
 	}
 	if status.runID == "" || status.context == nil || status.context.sourceID != barrier.sourceID || status.context.checkoutID != barrier.checkoutID || status.context.profileID != barrier.profileID {
 		return uciInstalledAcceptancePublication{}, errors.New("installed standard MCP status advanced outside the selected source, checkout, or profile")
@@ -2315,7 +2429,7 @@ func uciWaitForInstalledAcceptanceQuiescence(ctx context.Context, client *uciIns
 	ticker := time.NewTicker(uciInstalledAcceptanceQuiescencePollInterval)
 	defer ticker.Stop()
 	for {
-		payload, err := client.Tool(ctx, "codebase_status", map[string]any{"context_handle": selection.contextHandle})
+		payload, err := uciInstalledAcceptanceStatusTool(ctx, client, map[string]any{"context_handle": selection.contextHandle})
 		if err != nil {
 			return uciInstalledAcceptancePublication{}, err
 		}
@@ -2370,7 +2484,7 @@ func uciWaitForInstalledAcceptanceBarrier(ctx context.Context, client *uciInstal
 	if selection.contextHandle == "" || selection.runID == "" {
 		return uciInstalledAcceptancePublication{}, errors.New("installed standard MCP barrier target has no context handle or run_id")
 	}
-	payload, err := client.Tool(ctx, "codebase_status", map[string]any{
+	payload, err := uciInstalledAcceptanceStatusTool(ctx, client, map[string]any{
 		"context_handle": selection.contextHandle,
 		"after_barrier": map[string]any{
 			"token":   selection.runID,
@@ -2378,7 +2492,7 @@ func uciWaitForInstalledAcceptanceBarrier(ctx context.Context, client *uciInstal
 		},
 	})
 	if err != nil {
-		statusPayload, statusErr := client.Tool(ctx, "codebase_status", map[string]any{"context_handle": selection.contextHandle})
+		statusPayload, statusErr := uciInstalledAcceptanceStatusTool(ctx, client, map[string]any{"context_handle": selection.contextHandle})
 		if statusErr == nil {
 			if status, decodeErr := uciDecodeInstalledAcceptanceStatus(statusPayload); decodeErr == nil {
 				if detail := uciInstalledAcceptanceSafeErrorDetail(status.error); detail != "" {
@@ -2433,7 +2547,7 @@ func uciDecodeInstalledAcceptanceClosedOutcome(payload json.RawMessage) (uciInst
 		return uciInstalledAcceptanceClosedOutcome{}, err
 	}
 	if response.Error == nil || response.Contexts != nil || response.Items != nil || response.Graph != nil || response.Exposure != nil {
-		return uciInstalledAcceptanceClosedOutcome{}, errors.New("installed standard MCP closed response disclosed contextual data")
+		return uciInstalledAcceptanceClosedOutcome{}, fmt.Errorf("installed standard MCP closed response disclosed contextual data: status=%s error=%t contexts=%t items=%t graph=%t exposure=%t %s", response.Status, response.Error != nil, response.Contexts != nil, response.Items != nil, response.Graph != nil, response.Exposure != nil, uciInstalledAcceptancePayloadShape(payload))
 	}
 	return uciInstalledAcceptanceClosedOutcome{
 		Status:    string(response.Status),
@@ -2710,4 +2824,1113 @@ func uciInstalledAcceptanceIsBareSHA256(value string) bool {
 	}
 	_, err := hex.DecodeString(value)
 	return err == nil
+}
+
+func uciExerciseInstalledAcceptanceRefusals(
+	ctx context.Context,
+	first, second, third *uciInstalledAcceptanceMCPClient,
+	firstSelection, secondSelection uciInstalledAcceptanceSelection,
+	authority *uciInstalledAcceptanceAuthority,
+	result *uciInstalledAcceptanceResult,
+) error {
+	if first == nil || second == nil || third == nil || result == nil {
+		return errors.New("installed acceptance authorization-negative matrix is incomplete")
+	}
+
+	run := func(name string, client *uciInstalledAcceptanceMCPClient, handle, query, wantStatus, wantCode string) error {
+		if client == nil || handle == "" {
+			return errors.New("installed acceptance authorization-negative client context is incomplete")
+		}
+		before, err := uciInstalledAcceptanceExposureCount(ctx, authority)
+		if err != nil {
+			return err
+		}
+		toolResult, err := client.ToolWithCall(ctx, "codebase_search", uciInstalledAcceptanceSearchArguments(handle, query))
+		if err != nil {
+			return err
+		}
+		if toolResult.isError {
+			return errors.New("installed standard MCP authorization refusal returned a protocol-level tool error")
+		}
+		outcome, err := uciDecodeInstalledAcceptanceClosedOutcome(toolResult.payload)
+		if err != nil {
+			return err
+		}
+		if outcome.Status != wantStatus || outcome.ErrorCode != wantCode {
+			return fmt.Errorf("installed standard MCP %s refusal = %s/%s", name, outcome.Status, outcome.ErrorCode)
+		}
+		after, err := uciInstalledAcceptanceExposureCount(ctx, authority)
+		if err != nil {
+			return err
+		}
+		if after != before {
+			return errors.New("installed standard MCP refusal appended UCI exposure evidence")
+		}
+		result.Refusals[name] = outcome
+		return nil
+	}
+
+	deniedOwner := "agent/uci-installed-denied-" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if err := uciWithInstalledAcceptanceCheckoutOwner(ctx, authority, uciInstalledAcceptanceClientA, deniedOwner, func() error {
+		return run("denied", first, firstSelection.contextHandle, "denied-owner", "forbidden", "PERMISSION_DENIED")
+	}); err != nil {
+		return err
+	}
+
+	revokedPrincipal := "agent/uci-installed-revoked-" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if err := uciWithInstalledAcceptanceTokenPrincipal(ctx, authority, revokedPrincipal, func() error {
+		return run("revoked", first, firstSelection.contextHandle, "revoked-source", "forbidden", "PERMISSION_DENIED")
+	}); err != nil {
+		return err
+	}
+
+	if err := run("mismatched", third, firstSelection.contextHandle, "another-session-handle", "context_required", "CONTEXT_MISMATCH"); err != nil {
+		return err
+	}
+	if err := run("private", first, secondSelection.contextHandle, "private-client-local-handle", "context_required", "CONTEXT_MISMATCH"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func uciWithInstalledAcceptanceCheckoutOwner(
+	ctx context.Context,
+	authority *uciInstalledAcceptanceAuthority,
+	clientName, replacement string,
+	action func() error,
+) (retErr error) {
+	if authority == nil || authority.store == nil || action == nil || replacement == "" {
+		return errors.New("installed acceptance checkout-owner mutation is incomplete")
+	}
+	checkout := authority.checkouts[clientName]
+	if checkout == nil || checkout.CheckoutID == "" {
+		return errors.New("installed acceptance checkout-owner mutation has no checkout")
+	}
+	db := authority.store.GetDB()
+	var row struct {
+		OwnerPrincipal string `gorm:"column:owner_principal"`
+	}
+	loaded := db.WithContext(ctx).Raw(`SELECT owner_principal FROM ci_checkouts WHERE checkout_id = ?`, checkout.CheckoutID).Scan(&row)
+	if loaded.Error != nil || loaded.RowsAffected != 1 || row.OwnerPrincipal == "" || row.OwnerPrincipal == replacement {
+		return errors.New("load installed acceptance checkout owner")
+	}
+	updated := db.WithContext(ctx).Exec(`UPDATE ci_checkouts SET owner_principal = ? WHERE checkout_id = ? AND owner_principal = ?`, replacement, checkout.CheckoutID, row.OwnerPrincipal)
+	if updated.Error != nil || updated.RowsAffected != 1 {
+		return errors.New("mutate installed acceptance checkout owner")
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		restored := db.WithContext(cleanupCtx).Exec(`UPDATE ci_checkouts SET owner_principal = ? WHERE checkout_id = ? AND owner_principal = ?`, row.OwnerPrincipal, checkout.CheckoutID, replacement)
+		if restored.Error != nil || restored.RowsAffected != 1 {
+			retErr = errors.Join(retErr, errors.New("restore installed acceptance checkout owner"))
+		}
+	}()
+	return action()
+}
+
+func uciWithInstalledAcceptanceTokenPrincipal(
+	ctx context.Context,
+	authority *uciInstalledAcceptanceAuthority,
+	replacement string,
+	action func() error,
+) (retErr error) {
+	if authority == nil || authority.store == nil || authority.token == nil || authority.token.ID == "" || action == nil || replacement == "" {
+		return errors.New("installed acceptance source-revocation mutation is incomplete")
+	}
+	db := authority.store.GetDB()
+	var row struct {
+		Principal string `gorm:"column:principal"`
+	}
+	loaded := db.WithContext(ctx).Raw(`SELECT principal FROM api_tokens WHERE id = ?`, authority.token.ID).Scan(&row)
+	if loaded.Error != nil || loaded.RowsAffected != 1 || row.Principal == "" || row.Principal == replacement {
+		return errors.New("load installed acceptance source principal")
+	}
+	updated := db.WithContext(ctx).Exec(`UPDATE api_tokens SET principal = ? WHERE id = ? AND principal = ?`, replacement, authority.token.ID, row.Principal)
+	if updated.Error != nil || updated.RowsAffected != 1 {
+		return errors.New("revoke installed acceptance source principal")
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		restored := db.WithContext(cleanupCtx).Exec(`UPDATE api_tokens SET principal = ? WHERE id = ? AND principal = ?`, row.Principal, authority.token.ID, replacement)
+		if restored.Error != nil || restored.RowsAffected != 1 {
+			retErr = errors.Join(retErr, errors.New("restore installed acceptance source principal"))
+		}
+	}()
+	return action()
+}
+
+func uciInstalledAcceptanceSearchArguments(handle, query string) map[string]any {
+	return map[string]any{
+		"context_handle": handle,
+		"query":          query,
+		"path_prefix":    "pkg",
+		"limit":          1,
+	}
+}
+
+func uciInstalledAcceptanceExposureCount(ctx context.Context, authority *uciInstalledAcceptanceAuthority) (int64, error) {
+	if authority == nil || authority.store == nil || authority.source == nil || authority.source.SourceID == "" {
+		return 0, errors.New("installed acceptance exposure count authority is incomplete")
+	}
+	var count int64
+	if err := authority.store.GetDB().WithContext(ctx).Raw(`SELECT COUNT(*) FROM uci_exposures WHERE source_id = ?`, authority.source.SourceID).Scan(&count).Error; err != nil {
+		return 0, fmt.Errorf("count installed acceptance UCI exposures: %w", err)
+	}
+	return count, nil
+}
+
+func uciInstalledAcceptanceStatusForSelection(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection) (uciInstalledAcceptanceStatus, error) {
+	if client == nil || selection.contextHandle == "" {
+		return uciInstalledAcceptanceStatus{}, errors.New("installed acceptance status target is incomplete")
+	}
+	payload, err := uciInstalledAcceptanceStatusTool(ctx, client, map[string]any{"context_handle": selection.contextHandle})
+	if err != nil {
+		return uciInstalledAcceptanceStatus{}, err
+	}
+	return uciDecodeInstalledAcceptanceStatus(payload)
+}
+
+type uciInstalledAcceptanceExposureFault struct {
+	authority    *uciInstalledAcceptanceAuthority
+	functionName string
+	triggerName  string
+	closed       bool
+}
+
+func uciInstallInstalledAcceptanceExposureFault(ctx context.Context, authority *uciInstalledAcceptanceAuthority) (*uciInstalledAcceptanceExposureFault, error) {
+	if authority == nil || authority.store == nil || !uciInstalledAcceptanceRunSchema(authority.schema) {
+		return nil, errors.New("installed acceptance exposure fault authority is incomplete")
+	}
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
+	fault := &uciInstalledAcceptanceExposureFault{
+		authority:    authority,
+		functionName: "uci_exp_fail_" + suffix,
+		triggerName:  "uci_exp_fail_tr_" + suffix,
+	}
+	schema := pq.QuoteIdentifier(authority.schema)
+	qualifiedFunction := schema + "." + pq.QuoteIdentifier(fault.functionName)
+	qualifiedTable := schema + "." + pq.QuoteIdentifier("uci_exposures")
+	db := authority.store.GetDB().WithContext(ctx)
+	if err := db.Exec(`CREATE FUNCTION ` + qualifiedFunction + `() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'installed UCI exposure append fault'; END; $$`).Error; err != nil {
+		return nil, fmt.Errorf("install installed acceptance exposure fault function: %w", err)
+	}
+	if err := db.Exec(`CREATE TRIGGER ` + pq.QuoteIdentifier(fault.triggerName) + ` BEFORE INSERT ON ` + qualifiedTable + ` FOR EACH ROW EXECUTE FUNCTION ` + qualifiedFunction + `()`).Error; err != nil {
+		return nil, errors.Join(fmt.Errorf("install installed acceptance exposure fault trigger: %w", err), fault.Close())
+	}
+	return fault, nil
+}
+
+func (fault *uciInstalledAcceptanceExposureFault) Close() error {
+	if fault == nil || fault.closed {
+		return nil
+	}
+	if fault.authority == nil || fault.authority.store == nil || !uciInstalledAcceptanceRunSchema(fault.authority.schema) {
+		return errors.New("installed acceptance exposure fault cleanup is incomplete")
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	schema := pq.QuoteIdentifier(fault.authority.schema)
+	qualifiedFunction := schema + "." + pq.QuoteIdentifier(fault.functionName)
+	qualifiedTable := schema + "." + pq.QuoteIdentifier("uci_exposures")
+	db := fault.authority.store.GetDB().WithContext(cleanupCtx)
+	triggerErr := db.Exec(`DROP TRIGGER IF EXISTS ` + pq.QuoteIdentifier(fault.triggerName) + ` ON ` + qualifiedTable).Error
+	functionErr := db.Exec(`DROP FUNCTION IF EXISTS ` + qualifiedFunction + `()`).Error
+	if triggerErr == nil && functionErr == nil {
+		fault.closed = true
+	}
+	return errors.Join(triggerErr, functionErr)
+}
+
+func uciExerciseInstalledAcceptanceRecorder(
+	ctx context.Context,
+	client *uciInstalledAcceptanceMCPClient,
+	selection uciInstalledAcceptanceSelection,
+	authority *uciInstalledAcceptanceAuthority,
+	mismatchQuery string,
+	result *uciInstalledAcceptanceResult,
+) (retErr error) {
+	if client == nil || selection.contextHandle == "" || mismatchQuery == "" || result == nil {
+		return errors.New("installed acceptance recorder matrix is incomplete")
+	}
+	beforeUnavailable, err := uciInstalledAcceptanceExposureCount(ctx, authority)
+	if err != nil {
+		return err
+	}
+	fault, err := uciInstallInstalledAcceptanceExposureFault(ctx, authority)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		retErr = errors.Join(retErr, fault.Close())
+	}()
+
+	unavailable, err := client.ToolWithCall(ctx, "codebase_search", uciInstalledAcceptanceSearchArguments(selection.contextHandle, "recorder-unavailable"))
+	if err != nil {
+		return err
+	}
+	if unavailable.isError {
+		return errors.New("installed standard MCP recorder failure returned a protocol-level tool error")
+	}
+	result.Recorder.InitialUnavailable, err = uciDecodeInstalledAcceptanceClosedOutcome(unavailable.payload)
+	if err != nil {
+		return fmt.Errorf("decode initial exposure-unavailable response: %w", err)
+	}
+	if result.Recorder.InitialUnavailable.Status != "unavailable" || result.Recorder.InitialUnavailable.ErrorCode != "EXPOSURE_UNAVAILABLE" {
+		return errors.New("installed standard MCP recorder failure did not return EXPOSURE_UNAVAILABLE")
+	}
+	afterUnavailable, err := uciInstalledAcceptanceExposureCount(ctx, authority)
+	if err != nil {
+		return err
+	}
+	if afterUnavailable != beforeUnavailable {
+		return errors.New("installed standard MCP recorder failure appended UCI exposure evidence")
+	}
+	statusAfterUnavailable, err := uciInstalledAcceptanceStatusForSelection(ctx, client, selection)
+	if err != nil {
+		return err
+	}
+	result.Recorder.HealthAfterInitialUnavailable = statusAfterUnavailable.evidenceRecorder.state
+	if statusAfterUnavailable.evidenceRecorder.state != "unavailable" || statusAfterUnavailable.evidenceRecorder.lastFailureCode != "EXPOSURE_UNAVAILABLE" {
+		return errors.New("installed standard MCP recorder failure did not make health unavailable")
+	}
+	if err := fault.Close(); err != nil {
+		return err
+	}
+
+	first, err := client.ToolWithCall(ctx, "codebase_search", uciInstalledAcceptanceSearchArguments(selection.contextHandle, "recorder-exact-retry"))
+	if err != nil {
+		return err
+	}
+	if first.isError {
+		return errors.New("installed standard MCP recorder success returned a protocol-level tool error")
+	}
+	firstExposure, err := uciInstalledAcceptanceExposureReference(first.payload)
+	if err != nil {
+		return err
+	}
+	result.Recorder.FirstExposureDigest = uciInstalledAcceptanceStringDigest(firstExposure)
+	afterFirst, err := uciInstalledAcceptanceExposureCount(ctx, authority)
+	if err != nil {
+		return err
+	}
+	if afterFirst != afterUnavailable+1 {
+		return errors.New("installed standard MCP recorder success did not append one UCI exposure")
+	}
+
+	retry, err := client.RetryTool(ctx, first.call)
+	if err != nil {
+		return err
+	}
+	if retry.isError {
+		return errors.New("installed standard MCP recorder exact retry returned a protocol-level tool error")
+	}
+	retryExposure, err := uciInstalledAcceptanceExposureReference(retry.payload)
+	if err != nil {
+		return err
+	}
+	if retryExposure != firstExposure {
+		return errors.New("installed standard MCP recorder exact retry changed its exposure reference")
+	}
+	result.Recorder.ExactRetryExposureDigest = uciInstalledAcceptanceStringDigest(retryExposure)
+	afterRetry, err := uciInstalledAcceptanceExposureCount(ctx, authority)
+	if err != nil {
+		return err
+	}
+	if afterRetry != afterFirst {
+		return errors.New("installed standard MCP recorder exact retry appended a second UCI exposure")
+	}
+
+	statusBeforeMismatch, err := uciInstalledAcceptanceStatusForSelection(ctx, client, selection)
+	if err != nil {
+		return err
+	}
+	result.Recorder.HealthBeforeMismatch = statusBeforeMismatch.evidenceRecorder.state
+	if statusBeforeMismatch.evidenceRecorder.state != "healthy" || statusBeforeMismatch.evidenceRecorder.lastFailureCode != "NONE" {
+		return errors.New("installed standard MCP recorder did not recover healthy state")
+	}
+
+	mismatch, err := client.ReplayToolWithSameJSONRPCID(ctx, first.call, "codebase_search", uciInstalledAcceptanceSearchArguments(selection.contextHandle, mismatchQuery))
+	if err != nil {
+		return err
+	}
+	if mismatch.isError {
+		return errors.New("installed standard MCP recorder mismatch returned a protocol-level tool error")
+	}
+	afterMismatch, err := uciInstalledAcceptanceExposureCount(ctx, authority)
+	if err != nil {
+		return err
+	}
+	if afterMismatch != afterRetry {
+		return errors.New("installed standard MCP recorder mismatch appended UCI exposure evidence under a different idempotency key")
+	}
+	result.Recorder.Mismatch, err = uciDecodeInstalledAcceptanceClosedOutcome(mismatch.payload)
+	if err != nil {
+		return fmt.Errorf("decode exposure idempotency-mismatch response: %w", err)
+	}
+	if result.Recorder.Mismatch.Status != "unavailable" || result.Recorder.Mismatch.ErrorCode != "IDEMPOTENCY_MISMATCH" {
+		return errors.New("installed standard MCP recorder mismatch did not return IDEMPOTENCY_MISMATCH")
+	}
+	statusAfterMismatch, err := uciInstalledAcceptanceStatusForSelection(ctx, client, selection)
+	if err != nil {
+		return err
+	}
+	result.Recorder.HealthAfterMismatch = statusAfterMismatch.evidenceRecorder.state
+	if statusAfterMismatch.evidenceRecorder.state != "healthy" || statusAfterMismatch.evidenceRecorder.lastFailureCode != "NONE" {
+		return errors.New("installed standard MCP recorder mismatch changed healthy state")
+	}
+	return nil
+}
+
+func uciInstalledAcceptanceExposureReference(payload json.RawMessage) (string, error) {
+	response, err := uciDecodeInstalledAcceptanceQuery(payload)
+	if err != nil {
+		return "", err
+	}
+	if (response.Status != uci.QueryStatusOK && response.Status != uci.QueryStatusPartial) || response.Exposure == nil || response.Exposure.ExposureRef == "" {
+		return "", errors.New("installed standard MCP recorder success has no exposure reference")
+	}
+	return response.Exposure.ExposureRef, nil
+}
+
+func uciInstalledAcceptanceProjectionCountsForAuthority(ctx context.Context, authority *uciInstalledAcceptanceAuthority) (uciInstalledAcceptanceProjectionCounts, error) {
+	if authority == nil || authority.store == nil || authority.source == nil || authority.source.SourceID == "" {
+		return uciInstalledAcceptanceProjectionCounts{}, errors.New("installed acceptance projection count authority is incomplete")
+	}
+	checkoutIDs := make([]string, 0, 2)
+	for _, client := range []string{uciInstalledAcceptanceClientA, uciInstalledAcceptanceClientB} {
+		checkout := authority.checkouts[client]
+		if checkout == nil || checkout.CheckoutID == "" {
+			return uciInstalledAcceptanceProjectionCounts{}, errors.New("installed acceptance projection count checkout is unavailable")
+		}
+		checkoutIDs = append(checkoutIDs, checkout.CheckoutID)
+	}
+	db := authority.store.GetDB().WithContext(ctx)
+	counts := uciInstalledAcceptanceProjectionCounts{}
+	for _, count := range []struct {
+		name  string
+		query string
+		into  *int64
+		args  []any
+	}{
+		{name: "embeddings", query: `SELECT COUNT(*) FROM ci_embeddings WHERE source_id = ?`, into: &counts.Embeddings, args: []any{authority.source.SourceID}},
+		{name: "chunk embeddings", query: `SELECT COUNT(*) FROM ci_chunk_embeddings WHERE source_id = ?`, into: &counts.ChunkEmbeddings, args: []any{authority.source.SourceID}},
+		{name: "resolved edges", query: `SELECT COUNT(*) FROM ci_resolved_edges WHERE checkout_id IN (?)`, into: &counts.ResolvedEdges, args: []any{checkoutIDs}},
+	} {
+		if err := db.Raw(count.query, count.args...).Scan(count.into).Error; err != nil {
+			return uciInstalledAcceptanceProjectionCounts{}, fmt.Errorf("count installed acceptance %s: %w", count.name, err)
+		}
+	}
+	return counts, nil
+}
+
+func uciInstalledAcceptanceViewDelta(ctx context.Context, authority *uciInstalledAcceptanceAuthority, beforeViewID, afterViewID string) string {
+	if authority == nil || authority.store == nil || beforeViewID == "" || afterViewID == "" {
+		return "view_delta=unavailable"
+	}
+	type viewRow struct {
+		ViewID         string         `gorm:"column:view_id"`
+		ObservedFSSeq  int64          `gorm:"column:observed_fs_seq"`
+		ManifestDigest string         `gorm:"column:manifest_digest"`
+		CoverageJSON   string         `gorm:"column:coverage_json"`
+		HeadOID        sql.NullString `gorm:"column:head_oid"`
+		ObjectFormat   sql.NullString `gorm:"column:object_format"`
+		RefLabel       sql.NullString `gorm:"column:ref_label"`
+		Dirty          bool           `gorm:"column:dirty"`
+	}
+	var rows []viewRow
+	if err := authority.store.GetDB().WithContext(ctx).Raw(`
+		SELECT view_id, observed_fs_seq, manifest_digest, coverage_json::text AS coverage_json,
+		       head_oid, object_format, ref_label, dirty
+		FROM ci_views WHERE view_id IN (?, ?)`, beforeViewID, afterViewID).Scan(&rows).Error; err != nil || len(rows) != 2 {
+		return "view_delta=unavailable"
+	}
+	byID := make(map[string]viewRow, 2)
+	for _, row := range rows {
+		byID[row.ViewID] = row
+	}
+	before, beforeOK := byID[beforeViewID]
+	after, afterOK := byID[afterViewID]
+	if !beforeOK || !afterOK {
+		return "view_delta=unavailable"
+	}
+	gitSame := before.HeadOID == after.HeadOID && before.ObjectFormat == after.ObjectFormat && before.RefLabel == after.RefLabel && before.Dirty == after.Dirty
+	var producerCount int64
+	_ = authority.store.GetDB().WithContext(ctx).Raw(`
+		SELECT COUNT(*) FROM ci_jobs AS job
+		JOIN ci_views AS view_row ON view_row.view_id = job.result_view_id
+		WHERE job.result_view_id = ? AND job.state = 'succeeded'
+		  AND job.updated_at = view_row.published_at AND job.sealed_manifest IS NOT NULL`, beforeViewID).Scan(&producerCount).Error
+	return fmt.Sprintf("fs_seq=%d->%d manifest_same=%t coverage_same=%t git_same=%t producer_count=%d", before.ObservedFSSeq, after.ObservedFSSeq, before.ManifestDigest == after.ManifestDigest, before.CoverageJSON == after.CoverageJSON, gitSame, producerCount)
+}
+
+func uciVerifyInstalledAcceptanceRestartArtifacts(
+	candidates map[string]uciInstallHarnessCommand,
+	installation *uciInstallHarnessInstallation,
+	expected map[string]uciInstalledAcceptanceArtifact,
+) (map[string]string, error) {
+	if installation == nil {
+		return nil, errors.New("restarted installed acceptance has no installation")
+	}
+	paths := make(map[string]string, 3)
+	for _, role := range []string{"server", "daemon", "parser"} {
+		candidate, found := candidates[role]
+		if !found || candidate.Executable == "" {
+			return nil, fmt.Errorf("restarted installed acceptance has no %s candidate", role)
+		}
+		artifact, found := expected[role]
+		if !found || artifact.CandidateSHA256 == "" || artifact.InstalledSHA256 != artifact.CandidateSHA256 {
+			return nil, fmt.Errorf("restarted installed acceptance has no verified %s artifact", role)
+		}
+		candidateHash, err := uciInstalledAcceptanceFileSHA256(candidate.Executable)
+		if err != nil {
+			return nil, err
+		}
+		installedPath, err := installation.Executable(role)
+		if err != nil {
+			return nil, err
+		}
+		installedHash, err := uciInstalledAcceptanceFileSHA256(installedPath)
+		if err != nil {
+			return nil, err
+		}
+		if candidateHash != artifact.CandidateSHA256 || installedHash != candidateHash {
+			return nil, fmt.Errorf("restarted installed %s artifact bytes do not match the original candidate", role)
+		}
+		paths[role] = installedPath
+	}
+	return paths, nil
+}
+
+func uciWaitForInstalledAcceptanceLoopbackRelease(ctx context.Context, host string, port int) error {
+	if port < 1 || port > 65535 {
+		return errors.New("installed acceptance loopback release port is invalid")
+	}
+	address := net.JoinHostPort(host, strconv.Itoa(port))
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		listener, err := net.Listen("tcp", address)
+		if err == nil {
+			closeErr := listener.Close()
+			if closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
+				return fmt.Errorf("release installed acceptance loopback probe: %w", closeErr)
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for installed acceptance loopback release: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func uciWaitForInstalledAcceptanceRestartQuiescence(
+	ctx context.Context,
+	client *uciInstalledAcceptanceMCPClient,
+	selection uciInstalledAcceptanceSelection,
+	expected uciInstalledAcceptancePublication,
+) (uciInstalledAcceptancePublication, error) {
+	if client == nil || selection.contextHandle == "" || expected.sourceID == "" || expected.checkoutID == "" || expected.viewID == "" || expected.profileID == "" || expected.generation < 1 {
+		return uciInstalledAcceptancePublication{}, errors.New("installed acceptance restart quiescence target is incomplete")
+	}
+	var candidate uciInstalledAcceptancePublication
+	observations := 0
+	ticker := time.NewTicker(uciInstalledAcceptanceQuiescencePollInterval)
+	defer ticker.Stop()
+	for {
+		status, err := uciInstalledAcceptanceStatusForSelection(ctx, client, selection)
+		if err != nil {
+			return uciInstalledAcceptancePublication{}, err
+		}
+		if status.error != "" {
+			return uciInstalledAcceptancePublication{}, fmt.Errorf("installed standard MCP restart status error: %s", uciInstalledAcceptanceSafeErrorDetail(status.error))
+		}
+		if status.status == "idle" && status.context != nil && status.freshness != nil && status.freshness.state == "observed_current" && status.freshness.pendingChanges != nil && *status.freshness.pendingChanges == 0 {
+			publication := uciInstalledAcceptancePublication{
+				sourceID:         status.context.sourceID,
+				checkoutID:       status.context.checkoutID,
+				viewID:           status.context.viewID,
+				profileID:        status.context.profileID,
+				generation:       status.context.generation,
+				runID:            status.runID,
+				freshnessState:   status.freshness.state,
+				evidenceRecorder: status.evidenceRecorder.state,
+			}
+			if !uciInstalledAcceptanceSameViewPublication(publication, expected) {
+				return uciInstalledAcceptancePublication{}, errors.New("installed standard MCP restart selected a changed View")
+			}
+			if observations == 0 || !uciInstalledAcceptanceSameViewPublication(candidate, publication) || candidate.runID != publication.runID {
+				candidate = publication
+				observations = 1
+			} else {
+				observations++
+			}
+			if observations >= uciInstalledAcceptanceQuiescenceObservations {
+				return candidate, nil
+			}
+		} else {
+			observations = 0
+		}
+		select {
+		case <-ctx.Done():
+			return uciInstalledAcceptancePublication{}, fmt.Errorf("wait for installed acceptance restart quiescence: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func uciInstalledAcceptanceSameViewPublication(left, right uciInstalledAcceptancePublication) bool {
+	return left.sourceID == right.sourceID &&
+		left.checkoutID == right.checkoutID &&
+		left.viewID == right.viewID &&
+		left.profileID == right.profileID &&
+		left.generation == right.generation
+}
+
+func uciInstalledAcceptanceContextForPublication(publication uciInstalledAcceptancePublication) uciInstalledAcceptanceContext {
+	return uciInstalledAcceptanceContext{
+		SourceDigest:   uciInstalledAcceptanceStringDigest(publication.sourceID),
+		CheckoutDigest: uciInstalledAcceptanceStringDigest(publication.checkoutID),
+		ViewDigest:     uciInstalledAcceptanceStringDigest(publication.viewID),
+	}
+}
+
+func uciInstalledAcceptanceSameObservations(left, right uciInstalledAcceptanceObservations) bool {
+	return uciInstalledAcceptanceSameStrings(left.SearchArtifactDigests, right.SearchArtifactDigests) &&
+		uciInstalledAcceptanceSameStrings(left.GraphCalleeDigests, right.GraphCalleeDigests) &&
+		uciInstalledAcceptanceSameStrings(left.ReadArtifactDigests, right.ReadArtifactDigests)
+}
+
+func uciInstalledAcceptanceCloneObservations(observation uciInstalledAcceptanceObservations) uciInstalledAcceptanceObservations {
+	return uciInstalledAcceptanceObservations{
+		SearchArtifactDigests: append([]string(nil), observation.SearchArtifactDigests...),
+		GraphCalleeDigests:    append([]string(nil), observation.GraphCalleeDigests...),
+		ReadArtifactDigests:   append([]string(nil), observation.ReadArtifactDigests...),
+	}
+}
+
+func uciInstalledAcceptanceSameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func uciWaitForInstalledAcceptanceRestartParserPID(ctx context.Context, installation *uciInstallHarnessInstallation, parserPath string, previousPID int) (int, error) {
+	if installation == nil || parserPath == "" || previousPID <= 0 {
+		return 0, errors.New("installed acceptance restart parser target is incomplete")
+	}
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		for _, pid := range installation.ObservedPIDsForExecutable(parserPath) {
+			if pid > 0 && pid != previousPID {
+				return pid, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return 0, fmt.Errorf("wait for restarted installed parser process: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func uciRestartInstalledAcceptance(
+	ctx context.Context,
+	request uciInstalledAcceptanceRequest,
+	candidates map[string]uciInstallHarnessCommand,
+	authority *uciInstalledAcceptanceAuthority,
+	worktrees uciInstalledAcceptanceWorktreesFixture,
+	serverPort int,
+	parserBundleDigest, daemonControlRoot string,
+	oldInstallation *uciInstallHarnessInstallation,
+	oldDaemonPID int,
+	oldClients map[string]*uciInstalledAcceptanceMCPClient,
+	selections map[string]uciInstalledAcceptanceSelection,
+	publications map[string]uciInstalledAcceptancePublication,
+	result *uciInstalledAcceptanceResult,
+) (next *uciInstallHarnessInstallation, newDaemonPID int, retErr error) {
+	if oldInstallation == nil || authority == nil || result == nil || oldDaemonPID <= 0 || result.Processes.DaemonPID != oldDaemonPID || result.Processes.ServerPID <= 0 || result.Processes.ParserPID <= 0 {
+		return nil, 0, errors.New("installed acceptance restart baseline is incomplete")
+	}
+	for _, client := range []string{uciInstalledAcceptanceClientA, uciInstalledAcceptanceClientB, uciInstalledAcceptanceClientC} {
+		if oldClients[client] == nil || oldClients[client].process == nil {
+			return nil, 0, errors.New("installed acceptance restart client is incomplete")
+		}
+	}
+	if result.Restart.BeforeClientContexts == nil {
+		result.Restart.BeforeClientContexts = make(map[string]uciInstalledAcceptanceContext)
+	}
+	if result.Restart.BeforeObservations == nil {
+		result.Restart.BeforeObservations = make(map[string]uciInstalledAcceptanceObservations)
+	}
+	for _, client := range []string{uciInstalledAcceptanceClientA, uciInstalledAcceptanceClientB} {
+		publication, found := publications[client]
+		if !found || selections[client].contextHandle == "" || publication.sourceID == "" || publication.checkoutID == "" || publication.viewID == "" || publication.profileID == "" || publication.generation < 1 || publication.runID == "" {
+			return nil, 0, errors.New("installed acceptance restart selected publication is incomplete")
+		}
+		observation, found := result.Observations[client]
+		if !found {
+			return nil, 0, errors.New("installed acceptance restart has no observation baseline")
+		}
+		result.Restart.BeforeClientContexts[client] = uciInstalledAcceptanceContextForPublication(publication)
+		result.Restart.BeforeObservations[client] = uciInstalledAcceptanceCloneObservations(observation)
+	}
+
+	result.Restart.BeforeProcesses = result.Processes
+	beforeCounts, err := uciInstalledAcceptanceProjectionCountsForAuthority(ctx, authority)
+	if err != nil {
+		return nil, 0, err
+	}
+	result.Restart.BeforeProjectionCounts = beforeCounts
+
+	var shutdownErrors []error
+	for _, client := range []string{uciInstalledAcceptanceClientA, uciInstalledAcceptanceClientB, uciInstalledAcceptanceClientC} {
+		if closeErr := oldClients[client].process.closePipes(); closeErr != nil {
+			shutdownErrors = append(shutdownErrors, fmt.Errorf("close installed acceptance %s stdio: %w", client, closeErr))
+		}
+	}
+	if stopErr := uciStopInstalledAcceptanceDaemon(daemonControlRoot, oldDaemonPID); stopErr != nil {
+		shutdownErrors = append(shutdownErrors, stopErr)
+	}
+	if waitErr := uciWaitInstalledAcceptanceProcessExit(oldDaemonPID, 5*time.Second); waitErr != nil {
+		shutdownErrors = append(shutdownErrors, waitErr)
+	}
+	if closeErr := oldInstallation.Close(); closeErr != nil {
+		shutdownErrors = append(shutdownErrors, closeErr)
+	}
+	if shutdownErr := errors.Join(shutdownErrors...); shutdownErr != nil {
+		return nil, 0, shutdownErr
+	}
+	if err := uciWaitForInstalledAcceptanceLoopbackRelease(ctx, request.LoopbackHost, serverPort); err != nil {
+		return nil, 0, err
+	}
+
+	installResult, err := runUCIInstallHarness(ctx, uciInstallHarnessRequest{
+		Version:          request.InstallHarnessVersion,
+		Scenario:         uciInstallHarnessScenarioMaterialize,
+		InstallRoot:      request.InstallRoot,
+		Server:           candidates["server"],
+		Daemon:           candidates["daemon"],
+		Parser:           candidates["parser"],
+		ReadinessTimeout: request.ReadinessTimeout,
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("rematerialize installed UCI candidates: %w", err)
+	}
+	next = installResult.Installation
+	if next == nil {
+		return nil, 0, errors.New("rematerialize installed UCI candidates returned no installation")
+	}
+	defer func() {
+		if retErr == nil || next == nil {
+			return
+		}
+		var cleanupErrors []error
+		if newDaemonPID > 0 {
+			if stopErr := uciStopInstalledAcceptanceDaemon(daemonControlRoot, newDaemonPID); stopErr != nil {
+				cleanupErrors = append(cleanupErrors, stopErr)
+			}
+			if waitErr := uciWaitInstalledAcceptanceProcessExit(newDaemonPID, 5*time.Second); waitErr != nil {
+				cleanupErrors = append(cleanupErrors, waitErr)
+			}
+		}
+		if closeErr := next.Close(); closeErr != nil {
+			cleanupErrors = append(cleanupErrors, closeErr)
+		}
+		retErr = errors.Join(retErr, errors.Join(cleanupErrors...))
+		next = nil
+		newDaemonPID = 0
+	}()
+
+	installedPaths, err := uciVerifyInstalledAcceptanceRestartArtifacts(candidates, next, result.Artifacts)
+	if err != nil {
+		return nil, 0, err
+	}
+	serverEnvironment, clientEnvironment, err := uciInstalledAcceptanceEnvironment(request, authority, serverPort, parserBundleDigest, installedPaths["parser"])
+	if err != nil {
+		return nil, 0, err
+	}
+	server, err := next.Start(ctx, uciInstalledHarnessLaunchRequest{Role: "server", Environment: serverEnvironment})
+	if err != nil {
+		return nil, 0, err
+	}
+	if server == nil || server.command == nil || server.command.Process == nil || server.command.Process.Pid <= 0 {
+		return nil, 0, errors.New("restarted installed server has no process")
+	}
+	restartedServerPID := server.command.Process.Pid
+	readinessCtx, cancelReadiness := context.WithTimeout(ctx, request.ReadinessTimeout)
+	if err := uciWaitForInstalledAcceptanceLoopback(readinessCtx, request.LoopbackHost, serverPort); err != nil {
+		cancelReadiness()
+		return nil, 0, err
+	}
+	cancelReadiness()
+
+	restartedClients := make(map[string]*uciInstalledAcceptanceMCPClient, 3)
+	defer func() {
+		for name, client := range restartedClients {
+			result.Restart.ClientTranscripts[name] = client.Transcript()
+		}
+	}()
+	startClient := func(name, workingDirectory string) (*uciInstalledAcceptanceMCPClient, error) {
+		process, startErr := next.Start(ctx, uciInstalledHarnessLaunchRequest{
+			Role:             "daemon",
+			WorkingDirectory: workingDirectory,
+			Environment:      clientEnvironment,
+			WithStdio:        true,
+		})
+		if startErr != nil {
+			return nil, startErr
+		}
+		client, clientErr := newUCIInstalledAcceptanceMCPClient(name, process)
+		if clientErr != nil {
+			return nil, clientErr
+		}
+		if initErr := client.InitializeAndList(ctx); initErr != nil {
+			return nil, initErr
+		}
+		if toolErr := uciRequireInstalledAcceptanceTools(client.Transcript()); toolErr != nil {
+			return nil, toolErr
+		}
+		restartedClients[name] = client
+		return client, nil
+	}
+
+	first, err := startClient(uciInstalledAcceptanceClientA, worktrees.primaryRoot)
+	if err != nil {
+		return nil, 0, err
+	}
+	newDaemonPID, err = uciWaitForInstalledAcceptanceDaemonPID(ctx, daemonControlRoot, installedPaths["daemon"])
+	if err != nil {
+		return nil, 0, err
+	}
+	if newDaemonPID == oldDaemonPID {
+		return nil, 0, errors.New("restarted installed daemon retained its previous PID")
+	}
+	second, err := startClient(uciInstalledAcceptanceClientB, worktrees.linkedRoot)
+	if err != nil {
+		return nil, 0, err
+	}
+	third, err := startClient(uciInstalledAcceptanceClientC, worktrees.primaryRoot)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	firstSelection, secondSelection, err := uciSelectInstalledAcceptanceCheckouts(ctx, first, second, authority)
+	if err != nil {
+		return nil, 0, err
+	}
+	thirdSelection, err := uciSelectInstalledAcceptanceCheckout(ctx, third, uciInstalledAcceptanceClientA, authority)
+	if err != nil {
+		return nil, 0, err
+	}
+	if firstSelection.viewID == "" || secondSelection.viewID == "" || thirdSelection.viewID == "" {
+		return nil, 0, errors.New("restarted installed clients did not select published Views")
+	}
+
+	primaryBefore, primaryFound := publications[uciInstalledAcceptanceClientA]
+	linkedBefore, linkedFound := publications[uciInstalledAcceptanceClientB]
+	if !primaryFound || !linkedFound {
+		return nil, 0, errors.New("installed acceptance restart publication baseline is incomplete")
+	}
+	firstSelection, secondSelection, err = uciStartInstalledAcceptanceIndexes(ctx, first, second, firstSelection, secondSelection, worktrees)
+	if err != nil {
+		return nil, 0, err
+	}
+	restartedPublications := make(map[string]uciInstalledAcceptancePublication, 3)
+	for _, item := range []struct {
+		name      string
+		client    *uciInstalledAcceptanceMCPClient
+		selection uciInstalledAcceptanceSelection
+		expected  uciInstalledAcceptancePublication
+	}{
+		{name: uciInstalledAcceptanceClientA, client: first, selection: firstSelection, expected: primaryBefore},
+		{name: uciInstalledAcceptanceClientB, client: second, selection: secondSelection, expected: linkedBefore},
+	} {
+		barrier, waitErr := uciWaitForInstalledAcceptanceBarrier(ctx, item.client, item.selection)
+		if waitErr != nil {
+			return nil, 0, waitErr
+		}
+		publication, waitErr := uciWaitForInstalledAcceptanceQuiescence(ctx, item.client, item.selection, barrier)
+		if waitErr != nil {
+			return nil, 0, waitErr
+		}
+		contextRef := uciInstalledAcceptanceContextForPublication(publication)
+		if !uciInstalledAcceptanceSameViewPublication(publication, item.expected) {
+			delta := uciInstalledAcceptanceViewDelta(ctx, authority, item.expected.viewID, publication.viewID)
+			return nil, 0, fmt.Errorf("restarted installed client %s advanced from generation %d/view %s to generation %d/view %s (%s)", item.name, item.expected.generation, uciInstalledAcceptanceStringDigest(item.expected.viewID), publication.generation, uciInstalledAcceptanceStringDigest(publication.viewID), delta)
+		}
+		if before := result.Restart.BeforeClientContexts[item.name]; before != contextRef {
+			return nil, 0, fmt.Errorf("restarted installed client %s context digest changed", item.name)
+		}
+		restartedPublications[item.name] = publication
+		result.Restart.ClientContexts[item.name] = contextRef
+	}
+	thirdPublication, err := uciWaitForInstalledAcceptanceRestartQuiescence(ctx, third, thirdSelection, primaryBefore)
+	if err != nil {
+		return nil, 0, err
+	}
+	restartedPublications[uciInstalledAcceptanceClientC] = thirdPublication
+	result.Restart.ClientContexts[uciInstalledAcceptanceClientC] = uciInstalledAcceptanceContextForPublication(thirdPublication)
+
+	restartedParserPID, err := uciWaitForInstalledAcceptanceRestartParserPID(ctx, next, installedPaths["parser"], result.Processes.ParserPID)
+	if err != nil {
+		return nil, 0, err
+	}
+	afterProcesses := uciInstalledAcceptanceProcesses{
+		ServerPID: restartedServerPID,
+		DaemonPID: newDaemonPID,
+		ParserPID: restartedParserPID,
+	}
+	if afterProcesses.ServerPID == result.Processes.ServerPID || afterProcesses.DaemonPID == result.Processes.DaemonPID || afterProcesses.ParserPID == result.Processes.ParserPID {
+		return nil, 0, errors.New("restarted installed process retained a previous PID")
+	}
+	result.Restart.AfterProcesses = afterProcesses
+
+	for _, item := range []struct {
+		name           string
+		client         *uciInstalledAcceptanceMCPClient
+		selection      uciInstalledAcceptanceSelection
+		expectedCallee string
+	}{
+		{name: uciInstalledAcceptanceClientA, client: first, selection: firstSelection, expectedCallee: request.Fixture.PrimaryCallee},
+		{name: uciInstalledAcceptanceClientB, client: second, selection: secondSelection, expectedCallee: request.Fixture.LinkedCallee},
+	} {
+		observation, observationErr := uciObserveInstalledAcceptanceSearchGraphRead(ctx, item.client, item.selection, restartedPublications[item.name], request.Fixture, item.expectedCallee)
+		if observationErr != nil {
+			return nil, 0, fmt.Errorf("restarted installed standard MCP observation for %s: %w", item.name, observationErr)
+		}
+		beforeObservation, found := result.Restart.BeforeObservations[item.name]
+		if !found || !uciInstalledAcceptanceSameObservations(beforeObservation, observation) {
+			return nil, 0, errors.New("restarted installed standard MCP observation changed")
+		}
+		result.Restart.Observations[item.name] = observation
+	}
+
+	afterCounts, err := uciInstalledAcceptanceProjectionCountsForAuthority(ctx, authority)
+	if err != nil {
+		return nil, 0, err
+	}
+	result.Restart.AfterProjectionCounts = afterCounts
+	result.Restart.UnchangedInputReembedded = afterCounts.Embeddings > beforeCounts.Embeddings || afterCounts.ChunkEmbeddings > beforeCounts.ChunkEmbeddings
+	if result.Restart.UnchangedInputReembedded {
+		return nil, 0, errors.New("restarted installed runtime re-embedded unchanged input")
+	}
+	if afterCounts.Embeddings != beforeCounts.Embeddings || afterCounts.ChunkEmbeddings != beforeCounts.ChunkEmbeddings {
+		return nil, 0, errors.New("restarted installed runtime changed unchanged-input embedding counts")
+	}
+	if afterCounts.ResolvedEdges != beforeCounts.ResolvedEdges {
+		return nil, 0, errors.New("restarted installed runtime changed unchanged-input link counts")
+	}
+	return next, newDaemonPID, nil
+}
+
+func uciExerciseInstalledAcceptanceWatcher(
+	ctx context.Context,
+	fixture uciInstalledAcceptanceFixture,
+	worktrees uciInstalledAcceptanceWorktreesFixture,
+	first, second *uciInstalledAcceptanceMCPClient,
+	firstSelection, secondSelection uciInstalledAcceptanceSelection,
+	before map[string]uciInstalledAcceptancePublication,
+	result *uciInstalledAcceptanceResult,
+) (after map[string]uciInstalledAcceptancePublication, retErr error) {
+	if first == nil || second == nil || result == nil || firstSelection.contextHandle == "" || secondSelection.contextHandle == "" || worktrees.primaryRoot == "" {
+		return nil, errors.New("installed acceptance watcher proof is incomplete")
+	}
+	primaryBefore, primaryFound := before[uciInstalledAcceptanceClientA]
+	linkedBefore, linkedFound := before[uciInstalledAcceptanceClientB]
+	if !primaryFound || !linkedFound || primaryBefore.runID == "" || linkedBefore.viewID == "" {
+		return nil, errors.New("installed acceptance watcher publication baseline is incomplete")
+	}
+
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
+	functionName := "UCIInstalledWatcher" + suffix
+	relativePath := "pkg/uci_installed_watcher_" + suffix + ".go"
+	canaryPath := filepath.Join(worktrees.primaryRoot, filepath.FromSlash(relativePath))
+	canarySource := "package fixture\n\nfunc " + functionName + "() string { return \"" + functionName + "\" }\n"
+	if err := os.WriteFile(canaryPath, []byte(canarySource), 0o600); err != nil {
+		return nil, fmt.Errorf("write installed acceptance watcher canary: %w", err)
+	}
+	defer func() {
+		if removeErr := os.Remove(canaryPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			retErr = errors.Join(retErr, fmt.Errorf("remove installed acceptance watcher canary: %w", removeErr))
+		}
+	}()
+
+	afterWriteA, err := uciWaitForInstalledAcceptanceWatcherState(ctx, first, firstSelection, primaryBefore, functionName, relativePath, true)
+	if err != nil {
+		return nil, err
+	}
+	afterWriteB, err := uciWaitForInstalledAcceptanceRestartQuiescence(ctx, second, secondSelection, linkedBefore)
+	if err != nil {
+		return nil, err
+	}
+	if uciInstalledAcceptanceSameViewPublication(afterWriteA, primaryBefore) {
+		return nil, errors.New("installed acceptance watcher write did not publish a new primary View")
+	}
+	if !uciInstalledAcceptanceSameViewPublication(afterWriteB, linkedBefore) {
+		return nil, errors.New("installed acceptance watcher write changed linked View")
+	}
+
+	if err := os.Remove(canaryPath); err != nil {
+		return nil, fmt.Errorf("delete installed acceptance watcher canary: %w", err)
+	}
+	afterDeleteA, err := uciWaitForInstalledAcceptanceWatcherState(ctx, first, firstSelection, afterWriteA, functionName, relativePath, false)
+	if err != nil {
+		return nil, err
+	}
+	afterDeleteB, err := uciWaitForInstalledAcceptanceRestartQuiescence(ctx, second, secondSelection, afterWriteB)
+	if err != nil {
+		return nil, err
+	}
+	if uciInstalledAcceptanceSameViewPublication(afterDeleteA, afterWriteA) {
+		return nil, errors.New("installed acceptance watcher delete did not publish a new primary View")
+	}
+	if !uciInstalledAcceptanceSameViewPublication(afterDeleteB, linkedBefore) {
+		return nil, errors.New("installed acceptance watcher delete changed linked View")
+	}
+
+	result.Watcher = uciInstalledAcceptanceWatcher{
+		AfterWriteA:  uciInstalledAcceptancePublicationEvidenceFor(afterWriteA),
+		AfterDeleteA: uciInstalledAcceptancePublicationEvidenceFor(afterDeleteA),
+		AfterWriteB:  uciInstalledAcceptancePublicationEvidenceFor(afterWriteB),
+		AfterDeleteB: uciInstalledAcceptancePublicationEvidenceFor(afterDeleteB),
+	}
+	return map[string]uciInstalledAcceptancePublication{
+		uciInstalledAcceptanceClientA: afterDeleteA,
+		uciInstalledAcceptanceClientB: afterDeleteB,
+	}, nil
+}
+
+func uciWaitForInstalledAcceptanceWatcherPublication(
+	ctx context.Context,
+	client *uciInstalledAcceptanceMCPClient,
+	selection uciInstalledAcceptanceSelection,
+	previous uciInstalledAcceptancePublication,
+) (uciInstalledAcceptancePublication, error) {
+	if client == nil || selection.contextHandle == "" || previous.runID == "" {
+		return uciInstalledAcceptancePublication{}, errors.New("installed acceptance watcher status target is incomplete")
+	}
+	ticker := time.NewTicker(uciInstalledAcceptanceQuiescencePollInterval)
+	defer ticker.Stop()
+	for {
+		status, err := uciInstalledAcceptanceStatusForSelection(ctx, client, selection)
+		if err != nil {
+			return uciInstalledAcceptancePublication{}, err
+		}
+		if status.error != "" {
+			return uciInstalledAcceptancePublication{}, fmt.Errorf("installed standard MCP watcher status error: %s", uciInstalledAcceptanceSafeErrorDetail(status.error))
+		}
+		if status.runID != "" && status.runID != previous.runID {
+			watchedSelection := selection
+			watchedSelection.runID = status.runID
+			barrier, barrierErr := uciWaitForInstalledAcceptanceBarrier(ctx, client, watchedSelection)
+			if barrierErr != nil {
+				return uciInstalledAcceptancePublication{}, barrierErr
+			}
+			return uciWaitForInstalledAcceptanceQuiescence(ctx, client, watchedSelection, barrier)
+		}
+		select {
+		case <-ctx.Done():
+			return uciInstalledAcceptancePublication{}, fmt.Errorf("wait for installed acceptance watcher run: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func uciWaitForInstalledAcceptanceWatcherState(
+	ctx context.Context,
+	client *uciInstalledAcceptanceMCPClient,
+	selection uciInstalledAcceptanceSelection,
+	previous uciInstalledAcceptancePublication,
+	functionName, relativePath string,
+	wantPresent bool,
+) (uciInstalledAcceptancePublication, error) {
+	for {
+		publication, err := uciWaitForInstalledAcceptanceWatcherPublication(ctx, client, selection, previous)
+		if err != nil {
+			return uciInstalledAcceptancePublication{}, err
+		}
+		err = uciRequireInstalledAcceptanceWatcherCanary(ctx, client, selection, publication, functionName, relativePath, wantPresent)
+		if err == nil {
+			return publication, nil
+		}
+		if !errors.Is(err, errUCIInstalledAcceptanceWatcherCanaryMissing) && !errors.Is(err, errUCIInstalledAcceptanceWatcherCanaryPresent) {
+			return uciInstalledAcceptancePublication{}, err
+		}
+		previous = publication
+	}
+}
+
+func uciRequireInstalledAcceptanceWatcherCanary(
+	ctx context.Context,
+	client *uciInstalledAcceptanceMCPClient,
+	selection uciInstalledAcceptanceSelection,
+	publication uciInstalledAcceptancePublication,
+	functionName, relativePath string,
+	wantPresent bool,
+) error {
+	payload, err := client.Tool(ctx, "codebase_search", map[string]any{
+		"context_handle": selection.contextHandle,
+		"query":          functionName,
+		"path_prefix":    relativePath,
+		"limit":          10,
+	})
+	if err != nil {
+		return err
+	}
+	response, err := uciDecodeInstalledAcceptanceQuery(payload)
+	if err != nil {
+		return err
+	}
+	if !uciInstalledAcceptanceQueryMatchesPublication(response, publication) {
+		return errors.New("installed standard MCP watcher search did not retain the selected View")
+	}
+	if !wantPresent {
+		if (response.Status != uci.QueryStatusEmpty && response.Status != uci.QueryStatusPartial) || (response.Items != nil && len(*response.Items) != 0) {
+			return errUCIInstalledAcceptanceWatcherCanaryPresent
+		}
+		return nil
+	}
+	if (response.Status != uci.QueryStatusOK && response.Status != uci.QueryStatusPartial) || response.Items == nil {
+		return errors.New("installed standard MCP watcher write did not return the canary")
+	}
+	found := false
+	for _, item := range *response.Items {
+		if item.Ref.SourceID != publication.sourceID || item.Ref.ViewID != publication.viewID {
+			return errors.New("installed standard MCP watcher search disclosed an item outside the selected View")
+		}
+		name, nameOK := uciInstalledAcceptanceGoFunctionName(item.Ref.EntityKey)
+		if item.Path == relativePath && nameOK && name == functionName {
+			if !uciInstalledAcceptanceIsBareSHA256(string(item.ContentDigest)) {
+				return errors.New("installed standard MCP watcher canary has an invalid content digest")
+			}
+			found = true
+		}
+	}
+	if !found {
+		return errUCIInstalledAcceptanceWatcherCanaryMissing
+	}
+	return nil
+}
+
+func uciInstalledAcceptancePublicationEvidenceFor(publication uciInstalledAcceptancePublication) uciInstalledAcceptancePublicationEvidence {
+	return uciInstalledAcceptancePublicationEvidence{
+		SourceDigest:   uciInstalledAcceptanceStringDigest(publication.sourceID),
+		CheckoutDigest: uciInstalledAcceptanceStringDigest(publication.checkoutID),
+		ViewDigest:     uciInstalledAcceptanceStringDigest(publication.viewID),
+		RunDigest:      uciInstalledAcceptanceStringDigest(publication.runID),
+		Generation:     publication.generation,
+		FreshnessState: publication.freshnessState,
+		BarrierState:   publication.barrierState,
+	}
 }
