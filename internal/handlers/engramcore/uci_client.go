@@ -31,9 +31,9 @@ const (
 	maxUCIClientScopeBytes        = 2 << 10
 	maxUCIClientBindBytes         = 4 << 10
 	maxUCIClientBeginBytes        = 8 << 10
-	maxUCIClientPayloadBytes      = 1 << 20
-	maxUCIClientStageBytes        = 16 << 20
-	maxUCIClientStageFrames       = 1024
+	maxUCIClientPayloadBytes      = uci.IndexAdmissionMaxEncodedFrameBytes
+	maxUCIClientStageBytes        = uci.IndexAdmissionMaxTotalEncodedBytes
+	maxUCIClientStageFrames       = uci.IndexAdmissionMaxFrames
 	maxUCIClientCoverageBytes     = 1 << 20
 	maxUCIClientFinalizeBytes     = maxUCIClientCoverageBytes + 4<<10
 	maxUCIClientQueryBytes        = 16 << 10

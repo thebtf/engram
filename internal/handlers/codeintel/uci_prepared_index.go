@@ -352,7 +352,7 @@ func (collaborator *UCIPreparedIndexCollaborator) prepareAdmissionPlan(ctx conte
 		prepared = append(prepared, preparedFile)
 	}
 
-	unresolved, err := uciPreparedAddResolvedGoCallEdges(prepared)
+	unresolved, err := uciPreparedAddResolvedSourceEdges(prepared)
 	if err != nil {
 		return uciPreparedAdmissionPlan{}, err
 	}
@@ -823,6 +823,326 @@ func uciPreparedAddResolvedGoCallEdges(files []uciPreparedAdmissionFile) (uint64
 		}
 	}
 	return unresolved, nil
+}
+
+func uciPreparedAddResolvedSourceEdges(files []uciPreparedAdmissionFile) (uint64, error) {
+	goUnresolved, err := uciPreparedAddResolvedGoCallEdges(files)
+	if err != nil {
+		return 0, err
+	}
+	treeSitterUnresolved, err := uciPreparedAddResolvedTreeSitterEdges(files)
+	if err != nil {
+		return 0, err
+	}
+	if ^uint64(0)-goUnresolved < treeSitterUnresolved {
+		return 0, fmt.Errorf("uci prepared index: unresolved reference count overflow")
+	}
+	return goUnresolved + treeSitterUnresolved, nil
+}
+
+type uciPreparedTreeSitterTarget struct {
+	path       string
+	artifactID string
+	symbolKey  string
+}
+
+func uciPreparedAddResolvedTreeSitterEdges(files []uciPreparedAdmissionFile) (uint64, error) {
+	byPath := make(map[string]*uciPreparedAdmissionFile, len(files))
+	definitions := make(map[string]map[string][]uciPreparedTreeSitterTarget, len(files))
+	for index := range files {
+		file := &files[index]
+		if file.artifact == nil || file.membership.State != uci.IndexAdmissionMembershipPresent {
+			continue
+		}
+		byPath[file.path] = file
+		if !uciPreparedTreeSitterLanguage(file.artifact.Profile.Language) {
+			continue
+		}
+		byName := make(map[string][]uciPreparedTreeSitterTarget)
+		for _, definition := range file.artifact.Definitions {
+			name, ok := uciPreparedTreeSitterDefinitionName(definition.LocalSymbolKey)
+			if !ok {
+				continue
+			}
+			byName[name] = append(byName[name], uciPreparedTreeSitterTarget{
+				path:       file.path,
+				artifactID: file.artifact.ArtifactID,
+				symbolKey:  definition.LocalSymbolKey,
+			})
+		}
+		definitions[file.path] = byName
+	}
+
+	var unresolved uint64
+	for index := range files {
+		file := &files[index]
+		if file.artifact == nil || file.membership.State != uci.IndexAdmissionMembershipPresent || !uciPreparedTreeSitterLanguage(file.artifact.Profile.Language) {
+			continue
+		}
+		aliases := make(map[string]uciPreparedTreeSitterTarget)
+		namespaces := make(map[string]uciPreparedTreeSitterTarget)
+		for _, reference := range file.artifact.References {
+			module, imported, local, ok := uciPreparedTreeSitterModuleReference(reference)
+			if !ok {
+				continue
+			}
+			targetFile, found := uciPreparedResolveTreeSitterModule(byPath, file.path, module)
+			if !found || targetFile.artifact == nil {
+				unresolved++
+				continue
+			}
+			target := uciPreparedTreeSitterTarget{path: targetFile.path, artifactID: targetFile.artifact.ArtifactID}
+			if imported != "" && imported != "*" && imported != "default" {
+				matches := definitions[targetFile.path][imported]
+				if len(matches) == 1 {
+					target = matches[0]
+				} else {
+					unresolved++
+				}
+			}
+			file.edges = append(file.edges, uciPreparedTreeSitterEdge(file.path, *file.artifact, reference, target))
+			if local == "" {
+				continue
+			}
+			switch {
+			case imported == "*":
+				namespaces[local] = target
+			case target.symbolKey != "":
+				aliases[local] = target
+			}
+		}
+
+		for _, reference := range file.artifact.References {
+			local, ok := uciPreparedTreeSitterLocalReference(reference)
+			if !ok {
+				continue
+			}
+			target, found := aliases[local]
+			if !found {
+				if separator := strings.IndexByte(local, '.'); separator > 0 && separator < len(local)-1 {
+					namespace, namespaceFound := namespaces[local[:separator]]
+					if namespaceFound {
+						matches := definitions[namespace.path][local[separator+1:]]
+						if len(matches) == 1 {
+							target, found = matches[0], true
+						}
+					}
+				}
+			}
+			if !found {
+				unresolved++
+				continue
+			}
+			file.edges = append(file.edges, uciPreparedTreeSitterEdge(file.path, *file.artifact, reference, target))
+		}
+
+		for _, reference := range file.artifact.References {
+			imported, _, ok := uciPreparedTreeSitterExportAlias(reference)
+			if !ok {
+				continue
+			}
+			matches := definitions[file.path][imported]
+			if len(matches) != 1 {
+				unresolved++
+				continue
+			}
+			file.edges = append(file.edges, uciPreparedTreeSitterEdge(file.path, *file.artifact, reference, matches[0]))
+		}
+	}
+	return unresolved, nil
+}
+
+func uciPreparedTreeSitterLanguage(language uci.IndexAdmissionLanguage) bool {
+	switch language {
+	case uci.IndexAdmissionLanguageJavaScript, uci.IndexAdmissionLanguageTypeScript, uci.IndexAdmissionLanguageTSX:
+		return true
+	default:
+		return false
+	}
+}
+
+func uciPreparedTreeSitterDefinitionName(localKey string) (string, bool) {
+	separator := strings.LastIndexByte(localKey, ':')
+	if separator < 1 || separator == len(localKey)-1 {
+		return "", false
+	}
+	name := localKey[separator+1:]
+	return name, !strings.ContainsAny(name, "@/#")
+}
+
+func uciPreparedTreeSitterModuleReference(reference uci.IndexAdmissionReference) (module, imported, local string, ok bool) {
+	key, ok := uciPreparedTreeSitterSemanticKey(reference.SiteKey)
+	if !ok {
+		return "", "", "", false
+	}
+	var prefix string
+	switch reference.Kind {
+	case "import", "import_alias":
+		prefix = "import:"
+	case "reexport", "reexport_alias":
+		prefix = "reexport:"
+	default:
+		return "", "", "", false
+	}
+	if !strings.HasPrefix(key, prefix) {
+		return "", "", "", false
+	}
+	payload := strings.TrimPrefix(key, prefix)
+	if reference.Kind == "import" || reference.Kind == "reexport" {
+		return payload, "", "", payload != ""
+	}
+	hash := strings.LastIndexByte(payload, '#')
+	colon := strings.LastIndexByte(payload, ':')
+	if hash < 1 || colon <= hash+1 || colon == len(payload)-1 {
+		return "", "", "", false
+	}
+	return payload[:hash], payload[hash+1 : colon], payload[colon+1:], true
+}
+
+func uciPreparedTreeSitterLocalReference(reference uci.IndexAdmissionReference) (string, bool) {
+	key, ok := uciPreparedTreeSitterSemanticKey(reference.SiteKey)
+	if !ok {
+		return "", false
+	}
+	var prefix string
+	switch reference.Kind {
+	case "call":
+		prefix = "call:"
+	case "reference":
+		prefix = "reference:"
+	case "jsx_reference":
+		prefix = "jsx_reference:"
+	default:
+		return "", false
+	}
+	if !strings.HasPrefix(key, prefix) {
+		return "", false
+	}
+	local := strings.TrimPrefix(key, prefix)
+	if local == "" || strings.ContainsAny(local, "()[]{}'\"") {
+		return "", false
+	}
+	return local, true
+}
+
+func uciPreparedTreeSitterExportAlias(reference uci.IndexAdmissionReference) (imported, local string, ok bool) {
+	if reference.Kind != "export_alias" {
+		return "", "", false
+	}
+	key, ok := uciPreparedTreeSitterSemanticKey(reference.SiteKey)
+	if !ok || !strings.HasPrefix(key, "export:") {
+		return "", "", false
+	}
+	payload := strings.TrimPrefix(key, "export:")
+	separator := strings.LastIndexByte(payload, ':')
+	if separator < 1 || separator == len(payload)-1 {
+		return "", "", false
+	}
+	return payload[:separator], payload[separator+1:], true
+}
+
+func uciPreparedTreeSitterSemanticKey(key string) (string, bool) {
+	separator := strings.LastIndexByte(key, '@')
+	if separator < 1 || separator == len(key)-1 {
+		return "", false
+	}
+	position := key[separator+1:]
+	colon := strings.IndexByte(position, ':')
+	if colon < 1 || colon == len(position)-1 || !uciPreparedDecimal(position[:colon]) || !uciPreparedDecimal(position[colon+1:]) {
+		return "", false
+	}
+	return key[:separator], true
+}
+
+func uciPreparedDecimal(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func uciPreparedResolveTreeSitterModule(files map[string]*uciPreparedAdmissionFile, sourcePath, module string) (*uciPreparedAdmissionFile, bool) {
+	if module == "" || !strings.HasPrefix(module, ".") || path.IsAbs(module) {
+		return nil, false
+	}
+	base := path.Clean(path.Join(path.Dir(sourcePath), module))
+	if base == "." || base == ".." || strings.HasPrefix(base, "../") {
+		return nil, false
+	}
+	candidates := []string{base}
+	extension := strings.ToLower(path.Ext(base))
+	if extension == "" {
+		for _, suffix := range []string{".ts", ".tsx", ".js", ".json", "/index.ts", "/index.tsx", "/index.js"} {
+			candidates = append(candidates, base+suffix)
+		}
+	} else if extension == ".js" {
+		stem := strings.TrimSuffix(base, path.Ext(base))
+		candidates = append(candidates, stem+".ts", stem+".tsx")
+	}
+	var matched *uciPreparedAdmissionFile
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if _, duplicate := seen[candidate]; duplicate {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		file := files[candidate]
+		if file == nil {
+			continue
+		}
+		if matched != nil && matched.path != file.path {
+			return nil, false
+		}
+		matched = file
+	}
+	return matched, matched != nil
+}
+
+func uciPreparedTreeSitterEdge(sourcePath string, source uci.IndexAdmissionArtifact, reference uci.IndexAdmissionReference, target uciPreparedTreeSitterTarget) uci.IndexAdmissionEdge {
+	var sourceSymbol *string
+	if reference.OwnerSymbolKey != nil {
+		value := *reference.OwnerSymbolKey
+		sourceSymbol = &value
+	}
+	var targetSymbol *string
+	if target.symbolKey != "" {
+		value := target.symbolKey
+		targetSymbol = &value
+	}
+	return uci.IndexAdmissionEdge{
+		EdgeKey:          uciPreparedTreeSitterEdgeKey(sourcePath, reference.SiteKey, target.path, target.symbolKey, reference.Relation),
+		SourceArtifactID: source.ArtifactID,
+		SourceSymbolKey:  sourceSymbol,
+		Target: &uci.IndexAdmissionEdgeTarget{
+			PathKey:    target.path,
+			ArtifactID: target.artifactID,
+			SymbolKey:  targetSymbol,
+		},
+		Relation:         reference.Relation,
+		EvidenceKind:     uci.IndexEvidenceKind("resolved"),
+		ResolutionState:  uci.IndexResolutionState("resolved"),
+		ResolverRevision: "uci-prepared-tree-sitter-module/v1",
+		Evidence: uci.IndexAdmissionEdgeEvidence{
+			ReferenceSiteKey: reference.SiteKey,
+			Span:             reference.Span,
+			RuleKey:          "tree-sitter-module-alias/v1",
+			Explanation:      "unique relative module and exported symbol in the same prepared source",
+		},
+	}
+}
+
+func uciPreparedTreeSitterEdgeKey(sourcePath, siteKey, targetPath, targetSymbol string, relation uci.IndexRelation) string {
+	state := sha256.New()
+	for _, value := range []string{"uci-prepared-tree-sitter-edge/v1", sourcePath, siteKey, targetPath, targetSymbol, string(relation)} {
+		_, _ = state.Write([]byte{byte(len(value) >> 24), byte(len(value) >> 16), byte(len(value) >> 8), byte(len(value))})
+		_, _ = state.Write([]byte(value))
+	}
+	return "tree-sitter:" + hex.EncodeToString(state.Sum(nil))
 }
 
 func uciPreparedGoCallTargetSymbol(reference uci.IndexAdmissionReference) (string, bool) {

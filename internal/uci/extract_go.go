@@ -265,7 +265,7 @@ func goExtractGoReferences(file *ast.File, tokenFile *token.File, source []byte,
 				incomplete = true
 				return true
 			}
-			span, valid := goSpanFromTokenPositions(tokenFile, source, lineStarts, node.Pos(), node.End())
+			span, valid := goSpanFromTokenPositions(tokenFile, source, lineStarts, node.Fun.Pos(), node.Fun.End())
 			if !valid {
 				incomplete = true
 				return true

@@ -20,11 +20,11 @@ const (
 	IndexAdmissionFrameVersion = "uci-index-admission/v1"
 
 	// IndexAdmissionMaxEncodedFrameBytes is the maximum exact encoded payload for one Stage frame.
-	IndexAdmissionMaxEncodedFrameBytes = 1 << 20
+	IndexAdmissionMaxEncodedFrameBytes = 4 << 20
 	// IndexAdmissionMaxFrames is the maximum number of frames admitted in one build.
 	IndexAdmissionMaxFrames = 1024
 	// IndexAdmissionMaxTotalEncodedBytes is the maximum exact payload bytes admitted in one build.
-	IndexAdmissionMaxTotalEncodedBytes = 16 << 20
+	IndexAdmissionMaxTotalEncodedBytes = 256 << 20
 	// IndexAdmissionMaxArtifactBodyBytes bounds the private source bytes retained for one artifact.
 	IndexAdmissionMaxArtifactBodyBytes = 1 << 20
 
@@ -896,24 +896,42 @@ func NewIndexAdmissionArtifactFromGo(sourceID string, profile IndexAdmissionArti
 	}
 
 	chunkLimitReached := false
+	lineStarts := indexAdmissionLineStarts(source)
+definitionChunks:
 	for _, definition := range artifact.Definitions {
-		if len(artifact.Chunks) == indexAdmissionMaxChunksPerArtifact {
-			chunkLimitReached = true
-			break
+		for chunkStart := int(definition.Span.ByteStart); chunkStart < int(definition.Span.ByteEnd); {
+			if len(artifact.Chunks) == indexAdmissionMaxChunksPerArtifact {
+				chunkLimitReached = true
+				break definitionChunks
+			}
+			chunkEnd := chunkStart + indexAdmissionMaxTextBytes
+			if definitionEnd := int(definition.Span.ByteEnd); chunkEnd > definitionEnd {
+				chunkEnd = definitionEnd
+			}
+			for chunkEnd > chunkStart && chunkEnd < len(source) && !utf8.RuneStart(source[chunkEnd]) {
+				chunkEnd--
+			}
+			if chunkEnd <= chunkStart {
+				return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: cannot split Go definition chunk")
+			}
+			span := IndexSpan{
+				ByteStart: int64(chunkStart),
+				ByteEnd:   int64(chunkEnd),
+				LineStart: indexAdmissionLineForOffset(lineStarts, chunkStart),
+				LineEnd:   indexAdmissionLineForOffset(lineStarts, chunkEnd-1),
+			}
+			text := string(source[chunkStart:chunkEnd])
+			symbolKey := definition.LocalSymbolKey
+			artifact.Chunks = append(artifact.Chunks, IndexAdmissionChunk{
+				Ordinal:       len(artifact.Chunks),
+				SymbolKey:     &symbolKey,
+				Kind:          "definition",
+				Span:          span,
+				ContentDigest: indexAdmissionDigestBytes([]byte(text)),
+				Text:          text,
+			})
+			chunkStart = chunkEnd
 		}
-		text, err := indexAdmissionTextAtSpan(source, definition.Span)
-		if err != nil {
-			return IndexAdmissionArtifact{}, err
-		}
-		symbolKey := definition.LocalSymbolKey
-		artifact.Chunks = append(artifact.Chunks, IndexAdmissionChunk{
-			Ordinal:       len(artifact.Chunks),
-			SymbolKey:     &symbolKey,
-			Kind:          "definition",
-			Span:          definition.Span,
-			ContentDigest: indexAdmissionDigestBytes([]byte(text)),
-			Text:          text,
-		})
 	}
 	for _, chunk := range extracted.Chunks {
 		if len(artifact.Chunks) == indexAdmissionMaxChunksPerArtifact {
@@ -1037,10 +1055,12 @@ func NewIndexAdmissionArtifactFromTreeSitter(sourceID string, profile IndexAdmis
 		if reference.OwnerLocalKey != "" {
 			ownerSymbolKey = indexAdmissionStringPointer(reference.OwnerLocalKey)
 		}
+		siteKey := indexAdmissionTreeSitterSafeReferenceKey("site", reference.LocalKey)
+		symbolKey := indexAdmissionTreeSitterSafeReferenceKey("symbol", reference.SymbolKey)
 		artifact.References = append(artifact.References, IndexAdmissionReference{
-			SiteKey:        reference.LocalKey,
+			SiteKey:        siteKey,
 			Kind:           reference.Kind,
-			SymbolKey:      reference.SymbolKey,
+			SymbolKey:      symbolKey,
 			OwnerSymbolKey: ownerSymbolKey,
 			RawTarget:      rawTarget,
 			Relation:       relation,
@@ -2758,9 +2778,9 @@ func indexAdmissionTreeSitterLanguage(language TreeSitterLanguage) (IndexAdmissi
 
 func indexAdmissionTreeSitterReferenceRelation(kind string) (IndexRelation, error) {
 	switch kind {
-	case "import_alias":
+	case "import", "import_alias":
 		return IndexRelation("imports"), nil
-	case "reexport_alias":
+	case "reexport", "reexport_alias", "export_alias":
 		return IndexRelation("exports"), nil
 	case "call":
 		return IndexRelation("calls"), nil
@@ -2769,6 +2789,21 @@ func indexAdmissionTreeSitterReferenceRelation(kind string) (IndexRelation, erro
 	default:
 		return "", fmt.Errorf("uci index admission: unsupported Tree-sitter reference kind %q", kind)
 	}
+}
+
+// indexAdmissionTreeSitterSafeReferenceKey preserves ordinary readable parser
+// identities, but replaces keys that resemble private locators or exceed the
+// metadata boundary with a stable opaque digest. The exact source span and text
+// remain in the reference evidence; only the unsafe metadata identity changes.
+func indexAdmissionTreeSitterSafeReferenceKey(kind, value string) string {
+	if indexAdmissionValidKey(value) {
+		return value
+	}
+	state := sha256.New()
+	indexAdmissionWriteHashString(state, "uci-index-admission-tree-sitter-reference-key/v1")
+	indexAdmissionWriteHashString(state, kind)
+	indexAdmissionWriteHashString(state, value)
+	return "tree-sitter-" + kind + ":sha256:" + hex.EncodeToString(state.Sum(nil))
 }
 
 func indexAdmissionTreeSitterResolutionValid(resolution IndexResolutionState) bool {

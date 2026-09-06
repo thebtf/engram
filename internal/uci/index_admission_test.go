@@ -159,6 +159,51 @@ func TestIndexAdmissionGoDefinitionChunksBindEachFunction(t *testing.T) {
 	}
 }
 
+func TestIndexAdmissionGoDefinitionChunksSplitWithoutLoss(t *testing.T) {
+	t.Parallel()
+	source := []byte("package sample\n\nfunc Huge() {\n" + strings.Repeat("\t// bounded definition payload\n", 3000) + "}\n")
+	artifact := indexAdmissionTestArtifact(t, indexAdmissionTestSourceA, source)
+
+	var definition *IndexAdmissionDefinition
+	for index := range artifact.Definitions {
+		if artifact.Definitions[index].LocalSymbolKey == "func:Huge" {
+			definition = &artifact.Definitions[index]
+			break
+		}
+	}
+	if definition == nil {
+		t.Fatal("large Go fixture has no Huge definition")
+	}
+	chunks := make([]IndexAdmissionChunk, 0)
+	for _, chunk := range artifact.Chunks {
+		if chunk.SymbolKey != nil && *chunk.SymbolKey == definition.LocalSymbolKey {
+			chunks = append(chunks, chunk)
+		}
+	}
+	if len(chunks) < 2 {
+		t.Fatalf("large Go definition chunks = %d, want bounded split", len(chunks))
+	}
+	next := definition.Span.ByteStart
+	var rebuilt strings.Builder
+	for _, chunk := range chunks {
+		if chunk.Span.ByteStart != next || chunk.Span.ByteEnd <= chunk.Span.ByteStart || len(chunk.Text) > indexAdmissionMaxTextBytes {
+			t.Fatalf("large Go definition chunk is not contiguous and bounded: %#v", chunk)
+		}
+		next = chunk.Span.ByteEnd
+		rebuilt.WriteString(chunk.Text)
+	}
+	if next != definition.Span.ByteEnd {
+		t.Fatalf("large Go definition chunks end at %d, want %d", next, definition.Span.ByteEnd)
+	}
+	want, err := indexAdmissionTextAtSpan(source, definition.Span)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebuilt.String() != want {
+		t.Fatal("large Go definition chunks do not losslessly reconstruct the definition")
+	}
+}
+
 func TestIndexAdmissionEncodeCanonicalizesCollections(t *testing.T) {
 	t.Parallel()
 	frame := indexAdmissionTestFrame(t)
@@ -395,7 +440,7 @@ func TestIndexAdmissionCapacityErrorsAreTyped(t *testing.T) {
 		}
 	}
 
-	t.Run("body below nominal cap that cannot fit JSON", func(t *testing.T) {
+	t.Run("near-limit artifact fits the bounded encoded frame", func(t *testing.T) {
 		source := []byte("package sample\n//" + strings.Repeat("x", IndexAdmissionMaxArtifactBodyBytes-32))
 		artifact := indexAdmissionTestArtifact(t, indexAdmissionTestSourceA, source)
 		artifactID := artifact.ArtifactID
@@ -411,15 +456,13 @@ func TestIndexAdmissionCapacityErrorsAreTyped(t *testing.T) {
 				ArtifactID:  &artifactID,
 			}},
 		}
-		_, err := EncodeIndexAdmissionFrame(frame)
-		if err == nil {
-			t.Fatal("EncodeIndexAdmissionFrame() accepted a JSON-unrepresentable artifact")
+		encoded, err := EncodeIndexAdmissionFrame(frame)
+		if err != nil {
+			t.Fatalf("EncodeIndexAdmissionFrame() rejected a valid near-limit artifact: %v", err)
 		}
-		var capacity *IndexCapacityError
-		if !errors.As(err, &capacity) {
-			t.Fatalf("EncodeIndexAdmissionFrame() error = %T (%v), want *IndexCapacityError", err, err)
+		if len(encoded) > IndexAdmissionMaxEncodedFrameBytes {
+			t.Fatalf("encoded near-limit artifact bytes = %d, limit %d", len(encoded), IndexAdmissionMaxEncodedFrameBytes)
 		}
-		requireCapacity(t, err, IndexCapacityScopeAdmissionFrame, IndexCapacityResourceEncodedBytes, capacity.Required(), uint64(IndexAdmissionMaxEncodedFrameBytes))
 	})
 
 	t.Run("frame count", func(t *testing.T) {
@@ -714,8 +757,11 @@ func (frame IndexAdmissionFrame) CanonicalMust(t *testing.T) IndexAdmissionFrame
 
 func TestIndexAdmissionTreeSitterArtifactIsSourceScopedAndFactBound(t *testing.T) {
 	t.Parallel()
-	source := []byte("import { shared as localShared } from \"./shared.js\";\n" +
+	source := []byte("import \"./side-effect.js\";\n" +
+		"import { shared as localShared } from \"./shared.js\";\n" +
 		"export { shared as publicShared } from \"./shared.js\";\n" +
+		"const localOnly = localShared;\n" +
+		"export { localOnly as publicLocal };\n" +
 		"export function run() {\n" +
 		"\treturn localShared();\n" +
 		"}\n")
@@ -758,8 +804,11 @@ func TestIndexAdmissionTreeSitterArtifactIsSourceScopedAndFactBound(t *testing.T
 		relation IndexRelation
 		raw      string
 	}{
+		"import:./side-effect.js":                  {relation: IndexRelation("imports"), raw: "import \"./side-effect.js\";"},
 		"import:./shared.js#shared:localShared":    {relation: IndexRelation("imports"), raw: "shared as localShared"},
+		"reexport:./shared.js":                     {relation: IndexRelation("exports"), raw: "export { shared as publicShared } from \"./shared.js\";"},
 		"reexport:./shared.js#shared:publicShared": {relation: IndexRelation("exports"), raw: "shared as publicShared"},
+		"export:localOnly:publicLocal":             {relation: IndexRelation("exports"), raw: "localOnly as publicLocal"},
 		"call:localShared":                         {relation: IndexRelation("calls"), raw: "localShared()"},
 	}
 	if len(artifact.References) != len(wantReferences) {
@@ -821,11 +870,72 @@ func TestIndexAdmissionTreeSitterArtifactIsSourceScopedAndFactBound(t *testing.T
 	}
 }
 
+func TestIndexAdmissionTreeSitterHashesUnsafeReferenceKeys(t *testing.T) {
+	t.Parallel()
+	source := []byte("base.replace(/^https?:\\/\\//, '').replace(/\\/$/, '')")
+	span, valid := goSpanFromOffsets(goLineStarts(source), len(source), 0, len(source))
+	if !valid {
+		t.Fatal("failed to construct unsafe Tree-sitter reference span")
+	}
+	profile, err := TreeSitterIndexAdmissionArtifactProfile(TreeSitterLanguageTypeScript, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsafeLocalKey := "reference:base.replace(/^https?:\\/\\//, '').replace@0:51"
+	unsafeSymbolKey := "typescript:" + unsafeLocalKey
+	extracted := TreeSitterArtifact{
+		Proof: IndexArtifactProof{
+			ArtifactID:         "88888888-8888-4888-8888-888888888888",
+			ContentDigest:      indexAdmissionDigestBytes(source),
+			FactsDigest:        indexAdmissionDigestBytes([]byte("unsafe-tree-sitter-reference-facts")),
+			ReferenceSiteCount: 1,
+			ChunkCount:         1,
+		},
+		Coverage:     IndexCoverageComplete,
+		Language:     TreeSitterLanguageTypeScript,
+		BundleDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Text:         string(source),
+		Definitions:  []TreeSitterDefinition{},
+		References: []TreeSitterReferenceSite{{
+			Kind:       "reference",
+			SymbolKey:  unsafeSymbolKey,
+			LocalKey:   unsafeLocalKey,
+			RawTarget:  string(source),
+			Resolution: TreeSitterResolutionSyntaxOnly,
+			Span:       span,
+		}},
+		Chunks: []TreeSitterChunk{{
+			Span:          span,
+			Text:          string(source),
+			ContentDigest: indexAdmissionDigestBytes(source),
+		}},
+		Diagnostics: []TreeSitterDiagnostic{},
+	}
+
+	artifact, err := NewIndexAdmissionArtifactFromTreeSitter(indexAdmissionTestSourceA, profile, source, extracted)
+	if err != nil {
+		t.Fatalf("NewIndexAdmissionArtifactFromTreeSitter() error = %v", err)
+	}
+	if len(artifact.References) != 1 {
+		t.Fatalf("Tree-sitter reference count = %d, want 1", len(artifact.References))
+	}
+	reference := artifact.References[0]
+	if reference.RawTarget != string(source) || reference.Relation != IndexRelation("references") {
+		t.Fatalf("Tree-sitter unsafe reference lost source evidence: %#v", reference)
+	}
+	if reference.SiteKey == unsafeLocalKey || reference.SymbolKey == unsafeSymbolKey || !indexAdmissionValidKey(reference.SiteKey) || !indexAdmissionValidKey(reference.SymbolKey) {
+		t.Fatalf("Tree-sitter unsafe reference keys were not converted to safe opaque identities: %#v", reference)
+	}
+}
+
 func indexAdmissionTestTreeSitterArtifact(t *testing.T, source []byte) TreeSitterArtifact {
 	t.Helper()
 	definitionSpan := indexAdmissionTestTreeSitterSpan(t, source, "export function run() {\n\treturn localShared();\n}", 0)
+	bareImportSpan := indexAdmissionTestTreeSitterSpan(t, source, "import \"./side-effect.js\";", 0)
 	importSpan := indexAdmissionTestTreeSitterSpan(t, source, "shared as localShared", 0)
+	reexportStatementSpan := indexAdmissionTestTreeSitterSpan(t, source, "export { shared as publicShared } from \"./shared.js\";", 0)
 	reexportSpan := indexAdmissionTestTreeSitterSpan(t, source, "shared as publicShared", 0)
+	exportAliasSpan := indexAdmissionTestTreeSitterSpan(t, source, "localOnly as publicLocal", 0)
 	callSpan := indexAdmissionTestTreeSitterSpan(t, source, "localShared()", 0)
 	chunkSpan, valid := goSpanFromOffsets(goLineStarts(source), len(source), 0, len(source))
 	if !valid {
@@ -837,7 +947,7 @@ func indexAdmissionTestTreeSitterArtifact(t *testing.T, source []byte) TreeSitte
 			ContentDigest:      indexAdmissionDigestBytes(source),
 			FactsDigest:        indexAdmissionDigestBytes([]byte("tree-sitter-test-facts")),
 			DefinitionCount:    1,
-			ReferenceSiteCount: 3,
+			ReferenceSiteCount: 6,
 			ChunkCount:         1,
 		},
 		Coverage:     IndexCoverageComplete,
@@ -851,6 +961,14 @@ func indexAdmissionTestTreeSitterArtifact(t *testing.T, source []byte) TreeSitte
 			Span:      definitionSpan,
 		}},
 		References: []TreeSitterReferenceSite{
+			{
+				Kind:       "import",
+				SymbolKey:  "javascript:import:./side-effect.js",
+				LocalKey:   "import:./side-effect.js",
+				RawTarget:  "./side-effect.js",
+				Resolution: TreeSitterResolutionSyntaxOnly,
+				Span:       bareImportSpan,
+			},
 			{
 				Kind:       "import_alias",
 				SymbolKey:  "javascript:import:./shared.js#shared:localShared",
@@ -866,6 +984,22 @@ func indexAdmissionTestTreeSitterArtifact(t *testing.T, source []byte) TreeSitte
 				RawTarget:  "./shared.js#shared",
 				Resolution: TreeSitterResolutionPartial,
 				Span:       reexportSpan,
+			},
+			{
+				Kind:       "reexport",
+				SymbolKey:  "javascript:reexport:./shared.js",
+				LocalKey:   "reexport:./shared.js",
+				RawTarget:  "./shared.js",
+				Resolution: TreeSitterResolutionPartial,
+				Span:       reexportStatementSpan,
+			},
+			{
+				Kind:       "export_alias",
+				SymbolKey:  "javascript:export:localOnly:publicLocal",
+				LocalKey:   "export:localOnly:publicLocal",
+				RawTarget:  "localOnly",
+				Resolution: TreeSitterResolutionSyntaxOnly,
+				Span:       exportAliasSpan,
 			},
 			{
 				Kind:          "call",

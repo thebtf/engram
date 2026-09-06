@@ -48,8 +48,8 @@ func TestUCIGoExtractionProducesCompleteStableFacts(t *testing.T) {
 
 	uciRequireGoReference(t, first.References, "import", "go:sample/import:fmt", "import:fmt", uciGoExtractionSpan(t, source, "\"fmt\"", 0))
 	uciRequireGoReference(t, first.References, "reference", "go:sample/ref:Worker", "ref:Worker", uciGoExtractionSpan(t, source, "Worker", 1))
-	uciRequireGoReference(t, first.References, "call", "go:sample/call:fmt.Println", "call:fmt.Println", uciGoExtractionSpan(t, source, "fmt.Println(\"run\")", 0))
-	uciRequireGoReference(t, first.References, "call", "go:sample/call:local", "call:local", uciGoExtractionSpan(t, source, "local()", 1))
+	uciRequireGoReference(t, first.References, "call", "go:sample/call:fmt.Println", "call:fmt.Println", uciGoExtractionSpan(t, source, "fmt.Println", 0))
+	uciRequireGoReference(t, first.References, "call", "go:sample/call:local", "call:local", uciGoExtractionSpan(t, source, "local", 1))
 }
 
 func TestUCIGoExtractionSeparatesArtifactIdentityFromMembership(t *testing.T) {

@@ -658,7 +658,7 @@ func TestUCIPreparedIndexStopsAtCanceledTransition(t *testing.T) {
 
 func TestUCIPreparedIndexPacksGloballyValidCrossFrameGoCall(t *testing.T) {
 	fixture := newPreparedIndexFixture(t)
-	padding := strings.Repeat("x", 260_000)
+	padding := strings.Repeat("x", 900_000)
 	fixture.scanner.result.Files = []uci.ScannerFile{
 		{
 			Path:  "call.go",
@@ -1071,7 +1071,7 @@ func preparedRequireCapacityFailureBeforeBegin(t *testing.T, fixture preparedInd
 	return capacity
 }
 
-func TestUCIPreparedIndexRefusesGoArtifactWhoseSafeFrameCannotFit(t *testing.T) {
+func TestUCIPreparedIndexAcceptsGoArtifactNearSourceLimit(t *testing.T) {
 	fixture := newPreparedIndexFixture(t)
 	fixture.scanner.result.Files = []uci.ScannerFile{{
 		Path:  "large.go",
@@ -1080,10 +1080,15 @@ func TestUCIPreparedIndexRefusesGoArtifactWhoseSafeFrameCannotFit(t *testing.T) 
 	}}
 
 	result, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
-	preparedRequireCapacityFailureBeforeBegin(t, fixture, result, err, uci.IndexCapacityScopeAdmissionFrame, uci.IndexCapacityResourceEncodedBytes)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 1, result.Uploaded)
+	require.Len(t, fixture.client.beginRequests, 1)
+	require.Equal(t, 1, fixture.client.stageCalls)
+	require.Equal(t, 1, fixture.client.finalizeCalls)
 }
 
-func TestUCIPreparedIndexRefusesAggregateCapacityBeforePublishing(t *testing.T) {
+func TestUCIPreparedIndexAcceptsBoundedAggregateCorpus(t *testing.T) {
 	fixture := newPreparedIndexFixture(t)
 	padding := strings.Repeat("x", 400_000)
 	files := make([]uci.ScannerFile, 0, 32)
@@ -1097,8 +1102,17 @@ func TestUCIPreparedIndexRefusesAggregateCapacityBeforePublishing(t *testing.T) 
 	fixture.scanner.result.Files = files
 
 	result, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
-	capacity := preparedRequireCapacityFailureBeforeBegin(t, fixture, result, err, uci.IndexCapacityScopeAdmissionBuild, uci.IndexCapacityResourceEncodedBytes)
-	require.Equal(t, uint64(uci.IndexAdmissionMaxTotalEncodedBytes), capacity.Limit())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, len(files), result.Uploaded)
+	require.Len(t, fixture.client.stagePayloadSets, 1)
+	payloadBytes := 0
+	for _, frame := range fixture.client.stagePayloadSets[0] {
+		payloadBytes += len(frame)
+	}
+	require.LessOrEqual(t, payloadBytes, uci.IndexAdmissionMaxTotalEncodedBytes)
+	require.Greater(t, len(fixture.client.stagePayloadSets[0]), 1)
+	require.Equal(t, 1, fixture.client.finalizeCalls)
 }
 
 func TestUCIPreparedIndexRefusesOversizedCallCorpusBeforePublishing(t *testing.T) {
@@ -1118,13 +1132,13 @@ func TestUCIPreparedIndexRefusesOversizedCallCorpusBeforePublishing(t *testing.T
 	}
 
 	result, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
-	preparedRequireCapacityFailureBeforeBegin(t, fixture, result, err, uci.IndexCapacityScopeAdmissionFrame, uci.IndexCapacityResourceEncodedBytes)
+	preparedRequireCapacityFailureBeforeBegin(t, fixture, result, err, uci.IndexCapacityScopeEdgeReplacement, uci.IndexCapacityResourceEdges)
 }
 
 func TestUCIPreparedIndexPacksCompleteRecordsWithoutLoss(t *testing.T) {
 	fixture := newPreparedIndexFixture(t)
-	const calls = 1_400
-	caller := "package sample\nfunc Caller() {\n" + strings.Repeat("\tTarget()\n", calls) + "}\n//" + strings.Repeat("x", 250_000) + "\n"
+	const calls = 3_000
+	caller := "package sample\nfunc Caller() {\n" + strings.Repeat("\tTarget()\n", calls) + "}\n//" + strings.Repeat("x", 700_000) + "\n"
 	alias := "package sample\nfunc Alias() {}\n"
 	fixture.scanner.result.Files = []uci.ScannerFile{
 		{Path: "caller.go", State: uci.IndexFilePresent, Body: []byte(caller)},

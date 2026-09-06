@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/thebtf/engram/internal/uci"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -25,9 +26,9 @@ const (
 	maxUCITransportScopeBytes        = 2 << 10
 	maxUCITransportBindBytes         = 4 << 10
 	maxUCITransportBeginBytes        = 8 << 10
-	maxUCITransportPayloadBytes      = 1 << 20
-	maxUCITransportStageBytes        = 16 << 20
-	maxUCITransportStageFrames       = 1024
+	maxUCITransportPayloadBytes      = uci.IndexAdmissionMaxEncodedFrameBytes
+	maxUCITransportStageBytes        = uci.IndexAdmissionMaxTotalEncodedBytes
+	maxUCITransportStageFrames       = uci.IndexAdmissionMaxFrames
 	maxUCITransportCoverageBytes     = 1 << 20
 	maxUCITransportFinalizeBytes     = maxUCITransportCoverageBytes + 4<<10
 	maxUCITransportQueryBytes        = 16 << 10
