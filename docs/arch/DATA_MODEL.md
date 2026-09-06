@@ -53,9 +53,9 @@ The list below is generated. Do not edit it by hand; run `go run ./tools/gen-dat
 <!-- BEGIN GENERATED TABLES -->
 Generated from `internal/db/gorm/migrations.go`.
 
-Migration count: **143**.
+Migration count: **144**.
 
-Live table count: **61**.
+Live table count: **62**.
 
 | Table | Creating migration |
 | --- | --- |
@@ -120,4 +120,5 @@ Live table count: **61**.
 | `ci_resolved_edges` | `172_uci_index_projection` |
 | `uci_completion_evidence` | `172_uci_index_projection` |
 | `uci_exposures` | `172_uci_index_projection` |
+| `ci_index_build_parts` | `173_uci_fenced_publication` |
 <!-- END GENERATED TABLES -->
