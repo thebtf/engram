@@ -281,6 +281,18 @@ func TestUCIIndexAdmissionDefinitionNameIsLanguageAwareAndClosed(t *testing.T) {
 	require.ErrorContains(t, err, "unsupported artifact language")
 }
 
+func TestUCIIndexAdmissionFactVerificationIsCollationIndependent(t *testing.T) {
+	fixture := openUCIPublicationFixture(t)
+	frame := uciIndexAdmissionFixtureFrame(t, fixture, "collation.go", `package collation
+
+func SQLProfileAnchor() {}
+func SavedUpdateBoundary() {}
+`)
+
+	_, err := fixture.projection.AdmitIndexFrame(context.Background(), fixture.source.SourceID, fixture.profile.ProfileID, frame)
+	require.NoError(t, err)
+}
+
 func TestUCIIndexAdmissionStoresPinnedTypeScriptDefinitionAndRejectsCrossLanguageKeys(t *testing.T) {
 	t.Run("stores source-scoped installed parser definition", func(t *testing.T) {
 		fixture := openUCIPublicationFixture(t)

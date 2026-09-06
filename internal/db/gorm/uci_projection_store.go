@@ -1076,19 +1076,26 @@ func uciIndexAdmissionTreeSitterQualifiedName(value string) (string, bool) {
 
 func (s *UCIProjectionStore) verifyUCIIndexAdmissionFacts(ctx context.Context, artifact ucidomain.IndexAdmissionArtifact, bindings ucidomain.IndexAdmissionReferenceBindings) error {
 	var definitions []UCIDefinition
-	if err := s.db.WithContext(ctx).Where("artifact_id = ?", artifact.ArtifactID).Order("local_symbol_key ASC").Find(&definitions).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("artifact_id = ?", artifact.ArtifactID).Find(&definitions).Error; err != nil {
 		return fmt.Errorf("uci index admission: load definitions: %w", err)
 	}
 	if len(definitions) != len(artifact.Definitions) {
 		return fmt.Errorf("uci index admission: stored definition count differs: %w", errUCIProjectionImmutable)
 	}
-	for index, expected := range artifact.Definitions {
+	definitionsByKey := make(map[string]UCIDefinition, len(definitions))
+	for _, definition := range definitions {
+		if _, duplicate := definitionsByKey[definition.LocalSymbolKey]; duplicate {
+			return fmt.Errorf("uci index admission: stored definition key repeats: %w", errUCIProjectionImmutable)
+		}
+		definitionsByKey[definition.LocalSymbolKey] = definition
+	}
+	for _, expected := range artifact.Definitions {
 		name, err := uciIndexAdmissionDefinitionName(artifact.Profile.Language, expected)
 		if err != nil {
 			return err
 		}
-		actual := definitions[index]
-		if actual.LocalSymbolKey != expected.LocalSymbolKey || actual.Kind != expected.Kind ||
+		actual, found := definitionsByKey[expected.LocalSymbolKey]
+		if !found || actual.Kind != expected.Kind ||
 			actual.Name != name || actual.QualifiedLocalName != expected.SymbolKey || actual.Signature != "" ||
 			actual.ByteStart != expected.Span.ByteStart || actual.ByteEnd != expected.Span.ByteEnd ||
 			actual.LineStart != expected.Span.LineStart || actual.LineEnd != expected.Span.LineEnd {
@@ -1097,13 +1104,20 @@ func (s *UCIProjectionStore) verifyUCIIndexAdmissionFacts(ctx context.Context, a
 	}
 
 	var references []UCIReferenceSite
-	if err := s.db.WithContext(ctx).Where("artifact_id = ?", artifact.ArtifactID).Order("site_key ASC").Find(&references).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("artifact_id = ?", artifact.ArtifactID).Find(&references).Error; err != nil {
 		return fmt.Errorf("uci index admission: load reference sites: %w", err)
 	}
 	if len(references) != len(artifact.References) {
 		return fmt.Errorf("uci index admission: stored reference count differs: %w", errUCIProjectionImmutable)
 	}
-	for index, expected := range artifact.References {
+	referencesByKey := make(map[string]UCIReferenceSite, len(references))
+	for _, reference := range references {
+		if _, duplicate := referencesByKey[reference.SiteKey]; duplicate {
+			return fmt.Errorf("uci index admission: stored reference key repeats: %w", errUCIProjectionImmutable)
+		}
+		referencesByKey[reference.SiteKey] = reference
+	}
+	for _, expected := range artifact.References {
 		binding := ucidomain.IndexAdmissionReferenceKey{ArtifactID: artifact.ArtifactID, SiteKey: expected.SiteKey}
 		referenceSiteID, found := bindings[binding]
 		if !found {
@@ -1117,7 +1131,10 @@ func (s *UCIProjectionStore) verifyUCIIndexAdmissionFacts(ctx context.Context, a
 		if err != nil {
 			return err
 		}
-		actual := references[index]
+		actual, found := referencesByKey[expected.SiteKey]
+		if !found {
+			return fmt.Errorf("uci index admission: stored reference differs: %w", errUCIProjectionImmutable)
+		}
 		actualSyntaxSpan, err := normalizeUCIJSONObject("syntax_span", actual.SyntaxSpan)
 		if err != nil {
 			return errUCIProjectionImmutable
@@ -1126,7 +1143,7 @@ func (s *UCIProjectionStore) verifyUCIIndexAdmissionFacts(ctx context.Context, a
 		if err != nil {
 			return errUCIProjectionImmutable
 		}
-		if actual.ReferenceSiteID != referenceSiteID || actual.SiteKey != expected.SiteKey ||
+		if actual.ReferenceSiteID != referenceSiteID ||
 			!sameUCIOptionalString(actual.OwnerSymbolKey, expected.OwnerSymbolKey) ||
 			actual.RawTarget != expected.RawTarget || actual.Relation != string(expected.Relation) ||
 			actualSyntaxSpan != syntaxSpan || actualResolverHints != resolverHints {
