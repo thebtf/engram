@@ -884,7 +884,7 @@ func uciIndexAdmissionSQLQualifiedName(localKey, prefix string) (string, error) 
 }
 
 func uciIndexAdmissionOpenAPIDefinitionName(definition ucidomain.IndexAdmissionDefinition) (string, error) {
-	if definition.SymbolKey != "openapi:"+definition.LocalSymbolKey {
+	if !strings.HasPrefix(definition.SymbolKey, "openapi:") || !uciIndexAdmissionStructuredLabel(definition.SymbolKey) {
 		return "", fmt.Errorf("uci index admission: unparseable OpenAPI definition key %q", definition.LocalSymbolKey)
 	}
 	switch definition.Kind {
