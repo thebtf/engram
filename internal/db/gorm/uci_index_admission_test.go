@@ -179,8 +179,8 @@ func TestUCIIndexAdmissionRejectsArtifactPrimaryKeyCollision(t *testing.T) {
 	require.ErrorIs(t, err, errUCIProjectionImmutable)
 }
 
-func TestUCIIndexAdmissionDefinitionNameIsExactAndRejectsUnparseableKeys(t *testing.T) {
-	tests := []struct {
+func TestUCIIndexAdmissionDefinitionNameIsLanguageAwareAndClosed(t *testing.T) {
+	goTests := []struct {
 		definition ucidomain.IndexAdmissionDefinition
 		name       string
 		valid      bool
@@ -193,8 +193,8 @@ func TestUCIIndexAdmissionDefinitionNameIsExactAndRejectsUnparseableKeys(t *test
 		{definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "method:Worker.", Kind: "method"}, valid: false},
 		{definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "func:WrongKind", Kind: "method"}, valid: false},
 	}
-	for _, test := range tests {
-		name, err := uciIndexAdmissionDefinitionName(test.definition)
+	for _, test := range goTests {
+		name, err := uciIndexAdmissionDefinitionName(ucidomain.IndexAdmissionLanguageGo, test.definition)
 		if test.valid {
 			require.NoError(t, err)
 			require.Equal(t, test.name, name)
@@ -202,6 +202,107 @@ func TestUCIIndexAdmissionDefinitionNameIsExactAndRejectsUnparseableKeys(t *test
 		}
 		require.Error(t, err)
 	}
+
+	for _, language := range []ucidomain.IndexAdmissionLanguage{
+		ucidomain.IndexAdmissionLanguageJavaScript,
+		ucidomain.IndexAdmissionLanguageTypeScript,
+		ucidomain.IndexAdmissionLanguageTSX,
+	} {
+		name, err := uciIndexAdmissionDefinitionName(language, ucidomain.IndexAdmissionDefinition{
+			LocalSymbolKey: "function:InstalledParserCanary",
+			Kind:           "function",
+		})
+		require.NoError(t, err)
+		require.Equal(t, "InstalledParserCanary", name)
+	}
+
+	for _, kind := range []string{"function", "method", "class", "interface", "type", "enum", "namespace", "const", "let", "var"} {
+		name, err := uciIndexAdmissionDefinitionName(ucidomain.IndexAdmissionLanguageTypeScript, ucidomain.IndexAdmissionDefinition{
+			LocalSymbolKey: kind + ":Outer.InstalledParserCanary",
+			Kind:           kind,
+		})
+		require.NoError(t, err)
+		require.Equal(t, "InstalledParserCanary", name)
+	}
+
+	for _, definition := range []ucidomain.IndexAdmissionDefinition{
+		{LocalSymbolKey: "class:InstalledParserCanary", Kind: "function"},
+		{LocalSymbolKey: "function:", Kind: "function"},
+		{LocalSymbolKey: "function:Outer.", Kind: "function"},
+		{LocalSymbolKey: "function:Outer..InstalledParserCanary", Kind: "function"},
+		{LocalSymbolKey: "function:Outer.\x00InstalledParserCanary", Kind: "function"},
+	} {
+		_, err := uciIndexAdmissionDefinitionName(ucidomain.IndexAdmissionLanguageTypeScript, definition)
+		require.Error(t, err)
+	}
+	_, err := uciIndexAdmissionDefinitionName(ucidomain.IndexAdmissionLanguage("unsupported"), ucidomain.IndexAdmissionDefinition{
+		LocalSymbolKey: "function:InstalledParserCanary",
+		Kind:           "function",
+	})
+	require.ErrorContains(t, err, "unsupported artifact language")
+}
+
+func TestUCIIndexAdmissionStoresPinnedTypeScriptDefinitionAndRejectsCrossLanguageKeys(t *testing.T) {
+	t.Run("stores source-scoped installed parser definition", func(t *testing.T) {
+		fixture := openUCIPublicationFixture(t)
+		frame := uciIndexAdmissionTypeScriptFixtureFrame(t, fixture)
+		artifact := frame.Artifacts[0]
+
+		parts, err := fixture.projection.AdmitIndexFrame(context.Background(), fixture.source.SourceID, fixture.profile.ProfileID, frame)
+		require.NoError(t, err)
+		require.Len(t, parts.Artifacts, 1)
+		require.Equal(t, artifact.ArtifactID, parts.Artifacts[0].ArtifactID)
+
+		var storedArtifact UCIParseArtifact
+		require.NoError(t, fixture.db.Where("source_id = ? AND artifact_id = ?", fixture.source.SourceID, artifact.ArtifactID).First(&storedArtifact).Error)
+		require.Equal(t, fixture.source.SourceID, storedArtifact.SourceID)
+		require.Equal(t, string(ucidomain.IndexAdmissionLanguageTypeScript), storedArtifact.Language)
+
+		var reloaded UCIDefinition
+		require.NoError(t, fixture.db.Where("artifact_id = ? AND local_symbol_key = ?", artifact.ArtifactID, "function:InstalledParserCanary").First(&reloaded).Error)
+		require.Equal(t, "InstalledParserCanary", reloaded.Name)
+		require.Equal(t, "typescript:function:InstalledParserCanary", reloaded.QualifiedLocalName)
+
+		_, err = fixture.projection.DescribeIndexArtifact(context.Background(), fixture.foreign.SourceID, artifact.ArtifactID)
+		require.Error(t, err, "a source-scoped artifact must not be reloaded through a foreign source")
+	})
+
+	for _, test := range []struct {
+		name           string
+		localSymbolKey string
+	}{
+		{name: "kind prefix mismatch", localSymbolKey: "class:InstalledParserCanary"},
+		{name: "empty qualified name", localSymbolKey: "function:"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := openUCIPublicationFixture(t)
+			frame := uciIndexAdmissionTypeScriptFixtureFrame(t, fixture)
+			artifact := &frame.Artifacts[0]
+			artifact.Definitions[0].LocalSymbolKey = test.localSymbolKey
+			factsDigest, err := ucidomain.DigestIndexAdmissionArtifactFacts(*artifact)
+			require.NoError(t, err)
+			artifact.FactsDigest = factsDigest
+
+			_, err = fixture.projection.AdmitIndexFrame(context.Background(), fixture.source.SourceID, fixture.profile.ProfileID, frame)
+			require.Error(t, err)
+			var artifacts int64
+			require.NoError(t, fixture.db.Model(&UCIParseArtifact{}).Where("artifact_id = ?", artifact.ArtifactID).Count(&artifacts).Error)
+			require.Zero(t, artifacts)
+		})
+	}
+
+	t.Run("unsupported artifact language", func(t *testing.T) {
+		fixture := openUCIPublicationFixture(t)
+		frame := uciIndexAdmissionTypeScriptFixtureFrame(t, fixture)
+		artifact := &frame.Artifacts[0]
+		artifact.Profile.Language = ucidomain.IndexAdmissionLanguage("unsupported")
+
+		_, err := fixture.projection.AdmitIndexFrame(context.Background(), fixture.source.SourceID, fixture.profile.ProfileID, frame)
+		require.Error(t, err)
+		var artifacts int64
+		require.NoError(t, fixture.db.Model(&UCIParseArtifact{}).Where("artifact_id = ?", artifact.ArtifactID).Count(&artifacts).Error)
+		require.Zero(t, artifacts)
+	})
 }
 
 func TestUCIIndexAdmissionPackedCrossFrameSealsAndReplays(t *testing.T) {
@@ -458,6 +559,59 @@ func uciIndexAdmissionFixtureFrame(t *testing.T, fixture *uciPublicationFixture,
 		Memberships: []ucidomain.IndexAdmissionMembership{{
 			PathKey:     path,
 			DisplayPath: path,
+			Mode:        "100644",
+			State:       ucidomain.IndexAdmissionMembershipPresent,
+			ArtifactID:  &artifactID,
+		}},
+	}
+}
+
+func uciIndexAdmissionTypeScriptFixtureFrame(t *testing.T, fixture *uciPublicationFixture) ucidomain.IndexAdmissionFrame {
+	t.Helper()
+	body := []byte("export function InstalledParserCanary(): void {}\n")
+	contentDigest := ucidomain.IndexDigest(uciPublicationDigestBytes(body))
+	bundleDigest := ucidomain.IndexDigest(fixture.profile.ParserBundleDigest)
+	profile, err := ucidomain.TreeSitterIndexAdmissionArtifactProfile(ucidomain.TreeSitterLanguageTypeScript, bundleDigest)
+	require.NoError(t, err)
+	definitionSpan := ucidomain.IndexSpan{ByteStart: 0, ByteEnd: int64(len(body) - 1), LineStart: 1, LineEnd: 1}
+	chunkSpan := ucidomain.IndexSpan{ByteStart: 0, ByteEnd: int64(len(body)), LineStart: 1, LineEnd: 1}
+	extracted := ucidomain.TreeSitterArtifact{
+		Proof: ucidomain.IndexArtifactProof{
+			ArtifactID:         "88888888-8888-4888-8888-888888888888",
+			ContentDigest:      contentDigest,
+			FactsDigest:        ucidomain.IndexDigest(uciPublicationDigest("uci-admission-typescript-parser-facts")),
+			DefinitionCount:    1,
+			ReferenceSiteCount: 0,
+			ChunkCount:         1,
+		},
+		Coverage:     ucidomain.IndexCoverageComplete,
+		Language:     ucidomain.TreeSitterLanguageTypeScript,
+		BundleDigest: bundleDigest,
+		Text:         string(body),
+		Definitions: []ucidomain.TreeSitterDefinition{{
+			Kind:      "function",
+			SymbolKey: "typescript:function:InstalledParserCanary",
+			LocalKey:  "function:InstalledParserCanary",
+			Span:      definitionSpan,
+		}},
+		References: []ucidomain.TreeSitterReferenceSite{},
+		Chunks: []ucidomain.TreeSitterChunk{{
+			Span:          chunkSpan,
+			Text:          string(body),
+			ContentDigest: contentDigest,
+		}},
+		Diagnostics: []ucidomain.TreeSitterDiagnostic{},
+	}
+	artifact, err := ucidomain.NewIndexAdmissionArtifactFromTreeSitter(fixture.source.SourceID, profile, body, extracted)
+	require.NoError(t, err)
+	artifactID := artifact.ArtifactID
+	return ucidomain.IndexAdmissionFrame{
+		Version:   ucidomain.IndexAdmissionFrameVersion,
+		Profile:   ucidomain.IndexAdmissionProfile{ID: fixture.profile.ProfileID},
+		Artifacts: []ucidomain.IndexAdmissionArtifact{artifact},
+		Memberships: []ucidomain.IndexAdmissionMembership{{
+			PathKey:     "installed-parser-canary.ts",
+			DisplayPath: "installed-parser-canary.ts",
 			Mode:        "100644",
 			State:       ucidomain.IndexAdmissionMembershipPresent,
 			ArtifactID:  &artifactID,

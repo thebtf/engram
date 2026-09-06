@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
@@ -565,7 +567,7 @@ func (s *UCIProjectionStore) AdmitIndexFrames(ctx context.Context, sourceID, pro
 				return nil, fmt.Errorf("uci index admission: artifact ID does not match authorized source")
 			}
 			for _, definition := range artifact.Definitions {
-				if _, err := uciIndexAdmissionDefinitionName(definition); err != nil {
+				if _, err := uciIndexAdmissionDefinitionName(artifact.Profile.Language, definition); err != nil {
 					return nil, err
 				}
 			}
@@ -708,7 +710,7 @@ func (s *UCIProjectionStore) admitUCIIndexAdmissionArtifact(ctx context.Context,
 
 func (s *UCIProjectionStore) storeUCIIndexAdmissionFacts(ctx context.Context, sourceID string, artifact ucidomain.IndexAdmissionArtifact, bindings ucidomain.IndexAdmissionReferenceBindings) error {
 	for _, definition := range artifact.Definitions {
-		name, err := uciIndexAdmissionDefinitionName(definition)
+		name, err := uciIndexAdmissionDefinitionName(artifact.Profile.Language, definition)
 		if err != nil {
 			return err
 		}
@@ -772,7 +774,18 @@ func (s *UCIProjectionStore) storeUCIIndexAdmissionFacts(ctx context.Context, so
 	return nil
 }
 
-func uciIndexAdmissionDefinitionName(definition ucidomain.IndexAdmissionDefinition) (string, error) {
+func uciIndexAdmissionDefinitionName(language ucidomain.IndexAdmissionLanguage, definition ucidomain.IndexAdmissionDefinition) (string, error) {
+	switch language {
+	case ucidomain.IndexAdmissionLanguageGo:
+		return uciIndexAdmissionGoDefinitionName(definition)
+	case ucidomain.IndexAdmissionLanguageJavaScript, ucidomain.IndexAdmissionLanguageTypeScript, ucidomain.IndexAdmissionLanguageTSX:
+		return uciIndexAdmissionTreeSitterDefinitionName(definition)
+	default:
+		return "", fmt.Errorf("uci index admission: unsupported artifact language %q", language)
+	}
+}
+
+func uciIndexAdmissionGoDefinitionName(definition ucidomain.IndexAdmissionDefinition) (string, error) {
 	localKey := definition.LocalSymbolKey
 	var expectedKind, name string
 	switch {
@@ -811,6 +824,45 @@ func uciIndexAdmissionGoReceiver(receiver string) bool {
 	return true
 }
 
+func uciIndexAdmissionTreeSitterDefinitionName(definition ucidomain.IndexAdmissionDefinition) (string, error) {
+	switch definition.Kind {
+	case "function", "method", "class", "interface", "type", "enum", "namespace", "const", "let", "var":
+	default:
+		return "", fmt.Errorf("uci index admission: unparseable Tree-sitter definition key %q", definition.LocalSymbolKey)
+	}
+	prefix := definition.Kind + ":"
+	if !strings.HasPrefix(definition.LocalSymbolKey, prefix) {
+		return "", fmt.Errorf("uci index admission: unparseable Tree-sitter definition key %q", definition.LocalSymbolKey)
+	}
+	name, valid := uciIndexAdmissionTreeSitterQualifiedName(strings.TrimPrefix(definition.LocalSymbolKey, prefix))
+	if !valid {
+		return "", fmt.Errorf("uci index admission: unparseable Tree-sitter definition key %q", definition.LocalSymbolKey)
+	}
+	return name, nil
+}
+
+func uciIndexAdmissionTreeSitterQualifiedName(value string) (string, bool) {
+	if value == "" || !utf8.ValidString(value) || strings.TrimSpace(value) != value || strings.IndexFunc(value, unicode.IsControl) >= 0 {
+		return "", false
+	}
+	segmentStart := 0
+	for index, character := range value {
+		if character != '.' {
+			continue
+		}
+		segment := value[segmentStart:index]
+		if segment == "" || strings.TrimSpace(segment) != segment {
+			return "", false
+		}
+		segmentStart = index + 1
+	}
+	name := value[segmentStart:]
+	if name == "" || strings.TrimSpace(name) != name {
+		return "", false
+	}
+	return name, true
+}
+
 func (s *UCIProjectionStore) verifyUCIIndexAdmissionFacts(ctx context.Context, artifact ucidomain.IndexAdmissionArtifact, bindings ucidomain.IndexAdmissionReferenceBindings) error {
 	var definitions []UCIDefinition
 	if err := s.db.WithContext(ctx).Where("artifact_id = ?", artifact.ArtifactID).Order("local_symbol_key ASC").Find(&definitions).Error; err != nil {
@@ -820,7 +872,7 @@ func (s *UCIProjectionStore) verifyUCIIndexAdmissionFacts(ctx context.Context, a
 		return fmt.Errorf("uci index admission: stored definition count differs: %w", errUCIProjectionImmutable)
 	}
 	for index, expected := range artifact.Definitions {
-		name, err := uciIndexAdmissionDefinitionName(expected)
+		name, err := uciIndexAdmissionDefinitionName(artifact.Profile.Language, expected)
 		if err != nil {
 			return err
 		}
