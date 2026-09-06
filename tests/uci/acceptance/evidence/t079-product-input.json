@@ -1,0 +1,681 @@
+{
+  "schema_version": "engram.uci-product-result/v1",
+  "candidate": {
+    "commit": "22e2e41b044ee08e57d77bfb37cd25acb650a958",
+    "tree": "679f0b46c0738cf152700f04f7df661520998003",
+    "artifact_digests": [
+      {
+        "name": "engram-server",
+        "digest": "sha256:cadaaf16eb86ec7aa83004ee56b64c316b17ce4c915e7a4745ec273072e6579b"
+      },
+      {
+        "name": "engram-daemon",
+        "digest": "sha256:1763d82088a6a4a6609a115cea05686a0b889c9fa9242be1767902f04bda9b4a"
+      },
+      {
+        "name": "uci-parser",
+        "digest": "sha256:01b046a4d8c9c7780bcc045e6d312eca63e643159ebe256c41b7a2c865c03aa2"
+      }
+    ]
+  },
+  "corpus": {
+    "commit": "08139397016a48e7c9de785e37a60e92a7697831",
+    "dirty_manifest": "sha256:896f4728de0e7876e373bab3963a3472a8e1d6ead1c087936e8a51ae9931bc59"
+  },
+  "provider": {
+    "provider": "uci-product-local-http",
+    "model": "uci-product-local-model-v1",
+    "profile": "uci-product-local-semantic-v1"
+  },
+  "results": [
+    {
+      "id": "UCI-P01",
+      "question": "Где сохраняется отдельное несохранённое изменение рабочей копии без смешения с другой?",
+      "outcome": "success",
+      "execution_modes": [
+        "semantic_search",
+        "bounded_read"
+      ],
+      "tool_count": 1,
+      "read_count": 1,
+      "top_five": [
+        {
+          "rank": 1,
+          "evidence_reference": "fixture://uci-product-corpus/dirty-view-storage",
+          "context": {
+            "source_id": "7ff869af-4003-40a3-90d7-8cceb7989ce0",
+            "checkout_id": "f19ac326-0ae5-400f-b973-b959c2916bc4",
+            "view_id": "cb8959e8-ec1f-4ef7-b8ec-0bf28a593a36",
+            "generation": 2,
+            "analysis_profile_id": "b8799f84-1c8d-401a-8da8-72b30c99cef3"
+          },
+          "path": "src/dirty_view.go",
+          "span": {
+            "byte_start": 0,
+            "byte_end": 139,
+            "line_start": 1,
+            "line_end": 6
+          },
+          "digest": "f73f043fae1f2028f236245b288f9808fcc39cfe91db4d4b62bd4b318294aa96"
+        }
+      ],
+      "direct_read_used": false,
+      "semantic_provider_evidence": {
+        "provider": "uci-product-local-http",
+        "model": "uci-product-local-model-v1",
+        "profile": "uci-product-local-semantic-v1",
+        "vector_digest": "sha256:0e0b1216f8f902bf1117a2c79646a645c8325ee448334f5796cd04f12bf418cd"
+      },
+      "baseline": {
+        "task_id": "UCI-P01",
+        "question": "Где сохраняется отдельное несохранённое изменение рабочей копии без смешения с другой?",
+        "tool_count": 1,
+        "read_count": 2,
+        "correct": true
+      }
+    },
+    {
+      "id": "UCI-P02",
+      "question": "Как запрос проходит от поиска к объяснению зависимостей в текущем снимке исходников?",
+      "outcome": "success",
+      "execution_modes": [
+        "semantic_search",
+        "graph",
+        "bounded_read"
+      ],
+      "tool_count": 3,
+      "read_count": 1,
+      "top_five": [
+        {
+          "rank": 1,
+          "evidence_reference": "fixture://uci-product-corpus/search-to-explain",
+          "context": {
+            "source_id": "7ff869af-4003-40a3-90d7-8cceb7989ce0",
+            "checkout_id": "f19ac326-0ae5-400f-b973-b959c2916bc4",
+            "view_id": "cb8959e8-ec1f-4ef7-b8ec-0bf28a593a36",
+            "generation": 2,
+            "analysis_profile_id": "b8799f84-1c8d-401a-8da8-72b30c99cef3"
+          },
+          "path": "src/flows.go",
+          "span": {
+            "byte_start": 0,
+            "byte_end": 1228,
+            "line_start": 1,
+            "line_end": 18
+          },
+          "digest": "4c53fcc528fc91957fe17a0d71c4d66665d3552447084ef291a8f95ab0e39452"
+        }
+      ],
+      "relation_evidence": [
+        {
+          "evidence_reference": "fixture://uci-product-corpus/search-to-explain",
+          "citation_rank": 1,
+          "citation_context": {
+            "source_id": "7ff869af-4003-40a3-90d7-8cceb7989ce0",
+            "checkout_id": "f19ac326-0ae5-400f-b973-b959c2916bc4",
+            "view_id": "cb8959e8-ec1f-4ef7-b8ec-0bf28a593a36",
+            "generation": 2,
+            "analysis_profile_id": "b8799f84-1c8d-401a-8da8-72b30c99cef3"
+          },
+          "path": [
+            "go:corpus/func:SearchToExplain",
+            "go:corpus/func:ExplainDependencies"
+          ],
+          "digest": "sha256:71bb55cfa9b6be3f6281d19827472d1ea8f1c60cce8e0e0feb5cc24591000fc0"
+        }
+      ],
+      "direct_read_used": false,
+      "semantic_provider_evidence": {
+        "provider": "uci-product-local-http",
+        "model": "uci-product-local-model-v1",
+        "profile": "uci-product-local-semantic-v1",
+        "vector_digest": "sha256:48cfa8b56c28fda74d465978ad58e6382f53492a578c915774a270c698969b0a"
+      },
+      "baseline": {
+        "task_id": "UCI-P02",
+        "question": "Как запрос проходит от поиска к объяснению зависимостей в текущем снимке исходников?",
+        "tool_count": 1,
+        "read_count": 2,
+        "correct": true
+      }
+    },
+    {
+      "id": "UCI-P03",
+      "question": "Почему старый векторный результат не должен отвечать за файл после нового сохранения?",
+      "outcome": "success",
+      "execution_modes": [
+        "semantic_search",
+        "bounded_read"
+      ],
+      "tool_count": 1,
+      "read_count": 1,
+      "top_five": [
+        {
+          "rank": 1,
+          "evidence_reference": "fixture://uci-product-corpus/current-version-vector",
+          "context": {
+            "source_id": "7ff869af-4003-40a3-90d7-8cceb7989ce0",
+            "checkout_id": "f19ac326-0ae5-400f-b973-b959c2916bc4",
+            "view_id": "cb8959e8-ec1f-4ef7-b8ec-0bf28a593a36",
+            "generation": 2,
+            "analysis_profile_id": "b8799f84-1c8d-401a-8da8-72b30c99cef3"
+          },
+          "path": "src/vector_current.go",
+          "span": {
+            "byte_start": 0,
+            "byte_end": 150,
+            "line_start": 1,
+            "line_end": 4
+          },
+          "digest": "9ea6c340de91dc042130068b42bc636dbd82a8dcca2f2c7a6999a421e69c16fe"
+        }
+      ],
+      "direct_read_used": false,
+      "semantic_provider_evidence": {
+        "provider": "uci-product-local-http",
+        "model": "uci-product-local-model-v1",
+        "profile": "uci-product-local-semantic-v1",
+        "vector_digest": "sha256:2f90bbf83bbcf3e2460cbc0a88fc793a7dac87cbdd461920ed035a0b199c38d7"
+      },
+      "baseline": {
+        "task_id": "UCI-P03",
+        "question": "Почему старый векторный результат не должен отвечать за файл после нового сохранения?",
+        "tool_count": 1,
+        "read_count": 2,
+        "correct": true
+      }
+    },
+    {
+      "id": "UCI-P04",
+      "question": "Где английский обработчик связывает русское описание ошибки с кодом восстановления индекса?",
+      "outcome": "success",
+      "execution_modes": [
+        "semantic_search",
+        "bounded_read"
+      ],
+      "tool_count": 1,
+      "read_count": 1,
+      "top_five": [
+        {
+          "rank": 1,
+          "evidence_reference": "fixture://uci-product-corpus/ru-en-recovery",
+          "context": {
+            "source_id": "7ff869af-4003-40a3-90d7-8cceb7989ce0",
+            "checkout_id": "f19ac326-0ae5-400f-b973-b959c2916bc4",
+            "view_id": "cb8959e8-ec1f-4ef7-b8ec-0bf28a593a36",
+            "generation": 2,
+            "analysis_profile_id": "b8799f84-1c8d-401a-8da8-72b30c99cef3"
+          },
+          "path": "src/recovery.go",
+          "span": {
+            "byte_start": 0,
+            "byte_end": 181,
+            "line_start": 1,
+            "line_end": 6
+          },
+          "digest": "9b1a8f62b0a7eb110efd13102d72868850d7e385fb951e978657fc8f32e35c07"
+        }
+      ],
+      "direct_read_used": false,
+      "semantic_provider_evidence": {
+        "provider": "uci-product-local-http",
+        "model": "uci-product-local-model-v1",
+        "profile": "uci-product-local-semantic-v1",
+        "vector_digest": "sha256:3b8b2b364dda7a1b1d8635b83cb703443a68612025a53fc54a1178149cde20fd"
+      },
+      "baseline": {
+        "task_id": "UCI-P04",
+        "question": "Где английский обработчик связывает русское описание ошибки с кодом восстановления индекса?",
+        "tool_count": 1,
+        "read_count": 2,
+        "correct": true
+      }
+    },
+    {
+      "id": "UCI-P05",
+      "question": "Read the declared UCI SLO profile entry point.",
+      "outcome": "success",
+      "execution_modes": [
+        "direct_read"
+      ],
+      "tool_count": 1,
+      "read_count": 1,
+      "top_five": [
+        {
+          "rank": 1,
+          "evidence_reference": "tests/uci/acceptance/slo_runner.go:RunUCISLOProfile",
+          "context": {
+            "source_id": "7ff869af-4003-40a3-90d7-8cceb7989ce0",
+            "checkout_id": "f19ac326-0ae5-400f-b973-b959c2916bc4",
+            "view_id": "cb8959e8-ec1f-4ef7-b8ec-0bf28a593a36",
+            "generation": 2,
+            "analysis_profile_id": "b8799f84-1c8d-401a-8da8-72b30c99cef3"
+          },
+          "path": "tests/uci/acceptance/slo_runner.go",
+          "span": {
+            "byte_start": 20,
+            "byte_end": 120,
+            "line_start": 3,
+            "line_end": 3
+          },
+          "digest": "4d29bb1947cdcb9592d08e51481933d48d9d85fa5b7823a977558e0bdf558767"
+        }
+      ],
+      "direct_read_used": true,
+      "baseline": {
+        "task_id": "UCI-P05",
+        "question": "Read the declared UCI SLO profile entry point.",
+        "tool_count": 1,
+        "read_count": 2,
+        "correct": true
+      }
+    },
+    {
+      "id": "UCI-P06",
+      "question": "Read the UCI product-task acceptance specification section.",
+      "outcome": "success",
+      "execution_modes": [
+        "direct_read"
+      ],
+      "tool_count": 1,
+      "read_count": 1,
+      "top_five": [
+        {
+          "rank": 1,
+          "evidence_reference": "specs/010-unified-code-intelligence/acceptance/uci-acceptance.md:Продуктовые задачи",
+          "context": {
+            "source_id": "7ff869af-4003-40a3-90d7-8cceb7989ce0",
+            "checkout_id": "f19ac326-0ae5-400f-b973-b959c2916bc4",
+            "view_id": "cb8959e8-ec1f-4ef7-b8ec-0bf28a593a36",
+            "generation": 2,
+            "analysis_profile_id": "b8799f84-1c8d-401a-8da8-72b30c99cef3"
+          },
+          "path": "specs/010-unified-code-intelligence/acceptance/uci-acceptance.md",
+          "span": {
+            "byte_start": 18,
+            "byte_end": 152,
+            "line_start": 3,
+            "line_end": 6
+          },
+          "digest": "7bb3bf979a63a0c0f3dc3ae47f1c76bbf76779651cb2b0841d79cd8710d1d6b4"
+        }
+      ],
+      "direct_read_used": true,
+      "baseline": {
+        "task_id": "UCI-P06",
+        "question": "Read the UCI product-task acceptance specification section.",
+        "tool_count": 1,
+        "read_count": 2,
+        "correct": true
+      }
+    },
+    {
+      "id": "UCI-P07",
+      "question": "What source changes can reach the published current view after a saved update?",
+      "outcome": "success",
+      "execution_modes": [
+        "graph",
+        "bounded_read"
+      ],
+      "tool_count": 3,
+      "read_count": 1,
+      "top_five": [
+        {
+          "rank": 1,
+          "evidence_reference": "fixture://uci-product-corpus/save-to-published-view",
+          "context": {
+            "source_id": "7ff869af-4003-40a3-90d7-8cceb7989ce0",
+            "checkout_id": "f19ac326-0ae5-400f-b973-b959c2916bc4",
+            "view_id": "cb8959e8-ec1f-4ef7-b8ec-0bf28a593a36",
+            "generation": 2,
+            "analysis_profile_id": "b8799f84-1c8d-401a-8da8-72b30c99cef3"
+          },
+          "path": "src/flows.go",
+          "span": {
+            "byte_start": 303,
+            "byte_end": 363,
+            "line_start": 6,
+            "line_end": 6
+          },
+          "digest": "4c53fcc528fc91957fe17a0d71c4d66665d3552447084ef291a8f95ab0e39452"
+        }
+      ],
+      "relation_evidence": [
+        {
+          "evidence_reference": "fixture://uci-product-corpus/save-to-published-view",
+          "citation_rank": 1,
+          "citation_context": {
+            "source_id": "7ff869af-4003-40a3-90d7-8cceb7989ce0",
+            "checkout_id": "f19ac326-0ae5-400f-b973-b959c2916bc4",
+            "view_id": "cb8959e8-ec1f-4ef7-b8ec-0bf28a593a36",
+            "generation": 2,
+            "analysis_profile_id": "b8799f84-1c8d-401a-8da8-72b30c99cef3"
+          },
+          "path": [
+            "go:corpus/func:SaveToPublish",
+            "go:corpus/func:SavedUpdateBoundary",
+            "go:corpus/func:PublishCurrentView"
+          ],
+          "digest": "sha256:231900601d7a2d5c5dfcc3b6e4486a5028d5e8046c1ca58ac17e7780e16f3ccf"
+        }
+      ],
+      "direct_read_used": false,
+      "baseline": {
+        "task_id": "UCI-P07",
+        "question": "What source changes can reach the published current view after a saved update?",
+        "tool_count": 1,
+        "read_count": 2,
+        "correct": true
+      }
+    },
+    {
+      "id": "UCI-P08",
+      "question": "Which callers are affected when a scoped authorization decision changes?",
+      "outcome": "success",
+      "execution_modes": [
+        "graph",
+        "bounded_read"
+      ],
+      "tool_count": 3,
+      "read_count": 1,
+      "top_five": [
+        {
+          "rank": 1,
+          "evidence_reference": "fixture://uci-product-corpus/authorization-impact",
+          "context": {
+            "source_id": "7ff869af-4003-40a3-90d7-8cceb7989ce0",
+            "checkout_id": "f19ac326-0ae5-400f-b973-b959c2916bc4",
+            "view_id": "cb8959e8-ec1f-4ef7-b8ec-0bf28a593a36",
+            "generation": 2,
+            "analysis_profile_id": "b8799f84-1c8d-401a-8da8-72b30c99cef3"
+          },
+          "path": "src/flows.go",
+          "span": {
+            "byte_start": 548,
+            "byte_end": 620,
+            "line_start": 9,
+            "line_end": 9
+          },
+          "digest": "4c53fcc528fc91957fe17a0d71c4d66665d3552447084ef291a8f95ab0e39452"
+        }
+      ],
+      "relation_evidence": [
+        {
+          "evidence_reference": "fixture://uci-product-corpus/authorization-impact",
+          "citation_rank": 1,
+          "citation_context": {
+            "source_id": "7ff869af-4003-40a3-90d7-8cceb7989ce0",
+            "checkout_id": "f19ac326-0ae5-400f-b973-b959c2916bc4",
+            "view_id": "cb8959e8-ec1f-4ef7-b8ec-0bf28a593a36",
+            "generation": 2,
+            "analysis_profile_id": "b8799f84-1c8d-401a-8da8-72b30c99cef3"
+          },
+          "path": [
+            "go:corpus/func:AuthorizeToImpact",
+            "go:corpus/func:ScopedAuthorizationDecision",
+            "go:corpus/func:AffectedCallers"
+          ],
+          "digest": "sha256:83fda3c61fdea917206714664b0dd1cbf41bdd5a9eb61626209b6c0c69883c6c"
+        }
+      ],
+      "direct_read_used": false,
+      "baseline": {
+        "task_id": "UCI-P08",
+        "question": "Which callers are affected when a scoped authorization decision changes?",
+        "tool_count": 1,
+        "read_count": 2,
+        "correct": true
+      }
+    },
+    {
+      "id": "UCI-P09",
+      "question": "Where does the documented source/view contract map to its API schema?",
+      "outcome": "success",
+      "execution_modes": [
+        "graph",
+        "bounded_read"
+      ],
+      "tool_count": 4,
+      "read_count": 1,
+      "top_five": [
+        {
+          "rank": 1,
+          "evidence_reference": "fixture://uci-product-corpus/doc-to-source-view-schema",
+          "context": {
+            "source_id": "7ff869af-4003-40a3-90d7-8cceb7989ce0",
+            "checkout_id": "f19ac326-0ae5-400f-b973-b959c2916bc4",
+            "view_id": "cb8959e8-ec1f-4ef7-b8ec-0bf28a593a36",
+            "generation": 2,
+            "analysis_profile_id": "b8799f84-1c8d-401a-8da8-72b30c99cef3"
+          },
+          "path": "src/flows.go",
+          "span": {
+            "byte_start": 791,
+            "byte_end": 848,
+            "line_start": 12,
+            "line_end": 12
+          },
+          "digest": "4c53fcc528fc91957fe17a0d71c4d66665d3552447084ef291a8f95ab0e39452"
+        }
+      ],
+      "relation_evidence": [
+        {
+          "evidence_reference": "fixture://uci-product-corpus/doc-to-source-view-schema",
+          "citation_rank": 1,
+          "citation_context": {
+            "source_id": "7ff869af-4003-40a3-90d7-8cceb7989ce0",
+            "checkout_id": "f19ac326-0ae5-400f-b973-b959c2916bc4",
+            "view_id": "cb8959e8-ec1f-4ef7-b8ec-0bf28a593a36",
+            "generation": 2,
+            "analysis_profile_id": "b8799f84-1c8d-401a-8da8-72b30c99cef3"
+          },
+          "path": [
+            "go:corpus/func:CodeToDocs",
+            "markdown:heading:source-view-contract"
+          ],
+          "digest": "sha256:49f18289349660001a88f5f274bfb67c46b4c12aaf253092a0b5389343f66be2"
+        }
+      ],
+      "direct_read_used": false,
+      "baseline": {
+        "task_id": "UCI-P09",
+        "question": "Where does the documented source/view contract map to its API schema?",
+        "tool_count": 1,
+        "read_count": 2,
+        "correct": true
+      }
+    },
+    {
+      "id": "UCI-P10",
+      "question": "Which implementation and schema enforce the recorded embedding profile boundary?",
+      "outcome": "success",
+      "execution_modes": [
+        "graph",
+        "bounded_read"
+      ],
+      "tool_count": 2,
+      "read_count": 1,
+      "top_five": [
+        {
+          "rank": 1,
+          "evidence_reference": "fixture://uci-product-corpus/profile-code-schema",
+          "context": {
+            "source_id": "7ff869af-4003-40a3-90d7-8cceb7989ce0",
+            "checkout_id": "f19ac326-0ae5-400f-b973-b959c2916bc4",
+            "view_id": "cb8959e8-ec1f-4ef7-b8ec-0bf28a593a36",
+            "generation": 2,
+            "analysis_profile_id": "b8799f84-1c8d-401a-8da8-72b30c99cef3"
+          },
+          "path": "src/flows.go",
+          "span": {
+            "byte_start": 1081,
+            "byte_end": 1134,
+            "line_start": 16,
+            "line_end": 16
+          },
+          "digest": "4c53fcc528fc91957fe17a0d71c4d66665d3552447084ef291a8f95ab0e39452"
+        }
+      ],
+      "relation_evidence": [
+        {
+          "evidence_reference": "fixture://uci-product-corpus/profile-code-schema",
+          "citation_rank": 1,
+          "citation_context": {
+            "source_id": "7ff869af-4003-40a3-90d7-8cceb7989ce0",
+            "checkout_id": "f19ac326-0ae5-400f-b973-b959c2916bc4",
+            "view_id": "cb8959e8-ec1f-4ef7-b8ec-0bf28a593a36",
+            "generation": 2,
+            "analysis_profile_id": "b8799f84-1c8d-401a-8da8-72b30c99cef3"
+          },
+          "path": [
+            "go:corpus/func:CodeToSQL",
+            "sql:column:embedding_profiles.model"
+          ],
+          "digest": "sha256:2de5c02af19d47dcb2a5ea9dfc3410dfba1797cdd461b71a5cb06a727127eba3"
+        }
+      ],
+      "direct_read_used": false,
+      "baseline": {
+        "task_id": "UCI-P10",
+        "question": "Which implementation and schema enforce the recorded embedding profile boundary?",
+        "tool_count": 1,
+        "read_count": 2,
+        "correct": true
+      }
+    },
+    {
+      "id": "UCI-P11",
+      "question": "How do two worktrees with the same path retain different saved dirty bodies?",
+      "outcome": "success",
+      "execution_modes": [
+        "bounded_read"
+      ],
+      "tool_count": 2,
+      "read_count": 2,
+      "top_five": [
+        {
+          "rank": 1,
+          "evidence_reference": "fixture://uci-product-corpus/two-worktree-dirty-comparison",
+          "context": {
+            "source_id": "7ff869af-4003-40a3-90d7-8cceb7989ce0",
+            "checkout_id": "f19ac326-0ae5-400f-b973-b959c2916bc4",
+            "view_id": "cb8959e8-ec1f-4ef7-b8ec-0bf28a593a36",
+            "generation": 2,
+            "analysis_profile_id": "b8799f84-1c8d-401a-8da8-72b30c99cef3"
+          },
+          "path": "src/worktree_dirty.go",
+          "span": {
+            "byte_start": 0,
+            "byte_end": 111,
+            "line_start": 1,
+            "line_end": 4
+          },
+          "digest": "693c945a2441be8d931154145bc627fc3bb3393b44a0f5ef29808e8840c30977"
+        },
+        {
+          "rank": 2,
+          "evidence_reference": "fixture://uci-product-corpus/two-worktree-dirty-comparison",
+          "context": {
+            "source_id": "7ff869af-4003-40a3-90d7-8cceb7989ce0",
+            "checkout_id": "2e98fff5-c7ab-4da2-852e-14bd753b6691",
+            "view_id": "2541170b-5ed8-441c-8e48-63f435b64ac8",
+            "generation": 1,
+            "analysis_profile_id": "b8799f84-1c8d-401a-8da8-72b30c99cef3"
+          },
+          "path": "src/worktree_dirty.go",
+          "span": {
+            "byte_start": 0,
+            "byte_end": 111,
+            "line_start": 1,
+            "line_end": 4
+          },
+          "digest": "63f094bcfcafe2bb9258344fd4c023766b8433af2c6077a79092dcda780a91a9"
+        }
+      ],
+      "relation_evidence": [
+        {
+          "evidence_reference": "fixture://uci-product-corpus/two-worktree-dirty-comparison",
+          "citation_rank": 1,
+          "citation_context": {
+            "source_id": "7ff869af-4003-40a3-90d7-8cceb7989ce0",
+            "checkout_id": "f19ac326-0ae5-400f-b973-b959c2916bc4",
+            "view_id": "cb8959e8-ec1f-4ef7-b8ec-0bf28a593a36",
+            "generation": 2,
+            "analysis_profile_id": "b8799f84-1c8d-401a-8da8-72b30c99cef3"
+          },
+          "path": [
+            "view:cb8959e8-ec1f-4ef7-b8ec-0bf28a593a36",
+            "view:2541170b-5ed8-441c-8e48-63f435b64ac8"
+          ],
+          "digest": "sha256:c554e3416f52f0e4dbb5aa20f9d4d4a74ce6c2741c589ae62addd416efd53fcf"
+        }
+      ],
+      "direct_read_used": false,
+      "baseline": {
+        "task_id": "UCI-P11",
+        "question": "How do two worktrees with the same path retain different saved dirty bodies?",
+        "tool_count": 1,
+        "read_count": 3,
+        "correct": true
+      }
+    },
+    {
+      "id": "UCI-P12",
+      "question": "After a saved increment and restart, which view is current and which recovery state is visible?",
+      "outcome": "success",
+      "execution_modes": [
+        "graph",
+        "bounded_read"
+      ],
+      "tool_count": 4,
+      "read_count": 1,
+      "top_five": [
+        {
+          "rank": 1,
+          "evidence_reference": "fixture://uci-product-corpus/increment-restart-current-view",
+          "context": {
+            "source_id": "7ff869af-4003-40a3-90d7-8cceb7989ce0",
+            "checkout_id": "f19ac326-0ae5-400f-b973-b959c2916bc4",
+            "view_id": "cb8959e8-ec1f-4ef7-b8ec-0bf28a593a36",
+            "generation": 2,
+            "analysis_profile_id": "b8799f84-1c8d-401a-8da8-72b30c99cef3"
+          },
+          "path": "src/restart.go",
+          "span": {
+            "byte_start": 16,
+            "byte_end": 83,
+            "line_start": 3,
+            "line_end": 3
+          },
+          "digest": "4f31afe095e9249b2857945468366b78ad607f26566fc657348d2697bb3f4b6e"
+        }
+      ],
+      "relation_evidence": [
+        {
+          "evidence_reference": "fixture://uci-product-corpus/increment-restart-current-view",
+          "citation_rank": 1,
+          "citation_context": {
+            "source_id": "7ff869af-4003-40a3-90d7-8cceb7989ce0",
+            "checkout_id": "f19ac326-0ae5-400f-b973-b959c2916bc4",
+            "view_id": "cb8959e8-ec1f-4ef7-b8ec-0bf28a593a36",
+            "generation": 2,
+            "analysis_profile_id": "b8799f84-1c8d-401a-8da8-72b30c99cef3"
+          },
+          "path": [
+            "go:corpus/func:RestartRecoveryFlow",
+            "go:corpus/func:CurrentRecoveredView"
+          ],
+          "digest": "sha256:3ddf9a49129fb2c07befddf36f9a1f6aec67905df680341a94e50f7fe42400ee"
+        }
+      ],
+      "direct_read_used": false,
+      "baseline": {
+        "task_id": "UCI-P12",
+        "question": "After a saved increment and restart, which view is current and which recovery state is visible?",
+        "tool_count": 1,
+        "read_count": 2,
+        "correct": true
+      }
+    }
+  ]
+}
