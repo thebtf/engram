@@ -163,6 +163,9 @@ func (d *Dispatcher) HandleRequest(ctx context.Context, p muxcore.ProjectContext
 	case "tools/list":
 		return d.handleToolsList(ctx, p, &req)
 	case "tools/call":
+		if correlation, ok := auditcontext.NewUCIRequestCorrelation(req.ID); ok {
+			ctx = auditcontext.WithUCIRequestCorrelation(ctx, correlation)
+		}
 		return d.handleToolsCall(ctx, p, &req)
 	default:
 		return marshalError(req.ID, -32601, fmt.Sprintf("method not found: %s", req.Method)), nil

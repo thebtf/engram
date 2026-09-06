@@ -23,6 +23,7 @@ import (
 	"github.com/soheilhy/cmux"
 	httpSwagger "github.com/swaggo/http-swagger"
 
+	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/auth"
 	booksdomain "github.com/thebtf/engram/internal/books"
 	"github.com/thebtf/engram/internal/bulkops"
@@ -1544,6 +1545,18 @@ type mcpHandlerAdapter struct {
 
 // HandleToolCall implements grpcserver.MCPHandler.
 func (a *mcpHandlerAdapter) HandleToolCall(ctx context.Context, toolName string, argsJSON []byte) ([]byte, bool, error) {
+	requestID := any(float64(1))
+	correlationRequired := auditcontext.UCIRequestCorrelationRequired(ctx)
+	if correlation, found := auditcontext.UCIRequestCorrelationFromContext(ctx); found {
+		if jsonID, valid := correlation.JSONRPCID(); valid {
+			requestID = jsonID
+		} else if correlationRequired {
+			return nil, false, errors.New("UCI request correlation is required")
+		}
+	} else if correlationRequired {
+		return nil, false, errors.New("UCI request correlation is required")
+	}
+
 	params := map[string]any{
 		"name":      toolName,
 		"arguments": json.RawMessage(argsJSON),
@@ -1555,7 +1568,7 @@ func (a *mcpHandlerAdapter) HandleToolCall(ctx context.Context, toolName string,
 
 	req := &mcp.Request{
 		JSONRPC: "2.0",
-		ID:      float64(1),
+		ID:      requestID,
 		Method:  "tools/call",
 		Params:  json.RawMessage(paramsJSON),
 	}

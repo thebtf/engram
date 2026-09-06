@@ -17,6 +17,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/google/uuid"
+	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/auth"
 	engramgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/hostadvisor"
@@ -292,6 +293,22 @@ func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.Cal
 	if err := rejectHAPCredentialWithoutProject(ctx); err != nil {
 		return nil, err
 	}
+	requiresCorrelation := requiresUCIRequestCorrelation(req)
+	var metadataValues []string
+	if incoming, found := metadata.FromIncomingContext(ctx); found {
+		metadataValues = incoming.Get(auditcontext.UCIRequestCorrelationMetadataKey)
+	}
+	var correlation auditcontext.UCIRequestCorrelation
+	correlationValid := false
+	if len(metadataValues) == 1 {
+		correlation, correlationValid = auditcontext.ParseUCIRequestCorrelation(metadataValues[0])
+	}
+	if requiresCorrelation && !correlationValid {
+		if len(metadataValues) == 0 {
+			return nil, status.Error(codes.FailedPrecondition, "UCI request correlation is required")
+		}
+		return nil, status.Error(codes.InvalidArgument, "invalid UCI request correlation")
+	}
 	canonicalProject := ""
 	var resolutionV3 *pb.ProjectResolutionResultV3
 	if identity := req.GetProjectIdentityV3(); identity != nil {
@@ -321,6 +338,12 @@ func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.Cal
 	if req.SessionId != "" {
 		ctx = mcp.ContextWithSession(ctx, req.SessionId)
 	}
+	if correlationValid {
+		ctx = auditcontext.WithUCIRequestCorrelation(ctx, correlation)
+	}
+	if requiresCorrelation {
+		ctx = auditcontext.WithUCIRequestCorrelationRequired(ctx)
+	}
 
 	argumentsJSON, err := canonicalizeProjectArgument(req.ToolName, req.ArgumentsJson, canonicalProject, req.GetProjectIdentityV3() == nil)
 	if err != nil {
@@ -338,6 +361,18 @@ func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.Cal
 		CanonicalProject:    canonicalProject,
 		ProjectResolutionV3: resolutionV3,
 	}, nil
+}
+
+func requiresUCIRequestCorrelation(req *pb.CallToolRequest) bool {
+	if req == nil || req.GetProject() != "" || req.GetProjectIdentity() != nil || req.GetProjectIdentityV3() != nil {
+		return false
+	}
+	switch req.GetToolName() {
+	case "codebase_search", "codebase_graph", "codebase_read":
+		return true
+	default:
+		return false
+	}
 }
 
 func v3CallToolIntent(toolName string, args []byte) (projectidentity.ResolutionIntentV3, bool) {
