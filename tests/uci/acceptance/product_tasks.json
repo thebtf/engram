@@ -1,15 +1,15 @@
 {
   "schema_version": "engram.uci-product-tasks/v1",
   "corpus_manifest": {
-    "status": "unresolved",
-    "commit": "",
-    "dirty_manifest": ""
+    "status": "resolved",
+    "commit": "08139397016a48e7c9de785e37a60e92a7697831",
+    "dirty_manifest": "sha256:896f4728de0e7876e373bab3963a3472a8e1d6ead1c087936e8a51ae9931bc59"
   },
   "provider_profile": {
-    "status": "unresolved",
-    "provider": "",
-    "model": "",
-    "profile": ""
+    "status": "resolved",
+    "provider": "uci-product-local-http",
+    "model": "uci-product-local-model-v1",
+    "profile": "uci-product-local-semantic-v1"
   },
   "tasks": [
     {
