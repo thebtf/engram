@@ -254,6 +254,45 @@ func (a *UCIIndexAdapter) ResolveIndexTarget(ctx context.Context, project muxcor
 	}, nil
 }
 
+// RebindIndexTarget refreshes the server binding for a previously resolved
+// target through its retained authenticated connection. It never reloads a
+// project, path, environment, or raw selector: the original client session and
+// opaque handle remain the entire server authority input. A newer View is
+// allowed, but the checkout identity and workstation must remain unchanged.
+func (a *UCIIndexAdapter) RebindIndexTarget(ctx context.Context, target ResolvedIndexTarget) (ResolvedIndexTarget, error) {
+	if err := uciClientContextError("RebindIndexTarget", ctx); err != nil {
+		return ResolvedIndexTarget{}, err
+	}
+	clientSessionID, err := requireUCITransportSession(ctx)
+	if err != nil {
+		return ResolvedIndexTarget{}, err
+	}
+	if a == nil || a.module == nil || !validResolvedIndexTarget(target) || target.ClientSessionID != clientSessionID {
+		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("resolved target is unavailable")
+	}
+	conn, err := a.connectionForResolvedIndexTarget(target)
+	if err != nil {
+		return ResolvedIndexTarget{}, err
+	}
+	bound, err := newUCIClient(pb.NewEngramServiceClient(conn)).Bind(ctx, &pb.BindCodeContextRequest{
+		ClientSessionId: target.ClientSessionID,
+		ContextHandle:   target.ContextHandle,
+	})
+	if err != nil {
+		return ResolvedIndexTarget{}, err
+	}
+	binding, err := uciClientIndexBindingFromBindResponse(bound)
+	if err != nil {
+		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("UCI binding is invalid")
+	}
+	if !sameUCIResolvedIndexIdentity(target.BindingClone(), binding) {
+		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("UCI binding changed during rebind")
+	}
+	rebound := target.Clone()
+	rebound.Binding = binding.Clone()
+	return rebound, nil
+}
+
 // IndexCodebase executes only prepared UCI index work. Without the injected
 // collaborator it fails closed rather than scanning raw project bytes or
 // publishing an invented empty census.
@@ -336,6 +375,15 @@ func (a *UCIIndexAdapter) connectionForResolvedIndexTarget(target ResolvedIndexT
 		return nil, uciIndexSourceUnavailable("resolved target is unavailable")
 	}
 	return target.connection, nil
+}
+
+func sameUCIResolvedIndexIdentity(previous, current uci.IndexBinding) bool {
+	return previous.Scope.SourceID == current.Scope.SourceID &&
+		previous.Scope.CheckoutID == current.Scope.CheckoutID &&
+		previous.Scope.IncarnationID == current.Scope.IncarnationID &&
+		previous.ProfileID == current.ProfileID &&
+		previous.LocalRootID == current.LocalRootID &&
+		previous.WorkstationID == current.WorkstationID
 }
 
 func validResolvedIndexTarget(target ResolvedIndexTarget) bool {
@@ -635,13 +683,21 @@ func requireUCITransportSession(ctx context.Context) (string, error) {
 }
 
 func uciClientOutgoingContext(ctx context.Context) context.Context {
-	sessionID := auditcontext.UCITransportSession(ctx)
-	if !auditcontext.ValidUCITransportSession(sessionID) {
-		return ctx
-	}
 	outgoing, _ := metadata.FromOutgoingContext(ctx)
 	outgoing = outgoing.Copy()
-	outgoing.Set(auditcontext.SourceSessionMetadataKey, sessionID)
+	if outgoing == nil {
+		outgoing = metadata.MD{}
+	}
+	delete(outgoing, auditcontext.SourceSessionMetadataKey)
+	delete(outgoing, auditcontext.UCIRequestCorrelationMetadataKey)
+	if sessionID := auditcontext.UCITransportSession(ctx); auditcontext.ValidUCITransportSession(sessionID) {
+		outgoing.Set(auditcontext.SourceSessionMetadataKey, sessionID)
+	}
+	if correlation, found := auditcontext.UCIRequestCorrelationFromContext(ctx); found {
+		if value := correlation.MetadataValue(); value != "" {
+			outgoing.Set(auditcontext.UCIRequestCorrelationMetadataKey, value)
+		}
+	}
 	return metadata.NewOutgoingContext(ctx, outgoing)
 }
 

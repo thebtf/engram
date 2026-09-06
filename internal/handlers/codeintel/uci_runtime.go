@@ -30,12 +30,19 @@ const (
 	// whose value must match the server-selected analysis profile's parser
 	// bundle. It is deliberately not inferred from source, a project, or a path.
 	EnvUCIParserBundleDigest = "ENGRAM_UCI_PARSER_BUNDLE_DIGEST"
+	// EnvUCIParserExecutable names the installed parser artifact paired with the
+	// running daemon. It is an absolute installed-artifact path, never a project
+	// selector or a PATH lookup.
+	EnvUCIParserExecutable = "ENGRAM_UCI_PARSER_EXECUTABLE"
 
 	uciRuntimeRegistryFile         = "uci-registry.sqlite"
 	uciRuntimeGitLineLimit         = 4096
 	uciRuntimeWatcherDebounceDelay = 250 * time.Millisecond
 	uciRuntimeWatcherMaxBatchDelay = 2 * time.Second
 	uciRuntimeWatcherQueueCapacity = 64
+	uciRuntimeParserMaxInputBytes  = 4 << 20
+	uciRuntimeParserMaxOutputBytes = 16 << 20
+	uciRuntimeParserTimeout        = 10 * time.Second
 	uciRuntimeGoProfileKey         = "go-structure-v1"
 	uciRuntimeGoParserKey          = "go-parser-v1"
 	uciRuntimeGitFingerprintDomain = "engram.uci.local-git-directory/v1"
@@ -48,7 +55,10 @@ const (
 type UCIRuntimeConfig struct {
 	ClientInstanceID   string
 	ParserBundleDigest uci.IndexDigest
-	GoProfile          uci.GoExtractionProfile
+	// ParserExecutable is the canonical installed parser sibling selected at
+	// daemon startup. An empty value leaves parser-required source unavailable.
+	ParserExecutable string
+	GoProfile        uci.GoExtractionProfile
 }
 
 // RuntimeConfigFromEnvironment snapshots the existing daemon runtime inputs at
@@ -58,6 +68,7 @@ func RuntimeConfigFromEnvironment() UCIRuntimeConfig {
 	return UCIRuntimeConfig{
 		ClientInstanceID:   os.Getenv(config.EnvClientInstanceID),
 		ParserBundleDigest: uci.IndexDigest(os.Getenv(EnvUCIParserBundleDigest)),
+		ParserExecutable:   os.Getenv(EnvUCIParserExecutable),
 		GoProfile: uci.GoExtractionProfile{
 			ProfileKey: uciRuntimeGoProfileKey,
 			ParserKey:  uciRuntimeGoParserKey,
@@ -69,16 +80,24 @@ type uciRuntime struct {
 	core   *engramcore.Module
 	config UCIRuntimeConfig
 
-	stateMu       sync.RWMutex
-	started       bool
-	closed        bool
-	workstationID string
-	daemonCtx     context.Context
-	db            *sql.DB
-	registry      *UCILocalRegistry
+	stateMu          sync.RWMutex
+	started          bool
+	closed           bool
+	workstationID    string
+	daemonCtx        context.Context
+	db               *sql.DB
+	registry         *UCILocalRegistry
+	treeSitterParser UCIPreparedTreeSitterParser
+	authorizedTarget map[string]uciRuntimeAuthorizedTarget
 
 	watcherMu sync.Mutex
 	watchers  map[string]uciRuntimeWatcher
+}
+
+type uciRuntimeAuthorizedTarget struct {
+	target        engramcore.ResolvedIndexTarget
+	rootPath      string
+	incarnationID string
 }
 
 type uciRuntimeWatcher struct {
@@ -88,27 +107,163 @@ type uciRuntimeWatcher struct {
 	watcher       *UCIWatcher
 }
 
+// uciRuntimeWatcherChangeSource is the narrow handoff from the runtime's
+// retained server-authorized target to codeintel's execution scheduler. It
+// contains no project selector, raw root, or server configuration.
+type uciRuntimeWatcherChangeSource struct {
+	checkoutID    string
+	incarnationID string
+	rootPath      string
+	changes       <-chan struct{}
+}
+
+type uciRuntimeIndexSnapshot struct {
+	target   engramcore.ResolvedIndexTarget
+	rootPath string
+}
+
 // uciRuntimeWatcherSource adapts fsnotify's field-based API to the existing
-// watcher boundary without widening that boundary or introducing a second
-// watcher implementation.
+// watcher boundary. It registers every admitted directory recursively and
+// deliberately never follows symlinks or Windows reparse points.
 type uciRuntimeWatcherSource struct {
-	watcher *fsnotify.Watcher
+	watcher       *fsnotify.Watcher
+	rootPath      string
+	privateGitDir string
+
+	mu      sync.Mutex
+	watched map[string]struct{}
 }
 
-func (source uciRuntimeWatcherSource) Add(path string) error {
-	return source.watcher.Add(path)
+func newUCIRuntimeWatcherSource(watcher *fsnotify.Watcher, rootPath, privateGitDir string) *uciRuntimeWatcherSource {
+	return &uciRuntimeWatcherSource{
+		watcher:       watcher,
+		rootPath:      rootPath,
+		privateGitDir: privateGitDir,
+		watched:       make(map[string]struct{}),
+	}
 }
 
-func (source uciRuntimeWatcherSource) Events() <-chan fsnotify.Event {
+func (source *uciRuntimeWatcherSource) Add(path string) error {
+	if source == nil || source.watcher == nil {
+		return errors.New("uci runtime watcher source: unavailable")
+	}
+	path, admitted := source.admittedPath(path)
+	if !admitted {
+		return nil
+	}
+	return source.addDirectoryTree(path)
+}
+
+func (source *uciRuntimeWatcherSource) Events() <-chan fsnotify.Event {
 	return source.watcher.Events
 }
 
-func (source uciRuntimeWatcherSource) Errors() <-chan error {
+func (source *uciRuntimeWatcherSource) Errors() <-chan error {
 	return source.watcher.Errors
 }
 
-func (source uciRuntimeWatcherSource) Close() error {
+func (source *uciRuntimeWatcherSource) Close() error {
 	return source.watcher.Close()
+}
+
+func (source *uciRuntimeWatcherSource) AcceptsEvent(event fsnotify.Event) bool {
+	_, admitted := source.admittedPath(event.Name)
+	return admitted
+}
+
+func (source *uciRuntimeWatcherSource) addDirectoryTree(rootPath string) error {
+	pending := []string{rootPath}
+	for len(pending) != 0 {
+		current := pending[0]
+		pending = pending[1:]
+		current, admitted := source.admittedPath(current)
+		if !admitted {
+			continue
+		}
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("uci runtime watcher source: inspect %q: %w", current, err)
+		}
+		if !info.IsDir() || uciRuntimeWatcherIsReparse(info) {
+			continue
+		}
+		physical, err := uciRuntimeCanonicalPath(current)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("uci runtime watcher source: resolve %q: %w", current, err)
+		}
+		physical, admitted = source.admittedPath(physical)
+		if !admitted {
+			continue
+		}
+		if err := source.addDirectory(physical); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(physical)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("uci runtime watcher source: list %q: %w", physical, err)
+		}
+		for _, entry := range entries {
+			pending = append(pending, filepath.Join(physical, entry.Name()))
+		}
+	}
+	return nil
+}
+
+func (source *uciRuntimeWatcherSource) addDirectory(path string) error {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	if _, found := source.watched[path]; found {
+		return nil
+	}
+	if err := source.watcher.Add(path); err != nil {
+		return fmt.Errorf("uci runtime watcher source: add %q: %w", path, err)
+	}
+	source.watched[path] = struct{}{}
+	return nil
+}
+
+func (source *uciRuntimeWatcherSource) admittedPath(path string) (string, bool) {
+	if path == "" || !utf8.ValidString(path) || strings.IndexByte(path, 0) >= 0 || !filepath.IsAbs(path) {
+		return "", false
+	}
+	path = filepath.Clean(path)
+	if uciRuntimePathContains(filepath.Join(source.rootPath, ".agent", "worktrees"), path) {
+		return "", false
+	}
+	if source.privateGitDir != "" && uciRuntimePathContains(source.privateGitDir, path) {
+		return path, true
+	}
+	if !uciRuntimePathContains(source.rootPath, path) {
+		return "", false
+	}
+	relativePath, err := filepath.Rel(source.rootPath, path)
+	if err != nil || relativePath == "." {
+		return path, err == nil
+	}
+	return path, !uciRuntimeWatcherProtectedRelativePath(relativePath)
+}
+
+func uciRuntimeWatcherProtectedRelativePath(relativePath string) bool {
+	for _, component := range strings.Split(filepath.ToSlash(relativePath), "/") {
+		component = strings.ToLower(component)
+		if uciRuntimeProtectedSecretPath(component) {
+			return true
+		}
+		switch component {
+		case ".agent", ".cache", "build", "coverage", "dist", "keys", "node_modules", "target", "transcripts", "vendor":
+			return true
+		}
+	}
+	return false
 }
 
 type uciRuntimeWorktreeEvidence struct {
@@ -125,10 +280,16 @@ func newUCIRuntime(core *engramcore.Module, configuration UCIRuntimeConfig) (*uc
 	if err := validateUCIRuntimeConfig(configuration); err != nil {
 		return nil, err
 	}
+	treeSitterParser, err := newUCIRuntimeTreeSitterParser(configuration)
+	if err != nil {
+		return nil, err
+	}
 	return &uciRuntime{
-		core:     core,
-		config:   configuration,
-		watchers: make(map[string]uciRuntimeWatcher),
+		core:             core,
+		config:           configuration,
+		treeSitterParser: treeSitterParser,
+		authorizedTarget: make(map[string]uciRuntimeAuthorizedTarget),
+		watchers:         make(map[string]uciRuntimeWatcher),
 	}, nil
 }
 
@@ -202,6 +363,7 @@ func (runtimeState *uciRuntime) configureCollaboratorLocked(workstationID string
 		ParserBundleDigest: runtimeState.config.ParserBundleDigest,
 		Registry:           runtimeState.registry,
 		Scanner:            newUCIRuntimeScanner(),
+		TreeSitterParser:   runtimeState.treeSitterParser,
 		GoProfile:          runtimeState.config.GoProfile,
 	})
 	if err != nil {
@@ -218,10 +380,77 @@ func (runtimeState *uciRuntime) configureCollaboratorLocked(workstationID string
 	return nil
 }
 
-// The first installed vertical uses the existing Go extractor. Other bundled
-// parser languages remain unavailable until the parser worker is connected at
-// this same prepared-index boundary; callers must not infer support from the
-// installed artifact alone.
+// newUCIRuntimeTreeSitterParser wires only a verified installed parser artifact.
+// An unset executable makes parser-required source fail before publication; a
+// configured but missing, foreign, or invalid artifact fails runtime creation.
+func newUCIRuntimeTreeSitterParser(configuration UCIRuntimeConfig) (*uci.TreeSitterWorker, error) {
+	if configuration.ParserExecutable == "" {
+		return nil, nil
+	}
+	executablePath, err := uciRuntimeInstalledParserExecutable(configuration.ParserExecutable)
+	if err != nil {
+		return nil, err
+	}
+	worker, err := uci.NewTreeSitterWorker(uci.TreeSitterWorkerConfig{
+		ExecutablePath:       executablePath,
+		ExpectedBundleDigest: configuration.ParserBundleDigest,
+		MaxInputBytes:        uciRuntimeParserMaxInputBytes,
+		MaxOutputBytes:       uciRuntimeParserMaxOutputBytes,
+		Timeout:              uciRuntimeParserTimeout,
+		Environment:          uciRuntimeParserEnvironment(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("uci runtime: configure installed Tree-sitter parser: %w", err)
+	}
+	return worker, nil
+}
+
+// uciRuntimeParserEnvironment grants the parser only the Windows loader
+// variables it needs when they are present. Other platforms receive an empty,
+// non-inherited environment.
+func uciRuntimeParserEnvironment() []string {
+	if runtime.GOOS != "windows" {
+		return []string{}
+	}
+	environment := make([]string, 0, 3)
+	for _, name := range []string{"SYSTEMROOT", "WINDIR", "COMSPEC"} {
+		if value, present := os.LookupEnv(name); present {
+			environment = append(environment, name+"="+value)
+		}
+	}
+	return environment
+}
+
+func uciRuntimeInstalledParserExecutable(configuredPath string) (string, error) {
+	parserPath, err := uciRuntimeCanonicalPath(configuredPath)
+	if err != nil {
+		return "", fmt.Errorf("uci runtime: %s is invalid: %w", EnvUCIParserExecutable, err)
+	}
+	info, err := os.Stat(parserPath)
+	if err != nil {
+		return "", fmt.Errorf("uci runtime: inspect configured parser artifact: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", errors.New("uci runtime: configured parser artifact is not a regular file")
+	}
+	daemonPath, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("uci runtime: resolve running daemon executable: %w", err)
+	}
+	daemonPath, err = uciRuntimeCanonicalPath(daemonPath)
+	if err != nil {
+		return "", fmt.Errorf("uci runtime: canonicalize running daemon executable: %w", err)
+	}
+	expectedPath := filepath.Join(filepath.Dir(filepath.Dir(daemonPath)), "parser", "parser"+filepath.Ext(daemonPath))
+	expectedPath, err = uciRuntimeCanonicalPath(expectedPath)
+	if err != nil {
+		return "", fmt.Errorf("uci runtime: resolve installed parser sibling: %w", err)
+	}
+	if !uciRuntimeSamePath(parserPath, expectedPath) {
+		return "", errors.New("uci runtime: configured parser is not the installed sibling of the running daemon")
+	}
+	return parserPath, nil
+}
 
 func newUCIRuntimeScanner() *uci.Scanner {
 	return uci.NewScanner(
@@ -316,13 +545,8 @@ func (runtimeState *uciRuntime) Prepare(ctx context.Context, target engramcore.R
 	if err := runtimeState.configureCollaboratorLocked(binding.WorkstationID); err != nil {
 		return "", err
 	}
-	if err := runtimeState.registry.RecordApprovedRoot(ctx, UCILocalApprovedRoot{
-		RootID:                  binding.LocalRootID,
-		SourceID:                binding.Scope.SourceID,
-		CommonGitDirFingerprint: evidence.commonGitDirFingerprint,
-		RootPath:                evidence.rootPath,
-	}); err != nil {
-		return "", fmt.Errorf("uci runtime: record approved root: %w", err)
+	if err := runtimeState.recordApprovedRoot(ctx, binding, evidence); err != nil {
+		return "", err
 	}
 	registration := UCILocalCheckoutRegistration{
 		RootID:                   binding.LocalRootID,
@@ -339,6 +563,11 @@ func (runtimeState *uciRuntime) Prepare(ctx context.Context, target engramcore.R
 	}
 	if err := runtimeState.ensureWatcher(ctx, runtimeState.registry, registration, evidence); err != nil {
 		return "", err
+	}
+	runtimeState.authorizedTarget[registration.CheckoutID] = uciRuntimeAuthorizedTarget{
+		target:        target.Clone(),
+		rootPath:      evidence.rootPath,
+		incarnationID: registration.IncarnationID,
 	}
 	return evidence.rootPath, nil
 }
@@ -362,7 +591,7 @@ func (runtimeState *uciRuntime) ensureWatcher(ctx context.Context, registry *UCI
 	}
 	watcher, err := NewUCIWatcher(UCIWatcherConfig{
 		Registry:      registry,
-		Source:        uciRuntimeWatcherSource{watcher: source},
+		Source:        newUCIRuntimeWatcherSource(source, evidence.rootPath, evidence.privateGitDir),
 		CheckoutID:    registration.CheckoutID,
 		RootPath:      evidence.rootPath,
 		GitDir:        evidence.privateGitDir,
@@ -385,10 +614,89 @@ func (runtimeState *uciRuntime) ensureWatcher(ctx context.Context, registry *UCI
 		watcher:       watcher,
 	}
 
-	// UCIWatcher persists dirty/rescan evidence only. Automatic reindex needs a
-	// server lease/recovery trigger, and the typed engramcore boundary exposes no
-	// such trigger; a later authorized codebase_index consumes this durable state.
 	return nil
+}
+
+func (runtimeState *uciRuntime) watcherChangeSource(target engramcore.ResolvedIndexTarget) (uciRuntimeWatcherChangeSource, error) {
+	if runtimeState == nil {
+		return uciRuntimeWatcherChangeSource{}, errors.New("uci runtime: unavailable")
+	}
+	binding := target.BindingClone()
+	if err := binding.Validate(); err != nil {
+		return uciRuntimeWatcherChangeSource{}, errors.New("uci runtime: server binding is invalid")
+	}
+	runtimeState.stateMu.RLock()
+	authorized, found := runtimeState.authorizedTarget[binding.Scope.CheckoutID]
+	available := runtimeState.started && !runtimeState.closed
+	runtimeState.stateMu.RUnlock()
+	if !available || !found || !sameUCIRuntimeTargetIdentity(authorized.target, target) {
+		return uciRuntimeWatcherChangeSource{}, errors.New("uci runtime: authorized target is unavailable")
+	}
+
+	runtimeState.watcherMu.Lock()
+	retained, found := runtimeState.watchers[binding.Scope.CheckoutID]
+	runtimeState.watcherMu.Unlock()
+	if !found || retained.incarnationID != authorized.incarnationID || retained.rootPath != authorized.rootPath || !uciRuntimeWatcherAlive(retained.watcher) {
+		return uciRuntimeWatcherChangeSource{}, errors.New("uci runtime: watcher is unavailable")
+	}
+	return uciRuntimeWatcherChangeSource{
+		checkoutID:    binding.Scope.CheckoutID,
+		incarnationID: authorized.incarnationID,
+		rootPath:      authorized.rootPath,
+		changes:       retained.watcher.Changes(),
+	}, nil
+}
+
+func (runtimeState *uciRuntime) watcherIndexSnapshot(source uciRuntimeWatcherChangeSource) (uciRuntimeIndexSnapshot, bool) {
+	if runtimeState == nil || source.checkoutID == "" || source.incarnationID == "" || source.rootPath == "" || source.changes == nil {
+		return uciRuntimeIndexSnapshot{}, false
+	}
+	runtimeState.stateMu.RLock()
+	authorized, found := runtimeState.authorizedTarget[source.checkoutID]
+	available := runtimeState.started && !runtimeState.closed
+	runtimeState.stateMu.RUnlock()
+	if !found || !available || authorized.incarnationID != source.incarnationID || authorized.rootPath != source.rootPath {
+		return uciRuntimeIndexSnapshot{}, false
+	}
+	runtimeState.watcherMu.Lock()
+	retained, found := runtimeState.watchers[source.checkoutID]
+	runtimeState.watcherMu.Unlock()
+	if !found || retained.incarnationID != source.incarnationID || retained.rootPath != source.rootPath || !uciRuntimeWatcherAlive(retained.watcher) || retained.watcher.Changes() != source.changes {
+		return uciRuntimeIndexSnapshot{}, false
+	}
+	return uciRuntimeIndexSnapshot{target: authorized.target.Clone(), rootPath: authorized.rootPath}, true
+}
+
+func (runtimeState *uciRuntime) updateReboundTarget(target engramcore.ResolvedIndexTarget) error {
+	if runtimeState == nil {
+		return errors.New("uci runtime: unavailable")
+	}
+	binding := target.BindingClone()
+	if err := binding.Validate(); err != nil {
+		return errors.New("uci runtime: rebound binding is invalid")
+	}
+	runtimeState.stateMu.Lock()
+	defer runtimeState.stateMu.Unlock()
+	authorized, found := runtimeState.authorizedTarget[binding.Scope.CheckoutID]
+	if !found || !runtimeState.started || runtimeState.closed || !sameUCIRuntimeTargetIdentity(authorized.target, target) {
+		return errors.New("uci runtime: rebound target changed authorization")
+	}
+	authorized.target = target.Clone()
+	runtimeState.authorizedTarget[binding.Scope.CheckoutID] = authorized
+	return nil
+}
+
+func sameUCIRuntimeTargetIdentity(left, right engramcore.ResolvedIndexTarget) bool {
+	leftBinding := left.BindingClone()
+	rightBinding := right.BindingClone()
+	return left.ClientSessionID == right.ClientSessionID &&
+		left.ContextHandle == right.ContextHandle &&
+		leftBinding.Scope.SourceID == rightBinding.Scope.SourceID &&
+		leftBinding.Scope.CheckoutID == rightBinding.Scope.CheckoutID &&
+		leftBinding.Scope.IncarnationID == rightBinding.Scope.IncarnationID &&
+		leftBinding.ProfileID == rightBinding.ProfileID &&
+		leftBinding.LocalRootID == rightBinding.LocalRootID &&
+		leftBinding.WorkstationID == rightBinding.WorkstationID
 }
 
 func (runtimeState *uciRuntime) watcherFailure(ctx context.Context, registry *UCILocalRegistry, checkoutID string, watcherErr error) error {
@@ -410,9 +718,9 @@ func uciRuntimeWatcherAlive(watcher *UCIWatcher) bool {
 	}
 }
 
-// Close stops every retained watcher before releasing the SQLite handle. A
-// request that entered Prepare holds stateMu's read lock, so Close cannot race
-// a registry transaction or a watcher registration.
+// Close stops every retained watcher before releasing the SQLite handle. Prepare
+// holds stateMu while it records local authority and watcher registration, so
+// Close cannot race those transitions.
 func (runtimeState *uciRuntime) Close(ctx context.Context) error {
 	if runtimeState == nil {
 		return nil
@@ -431,6 +739,7 @@ func (runtimeState *uciRuntime) Close(ctx context.Context) error {
 	db := runtimeState.db
 	runtimeState.db = nil
 	runtimeState.registry = nil
+	runtimeState.authorizedTarget = make(map[string]uciRuntimeAuthorizedTarget)
 	runtimeState.stateMu.Unlock()
 
 	runtimeState.watcherMu.Lock()
@@ -496,6 +805,25 @@ func (runtimeState *uciRuntime) currentWorktreeEvidence(ctx context.Context, sel
 		privateGitDir:            privateGitDir,
 		privateGitDirFingerprint: uciRuntimeGitDirectoryFingerprint(privateGitDir),
 	}, nil
+}
+
+func (runtimeState *uciRuntime) recordApprovedRoot(ctx context.Context, binding uci.IndexBinding, evidence uciRuntimeWorktreeEvidence) error {
+	existing, found, err := runtimeState.registry.ApprovedRoot(ctx, binding.LocalRootID)
+	if err != nil {
+		return fmt.Errorf("uci runtime: load approved root: %w", err)
+	}
+	if found && !uciRuntimeSamePath(existing.RootPath, evidence.rootPath) {
+		return errors.New("uci runtime: server root ID is already registered for a different physical checkout")
+	}
+	if err := runtimeState.registry.RecordApprovedRoot(ctx, UCILocalApprovedRoot{
+		RootID:                  binding.LocalRootID,
+		SourceID:                binding.Scope.SourceID,
+		CommonGitDirFingerprint: evidence.commonGitDirFingerprint,
+		RootPath:                evidence.rootPath,
+	}); err != nil {
+		return fmt.Errorf("uci runtime: record approved root: %w", err)
+	}
+	return nil
 }
 
 func (runtimeState *uciRuntime) gitPath(ctx context.Context, rootPath, operation string, command ...string) (string, error) {
@@ -569,6 +897,15 @@ func uciRuntimeSamePath(left, right string) bool {
 }
 
 func uciRuntimePathContains(rootPath, candidatePath string) bool {
+	if rootPath == "" || candidatePath == "" || !filepath.IsAbs(rootPath) || !filepath.IsAbs(candidatePath) || strings.IndexByte(rootPath, 0) >= 0 || strings.IndexByte(candidatePath, 0) >= 0 {
+		return false
+	}
+	rootPath = filepath.Clean(rootPath)
+	candidatePath = filepath.Clean(candidatePath)
+	if runtime.GOOS == "windows" {
+		rootPath = strings.ToLower(rootPath)
+		candidatePath = strings.ToLower(candidatePath)
+	}
 	relativePath, err := filepath.Rel(rootPath, candidatePath)
 	if err != nil || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) || filepath.IsAbs(relativePath) {
 		return false

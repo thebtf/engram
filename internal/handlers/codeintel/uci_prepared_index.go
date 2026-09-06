@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
 	"sort"
@@ -23,6 +24,14 @@ type UCIPreparedIndexScanner interface {
 	Scan(context.Context, uci.AuthorizedRootEvidence) (uci.ScannerResult, error)
 }
 
+// UCIPreparedTreeSitterParser is the local grammar-only parser port. A nil
+// parser is allowed for Go-only input; parser-required input fails before Begin.
+type UCIPreparedTreeSitterParser interface {
+	Parse(context.Context, uci.TreeSitterParseRequest) (uci.TreeSitterArtifact, error)
+}
+
+var _ UCIPreparedTreeSitterParser = (*uci.TreeSitterWorker)(nil)
+
 // UCIPreparedIndexConfig binds one prepared index collaborator to the exact
 // daemon identity, selected server parser bundle, and local operational
 // evidence it is allowed to use.
@@ -32,6 +41,7 @@ type UCIPreparedIndexConfig struct {
 	ParserBundleDigest uci.IndexDigest
 	Registry           *UCILocalRegistry
 	Scanner            UCIPreparedIndexScanner
+	TreeSitterParser   UCIPreparedTreeSitterParser
 	GoProfile          uci.GoExtractionProfile
 }
 
@@ -44,11 +54,12 @@ type UCIPreparedIndexCollaborator struct {
 	parserBundleDigest uci.IndexDigest
 	registry           *UCILocalRegistry
 	scanner            UCIPreparedIndexScanner
+	treeSitterParser   UCIPreparedTreeSitterParser
 	goProfile          uci.GoExtractionProfile
 }
 
 // NewUCIPreparedIndexCollaborator constructs the daemon-side prepared-index
-// collaborator with a domain-validated versioned Go extraction profile.
+// collaborator with a domain-validated Go profile and parser-required fail-close boundary.
 func NewUCIPreparedIndexCollaborator(config UCIPreparedIndexConfig) (*UCIPreparedIndexCollaborator, error) {
 	if !validUCIPreparedIndexIdentity(config.WorkstationID) {
 		return nil, fmt.Errorf("uci prepared index: workstation identity is invalid")
@@ -74,6 +85,7 @@ func NewUCIPreparedIndexCollaborator(config UCIPreparedIndexConfig) (*UCIPrepare
 		parserBundleDigest: config.ParserBundleDigest,
 		registry:           config.Registry,
 		scanner:            config.Scanner,
+		treeSitterParser:   config.TreeSitterParser,
 		goProfile:          config.GoProfile,
 	}, nil
 }
@@ -156,10 +168,15 @@ func (collaborator *UCIPreparedIndexCollaborator) scanCurrent(ctx context.Contex
 }
 
 const (
-	uciPreparedMembershipMode        = "unknown"
-	uciPreparedGoResolverRevision    = "uci-prepared-go-call/v1"
-	uciPreparedGoResolverRule        = "go-direct-call/v1"
-	uciPreparedGoResolverExplanation = "unique same-package Go function declaration"
+	uciPreparedMembershipMode                  = "unknown"
+	uciPreparedGoResolverRevision              = "uci-prepared-go-call/v1"
+	uciPreparedGoResolverRule                  = "go-direct-call/v1"
+	uciPreparedGoResolverExplanation           = "unique same-package Go function declaration"
+	uciPreparedTreeSitterProfileKeyVersion     = "uci-prepared-tree-sitter/v1"
+	uciPreparedTreeSitterUnavailableMessage    = "Tree-sitter parser is unavailable"
+	uciPreparedTreeSitterProtocolMessage       = "Tree-sitter parser protocol failure"
+	uciPreparedTreeSitterBundleMismatchMessage = "Tree-sitter parser bundle mismatch"
+	uciPreparedTreeSitterPartialMessage        = "Tree-sitter parser coverage is partial"
 )
 
 type uciPreparedAdmissionFile struct {
@@ -180,11 +197,11 @@ type uciPreparedAdmissionPlan struct {
 }
 
 func (collaborator *UCIPreparedIndexCollaborator) prepareAdmissionPlan(ctx context.Context, local uciPreparedLocalTarget, scan uci.ScannerResult) (uciPreparedAdmissionPlan, error) {
-	profile, err := uci.GoIndexAdmissionArtifactProfile(collaborator.goProfile)
+	goProfile, err := uci.GoIndexAdmissionArtifactProfile(collaborator.goProfile)
 	if err != nil {
 		return uciPreparedAdmissionPlan{}, fmt.Errorf("uci prepared index: configure Go admission profile: %w", err)
 	}
-	profile.ExtractionProfileDigest = collaborator.parserBundleDigest
+	goProfile.ExtractionProfileDigest = collaborator.parserBundleDigest
 
 	files := append([]uci.ScannerFile(nil), scan.Files...)
 	sort.Slice(files, func(left, right int) bool {
@@ -202,7 +219,7 @@ func (collaborator *UCIPreparedIndexCollaborator) prepareAdmissionPlan(ctx conte
 		}
 		seenPaths[file.Path] = struct{}{}
 
-		preparedFile, _, err := collaborator.prepareAdmissionFile(local.binding.Scope.SourceID, profile, file)
+		preparedFile, err := collaborator.prepareAdmissionFile(ctx, local.binding.Scope.SourceID, local.binding.ProfileID, goProfile, file)
 		if err != nil {
 			return uciPreparedAdmissionPlan{}, err
 		}
@@ -279,7 +296,7 @@ func (collaborator *UCIPreparedIndexCollaborator) prepareAdmissionPlan(ctx conte
 	}, nil
 }
 
-func (collaborator *UCIPreparedIndexCollaborator) prepareAdmissionFile(sourceID string, profile uci.IndexAdmissionArtifactProfile, file uci.ScannerFile) (uciPreparedAdmissionFile, bool, error) {
+func (collaborator *UCIPreparedIndexCollaborator) prepareAdmissionFile(ctx context.Context, sourceID, analysisProfileID string, goProfile uci.IndexAdmissionArtifactProfile, file uci.ScannerFile) (uciPreparedAdmissionFile, error) {
 	prepared := uciPreparedAdmissionFile{
 		path: file.Path,
 		membership: uci.IndexAdmissionMembership{
@@ -292,39 +309,102 @@ func (collaborator *UCIPreparedIndexCollaborator) prepareAdmissionFile(sourceID 
 	case uci.IndexFileExcluded:
 		prepared.membership.State = uciPreparedExcludedMembershipState(file.Exclusion)
 		prepared.errors = append(prepared.errors, file.Path+": source is excluded")
-		return prepared, true, nil
+		return prepared, nil
 	case uci.IndexFileUnreadable:
 		prepared.membership.State = uci.IndexAdmissionMembershipUnreadable
 		prepared.errors = append(prepared.errors, file.Path+": source is unreadable")
-		return prepared, true, nil
+		return prepared, nil
 	case uci.IndexFilePresent:
-		if path.Ext(file.Path) != ".go" {
-			prepared.membership.State = uci.IndexAdmissionMembershipUnsupported
-			prepared.errors = append(prepared.errors, file.Path+": source language is unsupported")
-			return prepared, true, nil
-		}
 		if len(file.Body) > uci.IndexAdmissionMaxArtifactBodyBytes {
 			prepared.membership.State = uci.IndexAdmissionMembershipUnsupported
 			prepared.errors = append(prepared.errors, file.Path+": source exceeds the safe admission body limit")
-			return prepared, true, nil
+			return prepared, nil
 		}
-
-		extracted := uci.ExtractGo(file.Body, collaborator.goProfile)
-		artifact, err := uci.NewIndexAdmissionArtifactFromGo(sourceID, profile, file.Body, extracted)
-		if err != nil {
-			return uciPreparedAdmissionFile{}, false, fmt.Errorf("uci prepared index: normalize Go source %q: %w", file.Path, err)
+		switch path.Ext(file.Path) {
+		case ".go":
+			extracted := uci.ExtractGo(file.Body, collaborator.goProfile)
+			artifact, err := uci.NewIndexAdmissionArtifactFromGo(sourceID, goProfile, file.Body, extracted)
+			if err != nil {
+				return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: normalize Go source %q: %w", file.Path, err)
+			}
+			artifactID := artifact.ArtifactID
+			prepared.membership.State = uci.IndexAdmissionMembershipPresent
+			prepared.membership.ArtifactID = &artifactID
+			prepared.artifact = &artifact
+			if artifact.Status == uci.IndexAdmissionArtifactPartial {
+				prepared.errors = append(prepared.errors, file.Path+": Go extraction is partial")
+			}
+			return prepared, nil
+		case ".js":
+			return collaborator.prepareTreeSitterAdmissionFile(ctx, sourceID, analysisProfileID, file, prepared, uci.TreeSitterLanguageJavaScript)
+		case ".ts":
+			return collaborator.prepareTreeSitterAdmissionFile(ctx, sourceID, analysisProfileID, file, prepared, uci.TreeSitterLanguageTypeScript)
+		case ".tsx":
+			return collaborator.prepareTreeSitterAdmissionFile(ctx, sourceID, analysisProfileID, file, prepared, uci.TreeSitterLanguageTSX)
+		default:
+			prepared.membership.State = uci.IndexAdmissionMembershipUnsupported
+			prepared.errors = append(prepared.errors, file.Path+": source language is unsupported")
+			return prepared, nil
 		}
-		artifactID := artifact.ArtifactID
-		prepared.membership.State = uci.IndexAdmissionMembershipPresent
-		prepared.membership.ArtifactID = &artifactID
-		prepared.artifact = &artifact
-		if artifact.Status == uci.IndexAdmissionArtifactPartial {
-			prepared.errors = append(prepared.errors, file.Path+": Go extraction is partial")
-			return prepared, true, nil
-		}
-		return prepared, false, nil
 	default:
-		return uciPreparedAdmissionFile{}, false, fmt.Errorf("uci prepared index: scanner returned unsupported state %q for %q", file.State, file.Path)
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: scanner returned unsupported state %q for %q", file.State, file.Path)
+	}
+}
+
+// prepareTreeSitterAdmissionFile treats the selected parser as part of the
+// prepared runtime. A missing, invalid, or digest-mismatched parser aborts the
+// entire build before Begin so a partial fallback cannot publish a new View.
+func (collaborator *UCIPreparedIndexCollaborator) prepareTreeSitterAdmissionFile(ctx context.Context, sourceID, analysisProfileID string, file uci.ScannerFile, prepared uciPreparedAdmissionFile, language uci.TreeSitterLanguage) (uciPreparedAdmissionFile, error) {
+	if collaborator.treeSitterParser == nil {
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: %s for %q", uciPreparedTreeSitterUnavailableMessage, file.Path)
+	}
+	profile, err := uci.TreeSitterIndexAdmissionArtifactProfile(language, collaborator.parserBundleDigest)
+	if err != nil {
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: configure Tree-sitter admission profile: %w", err)
+	}
+	parsed, err := collaborator.treeSitterParser.Parse(ctx, uci.TreeSitterParseRequest{
+		Language:   language,
+		ProfileKey: uciPreparedTreeSitterProfileKey(analysisProfileID, language, collaborator.parserBundleDigest),
+		Source:     append([]byte(nil), file.Body...),
+	})
+	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return uciPreparedAdmissionFile{}, contextErr
+		}
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: %s for %q: %w", uciPreparedTreeSitterFailureMessage(err), file.Path, err)
+	}
+	if parsed.BundleDigest != collaborator.parserBundleDigest {
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: %s for %q", uciPreparedTreeSitterBundleMismatchMessage, file.Path)
+	}
+	if parsed.Coverage == uci.IndexCoverageUnavailable {
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: %s for %q", uciPreparedTreeSitterUnavailableMessage, file.Path)
+	}
+	artifact, err := uci.NewIndexAdmissionArtifactFromTreeSitter(sourceID, profile, file.Body, parsed)
+	if err != nil {
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: %s for %q: %w", uciPreparedTreeSitterProtocolMessage, file.Path, err)
+	}
+	artifactID := artifact.ArtifactID
+	prepared.membership.State = uci.IndexAdmissionMembershipPresent
+	prepared.membership.ArtifactID = &artifactID
+	prepared.artifact = &artifact
+	if artifact.Status == uci.IndexAdmissionArtifactPartial {
+		prepared.errors = append(prepared.errors, file.Path+": "+uciPreparedTreeSitterPartialMessage)
+	}
+	return prepared, nil
+}
+
+func uciPreparedTreeSitterProfileKey(analysisProfileID string, language uci.TreeSitterLanguage, bundleDigest uci.IndexDigest) string {
+	return uciPreparedTreeSitterProfileKeyVersion + ":" + analysisProfileID + ":" + string(language) + ":" + string(bundleDigest)
+}
+
+func uciPreparedTreeSitterFailureMessage(err error) string {
+	switch {
+	case errors.Is(err, uci.ErrTreeSitterBundleMismatch):
+		return uciPreparedTreeSitterBundleMismatchMessage
+	case errors.Is(err, uci.ErrTreeSitterProtocol), errors.Is(err, uci.ErrTreeSitterInputLimit), errors.Is(err, uci.ErrTreeSitterOutputLimit):
+		return uciPreparedTreeSitterProtocolMessage
+	default:
+		return uciPreparedTreeSitterUnavailableMessage
 	}
 }
 
@@ -579,7 +659,7 @@ func uciPreparedAddResolvedGoCallEdges(files []uciPreparedAdmissionFile) (uint64
 	}
 	definitions := make(map[string][]definitionTarget)
 	for _, prepared := range files {
-		if prepared.artifact == nil || prepared.membership.State != uci.IndexAdmissionMembershipPresent {
+		if prepared.artifact == nil || prepared.membership.State != uci.IndexAdmissionMembershipPresent || prepared.artifact.Profile.Language != uci.IndexAdmissionLanguageGo {
 			continue
 		}
 		for _, definition := range prepared.artifact.Definitions {
@@ -597,7 +677,7 @@ func uciPreparedAddResolvedGoCallEdges(files []uciPreparedAdmissionFile) (uint64
 	var unresolved uint64
 	for index := range files {
 		prepared := &files[index]
-		if prepared.artifact == nil || prepared.membership.State != uci.IndexAdmissionMembershipPresent {
+		if prepared.artifact == nil || prepared.membership.State != uci.IndexAdmissionMembershipPresent || prepared.artifact.Profile.Language != uci.IndexAdmissionLanguageGo {
 			continue
 		}
 		for _, reference := range prepared.artifact.References {

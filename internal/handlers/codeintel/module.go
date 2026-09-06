@@ -23,8 +23,8 @@
 //
 // # Concurrency
 //
-// The short admission critical section is keyed by the client transport plus
-// server-authorized source, checkout incarnation, and profile.
+// The short admission critical section is keyed by the complete
+// server-authorized target identity.
 //
 // CLEAN-ROOM: no AGPL source referenced during implementation.
 package codeintel
@@ -32,6 +32,8 @@ package codeintel
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -39,7 +41,6 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -61,22 +62,20 @@ const (
 
 	codebaseStatusAfterBarrierMaxTokenLength       = 2_048
 	codebaseStatusAfterBarrierMaxWaitMS      int64 = 60_000
+	indexRunRecordLimit                            = 256
+	indexRunTargetPathCount                  int64 = 1
 )
 
-// runCounter is an atomic counter used to generate monotonically-increasing
-// run IDs within the daemon lifetime. Using a counter instead of UUID/time
-// keeps run IDs small and avoids importing additional packages.
-var runCounter atomic.Int64
-
-// indexStateKey isolates state by exact client transport and server-authorized
-// source, checkout incarnation, and profile. A publication from no View to a
-// real View preserves the same daemon liveness entry.
+// indexStateKey isolates daemon liveness and execution by the complete
+// server-authorized target identity. A publication from no View to a real View
+// preserves the same scope entry across client sessions.
 type indexStateKey struct {
-	ClientSessionID    string
 	ScopeSourceID      string
 	ScopeCheckoutID    string
 	ScopeIncarnationID string
 	ProfileID          string
+	LocalRootID        string
+	WorkstationID      string
 }
 
 // indexState holds one resolved target's index run state.
@@ -92,6 +91,38 @@ const (
 	statusRunning = "running"
 	statusIdle    = "idle"
 	statusError   = "error"
+)
+
+// indexRunRecord keeps the immutable identity and completion signal for one
+// opaque run token. startMu protects the terminal fields and records remain
+// available independently of the current per-target liveness row.
+type indexRunRecord struct {
+	key       indexStateKey
+	runID     string
+	startedAt time.Time
+	pathCount int64
+	done      chan struct{}
+
+	terminal       bool
+	terminalStatus string
+	terminalErr    string
+}
+
+type indexRunSnapshot struct {
+	runID     string
+	pathCount int64
+	status    string
+	err       string
+	terminal  bool
+}
+
+type indexBarrierOutcome uint8
+
+const (
+	indexBarrierSatisfied indexBarrierOutcome = iota
+	indexBarrierTimedOut
+	indexBarrierStale
+	indexBarrierError
 )
 
 // ResolvedIndexTarget and IndexResult are aliases for the canonical typed
@@ -110,6 +141,14 @@ type CoreProvider interface {
 	ProxyHandleTool(ctx context.Context, target ResolvedIndexTarget, name string, args json.RawMessage) (json.RawMessage, error)
 }
 
+// IndexTargetRebinder is an optional production capability. It refreshes an
+// already-authorized target without accepting any raw project or path selector.
+// Tests and compatibility fakes can omit it without gaining a second authority
+// path.
+type IndexTargetRebinder interface {
+	RebindIndexTarget(context.Context, ResolvedIndexTarget) (ResolvedIndexTarget, error)
+}
+
 // engramCoreAdapter keeps codeintel dependent on the narrow typed contract.
 type engramCoreAdapter struct {
 	adapter *engramcore.UCIIndexAdapter
@@ -123,6 +162,10 @@ func (a *engramCoreAdapter) IndexCodebase(ctx context.Context, target ResolvedIn
 	return a.adapter.IndexCodebase(ctx, target, root)
 }
 
+func (a *engramCoreAdapter) RebindIndexTarget(ctx context.Context, target ResolvedIndexTarget) (ResolvedIndexTarget, error) {
+	return a.adapter.RebindIndexTarget(ctx, target)
+}
+
 func (a *engramCoreAdapter) ProxyHandleTool(ctx context.Context, target ResolvedIndexTarget, name string, args json.RawMessage) (json.RawMessage, error) {
 	return a.adapter.ProxyHandleTool(ctx, target, name, args)
 }
@@ -133,11 +176,37 @@ type Module struct {
 	core    CoreProvider
 	runtime *uciRuntime
 	deps    module.ModuleDeps
-	// indexStates maps an exact resolved target to its liveness state. startMu
-	// protects only admission for a single state transition; index work itself
-	// remains concurrent for disjoint target keys.
-	indexStates sync.Map // indexStateKey -> *indexState
-	startMu     sync.Mutex
+	// indexStates maps each authorized scope to its current liveness state.
+	// startMu serializes admission, terminal completion, and the bounded token
+	// ledger; index work itself remains concurrent for disjoint scope keys.
+	indexStates     sync.Map // indexStateKey -> *indexState
+	startMu         sync.Mutex
+	pendingAuto     map[indexStateKey]indexRunRequest
+	runRecords      map[string]*indexRunRecord
+	completedRunIDs []string
+
+	watcherConsumerMu     sync.Mutex
+	watcherConsumers      map[string]uciRuntimeWatcherChangeSource
+	watcherConsumerCtx    context.Context
+	watcherConsumerCancel context.CancelFunc
+	watcherConsumerWG     sync.WaitGroup
+}
+
+type indexRunOrigin uint8
+
+const (
+	indexRunManual indexRunOrigin = iota
+	indexRunAutomatic
+)
+
+const automaticIndexFailureDiagnostic = "automatic reindex failed; durable watcher state remains pending"
+
+type indexRunRequest struct {
+	target         ResolvedIndexTarget
+	root           string
+	origin         indexRunOrigin
+	correlation    auditcontext.UCIRequestCorrelation
+	hasCorrelation bool
 }
 
 // NewModule constructs an unstarted Module backed by a real *engramcore.Module.
@@ -184,6 +253,10 @@ func (m *Module) Init(_ context.Context, deps module.ModuleDeps) error {
 		if err := m.runtime.Start(deps); err != nil {
 			return fmt.Errorf("initialise codeintel runtime: %w", err)
 		}
+		m.watcherConsumerMu.Lock()
+		m.watcherConsumerCtx, m.watcherConsumerCancel = context.WithCancel(deps.DaemonCtx)
+		m.watcherConsumers = make(map[string]uciRuntimeWatcherChangeSource)
+		m.watcherConsumerMu.Unlock()
 	}
 	if deps.Logger != nil {
 		deps.Logger.Info("codeintel module initialised")
@@ -194,6 +267,17 @@ func (m *Module) Init(_ context.Context, deps module.ModuleDeps) error {
 // Shutdown stops watcher resources before closing the module-owned SQLite
 // registry. Index goroutines use DaemonCtx and are cancelled by the framework.
 func (m *Module) Shutdown(ctx context.Context) error {
+	m.watcherConsumerMu.Lock()
+	cancelConsumers := m.watcherConsumerCancel
+	m.watcherConsumerCancel = nil
+	m.watcherConsumerCtx = nil
+	m.watcherConsumers = nil
+	m.watcherConsumerMu.Unlock()
+	if cancelConsumers != nil {
+		cancelConsumers()
+		m.watcherConsumerWG.Wait()
+	}
+
 	var shutdownErr error
 	if m.runtime != nil {
 		shutdownErr = m.runtime.Close(ctx)
@@ -242,7 +326,7 @@ func (m *Module) Tools() []module.ToolDef {
 				"properties": map[string]any{
 					"token": map[string]any{
 						"type":        "string",
-						"description": "Opaque server-issued read-your-save barrier token.",
+						"description": "Opaque target-bound run_id returned by codebase_index.",
 						"minLength":   1,
 						"maxLength":   codebaseStatusAfterBarrierMaxTokenLength,
 					},
@@ -260,7 +344,7 @@ func (m *Module) Tools() []module.ToolDef {
 	return []module.ToolDef{
 		{
 			Name:        "codebase_index",
-			Description: "Trigger an async code index run for one resolved context. Returns immediately with a run_id. Poll codebase_status to track progress. Requires ENGRAM_CODE_INTEL_ENABLED=true.",
+			Description: "Trigger an async code index run for one resolved context. Returns immediately with an opaque run_id that can be used as codebase_status.after_barrier.token. Requires ENGRAM_CODE_INTEL_ENABLED=true.",
 			InputSchema: indexSchema,
 		},
 		{
@@ -302,8 +386,7 @@ type codebaseStatusAfterBarrierArgs struct {
 }
 
 type codebaseStatusProxyArgs struct {
-	ContextHandle string                      `json:"context_handle"`
-	AfterBarrier  *codebaseStatusAfterBarrier `json:"after_barrier,omitempty"`
+	ContextHandle string `json:"context_handle"`
 }
 
 type codebaseStatusAfterBarrier struct {
@@ -410,11 +493,12 @@ func requestedTargetMatches(target ResolvedIndexTarget, clientSessionID, context
 func indexKeyFor(target ResolvedIndexTarget) indexStateKey {
 	binding := target.BindingClone()
 	return indexStateKey{
-		ClientSessionID:    target.ClientSessionID,
 		ScopeSourceID:      binding.Scope.SourceID,
 		ScopeCheckoutID:    binding.Scope.CheckoutID,
 		ScopeIncarnationID: binding.Scope.IncarnationID,
 		ProfileID:          binding.ProfileID,
+		LocalRootID:        binding.LocalRootID,
+		WorkstationID:      binding.WorkstationID,
 	}
 }
 
@@ -483,129 +567,381 @@ func (m *Module) handleIndex(ctx context.Context, p muxcore.ProjectContext, args
 		if err != nil {
 			return nil, fmt.Errorf("codebase_index: prepare authorized worktree: %w", err)
 		}
-	}
-
-	key := indexKeyFor(target)
-	newRunID := fmt.Sprintf("run-%d", runCounter.Add(1))
-	newState := &indexState{
-		Status:    statusRunning,
-		RunID:     newRunID,
-		StartedAt: time.Now(),
-	}
-
-	m.startMu.Lock()
-	if raw, ok := m.indexStates.Load(key); ok {
-		if existing := raw.(*indexState); existing.Status == statusRunning {
-			m.startMu.Unlock()
-			out, _ := json.Marshal(map[string]any{
-				"status": "already_running",
-				"run_id": existing.RunID,
-			})
-			return out, nil
+		if err := m.armRuntimeWatcher(target); err != nil {
+			return nil, fmt.Errorf("codebase_index: arm authorized watcher: %w", err)
 		}
 	}
-	m.indexStates.Store(key, newState)
-	m.startMu.Unlock()
 
-	daemonCtx := m.deps.DaemonCtx
-	if daemonCtx == nil {
-		daemonCtx = context.Background()
+	correlation, hasCorrelation := auditcontext.UCIRequestCorrelationFromContext(ctx)
+	state, started, err := m.startIndexRun(indexRunRequest{
+		target:         target.Clone(),
+		root:           root,
+		origin:         indexRunManual,
+		correlation:    correlation,
+		hasCorrelation: hasCorrelation,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("codebase_index: allocate run identity: %w", err)
 	}
-	daemonCtx = auditcontext.WithUCITransportSession(daemonCtx, clientSessionID)
-	logger := m.deps.Logger
-	core := m.core
-	runID := newRunID
-	states := &m.indexStates
+	if !started {
+		out, _ := json.Marshal(map[string]any{
+			"status": "already_running",
+			"run_id": state.RunID,
+		})
+		return out, nil
+	}
+	out, _ := json.Marshal(map[string]any{
+		"status": "started",
+		"run_id": state.RunID,
+	})
+	return out, nil
+}
 
+func (m *Module) armRuntimeWatcher(target ResolvedIndexTarget) error {
+	if m.runtime == nil {
+		return nil
+	}
+	source, err := m.runtime.watcherChangeSource(target)
+	if err != nil {
+		return err
+	}
+	m.watcherConsumerMu.Lock()
+	ctx := m.watcherConsumerCtx
+	if ctx == nil || ctx.Err() != nil {
+		m.watcherConsumerMu.Unlock()
+		return fmt.Errorf("watcher consumer is unavailable")
+	}
+	if existing, found := m.watcherConsumers[source.checkoutID]; found && existing.incarnationID == source.incarnationID && existing.rootPath == source.rootPath && existing.changes == source.changes {
+		m.watcherConsumerMu.Unlock()
+		return nil
+	}
+	m.watcherConsumers[source.checkoutID] = source
+	m.watcherConsumerWG.Add(1)
+	m.watcherConsumerMu.Unlock()
+	go m.consumeRuntimeWatcher(ctx, source)
+	return nil
+}
+
+func (m *Module) consumeRuntimeWatcher(ctx context.Context, source uciRuntimeWatcherChangeSource) {
+	defer m.watcherConsumerWG.Done()
+	defer func() {
+		m.watcherConsumerMu.Lock()
+		if retained, found := m.watcherConsumers[source.checkoutID]; found && retained.incarnationID == source.incarnationID && retained.rootPath == source.rootPath && retained.changes == source.changes {
+			delete(m.watcherConsumers, source.checkoutID)
+		}
+		m.watcherConsumerMu.Unlock()
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case _, open := <-source.changes:
+			if !open {
+				return
+			}
+			snapshot, found := m.runtime.watcherIndexSnapshot(source)
+			if !found {
+				continue
+			}
+			if _, _, err := m.startIndexRun(indexRunRequest{target: snapshot.target, root: snapshot.rootPath, origin: indexRunAutomatic}); err != nil {
+				if logger := m.deps.Logger; logger != nil {
+					logger.Error("codeintel: automatic reindex scheduling failed", "checkout_id", source.checkoutID, "error", err.Error())
+				}
+			}
+		}
+	}
+}
+
+func (m *Module) startIndexRun(request indexRunRequest) (*indexState, bool, error) {
+	key := indexKeyFor(request.target)
+	m.startMu.Lock()
+	if raw, found := m.indexStates.Load(key); found {
+		if existing := raw.(*indexState); existing.Status == statusRunning {
+			if request.origin == indexRunAutomatic && m.daemonIndexContext().Err() == nil {
+				if m.pendingAuto == nil {
+					m.pendingAuto = make(map[indexStateKey]indexRunRequest)
+				}
+				m.pendingAuto[key] = request
+			}
+			m.startMu.Unlock()
+			return existing, false, nil
+		}
+	}
+	if request.origin == indexRunAutomatic && m.daemonIndexContext().Err() != nil {
+		m.startMu.Unlock()
+		return nil, false, nil
+	}
+	state, record, err := m.newRunningIndexStateLocked(key)
+	if err != nil {
+		m.startMu.Unlock()
+		return nil, false, err
+	}
+	m.indexStates.Store(key, state)
+	m.startMu.Unlock()
+	m.launchIndexRun(request, state, record)
+	return state, true, nil
+}
+
+func (m *Module) newRunningIndexStateLocked(key indexStateKey) (*indexState, *indexRunRecord, error) {
+	if m.runRecords == nil {
+		m.runRecords = make(map[string]*indexRunRecord)
+	}
+	for range 4 {
+		runID, err := newIndexRunID()
+		if err != nil {
+			return nil, nil, err
+		}
+		if _, found := m.runRecords[runID]; found {
+			continue
+		}
+		startedAt := time.Now()
+		record := &indexRunRecord{
+			key:       key,
+			runID:     runID,
+			startedAt: startedAt,
+			pathCount: indexRunTargetPathCount,
+			done:      make(chan struct{}),
+		}
+		m.runRecords[runID] = record
+		return &indexState{Status: statusRunning, RunID: runID, StartedAt: startedAt}, record, nil
+	}
+	return nil, nil, fmt.Errorf("generate a unique index run ID")
+}
+
+func newIndexRunID() (string, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", fmt.Errorf("read cryptographic run entropy: %w", err)
+	}
+	return "uci-run-v1-" + hex.EncodeToString(nonce[:]), nil
+}
+
+func (m *Module) launchIndexRun(request indexRunRequest, state *indexState, record *indexRunRecord) {
 	go func() {
+		var terminal *indexState
 		defer func() {
-			if r := recover(); r != nil {
-				if logger != nil {
+			if recovered := recover(); recovered != nil {
+				if logger := m.deps.Logger; logger != nil {
 					logger.Error("codeintel: index goroutine panicked",
-						"client_session_id", target.ClientSessionID,
-						"context_handle", target.ContextHandle,
-						"run_id", runID,
-						"panic", fmt.Sprintf("%v", r),
+						"client_session_id", request.target.ClientSessionID,
+						"context_handle", request.target.ContextHandle,
+						"run_id", state.RunID,
+						"panic", fmt.Sprintf("%v", recovered),
 						"stack", string(debug.Stack()),
 					)
 				}
-				states.Store(key, &indexState{
-					Status:    statusError,
-					RunID:     runID,
-					StartedAt: newState.StartedAt,
-					Err:       fmt.Sprintf("panic: %v", r),
-				})
+				terminal = m.failedIndexState(request, state, fmt.Errorf("panic: %v", recovered))
 			}
+			if terminal == nil {
+				terminal = m.failedIndexState(request, state, fmt.Errorf("index execution did not complete"))
+			}
+			m.completeIndexRun(request, terminal, record)
 		}()
-
-		if logger != nil {
-			logger.Info("codeintel: starting index run",
-				"client_session_id", target.ClientSessionID,
-				"context_handle", target.ContextHandle,
-				"run_id", runID,
-				"root", root,
-			)
-		}
-
-		result, indexErr := core.IndexCodebase(daemonCtx, target, root)
-		if indexErr != nil {
-			if logger != nil {
-				logger.Error("codeintel: index run failed",
-					"client_session_id", target.ClientSessionID,
-					"context_handle", target.ContextHandle,
-					"run_id", runID,
-					"error", indexErr.Error(),
-				)
-			}
-			states.Store(key, &indexState{
-				Status:    statusError,
-				RunID:     runID,
-				StartedAt: newState.StartedAt,
-				Err:       indexErr.Error(),
-			})
-			return
-		}
-		if !indexResultMatchesBinding(result, target.BindingClone()) {
-			err := fmt.Errorf("codebase_index: index result context does not match resolved target")
-			if logger != nil {
-				logger.Error("codeintel: index run rejected",
-					"client_session_id", target.ClientSessionID,
-					"context_handle", target.ContextHandle,
-					"run_id", runID,
-					"error", err.Error(),
-				)
-			}
-			states.Store(key, &indexState{
-				Status:    statusError,
-				RunID:     runID,
-				StartedAt: newState.StartedAt,
-				Err:       err.Error(),
-			})
-			return
-		}
-
-		if logger != nil {
-			logger.Info("codeintel: index run complete",
-				"client_session_id", target.ClientSessionID,
-				"context_handle", target.ContextHandle,
-				"run_id", runID,
-				"uploaded", result.Uploaded,
-				"embedded", result.Embedded,
-				"deleted", result.Deleted,
-			)
-		}
-		states.Store(key, &indexState{
-			Status:    statusIdle,
-			RunID:     runID,
-			StartedAt: newState.StartedAt,
-		})
+		terminal = m.executeIndexRun(request, state)
 	}()
+}
 
-	out, _ := json.Marshal(map[string]any{
-		"status": "started",
-		"run_id": newRunID,
-	})
-	return out, nil
+func (m *Module) executeIndexRun(request indexRunRequest, state *indexState) *indexState {
+	target := request.target.Clone()
+	if logger := m.deps.Logger; logger != nil {
+		logger.Info("codeintel: starting index run",
+			"client_session_id", target.ClientSessionID,
+			"context_handle", target.ContextHandle,
+			"run_id", state.RunID,
+			"root", request.root,
+		)
+	}
+	indexContext := m.indexContext(target, request)
+	if rebinder, supported := m.core.(IndexTargetRebinder); supported {
+		rebound, err := rebinder.RebindIndexTarget(indexContext, target)
+		if err != nil {
+			return m.logIndexFailure(request, state, target, err)
+		}
+		if !sameUCIRuntimeTargetIdentity(target, rebound) {
+			return m.logIndexFailure(request, state, target, fmt.Errorf("codebase_index: rebound target changed authorization"))
+		}
+		target = rebound
+		if m.runtime != nil {
+			if err := m.runtime.updateReboundTarget(target); err != nil {
+				return m.logIndexFailure(request, state, target, err)
+			}
+		}
+	}
+	result, err := m.core.IndexCodebase(indexContext, target, request.root)
+	if err != nil {
+		return m.logIndexFailure(request, state, target, err)
+	}
+	if !indexResultMatchesBinding(result, target.BindingClone()) {
+		return m.logIndexFailure(request, state, target, fmt.Errorf("codebase_index: index result context does not match resolved target"))
+	}
+	if logger := m.deps.Logger; logger != nil {
+		logger.Info("codeintel: index run complete",
+			"client_session_id", target.ClientSessionID,
+			"context_handle", target.ContextHandle,
+			"run_id", state.RunID,
+			"uploaded", result.Uploaded,
+			"embedded", result.Embedded,
+			"deleted", result.Deleted,
+		)
+	}
+	return &indexState{Status: statusIdle, RunID: state.RunID, StartedAt: state.StartedAt}
+}
+
+func (m *Module) logIndexFailure(request indexRunRequest, state *indexState, target ResolvedIndexTarget, err error) *indexState {
+	if logger := m.deps.Logger; logger != nil {
+		logger.Error("codeintel: index run failed",
+			"client_session_id", target.ClientSessionID,
+			"context_handle", target.ContextHandle,
+			"run_id", state.RunID,
+			"error", err.Error(),
+		)
+	}
+	return m.failedIndexState(request, state, err)
+}
+
+func (m *Module) failedIndexState(request indexRunRequest, state *indexState, err error) *indexState {
+	diagnostic := err.Error()
+	if request.origin == indexRunAutomatic {
+		diagnostic = automaticIndexFailureDiagnostic
+	}
+	return &indexState{Status: statusError, RunID: state.RunID, StartedAt: state.StartedAt, Err: diagnostic}
+}
+
+func (m *Module) completeIndexRun(request indexRunRequest, terminal *indexState, record *indexRunRecord) {
+	key := indexKeyFor(request.target)
+	m.startMu.Lock()
+	terminal = m.completeIndexRunRecordLocked(record, terminal)
+	if pending, found := m.pendingAuto[key]; found && m.daemonIndexContext().Err() == nil {
+		delete(m.pendingAuto, key)
+		next, nextRecord, err := m.newRunningIndexStateLocked(key)
+		if err == nil {
+			m.indexStates.Store(key, next)
+			m.startMu.Unlock()
+			m.launchIndexRun(pending, next, nextRecord)
+			return
+		}
+		m.indexStates.Store(key, terminal)
+		m.startMu.Unlock()
+		if logger := m.deps.Logger; logger != nil {
+			logger.Error("codeintel: automatic reindex scheduling failed", "checkout_id", key.ScopeCheckoutID, "error", err.Error())
+		}
+		return
+	}
+	delete(m.pendingAuto, key)
+	m.indexStates.Store(key, terminal)
+	m.startMu.Unlock()
+}
+
+func (m *Module) completeIndexRunRecordLocked(record *indexRunRecord, terminal *indexState) *indexState {
+	if record == nil {
+		return &indexState{Status: statusError, Err: "index completion record is unavailable"}
+	}
+	if record.terminal {
+		return &indexState{Status: record.terminalStatus, RunID: record.runID, StartedAt: record.startedAt, Err: record.terminalErr}
+	}
+	if terminal == nil || terminal.RunID != record.runID || (terminal.Status != statusIdle && terminal.Status != statusError) {
+		terminal = &indexState{Status: statusError, RunID: record.runID, StartedAt: record.startedAt, Err: "index completion receipt is invalid"}
+	}
+	record.terminal = true
+	record.terminalStatus = terminal.Status
+	record.terminalErr = terminal.Err
+	close(record.done)
+	m.completedRunIDs = append(m.completedRunIDs, record.runID)
+	m.pruneIndexRunRecordsLocked()
+	return terminal
+}
+
+func (m *Module) pruneIndexRunRecordsLocked() {
+	for len(m.completedRunIDs) > indexRunRecordLimit {
+		runID := m.completedRunIDs[0]
+		m.completedRunIDs = m.completedRunIDs[1:]
+		if record, found := m.runRecords[runID]; found && record.terminal {
+			delete(m.runRecords, runID)
+		}
+	}
+}
+
+func (m *Module) waitForIndexBarrier(ctx context.Context, key indexStateKey, barrier codebaseStatusAfterBarrier) (indexRunSnapshot, indexBarrierOutcome, error) {
+	if ctx == nil {
+		return indexRunSnapshot{}, indexBarrierError, fmt.Errorf("codebase_status: request context is required")
+	}
+	m.startMu.Lock()
+	record, found := m.runRecords[barrier.Token]
+	if !found || record.key != key {
+		m.startMu.Unlock()
+		return indexRunSnapshot{}, indexBarrierStale, nil
+	}
+	snapshot := indexRunRecordSnapshot(record)
+	done := record.done
+	m.startMu.Unlock()
+	if snapshot.terminal {
+		return snapshot, indexBarrierOutcomeForSnapshot(snapshot), nil
+	}
+
+	timer := time.NewTimer(time.Duration(barrier.WaitMS) * time.Millisecond)
+	defer func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}()
+	select {
+	case <-ctx.Done():
+		return indexRunSnapshot{}, indexBarrierError, ctx.Err()
+	case <-done:
+		m.startMu.Lock()
+		snapshot = indexRunRecordSnapshot(record)
+		m.startMu.Unlock()
+		return snapshot, indexBarrierOutcomeForSnapshot(snapshot), nil
+	case <-timer.C:
+		m.startMu.Lock()
+		snapshot = indexRunRecordSnapshot(record)
+		m.startMu.Unlock()
+		if snapshot.terminal {
+			return snapshot, indexBarrierOutcomeForSnapshot(snapshot), nil
+		}
+		return snapshot, indexBarrierTimedOut, nil
+	}
+}
+
+func indexRunRecordSnapshot(record *indexRunRecord) indexRunSnapshot {
+	snapshot := indexRunSnapshot{runID: record.runID, pathCount: record.pathCount, status: statusRunning, terminal: record.terminal}
+	if record.terminal {
+		snapshot.status = record.terminalStatus
+		snapshot.err = record.terminalErr
+	}
+	return snapshot
+}
+
+func indexBarrierOutcomeForSnapshot(snapshot indexRunSnapshot) indexBarrierOutcome {
+	if !snapshot.terminal {
+		return indexBarrierTimedOut
+	}
+	switch snapshot.status {
+	case statusIdle:
+		return indexBarrierSatisfied
+	case statusError:
+		return indexBarrierError
+	default:
+		return indexBarrierStale
+	}
+}
+
+func (m *Module) daemonIndexContext() context.Context {
+	if m.deps.DaemonCtx != nil {
+		return m.deps.DaemonCtx
+	}
+	return context.Background()
+}
+
+func (m *Module) indexContext(target ResolvedIndexTarget, request indexRunRequest) context.Context {
+	ctx := auditcontext.WithUCITransportSession(m.daemonIndexContext(), target.ClientSessionID)
+	if request.hasCorrelation {
+		ctx = auditcontext.WithUCIRequestCorrelation(ctx, request.correlation)
+	}
+	return ctx
 }
 
 // -----------------------------------------------------------------------
@@ -633,13 +969,41 @@ func (m *Module) handleStatus(ctx context.Context, p muxcore.ProjectContext, arg
 	}
 
 	result := map[string]any{"status": "never_indexed"}
-	if raw, ok := m.indexStates.Load(indexKeyFor(target)); ok {
+	var barrierSnapshot indexRunSnapshot
+	var barrierOutcome indexBarrierOutcome
+	if afterBarrier != nil {
+		barrierSnapshot, barrierOutcome, err = m.waitForIndexBarrier(ctx, indexKeyFor(target), *afterBarrier)
+		if err != nil {
+			return nil, err
+		}
+		switch barrierOutcome {
+		case indexBarrierStale:
+			return nil, fmt.Errorf("codebase_status: after_barrier token is stale for this target")
+		case indexBarrierError:
+			return nil, fmt.Errorf("codebase_status: after_barrier run failed")
+		case indexBarrierSatisfied, indexBarrierTimedOut:
+			result["status"] = barrierSnapshot.status
+			result["run_id"] = barrierSnapshot.runID
+		default:
+			return nil, fmt.Errorf("codebase_status: after_barrier has an invalid outcome")
+		}
+	} else if raw, ok := m.indexStates.Load(indexKeyFor(target)); ok {
 		state := raw.(*indexState)
 		result["status"] = state.Status
 		result["run_id"] = state.RunID
 		if state.Err != "" {
 			result["error"] = state.Err
 		}
+	}
+	if afterBarrier != nil {
+		refreshed, refreshErr := m.core.ResolveIndexTarget(ctx, p, contextHandle)
+		if refreshErr != nil {
+			return nil, refreshErr
+		}
+		if !requestedTargetMatches(refreshed, clientSessionID, contextHandle) || indexKeyFor(refreshed) != indexKeyFor(target) {
+			return nil, fmt.Errorf("codebase_status: target changed while waiting for local barrier")
+		}
+		target = refreshed
 	}
 	if target.ContextClone() == nil {
 		if afterBarrier != nil {
@@ -654,10 +1018,7 @@ func (m *Module) handleStatus(ctx context.Context, p muxcore.ProjectContext, arg
 		return out, nil
 	}
 
-	statusArgs, err := json.Marshal(codebaseStatusProxyArgs{
-		ContextHandle: target.ContextHandle,
-		AfterBarrier:  afterBarrier,
-	})
+	statusArgs, err := json.Marshal(codebaseStatusProxyArgs{ContextHandle: target.ContextHandle})
 	if err != nil {
 		return nil, fmt.Errorf("codebase_status: marshal proxy args: %w", err)
 	}
@@ -669,6 +1030,9 @@ func (m *Module) handleStatus(ctx context.Context, p muxcore.ProjectContext, arg
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
+		if afterBarrier != nil {
+			return nil, fmt.Errorf("codebase_status: load local barrier status: %w", proxyErr)
+		}
 		result["server_counts_available"] = false
 		result["server_counts_error"] = proxyErr.Error()
 	} else {
@@ -677,9 +1041,17 @@ func (m *Module) handleStatus(ctx context.Context, p muxcore.ProjectContext, arg
 		}
 		serverPayload, payloadErr := decodeServerStatusPayload(serverRaw)
 		if payloadErr != nil {
+			if afterBarrier != nil {
+				return nil, fmt.Errorf("codebase_status: decode local barrier status: %w", payloadErr)
+			}
 			result["server_counts_available"] = false
 			result["server_counts_error"] = payloadErr.Error()
 		} else {
+			if afterBarrier != nil {
+				if err := mergeIndexBarrierFreshness(serverPayload, barrierSnapshot, *afterBarrier, barrierOutcome); err != nil {
+					return nil, err
+				}
+			}
 			for _, key := range []string{"total_chunks", "embedded_chunks", "last_indexed_at", "context", "rows", "edges", "evidence_recorder", "freshness"} {
 				if value, found := serverPayload[key]; found {
 					result[key] = value
@@ -694,4 +1066,39 @@ func (m *Module) handleStatus(ctx context.Context, p muxcore.ProjectContext, arg
 		return nil, fmt.Errorf("codebase_status: marshal: %w", err)
 	}
 	return out, nil
+}
+
+func mergeIndexBarrierFreshness(payload map[string]json.RawMessage, snapshot indexRunSnapshot, request codebaseStatusAfterBarrier, outcome indexBarrierOutcome) error {
+	rawFreshness, found := payload["freshness"]
+	if !found {
+		return fmt.Errorf("codebase_status: local barrier status omitted freshness")
+	}
+	var freshness uci.QueryFreshness
+	if err := json.Unmarshal(rawFreshness, &freshness); err != nil {
+		return fmt.Errorf("codebase_status: decode local barrier freshness: %w", err)
+	}
+	if err := freshness.Validate(); err != nil {
+		return fmt.Errorf("codebase_status: local barrier freshness is invalid: %w", err)
+	}
+	state := uci.QueryBarrierSatisfied
+	if outcome == indexBarrierTimedOut {
+		state = uci.QueryBarrierTimedOut
+	} else if outcome != indexBarrierSatisfied {
+		return fmt.Errorf("codebase_status: local barrier cannot merge outcome")
+	}
+	freshness.Method = uci.QueryFreshnessPathHashBarrier
+	freshness.Barrier = &uci.QueryBarrier{
+		Scope:      uci.QueryBarrierScope{Kind: uci.QueryBarrierPaths, PathCount: snapshot.pathCount},
+		DeadlineMS: request.WaitMS,
+		State:      state,
+	}
+	if err := freshness.Validate(); err != nil {
+		return fmt.Errorf("codebase_status: merged local barrier freshness is invalid: %w", err)
+	}
+	encoded, err := json.Marshal(freshness)
+	if err != nil {
+		return fmt.Errorf("codebase_status: encode local barrier freshness: %w", err)
+	}
+	payload["freshness"] = encoded
+	return nil
 }

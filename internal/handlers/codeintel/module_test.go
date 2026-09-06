@@ -3,6 +3,7 @@ package codeintel_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,12 +28,15 @@ type fakeCore struct {
 	indexCalled int
 	indexDelay  time.Duration
 	indexErr    error
+	afterIndex  func()
+	indexGate   <-chan struct{}
 
 	statusResponse []byte
 	statusErr      error
 
 	bindings       map[string]uci.IndexBinding
 	resolveBinding func(int, string) uci.IndexBinding
+	afterResolve   func(int)
 	resolveCalled  int
 	proxyCalled    int
 }
@@ -50,7 +54,11 @@ func (f *fakeCore) ResolveIndexTarget(ctx context.Context, _ muxcore.ProjectCont
 		binding = fakeDefaultIndexBinding()
 	}
 	binding = binding.Clone()
+	afterResolve := f.afterResolve
 	f.mu.Unlock()
+	if afterResolve != nil {
+		afterResolve(resolveCall)
+	}
 
 	return codeintel.ResolvedIndexTarget{
 		ClientSessionID: auditcontext.UCITransportSession(ctx),
@@ -95,18 +103,30 @@ func fakeNoViewIndexBinding(checkoutID, incarnationID string) uci.IndexBinding {
 	}
 }
 
-func (f *fakeCore) IndexCodebase(_ context.Context, target codeintel.ResolvedIndexTarget, _ string) (*codeintel.IndexResult, error) {
+func (f *fakeCore) IndexCodebase(ctx context.Context, target codeintel.ResolvedIndexTarget, _ string) (*codeintel.IndexResult, error) {
 	f.mu.Lock()
 	delay := f.indexDelay
 	err := f.indexErr
+	afterIndex := f.afterIndex
+	indexGate := f.indexGate
 	f.indexCalled++
 	f.mu.Unlock()
 
+	if indexGate != nil {
+		select {
+		case <-indexGate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	if delay > 0 {
 		time.Sleep(delay)
 	}
 	if err != nil {
 		return nil, err
+	}
+	if afterIndex != nil {
+		afterIndex()
 	}
 	context := target.ContextClone()
 	if context == nil {
@@ -534,6 +554,137 @@ func TestCodebaseStatusKeepsRunAcrossNoViewPublication(t *testing.T) {
 	require.Equal(t, true, afterPublication["server_counts_available"])
 	_, proxyCalls = core.callCounts()
 	require.Equal(t, 1, proxyCalls, "published View must reach the server status proxy")
+}
+
+func TestCodebaseStatusBarrierRefreshesNoViewTargetAfterPublication(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	noView := fakeNoViewIndexBinding("33333333-3333-4333-8333-333333333333", "66666666-6666-4666-8666-666666666666")
+	published := noView.Clone()
+	published.Context = &uci.ContextRef{
+		SourceID:          noView.Scope.SourceID,
+		CheckoutID:        noView.Scope.CheckoutID,
+		ViewID:            "44444444-4444-4444-8444-444444444444",
+		AnalysisProfileID: noView.ProfileID,
+		Generation:        1,
+	}
+	pendingChanges := int64(0)
+	statusResponse, err := json.Marshal(map[string]any{
+		"context": *published.Context,
+		"freshness": uci.QueryFreshness{
+			State:          uci.QueryFreshnessObservedCurrent,
+			Method:         uci.QueryFreshnessWatchWatermark,
+			PendingChanges: &pendingChanges,
+			EnrichmentWatermark: uci.QueryEnrichmentWatermark{
+				Sequence: 1,
+				State:    uci.QueryEnrichmentCurrent,
+			},
+		},
+	})
+	require.NoError(t, err)
+	var isPublished atomic.Bool
+	initialBarrierResolved := make(chan struct{})
+	releaseIndex := make(chan struct{})
+	core := &fakeCore{
+		indexGate:      releaseIndex,
+		statusResponse: statusResponse,
+		resolveBinding: func(_ int, _ string) uci.IndexBinding {
+			if isPublished.Load() {
+				return published
+			}
+			return noView
+		},
+		afterResolve: func(call int) {
+			if call == 2 {
+				close(initialBarrierResolved)
+			}
+		},
+		afterIndex: func() { isPublished.Store(true) },
+	}
+	mod := newTestModule(core)
+	h := moduletest.New(t)
+	require.NoError(t, h.Register(mod))
+	h.Freeze()
+	p := testProjectContext("proj-no-view-barrier", t.TempDir())
+	ctx := testTransportContext(p)
+	contextHandle := "handle-" + p.ID
+
+	raw, err := h.CallToolWithProject(ctx, p, "codebase_index", testIndexArgsForHandle(p, contextHandle))
+	require.NoError(t, err)
+	var started struct {
+		RunID string `json:"run_id"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &started))
+	require.NotEmpty(t, started.RunID)
+
+	type barrierResponse struct {
+		raw json.RawMessage
+		err error
+	}
+	responses := make(chan barrierResponse, 1)
+	go func() {
+		response, callErr := h.CallToolWithProject(ctx, p, "codebase_status", testStatusArgsWithBarrier(contextHandle, started.RunID, 500))
+		responses <- barrierResponse{raw: response, err: callErr}
+	}()
+	select {
+	case <-initialBarrierResolved:
+	case <-time.After(2 * time.Second):
+		t.Fatal("barrier status did not resolve the initial no-View target")
+	}
+	require.False(t, isPublished.Load(), "initial barrier resolution must observe the no-View binding")
+	close(releaseIndex)
+	select {
+	case response := <-responses:
+		raw = response.raw
+		err = response.err
+	case <-time.After(2 * time.Second):
+		t.Fatal("barrier status did not return after publication")
+	}
+	require.NoError(t, err)
+	var status struct {
+		Status                string             `json:"status"`
+		RunID                 string             `json:"run_id"`
+		Context               uci.ContextRef     `json:"context"`
+		Freshness             uci.QueryFreshness `json:"freshness"`
+		ServerCountsAvailable bool               `json:"server_counts_available"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &status))
+	require.Equal(t, "idle", status.Status)
+	require.Equal(t, started.RunID, status.RunID)
+	require.Equal(t, *published.Context, status.Context)
+	require.True(t, status.ServerCountsAvailable)
+	require.Equal(t, uci.QueryFreshnessPathHashBarrier, status.Freshness.Method)
+	require.NotNil(t, status.Freshness.Barrier)
+	require.Equal(t, uci.QueryBarrierSatisfied, status.Freshness.Barrier.State)
+	require.NoError(t, status.Freshness.Validate())
+	resolveCalls, proxyCalls := core.callCounts()
+	require.GreaterOrEqual(t, resolveCalls, 3, "barrier status must resolve once before and once after waiting")
+	require.Equal(t, 1, proxyCalls)
+}
+
+func TestCodebaseStatusBarrierFailsClosedForFailedRun(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	core := &fakeCore{indexErr: errors.New("synthetic prepared-index failure")}
+	mod := newTestModule(core)
+	h := moduletest.New(t)
+	require.NoError(t, h.Register(mod))
+	h.Freeze()
+	p := testProjectContext("proj-failed-barrier", t.TempDir())
+	ctx := testTransportContext(p)
+	contextHandle := "handle-" + p.ID
+
+	raw, err := h.CallToolWithProject(ctx, p, "codebase_index", testIndexArgsForHandle(p, contextHandle))
+	require.NoError(t, err)
+	var started struct {
+		RunID string `json:"run_id"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &started))
+	require.NotEmpty(t, started.RunID)
+
+	raw, err = h.CallToolWithProject(ctx, p, "codebase_status", testStatusArgsWithBarrier(contextHandle, started.RunID, 500))
+	require.Nil(t, raw)
+	require.ErrorContains(t, err, "after_barrier run failed")
+	_, proxyCalls := core.callCounts()
+	require.Zero(t, proxyCalls, "failed local barrier must not proxy stale server evidence")
 }
 
 func TestCodebaseToolsRejectMissingTransportSessionWithoutEnvironmentFallback(t *testing.T) {

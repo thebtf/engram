@@ -2,7 +2,9 @@ package codeintel_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -768,6 +770,10 @@ type preparedIndexFixture struct {
 }
 
 func newPreparedIndexFixture(t *testing.T) preparedIndexFixture {
+	return newPreparedIndexFixtureWithTreeSitter(t, nil)
+}
+
+func newPreparedIndexFixtureWithTreeSitter(t *testing.T, parser codeintel.UCIPreparedTreeSitterParser) preparedIndexFixture {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
@@ -839,6 +845,7 @@ func newPreparedIndexFixture(t *testing.T) preparedIndexFixture {
 		ParserBundleDigest: preparedParserBundleDigest,
 		Registry:           registry,
 		Scanner:            scanner,
+		TreeSitterParser:   parser,
 		GoProfile: uci.GoExtractionProfile{
 			ProfileKey: "go-structure-v1",
 			ParserKey:  "go-parser-v1",
@@ -1000,4 +1007,242 @@ func TestUCIPreparedIndexExcludesGoArtifactWhoseSafeFrameCannotFit(t *testing.T)
 	coverage := preparedCoverage(t, fixture.client.finalRequests[0])
 	require.Equal(t, uci.IndexCoveragePartial, coverage.Lexical)
 	require.Equal(t, uint64(1), coverage.ExcludedFiles)
+}
+
+func TestUCIPreparedIndexPublishesTreeSitterFactsWithPinnedProfile(t *testing.T) {
+	parser := &preparedTreeSitterParser{responses: map[uci.TreeSitterLanguage]preparedTreeSitterResponse{
+		uci.TreeSitterLanguageJavaScript: {},
+		uci.TreeSitterLanguageTypeScript: {},
+		uci.TreeSitterLanguageTSX:        {},
+	}}
+	fixture := newPreparedIndexFixtureWithTreeSitter(t, parser)
+	fixture.scanner.result.Files = []uci.ScannerFile{
+		{Path: "client.js", State: uci.IndexFilePresent, Body: []byte("export const client = true;\n")},
+		{Path: "client.ts", State: uci.IndexFilePresent, Body: []byte("export const typed: string = \"ok\";\n")},
+		{Path: "legacy.jsx", State: uci.IndexFilePresent, Body: []byte("export default <div />;\n")},
+		{Path: "view.tsx", State: uci.IndexFilePresent, Body: []byte("export const View = () => <main />;\n")},
+	}
+
+	result, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	require.NoError(t, err)
+	require.Equal(t, fixture.published, result.Context)
+	require.Equal(t, 3, result.Uploaded)
+	require.Equal(t, []string{"legacy.jsx: source language is unsupported"}, result.Errors)
+	require.Len(t, parser.requests, 3)
+
+	expected := []struct {
+		path     string
+		language uci.TreeSitterLanguage
+	}{
+		{path: "client.js", language: uci.TreeSitterLanguageJavaScript},
+		{path: "client.ts", language: uci.TreeSitterLanguageTypeScript},
+		{path: "view.tsx", language: uci.TreeSitterLanguageTSX},
+	}
+	for index, want := range expected {
+		request := parser.requests[index]
+		require.Equal(t, want.language, request.Language)
+		require.Equal(t, "uci-prepared-tree-sitter/v1:"+preparedProfileID+":"+string(want.language)+":"+preparedParserBundleDigest, request.ProfileKey)
+		require.Equal(t, map[string][]byte{
+			"client.js": fixture.scanner.result.Files[0].Body,
+			"client.ts": fixture.scanner.result.Files[1].Body,
+			"view.tsx":  fixture.scanner.result.Files[3].Body,
+		}[want.path], request.Source)
+	}
+
+	frames := preparedFrames(t, fixture.client.stagePayloadSets[0])
+	preparedRequireMembership(t, frames[preparedFrameIndex(t, frames, "client.js")], "client.js", uci.IndexAdmissionMembershipPresent, true)
+	preparedRequireMembership(t, frames[preparedFrameIndex(t, frames, "client.ts")], "client.ts", uci.IndexAdmissionMembershipPresent, true)
+	preparedRequireMembership(t, frames[preparedFrameIndex(t, frames, "view.tsx")], "view.tsx", uci.IndexAdmissionMembershipPresent, true)
+	preparedRequireMembership(t, frames[preparedFrameIndex(t, frames, "legacy.jsx")], "legacy.jsx", uci.IndexAdmissionMembershipUnsupported, false)
+	for _, want := range expected {
+		artifact := preparedArtifactForPath(t, frames, want.path)
+		require.Equal(t, uci.IndexDigest(preparedParserBundleDigest), artifact.Profile.GrammarDigest)
+		require.Equal(t, uci.IndexDigest(preparedParserBundleDigest), artifact.Profile.ExtractionProfileDigest)
+		expectedID, err := uci.DeriveIndexAdmissionArtifactID(preparedSourceID, artifact.ContentDigest, artifact.Profile)
+		require.NoError(t, err)
+		require.Equal(t, expectedID, artifact.ArtifactID)
+		require.Len(t, artifact.Chunks, 1)
+		require.Equal(t, string(fixture.scanner.result.Files[map[string]int{"client.js": 0, "client.ts": 1, "view.tsx": 3}[want.path]].Body), artifact.Chunks[0].Text)
+	}
+	for _, frame := range frames {
+		for _, replacement := range frame.EdgeReplacements {
+			if replacement.SourcePath == "client.js" || replacement.SourcePath == "client.ts" || replacement.SourcePath == "view.tsx" {
+				require.Empty(t, replacement.Edges)
+			}
+		}
+	}
+	coverage := preparedCoverage(t, fixture.client.finalRequests[0])
+	require.Equal(t, uci.IndexCoveragePartial, coverage.Lexical)
+	require.Equal(t, uint64(1), coverage.ExcludedFiles)
+}
+
+func TestUCIPreparedIndexRetainsPartialTreeSitterFacts(t *testing.T) {
+	parser := &preparedTreeSitterParser{responses: map[uci.TreeSitterLanguage]preparedTreeSitterResponse{
+		uci.TreeSitterLanguageTypeScript: {
+			coverage: uci.IndexCoveragePartial,
+			diagnostics: []uci.TreeSitterDiagnostic{{
+				Code:    "PARSE_ERROR",
+				Message: "source could not be parsed completely",
+			}},
+		},
+	}}
+	fixture := newPreparedIndexFixtureWithTreeSitter(t, parser)
+	fixture.scanner.result.Files = []uci.ScannerFile{{
+		Path: "broken.ts", State: uci.IndexFilePresent, Body: []byte("export function broken(\n"),
+	}}
+
+	result, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Uploaded)
+	require.Equal(t, []string{"broken.ts: Tree-sitter parser coverage is partial"}, result.Errors)
+	frames := preparedFrames(t, fixture.client.stagePayloadSets[0])
+	broken := preparedArtifactForPath(t, frames, "broken.ts")
+	require.Equal(t, uci.IndexAdmissionArtifactPartial, broken.Status)
+	require.True(t, preparedArtifactHasDiagnostic(broken, "PARSE_ERROR"))
+	require.True(t, preparedArtifactHasDiagnostic(broken, "TREE_SITTER_PARTIAL_COVERAGE"))
+	coverage := preparedCoverage(t, fixture.client.finalRequests[0])
+	require.Equal(t, uci.IndexCoveragePartial, coverage.Lexical)
+	require.Zero(t, coverage.ExcludedFiles)
+}
+
+func TestUCIPreparedIndexRejectsTreeSitterBundleMismatchBeforePublishing(t *testing.T) {
+	parser := &preparedTreeSitterParser{responses: map[uci.TreeSitterLanguage]preparedTreeSitterResponse{
+		uci.TreeSitterLanguageTSX: {bundleDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+	}}
+	fixture := newPreparedIndexFixtureWithTreeSitter(t, parser)
+	fixture.scanner.result.Files = []uci.ScannerFile{{
+		Path: "missing.tsx", State: uci.IndexFilePresent, Body: []byte("export const Missing = () => <main />;\n"),
+	}}
+
+	result, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "Tree-sitter parser bundle mismatch")
+	require.Equal(t, 1, fixture.scanner.calls)
+	require.Empty(t, fixture.client.beginRequests)
+	require.Zero(t, fixture.client.stageCalls)
+	require.Zero(t, fixture.client.finalizeCalls)
+}
+
+func TestUCIPreparedIndexRejectsMissingTreeSitterBeforePublishingAnyFacts(t *testing.T) {
+	fixture := newPreparedIndexFixture(t)
+	fixture.scanner.result.Files = []uci.ScannerFile{
+		{Path: "caller.go", State: uci.IndexFilePresent, Body: []byte("package sample\nfunc Caller() { Target() }\n")},
+		{Path: "client.js", State: uci.IndexFilePresent, Body: []byte("export const client = true;\n")},
+		{Path: "target.go", State: uci.IndexFilePresent, Body: []byte("package sample\nfunc Target() {}\n")},
+	}
+
+	result, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "Tree-sitter parser is unavailable")
+	require.Equal(t, 1, fixture.scanner.calls)
+	require.Empty(t, fixture.client.beginRequests)
+	require.Zero(t, fixture.client.stageCalls)
+	require.Zero(t, fixture.client.finalizeCalls)
+}
+
+type preparedTreeSitterResponse struct {
+	coverage     uci.IndexCoverageState
+	bundleDigest uci.IndexDigest
+	diagnostics  []uci.TreeSitterDiagnostic
+	err          error
+}
+
+type preparedTreeSitterParser struct {
+	responses map[uci.TreeSitterLanguage]preparedTreeSitterResponse
+	requests  []uci.TreeSitterParseRequest
+}
+
+func (parser *preparedTreeSitterParser) Parse(ctx context.Context, request uci.TreeSitterParseRequest) (uci.TreeSitterArtifact, error) {
+	if err := ctx.Err(); err != nil {
+		return uci.TreeSitterArtifact{}, err
+	}
+	copy := request
+	copy.Source = append([]byte(nil), request.Source...)
+	parser.requests = append(parser.requests, copy)
+	response, found := parser.responses[request.Language]
+	if !found {
+		return uci.TreeSitterArtifact{}, fmt.Errorf("unconfigured Tree-sitter language %q", request.Language)
+	}
+	if response.err != nil {
+		return uci.TreeSitterArtifact{}, response.err
+	}
+	return preparedTreeSitterArtifact(request.Source, request.Language, response.coverage, response.bundleDigest, response.diagnostics), nil
+}
+
+func preparedTreeSitterArtifact(source []byte, language uci.TreeSitterLanguage, coverage uci.IndexCoverageState, bundleDigest uci.IndexDigest, diagnostics []uci.TreeSitterDiagnostic) uci.TreeSitterArtifact {
+	if coverage == "" {
+		coverage = uci.IndexCoverageComplete
+	}
+	if bundleDigest == "" {
+		bundleDigest = preparedParserBundleDigest
+	}
+	chunks := []uci.TreeSitterChunk{}
+	if len(source) != 0 {
+		chunks = append(chunks, uci.TreeSitterChunk{
+			Span:          preparedTreeSitterSpan(source, 0, len(source)),
+			Text:          string(source),
+			ContentDigest: preparedTreeSitterDigest(source),
+		})
+	}
+	return uci.TreeSitterArtifact{
+		Proof: uci.IndexArtifactProof{
+			ArtifactID:         "88888888-8888-4888-8888-888888888888",
+			ContentDigest:      preparedTreeSitterDigest(source),
+			FactsDigest:        preparedTreeSitterDigest(append([]byte("facts:"), source...)),
+			ChunkCount:         uint64(len(chunks)),
+			DefinitionCount:    0,
+			ReferenceSiteCount: 0,
+		},
+		Coverage:     coverage,
+		Language:     language,
+		BundleDigest: bundleDigest,
+		Text:         string(source),
+		Chunks:       chunks,
+		Diagnostics:  append([]uci.TreeSitterDiagnostic(nil), diagnostics...),
+	}
+}
+
+func preparedTreeSitterDigest(value []byte) uci.IndexDigest {
+	sum := sha256.Sum256(value)
+	return uci.IndexDigest("sha256:" + hex.EncodeToString(sum[:]))
+}
+
+func preparedTreeSitterSpan(source []byte, start, end int) uci.IndexSpan {
+	lineEndOffset := start
+	if end > start {
+		lineEndOffset = end - 1
+	}
+	return uci.IndexSpan{
+		ByteStart: int64(start),
+		ByteEnd:   int64(end),
+		LineStart: strings.Count(string(source[:start]), "\n") + 1,
+		LineEnd:   strings.Count(string(source[:lineEndOffset]), "\n") + 1,
+	}
+}
+
+func preparedArtifactForPath(t *testing.T, frames []uci.IndexAdmissionFrame, path string) uci.IndexAdmissionArtifact {
+	t.Helper()
+	for _, frame := range frames {
+		for _, membership := range frame.Memberships {
+			if membership.PathKey != path || membership.ArtifactID == nil {
+				continue
+			}
+			for _, artifact := range frame.Artifacts {
+				if artifact.ArtifactID == *membership.ArtifactID {
+					return artifact
+				}
+			}
+		}
+	}
+	require.Failf(t, "artifact missing", "path %q has no admitted artifact", path)
+	return uci.IndexAdmissionArtifact{}
+}
+
+func preparedArtifactHasDiagnostic(artifact uci.IndexAdmissionArtifact, code string) bool {
+	for _, diagnostic := range artifact.Diagnostics {
+		if diagnostic.Code == code {
+			return true
+		}
+	}
+	return false
 }

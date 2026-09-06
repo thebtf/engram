@@ -12,7 +12,10 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-const uciWatcherRescanQueueCapacity = 3
+const (
+	uciWatcherRescanQueueCapacity = 4
+	uciWatcherChangeQueueCapacity = 1
+)
 
 var errUCIWatcherAlreadyStarted = errors.New("uci watcher: already started")
 
@@ -30,6 +33,13 @@ type UCIWatcherEventSource interface {
 	Events() <-chan fsnotify.Event
 	Errors() <-chan error
 	Close() error
+}
+
+// uciWatcherEventAdmitter is an optional production-source filter. The generic
+// watcher remains registry-only; the adapter decides which filesystem paths it
+// is safe to observe.
+type uciWatcherEventAdmitter interface {
+	AcceptsEvent(fsnotify.Event) bool
 }
 
 // UCIWatcherTimer is the timer boundary used by the deterministic debounce
@@ -65,6 +75,8 @@ type UCIWatcher struct {
 	config   UCIWatcherConfig
 	rootPath string
 	gitDir   string
+
+	changes chan struct{}
 
 	done chan error
 
@@ -113,6 +125,7 @@ func NewUCIWatcher(config UCIWatcherConfig) (*UCIWatcher, error) {
 		config:   config,
 		rootPath: filepath.Clean(config.RootPath),
 		gitDir:   filepath.Clean(config.GitDir),
+		changes:  make(chan struct{}, uciWatcherChangeQueueCapacity),
 		done:     make(chan error, 1),
 	}, nil
 }
@@ -152,6 +165,8 @@ func (watcher *UCIWatcher) Start(parent context.Context) error {
 		registrationErr := fmt.Errorf("uci watcher: register event source: %w", err)
 		if _, rescanErr := watcher.config.Registry.RequireRescan(context.Background(), watcher.config.CheckoutID, UCILocalRescanWatcherRegistrationFailure); rescanErr != nil {
 			registrationErr = fmt.Errorf("%v; record registration failure: %w", registrationErr, rescanErr)
+		} else {
+			watcher.signalChange()
 		}
 		return watcher.failStart(registrationErr)
 	}
@@ -186,6 +201,13 @@ func (watcher *UCIWatcher) Done() <-chan error {
 	return watcher.done
 }
 
+// Changes returns a bounded, coalesced notification for durable local state
+// changes. It never signals startup recovery: each notification is emitted
+// only after a dirty batch or non-startup rescan cause has been persisted.
+func (watcher *UCIWatcher) Changes() <-chan struct{} {
+	return watcher.changes
+}
+
 func (watcher *UCIWatcher) failStart(err error) error {
 	watcher.mu.Lock()
 	cancel := watcher.cancel
@@ -200,6 +222,11 @@ func (watcher *UCIWatcher) failStart(err error) error {
 func (watcher *UCIWatcher) addWatches() error {
 	if err := watcher.config.Source.Add(watcher.rootPath); err != nil {
 		return fmt.Errorf("add %q: %w", watcher.rootPath, err)
+	}
+	if !uciWatcherPathWithin(watcher.rootPath, watcher.gitDir) {
+		if err := watcher.config.Source.Add(watcher.gitDir); err != nil {
+			return fmt.Errorf("add private Git directory %q: %w", watcher.gitDir, err)
+		}
 	}
 	return nil
 }
@@ -240,8 +267,8 @@ func (watcher *UCIWatcher) collect(ctx context.Context, batches chan<- uciWatche
 			return
 		}
 		queuedRescans[cause] = struct{}{}
-		// There are only three asynchronous causes (overflow, move, and Git
-		// transition), and the dedicated queue has exactly that capacity.
+		// Overflow, move, Git transition, and dynamic directory-registration
+		// failures are distinct durable rescan causes.
 		rescans <- cause
 	}
 
@@ -296,6 +323,14 @@ func (watcher *UCIWatcher) collect(ctx context.Context, batches chan<- uciWatche
 					return
 				}
 				continue
+			}
+			if admittingSource, ok := watcher.config.Source.(uciWatcherEventAdmitter); ok && !admittingSource.AcceptsEvent(event) {
+				continue
+			}
+			if event.Op&fsnotify.Create != 0 {
+				if err := watcher.config.Source.Add(event.Name); err != nil {
+					queueRescan(UCILocalRescanWatcherRegistrationFailure)
+				}
 			}
 			if watcher.eventIsGitTransition(event) {
 				queueRescan(UCILocalRescanGitTransition)
@@ -365,6 +400,9 @@ func (watcher *UCIWatcher) persist(ctx context.Context, batches <-chan uciWatche
 				}
 				return fmt.Errorf("uci watcher: persist rescan cause %q: %w", cause, err)
 			}
+			if cause != UCILocalRescanRestart {
+				watcher.signalChange()
+			}
 		case batch, open := <-batches:
 			if !open {
 				batches = nil
@@ -391,6 +429,7 @@ func (watcher *UCIWatcher) persist(ctx context.Context, batches <-chan uciWatche
 					return errors.New("uci watcher: dirty sequence exhausted")
 				}
 			}
+			watcher.signalChange()
 		}
 	}
 	return nil
@@ -421,11 +460,19 @@ func (watcher *UCIWatcher) closeSource() error {
 	return watcher.closeSourceErr
 }
 
+func (watcher *UCIWatcher) signalChange() {
+	select {
+	case watcher.changes <- struct{}{}:
+	default:
+	}
+}
+
 func (watcher *UCIWatcher) finish(err error) {
 	watcher.finishOnce.Do(func() {
 		if err != nil {
 			watcher.done <- err
 		}
+		close(watcher.changes)
 		close(watcher.done)
 	})
 }

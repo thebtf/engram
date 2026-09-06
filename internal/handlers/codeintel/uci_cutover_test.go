@@ -322,6 +322,23 @@ func (core *uciCutoverCore) proxyCallsSnapshot() []uciCutoverProxyCall {
 	return append([]uciCutoverProxyCall(nil), core.proxyCalls...)
 }
 
+func (core *uciCutoverCore) awaitResolveCallCount(t *testing.T, count int) {
+	t.Helper()
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	for {
+		if len(core.resolveCallsSnapshot()) >= count {
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatalf("typed resolver did not reach %d calls", count)
+		default:
+			runtime.Gosched()
+		}
+	}
+}
+
 type uciCutoverFixture struct {
 	t       *testing.T
 	harness *moduletest.Harness
@@ -376,11 +393,6 @@ func newUCICutoverFixture(t *testing.T) *uciCutoverFixture {
 			Sequence: 1,
 			State:    uci.QueryEnrichmentCurrent,
 		},
-		Barrier: &uci.QueryBarrier{
-			Scope:      uci.QueryBarrierScope{Kind: uci.QueryBarrierPaths, PathCount: 1},
-			DeadlineMS: 25,
-			State:      uci.QueryBarrierSatisfied,
-		},
 	}
 	freshnessB := uci.QueryFreshness{
 		State:          uci.QueryFreshnessCatchingUp,
@@ -389,11 +401,6 @@ func newUCICutoverFixture(t *testing.T) *uciCutoverFixture {
 		EnrichmentWatermark: uci.QueryEnrichmentWatermark{
 			Sequence: 2,
 			State:    uci.QueryEnrichmentPending,
-		},
-		Barrier: &uci.QueryBarrier{
-			Scope:      uci.QueryBarrierScope{Kind: uci.QueryBarrierPaths, PathCount: 1},
-			DeadlineMS: 25,
-			State:      uci.QueryBarrierStale,
 		},
 	}
 
@@ -548,17 +555,39 @@ func TestUCICutoverKeepsSameProjectCallersIsolated(t *testing.T) {
 	require.Len(t, fixture.core.indexCallsSnapshot(), 2, "client C must not reach index execution")
 }
 
-func TestUCICutoverStatusForwardsFreshnessAndStrictBarrier(t *testing.T) {
+func TestUCICutoverStatusWaitsForLocalBarrierAndReplaysExactToken(t *testing.T) {
 	fixture := newUCICutoverFixture(t)
-	wantBarrier := uciCutoverAfterBarrier{Token: "uci-status-barrier", WaitMS: 25}
-
-	raw, err := fixture.call(fixture.ctxA, fixture.projectA, "codebase_status", map[string]any{
-		"context_handle": uciCutoverHandleA,
-		"after_barrier":  wantBarrier,
-	})
+	started, err := fixture.start(fixture.ctxA, fixture.projectA, fixture.rootA, uciCutoverHandleA)
 	require.NoError(t, err)
+	require.Equal(t, "started", started.Status)
+	fixture.core.awaitStarted(t, fixture.targetA)
+
+	type barrierResult struct {
+		status uciCutoverStatus
+		err    error
+	}
+	results := make(chan barrierResult, 1)
+	go func() {
+		status, callErr := fixture.barrierStatus(fixture.ctxA, fixture.projectA, uciCutoverHandleA, uciCutoverAfterBarrier{Token: started.RunID, WaitMS: 25})
+		results <- barrierResult{status: status, err: callErr}
+	}()
+	fixture.core.awaitResolveCallCount(t, 2)
+	for range 8 {
+		runtime.Gosched()
+	}
+	require.Empty(t, fixture.core.proxyCallsSnapshot(), "local barrier must not proxy before durable completion")
+
+	fixture.core.release(t, fixture.targetA)
 	var status uciCutoverStatus
-	require.NoError(t, json.Unmarshal(raw, &status))
+	select {
+	case received := <-results:
+		require.NoError(t, received.err)
+		status = received.status
+	case <-time.After(2 * time.Second):
+		t.Fatal("local barrier did not finish after index completion")
+	}
+	require.Equal(t, "idle", status.Status)
+	require.Equal(t, started.RunID, status.RunID)
 	require.Equal(t, fixture.statusA.Context, status.Context)
 	require.Equal(t, fixture.statusA.Rows, status.Rows)
 	require.Equal(t, fixture.statusA.Edges, status.Edges)
@@ -566,11 +595,93 @@ func TestUCICutoverStatusForwardsFreshnessAndStrictBarrier(t *testing.T) {
 	require.Equal(t, fixture.statusA.TotalChunks, status.TotalChunks)
 	require.Equal(t, fixture.statusA.EmbeddedChunks, status.EmbeddedChunks)
 	require.Equal(t, fixture.statusA.LastIndexedAt, status.LastIndexedAt)
-	require.Equal(t, fixture.statusA.Freshness, status.Freshness)
+	requireUCICutoverBarrierFreshness(t, status.Freshness, fixture.statusA.Freshness, 25, uci.QueryBarrierSatisfied)
 
 	calls := fixture.core.proxyCallsSnapshot()
 	require.Len(t, calls, 1)
-	requireUCICutoverProxyArgs(t, calls[0], &wantBarrier)
+	requireUCICutoverProxyArgs(t, calls[0])
+
+	replayed, err := fixture.barrierStatus(fixture.ctxA, fixture.projectA, uciCutoverHandleA, uciCutoverAfterBarrier{Token: started.RunID, WaitMS: 25})
+	require.NoError(t, err)
+	require.Equal(t, status, replayed, "the retained token must replay its immutable terminal receipt")
+	calls = fixture.core.proxyCallsSnapshot()
+	require.Len(t, calls, 2)
+	requireUCICutoverProxyArgs(t, calls[1])
+}
+
+func TestUCICutoverStatusBarrierTimesOutWithoutClaimingCompletion(t *testing.T) {
+	fixture := newUCICutoverFixture(t)
+	started, err := fixture.start(fixture.ctxA, fixture.projectA, fixture.rootA, uciCutoverHandleA)
+	require.NoError(t, err)
+	fixture.core.awaitStarted(t, fixture.targetA)
+
+	status, err := fixture.barrierStatus(fixture.ctxA, fixture.projectA, uciCutoverHandleA, uciCutoverAfterBarrier{Token: started.RunID, WaitMS: 1})
+	require.NoError(t, err)
+	require.Equal(t, "running", status.Status)
+	require.Equal(t, started.RunID, status.RunID)
+	require.Equal(t, fixture.statusA.Context, status.Context)
+	requireUCICutoverBarrierFreshness(t, status.Freshness, fixture.statusA.Freshness, 1, uci.QueryBarrierTimedOut)
+	calls := fixture.core.proxyCallsSnapshot()
+	require.Len(t, calls, 1)
+	requireUCICutoverProxyArgs(t, calls[0])
+
+	fixture.core.release(t, fixture.targetA)
+	fixture.core.awaitCompleted(t, fixture.targetA)
+}
+
+func TestUCICutoverStatusRejectsForeignAndStaleBarrierTokens(t *testing.T) {
+	fixture := newUCICutoverFixture(t)
+	started, err := fixture.start(fixture.ctxA, fixture.projectA, fixture.rootA, uciCutoverHandleA)
+	require.NoError(t, err)
+	fixture.core.awaitStarted(t, fixture.targetA)
+
+	_, err = fixture.barrierStatus(fixture.ctxB, fixture.projectB, uciCutoverHandleB, uciCutoverAfterBarrier{Token: started.RunID, WaitMS: 25})
+	require.ErrorContains(t, err, "stale")
+	_, err = fixture.barrierStatus(fixture.ctxA, fixture.projectA, uciCutoverHandleA, uciCutoverAfterBarrier{Token: "unknown-local-run", WaitMS: 25})
+	require.ErrorContains(t, err, "stale")
+	require.Empty(t, fixture.core.proxyCallsSnapshot(), "foreign or unknown tokens must not reach server status")
+
+	fixture.core.release(t, fixture.targetA)
+	fixture.core.awaitCompleted(t, fixture.targetA)
+}
+
+func TestUCICutoverStatusBarrierPreservesCallerCancellation(t *testing.T) {
+	fixture := newUCICutoverFixture(t)
+	started, err := fixture.start(fixture.ctxA, fixture.projectA, fixture.rootA, uciCutoverHandleA)
+	require.NoError(t, err)
+	fixture.core.awaitStarted(t, fixture.targetA)
+
+	cancelled, cancel := context.WithCancel(fixture.ctxA)
+	cancel()
+	_, err = fixture.barrierStatus(cancelled, fixture.projectA, uciCutoverHandleA, uciCutoverAfterBarrier{Token: started.RunID, WaitMS: 25})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, fixture.core.proxyCallsSnapshot(), "cancelled local barrier must not proxy")
+
+	fixture.core.release(t, fixture.targetA)
+	fixture.core.awaitCompleted(t, fixture.targetA)
+}
+
+func TestUCICutoverStatusUsesPriorTokenAfterLaterRunReplacesLiveness(t *testing.T) {
+	fixture := newUCICutoverFixture(t)
+	first, err := fixture.start(fixture.ctxA, fixture.projectA, fixture.rootA, uciCutoverHandleA)
+	require.NoError(t, err)
+	fixture.core.awaitStarted(t, fixture.targetA)
+	fixture.core.release(t, fixture.targetA)
+	firstCurrent := fixture.waitForStatus(fixture.ctxA, fixture.projectA, uciCutoverHandleA, "idle")
+	require.Equal(t, first.RunID, firstCurrent.RunID)
+
+	second, err := fixture.start(fixture.ctxA, fixture.projectA, fixture.rootA, uciCutoverHandleA)
+	require.NoError(t, err)
+	require.Equal(t, "started", second.Status)
+	require.NotEqual(t, first.RunID, second.RunID)
+	secondCurrent := fixture.waitForStatus(fixture.ctxA, fixture.projectA, uciCutoverHandleA, "idle")
+	require.Equal(t, second.RunID, secondCurrent.RunID)
+
+	prior, err := fixture.barrierStatus(fixture.ctxA, fixture.projectA, uciCutoverHandleA, uciCutoverAfterBarrier{Token: first.RunID, WaitMS: 25})
+	require.NoError(t, err)
+	require.Equal(t, "idle", prior.Status)
+	require.Equal(t, first.RunID, prior.RunID, "barrier lookup must not consult the mutable current row")
+	requireUCICutoverBarrierFreshness(t, prior.Freshness, fixture.statusA.Freshness, 25, uci.QueryBarrierSatisfied)
 }
 
 func TestUCICutoverRejectsMismatchedIndexResult(t *testing.T) {
@@ -638,6 +749,21 @@ func (fixture *uciCutoverFixture) status(ctx context.Context, project muxcore.Pr
 	var status uciCutoverStatus
 	if err := json.Unmarshal(raw, &status); err != nil {
 		return uciCutoverStatus{}, fmt.Errorf("decode codebase_status result: %w", err)
+	}
+	return status, nil
+}
+
+func (fixture *uciCutoverFixture) barrierStatus(ctx context.Context, project muxcore.ProjectContext, contextHandle string, barrier uciCutoverAfterBarrier) (uciCutoverStatus, error) {
+	raw, err := fixture.call(ctx, project, "codebase_status", map[string]any{
+		"context_handle": contextHandle,
+		"after_barrier":  barrier,
+	})
+	if err != nil {
+		return uciCutoverStatus{}, err
+	}
+	var status uciCutoverStatus
+	if err := json.Unmarshal(raw, &status); err != nil {
+		return uciCutoverStatus{}, fmt.Errorf("decode barrier codebase_status result: %w", err)
 	}
 	return status, nil
 }
@@ -738,7 +864,7 @@ func requireUCICutoverProxyCalls(t *testing.T, calls []uciCutoverProxyCall, targ
 	seen := make(map[uciCutoverTargetKey]bool, len(targets))
 	for _, call := range calls {
 		require.Equal(t, call.Target.ClientSessionID, call.TransportSession, "status proxy must retain the calling transport tag")
-		requireUCICutoverProxyArgs(t, call, nil)
+		requireUCICutoverProxyArgs(t, call)
 		seen[uciCutoverKeyForTarget(call.Target)] = true
 	}
 	for _, target := range targets {
@@ -746,12 +872,12 @@ func requireUCICutoverProxyCalls(t *testing.T, calls []uciCutoverProxyCall, targ
 	}
 }
 
-func requireUCICutoverProxyArgs(t *testing.T, call uciCutoverProxyCall, wantBarrier *uciCutoverAfterBarrier) {
+func requireUCICutoverProxyArgs(t *testing.T, call uciCutoverProxyCall) {
 	t.Helper()
 	require.Equal(t, "codebase_status", call.Name)
 	var args map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(call.Args, &args))
-	for _, forbidden := range []string{"context", "project", "cwd", "root", "path"} {
+	for _, forbidden := range []string{"after_barrier", "context", "project", "cwd", "root", "path"} {
 		require.NotContains(t, args, forbidden, "status proxy must not receive %q", forbidden)
 	}
 
@@ -760,18 +886,7 @@ func requireUCICutoverProxyArgs(t *testing.T, call uciCutoverProxyCall, wantBarr
 	var contextHandle string
 	require.NoError(t, json.Unmarshal(rawContextHandle, &contextHandle))
 	require.Equal(t, call.Target.ContextHandle, contextHandle)
-
-	if wantBarrier == nil {
-		require.Len(t, args, 1)
-		require.NotContains(t, args, "after_barrier")
-		return
-	}
-	require.Len(t, args, 2)
-	rawBarrier, found := args["after_barrier"]
-	require.True(t, found)
-	var barrier uciCutoverAfterBarrier
-	require.NoError(t, json.Unmarshal(rawBarrier, &barrier))
-	require.Equal(t, *wantBarrier, barrier)
+	require.Len(t, args, 1)
 }
 
 func requireUCICutoverStatus(t *testing.T, got uciCutoverStatus, want, forbidden uciCutoverServerStatus) {
@@ -792,4 +907,19 @@ func requireUCICutoverStatus(t *testing.T, got uciCutoverStatus, want, forbidden
 	require.Equal(t, uciCutoverLabel, got.Rows[0].Label)
 	require.NotContains(t, got.Rows[0].Body, forbidden.Rows[0].Body)
 	require.NotContains(t, got.Edges, forbidden.Edges[0])
+}
+
+func requireUCICutoverBarrierFreshness(t *testing.T, got, want uci.QueryFreshness, waitMS int64, state uci.QueryBarrierState) {
+	t.Helper()
+	require.Equal(t, want.State, got.State)
+	require.Equal(t, uci.QueryFreshnessPathHashBarrier, got.Method)
+	require.Equal(t, want.PendingChanges, got.PendingChanges)
+	require.Equal(t, want.EnrichmentWatermark, got.EnrichmentWatermark)
+	require.NotNil(t, got.Barrier)
+	require.Equal(t, uci.QueryBarrier{
+		Scope:      uci.QueryBarrierScope{Kind: uci.QueryBarrierPaths, PathCount: 1},
+		DeadlineMS: waitMS,
+		State:      state,
+	}, *got.Barrier)
+	require.NoError(t, got.Validate())
 }

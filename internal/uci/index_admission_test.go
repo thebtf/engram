@@ -600,3 +600,204 @@ func (frame IndexAdmissionFrame) CanonicalMust(t *testing.T) IndexAdmissionFrame
 	}
 	return canonical
 }
+
+func TestIndexAdmissionTreeSitterArtifactIsSourceScopedAndFactBound(t *testing.T) {
+	t.Parallel()
+	source := []byte("import { shared as localShared } from \"./shared.js\";\n" +
+		"export { shared as publicShared } from \"./shared.js\";\n" +
+		"export function run() {\n" +
+		"\treturn localShared();\n" +
+		"}\n")
+	profile, err := TreeSitterIndexAdmissionArtifactProfile(TreeSitterLanguageJavaScript, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("TreeSitterIndexAdmissionArtifactProfile() error = %v", err)
+	}
+	extracted := indexAdmissionTestTreeSitterArtifact(t, source)
+	artifact, err := NewIndexAdmissionArtifactFromTreeSitter(indexAdmissionTestSourceA, profile, source, extracted)
+	if err != nil {
+		t.Fatalf("NewIndexAdmissionArtifactFromTreeSitter() error = %v", err)
+	}
+	same, err := NewIndexAdmissionArtifactFromTreeSitter(indexAdmissionTestSourceA, profile, append([]byte(nil), source...), extracted)
+	if err != nil {
+		t.Fatalf("same-source artifact error = %v", err)
+	}
+	otherSource, err := NewIndexAdmissionArtifactFromTreeSitter(indexAdmissionTestSourceB, profile, source, extracted)
+	if err != nil {
+		t.Fatalf("other-source artifact error = %v", err)
+	}
+	if artifact.ArtifactID != same.ArtifactID {
+		t.Fatalf("same Source/content/profile ArtifactID differs: %q != %q", artifact.ArtifactID, same.ArtifactID)
+	}
+	if artifact.ArtifactID == otherSource.ArtifactID {
+		t.Fatalf("different Sources reused Tree-sitter ArtifactID %q", artifact.ArtifactID)
+	}
+	if artifact.ContentDigest != indexAdmissionDigestBytes(source) || artifact.FactsDigest == "" || artifact.Profile != profile {
+		t.Fatalf("Tree-sitter admission artifact lost source/profile digest evidence: %#v", artifact)
+	}
+	if artifact.Status != IndexAdmissionArtifactComplete || len(artifact.Definitions) != 1 || len(artifact.Chunks) != 1 {
+		t.Fatalf("Tree-sitter admission artifact facts = %#v", artifact)
+	}
+	if artifact.Chunks[0].Text != string(source) || artifact.Chunks[0].ContentDigest != indexAdmissionDigestBytes(source) {
+		t.Fatalf("Tree-sitter source chunk does not bind exact bytes: %#v", artifact.Chunks[0])
+	}
+	if definition := artifact.Definitions[0]; definition.LocalSymbolKey != "function:run" || definition.SymbolKey != "javascript:function:run" || definition.Span != indexAdmissionTestTreeSitterSpan(t, source, "export function run() {\n\treturn localShared();\n}", 0) {
+		t.Fatalf("Tree-sitter definition = %#v", definition)
+	}
+	wantReferences := map[string]struct {
+		relation IndexRelation
+		raw      string
+	}{
+		"import:./shared.js#shared:localShared":    {relation: IndexRelation("imports"), raw: "shared as localShared"},
+		"reexport:./shared.js#shared:publicShared": {relation: IndexRelation("exports"), raw: "shared as publicShared"},
+		"call:localShared":                         {relation: IndexRelation("calls"), raw: "localShared()"},
+	}
+	if len(artifact.References) != len(wantReferences) {
+		t.Fatalf("Tree-sitter references = %#v", artifact.References)
+	}
+	for _, reference := range artifact.References {
+		want, found := wantReferences[reference.SiteKey]
+		if !found || reference.Relation != want.relation || reference.RawTarget != want.raw {
+			t.Fatalf("Tree-sitter reference = %#v, want relation/raw %#v", reference, want)
+		}
+	}
+
+	artifactID := artifact.ArtifactID
+	frame := IndexAdmissionFrame{
+		Version:   IndexAdmissionFrameVersion,
+		Profile:   IndexAdmissionProfile{ID: indexAdmissionTestProfile},
+		Artifacts: []IndexAdmissionArtifact{artifact},
+		Memberships: []IndexAdmissionMembership{{
+			PathKey:     "source.js",
+			DisplayPath: "source.js",
+			Mode:        "100644",
+			State:       IndexAdmissionMembershipPresent,
+			ArtifactID:  &artifactID,
+		}},
+	}
+	if err := ValidateIndexAdmissionFrame(frame); err != nil {
+		t.Fatalf("ValidateIndexAdmissionFrame() error = %v", err)
+	}
+	part, err := frame.PublicationPart()
+	if err != nil {
+		t.Fatalf("PublicationPart() error = %v", err)
+	}
+	if len(part.EdgeReplacements) != 0 {
+		t.Fatalf("grammar-only Tree-sitter references fabricated edges: %#v", part.EdgeReplacements)
+	}
+
+	partialInput := extracted
+	partialInput.Coverage = IndexCoveragePartial
+	partialInput.Diagnostics = []TreeSitterDiagnostic{{Code: "PARSE_ERROR", Message: "source could not be parsed completely"}}
+	partial, err := NewIndexAdmissionArtifactFromTreeSitter(indexAdmissionTestSourceA, profile, source, partialInput)
+	if err != nil {
+		t.Fatalf("partial Tree-sitter artifact error = %v", err)
+	}
+	if partial.Status != IndexAdmissionArtifactPartial || !indexAdmissionTestArtifactHasDiagnostic(partial, "PARSE_ERROR") || !indexAdmissionTestArtifactHasDiagnostic(partial, "TREE_SITTER_PARTIAL_COVERAGE") {
+		t.Fatalf("partial Tree-sitter artifact did not preserve explicit diagnostics: %#v", partial)
+	}
+
+	unavailable := extracted
+	unavailable.Coverage = IndexCoverageUnavailable
+	if _, err := NewIndexAdmissionArtifactFromTreeSitter(indexAdmissionTestSourceA, profile, source, unavailable); err == nil {
+		t.Fatal("NewIndexAdmissionArtifactFromTreeSitter() accepted unavailable parser coverage")
+	}
+	resolved := extracted
+	resolved.References = append([]TreeSitterReferenceSite(nil), extracted.References...)
+	resolved.References[0].Resolution = IndexResolutionState("resolved")
+	resolved.References[0].TargetKey = "fabricated-target"
+	if _, err := NewIndexAdmissionArtifactFromTreeSitter(indexAdmissionTestSourceA, profile, source, resolved); err == nil {
+		t.Fatal("NewIndexAdmissionArtifactFromTreeSitter() accepted a fabricated resolved syntax reference")
+	}
+}
+
+func indexAdmissionTestTreeSitterArtifact(t *testing.T, source []byte) TreeSitterArtifact {
+	t.Helper()
+	definitionSpan := indexAdmissionTestTreeSitterSpan(t, source, "export function run() {\n\treturn localShared();\n}", 0)
+	importSpan := indexAdmissionTestTreeSitterSpan(t, source, "shared as localShared", 0)
+	reexportSpan := indexAdmissionTestTreeSitterSpan(t, source, "shared as publicShared", 0)
+	callSpan := indexAdmissionTestTreeSitterSpan(t, source, "localShared()", 0)
+	chunkSpan, valid := goSpanFromOffsets(goLineStarts(source), len(source), 0, len(source))
+	if !valid {
+		t.Fatal("failed to construct full Tree-sitter chunk span")
+	}
+	return TreeSitterArtifact{
+		Proof: IndexArtifactProof{
+			ArtifactID:         "88888888-8888-4888-8888-888888888888",
+			ContentDigest:      indexAdmissionDigestBytes(source),
+			FactsDigest:        indexAdmissionDigestBytes([]byte("tree-sitter-test-facts")),
+			DefinitionCount:    1,
+			ReferenceSiteCount: 3,
+			ChunkCount:         1,
+		},
+		Coverage:     IndexCoverageComplete,
+		Language:     TreeSitterLanguageJavaScript,
+		BundleDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Text:         string(source),
+		Definitions: []TreeSitterDefinition{{
+			Kind:      "function",
+			SymbolKey: "javascript:function:run",
+			LocalKey:  "function:run",
+			Span:      definitionSpan,
+		}},
+		References: []TreeSitterReferenceSite{
+			{
+				Kind:       "import_alias",
+				SymbolKey:  "javascript:import:./shared.js#shared:localShared",
+				LocalKey:   "import:./shared.js#shared:localShared",
+				RawTarget:  "./shared.js#shared",
+				Resolution: TreeSitterResolutionSyntaxOnly,
+				Span:       importSpan,
+			},
+			{
+				Kind:       "reexport_alias",
+				SymbolKey:  "javascript:reexport:./shared.js#shared:publicShared",
+				LocalKey:   "reexport:./shared.js#shared:publicShared",
+				RawTarget:  "./shared.js#shared",
+				Resolution: TreeSitterResolutionPartial,
+				Span:       reexportSpan,
+			},
+			{
+				Kind:          "call",
+				SymbolKey:     "javascript:call:localShared",
+				LocalKey:      "call:localShared",
+				OwnerLocalKey: "function:run",
+				RawTarget:     "localShared",
+				Resolution:    TreeSitterResolutionUnresolved,
+				Span:          callSpan,
+			},
+		},
+		Chunks: []TreeSitterChunk{{
+			Span:          chunkSpan,
+			Text:          string(source),
+			ContentDigest: indexAdmissionDigestBytes(source),
+		}},
+	}
+}
+
+func indexAdmissionTestTreeSitterSpan(t *testing.T, source []byte, fragment string, occurrence int) IndexSpan {
+	t.Helper()
+	start := 0
+	found := -1
+	for range occurrence + 1 {
+		offset := bytes.Index(source[start:], []byte(fragment))
+		if offset < 0 {
+			t.Fatalf("fragment %q occurrence %d is absent", fragment, occurrence)
+		}
+		found = start + offset
+		start = found + len(fragment)
+	}
+	span, valid := goSpanFromOffsets(goLineStarts(source), len(source), found, found+len(fragment))
+	if !valid {
+		t.Fatalf("fragment %q has invalid span", fragment)
+	}
+	return span
+}
+
+func indexAdmissionTestArtifactHasDiagnostic(artifact IndexAdmissionArtifact, code string) bool {
+	for _, diagnostic := range artifact.Diagnostics {
+		if diagnostic.Code == code {
+			return true
+		}
+	}
+	return false
+}
