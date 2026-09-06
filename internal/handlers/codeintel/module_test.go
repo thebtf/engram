@@ -748,7 +748,7 @@ func TestCodebaseStatusBarrierFailsClosedForFailedRun(t *testing.T) {
 
 	raw, err = h.CallToolWithProject(ctx, p, "codebase_status", testStatusArgsWithBarrier(contextHandle, started.RunID, 500))
 	require.Nil(t, raw)
-	require.EqualError(t, err, "codebase_status: after_barrier run failed")
+	require.EqualError(t, err, "codebase_status: after_barrier run failed: synthetic prepared-index failure")
 	_, proxyCalls := core.callCounts()
 	require.Zero(t, proxyCalls, "failed local barrier must not proxy stale server evidence")
 }
@@ -768,10 +768,18 @@ func TestCodebaseStatusKeepsCapacityFailureClosedWithoutStaleFreshness(t *testin
 	p := testProjectContext("proj-capacity-status", t.TempDir())
 	ctx := testTransportContext(p)
 
-	_, err := h.CallToolWithProject(ctx, p, "codebase_index", testIndexArgs(p))
+	startedRaw, err := h.CallToolWithProject(ctx, p, "codebase_index", testIndexArgs(p))
 	require.NoError(t, err)
+	var started struct {
+		RunID string `json:"run_id"`
+	}
+	require.NoError(t, json.Unmarshal(startedRaw, &started))
+	require.NotEmpty(t, started.RunID)
 	drainIndex(t, h, p)
 	_, proxyCallsBeforeTerminalStatus := core.callCounts()
+	barrierRaw, barrierErr := h.CallToolWithProject(ctx, p, "codebase_status", testStatusArgsWithBarrier("handle-proj-capacity-status", started.RunID, 500))
+	require.Nil(t, barrierRaw)
+	require.EqualError(t, barrierErr, "codebase_status: after_barrier run failed: INDEX_CAPACITY_EXCEEDED")
 
 	raw, err := h.CallToolWithProject(ctx, p, "codebase_status", testStatusArgs(p))
 	require.NoError(t, err)

@@ -1068,6 +1068,9 @@ func (m *Module) handleStatus(ctx context.Context, p muxcore.ProjectContext, arg
 		case indexBarrierStale:
 			return nil, fmt.Errorf("codebase_status: after_barrier token is stale for this target")
 		case indexBarrierError:
+			if barrierSnapshot.err != "" {
+				return nil, fmt.Errorf("codebase_status: after_barrier run failed: %s", barrierSnapshot.err)
+			}
 			return nil, fmt.Errorf("codebase_status: after_barrier run failed")
 		case indexBarrierSatisfied, indexBarrierTimedOut:
 			result["status"] = barrierSnapshot.status
