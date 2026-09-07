@@ -370,6 +370,43 @@ func TestUCIIndexAdmissionStoresStructuredMarkdownDefinition(t *testing.T) {
 	require.Equal(t, "markdown:heading:install-guide", definition.QualifiedLocalName)
 }
 
+func TestUCIIndexAdmissionStoresEmptyJSONKey(t *testing.T) {
+	fixture := openUCIPublicationFixture(t)
+	body := []byte(`{"": {"value": 1}}`)
+	extractionProfile := ucidomain.DefaultJSONYAMLExtractionProfile("uci-admission-json-empty-key", ucidomain.JSONYAMLFormatJSON)
+	profile, err := ucidomain.JSONYAMLIndexAdmissionArtifactProfile(extractionProfile)
+	require.NoError(t, err)
+	profile.ExtractionProfileDigest = ucidomain.IndexDigest(fixture.profile.ParserBundleDigest)
+	artifact, err := ucidomain.NewIndexAdmissionArtifactFromJSONYAML(
+		fixture.source.SourceID,
+		profile,
+		extractionProfile,
+		body,
+		ucidomain.ExtractJSONYAML(body, extractionProfile),
+	)
+	require.NoError(t, err)
+	artifactID := artifact.ArtifactID
+	frame := ucidomain.IndexAdmissionFrame{
+		Version:   ucidomain.IndexAdmissionFrameVersion,
+		Profile:   ucidomain.IndexAdmissionProfile{ID: fixture.profile.ProfileID},
+		Artifacts: []ucidomain.IndexAdmissionArtifact{artifact},
+		Memberships: []ucidomain.IndexAdmissionMembership{{
+			PathKey:     "empty-key.json",
+			DisplayPath: "empty-key.json",
+			Mode:        "100644",
+			State:       ucidomain.IndexAdmissionMembershipPresent,
+			ArtifactID:  &artifactID,
+		}},
+	}
+
+	_, err = fixture.projection.AdmitIndexFrame(context.Background(), fixture.source.SourceID, fixture.profile.ProfileID, frame)
+	require.NoError(t, err)
+	var definition UCIDefinition
+	require.NoError(t, fixture.db.Where("artifact_id = ? AND local_symbol_key = ?", artifactID, "json:document:0#/").First(&definition).Error)
+	require.Equal(t, "(empty)", definition.Name)
+	require.Equal(t, "json:document:0#/", definition.QualifiedLocalName)
+}
+
 func TestUCIIndexAdmissionPackedCrossFrameSealsAndReplays(t *testing.T) {
 	fixture := openUCIPublicationFixture(t)
 	ctx := context.Background()

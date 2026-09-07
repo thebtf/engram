@@ -509,7 +509,10 @@ func (s *UCIProjectionStore) UpsertChunk(ctx context.Context, in UpsertUCIChunkI
 	return &existing, nil
 }
 
-const uciIndexAdmissionProtectionDomain = "source-private"
+const (
+	uciIndexAdmissionProtectionDomain = "source-private"
+	uciIndexAdmissionEmptyPointerName = "(empty)"
+)
 
 // AdmitIndexFrame admits one frame through the packed admission transaction.
 func (s *UCIProjectionStore) AdmitIndexFrame(ctx context.Context, sourceID, profileID string, frame ucidomain.IndexAdmissionFrame) (ucidomain.IndexPart, error) {
@@ -837,8 +840,11 @@ func uciIndexAdmissionJSONYAMLDefinitionName(language ucidomain.IndexAdmissionLa
 		return "", fmt.Errorf("uci index admission: unparseable %s definition key %q", language, definition.LocalSymbolKey)
 	}
 	name, valid := uciIndexAdmissionPointerTail(suffix)
-	if !valid {
+	if !valid || (name == "" && definition.Kind != "key") {
 		return "", fmt.Errorf("uci index admission: unparseable %s definition key %q", language, definition.LocalSymbolKey)
+	}
+	if name == "" {
+		return uciIndexAdmissionEmptyPointerName, nil
 	}
 	return name, nil
 }
@@ -960,7 +966,11 @@ func uciIndexAdmissionPointerTail(pointer string) (string, bool) {
 		return "", false
 	}
 	parts := strings.Split(pointer[1:], "/")
-	return uciIndexAdmissionPointerSegment(parts[len(parts)-1])
+	tail := parts[len(parts)-1]
+	if tail == "" {
+		return "", true
+	}
+	return uciIndexAdmissionPointerSegment(tail)
 }
 
 func uciIndexAdmissionPointerSegment(value string) (string, bool) {
