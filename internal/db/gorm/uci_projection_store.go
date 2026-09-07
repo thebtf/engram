@@ -3716,7 +3716,15 @@ func (publisher *uciPublisher) Finalize(ctx context.Context, caller ucidomain.In
 			return fmt.Errorf("uci publication switch current pointer: %w", err)
 		}
 		if publisher.embeddingProfile != nil {
-			if err := enqueueUCIEmbeddingJob(ctx, tx, caller.AuthRealm, caller.Principal, view, *publisher.embeddingProfile); err != nil {
+			totalCandidates, complete, err := uciPublicationEmbeddingCandidateCount(candidate)
+			if err != nil {
+				return err
+			}
+			var candidateTotal *uint64
+			if complete {
+				candidateTotal = &totalCandidates
+			}
+			if err := enqueueUCIEmbeddingJob(ctx, tx, caller.AuthRealm, caller.Principal, view, *publisher.embeddingProfile, candidateTotal); err != nil {
 				return fmt.Errorf("uci publication enqueue embedding: %w", err)
 			}
 		}
@@ -3777,6 +3785,30 @@ type uciPublicationCandidate struct {
 	CurrentEdges       map[string][]UCIResolvedEdge
 	EdgeReplacements   map[string]ucidomain.IndexEdgeReplacement
 	DeletedPaths       map[string]struct{}
+}
+
+func uciPublicationEmbeddingCandidateCount(candidate *uciPublicationCandidate) (uint64, bool, error) {
+	if candidate == nil {
+		return 0, false, errUCIPublicationRejected
+	}
+	var total uint64
+	for _, membership := range candidate.Memberships {
+		if membership.State != ucidomain.IndexFilePresent {
+			continue
+		}
+		if membership.ArtifactID == nil {
+			return 0, false, errUCIPublicationRejected
+		}
+		proof, found := candidate.ArtifactProofs[*membership.ArtifactID]
+		if !found {
+			return 0, false, nil
+		}
+		if math.MaxUint64-total < proof.ChunkCount {
+			return 0, false, errUCIPublicationRejected
+		}
+		total += proof.ChunkCount
+	}
+	return total, true, nil
 }
 
 // canReuseUCIPublishedView accepts only a fully proven semantic no-op. Any missing,

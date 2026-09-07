@@ -21,6 +21,7 @@ var _ ucidomain.EmbeddingJobStore = (*UCIProjectionStore)(nil)
 type uciEmbeddingProgress struct {
 	Version         int                              `json:"version"`
 	Cursor          *ucidomain.EmbeddingCandidateKey `json:"cursor,omitempty"`
+	Total           uint64                           `json:"total"`
 	Scanned         uint64                           `json:"scanned"`
 	Ready           uint64                           `json:"ready"`
 	LastBatchDigest string                           `json:"last_batch_digest,omitempty"`
@@ -183,7 +184,7 @@ func ensureUCIEmbeddingJobForCurrentView(ctx context.Context, tx *gorm.DB, sourc
 	if result.RowsAffected != 1 || publication.RequestedBy == nil || *publication.RequestedBy != ownerPrincipal {
 		return nil
 	}
-	return enqueueUCIEmbeddingJob(ctx, tx, source.AuthRealm, *publication.RequestedBy, view, profile)
+	return enqueueUCIEmbeddingJob(ctx, tx, source.AuthRealm, *publication.RequestedBy, view, profile, nil)
 }
 
 func (s *UCIProjectionStore) ClaimEmbeddingJob(ctx context.Context, profile ucidomain.VectorProfile, owner string, leaseTTL time.Duration) (ucidomain.EmbeddingJobClaim, bool, error) {
@@ -486,7 +487,7 @@ func (s *UCIProjectionStore) CompleteEmbeddingJob(ctx context.Context, claim uci
 		if err != nil {
 			return err
 		}
-		if !uciEmbeddingCursorsEqual(progress.Cursor, last) || progress.Scanned != total || progress.Ready != ready || total != ready {
+		if !uciEmbeddingCursorsEqual(progress.Cursor, last) || progress.Total != total || progress.Scanned != total || progress.Ready != ready || total != ready {
 			return fmt.Errorf("uci embedding complete: exact coverage is incomplete")
 		}
 		updates := map[string]any{
@@ -568,7 +569,7 @@ func (s *UCIProjectionStore) FailEmbeddingJob(ctx context.Context, ref ucidomain
 	})
 }
 
-func enqueueUCIEmbeddingJob(ctx context.Context, tx *gorm.DB, authRealm, requestedBy string, view UCIView, profile ucidomain.VectorProfile) error {
+func enqueueUCIEmbeddingJob(ctx context.Context, tx *gorm.DB, authRealm, requestedBy string, view UCIView, profile ucidomain.VectorProfile, candidateTotal *uint64) error {
 	if validateUCISemanticProfile(profile) != nil || validateUCIRequiredText("auth_realm", authRealm) != nil || validateUCIRequiredText("requested_by", requestedBy) != nil || validateUCIUUID("view_id", view.ViewID) != nil || view.Generation < 1 {
 		return fmt.Errorf("uci embedding enqueue: invalid binding")
 	}
@@ -604,7 +605,14 @@ func enqueueUCIEmbeddingJob(ctx context.Context, tx *gorm.DB, authRealm, request
 	}).Error; err != nil {
 		return fmt.Errorf("uci embedding obsolete replaced profile: %w", err)
 	}
-	counts, err := marshalUCIEmbeddingProgress(uciEmbeddingProgress{Version: 1})
+	if candidateTotal == nil {
+		total, _, err := loadUCIEmbeddingCoverageSummary(ctx, tx, uciContextRefFromView(view), embeddingProfile.EmbeddingProfileID, profile)
+		if err != nil {
+			return err
+		}
+		candidateTotal = &total
+	}
+	counts, err := marshalUCIEmbeddingProgress(uciEmbeddingProgress{Version: 1, Total: *candidateTotal})
 	if err != nil {
 		return err
 	}
@@ -1106,14 +1114,14 @@ func parseUCIEmbeddingProgress(raw string) (uciEmbeddingProgress, error) {
 	if err := json.Unmarshal([]byte(raw), &progress); err != nil {
 		return uciEmbeddingProgress{}, fmt.Errorf("uci embedding progress decode: %w", err)
 	}
-	if progress.Version != 1 || (progress.Cursor != nil && (validateUCIUUID("membership_id", progress.Cursor.MembershipID) != nil || validateUCIUUID("chunk_id", progress.Cursor.ChunkID) != nil)) || (progress.LastBatchDigest != "" && !isUCIDigest(progress.LastBatchDigest)) || progress.Ready > progress.Scanned {
+	if progress.Version != 1 || (progress.Cursor != nil && (validateUCIUUID("membership_id", progress.Cursor.MembershipID) != nil || validateUCIUUID("chunk_id", progress.Cursor.ChunkID) != nil)) || (progress.LastBatchDigest != "" && !isUCIDigest(progress.LastBatchDigest)) || progress.Ready > progress.Scanned || progress.Scanned > progress.Total || (progress.Exhausted && progress.Scanned != progress.Total) {
 		return uciEmbeddingProgress{}, fmt.Errorf("uci embedding progress is invalid")
 	}
 	return progress, nil
 }
 
 func marshalUCIEmbeddingProgress(progress uciEmbeddingProgress) (string, error) {
-	if progress.Version != 1 || (progress.Cursor != nil && (validateUCIUUID("membership_id", progress.Cursor.MembershipID) != nil || validateUCIUUID("chunk_id", progress.Cursor.ChunkID) != nil)) || (progress.LastBatchDigest != "" && !isUCIDigest(progress.LastBatchDigest)) || progress.Ready > progress.Scanned {
+	if progress.Version != 1 || (progress.Cursor != nil && (validateUCIUUID("membership_id", progress.Cursor.MembershipID) != nil || validateUCIUUID("chunk_id", progress.Cursor.ChunkID) != nil)) || (progress.LastBatchDigest != "" && !isUCIDigest(progress.LastBatchDigest)) || progress.Ready > progress.Scanned || progress.Scanned > progress.Total || (progress.Exhausted && progress.Scanned != progress.Total) {
 		return "", fmt.Errorf("uci embedding progress is invalid")
 	}
 	encoded, err := json.Marshal(progress)
@@ -1254,20 +1262,15 @@ func (s *UCIProjectionStore) loadUCIEmbeddingReadiness(ctx context.Context, ref 
 		return uciEmbeddingReadiness{}, nil
 	}
 	readiness := uciEmbeddingReadiness{ProfileID: embeddingProfile.EmbeddingProfileID}
-	total, ready, err := loadUCIEmbeddingCoverageSummary(ctx, s.db, ref, embeddingProfile.EmbeddingProfileID, *profile)
-	if err != nil {
-		return uciEmbeddingReadiness{}, err
-	}
-	readiness.Total = total
-	readiness.Ready = ready
 	type jobRow struct {
 		State      UCIJobState `gorm:"column:state"`
 		ErrorCode  *string     `gorm:"column:error_code"`
 		RetryAfter *time.Time  `gorm:"column:retry_after"`
+		Counts     string      `gorm:"column:counts"`
 	}
 	var job jobRow
 	result = s.db.WithContext(ctx).Raw(`
-		SELECT state, error_code, retry_after
+		SELECT state, error_code, retry_after, counts
 		FROM ci_jobs
 		WHERE job_kind = 'embed' AND source_id = ? AND checkout_id = ? AND incarnation_id = (
 			SELECT incarnation_id FROM ci_views WHERE view_id = ?
@@ -1288,6 +1291,18 @@ func (s *UCIProjectionStore) loadUCIEmbeddingReadiness(ctx context.Context, ref 
 			value := job.RetryAfter.UTC()
 			readiness.RetryAfter = &value
 		}
+		progress, progressErr := parseUCIEmbeddingProgress(job.Counts)
+		if progressErr == nil && (job.State != UCIJobSucceeded || progress.Exhausted) {
+			readiness.Total = progress.Total
+			readiness.Ready = progress.Ready
+			return readiness, nil
+		}
 	}
+	total, ready, err := loadUCIEmbeddingCoverageSummary(ctx, s.db, ref, embeddingProfile.EmbeddingProfileID, *profile)
+	if err != nil {
+		return uciEmbeddingReadiness{}, err
+	}
+	readiness.Total = total
+	readiness.Ready = ready
 	return readiness, nil
 }
