@@ -297,6 +297,78 @@ func TestUCIFreshnessEmbeddingPendingDoesNotDelaySourceBarrier(t *testing.T) {
 	assert.Equal(t, target, fixture.application.statusCalls[0])
 }
 
+func TestUCICodebaseStatusStabilizesMonotonicViewAdvance(t *testing.T) {
+	fixture := newUCIFreshnessFixture(t)
+	binding := uciCodeIntelCheckoutBinding(fixture.refA, &fixture.refA)
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = binding
+	handle := fixture.selectCheckout(t, fixture.clientA, binding)
+
+	moved := fixture.refA
+	moved.ViewID = "40000000-0000-4000-8000-000000000005"
+	moved.Generation++
+	profileID := "55555555-5555-4555-8555-555555555555"
+	jobState := uci.IndexStatusJobRetryScheduled
+	errorCode := uci.EmbeddingFailureProviderUnavailable
+	retryAfter := time.Date(2026, time.September, 7, 2, 3, 4, 0, time.UTC)
+	movedSnapshot := CodebaseStatusSnapshot{
+		TotalChunks:    43,
+		EmbeddedChunks: 37,
+		Embedding: uci.EmbeddingStatus{
+			EmbeddingProfileID: &profileID,
+			Coverage:           uci.IndexCoveragePartial,
+			TotalCandidates:    43,
+			ReadyCandidates:    37,
+			PendingJobs:        1,
+			JobState:           &jobState,
+			ErrorCode:          &errorCode,
+			RetryAfter:         &retryAfter,
+		},
+	}
+	freshA := uciFreshnessObservedCurrent(fixture.refA.Generation)
+	freshB := uciFreshnessCatchingUp(2, moved.Generation)
+	fixture.application.setPlan(fixture.refA, "", uciFreshnessTestPlan{freshness: freshA})
+	fixture.application.setPlan(moved, "", uciFreshnessTestPlan{freshness: freshB})
+
+	advanced := false
+	fixture.application.afterStatus = func() {
+		if advanced {
+			return
+		}
+		advanced = true
+		fixture.catalog.records[moved.CheckoutID] = uci.ContextRecord{Ref: moved, AuthRealm: uciCodebaseContextTestRealm}
+		movedBinding := binding.Clone()
+		movedBinding.Context = &moved
+		fixture.catalog.bindings[moved.CheckoutID] = movedBinding
+		fixture.application.statusSnapshots[moved.CheckoutID] = movedSnapshot
+	}
+
+	status := requireUCIFreshnessStatus(t, callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_status", map[string]any{
+		"context_handle": handle,
+	}), moved, freshB)
+	assert.Equal(t, int64(43), status.TotalChunks)
+	assert.Equal(t, int64(37), status.EmbeddedChunks)
+	require.NotNil(t, status.Embedding.EmbeddingProfileID)
+	assert.Equal(t, profileID, *status.Embedding.EmbeddingProfileID)
+	assert.Equal(t, uci.IndexCoveragePartial, status.Embedding.Coverage)
+	assert.Equal(t, uint64(43), status.Embedding.TotalCandidates)
+	assert.Equal(t, uint64(37), status.Embedding.ReadyCandidates)
+	assert.Equal(t, uint64(1), status.Embedding.PendingJobs)
+	require.NotNil(t, status.Embedding.JobState)
+	assert.Equal(t, jobState, *status.Embedding.JobState)
+	require.NotNil(t, status.Embedding.ErrorCode)
+	assert.Equal(t, errorCode, *status.Embedding.ErrorCode)
+	require.NotNil(t, status.Embedding.RetryAfter)
+	assert.Equal(t, retryAfter, *status.Embedding.RetryAfter)
+
+	freshnessCalls := fixture.application.freshnessCalls()
+	require.Len(t, freshnessCalls, 2)
+	assert.Equal(t, fixture.refA, freshnessCalls[0].ref)
+	assert.Equal(t, moved, freshnessCalls[1].ref)
+	require.Len(t, fixture.application.statusCalls, 2)
+	assert.Equal(t, fixture.refA, fixture.application.statusCalls[0])
+	assert.Equal(t, moved, fixture.application.statusCalls[1])
+}
+
 func TestUCIFreshnessAfterBarrierStaysOnAuthorizedCheckout(t *testing.T) {
 	fixture := newUCIFreshnessFixture(t)
 	handleA := fixture.selectContext(t, fixture.clientA, fixture.refA)

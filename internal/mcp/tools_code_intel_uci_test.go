@@ -297,6 +297,43 @@ func TestUCICodeIntelStatusReauthorizesBeforeEmbeddingSerialization(t *testing.T
 	assert.NotContains(t, string(raw), "embedding")
 }
 
+func TestUCICodeIntelStatusRejectsContinuousCheckoutViewDrift(t *testing.T) {
+	fixture := newUCICodeIntelCompatibilityFixture(t)
+	binding := uciCodeIntelCheckoutBinding(fixture.refA, &fixture.refA)
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = binding
+	handle := fixture.selectCheckout(t, fixture.clientA, binding)
+
+	current := fixture.refA
+	views := []string{
+		"40000000-0000-4000-8000-000000000005",
+		"40000000-0000-4000-8000-000000000006",
+	}
+	advance := 0
+	fixture.application.afterStatus = func() {
+		if advance == len(views) {
+			return
+		}
+		current.ViewID = views[advance]
+		current.Generation++
+		advance++
+		fixture.catalog.records[current.CheckoutID] = uci.ContextRecord{Ref: current, AuthRealm: uciCodebaseContextTestRealm}
+		movedBinding := binding.Clone()
+		movedBinding.Context = &current
+		fixture.catalog.bindings[current.CheckoutID] = movedBinding
+	}
+
+	response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_status", map[string]any{"context_handle": handle})
+	requireUCICodeIntelSafeToolError(t, response, "CONTEXT_MISMATCH", fixture)
+	require.Len(t, fixture.application.statusCalls, codebaseStatusStabilizationAttempts)
+	assert.Equal(t, fixture.refA, fixture.application.statusCalls[0])
+	moved := fixture.refA
+	moved.ViewID = views[0]
+	moved.Generation++
+	assert.Equal(t, moved, fixture.application.statusCalls[1])
+	assert.Equal(t, len(views), advance)
+	assert.Zero(t, fixture.exposureStore.exposureCount())
+}
+
 func TestUCICodeIntelExplicitHandlesAuthorizeWithoutSelectingDefaults(t *testing.T) {
 	t.Run("pinned handle preserves checkout default", func(t *testing.T) {
 		fixture := newUCICodeIntelCompatibilityFixture(t)
