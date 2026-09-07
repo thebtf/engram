@@ -146,7 +146,11 @@ type uciRealCorpusEmbeddingStatus struct {
 	TotalChunks    int64 `json:"total_chunks"`
 	EmbeddedChunks int64 `json:"embedded_chunks"`
 	Context        struct {
-		ViewID string `json:"view_id"`
+		SourceID   string `json:"source_id"`
+		CheckoutID string `json:"checkout_id"`
+		ViewID     string `json:"view_id"`
+		ProfileID  string `json:"profile_id"`
+		Generation int64  `json:"generation"`
 	} `json:"context"`
 	Embedding struct {
 		EmbeddingProfileID *string `json:"embedding_profile_id"`
@@ -229,6 +233,35 @@ func TestUCIRealCorpusInstalledProviderLifecycle(t *testing.T) {
 		if err := os.WriteFile(recordPath, encoded, 0o600); err != nil {
 			t.Fatalf("write real-corpus acceptance record: %v", err)
 		}
+	}
+}
+
+func TestUCIRealCorpusEmbeddingPublicationFollowsMonotonicCurrentView(t *testing.T) {
+	expected := uciInstalledAcceptancePublication{
+		sourceID: "source", checkoutID: "checkout", viewID: "view-1", profileID: "profile", generation: 1,
+	}
+	status := uciRealCorpusEmbeddingStatus{}
+	status.Context.SourceID = expected.sourceID
+	status.Context.CheckoutID = expected.checkoutID
+	status.Context.ViewID = "view-2"
+	status.Context.ProfileID = expected.profileID
+	status.Context.Generation = 2
+	current, err := uciRealCorpusEmbeddingPublication(status, expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.viewID != status.Context.ViewID || current.generation != status.Context.Generation {
+		t.Fatalf("current publication = %#v, want monotonic status View", current)
+	}
+
+	status.Context.SourceID = "foreign"
+	if _, err := uciRealCorpusEmbeddingPublication(status, expected); err == nil {
+		t.Fatal("foreign embedding status was accepted")
+	}
+	status.Context.SourceID = expected.sourceID
+	status.Context.Generation = expected.generation
+	if _, err := uciRealCorpusEmbeddingPublication(status, expected); err == nil {
+		t.Fatal("same-generation replacement View was accepted")
 	}
 }
 
@@ -413,7 +446,7 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 	if err != nil {
 		return record, err
 	}
-	initialEmbedding, err := uciWaitForRealCorpusEmbeddings(ctx, client, selection, initialPublication.viewID)
+	initialEmbedding, initialPublication, err := uciWaitForRealCorpusEmbeddings(ctx, client, selection, initialPublication)
 	if err != nil {
 		return record, err
 	}
@@ -444,7 +477,7 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 	if err != nil {
 		return record, err
 	}
-	changedEmbedding, err := uciWaitForRealCorpusEmbeddings(ctx, client, selection, changedPublication.viewID)
+	changedEmbedding, changedPublication, err := uciWaitForRealCorpusEmbeddings(ctx, client, selection, changedPublication)
 	if err != nil {
 		return record, err
 	}
@@ -563,30 +596,51 @@ func uciWaitForRealCorpusPublication(ctx context.Context, client *uciInstalledAc
 	}
 }
 
-func uciWaitForRealCorpusEmbeddings(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection, expectedViewID string) (uciRealCorpusEmbeddingStatus, error) {
+func uciWaitForRealCorpusEmbeddings(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection, expected uciInstalledAcceptancePublication) (uciRealCorpusEmbeddingStatus, uciInstalledAcceptancePublication, error) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
 		payload, err := client.Tool(ctx, "codebase_status", map[string]any{"context_handle": selection.contextHandle})
 		if err != nil {
-			return uciRealCorpusEmbeddingStatus{}, err
+			return uciRealCorpusEmbeddingStatus{}, expected, err
 		}
 		var status uciRealCorpusEmbeddingStatus
 		if err := json.Unmarshal(payload, &status); err != nil {
-			return uciRealCorpusEmbeddingStatus{}, err
+			return uciRealCorpusEmbeddingStatus{}, expected, err
+		}
+		current, err := uciRealCorpusEmbeddingPublication(status, expected)
+		if err != nil {
+			return status, expected, err
 		}
 		if status.Embedding.ErrorCode != nil && status.Embedding.JobState != nil && *status.Embedding.JobState == "failed_terminal" {
-			return status, fmt.Errorf("real-corpus embedding job failed: %s", *status.Embedding.ErrorCode)
+			return status, current, fmt.Errorf("real-corpus embedding job failed: %s", *status.Embedding.ErrorCode)
 		}
-		if status.Context.ViewID == expectedViewID && status.Embedding.EmbeddingProfileID != nil && status.Embedding.Coverage == string(uci.IndexCoverageComplete) && status.Embedding.TotalCandidates > 0 && status.Embedding.ReadyCandidates == status.Embedding.TotalCandidates && status.Embedding.PendingJobs == 0 {
-			return status, nil
+		if status.Embedding.EmbeddingProfileID != nil && status.Embedding.Coverage == string(uci.IndexCoverageComplete) && status.Embedding.TotalCandidates > 0 && status.Embedding.ReadyCandidates == status.Embedding.TotalCandidates && status.Embedding.PendingJobs == 0 {
+			return status, current, nil
 		}
+		expected = current
 		select {
 		case <-ctx.Done():
-			return status, ctx.Err()
+			return status, expected, ctx.Err()
 		case <-ticker.C:
 		}
 	}
+}
+
+func uciRealCorpusEmbeddingPublication(status uciRealCorpusEmbeddingStatus, expected uciInstalledAcceptancePublication) (uciInstalledAcceptancePublication, error) {
+	if expected.sourceID == "" || expected.checkoutID == "" || expected.profileID == "" || expected.viewID == "" || expected.generation < 1 {
+		return uciInstalledAcceptancePublication{}, errors.New("real-corpus expected publication is incomplete")
+	}
+	if status.Context.SourceID != expected.sourceID || status.Context.CheckoutID != expected.checkoutID || status.Context.ProfileID != expected.profileID || status.Context.ViewID == "" || status.Context.Generation < expected.generation {
+		return uciInstalledAcceptancePublication{}, errors.New("real-corpus embedding status left the expected source, checkout, profile, or generation")
+	}
+	if status.Context.Generation == expected.generation && status.Context.ViewID != expected.viewID {
+		return uciInstalledAcceptancePublication{}, errors.New("real-corpus embedding status changed View without advancing generation")
+	}
+	current := expected
+	current.viewID = status.Context.ViewID
+	current.generation = status.Context.Generation
+	return current, nil
 }
 
 func uciRealCorpusVerifyProviderProfile(ctx context.Context, authority *uciInstalledAcceptanceAuthority, status uciRealCorpusEmbeddingStatus, providerRef, model, preprocessing string) error {
