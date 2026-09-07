@@ -48,6 +48,8 @@ func (s *UCIProjectionStore) LoadIndexStatus(ctx context.Context, authorized uci
 	if err != nil {
 		return ucidomain.IndexStatusSnapshot{}, ucidomain.NewIndexStatusError(ucidomain.IndexStatusUnavailable, err)
 	}
+	snapshot.ReadyEmbeddingCount = readiness.Ready
+	snapshot.Freshness = uciIndexStatusFreshness(snapshot)
 	if err := snapshot.Validate(); err != nil {
 		return ucidomain.IndexStatusSnapshot{}, ucidomain.NewIndexStatusError(ucidomain.IndexStatusUnavailable, err)
 	}
@@ -109,7 +111,6 @@ type uciIndexStatusRow struct {
 	ScanStartedAt       time.Time        `gorm:"column:scan_started_at"`
 	ScanCompletedAt     time.Time        `gorm:"column:scan_completed_at"`
 	ChunkCount          int64            `gorm:"column:chunk_count"`
-	ReadyEmbeddingCount int64            `gorm:"column:ready_embedding_count"`
 	PendingJobCount     int64            `gorm:"column:pending_job_count"`
 	JobState            *string          `gorm:"column:job_state"`
 	JobTargetGeneration *int64           `gorm:"column:job_target_generation"`
@@ -193,25 +194,6 @@ func (s *UCIProjectionStore) loadUCIIndexStatusRow(ctx context.Context, ref ucid
 			selected_view.scan_completed_at,
 			(SELECT COUNT(*) FROM scoped_chunks) AS chunk_count,
 			(
-				SELECT COUNT(DISTINCT chunk.chunk_id)
-				FROM scoped_chunks AS chunk
-				CROSS JOIN selected_view AS embedding_view
-				JOIN ci_chunk_embeddings AS chunk_embedding
-					ON chunk_embedding.source_id = chunk.source_id
-					AND chunk_embedding.chunk_id = chunk.chunk_id
-				JOIN ci_embedding_profiles AS embedding_profile
-					ON embedding_profile.embedding_profile_id = chunk_embedding.embedding_profile_id
-					AND embedding_profile.analysis_profile_id = embedding_view.profile_id
-				JOIN ci_embeddings AS embedding
-					ON embedding.source_id = chunk_embedding.source_id
-					AND embedding.embedding_id = chunk_embedding.embedding_id
-					AND embedding.embedding_profile_id = chunk_embedding.embedding_profile_id
-					AND embedding.embedding_input_digest = chunk_embedding.embedding_input_digest
-					AND embedding.protection_domain = chunk.protection_domain
-					AND embedding.status = ?
-					AND embedding.vector IS NOT NULL
-			) AS ready_embedding_count,
-			(
 				SELECT COUNT(*)
 				FROM ci_jobs AS pending_job
 				WHERE pending_job.source_id = selected_view.source_id
@@ -259,7 +241,6 @@ func (s *UCIProjectionStore) loadUCIIndexStatusRow(ctx context.Context, ref ucid
 		UCIBlobStored,
 		UCIParseArtifactComplete,
 		UCIParseArtifactPartial,
-		UCIEmbeddingReady,
 		string(ucidomain.IndexJobInitial),
 		string(ucidomain.IndexJobReconcile),
 		string(ucidomain.IndexJobRecovery),
@@ -304,7 +285,7 @@ func uciIndexStatusSnapshotFromRow(ref ucidomain.ContextRef, row uciIndexStatusR
 	if row.PublishedAt == nil || row.PublishedAt.IsZero() || row.ObservedFSSeq < 0 || row.ScanStartedAt.IsZero() || row.ScanCompletedAt.IsZero() || row.ScanCompletedAt.Before(row.ScanStartedAt) {
 		return ucidomain.IndexStatusSnapshot{}, fmt.Errorf("uci projection index status: stored view metadata is invalid")
 	}
-	if row.ChunkCount < 0 || row.ReadyEmbeddingCount < 0 || row.PendingJobCount < 0 {
+	if row.ChunkCount < 0 || row.PendingJobCount < 0 {
 		return ucidomain.IndexStatusSnapshot{}, fmt.Errorf("uci projection index status: scoped counts are invalid")
 	}
 
@@ -321,7 +302,6 @@ func uciIndexStatusSnapshotFromRow(ref ucidomain.ContextRef, row uciIndexStatusR
 		ScanStartedAt:              row.ScanStartedAt.UTC(),
 		ScanCompletedAt:            row.ScanCompletedAt.UTC(),
 		ChunkCount:                 uint64(row.ChunkCount),
-		ReadyEmbeddingCount:        uint64(row.ReadyEmbeddingCount),
 		PendingPublicationJobCount: uint64(row.PendingJobCount),
 		Embedding:                  ucidomain.EmbeddingStatus{Coverage: ucidomain.IndexCoverageUnavailable},
 	}
