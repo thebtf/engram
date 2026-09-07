@@ -27,11 +27,12 @@ const (
 	uciRealCorpusPreprocessingRevisionEnv = "ENGRAM_UCI_REAL_CORPUS_PREPROCESSING_REVISION"
 	uciRealCorpusRecordPathEnv            = "ENGRAM_UCI_REAL_CORPUS_RECORD_PATH"
 
-	uciRealCorpusGoCallerPath = "internal/uci/zz_uci_real_corpus_caller.go"
-	uciRealCorpusGoCalleePath = "internal/uci/zz_uci_real_corpus_callee.go"
-	uciRealCorpusTSRoot       = "apps/operator-console/composables/zz-uci-real-corpus"
-	uciRealCorpusExpectedPath = "internal/uci/index_admission.go"
-	uciRealCorpusQuery        = "Как ссылки на выражения, похожие на приватные адреса, превращаются в безопасные стабильные идентификаторы без потери позиции в исходнике?"
+	uciRealCorpusGoCallerPath  = "internal/uci/zz_uci_real_corpus_caller.go"
+	uciRealCorpusGoCalleePath  = "internal/uci/zz_uci_real_corpus_callee.go"
+	uciRealCorpusTSRoot        = "apps/operator-console/composables/zz-uci-real-corpus"
+	uciRealCorpusExpectedPath  = "internal/uci/index_admission.go"
+	uciRealCorpusQuery         = "Как ссылки на выражения, похожие на приватные адреса, превращаются в безопасные стабильные идентификаторы без потери позиции в исходнике?"
+	uciRealCorpusBarrierWaitMS = int64(5_000)
 )
 
 var uciRealCorpusCanaries = map[string]string{
@@ -522,7 +523,7 @@ func uciWaitForRealCorpusPublication(ctx context.Context, client *uciInstalledAc
 			"context_handle": selection.contextHandle,
 			"after_barrier": map[string]any{
 				"token":   selection.runID,
-				"wait_ms": uciInstalledAcceptanceBarrierWait(ctx),
+				"wait_ms": min(uciRealCorpusBarrierWaitMS, uciInstalledAcceptanceBarrierWait(ctx)),
 			},
 		})
 		if err != nil {
