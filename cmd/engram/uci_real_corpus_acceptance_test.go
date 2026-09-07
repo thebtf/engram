@@ -251,7 +251,6 @@ func TestUCIRealCorpusInstalledProviderLifecycle(t *testing.T) {
 	if dsn == "" {
 		t.Fatal("real-corpus installed acceptance requires a disposable PostgreSQL DSN")
 	}
-	uciInstalledAcceptanceRequireTestPostgres(t, dsn)
 	providerURL := strings.TrimSpace(os.Getenv("ENGRAM_EMBEDDING_URL"))
 	providerModel := strings.TrimSpace(os.Getenv("ENGRAM_EMBEDDING_MODEL"))
 	providerRef := strings.TrimSpace(os.Getenv(uciRealCorpusProviderRefEnv))
@@ -259,6 +258,10 @@ func TestUCIRealCorpusInstalledProviderLifecycle(t *testing.T) {
 	if providerURL == "" || providerModel == "" || providerRef == "" || preprocessing == "" {
 		t.Fatal("real-corpus installed acceptance requires explicit provider URL, model, provider ref, and preprocessing revision")
 	}
+	if err := uciRealCorpusValidateConfiguredProviderRef(providerURL, providerRef); err != nil {
+		t.Fatal(err)
+	}
+	uciInstalledAcceptanceRequireTestPostgres(t, dsn)
 	sourceTransferApproved := strings.TrimSpace(os.Getenv(uciRealCorpusSourceTransferApprovedEnv)) == "1"
 	if !sourceTransferApproved {
 		t.Fatal("real-corpus installed acceptance requires explicit source-transfer approval")
@@ -458,6 +461,23 @@ func TestUCIRealCorpusEmbeddingProgressWindowWaitsForScheduledRetry(t *testing.T
 	}
 }
 
+func TestUCIRealCorpusProviderRefBindsExactEndpoint(t *testing.T) {
+	endpoint := "https://provider.invalid/v1"
+	providerRef := "sha256:" + uciInstalledAcceptanceStringDigest(endpoint)
+	if err := uciRealCorpusValidateConfiguredProviderRef(endpoint, providerRef); err != nil {
+		t.Fatalf("matching endpoint/provider_ref rejected: %v", err)
+	}
+
+	baseProviderRef := "sha256:" + uciInstalledAcceptanceStringDigest(strings.TrimSuffix(endpoint, "/v1"))
+	err := uciRealCorpusValidateConfiguredProviderRef(endpoint, baseProviderRef)
+	if err == nil {
+		t.Fatal("provider_ref for endpoint without /v1 was accepted")
+	}
+	if strings.Contains(err.Error(), endpoint) {
+		t.Fatalf("provider_ref mismatch exposed endpoint: %q", err)
+	}
+}
+
 func uciRealCorpusEmbeddingTestStatus(viewID string, generation int64, embeddingProfileID *string, coverage string, totalCandidates, readyCandidates, pendingJobs uint64, jobState *string) uciRealCorpusEmbeddingStatus {
 	status := uciRealCorpusEmbeddingStatus{}
 	status.Context.SourceID = "source"
@@ -497,6 +517,13 @@ func TestUCIRealCorpusEvidenceRecordRejectsPrivateValues(t *testing.T) {
 	if err := uciRealCorpusValidateEvidenceRecord(record, root, dsn, providerURL, providerKey); err == nil {
 		t.Fatal("provider credential was retained")
 	}
+}
+
+func uciRealCorpusValidateConfiguredProviderRef(providerURL, providerRef string) error {
+	if providerRef != "sha256:"+uciInstalledAcceptanceStringDigest(providerURL) {
+		return errors.New("real-corpus configured provider_ref does not match endpoint_digest")
+	}
+	return nil
 }
 
 func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstalledAcceptanceRequest, providerURL, providerModel, providerRef, preprocessing string, sourceTransferApproved bool) (record uciRealCorpusRecord, retErr error) {
@@ -1065,8 +1092,24 @@ func uciRealCorpusVerifyProviderProfile(ctx context.Context, authority *uciInsta
 	`, *status.Embedding.EmbeddingProfileID).Scan(&persisted).Error; err != nil {
 		return err
 	}
-	if persisted.ProviderRef != providerRef || persisted.Model != model || persisted.Dimension != 1536 || persisted.PreprocessingRevision != preprocessing || !persisted.IncludeRelativePath {
-		return errors.New("real-corpus persisted embedding profile does not match the configured provider contract")
+	mismatches := make([]string, 0, 5)
+	if persisted.ProviderRef != providerRef {
+		mismatches = append(mismatches, "provider_ref")
+	}
+	if persisted.Model != model {
+		mismatches = append(mismatches, "model")
+	}
+	if persisted.Dimension != 1536 {
+		mismatches = append(mismatches, "dimension")
+	}
+	if persisted.PreprocessingRevision != preprocessing {
+		mismatches = append(mismatches, "preprocessing_revision")
+	}
+	if !persisted.IncludeRelativePath {
+		mismatches = append(mismatches, "include_relative_path")
+	}
+	if len(mismatches) != 0 {
+		return fmt.Errorf("real-corpus persisted embedding profile mismatch fields=%s", strings.Join(mismatches, ","))
 	}
 	return nil
 }
