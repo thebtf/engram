@@ -2274,7 +2274,7 @@ func uciInstalledAcceptanceStringDigest(value string) string {
 }
 
 const (
-	uciInstalledAcceptanceBarrierWaitMS          int64 = 30_000
+	uciInstalledAcceptanceBarrierWaitMS          int64 = 5_000
 	uciInstalledAcceptanceQuiescenceObservations       = 15
 	uciInstalledAcceptanceQuiescencePollInterval       = 100 * time.Millisecond
 )
@@ -2504,41 +2504,63 @@ func uciWaitForInstalledAcceptanceBarrier(ctx context.Context, client *uciInstal
 	if selection.contextHandle == "" || selection.runID == "" {
 		return uciInstalledAcceptancePublication{}, errors.New("installed standard MCP barrier target has no context handle or run_id")
 	}
-	payload, err := uciInstalledAcceptanceStatusTool(ctx, client, map[string]any{
-		"context_handle": selection.contextHandle,
-		"after_barrier": map[string]any{
-			"token":   selection.runID,
-			"wait_ms": uciInstalledAcceptanceBarrierWait(ctx),
-		},
-	})
-	if err != nil {
-		statusPayload, statusErr := uciInstalledAcceptanceStatusTool(ctx, client, map[string]any{"context_handle": selection.contextHandle})
-		if statusErr == nil {
-			if status, decodeErr := uciDecodeInstalledAcceptanceStatus(statusPayload); decodeErr == nil {
-				if detail := uciInstalledAcceptanceSafeErrorDetail(status.error); detail != "" {
-					return uciInstalledAcceptancePublication{}, fmt.Errorf("%w: %s", err, detail)
+	for {
+		payload, err := uciInstalledAcceptanceStatusTool(ctx, client, map[string]any{
+			"context_handle": selection.contextHandle,
+			"after_barrier": map[string]any{
+				"token":   selection.runID,
+				"wait_ms": uciInstalledAcceptanceBarrierWait(ctx),
+			},
+		})
+		if err != nil {
+			statusPayload, statusErr := uciInstalledAcceptanceStatusTool(ctx, client, map[string]any{"context_handle": selection.contextHandle})
+			if statusErr == nil {
+				if status, decodeErr := uciDecodeInstalledAcceptanceStatus(statusPayload); decodeErr == nil {
+					if detail := uciInstalledAcceptanceSafeErrorDetail(status.error); detail != "" {
+						return uciInstalledAcceptancePublication{}, fmt.Errorf("%w: %s", err, detail)
+					}
 				}
 			}
+			return uciInstalledAcceptancePublication{}, err
 		}
-		return uciInstalledAcceptancePublication{}, err
+		status, err := uciDecodeInstalledAcceptanceStatus(payload)
+		if err != nil {
+			return uciInstalledAcceptancePublication{}, err
+		}
+		publication, retry, err := uciInstalledAcceptanceBarrierResult(status, selection)
+		if err != nil {
+			return uciInstalledAcceptancePublication{}, err
+		}
+		if retry {
+			if err := ctx.Err(); err != nil {
+				return uciInstalledAcceptancePublication{}, err
+			}
+			continue
+		}
+		return publication, nil
 	}
-	status, err := uciDecodeInstalledAcceptanceStatus(payload)
-	if err != nil {
-		return uciInstalledAcceptancePublication{}, err
+}
+
+func uciInstalledAcceptanceBarrierResult(status uciInstalledAcceptanceStatus, selection uciInstalledAcceptanceSelection) (uciInstalledAcceptancePublication, bool, error) {
+	if detail := uciInstalledAcceptanceSafeErrorDetail(status.error); detail != "" {
+		return uciInstalledAcceptancePublication{}, false, fmt.Errorf("installed standard MCP after_barrier status error: %s", detail)
+	}
+	if status.status == "running" && status.runID == selection.runID && status.freshness != nil && status.freshness.barrier != nil && status.freshness.barrier.state == "timed_out" {
+		return uciInstalledAcceptancePublication{}, true, nil
 	}
 	publication, err := uciInstalledAcceptanceStatusPublication(status, selection)
 	if err != nil {
-		return uciInstalledAcceptancePublication{}, err
+		return uciInstalledAcceptancePublication{}, false, err
 	}
 	if status.status != "idle" || status.freshness == nil || status.freshness.state != "observed_current" || status.freshness.barrier == nil ||
 		status.freshness.barrier.state != "satisfied" || status.freshness.barrier.deadlineMS < 1 ||
 		(status.freshness.barrier.scope.kind != "paths" && status.freshness.barrier.scope.kind != "paths_with_hashes") || status.freshness.barrier.scope.pathCount < 1 {
-		return uciInstalledAcceptancePublication{}, errors.New("installed standard MCP after_barrier did not return satisfied target freshness")
+		return uciInstalledAcceptancePublication{}, false, errors.New("installed standard MCP after_barrier did not return satisfied target freshness")
 	}
 	publication.freshnessState = status.freshness.state
 	publication.barrierState = status.freshness.barrier.state
 	publication.evidenceRecorder = status.evidenceRecorder.state
-	return publication, nil
+	return publication, false, nil
 }
 
 func uciDecodeInstalledAcceptanceQuery(payload json.RawMessage) (uci.QueryResponse, error) {

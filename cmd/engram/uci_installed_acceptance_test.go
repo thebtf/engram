@@ -68,6 +68,44 @@ func TestUCIInstalledAcceptanceTokenExpiryCoversOperationDeadline(t *testing.T) 
 	})
 }
 
+func TestUCIInstalledAcceptanceBarrierResultRetriesTimedOutRuns(t *testing.T) {
+	selection := uciInstalledAcceptanceSelection{runID: "run-1"}
+	timedOut, err := uciDecodeInstalledAcceptanceStatus(json.RawMessage(`{
+		"status":"running",
+		"run_id":"run-1",
+		"freshness":{
+			"state":"catching_up",
+			"barrier":{"scope":{"kind":"paths","path_count":1},"deadline_ms":5000,"state":"timed_out"}
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication, retry, err := uciInstalledAcceptanceBarrierResult(timedOut, selection)
+	if err != nil || !retry || publication != (uciInstalledAcceptancePublication{}) {
+		t.Fatalf("timed-out barrier result = publication=%#v retry=%t err=%v", publication, retry, err)
+	}
+
+	satisfied, err := uciDecodeInstalledAcceptanceStatus(json.RawMessage(`{
+		"status":"idle",
+		"run_id":"run-1",
+		"context":{"source_id":"source","checkout_id":"checkout","view_id":"view","profile_id":"profile","generation":2},
+		"freshness":{
+			"state":"observed_current",
+			"pending_changes":0,
+			"barrier":{"scope":{"kind":"paths_with_hashes","path_count":1},"deadline_ms":5000,"state":"satisfied"}
+		},
+		"evidence_recorder":{"state":"healthy","last_failure_code":"NONE"}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication, retry, err = uciInstalledAcceptanceBarrierResult(satisfied, selection)
+	if err != nil || retry || publication.viewID != "view" || publication.generation != 2 || publication.barrierState != "satisfied" {
+		t.Fatalf("satisfied barrier result = publication=%#v retry=%t err=%v", publication, retry, err)
+	}
+}
+
 func TestUCIInstalledStandardClientsKeepDirtyViewsIsolated(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("native Windows installed standard-client acceptance")
