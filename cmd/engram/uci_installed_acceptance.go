@@ -44,6 +44,8 @@ const (
 	uciInstalledAcceptanceParserCanaryRelativePath = "parser-canary.ts"
 	uciInstalledAcceptanceParserCanarySource       = "export function InstalledParserCanary(): string {\n\treturn \"UCI_INSTALLED_PARSER_CANARY\"\n}\n"
 	uciInstalledAcceptanceSchemaPrefix             = "uci_installed_"
+	uciInstalledAcceptanceTokenDefaultTTL          = 30 * time.Minute
+	uciInstalledAcceptanceTokenGrace               = 5 * time.Minute
 )
 
 var (
@@ -1016,6 +1018,20 @@ func uciInstalledAcceptanceGitPathDirty(ctx context.Context, directory, relative
 	return len(strings.TrimSpace(string(output))) > 0, nil
 }
 
+func uciInstalledAcceptanceTokenExpiry(ctx context.Context, now time.Time) time.Time {
+	expiresAt := now.UTC().Add(uciInstalledAcceptanceTokenDefaultTTL)
+	if ctx == nil {
+		return expiresAt
+	}
+	if deadline, found := ctx.Deadline(); found {
+		deadlineExpiry := deadline.UTC().Add(uciInstalledAcceptanceTokenGrace)
+		if deadlineExpiry.After(expiresAt) {
+			expiresAt = deadlineExpiry
+		}
+	}
+	return expiresAt
+}
+
 func uciPrepareInstalledAcceptanceAuthority(ctx context.Context, dsn string, worktrees uciInstalledAcceptanceWorktreesFixture, parserBundleDigest, anchorProjectID string) (_ *uciInstalledAcceptanceAuthority, retErr error) {
 	if err := uciValidateInstalledAcceptanceTestPostgres(dsn); err != nil {
 		return nil, err
@@ -1073,7 +1089,7 @@ func uciPrepareInstalledAcceptanceAuthority(ctx context.Context, dsn string, wor
 	if err != nil {
 		return nil, fmt.Errorf("hash installed acceptance keycard: %w", err)
 	}
-	expiresAt := time.Now().UTC().Add(30 * time.Minute)
+	expiresAt := uciInstalledAcceptanceTokenExpiry(ctx, time.Now())
 	tokens := gormdb.NewTokenStore(store)
 	authority.token, err = tokens.CreateWithPrincipal(ctx,
 		"uci-installed-"+strings.ReplaceAll(uuid.NewString(), "-", ""),

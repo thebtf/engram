@@ -43,6 +43,31 @@ func BetaCallee() string { return "T071_BETA_DIRTY_BODY" }
 // has no service, in-process transport, or host-profile injection seam.
 var _ func(context.Context, uciInstalledAcceptanceRequest) (uciInstalledAcceptanceResult, error) = runUCIInstalledAcceptance
 
+func TestUCIInstalledAcceptanceTokenExpiryCoversOperationDeadline(t *testing.T) {
+	now := time.Date(2026, time.September, 7, 6, 0, 0, 0, time.UTC)
+	requireExpiry := func(t *testing.T, ctx context.Context, want time.Time) {
+		t.Helper()
+		if got := uciInstalledAcceptanceTokenExpiry(ctx, now); !got.Equal(want) {
+			t.Fatalf("token expiry = %s, want %s", got, want)
+		}
+	}
+
+	t.Run("default", func(t *testing.T) {
+		requireExpiry(t, context.Background(), now.Add(uciInstalledAcceptanceTokenDefaultTTL))
+	})
+	t.Run("short operation keeps default", func(t *testing.T) {
+		ctx, cancel := context.WithDeadline(context.Background(), now.Add(10*time.Minute))
+		defer cancel()
+		requireExpiry(t, ctx, now.Add(uciInstalledAcceptanceTokenDefaultTTL))
+	})
+	t.Run("long operation includes grace", func(t *testing.T) {
+		deadline := now.Add(90 * time.Minute)
+		ctx, cancel := context.WithDeadline(context.Background(), deadline)
+		defer cancel()
+		requireExpiry(t, ctx, deadline.Add(uciInstalledAcceptanceTokenGrace))
+	})
+}
+
 func TestUCIInstalledStandardClientsKeepDirtyViewsIsolated(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("native Windows installed standard-client acceptance")
