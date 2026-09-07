@@ -963,9 +963,14 @@ func uciRealCorpusCountsFor(ctx context.Context, authority *uciInstalledAcceptan
 		}
 		counts.Edges[relation] = count
 	}
-	if err := db.Raw(`SELECT coverage_json FROM ci_views WHERE view_id = ?`, publication.viewID).Scan(&counts.CoverageJSON).Error; err != nil {
+	var coverageJSON string
+	if err := db.Raw(`SELECT coverage_json::text FROM ci_views WHERE view_id = ?`, publication.viewID).Scan(&coverageJSON).Error; err != nil {
 		return uciRealCorpusCounts{}, err
 	}
+	if !json.Valid([]byte(coverageJSON)) {
+		return uciRealCorpusCounts{}, errors.New("real-corpus coverage JSON is invalid")
+	}
+	counts.CoverageJSON = append(json.RawMessage(nil), coverageJSON...)
 	counts.EmbeddingCandidates = embedding.Embedding.TotalCandidates
 	counts.ReadyEmbeddings = embedding.Embedding.ReadyCandidates
 	counts.PendingEmbeddingJobs = embedding.Embedding.PendingJobs
