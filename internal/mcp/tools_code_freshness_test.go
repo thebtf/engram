@@ -297,6 +297,24 @@ func TestUCIFreshnessEmbeddingPendingDoesNotDelaySourceBarrier(t *testing.T) {
 	assert.Equal(t, target, fixture.application.statusCalls[0])
 }
 
+func TestUCICodebaseStatusUsesSnapshotFreshnessWithoutSecondLoad(t *testing.T) {
+	fixture := newUCIFreshnessFixture(t)
+	handle := fixture.selectContext(t, fixture.clientA, fixture.refA)
+	want := uciFreshnessObservedCurrent(fixture.refA.Generation)
+	snapshot := fixture.application.statusSnapshots[fixture.refA.CheckoutID]
+	snapshot.Freshness = &want
+	fixture.application.statusSnapshots[fixture.refA.CheckoutID] = snapshot
+
+	status := requireUCIFreshnessStatus(t, callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_status", map[string]any{
+		"context_handle": handle,
+	}), fixture.refA, want)
+	assert.Equal(t, int64(17), status.TotalChunks)
+	assert.Equal(t, int64(11), status.EmbeddedChunks)
+	assert.Empty(t, fixture.application.freshnessCalls(), "snapshot freshness must avoid a second status-store load")
+	require.Len(t, fixture.application.statusCalls, 1)
+	assert.Equal(t, fixture.refA, fixture.application.statusCalls[0])
+}
+
 func TestUCICodebaseStatusStabilizesMonotonicViewAdvance(t *testing.T) {
 	fixture := newUCIFreshnessFixture(t)
 	binding := uciCodeIntelCheckoutBinding(fixture.refA, &fixture.refA)

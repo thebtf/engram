@@ -181,10 +181,12 @@ func (application *UCIApplication) CodebaseStatus(ctx context.Context, authorize
 	if err != nil {
 		return mcp.CodebaseStatusSnapshot{}, fmt.Errorf("UCI application embedded chunk count: %w", err)
 	}
+	freshness := snapshot.Freshness
 	return mcp.CodebaseStatusSnapshot{
 		TotalChunks:    totalChunks,
 		EmbeddedChunks: embeddedChunks,
 		Embedding:      snapshot.Embedding,
+		Freshness:      &freshness,
 	}, nil
 }
 

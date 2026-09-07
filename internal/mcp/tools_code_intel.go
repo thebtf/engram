@@ -75,6 +75,7 @@ type CodebaseStatusSnapshot struct {
 	TotalChunks      int64
 	EmbeddedChunks   int64
 	Embedding        uci.EmbeddingStatus
+	Freshness        *uci.QueryFreshness
 	EvidenceRecorder CodebaseEvidenceRecorderHealth
 }
 
@@ -649,21 +650,24 @@ func (s *Server) handleUCICodebaseStatus(ctx context.Context, raw json.RawMessag
 	}
 
 	for attempt := range codebaseStatusStabilizationAttempts {
-		freshness, _, err := codebaseFreshness(ctx, application, authorized, args.AfterBarrier)
-		if err != nil {
-			if code, isContextFailure := codebaseContextErrorCode(err); isContextFailure {
-				return "", codebaseContextClosedError(code)
+		var freshness *uci.QueryFreshness
+		if args.AfterBarrier != nil {
+			freshness, _, err = codebaseFreshness(ctx, application, authorized, args.AfterBarrier)
+			if err != nil {
+				if code, isContextFailure := codebaseContextErrorCode(err); isContextFailure {
+					return "", codebaseContextClosedError(code)
+				}
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return "", ctxErr
+				}
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return "", err
+				}
+				return "", errors.New("codebase_status: UCI freshness unavailable")
 			}
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return "", ctxErr
+			if !s.codebaseContextEpochCurrent(epoch) {
+				return "", codebaseContextClosedError(uci.ContextMismatch)
 			}
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return "", err
-			}
-			return "", errors.New("codebase_status: UCI freshness unavailable")
-		}
-		if !s.codebaseContextEpochCurrent(epoch) {
-			return "", codebaseContextClosedError(uci.ContextMismatch)
 		}
 
 		snapshot, err := application.CodebaseStatus(ctx, authorized)
@@ -679,6 +683,31 @@ func (s *Server) handleUCICodebaseStatus(ctx context.Context, raw json.RawMessag
 		if !s.codebaseContextEpochCurrent(epoch) {
 			return "", codebaseContextClosedError(uci.ContextMismatch)
 		}
+		if args.AfterBarrier == nil {
+			switch {
+			case snapshot.Freshness != nil:
+				value := *snapshot.Freshness
+				if err := value.Validate(); err != nil {
+					return "", errors.New("codebase_status: UCI snapshot freshness unavailable")
+				}
+				freshness = &value
+			default:
+				freshness, _, err = codebaseFreshness(ctx, application, authorized, nil)
+				if err != nil {
+					if code, isContextFailure := codebaseContextErrorCode(err); isContextFailure {
+						return "", codebaseContextClosedError(code)
+					}
+					if ctxErr := ctx.Err(); ctxErr != nil {
+						return "", ctxErr
+					}
+					return "", errors.New("codebase_status: UCI freshness unavailable")
+				}
+				if !s.codebaseContextEpochCurrent(epoch) {
+					return "", codebaseContextClosedError(uci.ContextMismatch)
+				}
+			}
+		}
+
 		reauthorized, contextCode := s.reauthorizeCodebaseContext(ctx, epoch, authorized, args.ContextHandle)
 		if contextCode != "" {
 			return "", codebaseContextClosedError(contextCode)
