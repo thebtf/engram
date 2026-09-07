@@ -524,6 +524,7 @@ const (
 	uciIndexAdmissionProtectionDomain = "source-private"
 	uciIndexAdmissionEmptyPointerName = "(empty)"
 	uciIndexAdmissionFactBatchSize    = 500
+	uciIndexAdmissionAnalyzeThreshold = int64(10_000)
 )
 
 // AdmitIndexFrame admits one frame through the packed admission transaction.
@@ -595,6 +596,7 @@ func (s *UCIProjectionStore) AdmitIndexFrames(ctx context.Context, sourceID, pro
 	}
 
 	var admitted []ucidomain.IndexPart
+	var insertedFactRows int64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		store := &UCIProjectionStore{db: tx}
 		bindings := make(ucidomain.IndexAdmissionReferenceBindings)
@@ -623,10 +625,11 @@ func (s *UCIProjectionStore) AdmitIndexFrames(ctx context.Context, sourceID, pro
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				proof, err := store.admitUCIIndexAdmissionArtifact(ctx, sourceID, artifact, bindings)
+				proof, inserted, err := store.admitUCIIndexAdmissionArtifact(ctx, sourceID, artifact, bindings)
 				if err != nil {
 					return err
 				}
+				insertedFactRows += inserted
 				proofs[artifact.ArtifactID] = proof
 			}
 		}
@@ -654,7 +657,19 @@ func (s *UCIProjectionStore) AdmitIndexFrames(ctx context.Context, sourceID, pro
 	if err != nil {
 		return nil, err
 	}
+	if insertedFactRows >= uciIndexAdmissionAnalyzeThreshold {
+		if err := s.refreshUCIProjectionStatistics(ctx); err != nil {
+			return nil, err
+		}
+	}
 	return admitted, nil
+}
+
+func (s *UCIProjectionStore) refreshUCIProjectionStatistics(ctx context.Context) error {
+	if err := s.db.WithContext(ctx).Exec("ANALYZE ci_blobs, ci_parse_artifacts, ci_definitions, ci_reference_sites, ci_chunks").Error; err != nil {
+		return fmt.Errorf("uci index admission: refresh projection statistics: %w", err)
+	}
+	return nil
 }
 
 func (s *UCIProjectionStore) validateUCIIndexAdmissionProfile(ctx context.Context, profileID string, frame ucidomain.IndexAdmissionFrame) error {
@@ -670,14 +685,14 @@ func (s *UCIProjectionStore) validateUCIIndexAdmissionProfile(ctx context.Contex
 	return nil
 }
 
-func (s *UCIProjectionStore) admitUCIIndexAdmissionArtifact(ctx context.Context, sourceID string, artifact ucidomain.IndexAdmissionArtifact, bindings ucidomain.IndexAdmissionReferenceBindings) (ucidomain.IndexArtifactProof, error) {
+func (s *UCIProjectionStore) admitUCIIndexAdmissionArtifact(ctx context.Context, sourceID string, artifact ucidomain.IndexAdmissionArtifact, bindings ucidomain.IndexAdmissionReferenceBindings) (ucidomain.IndexArtifactProof, int64, error) {
 	status, err := uciIndexAdmissionArtifactStatus(artifact.Status)
 	if err != nil {
-		return ucidomain.IndexArtifactProof{}, err
+		return ucidomain.IndexArtifactProof{}, 0, err
 	}
 	diagnostics, err := marshalUCIIndexAdmissionDiagnostics(artifact.Diagnostics)
 	if err != nil {
-		return ucidomain.IndexArtifactProof{}, err
+		return ucidomain.IndexArtifactProof{}, 0, err
 	}
 	blob, err := s.UpsertBlob(ctx, UpsertUCIBlobInput{
 		SourceID:         sourceID,
@@ -689,7 +704,7 @@ func (s *UCIProjectionStore) admitUCIIndexAdmissionArtifact(ctx context.Context,
 		StorageState:     UCIBlobStored,
 	})
 	if err != nil {
-		return ucidomain.IndexArtifactProof{}, fmt.Errorf("uci index admission: upsert blob: %w", err)
+		return ucidomain.IndexArtifactProof{}, 0, fmt.Errorf("uci index admission: upsert blob: %w", err)
 	}
 	stored, err := s.UpsertParseArtifact(ctx, UpsertUCIParseArtifactInput{
 		ArtifactID:              artifact.ArtifactID,
@@ -703,34 +718,36 @@ func (s *UCIProjectionStore) admitUCIIndexAdmissionArtifact(ctx context.Context,
 		Diagnostics:             diagnostics,
 	})
 	if err != nil {
-		return ucidomain.IndexArtifactProof{}, fmt.Errorf("uci index admission: upsert artifact: %w", err)
+		return ucidomain.IndexArtifactProof{}, 0, fmt.Errorf("uci index admission: upsert artifact: %w", err)
 	}
 	if stored.ArtifactID != artifact.ArtifactID || stored.SourceID != sourceID {
-		return ucidomain.IndexArtifactProof{}, errUCIProjectionImmutable
+		return ucidomain.IndexArtifactProof{}, 0, errUCIProjectionImmutable
 	}
 
+	insertedFactRows := int64(0)
 	if stored.SealedAt == nil {
-		if err := s.storeUCIIndexAdmissionFacts(ctx, sourceID, artifact, bindings); err != nil {
-			return ucidomain.IndexArtifactProof{}, err
+		insertedFactRows, err = s.storeUCIIndexAdmissionFacts(ctx, sourceID, artifact, bindings)
+		if err != nil {
+			return ucidomain.IndexArtifactProof{}, 0, err
 		}
 	}
 	if err := s.verifyUCIIndexAdmissionFacts(ctx, artifact, bindings); err != nil {
-		return ucidomain.IndexArtifactProof{}, err
+		return ucidomain.IndexArtifactProof{}, 0, err
 	}
 	proof, err := s.DescribeIndexArtifact(ctx, sourceID, artifact.ArtifactID)
 	if err != nil {
-		return ucidomain.IndexArtifactProof{}, fmt.Errorf("uci index admission: describe stored artifact: %w", err)
+		return ucidomain.IndexArtifactProof{}, 0, fmt.Errorf("uci index admission: describe stored artifact: %w", err)
 	}
-	return proof, nil
+	return proof, insertedFactRows, nil
 }
 
-func (s *UCIProjectionStore) storeUCIIndexAdmissionFacts(ctx context.Context, sourceID string, artifact ucidomain.IndexAdmissionArtifact, bindings ucidomain.IndexAdmissionReferenceBindings) error {
+func (s *UCIProjectionStore) storeUCIIndexAdmissionFacts(ctx context.Context, sourceID string, artifact ucidomain.IndexAdmissionArtifact, bindings ucidomain.IndexAdmissionReferenceBindings) (int64, error) {
 	stored, err := s.loadMutableUCIArtifact(ctx, artifact.ArtifactID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if stored.SourceID != sourceID {
-		return fmt.Errorf("uci index admission: artifact source mismatch")
+		return 0, fmt.Errorf("uci index admission: artifact source mismatch")
 	}
 
 	now := time.Now().UTC()
@@ -738,7 +755,7 @@ func (s *UCIProjectionStore) storeUCIIndexAdmissionFacts(ctx context.Context, so
 	for _, definition := range artifact.Definitions {
 		name, err := uciIndexAdmissionDefinitionName(artifact.Profile.Language, definition)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		definitions = append(definitions, UCIDefinition{
 			DefinitionID:       uuid.NewString(),
@@ -761,22 +778,22 @@ func (s *UCIProjectionStore) storeUCIIndexAdmissionFacts(ctx context.Context, so
 		binding := ucidomain.IndexAdmissionReferenceKey{ArtifactID: artifact.ArtifactID, SiteKey: reference.SiteKey}
 		referenceSiteID, found := bindings[binding]
 		if !found {
-			return fmt.Errorf("uci index admission: missing reference binding")
+			return 0, fmt.Errorf("uci index admission: missing reference binding")
 		}
 		if err := validateUCIProjectionSourceText("raw_target", reference.RawTarget); err != nil {
-			return err
+			return 0, err
 		}
 		ownerSymbolKey, err := copyUCIOptionalTextPointer("owner_symbol_key", reference.OwnerSymbolKey)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		syntaxSpan, err := marshalUCIIndexAdmissionSpan(reference.Span)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		resolverHints, err := marshalUCIIndexAdmissionReferenceHints(reference)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		references = append(references, UCIReferenceSite{
 			ReferenceSiteID: referenceSiteID,
@@ -794,11 +811,11 @@ func (s *UCIProjectionStore) storeUCIIndexAdmissionFacts(ctx context.Context, so
 	chunks := make([]UCIChunk, 0, len(artifact.Chunks))
 	for _, chunk := range artifact.Chunks {
 		if err := validateUCIProjectionSourceText("text_for_search", chunk.Text); err != nil {
-			return err
+			return 0, err
 		}
 		symbolKey, err := copyUCIOptionalTextPointer("symbol_key", chunk.SymbolKey)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		chunks = append(chunks, UCIChunk{
 			ChunkID:       uuid.NewString(),
@@ -815,23 +832,26 @@ func (s *UCIProjectionStore) storeUCIIndexAdmissionFacts(ctx context.Context, so
 		})
 	}
 
+	inserted := int64(0)
 	for _, batch := range []struct {
-		name string
-		rows any
-		len  int
+		name  string
+		rows  any
+		count int
 	}{
-		{name: "definitions", rows: &definitions, len: len(definitions)},
-		{name: "reference sites", rows: &references, len: len(references)},
-		{name: "chunks", rows: &chunks, len: len(chunks)},
+		{name: "definitions", rows: &definitions, count: len(definitions)},
+		{name: "reference sites", rows: &references, count: len(references)},
+		{name: "chunks", rows: &chunks, count: len(chunks)},
 	} {
-		if batch.len == 0 {
+		if batch.count == 0 {
 			continue
 		}
-		if err := s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(batch.rows, uciIndexAdmissionFactBatchSize).Error; err != nil {
-			return fmt.Errorf("uci index admission: store %s: %w", batch.name, err)
+		result := s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(batch.rows, uciIndexAdmissionFactBatchSize)
+		if result.Error != nil {
+			return 0, fmt.Errorf("uci index admission: store %s: %w", batch.name, result.Error)
 		}
+		inserted += result.RowsAffected
 	}
-	return nil
+	return inserted, nil
 }
 
 func uciIndexAdmissionDefinitionName(language ucidomain.IndexAdmissionLanguage, definition ucidomain.IndexAdmissionDefinition) (string, error) {
