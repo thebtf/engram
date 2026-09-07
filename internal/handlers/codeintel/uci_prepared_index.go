@@ -894,11 +894,11 @@ func uciPreparedAddResolvedTreeSitterEdges(files []uciPreparedAdmissionFile) (ui
 			target := uciPreparedTreeSitterTarget{path: targetFile.path, artifactID: targetFile.artifact.ArtifactID}
 			if imported != "" && imported != "*" && imported != "default" {
 				matches := definitions[targetFile.path][imported]
-				if len(matches) == 1 {
-					target = matches[0]
-				} else {
+				if len(matches) != 1 {
 					unresolved++
+					continue
 				}
+				target = matches[0]
 			}
 			file.edges = append(file.edges, uciPreparedTreeSitterEdge(file.path, *file.artifact, reference, target))
 			if local == "" {

@@ -69,3 +69,43 @@ func TestUCIPreparedIndexResolvesTreeSitterModulesAliasesAndCalls(t *testing.T) 
 		}
 	}
 }
+
+func TestUCIPreparedIndexLeavesAmbiguousTreeSitterImportsUnresolved(t *testing.T) {
+	t.Parallel()
+	remoteID := "11111111-1111-4111-8111-111111111111"
+	callerID := "22222222-2222-4222-8222-222222222222"
+	files := []uciPreparedAdmissionFile{
+		{
+			path:       "remote.ts",
+			membership: uci.IndexAdmissionMembership{PathKey: "remote.ts", State: uci.IndexAdmissionMembershipPresent, ArtifactID: &remoteID},
+			artifact: &uci.IndexAdmissionArtifact{
+				ArtifactID: remoteID,
+				Profile:    uci.IndexAdmissionArtifactProfile{Language: uci.IndexAdmissionLanguageTypeScript},
+				Definitions: []uci.IndexAdmissionDefinition{
+					{LocalSymbolKey: "function:build", Kind: "function", SymbolKey: "typescript:function:build"},
+					{LocalSymbolKey: "class:build", Kind: "class", SymbolKey: "typescript:class:build"},
+				},
+			},
+		},
+		{
+			path:       "caller.ts",
+			membership: uci.IndexAdmissionMembership{PathKey: "caller.ts", State: uci.IndexAdmissionMembershipPresent, ArtifactID: &callerID},
+			artifact: &uci.IndexAdmissionArtifact{
+				ArtifactID: callerID,
+				Profile:    uci.IndexAdmissionArtifactProfile{Language: uci.IndexAdmissionLanguageTypeScript},
+				References: []uci.IndexAdmissionReference{{
+					SiteKey:   "import:./remote.ts#build:localBuild@0:40",
+					Kind:      "import_alias",
+					SymbolKey: "typescript:import:./remote.ts#build:localBuild@0:40",
+					RawTarget: "build as localBuild",
+					Relation:  uci.IndexRelation("imports"),
+				}},
+			},
+		},
+	}
+
+	unresolved, err := uciPreparedAddResolvedTreeSitterEdges(files)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), unresolved)
+	require.Empty(t, files[1].edges, "an ambiguous symbol must not be emitted as a resolved module-level edge")
+}
