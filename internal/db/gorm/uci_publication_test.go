@@ -309,6 +309,32 @@ func TestUCIReplayBeginAndStageBinding(t *testing.T) {
 	fixture.assertBuildPartCount(t, first.Build.BuildID, 1)
 }
 
+func TestUCIStageRenewsActivePublicationLease(t *testing.T) {
+	fixture := openUCIPublicationFixture(t)
+	artifact := fixture.admitArtifact(t, fixture.source.SourceID, "lease-renewal", "func Renewed() {}\n", UCIParseArtifactComplete)
+	part := uciPublicationPart(
+		[]uciPublicationArtifact{artifact},
+		[]ucidomain.IndexMembership{uciPublicationPresentMembership("renewed.go", artifact)},
+		nil,
+		[]ucidomain.IndexEdgeReplacement{{SourcePath: "renewed.go"}},
+	)
+	caller := fixture.caller("lease-renewal-owner")
+	build := fixture.begin(t, fixture.publisher, caller, "lease-renewal", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	shortExpiry := time.Now().UTC().Add(30 * time.Second).Truncate(time.Microsecond)
+	require.NoError(t, fixture.db.Model(&UCIJob{}).Where("job_id = ?", build.Build.BuildID).Update("lease_expiry", shortExpiry).Error)
+	require.NoError(t, fixture.db.Model(&UCICheckout{}).Where("checkout_id = ?", fixture.checkout.CheckoutID).Update("lease_expires_at", shortExpiry).Error)
+
+	fixture.stage(t, fixture.publisher, caller, build.Build, 0, part)
+	var job UCIJob
+	require.NoError(t, fixture.db.Where("job_id = ?", build.Build.BuildID).First(&job).Error)
+	var checkout UCICheckout
+	require.NoError(t, fixture.db.Where("checkout_id = ?", fixture.checkout.CheckoutID).First(&checkout).Error)
+	require.NotNil(t, job.LeaseExpiry)
+	require.NotNil(t, checkout.LeaseExpiresAt)
+	require.True(t, job.LeaseExpiry.After(shortExpiry), "staging progress must extend the build lease")
+	require.Equal(t, job.LeaseExpiry.UTC(), checkout.LeaseExpiresAt.UTC())
+}
+
 func TestUCILeaseExpiryTakeoverAndStaleWriter(t *testing.T) {
 	fixture := openUCIPublicationFixture(t)
 	artifact := fixture.admitArtifact(t, fixture.source.SourceID, "lease", "func Lease() {}\n", UCIParseArtifactComplete)

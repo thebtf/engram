@@ -3353,6 +3353,25 @@ func (publisher *uciPublisher) Stage(ctx context.Context, caller ucidomain.Index
 		if !activeUCIPublicationLease(*job, checkout, caller, input.Build, now) {
 			return errUCIPublicationLeaseStale
 		}
+		leaseExpiry := now.Add(publisher.limits.LeaseTTL)
+		checkoutUpdate := tx.WithContext(ctx).Model(&UCICheckout{}).
+			Where("checkout_id = ? AND lease_epoch = ? AND owner_instance = ?", checkout.CheckoutID, input.Build.LeaseEpoch, caller.OwnerInstance).
+			Updates(map[string]any{"lease_expires_at": leaseExpiry, "updated_at": now})
+		if checkoutUpdate.Error != nil {
+			return fmt.Errorf("uci publication renew checkout lease: %w", checkoutUpdate.Error)
+		}
+		if checkoutUpdate.RowsAffected != 1 {
+			return errUCIPublicationLeaseStale
+		}
+		jobUpdate := tx.WithContext(ctx).Model(&UCIJob{}).
+			Where("job_id = ? AND owner_epoch = ? AND lease_owner = ? AND state = ?", job.JobID, input.Build.LeaseEpoch, caller.OwnerInstance, UCIJobRunning).
+			Updates(map[string]any{"lease_expiry": leaseExpiry, "updated_at": now})
+		if jobUpdate.Error != nil {
+			return fmt.Errorf("uci publication renew build lease: %w", jobUpdate.Error)
+		}
+		if jobUpdate.RowsAffected != 1 {
+			return errUCIPublicationLeaseStale
+		}
 		var partCount int64
 		if err := tx.WithContext(ctx).Model(&UCIIndexBuildPart{}).Where("build_id = ?", input.Build.BuildID).Count(&partCount).Error; err != nil {
 			return fmt.Errorf("uci publication count staged parts: %w", err)
