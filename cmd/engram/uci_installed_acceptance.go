@@ -1656,7 +1656,7 @@ func (client *uciInstalledAcceptanceMCPClient) ToolWithCall(ctx context.Context,
 	raw, request, err := client.call(ctx, "tools/call", json.RawMessage(params))
 	call := uciInstalledAcceptanceMCPToolCall{client: client.name, name: name, request: request}
 	if err != nil {
-		return uciInstalledAcceptanceMCPToolResult{call: call}, err
+		return uciInstalledAcceptanceMCPToolResult{call: call}, fmt.Errorf("installed standard MCP %s tools/call failed: %w", name, err)
 	}
 	return uciInstalledAcceptanceDecodeToolResult(raw, call)
 }
