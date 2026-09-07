@@ -463,7 +463,7 @@ func TestCodebaseStatus_TransitionsRunningToIdle(t *testing.T) {
 
 func TestCodebaseStatusDecodesBoundedProxyPayloads(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
-	statusPayload := json.RawMessage(`{"total_chunks":17,"embedded_chunks":13,"last_indexed_at":"2026-09-06T00:00:00Z"}`)
+	statusPayload := json.RawMessage(`{"total_chunks":17,"embedded_chunks":13,"last_indexed_at":"2026-09-06T00:00:00Z","embedding":{"embedding_profile_id":"55555555-5555-4555-8555-555555555555","coverage":"partial","total_candidates":17,"ready_candidates":13,"pending_jobs":1,"job_state":"running","error_code":null,"retry_after":null}}`)
 
 	for _, test := range []struct {
 		name          string
@@ -480,8 +480,16 @@ func TestCodebaseStatusDecodesBoundedProxyPayloads(t *testing.T) {
 			raw, err := mod.HandleTool(testTransportContext(p), p, "codebase_status", testStatusArgs(p))
 			require.NoError(t, err)
 			var status struct {
-				TotalChunks           int64  `json:"total_chunks"`
-				EmbeddedChunks        int64  `json:"embedded_chunks"`
+				TotalChunks    int64 `json:"total_chunks"`
+				EmbeddedChunks int64 `json:"embedded_chunks"`
+				Embedding      struct {
+					EmbeddingProfileID *string `json:"embedding_profile_id"`
+					Coverage           string  `json:"coverage"`
+					TotalCandidates    uint64  `json:"total_candidates"`
+					ReadyCandidates    uint64  `json:"ready_candidates"`
+					PendingJobs        uint64  `json:"pending_jobs"`
+					JobState           *string `json:"job_state"`
+				} `json:"embedding"`
 				ServerCountsAvailable bool   `json:"server_counts_available"`
 				ServerCountsError     string `json:"server_counts_error"`
 			}
@@ -494,6 +502,14 @@ func TestCodebaseStatusDecodesBoundedProxyPayloads(t *testing.T) {
 			require.True(t, status.ServerCountsAvailable)
 			require.Equal(t, int64(17), status.TotalChunks)
 			require.Equal(t, int64(13), status.EmbeddedChunks)
+			require.NotNil(t, status.Embedding.EmbeddingProfileID)
+			require.Equal(t, "55555555-5555-4555-8555-555555555555", *status.Embedding.EmbeddingProfileID)
+			require.Equal(t, "partial", status.Embedding.Coverage)
+			require.Equal(t, uint64(17), status.Embedding.TotalCandidates)
+			require.Equal(t, uint64(13), status.Embedding.ReadyCandidates)
+			require.Equal(t, uint64(1), status.Embedding.PendingJobs)
+			require.NotNil(t, status.Embedding.JobState)
+			require.Equal(t, "running", *status.Embedding.JobState)
 		})
 	}
 }

@@ -1152,7 +1152,7 @@ func (m *Module) handleStatus(ctx context.Context, p muxcore.ProjectContext, arg
 					return nil, err
 				}
 			}
-			for _, key := range []string{"total_chunks", "embedded_chunks", "last_indexed_at", "context", "rows", "edges", "evidence_recorder", "freshness"} {
+			for _, key := range []string{"total_chunks", "embedded_chunks", "last_indexed_at", "context", "rows", "edges", "embedding", "evidence_recorder", "freshness"} {
 				if value, found := serverPayload[key]; found {
 					result[key] = value
 				}
