@@ -949,6 +949,86 @@ type uciEmbeddingCoverageKey struct {
 	ProtectionDomain        string `gorm:"column:protection_domain"`
 }
 
+func loadUCIEmbeddingCoverageSummary(ctx context.Context, db *gorm.DB, ref ucidomain.ContextRef, embeddingProfileID string, profile ucidomain.VectorProfile) (uint64, uint64, error) {
+	if validateUCIQueryContext(ref) != nil || validateUCIUUID("embedding_profile_id", embeddingProfileID) != nil || validateUCISemanticProfile(profile) != nil {
+		return 0, 0, fmt.Errorf("uci embedding coverage summary: invalid request")
+	}
+	var row struct {
+		Total int64 `gorm:"column:total"`
+		Ready int64 `gorm:"column:ready"`
+	}
+	err := db.WithContext(ctx).Raw(`
+		WITH selected_view AS (
+			SELECT view_row.source_id, view_row.checkout_id, view_row.generation, profile_row.parser_bundle_digest
+			FROM ci_views AS view_row
+			JOIN ci_profiles AS profile_row ON profile_row.profile_id = view_row.profile_id
+			WHERE view_row.view_id = ? AND view_row.source_id = ? AND view_row.checkout_id = ?
+				AND view_row.profile_id = ? AND view_row.generation = ? AND view_row.state IN (?, ?)
+		)
+		SELECT
+			COUNT(*) AS total,
+			COUNT(*) FILTER (WHERE EXISTS (
+				SELECT 1
+				FROM ci_chunk_embeddings AS link
+				JOIN ci_embeddings AS embedding
+					ON embedding.source_id = link.source_id
+					AND embedding.embedding_id = link.embedding_id
+					AND embedding.embedding_profile_id = link.embedding_profile_id
+					AND embedding.embedding_input_digest = link.embedding_input_digest
+				WHERE link.source_id = chunk.source_id
+					AND link.chunk_id = chunk.chunk_id
+					AND link.embedding_profile_id = ?
+					AND link.relative_path_fingerprint = CASE WHEN ? THEN membership.display_path ELSE ? END
+					AND embedding.status = ?
+					AND embedding.vector IS NOT NULL
+			)) AS ready
+		FROM selected_view AS view_row
+		JOIN ci_memberships AS membership
+			ON membership.source_id = view_row.source_id
+			AND membership.checkout_id = view_row.checkout_id
+			AND membership.valid_from_generation <= view_row.generation
+			AND (membership.valid_to_generation IS NULL OR membership.valid_to_generation > view_row.generation)
+		JOIN ci_parse_artifacts AS artifact
+			ON artifact.source_id = membership.source_id
+			AND artifact.artifact_id = membership.artifact_id
+			AND artifact.extraction_profile_digest = view_row.parser_bundle_digest
+		JOIN ci_blobs AS blob
+			ON blob.source_id = artifact.source_id
+			AND blob.blob_id = artifact.blob_id
+		JOIN ci_chunks AS chunk
+			ON chunk.source_id = artifact.source_id
+			AND chunk.artifact_id = artifact.artifact_id
+		WHERE membership.file_state = ?
+			AND blob.storage_state = ?
+			AND artifact.status IN (?, ?)
+			AND artifact.sealed_at IS NOT NULL
+			AND artifact.facts_digest IS NOT NULL
+	`,
+		ref.ViewID,
+		ref.SourceID,
+		ref.CheckoutID,
+		ref.AnalysisProfileID,
+		ref.Generation,
+		UCIViewPublished,
+		UCIViewSuperseded,
+		embeddingProfileID,
+		profile.IncludeRelativePath,
+		uciSemanticPathIndependentFingerprint,
+		UCIEmbeddingReady,
+		UCIFilePresent,
+		UCIBlobStored,
+		UCIParseArtifactComplete,
+		UCIParseArtifactPartial,
+	).Scan(&row).Error
+	if err != nil {
+		return 0, 0, fmt.Errorf("uci embedding coverage summary: %w", err)
+	}
+	if row.Total < 0 || row.Ready < 0 || row.Ready > row.Total {
+		return 0, 0, fmt.Errorf("uci embedding coverage summary is invalid")
+	}
+	return uint64(row.Total), uint64(row.Ready), nil
+}
+
 func loadUCIEmbeddingCoverage(ctx context.Context, db *gorm.DB, ref ucidomain.ContextRef, embeddingProfileID string, profile ucidomain.VectorProfile) (uint64, uint64, *ucidomain.EmbeddingCandidateKey, error) {
 	var total, ready uint64
 	var cursor *ucidomain.EmbeddingCandidateKey
@@ -1174,7 +1254,7 @@ func (s *UCIProjectionStore) loadUCIEmbeddingReadiness(ctx context.Context, ref 
 		return uciEmbeddingReadiness{}, nil
 	}
 	readiness := uciEmbeddingReadiness{ProfileID: embeddingProfile.EmbeddingProfileID}
-	total, ready, _, err := loadUCIEmbeddingCoverage(ctx, s.db, ref, embeddingProfile.EmbeddingProfileID, *profile)
+	total, ready, err := loadUCIEmbeddingCoverageSummary(ctx, s.db, ref, embeddingProfile.EmbeddingProfileID, *profile)
 	if err != nil {
 		return uciEmbeddingReadiness{}, err
 	}
