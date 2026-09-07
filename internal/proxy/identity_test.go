@@ -294,6 +294,18 @@ func findRealRepoRoot(t *testing.T) string {
 	return filepath.Clean(strings.TrimSpace(string(out)))
 }
 
+func normalizeGitWorktreePath(value string) string {
+	clean := filepath.Clean(value)
+	if !strings.EqualFold(filepath.Base(clean), ".git") {
+		return clean
+	}
+	info, err := os.Stat(clean)
+	if err != nil || info.IsDir() {
+		return clean
+	}
+	return filepath.Dir(clean)
+}
+
 // initSyntheticGitRepo creates a fresh, isolated git repository inside
 // t.TempDir() with a fixed remote URL. This replaces the previous
 // findRepoRoot helper, which was brittle when the test ran inside a git
@@ -530,7 +542,7 @@ func TestResolveProjectSlug_WorktreeMatchesMain(t *testing.T) {
 		if !strings.HasPrefix(line, "worktree ") {
 			continue
 		}
-		path := strings.TrimPrefix(line, "worktree ")
+		path := normalizeGitWorktreePath(strings.TrimPrefix(line, "worktree "))
 		// Use filepath.Clean for portable cross-platform path comparison.
 		if !strings.EqualFold(filepath.Clean(path), filepath.Clean(mainRepo)) {
 			worktreePaths = append(worktreePaths, path)
