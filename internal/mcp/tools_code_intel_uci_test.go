@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +33,8 @@ const (
 	uciCodeIntelCompatibilityDigestB     = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	uciCodeIntelCompatibilityOtherSource = "20000000-0000-4000-8000-000000000002"
 )
+
+var uciCodeIntelRequestSequence atomic.Uint64
 
 type uciCodeIntelCompatibilityFixture struct {
 	*uciCodebaseContextFixture
@@ -832,6 +835,11 @@ func uciCodeIntelCompatibilitySearchArguments(handle, project string, limit int)
 
 func callUCICodeIntel(t *testing.T, server *Server, ctx context.Context, name string, arguments map[string]any) *Response {
 	t.Helper()
+	return callUCICodeIntelWithID(t, server, ctx, uciCodeIntelRequestSequence.Add(1), name, arguments)
+}
+
+func callUCICodeIntelWithID(t *testing.T, server *Server, ctx context.Context, requestID any, name string, arguments map[string]any) *Response {
+	t.Helper()
 	params, err := json.Marshal(map[string]any{
 		"name":      name,
 		"arguments": arguments,
@@ -839,7 +847,7 @@ func callUCICodeIntel(t *testing.T, server *Server, ctx context.Context, name st
 	require.NoError(t, err)
 	response := server.HandleRequest(ctx, &Request{
 		JSONRPC: "2.0",
-		ID:      float64(1),
+		ID:      requestID,
 		Method:  "tools/call",
 		Params:  params,
 	})

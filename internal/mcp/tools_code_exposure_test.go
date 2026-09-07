@@ -72,9 +72,10 @@ func TestUCIExposureSearchAppendsOneOpaqueReceiptAndExactRetryReusesIt(t *testin
 	fixture := newUCICodeIntelCompatibilityFixture(t)
 	handle := fixture.selectContext(t, fixture.clientA, fixture.refA)
 	arguments := uciCodeIntelCompatibilitySearchArguments(handle, uciCodeIntelCompatibilityProject, 10)
+	requestID := "same-json-rpc-request"
 
-	_, first := requireUCICodeIntelQueryResponse(t, callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", arguments), fixture.refA, uciCodeIntelCompatibilityBodyA, uciCodeIntelCompatibilityBodyB)
-	_, second := requireUCICodeIntelQueryResponse(t, callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", arguments), fixture.refA, uciCodeIntelCompatibilityBodyA, uciCodeIntelCompatibilityBodyB)
+	_, first := requireUCICodeIntelQueryResponse(t, callUCICodeIntelWithID(t, fixture.server, fixture.clientA, requestID, "codebase_search", arguments), fixture.refA, uciCodeIntelCompatibilityBodyA, uciCodeIntelCompatibilityBodyB)
+	_, second := requireUCICodeIntelQueryResponse(t, callUCICodeIntelWithID(t, fixture.server, fixture.clientA, requestID, "codebase_search", arguments), fixture.refA, uciCodeIntelCompatibilityBodyA, uciCodeIntelCompatibilityBodyB)
 	if first.Exposure == nil || second.Exposure == nil || first.Exposure.ExposureRef != second.Exposure.ExposureRef {
 		t.Fatalf("exact retry receipts = %#v / %#v, want one original receipt", first.Exposure, second.Exposure)
 	}
@@ -87,7 +88,7 @@ func TestUCIExposureSearchAppendsOneOpaqueReceiptAndExactRetryReusesIt(t *testin
 
 	mismatchedArguments := uciCodeIntelCompatibilitySearchArguments(handle, uciCodeIntelCompatibilityProject, 10)
 	mismatchedArguments["query"] = "changed request body under the same JSON-RPC id"
-	mismatch := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", mismatchedArguments)
+	mismatch := callUCICodeIntelWithID(t, fixture.server, fixture.clientA, requestID, "codebase_search", mismatchedArguments)
 	mismatchText := uciCodeIntelToolText(t, mismatch)
 	var mismatchPayload uci.QueryResponse
 	require.NoError(t, json.Unmarshal([]byte(mismatchText), &mismatchPayload))
