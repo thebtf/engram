@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path"
@@ -209,9 +210,12 @@ func (runner *uciRealCorpusRecordingGitRunner) captureStageModes(output []byte) 
 // uciFreezeRealCorpusManifest scans through the same scanner policy as the
 // production prepared-index runtime, records only relative path facts, and
 // treats known untracked canaries as a separate delta.
-func uciFreezeRealCorpusManifest(ctx context.Context, root string) (uciRealCorpusFrozenManifest, error) {
+func uciFreezeRealCorpusManifest(ctx context.Context, root, semanticQuery string) (uciRealCorpusFrozenManifest, error) {
 	if ctx == nil {
 		return uciRealCorpusFrozenManifest{}, errors.New("real-corpus composition context is required")
+	}
+	if strings.TrimSpace(semanticQuery) == "" {
+		return uciRealCorpusFrozenManifest{}, errors.New("real-corpus semantic query is required")
 	}
 	runner := &uciRealCorpusRecordingGitRunner{stageModes: make(map[string]string)}
 	scanner := uci.NewScanner(
@@ -234,6 +238,7 @@ func uciFreezeRealCorpusManifest(ctx context.Context, root string) (uciRealCorpu
 	}
 
 	entries := make([]uciRealCorpusFrozenEntry, 0, len(scan.Files))
+	lexicalOverlap := make(map[string]struct{})
 	for _, file := range scan.Files {
 		if err := ctx.Err(); err != nil {
 			return uciRealCorpusFrozenManifest{}, err
@@ -241,6 +246,11 @@ func uciFreezeRealCorpusManifest(ctx context.Context, root string) (uciRealCorpu
 		membershipState, reason, err := uciRealCorpusFrozenMembershipState(file)
 		if err != nil {
 			return uciRealCorpusFrozenManifest{}, errors.New("real-corpus composition scanner file state is invalid")
+		}
+		if membershipState == uci.IndexFilePresent {
+			for _, token := range uciRealCorpusLexicalOverlap(semanticQuery, string(file.Body)) {
+				lexicalOverlap[token] = struct{}{}
+			}
 		}
 		contentDigest := ""
 		if file.State == uci.IndexFilePresent {
@@ -260,6 +270,14 @@ func uciFreezeRealCorpusManifest(ctx context.Context, root string) (uciRealCorpu
 			contentDigest:   contentDigest,
 			canary:          canary,
 		})
+	}
+	if len(lexicalOverlap) != 0 {
+		tokens := make([]string, 0, len(lexicalOverlap))
+		for token := range lexicalOverlap {
+			tokens = append(tokens, token)
+		}
+		sort.Strings(tokens)
+		return uciRealCorpusFrozenManifest{}, fmt.Errorf("real-corpus semantic query overlaps indexed corpus tokens: %s", strings.Join(tokens, ","))
 	}
 	manifest, err := uciRealCorpusBuildFrozenManifest(entries)
 	if err != nil {
@@ -958,7 +976,7 @@ func TestUCIRealCorpusFreezeIncludesUntrackedCanaryDelta(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = uciRealCorpusRemoveCanaries(root) })
 
-	manifest, err := uciFreezeRealCorpusManifest(context.Background(), root)
+	manifest, err := uciFreezeRealCorpusManifest(context.Background(), root, "semanticallydisjointtoken")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -969,6 +987,9 @@ func TestUCIRealCorpusFreezeIncludesUntrackedCanaryDelta(t *testing.T) {
 		if entry.canary && (entry.scannerMode != uciRealCorpusScannerModeUnavailable || entry.scannerState != uci.IndexFilePresent || entry.membershipState != uci.IndexFilePresent) {
 			t.Fatal("untracked canary did not remain an explicit present delta")
 		}
+	}
+	if _, err := uciFreezeRealCorpusManifest(context.Background(), root, "package"); err == nil {
+		t.Fatal("corpus-overlapping semantic query was accepted")
 	}
 }
 

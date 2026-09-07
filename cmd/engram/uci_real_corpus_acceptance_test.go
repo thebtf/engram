@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/uci"
@@ -31,7 +33,7 @@ const (
 	uciRealCorpusGoCalleePath         = "internal/uci/zz_uci_real_corpus_callee.go"
 	uciRealCorpusTSRoot               = "apps/operator-console/composables/zz-uci-real-corpus"
 	uciRealCorpusExpectedPath         = "internal/uci/index_admission.go"
-	uciRealCorpusQuery                = "Как ссылки на выражения, похожие на приватные адреса, превращаются в безопасные стабильные идентификаторы без потери позиции в исходнике?"
+	uciRealCorpusQueryBase64          = "5L2N572u5oOF5aCx44Gu44KI44GG44Gr6KaL44GI44KL5Y+C54Wn44Kt44O844KS44CB5YWD44Gu44K944O844K556+E5Zuy44Go5pys5paH44KS5L+d44Gj44Gf44G+44G+5YaN54++5Y+v6IO944Gq5Yy/5ZCN5oyH57SL44G45aSJ5o+b44GZ44KL5pa55rOV44Gv77yf"
 	uciRealCorpusBarrierWaitMS        = int64(5_000)
 	uciRealCorpusEmbeddingStallWindow = 5 * time.Minute
 )
@@ -432,6 +434,10 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 	if err != nil {
 		return record, err
 	}
+	semanticQuery, err := uciRealCorpusSemanticQuery()
+	if err != nil {
+		return record, err
+	}
 	if err := os.Mkdir(request.FixtureRoot, 0o700); err != nil {
 		return record, err
 	}
@@ -470,7 +476,7 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 			retErr = errors.Join(retErr, cleanupErr)
 		}
 	}()
-	frozenManifest, err := uciFreezeRealCorpusManifest(ctx, root)
+	frozenManifest, err := uciFreezeRealCorpusManifest(ctx, root, semanticQuery)
 	if err != nil {
 		return record, err
 	}
@@ -630,7 +636,7 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 	if composition.MembershipCount != uint64(initialCounts.Memberships) {
 		return record, errors.New("real-corpus exact composition and count receipt disagree")
 	}
-	semantic, err := uciRealCorpusSemanticProof(ctx, client, selection, initialPublication, root)
+	semantic, err := uciRealCorpusSemanticProof(ctx, client, selection, initialPublication, root, semanticQuery)
 	if err != nil {
 		return record, err
 	}
@@ -983,16 +989,16 @@ func uciRealCorpusCountsFor(ctx context.Context, authority *uciInstalledAcceptan
 	return counts, nil
 }
 
-func uciRealCorpusSemanticProof(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection, publication uciInstalledAcceptancePublication, root string) (uciRealCorpusSemantic, error) {
+func uciRealCorpusSemanticProof(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection, publication uciInstalledAcceptancePublication, root, query string) (uciRealCorpusSemantic, error) {
 	expectedSource, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(uciRealCorpusExpectedPath)))
 	if err != nil {
 		return uciRealCorpusSemantic{}, err
 	}
-	overlap := uciRealCorpusLexicalOverlap(uciRealCorpusQuery, string(expectedSource))
+	overlap := uciRealCorpusLexicalOverlap(query, string(expectedSource))
 	if len(overlap) != 0 {
 		return uciRealCorpusSemantic{}, fmt.Errorf("real-corpus semantic query has lexical overlap: %v", overlap)
 	}
-	payload, err := client.Tool(ctx, "codebase_search", map[string]any{"context_handle": selection.contextHandle, "query": uciRealCorpusQuery, "limit": 5})
+	payload, err := client.Tool(ctx, "codebase_search", map[string]any{"context_handle": selection.contextHandle, "query": query, "limit": 5})
 	if err != nil {
 		return uciRealCorpusSemantic{}, err
 	}
@@ -1003,22 +1009,23 @@ func uciRealCorpusSemanticProof(ctx context.Context, client *uciInstalledAccepta
 	if !uciInstalledAcceptanceQueryMatchesPublication(response, publication) || response.Retrieval == nil || response.Retrieval.Mode != uci.QueryRetrievalHybrid || response.Retrieval.VectorCoverage == nil || *response.Retrieval.VectorCoverage < 1 || response.Items == nil {
 		return uciRealCorpusSemantic{}, errors.New("real-corpus semantic response is not a complete selected-View hybrid result")
 	}
-	proof := uciRealCorpusSemantic{QueryDigest: uciInstalledAcceptanceStringDigest(uciRealCorpusQuery), ExpectedPath: uciRealCorpusExpectedPath, RetrievalMode: string(response.Retrieval.Mode), VectorCoverage: *response.Retrieval.VectorCoverage, LexicalOverlap: overlap, ExposureAvailable: response.Exposure != nil}
+	proof := uciRealCorpusSemantic{QueryDigest: uciInstalledAcceptanceStringDigest(query), ExpectedPath: uciRealCorpusExpectedPath, RetrievalMode: string(response.Retrieval.Mode), VectorCoverage: *response.Retrieval.VectorCoverage, LexicalOverlap: overlap, ExposureAvailable: response.Exposure != nil}
 	var item *uci.QueryItem
+	observedPaths := make([]string, 0, len(*response.Items))
 	for index := range *response.Items {
 		candidate := &(*response.Items)[index]
-		if candidate.Path == uciRealCorpusExpectedPath {
+		observedPaths = append(observedPaths, candidate.Path)
+		if candidate.Path == uciRealCorpusExpectedPath && item == nil {
 			proof.ExpectedRank = index + 1
 			proof.MatchSources = make([]string, len(candidate.MatchSources))
 			for matchIndex, source := range candidate.MatchSources {
 				proof.MatchSources[matchIndex] = string(source)
 			}
 			item = candidate
-			break
 		}
 	}
 	if item == nil || proof.ExpectedRank > 5 || !uciRealCorpusContains(proof.MatchSources, string(uci.QueryMatchVector)) {
-		return proof, errors.New("real-corpus semantic query did not return the expected vector-backed source in top five")
+		return proof, fmt.Errorf("real-corpus semantic query did not return the expected vector-backed source in top five: observed_paths=%q", observedPaths)
 	}
 	readPayload, err := client.Tool(ctx, "codebase_read", map[string]any{
 		"context_handle": selection.contextHandle,
@@ -1144,6 +1151,14 @@ func uciRealCorpusGraphHasEdge(response uci.QueryResponse, from, to uci.QueryEnt
 		}
 	}
 	return false
+}
+
+func uciRealCorpusSemanticQuery() (string, error) {
+	decoded, err := base64.StdEncoding.DecodeString(uciRealCorpusQueryBase64)
+	if err != nil || !utf8.Valid(decoded) || strings.TrimSpace(string(decoded)) == "" {
+		return "", errors.New("real-corpus semantic query encoding is invalid")
+	}
+	return string(decoded), nil
 }
 
 func uciRealCorpusLexicalOverlap(query, source string) []string {
