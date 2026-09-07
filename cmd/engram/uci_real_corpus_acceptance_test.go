@@ -32,8 +32,8 @@ const (
 	uciRealCorpusGoCallerPath         = "internal/uci/zz_uci_real_corpus_caller.go"
 	uciRealCorpusGoCalleePath         = "internal/uci/zz_uci_real_corpus_callee.go"
 	uciRealCorpusTSRoot               = "apps/operator-console/composables/zz-uci-real-corpus"
-	uciRealCorpusExpectedPath         = "internal/uci/index_admission.go"
-	uciRealCorpusQueryBase64          = "5L2N572u5oOF5aCx44Gu44KI44GG44Gr6KaL44GI44KL5Y+C54Wn44Kt44O844KS44CB5YWD44Gu44K944O844K556+E5Zuy44Go5pys5paH44KS5L+d44Gj44Gf44G+44G+5YaN54++5Y+v6IO944Gq5Yy/5ZCN5oyH57SL44G45aSJ5o+b44GZ44KL5pa55rOV44Gv77yf"
+	uciRealCorpusExpectedPath         = "internal/uci/semantic.go"
+	uciRealCorpusQueryBase64          = "6KqN5Y+v5riI44G/44Gu5LiN5aSJ44OT44Ol44O85YaF44Gn44CB6Kqe5b2Z5qSc57Si44Go44OZ44Kv44OI44Or5YCZ6KOc44KS57WQ5ZCI44GX44CB5a6M5YWo44Gq5Z+L44KB6L6844G/6KKr6KaG44GM44GC44KL5aC05ZCI44Gg44GR44OP44Kk44OW44Oq44OD44OJ57WQ5p6c44KS6L+U44GZ5LuV57WE44G/44Gv77yf"
 	uciRealCorpusBarrierWaitMS        = int64(5_000)
 	uciRealCorpusEmbeddingStallWindow = 5 * time.Minute
 )
