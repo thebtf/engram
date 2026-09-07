@@ -842,6 +842,7 @@ func uciRealCorpusRequiredPath(t *testing.T, name string) string {
 	if value == "" {
 		t.Fatalf("%s is required", name)
 	}
+	value = filepath.Clean(value)
 	physical, err := uciInstalledAcceptancePhysicalPath(value)
 	if err != nil {
 		t.Fatal(err)
