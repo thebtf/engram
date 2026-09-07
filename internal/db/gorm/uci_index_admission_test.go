@@ -132,6 +132,23 @@ func TestUCIIndexAdmissionPinsReferenceSiteIDAndRejectsPrimaryKeyCollision(t *te
 	require.ErrorIs(t, err, errUCIProjectionImmutable)
 }
 
+func TestUCIReferenceSitePreservesMultilineRawTarget(t *testing.T) {
+	fixture := openUCIPublicationFixture(t)
+	storedArtifact := fixture.insertArtifact(t, fixture.source.SourceID, "admission-multiline-reference", "func MultilineReference() {}\n", UCIParseArtifactComplete)
+	rawTarget := "source\n  .map"
+	reference, err := fixture.projection.UpsertReferenceSite(context.Background(), UpsertUCIReferenceSiteInput{
+		ReferenceSiteID: uuid.NewString(),
+		ArtifactID:      storedArtifact.Artifact.ArtifactID,
+		SiteKey:         "multiline-call-target",
+		RawTarget:       rawTarget,
+		Relation:        "calls",
+		SyntaxSpan:      `{"byte_start":15,"byte_end":28,"line_start":1,"line_end":2}`,
+		ResolverHints:   `{"kind":"call"}`,
+	})
+	require.NoError(t, err)
+	require.Equal(t, rawTarget, reference.RawTarget)
+}
+
 func TestUCIIndexAdmissionRejectsArtifactPrimaryKeyCollision(t *testing.T) {
 	fixture := openUCIPublicationFixture(t)
 	ctx := context.Background()

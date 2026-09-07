@@ -5613,7 +5613,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 							btrim(site_key) <> '' AND site_key = btrim(site_key) AND site_key !~ '[[:cntrl:]]'
 						),
 						CONSTRAINT ci_reference_sites_raw_target_chk CHECK (
-							btrim(raw_target) <> '' AND raw_target = btrim(raw_target) AND raw_target !~ '[[:cntrl:]]'
+							octet_length(raw_target) BETWEEN 1 AND 65536
 						),
 						CONSTRAINT ci_reference_sites_relation_chk CHECK (
 							btrim(relation) <> '' AND relation = btrim(relation) AND relation !~ '[[:cntrl:]]'
@@ -6383,6 +6383,24 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			},
 			Rollback: rollbackUCIEmbeddingJobsMigration174,
 		},
+		// Migration 175 aligns durable reference targets with the source-span
+		// contract: exact call/reference evidence may contain internal newlines.
+		{
+			ID: "175_uci_reference_source_text",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`ALTER TABLE ci_reference_sites DROP CONSTRAINT IF EXISTS ci_reference_sites_raw_target_chk`,
+					`ALTER TABLE ci_reference_sites ADD CONSTRAINT ci_reference_sites_raw_target_chk
+						CHECK (octet_length(raw_target) BETWEEN 1 AND 65536)`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 175: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackUCIReferenceSourceTextMigration175,
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
@@ -6533,6 +6551,12 @@ func rollbackUCIFencedPublicationMigration173(tx *gorm.DB) error {
 // reusable vectors because a binary rollback cannot safely recreate a missing
 // exact-View completion proof.
 func rollbackUCIEmbeddingJobsMigration174(tx *gorm.DB) error {
+	return nil
+}
+
+// rollbackUCIReferenceSourceTextMigration175 retains exact multiline source
+// evidence because restoring the older control-free constraint would reject it.
+func rollbackUCIReferenceSourceTextMigration175(tx *gorm.DB) error {
 	return nil
 }
 

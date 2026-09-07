@@ -24,6 +24,8 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const uciProjectionMaxSourceTextBytes = 64 << 10
+
 var (
 	errUCIProjectionStoreNotConfigured = errors.New("uci projection store not configured")
 	errUCIProjectionImmutable          = errors.New("UCI_PROJECTION_IMMUTABLE")
@@ -333,12 +335,14 @@ func (s *UCIProjectionStore) UpsertReferenceSite(ctx context.Context, in UpsertU
 		value string
 	}{
 		{"site_key", in.SiteKey},
-		{"raw_target", in.RawTarget},
 		{"relation", in.Relation},
 	} {
 		if err := validateUCIRequiredText(field.name, field.value); err != nil {
 			return nil, err
 		}
+	}
+	if err := validateUCIProjectionSourceText("raw_target", in.RawTarget); err != nil {
+		return nil, err
 	}
 	ownerSymbolKey, err := copyUCIOptionalTextPointer("owner_symbol_key", in.OwnerSymbolKey)
 	if err != nil {
@@ -408,6 +412,13 @@ func (s *UCIProjectionStore) UpsertReferenceSite(ctx context.Context, in UpsertU
 		return nil, errUCIProjectionImmutable
 	}
 	return &existing, nil
+}
+
+func validateUCIProjectionSourceText(name, value string) error {
+	if value == "" || len(value) > uciProjectionMaxSourceTextBytes || !utf8.ValidString(value) || strings.IndexByte(value, 0) >= 0 {
+		return fmt.Errorf("uci projection: %s must be non-empty valid UTF-8 source text within %d bytes", name, uciProjectionMaxSourceTextBytes)
+	}
+	return nil
 }
 
 // UpsertUCIChunkInput describes one artifact-local searchable excerpt.
