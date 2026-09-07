@@ -57,6 +57,7 @@ type uciRealCorpusProvider struct {
 	ProviderRef            string `json:"provider_ref"`
 	Model                  string `json:"model"`
 	Dimension              int    `json:"dimension"`
+	CandidatePageSize      int    `json:"candidate_page_size"`
 	ProviderBatchSize      int    `json:"provider_batch_size"`
 	PreprocessingRevision  string `json:"preprocessing_revision"`
 	CredentialRetained     bool   `json:"credential_retained"`
@@ -476,6 +477,7 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 		ProviderRef:            providerRef,
 		Model:                  providerModel,
 		Dimension:              1536,
+		CandidatePageSize:      uci.DefaultEmbeddingWorkerLimits().CandidatePageSize,
 		ProviderBatchSize:      uci.DefaultEmbeddingWorkerLimits().ProviderBatchSize,
 		PreprocessingRevision:  preprocessing,
 		CredentialRetained:     false,

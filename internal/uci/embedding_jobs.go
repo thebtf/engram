@@ -278,7 +278,7 @@ type EmbeddingWorkerLimits struct {
 // worker that persists all durable progress in PostgreSQL.
 func DefaultEmbeddingWorkerLimits() EmbeddingWorkerLimits {
 	return EmbeddingWorkerLimits{
-		CandidatePageSize:     128,
+		CandidatePageSize:     512,
 		ProviderBatchSize:     128,
 		MaxProviderBatchBytes: 524288,
 		LeaseTTL:              2 * time.Minute,
