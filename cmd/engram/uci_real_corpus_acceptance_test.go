@@ -36,6 +36,7 @@ const (
 	uciRealCorpusQueryBase64          = "6KqN5Y+v5riI44G/44Gu5LiN5aSJ44OT44Ol44O85YaF44Gn44CB6Kqe5b2Z5qSc57Si44Go44OZ44Kv44OI44Or5YCZ6KOc44KS57WQ5ZCI44GX44CB5a6M5YWo44Gq5Z+L44KB6L6844G/6KKr6KaG44GM44GC44KL5aC05ZCI44Gg44GR44OP44Kk44OW44Oq44OD44OJ57WQ5p6c44KS6L+U44GZ5LuV57WE44G/44Gv77yf"
 	uciRealCorpusBarrierWaitMS        = int64(5_000)
 	uciRealCorpusEmbeddingStallWindow = 5 * time.Minute
+	uciRealCorpusEmbeddingRetryGrace  = 30 * time.Second
 )
 
 var uciRealCorpusCanaries = map[string]string{
@@ -160,13 +161,14 @@ type uciRealCorpusEmbeddingStatus struct {
 		Generation int64  `json:"generation"`
 	} `json:"context"`
 	Embedding struct {
-		EmbeddingProfileID *string `json:"embedding_profile_id"`
-		Coverage           string  `json:"coverage"`
-		TotalCandidates    uint64  `json:"total_candidates"`
-		ReadyCandidates    uint64  `json:"ready_candidates"`
-		PendingJobs        uint64  `json:"pending_jobs"`
-		JobState           *string `json:"job_state"`
-		ErrorCode          *string `json:"error_code"`
+		EmbeddingProfileID *string    `json:"embedding_profile_id"`
+		Coverage           string     `json:"coverage"`
+		TotalCandidates    uint64     `json:"total_candidates"`
+		ReadyCandidates    uint64     `json:"ready_candidates"`
+		PendingJobs        uint64     `json:"pending_jobs"`
+		JobState           *string    `json:"job_state"`
+		ErrorCode          *string    `json:"error_code"`
+		RetryAfter         *time.Time `json:"retry_after"`
 	} `json:"embedding"`
 }
 
@@ -189,6 +191,8 @@ type uciRealCorpusEmbeddingProgress struct {
 	readyCandidates         uint64
 	pendingJobs             uint64
 	coverage                string
+	errorCode               string
+	retryAfter              time.Time
 }
 
 type uciRealCorpusEmbeddingSummary struct {
@@ -200,7 +204,8 @@ type uciRealCorpusEmbeddingSummary struct {
 	totalCandidates         uint64
 	readyCandidates         uint64
 	pendingJobs             uint64
-	errorCodePresent        bool
+	errorCode               string
+	retryAfterPresent       bool
 }
 
 type uciRealCorpusEmbeddingClassification struct {
@@ -410,6 +415,35 @@ func TestUCIRealCorpusEmbeddingProgressWindowStallsOnlyWithoutProgress(t *testin
 	}
 	if !window.observedAt.Equal(resetAt) {
 		t.Fatalf("progress reset at %s, want %s", window.observedAt, resetAt)
+	}
+}
+
+func TestUCIRealCorpusEmbeddingProgressWindowWaitsForScheduledRetry(t *testing.T) {
+	profileID := "profile://private"
+	retryScheduled := "retry_scheduled"
+	errorCode := string(uci.EmbeddingFailureProviderUnavailable)
+	started := time.Date(2026, time.September, 7, 0, 0, 0, 0, time.UTC)
+	retryAfter := started.Add(10 * time.Minute)
+	status := uciRealCorpusEmbeddingTestStatus("view://private", 2, &profileID, string(uci.IndexCoveragePartial), 20, 4, 1, &retryScheduled)
+	status.Embedding.ErrorCode = &errorCode
+	status.Embedding.RetryAfter = &retryAfter
+	classification := uciClassifyRealCorpusEmbedding(status, false)
+	window, stalled := (uciRealCorpusEmbeddingProgressWindow{}).observe(classification.progress, started)
+	if stalled {
+		t.Fatal("new retry schedule was marked stalled")
+	}
+	if _, stalled = window.observe(classification.progress, started.Add(uciRealCorpusEmbeddingStallWindow)); stalled {
+		t.Fatal("scheduled retry was cut off by the ordinary no-progress window")
+	}
+	if _, stalled = window.observe(classification.progress, retryAfter.Add(uciRealCorpusEmbeddingRetryGrace)); !stalled {
+		t.Fatal("unchanged retry schedule did not stop after its bounded grace")
+	}
+	message := uciClassifyRealCorpusEmbedding(status, true).waitError().Error()
+	if !strings.Contains(message, "error_code=provider_unavailable") || !strings.Contains(message, "retry_after_present=true") {
+		t.Fatalf("retry wait error omitted safe failure state: %q", message)
+	}
+	if strings.Contains(message, profileID) || strings.Contains(message, status.Context.ViewID) || strings.Contains(message, retryAfter.Format(time.RFC3339)) {
+		t.Fatalf("retry wait error exposed a private identifier or timestamp: %q", message)
 	}
 }
 
@@ -800,7 +834,26 @@ func uciRealCorpusEmbeddingSafeCoverage(value string) string {
 	}
 }
 
+func uciRealCorpusEmbeddingSafeErrorCode(value *string) string {
+	if value == nil {
+		return "absent"
+	}
+	code := uci.EmbeddingFailureCode(*value)
+	if !code.ValidForEmbeddingJob() {
+		return "unknown"
+	}
+	return string(code)
+}
+
+func uciRealCorpusEmbeddingSafeRetryAfter(value *time.Time) time.Time {
+	if value == nil {
+		return time.Time{}
+	}
+	return value.UTC()
+}
+
 func uciClassifyRealCorpusEmbedding(status uciRealCorpusEmbeddingStatus, stalled bool) uciRealCorpusEmbeddingClassification {
+	retryAfter := uciRealCorpusEmbeddingSafeRetryAfter(status.Embedding.RetryAfter)
 	summary := uciRealCorpusEmbeddingSummary{
 		viewPresent:             status.Context.ViewID != "",
 		generation:              status.Context.Generation,
@@ -810,7 +863,8 @@ func uciClassifyRealCorpusEmbedding(status uciRealCorpusEmbeddingStatus, stalled
 		totalCandidates:         status.Embedding.TotalCandidates,
 		readyCandidates:         status.Embedding.ReadyCandidates,
 		pendingJobs:             status.Embedding.PendingJobs,
-		errorCodePresent:        status.Embedding.ErrorCode != nil,
+		errorCode:               uciRealCorpusEmbeddingSafeErrorCode(status.Embedding.ErrorCode),
+		retryAfterPresent:       !retryAfter.IsZero(),
 	}
 	classification := uciRealCorpusEmbeddingClassification{
 		stage: uciRealCorpusEmbeddingStageStillProgressing,
@@ -823,6 +877,8 @@ func uciClassifyRealCorpusEmbedding(status uciRealCorpusEmbeddingStatus, stalled
 			readyCandidates:         summary.readyCandidates,
 			pendingJobs:             summary.pendingJobs,
 			coverage:                summary.coverage,
+			errorCode:               summary.errorCode,
+			retryAfter:              retryAfter,
 		},
 		summary: summary,
 	}
@@ -843,7 +899,14 @@ func (window uciRealCorpusEmbeddingProgressWindow) observe(progress uciRealCorpu
 	if !window.initialized || window.progress != progress {
 		return uciRealCorpusEmbeddingProgressWindow{progress: progress, observedAt: now, initialized: true}, false
 	}
-	return window, !now.Before(window.observedAt.Add(uciRealCorpusEmbeddingStallWindow))
+	deadline := window.observedAt.Add(uciRealCorpusEmbeddingStallWindow)
+	if progress.jobState == "retry_scheduled" && !progress.retryAfter.IsZero() {
+		retryDeadline := progress.retryAfter.Add(uciRealCorpusEmbeddingRetryGrace)
+		if retryDeadline.After(deadline) {
+			deadline = retryDeadline
+		}
+	}
+	return window, !now.Before(deadline)
 }
 
 func (classification uciRealCorpusEmbeddingClassification) waitError() error {
@@ -851,7 +914,7 @@ func (classification uciRealCorpusEmbeddingClassification) waitError() error {
 }
 
 func (err uciRealCorpusEmbeddingWaitError) Error() string {
-	return fmt.Sprintf("real-corpus embedding wait stage=%s view_present=%t generation=%d embedding_profile_present=%t job_state=%s coverage=%s total_candidates=%d ready_candidates=%d pending_jobs=%d error_code_present=%t", err.stage, err.summary.viewPresent, err.summary.generation, err.summary.embeddingProfilePresent, err.summary.jobState, err.summary.coverage, err.summary.totalCandidates, err.summary.readyCandidates, err.summary.pendingJobs, err.summary.errorCodePresent)
+	return fmt.Sprintf("real-corpus embedding wait stage=%s view_present=%t generation=%d embedding_profile_present=%t job_state=%s coverage=%s total_candidates=%d ready_candidates=%d pending_jobs=%d error_code=%s retry_after_present=%t", err.stage, err.summary.viewPresent, err.summary.generation, err.summary.embeddingProfilePresent, err.summary.jobState, err.summary.coverage, err.summary.totalCandidates, err.summary.readyCandidates, err.summary.pendingJobs, err.summary.errorCode, err.summary.retryAfterPresent)
 }
 
 func uciWaitForRealCorpusEmbeddings(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection, expected uciInstalledAcceptancePublication) (uciRealCorpusEmbeddingStatus, uciInstalledAcceptancePublication, error) {
