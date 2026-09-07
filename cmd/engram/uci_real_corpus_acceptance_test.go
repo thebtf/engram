@@ -312,6 +312,34 @@ func TestUCIRealCorpusInstalledProviderLifecycle(t *testing.T) {
 	}
 }
 
+func TestUCIRealCorpusFindQualifiedGoItemIgnoresReorderedSamePathHits(t *testing.T) {
+	const (
+		path       = "internal/uci/zz_uci_real_corpus_caller.go"
+		function   = "UCIRealCorpusCaller"
+		wrongKey   = "go:example/internal/uci/zz_uci_real_corpus_caller.go:0"
+		correctKey = "go:example/internal/uci/zz_uci_real_corpus_caller.go/func:UCIRealCorpusCaller"
+	)
+	items := uci.QueryItems{
+		{
+			Ref:  uci.QueryEntityRef{SourceID: "source", ViewID: "view", EntityKey: wrongKey},
+			Path: path,
+			Span: uci.QuerySpan{ByteStart: 0, ByteEnd: 10, LineStart: 1, LineEnd: 1},
+		},
+		{
+			Ref:  uci.QueryEntityRef{SourceID: "source", ViewID: "view", EntityKey: correctKey},
+			Path: path,
+			Span: uci.QuerySpan{ByteStart: 12, ByteEnd: 64, LineStart: 3, LineEnd: 3},
+		},
+	}
+	item, found := uciRealCorpusFindQualifiedGoItem(items, path, function)
+	if !found {
+		t.Fatal("qualified Go function was not selected")
+	}
+	if item.Ref.EntityKey != correctKey {
+		t.Fatalf("selected entity = %q, want %q", item.Ref.EntityKey, correctKey)
+	}
+}
+
 func TestUCIRealCorpusEmbeddingPublicationFollowsMonotonicCurrentView(t *testing.T) {
 	expected := uciInstalledAcceptancePublication{
 		sourceID: "source", checkoutID: "checkout", viewID: "view-1", profileID: "profile", generation: 1,
@@ -1259,7 +1287,7 @@ func uciRealCorpusGraphProof(ctx context.Context, client *uciInstalledAcceptance
 	proof.OutgoingMCPCall = uciRealCorpusGraphHasEdge(outgoing, caller.Ref, callee.Ref)
 	proof.IncomingMCPReverse = uciRealCorpusGraphHasEdge(incoming, caller.Ref, callee.Ref)
 	if !proof.OutgoingMCPCall || !proof.IncomingMCPReverse {
-		return proof, errors.New("real-corpus MCP graph did not expose both outgoing and reverse call navigation")
+		return proof, fmt.Errorf("real-corpus MCP graph did not expose both outgoing and reverse call navigation: outgoing_found=%t outgoing_target=%s outgoing={%s}; incoming_found=%t incoming_target=%s incoming={%s}", proof.OutgoingMCPCall, uciRealCorpusGraphTargetKind(caller.Ref), uciRealCorpusGraphResponseSummary(outgoing), proof.IncomingMCPReverse, uciRealCorpusGraphTargetKind(callee.Ref), uciRealCorpusGraphResponseSummary(incoming))
 	}
 	return proof, nil
 }
@@ -1283,8 +1311,8 @@ func uciRealCorpusCanaryEdge(ctx context.Context, authority *uciInstalledAccepta
 	return rows[0], nil
 }
 
-func uciRealCorpusFindItem(ctx context.Context, client *uciInstalledAcceptanceMCPClient, handle string, publication uciInstalledAcceptancePublication, query, expectedPath string) (uci.QueryItem, error) {
-	payload, err := client.Tool(ctx, "codebase_search", map[string]any{"context_handle": handle, "query": query, "path_prefix": expectedPath, "limit": 10})
+func uciRealCorpusFindItem(ctx context.Context, client *uciInstalledAcceptanceMCPClient, handle string, publication uciInstalledAcceptancePublication, functionName, expectedPath string) (uci.QueryItem, error) {
+	payload, err := client.Tool(ctx, "codebase_search", map[string]any{"context_handle": handle, "query": functionName, "path_prefix": expectedPath, "limit": 10})
 	if err != nil {
 		return uci.QueryItem{}, err
 	}
@@ -1292,12 +1320,21 @@ func uciRealCorpusFindItem(ctx context.Context, client *uciInstalledAcceptanceMC
 	if err != nil || !uciInstalledAcceptanceQueryMatchesPublication(response, publication) || response.Items == nil {
 		return uci.QueryItem{}, errors.New("real-corpus graph search did not return selected-View items")
 	}
-	for _, item := range *response.Items {
-		if item.Path == expectedPath {
-			return item, nil
+	item, found := uciRealCorpusFindQualifiedGoItem(*response.Items, expectedPath, functionName)
+	if !found {
+		return uci.QueryItem{}, fmt.Errorf("real-corpus graph search omitted qualified %s function at %s", functionName, expectedPath)
+	}
+	return item, nil
+}
+
+func uciRealCorpusFindQualifiedGoItem(items uci.QueryItems, expectedPath, functionName string) (uci.QueryItem, bool) {
+	for _, item := range items {
+		name, isGoFunction := uciInstalledAcceptanceGoFunctionName(item.Ref.EntityKey)
+		if item.Path == expectedPath && isGoFunction && name == functionName {
+			return item, true
 		}
 	}
-	return uci.QueryItem{}, fmt.Errorf("real-corpus graph search omitted %s", expectedPath)
+	return uci.QueryItem{}, false
 }
 
 func uciRealCorpusGraphCall(ctx context.Context, client *uciInstalledAcceptanceMCPClient, handle string, publication uciInstalledAcceptancePublication, target uci.QueryEntityRef, direction string) (uci.QueryResponse, error) {
@@ -1306,6 +1343,7 @@ func uciRealCorpusGraphCall(ctx context.Context, client *uciInstalledAcceptanceM
 		"action":         "neighbors",
 		"target":         map[string]any{"source_id": target.SourceID, "view_id": target.ViewID, "entity_key": target.EntityKey},
 		"direction":      direction,
+		"relations":      []string{"calls"},
 		"max_depth":      4,
 		"max_visited":    256,
 		"max_nodes":      128,
@@ -1316,8 +1354,14 @@ func uciRealCorpusGraphCall(ctx context.Context, client *uciInstalledAcceptanceM
 		return uci.QueryResponse{}, err
 	}
 	response, err := uciDecodeInstalledAcceptanceQuery(payload)
-	if err != nil || !uciInstalledAcceptanceQueryMatchesPublication(response, publication) || response.Graph == nil {
+	if err != nil {
 		return uci.QueryResponse{}, errors.New("real-corpus graph response is invalid")
+	}
+	if !uciInstalledAcceptanceQueryMatchesPublication(response, publication) {
+		return uci.QueryResponse{}, errors.New("real-corpus graph response did not retain the selected View")
+	}
+	if response.Graph == nil {
+		return uci.QueryResponse{}, fmt.Errorf("real-corpus %s graph response has no graph: %s", direction, uciRealCorpusGraphResponseSummary(response))
 	}
 	return response, nil
 }
@@ -1332,6 +1376,41 @@ func uciRealCorpusGraphHasEdge(response uci.QueryResponse, from, to uci.QueryEnt
 		}
 	}
 	return false
+}
+
+func uciRealCorpusGraphTargetKind(ref uci.QueryEntityRef) string {
+	if _, ok := uciInstalledAcceptanceGoFunctionName(ref.EntityKey); ok {
+		return "go_function"
+	}
+	return "other"
+}
+
+func uciRealCorpusGraphResponseSummary(response uci.QueryResponse) string {
+	errorCode := "none"
+	if response.Error != nil {
+		errorCode = string(response.Error.Code)
+	}
+	truncated := "absent"
+	if response.Truncated != nil {
+		truncated = fmt.Sprintf("%t", *response.Truncated)
+	}
+	stopReason := "absent"
+	relationCounts := make(map[string]int)
+	if response.Graph != nil {
+		stopReason = string(response.Graph.StopReason)
+		for _, edge := range response.Graph.Edges {
+			relationCounts[string(edge.Relation)]++
+		}
+	}
+	relations := make([]string, 0, len(relationCounts))
+	for relation, count := range relationCounts {
+		relations = append(relations, fmt.Sprintf("%s=%d", relation, count))
+	}
+	sort.Strings(relations)
+	if len(relations) == 0 {
+		relations = append(relations, "none")
+	}
+	return fmt.Sprintf("status=%s,error=%s,truncated=%s,stop=%s,relations=%s", response.Status, errorCode, truncated, stopReason, strings.Join(relations, ","))
 }
 
 func uciRealCorpusSemanticQuery() (string, error) {
