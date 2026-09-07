@@ -727,6 +727,50 @@ func TestCodebaseStatusBarrierRefreshesNoViewTargetAfterPublication(t *testing.T
 	require.Equal(t, 1, proxyCalls)
 }
 
+func TestCodebaseStatusBarrierReportsRunningBeforeInitialViewPublication(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	releaseIndex := make(chan struct{})
+	core := &fakeCore{
+		bindings: map[string]uci.IndexBinding{
+			"handle-proj-initial-barrier": fakeNoViewIndexBinding("33333333-3333-4333-8333-333333333333", "66666666-6666-4666-8666-666666666666"),
+		},
+		indexGate: releaseIndex,
+	}
+	mod := newTestModule(core)
+	h := moduletest.New(t)
+	require.NoError(t, h.Register(mod))
+	h.Freeze()
+	p := testProjectContext("proj-initial-barrier", t.TempDir())
+	ctx := testTransportContext(p)
+	const contextHandle = "handle-proj-initial-barrier"
+
+	raw, err := h.CallToolWithProject(ctx, p, "codebase_index", testIndexArgsForHandle(p, contextHandle))
+	require.NoError(t, err)
+	var started struct {
+		RunID string `json:"run_id"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &started))
+	require.NotEmpty(t, started.RunID)
+
+	raw, err = h.CallToolWithProject(ctx, p, "codebase_status", testStatusArgsWithBarrier(contextHandle, started.RunID, 10))
+	close(releaseIndex)
+	drainIndex(t, h, p)
+	require.NoError(t, err)
+	var status struct {
+		Status                string `json:"status"`
+		RunID                 string `json:"run_id"`
+		ServerCountsAvailable bool   `json:"server_counts_available"`
+		CurrentContext        any    `json:"current_context"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &status))
+	require.Equal(t, "running", status.Status)
+	require.Equal(t, started.RunID, status.RunID)
+	require.False(t, status.ServerCountsAvailable)
+	require.Nil(t, status.CurrentContext)
+	_, proxyCalls := core.callCounts()
+	require.Zero(t, proxyCalls, "an unpublished initial View must not proxy server status")
+}
+
 func TestCodebaseStatusBarrierFailsClosedForFailedRun(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
 	core := &fakeCore{indexErr: errors.New("synthetic prepared-index failure")}

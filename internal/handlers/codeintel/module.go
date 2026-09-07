@@ -1106,8 +1106,8 @@ func (m *Module) handleStatus(ctx context.Context, p muxcore.ProjectContext, arg
 		target = refreshed
 	}
 	if target.ContextClone() == nil {
-		if afterBarrier != nil {
-			return nil, fmt.Errorf("codebase_status: after_barrier requires a published View")
+		if afterBarrier != nil && barrierOutcome != indexBarrierTimedOut {
+			return nil, fmt.Errorf("codebase_status: satisfied after_barrier requires a published View")
 		}
 		result["server_counts_available"] = false
 		result["current_context"] = nil
