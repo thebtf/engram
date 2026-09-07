@@ -11,14 +11,16 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
 const (
-	semanticVectorDimension = 1536
-	semanticRRFConstant     = 60
-	semanticInputSchema     = "engram.uci-semantic-input/1"
-	semanticMaxProfileText  = 512
+	semanticVectorDimension     = 1536
+	semanticRRFConstant         = 60
+	semanticInputSchema         = "engram.uci-semantic-input/1"
+	semanticMaxProfileText      = 512
+	semanticQueryProviderBudget = 20 * time.Second
 )
 
 // VectorProfile names one versioned semantic space. Equal dimensions alone are
@@ -58,19 +60,21 @@ type SemanticStoreResult struct {
 // View-scoped lexical candidate store. It never resolves or authorizes a
 // context; callers must supply an already-authorized immutable context.
 type SemanticService struct {
-	profile  VectorProfile
-	embedder SemanticEmbedder
-	store    SemanticStore
-	lexical  *QueryService
+	profile             VectorProfile
+	embedder            SemanticEmbedder
+	store               SemanticStore
+	lexical             *QueryService
+	queryProviderBudget time.Duration
 }
 
 // NewSemanticService creates one profile-scoped semantic query workflow.
 func NewSemanticService(profile VectorProfile, embedder SemanticEmbedder, store SemanticStore, lexical QueryStore) *SemanticService {
 	return &SemanticService{
-		profile:  profile,
-		embedder: embedder,
-		store:    store,
-		lexical:  NewQueryService(lexical),
+		profile:             profile,
+		embedder:            embedder,
+		store:               store,
+		lexical:             NewQueryService(lexical),
+		queryProviderBudget: semanticQueryProviderBudget,
 	}
 }
 
@@ -204,7 +208,7 @@ func (service *SemanticService) Query(ctx context.Context, authorized Authorized
 	if err != nil {
 		return QueryResult{}, err
 	}
-	vector, err := service.embedOne(ctx, input)
+	vector, err := service.embedQuery(ctx, input)
 	if err != nil {
 		return service.lexicalOnlyResult(ref, normalized, start, lexical, lexicalResult.Coverage, semanticProviderDegradation(err))
 	}
@@ -304,6 +308,16 @@ func (service *SemanticService) providerUnavailableReason() string {
 		return "vector_provider_model_mismatch"
 	}
 	return ""
+}
+
+func (service *SemanticService) embedQuery(ctx context.Context, input string) ([]float32, error) {
+	budget := service.queryProviderBudget
+	if budget <= 0 {
+		budget = semanticQueryProviderBudget
+	}
+	providerCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	return service.embedOne(providerCtx, input)
 }
 
 func (service *SemanticService) embedOne(ctx context.Context, input string) ([]float32, error) {

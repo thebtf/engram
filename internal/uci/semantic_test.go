@@ -189,6 +189,35 @@ func TestUCISemanticProviderFailuresRemainLexicalAndVisible(t *testing.T) {
 	}
 }
 
+func TestUCISemanticQueryProviderTimeoutLeavesParentAliveForLexicalFallback(t *testing.T) {
+	fixture := newSemanticTestFixture()
+	profile := semanticTestProfile("uci-semantic-test-model")
+	lexical := &semanticTestLexicalStore{candidates: []QueryCandidate{fixture.lexical}}
+	service := NewSemanticService(profile, &semanticBlockingEmbedder{model: profile.Model}, newSemanticMemoryStore(), lexical)
+	service.queryProviderBudget = 25 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	started := time.Now()
+	result, err := service.Query(ctx, newAuthorizedContext(fixture.contextA), semanticTestQuerySpec("fallback-token"))
+	if err != nil {
+		t.Fatalf("Query() error = %v, want lexical fallback", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("query provider timeout cancelled the parent context: %v", ctx.Err())
+	}
+	if elapsed := time.Since(started); elapsed >= 500*time.Millisecond {
+		t.Fatalf("query provider fallback elapsed = %s, want bounded child deadline", elapsed)
+	}
+	if result.Response.Retrieval == nil || result.Response.Retrieval.Mode != QueryRetrievalLexical || !semanticTestContains(result.Response.Retrieval.DegradationReasons, "vector_provider_timeout") {
+		t.Fatalf("query provider fallback retrieval = %#v", result.Response.Retrieval)
+	}
+	items := semanticResponseItems(t, result)
+	if len(items) != 1 || items[0].Ref.EntityKey != fixture.lexical.EntityKey {
+		t.Fatalf("query provider fallback items = %#v", items)
+	}
+}
+
 func TestUCISemanticRealProviderConceptualHitMatchesScopedPostgresBaseline(t *testing.T) {
 	t.Run("real configured provider produces a non-lexical conceptual result", func(t *testing.T) {
 		real := newSemanticRealProviderFixture(t)
@@ -379,6 +408,19 @@ func (provider *semanticTestEmbedder) CallCount() int {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
 	return provider.calls
+}
+
+type semanticBlockingEmbedder struct {
+	model string
+}
+
+func (provider *semanticBlockingEmbedder) Model() string {
+	return provider.model
+}
+
+func (*semanticBlockingEmbedder) Embed(ctx context.Context, _ []string) ([][]float32, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 // semanticTestStatusError deliberately exposes the same structural HTTP status
