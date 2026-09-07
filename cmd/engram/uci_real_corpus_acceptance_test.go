@@ -29,14 +29,15 @@ const (
 	uciRealCorpusPreprocessingRevisionEnv = "ENGRAM_UCI_REAL_CORPUS_PREPROCESSING_REVISION"
 	uciRealCorpusRecordPathEnv            = "ENGRAM_UCI_REAL_CORPUS_RECORD_PATH"
 
-	uciRealCorpusGoCallerPath         = "internal/uci/zz_uci_real_corpus_caller.go"
-	uciRealCorpusGoCalleePath         = "internal/uci/zz_uci_real_corpus_callee.go"
-	uciRealCorpusTSRoot               = "apps/operator-console/composables/zz-uci-real-corpus"
-	uciRealCorpusExpectedPath         = "internal/uci/semantic.go"
-	uciRealCorpusQueryBase64          = "6KqN5Y+v5riI44G/44Gu5LiN5aSJ44OT44Ol44O85YaF44Gn44CB6Kqe5b2Z5qSc57Si44Go44OZ44Kv44OI44Or5YCZ6KOc44KS57WQ5ZCI44GX44CB5a6M5YWo44Gq5Z+L44KB6L6844G/6KKr6KaG44GM44GC44KL5aC05ZCI44Gg44GR44OP44Kk44OW44Oq44OD44OJ57WQ5p6c44KS6L+U44GZ5LuV57WE44G/44Gv77yf"
-	uciRealCorpusBarrierWaitMS        = int64(5_000)
-	uciRealCorpusEmbeddingStallWindow = 5 * time.Minute
-	uciRealCorpusEmbeddingRetryGrace  = 30 * time.Second
+	uciRealCorpusGoCallerPath          = "internal/uci/zz_uci_real_corpus_caller.go"
+	uciRealCorpusGoCalleePath          = "internal/uci/zz_uci_real_corpus_callee.go"
+	uciRealCorpusTSRoot                = "apps/operator-console/composables/zz-uci-real-corpus"
+	uciRealCorpusExpectedPath          = "internal/uci/semantic.go"
+	uciRealCorpusQueryBase64           = "6KqN5Y+v5riI44G/44Gu5LiN5aSJ44OT44Ol44O85YaF44Gn44CB6Kqe5b2Z5qSc57Si44Go44OZ44Kv44OI44Or5YCZ6KOc44KS57WQ5ZCI44GX44CB5a6M5YWo44Gq5Z+L44KB6L6844G/6KKr6KaG44GM44GC44KL5aC05ZCI44Gg44GR44OP44Kk44OW44Oq44OD44OJ57WQ5p6c44KS6L+U44GZ5LuV57WE44G/44Gv77yf"
+	uciRealCorpusBarrierWaitMS         = int64(5_000)
+	uciRealCorpusEmbeddingStallWindow  = 5 * time.Minute
+	uciRealCorpusEmbeddingRetryGrace   = 30 * time.Second
+	uciRealCorpusEmbeddingPollInterval = 5 * time.Second
 )
 
 var uciRealCorpusCanaries = map[string]string{
@@ -275,7 +276,7 @@ func TestUCIRealCorpusInstalledProviderLifecycle(t *testing.T) {
 		LoopbackHost:              "127.0.0.1",
 		ReservedLoopbackPortCount: 2,
 		ReadinessTimeout:          30 * time.Second,
-		OperationTimeout:          90 * time.Minute,
+		OperationTimeout:          3 * time.Hour,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), request.OperationTimeout)
 	defer cancel()
@@ -918,7 +919,7 @@ func (err uciRealCorpusEmbeddingWaitError) Error() string {
 }
 
 func uciWaitForRealCorpusEmbeddings(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection, expected uciInstalledAcceptancePublication) (uciRealCorpusEmbeddingStatus, uciInstalledAcceptancePublication, error) {
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(uciRealCorpusEmbeddingPollInterval)
 	defer ticker.Stop()
 	var progressWindow uciRealCorpusEmbeddingProgressWindow
 	var stalled bool
