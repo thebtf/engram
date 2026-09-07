@@ -431,7 +431,7 @@ func TestUCIIndexAdmissionPackedCrossFrameSealsAndReplays(t *testing.T) {
 	targetFrame := uciIndexAdmissionFixtureFrame(t, fixture, "target.go", "package target\n\nfunc Target() {}\n")
 	source := sourceFrame.Artifacts[0]
 	target := targetFrame.Artifacts[0]
-	reference := uciIndexAdmissionFixtureReference(t, source, "Target()")
+	reference := uciIndexAdmissionFixtureReference(t, source, "Target")
 	require.NotNil(t, reference.OwnerSymbolKey)
 	require.Equal(t, "func:Caller", *reference.OwnerSymbolKey)
 	sourceSymbol := *reference.OwnerSymbolKey
@@ -582,7 +582,7 @@ func TestUCIIndexAdmissionRejectsBeforeWriteAndRollsBack(t *testing.T) {
 		targetFrame := uciIndexAdmissionFixtureFrame(t, fixture, "target.go", "package target\n\nfunc Target() {}\n")
 		source := sourceFrame.Artifacts[0]
 		target := targetFrame.Artifacts[0]
-		reference := uciIndexAdmissionFixtureReference(t, source, "Target()")
+		reference := uciIndexAdmissionFixtureReference(t, source, "Target")
 		require.NotNil(t, reference.OwnerSymbolKey)
 		sourceSymbol := *reference.OwnerSymbolKey
 		targetSymbol := "func:Target"

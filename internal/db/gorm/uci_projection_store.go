@@ -523,6 +523,7 @@ func (s *UCIProjectionStore) UpsertChunk(ctx context.Context, in UpsertUCIChunkI
 const (
 	uciIndexAdmissionProtectionDomain = "source-private"
 	uciIndexAdmissionEmptyPointerName = "(empty)"
+	uciIndexAdmissionFactBatchSize    = 500
 )
 
 // AdmitIndexFrame admits one frame through the packed admission transaction.
@@ -724,12 +725,23 @@ func (s *UCIProjectionStore) admitUCIIndexAdmissionArtifact(ctx context.Context,
 }
 
 func (s *UCIProjectionStore) storeUCIIndexAdmissionFacts(ctx context.Context, sourceID string, artifact ucidomain.IndexAdmissionArtifact, bindings ucidomain.IndexAdmissionReferenceBindings) error {
+	stored, err := s.loadMutableUCIArtifact(ctx, artifact.ArtifactID)
+	if err != nil {
+		return err
+	}
+	if stored.SourceID != sourceID {
+		return fmt.Errorf("uci index admission: artifact source mismatch")
+	}
+
+	now := time.Now().UTC()
+	definitions := make([]UCIDefinition, 0, len(artifact.Definitions))
 	for _, definition := range artifact.Definitions {
 		name, err := uciIndexAdmissionDefinitionName(artifact.Profile.Language, definition)
 		if err != nil {
 			return err
 		}
-		if _, err := s.UpsertDefinition(ctx, UpsertUCIDefinitionInput{
+		definitions = append(definitions, UCIDefinition{
+			DefinitionID:       uuid.NewString(),
 			ArtifactID:         artifact.ArtifactID,
 			LocalSymbolKey:     definition.LocalSymbolKey,
 			Kind:               definition.Kind,
@@ -740,15 +752,23 @@ func (s *UCIProjectionStore) storeUCIIndexAdmissionFacts(ctx context.Context, so
 			ByteEnd:            definition.Span.ByteEnd,
 			LineStart:          definition.Span.LineStart,
 			LineEnd:            definition.Span.LineEnd,
-		}); err != nil {
-			return fmt.Errorf("uci index admission: upsert definition: %w", err)
-		}
+			CreatedAt:          now,
+		})
 	}
+
+	references := make([]UCIReferenceSite, 0, len(artifact.References))
 	for _, reference := range artifact.References {
 		binding := ucidomain.IndexAdmissionReferenceKey{ArtifactID: artifact.ArtifactID, SiteKey: reference.SiteKey}
 		referenceSiteID, found := bindings[binding]
 		if !found {
 			return fmt.Errorf("uci index admission: missing reference binding")
+		}
+		if err := validateUCIProjectionSourceText("raw_target", reference.RawTarget); err != nil {
+			return err
+		}
+		ownerSymbolKey, err := copyUCIOptionalTextPointer("owner_symbol_key", reference.OwnerSymbolKey)
+		if err != nil {
+			return err
 		}
 		syntaxSpan, err := marshalUCIIndexAdmissionSpan(reference.Span)
 		if err != nil {
@@ -758,32 +778,57 @@ func (s *UCIProjectionStore) storeUCIIndexAdmissionFacts(ctx context.Context, so
 		if err != nil {
 			return err
 		}
-		if _, err := s.UpsertReferenceSite(ctx, UpsertUCIReferenceSiteInput{
+		references = append(references, UCIReferenceSite{
 			ReferenceSiteID: referenceSiteID,
 			ArtifactID:      artifact.ArtifactID,
 			SiteKey:         reference.SiteKey,
-			OwnerSymbolKey:  reference.OwnerSymbolKey,
+			OwnerSymbolKey:  ownerSymbolKey,
 			RawTarget:       reference.RawTarget,
 			Relation:        string(reference.Relation),
 			SyntaxSpan:      syntaxSpan,
 			ResolverHints:   resolverHints,
-		}); err != nil {
-			return fmt.Errorf("uci index admission: upsert reference site: %w", err)
-		}
+			CreatedAt:       now,
+		})
 	}
+
+	chunks := make([]UCIChunk, 0, len(artifact.Chunks))
 	for _, chunk := range artifact.Chunks {
-		if _, err := s.UpsertChunk(ctx, UpsertUCIChunkInput{
+		if err := validateUCIProjectionSourceText("text_for_search", chunk.Text); err != nil {
+			return err
+		}
+		symbolKey, err := copyUCIOptionalTextPointer("symbol_key", chunk.SymbolKey)
+		if err != nil {
+			return err
+		}
+		chunks = append(chunks, UCIChunk{
+			ChunkID:       uuid.NewString(),
 			SourceID:      sourceID,
 			ArtifactID:    artifact.ArtifactID,
-			SymbolKey:     chunk.SymbolKey,
+			SymbolKey:     symbolKey,
 			ChunkKind:     chunk.Kind,
 			Ordinal:       chunk.Ordinal,
 			ByteStart:     chunk.Span.ByteStart,
 			ByteEnd:       chunk.Span.ByteEnd,
 			ContentDigest: string(chunk.ContentDigest),
 			TextForSearch: chunk.Text,
-		}); err != nil {
-			return fmt.Errorf("uci index admission: upsert chunk: %w", err)
+			CreatedAt:     now,
+		})
+	}
+
+	for _, batch := range []struct {
+		name string
+		rows any
+		len  int
+	}{
+		{name: "definitions", rows: &definitions, len: len(definitions)},
+		{name: "reference sites", rows: &references, len: len(references)},
+		{name: "chunks", rows: &chunks, len: len(chunks)},
+	} {
+		if batch.len == 0 {
+			continue
+		}
+		if err := s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(batch.rows, uciIndexAdmissionFactBatchSize).Error; err != nil {
+			return fmt.Errorf("uci index admission: store %s: %w", batch.name, err)
 		}
 	}
 	return nil
