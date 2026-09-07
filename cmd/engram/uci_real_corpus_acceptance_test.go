@@ -27,12 +27,13 @@ const (
 	uciRealCorpusPreprocessingRevisionEnv = "ENGRAM_UCI_REAL_CORPUS_PREPROCESSING_REVISION"
 	uciRealCorpusRecordPathEnv            = "ENGRAM_UCI_REAL_CORPUS_RECORD_PATH"
 
-	uciRealCorpusGoCallerPath  = "internal/uci/zz_uci_real_corpus_caller.go"
-	uciRealCorpusGoCalleePath  = "internal/uci/zz_uci_real_corpus_callee.go"
-	uciRealCorpusTSRoot        = "apps/operator-console/composables/zz-uci-real-corpus"
-	uciRealCorpusExpectedPath  = "internal/uci/index_admission.go"
-	uciRealCorpusQuery         = "Как ссылки на выражения, похожие на приватные адреса, превращаются в безопасные стабильные идентификаторы без потери позиции в исходнике?"
-	uciRealCorpusBarrierWaitMS = int64(5_000)
+	uciRealCorpusGoCallerPath         = "internal/uci/zz_uci_real_corpus_caller.go"
+	uciRealCorpusGoCalleePath         = "internal/uci/zz_uci_real_corpus_callee.go"
+	uciRealCorpusTSRoot               = "apps/operator-console/composables/zz-uci-real-corpus"
+	uciRealCorpusExpectedPath         = "internal/uci/index_admission.go"
+	uciRealCorpusQuery                = "Как ссылки на выражения, похожие на приватные адреса, превращаются в безопасные стабильные идентификаторы без потери позиции в исходнике?"
+	uciRealCorpusBarrierWaitMS        = int64(5_000)
+	uciRealCorpusEmbeddingStallWindow = 5 * time.Minute
 )
 
 var uciRealCorpusCanaries = map[string]string{
@@ -117,16 +118,20 @@ type uciRealCorpusRecord struct {
 	RecordedAt    string                 `json:"recorded_at"`
 	Candidate     uciRealCorpusCandidate `json:"candidate"`
 	Pilot         struct {
-		Source          string `json:"source"`
-		FullWorktree    bool   `json:"full_worktree"`
-		InitialGitClean bool   `json:"initial_git_clean"`
-		FinalGitClean   bool   `json:"final_git_clean"`
+		Source           string `json:"source"`
+		FullWorktree     bool   `json:"full_worktree"`
+		SizeSanity       bool   `json:"size_sanity"`
+		ExactComposition bool   `json:"exact_composition"`
+		InitialGitClean  bool   `json:"initial_git_clean"`
+		FinalGitClean    bool   `json:"final_git_clean"`
 	} `json:"pilot"`
-	Provider    uciRealCorpusProvider `json:"provider"`
-	Initial     uciRealCorpusCounts   `json:"initial"`
-	AfterChange uciRealCorpusCounts   `json:"after_change"`
-	Semantic    uciRealCorpusSemantic `json:"semantic"`
-	Graph       uciRealCorpusGraph    `json:"graph"`
+	Provider    uciRealCorpusProvider    `json:"provider"`
+	Initial     uciRealCorpusCounts      `json:"initial"`
+	AfterChange uciRealCorpusCounts      `json:"after_change"`
+	Semantic    uciRealCorpusSemantic    `json:"semantic"`
+	Graph       uciRealCorpusGraph       `json:"graph"`
+	Composition uciRealCorpusComposition `json:"composition"`
+	NativeGraph uciRealCorpusNativeGraph `json:"native_graph"`
 	Installed   struct {
 		ServerSHA256 string `json:"server_sha256"`
 		DaemonSHA256 string `json:"daemon_sha256"`
@@ -161,6 +166,56 @@ type uciRealCorpusEmbeddingStatus struct {
 		JobState           *string `json:"job_state"`
 		ErrorCode          *string `json:"error_code"`
 	} `json:"embedding"`
+}
+
+type uciRealCorpusEmbeddingStage string
+
+const (
+	uciRealCorpusEmbeddingStageReady                         uciRealCorpusEmbeddingStage = "ready"
+	uciRealCorpusEmbeddingStageStillProgressing              uciRealCorpusEmbeddingStage = "still_progressing"
+	uciRealCorpusEmbeddingStageTerminalFailed                uciRealCorpusEmbeddingStage = "terminal_failed"
+	uciRealCorpusEmbeddingStageTerminalSucceededInconsistent uciRealCorpusEmbeddingStage = "terminal_succeeded_inconsistent"
+	uciRealCorpusEmbeddingStageNoProgress                    uciRealCorpusEmbeddingStage = "no_progress"
+)
+
+type uciRealCorpusEmbeddingProgress struct {
+	viewID                  string
+	generation              int64
+	embeddingProfilePresent bool
+	jobState                string
+	totalCandidates         uint64
+	readyCandidates         uint64
+	pendingJobs             uint64
+	coverage                string
+}
+
+type uciRealCorpusEmbeddingSummary struct {
+	viewPresent             bool
+	generation              int64
+	embeddingProfilePresent bool
+	jobState                string
+	coverage                string
+	totalCandidates         uint64
+	readyCandidates         uint64
+	pendingJobs             uint64
+	errorCodePresent        bool
+}
+
+type uciRealCorpusEmbeddingClassification struct {
+	stage    uciRealCorpusEmbeddingStage
+	progress uciRealCorpusEmbeddingProgress
+	summary  uciRealCorpusEmbeddingSummary
+}
+
+type uciRealCorpusEmbeddingProgressWindow struct {
+	progress    uciRealCorpusEmbeddingProgress
+	observedAt  time.Time
+	initialized bool
+}
+
+type uciRealCorpusEmbeddingWaitError struct {
+	stage   uciRealCorpusEmbeddingStage
+	summary uciRealCorpusEmbeddingSummary
 }
 
 type uciRealCorpusEdgeRow struct {
@@ -253,6 +308,10 @@ func TestUCIRealCorpusEmbeddingPublicationFollowsMonotonicCurrentView(t *testing
 	if current.viewID != status.Context.ViewID || current.generation != status.Context.Generation {
 		t.Fatalf("current publication = %#v, want monotonic status View", current)
 	}
+	classification := uciClassifyRealCorpusEmbedding(status, false)
+	if classification.progress.viewID != current.viewID || classification.progress.generation != current.generation {
+		t.Fatalf("embedding progress = %#v, want current monotonic publication", classification.progress)
+	}
 
 	status.Context.SourceID = "foreign"
 	if _, err := uciRealCorpusEmbeddingPublication(status, expected); err == nil {
@@ -263,6 +322,109 @@ func TestUCIRealCorpusEmbeddingPublicationFollowsMonotonicCurrentView(t *testing
 	if _, err := uciRealCorpusEmbeddingPublication(status, expected); err == nil {
 		t.Fatal("same-generation replacement View was accepted")
 	}
+}
+
+func TestUCIRealCorpusEmbeddingClassifiesStatus(t *testing.T) {
+	profileID := "profile://private"
+	succeeded := "succeeded"
+	failed := "failed_terminal"
+
+	tests := []struct {
+		name    string
+		status  uciRealCorpusEmbeddingStatus
+		stalled bool
+		stage   uciRealCorpusEmbeddingStage
+	}{
+		{
+			name:   "ready",
+			status: uciRealCorpusEmbeddingTestStatus("view://private", 2, &profileID, string(uci.IndexCoverageComplete), 2, 2, 0, &succeeded),
+			stage:  uciRealCorpusEmbeddingStageReady,
+		},
+		{
+			name:   "terminal failed",
+			status: uciRealCorpusEmbeddingTestStatus("view://private", 2, &profileID, string(uci.IndexCoveragePartial), 2, 1, 1, &failed),
+			stage:  uciRealCorpusEmbeddingStageTerminalFailed,
+		},
+		{
+			name:   "succeeded but inconsistent",
+			status: uciRealCorpusEmbeddingTestStatus("view://private", 2, &profileID, string(uci.IndexCoveragePartial), 2, 1, 0, &succeeded),
+			stage:  uciRealCorpusEmbeddingStageTerminalSucceededInconsistent,
+		},
+		{
+			name:    "stagnant progress",
+			status:  uciRealCorpusEmbeddingTestStatus("view://private", 2, &profileID, string(uci.IndexCoveragePartial), 2, 1, 1, nil),
+			stalled: true,
+			stage:   uciRealCorpusEmbeddingStageNoProgress,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			classification := uciClassifyRealCorpusEmbedding(test.status, test.stalled)
+			if classification.stage != test.stage {
+				t.Fatalf("stage = %q, want %q", classification.stage, test.stage)
+			}
+		})
+	}
+
+	classification := uciClassifyRealCorpusEmbedding(tests[2].status, false)
+	message := classification.waitError().Error()
+	if !strings.Contains(message, "stage=terminal_succeeded_inconsistent") {
+		t.Fatalf("terminal succeeded error = %q", message)
+	}
+	if strings.Contains(message, profileID) || strings.Contains(message, tests[2].status.Context.ViewID) {
+		t.Fatalf("embedding wait error exposed a private identifier: %q", message)
+	}
+}
+
+func TestUCIRealCorpusEmbeddingProgressWindowStallsOnlyWithoutProgress(t *testing.T) {
+	profileID := "profile://private"
+	replacementProfileID := "profile://replacement"
+	running := "running"
+	status := uciRealCorpusEmbeddingTestStatus("view://private", 2, &profileID, string(uci.IndexCoveragePartial), 2, 0, 1, &running)
+	started := time.Date(2026, time.September, 7, 0, 0, 0, 0, time.UTC)
+	classification := uciClassifyRealCorpusEmbedding(status, false)
+	window, stalled := (uciRealCorpusEmbeddingProgressWindow{}).observe(classification.progress, started)
+	if stalled {
+		t.Fatal("first embedding status was marked stalled")
+	}
+
+	status.Embedding.EmbeddingProfileID = &replacementProfileID
+	classification = uciClassifyRealCorpusEmbedding(status, false)
+	window, stalled = window.observe(classification.progress, started.Add(uciRealCorpusEmbeddingStallWindow))
+	if !stalled {
+		t.Fatal("unchanged progress tuple did not stall at the bounded window")
+	}
+	if got := uciClassifyRealCorpusEmbedding(status, stalled).stage; got != uciRealCorpusEmbeddingStageNoProgress {
+		t.Fatalf("stagnant status stage = %q, want %q", got, uciRealCorpusEmbeddingStageNoProgress)
+	}
+
+	status.Embedding.ReadyCandidates++
+	classification = uciClassifyRealCorpusEmbedding(status, false)
+	resetAt := started.Add(uciRealCorpusEmbeddingStallWindow + time.Second)
+	window, stalled = window.observe(classification.progress, resetAt)
+	if stalled {
+		t.Fatal("changed ready candidate count did not reset the stall window")
+	}
+	if !window.observedAt.Equal(resetAt) {
+		t.Fatalf("progress reset at %s, want %s", window.observedAt, resetAt)
+	}
+}
+
+func uciRealCorpusEmbeddingTestStatus(viewID string, generation int64, embeddingProfileID *string, coverage string, totalCandidates, readyCandidates, pendingJobs uint64, jobState *string) uciRealCorpusEmbeddingStatus {
+	status := uciRealCorpusEmbeddingStatus{}
+	status.Context.SourceID = "source"
+	status.Context.CheckoutID = "checkout"
+	status.Context.ViewID = viewID
+	status.Context.ProfileID = "profile"
+	status.Context.Generation = generation
+	status.Embedding.EmbeddingProfileID = embeddingProfileID
+	status.Embedding.Coverage = coverage
+	status.Embedding.TotalCandidates = totalCandidates
+	status.Embedding.ReadyCandidates = readyCandidates
+	status.Embedding.PendingJobs = pendingJobs
+	status.Embedding.JobState = jobState
+	return status
 }
 
 func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstalledAcceptanceRequest, providerURL, providerModel, providerRef, preprocessing string) (record uciRealCorpusRecord, retErr error) {
@@ -308,6 +470,10 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 			retErr = errors.Join(retErr, cleanupErr)
 		}
 	}()
+	frozenManifest, err := uciFreezeRealCorpusManifest(ctx, root)
+	if err != nil {
+		return record, err
+	}
 
 	parserBundleDigest := uciInstalledAcceptanceParserBundleDigest()
 	worktrees := uciInstalledAcceptanceWorktreesFixture{primaryRoot: root, linkedRoot: root, head: candidateCommit}
@@ -457,6 +623,13 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 	if err != nil {
 		return record, err
 	}
+	composition, err := uciVerifyRealCorpusComposition(ctx, authority, initialPublication, frozenManifest)
+	if err != nil {
+		return record, err
+	}
+	if composition.MembershipCount != uint64(initialCounts.Memberships) {
+		return record, errors.New("real-corpus exact composition and count receipt disagree")
+	}
 	semantic, err := uciRealCorpusSemanticProof(ctx, client, selection, initialPublication, root)
 	if err != nil {
 		return record, err
@@ -466,6 +639,10 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 		return record, err
 	}
 	graph, err := uciRealCorpusGraphProof(ctx, client, selection, initialPublication, authority, initialEdge)
+	if err != nil {
+		return record, err
+	}
+	nativeGraph, err := uciVerifyRealCorpusNativeGraph(ctx, authority, initialPublication)
 	if err != nil {
 		return record, err
 	}
@@ -504,7 +681,9 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 	record.RecordedAt = time.Now().UTC().Format(time.RFC3339)
 	record.Candidate = uciRealCorpusCandidate{Commit: candidateCommit, Tree: candidateTree}
 	record.Pilot.Source = "engram-full-candidate-worktree"
-	record.Pilot.FullWorktree = initialCounts.Memberships >= 1000 && initialCounts.Artifacts >= 1000
+	record.Pilot.SizeSanity = initialCounts.Memberships >= 1000 && initialCounts.Artifacts >= 1000
+	record.Pilot.ExactComposition = composition.MembershipCount == composition.BaselineMembershipCount+composition.CanaryMembershipCount && composition.MembershipCount > 0
+	record.Pilot.FullWorktree = record.Pilot.SizeSanity && record.Pilot.ExactComposition
 	record.Pilot.InitialGitClean = true
 	record.Provider = uciRealCorpusProvider{
 		EndpointDigest:         uciInstalledAcceptanceStringDigest(providerURL),
@@ -522,6 +701,8 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 	record.AfterChange = changedCounts
 	record.Semantic = semantic
 	record.Graph = graph
+	record.Composition = composition
+	record.NativeGraph = nativeGraph
 	for role, destination := range map[string]*string{
 		"server": &record.Installed.ServerSHA256,
 		"daemon": &record.Installed.DaemonSHA256,
@@ -550,8 +731,8 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 	record.Scope.PrivateLocatorsRetained = false
 	record.Scope.ProductionMutation = false
 	record.Scope.ReleaseClaim = false
-	if !record.Pilot.FullWorktree || !record.Installed.StandardMCP {
-		return record, errors.New("real-corpus result did not prove a full installed standard-MCP worktree")
+	if !record.Pilot.FullWorktree || !record.Pilot.SizeSanity || !record.Pilot.ExactComposition || !record.Installed.StandardMCP {
+		return record, errors.New("real-corpus result did not prove exact full-corpus installed standard-MCP coverage")
 	}
 	return record, nil
 }
@@ -596,9 +777,86 @@ func uciWaitForRealCorpusPublication(ctx context.Context, client *uciInstalledAc
 	}
 }
 
+func uciRealCorpusEmbeddingSafeJobState(value *string) string {
+	if value == nil {
+		return "absent"
+	}
+	switch *value {
+	case "queued", "running", "retry_scheduled", "succeeded", "failed_terminal", "cancelled", "obsolete":
+		return *value
+	default:
+		return "unknown"
+	}
+}
+
+func uciRealCorpusEmbeddingSafeCoverage(value string) string {
+	switch value {
+	case string(uci.IndexCoverageComplete), string(uci.IndexCoveragePartial), string(uci.IndexCoverageUnavailable):
+		return value
+	default:
+		return "unknown"
+	}
+}
+
+func uciClassifyRealCorpusEmbedding(status uciRealCorpusEmbeddingStatus, stalled bool) uciRealCorpusEmbeddingClassification {
+	summary := uciRealCorpusEmbeddingSummary{
+		viewPresent:             status.Context.ViewID != "",
+		generation:              status.Context.Generation,
+		embeddingProfilePresent: status.Embedding.EmbeddingProfileID != nil,
+		jobState:                uciRealCorpusEmbeddingSafeJobState(status.Embedding.JobState),
+		coverage:                uciRealCorpusEmbeddingSafeCoverage(status.Embedding.Coverage),
+		totalCandidates:         status.Embedding.TotalCandidates,
+		readyCandidates:         status.Embedding.ReadyCandidates,
+		pendingJobs:             status.Embedding.PendingJobs,
+		errorCodePresent:        status.Embedding.ErrorCode != nil,
+	}
+	classification := uciRealCorpusEmbeddingClassification{
+		stage: uciRealCorpusEmbeddingStageStillProgressing,
+		progress: uciRealCorpusEmbeddingProgress{
+			viewID:                  status.Context.ViewID,
+			generation:              status.Context.Generation,
+			embeddingProfilePresent: summary.embeddingProfilePresent,
+			jobState:                summary.jobState,
+			totalCandidates:         summary.totalCandidates,
+			readyCandidates:         summary.readyCandidates,
+			pendingJobs:             summary.pendingJobs,
+			coverage:                summary.coverage,
+		},
+		summary: summary,
+	}
+	switch {
+	case summary.jobState == "failed_terminal" || summary.jobState == "cancelled" || summary.jobState == "obsolete":
+		classification.stage = uciRealCorpusEmbeddingStageTerminalFailed
+	case summary.embeddingProfilePresent && summary.coverage == string(uci.IndexCoverageComplete) && summary.totalCandidates > 0 && summary.readyCandidates == summary.totalCandidates && summary.pendingJobs == 0:
+		classification.stage = uciRealCorpusEmbeddingStageReady
+	case summary.jobState == "succeeded":
+		classification.stage = uciRealCorpusEmbeddingStageTerminalSucceededInconsistent
+	case stalled:
+		classification.stage = uciRealCorpusEmbeddingStageNoProgress
+	}
+	return classification
+}
+
+func (window uciRealCorpusEmbeddingProgressWindow) observe(progress uciRealCorpusEmbeddingProgress, now time.Time) (uciRealCorpusEmbeddingProgressWindow, bool) {
+	if !window.initialized || window.progress != progress {
+		return uciRealCorpusEmbeddingProgressWindow{progress: progress, observedAt: now, initialized: true}, false
+	}
+	return window, !now.Before(window.observedAt.Add(uciRealCorpusEmbeddingStallWindow))
+}
+
+func (classification uciRealCorpusEmbeddingClassification) waitError() error {
+	return uciRealCorpusEmbeddingWaitError{stage: classification.stage, summary: classification.summary}
+}
+
+func (err uciRealCorpusEmbeddingWaitError) Error() string {
+	return fmt.Sprintf("real-corpus embedding wait stage=%s view_present=%t generation=%d embedding_profile_present=%t job_state=%s coverage=%s total_candidates=%d ready_candidates=%d pending_jobs=%d error_code_present=%t", err.stage, err.summary.viewPresent, err.summary.generation, err.summary.embeddingProfilePresent, err.summary.jobState, err.summary.coverage, err.summary.totalCandidates, err.summary.readyCandidates, err.summary.pendingJobs, err.summary.errorCodePresent)
+}
+
 func uciWaitForRealCorpusEmbeddings(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection, expected uciInstalledAcceptancePublication) (uciRealCorpusEmbeddingStatus, uciInstalledAcceptancePublication, error) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	var progressWindow uciRealCorpusEmbeddingProgressWindow
+	var stalled bool
 	for {
 		payload, err := client.Tool(ctx, "codebase_status", map[string]any{"context_handle": selection.contextHandle})
 		if err != nil {
@@ -612,11 +870,14 @@ func uciWaitForRealCorpusEmbeddings(ctx context.Context, client *uciInstalledAcc
 		if err != nil {
 			return status, expected, err
 		}
-		if status.Embedding.ErrorCode != nil && status.Embedding.JobState != nil && *status.Embedding.JobState == "failed_terminal" {
-			return status, current, fmt.Errorf("real-corpus embedding job failed: %s", *status.Embedding.ErrorCode)
-		}
-		if status.Embedding.EmbeddingProfileID != nil && status.Embedding.Coverage == string(uci.IndexCoverageComplete) && status.Embedding.TotalCandidates > 0 && status.Embedding.ReadyCandidates == status.Embedding.TotalCandidates && status.Embedding.PendingJobs == 0 {
+		classification := uciClassifyRealCorpusEmbedding(status, false)
+		progressWindow, stalled = progressWindow.observe(classification.progress, time.Now())
+		classification = uciClassifyRealCorpusEmbedding(status, stalled)
+		switch classification.stage {
+		case uciRealCorpusEmbeddingStageReady:
 			return status, current, nil
+		case uciRealCorpusEmbeddingStageTerminalFailed, uciRealCorpusEmbeddingStageTerminalSucceededInconsistent, uciRealCorpusEmbeddingStageNoProgress:
+			return status, current, classification.waitError()
 		}
 		expected = current
 		select {
