@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	uciRealCorpusCompositionSchemaVersion   = "engram.uci-real-corpus-composition/v1"
+	uciRealCorpusCompositionSchemaVersion   = "engram.uci-real-corpus-composition/v2"
 	uciRealCorpusPreparedMembershipMode     = "unknown"
 	uciRealCorpusScannerModeUnavailable     = "unavailable"
 	uciRealCorpusUnsupportedCapabilityCause = "unsupported_capability"
@@ -58,6 +58,11 @@ var uciRealCorpusCompositionCapabilities = [...]string{
 	"sql:v1:.sql",
 }
 
+var uciRealCorpusCompositionExcludedCapabilities = [...]string{
+	"csharp:v1:.cs",
+	"vue:v1:.vue",
+}
+
 // uciRealCorpusFrozenManifest retains the private path-level scanner census only
 // in memory. Its marshalled form contains aggregate evidence, never paths or bodies.
 type uciRealCorpusFrozenManifest struct {
@@ -81,29 +86,38 @@ type uciRealCorpusFrozenManifest struct {
 // uciRealCorpusComposition is the receipt-safe exact-composition proof. It
 // contains bounded counts, histograms, and digests only.
 type uciRealCorpusComposition struct {
-	SchemaVersion               string            `json:"schema_version"`
-	ScannerPolicyDigest         string            `json:"scanner_policy_digest"`
-	FrozenManifestDigest        string            `json:"frozen_manifest_digest"`
-	BaselineManifestDigest      string            `json:"baseline_manifest_digest"`
-	CanaryDeltaDigest           string            `json:"canary_delta_digest"`
-	ViewManifestDigest          string            `json:"view_manifest_digest"`
-	ReconstructedManifestDigest string            `json:"reconstructed_manifest_digest"`
-	StagedPartsDigest           string            `json:"staged_parts_digest"`
-	StagedEdgesDigest           string            `json:"staged_edges_digest"`
-	ArtifactProofDigest         string            `json:"artifact_proof_digest"`
-	StagedPartCount             uint64            `json:"staged_part_count"`
-	StagedPayloadBytes          uint64            `json:"staged_payload_bytes"`
-	MembershipCount             uint64            `json:"membership_count"`
-	ArtifactProofCount          uint64            `json:"artifact_proof_count"`
-	EdgeCount                   uint64            `json:"edge_count"`
-	BaselineMembershipCount     uint64            `json:"baseline_membership_count"`
-	CanaryMembershipCount       uint64            `json:"canary_membership_count"`
-	MembershipStateHistogram    map[string]uint64 `json:"membership_state_histogram"`
-	BaselineStateHistogram      map[string]uint64 `json:"baseline_state_histogram"`
-	CanaryStateHistogram        map[string]uint64 `json:"canary_state_histogram"`
-	ReasonHistogram             map[string]uint64 `json:"reason_histogram"`
-	ScannerModeHistogram        map[string]uint64 `json:"scanner_mode_histogram"`
-	PersistedModeHistogram      map[string]uint64 `json:"persisted_mode_histogram"`
+	SchemaVersion               string                          `json:"schema_version"`
+	ScannerPolicyDigest         string                          `json:"scanner_policy_digest"`
+	FrozenManifestDigest        string                          `json:"frozen_manifest_digest"`
+	BaselineManifestDigest      string                          `json:"baseline_manifest_digest"`
+	CanaryDeltaDigest           string                          `json:"canary_delta_digest"`
+	ViewManifestDigest          string                          `json:"view_manifest_digest"`
+	ReconstructedManifestDigest string                          `json:"reconstructed_manifest_digest"`
+	StagedPartsDigest           string                          `json:"staged_parts_digest"`
+	StagedEdgesDigest           string                          `json:"staged_edges_digest"`
+	ArtifactProofDigest         string                          `json:"artifact_proof_digest"`
+	Packing                     uciRealCorpusPackedPartCapacity `json:"packing"`
+	MembershipCount             uint64                          `json:"membership_count"`
+	ArtifactProofCount          uint64                          `json:"artifact_proof_count"`
+	EdgeCount                   uint64                          `json:"edge_count"`
+	BaselineMembershipCount     uint64                          `json:"baseline_membership_count"`
+	CanaryMembershipCount       uint64                          `json:"canary_membership_count"`
+	MembershipStateHistogram    map[string]uint64               `json:"membership_state_histogram"`
+	BaselineStateHistogram      map[string]uint64               `json:"baseline_state_histogram"`
+	CanaryStateHistogram        map[string]uint64               `json:"canary_state_histogram"`
+	ReasonHistogram             map[string]uint64               `json:"reason_histogram"`
+	ScannerModeHistogram        map[string]uint64               `json:"scanner_mode_histogram"`
+	PersistedModeHistogram      map[string]uint64               `json:"persisted_mode_histogram"`
+	ExcludedCapabilities        []string                        `json:"excluded_capabilities"`
+}
+
+type uciRealCorpusPackedPartCapacity struct {
+	ObservedPartCount           uint64 `json:"observed_packed_part_count"`
+	ObservedTotalEncodedBytes   uint64 `json:"observed_total_encoded_bytes"`
+	ObservedMaxEncodedPartBytes uint64 `json:"observed_max_encoded_part_bytes"`
+	ConfiguredMaxPartCount      uint64 `json:"configured_max_packed_part_count"`
+	ConfiguredMaxTotalBytes     uint64 `json:"configured_max_total_encoded_bytes"`
+	ConfiguredMaxPartBytes      uint64 `json:"configured_max_encoded_part_bytes"`
 }
 
 type uciRealCorpusFrozenEntry struct {
@@ -140,14 +154,15 @@ type uciRealCorpusCompositionMembershipRow struct {
 }
 
 type uciRealCorpusCompositionStagedBuild struct {
-	memberships    map[string]uci.IndexMembership
-	artifactProofs map[string]uci.IndexArtifactProof
-	partsDigest    string
-	manifestDigest string
-	edgesDigest    string
-	partCount      uint64
-	payloadBytes   uint64
-	edgeCount      uint64
+	memberships     map[string]uci.IndexMembership
+	artifactProofs  map[string]uci.IndexArtifactProof
+	partsDigest     string
+	manifestDigest  string
+	edgesDigest     string
+	partCount       uint64
+	payloadBytes    uint64
+	maxPayloadBytes uint64
+	edgeCount       uint64
 }
 
 type uciRealCorpusRecordingGitRunner struct {
@@ -308,6 +323,11 @@ func uciVerifyRealCorpusComposition(ctx context.Context, authority *uciInstalled
 	if err != nil {
 		return uciRealCorpusComposition{}, err
 	}
+	packing, err := uciRealCorpusObservePackedPartCapacity(staged)
+	if err != nil {
+		return uciRealCorpusComposition{}, err
+	}
+
 	if err := uciRealCorpusValidateStagedCompletion(publicationRow, completion, staged); err != nil {
 		return uciRealCorpusComposition{}, err
 	}
@@ -338,8 +358,7 @@ func uciVerifyRealCorpusComposition(ctx context.Context, authority *uciInstalled
 		StagedPartsDigest:           staged.partsDigest,
 		StagedEdgesDigest:           staged.edgesDigest,
 		ArtifactProofDigest:         artifactProofDigest,
-		StagedPartCount:             staged.partCount,
-		StagedPayloadBytes:          staged.payloadBytes,
+		Packing:                     packing,
 		MembershipCount:             uint64(len(staged.memberships)),
 		ArtifactProofCount:          uint64(len(staged.artifactProofs)),
 		EdgeCount:                   staged.edgeCount,
@@ -351,6 +370,7 @@ func uciVerifyRealCorpusComposition(ctx context.Context, authority *uciInstalled
 		ReasonHistogram:             uciRealCorpusCloneHistogram(frozen.ReasonHistogram),
 		ScannerModeHistogram:        uciRealCorpusCloneHistogram(frozen.ScannerModeHistogram),
 		PersistedModeHistogram:      uciRealCorpusPersistedModeHistogram(persisted),
+		ExcludedCapabilities:        append([]string(nil), uciRealCorpusCompositionExcludedCapabilities[:]...),
 	}
 	return composition, nil
 }
@@ -517,17 +537,21 @@ func uciRealCorpusValidateFrozenManifest(frozen uciRealCorpusFrozenManifest) err
 
 func uciRealCorpusCompositionPolicyDigest() (string, error) {
 	return uciRealCorpusDigestValue(struct {
-		Version          string   `json:"version"`
-		IncludeUntracked bool     `json:"include_untracked"`
-		ProtectedPaths   []string `json:"protected_paths"`
-		Capabilities     []string `json:"capabilities"`
-		SecretDetector   string   `json:"secret_detector"`
+		Version              string   `json:"version"`
+		IncludeUntracked     bool     `json:"include_untracked"`
+		IncludeIgnored       bool     `json:"include_ignored"`
+		ProtectedPaths       []string `json:"protected_paths"`
+		Capabilities         []string `json:"capabilities"`
+		ExcludedCapabilities []string `json:"excluded_capabilities"`
+		SecretDetector       string   `json:"secret_detector"`
 	}{
-		Version:          uciRealCorpusCompositionSchemaVersion,
-		IncludeUntracked: true,
-		ProtectedPaths:   append([]string(nil), uciRealCorpusCompositionProtectedPaths[:]...),
-		Capabilities:     append([]string(nil), uciRealCorpusCompositionCapabilities[:]...),
-		SecretDetector:   "runtime-protected-secret-path+privacy-contains-secrets",
+		Version:              uciRealCorpusCompositionSchemaVersion,
+		IncludeUntracked:     true,
+		IncludeIgnored:       false,
+		ProtectedPaths:       append([]string(nil), uciRealCorpusCompositionProtectedPaths[:]...),
+		Capabilities:         append([]string(nil), uciRealCorpusCompositionCapabilities[:]...),
+		ExcludedCapabilities: append([]string(nil), uciRealCorpusCompositionExcludedCapabilities[:]...),
+		SecretDetector:       "runtime-protected-secret-path+privacy-contains-secrets",
 	})
 }
 
@@ -643,9 +667,15 @@ func uciRealCorpusLoadStagedBuild(ctx context.Context, authority *uciInstalledAc
 		if row.Sequence != int64(sequence) || row.PayloadBytes < 0 || !uciRealCorpusCompositionDigest(row.PartDigest) {
 			return uciRealCorpusCompositionStagedBuild{}, errors.New("real-corpus composition staged part is invalid")
 		}
+		payloadBytes := uint64(row.PayloadBytes)
+
 		var part uci.IndexPart
 		if err := json.Unmarshal([]byte(row.Payload), &part); err != nil {
 			return uciRealCorpusCompositionStagedBuild{}, errors.New("real-corpus composition staged part is invalid")
+		}
+		encodedPart, err := json.Marshal(part)
+		if err != nil || payloadBytes != uint64(len(encodedPart)) {
+			return uciRealCorpusCompositionStagedBuild{}, errors.New("real-corpus composition staged payload bytes do not match the encoded part")
 		}
 		digest, err := uci.DigestIndexPart(part)
 		if err != nil || string(digest) != row.PartDigest {
@@ -674,10 +704,13 @@ func uciRealCorpusLoadStagedBuild(ctx context.Context, authority *uciInstalledAc
 			staged.edgeCount += uint64(len(replacement.Edges))
 			replacements = append(replacements, replacement)
 		}
-		if ^uint64(0)-staged.payloadBytes < uint64(row.PayloadBytes) {
+		if ^uint64(0)-staged.payloadBytes < payloadBytes {
 			return uciRealCorpusCompositionStagedBuild{}, errors.New("real-corpus composition staged payload count overflow")
 		}
-		staged.payloadBytes += uint64(row.PayloadBytes)
+		staged.payloadBytes += payloadBytes
+		if payloadBytes > staged.maxPayloadBytes {
+			staged.maxPayloadBytes = payloadBytes
+		}
 		staged.partCount++
 		acks = append(acks, uci.IndexPartAck{BuildID: buildID, Sequence: uint32(row.Sequence), Digest: digest})
 	}
@@ -698,6 +731,28 @@ func uciRealCorpusLoadStagedBuild(ctx context.Context, authority *uciInstalledAc
 	staged.manifestDigest = string(manifestDigest)
 	staged.edgesDigest = string(edgesDigest)
 	return staged, nil
+}
+
+func uciRealCorpusObservePackedPartCapacity(staged uciRealCorpusCompositionStagedBuild) (uciRealCorpusPackedPartCapacity, error) {
+	limits := uci.DefaultIndexPublicationLimits()
+	if limits.MaxParts == 0 || limits.MaxBuildBytes <= 0 || limits.MaxPartBytes <= 0 {
+		return uciRealCorpusPackedPartCapacity{}, errors.New("real-corpus configured publication limits are not finite")
+	}
+	packing := uciRealCorpusPackedPartCapacity{
+		ObservedPartCount:           staged.partCount,
+		ObservedTotalEncodedBytes:   staged.payloadBytes,
+		ObservedMaxEncodedPartBytes: staged.maxPayloadBytes,
+		ConfiguredMaxPartCount:      uint64(limits.MaxParts),
+		ConfiguredMaxTotalBytes:     uint64(limits.MaxBuildBytes),
+		ConfiguredMaxPartBytes:      uint64(limits.MaxPartBytes),
+	}
+	if packing.ObservedPartCount == 0 || packing.ObservedMaxEncodedPartBytes == 0 || packing.ObservedMaxEncodedPartBytes > packing.ObservedTotalEncodedBytes {
+		return uciRealCorpusPackedPartCapacity{}, errors.New("real-corpus observed packed part measurements are invalid")
+	}
+	if packing.ObservedPartCount > packing.ConfiguredMaxPartCount || packing.ObservedTotalEncodedBytes > packing.ConfiguredMaxTotalBytes || packing.ObservedMaxEncodedPartBytes > packing.ConfiguredMaxPartBytes {
+		return uciRealCorpusPackedPartCapacity{}, errors.New("real-corpus observed packed parts exceed configured publication limits")
+	}
+	return packing, nil
 }
 
 func uciRealCorpusValidateStagedCompletion(row uciRealCorpusCompositionPublicationRow, completion uci.IndexManifestCompletion, staged uciRealCorpusCompositionStagedBuild) error {
