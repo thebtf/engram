@@ -656,11 +656,7 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(uciRealCorpusGoCalleePath)), []byte(uciRealCorpusChangedCallee), 0o600); err != nil {
 		return record, err
 	}
-	changedPublication, err := uciWaitForInstalledAcceptanceWatcherState(ctx, client, selection, initialPublication, "UCIRealCorpusCallee", uciRealCorpusGoCalleePath, true)
-	if err != nil {
-		return record, err
-	}
-	changedEmbedding, changedPublication, err := uciWaitForRealCorpusEmbeddings(ctx, client, selection, changedPublication)
+	changedEmbedding, changedPublication, err := uciWaitForRealCorpusWatcherState(ctx, client, selection, initialPublication, "UCIRealCorpusCallee", uciRealCorpusGoCalleePath, true)
 	if err != nil {
 		return record, err
 	}
@@ -891,6 +887,34 @@ func uciWaitForRealCorpusEmbeddings(ctx context.Context, client *uciInstalledAcc
 			return status, expected, ctx.Err()
 		case <-ticker.C:
 		}
+	}
+}
+
+func uciWaitForRealCorpusWatcherState(
+	ctx context.Context,
+	client *uciInstalledAcceptanceMCPClient,
+	selection uciInstalledAcceptanceSelection,
+	previous uciInstalledAcceptancePublication,
+	functionName, relativePath string,
+	wantPresent bool,
+) (uciRealCorpusEmbeddingStatus, uciInstalledAcceptancePublication, error) {
+	for {
+		publication, err := uciWaitForInstalledAcceptanceWatcherPublication(ctx, client, selection, previous)
+		if err != nil {
+			return uciRealCorpusEmbeddingStatus{}, uciInstalledAcceptancePublication{}, err
+		}
+		embedding, current, err := uciWaitForRealCorpusEmbeddings(ctx, client, selection, publication)
+		if err != nil {
+			return embedding, current, err
+		}
+		err = uciRequireInstalledAcceptanceWatcherCanary(ctx, client, selection, current, functionName, relativePath, wantPresent)
+		if err == nil {
+			return embedding, current, nil
+		}
+		if !errors.Is(err, errUCIInstalledAcceptanceWatcherCanaryMissing) && !errors.Is(err, errUCIInstalledAcceptanceWatcherCanaryPresent) {
+			return embedding, current, err
+		}
+		previous = current
 	}
 }
 
