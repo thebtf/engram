@@ -3,11 +3,14 @@ package codeintel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
 
+	engramgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/uci"
+	gormlib "gorm.io/gorm"
 )
 
 func TestUCIRealCorpusPreparedCapacity(t *testing.T) {
@@ -101,4 +104,39 @@ func TestUCIRealCorpusPreparedCapacity(t *testing.T) {
 		}
 	}
 	t.Logf("real corpus capacity files=%d present=%d excluded=%d unreadable=%d source_bytes=%d frames=%d payload_bytes=%d max_payload_bytes=%d artifacts=%d definitions=%d references=%d chunks=%d memberships=%d edge_replacements=%d edges=%d uploaded=%d coverage=%+v errors=%d", len(scan.Files), present, excluded, unreadable, sourceBytes, len(plan.frames), payloadBytes, maxPayloadBytes, artifacts, definitions, references, chunks, memberships, edgeReplacements, edges, plan.uploaded, plan.coverage, len(plan.errors))
+	if os.Getenv("ENGRAM_UCI_REAL_CORPUS_ADMIT") != "1" {
+		return
+	}
+	store, err := engramgorm.NewStore(engramgorm.Config{DSN: os.Getenv("DATABASE_DSN"), MaxConns: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	rollbackProbe := errors.New("real corpus admission probe rollback")
+	err = store.GetDB().Transaction(func(tx *gormlib.DB) error {
+		now := time.Now().UTC()
+		if err := tx.Create(&engramgorm.UCISource{
+			SourceID: binding.Scope.SourceID, AuthRealm: "real-corpus-probe", Kind: engramgorm.UCISourceGit,
+			DisplayName: "real corpus probe", State: engramgorm.UCISourceActive, CreatedAt: now, UpdatedAt: now,
+		}).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&engramgorm.UCIAnalysisProfile{
+			ProfileID: binding.ProfileID, ParserBundleDigest: string(uci.TreeSitterBundleDigest()),
+			ResolverRevision: "real-corpus-probe", ChunkerRevision: "real-corpus-probe",
+			IgnorePolicyDigest: fmt.Sprintf("sha256:%064d", 0), BuildContextJSON: `{}`,
+			SecretPolicyRevision: "real-corpus-probe", CreatedAt: now,
+		}).Error; err != nil {
+			return err
+		}
+		parts, err := engramgorm.NewUCIProjectionStore(tx).AdmitIndexFrames(ctx, binding.Scope.SourceID, binding.ProfileID, plan.frames)
+		if err != nil {
+			return err
+		}
+		t.Logf("real corpus direct admission parts=%d", len(parts))
+		return rollbackProbe
+	})
+	if !errors.Is(err, rollbackProbe) {
+		t.Fatalf("real corpus direct admission: %v", err)
+	}
 }
