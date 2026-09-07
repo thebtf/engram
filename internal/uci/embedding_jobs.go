@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 const embeddingWorkerClientSessionPrefix = "embedding-worker"
@@ -267,6 +269,7 @@ func embeddingCandidateKeyLess(left, right EmbeddingCandidateKey) bool {
 type EmbeddingWorkerLimits struct {
 	CandidatePageSize     int
 	ProviderBatchSize     int
+	ProviderConcurrency   int
 	MaxProviderBatchBytes int
 	LeaseTTL              time.Duration
 	RenewInterval         time.Duration
@@ -280,6 +283,7 @@ func DefaultEmbeddingWorkerLimits() EmbeddingWorkerLimits {
 	return EmbeddingWorkerLimits{
 		CandidatePageSize:     512,
 		ProviderBatchSize:     128,
+		ProviderConcurrency:   4,
 		MaxProviderBatchBytes: 524288,
 		LeaseTTL:              2 * time.Minute,
 		RenewInterval:         30 * time.Second,
@@ -290,6 +294,7 @@ func DefaultEmbeddingWorkerLimits() EmbeddingWorkerLimits {
 
 func (limits EmbeddingWorkerLimits) valid() bool {
 	return limits.CandidatePageSize > 0 && limits.ProviderBatchSize > 0 && limits.ProviderBatchSize <= limits.CandidatePageSize &&
+		limits.ProviderConcurrency > 0 && limits.ProviderConcurrency <= limits.CandidatePageSize &&
 		limits.MaxProviderBatchBytes > 0 && limits.LeaseTTL > 0 && limits.RenewInterval > 0 && limits.RenewInterval < limits.LeaseTTL &&
 		limits.ProviderCallTimeout > 0 && limits.PollInterval > 0
 }
@@ -557,6 +562,11 @@ func (worker *EmbeddingWorker) embedMissing(ctx context.Context, claim Embedding
 		inputs = append(inputs, *grouped[key])
 	}
 
+	type providerBatch struct {
+		start int
+		texts []string
+	}
+	providerBatches := make([]providerBatch, 0, (len(inputs)+worker.limits.ProviderBatchSize-1)/worker.limits.ProviderBatchSize)
 	for start := 0; start < len(inputs); {
 		end := start
 		bytes := 0
@@ -578,24 +588,37 @@ func (worker *EmbeddingWorker) embedMissing(ctx context.Context, claim Embedding
 		for index := start; index < end; index++ {
 			texts[index-start] = inputs[index].input
 		}
-		callContext, cancel := context.WithTimeout(ctx, worker.limits.ProviderCallTimeout)
-		returned, err := worker.embedder.Embed(callContext, texts)
-		cancel()
-		if err != nil {
-			return nil, err
-		}
-		if len(returned) != len(texts) {
-			return nil, errEmbeddingProviderReply
-		}
-		for index, vector := range returned {
-			if err := validateSemanticVector(vector, claim.Profile.Dimension); err != nil {
-				return nil, errEmbeddingProviderReply
-			}
-			for _, position := range inputs[start+index].indexes {
-				vectors[position] = append([]float32(nil), vector...)
-			}
-		}
+		providerBatches = append(providerBatches, providerBatch{start: start, texts: texts})
 		start = end
+	}
+
+	group, groupContext := errgroup.WithContext(ctx)
+	group.SetLimit(worker.limits.ProviderConcurrency)
+	for _, providerBatch := range providerBatches {
+		providerBatch := providerBatch
+		group.Go(func() error {
+			callContext, cancel := context.WithTimeout(groupContext, worker.limits.ProviderCallTimeout)
+			returned, err := worker.embedder.Embed(callContext, providerBatch.texts)
+			cancel()
+			if err != nil {
+				return err
+			}
+			if len(returned) != len(providerBatch.texts) {
+				return errEmbeddingProviderReply
+			}
+			for index, vector := range returned {
+				if err := validateSemanticVector(vector, claim.Profile.Dimension); err != nil {
+					return errEmbeddingProviderReply
+				}
+				for _, position := range inputs[providerBatch.start+index].indexes {
+					vectors[position] = append([]float32(nil), vector...)
+				}
+			}
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return nil, err
 	}
 	for _, vector := range vectors {
 		if err := validateSemanticVector(vector, claim.Profile.Dimension); err != nil {
