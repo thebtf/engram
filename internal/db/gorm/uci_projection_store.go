@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
+	"github.com/rs/zerolog/log"
 	ucidomain "github.com/thebtf/engram/internal/uci"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -659,7 +660,7 @@ func (s *UCIProjectionStore) AdmitIndexFrames(ctx context.Context, sourceID, pro
 	}
 	if insertedFactRows >= uciIndexAdmissionAnalyzeThreshold {
 		if err := s.refreshUCIProjectionStatistics(ctx); err != nil {
-			return nil, err
+			log.Warn().Err(err).Int64("inserted_fact_rows", insertedFactRows).Msg("uci index admission statistics refresh failed")
 		}
 	}
 	return admitted, nil
