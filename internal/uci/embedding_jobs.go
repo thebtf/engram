@@ -279,7 +279,7 @@ type EmbeddingWorkerLimits struct {
 func DefaultEmbeddingWorkerLimits() EmbeddingWorkerLimits {
 	return EmbeddingWorkerLimits{
 		CandidatePageSize:     128,
-		ProviderBatchSize:     32,
+		ProviderBatchSize:     128,
 		MaxProviderBatchBytes: 524288,
 		LeaseTTL:              2 * time.Minute,
 		RenewInterval:         30 * time.Second,
