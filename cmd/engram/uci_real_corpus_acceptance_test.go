@@ -279,8 +279,13 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 	var reservations []*uciInstalledAcceptanceReservation
 	activeDaemonPID := 0
 	defer func() {
-		if stopErr := uciStopInstalledAcceptanceDaemon(filepath.Join(request.LocalStateRoot, "temp"), activeDaemonPID); stopErr != nil {
+		stopErr := uciStopInstalledAcceptanceDaemon(filepath.Join(request.LocalStateRoot, "temp"), activeDaemonPID)
+		if stopErr != nil {
 			retErr = errors.Join(retErr, stopErr)
+		} else if activeDaemonPID > 0 {
+			if waitErr := uciWaitInstalledAcceptanceProcessExit(activeDaemonPID, 15*time.Second); waitErr != nil {
+				retErr = errors.Join(retErr, waitErr)
+			}
 		}
 		if installation != nil {
 			if closeErr := installation.Close(); closeErr != nil {
@@ -512,23 +517,41 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 }
 
 func uciWaitForRealCorpusPublication(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection) (uciInstalledAcceptancePublication, error) {
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
 	for {
-		status, err := uciInstalledAcceptanceStatusForSelection(ctx, client, selection)
+		payload, err := uciInstalledAcceptanceStatusTool(ctx, client, map[string]any{
+			"context_handle": selection.contextHandle,
+			"after_barrier": map[string]any{
+				"token":   selection.runID,
+				"wait_ms": uciInstalledAcceptanceBarrierWait(ctx),
+			},
+		})
+		if err != nil {
+			return uciInstalledAcceptancePublication{}, err
+		}
+		status, err := uciDecodeInstalledAcceptanceStatus(payload)
 		if err != nil {
 			return uciInstalledAcceptancePublication{}, err
 		}
 		if status.error != "" {
-			return uciInstalledAcceptancePublication{}, fmt.Errorf("real-corpus index status: %s", uciInstalledAcceptanceSafeErrorDetail(status.error))
+			return uciInstalledAcceptancePublication{}, fmt.Errorf("real-corpus target index status: %s", uciInstalledAcceptanceSafeErrorDetail(status.error))
 		}
 		if status.status == "idle" && status.runID == selection.runID && status.context != nil && status.context.viewID != "" {
-			return uciWaitForInstalledAcceptanceBarrier(ctx, client, selection)
+			publication, err := uciInstalledAcceptanceStatusPublication(status, selection)
+			if err != nil {
+				return uciInstalledAcceptancePublication{}, err
+			}
+			if status.freshness == nil || status.freshness.barrier == nil || status.freshness.barrier.state != "satisfied" {
+				return uciInstalledAcceptancePublication{}, errors.New("real-corpus target barrier was not satisfied")
+			}
+			publication.freshnessState = status.freshness.state
+			publication.barrierState = status.freshness.barrier.state
+			publication.evidenceRecorder = status.evidenceRecorder.state
+			return publication, nil
 		}
 		select {
 		case <-ctx.Done():
 			return uciInstalledAcceptancePublication{}, ctx.Err()
-		case <-ticker.C:
+		case <-time.After(250 * time.Millisecond):
 		}
 	}
 }
