@@ -762,7 +762,7 @@ func uciRealCorpusCapacityPartSequenceDigest(acks []uci.IndexPartAck) (string, e
 	if err != nil {
 		return "", errors.New("real-corpus capacity part sequence digest failed")
 	}
-	return uciRealCorpusSHA256(encoded), nil
+	return strings.TrimPrefix(uciRealCorpusSHA256(encoded), "sha256:"), nil
 }
 
 func uciRealCorpusCapacityBareIndexDigest(value uci.IndexDigest) (string, error) {
@@ -1572,6 +1572,17 @@ func uciRealCorpusStageInvocation(args []string) bool {
 		return seenStage && seenNUL
 	}
 	return false
+}
+
+func TestUCIRealCorpusCapacityPartSequenceDigestIsReceiptSafe(t *testing.T) {
+	partDigest := uci.IndexDigest(uciRealCorpusSHA256([]byte("part")))
+	digest, err := uciRealCorpusCapacityPartSequenceDigest([]uci.IndexPartAck{{Sequence: 0, Digest: partDigest}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !uciInstalledAcceptanceIsSHA256(digest) {
+		t.Fatalf("capacity receipt digest = %q, want bare SHA-256", digest)
+	}
 }
 
 func TestUCIRealCorpusFrozenManifestSeparatesCanaryDelta(t *testing.T) {
