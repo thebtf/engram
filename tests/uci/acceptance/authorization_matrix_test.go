@@ -302,42 +302,82 @@ func TestUCIAuthorizationMatrix(t *testing.T) {
 		fixture.requireRecorderHealth(t, fixture.clientA, handle, uci.ExposureHealthHealthy, uci.ExposureHealthFailureNone)
 	})
 
-	t.Run("completion remains unknown without a callback and only a verified partial callback appends", func(t *testing.T) {
+	t.Run("U42: callback completes only its authorized exposure", func(t *testing.T) {
 		fixture := newUCIAuthorizationMatrixFixture(t)
 		handle := fixture.selectContext(t, fixture.clientA, fixture.refA)
-		payload := fixture.requireQueryResponse(t, fixture.invoke(t, fixture.clientA, "completion-parent", "search", handle))
-		fixture.requireUnknownExposure(t, payload)
-		fixture.requireScopedExposure(t, fixture.refA, payload)
+		first := fixture.requireQueryResponse(t, fixture.invoke(t, fixture.clientA, "completion-first", "search", handle))
+		fixture.requireUnknownExposure(t, first)
+		fixture.requireScopedExposure(t, fixture.refA, first)
 
-		callback := uciAuthorizationCallback(payload.Exposure.ExposureRef, "completion-exact")
+		second := fixture.requireQueryResponse(t, fixture.invoke(t, fixture.clientA, "completion-sibling", "search", handle))
+		fixture.requireUnknownExposure(t, second)
+		if got := fixture.store.exposureCount(); got != 2 {
+			t.Fatalf("completion exposure rows = %d, want 2", got)
+		}
+		fixture.requireEachExposureScoped(t, fixture.refA)
+
+		if err := fixture.server.RecordUCICompletion(fixture.clientA, uciAuthorizationCallback(first.Exposure.ExposureRef, "completion-first")); err != nil {
+			t.Fatalf("verified partial callback: %v", err)
+		}
+		fixture.requireOneCompletion(t, first.Exposure.ExposureRef, "partial")
+		if got := fixture.store.completionState(first.Exposure.ExposureRef); got != uci.QueryCompletionPartial {
+			t.Fatalf("first durable completion state = %q, want partial", got)
+		}
+		if got := fixture.store.completionState(second.Exposure.ExposureRef); got != uci.QueryCompletionUnknown {
+			t.Fatalf("sibling durable completion state = %q, want unknown without a callback", got)
+		}
+		if got := fixture.store.completionCount(); got != 1 {
+			t.Fatalf("durable completion children = %d, want only the first callback child", got)
+		}
+	})
+
+	t.Run("U45: completion mismatch preserves durable partial child and state", func(t *testing.T) {
+		fixture := newUCIAuthorizationMatrixFixture(t)
+		handle := fixture.selectContext(t, fixture.clientA, fixture.refA)
+		parent := fixture.requireQueryResponse(t, fixture.invoke(t, fixture.clientA, "completion-parent", "search", handle))
+		fixture.requireUnknownExposure(t, parent)
+		fixture.requireScopedExposure(t, fixture.refA, parent)
+
+		callback := uciAuthorizationCallback(parent.Exposure.ExposureRef, "completion-exact")
 		if err := fixture.server.RecordUCICompletion(fixture.clientA, callback); err != nil {
 			t.Fatalf("verified partial callback: %v", err)
 		}
 		if err := fixture.server.RecordUCICompletion(fixture.clientA, callback); err != nil {
 			t.Fatalf("exact completion retry: %v", err)
 		}
-		fixture.requireOneCompletion(t, payload.Exposure.ExposureRef, "partial")
+		fixture.requireOneCompletion(t, parent.Exposure.ExposureRef, "partial")
 		if got := fixture.store.completionAttemptsCount(); got != 2 {
 			t.Fatalf("completion append attempts = %d, want 2", got)
 		}
-		if payload.Exposure.CompletionState != uci.QueryCompletionUnknown {
-			t.Fatalf("original query completion state = %q, want unknown", payload.Exposure.CompletionState)
+		childBefore := fixture.store.completionsSnapshot()[0]
+		stateBefore := fixture.store.completionState(parent.Exposure.ExposureRef)
+		if stateBefore != uci.QueryCompletionPartial {
+			t.Fatalf("durable completion state before mismatch = %q, want partial", stateBefore)
 		}
-
+		countBefore := fixture.store.completionCount()
 		before := fixture.health.Snapshot()
+
 		mismatch := callback
 		mismatch.Outcome = "failed"
 		err := fixture.server.RecordUCICompletion(fixture.clientA, mismatch)
 		if !errors.Is(err, uci.ErrIdempotencyMismatch) {
 			t.Fatalf("completion mismatch error = %v, want IDEMPOTENCY_MISMATCH", err)
 		}
-		if got := fixture.store.completionCount(); got != 1 {
-			t.Fatalf("completion mismatch rows = %d, want 1", got)
+		fixture.requireClosedNoDisclosure(t, err.Error())
+		fixture.requireOneCompletion(t, parent.Exposure.ExposureRef, "partial")
+		if got := fixture.store.completionState(parent.Exposure.ExposureRef); got != stateBefore {
+			t.Fatalf("durable completion state after mismatch = %q, want unchanged %q", got, stateBefore)
+		}
+		if got := fixture.store.completionCount(); got != countBefore {
+			t.Fatalf("durable completion child count after mismatch = %d, want unchanged %d", got, countBefore)
+		}
+		childrenAfter := fixture.store.completionsSnapshot()
+		if len(childrenAfter) != 1 || childrenAfter[0] != childBefore {
+			t.Fatalf("durable completion child after mismatch = %#v, want unchanged %#v", childrenAfter, childBefore)
 		}
 		if after := fixture.health.Snapshot(); after != before {
 			t.Fatalf("completion mismatch health = %#v, want unchanged %#v", after, before)
 		}
-		fixture.requireClosedNoDisclosure(t, err.Error())
 	})
 
 	t.Run("completion append failure changes only callback health and preserves parent", func(t *testing.T) {
@@ -1293,6 +1333,17 @@ func (store *uciAuthorizationExposureStore) completionsSnapshot() []uci.Completi
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	return append([]uci.CompletionEvidence(nil), store.completions...)
+}
+
+func (store *uciAuthorizationExposureStore) completionState(exposureRef string) uci.QueryCompletionState {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for _, record := range store.completions {
+		if record.ExposureRef == exposureRef {
+			return uci.QueryCompletionState(record.Outcome)
+		}
+	}
+	return uci.QueryCompletionUnknown
 }
 
 func (store *uciAuthorizationExposureStore) exposureCount() int {

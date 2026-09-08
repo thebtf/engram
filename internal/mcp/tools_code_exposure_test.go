@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/thebtf/engram/internal/uci"
@@ -149,5 +150,42 @@ func TestUCICompletionAcceptsVerifiedCallbackAndKeepsMismatchClosed(t *testing.T
 	mismatch.Outcome = uci.CompletionFailed
 	if err := fixture.server.RecordUCICompletion(context.Background(), mismatch); !errors.Is(err, uci.ErrIdempotencyMismatch) {
 		t.Fatalf("RecordUCICompletion() changed callback error = %v, want %v", err, uci.ErrIdempotencyMismatch)
+	}
+}
+
+func TestUCINilExposureRecorderSuppressesAuthorizedResultAndReportsUnavailable(t *testing.T) {
+	fixture := newUCICodeIntelCompatibilityFixture(t)
+	handle := fixture.selectContext(t, fixture.clientA, fixture.refA)
+	fixture.server.SetUCIExposureRecorder(nil)
+
+	response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", uciCodeIntelCompatibilitySearchArguments(handle, uciCodeIntelCompatibilityProject, 10))
+	text := uciCodeIntelToolText(t, response)
+	var payload uci.QueryResponse
+	require.NoError(t, json.Unmarshal([]byte(text), &payload))
+	require.NoError(t, payload.Validate())
+	require.Equal(t, uci.QueryStatusUnavailable, payload.Status)
+	require.NotNil(t, payload.Error)
+	require.Equal(t, uci.QueryErrorExposureUnavailable, payload.Error.Code)
+	require.Nil(t, payload.Exposure)
+	require.Nil(t, payload.Contexts)
+	require.Nil(t, payload.Freshness)
+	require.Nil(t, payload.Retrieval)
+	require.Nil(t, payload.Coverage)
+	require.Nil(t, payload.Items)
+	require.Nil(t, payload.Graph)
+	require.Nil(t, payload.Truncated)
+	require.Nil(t, payload.Warnings)
+	require.Nil(t, payload.Continuation)
+	requireUCICodeIntelNoLeaks(t, text, fixture)
+	require.Len(t, fixture.application.searchCalls, 1, "the authorized application result must not be released without durable exposure evidence")
+	require.Zero(t, fixture.exposureStore.exposureCount())
+
+	status := requireUCICodeIntelStatus(t, callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_status", map[string]any{
+		"context_handle": handle,
+	}), fixture.refA, 17, 11, "unavailable", "EXPOSURE_UNAVAILABLE")
+	encodedStatus, err := json.Marshal(status)
+	require.NoError(t, err)
+	for _, forbidden := range []string{uciCodeIntelCompatibilityBodyA, uciCodeIntelCompatibilityBodyB, "private_locator"} {
+		assert.NotContains(t, string(encodedStatus), forbidden)
 	}
 }
