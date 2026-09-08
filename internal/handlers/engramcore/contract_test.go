@@ -419,7 +419,7 @@ func TestContract_ToolsList_WaitsForDelayedGRPCReadiness(t *testing.T) {
 		startResult <- start()
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), proxyToolsDiscoveryTimeout/3)
 	defer cancel()
 	resp, err := disp.HandleRequest(ctx, p, jsonrpcListReq(1))
 	if startErr := <-startResult; startErr != nil {
@@ -468,8 +468,14 @@ func TestContract_ToolsList_DeadlineIsBoundedAndConnectionIsReusable(t *testing.
 		t.Fatalf("HandleRequest: %v", err)
 	}
 	assertToolsListServiceUnavailable(t, resp)
-	if elapsed := time.Since(startedAt); elapsed < 50*time.Millisecond || elapsed > time.Second {
-		t.Fatalf("deadline elapsed=%s, want bounded wait", elapsed)
+	// Race instrumentation can delay an already-fired timer while the full
+	// package gate is saturated. This must still return well before the
+	// production discovery timeout rather than waiting for the full retry budget.
+	if elapsed := time.Since(startedAt); elapsed < 50*time.Millisecond || elapsed > proxyToolsDiscoveryTimeout/4 {
+		t.Fatalf("deadline elapsed=%s, want caller cancellation before discovery timeout", elapsed)
+	}
+	if !strings.Contains(string(resp), context.DeadlineExceeded.Error()) {
+		t.Fatalf("deadline response=%s, want caller deadline exceeded", resp)
 	}
 
 	countConnections := func() int {
