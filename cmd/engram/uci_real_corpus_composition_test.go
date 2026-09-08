@@ -15,6 +15,10 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/privacy"
@@ -22,11 +26,13 @@ import (
 )
 
 const (
-	uciRealCorpusCompositionSchemaVersion   = "engram.uci-real-corpus-composition/v2"
-	uciRealCorpusPreparedMembershipMode     = "unknown"
-	uciRealCorpusScannerModeUnavailable     = "unavailable"
-	uciRealCorpusUnsupportedCapabilityCause = "unsupported_capability"
-	uciRealCorpusUnreadableCause            = "unreadable"
+	uciRealCorpusCompositionSchemaVersion         = "engram.uci-real-corpus-composition/v2"
+	uciRealCorpusPreparedMembershipMode           = "unknown"
+	uciRealCorpusScannerModeUnavailable           = "unavailable"
+	uciRealCorpusUnsupportedCapabilityCause       = "unsupported_capability"
+	uciRealCorpusUnreadableCause                  = "unreadable"
+	uciRealCorpusCapacityLegacyPartBytes    int64 = 1 << 20
+	uciRealCorpusCapacityLegacyBuildBytes   int64 = 16 << 20
 )
 
 var uciRealCorpusCompositionProtectedPaths = [...]string{
@@ -118,6 +124,44 @@ type uciRealCorpusPackedPartCapacity struct {
 	ConfiguredMaxPartCount      uint64 `json:"configured_max_packed_part_count"`
 	ConfiguredMaxTotalBytes     uint64 `json:"configured_max_total_encoded_bytes"`
 	ConfiguredMaxPartBytes      uint64 `json:"configured_max_encoded_part_bytes"`
+}
+
+// uciRealCorpusCapacityRecovery is a receipt-safe real-store proof that a
+// fragmented full corpus can recover without changing the accepted View.
+type uciRealCorpusCapacityRecovery struct {
+	FullCorpusFragmented              bool   `json:"full_corpus_fragmented"`
+	LegacyPartLimitExceeded           bool   `json:"legacy_part_limit_exceeded"`
+	LegacyBuildLimitExceeded          bool   `json:"legacy_build_limit_exceeded"`
+	InterruptedStagingObserved        bool   `json:"interrupted_staging_observed"`
+	ResumedStagingObserved            bool   `json:"resumed_staging_observed"`
+	ExactPartDigestsObserved          bool   `json:"exact_part_digests_observed"`
+	IncompleteFinalizeRejected        bool   `json:"incomplete_finalize_rejected"`
+	ConflictingFinalizeRejected       bool   `json:"conflicting_finalize_rejected"`
+	AtomicFinalizeObserved            bool   `json:"atomic_finalize_observed"`
+	PriorViewPreservedAfterIncomplete bool   `json:"prior_view_preserved_after_incomplete"`
+	PriorViewPreservedAfterConflict   bool   `json:"prior_view_preserved_after_conflict"`
+	SuccessfulFinalizeObserved        bool   `json:"successful_finalize_observed"`
+	AllGuaranteesObserved             bool   `json:"all_guarantees_observed"`
+	SourcePartCount                   uint64 `json:"source_part_count"`
+	SourcePayloadBytes                uint64 `json:"source_payload_bytes"`
+	SourceMaxPartBytes                uint64 `json:"source_max_part_bytes"`
+	LegacyMaxPartBytes                uint64 `json:"legacy_max_part_bytes"`
+	LegacyMaxBuildBytes               uint64 `json:"legacy_max_build_bytes"`
+	QuotaMaxParts                     uint64 `json:"quota_max_parts"`
+	QuotaMaxBuildBytes                uint64 `json:"quota_max_build_bytes"`
+	QuotaMaxPartBytes                 uint64 `json:"quota_max_part_bytes"`
+	InterruptedPartCount              uint64 `json:"interrupted_part_count"`
+	ResumedPartCount                  uint64 `json:"resumed_part_count"`
+	PriorViewCount                    uint64 `json:"prior_view_count"`
+	AfterIncompleteViewCount          uint64 `json:"after_incomplete_view_count"`
+	AfterConflictViewCount            uint64 `json:"after_conflict_view_count"`
+	PublishedViewCount                uint64 `json:"published_view_count"`
+	ReplayViewCount                   uint64 `json:"replay_view_count"`
+	SourcePartsDigest                 string `json:"source_parts_digest"`
+	ResumedPartsDigest                string `json:"resumed_parts_digest"`
+	ManifestDigest                    string `json:"manifest_digest"`
+	PriorViewDigest                   string `json:"prior_view_digest"`
+	PublishedViewDigest               string `json:"published_view_digest"`
 }
 
 type uciRealCorpusFrozenEntry struct {
@@ -373,6 +417,557 @@ func uciVerifyRealCorpusComposition(ctx context.Context, authority *uciInstalled
 		ExcludedCapabilities:        append([]string(nil), uciRealCorpusCompositionExcludedCapabilities[:]...),
 	}
 	return composition, nil
+}
+
+// uciVerifyRealCorpusCapacityRecovery proves the adverse publication path with
+// the real installed-store source parts. All mutation stays inside a rolled-back
+// transaction and fresh clone checkouts, leaving the accepted publication intact.
+func uciVerifyRealCorpusCapacityRecovery(ctx context.Context, authority *uciInstalledAcceptanceAuthority, publication uciInstalledAcceptancePublication, composition uciRealCorpusComposition) (uciRealCorpusCapacityRecovery, error) {
+	if ctx == nil {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity context is required")
+	}
+	if err := uciRealCorpusValidateCompositionAuthority(authority, publication); err != nil {
+		return uciRealCorpusCapacityRecovery{}, err
+	}
+	if authority.token == nil || authority.token.ID == "" {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity authority is incomplete")
+	}
+
+	publicationRow, completion, err := uciRealCorpusLoadCompositionPublication(ctx, authority, publication)
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, err
+	}
+	staged, err := uciRealCorpusLoadStagedBuild(ctx, authority, publicationRow.BuildID)
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, err
+	}
+	if err := uciRealCorpusValidateStagedCompletion(publicationRow, completion, staged); err != nil {
+		return uciRealCorpusCapacityRecovery{}, err
+	}
+	if composition.StagedPartsDigest != staged.partsDigest ||
+		composition.ReconstructedManifestDigest != staged.manifestDigest ||
+		composition.ViewManifestDigest != publicationRow.ViewManifestDigest ||
+		composition.MembershipCount != uint64(len(staged.memberships)) ||
+		composition.EdgeCount != staged.edgeCount {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity composition does not match the observed publication")
+	}
+
+	parts, sourceAcks, err := uciRealCorpusCapacityLoadParts(ctx, authority, publicationRow.BuildID)
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, err
+	}
+	sourceBuildPartsDigest, err := uci.DigestIndexParts(sourceAcks)
+	if err != nil || string(sourceBuildPartsDigest) != staged.partsDigest || sourceBuildPartsDigest != completion.PartsDigest || uint64(len(parts)) != staged.partCount {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity source parts do not match the sealed publication")
+	}
+	sourcePartsDigest, err := uciRealCorpusCapacityPartSequenceDigest(sourceAcks)
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, err
+	}
+	manifestDigest, err := uciRealCorpusCapacityBareIndexDigest(completion.ManifestDigest)
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, err
+	}
+
+	limits := uci.DefaultIndexPublicationLimits()
+	if limits.LeaseTTL <= 0 || limits.MaxPartBytes <= 0 || limits.MaxParts == 0 || limits.MaxBuildBytes <= 0 || limits.MaxManifestEntries == 0 || limits.MaxEdges == 0 || limits.MaxArtifactBytes <= 0 ||
+		staged.partCount > uint64(limits.MaxParts) || staged.payloadBytes > uint64(limits.MaxBuildBytes) || staged.maxPayloadBytes > uint64(limits.MaxPartBytes) ||
+		uint64(len(staged.memberships)) > limits.MaxManifestEntries || staged.edgeCount > limits.MaxEdges ||
+		composition.Packing.ObservedPartCount != staged.partCount || composition.Packing.ObservedTotalEncodedBytes != staged.payloadBytes || composition.Packing.ObservedMaxEncodedPartBytes != staged.maxPayloadBytes ||
+		composition.Packing.ConfiguredMaxPartCount != uint64(limits.MaxParts) || composition.Packing.ConfiguredMaxTotalBytes != uint64(limits.MaxBuildBytes) || composition.Packing.ConfiguredMaxPartBytes != uint64(limits.MaxPartBytes) {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity limits do not match the observed publication")
+	}
+	if staged.partCount < 2 || staged.payloadBytes <= uint64(uciRealCorpusCapacityLegacyBuildBytes) || staged.maxPayloadBytes <= uint64(uciRealCorpusCapacityLegacyPartBytes) {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity did not require fragmentation beyond legacy bounds")
+	}
+
+	tx := authority.store.GetDB().WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity isolation transaction could not start")
+	}
+	rolledBack := false
+	defer func() {
+		if !rolledBack {
+			_ = tx.Rollback().Error
+		}
+	}()
+
+	contexts := gormdb.NewUCIContextStore(tx)
+	authorizer := gormdb.NewUCIContextAuthorizer(contexts)
+	caller := uci.IndexCaller{
+		AuthRealm:     authority.source.AuthRealm,
+		Principal:     authority.principal,
+		OwnerInstance: "uci-real-corpus-capacity-" + uuid.NewString(),
+	}
+
+	legacyPartCheckout, err := uciRealCorpusCapacityRegisterCheckout(ctx, contexts, authority, "legacy-part-"+uuid.NewString())
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, err
+	}
+	legacyPartLimits := limits
+	legacyPartLimits.MaxPartBytes = uciRealCorpusCapacityLegacyPartBytes
+	legacyPartPublisher, err := gormdb.NewUCIProjectionStore(tx).Publisher(authorizer, uci.IndexPublicationConfig{Limits: legacyPartLimits})
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity legacy part publisher is unavailable")
+	}
+	legacyPartBegin, err := legacyPartPublisher.Begin(ctx, caller, uciRealCorpusCapacityBeginInput("uci-real-corpus-capacity-legacy-part-"+uuid.NewString(), legacyPartCheckout, authority.profile.ProfileID, nil, uci.IndexJobRecovery))
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity legacy part build could not start")
+	}
+	legacyPartFailure, err := uciRealCorpusCapacityObservePartLimitFailure(ctx, legacyPartPublisher, caller, legacyPartBegin.Build, parts, uint64(uciRealCorpusCapacityLegacyPartBytes))
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, err
+	}
+
+	legacyBuildCheckout, err := uciRealCorpusCapacityRegisterCheckout(ctx, contexts, authority, "legacy-build-"+uuid.NewString())
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, err
+	}
+	legacyBuildLimits := limits
+	legacyBuildLimits.MaxBuildBytes = uciRealCorpusCapacityLegacyBuildBytes
+	legacyBuildPublisher, err := gormdb.NewUCIProjectionStore(tx).Publisher(authorizer, uci.IndexPublicationConfig{Limits: legacyBuildLimits})
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity legacy build publisher is unavailable")
+	}
+	legacyBuildBegin, err := legacyBuildPublisher.Begin(ctx, caller, uciRealCorpusCapacityBeginInput("uci-real-corpus-capacity-legacy-build-"+uuid.NewString(), legacyBuildCheckout, authority.profile.ProfileID, nil, uci.IndexJobRecovery))
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity legacy build could not start")
+	}
+	legacyBuildFailure, err := uciRealCorpusCapacityObserveBuildLimitFailure(ctx, legacyBuildPublisher, caller, legacyBuildBegin.Build, parts, uint64(uciRealCorpusCapacityLegacyBuildBytes))
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, err
+	}
+
+	recoveryCheckout, err := uciRealCorpusCapacityRegisterCheckout(ctx, contexts, authority, "recovery-"+uuid.NewString())
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, err
+	}
+	recoveryPublisher, err := gormdb.NewUCIProjectionStore(tx).Publisher(authorizer, uci.IndexPublicationConfig{Limits: limits})
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity recovery publisher is unavailable")
+	}
+	priorBegin, err := recoveryPublisher.Begin(ctx, caller, uciRealCorpusCapacityBeginInput("uci-real-corpus-capacity-prior-"+uuid.NewString(), recoveryCheckout, authority.profile.ProfileID, nil, uci.IndexJobInitial))
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity prior view build could not start")
+	}
+	priorAck, err := uciRealCorpusCapacityStage(ctx, recoveryPublisher, caller, priorBegin.Build, 0, uci.IndexPart{})
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity prior view stage failed")
+	}
+	priorManifest, err := uciRealCorpusCapacityEmptyManifest(priorAck)
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, err
+	}
+	priorPublished, err := recoveryPublisher.Finalize(ctx, caller, uci.IndexFinalizeInput{Build: priorBegin.Build, Manifest: priorManifest})
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity prior view finalize failed")
+	}
+	priorView, err := contexts.GetCurrentView(ctx, recoveryCheckout.CheckoutID)
+	if err != nil || !uciRealCorpusCapacityCurrentMatchesPublished(priorView, priorPublished) {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity prior selected View is unavailable")
+	}
+	priorViewCount, err := uciRealCorpusCapacityViewCount(ctx, tx, recoveryCheckout)
+	if err != nil || priorViewCount != 1 {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity prior View count is invalid")
+	}
+
+	priorContext := priorPublished.Context
+	recoveryInput := uciRealCorpusCapacityBeginInput("uci-real-corpus-capacity-resume-"+uuid.NewString(), recoveryCheckout, authority.profile.ProfileID, &priorContext, uci.IndexJobRecovery)
+	recoveryBegin, err := recoveryPublisher.Begin(ctx, caller, recoveryInput)
+	if err != nil || recoveryBegin.Published != nil {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity recovery build could not start")
+	}
+	expectedAcks, err := uciRealCorpusCapacityAcks(recoveryBegin.Build.BuildID, parts)
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, err
+	}
+	expectedPartsDigest, err := uci.DigestIndexParts(expectedAcks)
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity recovery parts digest failed")
+	}
+	recoveryManifest := completion
+	recoveryManifest.PartsDigest = expectedPartsDigest
+
+	interruptedPartCount := len(parts) / 2
+	if interruptedPartCount == 0 || interruptedPartCount >= len(parts) {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity interruption boundary is invalid")
+	}
+	actualAcks := make([]uci.IndexPartAck, 0, len(parts))
+	for sequence := range interruptedPartCount {
+		ack, stageErr := uciRealCorpusCapacityStage(ctx, recoveryPublisher, caller, recoveryBegin.Build, uint32(sequence), parts[sequence])
+		if stageErr != nil || ack != expectedAcks[sequence] {
+			return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity interrupted stage did not retain the exact part digest")
+		}
+		actualAcks = append(actualAcks, ack)
+	}
+	if _, finalizeErr := recoveryPublisher.Finalize(ctx, caller, uci.IndexFinalizeInput{Build: recoveryBegin.Build, ExpectedParent: &priorContext, Manifest: recoveryManifest}); finalizeErr == nil {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity incomplete finalize published a View")
+	}
+	afterIncompleteView, err := contexts.GetCurrentView(ctx, recoveryCheckout.CheckoutID)
+	afterIncompleteViewCount, countErr := uciRealCorpusCapacityViewCount(ctx, tx, recoveryCheckout)
+	if err != nil || countErr != nil || afterIncompleteViewCount != priorViewCount || !uciRealCorpusCapacitySameView(priorView, afterIncompleteView) {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity incomplete finalize changed the selected View")
+	}
+
+	resumedPublisher, err := gormdb.NewUCIProjectionStore(tx).Publisher(authorizer, uci.IndexPublicationConfig{Limits: limits})
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity resumed publisher is unavailable")
+	}
+	resumedBegin, err := resumedPublisher.Begin(ctx, caller, recoveryInput)
+	if err != nil || resumedBegin.Build != recoveryBegin.Build || resumedBegin.Published != nil {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity staged build did not resume")
+	}
+	replayedAck, err := uciRealCorpusCapacityStage(ctx, resumedPublisher, caller, resumedBegin.Build, 0, parts[0])
+	if err != nil || replayedAck != actualAcks[0] {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity resumed stage did not replay the exact part digest")
+	}
+	for sequence := interruptedPartCount; sequence < len(parts); sequence++ {
+		ack, stageErr := uciRealCorpusCapacityStage(ctx, resumedPublisher, caller, resumedBegin.Build, uint32(sequence), parts[sequence])
+		if stageErr != nil || ack != expectedAcks[sequence] {
+			return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity resumed stage did not retain the exact part digest")
+		}
+		actualAcks = append(actualAcks, ack)
+	}
+	resumedPartsDigest, err := uciRealCorpusCapacityPartSequenceDigest(actualAcks)
+	if err != nil || !uciRealCorpusCapacitySameAcks(expectedAcks, actualAcks) || sourcePartsDigest != resumedPartsDigest || legacyPartFailure >= len(actualAcks) || legacyBuildFailure >= len(actualAcks) {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity resumed part digests are not exact")
+	}
+
+	conflictingManifest := recoveryManifest
+	conflictingManifest.PartsDigest, err = uciRealCorpusCapacityConflictingDigest(recoveryManifest.PartsDigest)
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, err
+	}
+	if _, finalizeErr := resumedPublisher.Finalize(ctx, caller, uci.IndexFinalizeInput{Build: resumedBegin.Build, ExpectedParent: &priorContext, Manifest: conflictingManifest}); finalizeErr == nil {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity conflicting finalize published a View")
+	}
+	afterConflictView, err := contexts.GetCurrentView(ctx, recoveryCheckout.CheckoutID)
+	afterConflictViewCount, countErr := uciRealCorpusCapacityViewCount(ctx, tx, recoveryCheckout)
+	if err != nil || countErr != nil || afterConflictViewCount != priorViewCount || !uciRealCorpusCapacitySameView(priorView, afterConflictView) {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity conflicting finalize changed the selected View")
+	}
+
+	published, err := resumedPublisher.Finalize(ctx, caller, uci.IndexFinalizeInput{Build: resumedBegin.Build, ExpectedParent: &priorContext, Manifest: recoveryManifest})
+	if err != nil {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity resumed finalize failed")
+	}
+	publishedView, err := contexts.GetCurrentView(ctx, recoveryCheckout.CheckoutID)
+	publishedViewCount, countErr := uciRealCorpusCapacityViewCount(ctx, tx, recoveryCheckout)
+	if err != nil || countErr != nil || publishedViewCount != priorViewCount+1 || !uciRealCorpusCapacityCurrentMatchesPublished(publishedView, published) {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity finalize was not atomic")
+	}
+	replayedPublished, err := resumedPublisher.Finalize(ctx, caller, uci.IndexFinalizeInput{Build: resumedBegin.Build, ExpectedParent: &priorContext, Manifest: recoveryManifest})
+	if err != nil || !uciRealCorpusCapacitySamePublished(published, replayedPublished) {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity finalize did not replay one publication")
+	}
+	replayView, err := contexts.GetCurrentView(ctx, recoveryCheckout.CheckoutID)
+	replayViewCount, countErr := uciRealCorpusCapacityViewCount(ctx, tx, recoveryCheckout)
+	if err != nil || countErr != nil || replayViewCount != publishedViewCount || !uciRealCorpusCapacityCurrentMatchesPublished(replayView, published) {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity finalize replay changed the selected View")
+	}
+
+	result := uciRealCorpusCapacityRecovery{
+		FullCorpusFragmented:              true,
+		LegacyPartLimitExceeded:           true,
+		LegacyBuildLimitExceeded:          true,
+		InterruptedStagingObserved:        true,
+		ResumedStagingObserved:            true,
+		ExactPartDigestsObserved:          true,
+		IncompleteFinalizeRejected:        true,
+		ConflictingFinalizeRejected:       true,
+		AtomicFinalizeObserved:            true,
+		PriorViewPreservedAfterIncomplete: true,
+		PriorViewPreservedAfterConflict:   true,
+		SuccessfulFinalizeObserved:        true,
+		SourcePartCount:                   uint64(len(parts)),
+		SourcePayloadBytes:                staged.payloadBytes,
+		SourceMaxPartBytes:                staged.maxPayloadBytes,
+		LegacyMaxPartBytes:                uint64(uciRealCorpusCapacityLegacyPartBytes),
+		LegacyMaxBuildBytes:               uint64(uciRealCorpusCapacityLegacyBuildBytes),
+		QuotaMaxParts:                     uint64(limits.MaxParts),
+		QuotaMaxBuildBytes:                uint64(limits.MaxBuildBytes),
+		QuotaMaxPartBytes:                 uint64(limits.MaxPartBytes),
+		InterruptedPartCount:              uint64(interruptedPartCount),
+		ResumedPartCount:                  uint64(len(actualAcks)),
+		PriorViewCount:                    priorViewCount,
+		AfterIncompleteViewCount:          afterIncompleteViewCount,
+		AfterConflictViewCount:            afterConflictViewCount,
+		PublishedViewCount:                publishedViewCount,
+		ReplayViewCount:                   replayViewCount,
+		SourcePartsDigest:                 sourcePartsDigest,
+		ResumedPartsDigest:                resumedPartsDigest,
+		ManifestDigest:                    manifestDigest,
+		PriorViewDigest:                   uciInstalledAcceptanceStringDigest(priorView.ViewID),
+		PublishedViewDigest:               uciInstalledAcceptanceStringDigest(publishedView.ViewID),
+	}
+	result.AllGuaranteesObserved = result.FullCorpusFragmented && result.LegacyPartLimitExceeded && result.LegacyBuildLimitExceeded &&
+		result.InterruptedStagingObserved && result.ResumedStagingObserved && result.ExactPartDigestsObserved &&
+		result.IncompleteFinalizeRejected && result.ConflictingFinalizeRejected && result.AtomicFinalizeObserved &&
+		result.PriorViewPreservedAfterIncomplete && result.PriorViewPreservedAfterConflict && result.SuccessfulFinalizeObserved
+	if !result.AllGuaranteesObserved || result.PriorViewDigest == result.PublishedViewDigest {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity guarantees were not all observed")
+	}
+	if rollbackErr := tx.Rollback().Error; rollbackErr != nil {
+		return uciRealCorpusCapacityRecovery{}, errors.New("real-corpus capacity isolation transaction could not roll back")
+	}
+	rolledBack = true
+	return result, nil
+}
+
+func uciRealCorpusCapacityLoadParts(ctx context.Context, authority *uciInstalledAcceptanceAuthority, buildID string) ([]uci.IndexPart, []uci.IndexPartAck, error) {
+	rows := make([]gormdb.UCIIndexBuildPart, 0)
+	if query := authority.store.GetDB().WithContext(ctx).Where("build_id = ?", buildID).Order("sequence ASC").Find(&rows); query.Error != nil || len(rows) == 0 {
+		return nil, nil, errors.New("real-corpus capacity source parts are unavailable")
+	}
+	parts := make([]uci.IndexPart, 0, len(rows))
+	acks := make([]uci.IndexPartAck, 0, len(rows))
+	for sequence, row := range rows {
+		if row.Sequence != uint32(sequence) || row.PayloadBytes < 0 || !uciRealCorpusCompositionDigest(row.PartDigest) {
+			return nil, nil, errors.New("real-corpus capacity source part is invalid")
+		}
+		var part uci.IndexPart
+		if err := json.Unmarshal([]byte(row.Payload), &part); err != nil {
+			return nil, nil, errors.New("real-corpus capacity source part is invalid")
+		}
+		encoded, err := json.Marshal(part)
+		if err != nil || int64(len(encoded)) != row.PayloadBytes {
+			return nil, nil, errors.New("real-corpus capacity source part bytes are invalid")
+		}
+		digest, err := uci.DigestIndexPart(part)
+		if err != nil || string(digest) != row.PartDigest {
+			return nil, nil, errors.New("real-corpus capacity source part digest is invalid")
+		}
+		parts = append(parts, part)
+		acks = append(acks, uci.IndexPartAck{BuildID: buildID, Sequence: row.Sequence, Digest: digest})
+	}
+	return parts, acks, nil
+}
+
+func uciRealCorpusCapacityPartSequenceDigest(acks []uci.IndexPartAck) (string, error) {
+	if len(acks) == 0 {
+		return "", errors.New("real-corpus capacity part sequence is empty")
+	}
+	type digestEntry struct {
+		Sequence uint32 `json:"sequence"`
+		Digest   string `json:"digest"`
+	}
+	entries := make([]digestEntry, 0, len(acks))
+	for sequence, ack := range acks {
+		if ack.Sequence != uint32(sequence) || !uciRealCorpusCompositionDigest(string(ack.Digest)) {
+			return "", errors.New("real-corpus capacity part sequence is invalid")
+		}
+		entries = append(entries, digestEntry{Sequence: ack.Sequence, Digest: string(ack.Digest)})
+	}
+	encoded, err := json.Marshal(entries)
+	if err != nil {
+		return "", errors.New("real-corpus capacity part sequence digest failed")
+	}
+	return uciRealCorpusSHA256(encoded), nil
+}
+
+func uciRealCorpusCapacityBareIndexDigest(value uci.IndexDigest) (string, error) {
+	digest := string(value)
+	if !uciRealCorpusCompositionDigest(digest) {
+		return "", errors.New("real-corpus capacity digest is invalid")
+	}
+	return strings.TrimPrefix(digest, "sha256:"), nil
+}
+
+func uciRealCorpusCapacityRegisterCheckout(ctx context.Context, contexts *gormdb.UCIContextStore, authority *uciInstalledAcceptanceAuthority, label string) (*gormdb.UCICheckout, error) {
+	if contexts == nil || authority == nil || authority.source == nil || authority.token == nil || authority.token.ID == "" || label == "" {
+		return nil, errors.New("real-corpus capacity checkout authority is incomplete")
+	}
+	checkout, err := contexts.RegisterCheckout(ctx, gormdb.RegisterCheckoutInput{
+		SourceID:       authority.source.SourceID,
+		WorkstationID:  authority.token.ID,
+		Kind:           gormdb.UCICheckoutWorkingTree,
+		OwnerPrincipal: authority.principal,
+		LocatorRef:     "file:///uci-real-corpus-capacity/" + label,
+	})
+	if err != nil {
+		return nil, errors.New("real-corpus capacity checkout registration failed")
+	}
+	return checkout, nil
+}
+
+func uciRealCorpusCapacityBeginInput(buildKey string, checkout *gormdb.UCICheckout, profileID string, parent *uci.ContextRef, kind uci.IndexJobKind) uci.IndexBeginInput {
+	return uci.IndexBeginInput{
+		BuildKey: buildKey,
+		Scope: uci.IndexScope{
+			SourceID:      checkout.SourceID,
+			CheckoutID:    checkout.CheckoutID,
+			IncarnationID: checkout.IncarnationID,
+		},
+		ProfileID:      profileID,
+		ExpectedParent: parent,
+		Mode:           uci.IndexManifestFull,
+		JobKind:        kind,
+	}
+}
+
+func uciRealCorpusCapacityAcks(buildID string, parts []uci.IndexPart) ([]uci.IndexPartAck, error) {
+	if buildID == "" || len(parts) == 0 {
+		return nil, errors.New("real-corpus capacity acknowledgements are unavailable")
+	}
+	acks := make([]uci.IndexPartAck, 0, len(parts))
+	for sequence, part := range parts {
+		digest, err := uci.DigestIndexPart(part)
+		if err != nil {
+			return nil, errors.New("real-corpus capacity part digest failed")
+		}
+		acks = append(acks, uci.IndexPartAck{BuildID: buildID, Sequence: uint32(sequence), Digest: digest})
+	}
+	return acks, nil
+}
+
+func uciRealCorpusCapacityStage(ctx context.Context, publisher uci.IndexStore, caller uci.IndexCaller, build uci.IndexBuildRef, sequence uint32, part uci.IndexPart) (uci.IndexPartAck, error) {
+	digest, err := uci.DigestIndexPart(part)
+	if err != nil {
+		return uci.IndexPartAck{}, err
+	}
+	return publisher.Stage(ctx, caller, uci.IndexStageInput{Build: build, Sequence: sequence, Digest: digest, Part: part})
+}
+
+func uciRealCorpusCapacityObservePartLimitFailure(ctx context.Context, publisher uci.IndexStore, caller uci.IndexCaller, build uci.IndexBuildRef, parts []uci.IndexPart, limit uint64) (int, error) {
+	if limit == 0 {
+		return 0, errors.New("real-corpus capacity legacy part limit is invalid")
+	}
+	for sequence, part := range parts {
+		payloadBytes, err := uciRealCorpusCapacityPartBytes(part)
+		if err != nil {
+			return 0, err
+		}
+		if payloadBytes > limit {
+			if _, stageErr := uciRealCorpusCapacityStage(ctx, publisher, caller, build, uint32(sequence), part); stageErr == nil {
+				return 0, errors.New("real-corpus capacity legacy part limit accepted an oversized part")
+			}
+			return sequence, nil
+		}
+		if _, stageErr := uciRealCorpusCapacityStage(ctx, publisher, caller, build, uint32(sequence), part); stageErr != nil {
+			return 0, errors.New("real-corpus capacity legacy part stage failed before its bound")
+		}
+	}
+	return 0, errors.New("real-corpus capacity legacy part limit did not reject the full corpus")
+}
+
+func uciRealCorpusCapacityObserveBuildLimitFailure(ctx context.Context, publisher uci.IndexStore, caller uci.IndexCaller, build uci.IndexBuildRef, parts []uci.IndexPart, limit uint64) (int, error) {
+	if limit == 0 {
+		return 0, errors.New("real-corpus capacity legacy build limit is invalid")
+	}
+	var total uint64
+	for sequence, part := range parts {
+		payloadBytes, err := uciRealCorpusCapacityPartBytes(part)
+		if err != nil || payloadBytes > limit {
+			return 0, errors.New("real-corpus capacity legacy build part is invalid")
+		}
+		if total > limit-payloadBytes {
+			if _, stageErr := uciRealCorpusCapacityStage(ctx, publisher, caller, build, uint32(sequence), part); stageErr == nil {
+				return 0, errors.New("real-corpus capacity legacy build limit accepted an oversized aggregate")
+			}
+			return sequence, nil
+		}
+		if _, stageErr := uciRealCorpusCapacityStage(ctx, publisher, caller, build, uint32(sequence), part); stageErr != nil {
+			return 0, errors.New("real-corpus capacity legacy build stage failed before its bound")
+		}
+		total += payloadBytes
+	}
+	return 0, errors.New("real-corpus capacity legacy build limit did not reject the full corpus")
+}
+
+func uciRealCorpusCapacityPartBytes(part uci.IndexPart) (uint64, error) {
+	encoded, err := json.Marshal(part)
+	if err != nil {
+		return 0, errors.New("real-corpus capacity part encoding failed")
+	}
+	return uint64(len(encoded)), nil
+}
+
+func uciRealCorpusCapacityEmptyManifest(ack uci.IndexPartAck) (uci.IndexManifestCompletion, error) {
+	partsDigest, err := uci.DigestIndexParts([]uci.IndexPartAck{ack})
+	if err != nil {
+		return uci.IndexManifestCompletion{}, err
+	}
+	manifestDigest, err := uci.DigestIndexManifest(nil)
+	if err != nil {
+		return uci.IndexManifestCompletion{}, err
+	}
+	edgesDigest, err := uci.DigestIndexEdges(nil)
+	if err != nil {
+		return uci.IndexManifestCompletion{}, err
+	}
+	started := time.Unix(1, 0).UTC()
+	return uci.IndexManifestCompletion{
+		PartCount:      1,
+		PartsDigest:    partsDigest,
+		ManifestDigest: manifestDigest,
+		EdgesDigest:    edgesDigest,
+		ScanOutcome:    uci.IndexScanComplete,
+		CensusComplete: true,
+		Observation: uci.IndexObservation{
+			ObservedFSSeq: 0,
+			ScanStart:     started,
+			ScanEnd:       started.Add(time.Second),
+		},
+		Coverage: uci.IndexCoverage{
+			Structural: uci.IndexCoverageComplete,
+			Lexical:    uci.IndexCoverageComplete,
+			Vector:     uci.IndexCoverageUnavailable,
+		},
+	}, nil
+}
+
+func uciRealCorpusCapacityViewCount(ctx context.Context, db *gorm.DB, checkout *gormdb.UCICheckout) (uint64, error) {
+	if db == nil || checkout == nil {
+		return 0, errors.New("real-corpus capacity View authority is unavailable")
+	}
+	var count int64
+	if err := db.WithContext(ctx).Model(&gormdb.UCIView{}).Where("source_id = ? AND checkout_id = ? AND incarnation_id = ?", checkout.SourceID, checkout.CheckoutID, checkout.IncarnationID).Count(&count).Error; err != nil || count < 0 {
+		return 0, errors.New("real-corpus capacity View count is unavailable")
+	}
+	return uint64(count), nil
+}
+
+func uciRealCorpusCapacitySameView(left, right *gormdb.UCIView) bool {
+	return left != nil && right != nil && left.ViewID == right.ViewID && left.SourceID == right.SourceID && left.CheckoutID == right.CheckoutID &&
+		left.IncarnationID == right.IncarnationID && left.Generation == right.Generation && left.ProfileID == right.ProfileID &&
+		left.ManifestDigest == right.ManifestDigest && left.State == gormdb.UCIViewPublished && right.State == gormdb.UCIViewPublished
+}
+
+func uciRealCorpusCapacityCurrentMatchesPublished(current *gormdb.UCIView, published uci.IndexPublishedView) bool {
+	return current != nil && current.State == gormdb.UCIViewPublished && current.ViewID == published.Context.ViewID &&
+		current.Generation == published.Context.Generation && current.ManifestDigest == string(published.ManifestDigest)
+}
+
+func uciRealCorpusCapacitySamePublished(left, right uci.IndexPublishedView) bool {
+	return left.BuildID == right.BuildID && left.Context.ViewID == right.Context.ViewID && left.Context.Generation == right.Context.Generation &&
+		left.ManifestDigest == right.ManifestDigest && left.AcceptedFSSeq == right.AcceptedFSSeq && left.PublishedAt.Equal(right.PublishedAt)
+}
+
+func uciRealCorpusCapacitySameAcks(left, right []uci.IndexPartAck) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func uciRealCorpusCapacityConflictingDigest(value uci.IndexDigest) (uci.IndexDigest, error) {
+	digest := string(value)
+	if !uciRealCorpusCompositionDigest(digest) {
+		return "", errors.New("real-corpus capacity conflicting digest is invalid")
+	}
+	bytes := []byte(digest)
+	last := len(bytes) - 1
+	if bytes[last] == '0' {
+		bytes[last] = '1'
+	} else {
+		bytes[last] = '0'
+	}
+	return uci.IndexDigest(string(bytes)), nil
 }
 
 func uciRealCorpusFrozenMembershipState(file uci.ScannerFile) (uci.IndexFileState, string, error) {

@@ -12,38 +12,62 @@ const (
 	uciRealCorpusNativeGraphSourcePath       = "plugin/openclaw-engram/src/index.ts"
 	uciRealCorpusNativeGraphTargetPath       = "plugin/openclaw-engram/src/client.ts"
 	uciRealCorpusNativeGraphTargetSymbol     = "class:EngramRestClient"
+	uciRealCorpusNativeGraphTypeScript       = "typescript"
+	uciRealCorpusNativeGraphTSX              = "tsx"
+	uciRealCorpusNativeGraphBuildSymbol      = "function:build"
+	uciRealCorpusNativeGraphWidgetSymbol     = "function:Widget"
+	uciRealCorpusNativeGraphCallerPath       = uciRealCorpusTSRoot + "/caller.ts"
+	uciRealCorpusNativeGraphBridgePath       = uciRealCorpusTSRoot + "/bridge.ts"
+	uciRealCorpusNativeGraphRemotePath       = uciRealCorpusTSRoot + "/remote.ts"
+	uciRealCorpusNativeGraphScreenPath       = uciRealCorpusTSRoot + "/screen.tsx"
+	uciRealCorpusNativeGraphWidgetPath       = uciRealCorpusTSRoot + "/widget.tsx"
 	uciRealCorpusNativeGraphResolverRevision = "uci-prepared-tree-sitter-module/v1"
 	uciRealCorpusNativeGraphRuleKey          = "tree-sitter-module-alias/v1"
 )
 
 type uciRealCorpusNativeGraph struct {
-	Import            uciRealCorpusNativeGraphEdge `json:"import"`
-	ImportAlias       uciRealCorpusNativeGraphEdge `json:"import_alias"`
-	Reexport          uciRealCorpusNativeGraphEdge `json:"reexport"`
-	ReverseDependency uciRealCorpusNativeGraphEdge `json:"reverse_dependency"`
+	Import                            uciRealCorpusNativeGraphEdge `json:"import"`
+	ImportAlias                       uciRealCorpusNativeGraphEdge `json:"import_alias"`
+	Reexport                          uciRealCorpusNativeGraphEdge `json:"reexport"`
+	ReverseDependency                 uciRealCorpusNativeGraphEdge `json:"reverse_dependency"`
+	CallerLocalBuildAlias             uciRealCorpusNativeGraphEdge `json:"caller_local_build_alias"`
+	BridgePublicBuildReexport         uciRealCorpusNativeGraphEdge `json:"bridge_public_build_reexport"`
+	ScreenRemoteWidgetAlias           uciRealCorpusNativeGraphEdge `json:"screen_remote_widget_alias"`
+	CallerLocalBuildReverseDependency uciRealCorpusNativeGraphEdge `json:"caller_local_build_reverse_dependency"`
 }
 
 type uciRealCorpusNativeGraphEdge struct {
-	SourcePath     string `json:"source_path"`
-	TargetPath     string `json:"target_path"`
-	Relation       string `json:"relation"`
-	ByteStart      int64  `json:"byte_start"`
-	ByteEnd        int64  `json:"byte_end"`
-	LineStart      int    `json:"line_start"`
-	LineEnd        int    `json:"line_end"`
-	SourceDigest   string `json:"source_digest"`
-	TargetDigest   string `json:"target_digest"`
-	EdgeDigest     string `json:"edge_digest"`
-	EvidenceDigest string `json:"evidence_digest"`
+	SourcePath             string `json:"source_path"`
+	TargetPath             string `json:"target_path"`
+	Relation               string `json:"relation"`
+	TargetSymbol           string `json:"target_symbol"`
+	ReferenceKind          string `json:"reference_kind"`
+	ByteStart              int64  `json:"byte_start"`
+	ByteEnd                int64  `json:"byte_end"`
+	LineStart              int    `json:"line_start"`
+	LineEnd                int    `json:"line_end"`
+	SourceDigest           string `json:"source_digest"`
+	TargetDigest           string `json:"target_digest"`
+	TargetArtifactDigest   string `json:"target_artifact_digest"`
+	TargetDefinitionDigest string `json:"target_definition_digest"`
+	RawTargetDigest        string `json:"raw_target_digest"`
+	LocalAliasDigest       string `json:"local_alias_digest"`
+	EdgeDigest             string `json:"edge_digest"`
+	EvidenceDigest         string `json:"evidence_digest"`
 }
 
 type uciRealCorpusNativeGraphExpectation struct {
-	kind         string
-	relation     string
-	sourcePath   string
-	targetPath   string
-	targetSymbol string
-	rawTarget    string
+	kind           string
+	relation       string
+	sourceLanguage string
+	targetLanguage string
+	sourcePath     string
+	targetPath     string
+	targetSymbol   string
+	rawTarget      string
+	importedSymbol string
+	localAlias     string
+	referenceKey   string
 }
 
 type uciRealCorpusNativeGraphRow struct {
@@ -56,6 +80,7 @@ type uciRealCorpusNativeGraphRow struct {
 	EvidenceKind           string `gorm:"column:evidence_kind"`
 	ResolutionState        string `gorm:"column:resolution_state"`
 	ResolverRevision       string `gorm:"column:resolver_revision"`
+	TargetArtifactID       string `gorm:"column:target_artifact_id"`
 	SourceContentDigest    string `gorm:"column:source_content_digest"`
 	TargetContentDigest    string `gorm:"column:target_content_digest"`
 	SourceBody             []byte `gorm:"column:source_body"`
@@ -101,13 +126,22 @@ func uciVerifyRealCorpusNativeGraph(ctx context.Context, authority *uciInstalled
 	}
 
 	importExpectation := uciRealCorpusNativeGraphExpectation{
-		kind: "import", relation: "imports", sourcePath: uciRealCorpusNativeGraphSourcePath, targetPath: uciRealCorpusNativeGraphTargetPath,
+		kind: "import", relation: "imports", sourceLanguage: uciRealCorpusNativeGraphTypeScript, targetLanguage: uciRealCorpusNativeGraphTypeScript, sourcePath: uciRealCorpusNativeGraphSourcePath, targetPath: uciRealCorpusNativeGraphTargetPath,
 	}
 	importAliasExpectation := uciRealCorpusNativeGraphExpectation{
-		kind: "import_alias", relation: "imports", sourcePath: uciRealCorpusNativeGraphSourcePath, targetPath: uciRealCorpusNativeGraphTargetPath, targetSymbol: uciRealCorpusNativeGraphTargetSymbol, rawTarget: "EngramRestClient",
+		kind: "import_alias", relation: "imports", sourceLanguage: uciRealCorpusNativeGraphTypeScript, targetLanguage: uciRealCorpusNativeGraphTypeScript, sourcePath: uciRealCorpusNativeGraphSourcePath, targetPath: uciRealCorpusNativeGraphTargetPath, targetSymbol: uciRealCorpusNativeGraphTargetSymbol, rawTarget: "EngramRestClient",
 	}
 	reexportExpectation := uciRealCorpusNativeGraphExpectation{
-		kind: "reexport_alias", relation: "exports", sourcePath: uciRealCorpusNativeGraphSourcePath, targetPath: uciRealCorpusNativeGraphTargetPath, targetSymbol: uciRealCorpusNativeGraphTargetSymbol, rawTarget: "EngramRestClient",
+		kind: "reexport_alias", relation: "exports", sourceLanguage: uciRealCorpusNativeGraphTypeScript, targetLanguage: uciRealCorpusNativeGraphTypeScript, sourcePath: uciRealCorpusNativeGraphSourcePath, targetPath: uciRealCorpusNativeGraphTargetPath, targetSymbol: uciRealCorpusNativeGraphTargetSymbol, rawTarget: "EngramRestClient",
+	}
+	callerLocalBuildExpectation := uciRealCorpusNativeGraphExpectation{
+		kind: "import_alias", relation: "imports", sourceLanguage: uciRealCorpusNativeGraphTypeScript, targetLanguage: uciRealCorpusNativeGraphTypeScript, sourcePath: uciRealCorpusNativeGraphCallerPath, targetPath: uciRealCorpusNativeGraphRemotePath, targetSymbol: uciRealCorpusNativeGraphBuildSymbol, rawTarget: "build as localBuild", importedSymbol: "build", localAlias: "localBuild", referenceKey: "import:./remote.ts#build:localBuild",
+	}
+	bridgePublicBuildExpectation := uciRealCorpusNativeGraphExpectation{
+		kind: "reexport_alias", relation: "exports", sourceLanguage: uciRealCorpusNativeGraphTypeScript, targetLanguage: uciRealCorpusNativeGraphTypeScript, sourcePath: uciRealCorpusNativeGraphBridgePath, targetPath: uciRealCorpusNativeGraphRemotePath, targetSymbol: uciRealCorpusNativeGraphBuildSymbol, rawTarget: "build as publicBuild", importedSymbol: "build", localAlias: "publicBuild", referenceKey: "reexport:./remote.ts#build:publicBuild",
+	}
+	screenRemoteWidgetExpectation := uciRealCorpusNativeGraphExpectation{
+		kind: "import_alias", relation: "imports", sourceLanguage: uciRealCorpusNativeGraphTSX, targetLanguage: uciRealCorpusNativeGraphTSX, sourcePath: uciRealCorpusNativeGraphScreenPath, targetPath: uciRealCorpusNativeGraphWidgetPath, targetSymbol: uciRealCorpusNativeGraphWidgetSymbol, rawTarget: "Widget as RemoteWidget", importedSymbol: "Widget", localAlias: "RemoteWidget", referenceKey: "import:./widget.tsx#Widget:RemoteWidget",
 	}
 
 	importRow, err := uciRealCorpusNativeGraphExactEdge(ctx, authority, publication, importExpectation)
@@ -122,27 +156,58 @@ func uciVerifyRealCorpusNativeGraph(ctx context.Context, authority *uciInstalled
 	if err != nil {
 		return uciRealCorpusNativeGraph{}, err
 	}
+	callerLocalBuildRow, err := uciRealCorpusNativeGraphExactEdge(ctx, authority, publication, callerLocalBuildExpectation)
+	if err != nil {
+		return uciRealCorpusNativeGraph{}, err
+	}
+	bridgePublicBuildRow, err := uciRealCorpusNativeGraphExactEdge(ctx, authority, publication, bridgePublicBuildExpectation)
+	if err != nil {
+		return uciRealCorpusNativeGraph{}, err
+	}
+	screenRemoteWidgetRow, err := uciRealCorpusNativeGraphExactEdge(ctx, authority, publication, screenRemoteWidgetExpectation)
+	if err != nil {
+		return uciRealCorpusNativeGraph{}, err
+	}
 	if err := uciRealCorpusNativeGraphIncomingEdge(ctx, authority, publication, importAliasExpectation, importAliasRow.EdgeKey); err != nil {
 		return uciRealCorpusNativeGraph{}, err
 	}
+	if err := uciRealCorpusNativeGraphIncomingEdge(ctx, authority, publication, callerLocalBuildExpectation, callerLocalBuildRow.EdgeKey); err != nil {
+		return uciRealCorpusNativeGraph{}, err
+	}
 
-	importProof, err := uciRealCorpusNativeGraphProof(importRow)
+	importProof, err := uciRealCorpusNativeGraphProof(importRow, importExpectation)
 	if err != nil {
 		return uciRealCorpusNativeGraph{}, err
 	}
-	importAliasProof, err := uciRealCorpusNativeGraphProof(importAliasRow)
+	importAliasProof, err := uciRealCorpusNativeGraphProof(importAliasRow, importAliasExpectation)
 	if err != nil {
 		return uciRealCorpusNativeGraph{}, err
 	}
-	reexportProof, err := uciRealCorpusNativeGraphProof(reexportRow)
+	reexportProof, err := uciRealCorpusNativeGraphProof(reexportRow, reexportExpectation)
+	if err != nil {
+		return uciRealCorpusNativeGraph{}, err
+	}
+	callerLocalBuildProof, err := uciRealCorpusNativeGraphProof(callerLocalBuildRow, callerLocalBuildExpectation)
+	if err != nil {
+		return uciRealCorpusNativeGraph{}, err
+	}
+	bridgePublicBuildProof, err := uciRealCorpusNativeGraphProof(bridgePublicBuildRow, bridgePublicBuildExpectation)
+	if err != nil {
+		return uciRealCorpusNativeGraph{}, err
+	}
+	screenRemoteWidgetProof, err := uciRealCorpusNativeGraphProof(screenRemoteWidgetRow, screenRemoteWidgetExpectation)
 	if err != nil {
 		return uciRealCorpusNativeGraph{}, err
 	}
 	return uciRealCorpusNativeGraph{
-		Import:            importProof,
-		ImportAlias:       importAliasProof,
-		Reexport:          reexportProof,
-		ReverseDependency: importAliasProof,
+		Import:                            importProof,
+		ImportAlias:                       importAliasProof,
+		Reexport:                          reexportProof,
+		ReverseDependency:                 importAliasProof,
+		CallerLocalBuildAlias:             callerLocalBuildProof,
+		BridgePublicBuildReexport:         bridgePublicBuildProof,
+		ScreenRemoteWidgetAlias:           screenRemoteWidgetProof,
+		CallerLocalBuildReverseDependency: callerLocalBuildProof,
 	}, nil
 }
 
@@ -171,6 +236,8 @@ func uciRealCorpusNativeGraphExactEdge(ctx context.Context, authority *uciInstal
 		publication.checkoutID,
 		publication.profileID,
 		publication.generation,
+		expected.sourceLanguage,
+		expected.targetLanguage,
 		expected.sourcePath,
 		expected.targetPath,
 		expected.relation,
@@ -215,6 +282,9 @@ func uciRealCorpusNativeGraphIncomingEdge(ctx context.Context, authority *uciIns
 }
 
 func uciRealCorpusNativeGraphValidateRow(row uciRealCorpusNativeGraphRow, expected uciRealCorpusNativeGraphExpectation) error {
+	if expected.sourceLanguage == "" || expected.targetLanguage == "" {
+		return errors.New("real-corpus native graph expected languages are incomplete")
+	}
 	if row.SourcePath != expected.sourcePath || row.TargetPath != expected.targetPath || row.Relation != expected.relation || row.SourceSymbol != "" || row.TargetSymbol != expected.targetSymbol {
 		return errors.New("real-corpus native graph edge does not match the expected source, target, relation, or symbols")
 	}
@@ -224,8 +294,8 @@ func uciRealCorpusNativeGraphValidateRow(row uciRealCorpusNativeGraphRow, expect
 	if expected.targetSymbol != "" && row.TargetDefinitionID == "" {
 		return errors.New("real-corpus native graph edge target symbol is not present in the selected View")
 	}
-	if row.SourceContentDigest == "" || row.TargetContentDigest == "" || row.EdgeKey == "" || row.ReferenceSiteID == "" || row.ReferenceSiteKey == "" || row.ReferenceRawTarget == "" || len(row.SourceBody) == 0 {
-		return errors.New("real-corpus native graph edge source evidence is incomplete")
+	if row.TargetArtifactID == "" || row.SourceContentDigest == "" || row.TargetContentDigest == "" || row.EdgeKey == "" || row.ReferenceSiteID == "" || row.ReferenceSiteKey == "" || row.ReferenceRawTarget == "" || len(row.SourceBody) == 0 {
+		return errors.New("real-corpus native graph edge source, target, or reference evidence is incomplete")
 	}
 
 	var referenceSpan uciRealCorpusNativeGraphSpan
@@ -246,6 +316,15 @@ func uciRealCorpusNativeGraphValidateRow(row uciRealCorpusNativeGraphRow, expect
 	if expected.rawTarget != "" && row.ReferenceRawTarget != expected.rawTarget {
 		return errors.New("real-corpus native graph edge source reference does not match the expected symbol")
 	}
+	if expected.localAlias != "" {
+		if expected.importedSymbol == "" || expected.referenceKey == "" || expected.rawTarget != expected.importedSymbol+" as "+expected.localAlias || expected.targetSymbol != "function:"+expected.importedSymbol {
+			return errors.New("real-corpus native graph alias expectation is inconsistent")
+		}
+		expectedReferenceSiteKey := fmt.Sprintf("%s@%d:%d", expected.referenceKey, referenceSpan.ByteStart, referenceSpan.ByteEnd)
+		if row.ReferenceSiteKey != expectedReferenceSiteKey || hints.SymbolKey != expected.sourceLanguage+":"+expectedReferenceSiteKey {
+			return errors.New("real-corpus native graph alias reference does not prove the expected renamed binding")
+		}
+	}
 	if !uciRealCorpusNativeGraphEqualSpans(referenceSpan, evidence.Span) {
 		return errors.New("real-corpus native graph edge and source reference span differ")
 	}
@@ -255,23 +334,47 @@ func uciRealCorpusNativeGraphValidateRow(row uciRealCorpusNativeGraphRow, expect
 	return nil
 }
 
-func uciRealCorpusNativeGraphProof(row uciRealCorpusNativeGraphRow) (uciRealCorpusNativeGraphEdge, error) {
+func uciRealCorpusNativeGraphProof(row uciRealCorpusNativeGraphRow, expected uciRealCorpusNativeGraphExpectation) (uciRealCorpusNativeGraphEdge, error) {
+	if row.TargetArtifactID == "" || (expected.targetSymbol != "" && row.TargetDefinitionID == "") {
+		return uciRealCorpusNativeGraphEdge{}, errors.New("real-corpus native graph proof is missing target identity evidence")
+	}
 	var span uciRealCorpusNativeGraphSpan
 	if err := json.Unmarshal([]byte(row.ReferenceSyntaxSpan), &span); err != nil {
 		return uciRealCorpusNativeGraphEdge{}, fmt.Errorf("decode real-corpus native graph proof span: %w", err)
 	}
+	var hints uciRealCorpusNativeGraphReferenceHints
+	if err := json.Unmarshal([]byte(row.ReferenceResolverHints), &hints); err != nil {
+		return uciRealCorpusNativeGraphEdge{}, fmt.Errorf("decode real-corpus native graph proof hints: %w", err)
+	}
+	if hints.Kind == "" {
+		return uciRealCorpusNativeGraphEdge{}, errors.New("real-corpus native graph proof is missing reference kind")
+	}
+	targetDefinitionDigest := ""
+	if row.TargetDefinitionID != "" {
+		targetDefinitionDigest = uciInstalledAcceptanceStringDigest(row.TargetDefinitionID)
+	}
+	localAliasDigest := ""
+	if expected.localAlias != "" {
+		localAliasDigest = uciInstalledAcceptanceStringDigest(expected.localAlias)
+	}
 	return uciRealCorpusNativeGraphEdge{
-		SourcePath:     row.SourcePath,
-		TargetPath:     row.TargetPath,
-		Relation:       row.Relation,
-		ByteStart:      span.ByteStart,
-		ByteEnd:        span.ByteEnd,
-		LineStart:      span.LineStart,
-		LineEnd:        span.LineEnd,
-		SourceDigest:   row.SourceContentDigest,
-		TargetDigest:   row.TargetContentDigest,
-		EdgeDigest:     uciInstalledAcceptanceStringDigest(row.EdgeKey),
-		EvidenceDigest: uciInstalledAcceptanceStringDigest(row.ReferenceSiteID + "\x00" + row.ReferenceSiteKey + "\x00" + row.EvidenceJSON),
+		SourcePath:             row.SourcePath,
+		TargetPath:             row.TargetPath,
+		Relation:               row.Relation,
+		TargetSymbol:           row.TargetSymbol,
+		ReferenceKind:          hints.Kind,
+		ByteStart:              span.ByteStart,
+		ByteEnd:                span.ByteEnd,
+		LineStart:              span.LineStart,
+		LineEnd:                span.LineEnd,
+		SourceDigest:           row.SourceContentDigest,
+		TargetDigest:           row.TargetContentDigest,
+		TargetArtifactDigest:   uciInstalledAcceptanceStringDigest(row.TargetArtifactID),
+		TargetDefinitionDigest: targetDefinitionDigest,
+		RawTargetDigest:        uciInstalledAcceptanceStringDigest(row.ReferenceRawTarget),
+		LocalAliasDigest:       localAliasDigest,
+		EdgeDigest:             uciInstalledAcceptanceStringDigest(row.EdgeKey),
+		EvidenceDigest:         uciInstalledAcceptanceStringDigest(row.ReferenceSiteID + "\x00" + row.ReferenceSiteKey + "\x00" + row.EvidenceJSON),
 	}, nil
 }
 
@@ -332,6 +435,7 @@ SELECT
 	edge.evidence_kind,
 	edge.resolution_state,
 	edge.resolver_revision,
+	edge.target_artifact::text AS target_artifact_id,
 	source_blob.content_digest AS source_content_digest,
 	target_blob.content_digest AS target_content_digest,
 	source_blob.safe_content AS source_body,
@@ -361,7 +465,7 @@ JOIN ci_parse_artifacts AS source_artifact
 	ON source_artifact.source_id = view_row.source_id
 	AND source_artifact.artifact_id = edge.source_artifact
 	AND source_artifact.extraction_profile_digest = view_row.parser_bundle_digest
-	AND source_artifact.language = 'typescript'
+	AND source_artifact.language = ?
 	AND source_artifact.status IN ('complete', 'partial')
 	AND source_artifact.sealed_at IS NOT NULL
 	AND source_artifact.facts_digest IS NOT NULL
@@ -385,7 +489,7 @@ JOIN ci_parse_artifacts AS target_artifact
 	ON target_artifact.source_id = view_row.source_id
 	AND target_artifact.artifact_id = target_membership.artifact_id
 	AND target_artifact.extraction_profile_digest = view_row.parser_bundle_digest
-	AND target_artifact.language = 'typescript'
+	AND target_artifact.language = ?
 	AND target_artifact.status IN ('complete', 'partial')
 	AND target_artifact.sealed_at IS NOT NULL
 	AND target_artifact.facts_digest IS NOT NULL

@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +26,9 @@ import (
 )
 
 const (
+	uciRealCorpusEmbeddingAPIKeyEnv        = "ENGRAM_EMBEDDING_API_KEY"
+	uciRealCorpusEmbeddingModelEnv         = "ENGRAM_EMBEDDING_MODEL"
+	uciRealCorpusEmbeddingURLEnv           = "ENGRAM_EMBEDDING_URL"
 	uciRealCorpusEnabledEnv                = "ENGRAM_UCI_REAL_CORPUS_ENABLED"
 	uciRealCorpusRootEnv                   = "ENGRAM_UCI_REAL_CORPUS_ROOT"
 	uciRealCorpusDatabaseDSNEnv            = "ENGRAM_UCI_REAL_CORPUS_DATABASE_DSN"
@@ -30,6 +36,8 @@ const (
 	uciRealCorpusPreprocessingRevisionEnv  = "ENGRAM_UCI_REAL_CORPUS_PREPROCESSING_REVISION"
 	uciRealCorpusRecordPathEnv             = "ENGRAM_UCI_REAL_CORPUS_RECORD_PATH"
 	uciRealCorpusSourceTransferApprovedEnv = "ENGRAM_UCI_REAL_CORPUS_SOURCE_TRANSFER_APPROVED"
+	uciRealCorpusTerminalArtifactEnv       = "ENGRAM_UCI_REAL_CORPUS_TERMINAL_ARTIFACT"
+	uciRealCorpusRecordSchemaVersion       = "engram.uci-real-corpus/v3"
 
 	uciRealCorpusGoCallerPath          = "internal/uci/zz_uci_real_corpus_caller.go"
 	uciRealCorpusGoCalleePath          = "internal/uci/zz_uci_real_corpus_callee.go"
@@ -44,6 +52,7 @@ const (
 	uciRealCorpusCleanupHeadroom       = 5 * time.Minute
 	uciRealCorpusRequiredOuterTimeout  = uciRealCorpusOperationTimeout + uciRealCorpusCleanupHeadroom
 	uciRealCorpusSafeOuterTimeoutFlag  = "3h10m"
+	uciRealCorpusRerunCommand          = "go test ./cmd/engram -run '^TestUCIRealCorpusInstalledProviderLifecycle$' -count=1 -v -timeout=3h10m"
 )
 
 var uciRealCorpusCanaries = map[string]string{
@@ -58,9 +67,35 @@ var uciRealCorpusCanaries = map[string]string{
 
 const uciRealCorpusChangedCallee = "package uci\n\nfunc UCIRealCorpusCallee() string { return \"after\" }\n"
 
+var uciRealCorpusRequiredRerunEnvironmentVariables = [...]string{
+	uciRealCorpusEmbeddingAPIKeyEnv,
+	uciRealCorpusEmbeddingModelEnv,
+	uciRealCorpusEmbeddingURLEnv,
+	uciRealCorpusDatabaseDSNEnv,
+	uciRealCorpusEnabledEnv,
+	uciRealCorpusPreprocessingRevisionEnv,
+	uciRealCorpusProviderRefEnv,
+	uciRealCorpusRootEnv,
+	uciRealCorpusSourceTransferApprovedEnv,
+}
+
 type uciRealCorpusCandidate struct {
 	Commit string `json:"commit"`
 	Tree   string `json:"tree"`
+}
+
+type uciRealCorpusIdentity struct {
+	SourceDigest           string `json:"source_digest"`
+	CheckoutDigest         string `json:"checkout_digest"`
+	AnalysisProfileDigest  string `json:"analysis_profile_digest"`
+	EmbeddingProfileDigest string `json:"embedding_profile_digest"`
+	FinalViewDigest        string `json:"final_view_digest"`
+}
+
+type uciRealCorpusRerunRecipe struct {
+	Command                      string   `json:"command"`
+	RequiredEnvironmentVariables []string `json:"required_environment_variables"`
+	TerminalArtifactDigest       string   `json:"terminal_artifact_digest,omitempty"`
 }
 
 type uciRealCorpusProvider struct {
@@ -125,12 +160,15 @@ type uciRealCorpusGraph struct {
 }
 
 type uciRealCorpusRecord struct {
-	SchemaVersion string                 `json:"schema_version"`
-	RecordedAt    string                 `json:"recorded_at"`
-	Candidate     uciRealCorpusCandidate `json:"candidate"`
+	SchemaVersion string                   `json:"schema_version"`
+	RecordedAt    string                   `json:"recorded_at"`
+	Candidate     uciRealCorpusCandidate   `json:"candidate"`
+	Identity      uciRealCorpusIdentity    `json:"identity"`
+	Rerun         uciRealCorpusRerunRecipe `json:"rerun"`
 	Pilot         struct {
 		Source               string `json:"source"`
 		CorpusDefinition     string `json:"corpus_definition"`
+		PresentSourceBytes   uint64 `json:"present_source_bytes"`
 		FullScannerCorpus    bool   `json:"full_scanner_corpus"`
 		IgnoredFilesIncluded bool   `json:"ignored_files_included"`
 		SizeSanity           bool   `json:"size_sanity"`
@@ -138,14 +176,15 @@ type uciRealCorpusRecord struct {
 		InitialGitClean      bool   `json:"initial_git_clean"`
 		FinalGitClean        bool   `json:"final_git_clean"`
 	} `json:"pilot"`
-	Provider    uciRealCorpusProvider    `json:"provider"`
-	Initial     uciRealCorpusCounts      `json:"initial"`
-	AfterChange uciRealCorpusCounts      `json:"after_change"`
-	Semantic    uciRealCorpusSemantic    `json:"semantic"`
-	Graph       uciRealCorpusGraph       `json:"graph"`
-	Composition uciRealCorpusComposition `json:"composition"`
-	NativeGraph uciRealCorpusNativeGraph `json:"native_graph"`
-	Installed   struct {
+	Provider         uciRealCorpusProvider         `json:"provider"`
+	Initial          uciRealCorpusCounts           `json:"initial"`
+	AfterChange      uciRealCorpusCounts           `json:"after_change"`
+	Semantic         uciRealCorpusSemantic         `json:"semantic"`
+	Graph            uciRealCorpusGraph            `json:"graph"`
+	Composition      uciRealCorpusComposition      `json:"composition"`
+	CapacityRecovery uciRealCorpusCapacityRecovery `json:"capacity_recovery"`
+	NativeGraph      uciRealCorpusNativeGraph      `json:"native_graph"`
+	Installed        struct {
 		ServerSHA256 string `json:"server_sha256"`
 		DaemonSHA256 string `json:"daemon_sha256"`
 		ParserSHA256 string `json:"parser_sha256"`
@@ -285,12 +324,13 @@ func TestUCIRealCorpusInstalledProviderLifecycle(t *testing.T) {
 	if dsn == "" {
 		t.Fatal("real-corpus installed acceptance requires a disposable PostgreSQL DSN")
 	}
-	providerURL := strings.TrimSpace(os.Getenv("ENGRAM_EMBEDDING_URL"))
-	providerModel := strings.TrimSpace(os.Getenv("ENGRAM_EMBEDDING_MODEL"))
+	providerURL := strings.TrimSpace(os.Getenv(uciRealCorpusEmbeddingURLEnv))
+	providerModel := strings.TrimSpace(os.Getenv(uciRealCorpusEmbeddingModelEnv))
+	providerKey := strings.TrimSpace(os.Getenv(uciRealCorpusEmbeddingAPIKeyEnv))
 	providerRef := strings.TrimSpace(os.Getenv(uciRealCorpusProviderRefEnv))
 	preprocessing := strings.TrimSpace(os.Getenv(uciRealCorpusPreprocessingRevisionEnv))
-	if providerURL == "" || providerModel == "" || providerRef == "" || preprocessing == "" {
-		t.Fatal("real-corpus installed acceptance requires explicit provider URL, model, provider ref, and preprocessing revision")
+	if providerURL == "" || providerModel == "" || providerKey == "" || providerRef == "" || preprocessing == "" {
+		t.Fatal("real-corpus installed acceptance requires explicit provider URL, model, API key, provider ref, and preprocessing revision")
 	}
 	if err := uciRealCorpusValidateConfiguredProviderRef(providerURL, providerRef); err != nil {
 		t.Fatal(err)
@@ -310,6 +350,10 @@ func TestUCIRealCorpusInstalledProviderLifecycle(t *testing.T) {
 			t.Fatal("real-corpus record path must be absolute and outside the pilot worktree")
 		}
 	}
+	rerun, err := uciRealCorpusBuildRerunRecipe(os.Getenv(uciRealCorpusTerminalArtifactEnv))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	sandbox := t.TempDir()
 	request := uciInstalledAcceptanceRequest{
@@ -327,8 +371,11 @@ func TestUCIRealCorpusInstalledProviderLifecycle(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), request.OperationTimeout)
 	defer cancel()
-	record, err := runUCIRealCorpusInstalledAcceptance(ctx, request, providerURL, providerModel, providerRef, preprocessing, sourceTransferApproved)
+	record, err := runUCIRealCorpusInstalledAcceptance(ctx, request, providerURL, providerModel, providerRef, preprocessing, sourceTransferApproved, rerun)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := uciRealCorpusValidateRecordForWrite(record); err != nil {
 		t.Fatal(err)
 	}
 	if !record.Pilot.FinalGitClean || !record.Pilot.FullScannerCorpus || !record.Installed.StandardMCP {
@@ -562,10 +609,28 @@ func TestUCIRealCorpusEvidenceRecordRejectsPrivateValues(t *testing.T) {
 	dsn := "postgres://test-user:test-password@127.0.0.1:5432/test-db"
 	providerURL := "https://provider.invalid"
 	providerKey := "provider-secret-value"
-	record := uciRealCorpusRecord{SchemaVersion: "engram.uci-real-corpus/v2"}
+	record := uciRealCorpusRecord{
+		SchemaVersion: uciRealCorpusRecordSchemaVersion,
+		Identity: uciRealCorpusIdentity{
+			SourceDigest:           uciInstalledAcceptanceStringDigest("source"),
+			CheckoutDigest:         uciInstalledAcceptanceStringDigest("checkout"),
+			AnalysisProfileDigest:  uciInstalledAcceptanceStringDigest("analysis-profile"),
+			EmbeddingProfileDigest: uciInstalledAcceptanceStringDigest("embedding-profile"),
+			FinalViewDigest:        uciInstalledAcceptanceStringDigest("view"),
+		},
+		Rerun: uciRealCorpusRerunRecipe{
+			Command:                      uciRealCorpusRerunCommand,
+			RequiredEnvironmentVariables: append([]string(nil), uciRealCorpusRequiredRerunEnvironmentVariables[:]...),
+		},
+	}
 	if err := uciRealCorpusValidateEvidenceRecord(record, root, dsn, providerURL, providerKey); err != nil {
 		t.Fatalf("safe evidence record rejected: %v", err)
 	}
+	record.Identity.SourceDigest = root
+	if err := uciRealCorpusValidateEvidenceRecord(record, root, dsn, providerURL, providerKey); err == nil {
+		t.Fatal("raw source identity was retained")
+	}
+	record.Identity.SourceDigest = uciInstalledAcceptanceStringDigest("source")
 
 	record.Semantic.ExpectedPath = root
 	if err := uciRealCorpusValidateEvidenceRecord(record, root, dsn, providerURL, providerKey); err == nil {
@@ -579,6 +644,11 @@ func TestUCIRealCorpusEvidenceRecordRejectsPrivateValues(t *testing.T) {
 	if err := uciRealCorpusValidateEvidenceRecord(record, root, dsn, providerURL, providerKey); err == nil {
 		t.Fatal("provider credential was retained")
 	}
+	record.Semantic.ExpectedPath = ""
+	record.Rerun.TerminalArtifactDigest = providerKey
+	if err := uciRealCorpusValidateEvidenceRecord(record, root, dsn, providerURL, providerKey); err == nil {
+		t.Fatal("raw terminal artifact was retained")
+	}
 }
 
 func uciRealCorpusValidateConfiguredProviderRef(providerURL, providerRef string) error {
@@ -588,7 +658,101 @@ func uciRealCorpusValidateConfiguredProviderRef(providerURL, providerRef string)
 	return nil
 }
 
-func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstalledAcceptanceRequest, providerURL, providerModel, providerRef, preprocessing string, sourceTransferApproved bool) (record uciRealCorpusRecord, retErr error) {
+func uciRealCorpusBuildRerunRecipe(terminalArtifact string) (uciRealCorpusRerunRecipe, error) {
+	recipe := uciRealCorpusRerunRecipe{
+		Command:                      uciRealCorpusRerunCommand,
+		RequiredEnvironmentVariables: append([]string(nil), uciRealCorpusRequiredRerunEnvironmentVariables[:]...),
+	}
+	terminalArtifact = strings.TrimSpace(terminalArtifact)
+	if terminalArtifact == "" {
+		return recipe, nil
+	}
+	if privacy.ContainsSecrets(terminalArtifact) {
+		return uciRealCorpusRerunRecipe{}, errors.New("real-corpus terminal artifact must be explicitly non-secret")
+	}
+	recipe.TerminalArtifactDigest = uciInstalledAcceptanceStringDigest(terminalArtifact)
+	return recipe, nil
+}
+
+func uciRealCorpusBuildReceiptIdentity(initial, final uciInstalledAcceptancePublication, finalEmbedding uciRealCorpusEmbeddingStatus) (uciRealCorpusIdentity, error) {
+	initialSource := strings.TrimSpace(initial.sourceID)
+	initialCheckout := strings.TrimSpace(initial.checkoutID)
+	initialProfile := strings.TrimSpace(initial.profileID)
+	finalSource := strings.TrimSpace(final.sourceID)
+	finalCheckout := strings.TrimSpace(final.checkoutID)
+	finalProfile := strings.TrimSpace(final.profileID)
+	finalView := strings.TrimSpace(final.viewID)
+	if initialSource == "" || initialCheckout == "" || initialProfile == "" || finalSource == "" || finalCheckout == "" || finalProfile == "" || finalView == "" {
+		return uciRealCorpusIdentity{}, errors.New("real-corpus receipt identity is incomplete")
+	}
+	if initialSource != finalSource || initialCheckout != finalCheckout || initialProfile != finalProfile || finalView == strings.TrimSpace(initial.viewID) {
+		return uciRealCorpusIdentity{}, errors.New("real-corpus final receipt identity is not bound to the initial publication")
+	}
+	if strings.TrimSpace(finalEmbedding.Context.SourceID) != finalSource || strings.TrimSpace(finalEmbedding.Context.CheckoutID) != finalCheckout || strings.TrimSpace(finalEmbedding.Context.ProfileID) != finalProfile || strings.TrimSpace(finalEmbedding.Context.ViewID) != finalView || finalEmbedding.Context.Generation != final.generation {
+		return uciRealCorpusIdentity{}, errors.New("real-corpus final embedding context is not bound to the final publication")
+	}
+	if finalEmbedding.Embedding.EmbeddingProfileID == nil {
+		return uciRealCorpusIdentity{}, errors.New("real-corpus final embedding profile is absent")
+	}
+	embeddingProfile := strings.TrimSpace(*finalEmbedding.Embedding.EmbeddingProfileID)
+	if embeddingProfile == "" {
+		return uciRealCorpusIdentity{}, errors.New("real-corpus final embedding profile is empty")
+	}
+	return uciRealCorpusIdentity{
+		SourceDigest:           uciInstalledAcceptanceStringDigest(finalSource),
+		CheckoutDigest:         uciInstalledAcceptanceStringDigest(finalCheckout),
+		AnalysisProfileDigest:  uciInstalledAcceptanceStringDigest(finalProfile),
+		EmbeddingProfileDigest: uciInstalledAcceptanceStringDigest(embeddingProfile),
+		FinalViewDigest:        uciInstalledAcceptanceStringDigest(finalView),
+	}, nil
+}
+
+func uciRealCorpusFrozenPresentSourceBytes(root string, frozen uciRealCorpusFrozenManifest) (uint64, error) {
+	if err := uciRealCorpusValidateFrozenManifest(frozen); err != nil {
+		return 0, errors.New("real-corpus frozen census is invalid while measuring present source bytes")
+	}
+	var total uint64
+	var present uint64
+	for _, entry := range frozen.entries {
+		if entry.scannerState != uci.IndexFilePresent {
+			continue
+		}
+		if !uciRealCorpusCompositionPath(entry.path) {
+			return 0, errors.New("real-corpus frozen census contains an invalid present source path")
+		}
+		source, err := os.Open(filepath.Join(root, filepath.FromSlash(entry.path)))
+		if err != nil {
+			return 0, errors.New("real-corpus frozen present source could not be opened")
+		}
+		hasher := sha256.New()
+		byteCount, copyErr := io.Copy(hasher, source)
+		closeErr := source.Close()
+		if copyErr != nil || closeErr != nil || byteCount < 0 {
+			return 0, errors.New("real-corpus frozen present source could not be measured")
+		}
+		if "sha256:"+hex.EncodeToString(hasher.Sum(nil)) != entry.contentDigest {
+			return 0, errors.New("real-corpus present source does not match the frozen census")
+		}
+		bytes := uint64(byteCount)
+		if total > ^uint64(0)-bytes || present == ^uint64(0) {
+			return 0, errors.New("real-corpus present source byte accounting overflowed")
+		}
+		total += bytes
+		present++
+	}
+	if present == 0 {
+		return 0, errors.New("real-corpus frozen census has no present source")
+	}
+	return total, nil
+}
+
+func runUCIRealCorpusInstalledAcceptance(
+	ctx context.Context,
+	request uciInstalledAcceptanceRequest,
+	providerURL, providerModel, providerRef, preprocessing string,
+	sourceTransferApproved bool,
+	rerun uciRealCorpusRerunRecipe,
+) (record uciRealCorpusRecord, retErr error) {
 	root, err := uciInstalledAcceptancePhysicalPath(request.CandidateSourceRoot)
 	if err != nil {
 		return record, err
@@ -636,6 +800,10 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 		}
 	}()
 	frozenManifest, err := uciFreezeRealCorpusManifest(ctx, root, semanticQuery)
+	if err != nil {
+		return record, err
+	}
+	presentSourceBytes, err := uciRealCorpusFrozenPresentSourceBytes(root, frozenManifest)
 	if err != nil {
 		return record, err
 	}
@@ -718,9 +886,9 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 		return record, err
 	}
 	serverEnvironment = append(serverEnvironment,
-		"ENGRAM_EMBEDDING_URL="+providerURL,
-		"ENGRAM_EMBEDDING_MODEL="+providerModel,
-		"ENGRAM_EMBEDDING_API_KEY="+os.Getenv("ENGRAM_EMBEDDING_API_KEY"),
+		uciRealCorpusEmbeddingURLEnv+"="+providerURL,
+		uciRealCorpusEmbeddingModelEnv+"="+providerModel,
+		uciRealCorpusEmbeddingAPIKeyEnv+"="+os.Getenv(uciRealCorpusEmbeddingAPIKeyEnv),
 	)
 	if _, err := installation.Start(ctx, uciInstalledHarnessLaunchRequest{Role: "server", Environment: serverEnvironment}); err != nil {
 		return record, err
@@ -798,6 +966,10 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 	if initialCounts.StagedParts < 0 || initialCounts.StagedPartBytes < 0 || uint64(initialCounts.StagedParts) != composition.Packing.ObservedPartCount || uint64(initialCounts.StagedPartBytes) != composition.Packing.ObservedTotalEncodedBytes {
 		return record, errors.New("real-corpus packed part receipt and count observation disagree")
 	}
+	capacityRecovery, err := uciVerifyRealCorpusCapacityRecovery(ctx, authority, initialPublication, composition)
+	if err != nil {
+		return record, err
+	}
 
 	semantic, err := uciRealCorpusSemanticProof(ctx, client, selection, initialPublication, root, semanticQuery)
 	if err != nil {
@@ -841,12 +1013,19 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 	if !graph.CallerArtifactStable || !graph.CalleeArtifactChanged || !graph.ChangedTargetPublished || initialPublication.viewID == changedPublication.viewID {
 		return record, errors.New("real-corpus changed-callee invalidation did not publish the expected new target")
 	}
+	identity, err := uciRealCorpusBuildReceiptIdentity(initialPublication, changedPublication, changedEmbedding)
+	if err != nil {
+		return record, err
+	}
 
-	record.SchemaVersion = "engram.uci-real-corpus/v2"
+	record.SchemaVersion = uciRealCorpusRecordSchemaVersion
 	record.RecordedAt = time.Now().UTC().Format(time.RFC3339)
 	record.Candidate = uciRealCorpusCandidate{Commit: candidateCommit, Tree: candidateTree}
+	record.Identity = identity
+	record.Rerun = rerun
 	record.Pilot.Source = "engram-production-scanner-corpus"
 	record.Pilot.CorpusDefinition = "tracked-and-nonignored-untracked"
+	record.Pilot.PresentSourceBytes = presentSourceBytes
 	record.Pilot.SizeSanity = initialCounts.Memberships >= 1000 && initialCounts.Artifacts >= 1000
 	record.Pilot.ExactComposition = composition.MembershipCount == composition.BaselineMembershipCount+composition.CanaryMembershipCount && composition.MembershipCount > 0
 	record.Pilot.FullScannerCorpus = record.Pilot.ExactComposition &&
@@ -873,6 +1052,7 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 	record.Semantic = semantic
 	record.Graph = graph
 	record.Composition = composition
+	record.CapacityRecovery = capacityRecovery
 	record.NativeGraph = nativeGraph
 	for role, destination := range map[string]*string{
 		"server": &record.Installed.ServerSHA256,
@@ -903,11 +1083,14 @@ func runUCIRealCorpusInstalledAcceptance(ctx context.Context, request uciInstall
 	record.Scope.ProcessRestartProof = false
 	record.Scope.ProductionMutation = false
 	record.Scope.ReleaseClaim = false
-	if err := uciRealCorpusValidateEvidenceRecord(record, root, request.TestPostgresDSN, providerURL, os.Getenv("ENGRAM_EMBEDDING_API_KEY")); err != nil {
+	if err := uciRealCorpusValidateEvidenceRecord(record, root, request.TestPostgresDSN, providerURL, os.Getenv(uciRealCorpusEmbeddingAPIKeyEnv)); err != nil {
 		return record, err
 	}
-	if !record.Pilot.FullScannerCorpus || !record.Pilot.SizeSanity || !record.Pilot.ExactComposition || !record.Installed.StandardMCP || record.Scope.ProcessRestartProof {
-		return record, errors.New("real-corpus result did not prove exact production-scanner corpus installed standard-MCP coverage within configured limits")
+	if err := uciRealCorpusValidateRecordForWrite(record); err != nil {
+		return record, err
+	}
+	if !record.Pilot.FullScannerCorpus || !record.Pilot.SizeSanity || !record.Pilot.ExactComposition || !record.Installed.StandardMCP || !record.CapacityRecovery.AllGuaranteesObserved || record.Scope.ProcessRestartProof {
+		return record, errors.New("real-corpus result did not prove exact production-scanner corpus, capacity recovery, and installed standard-MCP coverage within configured limits")
 	}
 	return record, nil
 }
@@ -1455,7 +1638,122 @@ func uciRealCorpusSemanticQuery() (string, error) {
 	return string(decoded), nil
 }
 
+func uciRealCorpusValidateRecordForWrite(record uciRealCorpusRecord) error {
+	if record.SchemaVersion != uciRealCorpusRecordSchemaVersion {
+		return errors.New("real-corpus evidence record schema is not v3")
+	}
+	if record.Pilot.PresentSourceBytes == 0 {
+		return errors.New("real-corpus evidence record has no frozen present source byte count")
+	}
+	if err := uciRealCorpusValidateIdentity(record.Identity); err != nil {
+		return err
+	}
+	if err := uciRealCorpusValidateRerunRecipe(record.Rerun); err != nil {
+		return err
+	}
+	if err := uciRealCorpusValidateCapacityRecovery(record.CapacityRecovery); err != nil {
+		return err
+	}
+	return nil
+}
+
+func uciRealCorpusValidateIdentity(identity uciRealCorpusIdentity) error {
+	for _, digest := range []string{
+		identity.SourceDigest,
+		identity.CheckoutDigest,
+		identity.AnalysisProfileDigest,
+		identity.EmbeddingProfileDigest,
+		identity.FinalViewDigest,
+	} {
+		if !uciInstalledAcceptanceIsSHA256(digest) {
+			return errors.New("real-corpus evidence record has an unredacted identity")
+		}
+	}
+	return nil
+}
+
+func uciRealCorpusValidateRerunRecipe(recipe uciRealCorpusRerunRecipe) error {
+	if recipe.Command != uciRealCorpusRerunCommand || len(recipe.RequiredEnvironmentVariables) != len(uciRealCorpusRequiredRerunEnvironmentVariables) {
+		return errors.New("real-corpus evidence record rerun recipe is incomplete")
+	}
+	for index, name := range uciRealCorpusRequiredRerunEnvironmentVariables {
+		if recipe.RequiredEnvironmentVariables[index] != name {
+			return errors.New("real-corpus evidence record rerun environment names are not the exact sorted set")
+		}
+	}
+	if recipe.TerminalArtifactDigest != "" && !uciInstalledAcceptanceIsSHA256(recipe.TerminalArtifactDigest) {
+		return errors.New("real-corpus evidence record has an unredacted terminal artifact")
+	}
+	return nil
+}
+
+func uciRealCorpusValidateCapacityRecovery(recovery uciRealCorpusCapacityRecovery) error {
+	if !recovery.FullCorpusFragmented ||
+		!recovery.LegacyPartLimitExceeded ||
+		!recovery.LegacyBuildLimitExceeded ||
+		!recovery.InterruptedStagingObserved ||
+		!recovery.ResumedStagingObserved ||
+		!recovery.ExactPartDigestsObserved ||
+		!recovery.IncompleteFinalizeRejected ||
+		!recovery.ConflictingFinalizeRejected ||
+		!recovery.AtomicFinalizeObserved ||
+		!recovery.PriorViewPreservedAfterIncomplete ||
+		!recovery.PriorViewPreservedAfterConflict ||
+		!recovery.SuccessfulFinalizeObserved ||
+		!recovery.AllGuaranteesObserved {
+		return errors.New("real-corpus capacity recovery proof is incomplete")
+	}
+	for _, count := range []uint64{
+		recovery.SourcePartCount,
+		recovery.SourcePayloadBytes,
+		recovery.SourceMaxPartBytes,
+		recovery.LegacyMaxPartBytes,
+		recovery.LegacyMaxBuildBytes,
+		recovery.QuotaMaxParts,
+		recovery.QuotaMaxBuildBytes,
+		recovery.QuotaMaxPartBytes,
+		recovery.InterruptedPartCount,
+		recovery.ResumedPartCount,
+		recovery.PriorViewCount,
+		recovery.AfterIncompleteViewCount,
+		recovery.AfterConflictViewCount,
+		recovery.PublishedViewCount,
+		recovery.ReplayViewCount,
+	} {
+		if count == 0 {
+			return errors.New("real-corpus capacity recovery proof has an empty measurement")
+		}
+	}
+	if recovery.SourcePartCount < 2 || recovery.InterruptedPartCount >= recovery.SourcePartCount || recovery.ResumedPartCount != recovery.SourcePartCount || recovery.SourcePayloadBytes <= recovery.LegacyMaxBuildBytes || recovery.SourceMaxPartBytes <= recovery.LegacyMaxPartBytes || recovery.SourcePartCount > recovery.QuotaMaxParts || recovery.SourcePayloadBytes > recovery.QuotaMaxBuildBytes || recovery.SourceMaxPartBytes > recovery.QuotaMaxPartBytes {
+		return errors.New("real-corpus capacity recovery measurements violate the bounded fragmentation contract")
+	}
+	if recovery.SourcePartsDigest != recovery.ResumedPartsDigest || recovery.PriorViewDigest == recovery.PublishedViewDigest {
+		return errors.New("real-corpus capacity recovery digests do not prove exact resume and a new atomic view")
+	}
+	for _, digest := range []string{
+		recovery.SourcePartsDigest,
+		recovery.ResumedPartsDigest,
+		recovery.ManifestDigest,
+		recovery.PriorViewDigest,
+		recovery.PublishedViewDigest,
+	} {
+		if !uciInstalledAcceptanceIsSHA256(digest) {
+			return errors.New("real-corpus capacity recovery proof has an unredacted digest")
+		}
+	}
+	if recovery.PriorViewCount == ^uint64(0) || recovery.AfterIncompleteViewCount != recovery.PriorViewCount || recovery.AfterConflictViewCount != recovery.PriorViewCount || recovery.PublishedViewCount != recovery.PriorViewCount+1 || recovery.ReplayViewCount != recovery.PublishedViewCount {
+		return errors.New("real-corpus capacity recovery proof did not preserve the prior view through failed finalize attempts")
+	}
+	return nil
+}
+
 func uciRealCorpusValidateEvidenceRecord(record uciRealCorpusRecord, root, dsn, providerURL, providerKey string) error {
+	if err := uciRealCorpusValidateIdentity(record.Identity); err != nil {
+		return err
+	}
+	if err := uciRealCorpusValidateRerunRecipe(record.Rerun); err != nil {
+		return err
+	}
 	encoded, err := json.Marshal(record)
 	if err != nil {
 		return errors.New("real-corpus evidence record could not be encoded for privacy validation")
