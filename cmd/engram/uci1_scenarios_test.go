@@ -16,14 +16,18 @@ import (
 const (
 	UCI1ScenarioReceiptSchemaVersion = "engram.uci1-scenarios-receipt/v1"
 
-	uci1ScenarioPlanSchema      = "engram.uci.acceptance-plan/1"
-	uci1ScenarioRecordPathEnv   = "ENGRAM_UCI1_SCENARIOS_RECORD_PATH"
-	uci1ScenarioStatusPass      = "pass"
-	uci1ScenarioStatusMissing   = "missing_installed_evidence"
-	uci1ScenarioModeInstalled   = "installed_observed"
-	uci1ScenarioModeMissing     = "missing_installed_evidence"
-	uci1ScenarioCodeObserved    = "OBSERVED_INSTALLED_LIFECYCLE"
-	uci1ScenarioCodeUnavailable = "MISSING_INSTALLED_EVIDENCE"
+	uci1ScenarioPlanSchema              = "engram.uci.acceptance-plan/1"
+	uci1ScenarioRecordPathEnv           = "ENGRAM_UCI1_SCENARIOS_RECORD_PATH"
+	uci1ScenarioStatusPass              = "pass"
+	uci1ScenarioStatusMissing           = "missing_installed_evidence"
+	uci1ScenarioModeInstalled           = "installed_observed"
+	uci1ScenarioModeExactCandidate      = "exact_candidate_behavior"
+	uci1ScenarioModeHistoricalInstalled = "historical_installed_revalidated"
+	uci1ScenarioModeMissing             = "missing_installed_evidence"
+	uci1ScenarioCodeObserved            = "OBSERVED_INSTALLED_LIFECYCLE"
+	uci1ScenarioCodeExactCandidate      = "EXACT_CANDIDATE_BEHAVIOR"
+	uci1ScenarioCodeHistoricalInstalled = "HISTORICAL_INSTALLED_REVALIDATED"
+	uci1ScenarioCodeUnavailable         = "MISSING_INSTALLED_EVIDENCE"
 )
 
 var uci1RequiredScenarioIDs = [...]string{
@@ -42,6 +46,12 @@ type uci1ScenarioDefinition struct {
 	ID        string `json:"id"`
 	Milestone string `json:"milestone"`
 	Area      string `json:"area"`
+}
+
+type uci1ScenarioEvidence struct {
+	Mode   string
+	Code   string
+	Digest string
 }
 
 // UCI1ScenarioReceipt is a deterministic, redacted projection of the current
@@ -91,6 +101,7 @@ type UCI1ScenarioResult struct {
 	Status       string `json:"status"`
 	EvidenceMode string `json:"evidence_mode"`
 	Code         string `json:"code"`
+	Digest       string `json:"digest"`
 }
 
 // TestUCI1Scenarios is deliberately RED until each assigned scenario is added
@@ -128,8 +139,25 @@ func TestUCI1Scenarios(t *testing.T) {
 	if err != nil {
 		t.Fatalf("assemble current installed lifecycle receipt: %v", err)
 	}
-	observed := uci1InstalledScenarioObservations(result)
-	receipt, err := BuildUCI1ScenarioReceipt(candidate, installedReceipt, scenarios, observed)
+	installedEvidence, err := uci1InstalledScenarioEvidence(result, installedReceipt)
+	if err != nil {
+		t.Fatalf("derive current installed UCI-1 scenario evidence: %v", err)
+	}
+	evidenceCtx, evidenceCancel := context.WithTimeout(context.Background(), request.OperationTimeout+5e9)
+	defer evidenceCancel()
+	exactCandidateEvidence, err := uci1CollectExactCandidateEvidence(evidenceCtx, request.CandidateSourceRoot)
+	if err != nil {
+		t.Fatalf("collect exact candidate UCI-1 scenario evidence: %v", err)
+	}
+	historicalInstalledEvidence, err := uci1CollectHistoricalInstalledEvidence(evidenceCtx, request.CandidateSourceRoot)
+	if err != nil {
+		t.Fatalf("collect historical installed UCI-1 scenario evidence: %v", err)
+	}
+	evidence, err := uci1MergeScenarioEvidence(installedEvidence, exactCandidateEvidence, historicalInstalledEvidence)
+	if err != nil {
+		t.Fatalf("merge UCI-1 scenario evidence: %v", err)
+	}
+	receipt, err := BuildUCI1ScenarioReceipt(candidate, installedReceipt, scenarios, evidence)
 	if err != nil {
 		t.Fatalf("assemble UCI-1 scenario receipt: %v", err)
 	}
@@ -267,12 +295,15 @@ func uci1ValidGitObjectID(value string) bool {
 // BuildUCI1ScenarioReceipt projects exactly one current installed lifecycle
 // result into every authoritative UCI-1 scenario. An unobserved behavior is
 // explicitly missing evidence, never an inferred pass.
-func BuildUCI1ScenarioReceipt(candidate UCI1ScenarioCandidate, installed UCIInstalledReceipt, scenarios []uci1ScenarioDefinition, observed map[string]bool) (UCI1ScenarioReceipt, error) {
+func BuildUCI1ScenarioReceipt(candidate UCI1ScenarioCandidate, installed UCIInstalledReceipt, scenarios []uci1ScenarioDefinition, evidence map[string]uci1ScenarioEvidence) (UCI1ScenarioReceipt, error) {
 	if err := ValidateUCIInstalledReceipt(installed); err != nil {
 		return UCI1ScenarioReceipt{}, fmt.Errorf("validate installed lifecycle input: %w", err)
 	}
 	if len(scenarios) != len(uci1RequiredScenarioIDs) {
 		return UCI1ScenarioReceipt{}, errors.New("UCI-1 scenario receipt requires the exact assigned plan")
+	}
+	if err := uci1ValidateScenarioEvidenceSet(installed, evidence); err != nil {
+		return UCI1ScenarioReceipt{}, fmt.Errorf("validate UCI-1 scenario evidence: %w", err)
 	}
 
 	receipt := UCI1ScenarioReceipt{
@@ -310,10 +341,11 @@ func BuildUCI1ScenarioReceipt(candidate UCI1ScenarioCandidate, installed UCIInst
 			ID:   scenario.ID,
 			Area: scenario.Area,
 		}
-		if observed[scenario.ID] {
+		if scenarioEvidence, found := evidence[scenario.ID]; found {
 			result.Status = uci1ScenarioStatusPass
-			result.EvidenceMode = uci1ScenarioModeInstalled
-			result.Code = uci1ScenarioCodeObserved
+			result.EvidenceMode = scenarioEvidence.Mode
+			result.Code = scenarioEvidence.Code
+			result.Digest = scenarioEvidence.Digest
 		} else {
 			result.Status = uci1ScenarioStatusMissing
 			result.EvidenceMode = uci1ScenarioModeMissing
@@ -368,11 +400,15 @@ func ValidateUCI1ScenarioReceipt(receipt UCI1ScenarioReceipt) error {
 		}
 		switch scenario.Status {
 		case uci1ScenarioStatusPass:
-			if scenario.EvidenceMode != uci1ScenarioModeInstalled || scenario.Code != uci1ScenarioCodeObserved {
-				return errors.New("UCI-1 scenario receipt pass is not installed evidence")
+			if !uci1ValidScenarioPassEvidence(uci1ScenarioEvidence{
+				Mode:   scenario.EvidenceMode,
+				Code:   scenario.Code,
+				Digest: scenario.Digest,
+			}) {
+				return errors.New("UCI-1 scenario receipt pass evidence is invalid")
 			}
 		case uci1ScenarioStatusMissing:
-			if scenario.EvidenceMode != uci1ScenarioModeMissing || scenario.Code != uci1ScenarioCodeUnavailable {
+			if scenario.EvidenceMode != uci1ScenarioModeMissing || scenario.Code != uci1ScenarioCodeUnavailable || scenario.Digest != "" {
 				return errors.New("UCI-1 scenario receipt missing evidence is unsafe")
 			}
 		default:
@@ -419,9 +455,101 @@ func uci1ScenarioReceiptDigest(receipt UCI1ScenarioReceipt) string {
 		values = append(values, artifact.Role, artifact.CandidateSHA256, artifact.InstalledSHA256)
 	}
 	for _, scenario := range receipt.Scenarios {
-		values = append(values, scenario.ID, scenario.Area, scenario.Status, scenario.EvidenceMode, scenario.Code)
+		values = append(values, scenario.ID, scenario.Area, scenario.Status, scenario.EvidenceMode, scenario.Code, scenario.Digest)
 	}
 	return uciInstalledReceiptDigestStrings(values...)
+}
+
+func uci1ValidateScenarioEvidenceSet(installed UCIInstalledReceipt, evidence map[string]uci1ScenarioEvidence) error {
+	installedEvidenceSeed := ""
+	for scenarioID, scenarioEvidence := range evidence {
+		if !uci1RequiredScenarioID(scenarioID) {
+			return errors.New("UCI-1 scenario evidence contains an unknown scenario")
+		}
+		if !uci1ValidScenarioPassEvidence(scenarioEvidence) {
+			return errors.New("UCI-1 scenario evidence is invalid")
+		}
+		if scenarioEvidence.Mode != uci1ScenarioModeInstalled {
+			continue
+		}
+		if installedEvidenceSeed == "" {
+			var err error
+			installedEvidenceSeed, err = uci1InstalledScenarioEvidenceSeed(installed)
+			if err != nil {
+				return fmt.Errorf("encode installed lifecycle evidence: %w", err)
+			}
+		}
+		if scenarioEvidence.Digest != uci1InstalledScenarioEvidenceDigest(installedEvidenceSeed, scenarioID) {
+			return errors.New("UCI-1 scenario installed evidence digest is invalid")
+		}
+	}
+	return nil
+}
+
+func uci1ValidScenarioPassEvidence(evidence uci1ScenarioEvidence) bool {
+	if !uciInstalledReceiptValidSHA256(evidence.Digest) {
+		return false
+	}
+	switch evidence.Mode {
+	case uci1ScenarioModeInstalled:
+		return evidence.Code == uci1ScenarioCodeObserved
+	case uci1ScenarioModeExactCandidate:
+		return evidence.Code == uci1ScenarioCodeExactCandidate
+	case uci1ScenarioModeHistoricalInstalled:
+		return evidence.Code == uci1ScenarioCodeHistoricalInstalled
+	default:
+		return false
+	}
+}
+
+func uci1MergeScenarioEvidence(installed, exactCandidate, historicalInstalled map[string]uci1ScenarioEvidence) (map[string]uci1ScenarioEvidence, error) {
+	sources := [...]struct {
+		mode     string
+		evidence map[string]uci1ScenarioEvidence
+	}{
+		{mode: uci1ScenarioModeHistoricalInstalled, evidence: historicalInstalled},
+		{mode: uci1ScenarioModeExactCandidate, evidence: exactCandidate},
+		{mode: uci1ScenarioModeInstalled, evidence: installed},
+	}
+	merged := make(map[string]uci1ScenarioEvidence, len(uci1RequiredScenarioIDs))
+	for _, source := range sources {
+		for scenarioID, scenarioEvidence := range source.evidence {
+			if !uci1RequiredScenarioID(scenarioID) {
+				return nil, errors.New("UCI-1 scenario evidence contains an unknown scenario")
+			}
+			if scenarioEvidence.Mode != source.mode || !uci1ValidScenarioPassEvidence(scenarioEvidence) {
+				return nil, errors.New("UCI-1 scenario evidence source is invalid")
+			}
+			if existing, found := merged[scenarioID]; found {
+				existingPrecedence := uci1ScenarioEvidencePrecedence(existing.Mode)
+				candidatePrecedence := uci1ScenarioEvidencePrecedence(scenarioEvidence.Mode)
+				if existingPrecedence == candidatePrecedence {
+					if existing != scenarioEvidence {
+						return nil, errors.New("UCI-1 scenario evidence conflicts at the same precedence")
+					}
+					continue
+				}
+				if existingPrecedence > candidatePrecedence {
+					continue
+				}
+			}
+			merged[scenarioID] = scenarioEvidence
+		}
+	}
+	return merged, nil
+}
+
+func uci1ScenarioEvidencePrecedence(mode string) int {
+	switch mode {
+	case uci1ScenarioModeInstalled:
+		return 3
+	case uci1ScenarioModeExactCandidate:
+		return 2
+	case uci1ScenarioModeHistoricalInstalled:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func uci1MissingScenarioIDs(receipt UCI1ScenarioReceipt) []string {
@@ -444,6 +572,37 @@ func uci1InstalledScenarioObservations(result uciInstalledAcceptanceResult) map[
 		"U43": uci1ObservesExposureUnavailable(result),
 		"U44": uci1ObservesExposureMismatch(result),
 	}
+}
+
+func uci1InstalledScenarioEvidence(result uciInstalledAcceptanceResult, installed UCIInstalledReceipt) (map[string]uci1ScenarioEvidence, error) {
+	installedEvidenceSeed, err := uci1InstalledScenarioEvidenceSeed(installed)
+	if err != nil {
+		return nil, err
+	}
+	evidence := make(map[string]uci1ScenarioEvidence, len(uci1RequiredScenarioIDs))
+	for scenarioID, observed := range uci1InstalledScenarioObservations(result) {
+		if !observed {
+			continue
+		}
+		evidence[scenarioID] = uci1ScenarioEvidence{
+			Mode:   uci1ScenarioModeInstalled,
+			Code:   uci1ScenarioCodeObserved,
+			Digest: uci1InstalledScenarioEvidenceDigest(installedEvidenceSeed, scenarioID),
+		}
+	}
+	return evidence, nil
+}
+
+func uci1InstalledScenarioEvidenceSeed(installed UCIInstalledReceipt) (string, error) {
+	encoded, err := EncodeUCIInstalledReceipt(installed)
+	if err != nil {
+		return "", err
+	}
+	return uciInstalledReceiptDigestStrings("engram.uci1-scenarios/installed-observed/v1", string(encoded)), nil
+}
+
+func uci1InstalledScenarioEvidenceDigest(installedEvidenceSeed, scenarioID string) string {
+	return uciInstalledReceiptDigestStrings("engram.uci1-scenarios/installed-observed/v1", scenarioID, installedEvidenceSeed)
 }
 
 func uci1ObservesDirtyViewIsolation(result uciInstalledAcceptanceResult) bool {
