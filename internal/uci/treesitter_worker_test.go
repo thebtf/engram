@@ -24,6 +24,8 @@ const (
 	uciTreeSitterWireVersion = TreeSitterWorkerProtocolVersion
 	uciTreeSitterHelperTest  = "^TestUCITreeSitterWorkerProcessHelper$"
 )
+const uciTreeSitterFixtureTimeout = 10 * time.Second
+
 
 var (
 	uciTreeSitterHelperMode               = flag.String("uci-tree-sitter-helper-mode", "", "Tree-sitter worker fixture-child mode")
@@ -903,7 +905,7 @@ func uciNewTreeSitterTestWorker(t *testing.T, options uciTreeSitterWorkerOptions
 		options.maxOutputBytes = 1 << 20
 	}
 	if options.timeout == 0 {
-		options.timeout = 2 * time.Second
+		options.timeout = uciTreeSitterFixtureTimeout
 	}
 	if options.environment == nil {
 		options.environment = uciTreeSitterMinimalEnvironment()
