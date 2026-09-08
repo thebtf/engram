@@ -40,6 +40,10 @@ const (
 	uciRealCorpusEmbeddingStallWindow  = 5 * time.Minute
 	uciRealCorpusEmbeddingRetryGrace   = 30 * time.Second
 	uciRealCorpusEmbeddingPollInterval = 5 * time.Second
+	uciRealCorpusOperationTimeout      = 3 * time.Hour
+	uciRealCorpusCleanupHeadroom       = 5 * time.Minute
+	uciRealCorpusRequiredOuterTimeout  = uciRealCorpusOperationTimeout + uciRealCorpusCleanupHeadroom
+	uciRealCorpusSafeOuterTimeoutFlag  = "3h10m"
 )
 
 var uciRealCorpusCanaries = map[string]string{
@@ -238,12 +242,42 @@ type uciRealCorpusEdgeRow struct {
 	TargetSymbol   string `gorm:"column:target_symbol"`
 }
 
+func TestUCIRealCorpusOuterDeadline(t *testing.T) {
+	now := time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name      string
+		available time.Duration
+		wantErr   bool
+	}{
+		{name: "required duration", available: uciRealCorpusRequiredOuterTimeout},
+		{name: "insufficient duration", available: uciRealCorpusRequiredOuterTimeout - time.Nanosecond, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := uciRealCorpusValidateOuterDeadline(now, now.Add(test.available), true, uciRealCorpusOperationTimeout, uciRealCorpusCleanupHeadroom)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("outer deadline error = %v, want error=%t", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func uciRealCorpusValidateOuterDeadline(now, deadline time.Time, deadlineSet bool, operationTimeout, cleanupHeadroom time.Duration) error {
+	if !deadlineSet || deadline.Sub(now) >= operationTimeout+cleanupHeadroom {
+		return nil
+	}
+	return fmt.Errorf("real-corpus installed acceptance needs at least %s remaining on the Go test deadline (%s operation plus %s cleanup headroom); rerun with -timeout=%s to leave startup margin", uciRealCorpusRequiredOuterTimeout, operationTimeout, cleanupHeadroom, uciRealCorpusSafeOuterTimeoutFlag)
+}
+
 func TestUCIRealCorpusInstalledProviderLifecycle(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("native Windows real-corpus installed acceptance")
 	}
 	if strings.TrimSpace(os.Getenv(uciRealCorpusEnabledEnv)) != "1" {
 		t.Skip("real-corpus installed acceptance requires ENGRAM_UCI_REAL_CORPUS_ENABLED=1")
+	}
+	deadline, deadlineSet := t.Deadline()
+	if err := uciRealCorpusValidateOuterDeadline(time.Now(), deadline, deadlineSet, uciRealCorpusOperationTimeout, uciRealCorpusCleanupHeadroom); err != nil {
+		t.Fatal(err)
 	}
 
 	root := uciRealCorpusRequiredPath(t, uciRealCorpusRootEnv)
@@ -289,7 +323,7 @@ func TestUCIRealCorpusInstalledProviderLifecycle(t *testing.T) {
 		LoopbackHost:              "127.0.0.1",
 		ReservedLoopbackPortCount: 2,
 		ReadinessTimeout:          30 * time.Second,
-		OperationTimeout:          3 * time.Hour,
+		OperationTimeout:          uciRealCorpusOperationTimeout,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), request.OperationTimeout)
 	defer cancel()
