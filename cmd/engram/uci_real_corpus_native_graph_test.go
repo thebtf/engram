@@ -16,6 +16,7 @@ const (
 	uciRealCorpusNativeGraphTSX              = "tsx"
 	uciRealCorpusNativeGraphBuildSymbol      = "function:build"
 	uciRealCorpusNativeGraphWidgetSymbol     = "function:Widget"
+	uciRealCorpusNativeGraphScreenSymbol     = "function:Screen"
 	uciRealCorpusNativeGraphCallerPath       = uciRealCorpusTSRoot + "/caller.ts"
 	uciRealCorpusNativeGraphBridgePath       = uciRealCorpusTSRoot + "/bridge.ts"
 	uciRealCorpusNativeGraphRemotePath       = uciRealCorpusTSRoot + "/remote.ts"
@@ -26,20 +27,23 @@ const (
 )
 
 type uciRealCorpusNativeGraph struct {
-	Import                            uciRealCorpusNativeGraphEdge `json:"import"`
-	ImportAlias                       uciRealCorpusNativeGraphEdge `json:"import_alias"`
-	Reexport                          uciRealCorpusNativeGraphEdge `json:"reexport"`
-	ReverseDependency                 uciRealCorpusNativeGraphEdge `json:"reverse_dependency"`
-	CallerLocalBuildAlias             uciRealCorpusNativeGraphEdge `json:"caller_local_build_alias"`
-	BridgePublicBuildReexport         uciRealCorpusNativeGraphEdge `json:"bridge_public_build_reexport"`
-	ScreenRemoteWidgetAlias           uciRealCorpusNativeGraphEdge `json:"screen_remote_widget_alias"`
-	CallerLocalBuildReverseDependency uciRealCorpusNativeGraphEdge `json:"caller_local_build_reverse_dependency"`
+	Import                                       uciRealCorpusNativeGraphEdge `json:"import"`
+	ImportAlias                                  uciRealCorpusNativeGraphEdge `json:"import_alias"`
+	Reexport                                     uciRealCorpusNativeGraphEdge `json:"reexport"`
+	ReverseDependency                            uciRealCorpusNativeGraphEdge `json:"reverse_dependency"`
+	CallerLocalBuildAlias                        uciRealCorpusNativeGraphEdge `json:"caller_local_build_alias"`
+	BridgePublicBuildReexport                    uciRealCorpusNativeGraphEdge `json:"bridge_public_build_reexport"`
+	ScreenRemoteWidgetAlias                      uciRealCorpusNativeGraphEdge `json:"screen_remote_widget_alias"`
+	ScreenRemoteWidgetReference                  uciRealCorpusNativeGraphEdge `json:"screen_remote_widget_reference"`
+	CallerLocalBuildReverseDependency            uciRealCorpusNativeGraphEdge `json:"caller_local_build_reverse_dependency"`
+	ScreenRemoteWidgetReferenceReverseDependency uciRealCorpusNativeGraphEdge `json:"screen_remote_widget_reference_reverse_dependency"`
 }
 
 type uciRealCorpusNativeGraphEdge struct {
 	SourcePath             string `json:"source_path"`
 	TargetPath             string `json:"target_path"`
 	Relation               string `json:"relation"`
+	SourceSymbol           string `json:"source_symbol,omitempty"`
 	TargetSymbol           string `json:"target_symbol"`
 	ReferenceKind          string `json:"reference_kind"`
 	ByteStart              int64  `json:"byte_start"`
@@ -63,6 +67,7 @@ type uciRealCorpusNativeGraphExpectation struct {
 	targetLanguage string
 	sourcePath     string
 	targetPath     string
+	sourceSymbol   string
 	targetSymbol   string
 	rawTarget      string
 	importedSymbol string
@@ -143,6 +148,9 @@ func uciVerifyRealCorpusNativeGraph(ctx context.Context, authority *uciInstalled
 	screenRemoteWidgetExpectation := uciRealCorpusNativeGraphExpectation{
 		kind: "import_alias", relation: "imports", sourceLanguage: uciRealCorpusNativeGraphTSX, targetLanguage: uciRealCorpusNativeGraphTSX, sourcePath: uciRealCorpusNativeGraphScreenPath, targetPath: uciRealCorpusNativeGraphWidgetPath, targetSymbol: uciRealCorpusNativeGraphWidgetSymbol, rawTarget: "Widget as RemoteWidget", importedSymbol: "Widget", localAlias: "RemoteWidget", referenceKey: "import:./widget.tsx#Widget:RemoteWidget",
 	}
+	screenRemoteWidgetReferenceExpectation := uciRealCorpusNativeGraphExpectation{
+		kind: "jsx_reference", relation: "references", sourceLanguage: uciRealCorpusNativeGraphTSX, targetLanguage: uciRealCorpusNativeGraphTSX, sourcePath: uciRealCorpusNativeGraphScreenPath, targetPath: uciRealCorpusNativeGraphWidgetPath, sourceSymbol: uciRealCorpusNativeGraphScreenSymbol, targetSymbol: uciRealCorpusNativeGraphWidgetSymbol, rawTarget: "RemoteWidget",
+	}
 
 	importRow, err := uciRealCorpusNativeGraphExactEdge(ctx, authority, publication, importExpectation)
 	if err != nil {
@@ -168,10 +176,17 @@ func uciVerifyRealCorpusNativeGraph(ctx context.Context, authority *uciInstalled
 	if err != nil {
 		return uciRealCorpusNativeGraph{}, err
 	}
+	screenRemoteWidgetReferenceRow, err := uciRealCorpusNativeGraphExactEdge(ctx, authority, publication, screenRemoteWidgetReferenceExpectation)
+	if err != nil {
+		return uciRealCorpusNativeGraph{}, err
+	}
 	if err := uciRealCorpusNativeGraphIncomingEdge(ctx, authority, publication, importAliasExpectation, importAliasRow.EdgeKey); err != nil {
 		return uciRealCorpusNativeGraph{}, err
 	}
 	if err := uciRealCorpusNativeGraphIncomingEdge(ctx, authority, publication, callerLocalBuildExpectation, callerLocalBuildRow.EdgeKey); err != nil {
+		return uciRealCorpusNativeGraph{}, err
+	}
+	if err := uciRealCorpusNativeGraphIncomingEdge(ctx, authority, publication, screenRemoteWidgetReferenceExpectation, screenRemoteWidgetReferenceRow.EdgeKey); err != nil {
 		return uciRealCorpusNativeGraph{}, err
 	}
 
@@ -199,6 +214,10 @@ func uciVerifyRealCorpusNativeGraph(ctx context.Context, authority *uciInstalled
 	if err != nil {
 		return uciRealCorpusNativeGraph{}, err
 	}
+	screenRemoteWidgetReferenceProof, err := uciRealCorpusNativeGraphProof(screenRemoteWidgetReferenceRow, screenRemoteWidgetReferenceExpectation)
+	if err != nil {
+		return uciRealCorpusNativeGraph{}, err
+	}
 	return uciRealCorpusNativeGraph{
 		Import:                            importProof,
 		ImportAlias:                       importAliasProof,
@@ -207,7 +226,9 @@ func uciVerifyRealCorpusNativeGraph(ctx context.Context, authority *uciInstalled
 		CallerLocalBuildAlias:             callerLocalBuildProof,
 		BridgePublicBuildReexport:         bridgePublicBuildProof,
 		ScreenRemoteWidgetAlias:           screenRemoteWidgetProof,
+		ScreenRemoteWidgetReference:       screenRemoteWidgetReferenceProof,
 		CallerLocalBuildReverseDependency: callerLocalBuildProof,
+		ScreenRemoteWidgetReferenceReverseDependency: screenRemoteWidgetReferenceProof,
 	}, nil
 }
 
@@ -241,6 +262,7 @@ func uciRealCorpusNativeGraphExactEdge(ctx context.Context, authority *uciInstal
 		expected.sourcePath,
 		expected.targetPath,
 		expected.relation,
+		expected.sourceSymbol,
 		expected.targetSymbol,
 	).Scan(&rows).Error
 	if err != nil {
@@ -270,6 +292,7 @@ func uciRealCorpusNativeGraphIncomingEdge(ctx context.Context, authority *uciIns
 		expected.sourcePath,
 		expected.targetPath,
 		expected.relation,
+		expected.sourceSymbol,
 		expected.targetSymbol,
 	).Scan(&rows).Error
 	if err != nil {
@@ -282,10 +305,13 @@ func uciRealCorpusNativeGraphIncomingEdge(ctx context.Context, authority *uciIns
 }
 
 func uciRealCorpusNativeGraphValidateRow(row uciRealCorpusNativeGraphRow, expected uciRealCorpusNativeGraphExpectation) error {
+	if expected.sourcePath == "" || expected.targetPath == "" || expected.sourcePath == expected.targetPath {
+		return errors.New("real-corpus native graph expected source and target paths must be distinct")
+	}
 	if expected.sourceLanguage == "" || expected.targetLanguage == "" {
 		return errors.New("real-corpus native graph expected languages are incomplete")
 	}
-	if row.SourcePath != expected.sourcePath || row.TargetPath != expected.targetPath || row.Relation != expected.relation || row.SourceSymbol != "" || row.TargetSymbol != expected.targetSymbol {
+	if row.SourcePath != expected.sourcePath || row.TargetPath != expected.targetPath || row.Relation != expected.relation || row.SourceSymbol != expected.sourceSymbol || row.TargetSymbol != expected.targetSymbol {
 		return errors.New("real-corpus native graph edge does not match the expected source, target, relation, or symbols")
 	}
 	if row.EvidenceKind != "resolved" || row.ResolutionState != "resolved" || row.ResolverRevision != uciRealCorpusNativeGraphResolverRevision || row.ReferenceRelation != expected.relation {
@@ -361,6 +387,7 @@ func uciRealCorpusNativeGraphProof(row uciRealCorpusNativeGraphRow, expected uci
 		SourcePath:             row.SourcePath,
 		TargetPath:             row.TargetPath,
 		Relation:               row.Relation,
+		SourceSymbol:           row.SourceSymbol,
 		TargetSymbol:           row.TargetSymbol,
 		ReferenceKind:          hints.Kind,
 		ByteStart:              span.ByteStart,
@@ -503,12 +530,13 @@ LEFT JOIN ci_definitions AS target_definition
 	AND target_definition.local_symbol_key = edge.target_symbol
 WHERE edge.source_path = ?
 	AND edge.target_path = ?
+	AND edge.source_path <> edge.target_path
 	AND edge.relation = ?
 	AND edge.evidence_kind = 'resolved'
 	AND edge.resolution_state = 'resolved'
 	AND edge.resolver_revision = 'uci-prepared-tree-sitter-module/v1'
 	AND reference.relation = edge.relation
-	AND COALESCE(edge.source_symbol, '') = ''
+	AND COALESCE(edge.source_symbol, '') = ?
 	AND COALESCE(edge.target_symbol, '') = ?
 ORDER BY edge.edge_key ASC
 `
@@ -561,12 +589,13 @@ JOIN ci_reference_sites AS reference
 	AND reference.reference_site_id::text = (edge.evidence_json ->> 'ReferenceSiteID')
 WHERE edge.source_path = ?
 	AND edge.target_path = ?
+	AND edge.source_path <> edge.target_path
 	AND edge.relation = ?
 	AND edge.evidence_kind = 'resolved'
 	AND edge.resolution_state = 'resolved'
 	AND edge.resolver_revision = 'uci-prepared-tree-sitter-module/v1'
 	AND reference.relation = edge.relation
-	AND COALESCE(edge.source_symbol, '') = ''
+	AND COALESCE(edge.source_symbol, '') = ?
 	AND COALESCE(edge.target_symbol, '') = ?
 ORDER BY edge.edge_key ASC
 `
