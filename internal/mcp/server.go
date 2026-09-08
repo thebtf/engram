@@ -1096,12 +1096,10 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		tools = append(tools, bulkOpsTools()...)
 	}
 
-	// Code intelligence tools (CR-006) retain the established public surface.
-	// Code intelligence tools are advertised only when the current scoped UCI
-	// application implements their public capability. The raw-project store is
-	// rollback-only and never controls current tool discovery or dispatch.
+	// Code intelligence search is available through scoped UCI or the explicit
+	// legacy-only rollback reader; a scoped application always takes precedence.
 	// codebase_status remains daemon-owned and is not advertised here.
-	if codeIntelEnabled() && s.hasCodebaseIntelligenceApplication() {
+	if codeIntelEnabled() && (s.hasCodebaseIntelligenceApplication() || s.hasLegacyUnscopedCodeChunkStore()) {
 		tools = append(tools, codebaseSearchTool())
 	}
 	if codeIntelEnabled() && s.hasCodebaseContextApplication() {

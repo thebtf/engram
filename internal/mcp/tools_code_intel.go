@@ -79,15 +79,15 @@ type CodebaseStatusSnapshot struct {
 	EvidenceRecorder CodebaseEvidenceRecorderHealth
 }
 
-// SetLegacyUnscopedCodeChunkStore wires the intentionally invoked raw-project
-// compatibility reader. Current UCI dispatch never consults this store.
+// SetLegacyUnscopedCodeChunkStore wires the explicit raw-project rollback reader.
+// UCI remains preferred whenever a scoped code intelligence application exists.
 func (s *Server) SetLegacyUnscopedCodeChunkStore(cs *gorm.CodeChunkStore) {
+	s.codebaseContextMu.Lock()
+	defer s.codebaseContextMu.Unlock()
 	s.legacyUnscopedCodeChunkStore = cs
 }
 
-// codebaseSearchTool returns the current UCI-only codebase_search definition.
-// Direct calls always fail closed through UCI resolution; they never select or
-// retrieve by raw project ID, including when the legacy store is unavailable.
+// codebaseSearchTool defines the public codebase_search schema.
 func codebaseSearchTool() Tool {
 	return Tool{
 		Name:        "codebase_search",
@@ -127,7 +127,7 @@ func codebaseSearchTool() Tool {
 	}
 }
 
-// codebaseStatusTool returns the current UCI-only codebase_status definition.
+// codebaseStatusTool defines the direct codebase_status schema.
 func codebaseStatusTool() Tool {
 	return Tool{
 		Name:        "codebase_status",
@@ -173,16 +173,23 @@ func codebaseAfterBarrierSchema() map[string]any {
 	}
 }
 
-// handleCodebaseSearch always dispatches through the current UCI route.
+// handleCodebaseSearch prefers scoped UCI and selects raw-project retrieval only
+// for the explicit legacy-only rollback state.
 func (s *Server) handleCodebaseSearch(ctx context.Context, args json.RawMessage) (string, error) {
 	if !codeIntelEnabled() {
 		return "", fmt.Errorf("codebase_search requires ENGRAM_CODE_INTEL_ENABLED=true")
 	}
+	if s.hasCodebaseIntelligenceApplication() {
+		return s.handleUCICodebaseSearch(ctx, args)
+	}
+	if s.hasLegacyUnscopedCodeChunkStore() {
+		return s.handleLegacyUnscopedCodebaseSearch(ctx, args)
+	}
 	return s.handleUCICodebaseSearch(ctx, args)
 }
 
-// handleLegacyUnscopedCodebaseSearch preserves raw-project retrieval for
-// internal rollback only. It is not a Server ToolCall endpoint.
+// handleLegacyUnscopedCodebaseSearch preserves the explicit raw-project
+// rollback route and labels every successful response legacy_unscoped.
 func (s *Server) handleLegacyUnscopedCodebaseSearch(ctx context.Context, args json.RawMessage) (string, error) {
 	if !codeIntelEnabled() {
 		return "", errors.New("legacy unscoped code search requires ENGRAM_CODE_INTEL_ENABLED=true")
@@ -234,16 +241,23 @@ func (s *Server) handleLegacyUnscopedCodebaseSearch(ctx context.Context, args js
 	return string(encoded), nil
 }
 
-// handleCodebaseStatus always dispatches through the current UCI route.
+// handleCodebaseStatus prefers scoped UCI and selects raw-project retrieval
+// only for the explicit legacy-only rollback state.
 func (s *Server) handleCodebaseStatus(ctx context.Context, args json.RawMessage) (string, error) {
 	if !codeIntelEnabled() {
 		return "", fmt.Errorf("codebase_status requires ENGRAM_CODE_INTEL_ENABLED=true")
 	}
+	if s.hasCodebaseIntelligenceApplication() {
+		return s.handleUCICodebaseStatus(ctx, args)
+	}
+	if s.hasLegacyUnscopedCodeChunkStore() {
+		return s.handleLegacyUnscopedCodebaseStatus(ctx, args)
+	}
 	return s.handleUCICodebaseStatus(ctx, args)
 }
 
-// handleLegacyUnscopedCodebaseStatus preserves raw-project status for internal
-// rollback only. It is not a Server ToolCall endpoint.
+// handleLegacyUnscopedCodebaseStatus preserves the explicit raw-project
+// rollback route and labels every successful response legacy_unscoped.
 func (s *Server) handleLegacyUnscopedCodebaseStatus(ctx context.Context, args json.RawMessage) (string, error) {
 	if !codeIntelEnabled() {
 		return "", errors.New("legacy unscoped code status requires ENGRAM_CODE_INTEL_ENABLED=true")
@@ -755,6 +769,12 @@ func (s *Server) hasCodebaseIntelligenceApplication() bool {
 	defer s.codebaseContextMu.Unlock()
 	_, ok := s.codebaseContextApplication.(CodebaseIntelligenceApplication)
 	return ok
+}
+
+func (s *Server) hasLegacyUnscopedCodeChunkStore() bool {
+	s.codebaseContextMu.Lock()
+	defer s.codebaseContextMu.Unlock()
+	return s.legacyUnscopedCodeChunkStore != nil
 }
 
 // releaseCodebaseQueryResponse is the single release boundary for authorized
