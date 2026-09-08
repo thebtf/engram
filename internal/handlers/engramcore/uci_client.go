@@ -19,7 +19,9 @@ import (
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -207,8 +209,9 @@ func NewUCIIndexAdapter(module *Module) *UCIIndexAdapter {
 	return &UCIIndexAdapter{module: module}
 }
 
-// ResolveIndexTarget validates an opaque client-owned handle, binds it at the
-// configured server, and retains only the server-authorized target authority.
+// ResolveIndexTarget binds an optional opaque client-owned handle at the
+// configured server. An empty handle leaves selection to the server's existing
+// client-scoped default and retains only server-authorized target authority.
 func (a *UCIIndexAdapter) ResolveIndexTarget(ctx context.Context, project muxcore.ProjectContext, contextHandle string) (ResolvedIndexTarget, error) {
 	if err := uciClientContextError("ResolveIndexTarget", ctx); err != nil {
 		return ResolvedIndexTarget{}, err
@@ -217,7 +220,7 @@ func (a *UCIIndexAdapter) ResolveIndexTarget(ctx context.Context, project muxcor
 	if err != nil {
 		return ResolvedIndexTarget{}, err
 	}
-	if !validUCIClientIdentifier(contextHandle, 128) {
+	if contextHandle != "" && !validUCIClientIdentifier(contextHandle, 128) {
 		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("resolved context handle is unavailable")
 	}
 	if a == nil || a.module == nil {
@@ -239,7 +242,7 @@ func (a *UCIIndexAdapter) ResolveIndexTarget(ctx context.Context, project muxcor
 		&pb.BindCodeContextRequest{ClientSessionId: clientSessionID, ContextHandle: contextHandle},
 	)
 	if err != nil {
-		return ResolvedIndexTarget{}, err
+		return ResolvedIndexTarget{}, uciIndexContextResolutionError(err)
 	}
 	binding, err := uciClientIndexBindingFromBindResponse(bound)
 	if err != nil {
@@ -248,7 +251,7 @@ func (a *UCIIndexAdapter) ResolveIndexTarget(ctx context.Context, project muxcor
 
 	return ResolvedIndexTarget{
 		ClientSessionID: clientSessionID,
-		ContextHandle:   contextHandle,
+		ContextHandle:   bound.GetContextHandle(),
 		Binding:         binding,
 		connection:      conn,
 	}, nil
@@ -439,6 +442,16 @@ func uciClientIndexBindingFromBindResponse(response *pb.BindCodeContextResponse)
 
 func uciIndexSourceUnavailable(message string) error {
 	return &module.ModuleError{Code: string(uci.QueryErrorSourceUnavailable), Message: message}
+}
+
+func uciIndexContextResolutionError(err error) error {
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		grpcStatus, ok := status.FromError(current)
+		if ok && grpcStatus.Code() == codes.FailedPrecondition && grpcStatus.Message() == string(uci.ContextRequired) {
+			return &module.ModuleError{Code: string(uci.ContextRequired), Message: "context is required"}
+		}
+	}
+	return err
 }
 
 func (client *uciClient) Bind(ctx context.Context, request *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {
@@ -742,6 +755,8 @@ func validUCIClientBindRequest(request *pb.BindCodeContextRequest) bool {
 		return validUCIClientContextRef(request.GetRequestedContext())
 	case request.GetRequestedContext() == nil && request.GetContextHandle() != "":
 		return validUCIClientIdentifier(request.GetContextHandle(), 128)
+	case request.GetRequestedContext() == nil && request.GetContextHandle() == "":
+		return true
 	default:
 		return false
 	}
@@ -874,10 +889,16 @@ func validUCIClientBindResponse(request *pb.BindCodeContextRequest, response *pb
 	if context != nil && (!validUCIClientContextRef(context) || !contextMatchesUCIClientIndexScope(context, response.GetIndexScope())) {
 		return false
 	}
-	if request.GetContextHandle() != "" {
-		return request.GetRequestedContext() == nil && response.GetContextHandle() == request.GetContextHandle()
+	switch {
+	case request.GetRequestedContext() != nil && request.GetContextHandle() == "":
+		return context != nil && sameUCIClientContextRef(request.GetRequestedContext(), context)
+	case request.GetRequestedContext() == nil && request.GetContextHandle() != "":
+		return response.GetContextHandle() == request.GetContextHandle()
+	case request.GetRequestedContext() == nil && request.GetContextHandle() == "":
+		return context != nil
+	default:
+		return false
 	}
-	return request.GetContextHandle() == "" && context != nil && sameUCIClientContextRef(request.GetRequestedContext(), context)
 }
 
 func validUCIClientBeginResponse(request *pb.BeginCodeIndexRequest, response *pb.BeginCodeIndexResponse) bool {

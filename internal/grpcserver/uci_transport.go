@@ -322,6 +322,8 @@ func validUCIBindCodeContextResponse(request *pb.BindCodeContextRequest, respons
 		return response.GetContext() != nil && sameUCIContextRef(request.GetRequestedContext(), response.GetContext())
 	case request.GetRequestedContext() == nil && request.GetContextHandle() != "":
 		return response.GetContextHandle() == request.GetContextHandle()
+	case request.GetRequestedContext() == nil && request.GetContextHandle() == "":
+		return response.GetContext() != nil
 	default:
 		return false
 	}
@@ -377,6 +379,7 @@ func validateUCIBindCodeContextRequest(request *pb.BindCodeContextRequest) error
 			return uciTransportInvalidArgument()
 		}
 	case request.GetRequestedContext() == nil && validUCIIdentifier(request.GetContextHandle(), maxUCITransportIdentifierBytes):
+	case request.GetRequestedContext() == nil && request.GetContextHandle() == "":
 	default:
 		return uciTransportInvalidArgument()
 	}

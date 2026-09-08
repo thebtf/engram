@@ -18,7 +18,7 @@ var (
 	ErrUCIAliasConflict              = errors.New("uci context alias conflict")
 	errUCIContextStoreNotConfigured  = errors.New("uci context store not configured")
 	errUCIContextCatalogNotFound     = errors.New("uci context catalog entry not found")
-	errUCIContextAuthorizationDenied = errors.New("uci context authorization denied")
+	errUCIContextAuthorizationDenied = uci.NewContextError(uci.PermissionDenied, errors.New("uci context authorization denied"))
 )
 
 const uciContextListMax = 64

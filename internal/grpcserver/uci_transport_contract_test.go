@@ -105,11 +105,12 @@ func TestUCITransportContractRequiresScopedAdditions(t *testing.T) {
 		{name: "FinalizeCodeIndex", input: "engram.v1.FinalizeCodeIndexRequest", output: "engram.v1.FinalizeCodeIndexResponse"},
 		{name: "QueryCode", input: "engram.v1.QueryCodeRequest", output: "engram.v1.QueryCodeResponse"},
 		{name: "ExploreCode", input: "engram.v1.ExploreCodeRequest", output: "engram.v1.ExploreCodeResponse"},
+		{name: "RecordUCICompletion", input: "engram.v1.RecordUCICompletionRequest", output: "engram.v1.RecordUCICompletionResponse"},
 	} {
 		requireUCITransportMethod(t, service, spec)
 	}
-	if methods := service.Methods().Len(); methods != 20 {
-		t.Fatalf("EngramService methods = %d, want 20 legacy-plus-UCI methods", methods)
+	if methods := service.Methods().Len(); methods != 21 {
+		t.Fatalf("EngramService methods = %d, want 21 legacy-plus-UCI methods", methods)
 	}
 
 	file := pb.File_proto_engram_v1_engram_proto
@@ -365,6 +366,24 @@ func TestUCITransportContractDelegatesValidatedRequests(t *testing.T) {
 	}
 	if runtime.exploreRequest != nil {
 		t.Fatal("canceled ExploreCode reached the runtime")
+	}
+}
+
+func TestUCITransportContractDelegatesUnboundBindRequest(t *testing.T) {
+	runtime := &uciTransportContractFake{}
+	server := &Server{}
+	server.SetUCITransport(runtime)
+	request := &pb.BindCodeContextRequest{ClientSessionId: "client-session"}
+
+	bound, err := server.BindCodeContext(context.Background(), request)
+	if err != nil {
+		t.Fatalf("BindCodeContext() error = %v", err)
+	}
+	if bound == nil || bound.GetContext() == nil {
+		t.Fatalf("unbound BindCodeContext response = %#v, want resolved context", bound)
+	}
+	if runtime.bindRequest != request || runtime.bindRequest.GetRequestedContext() != nil || runtime.bindRequest.GetContextHandle() != "" {
+		t.Fatalf("unbound BindCodeContext request = %#v, want selector-empty delegation", runtime.bindRequest)
 	}
 }
 
@@ -699,10 +718,6 @@ func TestUCITransportContractRejectsClosedInputsAndInvalidRuntimeResponses(t *te
 			_, err := server.BindCodeContext(context.Background(), request)
 			return err
 		}},
-		{name: "missing bind selector", invoke: func(server *Server) error {
-			_, err := server.BindCodeContext(context.Background(), &pb.BindCodeContextRequest{ClientSessionId: "client-session"})
-			return err
-		}},
 		{name: "multiple bind selectors", invoke: func(server *Server) error {
 			request := uciTransportContractBindRequest()
 			request.ContextHandle = "context-handle"
@@ -835,6 +850,13 @@ func TestUCITransportContractRejectsClosedInputsAndInvalidRuntimeResponses(t *te
 			response.Context = nil
 			runtime.bindResponse = response
 			_, err := server.BindCodeContext(context.Background(), uciTransportContractBindRequest())
+			return err
+		}},
+		{name: "unbound bind omits resolved context", invoke: func(server *Server, runtime *uciTransportContractFake) error {
+			response := uciTransportContractBindResponse()
+			response.Context = nil
+			runtime.bindResponse = response
+			_, err := server.BindCodeContext(context.Background(), &pb.BindCodeContextRequest{ClientSessionId: "client-session"})
 			return err
 		}},
 		{name: "bind handle changes opaque handle", invoke: func(server *Server, runtime *uciTransportContractFake) error {

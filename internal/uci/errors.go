@@ -1,5 +1,16 @@
 package uci
 
+import "errors"
+
+// ErrPublicationLeaseStale is the closed publication outcome for an inactive or superseded lease.
+var ErrPublicationLeaseStale = errors.New("LEASE_STALE")
+
+// ErrPublicationBuildIncomplete is the closed publication outcome for an incomplete staged build.
+var ErrPublicationBuildIncomplete = errors.New("BUILD_INCOMPLETE")
+
+// ErrPublicationIdempotencyMismatch is the closed publication outcome for a changed replay binding.
+var ErrPublicationIdempotencyMismatch = errors.New("IDEMPOTENCY_MISMATCH")
+
 // ContextErrorCode is one of the closed context-resolution outcomes.
 type ContextErrorCode string
 
@@ -43,6 +54,11 @@ func (code ContextErrorCode) valid() bool {
 	default:
 		return false
 	}
+}
+
+// NewContextError creates a closed context error while retaining an internal cause.
+func NewContextError(code ContextErrorCode, cause error) *ContextError {
+	return newContextError(code, cause)
 }
 
 func newContextError(code ContextErrorCode, cause error) *ContextError {

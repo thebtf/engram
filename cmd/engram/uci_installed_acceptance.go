@@ -41,11 +41,13 @@ const (
 	uciInstalledAcceptanceClientA                  = "client-a"
 	uciInstalledAcceptanceClientB                  = "client-b"
 	uciInstalledAcceptanceClientC                  = "client-c"
+	uciInstalledAcceptanceClientRecorder           = "client-recorder"
 	uciInstalledAcceptanceParserCanaryRelativePath = "parser-canary.ts"
 	uciInstalledAcceptanceParserCanarySource       = "export function InstalledParserCanary(): string {\n\treturn \"UCI_INSTALLED_PARSER_CANARY\"\n}\n"
 	uciInstalledAcceptanceSchemaPrefix             = "uci_installed_"
 	uciInstalledAcceptanceTokenDefaultTTL          = 30 * time.Minute
 	uciInstalledAcceptanceTokenGrace               = 5 * time.Minute
+	uciInstalledAcceptanceScenarioCodeObserved     = "OBSERVED_INSTALLED_LIFECYCLE"
 )
 
 var (
@@ -71,6 +73,38 @@ type uciInstalledAcceptanceRequest struct {
 	ReadinessTimeout          time.Duration
 	OperationTimeout          time.Duration
 	Fixture                   uciInstalledAcceptanceFixture
+	ScenarioProbe             uciInstalledAcceptanceScenarioProbe
+}
+
+// uciInstalledAcceptanceScenarioProbe runs synchronously after the base
+// recorder matrix. It must restore every live-state mutation before returning
+// and must not retain its runtime after it returns.
+type uciInstalledAcceptanceScenarioProbe func(context.Context, uciInstalledAcceptanceScenarioRuntime) (map[string]uciInstalledAcceptanceScenarioEvidence, error)
+
+// uciInstalledAcceptanceScenarioRuntime exposes only the already-live
+// installed lifecycle resources needed by same-package scenario probes.
+type uciInstalledAcceptanceScenarioRuntime struct {
+	Request            uciInstalledAcceptanceRequest
+	Installation       *uciInstallHarnessInstallation
+	Authority          *uciInstalledAcceptanceAuthority
+	Worktrees          uciInstalledAcceptanceWorktreesFixture
+	ClientA            *uciInstalledAcceptanceMCPClient
+	ClientB            *uciInstalledAcceptanceMCPClient
+	ClientC            *uciInstalledAcceptanceMCPClient
+	Recorder           *uciInstalledAcceptanceMCPClient
+	Selections         map[string]uciInstalledAcceptanceSelection
+	Publications       map[string]uciInstalledAcceptancePublication
+	ParserBundleDigest string
+	Candidates         map[string]uciInstallHarnessCommand
+	ServerEnvironment  []string
+	ClientEnvironment  []string
+}
+
+// uciInstalledAcceptanceScenarioEvidence retains only the safe receipt fields
+// a live installed scenario may contribute.
+type uciInstalledAcceptanceScenarioEvidence struct {
+	Code   string
+	Digest string
 }
 
 type uciInstalledAcceptanceFixture struct {
@@ -101,6 +135,7 @@ type uciInstalledAcceptanceResult struct {
 	Defaults              uciInstalledAcceptanceDefaults
 	Refusals              map[string]uciInstalledAcceptanceClosedOutcome
 	Recorder              uciInstalledAcceptanceRecorder
+	ScenarioEvidence      map[string]uciInstalledAcceptanceScenarioEvidence
 	Watcher               uciInstalledAcceptanceWatcher
 	Restart               uciInstalledAcceptanceRestart
 	Cleanup               uciInstalledAcceptanceCleanup
@@ -614,7 +649,7 @@ func runUCIInstalledAcceptance(ctx context.Context, request uciInstalledAcceptan
 		parserBundleDigest,
 		daemonControlRoot,
 		installation,
-		activeDaemonPID,
+		&activeDaemonPID,
 		map[string]*uciInstalledAcceptanceMCPClient{
 			uciInstalledAcceptanceClientA: clientA,
 			uciInstalledAcceptanceClientB: clientB,
@@ -719,6 +754,28 @@ func uciValidateInstalledAcceptanceRequest(ctx context.Context, request uciInsta
 		return err
 	}
 	return nil
+}
+
+func uciValidateInstalledAcceptanceScenarioEvidence(evidence map[string]uciInstalledAcceptanceScenarioEvidence) error {
+	for scenarioID, scenarioEvidence := range evidence {
+		if !uciInstalledAcceptanceSafeScenarioID(scenarioID) {
+			return errors.New("installed scenario evidence ID is unsafe")
+		}
+		if scenarioEvidence.Code != uciInstalledAcceptanceScenarioCodeObserved {
+			return errors.New("installed scenario evidence code is unsafe")
+		}
+		if !uciInstalledAcceptanceIsBareSHA256(scenarioEvidence.Digest) {
+			return errors.New("installed scenario evidence digest is unsafe")
+		}
+	}
+	return nil
+}
+
+func uciInstalledAcceptanceSafeScenarioID(id string) bool {
+	if len(id) != 3 || id[0] != 'U' {
+		return false
+	}
+	return id[1] >= '0' && id[1] <= '9' && id[2] >= '0' && id[2] <= '9'
 }
 
 func uciValidateInstalledAcceptanceTestPostgres(raw string) error {
@@ -1374,6 +1431,12 @@ func uciInstalledAcceptanceEnvironment(request uciInstalledAcceptanceRequest, au
 		"ENGRAM_WORKER_PORT=" + strconv.Itoa(serverPort),
 		"ENGRAM_AUTH_ADMIN_TOKEN=" + adminToken,
 		"ENGRAM_CODE_INTEL_ENABLED=true",
+		"ENGRAM_EMBEDDING_URL=",
+		"ENGRAM_EMBEDDING_MODEL=",
+		"ENGRAM_EMBEDDING_API_KEY=",
+		"ENGRAM_RERANK_URL=",
+		"ENGRAM_RERANK_MODEL=",
+		"ENGRAM_RERANK_API_KEY=",
 		"ENGRAM_DATA_DIR=" + serverData,
 		"TEMP=" + tempRoot,
 		"TMP=" + tempRoot,
@@ -1384,6 +1447,12 @@ func uciInstalledAcceptanceEnvironment(request uciInstalledAcceptanceRequest, au
 		"LOCALAPPDATA=" + filepath.Join(homeRoot, "localappdata"),
 	}
 	clientEnvironment := []string{
+		"ENGRAM_EMBEDDING_URL=",
+		"ENGRAM_EMBEDDING_MODEL=",
+		"ENGRAM_EMBEDDING_API_KEY=",
+		"ENGRAM_RERANK_URL=",
+		"ENGRAM_RERANK_MODEL=",
+		"ENGRAM_RERANK_API_KEY=",
 		"ENGRAM_CODE_INTEL_ENABLED=true",
 		"ENGRAM_URL=" + serverURL,
 		"ENGRAM_TOKEN=" + authority.rawToken,
@@ -2545,7 +2614,7 @@ func uciInstalledAcceptanceBarrierResult(status uciInstalledAcceptanceStatus, se
 	if detail := uciInstalledAcceptanceSafeErrorDetail(status.error); detail != "" {
 		return uciInstalledAcceptancePublication{}, false, fmt.Errorf("installed standard MCP after_barrier status error: %s", detail)
 	}
-	if status.status == "running" && status.runID == selection.runID && status.freshness != nil && status.freshness.barrier != nil && status.freshness.barrier.state == "timed_out" {
+	if status.status == "running" && status.runID == selection.runID {
 		return uciInstalledAcceptancePublication{}, true, nil
 	}
 	publication, err := uciInstalledAcceptanceStatusPublication(status, selection)
@@ -3495,12 +3564,16 @@ func uciRestartInstalledAcceptance(
 	serverPort int,
 	parserBundleDigest, daemonControlRoot string,
 	oldInstallation *uciInstallHarnessInstallation,
-	oldDaemonPID int,
+	daemonOwner *int,
 	oldClients map[string]*uciInstalledAcceptanceMCPClient,
 	selections map[string]uciInstalledAcceptanceSelection,
 	publications map[string]uciInstalledAcceptancePublication,
 	result *uciInstalledAcceptanceResult,
 ) (next *uciInstallHarnessInstallation, newDaemonPID int, retErr error) {
+	if daemonOwner == nil {
+		return nil, 0, errors.New("installed acceptance restart daemon owner is unavailable")
+	}
+	oldDaemonPID := *daemonOwner
 	if oldInstallation == nil || authority == nil || result == nil || oldDaemonPID <= 0 || result.Processes.DaemonPID != oldDaemonPID || result.Processes.ServerPID <= 0 || result.Processes.ParserPID <= 0 {
 		return nil, 0, errors.New("installed acceptance restart baseline is incomplete")
 	}
@@ -3553,6 +3626,9 @@ func uciRestartInstalledAcceptance(
 	if shutdownErr := errors.Join(shutdownErrors...); shutdownErr != nil {
 		return nil, 0, shutdownErr
 	}
+	// The restarted lifecycle now owns successor cleanup. A later failure must
+	// not stop the retired PID against a successor daemon control record.
+	*daemonOwner = 0
 	if err := uciWaitForInstalledAcceptanceLoopbackRelease(ctx, request.LoopbackHost, serverPort); err != nil {
 		return nil, 0, err
 	}
@@ -3773,6 +3849,49 @@ func uciRestartInstalledAcceptance(
 	if afterCounts.ResolvedEdges != beforeCounts.ResolvedEdges {
 		return nil, 0, errors.New("restarted installed runtime changed unchanged-input link counts")
 	}
+	if request.ScenarioProbe != nil {
+		scenarioSelections := map[string]uciInstalledAcceptanceSelection{
+			uciInstalledAcceptanceClientA:        firstSelection,
+			uciInstalledAcceptanceClientB:        secondSelection,
+			uciInstalledAcceptanceClientC:        thirdSelection,
+			uciInstalledAcceptanceClientRecorder: firstSelection,
+		}
+		scenarioPublications := map[string]uciInstalledAcceptancePublication{
+			uciInstalledAcceptanceClientA:        restartedPublications[uciInstalledAcceptanceClientA],
+			uciInstalledAcceptanceClientB:        restartedPublications[uciInstalledAcceptanceClientB],
+			uciInstalledAcceptanceClientC:        restartedPublications[uciInstalledAcceptanceClientC],
+			uciInstalledAcceptanceClientRecorder: restartedPublications[uciInstalledAcceptanceClientA],
+		}
+		evidence, probeErr := request.ScenarioProbe(ctx, uciInstalledAcceptanceScenarioRuntime{
+			Request:            request,
+			Installation:       next,
+			Authority:          authority,
+			Worktrees:          worktrees,
+			ClientA:            first,
+			ClientB:            second,
+			ClientC:            third,
+			Recorder:           first,
+			Selections:         scenarioSelections,
+			Publications:       scenarioPublications,
+			ParserBundleDigest: parserBundleDigest,
+			Candidates:         candidates,
+			ServerEnvironment:  serverEnvironment,
+			ClientEnvironment:  clientEnvironment,
+		})
+		if probeErr != nil {
+			return nil, 0, fmt.Errorf("installed UCI scenario probe: %w", probeErr)
+		}
+		if probeErr := uciValidateInstalledAcceptanceScenarioEvidence(evidence); probeErr != nil {
+			return nil, 0, fmt.Errorf("installed UCI scenario probe evidence: %w", probeErr)
+		}
+		if len(evidence) > 0 {
+			result.ScenarioEvidence = make(map[string]uciInstalledAcceptanceScenarioEvidence, len(evidence))
+			for scenarioID, scenarioEvidence := range evidence {
+				result.ScenarioEvidence[scenarioID] = scenarioEvidence
+			}
+		}
+	}
+
 	return next, newDaemonPID, nil
 }
 

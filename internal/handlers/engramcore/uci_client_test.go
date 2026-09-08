@@ -17,7 +17,9 @@ import (
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -151,6 +153,24 @@ func TestUCIClientAcceptsCompleteNoViewHandleBinding(t *testing.T) {
 	requireUCIClientScopeEqual(t, uciClientTestScopeA(), bound.GetIndexScope())
 	require.Equal(t, uciClientTestLocalRootID, bound.GetLocalRootId())
 	require.Equal(t, uciClientTestWorkstationID, bound.GetWorkstationId())
+}
+
+func TestUCIClientForwardsUnboundBindRequest(t *testing.T) {
+	rpc := &uciClientRPCFake{bind: func(_ context.Context, request *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {
+		require.Equal(t, "client-a", request.GetClientSessionId())
+		require.Empty(t, request.GetContextHandle())
+		require.Nil(t, request.GetRequestedContext())
+		response := uciClientTestBindResponse(request)
+		response.Context = uciClientTestContextA()
+		response.IndexScope = uciClientTestScopeA()
+		return response, nil
+	}}
+
+	bound, err := newUCIClient(rpc).Bind(context.Background(), &pb.BindCodeContextRequest{ClientSessionId: "client-a"})
+	require.NoError(t, err)
+	require.Equal(t, "context-handle-client-a", bound.GetContextHandle())
+	requireUCIClientContextEqual(t, uciClientTestContextA(), bound.GetContext())
+	require.Len(t, rpc.bindRequests, 1)
 }
 
 func TestUCIClientRejectsIncompleteOrMismatchedHandleBinding(t *testing.T) {
@@ -531,6 +551,68 @@ func TestUCIIndexAdapterBindsBeforeCollaboratorWithServerBinding(t *testing.T) {
 	require.NotNil(t, receivedClient)
 	require.NotNil(t, target.Binding.Context)
 	require.Equal(t, int64(1), target.Binding.Context.Generation, "collaborator mutation must not alter the resolved binding")
+}
+
+func TestUCIIndexAdapterForwardsUnboundBindAndRetainsIssuedHandle(t *testing.T) {
+	const (
+		clientSessionID = "client-a"
+		issuedHandle    = "server-issued-context-handle"
+	)
+	boundContext := uciClientTestContextA()
+	server := &uciIndexAdapterGRPCServer{
+		bind: func(_ context.Context, request *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {
+			response := uciClientTestBindResponse(request)
+			response.ContextHandle = issuedHandle
+			response.Context = proto.Clone(boundContext).(*pb.ContextRef)
+			response.IndexScope = uciClientTestScopeA()
+			return response, nil
+		},
+	}
+	serverURL := startUCIIndexAdapterGRPC(t, server)
+	mod := NewModuleWithClientInstanceID("")
+	t.Cleanup(mod.pool.closeAll)
+	adapter := NewUCIIndexAdapter(mod)
+	ctx := auditcontext.WithUCITransportSession(context.Background(), clientSessionID)
+
+	target, err := adapter.ResolveIndexTarget(ctx, uciClientTestProject(serverURL), "")
+	require.NoError(t, err)
+	require.Equal(t, issuedHandle, target.ContextHandle)
+	require.Equal(t, uciClientTestIndexBinding(boundContext), target.Binding)
+
+	rebound, err := adapter.RebindIndexTarget(ctx, target)
+	require.NoError(t, err)
+	require.Equal(t, issuedHandle, rebound.ContextHandle)
+	require.Equal(t, target.Binding, rebound.Binding)
+
+	requests := server.bindRequestsSnapshot()
+	require.Len(t, requests, 2)
+	require.Equal(t, clientSessionID, requests[0].GetClientSessionId())
+	require.Empty(t, requests[0].GetContextHandle())
+	require.Nil(t, requests[0].GetRequestedContext(), "project and CWD must not become binding authority")
+	require.Equal(t, issuedHandle, requests[1].GetContextHandle())
+	require.Nil(t, requests[1].GetRequestedContext())
+}
+
+func TestUCIIndexAdapterMapsUnboundContextRequiredToModuleError(t *testing.T) {
+	server := &uciIndexAdapterGRPCServer{
+		bind: func(context.Context, *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {
+			return nil, status.Error(codes.FailedPrecondition, string(uci.ContextRequired))
+		},
+	}
+	serverURL := startUCIIndexAdapterGRPC(t, server)
+	mod := NewModuleWithClientInstanceID("")
+	t.Cleanup(mod.pool.closeAll)
+	ctx := auditcontext.WithUCITransportSession(context.Background(), "client-a")
+
+	_, err := NewUCIIndexAdapter(mod).ResolveIndexTarget(ctx, uciClientTestProject(serverURL), "")
+	var moduleErr *module.ModuleError
+	require.True(t, errors.As(err, &moduleErr))
+	require.Equal(t, string(uci.ContextRequired), moduleErr.Code)
+	require.Equal(t, "context is required", moduleErr.Message)
+	requests := server.bindRequestsSnapshot()
+	require.Len(t, requests, 1)
+	require.Empty(t, requests[0].GetContextHandle())
+	require.Nil(t, requests[0].GetRequestedContext())
 }
 
 func TestUCIIndexAdapterResolvesNoViewAndProxiesWithoutCollaborator(t *testing.T) {

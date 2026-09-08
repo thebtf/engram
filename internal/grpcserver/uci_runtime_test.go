@@ -3,6 +3,7 @@ package grpcserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -182,6 +183,39 @@ func TestContextAwareUCIRuntimeErrorMappingPreservesOnlyClosedBridgeStatuses(t *
 			mapped := contextAwareRuntimeError(context.Background(), status.Error(test.code, test.message))
 			require.Equal(t, test.code, status.Code(mapped))
 			require.Equal(t, test.message, status.Convert(mapped).Message())
+		})
+	}
+
+	for _, test := range []struct {
+		name        string
+		sentinel    error
+		wantMessage string
+		private     string
+	}{
+		{
+			name:        "lease stale",
+			sentinel:    uci.ErrPublicationLeaseStale,
+			wantMessage: "LEASE_STALE",
+			private:     "lease owner internal diagnostic",
+		},
+		{
+			name:        "build incomplete",
+			sentinel:    uci.ErrPublicationBuildIncomplete,
+			wantMessage: "BUILD_INCOMPLETE",
+			private:     "build manifest internal diagnostic",
+		},
+		{
+			name:        "idempotency mismatch",
+			sentinel:    uci.ErrPublicationIdempotencyMismatch,
+			wantMessage: "IDEMPOTENCY_MISMATCH",
+			private:     "binding digest internal diagnostic",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mapped := contextAwareRuntimeError(context.Background(), fmt.Errorf("%s: %w", test.private, test.sentinel))
+			require.Equal(t, codes.FailedPrecondition, status.Code(mapped))
+			require.Equal(t, test.wantMessage, status.Convert(mapped).Message())
+			require.NotContains(t, mapped.Error(), test.private)
 		})
 	}
 

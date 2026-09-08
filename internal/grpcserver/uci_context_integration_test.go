@@ -88,6 +88,49 @@ func TestUCIContextIntegrationLegacySelectorUsesBoundCheckout(t *testing.T) {
 	require.Empty(t, fixture.query.calls)
 }
 
+func TestUCIContextIntegrationUnboundBindReusesAuthorizedDefault(t *testing.T) {
+	fixture := newUCIContextIntegrationFixture(t)
+	ctx := fixture.clientContext(uciContextIntegrationClientA, uciContextIntegrationPrincipalA)
+
+	_, err := fixture.server.BindCodeContext(ctx, &pb.BindCodeContextRequest{
+		ClientSessionId:  uciContextIntegrationClientA,
+		RequestedContext: uciContextIntegrationProtoRef(fixture.refA),
+	})
+	require.NoError(t, err)
+	catalogCalls := len(fixture.catalog.calls)
+	authorizerCalls := len(fixture.authorizer.accesses)
+	runtimeCalls := len(fixture.runtime.bindingCalls)
+	handleIssues := len(fixture.handles.issues)
+
+	bound, err := fixture.server.BindCodeContext(ctx, &pb.BindCodeContextRequest{ClientSessionId: uciContextIntegrationClientA})
+	require.NoError(t, err)
+	requireUCIContextIntegrationBinding(t, fixture.bindingA, bound)
+	require.NotEmpty(t, bound.GetContextHandle())
+	require.Len(t, fixture.catalog.calls, catalogCalls+1)
+	require.Equal(t, fixture.refA, fixture.catalog.calls[len(fixture.catalog.calls)-1])
+	require.Len(t, fixture.authorizer.accesses, authorizerCalls+1)
+	require.Len(t, fixture.runtime.bindingCalls, runtimeCalls+1)
+	require.Len(t, fixture.handles.issues, handleIssues+1)
+	require.Empty(t, fixture.handles.authorizations, "an empty selector must not be treated as a handle")
+}
+
+func TestUCIContextIntegrationUnboundBindRequiresExistingDefault(t *testing.T) {
+	fixture := newUCIContextIntegrationFixture(t)
+	ctx := fixture.clientContext(uciContextIntegrationClientA, uciContextIntegrationPrincipalA)
+
+	bound, err := fixture.server.BindCodeContext(ctx, &pb.BindCodeContextRequest{ClientSessionId: uciContextIntegrationClientA})
+	require.Nil(t, bound)
+	requireUCIContextIntegrationClosedStatus(t, err, codes.FailedPrecondition, uci.ContextRequired,
+		fixture.refA.SourceID,
+		fixture.refA.CheckoutID,
+		fixture.refA.ViewID,
+	)
+	require.Empty(t, fixture.catalog.calls)
+	require.Empty(t, fixture.authorizer.accesses)
+	require.Empty(t, fixture.runtime.bindingCalls)
+	require.Empty(t, fixture.handles.issues)
+}
+
 func TestUCIContextIntegrationLegacySelectorConflictStopsBeforeCatalogAndProjection(t *testing.T) {
 	fixture := newUCIContextIntegrationFixture(t)
 	ctx := fixture.clientContext(uciContextIntegrationClientA, uciContextIntegrationPrincipalA)

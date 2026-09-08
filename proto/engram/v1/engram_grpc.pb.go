@@ -39,6 +39,7 @@ const (
 	EngramService_FinalizeCodeIndex_FullMethodName         = "/engram.v1.EngramService/FinalizeCodeIndex"
 	EngramService_QueryCode_FullMethodName                 = "/engram.v1.EngramService/QueryCode"
 	EngramService_ExploreCode_FullMethodName               = "/engram.v1.EngramService/ExploreCode"
+	EngramService_RecordUCICompletion_FullMethodName       = "/engram.v1.EngramService/RecordUCICompletion"
 )
 
 // EngramServiceClient is the client API for EngramService service.
@@ -106,6 +107,8 @@ type EngramServiceClient interface {
 	QueryCode(ctx context.Context, in *QueryCodeRequest, opts ...grpc.CallOption) (*QueryCodeResponse, error)
 	// ExploreCode returns a bounded graph payload for one pinned context.
 	ExploreCode(ctx context.Context, in *ExploreCodeRequest, opts ...grpc.CallOption) (*ExploreCodeResponse, error)
+	// RecordUCICompletion records one verified supported-host completion callback.
+	RecordUCICompletion(ctx context.Context, in *RecordUCICompletionRequest, opts ...grpc.CallOption) (*RecordUCICompletionResponse, error)
 }
 
 type engramServiceClient struct {
@@ -331,6 +334,16 @@ func (c *engramServiceClient) ExploreCode(ctx context.Context, in *ExploreCodeRe
 	return out, nil
 }
 
+func (c *engramServiceClient) RecordUCICompletion(ctx context.Context, in *RecordUCICompletionRequest, opts ...grpc.CallOption) (*RecordUCICompletionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecordUCICompletionResponse)
+	err := c.cc.Invoke(ctx, EngramService_RecordUCICompletion_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EngramServiceServer is the server API for EngramService service.
 // All implementations must embed UnimplementedEngramServiceServer
 // for forward compatibility.
@@ -396,6 +409,8 @@ type EngramServiceServer interface {
 	QueryCode(context.Context, *QueryCodeRequest) (*QueryCodeResponse, error)
 	// ExploreCode returns a bounded graph payload for one pinned context.
 	ExploreCode(context.Context, *ExploreCodeRequest) (*ExploreCodeResponse, error)
+	// RecordUCICompletion records one verified supported-host completion callback.
+	RecordUCICompletion(context.Context, *RecordUCICompletionRequest) (*RecordUCICompletionResponse, error)
 	mustEmbedUnimplementedEngramServiceServer()
 }
 
@@ -465,6 +480,9 @@ func (UnimplementedEngramServiceServer) QueryCode(context.Context, *QueryCodeReq
 }
 func (UnimplementedEngramServiceServer) ExploreCode(context.Context, *ExploreCodeRequest) (*ExploreCodeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ExploreCode not implemented")
+}
+func (UnimplementedEngramServiceServer) RecordUCICompletion(context.Context, *RecordUCICompletionRequest) (*RecordUCICompletionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RecordUCICompletion not implemented")
 }
 func (UnimplementedEngramServiceServer) mustEmbedUnimplementedEngramServiceServer() {}
 func (UnimplementedEngramServiceServer) testEmbeddedByValue()                       {}
@@ -818,6 +836,24 @@ func _EngramService_ExploreCode_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EngramService_RecordUCICompletion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordUCICompletionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServiceServer).RecordUCICompletion(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngramService_RecordUCICompletion_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServiceServer).RecordUCICompletion(ctx, req.(*RecordUCICompletionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EngramService_ServiceDesc is the grpc.ServiceDesc for EngramService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -892,6 +928,10 @@ var EngramService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ExploreCode",
 			Handler:    _EngramService_ExploreCode_Handler,
+		},
+		{
+			MethodName: "RecordUCICompletion",
+			Handler:    _EngramService_RecordUCICompletion_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

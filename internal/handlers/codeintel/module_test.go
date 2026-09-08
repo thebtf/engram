@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,16 +40,25 @@ type fakeCore struct {
 	afterResolve   func(int)
 	resolveCalled  int
 	proxyCalled    int
+	resolveErr     error
+	resolveHandles []string
+	resolveHandle  func(string) string
 }
 
 func (f *fakeCore) ResolveIndexTarget(ctx context.Context, _ muxcore.ProjectContext, contextHandle string) (codeintel.ResolvedIndexTarget, error) {
 	f.mu.Lock()
 	f.resolveCalled++
 	resolveCall := f.resolveCalled
+	f.resolveHandles = append(f.resolveHandles, contextHandle)
 	binding, found := f.bindings[contextHandle]
 	if f.resolveBinding != nil {
 		binding = f.resolveBinding(resolveCall, contextHandle)
 		found = true
+	}
+	resolveErr := f.resolveErr
+	resolvedHandle := contextHandle
+	if f.resolveHandle != nil {
+		resolvedHandle = f.resolveHandle(contextHandle)
 	}
 	if !found {
 		binding = fakeDefaultIndexBinding()
@@ -59,10 +69,13 @@ func (f *fakeCore) ResolveIndexTarget(ctx context.Context, _ muxcore.ProjectCont
 	if afterResolve != nil {
 		afterResolve(resolveCall)
 	}
+	if resolveErr != nil {
+		return codeintel.ResolvedIndexTarget{}, resolveErr
+	}
 
 	return codeintel.ResolvedIndexTarget{
 		ClientSessionID: auditcontext.UCITransportSession(ctx),
-		ContextHandle:   contextHandle,
+		ContextHandle:   resolvedHandle,
 		Binding:         binding,
 	}, nil
 }
@@ -165,6 +178,12 @@ func (f *fakeCore) callCounts() (int, int) {
 	return f.resolveCalled, f.proxyCalled
 }
 
+func (f *fakeCore) resolvedHandles() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.resolveHandles...)
+}
+
 // newTestModule constructs a codeintel.Module backed by a fakeCore so tests can
 // run without a live gRPC server.
 func newTestModule(core codeintel.CoreProvider) *codeintel.Module {
@@ -240,6 +259,69 @@ func testNestedStatusProxyPayload(t *testing.T, status json.RawMessage) json.Raw
 // -----------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------
+
+func TestCodebaseIndexForwardsUnboundContextBeforeUsingRoot(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	root := t.TempDir()
+	p := testProjectContext("proj-unbound-index", "")
+	expected := &module.ModuleError{Code: string(uci.ContextRequired), Message: "context is required"}
+
+	for _, args := range []json.RawMessage{
+		json.RawMessage(`{"root":` + strconv.Quote(root) + `}`),
+		json.RawMessage(`{"context_handle":"","root":` + strconv.Quote(root) + `}`),
+	} {
+		core := &fakeCore{resolveErr: expected}
+		mod := newTestModule(core)
+
+		raw, err := mod.HandleTool(testTransportContext(p), p, "codebase_index", args)
+		require.Nil(t, raw)
+		require.Same(t, expected, err)
+		require.Equal(t, []string{""}, core.resolvedHandles())
+		core.mu.Lock()
+		indexCalls := core.indexCalled
+		core.mu.Unlock()
+		require.Zero(t, indexCalls, "root must not select or start an index target")
+	}
+}
+
+func TestCodebaseIndexAcceptsServerIssuedHandleForUnboundContext(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	p := testProjectContext("proj-issued-unbound-handle", t.TempDir())
+	args, err := json.Marshal(map[string]any{"root": p.Cwd})
+	require.NoError(t, err)
+	core := &fakeCore{resolveHandle: func(contextHandle string) string {
+		if contextHandle == "" {
+			return "server-issued-unbound-handle"
+		}
+		return contextHandle
+	}}
+	mod := newTestModule(core)
+	h := moduletest.New(t)
+	require.NoError(t, h.Register(mod))
+	h.Freeze()
+
+	raw, err := h.CallToolWithProject(testTransportContext(p), p, "codebase_index", args)
+	require.NoError(t, err)
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(raw, &result))
+	require.Equal(t, "started", result["status"])
+	require.Equal(t, []string{""}, core.resolvedHandles())
+	drainIndex(t, h, p)
+}
+
+func TestCodebaseIndexSchemaLeavesContextHandleOptional(t *testing.T) {
+	mod := newTestModule(&fakeCore{})
+	var schema map[string]any
+	for _, tool := range mod.Tools() {
+		if tool.Name == "codebase_index" {
+			require.NoError(t, json.Unmarshal(tool.InputSchema, &schema))
+			break
+		}
+	}
+	require.NotNil(t, schema)
+	_, required := schema["required"]
+	require.False(t, required)
+}
 
 // TestCodebaseIndex_ReturnsStartedImmediately verifies that codebase_index
 // returns {status:"started",run_id:...} before the background goroutine finishes.

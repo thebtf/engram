@@ -2921,9 +2921,9 @@ func normalizeUCIArtifactJSONObject(value string, byteLength int64) (string, err
 
 var (
 	errUCIPublicationRejected            = errors.New("UCI_PUBLICATION_REJECTED")
-	errUCIPublicationIdempotencyMismatch = errors.New("IDEMPOTENCY_MISMATCH")
-	errUCIPublicationLeaseStale          = errors.New("LEASE_STALE")
-	errUCIPublicationBuildIncomplete     = errors.New("BUILD_INCOMPLETE")
+	errUCIPublicationIdempotencyMismatch = ucidomain.ErrPublicationIdempotencyMismatch
+	errUCIPublicationLeaseStale          = ucidomain.ErrPublicationLeaseStale
+	errUCIPublicationBuildIncomplete     = ucidomain.ErrPublicationBuildIncomplete
 )
 
 type uciPublisher struct {

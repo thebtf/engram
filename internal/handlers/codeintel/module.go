@@ -301,15 +301,14 @@ func (m *Module) Tools() []module.ToolDef {
 	indexSchema, _ := json.Marshal(map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
-		"required":             []string{"context_handle"},
 		"properties": map[string]any{
 			"context_handle": map[string]any{
 				"type":        "string",
-				"description": "Opaque handle returned for this client by codebase_context.",
+				"description": "Optional opaque handle returned for this client by codebase_context. Without one, only this client's existing server-side binding may authorize a target.",
 			},
 			"root": map[string]any{
 				"type":        "string",
-				"description": "Optional local working root. Target authority comes only from context_handle.",
+				"description": "Optional local working root. It is evidence only and cannot select authority.",
 			},
 		},
 	})
@@ -402,9 +401,9 @@ func parseIndexArgs(args json.RawMessage) (string, string, error) {
 	if err := decodeStrictToolArgs("codebase_index", args, &parsed); err != nil {
 		return "", "", err
 	}
-	contextHandle, err := requiredContextHandle("codebase_index", parsed.ContextHandle)
-	if err != nil {
-		return "", "", err
+	contextHandle := ""
+	if parsed.ContextHandle != nil {
+		contextHandle = *parsed.ContextHandle
 	}
 	if parsed.Root == nil {
 		return contextHandle, "", nil
@@ -490,7 +489,10 @@ func validCodeintelIdentity(value string, maxBytes int) bool {
 }
 
 func requestedTargetMatches(target ResolvedIndexTarget, clientSessionID, contextHandle string) bool {
-	return target.ClientSessionID == clientSessionID && target.ContextHandle == contextHandle
+	if target.ClientSessionID != clientSessionID || !validCodeintelIdentity(target.ContextHandle, 128) {
+		return false
+	}
+	return contextHandle == "" || target.ContextHandle == contextHandle
 }
 
 func indexKeyFor(target ResolvedIndexTarget) indexStateKey {

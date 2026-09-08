@@ -119,14 +119,22 @@ func v3InputError(code string) error { return &projectIdentityV3InputError{code:
 
 // ResolveIdentityV3 builds fresh V3 descriptor evidence. Unlike V2, it neither
 // reads nor retains a slug/identity cache: server resolution owns scoped state.
+// A nil descriptor with a nil error is a verified authority-free root usable
+// only for unscoped UCI discovery; it never grants scoped V3 authority.
 func (c *slugCache) ResolveIdentityV3(p muxcore.ProjectContext, clientInstanceID string) (*pb.ProjectIdentityV3, error) {
 	c.Forget(p.ID)
 	root, err := repositoryRootV3(p.Cwd)
 	if err != nil {
+		if verifiedAnchorlessDirectoryV3(p.Cwd) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	anchor, err := projectidentity.DiscoverAnchorV3(root, "repository")
 	if err != nil {
+		if verifiedUnbornRepositoryV3(p.Cwd, root) {
+			return nil, nil
+		}
 		return nil, v3InputError("PROJECT_ANCHOR_INVALID")
 	}
 	remotes, err := normalizedGitRemotesV3(root)
@@ -155,6 +163,49 @@ func repositoryRootV3(cwd string) (string, error) {
 		return "", v3InputError("PROJECT_ANCHOR_INVALID")
 	}
 	return root, nil
+}
+
+func verifiedUnbornRepositoryV3(cwd, root string) bool {
+	prefix, err := exec.Command("git", "-C", cwd, "rev-parse", "--show-prefix").Output()
+	if err != nil || strings.TrimSpace(string(prefix)) != "" {
+		return false
+	}
+	if _, err := os.Lstat(filepath.Join(root, ".engram-project")); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	parentRoot, err := exec.Command("git", "-C", filepath.Dir(root), "rev-parse", "--show-toplevel").Output()
+	if err == nil && filepath.Clean(strings.TrimSpace(string(parentRoot))) != filepath.Clean(root) {
+		return false
+	}
+	objectFormat, err := exec.Command("git", "-C", root, "rev-parse", "--show-object-format").Output()
+	if err != nil || (strings.TrimSpace(string(objectFormat)) != "sha1" && strings.TrimSpace(string(objectFormat)) != "sha256") {
+		return false
+	}
+	head, err := exec.Command("git", "-C", root, "rev-parse", "--verify", "HEAD").Output()
+	if err == nil || strings.TrimSpace(string(head)) != "" {
+		return false
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || (exitErr.ExitCode() != 1 && exitErr.ExitCode() != 128) {
+		return false
+	}
+	refLabel, err := exec.Command("git", "-C", root, "symbolic-ref", "--quiet", "--short", "HEAD").Output()
+	return err == nil && strings.TrimSpace(string(refLabel)) != ""
+}
+
+func verifiedAnchorlessDirectoryV3(cwd string) bool {
+	root := filepath.Clean(strings.TrimSpace(cwd))
+	info, err := os.Stat(root)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	for _, marker := range []string{".git", ".engram-project"} {
+		if _, err := os.Lstat(filepath.Join(root, marker)); err == nil || !errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+	}
+	output, err := exec.Command("git", "-C", root, "rev-parse", "--show-toplevel").Output()
+	return err != nil && strings.TrimSpace(string(output)) == ""
 }
 
 func normalizedGitRemotesV3(root string) ([]string, error) {

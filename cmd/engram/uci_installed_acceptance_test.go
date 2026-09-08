@@ -68,8 +68,21 @@ func TestUCIInstalledAcceptanceTokenExpiryCoversOperationDeadline(t *testing.T) 
 	})
 }
 
-func TestUCIInstalledAcceptanceBarrierResultRetriesTimedOutRuns(t *testing.T) {
+func TestUCIInstalledAcceptanceBarrierResultRetriesRunningStates(t *testing.T) {
 	selection := uciInstalledAcceptanceSelection{runID: "run-1"}
+	pending, err := uciDecodeInstalledAcceptanceStatus(json.RawMessage(`{
+		"status":"running",
+		"run_id":"run-1",
+		"freshness":{"state":"catching_up"}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication, retry, err := uciInstalledAcceptanceBarrierResult(pending, selection)
+	if err != nil || !retry || publication != (uciInstalledAcceptancePublication{}) {
+		t.Fatalf("pending barrier result = publication=%#v retry=%t err=%v", publication, retry, err)
+	}
+
 	timedOut, err := uciDecodeInstalledAcceptanceStatus(json.RawMessage(`{
 		"status":"running",
 		"run_id":"run-1",
@@ -81,7 +94,7 @@ func TestUCIInstalledAcceptanceBarrierResultRetriesTimedOutRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	publication, retry, err := uciInstalledAcceptanceBarrierResult(timedOut, selection)
+	publication, retry, err = uciInstalledAcceptanceBarrierResult(timedOut, selection)
 	if err != nil || !retry || publication != (uciInstalledAcceptancePublication{}) {
 		t.Fatalf("timed-out barrier result = publication=%#v retry=%t err=%v", publication, retry, err)
 	}

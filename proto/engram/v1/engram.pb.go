@@ -1012,6 +1012,63 @@ func (HostAdvisorSemanticGapCode) EnumDescriptor() ([]byte, []int) {
 	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{16}
 }
 
+// UCICompletionOutcome is the closed completion state reported by a verified
+// supported-host callback.
+type UCICompletionOutcome int32
+
+const (
+	UCICompletionOutcome_UCI_COMPLETION_OUTCOME_UNSPECIFIED UCICompletionOutcome = 0
+	UCICompletionOutcome_UCI_COMPLETION_OUTCOME_SUCCEEDED   UCICompletionOutcome = 1
+	UCICompletionOutcome_UCI_COMPLETION_OUTCOME_PARTIAL     UCICompletionOutcome = 2
+	UCICompletionOutcome_UCI_COMPLETION_OUTCOME_FAILED      UCICompletionOutcome = 3
+	UCICompletionOutcome_UCI_COMPLETION_OUTCOME_ABANDONED   UCICompletionOutcome = 4
+)
+
+// Enum value maps for UCICompletionOutcome.
+var (
+	UCICompletionOutcome_name = map[int32]string{
+		0: "UCI_COMPLETION_OUTCOME_UNSPECIFIED",
+		1: "UCI_COMPLETION_OUTCOME_SUCCEEDED",
+		2: "UCI_COMPLETION_OUTCOME_PARTIAL",
+		3: "UCI_COMPLETION_OUTCOME_FAILED",
+		4: "UCI_COMPLETION_OUTCOME_ABANDONED",
+	}
+	UCICompletionOutcome_value = map[string]int32{
+		"UCI_COMPLETION_OUTCOME_UNSPECIFIED": 0,
+		"UCI_COMPLETION_OUTCOME_SUCCEEDED":   1,
+		"UCI_COMPLETION_OUTCOME_PARTIAL":     2,
+		"UCI_COMPLETION_OUTCOME_FAILED":      3,
+		"UCI_COMPLETION_OUTCOME_ABANDONED":   4,
+	}
+)
+
+func (x UCICompletionOutcome) Enum() *UCICompletionOutcome {
+	p := new(UCICompletionOutcome)
+	*p = x
+	return p
+}
+
+func (x UCICompletionOutcome) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (UCICompletionOutcome) Descriptor() protoreflect.EnumDescriptor {
+	return file_proto_engram_v1_engram_proto_enumTypes[17].Descriptor()
+}
+
+func (UCICompletionOutcome) Type() protoreflect.EnumType {
+	return &file_proto_engram_v1_engram_proto_enumTypes[17]
+}
+
+func (x UCICompletionOutcome) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use UCICompletionOutcome.Descriptor instead.
+func (UCICompletionOutcome) EnumDescriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{17}
+}
+
 type SyncProjectStateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// local_project_ids is the set of ProjectContext.ID values the daemon
@@ -6841,6 +6898,139 @@ func (x *ExploreCodeResponse) GetResponseJson() []byte {
 	return nil
 }
 
+// RecordUCICompletionRequest carries only opaque, verified callback facts.
+// canonical_project is checked against the authenticated HAP project-service
+// identity; it is not a caller-selected authorization scope.
+type RecordUCICompletionRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	CanonicalProject string                 `protobuf:"bytes,1,opt,name=canonical_project,json=canonicalProject,proto3" json:"canonical_project,omitempty"`
+	ExposureRef      string                 `protobuf:"bytes,2,opt,name=exposure_ref,json=exposureRef,proto3" json:"exposure_ref,omitempty"`
+	SupportedHostRef string                 `protobuf:"bytes,3,opt,name=supported_host_ref,json=supportedHostRef,proto3" json:"supported_host_ref,omitempty"`
+	CallbackRef      string                 `protobuf:"bytes,4,opt,name=callback_ref,json=callbackRef,proto3" json:"callback_ref,omitempty"`
+	Outcome          UCICompletionOutcome   `protobuf:"varint,5,opt,name=outcome,proto3,enum=engram.v1.UCICompletionOutcome" json:"outcome,omitempty"`
+	IdempotencyKey   string                 `protobuf:"bytes,6,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *RecordUCICompletionRequest) Reset() {
+	*x = RecordUCICompletionRequest{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[80]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecordUCICompletionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecordUCICompletionRequest) ProtoMessage() {}
+
+func (x *RecordUCICompletionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[80]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecordUCICompletionRequest.ProtoReflect.Descriptor instead.
+func (*RecordUCICompletionRequest) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{80}
+}
+
+func (x *RecordUCICompletionRequest) GetCanonicalProject() string {
+	if x != nil {
+		return x.CanonicalProject
+	}
+	return ""
+}
+
+func (x *RecordUCICompletionRequest) GetExposureRef() string {
+	if x != nil {
+		return x.ExposureRef
+	}
+	return ""
+}
+
+func (x *RecordUCICompletionRequest) GetSupportedHostRef() string {
+	if x != nil {
+		return x.SupportedHostRef
+	}
+	return ""
+}
+
+func (x *RecordUCICompletionRequest) GetCallbackRef() string {
+	if x != nil {
+		return x.CallbackRef
+	}
+	return ""
+}
+
+func (x *RecordUCICompletionRequest) GetOutcome() UCICompletionOutcome {
+	if x != nil {
+		return x.Outcome
+	}
+	return UCICompletionOutcome_UCI_COMPLETION_OUTCOME_UNSPECIFIED
+}
+
+func (x *RecordUCICompletionRequest) GetIdempotencyKey() string {
+	if x != nil {
+		return x.IdempotencyKey
+	}
+	return ""
+}
+
+// RecordUCICompletionResponse deliberately exposes no parent or completion
+// evidence. accepted confirms only that the callback was durably accepted.
+type RecordUCICompletionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Accepted      bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RecordUCICompletionResponse) Reset() {
+	*x = RecordUCICompletionResponse{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[81]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecordUCICompletionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecordUCICompletionResponse) ProtoMessage() {}
+
+func (x *RecordUCICompletionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[81]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecordUCICompletionResponse.ProtoReflect.Descriptor instead.
+func (*RecordUCICompletionResponse) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{81}
+}
+
+func (x *RecordUCICompletionResponse) GetAccepted() bool {
+	if x != nil {
+		return x.Accepted
+	}
+	return false
+}
+
 var File_proto_engram_v1_engram_proto protoreflect.FileDescriptor
 
 const file_proto_engram_v1_engram_proto_rawDesc = "" +
@@ -7354,7 +7544,16 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\x12continuation_token\x18\t \x01(\tR\x11continuationToken\"k\n" +
 	"\x13ExploreCodeResponse\x12/\n" +
 	"\acontext\x18\x01 \x01(\v2\x15.engram.v1.ContextRefR\acontext\x12#\n" +
-	"\rresponse_json\x18\x02 \x01(\fR\fresponseJson*\x96\x01\n" +
+	"\rresponse_json\x18\x02 \x01(\fR\fresponseJson\"\xa1\x02\n" +
+	"\x1aRecordUCICompletionRequest\x12+\n" +
+	"\x11canonical_project\x18\x01 \x01(\tR\x10canonicalProject\x12!\n" +
+	"\fexposure_ref\x18\x02 \x01(\tR\vexposureRef\x12,\n" +
+	"\x12supported_host_ref\x18\x03 \x01(\tR\x10supportedHostRef\x12!\n" +
+	"\fcallback_ref\x18\x04 \x01(\tR\vcallbackRef\x129\n" +
+	"\aoutcome\x18\x05 \x01(\x0e2\x1f.engram.v1.UCICompletionOutcomeR\aoutcome\x12'\n" +
+	"\x0fidempotency_key\x18\x06 \x01(\tR\x0eidempotencyKey\"9\n" +
+	"\x1bRecordUCICompletionResponse\x12\x1a\n" +
+	"\baccepted\x18\x01 \x01(\bR\baccepted*\x96\x01\n" +
 	"\x10ProjectEventType\x12\"\n" +
 	"\x1ePROJECT_EVENT_TYPE_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aPROJECT_EVENT_TYPE_REMOVED\x10\x01\x12\x1e\n" +
@@ -7471,7 +7670,13 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"*HOST_ADVISOR_SEMANTIC_GAP_CODE_UNSPECIFIED\x10\x00\x127\n" +
 	"3HOST_ADVISOR_SEMANTIC_GAP_CODE_CALLBACK_UNAVAILABLE\x10\x01\x12@\n" +
 	"<HOST_ADVISOR_SEMANTIC_GAP_CODE_CONTEXT_INJECTION_UNAVAILABLE\x10\x02\x12B\n" +
-	">HOST_ADVISOR_SEMANTIC_GAP_CODE_RECEIPT_CORRELATION_UNAVAILABLE\x10\x032\xe0\r\n" +
+	">HOST_ADVISOR_SEMANTIC_GAP_CODE_RECEIPT_CORRELATION_UNAVAILABLE\x10\x03*\xd1\x01\n" +
+	"\x14UCICompletionOutcome\x12&\n" +
+	"\"UCI_COMPLETION_OUTCOME_UNSPECIFIED\x10\x00\x12$\n" +
+	" UCI_COMPLETION_OUTCOME_SUCCEEDED\x10\x01\x12\"\n" +
+	"\x1eUCI_COMPLETION_OUTCOME_PARTIAL\x10\x02\x12!\n" +
+	"\x1dUCI_COMPLETION_OUTCOME_FAILED\x10\x03\x12$\n" +
+	" UCI_COMPLETION_OUTCOME_ABANDONED\x10\x042\xc6\x0e\n" +
 	"\rEngramService\x12C\n" +
 	"\bCallTool\x12\x1a.engram.v1.CallToolRequest\x1a\x1b.engram.v1.CallToolResponse\x12I\n" +
 	"\n" +
@@ -7493,7 +7698,8 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\x0eStageCodeIndex\x12\x1e.engram.v1.StageCodeIndexFrame\x1a!.engram.v1.StageCodeIndexResponse(\x01\x12^\n" +
 	"\x11FinalizeCodeIndex\x12#.engram.v1.FinalizeCodeIndexRequest\x1a$.engram.v1.FinalizeCodeIndexResponse\x12F\n" +
 	"\tQueryCode\x12\x1b.engram.v1.QueryCodeRequest\x1a\x1c.engram.v1.QueryCodeResponse\x12L\n" +
-	"\vExploreCode\x12\x1d.engram.v1.ExploreCodeRequest\x1a\x1e.engram.v1.ExploreCodeResponseB3Z1github.com/thebtf/engram/proto/engram/v1;engramv1b\x06proto3"
+	"\vExploreCode\x12\x1d.engram.v1.ExploreCodeRequest\x1a\x1e.engram.v1.ExploreCodeResponse\x12d\n" +
+	"\x13RecordUCICompletion\x12%.engram.v1.RecordUCICompletionRequest\x1a&.engram.v1.RecordUCICompletionResponseB3Z1github.com/thebtf/engram/proto/engram/v1;engramv1b\x06proto3"
 
 var (
 	file_proto_engram_v1_engram_proto_rawDescOnce sync.Once
@@ -7507,8 +7713,8 @@ func file_proto_engram_v1_engram_proto_rawDescGZIP() []byte {
 	return file_proto_engram_v1_engram_proto_rawDescData
 }
 
-var file_proto_engram_v1_engram_proto_enumTypes = make([]protoimpl.EnumInfo, 17)
-var file_proto_engram_v1_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 81)
+var file_proto_engram_v1_engram_proto_enumTypes = make([]protoimpl.EnumInfo, 18)
+var file_proto_engram_v1_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 83)
 var file_proto_engram_v1_engram_proto_goTypes = []any{
 	(ProjectEventType)(0),                      // 0: engram.v1.ProjectEventType
 	(ProjectResolutionOutcomeV3)(0),            // 1: engram.v1.ProjectResolutionOutcomeV3
@@ -7527,246 +7733,252 @@ var file_proto_engram_v1_engram_proto_goTypes = []any{
 	(HostAdvisorObservationReason)(0),          // 14: engram.v1.HostAdvisorObservationReason
 	(HostAdvisorAttestationKind)(0),            // 15: engram.v1.HostAdvisorAttestationKind
 	(HostAdvisorSemanticGapCode)(0),            // 16: engram.v1.HostAdvisorSemanticGapCode
-	(*SyncProjectStateRequest)(nil),            // 17: engram.v1.SyncProjectStateRequest
-	(*SyncProjectStateResponse)(nil),           // 18: engram.v1.SyncProjectStateResponse
-	(*ProjectEventsRequest)(nil),               // 19: engram.v1.ProjectEventsRequest
-	(*ProjectEvent)(nil),                       // 20: engram.v1.ProjectEvent
-	(*GetSessionStartContextRequest)(nil),      // 21: engram.v1.GetSessionStartContextRequest
-	(*GetSessionStartContextResponse)(nil),     // 22: engram.v1.GetSessionStartContextResponse
-	(*SessionStartIssue)(nil),                  // 23: engram.v1.SessionStartIssue
-	(*SessionStartRule)(nil),                   // 24: engram.v1.SessionStartRule
-	(*SessionStartRuleRouter)(nil),             // 25: engram.v1.SessionStartRuleRouter
-	(*SessionStartRulePacket)(nil),             // 26: engram.v1.SessionStartRulePacket
-	(*SessionStartMemory)(nil),                 // 27: engram.v1.SessionStartMemory
-	(*SessionStartMetaTagCount)(nil),           // 28: engram.v1.SessionStartMetaTagCount
-	(*SessionStartMetaSummary)(nil),            // 29: engram.v1.SessionStartMetaSummary
-	(*NegotiateVersionRequest)(nil),            // 30: engram.v1.NegotiateVersionRequest
-	(*NegotiateVersionResponse)(nil),           // 31: engram.v1.NegotiateVersionResponse
-	(*CallToolRequest)(nil),                    // 32: engram.v1.CallToolRequest
-	(*CallToolResponse)(nil),                   // 33: engram.v1.CallToolResponse
-	(*InitializeRequest)(nil),                  // 34: engram.v1.InitializeRequest
-	(*InitializeResponse)(nil),                 // 35: engram.v1.InitializeResponse
-	(*ToolDefinition)(nil),                     // 36: engram.v1.ToolDefinition
-	(*PingRequest)(nil),                        // 37: engram.v1.PingRequest
-	(*PingResponse)(nil),                       // 38: engram.v1.PingResponse
-	(*CodeChunkMeta)(nil),                      // 39: engram.v1.CodeChunkMeta
-	(*CodeIndexNegotiateRequest)(nil),          // 40: engram.v1.CodeIndexNegotiateRequest
-	(*CodeIndexNegotiateResponse)(nil),         // 41: engram.v1.CodeIndexNegotiateResponse
-	(*CodeChunkUpload)(nil),                    // 42: engram.v1.CodeChunkUpload
-	(*CodeIndexUploadReceipt)(nil),             // 43: engram.v1.CodeIndexUploadReceipt
-	(*ProjectIdentityV2)(nil),                  // 44: engram.v1.ProjectIdentityV2
-	(*ProjectLegacyIdentifierV3)(nil),          // 45: engram.v1.ProjectLegacyIdentifierV3
-	(*ProjectIdentityV3)(nil),                  // 46: engram.v1.ProjectIdentityV3
-	(*ProjectResolutionResultV3)(nil),          // 47: engram.v1.ProjectResolutionResultV3
-	(*RegisterProjectIdentityV3Request)(nil),   // 48: engram.v1.RegisterProjectIdentityV3Request
-	(*RegisterProjectIdentityV3Response)(nil),  // 49: engram.v1.RegisterProjectIdentityV3Response
-	(*GetAmbientCandidatesRequest)(nil),        // 50: engram.v1.GetAmbientCandidatesRequest
-	(*GetAmbientCandidatesResponse)(nil),       // 51: engram.v1.GetAmbientCandidatesResponse
-	(*HostAdvisorProtocolRange)(nil),           // 52: engram.v1.HostAdvisorProtocolRange
-	(*HostAdvisorHost)(nil),                    // 53: engram.v1.HostAdvisorHost
-	(*HostAdvisorArtifact)(nil),                // 54: engram.v1.HostAdvisorArtifact
-	(*HostAdvisorEvidenceRef)(nil),             // 55: engram.v1.HostAdvisorEvidenceRef
-	(*HostAdvisorCorrelation)(nil),             // 56: engram.v1.HostAdvisorCorrelation
-	(*HostAdvisorCallback)(nil),                // 57: engram.v1.HostAdvisorCallback
-	(*HostCapability)(nil),                     // 58: engram.v1.HostCapability
-	(*HostHello)(nil),                          // 59: engram.v1.HostHello
-	(*AcceptedCapabilitySnapshot)(nil),         // 60: engram.v1.AcceptedCapabilitySnapshot
-	(*HostBinding)(nil),                        // 61: engram.v1.HostBinding
-	(*HostAdvisorBindRequest)(nil),             // 62: engram.v1.HostAdvisorBindRequest
-	(*HostAdvisorBindResponse)(nil),            // 63: engram.v1.HostAdvisorBindResponse
-	(*HostAdvisorTypedFact)(nil),               // 64: engram.v1.HostAdvisorTypedFact
-	(*HostAdvisorBeforeAgentStartFacts)(nil),   // 65: engram.v1.HostAdvisorBeforeAgentStartFacts
-	(*HostAdvisorReceiptIdentity)(nil),         // 66: engram.v1.HostAdvisorReceiptIdentity
-	(*HostAdvisorOccurrence)(nil),              // 67: engram.v1.HostAdvisorOccurrence
-	(*HostAdvisorAdviseRequest)(nil),           // 68: engram.v1.HostAdvisorAdviseRequest
-	(*HostAdvisorKnowledgeReference)(nil),      // 69: engram.v1.HostAdvisorKnowledgeReference
-	(*HostAdvisorPresentation)(nil),            // 70: engram.v1.HostAdvisorPresentation
-	(*HostAdvisorPacket)(nil),                  // 71: engram.v1.HostAdvisorPacket
-	(*HostAdvisorEmit)(nil),                    // 72: engram.v1.HostAdvisorEmit
-	(*HostAdvisorAbstain)(nil),                 // 73: engram.v1.HostAdvisorAbstain
-	(*HostAdvisorDeliveryAmbiguous)(nil),       // 74: engram.v1.HostAdvisorDeliveryAmbiguous
-	(*HostAdvisorUnavailable)(nil),             // 75: engram.v1.HostAdvisorUnavailable
-	(*HostAdvisorAdviseResponse)(nil),          // 76: engram.v1.HostAdvisorAdviseResponse
-	(*HostAdvisorAdapterAttestation)(nil),      // 77: engram.v1.HostAdvisorAdapterAttestation
-	(*HostAdvisorAdapterSemanticGap)(nil),      // 78: engram.v1.HostAdvisorAdapterSemanticGap
-	(*HostAdvisorReceiptBoundObservation)(nil), // 79: engram.v1.HostAdvisorReceiptBoundObservation
-	(*HostAdvisorChannelSemanticGap)(nil),      // 80: engram.v1.HostAdvisorChannelSemanticGap
-	(*HostAdvisorObserveRequest)(nil),          // 81: engram.v1.HostAdvisorObserveRequest
-	(*HostAdvisorObserveResponse)(nil),         // 82: engram.v1.HostAdvisorObserveResponse
-	(*ContextRef)(nil),                         // 83: engram.v1.ContextRef
-	(*CodeIndexScope)(nil),                     // 84: engram.v1.CodeIndexScope
-	(*BindCodeContextRequest)(nil),             // 85: engram.v1.BindCodeContextRequest
-	(*BindCodeContextResponse)(nil),            // 86: engram.v1.BindCodeContextResponse
-	(*BeginCodeIndexRequest)(nil),              // 87: engram.v1.BeginCodeIndexRequest
-	(*BeginCodeIndexResponse)(nil),             // 88: engram.v1.BeginCodeIndexResponse
-	(*StageCodeIndexFrame)(nil),                // 89: engram.v1.StageCodeIndexFrame
-	(*StageCodeIndexResponse)(nil),             // 90: engram.v1.StageCodeIndexResponse
-	(*FinalizeCodeIndexRequest)(nil),           // 91: engram.v1.FinalizeCodeIndexRequest
-	(*FinalizeCodeIndexResponse)(nil),          // 92: engram.v1.FinalizeCodeIndexResponse
-	(*QueryCodeRequest)(nil),                   // 93: engram.v1.QueryCodeRequest
-	(*QueryCodeResponse)(nil),                  // 94: engram.v1.QueryCodeResponse
-	(*ExploreCodeRequest)(nil),                 // 95: engram.v1.ExploreCodeRequest
-	(*ExploreCodeResponse)(nil),                // 96: engram.v1.ExploreCodeResponse
-	nil,                                        // 97: engram.v1.ProjectEvent.MetadataEntry
-	(*timestamppb.Timestamp)(nil),              // 98: google.protobuf.Timestamp
+	(UCICompletionOutcome)(0),                  // 17: engram.v1.UCICompletionOutcome
+	(*SyncProjectStateRequest)(nil),            // 18: engram.v1.SyncProjectStateRequest
+	(*SyncProjectStateResponse)(nil),           // 19: engram.v1.SyncProjectStateResponse
+	(*ProjectEventsRequest)(nil),               // 20: engram.v1.ProjectEventsRequest
+	(*ProjectEvent)(nil),                       // 21: engram.v1.ProjectEvent
+	(*GetSessionStartContextRequest)(nil),      // 22: engram.v1.GetSessionStartContextRequest
+	(*GetSessionStartContextResponse)(nil),     // 23: engram.v1.GetSessionStartContextResponse
+	(*SessionStartIssue)(nil),                  // 24: engram.v1.SessionStartIssue
+	(*SessionStartRule)(nil),                   // 25: engram.v1.SessionStartRule
+	(*SessionStartRuleRouter)(nil),             // 26: engram.v1.SessionStartRuleRouter
+	(*SessionStartRulePacket)(nil),             // 27: engram.v1.SessionStartRulePacket
+	(*SessionStartMemory)(nil),                 // 28: engram.v1.SessionStartMemory
+	(*SessionStartMetaTagCount)(nil),           // 29: engram.v1.SessionStartMetaTagCount
+	(*SessionStartMetaSummary)(nil),            // 30: engram.v1.SessionStartMetaSummary
+	(*NegotiateVersionRequest)(nil),            // 31: engram.v1.NegotiateVersionRequest
+	(*NegotiateVersionResponse)(nil),           // 32: engram.v1.NegotiateVersionResponse
+	(*CallToolRequest)(nil),                    // 33: engram.v1.CallToolRequest
+	(*CallToolResponse)(nil),                   // 34: engram.v1.CallToolResponse
+	(*InitializeRequest)(nil),                  // 35: engram.v1.InitializeRequest
+	(*InitializeResponse)(nil),                 // 36: engram.v1.InitializeResponse
+	(*ToolDefinition)(nil),                     // 37: engram.v1.ToolDefinition
+	(*PingRequest)(nil),                        // 38: engram.v1.PingRequest
+	(*PingResponse)(nil),                       // 39: engram.v1.PingResponse
+	(*CodeChunkMeta)(nil),                      // 40: engram.v1.CodeChunkMeta
+	(*CodeIndexNegotiateRequest)(nil),          // 41: engram.v1.CodeIndexNegotiateRequest
+	(*CodeIndexNegotiateResponse)(nil),         // 42: engram.v1.CodeIndexNegotiateResponse
+	(*CodeChunkUpload)(nil),                    // 43: engram.v1.CodeChunkUpload
+	(*CodeIndexUploadReceipt)(nil),             // 44: engram.v1.CodeIndexUploadReceipt
+	(*ProjectIdentityV2)(nil),                  // 45: engram.v1.ProjectIdentityV2
+	(*ProjectLegacyIdentifierV3)(nil),          // 46: engram.v1.ProjectLegacyIdentifierV3
+	(*ProjectIdentityV3)(nil),                  // 47: engram.v1.ProjectIdentityV3
+	(*ProjectResolutionResultV3)(nil),          // 48: engram.v1.ProjectResolutionResultV3
+	(*RegisterProjectIdentityV3Request)(nil),   // 49: engram.v1.RegisterProjectIdentityV3Request
+	(*RegisterProjectIdentityV3Response)(nil),  // 50: engram.v1.RegisterProjectIdentityV3Response
+	(*GetAmbientCandidatesRequest)(nil),        // 51: engram.v1.GetAmbientCandidatesRequest
+	(*GetAmbientCandidatesResponse)(nil),       // 52: engram.v1.GetAmbientCandidatesResponse
+	(*HostAdvisorProtocolRange)(nil),           // 53: engram.v1.HostAdvisorProtocolRange
+	(*HostAdvisorHost)(nil),                    // 54: engram.v1.HostAdvisorHost
+	(*HostAdvisorArtifact)(nil),                // 55: engram.v1.HostAdvisorArtifact
+	(*HostAdvisorEvidenceRef)(nil),             // 56: engram.v1.HostAdvisorEvidenceRef
+	(*HostAdvisorCorrelation)(nil),             // 57: engram.v1.HostAdvisorCorrelation
+	(*HostAdvisorCallback)(nil),                // 58: engram.v1.HostAdvisorCallback
+	(*HostCapability)(nil),                     // 59: engram.v1.HostCapability
+	(*HostHello)(nil),                          // 60: engram.v1.HostHello
+	(*AcceptedCapabilitySnapshot)(nil),         // 61: engram.v1.AcceptedCapabilitySnapshot
+	(*HostBinding)(nil),                        // 62: engram.v1.HostBinding
+	(*HostAdvisorBindRequest)(nil),             // 63: engram.v1.HostAdvisorBindRequest
+	(*HostAdvisorBindResponse)(nil),            // 64: engram.v1.HostAdvisorBindResponse
+	(*HostAdvisorTypedFact)(nil),               // 65: engram.v1.HostAdvisorTypedFact
+	(*HostAdvisorBeforeAgentStartFacts)(nil),   // 66: engram.v1.HostAdvisorBeforeAgentStartFacts
+	(*HostAdvisorReceiptIdentity)(nil),         // 67: engram.v1.HostAdvisorReceiptIdentity
+	(*HostAdvisorOccurrence)(nil),              // 68: engram.v1.HostAdvisorOccurrence
+	(*HostAdvisorAdviseRequest)(nil),           // 69: engram.v1.HostAdvisorAdviseRequest
+	(*HostAdvisorKnowledgeReference)(nil),      // 70: engram.v1.HostAdvisorKnowledgeReference
+	(*HostAdvisorPresentation)(nil),            // 71: engram.v1.HostAdvisorPresentation
+	(*HostAdvisorPacket)(nil),                  // 72: engram.v1.HostAdvisorPacket
+	(*HostAdvisorEmit)(nil),                    // 73: engram.v1.HostAdvisorEmit
+	(*HostAdvisorAbstain)(nil),                 // 74: engram.v1.HostAdvisorAbstain
+	(*HostAdvisorDeliveryAmbiguous)(nil),       // 75: engram.v1.HostAdvisorDeliveryAmbiguous
+	(*HostAdvisorUnavailable)(nil),             // 76: engram.v1.HostAdvisorUnavailable
+	(*HostAdvisorAdviseResponse)(nil),          // 77: engram.v1.HostAdvisorAdviseResponse
+	(*HostAdvisorAdapterAttestation)(nil),      // 78: engram.v1.HostAdvisorAdapterAttestation
+	(*HostAdvisorAdapterSemanticGap)(nil),      // 79: engram.v1.HostAdvisorAdapterSemanticGap
+	(*HostAdvisorReceiptBoundObservation)(nil), // 80: engram.v1.HostAdvisorReceiptBoundObservation
+	(*HostAdvisorChannelSemanticGap)(nil),      // 81: engram.v1.HostAdvisorChannelSemanticGap
+	(*HostAdvisorObserveRequest)(nil),          // 82: engram.v1.HostAdvisorObserveRequest
+	(*HostAdvisorObserveResponse)(nil),         // 83: engram.v1.HostAdvisorObserveResponse
+	(*ContextRef)(nil),                         // 84: engram.v1.ContextRef
+	(*CodeIndexScope)(nil),                     // 85: engram.v1.CodeIndexScope
+	(*BindCodeContextRequest)(nil),             // 86: engram.v1.BindCodeContextRequest
+	(*BindCodeContextResponse)(nil),            // 87: engram.v1.BindCodeContextResponse
+	(*BeginCodeIndexRequest)(nil),              // 88: engram.v1.BeginCodeIndexRequest
+	(*BeginCodeIndexResponse)(nil),             // 89: engram.v1.BeginCodeIndexResponse
+	(*StageCodeIndexFrame)(nil),                // 90: engram.v1.StageCodeIndexFrame
+	(*StageCodeIndexResponse)(nil),             // 91: engram.v1.StageCodeIndexResponse
+	(*FinalizeCodeIndexRequest)(nil),           // 92: engram.v1.FinalizeCodeIndexRequest
+	(*FinalizeCodeIndexResponse)(nil),          // 93: engram.v1.FinalizeCodeIndexResponse
+	(*QueryCodeRequest)(nil),                   // 94: engram.v1.QueryCodeRequest
+	(*QueryCodeResponse)(nil),                  // 95: engram.v1.QueryCodeResponse
+	(*ExploreCodeRequest)(nil),                 // 96: engram.v1.ExploreCodeRequest
+	(*ExploreCodeResponse)(nil),                // 97: engram.v1.ExploreCodeResponse
+	(*RecordUCICompletionRequest)(nil),         // 98: engram.v1.RecordUCICompletionRequest
+	(*RecordUCICompletionResponse)(nil),        // 99: engram.v1.RecordUCICompletionResponse
+	nil,                                        // 100: engram.v1.ProjectEvent.MetadataEntry
+	(*timestamppb.Timestamp)(nil),              // 101: google.protobuf.Timestamp
 }
 var file_proto_engram_v1_engram_proto_depIdxs = []int32{
 	0,   // 0: engram.v1.ProjectEvent.event_type:type_name -> engram.v1.ProjectEventType
-	97,  // 1: engram.v1.ProjectEvent.metadata:type_name -> engram.v1.ProjectEvent.MetadataEntry
-	46,  // 2: engram.v1.GetSessionStartContextRequest.project_identity_v3:type_name -> engram.v1.ProjectIdentityV3
-	23,  // 3: engram.v1.GetSessionStartContextResponse.issues:type_name -> engram.v1.SessionStartIssue
-	24,  // 4: engram.v1.GetSessionStartContextResponse.rules:type_name -> engram.v1.SessionStartRule
-	27,  // 5: engram.v1.GetSessionStartContextResponse.memories:type_name -> engram.v1.SessionStartMemory
-	98,  // 6: engram.v1.GetSessionStartContextResponse.generated_at:type_name -> google.protobuf.Timestamp
-	25,  // 7: engram.v1.GetSessionStartContextResponse.rule_router:type_name -> engram.v1.SessionStartRuleRouter
-	29,  // 8: engram.v1.GetSessionStartContextResponse.meta_summary:type_name -> engram.v1.SessionStartMetaSummary
-	47,  // 9: engram.v1.GetSessionStartContextResponse.project_resolution_v3:type_name -> engram.v1.ProjectResolutionResultV3
-	98,  // 10: engram.v1.SessionStartIssue.acknowledged_at:type_name -> google.protobuf.Timestamp
-	98,  // 11: engram.v1.SessionStartIssue.resolved_at:type_name -> google.protobuf.Timestamp
-	98,  // 12: engram.v1.SessionStartIssue.reopened_at:type_name -> google.protobuf.Timestamp
-	98,  // 13: engram.v1.SessionStartIssue.closed_at:type_name -> google.protobuf.Timestamp
-	98,  // 14: engram.v1.SessionStartIssue.created_at:type_name -> google.protobuf.Timestamp
-	98,  // 15: engram.v1.SessionStartIssue.updated_at:type_name -> google.protobuf.Timestamp
-	98,  // 16: engram.v1.SessionStartRule.created_at:type_name -> google.protobuf.Timestamp
-	98,  // 17: engram.v1.SessionStartRule.updated_at:type_name -> google.protobuf.Timestamp
-	26,  // 18: engram.v1.SessionStartRuleRouter.kernel:type_name -> engram.v1.SessionStartRulePacket
-	26,  // 19: engram.v1.SessionStartRuleRouter.contextual:type_name -> engram.v1.SessionStartRulePacket
-	26,  // 20: engram.v1.SessionStartRuleRouter.suppressed:type_name -> engram.v1.SessionStartRulePacket
-	98,  // 21: engram.v1.SessionStartMemory.created_at:type_name -> google.protobuf.Timestamp
-	98,  // 22: engram.v1.SessionStartMemory.updated_at:type_name -> google.protobuf.Timestamp
-	28,  // 23: engram.v1.SessionStartMetaSummary.top_tags:type_name -> engram.v1.SessionStartMetaTagCount
-	98,  // 24: engram.v1.SessionStartMetaSummary.oldest_created_at:type_name -> google.protobuf.Timestamp
-	98,  // 25: engram.v1.SessionStartMetaSummary.newest_created_at:type_name -> google.protobuf.Timestamp
-	98,  // 26: engram.v1.SessionStartMetaSummary.generated_at:type_name -> google.protobuf.Timestamp
-	44,  // 27: engram.v1.CallToolRequest.project_identity:type_name -> engram.v1.ProjectIdentityV2
-	46,  // 28: engram.v1.CallToolRequest.project_identity_v3:type_name -> engram.v1.ProjectIdentityV3
-	47,  // 29: engram.v1.CallToolResponse.project_resolution_v3:type_name -> engram.v1.ProjectResolutionResultV3
-	44,  // 30: engram.v1.InitializeRequest.project_identity:type_name -> engram.v1.ProjectIdentityV2
-	46,  // 31: engram.v1.InitializeRequest.project_identity_v3:type_name -> engram.v1.ProjectIdentityV3
-	36,  // 32: engram.v1.InitializeResponse.tools:type_name -> engram.v1.ToolDefinition
-	47,  // 33: engram.v1.InitializeResponse.project_resolution_v3:type_name -> engram.v1.ProjectResolutionResultV3
-	39,  // 34: engram.v1.CodeIndexNegotiateRequest.manifest:type_name -> engram.v1.CodeChunkMeta
-	39,  // 35: engram.v1.CodeChunkUpload.meta:type_name -> engram.v1.CodeChunkMeta
-	45,  // 36: engram.v1.ProjectIdentityV3.legacy_identifiers:type_name -> engram.v1.ProjectLegacyIdentifierV3
+	100, // 1: engram.v1.ProjectEvent.metadata:type_name -> engram.v1.ProjectEvent.MetadataEntry
+	47,  // 2: engram.v1.GetSessionStartContextRequest.project_identity_v3:type_name -> engram.v1.ProjectIdentityV3
+	24,  // 3: engram.v1.GetSessionStartContextResponse.issues:type_name -> engram.v1.SessionStartIssue
+	25,  // 4: engram.v1.GetSessionStartContextResponse.rules:type_name -> engram.v1.SessionStartRule
+	28,  // 5: engram.v1.GetSessionStartContextResponse.memories:type_name -> engram.v1.SessionStartMemory
+	101, // 6: engram.v1.GetSessionStartContextResponse.generated_at:type_name -> google.protobuf.Timestamp
+	26,  // 7: engram.v1.GetSessionStartContextResponse.rule_router:type_name -> engram.v1.SessionStartRuleRouter
+	30,  // 8: engram.v1.GetSessionStartContextResponse.meta_summary:type_name -> engram.v1.SessionStartMetaSummary
+	48,  // 9: engram.v1.GetSessionStartContextResponse.project_resolution_v3:type_name -> engram.v1.ProjectResolutionResultV3
+	101, // 10: engram.v1.SessionStartIssue.acknowledged_at:type_name -> google.protobuf.Timestamp
+	101, // 11: engram.v1.SessionStartIssue.resolved_at:type_name -> google.protobuf.Timestamp
+	101, // 12: engram.v1.SessionStartIssue.reopened_at:type_name -> google.protobuf.Timestamp
+	101, // 13: engram.v1.SessionStartIssue.closed_at:type_name -> google.protobuf.Timestamp
+	101, // 14: engram.v1.SessionStartIssue.created_at:type_name -> google.protobuf.Timestamp
+	101, // 15: engram.v1.SessionStartIssue.updated_at:type_name -> google.protobuf.Timestamp
+	101, // 16: engram.v1.SessionStartRule.created_at:type_name -> google.protobuf.Timestamp
+	101, // 17: engram.v1.SessionStartRule.updated_at:type_name -> google.protobuf.Timestamp
+	27,  // 18: engram.v1.SessionStartRuleRouter.kernel:type_name -> engram.v1.SessionStartRulePacket
+	27,  // 19: engram.v1.SessionStartRuleRouter.contextual:type_name -> engram.v1.SessionStartRulePacket
+	27,  // 20: engram.v1.SessionStartRuleRouter.suppressed:type_name -> engram.v1.SessionStartRulePacket
+	101, // 21: engram.v1.SessionStartMemory.created_at:type_name -> google.protobuf.Timestamp
+	101, // 22: engram.v1.SessionStartMemory.updated_at:type_name -> google.protobuf.Timestamp
+	29,  // 23: engram.v1.SessionStartMetaSummary.top_tags:type_name -> engram.v1.SessionStartMetaTagCount
+	101, // 24: engram.v1.SessionStartMetaSummary.oldest_created_at:type_name -> google.protobuf.Timestamp
+	101, // 25: engram.v1.SessionStartMetaSummary.newest_created_at:type_name -> google.protobuf.Timestamp
+	101, // 26: engram.v1.SessionStartMetaSummary.generated_at:type_name -> google.protobuf.Timestamp
+	45,  // 27: engram.v1.CallToolRequest.project_identity:type_name -> engram.v1.ProjectIdentityV2
+	47,  // 28: engram.v1.CallToolRequest.project_identity_v3:type_name -> engram.v1.ProjectIdentityV3
+	48,  // 29: engram.v1.CallToolResponse.project_resolution_v3:type_name -> engram.v1.ProjectResolutionResultV3
+	45,  // 30: engram.v1.InitializeRequest.project_identity:type_name -> engram.v1.ProjectIdentityV2
+	47,  // 31: engram.v1.InitializeRequest.project_identity_v3:type_name -> engram.v1.ProjectIdentityV3
+	37,  // 32: engram.v1.InitializeResponse.tools:type_name -> engram.v1.ToolDefinition
+	48,  // 33: engram.v1.InitializeResponse.project_resolution_v3:type_name -> engram.v1.ProjectResolutionResultV3
+	40,  // 34: engram.v1.CodeIndexNegotiateRequest.manifest:type_name -> engram.v1.CodeChunkMeta
+	40,  // 35: engram.v1.CodeChunkUpload.meta:type_name -> engram.v1.CodeChunkMeta
+	46,  // 36: engram.v1.ProjectIdentityV3.legacy_identifiers:type_name -> engram.v1.ProjectLegacyIdentifierV3
 	1,   // 37: engram.v1.ProjectResolutionResultV3.outcome:type_name -> engram.v1.ProjectResolutionOutcomeV3
-	46,  // 38: engram.v1.RegisterProjectIdentityV3Request.project_identity_v3:type_name -> engram.v1.ProjectIdentityV3
-	47,  // 39: engram.v1.RegisterProjectIdentityV3Response.project_resolution_v3:type_name -> engram.v1.ProjectResolutionResultV3
-	46,  // 40: engram.v1.GetAmbientCandidatesRequest.project_identity_v3:type_name -> engram.v1.ProjectIdentityV3
+	47,  // 38: engram.v1.RegisterProjectIdentityV3Request.project_identity_v3:type_name -> engram.v1.ProjectIdentityV3
+	48,  // 39: engram.v1.RegisterProjectIdentityV3Response.project_resolution_v3:type_name -> engram.v1.ProjectResolutionResultV3
+	47,  // 40: engram.v1.GetAmbientCandidatesRequest.project_identity_v3:type_name -> engram.v1.ProjectIdentityV3
 	2,   // 41: engram.v1.HostAdvisorHost.family:type_name -> engram.v1.HostAdvisorHostFamily
 	3,   // 42: engram.v1.HostAdvisorArtifact.kind:type_name -> engram.v1.HostAdvisorArtifactKind
-	54,  // 43: engram.v1.HostAdvisorEvidenceRef.artifact:type_name -> engram.v1.HostAdvisorArtifact
+	55,  // 43: engram.v1.HostAdvisorEvidenceRef.artifact:type_name -> engram.v1.HostAdvisorArtifact
 	7,   // 44: engram.v1.HostAdvisorCallback.ordering:type_name -> engram.v1.HostAdvisorCallbackOrdering
 	4,   // 45: engram.v1.HostCapability.semantic:type_name -> engram.v1.HostAdvisorSemantic
 	5,   // 46: engram.v1.HostCapability.allowed_actions:type_name -> engram.v1.HostAdvisorAction
 	6,   // 47: engram.v1.HostCapability.context_injection_modes:type_name -> engram.v1.HostAdvisorContextInjectionMode
-	56,  // 48: engram.v1.HostCapability.correlation:type_name -> engram.v1.HostAdvisorCorrelation
-	57,  // 49: engram.v1.HostCapability.callback:type_name -> engram.v1.HostAdvisorCallback
+	57,  // 48: engram.v1.HostCapability.correlation:type_name -> engram.v1.HostAdvisorCorrelation
+	58,  // 49: engram.v1.HostCapability.callback:type_name -> engram.v1.HostAdvisorCallback
 	8,   // 50: engram.v1.HostCapability.acknowledgement:type_name -> engram.v1.HostAdvisorAcknowledgement
-	52,  // 51: engram.v1.HostHello.protocol_range:type_name -> engram.v1.HostAdvisorProtocolRange
-	53,  // 52: engram.v1.HostHello.host:type_name -> engram.v1.HostAdvisorHost
-	58,  // 53: engram.v1.HostHello.requested_capabilities:type_name -> engram.v1.HostCapability
-	55,  // 54: engram.v1.HostHello.evidence_ref:type_name -> engram.v1.HostAdvisorEvidenceRef
-	58,  // 55: engram.v1.AcceptedCapabilitySnapshot.capabilities:type_name -> engram.v1.HostCapability
-	60,  // 56: engram.v1.HostBinding.capability_snapshot:type_name -> engram.v1.AcceptedCapabilitySnapshot
-	98,  // 57: engram.v1.HostBinding.expires_at:type_name -> google.protobuf.Timestamp
-	59,  // 58: engram.v1.HostAdvisorBindRequest.hello:type_name -> engram.v1.HostHello
-	61,  // 59: engram.v1.HostAdvisorBindResponse.binding:type_name -> engram.v1.HostBinding
+	53,  // 51: engram.v1.HostHello.protocol_range:type_name -> engram.v1.HostAdvisorProtocolRange
+	54,  // 52: engram.v1.HostHello.host:type_name -> engram.v1.HostAdvisorHost
+	59,  // 53: engram.v1.HostHello.requested_capabilities:type_name -> engram.v1.HostCapability
+	56,  // 54: engram.v1.HostHello.evidence_ref:type_name -> engram.v1.HostAdvisorEvidenceRef
+	59,  // 55: engram.v1.AcceptedCapabilitySnapshot.capabilities:type_name -> engram.v1.HostCapability
+	61,  // 56: engram.v1.HostBinding.capability_snapshot:type_name -> engram.v1.AcceptedCapabilitySnapshot
+	101, // 57: engram.v1.HostBinding.expires_at:type_name -> google.protobuf.Timestamp
+	60,  // 58: engram.v1.HostAdvisorBindRequest.hello:type_name -> engram.v1.HostHello
+	62,  // 59: engram.v1.HostAdvisorBindResponse.binding:type_name -> engram.v1.HostBinding
 	9,   // 60: engram.v1.HostAdvisorTypedFact.kind:type_name -> engram.v1.HostAdvisorFactKind
-	64,  // 61: engram.v1.HostAdvisorBeforeAgentStartFacts.facts:type_name -> engram.v1.HostAdvisorTypedFact
+	65,  // 61: engram.v1.HostAdvisorBeforeAgentStartFacts.facts:type_name -> engram.v1.HostAdvisorTypedFact
 	4,   // 62: engram.v1.HostAdvisorOccurrence.phase:type_name -> engram.v1.HostAdvisorSemantic
-	65,  // 63: engram.v1.HostAdvisorOccurrence.before_agent_start:type_name -> engram.v1.HostAdvisorBeforeAgentStartFacts
-	66,  // 64: engram.v1.HostAdvisorOccurrence.predecessor:type_name -> engram.v1.HostAdvisorReceiptIdentity
-	46,  // 65: engram.v1.HostAdvisorAdviseRequest.project_evidence:type_name -> engram.v1.ProjectIdentityV3
-	67,  // 66: engram.v1.HostAdvisorAdviseRequest.occurrence:type_name -> engram.v1.HostAdvisorOccurrence
+	66,  // 63: engram.v1.HostAdvisorOccurrence.before_agent_start:type_name -> engram.v1.HostAdvisorBeforeAgentStartFacts
+	67,  // 64: engram.v1.HostAdvisorOccurrence.predecessor:type_name -> engram.v1.HostAdvisorReceiptIdentity
+	47,  // 65: engram.v1.HostAdvisorAdviseRequest.project_evidence:type_name -> engram.v1.ProjectIdentityV3
+	68,  // 66: engram.v1.HostAdvisorAdviseRequest.occurrence:type_name -> engram.v1.HostAdvisorOccurrence
 	10,  // 67: engram.v1.HostAdvisorKnowledgeReference.source_tier:type_name -> engram.v1.HostAdvisorCandidateTier
 	6,   // 68: engram.v1.HostAdvisorPresentation.injection_mode:type_name -> engram.v1.HostAdvisorContextInjectionMode
-	66,  // 69: engram.v1.HostAdvisorPacket.receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
-	98,  // 70: engram.v1.HostAdvisorPacket.expires_at:type_name -> google.protobuf.Timestamp
-	69,  // 71: engram.v1.HostAdvisorPacket.knowledge:type_name -> engram.v1.HostAdvisorKnowledgeReference
-	70,  // 72: engram.v1.HostAdvisorPacket.presentation:type_name -> engram.v1.HostAdvisorPresentation
-	66,  // 73: engram.v1.HostAdvisorEmit.receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
-	71,  // 74: engram.v1.HostAdvisorEmit.packet:type_name -> engram.v1.HostAdvisorPacket
-	66,  // 75: engram.v1.HostAdvisorAbstain.receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
+	67,  // 69: engram.v1.HostAdvisorPacket.receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
+	101, // 70: engram.v1.HostAdvisorPacket.expires_at:type_name -> google.protobuf.Timestamp
+	70,  // 71: engram.v1.HostAdvisorPacket.knowledge:type_name -> engram.v1.HostAdvisorKnowledgeReference
+	71,  // 72: engram.v1.HostAdvisorPacket.presentation:type_name -> engram.v1.HostAdvisorPresentation
+	67,  // 73: engram.v1.HostAdvisorEmit.receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
+	72,  // 74: engram.v1.HostAdvisorEmit.packet:type_name -> engram.v1.HostAdvisorPacket
+	67,  // 75: engram.v1.HostAdvisorAbstain.receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
 	11,  // 76: engram.v1.HostAdvisorAbstain.reason:type_name -> engram.v1.HostAdvisorAbstentionReason
-	66,  // 77: engram.v1.HostAdvisorDeliveryAmbiguous.receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
-	98,  // 78: engram.v1.HostAdvisorUnavailable.expires_at:type_name -> google.protobuf.Timestamp
+	67,  // 77: engram.v1.HostAdvisorDeliveryAmbiguous.receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
+	101, // 78: engram.v1.HostAdvisorUnavailable.expires_at:type_name -> google.protobuf.Timestamp
 	12,  // 79: engram.v1.HostAdvisorUnavailable.code:type_name -> engram.v1.HostAdvisorUnavailableCode
-	72,  // 80: engram.v1.HostAdvisorAdviseResponse.emit:type_name -> engram.v1.HostAdvisorEmit
-	73,  // 81: engram.v1.HostAdvisorAdviseResponse.abstain:type_name -> engram.v1.HostAdvisorAbstain
-	74,  // 82: engram.v1.HostAdvisorAdviseResponse.delivery_ambiguous:type_name -> engram.v1.HostAdvisorDeliveryAmbiguous
-	75,  // 83: engram.v1.HostAdvisorAdviseResponse.unavailable:type_name -> engram.v1.HostAdvisorUnavailable
+	73,  // 80: engram.v1.HostAdvisorAdviseResponse.emit:type_name -> engram.v1.HostAdvisorEmit
+	74,  // 81: engram.v1.HostAdvisorAdviseResponse.abstain:type_name -> engram.v1.HostAdvisorAbstain
+	75,  // 82: engram.v1.HostAdvisorAdviseResponse.delivery_ambiguous:type_name -> engram.v1.HostAdvisorDeliveryAmbiguous
+	76,  // 83: engram.v1.HostAdvisorAdviseResponse.unavailable:type_name -> engram.v1.HostAdvisorUnavailable
 	15,  // 84: engram.v1.HostAdvisorAdapterAttestation.kind:type_name -> engram.v1.HostAdvisorAttestationKind
 	16,  // 85: engram.v1.HostAdvisorAdapterSemanticGap.code:type_name -> engram.v1.HostAdvisorSemanticGapCode
-	66,  // 86: engram.v1.HostAdvisorReceiptBoundObservation.decision_receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
-	77,  // 87: engram.v1.HostAdvisorReceiptBoundObservation.adapter_attested:type_name -> engram.v1.HostAdvisorAdapterAttestation
-	78,  // 88: engram.v1.HostAdvisorReceiptBoundObservation.adapter_semantic_gap:type_name -> engram.v1.HostAdvisorAdapterSemanticGap
-	78,  // 89: engram.v1.HostAdvisorChannelSemanticGap.adapter_semantic_gap:type_name -> engram.v1.HostAdvisorAdapterSemanticGap
-	79,  // 90: engram.v1.HostAdvisorObserveRequest.receipt_bound:type_name -> engram.v1.HostAdvisorReceiptBoundObservation
-	80,  // 91: engram.v1.HostAdvisorObserveRequest.channel_gap:type_name -> engram.v1.HostAdvisorChannelSemanticGap
+	67,  // 86: engram.v1.HostAdvisorReceiptBoundObservation.decision_receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
+	78,  // 87: engram.v1.HostAdvisorReceiptBoundObservation.adapter_attested:type_name -> engram.v1.HostAdvisorAdapterAttestation
+	79,  // 88: engram.v1.HostAdvisorReceiptBoundObservation.adapter_semantic_gap:type_name -> engram.v1.HostAdvisorAdapterSemanticGap
+	79,  // 89: engram.v1.HostAdvisorChannelSemanticGap.adapter_semantic_gap:type_name -> engram.v1.HostAdvisorAdapterSemanticGap
+	80,  // 90: engram.v1.HostAdvisorObserveRequest.receipt_bound:type_name -> engram.v1.HostAdvisorReceiptBoundObservation
+	81,  // 91: engram.v1.HostAdvisorObserveRequest.channel_gap:type_name -> engram.v1.HostAdvisorChannelSemanticGap
 	13,  // 92: engram.v1.HostAdvisorObserveResponse.state:type_name -> engram.v1.HostAdvisorObservationState
 	14,  // 93: engram.v1.HostAdvisorObserveResponse.reason:type_name -> engram.v1.HostAdvisorObservationReason
-	83,  // 94: engram.v1.BindCodeContextRequest.requested_context:type_name -> engram.v1.ContextRef
-	83,  // 95: engram.v1.BindCodeContextResponse.context:type_name -> engram.v1.ContextRef
-	84,  // 96: engram.v1.BindCodeContextResponse.index_scope:type_name -> engram.v1.CodeIndexScope
-	84,  // 97: engram.v1.BeginCodeIndexRequest.scope:type_name -> engram.v1.CodeIndexScope
-	83,  // 98: engram.v1.BeginCodeIndexRequest.expected_parent:type_name -> engram.v1.ContextRef
-	84,  // 99: engram.v1.BeginCodeIndexResponse.scope:type_name -> engram.v1.CodeIndexScope
-	98,  // 100: engram.v1.BeginCodeIndexResponse.lease_expires_at:type_name -> google.protobuf.Timestamp
-	84,  // 101: engram.v1.StageCodeIndexFrame.scope:type_name -> engram.v1.CodeIndexScope
-	84,  // 102: engram.v1.FinalizeCodeIndexRequest.scope:type_name -> engram.v1.CodeIndexScope
-	83,  // 103: engram.v1.FinalizeCodeIndexRequest.expected_parent:type_name -> engram.v1.ContextRef
-	98,  // 104: engram.v1.FinalizeCodeIndexRequest.scan_started_at:type_name -> google.protobuf.Timestamp
-	98,  // 105: engram.v1.FinalizeCodeIndexRequest.scan_completed_at:type_name -> google.protobuf.Timestamp
-	83,  // 106: engram.v1.FinalizeCodeIndexResponse.published_context:type_name -> engram.v1.ContextRef
-	83,  // 107: engram.v1.QueryCodeRequest.context:type_name -> engram.v1.ContextRef
-	83,  // 108: engram.v1.QueryCodeResponse.context:type_name -> engram.v1.ContextRef
-	83,  // 109: engram.v1.ExploreCodeRequest.context:type_name -> engram.v1.ContextRef
-	83,  // 110: engram.v1.ExploreCodeResponse.context:type_name -> engram.v1.ContextRef
-	32,  // 111: engram.v1.EngramService.CallTool:input_type -> engram.v1.CallToolRequest
-	34,  // 112: engram.v1.EngramService.Initialize:input_type -> engram.v1.InitializeRequest
-	37,  // 113: engram.v1.EngramService.Ping:input_type -> engram.v1.PingRequest
-	17,  // 114: engram.v1.EngramService.SyncProjectState:input_type -> engram.v1.SyncProjectStateRequest
-	19,  // 115: engram.v1.EngramService.ProjectEvents:input_type -> engram.v1.ProjectEventsRequest
-	21,  // 116: engram.v1.EngramService.GetSessionStartContext:input_type -> engram.v1.GetSessionStartContextRequest
-	50,  // 117: engram.v1.EngramService.GetAmbientCandidates:input_type -> engram.v1.GetAmbientCandidatesRequest
-	30,  // 118: engram.v1.EngramService.NegotiateVersion:input_type -> engram.v1.NegotiateVersionRequest
-	40,  // 119: engram.v1.EngramService.CodeIndexNegotiate:input_type -> engram.v1.CodeIndexNegotiateRequest
-	42,  // 120: engram.v1.EngramService.CodeIndexUpload:input_type -> engram.v1.CodeChunkUpload
-	48,  // 121: engram.v1.EngramService.RegisterProjectIdentityV3:input_type -> engram.v1.RegisterProjectIdentityV3Request
-	62,  // 122: engram.v1.EngramService.Bind:input_type -> engram.v1.HostAdvisorBindRequest
-	68,  // 123: engram.v1.EngramService.Advise:input_type -> engram.v1.HostAdvisorAdviseRequest
-	81,  // 124: engram.v1.EngramService.Observe:input_type -> engram.v1.HostAdvisorObserveRequest
-	85,  // 125: engram.v1.EngramService.BindCodeContext:input_type -> engram.v1.BindCodeContextRequest
-	87,  // 126: engram.v1.EngramService.BeginCodeIndex:input_type -> engram.v1.BeginCodeIndexRequest
-	89,  // 127: engram.v1.EngramService.StageCodeIndex:input_type -> engram.v1.StageCodeIndexFrame
-	91,  // 128: engram.v1.EngramService.FinalizeCodeIndex:input_type -> engram.v1.FinalizeCodeIndexRequest
-	93,  // 129: engram.v1.EngramService.QueryCode:input_type -> engram.v1.QueryCodeRequest
-	95,  // 130: engram.v1.EngramService.ExploreCode:input_type -> engram.v1.ExploreCodeRequest
-	33,  // 131: engram.v1.EngramService.CallTool:output_type -> engram.v1.CallToolResponse
-	35,  // 132: engram.v1.EngramService.Initialize:output_type -> engram.v1.InitializeResponse
-	38,  // 133: engram.v1.EngramService.Ping:output_type -> engram.v1.PingResponse
-	18,  // 134: engram.v1.EngramService.SyncProjectState:output_type -> engram.v1.SyncProjectStateResponse
-	20,  // 135: engram.v1.EngramService.ProjectEvents:output_type -> engram.v1.ProjectEvent
-	22,  // 136: engram.v1.EngramService.GetSessionStartContext:output_type -> engram.v1.GetSessionStartContextResponse
-	51,  // 137: engram.v1.EngramService.GetAmbientCandidates:output_type -> engram.v1.GetAmbientCandidatesResponse
-	31,  // 138: engram.v1.EngramService.NegotiateVersion:output_type -> engram.v1.NegotiateVersionResponse
-	41,  // 139: engram.v1.EngramService.CodeIndexNegotiate:output_type -> engram.v1.CodeIndexNegotiateResponse
-	43,  // 140: engram.v1.EngramService.CodeIndexUpload:output_type -> engram.v1.CodeIndexUploadReceipt
-	49,  // 141: engram.v1.EngramService.RegisterProjectIdentityV3:output_type -> engram.v1.RegisterProjectIdentityV3Response
-	63,  // 142: engram.v1.EngramService.Bind:output_type -> engram.v1.HostAdvisorBindResponse
-	76,  // 143: engram.v1.EngramService.Advise:output_type -> engram.v1.HostAdvisorAdviseResponse
-	82,  // 144: engram.v1.EngramService.Observe:output_type -> engram.v1.HostAdvisorObserveResponse
-	86,  // 145: engram.v1.EngramService.BindCodeContext:output_type -> engram.v1.BindCodeContextResponse
-	88,  // 146: engram.v1.EngramService.BeginCodeIndex:output_type -> engram.v1.BeginCodeIndexResponse
-	90,  // 147: engram.v1.EngramService.StageCodeIndex:output_type -> engram.v1.StageCodeIndexResponse
-	92,  // 148: engram.v1.EngramService.FinalizeCodeIndex:output_type -> engram.v1.FinalizeCodeIndexResponse
-	94,  // 149: engram.v1.EngramService.QueryCode:output_type -> engram.v1.QueryCodeResponse
-	96,  // 150: engram.v1.EngramService.ExploreCode:output_type -> engram.v1.ExploreCodeResponse
-	131, // [131:151] is the sub-list for method output_type
-	111, // [111:131] is the sub-list for method input_type
-	111, // [111:111] is the sub-list for extension type_name
-	111, // [111:111] is the sub-list for extension extendee
-	0,   // [0:111] is the sub-list for field type_name
+	84,  // 94: engram.v1.BindCodeContextRequest.requested_context:type_name -> engram.v1.ContextRef
+	84,  // 95: engram.v1.BindCodeContextResponse.context:type_name -> engram.v1.ContextRef
+	85,  // 96: engram.v1.BindCodeContextResponse.index_scope:type_name -> engram.v1.CodeIndexScope
+	85,  // 97: engram.v1.BeginCodeIndexRequest.scope:type_name -> engram.v1.CodeIndexScope
+	84,  // 98: engram.v1.BeginCodeIndexRequest.expected_parent:type_name -> engram.v1.ContextRef
+	85,  // 99: engram.v1.BeginCodeIndexResponse.scope:type_name -> engram.v1.CodeIndexScope
+	101, // 100: engram.v1.BeginCodeIndexResponse.lease_expires_at:type_name -> google.protobuf.Timestamp
+	85,  // 101: engram.v1.StageCodeIndexFrame.scope:type_name -> engram.v1.CodeIndexScope
+	85,  // 102: engram.v1.FinalizeCodeIndexRequest.scope:type_name -> engram.v1.CodeIndexScope
+	84,  // 103: engram.v1.FinalizeCodeIndexRequest.expected_parent:type_name -> engram.v1.ContextRef
+	101, // 104: engram.v1.FinalizeCodeIndexRequest.scan_started_at:type_name -> google.protobuf.Timestamp
+	101, // 105: engram.v1.FinalizeCodeIndexRequest.scan_completed_at:type_name -> google.protobuf.Timestamp
+	84,  // 106: engram.v1.FinalizeCodeIndexResponse.published_context:type_name -> engram.v1.ContextRef
+	84,  // 107: engram.v1.QueryCodeRequest.context:type_name -> engram.v1.ContextRef
+	84,  // 108: engram.v1.QueryCodeResponse.context:type_name -> engram.v1.ContextRef
+	84,  // 109: engram.v1.ExploreCodeRequest.context:type_name -> engram.v1.ContextRef
+	84,  // 110: engram.v1.ExploreCodeResponse.context:type_name -> engram.v1.ContextRef
+	17,  // 111: engram.v1.RecordUCICompletionRequest.outcome:type_name -> engram.v1.UCICompletionOutcome
+	33,  // 112: engram.v1.EngramService.CallTool:input_type -> engram.v1.CallToolRequest
+	35,  // 113: engram.v1.EngramService.Initialize:input_type -> engram.v1.InitializeRequest
+	38,  // 114: engram.v1.EngramService.Ping:input_type -> engram.v1.PingRequest
+	18,  // 115: engram.v1.EngramService.SyncProjectState:input_type -> engram.v1.SyncProjectStateRequest
+	20,  // 116: engram.v1.EngramService.ProjectEvents:input_type -> engram.v1.ProjectEventsRequest
+	22,  // 117: engram.v1.EngramService.GetSessionStartContext:input_type -> engram.v1.GetSessionStartContextRequest
+	51,  // 118: engram.v1.EngramService.GetAmbientCandidates:input_type -> engram.v1.GetAmbientCandidatesRequest
+	31,  // 119: engram.v1.EngramService.NegotiateVersion:input_type -> engram.v1.NegotiateVersionRequest
+	41,  // 120: engram.v1.EngramService.CodeIndexNegotiate:input_type -> engram.v1.CodeIndexNegotiateRequest
+	43,  // 121: engram.v1.EngramService.CodeIndexUpload:input_type -> engram.v1.CodeChunkUpload
+	49,  // 122: engram.v1.EngramService.RegisterProjectIdentityV3:input_type -> engram.v1.RegisterProjectIdentityV3Request
+	63,  // 123: engram.v1.EngramService.Bind:input_type -> engram.v1.HostAdvisorBindRequest
+	69,  // 124: engram.v1.EngramService.Advise:input_type -> engram.v1.HostAdvisorAdviseRequest
+	82,  // 125: engram.v1.EngramService.Observe:input_type -> engram.v1.HostAdvisorObserveRequest
+	86,  // 126: engram.v1.EngramService.BindCodeContext:input_type -> engram.v1.BindCodeContextRequest
+	88,  // 127: engram.v1.EngramService.BeginCodeIndex:input_type -> engram.v1.BeginCodeIndexRequest
+	90,  // 128: engram.v1.EngramService.StageCodeIndex:input_type -> engram.v1.StageCodeIndexFrame
+	92,  // 129: engram.v1.EngramService.FinalizeCodeIndex:input_type -> engram.v1.FinalizeCodeIndexRequest
+	94,  // 130: engram.v1.EngramService.QueryCode:input_type -> engram.v1.QueryCodeRequest
+	96,  // 131: engram.v1.EngramService.ExploreCode:input_type -> engram.v1.ExploreCodeRequest
+	98,  // 132: engram.v1.EngramService.RecordUCICompletion:input_type -> engram.v1.RecordUCICompletionRequest
+	34,  // 133: engram.v1.EngramService.CallTool:output_type -> engram.v1.CallToolResponse
+	36,  // 134: engram.v1.EngramService.Initialize:output_type -> engram.v1.InitializeResponse
+	39,  // 135: engram.v1.EngramService.Ping:output_type -> engram.v1.PingResponse
+	19,  // 136: engram.v1.EngramService.SyncProjectState:output_type -> engram.v1.SyncProjectStateResponse
+	21,  // 137: engram.v1.EngramService.ProjectEvents:output_type -> engram.v1.ProjectEvent
+	23,  // 138: engram.v1.EngramService.GetSessionStartContext:output_type -> engram.v1.GetSessionStartContextResponse
+	52,  // 139: engram.v1.EngramService.GetAmbientCandidates:output_type -> engram.v1.GetAmbientCandidatesResponse
+	32,  // 140: engram.v1.EngramService.NegotiateVersion:output_type -> engram.v1.NegotiateVersionResponse
+	42,  // 141: engram.v1.EngramService.CodeIndexNegotiate:output_type -> engram.v1.CodeIndexNegotiateResponse
+	44,  // 142: engram.v1.EngramService.CodeIndexUpload:output_type -> engram.v1.CodeIndexUploadReceipt
+	50,  // 143: engram.v1.EngramService.RegisterProjectIdentityV3:output_type -> engram.v1.RegisterProjectIdentityV3Response
+	64,  // 144: engram.v1.EngramService.Bind:output_type -> engram.v1.HostAdvisorBindResponse
+	77,  // 145: engram.v1.EngramService.Advise:output_type -> engram.v1.HostAdvisorAdviseResponse
+	83,  // 146: engram.v1.EngramService.Observe:output_type -> engram.v1.HostAdvisorObserveResponse
+	87,  // 147: engram.v1.EngramService.BindCodeContext:output_type -> engram.v1.BindCodeContextResponse
+	89,  // 148: engram.v1.EngramService.BeginCodeIndex:output_type -> engram.v1.BeginCodeIndexResponse
+	91,  // 149: engram.v1.EngramService.StageCodeIndex:output_type -> engram.v1.StageCodeIndexResponse
+	93,  // 150: engram.v1.EngramService.FinalizeCodeIndex:output_type -> engram.v1.FinalizeCodeIndexResponse
+	95,  // 151: engram.v1.EngramService.QueryCode:output_type -> engram.v1.QueryCodeResponse
+	97,  // 152: engram.v1.EngramService.ExploreCode:output_type -> engram.v1.ExploreCodeResponse
+	99,  // 153: engram.v1.EngramService.RecordUCICompletion:output_type -> engram.v1.RecordUCICompletionResponse
+	133, // [133:154] is the sub-list for method output_type
+	112, // [112:133] is the sub-list for method input_type
+	112, // [112:112] is the sub-list for extension type_name
+	112, // [112:112] is the sub-list for extension extendee
+	0,   // [0:112] is the sub-list for field type_name
 }
 
 func init() { file_proto_engram_v1_engram_proto_init() }
@@ -7797,8 +8009,8 @@ func file_proto_engram_v1_engram_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_engram_v1_engram_proto_rawDesc), len(file_proto_engram_v1_engram_proto_rawDesc)),
-			NumEnums:      17,
-			NumMessages:   81,
+			NumEnums:      18,
+			NumMessages:   83,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

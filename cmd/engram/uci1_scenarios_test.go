@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -18,13 +19,15 @@ const (
 
 	uci1ScenarioPlanSchema              = "engram.uci.acceptance-plan/1"
 	uci1ScenarioRecordPathEnv           = "ENGRAM_UCI1_SCENARIOS_RECORD_PATH"
+	uci1ScenarioOperationTimeout        = 50 * time.Minute
 	uci1ScenarioStatusPass              = "pass"
 	uci1ScenarioStatusMissing           = "missing_installed_evidence"
 	uci1ScenarioModeInstalled           = "installed_observed"
+	uci1ScenarioModeInstalledProbe      = "installed_probe_observed"
 	uci1ScenarioModeExactCandidate      = "exact_candidate_behavior"
 	uci1ScenarioModeHistoricalInstalled = "historical_installed_revalidated"
 	uci1ScenarioModeMissing             = "missing_installed_evidence"
-	uci1ScenarioCodeObserved            = "OBSERVED_INSTALLED_LIFECYCLE"
+	uci1ScenarioCodeObserved            = uciInstalledAcceptanceScenarioCodeObserved
 	uci1ScenarioCodeExactCandidate      = "EXACT_CANDIDATE_BEHAVIOR"
 	uci1ScenarioCodeHistoricalInstalled = "HISTORICAL_INSTALLED_REVALIDATED"
 	uci1ScenarioCodeUnavailable         = "MISSING_INSTALLED_EVIDENCE"
@@ -36,6 +39,10 @@ var uci1RequiredScenarioIDs = [...]string{
 	"U21", "U22", "U23", "U24", "U25", "U29", "U36", "U37", "U38", "U39",
 	"U40", "U42", "U43", "U44", "U45", "U46",
 }
+
+// uciRunUCI1InstalledScenarioProbes is set by the T083 probe owner. Keeping
+// its default nil preserves the base installed lifecycle for every other caller.
+var uciRunUCI1InstalledScenarioProbes uciInstalledAcceptanceScenarioProbe = nil
 
 type uci1ScenarioPlan struct {
 	Schema    string                   `json:"schema"`
@@ -113,6 +120,8 @@ func TestUCI1Scenarios(t *testing.T) {
 	}
 
 	request := uciInstalledAcceptanceConfiguredRequest(t)
+	request.ScenarioProbe = uciRunUCI1InstalledScenarioProbes
+	request.OperationTimeout = uci1ScenarioOperationTimeout
 	scenarios, err := uci1LoadScenarioPlan(filepath.Join(request.CandidateSourceRoot, "specs", "010-unified-code-intelligence", "acceptance", "scenarios.json"))
 	if err != nil {
 		t.Fatalf("load authoritative UCI-1 scenario plan: %v", err)
@@ -127,7 +136,7 @@ func TestUCI1Scenarios(t *testing.T) {
 	}
 
 	uciInstalledAcceptanceRequireCleanup(t, request)
-	ctx, cancel := context.WithTimeout(context.Background(), request.OperationTimeout+5e9)
+	ctx, cancel := context.WithTimeout(context.Background(), request.OperationTimeout+time.Minute)
 	defer cancel()
 	result, err := runUCIInstalledAcceptance(ctx, request)
 	if err != nil {
@@ -143,6 +152,10 @@ func TestUCI1Scenarios(t *testing.T) {
 	if err != nil {
 		t.Fatalf("derive current installed UCI-1 scenario evidence: %v", err)
 	}
+	liveProbeEvidence, err := uci1InstalledScenarioProbeEvidence(result)
+	if err != nil {
+		t.Fatalf("derive live UCI-1 scenario probe evidence: %v", err)
+	}
 	evidenceCtx, evidenceCancel := context.WithTimeout(context.Background(), request.OperationTimeout+5e9)
 	defer evidenceCancel()
 	exactCandidateEvidence, err := uci1CollectExactCandidateEvidence(evidenceCtx, request.CandidateSourceRoot)
@@ -153,7 +166,11 @@ func TestUCI1Scenarios(t *testing.T) {
 	if err != nil {
 		t.Fatalf("collect historical installed UCI-1 scenario evidence: %v", err)
 	}
-	evidence, err := uci1MergeScenarioEvidence(installedEvidence, exactCandidateEvidence, historicalInstalledEvidence)
+	historicalInstalledEvidence, err = uci1AllowedHistoricalInstalledEvidence(historicalInstalledEvidence)
+	if err != nil {
+		t.Fatalf("filter historical installed UCI-1 scenario evidence: %v", err)
+	}
+	evidence, err := uci1MergeScenarioEvidence(installedEvidence, liveProbeEvidence, exactCandidateEvidence, historicalInstalledEvidence)
 	if err != nil {
 		t.Fatalf("merge UCI-1 scenario evidence: %v", err)
 	}
@@ -491,7 +508,7 @@ func uci1ValidScenarioPassEvidence(evidence uci1ScenarioEvidence) bool {
 		return false
 	}
 	switch evidence.Mode {
-	case uci1ScenarioModeInstalled:
+	case uci1ScenarioModeInstalled, uci1ScenarioModeInstalledProbe:
 		return evidence.Code == uci1ScenarioCodeObserved
 	case uci1ScenarioModeExactCandidate:
 		return evidence.Code == uci1ScenarioCodeExactCandidate
@@ -502,13 +519,14 @@ func uci1ValidScenarioPassEvidence(evidence uci1ScenarioEvidence) bool {
 	}
 }
 
-func uci1MergeScenarioEvidence(installed, exactCandidate, historicalInstalled map[string]uci1ScenarioEvidence) (map[string]uci1ScenarioEvidence, error) {
+func uci1MergeScenarioEvidence(installed, installedProbe, exactCandidate, historicalInstalled map[string]uci1ScenarioEvidence) (map[string]uci1ScenarioEvidence, error) {
 	sources := [...]struct {
 		mode     string
 		evidence map[string]uci1ScenarioEvidence
 	}{
 		{mode: uci1ScenarioModeHistoricalInstalled, evidence: historicalInstalled},
 		{mode: uci1ScenarioModeExactCandidate, evidence: exactCandidate},
+		{mode: uci1ScenarioModeInstalledProbe, evidence: installedProbe},
 		{mode: uci1ScenarioModeInstalled, evidence: installed},
 	}
 	merged := make(map[string]uci1ScenarioEvidence, len(uci1RequiredScenarioIDs))
@@ -539,9 +557,24 @@ func uci1MergeScenarioEvidence(installed, exactCandidate, historicalInstalled ma
 	return merged, nil
 }
 
+func uci1AllowedHistoricalInstalledEvidence(input map[string]uci1ScenarioEvidence) (map[string]uci1ScenarioEvidence, error) {
+	allowed := make(map[string]uci1ScenarioEvidence, 3)
+	for scenarioID, scenarioEvidence := range input {
+		if !uci1RequiredScenarioID(scenarioID) || scenarioEvidence.Mode != uci1ScenarioModeHistoricalInstalled || !uci1ValidScenarioPassEvidence(scenarioEvidence) {
+			return nil, errors.New("historical UCI-1 scenario evidence is invalid")
+		}
+		if scenarioID == "U16" || scenarioID == "U19" || scenarioID == "U25" {
+			allowed[scenarioID] = scenarioEvidence
+		}
+	}
+	return allowed, nil
+}
+
 func uci1ScenarioEvidencePrecedence(mode string) int {
 	switch mode {
 	case uci1ScenarioModeInstalled:
+		return 4
+	case uci1ScenarioModeInstalledProbe:
 		return 3
 	case uci1ScenarioModeExactCandidate:
 		return 2
@@ -588,6 +621,24 @@ func uci1InstalledScenarioEvidence(result uciInstalledAcceptanceResult, installe
 			Mode:   uci1ScenarioModeInstalled,
 			Code:   uci1ScenarioCodeObserved,
 			Digest: uci1InstalledScenarioEvidenceDigest(installedEvidenceSeed, scenarioID),
+		}
+	}
+	return evidence, nil
+}
+
+func uci1InstalledScenarioProbeEvidence(result uciInstalledAcceptanceResult) (map[string]uci1ScenarioEvidence, error) {
+	if err := uciValidateInstalledAcceptanceScenarioEvidence(result.ScenarioEvidence); err != nil {
+		return nil, err
+	}
+	evidence := make(map[string]uci1ScenarioEvidence, len(result.ScenarioEvidence))
+	for scenarioID, scenarioEvidence := range result.ScenarioEvidence {
+		if !uci1RequiredScenarioID(scenarioID) {
+			return nil, errors.New("installed scenario probe evidence contains an unknown scenario")
+		}
+		evidence[scenarioID] = uci1ScenarioEvidence{
+			Mode:   uci1ScenarioModeInstalledProbe,
+			Code:   scenarioEvidence.Code,
+			Digest: scenarioEvidence.Digest,
 		}
 	}
 	return evidence, nil

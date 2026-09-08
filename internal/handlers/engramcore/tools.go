@@ -72,10 +72,11 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 	defer cancel()
 
 	request := &pb.InitializeRequest{ClientName: "engram-daemon", ClientVersion: daemonClientVersion}
-	if v3Enabled {
+	unscopedUCIDiscovery := v3Enabled && v3Identity == nil
+	if v3Enabled && !unscopedUCIDiscovery {
 		request.ProjectIdentityV3 = v3Identity
 		discoveryCtx = daemonComparisonContextV3(discoveryCtx)
-	} else {
+	} else if !v3Enabled {
 		project := m.cache.Resolve(p)
 		projectIdentity, identityErr := m.cache.ResolveIdentity(p)
 		if identityErr != nil {
@@ -95,7 +96,7 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 		}
 		return nil, &module.RequiredProxyToolsError{Cause: fmt.Errorf("gRPC Initialize: %w", err)}
 	}
-	if v3Enabled {
+	if v3Enabled && !unscopedUCIDiscovery {
 		if err := validateV3Resolution(resp.GetProjectResolutionV3(), resp.GetCanonicalProject(), v3Identity); err != nil {
 			return nil, &module.RequiredProxyToolsError{Cause: err}
 		}
@@ -103,7 +104,7 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 
 	tools := make([]module.ToolDef, 0, len(resp.Tools))
 	for _, t := range resp.Tools {
-		if t.GetName() == projectIdentityV3RegistrationTool {
+		if t.GetName() == projectIdentityV3RegistrationTool || (unscopedUCIDiscovery && !isUCIProxyTool(t.GetName())) {
 			continue
 		}
 		tools = append(tools, module.ToolDef{
@@ -155,6 +156,9 @@ func (m *Module) HandleTool(ctx context.Context, p muxcore.ProjectContext, name 
 	}
 	if !v3Enabled {
 		return nil, &module.ModuleError{Code: "PROJECT_DESCRIPTOR_UNSUPPORTED", Message: "project identity resolution refused"}
+	}
+	if identity == nil {
+		return nil, &module.ModuleError{Code: "PROJECT_ANCHOR_INVALID", Message: "project identity resolution refused"}
 	}
 	serverURL, err := m.requireServerURL(p)
 	if err != nil {
@@ -252,6 +256,9 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 			return nil, err
 		}
 		if v3Enabled {
+			if v3Identity == nil {
+				return nil, &module.ModuleError{Code: "PROJECT_ANCHOR_INVALID", Message: "project identity resolution refused"}
+			}
 			request.ProjectIdentityV3 = v3Identity
 			ctx = daemonComparisonContextV3(ctx)
 		} else {

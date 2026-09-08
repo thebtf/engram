@@ -58,6 +58,7 @@ import (
 	"github.com/thebtf/engram/internal/sessions"
 	"github.com/thebtf/engram/internal/stateplane"
 	"github.com/thebtf/engram/internal/telemetry"
+	"github.com/thebtf/engram/internal/uci"
 	"github.com/thebtf/engram/internal/update"
 	"github.com/thebtf/engram/internal/watcher"
 	"github.com/thebtf/engram/internal/worker/ambientcore"
@@ -1627,6 +1628,15 @@ func (a *mcpHandlerAdapter) ToolDefinitions() []grpcserver.ToolDef {
 // ServerInfo implements grpcserver.MCPHandler.
 func (a *mcpHandlerAdapter) ServerInfo() (string, string) {
 	return "engram", a.mcpServer.Version()
+}
+
+// RecordUCICompletion carries only a pre-verified callback into the MCP-owned
+// UCI recorder; the gRPC boundary owns authentication and wire validation.
+func (a *mcpHandlerAdapter) RecordUCICompletion(ctx context.Context, callback uci.VerifiedSupportedHostCallback) error {
+	if a == nil || a.mcpServer == nil {
+		return uci.ErrCompletionEvidenceUnavailable
+	}
+	return a.mcpServer.RecordUCICompletion(ctx, callback)
 }
 
 // setupMiddleware registers global HTTP middleware on the router.

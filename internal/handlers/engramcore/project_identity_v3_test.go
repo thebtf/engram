@@ -53,6 +53,44 @@ func TestProxyV3DescriptorForwardsWithoutV2Fallback(t *testing.T) {
 	assertV3CallRequest(t, srv.callReq)
 }
 
+func TestProxyV3UnbornRepositoryAllowsOnlyUnscopedUCIDiscovery(t *testing.T) {
+	srv := &mockEngramServer{initResp: &pb.InitializeResponse{Tools: []*pb.ToolDefinition{
+		{Name: "recall", Description: "scoped memory tool"},
+		{Name: "codebase_context", Description: "select an authorized checkout"},
+	}}}
+	grpcAddr := startMockGRPC(t, srv)
+	_, mod, project := buildContractDispatcher(t, grpcAddr)
+	project.Cwd = daemonV3UnbornRepository(t)
+	mod.v3ClientInstanceID = "fixture-daemon-install"
+
+	tools, err := mod.ProxyTools(context.Background(), project)
+	if err != nil {
+		t.Fatalf("unborn V3 discovery: %v", err)
+	}
+	if srv.initReq == nil || srv.initReq.GetProjectIdentityV3() != nil || srv.initReq.GetProject() != "" || srv.initReq.GetProjectIdentity() != nil {
+		t.Fatalf("unborn discovery invented project authority: %#v", srv.initReq)
+	}
+	if len(tools) != 1 || tools[0].Name != "codebase_context" {
+		t.Fatalf("unborn discovery tools=%#v, want only UCI checkout selection", tools)
+	}
+	_, err = mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`))
+	var moduleErr *module.ModuleError
+	if !errors.As(err, &moduleErr) || moduleErr.Code != "PROJECT_ANCHOR_INVALID" || srv.callReq != nil {
+		t.Fatalf("unborn scoped proxy error=%v call=%#v, want local anchor refusal", err, srv.callReq)
+	}
+
+	anchorless := project
+	anchorless.Cwd = t.TempDir()
+	tools, err = mod.ProxyTools(context.Background(), anchorless)
+	if err != nil || len(tools) != 1 || tools[0].Name != "codebase_context" {
+		t.Fatalf("anchorless discovery tools=%#v error=%v, want only UCI checkout selection", tools, err)
+	}
+	_, err = mod.ProxyHandleTool(context.Background(), anchorless, "recall", json.RawMessage(`{}`))
+	if !errors.As(err, &moduleErr) || moduleErr.Code != "PROJECT_ANCHOR_INVALID" {
+		t.Fatalf("anchorless scoped proxy error=%v, want PROJECT_ANCHOR_INVALID", err)
+	}
+}
+
 func TestProxyV3CarriesStableDaemonComparisonMetadata(t *testing.T) {
 	srv := &mockEngramServer{
 		initResp:     &pb.InitializeResponse{CanonicalProject: daemonV3CanonicalProject, ProjectResolutionV3: resolvedV3Response()},
@@ -635,6 +673,21 @@ func daemonV3Repository(t *testing.T) string {
 		if output, err := command.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, output)
 		}
+	}
+	return root
+}
+
+func daemonV3UnbornRepository(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if output, err := exec.Command("git", "-C", root, "init").CombinedOutput(); err != nil {
+		t.Fatalf("initialize unborn repository: %v: %s", err, output)
+	}
+	if err := os.WriteFile(filepath.Join(root, "unborn.go"), []byte("package fixture\n"), 0o600); err != nil {
+		t.Fatalf("write unborn fixture: %v", err)
+	}
+	if output, err := exec.Command("git", "-C", root, "rev-parse", "--verify", "HEAD").CombinedOutput(); err == nil {
+		t.Fatalf("unborn fixture unexpectedly has HEAD: %s", output)
 	}
 	return root
 }

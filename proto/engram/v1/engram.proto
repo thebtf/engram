@@ -89,6 +89,9 @@ service EngramService {
 
   // ExploreCode returns a bounded graph payload for one pinned context.
   rpc ExploreCode(ExploreCodeRequest) returns (ExploreCodeResponse);
+
+  // RecordUCICompletion records one verified supported-host completion callback.
+  rpc RecordUCICompletion(RecordUCICompletionRequest) returns (RecordUCICompletionResponse);
 }
 
 // ---- SyncProjectState messages ----------------------------------------
@@ -979,4 +982,32 @@ message ExploreCodeRequest {
 message ExploreCodeResponse {
   ContextRef context = 1;
   bytes response_json = 2;
+}
+
+// UCICompletionOutcome is the closed completion state reported by a verified
+// supported-host callback.
+enum UCICompletionOutcome {
+  UCI_COMPLETION_OUTCOME_UNSPECIFIED = 0;
+  UCI_COMPLETION_OUTCOME_SUCCEEDED = 1;
+  UCI_COMPLETION_OUTCOME_PARTIAL = 2;
+  UCI_COMPLETION_OUTCOME_FAILED = 3;
+  UCI_COMPLETION_OUTCOME_ABANDONED = 4;
+}
+
+// RecordUCICompletionRequest carries only opaque, verified callback facts.
+// canonical_project is checked against the authenticated HAP project-service
+// identity; it is not a caller-selected authorization scope.
+message RecordUCICompletionRequest {
+  string canonical_project = 1;
+  string exposure_ref = 2;
+  string supported_host_ref = 3;
+  string callback_ref = 4;
+  UCICompletionOutcome outcome = 5;
+  string idempotency_key = 6;
+}
+
+// RecordUCICompletionResponse deliberately exposes no parent or completion
+// evidence. accepted confirms only that the callback was durably accepted.
+message RecordUCICompletionResponse {
+  bool accepted = 1;
 }

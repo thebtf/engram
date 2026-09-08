@@ -89,7 +89,14 @@ func (transport *contextAwareUCITransport) BindCodeContext(ctx context.Context, 
 	if handle := request.GetContextHandle(); handle != "" {
 		return transport.bindCodeContextHandle(ctx, caller, handle)
 	}
-	return transport.bindRequestedCodeContext(ctx, caller, contextAwareContextRefFromProto(request.GetRequestedContext()))
+	if requested := request.GetRequestedContext(); requested != nil {
+		return transport.bindRequestedCodeContext(ctx, caller, contextAwareContextRefFromProto(requested))
+	}
+	authorized, err := transport.resolveBound(ctx, caller)
+	if err != nil {
+		return nil, err
+	}
+	return transport.bindAuthorizedCodeContext(ctx, caller, authorized)
 }
 
 func (transport *contextAwareUCITransport) bindCodeContextHandle(ctx context.Context, caller contextAwareCaller, handle string) (*pb.BindCodeContextResponse, error) {
@@ -116,6 +123,10 @@ func (transport *contextAwareUCITransport) bindRequestedCodeContext(ctx context.
 	if err != nil {
 		return nil, err
 	}
+	return transport.bindAuthorizedCodeContext(ctx, caller, authorized)
+}
+
+func (transport *contextAwareUCITransport) bindAuthorizedCodeContext(ctx context.Context, caller contextAwareCaller, authorized uci.AuthorizedContext) (*pb.BindCodeContextResponse, error) {
 	if err := uciTransportContextError(ctx); err != nil {
 		return nil, err
 	}
@@ -638,6 +649,14 @@ func contextAwareRuntimeError(ctx context.Context, err error) error {
 	var closed *uci.ContextError
 	if errors.As(err, &closed) {
 		return contextAwareClosedError(closed.Code())
+	}
+	switch {
+	case errors.Is(err, uci.ErrPublicationLeaseStale):
+		return status.Error(codes.FailedPrecondition, uci.ErrPublicationLeaseStale.Error())
+	case errors.Is(err, uci.ErrPublicationBuildIncomplete):
+		return status.Error(codes.FailedPrecondition, uci.ErrPublicationBuildIncomplete.Error())
+	case errors.Is(err, uci.ErrPublicationIdempotencyMismatch):
+		return status.Error(codes.FailedPrecondition, uci.ErrPublicationIdempotencyMismatch.Error())
 	}
 	if contextAwareTrustedClosedStatus(err) {
 		return err
