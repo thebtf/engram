@@ -334,7 +334,7 @@ function Get-DSN {
 function Invoke-Fixture {
     param(
         [Parameter(Mandatory)][string]$SourceRoot,
-        [Parameter(Mandatory)][ValidateSet("seed", "assert")][string]$Action,
+        [Parameter(Mandatory)][ValidateSet("seed", "assert", "seed-uci", "assert-uci")][string]$Action,
         [Parameter(Mandatory)][string]$DSNFile,
         [Parameter(Mandatory)][string]$KeyFile
     )
@@ -535,6 +535,7 @@ try {
     # Opening with the candidate source runs all pending migrations and proves the
     # supported v6.42.0 -> candidate upgrade before the backup is taken.
     [void](Invoke-Fixture -SourceRoot $repoRoot -Action "assert" -DSNFile $sourceDSNFile -KeyFile $vaultKeyFile)
+    [void](Invoke-Fixture -SourceRoot $repoRoot -Action "seed-uci" -DSNFile $sourceDSNFile -KeyFile $vaultKeyFile)
 
     Write-Output "RECOVERY STAGE logical-backup"
     [void](Invoke-Docker -Arguments @(
@@ -645,6 +646,7 @@ try {
     $dynamicSecrets.Add($targetDSN)
     $targetDSNFile = New-SecretFile -Name "target-dsn" -Value $targetDSN
     [void](Invoke-Fixture -SourceRoot $repoRoot -Action "assert" -DSNFile $targetDSNFile -KeyFile $vaultKeyFile)
+    [void](Invoke-Fixture -SourceRoot $repoRoot -Action "assert-uci" -DSNFile $targetDSNFile -KeyFile $vaultKeyFile)
 
     $wrongKeyRejected = $false
     try { [void](Invoke-Fixture -SourceRoot $repoRoot -Action "assert" -DSNFile $targetDSNFile -KeyFile $wrongVaultKeyFile) } catch { $wrongKeyRejected = $true }
@@ -671,6 +673,7 @@ try {
     Restore-Globals -Name $target -User "target_admin"
     [void](Restore-Database -Name $target -User "target_admin" -Archive (Join-Path $tempRoot "engram.dump") -Clean)
     [void](Invoke-Fixture -SourceRoot $repoRoot -Action "assert" -DSNFile $targetDSNFile -KeyFile $vaultKeyFile)
+    [void](Invoke-Fixture -SourceRoot $repoRoot -Action "assert-uci" -DSNFile $targetDSNFile -KeyFile $vaultKeyFile)
     Assert-NoSecretExposure -Phase "final" -AdditionalSecrets @($sourceDSN, $targetDSN)
 
     $completed = $true
