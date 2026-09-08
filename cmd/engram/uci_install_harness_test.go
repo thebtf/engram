@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	uciInstallHarnessHelperTest       = "^TestUCIInstallHarnessProcessHelper$"
-	uciInstallHarnessHelperAuditDir   = "ENGRAM_UCI_INSTALL_HARNESS_TEST_AUDIT_DIR"
-	uciInstallHarnessHelperProbeEnv   = "ENGRAM_UCI_INSTALL_HARNESS_TEST_PROBE"
-	uciInstallHarnessHelperProbeValue = "value with spaces Кириллица"
+	uciInstallHarnessHelperTest            = "^TestUCIInstallHarnessProcessHelper$"
+	uciInstallHarnessHelperAuditDir        = "ENGRAM_UCI_INSTALL_HARNESS_TEST_AUDIT_DIR"
+	uciInstallHarnessHelperProbeEnv        = "ENGRAM_UCI_INSTALL_HARNESS_TEST_PROBE"
+	uciInstallHarnessHelperProbeValue      = "value with spaces Кириллица"
+	uciInstallHarnessReadinessRaceHeadroom = 2 * time.Second
 )
 
 var (
@@ -97,16 +98,24 @@ func TestUCIInstallHarnessBoundsReadinessAndPropagatesCancellation(t *testing.T)
 		installRoot := filepath.Join(t.TempDir(), "UCI readiness deadline Кириллица")
 		auditDir := t.TempDir()
 		request := uciInstallHarnessTestRequest(t, installRoot, auditDir, "stall", 2*time.Second)
+		readinessElapsed := make(chan time.Duration, 1)
+		request.MCPDriver = uciInstallHarnessDeadlineProbe{elapsed: readinessElapsed}
 		outer, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 		defer cancel()
 
-		started := time.Now()
 		_, err := runUCIInstallHarness(outer, request)
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("unready stdio harness error = %v, want wrapped context deadline", err)
 		}
-		if elapsed := time.Since(started); elapsed > 4*time.Second {
-			t.Fatalf("readiness deadline took %s; runner ignored its bounded readiness budget", elapsed)
+		// The driver boundary is the readiness operation. Materialization and
+		// process-tree teardown are outside that budget and slower under -race.
+		select {
+		case elapsed := <-readinessElapsed:
+			if maximum := request.ReadinessTimeout + uciInstallHarnessReadinessRaceHeadroom; elapsed > maximum {
+				t.Fatalf("readiness deadline took %s, want no more than %s", elapsed, maximum)
+			}
+		default:
+			t.Fatal("harness returned before its readiness driver started")
 		}
 		audit := uciReadInstallHarnessAudit(t, auditDir, "daemon")
 		if !reflect.DeepEqual(audit.Methods, []string{"initialize"}) {
@@ -224,6 +233,18 @@ func TestUCIInstallHarnessProcessHelper(t *testing.T) {
 // module or service substitute. Its PID and pipes checks make a direct call
 // unable to satisfy the installed-path contract.
 type uciInstallHarnessMCPProbe struct{}
+
+// uciInstallHarnessDeadlineProbe observes only the driver's readiness window.
+type uciInstallHarnessDeadlineProbe struct {
+	elapsed chan<- time.Duration
+}
+
+func (probe uciInstallHarnessDeadlineProbe) InitializeAndList(ctx context.Context, process uciMCPStdioProcess) ([]string, error) {
+	started := time.Now()
+	tools, err := (uciInstallHarnessMCPProbe{}).InitializeAndList(ctx, process)
+	probe.elapsed <- time.Since(started)
+	return tools, err
+}
 
 func (uciInstallHarnessMCPProbe) InitializeAndList(ctx context.Context, process uciMCPStdioProcess) ([]string, error) {
 	if process.PID <= 0 || process.PID == os.Getpid() {
