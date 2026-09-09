@@ -288,7 +288,7 @@ func DefaultEmbeddingWorkerLimits() EmbeddingWorkerLimits {
 		LeaseTTL:              2 * time.Minute,
 		RenewInterval:         30 * time.Second,
 		ProviderCallTimeout:   100 * time.Second,
-		PollInterval:          time.Second,
+		PollInterval:          100 * time.Millisecond,
 	}
 }
 

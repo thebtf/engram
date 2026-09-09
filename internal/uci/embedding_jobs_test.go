@@ -155,3 +155,161 @@ func TestEmbeddingWorkerRunsBoundedProviderBatchesConcurrently(t *testing.T) {
 		t.Fatalf("peak provider concurrency = %d, want %d", peak, limits.ProviderConcurrency)
 	}
 }
+
+func TestEmbeddingWorkerPollsAtConfiguredCadenceAndProcessesOneQueuedClaim(t *testing.T) {
+	limits := DefaultEmbeddingWorkerLimits()
+	if limits.PollInterval != 100*time.Millisecond {
+		t.Fatalf("default poll interval = %s, want 100ms", limits.PollInterval)
+	}
+	profile := semanticTestProfile("worker-polling")
+	claim, batch := embeddingJobTimingTestClaimAndBatch(t, profile, 1)
+	root, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := &embeddingWorkerPollingStore{
+		claim:       claim,
+		batches:     []EmbeddingBatch{batch, {Job: claim.Ref, BatchDigest: semanticTestDigest("polling-exhausted"), Exhausted: true}},
+		emptyLimit:  3,
+		idleReached: make(chan time.Time, 1),
+		queued:      make(chan struct{}),
+		claimed:     make(chan time.Time, 1),
+		cancel:      cancel,
+	}
+	resolver := NewContextResolver(&contextResolverCatalogFake{records: []contextResolverCatalogRecord{{lookup: claim.Ref.Context, record: ContextRecord{Ref: claim.Ref.Context, AuthRealm: claim.Access.AuthRealm}}}}, &contextResolverAuthorizerFake{}, nil)
+	worker := &EmbeddingWorker{profile: profile, embedder: &embeddingWorkerPollingEmbedder{model: profile.Model}, store: store, resolver: resolver, limits: limits}
+	run := make(chan error, 1)
+	go func() { run <- worker.Run(root, claim.Ref.LeaseOwner) }()
+
+	select {
+	case <-store.idleReached:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not make the expected idle claim attempts")
+	}
+	queuedAt := time.Now()
+	close(store.queued)
+	var claimedAt time.Time
+	select {
+	case claimedAt = <-store.claimed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not claim queued work promptly")
+	}
+	select {
+	case err := <-run:
+		if err != nil {
+			t.Fatalf("run embedding worker: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not stop after cancellation")
+	}
+
+	claimTimes, claims, prepares, commits, completes := store.snapshot()
+	if claimedAt.Sub(queuedAt) > 4*limits.PollInterval {
+		t.Fatalf("queued claim latency = %s, want at most %s", claimedAt.Sub(queuedAt), 4*limits.PollInterval)
+	}
+	for index := 1; index < len(claimTimes); index++ {
+		if interval := claimTimes[index].Sub(claimTimes[index-1]); interval < limits.PollInterval {
+			t.Fatalf("claim interval %d = %s, want at least %s", index, interval, limits.PollInterval)
+		}
+	}
+	if claims != 1 || prepares != 2 || commits != 1 || completes != 1 {
+		t.Fatalf("claimed/processed work = claims:%d prepares:%d commits:%d completes:%d, want 1:2:1:1", claims, prepares, commits, completes)
+	}
+}
+
+type embeddingWorkerPollingStore struct {
+	claim       EmbeddingJobClaim
+	batches     []EmbeddingBatch
+	emptyLimit  int
+	idleReached chan time.Time
+	queued      chan struct{}
+	claimed     chan time.Time
+	cancel      context.CancelFunc
+
+	mu         sync.Mutex
+	claimTimes []time.Time
+	emptyCalls int
+	claims     int
+	prepares   int
+	commits    int
+	completes  int
+}
+
+func (store *embeddingWorkerPollingStore) EnsureCurrentEmbeddingJobs(context.Context, VectorProfile, string, int) (string, bool, error) {
+	return "", true, nil
+}
+
+func (store *embeddingWorkerPollingStore) ClaimEmbeddingJob(_ context.Context, _ VectorProfile, _ string, _ time.Duration) (EmbeddingJobClaim, bool, error) {
+	now := time.Now()
+	store.mu.Lock()
+	store.claimTimes = append(store.claimTimes, now)
+	select {
+	case <-store.queued:
+		if store.claims == 0 {
+			store.claims++
+			store.mu.Unlock()
+			store.claimed <- now
+			return store.claim, true, nil
+		}
+	default:
+		store.emptyCalls++
+		if store.emptyCalls == store.emptyLimit {
+			store.mu.Unlock()
+			store.idleReached <- now
+			return EmbeddingJobClaim{}, false, nil
+		}
+	}
+	store.mu.Unlock()
+	return EmbeddingJobClaim{}, false, nil
+}
+
+func (store *embeddingWorkerPollingStore) RenewEmbeddingJob(context.Context, EmbeddingJobRef, time.Duration) error {
+	return nil
+}
+
+func (store *embeddingWorkerPollingStore) PrepareEmbeddingBatch(context.Context, EmbeddingJobClaim, AuthorizedContext, int) (EmbeddingBatch, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	batch := store.batches[store.prepares]
+	store.prepares++
+	return batch, nil
+}
+
+func (store *embeddingWorkerPollingStore) CommitEmbeddingBatch(context.Context, EmbeddingJobClaim, AuthorizedContext, EmbeddingBatch, [][]float32) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.commits++
+	return nil
+}
+
+func (store *embeddingWorkerPollingStore) CompleteEmbeddingJob(context.Context, EmbeddingJobClaim, AuthorizedContext) error {
+	store.mu.Lock()
+	store.completes++
+	store.mu.Unlock()
+	store.cancel()
+	return nil
+}
+
+func (store *embeddingWorkerPollingStore) FailEmbeddingJob(context.Context, EmbeddingJobRef, EmbeddingFailure) error {
+	return nil
+}
+
+func (store *embeddingWorkerPollingStore) snapshot() ([]time.Time, int, int, int, int) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return append([]time.Time(nil), store.claimTimes...), store.claims, store.prepares, store.commits, store.completes
+}
+
+type embeddingWorkerPollingEmbedder struct {
+	model string
+}
+
+func (embedder *embeddingWorkerPollingEmbedder) Model() string {
+	return embedder.model
+}
+
+func (embedder *embeddingWorkerPollingEmbedder) Embed(_ context.Context, inputs []string) ([][]float32, error) {
+	vectors := make([][]float32, len(inputs))
+	for index := range vectors {
+		vectors[index] = semanticTestVector(float32(index + 1))
+	}
+	return vectors, nil
+}
