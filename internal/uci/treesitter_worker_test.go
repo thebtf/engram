@@ -26,7 +26,6 @@ const (
 )
 const uciTreeSitterFixtureTimeout = 10 * time.Second
 
-
 var (
 	uciTreeSitterHelperMode               = flag.String("uci-tree-sitter-helper-mode", "", "Tree-sitter worker fixture-child mode")
 	uciTreeSitterHelperBundleDigest       = flag.String("uci-tree-sitter-helper-bundle-digest", "", "Tree-sitter worker fixture-child bundle digest")
@@ -453,6 +452,33 @@ func TestUCITSXWorkerFramesTSXFacts(t *testing.T) {
 	fixture := uciTreeSitterFixtureForLanguage(t, TreeSitterLanguageTSX)
 	artifact := uciParseTreeSitterFixture(t, fixture)
 	uciRequireTreeSitterFixtureArtifact(t, fixture, artifact)
+}
+
+func TestUCITreeSitterWorkerCachesIdenticalImmutableArtifact(t *testing.T) {
+	fixture := uciTreeSitterFixtureForLanguage(t, TreeSitterLanguageTypeScript)
+	auditPath := filepath.Join(t.TempDir(), "tree-sitter-child-audit.json")
+	worker := uciNewTreeSitterTestWorker(t, uciTreeSitterWorkerOptions{auditFile: auditPath})
+	request := TreeSitterParseRequest{Language: fixture.language, ProfileKey: fixture.profileKey, Source: []byte(fixture.source)}
+	first, err := worker.Parse(t.Context(), request)
+	if err != nil {
+		t.Fatalf("first Parse: %v", err)
+	}
+	uciRequireTreeSitterChildAudit(t, auditPath)
+	first.Text = "mutated caller result"
+	if len(first.Definitions) > 0 {
+		first.Definitions[0].Name = "mutated caller definition"
+	}
+	if err := os.Remove(auditPath); err != nil {
+		t.Fatalf("remove first child audit: %v", err)
+	}
+	second, err := worker.Parse(t.Context(), request)
+	if err != nil {
+		t.Fatalf("cached Parse: %v", err)
+	}
+	if _, err := os.Stat(auditPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cached Parse launched another child: %v", err)
+	}
+	uciRequireTreeSitterFixtureArtifact(t, fixture, second)
 }
 
 func TestUCITreeSitterWorkerFramesBuiltParserFacts(t *testing.T) {

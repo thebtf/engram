@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -38,6 +39,8 @@ const (
 	treeSitterWorkerMaxChunkBytes             = 64 << 10
 	treeSitterWorkerMaxDiagnostics            = 16
 	treeSitterWorkerMaxDiagnosticBytes        = 512
+	treeSitterWorkerCacheEntries              = 16
+	treeSitterWorkerCacheMaxBytes             = 1 << 20
 )
 
 // TreeSitterBundleDigest returns the exact parser bundle identity shared by
@@ -193,10 +196,20 @@ type TreeSitterWorkerWireResponse struct {
 	Diagnostics  []TreeSitterDiagnostic    `json:"diagnostics"`
 }
 
+type treeSitterWorkerCacheEntry struct {
+	artifact TreeSitterArtifact
+	bytes    int
+}
+
 // TreeSitterWorker executes the prebuilt local parser child with a bounded
 // request, response, deadline, environment, and private working directory.
 type TreeSitterWorker struct {
 	config TreeSitterWorkerConfig
+
+	cacheMu    sync.Mutex
+	cache      map[[sha256.Size]byte]treeSitterWorkerCacheEntry
+	cacheOrder [][sha256.Size]byte
+	cacheBytes int
 }
 
 // NewTreeSitterWorker validates and freezes a local parser-worker launch
@@ -225,12 +238,15 @@ func NewTreeSitterWorker(config TreeSitterWorkerConfig) (*TreeSitterWorker, erro
 	}
 	config.Arguments = append([]string(nil), config.Arguments...)
 	config.Environment = environment
-	return &TreeSitterWorker{config: config}, nil
+	return &TreeSitterWorker{
+		config: config,
+		cache:  make(map[[sha256.Size]byte]treeSitterWorkerCacheEntry, treeSitterWorkerCacheEntries),
+	}, nil
 }
 
-// Parse starts the configured parser child and returns only validated,
-// deterministic grammar evidence. It preserves caller cancellation and the
-// worker deadline as context errors.
+// Parse validates one configured request and returns immutable grammar evidence
+// from its bounded cache or, on a miss, from the configured parser child. It
+// preserves caller cancellation and the worker deadline as context errors.
 func (worker *TreeSitterWorker) Parse(ctx context.Context, request TreeSitterParseRequest) (TreeSitterArtifact, error) {
 	if worker == nil {
 		return TreeSitterArtifact{}, fmt.Errorf("%w: nil worker", ErrTreeSitterProtocol)
@@ -244,6 +260,10 @@ func (worker *TreeSitterWorker) Parse(ctx context.Context, request TreeSitterPar
 	requestLine, err := treeSitterPrepareWireRequest(request, worker.config.MaxInputBytes)
 	if err != nil {
 		return TreeSitterArtifact{}, err
+	}
+	cacheKey := sha256.Sum256(requestLine)
+	if artifact, found := worker.cachedArtifact(cacheKey); found {
+		return artifact, nil
 	}
 
 	privateDirectory, err := os.MkdirTemp("", "engram-uci-parser-")
@@ -329,7 +349,71 @@ func (worker *TreeSitterWorker) Parse(ctx context.Context, request TreeSitterPar
 	if err := treeSitterValidateArtifact(request.Source, artifact); err != nil {
 		return TreeSitterArtifact{}, err
 	}
-	return treeSitterFinalizeArtifact(request.Source, request.ProfileKey, artifact), nil
+	artifact = treeSitterFinalizeArtifact(request.Source, request.ProfileKey, artifact)
+	worker.cacheArtifact(cacheKey, artifact)
+	return treeSitterCloneArtifact(artifact), nil
+}
+
+func (worker *TreeSitterWorker) cachedArtifact(key [sha256.Size]byte) (TreeSitterArtifact, bool) {
+	worker.cacheMu.Lock()
+	defer worker.cacheMu.Unlock()
+	entry, found := worker.cache[key]
+	if !found {
+		return TreeSitterArtifact{}, false
+	}
+	return treeSitterCloneArtifact(entry.artifact), true
+}
+
+func (worker *TreeSitterWorker) cacheArtifact(key [sha256.Size]byte, artifact TreeSitterArtifact) {
+	bytes := treeSitterArtifactCacheBytes(artifact)
+	if bytes > treeSitterWorkerCacheMaxBytes {
+		return
+	}
+	entry := treeSitterWorkerCacheEntry{artifact: treeSitterCloneArtifact(artifact), bytes: bytes}
+	worker.cacheMu.Lock()
+	defer worker.cacheMu.Unlock()
+	if _, found := worker.cache[key]; found {
+		return
+	}
+	for len(worker.cacheOrder) >= treeSitterWorkerCacheEntries || worker.cacheBytes+bytes > treeSitterWorkerCacheMaxBytes {
+		if len(worker.cacheOrder) == 0 {
+			return
+		}
+		oldest := worker.cacheOrder[0]
+		worker.cacheOrder = worker.cacheOrder[1:]
+		oldEntry := worker.cache[oldest]
+		delete(worker.cache, oldest)
+		worker.cacheBytes -= oldEntry.bytes
+	}
+	worker.cache[key] = entry
+	worker.cacheOrder = append(worker.cacheOrder, key)
+	worker.cacheBytes += bytes
+}
+
+func treeSitterCloneArtifact(artifact TreeSitterArtifact) TreeSitterArtifact {
+	clone := artifact
+	clone.Definitions = append([]TreeSitterDefinition(nil), artifact.Definitions...)
+	clone.References = append([]TreeSitterReferenceSite(nil), artifact.References...)
+	clone.Chunks = append([]TreeSitterChunk(nil), artifact.Chunks...)
+	clone.Diagnostics = append([]TreeSitterDiagnostic(nil), artifact.Diagnostics...)
+	return clone
+}
+
+func treeSitterArtifactCacheBytes(artifact TreeSitterArtifact) int {
+	bytes := len(artifact.Text)
+	for _, definition := range artifact.Definitions {
+		bytes += len(definition.Kind) + len(definition.Name) + len(definition.SymbolKey) + len(definition.LocalKey)
+	}
+	for _, reference := range artifact.References {
+		bytes += len(reference.Kind) + len(reference.SymbolKey) + len(reference.LocalKey) + len(reference.OwnerLocalKey) + len(reference.RawTarget) + len(reference.TargetKey)
+	}
+	for _, chunk := range artifact.Chunks {
+		bytes += len(chunk.Text) + len(chunk.ContentDigest)
+	}
+	for _, diagnostic := range artifact.Diagnostics {
+		bytes += len(diagnostic.Code) + len(diagnostic.Message)
+	}
+	return bytes
 }
 
 // TreeSitterWireRequestDigest returns the SHA-256 digest of the exact canonical
