@@ -237,8 +237,71 @@ func uciWatcherSLOTiming(started, completed time.Time) UCIWatcherSLOTiming {
 	return UCIWatcherSLOTiming{Measured: true, StartedAt: started, CompletedAt: completed, Latency: latency}
 }
 
+func uciWatcherSLOInputWireFor(input UCIWatcherSLOInput) uciWatcherSLOInputWire {
+	wire := uciWatcherSLOInputWire{
+		SchemaVersion: input.SchemaVersion,
+		Candidate:     uciWatcherSLOCandidateWireFor(input.Candidate),
+		Environment:   uciWatcherSLOEnvironmentWireFor(input.Environment),
+		Profile: uciWatcherSLOProfileWire{
+			ID: input.Profile.ID, TextFileCount: input.Profile.TextFileCount, LinesOfCode: input.Profile.LinesOfCode,
+			ActiveWorktreeCount: input.Profile.ActiveWorktreeCount, InactiveRegistrationCount: input.Profile.InactiveRegistrationCount,
+			LANRTT: input.Profile.LANRTT, ChangedFileCount: input.Profile.ChangedFileCount, ChangedBytes: input.Profile.ChangedBytes,
+		},
+		Batches:                make([]uciWatcherSLOBatchWire, 0, len(input.Batches)),
+		UnchangedInputCounters: make([]uciWatcherSLOUnchangedCounterWire, 0, len(input.UnchangedInputCounters)),
+	}
+	for _, batch := range input.Batches {
+		wire.Batches = append(wire.Batches, uciWatcherSLOBatchWire{
+			ID: batch.ID, Identity: uciWatcherSLOIdentityWireFor(batch.Identity), ProfileID: batch.ProfileID,
+			ObservedFSSeq: batch.ObservedFSSeq, ChangedFileCount: batch.ChangedFileCount, ChangedBytes: batch.ChangedBytes,
+			ScanOutcome: batch.ScanOutcome, ResultStatus: batch.ResultStatus, Coverage: batch.Coverage, Outcome: batch.Outcome,
+			Reason: batch.Reason, Warmth: batch.Warmth, Scan: batch.Scan, StructuralFTS: batch.StructuralFTS,
+			EmbeddingReadiness: batch.EmbeddingReadiness, LocalACK: batch.LocalACK, ProviderCalls: batch.ProviderCalls,
+			ReembeddedCandidates: batch.ReembeddedCandidates, ABefore: uciWatcherSLOViewWireFor(batch.ABefore),
+			AAfter: uciWatcherSLOViewWireFor(batch.AAfter), BBefore: uciWatcherSLOViewWireFor(batch.BBefore), BAfter: uciWatcherSLOViewWireFor(batch.BAfter),
+		})
+	}
+	for _, counter := range input.UnchangedInputCounters {
+		wire.UnchangedInputCounters = append(wire.UnchangedInputCounters, uciWatcherSLOUnchangedCounterWire{
+			Identity: uciWatcherSLOIdentityWireFor(counter.Identity), Context: uciWatcherSLOContextWireFor(counter.Context),
+			InputDigest: counter.InputDigest, Unchanged: counter.Unchanged, ProviderCallsMeasured: counter.ProviderCallsMeasured,
+			ProviderCallsBefore: counter.ProviderCallsBefore, ProviderCallsAfter: counter.ProviderCallsAfter, ReembeddedCandidates: counter.ReembeddedCandidates,
+		})
+	}
+	return wire
+}
+
+func uciWatcherSLOCandidateWireFor(candidate uci.UCISLOCandidate) uciWatcherSLOCandidateWire {
+	wire := uciWatcherSLOCandidateWire{Branch: candidate.Branch, Commit: candidate.Commit, Tree: candidate.Tree, ArtifactDigests: make([]uciWatcherSLOArtifactDigestWire, 0, len(candidate.ArtifactDigests))}
+	for _, artifact := range candidate.ArtifactDigests {
+		wire.ArtifactDigests = append(wire.ArtifactDigests, uciWatcherSLOArtifactDigestWire{Name: artifact.Name, Digest: artifact.Digest})
+	}
+	return wire
+}
+
+func uciWatcherSLOEnvironmentWireFor(environment uci.UCISLOEnvironment) uciWatcherSLOEnvironmentWire {
+	return uciWatcherSLOEnvironmentWire{
+		Host:     uciWatcherSLOHostWire{ID: environment.Host.ID},
+		Database: uciWatcherSLODatabaseWire{ID: environment.Database.ID, Version: environment.Database.Version, DataSizeBytes: environment.Database.DataSizeBytes},
+		Corpus:   uciWatcherSLOCorpusWire{ID: environment.Corpus.ID, ManifestDigest: environment.Corpus.ManifestDigest},
+		Provider: uciWatcherSLOProviderWire{ID: environment.Provider.ID, Model: environment.Provider.Model, Status: environment.Provider.Status},
+	}
+}
+
+func uciWatcherSLOIdentityWireFor(identity uci.UCISLOSampleIdentity) uciWatcherSLOIdentityWire {
+	return uciWatcherSLOIdentityWire{Candidate: uciWatcherSLOCandidateWireFor(identity.Candidate), Environment: uciWatcherSLOEnvironmentWireFor(identity.Environment)}
+}
+
+func uciWatcherSLOContextWireFor(context uci.ContextRef) uciWatcherSLOContextWire {
+	return uciWatcherSLOContextWire{SpaceID: context.SpaceID, SourceID: context.SourceID, CheckoutID: context.CheckoutID, ViewID: context.ViewID, AnalysisProfileID: context.AnalysisProfileID, Generation: context.Generation}
+}
+
+func uciWatcherSLOViewWireFor(view UCIWatcherSLOView) uciWatcherSLOViewWire {
+	return uciWatcherSLOViewWire{BuildID: view.BuildID, Context: uciWatcherSLOContextWireFor(view.Context), ManifestDigest: string(view.ManifestDigest), AcceptedFSSeq: view.AcceptedFSSeq, PublishedAt: view.PublishedAt}
+}
+
 func uciWatcherSLOWriteInputAtomically(path string, input UCIWatcherSLOInput) error {
-	encoded, err := json.Marshal(input)
+	encoded, err := json.Marshal(uciWatcherSLOInputWireFor(input))
 	if err != nil {
 		return err
 	}
