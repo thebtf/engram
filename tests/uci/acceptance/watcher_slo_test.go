@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	uciWatcherSLOSchemaVersion                   = "engram.uci-watcher-slo/v1"
+	uciWatcherSLOSchemaVersion                   = "engram.uci-watcher-slo/v2"
 	uciWatcherSLOMinimumHealthyWarmBatches       = 100
 	uciWatcherSLOMaximumChangedFiles             = 20
 	uciWatcherSLOMaximumChangedBytes       int64 = 1 << 20
@@ -117,6 +117,9 @@ func TestUCIWatcherSLO(t *testing.T) {
 		if !reflect.DeepEqual(batch.BBefore, batch.BAfter) {
 			t.Fatalf("watcher SLO batch %q mutated unaffected worktree B", batch.ID)
 		}
+		if batch.ABeforeOrigin != UCIWatcherSLOOriginInstalledStatusAndView || batch.AAfterOrigin != UCIWatcherSLOOriginInstalledStatusAndView || batch.BBeforeOrigin != UCIWatcherSLOOriginInstalledStatusAndView || batch.BAfterOrigin != UCIWatcherSLOOriginInstalledStatusAndView {
+			t.Fatalf("watcher SLO batch %q used an unverified A/B View origin", batch.ID)
+		}
 
 		warm := false
 		switch batch.Warmth {
@@ -138,11 +141,14 @@ func TestUCIWatcherSLO(t *testing.T) {
 			if uciWatcherSLOResultIsDegraded(batch.ResultStatus, batch.Coverage) {
 				t.Fatalf("watcher SLO batch %q counted degraded result state %q/%q as healthy", batch.ID, batch.ResultStatus, batch.Coverage)
 			}
-			if !batch.StructuralFTS.Measured || batch.StructuralFTS.Latency <= 0 {
+			if batch.Scan.Origin != UCIWatcherSLOOriginUnknownNotMeasured || batch.Scan.Measured || batch.LocalACK.Origin != UCIWatcherSLOOriginUnknownNotMeasured || batch.LocalACK.Measured {
+				t.Fatalf("watcher SLO batch %q substituted an unobserved scan or local-ACK boundary", batch.ID)
+			}
+			if batch.StructuralFTS.Origin != UCIWatcherSLOOriginInstalledClientSearch || !batch.StructuralFTS.Measured || batch.StructuralFTS.Latency <= 0 {
 				t.Fatalf("watcher SLO batch %q used a synthetic/default structural/FTS timing: %#v", batch.ID, batch.StructuralFTS)
 			}
-			if providerHealthy && (!batch.EmbeddingReadiness.Measured || batch.EmbeddingReadiness.Latency <= 0) {
-				t.Fatalf("watcher SLO batch %q used a synthetic/default embedding-readiness timing while provider is healthy: %#v", batch.ID, batch.EmbeddingReadiness)
+			if providerHealthy && (batch.EmbeddingReadiness.Origin != UCIWatcherSLOOriginInstalledEmbeddingStatus || !batch.EmbeddingReadiness.Measured || batch.EmbeddingReadiness.Latency <= 0 || batch.EmbeddingCounters.Origin != UCIWatcherSLOOriginInstalledEmbeddingStatus || !batch.EmbeddingCounters.Measured) {
+				t.Fatalf("watcher SLO batch %q used an unverified embedding observation: readiness=%#v counters=%#v", batch.ID, batch.EmbeddingReadiness, batch.EmbeddingCounters)
 			}
 		case "degraded":
 			degradedBatches++
@@ -236,11 +242,11 @@ func TestUCIWatcherSLO(t *testing.T) {
 		}
 		counterScope := requireUCIWatcherSLOContext(t, "unchanged-input counter", counter.Context)
 		requireUCIWatcherSLOSameScope(t, "unchanged-input counter", expectedAScope, counterScope)
-		if counter.ProviderCallsBefore < 0 || counter.ProviderCallsAfter < counter.ProviderCallsBefore {
-			t.Fatalf("watcher SLO unchanged-input counter %d has invalid provider-call bounds: before %d after %d", index, counter.ProviderCallsBefore, counter.ProviderCallsAfter)
+		if counter.EmbeddingCountersOrigin != UCIWatcherSLOOriginInstalledEmbeddingStatus || !counter.EmbeddingCountersMeasured || counter.EmbeddingCountersBefore < 0 || counter.EmbeddingCountersAfter < counter.EmbeddingCountersBefore {
+			t.Fatalf("watcher SLO unchanged-input counter %d has invalid embedding counter bounds or origin: %#v", index, counter)
 		}
-		if counter.ProviderCallsAfter != counter.ProviderCallsBefore || counter.ReembeddedCandidates != 0 {
-			t.Fatalf("watcher SLO unchanged-input counter %d re-embedded unchanged input: before %d after %d candidates %d", index, counter.ProviderCallsBefore, counter.ProviderCallsAfter, counter.ReembeddedCandidates)
+		if counter.EmbeddingCountersAfter != counter.EmbeddingCountersBefore || counter.ReembeddedCandidates != 0 {
+			t.Fatalf("watcher SLO unchanged-input counter %d re-embedded unchanged input: before %d after %d candidates %d", index, counter.EmbeddingCountersBefore, counter.EmbeddingCountersAfter, counter.ReembeddedCandidates)
 		}
 	}
 }

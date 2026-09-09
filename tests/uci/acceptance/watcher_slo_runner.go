@@ -18,7 +18,7 @@ import (
 
 const (
 	// UCIWatcherSLOSchemaVersion identifies the external watcher-update evidence schema.
-	UCIWatcherSLOSchemaVersion = "engram.uci-watcher-slo/v1"
+	UCIWatcherSLOSchemaVersion = "engram.uci-watcher-slo/v2"
 
 	uciWatcherSLOInputEnv             = "ENGRAM_UCI_WATCHER_SLO_INPUT"
 	uciWatcherSLOMinimumHealthyWarm   = 100
@@ -34,62 +34,82 @@ const (
 // parallel acceptance-only View model.
 type UCIWatcherSLOView = uci.IndexPublishedView
 
+// UCIWatcherSLOOrigin names the concrete path which produced a retained
+// watcher-evidence fact. An unavailable observation is explicit rather than
+// borrowing a timestamp or counter from a different operation.
+type UCIWatcherSLOOrigin string
+
+const (
+	UCIWatcherSLOOriginUnknownNotMeasured       UCIWatcherSLOOrigin = "unknown_not_measured"
+	UCIWatcherSLOOriginInstalledClientSearch    UCIWatcherSLOOrigin = "installed_client_search"
+	UCIWatcherSLOOriginInstalledEmbeddingStatus UCIWatcherSLOOrigin = "installed_embedding_status"
+	UCIWatcherSLOOriginInstalledStatusAndView   UCIWatcherSLOOrigin = "installed_status_and_authoritative_view"
+)
+
 // UCIWatcherSLOTiming proves a stage was observed through timestamps. A
 // measured zero/default duration cannot represent a healthy readiness sample.
 type UCIWatcherSLOTiming struct {
-	Measured    bool          `json:"measured"`
-	StartedAt   time.Time     `json:"started_at"`
-	CompletedAt time.Time     `json:"completed_at"`
-	Latency     time.Duration `json:"latency"`
+	Origin      UCIWatcherSLOOrigin `json:"origin"`
+	Measured    bool                `json:"measured"`
+	StartedAt   time.Time           `json:"started_at"`
+	CompletedAt time.Time           `json:"completed_at"`
+	Latency     time.Duration       `json:"latency"`
 }
 
-// UCIWatcherSLOProviderCallCounters preserves externally observed provider
-// counter snapshots. Measured distinguishes an unavailable counter from zero.
-type UCIWatcherSLOProviderCallCounters struct {
-	Measured bool  `json:"measured"`
-	Before   int64 `json:"before"`
-	After    int64 `json:"after"`
+// UCIWatcherSLOEmbeddingCounters are the before/after ready-candidate counts
+// the installed client observes from codebase_status. They do not claim to be
+// opaque provider request counters.
+type UCIWatcherSLOEmbeddingCounters struct {
+	Origin   UCIWatcherSLOOrigin `json:"origin"`
+	Measured bool                `json:"measured"`
+	Before   int64               `json:"before"`
+	After    int64               `json:"after"`
 }
 
 // UCIWatcherSLOBatch is one retained A-only watcher update attempt. It carries
 // raw observations whether the attempt was healthy, degraded, unavailable, or
 // failed; the reporter never drops non-healthy attempts.
 type UCIWatcherSLOBatch struct {
-	ID                   string                            `json:"id"`
-	Identity             uci.UCISLOSampleIdentity          `json:"identity"`
-	ProfileID            string                            `json:"profile_id"`
-	ObservedFSSeq        int64                             `json:"observed_fs_seq"`
-	ChangedFileCount     int                               `json:"changed_file_count"`
-	ChangedBytes         int64                             `json:"changed_bytes"`
-	ScanOutcome          uci.IndexScanOutcome              `json:"scan_outcome"`
-	ResultStatus         string                            `json:"result_status"`
-	Coverage             string                            `json:"coverage"`
-	Outcome              string                            `json:"outcome"`
-	Reason               string                            `json:"reason,omitempty"`
-	Warmth               string                            `json:"warmth"`
-	Scan                 UCIWatcherSLOTiming               `json:"scan"`
-	StructuralFTS        UCIWatcherSLOTiming               `json:"structural_fts"`
-	EmbeddingReadiness   UCIWatcherSLOTiming               `json:"embedding_readiness"`
-	LocalACK             UCIWatcherSLOTiming               `json:"local_ack"`
-	ProviderCalls        UCIWatcherSLOProviderCallCounters `json:"provider_calls"`
-	ReembeddedCandidates int                               `json:"reembedded_candidates"`
-	ABefore              UCIWatcherSLOView                 `json:"a_before"`
-	AAfter               UCIWatcherSLOView                 `json:"a_after"`
-	BBefore              UCIWatcherSLOView                 `json:"b_before"`
-	BAfter               UCIWatcherSLOView                 `json:"b_after"`
+	ID                   string                         `json:"id"`
+	Identity             uci.UCISLOSampleIdentity       `json:"identity"`
+	ProfileID            string                         `json:"profile_id"`
+	ObservedFSSeq        int64                          `json:"observed_fs_seq"`
+	ChangedFileCount     int                            `json:"changed_file_count"`
+	ChangedBytes         int64                          `json:"changed_bytes"`
+	ScanOutcome          uci.IndexScanOutcome           `json:"scan_outcome"`
+	ResultStatus         string                         `json:"result_status"`
+	Coverage             string                         `json:"coverage"`
+	Outcome              string                         `json:"outcome"`
+	Reason               string                         `json:"reason,omitempty"`
+	Warmth               string                         `json:"warmth"`
+	Scan                 UCIWatcherSLOTiming            `json:"scan"`
+	StructuralFTS        UCIWatcherSLOTiming            `json:"structural_fts"`
+	EmbeddingReadiness   UCIWatcherSLOTiming            `json:"embedding_readiness"`
+	LocalACK             UCIWatcherSLOTiming            `json:"local_ack"`
+	EmbeddingCounters    UCIWatcherSLOEmbeddingCounters `json:"embedding_counters"`
+	ReembeddedCandidates int                            `json:"reembedded_candidates"`
+	ABefore              UCIWatcherSLOView              `json:"a_before"`
+	AAfter               UCIWatcherSLOView              `json:"a_after"`
+	BBefore              UCIWatcherSLOView              `json:"b_before"`
+	BAfter               UCIWatcherSLOView              `json:"b_after"`
+	ABeforeOrigin        UCIWatcherSLOOrigin            `json:"a_before_origin"`
+	AAfterOrigin         UCIWatcherSLOOrigin            `json:"a_after_origin"`
+	BBeforeOrigin        UCIWatcherSLOOrigin            `json:"b_before_origin"`
+	BAfterOrigin         UCIWatcherSLOOrigin            `json:"b_after_origin"`
 }
 
 // UCIWatcherSLOUnchangedInputCounter proves that an exact unchanged A input
-// did not cause another provider call or re-embedding.
+// did not cause another embedding-ready candidate or re-embedding.
 type UCIWatcherSLOUnchangedInputCounter struct {
-	Identity              uci.UCISLOSampleIdentity `json:"identity"`
-	Context               uci.ContextRef           `json:"context"`
-	InputDigest           string                   `json:"input_digest"`
-	Unchanged             bool                     `json:"unchanged"`
-	ProviderCallsMeasured bool                     `json:"provider_calls_measured"`
-	ProviderCallsBefore   int64                    `json:"provider_calls_before"`
-	ProviderCallsAfter    int64                    `json:"provider_calls_after"`
-	ReembeddedCandidates  int                      `json:"reembedded_candidates"`
+	Identity                  uci.UCISLOSampleIdentity `json:"identity"`
+	Context                   uci.ContextRef           `json:"context"`
+	InputDigest               string                   `json:"input_digest"`
+	Unchanged                 bool                     `json:"unchanged"`
+	EmbeddingCountersOrigin   UCIWatcherSLOOrigin      `json:"embedding_counters_origin"`
+	EmbeddingCountersMeasured bool                     `json:"embedding_counters_measured"`
+	EmbeddingCountersBefore   int64                    `json:"embedding_counters_before"`
+	EmbeddingCountersAfter    int64                    `json:"embedding_counters_after"`
+	ReembeddedCandidates      int                      `json:"reembedded_candidates"`
 }
 
 // UCIWatcherSLOInput is one externally recorded exact-candidate measurement
@@ -323,29 +343,23 @@ func validateWatcherSLOBatch(batch UCIWatcherSLOBatch, candidate uci.UCISLOCandi
 	if batch.ReembeddedCandidates < 0 {
 		return watcherSLOInputScopes{}, fmt.Errorf("has a negative re-embedding count")
 	}
-	if err := validateWatcherSLOTiming(batch.Scan, true); err != nil {
+	if err := validateWatcherSLOTiming(batch.Scan, UCIWatcherSLOOriginUnknownNotMeasured, false); err != nil {
 		return watcherSLOInputScopes{}, fmt.Errorf("scan timing: %w", err)
 	}
-	if err := validateWatcherSLOTiming(batch.StructuralFTS, false); err != nil {
+	if err := validateWatcherSLOTiming(batch.StructuralFTS, UCIWatcherSLOOriginInstalledClientSearch, false); err != nil {
 		return watcherSLOInputScopes{}, fmt.Errorf("structural/FTS timing: %w", err)
 	}
-	if err := validateWatcherSLOTiming(batch.EmbeddingReadiness, false); err != nil {
+	if err := validateWatcherSLOTiming(batch.EmbeddingReadiness, UCIWatcherSLOOriginInstalledEmbeddingStatus, false); err != nil {
 		return watcherSLOInputScopes{}, fmt.Errorf("embedding-readiness timing: %w", err)
 	}
-	if err := validateWatcherSLOTiming(batch.LocalACK, false); err != nil {
+	if err := validateWatcherSLOTiming(batch.LocalACK, UCIWatcherSLOOriginUnknownNotMeasured, false); err != nil {
 		return watcherSLOInputScopes{}, fmt.Errorf("local-ACK timing: %w", err)
-	}
-	if batch.StructuralFTS.Measured && (!watcherSLOTimingFollows(batch.StructuralFTS, batch.Scan) || batch.StructuralFTS.CompletedAt.Before(batch.Scan.CompletedAt)) {
-		return watcherSLOInputScopes{}, fmt.Errorf("structural/FTS readiness is not bound to scan completion")
 	}
 	if batch.EmbeddingReadiness.Measured && (!batch.StructuralFTS.Measured || !watcherSLOTimingFollows(batch.EmbeddingReadiness, batch.StructuralFTS)) {
 		return watcherSLOInputScopes{}, fmt.Errorf("embedding readiness precedes structural/FTS readiness")
 	}
-	if batch.LocalACK.Measured && (!batch.EmbeddingReadiness.Measured || !watcherSLOTimingFollows(batch.LocalACK, batch.EmbeddingReadiness)) {
-		return watcherSLOInputScopes{}, fmt.Errorf("local acknowledgement precedes embedding readiness")
-	}
-	if err := validateWatcherSLOProviderCalls(batch.ProviderCalls, false); err != nil {
-		return watcherSLOInputScopes{}, fmt.Errorf("provider-call counters: %w", err)
+	if err := validateWatcherSLOEmbeddingCounters(batch.EmbeddingCounters, false); err != nil {
+		return watcherSLOInputScopes{}, fmt.Errorf("embedding counters: %w", err)
 	}
 
 	aBeforeScope, err := validateWatcherSLOView(batch.ABefore, profile.ID)
@@ -364,6 +378,16 @@ func validateWatcherSLOBatch(batch UCIWatcherSLOBatch, candidate uci.UCISLOCandi
 	if err != nil {
 		return watcherSLOInputScopes{}, fmt.Errorf("B after View: %w", err)
 	}
+	for name, origin := range map[string]UCIWatcherSLOOrigin{
+		"A before": batch.ABeforeOrigin,
+		"A after":  batch.AAfterOrigin,
+		"B before": batch.BBeforeOrigin,
+		"B after":  batch.BAfterOrigin,
+	} {
+		if origin != UCIWatcherSLOOriginInstalledStatusAndView {
+			return watcherSLOInputScopes{}, fmt.Errorf("%s View origin = %q, want %q", name, origin, UCIWatcherSLOOriginInstalledStatusAndView)
+		}
+	}
 	if aBeforeScope != aAfterScope || bBeforeScope != bAfterScope {
 		return watcherSLOInputScopes{}, fmt.Errorf("before/after View scope changed within one checkout")
 	}
@@ -375,7 +399,7 @@ func validateWatcherSLOBatch(batch UCIWatcherSLOBatch, candidate uci.UCISLOCandi
 	}
 
 	if batch.Outcome == "healthy" {
-		if environment.Provider.Status != "healthy" || batch.ScanOutcome != uci.IndexScanComplete || watcherSLOResultIndicatesDegradation(batch.ResultStatus, batch.Coverage) || !batch.StructuralFTS.Measured || batch.StructuralFTS.Latency <= 0 || !batch.EmbeddingReadiness.Measured || batch.EmbeddingReadiness.Latency <= 0 || !batch.LocalACK.Measured || batch.LocalACK.Latency <= 0 || !batch.ProviderCalls.Measured || strings.TrimSpace(batch.Reason) != "" {
+		if environment.Provider.Status != "healthy" || batch.ScanOutcome != uci.IndexScanComplete || watcherSLOResultIndicatesDegradation(batch.ResultStatus, batch.Coverage) || batch.Scan.Measured || !batch.StructuralFTS.Measured || batch.StructuralFTS.Latency <= 0 || !batch.EmbeddingReadiness.Measured || batch.EmbeddingReadiness.Latency <= 0 || batch.LocalACK.Measured || !batch.EmbeddingCounters.Measured || strings.TrimSpace(batch.Reason) != "" {
 			return watcherSLOInputScopes{}, fmt.Errorf("labels unresolved, degraded, or unmeasured update evidence as healthy")
 		}
 		if batch.ABefore.Context.ViewID == batch.AAfter.Context.ViewID || batch.ABefore.Context.Generation >= batch.AAfter.Context.Generation || batch.ABefore.ManifestDigest == batch.AAfter.ManifestDigest || batch.ABefore.AcceptedFSSeq >= batch.AAfter.AcceptedFSSeq || batch.AAfter.AcceptedFSSeq != batch.ObservedFSSeq {
@@ -406,11 +430,11 @@ func validateWatcherSLOUnchangedInputCounter(counter UCIWatcherSLOUnchangedInput
 	if counterScope != scope {
 		return fmt.Errorf("context is outside the A checkout scope")
 	}
-	if !counter.ProviderCallsMeasured || counter.ProviderCallsBefore < 0 || counter.ProviderCallsAfter < counter.ProviderCallsBefore {
-		return fmt.Errorf("provider-call counter bounds are unresolved")
+	if counter.EmbeddingCountersOrigin != UCIWatcherSLOOriginInstalledEmbeddingStatus || !counter.EmbeddingCountersMeasured || counter.EmbeddingCountersBefore < 0 || counter.EmbeddingCountersAfter < counter.EmbeddingCountersBefore {
+		return fmt.Errorf("embedding counter bounds or origin are unresolved")
 	}
-	if counter.ProviderCallsAfter != counter.ProviderCallsBefore || counter.ReembeddedCandidates != 0 {
-		return fmt.Errorf("unchanged input caused provider work or re-embedding")
+	if counter.EmbeddingCountersAfter != counter.EmbeddingCountersBefore || counter.ReembeddedCandidates != 0 {
+		return fmt.Errorf("unchanged input caused embedding work or re-embedding")
 	}
 	return nil
 }
@@ -524,14 +548,17 @@ func validWatcherSLOReason(reason string) bool {
 	return validWatcherSLOText(reason)
 }
 
-func validateWatcherSLOTiming(timing UCIWatcherSLOTiming, required bool) error {
+func validateWatcherSLOTiming(timing UCIWatcherSLOTiming, expectedOrigin UCIWatcherSLOOrigin, required bool) error {
+	if timing.Origin != expectedOrigin {
+		return fmt.Errorf("origin = %q, want %q", timing.Origin, expectedOrigin)
+	}
 	if !timing.Measured {
-		if required || !timing.StartedAt.IsZero() || !timing.CompletedAt.IsZero() || timing.Latency != 0 {
-			return fmt.Errorf("unmeasured timing carries values")
+		if required || expectedOrigin != UCIWatcherSLOOriginUnknownNotMeasured || !timing.StartedAt.IsZero() || !timing.CompletedAt.IsZero() || timing.Latency != 0 {
+			return fmt.Errorf("unmeasured timing carries values or an unmeasurable origin")
 		}
 		return nil
 	}
-	if timing.StartedAt.IsZero() || timing.CompletedAt.IsZero() || timing.CompletedAt.Before(timing.StartedAt) || timing.Latency < 0 || timing.Latency != timing.CompletedAt.Sub(timing.StartedAt) {
+	if expectedOrigin == UCIWatcherSLOOriginUnknownNotMeasured || timing.StartedAt.IsZero() || timing.CompletedAt.IsZero() || timing.CompletedAt.Before(timing.StartedAt) || timing.Latency < 0 || timing.Latency != timing.CompletedAt.Sub(timing.StartedAt) {
 		return fmt.Errorf("timing is not an actual non-negative timestamp interval")
 	}
 	return nil
@@ -541,7 +568,10 @@ func watcherSLOTimingFollows(next, previous UCIWatcherSLOTiming) bool {
 	return next.StartedAt.Equal(previous.StartedAt) && !next.CompletedAt.Before(previous.CompletedAt)
 }
 
-func validateWatcherSLOProviderCalls(counters UCIWatcherSLOProviderCallCounters, required bool) error {
+func validateWatcherSLOEmbeddingCounters(counters UCIWatcherSLOEmbeddingCounters, required bool) error {
+	if counters.Origin != UCIWatcherSLOOriginInstalledEmbeddingStatus {
+		return fmt.Errorf("origin = %q, want %q", counters.Origin, UCIWatcherSLOOriginInstalledEmbeddingStatus)
+	}
 	if !counters.Measured {
 		if required || counters.Before != 0 || counters.After != 0 {
 			return fmt.Errorf("unmeasured counter carries values")
@@ -804,39 +834,130 @@ type uciWatcherSLOViewWire struct {
 }
 
 type uciWatcherSLOBatchWire struct {
-	ID                   string                            `json:"id"`
-	Identity             uciWatcherSLOIdentityWire         `json:"identity"`
-	ProfileID            string                            `json:"profile_id"`
-	ObservedFSSeq        int64                             `json:"observed_fs_seq"`
-	ChangedFileCount     int                               `json:"changed_file_count"`
-	ChangedBytes         int64                             `json:"changed_bytes"`
-	ScanOutcome          uci.IndexScanOutcome              `json:"scan_outcome"`
-	ResultStatus         string                            `json:"result_status"`
-	Coverage             string                            `json:"coverage"`
-	Outcome              string                            `json:"outcome"`
-	Reason               string                            `json:"reason"`
-	Warmth               string                            `json:"warmth"`
-	Scan                 UCIWatcherSLOTiming               `json:"scan"`
-	StructuralFTS        UCIWatcherSLOTiming               `json:"structural_fts"`
-	EmbeddingReadiness   UCIWatcherSLOTiming               `json:"embedding_readiness"`
-	LocalACK             UCIWatcherSLOTiming               `json:"local_ack"`
-	ProviderCalls        UCIWatcherSLOProviderCallCounters `json:"provider_calls"`
-	ReembeddedCandidates int                               `json:"reembedded_candidates"`
-	ABefore              uciWatcherSLOViewWire             `json:"a_before"`
-	AAfter               uciWatcherSLOViewWire             `json:"a_after"`
-	BBefore              uciWatcherSLOViewWire             `json:"b_before"`
-	BAfter               uciWatcherSLOViewWire             `json:"b_after"`
+	ID                   string                         `json:"id"`
+	Identity             uciWatcherSLOIdentityWire      `json:"identity"`
+	ProfileID            string                         `json:"profile_id"`
+	ObservedFSSeq        int64                          `json:"observed_fs_seq"`
+	ChangedFileCount     int                            `json:"changed_file_count"`
+	ChangedBytes         int64                          `json:"changed_bytes"`
+	ScanOutcome          uci.IndexScanOutcome           `json:"scan_outcome"`
+	ResultStatus         string                         `json:"result_status"`
+	Coverage             string                         `json:"coverage"`
+	Outcome              string                         `json:"outcome"`
+	Reason               string                         `json:"reason"`
+	Warmth               string                         `json:"warmth"`
+	Scan                 UCIWatcherSLOTiming            `json:"scan"`
+	StructuralFTS        UCIWatcherSLOTiming            `json:"structural_fts"`
+	EmbeddingReadiness   UCIWatcherSLOTiming            `json:"embedding_readiness"`
+	LocalACK             UCIWatcherSLOTiming            `json:"local_ack"`
+	EmbeddingCounters    UCIWatcherSLOEmbeddingCounters `json:"embedding_counters"`
+	ReembeddedCandidates int                            `json:"reembedded_candidates"`
+	ABefore              uciWatcherSLOViewWire          `json:"a_before"`
+	AAfter               uciWatcherSLOViewWire          `json:"a_after"`
+	BBefore              uciWatcherSLOViewWire          `json:"b_before"`
+	BAfter               uciWatcherSLOViewWire          `json:"b_after"`
+	ABeforeOrigin        UCIWatcherSLOOrigin            `json:"a_before_origin"`
+	AAfterOrigin         UCIWatcherSLOOrigin            `json:"a_after_origin"`
+	BBeforeOrigin        UCIWatcherSLOOrigin            `json:"b_before_origin"`
+	BAfterOrigin         UCIWatcherSLOOrigin            `json:"b_after_origin"`
 }
 
 type uciWatcherSLOUnchangedCounterWire struct {
-	Identity              uciWatcherSLOIdentityWire `json:"identity"`
-	Context               uciWatcherSLOContextWire  `json:"context"`
-	InputDigest           string                    `json:"input_digest"`
-	Unchanged             bool                      `json:"unchanged"`
-	ProviderCallsMeasured bool                      `json:"provider_calls_measured"`
-	ProviderCallsBefore   int64                     `json:"provider_calls_before"`
-	ProviderCallsAfter    int64                     `json:"provider_calls_after"`
-	ReembeddedCandidates  int                       `json:"reembedded_candidates"`
+	Identity                  uciWatcherSLOIdentityWire `json:"identity"`
+	Context                   uciWatcherSLOContextWire  `json:"context"`
+	InputDigest               string                    `json:"input_digest"`
+	Unchanged                 bool                      `json:"unchanged"`
+	EmbeddingCountersOrigin   UCIWatcherSLOOrigin       `json:"embedding_counters_origin"`
+	EmbeddingCountersMeasured bool                      `json:"embedding_counters_measured"`
+	EmbeddingCountersBefore   int64                     `json:"embedding_counters_before"`
+	EmbeddingCountersAfter    int64                     `json:"embedding_counters_after"`
+	ReembeddedCandidates      int                       `json:"reembedded_candidates"`
+}
+
+// EncodeUCIWatcherSLOInput validates and encodes strict externally recorded
+// watcher evidence. Recorder commands use this exact wire contract; component
+// publication measurements are intentionally a different schema.
+func EncodeUCIWatcherSLOInput(input UCIWatcherSLOInput) ([]byte, error) {
+	canonical, _, err := canonicalUCIWatcherSLOInput(input)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(watcherSLOInputWireFor(canonical))
+}
+
+func watcherSLOInputWireFor(input UCIWatcherSLOInput) uciWatcherSLOInputWire {
+	wire := uciWatcherSLOInputWire{
+		SchemaVersion: input.SchemaVersion,
+		Candidate: uciWatcherSLOCandidateWire{
+			Branch: input.Candidate.Branch, Commit: input.Candidate.Commit, Tree: input.Candidate.Tree,
+			ArtifactDigests: make([]uciWatcherSLOArtifactDigestWire, 0, len(input.Candidate.ArtifactDigests)),
+		},
+		Environment: uciWatcherSLOEnvironmentWire{
+			Host:     uciWatcherSLOHostWire{ID: input.Environment.Host.ID},
+			Database: uciWatcherSLODatabaseWire{ID: input.Environment.Database.ID, Version: input.Environment.Database.Version, DataSizeBytes: input.Environment.Database.DataSizeBytes},
+			Corpus:   uciWatcherSLOCorpusWire{ID: input.Environment.Corpus.ID, ManifestDigest: input.Environment.Corpus.ManifestDigest},
+			Provider: uciWatcherSLOProviderWire{ID: input.Environment.Provider.ID, Model: input.Environment.Provider.Model, Status: input.Environment.Provider.Status},
+		},
+		Profile: uciWatcherSLOProfileWire{
+			ID: input.Profile.ID, TextFileCount: input.Profile.TextFileCount, LinesOfCode: input.Profile.LinesOfCode,
+			ActiveWorktreeCount: input.Profile.ActiveWorktreeCount, InactiveRegistrationCount: input.Profile.InactiveRegistrationCount,
+			LANRTT: input.Profile.LANRTT, ChangedFileCount: input.Profile.ChangedFileCount, ChangedBytes: input.Profile.ChangedBytes,
+		},
+		Batches:                make([]uciWatcherSLOBatchWire, 0, len(input.Batches)),
+		UnchangedInputCounters: make([]uciWatcherSLOUnchangedCounterWire, 0, len(input.UnchangedInputCounters)),
+	}
+	for _, artifact := range input.Candidate.ArtifactDigests {
+		wire.Candidate.ArtifactDigests = append(wire.Candidate.ArtifactDigests, uciWatcherSLOArtifactDigestWire{Name: artifact.Name, Digest: artifact.Digest})
+	}
+	for _, batch := range input.Batches {
+		wire.Batches = append(wire.Batches, uciWatcherSLOBatchWire{
+			ID: batch.ID, Identity: watcherSLOIdentityWireFor(batch.Identity), ProfileID: batch.ProfileID,
+			ObservedFSSeq: batch.ObservedFSSeq, ChangedFileCount: batch.ChangedFileCount, ChangedBytes: batch.ChangedBytes,
+			ScanOutcome: batch.ScanOutcome, ResultStatus: batch.ResultStatus, Coverage: batch.Coverage, Outcome: batch.Outcome,
+			Reason: batch.Reason, Warmth: batch.Warmth, Scan: batch.Scan, StructuralFTS: batch.StructuralFTS,
+			EmbeddingReadiness: batch.EmbeddingReadiness, LocalACK: batch.LocalACK, EmbeddingCounters: batch.EmbeddingCounters,
+			ReembeddedCandidates: batch.ReembeddedCandidates, ABefore: watcherSLOViewWireFor(batch.ABefore), AAfter: watcherSLOViewWireFor(batch.AAfter),
+			BBefore: watcherSLOViewWireFor(batch.BBefore), BAfter: watcherSLOViewWireFor(batch.BAfter),
+			ABeforeOrigin: batch.ABeforeOrigin, AAfterOrigin: batch.AAfterOrigin, BBeforeOrigin: batch.BBeforeOrigin, BAfterOrigin: batch.BAfterOrigin,
+		})
+	}
+	for _, counter := range input.UnchangedInputCounters {
+		wire.UnchangedInputCounters = append(wire.UnchangedInputCounters, uciWatcherSLOUnchangedCounterWire{
+			Identity: watcherSLOIdentityWireFor(counter.Identity), Context: watcherSLOContextWireFor(counter.Context),
+			InputDigest: counter.InputDigest, Unchanged: counter.Unchanged, EmbeddingCountersOrigin: counter.EmbeddingCountersOrigin,
+			EmbeddingCountersMeasured: counter.EmbeddingCountersMeasured, EmbeddingCountersBefore: counter.EmbeddingCountersBefore,
+			EmbeddingCountersAfter: counter.EmbeddingCountersAfter, ReembeddedCandidates: counter.ReembeddedCandidates,
+		})
+	}
+	return wire
+}
+
+func watcherSLOIdentityWireFor(identity uci.UCISLOSampleIdentity) uciWatcherSLOIdentityWire {
+	return uciWatcherSLOIdentityWire{
+		Candidate: uciWatcherSLOCandidateWire{Branch: identity.Candidate.Branch, Commit: identity.Candidate.Commit, Tree: identity.Candidate.Tree, ArtifactDigests: watcherSLOArtifactWires(identity.Candidate.ArtifactDigests)},
+		Environment: uciWatcherSLOEnvironmentWire{
+			Host:     uciWatcherSLOHostWire{ID: identity.Environment.Host.ID},
+			Database: uciWatcherSLODatabaseWire{ID: identity.Environment.Database.ID, Version: identity.Environment.Database.Version, DataSizeBytes: identity.Environment.Database.DataSizeBytes},
+			Corpus:   uciWatcherSLOCorpusWire{ID: identity.Environment.Corpus.ID, ManifestDigest: identity.Environment.Corpus.ManifestDigest},
+			Provider: uciWatcherSLOProviderWire{ID: identity.Environment.Provider.ID, Model: identity.Environment.Provider.Model, Status: identity.Environment.Provider.Status},
+		},
+	}
+}
+
+func watcherSLOArtifactWires(artifacts []uci.UCISLOArtifactDigest) []uciWatcherSLOArtifactDigestWire {
+	result := make([]uciWatcherSLOArtifactDigestWire, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		result = append(result, uciWatcherSLOArtifactDigestWire{Name: artifact.Name, Digest: artifact.Digest})
+	}
+	return result
+}
+
+func watcherSLOContextWireFor(context uci.ContextRef) uciWatcherSLOContextWire {
+	return uciWatcherSLOContextWire{SpaceID: context.SpaceID, SourceID: context.SourceID, CheckoutID: context.CheckoutID, ViewID: context.ViewID, AnalysisProfileID: context.AnalysisProfileID, Generation: context.Generation}
+}
+
+func watcherSLOViewWireFor(view UCIWatcherSLOView) uciWatcherSLOViewWire {
+	return uciWatcherSLOViewWire{BuildID: view.BuildID, Context: watcherSLOContextWireFor(view.Context), ManifestDigest: string(view.ManifestDigest), AcceptedFSSeq: view.AcceptedFSSeq, PublishedAt: view.PublishedAt}
 }
 
 func decodeUCIWatcherSLOInput(contents []byte) (UCIWatcherSLOInput, error) {
@@ -954,24 +1075,29 @@ func (wire uciWatcherSLOBatchWire) batch() UCIWatcherSLOBatch {
 		StructuralFTS:        wire.StructuralFTS,
 		EmbeddingReadiness:   wire.EmbeddingReadiness,
 		LocalACK:             wire.LocalACK,
-		ProviderCalls:        wire.ProviderCalls,
+		EmbeddingCounters:    wire.EmbeddingCounters,
 		ReembeddedCandidates: wire.ReembeddedCandidates,
 		ABefore:              wire.ABefore.view(),
 		AAfter:               wire.AAfter.view(),
 		BBefore:              wire.BBefore.view(),
 		BAfter:               wire.BAfter.view(),
+		ABeforeOrigin:        wire.ABeforeOrigin,
+		AAfterOrigin:         wire.AAfterOrigin,
+		BBeforeOrigin:        wire.BBeforeOrigin,
+		BAfterOrigin:         wire.BAfterOrigin,
 	}
 }
 
 func (wire uciWatcherSLOUnchangedCounterWire) counter() UCIWatcherSLOUnchangedInputCounter {
 	return UCIWatcherSLOUnchangedInputCounter{
-		Identity:              wire.Identity.identity(),
-		Context:               wire.Context.context(),
-		InputDigest:           wire.InputDigest,
-		Unchanged:             wire.Unchanged,
-		ProviderCallsMeasured: wire.ProviderCallsMeasured,
-		ProviderCallsBefore:   wire.ProviderCallsBefore,
-		ProviderCallsAfter:    wire.ProviderCallsAfter,
-		ReembeddedCandidates:  wire.ReembeddedCandidates,
+		Identity:                  wire.Identity.identity(),
+		Context:                   wire.Context.context(),
+		InputDigest:               wire.InputDigest,
+		Unchanged:                 wire.Unchanged,
+		EmbeddingCountersOrigin:   wire.EmbeddingCountersOrigin,
+		EmbeddingCountersMeasured: wire.EmbeddingCountersMeasured,
+		EmbeddingCountersBefore:   wire.EmbeddingCountersBefore,
+		EmbeddingCountersAfter:    wire.EmbeddingCountersAfter,
+		ReembeddedCandidates:      wire.ReembeddedCandidates,
 	}
 }

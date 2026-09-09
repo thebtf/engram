@@ -72,8 +72,18 @@ type uciInstalledAcceptanceRequest struct {
 	ReservedLoopbackPortCount int
 	ReadinessTimeout          time.Duration
 	OperationTimeout          time.Duration
+	EmbeddingProvider         *uciInstalledAcceptanceEmbeddingProvider
 	Fixture                   uciInstalledAcceptanceFixture
 	ScenarioProbe             uciInstalledAcceptanceScenarioProbe
+}
+
+// uciInstalledAcceptanceEmbeddingProvider is an explicit caller-provided
+// server-only provider configuration for an opt-in installed recorder. The
+// resulting receipt retains only the endpoint digest and model, never Key.
+type uciInstalledAcceptanceEmbeddingProvider struct {
+	URL   string
+	Model string
+	Key   string
 }
 
 // uciInstalledAcceptanceScenarioProbe runs synchronously after the base
@@ -261,9 +271,10 @@ type uciInstalledAcceptanceCleanup struct {
 }
 
 type uciInstalledAcceptanceWorktreesFixture struct {
-	primaryRoot string
-	linkedRoot  string
-	head        string
+	primaryRoot    string
+	linkedRoot     string
+	auxiliaryRoots []string
+	head           string
 }
 
 type uciInstalledAcceptanceAuthority struct {
@@ -731,6 +742,9 @@ func uciValidateInstalledAcceptanceRequest(ctx context.Context, request uciInsta
 	if request.ReadinessTimeout > request.OperationTimeout {
 		return errors.New("UCI installed acceptance readiness timeout exceeds operation timeout")
 	}
+	if err := uciValidateInstalledAcceptanceEmbeddingProvider(request.EmbeddingProvider); err != nil {
+		return err
+	}
 	if err := uciValidateInstalledAcceptanceSourceRoot(request.CandidateSourceRoot); err != nil {
 		return err
 	}
@@ -752,6 +766,20 @@ func uciValidateInstalledAcceptanceRequest(ctx context.Context, request uciInsta
 	}
 	if err := uciValidateInstalledAcceptanceFixture(request.Fixture); err != nil {
 		return err
+	}
+	return nil
+}
+
+func uciValidateInstalledAcceptanceEmbeddingProvider(provider *uciInstalledAcceptanceEmbeddingProvider) error {
+	if provider == nil {
+		return nil
+	}
+	if provider.URL == "" || provider.Model == "" || provider.Key == "" || strings.TrimSpace(provider.URL) != provider.URL || strings.TrimSpace(provider.Model) != provider.Model || strings.TrimSpace(provider.Key) != provider.Key {
+		return errors.New("installed acceptance embedding provider is incomplete")
+	}
+	parsed, err := url.Parse(provider.URL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return errors.New("installed acceptance embedding provider URL is invalid")
 	}
 	return nil
 }
@@ -954,6 +982,12 @@ func uciInstalledAcceptanceParserBundleDigest() string {
 func uciCreateInstalledAcceptanceWorktrees(ctx context.Context, fixtureRoot string, fixture uciInstalledAcceptanceFixture, anchorProjectID string) (uciInstalledAcceptanceWorktreesFixture, uciInstalledAcceptanceWorktrees, error) {
 	primaryRoot := filepath.Join(fixtureRoot, "primary")
 	linkedRoot := filepath.Join(fixtureRoot, "linked")
+	auxiliaryRoots := []string{
+		filepath.Join(fixtureRoot, "auxiliary-1"),
+		filepath.Join(fixtureRoot, "auxiliary-2"),
+		filepath.Join(fixtureRoot, "auxiliary-3"),
+		filepath.Join(fixtureRoot, "auxiliary-4"),
+	}
 	if err := os.MkdirAll(filepath.Dir(filepath.Join(primaryRoot, fixture.RelativePath)), 0o700); err != nil {
 		return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, fmt.Errorf("create installed acceptance primary fixture: %w", err)
 	}
@@ -976,14 +1010,17 @@ func uciCreateInstalledAcceptanceWorktrees(ctx context.Context, fixtureRoot stri
 	if err := os.WriteFile(filepath.Join(primaryRoot, uciInstalledAcceptanceParserCanaryRelativePath), []byte(uciInstalledAcceptanceParserCanarySource), 0o600); err != nil {
 		return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, fmt.Errorf("write installed acceptance parser canary: %w", err)
 	}
-	for _, args := range [][]string{
+	commands := [][]string{
 		{"init"},
 		{"config", "user.email", "uci-installed@example.test"},
 		{"config", "user.name", "UCI Installed Acceptance"},
 		{"add", "--", ".engram-project", fixture.RelativePath, uciInstalledAcceptanceParserCanaryRelativePath},
 		{"commit", "-m", "create installed UCI fixture"},
-		{"worktree", "add", "--detach", linkedRoot, "HEAD"},
-	} {
+	}
+	for _, root := range append([]string{linkedRoot}, auxiliaryRoots...) {
+		commands = append(commands, []string{"worktree", "add", "--detach", root, "HEAD"})
+	}
+	for _, args := range commands {
 		if err := uciRunInstalledAcceptanceGit(ctx, primaryRoot, args...); err != nil {
 			return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, err
 		}
@@ -995,6 +1032,13 @@ func uciCreateInstalledAcceptanceWorktrees(ctx context.Context, fixtureRoot stri
 	linkedRoot, err = uciInstalledAcceptancePhysicalPath(linkedRoot)
 	if err != nil {
 		return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, fmt.Errorf("resolve installed acceptance linked checkout: %w", err)
+	}
+	for index, root := range auxiliaryRoots {
+		physical, physicalErr := uciInstalledAcceptancePhysicalPath(root)
+		if physicalErr != nil {
+			return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, fmt.Errorf("resolve installed acceptance auxiliary checkout: %w", physicalErr)
+		}
+		auxiliaryRoots[index] = physical
 	}
 	if err := os.WriteFile(filepath.Join(primaryRoot, fixture.RelativePath), []byte(fixture.PrimarySource), 0o600); err != nil {
 		return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, fmt.Errorf("write installed acceptance primary dirty source: %w", err)
@@ -1009,6 +1053,12 @@ func uciCreateInstalledAcceptanceWorktrees(ctx context.Context, fixtureRoot stri
 	linkedHead, err := uciReadInstalledAcceptanceGit(ctx, linkedRoot, "rev-parse", "HEAD")
 	if err != nil {
 		return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, err
+	}
+	for _, root := range auxiliaryRoots {
+		auxiliaryHead, auxiliaryErr := uciReadInstalledAcceptanceGit(ctx, root, "rev-parse", "HEAD")
+		if auxiliaryErr != nil || auxiliaryHead != primaryHead {
+			return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, errors.New("installed acceptance auxiliary worktree is not at the shared HEAD")
+		}
 	}
 	primaryDirty, err := uciInstalledAcceptanceGitPathDirty(ctx, primaryRoot, fixture.RelativePath)
 	if err != nil {
@@ -1035,7 +1085,7 @@ func uciCreateInstalledAcceptanceWorktrees(ctx context.Context, fixtureRoot stri
 	if !result.LinkedGitFile || !result.SameHead || !result.PrimaryDirty || !result.LinkedDirty {
 		return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, errors.New("installed acceptance Git worktree topology is invalid")
 	}
-	return uciInstalledAcceptanceWorktreesFixture{primaryRoot: primaryRoot, linkedRoot: linkedRoot, head: primaryHead}, result, nil
+	return uciInstalledAcceptanceWorktreesFixture{primaryRoot: primaryRoot, linkedRoot: linkedRoot, auxiliaryRoots: auxiliaryRoots, head: primaryHead}, result, nil
 }
 
 func uciRunInstalledAcceptanceGit(ctx context.Context, directory string, args ...string) error {
@@ -1170,10 +1220,14 @@ func uciPrepareInstalledAcceptanceAuthority(ctx context.Context, dsn string, wor
 	if err != nil {
 		return nil, fmt.Errorf("create installed acceptance source: %w", err)
 	}
-	for client, root := range map[string]string{
+	checkoutRoots := map[string]string{
 		uciInstalledAcceptanceClientA: worktrees.primaryRoot,
 		uciInstalledAcceptanceClientB: worktrees.linkedRoot,
-	} {
+	}
+	for index, root := range worktrees.auxiliaryRoots {
+		checkoutRoots[fmt.Sprintf("auxiliary-%d", index+1)] = root
+	}
+	for client, root := range checkoutRoots {
 		locatorRef, locatorErr := uciInstalledAcceptanceFileURI(root)
 		if locatorErr != nil {
 			return nil, fmt.Errorf("resolve installed acceptance checkout locator: %w", locatorErr)
@@ -1425,15 +1479,20 @@ func uciInstalledAcceptanceEnvironment(request uciInstalledAcceptanceRequest, au
 	if err != nil {
 		return nil, nil, err
 	}
+	embeddingProvider := uciInstalledAcceptanceEmbeddingProvider{}
+	if request.EmbeddingProvider != nil {
+		embeddingProvider = *request.EmbeddingProvider
+	}
+
 	serverEnvironment := []string{
 		"DATABASE_DSN=" + authority.scopedDSN,
 		"ENGRAM_WORKER_HOST=" + request.LoopbackHost,
 		"ENGRAM_WORKER_PORT=" + strconv.Itoa(serverPort),
 		"ENGRAM_AUTH_ADMIN_TOKEN=" + adminToken,
 		"ENGRAM_CODE_INTEL_ENABLED=true",
-		"ENGRAM_EMBEDDING_URL=",
-		"ENGRAM_EMBEDDING_MODEL=",
-		"ENGRAM_EMBEDDING_API_KEY=",
+		"ENGRAM_EMBEDDING_URL=" + embeddingProvider.URL,
+		"ENGRAM_EMBEDDING_MODEL=" + embeddingProvider.Model,
+		"ENGRAM_EMBEDDING_API_KEY=" + embeddingProvider.Key,
 		"ENGRAM_RERANK_URL=",
 		"ENGRAM_RERANK_MODEL=",
 		"ENGRAM_RERANK_API_KEY=",
@@ -3972,6 +4031,38 @@ func uciExerciseInstalledAcceptanceWatcher(
 	}, nil
 }
 
+// uciWaitForInstalledAcceptanceWatcherRun polls the normal installed status
+// path until the watcher owns a new run. It returns context expiry rather than
+// treating an unchanged status as evidence that the watcher is healthy.
+func uciWaitForInstalledAcceptanceWatcherRun(
+	ctx context.Context,
+	previousRunID string,
+	observe func(context.Context) (uciInstalledAcceptanceStatus, error),
+) (uciInstalledAcceptanceStatus, error) {
+	if previousRunID == "" || observe == nil {
+		return uciInstalledAcceptanceStatus{}, errors.New("installed acceptance watcher status target is incomplete")
+	}
+	ticker := time.NewTicker(uciInstalledAcceptanceQuiescencePollInterval)
+	defer ticker.Stop()
+	for {
+		status, err := observe(ctx)
+		if err != nil {
+			return uciInstalledAcceptanceStatus{}, err
+		}
+		if status.error != "" {
+			return uciInstalledAcceptanceStatus{}, fmt.Errorf("installed standard MCP watcher status error: %s", uciInstalledAcceptanceSafeErrorDetail(status.error))
+		}
+		if status.runID != "" && status.runID != previousRunID {
+			return status, nil
+		}
+		select {
+		case <-ctx.Done():
+			return uciInstalledAcceptanceStatus{}, fmt.Errorf("wait for installed acceptance watcher run: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
 func uciWaitForInstalledAcceptanceWatcherPublication(
 	ctx context.Context,
 	client *uciInstalledAcceptanceMCPClient,
@@ -3981,31 +4072,19 @@ func uciWaitForInstalledAcceptanceWatcherPublication(
 	if client == nil || selection.contextHandle == "" || previous.runID == "" {
 		return uciInstalledAcceptancePublication{}, errors.New("installed acceptance watcher status target is incomplete")
 	}
-	ticker := time.NewTicker(uciInstalledAcceptanceQuiescencePollInterval)
-	defer ticker.Stop()
-	for {
-		status, err := uciInstalledAcceptanceStatusForSelection(ctx, client, selection)
-		if err != nil {
-			return uciInstalledAcceptancePublication{}, err
-		}
-		if status.error != "" {
-			return uciInstalledAcceptancePublication{}, fmt.Errorf("installed standard MCP watcher status error: %s", uciInstalledAcceptanceSafeErrorDetail(status.error))
-		}
-		if status.runID != "" && status.runID != previous.runID {
-			watchedSelection := selection
-			watchedSelection.runID = status.runID
-			barrier, barrierErr := uciWaitForInstalledAcceptanceBarrier(ctx, client, watchedSelection)
-			if barrierErr != nil {
-				return uciInstalledAcceptancePublication{}, barrierErr
-			}
-			return uciWaitForInstalledAcceptanceQuiescence(ctx, client, watchedSelection, barrier)
-		}
-		select {
-		case <-ctx.Done():
-			return uciInstalledAcceptancePublication{}, fmt.Errorf("wait for installed acceptance watcher run: %w", ctx.Err())
-		case <-ticker.C:
-		}
+	status, err := uciWaitForInstalledAcceptanceWatcherRun(ctx, previous.runID, func(ctx context.Context) (uciInstalledAcceptanceStatus, error) {
+		return uciInstalledAcceptanceStatusForSelection(ctx, client, selection)
+	})
+	if err != nil {
+		return uciInstalledAcceptancePublication{}, err
 	}
+	watchedSelection := selection
+	watchedSelection.runID = status.runID
+	barrier, err := uciWaitForInstalledAcceptanceBarrier(ctx, client, watchedSelection)
+	if err != nil {
+		return uciInstalledAcceptancePublication{}, err
+	}
+	return uciWaitForInstalledAcceptanceQuiescence(ctx, client, watchedSelection, barrier)
 }
 
 func uciWaitForInstalledAcceptanceWatcherState(
