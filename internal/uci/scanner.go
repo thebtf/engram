@@ -231,8 +231,10 @@ type Scanner struct {
 	files  ScannerFileSystem
 	policy ScannerPolicy
 
-	topologyMu    sync.Mutex
-	topologyCache *scannerTopologyCache
+	topologyMu     sync.Mutex
+	topologyCache  *scannerTopologyCache
+	candidateMu    sync.Mutex
+	candidateCache *scannerCandidateCache
 }
 
 // NewScanner constructs a boundary scanner. Its policy slice is copied so a
@@ -283,7 +285,7 @@ func (scanner *Scanner) Scan(ctx context.Context, evidence AuthorizedRootEvidenc
 	objectFormat := topology.objectFormat
 	result.Observation.ObjectFormat = scannerStringPointer(objectFormat)
 
-	statusOutput, err := scanner.gitOutput(ctx, root, &result.Diagnostics.GitStatusDuration, "status", "--porcelain=v2", "--branch", "-z")
+	statusOutput, err := scanner.gitOutput(ctx, root, &result.Diagnostics.GitStatusDuration, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all")
 	if err != nil {
 		return scanner.classifyGitError(result, started, err)
 	}
@@ -299,18 +301,9 @@ func (scanner *Scanner) Scan(ctx context.Context, evidence AuthorizedRootEvidenc
 	}
 	result.Observation.Dirty = len(statusRecords) > 0
 
-	candidateOutput, err := scanner.gitOutput(ctx, root, &result.Diagnostics.GitCandidatesDuration, "ls-files", "--stage", "--others", "--exclude-standard", "-t", "-z")
+	candidates, err := scanner.scanCandidates(ctx, root, topology, statusRecords, &result.Diagnostics.GitCandidatesDuration)
 	if err != nil {
 		return scanner.classifyGitError(result, started, err)
-	}
-	staged, untracked, err := scannerCombinedCandidates(candidateOutput, objectFormat)
-	if err != nil {
-		return scanner.failed(result, started, err)
-	}
-
-	candidates, err := scannerMergeCandidates(staged, untracked, scanner.policy.IncludeUntracked)
-	if err != nil {
-		return scanner.failed(result, started, err)
 	}
 	result.Diagnostics.CandidateCount = len(candidates)
 	result.Files = make([]ScannerFile, 0, len(candidates))
@@ -376,6 +369,18 @@ type scannerRepositoryTopology struct {
 	objectFormat string
 }
 
+type scannerCandidateCache struct {
+	topology scannerRepositoryTopology
+	index    scannerIndexFingerprint
+	tracked  []scannerCandidate
+}
+
+type scannerIndexFingerprint struct {
+	path    string
+	present bool
+	digest  [sha256.Size]byte
+}
+
 func (scanner *Scanner) repositoryTopology(ctx context.Context, root string, rootInfo ScannerFileInfo, duration *time.Duration) (scannerRepositoryTopology, error) {
 	input, err := scanner.topologyInput(root, rootInfo)
 	if err != nil {
@@ -385,6 +390,7 @@ func (scanner *Scanner) repositoryTopology(ctx context.Context, root string, roo
 	if topology, ok := scanner.cachedTopology(input); ok {
 		return topology, nil
 	}
+	scanner.clearCandidateCache()
 
 	output, err := scanner.gitOutput(ctx, root, duration, "rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir", "--git-path", "HEAD", "--show-object-format")
 	if err != nil {
@@ -443,15 +449,128 @@ func (scanner *Scanner) storeTopology(input scannerTopologyInput, topology scann
 
 func (scanner *Scanner) clearTopologyCache() {
 	scanner.topologyMu.Lock()
-	defer scanner.topologyMu.Unlock()
 	scanner.topologyCache = nil
+	scanner.topologyMu.Unlock()
+	scanner.clearCandidateCache()
 }
 
 func scannerTopologyInputsEqual(left, right scannerTopologyInput) bool {
+	if !scannerPathsEqual(left.root, right.root) || left.rootInfo.Mode != right.rootInfo.Mode || left.rootInfo.ReparsePoint != right.rootInfo.ReparsePoint || left.markerInfo.Mode != right.markerInfo.Mode || left.markerInfo.ReparsePoint != right.markerInfo.ReparsePoint {
+		return false
+	}
+	return !left.markerInfo.Mode.IsRegular() || left.markerFingerprint == right.markerFingerprint
+}
+
+func (scanner *Scanner) scanCandidates(ctx context.Context, root string, topology scannerRepositoryTopology, statusRecords []string, duration *time.Duration) ([]scannerCandidate, error) {
+	untracked, err := scannerStatusUntrackedCandidates(statusRecords)
+	if err != nil {
+		return nil, err
+	}
+
+	index, err := scanner.indexFingerprint(topology)
+	if err != nil {
+		scanner.clearCandidateCache()
+		return nil, err
+	}
+	tracked, cached := scanner.cachedCandidates(topology, index)
+	if !cached {
+		output, err := scanner.gitOutput(ctx, root, duration, "ls-files", "--stage", "--others", "--exclude-standard", "-t", "-z")
+		if err != nil {
+			scanner.clearCandidateCache()
+			return nil, err
+		}
+		tracked, _, err = scannerCombinedCandidates(output, topology.objectFormat)
+		if err != nil {
+			scanner.clearCandidateCache()
+			return nil, err
+		}
+
+		current, err := scanner.indexFingerprint(topology)
+		if err != nil {
+			scanner.clearCandidateCache()
+			return nil, err
+		}
+		if !scannerIndexFingerprintsEqual(index, current) {
+			scanner.clearCandidateCache()
+			return nil, fmt.Errorf("%w: Git index changed during candidate enumeration", ErrScannerMalformed)
+		}
+		scanner.storeCandidates(topology, current, tracked)
+	}
+
+	return scannerMergeCandidates(tracked, untracked, scanner.policy.IncludeUntracked)
+}
+
+func (scanner *Scanner) indexFingerprint(topology scannerRepositoryTopology) (scannerIndexFingerprint, error) {
+	if topology.gitDir == "" || strings.IndexByte(topology.gitDir, 0) >= 0 {
+		return scannerIndexFingerprint{}, fmt.Errorf("%w: Git index path", ErrScannerMalformed)
+	}
+
+	indexPath := filepath.Join(topology.gitDir, "index")
+	initial, err := scanner.files.Lstat(indexPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return scannerIndexFingerprint{path: indexPath}, nil
+	}
+	if err != nil || scannerInfoIsReparse(initial) || !initial.Mode.IsRegular() || initial.Size < 0 {
+		return scannerIndexFingerprint{}, fmt.Errorf("%w: Git index unavailable", ErrScannerMalformed)
+	}
+
+	body, err := scanner.files.ReadFile(indexPath)
+	if err != nil {
+		return scannerIndexFingerprint{}, fmt.Errorf("%w: Git index unavailable", ErrScannerMalformed)
+	}
+	current, err := scanner.files.Lstat(indexPath)
+	if err != nil || !scannerSameFileInfo(initial, current) || current.Size < 0 || int64(len(body)) != current.Size {
+		return scannerIndexFingerprint{}, fmt.Errorf("%w: Git index changed", ErrScannerMalformed)
+	}
+	return scannerIndexFingerprint{
+		path:    indexPath,
+		present: true,
+		digest:  sha256.Sum256(body),
+	}, nil
+}
+
+func (scanner *Scanner) cachedCandidates(topology scannerRepositoryTopology, index scannerIndexFingerprint) ([]scannerCandidate, bool) {
+	scanner.candidateMu.Lock()
+	defer scanner.candidateMu.Unlock()
+	if scanner.candidateCache == nil || !scannerRepositoryTopologiesEqual(scanner.candidateCache.topology, topology) || !scannerIndexFingerprintsEqual(scanner.candidateCache.index, index) {
+		return nil, false
+	}
+	return scannerCopyCandidates(scanner.candidateCache.tracked), true
+}
+
+func (scanner *Scanner) storeCandidates(topology scannerRepositoryTopology, index scannerIndexFingerprint, tracked []scannerCandidate) {
+	scanner.candidateMu.Lock()
+	defer scanner.candidateMu.Unlock()
+	scanner.candidateCache = &scannerCandidateCache{
+		topology: topology,
+		index:    index,
+		tracked:  scannerCopyCandidates(tracked),
+	}
+}
+
+func (scanner *Scanner) clearCandidateCache() {
+	scanner.candidateMu.Lock()
+	defer scanner.candidateMu.Unlock()
+	scanner.candidateCache = nil
+}
+
+func scannerRepositoryTopologiesEqual(left, right scannerRepositoryTopology) bool {
 	return scannerPathsEqual(left.root, right.root) &&
-		scannerSameFileInfo(left.rootInfo, right.rootInfo) &&
-		scannerSameFileInfo(left.markerInfo, right.markerInfo) &&
-		left.markerFingerprint == right.markerFingerprint
+		scannerPathsEqual(left.gitDir, right.gitDir) &&
+		scannerPathsEqual(left.commonGitDir, right.commonGitDir) &&
+		scannerPathsEqual(left.headPath, right.headPath) &&
+		left.objectFormat == right.objectFormat
+}
+
+func scannerIndexFingerprintsEqual(left, right scannerIndexFingerprint) bool {
+	if !scannerPathsEqual(left.path, right.path) || left.present != right.present {
+		return false
+	}
+	return !left.present || left.digest == right.digest
+}
+
+func scannerCopyCandidates(candidates []scannerCandidate) []scannerCandidate {
+	return append([]scannerCandidate(nil), candidates...)
 }
 
 func scannerRepositoryTopologyFromOutput(output []byte, root string) (scannerRepositoryTopology, error) {
@@ -743,6 +862,86 @@ func scannerCombinedCandidates(output []byte, objectFormat string) ([]scannerCan
 		}
 	}
 	return staged, untracked, nil
+}
+
+func scannerStatusUntrackedCandidates(records []string) ([]scannerCandidate, error) {
+	candidates := make([]scannerCandidate, 0, len(records))
+	for index := 0; index < len(records); index++ {
+		record := records[index]
+		if len(record) < 2 || record[1] != ' ' {
+			return nil, fmt.Errorf("%w: status record", ErrScannerMalformed)
+		}
+		switch record[0] {
+		case '?':
+			candidate := scannerCandidate{path: record[2:]}
+			if err := scannerValidateGitPath(candidate.path); err != nil {
+				return nil, err
+			}
+			candidates = append(candidates, candidate)
+		case '!':
+			if err := scannerValidateGitPath(record[2:]); err != nil {
+				return nil, err
+			}
+		case '1':
+			fields, candidatePath, err := scannerStatusRecordFields(record, 8)
+			if err != nil || fields[0] != "1" || !scannerValidStatusXY(fields[1]) || scannerValidateGitPath(candidatePath) != nil {
+				return nil, fmt.Errorf("%w: ordinary status record", ErrScannerMalformed)
+			}
+		case '2':
+			fields, candidatePath, err := scannerStatusRecordFields(record, 9)
+			if err != nil || fields[0] != "2" || !scannerValidStatusXY(fields[1]) || scannerValidateGitPath(candidatePath) != nil || index+1 >= len(records) {
+				return nil, fmt.Errorf("%w: rename status record", ErrScannerMalformed)
+			}
+			originalPath := records[index+1]
+			if err := scannerValidateGitPath(originalPath); err != nil {
+				return nil, err
+			}
+			index++
+			if fields[1][0] == '.' && (fields[1][1] == 'R' || fields[1][1] == 'C') {
+				candidates = append(candidates, scannerCandidate{path: candidatePath})
+			}
+		case 'u':
+			fields, candidatePath, err := scannerStatusRecordFields(record, 10)
+			if err != nil || fields[0] != "u" || !scannerValidStatusXY(fields[1]) || scannerValidateGitPath(candidatePath) != nil {
+				return nil, fmt.Errorf("%w: unmerged status record", ErrScannerMalformed)
+			}
+		default:
+			return nil, fmt.Errorf("%w: status record kind", ErrScannerMalformed)
+		}
+	}
+	return candidates, nil
+}
+
+func scannerStatusRecordFields(record string, count int) ([]string, string, error) {
+	fields := make([]string, 0, count)
+	start := 0
+	for range count {
+		end := strings.IndexByte(record[start:], ' ')
+		if end <= 0 {
+			return nil, "", fmt.Errorf("%w: status record fields", ErrScannerMalformed)
+		}
+		end += start
+		fields = append(fields, record[start:end])
+		start = end + 1
+	}
+	if start >= len(record) {
+		return nil, "", fmt.Errorf("%w: status record path", ErrScannerMalformed)
+	}
+	return fields, record[start:], nil
+}
+
+func scannerValidStatusXY(value string) bool {
+	if len(value) != 2 {
+		return false
+	}
+	for index := range value {
+		switch value[index] {
+		case '.', 'M', 'T', 'A', 'D', 'R', 'C', 'U':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func scannerStagedCandidate(record, objectFormat string) (scannerCandidate, error) {

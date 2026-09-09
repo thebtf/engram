@@ -28,6 +28,7 @@ type uciPreparedScannerAggregate struct {
 	ScanCompletedAt         time.Time `json:"scan_completed_at"`
 	GitTopologyDurationNS   int64     `json:"git_topology_duration_ns"`
 	GitStatusDurationNS     int64     `json:"git_status_duration_ns"`
+	GitCandidatesDurationNS int64     `json:"git_candidates_duration_ns"`
 	GitStagedDurationNS     int64     `json:"git_staged_duration_ns"`
 	GitUntrackedDurationNS  int64     `json:"git_untracked_duration_ns"`
 	CandidateLoopDurationNS int64     `json:"candidate_loop_duration_ns"`
@@ -53,6 +54,7 @@ func uciPreparedScannerAggregateFor(local uciPreparedLocalTarget, scan uci.Scann
 		ScanCompletedAt:         scan.Observation.ScanEnd,
 		GitTopologyDurationNS:   diagnostics.GitTopologyDuration.Nanoseconds(),
 		GitStatusDurationNS:     diagnostics.GitStatusDuration.Nanoseconds(),
+		GitCandidatesDurationNS: diagnostics.GitCandidatesDuration.Nanoseconds(),
 		GitStagedDurationNS:     diagnostics.GitStagedDuration.Nanoseconds(),
 		GitUntrackedDurationNS:  diagnostics.GitUntrackedDuration.Nanoseconds(),
 		CandidateLoopDurationNS: diagnostics.CandidateLoopDuration.Nanoseconds(),

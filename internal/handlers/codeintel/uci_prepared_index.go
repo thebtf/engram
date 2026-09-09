@@ -182,6 +182,7 @@ func (collaborator *UCIPreparedIndexCollaborator) scanCurrent(ctx context.Contex
 				"scan_completed_at", aggregate.ScanCompletedAt.Format(time.RFC3339Nano),
 				"git_topology_duration_ns", aggregate.GitTopologyDurationNS,
 				"git_status_duration_ns", aggregate.GitStatusDurationNS,
+				"git_candidates_duration_ns", aggregate.GitCandidatesDurationNS,
 				"git_staged_duration_ns", aggregate.GitStagedDurationNS,
 				"git_untracked_duration_ns", aggregate.GitUntrackedDurationNS,
 				"candidate_loop_duration_ns", aggregate.CandidateLoopDurationNS,

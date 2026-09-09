@@ -805,6 +805,7 @@ func TestUCIPreparedIndexLogsOneCorrelatedScannerAggregate(t *testing.T) {
 	fixture.scanner.result.Diagnostics = uci.ScannerDiagnostics{
 		GitTopologyDuration:   11 * time.Nanosecond,
 		GitStatusDuration:     13 * time.Nanosecond,
+		GitCandidatesDuration: 15 * time.Nanosecond,
 		GitStagedDuration:     17 * time.Nanosecond,
 		GitUntrackedDuration:  19 * time.Nanosecond,
 		CandidateLoopDuration: 23 * time.Nanosecond,
@@ -833,6 +834,7 @@ func TestUCIPreparedIndexLogsOneCorrelatedScannerAggregate(t *testing.T) {
 	for field, want := range map[string]float64{
 		"git_topology_duration_ns":   11,
 		"git_status_duration_ns":     13,
+		"git_candidates_duration_ns": 15,
 		"git_staged_duration_ns":     17,
 		"git_untracked_duration_ns":  19,
 		"candidate_loop_duration_ns": 23,

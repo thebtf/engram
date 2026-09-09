@@ -326,7 +326,7 @@ func TestUCIScannerRecordsPhaseDiagnostics(t *testing.T) {
 	}
 	for _, operation := range []string{
 		"rev-parse --show-toplevel --absolute-git-dir --git-common-dir --git-path HEAD --show-object-format",
-		"status --porcelain=v2 --branch -z",
+		"status --porcelain=v2 --branch -z --untracked-files=all",
 		"ls-files --stage --others --exclude-standard -t -z",
 	} {
 		fixture.git.delays[operation] = time.Millisecond
@@ -578,8 +578,7 @@ func TestUCIScannerCachesTopologyAndKeepsStatusLive(t *testing.T) {
 	scannerAssertOptionalString(t, result.Observation.HeadOID, fixture.git.headOID, true, "detached observation.head_oid")
 	scannerAssertOptionalString(t, result.Observation.RefLabel, "", false, "detached observation.ref_label")
 	scannerAssertGitOperations(t, fixture.git, fixture.root, 3,
-		"status --porcelain=v2 --branch -z",
-		"ls-files --stage --others --exclude-standard -t -z",
+		"status --porcelain=v2 --branch -z --untracked-files=all",
 	)
 
 	fixture.git.hasHeadOID = false
@@ -591,9 +590,8 @@ func TestUCIScannerCachesTopologyAndKeepsStatusLive(t *testing.T) {
 	}
 	scannerAssertOptionalString(t, result.Observation.HeadOID, "", false, "unborn observation.head_oid")
 	scannerAssertOptionalString(t, result.Observation.RefLabel, "main", true, "unborn observation.ref_label")
-	scannerAssertGitOperations(t, fixture.git, fixture.root, 5,
-		"status --porcelain=v2 --branch -z",
-		"ls-files --stage --others --exclude-standard -t -z",
+	scannerAssertGitOperations(t, fixture.git, fixture.root, 4,
+		"status --porcelain=v2 --branch -z --untracked-files=all",
 	)
 }
 
@@ -614,7 +612,7 @@ func TestUCIScannerInvalidatesCachedTopologyForMarkerChanges(t *testing.T) {
 					t.Fatalf("Scan(%d) error = %v", scan, err)
 				}
 			}
-			scannerAssertGitCallCount(t, fixture.git, 5)
+			scannerAssertGitCallCount(t, fixture.git, 4)
 
 			marker := fixture.path(".git")
 			if test.linked {
@@ -632,7 +630,7 @@ func TestUCIScannerInvalidatesCachedTopologyForMarkerChanges(t *testing.T) {
 			if _, err := scanner.Scan(t.Context(), evidence); err != nil {
 				t.Fatalf("Scan after marker replacement error = %v", err)
 			}
-			scannerAssertGitCallCount(t, fixture.git, 8)
+			scannerAssertGitCallCount(t, fixture.git, 7)
 
 			if err := os.RemoveAll(marker); err != nil {
 				t.Fatalf("remove marker: %v", err)
@@ -640,7 +638,7 @@ func TestUCIScannerInvalidatesCachedTopologyForMarkerChanges(t *testing.T) {
 			if _, err := scanner.Scan(t.Context(), evidence); !errors.Is(err, ErrScannerInvalidRoot) {
 				t.Fatalf("Scan after marker removal error = %v, want ErrScannerInvalidRoot", err)
 			}
-			scannerAssertGitCallCount(t, fixture.git, 8)
+			scannerAssertGitCallCount(t, fixture.git, 7)
 
 			if test.linked {
 				if err := os.WriteFile(marker, []byte("gitdir: "+fixture.git.gitDir+"\n"), 0o600); err != nil {
@@ -654,7 +652,7 @@ func TestUCIScannerInvalidatesCachedTopologyForMarkerChanges(t *testing.T) {
 			if _, err := scanner.Scan(t.Context(), evidence); err != nil {
 				t.Fatalf("Scan after marker restoration error = %v", err)
 			}
-			scannerAssertGitCallCount(t, fixture.git, 11)
+			scannerAssertGitCallCount(t, fixture.git, 10)
 		})
 	}
 }
@@ -683,6 +681,315 @@ func TestUCIScannerRecoversAfterCachedTopologyFailure(t *testing.T) {
 		t.Fatalf("Scan after topology recovery error = %v", err)
 	}
 	scannerAssertGitCallCount(t, fixture.git, 7)
+}
+
+func TestUCIScannerCandidateCacheMatchesUncachedRealGit(t *testing.T) {
+	t.Run("modified tracked file", func(t *testing.T) {
+		fixture := newScannerRealFixture(t)
+		fixture.warm(t)
+		scannerRealWrite(t, fixture.root, "tracked.go", []byte("package fixture\nconst Version = 2\n"))
+		_, calls := fixture.scanAndCompare(t)
+		scannerAssertRecordedGitOperations(t, calls, fixture.root, "status --porcelain=v2 --branch -z --untracked-files=all")
+	})
+
+	t.Run("new untracked file", func(t *testing.T) {
+		fixture := newScannerRealFixture(t)
+		fixture.warm(t)
+		scannerRealWrite(t, fixture.root, "new.go", []byte("package fixture\n"))
+		result, calls := fixture.scanAndCompare(t)
+		scannerAssertFile(t, result, "new.go", IndexFilePresent, ScannerExclusionNone, []byte("package fixture\n"))
+		scannerAssertRecordedGitOperations(t, calls, fixture.root, "status --porcelain=v2 --branch -z --untracked-files=all")
+	})
+
+	t.Run("nested ignore negation", func(t *testing.T) {
+		fixture := newScannerRealFixture(t)
+		fixture.warm(t)
+		scannerRealWrite(t, fixture.root, "src/.gitignore", []byte("*\n!kept.go\n"))
+		scannerRealWrite(t, fixture.root, "src/kept.go", []byte("package kept\n"))
+		scannerRealWrite(t, fixture.root, "src/ignored.go", []byte("package ignored\n"))
+		result, calls := fixture.scanAndCompare(t)
+		scannerAssertFile(t, result, "src/kept.go", IndexFilePresent, ScannerExclusionNone, []byte("package kept\n"))
+		scannerAssertFileAbsent(t, result, "src/ignored.go")
+		scannerAssertRecordedGitOperations(t, calls, fixture.root, "status --porcelain=v2 --branch -z --untracked-files=all")
+	})
+
+	t.Run("deleted tracked file", func(t *testing.T) {
+		fixture := newScannerRealFixture(t)
+		fixture.warm(t)
+		if err := os.Remove(filepath.Join(fixture.root, "tracked.go")); err != nil {
+			t.Fatalf("remove tracked file: %v", err)
+		}
+		_, calls := fixture.scanAndCompare(t)
+		scannerAssertRecordedGitOperations(t, calls, fixture.root, "status --porcelain=v2 --branch -z --untracked-files=all")
+	})
+
+	t.Run("unstaged rename", func(t *testing.T) {
+		fixture := newScannerRealFixture(t)
+		fixture.warm(t)
+		if err := os.Rename(filepath.Join(fixture.root, "tracked.go"), filepath.Join(fixture.root, "renamed.go")); err != nil {
+			t.Fatalf("rename tracked file: %v", err)
+		}
+		result, calls := fixture.scanAndCompare(t)
+		scannerAssertFile(t, result, "renamed.go", IndexFilePresent, ScannerExclusionNone, []byte("package fixture\nconst Version = 1\n"))
+		scannerAssertRecordedGitOperations(t, calls, fixture.root, "status --porcelain=v2 --branch -z --untracked-files=all")
+	})
+
+	t.Run("staged file and rename", func(t *testing.T) {
+		fixture := newScannerRealFixture(t)
+		fixture.warm(t)
+		scannerRealWrite(t, fixture.root, "tracked.go", []byte("package fixture\nconst Version = 3\n"))
+		scannerRealGit(t, fixture.root, "add", "--", "tracked.go")
+		_, calls := fixture.scanAndCompare(t)
+		scannerAssertRecordedGitOperations(t, calls, fixture.root,
+			"status --porcelain=v2 --branch -z --untracked-files=all",
+			"ls-files --stage --others --exclude-standard -t -z",
+		)
+
+		scannerRealGit(t, fixture.root, "mv", "-f", "tracked.go", "renamed.go")
+		result, calls := fixture.scanAndCompare(t)
+		scannerAssertFile(t, result, "renamed.go", IndexFilePresent, ScannerExclusionNone, []byte("package fixture\nconst Version = 3\n"))
+		scannerAssertRecordedGitOperations(t, calls, fixture.root,
+			"status --porcelain=v2 --branch -z --untracked-files=all",
+			"ls-files --stage --others --exclude-standard -t -z",
+		)
+	})
+
+	t.Run("case-only staged rename", func(t *testing.T) {
+		fixture := newScannerRealFixture(t)
+		fixture.warm(t)
+		scannerRealGit(t, fixture.root, "mv", "-f", "Case.go", "case.go")
+		result, calls := fixture.scanAndCompare(t)
+		scannerAssertFile(t, result, "case.go", IndexFilePresent, ScannerExclusionNone, []byte("package fixture\nconst Case = true\n"))
+		scannerAssertFileAbsent(t, result, "Case.go")
+		scannerAssertRecordedGitOperations(t, calls, fixture.root,
+			"status --porcelain=v2 --branch -z --untracked-files=all",
+			"ls-files --stage --others --exclude-standard -t -z",
+		)
+	})
+
+	t.Run("branch switch and detached head", func(t *testing.T) {
+		fixture := newScannerRealFixture(t)
+		fixture.warm(t)
+		scannerRealGit(t, fixture.root, "branch", "cache-branch")
+		scannerRealGit(t, fixture.root, "switch", "cache-branch")
+		result, calls := fixture.scanAndCompare(t)
+		scannerAssertOptionalString(t, result.Observation.RefLabel, "cache-branch", true, "branch observation.ref_label")
+		scannerAssertRecordedGitOperations(t, calls, fixture.root, "status --porcelain=v2 --branch -z --untracked-files=all")
+
+		scannerRealGit(t, fixture.root, "checkout", "--detach")
+		result, calls = fixture.scanAndCompare(t)
+		scannerAssertOptionalString(t, result.Observation.RefLabel, "", false, "detached observation.ref_label")
+		scannerAssertRecordedGitOperations(t, calls, fixture.root, "status --porcelain=v2 --branch -z --untracked-files=all")
+	})
+
+	t.Run("unborn repository", func(t *testing.T) {
+		root := t.TempDir()
+		scannerRealGit(t, root, "init", "-b", "main")
+		scannerRealWrite(t, root, "unborn.go", []byte("package unborn\n"))
+		fixture := newScannerRealFixtureForRoot(root)
+		fixture.warm(t)
+		result, calls := fixture.scanAndCompare(t)
+		scannerAssertFile(t, result, "unborn.go", IndexFilePresent, ScannerExclusionNone, []byte("package unborn\n"))
+		scannerAssertRecordedGitOperations(t, calls, root, "status --porcelain=v2 --branch -z --untracked-files=all")
+	})
+
+	t.Run("linked worktree", func(t *testing.T) {
+		primary := newScannerRealFixture(t)
+		linkedRoot := filepath.Join(t.TempDir(), "linked")
+		scannerRealGit(t, primary.root, "worktree", "add", "--detach", linkedRoot, "HEAD")
+		fixture := newScannerRealFixtureForRoot(linkedRoot)
+		fixture.warm(t)
+		_, calls := fixture.scanAndCompare(t)
+		scannerAssertRecordedGitOperations(t, calls, linkedRoot, "status --porcelain=v2 --branch -z --untracked-files=all")
+	})
+
+	t.Run("index content changes with identical size and modification time", func(t *testing.T) {
+		fixture := newScannerRealFixture(t)
+		fixture.warm(t)
+		indexPath := scannerRealGitPath(t, fixture.root, "index")
+		scannerRealWrite(t, fixture.root, "tracked.go", []byte("package fixture\nconst Version = 2\n"))
+		scannerRealGit(t, fixture.root, "add", "--", "tracked.go")
+		_, refreshCalls := fixture.scanAndCompare(t)
+		scannerAssertRecordedGitOperations(t, refreshCalls, fixture.root,
+			"status --porcelain=v2 --branch -z --untracked-files=all",
+			"ls-files --stage --others --exclude-standard -t -z",
+		)
+		beforeInfo, err := (OSScannerFileSystem{}).Lstat(indexPath)
+		if err != nil {
+			t.Fatalf("stat index before replacement: %v", err)
+		}
+		before, err := os.ReadFile(indexPath)
+		if err != nil {
+			t.Fatalf("read index before replacement: %v", err)
+		}
+		scannerRealWrite(t, fixture.root, "tracked.go", []byte("package fixture\nconst Version = 3\n"))
+		scannerRealGit(t, fixture.root, "add", "--", "tracked.go")
+		after, err := os.ReadFile(indexPath)
+		if err != nil {
+			t.Fatalf("read index after replacement: %v", err)
+		}
+		if len(before) != len(after) || bytes.Equal(before, after) {
+			t.Fatalf("index replacement did not create an equal-size content change")
+		}
+		if err := os.Chtimes(indexPath, time.Now(), beforeInfo.ModTime); err != nil {
+			t.Fatalf("restore index modification time: %v", err)
+		}
+		afterInfo, err := (OSScannerFileSystem{}).Lstat(indexPath)
+		if err != nil {
+			t.Fatalf("stat index after timestamp restoration: %v", err)
+		}
+		if !scannerSameFileInfo(beforeInfo, afterInfo) {
+			t.Fatalf("index replacement fingerprint changed despite equal size and modification time")
+		}
+		_, calls := fixture.scanAndCompare(t)
+		scannerAssertRecordedGitOperations(t, calls, fixture.root,
+			"status --porcelain=v2 --branch -z --untracked-files=all",
+			"ls-files --stage --others --exclude-standard -t -z",
+		)
+	})
+
+	t.Run("failed candidate enumeration retries", func(t *testing.T) {
+		fixture := newScannerRealFixture(t)
+		fixture.runner.failOperation = "ls-files --stage --others --exclude-standard -t -z"
+		fixture.runner.failuresRemaining = 1
+		if _, err := fixture.scanner.Scan(t.Context(), AuthorizedRootEvidence{RootPath: fixture.root}); err == nil {
+			t.Fatal("Scan() error = nil after candidate enumeration failure")
+		}
+		scannerAssertRecordedGitOperations(t, fixture.runner.calls, fixture.root,
+			"rev-parse --show-toplevel --absolute-git-dir --git-common-dir --git-path HEAD --show-object-format",
+			"status --porcelain=v2 --branch -z --untracked-files=all",
+			"ls-files --stage --others --exclude-standard -t -z",
+		)
+		_, calls := fixture.scanAndCompare(t)
+		scannerAssertRecordedGitOperations(t, calls, fixture.root,
+			"status --porcelain=v2 --branch -z --untracked-files=all",
+			"ls-files --stage --others --exclude-standard -t -z",
+		)
+	})
+}
+
+type scannerRealFixture struct {
+	root    string
+	runner  *scannerRecordingGitRunner
+	scanner *Scanner
+}
+
+func newScannerRealFixture(t *testing.T) *scannerRealFixture {
+	t.Helper()
+	root := t.TempDir()
+	scannerRealGit(t, root, "init", "-b", "main")
+	scannerRealGit(t, root, "config", "user.email", "scanner@example.test")
+	scannerRealGit(t, root, "config", "user.name", "Scanner Fixture")
+	scannerRealWrite(t, root, "tracked.go", []byte("package fixture\nconst Version = 1\n"))
+	scannerRealWrite(t, root, "Case.go", []byte("package fixture\nconst Case = true\n"))
+	scannerRealGit(t, root, "add", "--", "tracked.go", "Case.go")
+	scannerRealGit(t, root, "commit", "-m", "scanner fixture")
+	return newScannerRealFixtureForRoot(root)
+}
+
+func newScannerRealFixtureForRoot(root string) *scannerRealFixture {
+	runner := &scannerRecordingGitRunner{}
+	return &scannerRealFixture{
+		root:    root,
+		runner:  runner,
+		scanner: NewScanner(runner, OSScannerFileSystem{}, ScannerPolicy{IncludeUntracked: true}),
+	}
+}
+
+func (fixture *scannerRealFixture) warm(t *testing.T) {
+	t.Helper()
+	_, calls := fixture.scanAndCompare(t)
+	scannerAssertRecordedGitOperations(t, calls, fixture.root,
+		"rev-parse --show-toplevel --absolute-git-dir --git-common-dir --git-path HEAD --show-object-format",
+		"status --porcelain=v2 --branch -z --untracked-files=all",
+		"ls-files --stage --others --exclude-standard -t -z",
+	)
+}
+
+func (fixture *scannerRealFixture) scanAndCompare(t *testing.T) (ScannerResult, []GitInvocation) {
+	t.Helper()
+	start := len(fixture.runner.calls)
+	result, err := fixture.scanner.Scan(t.Context(), AuthorizedRootEvidence{RootPath: fixture.root})
+	if err != nil {
+		t.Fatalf("cached Scan() error = %v", err)
+	}
+	uncached, err := NewScanner(ExecGitRunner{}, OSScannerFileSystem{}, ScannerPolicy{IncludeUntracked: true}).Scan(t.Context(), AuthorizedRootEvidence{RootPath: fixture.root})
+	if err != nil {
+		t.Fatalf("uncached Scan() error = %v", err)
+	}
+	scannerAssertSemanticallyEqual(t, result, uncached)
+	return result, append([]GitInvocation(nil), fixture.runner.calls[start:]...)
+}
+
+func scannerAssertSemanticallyEqual(t *testing.T, cached, uncached ScannerResult) {
+	t.Helper()
+	if !reflect.DeepEqual(cached.Files, uncached.Files) || !reflect.DeepEqual(cached.Census, uncached.Census) || !reflect.DeepEqual(cached.Coverage, uncached.Coverage) || cached.Observation.Dirty != uncached.Observation.Dirty || !reflect.DeepEqual(cached.Observation.HeadOID, uncached.Observation.HeadOID) || !reflect.DeepEqual(cached.Observation.ObjectFormat, uncached.Observation.ObjectFormat) || !reflect.DeepEqual(cached.Observation.RefLabel, uncached.Observation.RefLabel) {
+		t.Fatalf("cached scan differs from uncached scan: cached=%#v uncached=%#v", cached, uncached)
+	}
+}
+
+type scannerRecordingGitRunner struct {
+	calls             []GitInvocation
+	failOperation     string
+	failuresRemaining int
+}
+
+func (runner *scannerRecordingGitRunner) Run(ctx context.Context, invocation GitInvocation) (GitResult, error) {
+	runner.calls = append(runner.calls, GitInvocation{Args: append([]string(nil), invocation.Args...), Env: append([]string(nil), invocation.Env...)})
+	if scannerGitOperation(invocation.Args) == runner.failOperation && runner.failuresRemaining > 0 {
+		runner.failuresRemaining--
+		return GitResult{}, errors.New("fixture candidate enumeration unavailable")
+	}
+	return (ExecGitRunner{}).Run(ctx, invocation)
+}
+
+func scannerRealGit(t *testing.T, root string, arguments ...string) string {
+	t.Helper()
+	command := exec.CommandContext(t.Context(), "git", append([]string{"-C", root}, arguments...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %q: %v\n%s", arguments, err, output)
+	}
+	return string(output)
+}
+
+func scannerRealGitPath(t *testing.T, root, name string) string {
+	t.Helper()
+	value := filepath.FromSlash(strings.TrimSpace(scannerRealGit(t, root, "rev-parse", "--git-path", name)))
+	if !filepath.IsAbs(value) {
+		value = filepath.Join(root, value)
+	}
+	return filepath.Clean(value)
+}
+
+func scannerRealWrite(t *testing.T, root, relativePath string, body []byte) {
+	t.Helper()
+	fullPath := filepath.Join(root, filepath.FromSlash(relativePath))
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		t.Fatalf("create parent for %q: %v", relativePath, err)
+	}
+	if err := os.WriteFile(fullPath, body, 0o600); err != nil {
+		t.Fatalf("write %q: %v", relativePath, err)
+	}
+}
+
+func scannerAssertRecordedGitOperations(t *testing.T, calls []GitInvocation, root string, operations ...string) {
+	t.Helper()
+	if len(calls) != len(operations) {
+		t.Fatalf("Git process count = %d, want %d; calls=%#v", len(calls), len(operations), calls)
+	}
+	for index, want := range operations {
+		call := calls[index]
+		if len(call.Args) < 3 || call.Args[0] != "-C" || call.Args[1] != root {
+			t.Fatalf("Git invocation is not an argument-vector root-bound call: %#v", call.Args)
+		}
+		if !scannerHasEnvironment(call.Env, "GIT_OPTIONAL_LOCKS", "0") || !scannerHasEnvironment(call.Env, "GIT_TERMINAL_PROMPT", "0") {
+			t.Fatalf("Git invocation omitted required read-only environment: %#v", call.Env)
+		}
+		if got := scannerGitOperation(call.Args); got != want {
+			t.Fatalf("Git operation = %q, want %q", got, want)
+		}
+	}
 }
 
 type scannerFixture struct {
@@ -819,7 +1126,7 @@ func (git *scannerFixtureGit) Run(ctx context.Context, invocation GitInvocation)
 	switch operation {
 	case "rev-parse --show-toplevel --absolute-git-dir --git-common-dir --git-path HEAD --show-object-format":
 		return GitResult{Stdout: []byte(strings.Join([]string{git.showTopLevel, git.gitDir, git.commonGitDir, git.headPath, git.objectFormat}, "\n") + "\n")}, nil
-	case "status --porcelain=v2 --branch -z":
+	case "status --porcelain=v2 --branch -z --untracked-files=all":
 		return GitResult{Stdout: git.statusOutput()}, nil
 	case "ls-files --stage --others --exclude-standard -t -z":
 		return GitResult{Stdout: git.combinedOutput()}, nil
@@ -891,6 +1198,9 @@ func (git *scannerFixtureGit) statusOutput() []byte {
 	records := []string{"# branch.oid " + branchOID, "# branch.head " + branchHead}
 	if git.dirty {
 		records = append(records, "1 M. N... 100644 100644 100644 aaaaaaaa bbbbbbbb dirty.go")
+	}
+	for _, path := range git.untracked {
+		records = append(records, "? "+path)
 	}
 	return []byte(strings.Join(records, "\x00") + "\x00")
 }
@@ -1080,7 +1390,7 @@ func scannerAssertGitPlumbing(t *testing.T, git *scannerFixtureGit, root string)
 	t.Helper()
 	required := []string{
 		"rev-parse --show-toplevel --absolute-git-dir --git-common-dir --git-path HEAD --show-object-format",
-		"status --porcelain=v2 --branch -z",
+		"status --porcelain=v2 --branch -z --untracked-files=all",
 		"ls-files --stage --others --exclude-standard -t -z",
 	}
 	allowed := make(map[string]bool, len(required))
