@@ -22,6 +22,7 @@ import (
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/uci"
+	"github.com/thebtf/engram/internal/worker"
 )
 
 const (
@@ -105,8 +106,9 @@ func TestUCIRecordSLOMeasurement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("authorize SLO warm-up context: %v", err)
 	}
-	_ = uciSLOEnsurePathEmbedding(fixture.callerContext, fixture, baseAuthorization, "src/slo_measurement.go")
-	_ = uciSLOEnsurePathEmbedding(fixture.callerContext, fixture, baseAuthorization, "docs/slo_update.md")
+	if err := uciSLOEnsureCurrentViewEmbedding(fixture.callerContext, fixture, baseAuthorization); err != nil {
+		t.Fatalf("complete current-view SLO embeddings: %v", err)
+	}
 
 	localRTT, localRTTErr := uciSLOMeasureLocalProviderRTT(fixture)
 
@@ -211,6 +213,58 @@ func TestUCIRecordSLOMeasurement(t *testing.T) {
 	}
 	if !report.Passed {
 		t.Fatal("recorded UCI SLO report is not accepted")
+	}
+}
+
+func TestUCISLOQueryEmbeddingRequiresCurrentProfileAndCompletedReadiness(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("DATABASE_DSN")) == "" {
+		t.Skip("DATABASE_DSN not set; UCI query-embedding readiness regression requires a caller-supplied disposable PostgreSQL database")
+	}
+
+	fixture := newUCIRetrievalSliceFixture(t)
+	corpus, err := newUCISLORecordCorpus(t, fixture)
+	if err != nil {
+		t.Fatalf("publish current-profile SLO corpus: %v", err)
+	}
+	authorized, err := corpus.authorize(fixture.callerContext)
+	if err != nil {
+		t.Fatalf("authorize current-profile SLO corpus: %v", err)
+	}
+	if err := uciSLOEnsureCurrentViewEmbedding(fixture.callerContext, fixture, authorized); err != nil {
+		t.Fatalf("complete current-profile embedding job: %v", err)
+	}
+	status, err := fixture.status.Status(fixture.callerContext, authorized, "")
+	if err != nil {
+		t.Fatalf("read completed current-view embedding status: %v", err)
+	}
+	if status.Embedding.Coverage != uci.IndexCoverageComplete || status.Embedding.TotalCandidates == 0 || status.Embedding.ReadyCandidates != status.Embedding.TotalCandidates || status.Embedding.JobState == nil || *status.Embedding.JobState != uci.IndexStatusJobSucceeded {
+		t.Fatalf("current chunk-v2 embedding job is not durably complete: %#v", status.Embedding)
+	}
+
+	stale := fixture.vectorProfile
+	stale.PreprocessingRevision = "uci-retrieval-slice-semantic-v1"
+	for _, test := range []struct {
+		name          string
+		statusProfile *uci.VectorProfile
+	}{
+		{name: "nil profile", statusProfile: nil},
+		{name: "stale profile", statusProfile: &stale},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			application, err := uciSLOApplicationWithStatusProfile(fixture, test.statusProfile)
+			if err != nil {
+				t.Fatalf("compose %s application: %v", test.name, err)
+			}
+			attempt := uciSLORecordQueryEmbeddingWithApplication(fixture, application, authorized)
+			if attempt.outcome != "degraded" || attempt.reason != "query_not_healthy" {
+				t.Fatalf("%s query attempt = %#v, want degraded current-readiness rejection", test.name, attempt)
+			}
+		})
+	}
+
+	healthy := uciSLORecordQueryEmbedding(fixture, authorized)
+	if healthy.outcome != "healthy" {
+		t.Fatalf("completed chunk-v2 semantic query = %#v, want healthy semantic retrieval", healthy)
 	}
 }
 
@@ -339,6 +393,10 @@ func uciSLORegisterCheckoutCoverage(fixture *uciRetrievalSliceFixture) (int, int
 
 func newUCISLORecordCorpus(t *testing.T, fixture *uciRetrievalSliceFixture) (*uciSLORecordCorpus, error) {
 	t.Helper()
+	if err := uciSLOConfigureCurrentSemanticProfile(fixture); err != nil {
+		return nil, fmt.Errorf("configure current SLO semantic profile: %w", err)
+	}
+
 	goArtifact := fixture.goArtifact(t, []byte(`package slomeasurement
 
 func SLOMeasurementEntry() string {
@@ -451,7 +509,7 @@ func (corpus *uciSLORecordCorpus) updateAttempt(sequence int) (uciSLORecordedAtt
 
 	embeddingContext, cancelEmbedding := context.WithTimeout(corpus.fixture.callerContext, uciSLORecordEmbeddingWaitBound)
 	before := uciSLOProviderCalls(corpus.fixture.provider)
-	err = uciSLOEnsurePathEmbedding(embeddingContext, corpus.fixture, authorized, "docs/slo_update.md")
+	err = uciSLOEnsureCurrentViewEmbedding(embeddingContext, corpus.fixture, authorized)
 	after := uciSLOProviderCalls(corpus.fixture.provider)
 	embedding := uciSLOClassifyEmbeddingAttempt(time.Since(started), structural, err, before, after)
 	cancelEmbedding()
@@ -605,11 +663,15 @@ func uciSLORecordServerSearch(fixture *uciRetrievalSliceFixture, authorized uci.
 }
 
 func uciSLORecordQueryEmbedding(fixture *uciRetrievalSliceFixture, authorized uci.AuthorizedContext) uciSLORecordedAttempt {
+	return uciSLORecordQueryEmbeddingWithApplication(fixture, fixture.application, authorized)
+}
+
+func uciSLORecordQueryEmbeddingWithApplication(fixture *uciRetrievalSliceFixture, application *worker.UCIApplication, authorized uci.AuthorizedContext) uciSLORecordedAttempt {
 	started := time.Now()
 	ctx, cancel := context.WithTimeout(fixture.callerContext, uciSLORecordQueryWaitBound)
 	defer cancel()
 	before := uciSLOProviderCalls(fixture.provider)
-	response, err := fixture.application.SearchCodebase(ctx, authorized, mcp.CodebaseSearchInput{Query: uciRetrievalSliceSemanticQuery, Limit: 10})
+	response, err := application.SearchCodebase(ctx, authorized, mcp.CodebaseSearchInput{Query: uciRetrievalSliceSemanticQuery, Limit: 10})
 	after := uciSLOProviderCalls(fixture.provider)
 	attempt := uciSLOClassifyQueryAttempt(time.Since(started), response, err, uci.QueryRetrievalHybrid)
 	if attempt.outcome == "healthy" && (response.Retrieval.VectorCoverage == nil || *response.Retrieval.VectorCoverage != 1) {
@@ -649,26 +711,97 @@ func uciSLORecordGraph(fixture *uciRetrievalSliceFixture, authorized uci.Authori
 	return uciSLOHealthyAttempt(time.Since(started), "ok", "complete")
 }
 
-func uciSLOEnsurePathEmbedding(ctx context.Context, fixture *uciRetrievalSliceFixture, authorized uci.AuthorizedContext, path string) error {
-	selected, err := fixture.projection.SelectCandidates(ctx, authorized, uci.QuerySpec{
-		ClientSessionID: fixture.clientSessionID,
-		Mode:            uci.QueryModeExactRelativePath,
-		Text:            path,
-		Order:           uci.QueryOrderPath,
-		Limit:           50,
-	})
+func uciSLOConfigureCurrentSemanticProfile(fixture *uciRetrievalSliceFixture) error {
+	profile := fixture.vectorProfile
+	profile.ProviderRef = uciRetrievalSliceDigest(fixture.providerURL)
+	profile.PreprocessingRevision = "uci-semantic-preprocess/chunk-v2"
+	embedder, err := embedding.NewClient()
+	if err != nil {
+		return fmt.Errorf("create local embedding client: %w", err)
+	}
+	if embedder.Model() != profile.Model {
+		return fmt.Errorf("local embedding model = %q, want %q", embedder.Model(), profile.Model)
+	}
+	fixture.vectorProfile = profile
+	fixture.semanticService = uci.NewSemanticService(profile, embedder, fixture.projection, fixture.projection)
+	application, err := uciSLOApplicationWithStatusProfile(fixture, &profile)
 	if err != nil {
 		return err
 	}
-	if selected.Unavailable != nil || selected.Coverage != uci.IndexCoverageComplete || len(selected.Candidates) == 0 {
-		return fmt.Errorf("current candidate selection is not complete")
+	fixture.application = application
+	fixture.status = uci.NewIndexStatusService(fixture.projection, &profile)
+	return nil
+}
+
+func uciSLOApplicationWithStatusProfile(fixture *uciRetrievalSliceFixture, profile *uci.VectorProfile) (*worker.UCIApplication, error) {
+	contextApplication, err := mcp.NewUCIContextApplication(fixture.resolver, fixture.contextStore)
+	if err != nil {
+		return nil, fmt.Errorf("create UCI context application: %w", err)
 	}
-	for _, candidate := range selected.Candidates {
-		if err := fixture.semanticService.EnsureCandidateEmbedding(ctx, authorized, candidate); err != nil {
-			return err
+	application, err := worker.NewUCIApplication(
+		contextApplication,
+		uci.NewAliasResolver(fixture.contextStore.LookupLegacyAliasRecords),
+		fixture.queryService,
+		fixture.semanticService,
+		uci.NewGraphService(fixture.projection),
+		uci.NewVersionedReadService(fixture.projection),
+		uci.NewIndexStatusService(fixture.projection, profile),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("compose UCI application: %w", err)
+	}
+	return application, nil
+}
+
+func uciSLOEnsureCurrentViewEmbedding(ctx context.Context, fixture *uciRetrievalSliceFixture, authorized uci.AuthorizedContext) error {
+	embeddingClient, err := embedding.NewClient()
+	if err != nil {
+		return fmt.Errorf("create local embedding client: %w", err)
+	}
+	worker, err := uci.NewEmbeddingWorker(
+		fixture.vectorProfile,
+		embeddingClient,
+		fixture.projection,
+		fixture.resolver,
+		uci.DefaultEmbeddingWorkerLimits(),
+	)
+	if err != nil {
+		return fmt.Errorf("create current-view embedding worker: %w", err)
+	}
+	workerContext, cancel := context.WithCancel(ctx)
+	workerDone := make(chan error, 1)
+	go func() {
+		workerDone <- worker.Run(workerContext, fixture.indexCaller.OwnerInstance)
+	}()
+	defer func() {
+		cancel()
+		<-workerDone
+	}()
+
+	poll := time.NewTicker(20 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		status, err := fixture.status.Status(ctx, authorized, "")
+		if err != nil {
+			return fmt.Errorf("read current-view embedding status: %w", err)
+		}
+		if status.Embedding.Coverage == uci.IndexCoverageComplete {
+			if status.Embedding.TotalCandidates == 0 || status.Embedding.ReadyCandidates != status.Embedding.TotalCandidates || status.Embedding.JobState == nil || *status.Embedding.JobState != uci.IndexStatusJobSucceeded {
+				return fmt.Errorf("current-view embedding status is not durably complete: %#v", status.Embedding)
+			}
+			return nil
+		}
+		select {
+		case workerErr := <-workerDone:
+			if workerErr != nil {
+				return fmt.Errorf("current-view embedding worker: %w", workerErr)
+			}
+			return fmt.Errorf("current-view embedding worker stopped before durable completion: %#v", status.Embedding)
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-poll.C:
 		}
 	}
-	return nil
 }
 
 func uciSLOClassifyEmbeddingAttempt(latency time.Duration, structural uciSLORecordedAttempt, err error, before, after uciSLOProviderCallState) uciSLORecordedAttempt {

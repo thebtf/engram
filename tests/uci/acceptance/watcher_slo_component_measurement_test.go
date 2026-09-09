@@ -118,7 +118,7 @@ func uciMeasureComponentPublication(corpus *uciSLORecordCorpus, sequence int, wa
 	}
 
 	embeddingCtx, cancelEmbedding := context.WithTimeout(corpus.fixture.callerContext, uciSLORecordEmbeddingWaitBound)
-	err = uciSLOEnsurePathEmbedding(embeddingCtx, corpus.fixture, authorized, "docs/slo_update.md")
+	err = uciSLOEnsureCurrentViewEmbedding(embeddingCtx, corpus.fixture, authorized)
 	embeddingCompleted := time.Now().UTC()
 	cancelEmbedding()
 	if err != nil {
