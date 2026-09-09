@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -117,6 +118,85 @@ func TestUCIVectorProfileCacheReusesOnlyExactCompatibleInput(t *testing.T) {
 			}
 			if got := candidateProvider.CallCount(); got != 1 {
 				t.Fatalf("provider calls = %d, want 1 because the prior cache entry is incompatible", got)
+			}
+		})
+	}
+}
+
+func TestUCISemanticEmbeddingInputUsesChunkScopedV2Identity(t *testing.T) {
+	profile := semanticTestProfile("uci-semantic-test-model")
+	candidate := newSemanticTestFixture().current
+
+	input, digest, err := SemanticEmbeddingInput(profile, candidate)
+	if err != nil {
+		t.Fatalf("SemanticEmbeddingInput() error = %v", err)
+	}
+	var canonical struct {
+		Schema        string `json:"schema"`
+		ContentDigest string `json:"content_digest"`
+	}
+	if err := json.Unmarshal([]byte(input), &canonical); err != nil {
+		t.Fatalf("decode canonical input: %v", err)
+	}
+	if got, want := canonical.Schema, "engram.uci-semantic-input/2"; got != want {
+		t.Fatalf("input schema = %q, want %q", got, want)
+	}
+	if got, want := canonical.ContentDigest, string(semanticTestDigest(candidate.Text)); got != want {
+		t.Fatalf("input content digest = %q, want exact chunk digest %q", got, want)
+	}
+
+	changedBlobProof := candidate
+	changedBlobProof.Proof.ContentDigest = semanticTestDigest("whole-file-version-two")
+	proofInput, proofDigest, err := SemanticEmbeddingInput(profile, changedBlobProof)
+	if err != nil {
+		t.Fatalf("SemanticEmbeddingInput(changed blob proof) error = %v", err)
+	}
+	if proofInput != input || proofDigest != digest {
+		t.Fatalf("changed full blob proof changed v2 input identity: input=%q digest=%q, want %q %q", proofInput, proofDigest, input, digest)
+	}
+
+	for _, changed := range []struct {
+		name      string
+		candidate QueryCandidate
+		profile   VectorProfile
+	}{
+		{
+			name: "text",
+			candidate: func() QueryCandidate {
+				value := candidate
+				value.Text += " changed"
+				value.Span.ByteEnd = int64(len(value.Text))
+				value.Proof.ContentDigest = semanticTestDigest("whole-file-text-changed")
+				return value
+			}(),
+			profile: profile,
+		},
+		{
+			name: "relative path",
+			candidate: func() QueryCandidate {
+				value := candidate
+				value.RelativePath = "internal/storage/other.go"
+				return value
+			}(),
+			profile: profile,
+		},
+		{
+			name:      "preprocessing profile",
+			candidate: candidate,
+			profile: func() VectorProfile {
+				value := profile
+				value.PreprocessingRevision = "uci-semantic-preprocess/chunk-v3"
+				return value
+			}(),
+		},
+	} {
+		t.Run(changed.name, func(t *testing.T) {
+			changedInput, changedDigest, err := SemanticEmbeddingInput(changed.profile, changed.candidate)
+			if err != nil {
+				t.Fatalf("SemanticEmbeddingInput() error = %v", err)
+			}
+			if changedInput == input || changedDigest == digest {
+				t.Fatalf("%s did not change semantic input identity", changed.name)
 			}
 		})
 	}

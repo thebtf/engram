@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pgvector/pgvector-go"
 	"github.com/stretchr/testify/require"
 	ucidomain "github.com/thebtf/engram/internal/uci"
 )
@@ -266,6 +267,142 @@ func TestUCIEmbeddingReusesUnchangedInputAcrossCheckouts(t *testing.T) {
 	require.Equal(t, ucidomain.IndexCoverageComplete, status.Embedding.Coverage)
 	require.Equal(t, uint64(1), status.Embedding.TotalCandidates)
 	require.Equal(t, uint64(1), status.Embedding.ReadyCandidates)
+}
+
+func TestUCIEmbeddingReusesUnchangedChunksAcrossFileVersions(t *testing.T) {
+	fixture := openUCIEmbeddingJobsFixture(t)
+	ctx := context.Background()
+
+	legacyProfile := fixture.profile
+	legacyProfile.PreprocessingRevision = "uci-semantic-preprocess/chunk-v1"
+	v2Profile := legacyProfile
+	v2Profile.PreprocessingRevision = "uci-semantic-preprocess/chunk-v2"
+	legacyPublisher := uciEmbeddingJobsPublisher(t, fixture.publication, legacyProfile)
+	v2Publisher := uciEmbeddingJobsPublisher(t, fixture.publication, v2Profile)
+
+	initialGo := uciIndexAdmissionFixtureFrame(t, fixture.publication, "pkg/fixture.go", uciEmbeddingJobsVersionedGoSource("UCIWatcherSLO001"))
+	parserCanary := uciIndexAdmissionTypeScriptFixtureFrame(t, fixture.publication)
+	parserCanary.Memberships[0].PathKey = "parser-canary.ts"
+	parserCanary.Memberships[0].DisplayPath = "parser-canary.ts"
+	initialParts, err := fixture.store.AdmitIndexFrames(ctx, fixture.publication.source.SourceID, fixture.publication.profile.ProfileID, []ucidomain.IndexAdmissionFrame{initialGo, parserCanary})
+	require.NoError(t, err)
+	require.Len(t, initialParts, 2)
+
+	legacyView := fixture.publishAdmitted(t, legacyPublisher, "chunk-v1", nil, ucidomain.IndexJobInitial, initialParts)
+	legacyAuthorized := uciEmbeddingJobsAuthorize(t, fixture.publication, legacyView.Context)
+	legacyClaim, claimed, err := fixture.store.ClaimEmbeddingJob(ctx, legacyProfile, "embedding-chunk-v1-worker-"+fixture.publication.token, time.Minute)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	legacyBatch, err := fixture.store.PrepareEmbeddingBatch(ctx, legacyClaim, legacyAuthorized, 16)
+	require.NoError(t, err)
+	require.Len(t, legacyBatch.Candidates, 5)
+	require.Len(t, legacyBatch.MissingInputIndexes, 5)
+	uciEmbeddingJobsCommitBatch(t, fixture, legacyClaim, legacyAuthorized, legacyBatch, 1)
+
+	v2Initial := fixture.publishAdmitted(t, v2Publisher, "chunk-v2-initial", &legacyView.Context, ucidomain.IndexJobReconcile, initialParts)
+	v2InitialJob := uciEmbeddingJobsOnlyJobForView(t, fixture.publication, v2Initial.Context.ViewID)
+	require.NotNil(t, v2InitialJob.EmbeddingProfileID)
+	require.NotEqual(t, legacyClaim.Ref.EmbeddingProfileID, *v2InitialJob.EmbeddingProfileID, "the preprocessing revision must create an isolated profile")
+
+	v2Candidates, exhausted, err := loadUCIEmbeddingCandidatePage(ctx, fixture.publication.db, v2Initial.Context, nil, 16, v2Profile)
+	require.NoError(t, err)
+	require.True(t, exhausted)
+	require.Len(t, v2Candidates, 5)
+	packageCandidate := uciEmbeddingJobsCandidateByEntity(t, v2Candidates, "go:fixture/pkg:fixture")
+	parserCandidate := uciEmbeddingJobsCandidateByEntity(t, v2Candidates, "parser-canary.ts:0")
+	foreignVector := pgvector.NewVector(uciEmbeddingJobsVector(91))
+	_, err = fixture.store.UpsertEmbedding(ctx, UpsertUCIEmbeddingInput{
+		EmbeddingProfileID:   *v2InitialJob.EmbeddingProfileID,
+		EmbeddingInputDigest: string(packageCandidate.InputDigest),
+		Vector:               &foreignVector,
+		SourceID:             fixture.publication.foreign.SourceID,
+		ProtectionDomain:     packageCandidate.ProtectionDomain,
+		CompletionSeq:        v2Initial.Context.Generation,
+		Status:               UCIEmbeddingReady,
+	})
+	require.NoError(t, err)
+	otherProtectionVector := pgvector.NewVector(uciEmbeddingJobsVector(92))
+	_, err = fixture.store.UpsertEmbedding(ctx, UpsertUCIEmbeddingInput{
+		EmbeddingProfileID:   *v2InitialJob.EmbeddingProfileID,
+		EmbeddingInputDigest: string(parserCandidate.InputDigest),
+		Vector:               &otherProtectionVector,
+		SourceID:             fixture.publication.source.SourceID,
+		ProtectionDomain:     "source-restricted",
+		CompletionSeq:        v2Initial.Context.Generation,
+		Status:               UCIEmbeddingReady,
+	})
+	require.NoError(t, err)
+
+	v2InitialAuthorized := uciEmbeddingJobsAuthorize(t, fixture.publication, v2Initial.Context)
+	v2InitialClaim, claimed, err := fixture.store.ClaimEmbeddingJob(ctx, v2Profile, "embedding-chunk-v2-initial-worker-"+fixture.publication.token, time.Minute)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.Equal(t, *v2InitialJob.EmbeddingProfileID, v2InitialClaim.Ref.EmbeddingProfileID)
+	v2InitialBatch, err := fixture.store.PrepareEmbeddingBatch(ctx, v2InitialClaim, v2InitialAuthorized, 16)
+	require.NoError(t, err)
+	require.Len(t, v2InitialBatch.Candidates, 5)
+	require.Len(t, v2InitialBatch.MissingInputIndexes, 5, "v1, foreign-source, and foreign-protection vectors cannot satisfy the v2 View")
+	uciEmbeddingJobsCommitBatch(t, fixture, v2InitialClaim, v2InitialAuthorized, v2InitialBatch, 10)
+
+	legacyLinks := uciEmbeddingJobsLinks(t, fixture.publication, legacyClaim.Ref.EmbeddingProfileID)
+	v2InitialLinks := uciEmbeddingJobsLinks(t, fixture.publication, v2InitialClaim.Ref.EmbeddingProfileID)
+	require.Len(t, legacyLinks, 5)
+	require.Len(t, v2InitialLinks, 5)
+	v2LinksByChunk := make(map[string]UCIChunkEmbedding, len(v2InitialLinks))
+	for _, link := range v2InitialLinks {
+		v2LinksByChunk[link.ChunkID] = link
+	}
+	for _, legacyLink := range legacyLinks {
+		v2Link, found := v2LinksByChunk[legacyLink.ChunkID]
+		require.True(t, found, "the same immutable chunk must have a v2 link")
+		require.Equal(t, v2InitialClaim.Ref.EmbeddingProfileID, v2Link.EmbeddingProfileID)
+		require.NotEqual(t, legacyLink.EmbeddingProfileID, v2Link.EmbeddingProfileID, "v1 and v2 links must remain profile-isolated")
+	}
+
+	changedGo := uciIndexAdmissionFixtureFrame(t, fixture.publication, "pkg/fixture.go", uciEmbeddingJobsVersionedGoSource("UCIWatcherSLO002"))
+	changedGoPart, err := fixture.store.AdmitIndexFrame(ctx, fixture.publication.source.SourceID, fixture.publication.profile.ProfileID, changedGo)
+	require.NoError(t, err)
+	v2Next := fixture.publishAdmitted(t, v2Publisher, "chunk-v2-next", &v2Initial.Context, ucidomain.IndexJobReconcile, []ucidomain.IndexPart{changedGoPart, initialParts[1]})
+	v2NextAuthorized := uciEmbeddingJobsAuthorize(t, fixture.publication, v2Next.Context)
+	v2NextClaim, claimed, err := fixture.store.ClaimEmbeddingJob(ctx, v2Profile, "embedding-chunk-v2-next-worker-"+fixture.publication.token, time.Minute)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	v2NextBatch, err := fixture.store.PrepareEmbeddingBatch(ctx, v2NextClaim, v2NextAuthorized, 16)
+	require.NoError(t, err)
+	require.Len(t, v2NextBatch.Candidates, 5)
+	missingEntities := make(map[string]struct{}, len(v2NextBatch.MissingInputIndexes))
+	for _, index := range v2NextBatch.MissingInputIndexes {
+		missingEntities[v2NextBatch.Candidates[index].Candidate.EntityKey] = struct{}{}
+	}
+	require.Equal(t, map[string]struct{}{
+		"go:fixture/func:SharedTarget":     {},
+		"go:fixture/func:UCIWatcherSLO002": {},
+		"pkg/fixture.go:3":                 {},
+	}, missingEntities, "only semantic chunks changed by the file version require provider input")
+	for _, cachedEntity := range []string{"go:fixture/pkg:fixture", "parser-canary.ts:0"} {
+		_, missing := missingEntities[cachedEntity]
+		require.False(t, missing, "%s must be a v2 cache hit", cachedEntity)
+	}
+
+	v2NextPackage := uciEmbeddingJobsCandidateByEntity(t, v2NextBatch.Candidates, "go:fixture/pkg:fixture")
+	uciEmbeddingJobsCommitBatch(t, fixture, v2NextClaim, v2NextAuthorized, v2NextBatch, 20)
+	var packageVectorCount int64
+	require.NoError(t, fixture.publication.db.Model(&UCIEmbedding{}).Where(
+		"embedding_profile_id = ? AND embedding_input_digest = ? AND source_id = ? AND protection_domain = ?",
+		v2NextClaim.Ref.EmbeddingProfileID,
+		string(v2NextPackage.InputDigest),
+		fixture.publication.source.SourceID,
+		v2NextPackage.ProtectionDomain,
+	).Count(&packageVectorCount).Error)
+	require.Equal(t, int64(1), packageVectorCount, "the unchanged package chunk must link to its existing vector")
+	var currentSourceVectors int64
+	require.NoError(t, fixture.publication.db.Model(&UCIEmbedding{}).Where(
+		"embedding_profile_id = ? AND source_id = ? AND protection_domain = ?",
+		v2NextClaim.Ref.EmbeddingProfileID,
+		fixture.publication.source.SourceID,
+		"source-private",
+	).Count(&currentSourceVectors).Error)
+	require.Equal(t, int64(8), currentSourceVectors, "five initial v2 vectors plus three changed semantic chunks")
 }
 
 func TestUCIEmbeddingTransientFailureRetainsAttemptAndStatus(t *testing.T) {
@@ -645,6 +782,49 @@ func uciEmbeddingJobsVector(marker float32) []float32 {
 	vector[0] = marker
 	vector[1] = marker / 10
 	return vector
+}
+
+func (fixture *uciEmbeddingJobsFixture) publishAdmitted(t *testing.T, publisher ucidomain.IndexStore, key string, parent *ucidomain.ContextRef, kind ucidomain.IndexJobKind, parts []ucidomain.IndexPart) ucidomain.IndexPublishedView {
+	t.Helper()
+	memberships := make([]ucidomain.IndexMembership, 0)
+	replacements := make([]ucidomain.IndexEdgeReplacement, 0)
+	for _, part := range parts {
+		memberships = append(memberships, part.Memberships...)
+		for _, membership := range part.Memberships {
+			replacements = append(replacements, ucidomain.IndexEdgeReplacement{SourcePath: membership.PathKey})
+		}
+	}
+	draft := newUCIPublicationDraft(parts, memberships, replacements)
+	_, published := fixture.publication.publish(t, publisher, fixture.publication.caller("embedding-"+key), key, fixture.publication.checkout, fixture.publication.profile.ProfileID, parent, ucidomain.IndexManifestFull, kind, draft)
+	return published
+}
+
+func uciEmbeddingJobsCommitBatch(t *testing.T, fixture *uciEmbeddingJobsFixture, claim ucidomain.EmbeddingJobClaim, authorized ucidomain.AuthorizedContext, batch ucidomain.EmbeddingBatch, marker float32) {
+	t.Helper()
+	vectors := make([][]float32, len(batch.MissingInputIndexes))
+	for index := range vectors {
+		vectors[index] = uciEmbeddingJobsVector(marker + float32(index))
+	}
+	require.NoError(t, fixture.store.CommitEmbeddingBatch(context.Background(), claim, authorized, batch, vectors))
+	exhausted, err := fixture.store.PrepareEmbeddingBatch(context.Background(), claim, authorized, 16)
+	require.NoError(t, err)
+	require.True(t, exhausted.Exhausted)
+	require.NoError(t, fixture.store.CompleteEmbeddingJob(context.Background(), claim, authorized))
+}
+
+func uciEmbeddingJobsCandidateByEntity(t *testing.T, candidates []ucidomain.EmbeddingCandidate, entity string) ucidomain.EmbeddingCandidate {
+	t.Helper()
+	for _, candidate := range candidates {
+		if candidate.Candidate.EntityKey == entity {
+			return candidate
+		}
+	}
+	require.Failf(t, "missing embedding candidate", "entity %q not found in %#v", entity, candidates)
+	return ucidomain.EmbeddingCandidate{}
+}
+
+func uciEmbeddingJobsVersionedGoSource(callee string) string {
+	return "package fixture\n\nfunc SharedTarget() string {\n\treturn " + callee + "()\n}\n\nfunc " + callee + "() string {\n\treturn \"" + callee + "\"\n}\n"
 }
 
 type uciEmbeddingJobsCatalog map[string]ucidomain.ContextRecord

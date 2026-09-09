@@ -18,7 +18,7 @@ import (
 
 const (
 	uciSemanticDefaultEmbeddingModel  = "text-embedding"
-	uciSemanticPreprocessingRevision  = "uci-semantic-preprocess/identity-v1"
+	uciSemanticPreprocessingRevision  = "uci-semantic-preprocess/chunk-v2"
 	uciSemanticProviderUnavailableRef = "uci-semantic-provider-unavailable"
 )
 

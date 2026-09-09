@@ -136,6 +136,7 @@ func TestComposeUCIContextSharesMCPCheckoutHandleWithPrivateGRPC(t *testing.T) {
 }
 
 func TestUCISemanticProfileUsesOpaqueCacheIdentity(t *testing.T) {
+	require.Equal(t, "uci-semantic-preprocess/chunk-v2", uciSemanticPreprocessingRevision)
 	ctx := context.Background()
 	const (
 		endpointA = "https://vectors-a.example.test/v1"

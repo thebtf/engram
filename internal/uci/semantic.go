@@ -18,7 +18,7 @@ import (
 const (
 	semanticVectorDimension     = 1536
 	semanticRRFConstant         = 60
-	semanticInputSchema         = "engram.uci-semantic-input/1"
+	semanticInputSchema         = "engram.uci-semantic-input/2"
 	semanticMaxProfileText      = 512
 	semanticQueryProviderBudget = 20 * time.Second
 )
@@ -78,9 +78,9 @@ func NewSemanticService(profile VectorProfile, embedder SemanticEmbedder, store 
 	}
 }
 
-// SemanticEmbeddingInput returns the exact canonical input sent to the provider
-// for one current candidate and its digest. It is exported for storage adapters
-// so cache lookup, write, and selection share one input identity.
+// SemanticEmbeddingInput returns the exact canonical chunk-scoped input sent to
+// the provider for one current candidate and its digest. It is exported for
+// storage adapters so cache lookup, write, and selection share one input identity.
 func SemanticEmbeddingInput(profile VectorProfile, candidate QueryCandidate) (string, IndexDigest, error) {
 	if err := validateSemanticProfile(profile); err != nil {
 		return "", "", err
@@ -91,6 +91,7 @@ func SemanticEmbeddingInput(profile VectorProfile, candidate QueryCandidate) (st
 	if candidate.Text == "" || len(candidate.Text) > indexAdmissionMaxTextBytes {
 		return "", "", fmt.Errorf("uci semantic: candidate text is outside the embedding bound")
 	}
+	chunkDigest := sha256.Sum256([]byte(candidate.Text))
 
 	input := struct {
 		Schema                string  `json:"schema"`
@@ -101,7 +102,7 @@ func SemanticEmbeddingInput(profile VectorProfile, candidate QueryCandidate) (st
 	}{
 		Schema:                semanticInputSchema,
 		PreprocessingRevision: profile.PreprocessingRevision,
-		ContentDigest:         string(candidate.Proof.ContentDigest),
+		ContentDigest:         "sha256:" + hex.EncodeToString(chunkDigest[:]),
 		Text:                  candidate.Text,
 	}
 	if profile.IncludeRelativePath {
