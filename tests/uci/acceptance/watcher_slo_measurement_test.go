@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/thebtf/engram/internal/auth"
 	gormstore "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/uci"
 )
 
@@ -155,6 +157,9 @@ func uciWatcherSLOSecondFixture(fixture *uciRetrievalSliceFixture) (*uciRetrieva
 	clone := *fixture
 	clone.checkout = &checkout
 	clone.clientSessionID = "uci-watcher-slo-b-" + uuid.NewString()
+	clone.indexCaller.Principal = checkout.OwnerPrincipal
+	callerIdentity := auth.ClientWithPrincipal("read-write", checkout.WorkstationID, checkout.OwnerPrincipal, auth.PrincipalKindAgent)
+	clone.callerContext = auth.WithIdentity(mcp.ContextWithSession(clone.context, clone.clientSessionID), callerIdentity)
 	clone.indexCaller.OwnerInstance = "uci-watcher-slo-b-" + uuid.NewString()
 	clone.privateLocator = "fixture://uci-watcher-slo/b"
 	return &clone, nil
