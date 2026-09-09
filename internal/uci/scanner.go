@@ -251,56 +251,40 @@ func (scanner *Scanner) Scan(ctx context.Context, evidence AuthorizedRootEvidenc
 		return scanner.failed(result, fmt.Errorf("%w: root unavailable", ErrScannerInvalidRoot))
 	}
 
-	repositoryRoot, err := scanner.gitLine(ctx, root, "rev-parse", "--show-toplevel")
+	topologyOutput, err := scanner.gitOutput(ctx, root, "rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir", "--git-path", "HEAD", "--show-object-format")
 	if err != nil {
 		return scanner.classifyGitError(result, err)
 	}
-	normalizedRepositoryRoot, err := scannerAuthorizedRoot(repositoryRoot)
+	topology, err := scannerGitLines(topologyOutput, 5)
+	if err != nil {
+		return scanner.failed(result, err)
+	}
+	normalizedRepositoryRoot, err := scannerAuthorizedRoot(topology[0])
 	if err != nil || !scannerPathsEqual(root, normalizedRepositoryRoot) {
 		return scanner.failed(result, fmt.Errorf("%w: repository root does not match authorization", ErrScannerInvalidRoot))
 	}
-
-	if _, err := scanner.gitLine(ctx, root, "rev-parse", "--absolute-git-dir"); err != nil {
-		return scanner.classifyGitError(result, err)
+	if topology[1] == "" || topology[2] == "" || topology[3] == "" {
+		return scanner.failed(result, fmt.Errorf("%w: incomplete repository topology", ErrScannerMalformed))
 	}
-	if _, err := scanner.gitLine(ctx, root, "rev-parse", "--git-common-dir"); err != nil {
-		return scanner.classifyGitError(result, err)
-	}
-	if _, err := scanner.gitLine(ctx, root, "rev-parse", "--git-path", "HEAD"); err != nil {
-		return scanner.classifyGitError(result, err)
-	}
-
-	objectFormat, err := scanner.gitLine(ctx, root, "rev-parse", "--show-object-format")
-	if err != nil {
-		return scanner.classifyGitError(result, err)
-	}
+	objectFormat := topology[4]
 	if objectFormat != "sha1" && objectFormat != "sha256" {
 		return scanner.failed(result, fmt.Errorf("%w: unsupported object format", ErrScannerMalformed))
 	}
 	result.Observation.ObjectFormat = scannerStringPointer(objectFormat)
 
-	head, hasHead, err := scanner.gitHead(ctx, root, objectFormat)
+	statusOutput, err := scanner.gitOutput(ctx, root, "status", "--porcelain=v2", "--branch", "-z")
 	if err != nil {
 		return scanner.classifyGitError(result, err)
+	}
+	statusRecords, head, hasHead, refLabel, hasRefLabel, err := scannerStatusBranchRecords(statusOutput, objectFormat)
+	if err != nil {
+		return scanner.failed(result, err)
 	}
 	if hasHead {
 		result.Observation.HeadOID = scannerStringPointer(head)
 	}
-	refLabel, hasRefLabel, err := scanner.gitRefLabel(ctx, root)
-	if err != nil {
-		return scanner.classifyGitError(result, err)
-	}
 	if hasRefLabel {
 		result.Observation.RefLabel = scannerStringPointer(refLabel)
-	}
-
-	statusOutput, err := scanner.gitOutput(ctx, root, "status", "--porcelain=v2", "-z")
-	if err != nil {
-		return scanner.classifyGitError(result, err)
-	}
-	statusRecords, err := scannerNULRecords(statusOutput)
-	if err != nil {
-		return scanner.failed(result, err)
 	}
 	result.Observation.Dirty = len(statusRecords) > 0
 
@@ -493,54 +477,6 @@ func (scanner *Scanner) readStableFile(ctx context.Context, fullPath, relativePa
 	return scannerUnreadableFile(relativePath), true, nil
 }
 
-func (scanner *Scanner) gitHead(ctx context.Context, root, objectFormat string) (string, bool, error) {
-	result, err := scanner.runGit(ctx, root, "rev-parse", "--verify", "HEAD")
-	if err != nil {
-		return "", false, err
-	}
-	if result.ExitCode == 1 || (result.ExitCode == 128 && len(result.Stdout) == 0) {
-		return "", false, nil
-	}
-	if result.ExitCode != 0 {
-		return "", false, fmt.Errorf("%w: HEAD resolution", ErrScannerGitFailure)
-	}
-
-	head, err := scannerGitLine(result.Stdout)
-	if err != nil {
-		return "", false, err
-	}
-	if !scannerValidOID(head, objectFormat) {
-		return "", false, fmt.Errorf("%w: invalid HEAD", ErrScannerMalformed)
-	}
-	return head, true, nil
-}
-
-func (scanner *Scanner) gitRefLabel(ctx context.Context, root string) (string, bool, error) {
-	result, err := scanner.runGit(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD")
-	if err != nil {
-		return "", false, err
-	}
-	if result.ExitCode == 1 {
-		return "", false, nil
-	}
-	if result.ExitCode != 0 {
-		return "", false, fmt.Errorf("%w: symbolic HEAD", ErrScannerGitFailure)
-	}
-	label, err := scannerGitLine(result.Stdout)
-	if err != nil {
-		return "", false, err
-	}
-	return label, true, nil
-}
-
-func (scanner *Scanner) gitLine(ctx context.Context, root string, command ...string) (string, error) {
-	output, err := scanner.gitOutput(ctx, root, command...)
-	if err != nil {
-		return "", err
-	}
-	return scannerGitLine(output)
-}
-
 func (scanner *Scanner) gitOutput(ctx context.Context, root string, command ...string) ([]byte, error) {
 	result, err := scanner.runGit(ctx, root, command...)
 	if err != nil {
@@ -721,20 +657,73 @@ func scannerNULRecords(output []byte) ([]string, error) {
 	return records, nil
 }
 
-func scannerGitLine(output []byte) (string, error) {
-	if len(output) == 0 || bytes.IndexByte(output, 0) >= 0 {
-		return "", fmt.Errorf("%w: line plumbing output", ErrScannerMalformed)
+func scannerGitLines(output []byte, count int) ([]string, error) {
+	if len(output) == 0 || output[len(output)-1] != '\n' || bytes.IndexByte(output, 0) >= 0 {
+		return nil, fmt.Errorf("%w: repository topology lines", ErrScannerMalformed)
 	}
-	if output[len(output)-1] == '\n' {
-		output = output[:len(output)-1]
-		if len(output) > 0 && output[len(output)-1] == '\r' {
-			output = output[:len(output)-1]
+	values := bytes.Split(output[:len(output)-1], []byte{'\n'})
+	if len(values) != count {
+		return nil, fmt.Errorf("%w: repository topology count", ErrScannerMalformed)
+	}
+	result := make([]string, count)
+	for index, value := range values {
+		if len(value) > 0 && value[len(value)-1] == '\r' {
+			value = value[:len(value)-1]
+		}
+		if len(value) == 0 || !utf8.Valid(value) {
+			return nil, fmt.Errorf("%w: repository topology value", ErrScannerMalformed)
+		}
+		result[index] = string(value)
+	}
+	return result, nil
+}
+
+func scannerStatusBranchRecords(output []byte, objectFormat string) ([]string, string, bool, string, bool, error) {
+	records, err := scannerNULRecords(output)
+	if err != nil {
+		return nil, "", false, "", false, err
+	}
+	status := make([]string, 0, len(records))
+	var head, refLabel string
+	var hasHead, hasRefLabel, sawOID, sawHead bool
+	for _, record := range records {
+		switch {
+		case strings.HasPrefix(record, "# branch.oid "):
+			if sawOID {
+				return nil, "", false, "", false, fmt.Errorf("%w: duplicate branch OID", ErrScannerMalformed)
+			}
+			sawOID = true
+			value := strings.TrimPrefix(record, "# branch.oid ")
+			if value != "(initial)" {
+				if !scannerValidOID(value, objectFormat) {
+					return nil, "", false, "", false, fmt.Errorf("%w: branch OID", ErrScannerMalformed)
+				}
+				head, hasHead = value, true
+			}
+		case strings.HasPrefix(record, "# branch.head "):
+			if sawHead {
+				return nil, "", false, "", false, fmt.Errorf("%w: duplicate branch head", ErrScannerMalformed)
+			}
+			sawHead = true
+			value := strings.TrimPrefix(record, "# branch.head ")
+			if value != "(detached)" && value != "(unknown)" {
+				if value == "" || !utf8.ValidString(value) {
+					return nil, "", false, "", false, fmt.Errorf("%w: branch head", ErrScannerMalformed)
+				}
+				refLabel, hasRefLabel = value, true
+			}
+		case strings.HasPrefix(record, "# "):
+			if !utf8.ValidString(record) {
+				return nil, "", false, "", false, fmt.Errorf("%w: branch metadata", ErrScannerMalformed)
+			}
+		default:
+			status = append(status, record)
 		}
 	}
-	if len(output) == 0 || !utf8.Valid(output) {
-		return "", fmt.Errorf("%w: invalid line", ErrScannerMalformed)
+	if !sawOID || !sawHead {
+		return nil, "", false, "", false, fmt.Errorf("%w: branch metadata omitted", ErrScannerMalformed)
 	}
-	return string(output), nil
+	return status, head, hasHead, refLabel, hasRefLabel, nil
 }
 
 func scannerValidOID(value, objectFormat string) bool {

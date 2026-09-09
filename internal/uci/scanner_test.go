@@ -548,31 +548,10 @@ func (git *scannerFixtureGit) Run(ctx context.Context, invocation GitInvocation)
 	}
 
 	switch operation {
-	case "rev-parse --show-toplevel":
-		return scannerGitOutput(git.showTopLevel), nil
-	case "rev-parse --absolute-git-dir":
-		return scannerGitOutput(git.gitDir), nil
-	case "rev-parse --git-common-dir":
-		return scannerGitOutput(git.commonGitDir), nil
-	case "rev-parse --git-path HEAD":
-		return scannerGitOutput(git.headPath), nil
-	case "rev-parse --show-object-format":
-		return scannerGitOutput(git.objectFormat), nil
-	case "rev-parse --verify HEAD":
-		if !git.hasHeadOID {
-			return GitResult{Stderr: []byte("fatal: Needed a single revision\n"), ExitCode: 128}, nil
-		}
-		return scannerGitOutput(git.headOID), nil
-	case "symbolic-ref --quiet --short HEAD":
-		if !git.hasRefLabel {
-			return GitResult{ExitCode: 1}, nil
-		}
-		return scannerGitOutput(git.refLabel), nil
-	case "status --porcelain=v2 -z":
-		if !git.dirty {
-			return GitResult{}, nil
-		}
-		return GitResult{Stdout: []byte("1 M. N... 100644 100644 100644 aaaaaaaa bbbbbbbb dirty.go\x00")}, nil
+	case "rev-parse --show-toplevel --absolute-git-dir --git-common-dir --git-path HEAD --show-object-format":
+		return GitResult{Stdout: []byte(strings.Join([]string{git.showTopLevel, git.gitDir, git.commonGitDir, git.headPath, git.objectFormat}, "\n") + "\n")}, nil
+	case "status --porcelain=v2 --branch -z":
+		return GitResult{Stdout: git.statusOutput()}, nil
 	case "ls-files --stage -z":
 		return GitResult{Stdout: git.stageOutput()}, nil
 	case "ls-files --others --exclude-standard -z":
@@ -607,6 +586,22 @@ func (git *scannerFixtureGit) untrackedOutput() []byte {
 		output.WriteByte(0)
 	}
 	return []byte(output.String())
+}
+
+func (git *scannerFixtureGit) statusOutput() []byte {
+	branchOID := "(initial)"
+	if git.hasHeadOID {
+		branchOID = git.headOID
+	}
+	branchHead := "(detached)"
+	if git.hasRefLabel {
+		branchHead = git.refLabel
+	}
+	records := []string{"# branch.oid " + branchOID, "# branch.head " + branchHead}
+	if git.dirty {
+		records = append(records, "1 M. N... 100644 100644 100644 aaaaaaaa bbbbbbbb dirty.go")
+	}
+	return []byte(strings.Join(records, "\x00") + "\x00")
 }
 
 func scannerGitOutput(value string) GitResult {
@@ -769,14 +764,8 @@ func scannerAssertOptionalString(t *testing.T, got *string, want string, present
 func scannerAssertGitPlumbing(t *testing.T, git *scannerFixtureGit, root string) {
 	t.Helper()
 	required := []string{
-		"rev-parse --show-toplevel",
-		"rev-parse --absolute-git-dir",
-		"rev-parse --git-common-dir",
-		"rev-parse --git-path HEAD",
-		"rev-parse --show-object-format",
-		"rev-parse --verify HEAD",
-		"symbolic-ref --quiet --short HEAD",
-		"status --porcelain=v2 -z",
+		"rev-parse --show-toplevel --absolute-git-dir --git-common-dir --git-path HEAD --show-object-format",
+		"status --porcelain=v2 --branch -z",
 		"ls-files --stage -z",
 		"ls-files --others --exclude-standard -z",
 	}
@@ -800,6 +789,9 @@ func scannerAssertGitPlumbing(t *testing.T, git *scannerFixtureGit, root string)
 			t.Fatalf("Git invocation is not approved read-only plumbing: %#v", call.Args)
 		}
 		seen[operation] = true
+	}
+	if len(git.calls) != len(required) {
+		t.Fatalf("Git census calls = %d, want collapsed %d", len(git.calls), len(required))
 	}
 	for _, operation := range required {
 		if !seen[operation] {
