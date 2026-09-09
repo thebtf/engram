@@ -39,7 +39,7 @@ const (
 	UCIProductMeasurementCorpusManifestDigest = "sha256:896f4728de0e7876e373bab3963a3472a8e1d6ead1c087936e8a51ae9931bc59"
 	UCIProductMeasurementProvider             = "uci-product-local-http"
 	UCIProductMeasurementModel                = "uci-product-local-model-v1"
-	UCIProductMeasurementProfile              = "uci-product-local-semantic-v1"
+	UCIProductMeasurementProfile              = "uci-semantic-preprocess/chunk-v2"
 
 	uciProductMeasurementProviderCredential = "uci-product-local-test-credential"
 	uciProductMeasurementManifest           = "engram.uci-product-corpus/v1\n" +
@@ -103,7 +103,7 @@ func TestUCIRecordProductTaskResult(t *testing.T) {
 
 	first := fixture.publish(t, fixture.primaryCheckout, nil, "primary-v1", uciProductMeasurementSources("semantic-route:vector-old", "worktree-dirty-body-a", "restart-generation-one"))
 	firstAuthorized := fixture.authorize(t, fixture.resolver, first.view.Context)
-	fixture.ensureEmbeddings(t, firstAuthorized, []string{"src/vector_current.go"})
+	fixture.ensureEmbeddings(t, firstAuthorized)
 
 	currentSources := uciProductMeasurementSources("semantic-route:vector-current", "worktree-dirty-body-a", "restart-generation-two-current")
 	current := fixture.publish(t, fixture.primaryCheckout, &first.view.Context, "primary-v2", currentSources)
@@ -112,11 +112,6 @@ func TestUCIRecordProductTaskResult(t *testing.T) {
 	fixture.recompose(t)
 	currentAuthorized := fixture.authorize(t, fixture.resolver, current.view.Context)
 	secondaryAuthorized := fixture.authorize(t, fixture.resolver, secondary.view.Context)
-	currentPaths := make([]string, 0, len(currentSources))
-	for _, file := range currentSources {
-		currentPaths = append(currentPaths, file.path)
-	}
-	fixture.ensureEmbeddings(t, currentAuthorized, currentPaths)
 
 	results := fixture.productResults(t, corpus, current, secondary, currentAuthorized, secondaryAuthorized)
 	input := UCIProductTaskResultInput{
@@ -214,7 +209,7 @@ func newUCIProductMeasurementFixture(t *testing.T) *uciProductMeasurementFixture
 		profile:           profile,
 		token:             token,
 		vectorProfile: uci.VectorProfile{
-			ProviderRef:           provider.server.URL,
+			ProviderRef:           uciProductMeasurementDigest(provider.server.URL),
 			Model:                 UCIProductMeasurementModel,
 			Dimension:             embedding.EmbeddingDim,
 			PreprocessingRevision: UCIProductMeasurementProfile,
@@ -271,14 +266,14 @@ func (fixture *uciProductMeasurementFixture) recompose(t *testing.T) {
 		uci.NewSemanticService(fixture.vectorProfile, embedder, fixture.projection, fixture.projection),
 		uci.NewGraphService(fixture.projection),
 		uci.NewVersionedReadService(fixture.projection),
-		uci.NewIndexStatusService(fixture.projection, nil),
+		uci.NewIndexStatusService(fixture.projection, &fixture.vectorProfile),
 	)
 	if err != nil {
 		t.Fatalf("compose product measurement UCI application: %v", err)
 	}
 	fixture.resolver = resolver
 	fixture.application = application
-	fixture.status = uci.NewIndexStatusService(fixture.projection, nil)
+	fixture.status = uci.NewIndexStatusService(fixture.projection, &fixture.vectorProfile)
 }
 
 func (fixture *uciProductMeasurementFixture) requireDatabaseFacts(t *testing.T) {
@@ -597,31 +592,64 @@ func (fixture *uciProductMeasurementFixture) authorize(t *testing.T, resolver *u
 	return authorized
 }
 
-func (fixture *uciProductMeasurementFixture) ensureEmbeddings(t *testing.T, authorized uci.AuthorizedContext, paths []string) {
+func (fixture *uciProductMeasurementFixture) ensureEmbeddings(t *testing.T, authorized uci.AuthorizedContext) {
 	t.Helper()
-	semantic := uci.NewSemanticService(fixture.vectorProfile, mustUCIProductMeasurementEmbeddingClient(t), fixture.projection, fixture.projection)
-	seen := make(map[string]struct{})
-	for _, path := range paths {
-		selected, err := fixture.projection.SelectCandidates(fixture.callerContext, authorized, uci.QuerySpec{
-			ClientSessionID: "uci-product-measurement-session-" + fixture.token,
-			Mode:            uci.QueryModeExactRelativePath, Text: path, Order: uci.QueryOrderPath, Limit: 50,
-		})
-		if err != nil {
-			t.Fatalf("select semantic candidates for %q: %v", path, err)
-		}
-		for _, candidate := range selected.Candidates {
-			key := candidate.Proof.ArtifactID + "\x00" + candidate.EntityKey + "\x00" + string(candidate.Proof.ContentDigest)
-			if _, duplicate := seen[key]; duplicate {
-				continue
-			}
-			seen[key] = struct{}{}
-			if err := semantic.EnsureCandidateEmbedding(fixture.callerContext, authorized, candidate); err != nil {
-				t.Fatalf("embed product measurement candidate at %q: %v", path, err)
-			}
-		}
+	worker, err := uci.NewEmbeddingWorker(
+		fixture.vectorProfile,
+		mustUCIProductMeasurementEmbeddingClient(t),
+		fixture.projection,
+		fixture.resolver,
+		uci.DefaultEmbeddingWorkerLimits(),
+	)
+	if err != nil {
+		t.Fatalf("create product measurement embedding worker: %v", err)
 	}
-	if len(seen) == 0 || fixture.provider.corpusInputCount() == 0 {
-		t.Fatal("product semantic corpus did not reach the local provider")
+	before := fixture.provider.corpusInputCount()
+	workerContext, cancel := context.WithCancel(fixture.callerContext)
+	workerDone := make(chan error, 1)
+	go func() {
+		workerDone <- worker.Run(workerContext, fixture.indexCaller.OwnerInstance)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-workerDone:
+			if err != nil {
+				t.Errorf("stop product measurement embedding worker: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("product measurement embedding worker did not stop")
+		}
+	})
+
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	poll := time.NewTicker(20 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		status, err := fixture.status.Status(fixture.callerContext, authorized, "")
+		if err != nil {
+			t.Fatalf("read current-view embedding status: %v", err)
+		}
+		if status.Embedding.Coverage == uci.IndexCoverageComplete {
+			if status.Embedding.TotalCandidates == 0 || status.Embedding.ReadyCandidates != status.Embedding.TotalCandidates {
+				t.Fatalf("current-view embedding status is not complete: %#v", status.Embedding)
+			}
+			if fixture.provider.corpusInputCount() <= before {
+				t.Fatal("current-view embedding worker did not send corpus inputs to the local provider")
+			}
+			return
+		}
+		select {
+		case err := <-workerDone:
+			if err != nil {
+				t.Fatalf("product measurement embedding worker: %v", err)
+			}
+			t.Fatal("product measurement embedding worker stopped before current-view coverage completed")
+		case <-deadline.C:
+			t.Fatalf("product measurement embedding worker did not complete the current view: %#v", status.Embedding)
+		case <-poll.C:
+		}
 	}
 }
 
@@ -660,6 +688,9 @@ func (fixture *uciProductMeasurementFixture) semantic(t *testing.T, observation 
 		t.Fatalf("semantic product measurement query: %v", err)
 	}
 	uciProductMeasurementRequireResponse(t, "semantic query "+strconv.Quote(text), response, authorized.Ref())
+	if response.Retrieval == nil || response.Retrieval.Mode != uci.QueryRetrievalHybrid || response.Retrieval.VectorCoverage == nil || *response.Retrieval.VectorCoverage != 1 || len(response.Retrieval.DegradationReasons) != 0 {
+		t.Fatalf("semantic product measurement query is not a complete current-view vector retrieval: %#v", response.Retrieval)
+	}
 	return response
 }
 

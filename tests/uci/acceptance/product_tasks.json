@@ -9,7 +9,7 @@
     "status": "resolved",
     "provider": "uci-product-local-http",
     "model": "uci-product-local-model-v1",
-    "profile": "uci-product-local-semantic-v1"
+    "profile": "uci-semantic-preprocess/chunk-v2"
   },
   "tasks": [
     {
