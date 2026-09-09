@@ -77,7 +77,7 @@ func TestUCIRecordWatcherSLOMeasurement(t *testing.T) {
 		Provider: uci.UCISLOProvider{ID: uciSLORecordProviderID, Model: uciSLORecordProviderModel, Status: providerStatus},
 	}
 	profile := uci.UCISLOProfile{
-		ID:                        uciSLORecordProfileID,
+		ID:                        fixture.profile.ProfileID,
 		TextFileCount:             textFiles,
 		LinesOfCode:               linesOfCode,
 		ActiveWorktreeCount:       activeCheckouts,
