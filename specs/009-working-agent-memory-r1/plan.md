@@ -10,3 +10,7 @@ The detailed execution contract is `.agent/intake/engram-product-rescue-2026-09-
 6. M6 runs the frozen-candidate A/B/C campaign, security and correctness review, SonarQube, regression, integration, and release.
 
 The acceptance oracle is the authority package's `04-ACCEPTANCE.md`. A successful M1 emit is an intermediate checkpoint, not completion.
+
+## Current-order revalidation
+
+This index preserves M1 through M6 and the authority package's acceptance oracle. Constitution 2.0.0 permits Feature 011 to reach its early Code/basic-collection milestone before Book Context planning. That milestone does not complete Feature 011 or advance Memory R1. Full Feature 011 completion includes supported Issues, Memory, Queue, and Documents consumers plus S4 daemon job control. Book Context implementation follows that completion. Memory R1 resumes only after the Book Context product result.

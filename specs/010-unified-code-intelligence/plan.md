@@ -1,14 +1,14 @@
 # Implementation Plan: Unified Code Intelligence (UCI-1A+B)
 
 **Branch**: `uci/unified-code-intelligence-r1` | **Date**: 2026-09-05 | **Spec**: [spec.md](spec.md)
-**Approved specification commit**: `c3d41d2575847d8e4e4313cc0a55acfbb1419327` | **Constitution**: 1.1.0
+**Approved specification commit**: `c3d41d2575847d8e4e4313cc0a55acfbb1419327` | **Constitution**: 1.1.0 at UCI plan approval. Constitution 2.0.0 current-order revalidation appears in [Current-order revalidation](#current-order-revalidation).
 **Input**: The accepted UCI feature specification and its adopted supporting contracts under this directory.
 
 ## Summary
 
 Deliver UCI-1A and UCI-1B only as one installed native capability: one daemon serves two real saved Git worktrees concurrently, each MCP client remains bound to its own server-authorized `Source` / `Checkout` / immutable `View`, and exact, FTS, semantic-vector, and bounded graph answers all cite that same View.
 
-The implementation replaces the current project-string code-index path rather than extending it. PostgreSQL is the authority for context, rebuildable `ci_*` code projections, and durable UCI evidence; the daemon's local SQLite state is only a workstation registry, dirty-set, watcher, and recovery journal. The first executable proof is deliberately an adversarial two-real-worktree RED test against the existing public code-intelligence tool seam. UCI-2 and UCI-3, including the Code UI, remain deferred.
+The implementation replaces the current project-string code-index path rather than extending it. PostgreSQL is the authority for context, rebuildable `ci_*` code projections, and durable UCI evidence; the daemon's local SQLite state is only a workstation registry, dirty-set, watcher, and recovery journal. The first executable proof is deliberately an adversarial two-real-worktree RED test against the existing public code-intelligence tool seam. UCI-2 and UCI-3 remain deferred. The read-only Code UI belongs to separately accepted Feature 011 and is not UCI-1 work.
 After Source, Checkout, and View authorization, every code search, graph result, and versioned read records one idempotent non-content UCI exposure evidence row. The shared MCP boundary is its canonical source. Exact idempotency retries return the original record only when the canonical binding digest matches; a mismatch is non-disclosing `IDEMPOTENCY_MISMATCH`. A closed authorized unavailable decision remains recordable and returns its contextual envelope, closed source/index error, empty items, and opaque receipt while the recorder is healthy. An initial recording failure is distinct: it returns `EXPOSURE_UNAVAILABLE`, `status: unavailable`, `exposure: null`, and no contextual envelope, result body, or items. A verified supported-host callback is the only canonical completion source and may append only `succeeded`, `partial`, `failed`, or `abandoned`; without qualifying evidence completion remains `unknown`, independently of retrieval result state and coverage.
 
 ## Planning Calibration
@@ -50,7 +50,7 @@ After Source, Checkout, and View authorization, every code search, graph result,
 | Durable async state | PASS | Every index/watch/enrichment workflow has a persisted job, idempotency key, retry state, terminal error, and lease/epoch fence. |
 | Automatic retrieval exposure and completion | PASS | The UCI-owned `ExposureRecorder` writes durable, append-only, scoped non-content `uci_exposures` evidence from the authorized closed MCP search, graph, or read decision, including closed authorized unavailable outcomes. Such an outcome keeps its contextual envelope, closed error, empty items, and receipt. A verified supported-host callback may append closed `succeeded`, `partial`, `failed`, or `abandoned` `uci_completion_evidence`; no qualifying callback remains `unknown`. Canonical binding digests return an original record only for an exact retry and reject a mismatch with non-disclosing `IDEMPOTENCY_MISMATCH`. Initial append failure instead suppresses the contextual envelope and result body and returns `EXPOSURE_UNAVAILABLE`; a completion append failure returns `COMPLETION_EVIDENCE_UNAVAILABLE` only to the callback. The evidence grants no access, View, publication, or product-success authority. |
 | Versioned identity migration | PASS | Current migration high-water mark is `170_task_memory_context_reference_receipts`; UCI begins with additive migrations after 170 and preserves `legacy_unscoped` evidence. |
-| Future Code UI dependency | PASS | Code UI is UCI-2 surface work requiring a separate accepted Spec Kit feature; UCI-1 plans no UI. |
+| Future Code UI dependency | PASS | Feature 011 owns the separately accepted Code UI. UCI-1 plans no UI and is not a Feature 011 implementation prerequisite. |
 | Release and evidence gates | PASS | Built native server/daemon/parser worker, two simultaneous standard MCP clients, real PostgreSQL, real semantic provider, authorization-negative matrix, product-task baseline, exact-head regression/SonarQube, and rollback evidence are required before a UCI-1 release claim. |
 
 ### Post-Design Gate — PASS
@@ -193,4 +193,8 @@ plugin/engram/hooks/                    # existing host integration boundary; no
 
 ## Deferred Boundary
 
-UCI-2 retains broader languages/material, richer cross-source analysis, analytics, and the read-only Code UI. UCI-3 retains progressive product-domain address migration and legacy code-index retirement after migration/rollback evidence. Neither is designed, implemented, tested as a prerequisite, or claimed by this UCI-1 plan.
+UCI-2 retains broader languages and material, richer cross-source analysis, and analytics. UCI-3 retains progressive product-domain address migration and legacy code-index retirement after migration and rollback evidence. Feature 011 owns the read-only Code UI. Neither deferred UCI scope is designed, implemented, tested as a prerequisite, or claimed by this UCI-1 plan.
+
+## Current-order revalidation
+
+This annotation preserves the UCI-1 approved scope, its Constitution 1.1.0 acceptance evidence, and its core-only release requirements. Constitution 2.0.0 assigns the read-only Code UI to Feature 011 rather than UCI-2. Feature 011's early Code/basic-collection milestone may admit Book Context planning. It does not complete Feature 011 or admit Book Context implementation. Full Feature 011 completion includes the named collection consumers and S4 daemon job control. Book Context implementation follows that completion, and Working Agent Memory R1 remains after the Book Context product result. Feature 011 does not expand, reopen, or reaccept UCI-1.

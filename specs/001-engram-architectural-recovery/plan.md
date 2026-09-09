@@ -1,7 +1,7 @@
 # Implementation Plan: Engram Architectural Recovery
 
 **Branch**: `spec/engram-architectural-recovery` | **Date**: 2026-08-22 | **Spec**: `spec.md`  
-**Constitution**: `.specify/memory/constitution.md` version 1.0.0  
+**Constitution**: `.specify/memory/constitution.md` version 1.0.0 at plan acceptance. Constitution 2.0.0 current-order revalidation appears in [Current-order revalidation](#current-order-revalidation).
 **Status**: AR-0 implementation authority only; implementation remains unauthorized.
 
 ## Summary
@@ -22,8 +22,7 @@ canonical project resolution
 
 The target is a Go modular monolith with PostgreSQL authority. Existing transport adapters keep
 compatibility only at their edges; target domain workflows do not branch by architecture era.
-Recovery is delivered through the operator-required AR-1 through AR-7 installed release map,
-with no new operator-surface design and no replacement network service.
+Recovery is delivered through the operator-required AR-1 through AR-7 installed release map. AR itself has no working-surface design or replacement network-service scope. Feature 011 owns the separately accepted operator work under Constitution 2.0.0.
 
 ## Technical Context
 
@@ -278,7 +277,7 @@ The program deliberately defers these decision tickets until the named release n
 | Exact provider model/budget configuration | task | AR-4/AR-6 | Capability health contract is fixed; provider selection is deployment policy. |
 | Final latency thresholds | research | AR-6 | Measured baseline is required before a threshold can be accepted. |
 | Production merge groups and credential metadata conflicts | grilling | AR-3 | Requires operator-approved manifest and live fixture evidence. |
-| Operator working-surface redesign | task | Post AR-7 separate feature | Constitution defers surface work until core truth is installed. |
+| Operator working-surface redesign | task | Separate Feature 011 under Constitution 2.0.0 | This AR plan remains recovery-only. The separate feature owns current-order surface work without changing AR evidence or release outcomes. |
 
 ## Constitution Check: Pre-Design
 
@@ -295,7 +294,7 @@ The program deliberately defers these decision tickets until the named release n
 | Evidence-backed removal | PASS | Phase 0 and removal ledger require consumer/rollback/receipt. |
 | Meaning-conserving migrations | PASS | Expand/backfill/verify/observe/contract sequence is explicit. |
 | Small installed releases | PASS | AR-1..AR-7 have outcome and rollback boundaries. |
-| Core before surface | PASS | Surface redesign is explicitly deferred. |
+| Core before surface | PASS | In this AR plan, recovery scope excludes surface redesign. Constitution 2.0.0 separately admits Feature 011 without reopening this historical AR boundary. |
 | Behavioral evidence | PASS | Fixture, dogfood, installed proof, and receipts are required. |
 | No copied demolished implementation | PASS | Outcome recovery is new-contract based. |
 
@@ -304,6 +303,12 @@ The program deliberately defers these decision tickets until the named release n
 PASS. `research.md`, `data-model.md`, and contracts are required to preserve every pre-design gate;
 no plan step selects a second product workflow, a maturity flag, an unanchored identity, or a
 contraction before compatibility and observation evidence.
+
+## Current-order revalidation
+
+This annotation preserves the accepted AR-0 plan and its historical Constitution 1.0.0 evidence. Its no-working-surface statements bind AR scope only. They do not prohibit the separately accepted Feature 011 under Constitution 2.0.0.
+
+Feature 011's early Code/basic-collection milestone may admit Book Context planning. It does not complete Feature 011 or admit Book Context implementation. Full Feature 011 completion includes the named collection consumers and S4 daemon job control. Book Context implementation follows that completion, and Working Agent Memory R1 remains after the Book Context product result. All other core-only gates remain unchanged because they define AR scope, not the current cross-feature order.
 
 ## Project Structure
 

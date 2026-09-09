@@ -35,13 +35,16 @@ satisfied; it never means implementation is complete.
       Simulations]
 - [x] CHK008 Are D3 release boundaries and deferred decisions explicit enough to prevent AR-1
       implementation from absorbing AR-2 through AR-7 scope? [Scope, Plan §Release Map]
-- [x] CHK009 Are the no-new-network-service and no-working-surface-design constraints expressed as
-      enforceable boundaries rather than intentions? [Constraint, Constitution XII]
+- [x] CHK009 Are the no-new-network-service and no-working-surface-design constraints enforceable AR boundaries? Constitution 2.0.0 assigns separately accepted Feature 011 its own working-surface scope. [Constraint, Constitution XII]
 
 ## Notes
 
 - [x] CHK010 Does the plan state a measurable closure condition for every architecture decision
       classified as temporary or quarantine-pending-proof? [Measurability, Evidence inventories]
+
+## Constitution 2.0.0 revalidation
+
+CHK009 remains accepted AR evidence. Its no-working-surface constraint is scoped to AR and does not contradict Feature 011's separately accepted work.
 
 ## Review Notes
 

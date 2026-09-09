@@ -35,8 +35,7 @@ requirements are observable and operationally actionable.
 - [x] CHK009 Is the exact-head SonarQube gate stated as a release prerequisite independent of
       source/test success? [Coverage, Constitution Delivery Gates]
 
-- [x] CHK010 Are operator working-surface changes explicitly excluded from operational recovery
-      requirements unless a separate accepted feature authorizes them? [Scope, Constitution XII]
+- [x] CHK010 Are operator working-surface changes explicitly excluded from operational recovery requirements unless a separate accepted feature authorizes them? Feature 011 is that separate feature. [Scope, Constitution XII]
 
 ## Notes
 
@@ -64,3 +63,7 @@ requirements are observable and operationally actionable.
 - Result: **PASS** — 10/10 checked; no regressions identified.
 - Rechecked the temporary-control capability metrics and safe degradation, T075's active scope-matched render-budget policy gate before T076 cutover, and the synchronized AR-6 release/rollback and observation ordering; operational metric, failure-state, and no-new-surface requirements remain complete.
 - Exact regression IDs: none.
+
+## Constitution 2.0.0 revalidation
+
+CHK010 preserves the AR operational boundary and its historical review result. Feature 011 does not change AR operability requirements or accept AR release work.

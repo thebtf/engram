@@ -5,7 +5,7 @@
 **Feature**: [Unified Code Intelligence](../spec.md)
 **Approved specification commit**: `e08952a870735f0b27530351e871447b2eaa2266`
 **Reviewed plan commit**: `e08952a870735f0b27530351e871447b2eaa2266`
-**Constitution**: 1.1.0
+**Constitution**: 1.1.0 at review. Constitution 2.0.0 current-order revalidation appears in the UCI plan and this checklist.
 **Reviewer**: UCIPlanArchitectReview
 
 **Note**: Prepared from the installed `/speckit.checklist` template and requirements-quality rules. The parent explicitly requested reviewer evaluation of the items. No command was run or repository file written during this review.
@@ -54,7 +54,7 @@
 
 - [x] CHK021 Are performance criteria tied to a documented corpus, workload, healthy operating profile, sample count, and percentile, with degraded results excluded from healthy-path success? [Measurability; Spec §SC-05; Plan §Performance Goals, §Scale/Scope; Acceptance §Начальные SLO и их границы; Quickstart §Semantic, Watcher, and Recovery Gate]
 - [x] CHK022 Are the twelve product tasks, baseline timing, correct-source evidence, top-five target, and reduced-reading target defined before tuning, without substituting tool availability for measured developer value? [Acceptance Criteria Quality; Spec §SC-03, §SC-07; Acceptance §Продуктовые задачи; Plan §Single Release Map; Quickstart §Release Evidence Gate]
-- [x] CHK023 Are UCI-1A+B defined as one releasable outcome, while UCI-2/3 remain traceable deferred requirements and Code UI requires a separate accepted feature rather than becoming a UCI-1 prerequisite? [Scope Consistency; Spec §FR-12, §SC-08, §Scope Boundaries; Plan §Single Release Map, §Deferred Boundary; Constitution §XII]
+- [x] CHK023 Are UCI-1A+B defined as one releasable outcome, while UCI-2/3 remain traceable deferred requirements and separately accepted Feature 011 owns Code UI without becoming a UCI-1 prerequisite? [Scope Consistency; Spec §FR-12, §SC-08, §Scope Boundaries; Plan §Single Release Map, §Deferred Boundary, §Current-order revalidation; Constitution XII]
 - [x] CHK024 Are Memory R1's preserved project/Space and receipt semantics, migration-170 boundary, and required revalidation before resumption explicit, without implying that UCI-1 completes Memory R1 or its later domain migration? [Compatibility, Dependency Clarity; Spec §FR-11; Plan §Migration and Cutover Plan, §Deferred Boundary; Research §R-01; Migration §MIG-4; Constitution §Sync Impact Report]
 - [x] CHK025 Are UCI-owned exposure and completion requirements explicit about Source/Checkout/View authorization before idempotent, scoped, non-content recording for every code search, graph result, and versioned read; no record on refusal; verified supported-host `succeeded`/`partial`/`failed`/`abandoned` versus no-callback `unknown`; and completion remaining distinct from retrieval result state and coverage without granting authority? [Completeness, Consistency, Ownership; Spec §FR-04; Data model §Retrieval Exposure and Completion Evidence, §Context Resolution and Request Invariant; API §Retrieval exposure and completion; Constitution §VII, §VIII]
 - [x] CHK026 Are the response requirements explicitly disjoint: a closed authorized `unavailable` result with a healthy recorder retains its contextual envelope, closed source/index error, empty items, and exposure receipt; query `EXPOSURE_UNAVAILABLE`/`IDEMPOTENCY_MISMATCH` and context/permission refusals return `exposure: null` with a suppressed contextual envelope and no result content; and `COMPLETION_EVIDENCE_UNAVAILABLE` is callback-only, preserving the parent exposure without manufacturing completion? [Clarity, Consistency, Failure Coverage; Spec §FR-04; API §Retrieval exposure and completion, §Ошибки; Data model §Retrieval Exposure and Completion Evidence; Quickstart §Native Installed Two-Client Gate]
@@ -68,4 +68,8 @@
 - `checklists/requirements.md` retains its separate built-in lifecycle under `/speckit.specify` and `/speckit.clarify`.
 - Spec and Plan citations refer to [spec.md](../spec.md) and [plan.md](../plan.md). Supporting planning references are [research.md](../research.md), [data-model.md](../data-model.md), and [quickstart.md](../quickstart.md).
 - Contract citations refer to [Identity](../supporting-contracts/identity-and-worktrees.md), [Storage](../supporting-contracts/storage-and-indexing.md), [Retrieval](../supporting-contracts/retrieval-and-graph.md), [API](../supporting-contracts/api-contracts.md), and [Migration](../supporting-contracts/migration.md).
-- Acceptance and Constitution citations refer to [uci-acceptance.md](../acceptance/uci-acceptance.md) and [Constitution 1.1.0](../../../.specify/memory/constitution.md). The Memory R1 feature remains separately defined in [Working Agent Memory R1](../../009-working-agent-memory-r1/spec.md).
+- Acceptance and Constitution citations refer to [uci-acceptance.md](../acceptance/uci-acceptance.md), the historical [Constitution 1.1.0](../../../.specify/memory/constitution.md), and the plan's Constitution 2.0.0 current-order revalidation. The Memory R1 feature remains separately defined in [Working Agent Memory R1](../../009-working-agent-memory-r1/spec.md).
+
+## Constitution 2.0.0 revalidation
+
+The 26 satisfied markers remain historical UCI admission evidence. The current-order annotation only assigns Code UI to Feature 011 and records the Book and Memory sequence. It does not re-review UCI-1 or mark Feature 011 accepted.
