@@ -314,11 +314,12 @@ type EmbeddingJobStore interface {
 // EmbeddingWorker claims durable obligations, performs provider calls outside
 // database transactions, and commits only current lease-fenced results.
 type EmbeddingWorker struct {
-	profile  VectorProfile
-	embedder SemanticEmbedder
-	store    EmbeddingJobStore
-	resolver *ContextResolver
-	limits   EmbeddingWorkerLimits
+	profile        VectorProfile
+	embedder       SemanticEmbedder
+	store          EmbeddingJobStore
+	resolver       *ContextResolver
+	limits         EmbeddingWorkerLimits
+	timingObserver embeddingJobTimingObserver
 }
 
 // NewEmbeddingWorker constructs one configured-profile corpus worker.
@@ -332,7 +333,7 @@ func NewEmbeddingWorker(profile VectorProfile, embedder SemanticEmbedder, store 
 	if embedder.Model() != profile.Model {
 		return nil, fmt.Errorf("uci embedding worker: provider model does not match profile")
 	}
-	return &EmbeddingWorker{profile: profile, embedder: embedder, store: store, resolver: resolver, limits: limits}, nil
+	return &EmbeddingWorker{profile: profile, embedder: embedder, store: store, resolver: resolver, limits: limits, timingObserver: newEmbeddingJobTimingObserverFromEnvironment()}, nil
 }
 
 // Run adopts existing current Views once, then processes durable work until the
@@ -360,6 +361,10 @@ func (worker *EmbeddingWorker) Run(ctx context.Context, owner string) error {
 		case <-timer.C:
 		}
 
+		var claimStarted time.Time
+		if worker.timingObserver != nil {
+			claimStarted = time.Now()
+		}
 		claim, claimed, err := worker.store.ClaimEmbeddingJob(ctx, worker.profile, owner, worker.limits.LeaseTTL)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -368,7 +373,11 @@ func (worker *EmbeddingWorker) Run(ctx context.Context, owner string) error {
 			return err
 		}
 		if claimed {
-			if err := worker.runClaim(ctx, claim); err != nil {
+			timing := newEmbeddingJobTimingScope(worker.timingObserver, claim, claimStarted)
+			if timing != nil {
+				timing.observe(embeddingJobTimingStageClaim, claimStarted, time.Now(), nil, "ok")
+			}
+			if err := worker.runClaim(ctx, claim, timing); err != nil {
 				if ctx.Err() != nil {
 					return nil
 				}
@@ -398,11 +407,19 @@ func (worker *EmbeddingWorker) adopt(ctx context.Context) error {
 	}
 }
 
-func (worker *EmbeddingWorker) runClaim(root context.Context, claim EmbeddingJobClaim) error {
+func (worker *EmbeddingWorker) runClaim(root context.Context, claim EmbeddingJobClaim, timing *embeddingJobTimingScope) error {
 	if !claim.valid() {
 		return fmt.Errorf("uci embedding worker: claimed job is invalid")
 	}
-	authorized, err := worker.authorize(root, claim)
+	var authorized AuthorizedContext
+	var err error
+	if timing == nil {
+		authorized, err = worker.authorize(root, claim)
+	} else {
+		started := time.Now()
+		authorized, err = worker.authorize(root, claim)
+		timing.observe(embeddingJobTimingStageAuthorize, started, time.Now(), nil, embeddingJobTimingAuthorizationResultCode(err))
+	}
 	if err != nil {
 		if root.Err() != nil {
 			return nil
@@ -421,7 +438,14 @@ func (worker *EmbeddingWorker) runClaim(root context.Context, claim EmbeddingJob
 	}()
 
 	for {
-		batch, err := worker.store.PrepareEmbeddingBatch(jobContext, claim, authorized, worker.limits.CandidatePageSize)
+		var batch EmbeddingBatch
+		if timing == nil {
+			batch, err = worker.store.PrepareEmbeddingBatch(jobContext, claim, authorized, worker.limits.CandidatePageSize)
+		} else {
+			started := time.Now()
+			batch, err = worker.store.PrepareEmbeddingBatch(jobContext, claim, authorized, worker.limits.CandidatePageSize)
+			timing.observe(embeddingJobTimingStagePrepare, started, time.Now(), &batch, embeddingJobTimingResultCode(err))
+		}
 		if err != nil {
 			if worker.leaseLost(root, jobContext, renewalErrors, err) {
 				return nil
@@ -432,7 +456,13 @@ func (worker *EmbeddingWorker) runClaim(root context.Context, claim EmbeddingJob
 			return worker.transitionFailure(root, claim.Ref, EmbeddingFailure{Code: EmbeddingFailureProviderContract, Disposition: EmbeddingFailureTerminal})
 		}
 		if batch.Exhausted {
-			err = worker.store.CompleteEmbeddingJob(jobContext, claim, authorized)
+			if timing == nil {
+				err = worker.store.CompleteEmbeddingJob(jobContext, claim, authorized)
+			} else {
+				started := time.Now()
+				err = worker.store.CompleteEmbeddingJob(jobContext, claim, authorized)
+				timing.observe(embeddingJobTimingStageComplete, started, time.Now(), &batch, embeddingJobTimingResultCode(err))
+			}
 			if err == nil {
 				return nil
 			}
@@ -445,14 +475,21 @@ func (worker *EmbeddingWorker) runClaim(root context.Context, claim EmbeddingJob
 			continue
 		}
 
-		vectors, err := worker.embedMissing(jobContext, claim, batch)
+		vectors, err := worker.embedMissingWithTiming(jobContext, claim, batch, timing)
 		if err != nil {
 			if worker.leaseLost(root, jobContext, renewalErrors, err) {
 				return nil
 			}
 			return worker.transitionFailure(root, claim.Ref, classifyEmbeddingFailure(err))
 		}
-		if err := worker.store.CommitEmbeddingBatch(jobContext, claim, authorized, batch, vectors); err != nil {
+		if timing == nil {
+			err = worker.store.CommitEmbeddingBatch(jobContext, claim, authorized, batch, vectors)
+		} else {
+			started := time.Now()
+			err = worker.store.CommitEmbeddingBatch(jobContext, claim, authorized, batch, vectors)
+			timing.observe(embeddingJobTimingStageCommit, started, time.Now(), &batch, embeddingJobTimingResultCode(err))
+		}
+		if err != nil {
 			if worker.leaseLost(root, jobContext, renewalErrors, err) {
 				return nil
 			}
@@ -533,6 +570,10 @@ type embeddingProviderInput struct {
 }
 
 func (worker *EmbeddingWorker) embedMissing(ctx context.Context, claim EmbeddingJobClaim, batch EmbeddingBatch) ([][]float32, error) {
+	return worker.embedMissingWithTiming(ctx, claim, batch, nil)
+}
+
+func (worker *EmbeddingWorker) embedMissingWithTiming(ctx context.Context, claim EmbeddingJobClaim, batch EmbeddingBatch, timing *embeddingJobTimingScope) ([][]float32, error) {
 	if !batch.validFor(claim) {
 		return nil, errEmbeddingProviderReply
 	}
@@ -598,15 +639,25 @@ func (worker *EmbeddingWorker) embedMissing(ctx context.Context, claim Embedding
 		providerBatch := providerBatch
 		group.Go(func() error {
 			callContext, cancel := context.WithTimeout(groupContext, worker.limits.ProviderCallTimeout)
-			returned, err := worker.embedder.Embed(callContext, providerBatch.texts)
+			var started, returned time.Time
+			if timing != nil {
+				started = time.Now()
+			}
+			returnedVectors, err := worker.embedder.Embed(callContext, providerBatch.texts)
+			if timing != nil {
+				returned = time.Now()
+			}
 			cancel()
+			if timing != nil {
+				timing.observe(embeddingJobTimingStageEmbed, started, returned, &batch, embeddingJobTimingResultCode(err))
+			}
 			if err != nil {
 				return err
 			}
-			if len(returned) != len(providerBatch.texts) {
+			if len(returnedVectors) != len(providerBatch.texts) {
 				return errEmbeddingProviderReply
 			}
-			for index, vector := range returned {
+			for index, vector := range returnedVectors {
 				if err := validateSemanticVector(vector, claim.Profile.Dimension); err != nil {
 					return errEmbeddingProviderReply
 				}
