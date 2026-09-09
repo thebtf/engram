@@ -1781,7 +1781,7 @@ func (err *uciInstalledAcceptanceMCPError) Error() string {
 
 func uciInstalledAcceptanceIsTransientContextMismatch(err error) bool {
 	var mcpErr *uciInstalledAcceptanceMCPError
-	return errors.As(err, &mcpErr) && mcpErr.detail == "CONTEXT_MISMATCH"
+	return errors.As(err, &mcpErr) && (mcpErr.detail == "CONTEXT_MISMATCH" || mcpErr.detail == "UCI Bind: rpc error: code = FailedPrecondition desc = CONTEXT_MISMATCH")
 }
 
 func uciInstalledAcceptanceStatusTool(ctx context.Context, client *uciInstalledAcceptanceMCPClient, arguments map[string]any) (json.RawMessage, error) {

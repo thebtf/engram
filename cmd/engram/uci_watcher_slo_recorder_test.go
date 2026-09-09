@@ -2049,7 +2049,7 @@ func TestUCIInstalledWatcherFirstCurrentPublicationRetriesTransientContextMismat
 			return uciInstalledAcceptanceStatus{}, fmt.Errorf("transient watcher retry changed selection = %#v, want %#v", observed, selection)
 		}
 		if calls == 1 {
-			return uciInstalledAcceptanceStatus{}, &uciInstalledAcceptanceMCPError{method: "tools/call", code: "-32603", detail: "CONTEXT_MISMATCH"}
+			return uciInstalledAcceptanceStatus{}, &uciInstalledAcceptanceMCPError{method: "tools/call", code: "-32603", detail: "UCI Bind: rpc error: code = FailedPrecondition desc = CONTEXT_MISMATCH"}
 		}
 		if calls == 2 {
 			return current, nil
@@ -2061,6 +2061,41 @@ func TestUCIInstalledWatcherFirstCurrentPublicationRetriesTransientContextMismat
 	}
 	if calls != 2 || !uciWatcherSLOSameExactPublication(publication, after) {
 		t.Fatalf("first current watcher publication = %#v after %d calls, want %#v after 2", publication, calls, after)
+	}
+}
+
+func TestUCIInstalledAcceptanceTransientContextMismatchRecognition(t *testing.T) {
+	const observedDetail = "UCI Bind: rpc error: code = FailedPrecondition desc = CONTEXT_MISMATCH"
+
+	for _, test := range []struct {
+		name   string
+		detail string
+		want   bool
+	}{
+		{name: "bare closed code", detail: "CONTEXT_MISMATCH", want: true},
+		{name: "observed wrapped code", detail: observedDetail, want: true},
+		{name: "token prefix", detail: "XCONTEXT_MISMATCH"},
+		{name: "token suffix", detail: "CONTEXT_MISMATCH retry"},
+		{name: "different gRPC code", detail: "UCI Bind: rpc error: code = Internal desc = CONTEXT_MISMATCH"},
+		{name: "wrapped suffix", detail: observedDetail + " retry"},
+		{name: "URL", detail: "https://example.test/rpc?detail=CONTEXT_MISMATCH"},
+		{name: "control character", detail: observedDetail + "\n"},
+		{name: "free prose", detail: "the watcher reported CONTEXT_MISMATCH"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := fmt.Errorf("outer: %w", &uciInstalledAcceptanceMCPError{method: "tools/call", code: "-32603", detail: test.detail})
+			if got := uciInstalledAcceptanceIsTransientContextMismatch(err); got != test.want {
+				t.Fatalf("transient recognition for %q = %t, want %t", test.detail, got, test.want)
+			}
+
+			wantDiagnostic := "-32603"
+			if test.want {
+				wantDiagnostic = "CONTEXT_MISMATCH"
+			}
+			if got := uciWatcherSLODiagnosticErrorCode(err); got != wantDiagnostic {
+				t.Fatalf("diagnostic code for %q = %q, want %q", test.detail, got, wantDiagnostic)
+			}
+		})
 	}
 }
 
@@ -2271,7 +2306,7 @@ func TestUCIWatcherSLODiagnosticsRecordEachTransientContextMismatch(t *testing.T
 	baseline := uciInstalledAcceptancePublication{sourceID: "source", checkoutID: "checkout", profileID: "profile", viewID: "view-before", generation: 1, runID: "run-before"}
 	attempt := uciWatcherSLOStageAttempt{ID: "attempt-001", Sequence: 1, Warmth: "warm", Baseline: uciWatcherSLOStagePublicationFor(baseline)}
 	trace := newUCIWatcherSLOAttemptTrace(journal.origin, baseline)
-	mismatch := &uciInstalledAcceptanceMCPError{method: "tools/call", code: "-32603", detail: "CONTEXT_MISMATCH"}
+	mismatch := &uciInstalledAcceptanceMCPError{method: "tools/call", code: "-32603", detail: "UCI Bind: rpc error: code = FailedPrecondition desc = CONTEXT_MISMATCH"}
 	trace.observeTool("codebase_status", journal.origin.Add(time.Millisecond), journal.origin.Add(2*time.Millisecond), nil, mismatch)
 	trace.observeTool("codebase_status", journal.origin.Add(3*time.Millisecond), journal.origin.Add(4*time.Millisecond), nil, mismatch)
 	if err := uciWatcherSLOFinalizeAttempt(journal, &attempt, trace, "", nil, uciWatcherSLOStageEmbedding{}, acceptance.UCIWatcherSLOBatch{}); err != nil {
