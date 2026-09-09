@@ -58,6 +58,13 @@ var (
 	errUCIInstalledAcceptanceWatcherCanaryPresent = errors.New("installed standard MCP watcher delete still exposes the canary")
 )
 
+// uciInstalledAcceptanceScenarioProbePhase chooses whether an optional probe
+// follows the complete base lifecycle or consumes the initial installed A/B
+// publications before the base watcher and restart matrices.
+type uciInstalledAcceptanceScenarioProbePhase string
+
+const uciInstalledAcceptanceScenarioProbeBeforeBaseWatcher uciInstalledAcceptanceScenarioProbePhase = "before_base_watcher"
+
 // uciInstalledAcceptanceRequest contains only disposable candidate source,
 // filesystem roots, and a caller-supplied loopback PostgreSQL test target.
 type uciInstalledAcceptanceRequest struct {
@@ -75,6 +82,7 @@ type uciInstalledAcceptanceRequest struct {
 	EmbeddingProvider         *uciInstalledAcceptanceEmbeddingProvider
 	Fixture                   uciInstalledAcceptanceFixture
 	ScenarioProbe             uciInstalledAcceptanceScenarioProbe
+	ScenarioProbePhase        uciInstalledAcceptanceScenarioProbePhase
 }
 
 // uciInstalledAcceptanceEmbeddingProvider is an explicit caller-provided
@@ -86,9 +94,9 @@ type uciInstalledAcceptanceEmbeddingProvider struct {
 	Key   string
 }
 
-// uciInstalledAcceptanceScenarioProbe runs synchronously after the base
-// recorder matrix. It must restore every live-state mutation before returning
-// and must not retain its runtime after it returns.
+// uciInstalledAcceptanceScenarioProbe runs at the request-selected lifecycle
+// phase. It must restore every live-state mutation before returning and must
+// not retain its runtime after it returns.
 type uciInstalledAcceptanceScenarioProbe func(context.Context, uciInstalledAcceptanceScenarioRuntime) (map[string]uciInstalledAcceptanceScenarioEvidence, error)
 
 // uciInstalledAcceptanceScenarioRuntime exposes only the already-live
@@ -538,6 +546,28 @@ func runUCIInstalledAcceptance(ctx context.Context, request uciInstalledAcceptan
 		return result, fmt.Errorf("%w: %v", errUCIInstalledAcceptanceBarrierBoundary, err)
 	}
 
+	if uciInstalledAcceptanceScenarioRunsBeforeBaseWatcher(request) {
+		runtime := uciInstalledAcceptanceScenarioRuntime{
+			Request:            request,
+			Installation:       installation,
+			Authority:          authority,
+			Worktrees:          worktrees,
+			ClientA:            clientA,
+			ClientB:            clientB,
+			Recorder:           clientA,
+			Selections:         map[string]uciInstalledAcceptanceSelection{uciInstalledAcceptanceClientA: selectedA, uciInstalledAcceptanceClientB: selectedB, uciInstalledAcceptanceClientRecorder: selectedA},
+			Publications:       map[string]uciInstalledAcceptancePublication{uciInstalledAcceptanceClientA: publications[uciInstalledAcceptanceClientA], uciInstalledAcceptanceClientB: publications[uciInstalledAcceptanceClientB], uciInstalledAcceptanceClientRecorder: publications[uciInstalledAcceptanceClientA]},
+			ParserBundleDigest: parserBundleDigest,
+			Candidates:         candidates,
+			ServerEnvironment:  serverEnvironment,
+			ClientEnvironment:  clientEnvironment,
+		}
+		if err := uciRunInstalledAcceptanceScenarioProbe(operationCtx, runtime, &result); err != nil {
+			return result, fmt.Errorf("installed UCI pre-base scenario probe: %w", err)
+		}
+		return result, nil
+	}
+
 	parserPIDs := uciWaitForInstalledAcceptanceParserPIDs(operationCtx, installation, parserPath)
 	if len(parserPIDs) == 0 {
 		return result, fmt.Errorf("%w: codebase_index reached published Views without an installed parser process", errUCIInstalledAcceptanceParserBoundary)
@@ -745,6 +775,15 @@ func uciValidateInstalledAcceptanceRequest(ctx context.Context, request uciInsta
 	if err := uciValidateInstalledAcceptanceEmbeddingProvider(request.EmbeddingProvider); err != nil {
 		return err
 	}
+	switch request.ScenarioProbePhase {
+	case "":
+	case uciInstalledAcceptanceScenarioProbeBeforeBaseWatcher:
+		if request.ScenarioProbe == nil {
+			return errors.New("installed acceptance pre-base scenario phase requires a probe")
+		}
+	default:
+		return fmt.Errorf("installed acceptance scenario probe phase = %q", request.ScenarioProbePhase)
+	}
 	if err := uciValidateInstalledAcceptanceSourceRoot(request.CandidateSourceRoot); err != nil {
 		return err
 	}
@@ -794,6 +833,33 @@ func uciValidateInstalledAcceptanceScenarioEvidence(evidence map[string]uciInsta
 		}
 		if !uciInstalledAcceptanceIsBareSHA256(scenarioEvidence.Digest) {
 			return errors.New("installed scenario evidence digest is unsafe")
+		}
+	}
+	return nil
+}
+
+func uciInstalledAcceptanceScenarioRunsBeforeBaseWatcher(request uciInstalledAcceptanceRequest) bool {
+	return request.ScenarioProbe != nil && request.ScenarioProbePhase == uciInstalledAcceptanceScenarioProbeBeforeBaseWatcher
+}
+
+func uciRunInstalledAcceptanceScenarioProbe(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, result *uciInstalledAcceptanceResult) error {
+	if runtime.Request.ScenarioProbe == nil {
+		return nil
+	}
+	if result == nil {
+		return errors.New("installed UCI scenario result is unavailable")
+	}
+	evidence, err := runtime.Request.ScenarioProbe(ctx, runtime)
+	if err != nil {
+		return err
+	}
+	if err := uciValidateInstalledAcceptanceScenarioEvidence(evidence); err != nil {
+		return err
+	}
+	if len(evidence) > 0 {
+		result.ScenarioEvidence = make(map[string]uciInstalledAcceptanceScenarioEvidence, len(evidence))
+		for scenarioID, scenarioEvidence := range evidence {
+			result.ScenarioEvidence[scenarioID] = scenarioEvidence
 		}
 	}
 	return nil
@@ -3932,45 +3998,34 @@ func uciRestartInstalledAcceptance(
 		return nil, 0, errors.New("restarted installed runtime changed unchanged-input link counts")
 	}
 	if request.ScenarioProbe != nil {
-		scenarioSelections := map[string]uciInstalledAcceptanceSelection{
-			uciInstalledAcceptanceClientA:        firstSelection,
-			uciInstalledAcceptanceClientB:        secondSelection,
-			uciInstalledAcceptanceClientC:        thirdSelection,
-			uciInstalledAcceptanceClientRecorder: firstSelection,
-		}
-		scenarioPublications := map[string]uciInstalledAcceptancePublication{
-			uciInstalledAcceptanceClientA:        restartedPublications[uciInstalledAcceptanceClientA],
-			uciInstalledAcceptanceClientB:        restartedPublications[uciInstalledAcceptanceClientB],
-			uciInstalledAcceptanceClientC:        restartedPublications[uciInstalledAcceptanceClientC],
-			uciInstalledAcceptanceClientRecorder: restartedPublications[uciInstalledAcceptanceClientA],
-		}
-		evidence, probeErr := request.ScenarioProbe(ctx, uciInstalledAcceptanceScenarioRuntime{
-			Request:            request,
-			Installation:       next,
-			Authority:          authority,
-			Worktrees:          worktrees,
-			ClientA:            first,
-			ClientB:            second,
-			ClientC:            third,
-			Recorder:           first,
-			Selections:         scenarioSelections,
-			Publications:       scenarioPublications,
+		scenarioRuntime := uciInstalledAcceptanceScenarioRuntime{
+			Request:      request,
+			Installation: next,
+			Authority:    authority,
+			Worktrees:    worktrees,
+			ClientA:      first,
+			ClientB:      second,
+			ClientC:      third,
+			Recorder:     first,
+			Selections: map[string]uciInstalledAcceptanceSelection{
+				uciInstalledAcceptanceClientA:        firstSelection,
+				uciInstalledAcceptanceClientB:        secondSelection,
+				uciInstalledAcceptanceClientC:        thirdSelection,
+				uciInstalledAcceptanceClientRecorder: firstSelection,
+			},
+			Publications: map[string]uciInstalledAcceptancePublication{
+				uciInstalledAcceptanceClientA:        restartedPublications[uciInstalledAcceptanceClientA],
+				uciInstalledAcceptanceClientB:        restartedPublications[uciInstalledAcceptanceClientB],
+				uciInstalledAcceptanceClientC:        restartedPublications[uciInstalledAcceptanceClientC],
+				uciInstalledAcceptanceClientRecorder: restartedPublications[uciInstalledAcceptanceClientA],
+			},
 			ParserBundleDigest: parserBundleDigest,
 			Candidates:         candidates,
 			ServerEnvironment:  serverEnvironment,
 			ClientEnvironment:  clientEnvironment,
-		})
-		if probeErr != nil {
-			return nil, 0, fmt.Errorf("installed UCI scenario probe: %w", probeErr)
 		}
-		if probeErr := uciValidateInstalledAcceptanceScenarioEvidence(evidence); probeErr != nil {
-			return nil, 0, fmt.Errorf("installed UCI scenario probe evidence: %w", probeErr)
-		}
-		if len(evidence) > 0 {
-			result.ScenarioEvidence = make(map[string]uciInstalledAcceptanceScenarioEvidence, len(evidence))
-			for scenarioID, scenarioEvidence := range evidence {
-				result.ScenarioEvidence[scenarioID] = scenarioEvidence
-			}
+		if err := uciRunInstalledAcceptanceScenarioProbe(ctx, scenarioRuntime, result); err != nil {
+			return nil, 0, fmt.Errorf("installed UCI scenario probe: %w", err)
 		}
 	}
 

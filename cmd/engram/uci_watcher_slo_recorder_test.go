@@ -84,6 +84,7 @@ func TestUCIRecordInstalledWatcherSLO(t *testing.T) {
 		ReadinessTimeout:          30 * time.Second,
 		OperationTimeout:          uciWatcherSLORecordTimeout,
 		EmbeddingProvider:         provider,
+		ScenarioProbePhase:        uciInstalledAcceptanceScenarioProbeBeforeBaseWatcher,
 		Fixture: uciInstalledAcceptanceFixture{
 			RelativePath:  uciInstalledAcceptanceRelativePath,
 			SharedSymbol:  uciInstalledAcceptanceSharedSymbol,
@@ -655,5 +656,23 @@ func TestUCIInstalledAcceptanceCheckoutShapeRequiresDistinctAB(t *testing.T) {
 	delete(checkouts, "auxiliary-4")
 	if _, err := uciInstalledAcceptanceCheckoutIDs(checkouts); err == nil {
 		t.Fatal("incomplete recorder checkout shape was accepted")
+	}
+}
+
+func TestUCIInstalledAcceptanceScenarioProbePhaseKeepsBaseDefault(t *testing.T) {
+	probe := func(context.Context, uciInstalledAcceptanceScenarioRuntime) (map[string]uciInstalledAcceptanceScenarioEvidence, error) {
+		return nil, nil
+	}
+	request := uciInstalledAcceptanceRequest{ScenarioProbe: probe}
+	if uciInstalledAcceptanceScenarioRunsBeforeBaseWatcher(request) {
+		t.Fatal("ordinary scenario probe skipped the base lifecycle")
+	}
+	request.ScenarioProbePhase = uciInstalledAcceptanceScenarioProbeBeforeBaseWatcher
+	if !uciInstalledAcceptanceScenarioRunsBeforeBaseWatcher(request) {
+		t.Fatal("explicit pre-base scenario probe did not select the recorder lifecycle")
+	}
+	request.ScenarioProbe = nil
+	if uciInstalledAcceptanceScenarioRunsBeforeBaseWatcher(request) {
+		t.Fatal("absent scenario probe selected the pre-base lifecycle")
 	}
 }
