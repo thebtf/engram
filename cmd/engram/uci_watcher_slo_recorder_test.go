@@ -312,7 +312,7 @@ func uciWatcherSLOAwaitEmbeddingReady(ctx context.Context, authority *uciInstall
 		if status.Embedding.ErrorCode != nil || status.Embedding.Coverage == "failed" {
 			return status, uciInstalledAcceptancePublication{}, time.Time{}, errors.New("installed embedding worker reported a terminal failure")
 		}
-		if status.Embedding.Coverage == "complete" && status.Embedding.TotalCandidates > 0 && status.Embedding.ReadyCandidates == status.Embedding.TotalCandidates && status.Embedding.PendingJobs == 0 && status.Embedding.JobState != nil && *status.Embedding.JobState == "succeeded" {
+		if uciWatcherSLOEmbeddingReady(status) {
 			return status, uciInstalledAcceptancePublication{sourceID: view.Context.SourceID, checkoutID: view.Context.CheckoutID, viewID: view.Context.ViewID, profileID: view.Context.AnalysisProfileID, generation: view.Context.Generation, runID: expected.runID, freshnessState: "observed_current"}, time.Now().UTC(), nil
 		}
 		select {
@@ -321,6 +321,15 @@ func uciWatcherSLOAwaitEmbeddingReady(ctx context.Context, authority *uciInstall
 		case <-ticker.C:
 		}
 	}
+}
+
+func uciWatcherSLOEmbeddingReady(status uciRealCorpusEmbeddingStatus) bool {
+	return status.Embedding.ErrorCode == nil &&
+		status.Embedding.Coverage == "complete" &&
+		status.Embedding.TotalCandidates > 0 &&
+		status.Embedding.ReadyCandidates == status.Embedding.TotalCandidates &&
+		status.Embedding.PendingJobs == 0 &&
+		status.Embedding.JobState != nil && *status.Embedding.JobState == "succeeded"
 }
 
 func uciWatcherSLOCurrentView(ctx context.Context, authority *uciInstalledAcceptanceAuthority, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection, expected uciInstalledAcceptancePublication) (acceptance.UCIWatcherSLOView, uciRealCorpusEmbeddingStatus, error) {
@@ -429,42 +438,75 @@ func uciWatcherSLOEnvironmentAndProfile(ctx context.Context, live uciInstalledAc
 		}, nil
 }
 
+type uciWatcherSLOUnchangedSnapshot struct {
+	view            acceptance.UCIWatcherSLOView
+	readyCandidates uint64
+}
+
+// uciWatcherSLOObserveUnchangedWindow first establishes that the preceding
+// changed View is embedding-ready, then captures two independent quiescent
+// installed-client snapshots without scheduling another index run.
+func uciWatcherSLOObserveUnchangedWindow(
+	awaitReady func() (uciInstalledAcceptancePublication, error),
+	waitQuiescent func(uciInstalledAcceptancePublication) (uciInstalledAcceptancePublication, error),
+	snapshot func(uciInstalledAcceptancePublication) (uciWatcherSLOUnchangedSnapshot, error),
+) (uciWatcherSLOUnchangedSnapshot, uciWatcherSLOUnchangedSnapshot, error) {
+	ready, err := awaitReady()
+	if err != nil {
+		return uciWatcherSLOUnchangedSnapshot{}, uciWatcherSLOUnchangedSnapshot{}, err
+	}
+	baseline, err := waitQuiescent(ready)
+	if err != nil {
+		return uciWatcherSLOUnchangedSnapshot{}, uciWatcherSLOUnchangedSnapshot{}, err
+	}
+	before, err := snapshot(baseline)
+	if err != nil {
+		return uciWatcherSLOUnchangedSnapshot{}, uciWatcherSLOUnchangedSnapshot{}, err
+	}
+	afterPublication, err := waitQuiescent(baseline)
+	if err != nil {
+		return uciWatcherSLOUnchangedSnapshot{}, uciWatcherSLOUnchangedSnapshot{}, err
+	}
+	if !uciInstalledAcceptanceSameViewPublication(baseline, afterPublication) {
+		return uciWatcherSLOUnchangedSnapshot{}, uciWatcherSLOUnchangedSnapshot{}, errors.New("unchanged watcher observation published a new View")
+	}
+	after, err := snapshot(afterPublication)
+	if err != nil {
+		return uciWatcherSLOUnchangedSnapshot{}, uciWatcherSLOUnchangedSnapshot{}, err
+	}
+	return before, after, nil
+}
+
 func uciRecordInstalledWatcherSLOUnchanged(ctx context.Context, live uciInstalledAcceptanceScenarioRuntime, selection uciInstalledAcceptanceSelection, before uciInstalledAcceptancePublication, identity uci.UCISLOSampleIdentity) (acceptance.UCIWatcherSLOUnchangedInputCounter, error) {
-	beforeView, beforeEmbedding, err := uciWatcherSLOCurrentView(ctx, live.Authority, live.ClientA, selection, before)
+	baselineBefore, baselineAfter, err := uciWatcherSLOObserveUnchangedWindow(
+		func() (uciInstalledAcceptancePublication, error) {
+			_, ready, _, readyErr := uciWatcherSLOAwaitEmbeddingReady(ctx, live.Authority, live.ClientA, selection, before)
+			return ready, readyErr
+		},
+		func(expected uciInstalledAcceptancePublication) (uciInstalledAcceptancePublication, error) {
+			return uciWaitForInstalledAcceptanceRestartQuiescence(ctx, live.ClientA, selection, expected)
+		},
+		func(expected uciInstalledAcceptancePublication) (uciWatcherSLOUnchangedSnapshot, error) {
+			view, status, snapshotErr := uciWatcherSLOCurrentView(ctx, live.Authority, live.ClientA, selection, expected)
+			if snapshotErr != nil {
+				return uciWatcherSLOUnchangedSnapshot{}, snapshotErr
+			}
+			if !uciWatcherSLOEmbeddingReady(status) {
+				return uciWatcherSLOUnchangedSnapshot{}, errors.New("unchanged watcher baseline is not embedding-ready")
+			}
+			return uciWatcherSLOUnchangedSnapshot{view: view, readyCandidates: status.Embedding.ReadyCandidates}, nil
+		},
+	)
 	if err != nil {
 		return acceptance.UCIWatcherSLOUnchangedInputCounter{}, err
 	}
-	payload, err := live.ClientA.Tool(ctx, "codebase_index", map[string]any{"context_handle": selection.contextHandle, "root": live.Worktrees.primaryRoot})
-	if err != nil {
-		return acceptance.UCIWatcherSLOUnchangedInputCounter{}, err
-	}
-	var started struct {
-		Status string `json:"status"`
-		RunID  string `json:"run_id"`
-	}
-	if err := json.Unmarshal(payload, &started); err != nil || started.Status != "started" || started.RunID == "" {
-		return acceptance.UCIWatcherSLOUnchangedInputCounter{}, errors.New("installed unchanged-input index did not start")
-	}
-	selection.runID = started.RunID
-	barrier, err := uciWaitForInstalledAcceptanceBarrier(ctx, live.ClientA, selection)
-	if err != nil {
-		return acceptance.UCIWatcherSLOUnchangedInputCounter{}, err
-	}
-	settled, err := uciWaitForInstalledAcceptanceQuiescence(ctx, live.ClientA, selection, barrier)
-	if err != nil {
-		return acceptance.UCIWatcherSLOUnchangedInputCounter{}, err
-	}
-	afterView, afterEmbedding, err := uciWatcherSLOCurrentView(ctx, live.Authority, live.ClientA, selection, settled)
-	if err != nil {
-		return acceptance.UCIWatcherSLOUnchangedInputCounter{}, err
-	}
-	if !uciWatcherSLOViewsEqual(beforeView, afterView) || beforeEmbedding.Embedding.ReadyCandidates != afterEmbedding.Embedding.ReadyCandidates {
+	if !uciWatcherSLOViewsEqual(baselineBefore.view, baselineAfter.view) || baselineBefore.readyCandidates != baselineAfter.readyCandidates {
 		return acceptance.UCIWatcherSLOUnchangedInputCounter{}, errors.New("unchanged installed input changed its View or embedding-ready counter")
 	}
 	return acceptance.UCIWatcherSLOUnchangedInputCounter{
-		Identity: identity, Context: afterView.Context, InputDigest: string(afterView.ManifestDigest), Unchanged: true,
+		Identity: identity, Context: baselineAfter.view.Context, InputDigest: string(baselineAfter.view.ManifestDigest), Unchanged: true,
 		EmbeddingCountersOrigin: acceptance.UCIWatcherSLOOriginInstalledEmbeddingStatus, EmbeddingCountersMeasured: true,
-		EmbeddingCountersBefore: int64(beforeEmbedding.Embedding.ReadyCandidates), EmbeddingCountersAfter: int64(afterEmbedding.Embedding.ReadyCandidates),
+		EmbeddingCountersBefore: int64(baselineBefore.readyCandidates), EmbeddingCountersAfter: int64(baselineAfter.readyCandidates),
 		ReembeddedCandidates: 0,
 	}, nil
 }
@@ -691,5 +733,73 @@ func TestUCIWatcherSLOClassifiesPartialSearchAsDegraded(t *testing.T) {
 	outcome, reason = uciWatcherSLOClassifyOutcome(uci.QueryStatusOK, "complete", "complete")
 	if outcome != "healthy" || reason != "" {
 		t.Fatalf("complete structural result classification = %q, %q", outcome, reason)
+	}
+}
+
+func TestUCIWatcherSLOUnchangedWindowWaitsForReadyQuiescentBaseline(t *testing.T) {
+	stable := uciInstalledAcceptancePublication{sourceID: "source", checkoutID: "checkout", viewID: "view", profileID: "profile", generation: 2}
+	step := 0
+	before, after, err := uciWatcherSLOObserveUnchangedWindow(
+		func() (uciInstalledAcceptancePublication, error) {
+			if step != 0 {
+				t.Fatalf("ready step = %d, want 0", step)
+			}
+			step++
+			return stable, nil
+		},
+		func(expected uciInstalledAcceptancePublication) (uciInstalledAcceptancePublication, error) {
+			if expected != stable || (step != 1 && step != 3) {
+				t.Fatalf("quiescence step=%d expected=%#v", step, expected)
+			}
+			step++
+			return stable, nil
+		},
+		func(expected uciInstalledAcceptancePublication) (uciWatcherSLOUnchangedSnapshot, error) {
+			if expected != stable || (step != 2 && step != 4) {
+				t.Fatalf("snapshot step=%d expected=%#v", step, expected)
+			}
+			step++
+			return uciWatcherSLOUnchangedSnapshot{readyCandidates: 7}, nil
+		},
+	)
+	if err != nil || step != 5 || before.readyCandidates != 7 || after.readyCandidates != 7 {
+		t.Fatalf("unchanged sequence = before=%#v after=%#v step=%d err=%v", before, after, step, err)
+	}
+
+	waits := 0
+	_, _, err = uciWatcherSLOObserveUnchangedWindow(
+		func() (uciInstalledAcceptancePublication, error) { return stable, nil },
+		func(expected uciInstalledAcceptancePublication) (uciInstalledAcceptancePublication, error) {
+			waits++
+			if expected != stable {
+				t.Fatalf("unexpected changed baseline: %#v", expected)
+			}
+			if waits == 1 {
+				return stable, nil
+			}
+			return uciInstalledAcceptancePublication{sourceID: "source", checkoutID: "checkout", viewID: "new-view", profileID: "profile", generation: 3}, nil
+		},
+		func(uciInstalledAcceptancePublication) (uciWatcherSLOUnchangedSnapshot, error) {
+			return uciWatcherSLOUnchangedSnapshot{}, nil
+		},
+	)
+	if err == nil {
+		t.Fatal("unchanged window accepted a watcher-published View")
+	}
+}
+
+func TestUCIWatcherSLOEmbeddingReadyRequiresSettledWorker(t *testing.T) {
+	jobState := "succeeded"
+	status := uciRealCorpusEmbeddingStatus{}
+	status.Embedding.Coverage = "complete"
+	status.Embedding.TotalCandidates = 3
+	status.Embedding.ReadyCandidates = 3
+	status.Embedding.JobState = &jobState
+	if !uciWatcherSLOEmbeddingReady(status) {
+		t.Fatal("settled embedding worker was not ready")
+	}
+	status.Embedding.PendingJobs = 1
+	if uciWatcherSLOEmbeddingReady(status) {
+		t.Fatal("pending embedding worker was accepted as ready")
 	}
 }
