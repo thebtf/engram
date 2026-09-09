@@ -11,7 +11,7 @@ UCI-1A and UCI-1B together are the first releasable UCI scope. They deliver one 
 
 The release must provide exact lookup, full-text retrieval, and a real semantic-vector retrieval path; bounded graph exploration must agree with the same View as search. It must update itself after observed saved changes and recover honestly after interruption. Native installation proof and preservation of existing authorization boundaries are part of the release outcome, not optional follow-up work.
 
-UCI-2 and UCI-3 remain explicit deferred requirements. In particular, the future Code UI is UCI-2 surface work and requires its own accepted Spec Kit feature before it can be designed or delivered.
+UCI-2 and UCI-3 remain explicit deferred requirements. The separate Operator Code Console and basic collection feature is outside UCI-1 and takes the Code UI outcome forward under Constitution Principle XII.
 
 ## Actors
 
@@ -166,7 +166,7 @@ A coding agent uses UCI for representative navigation and impact questions and c
 
 ### Deferred — Retained Requirements, Not Removed Scope
 
-- **UCI-2**: Broader language and contextual-material support, richer navigation and analysis, cross-source behavior, and the future read-only Code UI. The Code UI is surface work and requires a separate accepted Spec Kit feature under Constitution Principle XII.
+- **UCI-2**: Broader language and contextual-material support, richer navigation and analysis, and cross-source behavior. It does not own the Operator Code Console.
 - **UCI-3**: Progressive migration of the remaining Engram domain addresses to Space and typed source references, plus legacy code-index retirement after the specified migration and rollback evidence.
 - Full support for C# and Python resolution, expansive document enrichment, community analytics, and media adapters remain later capability work; they are not implied by a UCI-1 success claim.
 
@@ -174,7 +174,7 @@ A coding agent uses UCI for representative navigation and impact questions and c
 
 - Editing application source, changing roles or leases, production deployment, release publication, or authorization-policy expansion.
 - Unsaved editor-buffer indexing, arbitrary source-path scanning, source-script execution, or automatic ingestion of private material outside approved scope.
-- A new operator working surface, a second code-intelligence product, or a claim of literal compatibility with upstream tools without its own contract evidence.
+- A new operator working surface in this UCI-1 feature, a second code-intelligence product, or a claim of literal compatibility with upstream tools without its own contract evidence.
 
 ## Assumptions
 
@@ -187,11 +187,15 @@ A coding agent uses UCI for representative navigation and impact questions and c
 
 ## Dependencies
 
-- Engram Constitution 1.1.0, especially its requirements for server-resolved typed context, View-pinned retrieval, preserved project/Space semantics, and separate accepted surface work.
+- Engram Constitution 2.0.0, especially its requirements for server-resolved typed context, View-pinned retrieval, preserved project/Space semantics, and separately accepted surface work.
 - The existing authorized Engram server, daemon, MCP integration boundary, and native Git worktree environment.
 - The adopted identity, storage, retrieval/graph, API, migration, and acceptance contracts under this feature directory.
 - The machine-readable response schema, examples, acceptance scenarios, and document-validation artifact adopted with this feature.
 - A curated, authorized acceptance corpus and recorded twelve-task baseline suitable for the first-release value measurement.
+
+### Constitution 2.0 ordering revalidation
+
+UCI technical acceptance is recorded as `PASS_WITH_EXPLICIT_SONAR_WAIVER` while the operator temporarily defers Sonar. This admits only separately accepted Feature 011 after UCI technical acceptance. It does not make Code UI part of UCI-1, waive UCI authority or evidence rules, authorize an access-policy expansion, or make a UCI release claim. Feature 011 completes the Code Explorer and Rules-first basic collection outcome before the separate Book Context feature, then preserved Working Agent Memory R1.
 
 ## Supporting Contract Boundary
 

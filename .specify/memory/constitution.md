@@ -1,10 +1,11 @@
 <!--
 Sync Impact Report
-- Version change: 1.0.0 -> 1.1.0
-- Modified principles: III. Stable Project Identity Precedes Scoped Access -> III. Stable Typed Context Precedes Scoped Access; VII. Retrieval Is Task-Aware and Bounded expanded for view-pinned code retrieval.
+- Version change: 1.1.0 -> 2.0.0
+- Modified principles: XII. Surface Work Follows Core Truth now permits the separately accepted Operator Code Console and basic collection feature after UCI technical acceptance, before Working Agent Memory R1.
 - Added sections: none.
 - Removed sections: none.
-- Follow-up TODOs: UCI-2 Code UI requires a separate accepted Spec Kit feature under Principle XII; Working Agent Memory R1 must be revalidated against the accepted Space/Source/Checkout/View contract before resumption.
+- Affected references revalidated: recovery feature 001 remains core-only; UCI feature 010 records Feature 011 as separate from UCI-1; Memory R1 feature 009 remains retained after Feature 011 and Book Context.
+- Operator provenance: explicit 2026-09-10 decision that Code UI and basic collections precede Book Context, then Working Agent Memory R1. UCI technical acceptance is PASS_WITH_EXPLICIT_SONAR_WAIVER while Sonar is temporarily deferred.
 -->
 
 # Engram Constitution
@@ -80,9 +81,9 @@ outcome, migration/rollback boundary, behavioral evidence, installed verificatio
 observation rule. A hidden long-lived replacement branch is forbidden.
 
 ### XII. Surface Work Follows Core Truth
-This recovery MUST NOT redesign the operator working surface. Existing surfaces MAY be removed or
-made honestly unavailable when their backing capability is removed. New working-surface design
-requires a separate accepted Spec Kit feature after recovery closure.
+This recovery MUST NOT redesign the operator working surface as core recovery work. Existing surfaces MAY be removed or made honestly unavailable when their backing capability is removed. New working-surface design requires a separate accepted Spec Kit feature.
+
+The separately accepted Operator Code Console and basic collection feature MAY proceed after UCI technical acceptance without waiting for Working Agent Memory R1. It MUST preserve UCI authority, evidence, and release boundaries. This exception does not place working-surface implementation in the recovery feature. Book Context is the next separate feature. Working Agent Memory R1 remains retained after Book Context.
 
 ### XIII. Evidence Proves Behavior, Not Ceremony
 Tests and receipts MUST prove cross-session evidence acquisition, identity convergence,
@@ -143,4 +144,4 @@ or removes a governing principle; a MINOR version adds or materially expands one
 clarifies without changing meaning. Every release and implementation review MUST check conformance
 to this constitution, preserve evidence of any exception, and reject scope expansion by workaround.
 
-**Version**: 1.1.0 | **Ratified**: 2026-08-21 | **Last Amended**: 2026-09-05
+**Version**: 2.0.0 | **Ratified**: 2026-08-21 | **Last Amended**: 2026-09-10

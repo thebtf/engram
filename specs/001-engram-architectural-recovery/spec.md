@@ -234,7 +234,8 @@ its current supported contract and prove identity handling is consistent where i
 - **FR-026**: The product MUST return actionable retirement behavior for supported temporary
   legacy interfaces and remove them after the declared sunset gate.
 - **FR-027**: The recovery MUST defer new operator working-surface design, broad graph products,
-  broad temporal interfaces, SaaS expansion, new cognitive families, and unrelated modernization.
+  broad temporal interfaces, SaaS expansion, new cognitive families, and unrelated modernization
+  to work outside this recovery feature.
 - **FR-028**: The recovery MUST deliver independently installable AR-1 through AR-7 slices, each
   with one outcome, test strategy, rollback boundary, installed verification, and observation rule.
 
@@ -333,12 +334,16 @@ active declaration, SC-010 is `not_computable` and the static-context cutover is
 
 ### Out of Scope
 
-- New operator working-surface design.
+- New operator working-surface design in this recovery feature. The separately accepted Operator Code Console exception in Constitution Principle XII remains outside this feature's work, evidence, and release authority.
 - New graph products or graph-first retrieval.
 - Broad temporal-truth user interfaces.
 - SaaS or multi-tenant expansion.
 - New cognitive feature families.
 - Cosmetic or unrelated modernization.
+
+### Constitution 2.0 revalidation
+
+Constitution 2.0.0 permits the separately accepted Operator Code Console and basic collection feature after UCI technical acceptance. It does not change this recovery's outcomes, AR-1 through AR-7 sequencing, or no-surface implementation boundary. Feature 011 owns the exception; this recovery feature does not.
 
 ## Assumptions
 

@@ -16,3 +16,7 @@ R1 uses an explicit `context_reference` mode inside the existing HostAdvisor, Ta
 ## Acceptance
 
 The frozen candidate must satisfy evidence classes A, B, and C in `04-ACCEPTANCE.md`, including automatic capture to fresh-session reuse, authorized shared or global cross-project experience, current issues, onboarding, rollback, installed OMP proof, exact-candidate SonarQube, and repository regression.
+
+## Constitution 2.0 ordering revalidation
+
+This feature remains retained and in implementation. Feature 011 owns the Code Explorer and Rules-first basic collection outcome. After Feature 011 completes, Book Context is the next separate feature. Working Agent Memory R1 returns after Book Context. This ordering does not change the R1 outcome, authority package, or acceptance evidence.
