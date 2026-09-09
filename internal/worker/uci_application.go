@@ -40,8 +40,8 @@ var (
 
 // NewUCIApplication composes the exact existing context application with the
 // real PostgreSQL-backed UCI services. Semantic retrieval is deliberately
-// optional: callers receive lexical FTS until a real semantic provider is
-// explicitly composed.
+// optional: callers receive structural lexical FTS until the selected View's
+// durable embedding status is complete.
 func NewUCIApplication(
 	contextApplication *mcp.UCIContextApplication,
 	aliasResolver *uci.AliasResolver,
@@ -101,8 +101,10 @@ func (application *UCIApplication) ResolveLegacyProject(ctx context.Context, _ u
 	})
 }
 
-// SearchCodebase executes retrieval inside the already-authorized immutable View.
-// The shared semantic service degrades to lexical until exact profile coverage is complete.
+// SearchCodebase executes structural FTS inside the already-authorized immutable
+// View. A queued embedding job must not delay this structural publication
+// boundary; semantic retrieval becomes eligible only after durable embedding
+// status is complete.
 func (application *UCIApplication) SearchCodebase(ctx context.Context, authorized uci.AuthorizedContext, input mcp.CodebaseSearchInput) (uci.QueryResponse, error) {
 	if application == nil || application.queryService == nil {
 		return uci.QueryResponse{}, errors.New("UCI application query service is not configured")
@@ -125,8 +127,16 @@ func (application *UCIApplication) SearchCodebase(ctx context.Context, authorize
 		Limit:           input.Limit,
 	}
 	var result uci.QueryResult
-	if application.semanticService != nil {
-		result, err = application.semanticService.Query(ctx, authorized, spec)
+	if application.semanticService != nil && application.indexStatusService != nil {
+		status, statusErr := application.indexStatusService.Status(ctx, authorized, "")
+		if statusErr != nil {
+			return uci.QueryResponse{}, statusErr
+		}
+		if status.Embedding.Coverage == uci.IndexCoverageComplete {
+			result, err = application.semanticService.Query(ctx, authorized, spec)
+		} else {
+			result, err = application.queryService.Query(ctx, authorized, spec)
+		}
 	} else {
 		result, err = application.queryService.Query(ctx, authorized, spec)
 	}

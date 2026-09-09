@@ -70,7 +70,7 @@ func TestUCIApplicationMCPUsesExactPostgreSQLViews(t *testing.T) {
 	require.NoError(t, searchResponse.Validate())
 	require.NotNil(t, searchResponse.Retrieval)
 	require.Equal(t, uci.QueryRetrievalLexical, searchResponse.Retrieval.Mode)
-	require.Contains(t, searchResponse.Retrieval.DegradationReasons, "vector_provider_unavailable")
+	require.Empty(t, searchResponse.Retrieval.DegradationReasons)
 	require.NotNil(t, searchResponse.Contexts, "search response: %s", workerUCIApplicationToolText(t, search))
 	require.Equal(t, fixture.current.Context.ViewID, (*searchResponse.Contexts)[0].ViewID)
 	require.NotNil(t, searchResponse.Exposure, "MCP must append evidence before releasing a code search")
@@ -206,6 +206,60 @@ func TestUCIApplicationMCPUsesExactPostgreSQLViews(t *testing.T) {
 	require.Equal(t, beforeFailure, workerUCIApplicationExposureCount(t, store.GetDB()))
 }
 
+func TestUCIApplicationFTSSearchDoesNotWaitForQueuedEmbedding(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	const model = "worker-uci-fts-first"
+	providerStarted := make(chan struct{}, 1)
+	providerRelease := make(chan struct{})
+	provider := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		select {
+		case providerStarted <- struct{}{}:
+		default:
+		}
+		<-providerRelease
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(map[string]any{"data": []map[string]any{{"embedding": make([]float32, embedding.EmbeddingDim), "index": 0}}})
+	}))
+	t.Cleanup(provider.Close)
+	t.Setenv("ENGRAM_EMBEDDING_URL", provider.URL)
+	t.Setenv("ENGRAM_EMBEDDING_MODEL", model)
+	sharedClient, err := embedding.NewClientWithSettings(context.Background(), nil)
+	require.NoError(t, err)
+	semantic := newUCISemanticConfig(context.Background(), nil, sharedClient, sharedClient)
+	store := openWorkerUCIContextCompositionStore(t)
+	server := mcp.NewServer(mcp.ServerOptions{Version: "uci-application-fts-first"})
+	composition, err := composeUCIContext(true, store.GetDB(), server, semantic)
+	require.NoError(t, err)
+	fixture := newWorkerUCIApplicationFixture(t, composition)
+	identity := auth.ClientWithPrincipal("read-write", fixture.workstationID, fixture.principal, auth.PrincipalKindAgent)
+	caller := auth.WithIdentity(mcp.ContextWithSession(context.Background(), fixture.clientSessionID), identity)
+	handle := workerUCISelectCheckout(t, server, caller, fixture.source.SourceID, fixture.checkout, fixture.profile.ProfileID)
+	parameters, err := json.Marshal(map[string]any{"name": "codebase_search", "arguments": map[string]any{"context_handle": handle, "query": "SearchNeedle", "path_prefix": "internal/", "limit": 10}})
+	require.NoError(t, err)
+	responses := make(chan *mcp.Response, 1)
+	go func() {
+		responses <- server.HandleRequest(caller, &mcp.Request{JSONRPC: "2.0", ID: uuid.NewString(), Method: "tools/call", Params: parameters})
+	}()
+	select {
+	case <-providerStarted:
+		close(providerRelease)
+		<-responses
+		t.Fatal("structural FTS search invoked the queued embedding provider")
+	case response := <-responses:
+		require.NotNil(t, response)
+		require.Nil(t, response.Error)
+		search := workerUCIApplicationQueryResponse(t, response)
+		require.Equal(t, uci.QueryRetrievalLexical, search.Retrieval.Mode)
+		select {
+		case <-providerStarted:
+			t.Fatal("structural FTS search invoked the queued embedding provider")
+		default:
+		}
+	case <-time.After(time.Second):
+		t.Fatal("structural FTS search waited for queued embedding")
+	}
+}
+
 func TestUCIApplicationUsesConfiguredSharedEmbeddingClient(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
 	const model = "worker-uci-shared-embedding"
@@ -286,11 +340,10 @@ func TestUCIApplicationUsesConfiguredSharedEmbeddingClient(t *testing.T) {
 	require.NoError(t, response.Validate())
 	require.NotNil(t, response.Retrieval)
 	require.Equal(t, uci.QueryRetrievalLexical, response.Retrieval.Mode)
-	require.Contains(t, response.Retrieval.DegradationReasons, "vector_coverage_incomplete")
-	require.NotContains(t, response.Retrieval.DegradationReasons, "vector_provider_unavailable")
+	require.Empty(t, response.Retrieval.DegradationReasons)
 	require.NotNil(t, response.Items)
 	require.NotEmpty(t, *response.Items)
-	require.Equal(t, int32(1), providerCalls.Load())
+	require.Zero(t, providerCalls.Load())
 	status := workerUCIApplicationToolResponse(t, server, caller, "codebase_status", map[string]any{
 		"context_handle": handle,
 	})
@@ -371,8 +424,8 @@ func TestUCIApplicationUsesConfiguredSharedEmbeddingClient(t *testing.T) {
 		require.Contains(t, item.MatchSources, uci.QueryMatchVector)
 	}
 	require.Equal(t, int32(3), corpusProviderInputs.Load(), "the runtime producer must embed each current corpus input exactly once")
-	require.Equal(t, int32(2), queryProviderInputs.Load(), "the test performs one pre-coverage and one post-coverage query embedding")
-	require.Equal(t, int32(3), providerCalls.Load(), "the producer must batch the corpus into one request beside the two query embeddings")
+	require.Equal(t, int32(1), queryProviderInputs.Load(), "only the post-coverage semantic query may call the provider")
+	require.Equal(t, int32(2), providerCalls.Load(), "the producer batches corpus inputs once and the ready semantic query makes one call")
 }
 
 func TestUCIApplicationGraphResponseKeepsNonconclusiveOutcomesExplicit(t *testing.T) {
