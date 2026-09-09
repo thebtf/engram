@@ -683,23 +683,6 @@ func TestUCIInstalledAcceptanceScenarioProbePhaseKeepsBaseDefault(t *testing.T) 
 	}
 }
 
-func TestUCIInstalledAcceptanceIgnoredProjectAnchorIsOutsideAdmission(t *testing.T) {
-	root := t.TempDir()
-	if err := uciRunInstalledAcceptanceGit(t.Context(), root, "init"); err != nil {
-		t.Fatalf("initialize recorder fixture: %v", err)
-	}
-	if err := uciWriteInstalledAcceptanceIgnoredProjectAnchor(t.Context(), root, []byte(`{"version":3,"project_id":"11111111-1111-4111-8111-111111111111","name":"recorder","scope":"repository"}`)); err != nil {
-		t.Fatalf("write ignored recorder anchor: %v", err)
-	}
-	output, err := exec.CommandContext(t.Context(), "git", "-C", root, "ls-files", "--others", "--exclude-standard").Output()
-	if err != nil {
-		t.Fatalf("list recorder admission candidates: %v", err)
-	}
-	if strings.Contains(string(output), ".engram-project") {
-		t.Fatalf("unsupported project anchor remained an admission candidate: %q", output)
-	}
-}
-
 func TestUCIWatcherSLOClassifiesPartialSearchAsDegraded(t *testing.T) {
 	outcome, reason := uciWatcherSLOClassifyOutcome(uci.QueryStatusPartial, "partial", "complete")
 	if outcome != "degraded" || reason == "" {

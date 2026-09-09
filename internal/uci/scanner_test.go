@@ -6,9 +6,12 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/thebtf/engram/internal/projectidentity"
 )
 
 func TestUCIScannerScansAuthorizedOrdinaryAndLinkedWorktrees(t *testing.T) {
@@ -45,6 +48,34 @@ func TestUCIScannerScansAuthorizedOrdinaryAndLinkedWorktrees(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUCIScannerExcludesTrackedProjectAnchorFromCodeAdmission(t *testing.T) {
+	root := t.TempDir()
+	if err := exec.CommandContext(t.Context(), "git", "init", root).Run(); err != nil {
+		t.Fatalf("initialize repository: %v", err)
+	}
+	anchor := []byte(`{"version":3,"project_id":"11111111-1111-4111-8111-111111111111","name":"scanner-anchor","scope":"repository"}`)
+	if err := os.WriteFile(filepath.Join(root, ".engram-project"), anchor, 0o600); err != nil {
+		t.Fatalf("write project anchor: %v", err)
+	}
+	goSource := []byte("package fixture\n\nfunc AnchorBoundary() string { return \"ok\" }\n")
+	if err := os.WriteFile(filepath.Join(root, "fixture.go"), goSource, 0o600); err != nil {
+		t.Fatalf("write Go source: %v", err)
+	}
+	if err := exec.CommandContext(t.Context(), "git", "-C", root, "add", "--", ".engram-project", "fixture.go").Run(); err != nil {
+		t.Fatalf("track repository fixture: %v", err)
+	}
+	if _, err := projectidentity.DiscoverAnchorV3(root, "repository"); err != nil {
+		t.Fatalf("resolve tracked V3 anchor: %v", err)
+	}
+	result, err := NewScanner(ExecGitRunner{}, OSScannerFileSystem{}, ScannerPolicy{}).Scan(t.Context(), AuthorizedRootEvidence{RootPath: root})
+	if err != nil {
+		t.Fatalf("scan anchored repository: %v", err)
+	}
+	scannerAssertCensus(t, result, IndexScanComplete, true, true)
+	scannerAssertFile(t, result, "fixture.go", IndexFilePresent, ScannerExclusionNone, goSource)
+	scannerAssertFileAbsent(t, result, ".engram-project")
 }
 
 func TestUCIScannerSupportsDetachedUnbornAndObjectFormatStates(t *testing.T) {

@@ -22,6 +22,10 @@ const (
 	defaultScannerMaxFileBytes   int64 = 8 << 20
 	scannerReadAttempts                = 2
 	scannerSecretInspectionLimit int64 = 64 << 10
+	// scannerProjectAnchorPath is tracked identity control metadata. The V3
+	// resolver consumes it before code admission; it is not source content and
+	// must not affect code-search coverage.
+	scannerProjectAnchorPath = ".engram-project"
 )
 
 var (
@@ -328,6 +332,9 @@ func (scanner *Scanner) Scan(ctx context.Context, evidence AuthorizedRootEvidenc
 	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
 			return scanner.incomplete(result, err)
+		}
+		if candidate.path == scannerProjectAnchorPath {
+			continue
 		}
 
 		file, incomplete, err := scanner.scanCandidate(ctx, root, candidate)

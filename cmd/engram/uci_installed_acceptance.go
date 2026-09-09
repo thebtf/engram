@@ -384,8 +384,7 @@ func runUCIInstalledAcceptance(ctx context.Context, request uciInstalledAcceptan
 	}
 	parserBundleDigest := uciInstalledAcceptanceParserBundleDigest()
 	anchorProjectID := uuid.NewString()
-	recorderFixture := uciInstalledAcceptanceScenarioRunsBeforeBaseWatcher(request)
-	worktrees, worktreeResult, err := uciCreateInstalledAcceptanceWorktrees(operationCtx, request.FixtureRoot, request.Fixture, anchorProjectID, recorderFixture)
+	worktrees, worktreeResult, err := uciCreateInstalledAcceptanceWorktrees(operationCtx, request.FixtureRoot, request.Fixture, anchorProjectID)
 	if err != nil {
 		return result, err
 	}
@@ -486,10 +485,10 @@ func runUCIInstalledAcceptance(ctx context.Context, request uciInstalledAcceptan
 	}
 	clientA, err := newUCIInstalledAcceptanceMCPClient(uciInstalledAcceptanceClientA, clientAProcess)
 	if err != nil {
-		return result, err
+		return result, errors.Join(err, clientAProcess.closePipes(), installation.tree.Close(), clientAProcess.wait())
 	}
 	if err := clientA.InitializeAndList(operationCtx); err != nil {
-		return result, err
+		return result, errors.Join(err, clientAProcess.closePipes(), installation.tree.Close(), clientAProcess.wait())
 	}
 	result.Processes.DaemonPID, err = uciWaitForInstalledAcceptanceDaemonPID(operationCtx, filepath.Join(request.LocalStateRoot, "temp"), daemonPath)
 	if err != nil {
@@ -1046,7 +1045,7 @@ func uciInstalledAcceptanceParserBundleDigest() string {
 	return string(uci.TreeSitterBundleDigest())
 }
 
-func uciCreateInstalledAcceptanceWorktrees(ctx context.Context, fixtureRoot string, fixture uciInstalledAcceptanceFixture, anchorProjectID string, excludeProjectAnchorFromIndex bool) (uciInstalledAcceptanceWorktreesFixture, uciInstalledAcceptanceWorktrees, error) {
+func uciCreateInstalledAcceptanceWorktrees(ctx context.Context, fixtureRoot string, fixture uciInstalledAcceptanceFixture, anchorProjectID string) (uciInstalledAcceptanceWorktreesFixture, uciInstalledAcceptanceWorktrees, error) {
 	primaryRoot := filepath.Join(fixtureRoot, "primary")
 	linkedRoot := filepath.Join(fixtureRoot, "linked")
 	auxiliaryRoots := []string{
@@ -1067,10 +1066,8 @@ func uciCreateInstalledAcceptanceWorktrees(ctx context.Context, fixtureRoot stri
 	if err != nil {
 		return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, fmt.Errorf("marshal installed acceptance V3 anchor: %w", err)
 	}
-	if !excludeProjectAnchorFromIndex {
-		if err := os.WriteFile(filepath.Join(primaryRoot, ".engram-project"), append(anchor, '\n'), 0o600); err != nil {
-			return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, fmt.Errorf("write installed acceptance V3 anchor: %w", err)
-		}
+	if err := os.WriteFile(filepath.Join(primaryRoot, ".engram-project"), append(anchor, '\n'), 0o600); err != nil {
+		return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, fmt.Errorf("write installed acceptance V3 anchor: %w", err)
 	}
 	baseline := "package fixture\n\nfunc " + fixture.SharedSymbol + "() string { return BaseCallee() }\nfunc BaseCallee() string { return \"UCI_BASE\" }\n"
 	if err := os.WriteFile(filepath.Join(primaryRoot, fixture.RelativePath), []byte(baseline), 0o600); err != nil {
@@ -1079,15 +1076,11 @@ func uciCreateInstalledAcceptanceWorktrees(ctx context.Context, fixtureRoot stri
 	if err := os.WriteFile(filepath.Join(primaryRoot, uciInstalledAcceptanceParserCanaryRelativePath), []byte(uciInstalledAcceptanceParserCanarySource), 0o600); err != nil {
 		return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, fmt.Errorf("write installed acceptance parser canary: %w", err)
 	}
-	trackedPaths := []string{fixture.RelativePath, uciInstalledAcceptanceParserCanaryRelativePath}
-	if !excludeProjectAnchorFromIndex {
-		trackedPaths = append([]string{".engram-project"}, trackedPaths...)
-	}
 	commands := [][]string{
 		{"init"},
 		{"config", "user.email", "uci-installed@example.test"},
 		{"config", "user.name", "UCI Installed Acceptance"},
-		append([]string{"add", "--"}, trackedPaths...),
+		{"add", "--", ".engram-project", fixture.RelativePath, uciInstalledAcceptanceParserCanaryRelativePath},
 		{"commit", "-m", "create installed UCI fixture"},
 	}
 	for _, root := range append([]string{linkedRoot}, auxiliaryRoots...) {
@@ -1112,13 +1105,6 @@ func uciCreateInstalledAcceptanceWorktrees(ctx context.Context, fixtureRoot stri
 			return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, fmt.Errorf("resolve installed acceptance auxiliary checkout: %w", physicalErr)
 		}
 		auxiliaryRoots[index] = physical
-	}
-	if excludeProjectAnchorFromIndex {
-		for _, root := range append([]string{primaryRoot, linkedRoot}, auxiliaryRoots...) {
-			if err := uciWriteInstalledAcceptanceIgnoredProjectAnchor(ctx, root, anchor); err != nil {
-				return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, err
-			}
-		}
 	}
 	if err := os.WriteFile(filepath.Join(primaryRoot, fixture.RelativePath), []byte(fixture.PrimarySource), 0o600); err != nil {
 		return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, fmt.Errorf("write installed acceptance primary dirty source: %w", err)
@@ -1166,47 +1152,6 @@ func uciCreateInstalledAcceptanceWorktrees(ctx context.Context, fixtureRoot stri
 		return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, errors.New("installed acceptance Git worktree topology is invalid")
 	}
 	return uciInstalledAcceptanceWorktreesFixture{primaryRoot: primaryRoot, linkedRoot: linkedRoot, auxiliaryRoots: auxiliaryRoots, head: primaryHead}, result, nil
-}
-
-// uciWriteInstalledAcceptanceIgnoredProjectAnchor keeps the V3 identity file
-// available to each installed daemon while excluding the extensionless control
-// file from this recorder-only corpus. Admission would otherwise classify it
-// as unsupported and make every FTS result partial.
-func uciWriteInstalledAcceptanceIgnoredProjectAnchor(ctx context.Context, root string, anchor []byte) error {
-	excludePath, err := uciReadInstalledAcceptanceGit(ctx, root, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude")
-	if err != nil {
-		return fmt.Errorf("locate installed recorder Git exclusions: %w", err)
-	}
-	if !filepath.IsAbs(excludePath) {
-		excludePath = filepath.Join(root, excludePath)
-	}
-	existing, err := os.ReadFile(excludePath)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("read installed recorder Git exclusions: %w", err)
-	}
-	found := false
-	for _, line := range strings.Split(strings.ReplaceAll(string(existing), "\r\n", "\n"), "\n") {
-		if strings.TrimSpace(line) == ".engram-project" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		if len(existing) > 0 && existing[len(existing)-1] != '\n' {
-			existing = append(existing, '\n')
-		}
-		existing = append(existing, []byte(".engram-project\n")...)
-		if err := os.WriteFile(excludePath, existing, 0o600); err != nil {
-			return fmt.Errorf("write installed recorder Git exclusions: %w", err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(root, ".engram-project"), append(anchor, '\n'), 0o600); err != nil {
-		return fmt.Errorf("write installed recorder V3 anchor: %w", err)
-	}
-	if err := uciRunInstalledAcceptanceGit(ctx, root, "check-ignore", "--quiet", "--", ".engram-project"); err != nil {
-		return fmt.Errorf("exclude installed recorder V3 anchor from admission: %w", err)
-	}
-	return nil
 }
 
 func uciRunInstalledAcceptanceGit(ctx context.Context, directory string, args ...string) error {
