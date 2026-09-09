@@ -1,6 +1,7 @@
 package codeintel_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -8,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -776,6 +778,77 @@ func TestUCIPreparedIndexClonesBindingBeforeScanning(t *testing.T) {
 	require.Equal(t, preparedPublishedView, fixture.target.Binding.Context.ViewID)
 	require.Len(t, fixture.client.beginRequests, 1)
 	require.Equal(t, originalParent.ViewID, fixture.client.beginRequests[0].GetExpectedParent().GetViewId())
+}
+
+func TestUCIPreparedIndexLogsOneCorrelatedScannerAggregate(t *testing.T) {
+	fixture := newPreparedIndexFixture(t)
+	var logs bytes.Buffer
+	collaborator, err := codeintel.NewUCIPreparedIndexCollaborator(codeintel.UCIPreparedIndexConfig{
+		WorkstationID:      preparedWorkstationID,
+		ClientInstanceID:   preparedClientID,
+		ParserBundleDigest: preparedParserBundleDigest,
+		Registry:           fixture.registry,
+		Scanner:            fixture.scanner,
+		GoProfile: uci.GoExtractionProfile{
+			ProfileKey: "go-structure-v1",
+			ParserKey:  "go-parser-v1",
+		},
+		Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+	})
+	require.NoError(t, err)
+	fixture.collaborator = collaborator
+	fixture.scanner.result.Files = []uci.ScannerFile{{
+		Path:  "sensitive/path.go",
+		State: uci.IndexFilePresent,
+		Body:  []byte("package sample\nconst hiddenBody = \"secret-body-do-not-log\"\n"),
+	}}
+	fixture.scanner.result.Diagnostics = uci.ScannerDiagnostics{
+		GitTopologyDuration:   11 * time.Nanosecond,
+		GitStatusDuration:     13 * time.Nanosecond,
+		GitStagedDuration:     17 * time.Nanosecond,
+		GitUntrackedDuration:  19 * time.Nanosecond,
+		CandidateLoopDuration: 23 * time.Nanosecond,
+		TotalDuration:         101 * time.Nanosecond,
+		ResidualDuration:      18 * time.Nanosecond,
+		CandidateCount:        29,
+		AdmittedCount:         31,
+		ExcludedCount:         37,
+		UnreadableCount:       41,
+		BytesRead:             43,
+	}
+
+	_, err = fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	require.Len(t, lines, 1)
+	var entry map[string]any
+	require.NoError(t, json.Unmarshal([]byte(lines[0]), &entry))
+	require.Equal(t, "codeintel: prepared scanner phase aggregate", entry["msg"])
+	require.Equal(t, preparedSourceID, entry["source_id"])
+	require.Equal(t, preparedCheckoutID, entry["checkout_id"])
+	require.Equal(t, preparedProfileID, entry["profile_id"])
+	require.Equal(t, float64(4), entry["observed_fs_seq"])
+	require.Equal(t, "2026-09-05T12:00:00Z", entry["scan_started_at"])
+	require.Equal(t, "2026-09-05T12:00:01Z", entry["scan_completed_at"])
+	for field, want := range map[string]float64{
+		"git_topology_duration_ns":   11,
+		"git_status_duration_ns":     13,
+		"git_staged_duration_ns":     17,
+		"git_untracked_duration_ns":  19,
+		"candidate_loop_duration_ns": 23,
+		"scan_total_duration_ns":     101,
+		"residual_duration_ns":       18,
+		"candidate_count":            29,
+		"admitted_count":             31,
+		"excluded_count":             37,
+		"unreadable_count":           41,
+		"bytes_read":                 43,
+	} {
+		require.Equalf(t, want, entry[field], "log field %q", field)
+	}
+	require.NotContains(t, logs.String(), fixture.root)
+	require.NotContains(t, logs.String(), "sensitive/path.go")
+	require.NotContains(t, logs.String(), "secret-body-do-not-log")
 }
 
 type preparedIndexFixture struct {

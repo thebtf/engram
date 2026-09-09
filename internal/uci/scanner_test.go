@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thebtf/engram/internal/projectidentity"
 )
@@ -305,6 +306,67 @@ func TestUCIScannerExcludesOversizedSecretAndProtectedFiles(t *testing.T) {
 	scannerAssertGitPlumbing(t, fixture.git, fixture.root)
 }
 
+func TestUCIScannerRecordsPhaseDiagnostics(t *testing.T) {
+	fixture := newScannerFixture(t, false)
+	source := []byte("package source\n")
+	binary := []byte{0x01, 0x00, 0x02}
+	secret := []byte("fixture-secret-marker\n")
+	fixture.write(t, "source.go", source)
+	fixture.write(t, "binary.bin", binary)
+	fixture.write(t, "secret.txt", secret)
+	fixture.write(t, "private.txt", []byte("protected\n"))
+	fixture.write(t, "unreadable.txt", []byte("unreadable\n"))
+	fixture.git.tracked = []scannerGitPath{
+		{Mode: "100644", Path: "source.go"},
+		{Mode: "100644", Path: "binary.bin"},
+		{Mode: "100644", Path: "secret.txt"},
+		{Mode: "100644", Path: "private.txt"},
+		{Mode: "100644", Path: "unreadable.txt"},
+	}
+	for _, operation := range []string{
+		"rev-parse --show-toplevel --absolute-git-dir --git-common-dir --git-path HEAD --show-object-format",
+		"status --porcelain=v2 --branch -z",
+		"ls-files --stage -z",
+		"ls-files --others --exclude-standard -z",
+	} {
+		fixture.git.delays[operation] = time.Millisecond
+	}
+	fixture.files.denyRead[fixture.path("unreadable.txt")] = fs.ErrPermission
+
+	result, err := scannerScan(fixture, ScannerPolicy{
+		IncludeUntracked: true,
+		ProtectedPaths:   []string{"private.txt"},
+		SecretDetector:   scannerFixtureSecretDetector{marker: []byte("fixture-secret-marker")},
+	})
+	if err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+	scannerAssertCensus(t, result, IndexScanIncomplete, false, false)
+	scannerAssertGitPlumbing(t, fixture.git, fixture.root)
+
+	diagnostics := result.Diagnostics
+	for name, duration := range map[string]time.Duration{
+		"topology":  diagnostics.GitTopologyDuration,
+		"status":    diagnostics.GitStatusDuration,
+		"staged":    diagnostics.GitStagedDuration,
+		"untracked": diagnostics.GitUntrackedDuration,
+	} {
+		if duration < time.Millisecond {
+			t.Fatalf("%s Git duration = %s, want at least %s", name, duration, time.Millisecond)
+		}
+	}
+	if diagnostics.CandidateCount != 5 || diagnostics.AdmittedCount != 1 || diagnostics.ExcludedCount != 3 || diagnostics.UnreadableCount != 1 {
+		t.Fatalf("diagnostic counters = %#v, want candidates=5 admitted=1 excluded=3 unreadable=1", diagnostics)
+	}
+	if want := int64(len(source) + len(binary) + len(secret)); diagnostics.BytesRead != want {
+		t.Fatalf("diagnostic bytes read = %d, want %d", diagnostics.BytesRead, want)
+	}
+	components := diagnostics.GitTopologyDuration + diagnostics.GitStatusDuration + diagnostics.GitStagedDuration + diagnostics.GitUntrackedDuration + diagnostics.CandidateLoopDuration + diagnostics.ResidualDuration
+	if diagnostics.TotalDuration != components {
+		t.Fatalf("diagnostic durations do not reconcile: total=%s components=%s diagnostics=%#v", diagnostics.TotalDuration, components, diagnostics)
+	}
+}
+
 func TestUCIScannerFailsClosedForUnavailableAndChangingInputs(t *testing.T) {
 	t.Run("inaccessible authorized root", func(t *testing.T) {
 		fixture := newScannerFixture(t, false)
@@ -471,6 +533,7 @@ func newScannerFixture(t *testing.T, linked bool) *scannerFixture {
 		refLabel:     "main",
 		hasRefLabel:  true,
 		failures:     make(map[string]error),
+		delays:       make(map[string]time.Duration),
 	}
 	files := &scannerFixtureFiles{
 		denyLstat:    make(map[string]error),
@@ -530,6 +593,7 @@ type scannerFixtureGit struct {
 	tracked      []scannerGitPath
 	untracked    []string
 	failures     map[string]error
+	delays       map[string]time.Duration
 	calls        []GitInvocation
 }
 
@@ -545,6 +609,9 @@ func (git *scannerFixtureGit) Run(ctx context.Context, invocation GitInvocation)
 	operation := scannerGitOperation(invocation.Args)
 	if err := git.failures[operation]; err != nil {
 		return GitResult{}, err
+	}
+	if delay := git.delays[operation]; delay > 0 {
+		time.Sleep(delay)
 	}
 
 	switch operation {

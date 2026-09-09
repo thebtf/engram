@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/thebtf/engram/internal/handlers/engramcore"
@@ -43,6 +45,7 @@ type UCIPreparedIndexConfig struct {
 	Scanner            UCIPreparedIndexScanner
 	TreeSitterParser   UCIPreparedTreeSitterParser
 	GoProfile          uci.GoExtractionProfile
+	Logger             *slog.Logger
 }
 
 // UCIPreparedIndexCollaborator prepares and publishes immutable UCI admission
@@ -56,6 +59,7 @@ type UCIPreparedIndexCollaborator struct {
 	scanner            UCIPreparedIndexScanner
 	treeSitterParser   UCIPreparedTreeSitterParser
 	goProfile          uci.GoExtractionProfile
+	logger             *slog.Logger
 }
 
 // NewUCIPreparedIndexCollaborator constructs the daemon-side prepared-index
@@ -87,6 +91,7 @@ func NewUCIPreparedIndexCollaborator(config UCIPreparedIndexConfig) (*UCIPrepare
 		scanner:            config.Scanner,
 		treeSitterParser:   config.TreeSitterParser,
 		goProfile:          config.GoProfile,
+		logger:             config.Logger,
 	}, nil
 }
 
@@ -164,6 +169,29 @@ func (collaborator *UCIPreparedIndexCollaborator) scanCurrent(ctx context.Contex
 		return uci.ScannerResult{}, fmt.Errorf("uci prepared index: scan is not a complete census")
 	}
 	scan.Observation.ObservedFSSeq = local.observedSequence
+	if collaborator.logger != nil {
+		diagnostics := scan.Diagnostics
+		collaborator.logger.Info("codeintel: prepared scanner phase aggregate",
+			"source_id", local.binding.Scope.SourceID,
+			"checkout_id", local.binding.Scope.CheckoutID,
+			"profile_id", local.binding.ProfileID,
+			"observed_fs_seq", scan.Observation.ObservedFSSeq,
+			"scan_started_at", scan.Observation.ScanStart.Format(time.RFC3339Nano),
+			"scan_completed_at", scan.Observation.ScanEnd.Format(time.RFC3339Nano),
+			"git_topology_duration_ns", diagnostics.GitTopologyDuration.Nanoseconds(),
+			"git_status_duration_ns", diagnostics.GitStatusDuration.Nanoseconds(),
+			"git_staged_duration_ns", diagnostics.GitStagedDuration.Nanoseconds(),
+			"git_untracked_duration_ns", diagnostics.GitUntrackedDuration.Nanoseconds(),
+			"candidate_loop_duration_ns", diagnostics.CandidateLoopDuration.Nanoseconds(),
+			"scan_total_duration_ns", diagnostics.TotalDuration.Nanoseconds(),
+			"residual_duration_ns", diagnostics.ResidualDuration.Nanoseconds(),
+			"candidate_count", diagnostics.CandidateCount,
+			"admitted_count", diagnostics.AdmittedCount,
+			"excluded_count", diagnostics.ExcludedCount,
+			"unreadable_count", diagnostics.UnreadableCount,
+			"bytes_read", diagnostics.BytesRead,
+		)
+	}
 	return scan, nil
 }
 

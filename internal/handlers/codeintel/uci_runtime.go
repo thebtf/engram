@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -85,6 +86,7 @@ type uciRuntime struct {
 	closed           bool
 	workstationID    string
 	daemonCtx        context.Context
+	logger           *slog.Logger
 	db               *sql.DB
 	registry         *UCILocalRegistry
 	treeSitterParser UCIPreparedTreeSitterParser
@@ -341,6 +343,7 @@ func (runtimeState *uciRuntime) Start(deps module.ModuleDeps) error {
 	}
 
 	runtimeState.daemonCtx = deps.DaemonCtx
+	runtimeState.logger = deps.Logger
 	runtimeState.db = db
 	runtimeState.registry = registry
 	runtimeState.started = true
@@ -365,6 +368,7 @@ func (runtimeState *uciRuntime) configureCollaboratorLocked(workstationID string
 		Scanner:            newUCIRuntimeScanner(),
 		TreeSitterParser:   runtimeState.treeSitterParser,
 		GoProfile:          runtimeState.config.GoProfile,
+		Logger:             runtimeState.logger,
 	})
 	if err != nil {
 		return fmt.Errorf("uci runtime: construct prepared index collaborator: %w", err)

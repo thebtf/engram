@@ -194,6 +194,23 @@ type ScannerCensus struct {
 	CanDeleteAll bool
 }
 
+// ScannerDiagnostics is the invocation-local attribution for Scanner.Scan.
+// It is diagnostic-only: it never affects admission, coverage, or publication.
+type ScannerDiagnostics struct {
+	GitTopologyDuration   time.Duration
+	GitStatusDuration     time.Duration
+	GitStagedDuration     time.Duration
+	GitUntrackedDuration  time.Duration
+	CandidateLoopDuration time.Duration
+	TotalDuration         time.Duration
+	ResidualDuration      time.Duration
+	CandidateCount        int
+	AdmittedCount         int
+	ExcludedCount         int
+	UnreadableCount       int
+	BytesRead             int64
+}
+
 // ScannerResult contains scanner-local facts only. It does not select a
 // context, grant access, publish a view, or request deletions.
 type ScannerResult struct {
@@ -201,6 +218,7 @@ type ScannerResult struct {
 	Census      ScannerCensus
 	Observation IndexObservation
 	Coverage    IndexCoverage
+	Diagnostics ScannerDiagnostics
 }
 
 // Scanner enumerates one explicitly authorized Git worktree through narrowly
@@ -222,9 +240,9 @@ func NewScanner(git GitRunner, files ScannerFileSystem, policy ScannerPolicy) *S
 // malformed Git candidate or plumbing failure is failed and never grants
 // delete-all authority; per-file read failures and races remain explicit facts.
 func (scanner *Scanner) Scan(ctx context.Context, evidence AuthorizedRootEvidence) (ScannerResult, error) {
-	started := time.Now().UTC()
+	started := time.Now()
 	result := ScannerResult{
-		Observation: IndexObservation{ScanStart: started},
+		Observation: IndexObservation{ScanStart: started.UTC()},
 		Coverage: IndexCoverage{
 			Lexical: IndexCoverageUnavailable,
 			Vector:  IndexCoverageUnavailable,
@@ -232,53 +250,53 @@ func (scanner *Scanner) Scan(ctx context.Context, evidence AuthorizedRootEvidenc
 	}
 
 	if scanner == nil || scanner.git == nil || scanner.files == nil {
-		return scanner.failed(result, ErrScannerUnavailable)
+		return scanner.failed(result, started, ErrScannerUnavailable)
 	}
 	if ctx == nil {
-		return scanner.failed(result, fmt.Errorf("%w: nil context", ErrScannerInvalidRoot))
+		return scanner.failed(result, started, fmt.Errorf("%w: nil context", ErrScannerInvalidRoot))
 	}
 	if err := ctx.Err(); err != nil {
-		return scanner.incomplete(result, err)
+		return scanner.incomplete(result, started, err)
 	}
 
 	root, err := scannerAuthorizedRoot(evidence.RootPath)
 	if err != nil {
-		return scanner.failed(result, err)
+		return scanner.failed(result, started, err)
 	}
 
 	rootInfo, err := scanner.files.Lstat(root)
 	if err != nil || scannerInfoIsReparse(rootInfo) || !rootInfo.Mode.IsDir() {
-		return scanner.failed(result, fmt.Errorf("%w: root unavailable", ErrScannerInvalidRoot))
+		return scanner.failed(result, started, fmt.Errorf("%w: root unavailable", ErrScannerInvalidRoot))
 	}
 
-	topologyOutput, err := scanner.gitOutput(ctx, root, "rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir", "--git-path", "HEAD", "--show-object-format")
+	topologyOutput, err := scanner.gitOutput(ctx, root, &result.Diagnostics.GitTopologyDuration, "rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir", "--git-path", "HEAD", "--show-object-format")
 	if err != nil {
-		return scanner.classifyGitError(result, err)
+		return scanner.classifyGitError(result, started, err)
 	}
 	topology, err := scannerGitLines(topologyOutput, 5)
 	if err != nil {
-		return scanner.failed(result, err)
+		return scanner.failed(result, started, err)
 	}
 	normalizedRepositoryRoot, err := scannerAuthorizedRoot(topology[0])
 	if err != nil || !scannerPathsEqual(root, normalizedRepositoryRoot) {
-		return scanner.failed(result, fmt.Errorf("%w: repository root does not match authorization", ErrScannerInvalidRoot))
+		return scanner.failed(result, started, fmt.Errorf("%w: repository root does not match authorization", ErrScannerInvalidRoot))
 	}
 	if topology[1] == "" || topology[2] == "" || topology[3] == "" {
-		return scanner.failed(result, fmt.Errorf("%w: incomplete repository topology", ErrScannerMalformed))
+		return scanner.failed(result, started, fmt.Errorf("%w: incomplete repository topology", ErrScannerMalformed))
 	}
 	objectFormat := topology[4]
 	if objectFormat != "sha1" && objectFormat != "sha256" {
-		return scanner.failed(result, fmt.Errorf("%w: unsupported object format", ErrScannerMalformed))
+		return scanner.failed(result, started, fmt.Errorf("%w: unsupported object format", ErrScannerMalformed))
 	}
 	result.Observation.ObjectFormat = scannerStringPointer(objectFormat)
 
-	statusOutput, err := scanner.gitOutput(ctx, root, "status", "--porcelain=v2", "--branch", "-z")
+	statusOutput, err := scanner.gitOutput(ctx, root, &result.Diagnostics.GitStatusDuration, "status", "--porcelain=v2", "--branch", "-z")
 	if err != nil {
-		return scanner.classifyGitError(result, err)
+		return scanner.classifyGitError(result, started, err)
 	}
 	statusRecords, head, hasHead, refLabel, hasRefLabel, err := scannerStatusBranchRecords(statusOutput, objectFormat)
 	if err != nil {
-		return scanner.failed(result, err)
+		return scanner.failed(result, started, err)
 	}
 	if hasHead {
 		result.Observation.HeadOID = scannerStringPointer(head)
@@ -288,93 +306,102 @@ func (scanner *Scanner) Scan(ctx context.Context, evidence AuthorizedRootEvidenc
 	}
 	result.Observation.Dirty = len(statusRecords) > 0
 
-	stageOutput, err := scanner.gitOutput(ctx, root, "ls-files", "--stage", "-z")
+	stageOutput, err := scanner.gitOutput(ctx, root, &result.Diagnostics.GitStagedDuration, "ls-files", "--stage", "-z")
 	if err != nil {
-		return scanner.classifyGitError(result, err)
+		return scanner.classifyGitError(result, started, err)
 	}
 	staged, err := scannerStagedCandidates(stageOutput, objectFormat)
 	if err != nil {
-		return scanner.failed(result, err)
+		return scanner.failed(result, started, err)
 	}
 
-	untrackedOutput, err := scanner.gitOutput(ctx, root, "ls-files", "--others", "--exclude-standard", "-z")
+	untrackedOutput, err := scanner.gitOutput(ctx, root, &result.Diagnostics.GitUntrackedDuration, "ls-files", "--others", "--exclude-standard", "-z")
 	if err != nil {
-		return scanner.classifyGitError(result, err)
+		return scanner.classifyGitError(result, started, err)
 	}
 	untracked, err := scannerUntrackedCandidates(untrackedOutput)
 	if err != nil {
-		return scanner.failed(result, err)
+		return scanner.failed(result, started, err)
 	}
 
 	candidates, err := scannerMergeCandidates(staged, untracked, scanner.policy.IncludeUntracked)
 	if err != nil {
-		return scanner.failed(result, err)
+		return scanner.failed(result, started, err)
 	}
-
+	result.Diagnostics.CandidateCount = len(candidates)
 	result.Files = make([]ScannerFile, 0, len(candidates))
 	partial := false
+	candidateLoopStarted := time.Now()
 	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
-			return scanner.incomplete(result, err)
+			result.Diagnostics.CandidateLoopDuration = time.Since(candidateLoopStarted)
+			return scanner.incomplete(result, started, err)
 		}
 		if candidate.path == scannerProjectAnchorPath {
 			continue
 		}
 
-		file, incomplete, err := scanner.scanCandidate(ctx, root, candidate)
+		file, incomplete, bytesRead, err := scanner.scanCandidate(ctx, root, candidate)
+		result.Diagnostics.BytesRead += bytesRead
 		if err != nil {
-			return scanner.failed(result, err)
+			result.Diagnostics.CandidateLoopDuration = time.Since(candidateLoopStarted)
+			return scanner.failed(result, started, err)
 		}
 		if incomplete {
 			partial = true
 		}
 		result.Files = append(result.Files, file)
 		switch file.State {
+		case IndexFilePresent:
+			result.Diagnostics.AdmittedCount++
 		case IndexFileExcluded:
 			result.Coverage.ExcludedFiles++
+			result.Diagnostics.ExcludedCount++
 		case IndexFileUnreadable:
 			result.Coverage.UnreadableFiles++
+			result.Diagnostics.UnreadableCount++
 		}
 	}
+	result.Diagnostics.CandidateLoopDuration = time.Since(candidateLoopStarted)
 
 	if partial {
-		scanner.finish(&result, IndexScanIncomplete)
+		scanner.finish(&result, started, IndexScanIncomplete)
 	} else {
-		scanner.finish(&result, IndexScanComplete)
+		scanner.finish(&result, started, IndexScanComplete)
 	}
 	return result, nil
 }
 
-func (scanner *Scanner) scanCandidate(ctx context.Context, root string, candidate scannerCandidate) (ScannerFile, bool, error) {
+func (scanner *Scanner) scanCandidate(ctx context.Context, root string, candidate scannerCandidate) (ScannerFile, bool, int64, error) {
 	if err := scannerValidateGitPath(candidate.path); err != nil {
-		return ScannerFile{}, false, err
+		return ScannerFile{}, false, 0, err
 	}
 	if scannerPathProtected(scanner.policy.ProtectedPaths, candidate.path) {
-		return scannerExcludedFile(candidate.path, ScannerExclusionProtected), false, nil
+		return scannerExcludedFile(candidate.path, ScannerExclusionProtected), false, 0, nil
 	}
 	if candidate.mode == "160000" {
-		return scannerExcludedFile(candidate.path, ScannerExclusionSubmodule), false, nil
+		return scannerExcludedFile(candidate.path, ScannerExclusionSubmodule), false, 0, nil
 	}
 	if candidate.mode == "120000" {
-		return scannerExcludedFile(candidate.path, ScannerExclusionReparseEscape), false, nil
+		return scannerExcludedFile(candidate.path, ScannerExclusionReparseEscape), false, 0, nil
 	}
 
 	fullPath, err := scannerJoinRoot(root, candidate.path)
 	if err != nil {
-		return ScannerFile{}, false, err
+		return ScannerFile{}, false, 0, err
 	}
 
 	location, err := scanner.checkCandidateLocation(root, candidate.path)
 	if err != nil {
-		return scannerUnreadableFile(candidate.path), true, nil
+		return scannerUnreadableFile(candidate.path), true, 0, nil
 	}
 	switch location {
 	case scannerLocationReparse:
-		return scannerExcludedFile(candidate.path, ScannerExclusionReparseEscape), false, nil
+		return scannerExcludedFile(candidate.path, ScannerExclusionReparseEscape), false, 0, nil
 	case scannerLocationNestedRepository:
-		return scannerExcludedFile(candidate.path, ScannerExclusionNestedRepository), false, nil
+		return scannerExcludedFile(candidate.path, ScannerExclusionNestedRepository), false, 0, nil
 	case scannerLocationUnsupported:
-		return scannerExcludedFile(candidate.path, ScannerExclusionUnsupportedType), false, nil
+		return scannerExcludedFile(candidate.path, ScannerExclusionUnsupportedType), false, 0, nil
 	}
 
 	return scanner.readStableFile(ctx, fullPath, candidate.path)
@@ -408,11 +435,12 @@ func (scanner *Scanner) checkCandidateLocation(root, relativePath string) (scann
 	return scannerLocationSafe, nil
 }
 
-func (scanner *Scanner) readStableFile(ctx context.Context, fullPath, relativePath string) (ScannerFile, bool, error) {
+func (scanner *Scanner) readStableFile(ctx context.Context, fullPath, relativePath string) (ScannerFile, bool, int64, error) {
 	maxBytes := scannerMaxBytes(scanner.policy.MaxFileBytes)
+	var bytesRead int64
 	for attempt := range scannerReadAttempts {
 		if err := ctx.Err(); err != nil {
-			return ScannerFile{}, true, err
+			return ScannerFile{}, true, bytesRead, err
 		}
 
 		initial, err := scanner.files.Lstat(fullPath)
@@ -420,16 +448,16 @@ func (scanner *Scanner) readStableFile(ctx context.Context, fullPath, relativePa
 			if attempt+1 < scannerReadAttempts {
 				continue
 			}
-			return scannerUnreadableFile(relativePath), true, nil
+			return scannerUnreadableFile(relativePath), true, bytesRead, nil
 		}
 		if scannerInfoIsReparse(initial) {
-			return scannerExcludedFile(relativePath, ScannerExclusionReparseEscape), false, nil
+			return scannerExcludedFile(relativePath, ScannerExclusionReparseEscape), false, bytesRead, nil
 		}
 		if !initial.Mode.IsRegular() {
-			return scannerExcludedFile(relativePath, ScannerExclusionUnsupportedType), false, nil
+			return scannerExcludedFile(relativePath, ScannerExclusionUnsupportedType), false, bytesRead, nil
 		}
 		if initial.Size < 0 || (initial.Size > maxBytes && !scannerMayInspectForSecret(initial.Size, scanner.policy.SecretDetector)) {
-			return scannerExcludedFile(relativePath, ScannerExclusionTooLarge), false, nil
+			return scannerExcludedFile(relativePath, ScannerExclusionTooLarge), false, bytesRead, nil
 		}
 
 		body, err := scanner.files.ReadFile(fullPath)
@@ -437,10 +465,11 @@ func (scanner *Scanner) readStableFile(ctx context.Context, fullPath, relativePa
 			if attempt+1 < scannerReadAttempts {
 				continue
 			}
-			return scannerUnreadableFile(relativePath), true, nil
+			return scannerUnreadableFile(relativePath), true, bytesRead, nil
 		}
+		bytesRead += int64(len(body))
 		if err := ctx.Err(); err != nil {
-			return ScannerFile{}, true, err
+			return ScannerFile{}, true, bytesRead, err
 		}
 
 		current, err := scanner.files.Lstat(fullPath)
@@ -452,33 +481,35 @@ func (scanner *Scanner) readStableFile(ctx context.Context, fullPath, relativePa
 				Path:      relativePath,
 				State:     IndexFileUnreadable,
 				Exclusion: ScannerExclusionChanging,
-			}, true, nil
+			}, true, bytesRead, nil
 		}
 		if current.Size < 0 || (current.Size > maxBytes && !scannerMayInspectForSecret(current.Size, scanner.policy.SecretDetector)) {
-			return scannerExcludedFile(relativePath, ScannerExclusionTooLarge), false, nil
+			return scannerExcludedFile(relativePath, ScannerExclusionTooLarge), false, bytesRead, nil
 		}
 		if scannerBinary(body) {
-			return scannerExcludedFile(relativePath, ScannerExclusionBinary), false, nil
+			return scannerExcludedFile(relativePath, ScannerExclusionBinary), false, bytesRead, nil
 		}
 		if detector := scanner.policy.SecretDetector; detector != nil && detector.ContainsSecret(relativePath, body) {
-			return scannerExcludedFile(relativePath, ScannerExclusionSecret), false, nil
+			return scannerExcludedFile(relativePath, ScannerExclusionSecret), false, bytesRead, nil
 		}
 		if current.Size > maxBytes {
-			return scannerExcludedFile(relativePath, ScannerExclusionTooLarge), false, nil
+			return scannerExcludedFile(relativePath, ScannerExclusionTooLarge), false, bytesRead, nil
 		}
 
 		return ScannerFile{
 			Path:  relativePath,
 			Body:  append([]byte(nil), body...),
 			State: IndexFilePresent,
-		}, false, nil
+		}, false, bytesRead, nil
 	}
 
-	return scannerUnreadableFile(relativePath), true, nil
+	return scannerUnreadableFile(relativePath), true, bytesRead, nil
 }
 
-func (scanner *Scanner) gitOutput(ctx context.Context, root string, command ...string) ([]byte, error) {
+func (scanner *Scanner) gitOutput(ctx context.Context, root string, duration *time.Duration, command ...string) ([]byte, error) {
+	started := time.Now()
 	result, err := scanner.runGit(ctx, root, command...)
+	*duration = time.Since(started)
 	if err != nil {
 		return nil, err
 	}
@@ -506,25 +537,35 @@ func (scanner *Scanner) runGit(ctx context.Context, root string, command ...stri
 	return result, nil
 }
 
-func (scanner *Scanner) classifyGitError(result ScannerResult, err error) (ScannerResult, error) {
+func (scanner *Scanner) classifyGitError(result ScannerResult, started time.Time, err error) (ScannerResult, error) {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return scanner.incomplete(result, err)
+		return scanner.incomplete(result, started, err)
 	}
-	return scanner.failed(result, err)
+	return scanner.failed(result, started, err)
 }
 
-func (scanner *Scanner) failed(result ScannerResult, err error) (ScannerResult, error) {
-	scanner.finish(&result, IndexScanFailed)
+func (scanner *Scanner) failed(result ScannerResult, started time.Time, err error) (ScannerResult, error) {
+	scanner.finish(&result, started, IndexScanFailed)
 	return result, err
 }
 
-func (scanner *Scanner) incomplete(result ScannerResult, err error) (ScannerResult, error) {
-	scanner.finish(&result, IndexScanIncomplete)
+func (scanner *Scanner) incomplete(result ScannerResult, started time.Time, err error) (ScannerResult, error) {
+	scanner.finish(&result, started, IndexScanIncomplete)
 	return result, err
 }
 
-func (scanner *Scanner) finish(result *ScannerResult, outcome IndexScanOutcome) {
-	result.Observation.ScanEnd = time.Now().UTC()
+func (scanner *Scanner) finish(result *ScannerResult, started time.Time, outcome IndexScanOutcome) {
+	finished := time.Now()
+	result.Observation.ScanEnd = finished.UTC()
+	result.Diagnostics.TotalDuration = finished.Sub(started)
+	measured := result.Diagnostics.GitTopologyDuration +
+		result.Diagnostics.GitStatusDuration +
+		result.Diagnostics.GitStagedDuration +
+		result.Diagnostics.GitUntrackedDuration +
+		result.Diagnostics.CandidateLoopDuration
+	if result.Diagnostics.TotalDuration > measured {
+		result.Diagnostics.ResidualDuration = result.Diagnostics.TotalDuration - measured
+	}
 	result.Census.Outcome = outcome
 	switch outcome {
 	case IndexScanComplete:
