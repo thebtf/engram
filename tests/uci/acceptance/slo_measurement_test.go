@@ -66,6 +66,7 @@ type uciSLORecordCorpus struct {
 	replacements   map[string]uci.IndexEdgeReplacement
 	markdownBytes  []byte
 	maxChanged     int64
+	buildPrefix    string
 }
 
 func TestUCIRecordSLOMeasurement(t *testing.T) {
@@ -411,8 +412,9 @@ func SLOMeasurementTarget() string {
 		memberships:   uciSLOMembershipMap(part.Memberships),
 		replacements:  uciSLOReplacementMap(part.EdgeReplacements),
 		markdownBytes: markdownBytes,
+		buildPrefix:   "uci-slo-" + strings.ReplaceAll(fixture.checkout.CheckoutID, "-", ""),
 	}
-	published, err := corpus.publish(fixture.context, "uci-slo-initial", uci.IndexManifestFull, uci.IndexJobInitial, nil, part, 1)
+	published, err := corpus.publish(fixture.context, corpus.buildPrefix+"-initial", uci.IndexManifestFull, uci.IndexJobInitial, nil, part, 1)
 	if err != nil {
 		return nil, fmt.Errorf("publish bounded SLO corpus: %w", err)
 	}
@@ -488,7 +490,7 @@ func (corpus *uciSLORecordCorpus) publishUpdate(ctx context.Context, sequence in
 	previousReplacements := corpus.replacements
 	corpus.memberships = uciSLOMembershipMapMerged(previousMemberships, part.Memberships)
 	corpus.replacements = uciSLOReplacementMapMerged(previousReplacements, part.EdgeReplacements)
-	published, err := corpus.publish(ctx, fmt.Sprintf("uci-slo-update-%03d", sequence), uci.IndexManifestDelta, uci.IndexJobReconcile, &corpus.current.Context, part, int64(sequence+1))
+	published, err := corpus.publish(ctx, fmt.Sprintf("%s-update-%03d", corpus.buildPrefix, sequence), uci.IndexManifestDelta, uci.IndexJobReconcile, &corpus.current.Context, part, int64(sequence+1))
 	if err != nil {
 		corpus.memberships = previousMemberships
 		corpus.replacements = previousReplacements
