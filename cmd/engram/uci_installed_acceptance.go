@@ -4178,13 +4178,30 @@ func uciWaitForInstalledAcceptanceWatcherFirstCurrentPublication(
 	selection uciInstalledAcceptanceSelection,
 	previous uciInstalledAcceptancePublication,
 ) (uciInstalledAcceptancePublication, error) {
-	if client == nil || selection.contextHandle == "" || previous.runID == "" {
+	if client == nil {
+		return uciInstalledAcceptancePublication{}, errors.New("installed acceptance watcher status target is incomplete")
+	}
+	return uciWaitForInstalledAcceptanceWatcherFirstCurrentPublicationObserved(ctx, selection, previous, func(ctx context.Context, observed uciInstalledAcceptanceSelection) (uciInstalledAcceptanceStatus, error) {
+		return uciInstalledAcceptanceStatusForSelection(ctx, client, observed)
+	})
+}
+
+func uciWaitForInstalledAcceptanceWatcherFirstCurrentPublicationObserved(
+	ctx context.Context,
+	selection uciInstalledAcceptanceSelection,
+	previous uciInstalledAcceptancePublication,
+	observe func(context.Context, uciInstalledAcceptanceSelection) (uciInstalledAcceptanceStatus, error),
+) (uciInstalledAcceptancePublication, error) {
+	if selection.contextHandle == "" || previous.runID == "" || observe == nil {
 		return uciInstalledAcceptancePublication{}, errors.New("installed acceptance watcher status target is incomplete")
 	}
 	status, err := uciWaitForInstalledAcceptanceWatcherRun(ctx, previous.runID, func(ctx context.Context) (uciInstalledAcceptanceStatus, error) {
-		return uciInstalledAcceptanceStatusForSelection(ctx, client, selection)
+		return observe(ctx, selection)
 	})
 	if err != nil {
+		return uciInstalledAcceptancePublication{}, err
+	}
+	if err := uciValidateInstalledAcceptanceWatcherStatusContext(status, previous); err != nil {
 		return uciInstalledAcceptancePublication{}, err
 	}
 	observedSelection := selection
@@ -4210,11 +4227,18 @@ func uciWaitForInstalledAcceptanceWatcherFirstCurrentPublication(
 			return uciInstalledAcceptancePublication{}, fmt.Errorf("wait for installed acceptance watcher current View: %w", ctx.Err())
 		case <-ticker.C:
 		}
-		status, err = uciInstalledAcceptanceStatusForSelection(ctx, client, selection)
+		status, err = observe(ctx, observedSelection)
 		if err != nil {
 			return uciInstalledAcceptancePublication{}, err
 		}
 	}
+}
+
+func uciValidateInstalledAcceptanceWatcherStatusContext(status uciInstalledAcceptanceStatus, previous uciInstalledAcceptancePublication) error {
+	if status.context == nil || status.context.sourceID != previous.sourceID || status.context.checkoutID != previous.checkoutID || status.context.profileID != previous.profileID {
+		return errors.New("installed standard MCP watcher status advanced outside the selected source, checkout, or profile")
+	}
+	return nil
 }
 
 type uciInstalledAcceptanceWatcherStageObserver func(stage string, started, returned time.Time, err error)

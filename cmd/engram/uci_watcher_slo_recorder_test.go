@@ -1989,6 +1989,46 @@ func TestUCIWatcherSLOAwaitSearchableUsesOneCanarySearch(t *testing.T) {
 	}
 }
 
+func TestUCIInstalledWatcherFirstCurrentPublicationUsesNewRunForSubsequentStatus(t *testing.T) {
+	before := uciInstalledAcceptancePublication{sourceID: "source", checkoutID: "checkout", profileID: "profile", viewID: "view-before", generation: 1, runID: "run-before"}
+	after := before
+	after.viewID, after.generation, after.runID = "view-after", 2, "run-after"
+	first, err := uciDecodeInstalledAcceptanceStatus(uciWatcherSLOTestStatusPayload(t, before, uciWatcherSLOStageEmbedding{}))
+	if err != nil {
+		t.Fatalf("decode first watcher status: %v", err)
+	}
+	first.runID = after.runID
+	current, err := uciDecodeInstalledAcceptanceStatus(uciWatcherSLOTestStatusPayload(t, after, uciWatcherSLOStageEmbedding{}))
+	if err != nil {
+		t.Fatalf("decode current watcher status: %v", err)
+	}
+
+	calls := 0
+	publication, err := uciWaitForInstalledAcceptanceWatcherFirstCurrentPublicationObserved(context.Background(), uciInstalledAcceptanceSelection{contextHandle: "checkout-handle", runID: before.runID}, before, func(_ context.Context, selection uciInstalledAcceptanceSelection) (uciInstalledAcceptanceStatus, error) {
+		calls++
+		switch calls {
+		case 1:
+			if selection.contextHandle != "checkout-handle" || selection.runID != before.runID {
+				return uciInstalledAcceptanceStatus{}, fmt.Errorf("initial watcher status selection = %#v", selection)
+			}
+			return first, nil
+		case 2:
+			if selection.contextHandle != "checkout-handle" || selection.runID != after.runID {
+				return uciInstalledAcceptanceStatus{}, fmt.Errorf("stale watcher run pairing = %#v, want run_id %q", selection, after.runID)
+			}
+			return current, nil
+		default:
+			return uciInstalledAcceptanceStatus{}, fmt.Errorf("watcher status calls = %d, want 2", calls)
+		}
+	})
+	if err != nil {
+		t.Fatalf("await first current watcher publication: %v", err)
+	}
+	if calls != 2 || !uciWatcherSLOSameExactPublication(publication, after) {
+		t.Fatalf("first current watcher publication = %#v after %d calls, want %#v after 2", publication, calls, after)
+	}
+}
+
 func TestUCIWatcherSLOObserverKeepsFirstExactViewObservation(t *testing.T) {
 	origin := time.Date(2026, time.September, 9, 1, 0, 0, 0, time.UTC)
 	baseline := uciInstalledAcceptancePublication{sourceID: "source", checkoutID: "checkout", profileID: "profile", viewID: "before", generation: 1, runID: "run-before"}
