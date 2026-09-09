@@ -1779,6 +1779,11 @@ func (err *uciInstalledAcceptanceMCPError) Error() string {
 	return message
 }
 
+func uciInstalledAcceptanceIsTransientContextMismatch(err error) bool {
+	var mcpErr *uciInstalledAcceptanceMCPError
+	return errors.As(err, &mcpErr) && mcpErr.detail == "CONTEXT_MISMATCH"
+}
+
 func uciInstalledAcceptanceStatusTool(ctx context.Context, client *uciInstalledAcceptanceMCPClient, arguments map[string]any) (json.RawMessage, error) {
 	var lastErr error
 	for range 3 {
@@ -1787,8 +1792,7 @@ func uciInstalledAcceptanceStatusTool(ctx context.Context, client *uciInstalledA
 			return payload, nil
 		}
 		lastErr = err
-		var mcpErr *uciInstalledAcceptanceMCPError
-		if !errors.As(err, &mcpErr) || mcpErr.detail != "CONTEXT_MISMATCH" {
+		if !uciInstalledAcceptanceIsTransientContextMismatch(err) {
 			return nil, err
 		}
 		select {
@@ -4186,6 +4190,29 @@ func uciWaitForInstalledAcceptanceWatcherFirstCurrentPublication(
 	})
 }
 
+func uciWaitForInstalledAcceptanceWatcherFirstCurrentStatus(
+	ctx context.Context,
+	selection uciInstalledAcceptanceSelection,
+	observe func(context.Context, uciInstalledAcceptanceSelection) (uciInstalledAcceptanceStatus, error),
+) (uciInstalledAcceptanceStatus, error) {
+	ticker := time.NewTicker(uciInstalledAcceptanceQuiescencePollInterval)
+	defer ticker.Stop()
+	for {
+		status, err := observe(ctx, selection)
+		if err == nil {
+			return status, nil
+		}
+		if !uciInstalledAcceptanceIsTransientContextMismatch(err) {
+			return uciInstalledAcceptanceStatus{}, err
+		}
+		select {
+		case <-ctx.Done():
+			return uciInstalledAcceptanceStatus{}, fmt.Errorf("wait for installed acceptance watcher first current status: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
 func uciWaitForInstalledAcceptanceWatcherFirstCurrentPublicationObserved(
 	ctx context.Context,
 	selection uciInstalledAcceptanceSelection,
@@ -4196,7 +4223,7 @@ func uciWaitForInstalledAcceptanceWatcherFirstCurrentPublicationObserved(
 		return uciInstalledAcceptancePublication{}, errors.New("installed acceptance watcher status target is incomplete")
 	}
 	status, err := uciWaitForInstalledAcceptanceWatcherRun(ctx, previous.runID, func(ctx context.Context) (uciInstalledAcceptanceStatus, error) {
-		return observe(ctx, selection)
+		return uciWaitForInstalledAcceptanceWatcherFirstCurrentStatus(ctx, selection, observe)
 	})
 	if err != nil {
 		return uciInstalledAcceptancePublication{}, err
@@ -4227,7 +4254,7 @@ func uciWaitForInstalledAcceptanceWatcherFirstCurrentPublicationObserved(
 			return uciInstalledAcceptancePublication{}, fmt.Errorf("wait for installed acceptance watcher current View: %w", ctx.Err())
 		case <-ticker.C:
 		}
-		status, err = observe(ctx, observedSelection)
+		status, err = uciWaitForInstalledAcceptanceWatcherFirstCurrentStatus(ctx, observedSelection, observe)
 		if err != nil {
 			return uciInstalledAcceptancePublication{}, err
 		}

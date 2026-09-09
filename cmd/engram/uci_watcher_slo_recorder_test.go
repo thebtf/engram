@@ -330,6 +330,9 @@ func uciWatcherSLODiagnosticErrorCode(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "deadline_exceeded"
 	}
+	if uciInstalledAcceptanceIsTransientContextMismatch(err) {
+		return "CONTEXT_MISMATCH"
+	}
 	var mcpErr *uciInstalledAcceptanceMCPError
 	if errors.As(err, &mcpErr) {
 		return mcpErr.code
@@ -2029,6 +2032,71 @@ func TestUCIInstalledWatcherFirstCurrentPublicationUsesNewRunForSubsequentStatus
 	}
 }
 
+func TestUCIInstalledWatcherFirstCurrentPublicationRetriesTransientContextMismatch(t *testing.T) {
+	before := uciInstalledAcceptancePublication{sourceID: "source", checkoutID: "checkout", profileID: "profile", viewID: "view-before", generation: 1, runID: "run-before"}
+	after := before
+	after.viewID, after.generation, after.runID = "view-after", 2, "run-after"
+	current, err := uciDecodeInstalledAcceptanceStatus(uciWatcherSLOTestStatusPayload(t, after, uciWatcherSLOStageEmbedding{}))
+	if err != nil {
+		t.Fatalf("decode current watcher status: %v", err)
+	}
+
+	selection := uciInstalledAcceptanceSelection{contextHandle: "checkout-handle", runID: before.runID}
+	calls := 0
+	publication, err := uciWaitForInstalledAcceptanceWatcherFirstCurrentPublicationObserved(context.Background(), selection, before, func(_ context.Context, observed uciInstalledAcceptanceSelection) (uciInstalledAcceptanceStatus, error) {
+		calls++
+		if observed != selection {
+			return uciInstalledAcceptanceStatus{}, fmt.Errorf("transient watcher retry changed selection = %#v, want %#v", observed, selection)
+		}
+		if calls == 1 {
+			return uciInstalledAcceptanceStatus{}, &uciInstalledAcceptanceMCPError{method: "tools/call", code: "-32603", detail: "CONTEXT_MISMATCH"}
+		}
+		if calls == 2 {
+			return current, nil
+		}
+		return uciInstalledAcceptanceStatus{}, fmt.Errorf("watcher status calls = %d, want 2", calls)
+	})
+	if err != nil {
+		t.Fatalf("retry transient context mismatch: %v", err)
+	}
+	if calls != 2 || !uciWatcherSLOSameExactPublication(publication, after) {
+		t.Fatalf("first current watcher publication = %#v after %d calls, want %#v after 2", publication, calls, after)
+	}
+}
+
+func TestUCIInstalledWatcherFirstCurrentPublicationRetriesTransientContextMismatchUntilDeadline(t *testing.T) {
+	before := uciInstalledAcceptancePublication{sourceID: "source", checkoutID: "checkout", profileID: "profile", viewID: "view-before", generation: 1, runID: "run-before"}
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	calls := 0
+	_, err := uciWaitForInstalledAcceptanceWatcherFirstCurrentPublicationObserved(ctx, uciInstalledAcceptanceSelection{contextHandle: "checkout-handle", runID: before.runID}, before, func(context.Context, uciInstalledAcceptanceSelection) (uciInstalledAcceptanceStatus, error) {
+		calls++
+		return uciInstalledAcceptanceStatus{}, &uciInstalledAcceptanceMCPError{method: "tools/call", code: "-32603", detail: "CONTEXT_MISMATCH"}
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("transient context mismatch deadline error = %v, want deadline exceeded", err)
+	}
+	if calls < 2 {
+		t.Fatalf("transient context mismatch status calls = %d, want repeated observation", calls)
+	}
+}
+
+func TestUCIInstalledWatcherFirstCurrentPublicationRejectsNonContextError(t *testing.T) {
+	before := uciInstalledAcceptancePublication{sourceID: "source", checkoutID: "checkout", profileID: "profile", viewID: "view-before", generation: 1, runID: "run-before"}
+	want := &uciInstalledAcceptanceMCPError{method: "tools/call", code: "-32603", detail: "PERMISSION_DENIED"}
+	calls := 0
+	_, err := uciWaitForInstalledAcceptanceWatcherFirstCurrentPublicationObserved(context.Background(), uciInstalledAcceptanceSelection{contextHandle: "checkout-handle", runID: before.runID}, before, func(context.Context, uciInstalledAcceptanceSelection) (uciInstalledAcceptanceStatus, error) {
+		calls++
+		return uciInstalledAcceptanceStatus{}, want
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("non-context watcher error = %v, want %v", err, want)
+	}
+	if calls != 1 {
+		t.Fatalf("non-context watcher status calls = %d, want 1", calls)
+	}
+}
+
 func TestUCIWatcherSLOObserverKeepsFirstExactViewObservation(t *testing.T) {
 	origin := time.Date(2026, time.September, 9, 1, 0, 0, 0, time.UTC)
 	baseline := uciInstalledAcceptancePublication{sourceID: "source", checkoutID: "checkout", profileID: "profile", viewID: "before", generation: 1, runID: "run-before"}
@@ -2191,6 +2259,50 @@ func TestUCIWatcherSLODiagnosticFailureClasses(t *testing.T) {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("diagnostic record retained %q: %s", forbidden, encoded)
 		}
+	}
+}
+
+func TestUCIWatcherSLODiagnosticsRecordEachTransientContextMismatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "watcher-slo.json")
+	journal, err := uciNewWatcherSLOStageJournal(path)
+	if err != nil {
+		t.Fatalf("create stage journal: %v", err)
+	}
+	baseline := uciInstalledAcceptancePublication{sourceID: "source", checkoutID: "checkout", profileID: "profile", viewID: "view-before", generation: 1, runID: "run-before"}
+	attempt := uciWatcherSLOStageAttempt{ID: "attempt-001", Sequence: 1, Warmth: "warm", Baseline: uciWatcherSLOStagePublicationFor(baseline)}
+	trace := newUCIWatcherSLOAttemptTrace(journal.origin, baseline)
+	mismatch := &uciInstalledAcceptanceMCPError{method: "tools/call", code: "-32603", detail: "CONTEXT_MISMATCH"}
+	trace.observeTool("codebase_status", journal.origin.Add(time.Millisecond), journal.origin.Add(2*time.Millisecond), nil, mismatch)
+	trace.observeTool("codebase_status", journal.origin.Add(3*time.Millisecond), journal.origin.Add(4*time.Millisecond), nil, mismatch)
+	if err := uciWatcherSLOFinalizeAttempt(journal, &attempt, trace, "", nil, uciWatcherSLOStageEmbedding{}, acceptance.UCIWatcherSLOBatch{}); err != nil {
+		t.Fatalf("finalize transient context mismatch attempt: %v", err)
+	}
+	if err := journal.close(); err != nil {
+		t.Fatalf("close stage journal: %v", err)
+	}
+	raw, err := os.ReadFile(path + ".attempts.jsonl")
+	if err != nil {
+		t.Fatalf("read stage journal: %v", err)
+	}
+	var record uciWatcherSLOStageJournalRecord
+	if err := json.Unmarshal(raw, &record); err != nil {
+		t.Fatalf("decode stage journal: %v", err)
+	}
+	if record.Attempt == nil || record.Attempt.Status != "complete" || record.Attempt.FailureClass != "" {
+		t.Fatalf("transient context mismatch attempt = %#v", record.Attempt)
+	}
+	observations := 0
+	for _, event := range record.Attempt.Events {
+		if event.Name != "codebase_status_return" {
+			continue
+		}
+		observations++
+		if event.ErrorClass != "mcp_error" || event.ErrorCode != "CONTEXT_MISMATCH" {
+			t.Fatalf("transient context mismatch diagnostic = %#v", event)
+		}
+	}
+	if observations != 2 {
+		t.Fatalf("transient context mismatch observations = %d, want 2", observations)
 	}
 }
 
