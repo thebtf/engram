@@ -51,7 +51,10 @@ type uciWatcherSLOStagePublication struct {
 	Generation     int64      `json:"generation,omitempty"`
 	ManifestDigest string     `json:"manifest_digest,omitempty"`
 	ObservedFSSeq  int64      `json:"observed_fs_seq,omitempty"`
-	PublishedAtUTC *time.Time `json:"published_at_utc,omitempty"`
+	PublishedAtUTC *time.Time `json:"published_at_utc"`
+	ScanStartDBUTC *time.Time `json:"scan_start_db_utc"`
+	ScanEndDBUTC   *time.Time `json:"scan_end_db_utc"`
+	ScanDurationNS *int64     `json:"scan_duration_ns"`
 }
 
 type uciWatcherSLOStageEmbedding struct {
@@ -178,6 +181,46 @@ func uciWatcherSLOStagePublicationFor(publication uciInstalledAcceptancePublicat
 		stage.RunDigest = uciInstalledAcceptanceStringDigest(publication.runID)
 	}
 	return stage
+}
+
+type uciWatcherSLODurableViewRow struct {
+	ViewID         string     `gorm:"column:view_id"`
+	Generation     int64      `gorm:"column:generation"`
+	ManifestDigest string     `gorm:"column:manifest_digest"`
+	ObservedFSSeq  int64      `gorm:"column:observed_fs_seq"`
+	PublishedAt    *time.Time `gorm:"column:published_at"`
+	ScanStart      *time.Time `gorm:"column:scan_start"`
+	ScanEnd        *time.Time `gorm:"column:scan_end"`
+}
+
+func uciWatcherSLOStagePublicationForDurableView(row uciWatcherSLODurableViewRow) (uciWatcherSLOStagePublication, error) {
+	stage := uciWatcherSLOStagePublication{ViewID: row.ViewID, Generation: row.Generation, ManifestDigest: row.ManifestDigest, ObservedFSSeq: row.ObservedFSSeq}
+	if row.PublishedAt != nil && !row.PublishedAt.IsZero() {
+		publishedAt := row.PublishedAt.UTC()
+		stage.PublishedAtUTC = &publishedAt
+	}
+	if row.ScanStart != nil {
+		if row.ScanStart.IsZero() {
+			return uciWatcherSLOStagePublication{}, errors.New("durable View scan_start is zero")
+		}
+		scanStart := row.ScanStart.UTC()
+		stage.ScanStartDBUTC = &scanStart
+	}
+	if row.ScanEnd != nil {
+		if row.ScanEnd.IsZero() {
+			return uciWatcherSLOStagePublication{}, errors.New("durable View scan_end is zero")
+		}
+		scanEnd := row.ScanEnd.UTC()
+		stage.ScanEndDBUTC = &scanEnd
+	}
+	if stage.ScanStartDBUTC != nil && stage.ScanEndDBUTC != nil {
+		if stage.ScanEndDBUTC.Before(*stage.ScanStartDBUTC) {
+			return uciWatcherSLOStagePublication{}, errors.New("durable View scan window is inverted")
+		}
+		duration := stage.ScanEndDBUTC.Sub(*stage.ScanStartDBUTC).Nanoseconds()
+		stage.ScanDurationNS = &duration
+	}
+	return stage, nil
 }
 
 func uciWatcherSLOStageSpanFor(origin, started, returned time.Time) uciWatcherSLOStageSpan {
@@ -566,15 +609,9 @@ func uciStartWatcherSLODurableViewObserver(ctx context.Context, authority *uciIn
 	observer := &uciWatcherSLODurableViewObserver{cancel: cancel, done: make(chan struct{})}
 	poll := func() {
 		started := time.Now()
-		var row struct {
-			ViewID         string     `gorm:"column:view_id"`
-			Generation     int64      `gorm:"column:generation"`
-			ManifestDigest string     `gorm:"column:manifest_digest"`
-			ObservedFSSeq  int64      `gorm:"column:observed_fs_seq"`
-			PublishedAt    *time.Time `gorm:"column:published_at"`
-		}
+		var row uciWatcherSLODurableViewRow
 		err := authority.store.GetDB().WithContext(observerCtx).Raw(`
-			SELECT view_id, generation, manifest_digest, observed_fs_seq, published_at
+			SELECT view_id, generation, manifest_digest, observed_fs_seq, published_at, scan_start, scan_end
 			FROM ci_views
 			WHERE source_id = ? AND checkout_id = ? AND profile_id = ?
 				AND (view_id <> ? OR generation > ?)
@@ -589,10 +626,10 @@ func uciStartWatcherSLODurableViewObserver(ctx context.Context, authority *uciIn
 			trace.observeDurable(started, returned, uciInstalledAcceptancePublication{}, uciWatcherSLOStagePublication{}, false, nil)
 			return
 		}
-		stage := uciWatcherSLOStagePublication{ViewID: row.ViewID, Generation: row.Generation, ManifestDigest: row.ManifestDigest, ObservedFSSeq: row.ObservedFSSeq}
-		if row.PublishedAt != nil && !row.PublishedAt.IsZero() {
-			publishedAt := row.PublishedAt.UTC()
-			stage.PublishedAtUTC = &publishedAt
+		stage, err := uciWatcherSLOStagePublicationForDurableView(row)
+		if err != nil {
+			trace.observeDurable(started, returned, uciInstalledAcceptancePublication{}, uciWatcherSLOStagePublication{}, false, err)
+			return
 		}
 		trace.observeDurable(started, returned, uciInstalledAcceptancePublication{sourceID: baseline.sourceID, checkoutID: baseline.checkoutID, profileID: baseline.profileID, viewID: row.ViewID, generation: row.Generation}, stage, true, nil)
 	}
@@ -1449,6 +1486,93 @@ func TestUCIWatcherSLOAttemptPersistsTerminalFailure(t *testing.T) {
 	}
 	if uciWatcherSLOEvent(terminal.Attempt.Events, "save_begin") == nil || uciWatcherSLOEvent(terminal.Attempt.Events, "embedding_status_observed") == nil || uciWatcherSLOEvent(terminal.Attempt.Events, "embedding_ready_first_seen") != nil {
 		t.Fatalf("terminal milestones = %#v", terminal.Attempt.Events)
+	}
+}
+
+func TestUCIWatcherSLODurableViewScanObservationKeepsClockDomainsSeparate(t *testing.T) {
+	localOrigin := time.Date(2042, time.January, 2, 3, 4, 5, 0, time.UTC)
+	dbScanStart := time.Date(2026, time.September, 9, 12, 0, 0, 123, time.FixedZone("db", -7*60*60))
+	dbScanEnd := dbScanStart.Add(23*time.Millisecond + 7*time.Nanosecond)
+	stage, err := uciWatcherSLOStagePublicationForDurableView(uciWatcherSLODurableViewRow{ViewID: "view-after", Generation: 2, ScanStart: &dbScanStart, ScanEnd: &dbScanEnd})
+	if err != nil {
+		t.Fatalf("stage durable View scan window: %v", err)
+	}
+	if stage.ScanStartDBUTC == nil || !stage.ScanStartDBUTC.Equal(dbScanStart.UTC()) || stage.ScanEndDBUTC == nil || !stage.ScanEndDBUTC.Equal(dbScanEnd.UTC()) || stage.ScanDurationNS == nil || *stage.ScanDurationNS != dbScanEnd.Sub(dbScanStart).Nanoseconds() {
+		t.Fatalf("durable View DB-clock observation = %#v", stage)
+	}
+
+	baseline := uciInstalledAcceptancePublication{sourceID: "source", checkoutID: "checkout", profileID: "profile", viewID: "view-before", generation: 1}
+	after := baseline
+	after.viewID, after.generation = "view-after", 2
+	trace := newUCIWatcherSLOAttemptTrace(localOrigin, baseline)
+	trace.markSave(localOrigin, localOrigin, nil)
+	trace.setPublication(after)
+	trace.observeDurable(localOrigin.Add(5*time.Millisecond), localOrigin.Add(7*time.Millisecond), after, stage, true, nil)
+	journalPath := filepath.Join(t.TempDir(), "watcher-slo.json")
+	journal, err := uciNewWatcherSLOStageJournal(journalPath)
+	if err != nil {
+		t.Fatalf("create stage journal: %v", err)
+	}
+	attempt := uciWatcherSLOStageAttempt{ID: "attempt-001", Sequence: 1, Warmth: "warm", Baseline: uciWatcherSLOStagePublicationFor(baseline)}
+	if err := uciWatcherSLOFinalizeAttempt(journal, &attempt, trace, "", nil, uciWatcherSLOStageEmbedding{}, acceptance.UCIWatcherSLOBatch{}); err != nil {
+		t.Fatalf("persist scan observation: %v", err)
+	}
+	if err := journal.close(); err != nil {
+		t.Fatalf("close stage journal: %v", err)
+	}
+	raw, err := os.ReadFile(journalPath + ".attempts.jsonl")
+	if err != nil {
+		t.Fatalf("read stage journal: %v", err)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(raw, &record); err != nil {
+		t.Fatalf("decode stage journal: %v", err)
+	}
+	attemptRecord, ok := record["attempt"].(map[string]any)
+	if !ok {
+		t.Fatalf("journal attempt = %#v", record["attempt"])
+	}
+	events, ok := attemptRecord["events"].([]any)
+	if !ok || len(events) != 3 {
+		t.Fatalf("journal events = %#v", attemptRecord["events"])
+	}
+	durable, ok := events[2].(map[string]any)
+	if !ok || durable["name"] != "durable_view_first_seen" {
+		t.Fatalf("durable journal event = %#v", events[2])
+	}
+	span, ok := durable["span"].(map[string]any)
+	if !ok || int64(span["elapsed_ns"].(float64)) != (2*time.Millisecond).Nanoseconds() {
+		t.Fatalf("local monotonic span = %#v", durable["span"])
+	}
+	publication, ok := durable["publication"].(map[string]any)
+	if !ok || publication["scan_start_db_utc"] != dbScanStart.UTC().Format(time.RFC3339Nano) || publication["scan_end_db_utc"] != dbScanEnd.UTC().Format(time.RFC3339Nano) || int64(publication["scan_duration_ns"].(float64)) != dbScanEnd.Sub(dbScanStart).Nanoseconds() {
+		t.Fatalf("durable DB-clock fields = %#v", durable["publication"])
+	}
+
+	unknown, err := uciWatcherSLOStagePublicationForDurableView(uciWatcherSLODurableViewRow{})
+	if err != nil {
+		t.Fatalf("stage missing scan window: %v", err)
+	}
+	encodedUnknown, err := json.Marshal(unknown)
+	if err != nil {
+		t.Fatalf("encode missing scan window: %v", err)
+	}
+	var unknownFields map[string]any
+	if err := json.Unmarshal(encodedUnknown, &unknownFields); err != nil {
+		t.Fatalf("decode missing scan window: %v", err)
+	}
+	for _, field := range []string{"scan_start_db_utc", "scan_end_db_utc", "scan_duration_ns"} {
+		value, present := unknownFields[field]
+		if !present || value != nil {
+			t.Fatalf("missing scan field %q = %#v, present %t", field, value, present)
+		}
+	}
+	zero := time.Time{}
+	if _, err := uciWatcherSLOStagePublicationForDurableView(uciWatcherSLODurableViewRow{ScanStart: &zero}); err == nil {
+		t.Fatal("zero scan_start was accepted")
+	}
+	if _, err := uciWatcherSLOStagePublicationForDurableView(uciWatcherSLODurableViewRow{ScanStart: &dbScanEnd, ScanEnd: &dbScanStart}); err == nil {
+		t.Fatal("inverted scan window was accepted")
 	}
 }
 
