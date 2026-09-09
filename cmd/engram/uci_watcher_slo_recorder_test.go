@@ -240,9 +240,7 @@ func uciRecordInstalledWatcherSLOBatch(ctx context.Context, live uciInstalledAcc
 	if response.Coverage != nil {
 		coverage = string(response.Coverage.Structural)
 	}
-	if response.Status != uci.QueryStatusOK || coverage != "complete" || embedding.Embedding.Coverage != "complete" {
-		return acceptance.UCIWatcherSLOBatch{}, nil, fmt.Errorf("installed watcher search or embedding readiness is not healthy: search=%s/%s embedding=%s", response.Status, coverage, embedding.Embedding.Coverage)
-	}
+	outcome, reason := uciWatcherSLOClassifyOutcome(response.Status, coverage, embedding.Embedding.Coverage)
 
 	return acceptance.UCIWatcherSLOBatch{
 		ID:                   fmt.Sprintf("installed-watcher-%s-%03d", warmth, sequence),
@@ -253,7 +251,8 @@ func uciRecordInstalledWatcherSLOBatch(ctx context.Context, live uciInstalledAcc
 		ScanOutcome:          uci.IndexScanComplete,
 		ResultStatus:         string(response.Status),
 		Coverage:             coverage,
-		Outcome:              "healthy",
+		Outcome:              outcome,
+		Reason:               reason,
 		Warmth:               warmth,
 		Scan:                 acceptance.UCIWatcherSLOTiming{Origin: acceptance.UCIWatcherSLOOriginUnknownNotMeasured},
 		StructuralFTS:        uciWatcherSLOInstalledTiming(acceptance.UCIWatcherSLOOriginInstalledClientSearch, started, structuralCompleted),
@@ -576,6 +575,13 @@ func uciWatcherSLOViewsEqual(left, right acceptance.UCIWatcherSLOView) bool {
 	return left.BuildID == right.BuildID && left.Context == right.Context && left.ManifestDigest == right.ManifestDigest && left.AcceptedFSSeq == right.AcceptedFSSeq && left.PublishedAt.Equal(right.PublishedAt)
 }
 
+func uciWatcherSLOClassifyOutcome(status uci.QueryResponseStatus, structuralCoverage, embeddingCoverage string) (string, string) {
+	if status == uci.QueryStatusOK && structuralCoverage == "complete" && embeddingCoverage == "complete" {
+		return "healthy", ""
+	}
+	return "degraded", fmt.Sprintf("installed watcher structural readiness is %s/%s while embedding readiness is %s", status, structuralCoverage, embeddingCoverage)
+}
+
 func uciWriteInstalledWatcherSLORecord(path string, encoded []byte) error {
 	temporary, err := os.CreateTemp(filepath.Dir(path), ".uci-installed-watcher-slo-")
 	if err != nil {
@@ -674,5 +680,33 @@ func TestUCIInstalledAcceptanceScenarioProbePhaseKeepsBaseDefault(t *testing.T) 
 	request.ScenarioProbe = nil
 	if uciInstalledAcceptanceScenarioRunsBeforeBaseWatcher(request) {
 		t.Fatal("absent scenario probe selected the pre-base lifecycle")
+	}
+}
+
+func TestUCIInstalledAcceptanceIgnoredProjectAnchorIsOutsideAdmission(t *testing.T) {
+	root := t.TempDir()
+	if err := uciRunInstalledAcceptanceGit(t.Context(), root, "init"); err != nil {
+		t.Fatalf("initialize recorder fixture: %v", err)
+	}
+	if err := uciWriteInstalledAcceptanceIgnoredProjectAnchor(t.Context(), root, []byte(`{"version":3,"project_id":"11111111-1111-4111-8111-111111111111","name":"recorder","scope":"repository"}`)); err != nil {
+		t.Fatalf("write ignored recorder anchor: %v", err)
+	}
+	output, err := exec.CommandContext(t.Context(), "git", "-C", root, "ls-files", "--others", "--exclude-standard").Output()
+	if err != nil {
+		t.Fatalf("list recorder admission candidates: %v", err)
+	}
+	if strings.Contains(string(output), ".engram-project") {
+		t.Fatalf("unsupported project anchor remained an admission candidate: %q", output)
+	}
+}
+
+func TestUCIWatcherSLOClassifiesPartialSearchAsDegraded(t *testing.T) {
+	outcome, reason := uciWatcherSLOClassifyOutcome(uci.QueryStatusPartial, "partial", "complete")
+	if outcome != "degraded" || reason == "" {
+		t.Fatalf("partial structural result classification = %q, %q", outcome, reason)
+	}
+	outcome, reason = uciWatcherSLOClassifyOutcome(uci.QueryStatusOK, "complete", "complete")
+	if outcome != "healthy" || reason != "" {
+		t.Fatalf("complete structural result classification = %q, %q", outcome, reason)
 	}
 }
