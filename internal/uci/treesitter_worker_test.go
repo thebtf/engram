@@ -481,6 +481,36 @@ func TestUCITreeSitterWorkerCachesIdenticalImmutableArtifact(t *testing.T) {
 	uciRequireTreeSitterFixtureArtifact(t, fixture, second)
 }
 
+func TestUCITreeSitterWorkerCacheAccountsArtifactContainersAndMetadata(t *testing.T) {
+	const sourceBytes = 524_000
+	artifact := TreeSitterArtifact{
+		Proof: IndexArtifactProof{
+			ArtifactID:    strings.Repeat("a", 36),
+			ContentDigest: IndexDigest("sha256:" + strings.Repeat("b", 64)),
+			FactsDigest:   IndexDigest("sha256:" + strings.Repeat("c", 64)),
+		},
+		Coverage:     IndexCoverageComplete,
+		Language:     TreeSitterLanguageTypeScript,
+		BundleDigest: IndexDigest("sha256:" + strings.Repeat("d", 64)),
+		Text:         strings.Repeat("x", sourceBytes),
+		Chunks:       make([]TreeSitterChunk, 8),
+	}
+	for index := range artifact.Chunks {
+		artifact.Chunks[index] = TreeSitterChunk{
+			Text:          strings.Repeat("x", 65_500),
+			ContentDigest: IndexDigest("sha256:" + strings.Repeat("e", 64)),
+		}
+	}
+	if got := treeSitterArtifactCacheBytes(artifact); got <= treeSitterWorkerCacheMaxBytes {
+		t.Fatalf("cache bytes = %d, want metadata-aware rejection above %d", got, treeSitterWorkerCacheMaxBytes)
+	}
+	worker := &TreeSitterWorker{cache: make(map[[sha256.Size]byte]treeSitterWorkerCacheEntry)}
+	worker.cacheArtifact([sha256.Size]byte{}, artifact)
+	if len(worker.cache) != 0 {
+		t.Fatal("metadata-over-limit artifact was retained in cache")
+	}
+}
+
 func TestUCITreeSitterWorkerFramesBuiltParserFacts(t *testing.T) {
 	executable := uciBuildTreeSitterParser(t)
 	worker := uciNewBuiltTreeSitterWorker(t, executable, uciBuiltTreeSitterBundleDigest(t, executable))

@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+	"unsafe"
 )
 
 const (
@@ -400,12 +401,20 @@ func treeSitterCloneArtifact(artifact TreeSitterArtifact) TreeSitterArtifact {
 }
 
 func treeSitterArtifactCacheBytes(artifact TreeSitterArtifact) int {
-	bytes := len(artifact.Text)
+	// Count the deep-cloned artifact's Go containers, both retained cache keys,
+	// and conservative map-bucket metadata before every retained string byte.
+	bytes := int(unsafe.Sizeof(treeSitterWorkerCacheEntry{})) + 2*sha256.Size + 64
+	bytes += cap(artifact.Definitions) * int(unsafe.Sizeof(TreeSitterDefinition{}))
+	bytes += cap(artifact.References) * int(unsafe.Sizeof(TreeSitterReferenceSite{}))
+	bytes += cap(artifact.Chunks) * int(unsafe.Sizeof(TreeSitterChunk{}))
+	bytes += cap(artifact.Diagnostics) * int(unsafe.Sizeof(TreeSitterDiagnostic{}))
+	bytes += len(artifact.Proof.ArtifactID) + len(artifact.Proof.ContentDigest) + len(artifact.Proof.FactsDigest)
+	bytes += len(artifact.Coverage) + len(artifact.Language) + len(artifact.BundleDigest) + len(artifact.Text)
 	for _, definition := range artifact.Definitions {
 		bytes += len(definition.Kind) + len(definition.Name) + len(definition.SymbolKey) + len(definition.LocalKey)
 	}
 	for _, reference := range artifact.References {
-		bytes += len(reference.Kind) + len(reference.SymbolKey) + len(reference.LocalKey) + len(reference.OwnerLocalKey) + len(reference.RawTarget) + len(reference.TargetKey)
+		bytes += len(reference.Kind) + len(reference.SymbolKey) + len(reference.LocalKey) + len(reference.OwnerLocalKey) + len(reference.RawTarget) + len(reference.TargetKey) + len(reference.Resolution)
 	}
 	for _, chunk := range artifact.Chunks {
 		bytes += len(chunk.Text) + len(chunk.ContentDigest)
