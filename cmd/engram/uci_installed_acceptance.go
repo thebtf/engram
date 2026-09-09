@@ -1303,19 +1303,42 @@ func (authority *uciInstalledAcceptanceAuthority) Close(ctx context.Context) err
 	return errors.Join(cleanupErrors...)
 }
 
+func uciInstalledAcceptanceCheckoutIDs(checkouts map[string]*gormdb.UCICheckout) ([]string, error) {
+	required := [...]string{
+		uciInstalledAcceptanceClientA,
+		uciInstalledAcceptanceClientB,
+		"auxiliary-1",
+		"auxiliary-2",
+		"auxiliary-3",
+		"auxiliary-4",
+	}
+	if len(checkouts) != len(required) {
+		return nil, errors.New("installed acceptance checkout registration shape is incomplete")
+	}
+	checkoutIDs := make([]string, 0, len(required))
+	for _, name := range required {
+		checkout := checkouts[name]
+		if checkout == nil || checkout.CheckoutID == "" {
+			return nil, fmt.Errorf("installed acceptance checkout %q is unavailable", name)
+		}
+		if checkout.CurrentViewID != nil {
+			return nil, fmt.Errorf("installed acceptance checkout %q unexpectedly has a current View", name)
+		}
+		checkoutIDs = append(checkoutIDs, checkout.CheckoutID)
+	}
+	if checkoutIDs[0] == checkoutIDs[1] {
+		return nil, errors.New("installed acceptance did not register two distinct A/B checkouts")
+	}
+	return checkoutIDs, nil
+}
+
 func uciAssertInstalledAcceptanceNoProjection(ctx context.Context, authority *uciInstalledAcceptanceAuthority) error {
 	if authority == nil || authority.store == nil || authority.source == nil || authority.profile == nil {
 		return errors.New("installed acceptance authority is incomplete")
 	}
-	checkoutIDs := make([]string, 0, len(authority.checkouts))
-	for _, checkout := range authority.checkouts {
-		if checkout == nil || checkout.CurrentViewID != nil {
-			return errors.New("installed acceptance checkout unexpectedly has a current View")
-		}
-		checkoutIDs = append(checkoutIDs, checkout.CheckoutID)
-	}
-	if len(checkoutIDs) != 2 {
-		return errors.New("installed acceptance did not register two checkouts")
+	checkoutIDs, err := uciInstalledAcceptanceCheckoutIDs(authority.checkouts)
+	if err != nil {
+		return err
 	}
 	type projectionCount struct {
 		name  string

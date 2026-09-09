@@ -633,3 +633,27 @@ func TestUCIWatcherSLOGitCleanAcceptsEmptyPorcelain(t *testing.T) {
 		t.Fatalf("dirty watcher candidate = %t, %v; want false, nil", clean, err)
 	}
 }
+
+func TestUCIInstalledAcceptanceCheckoutShapeRequiresDistinctAB(t *testing.T) {
+	checkouts := map[string]*gormdb.UCICheckout{
+		uciInstalledAcceptanceClientA: {CheckoutID: "checkout-a"},
+		uciInstalledAcceptanceClientB: {CheckoutID: "checkout-b"},
+		"auxiliary-1":                 {CheckoutID: "checkout-auxiliary-1"},
+		"auxiliary-2":                 {CheckoutID: "checkout-auxiliary-2"},
+		"auxiliary-3":                 {CheckoutID: "checkout-auxiliary-3"},
+		"auxiliary-4":                 {CheckoutID: "checkout-auxiliary-4"},
+	}
+	checkoutIDs, err := uciInstalledAcceptanceCheckoutIDs(checkouts)
+	if err != nil || len(checkoutIDs) != 6 {
+		t.Fatalf("valid recorder checkout shape = %#v, %v", checkoutIDs, err)
+	}
+	checkouts[uciInstalledAcceptanceClientB] = &gormdb.UCICheckout{CheckoutID: "checkout-a"}
+	if _, err := uciInstalledAcceptanceCheckoutIDs(checkouts); err == nil {
+		t.Fatal("shared A/B checkout identity was accepted")
+	}
+	checkouts[uciInstalledAcceptanceClientB] = &gormdb.UCICheckout{CheckoutID: "checkout-b"}
+	delete(checkouts, "auxiliary-4")
+	if _, err := uciInstalledAcceptanceCheckoutIDs(checkouts); err == nil {
+		t.Fatal("incomplete recorder checkout shape was accepted")
+	}
+}
