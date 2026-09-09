@@ -3,6 +3,7 @@ package uci
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -14,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -199,6 +201,7 @@ type ScannerCensus struct {
 type ScannerDiagnostics struct {
 	GitTopologyDuration   time.Duration
 	GitStatusDuration     time.Duration
+	GitCandidatesDuration time.Duration
 	GitStagedDuration     time.Duration
 	GitUntrackedDuration  time.Duration
 	CandidateLoopDuration time.Duration
@@ -227,6 +230,9 @@ type Scanner struct {
 	git    GitRunner
 	files  ScannerFileSystem
 	policy ScannerPolicy
+
+	topologyMu    sync.Mutex
+	topologyCache *scannerTopologyCache
 }
 
 // NewScanner constructs a boundary scanner. Its policy slice is copied so a
@@ -266,28 +272,15 @@ func (scanner *Scanner) Scan(ctx context.Context, evidence AuthorizedRootEvidenc
 
 	rootInfo, err := scanner.files.Lstat(root)
 	if err != nil || scannerInfoIsReparse(rootInfo) || !rootInfo.Mode.IsDir() {
+		scanner.clearTopologyCache()
 		return scanner.failed(result, started, fmt.Errorf("%w: root unavailable", ErrScannerInvalidRoot))
 	}
 
-	topologyOutput, err := scanner.gitOutput(ctx, root, &result.Diagnostics.GitTopologyDuration, "rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir", "--git-path", "HEAD", "--show-object-format")
+	topology, err := scanner.repositoryTopology(ctx, root, rootInfo, &result.Diagnostics.GitTopologyDuration)
 	if err != nil {
 		return scanner.classifyGitError(result, started, err)
 	}
-	topology, err := scannerGitLines(topologyOutput, 5)
-	if err != nil {
-		return scanner.failed(result, started, err)
-	}
-	normalizedRepositoryRoot, err := scannerAuthorizedRoot(topology[0])
-	if err != nil || !scannerPathsEqual(root, normalizedRepositoryRoot) {
-		return scanner.failed(result, started, fmt.Errorf("%w: repository root does not match authorization", ErrScannerInvalidRoot))
-	}
-	if topology[1] == "" || topology[2] == "" || topology[3] == "" {
-		return scanner.failed(result, started, fmt.Errorf("%w: incomplete repository topology", ErrScannerMalformed))
-	}
-	objectFormat := topology[4]
-	if objectFormat != "sha1" && objectFormat != "sha256" {
-		return scanner.failed(result, started, fmt.Errorf("%w: unsupported object format", ErrScannerMalformed))
-	}
+	objectFormat := topology.objectFormat
 	result.Observation.ObjectFormat = scannerStringPointer(objectFormat)
 
 	statusOutput, err := scanner.gitOutput(ctx, root, &result.Diagnostics.GitStatusDuration, "status", "--porcelain=v2", "--branch", "-z")
@@ -306,20 +299,11 @@ func (scanner *Scanner) Scan(ctx context.Context, evidence AuthorizedRootEvidenc
 	}
 	result.Observation.Dirty = len(statusRecords) > 0
 
-	stageOutput, err := scanner.gitOutput(ctx, root, &result.Diagnostics.GitStagedDuration, "ls-files", "--stage", "-z")
+	candidateOutput, err := scanner.gitOutput(ctx, root, &result.Diagnostics.GitCandidatesDuration, "ls-files", "--stage", "--others", "--exclude-standard", "-t", "-z")
 	if err != nil {
 		return scanner.classifyGitError(result, started, err)
 	}
-	staged, err := scannerStagedCandidates(stageOutput, objectFormat)
-	if err != nil {
-		return scanner.failed(result, started, err)
-	}
-
-	untrackedOutput, err := scanner.gitOutput(ctx, root, &result.Diagnostics.GitUntrackedDuration, "ls-files", "--others", "--exclude-standard", "-z")
-	if err != nil {
-		return scanner.classifyGitError(result, started, err)
-	}
-	untracked, err := scannerUntrackedCandidates(untrackedOutput)
+	staged, untracked, err := scannerCombinedCandidates(candidateOutput, objectFormat)
 	if err != nil {
 		return scanner.failed(result, started, err)
 	}
@@ -370,6 +354,128 @@ func (scanner *Scanner) Scan(ctx context.Context, evidence AuthorizedRootEvidenc
 		scanner.finish(&result, started, IndexScanComplete)
 	}
 	return result, nil
+}
+
+type scannerTopologyCache struct {
+	input    scannerTopologyInput
+	topology scannerRepositoryTopology
+}
+
+type scannerTopologyInput struct {
+	root              string
+	rootInfo          ScannerFileInfo
+	markerInfo        ScannerFileInfo
+	markerFingerprint [sha256.Size]byte
+}
+
+type scannerRepositoryTopology struct {
+	root         string
+	gitDir       string
+	commonGitDir string
+	headPath     string
+	objectFormat string
+}
+
+func (scanner *Scanner) repositoryTopology(ctx context.Context, root string, rootInfo ScannerFileInfo, duration *time.Duration) (scannerRepositoryTopology, error) {
+	input, err := scanner.topologyInput(root, rootInfo)
+	if err != nil {
+		scanner.clearTopologyCache()
+		return scannerRepositoryTopology{}, err
+	}
+	if topology, ok := scanner.cachedTopology(input); ok {
+		return topology, nil
+	}
+
+	output, err := scanner.gitOutput(ctx, root, duration, "rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir", "--git-path", "HEAD", "--show-object-format")
+	if err != nil {
+		scanner.clearTopologyCache()
+		return scannerRepositoryTopology{}, err
+	}
+	topology, err := scannerRepositoryTopologyFromOutput(output, root)
+	if err != nil {
+		scanner.clearTopologyCache()
+		return scannerRepositoryTopology{}, err
+	}
+
+	currentRootInfo, err := scanner.files.Lstat(root)
+	if err != nil || scannerInfoIsReparse(currentRootInfo) || !currentRootInfo.Mode.IsDir() {
+		return topology, nil
+	}
+	current, err := scanner.topologyInput(root, currentRootInfo)
+	if err == nil && scannerTopologyInputsEqual(input, current) {
+		scanner.storeTopology(input, topology)
+	}
+	return topology, nil
+}
+
+func (scanner *Scanner) topologyInput(root string, rootInfo ScannerFileInfo) (scannerTopologyInput, error) {
+	markerPath := filepath.Join(root, ".git")
+	markerInfo, err := scanner.files.Lstat(markerPath)
+	if err != nil || scannerInfoIsReparse(markerInfo) || (!markerInfo.Mode.IsDir() && !markerInfo.Mode.IsRegular()) {
+		return scannerTopologyInput{}, fmt.Errorf("%w: repository marker unavailable", ErrScannerInvalidRoot)
+	}
+
+	input := scannerTopologyInput{root: root, rootInfo: rootInfo, markerInfo: markerInfo}
+	if markerInfo.Mode.IsRegular() {
+		marker, err := scanner.files.ReadFile(markerPath)
+		if err != nil {
+			return scannerTopologyInput{}, fmt.Errorf("%w: repository marker unavailable", ErrScannerInvalidRoot)
+		}
+		input.markerFingerprint = sha256.Sum256(marker)
+	}
+	return input, nil
+}
+
+func (scanner *Scanner) cachedTopology(input scannerTopologyInput) (scannerRepositoryTopology, bool) {
+	scanner.topologyMu.Lock()
+	defer scanner.topologyMu.Unlock()
+	if scanner.topologyCache == nil || !scannerTopologyInputsEqual(scanner.topologyCache.input, input) {
+		return scannerRepositoryTopology{}, false
+	}
+	return scanner.topologyCache.topology, true
+}
+
+func (scanner *Scanner) storeTopology(input scannerTopologyInput, topology scannerRepositoryTopology) {
+	scanner.topologyMu.Lock()
+	defer scanner.topologyMu.Unlock()
+	scanner.topologyCache = &scannerTopologyCache{input: input, topology: topology}
+}
+
+func (scanner *Scanner) clearTopologyCache() {
+	scanner.topologyMu.Lock()
+	defer scanner.topologyMu.Unlock()
+	scanner.topologyCache = nil
+}
+
+func scannerTopologyInputsEqual(left, right scannerTopologyInput) bool {
+	return scannerPathsEqual(left.root, right.root) &&
+		scannerSameFileInfo(left.rootInfo, right.rootInfo) &&
+		scannerSameFileInfo(left.markerInfo, right.markerInfo) &&
+		left.markerFingerprint == right.markerFingerprint
+}
+
+func scannerRepositoryTopologyFromOutput(output []byte, root string) (scannerRepositoryTopology, error) {
+	values, err := scannerGitLines(output, 5)
+	if err != nil {
+		return scannerRepositoryTopology{}, err
+	}
+	normalizedRoot, err := scannerAuthorizedRoot(values[0])
+	if err != nil || !scannerPathsEqual(root, normalizedRoot) {
+		return scannerRepositoryTopology{}, fmt.Errorf("%w: repository root does not match authorization", ErrScannerInvalidRoot)
+	}
+	if values[1] == "" || values[2] == "" || values[3] == "" {
+		return scannerRepositoryTopology{}, fmt.Errorf("%w: incomplete repository topology", ErrScannerMalformed)
+	}
+	if values[4] != "sha1" && values[4] != "sha256" {
+		return scannerRepositoryTopology{}, fmt.Errorf("%w: unsupported object format", ErrScannerMalformed)
+	}
+	return scannerRepositoryTopology{
+		root:         normalizedRoot,
+		gitDir:       values[1],
+		commonGitDir: values[2],
+		headPath:     values[3],
+		objectFormat: values[4],
+	}, nil
 }
 
 func (scanner *Scanner) scanCandidate(ctx context.Context, root string, candidate scannerCandidate) (ScannerFile, bool, int64, error) {
@@ -560,6 +666,7 @@ func (scanner *Scanner) finish(result *ScannerResult, started time.Time, outcome
 	result.Diagnostics.TotalDuration = finished.Sub(started)
 	measured := result.Diagnostics.GitTopologyDuration +
 		result.Diagnostics.GitStatusDuration +
+		result.Diagnostics.GitCandidatesDuration +
 		result.Diagnostics.GitStagedDuration +
 		result.Diagnostics.GitUntrackedDuration +
 		result.Diagnostics.CandidateLoopDuration
@@ -597,25 +704,65 @@ func scannerStagedCandidates(output []byte, objectFormat string) ([]scannerCandi
 
 	candidates := make([]scannerCandidate, 0, len(records))
 	for _, record := range records {
-		separator := strings.IndexByte(record, '\t')
-		if separator < 0 {
-			return nil, fmt.Errorf("%w: index record", ErrScannerMalformed)
-		}
-		header := strings.Fields(record[:separator])
-		if len(header) != 3 || !scannerValidMode(header[0]) || !scannerValidOID(header[1], objectFormat) {
-			return nil, fmt.Errorf("%w: index header", ErrScannerMalformed)
-		}
-		stage, err := strconv.Atoi(header[2])
-		if err != nil || stage < 0 || stage > 3 {
-			return nil, fmt.Errorf("%w: index stage", ErrScannerMalformed)
-		}
-		candidate := scannerCandidate{path: record[separator+1:], mode: header[0], tracked: true}
-		if err := scannerValidateGitPath(candidate.path); err != nil {
+		candidate, err := scannerStagedCandidate(record, objectFormat)
+		if err != nil {
 			return nil, err
 		}
 		candidates = append(candidates, candidate)
 	}
 	return candidates, nil
+}
+
+func scannerCombinedCandidates(output []byte, objectFormat string) ([]scannerCandidate, []scannerCandidate, error) {
+	records, err := scannerNULRecords(output)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	staged := make([]scannerCandidate, 0, len(records))
+	untracked := make([]scannerCandidate, 0, len(records))
+	for _, record := range records {
+		if len(record) < 3 || record[1] != ' ' {
+			return nil, nil, fmt.Errorf("%w: tagged candidate record", ErrScannerMalformed)
+		}
+		switch record[0] {
+		case 'H', 'S', 'M':
+			candidate, err := scannerStagedCandidate(record[2:], objectFormat)
+			if err != nil {
+				return nil, nil, err
+			}
+			staged = append(staged, candidate)
+		case '?':
+			candidate := scannerCandidate{path: record[2:]}
+			if err := scannerValidateGitPath(candidate.path); err != nil {
+				return nil, nil, err
+			}
+			untracked = append(untracked, candidate)
+		default:
+			return nil, nil, fmt.Errorf("%w: candidate status tag", ErrScannerMalformed)
+		}
+	}
+	return staged, untracked, nil
+}
+
+func scannerStagedCandidate(record, objectFormat string) (scannerCandidate, error) {
+	separator := strings.IndexByte(record, '\t')
+	if separator < 0 {
+		return scannerCandidate{}, fmt.Errorf("%w: index record", ErrScannerMalformed)
+	}
+	header := strings.Fields(record[:separator])
+	if len(header) != 3 || !scannerValidMode(header[0]) || !scannerValidOID(header[1], objectFormat) {
+		return scannerCandidate{}, fmt.Errorf("%w: index header", ErrScannerMalformed)
+	}
+	stage, err := strconv.Atoi(header[2])
+	if err != nil || stage < 0 || stage > 3 {
+		return scannerCandidate{}, fmt.Errorf("%w: index stage", ErrScannerMalformed)
+	}
+	candidate := scannerCandidate{path: record[separator+1:], mode: header[0], tracked: true}
+	if err := scannerValidateGitPath(candidate.path); err != nil {
+		return scannerCandidate{}, err
+	}
+	return candidate, nil
 }
 
 func scannerUntrackedCandidates(output []byte) ([]scannerCandidate, error) {

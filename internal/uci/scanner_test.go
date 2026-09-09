@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -326,8 +327,7 @@ func TestUCIScannerRecordsPhaseDiagnostics(t *testing.T) {
 	for _, operation := range []string{
 		"rev-parse --show-toplevel --absolute-git-dir --git-common-dir --git-path HEAD --show-object-format",
 		"status --porcelain=v2 --branch -z",
-		"ls-files --stage -z",
-		"ls-files --others --exclude-standard -z",
+		"ls-files --stage --others --exclude-standard -t -z",
 	} {
 		fixture.git.delays[operation] = time.Millisecond
 	}
@@ -346,14 +346,16 @@ func TestUCIScannerRecordsPhaseDiagnostics(t *testing.T) {
 
 	diagnostics := result.Diagnostics
 	for name, duration := range map[string]time.Duration{
-		"topology":  diagnostics.GitTopologyDuration,
-		"status":    diagnostics.GitStatusDuration,
-		"staged":    diagnostics.GitStagedDuration,
-		"untracked": diagnostics.GitUntrackedDuration,
+		"topology":   diagnostics.GitTopologyDuration,
+		"status":     diagnostics.GitStatusDuration,
+		"candidates": diagnostics.GitCandidatesDuration,
 	} {
 		if duration < time.Millisecond {
 			t.Fatalf("%s Git duration = %s, want at least %s", name, duration, time.Millisecond)
 		}
+	}
+	if diagnostics.GitStagedDuration != 0 || diagnostics.GitUntrackedDuration != 0 {
+		t.Fatalf("separate candidate durations = staged %s, untracked %s, want zero for one combined invocation", diagnostics.GitStagedDuration, diagnostics.GitUntrackedDuration)
 	}
 	if diagnostics.CandidateCount != 5 || diagnostics.AdmittedCount != 1 || diagnostics.ExcludedCount != 3 || diagnostics.UnreadableCount != 1 {
 		t.Fatalf("diagnostic counters = %#v, want candidates=5 admitted=1 excluded=3 unreadable=1", diagnostics)
@@ -361,7 +363,7 @@ func TestUCIScannerRecordsPhaseDiagnostics(t *testing.T) {
 	if want := int64(len(source) + len(binary) + len(secret)); diagnostics.BytesRead != want {
 		t.Fatalf("diagnostic bytes read = %d, want %d", diagnostics.BytesRead, want)
 	}
-	components := diagnostics.GitTopologyDuration + diagnostics.GitStatusDuration + diagnostics.GitStagedDuration + diagnostics.GitUntrackedDuration + diagnostics.CandidateLoopDuration + diagnostics.ResidualDuration
+	components := diagnostics.GitTopologyDuration + diagnostics.GitStatusDuration + diagnostics.GitCandidatesDuration + diagnostics.GitStagedDuration + diagnostics.GitUntrackedDuration + diagnostics.CandidateLoopDuration + diagnostics.ResidualDuration
 	if diagnostics.TotalDuration != components {
 		t.Fatalf("diagnostic durations do not reconcile: total=%s components=%s diagnostics=%#v", diagnostics.TotalDuration, components, diagnostics)
 	}
@@ -470,7 +472,7 @@ func TestUCIScannerCensusCannotAuthorizeDeleteAllByAccident(t *testing.T) {
 
 	t.Run("empty Git enumeration failure is not delete all", func(t *testing.T) {
 		fixture := newScannerFixture(t, false)
-		fixture.git.failures["ls-files --others --exclude-standard -z"] = errors.New("fixture untracked enumeration unavailable")
+		fixture.git.failures["ls-files --stage --others --exclude-standard -t -z"] = errors.New("fixture candidate enumeration unavailable")
 
 		result, err := scannerScan(fixture, ScannerPolicy{IncludeUntracked: true})
 		if err == nil {
@@ -481,6 +483,206 @@ func TestUCIScannerCensusCannotAuthorizeDeleteAllByAccident(t *testing.T) {
 			t.Fatalf("failed empty scan files = %d, want 0", got)
 		}
 	})
+}
+
+func TestUCIScannerCombinedCandidatesMatchSeparateGitOutput(t *testing.T) {
+	root := t.TempDir()
+	if err := exec.CommandContext(t.Context(), "git", "init", root).Run(); err != nil {
+		t.Fatalf("initialize repository: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tracked.go"), []byte("package tracked\n"), 0o600); err != nil {
+		t.Fatalf("write tracked file: %v", err)
+	}
+	if err := exec.CommandContext(t.Context(), "git", "-C", root, "add", "--", "tracked.go").Run(); err != nil {
+		t.Fatalf("stage tracked file: %v", err)
+	}
+	untrackedPath := "untracked.go"
+	if err := os.WriteFile(filepath.Join(root, untrackedPath), []byte("package untracked\n"), 0o600); err != nil {
+		t.Fatalf("write untracked file: %v", err)
+	}
+
+	runner := ExecGitRunner{}
+	run := func(command ...string) []byte {
+		t.Helper()
+		result, err := runner.Run(t.Context(), GitInvocation{Args: scannerGitArgs(root, command...), Env: scannerGitEnvironment()})
+		if err != nil || result.ExitCode != 0 {
+			t.Fatalf("git %q failed: result=%#v err=%v", command, result, err)
+		}
+		return result.Stdout
+	}
+
+	separateStaged, err := scannerStagedCandidates(run("ls-files", "--stage", "-z"), "sha1")
+	if err != nil {
+		t.Fatalf("parse separate staged output: %v", err)
+	}
+	separateUntracked, err := scannerUntrackedCandidates(run("ls-files", "--others", "--exclude-standard", "-z"))
+	if err != nil {
+		t.Fatalf("parse separate untracked output: %v", err)
+	}
+	combinedStaged, combinedUntracked, err := scannerCombinedCandidates(run("ls-files", "--stage", "--others", "--exclude-standard", "-t", "-z"), "sha1")
+	if err != nil {
+		t.Fatalf("parse combined candidate output: %v", err)
+	}
+	if !reflect.DeepEqual(combinedStaged, separateStaged) || !reflect.DeepEqual(combinedUntracked, separateUntracked) {
+		t.Fatalf("combined candidate output differs from separate output: staged=%#v want=%#v untracked=%#v want=%#v", combinedStaged, separateStaged, combinedUntracked, separateUntracked)
+	}
+
+	want, err := scannerMergeCandidates(separateStaged, separateUntracked, true)
+	if err != nil {
+		t.Fatalf("merge separate candidates: %v", err)
+	}
+	got, err := scannerMergeCandidates(combinedStaged, combinedUntracked, true)
+	if err != nil {
+		t.Fatalf("merge combined candidates: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("combined merged candidates = %#v, want %#v", got, want)
+	}
+}
+
+func TestUCIScannerCombinedCandidatesKeepTaggedUntrackedDistinct(t *testing.T) {
+	path := "100644 " + strings.Repeat("a", 40) + " 0\tuntracked.go"
+	staged, untracked, err := scannerCombinedCandidates([]byte("? "+path+"\x00"), "sha1")
+	if err != nil {
+		t.Fatalf("parse tagged untracked candidate: %v", err)
+	}
+	if len(staged) != 0 || !reflect.DeepEqual(untracked, []scannerCandidate{{path: path}}) {
+		t.Fatalf("tagged untracked candidate = staged %#v untracked %#v, want path %q", staged, untracked, path)
+	}
+}
+
+func TestUCIScannerCachesTopologyAndKeepsStatusLive(t *testing.T) {
+	fixture := newScannerFixture(t, false)
+	fixture.write(t, "clean.go", []byte("package clean\n"))
+	fixture.write(t, "staged.go", []byte("package staged\n"))
+	fixture.write(t, "untracked.go", []byte("package untracked\n"))
+	fixture.git.tracked = []scannerGitPath{{Mode: "100644", Path: "clean.go"}, {Mode: "100644", Path: "staged.go"}}
+	fixture.git.untracked = []string{"untracked.go"}
+
+	scanner := NewScanner(fixture.git, fixture.files, ScannerPolicy{IncludeUntracked: true})
+	evidence := AuthorizedRootEvidence{RootPath: fixture.root}
+	result, err := scanner.Scan(t.Context(), evidence)
+	if err != nil {
+		t.Fatalf("initial Scan() error = %v", err)
+	}
+	scannerAssertGitPlumbing(t, fixture.git, fixture.root)
+	scannerAssertFile(t, result, "clean.go", IndexFilePresent, ScannerExclusionNone, []byte("package clean\n"))
+	scannerAssertFile(t, result, "staged.go", IndexFilePresent, ScannerExclusionNone, []byte("package staged\n"))
+	scannerAssertFile(t, result, "untracked.go", IndexFilePresent, ScannerExclusionNone, []byte("package untracked\n"))
+
+	fixture.git.hasRefLabel = false
+	result, err = scanner.Scan(t.Context(), evidence)
+	if err != nil {
+		t.Fatalf("detached Scan() error = %v", err)
+	}
+	scannerAssertOptionalString(t, result.Observation.HeadOID, fixture.git.headOID, true, "detached observation.head_oid")
+	scannerAssertOptionalString(t, result.Observation.RefLabel, "", false, "detached observation.ref_label")
+	scannerAssertGitOperations(t, fixture.git, fixture.root, 3,
+		"status --porcelain=v2 --branch -z",
+		"ls-files --stage --others --exclude-standard -t -z",
+	)
+
+	fixture.git.hasHeadOID = false
+	fixture.git.refLabel = "main"
+	fixture.git.hasRefLabel = true
+	result, err = scanner.Scan(t.Context(), evidence)
+	if err != nil {
+		t.Fatalf("unborn Scan() error = %v", err)
+	}
+	scannerAssertOptionalString(t, result.Observation.HeadOID, "", false, "unborn observation.head_oid")
+	scannerAssertOptionalString(t, result.Observation.RefLabel, "main", true, "unborn observation.ref_label")
+	scannerAssertGitOperations(t, fixture.git, fixture.root, 5,
+		"status --porcelain=v2 --branch -z",
+		"ls-files --stage --others --exclude-standard -t -z",
+	)
+}
+
+func TestUCIScannerInvalidatesCachedTopologyForMarkerChanges(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		linked bool
+	}{
+		{name: "ordinary marker"},
+		{name: "linked worktree marker", linked: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newScannerFixture(t, test.linked)
+			scanner := NewScanner(fixture.git, fixture.files, ScannerPolicy{IncludeUntracked: true})
+			evidence := AuthorizedRootEvidence{RootPath: fixture.root}
+			for scan := range 2 {
+				if _, err := scanner.Scan(t.Context(), evidence); err != nil {
+					t.Fatalf("Scan(%d) error = %v", scan, err)
+				}
+			}
+			scannerAssertGitCallCount(t, fixture.git, 5)
+
+			marker := fixture.path(".git")
+			if test.linked {
+				if err := os.WriteFile(marker, []byte("gitdir: "+fixture.git.gitDir+"-replacement\n"), 0o600); err != nil {
+					t.Fatalf("replace linked marker content: %v", err)
+				}
+			} else {
+				if err := os.RemoveAll(marker); err != nil {
+					t.Fatalf("remove ordinary marker: %v", err)
+				}
+				if err := os.WriteFile(marker, []byte("gitdir: "+fixture.git.gitDir+"\n"), 0o600); err != nil {
+					t.Fatalf("replace ordinary marker: %v", err)
+				}
+			}
+			if _, err := scanner.Scan(t.Context(), evidence); err != nil {
+				t.Fatalf("Scan after marker replacement error = %v", err)
+			}
+			scannerAssertGitCallCount(t, fixture.git, 8)
+
+			if err := os.RemoveAll(marker); err != nil {
+				t.Fatalf("remove marker: %v", err)
+			}
+			if _, err := scanner.Scan(t.Context(), evidence); !errors.Is(err, ErrScannerInvalidRoot) {
+				t.Fatalf("Scan after marker removal error = %v, want ErrScannerInvalidRoot", err)
+			}
+			scannerAssertGitCallCount(t, fixture.git, 8)
+
+			if test.linked {
+				if err := os.WriteFile(marker, []byte("gitdir: "+fixture.git.gitDir+"\n"), 0o600); err != nil {
+					t.Fatalf("restore linked marker: %v", err)
+				}
+			} else {
+				if err := os.MkdirAll(marker, 0o755); err != nil {
+					t.Fatalf("restore ordinary marker: %v", err)
+				}
+			}
+			if _, err := scanner.Scan(t.Context(), evidence); err != nil {
+				t.Fatalf("Scan after marker restoration error = %v", err)
+			}
+			scannerAssertGitCallCount(t, fixture.git, 11)
+		})
+	}
+}
+
+func TestUCIScannerRecoversAfterCachedTopologyFailure(t *testing.T) {
+	fixture := newScannerFixture(t, true)
+	scanner := NewScanner(fixture.git, fixture.files, ScannerPolicy{IncludeUntracked: true})
+	evidence := AuthorizedRootEvidence{RootPath: fixture.root}
+	if _, err := scanner.Scan(t.Context(), evidence); err != nil {
+		t.Fatalf("initial Scan() error = %v", err)
+	}
+
+	marker := fixture.path(".git")
+	if err := os.WriteFile(marker, []byte("gitdir: "+fixture.git.gitDir+"-changed\n"), 0o600); err != nil {
+		t.Fatalf("change marker content: %v", err)
+	}
+	topologyOperation := "rev-parse --show-toplevel --absolute-git-dir --git-common-dir --git-path HEAD --show-object-format"
+	fixture.git.failures[topologyOperation] = errors.New("fixture topology unavailable")
+	if _, err := scanner.Scan(t.Context(), evidence); err == nil {
+		t.Fatal("Scan() error = nil after topology failure")
+	}
+	scannerAssertGitCallCount(t, fixture.git, 4)
+
+	delete(fixture.git.failures, topologyOperation)
+	if _, err := scanner.Scan(t.Context(), evidence); err != nil {
+		t.Fatalf("Scan after topology recovery error = %v", err)
+	}
+	scannerAssertGitCallCount(t, fixture.git, 7)
 }
 
 type scannerFixture struct {
@@ -619,10 +821,8 @@ func (git *scannerFixtureGit) Run(ctx context.Context, invocation GitInvocation)
 		return GitResult{Stdout: []byte(strings.Join([]string{git.showTopLevel, git.gitDir, git.commonGitDir, git.headPath, git.objectFormat}, "\n") + "\n")}, nil
 	case "status --porcelain=v2 --branch -z":
 		return GitResult{Stdout: git.statusOutput()}, nil
-	case "ls-files --stage -z":
-		return GitResult{Stdout: git.stageOutput()}, nil
-	case "ls-files --others --exclude-standard -z":
-		return GitResult{Stdout: git.untrackedOutput()}, nil
+	case "ls-files --stage --others --exclude-standard -t -z":
+		return GitResult{Stdout: git.combinedOutput()}, nil
 	default:
 		return GitResult{}, errors.New("unexpected Git argument vector: " + operation)
 	}
@@ -649,6 +849,30 @@ func (git *scannerFixtureGit) stageOutput() []byte {
 func (git *scannerFixtureGit) untrackedOutput() []byte {
 	var output strings.Builder
 	for _, path := range git.untracked {
+		output.WriteString(path)
+		output.WriteByte(0)
+	}
+	return []byte(output.String())
+}
+
+func (git *scannerFixtureGit) combinedOutput() []byte {
+	objectIDLength := 40
+	if git.objectFormat == "sha256" {
+		objectIDLength = 64
+	}
+	objectID := strings.Repeat("a", objectIDLength)
+	var output strings.Builder
+	for _, entry := range git.tracked {
+		output.WriteString("H ")
+		output.WriteString(entry.Mode)
+		output.WriteByte(' ')
+		output.WriteString(objectID)
+		output.WriteString(" 0\t")
+		output.WriteString(entry.Path)
+		output.WriteByte(0)
+	}
+	for _, path := range git.untracked {
+		output.WriteString("? ")
 		output.WriteString(path)
 		output.WriteByte(0)
 	}
@@ -828,13 +1052,36 @@ func scannerAssertOptionalString(t *testing.T, got *string, want string, present
 	}
 }
 
+func scannerAssertGitCallCount(t *testing.T, git *scannerFixtureGit, want int) {
+	t.Helper()
+	if got := len(git.calls); got != want {
+		t.Fatalf("Git process count = %d, want %d; calls=%#v", got, want, git.calls)
+	}
+}
+
+func scannerAssertGitOperations(t *testing.T, git *scannerFixtureGit, root string, start int, operations ...string) {
+	t.Helper()
+	scannerAssertGitCallCount(t, git, start+len(operations))
+	for index, want := range operations {
+		call := git.calls[start+index]
+		if len(call.Args) < 3 || call.Args[0] != "-C" || call.Args[1] != root {
+			t.Fatalf("Git invocation is not an argument-vector root-bound call: %#v", call.Args)
+		}
+		if !scannerHasEnvironment(call.Env, "GIT_OPTIONAL_LOCKS", "0") || !scannerHasEnvironment(call.Env, "GIT_TERMINAL_PROMPT", "0") {
+			t.Fatalf("Git invocation omitted required read-only environment: %#v", call.Env)
+		}
+		if got := scannerGitOperation(call.Args); got != want {
+			t.Fatalf("Git operation = %q, want %q", got, want)
+		}
+	}
+}
+
 func scannerAssertGitPlumbing(t *testing.T, git *scannerFixtureGit, root string) {
 	t.Helper()
 	required := []string{
 		"rev-parse --show-toplevel --absolute-git-dir --git-common-dir --git-path HEAD --show-object-format",
 		"status --porcelain=v2 --branch -z",
-		"ls-files --stage -z",
-		"ls-files --others --exclude-standard -z",
+		"ls-files --stage --others --exclude-standard -t -z",
 	}
 	allowed := make(map[string]bool, len(required))
 	for _, operation := range required {
