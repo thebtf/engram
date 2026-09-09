@@ -206,7 +206,6 @@ func TestEmbeddingWorkerPollsAtConfiguredCadenceAndProcessesOneQueuedClaim(t *te
 		t.Fatalf("queued claim latency = %s, want at most %s", claimedAt.Sub(queuedAt), 4*limits.PollInterval)
 	}
 	claimedAttempt := -1
-	immediateContinuations := 0
 	for index, attempt := range claimAttempts {
 		if attempt.claimed {
 			if claimedAttempt >= 0 {
@@ -218,15 +217,10 @@ func TestEmbeddingWorkerPollsAtConfiguredCadenceAndProcessesOneQueuedClaim(t *te
 			continue
 		}
 		previous := claimAttempts[index-1]
-		interval := attempt.at.Sub(previous.at)
-		if interval < limits.PollInterval {
-			if !previous.claimed {
-				t.Fatalf("sub-cadence claim interval %d = %s followed an idle poll, want only post-claim continuation", index, interval)
+		if !previous.claimed && !attempt.claimed {
+			if interval := attempt.at.Sub(previous.at); interval < limits.PollInterval {
+				t.Fatalf("idle claim interval %d = %s, want at least %s", index, interval, limits.PollInterval)
 			}
-			immediateContinuations++
-		}
-		if !previous.claimed && !attempt.claimed && interval < limits.PollInterval {
-			t.Fatalf("idle claim interval %d = %s, want at least %s", index, interval, limits.PollInterval)
 		}
 	}
 	if claimedAttempt < 0 {
@@ -235,11 +229,15 @@ func TestEmbeddingWorkerPollsAtConfiguredCadenceAndProcessesOneQueuedClaim(t *te
 	if claimedAttempt+1 >= len(claimAttempts) {
 		t.Fatal("worker did not continue immediately after the successful claim")
 	}
-	if claimAttempts[claimedAttempt+1].claimed {
+	continuation := claimAttempts[claimedAttempt+1]
+	if continuation.claimed {
 		t.Fatal("worker duplicated the successful claim during its immediate continuation")
 	}
-	if immediateContinuations != 1 {
-		t.Fatalf("immediate post-claim continuations = %d, want 1", immediateContinuations)
+	if interval := continuation.at.Sub(claimAttempts[claimedAttempt].at); interval >= limits.PollInterval {
+		t.Fatalf("post-claim continuation interval = %s, want below %s", interval, limits.PollInterval)
+	}
+	if len(claimAttempts) != claimedAttempt+2 {
+		t.Fatalf("claim attempts after immediate continuation = %d, want 1", len(claimAttempts)-claimedAttempt-1)
 	}
 	if root.Err() != context.Canceled {
 		t.Fatalf("worker cancellation = %v, want %v", root.Err(), context.Canceled)

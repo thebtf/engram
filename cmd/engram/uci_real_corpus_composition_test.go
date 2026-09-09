@@ -246,20 +246,33 @@ func (runner *uciRealCorpusRecordingGitRunner) captureStageModes(output []byte) 
 			return errors.New("real-corpus composition scanner stage output is malformed")
 		}
 		record := string(output[start:end])
-		separator := strings.IndexByte(record, '\t')
-		if separator < 0 || separator == len(record)-1 {
+		if len(record) < 3 || record[1] != ' ' {
 			return errors.New("real-corpus composition scanner stage output is malformed")
 		}
-		header := strings.Fields(record[:separator])
-		if len(header) != 3 || !uciRealCorpusGitMode(header[0]) {
+		switch record[0] {
+		case '?':
+			if !uciRealCorpusCompositionPath(record[2:]) {
+				return errors.New("real-corpus composition scanner stage output is malformed")
+			}
+		case 'H', 'S', 'M':
+			stageRecord := record[2:]
+			separator := strings.IndexByte(stageRecord, '\t')
+			if separator < 0 || separator == len(stageRecord)-1 {
+				return errors.New("real-corpus composition scanner stage output is malformed")
+			}
+			header := strings.Fields(stageRecord[:separator])
+			if len(header) != 3 || !uciRealCorpusGitMode(header[0]) {
+				return errors.New("real-corpus composition scanner stage output is malformed")
+			}
+			candidatePath := stageRecord[separator+1:]
+			if !uciRealCorpusCompositionPath(candidatePath) {
+				return errors.New("real-corpus composition scanner stage output is malformed")
+			}
+			if previous, found := runner.stageModes[candidatePath]; !found || (previous != "160000" && header[0] == "160000") {
+				runner.stageModes[candidatePath] = header[0]
+			}
+		default:
 			return errors.New("real-corpus composition scanner stage output is malformed")
-		}
-		candidatePath := record[separator+1:]
-		if !uciRealCorpusCompositionPath(candidatePath) {
-			return errors.New("real-corpus composition scanner stage output is malformed")
-		}
-		if previous, found := runner.stageModes[candidatePath]; !found || (previous != "160000" && header[0] == "160000") {
-			runner.stageModes[candidatePath] = header[0]
 		}
 		start = end + 1
 	}
@@ -1644,9 +1657,16 @@ func TestUCIRealCorpusFreezeIncludesUntrackedCanaryDelta(t *testing.T) {
 	if manifest.BaselineEntryCount != 1 || manifest.CanaryEntryCount != uint64(len(uciRealCorpusCanaries)) {
 		t.Fatalf("frozen scanner counts = baseline=%d canary=%d", manifest.BaselineEntryCount, manifest.CanaryEntryCount)
 	}
+	canaries := make(map[string]uciRealCorpusFrozenEntry, len(uciRealCorpusCanaries))
 	for _, entry := range manifest.entries {
-		if entry.canary && (entry.scannerMode != uciRealCorpusScannerModeUnavailable || entry.scannerState != uci.IndexFilePresent || entry.membershipState != uci.IndexFilePresent) {
-			t.Fatal("untracked canary did not remain an explicit present delta")
+		if entry.canary {
+			canaries[entry.path] = entry
+		}
+	}
+	for canaryPath := range uciRealCorpusCanaries {
+		entry, found := canaries[canaryPath]
+		if !found || entry.scannerMode != uciRealCorpusScannerModeUnavailable || entry.scannerState != uci.IndexFilePresent || entry.membershipState != uci.IndexFilePresent {
+			t.Fatalf("untracked canary %q did not remain an explicit present delta", canaryPath)
 		}
 	}
 	if _, err := uciFreezeRealCorpusManifest(context.Background(), root, "package"); err == nil {
