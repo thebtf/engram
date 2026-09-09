@@ -4249,6 +4249,18 @@ func uciRequireInstalledAcceptanceWatcherCanary(
 	functionName, relativePath string,
 	wantPresent bool,
 ) error {
+	_, err := uciRequireInstalledAcceptanceWatcherCanaryResponse(ctx, client, selection, publication, functionName, relativePath, wantPresent)
+	return err
+}
+
+func uciRequireInstalledAcceptanceWatcherCanaryResponse(
+	ctx context.Context,
+	client *uciInstalledAcceptanceMCPClient,
+	selection uciInstalledAcceptanceSelection,
+	publication uciInstalledAcceptancePublication,
+	functionName, relativePath string,
+	wantPresent bool,
+) (uci.QueryResponse, error) {
 	payload, err := client.Tool(ctx, "codebase_search", map[string]any{
 		"context_handle": selection.contextHandle,
 		"query":          functionName,
@@ -4256,41 +4268,41 @@ func uciRequireInstalledAcceptanceWatcherCanary(
 		"limit":          10,
 	})
 	if err != nil {
-		return err
+		return uci.QueryResponse{}, err
 	}
 	response, err := uciDecodeInstalledAcceptanceQuery(payload)
 	if err != nil {
-		return err
+		return uci.QueryResponse{}, err
 	}
 	if !uciInstalledAcceptanceQueryMatchesPublication(response, publication) {
-		return errors.New("installed standard MCP watcher search did not retain the selected View")
+		return uci.QueryResponse{}, errors.New("installed standard MCP watcher search did not retain the selected View")
 	}
 	if !wantPresent {
 		if (response.Status != uci.QueryStatusEmpty && response.Status != uci.QueryStatusPartial) || (response.Items != nil && len(*response.Items) != 0) {
-			return errUCIInstalledAcceptanceWatcherCanaryPresent
+			return uci.QueryResponse{}, errUCIInstalledAcceptanceWatcherCanaryPresent
 		}
-		return nil
+		return response, nil
 	}
 	if (response.Status != uci.QueryStatusOK && response.Status != uci.QueryStatusPartial) || response.Items == nil {
-		return errors.New("installed standard MCP watcher write did not return the canary")
+		return uci.QueryResponse{}, errors.New("installed standard MCP watcher write did not return the canary")
 	}
 	found := false
 	for _, item := range *response.Items {
 		if item.Ref.SourceID != publication.sourceID || item.Ref.ViewID != publication.viewID {
-			return errors.New("installed standard MCP watcher search disclosed an item outside the selected View")
+			return uci.QueryResponse{}, errors.New("installed standard MCP watcher search disclosed an item outside the selected View")
 		}
 		name, nameOK := uciInstalledAcceptanceGoFunctionName(item.Ref.EntityKey)
 		if item.Path == relativePath && nameOK && name == functionName {
 			if !uciInstalledAcceptanceIsBareSHA256(string(item.ContentDigest)) {
-				return errors.New("installed standard MCP watcher canary has an invalid content digest")
+				return uci.QueryResponse{}, errors.New("installed standard MCP watcher canary has an invalid content digest")
 			}
 			found = true
 		}
 	}
 	if !found {
-		return errUCIInstalledAcceptanceWatcherCanaryMissing
+		return uci.QueryResponse{}, errUCIInstalledAcceptanceWatcherCanaryMissing
 	}
-	return nil
+	return response, nil
 }
 
 func uciInstalledAcceptancePublicationEvidenceFor(publication uciInstalledAcceptancePublication) uciInstalledAcceptancePublicationEvidence {

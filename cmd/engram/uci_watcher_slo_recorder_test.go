@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1001,7 +1002,7 @@ func uciWatcherSLOAwaitSearchable(ctx context.Context, client *uciInstalledAccep
 		watched := selection
 		watched.runID = publication.runID
 		canaryStarted := time.Now()
-		canaryErr := uciRequireInstalledAcceptanceWatcherCanary(ctx, client, watched, publication, functionName, relativePath, true)
+		response, canaryErr := uciRequireInstalledAcceptanceWatcherCanaryResponse(ctx, client, watched, publication, functionName, relativePath, true)
 		trace.observeCall("canary_search", canaryStarted, time.Now(), canaryErr)
 		if canaryErr != nil {
 			if errors.Is(canaryErr, errUCIInstalledAcceptanceWatcherCanaryMissing) {
@@ -1011,19 +1012,6 @@ func uciWatcherSLOAwaitSearchable(ctx context.Context, client *uciInstalledAccep
 			return uciInstalledAcceptancePublication{}, uci.QueryResponse{}, time.Time{}, fmt.Errorf("verify installed watcher search: %w", canaryErr)
 		}
 		trace.setPublication(publication)
-		finalStarted := time.Now()
-		payload, err := client.Tool(ctx, "codebase_search", map[string]any{"context_handle": selection.contextHandle, "query": functionName, "path_prefix": relativePath, "limit": 10})
-		trace.observeCall("final_search", finalStarted, time.Now(), err)
-		if err != nil {
-			return uciInstalledAcceptancePublication{}, uci.QueryResponse{}, time.Time{}, err
-		}
-		response, err := uciDecodeInstalledAcceptanceQuery(payload)
-		if err != nil {
-			return uciInstalledAcceptancePublication{}, uci.QueryResponse{}, time.Time{}, err
-		}
-		if !uciInstalledAcceptanceQueryMatchesPublication(response, publication) {
-			return uciInstalledAcceptancePublication{}, uci.QueryResponse{}, time.Time{}, errors.New("normal client search did not retain the watcher publication")
-		}
 		return publication, response, time.Now().UTC(), nil
 	}
 }
@@ -1484,6 +1472,156 @@ func TestUCIWatcherSLOPublicationObservationBounds(t *testing.T) {
 	}
 }
 
+func TestUCIWatcherSLOAwaitSearchableUsesOneCanarySearch(t *testing.T) {
+	before := uciInstalledAcceptancePublication{
+		sourceID: "20000000-0000-4000-8000-000000000001", checkoutID: "30000000-0000-4000-8000-000000000001", profileID: "50000000-0000-4000-8000-000000000001", viewID: "40000000-0000-4000-8000-000000000001", generation: 1, runID: "run-before",
+	}
+	after := before
+	after.viewID, after.generation, after.runID = "40000000-0000-4000-8000-000000000002", 2, "run-after"
+	statusPayload, err := json.Marshal(map[string]any{
+		"status": "idle", "run_id": after.runID,
+		"context":   map[string]any{"source_id": after.sourceID, "checkout_id": after.checkoutID, "view_id": after.viewID, "profile_id": after.profileID, "generation": after.generation},
+		"freshness": map[string]any{"state": "observed_current", "pending_changes": 0, "barrier": map[string]any{"scope": map[string]any{"kind": "paths", "path_count": 1}, "deadline_ms": 1, "state": "satisfied"}},
+	})
+	if err != nil {
+		t.Fatalf("encode watcher status: %v", err)
+	}
+	zero := int64(0)
+	contexts := uci.QueryContexts{{SourceID: after.sourceID, CheckoutID: after.checkoutID, ViewID: after.viewID, Generation: after.generation, ProfileID: after.profileID}}
+	items := uci.QueryItems{{
+		Ref:           uci.QueryEntityRef{SourceID: after.sourceID, ViewID: after.viewID, EntityKey: "go:pkg/watcher.go/func:UCIWatcherCanary"},
+		Path:          "pkg/watcher.go",
+		Span:          uci.QuerySpan{ByteStart: 0, ByteEnd: 1, LineStart: 1, LineEnd: 1},
+		ContentDigest: uci.QueryContentDigest(strings.Repeat("a", 64)),
+		Kind:          uci.QueryItemCode,
+		Language:      "go",
+		Excerpt:       "func UCIWatcherCanary() {}",
+		MatchSources:  []uci.QueryMatchSource{uci.QueryMatchExact},
+	}}
+	warnings := uci.QueryWarnings{}
+	truncated := false
+	query := uci.QueryResponse{
+		Schema:       uci.QueryResponseSchema,
+		Status:       uci.QueryStatusOK,
+		Contexts:     &contexts,
+		Freshness:    &uci.QueryFreshness{State: uci.QueryFreshnessObservedCurrent, Method: uci.QueryFreshnessWatchWatermark, PendingChanges: &zero, EnrichmentWatermark: uci.QueryEnrichmentWatermark{Sequence: after.generation, State: uci.QueryEnrichmentCurrent}},
+		Retrieval:    &uci.QueryRetrieval{Mode: uci.QueryRetrievalExact, DegradationReasons: []string{}},
+		Coverage:     &uci.QueryCoverage{Structural: uci.IndexCoverageComplete, UnresolvedSites: &zero, UnsupportedFiles: &zero},
+		Exposure:     &uci.QueryExposure{ExposureRef: uci.NewExposureRef(), CompletionState: uci.QueryCompletionUnknown},
+		Items:        &items,
+		Truncated:    &truncated,
+		Warnings:     &warnings,
+		Continuation: &uci.QueryContinuation{},
+	}
+	if err := query.Validate(); err != nil {
+		t.Fatalf("build validated canary response: %v", err)
+	}
+	queryPayload, err := json.Marshal(query)
+	if err != nil {
+		t.Fatalf("encode canary response: %v", err)
+	}
+
+	requests, clientInput, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("open client input pipe: %v", err)
+	}
+	responses, serverOutput, err := os.Pipe()
+	if err != nil {
+		_ = requests.Close()
+		_ = clientInput.Close()
+		t.Fatalf("open server output pipe: %v", err)
+	}
+	client := &uciInstalledAcceptanceMCPClient{name: "watcher-test", writer: bufio.NewWriter(clientInput), scanner: bufio.NewScanner(responses)}
+	client.scanner.Buffer(make([]byte, 64*1024), 16<<20)
+	serverErr := make(chan error, 1)
+	serverDone := make(chan struct{})
+	searchCalls := make(chan int, 1)
+	go func() {
+		defer close(serverDone)
+		defer func() { _ = serverOutput.Close() }()
+		calls := 0
+		defer func() { searchCalls <- calls }()
+		scanner := bufio.NewScanner(requests)
+		writer := json.NewEncoder(serverOutput)
+		for scanner.Scan() {
+			var request struct {
+				ID     string `json:"id"`
+				Method string `json:"method"`
+				Params struct {
+					Name string `json:"name"`
+				} `json:"params"`
+			}
+			if err := json.Unmarshal(scanner.Bytes(), &request); err != nil {
+				serverErr <- fmt.Errorf("decode watcher request: %w", err)
+				return
+			}
+			if request.Method != "tools/call" {
+				serverErr <- fmt.Errorf("watcher request method = %q, want tools/call", request.Method)
+				return
+			}
+			payload := statusPayload
+			switch request.Params.Name {
+			case "codebase_status":
+			case "codebase_search":
+				calls++
+				payload = queryPayload
+			default:
+				serverErr <- fmt.Errorf("watcher tool = %q", request.Params.Name)
+				return
+			}
+			if err := writer.Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"content": []map[string]string{{"type": "text", "text": string(payload)}}, "isError": false}}); err != nil {
+				serverErr <- fmt.Errorf("write watcher response: %w", err)
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			serverErr <- fmt.Errorf("read watcher request: %w", err)
+		}
+	}()
+	closed := false
+	closeServer := func() {
+		if closed {
+			return
+		}
+		closed = true
+		_ = clientInput.Close()
+		<-serverDone
+		_ = requests.Close()
+		_ = responses.Close()
+	}
+	defer closeServer()
+
+	trace := newUCIWatcherSLOAttemptTrace(time.Now(), before)
+	restoreObserver := client.setToolObserver(trace.observeTool)
+	publication, response, _, err := uciWatcherSLOAwaitSearchable(context.Background(), client, uciInstalledAcceptanceSelection{contextHandle: "context", runID: before.runID}, before, "UCIWatcherCanary", "pkg/watcher.go", trace)
+	restoreObserver()
+	closeServer()
+	if err != nil {
+		t.Fatalf("await searchable watcher: %v", err)
+	}
+	select {
+	case err := <-serverErr:
+		t.Fatal(err)
+	default:
+	}
+	if calls := <-searchCalls; calls != 1 {
+		t.Fatalf("codebase_search calls after one publication = %d, want 1", calls)
+	}
+	if publication.sourceID != after.sourceID || publication.checkoutID != after.checkoutID || publication.profileID != after.profileID || publication.viewID != after.viewID || publication.generation != after.generation || publication.runID != after.runID || publication.freshnessState != "observed_current" || publication.barrierState != "satisfied" || response.Status != uci.QueryStatusOK || !uciInstalledAcceptanceQueryMatchesPublication(response, publication) {
+		t.Fatalf("retained canary response = %#v for publication %#v", response, publication)
+	}
+	events := trace.snapshot()
+	searchReturns := 0
+	for _, event := range events {
+		if event.Name == "search_return" {
+			searchReturns++
+		}
+	}
+	if searchReturns != 1 || uciWatcherSLOEvent(events, "canary_search_return") == nil || uciWatcherSLOEvent(events, "final_search_begin") != nil || uciWatcherSLOEvent(events, "final_search_return") != nil {
+		t.Fatalf("search diagnostics = %#v", events)
+	}
+}
+
 func TestUCIWatcherSLOObserverKeepsFirstExactViewObservation(t *testing.T) {
 	origin := time.Date(2026, time.September, 9, 1, 0, 0, 0, time.UTC)
 	baseline := uciInstalledAcceptancePublication{sourceID: "source", checkoutID: "checkout", profileID: "profile", viewID: "before", generation: 1, runID: "run-before"}
@@ -1500,16 +1638,18 @@ func TestUCIWatcherSLOObserverKeepsFirstExactViewObservation(t *testing.T) {
 	trace.setPublication(after)
 	trace.observeTool("codebase_status", origin.Add(10*time.Millisecond), origin.Add(11*time.Millisecond), uciWatcherSLOTestStatusPayload(t, after, ready), nil)
 	trace.observeCall("canary_search", origin.Add(12*time.Millisecond), origin.Add(13*time.Millisecond), nil)
-	trace.observeCall("final_search", origin.Add(14*time.Millisecond), origin.Add(15*time.Millisecond), nil)
 	events := trace.snapshot()
 	first := uciWatcherSLOEvent(events, "client_view_first_seen")
 	if first == nil || first.Span.ReturnedElapsedNS != exactReturned.Sub(origin).Nanoseconds() {
 		t.Fatalf("first exact client View = %#v", first)
 	}
-	for _, name := range []string{"barrier_begin", "barrier_return", "quiescence_begin", "quiescence_return", "canary_search_begin", "canary_search_return", "final_search_begin", "final_search_return", "embedding_ready_first_seen"} {
+	for _, name := range []string{"barrier_begin", "barrier_return", "quiescence_begin", "quiescence_return", "canary_search_begin", "canary_search_return", "embedding_ready_first_seen"} {
 		if uciWatcherSLOEvent(events, name) == nil {
 			t.Fatalf("missing %s in %#v", name, events)
 		}
+	}
+	if uciWatcherSLOEvent(events, "final_search_begin") != nil || uciWatcherSLOEvent(events, "final_search_return") != nil {
+		t.Fatalf("fabricated final search diagnostics = %#v", events)
 	}
 	client := &uciInstalledAcceptanceMCPClient{}
 	calls := 0
