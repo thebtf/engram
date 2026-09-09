@@ -501,13 +501,35 @@ func TestUCITreeSitterWorkerCacheAccountsArtifactContainersAndMetadata(t *testin
 			ContentDigest: IndexDigest("sha256:" + strings.Repeat("e", 64)),
 		}
 	}
-	if got := treeSitterArtifactCacheBytes(artifact); got <= treeSitterWorkerCacheMaxBytes {
-		t.Fatalf("cache bytes = %d, want metadata-aware rejection above %d", got, treeSitterWorkerCacheMaxBytes)
+	entryBytes := treeSitterArtifactCacheBytes(artifact)
+	if treeSitterWorkerCacheWorkerReserveBytes+entryBytes <= treeSitterWorkerCacheMaxBytes {
+		t.Fatalf("charged cache bytes = %d, want metadata-aware rejection above %d", treeSitterWorkerCacheWorkerReserveBytes+entryBytes, treeSitterWorkerCacheMaxBytes)
 	}
-	worker := &TreeSitterWorker{cache: make(map[[sha256.Size]byte]treeSitterWorkerCacheEntry)}
+	worker := &TreeSitterWorker{cache: make(map[[sha256.Size]byte]treeSitterWorkerCacheEntry), cacheBytes: treeSitterWorkerCacheWorkerReserveBytes}
 	worker.cacheArtifact([sha256.Size]byte{}, artifact)
-	if len(worker.cache) != 0 {
-		t.Fatal("metadata-over-limit artifact was retained in cache")
+	if len(worker.cache) != 0 || worker.cacheBytes != treeSitterWorkerCacheWorkerReserveBytes {
+		t.Fatal("metadata-over-limit artifact changed the reserved cache state")
+	}
+}
+
+func TestUCITreeSitterWorkerCacheReserveBoundsInsertAndEvict(t *testing.T) {
+	artifact := TreeSitterArtifact{Text: strings.Repeat("x", 400_000)}
+	worker := &TreeSitterWorker{
+		cache:      make(map[[sha256.Size]byte]treeSitterWorkerCacheEntry, treeSitterWorkerCacheEntries),
+		cacheBytes: treeSitterWorkerCacheWorkerReserveBytes,
+	}
+	if worker.cacheBytes != treeSitterWorkerCacheWorkerReserveBytes {
+		t.Fatal("cache did not start with its worker reserve")
+	}
+	for index := range 3 {
+		key := [sha256.Size]byte{byte(index + 1)}
+		worker.cacheArtifact(key, artifact)
+		if worker.cacheBytes > treeSitterWorkerCacheMaxBytes {
+			t.Fatalf("cache charged bytes = %d, exceeds %d after insert %d", worker.cacheBytes, treeSitterWorkerCacheMaxBytes, index)
+		}
+	}
+	if len(worker.cache) != 2 || worker.cacheBytes < treeSitterWorkerCacheWorkerReserveBytes {
+		t.Fatalf("cache eviction state = entries %d charged %d", len(worker.cache), worker.cacheBytes)
 	}
 }
 

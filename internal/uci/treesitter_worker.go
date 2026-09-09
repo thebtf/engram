@@ -42,6 +42,11 @@ const (
 	treeSitterWorkerMaxDiagnosticBytes        = 512
 	treeSitterWorkerCacheEntries              = 16
 	treeSitterWorkerCacheMaxBytes             = 1 << 20
+	// treeSitterWorkerCacheWorkerReserveBytes is charged inside the total cache
+	// cap for preallocated map groups, map/slice headers, cacheOrder spare
+	// capacity, mutex, and worker/container storage not attributable to one
+	// cloned artifact.
+	treeSitterWorkerCacheWorkerReserveBytes = 64 << 10
 )
 
 // TreeSitterBundleDigest returns the exact parser bundle identity shared by
@@ -240,8 +245,9 @@ func NewTreeSitterWorker(config TreeSitterWorkerConfig) (*TreeSitterWorker, erro
 	config.Arguments = append([]string(nil), config.Arguments...)
 	config.Environment = environment
 	return &TreeSitterWorker{
-		config: config,
-		cache:  make(map[[sha256.Size]byte]treeSitterWorkerCacheEntry, treeSitterWorkerCacheEntries),
+		config:     config,
+		cache:      make(map[[sha256.Size]byte]treeSitterWorkerCacheEntry, treeSitterWorkerCacheEntries),
+		cacheBytes: treeSitterWorkerCacheWorkerReserveBytes,
 	}, nil
 }
 
@@ -367,12 +373,18 @@ func (worker *TreeSitterWorker) cachedArtifact(key [sha256.Size]byte) (TreeSitte
 
 func (worker *TreeSitterWorker) cacheArtifact(key [sha256.Size]byte, artifact TreeSitterArtifact) {
 	bytes := treeSitterArtifactCacheBytes(artifact)
-	if bytes > treeSitterWorkerCacheMaxBytes {
+	if bytes > treeSitterWorkerCacheMaxBytes-treeSitterWorkerCacheWorkerReserveBytes {
 		return
 	}
 	entry := treeSitterWorkerCacheEntry{artifact: treeSitterCloneArtifact(artifact), bytes: bytes}
 	worker.cacheMu.Lock()
 	defer worker.cacheMu.Unlock()
+	if worker.cache == nil {
+		worker.cache = make(map[[sha256.Size]byte]treeSitterWorkerCacheEntry, treeSitterWorkerCacheEntries)
+	}
+	if worker.cacheBytes == 0 {
+		worker.cacheBytes = treeSitterWorkerCacheWorkerReserveBytes
+	}
 	if _, found := worker.cache[key]; found {
 		return
 	}
@@ -401,9 +413,9 @@ func treeSitterCloneArtifact(artifact TreeSitterArtifact) TreeSitterArtifact {
 }
 
 func treeSitterArtifactCacheBytes(artifact TreeSitterArtifact) int {
-	// Count the deep-cloned artifact's Go containers, both retained cache keys,
-	// and conservative map-bucket metadata before every retained string byte.
-	bytes := int(unsafe.Sizeof(treeSitterWorkerCacheEntry{})) + 2*sha256.Size + 64
+	// Per-entry payload counts only the cloned artifact and its retained strings.
+	// Worker/map/order containers are charged once by the fixed worker reserve.
+	bytes := int(unsafe.Sizeof(TreeSitterArtifact{}))
 	bytes += cap(artifact.Definitions) * int(unsafe.Sizeof(TreeSitterDefinition{}))
 	bytes += cap(artifact.References) * int(unsafe.Sizeof(TreeSitterReferenceSite{}))
 	bytes += cap(artifact.Chunks) * int(unsafe.Sizeof(TreeSitterChunk{}))
