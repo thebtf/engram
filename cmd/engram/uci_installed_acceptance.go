@@ -4172,6 +4172,51 @@ func uciWaitForInstalledAcceptanceWatcherRun(
 	}
 }
 
+func uciWaitForInstalledAcceptanceWatcherFirstCurrentPublication(
+	ctx context.Context,
+	client *uciInstalledAcceptanceMCPClient,
+	selection uciInstalledAcceptanceSelection,
+	previous uciInstalledAcceptancePublication,
+) (uciInstalledAcceptancePublication, error) {
+	if client == nil || selection.contextHandle == "" || previous.runID == "" {
+		return uciInstalledAcceptancePublication{}, errors.New("installed acceptance watcher status target is incomplete")
+	}
+	status, err := uciWaitForInstalledAcceptanceWatcherRun(ctx, previous.runID, func(ctx context.Context) (uciInstalledAcceptanceStatus, error) {
+		return uciInstalledAcceptanceStatusForSelection(ctx, client, selection)
+	})
+	if err != nil {
+		return uciInstalledAcceptancePublication{}, err
+	}
+	observedSelection := selection
+	observedSelection.runID = status.runID
+	ticker := time.NewTicker(uciInstalledAcceptanceQuiescencePollInterval)
+	defer ticker.Stop()
+	for {
+		if status.error != "" {
+			return uciInstalledAcceptancePublication{}, fmt.Errorf("installed standard MCP watcher status error: %s", uciInstalledAcceptanceSafeErrorDetail(status.error))
+		}
+		if status.runID != observedSelection.runID {
+			return uciInstalledAcceptancePublication{}, errors.New("installed standard MCP watcher advanced before publishing its first current View")
+		}
+		publication, publicationErr := uciInstalledAcceptanceStatusPublication(status, observedSelection)
+		if publicationErr == nil && !uciInstalledAcceptanceSameViewPublication(publication, previous) {
+			if publication.sourceID != previous.sourceID || publication.checkoutID != previous.checkoutID || publication.profileID != previous.profileID {
+				return uciInstalledAcceptancePublication{}, errors.New("installed standard MCP watcher published outside the selected View context")
+			}
+			return publication, nil
+		}
+		select {
+		case <-ctx.Done():
+			return uciInstalledAcceptancePublication{}, fmt.Errorf("wait for installed acceptance watcher current View: %w", ctx.Err())
+		case <-ticker.C:
+		}
+		status, err = uciInstalledAcceptanceStatusForSelection(ctx, client, selection)
+		if err != nil {
+			return uciInstalledAcceptancePublication{}, err
+		}
+	}
+}
+
 type uciInstalledAcceptanceWatcherStageObserver func(stage string, started, returned time.Time, err error)
 
 func uciWaitForInstalledAcceptanceWatcherPublication(

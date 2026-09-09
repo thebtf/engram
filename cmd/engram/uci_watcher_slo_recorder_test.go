@@ -357,7 +357,7 @@ func uciWatcherSLODiagnosticFailureClass(stage string, err error, embedding uciW
 		return "setup_failure"
 	case "save":
 		return "save_failure"
-	case "watcher", "barrier", "quiescence":
+	case "watcher", "barrier", "quiescence", "post_endpoint_barrier", "post_endpoint_quiescence":
 		return "publication_failure"
 	case "search":
 		return "search_failure"
@@ -1133,6 +1133,15 @@ func uciRecordInstalledWatcherSLOBatch(ctx context.Context, live uciInstalledAcc
 		return acceptance.UCIWatcherSLOBatch{}, nil, err
 	}
 	selectionA.runID = publication.runID
+	stage = "post_endpoint_barrier"
+	barrier, err := uciWatcherSLOAwaitPostEndpointBarrier(ctx, live.ClientA, selectionA, publication, trace)
+	if err != nil {
+		return acceptance.UCIWatcherSLOBatch{}, nil, err
+	}
+	stage = "post_endpoint_quiescence"
+	if _, err := uciWatcherSLOAwaitPostEndpointQuiescence(ctx, live.ClientA, selectionA, publication, barrier, trace); err != nil {
+		return acceptance.UCIWatcherSLOBatch{}, nil, err
+	}
 	stage = "embedding"
 	embedding, embeddedPublication, embeddingCompleted, embeddingErr := uciWatcherSLOAwaitEmbeddingReady(ctx, live.Authority, live.ClientA, selectionA, publication)
 	lastEmbedding = uciWatcherSLOStageEmbeddingFor(embedding)
@@ -1207,7 +1216,7 @@ func uciRecordInstalledWatcherSLOBatch(ctx context.Context, live uciInstalledAcc
 
 func uciWatcherSLOAwaitSearchable(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection, previous uciInstalledAcceptancePublication, functionName, relativePath string, trace *uciWatcherSLOAttemptTrace) (uciInstalledAcceptancePublication, uci.QueryResponse, time.Time, error) {
 	for {
-		publication, err := uciWaitForInstalledAcceptanceWatcherPublicationObserved(ctx, client, selection, previous, trace.observeStage)
+		publication, err := uciWaitForInstalledAcceptanceWatcherFirstCurrentPublication(ctx, client, selection, previous)
 		if err != nil {
 			return uciInstalledAcceptancePublication{}, uci.QueryResponse{}, time.Time{}, fmt.Errorf("await installed watcher discovery: %w", err)
 		}
@@ -1215,7 +1224,8 @@ func uciWatcherSLOAwaitSearchable(ctx context.Context, client *uciInstalledAccep
 		watched.runID = publication.runID
 		canaryStarted := time.Now()
 		response, canaryErr := uciRequireInstalledAcceptanceWatcherCanaryResponse(ctx, client, watched, publication, functionName, relativePath, true)
-		trace.observeCall("canary_search", canaryStarted, time.Now(), canaryErr)
+		canaryCompleted := time.Now()
+		trace.observeCall("canary_search", canaryStarted, canaryCompleted, canaryErr)
 		if canaryErr != nil {
 			if errors.Is(canaryErr, errUCIInstalledAcceptanceWatcherCanaryMissing) {
 				previous = publication
@@ -1224,8 +1234,41 @@ func uciWatcherSLOAwaitSearchable(ctx context.Context, client *uciInstalledAccep
 			return uciInstalledAcceptancePublication{}, uci.QueryResponse{}, time.Time{}, fmt.Errorf("verify installed watcher search: %w", canaryErr)
 		}
 		trace.setPublication(publication)
-		return publication, response, time.Now().UTC(), nil
+		return publication, response, canaryCompleted.UTC(), nil
 	}
+}
+
+func uciWatcherSLOSameExactPublication(left, right uciInstalledAcceptancePublication) bool {
+	return uciInstalledAcceptanceSameViewPublication(left, right) && left.runID == right.runID
+}
+
+func uciWatcherSLORequirePostEndpointPublication(expected, observed uciInstalledAcceptancePublication) error {
+	if !uciWatcherSLOSameExactPublication(expected, observed) {
+		return errors.New("post-endpoint safety validation changed the structural View publication")
+	}
+	return nil
+}
+
+func uciWatcherSLOAwaitPostEndpointBarrier(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection, expected uciInstalledAcceptancePublication, trace *uciWatcherSLOAttemptTrace) (uciInstalledAcceptancePublication, error) {
+	selection.runID = expected.runID
+	started := time.Now()
+	barrier, err := uciWaitForInstalledAcceptanceBarrier(ctx, client, selection)
+	if err == nil {
+		err = uciWatcherSLORequirePostEndpointPublication(expected, barrier)
+	}
+	trace.observeStage("post_endpoint_barrier", started, time.Now(), err)
+	return barrier, err
+}
+
+func uciWatcherSLOAwaitPostEndpointQuiescence(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection, expected, barrier uciInstalledAcceptancePublication, trace *uciWatcherSLOAttemptTrace) (uciInstalledAcceptancePublication, error) {
+	selection.runID = expected.runID
+	started := time.Now()
+	quiescent, err := uciWaitForInstalledAcceptanceQuiescence(ctx, client, selection, barrier)
+	if err == nil {
+		err = uciWatcherSLORequirePostEndpointPublication(expected, quiescent)
+	}
+	trace.observeStage("post_endpoint_quiescence", started, time.Now(), err)
+	return quiescent, err
 }
 
 func uciWatcherSLOEmbeddingTerminal(status uciRealCorpusEmbeddingStatus) bool {
@@ -1835,11 +1878,14 @@ func TestUCIWatcherSLOAwaitSearchableUsesOneCanarySearch(t *testing.T) {
 	serverErr := make(chan error, 1)
 	serverDone := make(chan struct{})
 	searchCalls := make(chan int, 1)
+	statusCalls := make(chan int, 1)
+	toolCalls := make(chan []string, 1)
 	go func() {
 		defer close(serverDone)
 		defer func() { _ = serverOutput.Close() }()
-		calls := 0
-		defer func() { searchCalls <- calls }()
+		calls, statuses := 0, 0
+		tools := make([]string, 0, 2+uciInstalledAcceptanceQuiescenceObservations)
+		defer func() { searchCalls <- calls; statusCalls <- statuses; toolCalls <- tools }()
 		scanner := bufio.NewScanner(requests)
 		writer := json.NewEncoder(serverOutput)
 		for scanner.Scan() {
@@ -1858,9 +1904,11 @@ func TestUCIWatcherSLOAwaitSearchableUsesOneCanarySearch(t *testing.T) {
 				serverErr <- fmt.Errorf("watcher request method = %q, want tools/call", request.Method)
 				return
 			}
+			tools = append(tools, request.Params.Name)
 			payload := statusPayload
 			switch request.Params.Name {
 			case "codebase_status":
+				statuses++
 			case "codebase_search":
 				calls++
 				payload = queryPayload
@@ -1892,12 +1940,23 @@ func TestUCIWatcherSLOAwaitSearchableUsesOneCanarySearch(t *testing.T) {
 
 	trace := newUCIWatcherSLOAttemptTrace(time.Now(), before)
 	restoreObserver := client.setToolObserver(trace.observeTool)
-	publication, response, _, err := uciWatcherSLOAwaitSearchable(context.Background(), client, uciInstalledAcceptanceSelection{contextHandle: "context", runID: before.runID}, before, "UCIWatcherCanary", "pkg/watcher.go", trace)
-	restoreObserver()
-	closeServer()
+	publication, response, structuralCompleted, err := uciWatcherSLOAwaitSearchable(context.Background(), client, uciInstalledAcceptanceSelection{contextHandle: "context", runID: before.runID}, before, "UCIWatcherCanary", "pkg/watcher.go", trace)
 	if err != nil {
 		t.Fatalf("await searchable watcher: %v", err)
 	}
+	barrier, err := uciWatcherSLOAwaitPostEndpointBarrier(context.Background(), client, uciInstalledAcceptanceSelection{contextHandle: "context"}, publication, trace)
+	if err != nil {
+		t.Fatalf("await post-endpoint barrier: %v", err)
+	}
+	quiescent, err := uciWatcherSLOAwaitPostEndpointQuiescence(context.Background(), client, uciInstalledAcceptanceSelection{contextHandle: "context"}, publication, barrier, trace)
+	if err != nil {
+		t.Fatalf("await post-endpoint quiescence: %v", err)
+	}
+	if !uciWatcherSLOSameExactPublication(publication, barrier) || !uciWatcherSLOSameExactPublication(publication, quiescent) {
+		t.Fatalf("post-endpoint safety changed publication: endpoint=%#v barrier=%#v quiescent=%#v", publication, barrier, quiescent)
+	}
+	restoreObserver()
+	closeServer()
 	select {
 	case err := <-serverErr:
 		t.Fatal(err)
@@ -1906,7 +1965,13 @@ func TestUCIWatcherSLOAwaitSearchableUsesOneCanarySearch(t *testing.T) {
 	if calls := <-searchCalls; calls != 1 {
 		t.Fatalf("codebase_search calls after one publication = %d, want 1", calls)
 	}
-	if publication.sourceID != after.sourceID || publication.checkoutID != after.checkoutID || publication.profileID != after.profileID || publication.viewID != after.viewID || publication.generation != after.generation || publication.runID != after.runID || publication.freshnessState != "observed_current" || publication.barrierState != "satisfied" || response.Status != uci.QueryStatusOK || !uciInstalledAcceptanceQueryMatchesPublication(response, publication) {
+	if calls := <-statusCalls; calls != 2+uciInstalledAcceptanceQuiescenceObservations {
+		t.Fatalf("codebase_status calls through post-endpoint safety = %d, want %d", calls, 2+uciInstalledAcceptanceQuiescenceObservations)
+	}
+	if tools := <-toolCalls; len(tools) < 3 || tools[0] != "codebase_status" || tools[1] != "codebase_search" || tools[2] != "codebase_status" {
+		t.Fatalf("tool ordering = %#v, want first View then canary then post-endpoint safety", tools)
+	}
+	if publication.sourceID != after.sourceID || publication.checkoutID != after.checkoutID || publication.profileID != after.profileID || publication.viewID != after.viewID || publication.generation != after.generation || publication.runID != after.runID || publication.freshnessState != "observed_current" || publication.barrierState != "" || response.Status != uci.QueryStatusOK || !uciInstalledAcceptanceQueryMatchesPublication(response, publication) {
 		t.Fatalf("retained canary response = %#v for publication %#v", response, publication)
 	}
 	events := trace.snapshot()
@@ -1916,8 +1981,11 @@ func TestUCIWatcherSLOAwaitSearchableUsesOneCanarySearch(t *testing.T) {
 			searchReturns++
 		}
 	}
-	if searchReturns != 1 || uciWatcherSLOEvent(events, "canary_search_return") == nil || uciWatcherSLOEvent(events, "final_search_begin") != nil || uciWatcherSLOEvent(events, "final_search_return") != nil {
-		t.Fatalf("search diagnostics = %#v", events)
+	canary := uciWatcherSLOEvent(events, "canary_search_return")
+	barrierEvent := uciWatcherSLOEvent(events, "post_endpoint_barrier_begin")
+	quiescence := uciWatcherSLOEvent(events, "post_endpoint_quiescence_begin")
+	if searchReturns != 1 || uciWatcherSLOEvent(events, "client_view_first_seen") == nil || canary == nil || barrierEvent == nil || quiescence == nil || canary.Span.ReturnedElapsedNS > barrierEvent.Span.StartedElapsedNS || barrierEvent.Span.ReturnedElapsedNS > quiescence.Span.StartedElapsedNS || structuralCompleted.After(trace.origin.Add(time.Duration(barrierEvent.Span.StartedElapsedNS))) || uciWatcherSLOEvent(events, "final_search_begin") != nil || uciWatcherSLOEvent(events, "final_search_return") != nil {
+		t.Fatalf("endpoint and safety diagnostics = %#v", events)
 	}
 }
 
@@ -1932,17 +2000,17 @@ func TestUCIWatcherSLOObserverKeepsFirstExactViewObservation(t *testing.T) {
 	exactReturned := origin.Add(5 * time.Millisecond)
 	ready := uciWatcherSLOStageEmbedding{Coverage: "complete", TotalCandidates: 2, ReadyCandidates: 2, JobState: "succeeded"}
 	trace.observeTool("codebase_status", origin.Add(4*time.Millisecond), exactReturned, uciWatcherSLOTestStatusPayload(t, after, ready), nil)
-	trace.observeStage("barrier", origin.Add(6*time.Millisecond), origin.Add(7*time.Millisecond), nil)
-	trace.observeStage("quiescence", origin.Add(8*time.Millisecond), origin.Add(9*time.Millisecond), nil)
 	trace.setPublication(after)
-	trace.observeTool("codebase_status", origin.Add(10*time.Millisecond), origin.Add(11*time.Millisecond), uciWatcherSLOTestStatusPayload(t, after, ready), nil)
-	trace.observeCall("canary_search", origin.Add(12*time.Millisecond), origin.Add(13*time.Millisecond), nil)
+	trace.observeCall("canary_search", origin.Add(6*time.Millisecond), origin.Add(7*time.Millisecond), nil)
+	trace.observeStage("post_endpoint_barrier", origin.Add(8*time.Millisecond), origin.Add(9*time.Millisecond), nil)
+	trace.observeStage("post_endpoint_quiescence", origin.Add(10*time.Millisecond), origin.Add(11*time.Millisecond), nil)
+	trace.observeTool("codebase_status", origin.Add(12*time.Millisecond), origin.Add(13*time.Millisecond), uciWatcherSLOTestStatusPayload(t, after, ready), nil)
 	events := trace.snapshot()
 	first := uciWatcherSLOEvent(events, "client_view_first_seen")
 	if first == nil || first.Span.ReturnedElapsedNS != exactReturned.Sub(origin).Nanoseconds() {
 		t.Fatalf("first exact client View = %#v", first)
 	}
-	for _, name := range []string{"barrier_begin", "barrier_return", "quiescence_begin", "quiescence_return", "canary_search_begin", "canary_search_return", "embedding_ready_first_seen"} {
+	for _, name := range []string{"canary_search_begin", "canary_search_return", "post_endpoint_barrier_begin", "post_endpoint_barrier_return", "post_endpoint_quiescence_begin", "post_endpoint_quiescence_return", "embedding_ready_first_seen"} {
 		if uciWatcherSLOEvent(events, name) == nil {
 			t.Fatalf("missing %s in %#v", name, events)
 		}
@@ -2046,6 +2114,20 @@ func TestUCIWatcherSLOScannerAggregateObserverJoinsExactAttemptWithoutPathsOrBod
 	}
 }
 
+func TestUCIWatcherSLOPostEndpointSafetyRejectsChangedPublication(t *testing.T) {
+	expected := uciInstalledAcceptancePublication{sourceID: "source", checkoutID: "checkout", profileID: "profile", viewID: "view", generation: 2, runID: "run"}
+	changed := expected
+	changed.viewID, changed.generation = "changed", 3
+	if err := uciWatcherSLORequirePostEndpointPublication(expected, changed); err == nil {
+		t.Fatal("post-endpoint safety accepted a changed View")
+	}
+	changed = expected
+	changed.runID = "later-run"
+	if err := uciWatcherSLORequirePostEndpointPublication(expected, changed); err == nil {
+		t.Fatal("post-endpoint safety accepted a changed run")
+	}
+}
+
 func TestUCIWatcherSLODiagnosticFailureClasses(t *testing.T) {
 	retry := uciWatcherSLOStageEmbedding{JobState: "retry_scheduled", ErrorCode: "provider_unavailable"}
 	if got := uciWatcherSLODiagnosticFailureClass("embedding", errors.New("retry"), retry); got != "embedding_retry_observed" {
@@ -2054,6 +2136,9 @@ func TestUCIWatcherSLODiagnosticFailureClasses(t *testing.T) {
 	terminal := uciWatcherSLOStageEmbedding{JobState: "failed_terminal", ErrorCode: "provider_unavailable"}
 	if got := uciWatcherSLODiagnosticFailureClass("embedding", errors.New("failed"), terminal); got != "embedding_terminal_failure" {
 		t.Fatalf("terminal classification = %q", got)
+	}
+	if got := uciWatcherSLODiagnosticFailureClass("post_endpoint_quiescence", errors.New("changed"), uciWatcherSLOStageEmbedding{}); got != "publication_failure" {
+		t.Fatalf("post-endpoint quiescence classification = %q", got)
 	}
 	if got := uciWatcherSLODiagnosticMigrationWarningClass(true); got != "setup_migration_warning" {
 		t.Fatalf("migration warning classification = %q", got)
