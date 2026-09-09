@@ -1731,14 +1731,18 @@ func uciWaitForInstalledAcceptanceDaemonPID(ctx context.Context, controlRoot, in
 	}
 }
 
+type uciInstalledAcceptanceMCPToolObserver func(name string, started, returned time.Time, payload json.RawMessage, err error)
+
 type uciInstalledAcceptanceMCPClient struct {
-	name       string
-	process    *uciStartedInstallHarnessProcess
-	writer     *bufio.Writer
-	scanner    *bufio.Scanner
-	mu         sync.Mutex
-	nextID     uint64
-	transcript uciInstalledAcceptanceClientTranscript
+	name        string
+	process     *uciStartedInstallHarnessProcess
+	writer      *bufio.Writer
+	scanner     *bufio.Scanner
+	mu          sync.Mutex
+	observerMu  sync.RWMutex
+	nextID      uint64
+	transcript  uciInstalledAcceptanceClientTranscript
+	observeTool uciInstalledAcceptanceMCPToolObserver
 }
 type uciInstalledAcceptanceMCPRequest struct {
 	id     string
@@ -1854,11 +1858,38 @@ func (client *uciInstalledAcceptanceMCPClient) InitializeAndList(ctx context.Con
 	return nil
 }
 
-func (client *uciInstalledAcceptanceMCPClient) Tool(ctx context.Context, name string, arguments any) (json.RawMessage, error) {
+func (client *uciInstalledAcceptanceMCPClient) setToolObserver(observer uciInstalledAcceptanceMCPToolObserver) func() {
+	client.observerMu.Lock()
+	previous := client.observeTool
+	client.observeTool = observer
+	client.observerMu.Unlock()
+	return func() {
+		client.observerMu.Lock()
+		client.observeTool = previous
+		client.observerMu.Unlock()
+	}
+}
+
+func (client *uciInstalledAcceptanceMCPClient) observeToolCall(name string, started, returned time.Time, payload json.RawMessage, err error) {
+	client.observerMu.RLock()
+	observer := client.observeTool
+	client.observerMu.RUnlock()
+	if observer != nil {
+		observer(name, started, returned, payload, err)
+	}
+}
+
+func (client *uciInstalledAcceptanceMCPClient) Tool(ctx context.Context, name string, arguments any) (payload json.RawMessage, retErr error) {
+	started := time.Now()
+	var observed json.RawMessage
+	defer func() {
+		client.observeToolCall(name, started, time.Now(), observed, retErr)
+	}()
 	result, err := client.ToolWithCall(ctx, name, arguments)
 	if err != nil {
 		return nil, err
 	}
+	observed = result.payload
 	if result.isError {
 		return nil, &uciInstalledAcceptanceMCPError{method: name, code: uciInstalledAcceptancePublicErrorCode(result.payload), detail: uciInstalledAcceptancePublicErrorDetail(result.payload)}
 	}
@@ -4141,11 +4172,23 @@ func uciWaitForInstalledAcceptanceWatcherRun(
 	}
 }
 
+type uciInstalledAcceptanceWatcherStageObserver func(stage string, started, returned time.Time, err error)
+
 func uciWaitForInstalledAcceptanceWatcherPublication(
 	ctx context.Context,
 	client *uciInstalledAcceptanceMCPClient,
 	selection uciInstalledAcceptanceSelection,
 	previous uciInstalledAcceptancePublication,
+) (uciInstalledAcceptancePublication, error) {
+	return uciWaitForInstalledAcceptanceWatcherPublicationObserved(ctx, client, selection, previous, nil)
+}
+
+func uciWaitForInstalledAcceptanceWatcherPublicationObserved(
+	ctx context.Context,
+	client *uciInstalledAcceptanceMCPClient,
+	selection uciInstalledAcceptanceSelection,
+	previous uciInstalledAcceptancePublication,
+	observe uciInstalledAcceptanceWatcherStageObserver,
 ) (uciInstalledAcceptancePublication, error) {
 	if client == nil || selection.contextHandle == "" || previous.runID == "" {
 		return uciInstalledAcceptancePublication{}, errors.New("installed acceptance watcher status target is incomplete")
@@ -4156,13 +4199,22 @@ func uciWaitForInstalledAcceptanceWatcherPublication(
 	if err != nil {
 		return uciInstalledAcceptancePublication{}, err
 	}
-	watchedSelection := selection
-	watchedSelection.runID = status.runID
-	barrier, err := uciWaitForInstalledAcceptanceBarrier(ctx, client, watchedSelection)
+	observedSelection := selection
+	observedSelection.runID = status.runID
+	barrierStarted := time.Now()
+	barrier, err := uciWaitForInstalledAcceptanceBarrier(ctx, client, observedSelection)
+	if observe != nil {
+		observe("barrier", barrierStarted, time.Now(), err)
+	}
 	if err != nil {
 		return uciInstalledAcceptancePublication{}, err
 	}
-	return uciWaitForInstalledAcceptanceQuiescence(ctx, client, watchedSelection, barrier)
+	quiescenceStarted := time.Now()
+	publication, err := uciWaitForInstalledAcceptanceQuiescence(ctx, client, observedSelection, barrier)
+	if observe != nil {
+		observe("quiescence", quiescenceStarted, time.Now(), err)
+	}
+	return publication, err
 }
 
 func uciWaitForInstalledAcceptanceWatcherState(
