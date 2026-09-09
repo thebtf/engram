@@ -201,18 +201,57 @@ func TestEmbeddingWorkerPollsAtConfiguredCadenceAndProcessesOneQueuedClaim(t *te
 		t.Fatal("worker did not stop after cancellation")
 	}
 
-	claimTimes, claims, prepares, commits, completes := store.snapshot()
+	claimAttempts, claims, prepares, commits, completes := store.snapshot()
 	if claimedAt.Sub(queuedAt) > 4*limits.PollInterval {
 		t.Fatalf("queued claim latency = %s, want at most %s", claimedAt.Sub(queuedAt), 4*limits.PollInterval)
 	}
-	for index := 1; index < len(claimTimes); index++ {
-		if interval := claimTimes[index].Sub(claimTimes[index-1]); interval < limits.PollInterval {
-			t.Fatalf("claim interval %d = %s, want at least %s", index, interval, limits.PollInterval)
+	claimedAttempt := -1
+	immediateContinuations := 0
+	for index, attempt := range claimAttempts {
+		if attempt.claimed {
+			if claimedAttempt >= 0 {
+				t.Fatalf("successful claim attempts = %d and %d, want exactly one", claimedAttempt, index)
+			}
+			claimedAttempt = index
 		}
+		if index == 0 {
+			continue
+		}
+		previous := claimAttempts[index-1]
+		interval := attempt.at.Sub(previous.at)
+		if interval < limits.PollInterval {
+			if !previous.claimed {
+				t.Fatalf("sub-cadence claim interval %d = %s followed an idle poll, want only post-claim continuation", index, interval)
+			}
+			immediateContinuations++
+		}
+		if !previous.claimed && !attempt.claimed && interval < limits.PollInterval {
+			t.Fatalf("idle claim interval %d = %s, want at least %s", index, interval, limits.PollInterval)
+		}
+	}
+	if claimedAttempt < 0 {
+		t.Fatal("worker did not claim queued work")
+	}
+	if claimedAttempt+1 >= len(claimAttempts) {
+		t.Fatal("worker did not continue immediately after the successful claim")
+	}
+	if claimAttempts[claimedAttempt+1].claimed {
+		t.Fatal("worker duplicated the successful claim during its immediate continuation")
+	}
+	if immediateContinuations != 1 {
+		t.Fatalf("immediate post-claim continuations = %d, want 1", immediateContinuations)
+	}
+	if root.Err() != context.Canceled {
+		t.Fatalf("worker cancellation = %v, want %v", root.Err(), context.Canceled)
 	}
 	if claims != 1 || prepares != 2 || commits != 1 || completes != 1 {
 		t.Fatalf("claimed/processed work = claims:%d prepares:%d commits:%d completes:%d, want 1:2:1:1", claims, prepares, commits, completes)
 	}
+}
+
+type embeddingWorkerPollingClaimAttempt struct {
+	at      time.Time
+	claimed bool
 }
 
 type embeddingWorkerPollingStore struct {
@@ -224,13 +263,13 @@ type embeddingWorkerPollingStore struct {
 	claimed     chan time.Time
 	cancel      context.CancelFunc
 
-	mu         sync.Mutex
-	claimTimes []time.Time
-	emptyCalls int
-	claims     int
-	prepares   int
-	commits    int
-	completes  int
+	mu            sync.Mutex
+	claimAttempts []embeddingWorkerPollingClaimAttempt
+	emptyCalls    int
+	claims        int
+	prepares      int
+	commits       int
+	completes     int
 }
 
 func (store *embeddingWorkerPollingStore) EnsureCurrentEmbeddingJobs(context.Context, VectorProfile, string, int) (string, bool, error) {
@@ -240,15 +279,20 @@ func (store *embeddingWorkerPollingStore) EnsureCurrentEmbeddingJobs(context.Con
 func (store *embeddingWorkerPollingStore) ClaimEmbeddingJob(_ context.Context, _ VectorProfile, _ string, _ time.Duration) (EmbeddingJobClaim, bool, error) {
 	now := time.Now()
 	store.mu.Lock()
-	store.claimTimes = append(store.claimTimes, now)
+	store.claimAttempts = append(store.claimAttempts, embeddingWorkerPollingClaimAttempt{at: now})
+	attempt := len(store.claimAttempts) - 1
 	select {
 	case <-store.queued:
 		if store.claims == 0 {
 			store.claims++
+			store.claimAttempts[attempt].claimed = true
 			store.mu.Unlock()
 			store.claimed <- now
 			return store.claim, true, nil
 		}
+		store.mu.Unlock()
+		store.cancel()
+		return EmbeddingJobClaim{}, false, nil
 	default:
 		store.emptyCalls++
 		if store.emptyCalls == store.emptyLimit {
@@ -284,7 +328,6 @@ func (store *embeddingWorkerPollingStore) CompleteEmbeddingJob(context.Context, 
 	store.mu.Lock()
 	store.completes++
 	store.mu.Unlock()
-	store.cancel()
 	return nil
 }
 
@@ -292,10 +335,10 @@ func (store *embeddingWorkerPollingStore) FailEmbeddingJob(context.Context, Embe
 	return nil
 }
 
-func (store *embeddingWorkerPollingStore) snapshot() ([]time.Time, int, int, int, int) {
+func (store *embeddingWorkerPollingStore) snapshot() ([]embeddingWorkerPollingClaimAttempt, int, int, int, int) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	return append([]time.Time(nil), store.claimTimes...), store.claims, store.prepares, store.commits, store.completes
+	return append([]embeddingWorkerPollingClaimAttempt(nil), store.claimAttempts...), store.claims, store.prepares, store.commits, store.completes
 }
 
 type embeddingWorkerPollingEmbedder struct {
