@@ -52,14 +52,15 @@ type UCIPreparedIndexConfig struct {
 // frames for server-authorized targets. It has no project selector or path
 // authority: the server binding and local registry jointly determine its root.
 type UCIPreparedIndexCollaborator struct {
-	workstationID      string
-	clientInstanceID   string
-	parserBundleDigest uci.IndexDigest
-	registry           *UCILocalRegistry
-	scanner            UCIPreparedIndexScanner
-	treeSitterParser   UCIPreparedTreeSitterParser
-	goProfile          uci.GoExtractionProfile
-	logger             *slog.Logger
+	workstationID            string
+	clientInstanceID         string
+	parserBundleDigest       uci.IndexDigest
+	registry                 *UCILocalRegistry
+	scanner                  UCIPreparedIndexScanner
+	treeSitterParser         UCIPreparedTreeSitterParser
+	goProfile                uci.GoExtractionProfile
+	logger                   *slog.Logger
+	scannerAggregateObserver uciPreparedScannerAggregateObserver
 }
 
 // NewUCIPreparedIndexCollaborator constructs the daemon-side prepared-index
@@ -169,28 +170,33 @@ func (collaborator *UCIPreparedIndexCollaborator) scanCurrent(ctx context.Contex
 		return uci.ScannerResult{}, fmt.Errorf("uci prepared index: scan is not a complete census")
 	}
 	scan.Observation.ObservedFSSeq = local.observedSequence
-	if collaborator.logger != nil {
-		diagnostics := scan.Diagnostics
-		collaborator.logger.Info("codeintel: prepared scanner phase aggregate",
-			"source_id", local.binding.Scope.SourceID,
-			"checkout_id", local.binding.Scope.CheckoutID,
-			"profile_id", local.binding.ProfileID,
-			"observed_fs_seq", scan.Observation.ObservedFSSeq,
-			"scan_started_at", scan.Observation.ScanStart.Format(time.RFC3339Nano),
-			"scan_completed_at", scan.Observation.ScanEnd.Format(time.RFC3339Nano),
-			"git_topology_duration_ns", diagnostics.GitTopologyDuration.Nanoseconds(),
-			"git_status_duration_ns", diagnostics.GitStatusDuration.Nanoseconds(),
-			"git_staged_duration_ns", diagnostics.GitStagedDuration.Nanoseconds(),
-			"git_untracked_duration_ns", diagnostics.GitUntrackedDuration.Nanoseconds(),
-			"candidate_loop_duration_ns", diagnostics.CandidateLoopDuration.Nanoseconds(),
-			"scan_total_duration_ns", diagnostics.TotalDuration.Nanoseconds(),
-			"residual_duration_ns", diagnostics.ResidualDuration.Nanoseconds(),
-			"candidate_count", diagnostics.CandidateCount,
-			"admitted_count", diagnostics.AdmittedCount,
-			"excluded_count", diagnostics.ExcludedCount,
-			"unreadable_count", diagnostics.UnreadableCount,
-			"bytes_read", diagnostics.BytesRead,
-		)
+	if collaborator.logger != nil || collaborator.scannerAggregateObserver != nil {
+		aggregate := uciPreparedScannerAggregateFor(local, scan)
+		if collaborator.logger != nil {
+			collaborator.logger.Info("codeintel: prepared scanner phase aggregate",
+				"source_id", aggregate.SourceID,
+				"checkout_id", aggregate.CheckoutID,
+				"profile_id", aggregate.ProfileID,
+				"observed_fs_seq", aggregate.ObservedFSSeq,
+				"scan_started_at", aggregate.ScanStartedAt.Format(time.RFC3339Nano),
+				"scan_completed_at", aggregate.ScanCompletedAt.Format(time.RFC3339Nano),
+				"git_topology_duration_ns", aggregate.GitTopologyDurationNS,
+				"git_status_duration_ns", aggregate.GitStatusDurationNS,
+				"git_staged_duration_ns", aggregate.GitStagedDurationNS,
+				"git_untracked_duration_ns", aggregate.GitUntrackedDurationNS,
+				"candidate_loop_duration_ns", aggregate.CandidateLoopDurationNS,
+				"scan_total_duration_ns", aggregate.ScanTotalDurationNS,
+				"residual_duration_ns", aggregate.ResidualDurationNS,
+				"candidate_count", aggregate.CandidateCount,
+				"admitted_count", aggregate.AdmittedCount,
+				"excluded_count", aggregate.ExcludedCount,
+				"unreadable_count", aggregate.UnreadableCount,
+				"bytes_read", aggregate.BytesRead,
+			)
+		}
+		if collaborator.scannerAggregateObserver != nil {
+			collaborator.scannerAggregateObserver(aggregate)
+		}
 	}
 	return scan, nil
 }

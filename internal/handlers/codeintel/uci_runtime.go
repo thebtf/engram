@@ -81,16 +81,17 @@ type uciRuntime struct {
 	core   *engramcore.Module
 	config UCIRuntimeConfig
 
-	stateMu          sync.RWMutex
-	started          bool
-	closed           bool
-	workstationID    string
-	daemonCtx        context.Context
-	logger           *slog.Logger
-	db               *sql.DB
-	registry         *UCILocalRegistry
-	treeSitterParser UCIPreparedTreeSitterParser
-	authorizedTarget map[string]uciRuntimeAuthorizedTarget
+	stateMu                  sync.RWMutex
+	started                  bool
+	closed                   bool
+	workstationID            string
+	daemonCtx                context.Context
+	logger                   *slog.Logger
+	db                       *sql.DB
+	registry                 *UCILocalRegistry
+	treeSitterParser         UCIPreparedTreeSitterParser
+	scannerAggregateObserver uciPreparedScannerAggregateObserver
+	authorizedTarget         map[string]uciRuntimeAuthorizedTarget
 
 	watcherMu sync.Mutex
 	watchers  map[string]uciRuntimeWatcher
@@ -287,11 +288,12 @@ func newUCIRuntime(core *engramcore.Module, configuration UCIRuntimeConfig) (*uc
 		return nil, err
 	}
 	return &uciRuntime{
-		core:             core,
-		config:           configuration,
-		treeSitterParser: treeSitterParser,
-		authorizedTarget: make(map[string]uciRuntimeAuthorizedTarget),
-		watchers:         make(map[string]uciRuntimeWatcher),
+		core:                     core,
+		config:                   configuration,
+		treeSitterParser:         treeSitterParser,
+		scannerAggregateObserver: newUCIPreparedScannerAggregateObserverFromEnvironment(),
+		authorizedTarget:         make(map[string]uciRuntimeAuthorizedTarget),
+		watchers:                 make(map[string]uciRuntimeWatcher),
 	}, nil
 }
 
@@ -373,6 +375,7 @@ func (runtimeState *uciRuntime) configureCollaboratorLocked(workstationID string
 	if err != nil {
 		return fmt.Errorf("uci runtime: construct prepared index collaborator: %w", err)
 	}
+	collaborator.scannerAggregateObserver = runtimeState.scannerAggregateObserver
 	if err := runtimeState.core.ConfigurePreparedIndexCollaborator(engramcore.PreparedIndexConfiguration{
 		WorkstationID:      workstationID,
 		ClientInstanceID:   runtimeState.config.ClientInstanceID,

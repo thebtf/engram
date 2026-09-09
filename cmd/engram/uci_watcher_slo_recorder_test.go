@@ -2,12 +2,15 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +21,7 @@ import (
 	"time"
 
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/handlers/codeintel"
 	"github.com/thebtf/engram/internal/uci"
 	acceptance "github.com/thebtf/engram/tests/uci/acceptance"
 )
@@ -67,14 +71,84 @@ type uciWatcherSLOStageEmbedding struct {
 	RetryAfterUTC   *time.Time `json:"retry_after_utc,omitempty"`
 }
 
+type uciWatcherSLOStageScannerAggregate struct {
+	SourceDigest            string    `json:"source_digest"`
+	CheckoutDigest          string    `json:"checkout_digest"`
+	ProfileDigest           string    `json:"profile_digest"`
+	ObservedFSSeq           int64     `json:"observed_fs_seq"`
+	ScanStartedAt           time.Time `json:"scan_started_at"`
+	ScanCompletedAt         time.Time `json:"scan_completed_at"`
+	GitTopologyDurationNS   int64     `json:"git_topology_duration_ns"`
+	GitStatusDurationNS     int64     `json:"git_status_duration_ns"`
+	GitStagedDurationNS     int64     `json:"git_staged_duration_ns"`
+	GitUntrackedDurationNS  int64     `json:"git_untracked_duration_ns"`
+	CandidateLoopDurationNS int64     `json:"candidate_loop_duration_ns"`
+	ScanTotalDurationNS     int64     `json:"scan_total_duration_ns"`
+	ResidualDurationNS      int64     `json:"residual_duration_ns"`
+	CandidateCount          int       `json:"candidate_count"`
+	AdmittedCount           int       `json:"admitted_count"`
+	ExcludedCount           int       `json:"excluded_count"`
+	UnreadableCount         int       `json:"unreadable_count"`
+	BytesRead               int64     `json:"bytes_read"`
+}
+
+type uciWatcherSLOScannerAggregate struct {
+	SourceID                string    `json:"source_id"`
+	CheckoutID              string    `json:"checkout_id"`
+	ProfileID               string    `json:"profile_id"`
+	ObservedFSSeq           int64     `json:"observed_fs_seq"`
+	ScanStartedAt           time.Time `json:"scan_started_at"`
+	ScanCompletedAt         time.Time `json:"scan_completed_at"`
+	GitTopologyDurationNS   int64     `json:"git_topology_duration_ns"`
+	GitStatusDurationNS     int64     `json:"git_status_duration_ns"`
+	GitStagedDurationNS     int64     `json:"git_staged_duration_ns"`
+	GitUntrackedDurationNS  int64     `json:"git_untracked_duration_ns"`
+	CandidateLoopDurationNS int64     `json:"candidate_loop_duration_ns"`
+	ScanTotalDurationNS     int64     `json:"scan_total_duration_ns"`
+	ResidualDurationNS      int64     `json:"residual_duration_ns"`
+	CandidateCount          int       `json:"candidate_count"`
+	AdmittedCount           int       `json:"admitted_count"`
+	ExcludedCount           int       `json:"excluded_count"`
+	UnreadableCount         int       `json:"unreadable_count"`
+	BytesRead               int64     `json:"bytes_read"`
+}
+
+func uciWatcherSLOStageScannerAggregateFor(aggregate uciWatcherSLOScannerAggregate) uciWatcherSLOStageScannerAggregate {
+	return uciWatcherSLOStageScannerAggregate{
+		SourceDigest:            uciInstalledAcceptanceStringDigest(aggregate.SourceID),
+		CheckoutDigest:          uciInstalledAcceptanceStringDigest(aggregate.CheckoutID),
+		ProfileDigest:           uciInstalledAcceptanceStringDigest(aggregate.ProfileID),
+		ObservedFSSeq:           aggregate.ObservedFSSeq,
+		ScanStartedAt:           aggregate.ScanStartedAt.UTC(),
+		ScanCompletedAt:         aggregate.ScanCompletedAt.UTC(),
+		GitTopologyDurationNS:   aggregate.GitTopologyDurationNS,
+		GitStatusDurationNS:     aggregate.GitStatusDurationNS,
+		GitStagedDurationNS:     aggregate.GitStagedDurationNS,
+		GitUntrackedDurationNS:  aggregate.GitUntrackedDurationNS,
+		CandidateLoopDurationNS: aggregate.CandidateLoopDurationNS,
+		ScanTotalDurationNS:     aggregate.ScanTotalDurationNS,
+		ResidualDurationNS:      aggregate.ResidualDurationNS,
+		CandidateCount:          aggregate.CandidateCount,
+		AdmittedCount:           aggregate.AdmittedCount,
+		ExcludedCount:           aggregate.ExcludedCount,
+		UnreadableCount:         aggregate.UnreadableCount,
+		BytesRead:               aggregate.BytesRead,
+	}
+}
+
+func (aggregate uciWatcherSLOScannerAggregate) valid() bool {
+	return aggregate.SourceID != "" && aggregate.CheckoutID != "" && aggregate.ProfileID != "" && aggregate.ObservedFSSeq >= 0 && !aggregate.ScanStartedAt.IsZero() && !aggregate.ScanCompletedAt.IsZero() && !aggregate.ScanCompletedAt.Before(aggregate.ScanStartedAt)
+}
+
 type uciWatcherSLOStageEvent struct {
-	Name        string                         `json:"name"`
-	Span        uciWatcherSLOStageSpan         `json:"span"`
-	Tool        string                         `json:"tool,omitempty"`
-	ErrorClass  string                         `json:"error_class,omitempty"`
-	ErrorCode   string                         `json:"error_code,omitempty"`
-	Publication *uciWatcherSLOStagePublication `json:"publication,omitempty"`
-	Embedding   *uciWatcherSLOStageEmbedding   `json:"embedding,omitempty"`
+	Name             string                              `json:"name"`
+	Span             uciWatcherSLOStageSpan              `json:"span"`
+	Tool             string                              `json:"tool,omitempty"`
+	ErrorClass       string                              `json:"error_class,omitempty"`
+	ErrorCode        string                              `json:"error_code,omitempty"`
+	Publication      *uciWatcherSLOStagePublication      `json:"publication,omitempty"`
+	Embedding        *uciWatcherSLOStageEmbedding        `json:"embedding,omitempty"`
+	ScannerAggregate *uciWatcherSLOStageScannerAggregate `json:"scanner_aggregate,omitempty"`
 }
 
 type uciWatcherSLOStagePublicationBounds struct {
@@ -323,12 +397,13 @@ type uciWatcherSLOAttemptTrace struct {
 	events                 []uciWatcherSLOStageEvent
 	statusObservations     []uciWatcherSLOStatusObservation
 	durableObservations    []uciWatcherSLODurableObservation
+	scannerObservations    []uciWatcherSLOScannerAggregateObservation
 	lastDurableNegative    time.Time
 	lastEmbeddingSignature string
 }
 
 func newUCIWatcherSLOAttemptTrace(origin time.Time, baseline uciInstalledAcceptancePublication) *uciWatcherSLOAttemptTrace {
-	return &uciWatcherSLOAttemptTrace{origin: origin, baseline: baseline, events: make([]uciWatcherSLOStageEvent, 0, 32)}
+	return &uciWatcherSLOAttemptTrace{origin: origin, baseline: baseline, events: make([]uciWatcherSLOStageEvent, 0, 32), scannerObservations: make([]uciWatcherSLOScannerAggregateObservation, 0, 8)}
 }
 
 func (trace *uciWatcherSLOAttemptTrace) add(event uciWatcherSLOStageEvent) {
@@ -465,6 +540,38 @@ func (trace *uciWatcherSLOAttemptTrace) observeCall(stage string, started, retur
 	trace.add(uciWatcherSLOStageEvent{Name: stage + "_return", Span: span, ErrorClass: uciWatcherSLODiagnosticFailureClass("search", err, uciWatcherSLOStageEmbedding{}), ErrorCode: uciWatcherSLODiagnosticErrorCode(err)})
 }
 
+type uciWatcherSLOScannerAggregateObservation struct {
+	aggregate uciWatcherSLOScannerAggregate
+	span      uciWatcherSLOStageSpan
+}
+
+func (trace *uciWatcherSLOAttemptTrace) observeScannerAggregate(aggregate uciWatcherSLOScannerAggregate, observed time.Time) {
+	if trace == nil || !aggregate.valid() {
+		return
+	}
+	trace.mu.Lock()
+	defer trace.mu.Unlock()
+	if len(trace.scannerObservations) < 128 {
+		trace.scannerObservations = append(trace.scannerObservations, uciWatcherSLOScannerAggregateObservation{aggregate: aggregate, span: uciWatcherSLOStageSpanFor(trace.origin, observed, observed)})
+	}
+}
+
+func (trace *uciWatcherSLOAttemptTrace) joinScannerAggregates(view acceptance.UCIWatcherSLOView) {
+	if trace == nil {
+		return
+	}
+	trace.mu.Lock()
+	defer trace.mu.Unlock()
+	for _, observation := range trace.scannerObservations {
+		aggregate := observation.aggregate
+		if aggregate.SourceID != view.Context.SourceID || aggregate.CheckoutID != view.Context.CheckoutID || aggregate.ProfileID != view.Context.AnalysisProfileID || aggregate.ObservedFSSeq != view.AcceptedFSSeq {
+			continue
+		}
+		stage := uciWatcherSLOStageScannerAggregateFor(aggregate)
+		trace.add(uciWatcherSLOStageEvent{Name: "prepared_scanner_phase_aggregate", Span: observation.span, ScannerAggregate: &stage})
+	}
+}
+
 func (trace *uciWatcherSLOAttemptTrace) markSave(started, returned time.Time, err error) {
 	if trace == nil {
 		return
@@ -571,6 +678,7 @@ func uciWatcherSLOFinalizeAttempt(journal *uciWatcherSLOStageJournal, attempt *u
 	if journal == nil || attempt == nil {
 		return attemptErr
 	}
+	trace.joinScannerAggregates(batch.AAfter)
 	attempt.Events = trace.snapshot()
 	attempt.PublicationBounds = trace.publicationBounds()
 	attempt.CompleteV2Batch = attemptErr == nil && batch.ID != ""
@@ -594,6 +702,66 @@ func uciWatcherSLOFinalizeAttempt(journal *uciWatcherSLOStageJournal, attempt *u
 		return errors.Join(attemptErr, fmt.Errorf("write installed watcher attempt end: %w", err))
 	}
 	return attemptErr
+}
+
+type uciWatcherSLOScannerAggregateObserver struct {
+	mu     sync.Mutex
+	server *httptest.Server
+	trace  *uciWatcherSLOAttemptTrace
+}
+
+func uciNewWatcherSLOScannerAggregateObserver() *uciWatcherSLOScannerAggregateObserver {
+	observer := &uciWatcherSLOScannerAggregateObserver{}
+	observer.server = httptest.NewServer(http.HandlerFunc(observer.serveHTTP))
+	return observer
+}
+
+func (observer *uciWatcherSLOScannerAggregateObserver) endpoint() string {
+	if observer == nil || observer.server == nil {
+		return ""
+	}
+	return observer.server.URL
+}
+
+func (observer *uciWatcherSLOScannerAggregateObserver) close() {
+	if observer != nil && observer.server != nil {
+		observer.server.Close()
+	}
+}
+
+func (observer *uciWatcherSLOScannerAggregateObserver) setTrace(trace *uciWatcherSLOAttemptTrace) {
+	if observer == nil {
+		return
+	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.trace = trace
+}
+
+func (observer *uciWatcherSLOScannerAggregateObserver) serveHTTP(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	defer request.Body.Close()
+	decoder := json.NewDecoder(io.LimitReader(request.Body, 16<<10))
+	decoder.DisallowUnknownFields()
+	var aggregate uciWatcherSLOScannerAggregate
+	if err := decoder.Decode(&aggregate); err != nil || !aggregate.valid() {
+		writer.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		writer.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	observer.mu.Lock()
+	trace := observer.trace
+	observer.mu.Unlock()
+	if trace != nil {
+		trace.observeScannerAggregate(aggregate, time.Now())
+	}
+	writer.WriteHeader(http.StatusNoContent)
 }
 
 type uciWatcherSLODurableViewObserver struct {
@@ -704,6 +872,9 @@ func TestUCIRecordInstalledWatcherSLO(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create installed watcher stage journal: %v", err)
 	}
+	scannerAggregateObserver := uciNewWatcherSLOScannerAggregateObserver()
+	defer scannerAggregateObserver.close()
+	t.Setenv(codeintel.EnvUCIWatcherSLOScannerAggregateObserver, scannerAggregateObserver.endpoint())
 	run := &uciWatcherSLOStageRun{}
 	if err := journal.append("run_begin", run, nil); err != nil {
 		_ = journal.close()
@@ -756,7 +927,7 @@ func TestUCIRecordInstalledWatcherSLO(t *testing.T) {
 	}
 	var input acceptance.UCIWatcherSLOInput
 	request.ScenarioProbe = func(ctx context.Context, live uciInstalledAcceptanceScenarioRuntime) (map[string]uciInstalledAcceptanceScenarioEvidence, error) {
-		measured, err := uciRecordInstalledWatcherSLOObserved(ctx, live, provider, journal, run)
+		measured, err := uciRecordInstalledWatcherSLOObserved(ctx, live, provider, journal, run, scannerAggregateObserver)
 		if err != nil {
 			return nil, err
 		}
@@ -796,10 +967,10 @@ func TestUCIRecordInstalledWatcherSLO(t *testing.T) {
 }
 
 func uciRecordInstalledWatcherSLO(ctx context.Context, live uciInstalledAcceptanceScenarioRuntime, provider *uciInstalledAcceptanceEmbeddingProvider) (acceptance.UCIWatcherSLOInput, error) {
-	return uciRecordInstalledWatcherSLOObserved(ctx, live, provider, nil, nil)
+	return uciRecordInstalledWatcherSLOObserved(ctx, live, provider, nil, nil, nil)
 }
 
-func uciRecordInstalledWatcherSLOObserved(ctx context.Context, live uciInstalledAcceptanceScenarioRuntime, provider *uciInstalledAcceptanceEmbeddingProvider, journal *uciWatcherSLOStageJournal, run *uciWatcherSLOStageRun) (acceptance.UCIWatcherSLOInput, error) {
+func uciRecordInstalledWatcherSLOObserved(ctx context.Context, live uciInstalledAcceptanceScenarioRuntime, provider *uciInstalledAcceptanceEmbeddingProvider, journal *uciWatcherSLOStageJournal, run *uciWatcherSLOStageRun, scannerAggregateObserver *uciWatcherSLOScannerAggregateObserver) (acceptance.UCIWatcherSLOInput, error) {
 	if live.Authority == nil || live.Authority.profile == nil || live.Authority.source == nil || live.ClientA == nil || live.ClientB == nil || provider == nil {
 		return acceptance.UCIWatcherSLOInput{}, errors.New("installed watcher recorder runtime is incomplete")
 	}
@@ -843,7 +1014,7 @@ func uciRecordInstalledWatcherSLOObserved(ctx context.Context, live uciInstalled
 		if run != nil {
 			run.Attempted++
 		}
-		batch, nextSource, measureErr := uciRecordInstalledWatcherSLOBatch(ctx, live, selectionA, selectionB, beforeA, beforeB, previousSource, sequence, warmth, journal)
+		batch, nextSource, measureErr := uciRecordInstalledWatcherSLOBatch(ctx, live, selectionA, selectionB, beforeA, beforeB, previousSource, sequence, warmth, journal, scannerAggregateObserver)
 		if measureErr != nil {
 			return acceptance.UCIWatcherSLOInput{}, measureErr
 		}
@@ -897,7 +1068,7 @@ func uciRecordInstalledWatcherSLOObserved(ctx context.Context, live uciInstalled
 	}, nil
 }
 
-func uciRecordInstalledWatcherSLOBatch(ctx context.Context, live uciInstalledAcceptanceScenarioRuntime, selectionA, selectionB uciInstalledAcceptanceSelection, beforeA, beforeB uciInstalledAcceptancePublication, previousSource []byte, sequence int, warmth string, journal *uciWatcherSLOStageJournal) (batch acceptance.UCIWatcherSLOBatch, nextSource []byte, retErr error) {
+func uciRecordInstalledWatcherSLOBatch(ctx context.Context, live uciInstalledAcceptanceScenarioRuntime, selectionA, selectionB uciInstalledAcceptanceSelection, beforeA, beforeB uciInstalledAcceptancePublication, previousSource []byte, sequence int, warmth string, journal *uciWatcherSLOStageJournal, scannerAggregateObserver *uciWatcherSLOScannerAggregateObserver) (batch acceptance.UCIWatcherSLOBatch, nextSource []byte, retErr error) {
 	stage := "pre_save"
 	var trace *uciWatcherSLOAttemptTrace
 	var attempt uciWatcherSLOStageAttempt
@@ -915,6 +1086,10 @@ func uciRecordInstalledWatcherSLOBatch(ctx context.Context, live uciInstalledAcc
 			return acceptance.UCIWatcherSLOBatch{}, nil, fmt.Errorf("write installed watcher attempt begin: %w", err)
 		}
 		trace = newUCIWatcherSLOAttemptTrace(journal.origin, beforeA)
+		if scannerAggregateObserver != nil {
+			scannerAggregateObserver.setTrace(trace)
+			defer scannerAggregateObserver.setTrace(nil)
+		}
 		restoreObserver = live.ClientA.setToolObserver(trace.observeTool)
 		defer func() {
 			if restoreObserver != nil {
@@ -1783,6 +1958,91 @@ func TestUCIWatcherSLOObserverKeepsFirstExactViewObservation(t *testing.T) {
 	client.observeToolCall("codebase_status", origin, origin, nil, nil)
 	if calls != 1 {
 		t.Fatalf("scoped passive observer calls = %d, want 1", calls)
+	}
+}
+
+func TestUCIWatcherSLOScannerAggregateObserverJoinsExactAttemptWithoutPathsOrBodies(t *testing.T) {
+	journalPath := filepath.Join(t.TempDir(), "watcher-slo.json")
+	journal, err := uciNewWatcherSLOStageJournal(journalPath)
+	if err != nil {
+		t.Fatalf("create scanner aggregate journal: %v", err)
+	}
+	baseline := uciInstalledAcceptancePublication{sourceID: "source-id", checkoutID: "checkout-id", profileID: "profile-id", viewID: "before", generation: 1}
+	attempt := uciWatcherSLOStageAttempt{ID: "attempt-001", Sequence: 1, Warmth: "warm", Baseline: uciWatcherSLOStagePublicationFor(baseline)}
+	trace := newUCIWatcherSLOAttemptTrace(journal.origin, baseline)
+	observer := uciNewWatcherSLOScannerAggregateObserver()
+	defer observer.close()
+	observer.setTrace(trace)
+	started := time.Date(2026, time.September, 9, 12, 0, 0, 123, time.UTC)
+	wanted := uciWatcherSLOScannerAggregate{
+		SourceID: "source-id", CheckoutID: "checkout-id", ProfileID: "profile-id", ObservedFSSeq: 41,
+		ScanStartedAt: started, ScanCompletedAt: started.Add(23 * time.Millisecond),
+		GitTopologyDurationNS: 11, GitStatusDurationNS: 13, GitStagedDurationNS: 17, GitUntrackedDurationNS: 19,
+		CandidateLoopDurationNS: 23, ScanTotalDurationNS: 101, ResidualDurationNS: 18,
+		CandidateCount: 29, AdmittedCount: 31, ExcludedCount: 37, UnreadableCount: 41, BytesRead: 43,
+	}
+	post := func(payload any) int {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("encode scanner aggregate: %v", err)
+		}
+		response, err := http.Post(observer.endpoint(), "application/json", bytes.NewReader(encoded))
+		if err != nil {
+			t.Fatalf("post scanner aggregate: %v", err)
+		}
+		defer response.Body.Close()
+		return response.StatusCode
+	}
+	if status := post(wanted); status != http.StatusNoContent {
+		t.Fatalf("scanner aggregate status = %d, want %d", status, http.StatusNoContent)
+	}
+	mismatched := wanted
+	mismatched.ProfileID = "other-profile"
+	if status := post(mismatched); status != http.StatusNoContent {
+		t.Fatalf("mismatched scanner aggregate status = %d, want %d", status, http.StatusNoContent)
+	}
+	if status := post(map[string]any{
+		"source_id": wanted.SourceID, "checkout_id": wanted.CheckoutID, "profile_id": wanted.ProfileID, "observed_fs_seq": wanted.ObservedFSSeq,
+		"scan_started_at": wanted.ScanStartedAt, "scan_completed_at": wanted.ScanCompletedAt,
+		"root_path": `C:\\sensitive\\candidate`, "body": "secret-body-do-not-record",
+	}); status != http.StatusBadRequest {
+		t.Fatalf("unallowlisted scanner payload status = %d, want %d", status, http.StatusBadRequest)
+	}
+	after := acceptance.UCIWatcherSLOView{Context: uci.ContextRef{SourceID: wanted.SourceID, CheckoutID: wanted.CheckoutID, AnalysisProfileID: wanted.ProfileID, ViewID: "after", Generation: 2}, AcceptedFSSeq: wanted.ObservedFSSeq}
+	if err := uciWatcherSLOFinalizeAttempt(journal, &attempt, trace, "", nil, uciWatcherSLOStageEmbedding{}, acceptance.UCIWatcherSLOBatch{ID: attempt.ID, Outcome: "healthy", AAfter: after}); err != nil {
+		t.Fatalf("finalize scanner aggregate attempt: %v", err)
+	}
+	if err := journal.close(); err != nil {
+		t.Fatalf("close scanner aggregate journal: %v", err)
+	}
+	raw, err := os.ReadFile(journalPath + ".attempts.jsonl")
+	if err != nil {
+		t.Fatalf("read scanner aggregate journal: %v", err)
+	}
+	var record uciWatcherSLOStageJournalRecord
+	if err := json.Unmarshal(raw, &record); err != nil {
+		t.Fatalf("decode scanner aggregate journal: %v", err)
+	}
+	if record.Record != "attempt_end" || record.Attempt == nil {
+		t.Fatalf("scanner aggregate attempt record = %#v", record)
+	}
+	joined := 0
+	for _, event := range record.Attempt.Events {
+		if event.Name != "prepared_scanner_phase_aggregate" {
+			continue
+		}
+		joined++
+		if event.ScannerAggregate == nil || event.ScannerAggregate.SourceDigest != uciInstalledAcceptanceStringDigest(wanted.SourceID) || event.ScannerAggregate.CheckoutDigest != uciInstalledAcceptanceStringDigest(wanted.CheckoutID) || event.ScannerAggregate.ProfileDigest != uciInstalledAcceptanceStringDigest(wanted.ProfileID) || event.ScannerAggregate.ObservedFSSeq != wanted.ObservedFSSeq || !event.ScannerAggregate.ScanStartedAt.Equal(wanted.ScanStartedAt) || !event.ScannerAggregate.ScanCompletedAt.Equal(wanted.ScanCompletedAt) || event.ScannerAggregate.ScanTotalDurationNS != wanted.ScanTotalDurationNS || event.ScannerAggregate.BytesRead != wanted.BytesRead {
+			t.Fatalf("joined scanner aggregate = %#v", event.ScannerAggregate)
+		}
+	}
+	if joined != 1 {
+		t.Fatalf("joined scanner aggregate events = %d, want 1", joined)
+	}
+	for _, forbidden := range []string{"source-id", "checkout-id", "profile-id", `C:\\sensitive\\candidate`, "secret-body-do-not-record"} {
+		if strings.Contains(string(raw), forbidden) {
+			t.Fatalf("scanner aggregate journal retained %q: %s", forbidden, raw)
+		}
 	}
 }
 
