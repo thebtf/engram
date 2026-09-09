@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -39,6 +40,16 @@ func TestWatcherSLOAccountingRejectsUnobservedOrMisoriginatedEvidence(t *testing
 			t.Fatal("stalled watcher was accepted as healthy")
 		}
 	})
+
+	t.Run("unmeasured installed stage cannot borrow its origin", func(t *testing.T) {
+		batch, candidate, environment, profile := validWatcherSLOBatchForTest()
+		batch.EmbeddingReadiness = UCIWatcherSLOTiming{Origin: UCIWatcherSLOOriginInstalledEmbeddingStatus}
+
+		_, err := validateWatcherSLOBatch(batch, candidate, environment, profile)
+		if err == nil || !strings.Contains(err.Error(), "embedding-readiness timing") {
+			t.Fatalf("validate borrowed unmeasured embedding timing = %v, want origin rejection", err)
+		}
+	})
 }
 
 func TestUCIWatcherSLOEncoderRetainsMeasuredOrigins(t *testing.T) {
@@ -75,6 +86,26 @@ func TestUCIWatcherSLOEncoderRetainsMeasuredOrigins(t *testing.T) {
 	if !reflect.DeepEqual(got.Scan, batch.Scan) || !reflect.DeepEqual(got.LocalACK, batch.LocalACK) {
 		t.Fatalf("decoded watcher evidence invented an unknown timing: scan=%#v local_ack=%#v", got.Scan, got.LocalACK)
 	}
+	if strings.Contains(string(encoded), "0001-01-01") {
+		t.Fatalf("encoded watcher evidence invented zero timestamps: %s", encoded)
+	}
+	failed := batch
+	failed.ID = "watcher-unknown-embedding-stage"
+	failed.Outcome = "failed"
+	failed.Reason = "embedding_terminal_failure"
+	failed.EmbeddingReadiness = UCIWatcherSLOTiming{Origin: UCIWatcherSLOOriginUnknownNotMeasured}
+	input.Batches = []UCIWatcherSLOBatch{failed}
+	encoded, err = EncodeUCIWatcherSLOInput(input)
+	if err != nil {
+		t.Fatalf("encode unknown watcher stage: %v", err)
+	}
+	decoded, err = decodeUCIWatcherSLOInput(encoded)
+	if err != nil {
+		t.Fatalf("decode unknown watcher stage: %v", err)
+	}
+	if !reflect.DeepEqual(decoded.Batches[0].EmbeddingReadiness, failed.EmbeddingReadiness) {
+		t.Fatalf("decoded watcher evidence invented an embedding timing: %#v", decoded.Batches[0].EmbeddingReadiness)
+	}
 }
 
 func TestUCIWatcherSLODecoderRejectsComponentPublicationSchema(t *testing.T) {
@@ -84,6 +115,66 @@ func TestUCIWatcherSLODecoderRejectsComponentPublicationSchema(t *testing.T) {
 	}
 	if _, err := CalculateUCIWatcherSLOReport(input); err == nil || !strings.Contains(err.Error(), "unsupported schema") {
 		t.Fatalf("account component publication record = %v, want SLO schema rejection", err)
+	}
+}
+
+func TestUCIWatcherSLODecoderRejectsUnknownWireField(t *testing.T) {
+	if _, err := decodeUCIWatcherSLOInput([]byte(`{"schema_version":"engram.uci-watcher-slo/v2","untrusted":true}`)); err == nil {
+		t.Fatal("decoder accepted an unknown watcher evidence field")
+	}
+}
+
+func TestUCIWatcherSLOMixedOutcomeAccountingRetainsEveryAttempt(t *testing.T) {
+	batch, candidate, environment, profile := validWatcherSLOBatchForTest()
+	failed := batch
+	failed.ID = "watcher-cold-failed"
+	failed.Warmth = "cold"
+	failed.Outcome = "failed"
+	failed.Reason = "embedding_terminal_failure"
+	failed.EmbeddingReadiness = UCIWatcherSLOTiming{Origin: UCIWatcherSLOOriginUnknownNotMeasured}
+	unavailable := batch
+	unavailable.ID = "watcher-warm-unavailable"
+	unavailable.Outcome = "unavailable"
+	unavailable.Reason = "watcher_unavailable"
+	unavailable.ScanOutcome = uci.IndexScanIncomplete
+	unavailable.ResultStatus = "unavailable"
+	unavailable.Coverage = "unavailable"
+	unavailable.StructuralFTS = UCIWatcherSLOTiming{Origin: UCIWatcherSLOOriginUnknownNotMeasured}
+	unavailable.EmbeddingReadiness = UCIWatcherSLOTiming{Origin: UCIWatcherSLOOriginUnknownNotMeasured}
+	unavailable.EmbeddingCounters = UCIWatcherSLOEmbeddingCounters{Origin: UCIWatcherSLOOriginUnknownNotMeasured}
+	unavailable.AAfter = unavailable.ABefore
+	batches := []UCIWatcherSLOBatch{failed, unavailable}
+	for index := range uciWatcherSLOMinimumHealthyWarm {
+		healthy := batch
+		healthy.ID = fmt.Sprintf("watcher-warm-healthy-%03d", index)
+		batches = append(batches, healthy)
+	}
+	input := UCIWatcherSLOInput{
+		SchemaVersion: UCIWatcherSLOSchemaVersion,
+		Candidate:     candidate,
+		Environment:   environment,
+		Profile:       profile,
+		Batches:       batches,
+		UnchangedInputCounters: []UCIWatcherSLOUnchangedInputCounter{{
+			Identity:                  batch.Identity,
+			Context:                   batch.AAfter.Context,
+			InputDigest:               string(batch.AAfter.ManifestDigest),
+			Unchanged:                 true,
+			EmbeddingCountersOrigin:   UCIWatcherSLOOriginInstalledEmbeddingStatus,
+			EmbeddingCountersMeasured: true,
+			EmbeddingCountersBefore:   2,
+			EmbeddingCountersAfter:    2,
+		}},
+	}
+	report, err := CalculateUCIWatcherSLOReport(input)
+	if err != nil {
+		t.Fatalf("account mixed watcher attempts: %v", err)
+	}
+	if report.RetainedBatchCount != 102 || report.HealthyWarmBatchCount != 100 || report.EmbeddingHealthyWarmBatchCount != 100 || report.ColdBatchCount != 1 || report.UnavailableBatchCount != 1 || report.FailedBatchCount != 1 {
+		t.Fatalf("mixed watcher accounting = %#v", report)
+	}
+	if report.StructuralFTSP95 != batch.StructuralFTS.Latency || report.EmbeddingReadinessP95 != batch.EmbeddingReadiness.Latency {
+		t.Fatalf("mixed watcher percentile included a non-healthy attempt: %#v", report)
 	}
 }
 

@@ -549,14 +549,14 @@ func validWatcherSLOReason(reason string) bool {
 }
 
 func validateWatcherSLOTiming(timing UCIWatcherSLOTiming, expectedOrigin UCIWatcherSLOOrigin, required bool) error {
-	if timing.Origin != expectedOrigin {
-		return fmt.Errorf("origin = %q, want %q", timing.Origin, expectedOrigin)
-	}
 	if !timing.Measured {
-		if required || expectedOrigin != UCIWatcherSLOOriginUnknownNotMeasured || !timing.StartedAt.IsZero() || !timing.CompletedAt.IsZero() || timing.Latency != 0 {
+		if required || timing.Origin != UCIWatcherSLOOriginUnknownNotMeasured || !timing.StartedAt.IsZero() || !timing.CompletedAt.IsZero() || timing.Latency != 0 {
 			return fmt.Errorf("unmeasured timing carries values or an unmeasurable origin")
 		}
 		return nil
+	}
+	if timing.Origin != expectedOrigin {
+		return fmt.Errorf("origin = %q, want %q", timing.Origin, expectedOrigin)
 	}
 	if expectedOrigin == UCIWatcherSLOOriginUnknownNotMeasured || timing.StartedAt.IsZero() || timing.CompletedAt.IsZero() || timing.CompletedAt.Before(timing.StartedAt) || timing.Latency < 0 || timing.Latency != timing.CompletedAt.Sub(timing.StartedAt) {
 		return fmt.Errorf("timing is not an actual non-negative timestamp interval")
@@ -569,14 +569,14 @@ func watcherSLOTimingFollows(next, previous UCIWatcherSLOTiming) bool {
 }
 
 func validateWatcherSLOEmbeddingCounters(counters UCIWatcherSLOEmbeddingCounters, required bool) error {
-	if counters.Origin != UCIWatcherSLOOriginInstalledEmbeddingStatus {
-		return fmt.Errorf("origin = %q, want %q", counters.Origin, UCIWatcherSLOOriginInstalledEmbeddingStatus)
-	}
 	if !counters.Measured {
-		if required || counters.Before != 0 || counters.After != 0 {
-			return fmt.Errorf("unmeasured counter carries values")
+		if required || counters.Origin != UCIWatcherSLOOriginUnknownNotMeasured || counters.Before != 0 || counters.After != 0 {
+			return fmt.Errorf("unmeasured counter carries values or an unmeasurable origin")
 		}
 		return nil
+	}
+	if counters.Origin != UCIWatcherSLOOriginInstalledEmbeddingStatus {
+		return fmt.Errorf("origin = %q, want %q", counters.Origin, UCIWatcherSLOOriginInstalledEmbeddingStatus)
 	}
 	if counters.Before < 0 || counters.After < counters.Before {
 		return fmt.Errorf("counter bounds are invalid")
@@ -846,10 +846,10 @@ type uciWatcherSLOBatchWire struct {
 	Outcome              string                         `json:"outcome"`
 	Reason               string                         `json:"reason"`
 	Warmth               string                         `json:"warmth"`
-	Scan                 UCIWatcherSLOTiming            `json:"scan"`
-	StructuralFTS        UCIWatcherSLOTiming            `json:"structural_fts"`
-	EmbeddingReadiness   UCIWatcherSLOTiming            `json:"embedding_readiness"`
-	LocalACK             UCIWatcherSLOTiming            `json:"local_ack"`
+	Scan                 uciWatcherSLOTimingWire        `json:"scan"`
+	StructuralFTS        uciWatcherSLOTimingWire        `json:"structural_fts"`
+	EmbeddingReadiness   uciWatcherSLOTimingWire        `json:"embedding_readiness"`
+	LocalACK             uciWatcherSLOTimingWire        `json:"local_ack"`
 	EmbeddingCounters    UCIWatcherSLOEmbeddingCounters `json:"embedding_counters"`
 	ReembeddedCandidates int                            `json:"reembedded_candidates"`
 	ABefore              uciWatcherSLOViewWire          `json:"a_before"`
@@ -872,6 +872,14 @@ type uciWatcherSLOUnchangedCounterWire struct {
 	EmbeddingCountersBefore   int64                     `json:"embedding_counters_before"`
 	EmbeddingCountersAfter    int64                     `json:"embedding_counters_after"`
 	ReembeddedCandidates      int                       `json:"reembedded_candidates"`
+}
+
+type uciWatcherSLOTimingWire struct {
+	Origin      UCIWatcherSLOOrigin `json:"origin"`
+	Measured    bool                `json:"measured"`
+	StartedAt   *time.Time          `json:"started_at,omitempty"`
+	CompletedAt *time.Time          `json:"completed_at,omitempty"`
+	Latency     time.Duration       `json:"latency"`
 }
 
 // EncodeUCIWatcherSLOInput validates and encodes strict externally recorded
@@ -914,8 +922,8 @@ func watcherSLOInputWireFor(input UCIWatcherSLOInput) uciWatcherSLOInputWire {
 			ID: batch.ID, Identity: watcherSLOIdentityWireFor(batch.Identity), ProfileID: batch.ProfileID,
 			ObservedFSSeq: batch.ObservedFSSeq, ChangedFileCount: batch.ChangedFileCount, ChangedBytes: batch.ChangedBytes,
 			ScanOutcome: batch.ScanOutcome, ResultStatus: batch.ResultStatus, Coverage: batch.Coverage, Outcome: batch.Outcome,
-			Reason: batch.Reason, Warmth: batch.Warmth, Scan: batch.Scan, StructuralFTS: batch.StructuralFTS,
-			EmbeddingReadiness: batch.EmbeddingReadiness, LocalACK: batch.LocalACK, EmbeddingCounters: batch.EmbeddingCounters,
+			Reason: batch.Reason, Warmth: batch.Warmth, Scan: watcherSLOTimingWireFor(batch.Scan), StructuralFTS: watcherSLOTimingWireFor(batch.StructuralFTS),
+			EmbeddingReadiness: watcherSLOTimingWireFor(batch.EmbeddingReadiness), LocalACK: watcherSLOTimingWireFor(batch.LocalACK), EmbeddingCounters: batch.EmbeddingCounters,
 			ReembeddedCandidates: batch.ReembeddedCandidates, ABefore: watcherSLOViewWireFor(batch.ABefore), AAfter: watcherSLOViewWireFor(batch.AAfter),
 			BBefore: watcherSLOViewWireFor(batch.BBefore), BAfter: watcherSLOViewWireFor(batch.BAfter),
 			ABeforeOrigin: batch.ABeforeOrigin, AAfterOrigin: batch.AAfterOrigin, BBeforeOrigin: batch.BBeforeOrigin, BAfterOrigin: batch.BAfterOrigin,
@@ -954,6 +962,19 @@ func watcherSLOArtifactWires(artifacts []uci.UCISLOArtifactDigest) []uciWatcherS
 
 func watcherSLOContextWireFor(context uci.ContextRef) uciWatcherSLOContextWire {
 	return uciWatcherSLOContextWire{SpaceID: context.SpaceID, SourceID: context.SourceID, CheckoutID: context.CheckoutID, ViewID: context.ViewID, AnalysisProfileID: context.AnalysisProfileID, Generation: context.Generation}
+}
+
+func watcherSLOTimingWireFor(timing UCIWatcherSLOTiming) uciWatcherSLOTimingWire {
+	wire := uciWatcherSLOTimingWire{Origin: timing.Origin, Measured: timing.Measured, Latency: timing.Latency}
+	if !timing.StartedAt.IsZero() {
+		startedAt := timing.StartedAt
+		wire.StartedAt = &startedAt
+	}
+	if !timing.CompletedAt.IsZero() {
+		completedAt := timing.CompletedAt
+		wire.CompletedAt = &completedAt
+	}
+	return wire
 }
 
 func watcherSLOViewWireFor(view UCIWatcherSLOView) uciWatcherSLOViewWire {
@@ -1057,6 +1078,17 @@ func (wire uciWatcherSLOViewWire) view() UCIWatcherSLOView {
 	}
 }
 
+func (wire uciWatcherSLOTimingWire) timing() UCIWatcherSLOTiming {
+	timing := UCIWatcherSLOTiming{Origin: wire.Origin, Measured: wire.Measured, Latency: wire.Latency}
+	if wire.StartedAt != nil {
+		timing.StartedAt = wire.StartedAt.UTC()
+	}
+	if wire.CompletedAt != nil {
+		timing.CompletedAt = wire.CompletedAt.UTC()
+	}
+	return timing
+}
+
 func (wire uciWatcherSLOBatchWire) batch() UCIWatcherSLOBatch {
 	return UCIWatcherSLOBatch{
 		ID:                   wire.ID,
@@ -1071,10 +1103,10 @@ func (wire uciWatcherSLOBatchWire) batch() UCIWatcherSLOBatch {
 		Outcome:              wire.Outcome,
 		Reason:               wire.Reason,
 		Warmth:               wire.Warmth,
-		Scan:                 wire.Scan,
-		StructuralFTS:        wire.StructuralFTS,
-		EmbeddingReadiness:   wire.EmbeddingReadiness,
-		LocalACK:             wire.LocalACK,
+		Scan:                 wire.Scan.timing(),
+		StructuralFTS:        wire.StructuralFTS.timing(),
+		EmbeddingReadiness:   wire.EmbeddingReadiness.timing(),
+		LocalACK:             wire.LocalACK.timing(),
 		EmbeddingCounters:    wire.EmbeddingCounters,
 		ReembeddedCandidates: wire.ReembeddedCandidates,
 		ABefore:              wire.ABefore.view(),

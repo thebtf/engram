@@ -21,12 +21,16 @@ import (
 )
 
 const (
-	uciWatcherSLORecordEnabledEnv     = "ENGRAM_UCI_WATCHER_SLO_RECORD_ENABLED"
-	uciWatcherSLORecordDatabaseDSNEnv = "ENGRAM_UCI_WATCHER_SLO_DATABASE_DSN"
-	uciWatcherSLORecordPathEnv        = "ENGRAM_UCI_WATCHER_SLO_RECORD_PATH"
-	uciWatcherSLORecordTimeout        = 20 * time.Minute
-	uciWatcherSLORecordCommand        = "go test ./cmd/engram -run '^TestUCIRecordInstalledWatcherSLO$' -count=1 -v -timeout=25m"
+	uciWatcherSLORecordEnabledEnv          = "ENGRAM_UCI_WATCHER_SLO_RECORD_ENABLED"
+	uciWatcherSLORecordDatabaseDSNEnv      = "ENGRAM_UCI_WATCHER_SLO_DATABASE_DSN"
+	uciWatcherSLORecordPathEnv             = "ENGRAM_UCI_WATCHER_SLO_RECORD_PATH"
+	uciWatcherSLORecordTimeout             = 20 * time.Minute
+	uciWatcherSLORecordCommand             = "go test ./cmd/engram -run '^TestUCIRecordInstalledWatcherSLO$' -count=1 -v -timeout=25m"
+	uciWatcherSLORecordRequiredWarmBatches = 100
+	uciWatcherSLORecordMaximumAttempts     = 150
 )
+
+var errUCIWatcherSLOEmbeddingTerminal = errors.New("installed embedding worker reported a terminal failure")
 
 // TestUCIRecordInstalledWatcherSLO is the caller-owned, opt-in installed
 // recorder command. It builds the exact candidate, saves only a disposable A
@@ -144,12 +148,13 @@ func uciRecordInstalledWatcherSLO(ctx context.Context, live uciInstalledAcceptan
 		return acceptance.UCIWatcherSLOInput{}, errors.New("installed watcher recorder has no A/B baseline")
 	}
 
-	batches := make([]acceptance.UCIWatcherSLOBatch, 0, 101)
+	batches := make([]acceptance.UCIWatcherSLOBatch, 0, uciWatcherSLORecordMaximumAttempts)
 	previousSource, err := os.ReadFile(filepath.Join(live.Worktrees.primaryRoot, filepath.FromSlash(live.Request.Fixture.RelativePath)))
 	if err != nil {
 		return acceptance.UCIWatcherSLOInput{}, fmt.Errorf("read installed watcher A baseline: %w", err)
 	}
-	for sequence := 1; len(batches) < 101; sequence++ {
+	healthyWarmBatches := 0
+	for sequence := 1; sequence <= uciWatcherSLORecordMaximumAttempts && healthyWarmBatches < uciWatcherSLORecordRequiredWarmBatches; sequence++ {
 		warmth := "warm"
 		if sequence == 1 {
 			warmth = "cold"
@@ -163,9 +168,15 @@ func uciRecordInstalledWatcherSLO(ctx context.Context, live uciInstalledAcceptan
 			return acceptance.UCIWatcherSLOInput{}, errors.New("normal client status changed after watcher evidence was observed")
 		}
 		batches = append(batches, batch)
+		if batch.Warmth == "warm" && batch.Outcome == "healthy" {
+			healthyWarmBatches++
+		}
 		previousSource = nextSource
 		beforeA = afterA
 		selectionA.runID = afterA.runID
+	}
+	if healthyWarmBatches < uciWatcherSLORecordRequiredWarmBatches {
+		return acceptance.UCIWatcherSLOInput{}, fmt.Errorf("installed watcher recorder reached %d attempts with %d healthy warm samples, want %d", len(batches), healthyWarmBatches, uciWatcherSLORecordRequiredWarmBatches)
 	}
 
 	finalA := batches[len(batches)-1].AAfter
@@ -218,9 +229,18 @@ func uciRecordInstalledWatcherSLOBatch(ctx context.Context, live uciInstalledAcc
 		return acceptance.UCIWatcherSLOBatch{}, nil, err
 	}
 	selectionA.runID = publication.runID
-	embedding, embeddedPublication, embeddingCompleted, err := uciWatcherSLOAwaitEmbeddingReady(ctx, live.Authority, live.ClientA, selectionA, publication)
-	if err != nil {
-		return acceptance.UCIWatcherSLOBatch{}, nil, err
+	embedding, embeddedPublication, embeddingCompleted, embeddingErr := uciWatcherSLOAwaitEmbeddingReady(ctx, live.Authority, live.ClientA, selectionA, publication)
+	terminalEmbeddingFailure := false
+	if embeddingErr != nil {
+		if !errors.Is(embeddingErr, errUCIWatcherSLOEmbeddingTerminal) {
+			return acceptance.UCIWatcherSLOBatch{}, nil, embeddingErr
+		}
+		terminalEmbeddingFailure = true
+		embeddedPublication = publication
+	}
+	embeddingTiming := acceptance.UCIWatcherSLOTiming{Origin: acceptance.UCIWatcherSLOOriginUnknownNotMeasured}
+	if !terminalEmbeddingFailure {
+		embeddingTiming = uciWatcherSLOInstalledTiming(acceptance.UCIWatcherSLOOriginInstalledEmbeddingStatus, started, embeddingCompleted)
 	}
 	aAfter, afterEmbedding, err := uciWatcherSLOCurrentView(ctx, live.Authority, live.ClientA, selectionA, embeddedPublication)
 	if err != nil {
@@ -233,14 +253,22 @@ func uciRecordInstalledWatcherSLOBatch(ctx context.Context, live uciInstalledAcc
 	if !uciWatcherSLOViewsEqual(bBefore, bAfter) {
 		return acceptance.UCIWatcherSLOBatch{}, nil, errors.New("installed watcher changed B while only A was saved")
 	}
-	if afterEmbedding.Embedding.ReadyCandidates != embedding.Embedding.ReadyCandidates || beforeEmbedding.Embedding.ReadyCandidates > afterEmbedding.Embedding.ReadyCandidates {
-		return acceptance.UCIWatcherSLOBatch{}, nil, errors.New("installed watcher embedding counter observation is inconsistent")
-	}
 	coverage := "unknown"
 	if response.Coverage != nil {
 		coverage = string(response.Coverage.Structural)
 	}
-	outcome, reason := uciWatcherSLOClassifyOutcome(response.Status, coverage, embedding.Embedding.Coverage)
+	outcome, reason := "", ""
+	if terminalEmbeddingFailure {
+		if afterEmbedding.Embedding.ErrorCode == nil && afterEmbedding.Embedding.Coverage != "failed" {
+			return acceptance.UCIWatcherSLOBatch{}, nil, errors.New("installed embedding terminal status did not remain observable")
+		}
+		outcome, reason = "failed", "embedding_terminal_failure"
+	} else {
+		if afterEmbedding.Embedding.ReadyCandidates != embedding.Embedding.ReadyCandidates || beforeEmbedding.Embedding.ReadyCandidates > afterEmbedding.Embedding.ReadyCandidates {
+			return acceptance.UCIWatcherSLOBatch{}, nil, errors.New("installed watcher embedding counter observation is inconsistent")
+		}
+		outcome, reason = uciWatcherSLOClassifyOutcome(response.Status, coverage, embedding.Embedding.Coverage)
+	}
 
 	return acceptance.UCIWatcherSLOBatch{
 		ID:                   fmt.Sprintf("installed-watcher-%s-%03d", warmth, sequence),
@@ -256,7 +284,7 @@ func uciRecordInstalledWatcherSLOBatch(ctx context.Context, live uciInstalledAcc
 		Warmth:               warmth,
 		Scan:                 acceptance.UCIWatcherSLOTiming{Origin: acceptance.UCIWatcherSLOOriginUnknownNotMeasured},
 		StructuralFTS:        uciWatcherSLOInstalledTiming(acceptance.UCIWatcherSLOOriginInstalledClientSearch, started, structuralCompleted),
-		EmbeddingReadiness:   uciWatcherSLOInstalledTiming(acceptance.UCIWatcherSLOOriginInstalledEmbeddingStatus, started, embeddingCompleted),
+		EmbeddingReadiness:   embeddingTiming,
 		LocalACK:             acceptance.UCIWatcherSLOTiming{Origin: acceptance.UCIWatcherSLOOriginUnknownNotMeasured},
 		EmbeddingCounters:    acceptance.UCIWatcherSLOEmbeddingCounters{Origin: acceptance.UCIWatcherSLOOriginInstalledEmbeddingStatus, Measured: true, Before: int64(beforeEmbedding.Embedding.ReadyCandidates), After: int64(afterEmbedding.Embedding.ReadyCandidates)},
 		ReembeddedCandidates: int(afterEmbedding.Embedding.ReadyCandidates - beforeEmbedding.Embedding.ReadyCandidates),
@@ -310,7 +338,7 @@ func uciWatcherSLOAwaitEmbeddingReady(ctx context.Context, authority *uciInstall
 			return uciRealCorpusEmbeddingStatus{}, uciInstalledAcceptancePublication{}, time.Time{}, err
 		}
 		if status.Embedding.ErrorCode != nil || status.Embedding.Coverage == "failed" {
-			return status, uciInstalledAcceptancePublication{}, time.Time{}, errors.New("installed embedding worker reported a terminal failure")
+			return status, uciInstalledAcceptancePublication{}, time.Time{}, errUCIWatcherSLOEmbeddingTerminal
 		}
 		if uciWatcherSLOEmbeddingReady(status) {
 			return status, uciInstalledAcceptancePublication{sourceID: view.Context.SourceID, checkoutID: view.Context.CheckoutID, viewID: view.Context.ViewID, profileID: view.Context.AnalysisProfileID, generation: view.Context.Generation, runID: expected.runID, freshnessState: "observed_current"}, time.Now().UTC(), nil
