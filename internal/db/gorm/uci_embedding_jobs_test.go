@@ -299,8 +299,22 @@ func TestUCIEmbeddingReusesUnchangedChunksAcrossFileVersions(t *testing.T) {
 	require.Len(t, legacyBatch.MissingInputIndexes, 5)
 	uciEmbeddingJobsCommitBatch(t, fixture, legacyClaim, legacyAuthorized, legacyBatch, 1)
 
-	v2Initial := fixture.publishAdmitted(t, v2Publisher, "chunk-v2-initial", &legacyView.Context, ucidomain.IndexJobReconcile, initialParts)
-	v2InitialJob := uciEmbeddingJobsOnlyJobForView(t, fixture.publication, v2Initial.Context.ViewID)
+	next, exhausted, err := fixture.store.EnsureCurrentEmbeddingJobs(ctx, v2Profile, "", 16)
+	require.NoError(t, err)
+	require.True(t, exhausted)
+	require.Equal(t, fixture.publication.checkout.CheckoutID, next)
+	v2Initial := legacyView
+	v2InitialJobs := uciEmbeddingJobsJobsForView(t, fixture.publication, v2Initial.Context.ViewID)
+	require.Len(t, v2InitialJobs, 2)
+	var v2InitialJob UCIJob
+	for _, job := range v2InitialJobs {
+		if job.EmbeddingProfileID != nil && *job.EmbeddingProfileID != legacyClaim.Ref.EmbeddingProfileID {
+			v2InitialJob = job
+			break
+		}
+	}
+	require.NotEmpty(t, v2InitialJob.JobID)
+	require.Equal(t, UCIJobQueued, v2InitialJob.State)
 	require.NotNil(t, v2InitialJob.EmbeddingProfileID)
 	require.NotEqual(t, legacyClaim.Ref.EmbeddingProfileID, *v2InitialJob.EmbeddingProfileID, "the preprocessing revision must create an isolated profile")
 
@@ -362,7 +376,7 @@ func TestUCIEmbeddingReusesUnchangedChunksAcrossFileVersions(t *testing.T) {
 	changedGo := uciIndexAdmissionFixtureFrame(t, fixture.publication, "pkg/fixture.go", uciEmbeddingJobsVersionedGoSource("UCIWatcherSLO002"))
 	changedGoPart, err := fixture.store.AdmitIndexFrame(ctx, fixture.publication.source.SourceID, fixture.publication.profile.ProfileID, changedGo)
 	require.NoError(t, err)
-	v2Next := fixture.publishAdmitted(t, v2Publisher, "chunk-v2-next", &v2Initial.Context, ucidomain.IndexJobReconcile, []ucidomain.IndexPart{changedGoPart, initialParts[1]})
+	v2Next := fixture.publishAdmitted(t, v2Publisher, "chunk-v2-next", &legacyView.Context, ucidomain.IndexJobReconcile, []ucidomain.IndexPart{changedGoPart, initialParts[1]})
 	v2NextAuthorized := uciEmbeddingJobsAuthorize(t, fixture.publication, v2Next.Context)
 	v2NextClaim, claimed, err := fixture.store.ClaimEmbeddingJob(ctx, v2Profile, "embedding-chunk-v2-next-worker-"+fixture.publication.token, time.Minute)
 	require.NoError(t, err)
@@ -786,15 +800,25 @@ func uciEmbeddingJobsVector(marker float32) []float32 {
 
 func (fixture *uciEmbeddingJobsFixture) publishAdmitted(t *testing.T, publisher ucidomain.IndexStore, key string, parent *ucidomain.ContextRef, kind ucidomain.IndexJobKind, parts []ucidomain.IndexPart) ucidomain.IndexPublishedView {
 	t.Helper()
+	staged := append([]ucidomain.IndexPart(nil), parts...)
 	memberships := make([]ucidomain.IndexMembership, 0)
 	replacements := make([]ucidomain.IndexEdgeReplacement, 0)
-	for _, part := range parts {
-		memberships = append(memberships, part.Memberships...)
-		for _, membership := range part.Memberships {
-			replacements = append(replacements, ucidomain.IndexEdgeReplacement{SourcePath: membership.PathKey})
+	for index := range staged {
+		part := &staged[index]
+		part.EdgeReplacements = append([]ucidomain.IndexEdgeReplacement(nil), part.EdgeReplacements...)
+		replacementPaths := make(map[string]struct{}, len(part.EdgeReplacements))
+		for _, replacement := range part.EdgeReplacements {
+			replacementPaths[replacement.SourcePath] = struct{}{}
 		}
+		for _, membership := range part.Memberships {
+			if _, exists := replacementPaths[membership.PathKey]; !exists {
+				part.EdgeReplacements = append(part.EdgeReplacements, ucidomain.IndexEdgeReplacement{SourcePath: membership.PathKey})
+			}
+		}
+		memberships = append(memberships, part.Memberships...)
+		replacements = append(replacements, part.EdgeReplacements...)
 	}
-	draft := newUCIPublicationDraft(parts, memberships, replacements)
+	draft := newUCIPublicationDraft(staged, memberships, replacements)
 	_, published := fixture.publication.publish(t, publisher, fixture.publication.caller("embedding-"+key), key, fixture.publication.checkout, fixture.publication.profile.ProfileID, parent, ucidomain.IndexManifestFull, kind, draft)
 	return published
 }
