@@ -176,7 +176,8 @@ func TestUCIRetrievalSlice(t *testing.T) {
 		t.Fatalf("published View status = %#v, want one explicit unsupported/excluded admission state", status)
 	}
 
-	fixture.embedEveryCurrentCandidate(t, authorized)
+	fixture.requireLexicalDegradationForNilAndStaleProfiles(t, authorized)
+	fixture.completeCurrentViewEmbedding(t, authorized)
 	semantic, err := fixture.application.SearchCodebase(fixture.callerContext, authorized, mcp.CodebaseSearchInput{
 		Query: uciRetrievalSliceSemanticQuery,
 		Limit: 10,
@@ -297,36 +298,20 @@ func newUCIRetrievalSliceFixture(t *testing.T) *uciRetrievalSliceFixture {
 	projection := gormstore.NewUCIProjectionStore(store.GetDB())
 	authorizer := gormstore.NewUCIContextAuthorizer(contextStore)
 	resolver := uci.NewContextResolver(contextStore, authorizer, contextStore)
-	contextApplication, err := mcp.NewUCIContextApplication(resolver, contextStore)
-	if err != nil {
-		t.Fatalf("compose UCI context application: %v", err)
-	}
 	vectorProfile := uci.VectorProfile{
-		ProviderRef:           provider.server.URL,
+		ProviderRef:           uciRetrievalSliceDigest(provider.server.URL),
 		Model:                 embedder.Model(),
 		Dimension:             embedding.EmbeddingDim,
-		PreprocessingRevision: "uci-retrieval-slice-semantic-v1",
+		PreprocessingRevision: "uci-semantic-preprocess/chunk-v2",
 		IncludeRelativePath:   true,
 	}
 	queryService := uci.NewQueryService(projection)
 	semanticService := uci.NewSemanticService(vectorProfile, embedder, projection, projection)
-	application, err := worker.NewUCIApplication(
-		contextApplication,
-		uci.NewAliasResolver(contextStore.LookupLegacyAliasRecords),
-		queryService,
-		semanticService,
-		uci.NewGraphService(projection),
-		uci.NewVersionedReadService(projection),
-		uci.NewIndexStatusService(projection, nil),
-	)
-	if err != nil {
-		t.Fatalf("compose UCI retrieval application: %v", err)
-	}
 
 	clientSessionID := "uci-retrieval-slice-session-" + token
 	identity := auth.ClientWithPrincipal("read-write", workstationID, principal, auth.PrincipalKindAgent)
 	callerContext := auth.WithIdentity(mcp.ContextWithSession(ctx, clientSessionID), identity)
-	return &uciRetrievalSliceFixture{
+	fixture := &uciRetrievalSliceFixture{
 		store:              store,
 		contextStore:       contextStore,
 		projection:         projection,
@@ -334,8 +319,6 @@ func newUCIRetrievalSliceFixture(t *testing.T) *uciRetrievalSliceFixture {
 		resolver:           resolver,
 		queryService:       queryService,
 		semanticService:    semanticService,
-		application:        application,
-		status:             uci.NewIndexStatusService(projection, nil),
 		provider:           provider,
 		providerURL:        provider.server.URL,
 		providerCredential: uciRetrievalSliceProviderKey,
@@ -356,6 +339,30 @@ func newUCIRetrievalSliceFixture(t *testing.T) *uciRetrievalSliceFixture {
 		token:           token,
 		outOfViewPath:   uciRetrievalSliceOutOfViewPath,
 	}
+	fixture.application = fixture.applicationWithStatusProfile(t, &fixture.vectorProfile)
+	fixture.status = uci.NewIndexStatusService(projection, &fixture.vectorProfile)
+	return fixture
+}
+
+func (fixture *uciRetrievalSliceFixture) applicationWithStatusProfile(t *testing.T, profile *uci.VectorProfile) *worker.UCIApplication {
+	t.Helper()
+	contextApplication, err := mcp.NewUCIContextApplication(fixture.resolver, fixture.contextStore)
+	if err != nil {
+		t.Fatalf("compose UCI retrieval context application: %v", err)
+	}
+	application, err := worker.NewUCIApplication(
+		contextApplication,
+		uci.NewAliasResolver(fixture.contextStore.LookupLegacyAliasRecords),
+		fixture.queryService,
+		fixture.semanticService,
+		uci.NewGraphService(fixture.projection),
+		uci.NewVersionedReadService(fixture.projection),
+		uci.NewIndexStatusService(fixture.projection, profile),
+	)
+	if err != nil {
+		t.Fatalf("compose UCI retrieval application: %v", err)
+	}
+	return application
 }
 
 func (fixture *uciRetrievalSliceFixture) publishOneView(t *testing.T) uci.IndexPublishedView {
@@ -628,36 +635,95 @@ func (fixture *uciRetrievalSliceFixture) query(t *testing.T, authorized uci.Auth
 	return result.Response
 }
 
-func (fixture *uciRetrievalSliceFixture) embedEveryCurrentCandidate(t *testing.T, authorized uci.AuthorizedContext) {
+func (fixture *uciRetrievalSliceFixture) requireLexicalDegradationForNilAndStaleProfiles(t *testing.T, authorized uci.AuthorizedContext) {
 	t.Helper()
-	seen := make(map[string]struct{})
-	for _, path := range fixture.visiblePaths {
-		selected, err := fixture.projection.SelectCandidates(fixture.callerContext, authorized, uci.QuerySpec{
-			ClientSessionID: fixture.clientSessionID,
-			Mode:            uci.QueryModeExactRelativePath,
-			Text:            path,
-			Order:           uci.QueryOrderPath,
-			Limit:           50,
+	stale := fixture.vectorProfile
+	stale.PreprocessingRevision = "uci-retrieval-slice-semantic-v1"
+	for _, test := range []struct {
+		name    string
+		profile *uci.VectorProfile
+	}{
+		{name: "nil profile", profile: nil},
+		{name: "stale profile", profile: &stale},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response, err := fixture.applicationWithStatusProfile(t, test.profile).SearchCodebase(fixture.callerContext, authorized, mcp.CodebaseSearchInput{
+				Query: "sharedscopeneedle",
+				Limit: 10,
+			})
+			if err != nil {
+				t.Fatalf("%s semantic query: %v", test.name, err)
+			}
+			fixture.requireBoundResponse(t, test.name+" semantic query", response)
+			if response.Status != uci.QueryStatusOK || response.Retrieval == nil || response.Retrieval.Mode != uci.QueryRetrievalLexical {
+				t.Fatalf("%s semantic response = %#v, want lexical degraded result", test.name, response)
+			}
 		})
-		if err != nil {
-			t.Fatalf("select current semantic candidates for %q: %v", path, err)
-		}
-		if len(selected.Candidates) == 0 {
-			t.Fatalf("no current semantic candidates for published path %q", path)
-		}
-		for _, candidate := range selected.Candidates {
-			key := candidate.Proof.ArtifactID + "\x00" + candidate.RelativePath + "\x00" + candidate.EntityKey + "\x00" + string(candidate.Proof.ContentDigest)
-			if _, exists := seen[key]; exists {
-				continue
-			}
-			seen[key] = struct{}{}
-			if err := fixture.semanticService.EnsureCandidateEmbedding(fixture.callerContext, authorized, candidate); err != nil {
-				t.Fatalf("provider-embed current candidate %q: %v", candidate.RelativePath, err)
-			}
-		}
 	}
-	if len(seen) == 0 {
-		t.Fatal("no current candidates reached the real semantic provider")
+}
+
+func (fixture *uciRetrievalSliceFixture) completeCurrentViewEmbedding(t *testing.T, authorized uci.AuthorizedContext) {
+	t.Helper()
+	embeddingClient, err := embedding.NewClient()
+	if err != nil {
+		t.Fatalf("create current-view embedding client: %v", err)
+	}
+	worker, err := uci.NewEmbeddingWorker(
+		fixture.vectorProfile,
+		embeddingClient,
+		fixture.projection,
+		fixture.resolver,
+		uci.DefaultEmbeddingWorkerLimits(),
+	)
+	if err != nil {
+		t.Fatalf("create current-view embedding worker: %v", err)
+	}
+	before := fixture.provider.corpusInputs()
+	workerContext, cancel := context.WithCancel(fixture.callerContext)
+	workerDone := make(chan error, 1)
+	go func() {
+		workerDone <- worker.Run(workerContext, fixture.indexCaller.OwnerInstance)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-workerDone:
+			if err != nil {
+				t.Errorf("stop current-view embedding worker: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("current-view embedding worker did not stop")
+		}
+	})
+
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	poll := time.NewTicker(20 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		status, err := fixture.status.Status(fixture.callerContext, authorized, "")
+		if err != nil {
+			t.Fatalf("read current-view embedding status: %v", err)
+		}
+		if status.Embedding.Coverage == uci.IndexCoverageComplete {
+			if status.Embedding.TotalCandidates == 0 || status.Embedding.ReadyCandidates != status.Embedding.TotalCandidates || status.Embedding.JobState == nil || *status.Embedding.JobState != uci.IndexStatusJobSucceeded {
+				t.Fatalf("current-view embedding status is not durably complete: %#v", status.Embedding)
+			}
+			if fixture.provider.corpusInputs() <= before {
+				t.Fatal("current-view embedding worker did not send corpus inputs to the local provider")
+			}
+			return
+		}
+		select {
+		case err := <-workerDone:
+			if err != nil {
+				t.Fatalf("current-view embedding worker: %v", err)
+			}
+			t.Fatalf("current-view embedding worker stopped before durable completion: %#v", status.Embedding)
+		case <-deadline.C:
+			t.Fatalf("current-view embedding worker did not complete the current view: %#v", status.Embedding)
+		case <-poll.C:
+		}
 	}
 }
 
