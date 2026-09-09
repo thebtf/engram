@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -555,11 +557,14 @@ func uciWatcherSLOChangedBytes(previous, next []byte) int64 {
 }
 
 func uciWatcherSLOGitClean(ctx context.Context, root string) (bool, error) {
-	status, err := uciReadInstalledAcceptanceGit(ctx, root, "status", "--porcelain=v1")
+	command := exec.CommandContext(ctx, "git", "status", "--porcelain=v1")
+	command.Dir = root
+	command.Stderr = io.Discard
+	output, err := command.Output()
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("inspect installed watcher candidate Git status: %w", err)
 	}
-	return status == "", nil
+	return len(strings.TrimSpace(string(output))) == 0, nil
 }
 
 func uciWatcherSLOInstalledTiming(origin acceptance.UCIWatcherSLOOrigin, started, completed time.Time) acceptance.UCIWatcherSLOTiming {
@@ -608,5 +613,23 @@ func TestUCIInstalledWatcherWaitRejectsStall(t *testing.T) {
 	}
 	if observations == 0 {
 		t.Fatal("stalled watcher wait made no status observation")
+	}
+}
+
+func TestUCIWatcherSLOGitCleanAcceptsEmptyPorcelain(t *testing.T) {
+	root := t.TempDir()
+	if err := exec.CommandContext(t.Context(), "git", "init", "--quiet", root).Run(); err != nil {
+		t.Fatalf("initialize clean watcher candidate: %v", err)
+	}
+	clean, err := uciWatcherSLOGitClean(t.Context(), root)
+	if err != nil || !clean {
+		t.Fatalf("clean watcher candidate = %t, %v; want true, nil", clean, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "dirty.txt"), []byte("dirty\n"), 0o600); err != nil {
+		t.Fatalf("write dirty watcher candidate: %v", err)
+	}
+	clean, err = uciWatcherSLOGitClean(t.Context(), root)
+	if err != nil || clean {
+		t.Fatalf("dirty watcher candidate = %t, %v; want false, nil", clean, err)
 	}
 }
