@@ -12,8 +12,7 @@ import {
 import type { MutationResult } from '../composables/useApi'
 
 type IssueFilter = 'all' | 'open' | 'work' | 'closed' | 'rejected'
-type BulkField = 'status' | 'priority' | 'type'
-type LabelMode = 'add' | 'remove' | 'replace'
+type BulkField = 'status' | 'priority'
 type CreateTemplate = 'bug' | 'handoff' | 'question' | 'improvement'
 
 const { t } = useI18n()
@@ -34,10 +33,8 @@ const {
   updateIssue,
   commentIssue,
   rejectIssue,
-  acknowledgeIssue,
-  bulkAcknowledgeIssues,
-  bulkUpdateIssues,
   deleteIssue,
+  runIssueSelection,
 } = useOperatorIssues()
 
 const priorityOptions: OperatorIssuePriority[] = ['critical', 'high', 'medium', 'low']
@@ -54,7 +51,6 @@ const activeId = ref<number | null>(null)
 const showCreate = ref(false)
 const showReject = ref(false)
 const showDelete = ref(false)
-const showBulkReject = ref(false)
 const showBulkField = ref(false)
 const showBulkLabels = ref(false)
 const notice = ref('')
@@ -82,10 +78,8 @@ const typeDraft = ref<OperatorIssueType>('task')
 const labelDraft = ref<string[]>([])
 const commentDraft = ref('')
 const rejectComment = ref('')
-const bulkRejectComment = ref('')
 const bulkField = ref<BulkField>('status')
 const bulkValue = ref<string>('acknowledged')
-const bulkLabelMode = ref<LabelMode>('add')
 const bulkLabelValue = ref('operator-created')
 const mutationResult = ref<MutationResult | null>(null)
 
@@ -133,7 +127,6 @@ const pageRows = computed(() => filteredRows.value.slice((page.value - 1) * effe
 const canCreate = computed(() => createTitle.value.trim().length > 0 && createTargetProject.value.trim().length > 0 && !pending.value)
 const canComment = computed(() => Boolean(activeIssue.value) && commentDraft.value.trim().length > 0 && !pending.value)
 const canReject = computed(() => Boolean(activeIssue.value) && rejectComment.value.trim().length > 0 && !pending.value)
-const canBulkReject = computed(() => selectedCount.value > 0 && bulkRejectComment.value.trim().length > 0 && !pending.value)
 const projectOptions = computed(() => trackedProjects.value.length ? trackedProjects.value : ['engram'])
 const pageTitle = computed(() => activeIssue.value ? t('issues.detail.title', { id: activeIssue.value.id }) : t('issues.title'))
 const pageSubtitle = computed(() => activeIssue.value ? t('issues.detail.subtitle') : t('issues.subtitle'))
@@ -458,68 +451,30 @@ async function deleteCurrent() {
 
 function openBulkEditor(field: BulkField) {
   bulkField.value = field
-  bulkValue.value = field === 'status' ? 'acknowledged' : field === 'priority' ? 'high' : 'task'
+  bulkValue.value = field === 'status' ? 'acknowledged' : 'high'
   showBulkField.value = true
 }
 
 async function applyBulkField() {
   if (!selectedCount.value) return
-  const ids = [...selectedIds.value]
-  const result = bulkField.value === 'status' && bulkValue.value === 'acknowledged'
-    ? await bulkAcknowledgeIssues(ids)
-    : await bulkUpdateIssues(ids, { [bulkField.value]: bulkValue.value } as IssueUpdateInput)
+  const result = await runIssueSelection([...selectedIds.value], bulkField.value === 'status'
+    ? { kind: 'status', status: bulkValue.value as OperatorIssueStatus }
+    : { kind: 'priority', priority: bulkValue.value as OperatorIssuePriority })
   mutationResult.value = result
   if (result.kind === 'committed_verified') {
     showBulkField.value = false
     clearSelection()
-  } else if (result.kind === 'partial') {
-    const committed = new Set(result.items.filter((item) => item.outcome === 'committed').map((item) => Number(item.targetId)))
-    selectedIds.value = selectedIds.value.filter((id) => !committed.has(id))
-  }
-}
-
-async function applyBulkReject() {
-  if (!canBulkReject.value) return
-  const result = await bulkUpdateIssues([...selectedIds.value], {
-    status: 'rejected',
-    comment: bulkRejectComment.value.trim(),
-  })
-  mutationResult.value = result
-  if (result.kind === 'committed_verified') {
-    showBulkReject.value = false
-    bulkRejectComment.value = ''
-    clearSelection()
-  } else if (result.kind === 'partial') {
-    const committed = new Set(result.items.filter((item) => item.outcome === 'committed').map((item) => Number(item.targetId)))
-    selectedIds.value = selectedIds.value.filter((id) => !committed.has(id))
   }
 }
 
 async function applyBulkLabels() {
   if (!selectedCount.value || !bulkLabelValue.value) return
-  const selected = [...selectedRows.value]
-  const value = bulkLabelValue.value
-  if (bulkLabelMode.value === 'replace') {
-    const result = await bulkUpdateIssues(selected.map((issue) => issue.id), { labels: [value] })
-    mutationResult.value = result
-    if (result.kind === 'partial') {
-      const committed = new Set(result.items.filter((item) => item.outcome === 'committed').map((item) => Number(item.targetId)))
-      selectedIds.value = selectedIds.value.filter((id) => !committed.has(id))
-      return
-    }
-    if (result.kind !== 'committed_verified') return
-  } else {
-    for (const issue of selected) {
-      const labels = new Set(issue.labels)
-      if (bulkLabelMode.value === 'add') labels.add(value)
-      if (bulkLabelMode.value === 'remove') labels.delete(value)
-      const result = await updateIssue(issue.id, { labels: [...labels] })
-      mutationResult.value = result
-      if (result.kind !== 'committed_verified') return
-    }
+  const result = await runIssueSelection([...selectedIds.value], { kind: 'labels', labels: [bulkLabelValue.value] })
+  mutationResult.value = result
+  if (result.kind === 'committed_verified') {
+    showBulkLabels.value = false
+    clearSelection()
   }
-  showBulkLabels.value = false
-  clearSelection()
 }
 
 async function copyIssueLink() {
@@ -684,10 +639,8 @@ function renderMarkdown(value: string) {
           <span class="bsp"></span>
           <button class="act" @click="openBulkEditor('status')">{{ t('issues.bulk.status') }}</button>
           <button class="act" @click="openBulkEditor('priority')">{{ t('issues.bulk.priority') }}</button>
-          <button class="act" @click="openBulkEditor('type')">{{ t('issues.bulk.type') }}</button>
           <button class="act" disabled :title="routeChangeAction.evidence.reason">{{ t('issues.bulk.route') }}</button>
           <button class="act" @click="showBulkLabels = true">{{ t('issues.bulk.labels') }}</button>
-          <button class="act danger" @click="showBulkReject = true">{{ t('issues.bulk.reject') }}</button>
           <span class="bulk-note">{{ t('issues.bulk.note') }}</span>
           <button class="tbtn" @click="clearSelection">{{ t('issues.bulk.cancel') }}</button>
         </div>
@@ -1015,17 +968,6 @@ function renderMarkdown(value: string) {
       </section>
     </div>
 
-    <div v-if="showBulkReject" class="overlay show">
-      <section class="modal" role="dialog" :aria-label="t('issues.bulkReject.title')">
-        <h2 class="danger-title">{{ t('issues.bulkReject.title') }}</h2>
-        <p>{{ t('issues.bulkReject.body', selectedCount, { count: selectedCount }) }}</p>
-        <textarea v-model="bulkRejectComment" class="txt confirm-input" name="issue-bulk-reject-comment" :placeholder="t('issues.bulkReject.placeholder')" />
-        <div class="mf">
-          <button class="tbtn" @click="showBulkReject = false">{{ t('issues.modal.cancel') }}</button>
-          <button class="tbtn danger-fill" :disabled="!canBulkReject" @click="applyBulkReject">{{ t('issues.bulkReject.submit') }}</button>
-        </div>
-      </section>
-    </div>
 
     <div v-if="showBulkField" class="overlay show">
       <section class="modal" role="dialog" :aria-label="t('issues.bulkField.title')">
@@ -1035,11 +977,11 @@ function renderMarkdown(value: string) {
           <span>{{ t(`issues.bulkField.${bulkField}`) }}</span>
           <select v-model="bulkValue" class="txt" name="issue-bulk-value">
             <option
-              v-for="option in (bulkField === 'status' ? statusOptions : bulkField === 'priority' ? priorityOptions : typeOptions)"
+              v-for="option in (bulkField === 'status' ? statusOptions : priorityOptions)"
               :key="option"
               :value="option"
             >
-              {{ t(`issues.${bulkField === 'status' ? 'status' : bulkField === 'priority' ? 'priority' : 'type'}.${option}`) }}
+              {{ t(`issues.${bulkField === 'status' ? 'status' : 'priority'}.${option}`) }}
             </option>
           </select>
         </label>
@@ -1054,14 +996,6 @@ function renderMarkdown(value: string) {
       <section class="modal" role="dialog" :aria-label="t('issues.bulkLabels.title')">
         <h2>{{ t('issues.bulkLabels.title') }}</h2>
         <p>{{ t('issues.bulkLabels.body', selectedCount, { count: selectedCount }) }}</p>
-        <label class="field">
-          <span>{{ t('issues.bulkLabels.mode') }}</span>
-          <select v-model="bulkLabelMode" class="txt" name="issue-bulk-label-mode">
-            <option value="add">{{ t('issues.bulkLabels.add') }}</option>
-            <option value="remove">{{ t('issues.bulkLabels.remove') }}</option>
-            <option value="replace">{{ t('issues.bulkLabels.replace') }}</option>
-          </select>
-        </label>
         <label class="field">
           <span>{{ t('issues.bulkLabels.label') }}</span>
           <select v-model="bulkLabelValue" class="txt" name="issue-bulk-label-value">
