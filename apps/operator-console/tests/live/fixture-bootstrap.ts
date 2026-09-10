@@ -84,6 +84,13 @@ export interface LiveFixtureState {
     a: FixtureWorktree
     b: FixtureWorktree
   }
+  mcp: {
+    clientBinary: string
+    clientRoots: {
+      a: string
+      b: string
+    }
+  }
   traffic: RouteTraffic[]
 }
 
@@ -159,9 +166,8 @@ class LiveFixture implements FixtureController {
       const worktrees = await this.createWorktrees()
       const postgres = await this.startPostgres()
       const binary = await this.buildServer(candidate.commit)
-      const apiUrl = await this.startServer(binary, postgres.dsn)
-      const ready = await this.awaitReady(`${apiUrl}/api/ready`, this.server, 'Go API')
-      const health = await this.fetchJSON(`${apiUrl}/api/health`, { method: 'GET' })
+      const clientBinary = await this.buildMCPClient()
+      const { apiUrl, health, ready } = await this.startServer(binary, postgres.dsn)
       const healthBody = health.body
       if (
         health.status !== 200
@@ -231,6 +237,10 @@ class LiveFixture implements FixtureController {
         worktrees: {
           a: worktrees.a.identity,
           b: worktrees.b.identity,
+        },
+        mcp: {
+          clientBinary,
+          clientRoots: { a: worktrees.a.root, b: worktrees.b.root },
         },
         traffic: this.traffic,
       }
@@ -324,8 +334,13 @@ class LiveFixture implements FixtureController {
     return binary
   }
 
-  private async startServer(binary: string, dsn: string): Promise<string> {
-    const port = await reservePort()
+  private async buildMCPClient(): Promise<string> {
+    const binary = join(this.fixtureRoot, process.platform === 'win32' ? 'engram-mcp-client.exe' : 'engram-mcp-client')
+    await execute('go', ['build', '-o', binary, './cmd/engram'], repositoryRoot)
+    return binary
+  }
+
+  private async startServer(binary: string, dsn: string): Promise<{ apiUrl: string; health: { status: number; body: unknown }; ready: RouteTraffic }> {
     const home = join(this.fixtureRoot, 'home')
     const environment = fixtureEnvironment({
       DATABASE_DSN: dsn,
@@ -334,14 +349,25 @@ class LiveFixture implements FixtureController {
       ENGRAM_AUTH_DISABLED: 'false',
       ENGRAM_CODE_INTEL_ENABLED: 'true',
       ENGRAM_WORKER_HOST: '127.0.0.1',
-      ENGRAM_WORKER_PORT: String(port),
       HOME: home,
       USERPROFILE: home,
       APPDATA: join(home, 'AppData', 'Roaming'),
       LOCALAPPDATA: join(home, 'AppData', 'Local'),
     })
-    this.server = startProcess(binary, [], repositoryRoot, environment)
-    return `http://127.0.0.1:${port}`
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const port = await reservePort()
+      this.server = startProcess(binary, [], repositoryRoot, { ...environment, ENGRAM_WORKER_PORT: String(port) })
+      const apiUrl = `http://127.0.0.1:${port}`
+      try {
+        const ready = await this.awaitReady(`${apiUrl}/api/ready`, this.server, 'Go API')
+        const health = await this.fetchJSON(`${apiUrl}/api/health`, { method: 'GET' })
+        return { apiUrl, health, ready }
+      } catch {
+        await stopChild(this.server)
+        this.server = undefined
+      }
+    }
+    throw new Error('Go API did not retain its loopback listener after readiness')
   }
 
   private async provisionOperatorCode(dsn: string, worktree: FixtureWorktreeRuntime, password?: string): Promise<OperatorCodeFixture> {
@@ -392,6 +418,7 @@ class LiveFixture implements FixtureController {
     await execute('git', ['config', 'user.name', 'Operator Code Live Fixture'], aRoot)
     await execute('git', ['add', '--all'], aRoot)
     await execute('git', ['commit', '--message', 'operator code A fixture'], aRoot)
+    await execute('git', ['remote', 'add', 'origin', `https://fixture.invalid/${this.fixtureId}.git`], aRoot)
     await execute('git', ['worktree', 'add', '--detach', bRoot, 'HEAD'], aRoot)
     await this.writeWorktreeSources(bRoot, 'b', 'b')
     await execute('git', ['add', '--all'], bRoot)
@@ -413,6 +440,7 @@ class LiveFixture implements FixtureController {
     for (const name of ['target.ts', 'relay.ts', 'CurrentSlicePanel.tsx']) {
       await writeFile(join(destination, name), await readFile(join(sourceRoot, name)))
     }
+    await writeFile(join(root, '.engram-project'), `${JSON.stringify({ name: marker }, null, 2)}\n`)
     await writeFile(join(root, 'fixture.go'), `package fixture
 
 const CodeExplorerFixtureMessage = "operator-code-fixture-${marker}"
@@ -577,7 +605,7 @@ async function assertLiveHarnessContract(): Promise<void> {
 }
 
 
-function fixtureEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+export function fixtureEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const environment = { ...process.env }
   for (const name of Object.keys(environment)) {
     if (FIXTURE_OVERRIDDEN_ENVIRONMENT_NAMES[name.toUpperCase()] === true) {

@@ -1,7 +1,9 @@
 import { expect, test } from '@playwright/test'
 import type { Browser, BrowserContext, Page } from '@playwright/test'
+import { browserUserID, intervalsOverlap, issueReadOnlyKeycard, observeOperation } from './agent-topology'
 import { appendBrowserTraffic, readLiveFixture } from './fixture-bootstrap'
 import type { LiveFixtureState, RouteTraffic } from './fixture-bootstrap'
+import { MCPStdioClient } from './mcp-stdio'
 
 const RESUME_STORAGE_KEY = 'engram.operator-code.resume.v1'
 
@@ -131,6 +133,8 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
   }
   let a: CodeTab | undefined
   let b: CodeTab | undefined
+  let mcpA: MCPStdioClient | undefined
+  let mcpB: MCPStdioClient | undefined
 
   try {
     expect(fixture.mock.prohibited).toBe(true)
@@ -138,12 +142,95 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
     expect(fixture.worktrees.a.head).not.toBe(fixture.worktrees.b.head)
     expect(fixture.worktrees.a.fixtureSourceSha256).not.toBe(fixture.worktrees.b.fixtureSourceSha256)
 
-    a = await pinAndRead(browser, fixture, fixture.browserCredential, aScenario, traffic)
-    b = await pinAndRead(browser, fixture, fixture.browserCredentialB, bScenario, traffic)
+    const tabA = await pinAndRead(browser, fixture, fixture.browserCredential, aScenario, traffic)
+    const tabB = await pinAndRead(browser, fixture, fixture.browserCredentialB, bScenario, traffic)
+    a = tabA
+    b = tabB
     await expect(a.page.getByTestId('code-source-result')).toContainText(aScenario.expectedMarker)
     await expect(a.page.getByTestId('code-source-result')).not.toContainText(bScenario.expectedMarker)
     await expect(b.page.getByTestId('code-source-result')).toContainText(bScenario.expectedMarker)
     await expect(b.page.getByTestId('code-source-result')).not.toContainText(aScenario.expectedMarker)
+
+    const [aUserID, bUserID] = await Promise.all([browserUserID(tabA.page), browserUserID(tabB.page)])
+    expect(aUserID).not.toBe(bUserID)
+    const [aKeycard, bKeycard] = await Promise.all([
+      issueReadOnlyKeycard(tabA.page, `${fixture.fixtureId}-mcp-a`, aUserID),
+      issueReadOnlyKeycard(tabA.page, `${fixture.fixtureId}-mcp-b`, bUserID),
+    ])
+    const externalClientA = await MCPStdioClient.start({
+      clientRoot: fixture.mcp.clientRoots.a,
+      executable: fixture.mcp.clientBinary,
+      serverURL: fixture.backend.baseUrl,
+      token: aKeycard,
+    })
+    mcpA = externalClientA
+    const externalClientB = await MCPStdioClient.start({
+      clientRoot: fixture.mcp.clientRoots.b,
+      executable: fixture.mcp.clientBinary,
+      serverURL: fixture.backend.baseUrl,
+      token: bKeycard,
+    })
+    mcpB = externalClientB
+    const [browserA, browserB, externalA, externalB] = await Promise.all([
+      observeOperation(async () => {
+        await tabA.page.getByTestId('code-query-input').fill(aScenario.query)
+        await tabA.page.getByTestId('code-search-submit').click()
+        const result = tabA.page.getByTestId('code-search-results').getByRole('listitem').filter({
+          has: tabA.page.getByText(`go:fixture/func:${aScenario.expectedSource}`, { exact: true }),
+        })
+        await expect(result).toHaveCount(1)
+        await result.getByRole('button', { name: 'Read source' }).click()
+        await expect(tabA.page.getByTestId('code-source-result')).toContainText(aScenario.expectedMarker)
+        await expect(tabA.page.getByTestId('code-source-result')).not.toContainText(bScenario.expectedMarker)
+      }),
+      observeOperation(async () => {
+        await tabB.page.getByTestId('code-query-input').fill(bScenario.query)
+        await tabB.page.getByTestId('code-search-submit').click()
+        const result = tabB.page.getByTestId('code-search-results').getByRole('listitem').filter({
+          has: tabB.page.getByText(`go:fixture/func:${bScenario.expectedSource}`, { exact: true }),
+        })
+        await expect(result).toHaveCount(1)
+        await result.getByRole('button', { name: 'Read source' }).click()
+        await expect(tabB.page.getByTestId('code-source-result')).toContainText(bScenario.expectedMarker)
+        await expect(tabB.page.getByTestId('code-source-result')).not.toContainText(aScenario.expectedMarker)
+      }),
+      observeOperation(async () => {
+        await externalClientA.initializeAndList()
+        await externalClientA.readOnlySearch(fixture.fixtureId)
+        return externalClientA.transcript()
+      }),
+      observeOperation(async () => {
+        await externalClientB.initializeAndList()
+        await externalClientB.readOnlySearch(fixture.fixtureId)
+        return externalClientB.transcript()
+      }),
+    ])
+    expect(externalA.value.usedStdio).toBe(true)
+    expect(externalB.value.usedStdio).toBe(true)
+    expect(externalA.value.externalPID).not.toBe(externalB.value.externalPID)
+    expect(externalA.value.daemonPID).toBeGreaterThan(0)
+    expect(externalB.value.daemonPID).toBeGreaterThan(0)
+    expect(externalA.value.daemonPID).not.toBe(externalB.value.daemonPID)
+    expect(externalA.value.daemonGeneration).not.toBe('')
+    expect(externalB.value.daemonGeneration).not.toBe('')
+    expect(externalA.value.sessionScoped).toBe(true)
+    expect(externalB.value.sessionScoped).toBe(true)
+    expect(externalA.value.rootLabel).toBe('A')
+    expect(externalB.value.rootLabel).toBe('B')
+    for (const transcript of [externalA.value, externalB.value]) {
+      expect(transcript.methods).toEqual(expect.arrayContaining(['initialize', 'notifications/initialized', 'tools/list', 'tools/call']))
+      expect(transcript.tools).toContain('recall')
+    }
+    const browserMCPOverlap = intervalsOverlap(browserA, externalA) || intervalsOverlap(browserA, externalB) || intervalsOverlap(browserB, externalA) || intervalsOverlap(browserB, externalB)
+    expect(browserMCPOverlap).toBe(true)
+    lifecycle.concurrentBrowserMCP = {
+      browserMCPOverlap,
+      daemonPIDsDistinct: true,
+      externalPIDsDistinct: true,
+      readOnlyCalls: ['recall.search'],
+      sessionScoped: true,
+      usedStdio: true,
+    }
 
     const pending = await a.page.evaluate(async () => {
       const raw = sessionStorage.getItem('engram.operator-code.resume.v1')
@@ -178,14 +265,6 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
     await expect(copied.getByTestId('code-release-state')).toHaveAttribute('data-state', 'unselected')
     await copied.close()
 
-    await a.page.getByTestId('code-query-input').fill(aScenario.query)
-    await a.page.getByTestId('code-search-submit').click()
-    const refreshedResult = a.page.getByTestId('code-search-results').getByRole('listitem').filter({
-      has: a.page.getByText(`go:fixture/func:${aScenario.expectedSource}`, { exact: true }),
-    })
-    await expect(refreshedResult).toHaveCount(1)
-    await refreshedResult.getByRole('button', { name: 'Read source' }).click()
-    await expect(a.page.getByTestId('code-source-result')).toContainText(aScenario.expectedMarker)
 
     const popupPromise = a.page.waitForEvent('popup')
     await a.page.evaluate(() => { window.open('/code', '_blank') })
@@ -234,6 +313,14 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
     lifecycle.acknowledgedClose = ['A', 'B']
     lifecycle.replayedProof = 'denied_without_body'
   } finally {
+    await Promise.all([mcpA?.close(), mcpB?.close()])
+    const externalMCP = [mcpA, mcpB].flatMap((client) => client === undefined ? [] : [client.transcript()])
+    for (const transcript of externalMCP) {
+      expect(transcript.processTreeStopped).toBe(true)
+      expect(transcript.daemonPID).toBeGreaterThan(0)
+      expect(transcript.stateRootRemoved).toBe(true)
+    }
+    lifecycle.externalMCP = externalMCP
     const state = await appendBrowserTraffic(traffic)
     await testInfo.attach('s2-linked-worktree-browser-topology', {
       contentType: 'application/json',
