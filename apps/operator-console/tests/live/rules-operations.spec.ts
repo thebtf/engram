@@ -79,6 +79,14 @@ test('T026 live Rules UI retains safety state and server-authorized outcomes', a
     const shell = await page.goto(`${fixture.frontend.baseUrl}/rules`, { waitUntil: 'domcontentloaded' })
     expect(shell?.status()).toBe(200)
     expect((await requestJSON(page, '/api/auth/user-login', 'POST', fixture.browserCredential)).status).toBe(200)
+    const baseline = await requestJSON(page, '/api/rules?all=true&limit=1000')
+    expect(baseline.status).toBe(200)
+    const baselineRules: unknown = JSON.parse(baseline.text)
+    if (!Array.isArray(baselineRules)) throw new TypeError('Rules baseline response is invalid')
+    const expectedRuleTotal = baselineRules.length + globalRules.length + 201
+    const expectedGlobalRuleTotal = baselineRules.filter((rule) => typeof rule === 'object' && rule !== null && !Array.isArray(rule) && (Reflect.get(rule, 'project') === undefined || Reflect.get(rule, 'project') === null)).length + globalRules.length
+    expect(expectedRuleTotal).toBeGreaterThan(200)
+
 
     await seedRules(page, [
       ...globalRules,
@@ -91,7 +99,7 @@ test('T026 live Rules UI retains safety state and server-authorized outcomes', a
 
     await page.reload({ waitUntil: 'networkidle' })
     await page.getByTestId('rules-selection-load-page').click()
-    await expect(page.getByTestId('rules-selection-page-info')).toContainText('203')
+    await expect(page.getByTestId('rules-selection-page-info')).toContainText(String(expectedRuleTotal))
     await expect(page.getByTestId('rules-selection-page-info')).toContainText(/ещё результаты|More results|更多结果/)
 
     await page.getByTestId('rules-selection-page').click()
@@ -110,20 +118,20 @@ test('T026 live Rules UI retains safety state and server-authorized outcomes', a
 
     await page.getByTestId('rules-selection-freeze').click()
     await expect(page.getByTestId('rules-selection-kind')).toContainText(/Замороженный фильтр|Frozen filter|冻结/)
-    await expect(page.getByTestId('rules-selection-frozen-info')).toContainText('203')
+    await expect(page.getByTestId('rules-selection-frozen-info')).toContainText(String(expectedRuleTotal))
     await page.locator('.rule-check').first().click()
-    await expect(page.getByTestId('rules-selection-frozen-info')).toContainText('202')
+    await expect(page.getByTestId('rules-selection-frozen-info')).toContainText(String(expectedRuleTotal - 1))
     const frozenInfo = page.getByTestId('rules-selection-frozen-info')
     const disableSelected = page.getByRole('button', { name: /Выключить выбранные|Disable selected|禁用已选规则/ })
 
 
     await page.locator('.scope-filter select').selectOption('global')
     await expect(page.getByTestId('rules-selection-kind')).toContainText(/Замороженный фильтр|Frozen filter|冻结/)
-    await expect(frozenInfo).toContainText('202')
+    await expect(frozenInfo).toContainText(String(expectedRuleTotal - 1))
     await expect(page.getByTestId('rules-selection-reconfirm')).toContainText(/filter_changed/)
     await expect(disableSelected).toBeDisabled()
     await page.getByTestId('rules-selection-load-page').click()
-    await expect(page.getByTestId('rules-selection-page-info')).toContainText('2')
+    await expect(page.getByTestId('rules-selection-page-info')).toContainText(String(expectedGlobalRuleTotal))
     await page.getByTestId('rules-selection-page').click()
 
     const firstEdit = page.getByRole('button', { name: /Править|Edit|编辑/ }).first()
