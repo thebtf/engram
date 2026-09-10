@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "design_version": "2026.07.14",
-  "promoted_at_utc": "2026-07-14T00:00:00Z",
-  "content_sha256": "90cd6192b369dd32bf8d17079563e4ff3953053794ce2dd2d6d0884e4277827c",
+  "design_version": "2026.09.10",
+  "promoted_at_utc": "2026-09-10T00:00:00Z",
+  "content_sha256": "356563b1674beda461230e50af1d9afc29e28e197fcb64e18db83a592bf35ee9",
   "source_classification": "private-authoring-snapshot",
   "promotion_tool": {
     "path": "scripts/promote-od-operator-console.ps1",
@@ -11,12 +11,12 @@
   "files": [
     {
       "path": "contracts/PRODUCT.md",
-      "sha256": "e9e17caaff9df4f9a5ef13e93aa4c9713a93af374ae9de0adad5da808b4e8c82",
+      "sha256": "d510510bba36db7dd945a99996689cecd8f683be72f0cbbb5e7d179ce3c9708b",
       "source_classification": "private-authoring-snapshot"
     },
     {
       "path": "contracts/DESIGN.md",
-      "sha256": "c536f5b813ec5e22031345af25f86901f3171bd07de222ba652b2422f0211459",
+      "sha256": "6a679a7b08def3d62bdc2e41addb1e45ff1f97281440ea5554b632a54da62ecc",
       "source_classification": "private-authoring-snapshot"
     },
     {
@@ -56,7 +56,7 @@
     },
     {
       "path": "mockups/index.html",
-      "sha256": "87f3525f800f6ec8eab0fff6020bbe2b0c78e6da4e76e7bcc169d51323736466",
+      "sha256": "7c0128f79b97854bcd87d04e07f4f9dd9a7764d299d59869d55326ab620e9a4f",
       "source_classification": "private-authoring-snapshot"
     },
     {

@@ -4,12 +4,11 @@ description: >-
   Single-operator admin surface for persistent shared-memory infrastructure.
   Dark-first product UI with committed density, single accent, honesty contract
   over polish.
-design_version: "2026.07.14"   # contract stamp — bump on any token/component/screen change;
-                               # PARITY.json records which port pages are synced to which stamp.
-                               # 2026.07.14: candidate queue merged into the memory screen as a
-                               # review-mode toggle (queue route now renders memory lab).
-                               # 2026.06.21: app shell redesigned — full-height nav column,
-                               # collapse/icon-rail, brand moved into nav, breadcrumb removed.
+design_version: "2026.09.10"   # contract stamp — bump on any token/component/screen change.
+                               # 2026.09.10: Feature011 adds the Code flow: Source → Checkout → View,
+                               # a bounded graph return path, and explicit legacy-collection semantics.
+                               # Promotion copies this private authoring snapshot one way into the curated
+                               # design contract; it neither claims runtime parity nor writes application code.
 colors:
   neutral-bg: "#0b0d10"
   surface: "#14171c"
@@ -130,6 +129,35 @@ components:
 - Техника вторым слоем: endpoint, env-имена, gate-флаги — evidence, а не заголовки
 - Запрещены стеклянные панели, градиенты, неон, градиентный текст и side-stripe карточки
 - Без анимации входа страниц — продукт загружается в задачу, а не в хореографию
+
+## 1.1 Feature011 — Code flow
+
+**Mode:** Operate. `Code` is a compact, evidence-led flow, not a source browser that
+pretends a checkout already exists. Its three named stages are always visible and ordered:
+
+1. **Source** — the registered repository identity and its provenance. Until a source
+   registry is available, show `must-build` and the missing capability; do not invent a
+   repository, revision, or selectable control.
+2. **Checkout** — the resolved working copy for that Source. Without a Source, it is
+   blocked with the dependency stated plainly; it is never silently inferred from a
+   collection or a search result.
+3. **View** — files and symbols from that Checkout. Without a Checkout, it is an empty
+   state that explains the preceding prerequisite rather than a fabricated file tree.
+
+The discovery path is **search → bounded graph → Source**. A code-search result may open
+a graph only with explicit bounds (maximum depth `2`, maximum `24` nodes); selecting a node
+returns to its Source, where the operator can choose its Checkout before viewing code. The
+graph is a navigation aid, never a claim that an unrestricted traversal or runtime search ran.
+
+**Collection semantics:** `Старые коллекции` is a stale, read-only pre-v5 listing. It is
+not a Source, Checkout, corpus, or fallback search scope. If `search_collection` returns its
+deprecated string response, render the disabled/stale explanation — never an empty successful
+search and never a control that can start a Code flow.
+
+**Promotion boundary:** `.od` is private authoring. Promotion creates a curated,
+hash-bound snapshot in `design/operator-console/` from an explicit allowlist. It is one-way;
+the manifest proves the snapshot bytes only. It does not synchronize in either direction,
+assert application parity, or overwrite `apps/operator-console/`.
 
 ## 2. Colors
 
