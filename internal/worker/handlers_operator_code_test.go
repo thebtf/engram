@@ -3,11 +3,14 @@ package worker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auditcontext"
@@ -168,6 +171,7 @@ func TestOperatorCodeHTTPAdapter_BindsReleasedReadsToBrowserSession(t *testing.T
 		}
 	}
 }
+
 func TestOperatorCodeHTTPAdapter_UsesGrantedSourceRealmForRelease(t *testing.T) {
 	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
 	identity := operatorCodeRequestIdentity{identity: fixture.identity, sessionID: "browser-session-41"}
@@ -175,7 +179,6 @@ func TestOperatorCodeHTTPAdapter_UsesGrantedSourceRealmForRelease(t *testing.T) 
 	require.Equal(t, uci.ReleaseFailureNone, failure)
 	require.Equal(t, fixture.grants.current.AuthRealm, adapter.releaseRequest(identity, caller, uci.ReleaseCategoryCodeSearch, nil, nil).AuthRealm)
 }
-
 
 func TestOperatorCodeHTTPAdapter_RejectsClientSelectorsAndBoundsWithoutBody(t *testing.T) {
 	for _, testCase := range []struct {
@@ -343,7 +346,276 @@ func TestOperatorCodeHTTPAdapter_RevocationAndRecorderFailureSuppressResultAndRe
 	}
 }
 
-const operatorCodeHTTPTestBindingID = "60000000-0000-4000-8000-000000000041"
+func TestOperatorCodeHTTPAdapter_IndexIntentAcknowledgementIsNotCompletion(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	body := `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","request_ref":"lost-response","kind":"reindex"}`
+
+	first := httptest.NewRecorder()
+	adapter.HandleIndexIntentSubmit(first, operatorCodeHTTPTestRequest(t, body, fixture.identity))
+	require.Equal(t, http.StatusAccepted, first.Code, first.Body.String())
+	firstResponse := operatorCodeHTTPTestIndexIntentResponse(t, first.Body.String())
+	require.Equal(t, string(uci.IndexIntentSubmitted), firstResponse["state"])
+	require.NotContains(t, first.Body.String(), `"result"`)
+	operatorCodeHTTPTestRequireSafeIndexIntentResponse(t, first.Body.String(), false, fixture)
+
+	// The client lost the first response; repeating the same request gets the
+	// same durable intent rather than a second execution.
+	replay := httptest.NewRecorder()
+	adapter.HandleIndexIntentSubmit(replay, operatorCodeHTTPTestRequest(t, body, fixture.identity))
+	require.Equal(t, http.StatusAccepted, replay.Code, replay.Body.String())
+	replayResponse := operatorCodeHTTPTestIndexIntentResponse(t, replay.Body.String())
+	require.Equal(t, firstResponse["intent_ref"], replayResponse["intent_ref"])
+	require.Len(t, fixture.app.indexIntents, 1)
+
+	lateCompleted := operatorCodeHTTPTestIndexIntent(fixture.ref, "late-completed", uci.IndexIntentReindex, uci.IndexIntentCompleted)
+	fixture.app.indexIntents = map[string]uci.IndexIntent{"late-completed": lateCompleted}
+	lateReplay := httptest.NewRecorder()
+	adapter.HandleIndexIntentSubmit(lateReplay, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"late-completed","kind":"reindex"}`, fixture.identity))
+	require.Equal(t, http.StatusAccepted, lateReplay.Code, lateReplay.Body.String())
+	lateResponse := operatorCodeHTTPTestIndexIntentResponse(t, lateReplay.Body.String())
+	require.Equal(t, lateCompleted.ID, lateResponse["intent_ref"])
+	require.Equal(t, string(uci.IndexIntentSubmitted), lateResponse["state"])
+	operatorCodeHTTPTestRequireSafeIndexIntentResponse(t, lateReplay.Body.String(), false, fixture)
+	require.Equal(t, []string{"browser-session-41", "browser-session-41", "browser-session-41"}, fixture.app.indexSubmitSessions)
+
+	completed := operatorCodeHTTPTestIndexIntent(fixture.ref, "completed-status", uci.IndexIntentReindex, uci.IndexIntentCompleted)
+	fixture.app.indexIntents = map[string]uci.IndexIntent{completed.ID: completed}
+	status := httptest.NewRecorder()
+	adapter.HandleIndexIntentStatus(status, operatorCodeHTTPTestIndexIntentStatusRequest(t, completed.ID, "", fixture.identity))
+	require.Equal(t, http.StatusOK, status.Code, status.Body.String())
+	statusResponse := operatorCodeHTTPTestIndexIntentResponse(t, status.Body.String())
+	require.Equal(t, string(uci.IndexIntentCompleted), statusResponse["state"])
+	result, ok := statusResponse["result"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, completed.ResultView.ViewID, result["view_ref"])
+	require.Equal(t, float64(completed.ResultView.Generation), result["generation"])
+	operatorCodeHTTPTestRequireSafeIndexIntentResponse(t, status.Body.String(), true, fixture)
+	require.Empty(t, fixture.recorder.inputs, "code_index_result is non-content release only")
+	require.Equal(t, []string{"browser-session-41"}, fixture.app.indexGetSessions)
+}
+
+func TestOperatorCodeHTTPAdapter_IndexIntentIdempotencyAndRetry(t *testing.T) {
+	t.Run("changed binding is rejected without a second intent", func(t *testing.T) {
+		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+		first := httptest.NewRecorder()
+		adapter.HandleIndexIntentSubmit(first, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"same-client-request","kind":"reindex"}`, fixture.identity))
+		require.Equal(t, http.StatusAccepted, first.Code, first.Body.String())
+
+		changed := httptest.NewRecorder()
+		adapter.HandleIndexIntentSubmit(changed, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"same-client-request","kind":"reconcile"}`, fixture.identity))
+		require.Equal(t, http.StatusConflict, changed.Code, changed.Body.String())
+		require.Empty(t, changed.Body.String())
+		require.Len(t, fixture.app.indexIntents, 1)
+	})
+
+	t.Run("unavailable intent retries once into queued", func(t *testing.T) {
+		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+		unavailable := operatorCodeHTTPTestIndexIntent(fixture.ref, "offline-request", uci.IndexIntentReindex, uci.IndexIntentUnavailable)
+		fixture.app.indexIntents = map[string]uci.IndexIntent{unavailable.ID: unavailable}
+
+		before := httptest.NewRecorder()
+		adapter.HandleIndexIntentStatus(before, operatorCodeHTTPTestIndexIntentStatusRequest(t, unavailable.ID, "", fixture.identity))
+		require.Equal(t, http.StatusOK, before.Code, before.Body.String())
+		require.Equal(t, true, operatorCodeHTTPTestIndexIntentResponse(t, before.Body.String())["retryable"])
+
+		retry := httptest.NewRecorder()
+		adapter.HandleIndexIntentRetry(retry, operatorCodeHTTPTestIndexIntentRetryRequest(t, unavailable.ID, fixture.identity))
+		require.Equal(t, http.StatusAccepted, retry.Code, retry.Body.String())
+		retryResponse := operatorCodeHTTPTestIndexIntentResponse(t, retry.Body.String())
+		require.Equal(t, string(uci.IndexIntentQueued), retryResponse["state"])
+		require.NotContains(t, retry.Body.String(), `"result"`)
+		require.Equal(t, 1, fixture.app.indexRetryExecutions)
+
+		replayedRetry := httptest.NewRecorder()
+		adapter.HandleIndexIntentRetry(replayedRetry, operatorCodeHTTPTestIndexIntentRetryRequest(t, unavailable.ID, fixture.identity))
+		require.Equal(t, http.StatusConflict, replayedRetry.Code, replayedRetry.Body.String())
+		require.Empty(t, replayedRetry.Body.String())
+		require.Equal(t, 1, fixture.app.indexRetryExecutions)
+		require.Equal(t, []string{"browser-session-41", "browser-session-41"}, fixture.app.indexRetrySessions)
+	})
+
+	t.Run("completed retry return is a contract failure", func(t *testing.T) {
+		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+		unavailable := operatorCodeHTTPTestIndexIntent(fixture.ref, "completed-retry", uci.IndexIntentReindex, uci.IndexIntentUnavailable)
+		completed := operatorCodeHTTPTestIndexIntent(fixture.ref, "completed-retry", uci.IndexIntentReindex, uci.IndexIntentCompleted)
+		fixture.app.indexIntents = map[string]uci.IndexIntent{unavailable.ID: unavailable}
+		fixture.app.indexRetryResult = &completed
+		recorder := httptest.NewRecorder()
+		adapter.HandleIndexIntentRetry(recorder, operatorCodeHTTPTestIndexIntentRetryRequest(t, unavailable.ID, fixture.identity))
+		require.Equal(t, http.StatusServiceUnavailable, recorder.Code, recorder.Body.String())
+		require.Empty(t, recorder.Body.String())
+		require.Equal(t, []string{"browser-session-41"}, fixture.app.indexRetrySessions)
+	})
+}
+
+func TestOperatorCodeHTTPAdapter_IndexIntentStatusValidatesEveryState(t *testing.T) {
+	for _, state := range []uci.IndexIntentState{
+		uci.IndexIntentSubmitted,
+		uci.IndexIntentQueued,
+		uci.IndexIntentAcknowledged,
+		uci.IndexIntentRunning,
+		uci.IndexIntentCompleted,
+		uci.IndexIntentUnavailable,
+		uci.IndexIntentFailed,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+			intent := operatorCodeHTTPTestIndexIntent(fixture.ref, "state-"+string(state), uci.IndexIntentReindex, state)
+			fixture.app.indexIntents = map[string]uci.IndexIntent{intent.ID: intent}
+			recorder := httptest.NewRecorder()
+			adapter.HandleIndexIntentStatus(recorder, operatorCodeHTTPTestIndexIntentStatusRequest(t, intent.ID, "", fixture.identity))
+
+			require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+			response := operatorCodeHTTPTestIndexIntentResponse(t, recorder.Body.String())
+			require.Equal(t, string(state), response["state"])
+			require.Equal(t, float64(intent.Attempt), response["attempt"])
+			require.Equal(t, state == uci.IndexIntentUnavailable, response["retryable"])
+			operatorCodeHTTPTestRequireSafeIndexIntentResponse(t, recorder.Body.String(), state == uci.IndexIntentCompleted, fixture)
+			require.Empty(t, fixture.recorder.inputs)
+		})
+	}
+}
+
+func TestOperatorCodeHTTPAdapter_IndexIntentFailsClosedAndConcealsReleasedResults(t *testing.T) {
+	t.Run("missing capability", func(t *testing.T) {
+		_, fixture := newOperatorCodeHTTPTestAdapter(t)
+		adapter := NewOperatorCodeHTTPAdapter(fixture.grants, fixture.binding, fixture.authority, operatorCodeHTTPTestApplicationWithoutIndexIntent{base: fixture.app}, fixture.recorder)
+		recorder := httptest.NewRecorder()
+		adapter.HandleIndexIntentSubmit(recorder, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"missing-capability","kind":"reindex"}`, fixture.identity))
+		require.Equal(t, http.StatusServiceUnavailable, recorder.Code, recorder.Body.String())
+		require.Empty(t, recorder.Body.String())
+	})
+
+	t.Run("revoked grant", func(t *testing.T) {
+		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+		fixture.grants.allowed = false
+		recorder := httptest.NewRecorder()
+		adapter.HandleIndexIntentSubmit(recorder, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"revoked","kind":"reindex"}`, fixture.identity))
+		require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+		require.Empty(t, recorder.Body.String())
+	})
+
+	t.Run("wrong returned context", func(t *testing.T) {
+		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+		intent := operatorCodeHTTPTestIndexIntent(fixture.ref, "wrong-context", uci.IndexIntentReindex, uci.IndexIntentSubmitted)
+		intent.PreviousView.ViewID = uuid.NewString()
+		fixture.app.indexIntents = map[string]uci.IndexIntent{intent.ID: intent}
+		recorder := httptest.NewRecorder()
+		adapter.HandleIndexIntentStatus(recorder, operatorCodeHTTPTestIndexIntentStatusRequest(t, intent.ID, "", fixture.identity))
+		require.Equal(t, http.StatusConflict, recorder.Code, recorder.Body.String())
+		require.Empty(t, recorder.Body.String())
+	})
+
+	t.Run("invalid returned shape", func(t *testing.T) {
+		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+		intent := operatorCodeHTTPTestIndexIntent(fixture.ref, "invalid-shape", uci.IndexIntentReindex, uci.IndexIntentSubmitted)
+		intent.CreatedAt = time.Time{}
+		fixture.app.indexIntents = map[string]uci.IndexIntent{intent.ID: intent}
+		recorder := httptest.NewRecorder()
+		adapter.HandleIndexIntentStatus(recorder, operatorCodeHTTPTestIndexIntentStatusRequest(t, intent.ID, "", fixture.identity))
+		require.Equal(t, http.StatusServiceUnavailable, recorder.Code, recorder.Body.String())
+		require.Empty(t, recorder.Body.String())
+	})
+
+	t.Run("ordinary application failure", func(t *testing.T) {
+		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+		fixture.app.indexGetErr = errors.New("index service offline")
+		recorder := httptest.NewRecorder()
+		adapter.HandleIndexIntentStatus(recorder, operatorCodeHTTPTestIndexIntentStatusRequest(t, uuid.NewString(), "", fixture.identity))
+		require.Equal(t, http.StatusServiceUnavailable, recorder.Code, recorder.Body.String())
+		require.Empty(t, recorder.Body.String())
+	})
+
+	for _, testCase := range []struct {
+		name      string
+		configure func(*operatorCodeHTTPTestFixture)
+	}{
+		{
+			name: "binding release failure",
+			configure: func(fixture *operatorCodeHTTPTestFixture) {
+				fixture.binding.failOnCall = 2
+			},
+		},
+		{
+			name: "grant revocation during release",
+			configure: func(fixture *operatorCodeHTTPTestFixture) {
+				fixture.grants.revokeOnSecondCheck = true
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+			intent := operatorCodeHTTPTestIndexIntent(fixture.ref, "concealed-"+testCase.name, uci.IndexIntentReindex, uci.IndexIntentCompleted)
+			fixture.app.indexIntents = map[string]uci.IndexIntent{intent.ID: intent}
+			testCase.configure(fixture)
+			recorder := httptest.NewRecorder()
+			adapter.HandleIndexIntentStatus(recorder, operatorCodeHTTPTestIndexIntentStatusRequest(t, intent.ID, "", fixture.identity))
+
+			require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+			require.NotContains(t, recorder.Body.String(), `"result"`)
+			operatorCodeHTTPTestRequireSafeIndexIntentResponse(t, recorder.Body.String(), false, fixture)
+			require.Empty(t, fixture.recorder.inputs)
+		})
+	}
+}
+
+func TestOperatorCodeHTTPAdapter_IndexIntentStatusRequiresHeaderProof(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		body      string
+		configure func(*http.Request)
+		want      int
+	}{
+		{name: "header proof", want: http.StatusOK},
+		{name: "query proof", configure: func(request *http.Request) { request.URL.RawQuery = "document_proof=proof-current" }, want: http.StatusBadRequest},
+		{name: "unknown query", configure: func(request *http.Request) { request.URL.RawQuery = "unexpected=value" }, want: http.StatusBadRequest},
+		{name: "body proof", body: `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current"}`, want: http.StatusBadRequest},
+		{name: "missing proof header", configure: func(request *http.Request) { request.Header.Del("X-Engram-Document-Proof") }, want: http.StatusBadRequest},
+		{name: "missing binding header", configure: func(request *http.Request) { request.Header.Del("X-Engram-Tab-Binding-ID") }, want: http.StatusBadRequest},
+		{name: "duplicate proof header", configure: func(request *http.Request) { request.Header.Add("X-Engram-Document-Proof", "proof-second") }, want: http.StatusBadRequest},
+		{name: "oversized proof header", configure: func(request *http.Request) {
+			request.Header.Set("X-Engram-Document-Proof", string(bytes.Repeat([]byte("x"), 257)))
+		}, want: http.StatusBadRequest},
+		{name: "wrong method", configure: func(request *http.Request) { request.Method = http.MethodPost }, want: http.StatusBadRequest},
+		{name: "invalid path reference", configure: func(request *http.Request) {
+			routeContext := chi.RouteContext(request.Context())
+			routeContext.URLParams.Values[0] = "not-an-intent"
+		}, want: http.StatusBadRequest},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+			intent := operatorCodeHTTPTestIndexIntent(fixture.ref, "header-rules", uci.IndexIntentReindex, uci.IndexIntentSubmitted)
+			fixture.app.indexIntents = map[string]uci.IndexIntent{intent.ID: intent}
+			request := operatorCodeHTTPTestIndexIntentStatusRequest(t, intent.ID, testCase.body, fixture.identity)
+			if testCase.configure != nil {
+				testCase.configure(request)
+			}
+			recorder := httptest.NewRecorder()
+			adapter.HandleIndexIntentStatus(recorder, request)
+
+			require.Equal(t, testCase.want, recorder.Code, recorder.Body.String())
+			if testCase.want == http.StatusOK {
+				operatorCodeHTTPTestRequireSafeIndexIntentResponse(t, recorder.Body.String(), false, fixture)
+			} else {
+				require.Empty(t, recorder.Body.String())
+				require.Zero(t, fixture.app.indexGetCalls)
+			}
+		})
+	}
+}
+
+func TestOperatorCodeHTTPAdapter_IndexIntentDigestIsCanonical(t *testing.T) {
+	proof := BrowserBindingProof{TabBindingID: operatorCodeHTTPTestBindingID, DocumentProof: "proof-current"}
+	first := operatorCodeIndexIntentDigest("operator-code-index-intent-submit", proof, "", "request-1", uci.IndexIntentReindex)
+	second := operatorCodeIndexIntentDigest("operator-code-index-intent-submit", proof, "", "request-1", uci.IndexIntentReindex)
+	require.Equal(t, first, second)
+	require.NotEqual(t, first, operatorCodeIndexIntentDigest("operator-code-index-intent-submit", proof, "", "request-2", uci.IndexIntentReindex))
+}
+
+const (
+	operatorCodeHTTPTestBindingID     = "60000000-0000-4000-8000-000000000041"
+	operatorCodeHTTPTestIncarnationID = "70000000-0000-4000-8000-000000000001"
+)
 
 type operatorCodeHTTPTestFixture struct {
 	ref       uci.ContextRef
@@ -422,21 +694,22 @@ func (grants *operatorCodeHTTPTestGrants) Current(_ context.Context, caller auth
 }
 
 type operatorCodeHTTPTestBinding struct {
-	pinned    *BrowserBindingContext
-	err       error
-	calls     int
-	guardedID string
-	handshake BrowserBindingTransition
-	resume    BrowserBindingTransition
-	renewed   []BrowserBindingProof
-	closed    []BrowserBindingProof
-	pinnedTo  []BrowserBindingContext
+	pinned     *BrowserBindingContext
+	err        error
+	calls      int
+	failOnCall int
+	guardedID  string
+	handshake  BrowserBindingTransition
+	resume     BrowserBindingTransition
+	renewed    []BrowserBindingProof
+	closed     []BrowserBindingProof
+	pinnedTo   []BrowserBindingContext
 }
 
 func (binding *operatorCodeHTTPTestBinding) Guard(_ context.Context, identity auth.Identity, sessionID string, proof BrowserBindingProof) (BrowserBindingGuarded, error) {
 	binding.calls++
-	if binding.err != nil {
-		return BrowserBindingGuarded{}, binding.err
+	if binding.err != nil || (binding.failOnCall > 0 && binding.calls >= binding.failOnCall) {
+		return BrowserBindingGuarded{}, errors.New("proof denied")
 	}
 	if _, ok := identity.SessionBrowserSubject(); !ok || sessionID != "browser-session-41" || proof.TabBindingID != operatorCodeHTTPTestBindingID || proof.DocumentProof != "proof-current" {
 		return BrowserBindingGuarded{}, errors.New("proof denied")
@@ -546,16 +819,28 @@ func (authorizer operatorCodeHTTPTestAuthorizer) AuthorizeContext(_ context.Cont
 }
 
 type operatorCodeHTTPTestApplication struct {
-	search         uci.QueryResponse
-	graph          uci.QueryResponse
-	read           uci.QueryResponse
-	status         mcp.CodebaseStatusSnapshot
-	metadata       map[string]string
-	sourceSessions []string
-	searchCalls    int
-	graphCalls     int
-	readCalls      int
-	projectCalls   int
+	search               uci.QueryResponse
+	graph                uci.QueryResponse
+	read                 uci.QueryResponse
+	status               mcp.CodebaseStatusSnapshot
+	metadata             map[string]string
+	sourceSessions       []string
+	searchCalls          int
+	graphCalls           int
+	readCalls            int
+	projectCalls         int
+	indexIntents         map[string]uci.IndexIntent
+	indexSubmitErr       error
+	indexGetErr          error
+	indexRetryErr        error
+	indexSubmitCalls     int
+	indexGetCalls        int
+	indexRetryCalls      int
+	indexRetryExecutions int
+	indexSubmitSessions  []string
+	indexGetSessions     []string
+	indexRetrySessions   []string
+	indexRetryResult     *uci.IndexIntent
 }
 
 func (app *operatorCodeHTTPTestApplication) SearchCodebase(ctx context.Context, _ uci.AuthorizedContext, _ mcp.CodebaseSearchInput) (uci.QueryResponse, error) {
@@ -585,6 +870,101 @@ func (app *operatorCodeHTTPTestApplication) Project(_ context.Context, _ uci.Con
 	return app.metadata, nil
 }
 
+func (app *operatorCodeHTTPTestApplication) SubmitIndexIntent(ctx context.Context, authorized uci.AuthorizedContext, requestRef string, kind uci.IndexIntentKind) (uci.IndexIntent, error) {
+	app.indexSubmitCalls++
+	app.indexSubmitSessions = append(app.indexSubmitSessions, auditcontext.SourceSession(ctx))
+	if app.indexSubmitErr != nil {
+		return uci.IndexIntent{}, app.indexSubmitErr
+	}
+	if app.indexIntents == nil {
+		app.indexIntents = make(map[string]uci.IndexIntent)
+	}
+	if existing, found := app.indexIntents[requestRef]; found {
+		if existing.Kind != kind || existing.PreviousView == nil || !operatorCodeHTTPTestRefsEqual(*existing.PreviousView, authorized.Ref()) {
+			return uci.IndexIntent{}, uci.ErrIndexIntentBindingMismatch
+		}
+		return existing.Clone(), nil
+	}
+	intent := operatorCodeHTTPTestIndexIntent(authorized.Ref(), requestRef, kind, uci.IndexIntentSubmitted)
+	app.indexIntents[requestRef] = intent
+	return intent.Clone(), nil
+}
+
+func (app *operatorCodeHTTPTestApplication) GetIndexIntent(ctx context.Context, _ uci.AuthorizedContext, intentRef string) (uci.IndexIntent, error) {
+	app.indexGetCalls++
+	app.indexGetSessions = append(app.indexGetSessions, auditcontext.SourceSession(ctx))
+	if app.indexGetErr != nil {
+		return uci.IndexIntent{}, app.indexGetErr
+	}
+	_, intent, found := app.indexIntent(intentRef)
+	if !found {
+		return uci.IndexIntent{}, uci.ErrIndexIntentNotFound
+	}
+	return intent.Clone(), nil
+}
+
+func (app *operatorCodeHTTPTestApplication) RetryIndexIntent(ctx context.Context, authorized uci.AuthorizedContext, intentRef string) (uci.IndexIntent, error) {
+	app.indexRetryCalls++
+	app.indexRetrySessions = append(app.indexRetrySessions, auditcontext.SourceSession(ctx))
+	if app.indexRetryErr != nil {
+		return uci.IndexIntent{}, app.indexRetryErr
+	}
+	key, intent, found := app.indexIntent(intentRef)
+	if !found {
+		return uci.IndexIntent{}, uci.ErrIndexIntentNotFound
+	}
+	if intent.PreviousView == nil || !operatorCodeHTTPTestRefsEqual(*intent.PreviousView, authorized.Ref()) {
+		return uci.IndexIntent{}, uci.ErrIndexIntentRetryUnauthorized
+	}
+	if intent.State != uci.IndexIntentUnavailable {
+		return uci.IndexIntent{}, uci.ErrIndexIntentInvalidTransition
+	}
+	if app.indexRetryResult != nil {
+		return app.indexRetryResult.Clone(), nil
+	}
+	intent.State = uci.IndexIntentQueued
+	intent.UpdatedAt = intent.UpdatedAt.Add(time.Second)
+	app.indexIntents[key] = intent
+	app.indexRetryExecutions++
+	return intent.Clone(), nil
+}
+
+func (app *operatorCodeHTTPTestApplication) indexIntent(intentRef string) (string, uci.IndexIntent, bool) {
+	if intent, found := app.indexIntents[intentRef]; found && intent.ID == intentRef {
+		return intentRef, intent, true
+	}
+	for key, intent := range app.indexIntents {
+		if intent.ID == intentRef {
+			return key, intent, true
+		}
+	}
+	return "", uci.IndexIntent{}, false
+}
+
+type operatorCodeHTTPTestApplicationWithoutIndexIntent struct {
+	base *operatorCodeHTTPTestApplication
+}
+
+func (app operatorCodeHTTPTestApplicationWithoutIndexIntent) SearchCodebase(ctx context.Context, authorized uci.AuthorizedContext, input mcp.CodebaseSearchInput) (uci.QueryResponse, error) {
+	return app.base.SearchCodebase(ctx, authorized, input)
+}
+
+func (app operatorCodeHTTPTestApplicationWithoutIndexIntent) ExploreCodebase(ctx context.Context, authorized uci.AuthorizedContext, input mcp.CodebaseGraphInput) (uci.QueryResponse, error) {
+	return app.base.ExploreCodebase(ctx, authorized, input)
+}
+
+func (app operatorCodeHTTPTestApplicationWithoutIndexIntent) ReadCodebase(ctx context.Context, authorized uci.AuthorizedContext, input mcp.CodebaseReadInput) (uci.QueryResponse, error) {
+	return app.base.ReadCodebase(ctx, authorized, input)
+}
+
+func (app operatorCodeHTTPTestApplicationWithoutIndexIntent) CodebaseStatus(ctx context.Context, authorized uci.AuthorizedContext) (mcp.CodebaseStatusSnapshot, error) {
+	return app.base.CodebaseStatus(ctx, authorized)
+}
+
+func (app operatorCodeHTTPTestApplicationWithoutIndexIntent) Project(ctx context.Context, ref uci.ContextRef) (map[string]string, error) {
+	return app.base.Project(ctx, ref)
+}
+
 type operatorCodeHTTPTestRecorder struct {
 	inputs         []uci.ExposureInput
 	sourceSessions []string
@@ -606,6 +986,83 @@ func operatorCodeHTTPTestRequest(t *testing.T, body string, identity auth.Identi
 	request.Header.Set("X-Engram-Request-ID", "operator-request-1")
 	request.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: "browser-session-41"})
 	return request.WithContext(auth.WithIdentity(request.Context(), identity))
+}
+
+func operatorCodeHTTPTestIndexIntentStatusRequest(t *testing.T, intentRef, body string, identity auth.Identity) *http.Request {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet, "/api/operator/code/intents/"+intentRef, bytes.NewBufferString(body))
+	request.Header.Set("X-Engram-Request-ID", "operator-request-1")
+	request.Header.Set("X-Engram-Tab-Binding-ID", operatorCodeHTTPTestBindingID)
+	request.Header.Set("X-Engram-Document-Proof", "proof-current")
+	request.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: "browser-session-41"})
+	request = request.WithContext(auth.WithIdentity(request.Context(), identity))
+	routeContext := chi.NewRouteContext()
+	routeContext.URLParams.Add("intent_ref", intentRef)
+	return request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, routeContext))
+}
+
+func operatorCodeHTTPTestIndexIntentRetryRequest(t *testing.T, intentRef string, identity auth.Identity) *http.Request {
+	t.Helper()
+	request := operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current"}`, identity)
+	routeContext := chi.NewRouteContext()
+	routeContext.URLParams.Add("intent_ref", intentRef)
+	return request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, routeContext))
+}
+
+func operatorCodeHTTPTestIndexIntent(tRef uci.ContextRef, requestRef string, kind uci.IndexIntentKind, state uci.IndexIntentState) uci.IndexIntent {
+	createdAt := time.Date(2026, time.September, 10, 12, 0, 0, 0, time.UTC)
+	previous := tRef.Clone()
+	intent := uci.IndexIntent{
+		ID:         uuid.NewString(),
+		RequestRef: requestRef,
+		Kind:       kind,
+		Scope: uci.IndexScope{
+			SourceID:      tRef.SourceID,
+			CheckoutID:    tRef.CheckoutID,
+			IncarnationID: operatorCodeHTTPTestIncarnationID,
+		},
+		ProfileID:    tRef.AnalysisProfileID,
+		PreviousView: &previous,
+		State:        state,
+		CreatedAt:    createdAt,
+		UpdatedAt:    createdAt,
+	}
+	if state == uci.IndexIntentAcknowledged || state == uci.IndexIntentRunning || state == uci.IndexIntentCompleted || state == uci.IndexIntentFailed {
+		claim, _ := uci.NewIndexIntentClaim(intent.ID, "private-index-owner", 1, createdAt)
+		intent.Attempt = 1
+		intent.Acknowledgement = &claim
+	}
+	if state == uci.IndexIntentCompleted {
+		result := tRef.Clone()
+		result.ViewID = uuid.NewString()
+		result.Generation++
+		intent.ResultView = &result
+	}
+	return intent
+}
+
+func operatorCodeHTTPTestIndexIntentResponse(t *testing.T, body string) map[string]any {
+	t.Helper()
+	response := make(map[string]any)
+	require.NoError(t, json.Unmarshal([]byte(body), &response))
+	return response
+}
+
+func operatorCodeHTTPTestRequireSafeIndexIntentResponse(t *testing.T, body string, resultAllowed bool, fixture *operatorCodeHTTPTestFixture) {
+	t.Helper()
+	for _, privateField := range []string{
+		`"request_ref"`, `"kind"`, `"source_id"`, `"checkout_id"`, `"incarnation_id"`, `"profile_id"`, `"previous_view"`, `"acknowledgement"`, `"owner"`, `"tab_binding_id"`, `"document_proof"`, `"lease"`, `"host"`, `"path"`, `"provider"`,
+	} {
+		require.NotContains(t, body, privateField)
+	}
+	for _, privateValue := range []string{
+		fixture.ref.SourceID, fixture.ref.CheckoutID, fixture.ref.AnalysisProfileID, operatorCodeHTTPTestBindingID, "proof-current", "private-index-owner",
+	} {
+		require.NotContains(t, body, privateValue)
+	}
+	if !resultAllowed {
+		require.NotContains(t, body, `"result"`)
+	}
 }
 
 func operatorCodeHTTPTestQueryResponse(t *testing.T, ref uci.ContextRef, mode uci.QueryRetrievalMode) uci.QueryResponse {

@@ -87,6 +87,15 @@ type operatorCodeApplication interface {
 	Project(context.Context, uci.ContextRef) (map[string]string, error)
 }
 
+// operatorCodeIndexIntentApplication is an optional durable-index capability.
+// It receives only the reauthorized UCI context and opaque intent arguments;
+// grant, binding, browser proof, and release ownership remain at this boundary.
+type operatorCodeIndexIntentApplication interface {
+	SubmitIndexIntent(context.Context, uci.AuthorizedContext, string, uci.IndexIntentKind) (uci.IndexIntent, error)
+	GetIndexIntent(context.Context, uci.AuthorizedContext, string) (uci.IndexIntent, error)
+	RetryIndexIntent(context.Context, uci.AuthorizedContext, string) (uci.IndexIntent, error)
+}
+
 // operatorCodeExposureRecorder is the existing T016 recorder boundary. A
 // failed append must never permit contextual serialization.
 type operatorCodeExposureRecorder interface {
@@ -284,6 +293,138 @@ func (adapter *OperatorCodeHTTPAdapter) HandleStatus(w http.ResponseWriter, r *h
 	})
 }
 
+// HandleIndexIntentSubmit acknowledges one durable indexing request. A 202 is
+// only an admission projection; GET status is the sole current-state source.
+func (adapter *OperatorCodeHTTPAdapter) HandleIndexIntentSubmit(w http.ResponseWriter, r *http.Request) {
+	var request operatorCodeIndexIntentSubmitRequest
+	identity, ok := adapter.decodeIndexIntentJSON(w, r, "operator-code-index-intent-submit", &request)
+	if !ok || !request.valid() {
+		if ok {
+			operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		}
+		return
+	}
+	identity.digest = operatorCodeIndexIntentDigest("operator-code-index-intent-submit", request.Proof(), "", request.RequestRef, request.Kind)
+	r = r.WithContext(auditcontext.WithSourceSession(r.Context(), identity.sessionID))
+	caller, failure := adapter.authorize(r.Context(), identity, request.Proof())
+	if failure != uci.ReleaseFailureNone {
+		operatorCodeWriteFailure(w, failure)
+		return
+	}
+	application, ok := adapter.app.(operatorCodeIndexIntentApplication)
+	if !ok {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return
+	}
+	intent, err := application.SubmitIndexIntent(r.Context(), caller.authorized, request.RequestRef, request.Kind)
+	if err != nil {
+		operatorCodeWriteFailure(w, operatorCodeIndexIntentFailure(err))
+		return
+	}
+	if !operatorCodeIndexIntentShapeValid(intent) {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return
+	}
+	if !operatorCodeIndexIntentMatches(intent, caller.authorized) {
+		operatorCodeWriteBodyless(w, http.StatusConflict)
+		return
+	}
+	operatorCodeWriteIndexIntentAcknowledgement(w, intent)
+}
+
+// HandleIndexIntentStatus returns durable operation state. Only a completed
+// intent can release result metadata, and a release refusal remains concealed.
+func (adapter *OperatorCodeHTTPAdapter) HandleIndexIntentStatus(w http.ResponseWriter, r *http.Request) {
+	identity, intentRef, proof, ok := adapter.decodeIndexIntentStatus(w, r, "operator-code-index-intent-status")
+	if !ok {
+		return
+	}
+	r = r.WithContext(auditcontext.WithSourceSession(r.Context(), identity.sessionID))
+	caller, failure := adapter.authorize(r.Context(), identity, proof)
+	if failure != uci.ReleaseFailureNone {
+		operatorCodeWriteFailure(w, failure)
+		return
+	}
+	application, ok := adapter.app.(operatorCodeIndexIntentApplication)
+	if !ok {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return
+	}
+	intent, err := application.GetIndexIntent(r.Context(), caller.authorized, intentRef)
+	if err != nil {
+		operatorCodeWriteFailure(w, operatorCodeIndexIntentFailure(err))
+		return
+	}
+	if !operatorCodeIndexIntentShapeValid(intent) {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return
+	}
+	if !operatorCodeIndexIntentMatches(intent, caller.authorized) {
+		operatorCodeWriteBodyless(w, http.StatusConflict)
+		return
+	}
+
+	response := operatorCodeIndexIntentResponseFor(intent)
+	if intent.State == uci.IndexIntentCompleted {
+		decision := adapter.releaseNonContent(r.Context(), identity, caller, uci.ReleaseCategoryCodeIndexResult)
+		if decision.Released() && operatorCodeIndexIntentMatches(intent, decision.Authorized) {
+			response.Result = &operatorCodeIndexIntentResultResponse{
+				ViewRef:    intent.ResultView.ViewID,
+				Generation: intent.ResultView.Generation,
+			}
+		}
+	}
+	writeJSON(w, response)
+}
+
+// HandleIndexIntentRetry acknowledges a retry only after the application has
+// reauthorized it. It never returns a completion result or schedules directly.
+func (adapter *OperatorCodeHTTPAdapter) HandleIndexIntentRetry(w http.ResponseWriter, r *http.Request) {
+	var request operatorCodeIndexIntentRetryRequest
+	identity, ok := adapter.decodeIndexIntentJSON(w, r, "operator-code-index-intent-retry", &request)
+	if !ok || !request.valid() {
+		if ok {
+			operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		}
+		return
+	}
+	intentRef, ok := operatorCodeIndexIntentPath(r)
+	if !ok {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return
+	}
+	identity.digest = operatorCodeIndexIntentDigest("operator-code-index-intent-retry", request.Proof(), intentRef, "", "")
+	r = r.WithContext(auditcontext.WithSourceSession(r.Context(), identity.sessionID))
+	caller, failure := adapter.authorize(r.Context(), identity, request.Proof())
+	if failure != uci.ReleaseFailureNone {
+		operatorCodeWriteFailure(w, failure)
+		return
+	}
+	application, ok := adapter.app.(operatorCodeIndexIntentApplication)
+	if !ok {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return
+	}
+	intent, err := application.RetryIndexIntent(r.Context(), caller.authorized, intentRef)
+	if err != nil {
+		operatorCodeWriteFailure(w, operatorCodeIndexIntentFailure(err))
+		return
+	}
+	if !operatorCodeIndexIntentShapeValid(intent) {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return
+	}
+	if !operatorCodeIndexIntentMatches(intent, caller.authorized) {
+		operatorCodeWriteBodyless(w, http.StatusConflict)
+		return
+	}
+	if intent.State != uci.IndexIntentQueued {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return
+	}
+	operatorCodeWriteIndexIntentAcknowledgement(w, intent)
+}
+
 // HandleSearch reads bounded lexical code results from the one current grant.
 // It deliberately accepts no project, path, label, Space, or context selector.
 func (adapter *OperatorCodeHTTPAdapter) HandleSearch(w http.ResponseWriter, r *http.Request) {
@@ -431,6 +572,28 @@ type operatorCodeProofRequest struct {
 
 func (request operatorCodeProofRequest) Proof() BrowserBindingProof {
 	return BrowserBindingProof{TabBindingID: request.TabBindingID, DocumentProof: request.DocumentProof}
+}
+
+type operatorCodeIndexIntentSubmitRequest struct {
+	operatorCodeProofRequest
+	RequestRef string              `json:"request_ref"`
+	Kind       uci.IndexIntentKind `json:"kind"`
+}
+
+func (request operatorCodeIndexIntentSubmitRequest) valid() bool {
+	return operatorCodeProofValid(request.Proof()) && operatorCodeText(request.RequestRef) && (request.Kind == uci.IndexIntentReindex || request.Kind == uci.IndexIntentReconcile)
+}
+
+type operatorCodeIndexIntentRetryRequest struct {
+	operatorCodeProofRequest
+}
+
+func (request operatorCodeIndexIntentRetryRequest) valid() bool {
+	return operatorCodeProofValid(request.Proof())
+}
+
+func operatorCodeProofValid(proof BrowserBindingProof) bool {
+	return operatorCodeUUID(proof.TabBindingID) && operatorCodeText(proof.DocumentProof)
 }
 
 type operatorCodePathProofRequest struct {
@@ -735,6 +898,20 @@ type operatorCodeAuthorizedRequest struct {
 }
 
 func (adapter *OperatorCodeHTTPAdapter) decode(w http.ResponseWriter, r *http.Request, endpoint string, target any) (operatorCodeRequestIdentity, bool) {
+	identity, ok := adapter.decodeIdentity(w, r, endpoint)
+	if !ok {
+		return operatorCodeRequestIdentity{}, false
+	}
+	raw, err := operatorCodeReadJSON(r, target)
+	if err != nil {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return operatorCodeRequestIdentity{}, false
+	}
+	identity.digest = operatorCodeRequestDigest(endpoint, raw)
+	return identity, true
+}
+
+func (adapter *OperatorCodeHTTPAdapter) decodeIdentity(w http.ResponseWriter, r *http.Request, endpoint string) (operatorCodeRequestIdentity, bool) {
 	if adapter == nil || r == nil || !operatorCodeText(endpoint) {
 		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 		return operatorCodeRequestIdentity{}, false
@@ -754,18 +931,100 @@ func (adapter *OperatorCodeHTTPAdapter) decode(w http.ResponseWriter, r *http.Re
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
 		return operatorCodeRequestIdentity{}, false
 	}
-	raw, err := operatorCodeReadJSON(r, target)
-	if err != nil {
+	return operatorCodeRequestIdentity{requestID: requestID, identity: identity, sessionID: sessionID}, true
+}
+
+func (adapter *OperatorCodeHTTPAdapter) decodeIndexIntentJSON(w http.ResponseWriter, r *http.Request, endpoint string, target any) (operatorCodeRequestIdentity, bool) {
+	if r == nil || r.URL == nil || r.Method != http.MethodPost || r.URL.RawQuery != "" || len(r.Header.Values("X-Engram-Request-ID")) != 1 {
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
 		return operatorCodeRequestIdentity{}, false
 	}
-	digest := sha256.Sum256(append(append([]byte(endpoint+"\n"), raw...), '\n'))
-	return operatorCodeRequestIdentity{
-		requestID: requestID,
-		digest:    "sha256:" + hex.EncodeToString(digest[:]),
-		identity:  identity,
-		sessionID: sessionID,
-	}, true
+	identity, ok := adapter.decodeIdentity(w, r, endpoint)
+	if !ok {
+		return operatorCodeRequestIdentity{}, false
+	}
+	if _, err := operatorCodeReadJSON(r, target); err != nil {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return operatorCodeRequestIdentity{}, false
+	}
+	return identity, true
+}
+
+func (adapter *OperatorCodeHTTPAdapter) decodeIndexIntentStatus(w http.ResponseWriter, r *http.Request, endpoint string) (operatorCodeRequestIdentity, string, BrowserBindingProof, bool) {
+	if r == nil || r.URL == nil || r.Method != http.MethodGet || r.URL.RawQuery != "" || !operatorCodeEmptyBody(r) || len(r.Header.Values("X-Engram-Request-ID")) != 1 {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return operatorCodeRequestIdentity{}, "", BrowserBindingProof{}, false
+	}
+	intentRef, ok := operatorCodeIndexIntentPath(r)
+	if !ok {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return operatorCodeRequestIdentity{}, "", BrowserBindingProof{}, false
+	}
+	tabBindingID, ok := operatorCodeSingleHeader(r, "X-Engram-Tab-Binding-ID")
+	if !ok || !operatorCodeUUID(tabBindingID) {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return operatorCodeRequestIdentity{}, "", BrowserBindingProof{}, false
+	}
+	documentProof, ok := operatorCodeSingleHeader(r, "X-Engram-Document-Proof")
+	if !ok {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return operatorCodeRequestIdentity{}, "", BrowserBindingProof{}, false
+	}
+	proof := BrowserBindingProof{TabBindingID: tabBindingID, DocumentProof: documentProof}
+	identity, ok := adapter.decodeIdentity(w, r, endpoint)
+	if !ok {
+		return operatorCodeRequestIdentity{}, "", BrowserBindingProof{}, false
+	}
+	identity.digest = operatorCodeIndexIntentDigest(endpoint, proof, intentRef, "", "")
+	return identity, intentRef, proof, true
+}
+
+func operatorCodeEmptyBody(r *http.Request) bool {
+	if r.Body == nil {
+		return true
+	}
+	if r.ContentLength > 0 {
+		return false
+	}
+	value, err := io.ReadAll(io.LimitReader(r.Body, 1))
+	return err == nil && len(value) == 0
+}
+
+func operatorCodeSingleHeader(r *http.Request, name string) (string, bool) {
+	values := r.Header.Values(name)
+	if len(values) != 1 || !operatorCodeText(values[0]) {
+		return "", false
+	}
+	return values[0], true
+}
+
+func operatorCodeIndexIntentPath(r *http.Request) (string, bool) {
+	intentRef := chi.URLParam(r, "intent_ref")
+	return intentRef, operatorCodeUUID(intentRef)
+}
+
+type operatorCodeIndexIntentDigestBinding struct {
+	TabBindingID  string              `json:"tab_binding_id"`
+	DocumentProof string              `json:"document_proof"`
+	IntentRef     string              `json:"intent_ref,omitempty"`
+	RequestRef    string              `json:"request_ref,omitempty"`
+	Kind          uci.IndexIntentKind `json:"kind,omitempty"`
+}
+
+func operatorCodeIndexIntentDigest(endpoint string, proof BrowserBindingProof, intentRef, requestRef string, kind uci.IndexIntentKind) string {
+	encoded, _ := json.Marshal(operatorCodeIndexIntentDigestBinding{
+		TabBindingID:  proof.TabBindingID,
+		DocumentProof: proof.DocumentProof,
+		IntentRef:     intentRef,
+		RequestRef:    requestRef,
+		Kind:          kind,
+	})
+	return operatorCodeRequestDigest(endpoint, encoded)
+}
+
+func operatorCodeRequestDigest(endpoint string, binding []byte) string {
+	digest := sha256.Sum256(append(append([]byte(endpoint+"\n"), binding...), '\n'))
+	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
 func operatorCodeReadJSON(r *http.Request, target any) ([]byte, error) {
@@ -1122,6 +1381,33 @@ func operatorCodeStatusValid(snapshot mcp.CodebaseStatusSnapshot) bool {
 	return snapshot.Freshness == nil || snapshot.Freshness.Validate() == nil
 }
 
+func operatorCodeIndexIntentShapeValid(intent uci.IndexIntent) bool {
+	return intent.Validate() == nil && !intent.CreatedAt.IsZero() && !intent.UpdatedAt.IsZero() && !intent.UpdatedAt.Before(intent.CreatedAt)
+}
+
+func operatorCodeIndexIntentMatches(intent uci.IndexIntent, authorized uci.AuthorizedContext) bool {
+	ref := authorized.Ref()
+	if ref.SpaceID != nil || intent.Scope.SourceID != ref.SourceID || intent.Scope.CheckoutID != ref.CheckoutID || intent.ProfileID != ref.AnalysisProfileID || intent.PreviousView == nil || !operatorCodeRefsEqual(*intent.PreviousView, ref) {
+		return false
+	}
+	if intent.State != uci.IndexIntentCompleted {
+		return true
+	}
+	result := intent.ResultView
+	return result != nil && result.SpaceID == nil && result.SourceID == ref.SourceID && result.CheckoutID == ref.CheckoutID && result.AnalysisProfileID == ref.AnalysisProfileID
+}
+
+func operatorCodeIndexIntentFailure(err error) uci.ReleaseFailureCode {
+	switch {
+	case errors.Is(err, uci.ErrIndexIntentRetryUnauthorized):
+		return uci.ReleaseFailurePermissionDenied
+	case errors.Is(err, uci.ErrIndexIntentBindingMismatch), errors.Is(err, uci.ErrIndexIntentNotFound), errors.Is(err, uci.ErrIndexIntentInvalidTransition), errors.Is(err, uci.ErrIndexIntentResultInvalid), errors.Is(err, uci.ErrIndexIntentResultUnreadable):
+		return uci.ReleaseFailureContextMismatch
+	default:
+		return operatorCodeContextFailure(err)
+	}
+}
+
 type operatorCodeTransitionResponse struct {
 	State         BrowserBindingTransitionState `json:"state"`
 	TabBindingID  string                        `json:"tab_binding_id,omitempty"`
@@ -1165,6 +1451,43 @@ type operatorCodeStatusResponse struct {
 	EmbeddedChunks int64               `json:"embedded_chunks"`
 	Embedding      uci.EmbeddingStatus `json:"embedding"`
 	Freshness      *uci.QueryFreshness `json:"freshness,omitempty"`
+}
+
+type operatorCodeIndexIntentResultResponse struct {
+	ViewRef    string `json:"view_ref"`
+	Generation int64  `json:"generation"`
+}
+
+type operatorCodeIndexIntentResponse struct {
+	IntentRef string                                 `json:"intent_ref"`
+	State     uci.IndexIntentState                   `json:"state"`
+	Attempt   int                                    `json:"attempt"`
+	Retryable bool                                   `json:"retryable"`
+	CreatedAt time.Time                              `json:"created_at"`
+	UpdatedAt time.Time                              `json:"updated_at"`
+	Result    *operatorCodeIndexIntentResultResponse `json:"result,omitempty"`
+}
+
+func operatorCodeIndexIntentResponseFor(intent uci.IndexIntent) operatorCodeIndexIntentResponse {
+	return operatorCodeIndexIntentResponse{
+		IntentRef: intent.ID,
+		State:     intent.State,
+		Attempt:   intent.Attempt,
+		Retryable: intent.State == uci.IndexIntentUnavailable,
+		CreatedAt: intent.CreatedAt.UTC(),
+		UpdatedAt: intent.UpdatedAt.UTC(),
+	}
+}
+
+func operatorCodeWriteIndexIntentAcknowledgement(w http.ResponseWriter, intent uci.IndexIntent) {
+	response := operatorCodeIndexIntentResponseFor(intent)
+	if response.State != uci.IndexIntentSubmitted && response.State != uci.IndexIntentQueued {
+		response.State = uci.IndexIntentSubmitted
+	}
+	response.Retryable = false
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 func operatorCodeSafeMetadata(metadata map[string]string) (operatorCodeMetadata, bool) {
