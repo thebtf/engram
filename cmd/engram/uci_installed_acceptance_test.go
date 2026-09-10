@@ -159,7 +159,7 @@ func TestUCIInstalledStandardClientsKeepDirtyViewsIsolated(t *testing.T) {
 	uciInstalledAcceptanceRequireDefaultIsolation(t, result)
 	uciInstalledAcceptanceRequireRefusals(t, result)
 	uciInstalledAcceptanceRequireRecorderBehavior(t, result)
-	uciInstalledAcceptanceRequireWatcherIsolation(t, result)
+	uciInstalledAcceptanceRequireWatcherIsolation(t, request, result)
 	uciInstalledAcceptanceRequireRestartContinuity(t, request, result)
 
 	if !result.Cleanup.ProcessTreeClosed ||
@@ -556,7 +556,7 @@ func uciInstalledAcceptanceRequireRecorderBehavior(t *testing.T, result uciInsta
 	)
 }
 
-func uciInstalledAcceptanceRequireWatcherIsolation(t *testing.T, result uciInstalledAcceptanceResult) {
+func uciInstalledAcceptanceRequireWatcherIsolation(t *testing.T, request uciInstalledAcceptanceRequest, result uciInstalledAcceptanceResult) {
 	t.Helper()
 
 	initialA, initialAOK := result.ClientContexts[uciInstalledAcceptanceClientA]
@@ -569,11 +569,52 @@ func uciInstalledAcceptanceRequireWatcherIsolation(t *testing.T, result uciInsta
 		writeA.Generation < 2 || deleteA.Generation <= writeA.Generation ||
 		writeA.FreshnessState != "observed_current" || writeA.BarrierState != "satisfied" ||
 		deleteA.FreshnessState != "observed_current" || deleteA.BarrierState != "satisfied" {
-		t.Fatal("installed watcher did not publish isolated write and delete Views for client A")
+		t.Fatal("installed watcher did not publish isolated A v1-to-v2 and restored-v1 Views")
 	}
 	if writeB.SourceDigest != initialB.SourceDigest || writeB.CheckoutDigest != initialB.CheckoutDigest || writeB.ViewDigest != initialB.ViewDigest ||
-		deleteB != writeB || writeB.Generation < 1 || writeB.FreshnessState != "observed_current" {
-		t.Fatal("installed watcher changed client B while client A saved and deleted a file")
+		deleteB != writeB || writeB.FreshnessState != "observed_current" {
+		t.Fatal("installed watcher changed client B while client A updated and restored its tracked source")
+	}
+
+	updatedCallee := request.Fixture.PrimaryCallee + "V2"
+	updatedSource := strings.ReplaceAll(request.Fixture.PrimarySource, request.Fixture.PrimaryCallee, updatedCallee)
+	requireSnapshot := func(name string, snapshot uciInstalledAcceptanceWatcherSnapshot, source, callee string) {
+		t.Helper()
+		publication := snapshot.Publication
+		if publication.SourceDigest == "" || publication.CheckoutDigest == "" || publication.ViewDigest == "" || publication.RunDigest == "" || publication.Generation < 1 || publication.FreshnessState != "observed_current" ||
+			snapshot.BytesDigest != uciInstalledAcceptanceDigest(source) || snapshot.SearchDigest != snapshot.BytesDigest || snapshot.ReadDigest != snapshot.BytesDigest || snapshot.GraphDigest != uciInstalledAcceptanceDigest(callee) ||
+			!uciInstalledAcceptanceIsSHA256(publication.SourceDigest) || !uciInstalledAcceptanceIsSHA256(publication.CheckoutDigest) || !uciInstalledAcceptanceIsSHA256(publication.ViewDigest) || !uciInstalledAcceptanceIsSHA256(publication.RunDigest) ||
+			!uciInstalledAcceptanceIsSHA256(snapshot.BytesDigest) || !uciInstalledAcceptanceIsSHA256(snapshot.HeadDigest) || !uciInstalledAcceptanceIsSHA256(snapshot.TreeDigest) || !uciInstalledAcceptanceIsSHA256(snapshot.MembershipDigest) || !uciInstalledAcceptanceIsSHA256(snapshot.EdgesDigest) {
+			t.Fatalf("installed watcher %s snapshot is not exact redacted source, View, Git, membership, and edge evidence", name)
+		}
+	}
+	requireSnapshot("A v1", result.Watcher.InitialA, request.Fixture.PrimarySource, request.Fixture.PrimaryCallee)
+	requireSnapshot("A v2", result.Watcher.UpdatedA, updatedSource, updatedCallee)
+	requireSnapshot("A restored v1", result.Watcher.RestoredA, request.Fixture.PrimarySource, request.Fixture.PrimaryCallee)
+	requireSnapshot("B before A update", result.Watcher.InitialB, request.Fixture.LinkedSource, request.Fixture.LinkedCallee)
+	requireSnapshot("B after A update", result.Watcher.UpdatedB, request.Fixture.LinkedSource, request.Fixture.LinkedCallee)
+	requireSnapshot("B after A restore", result.Watcher.RestoredB, request.Fixture.LinkedSource, request.Fixture.LinkedCallee)
+
+	if result.Watcher.InitialA.Publication.ViewDigest != initialA.ViewDigest ||
+		result.Watcher.UpdatedA.Publication.ViewDigest != writeA.ViewDigest ||
+		result.Watcher.RestoredA.Publication.ViewDigest != deleteA.ViewDigest ||
+		result.Watcher.InitialA.BytesDigest == result.Watcher.UpdatedA.BytesDigest || result.Watcher.InitialA.BytesDigest != result.Watcher.RestoredA.BytesDigest ||
+		result.Watcher.InitialA.HeadDigest != result.Watcher.UpdatedA.HeadDigest || result.Watcher.InitialA.HeadDigest != result.Watcher.RestoredA.HeadDigest ||
+		result.Watcher.InitialA.TreeDigest != result.Watcher.UpdatedA.TreeDigest || result.Watcher.InitialA.TreeDigest != result.Watcher.RestoredA.TreeDigest {
+		t.Fatal("installed watcher did not retain exact saved A bytes and shared HEAD/tree across v1-to-v2 restoration")
+	}
+	if result.Watcher.InitialB.Publication.SourceDigest != result.Watcher.UpdatedB.Publication.SourceDigest || result.Watcher.InitialB.Publication.SourceDigest != result.Watcher.RestoredB.Publication.SourceDigest ||
+		result.Watcher.InitialB.Publication.CheckoutDigest != result.Watcher.UpdatedB.Publication.CheckoutDigest || result.Watcher.InitialB.Publication.CheckoutDigest != result.Watcher.RestoredB.Publication.CheckoutDigest ||
+		result.Watcher.InitialB.Publication.ViewDigest != initialB.ViewDigest || result.Watcher.InitialB.Publication.ViewDigest != result.Watcher.UpdatedB.Publication.ViewDigest || result.Watcher.InitialB.Publication.ViewDigest != result.Watcher.RestoredB.Publication.ViewDigest ||
+		result.Watcher.InitialB.Publication.Generation != result.Watcher.UpdatedB.Publication.Generation || result.Watcher.InitialB.Publication.Generation != result.Watcher.RestoredB.Publication.Generation ||
+		result.Watcher.InitialB.BytesDigest != result.Watcher.UpdatedB.BytesDigest || result.Watcher.InitialB.BytesDigest != result.Watcher.RestoredB.BytesDigest ||
+		result.Watcher.InitialB.MembershipDigest != result.Watcher.UpdatedB.MembershipDigest || result.Watcher.InitialB.MembershipDigest != result.Watcher.RestoredB.MembershipDigest ||
+		result.Watcher.InitialB.EdgesDigest != result.Watcher.UpdatedB.EdgesDigest || result.Watcher.InitialB.EdgesDigest != result.Watcher.RestoredB.EdgesDigest ||
+		result.Watcher.InitialB.SearchDigest != result.Watcher.UpdatedB.SearchDigest || result.Watcher.InitialB.SearchDigest != result.Watcher.RestoredB.SearchDigest ||
+		result.Watcher.InitialB.GraphDigest != result.Watcher.UpdatedB.GraphDigest || result.Watcher.InitialB.GraphDigest != result.Watcher.RestoredB.GraphDigest ||
+		result.Watcher.InitialB.ReadDigest != result.Watcher.UpdatedB.ReadDigest || result.Watcher.InitialB.ReadDigest != result.Watcher.RestoredB.ReadDigest ||
+		result.Watcher.InitialB.HeadDigest != result.Watcher.InitialA.HeadDigest || result.Watcher.InitialB.TreeDigest != result.Watcher.InitialA.TreeDigest {
+		t.Fatal("installed watcher did not preserve B View, generation, memberships, edges, source bytes, HEAD, and tree")
 	}
 }
 

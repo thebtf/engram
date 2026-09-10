@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	cryptorand "crypto/rand"
 	"crypto/sha256"
@@ -227,11 +228,29 @@ type uciInstalledAcceptancePublicationEvidence struct {
 	BarrierState   string
 }
 
+type uciInstalledAcceptanceWatcherSnapshot struct {
+	Publication      uciInstalledAcceptancePublicationEvidence
+	BytesDigest      string
+	HeadDigest       string
+	TreeDigest       string
+	MembershipDigest string
+	EdgesDigest      string
+	SearchDigest     string
+	GraphDigest      string
+	ReadDigest       string
+}
+
 type uciInstalledAcceptanceWatcher struct {
 	AfterWriteA  uciInstalledAcceptancePublicationEvidence
 	AfterDeleteA uciInstalledAcceptancePublicationEvidence
 	AfterWriteB  uciInstalledAcceptancePublicationEvidence
 	AfterDeleteB uciInstalledAcceptancePublicationEvidence
+	InitialA     uciInstalledAcceptanceWatcherSnapshot
+	UpdatedA     uciInstalledAcceptanceWatcherSnapshot
+	RestoredA    uciInstalledAcceptanceWatcherSnapshot
+	InitialB     uciInstalledAcceptanceWatcherSnapshot
+	UpdatedB     uciInstalledAcceptanceWatcherSnapshot
+	RestoredB    uciInstalledAcceptanceWatcherSnapshot
 }
 
 type uciInstalledAcceptanceDefaults struct {
@@ -665,9 +684,9 @@ func runUCIInstalledAcceptance(ctx context.Context, request uciInstalledAcceptan
 	if err := recorderProcess.closePipes(); err != nil {
 		return result, fmt.Errorf("close installed recorder client: %w", err)
 	}
-	watcherPublications, watcherErr := uciExerciseInstalledAcceptanceWatcher(operationCtx, request.Fixture, worktrees, clientA, clientB, selectedA, selectedB, publications, &result)
+	watcherPublications, watcherErr := uciExerciseInstalledAcceptanceWatcher(operationCtx, request.Fixture, authority, worktrees, clientA, clientB, selectedA, selectedB, publications, &result)
 	if watcherErr != nil {
-		return result, fmt.Errorf("installed standard MCP watcher save-delete isolation: %w", watcherErr)
+		return result, fmt.Errorf("installed standard MCP watcher A/B dirty-view isolation: %w", watcherErr)
 	}
 	primaryWatcherPublication, primaryWatcherFound := watcherPublications[uciInstalledAcceptanceClientA]
 	linkedWatcherPublication, linkedWatcherFound := watcherPublications[uciInstalledAcceptanceClientB]
@@ -3482,8 +3501,8 @@ func uciInstalledAcceptanceExposureReference(payload json.RawMessage) (string, e
 	if err != nil {
 		return "", err
 	}
-	if (response.Status != uci.QueryStatusOK && response.Status != uci.QueryStatusPartial) || response.Exposure == nil || response.Exposure.ExposureRef == "" {
-		return "", errors.New("installed standard MCP recorder success has no exposure reference")
+	if (response.Status != uci.QueryStatusOK && response.Status != uci.QueryStatusPartial && response.Status != uci.QueryStatusEmpty) || response.Exposure == nil || response.Exposure.ExposureRef == "" {
+		return "", fmt.Errorf("installed standard MCP recorder success has no exposure reference: status=%s exposure=%t %s", response.Status, response.Exposure != nil, uciInstalledAcceptancePayloadShape(payload))
 	}
 	return response.Exposure.ExposureRef, nil
 }
@@ -4070,13 +4089,14 @@ func uciRestartInstalledAcceptance(
 func uciExerciseInstalledAcceptanceWatcher(
 	ctx context.Context,
 	fixture uciInstalledAcceptanceFixture,
+	authority *uciInstalledAcceptanceAuthority,
 	worktrees uciInstalledAcceptanceWorktreesFixture,
 	first, second *uciInstalledAcceptanceMCPClient,
 	firstSelection, secondSelection uciInstalledAcceptanceSelection,
 	before map[string]uciInstalledAcceptancePublication,
 	result *uciInstalledAcceptanceResult,
 ) (after map[string]uciInstalledAcceptancePublication, retErr error) {
-	if first == nil || second == nil || result == nil || firstSelection.contextHandle == "" || secondSelection.contextHandle == "" || worktrees.primaryRoot == "" {
+	if first == nil || second == nil || authority == nil || result == nil || firstSelection.contextHandle == "" || secondSelection.contextHandle == "" || worktrees.primaryRoot == "" || worktrees.linkedRoot == "" {
 		return nil, errors.New("installed acceptance watcher proof is incomplete")
 	}
 	primaryBefore, primaryFound := before[uciInstalledAcceptanceClientA]
@@ -4085,63 +4105,229 @@ func uciExerciseInstalledAcceptanceWatcher(
 		return nil, errors.New("installed acceptance watcher publication baseline is incomplete")
 	}
 
-	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
-	functionName := "UCIInstalledWatcher" + suffix
-	relativePath := "pkg/uci_installed_watcher_" + suffix + ".go"
-	canaryPath := filepath.Join(worktrees.primaryRoot, filepath.FromSlash(relativePath))
-	canarySource := "package fixture\n\nfunc " + functionName + "() string { return \"" + functionName + "\" }\n"
-	if err := os.WriteFile(canaryPath, []byte(canarySource), 0o600); err != nil {
-		return nil, fmt.Errorf("write installed acceptance watcher canary: %w", err)
+	primaryPath := filepath.Join(worktrees.primaryRoot, filepath.FromSlash(fixture.RelativePath))
+	savedSource, err := os.ReadFile(primaryPath)
+	if err != nil {
+		return nil, fmt.Errorf("read installed acceptance watcher A v1 source: %w", err)
 	}
+	if !bytes.Equal(savedSource, []byte(fixture.PrimarySource)) {
+		return nil, errors.New("installed acceptance watcher A v1 bytes differ from the fixture")
+	}
+	updatedCallee := fixture.PrimaryCallee + "V2"
+	updatedSource := strings.ReplaceAll(string(savedSource), fixture.PrimaryCallee, updatedCallee)
+	if fixture.PrimaryCallee == "" || updatedSource == string(savedSource) || !strings.Contains(updatedSource, updatedCallee) {
+		return nil, errors.New("installed acceptance watcher cannot construct A v2 source")
+	}
+
+	initialA, err := uciSnapshotInstalledAcceptanceWatcher(ctx, authority, first, firstSelection, primaryBefore, worktrees.primaryRoot, fixture, fixture.PrimaryCallee)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot installed acceptance watcher A v1: %w", err)
+	}
+	initialB, err := uciSnapshotInstalledAcceptanceWatcher(ctx, authority, second, secondSelection, linkedBefore, worktrees.linkedRoot, fixture, fixture.LinkedCallee)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot installed acceptance watcher B baseline: %w", err)
+	}
+
+	restorePending := false
 	defer func() {
-		if removeErr := os.Remove(canaryPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			retErr = errors.Join(retErr, fmt.Errorf("remove installed acceptance watcher canary: %w", removeErr))
+		if !restorePending {
+			return
+		}
+		if restoreErr := os.WriteFile(primaryPath, savedSource, 0o600); restoreErr != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("restore installed acceptance watcher A bytes: %w", restoreErr))
 		}
 	}()
+	if err := os.WriteFile(primaryPath, []byte(updatedSource), 0o600); err != nil {
+		return nil, fmt.Errorf("write installed acceptance watcher A v2 source: %w", err)
+	}
+	restorePending = true
+	afterUpdateA, err := uciWaitForInstalledAcceptanceWatcherState(ctx, first, firstSelection, primaryBefore, updatedCallee, fixture.RelativePath, true)
+	if err != nil {
+		return nil, err
+	}
+	afterUpdateB, err := uciWaitForInstalledAcceptanceRestartQuiescence(ctx, second, secondSelection, linkedBefore)
+	if err != nil {
+		return nil, err
+	}
+	if uciInstalledAcceptanceSameViewPublication(afterUpdateA, primaryBefore) {
+		return nil, errors.New("installed acceptance watcher A v1 to v2 update did not publish a new View")
+	}
+	if !uciInstalledAcceptanceSameViewPublication(afterUpdateB, linkedBefore) {
+		return nil, errors.New("installed acceptance watcher A v1 to v2 update changed B View")
+	}
+	updatedA, err := uciSnapshotInstalledAcceptanceWatcher(ctx, authority, first, firstSelection, afterUpdateA, worktrees.primaryRoot, fixture, updatedCallee)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot installed acceptance watcher A v2: %w", err)
+	}
+	updatedB, err := uciSnapshotInstalledAcceptanceWatcher(ctx, authority, second, secondSelection, afterUpdateB, worktrees.linkedRoot, fixture, fixture.LinkedCallee)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot installed acceptance watcher B after A v2: %w", err)
+	}
 
-	afterWriteA, err := uciWaitForInstalledAcceptanceWatcherState(ctx, first, firstSelection, primaryBefore, functionName, relativePath, true)
+	if err := os.WriteFile(primaryPath, savedSource, 0o600); err != nil {
+		return nil, fmt.Errorf("restore installed acceptance watcher A v1 source: %w", err)
+	}
+	restorePending = false
+	afterRestoreA, err := uciWaitForInstalledAcceptanceWatcherState(ctx, first, firstSelection, afterUpdateA, fixture.PrimaryCallee, fixture.RelativePath, true)
 	if err != nil {
 		return nil, err
 	}
-	afterWriteB, err := uciWaitForInstalledAcceptanceRestartQuiescence(ctx, second, secondSelection, linkedBefore)
+	afterRestoreB, err := uciWaitForInstalledAcceptanceRestartQuiescence(ctx, second, secondSelection, afterUpdateB)
 	if err != nil {
 		return nil, err
 	}
-	if uciInstalledAcceptanceSameViewPublication(afterWriteA, primaryBefore) {
-		return nil, errors.New("installed acceptance watcher write did not publish a new primary View")
+	if uciInstalledAcceptanceSameViewPublication(afterRestoreA, afterUpdateA) {
+		return nil, errors.New("installed acceptance watcher A restore did not publish a new View")
 	}
-	if !uciInstalledAcceptanceSameViewPublication(afterWriteB, linkedBefore) {
-		return nil, errors.New("installed acceptance watcher write changed linked View")
+	if !uciInstalledAcceptanceSameViewPublication(afterRestoreB, linkedBefore) {
+		return nil, errors.New("installed acceptance watcher A restore changed B View")
 	}
-
-	if err := os.Remove(canaryPath); err != nil {
-		return nil, fmt.Errorf("delete installed acceptance watcher canary: %w", err)
-	}
-	afterDeleteA, err := uciWaitForInstalledAcceptanceWatcherState(ctx, first, firstSelection, afterWriteA, functionName, relativePath, false)
+	restoredA, err := uciSnapshotInstalledAcceptanceWatcher(ctx, authority, first, firstSelection, afterRestoreA, worktrees.primaryRoot, fixture, fixture.PrimaryCallee)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("snapshot restored installed acceptance watcher A v1: %w", err)
 	}
-	afterDeleteB, err := uciWaitForInstalledAcceptanceRestartQuiescence(ctx, second, secondSelection, afterWriteB)
+	restoredB, err := uciSnapshotInstalledAcceptanceWatcher(ctx, authority, second, secondSelection, afterRestoreB, worktrees.linkedRoot, fixture, fixture.LinkedCallee)
 	if err != nil {
-		return nil, err
-	}
-	if uciInstalledAcceptanceSameViewPublication(afterDeleteA, afterWriteA) {
-		return nil, errors.New("installed acceptance watcher delete did not publish a new primary View")
-	}
-	if !uciInstalledAcceptanceSameViewPublication(afterDeleteB, linkedBefore) {
-		return nil, errors.New("installed acceptance watcher delete changed linked View")
+		return nil, fmt.Errorf("snapshot installed acceptance watcher B after A restore: %w", err)
 	}
 
 	result.Watcher = uciInstalledAcceptanceWatcher{
-		AfterWriteA:  uciInstalledAcceptancePublicationEvidenceFor(afterWriteA),
-		AfterDeleteA: uciInstalledAcceptancePublicationEvidenceFor(afterDeleteA),
-		AfterWriteB:  uciInstalledAcceptancePublicationEvidenceFor(afterWriteB),
-		AfterDeleteB: uciInstalledAcceptancePublicationEvidenceFor(afterDeleteB),
+		AfterWriteA:  updatedA.Publication,
+		AfterDeleteA: restoredA.Publication,
+		AfterWriteB:  updatedB.Publication,
+		AfterDeleteB: restoredB.Publication,
+		InitialA:     initialA,
+		UpdatedA:     updatedA,
+		RestoredA:    restoredA,
+		InitialB:     initialB,
+		UpdatedB:     updatedB,
+		RestoredB:    restoredB,
 	}
 	return map[string]uciInstalledAcceptancePublication{
-		uciInstalledAcceptanceClientA: afterDeleteA,
-		uciInstalledAcceptanceClientB: afterDeleteB,
+		uciInstalledAcceptanceClientA: afterRestoreA,
+		uciInstalledAcceptanceClientB: afterRestoreB,
 	}, nil
+}
+
+func uciSnapshotInstalledAcceptanceWatcher(
+	ctx context.Context,
+	authority *uciInstalledAcceptanceAuthority,
+	client *uciInstalledAcceptanceMCPClient,
+	selection uciInstalledAcceptanceSelection,
+	publication uciInstalledAcceptancePublication,
+	root string,
+	fixture uciInstalledAcceptanceFixture,
+	expectedCallee string,
+) (uciInstalledAcceptanceWatcherSnapshot, error) {
+	if authority == nil || authority.store == nil || client == nil || root == "" || fixture.RelativePath == "" || expectedCallee == "" {
+		return uciInstalledAcceptanceWatcherSnapshot{}, errors.New("installed acceptance watcher snapshot target is incomplete")
+	}
+	bytes, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(fixture.RelativePath)))
+	if err != nil {
+		return uciInstalledAcceptanceWatcherSnapshot{}, fmt.Errorf("read installed acceptance watcher snapshot bytes: %w", err)
+	}
+	head, err := uciReadInstalledAcceptanceGit(ctx, root, "rev-parse", "HEAD")
+	if err != nil {
+		return uciInstalledAcceptanceWatcherSnapshot{}, err
+	}
+	tree, err := uciReadInstalledAcceptanceGit(ctx, root, "rev-parse", "HEAD^{tree}")
+	if err != nil {
+		return uciInstalledAcceptanceWatcherSnapshot{}, err
+	}
+	observations, err := uciObserveInstalledAcceptanceSearchGraphRead(ctx, client, selection, publication, fixture, expectedCallee)
+	if err != nil {
+		return uciInstalledAcceptanceWatcherSnapshot{}, err
+	}
+	if len(observations.SearchArtifactDigests) != 1 || len(observations.GraphCalleeDigests) != 1 || len(observations.ReadArtifactDigests) != 1 {
+		return uciInstalledAcceptanceWatcherSnapshot{}, errors.New("installed standard MCP watcher snapshot is incomplete")
+	}
+	bytesDigest := uciInstalledAcceptanceStringDigest(string(bytes))
+	if observations.SearchArtifactDigests[0] != bytesDigest || observations.ReadArtifactDigests[0] != bytesDigest || observations.GraphCalleeDigests[0] != uciInstalledAcceptanceStringDigest(expectedCallee) {
+		return uciInstalledAcceptanceWatcherSnapshot{}, errors.New("installed standard MCP watcher snapshot does not bind its exact source bytes")
+	}
+	membershipDigest, edgesDigest, err := uciInstalledAcceptanceWatcherProjectionDigests(ctx, authority, publication)
+	if err != nil {
+		return uciInstalledAcceptanceWatcherSnapshot{}, err
+	}
+	return uciInstalledAcceptanceWatcherSnapshot{
+		Publication:      uciInstalledAcceptancePublicationEvidenceFor(publication),
+		BytesDigest:      bytesDigest,
+		HeadDigest:       uciInstalledAcceptanceStringDigest(head),
+		TreeDigest:       uciInstalledAcceptanceStringDigest(tree),
+		MembershipDigest: membershipDigest,
+		EdgesDigest:      edgesDigest,
+		SearchDigest:     observations.SearchArtifactDigests[0],
+		GraphDigest:      observations.GraphCalleeDigests[0],
+		ReadDigest:       observations.ReadArtifactDigests[0],
+	}, nil
+}
+
+func uciInstalledAcceptanceWatcherProjectionDigests(ctx context.Context, authority *uciInstalledAcceptanceAuthority, publication uciInstalledAcceptancePublication) (string, string, error) {
+	if authority == nil || authority.store == nil || publication.sourceID == "" || publication.checkoutID == "" || publication.generation < 1 {
+		return "", "", errors.New("installed acceptance watcher projection target is incomplete")
+	}
+	type membershipRow struct {
+		PathKey     string `gorm:"column:path_key"`
+		DisplayPath string `gorm:"column:display_path"`
+		Mode        string `gorm:"column:mode"`
+		FileState   string `gorm:"column:file_state"`
+		ArtifactID  string `gorm:"column:artifact_id"`
+	}
+	type edgeRow struct {
+		EdgeKey          string `gorm:"column:edge_key"`
+		SourcePath       string `gorm:"column:source_path"`
+		SourceArtifact   string `gorm:"column:source_artifact"`
+		SourceSymbol     string `gorm:"column:source_symbol"`
+		TargetPath       string `gorm:"column:target_path"`
+		TargetArtifact   string `gorm:"column:target_artifact"`
+		TargetSymbol     string `gorm:"column:target_symbol"`
+		Relation         string `gorm:"column:relation"`
+		EvidenceKind     string `gorm:"column:evidence_kind"`
+		ResolverRevision string `gorm:"column:resolver_revision"`
+		EvidenceJSON     string `gorm:"column:evidence_json"`
+		ResolutionState  string `gorm:"column:resolution_state"`
+	}
+	db := authority.store.GetDB().WithContext(ctx)
+	var memberships []membershipRow
+	if err := db.Raw(`
+		SELECT path_key, display_path, mode, file_state, COALESCE(artifact_id::text, '') AS artifact_id
+		FROM ci_memberships
+		WHERE source_id = ? AND checkout_id = ?
+		  AND valid_from_generation <= ? AND (valid_to_generation IS NULL OR valid_to_generation > ?)
+		ORDER BY path_key, display_path, mode, file_state, COALESCE(artifact_id::text, '')`,
+		publication.sourceID, publication.checkoutID, publication.generation, publication.generation).Scan(&memberships).Error; err != nil {
+		return "", "", fmt.Errorf("read installed acceptance watcher memberships: %w", err)
+	}
+	if len(memberships) == 0 {
+		return "", "", errors.New("installed acceptance watcher View has no memberships")
+	}
+	membershipValues := []string{"uci-installed-watcher-memberships/v1"}
+	for _, membership := range memberships {
+		membershipValues = append(membershipValues, membership.PathKey, membership.DisplayPath, membership.Mode, membership.FileState, membership.ArtifactID)
+	}
+	var edges []edgeRow
+	if err := db.Raw(`
+		SELECT edge_key, source_path, source_artifact::text AS source_artifact, COALESCE(source_symbol, '') AS source_symbol,
+		       COALESCE(target_path, '') AS target_path, COALESCE(target_artifact::text, '') AS target_artifact,
+		       COALESCE(target_symbol, '') AS target_symbol, relation, evidence_kind, resolver_revision,
+		       evidence_json::text AS evidence_json, resolution_state
+		FROM ci_resolved_edges
+		WHERE source_id = ? AND checkout_id = ?
+		  AND valid_from_generation <= ? AND (valid_to_generation IS NULL OR valid_to_generation > ?)
+		ORDER BY edge_key, source_path, source_artifact, COALESCE(source_symbol, ''), COALESCE(target_path, ''),
+		         COALESCE(target_artifact::text, ''), COALESCE(target_symbol, ''), relation, evidence_kind,
+		         resolver_revision, evidence_json::text, resolution_state`,
+		publication.sourceID, publication.checkoutID, publication.generation, publication.generation).Scan(&edges).Error; err != nil {
+		return "", "", fmt.Errorf("read installed acceptance watcher edges: %w", err)
+	}
+	if len(edges) == 0 {
+		return "", "", errors.New("installed acceptance watcher View has no resolved edges")
+	}
+	edgeValues := []string{"uci-installed-watcher-edges/v1"}
+	for _, edge := range edges {
+		edgeValues = append(edgeValues, edge.EdgeKey, edge.SourcePath, edge.SourceArtifact, edge.SourceSymbol, edge.TargetPath, edge.TargetArtifact, edge.TargetSymbol, edge.Relation, edge.EvidenceKind, edge.ResolverRevision, edge.EvidenceJSON, edge.ResolutionState)
+	}
+	return uciInstalledReceiptDigestStrings(membershipValues...), uciInstalledReceiptDigestStrings(edgeValues...), nil
 }
 
 // uciWaitForInstalledAcceptanceWatcherRun polls the normal installed status
