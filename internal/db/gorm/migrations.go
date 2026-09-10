@@ -6457,6 +6457,74 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			},
 			Rollback: rollbackBrowserReadGrantsMigration176,
 		},
+		// Migration 177 remains inline so migrationmeta can derive the live browser-binding schema.
+		{
+			ID: "177_browser_tab_bindings",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`CREATE TABLE IF NOT EXISTS browser_tab_bindings (
+						tab_binding_id UUID PRIMARY KEY,
+						subject_user_id BIGINT NOT NULL,
+						session_id TEXT NOT NULL,
+						resume_nonce_digest BYTEA NOT NULL,
+						document_proof_digest BYTEA NOT NULL,
+						reload_token_digest BYTEA NOT NULL,
+						document_lease_state TEXT NOT NULL,
+						document_lease_expires_at TIMESTAMPTZ NOT NULL,
+						pinned_source_id UUID,
+						pinned_checkout_id UUID,
+						pinned_view_id UUID,
+						pinned_analysis_profile_id UUID,
+						pinned_generation BIGINT,
+						binding_expires_at TIMESTAMPTZ NOT NULL,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT browser_tab_bindings_subject_user_id_chk CHECK (subject_user_id > 0),
+						CONSTRAINT browser_tab_bindings_session_id_chk CHECK (
+							btrim(session_id) <> ''
+							AND session_id = btrim(session_id)
+							AND session_id !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT browser_tab_bindings_digest_chk CHECK (
+							octet_length(resume_nonce_digest) = 32
+							AND octet_length(document_proof_digest) = 32
+							AND octet_length(reload_token_digest) = 32
+						),
+						CONSTRAINT browser_tab_bindings_document_lease_state_chk CHECK (
+							document_lease_state IN ('live', 'closed', 'expired')
+						),
+						CONSTRAINT browser_tab_bindings_expiry_chk CHECK (
+							binding_expires_at > document_lease_expires_at
+							AND binding_expires_at > created_at
+						),
+						CONSTRAINT browser_tab_bindings_pinned_context_chk CHECK (
+							(
+								pinned_source_id IS NULL
+								AND pinned_checkout_id IS NULL
+								AND pinned_view_id IS NULL
+								AND pinned_analysis_profile_id IS NULL
+								AND pinned_generation IS NULL
+							)
+							OR (
+								pinned_source_id IS NOT NULL
+								AND pinned_checkout_id IS NOT NULL
+								AND pinned_view_id IS NOT NULL
+								AND pinned_analysis_profile_id IS NOT NULL
+								AND pinned_generation > 0
+							)
+						)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_browser_tab_bindings_session_lookup
+						ON browser_tab_bindings (session_id, tab_binding_id)`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 177: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackBrowserTabBindingsMigration177,
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
@@ -6619,6 +6687,12 @@ func rollbackUCIReferenceSourceTextMigration175(tx *gorm.DB) error {
 // rollbackBrowserReadGrantsMigration176 retains grants and audit history: a binary
 // rollback cannot safely reconstruct browser authority or its revocation record.
 func rollbackBrowserReadGrantsMigration176(tx *gorm.DB) error {
+	return nil
+}
+
+// rollbackBrowserTabBindingsMigration177 retains opaque browser binding state:
+// a binary rollback cannot recreate browser-held proof material or a safe lease.
+func rollbackBrowserTabBindingsMigration177(tx *gorm.DB) error {
 	return nil
 }
 
