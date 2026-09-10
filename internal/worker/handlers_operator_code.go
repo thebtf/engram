@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
@@ -294,6 +295,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleSearch(w http.ResponseWriter, r *h
 		}
 		return
 	}
+	r = r.WithContext(auditcontext.WithSourceSession(r.Context(), identity.sessionID))
 	caller, failure := adapter.authorize(r.Context(), identity, request.Proof())
 	if failure != uci.ReleaseFailureNone {
 		operatorCodeWriteFailure(w, failure)
@@ -324,6 +326,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGraph(w http.ResponseWriter, r *ht
 	if !ok {
 		return
 	}
+	r = r.WithContext(auditcontext.WithSourceSession(r.Context(), identity.sessionID))
 	input, deadlineMS, valid := request.input(time.Now().UTC())
 	if !valid {
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
@@ -363,6 +366,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleVersionedRead(w http.ResponseWrite
 		}
 		return
 	}
+	r = r.WithContext(auditcontext.WithSourceSession(r.Context(), identity.sessionID))
 	caller, failure := adapter.authorize(r.Context(), identity, request.Proof())
 	if failure != uci.ReleaseFailureNone {
 		operatorCodeWriteFailure(w, failure)
@@ -727,6 +731,7 @@ type operatorCodeAuthorizedRequest struct {
 	caller     operatorCodeVerifiedCaller
 	proof      BrowserBindingProof
 	authorized uci.AuthorizedContext
+	authRealm  string
 }
 
 func (adapter *OperatorCodeHTTPAdapter) decode(w http.ResponseWriter, r *http.Request, endpoint string, target any) (operatorCodeRequestIdentity, bool) {
@@ -850,7 +855,14 @@ func (adapter *OperatorCodeHTTPAdapter) authorize(ctx context.Context, identity 
 	if !operatorCodeRefsEqual(authorized.Ref(), ref) {
 		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailureContextMismatch
 	}
-	return operatorCodeAuthorizedRequest{operatorCodeRequestIdentity: identity, caller: caller, proof: proof, authorized: authorized}, uci.ReleaseFailureNone
+	grant, found, err := adapter.grants.Current(ctx, identity.identity)
+	if err != nil {
+		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailureExposureUnavailable
+	}
+	if !found || grant.SubjectUserID != subject.UserID || grant.SourceID != ref.SourceID || grant.CheckoutID != ref.CheckoutID || !operatorCodeText(grant.AuthRealm) {
+		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailurePermissionDenied
+	}
+	return operatorCodeAuthorizedRequest{operatorCodeRequestIdentity: identity, caller: caller, proof: proof, authorized: authorized, authRealm: grant.AuthRealm}, uci.ReleaseFailureNone
 }
 
 func (adapter *OperatorCodeHTTPAdapter) authorizeCurrent(ctx context.Context, identity operatorCodeRequestIdentity, proof BrowserBindingProof) (operatorCodeAuthorizedRequest, uci.ReleaseFailureCode) {
@@ -869,7 +881,7 @@ func (adapter *OperatorCodeHTTPAdapter) authorizeCurrent(ctx context.Context, id
 	if err != nil {
 		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailureExposureUnavailable
 	}
-	if !found {
+	if !found || grant.SubjectUserID != subject.UserID || !operatorCodeText(grant.AuthRealm) {
 		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailurePermissionDenied
 	}
 	bound := operatorCodeBindingCaller{Subject: subject, SessionID: identity.sessionID, BindingID: guarded.TabBindingID}
@@ -889,7 +901,7 @@ func (adapter *OperatorCodeHTTPAdapter) authorizeCurrent(ctx context.Context, id
 		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailurePermissionDenied
 	}
 	caller := operatorCodeVerifiedCaller{Subject: subject, SessionID: identity.sessionID, BindingID: guarded.TabBindingID, Context: ref}
-	return operatorCodeAuthorizedRequest{operatorCodeRequestIdentity: identity, caller: caller, proof: proof, authorized: authorized}, uci.ReleaseFailureNone
+	return operatorCodeAuthorizedRequest{operatorCodeRequestIdentity: identity, caller: caller, proof: proof, authorized: authorized, authRealm: grant.AuthRealm}, uci.ReleaseFailureNone
 }
 
 func operatorCodeContextRef(pinned BrowserBindingContext) (uci.ContextRef, bool) {
@@ -976,7 +988,7 @@ func (adapter *OperatorCodeHTTPAdapter) releaseRequest(
 	matches func(uci.QueryResponse, uci.AuthorizedContext) bool,
 ) uci.ReleaseRequest {
 	return uci.ReleaseRequest{
-		AuthRealm:            string(auth.SourceSession),
+		AuthRealm:            caller.authRealm,
 		Caller:               uci.ReleaseCaller{Browser: &uci.BrowserReleaseCaller{Subject: caller.caller.Subject, SessionID: identity.sessionID, DocumentBinding: caller.caller.BindingID}},
 		RequestID:            identity.requestID,
 		RequestBindingDigest: identity.digest,

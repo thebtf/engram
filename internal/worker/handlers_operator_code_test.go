@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
@@ -117,6 +118,64 @@ func TestOperatorCodeHTTPAdapter_ReleasesFiveBoundEndpoints(t *testing.T) {
 		})
 	}
 }
+
+func TestOperatorCodeHTTPAdapter_BindsReleasedReadsToBrowserSession(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		body      string
+		invoke    func(*OperatorCodeHTTPAdapter, http.ResponseWriter, *http.Request)
+		configure func(*operatorCodeHTTPTestApplication, uci.ContextRef)
+	}{
+		{
+			name:   "search",
+			body:   `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","query":"Fixture"}`,
+			invoke: (*OperatorCodeHTTPAdapter).HandleSearch,
+			configure: func(app *operatorCodeHTTPTestApplication, ref uci.ContextRef) {
+				app.search = operatorCodeHTTPTestQueryResponse(t, ref, uci.QueryRetrievalLexical)
+			},
+		},
+		{
+			name:   "graph",
+			body:   `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","action":"neighbors","target":{"entity_key":"Fixture.Symbol"}}`,
+			invoke: (*OperatorCodeHTTPAdapter).HandleGraph,
+			configure: func(app *operatorCodeHTTPTestApplication, ref uci.ContextRef) {
+				app.graph = operatorCodeHTTPTestGraphResponse(t, ref)
+			},
+		},
+		{
+			name:   "versioned read",
+			body:   `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","entity_key":"Fixture.Symbol","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
+			invoke: (*OperatorCodeHTTPAdapter).HandleVersionedRead,
+			configure: func(app *operatorCodeHTTPTestApplication, ref uci.ContextRef) {
+				app.read = operatorCodeHTTPTestQueryResponse(t, ref, uci.QueryRetrievalExact)
+			},
+		},
+	} {
+		for _, inheritedSession := range []string{"", "forged-client-session"} {
+			t.Run(testCase.name+"/"+map[bool]string{true: "forged", false: "absent"}[inheritedSession != ""], func(t *testing.T) {
+				adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+				testCase.configure(fixture.app, fixture.ref)
+				request := operatorCodeHTTPTestRequest(t, testCase.body, fixture.identity)
+				request = request.WithContext(auditcontext.WithSourceSession(request.Context(), inheritedSession))
+				recorder := httptest.NewRecorder()
+
+				testCase.invoke(adapter, recorder, request)
+
+				require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+				require.Equal(t, []string{"browser-session-41"}, fixture.app.sourceSessions)
+				require.Equal(t, []string{"browser-session-41"}, fixture.recorder.sourceSessions)
+			})
+		}
+	}
+}
+func TestOperatorCodeHTTPAdapter_UsesGrantedSourceRealmForRelease(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	identity := operatorCodeRequestIdentity{identity: fixture.identity, sessionID: "browser-session-41"}
+	caller, failure := adapter.authorize(context.Background(), identity, BrowserBindingProof{TabBindingID: operatorCodeHTTPTestBindingID, DocumentProof: "proof-current"})
+	require.Equal(t, uci.ReleaseFailureNone, failure)
+	require.Equal(t, fixture.grants.current.AuthRealm, adapter.releaseRequest(identity, caller, uci.ReleaseCategoryCodeSearch, nil, nil).AuthRealm)
+}
+
 
 func TestOperatorCodeHTTPAdapter_RejectsClientSelectorsAndBoundsWithoutBody(t *testing.T) {
 	for _, testCase := range []struct {
@@ -487,29 +546,33 @@ func (authorizer operatorCodeHTTPTestAuthorizer) AuthorizeContext(_ context.Cont
 }
 
 type operatorCodeHTTPTestApplication struct {
-	search       uci.QueryResponse
-	graph        uci.QueryResponse
-	read         uci.QueryResponse
-	status       mcp.CodebaseStatusSnapshot
-	metadata     map[string]string
-	searchCalls  int
-	graphCalls   int
-	readCalls    int
-	projectCalls int
+	search         uci.QueryResponse
+	graph          uci.QueryResponse
+	read           uci.QueryResponse
+	status         mcp.CodebaseStatusSnapshot
+	metadata       map[string]string
+	sourceSessions []string
+	searchCalls    int
+	graphCalls     int
+	readCalls      int
+	projectCalls   int
 }
 
-func (app *operatorCodeHTTPTestApplication) SearchCodebase(_ context.Context, _ uci.AuthorizedContext, _ mcp.CodebaseSearchInput) (uci.QueryResponse, error) {
+func (app *operatorCodeHTTPTestApplication) SearchCodebase(ctx context.Context, _ uci.AuthorizedContext, _ mcp.CodebaseSearchInput) (uci.QueryResponse, error) {
 	app.searchCalls++
+	app.sourceSessions = append(app.sourceSessions, auditcontext.SourceSession(ctx))
 	return app.search, nil
 }
 
-func (app *operatorCodeHTTPTestApplication) ExploreCodebase(_ context.Context, _ uci.AuthorizedContext, _ mcp.CodebaseGraphInput) (uci.QueryResponse, error) {
+func (app *operatorCodeHTTPTestApplication) ExploreCodebase(ctx context.Context, _ uci.AuthorizedContext, _ mcp.CodebaseGraphInput) (uci.QueryResponse, error) {
 	app.graphCalls++
+	app.sourceSessions = append(app.sourceSessions, auditcontext.SourceSession(ctx))
 	return app.graph, nil
 }
 
-func (app *operatorCodeHTTPTestApplication) ReadCodebase(_ context.Context, _ uci.AuthorizedContext, _ mcp.CodebaseReadInput) (uci.QueryResponse, error) {
+func (app *operatorCodeHTTPTestApplication) ReadCodebase(ctx context.Context, _ uci.AuthorizedContext, _ mcp.CodebaseReadInput) (uci.QueryResponse, error) {
 	app.readCalls++
+	app.sourceSessions = append(app.sourceSessions, auditcontext.SourceSession(ctx))
 	return app.read, nil
 }
 
@@ -523,12 +586,14 @@ func (app *operatorCodeHTTPTestApplication) Project(_ context.Context, _ uci.Con
 }
 
 type operatorCodeHTTPTestRecorder struct {
-	inputs []uci.ExposureInput
-	err    error
+	inputs         []uci.ExposureInput
+	sourceSessions []string
+	err            error
 }
 
-func (recorder *operatorCodeHTTPTestRecorder) Record(_ context.Context, _ uci.AuthorizedContext, input uci.ExposureInput) (uci.QueryExposure, error) {
+func (recorder *operatorCodeHTTPTestRecorder) Record(ctx context.Context, _ uci.AuthorizedContext, input uci.ExposureInput) (uci.QueryExposure, error) {
 	recorder.inputs = append(recorder.inputs, input)
+	recorder.sourceSessions = append(recorder.sourceSessions, auditcontext.SourceSession(ctx))
 	if recorder.err != nil {
 		return uci.QueryExposure{}, recorder.err
 	}
