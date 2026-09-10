@@ -1162,6 +1162,37 @@
       "body": "点击“新规则”添加第一条指令。",
       "scopeBody": "{scope} 范围下还没有规则。"
     },
+    "selection": {
+      "title": "选择",
+      "kind": {
+        "none": "未选择",
+        "explicit": "已选规则",
+        "page": "当前页",
+        "frozen_filter": "冻结的筛选结果"
+      },
+      "version": "选择 v{version}",
+      "unsaved": "尚未保存到服务器",
+      "loadPage": "加载当前页",
+      "selectPage": "选择当前页",
+      "freeze": "冻结当前筛选",
+      "pageInfo": "当前页有 {count} 条规则；权威总数：{total}",
+      "nextPageBound": "此页之后还有更多结果。",
+      "frozenInfo": "冻结选择包含 {count} 条规则，到期时间为 {expires}。",
+      "reconfirm": "此选择需要重新确认（{reason}）。执行操作前请再次冻结当前筛选。",
+      "loadError": "无法加载当前选择。",
+      "pageError": "无法加载当前选择页。",
+      "saveError": "无法保存选择。",
+      "freezeError": "无法冻结当前筛选。",
+      "operationError": "无法应用所选规则操作。",
+      "enable": "启用已选规则",
+      "disable": "禁用已选规则",
+      "delete": "删除已选规则",
+      "readbacks": "每条规则的权威回读",
+      "header": "选择当前规则页",
+      "row": "选择规则 {id}",
+      "reorderBound": "只有当前页包含完整范围时才能重新排序。",
+      "noChanges": "没有可应用的更改。"
+    },
     "detail": {
       "title": "规则 #{id}",
       "content": "规则文本",

@@ -291,6 +291,9 @@ let ruleRows = [
   },
 ]
 
+let ruleSelectionVersion = 0
+let ruleSelection = { domain: 'rules', kind: 'none', selection_version: ruleSelectionVersion }
+
 let domainRows = [
   {
     domain: 'memory-lab',
@@ -495,6 +498,69 @@ function ruleResponse(url) {
     .map(cloneRule)
 
   return rows
+}
+
+function ruleSelectionSnapshot(selection) {
+  return { selection: { ...selection, ...(selection.targets ? { targets: selection.targets.map((target) => ({ ...target })) } : {}) } }
+}
+
+function saveRuleSelection(body) {
+  if (!body || body.domain !== 'rules' || !body.selection || typeof body.selection !== 'object') return null
+  const selection = body.selection
+  if (selection.kind === 'none') {
+    ruleSelection = { domain: 'rules', kind: 'none', selection_version: ++ruleSelectionVersion }
+    return ruleSelectionSnapshot(ruleSelection)
+  }
+  if (selection.kind !== 'explicit' || !Array.isArray(selection.targets) || !selection.targets.length) return null
+
+  const targets = selection.targets.map((target) => {
+    const id = Number(target?.id)
+    const rule = ruleRows.find((row) => row.id === id)
+    if (!Number.isInteger(id) || !rule) return null
+    return { id: String(id), expected_version: Number.isInteger(target.expected_version) ? target.expected_version : rule.version }
+  })
+  if (targets.some((target) => target === null)) return null
+  ruleSelection = { domain: 'rules', kind: 'explicit', selection_version: ++ruleSelectionVersion, targets }
+  return ruleSelectionSnapshot(ruleSelection)
+}
+
+function ruleSelectionPage(body) {
+  if (!body || body.domain !== 'rules' || !body.filter || typeof body.filter.scope !== 'string') return null
+  const scope = body.filter.scope
+  const rows = ruleRows.filter((row) => scope === 'all' || (scope === 'global' ? !row.project : !row.project || row.project === scope))
+  return {
+    filter_fingerprint: `sha256:${createHash('sha256').update(`mock-rules-filter:${scope}`).digest('hex')}`,
+    cursor: `mock-rules-page-${scope}`,
+    next_cursor: '',
+    targets: rows.map((row) => ({ id: String(row.id), expected_version: row.version })),
+    total: rows.length,
+  }
+}
+
+function applyRuleSelectionOperation(body) {
+  if (!body || !['enable', 'disable'].includes(body.action) || body.selection?.selection_version !== ruleSelection.selection_version || ruleSelection.kind !== 'explicit') return null
+  const enabled = body.action === 'enable'
+  const now = new Date().toISOString()
+  const targets = ruleSelection.targets.map((target) => Number(target.id))
+  if (targets.some((id) => !ruleRows.some((row) => row.id === id))) return null
+
+  ruleRows = ruleRows.map((row) => !targets.includes(row.id)
+    ? row
+    : { ...row, enabled, version: row.version + 1, updated_at: now })
+  const updated = ruleRows.filter((row) => targets.includes(row.id))
+  const item_results = updated.map((row) => ({
+    target_id: row.id,
+    outcome: 'committed',
+    observed_version: row.version,
+    readback: { authoritative: true, kind: 'current', current_state: cloneRule(row), current_version: row.version },
+  }))
+  const current_state = updated.length === 1 ? cloneRule(updated[0]) : updated.map(cloneRule)
+  return {
+    request_id: body.request_id,
+    operation_state: 'completed',
+    item_results,
+    readback: { authoritative: true, kind: 'current', current_state, ...(updated.length === 1 ? { current_version: updated[0].version } : {}) },
+  }
 }
 
 function nextRuleId() {
@@ -970,9 +1036,56 @@ const server = createServer(async (req, res) => {
     return
   }
 
+  if (req.method === 'POST' && path === '/api/collections/selection/current') {
+    try {
+      const body = await readRequestJson(req)
+      if (body.domain !== 'rules') {
+        json(res, 400, { error: 'rules selection domain is required' })
+        return
+      }
+      json(res, 200, ruleSelectionSnapshot(ruleSelection))
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+
+  if (req.method === 'POST' && path === '/api/collections/selection') {
+    try {
+      const saved = saveRuleSelection(await readRequestJson(req))
+      if (!saved) {
+        json(res, 400, { error: 'invalid rules selection' })
+        return
+      }
+      json(res, 200, saved)
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+
+  if (req.method === 'POST' && path === '/api/collections/selection/page') {
+    try {
+      const page = ruleSelectionPage(await readRequestJson(req))
+      if (!page) {
+        json(res, 400, { error: 'invalid rules selection page' })
+        return
+      }
+      json(res, 200, page)
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+
   if (req.method === 'POST' && path === '/api/rules') {
     try {
       const body = await readRequestJson(req)
+      const result = applyRuleSelectionOperation(body)
+      if (result) {
+        json(res, 200, result)
+        return
+      }
       const content = typeof body.content === 'string' ? body.content.trim() : ''
       if (!content) {
         json(res, 400, { error: 'content is required' })
@@ -1000,6 +1113,7 @@ const server = createServer(async (req, res) => {
     }
     return
   }
+
 
   const ruleEnabledMatch = path.match(/^\/api\/rules\/([^/]+)\/enabled$/)
   if (req.method === 'PATCH' && ruleEnabledMatch) {

@@ -1162,6 +1162,37 @@
       "body": "Add the first directive with the New rule button.",
       "scopeBody": "Scope {scope} has no rules yet."
     },
+    "selection": {
+      "title": "Selection",
+      "kind": {
+        "none": "No selection",
+        "explicit": "Selected rules",
+        "page": "Current page",
+        "frozen_filter": "Frozen filter"
+      },
+      "version": "selection v{version}",
+      "unsaved": "not saved on the server",
+      "loadPage": "Load current page",
+      "selectPage": "Select current page",
+      "freeze": "Freeze current filter",
+      "pageInfo": "Page contains {count} rules; authoritative total: {total}",
+      "nextPageBound": "More results remain beyond this page.",
+      "frozenInfo": "Frozen selection has {count} rules and expires at {expires}.",
+      "reconfirm": "Selection needs reconfirmation ({reason}). Freeze the current filter again before applying an action.",
+      "loadError": "Could not load the current selection.",
+      "pageError": "Could not load the current selection page.",
+      "saveError": "Could not save the selection.",
+      "freezeError": "Could not freeze the current filter.",
+      "operationError": "Could not apply the selected Rules action.",
+      "enable": "Enable selected",
+      "disable": "Disable selected",
+      "delete": "Delete selected",
+      "readbacks": "Per-rule authoritative readback",
+      "header": "Select the current rules page",
+      "row": "Select rule {id}",
+      "reorderBound": "Reorder is available only when this page contains the complete scope.",
+      "noChanges": "No changes to apply."
+    },
     "detail": {
       "title": "Rule #{id}",
       "content": "Rule text",
