@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  executeMutation,
   parseMutationResponse,
   parseMutationTransportFailure,
   type MutationRequest,
@@ -68,6 +69,17 @@ test('HTTP acceptance remains pending even when its payload overstates completio
   assert.equal(result.operationId, 'operation-10')
 })
 
+test('bare successful receipts remain pending until authoritative readback', async () => {
+  const result = await parseMutationResponse(request, jsonResponse(200, {
+    id: 'rule-1',
+  }), parseRuleState)
+
+  assert.equal(result.kind, 'committed_verification_pending')
+  assert.equal(result.commitment, 'committed')
+  assert.equal(result.reason, 'readback_missing')
+  assert.deepEqual(result.request, request)
+})
+
 test('partial mutation responses preserve each item outcome', async () => {
   const result = await parseMutationResponse(request, jsonResponse(207, {
     operation_state: 'partial',
@@ -107,4 +119,14 @@ test('transport timeout and network loss stay distinct from server failures', ()
 
   assert.equal(timeout.kind, 'timeout')
   assert.equal(network.kind, 'network')
+})
+
+test('mutation execution maps a rejected response promise to network truth', async () => {
+  const result = await executeMutation(
+    request,
+    Promise.reject(new TypeError('Failed to fetch')),
+    parseRuleState,
+  )
+
+  assert.equal(result.kind, 'network')
 })

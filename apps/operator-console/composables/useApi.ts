@@ -281,7 +281,15 @@ export async function parseMutationResponse<TIntent, TCurrent>(
  const state = body && typeof body.operation_state === 'string' && body.operation_state.length > 0
   ? body.operation_state
   : undefined
- if (!state) return failureResult(request, 'failed', { ...metadata, code: 'invalid_mutation_response' })
+ if (!state) {
+  return {
+   kind: 'committed_verification_pending',
+   request,
+   ...metadata,
+   commitment: 'committed',
+   reason: 'readback_missing',
+  }
+ }
 
  if (response.status === 207 || state === 'partial') {
   const items = parseItemResults(body?.item_results)
@@ -326,10 +334,22 @@ export async function parseMutationResponse<TIntent, TCurrent>(
  return failureResult(request, 'failed', { ...metadata, code: 'invalid_mutation_state' })
 }
 
+export async function executeMutation<TIntent, TCurrent>(
+ request: MutationRequest<TIntent>,
+ response: Promise<Response>,
+ parseCurrentState: MutationCurrentStateParser<TCurrent>,
+): Promise<MutationResult<TIntent, TCurrent>> {
+ try {
+  return await parseMutationResponse<TIntent, TCurrent>(request, await response, parseCurrentState)
+ } catch (error) {
+  return parseMutationTransportFailure(request, error)
+ }
+}
+
 export function parseMutationTransportFailure<TIntent>(
  request: MutationRequest<TIntent>,
  error: unknown,
-): MutationResult<TIntent> {
+): MutationFailureResult<TIntent> {
  const name = error instanceof Error ? error.name : ''
  return failureResult(request, name === 'AbortError' || name === 'TimeoutError' ? 'timeout' : 'network')
 }
