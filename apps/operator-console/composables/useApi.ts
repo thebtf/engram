@@ -188,6 +188,17 @@ function parseReadback<TCurrent>(
  }
 }
 
+function parseDirectCurrentReadback<TCurrent>(
+ status: number,
+ body: MutationResponseBody | undefined,
+ parseCurrentState: MutationCurrentStateParser<TCurrent>,
+): MutationReadback<TCurrent> | undefined {
+ if ((status !== 200 && status !== 201) || body === undefined) return undefined
+
+ const current = parseCurrentState(body)
+ return current === undefined ? undefined : { kind: 'current', current }
+}
+
 function parseItemResults(value: unknown): MutationItemResult[] | undefined {
  if (!Array.isArray(value)) return undefined
 
@@ -318,13 +329,16 @@ export async function parseMutationResponse<TIntent, TCurrent>(
   ? body.operation_state
   : undefined
  if (!state) {
-  return {
-   kind: 'committed_verification_pending',
-   request,
-   ...metadata,
-   commitment: 'committed',
-   reason: 'readback_missing',
-  }
+  const readback = parseDirectCurrentReadback(response.status, body, parseCurrentState)
+  return readback === undefined
+   ? {
+    kind: 'committed_verification_pending',
+    request,
+    ...metadata,
+    commitment: 'committed',
+    reason: 'readback_missing',
+   }
+   : { kind: 'committed_verified', request, ...metadata, readback }
  }
 
  if (response.status === 207 || state === 'partial') {

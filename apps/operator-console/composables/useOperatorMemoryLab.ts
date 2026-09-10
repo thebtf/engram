@@ -1,7 +1,7 @@
 import type { ComputedRef, Ref } from 'vue'
 import type { Memory } from './useMockData'
 import type { OperatorLoadState, OperatorUnsupportedAction } from './useOperatorApi'
-import { executeMutation, type MutationResult } from './useApi'
+import { executeMutation, type MutationCurrentStateParser, type MutationResult } from './useApi'
 import {
   emptyState,
   endpointEvidence,
@@ -18,11 +18,17 @@ import {
   toOperatorSourceError,
   unsupportedOperatorAction,
 } from './useOperatorApi'
-function submitMutation<TIntent>(action: string, intent: TIntent, path: string, init: RequestInit): Promise<MutationResult<TIntent>> {
+function submitMutation<TIntent, TCurrent = unknown>(
+  action: string,
+  intent: TIntent,
+  path: string,
+  init: RequestInit,
+  parseCurrentState: MutationCurrentStateParser<TCurrent> = () => undefined,
+): Promise<MutationResult<TIntent, TCurrent>> {
   return executeMutation(
     { requestId: crypto.randomUUID(), action, intent },
     fetch(operatorApiUrl(path), { ...init, credentials: 'include' }),
-    () => undefined,
+    parseCurrentState,
   )
 }
 
@@ -133,6 +139,58 @@ export interface StoreMemoryInput {
   project: string
   content: string
   tags?: string[]
+}
+
+interface CurrentMemory {
+  id: number
+  project: string
+  content: string
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+
+function isMemoryRFC3339Timestamp(value: unknown): value is string {
+  return typeof value === 'string'
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)
+    && !Number.isNaN(Date.parse(value))
+}
+
+function parseCurrentMemory(value: unknown, input: StoreMemoryInput): CurrentMemory | undefined {
+  if (
+    typeof value !== 'object' || value === null || Array.isArray(value)
+    || !('id' in value) || !('project' in value) || !('content' in value)
+    || !('version' in value) || !('created_at' in value) || !('updated_at' in value)
+  ) return undefined
+
+  const id = value.id
+  const project = value.project
+  const content = value.content
+  const version = value.version
+  const createdAt = value.created_at
+  const updatedAt = value.updated_at
+  if (
+    typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0
+    || typeof project !== 'string' || !project || project !== input.project
+    || typeof content !== 'string' || !content || content !== input.content
+    || typeof version !== 'number' || !Number.isSafeInteger(version) || version <= 0
+    || !isMemoryRFC3339Timestamp(createdAt)
+    || !isMemoryRFC3339Timestamp(updatedAt)
+  ) return undefined
+
+  return {
+    id,
+    project,
+    content,
+    version,
+    created_at: createdAt,
+    updated_at: updatedAt,
+  }
+}
+
+export function storeMemoryCurrentStateParser(input: StoreMemoryInput): MutationCurrentStateParser<CurrentMemory> {
+  return (value) => parseCurrentMemory(value, input)
 }
 
 
@@ -757,7 +815,7 @@ export function useOperatorMemoryLab(): {
       content: input.content,
       tags: input.tags || [],
       source_agent: 'operator-console',
-    }))
+    }), storeMemoryCurrentStateParser(input))
   }
 
   async function deleteMemory(id: string) {

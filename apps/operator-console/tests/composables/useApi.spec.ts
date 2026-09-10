@@ -5,7 +5,14 @@ import {
  parseMutationResponse,
  parseMutationTransportFailure,
  type MutationRequest,
+ type MutationResult,
 } from '../../composables/useApi.ts'
+import {
+ createRuleCurrentStateParser,
+ toggleRuleCurrentStateParser,
+ updateRuleCurrentStateParser,
+} from '../../composables/useOperatorRules.ts'
+import { storeMemoryCurrentStateParser } from '../../composables/useOperatorMemoryLab.ts'
 
 const request: MutationRequest<{ enabled: boolean; version: number }> = {
  requestId: 'request-42',
@@ -30,6 +37,17 @@ function jsonResponse(status: number, body: unknown): Response {
  })
 }
 
+function assertMutationKind<
+ TIntent,
+ TCurrent,
+ TKind extends MutationResult<TIntent, TCurrent>['kind'],
+>(
+ result: MutationResult<TIntent, TCurrent>,
+ kind: TKind,
+): asserts result is Extract<MutationResult<TIntent, TCurrent>, { kind: TKind }> {
+ assert.equal(result.kind, kind)
+}
+
 test('completed mutations require an authoritative readback that remains separate from intent', async () => {
  const result = await parseMutationResponse(request, jsonResponse(200, {
   operation_state: 'completed',
@@ -43,7 +61,7 @@ test('completed mutations require an authoritative readback that remains separat
   },
  }), parseRuleState)
 
- assert.equal(result.kind, 'committed_verified')
+ assertMutationKind(result, 'committed_verified')
  assert.deepEqual(result.request.intent, { enabled: true, version: 1 })
  assert.deepEqual(result.readback, {
   kind: 'current',
@@ -64,7 +82,7 @@ test('HTTP acceptance remains pending even when its payload overstates completio
   },
  }), parseRuleState)
 
- assert.equal(result.kind, 'committed_verification_pending')
+ assertMutationKind(result, 'committed_verification_pending')
  assert.equal(result.commitment, 'accepted')
  assert.equal(result.operationId, 'operation-10')
 })
@@ -74,7 +92,7 @@ test('bare successful receipts remain pending until authoritative readback', asy
   id: 'rule-1',
  }), parseRuleState)
 
- assert.equal(result.kind, 'committed_verification_pending')
+ assertMutationKind(result, 'committed_verification_pending')
  assert.equal(result.commitment, 'committed')
  assert.equal(result.reason, 'readback_missing')
  assert.deepEqual(result.request, request)
@@ -90,7 +108,7 @@ test('unverified receipts retain the request without replaying or fabricating co
  const result = await executeMutation(request, response, parseRuleState)
 
  assert.equal(transportAttempts, 1)
- assert.equal(result.kind, 'committed_verification_pending')
+ assertMutationKind(result, 'committed_verification_pending')
  assert.deepEqual(result.request, request)
 })
 
@@ -103,7 +121,7 @@ test('partial mutation responses preserve each item outcome', async () => {
   ],
  }), parseRuleState)
 
- assert.equal(result.kind, 'partial')
+ assertMutationKind(result, 'partial')
  assert.deepEqual(result.items, [
   { targetId: 'rule-1', outcome: 'committed' },
   { targetId: 'rule-2', outcome: 'conflict', observedVersion: 3 },
@@ -149,7 +167,7 @@ test('an explicit timeout before a response remains timeout after dispatch', asy
   parseRuleState,
  )
 
- assert.equal(result.kind, 'timeout')
+ assertMutationKind(result, 'timeout')
  assert.strictEqual(result.request, request)
 })
 
@@ -160,7 +178,7 @@ test('a rejected already-dispatched mutation has manual retry intent and unknown
   parseRuleState,
  )
 
- assert.equal(result.kind, 'outcome_unknown')
+ assertMutationKind(result, 'outcome_unknown')
  assert.strictEqual(result.request, request)
  assert.strictEqual(result.request.intent, request.intent)
  assert.equal(result.retry, 'manual')
@@ -181,7 +199,7 @@ test('post-header body loss leaves commitment unknown without fabricating comple
  const result = await executeMutation(request, Promise.resolve(response), parseRuleState)
 
  assert.equal(bodyReads, 1)
- assert.equal(result.kind, 'outcome_unknown')
+ assertMutationKind(result, 'outcome_unknown')
  assert.strictEqual(result.request, request)
  assert.equal(result.retry, 'manual')
 })
@@ -189,7 +207,103 @@ test('post-header body loss leaves commitment unknown without fabricating comple
 test('invalid successful mutation bodies leave commitment unknown', async () => {
  const result = await parseMutationResponse(request, new Response('{'), parseRuleState)
 
- assert.equal(result.kind, 'outcome_unknown')
+ assertMutationKind(result, 'outcome_unknown')
  assert.strictEqual(result.request, request)
  assert.equal(result.retry, 'manual')
+})
+
+function directRule(overrides: Record<string, unknown> = {}) {
+ return {
+  id: 7,
+  project: 'engram',
+  content: 'Only write through reviewed paths.',
+  priority: 10,
+  version: 2,
+  enabled: true,
+  created_at: '2026-09-10T12:00:00.000Z',
+  updated_at: '2026-09-10T12:01:00.000Z',
+  ...overrides,
+ }
+}
+
+function directMemory(overrides: Record<string, unknown> = {}) {
+ return {
+  id: 19,
+  project: 'engram',
+  content: 'Mutation response proof belongs to the current DTO.',
+  tags: ['operator'],
+  version: 1,
+  created_at: '2026-09-10T12:00:00.000Z',
+  updated_at: '2026-09-10T12:01:00.000Z',
+  ...overrides,
+ }
+}
+
+test('strict endpoint parsers verify matching direct current DTOs separately from submitted intent', async () => {
+ const createdRule = await parseMutationResponse(
+  { requestId: 'rule-create-1', action: 'rule-create', intent: { content: 'Only write through reviewed paths.', priority: 10, project: 'engram' } },
+  jsonResponse(201, directRule()),
+  createRuleCurrentStateParser({ content: 'Only write through reviewed paths.', priority: 10, project: 'engram' }),
+ )
+ const updatedRule = await parseMutationResponse(
+  { requestId: 'rule-update-1', action: 'rule-update', intent: { id: 7, input: { priority: 10 } } },
+  jsonResponse(200, directRule()),
+  updateRuleCurrentStateParser(7, { priority: 10 }),
+ )
+ const toggledRule = await parseMutationResponse(
+  { requestId: 'rule-toggle-1', action: 'rule-enable-toggle', intent: { id: 7, enabled: true } },
+  jsonResponse(200, directRule()),
+  toggleRuleCurrentStateParser(7, true),
+ )
+ const storedMemory = await parseMutationResponse(
+  { requestId: 'memory-store-1', action: 'memory-store', intent: { project: 'engram', content: 'Mutation response proof belongs to the current DTO.', tags: ['operator'] } },
+  jsonResponse(201, directMemory()),
+  storeMemoryCurrentStateParser({ project: 'engram', content: 'Mutation response proof belongs to the current DTO.', tags: ['operator'] }),
+ )
+
+ for (const result of [createdRule, updatedRule, toggledRule, storedMemory]) {
+  assertMutationKind(result, 'committed_verified')
+  assert.equal(result.readback.kind, 'current')
+  assert.notStrictEqual(result.readback.current, result.request.intent)
+ }
+})
+
+test('direct current DTO identity, domain, and version mismatches remain pending', async () => {
+ const results = await Promise.all([
+  parseMutationResponse(
+   { requestId: 'rule-id-mismatch', action: 'rule-update', intent: { id: 7, input: {} } },
+   jsonResponse(200, directRule({ id: 8 })),
+   updateRuleCurrentStateParser(7, {}),
+  ),
+  parseMutationResponse(
+   { requestId: 'rule-domain-mismatch', action: 'rule-create', intent: { content: 'Only write through reviewed paths.', priority: 10, project: 'engram' } },
+   jsonResponse(201, directRule({ project: 'other-project' })),
+   createRuleCurrentStateParser({ content: 'Only write through reviewed paths.', priority: 10, project: 'engram' }),
+  ),
+  parseMutationResponse(
+   { requestId: 'memory-version-mismatch', action: 'memory-store', intent: { project: 'engram', content: 'Mutation response proof belongs to the current DTO.', tags: ['operator'] } },
+   jsonResponse(201, directMemory({ version: 0 })),
+   storeMemoryCurrentStateParser({ project: 'engram', content: 'Mutation response proof belongs to the current DTO.', tags: ['operator'] }),
+  ),
+ ])
+
+ for (const result of results) {
+  assertMutationKind(result, 'committed_verification_pending')
+  assert.equal(result.commitment, 'committed')
+ }
+})
+
+test('bare, delete, action, and 202 responses remain pending despite direct parser support', async () => {
+ const parser = updateRuleCurrentStateParser(7, {})
+ const results = await Promise.all([
+  parseMutationResponse({ requestId: 'bare', action: 'rule-update', intent: { id: 7, input: {} } }, jsonResponse(200, { id: 7 }), parser),
+  parseMutationResponse({ requestId: 'delete', action: 'rule-delete', intent: { id: 7 } }, jsonResponse(200, { deleted: 7 }), parser),
+  parseMutationResponse({ requestId: 'action', action: 'memory-suppress', intent: { id: '7' } }, jsonResponse(200, { status: 'suppressed', action: 'suppress', id: 7 }), parser),
+  parseMutationResponse({ requestId: 'accepted', action: 'rule-update', intent: { id: 7, input: {} } }, jsonResponse(202, directRule()), parser),
+ ])
+
+ for (const result of results) {
+  assertMutationKind(result, 'committed_verification_pending')
+ }
+ assertMutationKind(results[3], 'committed_verification_pending')
 })
