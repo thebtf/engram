@@ -82,13 +82,13 @@ function submitSearch() {
       <article class="panel" aria-live="polite">
         <div class="panel-head"><h3>Graph evidence</h3><span :data-state="graphState.kind">{{ graphState.kind }}</span></div>
         <p class="state-message">{{ graphState.message }}</p>
-        <ol v-if="graph?.graph !== null" class="edges" data-testid="code-graph-results">
+        <ol v-if="graph !== null && graph.graph !== null" class="edges" data-testid="code-graph-results">
           <li v-for="edge in graph.graph.edges" :key="`${edge.from.entityKey}:${edge.relation}:${edge.to.entityKey}`">
             <code>{{ edge.from.entityKey }}</code><span>{{ edge.relation }}</span><code>{{ edge.to.entityKey }}</code>
             <small>{{ edge.evidenceKind }}<template v-if="edge.explanation !== null"> — {{ edge.explanation }}</template></small>
           </li>
         </ol>
-        <p v-if="graph?.graph !== null" class="stop">Traversal: {{ graph.graph.stopReason }}</p>
+        <p v-if="graph !== null && graph.graph !== null" class="stop">Traversal: {{ graph.graph.stopReason }}</p>
         <p v-if="graph !== null" class="cursor">Cursor: {{ graph.hasContinuation ? 'released but continuation navigation is not exposed' : 'none released' }}</p>
       </article>
 

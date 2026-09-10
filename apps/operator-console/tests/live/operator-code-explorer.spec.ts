@@ -77,6 +77,8 @@ test('S2 live acceptance: explicit pin keeps search, graph, and source inside on
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('code-context-pinned')).toBeVisible()
     await expect(page.getByTestId('code-status')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Graph evidence' })).toBeVisible()
+    await expect(page.getByTestId('code-status')).toContainText('unavailable')
 
     await page.getByTestId('code-query-input').fill(scenario.query)
     await page.keyboard.press('Enter')
