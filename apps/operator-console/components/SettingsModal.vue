@@ -54,9 +54,15 @@ const {
   deleteDomain,
   listEvidence: domainListEvidence,
 } = useOperatorDomainRegistry()
+const { settingsModalCycle } = useSettingsModal()
+const modelHealthInitialLoad = !useState<boolean>('live:models:started', () => false).value
+const modelRegistryInitialLoad = !useState<boolean>('live:model-registry:started', () => false).value
 const modelHealthState = useModelsState()
 const modelRegistryState = useModelRegistryState()
 
+const modelSurfacesLoadedForCycle = ref<number | null>(
+  modelHealthInitialLoad || modelRegistryInitialLoad ? settingsModalCycle.value : null,
+)
 const restartConfirm = ref(false)
 const updateRestartConfirm = ref(false)
 const restartInFlight = ref(false)
@@ -419,7 +425,8 @@ watch(configState, () => {
 }, { immediate: true })
 
 watch([open, activeTab], ([isOpen, tab]) => {
-  if (!isOpen || tab !== 'models') return
+  if (!isOpen || tab !== 'models' || modelSurfacesLoadedForCycle.value === settingsModalCycle.value) return
+  modelSurfacesLoadedForCycle.value = settingsModalCycle.value
   void refreshModelSurfaces()
 }, { immediate: true })
 
