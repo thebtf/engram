@@ -16,6 +16,7 @@ const FIXTURE_OVERRIDDEN_ENVIRONMENT_NAMES: Record<string, true> = {
   DATABASE_URL: true,
   ENGRAM_AUTH_ADMIN_TOKEN: true,
   ENGRAM_AUTH_DISABLED: true,
+  ENGRAM_CODE_INTEL_ENABLED: true,
   ENGRAM_TOKEN: true,
   ENGRAM_WORKSTATION_TOKEN: true,
   ENGRAM_API_TOKEN: true,
@@ -73,7 +74,15 @@ export interface LiveFixtureState {
     prohibited: true
     liveConfigContainsMockCommand: false
   }
+  operatorCode: OperatorCodeFixture
   traffic: RouteTraffic[]
+}
+
+interface OperatorCodeFixture {
+  query: string
+  expectedSearch: string
+  expectedGraph: string
+  expectedSource: string
 }
 
 interface CommandResult {
@@ -148,6 +157,8 @@ class LiveFixture implements FixtureController {
       if (setup.status !== 201) {
         throw new Error(`real API fixture auth setup failed: ${setup.status} ${JSON.stringify(setup.body)}`)
       }
+      const operatorCode = await this.provisionOperatorCode(postgres.dsn)
+
 
       const appUrl = await this.startConsole(apiUrl)
       await this.awaitReady(`${appUrl}/settings`, this.console, 'built Nuxt console')
@@ -181,6 +192,8 @@ class LiveFixture implements FixtureController {
           prohibited: true,
           liveConfigContainsMockCommand: false,
         },
+        operatorCode,
+
         traffic: this.traffic,
       }
       await writeFixtureState(this.statePath, state)
@@ -272,6 +285,7 @@ class LiveFixture implements FixtureController {
       DATABASE_MAX_CONNS: '4',
       ENGRAM_AUTH_ADMIN_TOKEN: this.adminToken,
       ENGRAM_AUTH_DISABLED: 'false',
+      ENGRAM_CODE_INTEL_ENABLED: 'true',
       ENGRAM_WORKER_HOST: '127.0.0.1',
       ENGRAM_WORKER_PORT: String(port),
       HOME: home,
@@ -281,6 +295,35 @@ class LiveFixture implements FixtureController {
     })
     this.server = startProcess(binary, [], repositoryRoot, environment)
     return `http://127.0.0.1:${port}`
+  }
+
+  private async provisionOperatorCode(dsn: string): Promise<OperatorCodeFixture> {
+    const dsnFile = join(this.fixtureRoot, 'operator-code-dsn.txt')
+    await writeFile(dsnFile, `${dsn}\n`, { encoding: 'utf8', mode: 0o600 })
+    const result = await execute('go', [
+      'run', './cmd/operator-code-live-fixture',
+      '--dsn-file', dsnFile,
+      '--browser-email', this.browserEmail,
+      '--project', this.fixtureId,
+    ], repositoryRoot)
+    const output: unknown = JSON.parse(result.stdout)
+    if (
+      output === null
+      || typeof output !== 'object'
+      || Array.isArray(output)
+      || typeof Reflect.get(output, 'query') !== 'string'
+      || typeof Reflect.get(output, 'expectedSearch') !== 'string'
+      || typeof Reflect.get(output, 'expectedGraph') !== 'string'
+      || typeof Reflect.get(output, 'expectedSource') !== 'string'
+    ) {
+      throw new Error('operator-code fixture provisioner returned an invalid non-secret receipt')
+    }
+    return {
+      query: Reflect.get(output, 'query') as string,
+      expectedSearch: Reflect.get(output, 'expectedSearch') as string,
+      expectedGraph: Reflect.get(output, 'expectedGraph') as string,
+      expectedSource: Reflect.get(output, 'expectedSource') as string,
+    }
   }
 
   private async startConsole(apiUrl: string): Promise<string> {

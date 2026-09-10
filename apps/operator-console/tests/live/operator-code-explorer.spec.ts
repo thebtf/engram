@@ -83,9 +83,13 @@ test('S2 live acceptance: explicit pin keeps search, graph, and source inside on
     await page.getByTestId('code-query-input').fill(scenario.query)
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('code-search-results')).toContainText(scenario.expectedSearch)
-    await page.getByRole('button', { name: 'Explore graph' }).first().click()
+    const functionResult = page.getByTestId('code-search-results').getByRole('listitem').filter({
+      has: page.getByText(`go:fixture/func:${scenario.expectedSource}`, { exact: true }),
+    })
+    await expect(functionResult).toHaveCount(1)
+    await functionResult.getByRole('button', { name: 'Explore graph' }).click()
     await expect(page.getByTestId('code-graph-results')).toContainText(scenario.expectedGraph)
-    await page.getByRole('button', { name: 'Read source' }).first().click()
+    await functionResult.getByRole('button', { name: 'Read source' }).click()
     await expect(page.getByTestId('code-source-result')).toContainText(scenario.expectedSource)
 
     const resumePair = await page.evaluate((key) => sessionStorage.getItem(key), RESUME_STORAGE_KEY)
@@ -137,6 +141,7 @@ test('S2 live acceptance: explicit pin keeps search, graph, and source inside on
     const evidence = JSON.stringify({
       evidenceKind: 'real-authenticated-go-postgresql-browser',
       candidate: state.candidate,
+      backend: { sourceCommit: state.backend.sourceCommit, binarySha256: state.backend.binarySha256 },
       browser: { engine: browser.browserType().name(), version: browser.version() },
       transitions,
       traffic: state.traffic,
