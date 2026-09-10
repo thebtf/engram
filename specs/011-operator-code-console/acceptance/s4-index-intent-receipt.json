@@ -84,7 +84,9 @@
       "unavailable",
       "failed"
     ],
-    "browser_http_requests": 37,
+    "traffic_entries_total": 37,
+    "browser_http_requests": 15,
+    "bootstrap_http_requests": 22,
     "browser_routes": [
       "POST /api/code/index-intents",
       "GET /api/code/index-intents/:intent_ref",
