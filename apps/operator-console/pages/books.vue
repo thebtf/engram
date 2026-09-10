@@ -26,6 +26,7 @@ const notice = ref<{ kind: 'success' | 'error'; text: string } | null>(null)
 const fileMessage = ref<string | null>(null)
 const localState = ref<TruthState | null>(null)
 const localError = ref<OperatorSourceError | null>(null)
+const mutationResult = ref<Awaited<ReturnType<typeof ingestBook>> | null>(null)
 
 function clearLocalState() {
   localState.value = null
@@ -130,18 +131,9 @@ async function submitBook() {
     author: form.author,
     content: form.content,
   })
-
-  if (result.kind === 'success') {
+  mutationResult.value = result
+  if (result.kind === 'committed_verified') {
     currentProject.value = form.project.trim() || currentProject.value || 'engram'
-    notice.value = { kind: 'success', text: t('booksPage.notice.queued', { id: result.data.id }) }
-    return
-  }
-
-  localState.value = stateForError(result.error, Boolean(currentJob.value))
-  localError.value = result.error
-  notice.value = {
-    kind: 'error',
-    text: t('booksPage.notice.failed', { message: result.error.message || t('booksPage.notice.loadError') }),
   }
 }
 </script>
@@ -188,6 +180,7 @@ async function submitBook() {
       </div>
       <button v-if="showRefresh" class="tbtn" type="button" @click="refreshBooksStatus">{{ t('booksPage.actions.refresh') }}</button>
     </section>
+    <MutationResultNotice :result="mutationResult" :recheck-label="t('booksPage.actions.refresh')" @recheck="refreshBooksStatus" />
 
     <div class="books-grid">
       <section class="panel form-panel">

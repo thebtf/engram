@@ -34,6 +34,7 @@ const commentDraft = ref('')
 const lineStartDraft = ref('')
 const lineEndDraft = ref('')
 const commentBusy = ref(false)
+const mutationResult = ref<Awaited<ReturnType<typeof addComment>> | null>(null)
 
 const documentCount = computed(() => documents.length)
 const versionCount = computed(() => history.length)
@@ -109,22 +110,13 @@ async function onCommentSubmit() {
       lineEnd,
     })
 
-    if (result.kind === 'success') {
+    mutationResult.value = result
+    if (result.kind === 'committed_verified') {
       commentDraft.value = ''
       lineStartDraft.value = ''
       lineEndDraft.value = ''
-      notice.value = {
-        kind: 'success',
-        text: t('documents.comments.noticeSuccess', { version: currentVersionEntry.value?.version || '—' }),
-      }
-      return
-    }
-
-    notice.value = {
-      kind: 'error',
-      text: t('documents.comments.noticeError', {
-        message: result.error.message || t('documents.comments.unknownError'),
-      }),
+      notice.value = null
+      await refresh()
     }
   } finally {
     commentBusy.value = false
@@ -184,6 +176,7 @@ async function onCommentSubmit() {
       <button v-if="error" class="tbtn" @click="refresh">{{ t('documents.state.retry') }}</button>
       <button v-else-if="notice" class="tbtn" @click="notice = null">{{ t('common.hide') }}</button>
     </section>
+    <MutationResultNotice :result="mutationResult" :recheck-label="t('documents.actions.refresh')" @recheck="refresh" />
 
     <div class="docs-workspace">
       <section class="panel docs-list">

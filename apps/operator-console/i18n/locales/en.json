@@ -13,6 +13,82 @@
     "clearSelection": "Clear selection",
     "loadingShort": "…"
   },
+  "mutationOutcome": {
+    "request": "Request reference",
+    "action": "Action",
+    "operation": "Operation reference",
+    "code": "Response code",
+    "readback": "Authoritative readback",
+    "version": "Readback version",
+    "manualCheck": "The submitted input is still retained. Check current state before intentionally submitting it again.",
+    "readbackKinds": {
+      "current": "current state",
+      "authorized_absence": "authorized absence",
+      "non_disclosing": "non-disclosing operation status"
+    },
+    "items": {
+      "committed": "committed",
+      "denied": "denied",
+      "conflict": "conflict",
+      "validation_error": "invalid input",
+      "failed": "failed",
+      "outcome_unknown": "outcome unknown"
+    },
+    "outcomes": {
+      "committed_verified": {
+        "title": "Completed and verified",
+        "body": "An authoritative postcondition readback confirms this action."
+      },
+      "committed_verification_pending": {
+        "title": "Committed, verification pending",
+        "body": "The server accepted or committed the action, but no authoritative postcondition is available yet."
+      },
+      "partial": {
+        "title": "Partially completed",
+        "body": "Only the listed item outcomes are known; unresolved selections remain available."
+      },
+      "denied": {
+        "title": "Access denied",
+        "body": "The server denied this request before a known effect."
+      },
+      "conflict": {
+        "title": "Conflict",
+        "body": "The request conflicts with the server's current state."
+      },
+      "validation_error": {
+        "title": "Invalid input",
+        "body": "The server rejected the submitted input."
+      },
+      "stale": {
+        "title": "Stale state",
+        "body": "The request used state that is no longer current."
+      },
+      "unsupported": {
+        "title": "Unsupported action",
+        "body": "This server does not support the requested action."
+      },
+      "offline": {
+        "title": "Offline",
+        "body": "The server reported that this action cannot run while offline."
+      },
+      "timeout": {
+        "title": "Timed out",
+        "body": "The request timed out before a verified outcome was returned."
+      },
+      "network": {
+        "title": "Network failure",
+        "body": "A network failure prevented a verified outcome from being returned."
+      },
+      "failed": {
+        "title": "Operation failed",
+        "body": "The server did not complete this request."
+      },
+      "outcome_unknown": {
+        "title": "Outcome unknown",
+        "body": "The browser cannot determine whether the server committed this request."
+      }
+    }
+  },
   "honesty": {
     "live": "live",
     "dormant": "behind flag",

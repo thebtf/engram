@@ -82,6 +82,8 @@ const editingDomain = ref<string | null>(null)
 const configSaveResult = ref<Awaited<ReturnType<typeof saveConfig>> | null>(null)
 const domainSaveResult = ref<Awaited<ReturnType<typeof upsertDomain>> | null>(null)
 const domainDeleteResult = ref<Awaited<ReturnType<typeof deleteDomain>> | null>(null)
+const restartResult = ref<Awaited<ReturnType<typeof restartServer>> | null>(null)
+const updateRestartResult = ref<Awaited<ReturnType<typeof restartAfterUpdate>> | null>(null)
 const configDraftTouched = ref(false)
 const draftInjectUnified = ref(false)
 const draftSourceProject = ref(false)
@@ -195,8 +197,8 @@ function buildConfigPatch() {
   return patch
 }
 
-function formatChanged(fields?: string[]) {
-  return fields && fields.length ? fields.join(', ') : t('settings.save.noEffectiveChanges')
+async function recheckMutations() {
+  await Promise.all([refresh(), refreshDomains()])
 }
 
 function formatLifecycleValue(value: unknown) {
@@ -255,10 +257,9 @@ async function saveRuntimeConfig() {
   configSaveInFlight.value = true
   try {
     configSaveResult.value = await saveConfig(buildConfigPatch())
-    if (configSaveResult.value.kind === 'success' && configSaveResult.value.data.config) {
-      draftInjectUnified.value = Boolean(configSaveResult.value.data.config.memory?.inject_unified)
-      draftSourceProject.value = Boolean(configSaveResult.value.data.config.features?.enforce_source_project)
+    if (configSaveResult.value.kind === 'committed_verified') {
       configDraftTouched.value = false
+      await refresh()
     }
   } finally {
     configSaveInFlight.value = false
@@ -271,14 +272,7 @@ async function saveDomainDraft() {
   domainDeleteResult.value = null
   try {
     domainSaveResult.value = await upsertDomain(domainDraft.value)
-    if (domainSaveResult.value.kind === 'success') {
-      domainDraft.value = {
-        domain: domainSaveResult.value.data.domain,
-        ownerPrincipal: domainSaveResult.value.data.ownerPrincipal,
-        ownerPrincipalKind: domainSaveResult.value.data.ownerPrincipalKind,
-        mode: domainSaveResult.value.data.mode,
-      }
-    }
+    if (domainSaveResult.value.kind === 'committed_verified') await refreshDomains()
   } finally {
     domainSaveInFlight.value = false
   }
@@ -294,8 +288,9 @@ async function confirmDeleteDomain(domain: string) {
   domainSaveResult.value = null
   try {
     domainDeleteResult.value = await deleteDomain(domain)
-    if (domainDeleteResult.value.kind === 'success' && domainDraft.value.domain === domain) {
-      resetDomainDraft()
+    if (domainDeleteResult.value.kind === 'committed_verified') {
+      if (domainDraft.value.domain === domain) resetDomainDraft()
+      await refreshDomains()
     }
   } finally {
     domainDeleteInFlight.value = null
@@ -354,7 +349,7 @@ async function confirmRestartServer() {
   }
   restartInFlight.value = true
   try {
-    await restartServer()
+    restartResult.value = await restartServer()
   } finally {
     restartInFlight.value = false
     restartConfirm.value = false
@@ -369,7 +364,7 @@ async function confirmUpdateRestart() {
   }
   updateRestartInFlight.value = true
   try {
-    await restartAfterUpdate()
+    updateRestartResult.value = await restartAfterUpdate()
   } finally {
     updateRestartInFlight.value = false
     updateRestartConfirm.value = false
@@ -691,18 +686,7 @@ onBeforeUnmount(() => {
                     <summary>{{ t('settings.modal.evidence.title') }}</summary>
                     <code>PATCH {{ configSaveEvidence.endpoint }}</code>
                   </details>
-                  <div v-if="configSaveResult?.kind === 'success'" class="state" :class="configSaveResult.data.restart_required ? 'restart' : 'ok'">
-                    {{ t('settings.save.success', {
-                      changed: formatChanged(configSaveResult.data.changed),
-                      restart: configSaveResult.data.restart_required ? t('common.yes') : t('common.no'),
-                    }) }}
-                    <span v-if="configSaveResult.data.restart_required_fields?.length">
-                      {{ t('settings.save.restartFields', { fields: configSaveResult.data.restart_required_fields.join(', ') }) }}
-                    </span>
-                  </div>
-                  <div v-else-if="configSaveResult?.kind === 'rollback'" class="state error">
-                    {{ t('settings.save.error', { message: configSaveResult.error.message }) }}
-                  </div>
+                  <MutationResultNotice :result="configSaveResult" :recheck-label="t('settings.refresh')" @recheck="recheckMutations" />
                 </section>
 
                 <section class="settings-section">
@@ -758,6 +742,8 @@ onBeforeUnmount(() => {
                     · {{ t('settings.restart.updateAvailable') }}:
                     <code>{{ updateCheckState.kind === 'live' ? (updateCheckState.data?.available ? t('common.yes') : t('common.no')) : '—' }}</code>
                   </p>
+                  <MutationResultNotice :result="restartResult" :recheck-label="t('settings.refresh')" @recheck="recheckMutations" />
+                  <MutationResultNotice :result="updateRestartResult" :recheck-label="t('settings.refresh')" @recheck="recheckMutations" />
                 </section>
               </template>
 
@@ -777,18 +763,8 @@ onBeforeUnmount(() => {
                   </details>
                   <div v-if="domainsPending" class="state pending">{{ t('settings.domains.pending') }}</div>
                   <div v-if="domainsError" class="state error">{{ t('settings.domains.error', { message: domainsError }) }}</div>
-                  <div v-if="domainSaveResult?.kind === 'success'" class="state ok">
-                    {{ t('settings.domains.notice.saved', { domain: domainSaveResult.data.domain }) }}
-                  </div>
-                  <div v-else-if="domainSaveResult?.kind === 'rollback'" class="state error">
-                    {{ t('settings.domains.notice.error', { message: domainSaveResult.error.message }) }}
-                  </div>
-                  <div v-if="domainDeleteResult?.kind === 'success'" class="state ok">
-                    {{ t('settings.domains.notice.deleted', { domain: domainDeleteResult.data.domain }) }}
-                  </div>
-                  <div v-else-if="domainDeleteResult?.kind === 'rollback'" class="state error">
-                    {{ t('settings.domains.notice.error', { message: domainDeleteResult.error.message }) }}
-                  </div>
+                  <MutationResultNotice :result="domainSaveResult" :recheck-label="t('settings.refresh')" @recheck="recheckMutations" />
+                  <MutationResultNotice :result="domainDeleteResult" :recheck-label="t('settings.refresh')" @recheck="recheckMutations" />
                 </section>
 
                 <section class="settings-section domain-form">

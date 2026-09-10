@@ -9,6 +9,7 @@ import {
   type OperatorIssueStatus,
   type OperatorIssueType,
 } from '../composables/useOperatorIssues'
+import type { MutationResult } from '../composables/useApi'
 
 type IssueFilter = 'all' | 'open' | 'work' | 'closed' | 'rejected'
 type BulkField = 'status' | 'priority' | 'type'
@@ -86,6 +87,7 @@ const bulkField = ref<BulkField>('status')
 const bulkValue = ref<string>('acknowledged')
 const bulkLabelMode = ref<LabelMode>('add')
 const bulkLabelValue = ref('operator-created')
+const mutationResult = ref<MutationResult | null>(null)
 
 const activeIssue = computed(() => {
   if (activeId.value === null) return null
@@ -200,16 +202,6 @@ function setNotice(key: string, params: Record<string, unknown> = {}) {
   notice.value = t(key, params)
 }
 
-function mutationOk(result: unknown) {
-  return Boolean(result && typeof result === 'object' && 'kind' in result && (result as { kind?: string }).kind === 'success')
-}
-
-function mutationError(result: unknown) {
-  if (result && typeof result === 'object' && 'error' in result) {
-    return (result as { error?: { message?: string } }).error?.message || ''
-  }
-  return ''
-}
 
 function selectedCountText() {
   return t('issues.bulk.selected', selectedCount.value, { count: selectedCount.value })
@@ -323,9 +315,7 @@ async function updateCurrentField(field: 'status' | 'priority' | 'type', value: 
     ...patch,
     comment: t('issues.detail.fieldChangeComment', { field: t(`issues.detail.${field}`) }),
   })
-  setNotice(mutationOk(result) ? 'issues.notice.saved' : 'issues.notice.error', {
-    message: mutationError(result) || t('issues.notice.unknownError'),
-  })
+  mutationResult.value = result
 }
 
 async function toggleIssueLabel(label: string) {
@@ -338,9 +328,7 @@ async function toggleIssueLabel(label: string) {
     labels,
     comment: t('issues.detail.labelsComment'),
   })
-  setNotice(mutationOk(result) ? 'issues.notice.saved' : 'issues.notice.error', {
-    message: mutationError(result) || t('issues.notice.unknownError'),
-  })
+  mutationResult.value = result
 }
 
 function showIssueHover(issue: OperatorIssue, event: MouseEvent) {
@@ -414,27 +402,17 @@ async function createNewIssue() {
     labels: createLabels.value,
   })
 
-  if (mutationOk(result)) {
-    const id = (result as { data?: { id?: number } }).data?.id
+  mutationResult.value = result
+  if (result.kind === 'committed_verified') {
     showCreate.value = false
-    setNotice('issues.notice.created', { id })
-    if (id) {
-      activeId.value = id
-      await openIssue(id)
-    }
     resetCreate()
-    return
   }
-
-  setNotice('issues.notice.error', { message: mutationError(result) || t('issues.notice.unknownError') })
 }
 
 async function acknowledgeCurrent() {
   if (!activeIssue.value) return
   const result = await acknowledgeIssue(activeIssue.value.id)
-  setNotice(mutationOk(result) ? 'issues.notice.acknowledged' : 'issues.notice.error', {
-    message: mutationError(result) || t('issues.notice.unknownError'),
-  })
+  mutationResult.value = result
 }
 
 async function resolveCurrent() {
@@ -443,46 +421,39 @@ async function resolveCurrent() {
     status: 'resolved',
     comment: t('issues.detail.resolveComment'),
   })
-  setNotice(mutationOk(result) ? 'issues.notice.resolved' : 'issues.notice.error', {
-    message: mutationError(result) || t('issues.notice.unknownError'),
-  })
+  mutationResult.value = result
 }
 
 async function addComment() {
   if (!activeIssue.value || !canComment.value) return
   const result = await commentIssue(activeIssue.value.id, commentDraft.value.trim())
-  if (mutationOk(result)) {
-    setNotice('issues.notice.commented')
+  mutationResult.value = result
+  if (result.kind === 'committed_verified') {
     commentDraft.value = ''
     await openIssue(activeIssue.value.id)
-    return
   }
-  setNotice('issues.notice.error', { message: mutationError(result) || t('issues.notice.unknownError') })
 }
 
 async function rejectCurrent() {
   if (!activeIssue.value || !canReject.value) return
   const result = await rejectIssue(activeIssue.value.id, rejectComment.value.trim())
-  if (mutationOk(result)) {
+  mutationResult.value = result
+  if (result.kind === 'committed_verified') {
     showReject.value = false
-    setNotice('issues.notice.rejected')
+    rejectComment.value = ''
     await openIssue(activeIssue.value.id)
-    return
   }
-  setNotice('issues.notice.error', { message: mutationError(result) || t('issues.notice.unknownError') })
 }
 
 async function deleteCurrent() {
   if (!activeIssue.value) return
   const id = activeIssue.value.id
   const result = await deleteIssue(id)
-  if (mutationOk(result)) {
+  mutationResult.value = result
+  if (result.kind === 'committed_verified') {
     showDelete.value = false
     activeId.value = null
-    setNotice('issues.notice.deleted', { id })
-    return
   }
-  setNotice('issues.notice.error', { message: mutationError(result) || t('issues.notice.unknownError') })
 }
 
 function openBulkEditor(field: BulkField) {
@@ -494,19 +465,17 @@ function openBulkEditor(field: BulkField) {
 async function applyBulkField() {
   if (!selectedCount.value) return
   const ids = [...selectedIds.value]
-  let result: unknown
-  if (bulkField.value === 'status' && bulkValue.value === 'acknowledged') {
-    result = await bulkAcknowledgeIssues(ids)
-  } else {
-    result = await bulkUpdateIssues(ids, { [bulkField.value]: bulkValue.value } as IssueUpdateInput)
-  }
-  if (mutationOk(result)) {
+  const result = bulkField.value === 'status' && bulkValue.value === 'acknowledged'
+    ? await bulkAcknowledgeIssues(ids)
+    : await bulkUpdateIssues(ids, { [bulkField.value]: bulkValue.value } as IssueUpdateInput)
+  mutationResult.value = result
+  if (result.kind === 'committed_verified') {
     showBulkField.value = false
     clearSelection()
-    setNotice('issues.notice.bulkUpdated')
-    return
+  } else if (result.kind === 'partial') {
+    const committed = new Set(result.items.filter((item) => item.outcome === 'committed').map((item) => Number(item.targetId)))
+    selectedIds.value = selectedIds.value.filter((id) => !committed.has(id))
   }
-  setNotice('issues.notice.error', { message: mutationError(result) || t('issues.notice.unknownError') })
 }
 
 async function applyBulkReject() {
@@ -515,14 +484,15 @@ async function applyBulkReject() {
     status: 'rejected',
     comment: bulkRejectComment.value.trim(),
   })
-  if (mutationOk(result)) {
+  mutationResult.value = result
+  if (result.kind === 'committed_verified') {
     showBulkReject.value = false
     bulkRejectComment.value = ''
     clearSelection()
-    setNotice('issues.notice.bulkRejected')
-    return
+  } else if (result.kind === 'partial') {
+    const committed = new Set(result.items.filter((item) => item.outcome === 'committed').map((item) => Number(item.targetId)))
+    selectedIds.value = selectedIds.value.filter((id) => !committed.has(id))
   }
-  setNotice('issues.notice.error', { message: mutationError(result) || t('issues.notice.unknownError') })
 }
 
 async function applyBulkLabels() {
@@ -531,25 +501,25 @@ async function applyBulkLabels() {
   const value = bulkLabelValue.value
   if (bulkLabelMode.value === 'replace') {
     const result = await bulkUpdateIssues(selected.map((issue) => issue.id), { labels: [value] })
-    if (!mutationOk(result)) {
-      setNotice('issues.notice.error', { message: mutationError(result) || t('issues.notice.unknownError') })
+    mutationResult.value = result
+    if (result.kind === 'partial') {
+      const committed = new Set(result.items.filter((item) => item.outcome === 'committed').map((item) => Number(item.targetId)))
+      selectedIds.value = selectedIds.value.filter((id) => !committed.has(id))
       return
     }
+    if (result.kind !== 'committed_verified') return
   } else {
     for (const issue of selected) {
       const labels = new Set(issue.labels)
       if (bulkLabelMode.value === 'add') labels.add(value)
       if (bulkLabelMode.value === 'remove') labels.delete(value)
       const result = await updateIssue(issue.id, { labels: [...labels] })
-      if (!mutationOk(result)) {
-        setNotice('issues.notice.error', { message: mutationError(result) || t('issues.notice.unknownError') })
-        return
-      }
+      mutationResult.value = result
+      if (result.kind !== 'committed_verified') return
     }
   }
   showBulkLabels.value = false
   clearSelection()
-  setNotice('issues.notice.bulkUpdated')
 }
 
 async function copyIssueLink() {
@@ -601,6 +571,7 @@ function renderMarkdown(value: string) {
       <span v-else-if="loadState.kind === 'empty'">{{ t('issues.state.empty') }}</span>
       <button v-if="error" class="tbtn" @click="refresh">{{ t('issues.state.retry') }}</button>
     </section>
+    <MutationResultNotice :result="mutationResult" :recheck-label="t('issues.state.retry')" @recheck="refresh" />
 
     <section v-if="!activeIssue" class="area-body">
       <div class="pane">

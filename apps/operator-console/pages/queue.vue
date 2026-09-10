@@ -26,6 +26,7 @@ const selected = ref<Record<string, boolean>>({})
 const confirm = ref<{ id: string; action: CandidateAction } | null>(null)
 const busyActions = ref<Record<string, CandidateAction | undefined>>({})
 const notice = ref<{ kind: 'success' | 'error'; text: string } | null>(null)
+const mutationResult = ref<Awaited<ReturnType<typeof promoteCandidate>> | null>(null)
 
 const effectivePageSize = computed(() => resolvePageSize(pageSize.value, rows.length))
 const pageCount = computed(() => Math.max(1, Math.ceil(rows.length / effectivePageSize.value)))
@@ -136,12 +137,6 @@ function actionAriaLabel(candidate: OperatorCandidate, action: CandidateAction) 
   return t('queue.aria.action', { action: actionLabel(candidate, action), id: candidate.id })
 }
 
-function mutationError(result: unknown) {
-  if (result && typeof result === 'object' && 'error' in result) {
-    return (result as { error?: { message?: string } }).error?.message || ''
-  }
-  return ''
-}
 
 async function runAction(candidate: OperatorCandidate, action: CandidateAction) {
   if (isCandidateBusy(candidate.id)) return
@@ -159,16 +154,13 @@ async function runAction(candidate: OperatorCandidate, action: CandidateAction) 
         ? await rejectCandidate(candidate.id)
         : await supersedeCandidate(candidate.id)
 
-    if (result.kind === 'success') {
+    mutationResult.value = result
+    if (result.kind === 'committed_verified' || (result.kind === 'partial' && result.items.some((item) => String(item.targetId) === candidate.id && item.outcome === 'committed'))) {
       const nextSelected = { ...selected.value }
       delete nextSelected[candidate.id]
       selected.value = nextSelected
       if (openId.value === candidate.id) openId.value = null
       clearMatchingConfirm(candidate.id, action)
-      notice.value = { kind: 'success', text: t(`queue.notice.${action}`, { id: candidate.id }) }
-    } else {
-      clearMatchingConfirm(candidate.id, action)
-      notice.value = { kind: 'error', text: t('queue.notice.error', { message: mutationError(result) || t('queue.notice.unknownError') }) }
     }
   } finally {
     clearCandidateBusy(candidate.id)
@@ -237,6 +229,7 @@ async function runAction(candidate: OperatorCandidate, action: CandidateAction) 
       <span>{{ notice.text }}</span>
       <button class="tbtn" @click="notice = null">{{ t('common.hide') }}</button>
     </section>
+    <MutationResultNotice :result="mutationResult" :recheck-label="t('queue.actions.refresh')" @recheck="refresh" />
 
     <section v-if="pending || error || loadState.kind === 'empty' || loadState.kind === 'gated'" class="statebar" :data-state="statebarKind">
       <span v-if="pending">{{ t('queue.state.pending') }}</span>

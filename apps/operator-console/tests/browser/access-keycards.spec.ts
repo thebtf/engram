@@ -26,7 +26,7 @@ async function routeAccess(page: Page) {
   })
 }
 
-test('Access issues a one-time workstation keycard and revokes an existing keycard', async ({ page }) => {
+test('Access retains keycard input until authoritative mutation readback', async ({ page }) => {
   const failedRequests: string[] = []
   const badResponses: string[] = []
   const pageErrors: string[] = []
@@ -118,10 +118,13 @@ test('Access issues a one-time workstation keycard and revokes an existing keyca
   await page.locator('#access-keycard-expires-at').fill('2030-01-02T03:04')
   await page.getByTestId('keycard-issue').click()
 
-  const reveal = page.getByTestId('keycard-reveal')
-  await expect(reveal).toBeVisible()
-  await expect(reveal.locator('.rv-key')).toHaveText(RAW_KEYCARD)
-  await expect(page.getByTestId('keycard-row-keycard-issued')).not.toContainText(RAW_KEYCARD)
+  const outcome = page.getByTestId('mutation-result')
+  await expect(outcome).toHaveAttribute('data-kind', 'committed_verification_pending')
+  await expect(page.getByTestId('mutation-request-reference')).toHaveText(/\S+/)
+  await expect(page.getByTestId('mutation-retained-input')).toBeVisible()
+  await expect(page.locator('#access-keycard-name')).toHaveValue('browser-workstation')
+  await expect(page.locator('#access-keycard-principal')).toHaveValue('operator/browser')
+  await expect(page.locator('body')).not.toContainText(RAW_KEYCARD)
   expect(createPayload).toMatchObject({
     name: 'browser-workstation',
     scope: 'read-write',
@@ -138,14 +141,15 @@ test('Access issues a one-time workstation keycard and revokes an existing keyca
   expect(JSON.stringify(browserState)).not.toContain(RAW_KEYCARD)
   expect(consoleMessages.join('\n')).not.toContain(RAW_KEYCARD)
 
-  await page.getByTestId('keycard-dismiss').click()
-  await expect(reveal).toHaveCount(0)
-  await page.reload()
-  await expect(page.getByTestId('keycard-reveal')).toHaveCount(0)
-  await expect(page.getByTestId('keycard-row-keycard-issued')).not.toContainText(RAW_KEYCARD)
+  await page.getByTestId('mutation-recheck').click()
+  await expect(page.getByTestId('keycard-row-keycard-issued')).toBeVisible()
+  await expect(page.locator('#access-keycard-name')).toHaveValue('browser-workstation')
 
   await page.getByTestId('keycard-revoke-keycard-existing').click()
+  await expect(outcome).toHaveAttribute('data-kind', 'committed_verification_pending')
+  await page.getByTestId('mutation-recheck').click()
   await expect(page.getByTestId('keycard-row-keycard-existing')).toHaveAttribute('data-status', 'revoked')
+
   expect(revokedIDs).toEqual(['keycard-existing'])
   expect(failedRequests).toEqual([])
   expect(badResponses).toEqual([])

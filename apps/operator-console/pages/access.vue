@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { operatorDiagnosisKey, type OperatorSourceError } from '../composables/useOperatorApi'
+import { computed, ref } from 'vue'
+import { operatorDiagnosisKey } from '../composables/useOperatorApi'
+import type { MutationResult } from '../composables/useApi'
 import {
   useOperatorAccess,
   type OperatorAccessInvitation,
@@ -74,11 +75,9 @@ const inviteActionID = ref<number | null>(null)
 const userActionID = ref<number | null>(null)
 const sessionActionID = ref<string | null>(null)
 const localAuthBlocked = ref(false)
-const revealedInvitationCode = ref('')
-const copyNotice = ref<'success' | 'error' | null>(null)
 const keycardBusy = ref(false)
 const keycardActionID = ref<string | null>(null)
-const revealedKeycardToken = ref('')
+const mutationResult = ref<MutationResult | null>(null)
 const route = useRoute()
 
 const enabledProviderCount = computed(() => providers.filter((provider) => provider.enabled).length)
@@ -190,27 +189,6 @@ function clearNotice() {
   notice.value = null
 }
 
-function clearInvitationReveal() {
-  revealedInvitationCode.value = ''
-  copyNotice.value = null
-}
-
-function clearKeycardReveal() {
-  revealedKeycardToken.value = ''
-}
-
-async function copyInvitationCode() {
-  if (!revealedInvitationCode.value || !navigator.clipboard?.writeText) {
-    copyNotice.value = 'error'
-    return
-  }
-  try {
-    await navigator.clipboard.writeText(revealedInvitationCode.value)
-    copyNotice.value = 'success'
-  } catch {
-    copyNotice.value = 'error'
-  }
-}
 
 function keycardExpiry(value: string): string | null {
   const trimmed = value.trim()
@@ -243,7 +221,6 @@ function keycardTone(keycard: OperatorKeycard) {
 
 async function submitKeycard() {
   if (keycardBusy.value || keycardMutationDisabled.value) return
-  clearKeycardReveal()
   const name = keycardForm.value.name.trim()
   const principal = keycardForm.value.principal.trim()
   if (!name || !principal) {
@@ -260,15 +237,13 @@ async function submitKeycard() {
       principalKind: keycardForm.value.principalKind,
       expiresAt: keycardExpiry(keycardForm.value.expiresAt),
     })
-    if (result.kind === 'success') {
+    mutationResult.value = result
+    if (result.kind === 'committed_verified') {
       keycardForm.value.name = ''
       keycardForm.value.principal = ''
       keycardForm.value.expiresAt = ''
-      revealedKeycardToken.value = result.data.token
-      notice.value = { kind: 'success', text: t('access.notice.keycardCreated') }
-      return
+      notice.value = null
     }
-    await handleMutationFailure(result.error)
   } finally {
     keycardBusy.value = false
   }
@@ -279,29 +254,16 @@ async function onRevokeKeycard(keycard: OperatorKeycard) {
   keycardActionID.value = keycard.id
   try {
     const result = await revokeKeycard(keycard.id)
-    if (result.kind === 'success') {
-      notice.value = { kind: 'success', text: t('access.notice.keycardRevoked', { name: keycard.name }) }
-      return
-    }
-    await handleMutationFailure(result.error)
+    mutationResult.value = result
+    if (result.kind === 'committed_verified') notice.value = null
   } finally {
     keycardActionID.value = null
   }
 }
 
-watch(() => route.fullPath, clearInvitationReveal)
-watch(() => route.fullPath, clearKeycardReveal)
-onBeforeUnmount(clearInvitationReveal)
-onBeforeUnmount(clearKeycardReveal)
 
-async function handleMutationFailure(error: Pick<OperatorSourceError, 'message' | 'status' | 'category'>) {
-  if (error.status === 401 || error.status === 403) {
-    localAuthBlocked.value = true
-    notice.value = null
-    await recoverAccess()
-    return
-  }
-  notice.value = { kind: 'error', text: t('access.notice.error', { message: t(operatorDiagnosisKey(error)) }) }
+async function recheckMutations() {
+  await Promise.all([recoverAccess(), refreshKeycards()])
 }
 
 async function recoverAccess() {
@@ -313,7 +275,6 @@ async function recoverAccess() {
 
 async function submitInvitation() {
   if (inviteBusy.value) return
-  clearInvitationReveal()
   const email = inviteForm.value.email.trim()
   if (!email) {
     notice.value = { kind: 'error', text: t('access.notice.inviteInvalid') }
@@ -330,14 +291,11 @@ async function submitInvitation() {
       role: inviteForm.value.role,
       expiresInHours: inviteForm.value.expiresInHours,
     })
-    if (result.kind === 'success') {
+    mutationResult.value = result
+    if (result.kind === 'committed_verified') {
       inviteForm.value.email = ''
-      revealedInvitationCode.value = result.data.invitation.code || ''
-      copyNotice.value = null
-      notice.value = { kind: 'success', text: t('access.notice.inviteCreated') }
-      return
+      notice.value = null
     }
-    await handleMutationFailure(result.error)
   } finally {
     inviteBusy.value = false
   }
@@ -348,11 +306,8 @@ async function onRevokeInvitation(invitation: OperatorAccessInvitation) {
   inviteActionID.value = invitation.id
   try {
     const result = await revokeInvitation(invitation.id, t('access.notice.inviteRevokedReason'))
-    if (result.kind === 'success') {
-      notice.value = { kind: 'success', text: t('access.notice.inviteRevoked', { email: invitation.email || String(invitation.id) }) }
-      return
-    }
-    await handleMutationFailure(result.error)
+    mutationResult.value = result
+    if (result.kind === 'committed_verified') notice.value = null
   } finally {
     inviteActionID.value = null
   }
@@ -364,11 +319,8 @@ async function onToggleUserRole(user: OperatorAccessUser) {
   const nextRole = user.role === 'admin' ? 'operator' : 'admin'
   try {
     const result = await updateUser(user.id, { role: nextRole })
-    if (result.kind === 'success') {
-      notice.value = { kind: 'success', text: t('access.notice.userRoleUpdated', { email: user.email, role: roleLabel(nextRole) }) }
-      return
-    }
-    await handleMutationFailure(result.error)
+    mutationResult.value = result
+    if (result.kind === 'committed_verified') notice.value = null
   } finally {
     userActionID.value = null
   }
@@ -380,11 +332,8 @@ async function onToggleUserDisabled(user: OperatorAccessUser) {
   const nextDisabled = !user.disabled
   try {
     const result = await updateUser(user.id, { disabled: nextDisabled })
-    if (result.kind === 'success') {
-      notice.value = { kind: 'success', text: nextDisabled ? t('access.notice.userDisabled', { email: user.email }) : t('access.notice.userEnabled', { email: user.email }) }
-      return
-    }
-    await handleMutationFailure(result.error)
+    mutationResult.value = result
+    if (result.kind === 'committed_verified') notice.value = null
   } finally {
     userActionID.value = null
   }
@@ -395,11 +344,8 @@ async function onRevokeSession(session: OperatorAccessSession) {
   sessionActionID.value = session.id
   try {
     const result = await revokeSession(session.id, t('access.notice.sessionRevokedReason'))
-    if (result.kind === 'success') {
-      notice.value = { kind: 'success', text: t('access.notice.sessionRevoked', { email: session.userEmail }) }
-      return
-    }
-    await handleMutationFailure(result.error)
+    mutationResult.value = result
+    if (result.kind === 'committed_verified') notice.value = null
   } finally {
     sessionActionID.value = null
   }
@@ -469,6 +415,7 @@ async function selectUser(user: OperatorAccessUser) {
         <span>{{ notice.text }}</span>
         <button class="tbtn" @click="notice = null">{{ t('common.hide') }}</button>
       </section>
+      <MutationResultNotice :result="mutationResult" :recheck-label="t('access.actions.refresh')" @recheck="recheckMutations" />
 
       <div class="access-grid">
         <section class="panel providers-panel">
@@ -510,15 +457,6 @@ async function selectUser(user: OperatorAccessUser) {
               <p>{{ t('access.keycards.subtitle') }}</p>
             </div>
             <button class="tbtn" type="button" :disabled="keycardPending" @click="refreshKeycards">{{ t('access.actions.refresh') }}</button>
-          </div>
-          <div v-if="revealedKeycardToken" class="keycard-reveal" data-testid="keycard-reveal" role="status" aria-live="polite">
-            <strong>{{ t('access.keycards.reveal.title') }}</strong>
-            <p>{{ t('access.keycards.reveal.body') }}</p>
-            <RevealSecret :value="revealedKeycardToken" :seconds="30" @hide="clearKeycardReveal" />
-            <p>{{ t('access.keycards.reveal.copyHint') }}</p>
-            <div class="reveal-actions">
-              <button class="act" data-testid="keycard-dismiss" type="button" @click="clearKeycardReveal">{{ t('access.keycards.reveal.dismiss') }}</button>
-            </div>
           </div>
           <section v-if="keycardPending" class="keycard-state" role="status">
             <span>{{ t('access.keycards.pending') }}</span>
@@ -636,16 +574,6 @@ async function selectUser(user: OperatorAccessUser) {
             </label>
             <button class="act primary" type="submit" :disabled="inviteBusy || accessMutationDisabled">{{ inviteBusy ? t('access.actions.working') : t('access.invitations.form.submit') }}</button>
           </form>
-          <div v-if="revealedInvitationCode" class="invite-reveal" role="status">
-            <strong>{{ t('access.invitations.reveal.title') }}</strong>
-            <p>{{ t('access.invitations.reveal.body') }}</p>
-            <code>{{ revealedInvitationCode }}</code>
-            <div class="reveal-actions">
-              <button class="act" type="button" @click="copyInvitationCode">{{ t('access.invitations.reveal.copy') }}</button>
-              <button class="act" type="button" @click="clearInvitationReveal">{{ t('access.invitations.reveal.dismiss') }}</button>
-            </div>
-            <p v-if="copyNotice" :data-kind="copyNotice">{{ t(`access.invitations.reveal.copy${copyNotice === 'success' ? 'Success' : 'Error'}`) }}</p>
-          </div>
           <table class="tbl">
             <thead>
               <tr>
@@ -898,13 +826,9 @@ async function selectUser(user: OperatorAccessUser) {
 .page-head p { margin:0; color:var(--muted); font-size:var(--text-sm); }
 .access-brief { display:grid; grid-template-columns:repeat(4, minmax(120px, 180px)) minmax(260px, 1fr); gap:12px; }
 .metric, .brief-copy, .panel, .guard-panel, .statebar { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); }
-.invite-reveal, .keycard-reveal, .keycard-state { display:grid; gap:8px; margin:0 16px 16px; padding:14px; border:1px solid color-mix(in oklab,var(--accent),transparent 48%); border-radius:var(--r-sm); background:color-mix(in oklab,var(--accent),transparent 92%); }
-.invite-reveal p, .keycard-reveal p, .keycard-state p { margin:0; color:var(--fg-2); font-size:var(--text-sm); }
-.invite-reveal code { overflow-wrap:anywhere; font-family:var(--font-mono); color:var(--fg); }
-.keycard-reveal, .keycard-state { margin:0; }
+.keycard-state { display:grid; gap:8px; margin:0; padding:14px; border:1px solid color-mix(in oklab,var(--accent),transparent 48%); border-radius:var(--r-sm); background:color-mix(in oklab,var(--accent),transparent 92%); }
+.keycard-state p { margin:0; color:var(--fg-2); font-size:var(--text-sm); }
 .keycard-state.error { border-color:color-mix(in oklab,var(--state-warn),transparent 45%); }
-.keycard-reveal :deep(.reveal) { margin-top:0; }
-.reveal-actions { display:flex; gap:8px; flex-wrap:wrap; }
 .metric, .brief-copy, .guard-panel, .statebar { padding:14px; }
 .metric { display:flex; flex-direction:column; gap:3px; }
 .metric b { font-family:var(--font-mono); font-size:var(--text-xl); line-height:1; color:var(--fg); }

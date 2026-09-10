@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useOperatorRules } from '../composables/useOperatorRules'
 import type { RuleRow } from '../composables/useMockData'
+import type { MutationResult } from '../composables/useApi'
 
 const { t } = useI18n()
 const {
@@ -30,6 +31,7 @@ const draggingId = ref<number | null>(null)
 const dragOverId = ref<number | null>(null)
 const dragOverAfter = ref(false)
 const isToggling = ref(false)
+const mutationResult = ref<MutationResult | null>(null)
 
 const sortedRows = computed(() => [...rows].sort(compareRules))
 const visibleRows = computed(() => sortedRows.value.filter((rule) => scopeFilter.value === 'all' || rule.project === scopeFilter.value))
@@ -92,8 +94,8 @@ async function createRule() {
     project: createScope.value === 'global' ? undefined : createScope.value,
     editedBy: 'operator-console',
   })
-  if (isRollback(result)) return
-  closeCreate()
+  mutationResult.value = result
+  if (result.kind === 'committed_verified') closeCreate()
 }
 
 function startEdit(rule: RuleRow) {
@@ -113,15 +115,15 @@ async function saveEdit(rule: RuleRow) {
     content: editContent.value.trim(),
     editedBy: 'operator-console',
   })
-  if (isRollback(result)) return
-  cancelEdit()
+  mutationResult.value = result
+  if (result.kind === 'committed_verified') cancelEdit()
 }
 
 async function toggleRule(rule: RuleRow) {
   if (pending.value || isToggling.value) return
   isToggling.value = true
   try {
-    await toggleRuleEnabled(rule.id, !rule.enabled)
+    mutationResult.value = await toggleRuleEnabled(rule.id, !rule.enabled)
   } finally {
     isToggling.value = false
   }
@@ -133,7 +135,8 @@ async function confirmDelete(rule: RuleRow) {
     return
   }
   const result = await deleteRule(rule.id)
-  if (isRollback(result)) return
+  mutationResult.value = result
+  if (result.kind !== 'committed_verified') return
   confirmingDeleteId.value = null
   if (editingId.value === rule.id) {
     cancelEdit()
@@ -148,7 +151,7 @@ async function moveRule(ruleId: number, direction: -1 | 1) {
   const next = [...current]
   const [moved] = next.splice(from, 1)
   next.splice(to, 0, moved)
-  await reorderRules(next)
+  mutationResult.value = await reorderRules(next)
 }
 
 function startDrag(rule: RuleRow) {
@@ -181,7 +184,7 @@ async function dropRule(rule: RuleRow) {
   const [moved] = current.splice(from, 1)
   current.splice(to, 0, moved)
   clearDrag()
-  await reorderRules(current)
+  mutationResult.value = await reorderRules(current)
 }
 
 function clearDrag() {
@@ -190,9 +193,6 @@ function clearDrag() {
   dragOverAfter.value = false
 }
 
-function isRollback(result: unknown) {
-  return Boolean(result && typeof result === 'object' && 'kind' in result && (result as { kind?: string }).kind === 'rollback')
-}
 </script>
 
 <template>
@@ -219,6 +219,7 @@ function isRollback(result: unknown) {
       <span v-else-if="loadState.kind === 'empty'">{{ t('rules.state.empty') }}</span>
       <button v-if="error" class="tbtn" @click="refresh">{{ t('rules.state.retry') }}</button>
     </section>
+    <MutationResultNotice :result="mutationResult" :recheck-label="t('rules.actions.refresh')" @recheck="refresh" />
 
     <section class="pane">
       <div class="rule-reorder-note">

@@ -13,6 +13,82 @@
     "clearSelection": "清除选择",
     "loadingShort": "…"
   },
+  "mutationOutcome": {
+    "request": "请求引用",
+    "action": "操作",
+    "operation": "操作引用",
+    "code": "响应代码",
+    "readback": "权威回读",
+    "version": "回读版本",
+    "manualCheck": "已提交的输入仍被保留。请先检查当前状态，再有意地重新提交。",
+    "readbackKinds": {
+      "current": "当前状态",
+      "authorized_absence": "已获授权的不存在状态",
+      "non_disclosing": "不披露详情的操作状态"
+    },
+    "items": {
+      "committed": "已提交",
+      "denied": "已拒绝",
+      "conflict": "冲突",
+      "validation_error": "输入无效",
+      "failed": "失败",
+      "outcome_unknown": "结果未知"
+    },
+    "outcomes": {
+      "committed_verified": {
+        "title": "已完成并验证",
+        "body": "权威的后置条件回读已确认此操作。"
+      },
+      "committed_verification_pending": {
+        "title": "已提交，等待验证",
+        "body": "服务器已接受或提交该操作，但尚无权威的后置条件。"
+      },
+      "partial": {
+        "title": "部分完成",
+        "body": "仅列出的项目结果是已知的；未解决的选择仍会保留。"
+      },
+      "denied": {
+        "title": "访问被拒绝",
+        "body": "服务器在已知效果之前拒绝了此请求。"
+      },
+      "conflict": {
+        "title": "冲突",
+        "body": "该请求与服务器当前状态冲突。"
+      },
+      "validation_error": {
+        "title": "输入无效",
+        "body": "服务器拒绝了提交的输入。"
+      },
+      "stale": {
+        "title": "状态已过期",
+        "body": "该请求使用的状态已不再是当前状态。"
+      },
+      "unsupported": {
+        "title": "不支持的操作",
+        "body": "此服务器不支持请求的操作。"
+      },
+      "offline": {
+        "title": "离线",
+        "body": "服务器报告该操作无法在离线时运行。"
+      },
+      "timeout": {
+        "title": "已超时",
+        "body": "请求在返回已验证结果之前超时。"
+      },
+      "network": {
+        "title": "网络失败",
+        "body": "网络失败阻止了已验证结果的返回。"
+      },
+      "failed": {
+        "title": "操作失败",
+        "body": "服务器未完成此请求。"
+      },
+      "outcome_unknown": {
+        "title": "结果未知",
+        "body": "浏览器无法确定服务器是否已提交此请求。"
+      }
+    }
+  },
   "honesty": {
     "live": "运行中",
     "dormant": "受 flag 控制",
