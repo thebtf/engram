@@ -2,25 +2,38 @@ package gorm
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"github.com/thebtf/engram/pkg/models"
 )
 
 func strPtr(s string) *string { return &s }
 
+func openBehavioralRulesStore(t *testing.T) *Store {
+	t.Helper()
+	dsn := os.Getenv("DATABASE_DSN")
+	require.NotEmpty(t, dsn, "DATABASE_DSN is required for behavioral-rules PostgreSQL tests")
+	store, err := NewStore(Config{DSN: dsn, MaxConns: 2})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	return store
+}
+
 // TestBehavioralRulesStore_CreateGetUpdateListDelete exercises the full
 // Create→Get→Update→List→Delete round-trip against a real PostgreSQL database.
 // Anti-stub contract: if any method body is replaced with `return nil` this test fails.
 func TestBehavioralRulesStore_CreateGetUpdateListDelete(t *testing.T) {
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	store := openBehavioralRulesStore(t)
+	db := store.DB
 	defer db.Exec(`DELETE FROM behavioral_rules WHERE project = 'test-brules-store'`)
-
-	store := &Store{DB: db}
 	brs := NewBehavioralRulesStore(store)
 	ctx := context.Background()
 
@@ -135,11 +148,8 @@ func TestBehavioralRulesStore_CreateGetUpdateListDelete(t *testing.T) {
 
 // TestBehavioralRulesStore_Create_ValidationErrors verifies that Create rejects invalid input.
 func TestBehavioralRulesStore_Create_ValidationErrors(t *testing.T) {
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	store := openBehavioralRulesStore(t)
 	// No rows are inserted in this test (all creates fail), so no extra cleanup needed.
-
-	store := &Store{DB: db}
 	brs := NewBehavioralRulesStore(store)
 	ctx := context.Background()
 
@@ -163,11 +173,9 @@ func TestBehavioralRulesStore_Create_ValidationErrors(t *testing.T) {
 //   - List(project="p1") returns both the project-scoped rule AND the global rule.
 //   - List(project=nil)  returns only the global rule (not the project-scoped one).
 func TestBehavioralRulesStore_List_GlobalRulesAlwaysIncluded(t *testing.T) {
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	store := openBehavioralRulesStore(t)
+	db := store.DB
 	defer db.Exec(`DELETE FROM behavioral_rules WHERE project = 'test-brules-global' OR (project IS NULL AND content LIKE 'global rule: never hardcode%')`)
-
-	store := &Store{DB: db}
 	brs := NewBehavioralRulesStore(store)
 	ctx := context.Background()
 
@@ -208,4 +216,273 @@ func TestBehavioralRulesStore_List_GlobalRulesAlwaysIncluded(t *testing.T) {
 	}
 	assert.True(t, globalIDs[globalRule.ID], "List(nil) must include the global rule")
 	assert.False(t, globalIDs[projRule.ID], "List(nil) must NOT include project-scoped rules")
+}
+
+func TestBehavioralRulesStore_ApplySelectionOperation_OverTwoHundredRules(t *testing.T) {
+	store := openBehavioralRulesStore(t)
+	db := store.DB
+	brs := NewBehavioralRulesStore(store)
+	selections := NewCollectionSelectionStore(db)
+	ctx := context.Background()
+	project := fmt.Sprintf("test-brules-selection-%d", time.Now().UnixNano())
+	t.Cleanup(func() { require.NoError(t, db.Exec("DELETE FROM behavioral_rules WHERE project = ?", project).Error) })
+
+	rules := make([]*models.BehavioralRule, 205)
+	for index := range rules {
+		created, err := brs.Create(ctx, &models.BehavioralRule{
+			Project:  strPtr(project),
+			Content:  fmt.Sprintf("selection fixture rule %03d", index),
+			Priority: len(rules) - index,
+			EditedBy: "selection-fixture",
+		})
+		require.NoError(t, err)
+		rules[index] = created
+	}
+
+	scope := behavioralRuleSelectionScope("behavioral-rules-selection-" + strconv.FormatInt(time.Now().UnixNano(), 10))
+	explicit, err := selections.Save(ctx, scope, CollectionSelection{
+		Kind:    CollectionSelectionExplicit,
+		Targets: behavioralRuleSelectionTargets(t, brs, rules[:2]),
+	})
+	require.NoError(t, err)
+	disabled, err := brs.ApplySelectionOperation(ctx, scope, BehavioralRuleSelectionOperation{
+		Action:           BehavioralRuleSelectionDisable,
+		SelectionKind:    explicit.Kind,
+		SelectionVersion: explicit.Version,
+	})
+	require.NoError(t, err)
+	assertBehavioralRuleOperationCommitted(t, disabled, 2)
+	for _, rule := range rules[:2] {
+		current, getErr := brs.Get(ctx, rule.ID)
+		require.NoError(t, getErr)
+		assert.False(t, current.Enabled)
+	}
+
+	page, err := selections.Save(ctx, scope, CollectionSelection{
+		Kind:    CollectionSelectionPage,
+		Cursor:  "rules-page-2",
+		Targets: behavioralRuleSelectionTargets(t, brs, rules[2:4]),
+	})
+	require.NoError(t, err)
+	deleted, err := brs.ApplySelectionOperation(ctx, scope, BehavioralRuleSelectionOperation{
+		Action:           BehavioralRuleSelectionDelete,
+		SelectionKind:    page.Kind,
+		SelectionVersion: page.Version,
+	})
+	require.NoError(t, err)
+	assertBehavioralRuleOperationCommitted(t, deleted, 2)
+	for _, rule := range rules[2:4] {
+		_, getErr := brs.Get(ctx, rule.ID)
+		require.ErrorIs(t, getErr, gorm.ErrRecordNotFound)
+	}
+
+	active := append(append([]*models.BehavioralRule(nil), rules[:2]...), rules[4:]...)
+	frozen, err := selections.Save(ctx, scope, CollectionSelection{
+		Kind:              CollectionSelectionFrozenFilter,
+		FilterFingerprint: behavioralRuleSelectionDigest("enabled"),
+		Targets:           behavioralRuleSelectionTargets(t, brs, active),
+		ExcludedIDs:       []string{strconv.FormatInt(active[len(active)-1].ID, 10)},
+		ExpiresAt:         time.Now().UTC().Add(30 * time.Minute),
+	})
+	require.NoError(t, err)
+	enabled, err := brs.ApplySelectionOperation(ctx, scope, BehavioralRuleSelectionOperation{
+		Action:           BehavioralRuleSelectionEnable,
+		SelectionKind:    frozen.Kind,
+		SelectionVersion: frozen.Version,
+		SelectionToken:   frozen.Token,
+	})
+	require.NoError(t, err)
+	assertBehavioralRuleOperationCommitted(t, enabled, len(active)-1)
+	for _, rule := range rules[:2] {
+		current, getErr := brs.Get(ctx, rule.ID)
+		require.NoError(t, getErr)
+		assert.True(t, current.Enabled)
+	}
+
+	priority := 777
+	content := "selection operation updated content"
+	frozen, err = selections.Save(ctx, scope, CollectionSelection{
+		Kind:              CollectionSelectionFrozenFilter,
+		FilterFingerprint: behavioralRuleSelectionDigest("priority"),
+		Targets:           behavioralRuleSelectionTargets(t, brs, active),
+		ExcludedIDs:       []string{strconv.FormatInt(active[len(active)-1].ID, 10)},
+		ExpiresAt:         time.Now().UTC().Add(30 * time.Minute),
+	})
+	require.NoError(t, err)
+	updated, err := brs.ApplySelectionOperation(ctx, scope, BehavioralRuleSelectionOperation{
+		Action:           BehavioralRuleSelectionUpdate,
+		SelectionKind:    frozen.Kind,
+		SelectionVersion: frozen.Version,
+		SelectionToken:   frozen.Token,
+		Priority:         &priority,
+		Content:          &content,
+	})
+	require.NoError(t, err)
+	assertBehavioralRuleOperationCommitted(t, updated, len(active)-1)
+	for _, rule := range active[:len(active)-1] {
+		current, getErr := brs.Get(ctx, rule.ID)
+		require.NoError(t, getErr)
+		assert.Equal(t, priority, current.Priority)
+		assert.Equal(t, content, current.Content)
+	}
+	excluded, err := brs.Get(ctx, active[len(active)-1].ID)
+	require.NoError(t, err)
+	assert.NotEqual(t, priority, excluded.Priority)
+	assert.NotEqual(t, content, excluded.Content)
+	// A stale target must reject the entire selected mutation; it may not leave
+	// a later current target changed after reporting the stale revision.
+	conflictSelection, err := selections.Save(ctx, scope, CollectionSelection{
+		Kind:    CollectionSelectionExplicit,
+		Targets: behavioralRuleSelectionTargets(t, brs, rules[:2]),
+	})
+	require.NoError(t, err)
+	beforeCurrent, err := brs.Get(ctx, rules[1].ID)
+	require.NoError(t, err)
+	_, err = brs.SetEnabled(ctx, rules[0].ID, false, nil)
+	require.NoError(t, err)
+	_, err = brs.ApplySelectionOperation(ctx, scope, BehavioralRuleSelectionOperation{
+		Action:           BehavioralRuleSelectionDisable,
+		SelectionKind:    conflictSelection.Kind,
+		SelectionVersion: conflictSelection.Version,
+	})
+	require.ErrorIs(t, err, ErrBehavioralRuleSelectionConflict)
+	afterCurrent, err := brs.Get(ctx, rules[1].ID)
+	require.NoError(t, err)
+	assert.Equal(t, beforeCurrent.Enabled, afterCurrent.Enabled, "a stale selected rule must not partially disable another rule")
+	assert.Equal(t, beforeCurrent.Version, afterCurrent.Version, "a stale selected rule must not partially bump another rule version")
+}
+
+func TestBehavioralRulesStore_ApplySelectionOperation_ReorderConflictRollsBackScope(t *testing.T) {
+	store := openBehavioralRulesStore(t)
+	db := store.DB
+	brs := NewBehavioralRulesStore(store)
+	selections := NewCollectionSelectionStore(db)
+	ctx := context.Background()
+	project := fmt.Sprintf("test-brules-reorder-%d", time.Now().UnixNano())
+	t.Cleanup(func() { require.NoError(t, db.Exec("DELETE FROM behavioral_rules WHERE project = ?", project).Error) })
+
+	rules := make([]*models.BehavioralRule, 4)
+	for index := range rules {
+		created, err := brs.Create(ctx, &models.BehavioralRule{Project: strPtr(project), Content: fmt.Sprintf("reorder rule %d", index), Priority: 40 - index})
+		require.NoError(t, err)
+		rules[index] = created
+	}
+	scope := behavioralRuleSelectionScope("behavioral-rules-reorder-" + strconv.FormatInt(time.Now().UnixNano(), 10))
+	selection, err := selections.Save(ctx, scope, CollectionSelection{
+		Kind:    CollectionSelectionExplicit,
+		Targets: behavioralRuleSelectionTargets(t, brs, rules),
+	})
+	require.NoError(t, err)
+
+	reorder := make([]BehavioralRuleOrder, len(selection.Targets))
+	for index := range selection.Targets {
+		target := selection.Targets[len(selection.Targets)-1-index]
+		ruleID, parseErr := strconv.ParseInt(target.ID, 10, 64)
+		require.NoError(t, parseErr)
+		reorder[index] = BehavioralRuleOrder{RuleID: ruleID, ExpectedVersion: target.ExpectedVersion}
+	}
+
+	require.NoError(t, db.Model(&BehavioralRule{}).Where("id = ?", rules[0].ID).Updates(map[string]any{"version": gorm.Expr("version + 1")}).Error)
+	var before []BehavioralRule
+	require.NoError(t, db.Where("project = ?", project).Order("id ASC").Find(&before).Error)
+
+	_, err = brs.ApplySelectionOperation(ctx, scope, BehavioralRuleSelectionOperation{
+		Action:           BehavioralRuleSelectionReorder,
+		SelectionKind:    selection.Kind,
+		SelectionVersion: selection.Version,
+		Scope:            &BehavioralRuleScope{Project: strPtr(project)},
+		Order:            reorder,
+	})
+	require.ErrorIs(t, err, ErrBehavioralRuleSelectionConflict)
+
+	var after []BehavioralRule
+	require.NoError(t, db.Where("project = ?", project).Order("id ASC").Find(&after).Error)
+	require.Equal(t, before, after, "a reorder conflict must leave every row in its declared scope byte-equivalent")
+}
+
+func TestBehavioralRulesStore_ApplySelectionOperation_ReorderInjectedFailureRollsBackScope(t *testing.T) {
+	store := openBehavioralRulesStore(t)
+	db := store.DB
+	brs := NewBehavioralRulesStore(store)
+	selections := NewCollectionSelectionStore(db)
+	ctx := context.Background()
+	project := fmt.Sprintf("test-brules-reorder-failure-%d", time.Now().UnixNano())
+	t.Cleanup(func() { require.NoError(t, db.Exec("DELETE FROM behavioral_rules WHERE project = ?", project).Error) })
+
+	rules := make([]*models.BehavioralRule, 3)
+	for index := range rules {
+		created, err := brs.Create(ctx, &models.BehavioralRule{Project: strPtr(project), Content: fmt.Sprintf("reorder failure rule %d", index), Priority: 30 - index})
+		require.NoError(t, err)
+		rules[index] = created
+	}
+	scope := behavioralRuleSelectionScope("behavioral-rules-reorder-failure-" + strconv.FormatInt(time.Now().UnixNano(), 10))
+	selection, err := selections.Save(ctx, scope, CollectionSelection{
+		Kind:    CollectionSelectionExplicit,
+		Targets: behavioralRuleSelectionTargets(t, brs, rules),
+	})
+	require.NoError(t, err)
+
+	reorder := make([]BehavioralRuleOrder, len(selection.Targets))
+	for index := range selection.Targets {
+		target := selection.Targets[len(selection.Targets)-1-index]
+		ruleID, parseErr := strconv.ParseInt(target.ID, 10, 64)
+		require.NoError(t, parseErr)
+		reorder[index] = BehavioralRuleOrder{RuleID: ruleID, ExpectedVersion: target.ExpectedVersion}
+	}
+	functionName := fmt.Sprintf("behavioral_rules_reorder_fail_%d", time.Now().UnixNano())
+	triggerName := functionName + "_trigger"
+	require.NoError(t, db.Exec(fmt.Sprintf(`CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.id = %d THEN RAISE EXCEPTION 'injected reorder failure'; END IF; RETURN NEW; END; $$`, functionName, rules[0].ID)).Error)
+	require.NoError(t, db.Exec(fmt.Sprintf("CREATE TRIGGER %s BEFORE UPDATE ON behavioral_rules FOR EACH ROW EXECUTE FUNCTION %s()", triggerName, functionName)).Error)
+	t.Cleanup(func() {
+		require.NoError(t, db.Exec(fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON behavioral_rules", triggerName)).Error)
+		require.NoError(t, db.Exec(fmt.Sprintf("DROP FUNCTION IF EXISTS %s()", functionName)).Error)
+	})
+
+	var before []BehavioralRule
+	require.NoError(t, db.Where("project = ?", project).Order("id ASC").Find(&before).Error)
+	_, err = brs.ApplySelectionOperation(ctx, scope, BehavioralRuleSelectionOperation{
+		Action:           BehavioralRuleSelectionReorder,
+		SelectionKind:    selection.Kind,
+		SelectionVersion: selection.Version,
+		Scope:            &BehavioralRuleScope{Project: strPtr(project)},
+		Order:            reorder,
+	})
+	require.Error(t, err)
+	var after []BehavioralRule
+	require.NoError(t, db.Where("project = ?", project).Order("id ASC").Find(&after).Error)
+	require.Equal(t, before, after, "an injected reorder failure must roll back every update in the declared scope")
+}
+
+func behavioralRuleSelectionScope(sessionID string) CollectionSelectionScope {
+	return CollectionSelectionScope{
+		SubjectUserID:      41,
+		SessionID:          sessionID,
+		Domain:             "rules",
+		ContextFingerprint: behavioralRuleSelectionDigest("context"),
+		AuthorizationEpoch: 1,
+		CollectionVersion:  1,
+	}
+}
+
+func behavioralRuleSelectionDigest(value string) string {
+	return "sha256:" + fmt.Sprintf("%064x", len(value))
+}
+
+func behavioralRuleSelectionTargets(t *testing.T, store *BehavioralRulesStore, rules []*models.BehavioralRule) []CollectionSelectionTarget {
+	t.Helper()
+	targets := make([]CollectionSelectionTarget, len(rules))
+	for index, rule := range rules {
+		current, err := store.Get(context.Background(), rule.ID)
+		require.NoError(t, err)
+		targets[index] = CollectionSelectionTarget{ID: strconv.FormatInt(rule.ID, 10), ExpectedVersion: uint64(current.Version)}
+	}
+	return targets
+}
+
+func assertBehavioralRuleOperationCommitted(t *testing.T, result BehavioralRuleSelectionOperationResult, count int) {
+	t.Helper()
+	require.Len(t, result.Items, count)
+	for _, item := range result.Items {
+		assert.Equal(t, BehavioralRuleSelectionCommitted, item.Outcome)
+	}
 }

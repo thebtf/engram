@@ -9,37 +9,39 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/thebtf/engram/internal/auth"
 	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 )
 
 // newRulesTestService constructs a Service wired with a real BehavioralRulesStore
-// backed by the DATABASE_DSN integration database. Skips when DATABASE_DSN is unset.
+// backed by the required DATABASE_DSN integration database.
 func newRulesTestService(t *testing.T, project string) (*Service, *dbgorm.BehavioralRulesStore) {
 	t.Helper()
+	svc, brs, _ := newRulesSelectionTestService(t, project)
+	return svc, brs
+}
 
+func newRulesSelectionTestService(t *testing.T, project string) (*Service, *dbgorm.BehavioralRulesStore, *dbgorm.CollectionSelectionStore) {
+	t.Helper()
 	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN not set, skipping integration test")
-	}
-
+	require.NotEmpty(t, dsn, "DATABASE_DSN is required for Rules PostgreSQL tests")
 	store, err := dbgorm.NewStore(dbgorm.Config{DSN: dsn, MaxConns: 2})
 	require.NoError(t, err)
 
 	brs := dbgorm.NewBehavioralRulesStore(store)
 	svc := &Service{behavioralRulesStore: brs}
-
 	t.Cleanup(func() {
 		require.NoError(t, store.DB.WithContext(context.Background()).
 			Exec("DELETE FROM behavioral_rules WHERE project = ?", project).Error)
 		require.NoError(t, store.Close())
 	})
-
-	return svc, brs
+	return svc, brs, dbgorm.NewCollectionSelectionStore(store.DB)
 }
 
 // TestHandleDeleteBehavioralRule_Success verifies that a valid DELETE request
@@ -461,4 +463,125 @@ func (n nopReadCloser) Close() error { return nil }
 
 func ioNopCloser(body string) nopReadCloser {
 	return nopReadCloser{Reader: strings.NewReader(body)}
+}
+
+func TestHandleCreateBehavioralRule_SelectionOperationReauthorizesAndReportsTruth(t *testing.T) {
+	project := "test-rules-handler-selection-operation"
+	svc, brs, selections := newRulesSelectionTestService(t, project)
+	ctx := context.Background()
+	first, err := brs.Create(ctx, &models.BehavioralRule{Project: &project, Content: "selection operation first", Priority: 20})
+	require.NoError(t, err)
+	second, err := brs.Create(ctx, &models.BehavioralRule{Project: &project, Content: "selection operation second", Priority: 10})
+	require.NoError(t, err)
+
+	identity := auth.SessionForBrowserUser("operator", 41)
+	const sessionID = "rules-selection-operation-session"
+	scope, err := (operatorCollectionScopeAuthority{}).ResolveOperatorCollectionScope(ctx, identity, sessionID, operatorCollectionSelectionDomain)
+	require.NoError(t, err)
+	explicit, err := selections.Save(ctx, scope, dbgorm.CollectionSelection{
+		Kind:    dbgorm.CollectionSelectionExplicit,
+		Targets: []dbgorm.CollectionSelectionTarget{{ID: strconv.FormatInt(first.ID, 10), ExpectedVersion: uint64(first.Version)}},
+	})
+	require.NoError(t, err)
+
+	body := `{"request_id":"rules-operation-disable","action":"disable","selection":{"kind":"explicit","selection_version":` + strconv.FormatInt(explicit.Version, 10) + `}}`
+	request := httptest.NewRequest(http.MethodPost, "/api/rules", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Engram-Request-ID", "rules-operation-disable")
+	request.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: sessionID})
+	request = request.WithContext(auth.WithIdentity(request.Context(), identity))
+	recorder := httptest.NewRecorder()
+	svc.handleCreateBehavioralRule(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var completed struct {
+		RequestID      string `json:"request_id"`
+		OperationState string `json:"operation_state"`
+		ItemResults    []struct {
+			TargetID int64  `json:"target_id"`
+			Outcome  string `json:"outcome"`
+		} `json:"item_results"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &completed))
+	assert.Equal(t, "rules-operation-disable", completed.RequestID)
+	assert.Equal(t, "completed", completed.OperationState)
+	require.Equal(t, []struct {
+		TargetID int64  `json:"target_id"`
+		Outcome  string `json:"outcome"`
+	}{{TargetID: first.ID, Outcome: "committed"}}, completed.ItemResults)
+	disabled, err := brs.Get(ctx, first.ID)
+	require.NoError(t, err)
+	assert.False(t, disabled.Enabled)
+	assert.Greater(t, disabled.Version, first.Version)
+
+	stale, err := selections.Save(ctx, scope, dbgorm.CollectionSelection{
+		Kind:    dbgorm.CollectionSelectionExplicit,
+		Targets: []dbgorm.CollectionSelectionTarget{{ID: strconv.FormatInt(second.ID, 10), ExpectedVersion: uint64(second.Version)}},
+	})
+	require.NoError(t, err)
+	_, err = brs.SetEnabled(ctx, second.ID, false, nil)
+	require.NoError(t, err)
+	body = `{"request_id":"rules-operation-stale","action":"disable","selection":{"kind":"explicit","selection_version":` + strconv.FormatInt(stale.Version, 10) + `}}`
+	request = httptest.NewRequest(http.MethodPost, "/api/rules", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Engram-Request-ID", "rules-operation-stale")
+	request.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: sessionID})
+	request = request.WithContext(auth.WithIdentity(request.Context(), identity))
+	recorder = httptest.NewRecorder()
+	svc.handleCreateBehavioralRule(recorder, request)
+	require.Equal(t, http.StatusConflict, recorder.Code, recorder.Body.String())
+	assert.NotContains(t, recorder.Body.String(), strconv.FormatInt(second.ID, 10), "an aborted conflict must not disclose a stale target row")
+
+	current, err := brs.Get(ctx, first.ID)
+	require.NoError(t, err)
+	frozen, err := selections.Save(ctx, scope, dbgorm.CollectionSelection{
+		Kind:              dbgorm.CollectionSelectionFrozenFilter,
+		FilterFingerprint: "sha256:" + strings.Repeat("a", 64),
+		Targets:           []dbgorm.CollectionSelectionTarget{{ID: strconv.FormatInt(first.ID, 10), ExpectedVersion: uint64(current.Version)}},
+		ExpiresAt:         time.Now().UTC().Add(15 * time.Minute),
+	})
+	require.NoError(t, err)
+	body = `{"request_id":"rules-operation-forbidden","action":"delete","selection":{"kind":"frozen_filter","selection_version":` + strconv.FormatInt(frozen.Version, 10) + `,"selection_token":"` + frozen.Token + `"}}`
+	request = httptest.NewRequest(http.MethodPost, "/api/rules", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Engram-Request-ID", "rules-operation-forbidden")
+	request.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: sessionID})
+	request = request.WithContext(auth.WithIdentity(request.Context(), auth.SessionForBrowserUser("operator", 42)))
+	recorder = httptest.NewRecorder()
+	svc.handleCreateBehavioralRule(recorder, request)
+	require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+	assert.NotContains(t, recorder.Body.String(), strconv.FormatInt(first.ID, 10), "denied selection use must not disclose target rows")
+	remaining, err := brs.Get(ctx, first.ID)
+	require.NoError(t, err)
+	assert.Equal(t, current.Version, remaining.Version)
+
+	currentSecond, err := brs.Get(ctx, second.ID)
+	require.NoError(t, err)
+	deletion, err := selections.Save(ctx, scope, dbgorm.CollectionSelection{
+		Kind:    dbgorm.CollectionSelectionExplicit,
+		Targets: []dbgorm.CollectionSelectionTarget{{ID: strconv.FormatInt(second.ID, 10), ExpectedVersion: uint64(currentSecond.Version)}},
+	})
+	require.NoError(t, err)
+	body = `{"request_id":"rules-operation-delete","action":"delete","selection":{"kind":"explicit","selection_version":` + strconv.FormatInt(deletion.Version, 10) + `}}`
+	request = httptest.NewRequest(http.MethodPost, "/api/rules", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Engram-Request-ID", "rules-operation-delete")
+	request.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: sessionID})
+	request = request.WithContext(auth.WithIdentity(request.Context(), identity))
+	recorder = httptest.NewRecorder()
+	svc.handleCreateBehavioralRule(recorder, request)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var deleted struct {
+		OperationState string `json:"operation_state"`
+		Readback       struct {
+			Authoritative bool   `json:"authoritative"`
+			Kind          string `json:"kind"`
+		} `json:"readback"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &deleted))
+	assert.Equal(t, "completed", deleted.OperationState)
+	assert.True(t, deleted.Readback.Authoritative)
+	assert.Equal(t, "authorized_absence", deleted.Readback.Kind)
+	assert.NotContains(t, recorder.Body.String(), second.Content, "destructive readback must not disclose deleted row content")
+	assert.NotContains(t, recorder.Body.String(), "current_state", "destructive readback must not serialize a deleted row")
 }
