@@ -17,7 +17,19 @@
     "live": "live",
     "dormant": "behind flag",
     "stale": "tombstone",
-    "mustbuild": "must build"
+    "mustbuild": "must build",
+    "a11y": "{classification}; current state: {state}",
+    "states": {
+      "loading": "loading",
+      "empty": "no current result",
+      "denied": "access denied",
+      "error": "request failed",
+      "stale": "previous result",
+      "partial": "legacy result only",
+      "unsupported": "unsupported input",
+      "timeout": "request timed out",
+      "offline": "server unreachable"
+    }
   },
   "errors": {
     "diagnosis": {
@@ -1936,14 +1948,65 @@
     }
   },
   "booksPage": {
-    "title": "Legacy plaintext import",
-    "subtitle": "Submit a plaintext source to the existing import pipeline. It processes Markdown-compatible text and writes versioned Documents; it is not Book Context.",
+    "title": "Legacy plaintext-to-chunks import",
+    "subtitle": "Submit a plaintext source only to the legacy import endpoint. A completed import writes Documents; it does not create a Book Context catalog, reader, concepts, or readiness claim.",
     "brief": {
-      "title": "Legacy import writes documents",
-      "body": "This legacy import creates a books job, processes plaintext source through the markdown chunker adapter, and writes versioned Documents with source_book_job_id provenance metadata. It does not make Book Context ready."
+      "title": "Legacy import: plaintext → chunks → Documents",
+      "body": "The server must confirm each legacy import job before it is shown as complete. This capability processes Markdown-compatible plaintext into versioned Documents with source_book_job_id provenance; it is not Book Context."
+    },
+    "capability": {
+      "badge": "legacy import",
+      "technical": "Technical evidence"
+    },
+    "states": {
+      "loading": {
+        "title": "Checking the legacy import",
+        "body": "The console is waiting for this import request or current-job readback; no completion is confirmed yet.",
+        "action": "Next: wait for the server response before acting on the result."
+      },
+      "empty": {
+        "title": "No legacy import is active",
+        "body": "No import job has been submitted in this console session.",
+        "action": "Next: choose a text source or paste plaintext to queue a legacy import."
+      },
+      "denied": {
+        "title": "Legacy import access was denied",
+        "body": "The server did not authorize this import request, so no job result is available.",
+        "action": "Next: sign in with an authorized operator session, then submit again."
+      },
+      "error": {
+        "title": "The server did not confirm the import",
+        "body": "The request failed without a usable current result; this is not an empty import queue.",
+        "action": "Next: correct the source or server condition, then submit a new import."
+      },
+      "stale": {
+        "title": "Only an earlier import result is available",
+        "body": "The visible job was confirmed earlier, but its current status could not be read back.",
+        "action": "Next: refresh status before relying on this job or its Documents."
+      },
+      "partial": {
+        "title": "Legacy Documents were produced",
+        "body": "Plaintext-to-chunks processing completed for this job, but Book Context remains unavailable.",
+        "action": "Next: open the produced Documents; do not treat them as a Book Context catalog or reader."
+      },
+      "unsupported": {
+        "title": "This source format is not supported here",
+        "body": "The legacy importer accepts Markdown-compatible plaintext only; no binary extraction was attempted.",
+        "action": "Next: paste extracted text or choose a .md, .mdx, .markdown, or .txt source."
+      },
+      "timeout": {
+        "title": "The import request timed out",
+        "body": "The deadline elapsed before the server confirmed a result.",
+        "action": "Next: refresh an existing job before retrying to avoid assuming its outcome."
+      },
+      "offline": {
+        "title": "The server cannot be reached",
+        "body": "The console has no server confirmation for this import request.",
+        "action": "Next: restore connectivity, then refresh status or submit again."
+      }
     },
     "metrics": {
-      "status": "Current job status",
+      "status": "Current legacy-import status",
       "source": "Source ref",
       "prefix": "Documents tag"
     },
@@ -1951,57 +2014,73 @@
       "refresh": "Refresh status"
     },
     "form": {
-      "title": "Start a books job",
-      "lead": "Current TG5 intake is text/markdown content. Paste the source or load a text file; binary extractors remain outside this lane.",
+      "title": "Queue a legacy import",
+      "lead": "This legacy capability accepts Markdown-compatible text only. Paste a source or load a text file; binary extractors remain outside this capability.",
       "file": "Text source file",
-      "fileHint": "Accepted here: .md, .mdx, .markdown, .txt. PDF/EPUB extraction is not wired in this milestone.",
+      "fileHint": "Accepted here: .md, .mdx, .markdown, .txt. PDF/EPUB extraction is not wired in this capability.",
       "sourceRef": "Source reference",
       "sourceRefHint": "e.g. distributed-systems.md",
       "project": "Project",
       "author": "Actor",
       "content": "Source content",
-      "contentHint": "Paste book or chapter text here. The pipeline will synthesize a heading if the source begins as plain text.",
-      "submit": "Queue ingest",
+      "contentHint": "Paste book or chapter text here. The legacy importer will synthesize a heading if the source begins as plain text.",
+      "submit": "Queue legacy import",
       "submitting": "Queuing…",
-      "unsupportedFile": "This upload control currently accepts text/markdown sources only. Use pasted extracted text for binary books.",
+      "unsupportedFile": "This legacy import accepts text/markdown sources only. Use pasted extracted text for a binary book.",
       "validation": "Source reference and source content are required.",
       "loadedFile": "Loaded {name} into the source editor."
     },
     "job": {
-      "title": "Latest books job",
+      "title": "Current legacy import",
       "status": "Status",
       "source": "Source ref",
       "prefix": "Documents path prefix",
       "createdAt": "Created",
       "updatedAt": "Updated",
       "error": "Pipeline error",
-      "openDocuments": "Open produced documents",
-      "emptyTitle": "No books job yet",
-      "emptyBody": "Queue a source above to create a books job and start polling its lifecycle.",
-      "pendingBody": "The job is recorded and waiting for the pipeline to take it.",
-      "processingBody": "The pipeline is chunking and writing documents. Status polling stays live until a terminal state.",
-      "doneBody": "The job finished. Produced documents are tagged by the visible books/jobs/[job-id]/ path prefix and source_book_job_id metadata.",
-      "failedBody": "The job failed before documents were fully produced. Read the stored error and retry with corrected source content or format.",
+      "openDocuments": "Open produced Documents",
+      "emptyTitle": "No legacy import job yet",
+      "emptyBody": "Queue a plaintext source above to create a legacy import job and start polling its lifecycle.",
+      "pendingBody": "The legacy import is recorded and waiting for the pipeline to take it.",
+      "processingBody": "The legacy pipeline is chunking plaintext and writing Documents. Status polling continues until a terminal state.",
+      "doneBody": "The legacy import finished. Produced Documents are marked by the visible books/jobs/[job-id]/ path prefix and source_book_job_id metadata.",
+      "failedBody": "The legacy import failed before Documents were fully produced. Read the stored error and submit corrected plaintext or format.",
       "stateLabel": {
         "pending": "Pending",
         "processing": "Processing",
         "done": "Done",
         "failed": "Failed",
-        "idle": "Idle"
+        "idle": "No job"
       }
     },
     "notice": {
-      "queued": "Books job #{id} queued.",
-      "failed": "Books request failed: {message}",
-      "loadError": "Unknown books pipeline error"
+      "queued": "Legacy import job #{id} queued.",
+      "failed": "Legacy import request failed: {message}",
+      "loadError": "Unknown legacy import error"
     }
   },
   "sectionStub": {
-    "state": {
-      "live": "This section is connected but has no expanded view yet.",
-      "dormant": "This feature is disabled by a flag.",
-      "stale": "This surface is disabled as a tombstone.",
-      "mustbuild": "This section needs to be built."
+    "limitation": {
+      "loading": "The console is waiting for the capability check; no outcome is known yet.",
+      "empty": "The capability returned no current rows or result.",
+      "denied": "The current operator session is not authorized for this capability.",
+      "error": "The server did not provide a usable result for this capability.",
+      "stale": "Only a previously confirmed result is available now.",
+      "partial": "Only the stated part of this capability is available.",
+      "unsupported": "This capability or input is not available on this server.",
+      "timeout": "The server did not confirm a result before the request deadline.",
+      "offline": "The console cannot reach the server for this capability."
+    },
+    "action": {
+      "loading": "Next: wait for the read to finish.",
+      "empty": "Next: use the stated creation or filter action if it is available.",
+      "denied": "Next: use an authorized operator session.",
+      "error": "Next: correct the condition, then retry the read.",
+      "stale": "Next: refresh before relying on the earlier result.",
+      "partial": "Next: use only the available part; the remainder is not ready.",
+      "unsupported": "Next: use a supported input or wait for the server capability.",
+      "timeout": "Next: refresh before retrying to avoid assuming an outcome.",
+      "offline": "Next: restore connectivity, then retry the read."
     }
   },
   "deferred": {

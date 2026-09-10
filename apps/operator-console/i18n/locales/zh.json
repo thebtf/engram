@@ -17,7 +17,19 @@
     "live": "运行中",
     "dormant": "受 flag 控制",
     "stale": "tombstone",
-    "mustbuild": "需要构建"
+    "mustbuild": "需要构建",
+    "a11y": "{classification}；当前状态：{state}",
+    "states": {
+      "loading": "正在加载",
+      "empty": "没有当前结果",
+      "denied": "访问被拒绝",
+      "error": "请求失败",
+      "stale": "此前的结果",
+      "partial": "仅旧版结果",
+      "unsupported": "不支持的输入",
+      "timeout": "请求超时",
+      "offline": "无法连接服务器"
+    }
   },
   "errors": {
     "diagnosis": {
@@ -1936,72 +1948,139 @@
     }
   },
   "booksPage": {
-    "title": "旧版纯文本导入",
-    "subtitle": "将纯文本源提交给现有导入管线。它处理兼容 Markdown 的文本并写入版本化 Documents；这不表示 Book Context 已就绪。",
+    "title": "旧版纯文本到分块导入",
+    "subtitle": "仅将纯文本源提交到旧版导入端点。完成的导入会写入 Documents；它不会创建 Book Context catalog、reader、concepts，也不会声明 Book Context 已就绪。",
     "brief": {
-      "title": "旧版导入写入文档",
-      "body": "此旧版导入创建 books job，通过 markdown chunker 处理源文本并写入带有 source_book_job_id provenance 元数据的版本化 Documents。它不代表 Book Context 已就绪。"
+      "title": "旧版导入：纯文本 → 分块 → Documents",
+      "body": "每个旧版导入 job 都必须由服务器确认后才会显示为完成。该能力将兼容 Markdown 的纯文本处理为带 source_book_job_id provenance 的版本化 Documents；它不是 Book Context。"
+    },
+    "capability": {
+      "badge": "旧版导入",
+      "technical": "技术依据"
+    },
+    "states": {
+      "loading": {
+        "title": "正在检查旧版导入",
+        "body": "控制台正在等待本次导入请求或当前 job 的读取结果；尚未确认完成。",
+        "action": "下一步：请等待服务器响应后再依据结果操作。"
+      },
+      "empty": {
+        "title": "没有活动的旧版导入",
+        "body": "本次控制台会话中尚未提交导入 job。",
+        "action": "下一步：选择文本源或粘贴纯文本以排入旧版导入队列。"
+      },
+      "denied": {
+        "title": "旧版导入访问被拒绝",
+        "body": "服务器未授权此导入请求，因此没有 job 结果可用。",
+        "action": "下一步：使用已授权的操作员会话登录，然后重新提交。"
+      },
+      "error": {
+        "title": "服务器未确认导入",
+        "body": "请求失败且没有可用的当前结果；这不是空导入队列。",
+        "action": "下一步：修正源内容或服务器状态，然后提交新的导入。"
+      },
+      "stale": {
+        "title": "仅有较早的导入结果可用",
+        "body": "显示的 job 曾被确认，但其当前状态无法读取。",
+        "action": "下一步：在依赖此 job 或其 Documents 前刷新状态。"
+      },
+      "partial": {
+        "title": "仅生成了旧版 Documents",
+        "body": "此 job 的纯文本到分块处理已经完成，但 Book Context 仍不可用。",
+        "action": "下一步：打开生成的 Documents；不要把它们当作 Book Context catalog 或 reader。"
+      },
+      "unsupported": {
+        "title": "这里不支持此源格式",
+        "body": "旧版导入器只接受兼容 Markdown 的纯文本；未尝试二进制提取。",
+        "action": "下一步：粘贴已提取文本，或选择 .md、.mdx、.markdown 或 .txt。"
+      },
+      "timeout": {
+        "title": "导入请求超时",
+        "body": "在服务器确认结果前，请求期限已经结束。",
+        "action": "下一步：重试前刷新已有 job，避免假设其结果。"
+      },
+      "offline": {
+        "title": "无法连接服务器",
+        "body": "控制台没有收到此导入请求的服务器确认。",
+        "action": "下一步：恢复连接，然后刷新状态或重新提交。"
+      }
     },
     "metrics": {
-      "status": "当前 job 状态",
+      "status": "当前旧版导入状态",
       "source": "源引用",
-      "prefix": "文档标签"
+      "prefix": "Documents 标签"
     },
     "actions": {
       "refresh": "刷新状态"
     },
     "form": {
-      "title": "启动 books job",
-      "lead": "当前 TG5 intake 接受 text/markdown 内容。请粘贴源文本或加载文本文件；二进制 extractor 不在本 lane 范围内。",
+      "title": "排入旧版导入队列",
+      "lead": "此旧版能力仅接受兼容 Markdown 的文本。请粘贴源内容或加载文本文件；二进制 extractor 不属于此能力。",
       "file": "文本源文件",
-      "fileHint": "这里接受 .md、.mdx、.markdown、.txt。PDF/EPUB 提取在本 milestone 中尚未接通。",
+      "fileHint": "此处接受 .md、.mdx、.markdown、.txt。PDF/EPUB 提取未接入此能力。",
       "sourceRef": "源引用",
       "sourceRefHint": "例如 distributed-systems.md",
       "project": "项目",
       "author": "执行者",
       "content": "源内容",
-      "contentHint": "在这里粘贴书籍或章节文本。如果源内容是 plain text，流水线会自动补一个 heading。",
-      "submit": "加入 ingest 队列",
+      "contentHint": "在这里粘贴书籍或章节文本。如果源内容是纯文本，旧版导入器会自动补一个 heading。",
+      "submit": "排入旧版导入",
       "submitting": "正在入队…",
-      "unsupportedFile": "这个 upload control 目前只接受 text/markdown 源。对于二进制书籍，请粘贴已提取文本。",
+      "unsupportedFile": "此旧版导入仅接受 text/markdown 源。对于二进制书籍，请粘贴已提取文本。",
       "validation": "必须提供 source reference 和 source content。",
       "loadedFile": "已将 {name} 载入源编辑器。"
     },
     "job": {
-      "title": "最新 books job",
+      "title": "当前旧版导入",
       "status": "状态",
       "source": "源引用",
-      "prefix": "文档路径前缀",
+      "prefix": "Documents 路径前缀",
       "createdAt": "创建时间",
       "updatedAt": "更新时间",
       "error": "流水线错误",
-      "openDocuments": "打开生成的文档",
-      "emptyTitle": "还没有 books job",
-      "emptyBody": "请先在上方提交源内容，以创建 books job 并开始轮询其生命周期。",
-      "pendingBody": "Job 已记录，正在等待流水线接手。",
-      "processingBody": "流水线正在切块并写入文档。状态轮询会持续到 terminal state。",
-      "doneBody": "Job 已完成。生成的文档会通过可见的 books/jobs/[job-id]/ 前缀和 source_book_job_id 元数据进行标记。",
-      "failedBody": "Job 在文档完整生成前失败。请查看已保存的错误，并在修正内容或格式后重试。",
+      "openDocuments": "打开生成的 Documents",
+      "emptyTitle": "还没有旧版导入 job",
+      "emptyBody": "请先在上方提交纯文本源，以创建旧版导入 job 并开始轮询其生命周期。",
+      "pendingBody": "旧版导入已记录，正在等待流水线接手。",
+      "processingBody": "旧版流水线正在切分纯文本并写入 Documents。状态轮询会持续到终态。",
+      "doneBody": "旧版导入已完成。生成的 Documents 会通过可见的 books/jobs/[job-id]/ 前缀和 source_book_job_id 元数据进行标记。",
+      "failedBody": "旧版导入在 Documents 完整生成前失败。请查看已保存的错误，并提交已修正的纯文本或格式。",
       "stateLabel": {
         "pending": "待处理",
         "processing": "处理中",
         "done": "完成",
         "failed": "失败",
-        "idle": "空闲"
+        "idle": "没有 job"
       }
     },
     "notice": {
-      "queued": "Books job #{id} 已入队。",
-      "failed": "Books 请求失败：{message}",
-      "loadError": "未知 books 流水线错误"
+      "queued": "旧版导入 job #{id} 已入队。",
+      "failed": "旧版导入请求失败：{message}",
+      "loadError": "未知旧版导入错误"
     }
   },
   "sectionStub": {
-    "state": {
-      "live": "该分区已连接，但尚无扩展视图。",
-      "dormant": "该功能被 flag 关闭。",
-      "stale": "该 surface 已作为 tombstone 禁用。",
-      "mustbuild": "该分区仍需要构建。"
+    "limitation": {
+      "loading": "控制台正在等待能力检查；尚不知道结果。",
+      "empty": "该能力未返回当前行或结果。",
+      "denied": "当前操作员会话未获此能力的授权。",
+      "error": "服务器没有为此能力提供可用结果。",
+      "stale": "目前只有此前确认的结果可用。",
+      "partial": "该能力只有已说明的部分可用。",
+      "unsupported": "此服务器不支持该能力或输入。",
+      "timeout": "服务器未在请求期限内确认结果。",
+      "offline": "控制台无法连接到此能力所在的服务器。"
+    },
+    "action": {
+      "loading": "下一步：等待读取完成。",
+      "empty": "下一步：如可用，使用说明的创建或筛选操作。",
+      "denied": "下一步：使用已授权的操作员会话。",
+      "error": "下一步：修正条件后重新读取。",
+      "stale": "下一步：在依赖此前结果前刷新。",
+      "partial": "下一步：只使用可用部分；其余尚未就绪。",
+      "unsupported": "下一步：使用受支持的输入或等待服务器能力。",
+      "timeout": "下一步：重试前刷新，避免假设结果。",
+      "offline": "下一步：恢复连接后重新读取。"
     }
   },
   "deferred": {
