@@ -12,7 +12,11 @@ The browser shared seam returns exactly one `OperatorMutationResult` outcome:
 | `failed` | Commitment is definitively rejected/failed before a known effect. | Show typed reason; retry only when the action/validation makes it safe. |
 | `outcome_unknown` | Transport/result loss leaves commitment unknown. | Preserve request reference; require a domain status query or authorized postcondition readback before replaying a non-idempotent action. |
 
-A callback invocation is not verification. A local optimistic snapshot is presentation-only and may be refreshed/replaced, but no message or type calls that replacement a server rollback. All current direct `runOperatorMutation` callers migrate together in S1b: Access, Books, Documents, Domain Registry, Health Settings, Issues, Keycards, Memory Lab, Projects, Queue, Rules, and Secrets.
+All current direct `runOperatorMutation` consumer modules migrate as one S1b cutover: `apps/operator-console/composables/useOperatorAccess.ts`, `useOperatorBooks.ts`, `useOperatorDocuments.ts`, `useOperatorDomainRegistry.ts`, `useOperatorHealthSettings.ts`, `useOperatorIssues.ts`, `useOperatorKeycards.ts`, `useOperatorMemoryLab.ts`, `useOperatorProjects.ts`, `useOperatorQueue.ts`, `useOperatorRules.ts`, and `useOperatorSecrets.ts`. The helper definition `useOperatorApi.ts` is the shared seam, not a thirteenth consumer. A callback invocation is not verification. A local optimistic snapshot is presentation-only and may be refreshed/replaced, but no message or type calls that replacement a server rollback.
+
+### S1b ownership handoff
+
+The console mutation owner is sole writer of `useOperatorApi.ts`, the discriminated union, and shared seam tests. After that interface is fixed, each named domain owner migrates only its listed composable and its consumer-visible result adapter; the integration owner accepts all twelve consumers in the one atomic S1b cutover. Domain owners supply operation-specific postcondition/readback adapters and must not change the shared union. This preserves one result vocabulary without granting the shared owner a cross-domain implementation lane.
 
 ## Selection and Pagination
 

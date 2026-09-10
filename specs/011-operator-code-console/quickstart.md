@@ -8,7 +8,7 @@
 2. Use an isolated disposable PostgreSQL database and a real authenticated Go server configured only with disposable credentials. Do not set disabled-auth, expose a master token to Playwright, attach production data, or use a browser path/credential to reach a workstation.
 3. For S2, bind the exact R-A installed UCI candidate used by the fixture. It must make a real semantic result available for the selected View; lexical/degraded output is valid only for the corresponding truthful-state scenario, not the primary semantic-path acceptance.
 4. Use two real linked Git worktrees with divergent saved content and a concurrent ordinary MCP client. Do not replace their topology with copied folders or mocked ContextRefs.
-5. Seed explicit browser read grants for the test human subjects through the authorized grant application path and seed collection data exceeding 200 Rules and 100 Issues.
+5. Create and revoke explicit browser grants only through the authenticated `CodeGrantApplication` Source-owner routes; seed collection data exceeding 200 Rules and 100 Issues. Fixture setup must not write a grant row directly, use disabled auth, or substitute an administrator role for the exact `ci_checkouts.owner_principal` predicate.
 
 ## Existing Console Checks
 
@@ -39,13 +39,14 @@ For each migrated direct caller, exercise at least its ordinary success/readback
 
 ## S2 — First Requested Cross-Surface User Result
 
-The S2 implementation adds a separate live Playwright configuration and documented `test:browser:live` package script. It targets the built Nuxt output and real Go/PostgreSQL fixture; it must not start `scripts/mock-operator-api.mjs`.
+The S2 implementation adds a separate live Playwright configuration and documented `test:browser:live` package script. It targets built Nuxt output and a real Go/PostgreSQL fixture; it must not start `scripts/mock-operator-api.mjs`.
 
-1. Start ordinary agent session A in real worktree A and browser tabs A/B with different granted contexts for worktrees A/B. Start one concurrent MCP client on a distinct binding.
-2. In each browser tab, select named Source/Checkout/View, issue a semantic natural-language query, open a bounded graph/relation result, and read an exact source span. Retain trigger → HTTP request → registered handler → UCI application/release → PostgreSQL/readback evidence.
-3. Assert every successful search/graph/source result in each tab identifies the selected same View; tab A cannot affect tab B or MCP context. Hard reload preserves its own tab context while session remains valid.
-4. Revoke a grant after application work and before release in the controlled fixture. Confirm no contextual result/receipt is disclosed. Exercise absent/ambiguous/expired/mismatched continuation and all nine presentation states.
-5. Publish a newer View. Confirm open search/source/graph stay pinned and the browser requires an explicit transition.
+1. Create real linked worktrees A and B with divergent saved bytes. In A, export a function through a bounded TS/TSX alias/re-export chain and change that target while its importing caller remains textually unchanged; B retains a different function version. Issue explicit A/B browser grants through `CodeGrantApplication` and retain the corresponding audit records.
+2. Start ordinary installed agent session A through the real daemon/server path, browser tabs A/B, and a concurrent MCP client on a distinct client binding. The ordinary agent selects A, waits for complete selected-View embeddings, runs the deliberately non-lexical Russian intent query, follows the bounded declared relation, and exact-reads the cited stored span. Retain agent request → daemon/server → UCI → PostgreSQL/readback evidence.
+3. Handshake each browser document for its server-issued binding, then select named Source/Checkout/View in tabs A/B. In each tab run semantic search → bounded graph/relation → exact source. Retain trigger → HTTP handler → UCI application/release → PostgreSQL/readback evidence. Every successful response identifies its same selected View; neither tab affects the other or MCP context.
+4. Open or duplicate a Code tab from initialized tab A. Confirm copied `sessionStorage` produces `TAB_BINDING_COLLISION`, a new binding only for the new tab, no inherited selection, and no change to A. Independently hard-reload A and B and confirm their individual contexts resume through their own session/resume proofs.
+5. Save the changed alias/re-export target in A and drive the normal watcher/reconcile path—do not manually publish a fixture View. Confirm a new A View, re-resolved unchanged caller relation, no stale A target, and unchanged B View/membership/edges/exact source. Browser A’s previously pinned View remains readable until explicit transition; browser B never changes.
+6. Revoke a grant after application work and before release; separately force recorder/release failure, absent/ambiguous selector, expired/mismatched continuation, and all nine presentation states. Each response leaks no contextual body, IDs, counts, relationships, or receipt and the UI remains denied/error/partial/offline rather than empty/ready.
 
 ## S3 — Collection Evidence
 

@@ -2,120 +2,101 @@
 
 **Scope**: Resolve Feature011 implementation choices from the approved specification and current source. This document does not reaccept UCI, claim a release, or claim that a planned route/table exists.
 
-## R-01 — Browser principal and explicit read grants
+## R-01 — Browser principal, Source-owner grant issuance, and explicit reads
 
-**Decision**: Introduce a canonical `BrowserSubject` derived only from a real persisted browser user session, and persist an explicit active grant keyed by `(auth_realm, browser_subject, source_id, checkout_id)`. The grant is checked before list, selection, search, graph, source, cursor continuation, and index-intent admission. It is read authority only.
+**Decision**: Introduce a canonical `BrowserSubject` only from a real persisted browser user session and persist an exact active grant keyed by `(auth_realm, browser_subject, source_id, checkout_id)`. The narrow `CodeGrantApplication` issue/revoke surface is `POST /api/code/grants` and `POST /api/code/grants/{grant_ref}/revoke`; it admits the issuer only when the browser subject’s source-owner principal exactly equals the existing `ci_checkouts.owner_principal` for that exact tuple. Each transition writes `code_grant_issued` or `code_grant_revoked` through the existing transaction-capable audit store.
 
-**Rationale**: `middleware.go:464-494` resolves database/authentik users into `auth.Session(user.Role)`, while `identity.go:146-157` gives session and disabled-auth identities no Principal. `uci_context_store.go:177-223` deliberately admits only `checkout.owner_principal`; its source comment says broad grants are unavailable until modeled in PostgreSQL. A browser role, Space, path, label, tab, and legacy project therefore cannot safely stand in for a grant.
+**Rationale**: `internal/worker/middleware.go:464-494` resolves DB/authentik users but currently creates `auth.Session(user.Role)`, while `internal/auth/identity.go:146-171` has no session principal. `internal/db/gorm/uci_context_store.go:177-223` already constrains UCI authorization to exact `checkout.owner_principal` in a realm, and `internal/db/gorm/audit_store.go:40-53` supplies `LogTx`. The plan extends identity carriage; it never treats a role as the missing principal.
 
-**Rejected alternatives**:
-- Treat `admin` or `SourceSession` as code authority: would disclose code without an explicit Source+Checkout grant.
-- Use `SourceClient`/workstation identity for the browser: would spoof daemon ownership and couple browser sessions to a keycard.
-- Grant at Source scope only: conflicts with the requested checkout-specific access and private dirty View boundary.
+**Rejected alternatives**: administrator-role or SourceSession inference; disabled auth; master/keycard browser authority; Space/path/label/branch/legacy-project implication; a direct fixture DB write; and a broad IAM/grant-management product.
 
-**Implementation boundary**: Browser subject mapping and grant lifecycle are owned by the auth/grant writer. The UCI authorizer remains default-deny and distinguishes browser read from owner-only daemon/index authority. Disabled-auth and legacy HMAC sessions do not receive new Code browsing access.
+**Implementation boundary**: The auth/grant owner maps enabled persisted user identity to `BrowserSubject`, owns `CodeGrantApplication` and grant/audit transaction, and exposes only exact `CanRead(source, checkout)` to UCI/HTTP. The UCI default remains deny. The live fixture must issue and revoke through this surface.
 
-## R-02 — Shared UCI response release
+## R-02 — Shared UCI release with complete caller and metadata mapping
 
-**Decision**: Factor the release operation currently implemented by MCP into a UCI-owned transport-independent port. Both MCP and the new ordinary HTTP adapter provide an already-authorized pre-exposure response and receive either a fully released response or the existing closed failure/refusal envelope.
+**Decision**: Factor the MCP release operation into a UCI-owned transport-independent release port. Its typed caller maps either existing `mcp_keycard` identity/session or `browser_subject` identity/browser-session/server-issued tab binding; browser attribution is never a synthetic keycard. Contextual status and resulting index View metadata are release categories in addition to search/graph/read; discovery, binding, and non-contextual intent acknowledgement remain ordinary authorization categories.
 
-**Rationale**: `UCIApplication` states it returns pre-exposure results (`uci_application.go:19-21`). `releaseCodebaseQueryResponse` (`tools_code_intel.go:780-892`) verifies current epoch, reauthorizes the exact context, validates the pre-exposure response, records exposure, and only then serializes contextual data. Duplicating those steps in a handler risks a cross-transport evidence/security split.
+**Rationale**: `internal/worker/uci_application.go:19-21` returns pre-exposure results. `internal/mcp/tools_code_intel.go:780-892` reauthorizes current context and appends exposure before serialization. `internal/uci/exposure.go:109-121,409-468,552-572,679-685` currently accepts keycard/session fields and only search/graph/read operations, so it cannot silently represent a browser user or new metadata route without an explicit typed extension.
 
-**Rejected alternatives**:
-- Serialize `UCIApplication` response in HTTP directly: bypasses reauthorization and exposure append.
-- Proxy browser JSON through MCP over HTTP: violates the permanent no-HTTP-MCP boundary.
-- Record a browser-specific receipt: creates a competing evidence owner.
+**Rejected alternatives**: direct HTTP serialization; fake browser keycards; an HTTP MCP endpoint; bypassing exposure for code status/resulting View; recording an exposure for refused discovery; or treating a continuation as a cache that can return stale contextual bytes.
 
-**Implementation boundary**: The release owner preserves current MCP vectors and exposes no raw recorder/store detail to HTTP. Recorder failure, epoch change, authorization failure, or response validation failure returns no contextual source/graph body.
+**Implementation boundary**: The UCI release owner preserves MCP vectors and adds browser/status/index-result/revocation/recorder-failure vectors. The HTTP owner invokes only that port; detailed route classification is normative in `operator-code-http.md`.
 
-## R-03 — Tab-bound browser context
+## R-03 — Server-issued tab binding, opener collision, and reload
 
-**Decision**: Use a randomly generated opaque tab key stored in browser `sessionStorage`; bind it server-side to the authenticated browser session and an exact selected ContextRef. Context binding is convenience state only: every request is reauthorized against the current grant and View relation. Hard reload retains the same tab key; another tab and any MCP session have a different binding.
+**Decision**: Use server-issued `tab_binding_id`, a sessionStorage `tab_resume_nonce`, fresh in-memory `document_nonce`, and a server live-document lease. The handshake detects a copied resume pair whose original lease remains live, refuses use of the copied binding, issues a new binding only to the requesting new tab, and requires explicit reselection. A hard reload resumes the same binding only when its browser-session/resume proof is valid and the old lease ended; a bounded lease expiry handles a crashed page.
 
-**Rationale**: Feature010's `ContextResolver.Authorize` (`internal/uci/context_resolver.go:46-52`) validates an explicit ContextRef without modifying mutable client selection. Its client bindings are scoped to a client session (`identity-and-worktrees.md:79-84`). A normal browser needs equivalent isolation but must not mutate MCP's binding map.
+**Rationale**: `sessionStorage` is copied to an opener-created page (MDN: <https://developer.mozilla.org/en-US/docs/Web/API/Window/sessionStorage>), so a client-chosen stored key cannot prove tab uniqueness. `internal/uci/context_resolver.go:14-16,39-52` shows that mutable selection is client-scoped convenience and explicit authorization must not change a client default. The browser therefore needs its own server binding and cannot mutate MCP’s binding map.
 
-**Rejected alternatives**:
-- A global browser “current worktree”: violates two-tab isolation.
-- Put a ContextRef only in a URL/local storage and trust it: converts a selector into authority and leaks state across tabs.
-- Auto-follow latest View: breaks exact source/search/graph coherence.
+**Rejected alternatives**: global current worktree; `sessionStorage` uniqueness by assertion; a shared localStorage key; silently rotating an existing tab; URL bearer values; or failing a hard reload solely because a fresh document nonce is expected.
 
-**Implementation boundary**: Browser context is lost safely on server session expiry; an authorized hard reload rehydrates it through the tab key and server binding. A newer View is presented as an explicit available transition, never a silent substitution.
+**Implementation boundary**: Browser-context owner owns handshake/binding persistence and `X-Engram-Tab-Binding-ID`; console owner clears opener-copied Code storage, stores only the returned resume pair, and handles collision/reselection. The required fixture opens/duplicates a Code tab and independently reloads both A/B tabs.
 
 ## R-04 — Honest mutation result
 
-**Decision**: Replace `success|rollback` with one discriminated `OperatorMutationResult`: `committed_verified`, `committed_verification_pending`, `partial`, `failed`, or `outcome_unknown`. It carries a request reference, per-item outcomes when applicable, and a safe next action. Every current direct caller of `runOperatorMutation` migrates in S1b.
+**Decision**: Replace `success|rollback` with `OperatorMutationResult`: `committed_verified`, `committed_verification_pending`, `partial`, `failed`, or `outcome_unknown`. Every direct consumer migrates in one S1b cutover.
 
-**Rationale**: Current `runOperatorMutation` calls optimistic update, request, and refresh in one try block (`useOperatorApi.ts:410-440`), labels any callback invocation `success`, and invokes a local snapshot rollback when either request or refresh throws. A callback load error after a known commit is not rollback; a network loss after a write does not prove the write failed.
+**Rationale**: `apps/operator-console/composables/useOperatorApi.ts:410-440` currently joins optimistic update, request, and refresh; a callback load error or response loss cannot prove rollback. The exact twelve consumer inventory and handoff are in `collection-operations.md`.
 
-**Rejected alternatives**:
-- Keep `rollback` with a clarifying message: still asserts a server effect never observed.
-- Add a generic cross-domain mutation engine: would move domain validation/audit ownership out of Rules, Issues, Memory, Queue, and Documents.
-- Replay an ambiguous non-idempotent request: can duplicate an already committed action.
-
-**Implementation boundary**: Existing actions without a durable status/readback endpoint remain `outcome_unknown` after ambiguous commitment and are not replayed. New collection actions that need retry/status add a domain-owned operation resource. An authoritative postcondition is operation-specific: updated field/version, authorized absence for delete, or non-disclosing status after access loss.
+**Rejected alternatives**: retaining rollback wording; a shared universal domain executor; retrying outcome-unknown writes; or counting helper definition as a consumer.
 
 ## R-05 — Pagination, selection, and Rules reorder
 
-**Decision**: Use opaque server cursors for list pages and a typed selection union: none, explicit IDs, current page, or frozen all-filter token with explicit exclusions. The token binds subject, domain, canonical filter/sort fingerprint, target revision snapshot/count, expiry, and authorized target set; it is not a capability. Rules reorder uses one scope-local transaction with expected versions for every target.
+**Decision**: Use opaque server cursors plus typed `none|explicit|page|frozen_filter` selection. A frozen filter binds subject, domain, canonical filter/sort/context, permitted target revisions/count, expiry, and exclusions; it is not a capability. Rules reorder is one scope-local expected-version transaction.
 
-**Rationale**: Rules currently request `all=true&limit=200` and reorder with `Promise.all` of individual PATCHes (`useOperatorRules.ts:105-130,222-247`). Issues request `limit=100` and bulk patch each row concurrently (`useOperatorIssues.ts:278-325,488-516`). The Rules store increments Version (`behavioral_rules_store.go:161-188`) but the handler request currently has no expected-version field.
+**Rationale**: `useOperatorRules.ts:105-130,222-247` uses 200 rows and parallel PATCH; `useOperatorIssues.ts:278-325,488-516` uses 100 rows and parallel PATCH. Existing model `Version` fields do not turn those calls into atomic operations.
 
-**Rejected alternatives**:
-- Download all records before selection: turns a page limit into an unbounded data/ACL risk.
-- Treat page select-all as filter select-all: cannot name the intended target set.
-- Retry partial reorder until it looks ordered: violates all-or-nothing scope semantics.
-
-**Implementation boundary**: Rules are first. Each later domain retains its action matrix and readback condition; unsupported action requests receive `unsupported`, not a generic fallback. Filter/context/permission changes clear or require reconfirmation of a dangerous selection.
+**Rejected alternatives**: all-row download; silent bounds clamp; generic cross-domain action; or client-side compensating reorder.
 
 ## R-06 — Durable daemon index control
 
-**Decision**: Represent browser demand as a persisted `IndexIntent` with request idempotency and safe state. The daemon owner acknowledges/claims it through its existing private UCI path, and completion points to a new readable View only after publication/readback.
+**Decision**: A browser creates an idempotent `IndexIntent`; only daemon owner ACK/claim/execution and an authorized released resulting-View readback complete it. Submission/retry acknowledgement has no exposure; resulting View/status metadata has the explicit index-result release category.
 
-**Rationale**: Feature010 requires durable jobs, leases, current-view publication, and server-authorized context. The browser does not have a safe remote working-copy path or workstation credential, so it cannot index directly. A request accepted by HTTP cannot prove local owner execution.
+**Rationale**: UCI’s browser cannot safely own a remote working-copy path or workstation credential. HTTP acceptance is not daemon execution and `internal/uci/versioned_read.go:52-55` proves exact reads are stored-View only.
 
-**Rejected alternatives**:
-- Browser calls an arbitrary path/reindex endpoint: exposes a filesystem authority and bypasses daemon ownership.
-- Treat HTTP 202 as complete: collapses intent, ACK, execution, and readback.
-- Browser-side polling of a daemon: leaks topology/credentials and cannot preserve server authorization.
-
-**Implementation boundary**: `queued` and `unavailable` are honest nonterminal states. Retry uses the persisted intent/request reference; a daemon may publish only through existing fenced UCI view publication.
+**Rejected alternatives**: browser arbitrary reindex/path endpoint; browser-to-daemon credential transport; treating queued/202 as complete; or disclosing a View when release fails.
 
 ## R-07 — Live browser/API/DB proof
 
-**Decision**: Keep current Playwright suite as UI interaction evidence and add a separate live configuration that targets a built Nuxt console, real authenticated Go API, and disposable PostgreSQL fixture. The fixture uses a real browser session and explicit grant; it does not enable disabled-auth or inject a master/browser bypass.
+**Decision**: Retain mock Playwright as interaction evidence and add a separate live configuration targeting built Nuxt output, real authenticated Go API, disposable PostgreSQL, real agent/daemon, explicit grant path, and real linked worktrees.
 
-**Rationale**: `playwright.config.ts:27-56` starts `scripts/mock-operator-api.mjs`, which cannot establish route registration, Go authorization, persistence, postcondition readback, or daemon ACK. `package.json` has verified `build`, `test:seam`, `test:parity`, and `test:browser` scripts but no live-test script.
+**Rationale**: `apps/operator-console/playwright.config.ts:27-56` starts a mock API. `internal/worker/service.go:1677-1807` owns route registration and DB-ready composition. UI-only tests cannot prove identity, grants, release, persistence, normal watcher reconciliation, or source readback.
 
-**Rejected alternatives**:
-- Call a handler/unit test from Vue: cannot prove browser serialization/auth/context isolation.
-- Rebrand existing mock suite as end-to-end: contradicts the acceptance boundary.
-
-**Implementation boundary**: S2 adds a named live config/script and fixture under the console's existing test convention. It exercises hard reload, two tabs/two worktrees/MCP, semantic result availability, graph/source View coherence, revocation, and all required truthful UI states. S1a may use the same real route-trace harness for traffic assertions.
+**Implementation boundary**: The S1a shell/harness owner owns base live config/package script/fixture bootstrap before S1a acceptance. The Code owner owns S2 scenario assertions through that harness; it does not edit shared package script/config.
 
 ## R-08 — Design promotion
 
-**Decision**: Preserve `.od → design/operator-console → apps/operator-console`; accepted flow precedes parity change. Runtime code is developer-owned integration, not a raw design export destination.
+**Decision**: Preserve `.od → design/operator-console → apps/operator-console`; accepted flow precedes parity changes. Runtime code remains developer-owned integration, never a raw design export destination.
 
-**Rationale**: `PROMOTION-CONTRACT.md:3-56` identifies the curated snapshot and says routine promotion never overwrites `apps/operator-console`.
+**Rationale**: `design/operator-console/PROMOTION-CONTRACT.md:3-56` makes the curated snapshot authoritative and excludes routine app overwrite.
 
-**Implementation boundary**: Design source owner changes the flow and manifest; UI owners add only scoped parity evidence after the promoted design is accepted. Existing global parity drift is not cleared by Feature011 without route-level observed evidence.
+## R-09 — Pinned current-slice mechanism adaptation
 
-## R-09 — r11 mechanism adaptation evidence
+**Decision**: The supplied SocratiCode `78a9eafa3b122c9c8768a3b85cb8c8166a571301` and Graphify `33362d969292b57eda82f3fbd9eb5f3f5bc9bbc2` source handoffs are now represented in the compact current-slice matrix. It covers retrieval fusion, chunk/truncation boundaries, delta/worktree isolation, TS alias/re-export origin/cycle/ambiguity, graph coverage/false-empty, and View-bound viewer behavior. It rejects SocratiCode shared-ID last-writer authority, Graphify main-checkout fallback, static viewer authority, and Graphify benchmark transfer.
 
-**Decision**: Keep native Engram implementation. A separate R-C research handoff records, for each mechanism that changes scope, the user task, pinned reference commit/file/test or issue, observed behavior, known limitation, Engram-specific DB/worktree/UI adaptation, and positive/negative/failure-mode proof. Feature011 does not duplicate this research.
+**Rationale**: r11 requires pinned behavior → limitation → native adaptation → checks for material delivered mechanisms. The sources are reviewed evidence with stated non-runtime-reproduction qualification, not a new research program. See `mechanism-adaptation.md` for immutable URLs, licenses, labels, exact Engram seams, and proof matrix.
 
-**Rationale**: r11 `04-MECHANISM-ADAPTATION.md` requires source/test/issue-grounded adaptation and prohibits embedding SocratiCode or Graphify as applications, subprocess engines, or mandatory dependencies. It also requires one Source/Checkout/View model across index/graph/agent/browser.
+**Gate**: Current-slice matrix and its R-A declared fixture gate S2. Broader R-C source-oracle comparison, extra language/relation support, and optional comparator availability gate only the respective R-C claim; they do not hold the limited S2 current slice.
 
-**Implementation boundary**: No pinned upstream finding is asserted here because none was supplied to the Feature011 planner. This blocks parity, new-language, or new-mechanism claims only. S2 presents the already accepted UCI capability and its actual coverage/limitations.
+## R-10 — Finite r11 Residual Ledger
+
+| Residual | Owner | Current classification and closure condition | Preview versus release |
+|---|---|---|---|
+| Watcher variance | R-A measurement/evidence owner | Bound `dc02236a-r2` evidence reports structural/embedding p95 `1.037/7.459 s`; later installed `a3117803` reports `2.430/17.324 s` against `2/10 s` thresholds. Classify workload, provider, or observer variance—or amend the measurement contract—while retaining both receipts. No SLO is claimed until classification. | Does not block a non-SLO isolated preview; blocks any release freshness/SLO claim. |
+| Consumer tuple proof | Integration owner | Freeze and record exact server commit, daemon build, parser bundle digest, resolver/profile, console commit, and fixture identity. Prove fresh ordinary agent, browser A/B, and concurrent MCP against that tuple. | Required for preview acceptance of the cross-surface result and again for release candidate proof. |
+| Provider/profile readiness | R-A/UCI owner | Selected View embeds completely under the recorded provider/model/profile before the RU non-lexical semantic step. Failure is visibly lexical/degraded/unavailable, never semantic. | A truthful degraded preview is allowed; semantic preview/release claim requires ready proof. |
+| Sonar administrator debt | Release/Sonar administrator | Administrator-owned Sonar DB migration/re-entry, `/api/system/status` UP, fresh exact-candidate `sonar-project.properties`/`coverage.out` analysis, then Quality Gate `OK`. | Controlled isolated preview remains non-release; tag, publication, consumer delivery, and release completion stay blocked. |
+| Target-project profile | R-C evaluator | **Engram: supported only for the frozen candidate-declared Go relation plus bounded TS/TSX alias/re-export fixture. nvmd-ai: deferred; NovaScript: deferred.** Each deferred project needs its own declared language/relation/profile, source oracle, A/B result, and exact View-read evidence before a support claim. C#/Vue/Python and generic polyglot claims remain deferred. | No deferred-project parity/support claim is needed for limited Engram S2 preview; any advertised expansion requires its closed evidence packet and release proof. |
+| Optional comparators | R-C evaluator | Aligned lexical baseline is required. SocratiCode/Graphify comparators run only with authorized isolated matching corpus/profile; otherwise record `parity_not_checked`. | Comparator absence neither fails limited preview nor permits parity language. |
 
 ## Resolved Planning Ledger
 
 | Question | Resolution | Contract |
 |---|---|---|
-| Browser identity versus UCI owner identity | Canonical real-user browser subject plus explicit read grant; no role/Space/path inference. | `browser-context-and-grants.md` |
-| How HTTP preserves UCI release semantics | UCI-owned shared release port after application/pre-exposure response. | `operator-code-http.md` |
-| Context persistence and isolation | Server binding scoped to authenticated browser session + opaque tab key; `sessionStorage` preserves only that key across reload. | `browser-context-and-grants.md` |
-| Mutation status after response loss | Shared truth union; domain operation status only where a domain supports safe inquiry/retry. | `collection-operations.md` |
+| Browser identity versus UCI owner identity | Real persisted browser subject; exact Source-owner audit issuance; no role/Space/path inference. | `browser-context-and-grants.md` |
+| Browser tab cloning versus reload | Server-issued binding plus session/resume proof and document lease; collision rotates only new tab. | `browser-context-and-grants.md` |
+| HTTP/MCP release compatibility | Typed caller mapping and endpoint exposure categories after application/pre-exposure response. | `operator-code-http.md` |
+| Mutation status after response loss | Shared truth union; domain operation status only where safe inquiry/retry exists. | `collection-operations.md` |
 | All-filter and reorder integrity | Frozen token plus rechecked ACL/version; transactional Rules scope reorder. | `collection-operations.md` |
-| Browser-index execution | Durable intent, daemon ACK/claim, new View readback. | `index-intents.md` |
-| Reference/upstream strategy | Bounded pinned evidence handoff; native adaptation only. | `mechanism-adaptation.md` |
+| Browser-index execution/result release | Durable intent, daemon ACK/claim, and released new View readback. | `index-intents.md` |
+| Reference/upstream strategy | Fixed current-slice pinned adaptation matrix; broader comparison only for expansion claims. | `mechanism-adaptation.md` |
