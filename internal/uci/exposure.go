@@ -33,7 +33,7 @@ var (
 	ErrExposureNotFound = errors.New("UCI_EXPOSURE_NOT_FOUND")
 )
 
-// ExposureOperation identifies the MCP boundary operation that released an
+// ExposureOperation identifies the persisted evidence operation for an
 // authorized UCI result.
 type ExposureOperation string
 
@@ -42,6 +42,14 @@ const (
 	ExposureOperationCodeGraph     ExposureOperation = "code_graph"
 	ExposureOperationVersionedRead ExposureOperation = "versioned_read"
 )
+
+// BrowserSubject is the narrow canonical browser identity contract. The auth
+// package's BrowserSubject implements it without making UCI depend on the
+// transport authentication graph. Browser composition supplies this value only
+// after authenticating the persisted session user.
+type BrowserSubject interface {
+	Valid() bool
+}
 
 // ExposureResultState describes the closed result decision bound to a receipt.
 type ExposureResultState string
@@ -107,17 +115,22 @@ const (
 )
 
 // ExposureInput contains only the metadata needed to derive one non-content
-// receipt. ClientKeycard, ClientSession, RequestID, and RequestBindingDigest are
-// used only to derive opaque hashes and are never included in ExposureRecord.
+// receipt. ClientKeycard is populated exclusively by MCP callers. Browser
+// callers carry their canonical subject and a successful document-binding
+// proof separately, so a browser identity is never treated as a keycard.
+// Every raw value is used only to derive opaque hashes and is never included
+// in ExposureRecord.
 type ExposureInput struct {
-	AuthRealm            string
-	ClientKeycard        string
-	ClientSession        string
-	RequestID            string
-	RequestBindingDigest string
-	Operation            ExposureOperation
-	Response             QueryResponse
-	RecordedAt           time.Time
+	AuthRealm              string
+	ClientKeycard          string
+	BrowserSubject         BrowserSubject
+	BrowserDocumentBinding string
+	ClientSession          string
+	RequestID              string
+	RequestBindingDigest   string
+	Operation              ExposureOperation
+	Response               QueryResponse
+	RecordedAt             time.Time
 }
 
 // ExposureRecord is the complete durable, non-content representation of one
@@ -406,7 +419,12 @@ func deriveExposureRecord(authorized AuthorizedContext, input ExposureInput) (Ex
 		return ExposureRecord{}, err
 	}
 
-	clientRef, err := opaqueExposureHash("client_keycard", input.ClientKeycard)
+	var clientRef string
+	if input.BrowserSubject != nil {
+		clientRef, err = opaqueExposureHash("browser_subject", input.BrowserSubject)
+	} else {
+		clientRef, err = opaqueExposureHash("client_keycard", input.ClientKeycard)
+	}
 	if err != nil {
 		return ExposureRecord{}, err
 	}
@@ -415,11 +433,13 @@ func deriveExposureRecord(authorized AuthorizedContext, input ExposureInput) (Ex
 		return ExposureRecord{}, err
 	}
 	requestRef, err := opaqueExposureHash("request", struct {
-		RequestID     string `json:"request_id"`
-		BindingDigest string `json:"binding_digest"`
+		RequestID              string `json:"request_id"`
+		BindingDigest          string `json:"binding_digest"`
+		BrowserDocumentBinding string `json:"browser_document_binding,omitempty"`
 	}{
-		RequestID:     input.RequestID,
-		BindingDigest: input.RequestBindingDigest,
+		RequestID:              input.RequestID,
+		BindingDigest:          input.RequestBindingDigest,
+		BrowserDocumentBinding: input.BrowserDocumentBinding,
 	})
 	if err != nil {
 		return ExposureRecord{}, err
@@ -555,13 +575,19 @@ func validateExposureInput(input ExposureInput) error {
 		value string
 	}{
 		{"auth_realm", input.AuthRealm},
-		{"client_keycard", input.ClientKeycard},
 		{"client_session", input.ClientSession},
 		{"request_id", input.RequestID},
 	} {
 		if !validExposureText(field.value) {
 			return fmt.Errorf("uci exposure: invalid %s", field.name)
 		}
+	}
+	if input.BrowserSubject == nil {
+		if !validExposureText(input.ClientKeycard) || input.BrowserDocumentBinding != "" {
+			return errors.New("uci exposure: invalid MCP caller")
+		}
+	} else if input.ClientKeycard != "" || !input.BrowserSubject.Valid() || !validExposureUUID(input.BrowserDocumentBinding) {
+		return errors.New("uci exposure: invalid browser caller")
 	}
 	if !validExposureDigest(input.RequestBindingDigest) {
 		return errors.New("uci exposure: invalid request binding digest")

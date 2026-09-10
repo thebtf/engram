@@ -777,10 +777,9 @@ func (s *Server) hasLegacyUnscopedCodeChunkStore() bool {
 	return s.legacyUnscopedCodeChunkStore != nil
 }
 
-// releaseCodebaseQueryResponse is the single release boundary for authorized
-// query results. It validates an application-owned pre-exposure response,
-// re-resolves the caller's authority, and atomically records the receipt
-// against the same context epoch before any contextual data is serialized.
+// releaseCodebaseQueryResponse adapts the MCP context registry to the shared
+// UCI release mapper. The mapper owns typed caller mapping, closed suppression,
+// and receipt attachment; this adapter retains MCP's epoch-atomic recheck.
 func (s *Server) releaseCodebaseQueryResponse(
 	ctx context.Context,
 	epoch uint64,
@@ -791,53 +790,93 @@ func (s *Server) releaseCodebaseQueryResponse(
 	matches func(uci.QueryResponse) bool,
 	tool string,
 ) (string, error) {
-	if !s.codebaseContextEpochCurrent(epoch) {
-		return codebaseSearchContextRefusal(uci.ContextMismatch)
-	}
-
-	reauthorized, contextCode := s.reauthorizeCodebaseContext(ctx, epoch, authorized, contextHandle)
-	if contextCode != "" || !codebaseContextRefsEqual(reauthorized.Ref(), authorized.Ref()) {
-		if contextCode == "" {
-			contextCode = uci.ContextMismatch
-		}
-		return codebaseSearchContextRefusal(contextCode)
-	}
-
-	switch response.Status {
-	case uci.QueryStatusContextRequired, uci.QueryStatusForbidden:
-		if err := response.Validate(); err != nil {
-			return "", fmt.Errorf("%s: invalid UCI response", tool)
-		}
+	if response.Status == uci.QueryStatusContextRequired || response.Status == uci.QueryStatusForbidden {
 		return marshalValidatedCodebaseQueryResponse(response)
 	}
-	if !matches(response) || response.ValidatePreExposure() != nil {
+	if matches == nil || !matches(response) || response.ValidatePreExposure() != nil {
 		return "", fmt.Errorf("%s: invalid UCI response", tool)
 	}
-
-	input, err := codebaseExposureInput(ctx, operation, response)
-	if err != nil {
-		return codebaseExposureFailureResponse(uci.QueryErrorExposureUnavailable)
+	category, ok := uci.ReleaseCategoryForExposureOperation(operation)
+	if !ok {
+		return marshalValidatedCodebaseQueryResponse(uci.QueryResponse{
+			Schema: uci.QueryResponseSchema,
+			Status: uci.QueryStatusUnavailable,
+			Error:  &uci.QueryError{Code: uci.QueryErrorExposureUnavailable},
+		})
 	}
-	receipt, current, err := s.recordCodebaseExposure(ctx, epoch, reauthorized, input)
+	exposureInput, err := codebaseExposureInput(ctx, operation, response)
+	if err != nil {
+		return marshalValidatedCodebaseQueryResponse(uci.QueryResponse{
+			Schema: uci.QueryResponseSchema,
+			Status: uci.QueryStatusUnavailable,
+			Error:  &uci.QueryError{Code: uci.QueryErrorExposureUnavailable},
+		})
+	}
+
+	released := uci.ReleaseQueryResponse(ctx, uci.ReleaseRequest{
+		AuthRealm:            exposureInput.AuthRealm,
+		Caller:               uci.ReleaseCaller{MCP: &uci.MCPReleaseCaller{Keycard: exposureInput.ClientKeycard, SessionID: exposureInput.ClientSession}},
+		RequestID:            exposureInput.RequestID,
+		RequestBindingDigest: exposureInput.RequestBindingDigest,
+		Category:             category,
+		Response:             &response,
+		RecordedAt:           exposureInput.RecordedAt,
+	}, codebaseQueryReleaseGate{
+		server:        s,
+		epoch:         epoch,
+		authorized:    authorized,
+		contextHandle: contextHandle,
+	})
+	if err := released.Validate(); err != nil {
+		return "", fmt.Errorf("%s: invalid released UCI response", tool)
+	}
+	return marshalValidatedCodebaseQueryResponse(released)
+}
+
+type codebaseQueryReleaseGate struct {
+	server        *Server
+	epoch         uint64
+	authorized    uci.AuthorizedContext
+	contextHandle *string
+}
+
+func (gate codebaseQueryReleaseGate) Reauthorize(ctx context.Context) (uci.AuthorizedContext, uci.ReleaseFailureCode) {
+	if gate.server == nil || !gate.server.codebaseContextEpochCurrent(gate.epoch) {
+		return uci.AuthorizedContext{}, uci.ReleaseFailureContextMismatch
+	}
+	reauthorized, contextCode := gate.server.reauthorizeCodebaseContext(ctx, gate.epoch, gate.authorized, gate.contextHandle)
+	if contextCode != "" {
+		return uci.AuthorizedContext{}, codebaseReleaseFailure(contextCode)
+	}
+	if !codebaseContextRefsEqual(reauthorized.Ref(), gate.authorized.Ref()) {
+		return uci.AuthorizedContext{}, uci.ReleaseFailureContextMismatch
+	}
+	return reauthorized, uci.ReleaseFailureNone
+}
+
+func (gate codebaseQueryReleaseGate) AppendExposure(ctx context.Context, authorized uci.AuthorizedContext, input uci.ExposureInput) (uci.QueryExposure, uci.ReleaseFailureCode) {
+	receipt, current, err := gate.server.recordCodebaseExposure(ctx, gate.epoch, authorized, input)
 	if !current {
-		return codebaseSearchContextRefusal(uci.ContextMismatch)
+		return uci.QueryExposure{}, uci.ReleaseFailureContextMismatch
 	}
 	if err != nil {
 		if errors.Is(err, uci.ErrIdempotencyMismatch) {
-			return codebaseExposureFailureResponse(uci.QueryErrorIdempotencyMismatch)
+			return uci.QueryExposure{}, uci.ReleaseFailureIdempotencyMismatch
 		}
-		return codebaseExposureFailureResponse(uci.QueryErrorExposureUnavailable)
+		return uci.QueryExposure{}, uci.ReleaseFailureExposureUnavailable
 	}
+	return receipt, uci.ReleaseFailureNone
+}
 
-	response.Exposure = &receipt
-	if err := response.Validate(); err != nil {
-		return "", fmt.Errorf("%s: invalid released UCI response", tool)
+func codebaseReleaseFailure(code uci.ContextErrorCode) uci.ReleaseFailureCode {
+	switch code {
+	case uci.ContextRequired:
+		return uci.ReleaseFailureContextRequired
+	case uci.PermissionDenied:
+		return uci.ReleaseFailurePermissionDenied
+	default:
+		return uci.ReleaseFailureContextMismatch
 	}
-	encoded, err := json.Marshal(response)
-	if err != nil {
-		return "", fmt.Errorf("%s: marshal UCI response", tool)
-	}
-	return string(encoded), nil
 }
 
 func (s *Server) reauthorizeCodebaseContext(ctx context.Context, epoch uint64, authorized uci.AuthorizedContext, contextHandle *string) (uci.AuthorizedContext, uci.ContextErrorCode) {
@@ -890,14 +929,6 @@ func (s *Server) recordCodebaseExposure(ctx context.Context, epoch uint64, autho
 	}
 	receipt, err := s.uciExposureRecorder.Record(ctx, authorized, input)
 	return receipt, true, err
-}
-
-func codebaseExposureFailureResponse(code uci.QueryErrorCode) (string, error) {
-	return marshalValidatedCodebaseQueryResponse(uci.QueryResponse{
-		Schema: uci.QueryResponseSchema,
-		Status: uci.QueryStatusUnavailable,
-		Error:  &uci.QueryError{Code: code},
-	})
 }
 
 func (s *Server) codebaseExposureRecorderHealth() CodebaseEvidenceRecorderHealth {
