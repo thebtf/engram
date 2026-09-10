@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // projectBareName strips the "_<hash>" suffix from a canonical hashed project ID
@@ -28,7 +29,90 @@ var (
 	ErrIssueInvalidInput = errors.New("issue_invalid_input")
 	// ErrIssueForbidden indicates that the authenticated actor cannot mutate the issue.
 	ErrIssueForbidden = errors.New("issue_forbidden")
+	// ErrIssueSelectionConflict means a selected issue changed, disappeared, or no longer satisfies the action.
+	ErrIssueSelectionConflict = errors.New("issue_selection_conflict")
 )
+
+// IssueSelectionActionKind is the closed action matrix for selected issues.
+type IssueSelectionActionKind string
+
+const (
+	IssueSelectionAcknowledge IssueSelectionActionKind = "acknowledge"
+	IssueSelectionStatus      IssueSelectionActionKind = "status"
+	IssueSelectionPriority    IssueSelectionActionKind = "priority"
+	IssueSelectionLabels      IssueSelectionActionKind = "labels"
+	IssueSelectionDelete      IssueSelectionActionKind = "delete"
+)
+
+// IssueSelectionOutcome records the known durable outcome for one selected issue.
+type IssueSelectionOutcome string
+
+const (
+	IssueSelectionCommitted IssueSelectionOutcome = "committed"
+	IssueSelectionDenied    IssueSelectionOutcome = "denied"
+	IssueSelectionConflict  IssueSelectionOutcome = "conflict"
+	IssueSelectionFailed    IssueSelectionOutcome = "failed"
+)
+
+// IssueSelectionTarget is one handler-authorized issue and its optimistic revision.
+type IssueSelectionTarget struct {
+	ID                int64
+	ExpectedUpdatedAt time.Time
+}
+
+// IssueSelectionActor is the authenticated caller whose authority is rechecked
+// against each locked current issue row.
+type IssueSelectionActor struct {
+	KeycardID  string
+	IsOperator bool
+}
+
+// IssueSelectionAction is one typed selected-issue action. Pointer fields preserve
+// omitted-versus-empty payloads: an empty label list clears labels.
+type IssueSelectionAction struct {
+	Kind          IssueSelectionActionKind
+	Status        *string
+	Priority      *string
+	Labels        *[]string
+	Comment       *string
+	AuthorProject string
+	AuthorAgent   string
+}
+
+// IssueSelectionOperation is a bounded handler-resolved selected-issue mutation.
+// Selection tokens stay at the handler boundary; this store receives only exact targets.
+type IssueSelectionOperation struct {
+	Action  IssueSelectionAction
+	Actor   IssueSelectionActor
+	Targets []IssueSelectionTarget
+}
+
+// IssueSelectionReadback contains only fields permitted in a committed selected-issue result.
+type IssueSelectionReadback struct {
+	Status    string
+	Priority  string
+	Labels    []string
+	UpdatedAt time.Time
+}
+
+// IssueSelectionOperationItem is intentionally body-free. Delete, denial, conflict,
+// and failed results have no readback, so they cannot disclose a current or deleted row.
+type IssueSelectionOperationItem struct {
+	TargetID int64
+	Outcome  IssueSelectionOutcome
+	Deleted  bool
+	Readback *IssueSelectionReadback
+}
+
+// IssueSelectionOperationResult holds ordered, safe per-target outcomes.
+type IssueSelectionOperationResult struct {
+	Items []IssueSelectionOperationItem
+}
+
+type issueSelectionTarget struct {
+	id                int64
+	expectedUpdatedAt time.Time
+}
 
 // IssueStore provides CRUD operations for issues and issue comments.
 type IssueStore struct {
@@ -487,6 +571,247 @@ func (s *IssueStore) AcknowledgeIssuesAtomically(ctx context.Context, ids []int6
 	return acknowledged, nil
 }
 
+// ApplyIssueSelectionOperation locks every handler-authorized target, rechecks its
+// current authority, status, and updated_at revision, then commits one action over
+// the complete set. Any failed recheck rolls back the entire operation.
+func (s *IssueStore) ApplyIssueSelectionOperation(ctx context.Context, operation IssueSelectionOperation) (IssueSelectionOperationResult, error) {
+	if s == nil || s.db == nil {
+		return IssueSelectionOperationResult{}, errors.New("issue store is not configured")
+	}
+	targets, err := validateIssueSelectionOperation(operation)
+	if err != nil {
+		return IssueSelectionOperationResult{}, err
+	}
+
+	var failure IssueSelectionOperationResult
+	items := make([]IssueSelectionOperationItem, 0, len(targets))
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		ids := make([]int64, len(targets))
+		for index, target := range targets {
+			ids[index] = target.id
+		}
+
+		var rows []Issue
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id IN ?", ids).
+			Order("id ASC").
+			Find(&rows).Error; err != nil {
+			return fmt.Errorf("lock selected issues: %w", err)
+		}
+		byID := make(map[int64]*Issue, len(rows))
+		for index := range rows {
+			byID[rows[index].ID] = &rows[index]
+		}
+
+		for _, target := range targets {
+			row, found := byID[target.id]
+			if !found || !row.UpdatedAt.UTC().Truncate(time.Microsecond).Equal(target.expectedUpdatedAt) {
+				failure.Items = []IssueSelectionOperationItem{{TargetID: target.id, Outcome: IssueSelectionConflict}}
+				return ErrIssueSelectionConflict
+			}
+			if err := authorizeIssueSelectionRow(row, operation.Action, operation.Actor); err != nil {
+				failure.Items = []IssueSelectionOperationItem{{TargetID: target.id, Outcome: IssueSelectionDenied}}
+				return err
+			}
+			if err := validateIssueSelectionCurrentRow(row, operation.Action, operation.Actor); err != nil {
+				failure.Items = []IssueSelectionOperationItem{{TargetID: target.id, Outcome: IssueSelectionConflict}}
+				return err
+			}
+		}
+
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		for _, target := range targets {
+			item, err := applyIssueSelectionActionTx(tx, byID[target.id], operation.Action, operation.Actor.IsOperator, now)
+			if err != nil {
+				failure.Items = []IssueSelectionOperationItem{{TargetID: target.id, Outcome: issueSelectionFailureOutcome(err)}}
+				return err
+			}
+			items = append(items, item)
+		}
+		return nil
+	})
+	if err != nil {
+		return failure, err
+	}
+	return IssueSelectionOperationResult{Items: items}, nil
+}
+
+func validateIssueSelectionOperation(operation IssueSelectionOperation) ([]issueSelectionTarget, error) {
+	if len(operation.Targets) == 0 || len(operation.Targets) > CollectionSelectionMaxTargets {
+		return nil, fmt.Errorf("%w: selected issue count must be between 1 and %d", ErrIssueInvalidInput, CollectionSelectionMaxTargets)
+	}
+	if err := validateIssueSelectionAction(operation.Action); err != nil {
+		return nil, err
+	}
+
+	targets := make([]issueSelectionTarget, 0, len(operation.Targets))
+	seen := make(map[int64]struct{}, len(operation.Targets))
+	for _, target := range operation.Targets {
+		if target.ID <= 0 || target.ExpectedUpdatedAt.IsZero() {
+			return nil, fmt.Errorf("%w: target id and expected updated_at are required", ErrIssueInvalidInput)
+		}
+		if _, duplicate := seen[target.ID]; duplicate {
+			return nil, fmt.Errorf("%w: duplicate selected issue id %d", ErrIssueInvalidInput, target.ID)
+		}
+		seen[target.ID] = struct{}{}
+		targets = append(targets, issueSelectionTarget{
+			id:                target.ID,
+			expectedUpdatedAt: target.ExpectedUpdatedAt.UTC().Truncate(time.Microsecond),
+		})
+	}
+	return targets, nil
+}
+
+func validateIssueSelectionAction(action IssueSelectionAction) error {
+	noFields := action.Status == nil && action.Priority == nil && action.Labels == nil && action.Comment == nil && action.AuthorProject == "" && action.AuthorAgent == ""
+	switch action.Kind {
+	case IssueSelectionAcknowledge, IssueSelectionDelete:
+		if !noFields {
+			return fmt.Errorf("%w: %s action accepts no payload", ErrIssueInvalidInput, action.Kind)
+		}
+	case IssueSelectionStatus:
+		if action.Status == nil || action.Priority != nil || action.Labels != nil {
+			return fmt.Errorf("%w: status action requires only status and optional comment", ErrIssueInvalidInput)
+		}
+		switch *action.Status {
+		case "open", "acknowledged", "resolved", "reopened", "closed", "rejected":
+		default:
+			return fmt.Errorf("%w: invalid status %q", ErrIssueInvalidInput, *action.Status)
+		}
+		if *action.Status == "rejected" && (action.Comment == nil || *action.Comment == "") {
+			return fmt.Errorf("%w: comment is required when rejecting an issue", ErrIssueInvalidInput)
+		}
+	case IssueSelectionPriority:
+		if action.Priority == nil || action.Status != nil || action.Labels != nil || action.Comment != nil || action.AuthorProject != "" || action.AuthorAgent != "" {
+			return fmt.Errorf("%w: priority action requires only priority", ErrIssueInvalidInput)
+		}
+		if !map[string]bool{"critical": true, "high": true, "medium": true, "low": true}[*action.Priority] {
+			return fmt.Errorf("%w: invalid priority %q", ErrIssueInvalidInput, *action.Priority)
+		}
+	case IssueSelectionLabels:
+		if action.Labels == nil || action.Status != nil || action.Priority != nil || action.Comment != nil || action.AuthorProject != "" || action.AuthorAgent != "" {
+			return fmt.Errorf("%w: labels action requires only labels", ErrIssueInvalidInput)
+		}
+	default:
+		return fmt.Errorf("%w: unsupported selected issue action", ErrIssueInvalidInput)
+	}
+	return nil
+}
+
+func authorizeIssueSelectionRow(row *Issue, action IssueSelectionAction, actor IssueSelectionActor) error {
+	if actor.IsOperator {
+		return nil
+	}
+	if actor.KeycardID == "" {
+		return fmt.Errorf("%w: authenticated client keycard is required", ErrIssueForbidden)
+	}
+
+	sourceAuthority := action.Kind == IssueSelectionPriority || action.Kind == IssueSelectionLabels ||
+		(action.Kind == IssueSelectionStatus && action.Status != nil && (*action.Status == "reopened" || *action.Status == "closed"))
+	if sourceAuthority && (row.CreatorKeycardID == "" || row.CreatorKeycardID != actor.KeycardID) {
+		return fmt.Errorf("%w: issue mutation forbidden", ErrIssueForbidden)
+	}
+	if action.Kind == IssueSelectionAcknowledge || action.Kind == IssueSelectionDelete ||
+		(action.Kind == IssueSelectionStatus && action.Status != nil && (*action.Status == "open" || *action.Status == "acknowledged" || *action.Status == "rejected")) {
+		return fmt.Errorf("%w: operator identity is required", ErrIssueForbidden)
+	}
+	return nil
+}
+
+func validateIssueSelectionCurrentRow(row *Issue, action IssueSelectionAction, actor IssueSelectionActor) error {
+	switch action.Kind {
+	case IssueSelectionAcknowledge:
+		if row.Status != "open" {
+			return ErrIssueSelectionConflict
+		}
+	case IssueSelectionStatus:
+		switch *action.Status {
+		case "reopened":
+			if row.Status != "resolved" {
+				return ErrIssueSelectionConflict
+			}
+		case "closed":
+			if row.Status == "closed" || (!actor.IsOperator && row.Status != "resolved" && row.Status != "reopened") {
+				return ErrIssueSelectionConflict
+			}
+		}
+	}
+	return nil
+}
+
+func applyIssueSelectionActionTx(tx *gorm.DB, row *Issue, action IssueSelectionAction, isOperator bool, now time.Time) (IssueSelectionOperationItem, error) {
+	item := IssueSelectionOperationItem{TargetID: row.ID, Outcome: IssueSelectionCommitted}
+	if action.Kind == IssueSelectionDelete {
+		if err := deleteIssueTx(tx, row.ID); err != nil {
+			return IssueSelectionOperationItem{}, err
+		}
+		item.Deleted = true
+		return item, nil
+	}
+
+	var err error
+	switch action.Kind {
+	case IssueSelectionAcknowledge:
+		err = updateIssueStatusTx(tx, row.ID, "acknowledged", now)
+	case IssueSelectionPriority:
+		err = updateIssueFieldsTx(tx, row.ID, "", "", *action.Priority, "", nil, now)
+	case IssueSelectionLabels:
+		labels := append([]string(nil), (*action.Labels)...)
+		err = updateIssueFieldsTx(tx, row.ID, "", "", "", "", labels, now)
+	case IssueSelectionStatus:
+		switch *action.Status {
+		case "reopened":
+			err = reopenIssueTx(tx, row.ID, now)
+		case "closed":
+			err = closeIssueTx(tx, row.ID, isOperator, now)
+		case "rejected":
+			err = rejectIssueTx(tx, row.ID, *action.Comment, action.AuthorProject, action.AuthorAgent, now)
+		default:
+			err = updateIssueStatusTx(tx, row.ID, *action.Status, now)
+		}
+		if err == nil && *action.Status != "rejected" && action.Comment != nil && *action.Comment != "" {
+			_, err = addIssueCommentTx(tx, row.ID, &IssueComment{
+				AuthorProject: action.AuthorProject,
+				AuthorAgent:   action.AuthorAgent,
+				Body:          *action.Comment,
+			}, now)
+		}
+	}
+	if err != nil {
+		return IssueSelectionOperationItem{}, err
+	}
+
+	readback, err := readIssueSelectionReadbackTx(tx, row.ID)
+	if err != nil {
+		return IssueSelectionOperationItem{}, err
+	}
+	item.Readback = readback
+	return item, nil
+}
+
+func readIssueSelectionReadbackTx(tx *gorm.DB, id int64) (*IssueSelectionReadback, error) {
+	var row Issue
+	if err := tx.Select("status", "priority", "labels", "updated_at").First(&row, id).Error; err != nil {
+		return nil, fmt.Errorf("read selected issue: %w", err)
+	}
+	return &IssueSelectionReadback{
+		Status:    row.Status,
+		Priority:  row.Priority,
+		Labels:    append([]string(nil), row.Labels...),
+		UpdatedAt: row.UpdatedAt,
+	}, nil
+}
+
+func issueSelectionFailureOutcome(err error) IssueSelectionOutcome {
+	if errors.Is(err, ErrIssueForbidden) {
+		return IssueSelectionDenied
+	}
+	if errors.Is(err, ErrIssueNotFound) || errors.Is(err, ErrIssueInvalidTransition) || errors.Is(err, ErrIssueSelectionConflict) {
+		return IssueSelectionConflict
+	}
+	return IssueSelectionFailed
+}
+
 // ReopenIssue transitions a resolved issue back to reopened state.
 // Returns error if issue is not in 'resolved' state.
 // Optionally adds a comment explaining the reopen reason.
@@ -649,18 +974,22 @@ func (s *IssueStore) RejectIssue(ctx context.Context, id int64, comment, authorP
 // DeleteIssue hard-deletes an issue and all its comments.
 func (s *IssueStore) DeleteIssue(ctx context.Context, id int64) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("issue_id = ?", id).Delete(&IssueComment{}).Error; err != nil {
-			return fmt.Errorf("delete issue comments: %w", err)
-		}
-		result := tx.Delete(&Issue{}, id)
-		if result.Error != nil {
-			return fmt.Errorf("delete issue: %w", result.Error)
-		}
-		if result.RowsAffected == 0 {
-			return fmt.Errorf("issue %d not found", id)
-		}
-		return nil
+		return deleteIssueTx(tx, id)
 	})
+}
+
+func deleteIssueTx(tx *gorm.DB, id int64) error {
+	if err := tx.Where("issue_id = ?", id).Delete(&IssueComment{}).Error; err != nil {
+		return fmt.Errorf("delete issue comments: %w", err)
+	}
+	result := tx.Delete(&Issue{}, id)
+	if result.Error != nil {
+		return fmt.Errorf("delete issue: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("issue %d not found", id)
+	}
+	return nil
 }
 
 // UpdateIssueFields updates mutable fields (title, body, priority, labels, type) for dashboard editing.
