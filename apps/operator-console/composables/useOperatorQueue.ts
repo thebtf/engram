@@ -1,6 +1,8 @@
 import type { ComputedRef, Ref } from 'vue'
 import type { OperatorLoadState } from './useOperatorApi'
 import { executeMutation, type MutationResult } from './useApi'
+import type { OperatorSelection } from './useOperatorSelection'
+import { parseOperatorSelectionSnapshot } from './useOperatorSelection'
 import {
   emptyState,
   endpointEvidence,
@@ -81,13 +83,77 @@ export interface CandidateActionIntent {
   reason?: string
 }
 
-function jsonInit(method: 'POST', body?: unknown): RequestInit {
+interface CandidateActionStatus {
+  candidateId: string
+  candidateStatus: 'promoted' | 'rejected' | 'superseded'
+}
+
+type CandidateActionCurrentState = CandidateActionStatus | CandidateActionStatus[]
+
+interface SelectionEnvelope {
+  selection: unknown
+}
+
+function jsonInit(method: 'POST', body?: unknown, requestId?: string): RequestInit {
   const init: RequestInit = { method }
   if (body !== undefined) {
-    init.headers = { 'Content-Type': 'application/json' }
+    init.headers = {
+      'Content-Type': 'application/json',
+      ...(requestId === undefined ? {} : { 'X-Engram-Request-ID': requestId }),
+    }
     init.body = JSON.stringify(body)
   }
   return init
+}
+
+function candidateStatusForAction(action: CandidateAction): CandidateActionStatus['candidateStatus'] {
+  switch (action) {
+    case 'promote': return 'promoted'
+    case 'reject': return 'rejected'
+    case 'supersede': return 'superseded'
+  }
+}
+
+function parseCandidateActionStatus(value: unknown, action: CandidateAction): CandidateActionStatus | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const candidateId = Reflect.get(value, 'candidate_id')
+  const candidateStatus = Reflect.get(value, 'candidate_status')
+  if ((typeof candidateId !== 'string' && typeof candidateId !== 'number') || candidateStatus !== candidateStatusForAction(action)) return undefined
+  return { candidateId: String(candidateId), candidateStatus }
+}
+
+function candidateActionCurrentStateParser(action: CandidateAction) {
+  return (value: unknown): CandidateActionCurrentState | undefined => {
+    if (!Array.isArray(value)) return parseCandidateActionStatus(value, action)
+    if (!value.length) return undefined
+    const statuses: CandidateActionStatus[] = []
+    for (const entry of value) {
+      const status = parseCandidateActionStatus(entry, action)
+      if (status === undefined) return undefined
+      statuses.push(status)
+    }
+    return statuses
+  }
+}
+
+function operationSelectionPayload(selection: OperatorSelection): Record<string, unknown> {
+  if (selection.version < 1) throw new TypeError('the selected Queue snapshot has no server version')
+  switch (selection.kind) {
+    case 'explicit':
+    case 'page':
+      return { kind: selection.kind, selection_version: selection.version }
+    case 'frozen_filter':
+      return { kind: 'frozen_filter', selection_version: selection.version, selection_token: selection.selectionToken }
+    case 'none':
+      throw new TypeError('a Queue action requires a selected candidate')
+  }
+}
+
+function parseQueueSelection(value: unknown): OperatorSelection {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new TypeError('Queue selection response is invalid')
+  }
+  return parseOperatorSelectionSnapshot(Reflect.get(value, 'selection'))
 }
 
 function replaceArray<T>(target: T[], next: readonly T[]) {
@@ -156,9 +222,9 @@ export function useOperatorQueue(): {
   pending: ComputedRef<boolean>
   error: ComputedRef<string | null>
   refresh: () => Promise<void>
-  promoteCandidate: (id: string) => Promise<MutationResult<CandidateActionIntent>>
-  rejectCandidate: (id: string, reason?: string) => Promise<MutationResult<CandidateActionIntent>>
-  supersedeCandidate: (id: string) => Promise<MutationResult<CandidateActionIntent>>
+  promoteCandidate: (id: string) => Promise<MutationResult<CandidateActionIntent, CandidateActionCurrentState>>
+  rejectCandidate: (id: string, reason?: string) => Promise<MutationResult<CandidateActionIntent, CandidateActionCurrentState>>
+  supersedeCandidate: (id: string) => Promise<MutationResult<CandidateActionIntent, CandidateActionCurrentState>>
 } {
   const evidence = endpointEvidence(`/api/memory/candidates?project={project}&status=${QUEUE_STATUS}&limit=${QUEUE_LIMIT}`, 'candidate-queue', {
     flag: QUEUE_FLAG,
@@ -213,17 +279,49 @@ export function useOperatorQueue(): {
     }
   }
 
-  function actionPath(id: string, action: CandidateAction) {
-    return `/api/memory/candidates/${encodeURIComponent(id)}/${action}`
-  }
-
-  function runCandidateAction(id: string, action: CandidateAction, reason?: string) {
-    const path = actionPath(id, action)
+  async function runCandidateAction(id: string, action: CandidateAction, reason?: string): Promise<MutationResult<CandidateActionIntent, CandidateActionCurrentState>> {
+    const requestId = crypto.randomUUID()
     const intent = { id, action, ...(reason === undefined ? {} : { reason }) }
+    const request = { requestId, action: `candidate-${action}`, intent }
+    let selectionResponse: Response
+    try {
+      selectionResponse = await fetch(operatorApiUrl('/api/collections/selection'), {
+        ...jsonInit('POST', {
+          domain: 'queue',
+          selection: { kind: 'explicit', targets: [{ id }] },
+        }, requestId),
+        credentials: 'include',
+      })
+    } catch {
+      return { kind: 'network', request }
+    }
+    if (!selectionResponse.ok) {
+      return executeMutation(request, Promise.resolve(selectionResponse), candidateActionCurrentStateParser(action))
+    }
+
+    let selection: OperatorSelection
+    try {
+      selection = parseQueueSelection(await selectionResponse.json() as SelectionEnvelope)
+      if (selection.kind !== 'explicit' || selection.targets.length !== 1 || selection.targets[0].id !== id) {
+        throw new TypeError('Queue selection did not retain the requested candidate')
+      }
+    } catch {
+      return { kind: 'failed', request, httpStatus: selectionResponse.status, code: 'invalid_queue_selection_snapshot' }
+    }
+
+    const body = {
+      request_id: requestId,
+      action,
+      selection: operationSelectionPayload(selection),
+      ...(reason === undefined ? {} : { reason }),
+    }
     return executeMutation(
-      { requestId: crypto.randomUUID(), action: `candidate-${action}`, intent },
-      fetch(operatorApiUrl(path), { ...jsonInit('POST', reason === undefined ? undefined : { reason }), credentials: 'include' }),
-      () => undefined,
+      request,
+      fetch(operatorApiUrl('/api/memory/candidates/operations'), {
+        ...jsonInit('POST', body, requestId),
+        credentials: 'include',
+      }),
+      candidateActionCurrentStateParser(action),
     )
   }
 
