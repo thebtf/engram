@@ -1,17 +1,26 @@
 import type { ComputedRef } from 'vue'
 import type { OperatorLoadState } from './useOperatorApi'
+import { executeMutation, type MutationResult } from './useApi'
 import {
   emptyState,
   endpointEvidence,
   errorState,
   liveState,
   loadOperatorJson,
+  operatorApiUrl,
   operatorFetchJson,
   pendingState,
-  runOperatorMutation,
   toOperatorSourceError,
   unsupportedOperatorAction,
 } from './useOperatorApi'
+function submitMutation<TIntent>(action: string, intent: TIntent, path: string, init: RequestInit): Promise<MutationResult<TIntent>> {
+  return executeMutation(
+    { requestId: crypto.randomUUID(), action, intent },
+    fetch(operatorApiUrl(path), { ...init, credentials: 'include' }),
+    () => undefined,
+  )
+}
+
 
 export interface OperatorCredential {
   id: string
@@ -58,17 +67,6 @@ interface ApiVaultReveal {
   scope?: string
 }
 
-interface ApiVaultStoreReceipt {
-  id: number
-  name: string
-  scope: string
-  message?: string
-}
-
-interface ApiVaultOrphanReceipt {
-  status: string
-  deleted: number
-}
 
 function jsonInit(method: 'POST' | 'DELETE', body?: unknown): RequestInit {
   const init: RequestInit = { method }
@@ -146,9 +144,9 @@ export function useOperatorSecrets(): {
   error: ComputedRef<string | null>
   refresh: () => Promise<void>
   revealSecret: (cred: OperatorCredential) => Promise<string>
-  createSecret: (input: StoreSecretInput) => Promise<unknown>
-  deleteSecret: (cred: OperatorCredential) => Promise<unknown>
-  cleanupOrphans: () => Promise<unknown>
+  createSecret: (input: StoreSecretInput) => Promise<MutationResult<StoreSecretInput>>
+  deleteSecret: (cred: OperatorCredential) => Promise<MutationResult<{ credentialID: string }>>
+  cleanupOrphans: () => Promise<MutationResult<undefined>>
   rotationGap: ReturnType<typeof unsupportedOperatorAction>
 } {
   const credsEvidence = endpointEvidence('/api/vault/credentials', 'vault-credentials')
@@ -250,45 +248,21 @@ export function useOperatorSecrets(): {
   }
 
   async function createSecret(input: StoreSecretInput) {
-    return runOperatorMutation({
-      action: 'vault-store',
-      evidence: endpointEvidence('/api/vault/credentials', 'vault-store'),
-      snapshot: () => [...credsState.value],
-      run: () => operatorFetchJson<ApiVaultStoreReceipt>('/api/vault/credentials', jsonInit('POST', {
-        name: input.name,
-        value: input.value,
-        scope: input.scope,
-        project: input.project,
-      }), 'vault-store'),
-      rollback: (snapshot) => replaceArray(credsState.value, snapshot || []),
-      refresh,
-    })
+    return submitMutation('vault-store', input, '/api/vault/credentials', jsonInit('POST', {
+      name: input.name,
+      value: input.value,
+      scope: input.scope,
+      project: input.project,
+    }))
   }
 
   async function deleteSecret(cred: OperatorCredential) {
     const path = credentialUrl(cred)
-    return runOperatorMutation({
-      action: 'vault-delete',
-      evidence: endpointEvidence(path, 'vault-delete'),
-      snapshot: () => [...credsState.value],
-      optimistic: () => {
-        replaceArray(credsState.value, credsState.value.filter((row) => row.id !== cred.id))
-      },
-      run: () => operatorFetchJson(path, jsonInit('DELETE'), 'vault-delete'),
-      rollback: (snapshot) => replaceArray(credsState.value, snapshot || []),
-      refresh,
-    })
+    return submitMutation('vault-delete', { credentialID: cred.id }, path, jsonInit('DELETE'))
   }
 
   async function cleanupOrphans() {
-    return runOperatorMutation({
-      action: 'vault-orphan-cleanup',
-      evidence: endpointEvidence('/api/vault/orphaned-credentials', 'vault-orphan-cleanup'),
-      snapshot: () => [...credsState.value],
-      run: () => operatorFetchJson<ApiVaultOrphanReceipt>('/api/vault/orphaned-credentials', jsonInit('DELETE'), 'vault-orphan-cleanup'),
-      rollback: (snapshot) => replaceArray(credsState.value, snapshot || []),
-      refresh,
-    })
+    return submitMutation('vault-orphan-cleanup', undefined, '/api/vault/orphaned-credentials', jsonInit('DELETE'))
   }
 
   const rotationGap = unsupportedOperatorAction(

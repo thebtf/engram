@@ -1,14 +1,15 @@
 import type { ComputedRef } from 'vue'
 import type { OperatorLoadState } from './useOperatorApi'
+import { executeMutation, type MutationItemOutcome, type MutationResult } from './useApi'
 import {
   emptyState,
   endpointEvidence,
   errorState,
   liveState,
   loadOperatorJson,
+  operatorApiUrl,
   operatorFetchJson,
   pendingState,
-  runOperatorMutation,
   toOperatorSourceError,
   unsupportedOperatorAction,
   type OperatorUnsupportedAction,
@@ -106,14 +107,37 @@ interface ApiIssueDetail {
   target_project_display_name?: string
 }
 
-interface ApiIssueCreateReceipt {
-  id: number
-  message?: string
+function submitMutation<TIntent>(action: string, intent: TIntent, path: string, init: RequestInit): Promise<MutationResult<TIntent>> {
+  return executeMutation(
+    { requestId: crypto.randomUUID(), action, intent },
+    fetch(operatorApiUrl(path), { ...init, credentials: 'include' }),
+    () => undefined,
+  )
 }
 
-interface ApiIssueAcknowledgeReceipt {
-  acknowledged: number
+function itemOutcome(result: MutationResult<unknown>): MutationItemOutcome {
+  switch (result.kind) {
+    case 'committed_verified':
+      return 'committed'
+    case 'denied':
+      return 'denied'
+    case 'conflict':
+      return 'conflict'
+    case 'validation_error':
+      return 'validation_error'
+    case 'committed_verification_pending':
+    case 'partial':
+      return 'outcome_unknown'
+    case 'stale':
+    case 'unsupported':
+    case 'offline':
+    case 'timeout':
+    case 'network':
+    case 'failed':
+      return 'failed'
+  }
 }
+
 
 interface ApiTrackedProjects {
   projects?: string[]
@@ -266,14 +290,14 @@ export function useOperatorIssues(): {
   routeChangeAction: OperatorUnsupportedAction
   refresh: () => Promise<void>
   openIssue: (id: number) => Promise<void>
-  createIssue: (input: IssueCreateInput) => Promise<unknown>
-  updateIssue: (id: number, input: IssueUpdateInput) => Promise<unknown>
-  commentIssue: (id: number, body: string) => Promise<unknown>
-  rejectIssue: (id: number, comment: string) => Promise<unknown>
-  acknowledgeIssue: (id: number) => Promise<unknown>
-  bulkAcknowledgeIssues: (ids: number[]) => Promise<unknown>
-  bulkUpdateIssues: (ids: number[], input: IssueUpdateInput) => Promise<unknown>
-  deleteIssue: (id: number) => Promise<unknown>
+  createIssue: (input: IssueCreateInput) => Promise<MutationResult<IssueCreateInput>>
+  updateIssue: (id: number, input: IssueUpdateInput) => Promise<MutationResult<{ id: number; input: IssueUpdateInput }>>
+  commentIssue: (id: number, body: string) => Promise<MutationResult<{ id: number; input: IssueUpdateInput }>>
+  rejectIssue: (id: number, comment: string) => Promise<MutationResult<{ id: number; input: IssueUpdateInput }>>
+  acknowledgeIssue: (id: number) => Promise<MutationResult<{ id: number }>>
+  bulkAcknowledgeIssues: (ids: number[]) => Promise<MutationResult<{ ids: number[] }>>
+  bulkUpdateIssues: (ids: number[], input: IssueUpdateInput) => Promise<MutationResult<{ ids: number[]; input: IssueUpdateInput }>>
+  deleteIssue: (id: number) => Promise<MutationResult<{ id: number }>>
 } {
   const listEvidence = endpointEvidence('/api/issues?limit=100', 'issues-list')
   const detailEvidence = endpointEvidence('/api/issues/{id}', 'issues-detail')
@@ -356,10 +380,10 @@ export function useOperatorIssues(): {
       replaceRecord(projectNamesState.value, detailProjectNames)
       const next = payload.issue
         ? mapIssue({
-            ...payload.issue,
-            source_project_display_name: payload.source_project_display_name,
-            target_project_display_name: payload.target_project_display_name,
-          }, payload.comment_count ?? payload.comments?.length, projectNamesState.value)
+          ...payload.issue,
+          source_project_display_name: payload.source_project_display_name,
+          target_project_display_name: payload.target_project_display_name,
+        }, payload.comment_count ?? payload.comments?.length, projectNamesState.value)
         : null
       detailStateValue.value = next
       replaceArray(commentsState.value, (payload.comments || []).map((row) => mapComment(row)))
@@ -381,71 +405,30 @@ export function useOperatorIssues(): {
   }
 
   async function createIssue(input: IssueCreateInput) {
-    return runOperatorMutation({
-      action: 'issue-create',
-      evidence: endpointEvidence('/api/issues', 'issues-create'),
-      snapshot: () => [...rowsState.value],
-      run: () => operatorFetchJson<ApiIssueCreateReceipt>('/api/issues', jsonInit('POST', {
-        title: input.title,
-        body: input.body || '',
-        priority: input.priority,
-        type: input.type,
-        source_project: input.sourceProject || 'operator-console',
-        target_project: input.targetProject,
-        source_agent: 'operator-console',
-        labels: input.labels || [],
-      }), 'issues-create'),
-      rollback: (snapshot) => replaceArray(rowsState.value, snapshot || []),
-      refresh,
-    })
+    return submitMutation('issue-create', input, '/api/issues', jsonInit('POST', {
+      title: input.title,
+      body: input.body || '',
+      priority: input.priority,
+      type: input.type,
+      source_project: input.sourceProject || 'operator-console',
+      target_project: input.targetProject,
+      source_agent: 'operator-console',
+      labels: input.labels || [],
+    }))
   }
 
   async function updateIssue(id: number, input: IssueUpdateInput) {
-    return runOperatorMutation({
-      action: 'issue-update',
-      evidence: endpointEvidence(`/api/issues/${id}`, 'issues-update'),
-      snapshot: () => ({
-        rows: [...rowsState.value],
-        detail: detailStateValue.value ? { ...detailStateValue.value } : null,
-        comments: [...commentsState.value],
-      }),
-      optimistic: () => {
-        const patch = {
-          ...(input.title !== undefined ? { title: input.title } : {}),
-          ...(input.body !== undefined ? { body: input.body } : {}),
-          ...(input.priority !== undefined ? { priority: input.priority } : {}),
-          ...(input.type !== undefined ? { type: input.type } : {}),
-          ...(input.status !== undefined ? { status: input.status } : {}),
-          ...(input.labels !== undefined ? { labels: input.labels } : {}),
-        }
-        replaceArray(rowsState.value, rowsState.value.map((row) => row.id === id ? { ...row, ...patch } : row))
-        if (detailStateValue.value?.id === id) {
-          detailStateValue.value = { ...detailStateValue.value, ...patch }
-        }
-      },
-      run: () => operatorFetchJson(`/api/issues/${id}`, jsonInit('PATCH', {
-        ...(input.title !== undefined ? { title: input.title } : {}),
-        ...(input.body !== undefined ? { body: input.body } : {}),
-        ...(input.priority !== undefined ? { priority: input.priority } : {}),
-        ...(input.type !== undefined ? { type: input.type } : {}),
-        ...(input.status !== undefined ? { status: input.status } : {}),
-        ...(input.comment !== undefined ? { comment: input.comment } : {}),
-        ...(input.labels !== undefined ? { labels: input.labels } : {}),
-        source_project: 'dashboard',
-        source_agent: 'operator-console',
-      }), 'issues-update'),
-      rollback: (snapshot) => {
-        replaceArray(rowsState.value, snapshot?.rows || [])
-        detailStateValue.value = snapshot?.detail || null
-        replaceArray(commentsState.value, snapshot?.comments || [])
-      },
-      refresh: async () => {
-        await refresh()
-        if (detailStateValue.value?.id === id) {
-          await openIssue(id)
-        }
-      },
-    })
+    return submitMutation('issue-update', { id, input }, `/api/issues/${id}`, jsonInit('PATCH', {
+      ...(input.title !== undefined ? { title: input.title } : {}),
+      ...(input.body !== undefined ? { body: input.body } : {}),
+      ...(input.priority !== undefined ? { priority: input.priority } : {}),
+      ...(input.type !== undefined ? { type: input.type } : {}),
+      ...(input.status !== undefined ? { status: input.status } : {}),
+      ...(input.comment !== undefined ? { comment: input.comment } : {}),
+      ...(input.labels !== undefined ? { labels: input.labels } : {}),
+      source_project: 'dashboard',
+      source_agent: 'operator-console',
+    }))
   }
 
   async function commentIssue(id: number, body: string) {
@@ -457,89 +440,40 @@ export function useOperatorIssues(): {
   }
 
   async function acknowledgeIssue(id: number) {
-    return runOperatorMutation({
-      action: 'issue-acknowledge',
-      evidence: endpointEvidence('/api/issues/acknowledge', 'issues-acknowledge'),
-      snapshot: () => [...rowsState.value],
-      optimistic: () => {
-        replaceArray(rowsState.value, rowsState.value.map((row) => row.id === id ? { ...row, status: 'acknowledged' } : row))
-      },
-      run: () => operatorFetchJson<ApiIssueAcknowledgeReceipt>('/api/issues/acknowledge', jsonInit('POST', { ids: [id] }), 'issues-acknowledge'),
-      rollback: (snapshot) => replaceArray(rowsState.value, snapshot || []),
-      refresh,
-    })
+    return submitMutation('issue-acknowledge', { id }, '/api/issues/acknowledge', jsonInit('POST', { ids: [id] }))
   }
 
   async function bulkAcknowledgeIssues(ids: number[]) {
-    return runOperatorMutation({
-      action: 'issues-bulk-acknowledge',
-      evidence: endpointEvidence('/api/issues/acknowledge', 'issues-bulk-acknowledge'),
-      snapshot: () => [...rowsState.value],
-      optimistic: () => {
-        const set = new Set(ids)
-        replaceArray(rowsState.value, rowsState.value.map((row) => set.has(row.id) ? { ...row, status: 'acknowledged' } : row))
-      },
-      run: () => operatorFetchJson<ApiIssueAcknowledgeReceipt>('/api/issues/acknowledge', jsonInit('POST', { ids }), 'issues-bulk-acknowledge'),
-      rollback: (snapshot) => replaceArray(rowsState.value, snapshot || []),
-      refresh,
-    })
+    return submitMutation('issues-bulk-acknowledge', { ids }, '/api/issues/acknowledge', jsonInit('POST', { ids }))
   }
 
-  async function bulkUpdateIssues(ids: number[], input: IssueUpdateInput) {
-    return runOperatorMutation({
-      action: 'issues-bulk-update',
-      evidence: endpointEvidence('/api/issues/{id}', 'issues-bulk-update'),
-      snapshot: () => [...rowsState.value],
-      optimistic: () => {
-        const set = new Set(ids)
-        replaceArray(rowsState.value, rowsState.value.map((row) => set.has(row.id)
-          ? {
-              ...row,
-              ...(input.priority !== undefined ? { priority: input.priority } : {}),
-              ...(input.type !== undefined ? { type: input.type } : {}),
-              ...(input.status !== undefined ? { status: input.status } : {}),
-              ...(input.labels !== undefined ? { labels: input.labels } : {}),
-            }
-          : row))
-      },
-      run: async () => Promise.all(ids.map((id) => operatorFetchJson(`/api/issues/${id}`, jsonInit('PATCH', {
-        ...(input.priority !== undefined ? { priority: input.priority } : {}),
-        ...(input.type !== undefined ? { type: input.type } : {}),
-        ...(input.status !== undefined ? { status: input.status } : {}),
-        ...(input.comment !== undefined ? { comment: input.comment } : {}),
-        ...(input.labels !== undefined ? { labels: input.labels } : {}),
-        source_project: 'dashboard',
-        source_agent: 'operator-console',
-      }), 'issues-bulk-update'))),
-      rollback: (snapshot) => replaceArray(rowsState.value, snapshot || []),
-      refresh,
-    })
+  async function bulkUpdateIssues(ids: number[], input: IssueUpdateInput): Promise<MutationResult<{ ids: number[]; input: IssueUpdateInput }>> {
+    const intent = { ids, input }
+    const request = { requestId: crypto.randomUUID(), action: 'issues-bulk-update', intent }
+    const items = await Promise.all(ids.map(async (id) => {
+      const result = await executeMutation(
+        { requestId: crypto.randomUUID(), action: 'issue-update', intent: { id, input } },
+        fetch(operatorApiUrl(`/api/issues/${id}`), {
+          ...jsonInit('PATCH', {
+            ...(input.priority !== undefined ? { priority: input.priority } : {}),
+            ...(input.type !== undefined ? { type: input.type } : {}),
+            ...(input.status !== undefined ? { status: input.status } : {}),
+            ...(input.comment !== undefined ? { comment: input.comment } : {}),
+            ...(input.labels !== undefined ? { labels: input.labels } : {}),
+            source_project: 'dashboard',
+            source_agent: 'operator-console',
+          }),
+          credentials: 'include',
+        }),
+        () => undefined,
+      )
+      return { targetId: id, outcome: itemOutcome(result) }
+    }))
+    return { kind: 'partial', request, httpStatus: 207, items }
   }
 
   async function deleteIssue(id: number) {
-    return runOperatorMutation({
-      action: 'issue-delete',
-      evidence: endpointEvidence(`/api/issues/${id}`, 'issues-delete'),
-      snapshot: () => ({
-        rows: [...rowsState.value],
-        detail: detailStateValue.value ? { ...detailStateValue.value } : null,
-        comments: [...commentsState.value],
-      }),
-      optimistic: () => {
-        replaceArray(rowsState.value, rowsState.value.filter((row) => row.id !== id))
-        if (detailStateValue.value?.id === id) {
-          detailStateValue.value = null
-          replaceArray(commentsState.value, [])
-        }
-      },
-      run: () => operatorFetchJson(`/api/issues/${id}`, jsonInit('DELETE'), 'issues-delete'),
-      rollback: (snapshot) => {
-        replaceArray(rowsState.value, snapshot?.rows || [])
-        detailStateValue.value = snapshot?.detail || null
-        replaceArray(commentsState.value, snapshot?.comments || [])
-      },
-      refresh,
-    })
+    return submitMutation('issue-delete', { id }, `/api/issues/${id}`, jsonInit('DELETE'))
   }
 
   startOnce('issues-page', refresh)

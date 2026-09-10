@@ -1,18 +1,19 @@
 import { computed, type ComputedRef } from 'vue'
+import { executeMutation, type MutationResult } from './useApi'
 import {
   endpointEvidence,
   errorState,
   liveState,
+  operatorApiUrl,
   operatorFetchJson,
   pendingState,
-  runOperatorMutation,
   toOperatorSourceError,
   type OperatorLoadState,
-  type OperatorMutationResult,
   type OperatorSourceError,
 } from './useOperatorApi'
 
 const KEYCARDS_ENDPOINT = '/api/auth/tokens'
+
 
 export type OperatorKeycardScope = 'read-write' | 'read-only'
 export type OperatorKeycardPrincipalKind = 'human' | 'agent' | 'service'
@@ -41,22 +42,14 @@ export interface OperatorKeycardCreateInput {
   expiresAt: string | null
 }
 
-export interface OperatorKeycardIssue {
-  keycard: OperatorKeycard
-  token: string
-}
-
-interface OperatorKeycardRevocation {
-  revoked: true
-}
 
 export interface OperatorKeycardsComposable {
   keycards: OperatorKeycard[]
   loadState: ComputedRef<OperatorLoadState<OperatorKeycard[]>>
   error: ComputedRef<OperatorSourceError | null>
   refresh: () => Promise<void>
-  createKeycard: (input: OperatorKeycardCreateInput) => Promise<OperatorMutationResult<OperatorKeycardIssue>>
-  revokeKeycard: (keycardID: string) => Promise<OperatorMutationResult<OperatorKeycardRevocation>>
+  createKeycard: (input: OperatorKeycardCreateInput) => Promise<MutationResult<OperatorKeycardCreateInput>>
+  revokeKeycard: (keycardID: string) => Promise<MutationResult<{ keycardID: string }>>
 }
 
 function parseKeycard(value: unknown): OperatorKeycard {
@@ -120,36 +113,6 @@ function parseKeycardList(value: unknown): OperatorKeycard[] {
   return value.tokens.map(parseKeycard)
 }
 
-function parseKeycardIssue(value: unknown): OperatorKeycardIssue {
-  if (
-    value === null ||
-    typeof value !== 'object' ||
-    Array.isArray(value) ||
-    !('token' in value) ||
-    typeof value.token !== 'string' ||
-    value.token.length === 0
-  ) {
-    throw new Error('Invalid keycard issuance response')
-  }
-
-  return {
-    keycard: parseKeycard(value),
-    token: value.token,
-  }
-}
-
-function parseKeycardRevocation(value: unknown): OperatorKeycardRevocation {
-  if (
-    value === null ||
-    typeof value !== 'object' ||
-    Array.isArray(value) ||
-    !('revoked' in value) ||
-    value.revoked !== true
-  ) {
-    throw new Error('Invalid keycard revocation response')
-  }
-  return { revoked: true }
-}
 
 function keycardCreateInit(input: OperatorKeycardCreateInput): RequestInit {
   const body: Record<string, string> = {
@@ -209,30 +172,20 @@ export function useOperatorKeycards(): OperatorKeycardsComposable {
   }
 
   function createKeycard(input: OperatorKeycardCreateInput) {
-    return runOperatorMutation<OperatorKeycardIssue>({
-      action: 'access-create-keycard',
-      evidence: endpointEvidence(KEYCARDS_ENDPOINT, 'access-create-keycard'),
-      run: async () => parseKeycardIssue(await operatorFetchJson<unknown>(
-        KEYCARDS_ENDPOINT,
-        keycardCreateInit(input),
-        'access-create-keycard',
-      )),
-      refresh,
-    })
+    return executeMutation(
+      { requestId: crypto.randomUUID(), action: 'access-create-keycard', intent: input },
+      fetch(operatorApiUrl(KEYCARDS_ENDPOINT), { ...keycardCreateInit(input), credentials: 'include' }),
+      () => undefined,
+    )
   }
 
   function revokeKeycard(keycardID: string) {
     const path = `${KEYCARDS_ENDPOINT}/${encodeURIComponent(keycardID)}`
-    return runOperatorMutation<OperatorKeycardRevocation>({
-      action: 'access-revoke-keycard',
-      evidence: endpointEvidence(path, 'access-revoke-keycard'),
-      run: async () => parseKeycardRevocation(await operatorFetchJson<unknown>(
-        path,
-        { method: 'DELETE' },
-        'access-revoke-keycard',
-      )),
-      refresh,
-    })
+    return executeMutation(
+      { requestId: crypto.randomUUID(), action: 'access-revoke-keycard', intent: { keycardID } },
+      fetch(operatorApiUrl(path), { method: 'DELETE', credentials: 'include' }),
+      () => undefined,
+    )
   }
 
   if (import.meta.client && !started.value) {

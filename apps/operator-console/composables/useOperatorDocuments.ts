@@ -1,19 +1,21 @@
 import type { ComputedRef, Ref } from 'vue'
-import type { OperatorLoadState, OperatorMutationResult } from './useOperatorApi'
+import type { OperatorLoadState } from './useOperatorApi'
+import { executeMutation, type MutationResult } from './useApi'
 import {
   emptyState,
   endpointEvidence,
   errorState,
   liveState,
   OperatorFetchError,
+  operatorApiUrl,
   operatorFetchJson,
   pendingState,
-  runOperatorMutation,
   toOperatorSourceError,
 } from './useOperatorApi'
 
 const DEFAULT_DOCUMENT_PROJECT = 'engram'
 const DOCUMENT_LIST_LIMIT = 100
+
 
 type ApiProjectList = string[]
 
@@ -81,11 +83,6 @@ interface ApiDocumentCommentsResponse {
   document_id?: number | string
 }
 
-interface ApiDocumentCommentReceipt {
-  comment_id?: number | string
-  document_id?: number | string
-  author?: string
-}
 
 export interface OperatorDocumentSummary {
   id: string
@@ -321,7 +318,7 @@ export function useOperatorDocuments(): {
   openDocument: (doc: OperatorDocumentSummary) => Promise<void>
   selectPrimaryVersion: (version: number) => Promise<void>
   selectSecondaryVersion: (version: number) => Promise<void>
-  addComment: (input: DocumentCommentInput) => Promise<OperatorMutationResult<ApiDocumentCommentReceipt>>
+  addComment: (input: DocumentCommentInput) => Promise<MutationResult<DocumentCommentInput>>
 } {
   const listEvidence = endpointEvidence(`/api/documents?project={project}&limit=${DOCUMENT_LIST_LIMIT}`, 'documents-list')
   const historyEvidence = endpointEvidence('/api/documents/history?path={path}&project={project}', 'documents-history')
@@ -615,22 +612,20 @@ export function useOperatorDocuments(): {
       throw new Error('No current document version selected for comments')
     }
 
-    return runOperatorMutation<ApiDocumentCommentReceipt>({
-      action: 'document-comment',
-      evidence: endpointEvidence('/api/documents/comment', 'documents-comment'),
-      snapshot: () => [...comments.value],
-      run: () => operatorFetchJson<ApiDocumentCommentReceipt>('/api/documents/comment', jsonInit('POST', {
-        document_id: Number(currentVersionEntry.id),
-        author: input.author || 'operator-console',
-        content: input.content,
-        line_start: input.lineStart,
-        line_end: input.lineEnd,
-      }), 'documents-comment'),
-      rollback: (snapshot) => {
-        replaceArray(comments.value, snapshot || [])
-      },
-      refresh: () => refreshCommentsForVersion(currentVersionEntry.version),
-    })
+    return executeMutation(
+      { requestId: crypto.randomUUID(), action: 'document-comment', intent: input },
+      fetch(operatorApiUrl('/api/documents/comment'), {
+        ...jsonInit('POST', {
+          document_id: Number(currentVersionEntry.id),
+          author: input.author || 'operator-console',
+          content: input.content,
+          line_start: input.lineStart,
+          line_end: input.lineEnd,
+        }),
+        credentials: 'include',
+      }),
+      () => undefined,
+    )
   }
 
   startOnce('documents-page', refresh)

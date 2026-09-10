@@ -1,15 +1,16 @@
 import type { ComputedRef } from 'vue'
 import type { RuleCreateInput, RuleRow, RuleUpdateInput } from './useMockData'
 import type { OperatorLoadState } from './useOperatorApi'
+import { executeMutation, type MutationItemOutcome, type MutationResult } from './useApi'
 import {
   emptyState,
   endpointEvidence,
   errorState,
   liveState,
   loadOperatorJson,
+  operatorApiUrl,
   operatorFetchJson,
   pendingState,
-  runOperatorMutation,
   unsupportedOperatorAction,
 } from './useOperatorApi'
 
@@ -75,6 +76,37 @@ function sortRules(rows: RuleRow[]): RuleRow[] {
     return left.content.localeCompare(right.content)
   })
 }
+function submitMutation<TIntent>(action: string, intent: TIntent, path: string, init: RequestInit): Promise<MutationResult<TIntent>> {
+  return executeMutation(
+    { requestId: crypto.randomUUID(), action, intent },
+    fetch(operatorApiUrl(path), { ...init, credentials: 'include' }),
+    () => undefined,
+  )
+}
+
+function itemOutcome(result: MutationResult<unknown>): MutationItemOutcome {
+  switch (result.kind) {
+    case 'committed_verified':
+      return 'committed'
+    case 'denied':
+      return 'denied'
+    case 'conflict':
+      return 'conflict'
+    case 'validation_error':
+      return 'validation_error'
+    case 'committed_verification_pending':
+    case 'partial':
+      return 'outcome_unknown'
+    case 'stale':
+    case 'unsupported':
+    case 'offline':
+    case 'timeout':
+    case 'network':
+    case 'failed':
+      return 'failed'
+  }
+}
+
 
 function startOnce(key: string, run: () => Promise<void>) {
   const started = useState<boolean>(`live:${key}:started`, () => false)
@@ -95,11 +127,11 @@ export function useOperatorRules(): {
   pending: ComputedRef<boolean>
   error: ComputedRef<string | null>
   refresh: () => Promise<void>
-  createRule: (input: RuleCreateInput) => Promise<unknown>
-  updateRule: (id: number, input: RuleUpdateInput) => Promise<unknown>
-  toggleRuleEnabled: (id: number, enabled: boolean) => Promise<unknown>
-  reorderRules: (orderedRows: RuleRow[]) => Promise<unknown>
-  deleteRule: (id: number) => Promise<unknown>
+  createRule: (input: RuleCreateInput) => Promise<MutationResult<RuleCreateInput>>
+  updateRule: (id: number, input: RuleUpdateInput) => Promise<MutationResult<{ id: number; input: RuleUpdateInput }>>
+  toggleRuleEnabled: (id: number, enabled: boolean) => Promise<MutationResult<{ id: number; enabled: boolean }>>
+  reorderRules: (orderedRows: RuleRow[]) => Promise<MutationResult<{ orderedRows: RuleRow[] }>>
+  deleteRule: (id: number) => Promise<MutationResult<{ id: number }>>
   scopeChangeGap: ReturnType<typeof unsupportedOperatorAction>
 } {
   const evidence = endpointEvidence('/api/rules?all=true&limit=200', 'rules-list')
@@ -154,111 +186,56 @@ export function useOperatorRules(): {
   }
 
   async function createRule(input: RuleCreateInput) {
-    return runOperatorMutation({
-      action: 'rule-create',
-      evidence: endpointEvidence('/api/rules', 'rules-create'),
-      snapshot: () => [...rowsState.value],
-      run: async () => {
-        const row = await operatorFetchJson<ApiRuleRow>('/api/rules', jsonInit('POST', {
-          content: input.content,
-          priority: input.priority ?? 0,
-          edited_by: input.editedBy || 'operator-console',
-          ...(input.project ? { project: input.project } : {}),
-        }), 'rules-create')
-        return mapRuleRow(row)
-      },
-      rollback: (snapshot) => replaceArray(rowsState.value, snapshot || []),
-      refresh,
-    })
+    return submitMutation('rule-create', input, '/api/rules', jsonInit('POST', {
+      content: input.content,
+      priority: input.priority ?? 0,
+      edited_by: input.editedBy || 'operator-console',
+      ...(input.project ? { project: input.project } : {}),
+    }))
   }
 
   async function updateRule(id: number, input: RuleUpdateInput) {
-    return runOperatorMutation({
-      action: 'rule-update',
-      evidence: endpointEvidence(`/api/rules/${id}`, 'rules-update'),
-      snapshot: () => [...rowsState.value],
-      optimistic: () => {
-        replaceArray(rowsState.value, rowsState.value.map((row) => row.id === id
-          ? {
-              ...row,
-              ...(input.content !== undefined ? { content: input.content } : {}),
-              ...(input.priority !== undefined ? { priority: input.priority } : {}),
-            }
-          : row))
-      },
-      run: async () => {
-        const row = await operatorFetchJson<ApiRuleRow>(`/api/rules/${id}`, jsonInit('PATCH', {
-          ...(input.content !== undefined ? { content: input.content } : {}),
-          ...(input.priority !== undefined ? { priority: input.priority } : {}),
-          ...(input.editedBy !== undefined ? { edited_by: input.editedBy } : { edited_by: 'operator-console' }),
-        }), 'rules-update')
-        return mapRuleRow(row)
-      },
-      rollback: (snapshot) => replaceArray(rowsState.value, snapshot || []),
-      refresh,
-    })
+    return submitMutation('rule-update', { id, input }, `/api/rules/${id}`, jsonInit('PATCH', {
+      ...(input.content !== undefined ? { content: input.content } : {}),
+      ...(input.priority !== undefined ? { priority: input.priority } : {}),
+      ...(input.editedBy !== undefined ? { edited_by: input.editedBy } : { edited_by: 'operator-console' }),
+    }))
   }
 
   async function toggleRuleEnabled(id: number, enabled: boolean) {
-    return runOperatorMutation({
-      action: 'rule-enable-toggle',
-      evidence: endpointEvidence(`/api/rules/${id}/enabled`, 'rule-enable-toggle'),
-      snapshot: () => [...rowsState.value],
-      optimistic: () => {
-        replaceArray(rowsState.value, rowsState.value.map((row) => row.id === id ? { ...row, enabled } : row))
-      },
-      run: async () => {
-        const row = await operatorFetchJson<ApiRuleRow>(`/api/rules/${id}/enabled`, jsonInit('PATCH', {
-          enabled,
-          edited_by: 'operator-console',
-        }), 'rule-enable-toggle')
-        return mapRuleRow(row)
-      },
-      rollback: (snapshot) => replaceArray(rowsState.value, snapshot || []),
-      refresh,
-    })
+    return submitMutation('rule-enable-toggle', { id, enabled }, `/api/rules/${id}/enabled`, jsonInit('PATCH', {
+      enabled,
+      edited_by: 'operator-console',
+    }))
   }
 
-  async function reorderRules(orderedRows: RuleRow[]) {
+  async function reorderRules(orderedRows: RuleRow[]): Promise<MutationResult<{ orderedRows: RuleRow[] }>> {
     const nextRows = orderedRows.map((row, index) => ({
       ...row,
       priority: (orderedRows.length - index) * 10,
     }))
     const changed = nextRows.filter((row) => rowsState.value.find((current) => current.id === row.id)?.priority !== row.priority)
-
-    return runOperatorMutation({
-      action: 'rule-reorder',
-      evidence: endpointEvidence('/api/rules/{id}', 'rules-reorder'),
-      snapshot: () => [...rowsState.value],
-      optimistic: () => {
-        const byId = new Map(nextRows.map((row) => [row.id, row]))
-        const untouched = rowsState.value.filter((row) => !byId.has(row.id))
-        replaceArray(rowsState.value, sortRules([...nextRows, ...untouched]))
-      },
-      run: async () => {
-        await Promise.all(changed.map((row) => operatorFetchJson<ApiRuleRow>(`/api/rules/${row.id}`, jsonInit('PATCH', {
-          priority: row.priority,
-          edited_by: 'operator-console',
-        }), 'rules-reorder')))
-        return nextRows
-      },
-      rollback: (snapshot) => replaceArray(rowsState.value, snapshot || []),
-      refresh,
-    })
+    const intent = { orderedRows: nextRows }
+    const request = { requestId: crypto.randomUUID(), action: 'rule-reorder', intent }
+    const items = await Promise.all(changed.map(async (row) => {
+      const result = await executeMutation(
+        { requestId: crypto.randomUUID(), action: 'rule-update', intent: { id: row.id, priority: row.priority } },
+        fetch(operatorApiUrl(`/api/rules/${row.id}`), {
+          ...jsonInit('PATCH', {
+            priority: row.priority,
+            edited_by: 'operator-console',
+          }),
+          credentials: 'include',
+        }),
+        () => undefined,
+      )
+      return { targetId: row.id, outcome: itemOutcome(result) }
+    }))
+    return { kind: 'partial', request, httpStatus: 207, items }
   }
 
   async function deleteRule(id: number) {
-    return runOperatorMutation({
-      action: 'rule-delete',
-      evidence: endpointEvidence(`/api/rules/${id}`, 'rules-delete'),
-      snapshot: () => [...rowsState.value],
-      optimistic: () => {
-        replaceArray(rowsState.value, rowsState.value.filter((row) => row.id !== id))
-      },
-      run: () => operatorFetchJson(`/api/rules/${id}`, jsonInit('DELETE'), 'rules-delete'),
-      rollback: (snapshot) => replaceArray(rowsState.value, snapshot || []),
-      refresh,
-    })
+    return submitMutation('rule-delete', { id }, `/api/rules/${id}`, jsonInit('DELETE'))
   }
 
   const scopeChangeGap = unsupportedOperatorAction(

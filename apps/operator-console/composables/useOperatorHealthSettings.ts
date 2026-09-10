@@ -1,12 +1,20 @@
 import type { ComputedRef } from 'vue'
-import type { OperatorLoadState, OperatorMutationResult } from './useOperatorApi'
+import type { OperatorLoadState } from './useOperatorApi'
+import { executeMutation, type MutationResult } from './useApi'
 import {
   endpointEvidence,
   loadOperatorJson,
-  operatorFetchJson,
+  operatorApiUrl,
   pendingState,
-  runOperatorMutation,
 } from './useOperatorApi'
+function submitMutation<TIntent>(action: string, intent: TIntent, path: string, init: RequestInit): Promise<MutationResult<TIntent>> {
+  return executeMutation(
+    { requestId: crypto.randomUUID(), action, intent },
+    fetch(operatorApiUrl(path), { ...init, credentials: 'include' }),
+    () => undefined,
+  )
+}
+
 
 interface ApiComponentHealth {
   name?: string
@@ -77,15 +85,6 @@ interface ApiConfigPatch {
   }
 }
 
-interface ApiConfigPatchReceipt {
-  success?: boolean
-  applied?: boolean
-  audit_logged?: boolean
-  changed?: string[]
-  restart_required?: boolean
-  restart_required_fields?: string[]
-  config?: ApiConfig
-}
 
 interface ApiFlagItem {
   name: string
@@ -224,9 +223,9 @@ export function useOperatorHealthSettings(): {
   pending: ComputedRef<boolean>
   error: ComputedRef<string | null>
   refresh: () => Promise<void>
-  saveConfig: (patch: ApiConfigPatch) => Promise<OperatorMutationResult<ApiConfigPatchReceipt>>
-  restartServer: () => Promise<unknown>
-  restartAfterUpdate: () => Promise<unknown>
+  saveConfig: (patch: ApiConfigPatch) => Promise<MutationResult<ApiConfigPatch>>
+  restartServer: () => Promise<MutationResult<undefined>>
+  restartAfterUpdate: () => Promise<MutationResult<undefined>>
   configSaveEvidence: ReturnType<typeof endpointEvidence>
 } {
   const selfcheckEvidence = endpointEvidence('/api/selfcheck', 'selfcheck')
@@ -355,33 +354,19 @@ export function useOperatorHealthSettings(): {
   }
 
   async function saveConfig(patch: ApiConfigPatch) {
-    return runOperatorMutation({
-      action: 'config-save',
-      evidence: configSaveEvidence,
-      run: () => operatorFetchJson<ApiConfigPatchReceipt>('/api/config', {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(patch),
-      }, 'config-save'),
-      refresh,
+    return submitMutation('config-save', patch, '/api/config', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
     })
   }
 
   async function restartServer() {
-    return runOperatorMutation({
-      action: 'server-restart',
-      evidence: endpointEvidence('/api/restart', 'restart'),
-      run: () => operatorFetchJson('/api/restart', { method: 'POST' }, 'restart'),
-    })
+    return submitMutation('server-restart', undefined, '/api/restart', { method: 'POST' })
   }
 
   async function restartAfterUpdate() {
-    return runOperatorMutation({
-      action: 'update-restart',
-      evidence: endpointEvidence('/api/update/restart', 'update-restart'),
-      run: () => operatorFetchJson('/api/update/restart', { method: 'POST' }, 'update-restart'),
-      refresh,
-    })
+    return submitMutation('update-restart', undefined, '/api/update/restart', { method: 'POST' })
   }
 
   startOnce('health-settings', refresh)

@@ -80,6 +80,20 @@ test('bare successful receipts remain pending until authoritative readback', asy
   assert.deepEqual(result.request, request)
 })
 
+test('unverified receipts retain the request without replaying or fabricating completed state', async () => {
+  let transportAttempts = 0
+  const response = new Promise<Response>((resolve) => {
+    transportAttempts += 1
+    resolve(jsonResponse(200, { id: 'rule-1' }))
+  })
+
+  const result = await executeMutation(request, response, parseRuleState)
+
+  assert.equal(transportAttempts, 1)
+  assert.equal(result.kind, 'committed_verification_pending')
+  assert.deepEqual(result.request, request)
+})
+
 test('partial mutation responses preserve each item outcome', async () => {
   const result = await parseMutationResponse(request, jsonResponse(207, {
     operation_state: 'partial',

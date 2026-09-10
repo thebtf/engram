@@ -1,20 +1,22 @@
 import type { ComputedRef, Ref } from 'vue'
-import type { OperatorLoadState, OperatorMutationResult } from './useOperatorApi'
+import type { OperatorLoadState } from './useOperatorApi'
+import { executeMutation, type MutationResult } from './useApi'
 import {
   emptyState,
   endpointEvidence,
   errorState,
   liveState,
   OperatorFetchError,
+  operatorApiUrl,
   operatorFetchJson,
   pendingState,
-  runOperatorMutation,
   toOperatorSourceError,
 } from './useOperatorApi'
 
 const BOOKS_CREATE_ENDPOINT = '/api/books'
 const DEFAULT_BOOKS_PROJECT = 'engram'
 const BOOKS_POLL_INTERVAL_MS = 3000
+
 
 interface ApiBookJobResponse {
   id?: number | string
@@ -93,7 +95,7 @@ export interface OperatorBooksComposable {
   error: ComputedRef<string | null>
   documentsHref: ComputedRef<string>
   refreshJobStatus: () => Promise<void>
-  ingestBook: (input: CreateBookJobInput) => Promise<OperatorMutationResult<OperatorBookJob>>
+  ingestBook: (input: CreateBookJobInput) => Promise<MutationResult<{ sourceRef: string; content: string; project: string; author: string }>>
 }
 export function useOperatorBooks(): OperatorBooksComposable {
   let booksPollTimer: number | null = null
@@ -197,46 +199,29 @@ export function useOperatorBooks(): OperatorBooksComposable {
     }
   }
 
-  async function ingestBook(input: CreateBookJobInput): Promise<OperatorMutationResult<OperatorBookJob>> {
-    const sourceRef = input.sourceRef.trim()
-    const content = input.content.trim()
-    const project = (input.project || DEFAULT_BOOKS_PROJECT).trim() || DEFAULT_BOOKS_PROJECT
-    const author = (input.author || 'operator-console').trim() || 'operator-console'
+  async function ingestBook(input: CreateBookJobInput): Promise<MutationResult<{ sourceRef: string; content: string; project: string; author: string }>> {
+    const intent = {
+      sourceRef: input.sourceRef.trim(),
+      content: input.content.trim(),
+      project: (input.project || DEFAULT_BOOKS_PROJECT).trim() || DEFAULT_BOOKS_PROJECT,
+      author: (input.author || 'operator-console').trim() || 'operator-console',
+    }
 
-    currentProject.value = project
     submittingValue.value = true
-    jobStateValue.value = pendingState(createEvidence, currentJob.value)
-
     try {
-      const result = await runOperatorMutation<OperatorBookJob>({
-        action: 'book-ingest',
-        evidence: createEvidence,
-        snapshot: () => currentJob.value ? { ...currentJob.value } : null,
-        run: async () => {
-          const payload = await operatorFetchJson<ApiBookJobResponse>(BOOKS_CREATE_ENDPOINT, jsonInit('POST', {
-            source_ref: sourceRef,
-            content,
-            project,
-            author,
-          }), 'books-create')
-          const job = parseBookJobPayload(payload, BOOKS_CREATE_ENDPOINT, 'books-create', 'POST')
-          currentJob.value = job
-          jobStateValue.value = liveState(statusEvidence(job.id), currentJob.value)
-          reconcilePolling()
-          return job
-        },
-        rollback: (snapshot) => {
-          currentJob.value = snapshot ? { ...snapshot } : null
-          if (currentJob.value) {
-            jobStateValue.value = liveState(statusEvidence(currentJob.value.id), currentJob.value)
-          } else {
-            jobStateValue.value = emptyState(endpointEvidence('/api/books/{id}/status', 'books-status'), null)
-          }
-          reconcilePolling()
-        },
-        refresh: refreshJobStatus,
-      })
-      return result
+      return await executeMutation(
+        { requestId: crypto.randomUUID(), action: 'book-ingest', intent },
+        fetch(operatorApiUrl(BOOKS_CREATE_ENDPOINT), {
+          ...jsonInit('POST', {
+            source_ref: intent.sourceRef,
+            content: intent.content,
+            project: intent.project,
+            author: intent.author,
+          }),
+          credentials: 'include',
+        }),
+        () => undefined,
+      )
     } finally {
       submittingValue.value = false
     }

@@ -1,6 +1,7 @@
 import type { ComputedRef, Ref } from 'vue'
 import type { Memory } from './useMockData'
-import type { OperatorLoadState, OperatorMutationResult, OperatorUnsupportedAction } from './useOperatorApi'
+import type { OperatorLoadState, OperatorUnsupportedAction } from './useOperatorApi'
+import { executeMutation, type MutationResult } from './useApi'
 import {
   emptyState,
   endpointEvidence,
@@ -10,13 +11,21 @@ import {
   loadOperatorJson,
   mustBuildState,
   OperatorFetchError,
+  operatorApiUrl,
   operatorFetchJson,
   pendingState,
-  runOperatorMutation,
   staleState,
   toOperatorSourceError,
   unsupportedOperatorAction,
 } from './useOperatorApi'
+function submitMutation<TIntent>(action: string, intent: TIntent, path: string, init: RequestInit): Promise<MutationResult<TIntent>> {
+  return executeMutation(
+    { requestId: crypto.randomUUID(), action, intent },
+    fetch(operatorApiUrl(path), { ...init, credentials: 'include' }),
+    () => undefined,
+  )
+}
+
 
 interface ApiMemory {
   id: number | string
@@ -126,12 +135,6 @@ export interface StoreMemoryInput {
   tags?: string[]
 }
 
-export interface MemoryActionReceipt {
-  status: string
-  action: 'suppress'
-  id: number
-  reason?: string
-}
 
 export interface MemoryAuditEntry {
   id: number
@@ -700,10 +703,10 @@ export function useOperatorMemoryLab(): {
   error: ComputedRef<string | null>
   refresh: () => Promise<void>
   loadMemoryByID: (id: string) => Promise<Memory>
-  storeMemory: (input: StoreMemoryInput) => Promise<OperatorMutationResult<Memory>>
-  deleteMemory: (id: string) => Promise<OperatorMutationResult<unknown>>
-  suppressMemory: (id: string, reason?: string) => Promise<OperatorMutationResult<MemoryActionReceipt>>
-  suppressMemories: (ids: string[], reason?: string) => Promise<OperatorMutationResult<MemoryActionReceipt[]>>
+  storeMemory: (input: StoreMemoryInput) => Promise<MutationResult<StoreMemoryInput>>
+  deleteMemory: (id: string) => Promise<MutationResult<{ id: string }>>
+  suppressMemory: (id: string, reason?: string) => Promise<MutationResult<{ id: string; reason: string }>>
+  suppressMemories: (ids: string[], reason?: string) => Promise<MutationResult<{ ids: string[]; reason: string }>>
   auditMemory: (id: string, limit?: number) => Promise<OperatorLoadState<MemoryAuditResponse>>
   provenanceGap: ReturnType<typeof unsupportedOperatorAction>
   actionGaps: readonly MemoryActionGap[]
@@ -749,88 +752,35 @@ export function useOperatorMemoryLab(): {
     return row
   }
   async function storeMemory(input: StoreMemoryInput) {
-    return runOperatorMutation({
-      action: 'memory-store',
-      evidence: endpointEvidence('/api/memories', 'memory-store'),
-      snapshot: () => [...rowsState.value],
-      run: async () => {
-        const row = await operatorFetchJson<ApiMemory>('/api/memories', jsonInit('POST', {
-          project: input.project,
-          content: input.content,
-          tags: input.tags || [],
-          source_agent: 'operator-console',
-        }), 'memory-store')
-        return mapMemoryRow(row)
-      },
-      rollback: (snapshot) => {
-        replaceArray(rowsState.value, snapshot || [])
-      },
-      refresh,
-    })
+    return submitMutation('memory-store', input, '/api/memories', jsonInit('POST', {
+      project: input.project,
+      content: input.content,
+      tags: input.tags || [],
+      source_agent: 'operator-console',
+    }))
   }
 
   async function deleteMemory(id: string) {
-    return runOperatorMutation({
-      action: 'memory-delete',
-      evidence: endpointEvidence(`/api/memories/${id}`, 'memory-delete'),
-      snapshot: () => [...rowsState.value],
-      optimistic: () => {
-        replaceArray(rowsState.value, rowsState.value.filter((row) => row.id !== id))
-      },
-      run: () => operatorFetchJson(`/api/memories/${id}`, jsonInit('DELETE'), 'memory-delete'),
-      rollback: (snapshot) => {
-        replaceArray(rowsState.value, snapshot || [])
-      },
-      refresh,
-    })
+    return submitMutation('memory-delete', { id }, `/api/memories/${encodeURIComponent(id)}`, jsonInit('DELETE'))
   }
 
   async function suppressMemory(id: string, reason = 'operator marked as noise') {
-    return runOperatorMutation({
-      action: 'memory-suppress',
-      evidence: endpointEvidence(`/api/memories/${id}/suppress`, 'memory-suppress'),
-      snapshot: () => [...rowsState.value],
-      optimistic: () => {
-        replaceArray(rowsState.value, rowsState.value.filter((row) => row.id !== id))
-      },
-      run: () => operatorFetchJson<MemoryActionReceipt>(`/api/memories/${id}/suppress`, jsonInit('POST', { reason }), 'memory-suppress'),
-      rollback: (snapshot) => {
-        replaceArray(rowsState.value, snapshot || [])
-      },
-      refresh,
-    })
+    return submitMutation('memory-suppress', { id, reason }, `/api/memories/${encodeURIComponent(id)}/suppress`, jsonInit('POST', { reason }))
   }
 
-  async function suppressMemories(ids: string[], reason = 'operator bulk marked as noise') {
+  async function suppressMemories(ids: string[], reason = 'operator bulk marked as noise'): Promise<MutationResult<{ ids: string[]; reason: string }>> {
     const uniqueIds = [...new Set(ids)].filter(Boolean)
-    return runOperatorMutation({
-      action: 'memory-bulk-suppress',
-      evidence: endpointEvidence('/api/memories/suppress', 'memory-bulk-suppress', {
-        reason: 'Bulk suppression validates the selected memory IDs before applying soft-delete semantics.',
-      }),
-      snapshot: () => [...rowsState.value],
-      optimistic: () => {
-        const suppressed = new Set(uniqueIds)
-        replaceArray(rowsState.value, rowsState.value.filter((row) => !suppressed.has(row.id)))
-      },
-      run: () => {
-        const numericIds = uniqueIds.map((id) => Number.parseInt(id, 10))
-        if (numericIds.some((id) => !Number.isInteger(id) || id <= 0)) {
-          throw new OperatorFetchError('Bulk suppression requires numeric memory IDs', {
-            message: 'Bulk suppression requires numeric memory IDs',
-            source: 'memory-bulk-suppress',
-            path: '/api/memories/suppress',
-            method: 'POST',
-            retryable: false,
-          })
-        }
-        return operatorFetchJson<MemoryActionReceipt[]>('/api/memories/suppress', jsonInit('POST', { ids: numericIds, reason }), 'memory-bulk-suppress')
-      },
-      rollback: (snapshot) => {
-        replaceArray(rowsState.value, snapshot || [])
-      },
-      refresh,
-    })
+    const intent = { ids: uniqueIds, reason }
+    const numericIds = uniqueIds.map((id) => Number.parseInt(id, 10))
+    if (numericIds.some((id) => !Number.isInteger(id) || id <= 0)) {
+      return {
+        kind: 'validation_error',
+        request: { requestId: crypto.randomUUID(), action: 'memory-bulk-suppress', intent },
+        code: 'invalid_memory_id',
+      }
+    }
+
+    return submitMutation('memory-bulk-suppress', intent, '/api/memories/suppress', jsonInit('POST', { ids: numericIds, reason }))
   }
 
   async function auditMemory(id: string, limit = 10) {

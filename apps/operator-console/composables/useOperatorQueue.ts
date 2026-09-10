@@ -1,5 +1,6 @@
 import type { ComputedRef, Ref } from 'vue'
-import type { OperatorLoadState, OperatorMutationResult } from './useOperatorApi'
+import type { OperatorLoadState } from './useOperatorApi'
+import { executeMutation, type MutationResult } from './useApi'
 import {
   emptyState,
   endpointEvidence,
@@ -7,9 +8,9 @@ import {
   gatedState,
   liveState,
   OperatorFetchError,
+  operatorApiUrl,
   operatorFetchJson,
   pendingState,
-  runOperatorMutation,
   toOperatorSourceError,
 } from './useOperatorApi'
 
@@ -72,12 +73,12 @@ export interface OperatorCandidate {
   privacyScope: string
 }
 
-export interface CandidateActionReceipt {
-  candidate_id: number
-  candidate_status: string
-  memory_id?: number
-  promoted_memory_id?: number
-  action: 'promote' | 'reject' | 'supersede'
+export type CandidateAction = 'promote' | 'reject' | 'supersede'
+
+export interface CandidateActionIntent {
+  id: string
+  action: CandidateAction
+  reason?: string
 }
 
 function jsonInit(method: 'POST', body?: unknown): RequestInit {
@@ -155,9 +156,9 @@ export function useOperatorQueue(): {
   pending: ComputedRef<boolean>
   error: ComputedRef<string | null>
   refresh: () => Promise<void>
-  promoteCandidate: (id: string) => Promise<OperatorMutationResult<CandidateActionReceipt>>
-  rejectCandidate: (id: string, reason?: string) => Promise<OperatorMutationResult<CandidateActionReceipt>>
-  supersedeCandidate: (id: string) => Promise<OperatorMutationResult<CandidateActionReceipt>>
+  promoteCandidate: (id: string) => Promise<MutationResult<CandidateActionIntent>>
+  rejectCandidate: (id: string, reason?: string) => Promise<MutationResult<CandidateActionIntent>>
+  supersedeCandidate: (id: string) => Promise<MutationResult<CandidateActionIntent>>
 } {
   const evidence = endpointEvidence(`/api/memory/candidates?project={project}&status=${QUEUE_STATUS}&limit=${QUEUE_LIMIT}`, 'candidate-queue', {
     flag: QUEUE_FLAG,
@@ -212,25 +213,18 @@ export function useOperatorQueue(): {
     }
   }
 
-  function actionPath(id: string, action: CandidateActionReceipt['action']) {
+  function actionPath(id: string, action: CandidateAction) {
     return `/api/memory/candidates/${encodeURIComponent(id)}/${action}`
   }
 
-  function runCandidateAction(id: string, action: CandidateActionReceipt['action'], body?: unknown) {
+  function runCandidateAction(id: string, action: CandidateAction, reason?: string) {
     const path = actionPath(id, action)
-    return runOperatorMutation<CandidateActionReceipt>({
-      action: `candidate-${action}`,
-      evidence: endpointEvidence(path, 'candidate-queue-action', { flag: QUEUE_FLAG }),
-      snapshot: () => [...rowsState.value],
-      optimistic: () => {
-        replaceArray(rowsState.value, rowsState.value.filter((row) => row.id !== id))
-      },
-      run: () => operatorFetchJson<CandidateActionReceipt>(path, jsonInit('POST', body), 'candidate-queue-action'),
-      rollback: (snapshot) => {
-        replaceArray(rowsState.value, snapshot || [])
-      },
-      refresh,
-    })
+    const intent = { id, action, ...(reason === undefined ? {} : { reason }) }
+    return executeMutation(
+      { requestId: crypto.randomUUID(), action: `candidate-${action}`, intent },
+      fetch(operatorApiUrl(path), { ...jsonInit('POST', reason === undefined ? undefined : { reason }), credentials: 'include' }),
+      () => undefined,
+    )
   }
 
   function promoteCandidate(id: string) {
@@ -238,7 +232,7 @@ export function useOperatorQueue(): {
   }
 
   function rejectCandidate(id: string, reason = 'operator rejected candidate') {
-    return runCandidateAction(id, 'reject', { reason })
+    return runCandidateAction(id, 'reject', reason)
   }
 
   function supersedeCandidate(id: string) {

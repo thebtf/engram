@@ -1,11 +1,11 @@
 import type { ComputedRef } from 'vue'
-import type { OperatorLoadState, OperatorMutationResult } from './useOperatorApi'
+import type { OperatorLoadState } from './useOperatorApi'
+import { executeMutation, type MutationResult } from './useApi'
 import {
   endpointEvidence,
   loadOperatorJson,
-  operatorFetchJson,
+  operatorApiUrl,
   pendingState,
-  runOperatorMutation,
 } from './useOperatorApi'
 
 export const DOMAIN_OWNER_KINDS = ['human', 'agent', 'service'] as const
@@ -13,6 +13,7 @@ export const DOMAIN_OWNER_MODES = ['off', 'warn', 'reject'] as const
 
 export type DomainOwnerKind = typeof DOMAIN_OWNER_KINDS[number]
 export type DomainOwnerMode = typeof DOMAIN_OWNER_MODES[number]
+
 
 interface ApiMemoryDomain {
   created_at?: string
@@ -33,10 +34,6 @@ interface ApiMemoryDomainUpsertRequest {
   mode: DomainOwnerMode
 }
 
-interface ApiMemoryDomainDeleteReceipt {
-  deleted?: boolean
-  domain?: string
-}
 
 export interface OperatorMemoryDomain {
   createdAt: string
@@ -104,8 +101,8 @@ export function useOperatorDomainRegistry(): {
   pending: ComputedRef<boolean>
   error: ComputedRef<string | null>
   refreshDomains: () => Promise<void>
-  upsertDomain: (draft: DomainRegistryDraft) => Promise<OperatorMutationResult<OperatorMemoryDomain>>
-  deleteDomain: (domain: string) => Promise<OperatorMutationResult<ApiMemoryDomainDeleteReceipt>>
+  upsertDomain: (draft: DomainRegistryDraft) => Promise<MutationResult<DomainRegistryDraft>>
+  deleteDomain: (domain: string) => Promise<MutationResult<{ domain: string }>>
   listEvidence: ReturnType<typeof endpointEvidence>
 } {
   const listEvidence = endpointEvidence('/api/memory-domains', 'memory-domain-registry')
@@ -161,27 +158,26 @@ export function useOperatorDomainRegistry(): {
     }
     const endpoint = `/api/memory-domains/${encodeURIComponent(domain)}`
 
-    return runOperatorMutation({
-      action: 'memory-domain-upsert',
-      evidence: endpointEvidence(endpoint, 'memory-domain-upsert'),
-      run: async () => mapDomain(await operatorFetchJson<ApiMemoryDomain>(endpoint, {
+    return executeMutation(
+      { requestId: crypto.randomUUID(), action: 'memory-domain-upsert', intent: draft },
+      fetch(operatorApiUrl(endpoint), {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
-      }, 'memory-domain-upsert')),
-      refresh: refreshDomains,
-    })
+        credentials: 'include',
+      }),
+      () => undefined,
+    )
   }
 
   async function deleteDomain(domain: string) {
     const normalizedDomain = assertDomain(domain)
     const endpoint = `/api/memory-domains/${encodeURIComponent(normalizedDomain)}`
-    return runOperatorMutation({
-      action: 'memory-domain-delete',
-      evidence: endpointEvidence(endpoint, 'memory-domain-delete'),
-      run: () => operatorFetchJson<ApiMemoryDomainDeleteReceipt>(endpoint, { method: 'DELETE' }, 'memory-domain-delete'),
-      refresh: refreshDomains,
-    })
+    return executeMutation(
+      { requestId: crypto.randomUUID(), action: 'memory-domain-delete', intent: { domain: normalizedDomain } },
+      fetch(operatorApiUrl(endpoint), { method: 'DELETE', credentials: 'include' }),
+      () => undefined,
+    )
   }
 
   startOnce('domain-registry', refreshDomains)
