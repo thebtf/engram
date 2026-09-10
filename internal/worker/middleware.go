@@ -466,7 +466,7 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 			if authCookie, err := r.Cookie("engram_auth"); err == nil && authCookie.Value != "" {
 				if sess, err := authSessStore.GetSession(authCookie.Value); err == nil {
 					if user, err := uStore.GetUserByID(sess.UserID); err == nil && !user.Disabled {
-						id := authpkg.Session(user.Role)
+						id := authpkg.SessionForBrowserUser(user.Role, user.ID)
 						next.ServeHTTP(w, r.WithContext(buildAuthCtx(r.Context(), id)))
 						return
 					}
@@ -489,7 +489,7 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 					}
 				}
 				if err == nil && user != nil && !user.Disabled {
-					id := authpkg.Session(user.Role)
+					id := authpkg.SessionForBrowserUser(user.Role, user.ID)
 					next.ServeHTTP(w, r.WithContext(buildAuthCtx(r.Context(), id)))
 					return
 				}
