@@ -120,6 +120,11 @@ func TestUCI1Scenarios(t *testing.T) {
 	}
 
 	request := uciInstalledAcceptanceConfiguredRequest(t)
+	request.EmbeddingProvider = &uciInstalledAcceptanceEmbeddingProvider{
+		URL:   strings.TrimSpace(os.Getenv("ENGRAM_EMBEDDING_URL")),
+		Model: strings.TrimSpace(os.Getenv("ENGRAM_EMBEDDING_MODEL")),
+		Key:   strings.TrimSpace(os.Getenv("ENGRAM_EMBEDDING_API_KEY")),
+	}
 	request.ScenarioProbe = uciRunUCI1InstalledScenarioProbes
 	request.OperationTimeout = uci1ScenarioOperationTimeout
 	scenarios, err := uci1LoadScenarioPlan(filepath.Join(request.CandidateSourceRoot, "specs", "010-unified-code-intelligence", "acceptance", "scenarios.json"))

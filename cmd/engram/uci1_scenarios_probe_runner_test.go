@@ -23,6 +23,7 @@ func uci1RunInstalledScenarioProbes(ctx context.Context, runtime uciInstalledAcc
 	return uci1RunInstalledScenarioProbeSequence(ctx, runtime, []uci1InstalledScenarioProbeDefinition{
 		{name: "publication", run: uci1ProbePublicationFaults},
 		{name: "search", run: uci1ProbeSearchInstalled},
+		{name: "semantic-ru", run: uci1ProbeSemanticRUInstalled},
 		{name: "graph", run: uci1ProbeGraphInstalled},
 		{name: "security", run: uci1ProbeSecurityInstalled},
 		{name: "completion", run: uci1ProbeCompletionInstalled},
