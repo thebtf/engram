@@ -6,7 +6,7 @@
 
 - PostgreSQL is authoritative for explicit browser grants, server-issued tab bindings, frozen all-filter selection tokens, collection operation status where a domain needs durable inquiry, and index intents.
 - UCI remains authoritative for Source, Checkout, immutable View, query/graph/source facts, exposure evidence, and View publication.
-- Browser `sessionStorage` retains only a tab resume pair; it is not an ACL, a grant, a View authority, or a cross-tab/MCP default. The server-issued `tab_binding_id` is the only browser selection key.
+- Browser `sessionStorage` retains only the tab resume pair; the current document proof remains in document memory and the one-time reload token is server-issued in an HttpOnly cookie. None is an ACL, a grant, a View authority, or a cross-tab/MCP default. The server-issued `tab_binding_id` is the only browser selection key.
 - Domain entities retain their existing owners: Rules, Issues, Memory, Queue candidates, and Documents do not become rows in a universal collection table.
 
 ## Entities
@@ -15,10 +15,10 @@
 |---|---|---|---|
 | BrowserSubject | Canonical nonempty real-user reference; `auth_realm`; kind `human` | Auth/grant owner; attached to one authenticated browser session | Derived from an enabled persisted user, not role, Source label, Space, path, branch, legacy project, master key, keycard, disabled-auth identity, or tab data. Its source-owner principal must equal `ci_checkouts.owner_principal` to issue/revoke grants. |
 | BrowserReadGrant | Opaque grant ID; realm; BrowserSubject; Source; Checkout; `active|revoked|expired`; issuer principal; expiry; timestamps | `CodeGrantApplication`; references existing UCI Source and Checkout | Exact tuple only. Grant issue/revoke and `code_grant_issued|code_grant_revoked` audit append commit together; audit failure aborts transition. It grants code read, never index ownership/source registration/View publication. |
-| BrowserTabBinding | Server-issued opaque `tab_binding_id`; browser session reference; resume-nonce digest; current document-nonce digest; live-document lease; exact optional pinned `ContextRef`; expiry | Browser context owner; references BrowserSubject and UCI ContextRef | A binding is unique to one browser session. A copied resume pair while an existing document lease is live rotates only the requesting document to a fresh binding with no selected context. Hard reload resumes only after session/resume proof and ended old lease. |
+| BrowserTabBinding | Server-issued opaque `tab_binding_id`; browser session reference; resume-nonce, current document-proof, and reload-token digests; document lease state/expiry; exact optional pinned `ContextRef`; binding expiry | Browser Binding Application owner; references BrowserSubject and UCI ContextRef | The normative browser lifecycle is the single transition table in `browser-context-and-grants.md`. Every binding-bound Code request and lease operation presents the current binding ID plus document proof. Document lease expiry retains the binding/pin; only binding or session expiry destroys them. A copied/duplicate handshake rotates only the requester to a fresh unselected binding. |
 | ContextRef | Existing UCI `source_id`, `checkout_id`, `view_id`, `analysis_profile_id`, `generation`; safe display metadata only after authorization | UCI owner | Search, graph, source, cursor continuation, and released intent result use the same exact View. |
-| CodeContinuation | Opaque cursor; subject/session/`tab_binding_id` digest; ContextRef; normalized query/graph shape digest; ACL epoch; expiry | HTTP/UCI release owners | Mismatch, expiry, changed session/binding, revoked grant, or changed context returns non-disclosing refusal and reveals no stale IDs/counts/body. |
-| CodeReleaseCaller | Non-persisted typed mapper: `mcp_keycard` plus existing MCP identity/session, or `browser_subject` plus BrowserSubject/session/tab binding | UCI release owner | Browser caller is never a synthetic keycard. Opaque exposure hashes and idempotency bind kind, caller, session/binding, request, operation, and exact View. |
+| CodeContinuation | Opaque cursor; subject/session/`tab_binding_id` and document-proof digests; ContextRef; normalized query/graph shape digest; ACL epoch; expiry | HTTP/UCI release owners | Mismatch, expiry, changed session/binding/document proof, revoked grant, or changed context returns non-disclosing refusal and reveals no stale IDs/counts/body. |
+| CodeReleaseCaller | Non-persisted typed mapper: `mcp_keycard` plus existing MCP identity/session, or `browser_subject` plus BrowserSubject/session/tab binding/current document proof | UCI release owner | Browser caller is never a synthetic keycard. The document proof identifies one live document only; it does not replace separate grant/ContextRef authorization. Opaque exposure hashes and idempotency bind kind, caller, session/binding, request, operation, and exact View. |
 | OperatorMutationResult | Client discriminated outcome `committed_verified|committed_verification_pending|partial|failed|outcome_unknown`; request reference; per-item results; safe next action | Shared mutation owner; maps domain response/readback | A local snapshot is presentation state, never rollback evidence. Verified state requires the named authorized postcondition. Unknown commitment is never retried blindly. |
 | CollectionSelection | `none`, `explicit`, `page`, or `frozen_filter`; domain; typed IDs or cursor page; optional exclusions | Selection owner; consumed by one domain action | Page and all-filter are visibly distinct. Selection itself does not authorize the action. |
 | SelectionToken | Opaque token; BrowserSubject; domain; canonical filter/sort/context fingerprint; frozen authorized target IDs/revisions; count; exclusions; issued/expiry | Selection owner; PostgreSQL authoritative | Token has bounded lifetime, cannot add targets, and is invalidated/reconfirmed after relevant context/filter/permission change. Action rechecks current grant and expected version. |
@@ -35,15 +35,16 @@
 ```text
 real BrowserSubject + exact Source owner
   -> BrowserReadGrant(active, audited)
-  -> handshake(tab_binding_id, session, resume proof)
+  -> Browser Binding Application transition
   -> optional pinned ContextRef
-  -> authorized Code request
+  -> binding ID + current document proof on each request
   -> release reauthorization
 
-live copied resume pair -> TAB_BINDING_COLLISION -> new binding without ContextRef
+explicit copied pair -> TAB_BINDING_COLLISION -> fresh binding without ContextRef
+document lease expiry -> binding and pinned ContextRef retained -> valid resume may replace only document proof
+BrowserTabBinding session|binding expiry -> binding/pinned ContextRef destroyed -> explicit authorized selection required
 BrowserReadGrant(active) -> revoked|expired -> denied (no context metadata/body/count)
 BrowserTabBinding(selected) -> newer View observed -> selected + explicit transition available
-BrowserTabBinding -> session/lease expiry -> discarded -> explicit authorized selection required
 ```
 
 ### Mutation truth
@@ -76,8 +77,8 @@ A completed intent requires owner acknowledgement and authorized resulting-View 
 ## Keys, Constraints, Privacy, and Rollback
 
 - Browser grant lookup indexes realm, subject, Source, Checkout, and active state; revoked/expired grants are not read authority. The grant store validates issuer equality against the current `ci_checkouts.owner_principal` in the same transaction as audit.
-- Tab binding lookup indexes browser session plus binding ID and keeps nonce digests/leases only. A collision never overwrites an existing binding/context.
+- Tab binding lookup indexes browser session plus binding ID and retains only nonce/proof/token digests, lease state, binding expiry, and optional pinned context. The normative transition table prevents a collision or stale proof from overwriting an existing binding/context.
 - Selection/continuation/operation/intent values are opaque. Request body, source text, absolute checkout locator, credentials, raw query text, and unauthorized item IDs are excluded from durable status fields.
 - Existing UCI exposure records remain UCI-owned non-content evidence. Browser grants, bindings, selection tokens, and operation statuses neither create nor replace exposure evidence; browser release uses the typed caller mapper.
 - Rules expected-version checks use conditional update/transaction. Any mismatch makes the item conflict; reorder conflict leaves its entire declared scope unchanged.
-- Grant revocation is immediate at authorization/release. Retained resume pairs, cursors, tokens, and stale bindings cannot bypass it. Feature rollback disables browser handlers or reverses additive handlers, but never deletes UCI Views, legacy graph data, grants needed by another accepted surface, or in-flight daemon work.
+- Grant revocation is immediate at authorization/release. Retained resume pairs, replayed tokens, stale document proofs, cursors, selection tokens, and stale bindings cannot bypass it. Feature rollback disables browser handlers or reverses additive handlers, but never deletes UCI Views, legacy graph data, grants needed by another accepted surface, or in-flight daemon work.
