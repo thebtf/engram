@@ -1,0 +1,134 @@
+{
+  "schema": "engram.operator-code.s4-index-intent-acceptance/1",
+  "task": "T038",
+  "feature": "011-operator-code-console",
+  "generated_at": "2026-09-10T22:48:02Z",
+  "classification": "non-secret disposable-fixture acceptance evidence",
+  "candidate": {
+    "commit": "692fc78b37f3627dc04eed0ae4c90cdf126619c5",
+    "tree": "772a70b1304d4cbd493edd3655447428f8e9a599",
+    "branch": "ui/operator-code-console-r1",
+    "worktree": ".agent/worktrees/operator-code-console-r1",
+    "status": "clean before this receipt-only write"
+  },
+  "integrated_producers": {
+    "T033": {
+      "commit": "255f8b8b15bd561d059bd1ec235f597ed279ebc2",
+      "subject": "feat(011): add durable daemon index intents"
+    },
+    "T034": {
+      "commit": "e4a3468e82efd911b30e615ba7d77c4c9a73d318",
+      "subject": "feat(011): register index intent migration"
+    },
+    "T035": {
+      "commit": "6d71be848153fd0b98ece8094d395acab54503a2",
+      "subject": "feat(011): present daemon index intents safely"
+    },
+    "T036": {
+      "commit": "b28d09b48d8fe0f18a4dd2ec5ad586612bc7b424",
+      "subject": "feat(011): compose daemon intent routes"
+    },
+    "T037": {
+      "commit": "692fc78b37f3627dc04eed0ae4c90cdf126619c5",
+      "subject": "feat(011): show durable index intent status"
+    }
+  },
+  "consumed_outputs": [
+    {
+      "task": "T033",
+      "path": "internal/uci/index_intent_test.go",
+      "sha256": "728c0fde28aca1ec655cee945fde40afe3f5cd74131569589ce75a4ed5d06750",
+      "command": "go test ./internal/uci -run '^TestIndexIntent' -count=1 -v",
+      "result": "PASS",
+      "tests": [
+        "TestIndexIntentLifecycleTransitions",
+        "TestIndexIntentResultRequiresNewScopedView"
+      ]
+    },
+    {
+      "task": "T037",
+      "path": "apps/operator-console/tests/live/index-intent.spec.ts",
+      "sha256": "7fc8d8f57bb5e24fd7d8e215de4a842d3a6053a04f9ca0461c720628ae3b5f2c",
+      "command": "npx playwright test --config playwright.live.config.ts index-intent.spec.ts --output <repository .agent/tmp exact-candidate directory>",
+      "result": "PASS; 1 test passed",
+      "retained_output": ".agent/tmp/t038-index-intent-692fc78b/index-intent-S4-live-accep-5fb97-fixture-only-daemon-control-chromium/s4-live-index-intent.json",
+      "retained_output_sha256": "e1a9690c12338d6d12877cd1d3589670b5f997382470e4df98e48b8b70b30b35"
+    }
+  ],
+  "build_and_integration_checks": [
+    {
+      "command": "go test ./internal/uci ./internal/db/gorm ./internal/worker -run 'IndexIntent|OperatorCodeRoutes' -count=1",
+      "database": "isolated disposable PostgreSQL fixture; connection details excluded",
+      "result": "PASS for internal/uci, internal/db/gorm, and internal/worker"
+    },
+    {
+      "command": "npm run build",
+      "working_directory": "apps/operator-console",
+      "result": "PASS; Nuxt production build completed"
+    }
+  ],
+  "browser_fixture": {
+    "candidate_commit": "692fc78b37f3627dc04eed0ae4c90cdf126619c5",
+    "candidate_tree": "772a70b1304d4cbd493edd3655447428f8e9a599",
+    "backend_source_commit": "692fc78b37f3627dc04eed0ae4c90cdf126619c5",
+    "backend_binary_sha256": "34f7109b6bc96c2a8285ea61fc9ecbb550f184ae9248964371d65bac9f29fb16",
+    "browser": "Chromium 149.0.7827.55",
+    "transport": "real registered authenticated Go HTTP routes; no page-level API mock",
+    "lifecycle_control": "test-runner-only disposable PostgreSQL fixture standing in for the private daemon owner; never exposed to the browser",
+    "rendered_states": [
+      "queued",
+      "submitted",
+      "acknowledged",
+      "running",
+      "completed",
+      "unavailable",
+      "failed"
+    ],
+    "browser_http_requests": 37,
+    "browser_routes": [
+      "POST /api/code/index-intents",
+      "GET /api/code/index-intents/:intent_ref",
+      "POST /api/code/index-intents/:intent_ref/retry"
+    ]
+  },
+  "acceptance": {
+    "FR-016_durable_daemon_owned_intent": {
+      "status": "PASS",
+      "evidence": "The browser submitted an idempotent request_ref through the real handler; the durable store kept one row across response loss and reload; only the private fixture advanced daemon-owned lifecycle state."
+    },
+    "FR-017_truthful_status_and_release": {
+      "status": "PASS",
+      "evidence": "HTTP 202 remained admission only. Status rendered submitted, queued, acknowledged, running, unavailable, failed, and completed distinctly. Completed status was accepted only after a different published readable View existed and common release returned its safe result metadata."
+    },
+    "FR-018_authority_privacy_and_no_fallback": {
+      "status": "PASS",
+      "evidence": "The browser received no workstation path, credential, daemon owner, environment, private locator, raw result identifier, or filesystem capability. The old pinned View remained stable; completion announced a released candidate and did not auto-repin or read the working copy."
+    },
+    "FR-019_feature_boundary": {
+      "status": "PASS",
+      "evidence": "S4 is accepted for the integrated candidate. Together with the already retained T032 S3 acceptance, this closes the implementation prerequisite for full Feature 011; it does not itself implement Book Context, release, deploy, publish, tag, or alter Working Agent Memory R1."
+    },
+    "SC-007_online_offline_daemon_behavior": {
+      "status": "PASS",
+      "online": "Durable submission progressed through acknowledgement, claim/execution representation, a new published View, and authorized common-release status readback before completed was shown.",
+      "offline": "A separately controlled fixture remained queued or unavailable, exposed no result, and offered retry only from unavailable; HTTP acceptance and elapsed time never became completion.",
+      "separation": "Online completion required explicit daemon-owned state transitions plus published readable View release. Offline state remained nonterminal. Neither path inferred the other, and no local/disk fallback was used."
+    },
+    "SC-008_trigger_to_readback_trail": {
+      "status": "PASS",
+      "evidence": "Browser action -> real authenticated HTTP request -> registered operator-code handler -> typed UCI IndexIntent/store operation -> durable row/status -> authorized released result readback was observed. Fixture-only lifecycle SQL stayed outside browser traffic."
+    }
+  },
+  "recovery_and_rollback": {
+    "response_loss": "Reload reused the same request_ref and reconciled the existing intent; two admissions produced exactly one durable row and no duplicate execution identity.",
+    "terminal_new_work": "An explicit same-kind action after failed created a different request_ref and one new durable row rather than replaying or mutating the failed intent.",
+    "retry": "Retry was accepted only from unavailable and retained the original intent_ref.",
+    "rollback": "Stop new browser admission or revert the HTTP/UI adapter while preserving durable intents, existing Views, source data, worktrees, and private UCI recovery state. No destructive cleanup is part of rollback."
+  },
+  "prohibited_claims": [
+    "No production daemon, production database, real working-copy mutation, secret, deployment, installation, tag, push, publication, or release was used or authorized.",
+    "The fixture-controlled daemon lifecycle is acceptance evidence for the bounded S4 contract, not proof of a production daemon installation or owner availability.",
+    "This receipt does not reopen UCI technical acceptance, add a second queue or graph, authorize browser filesystem work, or implement Book Context."
+  ],
+  "verdict": "PASS"
+}
