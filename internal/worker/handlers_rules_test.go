@@ -440,6 +440,134 @@ func TestSearchFallbackObservations_UsesEnabledBehavioralRulesOnly(t *testing.T)
 	assert.False(t, byTitle[disabledRule.Content], "disabled rule must not leak into data-plane fallback observations")
 }
 
+func TestRulesCollectionBridgeRoutesFreezeAndPageOverTwoHundredRules(t *testing.T) {
+	ruleStore := openRulesCollectionBridgeStore(t)
+	store := dbgorm.NewBehavioralRulesStore(ruleStore)
+	ctx := context.Background()
+	project := "test-rules-collection-bridge-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	t.Cleanup(func() {
+		require.NoError(t, ruleStore.DB.Exec("DELETE FROM behavioral_rules WHERE project = ?", project).Error)
+	})
+
+	rules := make([]*models.BehavioralRule, 205)
+	for index := range rules {
+		created, err := store.Create(ctx, &models.BehavioralRule{
+			Project:  &project,
+			Content:  "collection bridge rule " + strconv.Itoa(index),
+			Priority: len(rules) - index,
+		})
+		require.NoError(t, err)
+		rules[index] = created
+	}
+
+	adapter, err := composeOperatorCollectionHTTPAdapter(ruleStore.DB)
+	require.NoError(t, err)
+	service := newOperatorCollectionRouteTestService(adapter)
+	identity := auth.SessionForBrowserUser("operator", 41)
+	sessionID := "rules-collection-bridge-session-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	call := func(path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("X-Engram-Request-ID", "rules-collection-bridge-request")
+		request.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: sessionID})
+		request = request.WithContext(auth.WithIdentity(request.Context(), identity))
+		recorder := httptest.NewRecorder()
+		service.router.ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	firstPage := call("/api/collections/selection/page", `{"domain":"rules","filter":{"scope":"`+project+`"},"limit":200}`)
+	require.Equal(t, http.StatusOK, firstPage.Code, firstPage.Body.String())
+	var first struct {
+		FilterFingerprint string                             `json:"filter_fingerprint"`
+		Cursor            string                             `json:"cursor"`
+		Targets           []dbgorm.CollectionSelectionTarget `json:"targets"`
+		NextCursor        string                             `json:"next_cursor"`
+		Total             *int64                             `json:"total"`
+	}
+	require.NoError(t, json.Unmarshal(firstPage.Body.Bytes(), &first))
+	require.NotEmpty(t, first.FilterFingerprint)
+	require.NotEmpty(t, first.Cursor)
+	require.NotEmpty(t, first.NextCursor)
+	require.Len(t, first.Targets, 200)
+	require.NotNil(t, first.Total)
+	require.EqualValues(t, len(rules), *first.Total)
+	require.Equal(t, dbgorm.CollectionSelectionTarget{ID: strconv.FormatInt(rules[0].ID, 10), ExpectedVersion: uint64(rules[0].Version)}, first.Targets[0])
+
+	pageSelection := call("/api/collections/selection", `{"domain":"rules","selection":{"kind":"page","cursor":"`+first.Cursor+`","targets":[{"id":"999999","expected_version":9}]}}`)
+	require.Equal(t, http.StatusOK, pageSelection.Code, pageSelection.Body.String())
+	var pageSnapshot struct {
+		Selection struct {
+			Targets []dbgorm.CollectionSelectionTarget `json:"targets"`
+			Cursor  string                             `json:"cursor"`
+		} `json:"selection"`
+	}
+	require.NoError(t, json.Unmarshal(pageSelection.Body.Bytes(), &pageSnapshot))
+	require.Equal(t, first.Cursor, pageSnapshot.Selection.Cursor)
+	require.Equal(t, first.Targets, pageSnapshot.Selection.Targets, "the bridge replaces caller targets with the server-issued page")
+
+	secondPage := call("/api/collections/selection/page", `{"domain":"rules","filter":{"scope":"`+project+`"},"cursor":"`+first.NextCursor+`","limit":200}`)
+	require.Equal(t, http.StatusOK, secondPage.Code, secondPage.Body.String())
+	var second struct {
+		Cursor     string                             `json:"cursor"`
+		Targets    []dbgorm.CollectionSelectionTarget `json:"targets"`
+		NextCursor string                             `json:"next_cursor"`
+	}
+	require.NoError(t, json.Unmarshal(secondPage.Body.Bytes(), &second))
+	require.Equal(t, first.NextCursor, second.Cursor)
+	require.Len(t, second.Targets, 5)
+	require.Empty(t, second.NextCursor)
+	require.Equal(t, dbgorm.CollectionSelectionTarget{ID: strconv.FormatInt(rules[200].ID, 10), ExpectedVersion: uint64(rules[200].Version)}, second.Targets[0])
+
+	frozenSnapshot := call("/api/collections/selection", `{"domain":"rules","selection":{"kind":"frozen_filter","filter":{"scope":"`+project+`"},"excluded_ids":["`+strconv.FormatInt(rules[0].ID, 10)+`"]}}`)
+	require.Equal(t, http.StatusOK, frozenSnapshot.Code, frozenSnapshot.Body.String())
+	var frozen struct {
+		Selection struct {
+			FilterFingerprint string                             `json:"filter_fingerprint"`
+			SelectionToken    string                             `json:"selection_token"`
+			TargetCount       int                                `json:"target_count"`
+			Targets           []dbgorm.CollectionSelectionTarget `json:"targets"`
+			ExcludedIDs       []string                           `json:"excluded_ids"`
+		} `json:"selection"`
+	}
+	require.NoError(t, json.Unmarshal(frozenSnapshot.Body.Bytes(), &frozen))
+	require.Equal(t, first.FilterFingerprint, frozen.Selection.FilterFingerprint)
+	require.NotEmpty(t, frozen.Selection.SelectionToken)
+	require.Equal(t, len(rules)-1, frozen.Selection.TargetCount)
+	require.Equal(t, []string{strconv.FormatInt(rules[0].ID, 10)}, frozen.Selection.ExcludedIDs)
+	require.Len(t, frozen.Selection.Targets, len(rules))
+	require.Equal(t, first.Targets[0], frozen.Selection.Targets[0])
+
+	forgedToken := call("/api/collections/selection", `{"domain":"rules","selection":{"kind":"frozen_filter","selection_token":"`+frozen.Selection.SelectionToken+`","filter":{"scope":"`+project+`"}}}`)
+	require.Equal(t, http.StatusBadRequest, forgedToken.Code)
+	unchanged, err := store.Get(ctx, rules[0].ID)
+	require.NoError(t, err)
+	require.Equal(t, rules[0].Version, unchanged.Version, "a selection token is not a mutation capability")
+
+	badOrder := call("/api/collections/selection/page", `{"domain":"rules","filter":{"scope":"`+project+`","order":"id DESC"},"limit":1}`)
+	require.Equal(t, http.StatusBadRequest, badOrder.Code)
+	tooLarge := call("/api/collections/selection/page", `{"domain":"rules","filter":{"scope":"`+project+`"},"limit":201}`)
+	require.Equal(t, http.StatusBadRequest, tooLarge.Code)
+	crossScope := call("/api/collections/selection/page", `{"domain":"rules","filter":{"scope":"global"},"cursor":"`+first.NextCursor+`","limit":200}`)
+	require.Equal(t, http.StatusBadRequest, crossScope.Code)
+
+	_, err = store.SetEnabled(ctx, rules[3].ID, false, nil)
+	require.NoError(t, err)
+	stale := call("/api/collections/selection/page", `{"domain":"rules","filter":{"scope":"`+project+`"},"cursor":"`+first.NextCursor+`","limit":200}`)
+	require.Equal(t, http.StatusPreconditionFailed, stale.Code, stale.Body.String())
+}
+
+func openRulesCollectionBridgeStore(t *testing.T) *dbgorm.Store {
+	t.Helper()
+	dsn := os.Getenv("DATABASE_DSN")
+	require.NotEmpty(t, dsn, "DATABASE_DSN is required for Rules PostgreSQL tests")
+	store, err := dbgorm.NewStore(dbgorm.Config{DSN: dsn, MaxConns: 2})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	return store
+}
+
 func storeDeleteRuleByProject(ctx context.Context, brs *dbgorm.BehavioralRulesStore, project string) error {
 	rows, err := brs.List(ctx, &project, 200)
 	if err != nil {

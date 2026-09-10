@@ -3,6 +3,10 @@ package gorm
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -100,7 +104,264 @@ type BehavioralRuleSelectionOperationResult struct {
 
 // NewBehavioralRulesStore creates a new BehavioralRulesStore backed by the given Store.
 func NewBehavioralRulesStore(store *Store) *BehavioralRulesStore {
-	return &BehavioralRulesStore{db: store.DB}
+	return NewBehavioralRulesStoreFromDB(store.DB)
+}
+
+// NewBehavioralRulesStoreFromDB composes read-only collection selection helpers
+// with an existing transaction owner without creating a second database handle.
+func NewBehavioralRulesStoreFromDB(db *gorm.DB) *BehavioralRulesStore {
+	return &BehavioralRulesStore{db: db}
+}
+
+const (
+	behavioralRuleCollectionAll    = "all"
+	behavioralRuleCollectionGlobal = "global"
+	behavioralRuleCollectionCursor = 1
+)
+
+type behavioralRuleCollectionFilter struct {
+	scope string
+}
+
+type behavioralRuleCollectionCursorState struct {
+	Fingerprint string `json:"f"`
+	Revision    string `json:"r"`
+	Scope       string `json:"s"`
+	Offset      int    `json:"o"`
+	Limit       int    `json:"l"`
+	Version     int    `json:"v"`
+}
+
+// NormalizeCollectionFilter converts the Rules scope named by a browser into
+// one canonical filter. The fingerprint is server-derived and fixes the only
+// supported order: priority DESC, created_at DESC, id DESC.
+func (s *BehavioralRulesStore) NormalizeCollectionFilter(_ context.Context, scope CollectionSelectionScope, rawScope string) (CollectionFilter, error) {
+	if err := validateCollectionSelectionScope(scope); err != nil || scope.Domain != "rules" {
+		return CollectionFilter{}, ErrCollectionSelectionDenied
+	}
+	filter, err := behavioralRuleCollectionFilterForScope(rawScope)
+	if err != nil {
+		return CollectionFilter{}, err
+	}
+	return filter.collectionFilter(), nil
+}
+
+// FreezeCollectionSelection resolves the entire current Rules filter into
+// immutable rule IDs and versions. It has no mutation path.
+func (s *BehavioralRulesStore) FreezeCollectionSelection(ctx context.Context, scope CollectionSelectionScope, filter CollectionFilter) (CollectionFrozenSelection, error) {
+	if err := behavioralRuleCollectionScopeValid(scope); err != nil {
+		return CollectionFrozenSelection{}, err
+	}
+	resolved, err := behavioralRuleCollectionFilterFrom(filter)
+	if err != nil {
+		return CollectionFrozenSelection{}, err
+	}
+	rows, err := s.behavioralRuleCollectionRows(ctx, resolved)
+	if err != nil {
+		return CollectionFrozenSelection{}, err
+	}
+	if len(rows) == 0 {
+		return CollectionFrozenSelection{}, ErrCollectionSelectionDenied
+	}
+	if len(rows) > CollectionSelectionMaxTargets {
+		return CollectionFrozenSelection{}, ErrCollectionSelectionInvalid
+	}
+	return CollectionFrozenSelection{
+		Targets:   behavioralRuleCollectionTargets(rows),
+		ExpiresAt: time.Now().UTC().Add(time.Hour),
+	}, nil
+}
+
+// FreezeCollectionPageSelection reconstructs the visible server-issued page.
+// Browser-supplied targets are deliberately replaced before persistence.
+func (s *BehavioralRulesStore) FreezeCollectionPageSelection(ctx context.Context, scope CollectionSelectionScope, cursor string) ([]CollectionSelectionTarget, error) {
+	if err := behavioralRuleCollectionScopeValid(scope); err != nil {
+		return nil, err
+	}
+	state, filter, err := decodeBehavioralRuleCollectionCursor(cursor)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.behavioralRuleCollectionRows(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	if state.Revision != behavioralRuleCollectionRevision(filter.collectionFilter(), rows) {
+		return nil, ErrCollectionSelectionReconfirmationRequired
+	}
+	if state.Offset < 0 || state.Offset >= len(rows) {
+		return nil, ErrCollectionSelectionInvalid
+	}
+	end := min(state.Offset+state.Limit, len(rows))
+	return behavioralRuleCollectionTargets(rows[state.Offset:end]), nil
+}
+
+// PageCollection returns a stable Rules page. The cursor binds the canonical
+// filter, fixed sort, observed membership revision, offset, and page size.
+func (s *BehavioralRulesStore) PageCollection(ctx context.Context, scope CollectionSelectionScope, request CollectionPageRequest) (CollectionPage, error) {
+	if err := behavioralRuleCollectionScopeValid(scope); err != nil {
+		return CollectionPage{}, err
+	}
+	if !request.Valid() || request.Domain != "rules" {
+		return CollectionPage{}, ErrCollectionSelectionInvalid
+	}
+	filter, err := behavioralRuleCollectionFilterFrom(request.Filter)
+	if err != nil {
+		return CollectionPage{}, err
+	}
+	rows, err := s.behavioralRuleCollectionRows(ctx, filter)
+	if err != nil {
+		return CollectionPage{}, err
+	}
+	revision := behavioralRuleCollectionRevision(request.Filter, rows)
+	offset := 0
+	cursor := request.Cursor
+	if cursor != "" {
+		state, cursorFilter, cursorErr := decodeBehavioralRuleCollectionCursor(cursor)
+		if cursorErr != nil || cursorFilter.scope != filter.scope || state.Fingerprint != request.Filter.Fingerprint || state.Limit != request.Limit {
+			return CollectionPage{}, ErrCollectionSelectionInvalid
+		}
+		if state.Revision != revision {
+			return CollectionPage{}, ErrCollectionSelectionReconfirmationRequired
+		}
+		if state.Offset < 0 || (len(rows) > 0 && state.Offset >= len(rows)) {
+			return CollectionPage{}, ErrCollectionSelectionInvalid
+		}
+		offset = state.Offset
+	} else {
+		cursor, err = encodeBehavioralRuleCollectionCursor(request.Filter, revision, offset, request.Limit)
+		if err != nil {
+			return CollectionPage{}, err
+		}
+	}
+	end := min(offset+request.Limit, len(rows))
+	var nextCursor string
+	if end < len(rows) {
+		nextCursor, err = encodeBehavioralRuleCollectionCursor(request.Filter, revision, end, request.Limit)
+		if err != nil {
+			return CollectionPage{}, err
+		}
+	}
+	total := int64(len(rows))
+	return CollectionPage{
+		Cursor:     cursor,
+		Targets:    behavioralRuleCollectionTargets(rows[offset:end]),
+		NextCursor: nextCursor,
+		Total:      &total,
+	}, nil
+}
+
+func behavioralRuleCollectionScopeValid(scope CollectionSelectionScope) error {
+	if err := validateCollectionSelectionScope(scope); err != nil || scope.Domain != "rules" {
+		return ErrCollectionSelectionDenied
+	}
+	return nil
+}
+
+func behavioralRuleCollectionFilterForScope(scope string) (behavioralRuleCollectionFilter, error) {
+	if !validCollectionSelectionText(scope, 256) {
+		return behavioralRuleCollectionFilter{}, ErrCollectionSelectionInvalid
+	}
+	return behavioralRuleCollectionFilter{scope: scope}, nil
+}
+
+func (filter behavioralRuleCollectionFilter) collectionFilter() CollectionFilter {
+	digest := sha256.Sum256([]byte("rules-collection-filter/v1\x00priority:desc\x00created_at:desc\x00id:desc\x00scope:" + filter.scope))
+	return CollectionFilter{Fingerprint: "sha256:" + hex.EncodeToString(digest[:]), Value: filter.scope}
+}
+
+func behavioralRuleCollectionFilterFrom(filter CollectionFilter) (behavioralRuleCollectionFilter, error) {
+	if !filter.Valid() {
+		return behavioralRuleCollectionFilter{}, ErrCollectionSelectionInvalid
+	}
+	resolved, err := behavioralRuleCollectionFilterForScope(filter.Value)
+	if err != nil || resolved.collectionFilter().Fingerprint != filter.Fingerprint {
+		return behavioralRuleCollectionFilter{}, ErrCollectionSelectionInvalid
+	}
+	return resolved, nil
+}
+
+func (s *BehavioralRulesStore) behavioralRuleCollectionRows(ctx context.Context, filter behavioralRuleCollectionFilter) ([]BehavioralRule, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("behavioral rules store is not configured")
+	}
+	query := s.db.WithContext(ctx).Where("deleted_at IS NULL")
+	switch filter.scope {
+	case behavioralRuleCollectionAll:
+	case behavioralRuleCollectionGlobal:
+		query = query.Where("project IS NULL")
+	default:
+		query = query.Where("project = ? OR project IS NULL", filter.scope)
+	}
+	var rows []BehavioralRule
+	if err := query.Order("priority DESC").Order("created_at DESC").Order("id DESC").Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("list behavioral rule collection: %w", err)
+	}
+	return rows, nil
+}
+
+func behavioralRuleCollectionRevision(filter CollectionFilter, rows []BehavioralRule) string {
+	hash := sha256.New()
+	hash.Write([]byte("rules-collection-revision/v1\x00" + filter.Fingerprint + "\x00"))
+	for _, row := range rows {
+		var value [32]byte
+		encoded := strconv.AppendInt(value[:0], row.ID, 10)
+		hash.Write(encoded)
+		hash.Write([]byte{0})
+		encoded = strconv.AppendInt(value[:0], int64(row.Version), 10)
+		hash.Write(encoded)
+		hash.Write([]byte{0})
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
+
+func behavioralRuleCollectionTargets(rows []BehavioralRule) []CollectionSelectionTarget {
+	targets := make([]CollectionSelectionTarget, len(rows))
+	for index, row := range rows {
+		targets[index] = CollectionSelectionTarget{ID: strconv.FormatInt(row.ID, 10), ExpectedVersion: uint64(row.Version)}
+	}
+	return targets
+}
+
+func encodeBehavioralRuleCollectionCursor(filter CollectionFilter, revision string, offset, limit int) (string, error) {
+	if !filter.Valid() || !validCollectionSelectionFingerprint(revision) || offset < 0 || limit < 1 || limit > CollectionPageMaxSize {
+		return "", ErrCollectionSelectionInvalid
+	}
+	payload, err := json.Marshal(behavioralRuleCollectionCursorState{
+		Fingerprint: filter.Fingerprint,
+		Revision:    revision,
+		Scope:       filter.Value,
+		Offset:      offset,
+		Limit:       limit,
+		Version:     behavioralRuleCollectionCursor,
+	})
+	if err != nil {
+		return "", fmt.Errorf("encode behavioral rule collection cursor: %w", err)
+	}
+	cursor := base64.RawURLEncoding.EncodeToString(payload)
+	if !validCollectionSelectionCursor(cursor) {
+		return "", ErrCollectionSelectionInvalid
+	}
+	return cursor, nil
+}
+
+func decodeBehavioralRuleCollectionCursor(cursor string) (behavioralRuleCollectionCursorState, behavioralRuleCollectionFilter, error) {
+	if !validCollectionSelectionCursor(cursor) {
+		return behavioralRuleCollectionCursorState{}, behavioralRuleCollectionFilter{}, ErrCollectionSelectionInvalid
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return behavioralRuleCollectionCursorState{}, behavioralRuleCollectionFilter{}, ErrCollectionSelectionInvalid
+	}
+	var state behavioralRuleCollectionCursorState
+	if err := json.Unmarshal(payload, &state); err != nil || state.Version != behavioralRuleCollectionCursor || state.Offset < 0 || state.Limit < 1 || state.Limit > CollectionPageMaxSize || !validCollectionSelectionFingerprint(state.Revision) {
+		return behavioralRuleCollectionCursorState{}, behavioralRuleCollectionFilter{}, ErrCollectionSelectionInvalid
+	}
+	filter, err := behavioralRuleCollectionFilterForScope(state.Scope)
+	if err != nil || filter.collectionFilter().Fingerprint != state.Fingerprint {
+		return behavioralRuleCollectionCursorState{}, behavioralRuleCollectionFilter{}, ErrCollectionSelectionInvalid
+	}
+	return state, filter, nil
 }
 
 // Create inserts a new behavioral rule. Returns a new *models.BehavioralRule populated with
@@ -185,7 +446,7 @@ func (s *BehavioralRulesStore) list(ctx context.Context, project *string, limit 
 
 	q := s.db.WithContext(ctx).
 		Where("deleted_at IS NULL").
-		Order("priority DESC, created_at DESC").
+		Order("priority DESC, created_at DESC, id DESC").
 		Limit(limit)
 
 	if project == nil {
@@ -209,7 +470,7 @@ func (s *BehavioralRulesStore) list(ctx context.Context, project *string, limit 
 }
 
 // ListAll returns all active behavioral rules across global and project scopes.
-// Results are ordered by priority DESC, created_at DESC.
+// Results are ordered by priority DESC, created_at DESC, id DESC.
 // limit must be > 0; if ≤ 0 it is clamped to 50.
 func (s *BehavioralRulesStore) ListAll(ctx context.Context, limit int) ([]*models.BehavioralRule, error) {
 	if limit <= 0 {
@@ -219,7 +480,7 @@ func (s *BehavioralRulesStore) ListAll(ctx context.Context, limit int) ([]*model
 	var rows []BehavioralRule
 	if err := s.db.WithContext(ctx).
 		Where("deleted_at IS NULL").
-		Order("priority DESC, created_at DESC").
+		Order("priority DESC, created_at DESC, id DESC").
 		Limit(limit).
 		Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("list all behavioral rules: %w", err)

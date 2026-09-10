@@ -17,22 +17,24 @@ import (
 	gormlib "gorm.io/gorm"
 )
 
-func TestComposeOperatorCollectionHTTPAdapterBuildsScopedSelectionOnly(t *testing.T) {
+func TestComposeOperatorCollectionHTTPAdapterBuildsScopedRulesBridge(t *testing.T) {
 	adapter, err := composeOperatorCollectionHTTPAdapter(&gormlib.DB{})
 
 	require.NoError(t, err)
 	require.NotNil(t, adapter)
 	require.IsType(t, &gormdb.CollectionSelectionStore{}, adapter.store)
 	require.NotNil(t, adapter.resolver)
-	require.Nil(t, adapter.freezer, "selection composition must not introduce a domain action")
-	require.Nil(t, adapter.pager, "a domain owns cursor pagination")
+	require.IsType(t, &gormdb.BehavioralRulesStore{}, adapter.normalizer)
+	require.IsType(t, &gormdb.BehavioralRulesStore{}, adapter.freezer)
+	require.IsType(t, &gormdb.BehavioralRulesStore{}, adapter.pager)
 }
 
 func TestOperatorCollectionRoutesDelegateScopedSelectionWithoutAuthority(t *testing.T) {
 	store := &operatorCollectionRouteTestStore{current: gormdb.CollectionSelection{Kind: gormdb.CollectionSelectionNone}}
 	resolver := &operatorCollectionRouteTestResolver{scope: operatorCollectionRouteTestScope("rules")}
-	pager := &operatorCollectionRouteTestPager{page: gormdb.CollectionPage{Targets: []gormdb.CollectionSelectionTarget{{ID: "rule-3", ExpectedVersion: 6}}}}
-	service := newOperatorCollectionRouteTestService(NewOperatorCollectionHTTPAdapter(store, resolver, nil, pager))
+	normalizer := &operatorCollectionRouteTestNormalizer{}
+	pager := &operatorCollectionRouteTestPager{page: gormdb.CollectionPage{Cursor: "route-page-cursor", Targets: []gormdb.CollectionSelectionTarget{{ID: "rule-3", ExpectedVersion: 6}}}}
+	service := newOperatorCollectionRouteTestService(NewOperatorCollectionHTTPAdapter(store, resolver, normalizer, nil, pager))
 	identity := auth.SessionForBrowserUser("operator", 41)
 
 	call := func(path, body string, caller auth.Identity) *httptest.ResponseRecorder {
@@ -53,12 +55,12 @@ func TestOperatorCollectionRoutesDelegateScopedSelectionWithoutAuthority(t *test
 	require.Equal(t, http.StatusOK, current.Code, current.Body.String())
 	require.Equal(t, 1, store.currentCalls)
 
-	page := call("/api/collections/selection/page", `{"domain":"rules","filter_fingerprint":"`+operatorCollectionRouteTestDigest("f")+`","limit":2}`, identity)
+	page := call("/api/collections/selection/page", `{"domain":"rules","filter":{"scope":"project"},"limit":2}`, identity)
 	require.Equal(t, http.StatusOK, page.Code, page.Body.String())
 	require.Equal(t, []gormdb.CollectionPageRequest{{
-		Domain:            "rules",
-		FilterFingerprint: operatorCollectionRouteTestDigest("f"),
-		Limit:             2,
+		Domain: "rules",
+		Filter: normalizer.filter,
+		Limit:  2,
 	}}, pager.calls)
 
 	forgedToken := call("/api/collections/selection", `{"domain":"rules","selection":{"kind":"explicit","selection_token":"4e0add48-42c9-4f4f-b5c7-f89ebf2a6ee6","targets":[{"id":"rule-2"}]}}`, identity)
@@ -126,6 +128,17 @@ type operatorCollectionRouteTestPager struct {
 func (pager *operatorCollectionRouteTestPager) PageCollection(_ context.Context, _ gormdb.CollectionSelectionScope, request gormdb.CollectionPageRequest) (gormdb.CollectionPage, error) {
 	pager.calls = append(pager.calls, request)
 	return pager.page, nil
+}
+
+type operatorCollectionRouteTestNormalizer struct {
+	filter gormdb.CollectionFilter
+}
+
+func (normalizer *operatorCollectionRouteTestNormalizer) NormalizeCollectionFilter(_ context.Context, _ gormdb.CollectionSelectionScope, scope string) (gormdb.CollectionFilter, error) {
+	if normalizer.filter.Fingerprint == "" {
+		normalizer.filter = gormdb.CollectionFilter{Fingerprint: operatorCollectionRouteTestDigest("f"), Value: scope}
+	}
+	return normalizer.filter, nil
 }
 
 func newOperatorCollectionRouteTestService(adapter *OperatorCollectionHTTPAdapter) *Service {

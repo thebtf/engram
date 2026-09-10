@@ -15,10 +15,11 @@ const operatorCollectionPageDefault = 50
 // OperatorCollectionHTTPAdapter is the shared browser-only boundary for
 // collection snapshots and bounded pages. It never dispatches a domain action.
 type OperatorCollectionHTTPAdapter struct {
-	store    operatorCollectionSelectionStore
-	resolver operatorCollectionScopeResolver
-	freezer  operatorCollectionFreezer
-	pager    operatorCollectionPager
+	store      operatorCollectionSelectionStore
+	resolver   operatorCollectionScopeResolver
+	normalizer operatorCollectionFilterNormalizer
+	freezer    operatorCollectionFreezer
+	pager      operatorCollectionPager
 }
 
 type operatorCollectionSelectionStore interface {
@@ -32,14 +33,22 @@ type operatorCollectionScopeResolver interface {
 	ResolveOperatorCollectionScope(context.Context, auth.Identity, string, string) (gormdb.CollectionSelectionScope, error)
 }
 
+// operatorCollectionFilterNormalizer canonicalizes browser filter values before
+// they can select a page or frozen snapshot. It never accepts a client digest.
+type operatorCollectionFilterNormalizer interface {
+	NormalizeCollectionFilter(context.Context, gormdb.CollectionSelectionScope, string) (gormdb.CollectionFilter, error)
+}
+
 // operatorCollectionFreezer authorizes and freezes membership for one canonical
-// filter fingerprint. It is deliberately separate from every domain action.
+// filter or previously server-issued current page. It is deliberately separate
+// from every domain action.
 type operatorCollectionFreezer interface {
-	FreezeCollectionSelection(context.Context, gormdb.CollectionSelectionScope, string) (gormdb.CollectionFrozenSelection, error)
+	FreezeCollectionSelection(context.Context, gormdb.CollectionSelectionScope, gormdb.CollectionFilter) (gormdb.CollectionFrozenSelection, error)
+	FreezeCollectionPageSelection(context.Context, gormdb.CollectionSelectionScope, string) ([]gormdb.CollectionSelectionTarget, error)
 }
 
 // operatorCollectionPager returns one bounded page after its domain authorizes
-// the request. A page result carries no token and cannot authorize an action.
+// the request. A page result carries no selection token and cannot authorize an action.
 type operatorCollectionPager interface {
 	PageCollection(context.Context, gormdb.CollectionSelectionScope, gormdb.CollectionPageRequest) (gormdb.CollectionPage, error)
 }
@@ -47,10 +56,11 @@ type operatorCollectionPager interface {
 func NewOperatorCollectionHTTPAdapter(
 	store operatorCollectionSelectionStore,
 	resolver operatorCollectionScopeResolver,
+	normalizer operatorCollectionFilterNormalizer,
 	freezer operatorCollectionFreezer,
 	pager operatorCollectionPager,
 ) *OperatorCollectionHTTPAdapter {
-	return &OperatorCollectionHTTPAdapter{store: store, resolver: resolver, freezer: freezer, pager: pager}
+	return &OperatorCollectionHTTPAdapter{store: store, resolver: resolver, normalizer: normalizer, freezer: freezer, pager: pager}
 }
 
 // HandleSnapshot stores none, explicit IDs, current-page IDs, or a server-frozen
@@ -74,7 +84,13 @@ func (adapter *OperatorCollectionHTTPAdapter) HandleSnapshot(w http.ResponseWrit
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
 		return
 	}
-	if selection.Kind == gormdb.CollectionSelectionFrozenFilter {
+	switch selection.Kind {
+	case gormdb.CollectionSelectionFrozenFilter:
+		filter, normalized := adapter.normalizeFilter(w, r.Context(), resolved, request.Selection.Filter)
+		if !normalized {
+			return
+		}
+		selection.FilterFingerprint = filter.Fingerprint
 		if err := gormdb.ValidateCollectionFrozenSelectionRequest(selection.FilterFingerprint, selection.ExcludedIDs); err != nil {
 			operatorCodeWriteBodyless(w, http.StatusBadRequest)
 			return
@@ -83,13 +99,24 @@ func (adapter *OperatorCollectionHTTPAdapter) HandleSnapshot(w http.ResponseWrit
 			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 			return
 		}
-		frozen, freezeErr := adapter.freezer.FreezeCollectionSelection(r.Context(), resolved, selection.FilterFingerprint)
+		frozen, freezeErr := adapter.freezer.FreezeCollectionSelection(r.Context(), resolved, filter)
 		if freezeErr != nil {
-			operatorCodeWriteBodyless(w, http.StatusForbidden)
+			operatorCollectionWriteSnapshotError(w, freezeErr)
 			return
 		}
 		selection.Targets = frozen.Targets
 		selection.ExpiresAt = frozen.ExpiresAt
+	case gormdb.CollectionSelectionPage:
+		if adapter.freezer == nil {
+			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+			return
+		}
+		targets, freezeErr := adapter.freezer.FreezeCollectionPageSelection(r.Context(), resolved, selection.Cursor)
+		if freezeErr != nil {
+			operatorCollectionWriteSnapshotError(w, freezeErr)
+			return
+		}
+		selection.Targets = targets
 	}
 	if err := gormdb.ValidateCollectionSelectionInput(selection); err != nil {
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
@@ -139,16 +166,23 @@ func (adapter *OperatorCollectionHTTPAdapter) HandleCurrent(w http.ResponseWrite
 func (adapter *OperatorCollectionHTTPAdapter) HandlePage(w http.ResponseWriter, r *http.Request) {
 	var request operatorCollectionPageRequest
 	identity, scope, ok := adapter.decode(w, r, &request)
+	if !ok || !request.valid() {
+		if ok {
+			operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		}
+		return
+	}
+	resolved, ok := adapter.resolveScope(w, r.Context(), identity, scope, request.Domain)
 	if !ok {
 		return
 	}
-	pageRequest := request.pageRequest()
+	filter, normalized := adapter.normalizeFilter(w, r.Context(), resolved, request.Filter)
+	if !normalized {
+		return
+	}
+	pageRequest := request.pageRequest(filter)
 	if !pageRequest.Valid() {
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
-		return
-	}
-	resolved, ok := adapter.resolveScope(w, r.Context(), identity, scope, pageRequest.Domain)
-	if !ok {
 		return
 	}
 	if adapter.pager == nil {
@@ -157,7 +191,9 @@ func (adapter *OperatorCollectionHTTPAdapter) HandlePage(w http.ResponseWriter, 
 	}
 	page, err := adapter.pager.PageCollection(r.Context(), resolved, pageRequest)
 	if err != nil {
-		if errors.Is(err, gormdb.ErrCollectionSelectionDenied) || errors.Is(err, gormdb.ErrCollectionSelectionReconfirmationRequired) {
+		if errors.Is(err, gormdb.ErrCollectionSelectionReconfirmationRequired) {
+			operatorCodeWriteBodyless(w, http.StatusPreconditionFailed)
+		} else if errors.Is(err, gormdb.ErrCollectionSelectionDenied) {
 			operatorCodeWriteBodyless(w, http.StatusForbidden)
 		} else if errors.Is(err, gormdb.ErrCollectionSelectionInvalid) {
 			operatorCodeWriteBodyless(w, http.StatusBadRequest)
@@ -170,7 +206,7 @@ func (adapter *OperatorCollectionHTTPAdapter) HandlePage(w http.ResponseWriter, 
 		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 		return
 	}
-	writeJSON(w, operatorCollectionPageResponse{Targets: page.Targets, NextCursor: page.NextCursor, Total: page.Total})
+	writeJSON(w, operatorCollectionPageResponse{FilterFingerprint: filter.Fingerprint, Cursor: page.Cursor, Targets: page.Targets, NextCursor: page.NextCursor, Total: page.Total})
 }
 
 type operatorCollectionRequestScope struct {
@@ -226,17 +262,50 @@ func (adapter *OperatorCollectionHTTPAdapter) resolveScope(w http.ResponseWriter
 	return scope, true
 }
 
+func (adapter *OperatorCollectionHTTPAdapter) normalizeFilter(w http.ResponseWriter, ctx context.Context, scope gormdb.CollectionSelectionScope, request *operatorCollectionFilterRequest) (gormdb.CollectionFilter, bool) {
+	if adapter == nil || adapter.normalizer == nil {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return gormdb.CollectionFilter{}, false
+	}
+	if request == nil {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return gormdb.CollectionFilter{}, false
+	}
+	filter, err := adapter.normalizer.NormalizeCollectionFilter(ctx, scope, request.Scope)
+	if err != nil || !filter.Valid() {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return gormdb.CollectionFilter{}, false
+	}
+	return filter, true
+}
+
+func operatorCollectionWriteSnapshotError(w http.ResponseWriter, err error) {
+	if errors.Is(err, gormdb.ErrCollectionSelectionInvalid) {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return
+	}
+	if errors.Is(err, gormdb.ErrCollectionSelectionReconfirmationRequired) {
+		operatorCodeWriteBodyless(w, http.StatusPreconditionFailed)
+		return
+	}
+	operatorCodeWriteBodyless(w, http.StatusForbidden)
+}
+
 type operatorCollectionSnapshotRequest struct {
 	Domain    string                             `json:"domain"`
 	Selection operatorCollectionSelectionRequest `json:"selection"`
 }
 
 type operatorCollectionSelectionRequest struct {
-	Kind              gormdb.CollectionSelectionKind     `json:"kind"`
-	Targets           []gormdb.CollectionSelectionTarget `json:"targets,omitempty"`
-	Cursor            string                             `json:"cursor,omitempty"`
-	FilterFingerprint string                             `json:"filter_fingerprint,omitempty"`
-	ExcludedIDs       []string                           `json:"excluded_ids,omitempty"`
+	Kind        gormdb.CollectionSelectionKind     `json:"kind"`
+	Targets     []gormdb.CollectionSelectionTarget `json:"targets,omitempty"`
+	Cursor      string                             `json:"cursor,omitempty"`
+	Filter      *operatorCollectionFilterRequest   `json:"filter,omitempty"`
+	ExcludedIDs []string                           `json:"excluded_ids,omitempty"`
+}
+
+type operatorCollectionFilterRequest struct {
+	Scope string `json:"scope"`
 }
 
 func (request operatorCollectionSnapshotRequest) valid() bool {
@@ -245,14 +314,16 @@ func (request operatorCollectionSnapshotRequest) valid() bool {
 
 func (request operatorCollectionSnapshotRequest) selection() (gormdb.CollectionSelection, error) {
 	selection := gormdb.CollectionSelection{
-		Kind:              request.Selection.Kind,
-		Targets:           append([]gormdb.CollectionSelectionTarget(nil), request.Selection.Targets...),
-		Cursor:            request.Selection.Cursor,
-		FilterFingerprint: request.Selection.FilterFingerprint,
-		ExcludedIDs:       append([]string(nil), request.Selection.ExcludedIDs...),
+		Kind:        request.Selection.Kind,
+		Targets:     append([]gormdb.CollectionSelectionTarget(nil), request.Selection.Targets...),
+		Cursor:      request.Selection.Cursor,
+		ExcludedIDs: append([]string(nil), request.Selection.ExcludedIDs...),
 	}
-	if selection.Kind == gormdb.CollectionSelectionFrozenFilter && len(selection.Targets) != 0 {
-		return gormdb.CollectionSelection{}, errors.New("frozen targets must be server-generated")
+	if selection.Kind == gormdb.CollectionSelectionFrozenFilter && (request.Selection.Filter == nil || len(selection.Targets) != 0) {
+		return gormdb.CollectionSelection{}, errors.New("frozen filter requires a server-resolved filter and targets")
+	}
+	if selection.Kind != gormdb.CollectionSelectionFrozenFilter && request.Selection.Filter != nil {
+		return gormdb.CollectionSelection{}, errors.New("only frozen filters accept a filter")
 	}
 	return selection, nil
 }
@@ -266,23 +337,26 @@ func (request operatorCollectionCurrentRequest) valid() bool {
 }
 
 type operatorCollectionPageRequest struct {
-	Domain            string `json:"domain"`
-	FilterFingerprint string `json:"filter_fingerprint"`
-	Cursor            string `json:"cursor,omitempty"`
-	Limit             int    `json:"limit,omitempty"`
+	Domain string                           `json:"domain"`
+	Filter *operatorCollectionFilterRequest `json:"filter"`
+	Cursor string                           `json:"cursor,omitempty"`
+	Limit  int                              `json:"limit,omitempty"`
 }
 
-func (request operatorCollectionPageRequest) pageRequest() gormdb.CollectionPageRequest {
+func (request operatorCollectionPageRequest) valid() bool {
 	limit := request.Limit
 	if limit == 0 {
 		limit = operatorCollectionPageDefault
 	}
-	return gormdb.CollectionPageRequest{
-		Domain:            request.Domain,
-		FilterFingerprint: request.FilterFingerprint,
-		Cursor:            request.Cursor,
-		Limit:             limit,
+	return gormdb.ValidCollectionSelectionDomain(request.Domain) && request.Filter != nil && (request.Cursor == "" || len(request.Cursor) <= 512) && limit >= 1 && limit <= gormdb.CollectionPageMaxSize
+}
+
+func (request operatorCollectionPageRequest) pageRequest(filter gormdb.CollectionFilter) gormdb.CollectionPageRequest {
+	limit := request.Limit
+	if limit == 0 {
+		limit = operatorCollectionPageDefault
 	}
+	return gormdb.CollectionPageRequest{Domain: request.Domain, Filter: filter, Cursor: request.Cursor, Limit: limit}
 }
 
 type operatorCollectionSnapshotResponse struct {
@@ -327,7 +401,9 @@ func newOperatorCollectionSnapshotDTO(domain string, selection gormdb.Collection
 }
 
 type operatorCollectionPageResponse struct {
-	Targets    []gormdb.CollectionSelectionTarget `json:"targets"`
-	NextCursor string                             `json:"next_cursor,omitempty"`
-	Total      *int64                             `json:"total,omitempty"`
+	FilterFingerprint string                             `json:"filter_fingerprint"`
+	Cursor            string                             `json:"cursor"`
+	Targets           []gormdb.CollectionSelectionTarget `json:"targets"`
+	NextCursor        string                             `json:"next_cursor,omitempty"`
+	Total             *int64                             `json:"total,omitempty"`
 }

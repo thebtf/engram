@@ -18,6 +18,7 @@ import (
 func TestOperatorCollectionHTTPAdapter_FrozenSelectionUsesServerSnapshot(t *testing.T) {
 	store := &operatorCollectionHTTPTestStore{}
 	resolver := &operatorCollectionHTTPTestResolver{scope: operatorCollectionTestScope("rules")}
+	normalizer := &operatorCollectionHTTPTestNormalizer{}
 	freezer := &operatorCollectionHTTPTestFreezer{frozen: gormdb.CollectionFrozenSelection{
 		Targets: []gormdb.CollectionSelectionTarget{
 			{ID: "rule-1", ExpectedVersion: 4},
@@ -25,11 +26,11 @@ func TestOperatorCollectionHTTPAdapter_FrozenSelectionUsesServerSnapshot(t *test
 		},
 		ExpiresAt: time.Now().UTC().Add(time.Minute),
 	}}
-	adapter := NewOperatorCollectionHTTPAdapter(store, resolver, freezer, nil)
+	adapter := NewOperatorCollectionHTTPAdapter(store, resolver, normalizer, freezer, nil)
 
 	request := operatorCollectionHTTPTestRequest(t, http.MethodPost, `{
 		"domain":"rules",
-		"selection":{"kind":"frozen_filter","filter_fingerprint":"`+operatorCollectionTestDigest("f")+`","excluded_ids":["rule-2"]}
+		"selection":{"kind":"frozen_filter","filter":{"scope":"project"},"excluded_ids":["rule-2"]}
 	}`)
 	recorder := httptest.NewRecorder()
 	adapter.HandleSnapshot(recorder, request)
@@ -41,6 +42,7 @@ func TestOperatorCollectionHTTPAdapter_FrozenSelectionUsesServerSnapshot(t *test
 	require.Equal(t, []gormdb.CollectionSelectionTarget{{ID: "rule-1", ExpectedVersion: 4}, {ID: "rule-2", ExpectedVersion: 5}}, store.saved[0].selection.Targets)
 	require.Len(t, freezer.calls, 1)
 	require.Equal(t, operatorCollectionTestScope("rules"), freezer.calls[0].scope)
+	require.Equal(t, normalizer.filter, freezer.calls[0].filter)
 
 	var response struct {
 		Selection struct {
@@ -56,9 +58,10 @@ func TestOperatorCollectionHTTPAdapter_FrozenSelectionUsesServerSnapshot(t *test
 func TestOperatorCollectionHTTPAdapter_DeniesStaleCursorAndRejectsTokenReplay(t *testing.T) {
 	store := &operatorCollectionHTTPTestStore{}
 	pager := &operatorCollectionHTTPTestPager{err: gormdb.ErrCollectionSelectionDenied}
-	adapter := NewOperatorCollectionHTTPAdapter(store, &operatorCollectionHTTPTestResolver{scope: operatorCollectionTestScope("rules")}, nil, pager)
+	normalizer := &operatorCollectionHTTPTestNormalizer{}
+	adapter := NewOperatorCollectionHTTPAdapter(store, &operatorCollectionHTTPTestResolver{scope: operatorCollectionTestScope("rules")}, normalizer, nil, pager)
 
-	staleCursor := operatorCollectionHTTPTestRequest(t, http.MethodPost, `{"domain":"rules","filter_fingerprint":"`+operatorCollectionTestDigest("f")+`","cursor":"opaque-stale-cursor","limit":50}`)
+	staleCursor := operatorCollectionHTTPTestRequest(t, http.MethodPost, `{"domain":"rules","filter":{"scope":"project"},"cursor":"opaque-stale-cursor","limit":50}`)
 	staleCursorRecorder := httptest.NewRecorder()
 	adapter.HandlePage(staleCursorRecorder, staleCursor)
 	require.Equal(t, http.StatusForbidden, staleCursorRecorder.Code)
@@ -74,9 +77,10 @@ func TestOperatorCollectionHTTPAdapter_DeniesStaleCursorAndRejectsTokenReplay(t 
 func TestOperatorCollectionHTTPAdapter_RejectsInvalidFrozenIntentBeforeFreezing(t *testing.T) {
 	store := &operatorCollectionHTTPTestStore{}
 	freezer := &operatorCollectionHTTPTestFreezer{}
-	adapter := NewOperatorCollectionHTTPAdapter(store, &operatorCollectionHTTPTestResolver{scope: operatorCollectionTestScope("rules")}, freezer, nil)
+	normalizer := &operatorCollectionHTTPTestNormalizer{err: gormdb.ErrCollectionSelectionInvalid}
+	adapter := NewOperatorCollectionHTTPAdapter(store, &operatorCollectionHTTPTestResolver{scope: operatorCollectionTestScope("rules")}, normalizer, freezer, nil)
 
-	request := operatorCollectionHTTPTestRequest(t, http.MethodPost, `{"domain":"rules","selection":{"kind":"frozen_filter","filter_fingerprint":"not-a-fingerprint","excluded_ids":["rule-1"]}}`)
+	request := operatorCollectionHTTPTestRequest(t, http.MethodPost, `{"domain":"rules","selection":{"kind":"frozen_filter","filter":{"scope":""},"excluded_ids":["rule-1"]}}`)
 	recorder := httptest.NewRecorder()
 	adapter.HandleSnapshot(recorder, request)
 
@@ -88,14 +92,15 @@ func TestOperatorCollectionHTTPAdapter_RejectsInvalidFrozenIntentBeforeFreezing(
 func TestOperatorCollectionHTTPAdapter_RejectsBoundsAndForeignSession(t *testing.T) {
 	store := &operatorCollectionHTTPTestStore{}
 	pager := &operatorCollectionHTTPTestPager{}
-	adapter := NewOperatorCollectionHTTPAdapter(store, &operatorCollectionHTTPTestResolver{scope: operatorCollectionTestScope("rules")}, nil, pager)
+	normalizer := &operatorCollectionHTTPTestNormalizer{}
+	adapter := NewOperatorCollectionHTTPAdapter(store, &operatorCollectionHTTPTestResolver{scope: operatorCollectionTestScope("rules")}, normalizer, nil, pager)
 
-	overBound := operatorCollectionHTTPTestRequest(t, http.MethodPost, `{"domain":"rules","filter_fingerprint":"`+operatorCollectionTestDigest("f")+`","limit":201}`)
+	overBound := operatorCollectionHTTPTestRequest(t, http.MethodPost, `{"domain":"rules","filter":{"scope":"project"},"limit":201}`)
 	overBoundRecorder := httptest.NewRecorder()
 	adapter.HandlePage(overBoundRecorder, overBound)
 	require.Equal(t, http.StatusBadRequest, overBoundRecorder.Code)
 	require.Empty(t, pager.calls, "the handler rejects bounds before a domain pager can observe them")
-	longCursor := operatorCollectionHTTPTestRequest(t, http.MethodPost, `{"domain":"rules","filter_fingerprint":"`+operatorCollectionTestDigest("f")+`","cursor":"`+strings.Repeat("c", 513)+`"}`)
+	longCursor := operatorCollectionHTTPTestRequest(t, http.MethodPost, `{"domain":"rules","filter":{"scope":"project"},"cursor":"`+strings.Repeat("c", 513)+`"}`)
 	longCursorRecorder := httptest.NewRecorder()
 	adapter.HandlePage(longCursorRecorder, longCursor)
 	require.Equal(t, http.StatusBadRequest, longCursorRecorder.Code)
@@ -148,8 +153,8 @@ func (resolver *operatorCollectionHTTPTestResolver) ResolveOperatorCollectionSco
 }
 
 type operatorCollectionFreezeCall struct {
-	scope             gormdb.CollectionSelectionScope
-	filterFingerprint string
+	scope  gormdb.CollectionSelectionScope
+	filter gormdb.CollectionFilter
 }
 
 type operatorCollectionHTTPTestFreezer struct {
@@ -157,9 +162,28 @@ type operatorCollectionHTTPTestFreezer struct {
 	calls  []operatorCollectionFreezeCall
 }
 
-func (freezer *operatorCollectionHTTPTestFreezer) FreezeCollectionSelection(_ context.Context, scope gormdb.CollectionSelectionScope, filterFingerprint string) (gormdb.CollectionFrozenSelection, error) {
-	freezer.calls = append(freezer.calls, operatorCollectionFreezeCall{scope: scope, filterFingerprint: filterFingerprint})
+func (freezer *operatorCollectionHTTPTestFreezer) FreezeCollectionSelection(_ context.Context, scope gormdb.CollectionSelectionScope, filter gormdb.CollectionFilter) (gormdb.CollectionFrozenSelection, error) {
+	freezer.calls = append(freezer.calls, operatorCollectionFreezeCall{scope: scope, filter: filter})
 	return freezer.frozen, nil
+}
+
+func (*operatorCollectionHTTPTestFreezer) FreezeCollectionPageSelection(context.Context, gormdb.CollectionSelectionScope, string) ([]gormdb.CollectionSelectionTarget, error) {
+	return nil, gormdb.ErrCollectionSelectionDenied
+}
+
+type operatorCollectionHTTPTestNormalizer struct {
+	filter gormdb.CollectionFilter
+	err    error
+}
+
+func (normalizer *operatorCollectionHTTPTestNormalizer) NormalizeCollectionFilter(_ context.Context, _ gormdb.CollectionSelectionScope, scope string) (gormdb.CollectionFilter, error) {
+	if normalizer.err != nil {
+		return gormdb.CollectionFilter{}, normalizer.err
+	}
+	if normalizer.filter.Fingerprint == "" {
+		normalizer.filter = gormdb.CollectionFilter{Fingerprint: operatorCollectionTestDigest("f"), Value: scope}
+	}
+	return normalizer.filter, nil
 }
 
 type operatorCollectionHTTPTestPager struct {

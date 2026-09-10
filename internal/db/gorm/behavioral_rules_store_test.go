@@ -453,6 +453,65 @@ func TestBehavioralRulesStore_ApplySelectionOperation_ReorderInjectedFailureRoll
 	require.Equal(t, before, after, "an injected reorder failure must roll back every update in the declared scope")
 }
 
+func TestBehavioralRulesStore_CollectionBridgePaginatesFreezesAndReconfirms(t *testing.T) {
+	store := openBehavioralRulesStore(t)
+	db := store.DB
+	brs := NewBehavioralRulesStore(store)
+	ctx := context.Background()
+	project := fmt.Sprintf("test-brules-collection-%d", time.Now().UnixNano())
+	t.Cleanup(func() { require.NoError(t, db.Exec("DELETE FROM behavioral_rules WHERE project = ?", project).Error) })
+
+	rules := make([]*models.BehavioralRule, 205)
+	for index := range rules {
+		created, err := brs.Create(ctx, &models.BehavioralRule{
+			Project:  strPtr(project),
+			Content:  fmt.Sprintf("collection rule %03d", index),
+			Priority: len(rules) - index,
+		})
+		require.NoError(t, err)
+		rules[index] = created
+	}
+
+	scope := behavioralRuleSelectionScope("behavioral-rules-collection-" + strconv.FormatInt(time.Now().UnixNano(), 10))
+	filter, err := brs.NormalizeCollectionFilter(ctx, scope, project)
+	require.NoError(t, err)
+	first, err := brs.PageCollection(ctx, scope, CollectionPageRequest{Domain: "rules", Filter: filter, Limit: CollectionPageMaxSize})
+	require.NoError(t, err)
+	require.Len(t, first.Targets, CollectionPageMaxSize)
+	require.NotEmpty(t, first.Cursor)
+	require.NotEmpty(t, first.NextCursor)
+	require.NotNil(t, first.Total)
+	require.EqualValues(t, len(rules), *first.Total)
+	require.Equal(t, CollectionSelectionTarget{ID: strconv.FormatInt(rules[0].ID, 10), ExpectedVersion: uint64(rules[0].Version)}, first.Targets[0])
+
+	second, err := brs.PageCollection(ctx, scope, CollectionPageRequest{Domain: "rules", Filter: filter, Cursor: first.NextCursor, Limit: CollectionPageMaxSize})
+	require.NoError(t, err)
+	require.Equal(t, first.NextCursor, second.Cursor)
+	require.Len(t, second.Targets, 5)
+	require.Empty(t, second.NextCursor)
+	require.Equal(t, CollectionSelectionTarget{ID: strconv.FormatInt(rules[200].ID, 10), ExpectedVersion: uint64(rules[200].Version)}, second.Targets[0])
+
+	frozen, err := brs.FreezeCollectionSelection(ctx, scope, filter)
+	require.NoError(t, err)
+	require.Len(t, frozen.Targets, len(rules))
+	require.Equal(t, first.Targets[0], frozen.Targets[0])
+	pageTargets, err := brs.FreezeCollectionPageSelection(ctx, scope, first.Cursor)
+	require.NoError(t, err)
+	require.Equal(t, first.Targets, pageTargets)
+	unchanged, err := brs.Get(ctx, rules[0].ID)
+	require.NoError(t, err)
+	require.Equal(t, rules[0].Version, unchanged.Version, "paging and freezing are read-only")
+
+	_, err = brs.SetEnabled(ctx, rules[3].ID, false, nil)
+	require.NoError(t, err)
+	_, err = brs.PageCollection(ctx, scope, CollectionPageRequest{Domain: "rules", Filter: filter, Cursor: first.NextCursor, Limit: CollectionPageMaxSize})
+	require.ErrorIs(t, err, ErrCollectionSelectionReconfirmationRequired)
+	global, err := brs.NormalizeCollectionFilter(ctx, scope, behavioralRuleCollectionGlobal)
+	require.NoError(t, err)
+	_, err = brs.PageCollection(ctx, scope, CollectionPageRequest{Domain: "rules", Filter: global, Cursor: first.NextCursor, Limit: CollectionPageMaxSize})
+	require.ErrorIs(t, err, ErrCollectionSelectionInvalid)
+}
+
 func behavioralRuleSelectionScope(sessionID string) CollectionSelectionScope {
 	return CollectionSelectionScope{
 		SubjectUserID:      41,

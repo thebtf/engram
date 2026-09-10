@@ -234,11 +234,13 @@ func composeOperatorCollectionHTTPAdapter(db *gormlib.DB) (*OperatorCollectionHT
 	if db == nil {
 		return nil, errors.New("operator collection HTTP composition requires a database")
 	}
+	rules := gormstore.NewBehavioralRulesStoreFromDB(db)
 	return NewOperatorCollectionHTTPAdapter(
 		gormstore.NewCollectionSelectionStore(db),
 		operatorCollectionScopeAuthority{},
-		nil,
-		nil,
+		rules,
+		rules,
+		rules,
 	), nil
 }
 

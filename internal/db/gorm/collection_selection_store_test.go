@@ -110,10 +110,11 @@ func TestCollectionSelectionStore_RejectsOversizedAndAmbiguousSnapshots(t *testi
 }
 
 func TestCollectionSelectionPageRequest_RejectsUnboundedCursorAndInvalidFreezeIntent(t *testing.T) {
+	filter := CollectionFilter{Fingerprint: collectionSelectionTestDigest("f"), Value: "project"}
 	request := CollectionPageRequest{
-		Domain:            "rules",
-		FilterFingerprint: collectionSelectionTestDigest("f"),
-		Limit:             CollectionPageMaxSize,
+		Domain: "rules",
+		Filter: filter,
+		Limit:  CollectionPageMaxSize,
 	}
 	require.True(t, request.Valid())
 
@@ -124,13 +125,14 @@ func TestCollectionSelectionPageRequest_RejectsUnboundedCursorAndInvalidFreezeIn
 	require.False(t, request.Valid())
 
 	page := CollectionPage{
+		Cursor:     "page-cursor",
 		Targets:    []CollectionSelectionTarget{{ID: "rule-1", ExpectedVersion: 1}},
 		NextCursor: strings.Repeat("n", 513),
 	}
 	require.False(t, page.ValidFor(CollectionPageRequest{
-		Domain:            "rules",
-		FilterFingerprint: collectionSelectionTestDigest("f"),
-		Limit:             1,
+		Domain: "rules",
+		Filter: filter,
+		Limit:  1,
 	}))
 	require.ErrorIs(t, ValidateCollectionFrozenSelectionRequest(collectionSelectionTestDigest("f"), []string{"rule-1", "rule-1"}), ErrCollectionSelectionInvalid)
 }

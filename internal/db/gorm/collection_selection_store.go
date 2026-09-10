@@ -93,16 +93,28 @@ type CollectionFrozenSelection struct {
 	ExpiresAt time.Time
 }
 
+// CollectionFilter is domain-normalized server state. Its fingerprint is
+// derived from Value; browser JSON never supplies either as authority.
+type CollectionFilter struct {
+	Fingerprint string
+	Value       string
+}
+
+func (filter CollectionFilter) Valid() bool {
+	return validCollectionSelectionFingerprint(filter.Fingerprint) && validCollectionSelectionText(filter.Value, 256)
+}
+
 // CollectionPageRequest is a bounded, non-authorizing request for one page.
 type CollectionPageRequest struct {
-	Domain            string
-	FilterFingerprint string
-	Cursor            string
-	Limit             int
+	Domain string
+	Filter CollectionFilter
+	Cursor string
+	Limit  int
 }
 
 // CollectionPage is a bounded domain-owned page. It carries no selection token.
 type CollectionPage struct {
+	Cursor     string
 	Targets    []CollectionSelectionTarget
 	NextCursor string
 	Total      *int64
@@ -487,14 +499,14 @@ func ValidateCollectionFrozenSelectionRequest(filterFingerprint string, excluded
 // Valid reports whether this is a bounded generic page request. The domain
 // pager remains responsible for authorization and interpreting the filter.
 func (request CollectionPageRequest) Valid() bool {
-	return validCollectionSelectionDomain(request.Domain) && validCollectionSelectionFingerprint(request.FilterFingerprint) &&
+	return validCollectionSelectionDomain(request.Domain) && request.Filter.Valid() &&
 		(request.Cursor == "" || validCollectionSelectionCursor(request.Cursor)) && request.Limit >= 1 && request.Limit <= CollectionPageMaxSize
 }
 
 // ValidFor reports whether a domain page honored the request's bounds without
 // treating its returned targets as an authorization decision.
 func (page CollectionPage) ValidFor(request CollectionPageRequest) bool {
-	if !request.Valid() || len(page.Targets) > request.Limit || (page.NextCursor != "" && !validCollectionSelectionCursor(page.NextCursor)) {
+	if !request.Valid() || !validCollectionSelectionCursor(page.Cursor) || len(page.Targets) > request.Limit || (page.NextCursor != "" && !validCollectionSelectionCursor(page.NextCursor)) {
 		return false
 	}
 	if page.Total != nil && (*page.Total < 0 || *page.Total < int64(len(page.Targets))) {
