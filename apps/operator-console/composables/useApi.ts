@@ -2,6 +2,7 @@ export const MUTATION_RESULT_KINDS = [
  'committed_verified',
  'committed_verification_pending',
  'partial',
+ 'outcome_unknown',
  'denied',
  'conflict',
  'validation_error',
@@ -66,11 +67,29 @@ type MutationBase<TIntent> = {
  code?: string
 }
 
-export type MutationFailureKind = Exclude<MutationResultKind, 'committed_verified' | 'committed_verification_pending' | 'partial'>
+export type MutationFailureKind = Exclude<
+ MutationResultKind,
+ 'committed_verified' | 'committed_verification_pending' | 'partial' | 'outcome_unknown'
+>
 
 export type MutationFailureResult<TIntent = unknown> = MutationBase<TIntent> & {
  kind: MutationFailureKind
 }
+
+export type MutationOutcomeUnknownResult<TIntent = unknown> = MutationBase<TIntent> & {
+ kind: 'outcome_unknown'
+ retry: 'manual'
+}
+
+export type MutationTransportEvidence =
+ | { stage: 'pre_dispatch'; failure: 'offline' | 'network' }
+ | { stage: 'dispatched' | 'response_received' }
+
+const PRE_DISPATCH_NETWORK_EVIDENCE: MutationTransportEvidence = {
+ stage: 'pre_dispatch',
+ failure: 'network',
+}
+const DISPATCHED_TRANSPORT_EVIDENCE: MutationTransportEvidence = { stage: 'dispatched' }
 
 export type MutationResult<TIntent = unknown, TCurrent = unknown> =
  | (MutationBase<TIntent> & {
@@ -89,6 +108,7 @@ export type MutationResult<TIntent = unknown, TCurrent = unknown> =
   httpStatus: number
   items: MutationItemResult[]
  })
+ | MutationOutcomeUnknownResult<TIntent>
  | MutationFailureResult<TIntent>
 
 interface MutationResponseBody {
@@ -99,6 +119,10 @@ interface MutationResponseBody {
  item_results?: unknown
  code?: unknown
 }
+
+type MutationResponseBodyRead =
+ | { kind: 'body'; body: MutationResponseBody }
+ | { kind: 'empty' | 'invalid' | 'lost' }
 
 interface MutationReadbackBody {
  authoritative?: unknown
@@ -210,31 +234,39 @@ function failureResult<TIntent>(
  return { kind, request, ...metadata }
 }
 
-async function readResponseBody(response: Response): Promise<MutationResponseBody | undefined> {
- const text = await response.text()
- if (!text.trim()) return undefined
+
+async function readResponseBody(response: Response): Promise<MutationResponseBodyRead> {
+ let text: string
+ try {
+  text = await response.text()
+ } catch {
+  return { kind: 'lost' }
+ }
+ if (!text.trim()) return { kind: 'empty' }
 
  try {
   const body: unknown = JSON.parse(text)
   return typeof body === 'object' && body !== null && !Array.isArray(body)
-   ? body as MutationResponseBody
-   : undefined
+   ? { kind: 'body', body: body as MutationResponseBody }
+   : { kind: 'invalid' }
  } catch {
-  return undefined
+  return { kind: 'invalid' }
  }
 }
 
 /**
  * Maps one HTTP mutation response into durable client truth. A successful HTTP
  * response alone is never verified completion: only a completed operation with
- * an authoritative readback can produce `committed_verified`.
+ * an authoritative readback can produce `committed_verified`. A dispatched
+ * transport failure is not proof of non-commit and requires manual reconciliation.
  */
 export async function parseMutationResponse<TIntent, TCurrent>(
  request: MutationRequest<TIntent>,
  response: Response,
  parseCurrentState: MutationCurrentStateParser<TCurrent>,
 ): Promise<MutationResult<TIntent, TCurrent>> {
- const body = await readResponseBody(response)
+ const bodyRead = await readResponseBody(response)
+ const body = bodyRead.kind === 'body' ? bodyRead.body : undefined
  const parsedOperationId = body && typeof body.operation_id === 'string' && body.operation_id.length > 0
   ? body.operation_id
   : undefined
@@ -254,10 +286,6 @@ export async function parseMutationResponse<TIntent, TCurrent>(
   return failureResult(request, 'failed', { ...metadata, code: 'request_reference_mismatch' })
  }
 
- if (!response.ok) {
-  return failureResult(request, failureKindForStatus(response.status), metadata)
- }
-
  if (response.status === 202) {
   return {
    kind: 'committed_verification_pending',
@@ -268,6 +296,10 @@ export async function parseMutationResponse<TIntent, TCurrent>(
   }
  }
 
+ if (!response.ok) {
+  return failureResult(request, failureKindForStatus(response.status), metadata)
+ }
+
  if (response.status === 204) {
   return {
    kind: 'committed_verification_pending',
@@ -276,6 +308,10 @@ export async function parseMutationResponse<TIntent, TCurrent>(
    commitment: 'committed',
    reason: 'readback_missing',
   }
+ }
+
+ if (bodyRead.kind === 'invalid' || bodyRead.kind === 'lost') {
+  return { kind: 'outcome_unknown', request, retry: 'manual', ...metadata }
  }
 
  const state = body && typeof body.operation_state === 'string' && body.operation_state.length > 0
@@ -339,17 +375,22 @@ export async function executeMutation<TIntent, TCurrent>(
  response: Promise<Response>,
  parseCurrentState: MutationCurrentStateParser<TCurrent>,
 ): Promise<MutationResult<TIntent, TCurrent>> {
+ let receivedResponse: Response
  try {
-  return await parseMutationResponse<TIntent, TCurrent>(request, await response, parseCurrentState)
+  receivedResponse = await response
  } catch (error) {
-  return parseMutationTransportFailure(request, error)
+  return parseMutationTransportFailure(request, error, DISPATCHED_TRANSPORT_EVIDENCE)
  }
+ return parseMutationResponse<TIntent, TCurrent>(request, receivedResponse, parseCurrentState)
 }
 
 export function parseMutationTransportFailure<TIntent>(
  request: MutationRequest<TIntent>,
  error: unknown,
-): MutationFailureResult<TIntent> {
+ evidence: MutationTransportEvidence = PRE_DISPATCH_NETWORK_EVIDENCE,
+): MutationFailureResult<TIntent> | MutationOutcomeUnknownResult<TIntent> {
  const name = error instanceof Error ? error.name : ''
- return failureResult(request, name === 'AbortError' || name === 'TimeoutError' ? 'timeout' : 'network')
+ if (name === 'AbortError' || name === 'TimeoutError') return failureResult(request, 'timeout')
+ if (evidence.stage === 'pre_dispatch') return failureResult(request, evidence.failure)
+ return { kind: 'outcome_unknown', request, retry: 'manual' }
 }
