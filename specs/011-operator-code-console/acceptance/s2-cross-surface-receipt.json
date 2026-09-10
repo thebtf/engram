@@ -1,0 +1,438 @@
+{
+  "schema": "operator-code-console/s2-cross-surface-receipt/v1",
+  "recorded_at_utc": "2026-09-10T18:42:32Z",
+  "verdict": {
+    "status": "PASS",
+    "acceptance_pass": true,
+    "reason": "The exact integration candidate passed the retained current-slice fixture, real Chromium Code Explorer and linked-worktree topology flows, and the complete installed UCI-1 scenario run. U16 is now fresh installed-probe evidence for a non-lexical Russian semantic query with the approved embedding provider; all 36 assigned UCI-1 scenarios passed."
+  },
+  "reopened_boundary": {
+    "criterion": "T020 installed Russian non-lexical semantic proof and final immutable S2 receipt",
+    "prior_gap": "uci1ProbeSemanticRUInstalled existed but was absent from uci1RunInstalledScenarioProbes, and TestUCI1Scenarios did not carry the caller-provided embedding provider into the installed server environment.",
+    "repair": {
+      "semantic_slice_commit": "5ad64443",
+      "integration_commit": "f683ec22eadf547e010fe7c1101a2e119a54543b",
+      "changed_paths": [
+        "cmd/engram/uci1_scenarios_probe_runner_test.go",
+        "cmd/engram/uci1_scenarios_test.go"
+      ],
+      "behavior": "The installed sequence runs semantic-ru after search, and TestUCI1Scenarios passes trimmed ENGRAM_EMBEDDING_URL, ENGRAM_EMBEDDING_MODEL, and ENGRAM_EMBEDDING_API_KEY to the server-only provider contract."
+    }
+  },
+  "candidate": {
+    "worktree": "D:/Dev/engram/.agent/worktrees/operator-code-console-r1",
+    "branch": "ui/operator-code-console-r1",
+    "source_commit_before_receipt": "f683ec22eadf547e010fe7c1101a2e119a54543b",
+    "source_tree_before_receipt": "59aeab9f400813d53d5940e1e663708d8bb8ea72",
+    "clean_before_receipt": true
+  },
+  "scope": {
+    "sole_changed_path": "specs/011-operator-code-console/acceptance/s2-cross-surface-receipt.json",
+    "product_or_producer_edits_in_receipt_commit": false,
+    "synthetic_redacted_fixture": true,
+    "production_mutation": false,
+    "release_claim": false,
+    "raw_request_or_response_bodies_retained": false,
+    "queries_retained": false,
+    "source_bodies_retained": false,
+    "private_locators_retained": false,
+    "credentials_or_tokens_retained": false
+  },
+  "source_sha256": {
+    "tests/uci/acceptance/operator_code_current_slice_test.go": "495157c18758a293e438ea25a26005f382fbc72f63359f7c89391839872ec1ac",
+    "tests/fixtures/operator-code-current-slice/manifest.json": "d5af0d50d47bd203ed824ec0f73faa5f0eba598ee6966851985f5587f6b257e4",
+    "apps/operator-console/package-lock.json": "c67c47ca6c4874c25e74eef294053ac3925e978045c1cff709aa32b417978ede",
+    "apps/operator-console/playwright.live.config.ts": "8e494412f13a7dfaf251f65bfc370a241782764a6d151455b1721d01b5cdfb58",
+    "apps/operator-console/tests/live/fixture-bootstrap.ts": "51d77662a724b5f12b96bc8b55df3eeb5ceca472423ef12cc3bea33d297fc677",
+    "apps/operator-console/tests/live/operator-code-explorer.spec.ts": "e801a94d5bc72b5f4d039fcf89677eef2e12ac80669354954a88854f378b3bdd",
+    "apps/operator-console/tests/live/operator-code-s2-topology.spec.ts": "362d524efb190d6ff1cfbc2fc19ff8bfab06e1b06d7d8ed2d5c7d83eea43d2f2",
+    "apps/operator-console/.output/server/index.mjs": "68d6b5e6bdc9fc4bde0d0bfe0bbfabb8776331990e7f9a2015b04435572ee9c7",
+    "cmd/engram/uci1_scenarios_probe_runner_test.go": "2016b2cc899c587aa404baee12812d0d5f08c9d933a93311f292a98f8b82a70a",
+    "cmd/engram/uci1_scenarios_test.go": "1e95e7a487ccd440ef0a160e6d27ac4c9255a5500230b79a7cf3763aaa75c4aa",
+    "cmd/engram/uci1_probe_semantic_ru_test.go": "6c5644e3708e29e0fc5e746fc7827f1e26490037c4b29e7450ebbe6eea7050f7",
+    "specs/010-unified-code-intelligence/acceptance/scenarios.json": "096123625cdd6f86934ca44a0e6c16577fa0981bcaa5cfc915baea6b97601cd1"
+  },
+  "evidence_sha256": {
+    "fresh_installed_uci1_scenarios_receipt": "a9c0c975bd21d89bdc956ead689c35d5a5fe340b9ecfb95c64e64e88d3c1f21b",
+    "fresh_s2_live_code_explorer_output": "a5cb5b808de2830fd99ca89ae6bc70b812cab34e9a45adcb60feaee404a0fe92",
+    "accepted_t099_real_corpus_receipt": "a130d4b4406f1077e24cdeed8e106cf0852e78016b8f101ee141b585b63fce97"
+  },
+  "fresh_execution": {
+    "t002_current_slice": {
+      "status": "PASS",
+      "command": "go test ./tests/uci/acceptance -run '^TestOperatorCodeCurrentSliceFixture$' -count=1 -v",
+      "denominator": {
+        "packages": 1,
+        "passed_packages": 1
+      },
+      "fixture_id": "operator-code-current-slice/v1"
+    },
+    "t019_and_s2_topology_browser": {
+      "status": "PASS",
+      "build_command": "npm run build",
+      "browser_command": "npx playwright test --config playwright.live.config.ts operator-code-explorer.spec.ts operator-code-s2-topology.spec.ts --output <caller-owned outside-candidate directory>",
+      "denominator": {
+        "tests": 2,
+        "passed": 2,
+        "failed": 0
+      },
+      "browser": {
+        "engine": "chromium",
+        "version": "149.0.7827.55"
+      },
+      "candidate": {
+        "commit": "f683ec22eadf547e010fe7c1101a2e119a54543b",
+        "tree": "59aeab9f400813d53d5940e1e663708d8bb8ea72"
+      },
+      "backend_source_commit": "f683ec22eadf547e010fe7c1101a2e119a54543b",
+      "backend_binary_sha256": "e2c899fa8228ec8f531b2f7c6bfc38c734779a1bf80f6952328cbd9b1f67c242",
+      "live_fixture_provisioned": true,
+      "traffic_observations": 34
+    },
+    "installed_agent_uci1": {
+      "status": "PASS",
+      "command": "go test ./cmd/engram -run '^TestUCI1Scenarios$' -count=1 -v -timeout=35m",
+      "environment_contract": [
+        "disposable loopback pgvector PostgreSQL through DATABASE_DSN and ENGRAM_UCI_INSTALLED_TEST_DATABASE_DSN",
+        "approved profile embedding values mapped process-locally to ENGRAM_EMBEDDING_URL, ENGRAM_EMBEDDING_MODEL, ENGRAM_EMBEDDING_API_KEY, and ENGRAM_EMBEDDING_DIMENSIONS",
+        "accepted external T099 receipt supplied through ENGRAM_UCI_T099_RECEIPT_PATH",
+        "caller-owned outside-candidate receipt path supplied through ENGRAM_UCI1_SCENARIOS_RECORD_PATH"
+      ],
+      "denominator": {
+        "assigned_scenarios": 36,
+        "passed": 36,
+        "failed": 0
+      },
+      "receipt_schema": "engram.uci1-scenarios-receipt/v1",
+      "receipt_digest": "1329c5e1090c48460d8bff793f664dc11abb5fb68d312d3f906912c6305c6a20",
+      "runtime": {
+        "acceptance_version": "uci-installed-acceptance/v1",
+        "harness_version": "uci-install-harness/v1",
+        "artifacts": [
+          {
+            "role": "server",
+            "candidate_sha256": "9839561144a5730090226acd2d3ace283665d5ea55d459438ab173fe4224fdc5",
+            "installed_sha256": "9839561144a5730090226acd2d3ace283665d5ea55d459438ab173fe4224fdc5"
+          },
+          {
+            "role": "daemon",
+            "candidate_sha256": "407b4e4fb60ea1eeffb5b4c25b7d87cf477f014e868eb95609096dd208f5cdee",
+            "installed_sha256": "407b4e4fb60ea1eeffb5b4c25b7d87cf477f014e868eb95609096dd208f5cdee"
+          },
+          {
+            "role": "parser",
+            "candidate_sha256": "5a5690c1bb68f1d955fe30962083c63c328ef7596bfa1f6f92b194bfa812a9c1",
+            "installed_sha256": "5a5690c1bb68f1d955fe30962083c63c328ef7596bfa1f6f92b194bfa812a9c1"
+          }
+        ]
+      },
+      "material_s2_scenarios": {
+        "U16": {
+          "id": "U16",
+          "area": "search",
+          "status": "pass",
+          "evidence_mode": "installed_probe_observed",
+          "code": "OBSERVED_INSTALLED_LIFECYCLE",
+          "digest": "95ab3162619d7e9631f897323e2b821b590cb901979cff2041f1961893ae5c80"
+        },
+        "U18": {
+          "id": "U18",
+          "area": "search",
+          "status": "pass",
+          "evidence_mode": "installed_probe_observed",
+          "code": "OBSERVED_INSTALLED_LIFECYCLE",
+          "digest": "05b5b951ebe68a23d0ed76ed7e1ce6823a5b378a91e3912a24680d4aac0d90ba"
+        },
+        "U19": {
+          "id": "U19",
+          "area": "graph",
+          "status": "pass",
+          "evidence_mode": "historical_installed_revalidated",
+          "code": "HISTORICAL_INSTALLED_REVALIDATED",
+          "digest": "ef6a278c39018b7f7dff04eeeeecccb483112779a5757d6477fbeff9d5b5a903"
+        },
+        "U20": {
+          "id": "U20",
+          "area": "graph",
+          "status": "pass",
+          "evidence_mode": "installed_probe_observed",
+          "code": "OBSERVED_INSTALLED_LIFECYCLE",
+          "digest": "0ae723fc2cf9280ffcd485e58a119edf344d8d17299278387d239a079ab2bf95"
+        },
+        "U22": {
+          "id": "U22",
+          "area": "security",
+          "status": "pass",
+          "evidence_mode": "exact_candidate_behavior",
+          "code": "EXACT_CANDIDATE_BEHAVIOR",
+          "digest": "219ec65ccc5b290db77b83ac709cf89f8c6b9852cf02e12ca73a7860a38fd6f0"
+        },
+        "U29": {
+          "id": "U29",
+          "area": "graph",
+          "status": "pass",
+          "evidence_mode": "installed_probe_observed",
+          "code": "OBSERVED_INSTALLED_LIFECYCLE",
+          "digest": "ba4d4e50c90975be445d83db3191c298d5b4b1dbdf73a1e3506a639e178066b5"
+        },
+        "U36": {
+          "id": "U36",
+          "area": "context",
+          "status": "pass",
+          "evidence_mode": "exact_candidate_behavior",
+          "code": "EXACT_CANDIDATE_BEHAVIOR",
+          "digest": "05635c6d3ed96c4673465c2f8c99097abab56daf6ee73f7ae2adcdbb19cf5782"
+        },
+        "U37": {
+          "id": "U37",
+          "area": "scanner",
+          "status": "pass",
+          "evidence_mode": "installed_probe_observed",
+          "code": "OBSERVED_INSTALLED_LIFECYCLE",
+          "digest": "5e05721609cfd3a8a6b1a1f8c795a336136b93c4c9c34f8fdcdb159eb65eeb13"
+        },
+        "U38": {
+          "id": "U38",
+          "area": "search",
+          "status": "pass",
+          "evidence_mode": "exact_candidate_behavior",
+          "code": "EXACT_CANDIDATE_BEHAVIOR",
+          "digest": "0b831a78259522e06fbcd5106cf260fbd35c90f87f0ac6f2b6a10b6a57f5db3e"
+        },
+        "U39": {
+          "id": "U39",
+          "area": "git",
+          "status": "pass",
+          "evidence_mode": "installed_probe_observed",
+          "code": "OBSERVED_INSTALLED_LIFECYCLE",
+          "digest": "0af5476804321edf5fa75d11bf811ec8ce12993a6475d459cbb2772fc98d2570"
+        },
+        "U42": {
+          "id": "U42",
+          "area": "exposure_completion",
+          "status": "pass",
+          "evidence_mode": "installed_probe_observed",
+          "code": "OBSERVED_INSTALLED_LIFECYCLE",
+          "digest": "d5353123a7c62550911249f5917cdebe5486ec830953a7c7d5eb1cdfa4a0e9d3"
+        },
+        "U43": {
+          "id": "U43",
+          "area": "evidence",
+          "status": "pass",
+          "evidence_mode": "installed_observed",
+          "code": "OBSERVED_INSTALLED_LIFECYCLE",
+          "digest": "8493054021187075332a65ff1bd8113bec13586181da47bc433f8e1c82e87db2"
+        },
+        "U44": {
+          "id": "U44",
+          "area": "evidence",
+          "status": "pass",
+          "evidence_mode": "installed_observed",
+          "code": "OBSERVED_INSTALLED_LIFECYCLE",
+          "digest": "1854d9cdc01e001292018eb87ca3f5239ff6bedc57d4044ca7f6ccaaf85c3003"
+        },
+        "U45": {
+          "id": "U45",
+          "area": "evidence",
+          "status": "pass",
+          "evidence_mode": "installed_probe_observed",
+          "code": "OBSERVED_INSTALLED_LIFECYCLE",
+          "digest": "3383a50692a8d0de5b8ba105581c740f9e913330aac32fc57e8c2494110cb300"
+        },
+        "U46": {
+          "id": "U46",
+          "area": "evidence",
+          "status": "pass",
+          "evidence_mode": "exact_candidate_behavior",
+          "code": "EXACT_CANDIDATE_BEHAVIOR",
+          "digest": "219ec65ccc5b290db77b83ac709cf89f8c6b9852cf02e12ca73a7860a38fd6f0"
+        }
+      }
+    }
+  },
+  "cross_surface_proof": {
+    "same_view": {
+      "status": "PASS",
+      "semantic": "U16 returned relevant current source through the vector leg as fresh installed_probe_observed evidence; the raw Russian query is intentionally not retained.",
+      "bounded_relation": {
+        "view_id": "view-a-initial",
+        "relation": "calls",
+        "from": "SemanticEntry",
+        "to": "ExactReadTarget"
+      },
+      "exact_stored_span": {
+        "view_id": "view-a-initial",
+        "path": "go/current_slice.go",
+        "source": "persisted_selected_view",
+        "working_copy_fallback": false
+      },
+      "browser": "The real authenticated Chromium flow pinned one context and returned search, graph, and stored source from the same released View."
+    },
+    "linked_worktrees_and_watcher": {
+      "status": "PASS",
+      "fixture": {
+        "trigger": "saved_write",
+        "mechanism": "normal_watcher_reconcile",
+        "manual_view_publication": false,
+        "a": {
+          "before": {
+            "view_id": "view-a-initial",
+            "target_value": "view-a-initial",
+            "target_sha256": "973ba3d78a861ad65d62e6dc93d466e3dcdb2cabce70183239026f7641b0c12f",
+            "caller_sha256": "86ab6b778abdf4b849d8b3d52ff428e54091dd3ad527086d8677085d59deb644"
+          },
+          "after": {
+            "view_id": "view-a-next",
+            "target_value": "view-a-next",
+            "target_sha256": "ff4c01046addd4f70d63ae654cd4c03266868504ff5a54a99d281fb725c39e2e",
+            "caller_sha256": "86ab6b778abdf4b849d8b3d52ff428e54091dd3ad527086d8677085d59deb644"
+          },
+          "old_view_readable_until_explicit_transition": true
+        },
+        "b": {
+          "before": {
+            "view_id": "view-b-isolated",
+            "target_value": "view-b-isolated",
+            "target_sha256": "48b84c045939fa12095e0185de9b3791e83b647ce2531a5ca63c85be5c2c169e",
+            "membership_snapshot": "b-membership-v1",
+            "edge_snapshot": "b-edges-v1",
+            "exact_source_snapshot": "b-target-v1"
+          },
+          "after": {
+            "view_id": "view-b-isolated",
+            "target_value": "view-b-isolated",
+            "target_sha256": "48b84c045939fa12095e0185de9b3791e83b647ce2531a5ca63c85be5c2c169e",
+            "membership_snapshot": "b-membership-v1",
+            "edge_snapshot": "b-edges-v1",
+            "exact_source_snapshot": "b-target-v1"
+          }
+        }
+      },
+      "topology": [
+        "A and B were real linked Git worktrees with distinct HEAD and fixture source digests.",
+        "A and B browser principals saw only their own expected source marker.",
+        "A normal saved-write watcher reconcile produced a new A View while the old A View remained readable until explicit transition.",
+        "B membership, edge, exact-source snapshot, target digest, and View remained unchanged."
+      ]
+    },
+    "ordinary_stdio_mcp_concurrency": {
+      "status": "PASS",
+      "observed": [
+        "two external ordinary stdio clients used separate roots, external process IDs, daemon process IDs, and daemon generations",
+        "both clients completed initialize, notifications/initialized, tools/list, and read-only tools/call",
+        "browser work overlapped at least one external MCP operation",
+        "both client process trees stopped and both caller-owned state roots were removed"
+      ]
+    },
+    "exact_grants_and_binding_lifecycle": {
+      "status": "PASS",
+      "observed": [
+        "two distinct persisted browser users were issued distinct read-only keycards for their own source/checkouts",
+        "fresh and hard-reload flows remained TAB_BINDING_READY",
+        "copied state produced TAB_BINDING_COLLISION and remained unselected",
+        "fresh opener normalized opener state, selected explicitly, and survived reload",
+        "delayed reload reported RELOAD_PENDING",
+        "acknowledged close succeeded for A and B",
+        "stale replay returned HTTP 403 with an empty body"
+      ],
+      "code_explorer_transitions": [
+        {
+          "label": "fresh",
+          "opener": false,
+          "navigationType": "navigate",
+          "transition": "TAB_BINDING_READY"
+        },
+        {
+          "label": "hard-reload",
+          "opener": false,
+          "navigationType": "reload",
+          "transition": "TAB_BINDING_READY"
+        },
+        {
+          "label": "copied-state-collision",
+          "opener": false,
+          "navigationType": "navigate",
+          "transition": "TAB_BINDING_COLLISION"
+        },
+        {
+          "label": "fresh-opener",
+          "opener": false,
+          "navigationType": "navigate",
+          "transition": "TAB_BINDING_READY"
+        }
+      ]
+    },
+    "non_disclosure_and_failure_truth": {
+      "status": "PASS",
+      "scenario_evidence": {
+        "U22": "authorization is enforced at every hop with no body, IDs, or counts leak",
+        "U36": "missing or ambiguous context remains closed instead of falling back to main/latest",
+        "U42": "exposure receipt and completion remain distinct from retrieval result state",
+        "U43": "recorder unavailable suppresses result body/items and returns no exposure receipt",
+        "U44": "exposure idempotency mismatch is non-disclosing",
+        "U45": "completion idempotency mismatch does not manufacture child completion",
+        "U46": "authorized source/index unavailable remains distinct from recorder unavailable and idempotency mismatch"
+      }
+    }
+  },
+  "trigger_to_handler_to_readback": [
+    {
+      "surface": "browser search",
+      "trigger": "explicit Code Explorer search inside the selected tab binding",
+      "request": "POST /api/code/search with document proof and bounded query",
+      "handler": "OperatorCodeHTTPAdapter.HandleSearch",
+      "domain": "SearchCodebase followed by writeReleasedQuery validation/release",
+      "readback": "released current-View result rendered by Chromium"
+    },
+    {
+      "surface": "browser graph",
+      "trigger": "explicit relation exploration from a returned entity",
+      "request": "POST /api/code/graph with the same binding proof",
+      "handler": "OperatorCodeHTTPAdapter.HandleGraph",
+      "domain": "ExploreCodebase followed by writeReleasedQuery validation/release",
+      "readback": "bounded calls relation from the same released View"
+    },
+    {
+      "surface": "browser exact source",
+      "trigger": "Read source from a released search result",
+      "request": "POST /api/code/source with entity key, span, and content digest",
+      "handler": "OperatorCodeHTTPAdapter.HandleVersionedRead",
+      "domain": "ReadCodebase binds SourceID and ViewID exclusively from the authorized pin, then releases the validated response",
+      "readback": "persisted selected-View span; working-copy fallback false"
+    },
+    {
+      "surface": "ordinary installed agent",
+      "trigger": "stdio initialize/tools/list/tools/call through the installed client and daemon",
+      "request": "context-bound code search/graph/source scenario probes",
+      "handler": "installed MCP tool handlers and UCI response release",
+      "domain": "PostgreSQL-backed current View with installed server/daemon/parser byte parity",
+      "readback": "36/36 UCI-1 scenarios pass, including fresh U16 installed semantic evidence"
+    }
+  ],
+  "criterion_status": {
+    "FR-004_to_FR-006_binding_and_same_view": "PASS",
+    "FR-007_FR-008_FR-018_release_and_non_disclosure": "PASS",
+    "FR-009_semantic_relation_exact_read": "PASS",
+    "FR-019_T020_boundary": "PASS; T033 may start, but this receipt does not claim S4 or full Feature 011 completion.",
+    "SC-002_two_worktrees_two_tabs_concurrent_mcp": "PASS",
+    "SC-003_denial_revocation_replay_recorder_failure": "PASS",
+    "SC-008_trigger_to_handler_to_readback": "PASS",
+    "SC-009_truthful_state_rendering": "PASS"
+  },
+  "truth_boundaries": {
+    "semantic_truth": "Fresh U16 installed evidence is semantic/vector-backed and current-View scoped.",
+    "degraded_truth": "U18 and U29 retain explicit partial/degraded semantics where exact baseline or graph expansion cannot be complete.",
+    "rc_claim": "No broader R-C parity, language support, corpus support, production readiness, deployment, installation, tag, push, or release is claimed."
+  },
+  "cleanup": {
+    "status": "PASS",
+    "observed": [
+      "installed scenario driver completed its cleanup checks",
+      "both live browser tests completed and their disposable fixture closed",
+      "external MCP process trees and caller-owned state roots were removed",
+      "the source integration worktree was clean before this sole receipt write"
+    ],
+    "preserved_unrelated_primary_checkout_dirt": true,
+    "preserved_foreign_worktrees": true
+  }
+}
