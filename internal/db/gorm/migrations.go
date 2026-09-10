@@ -6401,6 +6401,62 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			},
 			Rollback: rollbackUCIReferenceSourceTextMigration175,
 		},
+		// Migration 176 remains inline so migrationmeta can derive the live browser-grant schema.
+		{
+			ID: "176_browser_read_grants",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`CREATE TABLE IF NOT EXISTS browser_read_grants (
+						grant_ref UUID PRIMARY KEY,
+						auth_realm TEXT NOT NULL,
+						subject_user_id BIGINT NOT NULL,
+						source_id UUID NOT NULL,
+						checkout_id UUID NOT NULL,
+						state TEXT NOT NULL,
+						issuer_principal TEXT NOT NULL,
+						expires_at TIMESTAMPTZ,
+						issued_at TIMESTAMPTZ NOT NULL,
+						revoked_at TIMESTAMPTZ,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT browser_read_grants_auth_realm_chk CHECK (
+							btrim(auth_realm) <> ''
+							AND auth_realm = btrim(auth_realm)
+							AND auth_realm !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT browser_read_grants_subject_user_id_chk CHECK (subject_user_id > 0),
+						CONSTRAINT browser_read_grants_state_chk CHECK (state IN ('active', 'revoked', 'expired')),
+						CONSTRAINT browser_read_grants_issuer_principal_chk CHECK (
+							btrim(issuer_principal) <> ''
+							AND issuer_principal = btrim(issuer_principal)
+							AND issuer_principal !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT browser_read_grants_lifecycle_chk CHECK (
+							(state = 'revoked') = (revoked_at IS NOT NULL)
+							AND (expires_at IS NULL OR expires_at > issued_at)
+							AND (revoked_at IS NULL OR revoked_at >= issued_at)
+						),
+						CONSTRAINT browser_read_grants_tuple_unique
+							UNIQUE (auth_realm, subject_user_id, source_id, checkout_id),
+						CONSTRAINT browser_read_grants_subject_user_fkey
+							FOREIGN KEY (subject_user_id) REFERENCES users (id) ON DELETE RESTRICT,
+						CONSTRAINT browser_read_grants_source_realm_fkey
+							FOREIGN KEY (source_id, auth_realm) REFERENCES sources (source_id, auth_realm) ON DELETE RESTRICT,
+						CONSTRAINT browser_read_grants_checkout_source_fkey
+							FOREIGN KEY (source_id, checkout_id) REFERENCES ci_checkouts (source_id, checkout_id) ON DELETE RESTRICT
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_browser_read_grants_active_exact_read
+						ON browser_read_grants (subject_user_id, source_id, checkout_id, expires_at)
+						WHERE state = 'active'`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 176: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackBrowserReadGrantsMigration176,
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
@@ -6557,6 +6613,12 @@ func rollbackUCIEmbeddingJobsMigration174(tx *gorm.DB) error {
 // rollbackUCIReferenceSourceTextMigration175 retains exact multiline source
 // evidence because restoring the older control-free constraint would reject it.
 func rollbackUCIReferenceSourceTextMigration175(tx *gorm.DB) error {
+	return nil
+}
+
+// rollbackBrowserReadGrantsMigration176 retains grants and audit history: a binary
+// rollback cannot safely reconstruct browser authority or its revocation record.
+func rollbackBrowserReadGrantsMigration176(tx *gorm.DB) error {
 	return nil
 }
 
