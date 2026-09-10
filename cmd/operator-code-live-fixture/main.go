@@ -7,9 +7,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -18,6 +20,8 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/uci"
 	"github.com/thebtf/engram/internal/worker"
+	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
@@ -46,6 +50,8 @@ type invocation struct {
 	dsnFile      string
 	browserEmail string
 	project      string
+	sourceFile   string
+	passwordFile string
 }
 
 type fixtureOutput struct {
@@ -53,6 +59,7 @@ type fixtureOutput struct {
 	ExpectedSearch string `json:"expectedSearch"`
 	ExpectedGraph  string `json:"expectedGraph"`
 	ExpectedSource string `json:"expectedSource"`
+	ExpectedMarker string `json:"expectedMarker"`
 }
 
 type commandDependencies struct {
@@ -66,17 +73,15 @@ func main() {
 
 func defaultCommandDependencies() commandDependencies {
 	return commandDependencies{
-		readFile: os.ReadFile,
-		provision: func(ctx context.Context, dsn string, in invocation) (fixtureOutput, error) {
-			return provision(ctx, dsn, in.browserEmail, in.project)
-		},
+		readFile:  os.ReadFile,
+		provision: provision,
 	}
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer, deps commandDependencies) int {
 	in, err := parseInvocation(args)
 	if err != nil || deps.readFile == nil || deps.provision == nil {
-		fmt.Fprintln(stderr, "usage: operator-code-live-fixture --dsn-file <path> --browser-email <email> --project <fixture-id>")
+		fmt.Fprintln(stderr, "usage: operator-code-live-fixture --dsn-file <path> --browser-email <email> --project <fixture-id> [--source-file <path>] [--password-file <path>]")
 		return 2
 	}
 	dsnBytes, err := deps.readFile(in.dsnFile)
@@ -102,8 +107,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, deps comm
 }
 
 func parseInvocation(args []string) (invocation, error) {
-	if len(args) != 6 {
-		return invocation{}, fmt.Errorf("expected three flags")
+	if len(args) < 6 || len(args)%2 != 0 {
+		return invocation{}, fmt.Errorf("expected fixture flags")
 	}
 	var in invocation
 	seen := map[string]bool{}
@@ -120,6 +125,10 @@ func parseInvocation(args []string) (invocation, error) {
 			in.browserEmail = value
 		case "--project":
 			in.project = value
+		case "--source-file":
+			in.sourceFile = value
+		case "--password-file":
+			in.passwordFile = value
 		default:
 			return invocation{}, fmt.Errorf("unknown fixture argument")
 		}
@@ -130,14 +139,35 @@ func parseInvocation(args []string) (invocation, error) {
 	return in, nil
 }
 
-func provision(ctx context.Context, dsn, browserEmail, project string) (fixtureOutput, error) {
+func provision(ctx context.Context, dsn string, in invocation) (fixtureOutput, error) {
+	browserEmail, project := in.browserEmail, in.project
 	store, err := gormdb.NewStore(gormdb.Config{DSN: dsn, MaxConns: 2, LogLevel: logger.Silent})
 	if err != nil {
 		return fixtureOutput{}, fmt.Errorf("open fixture store: %w", err)
 	}
 	defer store.Close()
 
-	user, err := gormdb.NewUserStore(store.DB).GetUserByEmail(browserEmail)
+	sourceBytes, err := fixtureSourceFor(in)
+	if err != nil {
+		return fixtureOutput{}, err
+	}
+	marker := fixtureMarker(sourceBytes)
+	if marker == "" {
+		return fixtureOutput{}, fmt.Errorf("fixture source marker is unavailable")
+	}
+	users := gormdb.NewUserStore(store.DB)
+	user, err := users.GetUserByEmail(browserEmail)
+	if errors.Is(err, gorm.ErrRecordNotFound) && in.passwordFile != "" {
+		password, readErr := os.ReadFile(in.passwordFile)
+		if readErr != nil || strings.TrimSpace(string(password)) == "" {
+			return fixtureOutput{}, fmt.Errorf("read fixture browser password")
+		}
+		hash, hashErr := bcrypt.GenerateFromPassword([]byte(strings.TrimSpace(string(password))), bcrypt.DefaultCost)
+		if hashErr != nil {
+			return fixtureOutput{}, fmt.Errorf("hash fixture browser password: %w", hashErr)
+		}
+		user, err = users.CreateUser(browserEmail, string(hash), gormdb.DashboardRoleOperator)
+	}
 	if err != nil {
 		return fixtureOutput{}, fmt.Errorf("load fixture browser user: %w", err)
 	}
@@ -208,7 +238,7 @@ func provision(ctx context.Context, dsn, browserEmail, project string) (fixtureO
 	if err != nil {
 		return fixtureOutput{}, fmt.Errorf("begin fixture index: %w", err)
 	}
-	frame, err := fixtureFrame(source.SourceID, profile.ProfileID, admissionProfile, extraction)
+	frame, err := fixtureFrame(source.SourceID, profile.ProfileID, admissionProfile, extraction, sourceBytes)
 	if err != nil {
 		return fixtureOutput{}, err
 	}
@@ -254,11 +284,35 @@ func provision(ctx context.Context, dsn, browserEmail, project string) (fixtureO
 		ExpectedSearch: fixtureQuery,
 		ExpectedGraph:  fixtureExpectedGraph,
 		ExpectedSource: fixtureExpectedSource,
+		ExpectedMarker: marker,
 	}, nil
 }
 
-func fixtureFrame(sourceID, profileID string, admissionProfile uci.IndexAdmissionArtifactProfile, extraction uci.GoExtractionProfile) (uci.IndexAdmissionFrame, error) {
-	artifact, err := uci.NewIndexAdmissionArtifactFromGo(sourceID, admissionProfile, fixtureSource, uci.ExtractGo(fixtureSource, extraction))
+func fixtureSourceFor(in invocation) ([]byte, error) {
+	if in.sourceFile == "" {
+		return append([]byte(nil), fixtureSource...), nil
+	}
+	if filepath.Base(in.sourceFile) != fixtureSourcePath {
+		return nil, fmt.Errorf("fixture source path is invalid")
+	}
+	source, err := os.ReadFile(in.sourceFile)
+	if err != nil || len(source) == 0 {
+		return nil, fmt.Errorf("read fixture source")
+	}
+	return source, nil
+}
+
+func fixtureMarker(source []byte) string {
+	for _, candidate := range []string{"operator-code-fixture-a", "operator-code-fixture-b", "operator-code-fixture"} {
+		if strings.Contains(string(source), candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func fixtureFrame(sourceID, profileID string, admissionProfile uci.IndexAdmissionArtifactProfile, extraction uci.GoExtractionProfile, source []byte) (uci.IndexAdmissionFrame, error) {
+	artifact, err := uci.NewIndexAdmissionArtifactFromGo(sourceID, admissionProfile, source, uci.ExtractGo(source, extraction))
 	if err != nil {
 		return uci.IndexAdmissionFrame{}, fmt.Errorf("build fixture artifact: %w", err)
 	}

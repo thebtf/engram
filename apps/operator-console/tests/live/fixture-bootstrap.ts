@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { randomBytes, randomUUID, createHash } from 'node:crypto'
-import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, lstat, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -70,12 +70,38 @@ export interface LiveFixtureState {
     email: string
     password: string
   }
+  browserCredentialB: {
+    email: string
+    password: string
+  }
   mock: {
     prohibited: true
     liveConfigContainsMockCommand: false
   }
   operatorCode: OperatorCodeFixture
+  operatorCodeB: OperatorCodeFixture
+  worktrees: {
+    a: FixtureWorktree
+    b: FixtureWorktree
+  }
   traffic: RouteTraffic[]
+}
+
+interface FixtureWorktree {
+  head: string
+  tree: string
+  fixtureSourceSha256: string
+}
+
+interface FixtureWorktreeRuntime {
+  root: string
+  sourceFile: string
+  identity: FixtureWorktree
+}
+
+interface FixtureWorktreeSet {
+  a: FixtureWorktreeRuntime
+  b: FixtureWorktreeRuntime
 }
 
 interface OperatorCodeFixture {
@@ -83,6 +109,7 @@ interface OperatorCodeFixture {
   expectedSearch: string
   expectedGraph: string
   expectedSource: string
+  expectedMarker: string
 }
 
 interface CommandResult {
@@ -100,8 +127,10 @@ class LiveFixture implements FixtureController {
   private readonly containerName = this.fixtureId
   private readonly traffic: RouteTraffic[] = []
   private readonly browserPassword = `Live-${randomBytes(24).toString('base64url')}`
+  private readonly browserPasswordB = `Live-${randomBytes(24).toString('base64url')}`
   private readonly adminToken = randomBytes(32).toString('base64url')
   private readonly browserEmail = `${this.fixtureId}@fixture.invalid`
+  private readonly browserEmailB = `${this.fixtureId}-b@fixture.invalid`
   private fixtureRoot = ''
   private statePath = ''
   private server?: ChildProcess
@@ -116,6 +145,7 @@ class LiveFixture implements FixtureController {
     this.statePath = join(this.fixtureRoot, 'fixture-state.json')
     await mkdir(join(this.fixtureRoot, 'home'), { recursive: true })
 
+
     const [commitResult, treeResult] = await Promise.all([
       execute('git', ['rev-parse', 'HEAD'], repositoryRoot),
       execute('git', ['rev-parse', 'HEAD^{tree}'], repositoryRoot),
@@ -126,6 +156,7 @@ class LiveFixture implements FixtureController {
     }
 
     try {
+      const worktrees = await this.createWorktrees()
       const postgres = await this.startPostgres()
       const binary = await this.buildServer(candidate.commit)
       const apiUrl = await this.startServer(binary, postgres.dsn)
@@ -157,9 +188,8 @@ class LiveFixture implements FixtureController {
       if (setup.status !== 201) {
         throw new Error(`real API fixture auth setup failed: ${setup.status} ${JSON.stringify(setup.body)}`)
       }
-      const operatorCode = await this.provisionOperatorCode(postgres.dsn)
-
-
+      const operatorCode = await this.provisionOperatorCode(postgres.dsn, worktrees.a)
+      const operatorCodeB = await this.provisionOperatorCode(postgres.dsn, worktrees.b, this.browserPasswordB)
       const appUrl = await this.startConsole(apiUrl)
       await this.awaitReady(`${appUrl}/settings`, this.console, 'built Nuxt console')
 
@@ -188,12 +218,20 @@ class LiveFixture implements FixtureController {
           email: this.browserEmail,
           password: this.browserPassword,
         },
+        browserCredentialB: {
+          email: this.browserEmailB,
+          password: this.browserPasswordB,
+        },
         mock: {
           prohibited: true,
           liveConfigContainsMockCommand: false,
         },
         operatorCode,
-
+        operatorCodeB,
+        worktrees: {
+          a: worktrees.a.identity,
+          b: worktrees.b.identity,
+        },
         traffic: this.traffic,
       }
       await writeFixtureState(this.statePath, state)
@@ -215,16 +253,25 @@ class LiveFixture implements FixtureController {
     }
     if (this.postgresStarted) {
       try {
-        await execute('docker', ['rm', '--force', this.containerName], repositoryRoot)
+        await execute('docker', ['stop', this.containerName], repositoryRoot)
       } catch (error) {
         failures.push(error)
       }
     }
+    let worktreesRemoved = true
     if (this.fixtureRoot) {
       try {
-        await rm(this.fixtureRoot, { recursive: true, force: true })
+        await this.removeWorktrees()
       } catch (error) {
+        worktreesRemoved = false
         failures.push(error)
+      }
+      if (worktreesRemoved) {
+        try {
+          await rm(this.fixtureRoot, { recursive: true, force: true })
+        } catch (error) {
+          failures.push(error)
+        }
       }
     }
     if (failures.length > 0) {
@@ -297,32 +344,119 @@ class LiveFixture implements FixtureController {
     return `http://127.0.0.1:${port}`
   }
 
-  private async provisionOperatorCode(dsn: string): Promise<OperatorCodeFixture> {
+  private async provisionOperatorCode(dsn: string, worktree: FixtureWorktreeRuntime, password?: string): Promise<OperatorCodeFixture> {
     const dsnFile = join(this.fixtureRoot, 'operator-code-dsn.txt')
     await writeFile(dsnFile, `${dsn}\n`, { encoding: 'utf8', mode: 0o600 })
-    const result = await execute('go', [
+    const args = [
       'run', './cmd/operator-code-live-fixture',
       '--dsn-file', dsnFile,
-      '--browser-email', this.browserEmail,
-      '--project', this.fixtureId,
-    ], repositoryRoot)
+      '--browser-email', password === undefined ? this.browserEmail : this.browserEmailB,
+      '--project', `${this.fixtureId}-${password === undefined ? 'a' : 'b'}`,
+      '--source-file', worktree.sourceFile,
+    ]
+    if (password !== undefined) {
+      const passwordFile = join(this.fixtureRoot, 'operator-code-browser-b-password.txt')
+      await writeFile(passwordFile, `${password}\n`, { encoding: 'utf8', mode: 0o600 })
+      args.push('--password-file', passwordFile)
+    }
+    const result = await execute('go', args, repositoryRoot)
     const output: unknown = JSON.parse(result.stdout)
+    if (output === null || typeof output !== 'object' || Array.isArray(output)) {
+      throw new Error('operator-code fixture provisioner returned an invalid non-secret receipt')
+    }
+    const query = Reflect.get(output, 'query')
+    const expectedSearch = Reflect.get(output, 'expectedSearch')
+    const expectedGraph = Reflect.get(output, 'expectedGraph')
+    const expectedSource = Reflect.get(output, 'expectedSource')
+    const expectedMarker = Reflect.get(output, 'expectedMarker')
     if (
-      output === null
-      || typeof output !== 'object'
-      || Array.isArray(output)
-      || typeof Reflect.get(output, 'query') !== 'string'
-      || typeof Reflect.get(output, 'expectedSearch') !== 'string'
-      || typeof Reflect.get(output, 'expectedGraph') !== 'string'
-      || typeof Reflect.get(output, 'expectedSource') !== 'string'
+      typeof query !== 'string' || query === ''
+      || typeof expectedSearch !== 'string' || expectedSearch === ''
+      || typeof expectedGraph !== 'string' || expectedGraph === ''
+      || typeof expectedSource !== 'string' || expectedSource === ''
+      || typeof expectedMarker !== 'string' || expectedMarker === ''
     ) {
       throw new Error('operator-code fixture provisioner returned an invalid non-secret receipt')
     }
+    return { query, expectedSearch, expectedGraph, expectedSource, expectedMarker }
+  }
+
+  private async createWorktrees(): Promise<FixtureWorktreeSet> {
+    const worktreeRoot = join(this.fixtureRoot, 'worktrees')
+    const aRoot = join(worktreeRoot, 'a')
+    const bRoot = join(worktreeRoot, 'b')
+    await mkdir(aRoot, { recursive: true })
+    await this.writeWorktreeSources(aRoot, 'a-before', 'a')
+    await execute('git', ['init'], aRoot)
+    await execute('git', ['config', 'user.email', 'operator-code-live@example.test'], aRoot)
+    await execute('git', ['config', 'user.name', 'Operator Code Live Fixture'], aRoot)
+    await execute('git', ['add', '--all'], aRoot)
+    await execute('git', ['commit', '--message', 'operator code A fixture'], aRoot)
+    await execute('git', ['worktree', 'add', '--detach', bRoot, 'HEAD'], aRoot)
+    await this.writeWorktreeSources(bRoot, 'b', 'b')
+    await execute('git', ['add', '--all'], bRoot)
+    await execute('git', ['commit', '--message', 'operator code B fixture'], bRoot)
+    const linkedGit = await lstat(join(bRoot, '.git'))
+    if (linkedGit.isDirectory()) {
+      throw new Error('fixture B must be a Git linked worktree')
+    }
     return {
-      query: Reflect.get(output, 'query') as string,
-      expectedSearch: Reflect.get(output, 'expectedSearch') as string,
-      expectedGraph: Reflect.get(output, 'expectedGraph') as string,
-      expectedSource: Reflect.get(output, 'expectedSource') as string,
+      a: await this.worktreeRuntime(aRoot),
+      b: await this.worktreeRuntime(bRoot),
+    }
+  }
+
+  private async writeWorktreeSources(root: string, variant: 'a-before' | 'b', marker: 'a' | 'b'): Promise<void> {
+    const sourceRoot = join(repositoryRoot, 'tests', 'fixtures', 'operator-code-current-slice', 'worktrees', variant, 'src')
+    const destination = join(root, 'src')
+    await mkdir(destination, { recursive: true })
+    for (const name of ['target.ts', 'relay.ts', 'CurrentSlicePanel.tsx']) {
+      await writeFile(join(destination, name), await readFile(join(sourceRoot, name)))
+    }
+    await writeFile(join(root, 'fixture.go'), `package fixture
+
+const CodeExplorerFixtureMessage = "operator-code-fixture-${marker}"
+
+func CodeExplorerFixtureTarget() string { return CodeExplorerFixtureMessage }
+
+func CodeExplorerFixtureEntry() string {
+	const sourceMarker = "operator-code-fixture-${marker}"
+	_ = sourceMarker
+	return CodeExplorerFixtureTarget()
+}
+`)
+  }
+
+  private async worktreeRuntime(root: string): Promise<FixtureWorktreeRuntime> {
+    const sourceFile = join(root, 'fixture.go')
+    const [head, tree, source] = await Promise.all([
+      execute('git', ['rev-parse', 'HEAD'], root),
+      execute('git', ['rev-parse', 'HEAD^{tree}'], root),
+      readFile(sourceFile),
+    ])
+    return {
+      root,
+      sourceFile,
+      identity: {
+        head: head.stdout.trim(),
+        tree: tree.stdout.trim(),
+        fixtureSourceSha256: createHash('sha256').update(source).digest('hex'),
+      },
+    }
+  }
+
+  private async removeWorktrees(): Promise<void> {
+    const aRoot = join(this.fixtureRoot, 'worktrees', 'a')
+    const bRoot = join(this.fixtureRoot, 'worktrees', 'b')
+    try {
+      await lstat(join(bRoot, '.git'))
+    } catch {
+      return
+    }
+    await execute('git', ['worktree', 'remove', bRoot], aRoot)
+    const remaining = await execute('git', ['worktree', 'list', '--porcelain'], aRoot)
+    if (remaining.stdout.includes(`worktree ${bRoot}`)) {
+      throw new Error('fixture B linked worktree remained registered after teardown')
     }
   }
 
@@ -333,7 +467,7 @@ class LiveFixture implements FixtureController {
       PORT: String(port),
       HOST: '127.0.0.1',
       NUXT_OPERATOR_API_TARGET: apiUrl,
-      NUXT_PUBLIC_API_DISPLAY_HOST: `127.0.0.1:${port}`,
+      NUXT_PUBLIC_API_DISPLAY_HOST: `127.0.0.1:${port} `,
     })
     return `http://127.0.0.1:${port}`
   }

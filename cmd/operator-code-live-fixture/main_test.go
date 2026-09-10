@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -22,6 +24,27 @@ func TestParseInvocationAcceptsClosedFixtureInputs(t *testing.T) {
 	}
 	if got != (invocation{dsnFile: "private-dsn.txt", browserEmail: "fixture@example.invalid", project: "operator-code-live-1"}) {
 		t.Fatalf("parseInvocation() = %#v", got)
+	}
+}
+
+func TestFixtureSourceForReadsTheDeclaredWorktreeFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), fixtureSourcePath)
+	want := []byte(`package fixture
+
+const CodeExplorerFixtureMessage = "operator-code-fixture-a"
+
+func CodeExplorerFixtureTarget() string { return CodeExplorerFixtureMessage }
+func CodeExplorerFixtureEntry() string { return CodeExplorerFixtureTarget() }
+`)
+	if err := os.WriteFile(path, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := fixtureSourceFor(invocation{sourceFile: path})
+	if err != nil || string(got) != string(want) || fixtureMarker(got) != "operator-code-fixture-a" {
+		t.Fatalf("fixtureSourceFor() = %q, %v", got, err)
+	}
+	if _, err := fixtureSourceFor(invocation{sourceFile: filepath.Join(t.TempDir(), "outside.go")}); err == nil {
+		t.Fatal("fixtureSourceFor accepted a non-fixture filename")
 	}
 }
 
@@ -108,7 +131,7 @@ func TestFixtureFrameCarriesSearchableSourceAndResolvedGraphFact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	frame, err := fixtureFrame("10000000-0000-4000-8000-000000000001", "20000000-0000-4000-8000-000000000002", profile, extraction)
+	frame, err := fixtureFrame("10000000-0000-4000-8000-000000000001", "20000000-0000-4000-8000-000000000002", profile, extraction, fixtureSource)
 	if err != nil {
 		t.Fatal(err)
 	}
