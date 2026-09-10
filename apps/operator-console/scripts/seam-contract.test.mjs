@@ -196,6 +196,9 @@ test('exactly twelve direct mutation consumers preserve durable mutation truth',
 
   assert.deepEqual(discoveredPaths, [...mutationConsumerPaths].sort(), 'the direct mutation-consumer inventory must remain exact')
 
+  const sharedMutationSeam = read(seamPath)
+  assert.doesNotMatch(sharedMutationSeam, /\b(?:runOperatorMutation|OperatorMutationOptions|OperatorMutationResult|rollback)\b/, 'the shared operator seam must not retain the obsolete success-and-rollback helper')
+
   for (const path of mutationConsumerPaths) {
     const source = read(join(root, path))
     assert.match(source, /executeMutation\(/, `${path} must delegate mutation interpretation to the shared seam`)
