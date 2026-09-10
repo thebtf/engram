@@ -216,14 +216,19 @@ type operatorCollectionScopeAuthority struct{}
 
 func (operatorCollectionScopeAuthority) ResolveOperatorCollectionScope(_ context.Context, identity auth.Identity, sessionID, domain string) (gormstore.CollectionSelectionScope, error) {
 	subject, ok := identity.SessionBrowserSubject()
-	if !ok || !operatorCodeText(sessionID) || domain != operatorCollectionSelectionDomain {
+	if !ok || !operatorCodeText(sessionID) {
 		return gormstore.CollectionSelectionScope{}, errors.New("operator collection scope denied")
 	}
-	digest := sha256.Sum256([]byte(fmt.Sprintf("operator-collection-scope/v1\x00%d\x00%s\x00%s", subject.UserID, sessionID, operatorCollectionSelectionDomain)))
+	switch domain {
+	case operatorCollectionSelectionDomain, queueCandidateSelectionDomain:
+	default:
+		return gormstore.CollectionSelectionScope{}, errors.New("operator collection scope denied")
+	}
+	digest := sha256.Sum256([]byte(fmt.Sprintf("operator-collection-scope/v1\x00%d\x00%s\x00%s", subject.UserID, sessionID, domain)))
 	return gormstore.CollectionSelectionScope{
 		SubjectUserID:      subject.UserID,
 		SessionID:          sessionID,
-		Domain:             operatorCollectionSelectionDomain,
+		Domain:             domain,
 		ContextFingerprint: "sha256:" + hex.EncodeToString(digest[:]),
 		AuthorizationEpoch: 1,
 		CollectionVersion:  1,
@@ -242,6 +247,13 @@ func composeOperatorCollectionHTTPAdapter(db *gormlib.DB) (*OperatorCollectionHT
 		rules,
 		rules,
 	), nil
+}
+
+func composeQueueCandidateSelectionHandler(service *Service, db *gormlib.DB) (*QueueCandidateSelectionHandler, error) {
+	if service == nil || db == nil {
+		return nil, errors.New("queue candidate selection composition requires a service and database")
+	}
+	return NewQueueCandidateSelectionHandler(service, gormstore.NewCollectionSelectionStore(db), operatorCollectionScopeAuthority{}), nil
 }
 
 // composeUCIContext creates and installs the narrow UCI context capability.

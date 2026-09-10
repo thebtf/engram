@@ -171,61 +171,62 @@ type Service struct {
 	// transcriptStore in the handleSessionEnd persistence goroutine, letting unit
 	// tests assert the real handler path (redact → Create) without a live DB.
 	// Production code never sets this field.
-	transcriptCreatorOverride   transcriptCreator
-	retrievalHooks              *retrievalHooks
-	authHandlers                *AuthHandlers
-	operatorCodeAdapter         *OperatorCodeHTTPAdapter
-	operatorCollectionAdapter   *OperatorCollectionHTTPAdapter
-	version                     string
-	recentQueriesBuf            [maxRecentQueries]RecentSearchQuery
-	wg                          sync.WaitGroup
-	initWG                      sync.WaitGroup
-	shutdownOnce                sync.Once
-	shutdownDone                chan struct{}
-	shutdownErr                 error
-	recentQueriesLen            int
-	recentQueriesHead           int
-	statsCacheTTL               time.Duration
-	initMu                      sync.RWMutex
-	retrievalStatsMu            sync.RWMutex
-	recentQueriesMu             sync.RWMutex
-	cachedObsCountsMu           sync.RWMutex
-	staleQueueOnce              sync.Once
-	ready                       atomic.Bool
-	vault                       *crypto.Vault
-	issueStore                  *gorm.IssueStore
-	credentialStore             *gorm.CredentialStore
-	memoryStore                 *gorm.MemoryStore
-	documentStore               versionedDocumentStore
-	booksStore                  booksStore
-	booksPipeline               booksPipelineRunner
-	memoryStoreSeam             memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
-	memoryGetStoreSeam          memoryGetStore  // test-only: when non-nil, overrides memoryStore for exact-ID reads
-	stateStore                  statePlane
-	experienceProvider          experienceHistoryProvider
-	temporalTruthProvider       temporalTruthProvider
-	principalMemoryQueryService principalMemoryQueryService
-	domainOwnerStore            domainOwnerStore
-	domainRegistryService       domainRegistryService
-	behavioralRulesStore        *gorm.BehavioralRulesStore
-	auditStore                  *gorm.AuditStore
-	purgeStore                  *gorm.PurgeStore
-	testAuditRetainer           auditRetainer // test-only override for retention unit tests
-	feedbackUpdater             *feedback.Updater
-	segmentStore                *gorm.SegmentStore
-	embeddingClient             *embedding.Client
-	embeddingStore              *embedding.Store
-	embeddingRecorder           *embedding.BackfillRecorder
-	rerankClient                *reranking.Client
-	promotionStore              *gorm.PromotionStore
-	graphStore                  *graph.Store
-	graphNodeStore              *graph.NodesStore
-	vaultOnce                   sync.Once
-	vaultErr                    error
-	promptCache                 sync.Map // map[int64]promptCacheEntry — last user prompt per session
-	eventBus                    *projectevents.Bus
-	projectReaper               projectReaperLifecycle
-	projectReaperFactory        projectReaperFactory
+	transcriptCreatorOverride      transcriptCreator
+	retrievalHooks                 *retrievalHooks
+	authHandlers                   *AuthHandlers
+	operatorCodeAdapter            *OperatorCodeHTTPAdapter
+	operatorCollectionAdapter      *OperatorCollectionHTTPAdapter
+	queueCandidateSelectionHandler *QueueCandidateSelectionHandler
+	version                        string
+	recentQueriesBuf               [maxRecentQueries]RecentSearchQuery
+	wg                             sync.WaitGroup
+	initWG                         sync.WaitGroup
+	shutdownOnce                   sync.Once
+	shutdownDone                   chan struct{}
+	shutdownErr                    error
+	recentQueriesLen               int
+	recentQueriesHead              int
+	statsCacheTTL                  time.Duration
+	initMu                         sync.RWMutex
+	retrievalStatsMu               sync.RWMutex
+	recentQueriesMu                sync.RWMutex
+	cachedObsCountsMu              sync.RWMutex
+	staleQueueOnce                 sync.Once
+	ready                          atomic.Bool
+	vault                          *crypto.Vault
+	issueStore                     *gorm.IssueStore
+	credentialStore                *gorm.CredentialStore
+	memoryStore                    *gorm.MemoryStore
+	documentStore                  versionedDocumentStore
+	booksStore                     booksStore
+	booksPipeline                  booksPipelineRunner
+	memoryStoreSeam                memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
+	memoryGetStoreSeam             memoryGetStore  // test-only: when non-nil, overrides memoryStore for exact-ID reads
+	stateStore                     statePlane
+	experienceProvider             experienceHistoryProvider
+	temporalTruthProvider          temporalTruthProvider
+	principalMemoryQueryService    principalMemoryQueryService
+	domainOwnerStore               domainOwnerStore
+	domainRegistryService          domainRegistryService
+	behavioralRulesStore           *gorm.BehavioralRulesStore
+	auditStore                     *gorm.AuditStore
+	purgeStore                     *gorm.PurgeStore
+	testAuditRetainer              auditRetainer // test-only override for retention unit tests
+	feedbackUpdater                *feedback.Updater
+	segmentStore                   *gorm.SegmentStore
+	embeddingClient                *embedding.Client
+	embeddingStore                 *embedding.Store
+	embeddingRecorder              *embedding.BackfillRecorder
+	rerankClient                   *reranking.Client
+	promotionStore                 *gorm.PromotionStore
+	graphStore                     *graph.Store
+	graphNodeStore                 *graph.NodesStore
+	vaultOnce                      sync.Once
+	vaultErr                       error
+	promptCache                    sync.Map // map[int64]promptCacheEntry — last user prompt per session
+	eventBus                       *projectevents.Bus
+	projectReaper                  projectReaperLifecycle
+	projectReaperFactory           projectReaperFactory
 	// lastRequestAt tracks the Unix nanosecond timestamp of the most recent
 	// MCP/REST request handled by this server. Updated atomically in
 	// requestActivityMiddleware on every request.
@@ -1267,8 +1268,14 @@ func (s *Service) initializeAsync() {
 		s.setInitError(fmt.Errorf("compose operator collection HTTP adapter: %w", composeErr))
 		return
 	}
+	queueCandidateSelectionHandler, composeErr := composeQueueCandidateSelectionHandler(s, store.GetDB())
+	if composeErr != nil {
+		s.setInitError(fmt.Errorf("compose queue candidate selection handler: %w", composeErr))
+		return
+	}
 	s.initMu.Lock()
 	s.operatorCollectionAdapter = operatorCollectionAdapter
+	s.queueCandidateSelectionHandler = queueCandidateSelectionHandler
 	s.initMu.Unlock()
 
 	// Compose UCI after settings resolution and shared embedding initialization,
@@ -1912,6 +1919,10 @@ func (s *Service) setupRoutes() {
 		// Static routes must come BEFORE /{id} to avoid chi matching them as IDs.
 		r.Get("/api/issues/tracked-projects", s.handleTrackedProjects)
 		r.Post("/api/issues/acknowledge", s.handleAcknowledgeIssues)
+		r.Post("/api/issues/selection", s.HandleIssueSelectionSnapshot)
+		r.Post("/api/issues/selection/current", s.HandleIssueSelectionCurrent)
+		r.Post("/api/issues/selection/page", s.HandleIssueSelectionPage)
+		r.Post("/api/issues/operations", s.HandleIssueSelectionOperation)
 		r.Get("/api/issues/{id}", s.handleGetIssue)
 		r.Patch("/api/issues/{id}", s.handleUpdateIssue)
 		r.Delete("/api/issues/{id}", s.handleDeleteIssue)
@@ -1945,7 +1956,9 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/memory-domains", s.handleListMemoryDomains)
 		r.Put("/api/memory-domains/{domain}", s.handleUpsertMemoryDomain)
 		r.Delete("/api/memory-domains/{domain}", s.handleDeleteMemoryDomain)
+		s.registerMemoryCollectionOperationRoutes(r)
 		r.Get("/api/memory/candidates", s.handleListMemoryCandidates)
+		r.Post("/api/memory/candidates/operations", s.queueCandidateSelectionRoute())
 		r.Get("/api/memory/candidates/{id}", s.handleGetMemoryCandidate)
 		r.Post("/api/memory/candidates/{id}/promote", s.handlePromoteMemoryCandidate)
 		r.Post("/api/memory/candidates/{id}/reject", s.handleRejectMemoryCandidate)
@@ -2036,6 +2049,19 @@ func (s *Service) operatorCollectionRoute(handler func(*OperatorCollectionHTTPAd
 			return
 		}
 		handler(adapter, w, r)
+	}
+}
+
+func (s *Service) queueCandidateSelectionRoute() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.initMu.RLock()
+		handler := s.queueCandidateSelectionHandler
+		s.initMu.RUnlock()
+		if handler == nil {
+			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+			return
+		}
+		handler.Handle(w, r)
 	}
 }
 

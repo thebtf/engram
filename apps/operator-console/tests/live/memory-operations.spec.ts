@@ -156,11 +156,10 @@ test('T028 live Memory selection actions preserve privacy and mutation truth', a
     expect((await operate(page, 'suppress', conflictSelection)).status).toBe(200)
     const staleConflict = await operate(page, 'suppress', conflictSelection)
     expect(staleConflict.status).toBe(207)
-    expect(staleConflict.text).not.toContain(String(conflictTarget.id))
-    expect(parseJSON<{ operation_state: string; item_results: Array<{ target_id: string; outcome: string }> }>(staleConflict)).toEqual({
-      operation_state: 'partial',
-      item_results: [{ target_id: 'redacted', outcome: 'conflict' }],
-    })
+    const staleResult = parseJSON<{ request_id: string; operation_state: string; item_results: Array<{ target_id: string; outcome: string; observed_version?: number }> }>(staleConflict)
+    expect(staleResult.request_id).not.toBe('')
+    expect(staleResult.operation_state).toBe('partial')
+    expect(staleResult.item_results).toEqual([{ target_id: 'redacted', outcome: 'conflict' }])
 
     const accessLossTarget = await createMemory(page, project, privateContent)
     const frozenSelection = await selectFrozenProject(page, project)

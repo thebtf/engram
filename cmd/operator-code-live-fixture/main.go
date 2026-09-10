@@ -20,6 +20,7 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/uci"
 	"github.com/thebtf/engram/internal/worker"
+	"github.com/thebtf/engram/pkg/models"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -31,6 +32,7 @@ const (
 	fixtureExpectedGraph  = "CodeExplorerFixtureTarget"
 	fixtureExpectedSource = "CodeExplorerFixtureEntry"
 	fixtureSourcePath     = "fixture.go"
+	fixtureQueueSeedCount = 5
 )
 
 var fixtureSource = []byte(`package fixture
@@ -175,6 +177,9 @@ func provision(ctx context.Context, dsn string, in invocation) (fixtureOutput, e
 	if !subject.Valid() {
 		return fixtureOutput{}, fmt.Errorf("fixture browser subject is invalid")
 	}
+	if err := seedFixtureQueueCandidates(ctx, store.GetDB(), project); err != nil {
+		return fixtureOutput{}, err
+	}
 
 	contexts := gormdb.NewUCIContextStore(store.DB)
 	source, err := contexts.CreateSource(ctx, gormdb.CreateSourceInput{
@@ -286,6 +291,32 @@ func provision(ctx context.Context, dsn string, in invocation) (fixtureOutput, e
 		ExpectedSource: fixtureExpectedSource,
 		ExpectedMarker: marker,
 	}, nil
+}
+
+func seedFixtureQueueCandidates(ctx context.Context, db *gorm.DB, project string) error {
+	candidates := gormdb.NewCandidateStore(db, nil)
+	for index := range fixtureQueueSeedCount {
+		candidate, err := models.NewCrystallizationCandidate(
+			fmt.Sprintf("operator-code-live-queue-%s-%d", project, index),
+			fmt.Sprintf("operator code live queue candidate %d", index+1),
+			"semantic",
+			models.CandidateOptions{
+				Tier:             "semantic",
+				EpistemicType:    "decision",
+				PrivacyScope:     "project",
+				AffectedProjects: []string{project},
+				Confidence:       0.9,
+				RecurrenceCount:  1,
+			},
+		)
+		if err != nil {
+			return fmt.Errorf("create fixture queue candidate: %w", err)
+		}
+		if _, err := candidates.Create(ctx, candidate); err != nil {
+			return fmt.Errorf("seed fixture queue candidate: %w", err)
+		}
+	}
+	return nil
 }
 
 func fixtureSourceFor(in invocation) ([]byte, error) {

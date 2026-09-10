@@ -17,6 +17,7 @@ const FIXTURE_OVERRIDDEN_ENVIRONMENT_NAMES: Record<string, true> = {
   ENGRAM_AUTH_ADMIN_TOKEN: true,
   ENGRAM_AUTH_DISABLED: true,
   ENGRAM_CODE_INTEL_ENABLED: true,
+  ENGRAM_VNEXT_F_ENABLED: true,
   ENGRAM_TOKEN: true,
   ENGRAM_WORKSTATION_TOKEN: true,
   ENGRAM_API_TOKEN: true,
@@ -130,7 +131,7 @@ interface FixtureController {
 }
 
 class LiveFixture implements FixtureController {
-  private readonly fixtureId = `operator-console-live-${process.pid}-${randomUUID().replaceAll('-', '')}`
+  private readonly fixtureId = `operator-live-${process.pid}-${randomUUID().replaceAll('-', '')}`
   private readonly containerName = this.fixtureId
   private readonly traffic: RouteTraffic[] = []
   private readonly browserPassword = `Live-${randomBytes(24).toString('base64url')}`
@@ -348,6 +349,7 @@ class LiveFixture implements FixtureController {
       ENGRAM_AUTH_ADMIN_TOKEN: this.adminToken,
       ENGRAM_AUTH_DISABLED: 'false',
       ENGRAM_CODE_INTEL_ENABLED: 'true',
+      ENGRAM_VNEXT_F_ENABLED: 'true',
       ENGRAM_WORKER_HOST: '127.0.0.1',
       HOME: home,
       USERPROFILE: home,

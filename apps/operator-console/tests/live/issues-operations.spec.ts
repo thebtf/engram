@@ -25,16 +25,16 @@ function parseSelectionVersion(body: string): number {
  return value.selection.selection_version
 }
 
-async function requestJSON(page: Page, path: string, body: unknown) {
- return page.evaluate(async ({ requestPath, requestBody }) => {
+async function requestJSON(page: Page, path: string, body: unknown, requestID = crypto.randomUUID()) {
+ return page.evaluate(async ({ requestPath, requestBody, requestID: headerRequestID }) => {
   const response = await fetch(requestPath, {
    method: 'POST',
    credentials: 'include',
-   headers: { 'Content-Type': 'application/json', 'X-Engram-Request-ID': crypto.randomUUID() },
+   headers: { 'Content-Type': 'application/json', 'X-Engram-Request-ID': headerRequestID },
    body: JSON.stringify(requestBody),
   })
   return { status: response.status, body: await response.text() }
- }, { requestPath: path, requestBody: body })
+ }, { requestPath: path, requestBody: body, requestID })
 }
 
 test('T027 Issues selection actions retain cursor, revision, and readback truth', async ({ page }, testInfo) => {
@@ -84,7 +84,7 @@ test('T027 Issues selection actions retain cursor, revision, and readback truth'
    action: 'priority',
    priority: 'high',
    selection: { kind: 'page', selection_version: selectionVersion }
-  })
+  }, 't027-page-priority')
   expect(operation.status).toBe(200)
   expect(operation.body).toContain('"operation_state":"completed"')
   expect(operation.body).not.toContain(marker)
