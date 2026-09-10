@@ -31,6 +31,9 @@ var schemaIntegrityEntityIDWhitelist = map[string]string{
 	"sdk_sessions.claude_session_id":        "external Claude session identifier (TEXT), not a row FK",
 	"agent_session_state.session_id":        "external SDK session identifier (TEXT), not a row FK",
 	"attention_events.session_id":           "external SDK session identifier (TEXT), not a row FK",
+	// Browser-side caller sessions are external opaque strings, not dashboard sessions.id rows.
+	"browser_tab_bindings.session_id":  "external browser session identifier (TEXT), not a row FK",
+	"collection_selections.session_id": "external browser session identifier (TEXT), not a row FK",
 	// session_segments.session_id is an external-session-string (TEXT, not a
 	// FK to sdk_sessions.id). The former reasoning_traces.sdk_session_id entry
 	// was removed in CR-2b: migration 137 drops reasoning_traces, so a whitelist
