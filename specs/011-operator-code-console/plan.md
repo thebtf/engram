@@ -73,14 +73,37 @@ flowchart LR
   DESIGN[Accepted .od to design promotion] --> S1A[S1a honest shell and base live harness]
   S1A --> S1B[S1b shared mutation truth]
   S1B --> SEL[Shared selection and pagination]
-  SEL --> RULES[S3a Rules]
-  RULES --> OTHER[S3b Issues Memory Queue Documents]
+  SEL --> S3ROUTE[T023 shared selection composition]
+  S3ROUTE --> RULES[T026 S3a Rules-first acceptance]
+  RULES --> T027[T027 Issues]
+  RULES --> T028[T028 Memory]
+  RULES --> T029[T029 Queue]
+  RULES --> T030[T030 Documents]
+  S3ROUTE --> T031[T031 later-domain composition]
+  T027 --> T031
+  T028 --> T031
+  T029 --> T031
+  T030 --> T031
+  T031 --> T032[T032 later-domain integration proof]
+  T032 --> OTHER[S3b Issues Memory Queue Documents]
 
-  RA[Exact R-A installed tuple and declared fixture] --> S2[S2 Code Explorer]
-  MECH[Current-slice pinned mechanism matrix] --> S2
-  AUTH[Browser subject grants bindings] --> S2
-  RELEASE[Typed common UCI release] --> S2
-  DESIGN --> S2
+  PLAN[Accepted Feature011 planning] --> T012[T012 Browser subject and grants]
+  T012 --> T013[T013 grant migration registration]
+  T012 --> T014[T014 browser binding implementation]
+  T013 --> T015[T015 binding migration registration]
+  T014 --> T015
+  T012 --> T016[T016 typed UCI release]
+  T014 --> T016
+  T016 --> T017[T017 HTTP adapter]
+  T017 --> T018[T018 service composition]
+  T018 --> T019[T019 Code Explorer]
+
+  RA[Exact R-A installed tuple and declared fixture] --> T002[T002 current-slice fixture]
+  MECH[Current-slice pinned mechanism matrix] --> T002
+  T002 --> T019
+  T002 --> T020[T020 S2 cross-surface proof]
+  T019 --> T020
+  T020 --> S2[S2 Code Explorer accepted]
   S2 --> S4[S4 daemon index intent]
 
   S2 --> BOOKPLAN[Book Context planning admitted]
@@ -92,7 +115,7 @@ flowchart LR
   RC[Broader R-C comparison or language expansion] --> RCCLAIM[R-C quality/support claim only]
 ```
 
-The current-slice matrix, not broader R-C comparison, gates S2. The graph expresses the Book conjunction: Rules alone never admits planning, and S2 plus Rules never admits Book implementation. S2/S3 work may run in parallel only after ownership reservation below.
+The current-slice matrix, not broader R-C comparison, gates S2. The graph distinguishes implementation gates—the typed caller/binding contracts consumed by T016—from integration gates that serialize the migration registry or join completed producers. S1a/T008 and T015 are not UCI release implementation gates. The graph expresses the Book conjunction: Rules alone never admits planning, and S2 plus Rules never admits Book implementation. S2/S3 work may run in parallel only after ownership reservation below.
 
 ## Exclusive Ownership and Handoffs
 
@@ -121,7 +144,7 @@ The current-slice matrix, not broader R-C comparison, gates S2. The graph expres
 | S1b | Shared union plus all twelve domain consumer handoffs. | Mixed commit/failure, known commit/readback failure, response loss before/after commit, access loss, and callback load-error prove no false rollback/replay. | One client-contract cutover; pending server effects persist for safe readback. |
 | S2 | Current-slice mechanism gate, R-A exact tuple, grant/owner/audit, Browser Binding Application, typed release, HTTP adapter, design flow. | Ordinary agent and A/B browser/MCP execute declared semantic query → relation → exact View read; actual one-time opener normalization plus navigation signals drive fresh opener, child-open → select → child-reload pin retention, browser duplicate collision, normal/late/crash reload, ambiguous fallback, proof/token replay, and document versus binding/session expiry through the single binding table; normal watcher changes A alias target/caller unchanged to new A View while B stays unchanged; denial/revocation/recorder failure disclose nothing. | Disable/revert additive HTTP/UI/grant/binding seam; retain MCP/UCI Views and audit. |
 | S3a | S1b selection/cursor contract. | >200 Rules: explicit/page/frozen filter/exclusions; permission/version change; authorized postconditions; scope reorder is all-or-none. | Rules adapter/handler boundary; transactional reorder has no partial state. |
-| S3b | S3a shared seam; one domain at a time. | >100 Issues and each action matrix prove pagination, selection, partial/readback/status/retry-only-unfinished and forbidden action refusal. | Per-domain revert without weakening shared truth. |
+| S3b | S3a shared seam; four disjoint domain lanes begin after Rules-first acceptance and join only for route integration. | >100 Issues and each action matrix prove pagination, selection, partial/readback/status/retry-only-unfinished and forbidden action refusal. | Per-domain revert without weakening shared truth.
 | S4 | S2 context/release/binding and intent contract. | Online daemon records ACK/execution/released readable new View; offline remains queued/unavailable; released index result preserves authorization. | Stop new admission; retain durable intent/recovery and no browser filesystem action. |
 
 ## Integration Order and Cutover
@@ -131,7 +154,7 @@ The current-slice matrix, not broader R-C comparison, gates S2. The graph expres
 3. Mutation owner freezes union; named owners migrate the exact twelve consumers; integration lands one S1b cutover.
 4. Auth/grant, Browser Binding Application, release, and HTTP owners deliver their narrow contracts. The binding owner supplies its guard/transition port to HTTP and persistence declaration to composition; migration-registry owner lands ordered additive schema only after their declarations, and composition owner alone wires stores and routes.
 5. Code owner lands S2 through the live harness; integrator records the exact ordinary-agent/browser/MCP tuple and S2 fixture.
-6. Selection then Rules land; S2 + accepted Rules admits Book planning only. Later domain lanes and S4 complete Feature011; only then is Book implementation admissible.
+6. Selection then Rules land; S2 + accepted Rules admits Book planning only. Later independent domain lanes and S4 complete Feature011; only then is Book implementation admissible.
 
 ## Contract-to-Surface Map
 
