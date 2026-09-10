@@ -32,7 +32,7 @@ async function seedRules(page: Page, rows: RuleSeed[]): Promise<void> {
       const response = await fetch('/api/rules', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...rule, edited_by: 't025-live-fixture' }),
+        body: JSON.stringify({ ...rule, edited_by: 't026-live-fixture' }),
       })
       return response.status
     })), batch)
@@ -40,11 +40,12 @@ async function seedRules(page: Page, rows: RuleSeed[]): Promise<void> {
   }
 }
 
-test('T025 live Rules UI keeps selection, conflict, readback, and reorder server-authored', async ({ page }, testInfo) => {
+test('T026 live Rules UI retains safety state and server-authorized outcomes', async ({ page }, testInfo) => {
   const fixture = await readLiveFixture()
   const traffic: RouteTraffic[] = []
   const requestBodies: Array<{ method: string; path: string; body: string | null }> = []
-  const marker = `t025-${fixture.fixtureId}`
+  let reorderBody: string | null | undefined
+  const marker = `t026-${fixture.fixtureId}`
   const bulkProject = `${marker}-bulk`
   const globalRules = [
     { content: `${marker} global first`, priority: 100_002 },
@@ -112,8 +113,15 @@ test('T025 live Rules UI keeps selection, conflict, readback, and reorder server
     await expect(page.getByTestId('rules-selection-frozen-info')).toContainText('203')
     await page.locator('.rule-check').first().click()
     await expect(page.getByTestId('rules-selection-frozen-info')).toContainText('202')
+    const frozenInfo = page.getByTestId('rules-selection-frozen-info')
+    const disableSelected = page.getByRole('button', { name: /Выключить выбранные|Disable selected|禁用已选规则/ })
+
 
     await page.locator('.scope-filter select').selectOption('global')
+    await expect(page.getByTestId('rules-selection-kind')).toContainText(/Замороженный фильтр|Frozen filter|冻结/)
+    await expect(frozenInfo).toContainText('202')
+    await expect(page.getByTestId('rules-selection-reconfirm')).toContainText(/filter_changed/)
+    await expect(disableSelected).toBeDisabled()
     await page.getByTestId('rules-selection-load-page').click()
     await expect(page.getByTestId('rules-selection-page-info')).toContainText('2')
     await page.getByTestId('rules-selection-page').click()
@@ -125,6 +133,7 @@ test('T025 live Rules UI keeps selection, conflict, readback, and reorder server
     await editor.fill(`${marker} field changed by selection`)
     await page.getByRole('button', { name: /Сохранить|Save|保存/ }).click()
     await expect(page.getByTestId('rules-operation-readbacks')).toContainText(/включено|enabled|已启用/)
+    await expect(page.getByTestId('rules-operation-readbacks')).toContainText(/v\d+/)
 
     await page.getByTestId('rules-selection-load-page').click()
     await page.getByTestId('rules-selection-page').click()
@@ -154,22 +163,37 @@ test('T025 live Rules UI keeps selection, conflict, readback, and reorder server
     await expect(page.getByTestId('rules-operation-readbacks')).toHaveCount(1)
 
     const mutationRequests = requestBodies.filter((request) => request.method === 'POST' && request.path === '/api/rules')
-    expect(mutationRequests.some((request) => request.body?.includes('"action":"reorder"'))).toBe(true)
+    reorderBody = mutationRequests.find((request) => request.body?.includes('"action":"reorder"'))?.body
+    expect(reorderBody).toEqual(expect.stringContaining('"action":"reorder"'))
+    expect(reorderBody).toEqual(expect.stringContaining('"selection_version":'))
     expect(requestBodies.some((request) => request.method === 'PATCH')).toBe(false)
 
     const deleteButton = page.getByRole('button', { name: /Удалить|Delete|删除/ }).first()
     await deleteButton.click()
     await page.getByRole('button', { name: /Подтвердить|Confirm|确认/ }).click()
     await expect(page.getByTestId('rules-operation-readbacks')).toContainText(/отсутствие|authorized absence|授权不存在/)
+    await expect(page.getByTestId('rules-operation-readbacks')).not.toContainText(marker)
+    expect(traffic.filter((entry) => entry.path.toLowerCase().includes('book'))).toEqual([])
   } finally {
     const state = await appendBrowserTraffic(traffic)
-    await testInfo.attach('t025-rules-selection-live', {
+    await testInfo.attach('t026-rules-selection-safety-live', {
       contentType: 'application/json',
       body: Buffer.from(JSON.stringify({
         evidenceKind: 'real-authenticated-go-postgresql-browser',
         candidate: state.candidate,
         backend: { sourceCommit: state.backend.sourceCommit, binarySha256: state.backend.binarySha256 },
         frontend: { buildEntry: state.frontend.buildEntry, buildEntrySha256: state.frontend.buildEntrySha256 },
+        assertedSafetyBranches: [
+          'candidate-bound backend identity',
+          'page selection over two hundred rules',
+          'frozen selection exclusion and retained filter-change reconfirmation',
+          'stale selected-rule version conflict retaining UI selection',
+          'authorized current-state and destructive-absence readbacks',
+          'selection-version-bearing reorder request',
+          'no Book endpoint traffic',
+        ],
+        reorderRequestBody: reorderBody,
+        bookTraffic: state.traffic.filter((entry) => entry.path.toLowerCase().includes('book')),
         traffic: state.traffic,
       }, null, 2)),
     })

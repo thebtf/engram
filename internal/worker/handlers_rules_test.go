@@ -23,11 +23,11 @@ import (
 // backed by the required DATABASE_DSN integration database.
 func newRulesTestService(t *testing.T, project string) (*Service, *dbgorm.BehavioralRulesStore) {
 	t.Helper()
-	svc, brs, _ := newRulesSelectionTestService(t, project)
+	svc, brs, _, _ := newRulesSelectionTestService(t, project)
 	return svc, brs
 }
 
-func newRulesSelectionTestService(t *testing.T, project string) (*Service, *dbgorm.BehavioralRulesStore, *dbgorm.CollectionSelectionStore) {
+func newRulesSelectionTestService(t *testing.T, project string) (*Service, *dbgorm.BehavioralRulesStore, *dbgorm.CollectionSelectionStore, *dbgorm.Store) {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_DSN")
 	require.NotEmpty(t, dsn, "DATABASE_DSN is required for Rules PostgreSQL tests")
@@ -41,7 +41,7 @@ func newRulesSelectionTestService(t *testing.T, project string) (*Service, *dbgo
 			Exec("DELETE FROM behavioral_rules WHERE project = ?", project).Error)
 		require.NoError(t, store.Close())
 	})
-	return svc, brs, dbgorm.NewCollectionSelectionStore(store.DB)
+	return svc, brs, dbgorm.NewCollectionSelectionStore(store.DB), store
 }
 
 // TestHandleDeleteBehavioralRule_Success verifies that a valid DELETE request
@@ -465,6 +465,12 @@ func TestRulesCollectionBridgeRoutesFreezeAndPageOverTwoHundredRules(t *testing.
 	service := newOperatorCollectionRouteTestService(adapter)
 	identity := auth.SessionForBrowserUser("operator", 41)
 	sessionID := "rules-collection-bridge-session-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	t.Cleanup(func() {
+		require.NoError(t, ruleStore.DB.Exec(
+			"DELETE FROM collection_selections WHERE subject_user_id = ? AND session_id = ? AND domain = ?",
+			41, sessionID, operatorCollectionSelectionDomain,
+		).Error)
+	})
 	call := func(path, body string) *httptest.ResponseRecorder {
 		t.Helper()
 		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
@@ -595,15 +601,20 @@ func ioNopCloser(body string) nopReadCloser {
 
 func TestHandleCreateBehavioralRule_SelectionOperationReauthorizesAndReportsTruth(t *testing.T) {
 	project := "test-rules-handler-selection-operation"
-	svc, brs, selections := newRulesSelectionTestService(t, project)
+	const sessionID = "rules-selection-operation-session"
+	svc, brs, selections, ruleStore := newRulesSelectionTestService(t, project)
 	ctx := context.Background()
+	identity := auth.SessionForBrowserUser("operator", 41)
 	first, err := brs.Create(ctx, &models.BehavioralRule{Project: &project, Content: "selection operation first", Priority: 20})
 	require.NoError(t, err)
 	second, err := brs.Create(ctx, &models.BehavioralRule{Project: &project, Content: "selection operation second", Priority: 10})
 	require.NoError(t, err)
-
-	identity := auth.SessionForBrowserUser("operator", 41)
-	const sessionID = "rules-selection-operation-session"
+	t.Cleanup(func() {
+		require.NoError(t, ruleStore.DB.Exec(
+			"DELETE FROM collection_selections WHERE subject_user_id = ? AND session_id = ? AND domain = ?",
+			41, sessionID, operatorCollectionSelectionDomain,
+		).Error)
+	})
 	scope, err := (operatorCollectionScopeAuthority{}).ResolveOperatorCollectionScope(ctx, identity, sessionID, operatorCollectionSelectionDomain)
 	require.NoError(t, err)
 	explicit, err := selections.Save(ctx, scope, dbgorm.CollectionSelection{
@@ -709,7 +720,168 @@ func TestHandleCreateBehavioralRule_SelectionOperationReauthorizesAndReportsTrut
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &deleted))
 	assert.Equal(t, "completed", deleted.OperationState)
 	assert.True(t, deleted.Readback.Authoritative)
+
 	assert.Equal(t, "authorized_absence", deleted.Readback.Kind)
 	assert.NotContains(t, recorder.Body.String(), second.Content, "destructive readback must not disclose deleted row content")
 	assert.NotContains(t, recorder.Body.String(), "current_state", "destructive readback must not serialize a deleted row")
+}
+
+func TestHandleCreateBehavioralRule_SelectionOperationSafetyBranches(t *testing.T) {
+	project := "test-rules-handler-selection-safety-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	const sessionID = "rules-selection-safety-session"
+	svc, brs, selections, ruleStore := newRulesSelectionTestService(t, project)
+	ctx := context.Background()
+	identity := auth.SessionForBrowserUser("operator", 41)
+	scope, err := (operatorCollectionScopeAuthority{}).ResolveOperatorCollectionScope(ctx, identity, sessionID, operatorCollectionSelectionDomain)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, ruleStore.DB.Exec(
+			"DELETE FROM collection_selections WHERE subject_user_id = ? AND session_id = ? AND domain = ?",
+			41, sessionID, operatorCollectionSelectionDomain,
+		).Error)
+	})
+
+	first, err := brs.Create(ctx, &models.BehavioralRule{Project: &project, Content: "selection safety first", Priority: 30})
+	require.NoError(t, err)
+	second, err := brs.Create(ctx, &models.BehavioralRule{Project: &project, Content: "selection safety second", Priority: 20})
+	require.NoError(t, err)
+	third, err := brs.Create(ctx, &models.BehavioralRule{Project: &project, Content: "selection safety third", Priority: 10})
+	require.NoError(t, err)
+
+	call := func(requestID, body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/rules", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("X-Engram-Request-ID", requestID)
+		request.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: sessionID})
+		request = request.WithContext(auth.WithIdentity(request.Context(), identity))
+		recorder := httptest.NewRecorder()
+		svc.handleCreateBehavioralRule(recorder, request)
+		return recorder
+	}
+
+	t.Run("target and selection version changes reject without disclosure", func(t *testing.T) {
+		currentFirst, getErr := brs.Get(ctx, first.ID)
+		require.NoError(t, getErr)
+		currentSecond, getErr := brs.Get(ctx, second.ID)
+		require.NoError(t, getErr)
+		selection, saveErr := selections.Save(ctx, scope, dbgorm.CollectionSelection{
+			Kind: dbgorm.CollectionSelectionExplicit,
+			Targets: []dbgorm.CollectionSelectionTarget{
+				{ID: strconv.FormatInt(currentFirst.ID, 10), ExpectedVersion: uint64(currentFirst.Version)},
+				{ID: strconv.FormatInt(currentSecond.ID, 10), ExpectedVersion: uint64(currentSecond.Version)},
+			},
+		})
+		require.NoError(t, saveErr)
+
+		_, setErr := brs.SetEnabled(ctx, second.ID, false, nil)
+		require.NoError(t, setErr)
+		conflict := call("rules-operation-target-version", `{"request_id":"rules-operation-target-version","action":"disable","selection":{"kind":"explicit","selection_version":`+strconv.FormatInt(selection.Version, 10)+`}}`)
+		require.Equal(t, http.StatusConflict, conflict.Code, conflict.Body.String())
+		assert.NotContains(t, conflict.Body.String(), strconv.FormatInt(first.ID, 10), "a stale target conflict must not disclose selected rows")
+		afterFirst, getErr := brs.Get(ctx, first.ID)
+		require.NoError(t, getErr)
+		assert.Equal(t, currentFirst.Enabled, afterFirst.Enabled, "a target version conflict must not partially mutate an earlier target")
+		assert.Equal(t, currentFirst.Version, afterFirst.Version, "a target version conflict must not partially advance an earlier target")
+
+		currentThird, getErr := brs.Get(ctx, third.ID)
+		require.NoError(t, getErr)
+		staleSelection, saveErr := selections.Save(ctx, scope, dbgorm.CollectionSelection{
+			Kind:    dbgorm.CollectionSelectionExplicit,
+			Targets: []dbgorm.CollectionSelectionTarget{{ID: strconv.FormatInt(currentThird.ID, 10), ExpectedVersion: uint64(currentThird.Version)}},
+		})
+		require.NoError(t, saveErr)
+		_, saveErr = selections.Save(ctx, scope, dbgorm.CollectionSelection{
+			Kind:    dbgorm.CollectionSelectionExplicit,
+			Targets: []dbgorm.CollectionSelectionTarget{{ID: strconv.FormatInt(first.ID, 10), ExpectedVersion: uint64(afterFirst.Version)}},
+		})
+		require.NoError(t, saveErr)
+		selectionVersionConflict := call("rules-operation-selection-version", `{"request_id":"rules-operation-selection-version","action":"disable","selection":{"kind":"explicit","selection_version":`+strconv.FormatInt(staleSelection.Version, 10)+`}}`)
+		require.Equal(t, http.StatusConflict, selectionVersionConflict.Code, selectionVersionConflict.Body.String())
+		assert.NotContains(t, selectionVersionConflict.Body.String(), strconv.FormatInt(third.ID, 10), "a replaced selection version must not disclose its prior target")
+		afterThird, getErr := brs.Get(ctx, third.ID)
+		require.NoError(t, getErr)
+		assert.Equal(t, currentThird, afterThird, "a replaced selection version must not mutate its prior target")
+	})
+
+	t.Run("expired and permission-changed selections require reconfirmation", func(t *testing.T) {
+		currentFirst, getErr := brs.Get(ctx, first.ID)
+		require.NoError(t, getErr)
+		expiring, saveErr := selections.Save(ctx, scope, dbgorm.CollectionSelection{
+			Kind:              dbgorm.CollectionSelectionFrozenFilter,
+			FilterFingerprint: "sha256:" + strings.Repeat("b", 64),
+			Targets:           []dbgorm.CollectionSelectionTarget{{ID: strconv.FormatInt(first.ID, 10), ExpectedVersion: uint64(currentFirst.Version)}},
+			ExpiresAt:         time.Now().UTC().Add(time.Minute),
+		})
+		require.NoError(t, saveErr)
+		require.NoError(t, ruleStore.DB.Exec(
+			"UPDATE collection_selections SET created_at = ?, frozen_expires_at = ?, reconfirmation_required = TRUE, reconfirmation_reason = ?, selection_version = selection_version + 1 WHERE subject_user_id = ? AND session_id = ? AND domain = ?",
+			time.Now().UTC().Add(-2*time.Minute), time.Now().UTC().Add(-time.Minute), dbgorm.CollectionSelectionReconfirmExpired, scope.SubjectUserID, scope.SessionID, scope.Domain,
+		).Error)
+		expired := call("rules-operation-expired", `{"request_id":"rules-operation-expired","action":"delete","selection":{"kind":"frozen_filter","selection_version":`+strconv.FormatInt(expiring.Version, 10)+`,"selection_token":"`+expiring.Token+`"}}`)
+		require.Equal(t, http.StatusPreconditionFailed, expired.Code, expired.Body.String())
+		assert.NotContains(t, expired.Body.String(), currentFirst.Content, "an expired destructive selection must not disclose its target")
+		afterExpired, getErr := brs.Get(ctx, first.ID)
+		require.NoError(t, getErr)
+		assert.Equal(t, currentFirst, afterExpired, "selection expiry must reject destructive mutation")
+		reconfirmed, currentErr := selections.Current(ctx, scope)
+		require.NoError(t, currentErr)
+		assert.True(t, reconfirmed.ReconfirmationRequired)
+		assert.Equal(t, dbgorm.CollectionSelectionReconfirmExpired, reconfirmed.ReconfirmationReason)
+		assert.Greater(t, reconfirmed.Version, expiring.Version)
+
+		permissionSelection, saveErr := selections.Save(ctx, scope, dbgorm.CollectionSelection{
+			Kind:    dbgorm.CollectionSelectionExplicit,
+			Targets: []dbgorm.CollectionSelectionTarget{{ID: strconv.FormatInt(first.ID, 10), ExpectedVersion: uint64(afterExpired.Version)}},
+		})
+		require.NoError(t, saveErr)
+		require.NoError(t, ruleStore.DB.Exec(
+			"UPDATE collection_selections SET authorization_epoch = authorization_epoch + 1 WHERE subject_user_id = ? AND session_id = ? AND domain = ?",
+			scope.SubjectUserID, scope.SessionID, scope.Domain,
+		).Error)
+		permissionChanged := call("rules-operation-permission-changed", `{"request_id":"rules-operation-permission-changed","action":"disable","selection":{"kind":"explicit","selection_version":`+strconv.FormatInt(permissionSelection.Version, 10)+`}}`)
+		require.Equal(t, http.StatusPreconditionFailed, permissionChanged.Code, permissionChanged.Body.String())
+		assert.NotContains(t, permissionChanged.Body.String(), strconv.FormatInt(first.ID, 10), "a permission change must not disclose selected rows")
+		reconfirmed, currentErr = selections.Current(ctx, scope)
+		require.NoError(t, currentErr)
+		assert.True(t, reconfirmed.ReconfirmationRequired)
+		assert.Equal(t, dbgorm.CollectionSelectionReconfirmGrantChanged, reconfirmed.ReconfirmationReason)
+	})
+
+	t.Run("injected reorder conflict rolls back the complete scope", func(t *testing.T) {
+		current := make([]*models.BehavioralRule, 0, 3)
+		for _, rule := range []*models.BehavioralRule{first, second, third} {
+			loaded, getErr := brs.Get(ctx, rule.ID)
+			require.NoError(t, getErr)
+			current = append(current, loaded)
+		}
+		selection, saveErr := selections.Save(ctx, scope, dbgorm.CollectionSelection{
+			Kind: dbgorm.CollectionSelectionExplicit,
+			Targets: []dbgorm.CollectionSelectionTarget{
+				{ID: strconv.FormatInt(current[0].ID, 10), ExpectedVersion: uint64(current[0].Version)},
+				{ID: strconv.FormatInt(current[1].ID, 10), ExpectedVersion: uint64(current[1].Version)},
+				{ID: strconv.FormatInt(current[2].ID, 10), ExpectedVersion: uint64(current[2].Version)},
+			},
+		})
+		require.NoError(t, saveErr)
+
+		var before []dbgorm.BehavioralRule
+		require.NoError(t, ruleStore.DB.Where("project = ?", project).Order("id ASC").Find(&before).Error)
+		functionName := "rules_reorder_conflict_" + strconv.FormatInt(time.Now().UnixNano(), 10)
+		triggerName := functionName + "_trigger"
+		require.NoError(t, ruleStore.DB.Exec(
+			"CREATE FUNCTION "+functionName+"() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.id = "+strconv.FormatInt(current[0].ID, 10)+" AND pg_trigger_depth() = 1 THEN UPDATE behavioral_rules SET version = version + 1 WHERE id = "+strconv.FormatInt(current[1].ID, 10)+"; END IF; RETURN NEW; END; $$",
+		).Error)
+		require.NoError(t, ruleStore.DB.Exec("CREATE TRIGGER "+triggerName+" BEFORE UPDATE ON behavioral_rules FOR EACH ROW EXECUTE FUNCTION "+functionName+"()").Error)
+		t.Cleanup(func() {
+			require.NoError(t, ruleStore.DB.Exec("DROP TRIGGER IF EXISTS "+triggerName+" ON behavioral_rules").Error)
+			require.NoError(t, ruleStore.DB.Exec("DROP FUNCTION IF EXISTS "+functionName+"()").Error)
+		})
+
+		reorder := call("rules-operation-reorder-conflict", `{"request_id":"rules-operation-reorder-conflict","action":"reorder","selection":{"kind":"explicit","selection_version":`+strconv.FormatInt(selection.Version, 10)+`},"scope":{"project":"`+project+`"},"order":[{"rule_id":`+strconv.FormatInt(current[0].ID, 10)+`,"expected_version":`+strconv.FormatUint(uint64(current[0].Version), 10)+`},{"rule_id":`+strconv.FormatInt(current[1].ID, 10)+`,"expected_version":`+strconv.FormatUint(uint64(current[1].Version), 10)+`},{"rule_id":`+strconv.FormatInt(current[2].ID, 10)+`,"expected_version":`+strconv.FormatUint(uint64(current[2].Version), 10)+`}]}`)
+		require.Equal(t, http.StatusConflict, reorder.Code, reorder.Body.String())
+		assert.NotContains(t, reorder.Body.String(), strconv.FormatInt(current[0].ID, 10), "a rejected reorder must not disclose scoped rows")
+		var after []dbgorm.BehavioralRule
+		require.NoError(t, ruleStore.DB.Where("project = ?", project).Order("id ASC").Find(&after).Error)
+		assert.Equal(t, before, after, "an injected reorder conflict must leave the declared scope unchanged")
+	})
 }
