@@ -6525,6 +6525,116 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			},
 			Rollback: rollbackBrowserTabBindingsMigration177,
 		},
+		// Migration 178 remains inline so migrationmeta can derive the privacy-minimized selection schema.
+		{
+			ID: "178_collection_selections",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`CREATE TABLE IF NOT EXISTS collection_selections (
+						selection_id UUID PRIMARY KEY,
+						subject_user_id BIGINT NOT NULL,
+						session_id TEXT NOT NULL,
+						domain TEXT NOT NULL,
+						kind TEXT NOT NULL,
+						selection_version BIGINT NOT NULL,
+						context_fingerprint TEXT NOT NULL,
+						authorization_epoch BIGINT NOT NULL,
+						collection_version BIGINT NOT NULL,
+						filter_fingerprint TEXT,
+						page_cursor TEXT,
+						targets_json JSONB NOT NULL,
+						excluded_ids_json JSONB NOT NULL,
+						selection_token UUID,
+						frozen_expires_at TIMESTAMPTZ,
+						reconfirmation_required BOOLEAN NOT NULL DEFAULT false,
+						reconfirmation_reason TEXT,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT collection_selections_subject_user_id_chk CHECK (subject_user_id > 0),
+						CONSTRAINT collection_selections_session_id_chk CHECK (
+							btrim(session_id) <> ''
+							AND session_id = btrim(session_id)
+							AND session_id !~ '[[:cntrl:]]'
+							AND octet_length(session_id) <= 256
+						),
+						CONSTRAINT collection_selections_domain_chk CHECK (
+							domain ~ '^[a-z][a-z0-9_-]{0,63}$'
+						),
+						CONSTRAINT collection_selections_kind_chk CHECK (
+							kind IN ('none', 'explicit', 'page', 'frozen_filter')
+						),
+						CONSTRAINT collection_selections_selection_version_chk CHECK (selection_version > 0),
+						CONSTRAINT collection_selections_context_fingerprint_chk CHECK (
+							context_fingerprint ~ '^sha256:[0-9a-f]{64}$'
+						),
+						CONSTRAINT collection_selections_authorization_epoch_chk CHECK (authorization_epoch > 0),
+						CONSTRAINT collection_selections_collection_version_chk CHECK (collection_version > 0),
+						CONSTRAINT collection_selections_filter_fingerprint_chk CHECK (
+							filter_fingerprint IS NULL OR filter_fingerprint ~ '^sha256:[0-9a-f]{64}$'
+						),
+						CONSTRAINT collection_selections_page_cursor_chk CHECK (
+							page_cursor IS NULL OR (
+								btrim(page_cursor) <> ''
+								AND page_cursor = btrim(page_cursor)
+								AND page_cursor !~ '[[:cntrl:]]'
+								AND octet_length(page_cursor) <= 512
+							)
+						),
+						CONSTRAINT collection_selections_json_shape_chk CHECK (
+							jsonb_typeof(targets_json) IN ('array', 'null')
+							AND jsonb_typeof(excluded_ids_json) IN ('array', 'null')
+						),
+						CONSTRAINT collection_selections_selection_shape_chk CHECK (
+							(kind = 'none'
+								AND targets_json IN ('[]'::jsonb, 'null'::jsonb)
+								AND excluded_ids_json IN ('[]'::jsonb, 'null'::jsonb)
+								AND page_cursor IS NULL
+								AND filter_fingerprint IS NULL
+								AND selection_token IS NULL
+								AND frozen_expires_at IS NULL)
+							OR (kind = 'explicit'
+								AND jsonb_array_length(targets_json) > 0
+								AND excluded_ids_json IN ('[]'::jsonb, 'null'::jsonb)
+								AND page_cursor IS NULL
+								AND filter_fingerprint IS NULL
+								AND selection_token IS NULL
+								AND frozen_expires_at IS NULL)
+							OR (kind = 'page'
+								AND jsonb_array_length(targets_json) > 0
+								AND excluded_ids_json IN ('[]'::jsonb, 'null'::jsonb)
+								AND page_cursor IS NOT NULL
+								AND filter_fingerprint IS NULL
+								AND selection_token IS NULL
+								AND frozen_expires_at IS NULL)
+							OR (kind = 'frozen_filter'
+								AND jsonb_array_length(targets_json) > 0
+								AND filter_fingerprint IS NOT NULL
+								AND page_cursor IS NULL
+								AND selection_token IS NOT NULL
+								AND selection_token <> '00000000-0000-0000-0000-000000000000'::uuid
+								AND frozen_expires_at IS NOT NULL
+								AND frozen_expires_at > created_at)
+						),
+						CONSTRAINT collection_selections_reconfirmation_chk CHECK (
+							(NOT reconfirmation_required AND COALESCE(reconfirmation_reason, '') = '')
+							OR (reconfirmation_required AND reconfirmation_reason IN (
+								'filter_changed', 'context_changed', 'grant_changed', 'collection_changed', 'expired'
+							))
+						)
+					)`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS idx_collection_selection_scope
+						ON collection_selections (subject_user_id, session_id, domain)`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS idx_collection_selection_token
+						ON collection_selections (selection_token) WHERE selection_token IS NOT NULL`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 178: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackCollectionSelectionsMigration178,
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
@@ -6693,6 +6803,12 @@ func rollbackBrowserReadGrantsMigration176(tx *gorm.DB) error {
 // rollbackBrowserTabBindingsMigration177 retains opaque browser binding state:
 // a binary rollback cannot recreate browser-held proof material or a safe lease.
 func rollbackBrowserTabBindingsMigration177(tx *gorm.DB) error {
+	return nil
+}
+
+// rollbackCollectionSelectionsMigration178 retains opaque selection snapshots:
+// a binary rollback cannot safely reconstruct server-authorized frozen membership.
+func rollbackCollectionSelectionsMigration178(tx *gorm.DB) error {
 	return nil
 }
 
