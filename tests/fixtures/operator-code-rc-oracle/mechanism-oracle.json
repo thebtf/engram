@@ -1,0 +1,116 @@
+{
+  "schema_version": "engram.operator-code-rc-oracle/v1",
+  "references": [
+    {
+      "id": "socraticode",
+      "repository_url": "https://github.com/giancarloerra/SocratiCode",
+      "commit": "78a9eafa3b122c9c8768a3b85cb8c8166a571301",
+      "license": "AGPL-3.0-only",
+      "evidence_role": "source_metadata",
+      "runtime_dependency": false
+    },
+    {
+      "id": "graphify",
+      "repository_url": "https://github.com/Graphify-Labs/graphify",
+      "commit": "33362d969292b57eda82f3fbd9eb5f3f5bc9bbc2",
+      "license": "Apache-2.0; NOTICE records historical MIT portions",
+      "evidence_role": "source_metadata",
+      "runtime_dependency": false
+    }
+  ],
+  "oracle_cases": [
+    {
+      "id": "exact_identifier",
+      "kind": "exact_identifier",
+      "question": "Где определяется TreeSitterIndexAdmissionArtifactProfile?",
+      "expected_outcome": "source_bound_answer",
+      "source_anchor": "internal/uci/index_admission.go"
+    },
+    {
+      "id": "russian_concept_query",
+      "kind": "russian_concept_query",
+      "question": "Как система сохраняет изоляцию между двумя worktree при смене checkout?",
+      "expected_outcome": "source_bound_answer",
+      "source_anchor": "internal/uci/context.go"
+    },
+    {
+      "id": "dependency",
+      "kind": "dependency",
+      "question": "Какая зависимость связывает caller.ts через bridge.ts с remote.ts?",
+      "expected_outcome": "source_bound_relation",
+      "source_anchor": "internal/handlers/codeintel/uci_prepared_resolver_internal_test.go"
+    },
+    {
+      "id": "reverse_impact",
+      "kind": "reverse_impact",
+      "question": "Какие callers затронет изменение remote.ts через bridge.ts?",
+      "expected_outcome": "source_bound_reverse_relation",
+      "source_anchor": "internal/uci/graph.go"
+    },
+    {
+      "id": "worktree_switch",
+      "kind": "worktree_switch",
+      "question": "Что меняется при переключении с checkout A на checkout B?",
+      "expected_outcome": "view_bound_isolation",
+      "source_anchor": "internal/uci/context.go"
+    },
+    {
+      "id": "no_answer",
+      "kind": "no_answer",
+      "question": "Где определяется NonexistentOperatorCodeOracleSymbol?",
+      "expected_outcome": "explicit_no_answer",
+      "source_anchor": "none"
+    }
+  ],
+  "engram_coverage": [
+    {
+      "language": "go",
+      "relations": [
+        "calls"
+      ],
+      "scope": "frozen_current_fixture"
+    },
+    {
+      "language": "typescript",
+      "relations": [
+        "imports",
+        "exports",
+        "calls"
+      ],
+      "scope": "bounded_alias_reexport_fixture"
+    },
+    {
+      "language": "tsx",
+      "relations": [
+        "imports",
+        "exports",
+        "calls"
+      ],
+      "scope": "bounded_alias_reexport_fixture"
+    }
+  ],
+  "deferred_profiles": [
+    {
+      "subject": "nvmd-ai",
+      "status": "deferred"
+    },
+    {
+      "subject": "NovaScript",
+      "status": "deferred"
+    },
+    {
+      "subject": "C#",
+      "status": "deferred"
+    },
+    {
+      "subject": "Vue",
+      "status": "deferred"
+    }
+  ],
+  "optional_comparator": {
+    "availability": "unavailable",
+    "comparison_status": "parity_not_checked"
+  },
+  "expansion_packets": [],
+  "claims": []
+}
