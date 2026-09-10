@@ -174,6 +174,7 @@ type Service struct {
 	transcriptCreatorOverride   transcriptCreator
 	retrievalHooks              *retrievalHooks
 	authHandlers                *AuthHandlers
+	operatorCodeAdapter         *OperatorCodeHTTPAdapter
 	version                     string
 	recentQueriesBuf            [maxRecentQueries]RecentSearchQuery
 	wg                          sync.WaitGroup
@@ -1275,6 +1276,14 @@ func (s *Service) initializeAsync() {
 			return
 		}
 		s.startUCIEmbeddingWorker(uciContext.embeddingWorker)
+		operatorCodeAdapter, composeErr := composeOperatorCodeHTTPAdapter(store.GetDB(), uciContext)
+		if composeErr != nil {
+			s.setInitError(fmt.Errorf("compose operator code HTTP adapter: %w", composeErr))
+			return
+		}
+		s.initMu.Lock()
+		s.operatorCodeAdapter = operatorCodeAdapter
+		s.initMu.Unlock()
 	}
 
 	// Rank-4: initialize the cross-encoder rerank client (optional — disabled if
@@ -1831,6 +1840,14 @@ func (s *Service) setupRoutes() {
 			r.Post("/api/hooks/ambient-candidates", s.handleAmbientCandidates)
 		}
 
+		// Operator Code routes expose only the composed HTTP adapter. The adapter
+		// owns request validation, grant/binding checks, UCI calls, and release.
+		r.Post("/api/code/status", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleStatus))
+		r.Post("/api/code/search", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleSearch))
+		r.Post("/api/code/graph", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleGraph))
+		r.Post("/api/code/source", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleVersionedRead))
+		r.Post("/api/code/contexts", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleContexts))
+
 		// Event ingest (Level 0 deterministic pipeline)
 		r.Post("/api/events/ingest", s.handleIngestEvent)
 
@@ -1973,6 +1990,19 @@ func (s *Service) setupRoutes() {
 	// client-side routes such as /memory and /settings. If an explicit upstream
 	// proxy is configured, serveIndex will delegate there instead.
 	s.router.Get("/*", serveIndex)
+}
+
+func (s *Service) operatorCodeRoute(handler func(*OperatorCodeHTTPAdapter, http.ResponseWriter, *http.Request)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.initMu.RLock()
+		adapter := s.operatorCodeAdapter
+		s.initMu.RUnlock()
+		if adapter == nil {
+			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+			return
+		}
+		handler(adapter, w, r)
+	}
 }
 
 // recordRetrievalStatsExtended accumulates per-project retrieval metrics atomically.

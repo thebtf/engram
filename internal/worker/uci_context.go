@@ -110,6 +110,62 @@ type uciContextComposition struct {
 	transport          grpcserver.UCITransport
 }
 
+type operatorCodeServerContextStore interface {
+	GetSource(context.Context, string) (*gormstore.UCISource, error)
+	GetCheckout(context.Context, string) (*gormstore.UCICheckout, error)
+}
+
+type operatorCodeServerResolver interface {
+	Authorize(context.Context, uci.ResolveContextInput) (uci.AuthorizedContext, error)
+}
+
+// operatorCodeServerAuthorizer derives the realm and owner principal from the
+// context registry. The browser caller supplies only a binding-pinned View.
+type operatorCodeServerAuthorizer struct {
+	contexts operatorCodeServerContextStore
+	resolver operatorCodeServerResolver
+}
+
+var _ operatorCodeContextAuthorizer = (*operatorCodeServerAuthorizer)(nil)
+
+func newOperatorCodeServerAuthorizer(contexts operatorCodeServerContextStore, resolver operatorCodeServerResolver) *operatorCodeServerAuthorizer {
+	return &operatorCodeServerAuthorizer{contexts: contexts, resolver: resolver}
+}
+
+func (authorizer *operatorCodeServerAuthorizer) AuthorizeOperatorCode(ctx context.Context, caller operatorCodeVerifiedCaller) (uci.AuthorizedContext, error) {
+	if authorizer == nil || authorizer.contexts == nil || authorizer.resolver == nil || !caller.Subject.Valid() || caller.BindingID == "" || caller.Context.SpaceID != nil {
+		return uci.AuthorizedContext{}, errors.New("operator code context authorizer is not configured")
+	}
+	source, err := authorizer.contexts.GetSource(ctx, caller.Context.SourceID)
+	if err != nil || source == nil || source.SourceID != caller.Context.SourceID {
+		return uci.AuthorizedContext{}, errors.New("operator code source scope is unavailable")
+	}
+	checkout, err := authorizer.contexts.GetCheckout(ctx, caller.Context.CheckoutID)
+	if err != nil || checkout == nil || checkout.CheckoutID != caller.Context.CheckoutID || checkout.SourceID != caller.Context.SourceID {
+		return uci.AuthorizedContext{}, errors.New("operator code checkout scope is unavailable")
+	}
+	ref := caller.Context
+	return authorizer.resolver.Authorize(ctx, uci.ResolveContextInput{
+		ClientSessionID: "operator-code/" + caller.BindingID,
+		AuthRealm:       source.AuthRealm,
+		Principal:       checkout.OwnerPrincipal,
+		Ref:             &ref,
+	})
+}
+
+func composeOperatorCodeHTTPAdapter(db *gormlib.DB, composition *uciContextComposition) (*OperatorCodeHTTPAdapter, error) {
+	if db == nil || composition == nil || composition.contextStore == nil || composition.resolver == nil || composition.application == nil || composition.exposureRecorder == nil {
+		return nil, errors.New("operator code HTTP composition requires UCI context dependencies")
+	}
+	return NewOperatorCodeHTTPAdapter(
+		NewCodeGrantApplication(gormstore.NewBrowserReadGrantStore(db)),
+		NewBrowserBindingApplication(gormstore.NewBrowserTabBindingStore(db)),
+		newOperatorCodeServerAuthorizer(composition.contextStore, composition.resolver),
+		composition.application,
+		composition.exposureRecorder,
+	), nil
+}
+
 // composeUCIContext creates and installs the narrow UCI context capability.
 // The disabled path returns before it allocates or installs any UCI dependency.
 func composeUCIContext(
