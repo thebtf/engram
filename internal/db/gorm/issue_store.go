@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/thebtf/engram/pkg/models"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -1022,7 +1023,7 @@ func updateIssueFieldsTx(tx *gorm.DB, id int64, title, body, priority, issueType
 		updates["type"] = issueType
 	}
 	if labels != nil {
-		updates["labels"] = labels
+		updates["labels"] = models.JSONStringArray(labels)
 	}
 	result := tx.Model(&Issue{}).Where("id = ?", id).Updates(updates)
 	if result.Error != nil {

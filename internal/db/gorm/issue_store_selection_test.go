@@ -121,6 +121,20 @@ func TestIssueStoreApplySelectionOperationPostgres(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, labels, labeled.Items[0].Readback.Labels)
+	labeledCurrent, _, getErr := store.GetIssue(ctx, labelTarget.ID)
+	require.NoError(t, getErr)
+	require.Equal(t, models.JSONStringArray(labels), labeledCurrent.Labels)
+	clearedLabels := []string{}
+	cleared, err := store.ApplyIssueSelectionOperation(ctx, IssueSelectionOperation{
+		Action:  IssueSelectionAction{Kind: IssueSelectionLabels, Labels: &clearedLabels},
+		Actor:   IssueSelectionActor{KeycardID: "issue-selection-owner"},
+		Targets: issueSelectionTargets(*labeledCurrent),
+	})
+	require.NoError(t, err)
+	require.Empty(t, cleared.Items[0].Readback.Labels)
+	clearedCurrent, _, getErr := store.GetIssue(ctx, labelTarget.ID)
+	require.NoError(t, getErr)
+	require.Empty(t, clearedCurrent.Labels)
 
 	statusTarget := issueSelectionTestRows(t, db, []int64{ids[9]})[0]
 	status := "resolved"
