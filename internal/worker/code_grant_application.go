@@ -16,6 +16,7 @@ type codeGrantStore interface {
 	Issue(context.Context, gormdb.BrowserReadGrantIssue) (gormdb.BrowserReadGrant, error)
 	Revoke(context.Context, int64, string, string) (gormdb.BrowserReadGrant, error)
 	CanRead(context.Context, int64, string, string) (bool, error)
+	Current(context.Context, int64) (gormdb.BrowserReadGrant, bool, error)
 }
 
 // CodeGrantApplication is the narrow authenticated boundary for browser code-read grants.
@@ -80,6 +81,19 @@ func (a *CodeGrantApplication) CanRead(ctx context.Context, caller auth.Identity
 		return false, err
 	}
 	return a.grants.CanRead(ctx, subject.UserID, sourceID, checkoutID)
+}
+
+// Current returns the subject's only current exact grant. Zero or multiple
+// grants are deliberately unselected rather than client-resolved.
+func (a *CodeGrantApplication) Current(ctx context.Context, caller auth.Identity) (gormdb.BrowserReadGrant, bool, error) {
+	subject, ok := caller.SessionBrowserSubject()
+	if !ok {
+		return gormdb.BrowserReadGrant{}, false, nil
+	}
+	if err := a.requireStore(); err != nil {
+		return gormdb.BrowserReadGrant{}, false, err
+	}
+	return a.grants.Current(ctx, subject.UserID)
 }
 
 func (a *CodeGrantApplication) requireStore() error {

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/uci"
 )
@@ -308,8 +309,17 @@ func newOperatorCodeHTTPTestAdapter(t *testing.T) (*OperatorCodeHTTPAdapter, *op
 	fixture := &operatorCodeHTTPTestFixture{
 		ref:      ref,
 		identity: identity,
-		grants:   &operatorCodeHTTPTestGrants{allowed: true},
-		binding: &operatorCodeHTTPTestBinding{pinned: BrowserBindingContext{
+		grants: &operatorCodeHTTPTestGrants{
+			allowed:   true,
+			currentOK: true,
+			current: gormdb.BrowserReadGrant{
+				AuthRealm:     "browser",
+				SubjectUserID: 41,
+				SourceID:      ref.SourceID,
+				CheckoutID:    ref.CheckoutID,
+			},
+		},
+		binding: &operatorCodeHTTPTestBinding{pinned: &BrowserBindingContext{
 			SourceID:          ref.SourceID,
 			CheckoutID:        ref.CheckoutID,
 			ViewID:            ref.ViewID,
@@ -327,6 +337,10 @@ type operatorCodeHTTPTestGrants struct {
 	allowed             bool
 	checks              int
 	revokeOnSecondCheck bool
+	current             gormdb.BrowserReadGrant
+	currentOK           bool
+	currentErr          error
+	currentCalls        int
 }
 
 func (grants *operatorCodeHTTPTestGrants) CanRead(_ context.Context, caller auth.Identity, sourceID, checkoutID string) (bool, error) {
@@ -340,10 +354,24 @@ func (grants *operatorCodeHTTPTestGrants) CanRead(_ context.Context, caller auth
 	return grants.allowed, nil
 }
 
+func (grants *operatorCodeHTTPTestGrants) Current(_ context.Context, caller auth.Identity) (gormdb.BrowserReadGrant, bool, error) {
+	if _, ok := caller.SessionBrowserSubject(); !ok {
+		return gormdb.BrowserReadGrant{}, false, nil
+	}
+	grants.currentCalls++
+	return grants.current, grants.currentOK, grants.currentErr
+}
+
 type operatorCodeHTTPTestBinding struct {
-	pinned BrowserBindingContext
-	err    error
-	calls  int
+	pinned    *BrowserBindingContext
+	err       error
+	calls     int
+	guardedID string
+	handshake BrowserBindingTransition
+	resume    BrowserBindingTransition
+	renewed   []BrowserBindingProof
+	closed    []BrowserBindingProof
+	pinnedTo  []BrowserBindingContext
 }
 
 func (binding *operatorCodeHTTPTestBinding) Guard(_ context.Context, identity auth.Identity, sessionID string, proof BrowserBindingProof) (BrowserBindingGuarded, error) {
@@ -354,8 +382,52 @@ func (binding *operatorCodeHTTPTestBinding) Guard(_ context.Context, identity au
 	if _, ok := identity.SessionBrowserSubject(); !ok || sessionID != "browser-session-41" || proof.TabBindingID != operatorCodeHTTPTestBindingID || proof.DocumentProof != "proof-current" {
 		return BrowserBindingGuarded{}, errors.New("proof denied")
 	}
-	pinned := binding.pinned
-	return BrowserBindingGuarded{TabBindingID: proof.TabBindingID, Pinned: &pinned}, nil
+	guarded := BrowserBindingGuarded{TabBindingID: proof.TabBindingID}
+	if binding.guardedID != "" {
+		guarded.TabBindingID = binding.guardedID
+	}
+	if binding.pinned != nil {
+		pinned := *binding.pinned
+		guarded.Pinned = &pinned
+	}
+	return guarded, nil
+}
+
+func (binding *operatorCodeHTTPTestBinding) Handshake(_ context.Context, _ auth.Identity, _ string, _ BrowserBindingHandshakeInput) (BrowserBindingTransition, error) {
+	if binding.err != nil {
+		return BrowserBindingTransition{}, binding.err
+	}
+	if binding.handshake.State != "" {
+		return binding.handshake, nil
+	}
+	return BrowserBindingTransition{State: BrowserBindingReady, TabBindingID: operatorCodeHTTPTestBindingID, DocumentProof: "proof-handshake", ResumeNonce: "resume-handshake", ReloadToken: "reload-handshake"}, nil
+}
+
+func (binding *operatorCodeHTTPTestBinding) Resume(_ context.Context, _ auth.Identity, _ string, _ BrowserBindingResumeInput) (BrowserBindingTransition, error) {
+	if binding.err != nil {
+		return BrowserBindingTransition{}, binding.err
+	}
+	if binding.resume.State != "" {
+		return binding.resume, nil
+	}
+	return BrowserBindingTransition{State: BrowserBindingReady, TabBindingID: operatorCodeHTTPTestBindingID, DocumentProof: "proof-resumed", ResumeNonce: "resume-current", ReloadToken: "reload-rotated"}, nil
+}
+
+func (binding *operatorCodeHTTPTestBinding) Renew(_ context.Context, _ auth.Identity, _ string, proof BrowserBindingProof) error {
+	binding.renewed = append(binding.renewed, proof)
+	return binding.err
+}
+
+func (binding *operatorCodeHTTPTestBinding) Close(_ context.Context, _ auth.Identity, _ string, proof BrowserBindingProof) error {
+	binding.closed = append(binding.closed, proof)
+	return binding.err
+}
+
+func (binding *operatorCodeHTTPTestBinding) Pin(_ context.Context, _ auth.Identity, _ string, _ BrowserBindingProof, pinned BrowserBindingContext) error {
+	binding.pinnedTo = append(binding.pinnedTo, pinned)
+	copy := pinned
+	binding.pinned = &copy
+	return binding.err
 }
 
 type operatorCodeHTTPTestAuthority struct {
@@ -377,6 +449,18 @@ func (authority *operatorCodeHTTPTestAuthority) AuthorizeOperatorCode(ctx contex
 		AuthRealm:       "browser",
 		Principal:       "browser-user/99",
 		Ref:             &ref,
+	})
+}
+
+func (authority *operatorCodeHTTPTestAuthority) ResolveCurrentOperatorCode(ctx context.Context, caller operatorCodeBindingCaller, grant gormdb.BrowserReadGrant) (uci.AuthorizedContext, error) {
+	if !caller.Subject.Valid() || caller.BindingID != operatorCodeHTTPTestBindingID || grant.SubjectUserID != caller.Subject.UserID || grant.SourceID != authority.ref.SourceID || grant.CheckoutID != authority.ref.CheckoutID {
+		return uci.AuthorizedContext{}, errors.New("current grant mismatch")
+	}
+	return authority.AuthorizeOperatorCode(ctx, operatorCodeVerifiedCaller{
+		Subject:   caller.Subject,
+		SessionID: caller.SessionID,
+		BindingID: caller.BindingID,
+		Context:   authority.ref,
 	})
 }
 
@@ -403,14 +487,15 @@ func (authorizer operatorCodeHTTPTestAuthorizer) AuthorizeContext(_ context.Cont
 }
 
 type operatorCodeHTTPTestApplication struct {
-	search      uci.QueryResponse
-	graph       uci.QueryResponse
-	read        uci.QueryResponse
-	status      mcp.CodebaseStatusSnapshot
-	metadata    map[string]string
-	searchCalls int
-	graphCalls  int
-	readCalls   int
+	search       uci.QueryResponse
+	graph        uci.QueryResponse
+	read         uci.QueryResponse
+	status       mcp.CodebaseStatusSnapshot
+	metadata     map[string]string
+	searchCalls  int
+	graphCalls   int
+	readCalls    int
+	projectCalls int
 }
 
 func (app *operatorCodeHTTPTestApplication) SearchCodebase(_ context.Context, _ uci.AuthorizedContext, _ mcp.CodebaseSearchInput) (uci.QueryResponse, error) {
@@ -433,6 +518,7 @@ func (app *operatorCodeHTTPTestApplication) CodebaseStatus(_ context.Context, _ 
 }
 
 func (app *operatorCodeHTTPTestApplication) Project(_ context.Context, _ uci.ContextRef) (map[string]string, error) {
+	app.projectCalls++
 	return app.metadata, nil
 }
 

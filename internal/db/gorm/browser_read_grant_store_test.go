@@ -68,6 +68,65 @@ func TestBrowserReadGrantStore_ExactTupleAndEnabledSubject(t *testing.T) {
 	require.False(t, allowed, "a disabled persisted user loses grant reads")
 }
 
+func TestBrowserReadGrantStore_CurrentSelectsOnlyOneLiveGrant(t *testing.T) {
+	fixture := newBrowserReadGrantFixture(t)
+	ctx := context.Background()
+	issue := func(sourceID, checkoutID string) BrowserReadGrant {
+		grant, err := fixture.store.Issue(ctx, BrowserReadGrantIssue{
+			IssuerUserID:    fixture.owner.ID,
+			IssuerPrincipal: browserReadGrantPrincipal(fixture.owner.ID),
+			TargetUserID:    fixture.target.ID,
+			SourceID:        sourceID,
+			CheckoutID:      checkoutID,
+		})
+		require.NoError(t, err)
+		return grant
+	}
+
+	first := issue(fixture.source.SourceID, fixture.checkout.CheckoutID)
+	current, selected, err := fixture.store.Current(ctx, fixture.target.ID)
+	require.NoError(t, err)
+	require.True(t, selected)
+	require.Equal(t, first.GrantRef, current.GrantRef)
+
+	second := issue(fixture.source.SourceID, fixture.otherCheckout.CheckoutID)
+	_, selected, err = fixture.store.Current(ctx, fixture.target.ID)
+	require.NoError(t, err)
+	require.False(t, selected, "multiple active grants must not select either checkout")
+
+	_, err = fixture.store.Revoke(ctx, fixture.owner.ID, browserReadGrantPrincipal(fixture.owner.ID), second.GrantRef)
+	require.NoError(t, err)
+	current, selected, err = fixture.store.Current(ctx, fixture.target.ID)
+	require.NoError(t, err)
+	require.True(t, selected)
+	require.Equal(t, first.GrantRef, current.GrantRef)
+
+	expiredAt := time.Now().UTC().Add(-time.Minute)
+	expired := BrowserReadGrant{
+		GrantRef:        uuid.NewString(),
+		AuthRealm:       fixture.source.AuthRealm,
+		SubjectUserID:   fixture.target.ID,
+		SourceID:        fixture.foreignSource.SourceID,
+		CheckoutID:      fixture.foreignCheckout.CheckoutID,
+		State:           BrowserReadGrantActive,
+		IssuerPrincipal: browserReadGrantPrincipal(fixture.owner.ID),
+		ExpiresAt:       &expiredAt,
+		IssuedAt:        expiredAt.Add(-time.Minute),
+		CreatedAt:       expiredAt.Add(-time.Minute),
+		UpdatedAt:       expiredAt.Add(-time.Minute),
+	}
+	require.NoError(t, fixture.db.Create(&expired).Error)
+	_, err = fixture.store.Revoke(ctx, fixture.owner.ID, browserReadGrantPrincipal(fixture.owner.ID), first.GrantRef)
+	require.NoError(t, err)
+	_, selected, err = fixture.store.Current(ctx, fixture.target.ID)
+	require.NoError(t, err)
+	require.False(t, selected, "revoked and expired grants must not select a context")
+
+	var stored BrowserReadGrant
+	require.NoError(t, fixture.db.Where("grant_ref = ?", expired.GrantRef).First(&stored).Error)
+	require.Equal(t, BrowserReadGrantExpired, stored.State)
+}
+
 func TestBrowserReadGrantStore_RequiresExactSourceOwnerAndAuditsAtomically(t *testing.T) {
 	fixture := newBrowserReadGrantFixture(t)
 	ctx := context.Background()

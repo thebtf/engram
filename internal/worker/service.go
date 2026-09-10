@@ -1842,6 +1842,11 @@ func (s *Service) setupRoutes() {
 
 		// Operator Code routes expose only the composed HTTP adapter. The adapter
 		// owns request validation, grant/binding checks, UCI calls, and release.
+		r.Post("/api/code/tabs/handshake", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleHandshake))
+		r.Post("/api/code/tabs/resume", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleResume))
+		r.Put("/api/code/tabs/{tab_binding_id}/lease", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleRenew))
+		r.Delete("/api/code/tabs/{tab_binding_id}", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleClose))
+		r.Put("/api/code/tabs/{tab_binding_id}/context", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandlePin))
 		r.Post("/api/code/status", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleStatus))
 		r.Post("/api/code/search", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleSearch))
 		r.Post("/api/code/graph", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleGraph))

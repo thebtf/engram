@@ -201,6 +201,44 @@ func (s *BrowserReadGrantStore) Revoke(ctx context.Context, issuerUserID int64, 
 	return result, nil
 }
 
+// Current returns the subject's one active, unexpired grant. It intentionally
+// treats zero and multiple grants as the same unselected result.
+func (s *BrowserReadGrantStore) Current(ctx context.Context, subjectUserID int64) (BrowserReadGrant, bool, error) {
+	if ctx == nil {
+		return BrowserReadGrant{}, false, fmt.Errorf("browser read grant current: context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return BrowserReadGrant{}, false, err
+	}
+	if subjectUserID <= 0 {
+		return BrowserReadGrant{}, false, nil
+	}
+	if err := s.requireDB("current"); err != nil {
+		return BrowserReadGrant{}, false, err
+	}
+
+	now := time.Now().UTC()
+	if err := s.expireDue(ctx, subjectUserID, now); err != nil {
+		return BrowserReadGrant{}, false, err
+	}
+	var grants []BrowserReadGrant
+	err := s.db.WithContext(ctx).Table("browser_read_grants AS browser_grant").
+		Select("browser_grant.*").
+		Joins("JOIN sources AS source ON source.source_id = browser_grant.source_id AND source.auth_realm = browser_grant.auth_realm").
+		Joins("JOIN ci_checkouts AS checkout ON checkout.checkout_id = browser_grant.checkout_id AND checkout.source_id = browser_grant.source_id").
+		Joins("JOIN users AS subject ON subject.id = browser_grant.subject_user_id").
+		Where("browser_grant.subject_user_id = ? AND browser_grant.state = ? AND (browser_grant.expires_at IS NULL OR browser_grant.expires_at > ?) AND subject.disabled = FALSE", subjectUserID, BrowserReadGrantActive, now).
+		Limit(2).
+		Find(&grants).Error
+	if err != nil {
+		return BrowserReadGrant{}, false, fmt.Errorf("browser read grant current: %w", err)
+	}
+	if len(grants) != 1 {
+		return BrowserReadGrant{}, false, nil
+	}
+	return grants[0], true, nil
+}
+
 // CanRead returns true only while the exact enabled user grant remains active and unexpired.
 func (s *BrowserReadGrantStore) CanRead(ctx context.Context, subjectUserID int64, sourceID, checkoutID string) (bool, error) {
 	if ctx == nil {
@@ -239,6 +277,15 @@ func (s *BrowserReadGrantStore) CanRead(ctx context.Context, subjectUserID int64
 		return false, fmt.Errorf("browser read grant expire: %w", err)
 	}
 	return false, nil
+}
+
+func (s *BrowserReadGrantStore) expireDue(ctx context.Context, subjectUserID int64, now time.Time) error {
+	if err := s.db.WithContext(ctx).Model(&BrowserReadGrant{}).
+		Where("subject_user_id = ? AND state = ? AND expires_at IS NOT NULL AND expires_at <= ?", subjectUserID, BrowserReadGrantActive, now).
+		Updates(map[string]any{"state": BrowserReadGrantExpired, "updated_at": now}).Error; err != nil {
+		return fmt.Errorf("browser read grant expire: %w", err)
+	}
+	return nil
 }
 
 type browserReadGrantTuple struct {

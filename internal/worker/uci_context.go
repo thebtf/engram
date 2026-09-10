@@ -113,6 +113,7 @@ type uciContextComposition struct {
 type operatorCodeServerContextStore interface {
 	GetSource(context.Context, string) (*gormstore.UCISource, error)
 	GetCheckout(context.Context, string) (*gormstore.UCICheckout, error)
+	ListAuthorizedContexts(context.Context, string, string, int) ([]uci.ContextRef, error)
 }
 
 type operatorCodeServerResolver interface {
@@ -150,6 +151,46 @@ func (authorizer *operatorCodeServerAuthorizer) AuthorizeOperatorCode(ctx contex
 		AuthRealm:       source.AuthRealm,
 		Principal:       checkout.OwnerPrincipal,
 		Ref:             &ref,
+	})
+}
+
+// ResolveCurrentOperatorCode selects the current published View only after the
+// grant application established that exactly one active grant exists. Neither
+// a browser label nor a browser ContextRef participates in this resolution.
+func (authorizer *operatorCodeServerAuthorizer) ResolveCurrentOperatorCode(ctx context.Context, caller operatorCodeBindingCaller, grant gormstore.BrowserReadGrant) (uci.AuthorizedContext, error) {
+	if authorizer == nil || authorizer.contexts == nil || !caller.Subject.Valid() || caller.BindingID == "" || grant.SubjectUserID != caller.Subject.UserID {
+		return uci.AuthorizedContext{}, errors.New("operator code current context is unavailable")
+	}
+	source, err := authorizer.contexts.GetSource(ctx, grant.SourceID)
+	if err != nil || source == nil || source.SourceID != grant.SourceID || source.AuthRealm != grant.AuthRealm {
+		return uci.AuthorizedContext{}, errors.New("operator code current source scope is unavailable")
+	}
+	checkout, err := authorizer.contexts.GetCheckout(ctx, grant.CheckoutID)
+	if err != nil || checkout == nil || checkout.CheckoutID != grant.CheckoutID || checkout.SourceID != grant.SourceID {
+		return uci.AuthorizedContext{}, errors.New("operator code current checkout scope is unavailable")
+	}
+	refs, err := authorizer.contexts.ListAuthorizedContexts(ctx, source.AuthRealm, checkout.OwnerPrincipal, 64)
+	if err != nil {
+		return uci.AuthorizedContext{}, errors.New("operator code current context list is unavailable")
+	}
+	var current *uci.ContextRef
+	for _, ref := range refs {
+		if ref.SpaceID == nil && ref.SourceID == grant.SourceID && ref.CheckoutID == grant.CheckoutID {
+			if current != nil {
+				return uci.AuthorizedContext{}, errors.New("operator code current context is ambiguous")
+			}
+			candidate := ref
+			current = &candidate
+		}
+	}
+	if current == nil {
+		return uci.AuthorizedContext{}, errors.New("operator code current context is unavailable")
+	}
+	return authorizer.AuthorizeOperatorCode(ctx, operatorCodeVerifiedCaller{
+		Subject:   caller.Subject,
+		SessionID: caller.SessionID,
+		BindingID: caller.BindingID,
+		Context:   *current,
 	})
 }
 

@@ -98,6 +98,210 @@ func TestOperatorCodeRoutesDelegateFiveEndpoints(t *testing.T) {
 	}
 }
 
+func TestOperatorCodeRoutes_ExposeLifecycleAndPrePinContexts(t *testing.T) {
+	t.Run("handshake", func(t *testing.T) {
+		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+		service := newOperatorCodeRouteTestService(adapter)
+		recorder := httptest.NewRecorder()
+		request := operatorCodeHTTPTestRequest(t, `{"document_nonce":"document-nonce-1"}`, fixture.identity)
+		request.URL.Path = "/api/code/tabs/handshake"
+		request.RequestURI = "/api/code/tabs/handshake"
+		service.router.ServeHTTP(recorder, request)
+
+		require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+		require.JSONEq(t, `{"state":"TAB_BINDING_READY","tab_binding_id":"60000000-0000-4000-8000-000000000041","document_proof":"proof-handshake","resume_nonce":"resume-handshake","reload_token":"reload-handshake"}`, recorder.Body.String())
+	})
+
+	t.Run("contexts before pin", func(t *testing.T) {
+		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+		fixture.binding.pinned = nil
+		fixture.app.metadata = map[string]string{"source": "engram source", "checkout": "working tree", "view": "release candidate"}
+		service := newOperatorCodeRouteTestService(adapter)
+		recorder := httptest.NewRecorder()
+		request := operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current"}`, fixture.identity)
+		request.URL.Path = "/api/code/contexts"
+		request.RequestURI = "/api/code/contexts"
+		service.router.ServeHTTP(recorder, request)
+
+		require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+		require.JSONEq(t, `{"context":{"source":"engram source","checkout":"working tree","view":"release candidate"}}`, recorder.Body.String())
+		require.NotContains(t, recorder.Body.String(), operatorCodeHTTPTestBindingID)
+		require.NotContains(t, recorder.Body.String(), fixture.ref.SourceID)
+		require.NotContains(t, recorder.Body.String(), fixture.ref.CheckoutID)
+		require.NotContains(t, recorder.Body.String(), fixture.ref.ViewID)
+	})
+}
+
+func TestOperatorCodeRoutes_BindingLifecyclePinsOnlyServerResolvedCurrentGrant(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	fixture.binding.pinned = nil
+	fixture.binding.handshake = BrowserBindingTransition{
+		State:         BrowserBindingReady,
+		TabBindingID:  operatorCodeHTTPTestBindingID,
+		DocumentProof: "proof-current",
+		ResumeNonce:   "resume-current",
+		ReloadToken:   "reload-current",
+	}
+	fixture.binding.resume = BrowserBindingTransition{
+		State:         BrowserBindingReady,
+		TabBindingID:  operatorCodeHTTPTestBindingID,
+		DocumentProof: "proof-resumed",
+		ResumeNonce:   "resume-current",
+		ReloadToken:   "reload-rotated",
+	}
+	fixture.app.metadata = map[string]string{"source": "engram source", "checkout": "working tree", "view": "release candidate"}
+	fixture.app.read = operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalExact)
+	service := newOperatorCodeRouteTestService(adapter)
+
+	call := func(method, path, body string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		request := operatorCodeHTTPTestRequest(t, body, fixture.identity)
+		request.Method = method
+		request.URL.Path = path
+		request.RequestURI = path
+		service.router.ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	handshake := call(http.MethodPost, "/api/code/tabs/handshake", `{"document_nonce":"fresh-document"}`)
+	require.Equal(t, http.StatusOK, handshake.Code, handshake.Body.String())
+	require.JSONEq(t, `{"state":"TAB_BINDING_READY","tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","resume_nonce":"resume-current","reload_token":"reload-current"}`, handshake.Body.String())
+
+	contexts := call(http.MethodPost, "/api/code/contexts", `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current"}`)
+	require.Equal(t, http.StatusOK, contexts.Code, contexts.Body.String())
+	require.JSONEq(t, `{"context":{"source":"engram source","checkout":"working tree","view":"release candidate"}}`, contexts.Body.String())
+	require.NotContains(t, contexts.Body.String(), fixture.ref.SourceID)
+	require.NotContains(t, contexts.Body.String(), fixture.ref.CheckoutID)
+	require.NotContains(t, contexts.Body.String(), fixture.ref.ViewID)
+	require.NotContains(t, contexts.Body.String(), "grant_ref")
+	require.NotContains(t, contexts.Body.String(), "digest")
+
+	pinned := call(http.MethodPut, "/api/code/tabs/"+operatorCodeHTTPTestBindingID+"/context", `{"document_proof":"proof-current"}`)
+	require.Equal(t, http.StatusNoContent, pinned.Code, pinned.Body.String())
+	require.Empty(t, pinned.Body.String())
+	require.Equal(t, []BrowserBindingContext{browserBindingContext(fixture.ref)}, fixture.binding.pinnedTo)
+
+	read := call(http.MethodPost, "/api/code/source", `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","entity_key":"Fixture.Symbol","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`)
+	require.Equal(t, http.StatusOK, read.Code, read.Body.String())
+	require.Contains(t, read.Body.String(), `"excerpt":"package demo"`)
+
+	renewed := call(http.MethodPut, "/api/code/tabs/"+operatorCodeHTTPTestBindingID+"/lease", `{"document_proof":"proof-current"}`)
+	require.Equal(t, http.StatusNoContent, renewed.Code, renewed.Body.String())
+	closed := call(http.MethodDelete, "/api/code/tabs/"+operatorCodeHTTPTestBindingID, `{"document_proof":"proof-current"}`)
+	require.Equal(t, http.StatusNoContent, closed.Code, closed.Body.String())
+	require.Equal(t, []BrowserBindingProof{{TabBindingID: operatorCodeHTTPTestBindingID, DocumentProof: "proof-current"}}, fixture.binding.renewed)
+	require.Equal(t, []BrowserBindingProof{{TabBindingID: operatorCodeHTTPTestBindingID, DocumentProof: "proof-current"}}, fixture.binding.closed)
+
+	resumed := call(http.MethodPost, "/api/code/tabs/resume", `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","resume_nonce":"resume-current","reload_token":"reload-current","document_nonce":"reload-document"}`)
+	require.Equal(t, http.StatusOK, resumed.Code, resumed.Body.String())
+	require.JSONEq(t, `{"state":"TAB_BINDING_READY","tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-resumed","resume_nonce":"resume-current","reload_token":"reload-rotated"}`, resumed.Body.String())
+}
+
+func TestOperatorCodeRoutes_CloseDenialsDoNotSelectOrLeak(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		path      string
+		method    string
+		body      string
+		configure func(*operatorCodeHTTPTestFixture)
+	}{
+		{
+			name:   "zero current grant",
+			path:   "/api/code/contexts",
+			method: http.MethodPost,
+			body:   `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current"}`,
+			configure: func(fixture *operatorCodeHTTPTestFixture) {
+				fixture.grants.currentOK = false
+			},
+		},
+		{
+			name:   "multiple current grants",
+			path:   "/api/code/contexts",
+			method: http.MethodPost,
+			body:   `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current"}`,
+			configure: func(fixture *operatorCodeHTTPTestFixture) {
+				fixture.grants.currentOK = false
+			},
+		},
+		{
+			name:   "replayed document proof",
+			path:   "/api/code/contexts",
+			method: http.MethodPost,
+			body:   `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-replayed"}`,
+		},
+		{
+			name:   "path binding mismatch",
+			path:   "/api/code/tabs/60000000-0000-4000-8000-000000000042/context",
+			method: http.MethodPut,
+			body:   `{"document_proof":"proof-current"}`,
+		},
+		{
+			name:   "revoked grant cannot pin",
+			path:   "/api/code/tabs/" + operatorCodeHTTPTestBindingID + "/context",
+			method: http.MethodPut,
+			body:   `{"document_proof":"proof-current"}`,
+			configure: func(fixture *operatorCodeHTTPTestFixture) {
+				fixture.grants.allowed = false
+			},
+		},
+		{
+			name:   "expired grant cannot pin",
+			path:   "/api/code/tabs/" + operatorCodeHTTPTestBindingID + "/context",
+			method: http.MethodPut,
+			body:   `{"document_proof":"proof-current"}`,
+			configure: func(fixture *operatorCodeHTTPTestFixture) {
+				fixture.grants.currentOK = false
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+			fixture.binding.pinned = nil
+			if testCase.configure != nil {
+				testCase.configure(fixture)
+			}
+			service := newOperatorCodeRouteTestService(adapter)
+			recorder := httptest.NewRecorder()
+			request := operatorCodeHTTPTestRequest(t, testCase.body, fixture.identity)
+			request.Method = testCase.method
+			request.URL.Path = testCase.path
+			request.RequestURI = testCase.path
+			service.router.ServeHTTP(recorder, request)
+
+			require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+			require.Empty(t, recorder.Body.String())
+			require.Empty(t, fixture.binding.pinnedTo)
+			require.Zero(t, fixture.app.projectCalls)
+			for _, forbidden := range []string{fixture.ref.SourceID, fixture.ref.CheckoutID, fixture.ref.ViewID, "grant_ref", "digest", "proof-current"} {
+				require.NotContains(t, recorder.Body.String(), forbidden)
+			}
+		})
+	}
+}
+
+func TestOperatorCodeRoutes_CollisionDoesNotChangeOriginalPin(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	original := *fixture.binding.pinned
+	fixture.binding.handshake = BrowserBindingTransition{
+		State:         BrowserBindingCollision,
+		TabBindingID:  "60000000-0000-4000-8000-000000000042",
+		DocumentProof: "proof-copy",
+		ResumeNonce:   "resume-copy",
+		ReloadToken:   "reload-copy",
+	}
+	service := newOperatorCodeRouteTestService(adapter)
+	recorder := httptest.NewRecorder()
+	request := operatorCodeHTTPTestRequest(t, `{"document_nonce":"copy-document","copied_tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","copied_resume_nonce":"resume-current"}`, fixture.identity)
+	request.URL.Path = "/api/code/tabs/handshake"
+	request.RequestURI = "/api/code/tabs/handshake"
+	service.router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.JSONEq(t, `{"state":"TAB_BINDING_COLLISION","tab_binding_id":"60000000-0000-4000-8000-000000000042","document_proof":"proof-copy","resume_nonce":"resume-copy","reload_token":"reload-copy"}`, recorder.Body.String())
+	require.Equal(t, &original, fixture.binding.pinned)
+	require.Empty(t, fixture.binding.pinnedTo)
+}
+
 func TestOperatorCodeRoutesRejectForbiddenSelectorsBeforeDelegation(t *testing.T) {
 	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
 	app := &operatorCodeRouteTestApplication{operatorCodeHTTPTestApplication: fixture.app}
@@ -153,6 +357,35 @@ func TestOperatorCodeServerAuthorizerDerivesSourceOwnerScope(t *testing.T) {
 	require.Equal(t, "operator-code/"+operatorCodeHTTPTestBindingID, resolver.input.ClientSessionID)
 }
 
+func TestOperatorCodeServerAuthorizer_ResolvesCurrentGrantWithoutBrowserSelector(t *testing.T) {
+	ref := uci.ContextRef{
+		SourceID:          "20000000-0000-4000-8000-000000000001",
+		CheckoutID:        "30000000-0000-4000-8000-000000000001",
+		ViewID:            "40000000-0000-4000-8000-000000000001",
+		AnalysisProfileID: "50000000-0000-4000-8000-000000000001",
+		Generation:        7,
+	}
+	contexts := &operatorCodeRouteTestContextStore{
+		source:   &gormstore.UCISource{SourceID: ref.SourceID, AuthRealm: "browser-realm"},
+		checkout: &gormstore.UCICheckout{CheckoutID: ref.CheckoutID, SourceID: ref.SourceID, OwnerPrincipal: "browser-user/99"},
+		refs:     []uci.ContextRef{ref},
+	}
+	resolver := &operatorCodeRouteTestResolver{}
+	authorizer := newOperatorCodeServerAuthorizer(contexts, resolver)
+	grant := gormstore.BrowserReadGrant{AuthRealm: "browser-realm", SubjectUserID: 41, SourceID: ref.SourceID, CheckoutID: ref.CheckoutID}
+	caller := operatorCodeBindingCaller{Subject: auth.BrowserSubjectForUser(41), SessionID: "browser-session-41", BindingID: operatorCodeHTTPTestBindingID}
+
+	_, err := authorizer.ResolveCurrentOperatorCode(context.Background(), caller, grant)
+	require.NoError(t, err)
+	require.Equal(t, 1, contexts.contextListCalls)
+	require.NotNil(t, resolver.input.Ref)
+	require.Equal(t, ref, *resolver.input.Ref)
+
+	contexts.refs = []uci.ContextRef{ref, ref}
+	_, err = authorizer.ResolveCurrentOperatorCode(context.Background(), caller, grant)
+	require.Error(t, err)
+}
+
 type operatorCodeRouteTestCalls struct {
 	status  int
 	search  int
@@ -190,10 +423,12 @@ func newOperatorCodeRouteTestService(adapter *OperatorCodeHTTPAdapter) *Service 
 }
 
 type operatorCodeRouteTestContextStore struct {
-	source        *gormstore.UCISource
-	checkout      *gormstore.UCICheckout
-	sourceCalls   []string
-	checkoutCalls []string
+	source           *gormstore.UCISource
+	checkout         *gormstore.UCICheckout
+	sourceCalls      []string
+	checkoutCalls    []string
+	refs             []uci.ContextRef
+	contextListCalls int
 }
 
 func (store *operatorCodeRouteTestContextStore) GetSource(_ context.Context, sourceID string) (*gormstore.UCISource, error) {
@@ -210,6 +445,11 @@ func (store *operatorCodeRouteTestContextStore) GetCheckout(_ context.Context, c
 		return nil, errors.New("checkout not found")
 	}
 	return store.checkout, nil
+}
+
+func (store *operatorCodeRouteTestContextStore) ListAuthorizedContexts(_ context.Context, _ string, _ string, _ int) ([]uci.ContextRef, error) {
+	store.contextListCalls++
+	return append([]uci.ContextRef(nil), store.refs...), nil
 }
 
 type operatorCodeRouteTestResolver struct {

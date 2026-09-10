@@ -14,8 +14,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/auth"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/uci"
 )
@@ -39,31 +41,38 @@ const (
 // real browser-session identity.
 type OperatorCodeHTTPAdapter struct {
 	grants    operatorCodeGrantReader
-	bindings  operatorCodeBindingGuard
+	bindings  operatorCodeBindingApplication
 	authority operatorCodeContextAuthorizer
 	app       operatorCodeApplication
 	recorder  operatorCodeExposureRecorder
 	now       func() time.Time
 }
 
-// operatorCodeGrantReader retains the already-typed T012 grant check. The
+// operatorCodeGrantReader retains the already-typed T012 grant checks. The
 // adapter never queries grant persistence or accepts a grant reference itself.
 type operatorCodeGrantReader interface {
 	CanRead(context.Context, auth.Identity, string, string) (bool, error)
+	Current(context.Context, auth.Identity) (gormdb.BrowserReadGrant, bool, error)
 }
 
-// operatorCodeBindingGuard retains the T014 document-proof guard. It returns a
-// server-persisted pin, never a client-selected context.
-type operatorCodeBindingGuard interface {
+// operatorCodeBindingApplication retains the T014 lifecycle and document-proof
+// state machine. A binding is never Code-read authority.
+type operatorCodeBindingApplication interface {
 	Guard(context.Context, auth.Identity, string, BrowserBindingProof) (BrowserBindingGuarded, error)
+	Handshake(context.Context, auth.Identity, string, BrowserBindingHandshakeInput) (BrowserBindingTransition, error)
+	Resume(context.Context, auth.Identity, string, BrowserBindingResumeInput) (BrowserBindingTransition, error)
+	Renew(context.Context, auth.Identity, string, BrowserBindingProof) error
+	Close(context.Context, auth.Identity, string, BrowserBindingProof) error
+	Pin(context.Context, auth.Identity, string, BrowserBindingProof, BrowserBindingContext) error
 }
 
-// operatorCodeContextAuthorizer is the composition-owned bridge from one
-// verified browser grant/pin to an AuthorizedContext. Its implementation derives
+// operatorCodeContextAuthorizer is the composition-owned bridge from a
+// server-resolved grant/pin to an AuthorizedContext. Its implementation derives
 // the source realm and checkout owner server-side; browser JSON never supplies
-// a principal, workspace, project, Space, label, or path selector.
+// a principal, workspace, project, Space, label, path, or ContextRef selector.
 type operatorCodeContextAuthorizer interface {
 	AuthorizeOperatorCode(context.Context, operatorCodeVerifiedCaller) (uci.AuthorizedContext, error)
+	ResolveCurrentOperatorCode(context.Context, operatorCodeBindingCaller, gormdb.BrowserReadGrant) (uci.AuthorizedContext, error)
 }
 
 // operatorCodeApplication is the existing UCI application surface after a
@@ -83,6 +92,13 @@ type operatorCodeExposureRecorder interface {
 	Record(context.Context, uci.AuthorizedContext, uci.ExposureInput) (uci.QueryExposure, error)
 }
 
+// operatorCodeBindingCaller is trusted request state for an unpinned document.
+type operatorCodeBindingCaller struct {
+	Subject   auth.BrowserSubject
+	SessionID string
+	BindingID string
+}
+
 // operatorCodeVerifiedCaller is private trusted state passed only after the
 // grant and current-document proof have both been rechecked.
 type operatorCodeVerifiedCaller struct {
@@ -97,7 +113,7 @@ type operatorCodeVerifiedCaller struct {
 // can never publish a contextual body.
 func NewOperatorCodeHTTPAdapter(
 	grants operatorCodeGrantReader,
-	bindings operatorCodeBindingGuard,
+	bindings operatorCodeBindingApplication,
 	authority operatorCodeContextAuthorizer,
 	app operatorCodeApplication,
 	recorder operatorCodeExposureRecorder,
@@ -110,6 +126,125 @@ func NewOperatorCodeHTTPAdapter(
 		recorder:  recorder,
 		now:       func() time.Time { return time.Now().UTC() },
 	}
+}
+
+// HandleHandshake creates a new document binding. It returns only material for
+// that document; a binding begins unpinned and unselected.
+func (adapter *OperatorCodeHTTPAdapter) HandleHandshake(w http.ResponseWriter, r *http.Request) {
+	var request operatorCodeHandshakeRequest
+	identity, ok := adapter.decode(w, r, "operator-code-tab-handshake", &request)
+	if !ok {
+		return
+	}
+	if !request.valid() {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return
+	}
+	if adapter.bindings == nil {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return
+	}
+	transition, err := adapter.bindings.Handshake(r.Context(), identity.identity, identity.sessionID, request.input())
+	if err != nil {
+		operatorCodeWriteBodyless(w, http.StatusForbidden)
+		return
+	}
+	operatorCodeWriteTransition(w, transition)
+}
+
+// HandleResume delegates the no-opener reload transition to T014. Pending
+// reloads intentionally expose no document material.
+func (adapter *OperatorCodeHTTPAdapter) HandleResume(w http.ResponseWriter, r *http.Request) {
+	var request operatorCodeResumeRequest
+	identity, ok := adapter.decode(w, r, "operator-code-tab-resume", &request)
+	if !ok {
+		return
+	}
+	if !request.valid() {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return
+	}
+	if adapter.bindings == nil {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return
+	}
+	transition, err := adapter.bindings.Resume(r.Context(), identity.identity, identity.sessionID, request.input())
+	if err != nil {
+		operatorCodeWriteBodyless(w, http.StatusForbidden)
+		return
+	}
+	operatorCodeWriteTransition(w, transition)
+}
+
+// HandleRenew extends only the current path-bound document lease.
+func (adapter *OperatorCodeHTTPAdapter) HandleRenew(w http.ResponseWriter, r *http.Request) {
+	var request operatorCodePathProofRequest
+	identity, ok := adapter.decode(w, r, "operator-code-tab-lease", &request)
+	if !ok {
+		return
+	}
+	proof, ok := operatorCodePathProof(r, request)
+	if !ok {
+		operatorCodeWriteBodyless(w, http.StatusForbidden)
+		return
+	}
+	if adapter.bindings == nil {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return
+	}
+	if err := adapter.bindings.Renew(r.Context(), identity.identity, identity.sessionID, proof); err != nil {
+		operatorCodeWriteBodyless(w, http.StatusForbidden)
+		return
+	}
+	operatorCodeWriteBodyless(w, http.StatusNoContent)
+}
+
+// HandleClose closes only the current path-bound document lease.
+func (adapter *OperatorCodeHTTPAdapter) HandleClose(w http.ResponseWriter, r *http.Request) {
+	var request operatorCodePathProofRequest
+	identity, ok := adapter.decode(w, r, "operator-code-tab-close", &request)
+	if !ok {
+		return
+	}
+	proof, ok := operatorCodePathProof(r, request)
+	if !ok {
+		operatorCodeWriteBodyless(w, http.StatusForbidden)
+		return
+	}
+	if adapter.bindings == nil {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return
+	}
+	if err := adapter.bindings.Close(r.Context(), identity.identity, identity.sessionID, proof); err != nil {
+		operatorCodeWriteBodyless(w, http.StatusForbidden)
+		return
+	}
+	operatorCodeWriteBodyless(w, http.StatusNoContent)
+}
+
+// HandlePin resolves the one active grant and current UCI view on the server;
+// the browser supplies only the current document proof.
+func (adapter *OperatorCodeHTTPAdapter) HandlePin(w http.ResponseWriter, r *http.Request) {
+	var request operatorCodePathProofRequest
+	identity, ok := adapter.decode(w, r, "operator-code-tab-context", &request)
+	if !ok {
+		return
+	}
+	proof, ok := operatorCodePathProof(r, request)
+	if !ok {
+		operatorCodeWriteBodyless(w, http.StatusForbidden)
+		return
+	}
+	caller, failure := adapter.authorizeCurrent(r.Context(), identity, proof)
+	if failure != uci.ReleaseFailureNone {
+		operatorCodeWriteFailure(w, failure)
+		return
+	}
+	if err := adapter.bindings.Pin(r.Context(), identity.identity, identity.sessionID, proof, browserBindingContext(caller.authorized.Ref())); err != nil {
+		operatorCodeWriteBodyless(w, http.StatusForbidden)
+		return
+	}
+	operatorCodeWriteBodyless(w, http.StatusNoContent)
 }
 
 // HandleStatus serves the non-content index status. T016 Release still
@@ -259,33 +394,27 @@ func (adapter *OperatorCodeHTTPAdapter) HandleVersionedRead(w http.ResponseWrite
 	})
 }
 
-// HandleContexts exposes the one current grant as three safe display labels.
-// It never lists source-owner contexts or serializes grants, session tokens,
-// tab bindings, proofs, digests, nonces, IDs, or checkout locators.
+// HandleContexts resolves only the subject's one current grant before pinning.
+// It returns labels alone, never the grant, binding, proof, or ContextRef.
 func (adapter *OperatorCodeHTTPAdapter) HandleContexts(w http.ResponseWriter, r *http.Request) {
 	var request operatorCodeProofRequest
 	identity, ok := adapter.decode(w, r, "operator-code-contexts", &request)
 	if !ok {
 		return
 	}
-	caller, failure := adapter.authorize(r.Context(), identity, request.Proof())
+	caller, failure := adapter.authorizeCurrent(r.Context(), identity, request.Proof())
 	if failure != uci.ReleaseFailureNone {
 		operatorCodeWriteFailure(w, failure)
 		return
 	}
 	if adapter.app == nil {
-		operatorCodeWriteFailure(w, uci.ReleaseFailureExposureUnavailable)
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 		return
 	}
 	metadata, err := adapter.app.Project(r.Context(), caller.authorized.Ref())
 	response, valid := operatorCodeSafeMetadata(metadata)
 	if err != nil || !valid {
-		operatorCodeWriteFailure(w, uci.ReleaseFailureExposureUnavailable)
-		return
-	}
-	decision := adapter.releaseNonContent(r.Context(), identity, caller, uci.ReleaseCategoryCodeIndexResult)
-	if !decision.Released() {
-		operatorCodeWriteFailure(w, decision.Failure)
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 		return
 	}
 	writeJSON(w, operatorCodeContextsResponse{Context: response})
@@ -298,6 +427,52 @@ type operatorCodeProofRequest struct {
 
 func (request operatorCodeProofRequest) Proof() BrowserBindingProof {
 	return BrowserBindingProof{TabBindingID: request.TabBindingID, DocumentProof: request.DocumentProof}
+}
+
+type operatorCodePathProofRequest struct {
+	DocumentProof string `json:"document_proof"`
+}
+
+type operatorCodeHandshakeRequest struct {
+	DocumentNonce      string `json:"document_nonce"`
+	CopiedTabBindingID string `json:"copied_tab_binding_id,omitempty"`
+	CopiedResumeNonce  string `json:"copied_resume_nonce,omitempty"`
+	Ambiguous          bool   `json:"ambiguous,omitempty"`
+}
+
+func (request operatorCodeHandshakeRequest) valid() bool {
+	return operatorCodeText(request.DocumentNonce) &&
+		(request.CopiedTabBindingID == "" || operatorCodeUUID(request.CopiedTabBindingID)) &&
+		(request.CopiedResumeNonce == "" || operatorCodeText(request.CopiedResumeNonce))
+}
+
+func (request operatorCodeHandshakeRequest) input() BrowserBindingHandshakeInput {
+	return BrowserBindingHandshakeInput{
+		DocumentNonce:      request.DocumentNonce,
+		CopiedTabBindingID: request.CopiedTabBindingID,
+		CopiedResumeNonce:  request.CopiedResumeNonce,
+		Ambiguous:          request.Ambiguous,
+	}
+}
+
+type operatorCodeResumeRequest struct {
+	TabBindingID  string `json:"tab_binding_id"`
+	ResumeNonce   string `json:"resume_nonce"`
+	ReloadToken   string `json:"reload_token"`
+	DocumentNonce string `json:"document_nonce"`
+}
+
+func (request operatorCodeResumeRequest) valid() bool {
+	return operatorCodeUUID(request.TabBindingID) && operatorCodeText(request.ResumeNonce) && operatorCodeText(request.ReloadToken) && operatorCodeText(request.DocumentNonce)
+}
+
+func (request operatorCodeResumeRequest) input() BrowserBindingResumeInput {
+	return BrowserBindingResumeInput{
+		TabBindingID:  request.TabBindingID,
+		ResumeNonce:   request.ResumeNonce,
+		ReloadToken:   request.ReloadToken,
+		DocumentNonce: request.DocumentNonce,
+	}
 }
 
 type operatorCodeSearchRequest struct {
@@ -678,6 +853,45 @@ func (adapter *OperatorCodeHTTPAdapter) authorize(ctx context.Context, identity 
 	return operatorCodeAuthorizedRequest{operatorCodeRequestIdentity: identity, caller: caller, proof: proof, authorized: authorized}, uci.ReleaseFailureNone
 }
 
+func (adapter *OperatorCodeHTTPAdapter) authorizeCurrent(ctx context.Context, identity operatorCodeRequestIdentity, proof BrowserBindingProof) (operatorCodeAuthorizedRequest, uci.ReleaseFailureCode) {
+	if adapter == nil || adapter.grants == nil || adapter.bindings == nil || adapter.authority == nil {
+		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailureExposureUnavailable
+	}
+	subject, ok := identity.identity.SessionBrowserSubject()
+	if !ok {
+		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailurePermissionDenied
+	}
+	guarded, err := adapter.bindings.Guard(ctx, identity.identity, identity.sessionID, proof)
+	if err != nil || guarded.TabBindingID != proof.TabBindingID {
+		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailurePermissionDenied
+	}
+	grant, found, err := adapter.grants.Current(ctx, identity.identity)
+	if err != nil {
+		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailureExposureUnavailable
+	}
+	if !found {
+		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailurePermissionDenied
+	}
+	bound := operatorCodeBindingCaller{Subject: subject, SessionID: identity.sessionID, BindingID: guarded.TabBindingID}
+	authorized, err := adapter.authority.ResolveCurrentOperatorCode(ctx, bound, grant)
+	if err != nil {
+		return operatorCodeAuthorizedRequest{}, operatorCodeContextFailure(err)
+	}
+	ref := authorized.Ref()
+	if ref.SpaceID != nil || ref.SourceID != grant.SourceID || ref.CheckoutID != grant.CheckoutID {
+		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailureContextMismatch
+	}
+	granted, err := adapter.grants.CanRead(ctx, identity.identity, ref.SourceID, ref.CheckoutID)
+	if err != nil {
+		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailureExposureUnavailable
+	}
+	if !granted {
+		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailurePermissionDenied
+	}
+	caller := operatorCodeVerifiedCaller{Subject: subject, SessionID: identity.sessionID, BindingID: guarded.TabBindingID, Context: ref}
+	return operatorCodeAuthorizedRequest{operatorCodeRequestIdentity: identity, caller: caller, proof: proof, authorized: authorized}, uci.ReleaseFailureNone
+}
+
 func operatorCodeContextRef(pinned BrowserBindingContext) (uci.ContextRef, bool) {
 	if !operatorCodeUUID(pinned.SourceID) || !operatorCodeUUID(pinned.CheckoutID) || !operatorCodeUUID(pinned.ViewID) || !operatorCodeUUID(pinned.AnalysisProfileID) || pinned.Generation < 1 {
 		return uci.ContextRef{}, false
@@ -871,11 +1085,57 @@ func operatorCodeResponseContextExact(response uci.QueryResponse, authorized uci
 		context.Generation == ref.Generation
 }
 
+func operatorCodePathProof(r *http.Request, request operatorCodePathProofRequest) (BrowserBindingProof, bool) {
+	tabBindingID := chi.URLParam(r, "tab_binding_id")
+	if !operatorCodeUUID(tabBindingID) || !operatorCodeText(request.DocumentProof) {
+		return BrowserBindingProof{}, false
+	}
+	return BrowserBindingProof{TabBindingID: tabBindingID, DocumentProof: request.DocumentProof}, true
+}
+
+func browserBindingContext(ref uci.ContextRef) BrowserBindingContext {
+	return BrowserBindingContext{
+		SourceID:          ref.SourceID,
+		CheckoutID:        ref.CheckoutID,
+		ViewID:            ref.ViewID,
+		AnalysisProfileID: ref.AnalysisProfileID,
+		Generation:        ref.Generation,
+	}
+}
+
 func operatorCodeStatusValid(snapshot mcp.CodebaseStatusSnapshot) bool {
 	if snapshot.TotalChunks < 0 || snapshot.EmbeddedChunks < 0 || snapshot.EmbeddedChunks > snapshot.TotalChunks || snapshot.Embedding.Validate() != nil {
 		return false
 	}
 	return snapshot.Freshness == nil || snapshot.Freshness.Validate() == nil
+}
+
+type operatorCodeTransitionResponse struct {
+	State         BrowserBindingTransitionState `json:"state"`
+	TabBindingID  string                        `json:"tab_binding_id,omitempty"`
+	DocumentProof string                        `json:"document_proof,omitempty"`
+	ResumeNonce   string                        `json:"resume_nonce,omitempty"`
+	ReloadToken   string                        `json:"reload_token,omitempty"`
+}
+
+func operatorCodeWriteTransition(w http.ResponseWriter, transition BrowserBindingTransition) {
+	response := operatorCodeTransitionResponse{State: transition.State}
+	switch transition.State {
+	case BrowserBindingReloadPending:
+		writeJSON(w, response)
+	case BrowserBindingReady, BrowserBindingCollision, BrowserBindingAmbiguous:
+		if !operatorCodeUUID(transition.TabBindingID) || !operatorCodeText(transition.DocumentProof) || !operatorCodeText(transition.ResumeNonce) || !operatorCodeText(transition.ReloadToken) {
+			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+			return
+		}
+		response.TabBindingID = transition.TabBindingID
+		response.DocumentProof = transition.DocumentProof
+		response.ResumeNonce = transition.ResumeNonce
+		response.ReloadToken = transition.ReloadToken
+		writeJSON(w, response)
+	default:
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+	}
 }
 
 type operatorCodeMetadata struct {
