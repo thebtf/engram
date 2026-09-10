@@ -175,6 +175,7 @@ type Service struct {
 	retrievalHooks              *retrievalHooks
 	authHandlers                *AuthHandlers
 	operatorCodeAdapter         *OperatorCodeHTTPAdapter
+	operatorCollectionAdapter   *OperatorCollectionHTTPAdapter
 	version                     string
 	recentQueriesBuf            [maxRecentQueries]RecentSearchQuery
 	wg                          sync.WaitGroup
@@ -1261,6 +1262,15 @@ func (s *Service) initializeAsync() {
 		s.initMu.Unlock()
 	}
 
+	operatorCollectionAdapter, composeErr := composeOperatorCollectionHTTPAdapter(store.GetDB())
+	if composeErr != nil {
+		s.setInitError(fmt.Errorf("compose operator collection HTTP adapter: %w", composeErr))
+		return
+	}
+	s.initMu.Lock()
+	s.operatorCollectionAdapter = operatorCollectionAdapter
+	s.initMu.Unlock()
+
 	// Compose UCI after settings resolution and shared embedding initialization,
 	// before MCP or gRPC transports can expose its application.
 	var uciContext *uciContextComposition
@@ -1853,6 +1863,12 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/code/source", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleVersionedRead))
 		r.Post("/api/code/contexts", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleContexts))
 
+		// Collection selection is a shared, non-authorizing adapter. Domain
+		// operation owners provide their own action routes and authorization.
+		r.Post("/api/collections/selection", s.operatorCollectionRoute((*OperatorCollectionHTTPAdapter).HandleSnapshot))
+		r.Post("/api/collections/selection/current", s.operatorCollectionRoute((*OperatorCollectionHTTPAdapter).HandleCurrent))
+		r.Post("/api/collections/selection/page", s.operatorCollectionRoute((*OperatorCollectionHTTPAdapter).HandlePage))
+
 		// Event ingest (Level 0 deterministic pipeline)
 		r.Post("/api/events/ingest", s.handleIngestEvent)
 
@@ -2001,6 +2017,19 @@ func (s *Service) operatorCodeRoute(handler func(*OperatorCodeHTTPAdapter, http.
 	return func(w http.ResponseWriter, r *http.Request) {
 		s.initMu.RLock()
 		adapter := s.operatorCodeAdapter
+		s.initMu.RUnlock()
+		if adapter == nil {
+			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+			return
+		}
+		handler(adapter, w, r)
+	}
+}
+
+func (s *Service) operatorCollectionRoute(handler func(*OperatorCollectionHTTPAdapter, http.ResponseWriter, *http.Request)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.initMu.RLock()
+		adapter := s.operatorCollectionAdapter
 		s.initMu.RUnlock()
 		if adapter == nil {
 			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)

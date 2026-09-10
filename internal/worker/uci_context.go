@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/thebtf/engram/internal/auth"
 	gormstore "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/grpcserver"
@@ -204,6 +205,40 @@ func composeOperatorCodeHTTPAdapter(db *gormlib.DB, composition *uciContextCompo
 		newOperatorCodeServerAuthorizer(composition.contextStore, composition.resolver),
 		composition.application,
 		composition.exposureRecorder,
+	), nil
+}
+
+const operatorCollectionSelectionDomain = "rules"
+
+// operatorCollectionScopeAuthority owns only selection identity. Domain actions
+// remain responsible for their own authorization and state/version checks.
+type operatorCollectionScopeAuthority struct{}
+
+func (operatorCollectionScopeAuthority) ResolveOperatorCollectionScope(_ context.Context, identity auth.Identity, sessionID, domain string) (gormstore.CollectionSelectionScope, error) {
+	subject, ok := identity.SessionBrowserSubject()
+	if !ok || !operatorCodeText(sessionID) || domain != operatorCollectionSelectionDomain {
+		return gormstore.CollectionSelectionScope{}, errors.New("operator collection scope denied")
+	}
+	digest := sha256.Sum256([]byte(fmt.Sprintf("operator-collection-scope/v1\x00%d\x00%s\x00%s", subject.UserID, sessionID, operatorCollectionSelectionDomain)))
+	return gormstore.CollectionSelectionScope{
+		SubjectUserID:      subject.UserID,
+		SessionID:          sessionID,
+		Domain:             operatorCollectionSelectionDomain,
+		ContextFingerprint: "sha256:" + hex.EncodeToString(digest[:]),
+		AuthorizationEpoch: 1,
+		CollectionVersion:  1,
+	}, nil
+}
+
+func composeOperatorCollectionHTTPAdapter(db *gormlib.DB) (*OperatorCollectionHTTPAdapter, error) {
+	if db == nil {
+		return nil, errors.New("operator collection HTTP composition requires a database")
+	}
+	return NewOperatorCollectionHTTPAdapter(
+		gormstore.NewCollectionSelectionStore(db),
+		operatorCollectionScopeAuthority{},
+		nil,
+		nil,
 	), nil
 }
 
