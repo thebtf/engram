@@ -1,0 +1,228 @@
+{
+  "fixture_id": "operator-code-current-slice/v1",
+  "r_a_tuple_inputs": [
+    {
+      "name": "server_commit",
+      "recording_owner": "s2-integration",
+      "requirement": "exact immutable server commit"
+    },
+    {
+      "name": "daemon_build",
+      "recording_owner": "s2-integration",
+      "requirement": "exact installed daemon build identity"
+    },
+    {
+      "name": "parser_bundle_digest",
+      "recording_owner": "s2-integration",
+      "requirement": "exact parser bundle digest"
+    },
+    {
+      "name": "resolver_profile",
+      "recording_owner": "s2-integration",
+      "requirement": "exact resolver and embedding profile"
+    },
+    {
+      "name": "console_commit",
+      "recording_owner": "s2-integration",
+      "requirement": "exact operator-console commit"
+    },
+    {
+      "name": "fixture_identity",
+      "recording_owner": "s2-integration",
+      "requirement": "this fixture ID and source-file digests"
+    }
+  ],
+  "source_files": [
+    {
+      "path": "go/current_slice.go",
+      "language": "go",
+      "sha256": "3c618ad70a18a3015ba0400fc4f1c07b7f67267f9f9475d3f9f8ebb2f046c2a2"
+    },
+    {
+      "path": "worktrees/a-before/src/target.ts",
+      "language": "typescript",
+      "sha256": "973ba3d78a861ad65d62e6dc93d466e3dcdb2cabce70183239026f7641b0c12f"
+    },
+    {
+      "path": "worktrees/a-before/src/relay.ts",
+      "language": "typescript",
+      "sha256": "533a6688bd6358266b5420c7e7c165b568aedad69c88ab2eb8a9dad5022b946d"
+    },
+    {
+      "path": "worktrees/a-before/src/CurrentSlicePanel.tsx",
+      "language": "tsx",
+      "sha256": "86ab6b778abdf4b849d8b3d52ff428e54091dd3ad527086d8677085d59deb644"
+    },
+    {
+      "path": "worktrees/a-after/src/target.ts",
+      "language": "typescript",
+      "sha256": "ff4c01046addd4f70d63ae654cd4c03266868504ff5a54a99d281fb725c39e2e"
+    },
+    {
+      "path": "worktrees/a-after/src/relay.ts",
+      "language": "typescript",
+      "sha256": "533a6688bd6358266b5420c7e7c165b568aedad69c88ab2eb8a9dad5022b946d"
+    },
+    {
+      "path": "worktrees/a-after/src/CurrentSlicePanel.tsx",
+      "language": "tsx",
+      "sha256": "86ab6b778abdf4b849d8b3d52ff428e54091dd3ad527086d8677085d59deb644"
+    },
+    {
+      "path": "worktrees/b/src/target.ts",
+      "language": "typescript",
+      "sha256": "48b84c045939fa12095e0185de9b3791e83b647ce2531a5ca63c85be5c2c169e"
+    },
+    {
+      "path": "worktrees/b/src/relay.ts",
+      "language": "typescript",
+      "sha256": "533a6688bd6358266b5420c7e7c165b568aedad69c88ab2eb8a9dad5022b946d"
+    },
+    {
+      "path": "worktrees/b/src/CurrentSlicePanel.tsx",
+      "language": "tsx",
+      "sha256": "86ab6b778abdf4b849d8b3d52ff428e54091dd3ad527086d8677085d59deb644"
+    }
+  ],
+  "supported_relations": [
+    {
+      "language": "go",
+      "path": "go/current_slice.go",
+      "from": "SemanticEntry",
+      "relation": "calls",
+      "to": "ExactReadTarget"
+    },
+    {
+      "language": "typescript",
+      "path": "worktrees/a-before/src/relay.ts",
+      "from": "readCurrentSliceAlias",
+      "relation": "exports",
+      "to": "readCurrentSlice"
+    },
+    {
+      "language": "tsx",
+      "path": "worktrees/a-before/src/CurrentSlicePanel.tsx",
+      "from": "renderCurrentSlice",
+      "relation": "imports",
+      "to": "readCurrentSliceAlias"
+    },
+    {
+      "language": "tsx",
+      "path": "worktrees/a-before/src/CurrentSlicePanel.tsx",
+      "from": "CurrentSlicePanel",
+      "relation": "calls",
+      "to": "renderCurrentSlice"
+    }
+  ],
+  "deferred_relations": [
+    {
+      "language": "typescript",
+      "relation": "ambiguous_barrel_origin",
+      "reason": "ambiguous re-export origins are not guessed"
+    },
+    {
+      "language": "typescript",
+      "relation": "cyclic_reexport_origin",
+      "reason": "cycle-safe origin resolution requires the R-C oracle"
+    },
+    {
+      "language": "go",
+      "relation": "dynamic_dispatch",
+      "reason": "static graph evidence does not prove runtime dispatch"
+    },
+    {
+      "language": "csharp",
+      "relation": "generic_relation_support",
+      "reason": "deferred pending its own declared source oracle"
+    },
+    {
+      "language": "vue",
+      "relation": "generic_relation_support",
+      "reason": "deferred pending its own declared source oracle"
+    },
+    {
+      "language": "python",
+      "relation": "generic_relation_support",
+      "reason": "deferred pending its own declared source oracle"
+    }
+  ],
+  "limitation_labels": [
+    {
+      "category": "semantic",
+      "label": "semantic_requires_complete_selected_view_embeddings"
+    },
+    {
+      "category": "retrieval",
+      "label": "lexical_or_degraded_not_semantic"
+    },
+    {
+      "category": "coverage",
+      "label": "bounded_or_partial_graph_not_empty"
+    },
+    {
+      "category": "graph",
+      "label": "dynamic_dispatch_and_reflection_remain_unresolved"
+    },
+    {
+      "category": "view",
+      "label": "exact_read_uses_persisted_selected_view_bytes"
+    }
+  ],
+  "same_view_expectation": {
+    "semantic": {
+      "view_id": "view-a-initial",
+      "mode": "semantic",
+      "query": "найди текущий срез кода"
+    },
+    "graph": {
+      "view_id": "view-a-initial",
+      "relation": "calls",
+      "from": "SemanticEntry",
+      "to": "ExactReadTarget"
+    },
+    "exact_read": {
+      "view_id": "view-a-initial",
+      "path": "go/current_slice.go",
+      "source": "persisted_selected_view",
+      "working_copy_fallback": false
+    }
+  },
+  "watcher_observation": {
+    "trigger": "saved_write",
+    "mechanism": "normal_watcher_reconcile",
+    "manual_view_publication": false,
+    "a": {
+      "before": {
+        "view_id": "view-a-initial",
+        "target_value": "view-a-initial",
+        "target_sha256": "973ba3d78a861ad65d62e6dc93d466e3dcdb2cabce70183239026f7641b0c12f",
+        "caller_sha256": "86ab6b778abdf4b849d8b3d52ff428e54091dd3ad527086d8677085d59deb644"
+      },
+      "after": {
+        "view_id": "view-a-next",
+        "target_value": "view-a-next",
+        "target_sha256": "ff4c01046addd4f70d63ae654cd4c03266868504ff5a54a99d281fb725c39e2e",
+        "caller_sha256": "86ab6b778abdf4b849d8b3d52ff428e54091dd3ad527086d8677085d59deb644"
+      },
+      "old_view_readable_until_explicit_transition": true
+    },
+    "b": {
+      "before": {
+        "view_id": "view-b-isolated",
+        "target_value": "view-b-isolated",
+        "target_sha256": "48b84c045939fa12095e0185de9b3791e83b647ce2531a5ca63c85be5c2c169e",
+        "membership_snapshot": "b-membership-v1",
+        "edge_snapshot": "b-edges-v1",
+        "exact_source_snapshot": "b-target-v1"
+      },
+      "after": {
+        "view_id": "view-b-isolated",
+        "target_value": "view-b-isolated",
+        "target_sha256": "48b84c045939fa12095e0185de9b3791e83b647ce2531a5ca63c85be5c2c169e",
+        "membership_snapshot": "b-membership-v1",
+        "edge_snapshot": "b-edges-v1",
+        "exact_source_snapshot": "b-target-v1"
+      }
+    }
+  }
+}
