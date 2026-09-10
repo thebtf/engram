@@ -6635,6 +6635,93 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			},
 			Rollback: rollbackCollectionSelectionsMigration178,
 		},
+		// Migration 179 remains inline so migrationmeta can derive the durable intent schema.
+		{
+			ID: "179_uci_index_intents",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`CREATE TABLE IF NOT EXISTS uci_index_intents (
+						intent_id UUID PRIMARY KEY,
+						request_ref TEXT NOT NULL,
+						kind TEXT NOT NULL,
+						source_id UUID NOT NULL,
+						checkout_id UUID NOT NULL,
+						incarnation_id UUID NOT NULL,
+						profile_id UUID NOT NULL,
+						previous_space_id UUID,
+						previous_view_id UUID,
+						previous_generation BIGINT,
+						state TEXT NOT NULL,
+						attempt INTEGER NOT NULL,
+						acknowledged_owner TEXT,
+						acknowledgement_epoch BIGINT NOT NULL,
+						acknowledged_at TIMESTAMPTZ,
+						result_space_id UUID,
+						result_view_id UUID,
+						result_generation BIGINT,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT uci_index_intents_request_ref_chk CHECK (
+							btrim(request_ref) <> ''
+							AND request_ref = btrim(request_ref)
+							AND request_ref !~ '[[:cntrl:]]'
+							AND octet_length(request_ref) <= 256
+						),
+						CONSTRAINT uci_index_intents_kind_chk CHECK (kind IN ('reindex', 'reconcile')),
+						CONSTRAINT uci_index_intents_previous_view_shape_chk CHECK (
+							(previous_space_id IS NULL AND previous_view_id IS NULL AND previous_generation IS NULL)
+							OR (previous_view_id IS NOT NULL AND previous_generation IS NOT NULL AND previous_generation >= 1)
+						),
+						CONSTRAINT uci_index_intents_state_chk CHECK (
+							state IN ('submitted', 'queued', 'acknowledged', 'running', 'completed', 'unavailable', 'failed')
+						),
+						CONSTRAINT uci_index_intents_attempt_epoch_chk CHECK (
+							attempt >= 0
+							AND acknowledgement_epoch >= 0
+							AND acknowledgement_epoch = attempt
+						),
+						CONSTRAINT uci_index_intents_acknowledgement_shape_chk CHECK (
+							(state IN ('acknowledged', 'running', 'completed', 'failed')
+								AND attempt >= 1
+								AND acknowledged_owner IS NOT NULL
+								AND btrim(acknowledged_owner) <> ''
+								AND acknowledged_owner = btrim(acknowledged_owner)
+								AND acknowledged_owner !~ '[[:cntrl:]]'
+								AND octet_length(acknowledged_owner) <= 256
+								AND acknowledged_at IS NOT NULL
+								AND acknowledged_at >= created_at
+								AND acknowledged_at <= updated_at)
+							OR (state IN ('submitted', 'queued', 'unavailable')
+								AND attempt = 0
+								AND acknowledged_owner IS NULL
+								AND acknowledged_at IS NULL)
+						),
+						CONSTRAINT uci_index_intents_result_view_shape_chk CHECK (
+							(result_space_id IS NULL AND result_view_id IS NULL AND result_generation IS NULL)
+							OR (result_view_id IS NOT NULL AND result_generation IS NOT NULL AND result_generation >= 1)
+						),
+						CONSTRAINT uci_index_intents_completed_result_chk CHECK (
+							(state = 'completed' AND result_view_id IS NOT NULL AND result_generation IS NOT NULL)
+							OR (state <> 'completed' AND result_space_id IS NULL AND result_view_id IS NULL AND result_generation IS NULL)
+						),
+						CONSTRAINT uci_index_intents_timestamps_chk CHECK (updated_at >= created_at)
+					)`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS uci_index_intents_request_ref
+						ON uci_index_intents (request_ref)`,
+					`CREATE INDEX IF NOT EXISTS idx_uci_index_intents_owner_state
+						ON uci_index_intents (acknowledged_owner, state, updated_at DESC, intent_id)
+						WHERE acknowledged_owner IS NOT NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_uci_index_intents_scope_status
+						ON uci_index_intents (source_id, checkout_id, incarnation_id, profile_id, state, updated_at DESC, intent_id)`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 179: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackUCIIndexIntentsMigration179,
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
@@ -6809,6 +6896,12 @@ func rollbackBrowserTabBindingsMigration177(tx *gorm.DB) error {
 // rollbackCollectionSelectionsMigration178 retains opaque selection snapshots:
 // a binary rollback cannot safely reconstruct server-authorized frozen membership.
 func rollbackCollectionSelectionsMigration178(tx *gorm.DB) error {
+	return nil
+}
+
+// rollbackUCIIndexIntentsMigration179 retains durable index intents and migration history:
+// a binary rollback cannot safely reconstruct accepted work requests or their owner claims.
+func rollbackUCIIndexIntentsMigration179(tx *gorm.DB) error {
 	return nil
 }
 
