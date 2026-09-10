@@ -1,0 +1,220 @@
+{
+  "schema": "operator-code-console/s3-later-domain-fixture-manifest/v1",
+  "recorded_at_utc": "2026-09-10T14:33:29Z",
+  "verdict": {
+    "status": "PASS",
+    "acceptance_pass": true,
+    "reason": "The successor re-executed the repaired shared-mutation producers and a candidate-bound live T011 fixture. The predecessor's remaining S3 evidence is applicable because the successor is its direct child and changes exactly the two re-executed producer files; every reused producer/configuration/output input remains hash-bound and unchanged."
+  },
+  "reopened_boundary": {
+    "criterion": "T032 S3 shared mutation producer evidence",
+    "predecessor_manifest": {
+      "commit": "c523142566ca09a75eaaaba8a4382c3242c7ba2d",
+      "verdict": "CONTRACT_MISMATCH",
+      "role": "read-only historical evidence inventory; not cherry-picked and not acceptance proof for this successor"
+    },
+    "prior_candidate": {
+      "commit": "817db8d8903e7cfad201a2e6c53314740d4bbf4f",
+      "tree": "052f8eebc3d4f4c3daadac68dfa76c7477e4201d"
+    },
+    "successor_delta": {
+      "direct_parent": "817db8d8903e7cfad201a2e6c53314740d4bbf4f",
+      "changed_paths": [
+        "apps/operator-console/tests/browser/current-readback.spec.ts",
+        "apps/operator-console/tests/composables/useApi.spec.ts"
+      ],
+      "applicability_rule": "The two changed producers were rerun. All other reused producer, fixture, configuration, generated-output, and focused Go-test inputs below retain their recorded SHA-256 values; the direct-child diff contains no other path."
+    }
+  },
+  "candidate": {
+    "worktree": "D:/Dev/engram/.agent/worktrees/operator-code-t032-r2",
+    "branch": "ui/operator-code-console-r1-t032-r2",
+    "source_commit_before_manifest": "91200dec634284a19357d1005719c7c07018023c",
+    "source_tree_before_manifest": "7b6528d861fb9341fa386bcafe26f34b23bd5132",
+    "repair_source_commit": "c3110dc7a7b7c882a7fe7dd3e8a29e56c4e8c58e",
+    "repair_source_tree_matches_candidate": true,
+    "clean_before_manifest": true
+  },
+  "scope": {
+    "sole_changed_path": "specs/011-operator-code-console/acceptance/s3-later-domain-fixture-manifest.json",
+    "product_or_producer_edits": false,
+    "raw_request_or_response_bodies_retained": false,
+    "credentials_or_tokens_retained": false
+  },
+  "source_sha256": {
+    "apps/operator-console/package-lock.json": "c67c47ca6c4874c25e74eef294053ac3925e978045c1cff709aa32b417978ede",
+    "apps/operator-console/playwright.config.ts": "33db65e47f45fcf75d3741d4499da75abd461e5618bd54cbe831d3f510e7f502",
+    "apps/operator-console/tests/browser/collection-selection.spec.ts": "1479c6876c04bf6f577ce9fdb0f542425d6b2262ad0749fb09baad984b616c85",
+    "apps/operator-console/tests/browser/current-readback.spec.ts": "3a3d26aad1f96dc02e9cc9deff7a541deb3736ac7fd083c9db5ee51197a5efd3",
+    "apps/operator-console/tests/browser/responsive-navigation.spec.ts": "0251e2c1d1cba4b5e84c67a7ff036cf2aa0a9bd6ef33f631d1a7f807fb21f2db",
+    "apps/operator-console/tests/composables/useApi.spec.ts": "267384ee754e680d0d943e2e7f7a181b5c445d4c8fcb627a56116b4489228411",
+    "apps/operator-console/tests/live/fixture-bootstrap.ts": "51d77662a724b5f12b96bc8b55df3eeb5ceca472423ef12cc3bea33d297fc677",
+    "apps/operator-console/tests/live/mutation-result.spec.ts": "23c11af857da4e0971392bf8c5f199fd305f90be8401d2745f631f257d43bc90",
+    "apps/operator-console/tests/live/rules-operations.spec.ts": "79204c5523b0f73810e33739355a03789ea5eaaeb74c7005c110a69b1a6d9a2f",
+    "apps/operator-console/tests/live/issues-operations.spec.ts": "d70cb3a79a3dd22eeaed226843ee0dfdfb85af0474c77efd0c040b8d4e1fba80",
+    "apps/operator-console/tests/live/memory-operations.spec.ts": "d8ef475cae321e67c71e3beb8c20c8c2999e8912d1eb685bc20958aec3889b24",
+    "apps/operator-console/tests/live/queue-operations.spec.ts": "d7b3ec9bcc3ca64fc434b8241e5b7bf83472e3871aa9b469c8b3c8b358fc48ed",
+    "apps/operator-console/tests/live/document-operations.spec.ts": "e658cefdc53c0f88590453bb6c5be4935601eae2c302bc45b699596d93cec9b8",
+    "apps/operator-console/playwright.live.config.ts": "8e494412f13a7dfaf251f65bfc370a241782764a6d151455b1721d01b5cdfb58",
+    "apps/operator-console/.output/server/index.mjs": "68d6b5e6bdc9fc4bde0d0bfe0bbfabb8776331990e7f9a2015b04435572ee9c7",
+    "internal/worker/handlers_rules_test.go": "86b8fdcf0189ec3ad1262479f47bf5c3c691d067d3a5c04bfcf645138c221a1b",
+    "internal/worker/handlers_issues_selection_test.go": "2df1fd80c1479ffd4324b4539e97956981304457a8f9b85397060c91e2686a21",
+    "internal/worker/handlers_memories_test.go": "5db8fa0d4d852ad203d630a9466eb82e4dbf74583a07d7fef8ff52232cf04a9a",
+    "internal/worker/handlers_candidate_review_test.go": "ba90a10851917c3bb6ecdbe206dbe8079dbef858c43e0cf660f2d1d9952902e8",
+    "internal/worker/handlers_documents_test.go": "d0986fe7024fd5b1a16e4947b8c018cee221f9a6bd9192ad2c7e048674daedc4",
+    "internal/worker/handlers_collection_operations_routes_test.go": "4d347ebf9d419afab1319df1cfa16669095116abda3a2cb1cd1db8e76e0b1ff2"
+  },
+  "fresh_successor_execution": {
+    "candidate_build": {
+      "status": "PASS",
+      "command": "npm run build",
+      "result": "Nuxt production build completed; the bound server entry SHA-256 is recorded above."
+    },
+    "shared_mutation_union": {
+      "status": "PASS",
+      "command": "npm exec -- tsx --test tests/composables/useApi.spec.ts",
+      "denominator": {
+        "tests": 14,
+        "passed": 14,
+        "failed": 0
+      },
+      "proves": [
+        "committed_verified requires an authoritative current-state readback",
+        "committed_verification_pending retains intent when a receipt or readback is insufficient",
+        "partial retains item outcomes",
+        "failed transport categories remain distinct",
+        "outcome_unknown retains the exact request after dispatched response/body loss",
+        "unknown outcomes require manual reconciliation rather than replay"
+      ]
+    },
+    "repaired_browser_readback": {
+      "status": "PASS",
+      "command": "npm exec -- playwright test tests/browser/current-readback.spec.ts",
+      "denominator": {
+        "tests": 8,
+        "passed": 8,
+        "failed": 0
+      },
+      "proves": [
+        "Rules create and selection update use the current POST /api/rules operation route",
+        "partial Memory retry submits only the unresolved selection and never replays automatically",
+        "transport and response-body loss remain outcome_unknown with retained request reference",
+        "pending readback preserves the visible draft rather than claiming rollback"
+      ]
+    },
+    "candidate_bound_live_t011": {
+      "status": "PASS",
+      "command": "npm run test:browser:live -- --grep \"T011 live acceptance\"",
+      "denominator": {
+        "tests": 1,
+        "passed": 1,
+        "failed": 0
+      },
+      "fixture_contract": [
+        "fresh disposable Go/PostgreSQL/Chromium fixture",
+        "fixture asserts candidate commit equals backend source commit",
+        "fixture prohibits mock API use",
+        "current Rule and Memory DTO readbacks both classify as committed_verified"
+      ]
+    }
+  },
+  "reused_unchanged_evidence": {
+    "basis": "Read-only predecessor inventory at c5231425 recorded these PASS results on source commit 817db8d8. The successor changes only the two freshly rerun producers, while every listed input SHA-256 and the rebuilt server-entry SHA-256 remains unchanged.",
+    "go_postgresql": {
+      "status": "PASS",
+      "denominator": {
+        "selected_top_level_tests": 13,
+        "passed_top_level_tests": 13
+      },
+      "coverage": [
+        "205-Rule cursor, frozen-filter, exclusion, token, version, permission, and atomic-reorder behavior",
+        "101-Issue cursor/page, explicit/frozen selection, actions, expiry, version, and access-loss behavior",
+        "Memory suppress, unsuppress, archival, token/conflict/access-loss behavior",
+        "Queue promote, reject, valid-target supersede, partial conflict, and forbidden-control refusal",
+        "Document explicit/page/frozen export, per-version recheck, partial conflict, denial, and non-disclosing status",
+        "domain-bound route registration with generic collection-operation routes absent"
+      ]
+    },
+    "live_browser_domain_fixtures": {
+      "status": "PASS",
+      "reused_groups": 5,
+      "groups": [
+        "T026 Rules: >200 Rules; page/frozen selection, exclusions/reconfirmation, field/disable/delete/stale-version/atomic-reorder readbacks",
+        "T027 Issues: 101 Issues; two cursor pages, server selection snapshot, priority operation status",
+        "T028 Memory: explicit/current-page selection; suppress/unsuppress/archive, stale conflict, post-preview access-loss non-disclosure",
+        "T029 Queue: promote/reject/supersede, selection re-resolution partial conflict, no review-packet/lifecycle/ingestion control",
+        "T030 Documents: explicit/page/frozen export, version recheck, non-disclosing status, partial conflict, stale-version and unauthenticated refusal"
+      ]
+    },
+    "interaction_only_browser_producers": {
+      "status": "PASS",
+      "collection_selection": {
+        "tests": 2,
+        "proves": "none/explicit/page/frozen distinction, exclusions, invalidation/reconfirmation, bounds, keyboard space, and indeterminate header"
+      },
+      "responsive_locales": {
+        "tests": 2,
+        "proves": "1440/980/390 layouts, 200% zoom and narrow-layout behavior, keyboard navigation, RU/EN/zh-Hans localization"
+      },
+      "label": "mock interaction evidence only; it is not persistence or connection proof"
+    }
+  },
+  "trigger_to_handler_to_readback": [
+    {
+      "domain": "Rules",
+      "browser_route": "POST /api/rules",
+      "registered_handler": "Service.handleCreateBehavioralRule",
+      "readback": "current state/version or authorized absence; stale selection reports conflict"
+    },
+    {
+      "domain": "Issues",
+      "browser_route": "POST /api/issues/operations",
+      "registered_handler": "Service.HandleIssueSelectionOperation",
+      "readback": "completed operation status and selected Issue state"
+    },
+    {
+      "domain": "Memory",
+      "browser_route": "POST /api/memories/operations",
+      "registered_handler": "Service.handleMemoryCollectionSelectionOperation",
+      "readback": "current status/version or non-disclosing denial/conflict"
+    },
+    {
+      "domain": "Queue candidates",
+      "browser_route": "POST /api/memory/candidates/operations",
+      "registered_handler": "Service.queueCandidateSelectionRoute -> QueueCandidateSelectionHandler",
+      "readback": "permitted candidate state with per-item conflict and no candidate content"
+    },
+    {
+      "domain": "Documents",
+      "browser_route": "POST /api/documents",
+      "registered_handler": "Service.handleCreateDocument dispatches the document selection operation",
+      "readback": "authoritative non-disclosing export_ready status or per-item conflict"
+    }
+  ],
+  "criterion_status": {
+    "SC-004_selection_and_scale": "PASS: 205 Rules and 101 Issues are explicit real-fixture denominators; explicit/page/frozen selection, exclusions, expiry, permission and version changes are covered.",
+    "SC-005_mutation_truth": "PASS: all five result states, committed/readback failure, response loss, access-loss non-disclosure, partial/refusal, and retry-only-unfinished are covered without a rollback claim.",
+    "SC-008_domain_bound_traces": "PASS: each of the five registered domain routes has retained trigger-to-handler-to-readback evidence; generic collection-operation routes are absent.",
+    "SC-009_and_SC-010_interaction_states_layouts_locales": "PASS: interaction evidence is explicitly labeled mock-only and covers distinguishable result states, keyboard/header behavior, layouts, zoom, RU/EN, and zh-Hans.",
+    "SC-011_queue_candidate_only": "PASS: Queue coverage remains candidate-only and refuses review-packet, lifecycle, and ingestion controls."
+  },
+  "repaired_producer_guard": {
+    "status": "PASS",
+    "reconciled": [
+      "removed the stale toggleRuleCurrentStateParser expectation",
+      "uses the current POST /api/rules selection-operation route",
+      "uses the current POST /api/memories/operations route for retry"
+    ],
+    "not_claimed": "An unrelated vault DELETE assertion remains outside this recheck."
+  },
+  "cleanup": {
+    "status": "PASS",
+    "checked": [
+      "the source worktree was clean before this sole manifest write",
+      "no running container named t032-go-postgres was observed",
+      "no running container with the operator-live prefix was observed"
+    ],
+    "preserved_unrelated_containers": true,
+    "raw_fixture_state_retained": false
+  }
+}
