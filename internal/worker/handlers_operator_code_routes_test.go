@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
@@ -96,6 +97,165 @@ func TestOperatorCodeRoutesDelegateFiveEndpoints(t *testing.T) {
 			require.Len(t, fixture.recorder.inputs, testCase.wantRecorder)
 		})
 	}
+}
+
+func TestOperatorCodeRoutesDelegateIndexIntentEndpoints(t *testing.T) {
+	t.Run("submit", func(t *testing.T) {
+		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+		app := &operatorCodeRouteTestApplication{operatorCodeHTTPTestApplication: fixture.app}
+		adapter = NewOperatorCodeHTTPAdapter(fixture.grants, fixture.binding, fixture.authority, app, fixture.recorder)
+		service := newOperatorCodeRouteTestService(adapter)
+		recorder := httptest.NewRecorder()
+		request := operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"route-submit","kind":"reindex"}`, fixture.identity)
+		request.URL.Path = "/api/code/index-intents"
+		request.RequestURI = "/api/code/index-intents"
+		service.router.ServeHTTP(recorder, request)
+
+		require.Equal(t, http.StatusAccepted, recorder.Code, recorder.Body.String())
+		require.Equal(t, 1, app.indexSubmitCalls)
+		require.Len(t, app.indexIntents, 1)
+		require.Empty(t, fixture.recorder.inputs)
+	})
+
+	t.Run("status releases completed metadata in the handler", func(t *testing.T) {
+		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+		app := &operatorCodeRouteTestApplication{operatorCodeHTTPTestApplication: fixture.app}
+		adapter = NewOperatorCodeHTTPAdapter(fixture.grants, fixture.binding, fixture.authority, app, fixture.recorder)
+		intent := operatorCodeHTTPTestIndexIntent(fixture.ref, "route-status", uci.IndexIntentReindex, uci.IndexIntentCompleted)
+		app.indexIntents = map[string]uci.IndexIntent{intent.ID: intent}
+		service := newOperatorCodeRouteTestService(adapter)
+		recorder := httptest.NewRecorder()
+		request := operatorCodeHTTPTestIndexIntentStatusRequest(t, intent.ID, "", fixture.identity)
+		request.URL.Path = "/api/code/index-intents/" + intent.ID
+		request.RequestURI = request.URL.Path
+		service.router.ServeHTTP(recorder, request)
+
+		require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+		require.Equal(t, 1, app.indexGetCalls)
+		require.Contains(t, recorder.Body.String(), `"result"`)
+		require.Empty(t, fixture.recorder.inputs)
+	})
+
+	t.Run("retry", func(t *testing.T) {
+		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+		app := &operatorCodeRouteTestApplication{operatorCodeHTTPTestApplication: fixture.app}
+		adapter = NewOperatorCodeHTTPAdapter(fixture.grants, fixture.binding, fixture.authority, app, fixture.recorder)
+		intent := operatorCodeHTTPTestIndexIntent(fixture.ref, "route-retry", uci.IndexIntentReindex, uci.IndexIntentUnavailable)
+		app.indexIntents = map[string]uci.IndexIntent{intent.ID: intent}
+		service := newOperatorCodeRouteTestService(adapter)
+		recorder := httptest.NewRecorder()
+		request := operatorCodeHTTPTestIndexIntentRetryRequest(t, intent.ID, fixture.identity)
+		request.URL.Path = "/api/code/index-intents/" + intent.ID + "/retry"
+		request.RequestURI = request.URL.Path
+		service.router.ServeHTTP(recorder, request)
+
+		require.Equal(t, http.StatusAccepted, recorder.Code, recorder.Body.String())
+		require.Equal(t, 1, app.indexRetryCalls)
+		require.Equal(t, 1, app.indexRetryExecutions)
+	})
+}
+
+func TestOperatorCodeIndexIntentRoutesFailClosedWithoutComposition(t *testing.T) {
+	service := newOperatorCodeRouteTestService(nil)
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodPost, path: "/api/code/index-intents"},
+		{method: http.MethodGet, path: "/api/code/index-intents/60000000-0000-4000-8000-000000000042"},
+		{method: http.MethodPost, path: "/api/code/index-intents/60000000-0000-4000-8000-000000000042/retry"},
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(route.method, route.path, nil)
+		service.router.ServeHTTP(recorder, request)
+		require.Equal(t, http.StatusServiceUnavailable, recorder.Code, route.method+" "+route.path)
+	}
+}
+
+func TestOperatorCodeIndexIntentRouteRejectsBrowserExecutionSelectors(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	app := &operatorCodeRouteTestApplication{operatorCodeHTTPTestApplication: fixture.app}
+	adapter = NewOperatorCodeHTTPAdapter(fixture.grants, fixture.binding, fixture.authority, app, fixture.recorder)
+	service := newOperatorCodeRouteTestService(adapter)
+	recorder := httptest.NewRecorder()
+	request := operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"rejected-browser-selector","kind":"reindex","path":"internal/private.go","credential":"secret","daemon":"local","publish":true}`, fixture.identity)
+	request.URL.Path = "/api/code/index-intents"
+	request.RequestURI = "/api/code/index-intents"
+	service.router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+	require.Zero(t, app.indexSubmitCalls)
+	require.Empty(t, app.indexIntents)
+}
+
+func TestOperatorCodeIndexIntentCompositionUsesDurableCurrentBinding(t *testing.T) {
+	store := openWorkerUCIContextCompositionStore(t)
+	server := mcp.NewServer(mcp.ServerOptions{Version: "operator-code-index-intent"})
+	composition, err := composeUCIContext(true, store.GetDB(), server, workerUCISemanticConfig())
+	require.NoError(t, err)
+	fixture := newWorkerUCIApplicationFixture(t, composition)
+
+	missingContextStore := *composition
+	missingContextStore.contextStore = nil
+	_, err = composeOperatorCodeHTTPAdapter(store.GetDB(), &missingContextStore)
+	require.Error(t, err)
+
+	adapter, err := composeOperatorCodeHTTPAdapter(store.GetDB(), composition)
+	require.NoError(t, err)
+	application, ok := adapter.app.(*operatorCodeIndexIntentComposition)
+	require.True(t, ok)
+
+	ctx := context.Background()
+	currentRef := fixture.current.Context
+	current, err := composition.resolver.Authorize(ctx, uci.ResolveContextInput{
+		ClientSessionID: "operator-code-index-intent",
+		AuthRealm:       fixture.source.AuthRealm,
+		Principal:       fixture.principal,
+		Ref:             &currentRef,
+	})
+	require.NoError(t, err)
+
+	queued, err := application.SubmitIndexIntent(ctx, current, "durable-index-intent", uci.IndexIntentReindex)
+	require.NoError(t, err)
+	require.Equal(t, uci.IndexIntentQueued, queued.State)
+	require.Zero(t, queued.Attempt)
+	require.Nil(t, queued.Acknowledgement)
+	stored, err := application.indexIntentStore.GetIndexIntent(ctx, queued.ID)
+	require.NoError(t, err)
+	require.WithinDuration(t, queued.CreatedAt, stored.CreatedAt, time.Microsecond)
+	require.WithinDuration(t, queued.UpdatedAt, stored.UpdatedAt, time.Microsecond)
+	stored.CreatedAt = queued.CreatedAt
+	stored.UpdatedAt = queued.UpdatedAt
+	require.Equal(t, queued, stored)
+
+	replay, err := application.SubmitIndexIntent(ctx, current, "durable-index-intent", uci.IndexIntentReindex)
+	require.NoError(t, err)
+	require.Equal(t, queued.ID, replay.ID)
+	require.Equal(t, uci.IndexIntentQueued, replay.State)
+	_, err = application.SubmitIndexIntent(ctx, current, "durable-index-intent", uci.IndexIntentReconcile)
+	require.ErrorIs(t, err, uci.ErrIndexIntentBindingMismatch)
+
+	loaded, err := application.GetIndexIntent(ctx, current, queued.ID)
+	require.NoError(t, err)
+	require.Equal(t, queued.ID, loaded.ID)
+	unavailable, err := application.indexIntentStore.MarkIndexIntentUnavailable(ctx, queued.ID)
+	require.NoError(t, err)
+	require.Equal(t, uci.IndexIntentUnavailable, unavailable.State)
+	retried, err := application.RetryIndexIntent(ctx, current, queued.ID)
+	require.NoError(t, err)
+	require.Equal(t, queued.ID, retried.ID)
+	require.Equal(t, uci.IndexIntentQueued, retried.State)
+
+	historicalRef := fixture.historical.Context
+	historical, err := composition.resolver.Authorize(ctx, uci.ResolveContextInput{
+		ClientSessionID: "operator-code-index-intent-historical",
+		AuthRealm:       fixture.source.AuthRealm,
+		Principal:       fixture.principal,
+		Ref:             &historicalRef,
+	})
+	require.NoError(t, err)
+	_, err = application.GetIndexIntent(ctx, historical, queued.ID)
+	require.ErrorIs(t, err, uci.ErrIndexIntentBindingMismatch)
 }
 
 func TestOperatorCodeRoutes_ExposeLifecycleAndPrePinContexts(t *testing.T) {

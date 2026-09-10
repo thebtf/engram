@@ -1869,6 +1869,9 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/code/graph", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleGraph))
 		r.Post("/api/code/source", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleVersionedRead))
 		r.Post("/api/code/contexts", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleContexts))
+		r.Post("/api/code/index-intents", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleIndexIntentSubmit))
+		r.Get("/api/code/index-intents/{intent_ref}", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleIndexIntentStatus))
+		r.Post("/api/code/index-intents/{intent_ref}/retry", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleIndexIntentRetry))
 
 		// Collection selection is a shared, non-authorizing adapter. Domain
 		// operation owners provide their own action routes and authorization.
