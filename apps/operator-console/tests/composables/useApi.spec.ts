@@ -7,11 +7,7 @@ import {
  type MutationRequest,
  type MutationResult,
 } from '../../composables/useApi.ts'
-import {
- createRuleCurrentStateParser,
- toggleRuleCurrentStateParser,
- updateRuleCurrentStateParser,
-} from '../../composables/useOperatorRules.ts'
+import { createRuleCurrentStateParser } from '../../composables/useOperatorRules.ts'
 import { storeMemoryCurrentStateParser } from '../../composables/useOperatorMemoryLab.ts'
 
 const request: MutationRequest<{ enabled: boolean; version: number }> = {
@@ -239,21 +235,11 @@ function directMemory(overrides: Record<string, unknown> = {}) {
  }
 }
 
-test('strict endpoint parsers verify matching direct current DTOs separately from submitted intent', async () => {
+test('strict endpoint parsers verify matching direct Rules and Memory current DTOs separately from submitted intent', async () => {
  const createdRule = await parseMutationResponse(
   { requestId: 'rule-create-1', action: 'rule-create', intent: { content: 'Only write through reviewed paths.', priority: 10, project: 'engram' } },
   jsonResponse(201, directRule()),
   createRuleCurrentStateParser({ content: 'Only write through reviewed paths.', priority: 10, project: 'engram' }),
- )
- const updatedRule = await parseMutationResponse(
-  { requestId: 'rule-update-1', action: 'rule-update', intent: { id: 7, input: { priority: 10 } } },
-  jsonResponse(200, directRule()),
-  updateRuleCurrentStateParser(7, { priority: 10 }),
- )
- const toggledRule = await parseMutationResponse(
-  { requestId: 'rule-toggle-1', action: 'rule-enable-toggle', intent: { id: 7, enabled: true } },
-  jsonResponse(200, directRule()),
-  toggleRuleCurrentStateParser(7, true),
  )
  const storedMemory = await parseMutationResponse(
   { requestId: 'memory-store-1', action: 'memory-store', intent: { project: 'engram', content: 'Mutation response proof belongs to the current DTO.', tags: ['operator'] } },
@@ -261,23 +247,23 @@ test('strict endpoint parsers verify matching direct current DTOs separately fro
   storeMemoryCurrentStateParser({ project: 'engram', content: 'Mutation response proof belongs to the current DTO.', tags: ['operator'] }),
  )
 
- for (const result of [createdRule, updatedRule, toggledRule, storedMemory]) {
+ for (const result of [createdRule, storedMemory]) {
   assertMutationKind(result, 'committed_verified')
   assert.equal(result.readback.kind, 'current')
   assert.notStrictEqual(result.readback.current, result.request.intent)
  }
 })
 
-test('direct current DTO identity, domain, and version mismatches remain pending', async () => {
+test('direct current DTO domain and version mismatches remain pending', async () => {
  const results = await Promise.all([
-  parseMutationResponse(
-   { requestId: 'rule-id-mismatch', action: 'rule-update', intent: { id: 7, input: {} } },
-   jsonResponse(200, directRule({ id: 8 })),
-   updateRuleCurrentStateParser(7, {}),
-  ),
   parseMutationResponse(
    { requestId: 'rule-domain-mismatch', action: 'rule-create', intent: { content: 'Only write through reviewed paths.', priority: 10, project: 'engram' } },
    jsonResponse(201, directRule({ project: 'other-project' })),
+   createRuleCurrentStateParser({ content: 'Only write through reviewed paths.', priority: 10, project: 'engram' }),
+  ),
+  parseMutationResponse(
+   { requestId: 'rule-version-mismatch', action: 'rule-create', intent: { content: 'Only write through reviewed paths.', priority: 10, project: 'engram' } },
+   jsonResponse(201, directRule({ version: 0 })),
    createRuleCurrentStateParser({ content: 'Only write through reviewed paths.', priority: 10, project: 'engram' }),
   ),
   parseMutationResponse(
@@ -293,13 +279,13 @@ test('direct current DTO identity, domain, and version mismatches remain pending
  }
 })
 
-test('bare, delete, action, and 202 responses remain pending despite direct parser support', async () => {
- const parser = updateRuleCurrentStateParser(7, {})
+test('bare, action, and 202 responses remain pending despite direct parser support', async () => {
+ const parser = createRuleCurrentStateParser({ content: 'Only write through reviewed paths.', priority: 10, project: 'engram' })
  const results = await Promise.all([
-  parseMutationResponse({ requestId: 'bare', action: 'rule-update', intent: { id: 7, input: {} } }, jsonResponse(200, { id: 7 }), parser),
+  parseMutationResponse({ requestId: 'bare', action: 'rule-create', intent: { content: 'Only write through reviewed paths.', priority: 10, project: 'engram' } }, jsonResponse(200, { id: 7 }), parser),
   parseMutationResponse({ requestId: 'delete', action: 'rule-delete', intent: { id: 7 } }, jsonResponse(200, { deleted: 7 }), parser),
   parseMutationResponse({ requestId: 'action', action: 'memory-suppress', intent: { id: '7' } }, jsonResponse(200, { status: 'suppressed', action: 'suppress', id: 7 }), parser),
-  parseMutationResponse({ requestId: 'accepted', action: 'rule-update', intent: { id: 7, input: {} } }, jsonResponse(202, directRule()), parser),
+  parseMutationResponse({ requestId: 'accepted', action: 'rule-create', intent: { content: 'Only write through reviewed paths.', priority: 10, project: 'engram' } }, jsonResponse(202, directRule()), parser),
  ])
 
  for (const result of results) {
