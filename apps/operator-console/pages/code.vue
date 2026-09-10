@@ -15,10 +15,15 @@ const {
   sourceState,
   contextMessage,
   pending,
+  indexIntentState,
+  indexIntentPending,
   initialize,
   discoverContext,
   pinContext,
   refreshStatus,
+  submitIndexIntent,
+  retryIndexIntent,
+  refreshIndexIntent,
   search,
   explore,
   readSource,
@@ -51,6 +56,16 @@ onMounted(() => {
       @refresh="discoverContext"
       @pin="pinContext"
       @retry="initialize"
+    />
+
+    <CodeIndexIntentStatus
+      :pinned="pinnedContext"
+      :state="indexIntentState"
+      :busy="indexIntentPending"
+      :pending="pending"
+      @submit="submitIndexIntent"
+      @retry="retryIndexIntent"
+      @refresh="refreshIndexIntent"
     />
 
     <CodeResults

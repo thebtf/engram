@@ -1,4 +1,4 @@
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { operatorApiUrl } from './useOperatorApi'
 
 export type CodeBootstrapPhase = 'idle' | 'binding' | 'ready' | 'collision' | 'ambiguous' | 'reload-pending' | 'denied' | 'error'
@@ -86,6 +86,53 @@ export interface CodePresentationState {
   message: string
 }
 
+export type IndexIntentKind = 'reindex' | 'reconcile'
+export type IndexIntentState = 'submitted' | 'queued' | 'acknowledged' | 'running' | 'completed' | 'unavailable' | 'failed'
+
+interface IndexIntentBase<State extends IndexIntentState> {
+  intentRef: string
+  state: State
+  attempt: number
+  retryable: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+interface IndexIntentResult {
+  viewRef: string
+  generation: number
+}
+
+type IndexIntentRecord =
+  | IndexIntentBase<'submitted'>
+  | IndexIntentBase<'queued'>
+  | IndexIntentBase<'acknowledged'>
+  | IndexIntentBase<'running'>
+  | (IndexIntentBase<'completed'> & { result: IndexIntentResult | null })
+  | IndexIntentBase<'unavailable'>
+  | IndexIntentBase<'failed'>
+
+interface IndexIntentLifecyclePresentation<State extends IndexIntentState> {
+  kind: State
+  title: string
+  message: string
+  attempt: number | null
+}
+
+export type IndexIntentPresentationState =
+  | { kind: 'idle'; title: string; message: string; attempt: null }
+  | { kind: 'loading'; title: string; message: string; attempt: null }
+  | { kind: 'error'; title: string; message: string; attempt: null }
+  | { kind: 'denied'; title: string; message: string; attempt: null }
+  | { kind: 'offline'; title: string; message: string; attempt: null }
+  | IndexIntentLifecyclePresentation<'submitted'>
+  | IndexIntentLifecyclePresentation<'queued'>
+  | IndexIntentLifecyclePresentation<'acknowledged'>
+  | IndexIntentLifecyclePresentation<'running'>
+  | IndexIntentLifecyclePresentation<'completed'>
+  | IndexIntentLifecyclePresentation<'unavailable'>
+  | IndexIntentLifecyclePresentation<'failed'>
+
 interface CodeBinding {
   tabBindingId: string
   documentProof: string
@@ -114,6 +161,9 @@ type CodeApiResult =
 
 const RESUME_STORAGE_KEY = 'engram.operator-code.resume.v1'
 const REQUEST_TIMEOUT_MS = 30_000
+const INDEX_INTENT_STORAGE_KEY = 'engram.operator-code.index-intent.v1'
+const INDEX_INTENT_POLL_DELAY_MS = 1_000
+const INDEX_INTENT_MAX_POLLS = 30
 
 function text(value: unknown): string | null {
   if (typeof value !== 'string') return null
@@ -317,6 +367,87 @@ function parseStatus(value: unknown): CodeStatus | null {
   return { totalChunks, embeddedChunks, coverage, freshnessState }
 }
 
+function timestamp(value: unknown): string | null {
+  const parsed = text(value)
+  return parsed === null || Number.isNaN(Date.parse(parsed)) ? null : parsed
+}
+
+function parseIndexIntentResult(value: unknown): IndexIntentResult | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const viewRef = text(Reflect.get(value, 'view_ref'))
+  const generation = finiteNumber(Reflect.get(value, 'generation'))
+  if (viewRef === null || generation === null || !Number.isInteger(generation) || generation < 1) return null
+  return { viewRef, generation }
+}
+
+function parseIndexIntent(value: unknown): IndexIntentRecord | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const intentRef = text(Reflect.get(value, 'intent_ref'))
+  const state = text(Reflect.get(value, 'state'))
+  const attempt = finiteNumber(Reflect.get(value, 'attempt'))
+  const retryable = Reflect.get(value, 'retryable')
+  const createdAt = timestamp(Reflect.get(value, 'created_at'))
+  const updatedAt = timestamp(Reflect.get(value, 'updated_at'))
+  if (
+    intentRef === null || attempt === null || !Number.isInteger(attempt) || attempt < 0
+    || typeof retryable !== 'boolean' || createdAt === null || updatedAt === null
+  ) return null
+  const resultValue = Reflect.get(value, 'result')
+  const base = { intentRef, attempt, retryable, createdAt, updatedAt }
+  switch (state) {
+    case 'submitted':
+    case 'queued':
+    case 'acknowledged':
+    case 'running':
+    case 'unavailable':
+    case 'failed':
+      if (resultValue !== undefined && resultValue !== null || retryable !== (state === 'unavailable')) return null
+      return { ...base, state }
+    case 'completed': {
+      if (retryable) return null
+      const result = resultValue === undefined || resultValue === null ? null : parseIndexIntentResult(resultValue)
+      if (resultValue !== undefined && resultValue !== null && result === null) return null
+      return { ...base, state, result }
+    }
+    default:
+      return null
+  }
+}
+
+function parseIndexIntentAcknowledgement(value: unknown): Extract<IndexIntentRecord, { state: 'submitted' | 'queued' }> | null {
+  const intent = parseIndexIntent(value)
+  return intent !== null && (intent.state === 'submitted' || intent.state === 'queued') ? intent : null
+}
+
+function indexIntentNotice(kind: 'idle' | 'loading' | 'error' | 'denied' | 'offline', title: string, message: string): IndexIntentPresentationState {
+  return { kind, title, message, attempt: null }
+}
+
+function indexIntentPresentation(intent: IndexIntentRecord): IndexIntentPresentationState {
+  const attempt = intent.attempt > 0 ? intent.attempt : null
+  switch (intent.state) {
+    case 'submitted': return { kind: 'submitted', title: 'Request submitted', message: 'The server recorded this request. Completion has not been confirmed.', attempt }
+    case 'queued': return { kind: 'queued', title: 'Queued for the daemon', message: 'The request is eligible for daemon work. The pinned View remains unchanged.', attempt }
+    case 'acknowledged': return { kind: 'acknowledged', title: 'Daemon acknowledged', message: 'The daemon accepted the exact request. A new View is not available yet.', attempt }
+    case 'running': return { kind: 'running', title: 'Indexing is running', message: 'The daemon is working on this request. The pinned View remains unchanged.', attempt }
+    case 'unavailable': return { kind: 'unavailable', title: 'Daemon unavailable', message: 'The daemon cannot accept this request now. You can retry this same request when it is available.', attempt }
+    case 'failed': return { kind: 'failed', title: 'Indexing failed', message: 'The daemon reported a terminal failure. The pinned View remains unchanged.', attempt }
+    case 'completed': return intent.result !== null
+      ? { kind: 'completed', title: 'New View available', message: 'A new server-released View is available. It has not been selected automatically; the Explorer remains pinned to its current View.', attempt }
+      : { kind: 'completed', title: 'Indexing completed', message: 'The operation completed, but no new View is available to this browser. The current pin remains unchanged.', attempt }
+    default: {
+      const exhaustive: never = intent
+      return exhaustive
+    }
+  }
+}
+
+interface IndexIntentResume {
+  requestRef: string
+  kind: IndexIntentKind
+  intentRef?: string
+}
+
 function presentation(kind: CodePresentationKind, message: string): CodePresentationState {
   return { kind, message }
 }
@@ -388,6 +519,43 @@ function clearResumePair(): void {
   }
 }
 
+function loadIndexIntentResume(): IndexIntentResume | null {
+  try {
+    const raw = sessionStorage.getItem(INDEX_INTENT_STORAGE_KEY)
+    if (raw === null) return null
+    const parsed: unknown = JSON.parse(raw)
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const requestRef = text(Reflect.get(parsed, 'requestRef'))
+    const kind = Reflect.get(parsed, 'kind')
+    const intentRefValue = Reflect.get(parsed, 'intentRef')
+    if (requestRef === null || (kind !== 'reindex' && kind !== 'reconcile')) return null
+    if (intentRefValue === undefined) return { requestRef, kind }
+    const intentRef = text(intentRefValue)
+    return intentRef === null ? null : { requestRef, kind, intentRef }
+  } catch {
+    return null
+  }
+}
+
+function persistIndexIntentResume(value: IndexIntentResume): boolean {
+  try {
+    sessionStorage.setItem(INDEX_INTENT_STORAGE_KEY, JSON.stringify(value.intentRef === undefined
+      ? { requestRef: value.requestRef, kind: value.kind }
+      : { requestRef: value.requestRef, kind: value.kind, intentRef: value.intentRef }))
+    return true
+  } catch {
+    return false
+  }
+}
+
+function clearIndexIntentResume(): void {
+  try {
+    sessionStorage.removeItem(INDEX_INTENT_STORAGE_KEY)
+  } catch {
+    // Storage retains no authority; failing to clear it only prevents convenience cleanup.
+  }
+}
+
 export function useOperatorCode() {
   const bootstrapPhase = ref<CodeBootstrapPhase>('idle')
   const bootstrapEvidence = ref<CodeBootstrapEvidence>({ navigationType: 'unknown', openerBefore: false, openerAfter: null, transition: 'idle' })
@@ -403,24 +571,32 @@ export function useOperatorCode() {
   const sourceState = ref<CodePresentationState>(presentation('idle', 'Choose a released search result to read an exact source span.'))
   const contextMessage = ref('A context is never selected automatically.')
   const pending = ref(false)
+  const indexIntentState = ref<IndexIntentPresentationState>(indexIntentNotice('idle', 'No indexing request', 'Pin a source view before requesting reindex or reconcile work.'))
+  const indexIntentPending = ref(false)
+  const indexIntentResume = ref<IndexIntentResume | null>(loadIndexIntentResume())
+  let indexIntentPollTimer: number | null = null
+  let indexIntentPollGeneration = 0
+  let indexIntentPollCount = 0
 
   function bindingPayload(extra: Record<string, unknown> = {}): Record<string, unknown> | null {
     if (binding.value === null) return null
     return { tab_binding_id: binding.value.tabBindingId, document_proof: binding.value.documentProof, ...extra }
   }
 
-  async function request(path: string, method: string, body: Record<string, unknown>): Promise<CodeApiResult> {
+  async function request(path: string, method: string, body?: Record<string, unknown>, extraHeaders: Record<string, string> = {}): Promise<CodeApiResult> {
     const id = requestId()
     if (id === null) return { kind: 'error', status: 0 }
     if (!navigator.onLine) return { kind: 'offline', status: 0 }
     const controller = new AbortController()
     const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+    const headers: Record<string, string> = { 'X-Engram-Request-ID': id, ...extraHeaders }
+    if (body !== undefined) headers['Content-Type'] = 'application/json'
     try {
       const response = await fetch(operatorApiUrl(path), {
         method,
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json', 'X-Engram-Request-ID': id },
-        body: JSON.stringify(body),
+        headers,
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: controller.signal,
       })
       if (response.status === 204) return { kind: 'success', status: response.status, body: undefined }
@@ -457,7 +633,194 @@ export function useOperatorCode() {
     sourceState.value = presentation('idle', 'Choose a released search result to read an exact source span.')
   }
 
+  function stopIndexIntentPolling(): void {
+    indexIntentPollGeneration += 1
+    if (indexIntentPollTimer !== null) window.clearTimeout(indexIntentPollTimer)
+    indexIntentPollTimer = null
+    indexIntentPollCount = 0
+  }
+
+  function clearIndexIntent(): void {
+    stopIndexIntentPolling()
+    indexIntentResume.value = null
+    clearIndexIntentResume()
+    indexIntentPending.value = false
+    indexIntentState.value = indexIntentNotice('idle', 'No indexing request', 'Pin a source view before requesting reindex or reconcile work.')
+  }
+
+  function indexIntentFailure(result: Exclude<CodeApiResult, { kind: 'success' }>): IndexIntentPresentationState {
+    switch (result.kind) {
+      case 'denied': return indexIntentNotice('denied', 'Request denied', 'The server denied this request. The pinned View remains unchanged.')
+      case 'offline': return indexIntentNotice('offline', 'Offline', 'The browser cannot reach the server. Check the connection before checking this request again.')
+      case 'timeout': return indexIntentNotice('error', 'Status check timed out', 'The server did not answer in time. Check the current state again; completion was not assumed.')
+      case 'unsupported': return indexIntentNotice('error', 'Request could not be reconciled', 'The server could not reconcile this request. The pinned View remains unchanged.')
+      case 'error': return indexIntentNotice('error', 'Request could not be checked', 'The server response could not establish the current state. Completion was not assumed.')
+      default: {
+        const exhaustive: never = result
+        return exhaustive
+      }
+    }
+  }
+
+
+  function applyIndexIntent(intent: IndexIntentRecord): void {
+    indexIntentState.value = indexIntentPresentation(intent)
+    if (intent.state !== 'submitted' && intent.state !== 'queued' && intent.state !== 'acknowledged' && intent.state !== 'running') {
+      stopIndexIntentPolling()
+      return
+    }
+    scheduleIndexIntentPoll()
+  }
+
+  function scheduleIndexIntentPoll(): void {
+    const resume = indexIntentResume.value
+    if (resume?.intentRef === undefined || indexIntentPollTimer !== null || indexIntentPollCount >= INDEX_INTENT_MAX_POLLS) {
+      if (indexIntentPollCount >= INDEX_INTENT_MAX_POLLS) {
+        indexIntentState.value = indexIntentNotice('error', 'Status check paused', 'Automatic checks stopped after a bounded wait. Check the current state to continue reconciliation.')
+      }
+      return
+    }
+    const generation = indexIntentPollGeneration
+    indexIntentPollTimer = window.setTimeout(() => {
+      indexIntentPollTimer = null
+      indexIntentPollCount += 1
+      void loadIndexIntent(generation)
+    }, INDEX_INTENT_POLL_DELAY_MS)
+  }
+
+  async function loadIndexIntent(pollGeneration?: number): Promise<void> {
+    const requestGeneration = pollGeneration ?? indexIntentPollGeneration
+    const current = binding.value
+    const resume = indexIntentResume.value
+    if (current === null || resume?.intentRef === undefined || indexIntentPending.value) return
+    indexIntentPending.value = true
+    const result = await request(`/code/index-intents/${encodeURIComponent(resume.intentRef)}`, 'GET', undefined, {
+      'X-Engram-Tab-Binding-ID': current.tabBindingId,
+      'X-Engram-Document-Proof': current.documentProof,
+    })
+    if (requestGeneration !== indexIntentPollGeneration) return
+    indexIntentPending.value = false
+    if (result.kind !== 'success') {
+      stopIndexIntentPolling()
+      indexIntentState.value = indexIntentFailure(result)
+      return
+    }
+    const intent = parseIndexIntent(result.body)
+    if (intent === null || intent.intentRef !== resume.intentRef) {
+      stopIndexIntentPolling()
+      indexIntentState.value = indexIntentNotice('error', 'Invalid status response', 'The server response did not prove the current request state. Completion was not assumed.')
+      return
+    }
+    applyIndexIntent(intent)
+  }
+
+  async function submitIndexIntent(kind: IndexIntentKind): Promise<void> {
+    if (binding.value === null || pinnedContext.value === null || indexIntentPending.value || pending.value) return
+    const existing = indexIntentResume.value
+    const requestRef = existing !== null && existing.kind === kind
+      && indexIntentState.value.kind !== 'completed' && indexIntentState.value.kind !== 'failed'
+      ? existing.requestRef
+      : requestId()
+    if (requestRef === null) {
+      indexIntentState.value = indexIntentNotice('error', 'Request could not be created', 'This browser cannot create the opaque request reference required for reconciliation.')
+      return
+    }
+    const resume: IndexIntentResume = { requestRef, kind }
+    if (!persistIndexIntentResume(resume)) {
+      indexIntentState.value = indexIntentNotice('error', 'Request was not sent', 'This browser could not retain the request reference needed to reconcile a lost response.')
+      return
+    }
+    stopIndexIntentPolling()
+    const requestGeneration = indexIntentPollGeneration
+    indexIntentResume.value = resume
+    indexIntentState.value = indexIntentNotice('loading', 'Submitting request', 'Waiting for the server to admit this request. Admission is not completion.')
+    indexIntentPending.value = true
+    const payload = bindingPayload({ request_ref: requestRef, kind })
+    let result: CodeApiResult
+    if (payload === null) {
+      result = { kind: 'error', status: 0 }
+    } else {
+      result = await request('/code/index-intents', 'POST', payload)
+    }
+    if (requestGeneration !== indexIntentPollGeneration) return
+    indexIntentPending.value = false
+    if (result.kind !== 'success' || result.status !== 202) {
+      stopIndexIntentPolling()
+      indexIntentState.value = result.kind === 'success'
+        ? indexIntentNotice('error', 'Admission response was invalid', 'The server did not return an admission acknowledgement. Completion was not assumed.')
+        : indexIntentFailure(result)
+      return
+    }
+    const intent = parseIndexIntentAcknowledgement(result.body)
+    if (intent === null) {
+      stopIndexIntentPolling()
+      indexIntentState.value = indexIntentNotice('error', 'Admission response was invalid', 'The server did not return a safe admission state. Completion was not assumed.')
+      return
+    }
+    const reconciled: IndexIntentResume = { ...resume, intentRef: intent.intentRef }
+    indexIntentResume.value = reconciled
+    persistIndexIntentResume(reconciled)
+    applyIndexIntent(intent)
+  }
+
+  async function retryIndexIntent(): Promise<void> {
+    const current = binding.value
+    const resume = indexIntentResume.value
+    if (current === null || resume?.intentRef === undefined || indexIntentState.value.kind !== 'unavailable' || indexIntentPending.value || pending.value) return
+    stopIndexIntentPolling()
+    const requestGeneration = indexIntentPollGeneration
+    indexIntentState.value = indexIntentNotice('loading', 'Retrying request', 'Waiting for the server to admit a retry of this same request. Admission is not completion.')
+    indexIntentPending.value = true
+    const payload = bindingPayload()
+    if (payload === null) {
+      indexIntentPending.value = false
+      indexIntentState.value = indexIntentNotice('error', 'Retry could not be sent', 'The current browser binding is unavailable. Completion was not assumed.')
+      return
+    }
+    const result = await request(`/code/index-intents/${encodeURIComponent(resume.intentRef)}/retry`, 'POST', payload)
+    if (requestGeneration !== indexIntentPollGeneration) return
+    indexIntentPending.value = false
+    if (result.kind !== 'success' || result.status !== 202) {
+      indexIntentState.value = result.kind === 'success'
+        ? indexIntentNotice('error', 'Retry response was invalid', 'The server did not acknowledge this retry. Completion was not assumed.')
+        : indexIntentFailure(result)
+      return
+    }
+    const intent = parseIndexIntentAcknowledgement(result.body)
+    if (intent === null || intent.intentRef !== resume.intentRef) {
+      indexIntentState.value = indexIntentNotice('error', 'Retry response was invalid', 'The server did not return the same request reference. Completion was not assumed.')
+      return
+    }
+    applyIndexIntent(intent)
+  }
+
+  async function refreshIndexIntent(): Promise<void> {
+    const resume = indexIntentResume.value
+    if (resume === null || indexIntentPending.value) return
+    stopIndexIntentPolling()
+    if (resume.intentRef === undefined) {
+      await submitIndexIntent(resume.kind)
+      return
+    }
+    await loadIndexIntent()
+  }
+
+  async function reconcileIndexIntent(): Promise<void> {
+    const resume = indexIntentResume.value
+    if (resume === null) return
+    if (resume.intentRef === undefined) {
+      await submitIndexIntent(resume.kind)
+      return
+    }
+    await loadIndexIntent()
+  }
+
   function applyTransition(transition: CodeTransition, evidence: CodeBootstrapEvidence): boolean {
+    const previousBinding = binding.value
+    if (
+      transition.state === 'TAB_BINDING_COLLISION' || transition.state === 'TAB_BOOTSTRAP_AMBIGUOUS'
+      || (previousBinding !== null && previousBinding.tabBindingId !== transition.binding?.tabBindingId)
+    ) clearIndexIntent()
     bootstrapEvidence.value = { ...evidence, transition: transition.state }
     binding.value = transition.binding
     contextCandidate.value = null
@@ -580,6 +943,7 @@ export function useOperatorCode() {
     const evidence: CodeBootstrapEvidence = { navigationType: navType, openerBefore, openerAfter, transition: 'initializing' }
     const pair = openerBefore ? null : loadResumePair()
     const resumingPinnedBinding = !openerBefore && navType === 'reload' && pair !== null
+    if (!resumingPinnedBinding) clearIndexIntent()
     const established = openerBefore && openerAfter !== true
       ? await handshake(documentNonce, null, true, evidence)
       : resumingPinnedBinding
@@ -593,6 +957,7 @@ export function useOperatorCode() {
       if (contextCandidate.value !== null) {
         pinnedContext.value = contextCandidate.value
         contextMessage.value = 'The server retained this explicitly pinned view across the reload.'
+        await reconcileIndexIntent()
         return
       }
       status.value = null
@@ -700,11 +1065,18 @@ export function useOperatorCode() {
     sourceState.value = presentationFromEnvelope(envelope)
   }
 
+  function closeBinding(): void {
+    const current = binding.value
+    if (current !== null) void request(`/code/tabs/${encodeURIComponent(current.tabBindingId)}`, 'DELETE', { document_proof: current.documentProof })
+  }
+
   onMounted(() => {
-    window.addEventListener('pagehide', () => {
-      const current = binding.value
-      if (current !== null) void request(`/code/tabs/${encodeURIComponent(current.tabBindingId)}`, 'DELETE', { document_proof: current.documentProof })
-    }, { once: true })
+    window.addEventListener('pagehide', closeBinding, { once: true })
+  })
+
+  onBeforeUnmount(() => {
+    stopIndexIntentPolling()
+    window.removeEventListener('pagehide', closeBinding)
   })
 
   return {
@@ -721,10 +1093,15 @@ export function useOperatorCode() {
     sourceState,
     contextMessage,
     pending,
+    indexIntentState,
+    indexIntentPending,
     initialize,
     discoverContext,
     pinContext,
     refreshStatus,
+    submitIndexIntent,
+    retryIndexIntent,
+    refreshIndexIntent,
     search,
     explore,
     readSource,
