@@ -94,7 +94,7 @@
 | Question | Resolution | Contract |
 |---|---|---|
 | Browser identity versus UCI owner identity | Real persisted browser subject; exact Source-owner audit issuance; no role/Space/path inference. | `browser-context-and-grants.md` |
-| Browser tab cloning versus reload | Server-issued binding plus session/resume proof and document lease; collision rotates only new tab. | `browser-context-and-grants.md` |
+| Browser tab cloning versus reload | Distinct server binding plus current document proof on binding-bound requests, a server-owned one-time resume token, and document lease; explicit copied pairs rotate only the new tab, document lease expiry retains the pin, and binding/session expiry clears it. | `browser-context-and-grants.md` |
 | HTTP/MCP release compatibility | Typed caller mapping and endpoint exposure categories after application/pre-exposure response. | `operator-code-http.md` |
 | Mutation status after response loss | Shared truth union; domain operation status only where safe inquiry/retry exists. | `collection-operations.md` |
 | All-filter and reorder integrity | Frozen token plus rechecked ACL/version; transactional Rules scope reorder. | `collection-operations.md` |
