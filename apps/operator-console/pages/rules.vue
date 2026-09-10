@@ -241,7 +241,8 @@ function isRollback(result: unknown) {
             <option v-for="scope in createScopes" :key="scope" :value="scope">{{ scopeLabel(scope) }}</option>
           </select>
         </label>
-        <span class="toolbar-count">{{ t('rules.list.shown', { shown: visibleRows.length, total: rows.length }) }}</span>
+        <span class="toolbar-count">{{ t('rules.list.loaded', { count: visibleRows.length }) }}</span>
+
         <span class="spacer" />
         <button class="tbtn" :disabled="pending" @click="refresh">{{ t('rules.actions.refresh') }}</button>
       </div>

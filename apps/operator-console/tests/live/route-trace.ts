@@ -12,6 +12,7 @@ test('live harness boots the real authenticated fixture without the mock API', a
   const fixture = await readLiveFixture()
   const requestPaths: string[] = []
   const responseTraffic: RouteTraffic[] = []
+  const shellRouteTraces: Array<{ route: string; countState: string | null; countLabel: string }> = []
 
   page.on('request', (request) => {
     const url = new URL(request.url())
@@ -55,6 +56,26 @@ test('live harness boots the real authenticated fixture without the mock API', a
     const readiness = await requestJSON(page, '/api/ready')
     expect(readiness.status).toBe(200)
 
+    for (const route of ['/graph', '/books', '/rules']) {
+      const requestOffset = requestPaths.length
+      const routeResponse = await page.goto(`${fixture.frontend.baseUrl}${route}`, { waitUntil: 'domcontentloaded' })
+      expect(routeResponse?.status()).toBe(200)
+
+      const count = page.getByTestId('shell-memory-count')
+      await expect(count).toHaveAttribute('data-count-state', /^(bounded|zero|unknown)$/)
+      await expect(page.getByTestId('shell-review-queue-count')).toContainText(/unknown|неизвестно|未知/)
+      await page.waitForTimeout(100)
+
+      const routeRequests = requestPaths.slice(requestOffset)
+      expect(routeRequests.filter((path) => path === 'GET /api/memories')).toEqual([])
+      expect(routeRequests.filter((path) => path === 'GET /api/memory/candidates')).toEqual([])
+      shellRouteTraces.push({
+        route,
+        countState: await count.getAttribute('data-count-state'),
+        countLabel: (await count.textContent()) || '',
+      })
+    }
+
     expect(requestPaths).toEqual(expect.arrayContaining([
       'POST /api/auth/user-login',
       'GET /api/auth/me',
@@ -80,6 +101,7 @@ test('live harness boots the real authenticated fixture without the mock API', a
           buildEntrySha256: state.frontend.buildEntrySha256,
         },
         traffic: state.traffic,
+        shellRouteTraces,
       }, null, 2)),
     })
   }

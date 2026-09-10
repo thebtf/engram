@@ -2,16 +2,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useNav, type NavItem } from '../composables/useNav'
 import { operatorFetchJson } from '../composables/useOperatorApi'
-import { useOperatorMemoryLab } from '../composables/useOperatorMemoryLab'
-import { useOperatorQueue } from '../composables/useOperatorQueue'
 import { useOperatorShellStatus } from '../composables/useOperatorShell'
 
 const { NAV } = useNav()
 const shell = useOperatorShellStatus()
 const info = shell.info
-const memoryLab = useOperatorMemoryLab()
-const queue = useOperatorQueue()
-const memories = memoryLab.rows
 const route = useRoute()
 const router = useRouter()
 const colorMode = useColorMode()
@@ -58,16 +53,16 @@ const currentArea = computed(() => {
   const current = flatNav.value.find((item) => normalizePath(item.to) === currentPath)
   return current ? t(`nav.items.${current.labelKey}`) : t('nav.items.overview')
 })
-const memoryRecordsLabel = computed(() => (
-  memoryLab.pending.value && memories.length === 0
-    ? t('shell.recordsLoading')
-    : t('shell.records', memories.length)
-))
-const reviewQueueLabel = computed(() => (
-  ['live', 'empty'].includes(queue.loadState.value.kind)
-    ? t('shell.reviewQueue', queue.rows.length)
-    : t('nav.items.queue')
-))
+const activeMemoryCountState = computed(() => {
+  if (info.value.activeMemoryCount === null) return 'unknown'
+  return info.value.activeMemoryCount === 0 ? 'zero' : 'bounded'
+})
+const activeMemoryRecordsLabel = computed(() => {
+  if (info.value.activeMemoryCount === null) return t('shell.activeRecordsUnknown')
+  if (info.value.activeMemoryCount === 0) return t('shell.activeRecordsZero')
+  return t('shell.activeRecords', info.value.activeMemoryCount)
+})
+const reviewQueueLabel = computed(() => t('shell.reviewQueueUnknown'))
 const authPostureLabel = computed(() => {
   switch (info.value.authPosture) {
     case 'auth-disabled':
@@ -405,13 +400,14 @@ function onDocumentKeydown(event: KeyboardEvent) {
       <span class="si">{{ currentArea }}</span>
       <span class="ssp" />
       <NuxtLink to="/health" class="si warn"><span class="dot" />{{ t('shell.statusDegradation') }} <strong>{{ info.health }}</strong></NuxtLink>
-      <span class="si">{{ memoryRecordsLabel }}</span>
+      <span class="si" data-testid="shell-memory-count" :data-count-state="activeMemoryCountState">{{ activeMemoryRecordsLabel }}</span>
       <NuxtLink to="/noise" class="si warn"><span class="dot" />{{ t('shell.statusNoise') }} <strong>{{ info.noise }}</strong></NuxtLink>
-      <NuxtLink to="/queue" class="si">{{ reviewQueueLabel }}</NuxtLink>
+      <NuxtLink to="/queue" class="si" data-testid="shell-review-queue-count">{{ reviewQueueLabel }}</NuxtLink>
+
       <span class="si">{{ t('shell.uptime', { value: info.uptime }) }}</span>
     </footer>
 
-    <SettingsModal v-model:open="settingsModalOpen" v-model:active-tab="settingsModalTab" />
+    <SettingsModal v-if="settingsModalOpen" v-model:open="settingsModalOpen" v-model:active-tab="settingsModalTab" />
     <ProfileModal v-model:open="profileModalOpen" :info="info" :auth-posture-label="authPostureLabel" />
   </div>
 </template>

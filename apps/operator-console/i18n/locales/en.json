@@ -71,9 +71,10 @@
     "postgres": "PostgreSQL 17 · pgvector",
     "statusDegradation": "degradation",
     "statusNoise": "noise",
-    "records": "{count} record | {count} records",
-    "recordsLoading": "… records",
-    "reviewQueue": "{count} in review | {count} in review",
+    "activeRecords": "{count} active record | {count} active records",
+    "activeRecordsZero": "no active records",
+    "activeRecordsUnknown": "active records unknown",
+    "reviewQueueUnknown": "review queue unknown",
     "uptime": "running {value}"
   },
   "profileModal": {
@@ -108,7 +109,7 @@
       "queue": "Review queue",
       "noise": "Noise & value",
       "graph": "Knowledge links",
-      "books": "Context books",
+      "books": "Legacy import",
       "rules": "Behavior rules",
       "issues": "Issues",
       "projects": "Projects & sessions",
@@ -836,8 +837,8 @@
     "title": "Knowledge graph",
     "subtitle": "Inspect graph nodes and edges, create new links, and run live traverse/path reads from the operator console.",
     "metrics": {
-      "nodes": "nodes in project",
-      "edges": "edges on selected node",
+      "loadedNodes": "nodes loaded for this request",
+      "loadedEdges": "connected edges loaded for this request",
       "selectedDegree": "selected degree"
     },
     "brief": {
@@ -1057,7 +1058,7 @@
       "title": "Active directives",
       "count": "{count} rule | {count} rules",
       "header": "Order · rule · scope · audit",
-      "shown": "{shown} of {total} in current filter"
+      "loaded": "{count} loaded rule | {count} loaded rules in the current filter"
     },
     "meta": {
       "priority": "priority {priority}",
@@ -1935,11 +1936,11 @@
     }
   },
   "booksPage": {
-    "title": "Books as context",
-    "subtitle": "Upload or paste a source text, let the books pipeline chunk it through the markdown adapter, and track the job until produced documents land in Documents.",
+    "title": "Legacy plaintext import",
+    "subtitle": "Submit a plaintext source to the existing import pipeline. It processes Markdown-compatible text and writes versioned Documents; it is not Book Context.",
     "brief": {
-      "title": "Books stay a separate bounded context",
-      "body": "This milestone creates a books job, processes text through the markdown chunker adapter, and writes versioned documents with source_book_job_id provenance metadata."
+      "title": "Legacy import writes documents",
+      "body": "This legacy import creates a books job, processes plaintext source through the markdown chunker adapter, and writes versioned Documents with source_book_job_id provenance metadata. It does not make Book Context ready."
     },
     "metrics": {
       "status": "Current job status",

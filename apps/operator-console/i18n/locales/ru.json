@@ -71,9 +71,10 @@
     "postgres": "PostgreSQL 17 · pgvector",
     "statusDegradation": "деградация",
     "statusNoise": "шум",
-    "records": "{count} запись | {count} записи | {count} записей",
-    "recordsLoading": "… записей",
-    "reviewQueue": "на проверку {count} | на проверку {count} | на проверку {count}",
+    "activeRecords": "{count} активная запись | {count} активные записи | {count} активных записей",
+    "activeRecordsZero": "нет активных записей",
+    "activeRecordsUnknown": "активные записи: неизвестно",
+    "reviewQueueUnknown": "очередь проверки: неизвестно",
     "uptime": "работает {value}"
   },
   "profileModal": {
@@ -108,7 +109,7 @@
       "queue": "На проверку",
       "noise": "Шум и польза",
       "graph": "Связи знаний",
-      "books": "Книги-контекст",
+      "books": "Устаревший импорт",
       "rules": "Правила поведения",
       "issues": "Задачи",
       "projects": "Проекты и сессии",
@@ -836,8 +837,8 @@
     "title": "Граф знаний",
     "subtitle": "Смотрите узлы и связи графа, создавайте новые ребра и запускайте live traverse/path прямо из operator console.",
     "metrics": {
-      "nodes": "узлов в проекте",
-      "edges": "связей у выбранного узла",
+      "loadedNodes": "узлов загружено для этого запроса",
+      "loadedEdges": "связей загружено для этого запроса",
       "selectedDegree": "степень выбранного"
     },
     "brief": {
@@ -1057,7 +1058,7 @@
       "title": "Активные директивы",
       "count": "{count} правило | {count} правила | {count} правил",
       "header": "Порядок · правило · область · аудит",
-      "shown": "{shown} из {total} в текущем фильтре"
+      "loaded": "В текущем фильтре загружено {count} правило | В текущем фильтре загружено {count} правила | В текущем фильтре загружено {count} правил"
     },
     "meta": {
       "priority": "приоритет {priority}",
@@ -1935,11 +1936,11 @@
     }
   },
   "booksPage": {
-    "title": "Книги-контекст",
-    "subtitle": "Загрузите или вставьте текст источника, дайте books-конвейеру разбить его через markdown-адаптер и отслеживайте job, пока документы не появятся в разделе Documents.",
+    "title": "Устаревший импорт текста",
+    "subtitle": "Передайте текстовый источник в существующий конвейер импорта. Он обрабатывает совместимый с Markdown текст и создаёт версионируемые Documents; это не готовность Book Context.",
     "brief": {
-      "title": "Books остаётся отдельным bounded context",
-      "body": "Этот milestone создаёт books job, прогоняет текст через адаптер markdown chunker и пишет versioned documents с provenance-метаданными source_book_job_id."
+      "title": "Устаревший импорт создаёт документы",
+      "body": "Этот устаревший импорт создаёт books job, обрабатывает текст источника через markdown chunker и пишет versioned Documents с provenance-метаданными source_book_job_id. Он не означает готовность Book Context."
     },
     "metrics": {
       "status": "Статус текущей job",
