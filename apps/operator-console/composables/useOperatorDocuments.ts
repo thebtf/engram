@@ -1,5 +1,6 @@
 import type { ComputedRef, Ref } from 'vue'
 import type { OperatorLoadState } from './useOperatorApi'
+import type { OperatorSelection } from './useOperatorSelection'
 import { executeMutation, type MutationResult } from './useApi'
 import {
   emptyState,
@@ -137,6 +138,21 @@ export interface DocumentCommentInput {
   lineEnd?: number
 }
 
+export type DocumentSelectionOperationAction = 'export'
+
+export interface DocumentSelectionOperationTarget {
+  documentId: number
+  path: string
+  project: string
+  version: number
+}
+
+export interface DocumentSelectionOperationInput {
+  action: DocumentSelectionOperationAction
+  selection: Exclude<OperatorSelection, { kind: 'none' }>
+  targets: DocumentSelectionOperationTarget[]
+}
+
 function jsonInit(method: 'POST', body?: unknown): RequestInit {
   const init: RequestInit = { method }
   if (body !== undefined) {
@@ -144,6 +160,57 @@ function jsonInit(method: 'POST', body?: unknown): RequestInit {
     init.body = JSON.stringify(body)
   }
   return init
+}
+
+function documentOperationSelectionPayload(selection: Exclude<OperatorSelection, { kind: 'none' }>): Record<string, unknown> {
+  if (selection.domain !== 'documents' || !Number.isSafeInteger(selection.version) || selection.version < 1) {
+    throw new TypeError('the selected Documents snapshot is not server current')
+  }
+
+  switch (selection.kind) {
+    case 'explicit':
+    case 'page':
+      return { kind: selection.kind, selection_version: selection.version }
+    case 'frozen_filter':
+      return {
+        kind: selection.kind,
+        selection_version: selection.version,
+        selection_token: selection.selectionToken,
+      }
+  }
+}
+
+function documentOperationTargetsPayload(targets: DocumentSelectionOperationTarget[]): Array<Record<string, unknown>> {
+  if (!targets.length || targets.length > 1_000) {
+    throw new TypeError('Documents export requires one to 1000 selected versions')
+  }
+
+  const ids = new Set<number>()
+  return targets.map((target) => {
+    const path = target.path.trim()
+    const project = target.project.trim()
+    if (!Number.isSafeInteger(target.documentId) || target.documentId < 1 || !Number.isSafeInteger(target.version) || target.version < 1 || !path || !project || ids.has(target.documentId)) {
+      throw new TypeError('Documents export target is invalid')
+    }
+    ids.add(target.documentId)
+    return {
+      document_id: target.documentId,
+      path,
+      project,
+      version: target.version,
+    }
+  })
+}
+
+function documentOperationInit(body: unknown, requestId: string): RequestInit {
+  return {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Engram-Request-ID': requestId,
+    },
+    body: JSON.stringify(body),
+  }
 }
 
 function replaceArray<T>(target: T[], next: readonly T[]) {
@@ -319,6 +386,7 @@ export function useOperatorDocuments(): {
   selectPrimaryVersion: (version: number) => Promise<void>
   selectSecondaryVersion: (version: number) => Promise<void>
   addComment: (input: DocumentCommentInput) => Promise<MutationResult<DocumentCommentInput>>
+  runDocumentSelectionOperation: (input: DocumentSelectionOperationInput) => Promise<MutationResult<DocumentSelectionOperationInput>>
 } {
   const listEvidence = endpointEvidence(`/api/documents?project={project}&limit=${DOCUMENT_LIST_LIMIT}`, 'documents-list')
   const historyEvidence = endpointEvidence('/api/documents/history?path={path}&project={project}', 'documents-history')
@@ -628,6 +696,29 @@ export function useOperatorDocuments(): {
     )
   }
 
+  async function runDocumentSelectionOperation(input: DocumentSelectionOperationInput): Promise<MutationResult<DocumentSelectionOperationInput>> {
+    const requestId = crypto.randomUUID()
+    const request = {
+      requestId,
+      action: `document-${input.action}`,
+      intent: input,
+    }
+    const body = {
+      request_id: requestId,
+      action: input.action,
+      selection: documentOperationSelectionPayload(input.selection),
+      targets: documentOperationTargetsPayload(input.targets),
+    }
+    return executeMutation(
+      request,
+      fetch(operatorApiUrl('/api/documents'), {
+        ...documentOperationInit(body, requestId),
+        credentials: 'include',
+      }),
+      () => undefined,
+    )
+  }
+
   startOnce('documents-page', refresh)
 
   return {
@@ -654,5 +745,6 @@ export function useOperatorDocuments(): {
     selectPrimaryVersion,
     selectSecondaryVersion,
     addComment,
+    runDocumentSelectionOperation,
   }
 }

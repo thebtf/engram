@@ -12,8 +12,15 @@ import (
 	"github.com/stretchr/testify/require"
 	gormlib "gorm.io/gorm"
 
+	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
+
+type documentReadVersionKey struct {
+	path    string
+	project string
+	version int
+}
 
 // fakeDocumentStore is a test seam implementing the versionedDocumentStore
 // interface. Every call is recorded so tests can assert the REST handlers
@@ -42,11 +49,12 @@ type fakeDocumentStore struct {
 		called        bool
 	}
 
-	readLatestErr  error
-	readLatestDoc  *gormdb.VersionedDocument
-	readVersionErr error
-	readVersionDoc *gormdb.VersionedDocument
-	readCall       struct {
+	readLatestErr   error
+	readLatestDoc   *gormdb.VersionedDocument
+	readVersionErr  error
+	readVersionDoc  *gormdb.VersionedDocument
+	readVersionDocs map[documentReadVersionKey]*gormdb.VersionedDocument
+	readCall        struct {
 		path, project string
 		version       int
 		called        bool
@@ -102,6 +110,13 @@ func (f *fakeDocumentStore) ReadVersion(_ context.Context, path, project string,
 	if f.readVersionErr != nil {
 		return nil, f.readVersionErr
 	}
+	if f.readVersionDocs != nil {
+		document, found := f.readVersionDocs[documentReadVersionKey{path: path, project: project, version: version}]
+		if !found {
+			return nil, gormlib.ErrRecordNotFound
+		}
+		return document, nil
+	}
 	return f.readVersionDoc, nil
 }
 
@@ -152,6 +167,28 @@ func (f *fakeDocumentStore) GetComments(_ context.Context, documentID int64) ([]
 
 func documentsTestService(store versionedDocumentStore) *Service {
 	return &Service{documentStore: store}
+}
+
+func callDocumentSelectionOperation(t *testing.T, service *Service, request documentCreateRequest, identity auth.Identity) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(request)
+	require.NoError(t, err)
+	httpRequest := httptest.NewRequest(http.MethodPost, "/api/documents", bytes.NewReader(body))
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("X-Engram-Request-ID", request.RequestID)
+	httpRequest = httpRequest.WithContext(auth.WithIdentity(httpRequest.Context(), identity))
+	recorder := httptest.NewRecorder()
+	service.handleCreateDocument(recorder, httpRequest)
+	return recorder
+}
+
+func documentExportRequest(requestID, kind, token string, targets ...documentOperationTarget) documentCreateRequest {
+	return documentCreateRequest{
+		RequestID: requestID,
+		Action:    "export",
+		Selection: &documentOperationSelection{Kind: kind, Version: 1, Token: token},
+		Targets:   targets,
+	}
 }
 
 // TestHandlersDocuments_Create verifies POST /api/documents calls
@@ -444,4 +481,106 @@ func TestHandlersDocuments_StoreUnavailable(t *testing.T) {
 	w := httptest.NewRecorder()
 	svc.handleListDocuments(w, req)
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+}
+
+func TestHandlersDocuments_SelectionExportRechecksEverySelectedVersionWithoutReturningBodies(t *testing.T) {
+	t.Parallel()
+	identity := auth.SessionForBrowserUser("operator", 41)
+	document := gormdb.VersionedDocument{
+		ID:       42,
+		Path:     "safe/export.md",
+		Project:  "engram",
+		Version:  3,
+		Content:  "must not appear in export operation status",
+		Metadata: `{"private":"must not appear"}`,
+	}
+	target := documentOperationTarget{DocumentID: document.ID, Path: document.Path, Project: document.Project, Version: document.Version}
+
+	for _, selection := range []struct {
+		name  string
+		kind  string
+		token string
+	}{
+		{name: "explicit", kind: "explicit"},
+		{name: "page", kind: "page"},
+		{name: "frozen filter", kind: "frozen_filter", token: "server-owned-token-is-not-authority"},
+	} {
+		t.Run(selection.name, func(t *testing.T) {
+			fake := &fakeDocumentStore{readVersionDocs: map[documentReadVersionKey]*gormdb.VersionedDocument{
+				{path: document.Path, project: document.Project, version: document.Version}: &document,
+			}}
+			recorder := callDocumentSelectionOperation(t, documentsTestService(fake), documentExportRequest("documents-export-"+selection.kind, selection.kind, selection.token, target), identity)
+
+			require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+			assert.True(t, fake.readCall.called, "export must re-read the selected document version")
+			assert.Equal(t, document.Path, fake.readCall.path)
+			assert.Equal(t, document.Project, fake.readCall.project)
+			assert.Equal(t, document.Version, fake.readCall.version)
+			assert.NotContains(t, recorder.Body.String(), document.Content)
+			assert.NotContains(t, recorder.Body.String(), document.Metadata)
+
+			var response struct {
+				OperationState string `json:"operation_state"`
+				ItemResults    []struct {
+					TargetID        int64  `json:"target_id"`
+					ObservedVersion int    `json:"observed_version"`
+					Outcome         string `json:"outcome"`
+				} `json:"item_results"`
+				Readback documentOperationReadback `json:"readback"`
+			}
+			require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+			assert.Equal(t, "completed", response.OperationState)
+			require.Len(t, response.ItemResults, 1)
+			assert.Equal(t, document.ID, response.ItemResults[0].TargetID)
+			assert.Equal(t, document.Version, response.ItemResults[0].ObservedVersion)
+			assert.Equal(t, "committed", response.ItemResults[0].Outcome)
+			assert.Equal(t, documentOperationReadback{Authoritative: true, Kind: "non_disclosing", OperationStatus: "export_ready"}, response.Readback)
+		})
+	}
+}
+
+func TestHandlersDocuments_SelectionExportReturnsTruthfulPartialAndNonDisclosingPermissionStatus(t *testing.T) {
+	t.Parallel()
+	const project = "engram"
+	allowed := gormdb.VersionedDocument{ID: 51, Path: "safe/allowed.md", Project: project, Version: 2, Content: "selected document body must remain private"}
+	missing := documentOperationTarget{DocumentID: 52, Path: "safe/missing.md", Project: project, Version: 4}
+	fake := &fakeDocumentStore{readVersionDocs: map[documentReadVersionKey]*gormdb.VersionedDocument{
+		{path: allowed.Path, project: allowed.Project, version: allowed.Version}: &allowed,
+	}}
+	service := documentsTestService(fake)
+	allowedTarget := documentOperationTarget{DocumentID: allowed.ID, Path: allowed.Path, Project: allowed.Project, Version: allowed.Version}
+	partial := callDocumentSelectionOperation(t, service, documentExportRequest("documents-export-partial", "explicit", "", allowedTarget, missing), auth.SessionForBrowserUser("operator", 41))
+
+	require.Equal(t, http.StatusMultiStatus, partial.Code, partial.Body.String())
+	assert.NotContains(t, partial.Body.String(), allowed.Content)
+	var partialResponse struct {
+		OperationState string `json:"operation_state"`
+		ItemResults    []struct {
+			TargetID int64  `json:"target_id"`
+			Outcome  string `json:"outcome"`
+		} `json:"item_results"`
+	}
+	require.NoError(t, json.Unmarshal(partial.Body.Bytes(), &partialResponse))
+	assert.Equal(t, "partial", partialResponse.OperationState)
+	require.Len(t, partialResponse.ItemResults, 2)
+	assert.Equal(t, allowed.ID, partialResponse.ItemResults[0].TargetID)
+	assert.Equal(t, "committed", partialResponse.ItemResults[0].Outcome)
+	assert.Equal(t, missing.DocumentID, partialResponse.ItemResults[1].TargetID)
+	assert.Equal(t, "conflict", partialResponse.ItemResults[1].Outcome)
+
+	deniedFake := &fakeDocumentStore{readVersionDocs: map[documentReadVersionKey]*gormdb.VersionedDocument{
+		{path: allowed.Path, project: allowed.Project, version: allowed.Version}: &allowed,
+	}}
+	denied := callDocumentSelectionOperation(t, documentsTestService(deniedFake), documentExportRequest("documents-export-denied", "frozen_filter", "opaque-token-is-not-authority", allowedTarget), auth.Client("read-write", "keycard-without-browser-subject"))
+	require.Equal(t, http.StatusForbidden, denied.Code, denied.Body.String())
+	assert.NotContains(t, denied.Body.String(), allowed.Content)
+	assert.NotContains(t, denied.Body.String(), allowed.Path)
+	assert.False(t, deniedFake.readCall.called, "permission denial must not trigger an export read")
+	var deniedResponse struct {
+		OperationState string `json:"operation_state"`
+		ItemResults    []any  `json:"item_results"`
+	}
+	require.NoError(t, json.Unmarshal(denied.Body.Bytes(), &deniedResponse))
+	assert.Equal(t, "denied", deniedResponse.OperationState)
+	assert.Empty(t, deniedResponse.ItemResults)
 }

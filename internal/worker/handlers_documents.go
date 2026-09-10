@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	gormlib "gorm.io/gorm"
 )
@@ -95,6 +96,52 @@ type documentCommentsResponse struct {
 	Comments   []documentCommentItem `json:"comments"`
 	Count      int                   `json:"count"`
 	DocumentID int64                 `json:"document_id"`
+}
+
+type documentCreateRequest struct {
+	Path      string                      `json:"path"`
+	Project   string                      `json:"project"`
+	Content   string                      `json:"content"`
+	DocType   string                      `json:"doc_type"`
+	Metadata  string                      `json:"metadata"`
+	Author    string                      `json:"author"`
+	RequestID string                      `json:"request_id,omitempty"`
+	Action    string                      `json:"action,omitempty"`
+	Selection *documentOperationSelection `json:"selection,omitempty"`
+	Targets   []documentOperationTarget   `json:"targets,omitempty"`
+}
+
+type documentOperationSelection struct {
+	Kind    string `json:"kind"`
+	Version int64  `json:"selection_version"`
+	Token   string `json:"selection_token,omitempty"`
+}
+
+type documentOperationTarget struct {
+	DocumentID int64  `json:"document_id"`
+	Path       string `json:"path"`
+	Project    string `json:"project"`
+	Version    int    `json:"version"`
+}
+
+type documentOperationResponse struct {
+	RequestID      string                        `json:"request_id"`
+	OperationID    string                        `json:"operation_id"`
+	OperationState string                        `json:"operation_state"`
+	ItemResults    []documentOperationItemResult `json:"item_results,omitempty"`
+	Readback       *documentOperationReadback    `json:"readback,omitempty"`
+}
+
+type documentOperationItemResult struct {
+	TargetID        int64  `json:"target_id"`
+	Outcome         string `json:"outcome"`
+	ObservedVersion *int   `json:"observed_version,omitempty"`
+}
+
+type documentOperationReadback struct {
+	Authoritative   bool   `json:"authoritative"`
+	Kind            string `json:"kind"`
+	OperationStatus string `json:"operation_status,omitempty"`
 }
 
 func (s *Service) currentDocumentStore() versionedDocumentStore {
@@ -242,16 +289,17 @@ func (s *Service) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Path     string `json:"path"`
-		Project  string `json:"project"`
-		Content  string `json:"content"`
-		DocType  string `json:"doc_type"`
-		Metadata string `json:"metadata"`
-		Author   string `json:"author"`
-	}
+	var req documentCreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeDocumentError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Action != "" {
+		s.handleDocumentSelectionOperation(w, r, &req)
+		return
+	}
+	if req.RequestID != "" || req.Selection != nil || len(req.Targets) != 0 {
+		writeDocumentError(w, http.StatusBadRequest, "document selection operation requires an action")
 		return
 	}
 
@@ -295,6 +343,122 @@ func (s *Service) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
 		"path":    path,
 		"project": project,
 		"message": "document created",
+	})
+}
+
+// handleDocumentSelectionOperation re-resolves every selected document version
+// under the current browser identity. Its status response intentionally contains
+// no document body; an authorized read remains the separate content boundary.
+func (s *Service) handleDocumentSelectionOperation(w http.ResponseWriter, r *http.Request, request *documentCreateRequest) {
+	if request == nil || strings.TrimSpace(request.RequestID) == "" || r.Header.Get("X-Engram-Request-ID") != request.RequestID {
+		writeDocumentOperationFailure(w, http.StatusBadRequest, "", "validation_error")
+		return
+	}
+	if !documentSelectionOperationValid(request) {
+		writeDocumentOperationFailure(w, http.StatusBadRequest, request.RequestID, "validation_error")
+		return
+	}
+	if !documentOperationPermitted(r.Context()) {
+		writeDocumentOperationFailure(w, http.StatusForbidden, request.RequestID, "denied")
+		return
+	}
+
+	store := s.currentDocumentStore()
+	if store == nil {
+		writeDocumentOperationFailure(w, http.StatusServiceUnavailable, request.RequestID, "failed")
+		return
+	}
+
+	items := make([]documentOperationItemResult, 0, len(request.Targets))
+	committed := 0
+	conflicted := 0
+	for _, target := range request.Targets {
+		document, err := store.ReadVersion(r.Context(), target.Path, target.Project, target.Version)
+		if err != nil {
+			outcome := "failed"
+			if errors.Is(err, gormlib.ErrRecordNotFound) {
+				outcome = "conflict"
+				conflicted++
+			}
+			items = append(items, documentOperationItemResult{TargetID: target.DocumentID, Outcome: outcome})
+			continue
+		}
+		if document == nil || document.ID != target.DocumentID || document.Version != target.Version {
+			items = append(items, documentOperationItemResult{TargetID: target.DocumentID, Outcome: "conflict"})
+			conflicted++
+			continue
+		}
+		observedVersion := document.Version
+		items = append(items, documentOperationItemResult{TargetID: target.DocumentID, Outcome: "committed", ObservedVersion: &observedVersion})
+		committed++
+	}
+
+	response := documentOperationResponse{
+		RequestID:   request.RequestID,
+		OperationID: "documents-export:" + request.RequestID,
+		ItemResults: items,
+	}
+	if committed == len(items) {
+		response.OperationState = "completed"
+		response.Readback = &documentOperationReadback{Authoritative: true, Kind: "non_disclosing", OperationStatus: "export_ready"}
+		writeJSON(w, response)
+		return
+	}
+	if committed > 0 {
+		response.OperationState = "partial"
+		writeJSONStatus(w, http.StatusMultiStatus, response)
+		return
+	}
+	response.OperationState = "failed"
+	if conflicted == len(items) {
+		writeJSONStatus(w, http.StatusConflict, response)
+		return
+	}
+	writeJSONStatus(w, http.StatusInternalServerError, response)
+}
+
+func documentSelectionOperationValid(request *documentCreateRequest) bool {
+	if request == nil || request.Action != "export" || request.Selection == nil || request.Selection.Version < 1 || len(request.Targets) == 0 || len(request.Targets) > gormdb.CollectionSelectionMaxTargets {
+		return false
+	}
+	switch request.Selection.Kind {
+	case "explicit", "page":
+		if request.Selection.Token != "" {
+			return false
+		}
+	case "frozen_filter":
+		if strings.TrimSpace(request.Selection.Token) == "" {
+			return false
+		}
+	default:
+		return false
+	}
+	seen := make(map[int64]struct{}, len(request.Targets))
+	for _, target := range request.Targets {
+		if target.DocumentID < 1 || target.Version < 1 || strings.TrimSpace(target.Path) == "" || strings.TrimSpace(target.Project) == "" {
+			return false
+		}
+		if _, duplicate := seen[target.DocumentID]; duplicate {
+			return false
+		}
+		seen[target.DocumentID] = struct{}{}
+	}
+	return true
+}
+
+func documentOperationPermitted(ctx context.Context) bool {
+	identity, found := auth.IdentityFrom(ctx)
+	if !found {
+		return false
+	}
+	_, found = identity.SessionBrowserSubject()
+	return found
+}
+
+func writeDocumentOperationFailure(w http.ResponseWriter, status int, requestID, state string) {
+	writeJSONStatus(w, status, documentOperationResponse{
+		RequestID:      requestID,
+		OperationState: state,
 	})
 }
 
