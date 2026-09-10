@@ -47,6 +47,7 @@ interface ApiMemory {
   created_at?: string
   status?: string
   superseded_by?: number | string | null
+  version?: number
   source_sessions?: string[]
 }
 
@@ -139,6 +140,25 @@ export interface StoreMemoryInput {
   project: string
   content: string
   tags?: string[]
+}
+
+export type MemoryCollectionSelectionKind = 'explicit' | 'page' | 'frozen_filter'
+
+export interface MemoryCollectionSelection {
+  kind: MemoryCollectionSelectionKind
+  version: number
+  token?: string
+}
+
+export interface MemoryCollectionOperationReadback {
+  id: string
+  status: 'active' | 'flagged' | 'archived'
+  version: number
+}
+
+export interface MemoryCollectionOperationIntent {
+  action: 'suppress' | 'unsuppress' | 'archive'
+  selection: MemoryCollectionSelection
 }
 
 interface CurrentMemory {
@@ -427,6 +447,106 @@ function jsonInit(method: 'POST' | 'DELETE', body?: unknown): RequestInit {
     init.body = JSON.stringify(body)
   }
   return init
+}
+
+function parseMemoryCollectionSelection(value: unknown): MemoryCollectionSelection {
+  if (typeof value !== 'object' || value === null || Array.isArray(value) || !('selection' in value)) {
+    throw new Error('invalid memory selection response')
+  }
+  const selection = value.selection
+  if (typeof selection !== 'object' || selection === null || Array.isArray(selection)) {
+    throw new Error('invalid memory selection response')
+  }
+  const selectionValue = selection as { kind?: unknown; selection_version?: unknown; selection_token?: unknown }
+  const kind = selectionValue.kind
+  const version = selectionValue.selection_version
+  const token = selectionValue.selection_token
+  if ((kind !== 'explicit' && kind !== 'page' && kind !== 'frozen_filter') || typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) {
+    throw new Error('invalid memory selection response')
+  }
+  if (kind === 'frozen_filter' && (typeof token !== 'string' || !token)) {
+    throw new Error('invalid frozen memory selection response')
+  }
+  return { kind, version, ...(typeof token === 'string' && token ? { token } : {}) }
+}
+
+function parseMemoryCollectionReadback(value: unknown): MemoryCollectionOperationReadback[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const states: MemoryCollectionOperationReadback[] = []
+  for (const state of value) {
+    if (typeof state !== 'object' || state === null || Array.isArray(state)) return undefined
+    const id = state.id
+    const status = state.status
+    const version = state.version
+    if ((typeof id !== 'number' && typeof id !== 'string') || !String(id) || (status !== 'active' && status !== 'flagged' && status !== 'archived') || typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) {
+      return undefined
+    }
+    states.push({ id: String(id), status, version })
+  }
+  return states
+}
+
+async function memoryCollectionSelectionTarget(id: string): Promise<{ id: string; expectedVersion: number }> {
+  const path = `/api/memories/${encodeURIComponent(id)}`
+  const value = await operatorFetchJson<ApiMemory>(path, undefined, 'memory-selection-target')
+  if ((typeof value.id !== 'number' && typeof value.id !== 'string') || String(value.id) !== id || typeof value.version !== 'number' || !Number.isSafeInteger(value.version) || value.version < 1) {
+    throw new Error('invalid current memory selection target')
+  }
+  return { id, expectedVersion: value.version }
+}
+
+async function snapshotMemoryCollectionSelection(targets: Array<{ id: string; expectedVersion: number }>): Promise<MemoryCollectionSelection> {
+  const value = await operatorFetchJson<unknown>('/api/memories/selection', jsonInit('POST', {
+    selection: {
+      kind: 'explicit',
+      targets: targets.map((target) => ({ id: target.id, expected_version: target.expectedVersion })),
+    },
+  }), 'memory-selection')
+  return parseMemoryCollectionSelection(value)
+}
+
+async function submitMemoryCollectionOperation(
+  action: MemoryCollectionOperationIntent['action'],
+  selection: MemoryCollectionSelection,
+  requestId = crypto.randomUUID(),
+): Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>> {
+  const intent: MemoryCollectionOperationIntent = { action, selection }
+  return executeMutation(
+    { requestId, action: `memory-${action}`, intent },
+    fetch(operatorApiUrl('/api/memories/operations'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Engram-Request-ID': requestId,
+      },
+      body: JSON.stringify({
+        request_id: requestId,
+        action,
+        selection: {
+          kind: selection.kind,
+          selection_version: selection.version,
+          ...(selection.token === undefined ? {} : { selection_token: selection.token }),
+        },
+      }),
+      credentials: 'include',
+    }),
+    parseMemoryCollectionReadback,
+  )
+}
+
+async function applyMemoryCollectionOperation(
+  action: MemoryCollectionOperationIntent['action'],
+  ids: string[],
+): Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>> {
+  const requestId = crypto.randomUUID()
+  const intent: MemoryCollectionOperationIntent = { action, selection: { kind: 'explicit', version: 0 } }
+  try {
+    const targets = await Promise.all(ids.map(memoryCollectionSelectionTarget))
+    const selection = await snapshotMemoryCollectionSelection(targets)
+    return submitMemoryCollectionOperation(action, selection, requestId)
+  } catch {
+    return { kind: 'failed', request: { requestId, action: `memory-${action}`, intent } }
+  }
 }
 
 function replaceArray<T>(target: T[], next: readonly T[]) {
@@ -763,8 +883,10 @@ export function useOperatorMemoryLab(): {
   loadMemoryByID: (id: string) => Promise<Memory>
   storeMemory: (input: StoreMemoryInput) => Promise<MutationResult<StoreMemoryInput>>
   deleteMemory: (id: string) => Promise<MutationResult<{ id: string }>>
-  suppressMemory: (id: string, reason?: string) => Promise<MutationResult<{ id: string; reason: string }>>
-  suppressMemories: (ids: string[], reason?: string) => Promise<MutationResult<{ ids: string[]; reason: string }>>
+  suppressMemory: (id: string, reason?: string) => Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>>
+  suppressMemories: (ids: string[], reason?: string) => Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>>
+  unsuppressMemory: (id: string) => Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>>
+  archiveMemory: (id: string) => Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>>
   auditMemory: (id: string, limit?: number) => Promise<OperatorLoadState<MemoryAuditResponse>>
   provenanceGap: ReturnType<typeof unsupportedOperatorAction>
   actionGaps: readonly MemoryActionGap[]
@@ -822,23 +944,29 @@ export function useOperatorMemoryLab(): {
     return submitMutation('memory-delete', { id }, `/api/memories/${encodeURIComponent(id)}`, jsonInit('DELETE'))
   }
 
-  async function suppressMemory(id: string, reason = 'operator marked as noise') {
-    return submitMutation('memory-suppress', { id, reason }, `/api/memories/${encodeURIComponent(id)}/suppress`, jsonInit('POST', { reason }))
+  async function suppressMemory(id: string, _reason = 'operator marked as noise') {
+    return applyMemoryCollectionOperation('suppress', [id])
   }
 
-  async function suppressMemories(ids: string[], reason = 'operator bulk marked as noise'): Promise<MutationResult<{ ids: string[]; reason: string }>> {
+  async function suppressMemories(ids: string[], _reason = 'operator bulk marked as noise'): Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>> {
     const uniqueIds = [...new Set(ids)].filter(Boolean)
-    const intent = { ids: uniqueIds, reason }
-    const numericIds = uniqueIds.map((id) => Number.parseInt(id, 10))
-    if (numericIds.some((id) => !Number.isInteger(id) || id <= 0)) {
+    const intent: MemoryCollectionOperationIntent = { action: 'suppress', selection: { kind: 'explicit', version: 0 } }
+    if (!uniqueIds.length || uniqueIds.some((id) => !/^\d+$/.test(id) || Number(id) <= 0)) {
       return {
         kind: 'validation_error',
-        request: { requestId: crypto.randomUUID(), action: 'memory-bulk-suppress', intent },
+        request: { requestId: crypto.randomUUID(), action: 'memory-suppress', intent },
         code: 'invalid_memory_id',
       }
     }
+    return applyMemoryCollectionOperation('suppress', uniqueIds)
+  }
 
-    return submitMutation('memory-bulk-suppress', intent, '/api/memories/suppress', jsonInit('POST', { ids: numericIds, reason }))
+  async function unsuppressMemory(id: string) {
+    return applyMemoryCollectionOperation('unsuppress', [id])
+  }
+
+  async function archiveMemory(id: string) {
+    return applyMemoryCollectionOperation('archive', [id])
   }
 
   async function auditMemory(id: string, limit = 10) {
@@ -869,6 +997,8 @@ export function useOperatorMemoryLab(): {
     deleteMemory,
     suppressMemory,
     suppressMemories,
+    unsuppressMemory,
+    archiveMemory,
     auditMemory,
     provenanceGap,
     actionGaps: memoryActionGaps,

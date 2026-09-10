@@ -3,6 +3,8 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -899,4 +901,581 @@ func (s *Service) handleSuppressMemories(w http.ResponseWriter, r *http.Request)
 
 	log.Info().Int("count", len(receipts)).Str("reason", reason).Msg("memories suppressed")
 	writeJSON(w, receipts)
+}
+
+const memoryCollectionSelectionDomain = "memory"
+
+var (
+	errMemorySelectionDenied   = errors.New("memory selection denied")
+	errMemorySelectionConflict = errors.New("memory selection conflict")
+)
+
+type memoryCollectionSelectionRequest struct {
+	Kind        dbgorm.CollectionSelectionKind     `json:"kind"`
+	Targets     []dbgorm.CollectionSelectionTarget `json:"targets,omitempty"`
+	Cursor      string                             `json:"cursor,omitempty"`
+	Project     string                             `json:"project,omitempty"`
+	ExcludedIDs []string                           `json:"excluded_ids,omitempty"`
+}
+
+type memoryCollectionSelectionSnapshotRequest struct {
+	Selection memoryCollectionSelectionRequest `json:"selection"`
+}
+
+type memoryCollectionSelectionOperationRequest struct {
+	RequestID string                                      `json:"request_id"`
+	Action    string                                      `json:"action"`
+	Selection memoryCollectionSelectionOperationSelection `json:"selection"`
+}
+
+type memoryCollectionSelectionOperationSelection struct {
+	Kind    dbgorm.CollectionSelectionKind `json:"kind"`
+	Version int64                          `json:"selection_version"`
+	Token   string                         `json:"selection_token,omitempty"`
+}
+
+type memoryCollectionSelectionPageRequest struct {
+	Project string `json:"project"`
+	Cursor  string `json:"cursor,omitempty"`
+	Limit   int    `json:"limit"`
+}
+
+type memoryCollectionSelectionPageCursor struct {
+	Project  string `json:"project"`
+	Offset   int    `json:"offset"`
+	Limit    int    `json:"limit"`
+	Revision string `json:"revision"`
+}
+
+type memoryCollectionSelectionResponse struct {
+	Kind                   dbgorm.CollectionSelectionKind `json:"kind"`
+	Version                int64                          `json:"selection_version"`
+	Token                  string                         `json:"selection_token,omitempty"`
+	TargetCount            int                            `json:"target_count"`
+	ReconfirmationRequired bool                           `json:"reconfirmation_required"`
+	ReconfirmationReason   string                         `json:"reconfirmation_reason,omitempty"`
+}
+
+type memoryCollectionSelectionPageResponse struct {
+	Cursor     string                             `json:"cursor"`
+	Targets    []dbgorm.CollectionSelectionTarget `json:"targets"`
+	NextCursor string                             `json:"next_cursor,omitempty"`
+	Total      int                                `json:"total"`
+}
+
+type memoryCollectionSelectionItemResponse struct {
+	TargetID        string `json:"target_id"`
+	Outcome         string `json:"outcome"`
+	ObservedVersion *int   `json:"observed_version,omitempty"`
+}
+
+type memoryCollectionSelectionCurrentState struct {
+	ID      int64  `json:"id"`
+	Status  string `json:"status"`
+	Version int    `json:"version"`
+}
+
+type memoryCollectionSelectionReadback struct {
+	Authoritative   bool                                    `json:"authoritative"`
+	Kind            string                                  `json:"kind"`
+	CurrentState    []memoryCollectionSelectionCurrentState `json:"current_state,omitempty"`
+	OperationStatus string                                  `json:"operation_status,omitempty"`
+}
+
+type memoryCollectionSelectionOperationResponse struct {
+	RequestID      string                                  `json:"request_id"`
+	OperationState string                                  `json:"operation_state"`
+	ItemResults    []memoryCollectionSelectionItemResponse `json:"item_results"`
+	Readback       *memoryCollectionSelectionReadback      `json:"readback,omitempty"`
+}
+
+// registerMemoryCollectionOperationRoutes declares Memory's domain-local
+// selection and operation surface. T031 owns invoking it from setupRoutes.
+func (s *Service) registerMemoryCollectionOperationRoutes(r chi.Router) {
+	r.Post("/api/memories/selection", s.handleMemoryCollectionSelection)
+	r.Post("/api/memories/selection/current", s.handleMemoryCollectionSelectionCurrent)
+	r.Post("/api/memories/selection/page", s.handleMemoryCollectionSelectionPage)
+	r.Post("/api/memories/operations", s.handleMemoryCollectionSelectionOperation)
+}
+
+func memoryCollectionSelectionScope(r *http.Request) (dbgorm.CollectionSelectionScope, error) {
+	identity, found := auth.IdentityFrom(r.Context())
+	if !found {
+		return dbgorm.CollectionSelectionScope{}, errMemorySelectionDenied
+	}
+	subject, found := identity.SessionBrowserSubject()
+	if !found {
+		return dbgorm.CollectionSelectionScope{}, errMemorySelectionDenied
+	}
+	sessionID, found := operatorCodeSessionID(r)
+	if !found {
+		return dbgorm.CollectionSelectionScope{}, errMemorySelectionDenied
+	}
+	fingerprint := sha256.Sum256([]byte(fmt.Sprintf("memory-collection-scope/v1\x00%d\x00%s", subject.UserID, sessionID)))
+	return dbgorm.CollectionSelectionScope{
+		SubjectUserID:      subject.UserID,
+		SessionID:          sessionID,
+		Domain:             memoryCollectionSelectionDomain,
+		ContextFingerprint: fmt.Sprintf("sha256:%x", fingerprint),
+		AuthorizationEpoch: 1,
+		CollectionVersion:  1,
+	}, nil
+}
+
+func (s *Service) memoryCollectionSelectionStore() (*dbgorm.CollectionSelectionStore, error) {
+	if s == nil || s.memoryStore == nil || s.memoryStore.GetDB() == nil {
+		return nil, errors.New("memory store not available")
+	}
+	return dbgorm.NewCollectionSelectionStore(s.memoryStore.GetDB()), nil
+}
+
+func validMemoryCollectionProject(project string) bool {
+	return project != "" && project == strings.TrimSpace(project) && len(project) <= 256
+}
+
+func memoryCollectionFilterFingerprint(project string) string {
+	digest := sha256.Sum256([]byte("memory-collection-filter/v1\x00" + project))
+	return fmt.Sprintf("sha256:%x", digest)
+}
+
+func memoryCollectionRevision(project string, targets []dbgorm.CollectionSelectionTarget) string {
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("memory-collection-revision/v1\x00" + project + "\x00"))
+	for _, target := range targets {
+		_, _ = hash.Write([]byte(target.ID))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(strconv.FormatUint(target.ExpectedVersion, 10)))
+		_, _ = hash.Write([]byte{0})
+	}
+	return fmt.Sprintf("sha256:%x", hash.Sum(nil))
+}
+
+func (s *Service) memoryCollectionTargets(ctx context.Context, project string) ([]dbgorm.CollectionSelectionTarget, error) {
+	if !validMemoryCollectionProject(project) {
+		return nil, dbgorm.ErrCollectionSelectionInvalid
+	}
+	if s == nil || s.memoryStore == nil {
+		return nil, errors.New("memory store not available")
+	}
+	memories, err := listVisibleMemoriesREST(ctx, s.memoryStore, project, dbgorm.CollectionSelectionMaxTargets+1)
+	if err != nil {
+		return nil, err
+	}
+	if len(memories) > dbgorm.CollectionSelectionMaxTargets {
+		return nil, dbgorm.ErrCollectionSelectionInvalid
+	}
+	targets := make([]dbgorm.CollectionSelectionTarget, 0, len(memories))
+	for _, memory := range memories {
+		if memoryDomainManageAllowedREST(ctx, memory) {
+			targets = append(targets, dbgorm.CollectionSelectionTarget{ID: strconv.FormatInt(memory.ID, 10), ExpectedVersion: uint64(memory.Version)})
+		}
+	}
+	return targets, nil
+}
+
+func (s *Service) memoryCollectionExplicitTargets(ctx context.Context, targets []dbgorm.CollectionSelectionTarget) ([]dbgorm.CollectionSelectionTarget, error) {
+	if s == nil || s.memoryStore == nil || len(targets) == 0 || len(targets) > dbgorm.CollectionSelectionMaxTargets {
+		return nil, dbgorm.ErrCollectionSelectionInvalid
+	}
+	resolved := make([]dbgorm.CollectionSelectionTarget, 0, len(targets))
+	seen := make(map[int64]struct{}, len(targets))
+	for _, target := range targets {
+		id, err := strconv.ParseInt(target.ID, 10, 64)
+		if err != nil || id <= 0 {
+			return nil, dbgorm.ErrCollectionSelectionInvalid
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return nil, dbgorm.ErrCollectionSelectionInvalid
+		}
+		seen[id] = struct{}{}
+		memory, err := s.memoryStore.Get(ctx, id)
+		if err != nil {
+			if errors.Is(err, gormlib.ErrRecordNotFound) {
+				return nil, errMemorySelectionDenied
+			}
+			return nil, err
+		}
+		if memory == nil || !memoryVisibleREST(ctx, memory) || !memoryDomainManageAllowedREST(ctx, memory) {
+			return nil, errMemorySelectionDenied
+		}
+		resolved = append(resolved, dbgorm.CollectionSelectionTarget{ID: target.ID, ExpectedVersion: uint64(memory.Version)})
+	}
+	return resolved, nil
+}
+
+func newMemoryCollectionSelectionResponse(selection dbgorm.CollectionSelection) memoryCollectionSelectionResponse {
+	return memoryCollectionSelectionResponse{
+		Kind:                   selection.Kind,
+		Version:                selection.Version,
+		Token:                  selection.Token,
+		TargetCount:            len(selection.Targets) - len(selection.ExcludedIDs),
+		ReconfirmationRequired: selection.ReconfirmationRequired,
+		ReconfirmationReason:   string(selection.ReconfirmationReason),
+	}
+}
+
+func memoryCollectionPageCursorEncode(cursor memoryCollectionSelectionPageCursor) (string, error) {
+	payload, err := json.Marshal(cursor)
+	if err != nil {
+		return "", err
+	}
+	encoded := base64.RawURLEncoding.EncodeToString(payload)
+	if len(encoded) > 512 {
+		return "", dbgorm.ErrCollectionSelectionInvalid
+	}
+	return encoded, nil
+}
+
+func memoryCollectionPageCursorDecode(value string) (memoryCollectionSelectionPageCursor, error) {
+	if value == "" || len(value) > 512 {
+		return memoryCollectionSelectionPageCursor{}, dbgorm.ErrCollectionSelectionInvalid
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return memoryCollectionSelectionPageCursor{}, dbgorm.ErrCollectionSelectionInvalid
+	}
+	var cursor memoryCollectionSelectionPageCursor
+	if err := json.Unmarshal(payload, &cursor); err != nil || !validMemoryCollectionProject(cursor.Project) || cursor.Offset < 0 || cursor.Limit < 1 || cursor.Limit > dbgorm.CollectionPageMaxSize || !strings.HasPrefix(cursor.Revision, "sha256:") {
+		return memoryCollectionSelectionPageCursor{}, dbgorm.ErrCollectionSelectionInvalid
+	}
+	return cursor, nil
+}
+
+func (s *Service) memoryCollectionPage(ctx context.Context, project, cursor string, limit int) (memoryCollectionSelectionPageResponse, error) {
+	if limit < 1 || limit > dbgorm.CollectionPageMaxSize || !validMemoryCollectionProject(project) {
+		return memoryCollectionSelectionPageResponse{}, dbgorm.ErrCollectionSelectionInvalid
+	}
+	targets, err := s.memoryCollectionTargets(ctx, project)
+	if err != nil {
+		return memoryCollectionSelectionPageResponse{}, err
+	}
+	revision := memoryCollectionRevision(project, targets)
+	offset := 0
+	if cursor != "" {
+		decoded, err := memoryCollectionPageCursorDecode(cursor)
+		if err != nil {
+			return memoryCollectionSelectionPageResponse{}, err
+		}
+		if decoded.Project != project || decoded.Limit != limit || decoded.Revision != revision {
+			return memoryCollectionSelectionPageResponse{}, dbgorm.ErrCollectionSelectionReconfirmationRequired
+		}
+		offset = decoded.Offset
+	}
+	if offset >= len(targets) {
+		return memoryCollectionSelectionPageResponse{}, dbgorm.ErrCollectionSelectionInvalid
+	}
+	end := offset + limit
+	if end > len(targets) {
+		end = len(targets)
+	}
+	pageCursor, err := memoryCollectionPageCursorEncode(memoryCollectionSelectionPageCursor{Project: project, Offset: offset, Limit: limit, Revision: revision})
+	if err != nil {
+		return memoryCollectionSelectionPageResponse{}, err
+	}
+	response := memoryCollectionSelectionPageResponse{Cursor: pageCursor, Targets: append([]dbgorm.CollectionSelectionTarget(nil), targets[offset:end]...), Total: len(targets)}
+	if end < len(targets) {
+		response.NextCursor, err = memoryCollectionPageCursorEncode(memoryCollectionSelectionPageCursor{Project: project, Offset: end, Limit: limit, Revision: revision})
+		if err != nil {
+			return memoryCollectionSelectionPageResponse{}, err
+		}
+	}
+	return response, nil
+}
+
+func memoryCollectionSelectionSnapshotError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errMemorySelectionDenied):
+		http.Error(w, "memory selection unavailable", http.StatusNotFound)
+	case errors.Is(err, dbgorm.ErrCollectionSelectionReconfirmationRequired):
+		http.Error(w, "memory selection is stale", http.StatusPreconditionFailed)
+	case errors.Is(err, dbgorm.ErrCollectionSelectionInvalid):
+		http.Error(w, "invalid memory selection", http.StatusBadRequest)
+	default:
+		log.Error().Err(err).Msg("memory selection snapshot failed")
+		http.Error(w, "memory selection failed", http.StatusInternalServerError)
+	}
+}
+
+func (s *Service) handleMemoryCollectionSelection(w http.ResponseWriter, r *http.Request) {
+	var request memoryCollectionSelectionSnapshotRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "invalid memory selection", http.StatusBadRequest)
+		return
+	}
+	scope, err := memoryCollectionSelectionScope(r)
+	if err != nil {
+		http.Error(w, "memory selection forbidden", http.StatusForbidden)
+		return
+	}
+	store, err := s.memoryCollectionSelectionStore()
+	if err != nil {
+		http.Error(w, "memory store not available", http.StatusServiceUnavailable)
+		return
+	}
+	selection := dbgorm.CollectionSelection{Kind: request.Selection.Kind}
+	switch request.Selection.Kind {
+	case dbgorm.CollectionSelectionNone:
+	case dbgorm.CollectionSelectionExplicit:
+		selection.Targets, err = s.memoryCollectionExplicitTargets(r.Context(), request.Selection.Targets)
+	case dbgorm.CollectionSelectionPage:
+		cursor, decodeErr := memoryCollectionPageCursorDecode(request.Selection.Cursor)
+		if decodeErr != nil {
+			err = decodeErr
+			break
+		}
+		page, pageErr := s.memoryCollectionPage(r.Context(), cursor.Project, request.Selection.Cursor, cursor.Limit)
+		if pageErr != nil {
+			err = pageErr
+			break
+		}
+		selection.Cursor = page.Cursor
+		selection.Targets = page.Targets
+	case dbgorm.CollectionSelectionFrozenFilter:
+		selection.Targets, err = s.memoryCollectionTargets(r.Context(), request.Selection.Project)
+		if err == nil {
+			selection.FilterFingerprint = memoryCollectionFilterFingerprint(request.Selection.Project)
+			selection.ExcludedIDs = append([]string(nil), request.Selection.ExcludedIDs...)
+			selection.ExpiresAt = time.Now().UTC().Add(15 * time.Minute)
+		}
+	default:
+		err = dbgorm.ErrCollectionSelectionInvalid
+	}
+	if err != nil {
+		memoryCollectionSelectionSnapshotError(w, err)
+		return
+	}
+	saved, err := store.Save(r.Context(), scope, selection)
+	if err != nil {
+		memoryCollectionSelectionSnapshotError(w, err)
+		return
+	}
+	writeJSON(w, map[string]memoryCollectionSelectionResponse{"selection": newMemoryCollectionSelectionResponse(saved)})
+}
+
+func (s *Service) handleMemoryCollectionSelectionCurrent(w http.ResponseWriter, r *http.Request) {
+	scope, err := memoryCollectionSelectionScope(r)
+	if err != nil {
+		http.Error(w, "memory selection forbidden", http.StatusForbidden)
+		return
+	}
+	store, err := s.memoryCollectionSelectionStore()
+	if err != nil {
+		http.Error(w, "memory store not available", http.StatusServiceUnavailable)
+		return
+	}
+	selection, err := store.Current(r.Context(), scope)
+	if err != nil {
+		memoryCollectionSelectionSnapshotError(w, err)
+		return
+	}
+	writeJSON(w, map[string]memoryCollectionSelectionResponse{"selection": newMemoryCollectionSelectionResponse(selection)})
+}
+
+func (s *Service) handleMemoryCollectionSelectionPage(w http.ResponseWriter, r *http.Request) {
+	var request memoryCollectionSelectionPageRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "invalid memory page", http.StatusBadRequest)
+		return
+	}
+	if _, err := memoryCollectionSelectionScope(r); err != nil {
+		http.Error(w, "memory selection forbidden", http.StatusForbidden)
+		return
+	}
+	page, err := s.memoryCollectionPage(r.Context(), request.Project, request.Cursor, request.Limit)
+	if err != nil {
+		memoryCollectionSelectionSnapshotError(w, err)
+		return
+	}
+	writeJSON(w, page)
+}
+
+func (s *Service) memoryCollectionOperationSelection(ctx context.Context, store *dbgorm.CollectionSelectionStore, scope dbgorm.CollectionSelectionScope, request memoryCollectionSelectionOperationSelection) (dbgorm.CollectionSelection, error) {
+	if request.Version < 1 {
+		return dbgorm.CollectionSelection{}, dbgorm.ErrCollectionSelectionInvalid
+	}
+	var (
+		selection dbgorm.CollectionSelection
+		err       error
+	)
+	if request.Kind == dbgorm.CollectionSelectionFrozenFilter {
+		selection, err = store.Frozen(ctx, scope, request.Token)
+	} else {
+		if request.Token != "" {
+			return dbgorm.CollectionSelection{}, dbgorm.ErrCollectionSelectionInvalid
+		}
+		selection, err = store.Current(ctx, scope)
+	}
+	if err != nil {
+		return dbgorm.CollectionSelection{}, err
+	}
+	if selection.Kind != request.Kind || selection.Version != request.Version || selection.ReconfirmationRequired {
+		return dbgorm.CollectionSelection{}, errMemorySelectionConflict
+	}
+	return selection, nil
+}
+
+func memoryCollectionOperationTargets(selection dbgorm.CollectionSelection) ([]dbgorm.CollectionSelectionTarget, error) {
+	excluded := make(map[string]struct{}, len(selection.ExcludedIDs))
+	for _, id := range selection.ExcludedIDs {
+		excluded[id] = struct{}{}
+	}
+	targets := make([]dbgorm.CollectionSelectionTarget, 0, len(selection.Targets))
+	for _, target := range selection.Targets {
+		if _, skip := excluded[target.ID]; !skip {
+			targets = append(targets, target)
+		}
+	}
+	if len(targets) == 0 || len(targets) > dbgorm.CollectionSelectionMaxTargets {
+		return nil, dbgorm.ErrCollectionSelectionInvalid
+	}
+	return targets, nil
+}
+
+func memoryCollectionNextStatus(action, status string) (string, bool) {
+	switch action {
+	case "suppress":
+		return "flagged", status == "active"
+	case "unsuppress":
+		return "active", status == "flagged"
+	case "archive":
+		return "archived", status == "active" || status == "flagged"
+	default:
+		return "", false
+	}
+}
+
+func memoryCollectionSelectionOperationError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errMemorySelectionDenied), errors.Is(err, dbgorm.ErrCollectionSelectionDenied):
+		http.Error(w, "memory operation forbidden", http.StatusForbidden)
+	case errors.Is(err, dbgorm.ErrCollectionSelectionReconfirmationRequired):
+		http.Error(w, "memory selection is stale", http.StatusPreconditionFailed)
+	case errors.Is(err, errMemorySelectionConflict):
+		http.Error(w, "memory selection conflicts with current state", http.StatusConflict)
+	case errors.Is(err, dbgorm.ErrCollectionSelectionInvalid):
+		http.Error(w, "invalid memory operation", http.StatusBadRequest)
+	default:
+		log.Error().Err(err).Msg("memory selection operation failed")
+		http.Error(w, "memory operation failed", http.StatusInternalServerError)
+	}
+}
+
+func (s *Service) handleMemoryCollectionSelectionOperation(w http.ResponseWriter, r *http.Request) {
+	var request memoryCollectionSelectionOperationRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil || !operatorCodeText(request.RequestID) || r.Header.Get("X-Engram-Request-ID") != request.RequestID {
+		http.Error(w, "invalid memory operation request reference", http.StatusBadRequest)
+		return
+	}
+	if _, allowed := memoryCollectionNextStatus(request.Action, "active"); !allowed && request.Action != "unsuppress" {
+		http.Error(w, "invalid memory operation", http.StatusBadRequest)
+		return
+	}
+	scope, err := memoryCollectionSelectionScope(r)
+	if err != nil {
+		http.Error(w, "memory operation forbidden", http.StatusForbidden)
+		return
+	}
+	store, err := s.memoryCollectionSelectionStore()
+	if err != nil {
+		http.Error(w, "memory store not available", http.StatusServiceUnavailable)
+		return
+	}
+	selection, err := s.memoryCollectionOperationSelection(r.Context(), store, scope, request.Selection)
+	if err != nil {
+		memoryCollectionSelectionOperationError(w, err)
+		return
+	}
+	targets, err := memoryCollectionOperationTargets(selection)
+	if err != nil {
+		memoryCollectionSelectionOperationError(w, err)
+		return
+	}
+
+	response := memoryCollectionSelectionOperationResponse{RequestID: request.RequestID, ItemResults: make([]memoryCollectionSelectionItemResponse, 0, len(targets))}
+	current := make([]memoryCollectionSelectionCurrentState, 0, len(targets))
+	partial := false
+	readbackPending := false
+	nonDisclosing := false
+	for _, target := range targets {
+		id, parseErr := strconv.ParseInt(target.ID, 10, 64)
+		if parseErr != nil || id <= 0 || target.ExpectedVersion == 0 {
+			memoryCollectionSelectionOperationAppend(&response, "redacted", "validation_error", nil)
+			partial = true
+			continue
+		}
+		memory, getErr := s.memoryStore.Get(r.Context(), id)
+		if getErr != nil {
+			outcome := "failed"
+			if errors.Is(getErr, gormlib.ErrRecordNotFound) {
+				outcome = "conflict"
+			}
+			memoryCollectionSelectionOperationAppend(&response, "redacted", outcome, nil)
+			partial = true
+			continue
+		}
+		if memory == nil || !memoryVisibleREST(r.Context(), memory) || !memoryDomainManageAllowedREST(r.Context(), memory) {
+			memoryCollectionSelectionOperationAppend(&response, "redacted", "denied", nil)
+			partial = true
+			continue
+		}
+		if uint64(memory.Version) != target.ExpectedVersion {
+			memoryCollectionSelectionOperationAppend(&response, "redacted", "conflict", nil)
+			partial = true
+			continue
+		}
+		nextStatus, validTransition := memoryCollectionNextStatus(request.Action, memory.Status)
+		if !validTransition {
+			memoryCollectionSelectionOperationAppend(&response, "redacted", "conflict", nil)
+			partial = true
+			continue
+		}
+		update := s.memoryStore.GetDB().WithContext(r.Context()).Model(&dbgorm.Memory{}).
+			Where("id = ? AND deleted_at IS NULL AND version = ? AND status = ?", memory.ID, memory.Version, memory.Status).
+			Updates(map[string]any{"status": nextStatus, "updated_at": time.Now().UTC(), "version": gormlib.Expr("version + 1")})
+		if update.Error != nil {
+			memoryCollectionSelectionOperationAppend(&response, "redacted", "failed", nil)
+			partial = true
+			continue
+		}
+		if update.RowsAffected != 1 {
+			memoryCollectionSelectionOperationAppend(&response, "redacted", "conflict", nil)
+			partial = true
+			continue
+		}
+		observedVersion := memory.Version + 1
+		memoryCollectionSelectionOperationAppend(&response, target.ID, "committed", &observedVersion)
+		after, afterErr := s.memoryStore.Get(r.Context(), memory.ID)
+		if afterErr != nil || after == nil {
+			readbackPending = true
+			continue
+		}
+		if !memoryVisibleREST(r.Context(), after) || !memoryDomainManageAllowedREST(r.Context(), after) {
+			nonDisclosing = true
+			continue
+		}
+		current = append(current, memoryCollectionSelectionCurrentState{ID: after.ID, Status: after.Status, Version: after.Version})
+	}
+	if partial {
+		response.OperationState = "partial"
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusMultiStatus)
+		writeJSON(w, response)
+		return
+	}
+	if readbackPending {
+		response.OperationState = "committed"
+		writeJSON(w, response)
+		return
+	}
+	response.OperationState = "completed"
+	if nonDisclosing {
+		response.Readback = &memoryCollectionSelectionReadback{Authoritative: true, Kind: "non_disclosing", OperationStatus: request.Action}
+	} else {
+		response.Readback = &memoryCollectionSelectionReadback{Authoritative: true, Kind: "current", CurrentState: current}
+	}
+	writeJSON(w, response)
+}
+
+func memoryCollectionSelectionOperationAppend(response *memoryCollectionSelectionOperationResponse, targetID, outcome string, observedVersion *int) {
+	response.ItemResults = append(response.ItemResults, memoryCollectionSelectionItemResponse{TargetID: targetID, Outcome: outcome, ObservedVersion: observedVersion})
 }
