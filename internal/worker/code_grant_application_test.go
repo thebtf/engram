@@ -51,6 +51,15 @@ func (store *recordingCodeGrantStore) CanRead(_ context.Context, subjectUserID i
 	return store.canRead, nil
 }
 
+func (store *recordingCodeGrantStore) Active(_ context.Context, subjectUserID int64, sourceID, checkoutID string) (gormdb.BrowserReadGrant, bool, error) {
+	store.canReadCalls = append(store.canReadCalls, struct {
+		subjectUserID int64
+		sourceID      string
+		checkoutID    string
+	}{subjectUserID: subjectUserID, sourceID: sourceID, checkoutID: checkoutID})
+	return store.current, store.currentOK, nil
+}
+
 func (store *recordingCodeGrantStore) Current(_ context.Context, subjectUserID int64) (gormdb.BrowserReadGrant, bool, error) {
 	store.currentCalls = append(store.currentCalls, subjectUserID)
 	return store.current, store.currentOK, nil
@@ -91,6 +100,14 @@ func TestCodeGrantApplication_CarriesOnlyCanonicalBrowserSubject(t *testing.T) {
 	require.True(t, currentOK)
 	require.Equal(t, store.current, current)
 	require.Equal(t, []int64{41}, store.currentCalls)
+	active, activeOK, err := app.Active(context.Background(), issuer, sourceID, checkoutID)
+	require.NoError(t, err)
+	require.True(t, activeOK)
+	require.Equal(t, store.current, active)
+	require.Len(t, store.canReadCalls, 2)
+	require.Equal(t, int64(41), store.canReadCalls[1].subjectUserID)
+	require.Equal(t, sourceID, store.canReadCalls[1].sourceID)
+	require.Equal(t, checkoutID, store.canReadCalls[1].checkoutID)
 	_, err = app.Revoke(context.Background(), issuer, "grant-ref")
 	require.NoError(t, err)
 	require.Equal(t, []struct {

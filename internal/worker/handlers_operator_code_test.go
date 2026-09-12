@@ -84,18 +84,16 @@ func TestOperatorCodeHTTPAdapter_ReleasesFiveBoundEndpoints(t *testing.T) {
 			},
 		},
 		{
-			name:   "current grant metadata",
+			name:   "grant catalog",
 			body:   `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current"}`,
 			invoke: (*OperatorCodeHTTPAdapter).HandleContexts,
-			configure: func(app *operatorCodeHTTPTestApplication, _ uci.ContextRef) {
-				app.metadata = map[string]string{"source": "engram source", "checkout": "working tree", "view": "release candidate"}
-			},
 			assertResponse: func(t *testing.T, body string) {
 				t.Helper()
-				require.JSONEq(t, `{"context":{"source":"engram source","checkout":"working tree","view":"release candidate"}}`, body)
+				require.Contains(t, body, `"contexts":[{`)
+				require.Contains(t, body, `"source":{"id":"`+operatorCodeHTTPTestSourceID+`","label":"engram source"}`)
+				require.Contains(t, body, `"checkout":{"id":"`+operatorCodeHTTPTestCheckoutID+`","label":"working_tree · `+operatorCodeHTTPTestCheckoutID+`"}`)
+				require.Contains(t, body, `"view":{"context_ref":`)
 				require.NotContains(t, body, "proof-current")
-				require.NotContains(t, body, operatorCodeHTTPTestBindingID)
-				require.NotContains(t, body, "operator-request")
 				require.NotContains(t, body, "grant_ref")
 				require.NotContains(t, body, "nonce")
 				require.NotContains(t, body, "digest")
@@ -104,7 +102,9 @@ func TestOperatorCodeHTTPAdapter_ReleasesFiveBoundEndpoints(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
-			testCase.configure(fixture.app, fixture.ref)
+			if testCase.configure != nil {
+				testCase.configure(fixture.app, fixture.ref)
+			}
 			recorder := httptest.NewRecorder()
 			testCase.invoke(adapter, recorder, operatorCodeHTTPTestRequest(t, testCase.body, fixture.identity))
 
@@ -120,6 +120,116 @@ func TestOperatorCodeHTTPAdapter_ReleasesFiveBoundEndpoints(t *testing.T) {
 			testCase.assertResponse(t, recorder.Body.String())
 		})
 	}
+}
+
+func TestOperatorCodeHTTPAdapter_CatalogKeepsWorktreesExplicitAndNoViewUnselected(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	second := fixture.ref.Clone()
+	second.CheckoutID = "30000000-0000-4000-8000-000000000002"
+	second.ViewID = "40000000-0000-4000-8000-000000000002"
+	fixture.contexts.entries = append(fixture.contexts.entries,
+		gormdb.BrowserCodeContextCatalogEntry{
+			SourceID:      second.SourceID,
+			SourceLabel:   "engram source",
+			CheckoutID:    second.CheckoutID,
+			CheckoutLabel: "working_tree · " + second.CheckoutID,
+			Context:       &second,
+			ViewLabel:     "feature/api",
+		},
+		gormdb.BrowserCodeContextCatalogEntry{
+			SourceID:             fixture.ref.SourceID,
+			SourceLabel:          "engram source",
+			CheckoutID:           "30000000-0000-4000-8000-000000000003",
+			CheckoutLabel:        "working_tree · 30000000-0000-4000-8000-000000000003",
+			IndexIntentAvailable: true,
+		},
+	)
+	recorder := httptest.NewRecorder()
+	adapter.HandleContexts(recorder, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current"}`, fixture.identity))
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Contains(t, recorder.Body.String(), second.CheckoutID)
+	require.Contains(t, recorder.Body.String(), second.ViewID)
+	require.Contains(t, recorder.Body.String(), `"view":null,"index_intent_available":true`)
+	require.NotContains(t, recorder.Body.String(), "grant_ref")
+}
+
+func TestOperatorCodeHTTPAdapter_SearchContinuationStaysServerOwnedAndExactlyBound(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	internalCursor := "internal-service-cursor"
+	firstResponse := operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalLexical)
+	truncated := true
+	firstResponse.Truncated = &truncated
+	firstResponse.Continuation = &uci.QueryContinuation{Value: &internalCursor}
+	require.NoError(t, firstResponse.ValidatePreExposure())
+	fixture.app.searchResponses = []uci.QueryResponse{firstResponse, operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalLexical)}
+	fixture.contexts.createCursorRef = "80000000-0000-4000-8000-000000000001"
+
+	first := httptest.NewRecorder()
+	adapter.HandleSearch(first, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","query":"Fixture","path_prefix":"internal","languages":["Go","go"],"limit":1}`, fixture.identity))
+	require.Equal(t, http.StatusOK, first.Code, first.Body.String())
+	require.Contains(t, first.Body.String(), fixture.contexts.createCursorRef)
+	require.NotContains(t, first.Body.String(), internalCursor)
+	require.Len(t, fixture.contexts.createdBindings, 1)
+	created := fixture.contexts.createdBindings[0]
+	require.Equal(t, fixture.grants.current.GrantRef, created.GrantRef)
+	require.Equal(t, fixture.grants.current.IssuedAt, created.GrantIssuedAt)
+	require.Equal(t, fixture.ref, created.Context)
+	require.Equal(t, operatorCodeHTTPTestBindingID, created.TabBindingID)
+	require.Equal(t, 1, created.PageSize)
+	require.Equal(t, uci.QueryFilter{PathPrefix: "internal", Languages: []string{"go"}}, fixture.app.searchSpecs[0].Filter)
+
+	second := httptest.NewRecorder()
+	adapter.HandleSearch(second, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","query":"Fixture","path_prefix":"internal","languages":["go"],"limit":1,"continuation":"`+fixture.contexts.createCursorRef+`"}`, fixture.identity))
+	require.Equal(t, http.StatusOK, second.Code, second.Body.String())
+	require.Equal(t, []string{fixture.contexts.createCursorRef}, fixture.contexts.loadedRefs)
+	require.Equal(t, []string{fixture.contexts.createCursorRef}, fixture.contexts.advancedRefs)
+	require.Equal(t, []gormdb.BrowserCodeContinuationBinding{created}, fixture.contexts.loadedBindings)
+	require.Equal(t, []gormdb.BrowserCodeContinuationBinding{created}, fixture.contexts.advancedBindings)
+	require.NotNil(t, fixture.app.searchSpecs[1].Continuation)
+	require.Equal(t, internalCursor, *fixture.app.searchSpecs[1].Continuation)
+	require.NotContains(t, second.Body.String(), internalCursor)
+
+	fixture.contexts.loadErr = gormdb.ErrBrowserCodeContinuationDenied
+	denied := httptest.NewRecorder()
+	adapter.HandleSearch(denied, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","query":"Fixture","path_prefix":"internal","languages":["go"],"limit":1,"continuation":"80000000-0000-4000-8000-000000000099"}`, fixture.identity))
+	require.Equal(t, http.StatusForbidden, denied.Code)
+	require.Empty(t, denied.Body.String())
+	require.Equal(t, 2, fixture.app.searchCalls)
+}
+
+func TestOperatorCodeHTTPAdapter_GraphNavigationPublishesOnlyStoredSourceDescriptors(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	available := uci.QueryEntityRef{SourceID: fixture.ref.SourceID, ViewID: fixture.ref.ViewID, EntityKey: "Fixture.Available"}
+	unavailable := uci.QueryEntityRef{SourceID: fixture.ref.SourceID, ViewID: fixture.ref.ViewID, EntityKey: "Fixture.Unavailable"}
+	response := operatorCodeHTTPTestGraphResponse(t, fixture.ref)
+	response.Graph.Nodes = []uci.QueryEntityRef{available, unavailable}
+	response.Graph.Edges = []uci.QueryGraphEdge{{
+		From:         available,
+		To:           unavailable,
+		Relation:     uci.IndexRelation("calls"),
+		EvidenceKind: uci.QueryEvidenceResolved,
+		EvidenceRefs: []uci.QueryEntityRef{available},
+	}}
+	require.NoError(t, response.ValidatePreExposure())
+	fixture.app.graph = response
+	descriptor := uci.VersionedReadSpec{
+		Entity:        available,
+		Span:          uci.QuerySpan{ByteStart: 0, ByteEnd: 12, LineStart: 1, LineEnd: 1},
+		ContentDigest: uci.QueryContentDigest("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		MaxBytes:      12,
+	}
+	graphSources := &operatorCodeHTTPTestGraphSources{descriptors: map[uci.QueryEntityRef]uci.VersionedReadSpec{available: descriptor}}
+	adapter.graphSources = graphSources
+	recorder := httptest.NewRecorder()
+	adapter.HandleGraph(recorder, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","action":"neighbors","target":{"entity_key":"Fixture.Available"}}`, fixture.identity))
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Contains(t, recorder.Body.String(), `"source_state":"available","source_read":{"entity_key":"Fixture.Available"`)
+	require.Contains(t, recorder.Body.String(), `"source_state":"unavailable"`)
+	require.Contains(t, recorder.Body.String(), `"relation":"calls"`)
+	require.NotContains(t, recorder.Body.String(), `"excerpt"`)
+	require.Equal(t, []uci.QueryEntityRef{available, unavailable}, graphSources.calls)
 }
 
 func TestOperatorCodeHTTPAdapter_BindsReleasedReadsToBrowserSession(t *testing.T) {
@@ -255,6 +365,11 @@ func TestOperatorCodeHTTPAdapter_RejectsNonBrowserWrongProofAndWrongContext(t *t
 		{
 			name:     "keycard caller",
 			identity: auth.Client("read-write", uuid.NewString()),
+			want:     http.StatusForbidden,
+		},
+		{
+			name:     "different browser subject",
+			identity: auth.SessionForBrowserUser("other", 42),
 			want:     http.StatusForbidden,
 		},
 		{
@@ -613,8 +728,13 @@ func TestOperatorCodeHTTPAdapter_IndexIntentDigestIsCanonical(t *testing.T) {
 }
 
 const (
-	operatorCodeHTTPTestBindingID     = "60000000-0000-4000-8000-000000000041"
-	operatorCodeHTTPTestIncarnationID = "70000000-0000-4000-8000-000000000001"
+	operatorCodeHTTPTestSourceID       = "20000000-0000-4000-8000-000000000001"
+	operatorCodeHTTPTestCheckoutID     = "30000000-0000-4000-8000-000000000001"
+	operatorCodeHTTPTestViewID         = "40000000-0000-4000-8000-000000000001"
+	operatorCodeHTTPTestProfileID      = "50000000-0000-4000-8000-000000000001"
+	operatorCodeHTTPTestBindingID      = "60000000-0000-4000-8000-000000000041"
+	operatorCodeHTTPTestIncarnationID  = "70000000-0000-4000-8000-000000000001"
+	operatorCodeHTTPTestContextRefJSON = `{"source_id":"20000000-0000-4000-8000-000000000001","checkout_id":"30000000-0000-4000-8000-000000000001","view_id":"40000000-0000-4000-8000-000000000001","analysis_profile_id":"50000000-0000-4000-8000-000000000001","generation":7}`
 )
 
 type operatorCodeHTTPTestFixture struct {
@@ -624,16 +744,17 @@ type operatorCodeHTTPTestFixture struct {
 	binding   *operatorCodeHTTPTestBinding
 	authority *operatorCodeHTTPTestAuthority
 	app       *operatorCodeHTTPTestApplication
+	contexts  *operatorCodeHTTPTestContextStore
 	recorder  *operatorCodeHTTPTestRecorder
 }
 
 func newOperatorCodeHTTPTestAdapter(t *testing.T) (*OperatorCodeHTTPAdapter, *operatorCodeHTTPTestFixture) {
 	t.Helper()
 	ref := uci.ContextRef{
-		SourceID:          "20000000-0000-4000-8000-000000000001",
-		CheckoutID:        "30000000-0000-4000-8000-000000000001",
-		ViewID:            "40000000-0000-4000-8000-000000000001",
-		AnalysisProfileID: "50000000-0000-4000-8000-000000000001",
+		SourceID:          operatorCodeHTTPTestSourceID,
+		CheckoutID:        operatorCodeHTTPTestCheckoutID,
+		ViewID:            operatorCodeHTTPTestViewID,
+		AnalysisProfileID: operatorCodeHTTPTestProfileID,
 		Generation:        7,
 	}
 	identity := auth.SessionForBrowserUser("viewer", 41)
@@ -644,10 +765,12 @@ func newOperatorCodeHTTPTestAdapter(t *testing.T) (*OperatorCodeHTTPAdapter, *op
 			allowed:   true,
 			currentOK: true,
 			current: gormdb.BrowserReadGrant{
+				GrantRef:      uuid.NewString(),
 				AuthRealm:     "browser",
 				SubjectUserID: 41,
 				SourceID:      ref.SourceID,
 				CheckoutID:    ref.CheckoutID,
+				IssuedAt:      time.Now().UTC().Add(-time.Minute),
 			},
 		},
 		binding: &operatorCodeHTTPTestBinding{pinned: &BrowserBindingContext{
@@ -657,11 +780,22 @@ func newOperatorCodeHTTPTestAdapter(t *testing.T) (*OperatorCodeHTTPAdapter, *op
 			AnalysisProfileID: ref.AnalysisProfileID,
 			Generation:        ref.Generation,
 		}},
-		app:      &operatorCodeHTTPTestApplication{},
+		app: &operatorCodeHTTPTestApplication{},
+		contexts: &operatorCodeHTTPTestContextStore{entries: []gormdb.BrowserCodeContextCatalogEntry{{
+			SourceID:      ref.SourceID,
+			SourceLabel:   "engram source",
+			CheckoutID:    ref.CheckoutID,
+			CheckoutLabel: "working_tree · " + ref.CheckoutID,
+			Context:       &ref,
+			ViewLabel:     "release candidate",
+		}}},
 		recorder: &operatorCodeHTTPTestRecorder{},
 	}
 	fixture.authority = newOperatorCodeHTTPTestAuthority(t, ref)
-	return NewOperatorCodeHTTPAdapter(fixture.grants, fixture.binding, fixture.authority, fixture.app, fixture.recorder), fixture
+	fixture.contexts.binding = fixture.binding
+	adapter := NewOperatorCodeHTTPAdapter(fixture.grants, fixture.binding, fixture.authority, fixture.app, fixture.recorder)
+	adapter.contexts = fixture.contexts
+	return adapter, fixture
 }
 
 type operatorCodeHTTPTestGrants struct {
@@ -671,26 +805,114 @@ type operatorCodeHTTPTestGrants struct {
 	current             gormdb.BrowserReadGrant
 	currentOK           bool
 	currentErr          error
-	currentCalls        int
 }
 
-func (grants *operatorCodeHTTPTestGrants) CanRead(_ context.Context, caller auth.Identity, sourceID, checkoutID string) (bool, error) {
-	if _, ok := caller.SessionBrowserSubject(); !ok || sourceID == "" || checkoutID == "" {
-		return false, nil
+func (grants *operatorCodeHTTPTestGrants) Active(_ context.Context, caller auth.Identity, sourceID, checkoutID string) (gormdb.BrowserReadGrant, bool, error) {
+	if _, ok := caller.SessionBrowserSubject(); !ok || sourceID != grants.current.SourceID || checkoutID != grants.current.CheckoutID {
+		return gormdb.BrowserReadGrant{}, false, nil
 	}
 	grants.checks++
 	if grants.revokeOnSecondCheck && grants.checks == 2 {
 		grants.allowed = false
 	}
-	return grants.allowed, nil
+	if !grants.allowed {
+		return gormdb.BrowserReadGrant{}, false, grants.currentErr
+	}
+	return grants.current, grants.currentOK, grants.currentErr
 }
 
-func (grants *operatorCodeHTTPTestGrants) Current(_ context.Context, caller auth.Identity) (gormdb.BrowserReadGrant, bool, error) {
-	if _, ok := caller.SessionBrowserSubject(); !ok {
-		return gormdb.BrowserReadGrant{}, false, nil
+type operatorCodeHTTPTestContextStore struct {
+	entries          []gormdb.BrowserCodeContextCatalogEntry
+	pins             []gormdb.BrowserCodeContextPin
+	cursor           string
+	createCursorRef  string
+	advanceCursorRef string
+	loadErr          error
+	createdBindings  []gormdb.BrowserCodeContinuationBinding
+	loadedBindings   []gormdb.BrowserCodeContinuationBinding
+	advancedBindings []gormdb.BrowserCodeContinuationBinding
+	loadedRefs       []string
+	advancedRefs     []string
+	binding          *operatorCodeHTTPTestBinding
+	pinErr           error
+}
+
+func (store *operatorCodeHTTPTestContextStore) ListCatalog(_ context.Context, _ int64) ([]gormdb.BrowserCodeContextCatalogEntry, error) {
+	return append([]gormdb.BrowserCodeContextCatalogEntry(nil), store.entries...), nil
+}
+
+func (store *operatorCodeHTTPTestContextStore) Pin(_ context.Context, pin gormdb.BrowserCodeContextPin) error {
+	if store.pinErr != nil {
+		return store.pinErr
 	}
-	grants.currentCalls++
-	return grants.current, grants.currentOK, grants.currentErr
+	if pin.Caller.SubjectUserID != 41 || pin.Caller.SessionID != "browser-session-41" || pin.TabBindingID != operatorCodeHTTPTestBindingID {
+		return gormdb.ErrBrowserCodeContextDenied
+	}
+	authorized := false
+	for _, entry := range store.entries {
+		if entry.Context != nil && operatorCodeHTTPTestRefsEqual(pin.Context, *entry.Context) {
+			authorized = true
+			break
+		}
+	}
+	if !authorized {
+		return gormdb.ErrBrowserCodeContextDenied
+	}
+	store.pins = append(store.pins, pin)
+	if store.binding != nil {
+		pinned := browserBindingContext(pin.Context)
+		store.binding.pinnedTo = append(store.binding.pinnedTo, pinned)
+		store.binding.pinned = &pinned
+	}
+	return nil
+}
+
+func (store *operatorCodeHTTPTestContextStore) LoadContinuation(_ context.Context, cursorRef string, binding gormdb.BrowserCodeContinuationBinding) (string, error) {
+	store.loadedRefs = append(store.loadedRefs, cursorRef)
+	store.loadedBindings = append(store.loadedBindings, binding)
+	if store.loadErr != nil {
+		return "", store.loadErr
+	}
+	if store.cursor == "" {
+		return "", gormdb.ErrBrowserCodeContinuationDenied
+	}
+	return store.cursor, nil
+}
+
+func (store *operatorCodeHTTPTestContextStore) CreateContinuation(_ context.Context, binding gormdb.BrowserCodeContinuationBinding, cursor string) (string, error) {
+	store.createdBindings = append(store.createdBindings, binding)
+	store.cursor = cursor
+	if cursor == "" {
+		return "", nil
+	}
+	if store.createCursorRef != "" {
+		return store.createCursorRef, nil
+	}
+	return uuid.NewString(), nil
+}
+
+func (store *operatorCodeHTTPTestContextStore) AdvanceContinuation(_ context.Context, cursorRef string, binding gormdb.BrowserCodeContinuationBinding, cursor string) (string, error) {
+	store.advancedRefs = append(store.advancedRefs, cursorRef)
+	store.advancedBindings = append(store.advancedBindings, binding)
+	store.cursor = cursor
+	if cursor == "" {
+		return "", nil
+	}
+	if store.advanceCursorRef != "" {
+		return store.advanceCursorRef, nil
+	}
+	return uuid.NewString(), nil
+}
+
+type operatorCodeHTTPTestGraphSources struct {
+	descriptors map[uci.QueryEntityRef]uci.VersionedReadSpec
+	calls       []uci.QueryEntityRef
+}
+
+func (sources *operatorCodeHTTPTestGraphSources) DescribeGraphSource(_ context.Context, _ uci.AuthorizedContext, entity uci.QueryEntityRef) (uci.VersionedReadSpec, bool, error) {
+	sources.calls = append(sources.calls, entity)
+	descriptor, available := sources.descriptors[entity]
+	return descriptor, available, nil
 }
 
 type operatorCodeHTTPTestBinding struct {
@@ -755,13 +977,6 @@ func (binding *operatorCodeHTTPTestBinding) Close(_ context.Context, _ auth.Iden
 	return binding.err
 }
 
-func (binding *operatorCodeHTTPTestBinding) Pin(_ context.Context, _ auth.Identity, _ string, _ BrowserBindingProof, pinned BrowserBindingContext) error {
-	binding.pinnedTo = append(binding.pinnedTo, pinned)
-	copy := pinned
-	binding.pinned = &copy
-	return binding.err
-}
-
 type operatorCodeHTTPTestAuthority struct {
 	resolver *uci.ContextResolver
 	ref      uci.ContextRef
@@ -781,18 +996,6 @@ func (authority *operatorCodeHTTPTestAuthority) AuthorizeOperatorCode(ctx contex
 		AuthRealm:       "browser",
 		Principal:       "browser-user/99",
 		Ref:             &ref,
-	})
-}
-
-func (authority *operatorCodeHTTPTestAuthority) ResolveCurrentOperatorCode(ctx context.Context, caller operatorCodeBindingCaller, grant gormdb.BrowserReadGrant) (uci.AuthorizedContext, error) {
-	if !caller.Subject.Valid() || caller.BindingID != operatorCodeHTTPTestBindingID || grant.SubjectUserID != caller.Subject.UserID || grant.SourceID != authority.ref.SourceID || grant.CheckoutID != authority.ref.CheckoutID {
-		return uci.AuthorizedContext{}, errors.New("current grant mismatch")
-	}
-	return authority.AuthorizeOperatorCode(ctx, operatorCodeVerifiedCaller{
-		Subject:   caller.Subject,
-		SessionID: caller.SessionID,
-		BindingID: caller.BindingID,
-		Context:   authority.ref,
 	})
 }
 
@@ -820,15 +1023,15 @@ func (authorizer operatorCodeHTTPTestAuthorizer) AuthorizeContext(_ context.Cont
 
 type operatorCodeHTTPTestApplication struct {
 	search               uci.QueryResponse
+	searchResponses      []uci.QueryResponse
+	searchSpecs          []uci.QuerySpec
 	graph                uci.QueryResponse
 	read                 uci.QueryResponse
 	status               mcp.CodebaseStatusSnapshot
-	metadata             map[string]string
 	sourceSessions       []string
 	searchCalls          int
 	graphCalls           int
 	readCalls            int
-	projectCalls         int
 	indexIntents         map[string]uci.IndexIntent
 	indexSubmitErr       error
 	indexGetErr          error
@@ -843,9 +1046,15 @@ type operatorCodeHTTPTestApplication struct {
 	indexRetryResult     *uci.IndexIntent
 }
 
-func (app *operatorCodeHTTPTestApplication) SearchCodebase(ctx context.Context, _ uci.AuthorizedContext, _ mcp.CodebaseSearchInput) (uci.QueryResponse, error) {
+func (app *operatorCodeHTTPTestApplication) SearchOperatorCodebase(ctx context.Context, _ uci.AuthorizedContext, spec uci.QuerySpec) (uci.QueryResponse, error) {
 	app.searchCalls++
+	app.searchSpecs = append(app.searchSpecs, spec)
 	app.sourceSessions = append(app.sourceSessions, auditcontext.SourceSession(ctx))
+	if len(app.searchResponses) > 0 {
+		response := app.searchResponses[0]
+		app.searchResponses = app.searchResponses[1:]
+		return response, nil
+	}
 	return app.search, nil
 }
 
@@ -863,11 +1072,6 @@ func (app *operatorCodeHTTPTestApplication) ReadCodebase(ctx context.Context, _ 
 
 func (app *operatorCodeHTTPTestApplication) CodebaseStatus(_ context.Context, _ uci.AuthorizedContext) (mcp.CodebaseStatusSnapshot, error) {
 	return app.status, nil
-}
-
-func (app *operatorCodeHTTPTestApplication) Project(_ context.Context, _ uci.ContextRef) (map[string]string, error) {
-	app.projectCalls++
-	return app.metadata, nil
 }
 
 func (app *operatorCodeHTTPTestApplication) SubmitIndexIntent(ctx context.Context, authorized uci.AuthorizedContext, requestRef string, kind uci.IndexIntentKind) (uci.IndexIntent, error) {
@@ -945,8 +1149,8 @@ type operatorCodeHTTPTestApplicationWithoutIndexIntent struct {
 	base *operatorCodeHTTPTestApplication
 }
 
-func (app operatorCodeHTTPTestApplicationWithoutIndexIntent) SearchCodebase(ctx context.Context, authorized uci.AuthorizedContext, input mcp.CodebaseSearchInput) (uci.QueryResponse, error) {
-	return app.base.SearchCodebase(ctx, authorized, input)
+func (app operatorCodeHTTPTestApplicationWithoutIndexIntent) SearchOperatorCodebase(ctx context.Context, authorized uci.AuthorizedContext, spec uci.QuerySpec) (uci.QueryResponse, error) {
+	return app.base.SearchOperatorCodebase(ctx, authorized, spec)
 }
 
 func (app operatorCodeHTTPTestApplicationWithoutIndexIntent) ExploreCodebase(ctx context.Context, authorized uci.AuthorizedContext, input mcp.CodebaseGraphInput) (uci.QueryResponse, error) {
@@ -959,10 +1163,6 @@ func (app operatorCodeHTTPTestApplicationWithoutIndexIntent) ReadCodebase(ctx co
 
 func (app operatorCodeHTTPTestApplicationWithoutIndexIntent) CodebaseStatus(ctx context.Context, authorized uci.AuthorizedContext) (mcp.CodebaseStatusSnapshot, error) {
 	return app.base.CodebaseStatus(ctx, authorized)
-}
-
-func (app operatorCodeHTTPTestApplicationWithoutIndexIntent) Project(ctx context.Context, ref uci.ContextRef) (map[string]string, error) {
-	return app.base.Project(ctx, ref)
 }
 
 type operatorCodeHTTPTestRecorder struct {

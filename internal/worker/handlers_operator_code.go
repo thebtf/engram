@@ -27,6 +27,7 @@ const (
 	operatorCodeRequestMaxBytes = 32 << 10
 	operatorCodeSearchDefault   = 10
 	operatorCodeSearchMax       = 50
+	operatorCodeSearchMaxText   = 16 << 10
 	operatorCodeReadDefault     = 8_192
 	operatorCodeReadMax         = 8_192
 	operatorCodeGraphMaxDepth   = 8
@@ -41,19 +42,20 @@ const (
 // this adapter only after the normal authentication middleware has installed a
 // real browser-session identity.
 type OperatorCodeHTTPAdapter struct {
-	grants    operatorCodeGrantReader
-	bindings  operatorCodeBindingApplication
-	authority operatorCodeContextAuthorizer
-	app       operatorCodeApplication
-	recorder  operatorCodeExposureRecorder
-	now       func() time.Time
+	grants       operatorCodeGrantReader
+	bindings     operatorCodeBindingApplication
+	authority    operatorCodeContextAuthorizer
+	app          operatorCodeApplication
+	contexts     operatorCodeContextStore
+	graphSources operatorCodeGraphSourceReader
+	recorder     operatorCodeExposureRecorder
+	now          func() time.Time
 }
 
 // operatorCodeGrantReader retains the already-typed T012 grant checks. The
 // adapter never queries grant persistence or accepts a grant reference itself.
 type operatorCodeGrantReader interface {
-	CanRead(context.Context, auth.Identity, string, string) (bool, error)
-	Current(context.Context, auth.Identity) (gormdb.BrowserReadGrant, bool, error)
+	Active(context.Context, auth.Identity, string, string) (gormdb.BrowserReadGrant, bool, error)
 }
 
 // operatorCodeBindingApplication retains the T014 lifecycle and document-proof
@@ -64,27 +66,38 @@ type operatorCodeBindingApplication interface {
 	Resume(context.Context, auth.Identity, string, BrowserBindingResumeInput) (BrowserBindingTransition, error)
 	Renew(context.Context, auth.Identity, string, BrowserBindingProof) error
 	Close(context.Context, auth.Identity, string, BrowserBindingProof) error
-	Pin(context.Context, auth.Identity, string, BrowserBindingProof, BrowserBindingContext) error
 }
 
-// operatorCodeContextAuthorizer is the composition-owned bridge from a
-// server-resolved grant/pin to an AuthorizedContext. Its implementation derives
-// the source realm and checkout owner server-side; browser JSON never supplies
-// a principal, workspace, project, Space, label, path, or ContextRef selector.
+// operatorCodeContextAuthorizer is the composition-owned bridge from an exact
+// catalog ContextRef to an AuthorizedContext. Its implementation derives the
+// source realm and checkout owner server-side; browser JSON never supplies a
+// principal, workspace, project, Space, label, or path.
 type operatorCodeContextAuthorizer interface {
 	AuthorizeOperatorCode(context.Context, operatorCodeVerifiedCaller) (uci.AuthorizedContext, error)
-	ResolveCurrentOperatorCode(context.Context, operatorCodeBindingCaller, gormdb.BrowserReadGrant) (uci.AuthorizedContext, error)
 }
 
 // operatorCodeApplication is the existing UCI application surface after a
-// browser request has been authorized. It is intentionally narrower than route
-// composition and contains no grant, tab-proof, or release responsibility.
+// browser request has been authorized. It contains no grant, tab-proof, or
+// release responsibility.
 type operatorCodeApplication interface {
-	SearchCodebase(context.Context, uci.AuthorizedContext, mcp.CodebaseSearchInput) (uci.QueryResponse, error)
+	SearchOperatorCodebase(context.Context, uci.AuthorizedContext, uci.QuerySpec) (uci.QueryResponse, error)
 	ExploreCodebase(context.Context, uci.AuthorizedContext, mcp.CodebaseGraphInput) (uci.QueryResponse, error)
 	ReadCodebase(context.Context, uci.AuthorizedContext, mcp.CodebaseReadInput) (uci.QueryResponse, error)
 	CodebaseStatus(context.Context, uci.AuthorizedContext) (mcp.CodebaseStatusSnapshot, error)
-	Project(context.Context, uci.ContextRef) (map[string]string, error)
+}
+
+// operatorCodeContextStore owns the small cross-table API state that must be
+// rechecked atomically: catalog choices, exact pins, and opaque search cursors.
+type operatorCodeContextStore interface {
+	ListCatalog(context.Context, int64) ([]gormdb.BrowserCodeContextCatalogEntry, error)
+	Pin(context.Context, gormdb.BrowserCodeContextPin) error
+	LoadContinuation(context.Context, string, gormdb.BrowserCodeContinuationBinding) (string, error)
+	CreateContinuation(context.Context, gormdb.BrowserCodeContinuationBinding, string) (string, error)
+	AdvanceContinuation(context.Context, string, gormdb.BrowserCodeContinuationBinding, string) (string, error)
+}
+
+type operatorCodeGraphSourceReader interface {
+	DescribeGraphSource(context.Context, uci.AuthorizedContext, uci.QueryEntityRef) (uci.VersionedReadSpec, bool, error)
 }
 
 // operatorCodeIndexIntentApplication is an optional durable-index capability.
@@ -100,13 +113,6 @@ type operatorCodeIndexIntentApplication interface {
 // failed append must never permit contextual serialization.
 type operatorCodeExposureRecorder interface {
 	Record(context.Context, uci.AuthorizedContext, uci.ExposureInput) (uci.QueryExposure, error)
-}
-
-// operatorCodeBindingCaller is trusted request state for an unpinned document.
-type operatorCodeBindingCaller struct {
-	Subject   auth.BrowserSubject
-	SessionID string
-	BindingID string
 }
 
 // operatorCodeVerifiedCaller is private trusted state passed only after the
@@ -232,26 +238,45 @@ func (adapter *OperatorCodeHTTPAdapter) HandleClose(w http.ResponseWriter, r *ht
 	operatorCodeWriteBodyless(w, http.StatusNoContent)
 }
 
-// HandlePin resolves the one active grant and current UCI view on the server;
-// the browser supplies only the current document proof.
+// HandlePin stores only a browser-selected exact ContextRef that remains
+// grant-authorized and published in the same transaction as its audit append.
 func (adapter *OperatorCodeHTTPAdapter) HandlePin(w http.ResponseWriter, r *http.Request) {
-	var request operatorCodePathProofRequest
+	var request operatorCodePinRequest
 	identity, ok := adapter.decode(w, r, "operator-code-tab-context", &request)
 	if !ok {
 		return
 	}
-	proof, ok := operatorCodePathProof(r, request)
+	proof, ok := operatorCodePathProof(r, request.operatorCodePathProofRequest)
 	if !ok {
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
 	}
-	caller, failure := adapter.authorizeCurrent(r.Context(), identity, proof)
-	if failure != uci.ReleaseFailureNone {
-		operatorCodeWriteFailure(w, failure)
+	ref, ok := request.ContextRef.ref()
+	if !ok {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
 		return
 	}
-	if err := adapter.bindings.Pin(r.Context(), identity.identity, identity.sessionID, proof, browserBindingContext(caller.authorized.Ref())); err != nil {
+	subject, ok := identity.identity.SessionBrowserSubject()
+	if !ok {
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
+		return
+	}
+	if adapter == nil || adapter.contexts == nil {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return
+	}
+	err := adapter.contexts.Pin(r.Context(), gormdb.BrowserCodeContextPin{
+		Caller:              gormdb.BrowserTabBindingCaller{SubjectUserID: subject.UserID, SessionID: identity.sessionID},
+		TabBindingID:        proof.TabBindingID,
+		DocumentProofDigest: browserBindingDigest(proof.DocumentProof),
+		Context:             ref,
+	})
+	if err != nil {
+		if errors.Is(err, gormdb.ErrBrowserCodeContextDenied) || errors.Is(err, gormdb.ErrBrowserTabBindingDenied) {
+			operatorCodeWriteBodyless(w, http.StatusForbidden)
+		} else {
+			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		}
 		return
 	}
 	operatorCodeWriteBodyless(w, http.StatusNoContent)
@@ -425,8 +450,9 @@ func (adapter *OperatorCodeHTTPAdapter) HandleIndexIntentRetry(w http.ResponseWr
 	operatorCodeWriteIndexIntentAcknowledgement(w, intent)
 }
 
-// HandleSearch reads bounded lexical code results from the one current grant.
-// It deliberately accepts no project, path, label, Space, or context selector.
+// HandleSearch executes one exact pinned-View page. Browser continuations are
+// opaque, expiring, one-use server records rather than UCI's signed transport
+// continuations.
 func (adapter *OperatorCodeHTTPAdapter) HandleSearch(w http.ResponseWriter, r *http.Request) {
 	var request operatorCodeSearchRequest
 	identity, ok := adapter.decode(w, r, "operator-code-search", &request)
@@ -436,24 +462,58 @@ func (adapter *OperatorCodeHTTPAdapter) HandleSearch(w http.ResponseWriter, r *h
 		}
 		return
 	}
+	filter, _ := request.filter()
 	r = r.WithContext(auditcontext.WithSourceSession(r.Context(), identity.sessionID))
 	caller, failure := adapter.authorize(r.Context(), identity, request.Proof())
 	if failure != uci.ReleaseFailureNone {
 		operatorCodeWriteFailure(w, failure)
 		return
 	}
-	if adapter.app == nil {
-		operatorCodeWriteFailure(w, uci.ReleaseFailureExposureUnavailable)
+	if adapter.app == nil || adapter.contexts == nil {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 		return
 	}
-
-	response, err := adapter.app.SearchCodebase(r.Context(), caller.authorized, mcp.CodebaseSearchInput{
-		Query: request.Query,
-		Limit: request.limit(),
+	binding := operatorCodeSearchContinuationBinding(caller, request, filter)
+	var internalContinuation *string
+	if request.Continuation != nil {
+		value, err := adapter.contexts.LoadContinuation(r.Context(), *request.Continuation, binding)
+		if err != nil {
+			operatorCodeWriteCursorFailure(w, err)
+			return
+		}
+		internalContinuation = &value
+	}
+	response, err := adapter.app.SearchOperatorCodebase(r.Context(), caller.authorized, uci.QuerySpec{
+		ClientSessionID: "operator-code/" + caller.caller.BindingID,
+		Mode:            uci.QueryModeFTS,
+		Text:            request.Query,
+		Filter:          filter,
+		Order:           uci.QueryOrderRelevance,
+		Limit:           request.limit(),
+		Continuation:    internalContinuation,
 	})
 	if err != nil || !operatorCodeSearchResponseValid(response, caller.authorized) {
-		operatorCodeWriteFailure(w, uci.ReleaseFailureExposureUnavailable)
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 		return
+	}
+	nextServiceCursor := ""
+	if response.Continuation != nil && response.Continuation.Value != nil {
+		nextServiceCursor = *response.Continuation.Value
+	}
+	nextCursor := ""
+	if request.Continuation == nil {
+		nextCursor, err = adapter.contexts.CreateContinuation(r.Context(), binding, nextServiceCursor)
+	} else {
+		nextCursor, err = adapter.contexts.AdvanceContinuation(r.Context(), *request.Continuation, binding, nextServiceCursor)
+	}
+	if err != nil {
+		operatorCodeWriteCursorFailure(w, err)
+		return
+	}
+	if nextCursor == "" {
+		response.Continuation = &uci.QueryContinuation{}
+	} else {
+		response.Continuation = &uci.QueryContinuation{Value: &nextCursor}
 	}
 	adapter.writeReleasedQuery(w, r.Context(), identity, caller, uci.ReleaseCategoryCodeSearch, response, func(candidate uci.QueryResponse, authorized uci.AuthorizedContext) bool {
 		return operatorCodeSearchResponseValid(candidate, authorized)
@@ -490,7 +550,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGraph(w http.ResponseWriter, r *ht
 		operatorCodeWriteFailure(w, uci.ReleaseFailureExposureUnavailable)
 		return
 	}
-	adapter.writeReleasedQuery(w, operationCtx, identity, caller, uci.ReleaseCategoryCodeGraph, response, func(candidate uci.QueryResponse, authorized uci.AuthorizedContext) bool {
+	adapter.writeReleasedGraph(w, operationCtx, identity, caller, response, func(candidate uci.QueryResponse, authorized uci.AuthorizedContext) bool {
 		return operatorCodeGraphResponseValid(candidate, authorized, input)
 	})
 }
@@ -539,30 +599,34 @@ func (adapter *OperatorCodeHTTPAdapter) HandleVersionedRead(w http.ResponseWrite
 	})
 }
 
-// HandleContexts resolves only the subject's one current grant before pinning.
-// It returns labels alone, never the grant, binding, proof, or ContextRef.
+// HandleContexts lists every active grant's safe Source → Checkout → View
+// choices. It does not silently select a grant, checkout, or current View.
 func (adapter *OperatorCodeHTTPAdapter) HandleContexts(w http.ResponseWriter, r *http.Request) {
 	var request operatorCodeProofRequest
 	identity, ok := adapter.decode(w, r, "operator-code-contexts", &request)
 	if !ok {
 		return
 	}
-	caller, failure := adapter.authorizeCurrent(r.Context(), identity, request.Proof())
-	if failure != uci.ReleaseFailureNone {
-		operatorCodeWriteFailure(w, failure)
+	subject, ok := identity.identity.SessionBrowserSubject()
+	if !ok {
+		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
 	}
-	if adapter.app == nil {
+	if adapter == nil || adapter.bindings == nil || adapter.contexts == nil {
 		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 		return
 	}
-	metadata, err := adapter.app.Project(r.Context(), caller.authorized.Ref())
-	response, valid := operatorCodeSafeMetadata(metadata)
-	if err != nil || !valid {
+	guarded, err := adapter.bindings.Guard(r.Context(), identity.identity, identity.sessionID, request.Proof())
+	if err != nil || guarded.TabBindingID != request.TabBindingID {
+		operatorCodeWriteBodyless(w, http.StatusForbidden)
+		return
+	}
+	entries, err := adapter.contexts.ListCatalog(r.Context(), subject.UserID)
+	if err != nil {
 		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 		return
 	}
-	writeJSON(w, operatorCodeContextsResponse{Context: response})
+	writeJSON(w, operatorCodeContextsResponse{Contexts: operatorCodeCatalogEntries(entries)})
 }
 
 type operatorCodeProofRequest struct {
@@ -598,6 +662,32 @@ func operatorCodeProofValid(proof BrowserBindingProof) bool {
 
 type operatorCodePathProofRequest struct {
 	DocumentProof string `json:"document_proof"`
+}
+
+type operatorCodeContextRefRequest struct {
+	SourceID          string `json:"source_id"`
+	CheckoutID        string `json:"checkout_id"`
+	ViewID            string `json:"view_id"`
+	AnalysisProfileID string `json:"analysis_profile_id"`
+	Generation        int64  `json:"generation"`
+}
+
+func (request operatorCodeContextRefRequest) ref() (uci.ContextRef, bool) {
+	if !operatorCodeUUID(request.SourceID) || !operatorCodeUUID(request.CheckoutID) || !operatorCodeUUID(request.ViewID) || !operatorCodeUUID(request.AnalysisProfileID) || request.Generation < 1 {
+		return uci.ContextRef{}, false
+	}
+	return uci.ContextRef{
+		SourceID:          request.SourceID,
+		CheckoutID:        request.CheckoutID,
+		ViewID:            request.ViewID,
+		AnalysisProfileID: request.AnalysisProfileID,
+		Generation:        request.Generation,
+	}, true
+}
+
+type operatorCodePinRequest struct {
+	operatorCodePathProofRequest
+	ContextRef operatorCodeContextRefRequest `json:"context_ref"`
 }
 
 type operatorCodeHandshakeRequest struct {
@@ -644,12 +734,16 @@ func (request operatorCodeResumeRequest) input() BrowserBindingResumeInput {
 
 type operatorCodeSearchRequest struct {
 	operatorCodeProofRequest
-	Query string `json:"query"`
-	Limit *int   `json:"limit"`
+	Query        string   `json:"query"`
+	PathPrefix   string   `json:"path_prefix"`
+	Languages    []string `json:"languages"`
+	Limit        *int     `json:"limit"`
+	Continuation *string  `json:"continuation"`
 }
 
 func (request operatorCodeSearchRequest) valid() bool {
-	return request.Query != "" && (request.Limit == nil || (*request.Limit >= 1 && *request.Limit <= operatorCodeSearchMax))
+	_, ok := request.filter()
+	return operatorCodeSearchText(request.Query) && ok && (request.Limit == nil || (*request.Limit >= 1 && *request.Limit <= operatorCodeSearchMax)) && (request.Continuation == nil || operatorCodeUUID(*request.Continuation))
 }
 
 func (request operatorCodeSearchRequest) limit() int {
@@ -657,6 +751,75 @@ func (request operatorCodeSearchRequest) limit() int {
 		return operatorCodeSearchDefault
 	}
 	return *request.Limit
+}
+
+func (request operatorCodeSearchRequest) filter() (uci.QueryFilter, bool) {
+	prefix, err := uci.NormalizeQueryPathPrefix(request.PathPrefix)
+	if err != nil || len(request.Languages) > 32 {
+		return uci.QueryFilter{}, false
+	}
+	languages := make([]string, 0, len(request.Languages))
+	for _, language := range request.Languages {
+		language = strings.ToLower(strings.TrimSpace(language))
+		if len(language) == 0 || len(language) > 64 || !utf8.ValidString(language) || strings.ContainsAny(language, "\x00\r\n") {
+			return uci.QueryFilter{}, false
+		}
+		languages = append(languages, language)
+	}
+	sort.Strings(languages)
+	unique := languages[:0]
+	for _, language := range languages {
+		if len(unique) == 0 || unique[len(unique)-1] != language {
+			unique = append(unique, language)
+		}
+	}
+	return uci.QueryFilter{PathPrefix: prefix, Languages: unique}, true
+}
+
+func operatorCodeSearchText(value string) bool {
+	if len(value) == 0 || len(value) > operatorCodeSearchMaxText || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func operatorCodeSearchContinuationBinding(caller operatorCodeAuthorizedRequest, request operatorCodeSearchRequest, filter uci.QueryFilter) gormdb.BrowserCodeContinuationBinding {
+	return gormdb.BrowserCodeContinuationBinding{
+		SubjectUserID: caller.caller.Subject.UserID,
+		AuthRealm:     caller.grant.AuthRealm,
+		GrantRef:      caller.grant.GrantRef,
+		GrantIssuedAt: caller.grant.IssuedAt,
+		TabBindingID:  caller.caller.BindingID,
+		Context:       caller.authorized.Ref(),
+		QueryDigest:   operatorCodeSearchDigest("query", request.Query),
+		FilterDigest:  operatorCodeSearchDigest("filter", filter.PathPrefix, strings.Join(filter.Languages, "\x00")),
+		PageSize:      request.limit(),
+	}
+}
+
+func operatorCodeSearchDigest(kind string, values ...string) string {
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("operator-code-search/v1"))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte(kind))
+	for _, value := range values {
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(value))
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
+
+func operatorCodeWriteCursorFailure(w http.ResponseWriter, err error) {
+	if errors.Is(err, gormdb.ErrBrowserCodeContinuationDenied) {
+		operatorCodeWriteBodyless(w, http.StatusForbidden)
+		return
+	}
+	operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 }
 
 type operatorCodeGraphTargetRequest struct {
@@ -894,6 +1057,7 @@ type operatorCodeAuthorizedRequest struct {
 	caller     operatorCodeVerifiedCaller
 	proof      BrowserBindingProof
 	authorized uci.AuthorizedContext
+	grant      gormdb.BrowserReadGrant
 	authRealm  string
 }
 
@@ -1094,11 +1258,11 @@ func (adapter *OperatorCodeHTTPAdapter) authorize(ctx context.Context, identity 
 	if !ok {
 		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailureContextMismatch
 	}
-	granted, err := adapter.grants.CanRead(ctx, identity.identity, ref.SourceID, ref.CheckoutID)
+	grant, found, err := adapter.grants.Active(ctx, identity.identity, ref.SourceID, ref.CheckoutID)
 	if err != nil {
 		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailureExposureUnavailable
 	}
-	if !granted {
+	if !found || grant.SubjectUserID != subject.UserID || grant.SourceID != ref.SourceID || grant.CheckoutID != ref.CheckoutID || !operatorCodeText(grant.AuthRealm) || grant.IssuedAt.IsZero() {
 		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailurePermissionDenied
 	}
 	caller := operatorCodeVerifiedCaller{
@@ -1114,53 +1278,14 @@ func (adapter *OperatorCodeHTTPAdapter) authorize(ctx context.Context, identity 
 	if !operatorCodeRefsEqual(authorized.Ref(), ref) {
 		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailureContextMismatch
 	}
-	grant, found, err := adapter.grants.Current(ctx, identity.identity)
-	if err != nil {
-		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailureExposureUnavailable
-	}
-	if !found || grant.SubjectUserID != subject.UserID || grant.SourceID != ref.SourceID || grant.CheckoutID != ref.CheckoutID || !operatorCodeText(grant.AuthRealm) {
-		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailurePermissionDenied
-	}
-	return operatorCodeAuthorizedRequest{operatorCodeRequestIdentity: identity, caller: caller, proof: proof, authorized: authorized, authRealm: grant.AuthRealm}, uci.ReleaseFailureNone
-}
-
-func (adapter *OperatorCodeHTTPAdapter) authorizeCurrent(ctx context.Context, identity operatorCodeRequestIdentity, proof BrowserBindingProof) (operatorCodeAuthorizedRequest, uci.ReleaseFailureCode) {
-	if adapter == nil || adapter.grants == nil || adapter.bindings == nil || adapter.authority == nil {
-		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailureExposureUnavailable
-	}
-	subject, ok := identity.identity.SessionBrowserSubject()
-	if !ok {
-		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailurePermissionDenied
-	}
-	guarded, err := adapter.bindings.Guard(ctx, identity.identity, identity.sessionID, proof)
-	if err != nil || guarded.TabBindingID != proof.TabBindingID {
-		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailurePermissionDenied
-	}
-	grant, found, err := adapter.grants.Current(ctx, identity.identity)
-	if err != nil {
-		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailureExposureUnavailable
-	}
-	if !found || grant.SubjectUserID != subject.UserID || !operatorCodeText(grant.AuthRealm) {
-		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailurePermissionDenied
-	}
-	bound := operatorCodeBindingCaller{Subject: subject, SessionID: identity.sessionID, BindingID: guarded.TabBindingID}
-	authorized, err := adapter.authority.ResolveCurrentOperatorCode(ctx, bound, grant)
-	if err != nil {
-		return operatorCodeAuthorizedRequest{}, operatorCodeContextFailure(err)
-	}
-	ref := authorized.Ref()
-	if ref.SpaceID != nil || ref.SourceID != grant.SourceID || ref.CheckoutID != grant.CheckoutID {
-		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailureContextMismatch
-	}
-	granted, err := adapter.grants.CanRead(ctx, identity.identity, ref.SourceID, ref.CheckoutID)
-	if err != nil {
-		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailureExposureUnavailable
-	}
-	if !granted {
-		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailurePermissionDenied
-	}
-	caller := operatorCodeVerifiedCaller{Subject: subject, SessionID: identity.sessionID, BindingID: guarded.TabBindingID, Context: ref}
-	return operatorCodeAuthorizedRequest{operatorCodeRequestIdentity: identity, caller: caller, proof: proof, authorized: authorized, authRealm: grant.AuthRealm}, uci.ReleaseFailureNone
+	return operatorCodeAuthorizedRequest{
+		operatorCodeRequestIdentity: identity,
+		caller:                      caller,
+		proof:                       proof,
+		authorized:                  authorized,
+		grant:                       grant,
+		authRealm:                   grant.AuthRealm,
+	}, uci.ReleaseFailureNone
 }
 
 func operatorCodeContextRef(pinned BrowserBindingContext) (uci.ContextRef, bool) {
@@ -1237,6 +1362,90 @@ func (adapter *OperatorCodeHTTPAdapter) writeReleasedQuery(
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(released)
+}
+
+func (adapter *OperatorCodeHTTPAdapter) writeReleasedGraph(
+	w http.ResponseWriter,
+	ctx context.Context,
+	identity operatorCodeRequestIdentity,
+	caller operatorCodeAuthorizedRequest,
+	response uci.QueryResponse,
+	matches func(uci.QueryResponse, uci.AuthorizedContext) bool,
+) {
+	released := uci.ReleaseQueryResponse(ctx, adapter.releaseRequest(identity, caller, uci.ReleaseCategoryCodeGraph, &response, matches), adapter.releaseGate(identity, caller.Proof()))
+	if err := released.Validate(); err != nil {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return
+	}
+	if released.Status == uci.QueryStatusForbidden || released.Status == uci.QueryStatusContextRequired || released.Status == uci.QueryStatusUnavailable {
+		operatorCodeWriteQueryResponse(w, released)
+		return
+	}
+	reauthorized, failure := adapter.authorize(ctx, identity, caller.Proof())
+	if failure != uci.ReleaseFailureNone {
+		operatorCodeWriteFailure(w, failure)
+		return
+	}
+	navigation := adapter.graphNavigation(ctx, reauthorized.authorized, released.Graph)
+	operatorCodeWriteGraphResponse(w, released, navigation)
+}
+
+func (adapter *OperatorCodeHTTPAdapter) graphNavigation(ctx context.Context, authorized uci.AuthorizedContext, graph *uci.QueryGraph) operatorCodeGraphNavigation {
+	navigation := operatorCodeGraphNavigation{Nodes: []operatorCodeGraphNavigationRef{}, Edges: []operatorCodeGraphEdgeNavigation{}}
+	if graph == nil {
+		return navigation
+	}
+	contextRef := operatorCodeContextDTO(authorized.Ref())
+	nodes := make(map[uci.QueryEntityRef]operatorCodeGraphNavigationRef, len(graph.Nodes))
+	for _, node := range graph.Nodes {
+		entry := operatorCodeGraphNavigationRef{Entity: node, ContextRef: contextRef, SourceState: "unavailable"}
+		if adapter != nil && adapter.graphSources != nil {
+			descriptor, available, err := adapter.graphSources.DescribeGraphSource(ctx, authorized, node)
+			if err == nil && available {
+				entry.SourceState = "available"
+				entry.SourceRead = &operatorCodeSourceReadDescriptor{
+					EntityKey:     descriptor.Entity.EntityKey,
+					Span:          descriptor.Span,
+					ContentDigest: descriptor.ContentDigest,
+				}
+			}
+		}
+		navigation.Nodes = append(navigation.Nodes, entry)
+		nodes[node] = entry
+	}
+	for _, edge := range graph.Edges {
+		from, foundFrom := nodes[edge.From]
+		to, foundTo := nodes[edge.To]
+		if !foundFrom || !foundTo {
+			continue
+		}
+		navigation.Edges = append(navigation.Edges, operatorCodeGraphEdgeNavigation{From: from, To: to, Relation: edge.Relation, EvidenceKind: edge.EvidenceKind})
+	}
+	return navigation
+}
+
+func operatorCodeWriteQueryResponse(w http.ResponseWriter, response uci.QueryResponse) {
+	status := http.StatusOK
+	switch response.Status {
+	case uci.QueryStatusForbidden:
+		status = http.StatusForbidden
+	case uci.QueryStatusContextRequired:
+		status = http.StatusConflict
+	case uci.QueryStatusUnavailable:
+		status = http.StatusServiceUnavailable
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(response)
+}
+
+func operatorCodeWriteGraphResponse(w http.ResponseWriter, response uci.QueryResponse, navigation operatorCodeGraphNavigation) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(struct {
+		uci.QueryResponse
+		Navigation operatorCodeGraphNavigation `json:"navigation"`
+	}{QueryResponse: response, Navigation: navigation})
 }
 
 func (adapter *OperatorCodeHTTPAdapter) releaseRequest(
@@ -1436,14 +1645,84 @@ func operatorCodeWriteTransition(w http.ResponseWriter, transition BrowserBindin
 	}
 }
 
-type operatorCodeMetadata struct {
-	Source   string `json:"source"`
-	Checkout string `json:"checkout"`
-	View     string `json:"view"`
+type operatorCodeContextResponseRef struct {
+	SourceID          string `json:"source_id"`
+	CheckoutID        string `json:"checkout_id"`
+	ViewID            string `json:"view_id"`
+	AnalysisProfileID string `json:"analysis_profile_id"`
+	Generation        int64  `json:"generation"`
+}
+
+func operatorCodeContextDTO(ref uci.ContextRef) operatorCodeContextResponseRef {
+	return operatorCodeContextResponseRef{
+		SourceID:          ref.SourceID,
+		CheckoutID:        ref.CheckoutID,
+		ViewID:            ref.ViewID,
+		AnalysisProfileID: ref.AnalysisProfileID,
+		Generation:        ref.Generation,
+	}
+}
+
+type operatorCodeCatalogLabel struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+type operatorCodeCatalogView struct {
+	ContextRef operatorCodeContextResponseRef `json:"context_ref"`
+	Label      string                         `json:"label"`
+}
+
+type operatorCodeCatalogEntry struct {
+	Source               operatorCodeCatalogLabel `json:"source"`
+	Checkout             operatorCodeCatalogLabel `json:"checkout"`
+	View                 *operatorCodeCatalogView `json:"view"`
+	IndexIntentAvailable bool                     `json:"index_intent_available"`
 }
 
 type operatorCodeContextsResponse struct {
-	Context operatorCodeMetadata `json:"context"`
+	Contexts []operatorCodeCatalogEntry `json:"contexts"`
+}
+
+func operatorCodeCatalogEntries(entries []gormdb.BrowserCodeContextCatalogEntry) []operatorCodeCatalogEntry {
+	result := make([]operatorCodeCatalogEntry, 0, len(entries))
+	for _, entry := range entries {
+		item := operatorCodeCatalogEntry{
+			Source:               operatorCodeCatalogLabel{ID: entry.SourceID, Label: entry.SourceLabel},
+			Checkout:             operatorCodeCatalogLabel{ID: entry.CheckoutID, Label: entry.CheckoutLabel},
+			IndexIntentAvailable: entry.IndexIntentAvailable,
+		}
+		if entry.Context != nil {
+			item.View = &operatorCodeCatalogView{ContextRef: operatorCodeContextDTO(*entry.Context), Label: entry.ViewLabel}
+		}
+		result = append(result, item)
+	}
+	return result
+}
+
+type operatorCodeSourceReadDescriptor struct {
+	EntityKey     string                 `json:"entity_key"`
+	Span          uci.QuerySpan          `json:"span"`
+	ContentDigest uci.QueryContentDigest `json:"content_digest"`
+}
+
+type operatorCodeGraphNavigationRef struct {
+	Entity      uci.QueryEntityRef                `json:"entity"`
+	ContextRef  operatorCodeContextResponseRef    `json:"context_ref"`
+	SourceState string                            `json:"source_state"`
+	SourceRead  *operatorCodeSourceReadDescriptor `json:"source_read,omitempty"`
+}
+
+type operatorCodeGraphEdgeNavigation struct {
+	From         operatorCodeGraphNavigationRef `json:"from"`
+	To           operatorCodeGraphNavigationRef `json:"to"`
+	Relation     uci.IndexRelation              `json:"relation"`
+	EvidenceKind uci.QueryEvidenceKind          `json:"evidence_kind"`
+}
+
+type operatorCodeGraphNavigation struct {
+	Nodes []operatorCodeGraphNavigationRef  `json:"nodes"`
+	Edges []operatorCodeGraphEdgeNavigation `json:"edges"`
 }
 
 type operatorCodeStatusResponse struct {
@@ -1488,18 +1767,6 @@ func operatorCodeWriteIndexIntentAcknowledgement(w http.ResponseWriter, intent u
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(response)
-}
-
-func operatorCodeSafeMetadata(metadata map[string]string) (operatorCodeMetadata, bool) {
-	if len(metadata) != 3 {
-		return operatorCodeMetadata{}, false
-	}
-	for _, key := range []string{"source", "checkout", "view"} {
-		if !operatorCodeText(metadata[key]) {
-			return operatorCodeMetadata{}, false
-		}
-	}
-	return operatorCodeMetadata{Source: metadata["source"], Checkout: metadata["checkout"], View: metadata["view"]}, true
 }
 
 func operatorCodeWriteFailure(w http.ResponseWriter, failure uci.ReleaseFailureCode) {

@@ -66,19 +66,18 @@ func TestOperatorCodeRoutesDelegateFiveEndpoints(t *testing.T) {
 			wantRecorder: 1,
 		},
 		{
-			name: "contexts",
-			path: "/api/code/contexts",
-			body: `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current"}`,
-			configure: func(app *operatorCodeRouteTestApplication, _ uci.ContextRef) {
-				app.metadata = map[string]string{"source": "engram source", "checkout": "working tree", "view": "release candidate"}
-			},
-			wantCalls: operatorCodeRouteTestCalls{project: 1},
+			name:      "contexts",
+			path:      "/api/code/contexts",
+			body:      `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current"}`,
+			configure: func(app *operatorCodeRouteTestApplication, _ uci.ContextRef) {},
+			wantCalls: operatorCodeRouteTestCalls{},
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
 			app := &operatorCodeRouteTestApplication{operatorCodeHTTPTestApplication: fixture.app}
 			adapter = NewOperatorCodeHTTPAdapter(fixture.grants, fixture.binding, fixture.authority, app, fixture.recorder)
+			adapter.contexts = fixture.contexts
 			testCase.configure(app, fixture.ref)
 
 			service := newOperatorCodeRouteTestService(adapter)
@@ -93,7 +92,6 @@ func TestOperatorCodeRoutesDelegateFiveEndpoints(t *testing.T) {
 			require.Equal(t, testCase.wantCalls.search, app.searchCalls)
 			require.Equal(t, testCase.wantCalls.graph, app.graphCalls)
 			require.Equal(t, testCase.wantCalls.read, app.readCalls)
-			require.Equal(t, testCase.wantCalls.project, app.projectCalls)
 			require.Len(t, fixture.recorder.inputs, testCase.wantRecorder)
 		})
 	}
@@ -272,10 +270,9 @@ func TestOperatorCodeRoutes_ExposeLifecycleAndPrePinContexts(t *testing.T) {
 		require.JSONEq(t, `{"state":"TAB_BINDING_READY","tab_binding_id":"60000000-0000-4000-8000-000000000041","document_proof":"proof-handshake","resume_nonce":"resume-handshake","reload_token":"reload-handshake"}`, recorder.Body.String())
 	})
 
-	t.Run("contexts before pin", func(t *testing.T) {
+	t.Run("catalog before pin", func(t *testing.T) {
 		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
 		fixture.binding.pinned = nil
-		fixture.app.metadata = map[string]string{"source": "engram source", "checkout": "working tree", "view": "release candidate"}
 		service := newOperatorCodeRouteTestService(adapter)
 		recorder := httptest.NewRecorder()
 		request := operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current"}`, fixture.identity)
@@ -284,15 +281,14 @@ func TestOperatorCodeRoutes_ExposeLifecycleAndPrePinContexts(t *testing.T) {
 		service.router.ServeHTTP(recorder, request)
 
 		require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-		require.JSONEq(t, `{"context":{"source":"engram source","checkout":"working tree","view":"release candidate"}}`, recorder.Body.String())
-		require.NotContains(t, recorder.Body.String(), operatorCodeHTTPTestBindingID)
-		require.NotContains(t, recorder.Body.String(), fixture.ref.SourceID)
-		require.NotContains(t, recorder.Body.String(), fixture.ref.CheckoutID)
-		require.NotContains(t, recorder.Body.String(), fixture.ref.ViewID)
+		require.Contains(t, recorder.Body.String(), `"contexts":[{`)
+		require.Contains(t, recorder.Body.String(), fixture.ref.SourceID)
+		require.Contains(t, recorder.Body.String(), fixture.ref.CheckoutID)
+		require.Contains(t, recorder.Body.String(), fixture.ref.ViewID)
 	})
 }
 
-func TestOperatorCodeRoutes_BindingLifecyclePinsOnlyServerResolvedCurrentGrant(t *testing.T) {
+func TestOperatorCodeRoutes_BindingLifecyclePinsExactCatalogContext(t *testing.T) {
 	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
 	fixture.binding.pinned = nil
 	fixture.binding.handshake = BrowserBindingTransition{
@@ -309,7 +305,6 @@ func TestOperatorCodeRoutes_BindingLifecyclePinsOnlyServerResolvedCurrentGrant(t
 		ResumeNonce:   "resume-current",
 		ReloadToken:   "reload-rotated",
 	}
-	fixture.app.metadata = map[string]string{"source": "engram source", "checkout": "working tree", "view": "release candidate"}
 	fixture.app.read = operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalExact)
 	service := newOperatorCodeRouteTestService(adapter)
 
@@ -329,14 +324,14 @@ func TestOperatorCodeRoutes_BindingLifecyclePinsOnlyServerResolvedCurrentGrant(t
 
 	contexts := call(http.MethodPost, "/api/code/contexts", `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current"}`)
 	require.Equal(t, http.StatusOK, contexts.Code, contexts.Body.String())
-	require.JSONEq(t, `{"context":{"source":"engram source","checkout":"working tree","view":"release candidate"}}`, contexts.Body.String())
-	require.NotContains(t, contexts.Body.String(), fixture.ref.SourceID)
-	require.NotContains(t, contexts.Body.String(), fixture.ref.CheckoutID)
-	require.NotContains(t, contexts.Body.String(), fixture.ref.ViewID)
+	require.Contains(t, contexts.Body.String(), `"contexts":[{`)
+	require.Contains(t, contexts.Body.String(), fixture.ref.SourceID)
+	require.Contains(t, contexts.Body.String(), fixture.ref.CheckoutID)
+	require.Contains(t, contexts.Body.String(), fixture.ref.ViewID)
 	require.NotContains(t, contexts.Body.String(), "grant_ref")
 	require.NotContains(t, contexts.Body.String(), "digest")
 
-	pinned := call(http.MethodPut, "/api/code/tabs/"+operatorCodeHTTPTestBindingID+"/context", `{"document_proof":"proof-current"}`)
+	pinned := call(http.MethodPut, "/api/code/tabs/"+operatorCodeHTTPTestBindingID+"/context", `{"document_proof":"proof-current","context_ref":`+operatorCodeHTTPTestContextRefJSON+`}`)
 	require.Equal(t, http.StatusNoContent, pinned.Code, pinned.Body.String())
 	require.Empty(t, pinned.Body.String())
 	require.Equal(t, []BrowserBindingContext{browserBindingContext(fixture.ref)}, fixture.binding.pinnedTo)
@@ -366,24 +361,6 @@ func TestOperatorCodeRoutes_CloseDenialsDoNotSelectOrLeak(t *testing.T) {
 		configure func(*operatorCodeHTTPTestFixture)
 	}{
 		{
-			name:   "zero current grant",
-			path:   "/api/code/contexts",
-			method: http.MethodPost,
-			body:   `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current"}`,
-			configure: func(fixture *operatorCodeHTTPTestFixture) {
-				fixture.grants.currentOK = false
-			},
-		},
-		{
-			name:   "multiple current grants",
-			path:   "/api/code/contexts",
-			method: http.MethodPost,
-			body:   `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current"}`,
-			configure: func(fixture *operatorCodeHTTPTestFixture) {
-				fixture.grants.currentOK = false
-			},
-		},
-		{
 			name:   "replayed document proof",
 			path:   "/api/code/contexts",
 			method: http.MethodPost,
@@ -393,24 +370,24 @@ func TestOperatorCodeRoutes_CloseDenialsDoNotSelectOrLeak(t *testing.T) {
 			name:   "path binding mismatch",
 			path:   "/api/code/tabs/60000000-0000-4000-8000-000000000042/context",
 			method: http.MethodPut,
-			body:   `{"document_proof":"proof-current"}`,
+			body:   `{"document_proof":"proof-current","context_ref":` + operatorCodeHTTPTestContextRefJSON + `}`,
 		},
 		{
 			name:   "revoked grant cannot pin",
 			path:   "/api/code/tabs/" + operatorCodeHTTPTestBindingID + "/context",
 			method: http.MethodPut,
-			body:   `{"document_proof":"proof-current"}`,
+			body:   `{"document_proof":"proof-current","context_ref":` + operatorCodeHTTPTestContextRefJSON + `}`,
 			configure: func(fixture *operatorCodeHTTPTestFixture) {
-				fixture.grants.allowed = false
+				fixture.contexts.pinErr = gormstore.ErrBrowserCodeContextDenied
 			},
 		},
 		{
 			name:   "expired grant cannot pin",
 			path:   "/api/code/tabs/" + operatorCodeHTTPTestBindingID + "/context",
 			method: http.MethodPut,
-			body:   `{"document_proof":"proof-current"}`,
+			body:   `{"document_proof":"proof-current","context_ref":` + operatorCodeHTTPTestContextRefJSON + `}`,
 			configure: func(fixture *operatorCodeHTTPTestFixture) {
-				fixture.grants.currentOK = false
+				fixture.contexts.pinErr = gormstore.ErrBrowserCodeContextDenied
 			},
 		},
 	} {
@@ -431,7 +408,6 @@ func TestOperatorCodeRoutes_CloseDenialsDoNotSelectOrLeak(t *testing.T) {
 			require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
 			require.Empty(t, recorder.Body.String())
 			require.Empty(t, fixture.binding.pinnedTo)
-			require.Zero(t, fixture.app.projectCalls)
 			for _, forbidden := range []string{fixture.ref.SourceID, fixture.ref.CheckoutID, fixture.ref.ViewID, "grant_ref", "digest", "proof-current"} {
 				require.NotContains(t, recorder.Body.String(), forbidden)
 			}
@@ -480,7 +456,6 @@ func TestOperatorCodeRoutesRejectForbiddenSelectorsBeforeDelegation(t *testing.T
 	require.Zero(t, app.searchCalls)
 	require.Zero(t, app.graphCalls)
 	require.Zero(t, app.readCalls)
-	require.Zero(t, app.projectCalls)
 	require.Empty(t, fixture.recorder.inputs)
 }
 
@@ -517,57 +492,21 @@ func TestOperatorCodeServerAuthorizerDerivesSourceOwnerScope(t *testing.T) {
 	require.Equal(t, "operator-code/"+operatorCodeHTTPTestBindingID, resolver.input.ClientSessionID)
 }
 
-func TestOperatorCodeServerAuthorizer_ResolvesCurrentGrantWithoutBrowserSelector(t *testing.T) {
-	ref := uci.ContextRef{
-		SourceID:          "20000000-0000-4000-8000-000000000001",
-		CheckoutID:        "30000000-0000-4000-8000-000000000001",
-		ViewID:            "40000000-0000-4000-8000-000000000001",
-		AnalysisProfileID: "50000000-0000-4000-8000-000000000001",
-		Generation:        7,
-	}
-	contexts := &operatorCodeRouteTestContextStore{
-		source:   &gormstore.UCISource{SourceID: ref.SourceID, AuthRealm: "browser-realm"},
-		checkout: &gormstore.UCICheckout{CheckoutID: ref.CheckoutID, SourceID: ref.SourceID, OwnerPrincipal: "browser-user/99"},
-		refs:     []uci.ContextRef{ref},
-	}
-	resolver := &operatorCodeRouteTestResolver{}
-	authorizer := newOperatorCodeServerAuthorizer(contexts, resolver)
-	grant := gormstore.BrowserReadGrant{AuthRealm: "browser-realm", SubjectUserID: 41, SourceID: ref.SourceID, CheckoutID: ref.CheckoutID}
-	caller := operatorCodeBindingCaller{Subject: auth.BrowserSubjectForUser(41), SessionID: "browser-session-41", BindingID: operatorCodeHTTPTestBindingID}
-
-	_, err := authorizer.ResolveCurrentOperatorCode(context.Background(), caller, grant)
-	require.NoError(t, err)
-	require.Equal(t, 1, contexts.contextListCalls)
-	require.NotNil(t, resolver.input.Ref)
-	require.Equal(t, ref, *resolver.input.Ref)
-
-	contexts.refs = []uci.ContextRef{ref, ref}
-	_, err = authorizer.ResolveCurrentOperatorCode(context.Background(), caller, grant)
-	require.Error(t, err)
-}
-
 type operatorCodeRouteTestCalls struct {
-	status  int
-	search  int
-	graph   int
-	read    int
-	project int
+	status int
+	search int
+	graph  int
+	read   int
 }
 
 type operatorCodeRouteTestApplication struct {
 	*operatorCodeHTTPTestApplication
-	statusCalls  int
-	projectCalls int
+	statusCalls int
 }
 
 func (app *operatorCodeRouteTestApplication) CodebaseStatus(ctx context.Context, authorized uci.AuthorizedContext) (mcp.CodebaseStatusSnapshot, error) {
 	app.statusCalls++
 	return app.operatorCodeHTTPTestApplication.CodebaseStatus(ctx, authorized)
-}
-
-func (app *operatorCodeRouteTestApplication) Project(ctx context.Context, ref uci.ContextRef) (map[string]string, error) {
-	app.projectCalls++
-	return app.operatorCodeHTTPTestApplication.Project(ctx, ref)
 }
 
 func newOperatorCodeRouteTestService(adapter *OperatorCodeHTTPAdapter) *Service {
@@ -583,12 +522,10 @@ func newOperatorCodeRouteTestService(adapter *OperatorCodeHTTPAdapter) *Service 
 }
 
 type operatorCodeRouteTestContextStore struct {
-	source           *gormstore.UCISource
-	checkout         *gormstore.UCICheckout
-	sourceCalls      []string
-	checkoutCalls    []string
-	refs             []uci.ContextRef
-	contextListCalls int
+	source        *gormstore.UCISource
+	checkout      *gormstore.UCICheckout
+	sourceCalls   []string
+	checkoutCalls []string
 }
 
 func (store *operatorCodeRouteTestContextStore) GetSource(_ context.Context, sourceID string) (*gormstore.UCISource, error) {
@@ -605,11 +542,6 @@ func (store *operatorCodeRouteTestContextStore) GetCheckout(_ context.Context, c
 		return nil, errors.New("checkout not found")
 	}
 	return store.checkout, nil
-}
-
-func (store *operatorCodeRouteTestContextStore) ListAuthorizedContexts(_ context.Context, _ string, _ string, _ int) ([]uci.ContextRef, error) {
-	store.contextListCalls++
-	return append([]uci.ContextRef(nil), store.refs...), nil
 }
 
 type operatorCodeRouteTestResolver struct {

@@ -239,44 +239,51 @@ func (s *BrowserReadGrantStore) Current(ctx context.Context, subjectUserID int64
 	return grants[0], true, nil
 }
 
-// CanRead returns true only while the exact enabled user grant remains active and unexpired.
-func (s *BrowserReadGrantStore) CanRead(ctx context.Context, subjectUserID int64, sourceID, checkoutID string) (bool, error) {
+// Active returns one exact active grant, including its issuance epoch. Unlike
+// Current, it remains well-defined when the subject holds grants for several
+// checkouts and is therefore the only grant lookup suitable for a pinned tab.
+func (s *BrowserReadGrantStore) Active(ctx context.Context, subjectUserID int64, sourceID, checkoutID string) (BrowserReadGrant, bool, error) {
 	if ctx == nil {
-		return false, fmt.Errorf("browser read grant read: context is required")
+		return BrowserReadGrant{}, false, fmt.Errorf("browser read grant active: context is required")
 	}
 	if err := ctx.Err(); err != nil {
-		return false, err
+		return BrowserReadGrant{}, false, err
 	}
 	if subjectUserID <= 0 || validateUCIUUID("source_id", sourceID) != nil || validateUCIUUID("checkout_id", checkoutID) != nil {
-		return false, nil
+		return BrowserReadGrant{}, false, nil
 	}
-	if err := s.requireDB("read"); err != nil {
-		return false, err
+	if err := s.requireDB("active"); err != nil {
+		return BrowserReadGrant{}, false, err
 	}
 
 	now := time.Now().UTC()
-	var count int64
-	err := s.db.WithContext(ctx).Table("browser_read_grants AS browser_grant").
+	var grant BrowserReadGrant
+	result := s.db.WithContext(ctx).Table("browser_read_grants AS browser_grant").
+		Select("browser_grant.*").
 		Joins("JOIN sources AS source ON source.source_id = browser_grant.source_id AND source.auth_realm = browser_grant.auth_realm").
 		Joins("JOIN ci_checkouts AS checkout ON checkout.checkout_id = browser_grant.checkout_id AND checkout.source_id = browser_grant.source_id").
 		Joins("JOIN users AS subject ON subject.id = browser_grant.subject_user_id").
 		Where("browser_grant.subject_user_id = ? AND browser_grant.source_id = ? AND browser_grant.checkout_id = ?", subjectUserID, sourceID, checkoutID).
 		Where("browser_grant.state = ? AND (browser_grant.expires_at IS NULL OR browser_grant.expires_at > ?) AND subject.disabled = FALSE", BrowserReadGrantActive, now).
-		Count(&count).Error
-	if err != nil {
-		return false, fmt.Errorf("browser read grant read: %w", err)
+		First(&grant)
+	if result.Error == nil {
+		return grant, true, nil
 	}
-	if count == 1 {
-		return true, nil
+	if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return BrowserReadGrant{}, false, fmt.Errorf("browser read grant active: %w", result.Error)
 	}
-
-	// Expiry is durable state rather than an implicit timestamp-only condition.
 	if err := s.db.WithContext(ctx).Model(&BrowserReadGrant{}).
 		Where("subject_user_id = ? AND source_id = ? AND checkout_id = ? AND state = ? AND expires_at IS NOT NULL AND expires_at <= ?", subjectUserID, sourceID, checkoutID, BrowserReadGrantActive, now).
 		Updates(map[string]any{"state": BrowserReadGrantExpired, "updated_at": now}).Error; err != nil {
-		return false, fmt.Errorf("browser read grant expire: %w", err)
+		return BrowserReadGrant{}, false, fmt.Errorf("browser read grant expire: %w", err)
 	}
-	return false, nil
+	return BrowserReadGrant{}, false, nil
+}
+
+// CanRead returns true only while the exact enabled user grant remains active and unexpired.
+func (s *BrowserReadGrantStore) CanRead(ctx context.Context, subjectUserID int64, sourceID, checkoutID string) (bool, error) {
+	_, active, err := s.Active(ctx, subjectUserID, sourceID, checkoutID)
+	return active, err
 }
 
 func (s *BrowserReadGrantStore) expireDue(ctx context.Context, subjectUserID int64, now time.Time) error {

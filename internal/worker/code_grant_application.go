@@ -16,6 +16,7 @@ type codeGrantStore interface {
 	Issue(context.Context, gormdb.BrowserReadGrantIssue) (gormdb.BrowserReadGrant, error)
 	Revoke(context.Context, int64, string, string) (gormdb.BrowserReadGrant, error)
 	CanRead(context.Context, int64, string, string) (bool, error)
+	Active(context.Context, int64, string, string) (gormdb.BrowserReadGrant, bool, error)
 	Current(context.Context, int64) (gormdb.BrowserReadGrant, bool, error)
 }
 
@@ -81,6 +82,19 @@ func (a *CodeGrantApplication) CanRead(ctx context.Context, caller auth.Identity
 		return false, err
 	}
 	return a.grants.CanRead(ctx, subject.UserID, sourceID, checkoutID)
+}
+
+// Active returns the exact current grant and its issuance epoch. It does not
+// select among the caller's other grants.
+func (a *CodeGrantApplication) Active(ctx context.Context, caller auth.Identity, sourceID, checkoutID string) (gormdb.BrowserReadGrant, bool, error) {
+	subject, ok := caller.SessionBrowserSubject()
+	if !ok {
+		return gormdb.BrowserReadGrant{}, false, nil
+	}
+	if err := a.requireStore(); err != nil {
+		return gormdb.BrowserReadGrant{}, false, err
+	}
+	return a.grants.Active(ctx, subject.UserID, sourceID, checkoutID)
 }
 
 // Current returns the subject's only current exact grant. Zero or multiple

@@ -149,6 +149,26 @@ func (application *UCIApplication) SearchCodebase(ctx context.Context, authorize
 	return result.Response, nil
 }
 
+// SearchOperatorCodebase executes a browser-bound lexical query. Its caller
+// supplies a tab-scoped client session and any continuation only after the HTTP
+// boundary has resolved its server-owned cursor; no daemon transport changes.
+func (application *UCIApplication) SearchOperatorCodebase(ctx context.Context, authorized uci.AuthorizedContext, spec uci.QuerySpec) (uci.QueryResponse, error) {
+	if application == nil || application.queryService == nil {
+		return uci.QueryResponse{}, errors.New("UCI application browser query service is not configured")
+	}
+	if spec.Mode != uci.QueryModeFTS || spec.Order != uci.QueryOrderRelevance {
+		return uci.QueryResponse{}, errors.New("UCI application browser query must be lexical relevance")
+	}
+	result, err := application.queryService.Query(ctx, authorized, spec)
+	if err != nil {
+		return uci.QueryResponse{}, err
+	}
+	if err := result.Response.ValidatePreExposure(); err != nil {
+		return uci.QueryResponse{}, fmt.Errorf("UCI application browser search response: %w", err)
+	}
+	return result.Response, nil
+}
+
 // ReadCodebase maps a View-grounded citation directly to the exact persisted
 // source-read service. It does not have a working-copy or disk fallback.
 func (application *UCIApplication) ReadCodebase(ctx context.Context, authorized uci.AuthorizedContext, input mcp.CodebaseReadInput) (uci.QueryResponse, error) {

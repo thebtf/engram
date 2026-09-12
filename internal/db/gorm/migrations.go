@@ -6789,6 +6789,74 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			},
 			Rollback: rollbackUCIIndexIntentDeliveryMigration180,
 		},
+		// Migration 181 stores short-lived server-owned browser search cursors.
+		{
+			ID: "181_browser_code_search_continuations",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`CREATE TABLE IF NOT EXISTS browser_code_search_continuations (
+						cursor_ref UUID PRIMARY KEY,
+						subject_user_id BIGINT NOT NULL,
+						auth_realm TEXT NOT NULL,
+						grant_ref UUID NOT NULL,
+						grant_issued_at TIMESTAMPTZ NOT NULL,
+						tab_binding_id UUID NOT NULL,
+						source_id UUID NOT NULL,
+						checkout_id UUID NOT NULL,
+						view_id UUID NOT NULL,
+						profile_id UUID NOT NULL,
+						generation BIGINT NOT NULL,
+						query_digest TEXT NOT NULL,
+						filter_digest TEXT NOT NULL,
+						page_size INTEGER NOT NULL,
+						service_cursor TEXT NOT NULL,
+						expires_at TIMESTAMPTZ NOT NULL,
+						consumed_at TIMESTAMPTZ,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT browser_code_search_continuations_subject_fkey
+							FOREIGN KEY (subject_user_id) REFERENCES users (id) ON DELETE RESTRICT,
+						CONSTRAINT browser_code_search_continuations_grant_fkey
+							FOREIGN KEY (grant_ref) REFERENCES browser_read_grants (grant_ref) ON DELETE RESTRICT,
+						CONSTRAINT browser_code_search_continuations_binding_fkey
+							FOREIGN KEY (tab_binding_id) REFERENCES browser_tab_bindings (tab_binding_id) ON DELETE CASCADE,
+						CONSTRAINT browser_code_search_continuations_checkout_fkey
+							FOREIGN KEY (source_id, checkout_id) REFERENCES ci_checkouts (source_id, checkout_id) ON DELETE RESTRICT,
+						CONSTRAINT browser_code_search_continuations_auth_realm_chk CHECK (
+							btrim(auth_realm) <> ''
+							AND auth_realm = btrim(auth_realm)
+							AND auth_realm !~ '[[:cntrl:]]'
+							AND octet_length(auth_realm) <= 256
+						),
+						CONSTRAINT browser_code_search_continuations_generation_chk CHECK (generation > 0),
+						CONSTRAINT browser_code_search_continuations_digest_chk CHECK (
+							query_digest ~ '^sha256:[0-9a-f]{64}$'
+							AND filter_digest ~ '^sha256:[0-9a-f]{64}$'
+						),
+						CONSTRAINT browser_code_search_continuations_page_size_chk CHECK (page_size BETWEEN 1 AND 50),
+						CONSTRAINT browser_code_search_continuations_service_cursor_chk CHECK (
+							btrim(service_cursor) <> ''
+							AND service_cursor = btrim(service_cursor)
+							AND service_cursor !~ '[[:cntrl:]]'
+							AND octet_length(service_cursor) <= 2048
+						),
+						CONSTRAINT browser_code_search_continuations_lifecycle_chk CHECK (
+							expires_at > created_at
+							AND (consumed_at IS NULL OR consumed_at >= created_at)
+							AND updated_at >= created_at
+						)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_browser_code_search_continuations_subject_expiry
+						ON browser_code_search_continuations (subject_user_id, expires_at, cursor_ref)`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 181: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackBrowserCodeSearchContinuationsMigration181,
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
@@ -6975,6 +7043,13 @@ func rollbackUCIIndexIntentsMigration179(tx *gorm.DB) error {
 // rollbackUCIIndexIntentDeliveryMigration180 is forward-only: dropping claim
 // receipts or publication links would make accepted daemon work ambiguous.
 func rollbackUCIIndexIntentDeliveryMigration180(tx *gorm.DB) error {
+	return nil
+}
+
+func rollbackBrowserCodeSearchContinuationsMigration181(tx *gorm.DB) error {
+	if err := tx.Exec(`DROP TABLE IF EXISTS browser_code_search_continuations`).Error; err != nil {
+		return fmt.Errorf("migration 181 rollback: %w", err)
+	}
 	return nil
 }
 
