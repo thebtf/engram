@@ -100,6 +100,8 @@ func TestUCITransportContractRequiresScopedAdditions(t *testing.T) {
 
 	for _, spec := range []uciTransportMethodSpec{
 		{name: "BindCodeContext", input: "engram.v1.BindCodeContextRequest", output: "engram.v1.BindCodeContextResponse"},
+		{name: "PollCodeIndexIntents", input: "engram.v1.PollCodeIndexIntentsRequest", output: "engram.v1.PollCodeIndexIntentsResponse"},
+		{name: "UpdateCodeIndexIntent", input: "engram.v1.UpdateCodeIndexIntentRequest", output: "engram.v1.UpdateCodeIndexIntentResponse"},
 		{name: "BeginCodeIndex", input: "engram.v1.BeginCodeIndexRequest", output: "engram.v1.BeginCodeIndexResponse"},
 		{name: "StageCodeIndex", input: "engram.v1.StageCodeIndexFrame", output: "engram.v1.StageCodeIndexResponse", clientStreaming: true},
 		{name: "FinalizeCodeIndex", input: "engram.v1.FinalizeCodeIndexRequest", output: "engram.v1.FinalizeCodeIndexResponse"},
@@ -109,8 +111,8 @@ func TestUCITransportContractRequiresScopedAdditions(t *testing.T) {
 	} {
 		requireUCITransportMethod(t, service, spec)
 	}
-	if methods := service.Methods().Len(); methods != 21 {
-		t.Fatalf("EngramService methods = %d, want 21 legacy-plus-UCI methods", methods)
+	if methods := service.Methods().Len(); methods != 23 {
+		t.Fatalf("EngramService methods = %d, want 23 legacy-plus-UCI methods", methods)
 	}
 
 	file := pb.File_proto_engram_v1_engram_proto
@@ -140,6 +142,50 @@ func TestUCITransportContractRequiresScopedAdditions(t *testing.T) {
 		uciTransportFieldSpec{name: "local_root_id", number: 4, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
 		uciTransportFieldSpec{name: "workstation_id", number: 5, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
 	)
+	requireUCITransportFields(t, file, "CodeIndexIntentTarget",
+		uciTransportFieldSpec{name: "client_session_id", number: 1, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "context_handle", number: 2, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "scope", number: 3, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "engram.v1.CodeIndexScope"},
+		uciTransportFieldSpec{name: "local_root_id", number: 4, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "workstation_id", number: 5, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+	)
+	requireUCITransportFields(t, file, "CodeIndexIntentClaim",
+		uciTransportFieldSpec{name: "intent_ref", number: 1, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "owner_epoch", number: 2, kind: protoreflect.Uint64Kind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "process_nonce", number: 3, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+	)
+	requireUCITransportFields(t, file, "PollCodeIndexIntentsRequest",
+		uciTransportFieldSpec{name: "target", number: 1, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "engram.v1.CodeIndexIntentTarget"},
+		uciTransportFieldSpec{name: "client_instance_id", number: 2, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "process_nonce", number: 3, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+	)
+	requireUCITransportFields(t, file, "CodeIndexIntentOffer",
+		uciTransportFieldSpec{name: "intent_ref", number: 1, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "kind", number: 2, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "previous_context", number: 3, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "engram.v1.ContextRef"},
+		uciTransportFieldSpec{name: "state", number: 4, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "owner_epoch", number: 5, kind: protoreflect.Uint64Kind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "lease_expires_at", number: 6, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "google.protobuf.Timestamp"},
+	)
+	requireUCITransportFields(t, file, "PollCodeIndexIntentsResponse",
+		uciTransportFieldSpec{name: "offer", number: 1, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "engram.v1.CodeIndexIntentOffer"},
+	)
+	requireUCITransportFields(t, file, "UpdateCodeIndexIntentRequest",
+		uciTransportFieldSpec{name: "target", number: 1, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "engram.v1.CodeIndexIntentTarget"},
+		uciTransportFieldSpec{name: "client_instance_id", number: 2, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "process_nonce", number: 3, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "intent_ref", number: 4, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "operation", number: 5, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "operation_ref", number: 6, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "owner_epoch", number: 7, kind: protoreflect.Uint64Kind, cardinality: protoreflect.Optional},
+	)
+	requireUCITransportFields(t, file, "UpdateCodeIndexIntentResponse",
+		uciTransportFieldSpec{name: "intent_ref", number: 1, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "state", number: 2, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "attempt", number: 3, kind: protoreflect.Uint32Kind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "owner_epoch", number: 4, kind: protoreflect.Uint64Kind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "lease_expires_at", number: 5, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "google.protobuf.Timestamp"},
+	)
 	requireUCITransportFields(t, file, "BeginCodeIndexRequest",
 		uciTransportFieldSpec{name: "scope", number: 1, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "engram.v1.CodeIndexScope"},
 		uciTransportFieldSpec{name: "owner_instance", number: 2, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
@@ -147,6 +193,7 @@ func TestUCITransportContractRequiresScopedAdditions(t *testing.T) {
 		uciTransportFieldSpec{name: "expected_parent", number: 4, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "engram.v1.ContextRef"},
 		uciTransportFieldSpec{name: "manifest_mode", number: 5, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
 		uciTransportFieldSpec{name: "job_kind", number: 6, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "intent_claim", number: 7, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "engram.v1.CodeIndexIntentClaim"},
 	)
 	requireUCITransportFields(t, file, "BeginCodeIndexResponse",
 		uciTransportFieldSpec{name: "scope", number: 1, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "engram.v1.CodeIndexScope"},
@@ -161,6 +208,7 @@ func TestUCITransportContractRequiresScopedAdditions(t *testing.T) {
 		uciTransportFieldSpec{name: "sequence", number: 4, kind: protoreflect.Uint64Kind, cardinality: protoreflect.Optional},
 		uciTransportFieldSpec{name: "payload_digest", number: 5, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
 		uciTransportFieldSpec{name: "payload", number: 6, kind: protoreflect.BytesKind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "intent_claim", number: 7, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "engram.v1.CodeIndexIntentClaim"},
 	)
 	requireUCITransportFields(t, file, "StageCodeIndexResponse",
 		uciTransportFieldSpec{name: "build_id", number: 1, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
@@ -189,6 +237,7 @@ func TestUCITransportContractRequiresScopedAdditions(t *testing.T) {
 		uciTransportFieldSpec{name: "object_format", number: 18, kind: protoreflect.StringKind, cardinality: protoreflect.Optional, proto3Optional: true},
 		uciTransportFieldSpec{name: "ref_label", number: 19, kind: protoreflect.StringKind, cardinality: protoreflect.Optional, proto3Optional: true},
 		uciTransportFieldSpec{name: "dirty", number: 20, kind: protoreflect.BoolKind, cardinality: protoreflect.Optional, proto3Optional: true},
+		uciTransportFieldSpec{name: "intent_claim", number: 21, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "engram.v1.CodeIndexIntentClaim"},
 	)
 	requireUCITransportFields(t, file, "FinalizeCodeIndexResponse",
 		uciTransportFieldSpec{name: "published_context", number: 1, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "engram.v1.ContextRef"},
@@ -320,6 +369,21 @@ func TestUCITransportContractDelegatesValidatedRequests(t *testing.T) {
 	if runtime.bindRequest == nil {
 		t.Fatal("BindCodeContext did not delegate")
 	}
+	poll := uciTransportContractPollRequest()
+	if _, err := server.PollCodeIndexIntents(ctx, poll); err != nil {
+		t.Fatalf("PollCodeIndexIntents() error = %v", err)
+	}
+	if runtime.pollRequest != poll {
+		t.Fatal("PollCodeIndexIntents did not delegate the validated request")
+	}
+
+	update := uciTransportContractUpdateRequest()
+	if _, err := server.UpdateCodeIndexIntent(ctx, update); err != nil {
+		t.Fatalf("UpdateCodeIndexIntent() error = %v", err)
+	}
+	if runtime.updateRequest != update {
+		t.Fatal("UpdateCodeIndexIntent did not delegate the validated request")
+	}
 
 	begin := uciTransportContractBeginRequest()
 	if begin.GetExpectedParent() != nil {
@@ -449,6 +513,13 @@ func TestUCITransportContractStagesOnlyValidatedConsistentFrames(t *testing.T) {
 			frames[1].LeaseEpoch++
 			return frames
 		}()},
+		{name: "intent claim changes", frames: func() []*pb.StageCodeIndexFrame {
+			frames := []*pb.StageCodeIndexFrame{uciTransportContractStageFrame(0), uciTransportContractStageFrame(1)}
+			frames[0].IntentClaim = uciTransportContractIntentClaim()
+			frames[1].IntentClaim = uciTransportContractIntentClaim()
+			frames[1].IntentClaim.ProcessNonce = "other-process"
+			return frames
+		}()},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			stream := &uciTransportContractStageStream{ctx: context.Background(), frames: test.frames}
@@ -481,6 +552,10 @@ type uciTransportContractFake struct {
 	calls            int
 	bindRequest      *pb.BindCodeContextRequest
 	bindResponse     *pb.BindCodeContextResponse
+	pollRequest      *pb.PollCodeIndexIntentsRequest
+	pollResponse     *pb.PollCodeIndexIntentsResponse
+	updateRequest    *pb.UpdateCodeIndexIntentRequest
+	updateResponse   *pb.UpdateCodeIndexIntentResponse
 	beginRequest     *pb.BeginCodeIndexRequest
 	beginResponse    *pb.BeginCodeIndexResponse
 	stageFrames      []*pb.StageCodeIndexFrame
@@ -502,6 +577,26 @@ func (fake *uciTransportContractFake) BindCodeContext(_ context.Context, request
 		return fake.bindResponse, nil
 	}
 	return uciTransportContractBindResponse(), nil
+}
+
+func (fake *uciTransportContractFake) PollCodeIndexIntents(_ context.Context, request *pb.PollCodeIndexIntentsRequest) (*pb.PollCodeIndexIntentsResponse, error) {
+	fake.calls++
+	fake.pollRequest = request
+	if fake.pollResponse != nil {
+		return fake.pollResponse, nil
+	}
+	return &pb.PollCodeIndexIntentsResponse{}, nil
+}
+
+func (fake *uciTransportContractFake) UpdateCodeIndexIntent(_ context.Context, request *pb.UpdateCodeIndexIntentRequest) (*pb.UpdateCodeIndexIntentResponse, error) {
+	fake.calls++
+	fake.updateRequest = request
+	if fake.updateResponse != nil {
+		return fake.updateResponse, nil
+	}
+	return &pb.UpdateCodeIndexIntentResponse{
+		IntentRef: request.GetIntentRef(), State: "acknowledged", Attempt: 1, OwnerEpoch: 1, LeaseExpiresAt: timestamppb.Now(),
+	}, nil
 }
 
 func (fake *uciTransportContractFake) BeginCodeIndex(_ context.Context, request *pb.BeginCodeIndexRequest) (*pb.BeginCodeIndexResponse, error) {
@@ -641,6 +736,32 @@ func uciTransportContractBindResponse() *pb.BindCodeContextResponse {
 		IndexScope:    uciTransportContractScope(),
 		LocalRootId:   "local-root-id",
 		WorkstationId: "workstation-id",
+	}
+}
+
+func uciTransportContractIntentTarget() *pb.CodeIndexIntentTarget {
+	return &pb.CodeIndexIntentTarget{
+		ClientSessionId: "client-session", ContextHandle: "context-handle", Scope: uciTransportContractScope(),
+		LocalRootId: "local-root-id", WorkstationId: "workstation-id",
+	}
+}
+
+func uciTransportContractIntentClaim() *pb.CodeIndexIntentClaim {
+	return &pb.CodeIndexIntentClaim{
+		IntentRef: "77777777-7777-4777-8777-777777777777", OwnerEpoch: 1, ProcessNonce: "process-nonce",
+	}
+}
+
+func uciTransportContractPollRequest() *pb.PollCodeIndexIntentsRequest {
+	return &pb.PollCodeIndexIntentsRequest{
+		Target: uciTransportContractIntentTarget(), ClientInstanceId: "daemon-instance", ProcessNonce: "process-nonce",
+	}
+}
+
+func uciTransportContractUpdateRequest() *pb.UpdateCodeIndexIntentRequest {
+	return &pb.UpdateCodeIndexIntentRequest{
+		Target: uciTransportContractIntentTarget(), ClientInstanceId: "daemon-instance", ProcessNonce: "process-nonce",
+		IntentRef: "77777777-7777-4777-8777-777777777777", Operation: "acknowledge", OperationRef: "runtime-delivery/ack",
 	}
 }
 

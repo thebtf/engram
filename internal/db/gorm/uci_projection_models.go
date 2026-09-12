@@ -281,6 +281,7 @@ type UCIJob struct {
 	SealedManifest        *string     `gorm:"column:sealed_manifest;type:jsonb"`
 	FinalizeBindingDigest *string     `gorm:"column:finalize_binding_digest;type:text"`
 	ResultViewID          *string     `gorm:"column:result_view_id;type:uuid"`
+	IndexIntentID         *string     `gorm:"column:index_intent_id;type:uuid"`
 	CreatedAt             time.Time   `gorm:"column:created_at;type:timestamptz;not null"`
 	UpdatedAt             time.Time   `gorm:"column:updated_at;type:timestamptz;not null"`
 }

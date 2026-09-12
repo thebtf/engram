@@ -75,6 +75,14 @@ service EngramService {
   // BindCodeContext resolves a scoped immutable code context for one client session.
   rpc BindCodeContext(BindCodeContextRequest) returns (BindCodeContextResponse);
 
+  // PollCodeIndexIntents discovers one queued browser intent for a freshly
+  // reauthorized daemon-local target. Polling never acknowledges work.
+  rpc PollCodeIndexIntents(PollCodeIndexIntentsRequest) returns (PollCodeIndexIntentsResponse);
+
+  // UpdateCodeIndexIntent applies replay-keyed ACK/START/RENEW/FAIL operations
+  // over the exact authenticated daemon process claim.
+  rpc UpdateCodeIndexIntent(UpdateCodeIndexIntentRequest) returns (UpdateCodeIndexIntentResponse);
+
   // BeginCodeIndex starts a fenced, checkout-scoped index build.
   rpc BeginCodeIndex(BeginCodeIndexRequest) returns (BeginCodeIndexResponse);
 
@@ -889,6 +897,57 @@ message BindCodeContextResponse {
   string workstation_id = 5;
 }
 
+message CodeIndexIntentTarget {
+  string client_session_id = 1;
+  string context_handle = 2;
+  CodeIndexScope scope = 3;
+  string local_root_id = 4;
+  string workstation_id = 5;
+}
+
+message CodeIndexIntentClaim {
+  string intent_ref = 1;
+  uint64 owner_epoch = 2;
+  string process_nonce = 3;
+}
+
+message PollCodeIndexIntentsRequest {
+  CodeIndexIntentTarget target = 1;
+  string client_instance_id = 2;
+  string process_nonce = 3;
+}
+
+message CodeIndexIntentOffer {
+  string intent_ref = 1;
+  string kind = 2;
+  ContextRef previous_context = 3;
+  string state = 4;
+  uint64 owner_epoch = 5;
+  google.protobuf.Timestamp lease_expires_at = 6;
+}
+
+message PollCodeIndexIntentsResponse {
+  CodeIndexIntentOffer offer = 1;
+}
+
+message UpdateCodeIndexIntentRequest {
+  CodeIndexIntentTarget target = 1;
+  string client_instance_id = 2;
+  string process_nonce = 3;
+  string intent_ref = 4;
+  string operation = 5;
+  string operation_ref = 6;
+  uint64 owner_epoch = 7;
+}
+
+message UpdateCodeIndexIntentResponse {
+  string intent_ref = 1;
+  string state = 2;
+  uint32 attempt = 3;
+  uint64 owner_epoch = 4;
+  google.protobuf.Timestamp lease_expires_at = 5;
+}
+
 message BeginCodeIndexRequest {
   CodeIndexScope scope = 1;
   string owner_instance = 2;
@@ -896,6 +955,7 @@ message BeginCodeIndexRequest {
   ContextRef expected_parent = 4;
   string manifest_mode = 5;
   string job_kind = 6;
+  CodeIndexIntentClaim intent_claim = 7;
 }
 
 message BeginCodeIndexResponse {
@@ -912,6 +972,7 @@ message StageCodeIndexFrame {
   uint64 sequence = 4;
   string payload_digest = 5;
   bytes payload = 6;
+  CodeIndexIntentClaim intent_claim = 7;
 }
 
 message StageCodeIndexResponse {
@@ -944,6 +1005,7 @@ message FinalizeCodeIndexRequest {
   optional string object_format = 18;
   optional string ref_label = 19;
   optional bool dirty = 20;
+  CodeIndexIntentClaim intent_claim = 21;
 }
 
 message FinalizeCodeIndexResponse {

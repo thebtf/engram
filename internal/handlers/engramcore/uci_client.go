@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -70,7 +71,8 @@ type ResolvedIndexTarget struct {
 	ContextHandle   string
 	Binding         uci.IndexBinding
 
-	connection *grpc.ClientConn
+	connection  *grpc.ClientConn
+	intentClaim *uci.IndexIntentExecutionClaim
 }
 
 // Clone returns a target with an independently owned server binding.
@@ -92,6 +94,26 @@ func (target ResolvedIndexTarget) ContextClone() *uci.ContextRef {
 	return target.Binding.Clone().Context
 }
 
+// WithIndexIntentClaim attaches one transient daemon execution token without
+// changing the server-authorized target identity.
+func (target ResolvedIndexTarget) WithIndexIntentClaim(claim uci.IndexIntentExecutionClaim) (ResolvedIndexTarget, error) {
+	if claim.Validate() != nil {
+		return ResolvedIndexTarget{}, errUCIClientInvalidRequest
+	}
+	clone := target.Clone()
+	claimCopy := claim
+	clone.intentClaim = &claimCopy
+	return clone, nil
+}
+
+func (target ResolvedIndexTarget) IndexIntentClaim() *uci.IndexIntentExecutionClaim {
+	if target.intentClaim == nil {
+		return nil
+	}
+	claim := *target.intentClaim
+	return &claim
+}
+
 // IndexResult is the prepared indexer's result. Context must be the real,
 // newly published ContextRef from successful server-side finalization; this
 // adapter never synthesizes a parent or View.
@@ -101,6 +123,15 @@ type IndexResult struct {
 	Deleted  int
 	Uploaded int
 	Errors   []string
+}
+
+type IndexIntentOffer struct {
+	IntentID       string
+	Kind           uci.IndexIntentKind
+	PreviousView   uci.ContextRef
+	State          uci.IndexIntentState
+	ClaimEpoch     int64
+	LeaseExpiresAt time.Time
 }
 
 // UCIIndexClient is the narrow transport surface a prepared indexer uses to
@@ -175,9 +206,10 @@ func (m *Module) preparedIndexCollaborator() PreparedIndexCollaborator {
 	return m.preparedIndex
 }
 
-// uciClientRPC is the generated EngramService surface used by the UCI adapter.
 type uciClientRPC interface {
 	BindCodeContext(context.Context, *pb.BindCodeContextRequest, ...grpc.CallOption) (*pb.BindCodeContextResponse, error)
+	PollCodeIndexIntents(context.Context, *pb.PollCodeIndexIntentsRequest, ...grpc.CallOption) (*pb.PollCodeIndexIntentsResponse, error)
+	UpdateCodeIndexIntent(context.Context, *pb.UpdateCodeIndexIntentRequest, ...grpc.CallOption) (*pb.UpdateCodeIndexIntentResponse, error)
 	BeginCodeIndex(context.Context, *pb.BeginCodeIndexRequest, ...grpc.CallOption) (*pb.BeginCodeIndexResponse, error)
 	StageCodeIndex(context.Context, ...grpc.CallOption) (grpc.ClientStreamingClient[pb.StageCodeIndexFrame, pb.StageCodeIndexResponse], error)
 	FinalizeCodeIndex(context.Context, *pb.FinalizeCodeIndexRequest, ...grpc.CallOption) (*pb.FinalizeCodeIndexResponse, error)
@@ -294,6 +326,105 @@ func (a *UCIIndexAdapter) RebindIndexTarget(ctx context.Context, target Resolved
 	rebound := target.Clone()
 	rebound.Binding = binding.Clone()
 	return rebound, nil
+}
+
+func (a *UCIIndexAdapter) PollIndexIntent(ctx context.Context, target ResolvedIndexTarget, clientInstanceID, processNonce string) (*IndexIntentOffer, error) {
+	if err := uciClientContextError("PollIndexIntent", ctx); err != nil {
+		return nil, err
+	}
+	if !validResolvedIndexTarget(target) || !validUCIClientIdentifier(clientInstanceID, maxUCIClientIdentifierBytes) || !validUCIClientIdentifier(processNonce, maxUCIClientIdentifierBytes) {
+		return nil, errUCIClientInvalidRequest
+	}
+	conn, err := a.connectionForResolvedIndexTarget(target)
+	if err != nil {
+		return nil, err
+	}
+	response, err := pb.NewEngramServiceClient(conn).PollCodeIndexIntents(uciClientOutgoingContext(ctx), &pb.PollCodeIndexIntentsRequest{
+		Target: uciClientIntentTarget(target), ClientInstanceId: clientInstanceID, ProcessNonce: processNonce,
+	})
+	if err != nil {
+		return nil, uciClientCallError("PollIndexIntent", err)
+	}
+	if response == nil || response.GetOffer() == nil {
+		return nil, nil
+	}
+	offer := response.GetOffer()
+	previous := uciClientContextRefFromProto(offer.GetPreviousContext())
+	state := uci.IndexIntentState(offer.GetState())
+	if !validUCIClientIdentifier(offer.GetIntentRef(), maxUCIClientIdentifierBytes) ||
+		(offer.GetKind() != string(uci.IndexIntentReindex) && offer.GetKind() != string(uci.IndexIntentReconcile)) ||
+		previous.SourceID != target.Binding.Scope.SourceID || previous.CheckoutID != target.Binding.Scope.CheckoutID || previous.AnalysisProfileID != target.Binding.ProfileID ||
+		(state != uci.IndexIntentQueued && state != uci.IndexIntentAcknowledged && state != uci.IndexIntentRunning) {
+		return nil, errUCIClientInvalidResponse
+	}
+	result := &IndexIntentOffer{IntentID: offer.GetIntentRef(), Kind: uci.IndexIntentKind(offer.GetKind()), PreviousView: previous, State: state, ClaimEpoch: int64(offer.GetOwnerEpoch())}
+	if offer.GetLeaseExpiresAt() != nil {
+		result.LeaseExpiresAt = offer.GetLeaseExpiresAt().AsTime().UTC()
+	}
+	if (state == uci.IndexIntentQueued && (result.ClaimEpoch != 0 || !result.LeaseExpiresAt.IsZero())) || (state != uci.IndexIntentQueued && (result.ClaimEpoch < 1 || result.LeaseExpiresAt.IsZero())) {
+		return nil, errUCIClientInvalidResponse
+	}
+	return result, nil
+}
+
+func (a *UCIIndexAdapter) UpdateIndexIntent(ctx context.Context, target ResolvedIndexTarget, clientInstanceID, processNonce, intentID string, update uci.IndexIntentUpdate) (uci.IndexIntentUpdateResult, error) {
+	if err := uciClientContextError("UpdateIndexIntent", ctx); err != nil {
+		return uci.IndexIntentUpdateResult{}, err
+	}
+	if !validResolvedIndexTarget(target) || !validUCIClientIdentifier(clientInstanceID, maxUCIClientIdentifierBytes) || !validUCIClientIdentifier(processNonce, maxUCIClientIdentifierBytes) || update.Validate() != nil {
+		return uci.IndexIntentUpdateResult{}, errUCIClientInvalidRequest
+	}
+	conn, err := a.connectionForResolvedIndexTarget(target)
+	if err != nil {
+		return uci.IndexIntentUpdateResult{}, err
+	}
+	response, err := pb.NewEngramServiceClient(conn).UpdateCodeIndexIntent(uciClientOutgoingContext(ctx), &pb.UpdateCodeIndexIntentRequest{
+		Target: uciClientIntentTarget(target), ClientInstanceId: clientInstanceID, ProcessNonce: processNonce,
+		IntentRef: intentID, Operation: string(update.Operation), OperationRef: update.OperationRef, OwnerEpoch: uint64(update.ClaimEpoch),
+	})
+	if err != nil {
+		return uci.IndexIntentUpdateResult{}, uciClientCallError("UpdateIndexIntent", err)
+	}
+	result := uci.IndexIntentUpdateResult{
+		IntentID: response.GetIntentRef(), State: uci.IndexIntentState(response.GetState()), Attempt: int(response.GetAttempt()), ClaimEpoch: int64(response.GetOwnerEpoch()),
+	}
+	if response.GetLeaseExpiresAt() != nil {
+		result.LeaseExpiresAt = response.GetLeaseExpiresAt().AsTime().UTC()
+	}
+	if result.IntentID != intentID || result.Validate() != nil {
+		return uci.IndexIntentUpdateResult{}, errUCIClientInvalidResponse
+	}
+	return result, nil
+}
+
+func uciClientIntentTarget(target ResolvedIndexTarget) *pb.CodeIndexIntentTarget {
+	binding := target.BindingClone()
+	return &pb.CodeIndexIntentTarget{
+		ClientSessionId: target.ClientSessionID, ContextHandle: target.ContextHandle,
+		Scope: uciClientProtoScope(binding), LocalRootId: binding.LocalRootID, WorkstationId: binding.WorkstationID,
+	}
+}
+
+func uciClientProtoScope(binding uci.IndexBinding) *pb.CodeIndexScope {
+	return &pb.CodeIndexScope{
+		SourceId: binding.Scope.SourceID, CheckoutId: binding.Scope.CheckoutID,
+		IncarnationId: binding.Scope.IncarnationID, AnalysisProfileId: binding.ProfileID,
+	}
+}
+
+func uciClientContextRefFromProto(reference *pb.ContextRef) uci.ContextRef {
+	if reference == nil {
+		return uci.ContextRef{}
+	}
+	result := uci.ContextRef{
+		SourceID: reference.GetSourceId(), CheckoutID: reference.GetCheckoutId(), ViewID: reference.GetViewId(),
+		Generation: reference.GetGeneration(), AnalysisProfileID: reference.GetAnalysisProfileId(),
+	}
+	if reference.SpaceId != nil {
+		spaceID := reference.GetSpaceId()
+		result.SpaceID = &spaceID
+	}
+	return result
 }
 
 // IndexCodebase executes only prepared UCI index work. Without the injected

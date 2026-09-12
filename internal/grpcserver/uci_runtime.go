@@ -37,19 +37,16 @@ type contextAwareUCIRuntime struct {
 	contexts    *gormstore.UCIContextStore
 	projections uciRuntimeProjectionStore
 	publisher   uci.IndexStore
+	intents     *gormstore.UCIIndexIntentStore
 }
 
-// NewContextAwareUCIRuntime constructs the concrete scoped UCI runtime. Query,
-// Explore, and legacy negotiation intentionally remain unavailable until their
-// respective recorder-owned response boundaries are wired.
-func NewContextAwareUCIRuntime(contexts *gormstore.UCIContextStore, projections *gormstore.UCIProjectionStore, publisher uci.IndexStore) (ContextAwareUCIRuntime, error) {
-	if contexts == nil || projections == nil || publisher == nil {
+// NewContextAwareUCIRuntime constructs the concrete scoped UCI runtime.
+func NewContextAwareUCIRuntime(contexts *gormstore.UCIContextStore, projections *gormstore.UCIProjectionStore, publisher uci.IndexStore, intents *gormstore.UCIIndexIntentStore) (ContextAwareUCIRuntime, error) {
+	if contexts == nil || projections == nil || publisher == nil || intents == nil {
 		return nil, errUCIContextRuntimeUnavailable
 	}
 	return &contextAwareUCIRuntime{
-		contexts:    contexts,
-		projections: projections,
-		publisher:   publisher,
+		contexts: contexts, projections: projections, publisher: publisher, intents: intents,
 	}, nil
 }
 
@@ -69,6 +66,56 @@ func (runtime *contextAwareUCIRuntime) LegacyCodeIndexNegotiate(ctx context.Cont
 		return nil, err
 	}
 	return nil, errUCIContextRuntimeLegacy
+}
+
+func (runtime *contextAwareUCIRuntime) PollCodeIndexIntents(ctx context.Context, caller contextAwareCaller, binding uci.IndexBinding, request *pb.PollCodeIndexIntentsRequest) (*pb.PollCodeIndexIntentsResponse, error) {
+	if err := runtime.require(ctx); err != nil {
+		return nil, err
+	}
+	if request == nil || request.GetTarget() == nil {
+		return nil, errUCIContextRuntimeInvalid
+	}
+	owner := uciRuntimeIntentOwner(caller, request.GetClientInstanceId(), request.GetProcessNonce())
+	intent, err := runtime.intents.PollIndexIntent(ctx, binding, owner)
+	if err != nil {
+		return nil, err
+	}
+	response := &pb.PollCodeIndexIntentsResponse{}
+	if intent == nil {
+		return response, nil
+	}
+	if intent.PreviousView == nil {
+		return nil, errUCIContextRuntimeInvalid
+	}
+	offer := &pb.CodeIndexIntentOffer{
+		IntentRef: intent.ID, Kind: string(intent.Kind), PreviousContext: contextAwareProtoContextRef(*intent.PreviousView), State: string(intent.State),
+	}
+	if intent.Acknowledgement != nil {
+		offer.OwnerEpoch = uint64(intent.Acknowledgement.Epoch)
+		offer.LeaseExpiresAt = timestamppb.New(intent.Acknowledgement.LeaseExpiresAt)
+	}
+	response.Offer = offer
+	return response, nil
+}
+
+func (runtime *contextAwareUCIRuntime) UpdateCodeIndexIntent(ctx context.Context, caller contextAwareCaller, binding uci.IndexBinding, request *pb.UpdateCodeIndexIntentRequest) (*pb.UpdateCodeIndexIntentResponse, error) {
+	if err := runtime.require(ctx); err != nil {
+		return nil, err
+	}
+	if request == nil || request.GetTarget() == nil || request.GetOwnerEpoch() > math.MaxInt64 {
+		return nil, errUCIContextRuntimeInvalid
+	}
+	owner := uciRuntimeIntentOwner(caller, request.GetClientInstanceId(), request.GetProcessNonce())
+	result, err := runtime.intents.UpdateIndexIntent(ctx, binding, owner, request.GetIntentRef(), uci.IndexIntentUpdate{
+		OperationRef: request.GetOperationRef(), Operation: uci.IndexIntentOperation(request.GetOperation()), ClaimEpoch: int64(request.GetOwnerEpoch()),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &pb.UpdateCodeIndexIntentResponse{
+		IntentRef: result.IntentID, State: string(result.State), Attempt: uint32(result.Attempt), OwnerEpoch: uint64(result.ClaimEpoch),
+		LeaseExpiresAt: timestamppb.New(result.LeaseExpiresAt),
+	}, nil
 }
 
 func (runtime *contextAwareUCIRuntime) BeginCodeIndex(ctx context.Context, binding uci.IndexBinding, request *pb.BeginCodeIndexRequest) (*pb.BeginCodeIndexResponse, error) {
@@ -103,13 +150,13 @@ func (runtime *contextAwareUCIRuntime) BeginCodeIndex(ctx context.Context, bindi
 		return nil, err
 	}
 
+	intentClaim, err := runtime.resolveIntentClaim(ctx, binding, caller, request.GetIntentClaim(), true)
+	if err != nil {
+		return nil, err
+	}
 	result, err := runtime.publisher.Begin(ctx, caller, uci.IndexBeginInput{
-		BuildKey:       request.GetBuildKey(),
-		Scope:          binding.Scope,
-		ProfileID:      binding.ProfileID,
-		ExpectedParent: binding.Context,
-		Mode:           mode,
-		JobKind:        kind,
+		BuildKey: request.GetBuildKey(), Scope: binding.Scope, ProfileID: binding.ProfileID,
+		ExpectedParent: binding.Context, Mode: mode, JobKind: kind, IntentClaim: intentClaim,
 	})
 	if err != nil {
 		return nil, err
@@ -155,7 +202,7 @@ func (runtime *contextAwareUCIRuntime) StageCodeIndex(ctx context.Context, bindi
 		}
 		if frame == nil || !contextAwareIndexScopeMatchesBinding(frame.GetScope(), binding) ||
 			frame.GetBuildId() != first.GetBuildId() || frame.GetLeaseEpoch() != first.GetLeaseEpoch() ||
-			frame.GetSequence() != uint64(index) {
+			frame.GetSequence() != uint64(index) || !sameUCIIndexIntentClaim(first.GetIntentClaim(), frame.GetIntentClaim()) {
 			return nil, errUCIContextRuntimeInvalid
 		}
 		payload := frame.GetPayload()
@@ -182,6 +229,10 @@ func (runtime *contextAwareUCIRuntime) StageCodeIndex(ctx context.Context, bindi
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	intentClaim, err := runtime.resolveIntentClaim(ctx, binding, caller, first.GetIntentClaim(), false)
+	if err != nil {
+		return nil, err
+	}
 	parts, err := runtime.projections.AdmitIndexFrames(ctx, binding.Scope.SourceID, binding.ProfileID, admissions)
 	if err != nil {
 		return nil, err
@@ -200,10 +251,7 @@ func (runtime *contextAwareUCIRuntime) StageCodeIndex(ctx context.Context, bindi
 			return nil, fmt.Errorf("uci stage: digest admitted part: %w", err)
 		}
 		ack, err := runtime.publisher.Stage(ctx, caller, uci.IndexStageInput{
-			Build:    build,
-			Sequence: uint32(index),
-			Digest:   partDigest,
-			Part:     part,
+			Build: build, Sequence: uint32(index), Digest: partDigest, Part: part, IntentClaim: intentClaim,
 		})
 		if err != nil {
 			return nil, err
@@ -276,20 +324,17 @@ func (runtime *contextAwareUCIRuntime) FinalizeCodeIndex(ctx context.Context, bi
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	intentClaim, err := runtime.resolveIntentClaim(ctx, binding, caller, request.GetIntentClaim(), true)
+	if err != nil {
+		return nil, err
+	}
 	published, err := runtime.publisher.Finalize(ctx, caller, uci.IndexFinalizeInput{
-		Build:          build,
-		ExpectedParent: uciRuntimeExpectedParent(request.GetExpectedParent()),
+		Build: build, ExpectedParent: uciRuntimeExpectedParent(request.GetExpectedParent()), IntentClaim: intentClaim,
 		Manifest: uci.IndexManifestCompletion{
-			PartCount:      uint32(request.GetManifestPartCount()),
-			PartsDigest:    uci.IndexDigest(request.GetPartsDigest()),
-			EntryCount:     request.GetManifestEntryCount(),
-			ManifestDigest: uci.IndexDigest(request.GetManifestDigest()),
-			EdgeCount:      request.GetEdgeCount(),
-			EdgesDigest:    uci.IndexDigest(request.GetEdgesDigest()),
-			ScanOutcome:    scanOutcome,
-			CensusComplete: request.GetCompleteCensus(),
-			Observation:    observation,
-			Coverage:       coverage,
+			PartCount: uint32(request.GetManifestPartCount()), PartsDigest: uci.IndexDigest(request.GetPartsDigest()),
+			EntryCount: request.GetManifestEntryCount(), ManifestDigest: uci.IndexDigest(request.GetManifestDigest()),
+			EdgeCount: request.GetEdgeCount(), EdgesDigest: uci.IndexDigest(request.GetEdgesDigest()),
+			ScanOutcome: scanOutcome, CensusComplete: request.GetCompleteCensus(), Observation: observation, Coverage: coverage,
 		},
 	})
 	if err != nil {
@@ -330,7 +375,7 @@ func (runtime *contextAwareUCIRuntime) ExploreCode(ctx context.Context, _ uci.Au
 }
 
 func (runtime *contextAwareUCIRuntime) require(ctx context.Context) error {
-	if runtime == nil || runtime.contexts == nil || runtime.projections == nil || runtime.publisher == nil {
+	if runtime == nil || runtime.contexts == nil || runtime.projections == nil || runtime.publisher == nil || runtime.intents == nil {
 		return errUCIContextRuntimeUnavailable
 	}
 	if ctx == nil {
@@ -362,6 +407,31 @@ func (runtime *contextAwareUCIRuntime) loadBuildCaller(ctx context.Context, bind
 		Principal:     caller.principal,
 		OwnerInstance: build.OwnerInstance,
 	}, nil
+}
+
+func uciRuntimeIntentOwner(caller contextAwareCaller, clientInstanceID, processNonce string) uci.IndexIntentOwnerBinding {
+	return uci.IndexIntentOwnerBinding{
+		AuthRealm: caller.authRealm, Principal: caller.principal, WorkstationID: caller.workstationID,
+		ClientSessionID: caller.clientSessionID, ClientInstanceID: clientInstanceID, ProcessNonce: processNonce,
+	}
+}
+
+func (runtime *contextAwareUCIRuntime) resolveIntentClaim(ctx context.Context, binding uci.IndexBinding, caller uci.IndexCaller, wire *pb.CodeIndexIntentClaim, allowCompleted bool) (*uci.IndexIntentClaim, error) {
+	if wire == nil {
+		return nil, nil
+	}
+	if wire.GetOwnerEpoch() == 0 || wire.GetOwnerEpoch() > math.MaxInt64 {
+		return nil, errUCIContextRuntimeInvalid
+	}
+	transportCaller, err := contextAwareCallerFrom(ctx)
+	if err != nil {
+		return nil, err
+	}
+	claim, err := runtime.intents.LoadIndexIntentClaim(ctx, binding, uciRuntimeIntentOwner(transportCaller, caller.OwnerInstance, wire.GetProcessNonce()), wire.GetIntentRef(), int64(wire.GetOwnerEpoch()), allowCompleted)
+	if err != nil {
+		return nil, err
+	}
+	return &claim, nil
 }
 
 func uciRuntimeBuildMatchesRequest(build uci.IndexBuildRef, binding uci.IndexBinding, buildID string, leaseEpoch uint64) bool {

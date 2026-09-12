@@ -2976,6 +2976,15 @@ func (publisher *uciPublisher) Begin(ctx context.Context, caller ucidomain.Index
 			return err
 		}
 		if found {
+			now, err := uciDatabaseClock(ctx, tx)
+			if err != nil {
+				return err
+			}
+			if _, err := validateUCIPublicationIntentClaim(ctx, tx, job, input.IntentClaim, input.Scope, input.ProfileID, now, job.ResultViewID != nil); err != nil {
+				return err
+			}
+		}
+		if found {
 			if !sameUCIPublicationBegin(*job, caller, input, bindingDigest) {
 				return errUCIPublicationIdempotencyMismatch
 			}
@@ -3012,6 +3021,10 @@ func (publisher *uciPublisher) Begin(ctx context.Context, caller ucidomain.Index
 		if err != nil {
 			return err
 		}
+		intentRow, err := validateUCIPublicationIntentClaim(ctx, tx, nil, input.IntentClaim, input.Scope, input.ProfileID, now, false)
+		if err != nil {
+			return err
+		}
 		if checkout.LeaseExpiresAt != nil && checkout.LeaseExpiresAt.After(now) {
 			return errUCIPublicationLeaseStale
 		}
@@ -3034,6 +3047,10 @@ func (publisher *uciPublisher) Begin(ctx context.Context, caller ucidomain.Index
 		manifestMode := string(input.Mode)
 		leaseOwner := caller.OwnerInstance
 		epoch := nextEpoch
+		var intentID *string
+		if input.IntentClaim != nil {
+			intentID = indexIntentString(input.IntentClaim.IntentID)
+		}
 		newJob := UCIJob{
 			JobID:                uuid.NewString(),
 			SourceID:             input.Scope.SourceID,
@@ -3052,11 +3069,19 @@ func (publisher *uciPublisher) Begin(ctx context.Context, caller ucidomain.Index
 			ProfileID:            &profileID,
 			ExpectedParentViewID: expectedParentID,
 			ManifestMode:         &manifestMode,
+			IndexIntentID:        intentID,
 			CreatedAt:            now,
 			UpdatedAt:            now,
 		}
 		if err := tx.WithContext(ctx).Create(&newJob).Error; err != nil {
 			return fmt.Errorf("uci publication create build: %w", err)
+		}
+		if intentRow != nil {
+			intentRow.PublicationBuildID = indexIntentString(newJob.JobID)
+			intentRow.UpdatedAt = now
+			if err := updateIndexIntentRow(ctx, tx, *intentRow, string(ucidomain.IndexIntentRunning), input.IntentClaim); err != nil {
+				return err
+			}
 		}
 		result = ucidomain.IndexBeginResult{
 			Build: ucidomain.IndexBuildRef{
@@ -3108,6 +3133,9 @@ func validUCIPublicationBegin(input ucidomain.IndexBeginInput) bool {
 		return false
 	}
 	if input.JobKind != ucidomain.IndexJobInitial && input.JobKind != ucidomain.IndexJobReconcile && input.JobKind != ucidomain.IndexJobRecovery {
+		return false
+	}
+	if input.IntentClaim != nil && input.IntentClaim.Validate() != nil {
 		return false
 	}
 	return validUCIPublicationParent(input.ExpectedParent, input.Scope, input.ProfileID)
@@ -3196,7 +3224,8 @@ func sameUCIPublicationBegin(job UCIJob, caller ucidomain.IndexCaller, input uci
 		job.IncarnationID != nil && *job.IncarnationID == input.Scope.IncarnationID &&
 		job.ProfileID != nil && *job.ProfileID == input.ProfileID && job.JobKind == string(input.JobKind) &&
 		job.ManifestMode != nil && *job.ManifestMode == string(input.Mode) && job.InputFingerprint == bindingDigest &&
-		sameUCIOptionalString(job.ExpectedParentViewID, uciPublicationParentID(input.ExpectedParent))
+		sameUCIOptionalString(job.ExpectedParentViewID, uciPublicationParentID(input.ExpectedParent)) &&
+		sameUCIOptionalString(job.IndexIntentID, uciPublicationIntentID(input.IntentClaim))
 }
 
 func indexBuildRefFromJob(job UCIJob, scope ucidomain.IndexScope) (ucidomain.IndexBuildRef, error) {
@@ -3290,15 +3319,63 @@ func canonicalUCIPublicationBeginDigest(caller ucidomain.IndexCaller, input ucid
 		ExpectedParent *ucidomain.ContextRef       `json:"expected_parent"`
 		Mode           ucidomain.IndexManifestMode `json:"mode"`
 		JobKind        ucidomain.IndexJobKind      `json:"job_kind"`
+		IntentID       *string                     `json:"intent_id,omitempty"`
+		IntentEpoch    int64                       `json:"intent_epoch,omitempty"`
 	}{
-		Caller:         caller,
-		BuildKey:       input.BuildKey,
-		Scope:          input.Scope,
-		ProfileID:      input.ProfileID,
-		ExpectedParent: input.ExpectedParent,
-		Mode:           input.Mode,
-		JobKind:        input.JobKind,
+		Caller: caller, BuildKey: input.BuildKey, Scope: input.Scope, ProfileID: input.ProfileID,
+		ExpectedParent: input.ExpectedParent, Mode: input.Mode, JobKind: input.JobKind,
+		IntentID: uciPublicationIntentID(input.IntentClaim), IntentEpoch: uciPublicationIntentEpoch(input.IntentClaim),
 	})
+}
+
+func uciPublicationIntentID(claim *ucidomain.IndexIntentClaim) *string {
+	if claim == nil {
+		return nil
+	}
+	return indexIntentString(claim.IntentID)
+}
+
+func uciPublicationIntentEpoch(claim *ucidomain.IndexIntentClaim) int64 {
+	if claim == nil {
+		return 0
+	}
+	return claim.Epoch
+}
+
+func validateUCIPublicationIntentClaim(ctx context.Context, tx *gorm.DB, job *UCIJob, claim *ucidomain.IndexIntentClaim, scope ucidomain.IndexScope, profileID string, now time.Time, allowCompleted bool) (*indexIntentRow, error) {
+	if claim == nil {
+		if job != nil && job.IndexIntentID != nil {
+			return nil, errUCIPublicationRejected
+		}
+		return nil, nil
+	}
+	if claim.Validate() != nil {
+		return nil, errUCIPublicationRejected
+	}
+	row, err := lockIndexIntentRow(ctx, tx, claim.IntentID, false)
+	if err != nil {
+		return nil, errUCIPublicationRejected
+	}
+	if row.SourceID != scope.SourceID || row.CheckoutID != scope.CheckoutID || row.IncarnationID != scope.IncarnationID || row.ProfileID != profileID ||
+		!indexIntentClaimMatches(*row, *claim) {
+		return nil, errUCIPublicationRejected
+	}
+	if job == nil {
+		if row.PublicationBuildID != nil || row.State != string(ucidomain.IndexIntentRunning) || row.ClaimExpiresAt == nil || !row.ClaimExpiresAt.After(now) {
+			return nil, errUCIPublicationLeaseStale
+		}
+		return row, nil
+	}
+	if job.IndexIntentID == nil || *job.IndexIntentID != row.IntentID || row.PublicationBuildID == nil || *row.PublicationBuildID != job.JobID {
+		return nil, errUCIPublicationRejected
+	}
+	if allowCompleted && job.ResultViewID != nil && row.State == string(ucidomain.IndexIntentCompleted) {
+		return row, nil
+	}
+	if row.State != string(ucidomain.IndexIntentRunning) || row.ClaimExpiresAt == nil || !row.ClaimExpiresAt.After(now) {
+		return nil, errUCIPublicationLeaseStale
+	}
+	return row, nil
 }
 
 func canonicalUCIPublicationDigest(kind string, value any) (string, error) {
@@ -3350,6 +3427,14 @@ func (publisher *uciPublisher) Stage(ctx context.Context, caller ucidomain.Index
 		if err != nil {
 			return err
 		}
+		now, err := uciDatabaseClock(ctx, tx)
+		if err != nil {
+			return err
+		}
+		intentRow, err := validateUCIPublicationIntentClaim(ctx, tx, job, input.IntentClaim, input.Build.Scope, *job.ProfileID, now, false)
+		if err != nil {
+			return err
+		}
 		if !matchesUCIPublicationBuild(*job, checkout, caller, input.Build) {
 			return errUCIPublicationRejected
 		}
@@ -3366,10 +3451,6 @@ func (publisher *uciPublisher) Stage(ctx context.Context, caller ucidomain.Index
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("uci publication load staged part: %w", err)
-		}
-		now, err := uciDatabaseClock(ctx, tx)
-		if err != nil {
-			return err
 		}
 		if !activeUCIPublicationLease(*job, checkout, caller, input.Build, now) {
 			return errUCIPublicationLeaseStale
@@ -3392,6 +3473,13 @@ func (publisher *uciPublisher) Stage(ctx context.Context, caller ucidomain.Index
 		}
 		if jobUpdate.RowsAffected != 1 {
 			return errUCIPublicationLeaseStale
+		}
+		if intentRow != nil {
+			intentRow.ClaimExpiresAt = indexIntentTime(leaseExpiry)
+			intentRow.UpdatedAt = now
+			if err := updateIndexIntentRow(ctx, tx, *intentRow, string(ucidomain.IndexIntentRunning), input.IntentClaim); err != nil {
+				return errUCIPublicationLeaseStale
+			}
 		}
 		var partCount int64
 		if err := tx.WithContext(ctx).Model(&UCIIndexBuildPart{}).Where("build_id = ?", input.Build.BuildID).Count(&partCount).Error; err != nil {
@@ -3566,7 +3654,8 @@ func (publisher *uciPublisher) validateArtifactSymbol(ctx context.Context, artif
 
 func (publisher *uciPublisher) Finalize(ctx context.Context, caller ucidomain.IndexCaller, input ucidomain.IndexFinalizeInput) (ucidomain.IndexPublishedView, error) {
 	if publisher == nil || ctx == nil || !validUCIPublicationCaller(caller) || !validUCIPublicationBuild(input.Build) ||
-		!validUCIPublicationManifest(input.Manifest) || !validUCIPublicationParent(input.ExpectedParent, input.Build.Scope, "") {
+		!validUCIPublicationManifest(input.Manifest) || !validUCIPublicationParent(input.ExpectedParent, input.Build.Scope, "") ||
+		(input.IntentClaim != nil && input.IntentClaim.Validate() != nil) {
 		return ucidomain.IndexPublishedView{}, errUCIPublicationRejected
 	}
 	if err := publisher.authorize(ctx, caller, input.Build.Scope); err != nil {
@@ -3583,7 +3672,7 @@ func (publisher *uciPublisher) Finalize(ctx context.Context, caller ucidomain.In
 	).First(&preflight).Error; err != nil {
 		return ucidomain.IndexPublishedView{}, errUCIPublicationRejected
 	}
-	if preflight.ResultViewID != nil {
+	if preflight.ResultViewID != nil && preflight.IndexIntentID == nil {
 		if preflight.FinalizeBindingDigest == nil || *preflight.FinalizeBindingDigest != finalizeDigest {
 			return ucidomain.IndexPublishedView{}, errUCIPublicationIdempotencyMismatch
 		}
@@ -3592,9 +3681,12 @@ func (publisher *uciPublisher) Finalize(ctx context.Context, caller ucidomain.In
 	if preflight.ProfileID == nil || preflight.ManifestMode == nil || !sameUCIOptionalString(preflight.ExpectedParentViewID, uciPublicationParentID(input.ExpectedParent)) {
 		return ucidomain.IndexPublishedView{}, errUCIPublicationRejected
 	}
-	candidate, err := publisher.prepareUCIPublicationCandidate(ctx, preflight, input)
-	if err != nil {
-		return ucidomain.IndexPublishedView{}, err
+	var candidate *uciPublicationCandidate
+	if preflight.ResultViewID == nil {
+		candidate, err = publisher.prepareUCIPublicationCandidate(ctx, preflight, input)
+		if err != nil {
+			return ucidomain.IndexPublishedView{}, err
+		}
 	}
 
 	var published ucidomain.IndexPublishedView
@@ -3604,20 +3696,34 @@ func (publisher *uciPublisher) Finalize(ctx context.Context, caller ucidomain.In
 			return err
 		}
 		job, err := lockUCIPublicationJobByID(ctx, tx, input.Build.BuildID)
+		if err != nil || job.ProfileID == nil {
+			return errUCIPublicationRejected
+		}
+		now, err := uciDatabaseClock(ctx, tx)
 		if err != nil {
 			return err
 		}
-		// A durable result is replayed before evaluating lease freshness so a lost ACK cannot rewind current.
+		intentRow, err := validateUCIPublicationIntentClaim(ctx, tx, job, input.IntentClaim, input.Build.Scope, *job.ProfileID, now, job.ResultViewID != nil)
+		if err != nil {
+			return err
+		}
+		// A durable result is replayed before lease freshness so a lost response
+		// cannot rewind current or allocate a second publication.
 		if job.ResultViewID != nil {
 			if job.FinalizeBindingDigest == nil || *job.FinalizeBindingDigest != finalizeDigest {
 				return errUCIPublicationIdempotencyMismatch
 			}
 			published, err = loadUCIPublishedViewForJob(ctx, tx, *job)
-			return err
+			if err != nil {
+				return err
+			}
+			if intentRow != nil {
+				return completeIndexIntentRowFromPublication(ctx, tx, intentRow, published.Context)
+			}
+			return nil
 		}
 		if !matchesUCIPublicationBuild(*job, checkout, caller, input.Build) ||
-			!sameUCIOptionalString(job.ExpectedParentViewID, uciPublicationParentID(input.ExpectedParent)) ||
-			job.ProfileID == nil {
+			!sameUCIOptionalString(job.ExpectedParentViewID, uciPublicationParentID(input.ExpectedParent)) {
 			return errUCIPublicationRejected
 		}
 		current, err := loadUCICurrentViewForCheckout(ctx, tx, checkout)
@@ -3626,10 +3732,6 @@ func (publisher *uciPublisher) Finalize(ctx context.Context, caller ucidomain.In
 		}
 		if !matchesUCIPublicationParent(input.ExpectedParent, current, input.Build.Scope, *job.ProfileID) {
 			return errUCIPublicationRejected
-		}
-		now, err := uciDatabaseClock(ctx, tx)
-		if err != nil {
-			return err
 		}
 		if !activeUCIPublicationLease(*job, checkout, caller, input.Build, now) {
 			return errUCIPublicationLeaseStale
@@ -3641,27 +3743,22 @@ func (publisher *uciPublisher) Finalize(ctx context.Context, caller ucidomain.In
 			}
 			resultViewID := current.ViewID
 			if err := tx.WithContext(ctx).Model(&UCIJob{}).Where("job_id = ?", job.JobID).Updates(map[string]any{
-				"state":                   UCIJobSucceeded,
-				"result_view_id":          resultViewID,
-				"sealed_manifest":         string(sealedManifest),
-				"finalize_binding_digest": finalizeDigest,
-				"updated_at":              now,
+				"state": UCIJobSucceeded, "result_view_id": resultViewID, "sealed_manifest": string(sealedManifest),
+				"finalize_binding_digest": finalizeDigest, "updated_at": now,
 			}).Error; err != nil {
 				return fmt.Errorf("uci publication store no-op result: %w", err)
 			}
 			if err := tx.WithContext(ctx).Model(&UCICheckout{}).Where("checkout_id = ?", checkout.CheckoutID).Updates(map[string]any{
-				"owner_instance":   nil,
-				"lease_expires_at": nil,
-				"updated_at":       now,
+				"owner_instance": nil, "lease_expires_at": nil, "updated_at": now,
 			}).Error; err != nil {
 				return fmt.Errorf("uci publication release checkout lease: %w", err)
 			}
 			published = ucidomain.IndexPublishedView{
-				BuildID:        job.JobID,
-				Context:        uciContextRefFromView(*current),
-				ManifestDigest: ucidomain.IndexDigest(current.ManifestDigest),
-				AcceptedFSSeq:  current.ObservedFSSeq,
-				PublishedAt:    current.PublishedAt.UTC(),
+				BuildID: job.JobID, Context: uciContextRefFromView(*current), ManifestDigest: ucidomain.IndexDigest(current.ManifestDigest),
+				AcceptedFSSeq: current.ObservedFSSeq, PublishedAt: current.PublishedAt.UTC(),
+			}
+			if intentRow != nil {
+				return completeIndexIntentRowFromPublication(ctx, tx, intentRow, published.Context)
 			}
 			return nil
 		}
@@ -3685,34 +3782,20 @@ func (publisher *uciPublisher) Finalize(ctx context.Context, caller ucidomain.In
 		}
 		publishedAt := now
 		view := UCIView{
-			ViewID:         uuid.NewString(),
-			CheckoutID:     input.Build.Scope.CheckoutID,
-			SourceID:       input.Build.Scope.SourceID,
-			IncarnationID:  input.Build.Scope.IncarnationID,
-			Generation:     nextGeneration,
-			ProfileID:      *job.ProfileID,
-			HeadOID:        input.Manifest.Observation.HeadOID,
-			ObjectFormat:   input.Manifest.Observation.ObjectFormat,
-			RefLabel:       input.Manifest.Observation.RefLabel,
-			Dirty:          input.Manifest.Observation.Dirty,
-			ObservedFSSeq:  input.Manifest.Observation.ObservedFSSeq,
-			ScanStart:      input.Manifest.Observation.ScanStart.UTC(),
-			ScanEnd:        input.Manifest.Observation.ScanEnd.UTC(),
-			ManifestDigest: string(input.Manifest.ManifestDigest),
-			State:          UCIViewPublished,
-			CoverageJSON:   coverageJSON,
-			PublishedAt:    &publishedAt,
-			CreatedAt:      now,
-			UpdatedAt:      now,
+			ViewID: uuid.NewString(), CheckoutID: input.Build.Scope.CheckoutID, SourceID: input.Build.Scope.SourceID,
+			IncarnationID: input.Build.Scope.IncarnationID, Generation: nextGeneration, ProfileID: *job.ProfileID,
+			HeadOID: input.Manifest.Observation.HeadOID, ObjectFormat: input.Manifest.Observation.ObjectFormat,
+			RefLabel: input.Manifest.Observation.RefLabel, Dirty: input.Manifest.Observation.Dirty,
+			ObservedFSSeq: input.Manifest.Observation.ObservedFSSeq, ScanStart: input.Manifest.Observation.ScanStart.UTC(),
+			ScanEnd: input.Manifest.Observation.ScanEnd.UTC(), ManifestDigest: string(input.Manifest.ManifestDigest),
+			State: UCIViewPublished, CoverageJSON: coverageJSON, PublishedAt: &publishedAt,
+			CreatedAt: now, UpdatedAt: now,
 		}
 		if err := tx.WithContext(ctx).Create(&view).Error; err != nil {
 			return fmt.Errorf("uci publication create view: %w", err)
 		}
 		if err := tx.WithContext(ctx).Model(&UCICheckout{}).Where("checkout_id = ?", checkout.CheckoutID).Updates(map[string]any{
-			"current_view_id":  view.ViewID,
-			"owner_instance":   nil,
-			"lease_expires_at": nil,
-			"updated_at":       now,
+			"current_view_id": view.ViewID, "owner_instance": nil, "lease_expires_at": nil, "updated_at": now,
 		}).Error; err != nil {
 			return fmt.Errorf("uci publication switch current pointer: %w", err)
 		}
@@ -3731,8 +3814,7 @@ func (publisher *uciPublisher) Finalize(ctx context.Context, caller ucidomain.In
 		}
 		if current != nil {
 			if err := tx.WithContext(ctx).Model(&UCIView{}).Where("view_id = ?", current.ViewID).Updates(map[string]any{
-				"state":      UCIViewSuperseded,
-				"updated_at": now,
+				"state": UCIViewSuperseded, "updated_at": now,
 			}).Error; err != nil {
 				return fmt.Errorf("uci publication supersede parent: %w", err)
 			}
@@ -3743,20 +3825,17 @@ func (publisher *uciPublisher) Finalize(ctx context.Context, caller ucidomain.In
 		}
 		resultViewID := view.ViewID
 		if err := tx.WithContext(ctx).Model(&UCIJob{}).Where("job_id = ?", job.JobID).Updates(map[string]any{
-			"state":                   UCIJobSucceeded,
-			"result_view_id":          resultViewID,
-			"sealed_manifest":         string(sealedManifest),
-			"finalize_binding_digest": finalizeDigest,
-			"updated_at":              now,
+			"state": UCIJobSucceeded, "result_view_id": resultViewID, "sealed_manifest": string(sealedManifest),
+			"finalize_binding_digest": finalizeDigest, "updated_at": now,
 		}).Error; err != nil {
 			return fmt.Errorf("uci publication store result: %w", err)
 		}
 		published = ucidomain.IndexPublishedView{
-			BuildID:        job.JobID,
-			Context:        uciContextRefFromView(view),
-			ManifestDigest: input.Manifest.ManifestDigest,
-			AcceptedFSSeq:  input.Manifest.Observation.ObservedFSSeq,
-			PublishedAt:    publishedAt,
+			BuildID: job.JobID, Context: uciContextRefFromView(view), ManifestDigest: input.Manifest.ManifestDigest,
+			AcceptedFSSeq: input.Manifest.Observation.ObservedFSSeq, PublishedAt: publishedAt,
+		}
+		if intentRow != nil {
+			return completeIndexIntentRowFromPublication(ctx, tx, intentRow, published.Context)
 		}
 		return nil
 	})
@@ -3981,7 +4060,12 @@ func canonicalUCIPublicationFinalizeDigest(caller ucidomain.IndexCaller, input u
 		Build          ucidomain.IndexBuildRef           `json:"build"`
 		ExpectedParent *ucidomain.ContextRef             `json:"expected_parent"`
 		Manifest       ucidomain.IndexManifestCompletion `json:"manifest"`
-	}{Caller: caller, Build: input.Build, ExpectedParent: input.ExpectedParent, Manifest: input.Manifest})
+		IntentID       *string                           `json:"intent_id,omitempty"`
+		IntentEpoch    int64                             `json:"intent_epoch,omitempty"`
+	}{
+		Caller: caller, Build: input.Build, ExpectedParent: input.ExpectedParent, Manifest: input.Manifest,
+		IntentID: uciPublicationIntentID(input.IntentClaim), IntentEpoch: uciPublicationIntentEpoch(input.IntentClaim),
+	})
 }
 
 func (publisher *uciPublisher) prepareUCIPublicationCandidate(ctx context.Context, job UCIJob, input ucidomain.IndexFinalizeInput) (*uciPublicationCandidate, error) {

@@ -46,7 +46,7 @@ func TestIndexIntentLifecycleTransitions(t *testing.T) {
 	}
 }
 
-func TestIndexIntentResultRequiresNewScopedView(t *testing.T) {
+func TestIndexIntentResultAllowsPublisherProvenSemanticNoOp(t *testing.T) {
 	input, previous := newIndexIntentTestInput()
 	intent := IndexIntent{
 		ID:           uuid.NewString(),
@@ -60,7 +60,7 @@ func TestIndexIntentResultRequiresNewScopedView(t *testing.T) {
 	require.NoError(t, intent.Validate())
 
 	require.ErrorIs(t, ValidateIndexIntentResult(intent, ContextRef{}), ErrIndexIntentResultInvalid)
-	require.ErrorIs(t, ValidateIndexIntentResult(intent, previous), ErrIndexIntentResultInvalid)
+	require.NoError(t, ValidateIndexIntentResult(intent, previous))
 
 	next := previous.Clone()
 	next.ViewID = uuid.NewString()

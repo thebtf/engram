@@ -2,14 +2,18 @@ package uci
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
 )
 
 const (
-	indexIntentMaxRequestRef = 256
-	indexIntentMaxOwner      = 256
+	indexIntentMaxRequestRef   = 256
+	indexIntentMaxOwner        = 256
+	indexIntentMaxProcessNonce = 256
+	indexIntentMaxOperationRef = 256
 )
 
 var (
@@ -17,6 +21,7 @@ var (
 	ErrIndexIntentBindingMismatch   = errors.New("INDEX_INTENT_BINDING_MISMATCH")
 	ErrIndexIntentInvalidTransition = errors.New("INDEX_INTENT_INVALID_TRANSITION")
 	ErrIndexIntentOwnerLost         = errors.New("INDEX_INTENT_OWNER_LOST")
+	ErrIndexIntentLeaseExpired      = errors.New("INDEX_INTENT_LEASE_EXPIRED")
 	ErrIndexIntentRetryUnauthorized = errors.New("INDEX_INTENT_RETRY_UNAUTHORIZED")
 	ErrIndexIntentResultInvalid     = errors.New("INDEX_INTENT_RESULT_INVALID")
 	ErrIndexIntentResultUnreadable  = errors.New("INDEX_INTENT_RESULT_UNREADABLE")
@@ -122,17 +127,27 @@ func (input IndexIntentInput) Validate() error {
 }
 
 // IndexIntentClaim is the owner-fenced acknowledgement required to start, fail,
-// or complete an intent.
+// renew, link, or complete an intent.
 type IndexIntentClaim struct {
 	IntentID       string
 	Owner          string
 	Epoch          int64
 	AcknowledgedAt time.Time
+	LeaseExpiresAt time.Time
 }
 
-// NewIndexIntentClaim validates owner claim metadata before it is persisted.
+// NewIndexIntentClaim retains the original constructor for local callers while
+// using the publication lease policy for the claim lifetime.
 func NewIndexIntentClaim(intentID, owner string, epoch int64, acknowledgedAt time.Time) (IndexIntentClaim, error) {
-	claim := IndexIntentClaim{IntentID: intentID, Owner: owner, Epoch: epoch, AcknowledgedAt: acknowledgedAt.UTC()}
+	return NewLeasedIndexIntentClaim(intentID, owner, epoch, acknowledgedAt, acknowledgedAt.Add(DefaultIndexPublicationLimits().LeaseTTL))
+}
+
+// NewLeasedIndexIntentClaim validates exact persisted claim metadata.
+func NewLeasedIndexIntentClaim(intentID, owner string, epoch int64, acknowledgedAt, leaseExpiresAt time.Time) (IndexIntentClaim, error) {
+	claim := IndexIntentClaim{
+		IntentID: intentID, Owner: owner, Epoch: epoch,
+		AcknowledgedAt: acknowledgedAt.UTC(), LeaseExpiresAt: leaseExpiresAt.UTC(),
+	}
 	if err := claim.Validate(); err != nil {
 		return IndexIntentClaim{}, err
 	}
@@ -141,7 +156,8 @@ func NewIndexIntentClaim(intentID, owner string, epoch int64, acknowledgedAt tim
 
 // Validate checks a complete owner claim.
 func (claim IndexIntentClaim) Validate() error {
-	if !canonicalContextUUID(claim.IntentID) || !validIndexIntentText(claim.Owner, indexIntentMaxOwner) || claim.Epoch < 1 || claim.AcknowledgedAt.IsZero() {
+	if !canonicalContextUUID(claim.IntentID) || !validIndexIntentText(claim.Owner, indexIntentMaxOwner) || claim.Epoch < 1 ||
+		claim.AcknowledgedAt.IsZero() || !claim.LeaseExpiresAt.After(claim.AcknowledgedAt) {
 		return fmt.Errorf("uci index intent: invalid owner claim")
 	}
 	return nil
@@ -150,18 +166,19 @@ func (claim IndexIntentClaim) Validate() error {
 // IndexIntent is the safe durable record. It contains no host, source, or
 // provider details; Views are opaque UCI identities.
 type IndexIntent struct {
-	ID              string
-	RequestRef      string
-	Kind            IndexIntentKind
-	Scope           IndexScope
-	ProfileID       string
-	PreviousView    *ContextRef
-	State           IndexIntentState
-	Attempt         int
-	Acknowledgement *IndexIntentClaim
-	ResultView      *ContextRef
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID                 string
+	RequestRef         string
+	Kind               IndexIntentKind
+	Scope              IndexScope
+	ProfileID          string
+	PreviousView       *ContextRef
+	State              IndexIntentState
+	Attempt            int
+	Acknowledgement    *IndexIntentClaim
+	PublicationBuildID string
+	ResultView         *ContextRef
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // Clone returns an independent durable record.
@@ -215,9 +232,9 @@ func (intent IndexIntent) Validate() error {
 	return nil
 }
 
-// ValidateIndexIntentResult checks that a result is a new View in the intent's
-// exact source, checkout, and profile lineage. Readability is checked separately
-// through IndexIntentReadableView.
+// ValidateIndexIntentResult checks that a result is in the intent's exact
+// source, checkout, profile, and space lineage. A publisher-proven semantic
+// no-op may return the exact previous View; otherwise the result must advance.
 func ValidateIndexIntentResult(intent IndexIntent, result ContextRef) error {
 	if !result.valid() || result.SourceID != intent.Scope.SourceID || result.CheckoutID != intent.Scope.CheckoutID || result.AnalysisProfileID != intent.ProfileID {
 		return ErrIndexIntentResultInvalid
@@ -226,7 +243,13 @@ func ValidateIndexIntentResult(intent IndexIntent, result ContextRef) error {
 	if previous == nil {
 		return nil
 	}
-	if result.ViewID == previous.ViewID || result.Generation <= previous.Generation || !indexIntentSameSpace(result.SpaceID, previous.SpaceID) {
+	if !indexIntentSameSpace(result.SpaceID, previous.SpaceID) {
+		return ErrIndexIntentResultInvalid
+	}
+	if result.ViewID == previous.ViewID && result.Generation == previous.Generation {
+		return nil
+	}
+	if result.ViewID == previous.ViewID || result.Generation <= previous.Generation {
 		return ErrIndexIntentResultInvalid
 	}
 	return nil
@@ -256,6 +279,118 @@ type IndexIntentStore interface {
 	MarkIndexIntentUnavailable(context.Context, string) (IndexIntent, error)
 	RetryIndexIntent(context.Context, string, IndexIntentRetryAuthorizer) (IndexIntent, error)
 	FailIndexIntent(context.Context, IndexIntentClaim) (IndexIntent, error)
+}
+
+// IndexIntentOperation is the closed daemon transition vocabulary.
+type IndexIntentOperation string
+
+const (
+	IndexIntentAcknowledge IndexIntentOperation = "acknowledge"
+	IndexIntentStart       IndexIntentOperation = "start"
+	IndexIntentRenew       IndexIntentOperation = "renew"
+	IndexIntentFail        IndexIntentOperation = "fail"
+)
+
+func (operation IndexIntentOperation) Valid() bool {
+	switch operation {
+	case IndexIntentAcknowledge, IndexIntentStart, IndexIntentRenew, IndexIntentFail:
+		return true
+	default:
+		return false
+	}
+}
+
+// IndexIntentOwnerBinding is the authenticated executor incarnation. OwnerKey
+// returns a non-reversible durable fence; none of these transport facts are
+// persisted individually on the intent.
+type IndexIntentOwnerBinding struct {
+	AuthRealm        string
+	Principal        string
+	WorkstationID    string
+	ClientSessionID  string
+	ClientInstanceID string
+	ProcessNonce     string
+}
+
+func (binding IndexIntentOwnerBinding) OwnerKey() (string, error) {
+	values := []string{binding.AuthRealm, binding.Principal, binding.WorkstationID, binding.ClientSessionID, binding.ClientInstanceID, binding.ProcessNonce}
+	for _, value := range values {
+		if !validIndexIntentText(value, indexIntentMaxOwner) {
+			return "", fmt.Errorf("uci index intent: invalid owner binding")
+		}
+	}
+	if !validIndexIntentText(binding.ProcessNonce, indexIntentMaxProcessNonce) {
+		return "", fmt.Errorf("uci index intent: invalid process nonce")
+	}
+	digest := sha256.New()
+	for _, value := range values {
+		_, _ = digest.Write([]byte{0})
+		_, _ = digest.Write([]byte(value))
+	}
+	return "sha256:" + hex.EncodeToString(digest.Sum(nil)), nil
+}
+
+// IndexIntentUpdate is one replay-keyed daemon transition.
+type IndexIntentUpdate struct {
+	OperationRef string
+	Operation    IndexIntentOperation
+	ClaimEpoch   int64
+}
+
+func (update IndexIntentUpdate) Validate() error {
+	if !validIndexIntentText(update.OperationRef, indexIntentMaxOperationRef) || !update.Operation.Valid() || update.ClaimEpoch < 0 {
+		return fmt.Errorf("uci index intent: invalid update")
+	}
+	if update.Operation == IndexIntentAcknowledge && update.ClaimEpoch != 0 {
+		return fmt.Errorf("uci index intent: acknowledge must not carry an epoch")
+	}
+	if update.Operation != IndexIntentAcknowledge && update.ClaimEpoch < 1 {
+		return fmt.Errorf("uci index intent: claimed update requires an epoch")
+	}
+	return nil
+}
+
+// IndexIntentExecutionClaim is the daemon-held token attached to publication
+// messages. ProcessNonce is never accepted as authority without the current
+// authenticated transport caller.
+type IndexIntentExecutionClaim struct {
+	IntentID       string
+	Epoch          int64
+	ProcessNonce   string
+	LeaseExpiresAt time.Time
+}
+
+func (claim IndexIntentExecutionClaim) Validate() error {
+	if !canonicalContextUUID(claim.IntentID) || claim.Epoch < 1 || !validIndexIntentText(claim.ProcessNonce, indexIntentMaxProcessNonce) || claim.LeaseExpiresAt.IsZero() {
+		return fmt.Errorf("uci index intent: invalid execution claim")
+	}
+	return nil
+}
+
+// IndexIntentUpdateResult is the exact durable receipt replayed for one
+// operation reference.
+type IndexIntentUpdateResult struct {
+	IntentID       string
+	State          IndexIntentState
+	Attempt        int
+	ClaimEpoch     int64
+	LeaseExpiresAt time.Time
+}
+
+func (result IndexIntentUpdateResult) Validate() error {
+	if !canonicalContextUUID(result.IntentID) || !result.State.valid() || result.Attempt < 0 || result.ClaimEpoch < 0 {
+		return fmt.Errorf("uci index intent: invalid update result")
+	}
+	if result.ClaimEpoch == 0 {
+		if !result.LeaseExpiresAt.IsZero() {
+			return fmt.Errorf("uci index intent: unclaimed result has a lease")
+		}
+		return nil
+	}
+	if result.LeaseExpiresAt.IsZero() {
+		return fmt.Errorf("uci index intent: claimed result lacks a lease")
+	}
+	return nil
 }
 
 func cloneIndexIntentContext(value *ContextRef) *ContextRef {

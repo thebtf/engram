@@ -6722,6 +6722,73 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			},
 			Rollback: rollbackUCIIndexIntentsMigration179,
 		},
+		// Migration 180 adds the fenced daemon claim lease, exact update receipts,
+		// and the one-to-one publication build link used for atomic completion.
+		{
+			ID: "180_uci_index_intent_delivery",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`ALTER TABLE uci_index_intents ADD COLUMN IF NOT EXISTS claim_expires_at TIMESTAMPTZ`,
+					`ALTER TABLE uci_index_intents ADD COLUMN IF NOT EXISTS publication_build_id UUID`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS index_intent_id UUID`,
+					`UPDATE uci_index_intents
+					 SET claim_expires_at = GREATEST(updated_at, acknowledged_at) + INTERVAL '1 microsecond'
+					 WHERE acknowledged_owner IS NOT NULL`,
+					`ALTER TABLE uci_index_intents DROP CONSTRAINT IF EXISTS uci_index_intents_acknowledgement_shape_chk`,
+					`ALTER TABLE uci_index_intents ADD CONSTRAINT uci_index_intents_acknowledgement_shape_chk CHECK (
+						(state IN ('acknowledged', 'running', 'completed', 'failed')
+							AND attempt >= 1
+							AND acknowledged_owner IS NOT NULL
+							AND btrim(acknowledged_owner) <> ''
+							AND acknowledged_owner = btrim(acknowledged_owner)
+							AND acknowledged_owner !~ '[[:cntrl:]]'
+							AND octet_length(acknowledged_owner) <= 256
+							AND acknowledged_at IS NOT NULL
+							AND claim_expires_at IS NOT NULL
+							AND claim_expires_at > acknowledged_at
+							AND acknowledged_at >= created_at
+							AND acknowledged_at <= updated_at)
+						OR (state IN ('submitted', 'queued', 'unavailable')
+							AND attempt = 0
+							AND acknowledged_owner IS NULL
+							AND acknowledged_at IS NULL
+							AND claim_expires_at IS NULL)
+					)`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS uci_index_intents_publication_build
+						ON uci_index_intents (publication_build_id) WHERE publication_build_id IS NOT NULL`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS ci_jobs_index_intent
+						ON ci_jobs (index_intent_id) WHERE index_intent_id IS NOT NULL`,
+					`CREATE TABLE IF NOT EXISTS uci_index_intent_receipts (
+						intent_id UUID NOT NULL,
+						operation_ref TEXT NOT NULL,
+						operation TEXT NOT NULL,
+						owner_key TEXT NOT NULL,
+						claim_epoch BIGINT NOT NULL,
+						result_state TEXT NOT NULL,
+						result_attempt INTEGER NOT NULL,
+						lease_expires_at TIMESTAMPTZ,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						PRIMARY KEY (intent_id, operation_ref),
+						CONSTRAINT uci_index_intent_receipts_operation_chk CHECK (operation IN ('acknowledge', 'start', 'renew', 'fail')),
+						CONSTRAINT uci_index_intent_receipts_state_chk CHECK (result_state IN ('acknowledged', 'running', 'completed', 'failed')),
+						CONSTRAINT uci_index_intent_receipts_shape_chk CHECK (
+							btrim(operation_ref) <> '' AND operation_ref = btrim(operation_ref)
+							AND operation_ref !~ '[[:cntrl:]]' AND octet_length(operation_ref) <= 256
+							AND btrim(owner_key) <> '' AND owner_key = btrim(owner_key)
+							AND owner_key !~ '[[:cntrl:]]' AND octet_length(owner_key) <= 256
+							AND claim_epoch >= 1 AND result_attempt >= 1 AND lease_expires_at IS NOT NULL)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_uci_index_intents_delivery
+						ON uci_index_intents (source_id, checkout_id, incarnation_id, profile_id, state, created_at, intent_id)`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 180: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackUCIIndexIntentDeliveryMigration180,
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
@@ -6902,6 +6969,12 @@ func rollbackCollectionSelectionsMigration178(tx *gorm.DB) error {
 // rollbackUCIIndexIntentsMigration179 retains durable index intents and migration history:
 // a binary rollback cannot safely reconstruct accepted work requests or their owner claims.
 func rollbackUCIIndexIntentsMigration179(tx *gorm.DB) error {
+	return nil
+}
+
+// rollbackUCIIndexIntentDeliveryMigration180 is forward-only: dropping claim
+// receipts or publication links would make accepted daemon work ambiguous.
+func rollbackUCIIndexIntentDeliveryMigration180(tx *gorm.DB) error {
 	return nil
 }
 

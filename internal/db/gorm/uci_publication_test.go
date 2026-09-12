@@ -111,6 +111,63 @@ func TestUCIPublishInitialCheckoutAndCoherentCurrent(t *testing.T) {
 	fixture.assertPublicationJobResult(t, build.Build.BuildID, published.Context.ViewID)
 }
 
+func TestUCIPublishIntentCompletesWithPersistedViewAndFinalizerReplay(t *testing.T) {
+	fixture := openUCIPublicationFixture(t)
+	artifact := fixture.admitArtifact(t, fixture.source.SourceID, "intent-publication", "func IntentPublication() {}\n", UCIParseArtifactComplete)
+	memberships := []ucidomain.IndexMembership{uciPublicationPresentMembership("intent.go", artifact)}
+	draft := newUCIPublicationDraft(
+		[]ucidomain.IndexPart{uciPublicationPart([]uciPublicationArtifact{artifact}, memberships, nil, []ucidomain.IndexEdgeReplacement{{SourcePath: "intent.go"}})},
+		memberships,
+		[]ucidomain.IndexEdgeReplacement{{SourcePath: "intent.go"}},
+	)
+	intents := NewUCIIndexIntentStore(fixture.db)
+	input := ucidomain.IndexIntentInput{
+		RequestRef: "publication-intent-" + uuid.NewString(),
+		Kind:       ucidomain.IndexIntentReconcile,
+		Scope: ucidomain.IndexScope{
+			SourceID: fixture.checkout.SourceID, CheckoutID: fixture.checkout.CheckoutID, IncarnationID: fixture.checkout.IncarnationID,
+		},
+		ProfileID: fixture.profile.ProfileID,
+	}
+	submitted, err := intents.SubmitIndexIntent(context.Background(), input)
+	require.NoError(t, err)
+	_, err = intents.QueueIndexIntent(context.Background(), submitted.ID)
+	require.NoError(t, err)
+	claim, err := intents.AcknowledgeIndexIntent(context.Background(), submitted.ID, "intent-publication-owner")
+	require.NoError(t, err)
+	_, err = intents.StartIndexIntent(context.Background(), claim)
+	require.NoError(t, err)
+
+	caller := fixture.caller("intent-publication-owner")
+	beginInput := fixture.beginInput("intent-publication", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	beginInput.IntentClaim = &claim
+	build, err := fixture.publisher.Begin(context.Background(), caller, beginInput)
+	require.NoError(t, err)
+	part := draft.parts[0]
+	digest, err := ucidomain.DigestIndexPart(part)
+	require.NoError(t, err)
+	ack, err := fixture.publisher.Stage(context.Background(), caller, ucidomain.IndexStageInput{
+		Build: build.Build, Sequence: 0, Digest: digest, Part: part, IntentClaim: &claim,
+	})
+	require.NoError(t, err)
+	finalize := ucidomain.IndexFinalizeInput{
+		Build: build.Build, Manifest: fixture.manifest(t, []ucidomain.IndexPartAck{ack}, draft), IntentClaim: &claim,
+	}
+	published, err := fixture.publisher.Finalize(context.Background(), caller, finalize)
+	require.NoError(t, err)
+	completed, err := intents.GetIndexIntent(context.Background(), submitted.ID)
+	require.NoError(t, err)
+	require.Equal(t, ucidomain.IndexIntentCompleted, completed.State)
+	require.Equal(t, published.Context, *completed.ResultView)
+
+	replayed, err := fixture.publisher.Finalize(context.Background(), caller, finalize)
+	require.NoError(t, err)
+	require.Equal(t, published, replayed)
+	completed, err = intents.GetIndexIntent(context.Background(), submitted.ID)
+	require.NoError(t, err)
+	require.Equal(t, published.Context, *completed.ResultView)
+}
+
 func TestUCIPublishStagingInvisibleAndHistoricalIntervals(t *testing.T) {
 	fixture := openUCIPublicationFixture(t)
 	mainV1 := fixture.admitArtifact(t, fixture.source.SourceID, "history-main-v1", "func MainV1() {}\n", UCIParseArtifactComplete)

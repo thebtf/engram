@@ -51,6 +51,8 @@ const (
 // semantics; this boundary only admits bounded, structurally valid requests.
 type UCITransport interface {
 	BindCodeContext(context.Context, *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error)
+	PollCodeIndexIntents(context.Context, *pb.PollCodeIndexIntentsRequest) (*pb.PollCodeIndexIntentsResponse, error)
+	UpdateCodeIndexIntent(context.Context, *pb.UpdateCodeIndexIntentRequest) (*pb.UpdateCodeIndexIntentResponse, error)
 	BeginCodeIndex(context.Context, *pb.BeginCodeIndexRequest) (*pb.BeginCodeIndexResponse, error)
 	StageCodeIndex(context.Context, []*pb.StageCodeIndexFrame) (*pb.StageCodeIndexResponse, error)
 	FinalizeCodeIndex(context.Context, *pb.FinalizeCodeIndexRequest) (*pb.FinalizeCodeIndexResponse, error)
@@ -82,6 +84,48 @@ func (s *Server) BindCodeContext(ctx context.Context, request *pb.BindCodeContex
 		return nil, uciTransportEmptyResponse()
 	}
 	if !validUCIBindCodeContextResponse(request, response) {
+		return nil, uciTransportInvalidResponse()
+	}
+	return response, nil
+}
+
+func (s *Server) PollCodeIndexIntents(ctx context.Context, request *pb.PollCodeIndexIntentsRequest) (*pb.PollCodeIndexIntentsResponse, error) {
+	if err := uciTransportContextError(ctx); err != nil {
+		return nil, err
+	}
+	if !validUCIPollIndexIntentRequest(request) {
+		return nil, uciTransportInvalidArgument()
+	}
+	transport := s.currentUCITransport()
+	if transport == nil {
+		return nil, uciTransportUnavailable()
+	}
+	response, err := transport.PollCodeIndexIntents(ctx, request)
+	if err != nil {
+		return nil, uciTransportHandlerError(ctx, err)
+	}
+	if response == nil || !validUCIPollIndexIntentResponse(response) {
+		return nil, uciTransportInvalidResponse()
+	}
+	return response, nil
+}
+
+func (s *Server) UpdateCodeIndexIntent(ctx context.Context, request *pb.UpdateCodeIndexIntentRequest) (*pb.UpdateCodeIndexIntentResponse, error) {
+	if err := uciTransportContextError(ctx); err != nil {
+		return nil, err
+	}
+	if !validUCIUpdateIndexIntentRequest(request) {
+		return nil, uciTransportInvalidArgument()
+	}
+	transport := s.currentUCITransport()
+	if transport == nil {
+		return nil, uciTransportUnavailable()
+	}
+	response, err := transport.UpdateCodeIndexIntent(ctx, request)
+	if err != nil {
+		return nil, uciTransportHandlerError(ctx, err)
+	}
+	if response == nil || !validUCIUpdateIndexIntentResponse(response) {
 		return nil, uciTransportInvalidResponse()
 	}
 	return response, nil
@@ -275,7 +319,17 @@ func collectUCIStageFrames(ctx context.Context, stream pb.EngramService_StageCod
 func sameUCIStageIdentity(first, next *pb.StageCodeIndexFrame) bool {
 	return sameUCIIndexScope(first.GetScope(), next.GetScope()) &&
 		first.GetBuildId() == next.GetBuildId() &&
-		first.GetLeaseEpoch() == next.GetLeaseEpoch()
+		first.GetLeaseEpoch() == next.GetLeaseEpoch() &&
+		sameUCIIndexIntentClaim(first.GetIntentClaim(), next.GetIntentClaim())
+}
+
+func sameUCIIndexIntentClaim(left, right *pb.CodeIndexIntentClaim) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.GetIntentRef() == right.GetIntentRef() &&
+		left.GetOwnerEpoch() == right.GetOwnerEpoch() &&
+		left.GetProcessNonce() == right.GetProcessNonce()
 }
 
 func sameUCIIndexScope(left, right *pb.CodeIndexScope) bool {
@@ -302,6 +356,54 @@ func contextMatchesUCIIndexScope(reference *pb.ContextRef, scope *pb.CodeIndexSc
 		reference.GetSourceId() == scope.GetSourceId() &&
 		reference.GetCheckoutId() == scope.GetCheckoutId() &&
 		reference.GetAnalysisProfileId() == scope.GetAnalysisProfileId()
+}
+
+func validUCIIndexIntentTarget(target *pb.CodeIndexIntentTarget) bool {
+	return target != nil && validUCIIdentifier(target.GetClientSessionId(), maxUCITransportIdentifierBytes) &&
+		validUCIIdentifier(target.GetContextHandle(), maxUCITransportIdentifierBytes) && validUCIIndexScope(target.GetScope()) &&
+		validUCIIdentifier(target.GetLocalRootId(), maxUCITransportIdentifierBytes) && validUCIIdentifier(target.GetWorkstationId(), maxUCITransportIdentifierBytes)
+}
+
+func validUCIPollIndexIntentRequest(request *pb.PollCodeIndexIntentsRequest) bool {
+	return request != nil && validUCIMessage(request, maxUCITransportBeginBytes) && validUCIIndexIntentTarget(request.GetTarget()) &&
+		validUCIIdentifier(request.GetClientInstanceId(), maxUCITransportIdentifierBytes) && validUCIIdentifier(request.GetProcessNonce(), maxUCITransportIdentifierBytes)
+}
+
+func validUCIPollIndexIntentResponse(response *pb.PollCodeIndexIntentsResponse) bool {
+	if response == nil || !validUCIMessage(response, maxUCITransportResponseBytes) {
+		return false
+	}
+	if response.GetOffer() == nil {
+		return true
+	}
+	offer := response.GetOffer()
+	if !validUCIIdentifier(offer.GetIntentRef(), maxUCITransportIdentifierBytes) ||
+		(offer.GetKind() != string(uci.IndexIntentReindex) && offer.GetKind() != string(uci.IndexIntentReconcile)) || !validUCIContextRef(offer.GetPreviousContext()) {
+		return false
+	}
+	state := uci.IndexIntentState(offer.GetState())
+	if state == uci.IndexIntentQueued {
+		return offer.GetOwnerEpoch() == 0 && offer.GetLeaseExpiresAt() == nil
+	}
+	return (state == uci.IndexIntentAcknowledged || state == uci.IndexIntentRunning) && offer.GetOwnerEpoch() > 0 && validUCILeaseExpiry(offer.GetLeaseExpiresAt())
+}
+
+func validUCIUpdateIndexIntentRequest(request *pb.UpdateCodeIndexIntentRequest) bool {
+	if request == nil || !validUCIMessage(request, maxUCITransportBeginBytes) || !validUCIIndexIntentTarget(request.GetTarget()) ||
+		!validUCIIdentifier(request.GetClientInstanceId(), maxUCITransportIdentifierBytes) || !validUCIIdentifier(request.GetProcessNonce(), maxUCITransportIdentifierBytes) ||
+		!validUCIIdentifier(request.GetIntentRef(), maxUCITransportIdentifierBytes) || !validUCIIdentifier(request.GetOperationRef(), maxUCITransportIdentifierBytes) {
+		return false
+	}
+	operation := uci.IndexIntentOperation(request.GetOperation())
+	return operation.Valid() && ((operation == uci.IndexIntentAcknowledge && request.GetOwnerEpoch() == 0) || (operation != uci.IndexIntentAcknowledge && request.GetOwnerEpoch() > 0))
+}
+
+func validUCIUpdateIndexIntentResponse(response *pb.UpdateCodeIndexIntentResponse) bool {
+	if response == nil || !validUCIMessage(response, maxUCITransportResponseBytes) || !validUCIIdentifier(response.GetIntentRef(), maxUCITransportIdentifierBytes) || response.GetAttempt() == 0 || response.GetOwnerEpoch() == 0 {
+		return false
+	}
+	state := uci.IndexIntentState(response.GetState())
+	return (state == uci.IndexIntentAcknowledged || state == uci.IndexIntentRunning || state == uci.IndexIntentCompleted || state == uci.IndexIntentFailed) && validUCILeaseExpiry(response.GetLeaseExpiresAt())
 }
 
 func validUCIBindCodeContextResponse(request *pb.BindCodeContextRequest, response *pb.BindCodeContextResponse) bool {
@@ -392,7 +494,8 @@ func validateUCIBeginCodeIndexRequest(request *pb.BeginCodeIndexRequest) error {
 		!validUCIIdentifier(request.GetOwnerInstance(), maxUCITransportIdentifierBytes) ||
 		!validUCIIdentifier(request.GetBuildKey(), maxUCITransportIdentifierBytes) ||
 		!validUCIManifestMode(request.GetManifestMode()) ||
-		!validUCIJobKind(request.GetJobKind()) {
+		!validUCIJobKind(request.GetJobKind()) ||
+		!validUCIIndexIntentClaim(request.GetIntentClaim()) {
 		return uciTransportInvalidArgument()
 	}
 	if parent := request.GetExpectedParent(); parent != nil && !validUCIContextRef(parent) {
@@ -416,7 +519,8 @@ func validateUCIFinalizeCodeIndexRequest(request *pb.FinalizeCodeIndexRequest) e
 		!validUCICoverageJSON(request.GetCoverageJson()) ||
 		!validUCITimestamp(request.GetScanStartedAt()) ||
 		!validUCITimestamp(request.GetScanCompletedAt()) ||
-		!validUCIFinalizeObservation(request) {
+		!validUCIFinalizeObservation(request) ||
+		!validUCIIndexIntentClaim(request.GetIntentClaim()) {
 		return uciTransportInvalidArgument()
 	}
 	if request.GetScanCompletedAt().AsTime().Before(request.GetScanStartedAt().AsTime()) {
@@ -478,7 +582,8 @@ func validUCIStageFrame(frame *pb.StageCodeIndexFrame) bool {
 		validUCIIdentifier(frame.GetBuildId(), maxUCITransportIdentifierBytes) &&
 		frame.GetLeaseEpoch() != 0 &&
 		validUCISHA256Digest(frame.GetPayloadDigest()) &&
-		len(frame.GetPayload()) > 0 && len(frame.GetPayload()) <= maxUCITransportPayloadBytes
+		len(frame.GetPayload()) > 0 && len(frame.GetPayload()) <= maxUCITransportPayloadBytes &&
+		validUCIIndexIntentClaim(frame.GetIntentClaim())
 }
 
 func validUCIContextRef(reference *pb.ContextRef) bool {
@@ -500,6 +605,11 @@ func validUCIIndexScope(scope *pb.CodeIndexScope) bool {
 		validUCIUUID(scope.GetCheckoutId()) &&
 		validUCIUUID(scope.GetIncarnationId()) &&
 		validUCIUUID(scope.GetAnalysisProfileId())
+}
+
+func validUCIIndexIntentClaim(claim *pb.CodeIndexIntentClaim) bool {
+	return claim == nil || (validUCIUUID(claim.GetIntentRef()) && claim.GetOwnerEpoch() > 0 &&
+		validUCIIdentifier(claim.GetProcessNonce(), maxUCITransportIdentifierBytes))
 }
 
 func validUCIObjectFormat(value string) bool {

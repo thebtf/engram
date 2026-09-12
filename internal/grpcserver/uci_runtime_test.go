@@ -138,26 +138,32 @@ func TestContextAwareUCIRuntimeCompositionRequiresAllStoreHandles(t *testing.T) 
 	contexts := &gormstore.UCIContextStore{}
 	projections := &gormstore.UCIProjectionStore{}
 	publisher := &uciRuntimePublisherFake{}
+	intents := gormstore.NewUCIIndexIntentStore(nil)
 
-	for name, configure := range map[string]func(**gormstore.UCIContextStore, **gormstore.UCIProjectionStore, *uci.IndexStore){
-		"complete": func(_ **gormstore.UCIContextStore, _ **gormstore.UCIProjectionStore, _ *uci.IndexStore) {},
-		"missing context catalog": func(contexts **gormstore.UCIContextStore, _ **gormstore.UCIProjectionStore, _ *uci.IndexStore) {
+	for name, configure := range map[string]func(**gormstore.UCIContextStore, **gormstore.UCIProjectionStore, *uci.IndexStore, **gormstore.UCIIndexIntentStore){
+		"complete": func(_ **gormstore.UCIContextStore, _ **gormstore.UCIProjectionStore, _ *uci.IndexStore, _ **gormstore.UCIIndexIntentStore) {
+		},
+		"missing context catalog": func(contexts **gormstore.UCIContextStore, _ **gormstore.UCIProjectionStore, _ *uci.IndexStore, _ **gormstore.UCIIndexIntentStore) {
 			*contexts = nil
 		},
-		"missing projection store": func(_ **gormstore.UCIContextStore, projections **gormstore.UCIProjectionStore, _ *uci.IndexStore) {
+		"missing projection store": func(_ **gormstore.UCIContextStore, projections **gormstore.UCIProjectionStore, _ *uci.IndexStore, _ **gormstore.UCIIndexIntentStore) {
 			*projections = nil
 		},
-		"missing publication store": func(_ **gormstore.UCIContextStore, _ **gormstore.UCIProjectionStore, publisher *uci.IndexStore) {
+		"missing publication store": func(_ **gormstore.UCIContextStore, _ **gormstore.UCIProjectionStore, publisher *uci.IndexStore, _ **gormstore.UCIIndexIntentStore) {
 			*publisher = nil
+		},
+		"missing intent store": func(_ **gormstore.UCIContextStore, _ **gormstore.UCIProjectionStore, _ *uci.IndexStore, intents **gormstore.UCIIndexIntentStore) {
+			*intents = nil
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			configuredContexts := contexts
 			configuredProjections := projections
+			configuredIntents := intents
 			var configuredPublisher uci.IndexStore = publisher
-			configure(&configuredContexts, &configuredProjections, &configuredPublisher)
+			configure(&configuredContexts, &configuredProjections, &configuredPublisher, &configuredIntents)
 
-			runtime, err := NewContextAwareUCIRuntime(configuredContexts, configuredProjections, configuredPublisher)
+			runtime, err := NewContextAwareUCIRuntime(configuredContexts, configuredProjections, configuredPublisher, configuredIntents)
 			if name == "complete" {
 				require.NoError(t, err)
 				require.IsType(t, &contextAwareUCIRuntime{}, runtime)
@@ -535,6 +541,7 @@ func uciRuntimeTestRuntime(projection uciRuntimeProjectionStore, publisher uci.I
 		contexts:    &gormstore.UCIContextStore{},
 		projections: projection,
 		publisher:   publisher,
+		intents:     gormstore.NewUCIIndexIntentStore(nil),
 	}
 }
 

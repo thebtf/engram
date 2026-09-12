@@ -21,10 +21,11 @@ const (
 	legacyCodeIndexAliasScheme = "project_id"
 )
 
-// ContextAwareUCIRuntime is the scoped UCI runtime used after context resolution.
 type ContextAwareUCIRuntime interface {
 	uci.IndexBindingCatalog
 	LegacyCodeIndexNegotiate(context.Context, uci.AuthorizedContext, *pb.CodeIndexNegotiateRequest) (*pb.CodeIndexNegotiateResponse, error)
+	PollCodeIndexIntents(context.Context, contextAwareCaller, uci.IndexBinding, *pb.PollCodeIndexIntentsRequest) (*pb.PollCodeIndexIntentsResponse, error)
+	UpdateCodeIndexIntent(context.Context, contextAwareCaller, uci.IndexBinding, *pb.UpdateCodeIndexIntentRequest) (*pb.UpdateCodeIndexIntentResponse, error)
 	BeginCodeIndex(context.Context, uci.IndexBinding, *pb.BeginCodeIndexRequest) (*pb.BeginCodeIndexResponse, error)
 	StageCodeIndex(context.Context, uci.IndexBinding, []*pb.StageCodeIndexFrame) (*pb.StageCodeIndexResponse, error)
 	FinalizeCodeIndex(context.Context, uci.IndexBinding, *pb.FinalizeCodeIndexRequest) (*pb.FinalizeCodeIndexResponse, error)
@@ -165,6 +166,30 @@ func (transport *contextAwareUCITransport) bindAuthorizedCodeContext(ctx context
 		return nil, err
 	}
 	return contextAwareBindCodeContextResponse(handle, binding), nil
+}
+
+func (transport *contextAwareUCITransport) PollCodeIndexIntents(ctx context.Context, request *pb.PollCodeIndexIntentsRequest) (*pb.PollCodeIndexIntentsResponse, error) {
+	caller, binding, err := transport.authorizeIndexIntentTarget(ctx, request.GetTarget())
+	if err != nil {
+		return nil, err
+	}
+	runtime, err := transport.contextAwareRuntime()
+	if err != nil {
+		return nil, err
+	}
+	return runtime.PollCodeIndexIntents(ctx, caller, binding, proto.Clone(request).(*pb.PollCodeIndexIntentsRequest))
+}
+
+func (transport *contextAwareUCITransport) UpdateCodeIndexIntent(ctx context.Context, request *pb.UpdateCodeIndexIntentRequest) (*pb.UpdateCodeIndexIntentResponse, error) {
+	caller, binding, err := transport.authorizeIndexIntentTarget(ctx, request.GetTarget())
+	if err != nil {
+		return nil, err
+	}
+	runtime, err := transport.contextAwareRuntime()
+	if err != nil {
+		return nil, err
+	}
+	return runtime.UpdateCodeIndexIntent(ctx, caller, binding, proto.Clone(request).(*pb.UpdateCodeIndexIntentRequest))
 }
 
 func (transport *contextAwareUCITransport) BeginCodeIndex(ctx context.Context, request *pb.BeginCodeIndexRequest) (*pb.BeginCodeIndexResponse, error) {
@@ -512,6 +537,32 @@ func (transport *contextAwareUCITransport) authorizeCodeIndexScope(ctx context.C
 		return uci.IndexBinding{}, contextAwareClosedError(uci.ContextMismatch)
 	}
 	return binding, nil
+}
+
+func (transport *contextAwareUCITransport) authorizeIndexIntentTarget(ctx context.Context, target *pb.CodeIndexIntentTarget) (contextAwareCaller, uci.IndexBinding, error) {
+	caller, err := contextAwareCallerFrom(ctx)
+	if err != nil {
+		return contextAwareCaller{}, uci.IndexBinding{}, err
+	}
+	if target == nil || target.GetClientSessionId() != caller.clientSessionID || target.GetWorkstationId() != caller.workstationID {
+		return contextAwareCaller{}, uci.IndexBinding{}, contextAwareClosedError(uci.ContextMismatch)
+	}
+	port, err := transport.contextAwareHandlePort()
+	if err != nil {
+		return contextAwareCaller{}, uci.IndexBinding{}, err
+	}
+	binding, err := port.AuthorizeCodeContextHandle(contextAwarePortContext(ctx, caller), caller.clientSessionID, target.GetContextHandle())
+	if err != nil {
+		return contextAwareCaller{}, uci.IndexBinding{}, contextAwareRuntimeError(ctx, err)
+	}
+	binding, err = contextAwareValidatedIndexBinding(ctx, binding)
+	if err != nil {
+		return contextAwareCaller{}, uci.IndexBinding{}, err
+	}
+	if !contextAwareIndexScopeMatchesBinding(target.GetScope(), binding) || target.GetLocalRootId() != binding.LocalRootID || target.GetWorkstationId() != binding.WorkstationID {
+		return contextAwareCaller{}, uci.IndexBinding{}, contextAwareClosedError(uci.ContextMismatch)
+	}
+	return caller, binding, nil
 }
 
 func contextAwareValidatedIndexBinding(ctx context.Context, binding uci.IndexBinding) (uci.IndexBinding, error) {

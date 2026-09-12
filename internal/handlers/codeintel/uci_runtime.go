@@ -674,6 +674,22 @@ func (runtimeState *uciRuntime) watcherIndexSnapshot(source uciRuntimeWatcherCha
 	return uciRuntimeIndexSnapshot{target: authorized.target.Clone(), rootPath: authorized.rootPath}, true
 }
 
+func (runtimeState *uciRuntime) indexIntentTargets() []uciRuntimeIndexSnapshot {
+	if runtimeState == nil {
+		return nil
+	}
+	runtimeState.stateMu.RLock()
+	defer runtimeState.stateMu.RUnlock()
+	if !runtimeState.started || runtimeState.closed {
+		return nil
+	}
+	targets := make([]uciRuntimeIndexSnapshot, 0, len(runtimeState.authorizedTarget))
+	for _, authorized := range runtimeState.authorizedTarget {
+		targets = append(targets, uciRuntimeIndexSnapshot{target: authorized.target.Clone(), rootPath: authorized.rootPath})
+	}
+	return targets
+}
+
 func (runtimeState *uciRuntime) updateReboundTarget(target engramcore.ResolvedIndexTarget) error {
 	if runtimeState == nil {
 		return errors.New("uci runtime: unavailable")

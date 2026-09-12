@@ -12,7 +12,10 @@ import (
 	gormlib "gorm.io/gorm"
 )
 
-const uciIndexIntentMigrationID = "179_uci_index_intents"
+const (
+	uciIndexIntentMigrationID         = "179_uci_index_intents"
+	uciIndexIntentDeliveryMigrationID = "180_uci_index_intent_delivery"
+)
 
 type uciIndexIntentMigrationColumn struct {
 	Name     string `gorm:"column:column_name"`
@@ -25,12 +28,13 @@ type uciIndexIntentMigrationConstraint struct {
 	Definition string `gorm:"column:definition"`
 }
 
-// TestUCIIndexIntentMigration179FreshSchemaAndStoreLifecycle proves migration
-// 179 owns the durable intent schema and preserves the T033 store lifecycle.
+// TestUCIIndexIntentMigration179FreshSchemaAndStoreLifecycle proves migrations
+// 179 and 180 own the durable intent schema and preserve the store lifecycle.
 func TestUCIIndexIntentMigration179FreshSchemaAndStoreLifecycle(t *testing.T) {
 	fixture := openUCIProjectionMigrationFixture(t)
 	db := fixture.db
 	assertUCIIndexIntentMigrationApplied(t, db, 1)
+	assertUCIIndexIntentDeliveryMigrationApplied(t, db, 1)
 	assertUCIIndexIntentMigrationSchema(t, db)
 	assertUCIIndexIntentMigrationConstraintFailures(t, fixture)
 
@@ -63,8 +67,8 @@ func TestUCIIndexIntentMigration179FreshSchemaAndStoreLifecycle(t *testing.T) {
 	require.Equal(t, result, *completed.ResultView)
 }
 
-// TestUCIIndexIntentMigration179UpgradeRollbackAndReplay proves migration 179
-// upgrades the migration-178 boundary additively and retains durable intents.
+// TestUCIIndexIntentMigration179UpgradeRollbackAndReplay proves migrations 179
+// and 180 upgrade the migration-178 boundary additively and retain durable intents.
 func TestUCIIndexIntentMigration179UpgradeRollbackAndReplay(t *testing.T) {
 	fixture := openUCIProjectionMigrationFixture(t)
 	db := fixture.db
@@ -81,16 +85,20 @@ func TestUCIIndexIntentMigration179UpgradeRollbackAndReplay(t *testing.T) {
 	require.NoError(t, db.Where("checkout_id = ?", fixture.checkout.CheckoutID).First(&checkoutBefore).Error)
 	var viewBefore UCIView
 	require.NoError(t, db.Where("view_id = ?", fixture.view.ViewID).First(&viewBefore).Error)
-	require.NoError(t, db.Exec("DELETE FROM migrations WHERE id = ?", uciIndexIntentMigrationID).Error)
+	require.NoError(t, db.Exec("DELETE FROM migrations WHERE id IN ?", []string{uciIndexIntentMigrationID, uciIndexIntentDeliveryMigrationID}).Error)
+	require.NoError(t, db.Exec("DROP TABLE uci_index_intent_receipts").Error)
 	require.NoError(t, db.Exec("DROP TABLE uci_index_intents").Error)
+	require.NoError(t, db.Exec("ALTER TABLE ci_jobs DROP COLUMN index_intent_id").Error)
 	assertUCIIndexIntentMigrationApplied(t, db, 0)
+	assertUCIIndexIntentDeliveryMigrationApplied(t, db, 0)
 	var prerequisite int64
 	require.NoError(t, db.Table("migrations").Where("id = ?", "178_collection_selections").Count(&prerequisite).Error)
 	require.Equal(t, int64(1), prerequisite, "upgrade fixture must retain migration 178")
 	assertUCIIndexIntentMigrationTableAbsent(t, db)
 
-	require.NoError(t, runMigrations(db), "a chain upgraded from migration 178 must register index intents")
+	require.NoError(t, runMigrations(db), "a chain upgraded from migration 178 must register index intent delivery")
 	assertUCIIndexIntentMigrationApplied(t, db, 1)
+	assertUCIIndexIntentDeliveryMigrationApplied(t, db, 1)
 	assertUCIIndexIntentMigrationSchema(t, db)
 	var retainedAudit AuditLogEntry
 	require.NoError(t, db.Where("id = ?", legacyAudit.ID).First(&retainedAudit).Error)
@@ -130,6 +138,39 @@ func TestUCIIndexIntentMigration179UpgradeRollbackAndReplay(t *testing.T) {
 	require.Equal(t, saved.ID, replayed.ID)
 }
 
+func TestUCIIndexIntentMigration180BackfillsLegacyClaimsAsExpired(t *testing.T) {
+	fixture := openUCIProjectionMigrationFixture(t)
+	db := fixture.db
+	legacy := newUCIIndexIntentMigrationRow(fixture)
+	acknowledgedAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	legacy.CreatedAt = acknowledgedAt.Add(-time.Minute)
+	legacy.UpdatedAt = acknowledgedAt
+	legacy.State = string(ucidomain.IndexIntentAcknowledged)
+	legacy.Attempt = 1
+	legacy.AcknowledgedOwner = indexIntentString("legacy-index-owner")
+	legacy.AcknowledgementEpoch = 1
+	legacy.AcknowledgedAt = indexIntentTime(acknowledgedAt)
+	legacy.ClaimExpiresAt = indexIntentTime(acknowledgedAt.Add(time.Minute))
+	require.NoError(t, db.Create(&legacy).Error)
+
+	require.NoError(t, db.Exec("DELETE FROM migrations WHERE id = ?", uciIndexIntentDeliveryMigrationID).Error)
+	require.NoError(t, db.Exec("DROP TABLE uci_index_intent_receipts").Error)
+	require.NoError(t, db.Exec("ALTER TABLE uci_index_intents DROP CONSTRAINT uci_index_intents_acknowledgement_shape_chk").Error)
+	require.NoError(t, db.Exec("ALTER TABLE uci_index_intents DROP COLUMN claim_expires_at").Error)
+	require.NoError(t, db.Exec("ALTER TABLE uci_index_intents DROP COLUMN publication_build_id").Error)
+	require.NoError(t, db.Exec("ALTER TABLE ci_jobs DROP COLUMN index_intent_id").Error)
+	assertUCIIndexIntentDeliveryMigrationApplied(t, db, 0)
+
+	require.NoError(t, runMigrations(db), "migration 180 must upgrade pre-delivery acknowledged records")
+	assertUCIIndexIntentDeliveryMigrationApplied(t, db, 1)
+	var restored indexIntentRow
+	require.NoError(t, db.Where("intent_id = ?", legacy.IntentID).First(&restored).Error)
+	require.NotNil(t, restored.AcknowledgedAt)
+	require.NotNil(t, restored.ClaimExpiresAt)
+	require.True(t, restored.ClaimExpiresAt.After(*restored.AcknowledgedAt), "backfill must satisfy the fenced claim shape without granting a fresh lease")
+	require.True(t, restored.ClaimExpiresAt.Before(time.Now().UTC()), "legacy backfill must not grant a new execution lease")
+}
+
 func assertUCIIndexIntentMigrationSchema(t *testing.T, db *gormlib.DB) {
 	t.Helper()
 	columns := uciIndexIntentMigrationColumns(t, db)
@@ -149,6 +190,8 @@ func assertUCIIndexIntentMigrationSchema(t *testing.T, db *gormlib.DB) {
 		"acknowledged_owner":    {DataType: "text", Nullable: "YES"},
 		"acknowledgement_epoch": {DataType: "bigint", Nullable: "NO"},
 		"acknowledged_at":       {DataType: "timestamp with time zone", Nullable: "YES"},
+		"claim_expires_at":      {DataType: "timestamp with time zone", Nullable: "YES"},
+		"publication_build_id":  {DataType: "uuid", Nullable: "YES"},
 		"result_space_id":       {DataType: "uuid", Nullable: "YES"},
 		"result_view_id":        {DataType: "uuid", Nullable: "YES"},
 		"result_generation":     {DataType: "bigint", Nullable: "YES"},
@@ -163,7 +206,7 @@ func assertUCIIndexIntentMigrationSchema(t *testing.T, db *gormlib.DB) {
 	for name := range columns {
 		actualNames[name] = struct{}{}
 	}
-	require.Equal(t, expectedNames, actualNames, "migration 179 must persist exactly the T033 durable intent row")
+	require.Equal(t, expectedNames, actualNames, "migrations 179 and 180 must persist exactly the durable intent row")
 	for name, want := range expected {
 		actual := columns[name]
 		require.Equalf(t, want.DataType, actual.DataType, "uci_index_intents.%s type", name)
@@ -172,15 +215,17 @@ func assertUCIIndexIntentMigrationSchema(t *testing.T, db *gormlib.DB) {
 	for _, forbidden := range []string{
 		"host", "path", "secret", "credential", "environment", "source_body", "provider", "transport", "job_lease",
 	} {
-		require.NotContainsf(t, columns, forbidden, "migration 179 must not persist %q", forbidden)
+		require.NotContainsf(t, columns, forbidden, "durable intent migrations must not persist %q", forbidden)
 	}
+	require.True(t, db.Migrator().HasTable(&indexIntentReceiptRow{}), "migration 180 must persist exact update receipts")
+	require.True(t, db.Migrator().HasColumn(&UCIJob{}, "index_intent_id"), "migration 180 must link publication builds")
 
 	assertUCIIndexIntentMigrationConstraint(t, db, "uci_index_intents_request_ref_chk", "btrim(request_ref)", "octet_length(request_ref) <= 256")
 	assertUCIIndexIntentMigrationConstraint(t, db, "uci_index_intents_kind_chk", "reindex", "reconcile")
 	assertUCIIndexIntentMigrationConstraint(t, db, "uci_index_intents_previous_view_shape_chk", "previous_view_id", "previous_generation")
 	assertUCIIndexIntentMigrationConstraint(t, db, "uci_index_intents_state_chk", "submitted", "queued", "acknowledged", "running", "completed", "unavailable", "failed")
 	assertUCIIndexIntentMigrationConstraint(t, db, "uci_index_intents_attempt_epoch_chk", "attempt >= 0", "acknowledgement_epoch = attempt")
-	assertUCIIndexIntentMigrationConstraint(t, db, "uci_index_intents_acknowledgement_shape_chk", "acknowledged_owner", "octet_length(acknowledged_owner) <= 256", "acknowledged_at")
+	assertUCIIndexIntentMigrationConstraint(t, db, "uci_index_intents_acknowledgement_shape_chk", "acknowledged_owner", "octet_length(acknowledged_owner) <= 256", "acknowledged_at", "claim_expires_at")
 	assertUCIIndexIntentMigrationConstraint(t, db, "uci_index_intents_result_view_shape_chk", "result_view_id", "result_generation")
 	assertUCIIndexIntentMigrationConstraint(t, db, "uci_index_intents_completed_result_chk", "completed", "result_view_id", "result_generation")
 	assertUCIIndexIntentMigrationConstraint(t, db, "uci_index_intents_timestamps_chk", "updated_at >= created_at")
@@ -188,6 +233,7 @@ func assertUCIIndexIntentMigrationSchema(t *testing.T, db *gormlib.DB) {
 	assertUCIIndexIntentMigrationIndex(t, db, "uci_index_intents_request_ref", "unique", "request_ref")
 	assertUCIIndexIntentMigrationIndex(t, db, "idx_uci_index_intents_owner_state", "acknowledged_owner", "state", "updated_at", "where")
 	assertUCIIndexIntentMigrationIndex(t, db, "idx_uci_index_intents_scope_status", "source_id", "checkout_id", "incarnation_id", "profile_id", "state", "updated_at")
+	assertUCIIndexIntentMigrationIndex(t, db, "uci_index_intents_publication_build", "unique", "publication_build_id", "where")
 }
 
 func assertUCIIndexIntentMigrationConstraintFailures(t *testing.T, fixture *uciProjectionMigrationFixture) {
@@ -343,6 +389,13 @@ func assertUCIIndexIntentMigrationApplied(t *testing.T, db *gormlib.DB, want int
 	var applied int64
 	require.NoError(t, db.Table("migrations").Where("id = ?", uciIndexIntentMigrationID).Count(&applied).Error)
 	require.Equal(t, want, applied, "migration 179 registry entry")
+}
+
+func assertUCIIndexIntentDeliveryMigrationApplied(t *testing.T, db *gormlib.DB, want int64) {
+	t.Helper()
+	var got int64
+	require.NoError(t, db.Table("migrations").Where("id = ?", uciIndexIntentDeliveryMigrationID).Count(&got).Error)
+	require.Equal(t, want, got, "migration 180 delivery history")
 }
 
 func assertUCIIndexIntentMigrationTableAbsent(t *testing.T, db *gormlib.DB) {

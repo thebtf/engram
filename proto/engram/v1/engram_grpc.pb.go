@@ -34,6 +34,8 @@ const (
 	EngramService_Advise_FullMethodName                    = "/engram.v1.EngramService/Advise"
 	EngramService_Observe_FullMethodName                   = "/engram.v1.EngramService/Observe"
 	EngramService_BindCodeContext_FullMethodName           = "/engram.v1.EngramService/BindCodeContext"
+	EngramService_PollCodeIndexIntents_FullMethodName      = "/engram.v1.EngramService/PollCodeIndexIntents"
+	EngramService_UpdateCodeIndexIntent_FullMethodName     = "/engram.v1.EngramService/UpdateCodeIndexIntent"
 	EngramService_BeginCodeIndex_FullMethodName            = "/engram.v1.EngramService/BeginCodeIndex"
 	EngramService_StageCodeIndex_FullMethodName            = "/engram.v1.EngramService/StageCodeIndex"
 	EngramService_FinalizeCodeIndex_FullMethodName         = "/engram.v1.EngramService/FinalizeCodeIndex"
@@ -97,6 +99,12 @@ type EngramServiceClient interface {
 	Observe(ctx context.Context, in *HostAdvisorObserveRequest, opts ...grpc.CallOption) (*HostAdvisorObserveResponse, error)
 	// BindCodeContext resolves a scoped immutable code context for one client session.
 	BindCodeContext(ctx context.Context, in *BindCodeContextRequest, opts ...grpc.CallOption) (*BindCodeContextResponse, error)
+	// PollCodeIndexIntents discovers one queued browser intent for a freshly
+	// reauthorized daemon-local target. Polling never acknowledges work.
+	PollCodeIndexIntents(ctx context.Context, in *PollCodeIndexIntentsRequest, opts ...grpc.CallOption) (*PollCodeIndexIntentsResponse, error)
+	// UpdateCodeIndexIntent applies replay-keyed ACK/START/RENEW/FAIL operations
+	// over the exact authenticated daemon process claim.
+	UpdateCodeIndexIntent(ctx context.Context, in *UpdateCodeIndexIntentRequest, opts ...grpc.CallOption) (*UpdateCodeIndexIntentResponse, error)
 	// BeginCodeIndex starts a fenced, checkout-scoped index build.
 	BeginCodeIndex(ctx context.Context, in *BeginCodeIndexRequest, opts ...grpc.CallOption) (*BeginCodeIndexResponse, error)
 	// StageCodeIndex receives ordered parts for one fenced index build.
@@ -281,6 +289,26 @@ func (c *engramServiceClient) BindCodeContext(ctx context.Context, in *BindCodeC
 	return out, nil
 }
 
+func (c *engramServiceClient) PollCodeIndexIntents(ctx context.Context, in *PollCodeIndexIntentsRequest, opts ...grpc.CallOption) (*PollCodeIndexIntentsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PollCodeIndexIntentsResponse)
+	err := c.cc.Invoke(ctx, EngramService_PollCodeIndexIntents_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *engramServiceClient) UpdateCodeIndexIntent(ctx context.Context, in *UpdateCodeIndexIntentRequest, opts ...grpc.CallOption) (*UpdateCodeIndexIntentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateCodeIndexIntentResponse)
+	err := c.cc.Invoke(ctx, EngramService_UpdateCodeIndexIntent_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *engramServiceClient) BeginCodeIndex(ctx context.Context, in *BeginCodeIndexRequest, opts ...grpc.CallOption) (*BeginCodeIndexResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(BeginCodeIndexResponse)
@@ -399,6 +427,12 @@ type EngramServiceServer interface {
 	Observe(context.Context, *HostAdvisorObserveRequest) (*HostAdvisorObserveResponse, error)
 	// BindCodeContext resolves a scoped immutable code context for one client session.
 	BindCodeContext(context.Context, *BindCodeContextRequest) (*BindCodeContextResponse, error)
+	// PollCodeIndexIntents discovers one queued browser intent for a freshly
+	// reauthorized daemon-local target. Polling never acknowledges work.
+	PollCodeIndexIntents(context.Context, *PollCodeIndexIntentsRequest) (*PollCodeIndexIntentsResponse, error)
+	// UpdateCodeIndexIntent applies replay-keyed ACK/START/RENEW/FAIL operations
+	// over the exact authenticated daemon process claim.
+	UpdateCodeIndexIntent(context.Context, *UpdateCodeIndexIntentRequest) (*UpdateCodeIndexIntentResponse, error)
 	// BeginCodeIndex starts a fenced, checkout-scoped index build.
 	BeginCodeIndex(context.Context, *BeginCodeIndexRequest) (*BeginCodeIndexResponse, error)
 	// StageCodeIndex receives ordered parts for one fenced index build.
@@ -465,6 +499,12 @@ func (UnimplementedEngramServiceServer) Observe(context.Context, *HostAdvisorObs
 }
 func (UnimplementedEngramServiceServer) BindCodeContext(context.Context, *BindCodeContextRequest) (*BindCodeContextResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method BindCodeContext not implemented")
+}
+func (UnimplementedEngramServiceServer) PollCodeIndexIntents(context.Context, *PollCodeIndexIntentsRequest) (*PollCodeIndexIntentsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PollCodeIndexIntents not implemented")
+}
+func (UnimplementedEngramServiceServer) UpdateCodeIndexIntent(context.Context, *UpdateCodeIndexIntentRequest) (*UpdateCodeIndexIntentResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateCodeIndexIntent not implemented")
 }
 func (UnimplementedEngramServiceServer) BeginCodeIndex(context.Context, *BeginCodeIndexRequest) (*BeginCodeIndexResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method BeginCodeIndex not implemented")
@@ -757,6 +797,42 @@ func _EngramService_BindCodeContext_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EngramService_PollCodeIndexIntents_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PollCodeIndexIntentsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServiceServer).PollCodeIndexIntents(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngramService_PollCodeIndexIntents_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServiceServer).PollCodeIndexIntents(ctx, req.(*PollCodeIndexIntentsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EngramService_UpdateCodeIndexIntent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateCodeIndexIntentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServiceServer).UpdateCodeIndexIntent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngramService_UpdateCodeIndexIntent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServiceServer).UpdateCodeIndexIntent(ctx, req.(*UpdateCodeIndexIntentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _EngramService_BeginCodeIndex_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(BeginCodeIndexRequest)
 	if err := dec(in); err != nil {
@@ -912,6 +988,14 @@ var EngramService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "BindCodeContext",
 			Handler:    _EngramService_BindCodeContext_Handler,
+		},
+		{
+			MethodName: "PollCodeIndexIntents",
+			Handler:    _EngramService_PollCodeIndexIntents_Handler,
+		},
+		{
+			MethodName: "UpdateCodeIndexIntent",
+			Handler:    _EngramService_UpdateCodeIndexIntent_Handler,
 		},
 		{
 			MethodName: "BeginCodeIndex",

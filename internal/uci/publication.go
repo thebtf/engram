@@ -92,6 +92,7 @@ type IndexBeginInput struct {
 	ExpectedParent *ContextRef
 	Mode           IndexManifestMode
 	JobKind        IndexJobKind
+	IntentClaim    *IndexIntentClaim
 }
 
 // IndexBuildRef is the capability that fences Stage and Finalize.
@@ -184,12 +185,12 @@ type IndexPart struct {
 	EdgeReplacements []IndexEdgeReplacement
 }
 
-// IndexStageInput is one sequenced, content-addressed staging frame.
 type IndexStageInput struct {
-	Build    IndexBuildRef
-	Sequence uint32
-	Digest   IndexDigest
-	Part     IndexPart
+	Build       IndexBuildRef
+	Sequence    uint32
+	Digest      IndexDigest
+	Part        IndexPart
+	IntentClaim *IndexIntentClaim
 }
 
 // IndexPartAck proves one durable staged frame.
@@ -234,11 +235,11 @@ type IndexManifestCompletion struct {
 	Coverage       IndexCoverage
 }
 
-// IndexFinalizeInput is the only operation that can publish a staged build.
 type IndexFinalizeInput struct {
 	Build          IndexBuildRef
 	ExpectedParent *ContextRef
 	Manifest       IndexManifestCompletion
+	IntentClaim    *IndexIntentClaim
 }
 
 // IndexPublishedView is the durable result replayed after a lost ACK.

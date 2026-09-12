@@ -152,6 +152,67 @@ func TestUCIIndexIntentStoreConcurrentIdenticalSubmissionReturnsOneIntent(t *tes
 	require.Equal(t, ucidomain.IndexIntentSubmitted, stored.State)
 }
 
+func TestUCIIndexIntentStoreDeliveryUpdatesReplayExactOwnerClaim(t *testing.T) {
+	store := openUCIIndexIntentStore(t)
+	ctx := context.Background()
+	input, previous, _ := newUCIIndexIntentInput(ucidomain.IndexIntentReconcile)
+	submitted, err := store.SubmitIndexIntent(ctx, input)
+	require.NoError(t, err)
+	_, err = store.QueueIndexIntent(ctx, submitted.ID)
+	require.NoError(t, err)
+
+	binding := ucidomain.IndexBinding{
+		Context:       &previous,
+		Scope:         input.Scope,
+		ProfileID:     input.ProfileID,
+		LocalRootID:   uuid.NewString(),
+		WorkstationID: uuid.NewString(),
+	}
+	owner := ucidomain.IndexIntentOwnerBinding{
+		AuthRealm: "runtime-realm", Principal: "agent/runtime", WorkstationID: binding.WorkstationID,
+		ClientSessionID: "runtime-session", ClientInstanceID: "runtime-instance", ProcessNonce: "runtime-process",
+	}
+	offered, err := store.PollIndexIntent(ctx, binding, owner)
+	require.NoError(t, err)
+	require.NotNil(t, offered)
+	require.Equal(t, submitted.ID, offered.ID)
+	require.Equal(t, ucidomain.IndexIntentQueued, offered.State)
+
+	acknowledged, err := store.UpdateIndexIntent(ctx, binding, owner, submitted.ID, ucidomain.IndexIntentUpdate{
+		OperationRef: "runtime-delivery/ack", Operation: ucidomain.IndexIntentAcknowledge,
+	})
+	require.NoError(t, err)
+	require.Equal(t, ucidomain.IndexIntentAcknowledged, acknowledged.State)
+	require.Equal(t, 1, acknowledged.Attempt)
+	require.EqualValues(t, 1, acknowledged.ClaimEpoch)
+
+	replayed, err := store.UpdateIndexIntent(ctx, binding, owner, submitted.ID, ucidomain.IndexIntentUpdate{
+		OperationRef: "runtime-delivery/ack", Operation: ucidomain.IndexIntentAcknowledge,
+	})
+	require.NoError(t, err)
+	require.Equal(t, acknowledged, replayed)
+
+	foreignOwner := owner
+	foreignOwner.ProcessNonce = "foreign-process"
+	_, err = store.UpdateIndexIntent(ctx, binding, foreignOwner, submitted.ID, ucidomain.IndexIntentUpdate{
+		OperationRef: "runtime-delivery/ack", Operation: ucidomain.IndexIntentAcknowledge,
+	})
+	require.ErrorIs(t, err, ucidomain.ErrIndexIntentBindingMismatch)
+
+	started, err := store.UpdateIndexIntent(ctx, binding, owner, submitted.ID, ucidomain.IndexIntentUpdate{
+		OperationRef: "runtime-delivery/start", Operation: ucidomain.IndexIntentStart, ClaimEpoch: acknowledged.ClaimEpoch,
+	})
+	require.NoError(t, err)
+	require.Equal(t, ucidomain.IndexIntentRunning, started.State)
+
+	renewed, err := store.UpdateIndexIntent(ctx, binding, owner, submitted.ID, ucidomain.IndexIntentUpdate{
+		OperationRef: "runtime-delivery/renew", Operation: ucidomain.IndexIntentRenew, ClaimEpoch: started.ClaimEpoch,
+	})
+	require.NoError(t, err)
+	require.Equal(t, ucidomain.IndexIntentRunning, renewed.State)
+	require.NotZero(t, renewed.LeaseExpiresAt)
+}
+
 func TestUCIIndexIntentStoreUnavailableRetryAndFailurePreservePriorView(t *testing.T) {
 	store := openUCIIndexIntentStore(t)
 	ctx := context.Background()

@@ -651,6 +651,17 @@ func (runtime *uciContextIntegrationRuntime) LegacyCodeIndexNegotiate(_ context.
 	return runtime.publication.LegacyNegotiate(authorized, request), nil
 }
 
+func (runtime *uciContextIntegrationRuntime) PollCodeIndexIntents(_ context.Context, _ contextAwareCaller, _ uci.IndexBinding, _ *pb.PollCodeIndexIntentsRequest) (*pb.PollCodeIndexIntentsResponse, error) {
+	return &pb.PollCodeIndexIntentsResponse{}, nil
+}
+
+func (runtime *uciContextIntegrationRuntime) UpdateCodeIndexIntent(_ context.Context, _ contextAwareCaller, _ uci.IndexBinding, request *pb.UpdateCodeIndexIntentRequest) (*pb.UpdateCodeIndexIntentResponse, error) {
+	return &pb.UpdateCodeIndexIntentResponse{
+		IntentRef: request.GetIntentRef(), State: string(uci.IndexIntentAcknowledged), Attempt: 1, OwnerEpoch: 1,
+		LeaseExpiresAt: timestamppb.New(time.Date(2026, time.September, 5, 12, 5, 0, 0, time.UTC)),
+	}, nil
+}
+
 func (runtime *uciContextIntegrationRuntime) BeginCodeIndex(_ context.Context, binding uci.IndexBinding, request *pb.BeginCodeIndexRequest) (*pb.BeginCodeIndexResponse, error) {
 	return runtime.publication.Begin(binding, request), nil
 }

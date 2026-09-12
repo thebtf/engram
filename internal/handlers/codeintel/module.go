@@ -65,6 +65,7 @@ const (
 	codebaseStatusAfterBarrierMaxWaitMS      int64 = 60_000
 	indexRunRecordLimit                            = 256
 	indexRunTargetPathCount                  int64 = 1
+	indexIntentPollInterval                        = time.Second
 )
 
 var errInvalidServerStatusPayload = errors.New("failed to parse server response")
@@ -152,6 +153,11 @@ type IndexTargetRebinder interface {
 	RebindIndexTarget(context.Context, ResolvedIndexTarget) (ResolvedIndexTarget, error)
 }
 
+type IndexIntentExecutor interface {
+	PollIndexIntent(context.Context, ResolvedIndexTarget, string, string) (*engramcore.IndexIntentOffer, error)
+	UpdateIndexIntent(context.Context, ResolvedIndexTarget, string, string, string, uci.IndexIntentUpdate) (uci.IndexIntentUpdateResult, error)
+}
+
 // engramCoreAdapter keeps codeintel dependent on the narrow typed contract.
 type engramCoreAdapter struct {
 	adapter *engramcore.UCIIndexAdapter
@@ -167,6 +173,14 @@ func (a *engramCoreAdapter) IndexCodebase(ctx context.Context, target ResolvedIn
 
 func (a *engramCoreAdapter) RebindIndexTarget(ctx context.Context, target ResolvedIndexTarget) (ResolvedIndexTarget, error) {
 	return a.adapter.RebindIndexTarget(ctx, target)
+}
+
+func (a *engramCoreAdapter) PollIndexIntent(ctx context.Context, target ResolvedIndexTarget, clientInstanceID, processNonce string) (*engramcore.IndexIntentOffer, error) {
+	return a.adapter.PollIndexIntent(ctx, target, clientInstanceID, processNonce)
+}
+
+func (a *engramCoreAdapter) UpdateIndexIntent(ctx context.Context, target ResolvedIndexTarget, clientInstanceID, processNonce, intentID string, update uci.IndexIntentUpdate) (uci.IndexIntentUpdateResult, error) {
+	return a.adapter.UpdateIndexIntent(ctx, target, clientInstanceID, processNonce, intentID, update)
 }
 
 func (a *engramCoreAdapter) ProxyHandleTool(ctx context.Context, target ResolvedIndexTarget, name string, args json.RawMessage) (json.RawMessage, error) {
@@ -193,6 +207,11 @@ type Module struct {
 	watcherConsumerCtx    context.Context
 	watcherConsumerCancel context.CancelFunc
 	watcherConsumerWG     sync.WaitGroup
+
+	intentPumpCancel context.CancelFunc
+	intentPumpWG     sync.WaitGroup
+	intentPumpWake   chan struct{}
+	processNonce     string
 }
 
 type indexRunOrigin uint8
@@ -210,6 +229,13 @@ type indexRunRequest struct {
 	origin         indexRunOrigin
 	correlation    auditcontext.UCIRequestCorrelation
 	hasCorrelation bool
+	intent         *indexIntentRun
+	runCtx         context.Context
+}
+
+type indexIntentRun struct {
+	offer *engramcore.IndexIntentOffer
+	runID string
 }
 
 // NewModule constructs an unstarted Module backed by a real *engramcore.Module.
@@ -260,6 +286,18 @@ func (m *Module) Init(_ context.Context, deps module.ModuleDeps) error {
 		m.watcherConsumerCtx, m.watcherConsumerCancel = context.WithCancel(deps.DaemonCtx)
 		m.watcherConsumers = make(map[string]uciRuntimeWatcherChangeSource)
 		m.watcherConsumerMu.Unlock()
+		if executor, ok := m.core.(IndexIntentExecutor); ok {
+			processNonce, err := newIndexRunID()
+			if err != nil {
+				return fmt.Errorf("initialise codeintel intent owner: %w", err)
+			}
+			m.processNonce = processNonce
+			m.intentPumpWake = make(chan struct{}, 1)
+			pumpCtx, cancel := context.WithCancel(deps.DaemonCtx)
+			m.intentPumpCancel = cancel
+			m.intentPumpWG.Add(1)
+			go m.pumpIndexIntents(pumpCtx, executor)
+		}
 	}
 	if deps.Logger != nil {
 		deps.Logger.Info("codeintel module initialised")
@@ -276,6 +314,12 @@ func (m *Module) Shutdown(ctx context.Context) error {
 	m.watcherConsumerCtx = nil
 	m.watcherConsumers = nil
 	m.watcherConsumerMu.Unlock()
+	cancelPump := m.intentPumpCancel
+	m.intentPumpCancel = nil
+	if cancelPump != nil {
+		cancelPump()
+		m.intentPumpWG.Wait()
+	}
 	if cancelConsumers != nil {
 		cancelConsumers()
 		m.watcherConsumerWG.Wait()
@@ -706,6 +750,7 @@ func (m *Module) armRuntimeWatcher(target ResolvedIndexTarget) error {
 	m.watcherConsumerWG.Add(1)
 	m.watcherConsumerMu.Unlock()
 	go m.consumeRuntimeWatcher(ctx, source)
+	m.wakeIndexIntentPump()
 	return nil
 }
 
@@ -739,6 +784,140 @@ func (m *Module) consumeRuntimeWatcher(ctx context.Context, source uciRuntimeWat
 	}
 }
 
+func (m *Module) wakeIndexIntentPump() {
+	if m == nil || m.intentPumpWake == nil {
+		return
+	}
+	select {
+	case m.intentPumpWake <- struct{}{}:
+	default:
+	}
+}
+
+func (m *Module) pumpIndexIntents(ctx context.Context, executor IndexIntentExecutor) {
+	defer m.intentPumpWG.Done()
+	ticker := time.NewTicker(indexIntentPollInterval)
+	defer ticker.Stop()
+	for {
+		for _, snapshot := range m.runtime.indexIntentTargets() {
+			m.pollIndexIntentTarget(ctx, executor, snapshot)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		case <-m.intentPumpWake:
+		}
+	}
+}
+
+func (m *Module) pollIndexIntentTarget(ctx context.Context, executor IndexIntentExecutor, snapshot uciRuntimeIndexSnapshot) {
+	if ctx.Err() != nil {
+		return
+	}
+	target := snapshot.target.Clone()
+	targetCtx := auditcontext.WithUCITransportSession(ctx, target.ClientSessionID)
+	if rebinder, ok := m.core.(IndexTargetRebinder); ok {
+		rebound, err := rebinder.RebindIndexTarget(targetCtx, target)
+		if err != nil || !sameUCIRuntimeTargetIdentity(target, rebound) {
+			return
+		}
+		target = rebound
+	}
+	root, err := m.runtime.Prepare(targetCtx, target, snapshot.rootPath, snapshot.rootPath)
+	if err != nil {
+		return
+	}
+	if err := m.armRuntimeWatcher(target); err != nil {
+		return
+	}
+	offer, err := executor.PollIndexIntent(targetCtx, target, m.runtime.config.ClientInstanceID, m.processNonce)
+	if err != nil || offer == nil {
+		return
+	}
+	_, _, _ = m.startIndexRun(indexRunRequest{
+		target: target, root: root, origin: indexRunManual, intent: &indexIntentRun{offer: offer},
+	})
+}
+
+func (m *Module) claimIndexIntentRun(request indexRunRequest, runID string) (indexRunRequest, error) {
+	executor, ok := m.core.(IndexIntentExecutor)
+	if !ok || request.intent == nil || request.intent.offer == nil {
+		return indexRunRequest{}, errors.New("codeintel intent executor is unavailable")
+	}
+	offer := request.intent.offer
+	ctx := auditcontext.WithUCITransportSession(m.daemonIndexContext(), request.target.ClientSessionID)
+	epoch := offer.ClaimEpoch
+	expiresAt := offer.LeaseExpiresAt
+	if offer.State == uci.IndexIntentQueued {
+		ack, err := executor.UpdateIndexIntent(ctx, request.target, m.runtime.config.ClientInstanceID, m.processNonce, offer.IntentID, uci.IndexIntentUpdate{
+			OperationRef: runID + "/ack", Operation: uci.IndexIntentAcknowledge,
+		})
+		if err != nil {
+			return indexRunRequest{}, err
+		}
+		epoch, expiresAt = ack.ClaimEpoch, ack.LeaseExpiresAt
+	}
+	if offer.State != uci.IndexIntentRunning {
+		started, err := executor.UpdateIndexIntent(ctx, request.target, m.runtime.config.ClientInstanceID, m.processNonce, offer.IntentID, uci.IndexIntentUpdate{
+			OperationRef: runID + "/start", Operation: uci.IndexIntentStart, ClaimEpoch: epoch,
+		})
+		if err != nil {
+			return indexRunRequest{}, err
+		}
+		expiresAt = started.LeaseExpiresAt
+	}
+	claimed, err := request.target.WithIndexIntentClaim(uci.IndexIntentExecutionClaim{
+		IntentID: offer.IntentID, Epoch: epoch, ProcessNonce: m.processNonce, LeaseExpiresAt: expiresAt,
+	})
+	if err != nil {
+		return indexRunRequest{}, err
+	}
+	request.target = claimed
+	request.intent.runID = runID
+	return request, nil
+}
+
+func (m *Module) renewIndexIntent(ctx context.Context, request indexRunRequest, cancel context.CancelFunc, done chan<- struct{}) {
+	defer close(done)
+	executor, ok := m.core.(IndexIntentExecutor)
+	claim := request.target.IndexIntentClaim()
+	if !ok || claim == nil || request.intent == nil {
+		return
+	}
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	sequence := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sequence++
+			_, err := executor.UpdateIndexIntent(ctx, request.target, m.runtime.config.ClientInstanceID, m.processNonce, claim.IntentID, uci.IndexIntentUpdate{
+				OperationRef: fmt.Sprintf("%s/renew/%d", request.intent.runID, sequence), Operation: uci.IndexIntentRenew, ClaimEpoch: claim.Epoch,
+			})
+			if err != nil {
+				cancel()
+				return
+			}
+		}
+	}
+}
+
+func (m *Module) failIndexIntent(request indexRunRequest) {
+	executor, ok := m.core.(IndexIntentExecutor)
+	claim := request.target.IndexIntentClaim()
+	if !ok || claim == nil || request.intent == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(auditcontext.WithUCITransportSession(context.Background(), request.target.ClientSessionID), 5*time.Second)
+	defer cancel()
+	_, _ = executor.UpdateIndexIntent(ctx, request.target, m.runtime.config.ClientInstanceID, m.processNonce, claim.IntentID, uci.IndexIntentUpdate{
+		OperationRef: request.intent.runID + "/fail", Operation: uci.IndexIntentFail, ClaimEpoch: claim.Epoch,
+	})
+}
+
 func (m *Module) startIndexRun(request indexRunRequest) (*indexState, bool, error) {
 	key := indexKeyFor(request.target)
 	m.startMu.Lock()
@@ -765,6 +944,16 @@ func (m *Module) startIndexRun(request indexRunRequest) (*indexState, bool, erro
 	}
 	m.indexStates.Store(key, state)
 	m.startMu.Unlock()
+	if request.intent != nil {
+		request, err = m.claimIndexIntentRun(request, state.RunID)
+		if err != nil {
+			m.startMu.Lock()
+			m.indexStates.Delete(key)
+			delete(m.runRecords, state.RunID)
+			m.startMu.Unlock()
+			return nil, false, err
+		}
+	}
 	m.launchIndexRun(request, state, record)
 	return state, true, nil
 }
@@ -806,21 +995,29 @@ func newIndexRunID() (string, error) {
 func (m *Module) launchIndexRun(request indexRunRequest, state *indexState, record *indexRunRecord) {
 	go func() {
 		var terminal *indexState
+		var cancel context.CancelFunc
+		var renewDone chan struct{}
+		if request.intent != nil {
+			request.runCtx, cancel = context.WithCancel(m.daemonIndexContext())
+			renewDone = make(chan struct{})
+			go m.renewIndexIntent(request.runCtx, request, cancel, renewDone)
+		}
 		defer func() {
+			if cancel != nil {
+				cancel()
+				<-renewDone
+			}
 			if recovered := recover(); recovered != nil {
 				if logger := m.deps.Logger; logger != nil {
-					logger.Error("codeintel: index goroutine panicked",
-						"client_session_id", request.target.ClientSessionID,
-						"context_handle", request.target.ContextHandle,
-						"run_id", state.RunID,
-						"panic", fmt.Sprintf("%v", recovered),
-						"stack", string(debug.Stack()),
-					)
+					logger.Error("codeintel: index goroutine panicked", "client_session_id", request.target.ClientSessionID, "context_handle", request.target.ContextHandle, "run_id", state.RunID, "panic", fmt.Sprintf("%v", recovered), "stack", string(debug.Stack()))
 				}
 				terminal = m.failedIndexState(request, state, fmt.Errorf("panic: %v", recovered))
 			}
 			if terminal == nil {
 				terminal = m.failedIndexState(request, state, fmt.Errorf("index execution did not complete"))
+			}
+			if terminal.Status == statusError {
+				m.failIndexIntent(request)
 			}
 			m.completeIndexRun(request, terminal, record)
 		}()
@@ -1026,7 +1223,11 @@ func (m *Module) daemonIndexContext() context.Context {
 }
 
 func (m *Module) indexContext(target ResolvedIndexTarget, request indexRunRequest) context.Context {
-	ctx := auditcontext.WithUCITransportSession(m.daemonIndexContext(), target.ClientSessionID)
+	base := request.runCtx
+	if base == nil {
+		base = m.daemonIndexContext()
+	}
+	ctx := auditcontext.WithUCITransportSession(base, target.ClientSessionID)
 	if request.hasCorrelation {
 		ctx = auditcontext.WithUCIRequestCorrelation(ctx, request.correlation)
 	}
@@ -1055,6 +1256,13 @@ func (m *Module) handleStatus(ctx context.Context, p muxcore.ProjectContext, arg
 	}
 	if !requestedTargetMatches(target, clientSessionID, contextHandle) {
 		return nil, fmt.Errorf("codebase_status: resolved target does not match the requesting client handle")
+	}
+	if m.runtime != nil && p.Cwd != "" {
+		root, prepareErr := m.runtime.Prepare(ctx, target, p.Cwd, p.Cwd)
+		if prepareErr == nil {
+			_ = root
+			_ = m.armRuntimeWatcher(target)
+		}
 	}
 
 	result := map[string]any{"status": "never_indexed"}

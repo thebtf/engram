@@ -109,6 +109,7 @@ type uciContextComposition struct {
 	aliasResolver      *uci.AliasResolver
 	exposureRecorder   *uci.ExposureRecorder
 	transport          grpcserver.UCITransport
+	indexIntentStore   *gormstore.UCIIndexIntentStore
 }
 
 type operatorCodeServerContextStore interface {
@@ -227,10 +228,9 @@ func (application *operatorCodeIndexIntentComposition) indexIntentBinding(ctx co
 }
 
 func (binding operatorCodeIndexIntentBinding) matches(intent uci.IndexIntent) bool {
-	return intent.Scope == binding.scope &&
-		intent.ProfileID == binding.profileID &&
-		intent.PreviousView != nil &&
-		operatorCodeIndexIntentContextsEqual(*intent.PreviousView, binding.previousView)
+	return intent.Scope == binding.scope && intent.ProfileID == binding.profileID && intent.PreviousView != nil &&
+		intent.PreviousView.SourceID == binding.previousView.SourceID && intent.PreviousView.CheckoutID == binding.previousView.CheckoutID &&
+		intent.PreviousView.AnalysisProfileID == binding.previousView.AnalysisProfileID
 }
 
 func (authorizer *operatorCodeIndexIntentRetryAuthorizer) AuthorizeIndexIntentRetry(ctx context.Context, intent uci.IndexIntent) error {
@@ -328,7 +328,7 @@ func (authorizer *operatorCodeServerAuthorizer) ResolveCurrentOperatorCode(ctx c
 }
 
 func composeOperatorCodeHTTPAdapter(db *gormlib.DB, composition *uciContextComposition) (*OperatorCodeHTTPAdapter, error) {
-	if db == nil || composition == nil || composition.contextStore == nil || composition.resolver == nil || composition.application == nil || composition.exposureRecorder == nil {
+	if db == nil || composition == nil || composition.contextStore == nil || composition.resolver == nil || composition.application == nil || composition.exposureRecorder == nil || composition.indexIntentStore == nil {
 		return nil, errors.New("operator code HTTP composition requires UCI context dependencies")
 	}
 	return NewOperatorCodeHTTPAdapter(
@@ -336,9 +336,7 @@ func composeOperatorCodeHTTPAdapter(db *gormlib.DB, composition *uciContextCompo
 		NewBrowserBindingApplication(gormstore.NewBrowserTabBindingStore(db)),
 		newOperatorCodeServerAuthorizer(composition.contextStore, composition.resolver),
 		&operatorCodeIndexIntentComposition{
-			UCIApplication:   composition.application,
-			indexIntentStore: gormstore.NewUCIIndexIntentStore(db),
-			contextStore:     composition.contextStore,
+			UCIApplication: composition.application, indexIntentStore: composition.indexIntentStore, contextStore: composition.contextStore,
 		},
 		composition.exposureRecorder,
 	), nil
@@ -419,6 +417,7 @@ func composeUCIContext(
 	}
 
 	projectionStore := gormstore.NewUCIProjectionStore(db)
+	indexIntentStore := gormstore.NewUCIIndexIntentStore(db)
 	publisher, err := projectionStore.Publisher(authorizer, uci.IndexPublicationConfig{
 		Limits:           uci.DefaultIndexPublicationLimits(),
 		EmbeddingProfile: semantic.profilePtr,
@@ -440,7 +439,7 @@ func composeUCIContext(
 		}
 		embeddingWorker = worker
 	}
-	runtime, err := grpcserver.NewContextAwareUCIRuntime(contextStore, projectionStore, publisher)
+	runtime, err := grpcserver.NewContextAwareUCIRuntime(contextStore, projectionStore, publisher, indexIntentStore)
 	if err != nil {
 		return nil, fmt.Errorf("create UCI runtime: %w", err)
 	}
@@ -486,5 +485,6 @@ func composeUCIContext(
 		aliasResolver:      aliasResolver,
 		exposureRecorder:   exposureRecorder,
 		transport:          transport,
+		indexIntentStore:   indexIntentStore,
 	}, nil
 }

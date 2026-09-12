@@ -1295,6 +1295,7 @@ func (collaborator *UCIPreparedIndexCollaborator) IndexPreparedCodebase(ctx cont
 	if parent == nil {
 		jobKind = "initial_index"
 	}
+	intentClaim := uciPreparedProtoIntentClaim(target.IndexIntentClaim())
 	begin, err := client.Begin(ctx, &pb.BeginCodeIndexRequest{
 		Scope:          scope,
 		OwnerInstance:  collaborator.clientInstanceID,
@@ -1302,6 +1303,7 @@ func (collaborator *UCIPreparedIndexCollaborator) IndexPreparedCodebase(ctx cont
 		ExpectedParent: parent,
 		ManifestMode:   "full",
 		JobKind:        jobKind,
+		IntentClaim:    intentClaim,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("uci prepared index: begin publication: %w", err)
@@ -1319,6 +1321,7 @@ func (collaborator *UCIPreparedIndexCollaborator) IndexPreparedCodebase(ctx cont
 			Sequence:      uint64(index),
 			PayloadDigest: string(uci.DigestIndexAdmissionPayload(payload)),
 			Payload:       payload,
+			IntentClaim:   intentClaim,
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -1374,6 +1377,7 @@ func (collaborator *UCIPreparedIndexCollaborator) IndexPreparedCodebase(ctx cont
 		ObjectFormat:               scan.Observation.ObjectFormat,
 		RefLabel:                   scan.Observation.RefLabel,
 		Dirty:                      &scan.Observation.Dirty,
+		IntentClaim:                intentClaim,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("uci prepared index: finalize publication: %w", err)
@@ -1506,6 +1510,15 @@ func uciPreparedProtoContext(contextRef *uci.ContextRef) *pb.ContextRef {
 		result.SpaceId = &spaceID
 	}
 	return result
+}
+
+func uciPreparedProtoIntentClaim(claim *uci.IndexIntentExecutionClaim) *pb.CodeIndexIntentClaim {
+	if claim == nil {
+		return nil
+	}
+	return &pb.CodeIndexIntentClaim{
+		IntentRef: claim.IntentID, OwnerEpoch: uint64(claim.Epoch), ProcessNonce: claim.ProcessNonce,
+	}
 }
 
 func uciPreparedBeginMatches(response *pb.BeginCodeIndexResponse, scope *pb.CodeIndexScope) bool {
