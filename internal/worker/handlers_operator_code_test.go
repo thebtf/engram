@@ -382,7 +382,7 @@ func TestOperatorCodeHTTPAdapter_RejectsNonBrowserWrongProofAndWrongContext(t *t
 			configure: func(fixture *operatorCodeHTTPTestFixture) {
 				fixture.binding.pinned.SourceID = uuid.NewString()
 			},
-			want: http.StatusConflict,
+			want: http.StatusForbidden,
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
