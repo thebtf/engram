@@ -22,8 +22,19 @@ func TestParseInvocationAcceptsClosedFixtureInputs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseInvocation() error = %v", err)
 	}
-	if got != (invocation{dsnFile: "private-dsn.txt", browserEmail: "fixture@example.invalid", project: "operator-code-live-1"}) {
+	if got != (invocation{dsnFile: "private-dsn.txt", browserEmail: "fixture@example.invalid", project: "operator-code-live-1", mode: "published"}) {
 		t.Fatalf("parseInvocation() = %#v", got)
+	}
+}
+
+func TestParseInvocationRequiresNoViewFixtureKeycardFile(t *testing.T) {
+	base := []string{"--dsn-file", "private-dsn.txt", "--browser-email", "fixture@example.invalid", "--project", "operator-code-live-1", "--source-file", "fixture.go", "--mode", "no-view"}
+	if _, err := parseInvocation(base); err == nil {
+		t.Fatal("parseInvocation accepted a no-view fixture without a private keycard file")
+	}
+	got, err := parseInvocation(append(base, "--keycard-file", "private-keycard.txt"))
+	if err != nil || got.mode != "no-view" || got.keycardFile != "private-keycard.txt" {
+		t.Fatalf("parseInvocation(no-view) = %#v, %v", got, err)
 	}
 }
 

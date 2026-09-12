@@ -4,12 +4,14 @@ package main
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,12 +29,13 @@ import (
 )
 
 const (
-	fixtureAuthRealm      = "browser"
-	fixtureQuery          = "CodeExplorerFixtureEntry"
-	fixtureExpectedGraph  = "CodeExplorerFixtureTarget"
-	fixtureExpectedSource = "CodeExplorerFixtureEntry"
-	fixtureSourcePath     = "fixture.go"
-	fixtureQueueSeedCount = 5
+	fixtureAuthRealm       = "browser"
+	fixtureClientAuthRealm = string(auth.SourceClient)
+	fixtureQuery           = "CodeExplorerFixtureEntry"
+	fixtureExpectedGraph   = "CodeExplorerFixtureTarget"
+	fixtureExpectedSource  = "CodeExplorerFixtureEntry"
+	fixtureSourcePath      = "fixture.go"
+	fixtureQueueSeedCount  = 5
 )
 
 var fixtureSource = []byte(`package fixture
@@ -54,14 +57,25 @@ type invocation struct {
 	project      string
 	sourceFile   string
 	passwordFile string
+	keycardFile  string
+	mode         string
 }
 
 type fixtureOutput struct {
-	Query          string `json:"query"`
-	ExpectedSearch string `json:"expectedSearch"`
-	ExpectedGraph  string `json:"expectedGraph"`
-	ExpectedSource string `json:"expectedSource"`
-	ExpectedMarker string `json:"expectedMarker"`
+	Query          string               `json:"query"`
+	ExpectedSearch string               `json:"expectedSearch"`
+	ExpectedGraph  string               `json:"expectedGraph"`
+	ExpectedSource string               `json:"expectedSource"`
+	ExpectedMarker string               `json:"expectedMarker"`
+	NoView         *noViewFixtureOutput `json:"noView,omitempty"`
+}
+
+type noViewFixtureOutput struct {
+	SourceID           string `json:"sourceId"`
+	CheckoutID         string `json:"checkoutId"`
+	IncarnationID      string `json:"incarnationId"`
+	AnalysisProfileID  string `json:"analysisProfileId"`
+	ParserBundleDigest string `json:"parserBundleDigest"`
 }
 
 type commandDependencies struct {
@@ -83,7 +97,7 @@ func defaultCommandDependencies() commandDependencies {
 func run(ctx context.Context, args []string, stdout, stderr io.Writer, deps commandDependencies) int {
 	in, err := parseInvocation(args)
 	if err != nil || deps.readFile == nil || deps.provision == nil {
-		fmt.Fprintln(stderr, "usage: operator-code-live-fixture --dsn-file <path> --browser-email <email> --project <fixture-id> [--source-file <path>] [--password-file <path>]")
+		fmt.Fprintln(stderr, "usage: operator-code-live-fixture --dsn-file <path> --browser-email <email> --project <fixture-id> [--source-file <path>] [--password-file <path>] [--mode published|no-view --keycard-file <path>]")
 		return 2
 	}
 	dsnBytes, err := deps.readFile(in.dsnFile)
@@ -131,11 +145,18 @@ func parseInvocation(args []string) (invocation, error) {
 			in.sourceFile = value
 		case "--password-file":
 			in.passwordFile = value
+		case "--keycard-file":
+			in.keycardFile = value
+		case "--mode":
+			in.mode = value
 		default:
 			return invocation{}, fmt.Errorf("unknown fixture argument")
 		}
 	}
-	if in.dsnFile == "" || !validFixtureEmail(in.browserEmail) || !validFixtureID(in.project) {
+	if in.mode == "" {
+		in.mode = "published"
+	}
+	if in.dsnFile == "" || !validFixtureEmail(in.browserEmail) || !validFixtureID(in.project) || (in.mode != "published" && in.mode != "no-view") || (in.mode == "no-view" && (in.sourceFile == "" || in.keycardFile == "")) {
 		return invocation{}, fmt.Errorf("invalid fixture arguments")
 	}
 	return in, nil
@@ -176,6 +197,9 @@ func provision(ctx context.Context, dsn string, in invocation) (fixtureOutput, e
 	subject := auth.BrowserSubjectForUser(user.ID)
 	if !subject.Valid() {
 		return fixtureOutput{}, fmt.Errorf("fixture browser subject is invalid")
+	}
+	if in.mode == "no-view" {
+		return provisionNoView(ctx, store, user, subject, in, marker)
 	}
 	if err := seedFixtureQueueCandidates(ctx, store.GetDB(), project); err != nil {
 		return fixtureOutput{}, err
@@ -291,6 +315,103 @@ func provision(ctx context.Context, dsn string, in invocation) (fixtureOutput, e
 		ExpectedSource: fixtureExpectedSource,
 		ExpectedMarker: marker,
 	}, nil
+}
+
+func provisionNoView(ctx context.Context, store *gormdb.Store, user *gormdb.User, subject auth.BrowserSubject, in invocation, marker string) (fixtureOutput, error) {
+	if in.sourceFile == "" || in.keycardFile == "" {
+		return fixtureOutput{}, fmt.Errorf("no-view fixture source and keycard file are required")
+	}
+	root, err := filepath.Abs(filepath.Dir(in.sourceFile))
+	if err != nil {
+		return fixtureOutput{}, fmt.Errorf("resolve no-view fixture root: %w", err)
+	}
+	keycard, workstationID, err := fixtureClientKeycard(ctx, store, "operator-code-live-"+in.project, subject)
+	if err != nil {
+		return fixtureOutput{}, err
+	}
+	contexts := gormdb.NewUCIContextStore(store.DB)
+	source, err := contexts.CreateSource(ctx, gormdb.CreateSourceInput{
+		AuthRealm:   fixtureClientAuthRealm,
+		Kind:        gormdb.UCISourceGit,
+		DisplayName: "Operator Code Fixture " + in.project,
+	})
+	if err != nil {
+		return fixtureOutput{}, fmt.Errorf("create no-view fixture source: %w", err)
+	}
+	locator := (&url.URL{Scheme: "file", Path: filepath.ToSlash(root)}).String()
+	checkout, err := contexts.RegisterCheckout(ctx, gormdb.RegisterCheckoutInput{
+		SourceID:       source.SourceID,
+		WorkstationID:  workstationID,
+		Kind:           gormdb.UCICheckoutWorkingTree,
+		OwnerPrincipal: subject.Principal,
+		LocatorRef:     locator,
+	})
+	if err != nil {
+		return fixtureOutput{}, fmt.Errorf("register no-view fixture checkout: %w", err)
+	}
+	parserBundleDigest := string(uci.TreeSitterBundleDigest())
+	profile, err := contexts.CreateProfile(ctx, gormdb.CreateProfileInput{
+		ParserBundleDigest:   parserBundleDigest,
+		ResolverRevision:     "operator-code-live-no-view-resolver-v1",
+		ChunkerRevision:      "operator-code-live-no-view-chunker-v1",
+		IgnorePolicyDigest:   fixtureDigest("operator-code-live-no-view-ignore-v1"),
+		BuildContextJSON:     `{"fixture":"operator-code-live-no-view"}`,
+		SecretPolicyRevision: "operator-code-live-no-view-secret-v1",
+	})
+	if err != nil {
+		return fixtureOutput{}, fmt.Errorf("create no-view fixture profile: %w", err)
+	}
+	selector, err := uci.CheckoutIndexBindingSelector(uci.RegisteredCheckoutSelector{
+		Scope:     uci.IndexScope{SourceID: source.SourceID, CheckoutID: checkout.CheckoutID, IncarnationID: checkout.IncarnationID},
+		ProfileID: profile.ProfileID,
+	})
+	if err != nil {
+		return fixtureOutput{}, fmt.Errorf("select no-view fixture checkout: %w", err)
+	}
+	binding, err := contexts.LoadIndexBinding(ctx, selector)
+	if err != nil || binding.Context != nil || binding.Scope.SourceID != source.SourceID || binding.Scope.CheckoutID != checkout.CheckoutID || binding.Scope.IncarnationID != checkout.IncarnationID || binding.ProfileID != profile.ProfileID || binding.WorkstationID != workstationID || binding.LocalRootID != locator {
+		return fixtureOutput{}, fmt.Errorf("read back no-view fixture registration")
+	}
+	grants := worker.NewCodeGrantApplication(gormdb.NewBrowserReadGrantStore(store.DB))
+	issuer := auth.SessionForBrowserUser(user.Role, user.ID)
+	grant, err := grants.Issue(ctx, issuer, worker.IssueCodeGrantInput{Target: subject, SourceID: source.SourceID, CheckoutID: checkout.CheckoutID})
+	if err != nil {
+		return fixtureOutput{}, fmt.Errorf("issue no-view fixture grant: %w", err)
+	}
+	current, found, err := grants.Current(ctx, issuer)
+	if err != nil || !found || current.GrantRef != grant.GrantRef || current.SourceID != source.SourceID || current.CheckoutID != checkout.CheckoutID {
+		return fixtureOutput{}, fmt.Errorf("read back no-view fixture grant")
+	}
+	if err := os.WriteFile(in.keycardFile, []byte(keycard+"\n"), 0o600); err != nil {
+		return fixtureOutput{}, fmt.Errorf("write no-view fixture keycard")
+	}
+	return fixtureOutput{
+		Query: fixtureQuery, ExpectedSearch: fixtureQuery, ExpectedGraph: fixtureExpectedGraph, ExpectedSource: fixtureExpectedSource, ExpectedMarker: marker,
+		NoView: &noViewFixtureOutput{
+			SourceID: source.SourceID, CheckoutID: checkout.CheckoutID, IncarnationID: checkout.IncarnationID, AnalysisProfileID: profile.ProfileID,
+			ParserBundleDigest: parserBundleDigest,
+		},
+	}, nil
+}
+
+func fixtureClientKeycard(ctx context.Context, store *gormdb.Store, name string, subject auth.BrowserSubject) (string, string, error) {
+	if store == nil || !subject.Valid() {
+		return "", "", errors.New("create fixture client keycard")
+	}
+	randomBytes := make([]byte, auth.TokenBodyLen/2)
+	if _, err := cryptorand.Read(randomBytes); err != nil {
+		return "", "", fmt.Errorf("generate fixture client keycard: %w", err)
+	}
+	raw := auth.TokenRawPrefix + hex.EncodeToString(randomBytes)
+	hash, err := bcrypt.GenerateFromPassword([]byte(raw), bcrypt.DefaultCost)
+	if err != nil {
+		return "", "", fmt.Errorf("hash fixture client keycard: %w", err)
+	}
+	token, err := gormdb.NewTokenStore(store).CreateWithPrincipal(ctx, name, string(hash), raw[len(auth.TokenRawPrefix):len(auth.TokenRawPrefix)+auth.TokenPrefixLen], string(auth.RoleReadOnly), subject.Principal, string(subject.Kind))
+	if err != nil || token == nil || token.ID == "" {
+		return "", "", fmt.Errorf("store fixture client keycard")
+	}
+	return raw, token.ID, nil
 }
 
 func seedFixtureQueueCandidates(ctx context.Context, db *gorm.DB, project string) error {

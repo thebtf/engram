@@ -13,8 +13,21 @@ const PROCESS_STOP_TIMEOUT_MS = 10_000
 const CONTROL_TIMEOUT_MS = 5_000
 const DAEMON_READY_TIMEOUT_MS = 10_000
 
+export interface MCPCodeIndexConfig {
+  parserBundleDigest: string
+  parserExecutable: string
+}
+
+export interface MCPNoViewTarget {
+  analysisProfileId: string
+  checkoutId: string
+  incarnationId: string
+  sourceId: string
+}
+
 export interface MCPStdioClientOptions {
   clientRoot: string
+  codeIndex?: MCPCodeIndexConfig
   executable: string
   serverURL: string
   token: string
@@ -26,7 +39,7 @@ export interface MCPStdioTranscript {
   externalPID: number
   methods: string[]
   processTreeStopped: boolean
-  rootLabel: 'A' | 'B'
+  rootLabel: 'A' | 'B' | 'C'
   sessionScoped: true
   stateRootRemoved: boolean
   tools: string[]
@@ -49,7 +62,7 @@ export class MCPStdioClient {
   private readonly controlPath: string
   private readonly methods: string[] = []
   private readonly pending = new Map<string, PendingRequest>()
-  private readonly rootLabel: 'A' | 'B'
+  private readonly rootLabel: 'A' | 'B' | 'C'
   private readonly stateRoot: string
   private readonly tools: string[] = []
   private closed = false
@@ -58,7 +71,7 @@ export class MCPStdioClient {
   private processTreeStopped = false
   private stateRootRemoved = false
 
-  private constructor(child: ChildProcess, stateRoot: string, rootLabel: 'A' | 'B', controlPath: string) {
+  private constructor(child: ChildProcess, stateRoot: string, rootLabel: 'A' | 'B' | 'C', controlPath: string) {
     this.child = child
     this.controlPath = controlPath
     this.stateRoot = stateRoot
@@ -82,11 +95,20 @@ export class MCPStdioClient {
       mkdir(join(home, 'AppData', 'Roaming'), { recursive: true, mode: 0o700 }),
       mkdir(join(home, 'AppData', 'Local'), { recursive: true, mode: 0o700 }),
     ])
+    if (options.codeIndex !== undefined && (options.codeIndex.parserBundleDigest === '' || options.codeIndex.parserExecutable === '')) {
+      await rm(stateRoot, { force: true, recursive: true })
+      throw new Error('external MCP client code index configuration is incomplete')
+    }
     const child = spawn(options.executable, [], {
       cwd: options.clientRoot,
       env: fixtureEnvironment({
         APPDATA: join(home, 'AppData', 'Roaming'),
-        ENGRAM_CLIENT_INSTANCE_ID: '',
+        ENGRAM_CLIENT_INSTANCE_ID: randomUUID(),
+        ...(options.codeIndex === undefined ? {} : {
+          ENGRAM_CODE_INTEL_ENABLED: 'true',
+          ENGRAM_UCI_PARSER_BUNDLE_DIGEST: options.codeIndex.parserBundleDigest,
+          ENGRAM_UCI_PARSER_EXECUTABLE: options.codeIndex.parserExecutable,
+        }),
         ENGRAM_DATA_DIR: dataRoot,
         ENGRAM_TOKEN: options.token,
         ENGRAM_URL: options.serverURL,
@@ -140,6 +162,34 @@ export class MCPStdioClient {
     })
     if (result === null || typeof result !== 'object' || Array.isArray(result) || ('isError' in result && result.isError === true)) {
       throw new Error('external MCP client returned an invalid read-only search response')
+    }
+  }
+
+  async prepareNoViewIndexTarget(target: MCPNoViewTarget): Promise<void> {
+    const selected = record(await this.callTool('codebase_context', {
+      action: 'select',
+      checkout: {
+        analysis_profile_id: target.analysisProfileId,
+        checkout_id: target.checkoutId,
+        incarnation_id: target.incarnationId,
+        source_id: target.sourceId,
+      },
+    }))
+    const contextHandle = Reflect.get(selected, 'context_handle')
+    if (
+      Reflect.get(selected, 'binding_kind') !== 'checkout'
+      || typeof contextHandle !== 'string' || contextHandle === ''
+      || Reflect.get(selected, 'source_id') !== target.sourceId
+      || Reflect.get(selected, 'checkout_id') !== target.checkoutId
+      || Reflect.get(selected, 'incarnation_id') !== target.incarnationId
+      || Reflect.get(selected, 'analysis_profile_id') !== target.analysisProfileId
+      || Reflect.get(selected, 'context') !== undefined
+    ) {
+      throw new Error('external MCP client did not retain the no-view checkout binding')
+    }
+    const status = record(await this.callTool('codebase_status', { context_handle: contextHandle }))
+    if (Reflect.get(status, 'current_context') !== null || Reflect.get(status, 'server_counts_available') !== false) {
+      throw new Error('external MCP client did not prepare a no-view index target')
     }
   }
 
@@ -232,6 +282,23 @@ export class MCPStdioClient {
     await this.writeFrame({ jsonrpc: '2.0', method, params })
   }
 
+  private async callTool(name: string, arguments_: Record<string, unknown>): Promise<unknown> {
+    const result = await this.request('tools/call', { arguments: arguments_, name })
+    const envelope = record(result)
+    if (Reflect.get(envelope, 'isError') === true) throw new Error(`external MCP client ${name} returned a tool error`)
+    const content = Reflect.get(envelope, 'content')
+    if (!Array.isArray(content) || content.length !== 1) throw new Error(`external MCP client ${name} returned an invalid tool envelope`)
+    const block = record(content[0])
+    if (Reflect.get(block, 'type') !== 'text' || typeof Reflect.get(block, 'text') !== 'string') {
+      throw new Error(`external MCP client ${name} returned an invalid tool content block`)
+    }
+    try {
+      return JSON.parse(Reflect.get(block, 'text') as string)
+    } catch {
+      throw new Error(`external MCP client ${name} returned non-JSON tool content`)
+    }
+  }
+
   private async request(method: string, params: Record<string, unknown>): Promise<unknown> {
     if (this.closed) throw new Error('external MCP client is closed')
     const id = `${this.rootLabel.toLowerCase()}-${++this.nextID}-${randomUUID()}`
@@ -297,10 +364,11 @@ function safeRPCError(method: string, value: unknown): Error {
   return new Error(`external MCP client ${method} returned an RPC error [${code}; ${category}]`)
 }
 
-function clientRootLabel(root: string): 'A' | 'B' {
+function clientRootLabel(root: string): 'A' | 'B' | 'C' {
   const normalized = root.replaceAll('\\', '/').replace(/\/+$/, '')
   if (normalized.endsWith('/a')) return 'A'
   if (normalized.endsWith('/b')) return 'B'
+  if (normalized.endsWith('/c')) return 'C'
   throw new Error('external MCP client root is not a fixture linked worktree')
 }
 
@@ -395,6 +463,13 @@ async function sendMuxControlRequest(controlPath: string, request: Record<string
 function responseRecord(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('external MCP daemon control returned a non-object response')
+  }
+  return value
+}
+
+function record(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('external MCP client returned a non-object tool payload')
   }
   return value
 }
