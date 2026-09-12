@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"os"
 	"slices"
 	"sort"
 	"strings"
@@ -36,6 +37,10 @@ var uciSLOExpectedWarmGates = []uciSLOGateExpectation{
 }
 
 func TestUCISLOProfile(t *testing.T) {
+	if os.Getenv(uciSLOInputPathEnv) == "" {
+		t.Skip("UCI SLO profile requires externally recorded evidence at ENGRAM_UCI_SLO_INPUT")
+	}
+
 	report, err := RunUCISLOProfile(t.Context())
 	if err != nil {
 		t.Fatalf("run UCI healthy-profile SLO fixture: %v", err)

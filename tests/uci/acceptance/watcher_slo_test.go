@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -28,10 +29,12 @@ type uciWatcherSLOScope struct {
 }
 
 func TestUCIWatcherSLO(t *testing.T) {
-	// T064 must provide this acceptance-only runner. It must read one strict,
-	// externally recorded exact-candidate input (rather than run a benchmark,
-	// infer identity from this process, or manufacture timings). This RED test
-	// deliberately supplies no measurement input.
+	if os.Getenv(uciWatcherSLOInputEnv) == "" {
+		t.Skip("UCI watcher SLO requires externally recorded evidence at ENGRAM_UCI_WATCHER_SLO_INPUT")
+	}
+
+	// T064 reads one strict externally recorded exact-candidate input. It does
+	// not run a benchmark, infer identity from this process, or manufacture timings.
 	report, err := RunUCIWatcherSLO(t.Context())
 	if err != nil {
 		t.Fatalf("run externally recorded UCI watcher SLO input: %v", err)

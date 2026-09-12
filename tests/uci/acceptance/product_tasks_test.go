@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -10,6 +11,10 @@ func TestUCIProductTaskContracts(t *testing.T) {
 }
 
 func TestUCIProductTaskCorpus(t *testing.T) {
+	if os.Getenv(uciProductInputPathEnv) == "" {
+		t.Skip("UCI product task corpus requires externally recorded evidence at ENGRAM_UCI_PRODUCT_INPUT")
+	}
+
 	requireUCIProductTaskContracts(t)
 
 	report, err := RunUCIProductTaskCorpus(t.Context())

@@ -30,7 +30,9 @@ func newRulesTestService(t *testing.T, project string) (*Service, *dbgorm.Behavi
 func newRulesSelectionTestService(t *testing.T, project string) (*Service, *dbgorm.BehavioralRulesStore, *dbgorm.CollectionSelectionStore, *dbgorm.Store) {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_DSN")
-	require.NotEmpty(t, dsn, "DATABASE_DSN is required for Rules PostgreSQL tests")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN is not set; rules handler tests require a PostgreSQL database")
+	}
 	store, err := dbgorm.NewStore(dbgorm.Config{DSN: dsn, MaxConns: 2})
 	require.NoError(t, err)
 
@@ -567,7 +569,9 @@ func TestRulesCollectionBridgeRoutesFreezeAndPageOverTwoHundredRules(t *testing.
 func openRulesCollectionBridgeStore(t *testing.T) *dbgorm.Store {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_DSN")
-	require.NotEmpty(t, dsn, "DATABASE_DSN is required for Rules PostgreSQL tests")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN is not set; rules collection bridge tests require a PostgreSQL database")
+	}
 	store, err := dbgorm.NewStore(dbgorm.Config{DSN: dsn, MaxConns: 2})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })

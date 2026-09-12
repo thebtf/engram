@@ -231,7 +231,9 @@ func (fixture collectionSelectionFixture) scope(domain string) CollectionSelecti
 func newCollectionSelectionFixture(t *testing.T) collectionSelectionFixture {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_DSN")
-	require.NotEmpty(t, dsn, "DATABASE_DSN is required for collection selection PostgreSQL integration tests")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN is not set; collection selection tests require a PostgreSQL database")
+	}
 	db, err := gormlib.Open(postgres.Open(dsn), &gormlib.Config{Logger: logger.Default.LogMode(logger.Warn)})
 	require.NoError(t, err)
 	sqlDB, err := db.DB()

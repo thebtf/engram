@@ -20,7 +20,9 @@ func strPtr(s string) *string { return &s }
 func openBehavioralRulesStore(t *testing.T) *Store {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_DSN")
-	require.NotEmpty(t, dsn, "DATABASE_DSN is required for behavioral-rules PostgreSQL tests")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN is not set; behavioral-rules tests require a PostgreSQL database")
+	}
 	store, err := NewStore(Config{DSN: dsn, MaxConns: 2})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
