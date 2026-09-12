@@ -7,6 +7,7 @@ const path = require('path');
 const { execFileSync, spawnSync } = require('node:child_process');
 
 const lib = require('./lib');
+const NODE_CHILD_TIMEOUT_MS = process.platform === 'win32' ? 10000 : 2000;
 
 test('assertSupportedNodeVersion requires a canonical Node 18+ version', () => {
  for (const version of ['16.20.2', '17.9.1', '018.0.0', '18.00.00', '18', '18.0', 'node-18.0.0', '18.0.0-beta']) {
@@ -986,6 +987,10 @@ test('V3 registration builds and sends only the shared descriptor', async (t) =>
   scope: 'repository',
  }));
  execFileSync('git', ['-C', repo, 'add', '.engram-project']);
+ assert.equal(
+  execFileSync('git', ['-C', repo, 'ls-files', '--error-unmatch', '--', '.engram-project'], { encoding: 'utf8' }).trim(),
+  '.engram-project',
+ );
  execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://git.example.test/Platform/Hook.git']);
 
  const descriptor = lib.resolveHookProjectDescriptorV3(repo, 'hook-install-alpha');
@@ -1140,7 +1145,7 @@ test('configured Hook V3 requires an anchor before making a registration request
  const result = spawnSync(process.execPath, ['-e', childScript, require.resolve('./lib')], {
   input: JSON.stringify({ session_id: 'v3-no-anchor', cwd: directory }),
   encoding: 'utf8',
-  timeout: 2000,
+  timeout: NODE_CHILD_TIMEOUT_MS,
   windowsHide: true,
   env: environment,
  });
@@ -1197,7 +1202,7 @@ test('Hook V3 validates raw config client IDs before registration', (t) => {
   return spawnSync(process.execPath, ['-e', childScript, require.resolve('./lib')], {
    input: JSON.stringify({ session_id: 'v3-raw-client-id', cwd: directory }),
    encoding: 'utf8',
-   timeout: 2000,
+   timeout: NODE_CHILD_TIMEOUT_MS,
    windowsHide: true,
    env: environment,
   });
@@ -1269,7 +1274,7 @@ test('configured Hook V3 directory registration does not invoke legacy Git resol
  const result = spawnSync(process.execPath, ['-e', childScript, require.resolve('./lib')], {
   input: JSON.stringify({ session_id: 'v3-git-failure', cwd: directory }),
   encoding: 'utf8',
-  timeout: 2000,
+  timeout: NODE_CHILD_TIMEOUT_MS,
   windowsHide: true,
   env: environment,
  });

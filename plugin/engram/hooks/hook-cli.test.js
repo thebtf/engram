@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const test = require('node:test');
+const NODE_CHILD_TIMEOUT_MS = process.platform === 'win32' ? 10000 : 2000;
 
 const hooksDir = __dirname;
 const pluginRoot = path.resolve(hooksDir, '..');
@@ -15,7 +16,7 @@ function runHook(scriptName, input) {
   const result = spawnSync(process.execPath, [scriptPath], {
     input,
     encoding: 'utf8',
-    timeout: 2000,
+    timeout: NODE_CHILD_TIMEOUT_MS,
     killSignal: 'SIGKILL',
     maxBuffer: 1024 * 1024,
     env: {
@@ -80,7 +81,7 @@ function runLauncher(command, input, env) {
   return spawnSync(process.execPath, ['-e', match[1]], {
     input,
     encoding: 'utf8',
-    timeout: 2000,
+    timeout: NODE_CHILD_TIMEOUT_MS,
     killSignal: 'SIGKILL',
     maxBuffer: 1024 * 1024,
     env,
@@ -358,7 +359,7 @@ test('legacy Codex shims point to stable bridge when plugin data is available', 
       const result = spawnSync(process.execPath, [legacyPreCompact], {
         input: JSON.stringify({ session_id: 's1' }),
         encoding: 'utf8',
-        timeout: 2000,
+        timeout: NODE_CHILD_TIMEOUT_MS,
         killSignal: 'SIGKILL',
         maxBuffer: 1024 * 1024,
         env: {
@@ -425,7 +426,7 @@ test('stable Codex bridge survives cache version prune and dispatches newest slo
     const result = spawnSync(process.execPath, [bridgePath, 'PreCompact'], {
       input: JSON.stringify({ session_id: 's1' }),
       encoding: 'utf8',
-      timeout: 2000,
+      timeout: NODE_CHILD_TIMEOUT_MS,
       killSignal: 'SIGKILL',
       maxBuffer: 1024 * 1024,
       env: {
@@ -491,7 +492,7 @@ test('dispatcher repairs missing legacy Codex cache hook entrypoints with latest
     const result = spawnSync(process.execPath, [legacyPreCompact], {
       input: JSON.stringify({ session_id: 's1' }),
       encoding: 'utf8',
-      timeout: 2000,
+      timeout: NODE_CHILD_TIMEOUT_MS,
       killSignal: 'SIGKILL',
       maxBuffer: 1024 * 1024,
       env: {
@@ -549,7 +550,7 @@ test('dispatcher repair omits the retired tool-result entrypoint', () => {
     const dispatch = spawnSync(process.execPath, [path.join(hooksDir, 'dispatcher.cjs'), retiredEvent], {
       input: JSON.stringify({ session_id: 's1' }),
       encoding: 'utf8',
-      timeout: 2000,
+      timeout: NODE_CHILD_TIMEOUT_MS,
       env: { ...process.env, CODEX_HOME: '', PLUGIN_DATA: '', CLAUDE_PLUGIN_DATA: '', CODEX_PLUGIN_DATA: '' },
     });
     assert.equal(dispatch.status, 0, dispatch.stderr);
@@ -582,7 +583,7 @@ test('dispatcher main repairs deleted cache slots before non-session hooks', () 
     const result = spawnSync(process.execPath, [latestDispatcher, 'PreCompact'], {
       input: JSON.stringify({ session_id: 's1' }),
       encoding: 'utf8',
-      timeout: 2000,
+      timeout: NODE_CHILD_TIMEOUT_MS,
       killSignal: 'SIGKILL',
       maxBuffer: 1024 * 1024,
       env: {
@@ -618,7 +619,7 @@ test('legacy shim fails open when its pinned dispatcher throws', () => {
     const result = spawnSync(process.execPath, [legacyHook], {
       input: JSON.stringify({ session_id: 's1' }),
       encoding: 'utf8',
-      timeout: 2000,
+      timeout: NODE_CHILD_TIMEOUT_MS,
       killSignal: 'SIGKILL',
       maxBuffer: 1024 * 1024,
       env: { ...process.env },
@@ -643,7 +644,7 @@ test('dispatcher fails open when a child hook file is missing', () => {
     const result = spawnSync(process.execPath, [path.join(tempHooks, 'dispatcher.cjs'), 'PreCompact'], {
       input: JSON.stringify({ session_id: 's1' }),
       encoding: 'utf8',
-      timeout: 2000,
+      timeout: NODE_CHILD_TIMEOUT_MS,
       killSignal: 'SIGKILL',
       maxBuffer: 1024 * 1024,
       env: { ...process.env },
@@ -673,7 +674,7 @@ test('dispatcher fails open when a child hook exits nonzero', () => {
     const result = spawnSync(process.execPath, [path.join(tempHooks, 'dispatcher.cjs'), 'PreCompact'], {
       input: JSON.stringify({ session_id: 's1' }),
       encoding: 'utf8',
-      timeout: 2000,
+      timeout: NODE_CHILD_TIMEOUT_MS,
       killSignal: 'SIGKILL',
       maxBuffer: 1024 * 1024,
       env: { ...process.env },

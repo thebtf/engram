@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const NODE_CHILD_TIMEOUT_MS = process.platform === 'win32' ? 10000 : 3000;
 
 const { handleStop, extractAgentOutput } = require('./stop');
 
@@ -51,7 +52,7 @@ test('Stop clears the pending marker when project registration is offline', (t) 
   const result = spawnSync(process.execPath, [require.resolve('./stop')], {
     input: JSON.stringify({ session_id: sessionID, cwd: workspace }),
     encoding: 'utf8',
-    timeout: 3000,
+    timeout: NODE_CHILD_TIMEOUT_MS,
     windowsHide: true,
     env: {
       ...process.env,
