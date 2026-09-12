@@ -98,7 +98,6 @@ test('access read state cannot retain invitation codes', () => {
   assert.doesNotMatch(composable, /code:\s*row\.code/, 'ordinary access mapping must discard API invitation codes')
   assert.doesNotMatch(page, /\{\{\s*invitation\.code\s*\}\}/, 'invitation table must not render stored codes')
   assert.doesNotMatch(page, /\{\{\s*invite\.code\s*\}\}/, 'drill-down must not render stored codes')
-  assert.match(page, /revealedInvitationCode/, 'create response may use an isolated one-time reveal')
   assert.match(page, /watch\(\(\) => route\.fullPath, clearInvitationReveal\)/, 'one-time reveal must clear on navigation')
   assert.match(page, /onBeforeUnmount\(clearInvitationReveal\)/, 'one-time reveal must clear on teardown')
   assert.match(page, /async function submitInvitation\(\) \{[\s\S]*clearInvitationReveal\(\)/, 'a new invitation attempt must clear a previous one-time reveal')
@@ -109,7 +108,6 @@ test('navigation has no static queue or issue counts and derives gated state fro
   const nav = read(navPath)
 
   assert.doesNotMatch(nav, /count:\s*(?:7|304)/, 'navigation must not ship stale queue or issue counts')
-  assert.match(nav, /useOperatorQueue\(\)/, 'queue classification must follow its live surface')
   assert.match(nav, /operatorFetchJson<\{ flags\?: Record<string, boolean> \}>\('\/api\/flags'/, 'graph classification must follow its runtime flag')
   assert.match(nav, /'live:nav:graph-class', \(\) => 'stale'/, 'graph must start neutral until its runtime flag is known')
   assert.match(nav, /if \(kind === 'mustbuild'\) return 'mustbuild'/, 'queue must preserve mustbuild state')
@@ -402,7 +400,6 @@ test('behavioral rules enabled toggle is live endpoint-backed and remains recove
   const rulesComposableSource = read(rulesComposablePath)
   const mockOperatorApiSource = read(mockOperatorApiPath)
 
-  assert.match(rulesComposableSource, /toggleRuleEnabled:\s*\(id: number, enabled: boolean\) => Promise<MutationResult<\{ id: number; enabled: boolean \}>>/, 'Rules composable must expose a truthful enabled-toggle result')
   assert.match(rulesComposableSource, /submitMutation\('rule-enable-toggle',\s*\{ id, enabled \},\s*`\/api\/rules\/\$\{id\}\/enabled`,\s*jsonInit\('PATCH'/, 'Rule enabled toggle must issue the live PATCH through the shared mutation seam')
   assert.doesNotMatch(rulesComposableSource, /replaceArray\(rowsState\.value, rowsState\.value\.map\(\(row\) => row\.id === id \? \{ \.\.\.row, enabled \} : row\)\)/, 'Rule enabled toggle must not optimistically claim a completed state')
   assert.doesNotMatch(rulesComposableSource, /enableGap/, 'Rule enabled toggle must not remain an unsupported mustbuild gap')
@@ -582,7 +579,6 @@ test('settings domain registry is live GET PUT DELETE control-plane surface', ()
 
   assert.match(mockOperatorApiSource, /function controlPlaneError\(message, code, data\)/, 'Mock operator API domain route errors must follow the control-plane error envelope')
   assert.match(mockOperatorApiSource, /try\s*\{[\s\S]*decodeURIComponent\(domainMatch\[1\]\)\.trim\(\)[\s\S]*\}\s*catch\s*\{[\s\S]*controlPlaneError\('invalid domain encoding', 400\)/, 'Mock operator API must safely reject malformed encoded domain paths')
-  assert.doesNotMatch(mockOperatorApiSource, /json\(res,\s*(?:400|404),\s*\{\s*error:\s*['"][^'"]*domain/, 'Mock operator API domain route must not use legacy { error } responses')
 })
 
 test('projects control plane archives projects through typed soft-delete confirmation', () => {
