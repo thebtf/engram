@@ -51,6 +51,28 @@ type projectIdentityPublicationObservations struct {
 	partial  atomic.Int64
 }
 
+func projectIdentityGitAbsenceStub(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	name := "git"
+	script := []byte("#!/bin/sh\nprintf '%s\\n' 'fatal: not a git repository' >&2\nexit 128\n")
+	if runtime.GOOS == "windows" {
+		name += ".cmd"
+		script = []byte("@echo off\r\necho fatal: not a git repository 1>&2\r\nexit /b 128\r\n")
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), script, 0o700); err != nil {
+		t.Fatalf("write git absence stub: %v", err)
+	}
+	return dir
+}
+
+// useProjectIdentityGitAbsenceStub isolates anchor tests from unrelated Git work.
+func useProjectIdentityGitAbsenceStub(t *testing.T) {
+	t.Helper()
+	gitStubDir := projectIdentityGitAbsenceStub(t)
+	t.Setenv("PATH", gitStubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 // TestResolveProjectIdentityV2_ProcessHelper is intentionally inert in an
 // ordinary test run. The parent acceptance test re-executes this test binary
 // with the helper environment set, waits for READY on stdout, and releases all
@@ -208,6 +230,7 @@ func runProjectIdentityProcessWave(t *testing.T, workspace string, count int, mo
 	if count < 2 {
 		t.Fatalf("child count=%d, want at least two independent processes", count)
 	}
+	useProjectIdentityGitAbsenceStub(t)
 
 	executable, err := os.Executable()
 	if err != nil {

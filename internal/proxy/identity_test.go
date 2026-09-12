@@ -127,6 +127,7 @@ func TestResolveProjectIdentityV2_NonGitAnchorStrictAndStable(t *testing.T) {
 }
 
 func TestResolveProjectIdentityV2_ConcurrentFirstUseConverges(t *testing.T) {
+	useProjectIdentityGitAbsenceStub(t)
 	dir := t.TempDir()
 	const callers = 24
 	identities := make([]proxy.ProjectIdentityV2, callers)
@@ -152,6 +153,7 @@ func TestResolveProjectIdentityV2_ConcurrentFirstUseConverges(t *testing.T) {
 }
 
 func TestResolveProjectIdentityV2_PreExistingAnchorsAreNeverReplaced(t *testing.T) {
+	useProjectIdentityGitAbsenceStub(t)
 	t.Run("valid", func(t *testing.T) {
 		dir := t.TempDir()
 		anchorPath := filepath.Join(dir, ".engram-project-v2.json")
