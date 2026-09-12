@@ -86,8 +86,7 @@ func TestBrowserTabBindingMigration177UpgradeRollbackAndReplay(t *testing.T) {
 	}
 	require.NoError(t, db.Create(&legacyAudit).Error)
 
-	require.NoError(t, db.Exec("DELETE FROM migrations WHERE id = ?", browserTabBindingMigrationID).Error)
-	require.NoError(t, db.Exec("DROP TABLE browser_tab_bindings").Error)
+	rewindBrowserMigrationTestBoundary(t, db, browserReadGrantMigrationID)
 	assertBrowserTabBindingMigrationApplied(t, db, 0)
 	assertBrowserTabBindingMigrationPrerequisite(t, db, browserReadGrantMigrationID)
 	assertBrowserTabBindingMigrationTableAbsent(t, db)

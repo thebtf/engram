@@ -35,6 +35,33 @@ type browserReadGrantMigrationConstraint struct {
 	Definition string `gorm:"column:definition"`
 }
 
+// rewindBrowserMigrationTestBoundary removes only post-boundary test schema in
+// reverse migration order. Production rollback callbacks remain untouched.
+func rewindBrowserMigrationTestBoundary(t *testing.T, db *gormlib.DB, boundaryMigrationID string) {
+	t.Helper()
+	steps := []struct {
+		migrationID string
+		statements  []string
+	}{
+		{"181_browser_code_search_continuations", []string{"DROP TABLE browser_code_search_continuations"}},
+		{"180_uci_index_intent_delivery", []string{"DROP TABLE uci_index_intent_receipts", "ALTER TABLE ci_jobs DROP COLUMN index_intent_id"}},
+		{"179_uci_index_intents", []string{"DROP TABLE uci_index_intents"}},
+		{"178_collection_selections", []string{"DROP TABLE collection_selections"}},
+		{"177_browser_tab_bindings", []string{"DROP TABLE browser_tab_bindings"}},
+		{browserReadGrantMigrationID, []string{"DROP TABLE browser_read_grants"}},
+	}
+	for _, step := range steps {
+		if step.migrationID == boundaryMigrationID {
+			return
+		}
+		for _, statement := range step.statements {
+			require.NoErrorf(t, db.Exec(statement).Error, "unwind test schema for %s", step.migrationID)
+		}
+		require.NoError(t, db.Exec("DELETE FROM migrations WHERE id = ?", step.migrationID).Error)
+	}
+	require.Equal(t, "175_uci_reference_source_text", boundaryMigrationID, "unsupported browser migration test boundary")
+}
+
 // TestBrowserReadGrantMigration176FreshSchemaAndStoreLifecycle proves a fresh
 // migration chain owns the grant table rather than a store AutoMigrate call.
 func TestBrowserReadGrantMigration176FreshSchemaAndStoreLifecycle(t *testing.T) {
@@ -113,8 +140,7 @@ func TestBrowserReadGrantMigration176UpgradeAndRollbackRetainSchemaHistory(t *te
 	}
 	require.NoError(t, db.Create(&legacyAudit).Error)
 
-	require.NoError(t, db.Exec("DELETE FROM migrations WHERE id = ?", browserReadGrantMigrationID).Error)
-	require.NoError(t, db.Exec("DROP TABLE browser_read_grants").Error)
+	rewindBrowserMigrationTestBoundary(t, db, "175_uci_reference_source_text")
 	assertBrowserReadGrantMigrationApplied(t, db, 0)
 	assertBrowserReadGrantMigrationPrerequisite(t, db, "175_uci_reference_source_text")
 	assertBrowserReadGrantMigrationTableAbsent(t, db)
