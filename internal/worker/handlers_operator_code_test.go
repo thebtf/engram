@@ -512,6 +512,7 @@ func TestOperatorCodeHTTPAdapter_IndexIntentAcknowledgementIsNotCompletion(t *te
 func TestOperatorCodeHTTPAdapter_NoViewIndexIntentReauthorizesWithoutPin(t *testing.T) {
 	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
 	fixture.binding.pinned = nil
+	fixture.contexts.entries[0].Context = nil
 	target := `{"source_id":"` + operatorCodeHTTPTestSourceID + `","checkout_id":"` + operatorCodeHTTPTestCheckoutID + `"}`
 	body := `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","request_ref":"first-index","kind":"reindex","target":` + target + `}`
 
@@ -962,7 +963,7 @@ func (store *operatorCodeHTTPTestContextStore) AuthorizeInitialIndexIntent(_ con
 	if store.initialTargetErr != nil {
 		return gormdb.BrowserCodeIndexIntentBinding{}, store.initialTargetErr
 	}
-	return store.noViewIndexIntentBinding(target)
+	return store.noViewIndexIntentBinding(target, true)
 }
 
 func (store *operatorCodeHTTPTestContextStore) ReauthorizeIndexIntent(_ context.Context, target gormdb.BrowserCodeIndexIntentTarget) (gormdb.BrowserCodeIndexIntentBinding, error) {
@@ -970,12 +971,27 @@ func (store *operatorCodeHTTPTestContextStore) ReauthorizeIndexIntent(_ context.
 	if store.reauthTargetErr != nil {
 		return gormdb.BrowserCodeIndexIntentBinding{}, store.reauthTargetErr
 	}
-	return store.noViewIndexIntentBinding(target)
+	return store.noViewIndexIntentBinding(target, false)
 }
 
-func (store *operatorCodeHTTPTestContextStore) noViewIndexIntentBinding(target gormdb.BrowserCodeIndexIntentTarget) (gormdb.BrowserCodeIndexIntentBinding, error) {
+func (store *operatorCodeHTTPTestContextStore) noViewIndexIntentBinding(target gormdb.BrowserCodeIndexIntentTarget, requireNoView bool) (gormdb.BrowserCodeIndexIntentBinding, error) {
 	if target.Caller.SubjectUserID != 41 || target.Caller.SessionID != "browser-session-41" || target.TabBindingID != operatorCodeHTTPTestBindingID || target.SourceID != operatorCodeHTTPTestSourceID || target.CheckoutID != operatorCodeHTTPTestCheckoutID || target.ProfileID != operatorCodeHTTPTestProfileID {
 		return gormdb.BrowserCodeIndexIntentBinding{}, gormdb.ErrBrowserCodeContextDenied
+	}
+	if requireNoView {
+		found := false
+		for _, entry := range store.entries {
+			if entry.SourceID != target.SourceID || entry.CheckoutID != target.CheckoutID {
+				continue
+			}
+			found = true
+			if entry.Context != nil {
+				return gormdb.BrowserCodeIndexIntentBinding{}, gormdb.ErrBrowserCodeContextDenied
+			}
+		}
+		if !found {
+			return gormdb.BrowserCodeIndexIntentBinding{}, gormdb.ErrBrowserCodeContextDenied
+		}
 	}
 	binding := store.noViewBinding
 	if binding.Scope == (uci.IndexScope{}) {
