@@ -109,6 +109,7 @@ test('S4 live first-index uses the real C-worktree daemon pump', async ({ browse
   const statusHeaderChecks: boolean[] = []
   const statusCodes: number[] = []
   const transcripts: MCPStdioTranscript[] = []
+  const advertisementChecks: Array<{ available: boolean; profileId: string | null }> = []
   let catalogRefreshes = 0
   let firstIndexSubmitted = false
   let intentRef: string | null = null
@@ -218,18 +219,27 @@ test('S4 live first-index uses the real C-worktree daemon pump', async ({ browse
     expect(live.externalPID).toBeGreaterThan(0)
     expect(live.tools).toEqual(expect.arrayContaining(['codebase_context', 'codebase_index', 'codebase_status']))
 
-    const liveCatalogResponse = page.waitForResponse((response) => {
-      const url = new URL(response.url())
-      return response.request().method() === 'POST' && url.pathname === '/api/code/contexts'
-    })
-    await page.reload({ waitUntil: 'domcontentloaded' })
-    const liveCatalog = await liveCatalogResponse
-    expect(liveCatalog.status()).toBe(200)
-    const liveBody: unknown = await liveCatalog.json()
-    const liveEntries = liveBody !== null && typeof liveBody === 'object' && !Array.isArray(liveBody) ? Reflect.get(liveBody, 'contexts') : null
-    const noView = Array.isArray(liveEntries)
-      ? liveEntries.map(catalogEntry).find((entry) => entry !== null && entry.source.id === fixture.operatorCodeFirstIndex.sourceId && entry.checkout.id === fixture.operatorCodeFirstIndex.checkoutId) ?? null
-      : null
+    let noView: CatalogEntry = null
+    let liveCatalogStatus = 0
+    const advertisementDeadline = Date.now() + 15_000
+    do {
+      const liveCatalogResponse = page.waitForResponse((response) => {
+        const url = new URL(response.url())
+        return response.request().method() === 'POST' && url.pathname === '/api/code/contexts'
+      })
+      await page.reload({ waitUntil: 'domcontentloaded' })
+      const liveCatalog = await liveCatalogResponse
+      liveCatalogStatus = liveCatalog.status()
+      const liveBody: unknown = await liveCatalog.json()
+      const liveEntries = liveBody !== null && typeof liveBody === 'object' && !Array.isArray(liveBody) ? Reflect.get(liveBody, 'contexts') : null
+      noView = Array.isArray(liveEntries)
+        ? liveEntries.map(catalogEntry).find((entry) => entry !== null && entry.source.id === fixture.operatorCodeFirstIndex.sourceId && entry.checkout.id === fixture.operatorCodeFirstIndex.checkoutId) ?? null
+        : null
+      advertisementChecks.push({ available: noView?.indexIntentAvailable ?? false, profileId: noView?.analysisProfileId ?? null })
+      if (liveCatalogStatus === 200 && noView?.indexIntentAvailable === true) break
+      await page.waitForTimeout(250)
+    } while (Date.now() < advertisementDeadline)
+    expect(liveCatalogStatus).toBe(200)
     expect(noView).not.toBeNull()
     expect(noView?.indexIntentAvailable).toBe(true)
     expect(noView?.analysisProfileId).toBe(fixture.operatorCodeFirstIndex.analysisProfileId)
@@ -317,7 +327,7 @@ test('S4 live first-index uses the real C-worktree daemon pump', async ({ browse
       backend: { sourceCommit: state.backend.sourceCommit, binarySha256: state.backend.binarySha256 },
       browser: { engine: browser.browserType().name(), version: browser.version() },
       browserHTTP: 'real registered Go routes; no page-level API mock or SQL lifecycle fabrication',
-      indexIntent: { intentRef, resultViewId, firstIndexSubmitted, catalogRefreshes, noAutoPin: true },
+      indexIntent: { intentRef, resultViewId, firstIndexSubmitted, catalogRefreshes, noAutoPin: true, advertisementChecks },
       mcp: transcripts,
       offline: { stoppedOwnedDaemon: true, noCompletionBeforeLiveDaemon: true },
       traffic: state.traffic,

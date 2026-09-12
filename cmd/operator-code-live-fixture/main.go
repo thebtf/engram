@@ -338,7 +338,11 @@ func provisionNoView(ctx context.Context, store *gormdb.Store, user *gormdb.User
 	if err != nil {
 		return fixtureOutput{}, fmt.Errorf("create no-view fixture source: %w", err)
 	}
-	locator := (&url.URL{Scheme: "file", Path: filepath.ToSlash(root)}).String()
+	locatorPath := filepath.ToSlash(root)
+	if filepath.VolumeName(root) != "" {
+		locatorPath = "/" + locatorPath
+	}
+	locator := (&url.URL{Scheme: "file", Path: locatorPath}).String()
 	checkout, err := contexts.RegisterCheckout(ctx, gormdb.RegisterCheckoutInput{
 		SourceID:       source.SourceID,
 		WorkstationID:  workstationID,

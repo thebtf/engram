@@ -294,7 +294,7 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
     await a.page.evaluate(() => { window.open('/code', '_blank') })
     const child = await popupPromise
     await child.waitForLoadState('domcontentloaded')
-    await expect(child.getByTestId('code-bootstrap-evidence')).toContainText('normalized to null')
+    await expect(child.getByTestId('code-bootstrap-evidence')).toContainText('TAB_BINDING_READY')
     await expect(child.getByTestId('code-release-state')).toHaveAttribute('data-state', 'unselected')
     const childSelect = child.getByTestId('code-context-select')
     const childOption = childSelect.locator('option').filter({ hasText: `${fixture.fixtureId}-a` })
