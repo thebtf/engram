@@ -87,7 +87,7 @@ if (promotion && parity) {
   for (const mapping of expected) if (!rowIds.has(mapping.id)) fail(`missing parity row: ${mapping.id}`)
   const routes = expected.filter((item) => item.kind === 'route')
   const frames = expected.filter((item) => item.kind === 'frame')
-  if (routes.length !== 15 || frames.length !== 2) fail(`route/frame contract must have 15 routes + 2 frames (has ${routes.length} + ${frames.length})`)
+  if (routes.length !== 16 || frames.length !== 2) fail(`route/frame contract must have 16 routes + 2 frames (has ${routes.length} + ${frames.length})`)
 
   const pageRows = rows.filter((row) => row.kind === 'route').map((row) => row.runtime)
   const pages = readdirSync(join(appRoot, 'pages')).filter((name) => name.endsWith('.vue')).map((name) => `pages/${name}`)

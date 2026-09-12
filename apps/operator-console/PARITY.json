@@ -1,7 +1,7 @@
 {
   "$schema": "./PARITY.schema.json",
-  "design_version": "2026.07.14",
-  "design_snapshot_sha256": "90cd6192b369dd32bf8d17079563e4ff3953053794ce2dd2d6d0884e4277827c",
+  "design_version": "2026.09.10",
+  "design_snapshot_sha256": "356563b1674beda461230e50af1d9afc29e28e197fcb64e18db83a592bf35ee9",
   "note": "Truthful G1 ledger. The promoted manifest copies the source DESIGN.md version authority. Every row is explicitly drifted until route-specific Chrome evidence accepts it; this is not a runtime visual-sync claim.",
   "sections": [
     { "id": "overview", "kind": "route", "route": "/", "mockup": "mockups/index.html#overview", "runtime": "pages/index.vue", "fidelity": "interactive", "sync": "drifted", "synced_to": null, "synced_snapshot": null, "visual_evidence": [], "gaps": ["2026-07-14 audit requires re-convergence"] },
@@ -10,6 +10,7 @@
     { "id": "queue", "kind": "route", "route": "/queue", "mockup": "mockups/index.html#queue", "runtime": "pages/queue.vue", "fidelity": "interactive", "sync": "drifted", "synced_to": null, "synced_snapshot": null, "visual_evidence": [], "gaps": ["audit replay pending"] },
     { "id": "noise", "kind": "route", "route": "/noise", "mockup": "mockups/index.html#noise", "runtime": "pages/noise.vue", "fidelity": "structural", "sync": "drifted", "synced_to": null, "synced_snapshot": null, "visual_evidence": [], "gaps": ["major visual drift in audit"] },
     { "id": "graph", "kind": "route", "route": "/graph", "mockup": "mockups/index.html#graph", "runtime": "pages/graph.vue", "fidelity": "structural", "sync": "drifted", "synced_to": null, "synced_snapshot": null, "visual_evidence": [], "gaps": ["major visual drift in audit"] },
+    { "id": "code", "kind": "route", "route": "/code", "mockup": "mockups/index.html#code", "runtime": "pages/code.vue", "fidelity": "interactive", "sync": "drifted", "synced_to": null, "synced_snapshot": null, "visual_evidence": [], "gaps": ["runtime behavior exists; route-specific Chrome acceptance against the promoted Code flow is pending"] },
     { "id": "books", "kind": "route", "route": "/books", "mockup": "mockups/index.html#books", "runtime": "pages/books.vue", "fidelity": "interactive", "sync": "drifted", "synced_to": null, "synced_snapshot": null, "visual_evidence": [], "gaps": ["live behavior needs visual re-convergence"] },
     { "id": "rules", "kind": "route", "route": "/rules", "mockup": "mockups/index.html#rules", "runtime": "pages/rules.vue", "fidelity": "interactive", "sync": "drifted", "synced_to": null, "synced_snapshot": null, "visual_evidence": [], "gaps": ["Chrome acceptance pending"] },
     { "id": "issues", "kind": "route", "route": "/issues", "mockup": "mockups/index.html#issues", "runtime": "pages/issues.vue", "fidelity": "interactive", "sync": "drifted", "synced_to": null, "synced_snapshot": null, "visual_evidence": [], "gaps": ["Chrome acceptance pending"] },

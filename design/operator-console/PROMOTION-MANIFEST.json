@@ -113,6 +113,12 @@
       "mockup": "mockups/index.html#graph"
     },
     {
+      "id": "code",
+      "kind": "route",
+      "route": "/code",
+      "mockup": "mockups/index.html#code"
+    },
+    {
       "id": "books",
       "kind": "route",
       "route": "/books",
