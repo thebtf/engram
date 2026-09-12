@@ -110,7 +110,7 @@ function chooseContext(event: Event): void {
 
     <div class="actions">
       <button class="btn" type="button" :disabled="pending" @click="emit('refresh')">{{ t('codeExplorer.context.refresh') }}</button>
-      <button v-if="phase === 'reload-pending'" class="btn" type="button" :disabled="pending" @click="emit('retry')">{{ t('codeExplorer.context.retryReload') }}</button>
+      <button v-if="phase === 'reload-pending'" class="btn" type="button" :disabled="pending" data-testid="code-retry-reload" @click="emit('retry')">{{ t('codeExplorer.context.retryReload') }}</button>
       <button class="btn primary" type="button" :disabled="pending || candidate === null || samePinned" data-testid="code-pin-context" @click="emit('pin')">
         {{ samePinned ? t('codeExplorer.context.pinned') : pinned === null ? t('codeExplorer.context.pin') : t('codeExplorer.context.switch') }}
       </button>

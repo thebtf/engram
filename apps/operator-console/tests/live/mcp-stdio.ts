@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises'
 import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fixtureEnvironment } from './fixture-bootstrap'
 
@@ -59,6 +59,7 @@ interface MuxDaemonIdentity {
 
 export class MCPStdioClient {
   private readonly child: ChildProcess
+  private readonly daemonIdentity: Promise<MuxDaemonIdentity>
   private readonly controlPath: string
   private readonly methods: string[] = []
   private readonly pending = new Map<string, PendingRequest>()
@@ -70,10 +71,10 @@ export class MCPStdioClient {
   private nextID = 0
   private processTreeStopped = false
   private stateRootRemoved = false
-
-  private constructor(child: ChildProcess, stateRoot: string, rootLabel: 'A' | 'B' | 'C', controlPath: string) {
+  private constructor(child: ChildProcess, stateRoot: string, rootLabel: 'A' | 'B' | 'C', controlPath: string, expectedExecutable: string) {
     this.child = child
     this.controlPath = controlPath
+    this.daemonIdentity = readMuxDaemonIdentity(controlPath, expectedExecutable)
     this.stateRoot = stateRoot
     this.rootLabel = rootLabel
     child.on('error', () => this.rejectPending())
@@ -124,11 +125,11 @@ export class MCPStdioClient {
     })
     child.stderr?.resume()
     if (child.pid === undefined || child.pid <= 0 || child.stdin === null || child.stdout === null) {
-      await stopOwnedChild(child)
-      await rm(stateRoot, { force: true, recursive: true })
+      child.stdin?.end()
+      await waitForExit(child, 2_000)
       throw new Error('external MCP client did not start with standard I/O')
     }
-    return new MCPStdioClient(child, stateRoot, rootLabel, muxDaemonControlPath(dataRoot))
+    return new MCPStdioClient(child, stateRoot, rootLabel, muxDaemonControlPath(dataRoot), options.executable)
   }
 
   async initializeAndList(): Promise<void> {
@@ -143,6 +144,7 @@ export class MCPStdioClient {
     ) {
       throw new Error('external MCP client returned an invalid initialize response')
     }
+    this.daemon = await this.daemonIdentity
     await this.notify('notifications/initialized', {})
     const listed = await this.request('tools/list', {})
     if (listed === null || typeof listed !== 'object' || Array.isArray(listed) || !('tools' in listed) || !Array.isArray(listed.tools)) {
@@ -152,7 +154,6 @@ export class MCPStdioClient {
     for (const tool of listed.tools) {
       if (tool !== null && typeof tool === 'object' && !Array.isArray(tool) && 'name' in tool && typeof tool.name === 'string' && tool.name !== '') this.tools.push(tool.name)
     }
-    this.daemon = await readMuxDaemonIdentity(this.controlPath)
   }
 
   async readOnlySearch(query: string): Promise<void> {
@@ -217,16 +218,8 @@ export class MCPStdioClient {
     let childStopped = false
     try {
       try {
-        const daemon = this.daemon ?? await readMuxDaemonIdentity(this.controlPath)
-        this.daemon = daemon
-        const current = await readMuxDaemonIdentity(this.controlPath)
-        if (current.pid !== daemon.pid || current.generation !== daemon.generation) {
-          throw new Error('external MCP daemon control metadata changed before shutdown')
-        }
-        const response = responseRecord(await sendMuxControlRequest(this.controlPath, { cmd: 'shutdown', drain_timeout_ms: 2_000 }))
-        if (response.ok !== true) throw new Error('external MCP daemon rejected graceful shutdown')
-        await waitForMuxDaemonStop(this.controlPath)
-        daemonStopped = true
+        this.daemon ??= await this.daemonIdentity
+        daemonStopped = await stopRetainedMuxDaemon(this.controlPath, this.daemon)
       } catch (error) {
         failures.push(error)
       }
@@ -382,33 +375,42 @@ function muxControlEndpoint(controlPath: string): string {
   return `\\\\.\\pipe\\mcp-mux-${digest}`
 }
 
-async function readMuxDaemonIdentity(controlPath: string): Promise<MuxDaemonIdentity> {
+async function readMuxDaemonIdentity(controlPath: string, expectedExecutable: string): Promise<MuxDaemonIdentity> {
   const deadline = Date.now() + DAEMON_READY_TIMEOUT_MS
   let lastError = 'daemon control did not respond'
   while (Date.now() < deadline) {
     try {
-      const response = responseRecord(await sendMuxControlRequest(controlPath, { cmd: 'status' }))
-      if (response.ok !== true) throw new Error('daemon control rejected status request')
-      const status = responseRecord(response.data)
-      const identity = muxDaemonIdentity(status)
+      const identity = await readMuxDaemonStatus(controlPath)
       const marker = responseRecord(JSON.parse(await readFile(`${controlPath}.marker.json`, 'utf8')))
-      if (marker.pid !== identity.pid || marker.daemon_generation !== identity.generation) {
-        throw new Error('daemon marker does not match live control metadata')
+      const executable = Reflect.get(marker, 'exe')
+      if (
+        marker.pid !== identity.pid
+        || marker.daemon_generation !== identity.generation
+        || typeof executable !== 'string' || executable === ''
+        || resolve(executable).toLowerCase() !== resolve(expectedExecutable).toLowerCase()
+      ) {
+        throw new Error('daemon marker does not match the launched client executable and live control metadata')
       }
       return identity
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error)
-      await new Promise<void>((resolve) => setTimeout(resolve, 50))
+      await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 50))
     }
   }
   throw new Error(`external MCP daemon did not publish verified control metadata: ${lastError}`)
+}
+
+async function readMuxDaemonStatus(controlPath: string): Promise<MuxDaemonIdentity> {
+  const response = responseRecord(await sendMuxControlRequest(controlPath, { cmd: 'status' }))
+  if (response.ok !== true) throw new Error('daemon control rejected status request')
+  return muxDaemonIdentity(responseRecord(response.data))
 }
 
 function muxDaemonIdentity(status: Record<string, unknown>): MuxDaemonIdentity {
   const pid = status.pid
   const generation = status.daemon_generation
   const shuttingDown = status.shutting_down
-  if (!Number.isSafeInteger(pid) || pid <= 0 || typeof generation !== 'string' || generation === '' || shuttingDown === true) {
+  if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0 || typeof generation !== 'string' || generation === '' || shuttingDown === true) {
     throw new Error('external MCP daemon control returned invalid live metadata')
   }
   return { generation, pid }
@@ -418,14 +420,34 @@ async function waitForMuxDaemonStop(controlPath: string): Promise<void> {
   const deadline = Date.now() + PROCESS_STOP_TIMEOUT_MS
   while (Date.now() < deadline) {
     try {
-      await sendMuxControlRequest(controlPath, { cmd: 'status' })
-    } catch {
-      return
+      await readMuxDaemonStatus(controlPath)
+    } catch (error) {
+      if (error instanceof MuxControlUnavailableError) return
+      throw error
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, 50))
+    await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 50))
   }
   throw new Error('external MCP daemon remained reachable after graceful shutdown')
 }
+
+async function stopRetainedMuxDaemon(controlPath: string, daemon: MuxDaemonIdentity): Promise<boolean> {
+  let current: MuxDaemonIdentity
+  try {
+    current = await readMuxDaemonStatus(controlPath)
+  } catch (error) {
+    if (error instanceof MuxControlUnavailableError) return true
+    throw error
+  }
+  if (current.pid !== daemon.pid || current.generation !== daemon.generation) {
+    throw new Error('external MCP daemon control metadata changed before shutdown')
+  }
+  const response = responseRecord(await sendMuxControlRequest(controlPath, { cmd: 'shutdown', drain_timeout_ms: 2_000 }))
+  if (response.ok !== true) throw new Error('external MCP daemon rejected graceful shutdown')
+  await waitForMuxDaemonStop(controlPath)
+  return true
+}
+
+class MuxControlUnavailableError extends Error { }
 
 async function sendMuxControlRequest(controlPath: string, request: Record<string, unknown>): Promise<unknown> {
   const socket = createConnection({ path: muxControlEndpoint(controlPath) })
@@ -453,7 +475,7 @@ async function sendMuxControlRequest(controlPath: string, request: Record<string
     }
   })
   socket.once('timeout', () => fail(new Error('external MCP daemon control request timed out')))
-  socket.once('error', () => fail(new Error('external MCP daemon control request failed')))
+  socket.once('error', () => fail(new MuxControlUnavailableError('external MCP daemon control request failed')))
   socket.once('end', () => {
     if (!complete) fail(new Error('external MCP daemon control closed without a response'))
   })
@@ -474,12 +496,6 @@ function record(value: unknown): Record<string, unknown> {
   return value
 }
 
-async function stopOwnedChild(child: ChildProcess): Promise<void> {
-  child.stdin?.end()
-  if (await waitForExit(child, 2_000)) return
-  if (child.pid !== undefined && child.pid > 0) child.kill('SIGTERM')
-  await waitForExit(child, PROCESS_STOP_TIMEOUT_MS)
-}
 
 async function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
   if (child.exitCode !== null || child.signalCode !== null) return true

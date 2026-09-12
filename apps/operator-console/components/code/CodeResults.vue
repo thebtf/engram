@@ -92,8 +92,8 @@ async function copy(value: string): Promise<void> {
               <p class="result-evidence">{{ t('codeExplorer.search.evidence', { mode: search.retrievalMode ?? t('codeExplorer.status.unknown'), freshness: search.freshnessState ?? t('codeExplorer.status.unknown'), score: item.score ?? '—' }) }}</p>
             </div>
             <div class="item-actions">
-              <button class="btn" type="button" :disabled="pending" @click="emit('explore', item, { direction: 'both', relations: [] })">{{ t('codeExplorer.search.explore') }}</button>
-              <button class="btn" type="button" :disabled="pending" @click="emit('source', { entityKey: item.ref.entityKey, span: item.span, contentDigest: item.contentDigest })">{{ t('codeExplorer.search.source') }}</button>
+              <button class="btn" type="button" :disabled="pending" data-testid="code-search-explore" @click="emit('explore', item, { direction: 'both', relations: [] })">{{ t('codeExplorer.search.explore') }}</button>
+              <button class="btn" type="button" :disabled="pending" data-testid="code-search-source" @click="emit('source', { entityKey: item.ref.entityKey, span: item.span, contentDigest: item.contentDigest })">{{ t('codeExplorer.search.source') }}</button>
             </div>
           </li>
         </ul>

@@ -44,8 +44,8 @@ func TestFixtureSourceForReadsTheDeclaredWorktreeFile(t *testing.T) {
 
 const CodeExplorerFixtureMessage = "operator-code-fixture-a"
 
-func CodeExplorerFixtureTarget() string { return CodeExplorerFixtureMessage }
-func CodeExplorerFixtureEntry() string { return CodeExplorerFixtureTarget() }
+func CodeExplorerFixtureB() string { return CodeExplorerFixtureMessage }
+func CodeExplorerFixtureA() string { return CodeExplorerFixtureB() }
 `)
 	if err := os.WriteFile(path, want, 0o600); err != nil {
 		t.Fatal(err)
@@ -136,7 +136,7 @@ func TestRunRedactsPrivateDSNOnProvisionFailure(t *testing.T) {
 	}
 }
 
-func TestFixtureFrameCarriesSearchableSourceAndResolvedGraphFact(t *testing.T) {
+func TestFixtureFrameCarriesSearchableAAndResolvedGraphB(t *testing.T) {
 	extraction := uci.GoExtractionProfile{ProfileKey: "operator-code-live-v1", ParserKey: "go-parser"}
 	profile, err := uci.GoIndexAdmissionArtifactProfile(extraction)
 	if err != nil {
@@ -152,5 +152,8 @@ func TestFixtureFrameCarriesSearchableSourceAndResolvedGraphFact(t *testing.T) {
 	edge := frame.EdgeReplacements[0].Edges[0]
 	if edge.Target == nil || edge.Target.PathKey != fixtureSourcePath || edge.Target.SymbolKey == nil || *edge.Target.SymbolKey != "func:"+fixtureExpectedGraph || edge.ResolutionState != uci.IndexResolutionState("resolved") {
 		t.Fatalf("fixture graph edge = %#v", edge)
+	}
+	if fixtureQuery != "CodeExplorerFixtureA" || fixtureExpectedSource != "CodeExplorerFixtureA" || fixtureExpectedGraph != "CodeExplorerFixtureB" {
+		t.Fatalf("fixture scenario = query %q, source %q, graph %q", fixtureQuery, fixtureExpectedSource, fixtureExpectedGraph)
 	}
 }

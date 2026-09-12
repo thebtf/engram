@@ -31,9 +31,9 @@ import (
 const (
 	fixtureAuthRealm       = "browser"
 	fixtureClientAuthRealm = string(auth.SourceClient)
-	fixtureQuery           = "CodeExplorerFixtureEntry"
-	fixtureExpectedGraph   = "CodeExplorerFixtureTarget"
-	fixtureExpectedSource  = "CodeExplorerFixtureEntry"
+	fixtureQuery           = "CodeExplorerFixtureA"
+	fixtureExpectedGraph   = "CodeExplorerFixtureB"
+	fixtureExpectedSource  = "CodeExplorerFixtureA"
 	fixtureSourcePath      = "fixture.go"
 	fixtureQueueSeedCount  = 5
 )
@@ -42,12 +42,12 @@ var fixtureSource = []byte(`package fixture
 
 const CodeExplorerFixtureMessage = "operator-code-fixture"
 
-func CodeExplorerFixtureTarget() string {
+func CodeExplorerFixtureB() string {
 	return CodeExplorerFixtureMessage
 }
 
-func CodeExplorerFixtureEntry() string {
-	return CodeExplorerFixtureTarget()
+func CodeExplorerFixtureA() string {
+	return CodeExplorerFixtureB()
 }
 `)
 

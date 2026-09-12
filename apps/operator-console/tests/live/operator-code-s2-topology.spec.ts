@@ -118,9 +118,9 @@ async function pinAndRead(browser: Browser, fixture: LiveFixtureState, credentia
     has: page.getByText(`go:fixture/func:${scenario.expectedSource}`, { exact: true }),
   })
   await expect(result).toHaveCount(1)
-  await result.getByRole('button', { name: 'Explore graph' }).click()
+  await result.getByTestId('code-search-explore').click()
   await expect(page.getByTestId('code-graph-results')).toContainText(scenario.expectedGraph)
-  await result.getByRole('button', { name: 'Read source' }).click()
+  await result.getByTestId('code-search-source').click()
   await expect(page.getByTestId('code-source-result')).toContainText(scenario.expectedMarker)
   if (proof === null || searchPayload === null) {
     throw new Error('live Code Explorer did not send a binding-bound search request')
@@ -185,7 +185,7 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
           has: tabA.page.getByText(`go:fixture/func:${aScenario.expectedSource}`, { exact: true }),
         })
         await expect(result).toHaveCount(1)
-        await result.getByRole('button', { name: 'Read source' }).click()
+        await result.getByTestId('code-search-source').click()
         await expect(tabA.page.getByTestId('code-source-result')).toContainText(aScenario.expectedMarker)
         await expect(tabA.page.getByTestId('code-source-result')).not.toContainText(bScenario.expectedMarker)
       }),
@@ -196,7 +196,7 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
           has: tabB.page.getByText(`go:fixture/func:${bScenario.expectedSource}`, { exact: true }),
         })
         await expect(result).toHaveCount(1)
-        await result.getByRole('button', { name: 'Read source' }).click()
+        await result.getByTestId('code-search-source').click()
         await expect(tabB.page.getByTestId('code-source-result')).toContainText(bScenario.expectedMarker)
         await expect(tabB.page.getByTestId('code-source-result')).not.toContainText(aScenario.expectedMarker)
       }),

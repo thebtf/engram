@@ -90,7 +90,7 @@ watch(() => props.graph, () => {
   <article class="panel graph-panel" aria-live="polite">
     <div class="panel-head">
       <div>
-        <h3>{{ t('codeExplorer.graph.title') }}</h3>
+        <h3 data-testid="code-graph-heading">{{ t('codeExplorer.graph.title') }}</h3>
         <p>{{ t(`codeExplorer.states.${state.kind}.graph`) }}</p>
       </div>
       <span :data-state="state.kind">{{ t(`codeExplorer.states.${state.kind}.label`) }}</span>
@@ -124,7 +124,7 @@ watch(() => props.graph, () => {
     <div v-if="graph !== null" class="graph-toolbar">
       <button class="btn" type="button" :aria-pressed="mode === 'graph'" :disabled="pending" @click="mode = 'graph'">{{ t('codeExplorer.graph.visual') }}</button>
       <button class="btn" type="button" :aria-pressed="mode === 'list'" :disabled="pending" @click="mode = 'list'">{{ t('codeExplorer.graph.list') }}</button>
-      <button v-if="selectedTarget !== null || visibleContinuation" class="btn" type="button" :disabled="pending" @click="emit('continue', selectedTarget)">{{ t('codeExplorer.graph.continue') }}</button>
+      <button v-if="selectedTarget !== null || visibleContinuation" class="btn" type="button" :disabled="pending" data-testid="code-graph-continue" @click="emit('continue', selectedTarget)">{{ t('codeExplorer.graph.continue') }}</button>
     </div>
 
     <svg v-if="graph !== null && mode === 'graph'" class="graph-canvas" viewBox="0 0 320 260" role="img" data-testid="code-graph-results" :aria-label="t('codeExplorer.graph.canvasLabel', { count: nodes.length })">
@@ -151,6 +151,7 @@ watch(() => props.graph, () => {
         :class="{ selected: selectedNode === node.ref.entityKey }"
         tabindex="0"
         role="button"
+        data-testid="code-graph-node"
         :aria-label="t('codeExplorer.graph.nodeLabel', { node: node.ref.entityKey })"
         @click="chooseNode(node.ref.entityKey)"
         @keydown.enter.prevent="chooseNode(node.ref.entityKey)"
@@ -173,8 +174,8 @@ watch(() => props.graph, () => {
     <section v-if="selectedNode !== null" class="selection" :aria-label="t('codeExplorer.graph.selection')">
       <strong>{{ selectedNode }}</strong>
       <p v-if="selectedEdge !== null">{{ selectedEdge.relation }} · {{ selectedEdge.evidenceKind }}</p>
-      <button v-if="selectedSource !== null" class="btn" type="button" :disabled="pending" @click="emit('source', selectedSource)">{{ t('codeExplorer.graph.inspectSource') }}</button>
-      <p v-else>{{ t('codeExplorer.graph.noPublishedSource') }}</p>
+      <button v-if="selectedSource !== null" class="btn" type="button" :disabled="pending" data-testid="code-graph-source" @click="emit('source', selectedSource)">{{ t('codeExplorer.graph.inspectSource') }}</button>
+      <p v-else data-testid="code-graph-no-source">{{ t('codeExplorer.graph.noPublishedSource') }}</p>
     </section>
 
     <p v-if="graph !== null" class="stop">{{ t('codeExplorer.graph.traversal', { stop: graph.stopReason }) }}</p>

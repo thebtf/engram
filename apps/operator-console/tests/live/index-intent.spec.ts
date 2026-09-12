@@ -273,7 +273,7 @@ test('S4 live first-index uses the real C-worktree daemon pump', async ({ browse
       has: page.getByText(`go:fixture/func:${fixture.operatorCodeFirstIndex.expectedSource}`, { exact: true }),
     })
     await expect(result).toHaveCount(1)
-    await result.getByRole('button', { name: 'Read source' }).click()
+    await result.getByTestId('code-search-source').click()
     await expect(page.getByTestId('code-source-result')).toContainText(fixture.operatorCodeFirstIndex.expectedMarker)
   } finally {
     await Promise.all([offlineClient?.close(), liveClient?.close()])

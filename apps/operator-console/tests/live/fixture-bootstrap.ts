@@ -533,19 +533,19 @@ class LiveFixture implements FixtureController {
     }
     await writeFile(join(root, '.engram-project'), `${JSON.stringify({ name: marker }, null, 2)}\n`)
     const searchPages = Array.from({ length: 11 }, (_, index) => `
-func CodeExplorerFixtureEntryPage${index + 1}() string {
-	return "CodeExplorerFixtureEntry"
+func CodeExplorerFixtureAPage${index + 1}() string {
+	return "CodeExplorerFixtureA"
 }`).join('')
     await writeFile(join(root, 'fixture.go'), `package fixture
 
 const CodeExplorerFixtureMessage = "operator-code-fixture-${marker}"
 
-func CodeExplorerFixtureTarget() string { return CodeExplorerFixtureMessage }
+func CodeExplorerFixtureB() string { return CodeExplorerFixtureMessage }
 
-func CodeExplorerFixtureEntry() string {
+func CodeExplorerFixtureA() string {
 	const sourceMarker = "operator-code-fixture-${marker}"
 	_ = sourceMarker
-	return CodeExplorerFixtureTarget()
+	return CodeExplorerFixtureB()
 }
 ${searchPages}`)
   }
@@ -704,8 +704,9 @@ async function assertLiveHarnessContract(): Promise<void> {
 
 export function fixtureEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const environment = { ...process.env }
+  const overrideNames = new Set(Object.keys(overrides).map((name) => name.toUpperCase()))
   for (const name of Object.keys(environment)) {
-    if (FIXTURE_OVERRIDDEN_ENVIRONMENT_NAMES[name.toUpperCase()] === true) {
+    if (FIXTURE_OVERRIDDEN_ENVIRONMENT_NAMES[name.toUpperCase()] === true || overrideNames.has(name.toUpperCase())) {
       delete environment[name]
     }
   }
