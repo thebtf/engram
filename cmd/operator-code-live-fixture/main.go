@@ -304,7 +304,7 @@ func provision(ctx context.Context, dsn string, in invocation) (fixtureOutput, e
 	if err != nil {
 		return fixtureOutput{}, fmt.Errorf("issue fixture grant: %w", err)
 	}
-	current, found, err := grants.Current(ctx, issuer)
+	current, found, err := grants.Active(ctx, issuer, source.SourceID, checkout.CheckoutID)
 	if err != nil || !found || current.GrantRef != grant.GrantRef || current.SourceID != source.SourceID || current.CheckoutID != checkout.CheckoutID {
 		return fixtureOutput{}, fmt.Errorf("read back fixture grant")
 	}
@@ -378,7 +378,7 @@ func provisionNoView(ctx context.Context, store *gormdb.Store, user *gormdb.User
 	if err != nil {
 		return fixtureOutput{}, fmt.Errorf("issue no-view fixture grant: %w", err)
 	}
-	current, found, err := grants.Current(ctx, issuer)
+	current, found, err := grants.Active(ctx, issuer, source.SourceID, checkout.CheckoutID)
 	if err != nil || !found || current.GrantRef != grant.GrantRef || current.SourceID != source.SourceID || current.CheckoutID != checkout.CheckoutID {
 		return fixtureOutput{}, fmt.Errorf("read back no-view fixture grant")
 	}
