@@ -59,6 +59,7 @@ export interface CodeGraphEdge {
 }
 
 export interface CodeGraph {
+  nodes: CodeEntityRef[]
   edges: CodeGraphEdge[]
   stopReason: string
 }
@@ -71,7 +72,7 @@ export interface CodeEnvelope {
   warnings: string[]
   retrievalMode: string | null
   freshnessState: string | null
-  hasContinuation: boolean
+  continuation: string | null
 }
 
 export interface CodeStatus {
@@ -85,10 +86,18 @@ export interface CodePresentationState {
   kind: CodePresentationKind
   message: string
 }
+export interface CodeGraphOptions {
+  direction: 'incoming' | 'outgoing' | 'both'
+  relations: string[]
+}
 
 export type IndexIntentKind = 'reindex' | 'reconcile'
 export type IndexIntentState = 'submitted' | 'queued' | 'acknowledged' | 'running' | 'completed' | 'unavailable' | 'failed'
 
+interface CodeGraphRequest {
+  item: CodeItem
+  options: CodeGraphOptions
+}
 interface IndexIntentBase<State extends IndexIntentState> {
   intentRef: string
   state: State
@@ -244,10 +253,23 @@ function parseResponseContext(value: unknown): CodeResponseContext | null {
   return { sourceId, checkoutId, viewId, profileId, generation }
 }
 
+function entityRefKey(ref: CodeEntityRef): string {
+  return `${ref.sourceId}\u0000${ref.viewId}\u0000${ref.entityKey}`
+}
+
 function parseGraph(value: unknown): CodeGraph | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const nodeValues = Reflect.get(value, 'nodes')
   const edgeValues = Reflect.get(value, 'edges')
-  if (!Array.isArray(edgeValues)) return null
+  if (!Array.isArray(nodeValues) || !Array.isArray(edgeValues)) return null
+  const nodes: CodeEntityRef[] = []
+  const nodeKeys = new Set<string>()
+  for (const rawNode of nodeValues) {
+    const node = parseEntityRef(rawNode)
+    if (node === null || nodeKeys.has(entityRefKey(node))) return null
+    nodeKeys.add(entityRefKey(node))
+    nodes.push(node)
+  }
   const edges: CodeGraphEdge[] = []
   for (const rawEdge of edgeValues) {
     if (rawEdge === null || typeof rawEdge !== 'object' || Array.isArray(rawEdge)) return null
@@ -257,13 +279,16 @@ function parseGraph(value: unknown): CodeGraph | null {
     const evidenceKind = text(Reflect.get(rawEdge, 'evidence_kind'))
     const explanationValue = Reflect.get(rawEdge, 'explanation')
     const explanation = explanationValue === undefined || explanationValue === null ? null : text(explanationValue)
-    if (from === null || to === null || relation === null || evidenceKind === null || (explanationValue !== undefined && explanationValue !== null && explanation === null)) return null
+    if (
+      from === null || to === null || relation === null || evidenceKind === null
+      || !nodeKeys.has(entityRefKey(from)) || !nodeKeys.has(entityRefKey(to))
+      || (explanationValue !== undefined && explanationValue !== null && explanation === null)
+    ) return null
     edges.push({ from, to, relation, evidenceKind, explanation })
   }
   const stopReason = text(Reflect.get(value, 'stop_reason'))
-  return stopReason === null ? null : { edges, stopReason }
+  return stopReason === null ? null : { nodes, edges, stopReason }
 }
-
 function parseEnvelope(value: unknown): CodeEnvelope | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
   const status = text(Reflect.get(value, 'status'))
@@ -310,16 +335,21 @@ function parseEnvelope(value: unknown): CodeEnvelope | null {
   if (contextual && continuationValue === undefined) return null
   if (continuationValue !== undefined && continuationValue !== null && text(continuationValue) === null) return null
   if (contextual && contexts.length !== 1) return null
+  const context = contexts[0] ?? null
+  if (context !== null && (
+    !items.every((item) => item.ref.sourceId === context.sourceId && item.ref.viewId === context.viewId)
+    || graph !== null && !graph.nodes.every((node) => node.sourceId === context.sourceId && node.viewId === context.viewId)
+  )) return null
   if (!contextual && (items.length > 0 || graph !== null || contexts.length > 0 || continuationValue !== undefined)) return null
   return {
     status,
-    context: contexts.length === 1 ? contexts[0] : null,
+    context,
     items,
     graph,
     warnings,
     retrievalMode,
     freshnessState,
-    hasContinuation: continuationValue !== undefined && continuationValue !== null,
+    continuation: continuationValue === undefined || continuationValue === null ? null : text(continuationValue),
   }
 }
 
@@ -566,10 +596,10 @@ export function useOperatorCode() {
   const searchEnvelope = ref<CodeEnvelope | null>(null)
   const graphEnvelope = ref<CodeEnvelope | null>(null)
   const sourceEnvelope = ref<CodeEnvelope | null>(null)
+  const activeGraphRequest = ref<CodeGraphRequest | null>(null)
   const searchState = ref<CodePresentationState>(presentation('idle', 'Pin an authorized view before searching.'))
   const graphState = ref<CodePresentationState>(presentation('idle', 'Choose a released search result to explore relationships.'))
   const sourceState = ref<CodePresentationState>(presentation('idle', 'Choose a released search result to read an exact source span.'))
-  const contextMessage = ref('A context is never selected automatically.')
   const pending = ref(false)
   const indexIntentState = ref<IndexIntentPresentationState>(indexIntentNotice('idle', 'No indexing request', 'Pin a source view before requesting reindex or reconcile work.'))
   const indexIntentPending = ref(false)
@@ -628,6 +658,7 @@ export function useOperatorCode() {
     searchEnvelope.value = null
     graphEnvelope.value = null
     sourceEnvelope.value = null
+    activeGraphRequest.value = null
     searchState.value = presentation('idle', 'Pin an authorized view before searching.')
     graphState.value = presentation('idle', 'Choose a released search result to explore relationships.')
     sourceState.value = presentation('idle', 'Choose a released search result to read an exact source span.')
@@ -828,14 +859,12 @@ export function useOperatorCode() {
     clearContextualResults()
     if (transition.state === 'RELOAD_PENDING') {
       bootstrapPhase.value = 'reload-pending'
-      contextMessage.value = 'The prior document lease is still live. Retry after it closes or expires.'
       return false
     }
     if (transition.binding === null || !persistResumePair(transition.binding)) {
       binding.value = null
       clearResumePair()
       bootstrapPhase.value = 'ambiguous'
-      contextMessage.value = 'Reload convenience could not be safely persisted. The view remains unselected.'
       return false
     }
     bootstrapPhase.value = transition.state === 'TAB_BINDING_COLLISION'
@@ -843,11 +872,6 @@ export function useOperatorCode() {
       : transition.state === 'TAB_BOOTSTRAP_AMBIGUOUS'
         ? 'ambiguous'
         : 'ready'
-    contextMessage.value = transition.state === 'TAB_BINDING_COLLISION'
-      ? 'This copied tab received a fresh, unselected binding.'
-      : transition.state === 'TAB_BOOTSTRAP_AMBIGUOUS'
-        ? 'Bootstrap was ambiguous. The server created a fresh, unselected binding.'
-        : 'A fresh server binding is ready. Review and pin the offered view explicitly.'
     return true
   }
 
@@ -861,13 +885,11 @@ export function useOperatorCode() {
     const result = await request('/code/tabs/handshake', 'POST', body)
     if (result.kind !== 'success') {
       bootstrapPhase.value = result.kind === 'denied' ? 'denied' : 'error'
-      contextMessage.value = 'The server did not establish a browser binding. No context was selected.'
       return false
     }
     const transition = parseTransition(result.body)
     if (transition === null) {
       bootstrapPhase.value = 'error'
-      contextMessage.value = 'The binding response was invalid. No context was selected.'
       return false
     }
     return applyTransition(transition, evidence)
@@ -883,14 +905,12 @@ export function useOperatorCode() {
     if (result.kind !== 'success') {
       clearResumePair()
       bootstrapPhase.value = result.kind === 'denied' ? 'denied' : 'error'
-      contextMessage.value = 'The server did not resume this document. No context was selected.'
       return false
     }
     const transition = parseTransition(result.body)
     if (transition === null) {
       clearResumePair()
       bootstrapPhase.value = 'error'
-      contextMessage.value = 'The resume response was invalid. No context was selected.'
       return false
     }
     return applyTransition(transition, evidence)
@@ -904,19 +924,14 @@ export function useOperatorCode() {
     pending.value = false
     if (result.kind !== 'success') {
       contextCandidate.value = null
-      contextMessage.value = result.kind === 'denied'
-        ? 'No unique current grant can be shown for this binding.'
-        : 'The server could not safely present an authorized context.'
       return
     }
     const candidate = parseSafeContext(result.body)
     if (candidate === null) {
       contextCandidate.value = null
-      contextMessage.value = 'The context response was invalid. No context was selected.'
       return
     }
     contextCandidate.value = candidate
-    contextMessage.value = 'Review the server-provided view, then pin it explicitly.'
   }
 
   async function initialize(): Promise<void> {
@@ -925,7 +940,6 @@ export function useOperatorCode() {
     const documentNonce = requestId()
     if (documentNonce === null) {
       bootstrapPhase.value = 'error'
-      contextMessage.value = 'This browser cannot create the required document nonce.'
       return
     }
     const navType = navigationType()
@@ -956,7 +970,6 @@ export function useOperatorCode() {
       await discoverContext()
       if (contextCandidate.value !== null) {
         pinnedContext.value = contextCandidate.value
-        contextMessage.value = 'The server retained this explicitly pinned view across the reload.'
         await reconcileIndexIntent()
         return
       }
@@ -973,11 +986,9 @@ export function useOperatorCode() {
     if (result.kind !== 'success' || result.status !== 204) {
       pinnedContext.value = null
       clearContextualResults()
-      contextMessage.value = 'The server did not confirm this pin. No contextual result is shown.'
       return
     }
     pinnedContext.value = contextCandidate.value
-    contextMessage.value = 'The server confirmed this pin. Contextual reads are now released per request.'
     await refreshStatus()
   }
 
@@ -1015,8 +1026,17 @@ export function useOperatorCode() {
     searchState.value = presentationFromEnvelope(envelope)
   }
 
-  async function explore(item: CodeItem): Promise<void> {
-    const payload = bindingPayload({ action: 'neighbors', target: { entity_key: item.ref.entityKey } })
+  async function explore(item: CodeItem, options: CodeGraphOptions = { direction: 'both', relations: [] }, continuation: string | null = null): Promise<void> {
+    const payload = bindingPayload({
+      action: 'neighbors',
+      target: { entity_key: item.ref.entityKey },
+      direction: options.direction,
+      relations: options.relations,
+      max_depth: 2,
+      max_nodes: 24,
+      max_edges: 48,
+      ...(continuation === null ? {} : { continuation }),
+    })
     const activeSearch = searchEnvelope.value
     if (payload === null || pinnedContext.value === null || activeSearch === null || activeSearch.context === null) return
     pending.value = true
@@ -1025,17 +1045,27 @@ export function useOperatorCode() {
     pending.value = false
     if (result.kind !== 'success') {
       graphEnvelope.value = null
+      activeGraphRequest.value = null
       graphState.value = presentation(result.kind, 'No relationship facts were released.')
       return
     }
     const envelope = parseEnvelope(result.body)
     if (envelope === null || !sameView(activeSearch.context, envelope.context)) {
       graphEnvelope.value = null
+      activeGraphRequest.value = null
       graphState.value = presentation('error', 'The graph response did not prove the same pinned view, so it was concealed.')
       return
     }
+    activeGraphRequest.value = { item, options }
     graphEnvelope.value = envelope
     graphState.value = presentationFromEnvelope(envelope)
+  }
+
+  async function continueGraph(): Promise<void> {
+    const request = activeGraphRequest.value
+    const continuation = graphEnvelope.value?.continuation
+    if (request === null || continuation === null) return
+    await explore(request.item, request.options, continuation)
   }
 
   async function readSource(item: CodeItem): Promise<void> {
@@ -1091,7 +1121,6 @@ export function useOperatorCode() {
     searchState,
     graphState,
     sourceState,
-    contextMessage,
     pending,
     indexIntentState,
     indexIntentPending,
@@ -1105,5 +1134,6 @@ export function useOperatorCode() {
     search,
     explore,
     readSource,
+    continueGraph,
   }
 }

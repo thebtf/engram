@@ -2221,5 +2221,269 @@
       "lead": "Users, login providers, and roles belong to the future control-plane surface.",
       "next": "GET /api/access/users does not exist yet, so fake users and roles are not rendered."
     }
+  },
+  "codeExplorer": {
+    "title": "Code Explorer",
+    "subtitle": "Inspect a server-authorized immutable source view. Code, graph facts, and source spans are released separately.",
+    "refresh": "Refresh status",
+    "evidence": {
+      "title": "Technical evidence",
+      "unselected": "No contextual response can render before an explicit server pin.",
+      "pinned": "Each status, search, graph, and source response must match pinned View {view}.",
+      "binding": "Binding evidence",
+      "navigation": "Navigation",
+      "openerBefore": "Opener before",
+      "openerReadback": "Opener readback",
+      "transition": "Transition",
+      "present": "present",
+      "none": "none",
+      "notNeeded": "not needed",
+      "normalized": "normalized to null",
+      "failed": "normalization failed"
+    },
+    "context": {
+      "title": "Authorized source view",
+      "lead": "Only server-presented Source, Checkout, and View labels can be pinned. Labels never grant access.",
+      "source": "Source",
+      "checkout": "Checkout",
+      "view": "View",
+      "refresh": "Check authorized view",
+      "retryReload": "Retry reload binding",
+      "pin": "Pin this view",
+      "pinned": "Pinned by server",
+      "emptyTitle": "No selectable view is available.",
+      "emptyBody": "A revoked, expired, or ambiguous binding reveals no context labels or code facts.",
+      "singleCandidate": "Review the one server-resolved safe choice, then pin it explicitly.",
+      "pinnedMessage": "This server pin is active only for the current document binding.",
+      "pinnedReadout": "Server pin confirmed for {source} / {checkout} / {view}.",
+      "catalogGapTitle": "Catalog selection is not available on this server",
+      "catalogGapBody": "The current API returns one server-resolved safe context and accepts no ContextRef selector. This console does not invent a worktree catalog or local View selection.",
+      "phases": {
+        "idle": "Waiting",
+        "binding": "Binding document",
+        "ready": "Ready",
+        "collision": "Copied tab",
+        "ambiguous": "Ambiguous bootstrap",
+        "reload-pending": "Reload pending",
+        "denied": "Binding denied",
+        "error": "Binding error"
+      },
+      "messages": {
+        "idle": "Waiting to establish the browser binding.",
+        "binding": "Establishing a server-issued browser binding.",
+        "ready": "No authorized context is currently available to this document.",
+        "collision": "The copied tab received a fresh unselected binding.",
+        "ambiguous": "Bootstrap was ambiguous; the new binding starts unselected.",
+        "reload-pending": "The prior document lease is still live. Retry after it closes or expires.",
+        "denied": "The server denied this browser binding.",
+        "error": "The server could not establish a safe browser binding."
+      }
+    },
+    "results": {
+      "title": "Explore the pinned view",
+      "unpinned": "Search, graph, and source remain unavailable until the server confirms a pin.",
+      "pinned": "Every result below is released separately for View {view}."
+    },
+    "status": {
+      "coverage": "Coverage",
+      "indexed": "Indexed",
+      "freshness": "Freshness",
+      "unknown": "unknown"
+    },
+    "emptyIndex": {
+      "title": "This View has no indexed records",
+      "body": "Request daemon-owned indexing to create work. Submission is not completion and does not switch the pinned View.",
+      "action": "Request reindex"
+    },
+    "unselected": {
+      "title": "No contextual result is rendered.",
+      "body": "Pin a server-authorized View to start released code exploration."
+    },
+    "search": {
+      "title": "Search",
+      "label": "Search this immutable View",
+      "placeholder": "Describe a code concept",
+      "action": "Search",
+      "explore": "Explore graph",
+      "source": "Read source",
+      "noMatches": "The released response has no displayable matches.",
+      "evidence": "Retrieval: {mode} · freshness: {freshness} · confidence: {score}"
+    },
+    "states": {
+      "idle": {
+        "label": "Waiting",
+        "search": "Search is ready after a server pin.",
+        "graph": "Choose a released result to traverse code relations.",
+        "source": "Choose a released result to inspect its exact persisted source span."
+      },
+      "loading": {
+        "label": "Loading",
+        "search": "Waiting for the server to release search results.",
+        "graph": "Waiting for the server to release bounded graph evidence.",
+        "source": "Waiting for the server to release the exact source span."
+      },
+      "ready": {
+        "label": "Available",
+        "search": "Released search results describe the pinned View.",
+        "graph": "Released graph evidence remains bounded to the pinned View.",
+        "source": "Released source content is an exact persisted span from the pinned View."
+      },
+      "empty": {
+        "label": "Empty",
+        "search": "The authorized query completed without matches.",
+        "graph": "No authorized graph relations were returned.",
+        "source": "No source span is available for this released result."
+      },
+      "partial": {
+        "label": "Partial",
+        "search": "Only the released partial search result is available.",
+        "graph": "Traversal reached a declared bound; this is not proof of no further relation.",
+        "source": "Only the released portion of this source result is available."
+      },
+      "stale": {
+        "label": "Stale",
+        "search": "This released result carries stale-View evidence.",
+        "graph": "This graph result carries stale-View evidence.",
+        "source": "Refresh before relying on this earlier source result."
+      },
+      "denied": {
+        "label": "Access denied",
+        "search": "Access changed or was revoked; no contextual result is shown.",
+        "graph": "Access changed or was revoked; no graph fact is shown.",
+        "source": "Access changed or was revoked; no source body is shown."
+      },
+      "unsupported": {
+        "label": "Unavailable",
+        "search": "The server requires a supported current context.",
+        "graph": "This graph request is not supported for the current context.",
+        "source": "This exact source read is not supported for the current context."
+      },
+      "timeout": {
+        "label": "Timed out",
+        "search": "The server did not release search results before the deadline.",
+        "graph": "The bounded graph request exceeded its deadline.",
+        "source": "The source read exceeded its deadline."
+      },
+      "offline": {
+        "label": "Offline",
+        "search": "The browser cannot reach the server for this search.",
+        "graph": "The browser cannot reach the server for this traversal.",
+        "source": "The browser cannot reach the server for this source read."
+      },
+      "error": {
+        "label": "Unavailable",
+        "search": "The source provider or release path did not return a readable result.",
+        "graph": "The source provider or release path did not return readable graph evidence.",
+        "source": "The source provider or release path did not return a readable source span."
+      }
+    },
+    "continuation": {
+      "searchGap": "A search continuation was returned, but this server exposes no continuation route. The original query and pinned View stay unchanged."
+    },
+    "source": {
+      "title": "Exact source",
+      "exactPublished": "exact persisted span from the published View",
+      "copyPath": "Copy path",
+      "copyDigest": "Copy digest",
+      "copyContent": "Copy source",
+      "copy": {
+        "copied": "Copied to the clipboard.",
+        "unavailable": "Clipboard access is unavailable in this browser."
+      }
+    },
+    "graph": {
+      "title": "Graph evidence",
+      "direction": "Direction",
+      "relations": "Relation types",
+      "target": "Result to traverse",
+      "chooseTarget": "Choose a released result",
+      "visual": "Graph",
+      "list": "Relation list",
+      "continue": "Load next bounded relations",
+      "selection": "Selected graph evidence",
+      "inspectSource": "Inspect exact source",
+      "noPublishedSource": "This graph-only node has no released source descriptor. Choose its original search result to read a source span.",
+      "traversal": "Traversal: {stop}",
+      "canvasLabel": "Bounded code graph with {count} nodes",
+      "edgeLabel": "{from} {relation} {to}",
+      "nodeLabel": "Select graph node {node}",
+      "directions": {
+        "both": "Both directions",
+        "outgoing": "Outgoing",
+        "incoming": "Incoming"
+      }
+    },
+    "intent": {
+      "title": "Index request",
+      "lead": "Request daemon-owned work for the pinned View. Admission never selects a new View.",
+      "reindex": "Request reindex",
+      "reconcile": "Request reconcile",
+      "retry": "Retry unavailable request",
+      "refresh": "Check current state",
+      "unpinned": "Pin a server-authorized View before requesting daemon work.",
+      "attempt": "Daemon attempt {attempt}",
+      "states": {
+        "idle": {
+          "label": "Waiting",
+          "title": "No indexing request",
+          "message": "Pin a source View before requesting daemon work."
+        },
+        "loading": {
+          "label": "Submitting",
+          "title": "Submitting request",
+          "message": "Waiting for admission; admission is not completion."
+        },
+        "submitted": {
+          "label": "Submitted",
+          "title": "Request submitted",
+          "message": "The server recorded this request. Completion is not confirmed."
+        },
+        "queued": {
+          "label": "Queued",
+          "title": "Queued for the daemon",
+          "message": "The request is eligible for daemon work; the pinned View remains unchanged."
+        },
+        "acknowledged": {
+          "label": "Acknowledged",
+          "title": "Daemon acknowledged",
+          "message": "The daemon accepted this request. No new View is available yet."
+        },
+        "running": {
+          "label": "Running",
+          "title": "Indexing is running",
+          "message": "The daemon is working; the pinned View remains unchanged."
+        },
+        "completed": {
+          "label": "Completed",
+          "title": "New View available",
+          "message": "A new server-released View may be available, but this console will not switch the pin automatically."
+        },
+        "unavailable": {
+          "label": "Unavailable",
+          "title": "Daemon unavailable",
+          "message": "The daemon cannot accept this request now. Retry the same request when it is available."
+        },
+        "failed": {
+          "label": "Failed",
+          "title": "Indexing failed",
+          "message": "The daemon reported a terminal failure; the pinned View remains unchanged."
+        },
+        "error": {
+          "label": "Unresolved",
+          "title": "Current state unknown",
+          "message": "The server did not establish the current request state. Completion was not assumed."
+        },
+        "denied": {
+          "label": "Access denied",
+          "title": "Request denied",
+          "message": "The server denied this request; the pinned View remains unchanged."
+        },
+        "offline": {
+          "label": "Offline",
+          "title": "Offline",
+          "message": "Restore connectivity before checking this request again."
+        }
+      }
+    }
   }
 }

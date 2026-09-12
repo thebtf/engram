@@ -2,6 +2,36 @@
 
 **Status**: Feature011 implementation contract. The listed routes are planned normal authenticated HTTP presentation endpoints; they do not exist in the current candidate and are not HTTP-MCP aliases.
 
+## 2026-09-11 delivery amendment — current candidate gaps
+
+The intended API below remains the acceptance contract. The current candidate implementation is narrower, so the Console Code runtime must use only the real calls it can make and render the following limitations rather than fabricate selection, continuation, or source data:
+
+| Required operator outcome | Current implementation | Console posture until serialized backend delivery |
+|---|---|---|
+| Authorized Source → Checkout → View catalog and exact selection | `POST /api/code/contexts` returns exactly one server-resolved `{context:{source,checkout,view}}`; `PUT /api/code/tabs/{tab_binding_id}/context` accepts only `document_proof` and pins that server-resolved context. It returns no catalog, opaque `ContextRef`, or selector. | Display only the one safe server label set; pin it explicitly. Do not create a local worktree/View picker or claim A/B worktree selection. |
+| Search continuation | `operatorCodeSearchRequest` accepts only `query` and `limit`; no continuation route is registered. | Preserve the shown query and View, announce that the returned cursor cannot be continued, and expose no control that implies otherwise. |
+| Graph continuation and filters | `POST /api/code/graph` accepts `direction`, relation filters, bounded budgets, and an inline opaque continuation. | Re-submit only the original graph target and filters with the opaque server cursor; each call remains binding/grant/UCI authorized. The browser treats the cursor as opaque. |
+| Graph-node source inspection | `POST /api/code/source` requires a released search item's entity key, span, and content digest. Graph edges contain no source descriptor. | Let an operator inspect exact source only when the selected graph node matches a released search item; otherwise say that no published source descriptor was released. |
+| New View after index request | Intent endpoints persist/read safe state, but the current slice has no daemon execution consumer proving a newly published readable View. | Render acknowledgement and state only. Never switch the pin, expose a path, or call completion a new selectable View. |
+
+The actual implementation also uses JSON binding/proof DTOs and `POST` for contextual reads while the planned table names header/`GET` shapes. The browser must follow the actual handler contract until the backend cutover ships; this does not relax the required same-View, grant, and release semantics.
+
+### Current handler seam (delivery candidate)
+
+The Console consumes the following registered shapes until the planned contract above is delivered. This is the one typed response-to-screen adaptation seam: `useOperatorCode.ts` validates these JSON DTOs before rendering; it neither guesses planned fields nor constructs a local substitute.
+
+| Route | Current request shape | Current response and UI constraint |
+|---|---|---|
+| `POST /api/code/tabs/handshake` | `document_nonce`, optional copied binding/resume nonce, optional `ambiguous` | Returns only binding transition material. No context is selected by bootstrap. |
+| `POST /api/code/tabs/resume` | binding ID, resume nonce, reload token, document nonce | Resumes only the retained binding or returns `RELOAD_PENDING`; contextual data stays concealed until a current proof is established. |
+| `POST /api/code/contexts` | `tab_binding_id`, `document_proof` | Returns one safe `{context:{source,checkout,view}}` or no safe labels. |
+| `PUT /api/code/tabs/{tab_binding_id}/context` | `{document_proof}` | Pins only that server-resolved context; returns `204` on confirmation. |
+| `POST /api/code/status` | `tab_binding_id`, `document_proof` | Returns released coverage/freshness metadata for the pin. |
+| `POST /api/code/search` | binding proof, `query`, optional bounded `limit` | Returns a released query envelope. A returned search cursor has no current continuation route and is announced as unavailable. |
+| `POST /api/code/graph` | binding proof, target, direction, supported relations, declared bounds, optional opaque `continuation` | Returns only server-supplied nodes and edges; the same target and filters may be resubmitted with its opaque cursor. |
+| `POST /api/code/source` | binding proof, released item `entity_key`, exact span, `content_digest` | Returns one exact persisted source item or a closed non-content state. No graph-only node receives invented source text. |
+| `POST`/`GET` `/api/code/index-intents…` | binding proof, opaque request/intent references and kind as applicable | Presents durable admission/status only. It never switches the pin or exposes a resulting View reference/path. |
+
 ## Boundary and Caller Mapping
 
 `internal/worker` validates DTOs and invokes one composed UCI application. It never queries `ci_*` tables directly, reconstructs a graph, accepts a filesystem path, creates AST facts, or calls an MCP tool. UCI owns `ContextRef` validation/authorization, query/graph/source semantics, response validation, reauthorization, and initial exposure recording.

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { useOperatorCode } from '../composables/useOperatorCode'
+
+const { t } = useI18n()
 const {
   bootstrapPhase,
   bootstrapEvidence,
@@ -13,7 +15,6 @@ const {
   searchState,
   graphState,
   sourceState,
-  contextMessage,
   pending,
   indexIntentState,
   indexIntentPending,
@@ -27,6 +28,7 @@ const {
   search,
   explore,
   readSource,
+  continueGraph,
 } = useOperatorCode()
 
 const resultMode = computed(() => pinnedContext.value === null ? 'unselected' : searchState.value.kind)
@@ -40,10 +42,10 @@ onMounted(() => {
   <main class="code-page">
     <header class="head">
       <div>
-        <h1>Code Explorer</h1>
-        <p>Inspect one server-authorized immutable source view. Source text and graph facts appear only after their individual release.</p>
+        <h1>{{ t('codeExplorer.title') }}</h1>
+        <p>{{ t('codeExplorer.subtitle') }}</p>
       </div>
-      <button class="btn" type="button" :disabled="pending || pinnedContext === null" @click="refreshStatus">Refresh release status</button>
+      <button class="btn" type="button" :disabled="pending || pinnedContext === null" @click="refreshStatus">{{ t('codeExplorer.refresh') }}</button>
     </header>
 
     <CodeContextPicker
@@ -51,7 +53,6 @@ onMounted(() => {
       :candidate="contextCandidate"
       :pinned="pinnedContext"
       :pending="pending"
-      :message="contextMessage"
       :evidence="bootstrapEvidence"
       @refresh="discoverContext"
       @pin="pinContext"
@@ -80,14 +81,16 @@ onMounted(() => {
       :pending="pending"
       @search="search"
       @explore="explore"
+      @continue-graph="continueGraph"
       @source="readSource"
+      @request-index="submitIndexIntent('reindex')"
     />
 
-    <footer class="release-note" :data-state="resultMode" data-testid="code-release-state">
-      <strong>Release boundary:</strong>
-      <span v-if="pinnedContext === null">No contextual payload is eligible for rendering before an explicit server pin.</span>
-      <span v-else>Each status, search, graph, and source response must match this pinned view before rendering.</span>
-    </footer>
+    <details class="release-note" :data-state="resultMode" data-testid="code-release-state">
+      <summary>{{ t('codeExplorer.evidence.title') }}</summary>
+      <span v-if="pinnedContext === null">{{ t('codeExplorer.evidence.unselected') }}</span>
+      <span v-else>{{ t('codeExplorer.evidence.pinned', { view: pinnedContext.view }) }}</span>
+    </details>
   </main>
 </template>
 
@@ -98,7 +101,6 @@ h1 { margin:0 0 4px; color:var(--fg); font-size:var(--text-xl); font-weight:700;
 .head p { max-width:78ch; margin:0; color:var(--muted); font-size:var(--text-sm); }
 .btn { min-height:36px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface); color:var(--fg); padding:8px 12px; font:inherit; font-size:var(--text-sm); font-weight:700; cursor:pointer; white-space:nowrap; }
 .btn:disabled { cursor:not-allowed; opacity:.55; }
-.release-note { display:flex; gap:6px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface-warm); padding:10px 12px; color:var(--fg-2); font-size:var(--text-sm); }
-.release-note strong { color:var(--fg); }.release-note[data-state='partial'], .release-note[data-state='stale'] { border-color:color-mix(in oklab,var(--warn),transparent 35%); }
+.release-note { display:grid; gap:6px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface-warm); padding:10px 12px; color:var(--fg-2); font-size:var(--text-sm); }.release-note summary { color:var(--fg); cursor:pointer; font-weight:700; }.release-note[data-state='partial'], .release-note[data-state='stale'] { border-color:color-mix(in oklab,var(--warn),transparent 35%); }
 @media (max-width: 720px) { .head { display:grid; }.btn { justify-self:start; white-space:normal; } }
 </style>

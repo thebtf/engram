@@ -2,6 +2,8 @@
 import { computed } from 'vue'
 import type { CodeSafeContext, IndexIntentKind, IndexIntentPresentationState } from '~/composables/useOperatorCode'
 
+const { t } = useI18n()
+
 const props = defineProps<{
   pinned: CodeSafeContext | null
   state: IndexIntentPresentationState
@@ -19,31 +21,35 @@ const active = computed(() => ['loading', 'submitted', 'queued', 'acknowledged',
 const canStart = computed(() => props.pinned !== null && !props.busy && !props.pending && !active.value)
 const canRetry = computed(() => props.pinned !== null && props.state.kind === 'unavailable' && !props.busy && !props.pending)
 const canRefresh = computed(() => props.pinned !== null && props.state.kind !== 'idle' && !props.busy && !props.pending)
+const statusCopy = computed(() => ({
+  title: t(`codeExplorer.intent.states.${props.state.kind}.title`),
+  message: t(`codeExplorer.intent.states.${props.state.kind}.message`),
+}))
 </script>
 
 <template>
   <section class="index-intent" aria-labelledby="index-intent-heading" data-testid="index-intent-status">
     <div class="head">
       <div>
-        <h2 id="index-intent-heading">Index intent</h2>
-        <p>Request daemon-owned indexing for the pinned View. Admission never means that a new View has been selected.</p>
+        <h2 id="index-intent-heading">{{ t('codeExplorer.intent.title') }}</h2>
+        <p>{{ t('codeExplorer.intent.lead') }}</p>
       </div>
-      <span class="state" :data-state="state.kind" data-testid="index-intent-state">{{ state.kind }}</span>
+      <span class="state" :data-state="state.kind" data-testid="index-intent-state">{{ t(`codeExplorer.intent.states.${state.kind}.label`) }}</span>
     </div>
 
     <div class="readout" role="status" aria-live="polite" aria-atomic="true">
-      <strong>{{ state.title }}</strong>
-      <p>{{ state.message }}</p>
-      <small v-if="state.attempt !== null">Daemon attempt {{ state.attempt }}</small>
+      <strong>{{ statusCopy.title }}</strong>
+      <p>{{ statusCopy.message }}</p>
+      <small v-if="state.attempt !== null">{{ t('codeExplorer.intent.attempt', { attempt: state.attempt }) }}</small>
     </div>
 
     <div v-if="pinned !== null" class="actions">
-      <button class="btn primary" type="button" :disabled="!canStart" data-testid="index-intent-reindex" @click="emit('submit', 'reindex')">Request reindex</button>
-      <button class="btn" type="button" :disabled="!canStart" data-testid="index-intent-reconcile" @click="emit('submit', 'reconcile')">Request reconcile</button>
-      <button v-if="state.kind === 'unavailable'" class="btn" type="button" :disabled="!canRetry" data-testid="index-intent-retry" @click="emit('retry')">Retry unavailable request</button>
-      <button v-if="state.kind !== 'idle'" class="btn" type="button" :disabled="!canRefresh" data-testid="index-intent-check-status" @click="emit('refresh')">Check current state</button>
+      <button class="btn primary" type="button" :disabled="!canStart" data-testid="index-intent-reindex" @click="emit('submit', 'reindex')">{{ t('codeExplorer.intent.reindex') }}</button>
+      <button class="btn" type="button" :disabled="!canStart" data-testid="index-intent-reconcile" @click="emit('submit', 'reconcile')">{{ t('codeExplorer.intent.reconcile') }}</button>
+      <button v-if="state.kind === 'unavailable'" class="btn" type="button" :disabled="!canRetry" data-testid="index-intent-retry" @click="emit('retry')">{{ t('codeExplorer.intent.retry') }}</button>
+      <button v-if="state.kind !== 'idle'" class="btn" type="button" :disabled="!canRefresh" data-testid="index-intent-check-status" @click="emit('refresh')">{{ t('codeExplorer.intent.refresh') }}</button>
     </div>
-    <p v-else class="recovery">Pin a server-authorized View before requesting daemon work.</p>
+    <p v-else class="recovery">{{ t('codeExplorer.intent.unpinned') }}</p>
   </section>
 </template>
 
