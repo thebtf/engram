@@ -43,6 +43,7 @@ export interface MCPStdioTranscript {
   processTreeStopped: boolean
   rootLabel: 'A' | 'B' | 'C'
   sessionScoped: true
+  stateRemovalAttempts: number
   stateRootRemoved: boolean
   tools: string[]
   usedStdio: true
@@ -80,6 +81,7 @@ export class MCPStdioClient {
   private daemon: MuxDaemonIdentity | undefined
   private nextID = 0
   private processTreeStopped = false
+  private stateRemovalAttempts = 0
   private stateRootRemoved = false
   private constructor(child: ChildProcess, stateRoot: string, rootLabel: 'A' | 'B' | 'C', controlPath: string, expectedExecutable: string) {
     this.child = child
@@ -225,6 +227,7 @@ export class MCPStdioClient {
       processTreeStopped: this.processTreeStopped,
       rootLabel: this.rootLabel,
       sessionScoped: true,
+      stateRemovalAttempts: this.stateRemovalAttempts,
       stateRootRemoved: this.stateRootRemoved,
       tools: [...this.tools],
       usedStdio: true,
@@ -254,7 +257,7 @@ export class MCPStdioClient {
       }
       if (daemonStopped && childStopped) {
         try {
-          await rm(this.stateRoot, { force: true, recursive: true })
+          this.stateRemovalAttempts = await removeStateRoot(this.stateRoot)
           this.stateRootRemoved = true
         } catch (error) {
           failures.push(error)
@@ -489,7 +492,37 @@ async function stopRetainedMuxDaemon(controlPath: string, daemon: MuxDaemonIdent
     if (response.ok !== true) throw new Error('external MCP daemon rejected graceful shutdown')
   }
   await waitForMuxDaemonStop(controlPath, daemon)
+  await waitForProcessExit(daemon.pid)
   return true
+}
+
+async function waitForProcessExit(pid: number): Promise<void> {
+  const deadline = Date.now() + PROCESS_STOP_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0)
+    } catch (error) {
+      if (error !== null && typeof error === 'object' && Reflect.get(error, 'code') === 'ESRCH') return
+      throw error
+    }
+    await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 50))
+  }
+  throw new Error('external MCP daemon process remained alive after graceful shutdown')
+}
+
+async function removeStateRoot(stateRoot: string): Promise<number> {
+  const deadline = Date.now() + PROCESS_STOP_TIMEOUT_MS
+  let attempts = 0
+  for (; ;) {
+    attempts += 1
+    try {
+      await rm(stateRoot, { force: true, recursive: true })
+      return attempts
+    } catch (error) {
+      if (process.platform !== 'win32' || error === null || typeof error !== 'object' || Reflect.get(error, 'code') !== 'EBUSY' || Date.now() >= deadline) throw error
+      await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 50))
+    }
+  }
 }
 
 class MuxControlUnavailableError extends Error { }
