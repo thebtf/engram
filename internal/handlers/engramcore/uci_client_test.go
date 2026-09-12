@@ -814,6 +814,8 @@ func (fake *uciIndexCollaboratorFake) snapshot() (int, ResolvedIndexTarget, stri
 
 type uciClientRPCFake struct {
 	bindRequests     []*pb.BindCodeContextRequest
+	pollRequests     []*pb.PollCodeIndexIntentsRequest
+	updateRequests   []*pb.UpdateCodeIndexIntentRequest
 	beginRequests    []*pb.BeginCodeIndexRequest
 	stageOpenCalls   int
 	stageStream      *uciClientStageStream
@@ -822,6 +824,8 @@ type uciClientRPCFake struct {
 	exploreRequests  []*pb.ExploreCodeRequest
 
 	bind     func(context.Context, *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error)
+	poll     func(context.Context, *pb.PollCodeIndexIntentsRequest) (*pb.PollCodeIndexIntentsResponse, error)
+	update   func(context.Context, *pb.UpdateCodeIndexIntentRequest) (*pb.UpdateCodeIndexIntentResponse, error)
 	begin    func(context.Context, *pb.BeginCodeIndexRequest) (*pb.BeginCodeIndexResponse, error)
 	finalize func(context.Context, *pb.FinalizeCodeIndexRequest) (*pb.FinalizeCodeIndexResponse, error)
 	query    func(context.Context, *pb.QueryCodeRequest) (*pb.QueryCodeResponse, error)
@@ -834,6 +838,31 @@ func (fake *uciClientRPCFake) BindCodeContext(ctx context.Context, request *pb.B
 		return fake.bind(ctx, request)
 	}
 	return uciClientTestBindResponse(request), nil
+}
+
+func (fake *uciClientRPCFake) PollCodeIndexIntents(ctx context.Context, request *pb.PollCodeIndexIntentsRequest, _ ...grpc.CallOption) (*pb.PollCodeIndexIntentsResponse, error) {
+	fake.pollRequests = append(fake.pollRequests, request)
+	if fake.poll != nil {
+		return fake.poll(ctx, request)
+	}
+	return &pb.PollCodeIndexIntentsResponse{}, nil
+}
+
+func (fake *uciClientRPCFake) UpdateCodeIndexIntent(ctx context.Context, request *pb.UpdateCodeIndexIntentRequest, _ ...grpc.CallOption) (*pb.UpdateCodeIndexIntentResponse, error) {
+	fake.updateRequests = append(fake.updateRequests, request)
+	if fake.update != nil {
+		return fake.update(ctx, request)
+	}
+	response := &pb.UpdateCodeIndexIntentResponse{
+		IntentRef: request.GetIntentRef(),
+		State:     string(uci.IndexIntentAcknowledged),
+		Attempt:   1,
+	}
+	if request.GetOwnerEpoch() > 0 {
+		response.OwnerEpoch = request.GetOwnerEpoch()
+		response.LeaseExpiresAt = timestamppb.Now()
+	}
+	return response, nil
 }
 
 func (fake *uciClientRPCFake) BeginCodeIndex(ctx context.Context, request *pb.BeginCodeIndexRequest, _ ...grpc.CallOption) (*pb.BeginCodeIndexResponse, error) {
@@ -887,7 +916,7 @@ func (fake *uciClientRPCFake) ExploreCode(ctx context.Context, request *pb.Explo
 }
 
 func (fake *uciClientRPCFake) callCount() int {
-	return len(fake.bindRequests) + len(fake.beginRequests) + fake.stageOpenCalls + len(fake.finalizeRequests) + len(fake.queryRequests) + len(fake.exploreRequests)
+	return len(fake.bindRequests) + len(fake.pollRequests) + len(fake.updateRequests) + len(fake.beginRequests) + fake.stageOpenCalls + len(fake.finalizeRequests) + len(fake.queryRequests) + len(fake.exploreRequests)
 }
 
 var _ uciClientRPC = (*uciClientRPCFake)(nil)
