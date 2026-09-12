@@ -12,9 +12,9 @@ import (
 )
 
 func TestUCIIndexIntentStoreLifecycleIdempotencyAndReadableCompletion(t *testing.T) {
-	store := openUCIIndexIntentStore(t)
+	store, fixture := openUCIIndexIntentStore(t)
 	ctx := context.Background()
-	input, previous, next := newUCIIndexIntentInput(ucidomain.IndexIntentReindex)
+	input, previous, next := newUCIIndexIntentInput(fixture, ucidomain.IndexIntentReindex)
 
 	submitted, err := store.SubmitIndexIntent(ctx, input)
 	require.NoError(t, err)
@@ -60,6 +60,8 @@ func TestUCIIndexIntentStoreLifecycleIdempotencyAndReadableCompletion(t *testing
 	require.Equal(t, 1, acknowledged.Attempt)
 	require.NotNil(t, acknowledged.Acknowledgement)
 	require.Equal(t, claim.Owner, acknowledged.Acknowledgement.Owner)
+	require.Equal(t, claim, *acknowledged.Acknowledgement)
+	require.Equal(t, ucidomain.DefaultIndexPublicationLimits().LeaseTTL, claim.LeaseExpiresAt.Sub(claim.AcknowledgedAt))
 
 	wrongOwner := claim
 	wrongOwner.Owner = "index-worker-b"
@@ -75,6 +77,8 @@ func TestUCIIndexIntentStoreLifecycleIdempotencyAndReadableCompletion(t *testing
 	running, err := store.StartIndexIntent(ctx, claim)
 	require.NoError(t, err)
 	require.Equal(t, ucidomain.IndexIntentRunning, running.State)
+	require.NotNil(t, running.Acknowledgement)
+	require.Equal(t, claim, *running.Acknowledgement)
 
 	readable := indexIntentReadableViews{next.ViewID: true}
 	wrongCompletion := claim
@@ -119,12 +123,14 @@ func TestUCIIndexIntentStoreLifecycleIdempotencyAndReadableCompletion(t *testing
 	require.NoError(t, err)
 	require.Equal(t, ucidomain.IndexIntentCompleted, completed.State)
 	require.Equal(t, next, *completed.ResultView)
+	require.NotNil(t, completed.Acknowledgement)
+	require.Equal(t, claim, *completed.Acknowledgement)
 }
 
 func TestUCIIndexIntentStoreConcurrentIdenticalSubmissionReturnsOneIntent(t *testing.T) {
-	store := openUCIIndexIntentStore(t)
+	store, fixture := openUCIIndexIntentStore(t)
 	ctx := context.Background()
-	input, _, _ := newUCIIndexIntentInput(ucidomain.IndexIntentReindex)
+	input, _, _ := newUCIIndexIntentInput(fixture, ucidomain.IndexIntentReindex)
 
 	const submitters = 8
 	intents := make([]ucidomain.IndexIntent, submitters)
@@ -156,9 +162,9 @@ func TestUCIIndexIntentStoreConcurrentIdenticalSubmissionReturnsOneIntent(t *tes
 }
 
 func TestUCIIndexIntentStoreDeliveryUpdatesReplayExactOwnerClaim(t *testing.T) {
-	store := openUCIIndexIntentStore(t)
+	store, fixture := openUCIIndexIntentStore(t)
 	ctx := context.Background()
-	input, previous, _ := newUCIIndexIntentInput(ucidomain.IndexIntentReconcile)
+	input, previous, _ := newUCIIndexIntentInput(fixture, ucidomain.IndexIntentReconcile)
 	submitted, err := store.SubmitIndexIntent(ctx, input)
 	require.NoError(t, err)
 	_, err = store.QueueIndexIntent(ctx, submitted.ID)
@@ -217,9 +223,9 @@ func TestUCIIndexIntentStoreDeliveryUpdatesReplayExactOwnerClaim(t *testing.T) {
 }
 
 func TestUCIIndexIntentStoreUnavailableRetryAndFailurePreservePriorView(t *testing.T) {
-	store := openUCIIndexIntentStore(t)
+	store, fixture := openUCIIndexIntentStore(t)
 	ctx := context.Background()
-	input, previous, _ := newUCIIndexIntentInput(ucidomain.IndexIntentReconcile)
+	input, previous, _ := newUCIIndexIntentInput(fixture, ucidomain.IndexIntentReconcile)
 
 	submitted, err := store.SubmitIndexIntent(ctx, input)
 	require.NoError(t, err)
@@ -235,15 +241,21 @@ func TestUCIIndexIntentStoreUnavailableRetryAndFailurePreservePriorView(t *testi
 	require.NoError(t, err)
 	require.Equal(t, ucidomain.IndexIntentUnavailable, stored.State)
 
+	beforeRetry, err := uciDatabaseClock(ctx, fixture.db)
+	require.NoError(t, err)
 	queued, err := store.RetryIndexIntent(ctx, submitted.ID, indexIntentRetryAuthorizer{allow: true})
+	require.NoError(t, err)
+	afterRetry, err := uciDatabaseClock(ctx, fixture.db)
 	require.NoError(t, err)
 	require.Equal(t, ucidomain.IndexIntentQueued, queued.State)
 	require.Zero(t, queued.Attempt)
+	require.False(t, queued.UpdatedAt.Before(beforeRetry), "retry updated_at must come from the database clock")
+	require.False(t, queued.UpdatedAt.After(afterRetry), "retry updated_at must come from the database clock")
 	replay, err := store.SubmitIndexIntent(ctx, input)
 	require.NoError(t, err)
 	require.Equal(t, submitted.ID, replay.ID, "retry must reuse the original durable intent")
 
-	failedInput, failedPrevious, _ := newUCIIndexIntentInput(ucidomain.IndexIntentReindex)
+	failedInput, failedPrevious, _ := newUCIIndexIntentInput(fixture, ucidomain.IndexIntentReindex)
 	failedSubmitted, err := store.SubmitIndexIntent(ctx, failedInput)
 	require.NoError(t, err)
 	_, err = store.QueueIndexIntent(ctx, failedSubmitted.ID)
@@ -261,34 +273,24 @@ func TestUCIIndexIntentStoreUnavailableRetryAndFailurePreservePriorView(t *testi
 	require.Equal(t, ucidomain.IndexIntentFailed, failedReplay.State)
 }
 
-func openUCIIndexIntentStore(t *testing.T) *UCIIndexIntentStore {
+func openUCIIndexIntentStore(t *testing.T) (*UCIIndexIntentStore, *uciProjectionMigrationFixture) {
 	t.Helper()
-	db, _ := openInterventionReceiptMigrationTestDB(t)
-	require.NoError(t, db.AutoMigrate(&indexIntentRow{}))
-	return NewUCIIndexIntentStore(db)
+	fixture := openUCIProjectionMigrationFixture(t)
+	return NewUCIIndexIntentStore(fixture.db), fixture
 }
 
-func newUCIIndexIntentInput(kind ucidomain.IndexIntentKind) (ucidomain.IndexIntentInput, ucidomain.ContextRef, ucidomain.ContextRef) {
-	scope := ucidomain.IndexScope{
-		SourceID:      uuid.NewString(),
-		CheckoutID:    uuid.NewString(),
-		IncarnationID: uuid.NewString(),
-	}
-	previous := ucidomain.ContextRef{
-		SourceID:          scope.SourceID,
-		CheckoutID:        scope.CheckoutID,
-		ViewID:            uuid.NewString(),
-		AnalysisProfileID: uuid.NewString(),
-		Generation:        1,
-	}
-	next := previous.Clone()
-	next.ViewID = uuid.NewString()
-	next.Generation++
+func newUCIIndexIntentInput(fixture *uciProjectionMigrationFixture, kind ucidomain.IndexIntentKind) (ucidomain.IndexIntentInput, ucidomain.ContextRef, ucidomain.ContextRef) {
+	previous := uciContextRefFromView(*fixture.view)
+	next := uciContextRefFromView(*fixture.stagingView)
 	return ucidomain.IndexIntentInput{
-		RequestRef:   "index-intent-request-" + uuid.NewString(),
-		Kind:         kind,
-		Scope:        scope,
-		ProfileID:    previous.AnalysisProfileID,
+		RequestRef: "index-intent-request-" + uuid.NewString(),
+		Kind:       kind,
+		Scope: ucidomain.IndexScope{
+			SourceID:      fixture.source.SourceID,
+			CheckoutID:    fixture.checkout.CheckoutID,
+			IncarnationID: fixture.checkout.IncarnationID,
+		},
+		ProfileID:    fixture.profile.ProfileID,
 		PreviousView: &previous,
 	}, previous, next
 }

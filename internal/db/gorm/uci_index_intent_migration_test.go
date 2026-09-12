@@ -39,32 +39,48 @@ func TestUCIIndexIntentMigration179FreshSchemaAndStoreLifecycle(t *testing.T) {
 	assertUCIIndexIntentMigrationConstraintFailures(t, fixture)
 
 	store := NewUCIIndexIntentStore(db)
+	ctx := context.Background()
 	input, previous, result := newUCIIndexIntentMigrationInput(fixture)
-	submitted, err := store.SubmitIndexIntent(context.Background(), input)
+	beforeSubmit, err := uciDatabaseClock(ctx, db)
 	require.NoError(t, err)
+	submitted, err := store.SubmitIndexIntent(ctx, input)
+	require.NoError(t, err)
+	afterSubmit, err := uciDatabaseClock(ctx, db)
+	require.NoError(t, err)
+	require.False(t, submitted.CreatedAt.Before(beforeSubmit), "submitted_at must come from the database clock")
+	require.False(t, submitted.CreatedAt.After(afterSubmit), "submitted_at must come from the database clock")
 	require.Equal(t, ucidomain.IndexIntentSubmitted, submitted.State)
 	require.Equal(t, previous, *submitted.PreviousView)
 
-	replayed, err := store.SubmitIndexIntent(context.Background(), input.Clone())
+	replayed, err := store.SubmitIndexIntent(ctx, input.Clone())
 	require.NoError(t, err)
 	require.Equal(t, submitted.ID, replayed.ID, "the request reference must bind idempotently")
 	changed := input.Clone()
 	changed.Kind = ucidomain.IndexIntentReconcile
-	_, err = store.SubmitIndexIntent(context.Background(), changed)
+	_, err = store.SubmitIndexIntent(ctx, changed)
 	require.ErrorIs(t, err, ucidomain.ErrIndexIntentBindingMismatch)
 
-	_, err = store.QueueIndexIntent(context.Background(), submitted.ID)
+	beforeQueue, err := uciDatabaseClock(ctx, db)
 	require.NoError(t, err)
-	claim, err := store.AcknowledgeIndexIntent(context.Background(), submitted.ID, "index-intent-migration-owner")
+	queued, err := store.QueueIndexIntent(ctx, submitted.ID)
+	require.NoError(t, err)
+	afterQueue, err := uciDatabaseClock(ctx, db)
+	require.NoError(t, err)
+	require.False(t, queued.UpdatedAt.Before(beforeQueue), "queued updated_at must come from the database clock")
+	require.False(t, queued.UpdatedAt.After(afterQueue), "queued updated_at must come from the database clock")
+	claim, err := store.AcknowledgeIndexIntent(ctx, submitted.ID, "index-intent-migration-owner")
 	require.NoError(t, err)
 	require.Equal(t, int64(1), claim.Epoch)
 	require.False(t, claim.AcknowledgedAt.IsZero())
-	_, err = store.StartIndexIntent(context.Background(), claim)
+	assertUCIIndexIntentMigrationLease(t, db, submitted.ID, ucidomain.IndexIntentAcknowledged, claim)
+	_, err = store.StartIndexIntent(ctx, claim)
 	require.NoError(t, err)
-	completed, err := store.CompleteIndexIntent(context.Background(), claim, result, indexIntentReadableViews{result.ViewID: true})
+	assertUCIIndexIntentMigrationLease(t, db, submitted.ID, ucidomain.IndexIntentRunning, claim)
+	completed, err := store.CompleteIndexIntent(ctx, claim, result, indexIntentReadableViews{result.ViewID: true})
 	require.NoError(t, err)
 	require.Equal(t, ucidomain.IndexIntentCompleted, completed.State)
 	require.Equal(t, result, *completed.ResultView)
+	assertUCIIndexIntentMigrationLease(t, db, submitted.ID, ucidomain.IndexIntentCompleted, claim)
 }
 
 // TestUCIIndexIntentMigration179UpgradeRollbackAndReplay proves migrations 179
@@ -171,6 +187,7 @@ func TestUCIIndexIntentMigration180BackfillsLegacyClaimsAsExpired(t *testing.T) 
 	require.NotNil(t, restored.AcknowledgedAt)
 	require.NotNil(t, restored.ClaimExpiresAt)
 	require.True(t, restored.ClaimExpiresAt.After(*restored.AcknowledgedAt), "backfill must satisfy the fenced claim shape without granting a fresh lease")
+	require.Equal(t, acknowledgedAt.Add(time.Microsecond), restored.ClaimExpiresAt.UTC(), "legacy backfill must grant only the minimum shape-valid expired lease")
 	require.True(t, restored.ClaimExpiresAt.Before(time.Now().UTC()), "legacy backfill must not grant a new execution lease")
 }
 
@@ -285,6 +302,15 @@ func assertUCIIndexIntentMigrationConstraintFailures(t *testing.T, fixture *uciP
 	invalid.State = string(ucidomain.IndexIntentAcknowledged)
 	invalid.Attempt = 1
 	invalid.AcknowledgementEpoch = 1
+	invalid.AcknowledgedOwner = indexIntentString("index-intent-migration-owner")
+	invalid.AcknowledgedAt = indexIntentTime(acknowledgedAt)
+	require.Error(t, fixture.db.Create(&invalid).Error, "acknowledged states require a bounded claim expiry")
+
+	invalid = newUCIIndexIntentMigrationRow(fixture)
+	acknowledgedAt = invalid.CreatedAt
+	invalid.State = string(ucidomain.IndexIntentAcknowledged)
+	invalid.Attempt = 1
+	invalid.AcknowledgementEpoch = 1
 	invalid.AcknowledgedOwner = indexIntentString(strings.Repeat("o", 257))
 	invalid.AcknowledgedAt = indexIntentTime(acknowledgedAt)
 	require.Error(t, fixture.db.Create(&invalid).Error, "acknowledgement owners must be bounded opaque text")
@@ -310,6 +336,16 @@ func assertUCIIndexIntentMigrationConstraintFailures(t *testing.T, fixture *uciP
 	invalid = newUCIIndexIntentMigrationRow(fixture)
 	invalid.UpdatedAt = invalid.CreatedAt.Add(-time.Second)
 	require.Error(t, fixture.db.Create(&invalid).Error, "intent timestamps must be monotonic")
+}
+
+func assertUCIIndexIntentMigrationLease(t *testing.T, db *gormlib.DB, intentID string, state ucidomain.IndexIntentState, claim ucidomain.IndexIntentClaim) {
+	t.Helper()
+	var row indexIntentRow
+	require.NoError(t, db.Where("intent_id = ?", intentID).First(&row).Error)
+	require.Equal(t, string(state), row.State)
+	require.NotNil(t, row.ClaimExpiresAt)
+	require.Equal(t, claim.LeaseExpiresAt, row.ClaimExpiresAt.UTC())
+	require.Equal(t, ucidomain.DefaultIndexPublicationLimits().LeaseTTL, claim.LeaseExpiresAt.Sub(claim.AcknowledgedAt))
 }
 
 func newUCIIndexIntentMigrationInput(fixture *uciProjectionMigrationFixture) (ucidomain.IndexIntentInput, ucidomain.ContextRef, ucidomain.ContextRef) {

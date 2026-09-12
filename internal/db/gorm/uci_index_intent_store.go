@@ -126,7 +126,10 @@ func (s *UCIIndexIntentStore) SubmitIndexIntent(ctx context.Context, input ucido
 
 	var intent ucidomain.IndexIntent
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		now := time.Now().UTC()
+		now, err := uciDatabaseClock(ctx, tx)
+		if err != nil {
+			return err
+		}
 		candidate := indexIntentRowFromInput(uuid.NewString(), input, now)
 		created := tx.WithContext(ctx).Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "request_ref"}},
@@ -331,8 +334,12 @@ func (s *UCIIndexIntentStore) RetryIndexIntent(ctx context.Context, intentID str
 		if authorizer.AuthorizeIndexIntentRetry(ctx, current.Clone()) != nil {
 			return ucidomain.ErrIndexIntentRetryUnauthorized
 		}
+		now, err := uciDatabaseClock(ctx, tx)
+		if err != nil {
+			return err
+		}
 		row.State = string(ucidomain.IndexIntentQueued)
-		row.UpdatedAt = time.Now().UTC()
+		row.UpdatedAt = now
 		if err := updateIndexIntentRow(ctx, tx, *row, string(ucidomain.IndexIntentUnavailable), nil); err != nil {
 			return err
 		}
@@ -418,7 +425,11 @@ func (s *UCIIndexIntentStore) LoadIndexIntentClaim(ctx context.Context, binding 
 	if err != nil || claim == nil {
 		return ucidomain.IndexIntentClaim{}, ucidomain.ErrIndexIntentOwnerLost
 	}
-	if !allowCompleted && !claim.LeaseExpiresAt.After(time.Now().UTC()) {
+	now, err := uciDatabaseClock(ctx, s.db)
+	if err != nil {
+		return ucidomain.IndexIntentClaim{}, err
+	}
+	if !allowCompleted && !claim.LeaseExpiresAt.After(now) {
 		return ucidomain.IndexIntentClaim{}, ucidomain.ErrIndexIntentLeaseExpired
 	}
 	return *claim, nil
@@ -701,8 +712,12 @@ func (s *UCIIndexIntentStore) transition(ctx context.Context, intentID string, a
 		if err != nil {
 			return err
 		}
+		now, err := uciDatabaseClock(ctx, tx)
+		if err != nil {
+			return err
+		}
 		expectedState := row.State
-		if err := apply(row, time.Now().UTC()); err != nil {
+		if err := apply(row, now); err != nil {
 			return err
 		}
 		if err := updateIndexIntentRow(ctx, tx, *row, expectedState, nil); err != nil {
