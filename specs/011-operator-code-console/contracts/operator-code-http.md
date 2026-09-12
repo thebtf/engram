@@ -1,92 +1,40 @@
 # Operator Code HTTP Contract
 
-**Status**: Feature011 implementation contract. The listed routes are planned normal authenticated HTTP presentation endpoints; they do not exist in the current candidate and are not HTTP-MCP aliases.
+**Status**: Integrated HTTP presentation contract. `internal/worker/handlers_operator_code.go` and registered routes are authoritative. These are authenticated browser endpoints, not HTTP-MCP aliases.
 
-## 2026-09-11 delivery amendment — current candidate gaps
+## Current Routes and DTOs
 
-The intended API below remains the acceptance contract. The current candidate implementation is narrower, so the Console Code runtime must use only the real calls it can make and render the following limitations rather than fabricate selection, continuation, or source data:
+The Console sends `X-Engram-Request-ID` on every request. Contextual JSON routes carry `tab_binding_id` and `document_proof` in their body; the index-intent status `GET` carries the same two values in `X-Engram-Tab-Binding-ID` and `X-Engram-Document-Proof` headers. No route accepts a browser filesystem path, principal, grant reference, project label, or raw service cursor.
 
-| Required operator outcome | Current implementation | Console posture until serialized backend delivery |
+| Route | Request | Response and required Console posture |
 |---|---|---|
-| Authorized Source → Checkout → View catalog and exact selection | `POST /api/code/contexts` returns exactly one server-resolved `{context:{source,checkout,view}}`; `PUT /api/code/tabs/{tab_binding_id}/context` accepts only `document_proof` and pins that server-resolved context. It returns no catalog, opaque `ContextRef`, or selector. | Display only the one safe server label set; pin it explicitly. Do not create a local worktree/View picker or claim A/B worktree selection. |
-| Search continuation | `operatorCodeSearchRequest` accepts only `query` and `limit`; no continuation route is registered. | Preserve the shown query and View, announce that the returned cursor cannot be continued, and expose no control that implies otherwise. |
-| Graph continuation and filters | `POST /api/code/graph` accepts `direction`, relation filters, bounded budgets, and an inline opaque continuation. | Re-submit only the original graph target and filters with the opaque server cursor; each call remains binding/grant/UCI authorized. The browser treats the cursor as opaque. |
-| Graph-node source inspection | `POST /api/code/source` requires a released search item's entity key, span, and content digest. Graph edges contain no source descriptor. | Let an operator inspect exact source only when the selected graph node matches a released search item; otherwise say that no published source descriptor was released. |
-| New View after index request | Intent endpoints persist/read safe state, but the current slice has no daemon execution consumer proving a newly published readable View. | Render acknowledgement and state only. Never switch the pin, expose a path, or call completion a new selectable View. |
+| `POST /api/code/tabs/handshake` | `document_nonce`; optional copied binding/resume pair and `ambiguous` | Returns binding transition material only. A new binding starts without a pin or selected context. |
+| `POST /api/code/tabs/resume` | `tab_binding_id`, `resume_nonce`, `reload_token`, `document_nonce` | Restores only the retained binding or returns `RELOAD_PENDING`; no context is exposed until a valid current proof is used. |
+| `POST /api/code/contexts` | binding proof | Returns `contexts[]`, ordered server-side. Each entry contains safe `source{id,label}`, `checkout{id,label}`, optional `view{context_ref,label}`, and `index_intent_available`. The Console must present every published/superseded View as an explicit choice. A `view:null` entry is an index affordance only: it supplies no `ContextRef`, source content, or local substitute. |
+| `PUT /api/code/tabs/{tab_binding_id}/context` | `{document_proof, context_ref:{source_id,checkout_id,view_id,analysis_profile_id,generation}}` | Pins only that exact catalog `ContextRef` for this document. The Console must not infer a ContextRef or switch a different tab. |
+| `POST /api/code/status` | binding proof | Returns released non-content status: `total_chunks`, `embedded_chunks`, `embedding`, and optional `freshness`. The embedded `uci.EmbeddingStatus` currently serializes its fields as `EmbeddingProfileID`, `Coverage`, `TotalCandidates`, `ReadyCandidates`, `PendingJobs`, `JobState`, `ErrorCode`, and `RetryAfter`; it does not identify the pin. |
+| `POST /api/code/search` | binding proof, `query`, optional `path_prefix`, `languages`, `limit`, and opaque `continuation` | Returns one released query envelope. Search `continuation` is a server-owned, one-use, expiring opaque cursor bound to subject, grant epoch, tab binding, exact View, normalized query/filter, and page size. The Console offers the next page only when this response contains a cursor and reuses the unchanged query/filter/View request. A cursor refusal is non-disclosing: the UI must not mix old and new result pages and can truthfully name possible expiry, consumption, or mismatch rather than guessing which occurred. |
+| `POST /api/code/graph` | binding proof, graph target/action, optional filters/budgets, optional opaque continuation | Returns a released graph envelope plus `navigation`. Each navigation node contains its exact entity/context projection, `source_state`, and optional `source_read{entity_key,span,content_digest}`. Graph continuation remains the opaque UCI continuation supplied with the unchanged graph request. |
+| `POST /api/code/source` | binding proof plus a released descriptor's `entity_key`, exact `span`, and `content_digest` | Reads only the persisted selected-View span. The Console calls it only when a result or graph-navigation node supplied its descriptor; it never reads disk or manufactures a graph-node source body. |
+| `POST /api/code/index-intents`, `GET /api/code/index-intents/{intent_ref}`, `POST /api/code/index-intents/{intent_ref}/retry` | binding proof, opaque request/intent reference, kind where applicable | Presents `intent_ref`, `state`, `attempt`, `retryable`, `created_at`, and `updated_at`; only completed status may add `result{view_ref,generation}`. Admission/status never selects or pins that newer View. |
 
-The actual implementation also uses JSON binding/proof DTOs and `POST` for contextual reads while the planned table names header/`GET` shapes. The browser must follow the actual handler contract until the backend cutover ships; this does not relax the required same-View, grant, and release semantics.
+## Binding, Selection, and Failure Rules
 
-### Current handler seam (delivery candidate)
+Every route derives the authenticated browser subject and session server-side. Except for binding transition endpoints, no Code route can proceed without a live binding plus current document proof. Contextual handlers reauthorize the pin and exact active Source/Checkout grant before invoking UCI; refusals do not disclose contextual body, source/check-out identifiers, counts, edges, cursors, or exposure data.
 
-The Console consumes the following registered shapes until the planned contract above is delivered. This is the one typed response-to-screen adaptation seam: `useOperatorCode.ts` validates these JSON DTOs before rendering; it neither guesses planned fields nor constructs a local substitute.
+- Catalog labels and opaque `ContextRef`s are browser presentation data, not authority. Only a catalog View can be submitted to the pin route.
+- Catalog discovery never pins a default. A retained explicit choice may be restored only after the resumed binding and current catalog both prove the same `ContextRef`; otherwise the document remains unselected.
+- A completed index intent may identify a newer View result, but does not replace the current pin or client selection.
+- Search-page requests must preserve query, normalized filters, page size, and pinned View. The server consumes a successful cursor advance atomically; a rejected advance leaves no usable next page response.
+- Graph navigation is bounded to the released graph context. `source_state:"unavailable"` means no source-read control; the Console does not fall back to a matching search item, a checkout path, or local disk.
+- `loading`, `empty`, `denied`, `unavailable`, `offline`, `timeout`, `partial`, and `stale` remain distinct. Empty is a complete authorized result with no match, never a substitute for denial, cursor refusal, or a capped/unavailable graph.
 
-| Route | Current request shape | Current response and UI constraint |
-|---|---|---|
-| `POST /api/code/tabs/handshake` | `document_nonce`, optional copied binding/resume nonce, optional `ambiguous` | Returns only binding transition material. No context is selected by bootstrap. |
-| `POST /api/code/tabs/resume` | binding ID, resume nonce, reload token, document nonce | Resumes only the retained binding or returns `RELOAD_PENDING`; contextual data stays concealed until a current proof is established. |
-| `POST /api/code/contexts` | `tab_binding_id`, `document_proof` | Returns one safe `{context:{source,checkout,view}}` or no safe labels. |
-| `PUT /api/code/tabs/{tab_binding_id}/context` | `{document_proof}` | Pins only that server-resolved context; returns `204` on confirmation. |
-| `POST /api/code/status` | `tab_binding_id`, `document_proof` | Returns released coverage/freshness metadata for the pin. |
-| `POST /api/code/search` | binding proof, `query`, optional bounded `limit` | Returns a released query envelope. A returned search cursor has no current continuation route and is announced as unavailable. |
-| `POST /api/code/graph` | binding proof, target, direction, supported relations, declared bounds, optional opaque `continuation` | Returns only server-supplied nodes and edges; the same target and filters may be resubmitted with its opaque cursor. |
-| `POST /api/code/source` | binding proof, released item `entity_key`, exact span, `content_digest` | Returns one exact persisted source item or a closed non-content state. No graph-only node receives invented source text. |
-| `POST`/`GET` `/api/code/index-intents…` | binding proof, opaque request/intent references and kind as applicable | Presents durable admission/status only. It never switches the pin or exposes a resulting View reference/path. |
+## Release Boundary
 
-## Boundary and Caller Mapping
+`internal/worker` validates DTOs and delegates through the binding, grant, catalog/continuation, composed UCI, and release ports. It does not query `ci_*` tables directly, reconstruct graph facts, accept an absolute locator, create AST facts, or invoke an MCP tool. UCI owns exact `ContextRef` validation/authorization, query/graph/source semantics, response validation, reauthorization, and release/exposure rules.
 
-`internal/worker` validates DTOs and invokes one composed UCI application. It never queries `ci_*` tables directly, reconstructs a graph, accepts a filesystem path, creates AST facts, or calls an MCP tool. UCI owns `ContextRef` validation/authorization, query/graph/source semantics, response validation, reauthorization, and initial exposure recording.
+The contextual envelope is the serialized `engram.code-query/1` UCI response: `schema`, `status`, `contexts`, `freshness`, `retrieval`, `coverage`, `exposure`, `error`, `items`, `graph`, `truncated`, `warnings`, and `continuation` under their UCI omission/null rules. Graph HTTP adds only the route-owned `navigation` projection described above. HTTP does not add source bytes outside a released exact-read item, a raw UCI cursor, a path locator, a query log, or credentials.
 
-The release port receives a typed caller rather than a fabricated browser keycard:
+## Explicit UI Non-Contracts
 
-| Caller kind | Stable caller reference | Session/reference binding | Compatibility rule |
-|---|---|---|
-| `mcp_keycard` | Existing validated MCP keycard identity | Existing admitted MCP transport session and context handle | Preserves the current MCP release/idempotency vectors. |
-| `browser_subject` | Canonical realm-qualified BrowserSubject | Authenticated browser session, server-issued `tab_binding_id`, current document proof, and request reference | Never populates or pretends to own `ClientKeycard`; the proof identifies a document only and is a distinct caller kind from MCP. |
-
-The release owner evolves `uci.ExposureInput` behind this typed mapper so persisted opaque hashes and canonical idempotency bind caller kind, caller reference, session/binding/document-proof digest, request reference, operation, and exact View. The MCP mapper retains the current hash/vector compatibility contract; the browser mapper uses the browser subject, binding, and current document proof. Neither raw caller identity nor request body is persisted. A browser request cannot borrow an MCP keycard hash, and an MCP request cannot select a browser tab binding.
-
-Every contextual Code route requires a real authenticated browser session, server-issued `X-Engram-Tab-Binding-ID`, matching current `X-Engram-Document-Proof`, and an active exact browser read grant for the selected Source and Checkout. A malformed, absent, foreign, expired, revoked, collision-rotated, replayed, or mismatched binding/proof/context has the same non-disclosing failure posture: no source body, source/check-out identifier, count, edge, cursor, or exposure receipt.
-Except for the first `handshake` or `resume` transition, every `/api/code` route—including safe context metadata, pin selection, and grant administration—and every lease operation carries both binding ID and current document proof. `handshake` carries a fresh document nonce; `resume` carries fresh nonce, binding ID, resume nonce, and the server-owned one-time reload cookie. The Console Code bootstrap selects `resume` only after one-time opener normalization/readback reports no opener and `PerformanceNavigationTiming.type === "reload"`; a normalized no-opener `navigate` copied pair uses handshake, while opener failure/persistence or ambiguous metadata clears to fresh handshake. The cookie, opener, and bootstrap signal do not substitute for exact grant or UCI ContextRef authorization.
-
-## Common Release Categories
-
-The common release operation reauthorizes the exact `ContextRef` against the current grant and UCI epoch, validates a pre-exposure response, appends non-content exposure when required, validates the released response, and only then returns a serializable envelope. A release/recorder failure returns UCI’s closed unavailable envelope with `exposure: null` and no contextual data. Permission/context refusal records no exposure.
-
-| Category | Routes | Authorization and exposure rule |
-|---|---|---|
-| Binding transition | `POST /api/code/tab-bindings/handshake`; `POST /api/code/tab-bindings/resume`; `POST /api/code/tabs/{tab_binding_id}/lease/renew`; `POST /api/code/tabs/{tab_binding_id}/lease/close` | Handshake uses authenticated session plus fresh document nonce and either no pair or a copied pair; resume uses the exact server-owned one-time token material only after the Console Code normalized no-opener `reload` classifier branch; lease calls require current binding ID/proof. A normalized `navigate` duplicate uses handshake and returns only `TAB_BINDING_COLLISION`; delayed reload returns only `RELOAD_PENDING`; opener-normalization failure/persistence or ambiguous bootstrap returns only `TAB_BOOTSTRAP_AMBIGUOUS`; none returns prior context. |
-| Ordinary authorized metadata | `GET /api/code/contexts`; `PUT /api/code/tabs/{tab_binding_id}/context`; `POST /api/code/grants`; `POST /api/code/grants/{grant_ref}/revoke` | Current binding/document proof plus exact grant or Source-owner authorization is checked before safe metadata/operation acknowledgement. These responses contain no code fact, coverage/status, result View, or source relation and do not append exposure. |
-| Contextual status metadata | `GET /api/code/status` | Exact binding/grant/context authorization plus common release and `code_status` exposure before View/freshness/coverage metadata serializes. It is not a generic health endpoint and cannot call a chunk count semantic readiness. |
-| Contextual query/fact response | `POST /api/code/search`, `POST /api/code/graph`, `POST /api/code/source` | Common release with respectively `code_search`, `code_graph`, or `versioned_read`; it returns only the released UCI envelope. |
-| Continuation | `GET /api/code/continuations/{cursor}` | Cursor validation is ordinary non-disclosing authorization. It then re-executes the underlying search/graph category and records that operation’s exposure; a cursor never serializes cached contextual payload itself. |
-| Intent admission/retry acknowledgement | `POST /api/code/index-intents`, `POST /api/code/index-intents/{intent_ref}/retry` | Exact current grant/context check; returns only opaque intent reference, safe state, and retryability. No exposure because it returns no contextual code fact or View. |
-| Intent result metadata | `GET /api/code/index-intents/{intent_ref}` | Reauthorizes before all status. A state without a readable resulting View returns only safe operation metadata with no exposure. If the response includes resulting `ContextRef`/View, freshness, or coverage, it uses common release and `code_index_result` exposure; release failure omits those fields and receipt. |
-
-`code_status` and `code_index_result` are explicit planned exposure operations in addition to the current `code_search`, `code_graph`, and `versioned_read` vocabulary. They cannot be mislabeled as search merely to reuse a recorder branch.
-
-## Endpoints and Envelope
-
-The contextual envelope mirrors the released UCI response: `status`, `context`, `freshness`, `retrieval`, `coverage`, `warnings`, `items`, `graph`, `source`, `error`, and opaque `exposure`. HTTP may add request correlation metadata but cannot add an unredacted internal error, locator, source text outside the UCI source excerpt, query log, or credential.
-
-| Endpoint | Input | Output contract |
-|---|---|---|
-| `GET /api/code/contexts` | Binding ID + current document proof; optional bounded cursor | Returns only grant-authorized Source/Checkout/View safe labels and opaque `ContextRef`s; no owner, workstation, absolute locator, or ungranted count. |
-| `PUT /api/code/tabs/{tab_binding_id}/context` | Binding ID + current document proof; exact `ContextRef` selector | Validates context tuple, active grant, and binding; pins one context to that binding only and never changes MCP/another tab. |
-| `GET /api/code/status` | Binding ID + current document proof; optional exact context selector | Returns released status/coverage/freshness for the bound authorized View. |
-| `POST /api/code/search` | Binding ID + current document proof; bounded query, requested retrieval mode, bounded limit, optional continuation | Resolves bound/exact context, calls UCI search, and returns a released envelope. A semantic request reports UCI’s actual semantic/hybrid/degraded outcome; lexical FTS is never named semantic. |
-| `POST /api/code/graph` | Binding ID + current document proof; bounded graph operation/target, direction/relation filters, UCI budgets, optional continuation | Returns released bounded relations or visible cap/partial/unsupported/no-path qualification. Edges are UCI code facts, not legacy memory graph records. |
-| `POST /api/code/source` | Binding ID + current document proof; UCI entity reference or relative path plus bounded source span | Calls UCI versioned read only. Source bytes are the exact persisted artifact/span from the selected View; there is no working-copy/disk fallback. |
-
-Index intent endpoints are specified in [index-intents.md](index-intents.md); grant and binding routes are specified in [browser-context-and-grants.md](browser-context-and-grants.md).
-
-## Validation, Compatibility, and Failure Vectors
-
-- Limits and graph budgets use UCI maxima; invalid, negative, or oversized values are rejected rather than silently clamped.
-- Multiple possible contexts without explicit authorized selection return `CONTEXT_REQUIRED`; a label/path/Space/legacy project is not a selection.
-- `loading`, `empty`, `denied`, `error`, `stale`, `partial`, `unsupported`, `timeout`, and `offline` remain distinct. `empty` means a complete authorized query has no match; it never replaces denied, incomplete, capped, or unavailable.
-- Grant revocation between application result and release serializes no contextual body. A new View leaves the pinned View stable and may only announce a newer candidate.
-- MCP remains a first-class release consumer. Parity/failure vectors cover MCP and browser caller attribution, binding/document-proof validation, fresh opener, copied-tab collision, acknowledged and delayed/crash reload, token/proof replay, document versus binding/session expiry, authorized search/graph/source/status/index-result, ordinary discovery/binding/admission, recorder failure, context mismatch, grant revocation after application work, invalid response, idempotency mismatch, bounded partial graph, and continuation mismatch. Equivalent contextual inputs yield the same UCI content/redaction/exposure semantics; transport framing and caller kind are the only permitted differences.
-
-## Explicit Non-Contracts
-
-This surface does not expose an MCP JSON-RPC endpoint, raw UCI stores, arbitrary server paths, View publication, source registration, daemon credentials, legacy graph mutation, manual AST editing, full graph download, a browser request for a local workstation filesystem action, broad browser IAM, or an administrator-role implied grant.
+The Console does not expose local worktree/disk actions, raw UCI stores, View publication, source registration, daemon credentials, a full graph download, a browser-supplied grant/principal, a source body for an unavailable graph node, or automatic selection after catalog refresh/index completion. A `view:null` catalog item is truthfully shown as unavailable for source inspection and carries only the server-declared indexing affordance.

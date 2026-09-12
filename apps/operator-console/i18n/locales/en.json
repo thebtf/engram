@@ -2242,22 +2242,37 @@
       "failed": "normalization failed"
     },
     "context": {
-      "title": "Authorized source view",
-      "lead": "Only server-presented Source, Checkout, and View labels can be pinned. Labels never grant access.",
+      "title": "Authorized source views",
+      "lead": "Select one server-presented Source, Checkout, and View before pinning it. Labels never grant access.",
       "source": "Source",
       "checkout": "Checkout",
       "view": "View",
-      "refresh": "Check authorized view",
+      "catalog": "Authorized choices",
+      "choose": "Choose a Source / Checkout / View",
+      "selectPrompt": "Choose a server-authorized View. This document stays unpinned until you confirm it.",
+      "selectedPrompt": "Review the selected View, then pin it explicitly for this document.",
+      "refresh": "Refresh authorized choices",
       "retryReload": "Retry reload binding",
-      "pin": "Pin this view",
+      "pin": "Pin selected View",
+      "switch": "Switch to selected View",
       "pinned": "Pinned by server",
       "emptyTitle": "No selectable view is available.",
       "emptyBody": "A revoked, expired, or ambiguous binding reveals no context labels or code facts.",
-      "singleCandidate": "Review the one server-resolved safe choice, then pin it explicitly.",
       "pinnedMessage": "This server pin is active only for the current document binding.",
       "pinnedReadout": "Server pin confirmed for {source} / {checkout} / {view}.",
-      "catalogGapTitle": "Catalog selection is not available on this server",
-      "catalogGapBody": "The current API returns one server-resolved safe context and accepts no ContextRef selector. This console does not invent a worktree catalog or local View selection.",
+      "noViewIndexAvailable": "This authorized Checkout has no published View. It is eligible for server-owned indexing, but no ContextRef or source content is available here.",
+      "noViewUnavailable": "This authorized Checkout has no published View and exposes no indexing affordance.",
+      "noViewOnlyTitle": "No published View is available.",
+      "noViewOnlyBody": "The authorized Checkouts below have no pinnable ContextRef. Their server-declared indexing availability is shown without inventing a View.",
+      "catalogStates": {
+        "idle": "Waiting to request authorized choices.",
+        "loading": "Loading server-authorized choices.",
+        "ready": "Authorized choices are available.",
+        "empty": "No authorized Source, Checkout, or View is available to this document.",
+        "denied": "The server denied catalog access. Existing contextual content was not changed.",
+        "unavailable": "The server did not provide a readable catalog. No context was selected.",
+        "offline": "The browser cannot reach the server for authorized choices."
+      },
       "phases": {
         "idle": "Waiting",
         "binding": "Binding document",
@@ -2271,7 +2286,7 @@
       "messages": {
         "idle": "Waiting to establish the browser binding.",
         "binding": "Establishing a server-issued browser binding.",
-        "ready": "No authorized context is currently available to this document.",
+        "ready": "Authorized choices are ready for explicit selection.",
         "collision": "The copied tab received a fresh unselected binding.",
         "ambiguous": "Bootstrap was ambiguous; the new binding starts unselected.",
         "reload-pending": "The prior document lease is still live. Retry after it closes or expires.",
@@ -2378,7 +2393,11 @@
       }
     },
     "continuation": {
-      "searchGap": "A search continuation was returned, but this server exposes no continuation route. The original query and pinned View stay unchanged."
+      "next": "Load next search page",
+      "search": {
+        "denied": "The next-page cursor was not usable. It may have expired, been consumed, or not matched the original query, filter, or pinned View; no page was applied.",
+        "unavailable": "The next-page cursor could not be advanced. The server released no new page."
+      }
     },
     "source": {
       "title": "Exact source",
@@ -2402,7 +2421,7 @@
       "continue": "Load next bounded relations",
       "selection": "Selected graph evidence",
       "inspectSource": "Inspect exact source",
-      "noPublishedSource": "This graph-only node has no released source descriptor. Choose its original search result to read a source span.",
+      "noPublishedSource": "This graph-only node has no released source descriptor. No source request was made.",
       "traversal": "Traversal: {stop}",
       "canvasLabel": "Bounded code graph with {count} nodes",
       "edgeLabel": "{from} {relation} {to}",

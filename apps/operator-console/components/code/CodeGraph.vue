@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { CodeEntityRef, CodeEnvelope, CodeGraphEdge, CodeGraphOptions, CodeItem, CodePresentationState } from '~/composables/useOperatorCode'
+import type { CodeEntityRef, CodeEnvelope, CodeGraphEdge, CodeGraphOptions, CodeItem, CodePresentationState, CodeSourceDescriptor } from '~/composables/useOperatorCode'
 
 const { t } = useI18n()
 
@@ -14,7 +14,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   explore: [item: CodeItem, options: CodeGraphOptions]
   continue: []
-  source: [item: CodeItem]
+  source: [descriptor: CodeSourceDescriptor]
 }>()
 
 const direction = ref<CodeGraphOptions['direction']>('both')
@@ -31,7 +31,7 @@ const nodes = computed(() => graph.value?.nodes.map((ref, index) => {
   const angle = (Math.PI * 2 * index) / count - Math.PI / 2
   return { ref, x: 160 + Math.cos(angle) * 112, y: 130 + Math.sin(angle) * 82 }
 }) ?? [])
-const selectedSource = computed(() => props.search?.items.find((item) => item.ref.entityKey === selectedNode.value) ?? null)
+const selectedSource = computed(() => props.graph?.navigation?.nodes.find((node) => node.ref.entityKey === selectedNode.value)?.source ?? null)
 const visibleContinuation = computed(() => props.graph !== null && props.graph.continuation !== null)
 
 function point(ref: CodeEntityRef): { x: number; y: number } | null {

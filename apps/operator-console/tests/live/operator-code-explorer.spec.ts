@@ -1,6 +1,7 @@
+import { spawn } from 'node:child_process'
 import { writeFile } from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
-import type { Browser, Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
 import { appendBrowserTraffic, readLiveFixture } from './fixture-bootstrap'
 import type { LiveFixtureState, RouteTraffic } from './fixture-bootstrap'
 
@@ -11,6 +12,7 @@ interface OperatorCodeLiveFixture {
   expectedSearch: string
   expectedGraph: string
   expectedSource: string
+  expectedMarker: string
 }
 
 interface BrowserApiResponse {
@@ -18,38 +20,63 @@ interface BrowserApiResponse {
   body: unknown
 }
 
-function provisionedOperatorCodeFixture(state: LiveFixtureState): OperatorCodeLiveFixture | null {
-  const raw = Reflect.get(state, 'operatorCode')
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
-  const query = Reflect.get(raw, 'query')
-  const expectedSearch = Reflect.get(raw, 'expectedSearch')
-  const expectedGraph = Reflect.get(raw, 'expectedGraph')
-  const expectedSource = Reflect.get(raw, 'expectedSource')
+function provisionedOperatorCodeFixture(state: LiveFixtureState, key: 'operatorCode' | 'operatorCodeAlternate'): OperatorCodeLiveFixture | null {
+  const raw = state[key]
   if (
-    typeof query !== 'string' || query.trim() === ''
-    || typeof expectedSearch !== 'string' || expectedSearch.trim() === ''
-    || typeof expectedGraph !== 'string' || expectedGraph.trim() === ''
-    || typeof expectedSource !== 'string' || expectedSource.trim() === ''
+    typeof raw.query !== 'string' || raw.query.trim() === ''
+    || typeof raw.expectedSearch !== 'string' || raw.expectedSearch.trim() === ''
+    || typeof raw.expectedGraph !== 'string' || raw.expectedGraph.trim() === ''
+    || typeof raw.expectedSource !== 'string' || raw.expectedSource.trim() === ''
+    || typeof raw.expectedMarker !== 'string' || raw.expectedMarker.trim() === ''
   ) return null
-  return { query, expectedSearch, expectedGraph, expectedSource }
+  return raw
 }
 
-test('S2 live acceptance: explicit pin keeps search, graph, and source inside one released view', async ({ browser }, testInfo) => {
+
+async function fixtureSQL(fixture: LiveFixtureState, statement: string): Promise<void> {
+  const child = spawn('docker', [
+    'exec', fixture.postgres.container,
+    'psql', '--username=engram', '--dbname=engram', '--command', statement,
+  ], { windowsHide: true })
+  child.stdout?.resume()
+  child.stderr?.resume()
+  const code = await new Promise<number | null>((resolve, reject) => {
+    child.once('error', reject)
+    child.once('close', resolve)
+  })
+  if (code !== 0) throw new Error('disposable fixture lifecycle control failed')
+}
+
+async function selectFixtureContext(page: Page, fixture: LiveFixtureState, variant: 'a' | 'd'): Promise<void> {
+  const select = page.getByTestId('code-context-select')
+  const option = select.locator('option').filter({ hasText: `${fixture.fixtureId}-${variant}` })
+  await expect(option).toHaveCount(1)
+  const value = await option.getAttribute('value')
+  if (value === null) throw new Error('fixture catalog did not expose a selectable View')
+  await select.selectOption(value)
+}
+
+test('S2 live acceptance: explicit catalog preserves View-bound pagination and graph-source limits', async ({ browser }, testInfo) => {
   const fixture = await readLiveFixture()
-  const scenario = provisionedOperatorCodeFixture(fixture)
-  test.skip(scenario === null, 'requires the server-owned CodeGrantApplication/UCI live fixture provisioner')
+  const scenario = provisionedOperatorCodeFixture(fixture, 'operatorCode')
+  const alternate = provisionedOperatorCodeFixture(fixture, 'operatorCodeAlternate')
+  test.skip(scenario === null || alternate === null, 'requires the server-owned CodeGrantApplication/UCI live fixture provisioner')
+  if (scenario === null || alternate === null) return
 
   const requestPaths: string[] = []
   const responseTraffic: RouteTraffic[] = []
+  const searchRequests: Array<Record<string, unknown>> = []
   const context = await browser.newContext()
   const page = await context.newPage()
   const transitions: Array<{ label: string; opener: boolean; navigationType: string; transition: string | null }> = []
 
   page.on('request', (request) => {
     const url = new URL(request.url())
-    if (url.origin === fixture.frontend.baseUrl && url.pathname.startsWith('/api/code/')) {
-      requestPaths.push(`${request.method()} ${url.pathname}`)
-    }
+    if (url.origin !== fixture.frontend.baseUrl || !url.pathname.startsWith('/api/code/')) return
+    requestPaths.push(`${request.method()} ${url.pathname}`)
+    if (url.pathname !== '/api/code/search' || request.postData() === null) return
+    const body: unknown = JSON.parse(request.postData() || '')
+    if (body !== null && typeof body === 'object' && !Array.isArray(body)) searchRequests.push({ ...body })
   })
   page.on('response', (response) => {
     const url = new URL(response.url())
@@ -68,11 +95,15 @@ test('S2 live acceptance: explicit pin keeps search, graph, and source inside on
     expect(login.status).toBe(200)
 
     await page.goto(`${fixture.frontend.baseUrl}/code`, { waitUntil: 'domcontentloaded' })
-    await expect(page.getByTestId('code-context-candidate')).toBeVisible()
+    const contextSelect = page.getByTestId('code-context-select')
+    await expect(contextSelect.locator('option')).toHaveCount(3)
+    await expect(page.getByTestId('code-context-index-affordance')).toHaveCount(1)
     await expect(page.getByTestId('code-release-state')).toHaveAttribute('data-state', 'unselected')
     await expect(page.getByTestId('code-results-unselected')).toBeVisible()
     await recordTransition(page, transitions, 'fresh')
 
+    await selectFixtureContext(page, fixture, 'a')
+    await expect(page.getByTestId('code-context-candidate')).toBeVisible()
     await page.getByTestId('code-pin-context').focus()
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('code-context-pinned')).toBeVisible()
@@ -80,21 +111,55 @@ test('S2 live acceptance: explicit pin keeps search, graph, and source inside on
     await expect(page.getByRole('heading', { name: 'Graph evidence' })).toBeVisible()
     await expect(page.getByTestId('code-status')).toContainText('unavailable')
 
+    const pinnedA = await page.getByTestId('code-context-pinned').textContent()
     await page.getByTestId('code-query-input').fill(scenario.query)
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('code-search-results')).toContainText(scenario.expectedSearch)
+    await expect(page.getByTestId('code-search-next')).toBeVisible()
+    await page.getByTestId('code-search-next').click()
+    await expect.poll(() => searchRequests.length).toBe(2)
+    expect(searchRequests[1]).toMatchObject({ query: scenario.query, limit: 10, path_prefix: '', languages: [] })
+    expect(typeof searchRequests[1].continuation).toBe('string')
+    expect(await page.getByTestId('code-context-pinned').textContent()).toBe(pinnedA)
+
+    await page.getByTestId('code-query-input').fill(scenario.query)
+    await page.keyboard.press('Enter')
     const functionResult = page.getByTestId('code-search-results').getByRole('listitem').filter({
       has: page.getByText(`go:fixture/func:${scenario.expectedSource}`, { exact: true }),
     })
     await expect(functionResult).toHaveCount(1)
     await functionResult.getByRole('button', { name: 'Explore graph' }).click()
     await expect(page.getByTestId('code-graph-results')).toContainText(scenario.expectedGraph)
-    await functionResult.getByRole('button', { name: 'Read source' }).click()
-    await expect(page.getByTestId('code-source-result')).toContainText(scenario.expectedSource)
+    await page.getByRole('button', { name: `Select graph node go:fixture/func:${scenario.expectedGraph}` }).click()
+    const inspectSource = page.getByRole('button', { name: 'Inspect exact source' })
+    await expect(inspectSource).toBeVisible()
+    await inspectSource.click()
+    await expect(page.getByTestId('code-source-result')).toContainText(scenario.expectedMarker)
+
+    await fixtureSQL(fixture, `
+      UPDATE ci_blobs
+      SET storage_state = 'metadata_only', safe_content = NULL
+      WHERE source_id IN (
+        SELECT source_id FROM sources
+        WHERE display_name = 'Operator Code Fixture ${fixture.fixtureId.split("'").join("''")}-d'
+      );
+    `)
+    await selectFixtureContext(page, fixture, 'd')
+    await page.getByTestId('code-pin-context').click()
+    await expect(page.getByTestId('code-context-pinned')).toContainText(`${fixture.fixtureId}-d`)
+    await page.getByTestId('code-query-input').fill(alternate.query)
+    await page.keyboard.press('Enter')
+    const alternateResult = page.getByTestId('code-search-results').getByRole('listitem').filter({
+      has: page.getByText(`go:fixture/func:${alternate.expectedSource}`, { exact: true }),
+    })
+    await expect(alternateResult).toHaveCount(1)
+    await alternateResult.getByRole('button', { name: 'Explore graph' }).click()
+    await page.getByRole('button', { name: `Select graph node go:fixture/func:${alternate.expectedGraph}` }).click()
+    await expect(page.getByText('No source request was made.', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Inspect exact source' })).toHaveCount(0)
 
     const resumePair = await page.evaluate((key) => sessionStorage.getItem(key), RESUME_STORAGE_KEY)
     expect(resumePair).not.toBeNull()
-
     await page.reload({ waitUntil: 'domcontentloaded' })
     if (await page.getByRole('button', { name: 'Retry reload binding' }).isVisible().catch(() => false)) {
       await page.getByRole('button', { name: 'Retry reload binding' }).click()
@@ -145,7 +210,7 @@ test('S2 live acceptance: explicit pin keeps search, graph, and source inside on
       browser: { engine: browser.browserType().name(), version: browser.version() },
       transitions,
       traffic: state.traffic,
-      liveFixtureProvisioned: scenario !== null,
+      liveFixtureProvisioned: scenario !== null && alternate !== null,
     }, null, 2)
     await writeFile(testInfo.outputPath('s2-live-code-explorer.json'), evidence, 'utf8')
     await testInfo.attach('s2-live-code-explorer', { contentType: 'application/json', body: Buffer.from(evidence) })
@@ -168,12 +233,13 @@ async function requestJSON(page: Page, path: string, body?: Record<string, strin
 }
 
 async function recordTransition(page: Page, transitions: Array<{ label: string; opener: boolean; navigationType: string; transition: string | null }>, label: string): Promise<void> {
-  const signal = await page.evaluate(() => ({
-    opener: window.opener !== null,
-    navigationType: performance.getEntriesByType('navigation')[0] instanceof PerformanceNavigationTiming
-      ? performance.getEntriesByType('navigation')[0].type
-      : 'unknown',
-  }))
+  const signal = await page.evaluate(() => {
+    const navigation = performance.getEntriesByType('navigation')[0]
+    return {
+      opener: window.opener !== null,
+      navigationType: navigation instanceof PerformanceNavigationTiming ? navigation.type : 'unknown',
+    }
+  })
   transitions.push({ label, opener: signal.opener, navigationType: signal.navigationType, transition: await page.getByTestId('code-bootstrap-evidence').locator('dd').last().textContent() })
 }
 

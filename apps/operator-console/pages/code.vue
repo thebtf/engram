@@ -6,12 +6,15 @@ const { t } = useI18n()
 const {
   bootstrapPhase,
   bootstrapEvidence,
+  contextCatalog,
+  contextState,
   contextCandidate,
   pinnedContext,
   status,
   searchEnvelope,
   graphEnvelope,
   sourceEnvelope,
+  searchContinuationNotice,
   searchState,
   graphState,
   sourceState,
@@ -20,12 +23,14 @@ const {
   indexIntentPending,
   initialize,
   discoverContext,
+  selectContext,
   pinContext,
   refreshStatus,
   submitIndexIntent,
   retryIndexIntent,
   refreshIndexIntent,
   search,
+  continueSearch,
   explore,
   readSource,
   continueGraph,
@@ -50,11 +55,14 @@ onMounted(() => {
 
     <CodeContextPicker
       :phase="bootstrapPhase"
+      :state="contextState"
+      :catalog="contextCatalog"
       :candidate="contextCandidate"
       :pinned="pinnedContext"
       :pending="pending"
       :evidence="bootstrapEvidence"
       @refresh="discoverContext"
+      @select="selectContext"
       @pin="pinContext"
       @retry="initialize"
     />
@@ -75,11 +83,13 @@ onMounted(() => {
       :search="searchEnvelope"
       :graph="graphEnvelope"
       :source="sourceEnvelope"
+      :search-continuation-notice="searchContinuationNotice"
       :search-state="searchState"
       :graph-state="graphState"
       :source-state="sourceState"
       :pending="pending"
       @search="search"
+      @continue-search="continueSearch"
       @explore="explore"
       @continue-graph="continueGraph"
       @source="readSource"

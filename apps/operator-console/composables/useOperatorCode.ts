@@ -4,10 +4,28 @@ import { operatorApiUrl } from './useOperatorApi'
 export type CodeBootstrapPhase = 'idle' | 'binding' | 'ready' | 'collision' | 'ambiguous' | 'reload-pending' | 'denied' | 'error'
 export type CodePresentationKind = 'idle' | 'loading' | 'ready' | 'empty' | 'partial' | 'stale' | 'denied' | 'unsupported' | 'timeout' | 'offline' | 'error'
 
+export type CodeCatalogState = 'idle' | 'loading' | 'ready' | 'empty' | 'denied' | 'unavailable' | 'offline'
+
+export interface CodeResponseContext {
+  sourceId: string
+  checkoutId: string
+  viewId: string
+  profileId: string
+  generation: number
+}
+
 export interface CodeSafeContext {
   source: string
   checkout: string
   view: string
+  context: CodeResponseContext
+}
+
+export interface CodeCatalogEntry {
+  source: { id: string; label: string }
+  checkout: { id: string; label: string }
+  view: CodeSafeContext | null
+  indexIntentAvailable: boolean
 }
 
 export interface CodeBootstrapEvidence {
@@ -30,12 +48,10 @@ export interface CodeEntityRef {
   entityKey: string
 }
 
-export interface CodeResponseContext {
-  sourceId: string
-  checkoutId: string
-  viewId: string
-  profileId: string
-  generation: number
+export interface CodeSourceDescriptor {
+  entityKey: string
+  span: CodeSpan
+  contentDigest: string
 }
 
 export interface CodeItem {
@@ -64,11 +80,21 @@ export interface CodeGraph {
   stopReason: string
 }
 
+export interface CodeGraphNavigationNode {
+  ref: CodeEntityRef
+  source: CodeSourceDescriptor | null
+}
+
+export interface CodeGraphNavigation {
+  nodes: CodeGraphNavigationNode[]
+}
+
 export interface CodeEnvelope {
   status: 'ok' | 'empty' | 'partial' | 'stale' | 'unavailable' | 'context_required' | 'forbidden'
   context: CodeResponseContext | null
   items: CodeItem[]
   graph: CodeGraph | null
+  navigation: CodeGraphNavigation | null
   warnings: string[]
   retrievalMode: string | null
   freshnessState: string | null
@@ -90,9 +116,16 @@ export interface CodeGraphOptions {
   direction: 'incoming' | 'outgoing' | 'both'
   relations: string[]
 }
-
 export type IndexIntentKind = 'reindex' | 'reconcile'
 export type IndexIntentState = 'submitted' | 'queued' | 'acknowledged' | 'running' | 'completed' | 'unavailable' | 'failed'
+
+
+interface CodeSearchRequest {
+  query: string
+  limit: number
+  pathPrefix: string
+  languages: string[]
+}
 
 interface CodeGraphRequest {
   item: CodeItem
@@ -123,17 +156,11 @@ type IndexIntentRecord =
 
 interface IndexIntentLifecyclePresentation<State extends IndexIntentState> {
   kind: State
-  title: string
-  message: string
   attempt: number | null
 }
 
 export type IndexIntentPresentationState =
-  | { kind: 'idle'; title: string; message: string; attempt: null }
-  | { kind: 'loading'; title: string; message: string; attempt: null }
-  | { kind: 'error'; title: string; message: string; attempt: null }
-  | { kind: 'denied'; title: string; message: string; attempt: null }
-  | { kind: 'offline'; title: string; message: string; attempt: null }
+  | { kind: 'idle' | 'loading' | 'error' | 'denied' | 'offline'; attempt: null }
   | IndexIntentLifecyclePresentation<'submitted'>
   | IndexIntentLifecyclePresentation<'queued'>
   | IndexIntentLifecyclePresentation<'acknowledged'>
@@ -169,6 +196,7 @@ type CodeApiResult =
   | { kind: 'error'; status: number }
 
 const RESUME_STORAGE_KEY = 'engram.operator-code.resume.v1'
+const CONTEXT_SELECTION_STORAGE_KEY = 'engram.operator-code.context-selection.v1'
 const REQUEST_TIMEOUT_MS = 30_000
 const INDEX_INTENT_STORAGE_KEY = 'engram.operator-code.index-intent.v1'
 const INDEX_INTENT_POLL_DELAY_MS = 1_000
@@ -214,7 +242,7 @@ function parseSpan(value: unknown): CodeSpan | null {
     byteStart === null || byteEnd === null || lineStart === null || lineEnd === null
     || !Number.isInteger(byteStart) || !Number.isInteger(byteEnd)
     || !Number.isInteger(lineStart) || !Number.isInteger(lineEnd)
-    || byteStart < 0 || byteEnd < byteStart || lineStart < 1 || lineEnd < lineStart
+    || byteStart < 0 || byteEnd <= byteStart || lineStart < 1 || lineEnd < lineStart
   ) return null
   return { byteStart, byteEnd, lineStart, lineEnd }
 }
@@ -257,6 +285,65 @@ function entityRefKey(ref: CodeEntityRef): string {
   return `${ref.sourceId}\u0000${ref.viewId}\u0000${ref.entityKey}`
 }
 
+function contextKey(context: CodeResponseContext): string {
+  return `${context.sourceId}\u0000${context.checkoutId}\u0000${context.viewId}\u0000${context.profileId}\u0000${context.generation}`
+}
+
+function parseCatalogContext(value: unknown): CodeResponseContext | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const sourceId = text(Reflect.get(value, 'source_id'))
+  const checkoutId = text(Reflect.get(value, 'checkout_id'))
+  const viewId = text(Reflect.get(value, 'view_id'))
+  const profileId = text(Reflect.get(value, 'analysis_profile_id'))
+  const generation = finiteNumber(Reflect.get(value, 'generation'))
+  if (
+    sourceId === null || checkoutId === null || viewId === null || profileId === null || generation === null
+    || !Number.isInteger(generation) || generation < 1
+  ) return null
+  return { sourceId, checkoutId, viewId, profileId, generation }
+}
+
+function parseCatalogLabel(value: unknown): { id: string; label: string } | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const id = text(Reflect.get(value, 'id'))
+  const label = text(Reflect.get(value, 'label'))
+  return id === null || label === null ? null : { id, label }
+}
+
+function parseCatalogEntry(value: unknown): CodeCatalogEntry | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const source = parseCatalogLabel(Reflect.get(value, 'source'))
+  const checkout = parseCatalogLabel(Reflect.get(value, 'checkout'))
+  const indexIntentAvailable = Reflect.get(value, 'index_intent_available')
+  const viewValue = Reflect.get(value, 'view')
+  if (source === null || checkout === null || typeof indexIntentAvailable !== 'boolean') return null
+  if (viewValue === null) return { source, checkout, view: null, indexIntentAvailable }
+  if (viewValue === undefined || typeof viewValue !== 'object' || Array.isArray(viewValue)) return null
+  const context = parseCatalogContext(Reflect.get(viewValue, 'context_ref'))
+  const view = text(Reflect.get(viewValue, 'label'))
+  if (context === null || view === null || context.sourceId !== source.id || context.checkoutId !== checkout.id) return null
+  return { source, checkout, view: { source: source.label, checkout: checkout.label, view, context }, indexIntentAvailable }
+}
+
+function parseCatalog(value: unknown): CodeCatalogEntry[] | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const values = Reflect.get(value, 'contexts')
+  if (!Array.isArray(values)) return null
+  const entries: CodeCatalogEntry[] = []
+  const contexts = new Set<string>()
+  for (const value of values) {
+    const entry = parseCatalogEntry(value)
+    if (entry === null) return null
+    if (entry.view !== null) {
+      const key = contextKey(entry.view.context)
+      if (contexts.has(key)) return null
+      contexts.add(key)
+    }
+    entries.push(entry)
+  }
+  return entries
+}
+
 function parseGraph(value: unknown): CodeGraph | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
   const nodeValues = Reflect.get(value, 'nodes')
@@ -289,8 +376,54 @@ function parseGraph(value: unknown): CodeGraph | null {
   const stopReason = text(Reflect.get(value, 'stop_reason'))
   return stopReason === null ? null : { nodes, edges, stopReason }
 }
+
+function parseSourceDescriptor(value: unknown): CodeSourceDescriptor | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const entityKey = text(Reflect.get(value, 'entity_key'))
+  const span = parseSpan(Reflect.get(value, 'span'))
+  const contentDigest = text(Reflect.get(value, 'content_digest'))
+  return entityKey === null || span === null || contentDigest === null ? null : { entityKey, span, contentDigest }
+}
+
+function parseGraphNavigation(value: unknown, context: CodeResponseContext, graph: CodeGraph): CodeGraphNavigation | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const nodeValues = Reflect.get(value, 'nodes')
+  const edgeValues = Reflect.get(value, 'edges')
+  if (!Array.isArray(nodeValues) || !Array.isArray(edgeValues)) return null
+  const graphNodes = new Set(graph.nodes.map(entityRefKey))
+  const nodes: CodeGraphNavigationNode[] = []
+  const navigationNodes = new Set<string>()
+  for (const value of nodeValues) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+    const ref = parseEntityRef(Reflect.get(value, 'entity'))
+    const nodeContext = parseCatalogContext(Reflect.get(value, 'context_ref'))
+    const sourceState = text(Reflect.get(value, 'source_state'))
+    const sourceValue = Reflect.get(value, 'source_read')
+    const source = sourceValue === undefined || sourceValue === null ? null : parseSourceDescriptor(sourceValue)
+    if (
+      ref === null || nodeContext === null || !sameView(context, nodeContext) || !graphNodes.has(entityRefKey(ref))
+      || navigationNodes.has(entityRefKey(ref)) || (sourceState !== 'available' && sourceState !== 'unavailable')
+      || (sourceState === 'available' && (source === null || source.entityKey !== ref.entityKey))
+      || (sourceState === 'unavailable' && source !== null)
+    ) return null
+    navigationNodes.add(entityRefKey(ref))
+    nodes.push({ ref, source })
+  }
+  if (navigationNodes.size !== graphNodes.size) return null
+  for (const value of edgeValues) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+    const fromValue = Reflect.get(value, 'from')
+    const toValue = Reflect.get(value, 'to')
+    const from = fromValue !== null && typeof fromValue === 'object' && !Array.isArray(fromValue) ? parseEntityRef(Reflect.get(fromValue, 'entity')) : null
+    const to = toValue !== null && typeof toValue === 'object' && !Array.isArray(toValue) ? parseEntityRef(Reflect.get(toValue, 'entity')) : null
+    if (from === null || to === null || !navigationNodes.has(entityRefKey(from)) || !navigationNodes.has(entityRefKey(to)) || text(Reflect.get(value, 'relation')) === null || text(Reflect.get(value, 'evidence_kind')) === null) return null
+  }
+  return { nodes }
+}
+
 function parseEnvelope(value: unknown): CodeEnvelope | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  if (Reflect.get(value, 'schema') !== 'engram.code-query/1') return null
   const status = text(Reflect.get(value, 'status'))
   if (
     status !== 'ok' && status !== 'empty' && status !== 'partial' && status !== 'stale'
@@ -332,27 +465,40 @@ function parseEnvelope(value: unknown): CodeEnvelope | null {
     : null
   const contextual = status === 'ok' || status === 'empty' || status === 'partial' || status === 'stale'
   const continuationValue = Reflect.get(value, 'continuation')
-  if (contextual && continuationValue === undefined) return null
-  if (continuationValue !== undefined && continuationValue !== null && text(continuationValue) === null) return null
-  if (contextual && contexts.length !== 1) return null
+  const continuation = continuationValue === undefined || continuationValue === null ? null : text(continuationValue)
+  const truncated = Reflect.get(value, 'truncated')
+  const coverage = Reflect.get(value, 'coverage')
+  if (continuationValue !== undefined && continuationValue !== null && continuation === null) return null
+  if (contextual && (
+    contextsValue === undefined || contexts.length !== 1 || itemsValue === undefined || warningsValue === undefined
+    || retrievalMode === null || freshnessState === null || coverage === null || typeof coverage !== 'object' || Array.isArray(coverage)
+    || typeof truncated !== 'boolean' || truncated !== (continuation !== null)
+  )) return null
   const context = contexts[0] ?? null
   if (context !== null && (
     !items.every((item) => item.ref.sourceId === context.sourceId && item.ref.viewId === context.viewId)
     || graph !== null && !graph.nodes.every((node) => node.sourceId === context.sourceId && node.viewId === context.viewId)
   )) return null
-  if (!contextual && (items.length > 0 || graph !== null || contexts.length > 0 || continuationValue !== undefined)) return null
+  const navigationValue = Reflect.get(value, 'navigation')
+  const navigation = navigationValue === undefined ? null : context === null || graph === null ? null : parseGraphNavigation(navigationValue, context, graph)
+  if (navigationValue !== undefined && navigation === null) return null
+  if (!contextual && (
+    contextsValue !== undefined || freshness !== undefined || retrieval !== undefined || coverage !== undefined
+    || itemsValue !== undefined || graphValue !== undefined || truncated !== undefined || warningsValue !== undefined
+    || continuationValue !== undefined || navigationValue !== undefined
+  )) return null
   return {
     status,
     context,
     items,
     graph,
+    navigation,
     warnings,
     retrievalMode,
     freshnessState,
-    continuation: continuationValue === undefined || continuationValue === null ? null : text(continuationValue),
+    continuation,
   }
 }
-
 function parseTransition(value: unknown): CodeTransition | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
   const state = text(Reflect.get(value, 'state'))
@@ -366,16 +512,6 @@ function parseTransition(value: unknown): CodeTransition | null {
   return { state, binding: { tabBindingId, documentProof, resumeNonce, reloadToken } }
 }
 
-function parseSafeContext(value: unknown): CodeSafeContext | null {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
-  const context = Reflect.get(value, 'context')
-  if (context === null || typeof context !== 'object' || Array.isArray(context)) return null
-  const source = text(Reflect.get(context, 'source'))
-  const checkout = text(Reflect.get(context, 'checkout'))
-  const view = text(Reflect.get(context, 'view'))
-  if (source === null || checkout === null || view === null) return null
-  return { source, checkout, view }
-}
 
 function parseStatus(value: unknown): CodeStatus | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
@@ -449,22 +585,21 @@ function parseIndexIntentAcknowledgement(value: unknown): Extract<IndexIntentRec
   return intent !== null && (intent.state === 'submitted' || intent.state === 'queued') ? intent : null
 }
 
-function indexIntentNotice(kind: 'idle' | 'loading' | 'error' | 'denied' | 'offline', title: string, message: string): IndexIntentPresentationState {
-  return { kind, title, message, attempt: null }
+function indexIntentNotice(kind: 'idle' | 'loading' | 'error' | 'denied' | 'offline'): IndexIntentPresentationState {
+  return { kind, attempt: null }
 }
 
 function indexIntentPresentation(intent: IndexIntentRecord): IndexIntentPresentationState {
   const attempt = intent.attempt > 0 ? intent.attempt : null
   switch (intent.state) {
-    case 'submitted': return { kind: 'submitted', title: 'Request submitted', message: 'The server recorded this request. Completion has not been confirmed.', attempt }
-    case 'queued': return { kind: 'queued', title: 'Queued for the daemon', message: 'The request is eligible for daemon work. The pinned View remains unchanged.', attempt }
-    case 'acknowledged': return { kind: 'acknowledged', title: 'Daemon acknowledged', message: 'The daemon accepted the exact request. A new View is not available yet.', attempt }
-    case 'running': return { kind: 'running', title: 'Indexing is running', message: 'The daemon is working on this request. The pinned View remains unchanged.', attempt }
-    case 'unavailable': return { kind: 'unavailable', title: 'Daemon unavailable', message: 'The daemon cannot accept this request now. You can retry this same request when it is available.', attempt }
-    case 'failed': return { kind: 'failed', title: 'Indexing failed', message: 'The daemon reported a terminal failure. The pinned View remains unchanged.', attempt }
-    case 'completed': return intent.result !== null
-      ? { kind: 'completed', title: 'New View available', message: 'A new server-released View is available. It has not been selected automatically; the Explorer remains pinned to its current View.', attempt }
-      : { kind: 'completed', title: 'Indexing completed', message: 'The operation completed, but no new View is available to this browser. The current pin remains unchanged.', attempt }
+    case 'submitted':
+    case 'queued':
+    case 'acknowledged':
+    case 'running':
+    case 'unavailable':
+    case 'failed':
+    case 'completed':
+      return { kind: intent.state, attempt }
     default: {
       const exhaustive: never = intent
       return exhaustive
@@ -548,6 +683,31 @@ function clearResumePair(): void {
     // Storage failure removes only reload convenience; it never creates an authorization fallback.
   }
 }
+function loadContextSelection(): string | null {
+  try {
+    return text(sessionStorage.getItem(CONTEXT_SELECTION_STORAGE_KEY))
+  } catch {
+    return null
+  }
+}
+
+function persistContextSelection(context: CodeSafeContext): boolean {
+  try {
+    sessionStorage.setItem(CONTEXT_SELECTION_STORAGE_KEY, contextKey(context.context))
+    return true
+  } catch {
+    return false
+  }
+}
+
+function clearContextSelection(): void {
+  try {
+    sessionStorage.removeItem(CONTEXT_SELECTION_STORAGE_KEY)
+  } catch {
+    // Selection storage is a convenience only; it never grants or restores a pin.
+  }
+}
+
 
 function loadIndexIntentResume(): IndexIntentResume | null {
   try {
@@ -590,18 +750,22 @@ export function useOperatorCode() {
   const bootstrapPhase = ref<CodeBootstrapPhase>('idle')
   const bootstrapEvidence = ref<CodeBootstrapEvidence>({ navigationType: 'unknown', openerBefore: false, openerAfter: null, transition: 'idle' })
   const binding = ref<CodeBinding | null>(null)
+  const contextCatalog = ref<CodeCatalogEntry[]>([])
+  const contextState = ref<CodeCatalogState>('idle')
   const contextCandidate = ref<CodeSafeContext | null>(null)
   const pinnedContext = ref<CodeSafeContext | null>(null)
   const status = ref<CodeStatus | null>(null)
   const searchEnvelope = ref<CodeEnvelope | null>(null)
   const graphEnvelope = ref<CodeEnvelope | null>(null)
   const sourceEnvelope = ref<CodeEnvelope | null>(null)
+  const activeSearchRequest = ref<CodeSearchRequest | null>(null)
   const activeGraphRequest = ref<CodeGraphRequest | null>(null)
+  const searchContinuationNotice = ref<'denied' | 'unavailable' | null>(null)
   const searchState = ref<CodePresentationState>(presentation('idle', 'Pin an authorized view before searching.'))
   const graphState = ref<CodePresentationState>(presentation('idle', 'Choose a released search result to explore relationships.'))
   const sourceState = ref<CodePresentationState>(presentation('idle', 'Choose a released search result to read an exact source span.'))
   const pending = ref(false)
-  const indexIntentState = ref<IndexIntentPresentationState>(indexIntentNotice('idle', 'No indexing request', 'Pin a source view before requesting reindex or reconcile work.'))
+  const indexIntentState = ref<IndexIntentPresentationState>(indexIntentNotice('idle'))
   const indexIntentPending = ref(false)
   const indexIntentResume = ref<IndexIntentResume | null>(loadIndexIntentResume())
   let indexIntentPollTimer: number | null = null
@@ -658,7 +822,9 @@ export function useOperatorCode() {
     searchEnvelope.value = null
     graphEnvelope.value = null
     sourceEnvelope.value = null
+    activeSearchRequest.value = null
     activeGraphRequest.value = null
+    searchContinuationNotice.value = null
     searchState.value = presentation('idle', 'Pin an authorized view before searching.')
     graphState.value = presentation('idle', 'Choose a released search result to explore relationships.')
     sourceState.value = presentation('idle', 'Choose a released search result to read an exact source span.')
@@ -676,16 +842,17 @@ export function useOperatorCode() {
     indexIntentResume.value = null
     clearIndexIntentResume()
     indexIntentPending.value = false
-    indexIntentState.value = indexIntentNotice('idle', 'No indexing request', 'Pin a source view before requesting reindex or reconcile work.')
+    indexIntentState.value = indexIntentNotice('idle')
   }
 
   function indexIntentFailure(result: Exclude<CodeApiResult, { kind: 'success' }>): IndexIntentPresentationState {
     switch (result.kind) {
-      case 'denied': return indexIntentNotice('denied', 'Request denied', 'The server denied this request. The pinned View remains unchanged.')
-      case 'offline': return indexIntentNotice('offline', 'Offline', 'The browser cannot reach the server. Check the connection before checking this request again.')
-      case 'timeout': return indexIntentNotice('error', 'Status check timed out', 'The server did not answer in time. Check the current state again; completion was not assumed.')
-      case 'unsupported': return indexIntentNotice('error', 'Request could not be reconciled', 'The server could not reconcile this request. The pinned View remains unchanged.')
-      case 'error': return indexIntentNotice('error', 'Request could not be checked', 'The server response could not establish the current state. Completion was not assumed.')
+      case 'denied': return indexIntentNotice('denied')
+      case 'offline': return indexIntentNotice('offline')
+      case 'timeout':
+      case 'unsupported':
+      case 'error':
+        return indexIntentNotice('error')
       default: {
         const exhaustive: never = result
         return exhaustive
@@ -707,7 +874,7 @@ export function useOperatorCode() {
     const resume = indexIntentResume.value
     if (resume?.intentRef === undefined || indexIntentPollTimer !== null || indexIntentPollCount >= INDEX_INTENT_MAX_POLLS) {
       if (indexIntentPollCount >= INDEX_INTENT_MAX_POLLS) {
-        indexIntentState.value = indexIntentNotice('error', 'Status check paused', 'Automatic checks stopped after a bounded wait. Check the current state to continue reconciliation.')
+        indexIntentState.value = indexIntentNotice('error')
       }
       return
     }
@@ -739,7 +906,7 @@ export function useOperatorCode() {
     const intent = parseIndexIntent(result.body)
     if (intent === null || intent.intentRef !== resume.intentRef) {
       stopIndexIntentPolling()
-      indexIntentState.value = indexIntentNotice('error', 'Invalid status response', 'The server response did not prove the current request state. Completion was not assumed.')
+      indexIntentState.value = indexIntentNotice('error')
       return
     }
     applyIndexIntent(intent)
@@ -748,23 +915,22 @@ export function useOperatorCode() {
   async function submitIndexIntent(kind: IndexIntentKind): Promise<void> {
     if (binding.value === null || pinnedContext.value === null || indexIntentPending.value || pending.value) return
     const existing = indexIntentResume.value
-    const requestRef = existing !== null && existing.kind === kind
-      && indexIntentState.value.kind !== 'completed' && indexIntentState.value.kind !== 'failed'
+    const requestRef = existing !== null && existing.kind === kind && existing.intentRef === undefined
       ? existing.requestRef
       : requestId()
     if (requestRef === null) {
-      indexIntentState.value = indexIntentNotice('error', 'Request could not be created', 'This browser cannot create the opaque request reference required for reconciliation.')
+      indexIntentState.value = indexIntentNotice('error')
       return
     }
     const resume: IndexIntentResume = { requestRef, kind }
     if (!persistIndexIntentResume(resume)) {
-      indexIntentState.value = indexIntentNotice('error', 'Request was not sent', 'This browser could not retain the request reference needed to reconcile a lost response.')
+      indexIntentState.value = indexIntentNotice('error')
       return
     }
     stopIndexIntentPolling()
     const requestGeneration = indexIntentPollGeneration
     indexIntentResume.value = resume
-    indexIntentState.value = indexIntentNotice('loading', 'Submitting request', 'Waiting for the server to admit this request. Admission is not completion.')
+    indexIntentState.value = indexIntentNotice('loading')
     indexIntentPending.value = true
     const payload = bindingPayload({ request_ref: requestRef, kind })
     let result: CodeApiResult
@@ -777,15 +943,13 @@ export function useOperatorCode() {
     indexIntentPending.value = false
     if (result.kind !== 'success' || result.status !== 202) {
       stopIndexIntentPolling()
-      indexIntentState.value = result.kind === 'success'
-        ? indexIntentNotice('error', 'Admission response was invalid', 'The server did not return an admission acknowledgement. Completion was not assumed.')
-        : indexIntentFailure(result)
+      indexIntentState.value = result.kind === 'success' ? indexIntentNotice('error') : indexIntentFailure(result)
       return
     }
     const intent = parseIndexIntentAcknowledgement(result.body)
     if (intent === null) {
       stopIndexIntentPolling()
-      indexIntentState.value = indexIntentNotice('error', 'Admission response was invalid', 'The server did not return a safe admission state. Completion was not assumed.')
+      indexIntentState.value = indexIntentNotice('error')
       return
     }
     const reconciled: IndexIntentResume = { ...resume, intentRef: intent.intentRef }
@@ -800,26 +964,24 @@ export function useOperatorCode() {
     if (current === null || resume?.intentRef === undefined || indexIntentState.value.kind !== 'unavailable' || indexIntentPending.value || pending.value) return
     stopIndexIntentPolling()
     const requestGeneration = indexIntentPollGeneration
-    indexIntentState.value = indexIntentNotice('loading', 'Retrying request', 'Waiting for the server to admit a retry of this same request. Admission is not completion.')
+    indexIntentState.value = indexIntentNotice('loading')
     indexIntentPending.value = true
     const payload = bindingPayload()
     if (payload === null) {
       indexIntentPending.value = false
-      indexIntentState.value = indexIntentNotice('error', 'Retry could not be sent', 'The current browser binding is unavailable. Completion was not assumed.')
+      indexIntentState.value = indexIntentNotice('error')
       return
     }
     const result = await request(`/code/index-intents/${encodeURIComponent(resume.intentRef)}/retry`, 'POST', payload)
     if (requestGeneration !== indexIntentPollGeneration) return
     indexIntentPending.value = false
     if (result.kind !== 'success' || result.status !== 202) {
-      indexIntentState.value = result.kind === 'success'
-        ? indexIntentNotice('error', 'Retry response was invalid', 'The server did not acknowledge this retry. Completion was not assumed.')
-        : indexIntentFailure(result)
+      indexIntentState.value = result.kind === 'success' ? indexIntentNotice('error') : indexIntentFailure(result)
       return
     }
     const intent = parseIndexIntentAcknowledgement(result.body)
     if (intent === null || intent.intentRef !== resume.intentRef) {
-      indexIntentState.value = indexIntentNotice('error', 'Retry response was invalid', 'The server did not return the same request reference. Completion was not assumed.')
+      indexIntentState.value = indexIntentNotice('error')
       return
     }
     applyIndexIntent(intent)
@@ -848,12 +1010,16 @@ export function useOperatorCode() {
 
   function applyTransition(transition: CodeTransition, evidence: CodeBootstrapEvidence): boolean {
     const previousBinding = binding.value
-    if (
-      transition.state === 'TAB_BINDING_COLLISION' || transition.state === 'TAB_BOOTSTRAP_AMBIGUOUS'
-      || (previousBinding !== null && previousBinding.tabBindingId !== transition.binding?.tabBindingId)
-    ) clearIndexIntent()
+    const replaced = transition.state === 'TAB_BINDING_COLLISION' || transition.state === 'TAB_BOOTSTRAP_AMBIGUOUS'
+      || previousBinding !== null && previousBinding.tabBindingId !== transition.binding?.tabBindingId
+    if (replaced) {
+      clearIndexIntent()
+      clearContextSelection()
+    }
     bootstrapEvidence.value = { ...evidence, transition: transition.state }
     binding.value = transition.binding
+    contextCatalog.value = []
+    contextState.value = 'idle'
     contextCandidate.value = null
     pinnedContext.value = null
     clearContextualResults()
@@ -919,19 +1085,43 @@ export function useOperatorCode() {
   async function discoverContext(): Promise<void> {
     const payload = bindingPayload()
     if (payload === null) return
+    contextState.value = 'loading'
     pending.value = true
     const result = await request('/code/contexts', 'POST', payload)
     pending.value = false
     if (result.kind !== 'success') {
-      contextCandidate.value = null
+      contextState.value = result.kind === 'denied' ? 'denied' : result.kind === 'offline' ? 'offline' : 'unavailable'
       return
     }
-    const candidate = parseSafeContext(result.body)
-    if (candidate === null) {
-      contextCandidate.value = null
+    const catalog = parseCatalog(result.body)
+    if (catalog === null) {
+      contextState.value = 'unavailable'
       return
     }
-    contextCandidate.value = candidate
+    contextCatalog.value = catalog
+    contextState.value = catalog.length === 0 ? 'empty' : 'ready'
+    const selectedKey = contextCandidate.value === null ? null : contextKey(contextCandidate.value.context)
+    if (selectedKey !== null) contextCandidate.value = catalog.flatMap((entry) => entry.view === null ? [] : [entry.view]).find((entry) => contextKey(entry.context) === selectedKey) ?? null
+    if (pinnedContext.value !== null && !catalog.some((entry) => entry.view !== null && sameView(entry.view.context, pinnedContext.value?.context ?? null))) {
+      pinnedContext.value = null
+      clearContextualResults()
+      clearIndexIntent()
+      clearContextSelection()
+    }
+  }
+
+  function selectContext(context: CodeSafeContext): void {
+    contextCandidate.value = context
+    persistContextSelection(context)
+  }
+
+  function restoreContextSelection(): boolean {
+    const stored = loadContextSelection()
+    if (stored === null) return false
+    const selected = contextCatalog.value.flatMap((entry) => entry.view === null ? [] : [entry.view]).find((entry) => contextKey(entry.context) === stored) ?? null
+    if (selected === null) return false
+    contextCandidate.value = selected
+    return true
   }
 
   async function initialize(): Promise<void> {
@@ -966,29 +1156,39 @@ export function useOperatorCode() {
           ? await handshake(documentNonce, pair, false, evidence)
           : await handshake(documentNonce, null, true, evidence)
     if (!established) return
-    if (resumingPinnedBinding && await refreshStatus(true)) {
-      await discoverContext()
-      if (contextCandidate.value !== null) {
-        pinnedContext.value = contextCandidate.value
-        await reconcileIndexIntent()
-        return
-      }
-      status.value = null
-    }
     await discoverContext()
+    if (resumingPinnedBinding && restoreContextSelection()) {
+      const restored = contextCandidate.value
+      if (restored !== null && await refreshStatus(true)) {
+        pinnedContext.value = restored
+        await reconcileIndexIntent()
+      }
+    }
   }
 
   async function pinContext(): Promise<void> {
-    if (binding.value === null || contextCandidate.value === null || pending.value) return
+    const selected = contextCandidate.value
+    if (binding.value === null || selected === null || pending.value) return
     pending.value = true
-    const result = await request(`/code/tabs/${encodeURIComponent(binding.value.tabBindingId)}/context`, 'PUT', { document_proof: binding.value.documentProof })
+    const result = await request(`/code/tabs/${encodeURIComponent(binding.value.tabBindingId)}/context`, 'PUT', {
+      document_proof: binding.value.documentProof,
+      context_ref: {
+        source_id: selected.context.sourceId,
+        checkout_id: selected.context.checkoutId,
+        view_id: selected.context.viewId,
+        analysis_profile_id: selected.context.profileId,
+        generation: selected.context.generation,
+      },
+    })
     pending.value = false
     if (result.kind !== 'success' || result.status !== 204) {
-      pinnedContext.value = null
-      clearContextualResults()
+      contextState.value = result.kind === 'denied' ? 'denied' : result.kind === 'offline' ? 'offline' : 'unavailable'
       return
     }
-    pinnedContext.value = contextCandidate.value
+    clearIndexIntent()
+    pinnedContext.value = selected
+    persistContextSelection(selected)
+    clearContextualResults()
     await refreshStatus()
   }
 
@@ -1002,28 +1202,51 @@ export function useOperatorCode() {
     return status.value !== null
   }
 
-  async function search(query: string): Promise<void> {
-    const payload = bindingPayload({ query: query.trim(), limit: 10 })
-    if (payload === null || pinnedContext.value === null || query.trim() === '') return
+  async function requestSearch(searchRequest: CodeSearchRequest, continuation: string | null): Promise<void> {
+    const pinned = pinnedContext.value
+    const payload = bindingPayload({
+      query: searchRequest.query,
+      limit: searchRequest.limit,
+      path_prefix: searchRequest.pathPrefix,
+      languages: searchRequest.languages,
+      ...(continuation === null ? {} : { continuation }),
+    })
+    if (payload === null || pinned === null) return
     pending.value = true
     searchState.value = presentation('loading', 'Waiting for the server to release the search result.')
+    searchEnvelope.value = null
     graphEnvelope.value = null
     sourceEnvelope.value = null
+    searchContinuationNotice.value = null
     const result = await request('/code/search', 'POST', payload)
     pending.value = false
     if (result.kind !== 'success') {
-      searchEnvelope.value = null
+      if (continuation !== null && result.kind === 'denied') searchContinuationNotice.value = 'denied'
+      if (continuation !== null && result.kind === 'error') searchContinuationNotice.value = 'unavailable'
       searchState.value = presentation(result.kind, 'No contextual search body was released.')
       return
     }
     const envelope = parseEnvelope(result.body)
-    if (envelope === null) {
-      searchEnvelope.value = null
-      searchState.value = presentation('error', 'The server response was invalid, so no result was rendered.')
+    if (envelope === null || !sameView(pinned.context, envelope.context)) {
+      searchState.value = presentation('error', 'The search response did not prove the pinned View, so no result was rendered.')
       return
     }
+    activeSearchRequest.value = searchRequest
     searchEnvelope.value = envelope
     searchState.value = presentationFromEnvelope(envelope)
+  }
+
+  async function search(query: string): Promise<void> {
+    const normalized = query.trim()
+    if (normalized === '') return
+    await requestSearch({ query: normalized, limit: 10, pathPrefix: '', languages: [] }, null)
+  }
+
+  async function continueSearch(): Promise<void> {
+    const searchRequest = activeSearchRequest.value
+    const continuation = searchEnvelope.value?.continuation ?? null
+    if (searchRequest === null || continuation === null) return
+    await requestSearch(searchRequest, continuation)
   }
 
   async function explore(item: CodeItem, options: CodeGraphOptions = { direction: 'both', relations: [] }, continuation: string | null = null): Promise<void> {
@@ -1037,8 +1260,9 @@ export function useOperatorCode() {
       max_edges: 48,
       ...(continuation === null ? {} : { continuation }),
     })
+    const pinned = pinnedContext.value
     const activeSearch = searchEnvelope.value
-    if (payload === null || pinnedContext.value === null || activeSearch === null || activeSearch.context === null) return
+    if (payload === null || pinned === null || activeSearch === null || !sameView(pinned.context, activeSearch.context)) return
     pending.value = true
     graphState.value = presentation('loading', 'Waiting for the server to release graph evidence.')
     const result = await request('/code/graph', 'POST', payload)
@@ -1050,10 +1274,10 @@ export function useOperatorCode() {
       return
     }
     const envelope = parseEnvelope(result.body)
-    if (envelope === null || !sameView(activeSearch.context, envelope.context)) {
+    if (envelope === null || envelope.navigation === null || !sameView(pinned.context, envelope.context)) {
       graphEnvelope.value = null
       activeGraphRequest.value = null
-      graphState.value = presentation('error', 'The graph response did not prove the same pinned view, so it was concealed.')
+      graphState.value = presentation('error', 'The graph response did not prove navigation inside the pinned View, so it was concealed.')
       return
     }
     activeGraphRequest.value = { item, options }
@@ -1063,19 +1287,19 @@ export function useOperatorCode() {
 
   async function continueGraph(): Promise<void> {
     const request = activeGraphRequest.value
-    const continuation = graphEnvelope.value?.continuation
+    const continuation = graphEnvelope.value?.continuation ?? null
     if (request === null || continuation === null) return
     await explore(request.item, request.options, continuation)
   }
 
-  async function readSource(item: CodeItem): Promise<void> {
+  async function readSource(descriptor: CodeSourceDescriptor): Promise<void> {
     const payload = bindingPayload({
-      entity_key: item.ref.entityKey,
-      span: { byte_start: item.span.byteStart, byte_end: item.span.byteEnd, line_start: item.span.lineStart, line_end: item.span.lineEnd },
-      content_digest: item.contentDigest,
+      entity_key: descriptor.entityKey,
+      span: { byte_start: descriptor.span.byteStart, byte_end: descriptor.span.byteEnd, line_start: descriptor.span.lineStart, line_end: descriptor.span.lineEnd },
+      content_digest: descriptor.contentDigest,
     })
-    const activeSearch = searchEnvelope.value
-    if (payload === null || pinnedContext.value === null || activeSearch === null || activeSearch.context === null) return
+    const pinned = pinnedContext.value
+    if (payload === null || pinned === null) return
     pending.value = true
     sourceState.value = presentation('loading', 'Waiting for the server to release the exact source span.')
     const result = await request('/code/source', 'POST', payload)
@@ -1086,9 +1310,9 @@ export function useOperatorCode() {
       return
     }
     const envelope = parseEnvelope(result.body)
-    if (envelope === null || !sameView(activeSearch.context, envelope.context)) {
+    if (envelope === null || !sameView(pinned.context, envelope.context)) {
       sourceEnvelope.value = null
-      sourceState.value = presentation('error', 'The source response did not prove the same pinned view, so no body was rendered.')
+      sourceState.value = presentation('error', 'The source response did not prove the pinned view, so no body was rendered.')
       return
     }
     sourceEnvelope.value = envelope
@@ -1112,12 +1336,15 @@ export function useOperatorCode() {
   return {
     bootstrapPhase,
     bootstrapEvidence,
+    contextCatalog,
+    contextState,
     contextCandidate,
     pinnedContext,
     status,
     searchEnvelope,
     graphEnvelope,
     sourceEnvelope,
+    searchContinuationNotice,
     searchState,
     graphState,
     sourceState,
@@ -1126,12 +1353,14 @@ export function useOperatorCode() {
     indexIntentPending,
     initialize,
     discoverContext,
+    selectContext,
     pinContext,
     refreshStatus,
     submitIndexIntent,
     retryIndexIntent,
     refreshIndexIntent,
     search,
+    continueSearch,
     explore,
     readSource,
     continueGraph,

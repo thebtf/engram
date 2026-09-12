@@ -80,6 +80,7 @@ export interface LiveFixtureState {
     liveConfigContainsMockCommand: false
   }
   operatorCode: OperatorCodeFixture
+  operatorCodeAlternate: OperatorCodeFixture
   operatorCodeB: OperatorCodeFixture
   worktrees: {
     a: FixtureWorktree
@@ -195,8 +196,11 @@ class LiveFixture implements FixtureController {
       if (setup.status !== 201) {
         throw new Error(`real API fixture auth setup failed: ${setup.status} ${JSON.stringify(setup.body)}`)
       }
-      const operatorCode = await this.provisionOperatorCode(postgres.dsn, worktrees.a)
-      const operatorCodeB = await this.provisionOperatorCode(postgres.dsn, worktrees.b, this.browserPasswordB)
+      const operatorCode = await this.provisionOperatorCode(postgres.dsn, worktrees.a, 'a', this.browserEmail)
+      const operatorCodeAlternate = await this.provisionOperatorCode(postgres.dsn, worktrees.b, 'd', this.browserEmail)
+      await this.provisionOperatorCode(postgres.dsn, worktrees.b, 'c', this.browserEmail)
+      await this.hideFixtureView('c')
+      const operatorCodeB = await this.provisionOperatorCode(postgres.dsn, worktrees.b, 'b', this.browserEmailB, this.browserPasswordB)
       const appUrl = await this.startConsole(apiUrl)
       await this.awaitReady(`${appUrl}/settings`, this.console, 'built Nuxt console')
 
@@ -234,6 +238,7 @@ class LiveFixture implements FixtureController {
           liveConfigContainsMockCommand: false,
         },
         operatorCode,
+        operatorCodeAlternate,
         operatorCodeB,
         worktrees: {
           a: worktrees.a.identity,
@@ -372,18 +377,18 @@ class LiveFixture implements FixtureController {
     throw new Error('Go API did not retain its loopback listener after readiness')
   }
 
-  private async provisionOperatorCode(dsn: string, worktree: FixtureWorktreeRuntime, password?: string): Promise<OperatorCodeFixture> {
+  private async provisionOperatorCode(dsn: string, worktree: FixtureWorktreeRuntime, variant: 'a' | 'b' | 'c' | 'd', browserEmail: string, password?: string): Promise<OperatorCodeFixture> {
     const dsnFile = join(this.fixtureRoot, 'operator-code-dsn.txt')
     await writeFile(dsnFile, `${dsn}\n`, { encoding: 'utf8', mode: 0o600 })
     const args = [
       'run', './cmd/operator-code-live-fixture',
       '--dsn-file', dsnFile,
-      '--browser-email', password === undefined ? this.browserEmail : this.browserEmailB,
-      '--project', `${this.fixtureId}-${password === undefined ? 'a' : 'b'}`,
+      '--browser-email', browserEmail,
+      '--project', `${this.fixtureId}-${variant}`,
       '--source-file', worktree.sourceFile,
     ]
     if (password !== undefined) {
-      const passwordFile = join(this.fixtureRoot, 'operator-code-browser-b-password.txt')
+      const passwordFile = join(this.fixtureRoot, `operator-code-browser-${variant}-password.txt`)
       await writeFile(passwordFile, `${password}\n`, { encoding: 'utf8', mode: 0o600 })
       args.push('--password-file', passwordFile)
     }
@@ -407,6 +412,15 @@ class LiveFixture implements FixtureController {
       throw new Error('operator-code fixture provisioner returned an invalid non-secret receipt')
     }
     return { query, expectedSearch, expectedGraph, expectedSource, expectedMarker }
+  }
+
+  private async hideFixtureView(variant: 'c'): Promise<void> {
+    const sourceName = `Operator Code Fixture ${this.fixtureId}-${variant}`
+    await execute('docker', [
+      'exec', this.containerName,
+      'psql', '--username=engram', '--dbname=engram', '--command',
+      `UPDATE ci_views SET state = 'staging' WHERE source_id = (SELECT source_id FROM sources WHERE display_name = '${sourceName}');`,
+    ], repositoryRoot)
   }
 
   private async createWorktrees(): Promise<FixtureWorktreeSet> {
@@ -443,6 +457,10 @@ class LiveFixture implements FixtureController {
       await writeFile(join(destination, name), await readFile(join(sourceRoot, name)))
     }
     await writeFile(join(root, '.engram-project'), `${JSON.stringify({ name: marker }, null, 2)}\n`)
+    const searchPages = Array.from({ length: 11 }, (_, index) => `
+func CodeExplorerFixtureEntryPage${index + 1}() string {
+	return "CodeExplorerFixtureEntry"
+}`).join('')
     await writeFile(join(root, 'fixture.go'), `package fixture
 
 const CodeExplorerFixtureMessage = "operator-code-fixture-${marker}"
@@ -454,7 +472,7 @@ func CodeExplorerFixtureEntry() string {
 	_ = sourceMarker
 	return CodeExplorerFixtureTarget()
 }
-`)
+${searchPages}`)
   }
 
   private async worktreeRuntime(root: string): Promise<FixtureWorktreeRuntime> {

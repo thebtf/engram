@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { CodeEnvelope, CodeGraphOptions, CodeItem, CodePresentationState, CodeSafeContext, CodeStatus } from '~/composables/useOperatorCode'
+import type { CodeEnvelope, CodeGraphOptions, CodeItem, CodePresentationState, CodeSafeContext, CodeSourceDescriptor, CodeStatus } from '~/composables/useOperatorCode'
 
 const { t } = useI18n()
 
@@ -13,14 +13,16 @@ const props = defineProps<{
   searchState: CodePresentationState
   graphState: CodePresentationState
   sourceState: CodePresentationState
+  searchContinuationNotice: 'denied' | 'unavailable' | null
   pending: boolean
 }>()
 
 const emit = defineEmits<{
   search: [query: string]
+  continueSearch: []
   explore: [item: CodeItem, options: CodeGraphOptions]
   continueGraph: []
-  source: [item: CodeItem]
+  source: [descriptor: CodeSourceDescriptor]
   requestIndex: []
 }>()
 
@@ -32,6 +34,7 @@ const copyNotice = ref<'copied' | 'unavailable' | null>(null)
 function submitSearch() {
   if (query.value.trim() !== '') emit('search', query.value)
 }
+
 
 async function copy(value: string): Promise<void> {
   try {
@@ -90,13 +93,14 @@ async function copy(value: string): Promise<void> {
             </div>
             <div class="item-actions">
               <button class="btn" type="button" :disabled="pending" @click="emit('explore', item, { direction: 'both', relations: [] })">{{ t('codeExplorer.search.explore') }}</button>
-              <button class="btn" type="button" :disabled="pending" @click="emit('source', item)">{{ t('codeExplorer.search.source') }}</button>
+              <button class="btn" type="button" :disabled="pending" @click="emit('source', { entityKey: item.ref.entityKey, span: item.span, contentDigest: item.contentDigest })">{{ t('codeExplorer.search.source') }}</button>
             </div>
           </li>
         </ul>
         <p v-else-if="search !== null && searchState.kind === 'ready'" class="state-message">{{ t('codeExplorer.search.noMatches') }}</p>
         <ul v-if="search !== null && search.warnings.length > 0" class="warnings"><li v-for="warning in search.warnings" :key="warning">{{ warning }}</li></ul>
-        <p v-if="search !== null && search.continuation !== null" class="continuation-gap">{{ t('codeExplorer.continuation.searchGap') }}</p>
+        <button v-if="search !== null && search.continuation !== null" class="btn" type="button" :disabled="pending" data-testid="code-search-next" @click="emit('continueSearch')">{{ t('codeExplorer.continuation.next') }}</button>
+        <p v-if="searchContinuationNotice !== null" class="continuation-gap" role="status">{{ t(`codeExplorer.continuation.search.${searchContinuationNotice}`) }}</p>
       </article>
 
       <CodeGraph
@@ -106,7 +110,7 @@ async function copy(value: string): Promise<void> {
         :pending="pending"
         @explore="(item, options) => emit('explore', item, options)"
         @continue="emit('continueGraph')"
-        @source="(item) => emit('source', item)"
+        @source="(descriptor) => emit('source', descriptor)"
       />
 
       <article class="panel source" aria-live="polite">

@@ -324,6 +324,11 @@ test('S4 live acceptance: truthful index intent lifecycle uses real HTTP and fix
 
     await login(page, fixture)
     await page.goto(`${fixture.frontend.baseUrl}/code`, { waitUntil: 'domcontentloaded' })
+    const contextSelect = page.getByTestId('code-context-select')
+    const contextOption = contextSelect.locator('option').filter({ hasText: `${fixture.fixtureId}-a` })
+    const contextValue = await contextOption.getAttribute('value')
+    if (contextValue === null) throw new Error('fixture catalog did not expose a selectable View')
+    await contextSelect.selectOption(contextValue)
     await expect(page.getByTestId('code-context-candidate')).toBeVisible()
     await page.getByTestId('code-pin-context').click()
     await expect(page.getByTestId('code-context-pinned')).toBeVisible()
