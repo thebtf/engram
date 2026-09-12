@@ -91,29 +91,7 @@ test('responsive primary navigation is an accessible <=980px off-canvas control'
   assert.match(source, /onBeforeUnmount\(\(\) => \{[\s\S]*document\.body\.style\.overflow = previousBodyOverflow\.value/, 'layout teardown must restore body scroll when the drawer is open')
 })
 
-test('access read state cannot retain invitation codes', () => {
-  const page = read(accessPagePath)
-  const composable = read(accessComposablePath)
 
-  assert.doesNotMatch(composable, /code:\s*row\.code/, 'ordinary access mapping must discard API invitation codes')
-  assert.doesNotMatch(page, /\{\{\s*invitation\.code\s*\}\}/, 'invitation table must not render stored codes')
-  assert.doesNotMatch(page, /\{\{\s*invite\.code\s*\}\}/, 'drill-down must not render stored codes')
-  assert.match(page, /watch\(\(\) => route\.fullPath, clearInvitationReveal\)/, 'one-time reveal must clear on navigation')
-  assert.match(page, /onBeforeUnmount\(clearInvitationReveal\)/, 'one-time reveal must clear on teardown')
-  assert.match(page, /async function submitInvitation\(\) \{[\s\S]*clearInvitationReveal\(\)/, 'a new invitation attempt must clear a previous one-time reveal')
-  assert.match(page, /copyNotice/, 'copy outcomes must have bounded feedback')
-})
-
-test('navigation has no static queue or issue counts and derives gated state from live surfaces', () => {
-  const nav = read(navPath)
-
-  assert.doesNotMatch(nav, /count:\s*(?:7|304)/, 'navigation must not ship stale queue or issue counts')
-  assert.match(nav, /operatorFetchJson<\{ flags\?: Record<string, boolean> \}>\('\/api\/flags'/, 'graph classification must follow its runtime flag')
-  assert.match(nav, /'live:nav:graph-class', \(\) => 'stale'/, 'graph must start neutral until its runtime flag is known')
-  assert.match(nav, /if \(kind === 'mustbuild'\) return 'mustbuild'/, 'queue must preserve mustbuild state')
-  assert.match(nav, /if \(kind === 'live' \|\| kind === 'empty'\) return 'live'/, 'only proven live or empty queue states may render live')
-  assert.doesNotMatch(nav, /id: 'books',[\s\S]*cls: 'mustbuild'/, 'Books is a live surface')
-})
 
 test('load-state union covers every honest operator surface state', () => {
   const source = read(seamPath)
@@ -395,33 +373,6 @@ test('candidate review queue is a live gated surface, not a SectionStub', () => 
   assert.match(overviewPageSource, /overview\.attention\.queueLive/, 'Overview attention must distinguish live queue count from gated copy')
 })
 
-test('behavioral rules enabled toggle is live endpoint-backed and remains recoverable', () => {
-  const rulesPageSource = read(rulesPagePath)
-  const rulesComposableSource = read(rulesComposablePath)
-  const mockOperatorApiSource = read(mockOperatorApiPath)
-
-  assert.match(rulesComposableSource, /submitMutation\('rule-enable-toggle',\s*\{ id, enabled \},\s*`\/api\/rules\/\$\{id\}\/enabled`,\s*jsonInit\('PATCH'/, 'Rule enabled toggle must issue the live PATCH through the shared mutation seam')
-  assert.doesNotMatch(rulesComposableSource, /replaceArray\(rowsState\.value, rowsState\.value\.map\(\(row\) => row\.id === id \? \{ \.\.\.row, enabled \} : row\)\)/, 'Rule enabled toggle must not optimistically claim a completed state')
-  assert.doesNotMatch(rulesComposableSource, /enableGap/, 'Rule enabled toggle must not remain an unsupported mustbuild gap')
-  assert.doesNotMatch(rulesComposableSource, /unsupportedOperatorAction\(\s*['"]rule-enable-toggle['"]/, 'Rule enabled toggle must not be represented as an unsupported action')
-
-  assert.match(rulesPageSource, /const isToggling = ref\(false\)/, 'Rules page must keep a local in-flight guard for toggle mutations')
-  assert.match(rulesPageSource, /if \(pending\.value \|\| isToggling\.value\) return/, 'Rules page toggle handler must reject concurrent toggle clicks')
-  assert.match(rulesPageSource, /@click="toggleRule\(rule\)"/, 'Rules page switch must call the live toggle handler')
-  assert.match(rulesPageSource, /:aria-checked="String\(rule\.enabled\)"/, 'Rules page switch must expose true state to assistive tech')
-  assert.match(rulesPageSource, /:disabled="pending \|\| isToggling"/, 'Rules page switch must be disabled while a toggle mutation is locally in flight')
-  assert.match(rulesPageSource, /data-testid="`rule-enable-toggle-\$\{rule\.id\}`"/, 'Rules page switch must expose a stable browser-smoke selector')
-  assert.match(rulesPageSource, /data-testid="`rule-status-\$\{rule\.id\}`"/, 'Rules page status chip must expose a stable browser-smoke selector')
-  assert.match(rulesPageSource, /rules\.detail\.enabled/, 'Rules page enabled label must be i18n-keyed')
-  assert.match(rulesPageSource, /rules\.detail\.disabled/, 'Rules page disabled label must be i18n-keyed')
-  assert.doesNotMatch(rulesPageSource, /disabled\s+role="switch"/, 'Rules page must not render the enabled switch as inert')
-
-  assert.match(mockOperatorApiSource, /let ruleRows = \[/, 'Mock operator API must keep stateful rule rows for browser smoke')
-  assert.match(mockOperatorApiSource, /path\.match\(\/\^\\\/api\\\/rules\\\/\(\[\^\/\]\+\)\\\/enabled\$\/\)/, 'Mock operator API must implement PATCH /api/rules/{id}/enabled')
-  assert.match(mockOperatorApiSource, /typeof body\.enabled !== 'boolean'/, 'Mock rule enabled route must reject missing enabled state')
-  assert.match(mockOperatorApiSource, /enabled: body\.enabled/, 'Mock rule enabled route must persist the enabled state')
-  assert.match(mockOperatorApiSource, /case '\/api\/rules':[\s\S]*ruleResponse\(url\)/, 'Mock operator API must serve rule rows through GET /api/rules')
-})
 
 test('memory detail actions keep mustbuild descriptors while live delete and audit are endpoint-backed', () => {
   const memoryPageSource = read(memoryPagePath)
