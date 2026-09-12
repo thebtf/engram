@@ -2260,10 +2260,12 @@
       "emptyBody": "A revoked, expired, or ambiguous binding reveals no context labels or code facts.",
       "pinnedMessage": "This server pin is active only for the current document binding.",
       "pinnedReadout": "Server pin confirmed for {source} / {checkout} / {view}.",
-      "noViewIndexAvailable": "This authorized Checkout has no published View. It is eligible for server-owned indexing, but no ContextRef or source content is available here.",
-      "noViewUnavailable": "This authorized Checkout has no published View and exposes no indexing affordance.",
+      "noViewIndexAvailable": "Exactly one fresh live daemon target advertises this authorized Checkout. It has no published View, and indexing will not select one.",
+      "noViewUnavailable": "This authorized Checkout has no published View, and no single fresh daemon target can accept its indexing request.",
+      "requestIndex": "Index checkout",
+      "requestIndexFor": "Index {source} / {checkout}",
       "noViewOnlyTitle": "No published View is available.",
-      "noViewOnlyBody": "The authorized Checkouts below have no pinnable ContextRef. Their server-declared indexing availability is shown without inventing a View.",
+      "noViewOnlyBody": "The authorized Checkouts below have no pinnable ContextRef. An Index action appears only when one fresh live daemon target advertises that Checkout.",
       "catalogStates": {
         "idle": "Waiting to request authorized choices.",
         "loading": "Loading server-authorized choices.",
@@ -2434,18 +2436,18 @@
     },
     "intent": {
       "title": "Index request",
-      "lead": "Request daemon-owned work for the pinned View. Admission never selects a new View.",
+      "lead": "Request daemon-owned work for a pinned View or an eligible unindexed Checkout. Admission never selects a View.",
       "reindex": "Request reindex",
       "reconcile": "Request reconcile",
       "retry": "Retry unavailable request",
       "refresh": "Check current state",
-      "unpinned": "Pin a server-authorized View before requesting daemon work.",
+      "unpinned": "Pin a server-authorized View, or use an available Index checkout action before requesting daemon work.",
       "attempt": "Daemon attempt {attempt}",
       "states": {
         "idle": {
           "label": "Waiting",
           "title": "No indexing request",
-          "message": "Pin a source View before requesting daemon work."
+          "message": "Pin a source View or use an available Index checkout action before requesting daemon work."
         },
         "loading": {
           "label": "Submitting",
@@ -2460,7 +2462,7 @@
         "queued": {
           "label": "Queued",
           "title": "Queued for the daemon",
-          "message": "The request is eligible for daemon work; the pinned View remains unchanged."
+          "message": "The request is eligible for daemon work; the current selection remains unchanged."
         },
         "acknowledged": {
           "label": "Acknowledged",
@@ -2470,12 +2472,12 @@
         "running": {
           "label": "Running",
           "title": "Indexing is running",
-          "message": "The daemon is working; the pinned View remains unchanged."
+          "message": "The daemon is working; the current selection remains unchanged."
         },
         "completed": {
           "label": "Completed",
           "title": "New View available",
-          "message": "A new server-released View may be available, but this console will not switch the pin automatically."
+          "message": "The catalog was refreshed. A new server-released View may be available, but this console will not select or pin it automatically."
         },
         "unavailable": {
           "label": "Unavailable",
@@ -2485,7 +2487,7 @@
         "failed": {
           "label": "Failed",
           "title": "Indexing failed",
-          "message": "The daemon reported a terminal failure; the pinned View remains unchanged."
+          "message": "The daemon reported a terminal failure; the current selection remains unchanged."
         },
         "error": {
           "label": "Unresolved",
@@ -2495,7 +2497,7 @@
         "denied": {
           "label": "Access denied",
           "title": "Request denied",
-          "message": "The server denied this request; the pinned View remains unchanged."
+          "message": "The server denied this request; the current selection remains unchanged."
         },
         "offline": {
           "label": "Offline",

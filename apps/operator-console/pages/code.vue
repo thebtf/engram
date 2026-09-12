@@ -65,6 +65,7 @@ onMounted(() => {
       @select="selectContext"
       @pin="pinContext"
       @retry="initialize"
+      @request-index="submitIndexIntent('reindex', $event)"
     />
 
     <CodeIndexIntentStatus

@@ -19,8 +19,8 @@ const emit = defineEmits<{
 
 const active = computed(() => ['loading', 'submitted', 'queued', 'acknowledged', 'running'].includes(props.state.kind))
 const canStart = computed(() => props.pinned !== null && !props.busy && !props.pending && !active.value)
-const canRetry = computed(() => props.pinned !== null && props.state.kind === 'unavailable' && !props.busy && !props.pending)
-const canRefresh = computed(() => props.pinned !== null && props.state.kind !== 'idle' && !props.busy && !props.pending)
+const canRetry = computed(() => props.state.kind === 'unavailable' && !props.busy && !props.pending)
+const canRefresh = computed(() => props.state.kind !== 'idle' && !props.busy && !props.pending)
 const statusCopy = computed(() => ({
   title: t(`codeExplorer.intent.states.${props.state.kind}.title`),
   message: t(`codeExplorer.intent.states.${props.state.kind}.message`),
@@ -43,13 +43,15 @@ const statusCopy = computed(() => ({
       <small v-if="state.attempt !== null">{{ t('codeExplorer.intent.attempt', { attempt: state.attempt }) }}</small>
     </div>
 
-    <div v-if="pinned !== null" class="actions">
-      <button class="btn primary" type="button" :disabled="!canStart" data-testid="index-intent-reindex" @click="emit('submit', 'reindex')">{{ t('codeExplorer.intent.reindex') }}</button>
-      <button class="btn" type="button" :disabled="!canStart" data-testid="index-intent-reconcile" @click="emit('submit', 'reconcile')">{{ t('codeExplorer.intent.reconcile') }}</button>
+    <div class="actions">
+      <template v-if="pinned !== null">
+        <button class="btn primary" type="button" :disabled="!canStart" data-testid="index-intent-reindex" @click="emit('submit', 'reindex')">{{ t('codeExplorer.intent.reindex') }}</button>
+        <button class="btn" type="button" :disabled="!canStart" data-testid="index-intent-reconcile" @click="emit('submit', 'reconcile')">{{ t('codeExplorer.intent.reconcile') }}</button>
+      </template>
       <button v-if="state.kind === 'unavailable'" class="btn" type="button" :disabled="!canRetry" data-testid="index-intent-retry" @click="emit('retry')">{{ t('codeExplorer.intent.retry') }}</button>
       <button v-if="state.kind !== 'idle'" class="btn" type="button" :disabled="!canRefresh" data-testid="index-intent-check-status" @click="emit('refresh')">{{ t('codeExplorer.intent.refresh') }}</button>
     </div>
-    <p v-else class="recovery">{{ t('codeExplorer.intent.unpinned') }}</p>
+    <p v-if="pinned === null && state.kind === 'idle'" class="recovery">{{ t('codeExplorer.intent.unpinned') }}</p>
   </section>
 </template>
 

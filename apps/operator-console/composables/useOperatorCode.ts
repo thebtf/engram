@@ -21,11 +21,17 @@ export interface CodeSafeContext {
   context: CodeResponseContext
 }
 
+export interface IndexIntentTarget {
+  sourceId: string
+  checkoutId: string
+}
+
 export interface CodeCatalogEntry {
   source: { id: string; label: string }
   checkout: { id: string; label: string }
   view: CodeSafeContext | null
   indexIntentAvailable: boolean
+  indexIntentTarget: IndexIntentTarget | null
 }
 
 export interface CodeBootstrapEvidence {
@@ -315,14 +321,25 @@ function parseCatalogEntry(value: unknown): CodeCatalogEntry | null {
   const source = parseCatalogLabel(Reflect.get(value, 'source'))
   const checkout = parseCatalogLabel(Reflect.get(value, 'checkout'))
   const indexIntentAvailable = Reflect.get(value, 'index_intent_available')
+  const profileValue = Reflect.get(value, 'analysis_profile_id')
+  const profileId = profileValue === undefined ? null : text(profileValue)
   const viewValue = Reflect.get(value, 'view')
   if (source === null || checkout === null || typeof indexIntentAvailable !== 'boolean') return null
-  if (viewValue === null) return { source, checkout, view: null, indexIntentAvailable }
-  if (viewValue === undefined || typeof viewValue !== 'object' || Array.isArray(viewValue)) return null
+  if (viewValue === null) {
+    if (indexIntentAvailable !== (profileId !== null)) return null
+    return {
+      source,
+      checkout,
+      view: null,
+      indexIntentAvailable,
+      indexIntentTarget: profileId === null ? null : { sourceId: source.id, checkoutId: checkout.id },
+    }
+  }
+  if (profileValue !== undefined || viewValue === undefined || typeof viewValue !== 'object' || Array.isArray(viewValue)) return null
   const context = parseCatalogContext(Reflect.get(viewValue, 'context_ref'))
   const view = text(Reflect.get(viewValue, 'label'))
   if (context === null || view === null || context.sourceId !== source.id || context.checkoutId !== checkout.id) return null
-  return { source, checkout, view: { source: source.label, checkout: checkout.label, view, context }, indexIntentAvailable }
+  return { source, checkout, view: { source: source.label, checkout: checkout.label, view, context }, indexIntentAvailable, indexIntentTarget: null }
 }
 
 function parseCatalog(value: unknown): CodeCatalogEntry[] | null {
@@ -610,8 +627,10 @@ function indexIntentPresentation(intent: IndexIntentRecord): IndexIntentPresenta
 interface IndexIntentResume {
   requestRef: string
   kind: IndexIntentKind
+  target?: IndexIntentTarget
   intentRef?: string
 }
+
 
 function presentation(kind: CodePresentationKind, message: string): CodePresentationState {
   return { kind, message }
@@ -717,21 +736,33 @@ function loadIndexIntentResume(): IndexIntentResume | null {
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
     const requestRef = text(Reflect.get(parsed, 'requestRef'))
     const kind = Reflect.get(parsed, 'kind')
+    const targetValue = Reflect.get(parsed, 'target')
+    const target = targetValue === undefined ? undefined : parseStoredIndexIntentTarget(targetValue)
     const intentRefValue = Reflect.get(parsed, 'intentRef')
-    if (requestRef === null || (kind !== 'reindex' && kind !== 'reconcile')) return null
-    if (intentRefValue === undefined) return { requestRef, kind }
+    if (requestRef === null || (kind !== 'reindex' && kind !== 'reconcile') || target === null) return null
+    if (intentRefValue === undefined) return target === undefined ? { requestRef, kind } : { requestRef, kind, target }
     const intentRef = text(intentRefValue)
-    return intentRef === null ? null : { requestRef, kind, intentRef }
+    return intentRef === null ? null : target === undefined ? { requestRef, kind, intentRef } : { requestRef, kind, target, intentRef }
   } catch {
     return null
   }
 }
+function parseStoredIndexIntentTarget(value: unknown): IndexIntentTarget | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const sourceId = text(Reflect.get(value, 'sourceId'))
+  const checkoutId = text(Reflect.get(value, 'checkoutId'))
+  return sourceId === null || checkoutId === null ? null : { sourceId, checkoutId }
+}
+
 
 function persistIndexIntentResume(value: IndexIntentResume): boolean {
   try {
-    sessionStorage.setItem(INDEX_INTENT_STORAGE_KEY, JSON.stringify(value.intentRef === undefined
-      ? { requestRef: value.requestRef, kind: value.kind }
-      : { requestRef: value.requestRef, kind: value.kind, intentRef: value.intentRef }))
+    sessionStorage.setItem(INDEX_INTENT_STORAGE_KEY, JSON.stringify({
+      requestRef: value.requestRef,
+      kind: value.kind,
+      ...(value.target === undefined ? {} : { target: value.target }),
+      ...(value.intentRef === undefined ? {} : { intentRef: value.intentRef }),
+    }))
     return true
   } catch {
     return false
@@ -861,13 +892,14 @@ export function useOperatorCode() {
   }
 
 
-  function applyIndexIntent(intent: IndexIntentRecord): void {
+  async function applyIndexIntent(intent: IndexIntentRecord): Promise<void> {
     indexIntentState.value = indexIntentPresentation(intent)
-    if (intent.state !== 'submitted' && intent.state !== 'queued' && intent.state !== 'acknowledged' && intent.state !== 'running') {
-      stopIndexIntentPolling()
+    if (intent.state === 'submitted' || intent.state === 'queued' || intent.state === 'acknowledged' || intent.state === 'running') {
+      scheduleIndexIntentPoll()
       return
     }
-    scheduleIndexIntentPoll()
+    stopIndexIntentPolling()
+    if (intent.state === 'completed') await discoverContext()
   }
 
   function scheduleIndexIntentPoll(): void {
@@ -909,20 +941,21 @@ export function useOperatorCode() {
       indexIntentState.value = indexIntentNotice('error')
       return
     }
-    applyIndexIntent(intent)
+    await applyIndexIntent(intent)
   }
 
-  async function submitIndexIntent(kind: IndexIntentKind): Promise<void> {
-    if (binding.value === null || pinnedContext.value === null || indexIntentPending.value || pending.value) return
+  async function submitIndexIntent(kind: IndexIntentKind, target?: IndexIntentTarget): Promise<void> {
+    if (binding.value === null || target === undefined && pinnedContext.value === null || indexIntentPending.value || pending.value) return
     const existing = indexIntentResume.value
     const requestRef = existing !== null && existing.kind === kind && existing.intentRef === undefined
+      && (existing.target === undefined || target === undefined ? existing.target === target : existing.target.sourceId === target.sourceId && existing.target.checkoutId === target.checkoutId)
       ? existing.requestRef
       : requestId()
     if (requestRef === null) {
       indexIntentState.value = indexIntentNotice('error')
       return
     }
-    const resume: IndexIntentResume = { requestRef, kind }
+    const resume: IndexIntentResume = target === undefined ? { requestRef, kind } : { requestRef, kind, target }
     if (!persistIndexIntentResume(resume)) {
       indexIntentState.value = indexIntentNotice('error')
       return
@@ -932,7 +965,11 @@ export function useOperatorCode() {
     indexIntentResume.value = resume
     indexIntentState.value = indexIntentNotice('loading')
     indexIntentPending.value = true
-    const payload = bindingPayload({ request_ref: requestRef, kind })
+    const payload = bindingPayload({
+      request_ref: requestRef,
+      kind,
+      ...(target === undefined ? {} : { target: { source_id: target.sourceId, checkout_id: target.checkoutId } }),
+    })
     let result: CodeApiResult
     if (payload === null) {
       result = { kind: 'error', status: 0 }
@@ -955,7 +992,7 @@ export function useOperatorCode() {
     const reconciled: IndexIntentResume = { ...resume, intentRef: intent.intentRef }
     indexIntentResume.value = reconciled
     persistIndexIntentResume(reconciled)
-    applyIndexIntent(intent)
+    await applyIndexIntent(intent)
   }
 
   async function retryIndexIntent(): Promise<void> {
@@ -984,7 +1021,7 @@ export function useOperatorCode() {
       indexIntentState.value = indexIntentNotice('error')
       return
     }
-    applyIndexIntent(intent)
+    await applyIndexIntent(intent)
   }
 
   async function refreshIndexIntent(): Promise<void> {
@@ -992,7 +1029,7 @@ export function useOperatorCode() {
     if (resume === null || indexIntentPending.value) return
     stopIndexIntentPolling()
     if (resume.intentRef === undefined) {
-      await submitIndexIntent(resume.kind)
+      await submitIndexIntent(resume.kind, resume.target)
       return
     }
     await loadIndexIntent()
@@ -1002,7 +1039,7 @@ export function useOperatorCode() {
     const resume = indexIntentResume.value
     if (resume === null) return
     if (resume.intentRef === undefined) {
-      await submitIndexIntent(resume.kind)
+      await submitIndexIntent(resume.kind, resume.target)
       return
     }
     await loadIndexIntent()

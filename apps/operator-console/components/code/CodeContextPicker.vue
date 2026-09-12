@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { CodeBootstrapEvidence, CodeBootstrapPhase, CodeCatalogEntry, CodeCatalogState, CodeSafeContext } from '~/composables/useOperatorCode'
+import type { CodeBootstrapEvidence, CodeBootstrapPhase, CodeCatalogEntry, CodeCatalogState, CodeSafeContext, IndexIntentTarget } from '~/composables/useOperatorCode'
 
 const { t } = useI18n()
 
@@ -19,6 +19,7 @@ const emit = defineEmits<{
   select: [context: CodeSafeContext]
   pin: []
   retry: []
+  requestIndex: [target: IndexIntentTarget]
 }>()
 
 const selectable = computed(() => props.catalog.flatMap((entry) => entry.view === null ? [] : [entry.view]))
@@ -94,7 +95,16 @@ function chooseContext(event: Event): void {
     <ul v-if="noViewEntries.length > 0" class="no-view-list">
       <li v-for="entry in noViewEntries" :key="`${entry.source.id}:${entry.checkout.id}`" data-testid="code-context-index-affordance">
         <strong>{{ entry.source.label }} · {{ entry.checkout.label }}</strong>
-        <p>{{ entry.indexIntentAvailable ? t('codeExplorer.context.noViewIndexAvailable') : t('codeExplorer.context.noViewUnavailable') }}</p>
+        <p>{{ entry.indexIntentTarget === null ? t('codeExplorer.context.noViewUnavailable') : t('codeExplorer.context.noViewIndexAvailable') }}</p>
+        <button
+          v-if="entry.indexIntentTarget !== null"
+          class="btn"
+          type="button"
+          :disabled="pending"
+          :aria-label="t('codeExplorer.context.requestIndexFor', { source: entry.source.label, checkout: entry.checkout.label })"
+          data-testid="code-request-first-index"
+          @click="emit('requestIndex', entry.indexIntentTarget)"
+        >{{ t('codeExplorer.context.requestIndex') }}</button>
       </li>
     </ul>
 
