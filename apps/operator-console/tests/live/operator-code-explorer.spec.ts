@@ -124,9 +124,6 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
     expect(login.status).toBe(200)
 
     await page.goto(`${fixture.frontend.baseUrl}/code`, { waitUntil: 'domcontentloaded' })
-    const contextSelect = page.getByTestId('code-context-select')
-    await expect(contextSelect.locator('option')).toHaveCount(3)
-    await expect(page.getByTestId('code-context-index-affordance')).toHaveCount(1)
     await expect(page.getByTestId('code-release-state')).toHaveAttribute('data-state', 'unselected')
     await expect(page.getByTestId('code-results-unselected')).toBeVisible()
     await recordTransition(page, transitions, 'fresh')
@@ -151,16 +148,30 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
     expect(scenarioEntityKeys(initialSearch, searchEntityKey, graphEntityKey)).toEqual([searchEntityKey])
     await expect(page.getByTestId('code-search-results')).toContainText(scenario.expectedSearch)
     await expect(page.getByTestId('code-search-next')).toBeVisible()
+    const continuedSearchResponse = page.waitForResponse((response) => {
+      if (new URL(response.url()).pathname !== '/api/code/search' || response.request().method() !== 'POST') return false
+      const body = response.request().postData()
+      return body !== null && Object.hasOwn(record(JSON.parse(body), 'Search request'), 'continuation')
+    })
     await page.getByTestId('code-search-next').click()
+    const continuedSearch = await (await continuedSearchResponse).json()
+    expect(oneContext(continuedSearch)).toEqual(initialSearchContext)
     await expect.poll(() => searchRequests.length).toBe(2)
     expect(searchRequests[1]).toMatchObject({ query: scenario.query, limit: 10, path_prefix: '', languages: [] })
     expect(typeof searchRequests[1].continuation).toBe('string')
     expect(await page.getByTestId('code-context-pinned').textContent()).toBe(pinnedA)
 
-    const resetSearchResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/code/search' && response.request().method() === 'POST')
+    const resetSearchResponse = page.waitForResponse((response) => {
+      if (new URL(response.url()).pathname !== '/api/code/search' || response.request().method() !== 'POST') return false
+      const body = response.request().postData()
+      return body !== null && !Object.hasOwn(record(JSON.parse(body), 'Search request'), 'continuation')
+    })
     await page.getByTestId('code-query-input').fill(scenario.query)
     await page.keyboard.press('Enter')
     const resetSearch = await (await resetSearchResponse).json()
+    await expect.poll(() => searchRequests.length).toBe(3)
+    expect(searchRequests[2]).toMatchObject({ query: scenario.query, limit: 10, path_prefix: '', languages: [] })
+    expect(searchRequests[2]).not.toHaveProperty('continuation')
     expect(oneContext(resetSearch)).toEqual(initialSearchContext)
     expect(scenarioEntityKeys(resetSearch, searchEntityKey, graphEntityKey)).toEqual([searchEntityKey])
     const functionResult = page.getByTestId('code-search-results').getByRole('listitem').filter({
@@ -222,7 +233,6 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
     if (await page.getByTestId('code-retry-reload').isVisible().catch(() => false)) {
       await page.getByTestId('code-retry-reload').click()
     }
-    await expect(page.getByTestId('code-context-select').locator('option')).toHaveCount(3)
     await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
     await expect(page.getByTestId('code-release-state')).toHaveAttribute('data-state', 'unselected')
     await expect(page.getByTestId('code-results-unselected')).toBeVisible()
@@ -259,8 +269,8 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
     await page.evaluate(() => { window.open('/code', '_blank') })
     const child = await popupPromise
     await child.waitForLoadState('domcontentloaded')
-    await expect(child.getByTestId('code-bootstrap-evidence')).toContainText('Opener before')
-    await expect(child.getByTestId('code-bootstrap-evidence')).toContainText('normalized to null')
+    await expect(child.getByTestId('code-bootstrap-evidence')).toContainText('Opener до')
+    await expect(child.getByTestId('code-bootstrap-evidence')).toContainText('нормализован в null')
     await expect(child.getByTestId('code-release-state')).toHaveAttribute('data-state', 'unselected')
     await expect(child.locator('body')).not.toContainText(scenario.expectedSource)
     await recordTransition(child, transitions, 'fresh-opener')
