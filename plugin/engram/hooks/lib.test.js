@@ -1131,6 +1131,16 @@ test('configured Hook V3 requires an anchor before making a registration request
   ENGRAM_QUIET: '0',
  });
  const childScript = `
+  const childProcess = require('node:child_process');
+  const originalExecFileSync = childProcess.execFileSync;
+  childProcess.execFileSync = (file, args, options) => {
+   if (file === 'git') {
+    const error = new Error('not a git repository');
+    error.stderr = 'fatal: not a git repository';
+    throw error;
+   }
+   return originalExecFileSync(file, args, options);
+  };
   let requestCount = 0;
   global.fetch = async () => {
    requestCount += 1;

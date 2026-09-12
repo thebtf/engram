@@ -3,7 +3,9 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
+const { once } = require('node:events');
+const { spawn } = require('node:child_process');
 const NODE_CHILD_TIMEOUT_MS = process.platform === 'win32' ? 10000 : 3000;
 
 const { handleStop, extractAgentOutput } = require('./stop');
@@ -39,20 +41,28 @@ test('handleStop ignores optional input payload and remains a no-op', async () =
   assert.equal(result, '');
 });
 
-test('Stop clears the pending marker when project registration is offline', (t) => {
+test('Stop clears the pending marker when project registration is offline', async (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-stop-offline-'));
-  const sessionID = `stop-offline-${process.pid}-${Date.now()}`;
+  const sessionID = `stop-offline-${randomUUID()}`;
   const markerPath = path.join(os.tmpdir(), `.engram-pending-${sessionID}`);
-  fs.writeFileSync(markerPath, 'pending', 'utf8');
+  let child;
   t.after(() => {
+    if (child && child.exitCode === null && child.signalCode === null) child.kill();
     fs.rmSync(workspace, { recursive: true, force: true });
     fs.rmSync(markerPath, { force: true });
   });
+  fs.writeFileSync(path.join(workspace, '.engram-project'), JSON.stringify({
+    version: 3,
+    project_id: randomUUID(),
+    name: 'stop-offline',
+    scope: 'directory',
+  }));
+  fs.writeFileSync(markerPath, 'pending', 'utf8');
 
-  const result = spawnSync(process.execPath, [require.resolve('./stop')], {
-    input: JSON.stringify({ session_id: sessionID, cwd: workspace }),
-    encoding: 'utf8',
-    timeout: NODE_CHILD_TIMEOUT_MS,
+  let stdout = '';
+  let stderr = '';
+  let timedOut = false;
+  child = spawn(process.execPath, [require.resolve('./stop')], {
     windowsHide: true,
     env: {
       ...process.env,
@@ -60,14 +70,28 @@ test('Stop clears the pending marker when project registration is offline', (t) 
       ENGRAM_QUIET: '0',
       ENGRAM_URL: 'http://127.0.0.1:9',
       ENGRAM_TOKEN: 'test-token',
+      ENGRAM_CLIENT_INSTANCE_ID: 'hook-install-alpha',
     },
+    stdio: ['pipe', 'pipe', 'pipe'],
   });
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  child.stdin.end(JSON.stringify({ session_id: sessionID, cwd: workspace }));
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    child.kill();
+  }, NODE_CHILD_TIMEOUT_MS);
+  const [status, signal] = await once(child, 'close');
+  clearTimeout(timeout);
 
-  assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), '{"continue":true}');
+  assert.equal(timedOut, false, `child exceeded ${NODE_CHILD_TIMEOUT_MS}ms`);
+  assert.equal(signal, null, stderr);
+  assert.equal(status, 0, stderr);
+  assert.equal(stdout.trim(), '{"continue":true}');
   assert.equal(fs.existsSync(markerPath), false, 'clean Stop must remove the crash marker offline');
-  assert.match(result.stderr, /continuing local capture\/cleanup/);
+  assert.match(stderr, /continuing local capture\/cleanup/);
 });
 
 // ---------------------------------------------------------------------------
