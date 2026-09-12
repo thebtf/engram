@@ -378,7 +378,10 @@ func validUCIPollIndexIntentResponse(response *pb.PollCodeIndexIntentsResponse) 
 	}
 	offer := response.GetOffer()
 	if !validUCIIdentifier(offer.GetIntentRef(), maxUCITransportIdentifierBytes) ||
-		(offer.GetKind() != string(uci.IndexIntentReindex) && offer.GetKind() != string(uci.IndexIntentReconcile)) || !validUCIContextRef(offer.GetPreviousContext()) {
+		(offer.GetKind() != string(uci.IndexIntentReindex) && offer.GetKind() != string(uci.IndexIntentReconcile)) {
+		return false
+	}
+	if previous := offer.GetPreviousContext(); previous != nil && !validUCIContextRef(previous) {
 		return false
 	}
 	state := uci.IndexIntentState(offer.GetState())

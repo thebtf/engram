@@ -150,7 +150,7 @@ func TestOperatorCodeHTTPAdapter_CatalogKeepsWorktreesExplicitAndNoViewUnselecte
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	require.Contains(t, recorder.Body.String(), second.CheckoutID)
 	require.Contains(t, recorder.Body.String(), second.ViewID)
-	require.Contains(t, recorder.Body.String(), `"view":null,"index_intent_available":true`)
+	require.Contains(t, recorder.Body.String(), `"view":null,"index_intent_available":true,"analysis_profile_id":"`+operatorCodeHTTPTestProfileID+`"`)
 	require.NotContains(t, recorder.Body.String(), "grant_ref")
 }
 
@@ -509,6 +509,76 @@ func TestOperatorCodeHTTPAdapter_IndexIntentAcknowledgementIsNotCompletion(t *te
 	require.Equal(t, []string{"browser-session-41"}, fixture.app.indexGetSessions)
 }
 
+func TestOperatorCodeHTTPAdapter_NoViewIndexIntentReauthorizesWithoutPin(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	fixture.binding.pinned = nil
+	target := `{"source_id":"` + operatorCodeHTTPTestSourceID + `","checkout_id":"` + operatorCodeHTTPTestCheckoutID + `"}`
+	body := `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","request_ref":"first-index","kind":"reindex","target":` + target + `}`
+
+	first := httptest.NewRecorder()
+	adapter.HandleIndexIntentSubmit(first, operatorCodeHTTPTestRequest(t, body, fixture.identity))
+	require.Equal(t, http.StatusAccepted, first.Code, first.Body.String())
+	response := operatorCodeHTTPTestIndexIntentResponse(t, first.Body.String())
+	intentRef, ok := response["intent_ref"].(string)
+	require.True(t, ok)
+	stored := fixture.app.indexIntents["first-index"]
+	require.Nil(t, stored.PreviousView)
+	require.Len(t, fixture.contexts.initialTargets, 1)
+	require.Equal(t, operatorCodeHTTPTestProfileID, fixture.contexts.initialTargets[0].ProfileID, "the server must derive the daemon-advertised profile")
+	require.Nil(t, fixture.binding.pinned, "first-index admission must not pin a View")
+
+	replay := httptest.NewRecorder()
+	adapter.HandleIndexIntentSubmit(replay, operatorCodeHTTPTestRequest(t, body, fixture.identity))
+	require.Equal(t, http.StatusAccepted, replay.Code, replay.Body.String())
+	require.Equal(t, intentRef, operatorCodeHTTPTestIndexIntentResponse(t, replay.Body.String())["intent_ref"])
+	require.Len(t, fixture.app.indexIntents, 1)
+
+	changed := httptest.NewRecorder()
+	adapter.HandleIndexIntentSubmit(changed, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"first-index","kind":"reconcile","target":`+target+`}`, fixture.identity))
+	require.Equal(t, http.StatusConflict, changed.Code, changed.Body.String())
+
+	stored.State = uci.IndexIntentUnavailable
+	fixture.app.indexIntents["first-index"] = stored
+	status := httptest.NewRecorder()
+	adapter.HandleIndexIntentStatus(status, operatorCodeHTTPTestIndexIntentStatusRequest(t, intentRef, "", fixture.identity))
+	require.Equal(t, http.StatusOK, status.Code, status.Body.String())
+	require.True(t, operatorCodeHTTPTestIndexIntentResponse(t, status.Body.String())["retryable"].(bool))
+
+	retry := httptest.NewRecorder()
+	adapter.HandleIndexIntentRetry(retry, operatorCodeHTTPTestIndexIntentRetryRequest(t, intentRef, fixture.identity))
+	require.Equal(t, http.StatusAccepted, retry.Code, retry.Body.String())
+	require.Equal(t, string(uci.IndexIntentQueued), operatorCodeHTTPTestIndexIntentResponse(t, retry.Body.String())["state"])
+
+	completed := operatorCodeHTTPTestNoViewIndexIntent(stored.Scope, stored.ProfileID, stored.RequestRef, stored.Kind, uci.IndexIntentCompleted)
+	completed.ID = stored.ID
+	claim, err := uci.NewIndexIntentClaim(completed.ID, "private-index-owner", 1, completed.CreatedAt)
+	require.NoError(t, err)
+	completed.Acknowledgement = &claim
+	fixture.app.indexIntents["first-index"] = completed
+	completedStatus := httptest.NewRecorder()
+	adapter.HandleIndexIntentStatus(completedStatus, operatorCodeHTTPTestIndexIntentStatusRequest(t, intentRef, "", fixture.identity))
+	require.Equal(t, http.StatusOK, completedStatus.Code, completedStatus.Body.String())
+	result, ok := operatorCodeHTTPTestIndexIntentResponse(t, completedStatus.Body.String())["result"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, completed.ResultView.ViewID, result["view_ref"])
+	require.Nil(t, fixture.binding.pinned, "completed first-index status must not select its result")
+
+	fixture.contexts.reauthTargetErr = gormdb.ErrBrowserCodeContextDenied
+	revokedStatus := httptest.NewRecorder()
+	adapter.HandleIndexIntentStatus(revokedStatus, operatorCodeHTTPTestIndexIntentStatusRequest(t, intentRef, "", fixture.identity))
+	require.Equal(t, http.StatusForbidden, revokedStatus.Code, revokedStatus.Body.String())
+	fixture.contexts.reauthTargetErr = nil
+
+	foreign := httptest.NewRecorder()
+	adapter.HandleIndexIntentSubmit(foreign, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"foreign","kind":"reindex","target":{"source_id":"`+uuid.NewString()+`","checkout_id":"`+operatorCodeHTTPTestCheckoutID+`"}}`, fixture.identity))
+	require.Equal(t, http.StatusForbidden, foreign.Code, foreign.Body.String())
+
+	fixture.contexts.initialTargetErr = gormdb.ErrBrowserCodeContextDenied
+	revoked := httptest.NewRecorder()
+	adapter.HandleIndexIntentSubmit(revoked, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"revoked","kind":"reindex","target":`+target+`}`, fixture.identity))
+	require.Equal(t, http.StatusForbidden, revoked.Code, revoked.Body.String())
+}
+
 func TestOperatorCodeHTTPAdapter_IndexIntentIdempotencyAndRetry(t *testing.T) {
 	t.Run("changed binding is rejected without a second intent", func(t *testing.T) {
 		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
@@ -795,7 +865,22 @@ func newOperatorCodeHTTPTestAdapter(t *testing.T) (*OperatorCodeHTTPAdapter, *op
 	fixture.contexts.binding = fixture.binding
 	adapter := NewOperatorCodeHTTPAdapter(fixture.grants, fixture.binding, fixture.authority, fixture.app, fixture.recorder)
 	adapter.contexts = fixture.contexts
+	adapter.indexTargets = operatorCodeHTTPTestIndexTargets{}
 	return adapter, fixture
+}
+
+type operatorCodeHTTPTestIndexTargets struct{}
+
+func (operatorCodeHTTPTestIndexTargets) Resolve(sourceID, checkoutID string) (uci.IndexBinding, bool) {
+	if sourceID != operatorCodeHTTPTestSourceID || !operatorCodeUUID(checkoutID) {
+		return uci.IndexBinding{}, false
+	}
+	return uci.IndexBinding{
+		Scope:         uci.IndexScope{SourceID: sourceID, CheckoutID: checkoutID, IncarnationID: operatorCodeHTTPTestIncarnationID},
+		ProfileID:     operatorCodeHTTPTestProfileID,
+		LocalRootID:   "daemon-root",
+		WorkstationID: "daemon-workstation",
+	}, true
 }
 
 type operatorCodeHTTPTestGrants struct {
@@ -835,6 +920,11 @@ type operatorCodeHTTPTestContextStore struct {
 	advancedRefs     []string
 	binding          *operatorCodeHTTPTestBinding
 	pinErr           error
+	initialTargets   []gormdb.BrowserCodeIndexIntentTarget
+	reauthTargets    []gormdb.BrowserCodeIndexIntentTarget
+	initialTargetErr error
+	reauthTargetErr  error
+	noViewBinding    gormdb.BrowserCodeIndexIntentBinding
 }
 
 func (store *operatorCodeHTTPTestContextStore) ListCatalog(_ context.Context, _ int64) ([]gormdb.BrowserCodeContextCatalogEntry, error) {
@@ -865,6 +955,35 @@ func (store *operatorCodeHTTPTestContextStore) Pin(_ context.Context, pin gormdb
 		store.binding.pinned = &pinned
 	}
 	return nil
+}
+
+func (store *operatorCodeHTTPTestContextStore) AuthorizeInitialIndexIntent(_ context.Context, target gormdb.BrowserCodeIndexIntentTarget) (gormdb.BrowserCodeIndexIntentBinding, error) {
+	store.initialTargets = append(store.initialTargets, target)
+	if store.initialTargetErr != nil {
+		return gormdb.BrowserCodeIndexIntentBinding{}, store.initialTargetErr
+	}
+	return store.noViewIndexIntentBinding(target)
+}
+
+func (store *operatorCodeHTTPTestContextStore) ReauthorizeIndexIntent(_ context.Context, target gormdb.BrowserCodeIndexIntentTarget) (gormdb.BrowserCodeIndexIntentBinding, error) {
+	store.reauthTargets = append(store.reauthTargets, target)
+	if store.reauthTargetErr != nil {
+		return gormdb.BrowserCodeIndexIntentBinding{}, store.reauthTargetErr
+	}
+	return store.noViewIndexIntentBinding(target)
+}
+
+func (store *operatorCodeHTTPTestContextStore) noViewIndexIntentBinding(target gormdb.BrowserCodeIndexIntentTarget) (gormdb.BrowserCodeIndexIntentBinding, error) {
+	if target.Caller.SubjectUserID != 41 || target.Caller.SessionID != "browser-session-41" || target.TabBindingID != operatorCodeHTTPTestBindingID || target.SourceID != operatorCodeHTTPTestSourceID || target.CheckoutID != operatorCodeHTTPTestCheckoutID || target.ProfileID != operatorCodeHTTPTestProfileID {
+		return gormdb.BrowserCodeIndexIntentBinding{}, gormdb.ErrBrowserCodeContextDenied
+	}
+	binding := store.noViewBinding
+	if binding.Scope == (uci.IndexScope{}) {
+		binding.Scope = uci.IndexScope{SourceID: target.SourceID, CheckoutID: target.CheckoutID, IncarnationID: operatorCodeHTTPTestIncarnationID}
+		binding.ProfileID = target.ProfileID
+		binding.AuthRealm = "browser"
+	}
+	return binding, nil
 }
 
 func (store *operatorCodeHTTPTestContextStore) LoadContinuation(_ context.Context, cursorRef string, binding gormdb.BrowserCodeContinuationBinding) (string, error) {
@@ -990,8 +1109,12 @@ func newOperatorCodeHTTPTestAuthority(t *testing.T, ref uci.ContextRef) *operato
 }
 
 func (authority *operatorCodeHTTPTestAuthority) AuthorizeOperatorCode(ctx context.Context, caller operatorCodeVerifiedCaller) (uci.AuthorizedContext, error) {
-	ref := authority.ref
-	return authority.resolver.Authorize(ctx, uci.ResolveContextInput{
+	ref := caller.Context
+	if ref.ViewID == "" {
+		ref = authority.ref
+	}
+	resolver := uci.NewContextResolver(operatorCodeHTTPTestCatalog{ref: ref}, operatorCodeHTTPTestAuthorizer{ref: ref}, nil)
+	return resolver.Authorize(ctx, uci.ResolveContextInput{
 		ClientSessionID: "server/" + caller.SessionID,
 		AuthRealm:       "browser",
 		Principal:       "browser-user/99",
@@ -1133,6 +1256,67 @@ func (app *operatorCodeHTTPTestApplication) RetryIndexIntent(ctx context.Context
 	return intent.Clone(), nil
 }
 
+func (app *operatorCodeHTTPTestApplication) SubmitNoViewIndexIntent(ctx context.Context, scope uci.IndexScope, profileID, requestRef string, kind uci.IndexIntentKind) (uci.IndexIntent, error) {
+	app.indexSubmitCalls++
+	app.indexSubmitSessions = append(app.indexSubmitSessions, auditcontext.SourceSession(ctx))
+	if app.indexSubmitErr != nil {
+		return uci.IndexIntent{}, app.indexSubmitErr
+	}
+	if app.indexIntents == nil {
+		app.indexIntents = make(map[string]uci.IndexIntent)
+	}
+	if existing, found := app.indexIntents[requestRef]; found {
+		if existing.Kind != kind || existing.PreviousView != nil || existing.Scope != scope || existing.ProfileID != profileID {
+			return uci.IndexIntent{}, uci.ErrIndexIntentBindingMismatch
+		}
+		return existing.Clone(), nil
+	}
+	intent := operatorCodeHTTPTestNoViewIndexIntent(scope, profileID, requestRef, kind, uci.IndexIntentSubmitted)
+	app.indexIntents[requestRef] = intent
+	return intent.Clone(), nil
+}
+
+func (app *operatorCodeHTTPTestApplication) NoViewIndexIntentTarget(_ context.Context, intentRef string) (uci.IndexScope, string, error) {
+	_, intent, found := app.indexIntent(intentRef)
+	if !found || intent.PreviousView != nil {
+		return uci.IndexScope{}, "", uci.ErrIndexIntentBindingMismatch
+	}
+	return intent.Scope, intent.ProfileID, nil
+}
+
+func (app *operatorCodeHTTPTestApplication) GetNoViewIndexIntent(ctx context.Context, scope uci.IndexScope, profileID, intentRef string) (uci.IndexIntent, error) {
+	app.indexGetCalls++
+	app.indexGetSessions = append(app.indexGetSessions, auditcontext.SourceSession(ctx))
+	if app.indexGetErr != nil {
+		return uci.IndexIntent{}, app.indexGetErr
+	}
+	_, intent, found := app.indexIntent(intentRef)
+	if !found || intent.PreviousView != nil || intent.Scope != scope || intent.ProfileID != profileID {
+		return uci.IndexIntent{}, uci.ErrIndexIntentBindingMismatch
+	}
+	return intent.Clone(), nil
+}
+
+func (app *operatorCodeHTTPTestApplication) RetryNoViewIndexIntent(ctx context.Context, scope uci.IndexScope, profileID, intentRef string) (uci.IndexIntent, error) {
+	app.indexRetryCalls++
+	app.indexRetrySessions = append(app.indexRetrySessions, auditcontext.SourceSession(ctx))
+	if app.indexRetryErr != nil {
+		return uci.IndexIntent{}, app.indexRetryErr
+	}
+	key, intent, found := app.indexIntent(intentRef)
+	if !found || intent.PreviousView != nil || intent.Scope != scope || intent.ProfileID != profileID {
+		return uci.IndexIntent{}, uci.ErrIndexIntentRetryUnauthorized
+	}
+	if intent.State != uci.IndexIntentUnavailable {
+		return uci.IndexIntent{}, uci.ErrIndexIntentInvalidTransition
+	}
+	intent.State = uci.IndexIntentQueued
+	intent.UpdatedAt = intent.UpdatedAt.Add(time.Second)
+	app.indexIntents[key] = intent
+	app.indexRetryExecutions++
+	return intent.Clone(), nil
+}
+
 func (app *operatorCodeHTTPTestApplication) indexIntent(intentRef string) (string, uci.IndexIntent, bool) {
 	if intent, found := app.indexIntents[intentRef]; found && intent.ID == intentRef {
 		return intentRef, intent, true
@@ -1236,6 +1420,18 @@ func operatorCodeHTTPTestIndexIntent(tRef uci.ContextRef, requestRef string, kin
 		result := tRef.Clone()
 		result.ViewID = uuid.NewString()
 		result.Generation++
+		intent.ResultView = &result
+	}
+	return intent
+}
+
+func operatorCodeHTTPTestNoViewIndexIntent(scope uci.IndexScope, profileID, requestRef string, kind uci.IndexIntentKind, state uci.IndexIntentState) uci.IndexIntent {
+	intent := operatorCodeHTTPTestIndexIntent(uci.ContextRef{SourceID: scope.SourceID, CheckoutID: scope.CheckoutID, AnalysisProfileID: profileID}, requestRef, kind, state)
+	intent.Scope = scope
+	intent.ProfileID = profileID
+	intent.PreviousView = nil
+	if state == uci.IndexIntentCompleted {
+		result := uci.ContextRef{SourceID: scope.SourceID, CheckoutID: scope.CheckoutID, ViewID: uuid.NewString(), AnalysisProfileID: profileID, Generation: 1}
 		intent.ResultView = &result
 	}
 	return intent

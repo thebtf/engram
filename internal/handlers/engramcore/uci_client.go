@@ -128,7 +128,7 @@ type IndexResult struct {
 type IndexIntentOffer struct {
 	IntentID       string
 	Kind           uci.IndexIntentKind
-	PreviousView   uci.ContextRef
+	PreviousView   *uci.ContextRef
 	State          uci.IndexIntentState
 	ClaimEpoch     int64
 	LeaseExpiresAt time.Time
@@ -349,11 +349,17 @@ func (a *UCIIndexAdapter) PollIndexIntent(ctx context.Context, target ResolvedIn
 		return nil, nil
 	}
 	offer := response.GetOffer()
-	previous := uciClientContextRefFromProto(offer.GetPreviousContext())
+	var previous *uci.ContextRef
+	if wirePrevious := offer.GetPreviousContext(); wirePrevious != nil {
+		value := uciClientContextRefFromProto(wirePrevious)
+		if value.SourceID != target.Binding.Scope.SourceID || value.CheckoutID != target.Binding.Scope.CheckoutID || value.AnalysisProfileID != target.Binding.ProfileID {
+			return nil, errUCIClientInvalidResponse
+		}
+		previous = &value
+	}
 	state := uci.IndexIntentState(offer.GetState())
 	if !validUCIClientIdentifier(offer.GetIntentRef(), maxUCIClientIdentifierBytes) ||
 		(offer.GetKind() != string(uci.IndexIntentReindex) && offer.GetKind() != string(uci.IndexIntentReconcile)) ||
-		previous.SourceID != target.Binding.Scope.SourceID || previous.CheckoutID != target.Binding.Scope.CheckoutID || previous.AnalysisProfileID != target.Binding.ProfileID ||
 		(state != uci.IndexIntentQueued && state != uci.IndexIntentAcknowledged && state != uci.IndexIntentRunning) {
 		return nil, errUCIClientInvalidResponse
 	}

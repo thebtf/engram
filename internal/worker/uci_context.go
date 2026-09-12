@@ -105,6 +105,7 @@ type uciContextComposition struct {
 	embeddingProfile   *uci.VectorProfile
 	embeddingWorker    uciEmbeddingWorkerRunner
 	runtime            grpcserver.ContextAwareUCIRuntime
+	indexTargets       *grpcserver.IndexIntentTargetRegistry
 	handlePort         *mcp.UCIContextHandlePort
 	aliasResolver      *uci.AliasResolver
 	exposureRecorder   *uci.ExposureRecorder
@@ -137,12 +138,11 @@ type operatorCodeIndexIntentComposition struct {
 type operatorCodeIndexIntentBinding struct {
 	scope        uci.IndexScope
 	profileID    string
-	previousView uci.ContextRef
+	previousView *uci.ContextRef
 }
 
 type operatorCodeIndexIntentRetryAuthorizer struct {
-	application *operatorCodeIndexIntentComposition
-	authorized  uci.AuthorizedContext
+	binding operatorCodeIndexIntentBinding
 }
 
 var (
@@ -156,21 +156,7 @@ func (application *operatorCodeIndexIntentComposition) SubmitIndexIntent(ctx con
 	if err != nil {
 		return uci.IndexIntent{}, err
 	}
-	intent, err := application.indexIntentStore.SubmitIndexIntent(ctx, uci.IndexIntentInput{
-		RequestRef:   requestRef,
-		Kind:         kind,
-		Scope:        binding.scope,
-		ProfileID:    binding.profileID,
-		PreviousView: &binding.previousView,
-	})
-	if err != nil || intent.State != uci.IndexIntentSubmitted {
-		return intent, err
-	}
-	queued, err := application.indexIntentStore.QueueIndexIntent(ctx, intent.ID)
-	if errors.Is(err, uci.ErrIndexIntentInvalidTransition) {
-		return application.getIndexIntent(ctx, binding, intent.ID)
-	}
-	return queued, err
+	return application.submitIndexIntent(ctx, binding, requestRef, kind)
 }
 
 func (application *operatorCodeIndexIntentComposition) GetIndexIntent(ctx context.Context, authorized uci.AuthorizedContext, intentRef string) (uci.IndexIntent, error) {
@@ -182,13 +168,11 @@ func (application *operatorCodeIndexIntentComposition) GetIndexIntent(ctx contex
 }
 
 func (application *operatorCodeIndexIntentComposition) RetryIndexIntent(ctx context.Context, authorized uci.AuthorizedContext, intentRef string) (uci.IndexIntent, error) {
-	if application == nil || application.indexIntentStore == nil {
-		return uci.IndexIntent{}, errors.New("operator code index intent composition is not configured")
+	binding, err := application.indexIntentBinding(ctx, authorized)
+	if err != nil {
+		return uci.IndexIntent{}, err
 	}
-	return application.indexIntentStore.RetryIndexIntent(ctx, intentRef, &operatorCodeIndexIntentRetryAuthorizer{
-		application: application,
-		authorized:  authorized,
-	})
+	return application.retryIndexIntent(ctx, binding, intentRef)
 }
 
 func (application *operatorCodeIndexIntentComposition) getIndexIntent(ctx context.Context, binding operatorCodeIndexIntentBinding, intentRef string) (uci.IndexIntent, error) {
@@ -214,30 +198,107 @@ func (application *operatorCodeIndexIntentComposition) indexIntentBinding(ctx co
 	if err != nil || checkout == nil || checkout.CheckoutID != ref.CheckoutID || checkout.SourceID != ref.SourceID {
 		return operatorCodeIndexIntentBinding{}, uci.ErrIndexIntentBindingMismatch
 	}
-	scope := uci.IndexScope{SourceID: ref.SourceID, CheckoutID: ref.CheckoutID, IncarnationID: checkout.IncarnationID}
-	selector, err := uci.CheckoutIndexBindingSelector(uci.RegisteredCheckoutSelector{Scope: scope, ProfileID: ref.AnalysisProfileID})
+	return application.indexIntentBindingForCheckout(ctx, uci.IndexScope{SourceID: ref.SourceID, CheckoutID: ref.CheckoutID, IncarnationID: checkout.IncarnationID}, ref.AnalysisProfileID, &ref, false)
+}
+
+// SubmitNoViewIndexIntent creates the first durable index request for a
+// server-reauthorized registered checkout. No View exists at admission.
+func (application *operatorCodeIndexIntentComposition) SubmitNoViewIndexIntent(ctx context.Context, scope uci.IndexScope, profileID, requestRef string, kind uci.IndexIntentKind) (uci.IndexIntent, error) {
+	binding, err := application.indexIntentBindingForCheckout(ctx, scope, profileID, nil, true)
+	if err != nil {
+		return uci.IndexIntent{}, err
+	}
+	return application.submitIndexIntent(ctx, binding, requestRef, kind)
+}
+
+// NoViewIndexIntentTarget returns only the server-stored scope needed to
+// reauthorize a first-index status or retry request before it is released.
+func (application *operatorCodeIndexIntentComposition) NoViewIndexIntentTarget(ctx context.Context, intentRef string) (uci.IndexScope, string, error) {
+	if application == nil || application.indexIntentStore == nil {
+		return uci.IndexScope{}, "", errors.New("operator code index intent composition is not configured")
+	}
+	intent, err := application.indexIntentStore.GetIndexIntent(ctx, intentRef)
+	if err != nil || intent.PreviousView != nil {
+		return uci.IndexScope{}, "", uci.ErrIndexIntentBindingMismatch
+	}
+	return intent.Scope, intent.ProfileID, nil
+}
+
+func (application *operatorCodeIndexIntentComposition) GetNoViewIndexIntent(ctx context.Context, scope uci.IndexScope, profileID, intentRef string) (uci.IndexIntent, error) {
+	binding, err := application.indexIntentBindingForCheckout(ctx, scope, profileID, nil, false)
+	if err != nil {
+		return uci.IndexIntent{}, err
+	}
+	return application.getIndexIntent(ctx, binding, intentRef)
+}
+
+func (application *operatorCodeIndexIntentComposition) RetryNoViewIndexIntent(ctx context.Context, scope uci.IndexScope, profileID, intentRef string) (uci.IndexIntent, error) {
+	binding, err := application.indexIntentBindingForCheckout(ctx, scope, profileID, nil, false)
+	if err != nil {
+		return uci.IndexIntent{}, err
+	}
+	return application.retryIndexIntent(ctx, binding, intentRef)
+}
+
+func (application *operatorCodeIndexIntentComposition) submitIndexIntent(ctx context.Context, binding operatorCodeIndexIntentBinding, requestRef string, kind uci.IndexIntentKind) (uci.IndexIntent, error) {
+	intent, err := application.indexIntentStore.SubmitIndexIntent(ctx, uci.IndexIntentInput{
+		RequestRef: requestRef, Kind: kind, Scope: binding.scope, ProfileID: binding.profileID, PreviousView: binding.previousView,
+	})
+	if err != nil || intent.State != uci.IndexIntentSubmitted {
+		return intent, err
+	}
+	queued, err := application.indexIntentStore.QueueIndexIntent(ctx, intent.ID)
+	if errors.Is(err, uci.ErrIndexIntentInvalidTransition) {
+		return application.getIndexIntent(ctx, binding, intent.ID)
+	}
+	return queued, err
+}
+
+func (application *operatorCodeIndexIntentComposition) retryIndexIntent(ctx context.Context, binding operatorCodeIndexIntentBinding, intentRef string) (uci.IndexIntent, error) {
+	if application == nil || application.indexIntentStore == nil {
+		return uci.IndexIntent{}, errors.New("operator code index intent composition is not configured")
+	}
+	return application.indexIntentStore.RetryIndexIntent(ctx, intentRef, &operatorCodeIndexIntentRetryAuthorizer{binding: binding})
+}
+
+func (application *operatorCodeIndexIntentComposition) indexIntentBindingForCheckout(ctx context.Context, scope uci.IndexScope, profileID string, previous *uci.ContextRef, requireNoView bool) (operatorCodeIndexIntentBinding, error) {
+	if application == nil || application.indexIntentStore == nil || application.contextStore == nil {
+		return operatorCodeIndexIntentBinding{}, errors.New("operator code index intent composition is not configured")
+	}
+	selector, err := uci.CheckoutIndexBindingSelector(uci.RegisteredCheckoutSelector{Scope: scope, ProfileID: profileID})
 	if err != nil {
 		return operatorCodeIndexIntentBinding{}, uci.ErrIndexIntentBindingMismatch
 	}
 	current, err := application.contextStore.LoadIndexBinding(ctx, selector)
-	if err != nil || current.Scope != scope || current.ProfileID != ref.AnalysisProfileID || current.Context == nil || !operatorCodeIndexIntentContextsEqual(*current.Context, ref) {
+	if err != nil || current.Scope != scope || current.ProfileID != profileID || (requireNoView && current.Context != nil) {
 		return operatorCodeIndexIntentBinding{}, uci.ErrIndexIntentBindingMismatch
 	}
-	return operatorCodeIndexIntentBinding{scope: scope, profileID: ref.AnalysisProfileID, previousView: ref}, nil
+	if previous != nil && (current.Context == nil || !operatorCodeIndexIntentContextsEqual(*current.Context, *previous)) {
+		return operatorCodeIndexIntentBinding{}, uci.ErrIndexIntentBindingMismatch
+	}
+	var previousCopy *uci.ContextRef
+	if previous != nil {
+		copy := previous.Clone()
+		previousCopy = &copy
+	}
+	return operatorCodeIndexIntentBinding{scope: scope, profileID: profileID, previousView: previousCopy}, nil
 }
 
 func (binding operatorCodeIndexIntentBinding) matches(intent uci.IndexIntent) bool {
-	return intent.Scope == binding.scope && intent.ProfileID == binding.profileID && intent.PreviousView != nil &&
-		intent.PreviousView.SourceID == binding.previousView.SourceID && intent.PreviousView.CheckoutID == binding.previousView.CheckoutID &&
+	if intent.Scope != binding.scope || intent.ProfileID != binding.profileID {
+		return false
+	}
+	if binding.previousView == nil {
+		return intent.PreviousView == nil
+	}
+	return intent.PreviousView != nil &&
+		intent.PreviousView.SourceID == binding.previousView.SourceID &&
+		intent.PreviousView.CheckoutID == binding.previousView.CheckoutID &&
 		intent.PreviousView.AnalysisProfileID == binding.previousView.AnalysisProfileID
 }
 
-func (authorizer *operatorCodeIndexIntentRetryAuthorizer) AuthorizeIndexIntentRetry(ctx context.Context, intent uci.IndexIntent) error {
-	if authorizer == nil || authorizer.application == nil {
-		return uci.ErrIndexIntentBindingMismatch
-	}
-	binding, err := authorizer.application.indexIntentBinding(ctx, authorizer.authorized)
-	if err != nil || !binding.matches(intent) {
+func (authorizer *operatorCodeIndexIntentRetryAuthorizer) AuthorizeIndexIntentRetry(_ context.Context, intent uci.IndexIntent) error {
+	if authorizer == nil || !authorizer.binding.matches(intent) {
 		return uci.ErrIndexIntentBindingMismatch
 	}
 	return nil
@@ -287,7 +348,7 @@ func (authorizer *operatorCodeServerAuthorizer) AuthorizeOperatorCode(ctx contex
 }
 
 func composeOperatorCodeHTTPAdapter(db *gormlib.DB, composition *uciContextComposition) (*OperatorCodeHTTPAdapter, error) {
-	if db == nil || composition == nil || composition.contextStore == nil || composition.resolver == nil || composition.application == nil || composition.exposureRecorder == nil || composition.indexIntentStore == nil {
+	if db == nil || composition == nil || composition.contextStore == nil || composition.resolver == nil || composition.application == nil || composition.exposureRecorder == nil || composition.indexIntentStore == nil || composition.indexTargets == nil {
 		return nil, errors.New("operator code HTTP composition requires UCI context dependencies")
 	}
 	adapter := NewOperatorCodeHTTPAdapter(
@@ -300,6 +361,7 @@ func composeOperatorCodeHTTPAdapter(db *gormlib.DB, composition *uciContextCompo
 		composition.exposureRecorder,
 	)
 	adapter.contexts = gormstore.NewBrowserCodeContextStore(db)
+	adapter.indexTargets = composition.indexTargets
 	adapter.graphSources = composition.projectionStore
 	return adapter, nil
 }
@@ -401,7 +463,8 @@ func composeUCIContext(
 		}
 		embeddingWorker = worker
 	}
-	runtime, err := grpcserver.NewContextAwareUCIRuntime(contextStore, projectionStore, publisher, indexIntentStore)
+	indexTargets := grpcserver.NewIndexIntentTargetRegistry()
+	runtime, err := grpcserver.NewContextAwareUCIRuntimeWithIndexTargets(contextStore, projectionStore, publisher, indexIntentStore, indexTargets)
 	if err != nil {
 		return nil, fmt.Errorf("create UCI runtime: %w", err)
 	}
@@ -443,6 +506,7 @@ func composeUCIContext(
 		embeddingProfile:   semantic.profilePtr,
 		embeddingWorker:    embeddingWorker,
 		runtime:            runtime,
+		indexTargets:       indexTargets,
 		handlePort:         handlePort,
 		aliasResolver:      aliasResolver,
 		exposureRecorder:   exposureRecorder,

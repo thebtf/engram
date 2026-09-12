@@ -175,6 +175,30 @@ func TestContextAwareUCIRuntimeCompositionRequiresAllStoreHandles(t *testing.T) 
 	}
 }
 
+func TestIndexIntentTargetRegistryRequiresOneFreshNoViewDaemonTarget(t *testing.T) {
+	registry := NewIndexIntentTargetRegistry()
+	now := time.Date(2026, time.September, 12, 12, 0, 0, 0, time.UTC)
+	registry.now = func() time.Time { return now }
+	binding := uciRuntimeTestBinding()
+	registry.Observe(binding)
+	resolved, found := registry.Resolve(binding.Scope.SourceID, binding.Scope.CheckoutID)
+	require.True(t, found)
+	require.Equal(t, binding, resolved)
+
+	competing := binding.Clone()
+	competing.ProfileID = uuid.NewString()
+	registry.Observe(competing)
+	_, found = registry.Resolve(binding.Scope.SourceID, binding.Scope.CheckoutID)
+	require.False(t, found, "multiple live daemon profiles must not let the browser choose one")
+
+	registry = NewIndexIntentTargetRegistry()
+	registry.now = func() time.Time { return now }
+	registry.Observe(binding)
+	now = now.Add(indexIntentTargetAdvertisementTTL)
+	_, found = registry.Resolve(binding.Scope.SourceID, binding.Scope.CheckoutID)
+	require.False(t, found, "a stale daemon target must not authorize first-index admission")
+}
+
 func TestContextAwareUCIRuntimeErrorMappingPreservesOnlyClosedBridgeStatuses(t *testing.T) {
 	for _, test := range []struct {
 		name    string

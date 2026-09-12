@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sync"
 	"time"
 
 	gormstore "github.com/thebtf/engram/internal/db/gorm"
@@ -22,6 +23,87 @@ var (
 	errUCIContextRuntimeExposure    = errors.New("UCI recorder-owned response is unavailable")
 	errUCIContextRuntimeInvalid     = errors.New("UCI context runtime request is invalid")
 )
+
+const indexIntentTargetAdvertisementTTL = 2 * time.Minute
+
+// IndexIntentTargetRegistry records only currently polling daemon targets.
+// It has no browser input, persistence, scheduler, or local-path projection.
+type IndexIntentTargetRegistry struct {
+	mu      sync.Mutex
+	targets map[indexIntentTargetKey]indexIntentTargetAdvertisement
+	now     func() time.Time
+}
+
+type indexIntentTargetKey struct {
+	scope     uci.IndexScope
+	profileID string
+}
+
+type indexIntentTargetAdvertisement struct {
+	binding  uci.IndexBinding
+	observed time.Time
+}
+
+func NewIndexIntentTargetRegistry() *IndexIntentTargetRegistry {
+	return &IndexIntentTargetRegistry{
+		targets: make(map[indexIntentTargetKey]indexIntentTargetAdvertisement),
+		now:     func() time.Time { return time.Now().UTC() },
+	}
+}
+
+// Observe accepts only a complete no-View binding which has already passed the
+// private daemon transport's authenticated target authorization.
+func (registry *IndexIntentTargetRegistry) Observe(binding uci.IndexBinding) {
+	if registry == nil || binding.Validate() != nil || binding.Context != nil {
+		return
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	now := registry.currentTime()
+	registry.prune(now)
+	registry.targets[indexIntentTargetKey{scope: binding.Scope, profileID: binding.ProfileID}] = indexIntentTargetAdvertisement{binding: binding.Clone(), observed: now}
+}
+
+// Resolve returns a binding only when exactly one live daemon target owns the
+// requested source and checkout. Ambiguity and stale advertisements fail closed.
+func (registry *IndexIntentTargetRegistry) Resolve(sourceID, checkoutID string) (uci.IndexBinding, bool) {
+	if registry == nil {
+		return uci.IndexBinding{}, false
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	now := registry.currentTime()
+	registry.prune(now)
+	var resolved uci.IndexBinding
+	for key, advertised := range registry.targets {
+		if key.scope.SourceID != sourceID || key.scope.CheckoutID != checkoutID {
+			continue
+		}
+		if resolved.Scope != (uci.IndexScope{}) {
+			return uci.IndexBinding{}, false
+		}
+		resolved = advertised.binding.Clone()
+	}
+	if resolved.Validate() != nil || resolved.Context != nil {
+		return uci.IndexBinding{}, false
+	}
+	return resolved, true
+}
+
+func (registry *IndexIntentTargetRegistry) currentTime() time.Time {
+	if registry.now != nil {
+		return registry.now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func (registry *IndexIntentTargetRegistry) prune(now time.Time) {
+	for key, advertised := range registry.targets {
+		if !advertised.observed.Add(indexIntentTargetAdvertisementTTL).After(now) {
+			delete(registry.targets, key)
+		}
+	}
+}
 
 // uciRuntimeProjectionStore is the narrow persistence boundary needed by the
 // scoped runtime. The concrete store remains the production implementation.
@@ -38,15 +120,22 @@ type contextAwareUCIRuntime struct {
 	projections uciRuntimeProjectionStore
 	publisher   uci.IndexStore
 	intents     *gormstore.UCIIndexIntentStore
+	targets     *IndexIntentTargetRegistry
 }
 
 // NewContextAwareUCIRuntime constructs the concrete scoped UCI runtime.
 func NewContextAwareUCIRuntime(contexts *gormstore.UCIContextStore, projections *gormstore.UCIProjectionStore, publisher uci.IndexStore, intents *gormstore.UCIIndexIntentStore) (ContextAwareUCIRuntime, error) {
+	return NewContextAwareUCIRuntimeWithIndexTargets(contexts, projections, publisher, intents, nil)
+}
+
+// NewContextAwareUCIRuntimeWithIndexTargets additionally records live daemon
+// no-View targets for the browser's first-index admission path.
+func NewContextAwareUCIRuntimeWithIndexTargets(contexts *gormstore.UCIContextStore, projections *gormstore.UCIProjectionStore, publisher uci.IndexStore, intents *gormstore.UCIIndexIntentStore, targets *IndexIntentTargetRegistry) (ContextAwareUCIRuntime, error) {
 	if contexts == nil || projections == nil || publisher == nil || intents == nil {
 		return nil, errUCIContextRuntimeUnavailable
 	}
 	return &contextAwareUCIRuntime{
-		contexts: contexts, projections: projections, publisher: publisher, intents: intents,
+		contexts: contexts, projections: projections, publisher: publisher, intents: intents, targets: targets,
 	}, nil
 }
 
@@ -72,6 +161,9 @@ func (runtime *contextAwareUCIRuntime) PollCodeIndexIntents(ctx context.Context,
 	if err := runtime.require(ctx); err != nil {
 		return nil, err
 	}
+	if runtime.targets != nil {
+		runtime.targets.Observe(binding)
+	}
 	if request == nil || request.GetTarget() == nil {
 		return nil, errUCIContextRuntimeInvalid
 	}
@@ -84,11 +176,13 @@ func (runtime *contextAwareUCIRuntime) PollCodeIndexIntents(ctx context.Context,
 	if intent == nil {
 		return response, nil
 	}
-	if intent.PreviousView == nil {
-		return nil, errUCIContextRuntimeInvalid
-	}
 	offer := &pb.CodeIndexIntentOffer{
-		IntentRef: intent.ID, Kind: string(intent.Kind), PreviousContext: contextAwareProtoContextRef(*intent.PreviousView), State: string(intent.State),
+		IntentRef: intent.ID,
+		Kind:      string(intent.Kind),
+		State:     string(intent.State),
+	}
+	if intent.PreviousView != nil {
+		offer.PreviousContext = contextAwareProtoContextRef(*intent.PreviousView)
 	}
 	if intent.Acknowledgement != nil {
 		offer.OwnerEpoch = uint64(intent.Acknowledgement.Epoch)

@@ -49,6 +49,26 @@ type BrowserCodeContextPin struct {
 	DocumentProofDigest []byte
 	Context             uci.ContextRef
 }
+// BrowserCodeIndexIntentTarget contains the only browser-carried target facts
+// for an initial index request. Realm, owner, incarnation, and paths are
+// deliberately derived in the same server transaction.
+type BrowserCodeIndexIntentTarget struct {
+	Caller              BrowserTabBindingCaller
+	TabBindingID        string
+	DocumentProofDigest []byte
+	SourceID            string
+	CheckoutID          string
+	ProfileID           string
+}
+
+// BrowserCodeIndexIntentBinding is the server-derived durable intent scope.
+// It intentionally omits every workstation-local selector.
+type BrowserCodeIndexIntentBinding struct {
+	Scope     uci.IndexScope
+	ProfileID string
+	AuthRealm string
+}
+
 
 // BrowserCodeSearchContinuation is an internal server-owned cursor. It stores
 // only normalized request digests and the application continuation, never raw
@@ -244,6 +264,48 @@ func (s *BrowserCodeContextStore) Pin(ctx context.Context, in BrowserCodeContext
 		}
 		return nil
 	})
+}
+// AuthorizeInitialIndexIntent atomically rechecks the current browser document,
+// active grant, source realm, registered checkout, and configured profile before
+// admitting an intent for a checkout that has not yet published a View.
+func (s *BrowserCodeContextStore) AuthorizeInitialIndexIntent(ctx context.Context, in BrowserCodeIndexIntentTarget) (BrowserCodeIndexIntentBinding, error) {
+	return s.authorizeIndexIntentTarget(ctx, in, true)
+}
+
+// ReauthorizeIndexIntent atomically rechecks the browser and target tuple for
+// status/retry. Unlike initial admission it keeps working after first publication.
+func (s *BrowserCodeContextStore) ReauthorizeIndexIntent(ctx context.Context, in BrowserCodeIndexIntentTarget) (BrowserCodeIndexIntentBinding, error) {
+	return s.authorizeIndexIntentTarget(ctx, in, false)
+}
+
+func (s *BrowserCodeContextStore) authorizeIndexIntentTarget(ctx context.Context, in BrowserCodeIndexIntentTarget, requireNoView bool) (BrowserCodeIndexIntentBinding, error) {
+	if err := s.requireDB("authorize index intent"); err != nil {
+		return BrowserCodeIndexIntentBinding{}, err
+	}
+	if err := validateBrowserCodeIndexIntentTarget(ctx, in); err != nil {
+		return BrowserCodeIndexIntentBinding{}, err
+	}
+	if s.bindings == nil {
+		return BrowserCodeIndexIntentBinding{}, errBrowserTabBindingStoreNotConfigured
+	}
+
+	guard := BrowserTabBindingGuard{
+		Caller:              in.Caller,
+		TabBindingID:        in.TabBindingID,
+		DocumentProofDigest: append([]byte(nil), in.DocumentProofDigest...),
+	}
+	var binding BrowserCodeIndexIntentBinding
+	err := s.bindings.mutateLiveLease(ctx, guard, func(tx *gorm.DB, _ BrowserTabBinding, now time.Time) error {
+		grant, err := loadBrowserCodeActiveGrant(ctx, tx, in.Caller.SubjectUserID, in.SourceID, in.CheckoutID, now)
+		if err != nil {
+			return err
+		}
+		return browserCodeIndexIntentTargetExists(ctx, tx, in, grant.AuthRealm, requireNoView, &binding)
+	})
+	if err != nil {
+		return BrowserCodeIndexIntentBinding{}, err
+	}
+	return binding, nil
 }
 
 // LoadContinuation returns the private application cursor only while the
@@ -449,6 +511,64 @@ func browserCodePublishedContextExists(ctx context.Context, tx *gorm.DB, ref uci
 	}
 	if result.RowsAffected != 1 || found != 1 {
 		return ErrBrowserCodeContextDenied
+	}
+	return nil
+}
+
+func browserCodeIndexIntentTargetExists(ctx context.Context, tx *gorm.DB, in BrowserCodeIndexIntentTarget, authRealm string, requireNoView bool, binding *BrowserCodeIndexIntentBinding) error {
+	if binding == nil {
+		return ErrBrowserCodeContextDenied
+	}
+	noViewPredicate := ""
+	if requireNoView {
+		noViewPredicate = " AND checkout.current_view_id IS NULL"
+	}
+	var row struct {
+		IncarnationID string `gorm:"column:incarnation_id"`
+		AuthRealm     string `gorm:"column:auth_realm"`
+	}
+	result := tx.WithContext(ctx).Raw(`
+		SELECT checkout.incarnation_id, source.auth_realm
+		FROM sources AS source
+		JOIN ci_checkouts AS checkout ON checkout.source_id = source.source_id
+		JOIN ci_profiles AS profile ON profile.profile_id = ?
+		WHERE source.source_id = ?
+			AND checkout.checkout_id = ?
+			AND source.auth_realm = ?
+			AND source.state = ?
+			AND checkout.state IN (?, ?, ?)`+noViewPredicate+`
+		FOR KEY SHARE
+	`, in.ProfileID, in.SourceID, in.CheckoutID, authRealm, UCISourceActive,
+		UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp).Scan(&row)
+	if result.Error != nil {
+		return fmt.Errorf("browser code index intent target: %w", result.Error)
+	}
+	if result.RowsAffected != 1 || validateUCIUUID("incarnation_id", row.IncarnationID) != nil || !validBrowserCodeText(row.AuthRealm, 256) {
+		return ErrBrowserCodeContextDenied
+	}
+	*binding = BrowserCodeIndexIntentBinding{
+		Scope:     uci.IndexScope{SourceID: in.SourceID, CheckoutID: in.CheckoutID, IncarnationID: row.IncarnationID},
+		ProfileID: in.ProfileID,
+		AuthRealm: row.AuthRealm,
+	}
+	return nil
+}
+
+func validateBrowserCodeIndexIntentTarget(ctx context.Context, in BrowserCodeIndexIntentTarget) error {
+	if ctx == nil || ctx.Err() != nil || !validBrowserTabBindingCaller(in.Caller) || !validBrowserTabBindingID(in.TabBindingID) || !validBrowserTabBindingDigest(in.DocumentProofDigest) {
+		return ErrBrowserCodeContextDenied
+	}
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{"source_id", in.SourceID},
+		{"checkout_id", in.CheckoutID},
+		{"profile_id", in.ProfileID},
+	} {
+		if validateUCIUUID(field.name, field.value) != nil {
+			return ErrBrowserCodeContextDenied
+		}
 	}
 	return nil
 }
