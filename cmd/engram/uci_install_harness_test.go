@@ -128,6 +128,8 @@ func TestUCIInstallHarnessBoundsReadinessAndPropagatesCancellation(t *testing.T)
 		installRoot := filepath.Join(t.TempDir(), "UCI caller cancellation Кириллица")
 		auditDir := t.TempDir()
 		request := uciInstallHarnessTestRequest(t, installRoot, auditDir, "stall", 4*time.Second)
+		driverStarted := make(chan struct{})
+		request.MCPDriver = uciInstallHarnessStartedProbe{started: driverStarted}
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
 		completed := false
@@ -146,6 +148,14 @@ func TestUCIInstallHarnessBoundsReadinessAndPropagatesCancellation(t *testing.T)
 			done <- err
 		}()
 
+		select {
+		case <-driverStarted:
+		case err := <-done:
+			completed = true
+			t.Fatalf("install harness stopped before MCP driver started: %v", err)
+		case <-time.After(request.ReadinessTimeout + uciInstallHarnessReadinessRaceHeadroom):
+			t.Fatal("install harness did not reach its MCP driver")
+		}
 		uciWaitForInstallHarnessAudit(t, auditDir, "daemon")
 		cancel()
 		select {
@@ -237,6 +247,15 @@ type uciInstallHarnessMCPProbe struct{}
 // uciInstallHarnessDeadlineProbe observes only the driver's readiness window.
 type uciInstallHarnessDeadlineProbe struct {
 	elapsed chan<- time.Duration
+}
+
+type uciInstallHarnessStartedProbe struct {
+	started chan<- struct{}
+}
+
+func (probe uciInstallHarnessStartedProbe) InitializeAndList(ctx context.Context, process uciMCPStdioProcess) ([]string, error) {
+	close(probe.started)
+	return (uciInstallHarnessMCPProbe{}).InitializeAndList(ctx, process)
 }
 
 func (probe uciInstallHarnessDeadlineProbe) InitializeAndList(ctx context.Context, process uciMCPStdioProcess) ([]string, error) {
