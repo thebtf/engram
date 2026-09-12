@@ -193,7 +193,7 @@ export class MCPStdioClient {
         incarnation_id: target.incarnationId,
         source_id: target.sourceId,
       },
-    }))
+    }, 'proxy'))
     const contextHandle = Reflect.get(selected, 'context_handle')
     if (
       Reflect.get(selected, 'binding_kind') !== 'checkout'
@@ -202,11 +202,11 @@ export class MCPStdioClient {
       || Reflect.get(selected, 'checkout_id') !== target.checkoutId
       || Reflect.get(selected, 'incarnation_id') !== target.incarnationId
       || Reflect.get(selected, 'analysis_profile_id') !== target.analysisProfileId
-      || Reflect.get(selected, 'context') !== undefined
+      || Reflect.get(selected, 'context') !== null
     ) {
       throw new Error('external MCP client did not retain the no-view checkout binding')
     }
-    const status = record(await this.callTool('codebase_status', { context_handle: contextHandle }))
+    const status = record(await this.callTool('codebase_status', { context_handle: contextHandle }, 'direct'))
     if (Reflect.get(status, 'current_context') !== null || Reflect.get(status, 'server_counts_available') !== false) {
       throw new Error('external MCP client did not prepare a no-view index target')
     }
@@ -295,20 +295,39 @@ export class MCPStdioClient {
     await this.writeFrame({ jsonrpc: '2.0', method, params })
   }
 
-  private async callTool(name: string, arguments_: Record<string, unknown>): Promise<unknown> {
-    const result = await this.request('tools/call', { arguments: arguments_, name })
-    const envelope = record(result)
-    if (Reflect.get(envelope, 'isError') === true) throw new Error(`external MCP client ${name} returned a tool error`)
+  private async callTool(name: string, arguments_: Record<string, unknown>, shape: 'direct' | 'proxy'): Promise<unknown> {
+    const envelope = record(await this.request('tools/call', { arguments: arguments_, name }))
+    const envelopeKeys = Object.keys(envelope).sort().join(',')
     const content = Reflect.get(envelope, 'content')
-    if (!Array.isArray(content) || content.length !== 1) throw new Error(`external MCP client ${name} returned an invalid tool envelope`)
+    if (envelopeKeys !== 'content,isError' || Reflect.get(envelope, 'isError') !== false || !Array.isArray(content) || content.length !== 1) {
+      throw new Error(`external MCP client ${name} returned an invalid tool envelope`)
+    }
+    if (shape === 'direct') return content[0]
     const block = record(content[0])
-    if (Reflect.get(block, 'type') !== 'text' || typeof Reflect.get(block, 'text') !== 'string') {
+    if (Object.keys(block).sort().join(',') !== 'text,type' || Reflect.get(block, 'type') !== 'text' || typeof Reflect.get(block, 'text') !== 'string') {
       throw new Error(`external MCP client ${name} returned an invalid tool content block`)
     }
+    let proxyEnvelope: Record<string, unknown>
     try {
-      return JSON.parse(Reflect.get(block, 'text') as string)
+      proxyEnvelope = record(JSON.parse(Reflect.get(block, 'text') as string))
     } catch {
-      throw new Error(`external MCP client ${name} returned non-JSON tool content`)
+      throw new Error(`external MCP client ${name} returned a non-JSON proxy envelope`)
+    }
+    const proxyKeys = Object.keys(proxyEnvelope).sort().join(',')
+    const proxyContent = Reflect.get(proxyEnvelope, 'content')
+    const proxyIsError = Reflect.get(proxyEnvelope, 'isError')
+    if ((proxyKeys !== 'content' && proxyKeys !== 'content,isError') || (proxyIsError !== undefined && typeof proxyIsError !== 'boolean') || !Array.isArray(proxyContent) || proxyContent.length !== 1) {
+      throw new Error(`external MCP client ${name} returned an invalid proxy tool envelope`)
+    }
+    if (proxyIsError === true) throw new Error(`external MCP client ${name} returned a proxy tool error`)
+    const proxyBlock = record(proxyContent[0])
+    if (Object.keys(proxyBlock).sort().join(',') !== 'text,type' || Reflect.get(proxyBlock, 'type') !== 'text' || typeof Reflect.get(proxyBlock, 'text') !== 'string') {
+      throw new Error(`external MCP client ${name} returned an invalid proxy tool content block`)
+    }
+    try {
+      return JSON.parse(Reflect.get(proxyBlock, 'text') as string)
+    } catch {
+      throw new Error(`external MCP client ${name} returned non-JSON proxy tool content`)
     }
   }
 
