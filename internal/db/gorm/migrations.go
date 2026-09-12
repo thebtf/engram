@@ -6722,8 +6722,9 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			},
 			Rollback: rollbackUCIIndexIntentsMigration179,
 		},
-		// Migration 180 adds the fenced daemon claim lease, exact update receipts,
-		// and the one-to-one publication build link used for atomic completion.
+		// Migration 180 adds checkout/profile referential integrity, the fenced daemon
+		// claim lease, exact update receipts, and the one-to-one publication build link
+		// used for atomic completion.
 		{
 			ID: "180_uci_index_intent_delivery",
 			Migrate: func(tx *gorm.DB) error {
@@ -6734,6 +6735,13 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 					`UPDATE uci_index_intents
 					 SET claim_expires_at = GREATEST(updated_at, acknowledged_at) + INTERVAL '1 microsecond'
 					 WHERE acknowledged_owner IS NOT NULL`,
+					`ALTER TABLE uci_index_intents DROP CONSTRAINT IF EXISTS uci_index_intents_checkout_source_incarnation_fkey`,
+					`ALTER TABLE uci_index_intents ADD CONSTRAINT uci_index_intents_checkout_source_incarnation_fkey
+						FOREIGN KEY (checkout_id, source_id, incarnation_id)
+						REFERENCES ci_checkouts (checkout_id, source_id, incarnation_id)`,
+					`ALTER TABLE uci_index_intents DROP CONSTRAINT IF EXISTS uci_index_intents_profile_fkey`,
+					`ALTER TABLE uci_index_intents ADD CONSTRAINT uci_index_intents_profile_fkey
+						FOREIGN KEY (profile_id) REFERENCES ci_profiles (profile_id)`,
 					`ALTER TABLE uci_index_intents DROP CONSTRAINT IF EXISTS uci_index_intents_acknowledgement_shape_chk`,
 					`ALTER TABLE uci_index_intents ADD CONSTRAINT uci_index_intents_acknowledgement_shape_chk CHECK (
 						(state IN ('acknowledged', 'running', 'completed', 'failed')

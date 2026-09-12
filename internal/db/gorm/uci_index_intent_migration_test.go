@@ -155,6 +155,8 @@ func TestUCIIndexIntentMigration180BackfillsLegacyClaimsAsExpired(t *testing.T) 
 
 	require.NoError(t, db.Exec("DELETE FROM migrations WHERE id = ?", uciIndexIntentDeliveryMigrationID).Error)
 	require.NoError(t, db.Exec("DROP TABLE uci_index_intent_receipts").Error)
+	require.NoError(t, db.Exec("ALTER TABLE uci_index_intents DROP CONSTRAINT uci_index_intents_checkout_source_incarnation_fkey").Error)
+	require.NoError(t, db.Exec("ALTER TABLE uci_index_intents DROP CONSTRAINT uci_index_intents_profile_fkey").Error)
 	require.NoError(t, db.Exec("ALTER TABLE uci_index_intents DROP CONSTRAINT uci_index_intents_acknowledgement_shape_chk").Error)
 	require.NoError(t, db.Exec("ALTER TABLE uci_index_intents DROP COLUMN claim_expires_at").Error)
 	require.NoError(t, db.Exec("ALTER TABLE uci_index_intents DROP COLUMN publication_build_id").Error)
@@ -163,6 +165,7 @@ func TestUCIIndexIntentMigration180BackfillsLegacyClaimsAsExpired(t *testing.T) 
 
 	require.NoError(t, runMigrations(db), "migration 180 must upgrade pre-delivery acknowledged records")
 	assertUCIIndexIntentDeliveryMigrationApplied(t, db, 1)
+	assertUCIIndexIntentMigrationSchema(t, db)
 	var restored indexIntentRow
 	require.NoError(t, db.Where("intent_id = ?", legacy.IntentID).First(&restored).Error)
 	require.NotNil(t, restored.AcknowledgedAt)
@@ -229,6 +232,8 @@ func assertUCIIndexIntentMigrationSchema(t *testing.T, db *gormlib.DB) {
 	assertUCIIndexIntentMigrationConstraint(t, db, "uci_index_intents_result_view_shape_chk", "result_view_id", "result_generation")
 	assertUCIIndexIntentMigrationConstraint(t, db, "uci_index_intents_completed_result_chk", "completed", "result_view_id", "result_generation")
 	assertUCIIndexIntentMigrationConstraint(t, db, "uci_index_intents_timestamps_chk", "updated_at >= created_at")
+	assertUCIIndexIntentMigrationConstraint(t, db, "uci_index_intents_checkout_source_incarnation_fkey", "foreign key", "references ci_checkouts", "checkout_id", "source_id", "incarnation_id")
+	assertUCIIndexIntentMigrationConstraint(t, db, "uci_index_intents_profile_fkey", "foreign key", "references ci_profiles", "profile_id")
 
 	assertUCIIndexIntentMigrationIndex(t, db, "uci_index_intents_request_ref", "unique", "request_ref")
 	assertUCIIndexIntentMigrationIndex(t, db, "idx_uci_index_intents_owner_state", "acknowledged_owner", "state", "updated_at", "where")
@@ -242,6 +247,14 @@ func assertUCIIndexIntentMigrationConstraintFailures(t *testing.T, fixture *uciP
 	require.NoError(t, fixture.db.Create(&valid).Error)
 
 	invalid := newUCIIndexIntentMigrationRow(fixture)
+	invalid.SourceID = uuid.NewString()
+	require.Error(t, fixture.db.Create(&invalid).Error, "intent scope must match an existing checkout identity")
+
+	invalid = newUCIIndexIntentMigrationRow(fixture)
+	invalid.ProfileID = uuid.NewString()
+	require.Error(t, fixture.db.Create(&invalid).Error, "intent profile must exist")
+
+	invalid = newUCIIndexIntentMigrationRow(fixture)
 	invalid.RequestRef = valid.RequestRef
 	require.Error(t, fixture.db.Create(&invalid).Error, "request references must remain unique")
 
