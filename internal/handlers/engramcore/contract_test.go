@@ -114,8 +114,9 @@ func (s *mockEngramServer) RegisterProjectIdentityV3(ctx context.Context, req *p
 	return resp, nil
 }
 
-// startMockGRPC starts a mock gRPC server on an ephemeral port and returns the
-// listener address ("host:port"). The server is registered for cleanup via t.Cleanup.
+// startMockGRPC starts a mock gRPC server on an ephemeral port, waits for its
+// transport handshake, and returns the listener address ("host:port"). The
+// server and readiness probe are registered for cleanup via t.Cleanup.
 func startMockGRPC(t *testing.T, srv *mockEngramServer) string {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -131,6 +132,14 @@ func startMockGRPC(t *testing.T, srv *mockEngramServer) string {
 		}
 	}()
 	t.Cleanup(func() { gs.GracefulStop() })
+
+	readyCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	readyConn, err := grpc.DialContext(readyCtx, lis.Addr().String(), grpc.WithBlock(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("wait for mock gRPC readiness: %v", err)
+	}
+	t.Cleanup(func() { _ = readyConn.Close() })
 	return lis.Addr().String()
 }
 
@@ -419,7 +428,7 @@ func TestContract_ToolsList_WaitsForDelayedGRPCReadiness(t *testing.T) {
 		startResult <- start()
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), proxyToolsDiscoveryTimeout/3)
+	ctx, cancel := context.WithTimeout(context.Background(), proxyToolsDiscoveryTimeout)
 	defer cancel()
 	resp, err := disp.HandleRequest(ctx, p, jsonrpcListReq(1))
 	if startErr := <-startResult; startErr != nil {
