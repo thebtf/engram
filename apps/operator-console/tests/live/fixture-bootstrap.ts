@@ -90,6 +90,7 @@ export interface LiveFixtureState {
   }
   mcp: {
     clientBinary: string
+    clientBinarySha256: string
     clientRoots: {
       a: string
       b: string
@@ -138,6 +139,7 @@ interface FirstIndexMCPFixture {
   clientRoot: string
   keycardFile: string
   parserBundleDigest: string
+  parserExecutableSha256: string
   parserExecutable: string
 }
 
@@ -268,12 +270,14 @@ class LiveFixture implements FixtureController {
         },
         mcp: {
           clientBinary,
+          clientBinarySha256: createHash('sha256').update(await readFile(clientBinary)).digest('hex'),
           clientRoots: { a: worktrees.a.root, b: worktrees.b.root, c: worktrees.c.root },
           firstIndex: {
             clientRoot: worktrees.c.root,
             keycardFile: operatorCodeFirstIndex.keycardFile,
             parserBundleDigest: operatorCodeFirstIndex.fixture.parserBundleDigest,
             parserExecutable: parserBinary,
+            parserExecutableSha256: createHash('sha256').update(await readFile(parserBinary)).digest('hex'),
           },
         },
         traffic: this.traffic,
@@ -369,13 +373,17 @@ class LiveFixture implements FixtureController {
   }
 
   private async buildMCPClient(): Promise<string> {
-    const binary = join(this.fixtureRoot, process.platform === 'win32' ? 'engram-mcp-client.exe' : 'engram-mcp-client')
+    const clientDir = join(this.fixtureRoot, 'mcp-install', 'client')
+    await mkdir(clientDir, { recursive: true, mode: 0o700 })
+    const binary = join(clientDir, process.platform === 'win32' ? 'engram.exe' : 'engram')
     await execute('go', ['build', '-o', binary, './cmd/engram'], repositoryRoot)
     return binary
   }
 
   private async buildMCPParser(): Promise<string> {
-    const binary = join(this.fixtureRoot, process.platform === 'win32' ? 'operator-code-uci-parser.exe' : 'operator-code-uci-parser')
+    const parserDir = join(this.fixtureRoot, 'mcp-install', 'parser')
+    await mkdir(parserDir, { recursive: true, mode: 0o700 })
+    const binary = join(parserDir, process.platform === 'win32' ? 'parser.exe' : 'parser')
     await execute('go', ['build', '-o', binary, './tools/uci-parser'], repositoryRoot)
     return binary
   }

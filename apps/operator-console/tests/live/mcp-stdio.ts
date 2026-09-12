@@ -34,6 +34,8 @@ export interface MCPStdioClientOptions {
 }
 
 export interface MCPStdioTranscript {
+  daemonExecutable: string
+  daemonExecutableSha256: string
   daemonGeneration: string
   daemonPID: number
   externalPID: number
@@ -53,8 +55,16 @@ interface PendingRequest {
 }
 
 interface MuxDaemonIdentity {
+  executable: string
+  executableSha256: string
   generation: string
   pid: number
+}
+
+interface MuxDaemonStatus {
+  generation: string
+  pid: number
+  shuttingDown: boolean
 }
 
 export class MCPStdioClient {
@@ -198,6 +208,8 @@ export class MCPStdioClient {
     const pid = this.child.pid
     if (pid === undefined || pid <= 0) throw new Error('external MCP client lost its process identity')
     return {
+      daemonExecutable: this.daemon?.executable ?? '',
+      daemonExecutableSha256: this.daemon?.executableSha256 ?? '',
       daemonGeneration: this.daemon?.generation ?? '',
       daemonPID: this.daemon?.pid ?? 0,
       externalPID: pid,
@@ -380,18 +392,25 @@ async function readMuxDaemonIdentity(controlPath: string, expectedExecutable: st
   let lastError = 'daemon control did not respond'
   while (Date.now() < deadline) {
     try {
-      const identity = await readMuxDaemonStatus(controlPath)
+      const status = await readMuxDaemonStatus(controlPath)
+      if (status.shuttingDown) throw new Error('external MCP daemon control returned invalid live metadata')
       const marker = responseRecord(JSON.parse(await readFile(`${controlPath}.marker.json`, 'utf8')))
       const executable = Reflect.get(marker, 'exe')
+      const executablePath = typeof executable === 'string' && executable !== '' ? resolve(executable) : ''
       if (
-        marker.pid !== identity.pid
-        || marker.daemon_generation !== identity.generation
-        || typeof executable !== 'string' || executable === ''
-        || resolve(executable).toLowerCase() !== resolve(expectedExecutable).toLowerCase()
+        marker.pid !== status.pid
+        || marker.daemon_generation !== status.generation
+        || executablePath === ''
+        || executablePath.toLowerCase() !== resolve(expectedExecutable).toLowerCase()
       ) {
         throw new Error('daemon marker does not match the launched client executable and live control metadata')
       }
-      return identity
+      return {
+        executable: executablePath,
+        executableSha256: createHash('sha256').update(await readFile(executablePath)).digest('hex'),
+        generation: status.generation,
+        pid: status.pid,
+      }
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error)
       await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 50))
@@ -400,27 +419,30 @@ async function readMuxDaemonIdentity(controlPath: string, expectedExecutable: st
   throw new Error(`external MCP daemon did not publish verified control metadata: ${lastError}`)
 }
 
-async function readMuxDaemonStatus(controlPath: string): Promise<MuxDaemonIdentity> {
+async function readMuxDaemonStatus(controlPath: string): Promise<MuxDaemonStatus> {
   const response = responseRecord(await sendMuxControlRequest(controlPath, { cmd: 'status' }))
   if (response.ok !== true) throw new Error('daemon control rejected status request')
-  return muxDaemonIdentity(responseRecord(response.data))
+  return muxDaemonStatus(responseRecord(response.data))
 }
 
-function muxDaemonIdentity(status: Record<string, unknown>): MuxDaemonIdentity {
+function muxDaemonStatus(status: Record<string, unknown>): MuxDaemonStatus {
   const pid = status.pid
   const generation = status.daemon_generation
   const shuttingDown = status.shutting_down
-  if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0 || typeof generation !== 'string' || generation === '' || shuttingDown === true) {
-    throw new Error('external MCP daemon control returned invalid live metadata')
+  if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0 || typeof generation !== 'string' || generation === '' || typeof shuttingDown !== 'boolean') {
+    throw new Error('external MCP daemon control returned invalid metadata')
   }
-  return { generation, pid }
+  return { generation, pid, shuttingDown }
 }
 
-async function waitForMuxDaemonStop(controlPath: string): Promise<void> {
+async function waitForMuxDaemonStop(controlPath: string, daemon: MuxDaemonIdentity): Promise<void> {
   const deadline = Date.now() + PROCESS_STOP_TIMEOUT_MS
   while (Date.now() < deadline) {
     try {
-      await readMuxDaemonStatus(controlPath)
+      const current = await readMuxDaemonStatus(controlPath)
+      if (current.pid !== daemon.pid || current.generation !== daemon.generation) {
+        throw new Error('external MCP daemon control metadata changed during shutdown')
+      }
     } catch (error) {
       if (error instanceof MuxControlUnavailableError) return
       throw error
@@ -431,19 +453,15 @@ async function waitForMuxDaemonStop(controlPath: string): Promise<void> {
 }
 
 async function stopRetainedMuxDaemon(controlPath: string, daemon: MuxDaemonIdentity): Promise<boolean> {
-  let current: MuxDaemonIdentity
-  try {
-    current = await readMuxDaemonStatus(controlPath)
-  } catch (error) {
-    if (error instanceof MuxControlUnavailableError) return true
-    throw error
-  }
+  const current = await readMuxDaemonStatus(controlPath)
   if (current.pid !== daemon.pid || current.generation !== daemon.generation) {
     throw new Error('external MCP daemon control metadata changed before shutdown')
   }
-  const response = responseRecord(await sendMuxControlRequest(controlPath, { cmd: 'shutdown', drain_timeout_ms: 2_000 }))
-  if (response.ok !== true) throw new Error('external MCP daemon rejected graceful shutdown')
-  await waitForMuxDaemonStop(controlPath)
+  if (!current.shuttingDown) {
+    const response = responseRecord(await sendMuxControlRequest(controlPath, { cmd: 'shutdown', drain_timeout_ms: 2_000 }))
+    if (response.ok !== true) throw new Error('external MCP daemon rejected graceful shutdown')
+  }
+  await waitForMuxDaemonStop(controlPath, daemon)
   return true
 }
 
