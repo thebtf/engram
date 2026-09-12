@@ -96,6 +96,10 @@ export interface LiveFixtureState {
       b: string
       c: string
     }
+    registration: {
+      clientRoot: string
+      keycardFile: string
+    }
     firstIndex: FirstIndexMCPFixture
   }
   traffic: RouteTraffic[]
@@ -160,6 +164,7 @@ class LiveFixture implements FixtureController {
   private readonly browserPassword = `Live-${randomBytes(24).toString('base64url')}`
   private readonly browserPasswordB = `Live-${randomBytes(24).toString('base64url')}`
   private readonly adminToken = randomBytes(32).toString('base64url')
+  private readonly projectAnchorID = randomUUID()
   private readonly browserEmail = `${this.fixtureId}@fixture.invalid`
   private readonly browserEmailB = `${this.fixtureId}-b@fixture.invalid`
   private fixtureRoot = ''
@@ -225,6 +230,8 @@ class LiveFixture implements FixtureController {
       const operatorCodeB = await this.provisionOperatorCode(postgres.dsn, worktrees.b, 'b', this.browserEmailB, this.browserPasswordB)
       const appUrl = await this.startConsole(apiUrl)
       await this.awaitReady(`${appUrl}/settings`, this.console, 'built Nuxt console')
+      const registrationKeycardFile = join(this.fixtureRoot, 'project-identity-registration.keycard')
+      await writeFile(registrationKeycardFile, `${this.adminToken}\n`, { encoding: 'utf8', mode: 0o600 })
 
       const state: LiveFixtureState = {
         schema: STATE_SCHEMA,
@@ -278,6 +285,10 @@ class LiveFixture implements FixtureController {
             parserBundleDigest: operatorCodeFirstIndex.fixture.parserBundleDigest,
             parserExecutable: parserBinary,
             parserExecutableSha256: createHash('sha256').update(await readFile(parserBinary)).digest('hex'),
+          },
+          registration: {
+            clientRoot: worktrees.a.root,
+            keycardFile: registrationKeycardFile,
           },
         },
         traffic: this.traffic,
@@ -539,7 +550,12 @@ class LiveFixture implements FixtureController {
     for (const name of ['target.ts', 'relay.ts', 'CurrentSlicePanel.tsx']) {
       await writeFile(join(destination, name), await readFile(join(sourceRoot, name)))
     }
-    await writeFile(join(root, '.engram-project'), `${JSON.stringify({ name: marker }, null, 2)}\n`)
+    await writeFile(join(root, '.engram-project'), `${JSON.stringify({
+      version: 3,
+      project_id: this.projectAnchorID,
+      name: `${this.fixtureId}-repository`,
+      scope: 'repository',
+    }, null, 2)}\n`)
     const searchPages = Array.from({ length: 11 }, (_, index) => `
 func CodeExplorerFixtureAPage${index + 1}() string {
 	return "CodeExplorerFixtureA"

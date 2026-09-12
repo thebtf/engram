@@ -113,6 +113,7 @@ test('S4 live first-index uses the real C-worktree daemon pump', async ({ browse
   let firstIndexSubmitted = false
   let intentRef: string | null = null
   let resultViewId: string | null = null
+  let registrationClient: MCPStdioClient | undefined
   let offlineClient: MCPStdioClient | undefined
   let liveClient: MCPStdioClient | undefined
 
@@ -148,6 +149,18 @@ test('S4 live first-index uses the real C-worktree daemon pump', async ({ browse
     await login(page, fixture)
     const keycard = (await readFile(fixture.mcp.firstIndex.keycardFile, 'utf8')).trim()
     expect(keycard).not.toBe('')
+    const registrationKeycard = (await readFile(fixture.mcp.registration.keycardFile, 'utf8')).trim()
+    expect(registrationKeycard).not.toBe('')
+    registrationClient = await MCPStdioClient.start({
+      clientRoot: fixture.mcp.registration.clientRoot,
+      executable: fixture.mcp.clientBinary,
+      serverURL: fixture.backend.baseUrl,
+      token: registrationKeycard,
+    })
+    await registrationClient.initializeAndList()
+    await registrationClient.registerProjectIdentity()
+    await registrationClient.close()
+    transcripts.push(registrationClient.transcript())
 
     offlineClient = await MCPStdioClient.start({
       clientRoot: fixture.mcp.firstIndex.clientRoot,
@@ -282,8 +295,8 @@ test('S4 live first-index uses the real C-worktree daemon pump', async ({ browse
     await result.getByTestId('code-search-source').click()
     await expect(page.getByTestId('code-source-result')).toContainText(fixture.operatorCodeFirstIndex.expectedMarker)
   } finally {
-    await Promise.all([offlineClient?.close(), liveClient?.close()])
-    for (const client of [offlineClient, liveClient]) {
+    await Promise.all([registrationClient?.close(), offlineClient?.close(), liveClient?.close()])
+    for (const client of [registrationClient, offlineClient, liveClient]) {
       if (client === undefined) continue
       const transcript = client.transcript()
       if (!transcripts.some((candidate) => candidate.externalPID === transcript.externalPID)) transcripts.push(transcript)

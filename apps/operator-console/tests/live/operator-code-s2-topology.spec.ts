@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
 import type { Browser, BrowserContext, Page } from '@playwright/test'
 import { browserUserID, intervalsOverlap, issueReadOnlyKeycard, observeOperation } from './agent-topology'
@@ -139,6 +140,7 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
   }
   let a: CodeTab | undefined
   let b: CodeTab | undefined
+  let registrationClient: MCPStdioClient | undefined
   let mcpA: MCPStdioClient | undefined
   let mcpB: MCPStdioClient | undefined
 
@@ -147,6 +149,18 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
     expect(fixture.candidate.commit).toBe(fixture.backend.sourceCommit)
     expect(fixture.worktrees.a.head).not.toBe(fixture.worktrees.b.head)
     expect(fixture.worktrees.a.fixtureSourceSha256).not.toBe(fixture.worktrees.b.fixtureSourceSha256)
+    const registrationKeycard = (await readFile(fixture.mcp.registration.keycardFile, 'utf8')).trim()
+    expect(registrationKeycard).not.toBe('')
+    registrationClient = await MCPStdioClient.start({
+      clientRoot: fixture.mcp.registration.clientRoot,
+      executable: fixture.mcp.clientBinary,
+      serverURL: fixture.backend.baseUrl,
+      token: registrationKeycard,
+    })
+    await registrationClient.initializeAndList()
+    await registrationClient.registerProjectIdentity()
+    await registrationClient.close()
+    lifecycle.projectIdentityRegistration = registrationClient.transcript()
 
     const tabA = await pinAndRead(browser, fixture, fixture.browserCredential, aScenario, traffic)
     const tabB = await pinAndRead(browser, fixture, fixture.browserCredentialB, bScenario, traffic)
@@ -332,8 +346,8 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
     lifecycle.acknowledgedClose = ['A', 'B']
     lifecycle.replayedProof = 'denied_without_body'
   } finally {
-    await Promise.all([mcpA?.close(), mcpB?.close()])
-    const externalMCP = [mcpA, mcpB].flatMap((client) => client === undefined ? [] : [client.transcript()])
+    await Promise.all([registrationClient?.close(), mcpA?.close(), mcpB?.close()])
+    const externalMCP = [registrationClient, mcpA, mcpB].flatMap((client) => client === undefined ? [] : [client.transcript()])
     for (const transcript of externalMCP) {
       expect(transcript.daemonExecutable).toBe(fixture.mcp.clientBinary)
       expect(transcript.daemonExecutableSha256).toBe(fixture.mcp.clientBinarySha256)

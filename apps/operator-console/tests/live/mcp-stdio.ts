@@ -165,6 +165,14 @@ export class MCPStdioClient {
       if (tool !== null && typeof tool === 'object' && !Array.isArray(tool) && 'name' in tool && typeof tool.name === 'string' && tool.name !== '') this.tools.push(tool.name)
     }
   }
+  async registerProjectIdentity(): Promise<void> {
+    if (!this.tools.includes('project_identity.register_v3')) throw new Error('external MCP client did not expose V3 project registration')
+    const result = record(await this.request('tools/call', { arguments: {}, name: 'project_identity.register_v3' }))
+    const content = Reflect.get(result, 'content')
+    if (Reflect.get(result, 'isError') !== false || !Array.isArray(content) || content.length !== 1 || Reflect.get(record(content[0]), 'outcome') !== 'PROJECT_RESOLVED') {
+      throw new Error('external MCP client did not complete V3 project registration')
+    }
+  }
 
   async readOnlySearch(query: string): Promise<void> {
     const result = await this.request('tools/call', {
