@@ -1402,7 +1402,8 @@ func (adapter *OperatorCodeHTTPAdapter) authorizeNoViewIndexIntent(ctx context.C
 		if adapter.indexTargets == nil {
 			return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailureContextMismatch
 		}
-		advertised, found := adapter.indexTargets.Resolve(requested.SourceID, requested.CheckoutID)
+		var found bool
+		advertised, found = adapter.indexTargets.Resolve(requested.SourceID, requested.CheckoutID)
 		if !found {
 			return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailurePermissionDenied
 		}
