@@ -4,14 +4,17 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -407,6 +410,65 @@ func TestUCIContextIntegrationNoViewHandleBeginsInitialIndex(t *testing.T) {
 	require.Len(t, fixture.publication.beginCalls, 1, "a no-View binding must reject expected_parent before the runtime")
 }
 
+func TestUCIContextIntegrationReplaysIdenticalIndexIntentUpdateOverGRPC(t *testing.T) {
+	fixture := newUCIContextIntegrationFixture(t)
+	identity := auth.ClientWithPrincipal("read-write", "uci-context-replay-workstation", uciContextIntegrationPrincipalA, auth.PrincipalKindAgent)
+	binding := uciContextIntegrationNoViewBinding(
+		fixture.refA,
+		uciContextIntegrationIncarnationA,
+		uciContextIntegrationLocalRootA,
+		identity.WorkstationID(),
+	)
+	fixture.handles.register(uciContextIntegrationClientA, "replay-no-view", binding)
+
+	listener := bufconn.Listen(bufSize)
+	server := grpc.NewServer(grpc.UnaryInterceptor(func(ctx context.Context, request any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		return handler(auth.WithIdentity(ctx, identity), request)
+	}))
+	pb.RegisterEngramServiceServer(server, fixture.server)
+	go func() { _ = server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		_ = listener.Close()
+	}()
+
+	connection, err := grpc.NewClient(
+		"passthrough:///uci-index-intent-replay",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	require.NoError(t, err)
+	defer func() { _ = connection.Close() }()
+
+	client := pb.NewEngramServiceClient(connection)
+	ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(auditcontext.SourceSessionMetadataKey, uciContextIntegrationClientA))
+	request := &pb.UpdateCodeIndexIntentRequest{
+		Target: &pb.CodeIndexIntentTarget{
+			ClientSessionId: uciContextIntegrationClientA,
+			ContextHandle:   "replay-no-view",
+			Scope:           contextAwareProtoIndexScope(binding.Scope, binding.ProfileID),
+			LocalRootId:     binding.LocalRootID,
+			WorkstationId:   binding.WorkstationID,
+		},
+		ClientInstanceId: "replay-daemon",
+		ProcessNonce:     "replay-process",
+		IntentRef:        "90000000-0000-4000-8000-000000000001",
+		Operation:        string(uci.IndexIntentAcknowledge),
+		OperationRef:     "replay-delivery/ack",
+	}
+	first, err := client.UpdateCodeIndexIntent(ctx, request)
+	require.NoError(t, err)
+	second, err := client.UpdateCodeIndexIntent(ctx, request)
+	require.NoError(t, err)
+
+	require.True(t, proto.Equal(first, second), "identical update replay must return the same receipt")
+	require.Len(t, fixture.runtime.updateRequests, 2)
+	for _, replayed := range fixture.runtime.updateRequests {
+		require.True(t, proto.Equal(request, replayed))
+	}
+	require.Len(t, fixture.handles.authorizations, 2, "each replay must reauthorize the exact daemon target")
+}
+
 func TestUCIContextIntegrationUnownedIndexScopeStopsBeforeRuntime(t *testing.T) {
 	fixture := newUCIContextIntegrationFixture(t)
 	ctx := fixture.clientContext(uciContextIntegrationClientA, uciContextIntegrationPrincipalA)
@@ -624,10 +686,11 @@ func (aliases *uciContextIntegrationAliases) Lookup(_ context.Context, key uci.L
 }
 
 type uciContextIntegrationRuntime struct {
-	publication  *uciContextIntegrationPublication
-	query        *uciContextIntegrationQuery
-	bindings     map[uciContextIntegrationRefKey]uci.IndexBinding
-	bindingCalls []uci.IndexBindingSelector
+	publication    *uciContextIntegrationPublication
+	query          *uciContextIntegrationQuery
+	bindings       map[uciContextIntegrationRefKey]uci.IndexBinding
+	bindingCalls   []uci.IndexBindingSelector
+	updateRequests []*pb.UpdateCodeIndexIntentRequest
 }
 
 func (runtime *uciContextIntegrationRuntime) LoadIndexBinding(_ context.Context, selector uci.IndexBindingSelector) (uci.IndexBinding, error) {
@@ -656,6 +719,7 @@ func (runtime *uciContextIntegrationRuntime) PollCodeIndexIntents(_ context.Cont
 }
 
 func (runtime *uciContextIntegrationRuntime) UpdateCodeIndexIntent(_ context.Context, _ contextAwareCaller, _ uci.IndexBinding, request *pb.UpdateCodeIndexIntentRequest) (*pb.UpdateCodeIndexIntentResponse, error) {
+	runtime.updateRequests = append(runtime.updateRequests, proto.Clone(request).(*pb.UpdateCodeIndexIntentRequest))
 	return &pb.UpdateCodeIndexIntentResponse{
 		IntentRef: request.GetIntentRef(), State: string(uci.IndexIntentAcknowledged), Attempt: 1, OwnerEpoch: 1,
 		LeaseExpiresAt: timestamppb.New(time.Date(2026, time.September, 5, 12, 5, 0, 0, time.UTC)),

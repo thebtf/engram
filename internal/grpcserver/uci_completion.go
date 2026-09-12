@@ -22,9 +22,10 @@ const (
 	maxUCICompletionIdempotencyKeyBytes = 4 << 10
 )
 
-// uciCompletionRecorder is deliberately narrower than MCPHandler so existing
-// generic gRPC adapters do not accidentally gain a completion capability.
-type uciCompletionRecorder interface {
+// UCICompletionRecorder accepts a pre-verified supported-host callback.
+// It is separate from MCPHandler so generic gRPC adapters never gain this
+// completion capability accidentally.
+type UCICompletionRecorder interface {
 	RecordUCICompletion(context.Context, uci.VerifiedSupportedHostCallback) error
 }
 
@@ -62,8 +63,8 @@ func (s *Server) RecordUCICompletion(ctx context.Context, request *pb.RecordUCIC
 	if s == nil {
 		return nil, uciCompletionUnavailable()
 	}
-	recorder, ok := any(s.handler).(uciCompletionRecorder)
-	if !ok || recorder == nil {
+	recorder := s.currentUCICompletionRecorder()
+	if recorder == nil {
 		return nil, uciCompletionUnavailable()
 	}
 	callback := uci.VerifiedSupportedHostCallback{

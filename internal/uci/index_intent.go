@@ -39,6 +39,12 @@ func (kind IndexIntentKind) valid() bool {
 	return kind == IndexIntentReindex || kind == IndexIntentReconcile
 }
 
+// ValidIndexIntentRequestRef reports whether an opaque request reference is
+// valid at the durable intent boundary.
+func ValidIndexIntentRequestRef(value string) bool {
+	return validIndexIntentText(value, indexIntentMaxRequestRef)
+}
+
 // IndexIntentState is the durable lifecycle for a requested index operation.
 type IndexIntentState string
 
@@ -67,7 +73,9 @@ func (state IndexIntentState) valid() bool {
 	}
 }
 
-// CanTransitionTo reports whether the lifecycle permits a direct transition.
+// CanTransitionTo reports whether the lifecycle permits a direct state transition.
+// A matching owner’s post-completion fail report remains completed as a durable
+// replay receipt; it is intentionally not a second lifecycle transition.
 func (state IndexIntentState) CanTransitionTo(next IndexIntentState) bool {
 	switch state {
 	case IndexIntentSubmitted:
@@ -108,7 +116,7 @@ func (input IndexIntentInput) Clone() IndexIntentInput {
 
 // Validate checks that an intent contains only a complete safe identity tuple.
 func (input IndexIntentInput) Validate() error {
-	if !validIndexIntentText(input.RequestRef, indexIntentMaxRequestRef) {
+	if !ValidIndexIntentRequestRef(input.RequestRef) {
 		return fmt.Errorf("uci index intent: invalid request reference")
 	}
 	if !input.Kind.valid() || !validIndexScope(input.Scope) || !canonicalContextUUID(input.ProfileID) {

@@ -146,9 +146,10 @@ type operatorCodeIndexIntentRetryAuthorizer struct {
 }
 
 var (
-	_ operatorCodeApplication            = (*operatorCodeIndexIntentComposition)(nil)
-	_ operatorCodeIndexIntentApplication = (*operatorCodeIndexIntentComposition)(nil)
-	_ uci.IndexIntentRetryAuthorizer     = (*operatorCodeIndexIntentRetryAuthorizer)(nil)
+	_ operatorCodeApplication                  = (*operatorCodeIndexIntentComposition)(nil)
+	_ operatorCodeIndexIntentApplication       = (*operatorCodeIndexIntentComposition)(nil)
+	_ operatorCodeNoViewIndexIntentApplication = (*operatorCodeIndexIntentComposition)(nil)
+	_ uci.IndexIntentRetryAuthorizer           = (*operatorCodeIndexIntentRetryAuthorizer)(nil)
 )
 
 func (application *operatorCodeIndexIntentComposition) SubmitIndexIntent(ctx context.Context, authorized uci.AuthorizedContext, requestRef string, kind uci.IndexIntentKind) (uci.IndexIntent, error) {
@@ -209,6 +210,39 @@ func (application *operatorCodeIndexIntentComposition) SubmitNoViewIndexIntent(c
 		return uci.IndexIntent{}, err
 	}
 	return application.submitIndexIntent(ctx, binding, requestRef, kind)
+}
+
+// NoViewIndexIntentByRequestRef loads the durable first-index binding before
+// the HTTP boundary reauthorizes the current tab, grant, and target tuple.
+func (application *operatorCodeIndexIntentComposition) NoViewIndexIntentByRequestRef(ctx context.Context, requestRef string) (uci.IndexIntent, error) {
+	if application == nil || application.indexIntentStore == nil {
+		return uci.IndexIntent{}, errors.New("operator code index intent composition is not configured")
+	}
+	intent, err := application.indexIntentStore.GetIndexIntentByRequestRef(ctx, requestRef)
+	if err != nil {
+		return uci.IndexIntent{}, err
+	}
+	if intent.PreviousView != nil {
+		return uci.IndexIntent{}, uci.ErrIndexIntentBindingMismatch
+	}
+	return intent, nil
+}
+
+// ReplayNoViewIndexIntent returns an existing durable request after the
+// current registered checkout has been reauthorized. It cannot admit a new one.
+func (application *operatorCodeIndexIntentComposition) ReplayNoViewIndexIntent(ctx context.Context, scope uci.IndexScope, profileID, requestRef string, kind uci.IndexIntentKind) (uci.IndexIntent, error) {
+	binding, err := application.indexIntentBindingForCheckout(ctx, scope, profileID, nil, false)
+	if err != nil {
+		return uci.IndexIntent{}, err
+	}
+	intent, err := application.NoViewIndexIntentByRequestRef(ctx, requestRef)
+	if err != nil {
+		return uci.IndexIntent{}, err
+	}
+	if intent.Kind != kind || !binding.matches(intent) {
+		return uci.IndexIntent{}, uci.ErrIndexIntentBindingMismatch
+	}
+	return intent, nil
 }
 
 // NoViewIndexIntentTarget returns only the server-stored scope needed to

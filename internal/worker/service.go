@@ -1354,6 +1354,7 @@ func (s *Service) initializeAsync() {
 		s.tokenAuth.SetValidator(grpcValidator)
 	}
 	grpcSrv, grpcInternalSrv := grpcserver.New(adapter, grpcValidator)
+	grpcInternalSrv.SetUCICompletionRecorder(adapter)
 	if uciContext != nil {
 		grpcInternalSrv.SetUCITransport(uciContext.transport)
 	}

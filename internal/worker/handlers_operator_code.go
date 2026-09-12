@@ -122,6 +122,8 @@ type operatorCodeIndexIntentApplication interface {
 // the server-derived checkout binding separate from a published ContextRef.
 type operatorCodeNoViewIndexIntentApplication interface {
 	SubmitNoViewIndexIntent(context.Context, uci.IndexScope, string, string, uci.IndexIntentKind) (uci.IndexIntent, error)
+	NoViewIndexIntentByRequestRef(context.Context, string) (uci.IndexIntent, error)
+	ReplayNoViewIndexIntent(context.Context, uci.IndexScope, string, string, uci.IndexIntentKind) (uci.IndexIntent, error)
 	NoViewIndexIntentTarget(context.Context, string) (uci.IndexScope, string, error)
 	GetNoViewIndexIntent(context.Context, uci.IndexScope, string, string) (uci.IndexIntent, error)
 	RetryNoViewIndexIntent(context.Context, uci.IndexScope, string, string) (uci.IndexIntent, error)
@@ -353,6 +355,37 @@ func (adapter *OperatorCodeHTTPAdapter) HandleIndexIntentSubmit(w http.ResponseW
 		application, available := adapter.app.(operatorCodeNoViewIndexIntentApplication)
 		if !available {
 			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+			return
+		}
+		existing, lookupErr := application.NoViewIndexIntentByRequestRef(r.Context(), request.RequestRef)
+		if lookupErr == nil {
+			if existing.Kind != request.Kind || existing.Scope.SourceID != request.Target.SourceID || existing.Scope.CheckoutID != request.Target.CheckoutID {
+				operatorCodeWriteBodyless(w, http.StatusConflict)
+				return
+			}
+			target, failure := adapter.authorizeNoViewIndexIntent(r.Context(), identity, request.Proof(), *request.Target, existing.ProfileID, false)
+			if failure != uci.ReleaseFailureNone {
+				operatorCodeWriteFailure(w, failure)
+				return
+			}
+			intent, err := application.ReplayNoViewIndexIntent(r.Context(), target.scope, target.profileID, request.RequestRef, request.Kind)
+			if err != nil {
+				operatorCodeWriteFailure(w, operatorCodeIndexIntentFailure(err))
+				return
+			}
+			if !operatorCodeIndexIntentShapeValid(intent) {
+				operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+				return
+			}
+			if !operatorCodeNoViewIndexIntentMatches(intent, target) {
+				operatorCodeWriteBodyless(w, http.StatusConflict)
+				return
+			}
+			operatorCodeWriteIndexIntentAcknowledgement(w, intent)
+			return
+		}
+		if !errors.Is(lookupErr, uci.ErrIndexIntentNotFound) {
+			operatorCodeWriteFailure(w, operatorCodeIndexIntentFailure(lookupErr))
 			return
 		}
 		target, failure := adapter.authorizeNoViewIndexIntent(r.Context(), identity, request.Proof(), *request.Target, "", true)

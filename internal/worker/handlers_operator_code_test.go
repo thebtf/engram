@@ -527,12 +527,25 @@ func TestOperatorCodeHTTPAdapter_NoViewIndexIntentReauthorizesWithoutPin(t *test
 	require.Len(t, fixture.contexts.initialTargets, 1)
 	require.Equal(t, operatorCodeHTTPTestProfileID, fixture.contexts.initialTargets[0].ProfileID, "the server must derive the daemon-advertised profile")
 	require.Nil(t, fixture.binding.pinned, "first-index admission must not pin a View")
+	adapter.indexTargets = operatorCodeHTTPTestExpiredIndexTargets{}
 
 	replay := httptest.NewRecorder()
 	adapter.HandleIndexIntentSubmit(replay, operatorCodeHTTPTestRequest(t, body, fixture.identity))
 	require.Equal(t, http.StatusAccepted, replay.Code, replay.Body.String())
 	require.Equal(t, intentRef, operatorCodeHTTPTestIndexIntentResponse(t, replay.Body.String())["intent_ref"])
 	require.Len(t, fixture.app.indexIntents, 1)
+	require.Len(t, fixture.contexts.reauthTargets, 1, "replay must reauthorize the durable target")
+
+	newAfterAdvertisementExpiry := httptest.NewRecorder()
+	adapter.HandleIndexIntentSubmit(newAfterAdvertisementExpiry, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"new-after-advertisement-expiry","kind":"reindex","target":`+target+`}`, fixture.identity))
+	require.Equal(t, http.StatusForbidden, newAfterAdvertisementExpiry.Code, newAfterAdvertisementExpiry.Body.String())
+	require.Len(t, fixture.contexts.initialTargets, 1, "a new request still requires a fresh daemon advertisement")
+
+	fixture.contexts.reauthTargetErr = gormdb.ErrBrowserCodeContextDenied
+	revokedReplay := httptest.NewRecorder()
+	adapter.HandleIndexIntentSubmit(revokedReplay, operatorCodeHTTPTestRequest(t, body, fixture.identity))
+	require.Equal(t, http.StatusForbidden, revokedReplay.Code, revokedReplay.Body.String())
+	fixture.contexts.reauthTargetErr = nil
 
 	changed := httptest.NewRecorder()
 	adapter.HandleIndexIntentSubmit(changed, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"first-index","kind":"reconcile","target":`+target+`}`, fixture.identity))
@@ -882,6 +895,12 @@ func (operatorCodeHTTPTestIndexTargets) Resolve(sourceID, checkoutID string) (uc
 		LocalRootID:   "daemon-root",
 		WorkstationID: "daemon-workstation",
 	}, true
+}
+
+type operatorCodeHTTPTestExpiredIndexTargets struct{}
+
+func (operatorCodeHTTPTestExpiredIndexTargets) Resolve(string, string) (uci.IndexBinding, bool) {
+	return uci.IndexBinding{}, false
 }
 
 type operatorCodeHTTPTestGrants struct {
@@ -1290,6 +1309,28 @@ func (app *operatorCodeHTTPTestApplication) SubmitNoViewIndexIntent(ctx context.
 	intent := operatorCodeHTTPTestNoViewIndexIntent(scope, profileID, requestRef, kind, uci.IndexIntentSubmitted)
 	app.indexIntents[requestRef] = intent
 	return intent.Clone(), nil
+}
+
+func (app *operatorCodeHTTPTestApplication) NoViewIndexIntentByRequestRef(_ context.Context, requestRef string) (uci.IndexIntent, error) {
+	intent, found := app.indexIntents[requestRef]
+	if !found {
+		return uci.IndexIntent{}, uci.ErrIndexIntentNotFound
+	}
+	if intent.PreviousView != nil {
+		return uci.IndexIntent{}, uci.ErrIndexIntentBindingMismatch
+	}
+	return intent.Clone(), nil
+}
+
+func (app *operatorCodeHTTPTestApplication) ReplayNoViewIndexIntent(ctx context.Context, scope uci.IndexScope, profileID, requestRef string, kind uci.IndexIntentKind) (uci.IndexIntent, error) {
+	intent, err := app.NoViewIndexIntentByRequestRef(ctx, requestRef)
+	if err != nil {
+		return uci.IndexIntent{}, err
+	}
+	if intent.Scope != scope || intent.ProfileID != profileID || intent.Kind != kind {
+		return uci.IndexIntent{}, uci.ErrIndexIntentBindingMismatch
+	}
+	return intent, nil
 }
 
 func (app *operatorCodeHTTPTestApplication) NoViewIndexIntentTarget(_ context.Context, intentRef string) (uci.IndexScope, string, error) {

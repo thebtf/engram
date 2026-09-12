@@ -22,14 +22,6 @@ type uciCompletionTransportHandler struct {
 	err       error
 }
 
-func (*uciCompletionTransportHandler) HandleToolCall(context.Context, string, []byte) ([]byte, bool, error) {
-	return nil, false, nil
-}
-
-func (*uciCompletionTransportHandler) ToolDefinitions() []ToolDef { return nil }
-
-func (*uciCompletionTransportHandler) ServerInfo() (string, string) { return "engram", "test" }
-
 func (handler *uciCompletionTransportHandler) RecordUCICompletion(_ context.Context, callback uci.VerifiedSupportedHostCallback) error {
 	handler.callbacks = append(handler.callbacks, callback)
 	return handler.err
@@ -37,7 +29,7 @@ func (handler *uciCompletionTransportHandler) RecordUCICompletion(_ context.Cont
 
 func TestRecordUCICompletionAcceptsMatchedProjectServiceCallback(t *testing.T) {
 	handler := &uciCompletionTransportHandler{}
-	server := &Server{handler: handler}
+	server := &Server{uciCompletionRecorder: handler}
 	request := uciCompletionTransportRequest()
 
 	response, err := server.RecordUCICompletion(uciCompletionTransportContext(uciCompletionTransportProject), request)
@@ -73,7 +65,7 @@ func TestRecordUCICompletionRejectsEveryIneligibleIdentity(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			handler := &uciCompletionTransportHandler{}
-			server := &Server{handler: handler}
+			server := &Server{uciCompletionRecorder: handler}
 			_, err := server.RecordUCICompletion(auth.WithIdentity(context.Background(), identity), uciCompletionTransportRequest())
 			if status.Code(err) != codes.PermissionDenied {
 				t.Fatalf("RecordUCICompletion() status = %v, error = %v", status.Code(err), err)
@@ -84,7 +76,7 @@ func TestRecordUCICompletionRejectsEveryIneligibleIdentity(t *testing.T) {
 		})
 	}
 
-	server := &Server{handler: &uciCompletionTransportHandler{}}
+	server := &Server{uciCompletionRecorder: &uciCompletionTransportHandler{}}
 	_, err := server.RecordUCICompletion(context.Background(), uciCompletionTransportRequest())
 	if status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("missing identity status = %v, error = %v", status.Code(err), err)
@@ -128,7 +120,7 @@ func TestRecordUCICompletionRejectsMalformedRequestsBeforeRecorder(t *testing.T)
 	} {
 		t.Run(name, func(t *testing.T) {
 			handler := &uciCompletionTransportHandler{}
-			server := &Server{handler: handler}
+			server := &Server{uciCompletionRecorder: handler}
 			_, err := server.RecordUCICompletion(uciCompletionTransportContext(uciCompletionTransportProject), request)
 			if status.Code(err) != codes.InvalidArgument {
 				t.Fatalf("RecordUCICompletion() status = %v, error = %v", status.Code(err), err)
@@ -147,7 +139,7 @@ func TestRecordUCICompletionKeepsRecorderErrorsClosed(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			handler := &uciCompletionTransportHandler{err: recorderErr}
-			server := &Server{handler: handler}
+			server := &Server{uciCompletionRecorder: handler}
 			response, err := server.RecordUCICompletion(uciCompletionTransportContext(uciCompletionTransportProject), uciCompletionTransportRequest())
 			if response != nil {
 				t.Fatalf("RecordUCICompletion() response leaked evidence: %#v", response)

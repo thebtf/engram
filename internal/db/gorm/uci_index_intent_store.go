@@ -96,6 +96,25 @@ func (s *UCIIndexIntentStore) GetIndexIntent(ctx context.Context, intentID strin
 	return intent.Clone(), nil
 }
 
+// GetIndexIntentByRequestRef returns one validated durable intent selected by
+// its opaque browser request reference.
+func (s *UCIIndexIntentStore) GetIndexIntentByRequestRef(ctx context.Context, requestRef string) (ucidomain.IndexIntent, error) {
+	if err := s.requireDB("get by request reference"); err != nil {
+		return ucidomain.IndexIntent{}, err
+	}
+	if ctx == nil || ctx.Err() != nil || !ucidomain.ValidIndexIntentRequestRef(requestRef) {
+		return ucidomain.IndexIntent{}, fmt.Errorf("uci index intent get by request reference: invalid request")
+	}
+	var row indexIntentRow
+	if err := s.db.WithContext(ctx).Where("request_ref = ?", requestRef).First(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ucidomain.IndexIntent{}, ucidomain.ErrIndexIntentNotFound
+		}
+		return ucidomain.IndexIntent{}, err
+	}
+	return s.GetIndexIntent(ctx, row.IntentID)
+}
+
 func (s *UCIIndexIntentStore) SubmitIndexIntent(ctx context.Context, input ucidomain.IndexIntentInput) (ucidomain.IndexIntent, error) {
 	if err := s.requireDB("submit"); err != nil {
 		return ucidomain.IndexIntent{}, err

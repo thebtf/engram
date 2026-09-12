@@ -71,6 +71,7 @@ type Server struct {
 	hostAdvisorRegistry   *hostadvisor.Registry
 	interventionAdvisor   intervention.Advisor
 	uciTransport          UCITransport
+	uciCompletionRecorder UCICompletionRecorder
 }
 
 // New creates a new gRPC server. The returned *grpc.Server has EngramService
@@ -160,6 +161,19 @@ func (s *Server) currentUCITransport() UCITransport {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.uciTransport
+}
+
+// SetUCICompletionRecorder installs or removes the dedicated completion port.
+func (s *Server) SetUCICompletionRecorder(recorder UCICompletionRecorder) {
+	s.mu.Lock()
+	s.uciCompletionRecorder = recorder
+	s.mu.Unlock()
+}
+
+func (s *Server) currentUCICompletionRecorder() UCICompletionRecorder {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.uciCompletionRecorder
 }
 
 // currentValidator returns the live validator under read lock.
