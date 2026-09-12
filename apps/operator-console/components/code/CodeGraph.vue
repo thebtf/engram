@@ -13,7 +13,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   explore: [item: CodeItem, options: CodeGraphOptions]
-  continue: []
+  continue: [target: CodeEntityRef | null]
   source: [descriptor: CodeSourceDescriptor]
 }>()
 
@@ -31,8 +31,8 @@ const nodes = computed(() => graph.value?.nodes.map((ref, index) => {
   const angle = (Math.PI * 2 * index) / count - Math.PI / 2
   return { ref, x: 160 + Math.cos(angle) * 112, y: 130 + Math.sin(angle) * 82 }
 }) ?? [])
-const selectedSource = computed(() => props.graph?.navigation?.nodes.find((node) => node.ref.entityKey === selectedNode.value)?.source ?? null)
-const visibleContinuation = computed(() => props.graph !== null && props.graph.continuation !== null)
+const selectedTarget = computed(() => nodes.value.find((node) => node.ref.entityKey === selectedNode.value)?.ref ?? null)
+const selectedSource = computed(() => selectedTarget.value === null ? null : props.graph?.navigation?.nodes.find((node) => node.ref.entityKey === selectedTarget.value?.entityKey)?.source ?? null)
 
 function point(ref: CodeEntityRef): { x: number; y: number } | null {
   return nodes.value.find((node) => node.ref.entityKey === ref.entityKey) ?? null
@@ -123,7 +123,7 @@ watch(() => props.graph, () => {
     <div v-if="graph !== null && graph.graph !== null" class="graph-toolbar">
       <button class="btn" type="button" :aria-pressed="mode === 'graph'" :disabled="pending" @click="mode = 'graph'">{{ t('codeExplorer.graph.visual') }}</button>
       <button class="btn" type="button" :aria-pressed="mode === 'list'" :disabled="pending" @click="mode = 'list'">{{ t('codeExplorer.graph.list') }}</button>
-      <button v-if="visibleContinuation" class="btn" type="button" :disabled="pending" @click="emit('continue')">{{ t('codeExplorer.graph.continue') }}</button>
+      <button v-if="selectedTarget !== null || visibleContinuation" class="btn" type="button" :disabled="pending" @click="emit('continue', selectedTarget)">{{ t('codeExplorer.graph.continue') }}</button>
     </div>
 
     <svg v-if="graph !== null && graph.graph !== null && mode === 'graph'" class="graph-canvas" viewBox="0 0 320 260" role="img" data-testid="code-graph-results" :aria-label="t('codeExplorer.graph.canvasLabel', { count: nodes.length })">

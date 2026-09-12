@@ -134,7 +134,7 @@ interface CodeSearchRequest {
 }
 
 interface CodeGraphRequest {
-  item: CodeItem
+  target: CodeEntityRef
   options: CodeGraphOptions
 }
 interface IndexIntentBase<State extends IndexIntentState> {
@@ -1286,10 +1286,10 @@ export function useOperatorCode() {
     await requestSearch(searchRequest, continuation)
   }
 
-  async function explore(item: CodeItem, options: CodeGraphOptions = { direction: 'both', relations: [] }, continuation: string | null = null): Promise<void> {
+  async function requestGraph(target: CodeEntityRef, options: CodeGraphOptions, continuation: string | null = null): Promise<void> {
     const payload = bindingPayload({
       action: 'neighbors',
-      target: { entity_key: item.ref.entityKey },
+      target: { entity_key: target.entityKey },
       direction: options.direction,
       relations: options.relations,
       max_depth: 2,
@@ -1317,16 +1317,30 @@ export function useOperatorCode() {
       graphState.value = presentation('error', 'The graph response did not prove navigation inside the pinned View, so it was concealed.')
       return
     }
-    activeGraphRequest.value = { item, options }
+    activeGraphRequest.value = { target, options }
     graphEnvelope.value = envelope
     graphState.value = presentationFromEnvelope(envelope)
   }
 
-  async function continueGraph(): Promise<void> {
+  async function explore(item: CodeItem, options: CodeGraphOptions = { direction: 'both', relations: [] }, continuation: string | null = null): Promise<void> {
+    await requestGraph(item.ref, options, continuation)
+  }
+
+  async function continueGraph(target: CodeEntityRef | null = null): Promise<void> {
     const request = activeGraphRequest.value
-    const continuation = graphEnvelope.value?.continuation ?? null
-    if (request === null || continuation === null) return
-    await explore(request.item, request.options, continuation)
+    const graph = graphEnvelope.value
+    if (request === null || graph === null) return
+    if (target !== null) {
+      const pinned = pinnedContext.value
+      if (
+        pinned === null || target.sourceId !== pinned.context.sourceId || target.viewId !== pinned.context.viewId
+        || graph.navigation === null || !graph.navigation.nodes.some((node) => entityRefKey(node.ref) === entityRefKey(target))
+      ) return
+      await requestGraph(target, request.options)
+      return
+    }
+    if (graph.continuation === null) return
+    await requestGraph(request.target, request.options, graph.continuation)
   }
 
   async function readSource(descriptor: CodeSourceDescriptor): Promise<void> {

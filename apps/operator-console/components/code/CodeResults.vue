@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { CodeEnvelope, CodeGraphOptions, CodeItem, CodePresentationState, CodeSafeContext, CodeSourceDescriptor, CodeStatus } from '~/composables/useOperatorCode'
+import type { CodeEntityRef, CodeEnvelope, CodeGraphOptions, CodeItem, CodePresentationState, CodeSafeContext, CodeSourceDescriptor, CodeStatus } from '~/composables/useOperatorCode'
 
 const { t } = useI18n()
 
@@ -21,7 +21,7 @@ const emit = defineEmits<{
   search: [query: string]
   continueSearch: []
   explore: [item: CodeItem, options: CodeGraphOptions]
-  continueGraph: []
+  continueGraph: [target: CodeEntityRef | null]
   source: [descriptor: CodeSourceDescriptor]
   requestIndex: []
 }>()
@@ -109,7 +109,7 @@ async function copy(value: string): Promise<void> {
         :state="graphState"
         :pending="pending"
         @explore="(item, options) => emit('explore', item, options)"
-        @continue="emit('continueGraph')"
+        @continue="(target) => emit('continueGraph', target)"
         @source="(descriptor) => emit('source', descriptor)"
       />
 

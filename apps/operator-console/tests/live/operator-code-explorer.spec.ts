@@ -32,6 +32,39 @@ function provisionedOperatorCodeFixture(state: LiveFixtureState, key: 'operatorC
   return raw
 }
 
+function record(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} was not an object`)
+  return value
+}
+
+function oneContext(value: unknown): Record<string, unknown> {
+  const contexts = record(value, 'Code response').contexts
+  if (!Array.isArray(contexts) || contexts.length !== 1) throw new Error('Code response did not contain exactly one ContextRef')
+  return record(contexts[0], 'Code response ContextRef')
+}
+
+function graphSourceDescriptor(value: unknown, entityKey: string): Record<string, unknown> {
+  const navigation = record(record(value, 'Graph response').navigation, 'Graph navigation')
+  if (!Array.isArray(navigation.nodes)) throw new Error('Graph navigation did not contain nodes')
+  for (const rawNode of navigation.nodes) {
+    const node = record(rawNode, 'Graph navigation node')
+    const entity = record(node.entity, 'Graph navigation entity')
+    if (entity.entity_key !== entityKey) continue
+    if (node.source_state !== 'available') throw new Error(`Graph node ${entityKey} did not publish a source descriptor`)
+    return record(node.source_read, `Graph node ${entityKey} source descriptor`)
+  }
+  throw new Error(`Graph navigation omitted ${entityKey}`)
+}
+
+function requiredText(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value === '') throw new Error(`${label} was not text`)
+  return value
+}
+
+function requiredInteger(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value)) throw new Error(`${label} was not an integer`)
+  return value
+}
 
 async function fixtureSQL(fixture: LiveFixtureState, statement: string): Promise<void> {
   const child = spawn('docker', [
@@ -66,6 +99,8 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
   const requestPaths: string[] = []
   const responseTraffic: RouteTraffic[] = []
   const searchRequests: Array<Record<string, unknown>> = []
+  const graphRequests: Array<Record<string, unknown>> = []
+  const sourceRequests: Array<Record<string, unknown>> = []
   const context = await browser.newContext()
   const page = await context.newPage()
   const transitions: Array<{ label: string; opener: boolean; navigationType: string; transition: string | null }> = []
@@ -74,9 +109,12 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
     const url = new URL(request.url())
     if (url.origin !== fixture.frontend.baseUrl || !url.pathname.startsWith('/api/code/')) return
     requestPaths.push(`${request.method()} ${url.pathname}`)
-    if (url.pathname !== '/api/code/search' || request.postData() === null) return
+    if ((url.pathname !== '/api/code/search' && url.pathname !== '/api/code/graph' && url.pathname !== '/api/code/source') || request.postData() === null) return
     const body: unknown = JSON.parse(request.postData() || '')
-    if (body !== null && typeof body === 'object' && !Array.isArray(body)) searchRequests.push({ ...body })
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) return
+    if (url.pathname === '/api/code/search') searchRequests.push({ ...body })
+    if (url.pathname === '/api/code/graph') graphRequests.push({ ...body })
+    if (url.pathname === '/api/code/source') sourceRequests.push({ ...body })
   })
   page.on('response', (response) => {
     const url = new URL(response.url())
@@ -112,8 +150,10 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
     await expect(page.getByTestId('code-status')).toContainText('unavailable')
 
     const pinnedA = await page.getByTestId('code-context-pinned').textContent()
+    const initialSearchResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/code/search' && response.request().method() === 'POST')
     await page.getByTestId('code-query-input').fill(scenario.query)
     await page.keyboard.press('Enter')
+    const initialSearchContext = oneContext(await (await initialSearchResponse).json())
     await expect(page.getByTestId('code-search-results')).toContainText(scenario.expectedSearch)
     await expect(page.getByTestId('code-search-next')).toBeVisible()
     await page.getByTestId('code-search-next').click()
@@ -124,17 +164,56 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
 
     await page.getByTestId('code-query-input').fill(scenario.query)
     await page.keyboard.press('Enter')
+    const graphEntityKey = `go:fixture/func:${scenario.expectedGraph}`
     const functionResult = page.getByTestId('code-search-results').getByRole('listitem').filter({
       has: page.getByText(`go:fixture/func:${scenario.expectedSource}`, { exact: true }),
     })
+    const offPageResult = page.getByTestId('code-search-results').getByRole('listitem').filter({
+      has: page.getByText(graphEntityKey, { exact: true }),
+    })
     await expect(functionResult).toHaveCount(1)
+    await expect(offPageResult).toHaveCount(0)
+    const firstGraphResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/code/graph' && response.request().method() === 'POST')
     await functionResult.getByRole('button', { name: 'Explore graph' }).click()
+    const firstGraph = await (await firstGraphResponse).json()
+    expect(oneContext(firstGraph)).toEqual(initialSearchContext)
     await expect(page.getByTestId('code-graph-results')).toContainText(scenario.expectedGraph)
-    await page.getByRole('button', { name: `Select graph node go:fixture/func:${scenario.expectedGraph}` }).click()
+    await page.getByRole('button', { name: `Select graph node ${graphEntityKey}` }).click()
+    const continuedGraphResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/code/graph' && response.request().method() === 'POST')
+    await page.getByRole('button', { name: 'Continue traversal' }).click()
+    const continuedGraph = await (await continuedGraphResponse).json()
+    expect(oneContext(continuedGraph)).toEqual(initialSearchContext)
+    await expect.poll(() => graphRequests.length).toBe(2)
+    expect(graphRequests[1]).toMatchObject({
+      action: graphRequests[0]?.action,
+      target: { entity_key: graphEntityKey },
+      direction: graphRequests[0]?.direction,
+      relations: graphRequests[0]?.relations,
+      max_depth: graphRequests[0]?.max_depth,
+      max_nodes: graphRequests[0]?.max_nodes,
+      max_edges: graphRequests[0]?.max_edges,
+    })
+    expect(graphRequests[1]).not.toHaveProperty('continuation')
+    const descriptor = graphSourceDescriptor(continuedGraph, graphEntityKey)
+    const descriptorSpan = record(descriptor.span, 'Graph source span')
+    const descriptorDigest = requiredText(descriptor.content_digest, 'Graph source digest')
+    const lineStart = requiredInteger(descriptorSpan.line_start, 'Graph source start line')
+    const lineEnd = requiredInteger(descriptorSpan.line_end, 'Graph source end line')
+    const byteStart = requiredInteger(descriptorSpan.byte_start, 'Graph source start byte')
+    const byteEnd = requiredInteger(descriptorSpan.byte_end, 'Graph source end byte')
+    const sourceResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/code/source' && response.request().method() === 'POST')
     const inspectSource = page.getByRole('button', { name: 'Inspect exact source' })
     await expect(inspectSource).toBeVisible()
     await inspectSource.click()
-    await expect(page.getByTestId('code-source-result')).toContainText(scenario.expectedMarker)
+    const source = await (await sourceResponse).json()
+    expect(oneContext(source)).toEqual(initialSearchContext)
+    await expect.poll(() => sourceRequests.length).toBe(1)
+    expect(sourceRequests[0]).toMatchObject(descriptor)
+    await expect(page.getByTestId('code-source-result')).toContainText(`func ${scenario.expectedGraph}`)
+    const sourceMeta = page.locator('.source-meta').first()
+    await expect(sourceMeta).toContainText(`${lineStart}–${lineEnd}`)
+    await expect(sourceMeta).toContainText(`${byteStart}–${byteEnd}`)
+    await expect(sourceMeta).toContainText(descriptorDigest)
 
     await fixtureSQL(fixture, `
       UPDATE ci_blobs
