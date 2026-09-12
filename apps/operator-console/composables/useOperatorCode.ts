@@ -202,7 +202,7 @@ type CodeApiResult =
   | { kind: 'error'; status: number }
 
 const RESUME_STORAGE_KEY = 'engram.operator-code.resume.v1'
-const CONTEXT_SELECTION_STORAGE_KEY = 'engram.operator-code.context-selection.v1'
+const PINNED_CONTEXT_STORAGE_KEY = 'engram.operator-code.pinned-context.v1'
 const REQUEST_TIMEOUT_MS = 30_000
 const INDEX_INTENT_STORAGE_KEY = 'engram.operator-code.index-intent.v1'
 const INDEX_INTENT_POLL_DELAY_MS = 1_000
@@ -702,28 +702,28 @@ function clearResumePair(): void {
     // Storage failure removes only reload convenience; it never creates an authorization fallback.
   }
 }
-function loadContextSelection(): string | null {
+function loadPersistedPinCandidate(): string | null {
   try {
-    return text(sessionStorage.getItem(CONTEXT_SELECTION_STORAGE_KEY))
+    return text(sessionStorage.getItem(PINNED_CONTEXT_STORAGE_KEY))
   } catch {
     return null
   }
 }
 
-function persistContextSelection(context: CodeSafeContext): boolean {
+function persistPinnedContext(context: CodeSafeContext): boolean {
   try {
-    sessionStorage.setItem(CONTEXT_SELECTION_STORAGE_KEY, contextKey(context.context))
+    sessionStorage.setItem(PINNED_CONTEXT_STORAGE_KEY, contextKey(context.context))
     return true
   } catch {
     return false
   }
 }
 
-function clearContextSelection(): void {
+function clearPersistedPinCandidate(): void {
   try {
-    sessionStorage.removeItem(CONTEXT_SELECTION_STORAGE_KEY)
+    sessionStorage.removeItem(PINNED_CONTEXT_STORAGE_KEY)
   } catch {
-    // Selection storage is a convenience only; it never grants or restores a pin.
+    // Storage failure removes only reload convenience; it never creates or restores a pin.
   }
 }
 
@@ -1035,15 +1035,6 @@ export function useOperatorCode() {
     await loadIndexIntent()
   }
 
-  async function reconcileIndexIntent(): Promise<void> {
-    const resume = indexIntentResume.value
-    if (resume === null) return
-    if (resume.intentRef === undefined) {
-      await submitIndexIntent(resume.kind, resume.target)
-      return
-    }
-    await loadIndexIntent()
-  }
 
   function applyTransition(transition: CodeTransition, evidence: CodeBootstrapEvidence): boolean {
     const previousBinding = binding.value
@@ -1051,7 +1042,7 @@ export function useOperatorCode() {
       || previousBinding !== null && previousBinding.tabBindingId !== transition.binding?.tabBindingId
     if (replaced) {
       clearIndexIntent()
-      clearContextSelection()
+      clearPersistedPinCandidate()
     }
     bootstrapEvidence.value = { ...evidence, transition: transition.state }
     binding.value = transition.binding
@@ -1143,17 +1134,16 @@ export function useOperatorCode() {
       pinnedContext.value = null
       clearContextualResults()
       clearIndexIntent()
-      clearContextSelection()
+      clearPersistedPinCandidate()
     }
   }
 
   function selectContext(context: CodeSafeContext): void {
     contextCandidate.value = context
-    persistContextSelection(context)
   }
 
-  function restoreContextSelection(): boolean {
-    const stored = loadContextSelection()
+  function restorePersistedPinCandidate(): boolean {
+    const stored = loadPersistedPinCandidate()
     if (stored === null) return false
     const selected = contextCatalog.value.flatMap((entry) => entry.view === null ? [] : [entry.view]).find((entry) => contextKey(entry.context) === stored) ?? null
     if (selected === null) return false
@@ -1183,24 +1173,18 @@ export function useOperatorCode() {
     }
     const evidence: CodeBootstrapEvidence = { navigationType: navType, openerBefore, openerAfter, transition: 'initializing' }
     const pair = openerBefore ? null : loadResumePair()
-    const resumingPinnedBinding = !openerBefore && navType === 'reload' && pair !== null
-    if (!resumingPinnedBinding) clearIndexIntent()
+    const resumingBinding = !openerBefore && navType === 'reload' && pair !== null
+    if (!resumingBinding) clearIndexIntent()
     const established = openerBefore && openerAfter !== true
       ? await handshake(documentNonce, null, true, evidence)
-      : resumingPinnedBinding
+      : resumingBinding
         ? await resume(documentNonce, pair, evidence)
         : navType === 'navigate'
           ? await handshake(documentNonce, pair, false, evidence)
           : await handshake(documentNonce, null, true, evidence)
     if (!established) return
     await discoverContext()
-    if (resumingPinnedBinding && restoreContextSelection()) {
-      const restored = contextCandidate.value
-      if (restored !== null && await refreshStatus(true)) {
-        pinnedContext.value = restored
-        await reconcileIndexIntent()
-      }
-    }
+    if (resumingBinding) restorePersistedPinCandidate()
   }
 
   async function pinContext(): Promise<void> {
@@ -1224,14 +1208,14 @@ export function useOperatorCode() {
     }
     clearIndexIntent()
     pinnedContext.value = selected
-    persistContextSelection(selected)
+    persistPinnedContext(selected)
     clearContextualResults()
     await refreshStatus()
   }
 
-  async function refreshStatus(allowRestoredPin = false): Promise<boolean> {
+  async function refreshStatus(): Promise<boolean> {
     const payload = bindingPayload()
-    if (payload === null || (!allowRestoredPin && pinnedContext.value === null)) return false
+    if (payload === null || pinnedContext.value === null) return false
     pending.value = true
     const result = await request('/code/status', 'POST', payload)
     pending.value = false

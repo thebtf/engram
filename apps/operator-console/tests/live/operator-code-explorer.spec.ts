@@ -224,6 +224,21 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
       );
     `)
     await selectFixtureContext(page, fixture, 'd')
+    await expect(page.getByTestId('code-context-candidate')).toContainText(`${fixture.fixtureId}-d`)
+    await expect(page.getByTestId('code-context-pinned')).toContainText(`${fixture.fixtureId}-a`)
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    if (await page.getByRole('button', { name: 'Retry reload binding' }).isVisible().catch(() => false)) {
+      await page.getByRole('button', { name: 'Retry reload binding' }).click()
+    }
+    await expect(page.getByTestId('code-context-select').locator('option')).toHaveCount(3)
+    await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+    await expect(page.getByTestId('code-release-state')).toHaveAttribute('data-state', 'unselected')
+    await expect(page.getByTestId('code-results-unselected')).toBeVisible()
+    await recordTransition(page, transitions, 'unproven-pin-reload')
+
+    await selectFixtureContext(page, fixture, 'd')
+    await expect(page.getByTestId('code-context-candidate')).toContainText(`${fixture.fixtureId}-d`)
+    await expect(page.getByTestId('code-pin-context')).toBeEnabled()
     await page.getByTestId('code-pin-context').click()
     await expect(page.getByTestId('code-context-pinned')).toContainText(`${fixture.fixtureId}-d`)
     await page.getByTestId('code-query-input').fill(alternate.query)
@@ -239,12 +254,6 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
 
     const resumePair = await page.evaluate((key) => sessionStorage.getItem(key), RESUME_STORAGE_KEY)
     expect(resumePair).not.toBeNull()
-    await page.reload({ waitUntil: 'domcontentloaded' })
-    if (await page.getByRole('button', { name: 'Retry reload binding' }).isVisible().catch(() => false)) {
-      await page.getByRole('button', { name: 'Retry reload binding' }).click()
-    }
-    await expect(page.getByTestId('code-context-pinned')).toBeVisible()
-    await recordTransition(page, transitions, 'hard-reload')
 
     const copied = await context.newPage()
     await copied.addInitScript(({ key, value }) => {

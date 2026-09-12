@@ -286,7 +286,9 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
     await child.getByTestId('code-pin-context').click()
     await expect(child.getByTestId('code-context-pinned')).toBeVisible()
     await child.reload({ waitUntil: 'domcontentloaded' })
-    await expect(child.getByTestId('code-context-pinned')).toBeVisible()
+    await expect(child.getByTestId('code-context-pinned')).toHaveCount(0)
+    await expect(child.getByTestId('code-release-state')).toHaveAttribute('data-state', 'unselected')
+    await expect(child.getByTestId('code-pin-context')).toBeEnabled()
     await child.close()
 
     const beforeReloadPayload = { ...a.searchPayload }
@@ -300,7 +302,9 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
     }, a.proof)
     expect(closeA).toEqual({ status: 204, text: '' })
     await a.page.reload({ waitUntil: 'domcontentloaded' })
-    await expect(a.page.getByTestId('code-context-pinned')).toBeVisible()
+    await expect(a.page.getByTestId('code-context-pinned')).toHaveCount(0)
+    await expect(a.page.getByTestId('code-release-state')).toHaveAttribute('data-state', 'unselected')
+    await expect(a.page.getByTestId('code-pin-context')).toBeEnabled()
     const staleReplay = await a.page.evaluate(async (body) => {
       const response = await fetch('/api/code/search', {
         method: 'POST',

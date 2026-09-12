@@ -25,6 +25,7 @@ const selectedEdge = ref<CodeGraphEdge | null>(null)
 
 const relationTypes = ['contains', 'imports', 'exports', 'references', 'calls', 'may_call', 'inherits', 'implements', 'documents', 'mentions', 'configures', 'schema_references', 'tests', 'depends_on']
 const graph = computed(() => props.graph?.graph ?? null)
+const visibleContinuation = computed(() => props.graph?.continuation !== null)
 const edges = computed(() => graph.value?.edges ?? [])
 const nodes = computed(() => graph.value?.nodes.map((ref, index) => {
   const count = Math.max(graph.value?.nodes.length ?? 0, 1)
@@ -120,13 +121,13 @@ watch(() => props.graph, () => {
       </label>
     </div>
 
-    <div v-if="graph !== null && graph.graph !== null" class="graph-toolbar">
+    <div v-if="graph !== null" class="graph-toolbar">
       <button class="btn" type="button" :aria-pressed="mode === 'graph'" :disabled="pending" @click="mode = 'graph'">{{ t('codeExplorer.graph.visual') }}</button>
       <button class="btn" type="button" :aria-pressed="mode === 'list'" :disabled="pending" @click="mode = 'list'">{{ t('codeExplorer.graph.list') }}</button>
       <button v-if="selectedTarget !== null || visibleContinuation" class="btn" type="button" :disabled="pending" @click="emit('continue', selectedTarget)">{{ t('codeExplorer.graph.continue') }}</button>
     </div>
 
-    <svg v-if="graph !== null && graph.graph !== null && mode === 'graph'" class="graph-canvas" viewBox="0 0 320 260" role="img" data-testid="code-graph-results" :aria-label="t('codeExplorer.graph.canvasLabel', { count: nodes.length })">
+    <svg v-if="graph !== null && mode === 'graph'" class="graph-canvas" viewBox="0 0 320 260" role="img" data-testid="code-graph-results" :aria-label="t('codeExplorer.graph.canvasLabel', { count: nodes.length })">
       <desc>{{ edges.map((edge) => `${edge.from.entityKey} ${edge.relation} ${edge.to.entityKey} ${edge.explanation ?? ''}`).join(' ') }}</desc>
       <defs><marker id="code-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" /></marker></defs>
       <path
@@ -160,7 +161,7 @@ watch(() => props.graph, () => {
       </g>
     </svg>
 
-    <ol v-if="graph !== null && graph.graph !== null && mode === 'list'" class="edges" data-testid="code-graph-results">
+    <ol v-if="graph !== null && mode === 'list'" class="edges" data-testid="code-graph-results">
       <li v-for="edge in edges" :key="`${edge.from.entityKey}:${edge.relation}:${edge.to.entityKey}`">
         <button type="button" class="edge-list" :aria-pressed="selected(edge)" @click="chooseEdge(edge)">
           <code>{{ edge.from.entityKey }}</code><span>{{ edge.relation }}</span><code>{{ edge.to.entityKey }}</code>
@@ -176,7 +177,7 @@ watch(() => props.graph, () => {
       <p v-else>{{ t('codeExplorer.graph.noPublishedSource') }}</p>
     </section>
 
-    <p v-if="graph !== null && graph.graph !== null" class="stop">{{ t('codeExplorer.graph.traversal', { stop: graph.graph.stopReason }) }}</p>
+    <p v-if="graph !== null" class="stop">{{ t('codeExplorer.graph.traversal', { stop: graph.stopReason }) }}</p>
   </article>
 </template>
 
