@@ -62,28 +62,7 @@ func scanFlagFile(report *Report, file sourceFile) error {
 		report.add(Record{Kind: environmentReaderKind, Path: file.relative, Classification: classificationSourceUncertain})
 		return nil
 	}
-
-	var reads []goEnvironmentRead
-	ast.Inspect(parsed, func(node ast.Node) bool {
-		call, ok := node.(*ast.CallExpr)
-		if !ok || !isEnvironmentRead(call) || len(call.Args) != 1 {
-			return true
-		}
-		line := fset.Position(call.Pos()).Line
-		literal, ok := call.Args[0].(*ast.BasicLit)
-		if !ok || literal.Kind != token.STRING {
-			addUncertainEnvironmentReader(report, file.relative, line)
-			return true
-		}
-		name, err := strconv.Unquote(literal.Value)
-		if err != nil {
-			addUncertainEnvironmentReader(report, file.relative, line)
-			return true
-		}
-		reads = append(reads, goEnvironmentRead{call: call, name: name, line: line})
-		return true
-	})
-	for _, read := range reads {
+	for _, read := range goEnvironmentReads(report, file.relative, fset, parsed) {
 		parserKind, defaultKind := goEnvironmentSemantics(parsed, read.call)
 		addEnvironmentReader(report, file.relative, read.line, read.name, parserKind, defaultKind)
 	}
@@ -94,6 +73,36 @@ type goEnvironmentRead struct {
 	call *ast.CallExpr
 	name string
 	line int
+}
+
+func goEnvironmentReads(report *Report, path string, fset *token.FileSet, parsed *ast.File) []goEnvironmentRead {
+	var reads []goEnvironmentRead
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if ok {
+			appendGoEnvironmentRead(report, path, fset, call, &reads)
+		}
+		return true
+	})
+	return reads
+}
+
+func appendGoEnvironmentRead(report *Report, path string, fset *token.FileSet, call *ast.CallExpr, reads *[]goEnvironmentRead) {
+	if !isEnvironmentRead(call) || len(call.Args) != 1 {
+		return
+	}
+	line := fset.Position(call.Pos()).Line
+	literal, ok := call.Args[0].(*ast.BasicLit)
+	if !ok || literal.Kind != token.STRING {
+		addUncertainEnvironmentReader(report, path, line)
+		return
+	}
+	name, err := strconv.Unquote(literal.Value)
+	if err != nil {
+		addUncertainEnvironmentReader(report, path, line)
+		return
+	}
+	*reads = append(*reads, goEnvironmentRead{call: call, name: name, line: line})
 }
 
 func isEnvironmentRead(call *ast.CallExpr) bool {
@@ -175,25 +184,29 @@ func scanShellFlagFile(report *Report, file sourceFile) error {
 	declared := make(map[string]bool)
 	var state shellLexState
 	for index, line := range strings.Split(string(source), "\n") {
-		code, unsupportedHereDoc := shellCodeMaskWithState(line, &state)
-		if unsupportedHereDoc {
-			addUncertainEnvironmentReader(report, file.relative, index+1)
-		}
-		for offset := range len(code) {
-			if code[offset] != '$' || shellEscaped(code, offset) {
-				continue
-			}
-			name, defaultKind, ok := shellEnvironmentRead(code, offset)
-			if !ok || declared[name] {
-				continue
-			}
-			addEnvironmentReader(report, file.relative, index+1, name, "shell-parameter-expansion", defaultKind)
-		}
-		if match := shellAssignment.FindStringSubmatch(code); match != nil {
-			declared[match[1]] = true
-		}
+		scanShellFlagLine(report, file.relative, line, index+1, &state, declared)
 	}
 	return nil
+}
+
+func scanShellFlagLine(report *Report, path, line string, lineNumber int, state *shellLexState, declared map[string]bool) {
+	code, unsupportedHereDoc := shellCodeMaskWithState(line, state)
+	if unsupportedHereDoc {
+		addUncertainEnvironmentReader(report, path, lineNumber)
+	}
+	for offset := range len(code) {
+		if code[offset] != '$' || shellEscaped(code, offset) {
+			continue
+		}
+		name, defaultKind, ok := shellEnvironmentRead(code, offset)
+		if !ok || declared[name] {
+			continue
+		}
+		addEnvironmentReader(report, path, lineNumber, name, "shell-parameter-expansion", defaultKind)
+	}
+	if match := shellAssignment.FindStringSubmatch(code); match != nil {
+		declared[match[1]] = true
+	}
 }
 
 func scanPowerShellFlagFile(report *Report, file sourceFile) error {
@@ -353,68 +366,91 @@ func capture(value string, start, end int) string {
 }
 
 func goEnvironmentSemantics(file *ast.File, environmentCall *ast.CallExpr) (string, string) {
-	aliases := goEnvironmentAliases(file, environmentCall)
-	parserKind := ""
-	parserConflict := false
-	booleanKind := ""
-	booleanDefault := ""
-	booleanConflict := false
-	trimmed := false
-	ast.Inspect(file, func(node ast.Node) bool {
-		switch node := node.(type) {
-		case *ast.CallExpr:
-			if goCallUsesEnvironmentValue(node, aliases, environmentCall) && goCallName(node) == "strings.TrimSpace" {
-				trimmed = true
-			}
-			kind := ""
-			switch goCallName(node) {
-			case "strconv.Atoi", "strconv.ParseInt", "strconv.ParseUint":
-				kind = "integer-parser"
-			case "strconv.ParseBool":
-				kind = "parse-bool"
-			}
-			if kind != "" && len(node.Args) > 0 && goCallUsesEnvironmentValue(node, aliases, environmentCall) {
-				if node.Pos() > environmentCall.Pos() || goExpressionContainsCall(node.Args[0], environmentCall) {
-					if parserKind == "" {
-						parserKind = kind
-					} else if parserKind != kind {
-						parserConflict = true
-					}
-				}
-			}
-		case *ast.BinaryExpr:
-			if node.Op == token.LOR {
-				if kind, defaultKind, ok := goBooleanExpressionSemantics(node, aliases, environmentCall); ok {
-					if booleanKind == "" {
-						booleanKind, booleanDefault = kind, defaultKind
-					} else if booleanKind != kind {
-						booleanConflict = true
-					}
-					return false
-				}
-			}
-			if node.Op == token.EQL {
-				if kind, defaultKind, ok := goBooleanExpressionSemantics(node, aliases, environmentCall); ok {
-					if booleanKind == "" {
-						booleanKind, booleanDefault = kind, defaultKind
-					} else if booleanKind != kind {
-						booleanConflict = true
-					}
-				}
-			}
-		}
-		return true
-	})
-	if parserConflict || booleanConflict {
+	state := goEnvironmentSemanticState{aliases: goEnvironmentAliases(file, environmentCall), environmentCall: environmentCall}
+	ast.Inspect(file, state.inspect)
+	return state.result()
+}
+
+type goEnvironmentSemanticState struct {
+	aliases         map[*ast.Object]bool
+	environmentCall *ast.CallExpr
+	parserKind      string
+	parserConflict  bool
+	booleanKind     string
+	booleanDefault  string
+	booleanConflict bool
+	trimmed         bool
+}
+
+func (state *goEnvironmentSemanticState) inspect(node ast.Node) bool {
+	switch node := node.(type) {
+	case *ast.CallExpr:
+		state.noteCall(node)
+	case *ast.BinaryExpr:
+		state.noteBoolean(node)
+	}
+	return true
+}
+
+func (state *goEnvironmentSemanticState) noteCall(call *ast.CallExpr) {
+	usesEnvironment := goCallUsesEnvironmentValue(call, state.aliases, state.environmentCall)
+	if usesEnvironment && goCallName(call) == "strings.TrimSpace" {
+		state.trimmed = true
+	}
+	kind := goParserKind(call)
+	if kind == "" || len(call.Args) == 0 || !usesEnvironment {
+		return
+	}
+	if call.Pos() > state.environmentCall.Pos() || goExpressionContainsCall(call.Args[0], state.environmentCall) {
+		state.noteParser(kind)
+	}
+}
+
+func goParserKind(call *ast.CallExpr) string {
+	switch goCallName(call) {
+	case "strconv.Atoi", "strconv.ParseInt", "strconv.ParseUint":
+		return "integer-parser"
+	case "strconv.ParseBool":
+		return "parse-bool"
+	default:
+		return ""
+	}
+}
+
+func (state *goEnvironmentSemanticState) noteParser(kind string) {
+	if state.parserKind == "" {
+		state.parserKind = kind
+	} else if state.parserKind != kind {
+		state.parserConflict = true
+	}
+}
+
+func (state *goEnvironmentSemanticState) noteBoolean(expression *ast.BinaryExpr) {
+	if expression.Op != token.LOR && expression.Op != token.EQL {
+		return
+	}
+	kind, defaultKind, ok := goBooleanExpressionSemantics(expression, state.aliases, state.environmentCall)
+	if !ok {
+		return
+	}
+	if state.booleanKind == "" {
+		state.booleanKind, state.booleanDefault = kind, defaultKind
+	} else if state.booleanKind != kind {
+		state.booleanConflict = true
+	}
+}
+
+func (state *goEnvironmentSemanticState) result() (string, string) {
+	if state.parserConflict || state.booleanConflict {
 		return classificationSourceUncertain, environmentDefaultSourceUnspecified
 	}
-	if parserKind != "" {
-		return parserKind, "source-parser-default"
+	if state.parserKind != "" {
+		return state.parserKind, "source-parser-default"
 	}
-	if booleanKind != "" {
-		return booleanKind, booleanDefault
+	if state.booleanKind != "" {
+		return state.booleanKind, state.booleanDefault
 	}
-	if trimmed {
+	if state.trimmed {
 		return "trimmed-string", environmentDefaultSourceUnspecified
 	}
 	return classificationSourceUncertain, environmentDefaultSourceUnspecified
