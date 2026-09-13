@@ -1247,43 +1247,71 @@ func uciRecordInstalledWatcherSLO(ctx context.Context, live uciInstalledAcceptan
 	return uciRecordInstalledWatcherSLOObserved(ctx, live, provider, nil, nil, nil, nil)
 }
 
+type uciWatcherSLORecordedBatches struct {
+	selectionA         uciInstalledAcceptanceSelection
+	selectionB         uciInstalledAcceptanceSelection
+	beforeA            uciInstalledAcceptancePublication
+	beforeB            uciInstalledAcceptancePublication
+	previousSource     []byte
+	batches            []acceptance.UCIWatcherSLOBatch
+	healthyWarmBatches int
+}
+
 func uciRecordInstalledWatcherSLOObserved(ctx context.Context, live uciInstalledAcceptanceScenarioRuntime, provider *uciInstalledAcceptanceEmbeddingProvider, journal *uciWatcherSLOStageJournal, run *uciWatcherSLOStageRun, scannerAggregateObserver *uciWatcherSLOScannerAggregateObserver, embeddingTimingObserver *uciWatcherSLOEmbeddingTimingObserver) (acceptance.UCIWatcherSLOInput, error) {
+	candidate, err := uciWatcherSLORecordCandidate(ctx, live, provider, journal, run)
+	if err != nil {
+		return acceptance.UCIWatcherSLOInput{}, err
+	}
+	recorded, err := uciWatcherSLORecordBatches(ctx, live, journal, run, scannerAggregateObserver, embeddingTimingObserver)
+	if err != nil {
+		return acceptance.UCIWatcherSLOInput{}, err
+	}
+	return uciWatcherSLORecordResult(ctx, live, provider, candidate, recorded)
+}
+
+func uciWatcherSLORecordCandidate(ctx context.Context, live uciInstalledAcceptanceScenarioRuntime, provider *uciInstalledAcceptanceEmbeddingProvider, journal *uciWatcherSLOStageJournal, run *uciWatcherSLOStageRun) (uci.UCISLOCandidate, error) {
 	if live.Authority == nil || live.Authority.profile == nil || live.Authority.source == nil || live.ClientA == nil || live.ClientB == nil || provider == nil {
-		return acceptance.UCIWatcherSLOInput{}, errors.New("installed watcher recorder runtime is incomplete")
+		return uci.UCISLOCandidate{}, errors.New("installed watcher recorder runtime is incomplete")
 	}
 	if err := uciWatcherSLOMarkAuxiliaryInactive(ctx, live.Authority); err != nil {
-		return acceptance.UCIWatcherSLOInput{}, err
+		return uci.UCISLOCandidate{}, err
 	}
 	candidate, err := uciWatcherSLOCandidate(ctx, live.Request.CandidateSourceRoot, live.Candidates)
 	if err != nil {
-		return acceptance.UCIWatcherSLOInput{}, err
+		return uci.UCISLOCandidate{}, err
 	}
-	if journal != nil {
-		if run == nil {
-			return acceptance.UCIWatcherSLOInput{}, errors.New("installed watcher stage journal has no run state")
-		}
-		run.CandidateBranch = candidate.Branch
-		run.CandidateCommit = candidate.Commit
-		run.CandidateTree = candidate.Tree
-		if err := journal.append("run_candidate", run, nil); err != nil {
-			return acceptance.UCIWatcherSLOInput{}, fmt.Errorf("write installed watcher stage candidate: %w", err)
-		}
+	if journal == nil {
+		return candidate, nil
 	}
-	selectionA := live.Selections[uciInstalledAcceptanceClientA]
-	selectionB := live.Selections[uciInstalledAcceptanceClientB]
-	beforeA := live.Publications[uciInstalledAcceptanceClientA]
-	beforeB := live.Publications[uciInstalledAcceptanceClientB]
-	if selectionA.contextHandle == "" || selectionB.contextHandle == "" || beforeA.viewID == "" || beforeB.viewID == "" {
-		return acceptance.UCIWatcherSLOInput{}, errors.New("installed watcher recorder has no A/B baseline")
+	if run == nil {
+		return uci.UCISLOCandidate{}, errors.New("installed watcher stage journal has no run state")
 	}
+	run.CandidateBranch = candidate.Branch
+	run.CandidateCommit = candidate.Commit
+	run.CandidateTree = candidate.Tree
+	if err := journal.append("run_candidate", run, nil); err != nil {
+		return uci.UCISLOCandidate{}, fmt.Errorf("write installed watcher stage candidate: %w", err)
+	}
+	return candidate, nil
+}
 
-	batches := make([]acceptance.UCIWatcherSLOBatch, 0, uciWatcherSLORecordMaximumAttempts)
-	previousSource, err := os.ReadFile(filepath.Join(live.Worktrees.primaryRoot, filepath.FromSlash(live.Request.Fixture.RelativePath)))
-	if err != nil {
-		return acceptance.UCIWatcherSLOInput{}, fmt.Errorf("read installed watcher A baseline: %w", err)
+func uciWatcherSLORecordBatches(ctx context.Context, live uciInstalledAcceptanceScenarioRuntime, journal *uciWatcherSLOStageJournal, run *uciWatcherSLOStageRun, scannerAggregateObserver *uciWatcherSLOScannerAggregateObserver, embeddingTimingObserver *uciWatcherSLOEmbeddingTimingObserver) (uciWatcherSLORecordedBatches, error) {
+	recorded := uciWatcherSLORecordedBatches{
+		selectionA: live.Selections[uciInstalledAcceptanceClientA],
+		selectionB: live.Selections[uciInstalledAcceptanceClientB],
+		beforeA:    live.Publications[uciInstalledAcceptanceClientA],
+		beforeB:    live.Publications[uciInstalledAcceptanceClientB],
+		batches:    make([]acceptance.UCIWatcherSLOBatch, 0, uciWatcherSLORecordMaximumAttempts),
 	}
-	healthyWarmBatches := 0
-	for sequence := 1; sequence <= uciWatcherSLORecordMaximumAttempts && healthyWarmBatches < uciWatcherSLORecordRequiredWarmBatches; sequence++ {
+	if recorded.selectionA.contextHandle == "" || recorded.selectionB.contextHandle == "" || recorded.beforeA.viewID == "" || recorded.beforeB.viewID == "" {
+		return uciWatcherSLORecordedBatches{}, errors.New("installed watcher recorder has no A/B baseline")
+	}
+	var err error
+	recorded.previousSource, err = os.ReadFile(filepath.Join(live.Worktrees.primaryRoot, filepath.FromSlash(live.Request.Fixture.RelativePath)))
+	if err != nil {
+		return uciWatcherSLORecordedBatches{}, fmt.Errorf("read installed watcher A baseline: %w", err)
+	}
+	for sequence := 1; sequence <= uciWatcherSLORecordMaximumAttempts && recorded.healthyWarmBatches < uciWatcherSLORecordRequiredWarmBatches; sequence++ {
 		warmth := "warm"
 		if sequence == 1 {
 			warmth = "cold"
@@ -1291,59 +1319,69 @@ func uciRecordInstalledWatcherSLOObserved(ctx context.Context, live uciInstalled
 		if run != nil {
 			run.Attempted++
 		}
-		batch, nextSource, measureErr := uciRecordInstalledWatcherSLOBatch(ctx, uciWatcherSLOBatchInput{
+		batchInput := uciWatcherSLOBatchInput{
 			live:                     live,
-			selectionA:               selectionA,
-			selectionB:               selectionB,
-			beforeA:                  beforeA,
-			beforeB:                  beforeB,
-			previousSource:           previousSource,
+			selectionA:               recorded.selectionA,
+			selectionB:               recorded.selectionB,
+			beforeA:                  recorded.beforeA,
+			beforeB:                  recorded.beforeB,
+			previousSource:           recorded.previousSource,
 			sequence:                 sequence,
 			warmth:                   warmth,
 			journal:                  journal,
 			scannerAggregateObserver: scannerAggregateObserver,
 			embeddingTimingObserver:  embeddingTimingObserver,
-		})
-		if measureErr != nil {
-			return acceptance.UCIWatcherSLOInput{}, measureErr
+		}
+		batch, nextSource, afterA, err := uciWatcherSLORecordObservedBatch(ctx, batchInput)
+		if err != nil {
+			return uciWatcherSLORecordedBatches{}, err
 		}
 		if run != nil {
 			run.Finished++
 		}
-		afterA, statusErr := uciWatcherSLOCurrentPublication(ctx, live.ClientA, selectionA)
-		if statusErr != nil || afterA.viewID != batch.AAfter.Context.ViewID || afterA.generation != batch.AAfter.Context.Generation {
-			return acceptance.UCIWatcherSLOInput{}, errors.New("normal client status changed after watcher evidence was observed")
-		}
-		batches = append(batches, batch)
+		recorded.batches = append(recorded.batches, batch)
 		if batch.Warmth == "warm" && batch.Outcome == "healthy" {
-			healthyWarmBatches++
+			recorded.healthyWarmBatches++
 			if run != nil {
 				run.HealthyWarm++
 			}
 		}
-		previousSource = nextSource
-		beforeA = afterA
-		selectionA.runID = afterA.runID
+		recorded.previousSource = nextSource
+		recorded.beforeA = afterA
+		recorded.selectionA.runID = afterA.runID
 	}
-	if healthyWarmBatches < uciWatcherSLORecordRequiredWarmBatches {
-		return acceptance.UCIWatcherSLOInput{}, fmt.Errorf("installed watcher recorder reached %d attempts with %d healthy warm samples, want %d", len(batches), healthyWarmBatches, uciWatcherSLORecordRequiredWarmBatches)
+	if recorded.healthyWarmBatches < uciWatcherSLORecordRequiredWarmBatches {
+		return uciWatcherSLORecordedBatches{}, fmt.Errorf("installed watcher recorder reached %d attempts with %d healthy warm samples, want %d", len(recorded.batches), recorded.healthyWarmBatches, uciWatcherSLORecordRequiredWarmBatches)
 	}
+	return recorded, nil
+}
 
-	finalA := batches[len(batches)-1].AAfter
+func uciWatcherSLORecordObservedBatch(ctx context.Context, input uciWatcherSLOBatchInput) (acceptance.UCIWatcherSLOBatch, []byte, uciInstalledAcceptancePublication, error) {
+	batch, nextSource, err := uciRecordInstalledWatcherSLOBatch(ctx, input)
+	if err != nil {
+		return acceptance.UCIWatcherSLOBatch{}, nil, uciInstalledAcceptancePublication{}, err
+	}
+	afterA, err := uciWatcherSLOCurrentPublication(ctx, input.live.ClientA, input.selectionA)
+	if err != nil || afterA.viewID != batch.AAfter.Context.ViewID || afterA.generation != batch.AAfter.Context.Generation {
+		return acceptance.UCIWatcherSLOBatch{}, nil, uciInstalledAcceptancePublication{}, errors.New("normal client status changed after watcher evidence was observed")
+	}
+	return batch, nextSource, afterA, nil
+}
+
+func uciWatcherSLORecordResult(ctx context.Context, live uciInstalledAcceptanceScenarioRuntime, provider *uciInstalledAcceptanceEmbeddingProvider, candidate uci.UCISLOCandidate, recorded uciWatcherSLORecordedBatches) (acceptance.UCIWatcherSLOInput, error) {
+	finalA := recorded.batches[len(recorded.batches)-1].AAfter
 	environment, profile, err := uciWatcherSLOEnvironmentAndProfile(ctx, live, provider, finalA)
 	if err != nil {
 		return acceptance.UCIWatcherSLOInput{}, err
 	}
 	identity := uci.UCISLOSampleIdentity{Candidate: candidate, Environment: environment}
-	for index := range batches {
-		batches[index].Identity = identity
-	}
-	for _, batch := range batches {
-		if batch.ChangedBytes > profile.ChangedBytes {
-			profile.ChangedBytes = batch.ChangedBytes
+	for index := range recorded.batches {
+		recorded.batches[index].Identity = identity
+		if recorded.batches[index].ChangedBytes > profile.ChangedBytes {
+			profile.ChangedBytes = recorded.batches[index].ChangedBytes
 		}
 	}
-	unchanged, err := uciRecordInstalledWatcherSLOUnchanged(ctx, live, selectionA, beforeA, identity)
+	unchanged, err := uciRecordInstalledWatcherSLOUnchanged(ctx, live, recorded.selectionA, recorded.beforeA, identity)
 	if err != nil {
 		return acceptance.UCIWatcherSLOInput{}, err
 	}
@@ -1352,7 +1390,7 @@ func uciRecordInstalledWatcherSLOObserved(ctx context.Context, live uciInstalled
 		Candidate:              candidate,
 		Environment:            environment,
 		Profile:                profile,
-		Batches:                batches,
+		Batches:                recorded.batches,
 		UnchangedInputCounters: []acceptance.UCIWatcherSLOUnchangedInputCounter{unchanged},
 	}, nil
 }
@@ -1371,161 +1409,207 @@ type uciWatcherSLOBatchInput struct {
 	embeddingTimingObserver  *uciWatcherSLOEmbeddingTimingObserver
 }
 
+type uciWatcherSLOBatchMeasurement struct {
+	functionName             string
+	nextSource               []byte
+	started                  time.Time
+	publication              uciInstalledAcceptancePublication
+	response                 uci.QueryResponse
+	structuralCompleted      time.Time
+	embeddedPublication      uciInstalledAcceptancePublication
+	embedding                uciRealCorpusEmbeddingStatus
+	embeddingCompleted       time.Time
+	terminalEmbeddingFailure bool
+	embeddingTiming          acceptance.UCIWatcherSLOTiming
+	beforeEmbedding          uciRealCorpusEmbeddingStatus
+	afterEmbedding           uciRealCorpusEmbeddingStatus
+	aBefore                  acceptance.UCIWatcherSLOView
+	aAfter                   acceptance.UCIWatcherSLOView
+	bBefore                  acceptance.UCIWatcherSLOView
+	bAfter                   acceptance.UCIWatcherSLOView
+	coverage                 string
+	outcome                  string
+	reason                   string
+}
+
 func uciRecordInstalledWatcherSLOBatch(ctx context.Context, input uciWatcherSLOBatchInput) (batch acceptance.UCIWatcherSLOBatch, nextSource []byte, retErr error) {
-	live := input.live
-	selectionA, selectionB := input.selectionA, input.selectionB
-	beforeA, beforeB := input.beforeA, input.beforeB
-	previousSource, sequence, warmth := input.previousSource, input.sequence, input.warmth
-	journal := input.journal
-	scannerAggregateObserver := input.scannerAggregateObserver
-	embeddingTimingObserver := input.embeddingTimingObserver
 	stage := "pre_save"
 	var trace *uciWatcherSLOAttemptTrace
 	var attempt uciWatcherSLOStageAttempt
 	var restoreObserver func()
 	var durableObserver *uciWatcherSLODurableViewObserver
 	var lastEmbedding uciWatcherSLOStageEmbedding
-	if journal != nil {
+	if input.journal != nil {
 		attempt = uciWatcherSLOStageAttempt{
-			ID:       fmt.Sprintf("installed-watcher-%s-%03d", warmth, sequence),
-			Sequence: sequence,
-			Warmth:   warmth,
-			Baseline: uciWatcherSLOStagePublicationFor(beforeA),
+			ID:       fmt.Sprintf("installed-watcher-%s-%03d", input.warmth, input.sequence),
+			Sequence: input.sequence,
+			Warmth:   input.warmth,
+			Baseline: uciWatcherSLOStagePublicationFor(input.beforeA),
 		}
-		if err := journal.append("attempt_begin", nil, &attempt); err != nil {
+		if err := input.journal.append("attempt_begin", nil, &attempt); err != nil {
 			return acceptance.UCIWatcherSLOBatch{}, nil, fmt.Errorf("write installed watcher attempt begin: %w", err)
 		}
-		trace = newUCIWatcherSLOAttemptTrace(journal.origin, beforeA)
-		if scannerAggregateObserver != nil {
-			scannerAggregateObserver.setTrace(trace)
-			defer scannerAggregateObserver.setTrace(nil)
+		trace = newUCIWatcherSLOAttemptTrace(input.journal.origin, input.beforeA)
+		if input.scannerAggregateObserver != nil {
+			input.scannerAggregateObserver.setTrace(trace)
+			defer input.scannerAggregateObserver.setTrace(nil)
 		}
-		if embeddingTimingObserver != nil {
-			embeddingTimingObserver.setTrace(trace)
-			defer embeddingTimingObserver.setTrace(nil)
+		if input.embeddingTimingObserver != nil {
+			input.embeddingTimingObserver.setTrace(trace)
+			defer input.embeddingTimingObserver.setTrace(nil)
 		}
-		restoreObserver = live.ClientA.setToolObserver(trace.observeTool)
+		restoreObserver = input.live.ClientA.setToolObserver(trace.observeTool)
 		defer func() {
 			if restoreObserver != nil {
 				restoreObserver()
 			}
 			durableObserver.stop()
-			retErr = uciWatcherSLOFinalizeAttempt(journal, &attempt, trace, stage, retErr, lastEmbedding, batch)
+			retErr = uciWatcherSLOFinalizeAttempt(input.journal, &attempt, trace, stage, retErr, lastEmbedding, batch)
 		}()
-		var observerErr error
-		durableObserver, observerErr = uciStartWatcherSLODurableViewObserver(ctx, live.Authority, beforeA, trace)
-		if observerErr != nil {
-			return acceptance.UCIWatcherSLOBatch{}, nil, fmt.Errorf("start installed watcher durable observer: %w", observerErr)
+		var err error
+		durableObserver, err = uciStartWatcherSLODurableViewObserver(ctx, input.live.Authority, input.beforeA, trace)
+		if err != nil {
+			return acceptance.UCIWatcherSLOBatch{}, nil, fmt.Errorf("start installed watcher durable observer: %w", err)
 		}
 	}
+	return uciWatcherSLOMeasureBatch(ctx, input, trace, &stage, &lastEmbedding)
+}
 
-	aBefore, beforeEmbedding, err := uciWatcherSLOCurrentView(ctx, live.Authority, live.ClientA, selectionA, beforeA)
+func uciWatcherSLOMeasureBatch(ctx context.Context, input uciWatcherSLOBatchInput, trace *uciWatcherSLOAttemptTrace, stage *string, lastEmbedding *uciWatcherSLOStageEmbedding) (acceptance.UCIWatcherSLOBatch, []byte, error) {
+	measurement, selectionA, err := uciWatcherSLOObserveBatchStart(ctx, input, trace, stage)
 	if err != nil {
-		return acceptance.UCIWatcherSLOBatch{}, nil, fmt.Errorf("observe A before save: %w", err)
+		return acceptance.UCIWatcherSLOBatch{}, nil, err
 	}
-	bBefore, _, err := uciWatcherSLOCurrentView(ctx, live.Authority, live.ClientB, selectionB, beforeB)
+	measurement, err = uciWatcherSLOObserveBatchEmbedding(ctx, input, trace, stage, lastEmbedding, selectionA, measurement)
 	if err != nil {
-		return acceptance.UCIWatcherSLOBatch{}, nil, fmt.Errorf("observe B before A save: %w", err)
+		return acceptance.UCIWatcherSLOBatch{}, nil, err
 	}
+	if err := uciWatcherSLOObserveBatchAfter(ctx, input, selectionA, &measurement); err != nil {
+		return acceptance.UCIWatcherSLOBatch{}, nil, err
+	}
+	return uciWatcherSLOBatchFromMeasurement(input, measurement), measurement.nextSource, nil
+}
 
-	functionName := fmt.Sprintf("UCIWatcherSLO%03d", sequence)
-	nextSource = []byte("package fixture\n\nfunc " + live.Request.Fixture.SharedSymbol + "() string { return " + functionName + "() }\nfunc " + functionName + "() string { return \"" + functionName + "\" }\n")
-	path := filepath.Join(live.Worktrees.primaryRoot, filepath.FromSlash(live.Request.Fixture.RelativePath))
-	stage = "save"
+func uciWatcherSLOObserveBatchStart(ctx context.Context, input uciWatcherSLOBatchInput, trace *uciWatcherSLOAttemptTrace, stage *string) (uciWatcherSLOBatchMeasurement, uciInstalledAcceptanceSelection, error) {
+	measurement := uciWatcherSLOBatchMeasurement{}
+	aBefore, beforeEmbedding, err := uciWatcherSLOCurrentView(ctx, input.live.Authority, input.live.ClientA, input.selectionA, input.beforeA)
+	if err != nil {
+		return measurement, uciInstalledAcceptanceSelection{}, fmt.Errorf("observe A before save: %w", err)
+	}
+	bBefore, _, err := uciWatcherSLOCurrentView(ctx, input.live.Authority, input.live.ClientB, input.selectionB, input.beforeB)
+	if err != nil {
+		return measurement, uciInstalledAcceptanceSelection{}, fmt.Errorf("observe B before A save: %w", err)
+	}
+	measurement.aBefore, measurement.bBefore, measurement.beforeEmbedding = aBefore, bBefore, beforeEmbedding
+	measurement.functionName = fmt.Sprintf("UCIWatcherSLO%03d", input.sequence)
+	measurement.nextSource = []byte("package fixture\n\nfunc " + input.live.Request.Fixture.SharedSymbol + "() string { return " + measurement.functionName + "() }\nfunc " + measurement.functionName + "() string { return \"" + measurement.functionName + "\" }\n")
+	path := filepath.Join(input.live.Worktrees.primaryRoot, filepath.FromSlash(input.live.Request.Fixture.RelativePath))
+	*stage = "save"
 	diagnosticSaveStarted := time.Now()
-	started := diagnosticSaveStarted.UTC()
-	writeErr := os.WriteFile(path, nextSource, 0o600)
+	measurement.started = diagnosticSaveStarted.UTC()
+	writeErr := os.WriteFile(path, measurement.nextSource, 0o600)
 	if trace != nil {
 		trace.markSave(diagnosticSaveStarted, time.Now(), writeErr)
 	}
 	if writeErr != nil {
-		return acceptance.UCIWatcherSLOBatch{}, nil, fmt.Errorf("save bounded A watcher source: %w", writeErr)
+		return measurement, uciInstalledAcceptanceSelection{}, fmt.Errorf("save bounded A watcher source: %w", writeErr)
 	}
-	stage = "watcher"
-	publication, response, structuralCompleted, err := uciWatcherSLOAwaitSearchable(ctx, live.ClientA, selectionA, beforeA, functionName, live.Request.Fixture.RelativePath, trace)
+	*stage = "watcher"
+	measurement.publication, measurement.response, measurement.structuralCompleted, err = uciWatcherSLOAwaitSearchable(ctx, input.live.ClientA, input.selectionA, input.beforeA, measurement.functionName, input.live.Request.Fixture.RelativePath, trace)
 	if err != nil {
-		return acceptance.UCIWatcherSLOBatch{}, nil, err
+		return measurement, uciInstalledAcceptanceSelection{}, err
 	}
-	selectionA.runID = publication.runID
-	stage = "post_endpoint_barrier"
-	barrier, err := uciWatcherSLOAwaitPostEndpointBarrier(ctx, live.ClientA, selectionA, publication, trace)
-	if err != nil {
-		return acceptance.UCIWatcherSLOBatch{}, nil, err
-	}
-	stage = "post_endpoint_quiescence"
-	if _, err := uciWatcherSLOAwaitPostEndpointQuiescence(ctx, live.ClientA, selectionA, publication, barrier, trace); err != nil {
-		return acceptance.UCIWatcherSLOBatch{}, nil, err
-	}
-	stage = "embedding"
-	embedding, embeddedPublication, embeddingCompleted, embeddingErr := uciWatcherSLOAwaitEmbeddingReady(ctx, live.Authority, live.ClientA, selectionA, publication)
-	lastEmbedding = uciWatcherSLOStageEmbeddingFor(embedding)
-	terminalEmbeddingFailure := false
-	if embeddingErr != nil {
-		if !errors.Is(embeddingErr, errUCIWatcherSLOEmbeddingTerminal) {
-			return acceptance.UCIWatcherSLOBatch{}, nil, embeddingErr
-		}
-		terminalEmbeddingFailure = true
-		embeddedPublication = publication
-	}
-	embeddingTiming := acceptance.UCIWatcherSLOTiming{Origin: acceptance.UCIWatcherSLOOriginUnknownNotMeasured}
-	if !terminalEmbeddingFailure {
-		embeddingTiming = uciWatcherSLOInstalledTiming(acceptance.UCIWatcherSLOOriginInstalledEmbeddingStatus, started, embeddingCompleted)
-	}
-	aAfter, afterEmbedding, err := uciWatcherSLOCurrentView(ctx, live.Authority, live.ClientA, selectionA, embeddedPublication)
-	if err != nil {
-		return acceptance.UCIWatcherSLOBatch{}, nil, fmt.Errorf("observe A after watcher publication: %w", err)
-	}
-	bAfter, _, err := uciWatcherSLOCurrentView(ctx, live.Authority, live.ClientB, selectionB, beforeB)
-	if err != nil {
-		return acceptance.UCIWatcherSLOBatch{}, nil, fmt.Errorf("independently observe B after A save: %w", err)
-	}
-	if !uciWatcherSLOViewsEqual(bBefore, bAfter) {
-		return acceptance.UCIWatcherSLOBatch{}, nil, errors.New("installed watcher changed B while only A was saved")
-	}
-	coverage := "unknown"
-	if response.Coverage != nil {
-		coverage = string(response.Coverage.Structural)
-	}
-	outcome, reason := "", ""
-	if terminalEmbeddingFailure {
-		if !uciWatcherSLOEmbeddingTerminal(afterEmbedding) {
-			return acceptance.UCIWatcherSLOBatch{}, nil, errors.New("installed embedding terminal status did not remain observable")
-		}
-		outcome, reason = "failed", "embedding_terminal_failure"
-	} else {
-		if afterEmbedding.Embedding.ReadyCandidates != embedding.Embedding.ReadyCandidates || beforeEmbedding.Embedding.ReadyCandidates > afterEmbedding.Embedding.ReadyCandidates {
-			return acceptance.UCIWatcherSLOBatch{}, nil, errors.New("installed watcher embedding counter observation is inconsistent")
-		}
-		outcome, reason = uciWatcherSLOClassifyOutcome(response.Status, coverage, embedding.Embedding.Coverage)
-	}
+	selectionA := input.selectionA
+	selectionA.runID = measurement.publication.runID
+	return measurement, selectionA, nil
+}
 
+func uciWatcherSLOObserveBatchEmbedding(ctx context.Context, input uciWatcherSLOBatchInput, trace *uciWatcherSLOAttemptTrace, stage *string, lastEmbedding *uciWatcherSLOStageEmbedding, selectionA uciInstalledAcceptanceSelection, measurement uciWatcherSLOBatchMeasurement) (uciWatcherSLOBatchMeasurement, error) {
+	*stage = "post_endpoint_barrier"
+	barrier, err := uciWatcherSLOAwaitPostEndpointBarrier(ctx, input.live.ClientA, selectionA, measurement.publication, trace)
+	if err != nil {
+		return measurement, err
+	}
+	*stage = "post_endpoint_quiescence"
+	if _, err := uciWatcherSLOAwaitPostEndpointQuiescence(ctx, input.live.ClientA, selectionA, measurement.publication, barrier, trace); err != nil {
+		return measurement, err
+	}
+	*stage = "embedding"
+	measurement.embedding, measurement.embeddedPublication, measurement.embeddingCompleted, err = uciWatcherSLOAwaitEmbeddingReady(ctx, input.live.Authority, input.live.ClientA, selectionA, measurement.publication)
+	*lastEmbedding = uciWatcherSLOStageEmbeddingFor(measurement.embedding)
+	if err != nil {
+		if !errors.Is(err, errUCIWatcherSLOEmbeddingTerminal) {
+			return measurement, err
+		}
+		measurement.terminalEmbeddingFailure = true
+		measurement.embeddedPublication = measurement.publication
+	}
+	measurement.embeddingTiming = acceptance.UCIWatcherSLOTiming{Origin: acceptance.UCIWatcherSLOOriginUnknownNotMeasured}
+	if !measurement.terminalEmbeddingFailure {
+		measurement.embeddingTiming = uciWatcherSLOInstalledTiming(acceptance.UCIWatcherSLOOriginInstalledEmbeddingStatus, measurement.started, measurement.embeddingCompleted)
+	}
+	return measurement, nil
+}
+
+func uciWatcherSLOObserveBatchAfter(ctx context.Context, input uciWatcherSLOBatchInput, selectionA uciInstalledAcceptanceSelection, measurement *uciWatcherSLOBatchMeasurement) error {
+	var err error
+	measurement.aAfter, measurement.afterEmbedding, err = uciWatcherSLOCurrentView(ctx, input.live.Authority, input.live.ClientA, selectionA, measurement.embeddedPublication)
+	if err != nil {
+		return fmt.Errorf("observe A after watcher publication: %w", err)
+	}
+	measurement.bAfter, _, err = uciWatcherSLOCurrentView(ctx, input.live.Authority, input.live.ClientB, input.selectionB, input.beforeB)
+	if err != nil {
+		return fmt.Errorf("independently observe B after A save: %w", err)
+	}
+	if !uciWatcherSLOViewsEqual(measurement.bBefore, measurement.bAfter) {
+		return errors.New("installed watcher changed B while only A was saved")
+	}
+	measurement.coverage = "unknown"
+	if measurement.response.Coverage != nil {
+		measurement.coverage = string(measurement.response.Coverage.Structural)
+	}
+	if measurement.terminalEmbeddingFailure {
+		if !uciWatcherSLOEmbeddingTerminal(measurement.afterEmbedding) {
+			return errors.New("installed embedding terminal status did not remain observable")
+		}
+		measurement.outcome, measurement.reason = "failed", "embedding_terminal_failure"
+		return nil
+	}
+	if measurement.afterEmbedding.Embedding.ReadyCandidates != measurement.embedding.Embedding.ReadyCandidates || measurement.beforeEmbedding.Embedding.ReadyCandidates > measurement.afterEmbedding.Embedding.ReadyCandidates {
+		return errors.New("installed watcher embedding counter observation is inconsistent")
+	}
+	measurement.outcome, measurement.reason = uciWatcherSLOClassifyOutcome(measurement.response.Status, measurement.coverage, measurement.embedding.Embedding.Coverage)
+	return nil
+}
+
+func uciWatcherSLOBatchFromMeasurement(input uciWatcherSLOBatchInput, measurement uciWatcherSLOBatchMeasurement) acceptance.UCIWatcherSLOBatch {
 	return acceptance.UCIWatcherSLOBatch{
-		ID:                   fmt.Sprintf("installed-watcher-%s-%03d", warmth, sequence),
-		ProfileID:            aAfter.Context.AnalysisProfileID,
-		ObservedFSSeq:        aAfter.AcceptedFSSeq,
+		ID:                   fmt.Sprintf("installed-watcher-%s-%03d", input.warmth, input.sequence),
+		ProfileID:            measurement.aAfter.Context.AnalysisProfileID,
+		ObservedFSSeq:        measurement.aAfter.AcceptedFSSeq,
 		ChangedFileCount:     1,
-		ChangedBytes:         uciWatcherSLOChangedBytes(previousSource, nextSource),
+		ChangedBytes:         uciWatcherSLOChangedBytes(input.previousSource, measurement.nextSource),
 		ScanOutcome:          uci.IndexScanComplete,
-		ResultStatus:         string(response.Status),
-		Coverage:             coverage,
-		Outcome:              outcome,
-		Reason:               reason,
-		Warmth:               warmth,
+		ResultStatus:         string(measurement.response.Status),
+		Coverage:             measurement.coverage,
+		Outcome:              measurement.outcome,
+		Reason:               measurement.reason,
+		Warmth:               input.warmth,
 		Scan:                 acceptance.UCIWatcherSLOTiming{Origin: acceptance.UCIWatcherSLOOriginUnknownNotMeasured},
-		StructuralFTS:        uciWatcherSLOInstalledTiming(acceptance.UCIWatcherSLOOriginInstalledClientSearch, started, structuralCompleted),
-		EmbeddingReadiness:   embeddingTiming,
+		StructuralFTS:        uciWatcherSLOInstalledTiming(acceptance.UCIWatcherSLOOriginInstalledClientSearch, measurement.started, measurement.structuralCompleted),
+		EmbeddingReadiness:   measurement.embeddingTiming,
 		LocalACK:             acceptance.UCIWatcherSLOTiming{Origin: acceptance.UCIWatcherSLOOriginUnknownNotMeasured},
-		EmbeddingCounters:    acceptance.UCIWatcherSLOEmbeddingCounters{Origin: acceptance.UCIWatcherSLOOriginInstalledEmbeddingStatus, Measured: true, Before: int64(beforeEmbedding.Embedding.ReadyCandidates), After: int64(afterEmbedding.Embedding.ReadyCandidates)},
-		ReembeddedCandidates: int(afterEmbedding.Embedding.ReadyCandidates - beforeEmbedding.Embedding.ReadyCandidates),
-		ABefore:              aBefore,
-		AAfter:               aAfter,
-		BBefore:              bBefore,
-		BAfter:               bAfter,
+		EmbeddingCounters:    acceptance.UCIWatcherSLOEmbeddingCounters{Origin: acceptance.UCIWatcherSLOOriginInstalledEmbeddingStatus, Measured: true, Before: int64(measurement.beforeEmbedding.Embedding.ReadyCandidates), After: int64(measurement.afterEmbedding.Embedding.ReadyCandidates)},
+		ReembeddedCandidates: int(measurement.afterEmbedding.Embedding.ReadyCandidates - measurement.beforeEmbedding.Embedding.ReadyCandidates),
+		ABefore:              measurement.aBefore,
+		AAfter:               measurement.aAfter,
+		BBefore:              measurement.bBefore,
+		BAfter:               measurement.bAfter,
 		ABeforeOrigin:        acceptance.UCIWatcherSLOOriginInstalledStatusAndView,
 		AAfterOrigin:         acceptance.UCIWatcherSLOOriginInstalledStatusAndView,
 		BBeforeOrigin:        acceptance.UCIWatcherSLOOriginInstalledStatusAndView,
 		BAfterOrigin:         acceptance.UCIWatcherSLOOriginInstalledStatusAndView,
-	}, nextSource, nil
+	}
 }
 
 func uciWatcherSLOAwaitSearchable(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection, previous uciInstalledAcceptancePublication, functionName, relativePath string, trace *uciWatcherSLOAttemptTrace) (uciInstalledAcceptancePublication, uci.QueryResponse, time.Time, error) {
@@ -2128,24 +2212,67 @@ func TestUCIWatcherSLOPublicationObservationBounds(t *testing.T) {
 	}
 }
 
+type uciWatcherSLOSearchableServer struct {
+	clientInput *os.File
+	requests    *os.File
+	responses   *os.File
+	serverDone  chan struct{}
+	serverErr   chan error
+	searchCalls chan int
+	statusCalls chan int
+	toolCalls   chan []string
+	client      *uciInstalledAcceptanceMCPClient
+	closed      bool
+}
+
 func TestUCIWatcherSLOAwaitSearchableUsesOneCanarySearch(t *testing.T) {
 	before := uciInstalledAcceptancePublication{
 		sourceID: "20000000-0000-4000-8000-000000000001", checkoutID: "30000000-0000-4000-8000-000000000001", profileID: "50000000-0000-4000-8000-000000000001", viewID: "40000000-0000-4000-8000-000000000001", generation: 1, runID: "run-before",
 	}
 	after := before
 	after.viewID, after.generation, after.runID = "40000000-0000-4000-8000-000000000002", 2, "run-after"
+	statusPayload, queryPayload := uciWatcherSLOSearchablePayloads(t, after)
+	server := newUCIWatcherSLOSearchableServer(t, statusPayload, queryPayload)
+	defer server.close()
+
+	trace := newUCIWatcherSLOAttemptTrace(time.Now(), before)
+	restoreObserver := server.client.setToolObserver(trace.observeTool)
+	publication, response, structuralCompleted, err := uciWatcherSLOAwaitSearchable(context.Background(), server.client, uciInstalledAcceptanceSelection{contextHandle: "context", runID: before.runID}, before, "UCIWatcherCanary", "pkg/watcher.go", trace)
+	if err != nil {
+		t.Fatalf("await searchable watcher: %v", err)
+	}
+	barrier, err := uciWatcherSLOAwaitPostEndpointBarrier(context.Background(), server.client, uciInstalledAcceptanceSelection{contextHandle: "context"}, publication, trace)
+	if err != nil {
+		t.Fatalf("await post-endpoint barrier: %v", err)
+	}
+	quiescent, err := uciWatcherSLOAwaitPostEndpointQuiescence(context.Background(), server.client, uciInstalledAcceptanceSelection{contextHandle: "context"}, publication, barrier, trace)
+	if err != nil {
+		t.Fatalf("await post-endpoint quiescence: %v", err)
+	}
+	if !uciWatcherSLOSameExactPublication(publication, barrier) || !uciWatcherSLOSameExactPublication(publication, quiescent) {
+		t.Fatalf("post-endpoint safety changed publication: endpoint=%#v barrier=%#v quiescent=%#v", publication, barrier, quiescent)
+	}
+	restoreObserver()
+	server.close()
+	server.require(t)
+	uciWatcherSLORequireSearchableResult(t, after, publication, response)
+	uciWatcherSLORequireSearchableDiagnostics(t, trace, structuralCompleted)
+}
+
+func uciWatcherSLOSearchablePayloads(t *testing.T, publication uciInstalledAcceptancePublication) (json.RawMessage, json.RawMessage) {
+	t.Helper()
 	statusPayload, err := json.Marshal(map[string]any{
-		"status": "idle", "run_id": after.runID,
-		"context":   map[string]any{"source_id": after.sourceID, "checkout_id": after.checkoutID, "view_id": after.viewID, "profile_id": after.profileID, "generation": after.generation},
+		"status": "idle", "run_id": publication.runID,
+		"context":   map[string]any{"source_id": publication.sourceID, "checkout_id": publication.checkoutID, "view_id": publication.viewID, "profile_id": publication.profileID, "generation": publication.generation},
 		"freshness": map[string]any{"state": "observed_current", "pending_changes": 0, "barrier": map[string]any{"scope": map[string]any{"kind": "paths", "path_count": 1}, "deadline_ms": 1, "state": "satisfied"}},
 	})
 	if err != nil {
 		t.Fatalf("encode watcher status: %v", err)
 	}
 	zero := int64(0)
-	contexts := uci.QueryContexts{{SourceID: after.sourceID, CheckoutID: after.checkoutID, ViewID: after.viewID, Generation: after.generation, ProfileID: after.profileID}}
+	contexts := uci.QueryContexts{{SourceID: publication.sourceID, CheckoutID: publication.checkoutID, ViewID: publication.viewID, Generation: publication.generation, ProfileID: publication.profileID}}
 	items := uci.QueryItems{{
-		Ref:           uci.QueryEntityRef{SourceID: after.sourceID, ViewID: after.viewID, EntityKey: "go:pkg/watcher.go/func:UCIWatcherCanary"},
+		Ref:           uci.QueryEntityRef{SourceID: publication.sourceID, ViewID: publication.viewID, EntityKey: "go:pkg/watcher.go/func:UCIWatcherCanary"},
 		Path:          "pkg/watcher.go",
 		Span:          uci.QuerySpan{ByteStart: 0, ByteEnd: 1, LineStart: 1, LineEnd: 1},
 		ContentDigest: uci.QueryContentDigest(strings.Repeat("a", 64)),
@@ -2160,7 +2287,7 @@ func TestUCIWatcherSLOAwaitSearchableUsesOneCanarySearch(t *testing.T) {
 		Schema:       uci.QueryResponseSchema,
 		Status:       uci.QueryStatusOK,
 		Contexts:     &contexts,
-		Freshness:    &uci.QueryFreshness{State: uci.QueryFreshnessObservedCurrent, Method: uci.QueryFreshnessWatchWatermark, PendingChanges: &zero, EnrichmentWatermark: uci.QueryEnrichmentWatermark{Sequence: after.generation, State: uci.QueryEnrichmentCurrent}},
+		Freshness:    &uci.QueryFreshness{State: uci.QueryFreshnessObservedCurrent, Method: uci.QueryFreshnessWatchWatermark, PendingChanges: &zero, EnrichmentWatermark: uci.QueryEnrichmentWatermark{Sequence: publication.generation, State: uci.QueryEnrichmentCurrent}},
 		Retrieval:    &uci.QueryRetrieval{Mode: uci.QueryRetrievalExact, DegradationReasons: []string{}},
 		Coverage:     &uci.QueryCoverage{Structural: uci.IndexCoverageComplete, UnresolvedSites: &zero, UnsupportedFiles: &zero},
 		Exposure:     &uci.QueryExposure{ExposureRef: uci.NewExposureRef(), CompletionState: uci.QueryCompletionUnknown},
@@ -2176,7 +2303,11 @@ func TestUCIWatcherSLOAwaitSearchableUsesOneCanarySearch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode canary response: %v", err)
 	}
+	return statusPayload, queryPayload
+}
 
+func newUCIWatcherSLOSearchableServer(t *testing.T, statusPayload, queryPayload json.RawMessage) *uciWatcherSLOSearchableServer {
+	t.Helper()
 	requests, clientInput, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("open client input pipe: %v", err)
@@ -2187,107 +2318,106 @@ func TestUCIWatcherSLOAwaitSearchableUsesOneCanarySearch(t *testing.T) {
 		_ = clientInput.Close()
 		t.Fatalf("open server output pipe: %v", err)
 	}
-	client := &uciInstalledAcceptanceMCPClient{name: "watcher-test", writer: bufio.NewWriter(clientInput), scanner: bufio.NewScanner(responses)}
-	client.scanner.Buffer(make([]byte, 64*1024), 16<<20)
-	serverErr := make(chan error, 1)
-	serverDone := make(chan struct{})
-	searchCalls := make(chan int, 1)
-	statusCalls := make(chan int, 1)
-	toolCalls := make(chan []string, 1)
-	go func() {
-		defer close(serverDone)
-		defer func() { _ = serverOutput.Close() }()
-		calls, statuses := 0, 0
-		tools := make([]string, 0, 2+uciInstalledAcceptanceQuiescenceObservations)
-		defer func() { searchCalls <- calls; statusCalls <- statuses; toolCalls <- tools }()
-		scanner := bufio.NewScanner(requests)
-		writer := json.NewEncoder(serverOutput)
-		for scanner.Scan() {
-			var request struct {
-				ID     string `json:"id"`
-				Method string `json:"method"`
-				Params struct {
-					Name string `json:"name"`
-				} `json:"params"`
-			}
-			if err := json.Unmarshal(scanner.Bytes(), &request); err != nil {
-				serverErr <- fmt.Errorf("decode watcher request: %w", err)
-				return
-			}
-			if request.Method != "tools/call" {
-				serverErr <- fmt.Errorf("watcher request method = %q, want tools/call", request.Method)
-				return
-			}
-			tools = append(tools, request.Params.Name)
-			payload := statusPayload
-			switch request.Params.Name {
-			case "codebase_status":
-				statuses++
-			case "codebase_search":
-				calls++
-				payload = queryPayload
-			default:
-				serverErr <- fmt.Errorf("watcher tool = %q", request.Params.Name)
-				return
-			}
-			if err := writer.Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"content": []map[string]string{{"type": "text", "text": string(payload)}}, "isError": false}}); err != nil {
-				serverErr <- fmt.Errorf("write watcher response: %w", err)
-				return
-			}
+	server := &uciWatcherSLOSearchableServer{
+		clientInput: clientInput,
+		requests:    requests,
+		responses:   responses,
+		serverDone:  make(chan struct{}),
+		serverErr:   make(chan error, 1),
+		searchCalls: make(chan int, 1),
+		statusCalls: make(chan int, 1),
+		toolCalls:   make(chan []string, 1),
+		client:      &uciInstalledAcceptanceMCPClient{name: "watcher-test", writer: bufio.NewWriter(clientInput), scanner: bufio.NewScanner(responses)},
+	}
+	server.client.scanner.Buffer(make([]byte, 64*1024), 16<<20)
+	go server.serve(serverOutput, statusPayload, queryPayload)
+	return server
+}
+
+func (server *uciWatcherSLOSearchableServer) serve(serverOutput *os.File, statusPayload, queryPayload json.RawMessage) {
+	defer close(server.serverDone)
+	defer func() { _ = serverOutput.Close() }()
+	calls, statuses := 0, 0
+	tools := make([]string, 0, 2+uciInstalledAcceptanceQuiescenceObservations)
+	defer func() { server.searchCalls <- calls; server.statusCalls <- statuses; server.toolCalls <- tools }()
+	scanner := bufio.NewScanner(server.requests)
+	writer := json.NewEncoder(serverOutput)
+	for scanner.Scan() {
+		var request struct {
+			ID     string `json:"id"`
+			Method string `json:"method"`
+			Params struct {
+				Name string `json:"name"`
+			} `json:"params"`
 		}
-		if err := scanner.Err(); err != nil {
-			serverErr <- fmt.Errorf("read watcher request: %w", err)
-		}
-	}()
-	closed := false
-	closeServer := func() {
-		if closed {
+		if err := json.Unmarshal(scanner.Bytes(), &request); err != nil {
+			server.serverErr <- fmt.Errorf("decode watcher request: %w", err)
 			return
 		}
-		closed = true
-		_ = clientInput.Close()
-		<-serverDone
-		_ = requests.Close()
-		_ = responses.Close()
+		if request.Method != "tools/call" {
+			server.serverErr <- fmt.Errorf("watcher request method = %q, want tools/call", request.Method)
+			return
+		}
+		tools = append(tools, request.Params.Name)
+		payload := statusPayload
+		switch request.Params.Name {
+		case "codebase_status":
+			statuses++
+		case "codebase_search":
+			calls++
+			payload = queryPayload
+		default:
+			server.serverErr <- fmt.Errorf("watcher tool = %q", request.Params.Name)
+			return
+		}
+		if err := writer.Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"content": []map[string]string{{"type": "text", "text": string(payload)}}, "isError": false}}); err != nil {
+			server.serverErr <- fmt.Errorf("write watcher response: %w", err)
+			return
+		}
 	}
-	defer closeServer()
+	if err := scanner.Err(); err != nil {
+		server.serverErr <- fmt.Errorf("read watcher request: %w", err)
+	}
+}
 
-	trace := newUCIWatcherSLOAttemptTrace(time.Now(), before)
-	restoreObserver := client.setToolObserver(trace.observeTool)
-	publication, response, structuralCompleted, err := uciWatcherSLOAwaitSearchable(context.Background(), client, uciInstalledAcceptanceSelection{contextHandle: "context", runID: before.runID}, before, "UCIWatcherCanary", "pkg/watcher.go", trace)
-	if err != nil {
-		t.Fatalf("await searchable watcher: %v", err)
+func (server *uciWatcherSLOSearchableServer) close() {
+	if server.closed {
+		return
 	}
-	barrier, err := uciWatcherSLOAwaitPostEndpointBarrier(context.Background(), client, uciInstalledAcceptanceSelection{contextHandle: "context"}, publication, trace)
-	if err != nil {
-		t.Fatalf("await post-endpoint barrier: %v", err)
-	}
-	quiescent, err := uciWatcherSLOAwaitPostEndpointQuiescence(context.Background(), client, uciInstalledAcceptanceSelection{contextHandle: "context"}, publication, barrier, trace)
-	if err != nil {
-		t.Fatalf("await post-endpoint quiescence: %v", err)
-	}
-	if !uciWatcherSLOSameExactPublication(publication, barrier) || !uciWatcherSLOSameExactPublication(publication, quiescent) {
-		t.Fatalf("post-endpoint safety changed publication: endpoint=%#v barrier=%#v quiescent=%#v", publication, barrier, quiescent)
-	}
-	restoreObserver()
-	closeServer()
+	server.closed = true
+	_ = server.clientInput.Close()
+	<-server.serverDone
+	_ = server.requests.Close()
+	_ = server.responses.Close()
+}
+
+func (server *uciWatcherSLOSearchableServer) require(t *testing.T) {
+	t.Helper()
 	select {
-	case err := <-serverErr:
+	case err := <-server.serverErr:
 		t.Fatal(err)
 	default:
 	}
-	if calls := <-searchCalls; calls != 1 {
+	if calls := <-server.searchCalls; calls != 1 {
 		t.Fatalf("codebase_search calls after one publication = %d, want 1", calls)
 	}
-	if calls := <-statusCalls; calls != 2+uciInstalledAcceptanceQuiescenceObservations {
+	if calls := <-server.statusCalls; calls != 2+uciInstalledAcceptanceQuiescenceObservations {
 		t.Fatalf("codebase_status calls through post-endpoint safety = %d, want %d", calls, 2+uciInstalledAcceptanceQuiescenceObservations)
 	}
-	if tools := <-toolCalls; len(tools) < 3 || tools[0] != "codebase_status" || tools[1] != "codebase_search" || tools[2] != "codebase_status" {
+	if tools := <-server.toolCalls; len(tools) < 3 || tools[0] != "codebase_status" || tools[1] != "codebase_search" || tools[2] != "codebase_status" {
 		t.Fatalf("tool ordering = %#v, want first View then canary then post-endpoint safety", tools)
 	}
-	if publication.sourceID != after.sourceID || publication.checkoutID != after.checkoutID || publication.profileID != after.profileID || publication.viewID != after.viewID || publication.generation != after.generation || publication.runID != after.runID || publication.freshnessState != "observed_current" || publication.barrierState != "" || response.Status != uci.QueryStatusOK || !uciInstalledAcceptanceQueryMatchesPublication(response, publication) {
+}
+
+func uciWatcherSLORequireSearchableResult(t *testing.T, expected, publication uciInstalledAcceptancePublication, response uci.QueryResponse) {
+	t.Helper()
+	if publication.sourceID != expected.sourceID || publication.checkoutID != expected.checkoutID || publication.profileID != expected.profileID || publication.viewID != expected.viewID || publication.generation != expected.generation || publication.runID != expected.runID || publication.freshnessState != "observed_current" || publication.barrierState != "" || response.Status != uci.QueryStatusOK || !uciInstalledAcceptanceQueryMatchesPublication(response, publication) {
 		t.Fatalf("retained canary response = %#v for publication %#v", response, publication)
 	}
+}
+
+func uciWatcherSLORequireSearchableDiagnostics(t *testing.T, trace *uciWatcherSLOAttemptTrace, structuralCompleted time.Time) {
+	t.Helper()
 	events := trace.snapshot()
 	searchReturns := 0
 	for _, event := range events {
