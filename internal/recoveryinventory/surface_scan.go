@@ -11,7 +11,13 @@ import (
 	"strings"
 )
 
-const dispatcherHookPath = "plugin/engram/hooks/dispatcher.cjs"
+const (
+	dispatcherHookPath = "plugin/engram/hooks/dispatcher.cjs"
+	mcpToolKind        = "mcp-tool"
+	openClawToolKind   = "openclaw-tool"
+	grpcMethodKind     = "grpc-method"
+	httpRouteKind      = "http-route"
+)
 
 type hookConfiguration struct {
 	Hooks map[string][]struct {
@@ -28,7 +34,7 @@ func ScanSurfaces(root string) (Report, error) {
 	for _, surfaceRoot := range []string{"ui", "apps/operator-console"} {
 		classification := "claim-only"
 		if _, err := os.Stat(filepath.Join(root, surfaceRoot)); os.IsNotExist(err) {
-			classification = "source-uncertain"
+			classification = classificationSourceUncertain
 		}
 		report.add(Record{Kind: "ui-root-claim", Path: filepath.ToSlash(surfaceRoot), Name: surfaceRoot, Classification: classification, ClaimOnly: true})
 	}
@@ -54,18 +60,18 @@ func activatedHookSources(root string) map[string]string {
 	const dispatcher = dispatcherHookPath
 	data, err := os.ReadFile(filepath.Join(root, "plugin", "engram", "hooks", "hooks.json"))
 	if err != nil {
-		return map[string]string{dispatcher: "source-uncertain"}
+		return map[string]string{dispatcher: classificationSourceUncertain}
 	}
 	var config hookConfiguration
 	if json.Unmarshal(data, &config) != nil {
-		return map[string]string{dispatcher: "source-uncertain"}
+		return map[string]string{dispatcher: classificationSourceUncertain}
 	}
 	sources := make(map[string]string)
 	for _, entries := range config.Hooks {
 		for _, entry := range entries {
 			for _, hook := range entry.Hooks {
 				classification := dispatcherActivation(hook.Command)
-				if classification == "" || sources[dispatcher] == "source-declared" {
+				if classification == "" || sources[dispatcher] == classificationSourceDeclared {
 					continue
 				}
 				sources[dispatcher] = classification
@@ -78,29 +84,29 @@ func activatedHookSources(root string) map[string]string {
 func dispatcherActivation(command string) string {
 	parts := strings.Fields(command)
 	if len(parts) < 2 || parts[0] != "node" {
-		return "source-uncertain"
+		return classificationSourceUncertain
 	}
 	if parts[1] == "-e" {
 		for _, quote := range []string{"'", "\"", "`"} {
 			literal := quote + dispatcherHookPath + quote
 			if strings.Contains(command, "require("+literal+")") || strings.Contains(command, "import("+literal+")") {
-				return "source-declared"
+				return classificationSourceDeclared
 			}
 		}
-		return "source-uncertain"
+		return classificationSourceUncertain
 	}
 	switch filepath.ToSlash(strings.TrimPrefix(parts[1], "./")) {
 	case "dispatcher.cjs", "plugin/engram/hooks/dispatcher.cjs":
-		return "source-declared"
+		return classificationSourceDeclared
 	}
 	if strings.HasPrefix(parts[1], "-") {
-		return "source-uncertain"
+		return classificationSourceUncertain
 	}
 	return ""
 }
 
 func activatesDispatcher(command string) bool {
-	return dispatcherActivation(command) == "source-declared"
+	return dispatcherActivation(command) == classificationSourceDeclared
 }
 
 func isSurfaceTestFile(path string) bool {
@@ -131,21 +137,21 @@ func scanSurfaceFile(report *Report, file sourceFile, activeHooks map[string]str
 		return nil
 	}
 	if strings.HasSuffix(lowerPath, ".md") {
-		report.add(Record{Kind: "current-documentation-claim", Path: path, Classification: "source-declared", ClaimOnly: true})
+		report.add(Record{Kind: "current-documentation-claim", Path: path, Classification: classificationSourceDeclared, ClaimOnly: true})
 		return nil
 	}
 	if strings.Contains(path, "/hooks/") || strings.HasPrefix(path, "plugin/engram/hooks/") {
 		if filepath.Ext(path) != ".cjs" {
-			report.add(Record{Kind: "hook", Path: path, Name: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)), Classification: "source-declared"})
+			report.add(Record{Kind: "hook", Path: path, Name: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)), Classification: classificationSourceDeclared})
 		} else if classification, active := activeHooks[path]; active {
 			report.add(Record{Kind: "hook", Path: path, Name: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)), Classification: classification})
 		}
 	}
 	if strings.HasPrefix(path, "internal/mcp/") {
-		report.add(Record{Kind: "mcp-surface", Path: path, Classification: "source-declared"})
+		report.add(Record{Kind: "mcp-surface", Path: path, Classification: classificationSourceDeclared})
 	}
 	if strings.HasPrefix(path, "cmd/engram/") || strings.HasPrefix(path, "internal/handlers/") {
-		report.add(Record{Kind: "daemon-surface", Path: path, Classification: "source-declared"})
+		report.add(Record{Kind: "daemon-surface", Path: path, Classification: classificationSourceDeclared})
 	}
 
 	source, err := os.ReadFile(file.absolute)
@@ -172,7 +178,7 @@ func scanMCPTools(report *Report, path string, source []byte) {
 	fset := token.NewFileSet()
 	parsed, err := parser.ParseFile(fset, path, source, 0)
 	if err != nil {
-		emitUncertainSurface(report, "mcp-tool", path, 1)
+		emitUncertainSurface(report, mcpToolKind, path, 1)
 		return
 	}
 	constants := stringConstants(parsed)
@@ -181,7 +187,7 @@ func scanMCPTools(report *Report, path string, source []byte) {
 		if uncertain {
 			return
 		}
-		emitUncertainSurface(report, "mcp-tool", path, line)
+		emitUncertainSurface(report, mcpToolKind, path, line)
 		uncertain = true
 	}
 	ast.Inspect(parsed, func(node ast.Node) bool {
@@ -241,7 +247,7 @@ func scanMCPToolDefinition(report *Report, path string, fset *token.FileSet, def
 			emitUncertain(line)
 			continue
 		}
-		report.add(Record{Kind: "mcp-tool", Path: path, Line: line, Name: redactedName(name), Classification: "source-declared"})
+		report.add(Record{Kind: mcpToolKind, Path: path, Line: line, Name: redactedName(name), Classification: classificationSourceDeclared})
 	}
 	if !hasName {
 		emitUncertain(fset.Position(definition.Pos()).Line)
@@ -263,7 +269,7 @@ func surfaceStringValue(expression ast.Expr, constants map[string]string) (strin
 func scanOpenClawTools(report *Report, path string, source []byte) {
 	tokens, complete := lexSurfaceTokens(source)
 	if !complete {
-		emitUncertainSurface(report, "openclaw-tool", path, 1)
+		emitUncertainSurface(report, openClawToolKind, path, 1)
 		return
 	}
 	uncertain := false
@@ -271,7 +277,7 @@ func scanOpenClawTools(report *Report, path string, source []byte) {
 		if uncertain {
 			return
 		}
-		emitUncertainSurface(report, "openclaw-tool", path, line)
+		emitUncertainSurface(report, openClawToolKind, path, line)
 		uncertain = true
 	}
 	objectStack := make([]bool, 0)
@@ -296,7 +302,7 @@ func scanOpenClawTools(report *Report, path string, source []byte) {
 				emitUncertain(token.line)
 				continue
 			}
-			report.add(Record{Kind: "openclaw-tool", Path: path, Line: name.line, Name: redactedName(name.text), Classification: "source-declared"})
+			report.add(Record{Kind: openClawToolKind, Path: path, Line: name.line, Name: redactedName(name.text), Classification: classificationSourceDeclared})
 		}
 		if len(objectStack) == 0 || token.stringLiteral || token.text != "name" || index+1 >= len(tokens) {
 			continue
@@ -312,7 +318,7 @@ func scanOpenClawTools(report *Report, path string, source []byte) {
 				emitUncertain(token.line)
 				continue
 			}
-			report.add(Record{Kind: "openclaw-tool", Path: path, Line: token.line, Name: redactedName(value.text), Classification: "source-declared"})
+			report.add(Record{Kind: openClawToolKind, Path: path, Line: token.line, Name: redactedName(value.text), Classification: classificationSourceDeclared})
 			continue
 		}
 		if objectStack[len(objectStack)-1] && (next.text == "," || next.text == "}") {
@@ -324,7 +330,7 @@ func scanOpenClawTools(report *Report, path string, source []byte) {
 func scanProtoMethods(report *Report, path string, source []byte) {
 	tokens, complete := lexSurfaceTokens(source)
 	if !complete {
-		emitUncertainSurface(report, "grpc-method", path, 1)
+		emitUncertainSurface(report, grpcMethodKind, path, 1)
 		return
 	}
 	uncertain := false
@@ -332,7 +338,7 @@ func scanProtoMethods(report *Report, path string, source []byte) {
 		if uncertain {
 			return
 		}
-		emitUncertainSurface(report, "grpc-method", path, line)
+		emitUncertainSurface(report, grpcMethodKind, path, line)
 		uncertain = true
 	}
 	for index, token := range tokens {
@@ -343,12 +349,12 @@ func scanProtoMethods(report *Report, path string, source []byte) {
 			emitUncertain(token.line)
 			continue
 		}
-		report.add(Record{Kind: "grpc-method", Path: path, Line: tokens[index+1].line, Name: tokens[index+1].text, Classification: "source-declared"})
+		report.add(Record{Kind: grpcMethodKind, Path: path, Line: tokens[index+1].line, Name: tokens[index+1].text, Classification: classificationSourceDeclared})
 	}
 }
 
 func emitUncertainSurface(report *Report, kind, path string, line int) {
-	report.add(Record{Kind: kind, Path: path, Line: line, Classification: "source-uncertain"})
+	report.add(Record{Kind: kind, Path: path, Line: line, Classification: classificationSourceUncertain})
 }
 
 type surfaceToken struct {
@@ -475,7 +481,7 @@ func scanGoRoutes(report *Report, path string, source []byte) {
 	fset := token.NewFileSet()
 	parsed, err := parser.ParseFile(fset, path, source, 0)
 	if err != nil {
-		report.add(Record{Kind: "http-route", Path: path, Classification: "source-uncertain"})
+		report.add(Record{Kind: httpRouteKind, Path: path, Classification: classificationSourceUncertain})
 		return
 	}
 	scanner := newRouteScanner(report, fset, path, parsed)
@@ -853,7 +859,7 @@ func (s *routeScanner) scanCall(expression ast.Expr, scope routeScope) {
 }
 
 func (s *routeScanner) emitUncertainRoute(call *ast.CallExpr) {
-	s.report.add(Record{Kind: "http-route", Path: s.path, Line: s.fset.Position(call.Pos()).Line, Classification: "source-uncertain"})
+	s.report.add(Record{Kind: httpRouteKind, Path: s.path, Line: s.fset.Position(call.Pos()).Line, Classification: classificationSourceUncertain})
 }
 
 func isRouteCall(name string) bool {
@@ -945,7 +951,7 @@ func (s *routeScanner) emitRoutes() {
 	}
 	for _, route := range s.routes {
 		for prefix := range prefixes[route.router] {
-			s.report.add(Record{Kind: "http-route", Path: s.path, Line: route.line, Name: route.method + " " + joinRoute(prefix, route.path), Classification: "source-declared"})
+			s.report.add(Record{Kind: httpRouteKind, Path: s.path, Line: route.line, Name: route.method + " " + joinRoute(prefix, route.path), Classification: classificationSourceDeclared})
 		}
 	}
 }
@@ -999,7 +1005,7 @@ func scanDaemonTools(report *Report, path string, source []byte) {
 					emitUncertainTool(report, path, fset.Position(definition.Pos()).Line)
 					continue
 				}
-				report.add(Record{Kind: "daemon-tool", Path: path, Line: fset.Position(definition.Pos()).Line, Name: redactedName(name), Classification: "source-declared"})
+				report.add(Record{Kind: "daemon-tool", Path: path, Line: fset.Position(definition.Pos()).Line, Name: redactedName(name), Classification: classificationSourceDeclared})
 			}
 			return false
 		})
@@ -1007,7 +1013,7 @@ func scanDaemonTools(report *Report, path string, source []byte) {
 }
 
 func emitUncertainTool(report *Report, path string, line int) {
-	report.add(Record{Kind: "daemon-tool", Path: path, Line: line, Classification: "source-uncertain"})
+	report.add(Record{Kind: "daemon-tool", Path: path, Line: line, Classification: classificationSourceUncertain})
 }
 
 func stringConstants(file *ast.File) map[string]string {

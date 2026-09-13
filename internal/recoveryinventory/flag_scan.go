@@ -11,6 +11,13 @@ import (
 	"strings"
 )
 
+const (
+	environmentReaderKind               = "environment-reader"
+	environmentDefaultEmptyUnset        = "empty-unset"
+	environmentDefaultSourceExpression  = "source-default-expression"
+	environmentDefaultSourceUnspecified = "source-unspecified"
+)
+
 // ScanFlags inventories source-declared environment readers and defaults. It
 // never reads the process environment or reports effective runtime state.
 func ScanFlags(root string) (Report, error) {
@@ -52,7 +59,7 @@ func scanFlagFile(report *Report, file sourceFile) error {
 	fset := token.NewFileSet()
 	parsed, err := parser.ParseFile(fset, file.relative, source, 0)
 	if err != nil {
-		report.add(Record{Kind: "environment-reader", Path: file.relative, Classification: "source-uncertain"})
+		report.add(Record{Kind: environmentReaderKind, Path: file.relative, Classification: classificationSourceUncertain})
 		return nil
 	}
 
@@ -200,9 +207,9 @@ func scanPowerShellFlagFile(report *Report, file sourceFile) error {
 				addUncertainEnvironmentReader(report, file.relative, index+1)
 				continue
 			}
-			defaultKind := "empty-unset"
+			defaultKind := environmentDefaultEmptyUnset
 			if strings.HasPrefix(strings.TrimSpace(code[match[1]:]), "??") {
-				defaultKind = "source-default-expression"
+				defaultKind = environmentDefaultSourceExpression
 			}
 			addEnvironmentReader(report, file.relative, index+1, name, "powershell-string", defaultKind)
 		}
@@ -212,7 +219,7 @@ func scanPowerShellFlagFile(report *Report, file sourceFile) error {
 				addUncertainEnvironmentReader(report, file.relative, index+1)
 				continue
 			}
-			addEnvironmentReader(report, file.relative, index+1, name, "powershell-environment-api", "empty-unset")
+			addEnvironmentReader(report, file.relative, index+1, name, "powershell-environment-api", environmentDefaultEmptyUnset)
 		}
 	}
 	return nil
@@ -228,15 +235,15 @@ func scanPythonFlagFile(report *Report, file sourceFile) error {
 		code := pythonCodeMask(line, &state)
 		for _, start := range pythonEnvironmentStart.FindAllStringIndex(code, -1) {
 			if match := pythonGetenvRead.FindStringSubmatchIndex(code[start[0]:]); match != nil && match[0] == 0 {
-				defaultKind := "empty-unset"
+				defaultKind := environmentDefaultEmptyUnset
 				if match[6] >= 0 {
-					defaultKind = "source-default-expression"
+					defaultKind = environmentDefaultSourceExpression
 				}
 				addEnvironmentReader(report, file.relative, index+1, capture(line, start[0]+match[4], start[0]+match[5]), "python-string", defaultKind)
 				continue
 			}
 			if match := pythonEnvironRead.FindStringSubmatchIndex(code[start[0]:]); match != nil && match[0] == 0 {
-				addEnvironmentReader(report, file.relative, index+1, capture(line, start[0]+match[2], start[0]+match[3]), "python-string", "empty-unset")
+				addEnvironmentReader(report, file.relative, index+1, capture(line, start[0]+match[2], start[0]+match[3]), "python-string", environmentDefaultEmptyUnset)
 				continue
 			}
 			addUncertainEnvironmentReader(report, file.relative, index+1)
@@ -266,14 +273,14 @@ func javaScriptSemantics(code, source string, start, end int) (parserKind, defau
 	}
 	remainder := strings.TrimSpace(code[end:])
 	if strings.HasPrefix(remainder, "||") || strings.HasPrefix(remainder, "??") || strings.HasPrefix(remainder, ".trim() ||") || strings.HasPrefix(remainder, ".trim() ??") || strings.HasPrefix(remainder, "?.trim() ||") || strings.HasPrefix(remainder, "?.trim() ??") {
-		return parserKind, "source-default-expression"
+		return parserKind, environmentDefaultSourceExpression
 	}
-	return parserKind, "empty-unset"
+	return parserKind, environmentDefaultEmptyUnset
 }
 
 func addEnvironmentReader(report *Report, path string, line int, name, parserKind, defaultKind string) {
 	report.add(Record{
-		Kind:           "environment-reader",
+		Kind:           environmentReaderKind,
 		Path:           path,
 		Line:           line,
 		Name:           redactedName(name),
@@ -284,7 +291,7 @@ func addEnvironmentReader(report *Report, path string, line int, name, parserKin
 }
 
 func addUncertainEnvironmentReader(report *Report, path string, line int) {
-	report.add(Record{Kind: "environment-reader", Path: path, Line: line, Parser: "source-uncertain", Default: "source-unspecified", Classification: "source-uncertain"})
+	report.add(Record{Kind: environmentReaderKind, Path: path, Line: line, Parser: classificationSourceUncertain, Default: environmentDefaultSourceUnspecified, Classification: classificationSourceUncertain})
 }
 
 func environmentClassification(name string) string {
@@ -377,7 +384,7 @@ func goEnvironmentSemantics(file *ast.File, environmentCall *ast.CallExpr) (stri
 		return true
 	})
 	if parserConflict || booleanConflict {
-		return "source-uncertain", "source-unspecified"
+		return classificationSourceUncertain, environmentDefaultSourceUnspecified
 	}
 	if parserKind != "" {
 		return parserKind, "source-parser-default"
@@ -386,9 +393,9 @@ func goEnvironmentSemantics(file *ast.File, environmentCall *ast.CallExpr) (stri
 		return booleanKind, booleanDefault
 	}
 	if trimmed {
-		return "trimmed-string", "source-unspecified"
+		return "trimmed-string", environmentDefaultSourceUnspecified
 	}
-	return "source-uncertain", "source-unspecified"
+	return classificationSourceUncertain, environmentDefaultSourceUnspecified
 }
 
 func goEnvironmentAliases(file *ast.File, environmentCall *ast.CallExpr) map[*ast.Object]bool {
@@ -497,9 +504,9 @@ func goBooleanExpressionSemantics(expression ast.Expr, aliases map[*ast.Object]b
 	case len(values) == 2 && values["true"] && values["1"]:
 		return "exact-true-or-one", "false-unless-true-or-one", true
 	case len(values) == 1 && values["false"]:
-		return "exact-lowercase-false", "source-unspecified", true
+		return "exact-lowercase-false", environmentDefaultSourceUnspecified, true
 	case len(values) == 2 && values["false"] && values["0"]:
-		return "exact-false-or-zero", "source-unspecified", true
+		return "exact-false-or-zero", environmentDefaultSourceUnspecified, true
 	default:
 		return "", "", false
 	}
@@ -1125,11 +1132,11 @@ func shellEnvironmentRead(code string, start int) (string, string, bool) {
 		}
 		switch operator {
 		case "-", "=":
-			return name, "source-default-expression", true
+			return name, environmentDefaultSourceExpression, true
 		case "?":
 			return name, "required-environment", true
 		default:
-			return name, "empty-unset", true
+			return name, environmentDefaultEmptyUnset, true
 		}
 	}
 	if !isShellNameStart(code[start+1]) {
@@ -1139,7 +1146,7 @@ func shellEnvironmentRead(code string, start int) (string, string, bool) {
 	for end < len(code) && isShellNamePart(code[end]) {
 		end++
 	}
-	return code[start+1 : end], "empty-unset", true
+	return code[start+1 : end], environmentDefaultEmptyUnset, true
 }
 
 func isShellNameStart(value byte) bool {

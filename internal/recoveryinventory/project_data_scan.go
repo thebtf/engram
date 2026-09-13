@@ -12,10 +12,12 @@ import (
 
 var vueScriptBlockPattern = regexp.MustCompile(`(?is)<script(?:\s+[^>]*)?>(.*?)</script\s*>`)
 
+const projectDataKind = "project-bearing-data"
+
 // ScanProjectData inventories source-declared project-bearing data families.
 // It never opens a database, cache, import, export, or job payload.
 func ScanProjectData(root string) (Report, error) {
-	report := newReport("project-bearing-data")
+	report := newReport(projectDataKind)
 	files, err := sourceFiles(root, ".go", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".vue")
 	if err != nil {
 		return Report{}, err
@@ -49,7 +51,7 @@ func scanProjectDataFile(report *Report, file sourceFile) error {
 	fset := token.NewFileSet()
 	parsed, err := parser.ParseFile(fset, file.relative, source, 0)
 	if err != nil {
-		report.add(Record{Kind: "project-data-family", Path: file.relative, Classification: "source-uncertain"})
+		report.add(Record{Kind: "project-data-family", Path: file.relative, Classification: classificationSourceUncertain})
 		return nil
 	}
 
@@ -89,7 +91,7 @@ func scanProjectDataFile(report *Report, file sourceFile) error {
 		found = true
 	}
 	if !found && projectBearingGoCode(parsed) {
-		report.add(Record{Kind: "project-data-family", Path: file.relative, Name: "unresolved-declaration", Classification: "source-uncertain"})
+		report.add(Record{Kind: "project-data-family", Path: file.relative, Name: "unresolved-declaration", Classification: classificationSourceUncertain})
 	}
 	return nil
 }
@@ -127,7 +129,7 @@ func scanProjectBearingGoMapLiterals(report *Report, path string, fset *token.Fi
 			}
 			found = true
 			report.add(Record{
-				Kind:           "project-bearing-data",
+				Kind:           projectDataKind,
 				Path:           path,
 				Line:           fset.Position(key.Pos()).Line,
 				Classification: "serialized",
@@ -168,7 +170,7 @@ func scanJavaScriptProjectData(report *Report, file sourceFile, source string, l
 		if !projectBearingJavaScriptCode(code) && !templateState.hasProjectContext(line) {
 			continue
 		}
-		report.add(Record{Kind: "project-bearing-data", Path: file.relative, Line: lineOffset + index + 1, Classification: "source-uncertain"})
+		report.add(Record{Kind: projectDataKind, Path: file.relative, Line: lineOffset + index + 1, Classification: classificationSourceUncertain})
 	}
 }
 
@@ -335,7 +337,7 @@ func projectDataClassification(path, typeName string, field *ast.Field) string {
 			return "serialized"
 		}
 	}
-	return "source-uncertain"
+	return classificationSourceUncertain
 }
 
 func projectDataPath(value string) string {
