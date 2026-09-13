@@ -578,31 +578,44 @@ func goBooleanValues(expression ast.Expr, aliases map[*ast.Object]bool, environm
 	if !ok {
 		return nil, false
 	}
-	if binary.Op == token.LOR {
-		left, leftOK := goBooleanValues(binary.X, aliases, environmentCall)
-		right, rightOK := goBooleanValues(binary.Y, aliases, environmentCall)
-		if !leftOK || !rightOK {
-			return nil, false
-		}
-		for value := range right {
-			left[value] = true
-		}
-		return left, true
-	}
-	if binary.Op != token.EQL {
+	switch binary.Op {
+	case token.LOR:
+		return mergeGoBooleanValues(binary, aliases, environmentCall)
+	case token.EQL:
+		return goBooleanEqualityValues(binary, aliases, environmentCall)
+	default:
 		return nil, false
 	}
+}
+
+func mergeGoBooleanValues(binary *ast.BinaryExpr, aliases map[*ast.Object]bool, environmentCall *ast.CallExpr) (map[string]bool, bool) {
+	left, leftOK := goBooleanValues(binary.X, aliases, environmentCall)
+	right, rightOK := goBooleanValues(binary.Y, aliases, environmentCall)
+	if !leftOK || !rightOK {
+		return nil, false
+	}
+	for value := range right {
+		left[value] = true
+	}
+	return left, true
+}
+
+func goBooleanEqualityValues(binary *ast.BinaryExpr, aliases map[*ast.Object]bool, environmentCall *ast.CallExpr) (map[string]bool, bool) {
 	if goExpressionUsesEnvironmentValue(binary.X, aliases, environmentCall) {
-		if value, ok := goStringLiteral(binary.Y); ok {
-			return map[string]bool{value: true}, true
-		}
+		return goBooleanLiteralValue(binary.Y)
 	}
 	if goExpressionUsesEnvironmentValue(binary.Y, aliases, environmentCall) {
-		if value, ok := goStringLiteral(binary.X); ok {
-			return map[string]bool{value: true}, true
-		}
+		return goBooleanLiteralValue(binary.X)
 	}
 	return nil, false
+}
+
+func goBooleanLiteralValue(expression ast.Expr) (map[string]bool, bool) {
+	value, ok := goStringLiteral(expression)
+	if !ok {
+		return nil, false
+	}
+	return map[string]bool{value: true}, true
 }
 
 func goStringLiteral(expression ast.Expr) (string, bool) {
@@ -622,62 +635,79 @@ type pythonLexState struct {
 func pythonCodeMask(line string, state *pythonLexState) string {
 	masked := []byte(line)
 	for index := 0; index < len(masked); {
-		if state.tripleQuote != 0 {
-			end, closed := pythonTripleStringEnd(line, index, state.tripleQuote)
-			blankBytes(masked, index, end)
-			if !closed {
-				return string(masked)
-			}
-			state.tripleQuote = 0
-			index = end
-			continue
+		var done bool
+		switch {
+		case state.tripleQuote != 0:
+			index, done = state.maskPythonTripleString(line, masked, index)
+		case state.quote != 0:
+			index, done = state.maskPythonContinuedString(line, masked, index)
+		default:
+			index, done = state.maskPythonByte(line, masked, index)
 		}
-		if state.quote != 0 {
-			end, closed := quotedStringEnd(line, index, state.quote)
-			blankBytes(masked, index, end)
-			if !closed {
-				if !pythonContinuesString(line) {
-					state.quote = 0
-				}
-				return string(masked)
-			}
-			state.quote = 0
-			index = end
-			continue
-		}
-
-		switch masked[index] {
-		case '#':
-			blankBytes(masked, index, len(masked))
+		if done {
 			return string(masked)
-		case '\'', '"':
-			quote := masked[index]
-			if index+2 < len(masked) && masked[index+1] == quote && masked[index+2] == quote {
-				end, closed := pythonTripleStringEnd(line, index+3, quote)
-				blankBytes(masked, index, end)
-				if !closed {
-					state.tripleQuote = quote
-					return string(masked)
-				}
-				index = end
-				continue
-			}
-			end, closed := quotedStringEnd(line, index+1, quote)
-			if !pythonLiteralArgument.Match(masked[:index]) {
-				blankBytes(masked, index, end)
-			}
-			if !closed {
-				if pythonContinuesString(line) {
-					state.quote = quote
-				}
-				return string(masked)
-			}
-			index = end
-			continue
 		}
-		index++
 	}
 	return string(masked)
+}
+
+func (state *pythonLexState) maskPythonTripleString(line string, masked []byte, index int) (int, bool) {
+	end, closed := pythonTripleStringEnd(line, index, state.tripleQuote)
+	blankBytes(masked, index, end)
+	if !closed {
+		return end, true
+	}
+	state.tripleQuote = 0
+	return end, false
+}
+
+func (state *pythonLexState) maskPythonContinuedString(line string, masked []byte, index int) (int, bool) {
+	end, closed := quotedStringEnd(line, index, state.quote)
+	blankBytes(masked, index, end)
+	if !closed {
+		if !pythonContinuesString(line) {
+			state.quote = 0
+		}
+		return end, true
+	}
+	state.quote = 0
+	return end, false
+}
+
+func (state *pythonLexState) maskPythonByte(line string, masked []byte, index int) (int, bool) {
+	switch masked[index] {
+	case '#':
+		blankBytes(masked, index, len(masked))
+		return len(masked), true
+	case '\'', '"':
+		return state.maskPythonLiteral(line, masked, index)
+	default:
+		return index + 1, false
+	}
+}
+
+func (state *pythonLexState) maskPythonLiteral(line string, masked []byte, index int) (int, bool) {
+	quote := masked[index]
+	if index+2 < len(masked) && masked[index+1] == quote && masked[index+2] == quote {
+		end, closed := pythonTripleStringEnd(line, index+3, quote)
+		blankBytes(masked, index, end)
+		if !closed {
+			state.tripleQuote = quote
+			return end, true
+		}
+		return end, false
+	}
+	end, closed := quotedStringEnd(line, index+1, quote)
+	if !pythonLiteralArgument.Match(masked[:index]) {
+		blankBytes(masked, index, end)
+	}
+	if !closed {
+		if pythonContinuesString(line) {
+			state.quote = quote
+		}
+		return end, true
+	}
+	return end, false
 }
 
 func pythonTripleStringEnd(line string, start int, quote byte) (int, bool) {
@@ -725,97 +755,121 @@ func javaScriptCodeMask(line string, state *javaScriptLexState) (string, bool) {
 	masked := []byte(line)
 	sourceUncertain := false
 	for index := 0; index < len(masked); {
-		if state.quote != 0 {
-			end, closed := quotedStringEnd(line, index, state.quote)
-			blankBytes(masked, index, end)
-			if !closed {
-				if !javaScriptContinuesString(line) {
-					state.quote = 0
-				}
-				return string(masked), sourceUncertain
-			}
-			state.quote = 0
-			index = end
-			continue
+		var done, uncertain bool
+		switch {
+		case state.quote != 0:
+			index, done = state.maskJavaScriptContinuedString(line, masked, index)
+		case state.templateLiteral:
+			index, done, uncertain = state.maskJavaScriptTemplate(line, masked, index)
+		case state.blockComment:
+			index, done = state.maskJavaScriptBlockComment(line, masked, index)
+		default:
+			index, done, uncertain = state.maskJavaScriptByte(line, masked, index)
 		}
-
-		if state.templateLiteral {
-			end, closed, interpolated := javaScriptTemplateEnd(line, index)
-			blankBytes(masked, index, end)
-			if interpolated && !state.templateUncertain {
-				sourceUncertain = true
-				state.templateUncertain = true
-			}
-			if !closed {
-				return string(masked), sourceUncertain
-			}
-			state.templateLiteral = false
-			state.templateUncertain = false
-			index = end
-			continue
+		sourceUncertain = sourceUncertain || uncertain
+		if done {
+			return string(masked), sourceUncertain
 		}
-		if state.blockComment {
-			end := strings.Index(line[index:], "*/")
-			if end < 0 {
-				blankBytes(masked, index, len(masked))
-				return string(masked), sourceUncertain
-			}
-			end += index + len("*/")
-			blankBytes(masked, index, end)
-			index = end
-			state.blockComment = false
-			continue
-		}
-
-		switch masked[index] {
-		case '/':
-			if index+1 < len(masked) && masked[index+1] == '/' {
-				blankBytes(masked, index, len(masked))
-				return string(masked), sourceUncertain
-			}
-			if index+1 < len(masked) && masked[index+1] == '*' {
-				end := strings.Index(line[index+2:], "*/")
-				if end < 0 {
-					blankBytes(masked, index, len(masked))
-					state.blockComment = true
-					return string(masked), sourceUncertain
-				}
-				end += index + 4
-				blankBytes(masked, index, end)
-				index = end
-				continue
-			}
-		case '\'', '"':
-			quote := masked[index]
-			end, closed := quotedStringEnd(line, index+1, quote)
-			if !javaScriptBracketReader.Match(masked[:index]) {
-				blankBytes(masked, index, end)
-			}
-			if !closed {
-				if javaScriptContinuesString(line) {
-					state.quote = quote
-				}
-				return string(masked), sourceUncertain
-			}
-			index = end
-			continue
-		case '`':
-			end, closed, interpolated := javaScriptTemplateEnd(line, index+1)
-			blankBytes(masked, index, end)
-			if interpolated {
-				sourceUncertain = true
-			}
-			if !closed {
-				state.templateLiteral = true
-				state.templateUncertain = interpolated
-				return string(masked), sourceUncertain
-			}
-			index = end
-			continue
-		}
-		index++
 	}
 	return string(masked), sourceUncertain
+}
+
+func (state *javaScriptLexState) maskJavaScriptContinuedString(line string, masked []byte, index int) (int, bool) {
+	end, closed := quotedStringEnd(line, index, state.quote)
+	blankBytes(masked, index, end)
+	if !closed {
+		if !javaScriptContinuesString(line) {
+			state.quote = 0
+		}
+		return end, true
+	}
+	state.quote = 0
+	return end, false
+}
+
+func (state *javaScriptLexState) maskJavaScriptTemplate(line string, masked []byte, index int) (int, bool, bool) {
+	end, closed, interpolated := javaScriptTemplateEnd(line, index)
+	blankBytes(masked, index, end)
+	uncertain := interpolated && !state.templateUncertain
+	if uncertain {
+		state.templateUncertain = true
+	}
+	if !closed {
+		return end, true, uncertain
+	}
+	state.templateLiteral = false
+	state.templateUncertain = false
+	return end, false, uncertain
+}
+
+func (state *javaScriptLexState) maskJavaScriptBlockComment(line string, masked []byte, index int) (int, bool) {
+	end := strings.Index(line[index:], "*/")
+	if end < 0 {
+		blankBytes(masked, index, len(masked))
+		return len(masked), true
+	}
+	end += index + len("*/")
+	blankBytes(masked, index, end)
+	state.blockComment = false
+	return end, false
+}
+
+func (state *javaScriptLexState) maskJavaScriptByte(line string, masked []byte, index int) (int, bool, bool) {
+	switch masked[index] {
+	case '/':
+		return state.maskJavaScriptSlash(line, masked, index)
+	case '\'', '"':
+		return state.maskJavaScriptLiteral(line, masked, index)
+	case '`':
+		return state.maskJavaScriptTemplateStart(line, masked, index)
+	default:
+		return index + 1, false, false
+	}
+}
+
+func (state *javaScriptLexState) maskJavaScriptSlash(line string, masked []byte, index int) (int, bool, bool) {
+	if index+1 >= len(masked) || masked[index+1] != '/' && masked[index+1] != '*' {
+		return index + 1, false, false
+	}
+	if masked[index+1] == '/' {
+		blankBytes(masked, index, len(masked))
+		return len(masked), true, false
+	}
+	end := strings.Index(line[index+2:], "*/")
+	if end < 0 {
+		blankBytes(masked, index, len(masked))
+		state.blockComment = true
+		return len(masked), true, false
+	}
+	end += index + 4
+	blankBytes(masked, index, end)
+	return end, false, false
+}
+
+func (state *javaScriptLexState) maskJavaScriptLiteral(line string, masked []byte, index int) (int, bool, bool) {
+	quote := masked[index]
+	end, closed := quotedStringEnd(line, index+1, quote)
+	if !javaScriptBracketReader.Match(masked[:index]) {
+		blankBytes(masked, index, end)
+	}
+	if !closed {
+		if javaScriptContinuesString(line) {
+			state.quote = quote
+		}
+		return end, true, false
+	}
+	return end, false, false
+}
+
+func (state *javaScriptLexState) maskJavaScriptTemplateStart(line string, masked []byte, index int) (int, bool, bool) {
+	end, closed, interpolated := javaScriptTemplateEnd(line, index+1)
+	blankBytes(masked, index, end)
+	if !closed {
+		state.templateLiteral = true
+		state.templateUncertain = interpolated
+		return end, true, interpolated
+	}
+	return end, false, interpolated
 }
 
 func javaScriptTemplateEnd(line string, start int) (end int, closed, interpolated bool) {
@@ -1041,29 +1095,39 @@ func shellCodeMask(line string) string {
 	masked := []byte(line)
 	inSingleQuote := false
 	for index := 0; index < len(masked); index++ {
-		if inSingleQuote {
-			masked[index] = ' '
-			if line[index] == '\'' {
-				inSingleQuote = false
-			}
+		if shellMasksSingleQuote(line, masked, index, &inSingleQuote) {
 			continue
 		}
-		if line[index] == '\'' {
-			masked[index] = ' '
-			inSingleQuote = true
-			continue
-		}
-		if line[index] == '#' && (index == 0 || line[index-1] == ' ' || line[index-1] == '\t') {
+		if shellCommentStarts(line, index) {
 			blankBytes(masked, index, len(masked))
 			break
 		}
 		if line[index] == '\\' && index+1 < len(masked) {
-			masked[index] = ' '
-			masked[index+1] = ' '
+			masked[index], masked[index+1] = ' ', ' '
 			index++
 		}
 	}
 	return string(masked)
+}
+
+func shellMasksSingleQuote(line string, masked []byte, index int, inSingleQuote *bool) bool {
+	if *inSingleQuote {
+		masked[index] = ' '
+		if line[index] == '\'' {
+			*inSingleQuote = false
+		}
+		return true
+	}
+	if line[index] != '\'' {
+		return false
+	}
+	masked[index] = ' '
+	*inSingleQuote = true
+	return true
+}
+
+func shellCommentStarts(line string, index int) bool {
+	return line[index] == '#' && (index == 0 || line[index-1] == ' ' || line[index-1] == '\t')
 }
 
 type shellLexState struct {
@@ -1074,24 +1138,32 @@ type shellLexState struct {
 
 func shellCodeMaskWithState(line string, state *shellLexState) (string, bool) {
 	if state.hereDoc != "" {
-		if shellHereDocEnd(line, *state) {
-			*state = shellLexState{}
-			return "", false
-		}
-		if state.literal {
-			return "", false
-		}
-		return shellCodeMask(line), false
+		return state.maskHereDocLine(line)
 	}
-
 	code := shellCodeMask(line)
-	if hereDoc, found, ok := shellHereDocStart(line, code); found {
-		if ok {
-			*state = hereDoc
-		} else {
-			return code, true
-		}
+	return state.beginHereDoc(line, code)
+}
+
+func (state *shellLexState) maskHereDocLine(line string) (string, bool) {
+	if shellHereDocEnd(line, *state) {
+		*state = shellLexState{}
+		return "", false
 	}
+	if state.literal {
+		return "", false
+	}
+	return shellCodeMask(line), false
+}
+
+func (state *shellLexState) beginHereDoc(line, code string) (string, bool) {
+	hereDoc, found, ok := shellHereDocStart(line, code)
+	if !found {
+		return code, false
+	}
+	if !ok {
+		return code, true
+	}
+	*state = hereDoc
 	return code, false
 }
 
@@ -1102,46 +1174,62 @@ func shellHereDocStart(line, code string) (shellLexState, bool, bool) {
 			inDoubleQuote = !inDoubleQuote
 			continue
 		}
-		if inDoubleQuote || code[index] != '<' || code[index+1] != '<' || (index+2 < len(code) && code[index+2] == '<') {
+		if inDoubleQuote || !shellHereDocOperator(code, index) {
 			continue
 		}
-		end := index + 2
-		state := shellLexState{}
-		if end < len(line) && line[end] == '-' {
-			state.stripTabs = true
-			end++
-		}
-		for end < len(line) && (line[end] == ' ' || line[end] == '\t') {
-			end++
-		}
-		if end >= len(line) {
-			return shellLexState{}, true, false
-		}
-		if line[end] == '\'' || line[end] == '"' {
-			quote := line[end]
-			end++
-			start := end
-			for end < len(line) && line[end] != quote {
-				end++
-			}
-			if end == len(line) || start == end {
-				return shellLexState{}, true, false
-			}
-			state.hereDoc = line[start:end]
-			state.literal = true
-			return state, true, true
-		}
-		start := end
-		for end < len(line) && !strings.ContainsRune(" \t;|&<>()", rune(line[end])) {
-			end++
-		}
-		if start == end {
-			return shellLexState{}, true, false
-		}
-		state.hereDoc = line[start:end]
-		return state, true, true
+		state, ok := shellHereDocState(line, index+2)
+		return state, true, ok
 	}
 	return shellLexState{}, false, false
+}
+
+func shellHereDocOperator(code string, index int) bool {
+	return code[index] == '<' && code[index+1] == '<' && (index+2 >= len(code) || code[index+2] != '<')
+}
+
+func shellHereDocState(line string, end int) (shellLexState, bool) {
+	state := shellLexState{}
+	if end < len(line) && line[end] == '-' {
+		state.stripTabs = true
+		end++
+	}
+	for end < len(line) && (line[end] == ' ' || line[end] == '\t') {
+		end++
+	}
+	if end >= len(line) {
+		return shellLexState{}, false
+	}
+	if line[end] == '\'' || line[end] == '"' {
+		return quotedShellHereDocState(line, end, state)
+	}
+	return bareShellHereDocState(line, end, state)
+}
+
+func quotedShellHereDocState(line string, end int, state shellLexState) (shellLexState, bool) {
+	quote := line[end]
+	end++
+	start := end
+	for end < len(line) && line[end] != quote {
+		end++
+	}
+	if end == len(line) || start == end {
+		return shellLexState{}, false
+	}
+	state.hereDoc = line[start:end]
+	state.literal = true
+	return state, true
+}
+
+func bareShellHereDocState(line string, end int, state shellLexState) (shellLexState, bool) {
+	start := end
+	for end < len(line) && !strings.ContainsRune(" \t;|&<>()", rune(line[end])) {
+		end++
+	}
+	if start == end {
+		return shellLexState{}, false
+	}
+	state.hereDoc = line[start:end]
+	return state, true
 }
 
 func shellHereDocEnd(line string, state shellLexState) bool {
