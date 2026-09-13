@@ -2835,7 +2835,6 @@ func uciWaitForInstalledAcceptanceQuiescence(ctx context.Context, client *uciIns
 	if client == nil || selection.contextHandle == "" || barrier.barrierState != "satisfied" {
 		return uciInstalledAcceptancePublication{}, errors.New("installed standard MCP quiescence target is incomplete")
 	}
-
 	var candidate uciInstalledAcceptancePublication
 	observations := 0
 	ticker := time.NewTicker(uciInstalledAcceptanceQuiescencePollInterval)
@@ -2852,30 +2851,36 @@ func uciWaitForInstalledAcceptanceQuiescence(ctx context.Context, client *uciIns
 		if status.error != "" {
 			return uciInstalledAcceptancePublication{}, fmt.Errorf("installed standard MCP quiescence status error: %s", uciInstalledAcceptanceSafeErrorDetail(status.error))
 		}
-		if status.status == "running" {
-			observations = 0
-		} else {
-			publication, err := uciInstalledAcceptanceQuiescentPublication(status, barrier)
-			if err != nil {
-				return uciInstalledAcceptancePublication{}, err
-			}
-			if observations == 0 || !uciInstalledAcceptanceSamePublicationTuple(candidate, publication) {
-				candidate = publication
-				observations = 1
-			} else {
-				observations++
-			}
-			if observations >= uciInstalledAcceptanceQuiescenceObservations {
-				return candidate, nil
-			}
+		var ready bool
+		candidate, observations, ready, err = uciInstalledAcceptanceObserveQuiescence(status, barrier, candidate, observations)
+		if err != nil {
+			return uciInstalledAcceptancePublication{}, err
 		}
-
+		if ready {
+			return candidate, nil
+		}
 		select {
 		case <-ctx.Done():
 			return uciInstalledAcceptancePublication{}, ctx.Err()
 		case <-ticker.C:
 		}
 	}
+}
+
+func uciInstalledAcceptanceObserveQuiescence(status uciInstalledAcceptanceStatus, barrier, candidate uciInstalledAcceptancePublication, observations int) (uciInstalledAcceptancePublication, int, bool, error) {
+	if status.status == "running" {
+		return uciInstalledAcceptancePublication{}, 0, false, nil
+	}
+	publication, err := uciInstalledAcceptanceQuiescentPublication(status, barrier)
+	if err != nil {
+		return uciInstalledAcceptancePublication{}, 0, false, err
+	}
+	if observations == 0 || !uciInstalledAcceptanceSamePublicationTuple(candidate, publication) {
+		candidate, observations = publication, 1
+	} else {
+		observations++
+	}
+	return candidate, observations, observations >= uciInstalledAcceptanceQuiescenceObservations, nil
 }
 
 func uciInstalledAcceptanceBarrierWait(ctx context.Context) int64 {
@@ -2990,6 +2995,26 @@ func uciDecodeInstalledAcceptanceClosedOutcome(payload json.RawMessage) (uciInst
 }
 
 func uciObserveInstalledAcceptanceSearchGraphRead(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection, publication uciInstalledAcceptancePublication, fixture uciInstalledAcceptanceFixture, expectedCallee string) (uciInstalledAcceptanceObservations, error) {
+	searchItem, err := uciInstalledAcceptanceSearchCitation(ctx, client, selection, publication, fixture)
+	if err != nil {
+		return uciInstalledAcceptanceObservations{}, err
+	}
+	callee, err := uciInstalledAcceptanceGraphCallee(ctx, client, selection, publication, searchItem, expectedCallee)
+	if err != nil {
+		return uciInstalledAcceptanceObservations{}, err
+	}
+	readItem, err := uciInstalledAcceptanceReadCitation(ctx, client, selection, publication, searchItem)
+	if err != nil {
+		return uciInstalledAcceptanceObservations{}, err
+	}
+	return uciInstalledAcceptanceObservations{
+		SearchArtifactDigests: []string{string(searchItem.ContentDigest)},
+		GraphCalleeDigests:    []string{uciInstalledAcceptanceStringDigest(callee)},
+		ReadArtifactDigests:   []string{string(readItem.ContentDigest)},
+	}, nil
+}
+
+func uciInstalledAcceptanceSearchCitation(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection, publication uciInstalledAcceptancePublication, fixture uciInstalledAcceptanceFixture) (uci.QueryItem, error) {
 	searchPayload, err := client.Tool(ctx, "codebase_search", map[string]any{
 		"context_handle": selection.contextHandle,
 		"query":          fixture.SharedSymbol,
@@ -2997,43 +3022,50 @@ func uciObserveInstalledAcceptanceSearchGraphRead(ctx context.Context, client *u
 		"limit":          10,
 	})
 	if err != nil {
-		return uciInstalledAcceptanceObservations{}, err
+		return uci.QueryItem{}, err
 	}
 	search, err := uciDecodeInstalledAcceptanceQuery(searchPayload)
 	if err != nil {
-		return uciInstalledAcceptanceObservations{}, err
+		return uci.QueryItem{}, err
 	}
 	if (search.Status != uci.QueryStatusOK && search.Status != uci.QueryStatusPartial) || !uciInstalledAcceptanceQueryMatchesPublication(search, publication) || search.Items == nil {
-		return uciInstalledAcceptanceObservations{}, fmt.Errorf("installed standard MCP search result is not selected-View evidence: status=%s", search.Status)
+		return uci.QueryItem{}, fmt.Errorf("installed standard MCP search result is not selected-View evidence: status=%s", search.Status)
 	}
+	return uciInstalledAcceptanceFindSearchCitation(*search.Items, publication, fixture)
+}
+
+func uciInstalledAcceptanceFindSearchCitation(items uci.QueryItems, publication uciInstalledAcceptancePublication, fixture uciInstalledAcceptanceFixture) (uci.QueryItem, error) {
 	var searchItem *uci.QueryItem
-	for index := range *search.Items {
-		item := &(*search.Items)[index]
+	for index := range items {
+		item := &items[index]
 		if item.Ref.SourceID != publication.sourceID || item.Ref.ViewID != publication.viewID {
-			return uciInstalledAcceptanceObservations{}, errors.New("installed standard MCP search disclosed an item outside the selected View")
+			return uci.QueryItem{}, errors.New("installed standard MCP search disclosed an item outside the selected View")
 		}
 		caller, callerOK := uciInstalledAcceptanceGoFunctionName(item.Ref.EntityKey)
 		if item.Path != fixture.RelativePath || !callerOK || caller != fixture.SharedSymbol {
 			continue
 		}
 		if !uciInstalledAcceptanceIsBareSHA256(string(item.ContentDigest)) {
-			return uciInstalledAcceptanceObservations{}, errors.New("installed standard MCP search citation has an invalid content digest")
+			return uci.QueryItem{}, errors.New("installed standard MCP search citation has an invalid content digest")
 		}
 		if searchItem != nil && searchItem.ContentDigest != item.ContentDigest {
-			return uciInstalledAcceptanceObservations{}, errors.New("installed standard MCP search returned conflicting SharedTarget artifacts")
+			return uci.QueryItem{}, errors.New("installed standard MCP search returned conflicting SharedTarget artifacts")
 		}
 		if searchItem == nil || item.Span.ByteEnd-item.Span.ByteStart < searchItem.Span.ByteEnd-searchItem.Span.ByteStart {
 			searchItem = item
 		}
 	}
 	if searchItem == nil {
-		return uciInstalledAcceptanceObservations{}, errors.New("installed standard MCP search omitted the qualified SharedTarget citation")
+		return uci.QueryItem{}, errors.New("installed standard MCP search omitted the qualified SharedTarget citation")
 	}
-
 	caller, callerOK := uciInstalledAcceptanceGoFunctionName(searchItem.Ref.EntityKey)
 	if !callerOK || caller != fixture.SharedSymbol {
-		return uciInstalledAcceptanceObservations{}, errors.New("installed standard MCP search did not cite the qualified SharedTarget entity")
+		return uci.QueryItem{}, errors.New("installed standard MCP search did not cite the qualified SharedTarget entity")
 	}
+	return *searchItem, nil
+}
+
+func uciInstalledAcceptanceGraphCallee(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection, publication uciInstalledAcceptancePublication, searchItem uci.QueryItem, expectedCallee string) (string, error) {
 	graphPayload, err := client.Tool(ctx, "codebase_graph", map[string]any{
 		"context_handle": selection.contextHandle,
 		"action":         "neighbors",
@@ -3042,22 +3074,17 @@ func uciObserveInstalledAcceptanceSearchGraphRead(ctx context.Context, client *u
 			"view_id":    publication.viewID,
 			"entity_key": searchItem.Ref.EntityKey,
 		},
-		"direction":   "outgoing",
-		"max_depth":   4,
-		"max_visited": 64,
-		"max_nodes":   32,
-		"max_edges":   64,
-		"deadline_ms": 30_000,
+		"direction": "outgoing", "max_depth": 4, "max_visited": 64, "max_nodes": 32, "max_edges": 64, "deadline_ms": 30_000,
 	})
 	if err != nil {
-		return uciInstalledAcceptanceObservations{}, err
+		return "", err
 	}
 	graphResponse, err := uciDecodeInstalledAcceptanceQuery(graphPayload)
 	if err != nil {
-		return uciInstalledAcceptanceObservations{}, err
+		return "", err
 	}
 	if graphResponse.Status != uci.QueryStatusOK || !uciInstalledAcceptanceQueryMatchesPublication(graphResponse, publication) || graphResponse.Graph == nil {
-		return uciInstalledAcceptanceObservations{}, errors.New("installed standard MCP graph did not return the selected View")
+		return "", errors.New("installed standard MCP graph did not return the selected View")
 	}
 	callee := ""
 	for _, edge := range graphResponse.Graph.Edges {
@@ -3065,57 +3092,49 @@ func uciObserveInstalledAcceptanceSearchGraphRead(ctx context.Context, client *u
 			continue
 		}
 		if edge.To.SourceID != publication.sourceID || edge.To.ViewID != publication.viewID {
-			return uciInstalledAcceptanceObservations{}, errors.New("installed standard MCP graph calls edge left the selected View")
+			return "", errors.New("installed standard MCP graph calls edge left the selected View")
 		}
 		calleeName, calleeOK := uciInstalledAcceptanceGoFunctionName(edge.To.EntityKey)
 		if !calleeOK || calleeName != expectedCallee {
-			return uciInstalledAcceptanceObservations{}, errors.New("installed standard MCP graph calls edge did not resolve the expected fixture callee")
+			return "", errors.New("installed standard MCP graph calls edge did not resolve the expected fixture callee")
 		}
 		if callee != "" {
-			return uciInstalledAcceptanceObservations{}, errors.New("installed standard MCP graph returned more than one SharedTarget calls edge")
+			return "", errors.New("installed standard MCP graph returned more than one SharedTarget calls edge")
 		}
 		callee = calleeName
 	}
 	if callee == "" {
-		return uciInstalledAcceptanceObservations{}, errors.New("installed standard MCP graph omitted the SharedTarget calls edge")
+		return "", errors.New("installed standard MCP graph omitted the SharedTarget calls edge")
 	}
+	return callee, nil
+}
 
+func uciInstalledAcceptanceReadCitation(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection, publication uciInstalledAcceptancePublication, searchItem uci.QueryItem) (uci.QueryItem, error) {
 	readPayload, err := client.Tool(ctx, "codebase_read", map[string]any{
 		"context_handle": selection.contextHandle,
 		"ref": map[string]any{
-			"source_id":  searchItem.Ref.SourceID,
-			"view_id":    searchItem.Ref.ViewID,
-			"entity_key": searchItem.Ref.EntityKey,
+			"source_id": searchItem.Ref.SourceID, "view_id": searchItem.Ref.ViewID, "entity_key": searchItem.Ref.EntityKey,
 		},
 		"span": map[string]any{
-			"byte_start": searchItem.Span.ByteStart,
-			"byte_end":   searchItem.Span.ByteEnd,
-			"line_start": searchItem.Span.LineStart,
-			"line_end":   searchItem.Span.LineEnd,
+			"byte_start": searchItem.Span.ByteStart, "byte_end": searchItem.Span.ByteEnd, "line_start": searchItem.Span.LineStart, "line_end": searchItem.Span.LineEnd,
 		},
-		"content_digest":      string(searchItem.ContentDigest),
-		"verify_working_copy": false,
-		"max_bytes":           8_192,
+		"content_digest": string(searchItem.ContentDigest), "verify_working_copy": false, "max_bytes": 8_192,
 	})
 	if err != nil {
-		return uciInstalledAcceptanceObservations{}, err
+		return uci.QueryItem{}, err
 	}
 	read, err := uciDecodeInstalledAcceptanceQuery(readPayload)
 	if err != nil {
-		return uciInstalledAcceptanceObservations{}, err
+		return uci.QueryItem{}, err
 	}
 	if read.Status != uci.QueryStatusOK || !uciInstalledAcceptanceQueryMatchesPublication(read, publication) || read.Items == nil || len(*read.Items) != 1 {
-		return uciInstalledAcceptanceObservations{}, errors.New("installed standard MCP read did not return one exact selected-View artifact")
+		return uci.QueryItem{}, errors.New("installed standard MCP read did not return one exact selected-View artifact")
 	}
 	readItem := (*read.Items)[0]
 	if readItem.Ref != searchItem.Ref || readItem.Span != searchItem.Span || readItem.ContentDigest != searchItem.ContentDigest {
-		return uciInstalledAcceptanceObservations{}, errors.New("installed standard MCP read did not preserve the search citation")
+		return uci.QueryItem{}, errors.New("installed standard MCP read did not preserve the search citation")
 	}
-	return uciInstalledAcceptanceObservations{
-		SearchArtifactDigests: []string{string(searchItem.ContentDigest)},
-		GraphCalleeDigests:    []string{uciInstalledAcceptanceStringDigest(callee)},
-		ReadArtifactDigests:   []string{string(readItem.ContentDigest)},
-	}, nil
+	return readItem, nil
 }
 
 func uciInstalledAcceptanceGoFunctionName(entityKey string) (string, bool) {
