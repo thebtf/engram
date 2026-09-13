@@ -467,22 +467,22 @@ func TestUCIRealCorpusEmbeddingClassifiesStatus(t *testing.T) {
 	}{
 		{
 			name:   "ready",
-			status: uciRealCorpusEmbeddingTestStatus("view://private", 2, &profileID, string(uci.IndexCoverageComplete), 2, 2, 0, &succeeded),
+			status: uciRealCorpusEmbeddingTestStatus(uciRealCorpusEmbeddingTestStatusInput{viewID: "view://private", generation: 2, embeddingProfileID: &profileID, coverage: string(uci.IndexCoverageComplete), totalCandidates: 2, readyCandidates: 2, pendingJobs: 0, jobState: &succeeded}),
 			stage:  uciRealCorpusEmbeddingStageReady,
 		},
 		{
 			name:   "terminal failed",
-			status: uciRealCorpusEmbeddingTestStatus("view://private", 2, &profileID, string(uci.IndexCoveragePartial), 2, 1, 1, &failed),
+			status: uciRealCorpusEmbeddingTestStatus(uciRealCorpusEmbeddingTestStatusInput{viewID: "view://private", generation: 2, embeddingProfileID: &profileID, coverage: string(uci.IndexCoveragePartial), totalCandidates: 2, readyCandidates: 1, pendingJobs: 1, jobState: &failed}),
 			stage:  uciRealCorpusEmbeddingStageTerminalFailed,
 		},
 		{
 			name:   "succeeded but inconsistent",
-			status: uciRealCorpusEmbeddingTestStatus("view://private", 2, &profileID, string(uci.IndexCoveragePartial), 2, 1, 0, &succeeded),
+			status: uciRealCorpusEmbeddingTestStatus(uciRealCorpusEmbeddingTestStatusInput{viewID: "view://private", generation: 2, embeddingProfileID: &profileID, coverage: string(uci.IndexCoveragePartial), totalCandidates: 2, readyCandidates: 1, pendingJobs: 0, jobState: &succeeded}),
 			stage:  uciRealCorpusEmbeddingStageTerminalSucceededInconsistent,
 		},
 		{
 			name:    "stagnant progress",
-			status:  uciRealCorpusEmbeddingTestStatus("view://private", 2, &profileID, string(uci.IndexCoveragePartial), 2, 1, 1, nil),
+			status:  uciRealCorpusEmbeddingTestStatus(uciRealCorpusEmbeddingTestStatusInput{viewID: "view://private", generation: 2, embeddingProfileID: &profileID, coverage: string(uci.IndexCoveragePartial), totalCandidates: 2, readyCandidates: 1, pendingJobs: 1}),
 			stalled: true,
 			stage:   uciRealCorpusEmbeddingStageNoProgress,
 		},
@@ -511,7 +511,7 @@ func TestUCIRealCorpusEmbeddingProgressWindowStallsOnlyWithoutProgress(t *testin
 	profileID := "profile://private"
 	replacementProfileID := "profile://replacement"
 	running := "running"
-	status := uciRealCorpusEmbeddingTestStatus("view://private", 2, &profileID, string(uci.IndexCoveragePartial), 2, 0, 1, &running)
+	status := uciRealCorpusEmbeddingTestStatus(uciRealCorpusEmbeddingTestStatusInput{viewID: "view://private", generation: 2, embeddingProfileID: &profileID, coverage: string(uci.IndexCoveragePartial), totalCandidates: 2, readyCandidates: 0, pendingJobs: 1, jobState: &running})
 	started := time.Date(2026, time.September, 7, 0, 0, 0, 0, time.UTC)
 	classification := uciClassifyRealCorpusEmbedding(status, false)
 	window, stalled := (uciRealCorpusEmbeddingProgressWindow{}).observe(classification.progress, started)
@@ -547,7 +547,7 @@ func TestUCIRealCorpusEmbeddingProgressWindowWaitsForScheduledRetry(t *testing.T
 	errorCode := string(uci.EmbeddingFailureProviderUnavailable)
 	started := time.Date(2026, time.September, 7, 0, 0, 0, 0, time.UTC)
 	retryAfter := started.Add(10 * time.Minute)
-	status := uciRealCorpusEmbeddingTestStatus("view://private", 2, &profileID, string(uci.IndexCoveragePartial), 20, 4, 1, &retryScheduled)
+	status := uciRealCorpusEmbeddingTestStatus(uciRealCorpusEmbeddingTestStatusInput{viewID: "view://private", generation: 2, embeddingProfileID: &profileID, coverage: string(uci.IndexCoveragePartial), totalCandidates: 20, readyCandidates: 4, pendingJobs: 1, jobState: &retryScheduled})
 	status.Embedding.ErrorCode = &errorCode
 	status.Embedding.RetryAfter = &retryAfter
 	classification := uciClassifyRealCorpusEmbedding(status, false)
@@ -587,7 +587,17 @@ func TestUCIRealCorpusProviderRefBindsExactEndpoint(t *testing.T) {
 	}
 }
 
-func uciRealCorpusEmbeddingTestStatus(viewID string, generation int64, embeddingProfileID *string, coverage string, totalCandidates, readyCandidates, pendingJobs uint64, jobState *string) uciRealCorpusEmbeddingStatus {
+type uciRealCorpusEmbeddingTestStatusInput struct {
+	viewID                                        string
+	generation                                    int64
+	embeddingProfileID, jobState                  *string
+	coverage                                      string
+	totalCandidates, readyCandidates, pendingJobs uint64
+}
+
+func uciRealCorpusEmbeddingTestStatus(input uciRealCorpusEmbeddingTestStatusInput) uciRealCorpusEmbeddingStatus {
+	viewID, generation, embeddingProfileID, coverage := input.viewID, input.generation, input.embeddingProfileID, input.coverage
+	totalCandidates, readyCandidates, pendingJobs, jobState := input.totalCandidates, input.readyCandidates, input.pendingJobs, input.jobState
 	status := uciRealCorpusEmbeddingStatus{}
 	status.Context.SourceID = "source"
 	status.Context.CheckoutID = "checkout"
