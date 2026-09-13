@@ -127,87 +127,131 @@ func NewQueryService(store QueryStore) *QueryService {
 // Query executes one query in an already-authorized immutable ContextRef. It
 // never resolves or authorizes the context again.
 func (service *QueryService) Query(ctx context.Context, authorized AuthorizedContext, spec QuerySpec) (QueryResult, error) {
-	if service == nil || service.store == nil {
-		return QueryResult{}, fmt.Errorf("uci query: store is not configured")
-	}
-	if err := ctx.Err(); err != nil {
+	prepared, err := service.prepareQuery(ctx, authorized, spec)
+	if err != nil {
 		return QueryResult{}, err
 	}
+	if result, unavailable, err := queryUnavailableStoreResult(prepared.ref, prepared.selected); unavailable || err != nil {
+		return result, err
+	}
+	candidates := queryCurrentCandidates(prepared.selected.Candidates, prepared.ref)
+	return service.availableQueryResult(prepared, candidates)
+}
 
+type queryPrepared struct {
+	ref        ContextRef
+	normalized QuerySpec
+	start      int
+	selected   QueryStoreResult
+}
+
+func (service *QueryService) prepareQuery(ctx context.Context, authorized AuthorizedContext, spec QuerySpec) (queryPrepared, error) {
+	if err := service.validateQuery(ctx); err != nil {
+		return queryPrepared{}, err
+	}
 	ref := authorized.Ref()
 	if !ref.valid() {
-		return QueryResult{}, fmt.Errorf("uci query: authorized context is invalid")
+		return queryPrepared{}, fmt.Errorf("uci query: authorized context is invalid")
 	}
 	normalized, err := normalizeQuerySpec(spec)
 	if err != nil {
-		return QueryResult{}, err
+		return queryPrepared{}, err
 	}
 	start, err := service.continuationOffset(ref, normalized)
 	if err != nil {
-		return QueryResult{}, err
+		return queryPrepared{}, err
 	}
-
 	storeSpec := normalized
 	storeSpec.Offset = start
 	selected, err := service.store.SelectCandidates(ctx, authorized, storeSpec)
 	if err != nil {
-		return QueryResult{}, err
+		return queryPrepared{}, err
 	}
 	if err := ctx.Err(); err != nil {
-		return QueryResult{}, err
+		return queryPrepared{}, err
 	}
 	if !validQueryCoverage(selected.Coverage) {
-		return QueryResult{}, fmt.Errorf("uci query: store returned invalid coverage %q", selected.Coverage)
+		return queryPrepared{}, fmt.Errorf("uci query: store returned invalid coverage %q", selected.Coverage)
 	}
-	if selected.Unavailable != nil {
-		if err := selected.Unavailable.Validate(); err != nil || !selected.Unavailable.Code.isAuthorizedUnavailable() {
-			return QueryResult{}, fmt.Errorf("uci query: store returned invalid unavailable state")
-		}
-		if selected.Coverage != IndexCoverageUnavailable {
-			return QueryResult{}, fmt.Errorf("uci query: unavailable store result requires unavailable coverage")
-		}
-		return QueryResult{Response: queryUnavailableResponse(ref, selected.Coverage, *selected.Unavailable)}, nil
-	}
-	if selected.Coverage == IndexCoverageUnavailable {
-		return QueryResult{}, fmt.Errorf("uci query: unavailable coverage requires an unavailable outcome")
-	}
+	return queryPrepared{ref: ref, normalized: normalized, start: start, selected: selected}, nil
+}
 
-	candidates := make([]QueryCandidate, 0, len(selected.Candidates))
-	for _, candidate := range selected.Candidates {
+func (service *QueryService) validateQuery(ctx context.Context) error {
+	if service == nil || service.store == nil {
+		return fmt.Errorf("uci query: store is not configured")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func queryUnavailableStoreResult(ref ContextRef, selected QueryStoreResult) (QueryResult, bool, error) {
+	if selected.Unavailable == nil {
+		if selected.Coverage == IndexCoverageUnavailable {
+			return QueryResult{}, false, fmt.Errorf("uci query: unavailable coverage requires an unavailable outcome")
+		}
+		return QueryResult{}, false, nil
+	}
+	if err := selected.Unavailable.Validate(); err != nil || !selected.Unavailable.Code.isAuthorizedUnavailable() {
+		return QueryResult{}, false, fmt.Errorf("uci query: store returned invalid unavailable state")
+	}
+	if selected.Coverage != IndexCoverageUnavailable {
+		return QueryResult{}, false, fmt.Errorf("uci query: unavailable store result requires unavailable coverage")
+	}
+	return QueryResult{Response: queryUnavailableResponse(ref, selected.Coverage, *selected.Unavailable)}, true, nil
+}
+
+func queryCurrentCandidates(selected []QueryCandidate, ref ContextRef) []QueryCandidate {
+	candidates := make([]QueryCandidate, 0, len(selected))
+	for _, candidate := range selected {
 		if !contextRefsEqual(candidate.Context, ref) || !validQueryCandidate(candidate) {
 			continue
 		}
 		candidates = append(candidates, candidate)
 	}
-	orderQueryCandidates(candidates, normalized.Order)
-	if start > 0 && len(candidates) == 0 {
+	return candidates
+}
+
+func (service *QueryService) availableQueryResult(prepared queryPrepared, candidates []QueryCandidate) (QueryResult, error) {
+	orderQueryCandidates(candidates, prepared.normalized.Order)
+	if prepared.start > 0 && len(candidates) == 0 {
 		return QueryResult{}, fmt.Errorf("uci query: continuation position is outside the selected view")
 	}
-
-	end := normalized.Limit
-	if end > len(candidates) {
-		end = len(candidates)
+	end := min(prepared.normalized.Limit, len(candidates))
+	items, warnings := queryItemsFromCandidates(candidates[:end], prepared.normalized)
+	continuation, err := service.queryContinuation(prepared, end, len(candidates))
+	if err != nil {
+		return QueryResult{}, err
 	}
-	items := make(QueryItems, 0, end)
+	truncated := end < len(candidates)
+	return QueryResult{Response: queryAvailableResponse(prepared.ref, prepared.normalized, prepared.selected.Coverage, items, warnings, truncated, continuation)}, nil
+}
+
+func queryItemsFromCandidates(candidates []QueryCandidate, spec QuerySpec) (QueryItems, QueryWarnings) {
+	items := make(QueryItems, 0, len(candidates))
 	warnings := QueryWarnings{}
-	for _, candidate := range candidates[:end] {
-		item, excerptOmitted := queryItemFromCandidate(candidate, normalized)
+	for _, candidate := range candidates {
+		item, excerptOmitted := queryItemFromCandidate(candidate, spec)
 		items = append(items, item)
 		if excerptOmitted && !containsQueryWarning(warnings, "excerpt_omitted_response_bound") {
 			warnings = append(warnings, "excerpt_omitted_response_bound")
 		}
 	}
+	return items, warnings
+}
 
-	truncated := end < len(candidates)
+func (service *QueryService) queryContinuation(prepared queryPrepared, end, candidateCount int) (QueryContinuation, error) {
 	continuation := QueryContinuation{}
-	if truncated {
-		token, err := service.encodeContinuation(ref, normalized, start+end)
-		if err != nil {
-			return QueryResult{}, err
-		}
-		continuation.Value = &token
+	if end >= candidateCount {
+		return continuation, nil
 	}
-	return QueryResult{Response: queryAvailableResponse(ref, normalized, selected.Coverage, items, warnings, truncated, continuation)}, nil
+	token, err := service.encodeContinuation(prepared.ref, prepared.normalized, prepared.start+end)
+	if err != nil {
+		return QueryContinuation{}, err
+	}
+	continuation.Value = &token
+	return continuation, nil
 }
 
 func normalizeQuerySpec(spec QuerySpec) (QuerySpec, error) {
@@ -218,54 +262,83 @@ func normalizeQuerySpec(spec QuerySpec) (QuerySpec, error) {
 		Order:           spec.Order,
 		Limit:           spec.Limit,
 	}
-	if !validQueryIdentity(normalized.ClientSessionID, queryMaxClientSessionID) {
-		return QuerySpec{}, fmt.Errorf("uci query: client session ID is invalid")
+	if err := validateNormalizedQuerySpec(normalized); err != nil {
+		return QuerySpec{}, err
 	}
-	if !normalized.Mode.valid() {
-		return QuerySpec{}, fmt.Errorf("uci query: mode is invalid")
+	languages, err := normalizeQueryLanguages(spec.Filter.Languages)
+	if err != nil {
+		return QuerySpec{}, err
 	}
-	if !validQueryIdentity(normalized.Text, queryMaxText) {
-		return QuerySpec{}, fmt.Errorf("uci query: text is invalid")
-	}
-	if !normalized.Order.valid() {
-		return QuerySpec{}, fmt.Errorf("uci query: order is invalid")
-	}
-	if normalized.Limit < 1 || normalized.Limit > queryMaxItems {
-		return QuerySpec{}, fmt.Errorf("uci query: limit must be between 1 and %d", queryMaxItems)
-	}
-	if len(spec.Filter.Languages) > queryMaxLanguages {
-		return QuerySpec{}, fmt.Errorf("uci query: language filter exceeds limit")
-	}
-
-	languages := make([]string, 0, len(spec.Filter.Languages))
-	for _, language := range spec.Filter.Languages {
-		language = strings.ToLower(strings.TrimSpace(language))
-		if !validQueryIdentity(language, queryMaxLanguageFilter) {
-			return QuerySpec{}, fmt.Errorf("uci query: language filter is invalid")
-		}
-		languages = append(languages, language)
-	}
-	sort.Strings(languages)
-	for _, language := range languages {
-		if len(normalized.Filter.Languages) == 0 || normalized.Filter.Languages[len(normalized.Filter.Languages)-1] != language {
-			normalized.Filter.Languages = append(normalized.Filter.Languages, language)
-		}
-	}
-
 	pathPrefix, err := NormalizeQueryPathPrefix(spec.Filter.PathPrefix)
 	if err != nil {
 		return QuerySpec{}, err
 	}
-	normalized.Filter.PathPrefix = pathPrefix
-
-	if spec.Continuation != nil {
-		token := *spec.Continuation
-		if len(token) == 0 || len(token) > queryMaxContinuation || !utf8.ValidString(token) || strings.TrimSpace(token) != token {
-			return QuerySpec{}, fmt.Errorf("uci query: continuation is invalid")
-		}
-		normalized.Continuation = &token
+	continuation, err := normalizeQueryContinuation(spec.Continuation)
+	if err != nil {
+		return QuerySpec{}, err
 	}
+	normalized.Filter = QueryFilter{Languages: languages, PathPrefix: pathPrefix}
+	normalized.Continuation = continuation
 	return normalized, nil
+}
+
+func validateNormalizedQuerySpec(spec QuerySpec) error {
+	if !validQueryIdentity(spec.ClientSessionID, queryMaxClientSessionID) {
+		return fmt.Errorf("uci query: client session ID is invalid")
+	}
+	if !spec.Mode.valid() {
+		return fmt.Errorf("uci query: mode is invalid")
+	}
+	if !validQueryIdentity(spec.Text, queryMaxText) {
+		return fmt.Errorf("uci query: text is invalid")
+	}
+	if !spec.Order.valid() {
+		return fmt.Errorf("uci query: order is invalid")
+	}
+	if spec.Limit < 1 || spec.Limit > queryMaxItems {
+		return fmt.Errorf("uci query: limit must be between 1 and %d", queryMaxItems)
+	}
+	return nil
+}
+
+func normalizeQueryLanguages(values []string) ([]string, error) {
+	if len(values) > queryMaxLanguages {
+		return nil, fmt.Errorf("uci query: language filter exceeds limit")
+	}
+	if len(values) == 0 {
+		return nil, nil
+	}
+	languages := make([]string, 0, len(values))
+	for _, value := range values {
+		language := strings.ToLower(strings.TrimSpace(value))
+		if !validQueryIdentity(language, queryMaxLanguageFilter) {
+			return nil, fmt.Errorf("uci query: language filter is invalid")
+		}
+		languages = append(languages, language)
+	}
+	sort.Strings(languages)
+	return queryUniqueLanguages(languages), nil
+}
+
+func queryUniqueLanguages(languages []string) []string {
+	unique := make([]string, 0, len(languages))
+	for _, language := range languages {
+		if len(unique) == 0 || unique[len(unique)-1] != language {
+			unique = append(unique, language)
+		}
+	}
+	return unique
+}
+
+func normalizeQueryContinuation(value *string) (*string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	token := *value
+	if len(token) == 0 || len(token) > queryMaxContinuation || !utf8.ValidString(token) || strings.TrimSpace(token) != token {
+		return nil, fmt.Errorf("uci query: continuation is invalid")
+	}
+	return &token, nil
 }
 
 // NormalizeQueryPathPrefix closes an untrusted repository-relative path prefix

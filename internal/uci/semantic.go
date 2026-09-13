@@ -174,35 +174,20 @@ func (service *SemanticService) Query(ctx context.Context, authorized Authorized
 
 	storeSpec := normalized
 	storeSpec.Offset = start
-	lexicalResult, err := service.lexical.store.SelectCandidates(ctx, authorized, storeSpec)
+	lexicalSelection, unavailable, err := service.selectLexical(ctx, authorized, ref, storeSpec)
 	if err != nil {
 		return QueryResult{}, err
 	}
-	if err := ctx.Err(); err != nil {
-		return QueryResult{}, err
+	if unavailable != nil {
+		return *unavailable, nil
 	}
-	if !validQueryCoverage(lexicalResult.Coverage) {
-		return QueryResult{}, fmt.Errorf("uci semantic: lexical store returned invalid coverage %q", lexicalResult.Coverage)
-	}
-	if lexicalResult.Unavailable != nil {
-		if err := lexicalResult.Unavailable.Validate(); err != nil || !lexicalResult.Unavailable.Code.isAuthorizedUnavailable() {
-			return QueryResult{}, fmt.Errorf("uci semantic: lexical store returned invalid unavailable state")
-		}
-		if lexicalResult.Coverage != IndexCoverageUnavailable {
-			return QueryResult{}, fmt.Errorf("uci semantic: lexical unavailable result has available coverage")
-		}
-		return QueryResult{Response: queryUnavailableResponse(ref, lexicalResult.Coverage, *lexicalResult.Unavailable)}, nil
-	}
-	if lexicalResult.Coverage == IndexCoverageUnavailable {
-		return QueryResult{}, fmt.Errorf("uci semantic: lexical unavailable coverage requires an unavailable outcome")
-	}
-	lexical := semanticCurrentCandidates(lexicalResult.Candidates, ref)
+	lexical := lexicalSelection.candidates
 
 	if reason := service.providerUnavailableReason(); reason != "" {
-		return service.lexicalOnlyResult(ref, normalized, start, lexical, lexicalResult.Coverage, reason)
+		return service.lexicalOnlyResult(ref, normalized, start, lexical, lexicalSelection.coverage, reason)
 	}
 	if semanticNil(service.store) {
-		return service.lexicalOnlyResult(ref, normalized, start, lexical, lexicalResult.Coverage, "vector_store_unavailable")
+		return service.lexicalOnlyResult(ref, normalized, start, lexical, lexicalSelection.coverage, "vector_store_unavailable")
 	}
 
 	input, err := semanticQueryEmbeddingInput(service.profile, normalized.Text)
@@ -211,18 +196,18 @@ func (service *SemanticService) Query(ctx context.Context, authorized Authorized
 	}
 	vector, err := service.embedQuery(ctx, input)
 	if err != nil {
-		return service.lexicalOnlyResult(ref, normalized, start, lexical, lexicalResult.Coverage, semanticProviderDegradation(err))
+		return service.lexicalOnlyResult(ref, normalized, start, lexical, lexicalSelection.coverage, semanticProviderDegradation(err))
 	}
 
 	semanticResult, err := service.store.SelectSemanticCandidates(ctx, authorized, service.profile, vector, storeSpec)
 	if err != nil {
-		return service.lexicalOnlyResult(ref, normalized, start, lexical, lexicalResult.Coverage, "vector_store_unavailable")
+		return service.lexicalOnlyResult(ref, normalized, start, lexical, lexicalSelection.coverage, "vector_store_unavailable")
 	}
 	if !validQueryCoverage(semanticResult.Coverage) || !validSemanticCoverage(semanticResult.VectorCoverage) {
-		return service.lexicalOnlyResult(ref, normalized, start, lexical, lexicalResult.Coverage, "vector_coverage_incomplete")
+		return service.lexicalOnlyResult(ref, normalized, start, lexical, lexicalSelection.coverage, "vector_coverage_incomplete")
 	}
 	if semanticResult.Coverage != IndexCoverageComplete || semanticResult.VectorCoverage < 1 {
-		return service.lexicalOnlyResult(ref, normalized, start, lexical, lexicalResult.Coverage, "vector_coverage_incomplete")
+		return service.lexicalOnlyResult(ref, normalized, start, lexical, lexicalSelection.coverage, "vector_coverage_incomplete")
 	}
 
 	semantic := semanticCurrentCandidates(semanticResult.Candidates, ref)
@@ -232,11 +217,43 @@ func (service *SemanticService) Query(ctx context.Context, authorized Authorized
 		spec:               normalized,
 		start:              start,
 		candidates:         fused,
-		coverage:           lexicalResult.Coverage,
+		coverage:           lexicalSelection.coverage,
 		mode:               QueryRetrievalHybrid,
 		vectorCoverage:     &semanticResult.VectorCoverage,
 		degradationReasons: []string{},
 	})
+}
+
+type semanticLexicalSelection struct {
+	candidates []QueryCandidate
+	coverage   IndexCoverageState
+}
+
+func (service *SemanticService) selectLexical(ctx context.Context, authorized AuthorizedContext, ref ContextRef, spec QuerySpec) (semanticLexicalSelection, *QueryResult, error) {
+	result, err := service.lexical.store.SelectCandidates(ctx, authorized, spec)
+	if err != nil {
+		return semanticLexicalSelection{}, nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return semanticLexicalSelection{}, nil, err
+	}
+	if !validQueryCoverage(result.Coverage) {
+		return semanticLexicalSelection{}, nil, fmt.Errorf("uci semantic: lexical store returned invalid coverage %q", result.Coverage)
+	}
+	if result.Unavailable == nil {
+		if result.Coverage == IndexCoverageUnavailable {
+			return semanticLexicalSelection{}, nil, fmt.Errorf("uci semantic: lexical unavailable coverage requires an unavailable outcome")
+		}
+		return semanticLexicalSelection{candidates: semanticCurrentCandidates(result.Candidates, ref), coverage: result.Coverage}, nil, nil
+	}
+	if err := result.Unavailable.Validate(); err != nil || !result.Unavailable.Code.isAuthorizedUnavailable() {
+		return semanticLexicalSelection{}, nil, fmt.Errorf("uci semantic: lexical store returned invalid unavailable state")
+	}
+	if result.Coverage != IndexCoverageUnavailable {
+		return semanticLexicalSelection{}, nil, fmt.Errorf("uci semantic: lexical unavailable result has available coverage")
+	}
+	unavailable := QueryResult{Response: queryUnavailableResponse(ref, result.Coverage, *result.Unavailable)}
+	return semanticLexicalSelection{}, &unavailable, nil
 }
 
 func (service *SemanticService) lexicalOnlyResult(ref ContextRef, spec QuerySpec, start int, candidates []QueryCandidate, coverage IndexCoverageState, reason string) (QueryResult, error) {
