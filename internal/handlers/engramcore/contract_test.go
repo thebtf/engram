@@ -143,9 +143,9 @@ func startMockGRPC(t *testing.T, srv *mockEngramServer) string {
 	return lis.Addr().String()
 }
 
-// startDeferredMockGRPC reserves an address but leaves it unreachable until
-// start is called. This forces the client connection through transient failure
-// before the backend becomes ready.
+// startDeferredMockGRPC starts a mock server immediately, but holds the first
+// accepted TCP connection until release observes the client's connection
+// attempt. This exercises the production dial path without scheduler delays.
 func startDeferredMockGRPC(t *testing.T, srv *mockEngramServer) (string, func() error) {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -153,20 +153,60 @@ func startDeferredMockGRPC(t *testing.T, srv *mockEngramServer) (string, func() 
 		t.Fatalf("net.Listen: %v", err)
 	}
 
+	acceptStarted := make(chan struct{})
+	releaseAccept := make(chan struct{})
+	var releaseOnce sync.Once
+	delayedLis := &delayedAcceptListener{
+		Listener:      lis,
+		acceptStarted: acceptStarted,
+		release:       releaseAccept,
+	}
+
 	gs := grpc.NewServer()
 	pb.RegisterEngramServiceServer(gs, srv)
-	var once sync.Once
-	start := func() error {
-		once.Do(func() {
-			go func() { _ = gs.Serve(lis) }()
-		})
-		return nil
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		_ = gs.Serve(delayedLis)
+	}()
+
+	release := func() error {
+		select {
+		case <-acceptStarted:
+			releaseOnce.Do(func() { close(releaseAccept) })
+			return nil
+		case <-time.After(5 * time.Second):
+			return fmt.Errorf("wait for client TCP connection")
+		}
 	}
 	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(releaseAccept) })
 		gs.Stop()
 		_ = lis.Close()
+		select {
+		case <-serveDone:
+		case <-time.After(5 * time.Second):
+			t.Error("mock gRPC Serve did not stop")
+		}
 	})
-	return lis.Addr().String(), start
+	return lis.Addr().String(), release
+}
+
+type delayedAcceptListener struct {
+	net.Listener
+	acceptStarted chan struct{}
+	release       <-chan struct{}
+	acceptOnce    sync.Once
+}
+
+func (l *delayedAcceptListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	l.acceptOnce.Do(func() { close(l.acceptStarted) })
+	<-l.release
+	return conn, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -420,19 +460,19 @@ func TestContract_ToolsList_WaitsForDelayedGRPCReadiness(t *testing.T) {
 		{Name: "memory_store", Description: "store"},
 		{Name: "memory_search", Description: "search"},
 	}}}
-	grpcAddr, start := startDeferredMockGRPC(t, srv)
-	disp, _, p := buildContractDispatcher(t, grpcAddr)
-	startResult := make(chan error, 1)
+	grpcAddr, release := startDeferredMockGRPC(t, srv)
+	disp, _, p := buildContractDispatcher(t, "")
+	p.Env[config.EnvServerURL] = "http://" + grpcAddr
+	releaseResult := make(chan error, 1)
 	go func() {
-		time.Sleep(75 * time.Millisecond)
-		startResult <- start()
+		releaseResult <- release()
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), proxyToolsDiscoveryTimeout)
 	defer cancel()
 	resp, err := disp.HandleRequest(ctx, p, jsonrpcListReq(1))
-	if startErr := <-startResult; startErr != nil {
-		t.Fatalf("start delayed gRPC server: %v", startErr)
+	if releaseErr := <-releaseResult; releaseErr != nil {
+		t.Fatalf("release delayed gRPC server: %v", releaseErr)
 	}
 	if err != nil {
 		t.Fatalf("HandleRequest: %v", err)
@@ -466,8 +506,9 @@ func TestContract_ToolsList_DeadlineIsBoundedAndConnectionIsReusable(t *testing.
 	leakBaseline := goleak.IgnoreCurrent()
 	t.Cleanup(func() { goleak.VerifyNone(t, leakBaseline) })
 	srv := &mockEngramServer{initResp: &pb.InitializeResponse{Tools: []*pb.ToolDefinition{{Name: "memory_store"}}}}
-	grpcAddr, start := startDeferredMockGRPC(t, srv)
-	disp, mod, p := buildContractDispatcher(t, grpcAddr)
+	grpcAddr, release := startDeferredMockGRPC(t, srv)
+	disp, mod, p := buildContractDispatcher(t, "")
+	p.Env[config.EnvServerURL] = "http://" + grpcAddr
 
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 	startedAt := time.Now()
@@ -510,8 +551,8 @@ func TestContract_ToolsList_DeadlineIsBoundedAndConnectionIsReusable(t *testing.
 		t.Fatalf("pooled connections grew across retries: first=%d second=%d", connectionsAfterFirst, got)
 	}
 
-	if err := start(); err != nil {
-		t.Fatalf("start gRPC server: %v", err)
+	if err := release(); err != nil {
+		t.Fatalf("release gRPC server: %v", err)
 	}
 	retryCtx, retryCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer retryCancel()
