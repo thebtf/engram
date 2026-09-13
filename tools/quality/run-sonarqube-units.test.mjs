@@ -94,9 +94,31 @@ function deadline() {
 }
 
 function progress() {
+  let work = null;
   return {
     completed: 0,
     reused: 0,
+    configuredWork: null,
+    completedWork: [],
+    configureWork(nextWork) {
+      assert.deepEqual(Object.keys(nextWork).sort(), ["coverage", "dedicated", "overall", "race"]);
+      for (const phase of Object.values(nextWork)) assert.deepEqual(Object.keys(phase).sort(), ["completed", "required", "reused"]);
+      work = structuredClone(nextWork);
+      this.configuredWork = structuredClone(nextWork);
+    },
+    complete(workPhase, { reused = false } = {}) {
+      const phase = work?.[workPhase];
+      assert.ok(phase, `unknown work phase ${workPhase}`);
+      assert.ok(phase.completed < phase.required, `${workPhase} exceeds its declared denominator`);
+      assert.ok(work.overall.completed < work.overall.required, "overall work exceeds its declared denominator");
+      phase.completed += 1;
+      work.overall.completed += 1;
+      if (reused) {
+        phase.reused += 1;
+        work.overall.reused += 1;
+      }
+      this.completedWork.push({ workPhase, reused });
+    },
     activate() { },
     meaningful() { },
     deactivate() { },
