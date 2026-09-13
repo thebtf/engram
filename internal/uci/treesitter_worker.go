@@ -505,46 +505,57 @@ func treeSitterReadWireLine(reader io.Reader, maximum int) ([]byte, error) {
 	if maximum <= 0 {
 		return nil, ErrTreeSitterOutputLimit
 	}
-	bufferSize := 4 << 10
-	if maximum+1 < bufferSize {
-		bufferSize = maximum + 1
-	}
+	bufferSize := min(maximum+1, 4<<10)
 	buffered := bufio.NewReaderSize(reader, bufferSize)
-	line := make([]byte, 0, min(maximum+1, bufferSize))
+	line := make([]byte, 0, bufferSize)
 	for {
 		fragment, err := buffered.ReadSlice('\n')
-		if len(fragment) > 0 {
-			if len(line) > maximum+1-len(fragment) {
-				return nil, fmt.Errorf("%w: response frame is too large", ErrTreeSitterOutputLimit)
-			}
-			line = append(line, fragment...)
+		var appendErr error
+		line, appendErr = treeSitterAppendWireFragment(line, fragment, maximum)
+		if appendErr != nil {
+			return nil, appendErr
 		}
-		switch {
-		case err == nil:
-			line = line[:len(line)-1]
-			if len(line) > maximum {
-				return nil, fmt.Errorf("%w: response frame is too large", ErrTreeSitterOutputLimit)
-			}
-			if len(line) > 0 && line[len(line)-1] == '\r' {
-				line = line[:len(line)-1]
-			}
-			extra, readErr := buffered.ReadByte()
-			if readErr == nil {
-				_ = extra
-				return nil, fmt.Errorf("%w: multiple response frames", ErrTreeSitterProtocol)
-			}
-			if !errors.Is(readErr, io.EOF) {
-				return nil, fmt.Errorf("%w: read trailing response bytes: %v", ErrTreeSitterProtocol, readErr)
-			}
-			return line, nil
-		case errors.Is(err, bufio.ErrBufferFull):
+		if err == nil {
+			return treeSitterCompleteWireLine(buffered, line, maximum)
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
 			continue
-		case errors.Is(err, io.EOF):
-			return nil, fmt.Errorf("%w: response is missing a terminating newline", ErrTreeSitterProtocol)
-		default:
-			return nil, fmt.Errorf("%w: read response: %v", ErrTreeSitterProtocol, err)
 		}
+		return treeSitterReadWireError(err)
 	}
+}
+
+func treeSitterAppendWireFragment(line, fragment []byte, maximum int) ([]byte, error) {
+	if len(fragment) == 0 {
+		return line, nil
+	}
+	if len(line) > maximum+1-len(fragment) {
+		return nil, fmt.Errorf("%w: response frame is too large", ErrTreeSitterOutputLimit)
+	}
+	return append(line, fragment...), nil
+}
+
+func treeSitterCompleteWireLine(buffered *bufio.Reader, line []byte, maximum int) ([]byte, error) {
+	line = line[:len(line)-1]
+	if len(line) > maximum {
+		return nil, fmt.Errorf("%w: response frame is too large", ErrTreeSitterOutputLimit)
+	}
+	if len(line) > 0 && line[len(line)-1] == '\r' {
+		line = line[:len(line)-1]
+	}
+	if _, err := buffered.ReadByte(); err == nil {
+		return nil, fmt.Errorf("%w: multiple response frames", ErrTreeSitterProtocol)
+	} else if !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("%w: read trailing response bytes: %v", ErrTreeSitterProtocol, err)
+	}
+	return line, nil
+}
+
+func treeSitterReadWireError(err error) ([]byte, error) {
+	if errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("%w: response is missing a terminating newline", ErrTreeSitterProtocol)
+	}
+	return nil, fmt.Errorf("%w: read response: %v", ErrTreeSitterProtocol, err)
 }
 
 func treeSitterStopChild(command *exec.Cmd) {
@@ -635,6 +646,23 @@ func treeSitterDigestValid(value IndexDigest) bool {
 }
 
 func treeSitterValidateArtifact(source []byte, artifact TreeSitterArtifact) error {
+	if err := treeSitterValidateArtifactHeader(artifact); err != nil {
+		return err
+	}
+	if err := treeSitterValidateArtifactText(source, artifact); err != nil {
+		return err
+	}
+	lineStarts := goLineStarts(source)
+	if err := treeSitterValidateDefinitions(source, lineStarts, artifact.Definitions); err != nil {
+		return err
+	}
+	if err := treeSitterValidateReferences(source, lineStarts, artifact.References); err != nil {
+		return err
+	}
+	return treeSitterValidateDiagnostics(source, lineStarts, artifact.Diagnostics)
+}
+
+func treeSitterValidateArtifactHeader(artifact TreeSitterArtifact) error {
 	if !treeSitterDigestValid(artifact.BundleDigest) {
 		return fmt.Errorf("%w: child returned an invalid bundle digest", ErrTreeSitterProtocol)
 	}
@@ -644,49 +672,73 @@ func treeSitterValidateArtifact(source []byte, artifact TreeSitterArtifact) erro
 	if len(artifact.Definitions) > treeSitterWorkerMaxDefinitions || len(artifact.References) > treeSitterWorkerMaxReferences || len(artifact.Chunks) > treeSitterWorkerMaxChunks || len(artifact.Diagnostics) > treeSitterWorkerMaxDiagnostics {
 		return fmt.Errorf("%w: child exceeded fact count bounds", ErrTreeSitterProtocol)
 	}
+	return nil
+}
+
+func treeSitterValidateArtifactText(source []byte, artifact TreeSitterArtifact) error {
 	if !utf8.Valid(source) {
 		if artifact.Text != "" || len(artifact.Chunks) != 0 {
 			return fmt.Errorf("%w: invalid UTF-8 source must not be emitted as text", ErrTreeSitterProtocol)
 		}
-	} else {
-		expectedText, _ := goSafeText(source, treeSitterWorkerHardMaxInputBytes)
-		if artifact.Text != expectedText {
-			return fmt.Errorf("%w: child text did not match source bytes", ErrTreeSitterProtocol)
-		}
-		if err := treeSitterValidateChunks(source, artifact.Chunks); err != nil {
-			return err
-		}
+		return nil
 	}
+	expectedText, _ := goSafeText(source, treeSitterWorkerHardMaxInputBytes)
+	if artifact.Text != expectedText {
+		return fmt.Errorf("%w: child text did not match source bytes", ErrTreeSitterProtocol)
+	}
+	return treeSitterValidateChunks(source, artifact.Chunks)
+}
 
-	lineStarts := goLineStarts(source)
-	definitions := make(map[string]struct{}, len(artifact.Definitions))
-	for _, definition := range artifact.Definitions {
-		if definition.Kind == "" || definition.Name == "" || definition.SymbolKey == "" || definition.LocalKey == "" || !treeSitterBoundedText(definition.Kind, treeSitterWorkerMaxIdentifierBytes) || !treeSitterBoundedText(definition.Name, treeSitterWorkerMaxIdentifierBytes) || !treeSitterBoundedText(definition.SymbolKey, treeSitterWorkerMaxIdentifierBytes) || !treeSitterBoundedText(definition.LocalKey, treeSitterWorkerMaxIdentifierBytes) || !treeSitterSpanValid(source, lineStarts, definition.Span, false) || !treeSitterDefinitionNameSourceValid(source, definition) {
+func treeSitterValidateDefinitions(source []byte, lineStarts []int, definitions []TreeSitterDefinition) error {
+	seen := make(map[string]struct{}, len(definitions))
+	for _, definition := range definitions {
+		if !treeSitterDefinitionValid(source, lineStarts, definition) {
 			return fmt.Errorf("%w: invalid definition", ErrTreeSitterProtocol)
 		}
-		if _, exists := definitions[definition.SymbolKey]; exists {
+		if _, exists := seen[definition.SymbolKey]; exists {
 			return fmt.Errorf("%w: duplicate definition symbol key", ErrTreeSitterProtocol)
 		}
-		definitions[definition.SymbolKey] = struct{}{}
+		seen[definition.SymbolKey] = struct{}{}
 	}
+	return nil
+}
 
-	references := make(map[string]struct{}, len(artifact.References))
-	referenceSites := make(map[string]struct{}, len(artifact.References))
-	for _, reference := range artifact.References {
-		if reference.Kind == "" || reference.SymbolKey == "" || reference.LocalKey == "" || reference.RawTarget == "" || reference.TargetKey != "" || !treeSitterReferenceKindValid(reference.Kind) || !treeSitterBoundedText(reference.SymbolKey, treeSitterWorkerMaxIdentifierBytes) || !treeSitterBoundedText(reference.LocalKey, treeSitterWorkerMaxIdentifierBytes) || !treeSitterBoundedText(reference.OwnerLocalKey, treeSitterWorkerMaxIdentifierBytes) || !treeSitterBoundedText(reference.RawTarget, treeSitterWorkerMaxIdentifierBytes) || !treeSitterReferenceResolutionValid(reference.Resolution) || !treeSitterSpanValid(source, lineStarts, reference.Span, false) || !treeSitterReferenceSiteIdentityValid(reference) {
+func treeSitterDefinitionValid(source []byte, lineStarts []int, definition TreeSitterDefinition) bool {
+	return definition.Kind != "" && definition.Name != "" && definition.SymbolKey != "" && definition.LocalKey != "" &&
+		treeSitterBoundedText(definition.Kind, treeSitterWorkerMaxIdentifierBytes) && treeSitterBoundedText(definition.Name, treeSitterWorkerMaxIdentifierBytes) &&
+		treeSitterBoundedText(definition.SymbolKey, treeSitterWorkerMaxIdentifierBytes) && treeSitterBoundedText(definition.LocalKey, treeSitterWorkerMaxIdentifierBytes) &&
+		treeSitterSpanValid(source, lineStarts, definition.Span, false) && treeSitterDefinitionNameSourceValid(source, definition)
+}
+
+func treeSitterValidateReferences(source []byte, lineStarts []int, references []TreeSitterReferenceSite) error {
+	symbols := make(map[string]struct{}, len(references))
+	sites := make(map[string]struct{}, len(references))
+	for _, reference := range references {
+		if !treeSitterReferenceValid(source, lineStarts, reference) {
 			return fmt.Errorf("%w: invalid reference", ErrTreeSitterProtocol)
 		}
-		if _, exists := references[reference.SymbolKey]; exists {
+		if _, exists := symbols[reference.SymbolKey]; exists {
 			return fmt.Errorf("%w: duplicate reference symbol key", ErrTreeSitterProtocol)
 		}
-		if _, exists := referenceSites[reference.LocalKey]; exists {
+		if _, exists := sites[reference.LocalKey]; exists {
 			return fmt.Errorf("%w: duplicate reference site key", ErrTreeSitterProtocol)
 		}
-		references[reference.SymbolKey] = struct{}{}
-		referenceSites[reference.LocalKey] = struct{}{}
+		symbols[reference.SymbolKey] = struct{}{}
+		sites[reference.LocalKey] = struct{}{}
 	}
+	return nil
+}
 
-	for _, diagnostic := range artifact.Diagnostics {
+func treeSitterReferenceValid(source []byte, lineStarts []int, reference TreeSitterReferenceSite) bool {
+	return reference.Kind != "" && reference.SymbolKey != "" && reference.LocalKey != "" && reference.RawTarget != "" && reference.TargetKey == "" &&
+		treeSitterReferenceKindValid(reference.Kind) && treeSitterBoundedText(reference.SymbolKey, treeSitterWorkerMaxIdentifierBytes) &&
+		treeSitterBoundedText(reference.LocalKey, treeSitterWorkerMaxIdentifierBytes) && treeSitterBoundedText(reference.OwnerLocalKey, treeSitterWorkerMaxIdentifierBytes) &&
+		treeSitterBoundedText(reference.RawTarget, treeSitterWorkerMaxIdentifierBytes) && treeSitterReferenceResolutionValid(reference.Resolution) &&
+		treeSitterSpanValid(source, lineStarts, reference.Span, false) && treeSitterReferenceSiteIdentityValid(reference)
+}
+
+func treeSitterValidateDiagnostics(source []byte, lineStarts []int, diagnostics []TreeSitterDiagnostic) error {
+	for _, diagnostic := range diagnostics {
 		if diagnostic.Code == "" || !treeSitterBoundedText(diagnostic.Code, treeSitterWorkerMaxIdentifierBytes) || !treeSitterBoundedText(diagnostic.Message, treeSitterWorkerMaxDiagnosticBytes) || !treeSitterSpanValid(source, lineStarts, diagnostic.Span, true) {
 			return fmt.Errorf("%w: invalid diagnostic", ErrTreeSitterProtocol)
 		}
