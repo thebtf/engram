@@ -2380,62 +2380,28 @@ type uciInstalledAcceptanceSelection struct {
 	runID         string
 }
 
+type uciInstalledAcceptanceSelectedCheckout struct {
+	client string
+	value  uciInstalledAcceptanceSelection
+	err    error
+}
+
+type uciInstalledAcceptanceCheckoutClient struct {
+	clientName string
+	client     *uciInstalledAcceptanceMCPClient
+}
+
 func uciSelectInstalledAcceptanceCheckouts(ctx context.Context, first, second *uciInstalledAcceptanceMCPClient, authority *uciInstalledAcceptanceAuthority) (uciInstalledAcceptanceSelection, uciInstalledAcceptanceSelection, error) {
 	if authority == nil || authority.source == nil || authority.profile == nil {
 		return uciInstalledAcceptanceSelection{}, uciInstalledAcceptanceSelection{}, errors.New("installed acceptance UCI authority is incomplete")
 	}
-	type selected struct {
-		client string
-		value  uciInstalledAcceptanceSelection
-		err    error
-	}
-	results := make(chan selected, 2)
-	for _, item := range []struct {
-		clientName string
-		client     *uciInstalledAcceptanceMCPClient
-	}{
+	results := make(chan uciInstalledAcceptanceSelectedCheckout, 2)
+	for _, item := range []uciInstalledAcceptanceCheckoutClient{
 		{uciInstalledAcceptanceClientA, first},
 		{uciInstalledAcceptanceClientB, second},
 	} {
-		go func(item struct {
-			clientName string
-			client     *uciInstalledAcceptanceMCPClient
-		},
-		) {
-			checkout := authority.checkouts[item.clientName]
-			if checkout == nil {
-				results <- selected{client: item.clientName, err: errors.New("installed acceptance checkout is unavailable")}
-				return
-			}
-			payload, err := item.client.Tool(ctx, "codebase_context", map[string]any{
-				"action": "select",
-				"checkout": map[string]any{
-					"source_id":           authority.source.SourceID,
-					"checkout_id":         checkout.CheckoutID,
-					"incarnation_id":      checkout.IncarnationID,
-					"analysis_profile_id": authority.profile.ProfileID,
-				},
-			})
-			if err != nil {
-				results <- selected{client: item.clientName, err: err}
-				return
-			}
-			var response struct {
-				ContextHandle string `json:"context_handle"`
-				BindingKind   string `json:"binding_kind"`
-				ViewID        string `json:"view_id"`
-				Context       *struct {
-					ViewID string `json:"view_id"`
-				} `json:"context"`
-			}
-			if err := json.Unmarshal(payload, &response); err != nil || response.ContextHandle == "" || response.BindingKind != "checkout" {
-				results <- selected{client: item.clientName, err: errors.New("installed standard MCP checkout selection response is invalid")}
-				return
-			}
-			if response.Context != nil && response.Context.ViewID != "" {
-				response.ViewID = response.Context.ViewID
-			}
-			results <- selected{client: item.clientName, value: uciInstalledAcceptanceSelection{contextHandle: response.ContextHandle, viewID: response.ViewID}}
+		go func(item uciInstalledAcceptanceCheckoutClient) {
+			results <- uciSelectInstalledAcceptanceCheckoutForClient(ctx, item, authority)
 		}(item)
 	}
 	values := make(map[string]uciInstalledAcceptanceSelection, 2)
@@ -2447,6 +2413,40 @@ func uciSelectInstalledAcceptanceCheckouts(ctx context.Context, first, second *u
 		values[result.client] = result.value
 	}
 	return values[uciInstalledAcceptanceClientA], values[uciInstalledAcceptanceClientB], nil
+}
+
+func uciSelectInstalledAcceptanceCheckoutForClient(ctx context.Context, item uciInstalledAcceptanceCheckoutClient, authority *uciInstalledAcceptanceAuthority) uciInstalledAcceptanceSelectedCheckout {
+	checkout := authority.checkouts[item.clientName]
+	if checkout == nil {
+		return uciInstalledAcceptanceSelectedCheckout{client: item.clientName, err: errors.New("installed acceptance checkout is unavailable")}
+	}
+	payload, err := item.client.Tool(ctx, "codebase_context", map[string]any{
+		"action": "select",
+		"checkout": map[string]any{
+			"source_id":           authority.source.SourceID,
+			"checkout_id":         checkout.CheckoutID,
+			"incarnation_id":      checkout.IncarnationID,
+			"analysis_profile_id": authority.profile.ProfileID,
+		},
+	})
+	if err != nil {
+		return uciInstalledAcceptanceSelectedCheckout{client: item.clientName, err: err}
+	}
+	var response struct {
+		ContextHandle string `json:"context_handle"`
+		BindingKind   string `json:"binding_kind"`
+		ViewID        string `json:"view_id"`
+		Context       *struct {
+			ViewID string `json:"view_id"`
+		} `json:"context"`
+	}
+	if err := json.Unmarshal(payload, &response); err != nil || response.ContextHandle == "" || response.BindingKind != "checkout" {
+		return uciInstalledAcceptanceSelectedCheckout{client: item.clientName, err: errors.New("installed standard MCP checkout selection response is invalid")}
+	}
+	if response.Context != nil && response.Context.ViewID != "" {
+		response.ViewID = response.Context.ViewID
+	}
+	return uciInstalledAcceptanceSelectedCheckout{client: item.clientName, value: uciInstalledAcceptanceSelection{contextHandle: response.ContextHandle, viewID: response.ViewID}}
 }
 
 func uciStartInstalledAcceptanceIndexes(ctx context.Context, first, second *uciInstalledAcceptanceMCPClient, firstSelection, secondSelection uciInstalledAcceptanceSelection, worktrees uciInstalledAcceptanceWorktreesFixture) (uciInstalledAcceptanceSelection, uciInstalledAcceptanceSelection, error) {
@@ -2585,56 +2585,64 @@ func uciRequireInstalledAcceptanceParserCanaryPublished(ctx context.Context, aut
 	for _, client := range []string{uciInstalledAcceptanceClientA, uciInstalledAcceptanceClientB} {
 		checkout := authority.checkouts[client]
 		publication, found := publications[client]
-		if checkout == nil || !found || publication.sourceID != authority.source.SourceID || publication.checkoutID != checkout.CheckoutID || publication.profileID != authority.profile.ProfileID || publication.viewID == "" {
-			return nil, errors.New("installed parser canary publication identity is incomplete")
-		}
-		source, err := os.ReadFile(filepath.Join(roots[client], uciInstalledAcceptanceParserCanaryRelativePath))
-		if err != nil || strings.ReplaceAll(string(source), "\r\n", "\n") != uciInstalledAcceptanceParserCanarySource {
-			return nil, errors.New("installed parser canary worktree bytes are invalid")
+		source, err := uciRequireInstalledAcceptanceParserCanaryForClient(ctx, authority, roots[client], checkout, publication, found, parserBundleDigest)
+		if err != nil {
+			return nil, err
 		}
 		if client == uciInstalledAcceptanceClientA {
-			primarySource = append([]byte(nil), source...)
-		}
-		contentDigest := uciInstalledAcceptanceSHA256Prefix + uciInstalledAcceptanceStringDigest(string(source))
-		var count int64
-		if err := authority.store.GetDB().WithContext(ctx).Raw(`
-			SELECT COUNT(*)
-			FROM ci_views AS view
-			JOIN ci_memberships AS membership
-			  ON membership.checkout_id = view.checkout_id
-			 AND membership.valid_from_generation <= view.generation
-			 AND (membership.valid_to_generation IS NULL OR membership.valid_to_generation > view.generation)
-			JOIN ci_parse_artifacts AS artifact ON artifact.artifact_id = membership.artifact_id
-			JOIN ci_blobs AS blob ON blob.source_id = artifact.source_id AND blob.blob_id = artifact.blob_id
-			WHERE view.view_id = ?
-			  AND view.source_id = ?
-			  AND view.checkout_id = ?
-			  AND membership.path_key = ?
-			  AND membership.file_state = 'present'
-			  AND artifact.language = ?
-			  AND artifact.status = 'complete'
-			  AND artifact.grammar_digest = ?
-			  AND artifact.extraction_profile_digest = ?
-			  AND blob.content_digest = ?`,
-			publication.viewID,
-			authority.source.SourceID,
-			checkout.CheckoutID,
-			uciInstalledAcceptanceParserCanaryRelativePath,
-			string(uci.TreeSitterLanguageTypeScript),
-			parserBundleDigest,
-			parserBundleDigest,
-			contentDigest,
-		).Scan(&count).Error; err != nil {
-			return nil, fmt.Errorf("inspect installed parser canary publication: %w", err)
-		}
-		if count != 1 {
-			return nil, errors.New("installed parser canary is not published exactly once in the selected View")
+			primarySource = source
 		}
 	}
 	if len(primarySource) == 0 {
 		return nil, errors.New("installed parser canary primary request is unavailable")
 	}
 	return primarySource, nil
+}
+
+func uciRequireInstalledAcceptanceParserCanaryForClient(ctx context.Context, authority *uciInstalledAcceptanceAuthority, root string, checkout *gormdb.UCICheckout, publication uciInstalledAcceptancePublication, found bool, parserBundleDigest string) ([]byte, error) {
+	if checkout == nil || !found || publication.sourceID != authority.source.SourceID || publication.checkoutID != checkout.CheckoutID || publication.profileID != authority.profile.ProfileID || publication.viewID == "" {
+		return nil, errors.New("installed parser canary publication identity is incomplete")
+	}
+	source, err := os.ReadFile(filepath.Join(root, uciInstalledAcceptanceParserCanaryRelativePath))
+	if err != nil || strings.ReplaceAll(string(source), "\r\n", "\n") != uciInstalledAcceptanceParserCanarySource {
+		return nil, errors.New("installed parser canary worktree bytes are invalid")
+	}
+	contentDigest := uciInstalledAcceptanceSHA256Prefix + uciInstalledAcceptanceStringDigest(string(source))
+	var count int64
+	if err := authority.store.GetDB().WithContext(ctx).Raw(`
+		SELECT COUNT(*)
+		FROM ci_views AS view
+		JOIN ci_memberships AS membership
+		  ON membership.checkout_id = view.checkout_id
+		 AND membership.valid_from_generation <= view.generation
+		 AND (membership.valid_to_generation IS NULL OR membership.valid_to_generation > view.generation)
+		JOIN ci_parse_artifacts AS artifact ON artifact.artifact_id = membership.artifact_id
+		JOIN ci_blobs AS blob ON blob.source_id = artifact.source_id AND blob.blob_id = artifact.blob_id
+		WHERE view.view_id = ?
+		  AND view.source_id = ?
+		  AND view.checkout_id = ?
+		  AND membership.path_key = ?
+		  AND membership.file_state = 'present'
+		  AND artifact.language = ?
+		  AND artifact.status = 'complete'
+		  AND artifact.grammar_digest = ?
+		  AND artifact.extraction_profile_digest = ?
+		  AND blob.content_digest = ?`,
+		publication.viewID,
+		authority.source.SourceID,
+		checkout.CheckoutID,
+		uciInstalledAcceptanceParserCanaryRelativePath,
+		string(uci.TreeSitterLanguageTypeScript),
+		parserBundleDigest,
+		parserBundleDigest,
+		contentDigest,
+	).Scan(&count).Error; err != nil {
+		return nil, fmt.Errorf("inspect installed parser canary publication: %w", err)
+	}
+	if count != 1 {
+		return nil, errors.New("installed parser canary is not published exactly once in the selected View")
+	}
+	return append([]byte(nil), source...), nil
 }
 
 func uciInstalledAcceptanceBareSHA256(value string) (string, error) {
