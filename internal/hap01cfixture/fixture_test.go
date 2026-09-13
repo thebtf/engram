@@ -187,6 +187,16 @@ func TestRedactedReceiptsNeverContainSecrets(t *testing.T) {
 // not use DATABASE_DSN so a general development/test database cannot satisfy
 // the fixture's dedicated-db guard by accident.
 func TestFixtureSeedRotateAndSnapshotIntegration(t *testing.T) {
+	fixture, request, secretsPath := openHAPFixtureIntegration(t)
+	secrets, validator := seedHAPFixtureIntegration(t, fixture, request, secretsPath)
+	assertHAPFixtureFailedPublication(t, fixture, request, secretsPath, secrets, validator)
+	secrets = assertHAPFixturePostPublishConvergence(t, fixture, request, secretsPath, secrets, validator)
+	secrets = assertHAPFixtureRotation(t, fixture, request, secretsPath, secrets, validator)
+	assertHAPFixtureSnapshot(t, fixture, request, secretsPath)
+}
+
+func openHAPFixtureIntegration(t *testing.T) (*Fixture, seedRequest, string) {
+	t.Helper()
 	dsn := os.Getenv("HAP01C_FIXTURE_TEST_DSN")
 	if dsn == "" {
 		t.Skip("HAP01C_FIXTURE_TEST_DSN must name a dedicated hap01c_<run-id> PostgreSQL 17+ database")
@@ -203,7 +213,6 @@ func TestFixtureSeedRotateAndSnapshotIntegration(t *testing.T) {
 	if err := ValidateRunID(runID); err != nil {
 		t.Fatalf("integration run id: %v", err)
 	}
-
 	directory := t.TempDir()
 	dsnFile := filepath.Join(directory, "dsn.txt")
 	requestFile := filepath.Join(directory, "request.json")
@@ -231,7 +240,6 @@ func TestFixtureSeedRotateAndSnapshotIntegration(t *testing.T) {
 	if err := os.WriteFile(requestFile, requestJSON, 0o600); err != nil {
 		t.Fatalf("write request: %v", err)
 	}
-
 	fixture, err := Open(context.Background(), dsnFile, runID)
 	if err != nil {
 		t.Fatalf("open fixture: %v", err)
@@ -241,57 +249,71 @@ func TestFixtureSeedRotateAndSnapshotIntegration(t *testing.T) {
 		cleanupFixtureRows(t, fixture, request)
 		_ = fixture.Close()
 	})
+	return fixture, request, secretsFile
+}
 
-	seed, err := fixture.Seed(context.Background(), requestFile, secretsFile)
+func seedHAPFixtureIntegration(t *testing.T, fixture *Fixture, request seedRequest, secretsPath string) (secretsFile, *auth.Validator) {
+	t.Helper()
+	seed, err := fixture.Seed(context.Background(), fixtureRequestPath(secretsPath), secretsPath)
 	if err != nil {
 		t.Fatalf("seed fixture: %v", err)
 	}
 	if seed.MemoryRows != 1 || seed.RuleRows != 1 || len(seed.Keycards) != 4 {
 		t.Fatalf("unexpected seed receipt: %#v", seed)
 	}
-	secretsRaw, err := readBoundedFile(secretsFile, maxSecretsBytes, true, "SECRETS")
+	secretsRaw, err := readBoundedFile(secretsPath, maxSecretsBytes, true, "SECRETS")
 	if err != nil {
 		t.Fatalf("read seed secrets: %v", err)
 	}
-	secrets, err := parseSecrets(secretsRaw, runID)
+	secrets, err := parseSecrets(secretsRaw, request.RunID)
 	if err != nil {
 		t.Fatalf("parse seed secrets: %v", err)
 	}
-	tokenStore := gormdb.NewTokenStore(fixture.store)
-	validator := auth.NewValidator("", tokenStore)
-	identity, err := validator.Validate(context.Background(), secrets.ProjectToken)
-	if err != nil || !identity.IsHAPProjectServiceFor(request.CanonicalProjectKey) {
+	validator := auth.NewValidator("", gormdb.NewTokenStore(fixture.store))
+	if identity, err := validator.Validate(context.Background(), secrets.ProjectToken); err != nil || !identity.IsHAPProjectServiceFor(request.CanonicalProjectKey) {
 		t.Fatalf("project keycard did not validate as the scoped service identity: %v", err)
 	}
-	legacy, err := validator.Validate(context.Background(), secrets.LegacyDirectToken)
-	if err != nil || !legacy.IsHAPLegacyDirectFor(request.CanonicalProjectKey, time.Now().UTC()) {
+	if legacy, err := validator.Validate(context.Background(), secrets.LegacyDirectToken); err != nil || !legacy.IsHAPLegacyDirectFor(request.CanonicalProjectKey, time.Now().UTC()) {
 		t.Fatalf("legacy keycard did not validate with its real expiry: %v", err)
 	}
+	return secrets, validator
+}
+
+func fixtureRequestPath(secretsPath string) string {
+	return filepath.Join(filepath.Dir(secretsPath), "request.json")
+}
+
+func assertHAPFixtureFailedPublication(t *testing.T, fixture *Fixture, request seedRequest, secretsPath string, secrets secretsFile, validator *auth.Validator) {
+	t.Helper()
 	originalReplace := fixture.deps.replaceSecrets
 	fixture.deps.replaceSecrets = func(string, []byte) error { return boundary("FORCED_SECRET_REPLACE_FAILURE") }
-	if _, err := fixture.RotateProjectKeycard(context.Background(), secretsFile); !IsBoundaryError(err) {
+	if _, err := fixture.RotateProjectKeycard(context.Background(), secretsPath); !IsBoundaryError(err) {
 		t.Fatalf("forced replacement error = %v, want boundary failure", err)
 	}
 	fixture.deps.replaceSecrets = originalReplace
-	unchangedRaw, err := readBoundedFile(secretsFile, maxSecretsBytes, true, "SECRETS")
+	unchangedRaw, err := readBoundedFile(secretsPath, maxSecretsBytes, true, "SECRETS")
 	if err != nil {
 		t.Fatalf("read compensated secrets: %v", err)
 	}
-	unchanged, err := parseSecrets(unchangedRaw, runID)
+	unchanged, err := parseSecrets(unchangedRaw, request.RunID)
 	if err != nil || unchanged.ProjectToken != secrets.ProjectToken || unchanged.ProjectTokenID != secrets.ProjectTokenID {
 		t.Fatalf("failed publication changed active secret: %v", err)
 	}
 	if identity, err := validator.Validate(context.Background(), unchanged.ProjectToken); err != nil || !identity.IsHAPProjectServiceFor(request.CanonicalProjectKey) {
 		t.Fatalf("compensation did not restore old project keycard: %v", err)
 	}
+}
 
+func assertHAPFixturePostPublishConvergence(t *testing.T, fixture *Fixture, request seedRequest, secretsPath string, secrets secretsFile, validator *auth.Validator) secretsFile {
+	t.Helper()
+	originalReplace := fixture.deps.replaceSecrets
 	fixture.deps.replaceSecrets = func(path string, content []byte) error {
 		if err := atomicReplacePrivateFile(path, content); err != nil {
 			return err
 		}
 		return boundary("FORCED_POST_PUBLISH_FAILURE")
 	}
-	publishedRotation, err := fixture.RotateProjectKeycard(context.Background(), secretsFile)
+	publishedRotation, err := fixture.RotateProjectKeycard(context.Background(), secretsPath)
 	if err != nil {
 		t.Fatalf("post-publish rotation did not converge: %v", err)
 	}
@@ -299,42 +321,45 @@ func TestFixtureSeedRotateAndSnapshotIntegration(t *testing.T) {
 		t.Fatalf("unexpected post-publish receipt: %#v", publishedRotation)
 	}
 	fixture.deps.replaceSecrets = originalReplace
-	publishedRaw, err := readBoundedFile(secretsFile, maxSecretsBytes, true, "SECRETS")
+	publishedRaw, err := readBoundedFile(secretsPath, maxSecretsBytes, true, "SECRETS")
 	if err != nil {
 		t.Fatalf("read post-publish secrets: %v", err)
 	}
-	published, err := parseSecrets(publishedRaw, runID)
+	published, err := parseSecrets(publishedRaw, request.RunID)
 	if err != nil || published.ProjectTokenID == secrets.ProjectTokenID || published.ProjectToken == secrets.ProjectToken {
 		t.Fatalf("post-publish error did not retain replacement secrets: %v", err)
 	}
-	if oldRecord, err := tokenStore.GetByID(context.Background(), secrets.ProjectTokenID); err != nil || oldRecord == nil || !oldRecord.Revoked {
+	if oldRecord, err := gormdb.NewTokenStore(fixture.store).GetByID(context.Background(), secrets.ProjectTokenID); err != nil || oldRecord == nil || !oldRecord.Revoked {
 		t.Fatalf("post-publish error did not retain DB revocation: %v", err)
 	}
 	if identity, err := validator.Validate(context.Background(), published.ProjectToken); err != nil || !identity.IsHAPProjectServiceFor(request.CanonicalProjectKey) {
 		t.Fatalf("post-publish replacement keycard did not validate: %v", err)
 	}
-	secrets = published
+	return published
+}
 
+func assertHAPFixtureRotation(t *testing.T, fixture *Fixture, request seedRequest, secretsPath string, secrets secretsFile, validator *auth.Validator) secretsFile {
+	t.Helper()
 	oldRaw, oldID := secrets.ProjectToken, secrets.ProjectTokenID
-	rotation, err := fixture.RotateProjectKeycard(context.Background(), secretsFile)
+	rotation, err := fixture.RotateProjectKeycard(context.Background(), secretsPath)
 	if err != nil {
 		t.Fatalf("rotate project keycard: %v", err)
 	}
 	if !rotation.RevokedKeycard.Revoked || rotation.ReplacementCard.Revoked {
 		t.Fatalf("unexpected rotation receipt: %#v", rotation)
 	}
-	rotatedRaw, err := readBoundedFile(secretsFile, maxSecretsBytes, true, "SECRETS")
+	rotatedRaw, err := readBoundedFile(secretsPath, maxSecretsBytes, true, "SECRETS")
 	if err != nil {
 		t.Fatalf("read rotated secrets: %v", err)
 	}
-	rotated, err := parseSecrets(rotatedRaw, runID)
+	rotated, err := parseSecrets(rotatedRaw, request.RunID)
 	if err != nil {
 		t.Fatalf("parse rotated secrets: %v", err)
 	}
 	if rotated.ProjectTokenID == oldID || rotated.ProjectToken == oldRaw {
 		t.Fatal("rotation did not replace the project keycard")
 	}
-	oldRecord, err := tokenStore.GetByID(context.Background(), oldID)
+	oldRecord, err := gormdb.NewTokenStore(fixture.store).GetByID(context.Background(), oldID)
 	if err != nil || oldRecord == nil || !oldRecord.Revoked {
 		t.Fatalf("old keycard was not revoked: %v", err)
 	}
@@ -344,7 +369,11 @@ func TestFixtureSeedRotateAndSnapshotIntegration(t *testing.T) {
 	if identity, err := validator.Validate(context.Background(), rotated.ProjectToken); err != nil || !identity.IsHAPProjectServiceFor(request.CanonicalProjectKey) {
 		t.Fatalf("replacement project keycard did not validate: %v", err)
 	}
+	return rotated
+}
 
+func assertHAPFixtureSnapshot(t *testing.T, fixture *Fixture, request seedRequest, secretsPath string) {
+	t.Helper()
 	var target models.Memory
 	if err := fixture.store.GetDB().Where("project = ? AND source_agent = ?", request.CanonicalProjectKey, fixtureSourceAgent).First(&target).Error; err != nil {
 		t.Fatalf("read target memory: %v", err)
@@ -352,8 +381,7 @@ func TestFixtureSeedRotateAndSnapshotIntegration(t *testing.T) {
 	if err := gormdb.NewInjectionLogStore(fixture.store).Record(context.Background(), "01a-hap01c-omp-session", request.CanonicalProjectKey, []int64{target.ID}); err != nil {
 		t.Fatalf("record OMP-shaped session telemetry: %v", err)
 	}
-
-	snapshot, err := fixture.Snapshot(context.Background(), requestFile)
+	snapshot, err := fixture.Snapshot(context.Background(), fixtureRequestPath(secretsPath))
 	if err != nil {
 		t.Fatalf("snapshot fixture: %v", err)
 	}
