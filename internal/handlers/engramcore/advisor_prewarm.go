@@ -497,43 +497,7 @@ func (g *LegacyRelayGateway) PrewarmAdvisorBinding(ctx context.Context, request 
 	if !hasDeadline || !deadline.After(time.Now()) {
 		return nil, errors.New("advisor prewarm requires a live bounded context deadline")
 	}
-
-	runtimeRef, err := request.Bootstrap.RuntimeInstanceRef(request.Generation)
-	if err != nil {
-		return nil, fmt.Errorf("derive advisor runtime reference: %w", err)
-	}
-	child := request.Bootstrap.Child()
-	childConfig, err := g.advisorConfigFor(child)
-	if err != nil {
-		g.advisorBindings.removeChild(child)
-		return nil, err
-	}
-	proofKey, proof, ok, err := g.module.advisorProofs.lookup(childConfig.serverURL, childConfig.token)
-	if err != nil {
-		g.advisorBindings.removeChild(child)
-		return nil, err
-	}
-	if !ok {
-		g.advisorBindings.removeChild(child)
-		return nil, errors.New("advisor prewarm requires an accepted Initialize subject proof")
-	}
-	if !g.module.advisorProofsMatches(proofKey, proof) {
-		g.advisorBindings.removeChild(child)
-		return nil, errors.New("advisor Initialize subject proof changed")
-	}
-
-	hello, err := g.advisorProfile.hello(runtimeRef)
-	if err != nil {
-		return nil, err
-	}
-	channel := advisorBindingChannel{
-		authority:  proofKey.authority,
-		subject:    proof,
-		hostFamily: hello.GetHost().GetFamily(),
-		adapterID:  hello.GetHost().GetAdapterId(),
-		runtimeRef: hello.GetHost().GetRuntimeInstanceRef(),
-	}
-	material, err := g.advisorProfile.materialDigest(proofKey.authority, proof, hello)
+	subject, err := g.advisorPrewarmSubject(request)
 	if err != nil {
 		return nil, err
 	}
@@ -541,49 +505,118 @@ func (g *LegacyRelayGateway) PrewarmAdvisorBinding(ctx context.Context, request 
 	// Remove the exact current channel before any dial or Bind attempt. A
 	// connection failure, a rejected retry, or a malformed response therefore
 	// cannot leave a prior local binding visible to the current session start.
-	g.advisorBindings.invalidate(channel)
-	connection, err := g.module.pool.getOrDialGRPC(childConfig.serverURL, childConfig.token)
+	g.advisorBindings.invalidate(subject.channel)
+	binding, expiry, err := g.advisorBind(ctx, subject.config, subject.hello, subject.proof)
 	if err != nil {
-		return nil, fmt.Errorf("advisor Bind gRPC connection: %w", err)
+		return nil, err
 	}
-	response, err := pb.NewEngramServiceClient(connection).Bind(
-		ctx,
-		&pb.HostAdvisorBindRequest{Hello: hello},
-		grpc.WaitForReady(true),
-	)
+	if err := g.advisorRequireCurrentSubject(subject.child, subject.config, subject.proofKey, subject.proof); err != nil {
+		return nil, err
+	}
+	if err := g.advisorBindings.store(subject.channel, subject.child, subject.material, binding, expiry); err != nil {
+		return nil, err
+	}
+	if err := g.advisorRequireCurrentSubject(subject.child, subject.config, subject.proofKey, subject.proof); err != nil {
+		if errors.Is(err, errAdvisorProofChanged) {
+			g.advisorBindings.invalidate(subject.channel)
+		} else {
+			g.advisorBindings.removeChild(subject.child)
+		}
+		return nil, err
+	}
+	return proto.Clone(binding).(*pb.HostBinding), nil
+}
+
+var errAdvisorProofChanged = errors.New("advisor Initialize subject proof changed during Bind")
+
+type advisorPrewarmSubject struct {
+	child    legacyrelay.ChildBinding
+	config   advisorChildConfig
+	proofKey advisorProofKey
+	proof    advisorSubjectProof
+	hello    *pb.HostHello
+	channel  advisorBindingChannel
+	material [sha256.Size]byte
+}
+
+func (g *LegacyRelayGateway) advisorPrewarmSubject(request AdvisorPrewarmRequest) (advisorPrewarmSubject, error) {
+	runtimeRef, err := request.Bootstrap.RuntimeInstanceRef(request.Generation)
+	if err != nil {
+		return advisorPrewarmSubject{}, fmt.Errorf("derive advisor runtime reference: %w", err)
+	}
+	child := request.Bootstrap.Child()
+	config, err := g.advisorConfigFor(child)
+	if err != nil {
+		g.advisorBindings.removeChild(child)
+		return advisorPrewarmSubject{}, err
+	}
+	proofKey, proof, ok, err := g.module.advisorProofs.lookup(config.serverURL, config.token)
+	if err != nil {
+		g.advisorBindings.removeChild(child)
+		return advisorPrewarmSubject{}, err
+	}
+	if !ok {
+		g.advisorBindings.removeChild(child)
+		return advisorPrewarmSubject{}, errors.New("advisor prewarm requires an accepted Initialize subject proof")
+	}
+	if !g.module.advisorProofsMatches(proofKey, proof) {
+		g.advisorBindings.removeChild(child)
+		return advisorPrewarmSubject{}, errors.New("advisor Initialize subject proof changed")
+	}
+	hello, err := g.advisorProfile.hello(runtimeRef)
+	if err != nil {
+		return advisorPrewarmSubject{}, err
+	}
+	material, err := g.advisorProfile.materialDigest(proofKey.authority, proof, hello)
+	if err != nil {
+		return advisorPrewarmSubject{}, err
+	}
+	return advisorPrewarmSubject{
+		child:    child,
+		config:   config,
+		proofKey: proofKey,
+		proof:    proof,
+		hello:    hello,
+		channel: advisorBindingChannel{
+			authority:  proofKey.authority,
+			subject:    proof,
+			hostFamily: hello.GetHost().GetFamily(),
+			adapterID:  hello.GetHost().GetAdapterId(),
+			runtimeRef: hello.GetHost().GetRuntimeInstanceRef(),
+		},
+		material: material,
+	}, nil
+}
+
+func (g *LegacyRelayGateway) advisorBind(ctx context.Context, config advisorChildConfig, hello *pb.HostHello, proof advisorSubjectProof) (*pb.HostBinding, time.Time, error) {
+	connection, err := g.module.pool.getOrDialGRPC(config.serverURL, config.token)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("advisor Bind gRPC connection: %w", err)
+	}
+	response, err := pb.NewEngramServiceClient(connection).Bind(ctx, &pb.HostAdvisorBindRequest{Hello: hello}, grpc.WaitForReady(true))
 	if err != nil {
 		if code := status.Code(err); code == codes.Unauthenticated || code == codes.PermissionDenied {
-			g.module.pool.closeTokenHash(hashToken(childConfig.token))
+			g.module.pool.closeTokenHash(hashToken(config.token))
 		}
-		return nil, fmt.Errorf("advisor Bind: %w", err)
+		return nil, time.Time{}, fmt.Errorf("advisor Bind: %w", err)
 	}
 	binding, expiry, err := g.advisorProfile.validateBinding(response, proof, time.Now())
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
+	return binding, expiry, nil
+}
 
+func (g *LegacyRelayGateway) advisorRequireCurrentSubject(child legacyrelay.ChildBinding, expectedConfig advisorChildConfig, expectedProofKey advisorProofKey, expectedProof advisorSubjectProof) error {
 	currentConfig, err := g.advisorConfigFor(child)
-	if err != nil || currentConfig != childConfig {
-		return nil, errors.New("advisor child configuration changed during Bind")
+	if err != nil || currentConfig != expectedConfig {
+		return errors.New("advisor child configuration changed during Bind")
 	}
 	currentProofKey, currentProof, currentProofOK, err := g.module.advisorProofs.lookup(currentConfig.serverURL, currentConfig.token)
-	if err != nil || !currentProofOK || currentProofKey != proofKey || currentProof != proof {
-		return nil, errors.New("advisor Initialize subject proof changed during Bind")
+	if err != nil || !currentProofOK || currentProofKey != expectedProofKey || currentProof != expectedProof {
+		return errAdvisorProofChanged
 	}
-	if err := g.advisorBindings.store(channel, child, material, binding, expiry); err != nil {
-		return nil, err
-	}
-	finalConfig, err := g.advisorConfigFor(child)
-	if err != nil || finalConfig != childConfig {
-		g.advisorBindings.removeChild(child)
-		return nil, errors.New("advisor child configuration changed during Bind")
-	}
-	finalProofKey, finalProof, finalProofOK, err := g.module.advisorProofs.lookup(finalConfig.serverURL, finalConfig.token)
-	if err != nil || !finalProofOK || finalProofKey != proofKey || finalProof != proof {
-		g.advisorBindings.invalidate(channel)
-		return nil, errors.New("advisor Initialize subject proof changed during Bind")
-	}
-	return proto.Clone(binding).(*pb.HostBinding), nil
+	return nil
 }
 
 func (g *LegacyRelayGateway) advisorConfigFor(child legacyrelay.ChildBinding) (advisorChildConfig, error) {
