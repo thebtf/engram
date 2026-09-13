@@ -11,6 +11,7 @@ import {
   acquireLock,
   cleanupExecution,
   Progress,
+  assertUnitDedicatedOwnership,
   classifyProfileFailure,
   collectCoverage,
   consumeGoEvents,
@@ -30,6 +31,7 @@ import {
   profileTimeout,
   runCoverageProfile,
   scheduleProfiles,
+  schedulePackageUnits,
   sha256,
   runWithCampaign,
   sourceInventory,
@@ -61,6 +63,22 @@ function progressHarness(directory, now) {
   const campaign = { runDir, manifest: { run_id: "11111111-1111-4111-8111-111111111111", candidate: candidate(), analysis: {} } };
   const deadline = { started: 0, remaining: () => 123456 };
   return { campaign, progress: new Progress(campaign, deadline, () => now.value), events: () => readFileSync(join(runDir, "events.ndjson"), "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) };
+}
+
+async function runRaceUnit(directory, profile, currentCandidate, expected, events) {
+  const entry = { id: profile.name, name: profile.name, attempt: 1 };
+  const campaign = { runDir: join(directory, "run"), manifest: { profiles: [entry] } };
+  mkdirSync(campaign.runDir, { recursive: true });
+  const deadline = new Deadline({ overallTimeout: 1000, coverageTimeout: 60, profileTimeout: 30, scannerTimeout: 60, qualityGateTimeout: 60 });
+  const progress = { activate() { }, meaningful() { }, deactivate() { }, location() { }, semantic() { }, output() { }, complete() { } };
+  await runCoverageProfile("fake-go", profile, campaign, entry, directory, {}, null, { signal: new AbortController().signal }, deadline, progress, [], Date.now() + 30000, currentCandidate, {
+    expectedTests: async () => expected,
+    runProcess: async (_command, _args, context) => {
+      context.onStdout(events);
+      return { stdout: "", stderr: "" };
+    },
+  });
+  return entry;
 }
 
 function candidate(inputs = "inputs", worktree = "worktree") {
@@ -228,6 +246,91 @@ test("unit work plan and heartbeat expose exact phase and overall denominators",
     progress.complete("coverage");
     progress.complete("coverage");
     assert.throws(() => progress.complete("coverage"), /exceeds declared denominator/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("package unit accepts only source-bound conditional skips and records mandatory ownership", async () => {
+  const directory = temporaryDirectory();
+  try {
+    const conditionalReason = "DATABASE_DSN not set, skipping installed acceptance";
+    const source = "cmd/engram/installed_test.go";
+    const sourceText = `func TestInstalledGate(t *testing.T) { t.Skip("${conditionalReason}") }`;
+    write(join(directory, source), sourceText);
+    const currentCandidate = { ...candidate(), repository_path: directory, inventory: [{ path: source, type: "file", sha256: sha256(sourceText) }] };
+    const conditionalProfile = { name: "base-race-installed", target: "example/cmd/engram", race: true, packageConcurrency: 1, baseUnit: true, unitPhase: "race", workPhase: "race", unitDirectory: "cmd/engram" };
+    const conditionalEvents = `{"Action":"output","Package":"example/cmd/engram","Test":"TestInstalledGate","Output":"${conditionalReason}"}\n{"Action":"skip","Package":"example/cmd/engram","Test":"TestInstalledGate"}\n{"Action":"pass","Package":"example/cmd/engram"}\n`;
+    const conditional = await runRaceUnit(directory, conditionalProfile, currentCandidate, [{ package: "example/cmd/engram", test: "TestInstalledGate" }], conditionalEvents);
+    assert.deepEqual(conditional.allowed_skip_obligations.map((item) => item.kind), ["conditional"]);
+    await assert.rejects(
+      runRaceUnit(directory, conditionalProfile, currentCandidate, [{ package: "example/cmd/engram", test: "TestInstalledGate" }], conditionalEvents.replace(conditionalReason, "forged skip reason")),
+      /unexpected skipped/,
+    );
+
+    const mandatoryProfile = { name: "base-race-gorm", target: "example/internal/db/gorm", race: true, packageConcurrency: 1, baseUnit: true, unitPhase: "race", workPhase: "race", unitDirectory: "internal/db/gorm" };
+    const mandatory = await runRaceUnit(directory, mandatoryProfile, { ...candidate(), repository_path: directory, inventory: [] }, [{ package: "example/internal/db/gorm", test: "TestUCI" }], '{"Action":"skip","Package":"example/internal/db/gorm","Test":"TestUCI"}\n{"Action":"pass","Package":"example/internal/db/gorm"}\n');
+    assert.equal(mandatory.allowed_skip_obligations[0].required_profile, "uci");
+    assert.throws(() => assertUnitDedicatedOwnership([mandatory], [{ name: "uci", status: "failed" }]), /without a passed dedicated uci profile/);
+    assert.doesNotThrow(() => assertUnitDedicatedOwnership([mandatory], [{ name: "uci", status: "passed" }]));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("race failures retain every race result and prevent coverage phase launch", async () => {
+  const units = [
+    { id: "race-one", phase: "race", classification: "ordinary" },
+    { id: "race-two", phase: "race", classification: "ordinary" },
+    { id: "coverage-one", phase: "coverage", classification: "ordinary" },
+  ];
+  const started = [];
+  const outcomes = await schedulePackageUnits(units, 2, async (unit) => {
+    started.push(unit.id);
+    if (unit.id === "race-one") throw new Error("race failed");
+    return { status: "passed" };
+  });
+  assert.equal(outcomes.get("race-one").status, "failed");
+  assert.equal(outcomes.get("race-two").status, "passed");
+  assert.equal(outcomes.has("coverage-one"), false);
+  assert.deepEqual(started.sort(), ["race-one", "race-two"]);
+});
+
+test("coverage unit failure prevents dedicated execution and merge", async () => {
+  const directory = temporaryDirectory();
+  try {
+    const base = coverageProfiles.find((profile) => profile.name === "base");
+    const dedicated = { name: "dedicated", target: "./dedicated", packageConcurrency: 1, resourceGroup: "exclusive" };
+    const packagePath = "example/core";
+    const packageUnits = [
+      { id: "race-core", phase: "race", importPath: packagePath, directory: "core", classification: "ordinary", core: true, coverpkg: [] },
+      { id: "coverage-core", phase: "coverage", importPath: packagePath, directory: "core", classification: "ordinary", core: true, coverpkg: [packagePath] },
+    ];
+    const campaign = { namespace: directory, runDir: join(directory, "run"), manifest: { run_id: "11111111-1111-4111-8111-111111111111", profiles: [], resources: { cleanup: { errors: [] } }, result: {} } };
+    mkdirSync(campaign.runDir, { recursive: true });
+    const environment = { values: { image_id: `sha256:${"a".repeat(64)}` }, sha256: "environment", testEnvironment: {} };
+    const calls = [];
+    const runtime = {
+      goCommand: "fake-go",
+      dockerCommand: "fake-docker",
+      profiles: [base, dedicated],
+      packageUnits,
+      unitRuntime: {
+        expectedTests: async () => [{ package: packagePath, test: "TestCore" }],
+        runProcess: async (_command, args, context) => {
+          calls.push(args);
+          if (args.some((argument) => argument.startsWith("-coverprofile="))) throw new Error("coverage failed");
+          context.onStdout(`{"Action":"pass","Package":"${packagePath}","Test":"TestCore"}\n{"Action":"pass","Package":"${packagePath}"}\n`);
+          return { stdout: "", stderr: "" };
+        },
+      },
+    };
+    const deadline = new Deadline({ overallTimeout: 1000, coverageTimeout: 60, profileTimeout: 30, scannerTimeout: 60, qualityGateTimeout: 60 });
+    const progress = { configureWork() { }, complete() { }, activate() { }, meaningful() { }, deactivate() { }, location() { }, semantic() { }, output() { } };
+    await assert.rejects(collectCoverage(campaign, { ...candidate(), repository_path: directory, inventory: [] }, environment, { fresh: true, jobs: 1, baseOnly: false }, { signal: new AbortController().signal }, deadline, progress, runtime), /coverage failed/);
+    assert.equal(campaign.manifest.profiles.find((entry) => entry.name === "dedicated").status, "pending");
+    assert.equal(campaign.manifest.merged.status, "incomplete");
+    assert.equal(calls.length, 2);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

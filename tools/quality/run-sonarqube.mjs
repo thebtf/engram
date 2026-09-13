@@ -1586,7 +1586,9 @@ function conditionalSkipObligation(profile, skipped, candidate) {
   if (profile.name !== "base" && !profile.baseUnit) return null;
   const packageSuffix = skipped.package.replace(/^.*?(?=\/internal\/|\/cmd\/|\/pkg\/)/, "");
   for (const inventory of candidate.inventory || []) {
-    if (inventory.type !== "file" || !inventory.path.endsWith("_test.go") || !packageSuffix.endsWith(`/${dirname(inventory.path).replaceAll("\\", "/")}`)) continue;
+    const sourceDirectory = dirname(inventory.path).replaceAll("\\", "/");
+    if (inventory.type !== "file" || !inventory.path.endsWith("_test.go")) continue;
+    if (profile.unitDirectory ? sourceDirectory !== profile.unitDirectory : !packageSuffix.endsWith(`/${sourceDirectory}`)) continue;
     const sourcePath = join(candidate.repository_path, inventory.path);
     if (!existsSync(sourcePath) || shaFile(sourcePath) !== inventory.sha256) continue;
     const source = readFileSync(sourcePath, "utf8");
@@ -1723,6 +1725,7 @@ export async function schedulePackageUnits(units, jobs, runUnit) {
         await run(unit);
       }
     }));
+    if (phase === "race" && [...outcomes.values()].some((outcome) => outcome.status === "failed")) return outcomes;
   }
   return outcomes;
 }
@@ -1738,6 +1741,17 @@ export function terminalPackageSummary(entries) {
   return summary;
 }
 
+export function assertUnitDedicatedOwnership(units, profiles) {
+  const byName = new Map(profiles.map((profile) => [profile.name, profile]));
+  for (const unit of units) {
+    for (const obligation of unit.allowed_skip_obligations || []) {
+      if (obligation.kind === "conditional") continue;
+      const owner = byName.get(obligation.required_profile);
+      if (owner?.status !== "passed") throw new RunnerError(`${unit.id} skipped ${obligation.package}/${obligation.test} without a passed dedicated ${obligation.required_profile} profile`);
+    }
+  }
+}
+
 function packageUnitProfile(unit) {
   return {
     name: unit.id,
@@ -1749,6 +1763,7 @@ function packageUnitProfile(unit) {
     baseUnit: true,
     unitPhase: unit.phase,
     workPhase: unit.phase,
+    unitDirectory: unit.directory,
   };
 }
 
@@ -1937,6 +1952,7 @@ export async function collectCoverage(campaign, candidate, environment, options,
     const failed = [...outcomes.values()].find((outcome) => outcome?.status === "failed");
     if (failed) throw failed.error;
     if (campaign.manifest.profiles.some((entry) => entry.status !== "passed")) throw new RunnerError("Coverage did not complete every required profile");
+    if (base) assertUnitDedicatedOwnership(entries.get("base").units, [...entries.values()]);
     const mergePath = join(campaign.runDir, "coverage.out");
     mergeCoverProfiles(profiles.map((profile) => {
       const entry = entries.get(profile.name);
