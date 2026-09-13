@@ -1290,15 +1290,15 @@ func uciPrepareInstalledAcceptanceAuthority(ctx context.Context, dsn string, wor
 	}
 	expiresAt := uciInstalledAcceptanceTokenExpiry(ctx, time.Now())
 	tokens := gormdb.NewTokenStore(store)
-	authority.token, err = tokens.CreateWithPrincipal(ctx,
-		"uci-installed-"+strings.ReplaceAll(uuid.NewString(), "-", ""),
-		string(tokenHash),
-		authority.rawToken[len("engram_"):len("engram_")+8],
-		"read-write",
-		authority.principal,
-		"agent",
-		&expiresAt,
-	)
+	authority.token, err = tokens.CreateWithPrincipal(ctx, gormdb.TokenCreatePrincipalInput{
+		Name:          "uci-installed-" + strings.ReplaceAll(uuid.NewString(), "-", ""),
+		TokenHash:     string(tokenHash),
+		TokenPrefix:   authority.rawToken[len("engram_") : len("engram_")+8],
+		Scope:         "read-write",
+		Principal:     authority.principal,
+		PrincipalKind: "agent",
+		ExpiresAt:     &expiresAt,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("create installed acceptance SourceClient keycard: %w", err)
 	}

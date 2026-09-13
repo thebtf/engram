@@ -413,7 +413,14 @@ func fixtureClientKeycard(ctx context.Context, store *gormdb.Store, name string,
 	if err != nil {
 		return "", "", fmt.Errorf("hash fixture client keycard: %w", err)
 	}
-	token, err := gormdb.NewTokenStore(store).CreateWithPrincipal(ctx, name, string(hash), raw[len(auth.TokenRawPrefix):len(auth.TokenRawPrefix)+auth.TokenPrefixLen], string(auth.RoleReadOnly), subject.Principal, string(subject.Kind))
+	token, err := gormdb.NewTokenStore(store).CreateWithPrincipal(ctx, gormdb.TokenCreatePrincipalInput{
+		Name:          name,
+		TokenHash:     string(hash),
+		TokenPrefix:   raw[len(auth.TokenRawPrefix) : len(auth.TokenRawPrefix)+auth.TokenPrefixLen],
+		Scope:         string(auth.RoleReadOnly),
+		Principal:     subject.Principal,
+		PrincipalKind: string(subject.Kind),
+	})
 	if err != nil || token == nil || token.ID == "" {
 		return "", "", fmt.Errorf("store fixture client keycard")
 	}

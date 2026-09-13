@@ -45,16 +45,15 @@ func uci1ProbeCompletionInstalled(ctx context.Context, runtime uciInstalledAccep
 	}
 	keycards := gormdb.NewTokenStore(runtime.Authority.store)
 	expiresAt := uciInstalledAcceptanceTokenExpiry(ctx, time.Now())
-	keycard, err := keycards.CreateWithPrincipal(
-		ctx,
-		"uci1-completion-"+uuid.NewString(),
-		string(tokenHash),
-		rawKeycard[len("engram_"):len("engram_")+8],
-		"read-write",
-		auth.ProjectServicePrincipal(runtime.Authority.projectKey),
-		string(auth.PrincipalKindService),
-		&expiresAt,
-	)
+	keycard, err := keycards.CreateWithPrincipal(ctx, gormdb.TokenCreatePrincipalInput{
+		Name:          "uci1-completion-" + uuid.NewString(),
+		TokenHash:     string(tokenHash),
+		TokenPrefix:   rawKeycard[len("engram_") : len("engram_")+8],
+		Scope:         "read-write",
+		Principal:     auth.ProjectServicePrincipal(runtime.Authority.projectKey),
+		PrincipalKind: string(auth.PrincipalKindService),
+		ExpiresAt:     &expiresAt,
+	})
 	if err != nil {
 		return nil, errors.New("create installed completion project-service keycard")
 	}
