@@ -1576,6 +1576,27 @@ try {
 		ar2OpenClawDriverFailureCode)
 }
 
+type ar2OpenClawDiagnostic struct {
+	Code                  string `json:"code"`
+	Callable              string `json:"callable"`
+	ResponseStatus        *int   `json:"response_status"`
+	RequestShape          string `json:"request_shape"`
+	ResultOrErrorCategory string `json:"result_or_error_category"`
+}
+
+type ar2OpenClawDiagnosticCase struct {
+	name                 string
+	body                 string
+	result               string
+	responseStatus       int
+	resolverResponse     string
+	success              bool
+	wantCode             string
+	wantResponseStatus   *int
+	wantRequestShape     string
+	wantResultOrCategory string
+}
+
 func TestAR2OpenClawDriverClosedPayloadAndDiagnostics(t *testing.T) {
 	const (
 		projectKey  = "fixture-openclaw-project-key"
@@ -1605,25 +1626,7 @@ export class EngramRestClient {
 }
 `, body, result)
 	}
-	type diagnostic struct {
-		Code                  string `json:"code"`
-		Callable              string `json:"callable"`
-		ResponseStatus        *int   `json:"response_status"`
-		RequestShape          string `json:"request_shape"`
-		ResultOrErrorCategory string `json:"result_or_error_category"`
-	}
-	for _, testCase := range []struct {
-		name                 string
-		body                 string
-		result               string
-		responseStatus       int
-		resolverResponse     string
-		success              bool
-		wantCode             string
-		wantResponseStatus   *int
-		wantRequestShape     string
-		wantResultOrCategory string
-	}{
+	for _, testCase := range []ar2OpenClawDiagnosticCase{
 		{
 			name:    "semantically reordered closed payload is accepted",
 			body:    `{"identity_only":true,"project_descriptor":{"legacy_identifiers":["fixture-legacy-a","fixture-legacy-b"],"name":"fixture-openclaw-descriptor","scope":"repository"}}`,
@@ -1681,76 +1684,90 @@ export class EngramRestClient {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-				status := testCase.responseStatus
-				if status == 0 {
-					status = http.StatusOK
-				}
-				response := testCase.resolverResponse
-				if response == "" {
-					response = validResponse
-				}
-				writer.Header().Set("Content-Type", "application/json")
-				writer.WriteHeader(status)
-				_, _ = io.WriteString(writer, response)
-			}))
-			defer server.Close()
-
-			fixtureDir := t.TempDir()
-			driver := filepath.Join(fixtureDir, "openclaw-driver.mjs")
-			if err := os.WriteFile(driver, []byte(ar2OpenClawDriverSource()), 0o600); err != nil {
-				t.Fatal("write OpenClaw diagnostic driver")
-			}
-			client := filepath.Join(fixtureDir, "client.mjs")
-			if err := os.WriteFile(client, []byte(clientSource(testCase.body, testCase.result)), 0o600); err != nil {
-				t.Fatal("write OpenClaw diagnostic client")
-			}
-			output, err := ar2CommandEnv(context.Background(), fixtureDir, ar2FixtureEnvironment(t, "", map[string]string{
-				"AR2_DESCRIPTOR":      descriptor,
-				"AR2_OPENCLAW_CLIENT": client,
-				"AR2_PROJECT_KEY":     projectKey,
-				"AR2_SERVER_URL":      server.URL,
-			}), "node", driver)
-			if testCase.success {
-				if err != nil {
-					t.Fatalf("successful OpenClaw driver: %v", err)
-				}
-				var result struct {
-					Step        string `json:"step"`
-					Correlation string `json:"correlation"`
-				}
-				if err := json.Unmarshal(output, &result); err != nil || result.Step != "openclaw" || result.Correlation != correlation {
-					t.Fatalf("successful OpenClaw driver output = %q, %v", output, err)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatal("failing OpenClaw driver returned nil error")
-			}
-			if len(output) != 0 {
-				t.Fatalf("failing OpenClaw driver emitted stdout: %q", output)
-			}
-			diagnosticText := err.Error()
-			index := strings.LastIndex(diagnosticText, `{"code":`)
-			if index < 0 {
-				t.Fatalf("OpenClaw driver omitted structured diagnostic: %s", diagnosticText)
-			}
-			var actual diagnostic
-			if err := json.Unmarshal([]byte(diagnosticText[index:]), &actual); err != nil {
-				t.Fatalf("decode OpenClaw diagnostic: %v: %s", err, diagnosticText)
-			}
-			if actual.Code != testCase.wantCode || actual.Callable != ar2ControlledFixtureCallables[4].callable || actual.RequestShape != testCase.wantRequestShape || actual.ResultOrErrorCategory != testCase.wantResultOrCategory {
-				t.Fatalf("OpenClaw diagnostic = %#v", actual)
-			}
-			if (actual.ResponseStatus == nil) != (testCase.wantResponseStatus == nil) || actual.ResponseStatus != nil && *actual.ResponseStatus != *testCase.wantResponseStatus {
-				t.Fatalf("OpenClaw response status = %#v, want %#v", actual.ResponseStatus, testCase.wantResponseStatus)
-			}
-			for _, forbidden := range []string{descriptor, projectKey, server.URL, typedErrorSecret} {
-				if strings.Contains(diagnosticText, forbidden) {
-					t.Fatalf("OpenClaw diagnostic leaked %q: %s", forbidden, diagnosticText)
-				}
-			}
+			runAR2OpenClawDiagnosticCase(t, testCase, clientSource, validResponse, descriptor, projectKey, correlation, typedErrorSecret)
 		})
+	}
+}
+
+func runAR2OpenClawDiagnosticCase(t *testing.T, testCase ar2OpenClawDiagnosticCase, clientSource func(string, string) string, validResponse, descriptor, projectKey, correlation, typedErrorSecret string) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		status := testCase.responseStatus
+		if status == 0 {
+			status = http.StatusOK
+		}
+		response := testCase.resolverResponse
+		if response == "" {
+			response = validResponse
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(status)
+		_, _ = io.WriteString(writer, response)
+	}))
+	defer server.Close()
+	fixtureDir := t.TempDir()
+	driver := filepath.Join(fixtureDir, "openclaw-driver.mjs")
+	if err := os.WriteFile(driver, []byte(ar2OpenClawDriverSource()), 0o600); err != nil {
+		t.Fatal("write OpenClaw diagnostic driver")
+	}
+	client := filepath.Join(fixtureDir, "client.mjs")
+	if err := os.WriteFile(client, []byte(clientSource(testCase.body, testCase.result)), 0o600); err != nil {
+		t.Fatal("write OpenClaw diagnostic client")
+	}
+	output, err := ar2CommandEnv(context.Background(), fixtureDir, ar2FixtureEnvironment(t, "", map[string]string{
+		"AR2_DESCRIPTOR":      descriptor,
+		"AR2_OPENCLAW_CLIENT": client,
+		"AR2_PROJECT_KEY":     projectKey,
+		"AR2_SERVER_URL":      server.URL,
+	}), "node", driver)
+	if testCase.success {
+		assertAR2OpenClawDiagnosticSuccess(t, err, output, correlation)
+		return
+	}
+	assertAR2OpenClawDiagnosticFailure(t, err, output, testCase, descriptor, projectKey, server.URL, typedErrorSecret)
+}
+
+func assertAR2OpenClawDiagnosticSuccess(t *testing.T, err error, output []byte, correlation string) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("successful OpenClaw driver: %v", err)
+	}
+	var result struct {
+		Step        string `json:"step"`
+		Correlation string `json:"correlation"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil || result.Step != "openclaw" || result.Correlation != correlation {
+		t.Fatalf("successful OpenClaw driver output = %q, %v", output, err)
+	}
+}
+
+func assertAR2OpenClawDiagnosticFailure(t *testing.T, err error, output []byte, testCase ar2OpenClawDiagnosticCase, descriptor, projectKey, serverURL, typedErrorSecret string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("failing OpenClaw driver returned nil error")
+	}
+	if len(output) != 0 {
+		t.Fatalf("failing OpenClaw driver emitted stdout: %q", output)
+	}
+	diagnosticText := err.Error()
+	index := strings.LastIndex(diagnosticText, `{"code":`)
+	if index < 0 {
+		t.Fatalf("OpenClaw driver omitted structured diagnostic: %s", diagnosticText)
+	}
+	var actual ar2OpenClawDiagnostic
+	if err := json.Unmarshal([]byte(diagnosticText[index:]), &actual); err != nil {
+		t.Fatalf("decode OpenClaw diagnostic: %v: %s", err, diagnosticText)
+	}
+	if actual.Code != testCase.wantCode || actual.Callable != ar2ControlledFixtureCallables[4].callable || actual.RequestShape != testCase.wantRequestShape || actual.ResultOrErrorCategory != testCase.wantResultOrCategory {
+		t.Fatalf("OpenClaw diagnostic = %#v", actual)
+	}
+	if (actual.ResponseStatus == nil) != (testCase.wantResponseStatus == nil) || actual.ResponseStatus != nil && *actual.ResponseStatus != *testCase.wantResponseStatus {
+		t.Fatalf("OpenClaw response status = %#v, want %#v", actual.ResponseStatus, testCase.wantResponseStatus)
+	}
+	for _, forbidden := range []string{descriptor, projectKey, serverURL, typedErrorSecret} {
+		if strings.Contains(diagnosticText, forbidden) {
+			t.Fatalf("OpenClaw diagnostic leaked %q: %s", forbidden, diagnosticText)
+		}
 	}
 }
 
