@@ -221,63 +221,24 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 	if name == projectIdentityV3RegistrationTool {
 		return nil, &module.ModuleError{Code: "PROJECT_DESCRIPTOR_UNSUPPORTED", Message: projectIdentityResolutionRefusedMessage}
 	}
-
-	var (
-		err       error
-		sessionID string
-	)
-	uciTool := isUCIProxyTool(name)
-	if uciTool {
-		sessionID, err = requireUCITransportSession(ctx)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		// Non-UCI tools retain their established V2/V3 source-session forwarding.
-		sessionID = m.envFor(p, config.EnvClaudeSessionID)
+	sessionID, uciTool, err := m.proxyToolSession(ctx, p, name)
+	if err != nil {
+		return nil, err
 	}
-
 	serverURL, err := m.requireServerURL(p)
 	if err != nil {
 		return nil, err
 	}
-	token := m.envFor(p, config.EnvWorkstationToken)
-	conn, err := m.pool.getOrDialGRPC(serverURL, token)
+	conn, err := m.pool.getOrDialGRPC(serverURL, m.envFor(p, config.EnvWorkstationToken))
 	if err != nil {
 		return nil, fmt.Errorf("gRPC connect: %w", err)
 	}
-	client := pb.NewEngramServiceClient(conn)
 	request := &pb.CallToolRequest{ToolName: name, ArgumentsJson: args, SessionId: sessionID}
-
-	var (
-		v3Identity *pb.ProjectIdentityV3
-		v3Enabled  bool
-	)
-	if uciTool {
-		ctx = uciClientOutgoingContext(ctx)
-	} else {
-		v3Identity, v3Enabled, err = m.v3Identity(p)
-		if err != nil {
-			return nil, err
-		}
-		if v3Enabled {
-			if v3Identity == nil {
-				return nil, &module.ModuleError{Code: "PROJECT_ANCHOR_INVALID", Message: projectIdentityResolutionRefusedMessage}
-			}
-			request.ProjectIdentityV3 = v3Identity
-			ctx = daemonComparisonContextV3(ctx)
-		} else {
-			project := m.cache.Resolve(p)
-			projectIdentity, identityErr := m.cache.ResolveIdentity(p)
-			if identityErr != nil {
-				return nil, fmt.Errorf("project identity v2: %w", identityErr)
-			}
-			request.Project = project
-			request.ProjectIdentity = projectIdentity
-		}
+	callCtx, v3Identity, v3Enabled, err := m.proxyToolCallContext(ctx, p, request, uciTool)
+	if err != nil {
+		return nil, err
 	}
-
-	resp, err := client.CallTool(ctx, request)
+	response, err := pb.NewEngramServiceClient(conn).CallTool(callCtx, request)
 	if err != nil {
 		if !uciTool && v3Enabled {
 			return nil, v3ProxyError(err)
@@ -285,23 +246,52 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 		return nil, fmt.Errorf("gRPC CallTool: %w", err)
 	}
 	if !uciTool && v3Enabled {
-		if err := validateV3Resolution(resp.GetProjectResolutionV3(), resp.GetCanonicalProject(), v3Identity); err != nil {
+		if err := validateV3Resolution(response.GetProjectResolutionV3(), response.GetCanonicalProject(), v3Identity); err != nil {
 			return nil, err
 		}
 	}
-
-	block, mErr := buildInnerBlock(resp.ContentJson)
+	block, mErr := buildInnerBlock(response.ContentJson)
 	if mErr != nil {
 		return nil, mErr
 	}
-
-	if resp.IsError {
-		// Sentinel path: dispatcher detects *module.ProxyIsError and emits
-		// the raw inner block with isError:true, preserving byte-identity
-		// with v4.2.0's error envelope.
+	if response.IsError {
 		return nil, &module.ProxyIsError{RawContent: block}
 	}
 	return block, nil
+}
+
+func (m *Module) proxyToolSession(ctx context.Context, project muxcore.ProjectContext, name string) (string, bool, error) {
+	uciTool := isUCIProxyTool(name)
+	if !uciTool {
+		return m.envFor(project, config.EnvClaudeSessionID), false, nil
+	}
+	sessionID, err := requireUCITransportSession(ctx)
+	return sessionID, true, err
+}
+
+func (m *Module) proxyToolCallContext(ctx context.Context, project muxcore.ProjectContext, request *pb.CallToolRequest, uciTool bool) (context.Context, *pb.ProjectIdentityV3, bool, error) {
+	if uciTool {
+		return uciClientOutgoingContext(ctx), nil, false, nil
+	}
+	v3Identity, v3Enabled, err := m.v3Identity(project)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if v3Enabled {
+		if v3Identity == nil {
+			return nil, nil, false, &module.ModuleError{Code: "PROJECT_ANCHOR_INVALID", Message: projectIdentityResolutionRefusedMessage}
+		}
+		request.ProjectIdentityV3 = v3Identity
+		return daemonComparisonContextV3(ctx), v3Identity, true, nil
+	}
+	projectSlug := m.cache.Resolve(project)
+	projectIdentity, err := m.cache.ResolveIdentity(project)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("project identity v2: %w", err)
+	}
+	request.Project = projectSlug
+	request.ProjectIdentity = projectIdentity
+	return ctx, nil, false, nil
 }
 
 func isUCIProxyTool(name string) bool {
