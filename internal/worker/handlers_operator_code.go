@@ -352,63 +352,79 @@ func (adapter *OperatorCodeHTTPAdapter) HandleIndexIntentSubmit(w http.ResponseW
 	identity.digest = operatorCodeIndexIntentDigest("operator-code-index-intent-submit", request.Proof(), "", request.RequestRef, request.Kind)
 	r = r.WithContext(auditcontext.WithSourceSession(r.Context(), identity.sessionID))
 	if request.Target != nil {
-		application, available := adapter.app.(operatorCodeNoViewIndexIntentApplication)
-		if !available {
-			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
-			return
-		}
-		existing, lookupErr := application.NoViewIndexIntentByRequestRef(r.Context(), request.RequestRef)
-		if lookupErr == nil {
-			if existing.Kind != request.Kind || existing.Scope.SourceID != request.Target.SourceID || existing.Scope.CheckoutID != request.Target.CheckoutID {
-				operatorCodeWriteBodyless(w, http.StatusConflict)
-				return
-			}
-			target, failure := adapter.authorizeNoViewIndexIntent(r.Context(), identity, request.Proof(), *request.Target, existing.ProfileID, false)
-			if failure != uci.ReleaseFailureNone {
-				operatorCodeWriteFailure(w, failure)
-				return
-			}
-			intent, err := application.ReplayNoViewIndexIntent(r.Context(), target.scope, target.profileID, request.RequestRef, request.Kind)
-			if err != nil {
-				operatorCodeWriteFailure(w, operatorCodeIndexIntentFailure(err))
-				return
-			}
-			if !operatorCodeIndexIntentShapeValid(intent) {
-				operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
-				return
-			}
-			if !operatorCodeNoViewIndexIntentMatches(intent, target) {
-				operatorCodeWriteBodyless(w, http.StatusConflict)
-				return
-			}
-			operatorCodeWriteIndexIntentAcknowledgement(w, intent)
-			return
-		}
-		if !errors.Is(lookupErr, uci.ErrIndexIntentNotFound) {
-			operatorCodeWriteFailure(w, operatorCodeIndexIntentFailure(lookupErr))
-			return
-		}
-		target, failure := adapter.authorizeNoViewIndexIntent(r.Context(), identity, request.Proof(), *request.Target, "", true)
-		if failure != uci.ReleaseFailureNone {
-			operatorCodeWriteFailure(w, failure)
-			return
-		}
-		intent, err := application.SubmitNoViewIndexIntent(r.Context(), target.scope, target.profileID, request.RequestRef, request.Kind)
-		if err != nil {
-			operatorCodeWriteFailure(w, operatorCodeIndexIntentFailure(err))
-			return
-		}
-		if !operatorCodeIndexIntentShapeValid(intent) {
-			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
-			return
-		}
-		if !operatorCodeNoViewIndexIntentMatches(intent, target) {
-			operatorCodeWriteBodyless(w, http.StatusConflict)
-			return
-		}
-		operatorCodeWriteIndexIntentAcknowledgement(w, intent)
+		adapter.handleNoViewIndexIntentSubmit(w, r, identity, request)
 		return
 	}
+	adapter.handleIndexIntentSubmit(w, r, identity, request)
+}
+
+func (adapter *OperatorCodeHTTPAdapter) handleNoViewIndexIntentSubmit(w http.ResponseWriter, r *http.Request, identity operatorCodeRequestIdentity, request operatorCodeIndexIntentSubmitRequest) {
+	application, available := adapter.app.(operatorCodeNoViewIndexIntentApplication)
+	if !available {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return
+	}
+	existing, lookupErr := application.NoViewIndexIntentByRequestRef(r.Context(), request.RequestRef)
+	if lookupErr == nil {
+		adapter.replayNoViewIndexIntentSubmit(w, r, identity, request, application, existing)
+		return
+	}
+	if !errors.Is(lookupErr, uci.ErrIndexIntentNotFound) {
+		operatorCodeWriteFailure(w, operatorCodeIndexIntentFailure(lookupErr))
+		return
+	}
+	adapter.submitNoViewIndexIntent(w, r, identity, request, application)
+}
+
+func (adapter *OperatorCodeHTTPAdapter) replayNoViewIndexIntentSubmit(w http.ResponseWriter, r *http.Request, identity operatorCodeRequestIdentity, request operatorCodeIndexIntentSubmitRequest, application operatorCodeNoViewIndexIntentApplication, existing uci.IndexIntent) {
+	if existing.Kind != request.Kind || existing.Scope.SourceID != request.Target.SourceID || existing.Scope.CheckoutID != request.Target.CheckoutID {
+		operatorCodeWriteBodyless(w, http.StatusConflict)
+		return
+	}
+	target, failure := adapter.authorizeNoViewIndexIntent(r.Context(), identity, request.Proof(), *request.Target, existing.ProfileID, false)
+	if failure != uci.ReleaseFailureNone {
+		operatorCodeWriteFailure(w, failure)
+		return
+	}
+	intent, err := application.ReplayNoViewIndexIntent(r.Context(), target.scope, target.profileID, request.RequestRef, request.Kind)
+	if err != nil {
+		operatorCodeWriteFailure(w, operatorCodeIndexIntentFailure(err))
+		return
+	}
+	if !operatorCodeIndexIntentShapeValid(intent) {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return
+	}
+	if !operatorCodeNoViewIndexIntentMatches(intent, target) {
+		operatorCodeWriteBodyless(w, http.StatusConflict)
+		return
+	}
+	operatorCodeWriteIndexIntentAcknowledgement(w, intent)
+}
+
+func (adapter *OperatorCodeHTTPAdapter) submitNoViewIndexIntent(w http.ResponseWriter, r *http.Request, identity operatorCodeRequestIdentity, request operatorCodeIndexIntentSubmitRequest, application operatorCodeNoViewIndexIntentApplication) {
+	target, failure := adapter.authorizeNoViewIndexIntent(r.Context(), identity, request.Proof(), *request.Target, "", true)
+	if failure != uci.ReleaseFailureNone {
+		operatorCodeWriteFailure(w, failure)
+		return
+	}
+	intent, err := application.SubmitNoViewIndexIntent(r.Context(), target.scope, target.profileID, request.RequestRef, request.Kind)
+	if err != nil {
+		operatorCodeWriteFailure(w, operatorCodeIndexIntentFailure(err))
+		return
+	}
+	if !operatorCodeIndexIntentShapeValid(intent) {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return
+	}
+	if !operatorCodeNoViewIndexIntentMatches(intent, target) {
+		operatorCodeWriteBodyless(w, http.StatusConflict)
+		return
+	}
+	operatorCodeWriteIndexIntentAcknowledgement(w, intent)
+}
+
+func (adapter *OperatorCodeHTTPAdapter) handleIndexIntentSubmit(w http.ResponseWriter, r *http.Request, identity operatorCodeRequestIdentity, request operatorCodeIndexIntentSubmitRequest) {
 	caller, failure := adapter.authorize(r.Context(), identity, request.Proof())
 	if failure != uci.ReleaseFailureNone {
 		operatorCodeWriteFailure(w, failure)
@@ -443,38 +459,51 @@ func (adapter *OperatorCodeHTTPAdapter) HandleIndexIntentStatus(w http.ResponseW
 		return
 	}
 	r = r.WithContext(auditcontext.WithSourceSession(r.Context(), identity.sessionID))
-	if application, available := adapter.app.(operatorCodeNoViewIndexIntentApplication); available {
-		scope, profileID, err := application.NoViewIndexIntentTarget(r.Context(), intentRef)
-		if err == nil {
-			target, failure := adapter.authorizeNoViewIndexIntent(r.Context(), identity, proof, operatorCodeIndexIntentTargetRequest{SourceID: scope.SourceID, CheckoutID: scope.CheckoutID}, profileID, false)
-			if failure != uci.ReleaseFailureNone {
-				operatorCodeWriteFailure(w, failure)
-				return
-			}
-			intent, err := application.GetNoViewIndexIntent(r.Context(), target.scope, target.profileID, intentRef)
-			if err != nil {
-				operatorCodeWriteFailure(w, operatorCodeIndexIntentFailure(err))
-				return
-			}
-			if !operatorCodeIndexIntentShapeValid(intent) {
-				operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
-				return
-			}
-			if !operatorCodeNoViewIndexIntentMatches(intent, target) {
-				operatorCodeWriteBodyless(w, http.StatusConflict)
-				return
-			}
-			response := operatorCodeIndexIntentResponseFor(intent)
-			if intent.State == uci.IndexIntentCompleted {
-				decision := adapter.releaseNoViewIndexIntentResult(r.Context(), identity, proof, target, intent)
-				if decision.Released() && intent.ResultView != nil && operatorCodeRefsEqual(*intent.ResultView, decision.Authorized.Ref()) {
-					response.Result = &operatorCodeIndexIntentResultResponse{ViewRef: intent.ResultView.ViewID, Generation: intent.ResultView.Generation}
-				}
-			}
-			writeJSON(w, response)
-			return
+	if adapter.writeNoViewIndexIntentStatus(w, r, identity, intentRef, proof) {
+		return
+	}
+	adapter.writeIndexIntentStatus(w, r, identity, intentRef, proof)
+}
+
+func (adapter *OperatorCodeHTTPAdapter) writeNoViewIndexIntentStatus(w http.ResponseWriter, r *http.Request, identity operatorCodeRequestIdentity, intentRef string, proof BrowserBindingProof) bool {
+	application, available := adapter.app.(operatorCodeNoViewIndexIntentApplication)
+	if !available {
+		return false
+	}
+	scope, profileID, err := application.NoViewIndexIntentTarget(r.Context(), intentRef)
+	if err != nil {
+		return false
+	}
+	target, failure := adapter.authorizeNoViewIndexIntent(r.Context(), identity, proof, operatorCodeIndexIntentTargetRequest{SourceID: scope.SourceID, CheckoutID: scope.CheckoutID}, profileID, false)
+	if failure != uci.ReleaseFailureNone {
+		operatorCodeWriteFailure(w, failure)
+		return true
+	}
+	intent, err := application.GetNoViewIndexIntent(r.Context(), target.scope, target.profileID, intentRef)
+	if err != nil {
+		operatorCodeWriteFailure(w, operatorCodeIndexIntentFailure(err))
+		return true
+	}
+	if !operatorCodeIndexIntentShapeValid(intent) {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return true
+	}
+	if !operatorCodeNoViewIndexIntentMatches(intent, target) {
+		operatorCodeWriteBodyless(w, http.StatusConflict)
+		return true
+	}
+	response := operatorCodeIndexIntentResponseFor(intent)
+	if intent.State == uci.IndexIntentCompleted {
+		decision := adapter.releaseNoViewIndexIntentResult(r.Context(), identity, proof, target, intent)
+		if decision.Released() && intent.ResultView != nil && operatorCodeRefsEqual(*intent.ResultView, decision.Authorized.Ref()) {
+			response.Result = &operatorCodeIndexIntentResultResponse{ViewRef: intent.ResultView.ViewID, Generation: intent.ResultView.Generation}
 		}
 	}
+	writeJSON(w, response)
+	return true
+}
+
+func (adapter *OperatorCodeHTTPAdapter) writeIndexIntentStatus(w http.ResponseWriter, r *http.Request, identity operatorCodeRequestIdentity, intentRef string, proof BrowserBindingProof) {
 	caller, failure := adapter.authorize(r.Context(), identity, proof)
 	if failure != uci.ReleaseFailureNone {
 		operatorCodeWriteFailure(w, failure)
@@ -583,6 +612,10 @@ func (adapter *OperatorCodeHTTPAdapter) HandleSearch(w http.ResponseWriter, r *h
 	}
 	filter, _ := request.filter()
 	r = r.WithContext(auditcontext.WithSourceSession(r.Context(), identity.sessionID))
+	adapter.handleOperatorCodeSearch(w, r, identity, request, filter)
+}
+
+func (adapter *OperatorCodeHTTPAdapter) handleOperatorCodeSearch(w http.ResponseWriter, r *http.Request, identity operatorCodeRequestIdentity, request operatorCodeSearchRequest, filter uci.QueryFilter) {
 	caller, failure := adapter.authorize(r.Context(), identity, request.Proof())
 	if failure != uci.ReleaseFailureNone {
 		operatorCodeWriteFailure(w, failure)
@@ -593,14 +626,10 @@ func (adapter *OperatorCodeHTTPAdapter) HandleSearch(w http.ResponseWriter, r *h
 		return
 	}
 	binding := operatorCodeSearchContinuationBinding(caller, request, filter)
-	var internalContinuation *string
-	if request.Continuation != nil {
-		value, err := adapter.contexts.LoadContinuation(r.Context(), *request.Continuation, binding)
-		if err != nil {
-			operatorCodeWriteCursorFailure(w, err)
-			return
-		}
-		internalContinuation = &value
+	internalContinuation, err := adapter.operatorCodeSearchContinuation(r.Context(), request.Continuation, binding)
+	if err != nil {
+		operatorCodeWriteCursorFailure(w, err)
+		return
 	}
 	response, err := adapter.app.SearchOperatorCodebase(r.Context(), caller.authorized, uci.QuerySpec{
 		ClientSessionID: "operator-code/" + caller.caller.BindingID,
@@ -615,16 +644,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleSearch(w http.ResponseWriter, r *h
 		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 		return
 	}
-	nextServiceCursor := ""
-	if response.Continuation != nil && response.Continuation.Value != nil {
-		nextServiceCursor = *response.Continuation.Value
-	}
-	nextCursor := ""
-	if request.Continuation == nil {
-		nextCursor, err = adapter.contexts.CreateContinuation(r.Context(), binding, nextServiceCursor)
-	} else {
-		nextCursor, err = adapter.contexts.AdvanceContinuation(r.Context(), *request.Continuation, binding, nextServiceCursor)
-	}
+	nextCursor, err := adapter.operatorCodeSearchNextContinuation(r.Context(), request.Continuation, binding, response)
 	if err != nil {
 		operatorCodeWriteCursorFailure(w, err)
 		return
@@ -637,6 +657,28 @@ func (adapter *OperatorCodeHTTPAdapter) HandleSearch(w http.ResponseWriter, r *h
 	adapter.writeReleasedQuery(w, r.Context(), identity, caller, uci.ReleaseCategoryCodeSearch, response, func(candidate uci.QueryResponse, authorized uci.AuthorizedContext) bool {
 		return operatorCodeSearchResponseValid(candidate, authorized)
 	})
+}
+
+func (adapter *OperatorCodeHTTPAdapter) operatorCodeSearchContinuation(ctx context.Context, continuation *string, binding gormdb.BrowserCodeContinuationBinding) (*string, error) {
+	if continuation == nil {
+		return nil, nil
+	}
+	value, err := adapter.contexts.LoadContinuation(ctx, *continuation, binding)
+	if err != nil {
+		return nil, err
+	}
+	return &value, nil
+}
+
+func (adapter *OperatorCodeHTTPAdapter) operatorCodeSearchNextContinuation(ctx context.Context, continuation *string, binding gormdb.BrowserCodeContinuationBinding, response uci.QueryResponse) (string, error) {
+	nextServiceCursor := ""
+	if response.Continuation != nil && response.Continuation.Value != nil {
+		nextServiceCursor = *response.Continuation.Value
+	}
+	if continuation == nil {
+		return adapter.contexts.CreateContinuation(ctx, binding, nextServiceCursor)
+	}
+	return adapter.contexts.AdvanceContinuation(ctx, *continuation, binding, nextServiceCursor)
 }
 
 // HandleGraph explores bounded graph evidence inside the one current grant.
@@ -973,91 +1015,105 @@ type operatorCodeGraphRequest struct {
 }
 
 func (request operatorCodeGraphRequest) input(now time.Time) (mcp.CodebaseGraphInput, int64, bool) {
+	action, target, destination, valid := operatorCodeGraphActionTargets(request)
+	if !valid {
+		return mcp.CodebaseGraphInput{}, 0, false
+	}
+	filter, valid := operatorCodeGraphFilter(request)
+	if !valid {
+		return mcp.CodebaseGraphInput{}, 0, false
+	}
+	budget, deadlineMS, valid := operatorCodeGraphBudget(request, now)
+	if !valid {
+		return mcp.CodebaseGraphInput{}, 0, false
+	}
+	continuation, valid := operatorCodeGraphContinuation(request)
+	if !valid {
+		return mcp.CodebaseGraphInput{}, 0, false
+	}
+	return mcp.CodebaseGraphInput{Action: action, Target: target, Destination: destination, Filter: filter, Budget: budget, Continuation: continuation}, deadlineMS, true
+}
+
+func operatorCodeGraphActionTargets(request operatorCodeGraphRequest) (uci.GraphAction, uci.GraphTarget, *uci.GraphTarget, bool) {
 	action := uci.GraphAction(strings.ToLower(strings.TrimSpace(request.Action)))
 	switch action {
 	case uci.GraphActionExplain, uci.GraphActionNeighbors, uci.GraphActionPath, uci.GraphActionImpact, uci.GraphActionFlow, uci.GraphActionCycles:
 	default:
-		return mcp.CodebaseGraphInput{}, 0, false
+		return "", uci.GraphTarget{}, nil, false
 	}
 	target, valid := operatorCodeGraphTarget(request.Target)
 	if !valid {
-		return mcp.CodebaseGraphInput{}, 0, false
+		return "", uci.GraphTarget{}, nil, false
 	}
 	var destination *uci.GraphTarget
 	if request.Destination != nil {
 		value, targetValid := operatorCodeGraphTarget(request.Destination)
 		if !targetValid {
-			return mcp.CodebaseGraphInput{}, 0, false
+			return "", uci.GraphTarget{}, nil, false
 		}
 		destination = &value
 	}
 	if (action == uci.GraphActionPath) != (destination != nil) {
-		return mcp.CodebaseGraphInput{}, 0, false
+		return "", uci.GraphTarget{}, nil, false
 	}
+	return action, target, destination, true
+}
+
+func operatorCodeGraphFilter(request operatorCodeGraphRequest) (uci.GraphFilter, bool) {
 	direction := uci.GraphDirectionBoth
 	if request.Direction != nil {
 		direction = uci.GraphDirection(strings.ToLower(strings.TrimSpace(*request.Direction)))
 	}
 	if direction != uci.GraphDirectionIncoming && direction != uci.GraphDirectionOutgoing && direction != uci.GraphDirectionBoth {
-		return mcp.CodebaseGraphInput{}, 0, false
+		return uci.GraphFilter{}, false
 	}
 	relations, valid := operatorCodeGraphRelations(request.Relations)
 	if !valid {
-		return mcp.CodebaseGraphInput{}, 0, false
+		return uci.GraphFilter{}, false
 	}
 	evidenceKinds, valid := operatorCodeGraphEvidenceKinds(request.EvidenceKinds)
 	if !valid {
-		return mcp.CodebaseGraphInput{}, 0, false
+		return uci.GraphFilter{}, false
 	}
+	return uci.GraphFilter{Direction: direction, Relations: relations, EvidenceKinds: evidenceKinds}, true
+}
+
+func operatorCodeGraphBudget(request operatorCodeGraphRequest, now time.Time) (uci.GraphBudget, int64, bool) {
 	maxDepth, valid := operatorCodeGraphBound(request.MaxDepth, 4, 0, operatorCodeGraphMaxDepth)
 	if !valid {
-		return mcp.CodebaseGraphInput{}, 0, false
+		return uci.GraphBudget{}, 0, false
 	}
 	maxVisited, valid := operatorCodeGraphBound(request.MaxVisited, 64, 1, operatorCodeGraphMaxVisited)
 	if !valid {
-		return mcp.CodebaseGraphInput{}, 0, false
+		return uci.GraphBudget{}, 0, false
 	}
 	maxNodes, valid := operatorCodeGraphBound(request.MaxNodes, 32, 1, operatorCodeGraphMaxNodes)
 	if !valid {
-		return mcp.CodebaseGraphInput{}, 0, false
+		return uci.GraphBudget{}, 0, false
 	}
 	maxEdges, valid := operatorCodeGraphBound(request.MaxEdges, 64, 1, operatorCodeGraphMaxEdges)
 	if !valid {
-		return mcp.CodebaseGraphInput{}, 0, false
+		return uci.GraphBudget{}, 0, false
 	}
 	deadlineMS := int64(30_000)
 	if request.DeadlineMS != nil {
 		deadlineMS = *request.DeadlineMS
 	}
 	if deadlineMS < 1 || deadlineMS > operatorCodeGraphMaxWaitMS {
-		return mcp.CodebaseGraphInput{}, 0, false
+		return uci.GraphBudget{}, 0, false
 	}
-	var continuation *string
-	if request.Continuation != nil {
-		if !operatorCodeText(*request.Continuation) || len(*request.Continuation) > 2_048 {
-			return mcp.CodebaseGraphInput{}, 0, false
-		}
-		value := *request.Continuation
-		continuation = &value
+	return uci.GraphBudget{MaxDepth: maxDepth, MaxVisited: maxVisited, MaxNodes: maxNodes, MaxEdges: maxEdges, Deadline: now.Add(time.Duration(deadlineMS) * time.Millisecond)}, deadlineMS, true
+}
+
+func operatorCodeGraphContinuation(request operatorCodeGraphRequest) (*string, bool) {
+	if request.Continuation == nil {
+		return nil, true
 	}
-	return mcp.CodebaseGraphInput{
-		Action:      action,
-		Target:      target,
-		Destination: destination,
-		Filter: uci.GraphFilter{
-			Direction:     direction,
-			Relations:     relations,
-			EvidenceKinds: evidenceKinds,
-		},
-		Budget: uci.GraphBudget{
-			MaxDepth:   maxDepth,
-			MaxVisited: maxVisited,
-			MaxNodes:   maxNodes,
-			MaxEdges:   maxEdges,
-			Deadline:   now.Add(time.Duration(deadlineMS) * time.Millisecond),
-		},
-		Continuation: continuation,
-	}, deadlineMS, true
+	if !operatorCodeText(*request.Continuation) || len(*request.Continuation) > 2_048 {
+		return nil, false
+	}
+	value := *request.Continuation
+	return &value, true
 }
 
 func operatorCodeGraphTarget(request *operatorCodeGraphTargetRequest) (uci.GraphTarget, bool) {
@@ -1436,23 +1492,9 @@ func (adapter *OperatorCodeHTTPAdapter) authorizeNoViewIndexIntent(ctx context.C
 	if adapter == nil || adapter.contexts == nil {
 		return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailureExposureUnavailable
 	}
-	var advertised uci.IndexBinding
-	if initial {
-		if adapter.indexTargets == nil {
-			return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailureContextMismatch
-		}
-		var found bool
-		advertised, found = adapter.indexTargets.Resolve(requested.SourceID, requested.CheckoutID)
-		if !found {
-			return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailurePermissionDenied
-		}
-		if advertised.Context != nil || advertised.ProfileID == "" {
-			return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailureContextMismatch
-		}
-		profileID = advertised.ProfileID
-	}
-	if !operatorCodeUUID(profileID) {
-		return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailureContextMismatch
+	advertised, profileID, failure := adapter.noViewIndexIntentProfile(requested, profileID, initial)
+	if failure != uci.ReleaseFailureNone {
+		return operatorCodeNoViewIndexIntentRequest{}, failure
 	}
 	subject, ok := identity.identity.SessionBrowserSubject()
 	if !ok {
@@ -1466,20 +1508,9 @@ func (adapter *OperatorCodeHTTPAdapter) authorizeNoViewIndexIntent(ctx context.C
 		CheckoutID:          requested.CheckoutID,
 		ProfileID:           profileID,
 	}
-	var (
-		binding gormdb.BrowserCodeIndexIntentBinding
-		err     error
-	)
-	if initial {
-		binding, err = adapter.contexts.AuthorizeInitialIndexIntent(ctx, in)
-	} else {
-		binding, err = adapter.contexts.ReauthorizeIndexIntent(ctx, in)
-	}
-	if err != nil {
-		if errors.Is(err, gormdb.ErrBrowserCodeContextDenied) || errors.Is(err, gormdb.ErrBrowserTabBindingDenied) {
-			return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailurePermissionDenied
-		}
-		return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailureExposureUnavailable
+	binding, failure := adapter.noViewIndexIntentBinding(ctx, in, initial)
+	if failure != uci.ReleaseFailureNone {
+		return operatorCodeNoViewIndexIntentRequest{}, failure
 	}
 	if binding.Scope.SourceID != requested.SourceID || binding.Scope.CheckoutID != requested.CheckoutID || binding.ProfileID != profileID || !operatorCodeUUID(binding.Scope.IncarnationID) || !operatorCodeText(binding.AuthRealm) || (initial && binding.Scope != advertised.Scope) {
 		return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailureContextMismatch
@@ -1491,6 +1522,47 @@ func (adapter *OperatorCodeHTTPAdapter) authorizeNoViewIndexIntent(ctx context.C
 		},
 		proof: proof, scope: binding.Scope, profileID: binding.ProfileID, authRealm: binding.AuthRealm,
 	}, uci.ReleaseFailureNone
+}
+
+func (adapter *OperatorCodeHTTPAdapter) noViewIndexIntentProfile(requested operatorCodeIndexIntentTargetRequest, profileID string, initial bool) (uci.IndexBinding, string, uci.ReleaseFailureCode) {
+	var advertised uci.IndexBinding
+	if initial {
+		if adapter.indexTargets == nil {
+			return uci.IndexBinding{}, "", uci.ReleaseFailureContextMismatch
+		}
+		var found bool
+		advertised, found = adapter.indexTargets.Resolve(requested.SourceID, requested.CheckoutID)
+		if !found {
+			return uci.IndexBinding{}, "", uci.ReleaseFailurePermissionDenied
+		}
+		if advertised.Context != nil || advertised.ProfileID == "" {
+			return uci.IndexBinding{}, "", uci.ReleaseFailureContextMismatch
+		}
+		profileID = advertised.ProfileID
+	}
+	if !operatorCodeUUID(profileID) {
+		return uci.IndexBinding{}, "", uci.ReleaseFailureContextMismatch
+	}
+	return advertised, profileID, uci.ReleaseFailureNone
+}
+
+func (adapter *OperatorCodeHTTPAdapter) noViewIndexIntentBinding(ctx context.Context, in gormdb.BrowserCodeIndexIntentTarget, initial bool) (gormdb.BrowserCodeIndexIntentBinding, uci.ReleaseFailureCode) {
+	var (
+		binding gormdb.BrowserCodeIndexIntentBinding
+		err     error
+	)
+	if initial {
+		binding, err = adapter.contexts.AuthorizeInitialIndexIntent(ctx, in)
+	} else {
+		binding, err = adapter.contexts.ReauthorizeIndexIntent(ctx, in)
+	}
+	if err == nil {
+		return binding, uci.ReleaseFailureNone
+	}
+	if errors.Is(err, gormdb.ErrBrowserCodeContextDenied) || errors.Is(err, gormdb.ErrBrowserTabBindingDenied) {
+		return gormdb.BrowserCodeIndexIntentBinding{}, uci.ReleaseFailurePermissionDenied
+	}
+	return gormdb.BrowserCodeIndexIntentBinding{}, uci.ReleaseFailureExposureUnavailable
 }
 
 func (adapter *OperatorCodeHTTPAdapter) authorizeNoViewIndexIntentResult(ctx context.Context, identity operatorCodeRequestIdentity, proof BrowserBindingProof, target operatorCodeNoViewIndexIntentRequest, intent uci.IndexIntent) (operatorCodeAuthorizedRequest, uci.ReleaseFailureCode) {
