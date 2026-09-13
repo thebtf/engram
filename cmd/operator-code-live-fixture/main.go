@@ -85,6 +85,14 @@ type commandDependencies struct {
 	provision func(context.Context, string, invocation) (fixtureOutput, error)
 }
 
+type fixturePublishedProvisionInput struct {
+	invocation  invocation
+	sourceBytes []byte
+	marker      string
+	user        *gormdb.User
+	subject     auth.BrowserSubject
+}
+
 func main() {
 	os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr, defaultCommandDependencies()))
 }
@@ -165,7 +173,6 @@ func parseInvocation(args []string) (invocation, error) {
 }
 
 func provision(ctx context.Context, dsn string, in invocation) (fixtureOutput, error) {
-	browserEmail, project := in.browserEmail, in.project
 	store, err := gormdb.NewStore(gormdb.Config{DSN: dsn, MaxConns: 2, LogLevel: logger.Silent})
 	if err != nil {
 		return fixtureOutput{}, fmt.Errorf("open fixture store: %w", err)
@@ -180,33 +187,46 @@ func provision(ctx context.Context, dsn string, in invocation) (fixtureOutput, e
 	if marker == "" {
 		return fixtureOutput{}, fmt.Errorf("fixture source marker is unavailable")
 	}
-	users := gormdb.NewUserStore(store.DB)
-	user, err := users.GetUserByEmail(browserEmail)
-	if errors.Is(err, gorm.ErrRecordNotFound) && in.passwordFile != "" {
-		password, readErr := os.ReadFile(in.passwordFile)
-		if readErr != nil || strings.TrimSpace(string(password)) == "" {
-			return fixtureOutput{}, fmt.Errorf("read fixture browser password")
-		}
-		hash, hashErr := bcrypt.GenerateFromPassword([]byte(strings.TrimSpace(string(password))), bcrypt.DefaultCost)
-		if hashErr != nil {
-			return fixtureOutput{}, fmt.Errorf("hash fixture browser password: %w", hashErr)
-		}
-		user, err = users.CreateUser(browserEmail, string(hash), gormdb.DashboardRoleOperator)
-	}
+	user, subject, err := fixtureBrowserUser(store, in)
 	if err != nil {
-		return fixtureOutput{}, fmt.Errorf("load fixture browser user: %w", err)
-	}
-	subject := auth.BrowserSubjectForUser(user.ID)
-	if !subject.Valid() {
-		return fixtureOutput{}, fmt.Errorf("fixture browser subject is invalid")
+		return fixtureOutput{}, err
 	}
 	if in.mode == fixtureModeNoView {
 		return provisionNoView(ctx, store, user, subject, in, marker)
 	}
-	if err := seedFixtureQueueCandidates(ctx, store.GetDB(), project); err != nil {
+	if err := seedFixtureQueueCandidates(ctx, store.GetDB(), in.project); err != nil {
 		return fixtureOutput{}, err
 	}
+	return provisionPublished(ctx, store, fixturePublishedProvisionInput{invocation: in, sourceBytes: sourceBytes, marker: marker, user: user, subject: subject})
+}
 
+func fixtureBrowserUser(store *gormdb.Store, in invocation) (*gormdb.User, auth.BrowserSubject, error) {
+	users := gormdb.NewUserStore(store.DB)
+	user, err := users.GetUserByEmail(in.browserEmail)
+	if errors.Is(err, gorm.ErrRecordNotFound) && in.passwordFile != "" {
+		password, readErr := os.ReadFile(in.passwordFile)
+		if readErr != nil || strings.TrimSpace(string(password)) == "" {
+			return nil, auth.BrowserSubject{}, fmt.Errorf("read fixture browser password")
+		}
+		hash, hashErr := bcrypt.GenerateFromPassword([]byte(strings.TrimSpace(string(password))), bcrypt.DefaultCost)
+		if hashErr != nil {
+			return nil, auth.BrowserSubject{}, fmt.Errorf("hash fixture browser password: %w", hashErr)
+		}
+		user, err = users.CreateUser(in.browserEmail, string(hash), gormdb.DashboardRoleOperator)
+	}
+	if err != nil {
+		return nil, auth.BrowserSubject{}, fmt.Errorf("load fixture browser user: %w", err)
+	}
+	subject := auth.BrowserSubjectForUser(user.ID)
+	if !subject.Valid() {
+		return nil, auth.BrowserSubject{}, fmt.Errorf("fixture browser subject is invalid")
+	}
+	return user, subject, nil
+}
+
+func provisionPublished(ctx context.Context, store *gormdb.Store, input fixturePublishedProvisionInput) (fixtureOutput, error) {
+	in, sourceBytes, marker, user, subject := input.invocation, input.sourceBytes, input.marker, input.user, input.subject
+	project := in.project
 	contexts := gormdb.NewUCIContextStore(store.DB)
 	source, err := contexts.CreateSource(ctx, gormdb.CreateSourceInput{
 		AuthRealm:   fixtureAuthRealm,
@@ -285,10 +305,7 @@ func provision(ctx context.Context, dsn string, in invocation) (fixtureOutput, e
 	if err != nil {
 		return fixtureOutput{}, fmt.Errorf("stage fixture index: %w", err)
 	}
-	published, err := publisher.Finalize(ctx, caller, uci.IndexFinalizeInput{
-		Build:    build.Build,
-		Manifest: fixtureManifest(ack, part),
-	})
+	published, err := publisher.Finalize(ctx, caller, uci.IndexFinalizeInput{Build: build.Build, Manifest: fixtureManifest(ack, part)})
 	if err != nil {
 		return fixtureOutput{}, fmt.Errorf("publish fixture view: %w", err)
 	}
@@ -298,11 +315,7 @@ func provision(ctx context.Context, dsn string, in invocation) (fixtureOutput, e
 
 	grants := worker.NewCodeGrantApplication(gormdb.NewBrowserReadGrantStore(store.DB))
 	issuer := auth.SessionForBrowserUser(user.Role, user.ID)
-	grant, err := grants.Issue(ctx, issuer, worker.IssueCodeGrantInput{
-		Target:     subject,
-		SourceID:   source.SourceID,
-		CheckoutID: checkout.CheckoutID,
-	})
+	grant, err := grants.Issue(ctx, issuer, worker.IssueCodeGrantInput{Target: subject, SourceID: source.SourceID, CheckoutID: checkout.CheckoutID})
 	if err != nil {
 		return fixtureOutput{}, fmt.Errorf("issue fixture grant: %w", err)
 	}
@@ -310,13 +323,7 @@ func provision(ctx context.Context, dsn string, in invocation) (fixtureOutput, e
 	if err != nil || !found || current.GrantRef != grant.GrantRef || current.SourceID != source.SourceID || current.CheckoutID != checkout.CheckoutID {
 		return fixtureOutput{}, fmt.Errorf("read back fixture grant")
 	}
-	return fixtureOutput{
-		Query:          fixtureQuery,
-		ExpectedSearch: fixtureQuery,
-		ExpectedGraph:  fixtureExpectedGraph,
-		ExpectedSource: fixtureExpectedSource,
-		ExpectedMarker: marker,
-	}, nil
+	return fixtureOutput{Query: fixtureQuery, ExpectedSearch: fixtureQuery, ExpectedGraph: fixtureExpectedGraph, ExpectedSource: fixtureExpectedSource, ExpectedMarker: marker}, nil
 }
 
 func provisionNoView(ctx context.Context, store *gormdb.Store, user *gormdb.User, subject auth.BrowserSubject, in invocation, marker string) (fixtureOutput, error) {
