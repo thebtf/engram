@@ -176,7 +176,19 @@ func assertCollectionSelectionMigrationConstraintFailures(t *testing.T, db *gorm
 	validToken := uuid.NewString()
 	otherValidToken := uuid.NewString()
 	validReason := string(CollectionSelectionReconfirmFilterChanged)
-	insert := func(subjectUserID int64, kind, contextFingerprint string, filterFingerprint, pageCursor, token *string, frozenExpiresAt *time.Time, targets, exclusions string, reconfirmationRequired bool, reconfirmationReason *string) error {
+	type insertInput struct {
+		subjectUserID            int64
+		kind, contextFingerprint string
+		filterFingerprint        *string
+		pageCursor               *string
+		token                    *string
+		frozenExpiresAt          *time.Time
+		targets, exclusions      string
+		reconfirmationRequired   bool
+		reconfirmationReason     *string
+	}
+
+	insert := func(input insertInput) error {
 		return db.Exec(`
 			INSERT INTO collection_selections (
 				selection_id, subject_user_id, session_id, domain, kind, selection_version,
@@ -185,18 +197,18 @@ func assertCollectionSelectionMigrationConstraintFailures(t *testing.T, db *gorm
 				selection_token, frozen_expires_at, reconfirmation_required, reconfirmation_reason,
 				created_at, updated_at
 			) VALUES (?, ?, ?, 'rules', ?, 1, ?, 1, 1, ?, ?, ?::jsonb, ?::jsonb, ?, ?, ?, ?, ?, ?)
-		`, uuid.NewString(), subjectUserID, "collection-selection-migration-constraint-"+uuid.NewString(), kind, contextFingerprint, filterFingerprint, pageCursor, targets, exclusions, token, frozenExpiresAt, reconfirmationRequired, reconfirmationReason, now, now).Error
+		`, uuid.NewString(), input.subjectUserID, "collection-selection-migration-constraint-"+uuid.NewString(), input.kind, input.contextFingerprint, input.filterFingerprint, input.pageCursor, input.targets, input.exclusions, input.token, input.frozenExpiresAt, input.reconfirmationRequired, input.reconfirmationReason, now, now).Error
 	}
 	frozenExpiresAt := now.Add(time.Hour)
-	require.NoError(t, insert(1, "frozen_filter", validContext, &validFilter, nil, &validToken, &frozenExpiresAt, `[{"id":"rule-1","expected_version":1}]`, `[]`, false, nil))
-	require.Error(t, insert(0, "frozen_filter", validContext, &validFilter, nil, &validToken, &frozenExpiresAt, `[{"id":"rule-2","expected_version":1}]`, `[]`, false, nil), "selection owner must stay positive")
-	require.Error(t, insert(1, "unknown", validContext, &validFilter, nil, &validToken, &frozenExpiresAt, `[{"id":"rule-3","expected_version":1}]`, `[]`, false, nil), "selection kind must stay closed")
-	require.Error(t, insert(1, "frozen_filter", "sha256:"+strings.Repeat("g", 64), &validFilter, nil, &validToken, &frozenExpiresAt, `[{"id":"rule-4","expected_version":1}]`, `[]`, false, nil), "context binding must stay normalized")
-	require.Error(t, insert(1, "frozen_filter", validContext, nil, nil, &validToken, &frozenExpiresAt, `[{"id":"rule-5","expected_version":1}]`, `[]`, false, nil), "frozen selections require a normalized filter fingerprint")
-	require.Error(t, insert(1, "frozen_filter", validContext, &validFilter, nil, &validToken, &frozenExpiresAt, `{}`, `[]`, false, nil), "selection membership must remain a JSON array")
-	require.Error(t, insert(1, "none", validContext, nil, nil, nil, nil, `[{"id":"rule-6"}]`, `[]`, false, nil), "none selections must carry no target IDs")
-	require.Error(t, insert(1, "frozen_filter", validContext, &validFilter, nil, &validToken, &frozenExpiresAt, `[{"id":"rule-7","expected_version":1}]`, `[]`, true, nil), "reconfirmation status requires a closed reason")
-	require.NoError(t, insert(1, "frozen_filter", validContext, &validFilter, nil, &otherValidToken, &frozenExpiresAt, `[{"id":"rule-8","expected_version":1}]`, `[]`, true, &validReason))
+	require.NoError(t, insert(insertInput{1, "frozen_filter", validContext, &validFilter, nil, &validToken, &frozenExpiresAt, `[{"id":"rule-1","expected_version":1}]`, `[]`, false, nil}))
+	require.Error(t, insert(insertInput{0, "frozen_filter", validContext, &validFilter, nil, &validToken, &frozenExpiresAt, `[{"id":"rule-2","expected_version":1}]`, `[]`, false, nil}), "selection owner must stay positive")
+	require.Error(t, insert(insertInput{1, "unknown", validContext, &validFilter, nil, &validToken, &frozenExpiresAt, `[{"id":"rule-3","expected_version":1}]`, `[]`, false, nil}), "selection kind must stay closed")
+	require.Error(t, insert(insertInput{1, "frozen_filter", "sha256:" + strings.Repeat("g", 64), &validFilter, nil, &validToken, &frozenExpiresAt, `[{"id":"rule-4","expected_version":1}]`, `[]`, false, nil}), "context binding must stay normalized")
+	require.Error(t, insert(insertInput{1, "frozen_filter", validContext, nil, nil, &validToken, &frozenExpiresAt, `[{"id":"rule-5","expected_version":1}]`, `[]`, false, nil}), "frozen selections require a normalized filter fingerprint")
+	require.Error(t, insert(insertInput{1, "frozen_filter", validContext, &validFilter, nil, &validToken, &frozenExpiresAt, `{}`, `[]`, false, nil}), "selection membership must remain a JSON array")
+	require.Error(t, insert(insertInput{1, "none", validContext, nil, nil, nil, nil, `[{"id":"rule-6"}]`, `[]`, false, nil}), "none selections must carry no target IDs")
+	require.Error(t, insert(insertInput{1, "frozen_filter", validContext, &validFilter, nil, &validToken, &frozenExpiresAt, `[{"id":"rule-7","expected_version":1}]`, `[]`, true, nil}), "reconfirmation status requires a closed reason")
+	require.NoError(t, insert(insertInput{1, "frozen_filter", validContext, &validFilter, nil, &otherValidToken, &frozenExpiresAt, `[{"id":"rule-8","expected_version":1}]`, `[]`, true, &validReason}))
 }
 
 func collectionSelectionMigrationColumns(t *testing.T, db *gormlib.DB) map[string]collectionSelectionMigrationColumn {

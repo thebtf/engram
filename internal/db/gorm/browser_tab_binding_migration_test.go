@@ -197,7 +197,17 @@ func assertBrowserTabBindingMigrationSchema(t *testing.T, db *gormlib.DB) {
 func assertBrowserTabBindingMigrationConstraintFailures(t *testing.T, db *gormlib.DB) {
 	t.Helper()
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	insert := func(subjectUserID int64, sessionID string, resumeDigest, proofDigest, reloadDigest []byte, state string, leaseExpiresAt, bindingExpiresAt time.Time, pinnedSourceID, pinnedCheckoutID, pinnedViewID, pinnedAnalysisProfileID *string, pinnedGeneration *int64) error {
+	type insertInput struct {
+		subjectUserID                                                           int64
+		sessionID                                                               string
+		resumeDigest, proofDigest, reloadDigest                                 []byte
+		state                                                                   string
+		leaseExpiresAt, bindingExpiresAt                                        time.Time
+		pinnedSourceID, pinnedCheckoutID, pinnedViewID, pinnedAnalysisProfileID *string
+		pinnedGeneration                                                        *int64
+	}
+
+	insert := func(input insertInput) error {
 		return db.Exec(`
 			INSERT INTO browser_tab_bindings (
 				tab_binding_id, subject_user_id, session_id,
@@ -206,23 +216,23 @@ func assertBrowserTabBindingMigrationConstraintFailures(t *testing.T, db *gormli
 				pinned_source_id, pinned_checkout_id, pinned_view_id, pinned_analysis_profile_id, pinned_generation,
 				binding_expires_at, created_at, updated_at
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, uuid.NewString(), subjectUserID, sessionID, resumeDigest, proofDigest, reloadDigest, state, leaseExpiresAt, pinnedSourceID, pinnedCheckoutID, pinnedViewID, pinnedAnalysisProfileID, pinnedGeneration, bindingExpiresAt, now, now).Error
+		`, uuid.NewString(), input.subjectUserID, input.sessionID, input.resumeDigest, input.proofDigest, input.reloadDigest, input.state, input.leaseExpiresAt, input.pinnedSourceID, input.pinnedCheckoutID, input.pinnedViewID, input.pinnedAnalysisProfileID, input.pinnedGeneration, input.bindingExpiresAt, now, now).Error
 	}
 	validDigest := bytes.Repeat([]byte{0xAA}, 32)
 	leaseExpiresAt := now.Add(time.Minute)
 	bindingExpiresAt := now.Add(time.Hour)
-	require.Error(t, insert(0, "browser-tab-binding-migration-session", validDigest, validDigest, validDigest, "live", leaseExpiresAt, bindingExpiresAt, nil, nil, nil, nil, nil), "subject must stay positive")
-	require.Error(t, insert(1, " ", validDigest, validDigest, validDigest, "live", leaseExpiresAt, bindingExpiresAt, nil, nil, nil, nil, nil), "session must stay normalized and nonblank")
-	require.Error(t, insert(1, "browser-tab-binding-migration-session", validDigest[:31], validDigest, validDigest, "live", leaseExpiresAt, bindingExpiresAt, nil, nil, nil, nil, nil), "stored material must be fixed-width digests")
-	require.Error(t, insert(1, "browser-tab-binding-migration-session", validDigest, validDigest, validDigest, "pending", leaseExpiresAt, bindingExpiresAt, nil, nil, nil, nil, nil), "lease state must stay closed")
-	require.Error(t, insert(1, "browser-tab-binding-migration-session", validDigest, validDigest, validDigest, "live", bindingExpiresAt, leaseExpiresAt, nil, nil, nil, nil, nil), "binding expiry must outlive its document lease")
+	require.Error(t, insert(insertInput{subjectUserID: 0, sessionID: "browser-tab-binding-migration-session", resumeDigest: validDigest, proofDigest: validDigest, reloadDigest: validDigest, state: "live", leaseExpiresAt: leaseExpiresAt, bindingExpiresAt: bindingExpiresAt}), "subject must stay positive")
+	require.Error(t, insert(insertInput{subjectUserID: 1, sessionID: " ", resumeDigest: validDigest, proofDigest: validDigest, reloadDigest: validDigest, state: "live", leaseExpiresAt: leaseExpiresAt, bindingExpiresAt: bindingExpiresAt}), "session must stay normalized and nonblank")
+	require.Error(t, insert(insertInput{subjectUserID: 1, sessionID: "browser-tab-binding-migration-session", resumeDigest: validDigest[:31], proofDigest: validDigest, reloadDigest: validDigest, state: "live", leaseExpiresAt: leaseExpiresAt, bindingExpiresAt: bindingExpiresAt}), "stored material must be fixed-width digests")
+	require.Error(t, insert(insertInput{subjectUserID: 1, sessionID: "browser-tab-binding-migration-session", resumeDigest: validDigest, proofDigest: validDigest, reloadDigest: validDigest, state: "pending", leaseExpiresAt: leaseExpiresAt, bindingExpiresAt: bindingExpiresAt}), "lease state must stay closed")
+	require.Error(t, insert(insertInput{subjectUserID: 1, sessionID: "browser-tab-binding-migration-session", resumeDigest: validDigest, proofDigest: validDigest, reloadDigest: validDigest, state: "live", leaseExpiresAt: bindingExpiresAt, bindingExpiresAt: leaseExpiresAt}), "binding expiry must outlive its document lease")
 	pinnedSourceID := uuid.NewString()
 	pinnedCheckoutID := uuid.NewString()
 	pinnedViewID := uuid.NewString()
 	pinnedAnalysisProfileID := uuid.NewString()
-	require.Error(t, insert(1, "browser-tab-binding-migration-session", validDigest, validDigest, validDigest, "live", leaseExpiresAt, bindingExpiresAt, &pinnedSourceID, nil, nil, nil, nil), "pinned ContextRef must be complete")
+	require.Error(t, insert(insertInput{subjectUserID: 1, sessionID: "browser-tab-binding-migration-session", resumeDigest: validDigest, proofDigest: validDigest, reloadDigest: validDigest, state: "live", leaseExpiresAt: leaseExpiresAt, bindingExpiresAt: bindingExpiresAt, pinnedSourceID: &pinnedSourceID}), "pinned ContextRef must be complete")
 	zeroGeneration := int64(0)
-	require.Error(t, insert(1, "browser-tab-binding-migration-session", validDigest, validDigest, validDigest, "live", leaseExpiresAt, bindingExpiresAt, &pinnedSourceID, &pinnedCheckoutID, &pinnedViewID, &pinnedAnalysisProfileID, &zeroGeneration), "pinned ContextRef generation must stay positive")
+	require.Error(t, insert(insertInput{subjectUserID: 1, sessionID: "browser-tab-binding-migration-session", resumeDigest: validDigest, proofDigest: validDigest, reloadDigest: validDigest, state: "live", leaseExpiresAt: leaseExpiresAt, bindingExpiresAt: bindingExpiresAt, pinnedSourceID: &pinnedSourceID, pinnedCheckoutID: &pinnedCheckoutID, pinnedViewID: &pinnedViewID, pinnedAnalysisProfileID: &pinnedAnalysisProfileID, pinnedGeneration: &zeroGeneration}), "pinned ContextRef generation must stay positive")
 }
 
 func browserTabBindingMigrationColumns(t *testing.T, db *gormlib.DB) map[string]browserTabBindingMigrationColumn {

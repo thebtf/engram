@@ -2990,7 +2990,14 @@ func (publisher *uciPublisher) Begin(ctx context.Context, caller ucidomain.Index
 			if err != nil {
 				return err
 			}
-			if _, err := validateUCIPublicationIntentClaim(ctx, tx, job, input.IntentClaim, input.Scope, input.ProfileID, now, job.ResultViewID != nil); err != nil {
+			if _, err := validateUCIPublicationIntentClaim(ctx, tx, uciPublicationIntentClaimValidation{
+				job:            job,
+				claim:          input.IntentClaim,
+				scope:          input.Scope,
+				profileID:      input.ProfileID,
+				now:            now,
+				allowCompleted: job.ResultViewID != nil,
+			}); err != nil {
 				return err
 			}
 		}
@@ -3031,7 +3038,12 @@ func (publisher *uciPublisher) Begin(ctx context.Context, caller ucidomain.Index
 		if err != nil {
 			return err
 		}
-		intentRow, err := validateUCIPublicationIntentClaim(ctx, tx, nil, input.IntentClaim, input.Scope, input.ProfileID, now, false)
+		intentRow, err := validateUCIPublicationIntentClaim(ctx, tx, uciPublicationIntentClaimValidation{
+			claim:     input.IntentClaim,
+			scope:     input.Scope,
+			profileID: input.ProfileID,
+			now:       now,
+		})
 		if err != nil {
 			return err
 		}
@@ -3352,7 +3364,19 @@ func uciPublicationIntentEpoch(claim *ucidomain.IndexIntentClaim) int64 {
 	return claim.Epoch
 }
 
-func validateUCIPublicationIntentClaim(ctx context.Context, tx *gorm.DB, job *UCIJob, claim *ucidomain.IndexIntentClaim, scope ucidomain.IndexScope, profileID string, now time.Time, allowCompleted bool) (*indexIntentRow, error) {
+type uciPublicationIntentClaimValidation struct {
+	job            *UCIJob
+	claim          *ucidomain.IndexIntentClaim
+	scope          ucidomain.IndexScope
+	profileID      string
+	now            time.Time
+	allowCompleted bool
+}
+
+func validateUCIPublicationIntentClaim(ctx context.Context, tx *gorm.DB, input uciPublicationIntentClaimValidation) (*indexIntentRow, error) {
+	job, claim := input.job, input.claim
+	scope, profileID, now := input.scope, input.profileID, input.now
+	allowCompleted := input.allowCompleted
 	if claim == nil {
 		if job != nil && job.IndexIntentID != nil {
 			return nil, errUCIPublicationRejected
@@ -3441,7 +3465,13 @@ func (publisher *uciPublisher) Stage(ctx context.Context, caller ucidomain.Index
 		if err != nil {
 			return err
 		}
-		intentRow, err := validateUCIPublicationIntentClaim(ctx, tx, job, input.IntentClaim, input.Build.Scope, *job.ProfileID, now, false)
+		intentRow, err := validateUCIPublicationIntentClaim(ctx, tx, uciPublicationIntentClaimValidation{
+			job:       job,
+			claim:     input.IntentClaim,
+			scope:     input.Build.Scope,
+			profileID: *job.ProfileID,
+			now:       now,
+		})
 		if err != nil {
 			return err
 		}
@@ -3713,7 +3743,14 @@ func (publisher *uciPublisher) Finalize(ctx context.Context, caller ucidomain.In
 		if err != nil {
 			return err
 		}
-		intentRow, err := validateUCIPublicationIntentClaim(ctx, tx, job, input.IntentClaim, input.Build.Scope, *job.ProfileID, now, job.ResultViewID != nil)
+		intentRow, err := validateUCIPublicationIntentClaim(ctx, tx, uciPublicationIntentClaimValidation{
+			job:            job,
+			claim:          input.IntentClaim,
+			scope:          input.Build.Scope,
+			profileID:      *job.ProfileID,
+			now:            now,
+			allowCompleted: job.ResultViewID != nil,
+		})
 		if err != nil {
 			return err
 		}

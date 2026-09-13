@@ -285,21 +285,30 @@ func assertBrowserReadGrantMigrationSchema(t *testing.T, db *gormlib.DB) {
 func assertBrowserReadGrantMigrationConstraintFailures(t *testing.T, fixture browserReadGrantMigrationFixture) {
 	t.Helper()
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	insert := func(grantRef, realm string, subjectUserID int64, sourceID, checkoutID, state, issuer string, expiresAt, revokedAt *time.Time) error {
+	type insertInput struct {
+		grantRef             string
+		realm                string
+		subjectUserID        int64
+		sourceID, checkoutID string
+		state, issuer        string
+		expiresAt, revokedAt *time.Time
+	}
+
+	insert := func(input insertInput) error {
 		return fixture.db.Exec(`
 			INSERT INTO browser_read_grants (
 				grant_ref, auth_realm, subject_user_id, source_id, checkout_id,
 				state, issuer_principal, expires_at, issued_at, revoked_at, created_at, updated_at
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, grantRef, realm, subjectUserID, sourceID, checkoutID, state, issuer, expiresAt, now, revokedAt, now, now).Error
+		`, input.grantRef, input.realm, input.subjectUserID, input.sourceID, input.checkoutID, input.state, input.issuer, input.expiresAt, now, input.revokedAt, now, now).Error
 	}
 
-	require.Error(t, insert(uuid.NewString(), " ", fixture.subject.ID, fixture.source.SourceID, fixture.checkout.CheckoutID, "active", browserReadGrantMigrationPrincipal(fixture.owner.ID), nil, nil), "realm must be nonblank and normalized")
-	require.Error(t, insert(uuid.NewString(), fixture.source.AuthRealm, fixture.subject.ID, fixture.foreignCheckout.SourceID, fixture.foreignCheckout.CheckoutID, "pending", browserReadGrantMigrationPrincipal(fixture.owner.ID), nil, nil), "state must stay in the closed grant lifecycle")
-	require.Error(t, insert(uuid.NewString(), fixture.source.AuthRealm, fixture.subject.ID, fixture.foreignCheckout.SourceID, fixture.foreignCheckout.CheckoutID, "revoked", browserReadGrantMigrationPrincipal(fixture.owner.ID), nil, nil), "revoked state requires a revoke timestamp")
-	require.Error(t, insert(uuid.NewString(), fixture.source.AuthRealm, fixture.subject.ID, fixture.source.SourceID, fixture.foreignCheckout.CheckoutID, "active", browserReadGrantMigrationPrincipal(fixture.owner.ID), nil, nil), "checkout must resolve under the grant source")
-	require.Error(t, insert(uuid.NewString(), fixture.source.AuthRealm, fixture.subject.ID+1000000, fixture.foreignCheckout.SourceID, fixture.foreignCheckout.CheckoutID, "active", browserReadGrantMigrationPrincipal(fixture.owner.ID), nil, nil), "grant subject must resolve to a persisted browser user")
-	require.Error(t, insert(uuid.NewString(), fixture.source.AuthRealm, fixture.subject.ID, fixture.source.SourceID, fixture.checkout.CheckoutID, "revoked", browserReadGrantMigrationPrincipal(fixture.owner.ID), nil, &now), "one realm subject source checkout tuple may have only one durable grant")
+	require.Error(t, insert(insertInput{grantRef: uuid.NewString(), realm: " ", subjectUserID: fixture.subject.ID, sourceID: fixture.source.SourceID, checkoutID: fixture.checkout.CheckoutID, state: "active", issuer: browserReadGrantMigrationPrincipal(fixture.owner.ID)}), "realm must be nonblank and normalized")
+	require.Error(t, insert(insertInput{grantRef: uuid.NewString(), realm: fixture.source.AuthRealm, subjectUserID: fixture.subject.ID, sourceID: fixture.foreignCheckout.SourceID, checkoutID: fixture.foreignCheckout.CheckoutID, state: "pending", issuer: browserReadGrantMigrationPrincipal(fixture.owner.ID)}), "state must stay in the closed grant lifecycle")
+	require.Error(t, insert(insertInput{grantRef: uuid.NewString(), realm: fixture.source.AuthRealm, subjectUserID: fixture.subject.ID, sourceID: fixture.foreignCheckout.SourceID, checkoutID: fixture.foreignCheckout.CheckoutID, state: "revoked", issuer: browserReadGrantMigrationPrincipal(fixture.owner.ID)}), "revoked state requires a revoke timestamp")
+	require.Error(t, insert(insertInput{grantRef: uuid.NewString(), realm: fixture.source.AuthRealm, subjectUserID: fixture.subject.ID, sourceID: fixture.source.SourceID, checkoutID: fixture.foreignCheckout.CheckoutID, state: "active", issuer: browserReadGrantMigrationPrincipal(fixture.owner.ID)}), "checkout must resolve under the grant source")
+	require.Error(t, insert(insertInput{grantRef: uuid.NewString(), realm: fixture.source.AuthRealm, subjectUserID: fixture.subject.ID + 1000000, sourceID: fixture.foreignCheckout.SourceID, checkoutID: fixture.foreignCheckout.CheckoutID, state: "active", issuer: browserReadGrantMigrationPrincipal(fixture.owner.ID)}), "grant subject must resolve to a persisted browser user")
+	require.Error(t, insert(insertInput{grantRef: uuid.NewString(), realm: fixture.source.AuthRealm, subjectUserID: fixture.subject.ID, sourceID: fixture.source.SourceID, checkoutID: fixture.checkout.CheckoutID, state: "revoked", issuer: browserReadGrantMigrationPrincipal(fixture.owner.ID), revokedAt: &now}), "one realm subject source checkout tuple may have only one durable grant")
 }
 
 func browserReadGrantMigrationColumns(t *testing.T, db *gormlib.DB) map[string]browserReadGrantMigrationColumn {

@@ -151,7 +151,14 @@ func (s *UCIProjectionStore) EnsureCurrentEmbeddingJobs(ctx context.Context, pro
 	}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, candidate := range rows {
-			if err := ensureUCIEmbeddingJobForCurrentView(ctx, tx, candidate.SourceID, candidate.CheckoutID, candidate.ViewID, candidate.AuthRealm, candidate.OwnerPrincipal, profile); err != nil {
+			if err := ensureUCIEmbeddingJobForCurrentView(ctx, tx, uciEmbeddingCurrentViewCandidate{
+				sourceID:       candidate.SourceID,
+				checkoutID:     candidate.CheckoutID,
+				viewID:         candidate.ViewID,
+				authRealm:      candidate.AuthRealm,
+				ownerPrincipal: candidate.OwnerPrincipal,
+				profile:        profile,
+			}); err != nil {
 				return err
 			}
 		}
@@ -162,7 +169,18 @@ func (s *UCIProjectionStore) EnsureCurrentEmbeddingJobs(ctx context.Context, pro
 	return rows[len(rows)-1].CheckoutID, len(rows) < limit, nil
 }
 
-func ensureUCIEmbeddingJobForCurrentView(ctx context.Context, tx *gorm.DB, sourceID, checkoutID, viewID, authRealm, ownerPrincipal string, profile ucidomain.VectorProfile) error {
+type uciEmbeddingCurrentViewCandidate struct {
+	sourceID       string
+	checkoutID     string
+	viewID         string
+	authRealm      string
+	ownerPrincipal string
+	profile        ucidomain.VectorProfile
+}
+
+func ensureUCIEmbeddingJobForCurrentView(ctx context.Context, tx *gorm.DB, candidate uciEmbeddingCurrentViewCandidate) error {
+	sourceID, checkoutID, viewID := candidate.sourceID, candidate.checkoutID, candidate.viewID
+	authRealm, ownerPrincipal, profile := candidate.authRealm, candidate.ownerPrincipal, candidate.profile
 	var checkout UCICheckout
 	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("checkout_id = ? AND source_id = ?", checkoutID, sourceID).First(&checkout).Error; err != nil {
 		return fmt.Errorf("uci embedding adoption lock checkout: %w", err)
