@@ -258,38 +258,18 @@ func canonicalReconcileScan(scan ScannerResult) (reconcileScan, error) {
 	}
 
 	files := make(map[string]reconcileScanFile, len(scan.Files))
-	var excluded uint64
-	var unreadable uint64
+	var excluded, unreadable uint64
 	for _, file := range scan.Files {
-		if err := scannerValidateGitPath(file.Path); err != nil {
-			return reconcileScan{}, fmt.Errorf("uci reconcile: invalid scan path %q: %w", file.Path, err)
+		fact, fileExcluded, fileUnreadable, err := canonicalReconcileScanFile(file)
+		if err != nil {
+			return reconcileScan{}, err
 		}
 		if _, exists := files[file.Path]; exists {
 			return reconcileScan{}, fmt.Errorf("uci reconcile: duplicate scan path %q", file.Path)
 		}
-
-		fact := reconcileScanFile{state: file.State}
-		switch file.State {
-		case IndexFilePresent:
-			if file.Exclusion != ScannerExclusionNone {
-				return reconcileScan{}, fmt.Errorf("uci reconcile: present scan file %q has an exclusion", file.Path)
-			}
-			sum := sha256.Sum256(file.Body)
-			fact.contentDigest = IndexDigest("sha256:" + hex.EncodeToString(sum[:]))
-		case IndexFileExcluded:
-			if len(file.Body) != 0 || !validReconcileExclusion(file.Exclusion) || file.Exclusion == ScannerExclusionNone {
-				return reconcileScan{}, fmt.Errorf("uci reconcile: invalid excluded scan file %q", file.Path)
-			}
-			excluded++
-		case IndexFileUnreadable:
-			if len(file.Body) != 0 || (file.Exclusion != ScannerExclusionNone && file.Exclusion != ScannerExclusionChanging) {
-				return reconcileScan{}, fmt.Errorf("uci reconcile: invalid unreadable scan file %q", file.Path)
-			}
-			unreadable++
-		default:
-			return reconcileScan{}, fmt.Errorf("uci reconcile: unsupported scan file state %q", file.State)
-		}
 		files[file.Path] = fact
+		excluded += fileExcluded
+		unreadable += fileUnreadable
 	}
 	if scan.Coverage.ExcludedFiles != excluded || scan.Coverage.UnreadableFiles != unreadable {
 		return reconcileScan{}, fmt.Errorf("uci reconcile: scan coverage does not match scan files")
@@ -300,6 +280,34 @@ func canonicalReconcileScan(scan ScannerResult) (reconcileScan, error) {
 		observation: cloneReconcileObservation(scan.Observation),
 		coverage:    scan.Coverage,
 	}, nil
+}
+
+func canonicalReconcileScanFile(file ScannerFile) (reconcileScanFile, uint64, uint64, error) {
+	if err := scannerValidateGitPath(file.Path); err != nil {
+		return reconcileScanFile{}, 0, 0, fmt.Errorf("uci reconcile: invalid scan path %q: %w", file.Path, err)
+	}
+	fact := reconcileScanFile{state: file.State}
+	switch file.State {
+	case IndexFilePresent:
+		if file.Exclusion != ScannerExclusionNone {
+			return reconcileScanFile{}, 0, 0, fmt.Errorf("uci reconcile: present scan file %q has an exclusion", file.Path)
+		}
+		sum := sha256.Sum256(file.Body)
+		fact.contentDigest = IndexDigest("sha256:" + hex.EncodeToString(sum[:]))
+	case IndexFileExcluded:
+		if len(file.Body) != 0 || !validReconcileExclusion(file.Exclusion) || file.Exclusion == ScannerExclusionNone {
+			return reconcileScanFile{}, 0, 0, fmt.Errorf("uci reconcile: invalid excluded scan file %q", file.Path)
+		}
+		return fact, 1, 0, nil
+	case IndexFileUnreadable:
+		if len(file.Body) != 0 || (file.Exclusion != ScannerExclusionNone && file.Exclusion != ScannerExclusionChanging) {
+			return reconcileScanFile{}, 0, 0, fmt.Errorf("uci reconcile: invalid unreadable scan file %q", file.Path)
+		}
+		return fact, 0, 1, nil
+	default:
+		return reconcileScanFile{}, 0, 0, fmt.Errorf("uci reconcile: unsupported scan file state %q", file.State)
+	}
+	return fact, 0, 0, nil
 }
 
 func validateReconcileObservation(observation IndexObservation) error {
@@ -357,125 +365,215 @@ func validReconcileExclusion(exclusion ScannerExclusion) bool {
 	}
 }
 
-func canonicalReconcileParts(parts []IndexPart, scan reconcileScan) ([]IndexPart, []IndexDigest, []IndexMembership, []IndexEdgeReplacement, uint64, error) {
-	if uint64(len(parts)) > uint64(^uint32(0)) {
-		return nil, nil, nil, nil, 0, fmt.Errorf("uci reconcile: too many parts")
-	}
+type reconcilePartAccumulator struct {
+	artifacts          map[string]IndexArtifactProof
+	membershipsByPath  map[string]IndexMembership
+	replacementsByPath map[string]IndexEdgeReplacement
+	parts              []IndexPart
+	partDigests        []IndexDigest
+	memberships        []IndexMembership
+	replacements       []IndexEdgeReplacement
+	edgeCount          uint64
+}
 
+func canonicalReconcileParts(parts []IndexPart, scan reconcileScan) ([]IndexPart, []IndexDigest, []IndexMembership, []IndexEdgeReplacement, uint64, error) {
+	frames, err := canonicalReconcilePartFrames(parts)
+	if err != nil {
+		return nil, nil, nil, nil, 0, err
+	}
+	accumulator := newReconcilePartAccumulator(len(frames))
+	for _, frame := range frames {
+		if err := accumulator.addFrame(frame); err != nil {
+			return nil, nil, nil, nil, 0, err
+		}
+	}
+	if err := accumulator.validate(scan); err != nil {
+		return nil, nil, nil, nil, 0, err
+	}
+	return accumulator.parts, accumulator.partDigests, accumulator.memberships, accumulator.replacements, accumulator.edgeCount, nil
+}
+
+func canonicalReconcilePartFrames(parts []IndexPart) ([]reconcilePartFrame, error) {
+	if uint64(len(parts)) > uint64(^uint32(0)) {
+		return nil, fmt.Errorf("uci reconcile: too many parts")
+	}
 	frames := make([]reconcilePartFrame, 0, len(parts))
 	for index, part := range parts {
 		canonical, err := normalizeIndexPart(cloneReconcilePart(part))
 		if err != nil {
-			return nil, nil, nil, nil, 0, fmt.Errorf("uci reconcile: invalid part %d: %w", index, err)
+			return nil, fmt.Errorf("uci reconcile: invalid part %d: %w", index, err)
 		}
 		if len(canonical.Deletions) != 0 {
-			return nil, nil, nil, nil, 0, fmt.Errorf("uci reconcile: full reconciliation must not stage deletions")
+			return nil, fmt.Errorf("uci reconcile: full reconciliation must not stage deletions")
 		}
 		digest, err := DigestIndexPart(canonical)
 		if err != nil {
-			return nil, nil, nil, nil, 0, fmt.Errorf("uci reconcile: digest part %d: %w", index, err)
+			return nil, fmt.Errorf("uci reconcile: digest part %d: %w", index, err)
 		}
 		frames = append(frames, reconcilePartFrame{part: canonical, digest: digest})
 	}
 	sort.SliceStable(frames, func(left, right int) bool {
 		return frames[left].digest < frames[right].digest
 	})
+	return frames, nil
+}
 
-	artifacts := make(map[string]IndexArtifactProof)
-	membershipsByPath := make(map[string]IndexMembership)
-	replacementsByPath := make(map[string]IndexEdgeReplacement)
-	partsOut := make([]IndexPart, 0, len(frames))
-	partDigests := make([]IndexDigest, 0, len(frames))
-	memberships := make([]IndexMembership, 0)
-	replacements := make([]IndexEdgeReplacement, 0)
-	var edgeCount uint64
-
-	for _, frame := range frames {
-		partsOut = append(partsOut, frame.part)
-		partDigests = append(partDigests, frame.digest)
-		for _, artifact := range frame.part.Artifacts {
-			if existing, found := artifacts[artifact.ArtifactID]; found && existing != artifact {
-				return nil, nil, nil, nil, 0, fmt.Errorf("uci reconcile: conflicting artifact proof %q", artifact.ArtifactID)
-			}
-			artifacts[artifact.ArtifactID] = artifact
-		}
-		for _, membership := range frame.part.Memberships {
-			if _, found := membershipsByPath[membership.PathKey]; found {
-				return nil, nil, nil, nil, 0, fmt.Errorf("uci reconcile: duplicate membership path %q", membership.PathKey)
-			}
-			membershipsByPath[membership.PathKey] = membership
-			memberships = append(memberships, membership)
-		}
-		for _, replacement := range frame.part.EdgeReplacements {
-			if _, found := replacementsByPath[replacement.SourcePath]; found {
-				return nil, nil, nil, nil, 0, fmt.Errorf("uci reconcile: duplicate edge replacement path %q", replacement.SourcePath)
-			}
-			edges := uint64(len(replacement.Edges))
-			if ^uint64(0)-edgeCount < edges {
-				return nil, nil, nil, nil, 0, fmt.Errorf("uci reconcile: edge count overflow")
-			}
-			edgeCount += edges
-			replacementsByPath[replacement.SourcePath] = replacement
-			replacements = append(replacements, replacement)
-		}
+func newReconcilePartAccumulator(capacity int) *reconcilePartAccumulator {
+	return &reconcilePartAccumulator{
+		artifacts:          make(map[string]IndexArtifactProof),
+		membershipsByPath:  make(map[string]IndexMembership),
+		replacementsByPath: make(map[string]IndexEdgeReplacement),
+		parts:              make([]IndexPart, 0, capacity),
+		partDigests:        make([]IndexDigest, 0, capacity),
+		memberships:        make([]IndexMembership, 0),
+		replacements:       make([]IndexEdgeReplacement, 0),
 	}
+}
 
+func (accumulator *reconcilePartAccumulator) addFrame(frame reconcilePartFrame) error {
+	accumulator.parts = append(accumulator.parts, frame.part)
+	accumulator.partDigests = append(accumulator.partDigests, frame.digest)
+	if err := accumulator.addArtifacts(frame.part.Artifacts); err != nil {
+		return err
+	}
+	if err := accumulator.addMemberships(frame.part.Memberships); err != nil {
+		return err
+	}
+	return accumulator.addReplacements(frame.part.EdgeReplacements)
+}
+
+func (accumulator *reconcilePartAccumulator) addArtifacts(artifacts []IndexArtifactProof) error {
+	for _, artifact := range artifacts {
+		if existing, found := accumulator.artifacts[artifact.ArtifactID]; found && existing != artifact {
+			return fmt.Errorf("uci reconcile: conflicting artifact proof %q", artifact.ArtifactID)
+		}
+		accumulator.artifacts[artifact.ArtifactID] = artifact
+	}
+	return nil
+}
+
+func (accumulator *reconcilePartAccumulator) addMemberships(memberships []IndexMembership) error {
+	for _, membership := range memberships {
+		if _, found := accumulator.membershipsByPath[membership.PathKey]; found {
+			return fmt.Errorf("uci reconcile: duplicate membership path %q", membership.PathKey)
+		}
+		accumulator.membershipsByPath[membership.PathKey] = membership
+		accumulator.memberships = append(accumulator.memberships, membership)
+	}
+	return nil
+}
+
+func (accumulator *reconcilePartAccumulator) addReplacements(replacements []IndexEdgeReplacement) error {
+	for _, replacement := range replacements {
+		if _, found := accumulator.replacementsByPath[replacement.SourcePath]; found {
+			return fmt.Errorf("uci reconcile: duplicate edge replacement path %q", replacement.SourcePath)
+		}
+		edges := uint64(len(replacement.Edges))
+		if ^uint64(0)-accumulator.edgeCount < edges {
+			return fmt.Errorf("uci reconcile: edge count overflow")
+		}
+		accumulator.edgeCount += edges
+		accumulator.replacementsByPath[replacement.SourcePath] = replacement
+		accumulator.replacements = append(accumulator.replacements, replacement)
+	}
+	return nil
+}
+
+func (accumulator *reconcilePartAccumulator) validate(scan reconcileScan) error {
+	usedArtifacts, err := accumulator.validateMemberships(scan)
+	if err != nil {
+		return err
+	}
+	if err := accumulator.validateScanMemberships(scan); err != nil {
+		return err
+	}
+	if err := accumulator.validateCurrentArtifacts(usedArtifacts); err != nil {
+		return err
+	}
+	if err := accumulator.validateMembershipReplacements(); err != nil {
+		return err
+	}
+	return accumulator.validateReplacements()
+}
+
+func (accumulator *reconcilePartAccumulator) validateMemberships(scan reconcileScan) (map[string]struct{}, error) {
 	usedArtifacts := make(map[string]struct{})
-	for path, membership := range membershipsByPath {
+	for path, membership := range accumulator.membershipsByPath {
 		file, found := scan.files[path]
 		if !found || membership.DisplayPath != path || membership.State != file.state {
-			return nil, nil, nil, nil, 0, fmt.Errorf("uci reconcile: membership %q does not represent the complete scan", path)
+			return nil, fmt.Errorf("uci reconcile: membership %q does not represent the complete scan", path)
 		}
 		if membership.State != IndexFilePresent {
 			continue
 		}
-		proof, found := artifacts[*membership.ArtifactID]
+		proof, found := accumulator.artifacts[*membership.ArtifactID]
 		if !found || proof.ContentDigest != file.contentDigest {
-			return nil, nil, nil, nil, 0, fmt.Errorf("uci reconcile: membership %q has no matching immutable artifact", path)
+			return nil, fmt.Errorf("uci reconcile: membership %q has no matching immutable artifact", path)
 		}
 		usedArtifacts[*membership.ArtifactID] = struct{}{}
 	}
+	return usedArtifacts, nil
+}
+
+func (accumulator *reconcilePartAccumulator) validateScanMemberships(scan reconcileScan) error {
 	for path := range scan.files {
-		if _, found := membershipsByPath[path]; !found {
-			return nil, nil, nil, nil, 0, fmt.Errorf("uci reconcile: scan path %q has no membership", path)
+		if _, found := accumulator.membershipsByPath[path]; !found {
+			return fmt.Errorf("uci reconcile: scan path %q has no membership", path)
 		}
 	}
-	for artifactID := range artifacts {
+	return nil
+}
+
+func (accumulator *reconcilePartAccumulator) validateCurrentArtifacts(usedArtifacts map[string]struct{}) error {
+	for artifactID := range accumulator.artifacts {
 		if _, found := usedArtifacts[artifactID]; !found {
-			return nil, nil, nil, nil, 0, fmt.Errorf("uci reconcile: artifact proof %q is not current", artifactID)
+			return fmt.Errorf("uci reconcile: artifact proof %q is not current", artifactID)
 		}
 	}
+	return nil
+}
 
-	for path := range membershipsByPath {
-		if _, found := replacementsByPath[path]; !found {
-			return nil, nil, nil, nil, 0, fmt.Errorf("uci reconcile: membership %q has no edge replacement", path)
+func (accumulator *reconcilePartAccumulator) validateMembershipReplacements() error {
+	for path := range accumulator.membershipsByPath {
+		if _, found := accumulator.replacementsByPath[path]; !found {
+			return fmt.Errorf("uci reconcile: membership %q has no edge replacement", path)
 		}
 	}
+	return nil
+}
+
+func (accumulator *reconcilePartAccumulator) validateReplacements() error {
 	seenEdgeKeys := make(map[string]struct{})
-	for path, replacement := range replacementsByPath {
-		membership, found := membershipsByPath[path]
+	for path, replacement := range accumulator.replacementsByPath {
+		membership, found := accumulator.membershipsByPath[path]
 		if !found {
-			return nil, nil, nil, nil, 0, fmt.Errorf("uci reconcile: edge replacement %q is outside the scan", path)
+			return fmt.Errorf("uci reconcile: edge replacement %q is outside the scan", path)
 		}
-		for _, edge := range replacement.Edges {
-			if _, found := seenEdgeKeys[edge.EdgeKey]; found {
-				return nil, nil, nil, nil, 0, fmt.Errorf("uci reconcile: duplicate edge key %q", edge.EdgeKey)
-			}
-			seenEdgeKeys[edge.EdgeKey] = struct{}{}
-			if membership.State != IndexFilePresent || membership.ArtifactID == nil || *membership.ArtifactID != edge.SourceArtifactID {
-				return nil, nil, nil, nil, 0, fmt.Errorf("uci reconcile: edge %q does not match its source", edge.EdgeKey)
-			}
-			if edge.Target == nil {
-				continue
-			}
-			target, found := membershipsByPath[edge.Target.PathKey]
-			if !found || target.State != IndexFilePresent || target.ArtifactID == nil || *target.ArtifactID != edge.Target.ArtifactID {
-				return nil, nil, nil, nil, 0, fmt.Errorf("uci reconcile: edge %q does not match its target", edge.EdgeKey)
-			}
+		if err := accumulator.validateReplacementEdges(replacement, membership, seenEdgeKeys); err != nil {
+			return err
 		}
 	}
+	return nil
+}
 
-	return partsOut, partDigests, memberships, replacements, edgeCount, nil
+func (accumulator *reconcilePartAccumulator) validateReplacementEdges(replacement IndexEdgeReplacement, membership IndexMembership, seenEdgeKeys map[string]struct{}) error {
+	for _, edge := range replacement.Edges {
+		if _, found := seenEdgeKeys[edge.EdgeKey]; found {
+			return fmt.Errorf("uci reconcile: duplicate edge key %q", edge.EdgeKey)
+		}
+		seenEdgeKeys[edge.EdgeKey] = struct{}{}
+		if membership.State != IndexFilePresent || membership.ArtifactID == nil || *membership.ArtifactID != edge.SourceArtifactID {
+			return fmt.Errorf("uci reconcile: edge %q does not match its source", edge.EdgeKey)
+		}
+		if edge.Target == nil {
+			continue
+		}
+		target, found := accumulator.membershipsByPath[edge.Target.PathKey]
+		if !found || target.State != IndexFilePresent || target.ArtifactID == nil || *target.ArtifactID != edge.Target.ArtifactID {
+			return fmt.Errorf("uci reconcile: edge %q does not match its target", edge.EdgeKey)
+		}
+	}
+	return nil
 }
 
 func validateReconcileBuild(build IndexBuildRef, caller IndexCaller, scope IndexScope) error {
