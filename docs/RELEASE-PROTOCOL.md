@@ -109,12 +109,13 @@ a separate reviewed security change, not an operator-side escape hatch.
 
 Run the default command for the complete exact-candidate release gate. It retains immutable per-profile evidence under the shared repository `.agent/e/sonarqube` namespace and only reuses a passed profile when the same worktree, HEAD/tree, source/test/config/dependency inputs, profile descriptor, and test environment fingerprints match.
 
-- `--mode coverage` collects or validates coverage only and prints `COVERAGE_READY` when all profiles are admissible.
+- `--mode coverage` collects or validates coverage only and prints `COVERAGE_READY` only when all 25 profiles are admissible.
+- `--mode coverage --base-only --fresh` is the bounded diagnostic measurement for the existing base profile only. It prints `BASE_PROFILE_READY`, retains its exact profile evidence, and leaves merged/full coverage incomplete; it neither starts dedicated profiles nor submits a scanner analysis, CE/QG request, or status publication. It is not a release gate or scan input by itself.
 - `--mode scan` consumes an existing complete exact-worktree coverage manifest, submits one fresh analysis, and waits for that exact analysis ID.
 - `--mode resume --run <UUID>` only resumes the durable submitted CE task or saved analysis ID; it never runs Go tests or submits another scanner analysis.
-- `--mode gate` remains the default one-command release gate. `--fresh` bypasses reuse while preserving old evidence; `--jobs 1|2` permits only the isolated fixture pair to overlap.
+- `--mode gate` remains the default one-command release gate. `--fresh` bypasses reuse while preserving old evidence; `--jobs 1|2` permits only the isolated fixture pair to overlap. The base descriptor uses Go package concurrency `-p=2`; every dedicated descriptor uses `-p=1`, including test inventory. This descriptor-bound setting is fingerprinted with the executed argv.
 
-The runner prints run/profile progress, phase and overall budgets, event-log location, reuse/invalidation reasons, and persists partial diagnostics. Scanner, CE/QG, network, cancellation, and status-publication failures never delete successful coverage evidence. A completed `PASS` receipt remains valid only for its exact manifest and analysis bytes; resume preserves task identity rather than querying project-latest state.
+The runner prints run/profile progress, phase and overall budgets, event-log location, reuse/invalidation reasons, and persists partial diagnostics. Parsed Go lifecycle transitions—not raw output—advance semantic progress: a `stalled` heartbeat means no semantic transition was observed for 120 seconds, not a proven deadlock. Scanner, CE/QG, network, cancellation, and status-publication failures never delete successful coverage evidence. A completed `PASS` receipt remains valid only for its exact manifest and analysis bytes; resume preserves task identity rather than querying project-latest state.
 
 ## Terminal Verdict
 

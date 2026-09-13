@@ -43,6 +43,7 @@ export const coverageProfiles = Object.freeze([
     race: true,
     coverpkg: "./cmd/...,./internal/...,./pkg/...",
     resourceGroup: "exclusive",
+    packageConcurrency: 2,
   },
   { name: "uci", target: "./internal/db/gorm", run: "^TestUCI", databasePrefix: "sonar_uci" },
   {
@@ -170,7 +171,7 @@ export const coverageProfiles = Object.freeze([
     databasePrefix: "operator_code",
     resourceGroup: "isolated-fixture",
   },
-].map((profile) => Object.freeze({ resourceGroup: "exclusive", ...profile })));
+].map((profile) => Object.freeze({ resourceGroup: "exclusive", packageConcurrency: 1, ...profile })));
 
 class RunnerError extends Error {
   constructor(message, exitCode = 1, retryable = false) {
@@ -262,11 +263,14 @@ function safeRedactionBoundary(value, boundary, secrets) {
   const dsn = Math.max(value.lastIndexOf("postgres://", boundary), value.lastIndexOf("postgresql://", boundary));
   return dsn >= 0 && dsn >= boundary - 1024 ? dsn : boundary;
 }
+function redactionTailLength(secrets) {
+  return Math.max("postgresql://".length, ...secrets.map((secret) => (secret?.length || 0) + 1));
+}
 
 export function redactChunks(chunks, secrets) {
   let tail = "";
   let output = "";
-  const tailLength = Math.max(1024, ...secrets.map((secret) => secret?.length || 0) + 1);
+  const tailLength = redactionTailLength(secrets);
   for (const chunk of chunks) {
     const value = tail + String(chunk);
     const boundary = safeRedactionBoundary(value, Math.max(0, value.length - tailLength), secrets);
@@ -275,10 +279,9 @@ export function redactChunks(chunks, secrets) {
   }
   return output + redacted(tail, secrets);
 }
-
-function createLogWriter(path, secrets) {
+export function createLogWriter(path, secrets) {
   let tail = "";
-  const tailLength = Math.max(1024, ...secrets.map((secret) => secret?.length || 0) + 1);
+  const tailLength = redactionTailLength(secrets);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, "", { encoding: "utf8", mode: 0o600 });
   return {
@@ -478,6 +481,7 @@ export function parseOptions(argv) {
     fresh: false,
     jobs: 2,
     publishStatus: false,
+    baseOnly: false,
     repository: defaultRepository,
     scannerCommand: "sonar-scanner",
     qualityGateTimeout: 600,
@@ -500,14 +504,16 @@ export function parseOptions(argv) {
       options.fresh = true;
       continue;
     }
+    if (option === "--base-only") {
+      options.baseOnly = true;
+      continue;
+    }
     const value = argv[index + 1];
     if (!value || value.startsWith("--")) throw new RunnerError(`Missing value for ${option}`);
     if (option === "--repository") options.repository = resolve(value);
     else if (option === "--scanner") options.scannerCommand = value;
     else if (option === "--mode") {
-      if (!new Set(["gate", "coverage", "scan", "resume"]).has(value)) {
-        throw new RunnerError("--mode must be gate, coverage, scan, or resume");
-      }
+      if (!new Set(["gate", "coverage", "scan", "resume"]).has(value)) throw new RunnerError("--mode must be gate, coverage, scan, or resume");
       options.mode = value;
     } else if (option === "--run") options.run = value;
     else if (option === "--jobs") {
@@ -521,16 +527,11 @@ export function parseOptions(argv) {
     else throw new RunnerError(`Unknown option: ${option}`);
     index += 1;
   }
-  if (options.mode === "resume" && (!options.run || !uuidPattern.test(options.run))) {
-    throw new RunnerError("--mode resume requires --run <UUID>");
-  }
+  if (options.mode === "resume" && (!options.run || !uuidPattern.test(options.run))) throw new RunnerError("--mode resume requires --run <UUID>");
   if (options.mode !== "resume" && options.run) throw new RunnerError("--run is only valid with --mode resume");
-  if (options.mode !== "gate" && options.fresh && options.mode !== "coverage") {
-    throw new RunnerError("--fresh is only valid with gate or coverage mode");
-  }
-  if (options.mode === "coverage" && options.publishStatus) {
-    throw new RunnerError("--publish-status is invalid in coverage mode");
-  }
+  if (options.mode !== "gate" && options.fresh && options.mode !== "coverage") throw new RunnerError("--fresh is only valid with gate or coverage mode");
+  if (options.baseOnly && options.mode !== "coverage") throw new RunnerError("--base-only is only valid in coverage mode");
+  if (options.mode === "coverage" && options.publishStatus) throw new RunnerError("--publish-status is invalid in coverage mode");
   return options;
 }
 
@@ -712,15 +713,23 @@ async function coverageEnvironment(repoRoot, { goCommand, dockerCommand, imageId
   };
   return { values, sha256: sha256(canonicalJson(values)), testEnvironment };
 }
+function profilePackageConcurrency(profile) {
+  if (![1, 2].includes(profile.packageConcurrency)) throw new RunnerError(`${profile.name} has invalid package concurrency`);
+  return profile.packageConcurrency;
+}
 
-function profileDescriptor(profile) {
-  const args = ["test", "-json", "-p=1", "-count=1", profile.target, "-covermode=atomic"];
+export function profileDescriptor(profile) {
+  const args = ["test", "-json", `-p=${profilePackageConcurrency(profile)}`, "-count=1", profile.target, "-covermode=atomic"];
   if (profile.databasePrefix) args.push("-parallel=1");
   if (profile.race) args.push("-race");
   if (profile.coverpkg) args.push(`-coverpkg=${profile.coverpkg}`);
   if (profile.run) args.push(`-run=${profile.run}`);
   if (profile.skip) args.push(`-skip=${profile.skip}`);
   return { ...profile, effective_argv: args };
+}
+
+export function testInventoryArguments(profile) {
+  return ["test", `-p=${profilePackageConcurrency(profile)}`, "-list", ".", profile.target];
 }
 
 function testInventoryFingerprint(profile, candidate) {
@@ -975,6 +984,7 @@ function newManifest(runId, mode, candidate, environment, options, runDir) {
       started_at_utc: started,
     },
     paths: { manifest: join(runDir, "manifest.json") },
+    selection: { base_only: options.baseOnly, selected_profiles: options.baseOnly ? ["base"] : coverageProfiles.map((profile) => profile.name), required_profiles: coverageProfiles.length },
     profiles: [],
     merged: { status: "pending" },
     analysis: { state: "not_submitted", project_key: projectKey, attempts: [] },
@@ -1002,67 +1012,124 @@ function event(campaign, phase, kind, details = {}) {
   appendFileSync(join(campaign.runDir, "events.ndjson"), `${JSON.stringify({ at_utc: new Date().toISOString(), run_id: campaign.manifest.run_id, phase, kind, ...details })}\n`, { encoding: "utf8", mode: 0o600 });
 }
 
-class Progress {
-  constructor(campaign, deadline) {
+export class Progress {
+  constructor(campaign, deadline, now = () => Date.now()) {
     this.campaign = campaign;
     this.deadline = deadline;
+    this.now = now;
     this.startedMs = deadline.started;
     this.phase = "preflight";
     this.phaseStarted = this.startedMs;
     this.active = new Map();
     this.completed = 0;
     this.reused = 0;
-    this.lastProgress = new Date().toISOString();
+    this.lastProgressMs = this.now();
+    this.lastProgress = new Date(this.lastProgressMs).toISOString();
+    this.lastProgressAction = null;
+    this.lastProgressPackage = null;
+    this.lastProgressTest = null;
+    this.lastOutputMs = null;
     this.lastOutput = null;
     this.timer = null;
   }
 
   meaningful(phase, details = {}) {
-    if (phase !== this.phase) this.phaseStarted = Date.now();
+    const now = this.now();
+    if (phase !== this.phase) this.phaseStarted = now;
     this.phase = phase;
-    this.lastProgress = new Date().toISOString();
-    event(this.campaign, phase, "progress", { ...details, elapsed_ms: Date.now() - this.startedMs, phase_elapsed_ms: Date.now() - this.phaseStarted, last_progress_utc: this.lastProgress });
+    this.lastProgressMs = now;
+    this.lastProgress = new Date(now).toISOString();
+    event(this.campaign, phase, "progress", { ...details, observed_at_utc: this.lastProgress, elapsed_ms: now - this.startedMs, phase_elapsed_ms: now - this.phaseStarted, last_progress_utc: this.lastProgress });
   }
 
-  activate(profile) {
-    this.active.set(profile, { started_ms: Date.now(), current_test: null, current_package: null });
+  activate(profile, deadlineAt = null) {
+    const now = this.now();
+    this.active.set(profile, { started_ms: now, deadline_at_ms: deadlineAt, current_test: null, current_package: null, last_progress_ms: now, last_progress_utc: new Date(now).toISOString(), last_progress_action: "profile_started", last_progress_package: null, last_progress_test: null });
   }
 
-  output(profile, currentTest = null, currentPackage = null) {
+  output() {
+    this.lastOutputMs = this.now();
+    this.lastOutput = new Date(this.lastOutputMs).toISOString();
+  }
+
+  location(profile, packageName, testName) {
     const active = this.active.get(profile);
-    if (active) {
-      active.current_test = currentTest || active.current_test;
-      active.current_package = currentPackage || active.current_package;
+    if (!active) return;
+    if (packageName) {
+      active.current_package = packageName;
+      active.current_test = testName || null;
+    } else if (testName) {
+      active.current_test = testName;
     }
-    this.lastOutput = new Date().toISOString();
+  }
+
+  semantic(profile, transition) {
+    const active = this.active.get(profile);
+    if (!active) return;
+    const now = this.now();
+    this.location(profile, transition.package, transition.test);
+    active.last_progress_ms = now;
+    active.last_progress_utc = new Date(now).toISOString();
+    active.last_progress_action = transition.action;
+    active.last_progress_package = transition.package;
+    active.last_progress_test = transition.test;
+    this.lastProgressMs = now;
+    this.lastProgress = active.last_progress_utc;
+    this.lastProgressAction = transition.action;
+    this.lastProgressPackage = transition.package;
+    this.lastProgressTest = transition.test;
+    event(this.campaign, this.phase, "progress", { profile, observation: "go-lifecycle", action: transition.action, package: transition.package, test: transition.test, observed_at_utc: this.lastProgress, elapsed_ms: now - this.startedMs, phase_elapsed_ms: now - this.phaseStarted, last_progress_utc: this.lastProgress });
   }
 
   deactivate(profile) {
     this.active.delete(profile);
   }
 
+  heartbeat() {
+    const now = this.now();
+    const age = now - this.lastProgressMs;
+    const activeProfiles = [...this.active.entries()].map(([name, value]) => ({
+      profile: name,
+      elapsed_ms: now - value.started_ms,
+      deadline_remaining_ms: value.deadline_at_ms === null ? this.deadline.remaining(this.phase) : Math.max(0, value.deadline_at_ms - now),
+      current_test: value.current_test,
+      current_package: value.current_package,
+      last_progress_action: value.last_progress_action,
+      last_progress_package: value.last_progress_package,
+      last_progress_test: value.last_progress_test,
+      last_progress_utc: value.last_progress_utc,
+      last_progress_age_ms: now - value.last_progress_ms,
+      semantic_idle: now - value.last_progress_ms >= 120000,
+    }));
+    const semanticIdle = age >= 120000;
+    const kind = semanticIdle ? "stalled" : "heartbeat";
+    event(this.campaign, this.phase, kind, {
+      head: this.campaign.manifest.candidate.head,
+      active_profiles: activeProfiles,
+      completed_profiles: this.completed,
+      required_profiles: coverageProfiles.length,
+      reused_profiles: this.reused,
+      elapsed_ms: now - this.startedMs,
+      phase_elapsed_ms: now - this.phaseStarted,
+      deadline_remaining_ms: this.deadline.remaining(this.phase),
+      last_progress_utc: this.lastProgress,
+      last_progress_age_ms: age,
+      last_progress_action: this.lastProgressAction,
+      last_progress_package: this.lastProgressPackage,
+      last_progress_test: this.lastProgressTest,
+      last_output_utc: this.lastOutput,
+      last_output_age_ms: this.lastOutputMs === null ? null : now - this.lastOutputMs,
+      ce_status: this.campaign.manifest.analysis?.last_ce_status || null,
+      semantic_idle: semanticIdle,
+      stall_reason: semanticIdle ? "no_semantic_transition_observed" : null,
+    });
+    const activeSummary = activeProfiles.map((profile) => `${profile.profile}:${profile.last_progress_action || "none"}:${profile.last_progress_age_ms}ms`).join(",");
+    console.log(`sonar run ${this.campaign.manifest.run_id}: ${this.phase}; ${this.completed}/${coverageProfiles.length}; semantic_idle=${semanticIdle}; active=${activeSummary || "none"}; diagnostics ${this.campaign.runDir}`);
+    return { kind, active_profiles: activeProfiles, semantic_idle: semanticIdle };
+  }
+
   start() {
-    this.timer = setInterval(() => {
-      const now = Date.now();
-      const age = now - Date.parse(this.lastProgress);
-      const activeProfiles = [...this.active.entries()].map(([name, value]) => ({ profile: name, elapsed_ms: now - value.started_ms, current_test: value.current_test, current_package: value.current_package }));
-      event(this.campaign, this.phase, age >= 120000 ? "stalled" : "heartbeat", {
-        head: this.campaign.manifest.candidate.head,
-        active_profiles: activeProfiles,
-        completed_profiles: this.completed,
-        required_profiles: coverageProfiles.length,
-        reused_profiles: this.reused,
-        elapsed_ms: now - this.startedMs,
-        phase_elapsed_ms: now - this.phaseStarted,
-        deadline_remaining_ms: this.deadline.remaining(this.phase),
-        last_progress_utc: this.lastProgress,
-        last_progress_age_ms: age,
-        last_output_utc: this.lastOutput,
-        last_output_age_ms: this.lastOutput ? now - Date.parse(this.lastOutput) : null,
-        ce_status: this.campaign.manifest.analysis?.last_ce_status || null,
-      });
-      console.log(`sonar run ${this.campaign.manifest.run_id}: ${this.phase}; ${this.completed}/${coverageProfiles.length}; reused ${this.reused}; diagnostics ${this.campaign.runDir}`);
-    }, 10000);
+    this.timer = setInterval(() => this.heartbeat(), 10000);
     this.timer.unref?.();
   }
 
@@ -1233,7 +1300,7 @@ function profileTimeout(deadline, profileDeadline, ownMs) {
 }
 
 async function expectedTests(goCommand, profile, cwd, environment, execution, deadline, profileDeadline) {
-  const result = await runProcess(goCommand, ["test", "-list", ".", profile.target], {
+  const result = await runProcess(goCommand, testInventoryArguments(profile), {
     ...execution,
     cwd,
     env: environment,
@@ -1245,7 +1312,24 @@ async function expectedTests(goCommand, profile, cwd, environment, execution, de
   return tests;
 }
 
-function consumeGoEvents(chunk, state, write) {
+function goLifecycleTransition(state, eventValue) {
+  const action = eventValue.Action;
+  const packageName = eventValue.Package || null;
+  const test = eventValue.Test || null;
+  const terminal = ["pass", "fail", "skip"].includes(action);
+  const meaningful = (action === "start" && packageName && !test) ||
+    (action === "run" && packageName && test) ||
+    (["pause", "cont"].includes(action) && packageName && test) ||
+    (terminal && packageName);
+  if (!meaningful) return null;
+  state.lifecycle ||= new Set();
+  const key = `${action}\u0000${packageName}\u0000${test || ""}`;
+  if (state.lifecycle.has(key)) return null;
+  state.lifecycle.add(key);
+  return { action, package: packageName, test };
+}
+
+export function consumeGoEvents(chunk, state, write, observe = () => { }) {
   state.buffer += chunk;
   const lines = state.buffer.split(/\r?\n/);
   state.buffer = lines.pop();
@@ -1254,10 +1338,14 @@ function consumeGoEvents(chunk, state, write) {
     write(`${line}\n`);
     let eventValue;
     try { eventValue = JSON.parse(line); } catch { continue; }
+    if (eventValue.Package) {
+      state.currentPackage = eventValue.Package;
+      state.currentTest = eventValue.Test || null;
+    } else if (eventValue.Test) {
+      state.currentTest = eventValue.Test;
+    }
     if (eventValue.Test) {
       const key = testIdentity(eventValue.Package || "", eventValue.Test);
-      state.currentTest = eventValue.Test;
-      state.currentPackage = eventValue.Package || state.currentPackage;
       if (eventValue.Action === "output") state.skipReasons.set(key, `${state.skipReasons.get(key) || ""}${eventValue.Output || ""}`);
       if (eventValue.Action === "pass") state.passedTests.add(key);
       if (eventValue.Action === "skip") state.skippedTests.set(key, { package: eventValue.Package || "", test: eventValue.Test, reason: state.skipReasons.get(key)?.trim() || "" });
@@ -1266,12 +1354,14 @@ function consumeGoEvents(chunk, state, write) {
     }
     if (eventValue.Package && eventValue.Action === "pass") state.passedPackages.add(eventValue.Package);
     if (eventValue.Package && eventValue.Action === "fail") state.failedPackages.add(eventValue.Package);
+    observe(eventValue, goLifecycleTransition(state, eventValue));
   }
 }
 
-function finishGoEvents(state, write) {
-  if (state.buffer.trim()) consumeGoEvents(`${state.buffer}\n`, state, write);
+export function finishGoEvents(state, write, observe = () => { }) {
+  const buffered = state.buffer;
   state.buffer = "";
+  if (buffered.trim()) consumeGoEvents(`${buffered}\n`, state, write, observe);
 }
 
 export function summarizeGoEvents(events) {
@@ -1351,21 +1441,21 @@ async function runCoverageProfile(goCommand, profile, campaign, entry, cwd, base
   const databaseDSN = profile.databasePrefix ? await postgres.createDatabase(profile.databasePrefix, deadlineAt) : null;
   const environment = profileEnvironment(baseEnvironment, profile, databaseDSN);
   const tests = await expectedTests(goCommand, profile, cwd, environment, execution, deadline, deadlineAt);
+  const observeGoEvent = (eventValue, transition) => {
+    progress.location(profile.name, eventValue.Package || null, eventValue.Test || null);
+    if (transition) progress.semantic(profile.name, transition);
+  };
   const testWriter = createLogWriter(eventPath, secrets);
   const stderrWriter = createLogWriter(stderrPath, secrets);
-  const state = { buffer: "", currentTest: null, currentPackage: null, passedTests: new Set(), skippedTests: new Map(), skipReasons: new Map(), failedTests: new Set(), startedTests: new Set(), passedPackages: new Set(), failedPackages: new Set() };
-  const args = ["test", "-json", "-p=1", "-count=1", ...(databaseDSN ? ["-parallel=1"] : []), profile.target, "-covermode=atomic", `-coverprofile=${relative(cwd, coveragePath)}`];
-  if (profile.race) args.push("-race");
-  if (profile.coverpkg) args.push(`-coverpkg=${profile.coverpkg}`);
-  if (profile.run) args.push(`-run=${profile.run}`);
-  if (profile.skip) args.push(`-skip=${profile.skip}`);
+  const state = { buffer: "", currentTest: null, currentPackage: null, passedTests: new Set(), skippedTests: new Map(), skipReasons: new Map(), failedTests: new Set(), startedTests: new Set(), passedPackages: new Set(), failedPackages: new Set(), lifecycle: new Set() };
+  const args = [...profileDescriptor(profile).effective_argv, `-coverprofile=${relative(cwd, coveragePath)}`];
   entry.started_at_utc = new Date().toISOString();
   entry.status = "running";
   entry.expected_test_inventory_sha256 = sha256(canonicalJson(tests));
   entry.expected_tests = tests;
   entry.effective_argv = args.filter((argument) => !argument.includes(databasePassword));
   saveCampaign(campaign);
-  progress.activate(profile.name);
+  progress.activate(profile.name, deadlineAt);
   progress.meaningful("coverage", { profile: profile.name, state: "started" });
   try {
     await runProcess(goCommand, args, {
@@ -1375,15 +1465,15 @@ async function runCoverageProfile(goCommand, profile, campaign, entry, cwd, base
       timeoutMs: profileTimeout(deadline, deadlineAt, deadline.profile),
       label: `${profile.name} coverage`,
       onStdout: (chunk) => {
-        consumeGoEvents(chunk, state, (line) => testWriter.write(line));
-        progress.output(profile.name, state.currentTest, state.currentPackage);
+        consumeGoEvents(chunk, state, (line) => testWriter.write(line), observeGoEvent);
+        progress.output();
       },
       onStderr: (chunk) => {
         stderrWriter.write(chunk);
-        progress.output(profile.name, state.currentTest, state.currentPackage);
+        progress.output();
       },
     });
-    finishGoEvents(state, (line) => testWriter.write(line));
+    finishGoEvents(state, (line) => testWriter.write(line), observeGoEvent);
     if (state.failedTests.size || state.failedPackages.size) throw new RunnerError(`${profile.name} reported failed Go test events`);
     const allowedSkips = [...state.skippedTests.values()].map((skipped) => skipAdmission(profile, skipped, candidate)).filter(Boolean);
     const allowedSkippedNames = new Set(allowedSkips.map((skip) => testIdentity(skip.package, skip.test)));
@@ -1407,7 +1497,7 @@ async function runCoverageProfile(goCommand, profile, campaign, entry, cwd, base
     progress.completed += 1;
     progress.meaningful("coverage", { profile: profile.name, state: "passed", elapsed_ms: entry.elapsed_ms });
   } catch (error) {
-    finishGoEvents(state, (line) => testWriter.write(line));
+    finishGoEvents(state, (line) => testWriter.write(line), observeGoEvent);
     testWriter.finish();
     stderrWriter.finish();
     entry.status = error instanceof BudgetError ? "timed_out" : execution.signal?.aborted ? "cancelled" : "failed";
@@ -1460,7 +1550,8 @@ export async function collectCoverage(campaign, candidate, environment, options,
   if (!dockerCommand) throw new RunnerError("Docker is required to generate isolated coverage");
   const imageId = environment.values.image_id;
   if (!/^sha256:[0-9a-f]{64}$/i.test(imageId)) throw new RunnerError("An immutable PostgreSQL image is required for coverage");
-  const profiles = runtime.profiles ?? coverageProfiles;
+  const profiles = runtime.profiles ?? (options.baseOnly ? coverageProfiles.filter((profile) => profile.name === "base") : coverageProfiles);
+  if (options.baseOnly && (profiles.length !== 1 || profiles[0]?.name !== "base")) throw new RunnerError("base-only coverage must select exactly the base profile");
   const reusable = options.fresh ? new Map() : findReusableProfiles(campaign.namespace, profiles, candidate, environment);
   for (const profile of profiles) {
     const cached = reusable.get(profile.name);
@@ -1513,6 +1604,14 @@ export async function collectCoverage(campaign, candidate, environment, options,
     const failed = [...outcomes.values()].find((outcome) => outcome?.status === "failed");
     if (failed) throw failed.error;
     if (campaign.manifest.profiles.some((entry) => entry.status !== "passed")) throw new RunnerError("Coverage did not complete every required profile");
+    if (options.baseOnly) {
+      campaign.manifest.merged = { status: "incomplete", reason: "base_only", selected_profiles: 1, required_profiles: coverageProfiles.length };
+      campaign.manifest.result.coverage = "incomplete";
+      campaign.manifest.result.disposition = "base_profile_ready";
+      progress.meaningful("coverage", { state: "base_profile_ready", selected_profiles: 1, required_profiles: coverageProfiles.length });
+      saveCampaign(campaign);
+      return;
+    }
     const mergePath = join(campaign.runDir, "coverage.out");
     mergeCoverProfiles(profiles.map((profile) => {
       const entry = entries.get(profile.name);
@@ -1876,10 +1975,14 @@ function campaignFromRecord(record) {
   return { runDir: record.runDir, manifest: record.manifest, runId: record.manifest.run_id };
 }
 
-async function runWithCampaign(campaign, candidate, environment, options, execution, deadline, progress) {
+export async function runWithCampaign(campaign, candidate, environment, options, execution, deadline, progress) {
   if (options.mode === "coverage" || options.mode === "gate") {
     if (campaign.manifest.result.coverage !== "passed") await collectCoverage(campaign, candidate, environment, options, execution, deadline, progress);
     if (options.mode === "coverage") {
+      if (options.baseOnly) {
+        console.log(`BASE_PROFILE_READY ${campaign.runId}`);
+        return;
+      }
       campaign.manifest.result.disposition = "coverage_ready";
       saveCampaign(campaign);
       console.log(`COVERAGE_READY ${campaign.runId}`);
@@ -2026,8 +2129,9 @@ export async function main(options = parseOptions(process.argv.slice(2))) {
     progress = new Progress(campaign, deadline);
     progress.start();
     clearInterval(preflightHeartbeat);
-    event(campaign, "preflight", "started", { mode: options.mode, head: candidate.head, profiles: coverageProfiles.length, jobs: options.jobs, manifest_path: join(campaign.runDir, "manifest.json"), budgets: campaign.manifest.budgets });
-    console.log(`Sonar mode=${options.mode} head=${candidate.head} profiles=${coverageProfiles.length} jobs=${options.jobs} manifest=${campaign.runDir}`);
+    const selectedProfiles = options.baseOnly ? 1 : coverageProfiles.length;
+    event(campaign, "preflight", "started", { mode: options.mode, head: candidate.head, selected_profiles: selectedProfiles, required_profiles: coverageProfiles.length, jobs: options.jobs, manifest_path: join(campaign.runDir, "manifest.json"), budgets: campaign.manifest.budgets });
+    console.log(`Sonar mode=${options.mode} head=${candidate.head} profiles=${selectedProfiles}/${coverageProfiles.length} jobs=${options.jobs} manifest=${campaign.runDir}`);
     await assertCandidate(candidate, preliminaryExecution, { requireClean: options.mode === "gate" || options.mode === "coverage" });
     await runWithCampaign(campaign, candidate, environment, options, preliminaryExecution, deadline, progress);
   } catch (error) {

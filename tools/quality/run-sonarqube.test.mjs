@@ -10,23 +10,31 @@ import {
   Deadline,
   acquireLock,
   cleanupExecution,
+  Progress,
   collectCoverage,
+  consumeGoEvents,
+  createLogWriter,
   coverageProfiles,
   executeAnalysis,
   fingerprintProfile,
+  finishGoEvents,
   materializeCoverage,
   parseOptions,
+  parseDockerPort,
   redactChunks,
   reusableProfile,
+  profileDescriptor,
   runOwnedCommand,
   scheduleProfiles,
   sha256,
+  runWithCampaign,
   sourceInventory,
   summarizeGoEvents,
   validAnalysisEvidence,
   validateReport,
   waitForAnalysis,
   writeReceipt,
+  testInventoryArguments,
 } from "./run-sonarqube.mjs";
 
 function temporaryDirectory() {
@@ -36,6 +44,19 @@ function temporaryDirectory() {
 function write(path, contents) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, contents);
+}
+
+function goEventState() {
+  return { buffer: "", currentTest: null, currentPackage: null, passedTests: new Set(), skippedTests: new Map(), skipReasons: new Map(), failedTests: new Set(), startedTests: new Set(), passedPackages: new Set(), failedPackages: new Set(), lifecycle: new Set() };
+}
+
+function progressHarness(directory, now) {
+  const runDir = join(directory, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, "events.ndjson"), "");
+  const campaign = { runDir, manifest: { run_id: "11111111-1111-4111-8111-111111111111", candidate: candidate(), analysis: {} } };
+  const deadline = { started: 0, remaining: () => 123456 };
+  return { campaign, progress: new Progress(campaign, deadline, () => now.value), events: () => readFileSync(join(runDir, "events.ndjson"), "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) };
 }
 
 function candidate(inputs = "inputs", worktree = "worktree") {
@@ -169,6 +190,106 @@ test("scheduler overlaps only the approved fixture pair and retains a successful
   assert.equal(results.get("operator-code-fixture").status, "passed");
 });
 
+test("descriptor binds base p=2 and dedicated p=1 for inventory and execution fingerprints", () => {
+  const base = coverageProfiles.find((profile) => profile.name === "base");
+  const dedicated = coverageProfiles.find((profile) => profile.name === "uci");
+  assert.deepEqual(profileDescriptor(base).effective_argv.slice(0, 4), ["test", "-json", "-p=2", "-count=1"]);
+  assert.deepEqual(testInventoryArguments(base), ["test", "-p=2", "-list", ".", "./..."]);
+  assert.equal(profileDescriptor(dedicated).effective_argv[2], "-p=1");
+  assert.equal(testInventoryArguments(dedicated)[1], "-p=1");
+  assert.notEqual(fingerprintProfile(base, candidate(), { sha256: "environment" }), fingerprintProfile({ ...base, packageConcurrency: 1 }, candidate(), { sha256: "environment" }));
+});
+
+test("log writer streams ordinary test events while retaining split-secret redaction", () => {
+  const directory = temporaryDirectory();
+  try {
+    const path = join(directory, "test-events.ndjson");
+    const secret = "split-secret-token";
+    const writer = createLogWriter(path, [secret]);
+    writer.write('{"Action":"run","Package":"example/internal/books","Test":"TestExample"}\n');
+    assert.match(readFileSync(path, "utf8"), /"Action":"run"/);
+    writer.write(secret.slice(0, 7));
+    assert.doesNotMatch(readFileSync(path, "utf8"), /split-secret-token|split-secret|token/);
+    writer.write(secret.slice(7));
+    writer.finish();
+    const contents = readFileSync(path, "utf8");
+    assert.doesNotMatch(contents, /split-secret-token|split-secret|token/);
+    assert.match(contents, /\[REDACTED\]/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("semantic Go lifecycle progress distinguishes transitions from noisy output", () => {
+  const directory = temporaryDirectory();
+  try {
+    const now = { value: 0 };
+    const { progress, events } = progressHarness(directory, now);
+    const state = goEventState();
+    const observe = (eventValue, transition) => {
+      progress.location("base", eventValue.Package || null, eventValue.Test || null);
+      if (transition) progress.semantic("base", transition);
+    };
+    progress.activate("base", 900000);
+    consumeGoEvents('{"Action":"start","Package":"a/pkg"}\n', state, () => { }, observe);
+    now.value = 120001;
+    progress.output();
+    assert.equal(progress.heartbeat().kind, "stalled");
+    now.value = 120002;
+    consumeGoEvents('{"Action":"run","Package":"b/pkg","Test":"TestInterleaved"}\n', state, () => { }, observe);
+    assert.equal(progress.heartbeat().kind, "heartbeat");
+    now.value = 240003;
+    progress.output();
+    assert.equal(progress.heartbeat().kind, "stalled");
+    now.value = 240004;
+    consumeGoEvents('{"Action":"pause","Package":"b/pkg","Test":"TestInterleaved"}\n', state, () => { }, observe);
+    assert.equal(progress.heartbeat().kind, "heartbeat");
+    now.value = 360005;
+    consumeGoEvents('{"Action":"cont","Package":"b/pkg","Test":"TestInterleaved"}', state, () => { }, observe);
+    finishGoEvents(state, () => { }, observe);
+    assert.equal(progress.heartbeat().kind, "heartbeat");
+    now.value = 480006;
+    consumeGoEvents('{"Action":"pass","Package":"a/pkg"}', state, () => { }, observe);
+    finishGoEvents(state, () => { }, observe);
+    assert.equal(progress.heartbeat().kind, "heartbeat");
+    assert.equal(progress.active.get("base").current_package, "a/pkg");
+    assert.equal(progress.active.get("base").current_test, null);
+    now.value = 480007;
+    consumeGoEvents('{"Action":"skip","Package":"b/pkg","Test":"TestInterleaved"}\n', state, () => { }, observe);
+    assert.equal(progress.heartbeat().kind, "heartbeat");
+    now.value = 480008;
+    consumeGoEvents('{"Action":"fail","Package":"c/pkg","Test":"TestFailure"}\n', state, () => { }, observe);
+    assert.equal(progress.heartbeat().kind, "heartbeat");
+    now.value = 600009;
+    consumeGoEvents('{"Action":"fail","Package":"c/pkg","Test":"TestFailure"}\n', state, () => { }, observe);
+    progress.output();
+    assert.equal(progress.heartbeat().kind, "stalled");
+    const last = events().at(-1);
+    assert.equal(last.stall_reason, "no_semantic_transition_observed");
+    assert.equal(last.last_output_age_ms, 0);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("one fixture sibling's lifecycle transition does not hide another profile's semantic idle age", () => {
+  const directory = temporaryDirectory();
+  try {
+    const now = { value: 0 };
+    const { progress } = progressHarness(directory, now);
+    progress.activate("base", 900000);
+    progress.activate("hap-fixture", 900000);
+    now.value = 120001;
+    progress.semantic("hap-fixture", { action: "run", package: "fixture/pkg", test: "TestFixture" });
+    const heartbeat = progress.heartbeat();
+    assert.equal(heartbeat.kind, "heartbeat");
+    assert.equal(heartbeat.active_profiles.find((profile) => profile.profile === "base").semantic_idle, true);
+    assert.equal(heartbeat.active_profiles.find((profile) => profile.profile === "hap-fixture").semantic_idle, false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("cold collector reaches actual scheduling without an undefined pending-profile variable", async () => {
   const directory = temporaryDirectory();
   try {
@@ -186,6 +307,43 @@ test("cold collector reaches actual scheduling without an undefined pending-prof
     );
     assert.equal(campaign.manifest.result.coverage, "failed");
     assert.equal(JSON.parse(readFileSync(join(campaign.runDir, "manifest.json"), "utf8")).result.coverage, "failed");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("base-only retains exact base evidence without projecting full coverage or scanner readiness", async () => {
+  const directory = temporaryDirectory();
+  try {
+    const sourceId = "11111111-1111-4111-8111-111111111111";
+    const sourceRun = join(directory, "runs", sourceId);
+    const base = coverageProfiles.find((profile) => profile.name === "base");
+    const currentCandidate = { ...candidate(), repository_path: directory };
+    const environment = { values: { image_id: `sha256:${"a".repeat(64)}` }, sha256: "environment", testEnvironment: {} };
+    const coverage = "mode: atomic\nexample.go:1.1,1.2 1 1\n";
+    const events = '{"Action":"pass","Package":"example","Test":"TestExample"}\n{"Action":"pass","Package":"example"}\n';
+    write(join(sourceRun, "profiles", "base", "attempt-1", "coverage.out"), coverage);
+    write(join(sourceRun, "profiles", "base", "attempt-1", "test-events.ndjson"), events);
+    write(join(sourceRun, "manifest.json"), JSON.stringify({
+      schema_version: 2,
+      run_id: sourceId,
+      candidate: currentCandidate,
+      fingerprints: { coverage_environment: environment.sha256 },
+      profiles: [{ name: "base", status: "passed", fingerprint: fingerprintProfile(base, currentCandidate, environment), coverage: { path: "profiles/base/attempt-1/coverage.out", sha256: sha256(coverage), bytes: Buffer.byteLength(coverage) }, test_events: { path: "profiles/base/attempt-1/test-events.ndjson", sha256: sha256(events), bytes: Buffer.byteLength(events) }, expected_tests: [{ package: "example", test: "TestExample" }], expected_test_inventory_sha256: sha256('[{"package":"example","test":"TestExample"}]'), package_counts: { passed: 1, failed: 0, tests_passed: 1, tests_skipped: 0 }, unexpected_skip_count: 0 }],
+    }));
+    const campaign = { namespace: directory, runId: "22222222-2222-4222-8222-222222222222", runDir: join(directory, "run"), manifest: { run_id: "22222222-2222-4222-8222-222222222222", candidate: currentCandidate, profiles: [], merged: { status: "pending" }, analysis: { state: "not_submitted" }, publication: { requested: false, state: "not_requested" }, resources: { cleanup: { errors: [] } }, result: { coverage: "incomplete", technical_gate: "incomplete", effect: "not_requested", disposition: "incomplete" } } };
+    mkdirSync(campaign.runDir, { recursive: true });
+    const options = parseOptions(["--mode", "coverage", "--base-only"]);
+    const deadline = new Deadline({ overallTimeout: 1000, coverageTimeout: 60, profileTimeout: 30, scannerTimeout: 60, qualityGateTimeout: 60 });
+    const progress = { completed: 0, reused: 0, meaningful() { } };
+    await runWithCampaign(campaign, currentCandidate, environment, options, { signal: new AbortController().signal, children: new Map() }, deadline, progress);
+    assert.equal(campaign.manifest.profiles.length, 1);
+    assert.equal(campaign.manifest.profiles[0].status, "passed");
+    assert.equal(campaign.manifest.merged.status, "incomplete");
+    assert.equal(campaign.manifest.result.coverage, "incomplete");
+    assert.equal(campaign.manifest.result.disposition, "base_profile_ready");
+    assert.equal(campaign.manifest.analysis.state, "not_submitted");
+    assert.equal(campaign.manifest.publication.state, "not_requested");
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -253,9 +411,17 @@ test("options preserve the default gate while rejecting unsafe mode combinations
     parseOptions(["--mode", "coverage", "--fresh", "--jobs", "1", "--overall-timeout", "4500"]),
     { ...parseOptions([]), mode: "coverage", fresh: true, jobs: 1, overallTimeout: 4500 },
   );
+  assert.equal(parseOptions(["--mode", "coverage", "--base-only"]).baseOnly, true);
+  assert.throws(() => parseOptions(["--base-only"]), /only valid in coverage mode/);
+  assert.throws(() => parseOptions(["--mode", "scan", "--base-only"]), /only valid in coverage mode/);
   assert.throws(() => parseOptions(["--mode", "resume"]), /requires --run/);
   assert.throws(() => parseOptions(["--mode", "coverage", "--publish-status"]), /invalid in coverage/);
   assert.throws(() => parseOptions(["--jobs", "3"]), /must be 1 or 2/);
+});
+
+test("Docker port parsing has no option-parser dependency", () => {
+  assert.equal(parseDockerPort("127.0.0.1:49153\n"), 49153);
+  assert.throws(() => parseDockerPort("127.0.0.1:0\n"), /Docker did not report/);
 });
 
 test("resume-only lifecycle never submits a not-submitted campaign", async () => {
