@@ -163,93 +163,22 @@ type ar2IdentityExpandReceipt struct {
 // correlations held by the fixed-order wrapper capture. The capture cannot be
 // reconstructed from persisted comparison labels or durable rows alone.
 func buildAR2IdentityExpandReceiptFromControlledFixture(ctx context.Context, reader projectidentity.ComparisonReaderV3, capture *ar2ControlledFixtureCapture) (ar2IdentityExpandReceipt, error) {
-	if reader == nil {
-		return ar2IdentityExpandReceipt{}, fmt.Errorf("controlled-fixture comparison reader is required")
-	}
-	if capture == nil {
-		return ar2IdentityExpandReceipt{}, fmt.Errorf("controlled-fixture capture is required")
-	}
-	if err := validateAR2CandidateAttestation(capture.attestation); err != nil {
-		return ar2IdentityExpandReceipt{}, err
-	}
-	ordered, err := capture.ordered()
+	ordered, err := ar2ControlledFixtureCorrelations(reader, capture)
 	if err != nil {
 		return ar2IdentityExpandReceipt{}, err
 	}
-	requested := make(map[projectidentity.CorrelationV3]struct{}, len(ordered))
-	for _, correlation := range ordered {
-		if _, err := projectidentity.NewCorrelationV3(string(correlation)); err != nil {
-			return ar2IdentityExpandReceipt{}, fmt.Errorf("invalid controlled-fixture correlation")
-		}
-		requested[correlation] = struct{}{}
-	}
-	observations, err := reader.ReadComparisonsByCorrelationV3(ctx, ordered[:])
+	byCorrelation, err := ar2ReadControlledFixtureComparisons(ctx, reader, ordered)
 	if err != nil {
-		return ar2IdentityExpandReceipt{}, fmt.Errorf("read controlled-fixture comparisons: %w", err)
+		return ar2IdentityExpandReceipt{}, err
 	}
-	if len(observations) != len(ordered) {
-		return ar2IdentityExpandReceipt{}, fmt.Errorf("controlled-fixture comparison readback is not exact")
-	}
-	byCorrelation := make(map[projectidentity.CorrelationV3]projectidentity.ComparisonObservationV3, len(observations))
-	for _, observation := range observations {
-		if !observation.ValidPersistedLegacyReadback() {
-			return ar2IdentityExpandReceipt{}, fmt.Errorf("invalid persisted controlled-fixture comparison")
-		}
-		if _, ok := requested[observation.Correlation]; !ok {
-			return ar2IdentityExpandReceipt{}, fmt.Errorf("unrequested persisted controlled-fixture comparison")
-		}
-		if _, duplicate := byCorrelation[observation.Correlation]; duplicate {
-			return ar2IdentityExpandReceipt{}, fmt.Errorf("duplicate persisted controlled-fixture comparison")
-		}
-		byCorrelation[observation.Correlation] = observation
-	}
-	if len(byCorrelation) != len(requested) {
-		return ar2IdentityExpandReceipt{}, fmt.Errorf("missing persisted controlled-fixture comparison")
-	}
-
-	adapters := make([]AR2SupportedAdapter, 0, len(ar2ControlledFixtureCallables))
-	coverage := make([]AR2CallableCoverage, 0, len(ar2ControlledFixtureCallables))
-	for index, spec := range ar2ControlledFixtureCallables {
-		observation, ok := byCorrelation[ordered[index]]
-		if !ok {
-			return ar2IdentityExpandReceipt{}, fmt.Errorf("missing %s controlled-fixture comparison", spec.adapter)
-		}
-		counts := AR2CallableCoverage{Adapter: spec.adapter, Callable: spec.callable}
-		switch observation.Classification() {
-		case projectidentity.ComparisonEqualV3:
-			counts.Equal = 1
-		case projectidentity.ComparisonMismatchV3:
-			counts.Mismatch = 1
-		case projectidentity.ComparisonRefusalV3:
-			counts.Refusal = 1
-		case projectidentity.ComparisonUnavailableV3:
-			counts.Unavailable = 1
-		default:
-			return ar2IdentityExpandReceipt{}, fmt.Errorf("invalid %s controlled-fixture classification", spec.adapter)
-		}
-		metric, err := operability.EvaluateMetric(operability.MetricInput{
-			Name:             "ar2-" + spec.adapter + "-comparison-coverage",
-			NumeratorName:    "classified_comparisons",
-			NumeratorValue:   1,
-			DenominatorName:  "controlled_fixture_callable_returns",
-			DenominatorValue: 1,
-			Scope:            ar2EvidenceScope,
-			Window:           AR2CompatibilityWindow,
-			Freshness:        "fixture_observation",
-			Source:           operability.DurableRecordSource,
-		})
-		if err != nil {
-			return ar2IdentityExpandReceipt{}, fmt.Errorf("%s coverage: %w", spec.adapter, err)
-		}
-		counts.Metric = metric
-		coverage = append(coverage, counts)
-		adapters = append(adapters, AR2SupportedAdapter{Adapter: spec.adapter, Callable: spec.callable, PhysicalChannel: spec.physicalChannel})
+	adapters, coverage, err := ar2ControlledFixtureCoverage(ordered, byCorrelation)
+	if err != nil {
+		return ar2IdentityExpandReceipt{}, err
 	}
 	fixtureEvidenceFingerprint, err := ar2FixtureEvidenceFingerprint(capture.attestation.candidate, ordered, byCorrelation)
 	if err != nil {
 		return ar2IdentityExpandReceipt{}, err
 	}
-
 	return ar2IdentityExpandReceipt{
 		SchemaVersion:              AR2IdentityExpandSchemaVersion,
 		ReceiptAuthority:           AR2IdentityExpandAuthority,
@@ -270,6 +199,123 @@ func buildAR2IdentityExpandReceiptFromControlledFixture(ctx context.Context, rea
 			Preserve:        []string{"additive_schema", "v3_identifiers", "v3_resolution_audits", "v3_anchors", "comparison_evidence"},
 		},
 	}, nil
+}
+
+func ar2ControlledFixtureCorrelations(reader projectidentity.ComparisonReaderV3, capture *ar2ControlledFixtureCapture) ([len(ar2ControlledFixtureCallables)]projectidentity.CorrelationV3, error) {
+	if reader == nil {
+		return [len(ar2ControlledFixtureCallables)]projectidentity.CorrelationV3{}, fmt.Errorf("controlled-fixture comparison reader is required")
+	}
+	if capture == nil {
+		return [len(ar2ControlledFixtureCallables)]projectidentity.CorrelationV3{}, fmt.Errorf("controlled-fixture capture is required")
+	}
+	if err := validateAR2CandidateAttestation(capture.attestation); err != nil {
+		return [len(ar2ControlledFixtureCallables)]projectidentity.CorrelationV3{}, err
+	}
+	ordered, err := capture.ordered()
+	if err != nil {
+		return [len(ar2ControlledFixtureCallables)]projectidentity.CorrelationV3{}, err
+	}
+	for _, correlation := range ordered {
+		if _, err := projectidentity.NewCorrelationV3(string(correlation)); err != nil {
+			return [len(ar2ControlledFixtureCallables)]projectidentity.CorrelationV3{}, fmt.Errorf("invalid controlled-fixture correlation")
+		}
+	}
+	return ordered, nil
+}
+
+func ar2ReadControlledFixtureComparisons(ctx context.Context, reader projectidentity.ComparisonReaderV3, ordered [len(ar2ControlledFixtureCallables)]projectidentity.CorrelationV3) (map[projectidentity.CorrelationV3]projectidentity.ComparisonObservationV3, error) {
+	requested := make(map[projectidentity.CorrelationV3]struct{}, len(ordered))
+	for _, correlation := range ordered {
+		requested[correlation] = struct{}{}
+	}
+	observations, err := reader.ReadComparisonsByCorrelationV3(ctx, ordered[:])
+	if err != nil {
+		return nil, fmt.Errorf("read controlled-fixture comparisons: %w", err)
+	}
+	if len(observations) != len(ordered) {
+		return nil, fmt.Errorf("controlled-fixture comparison readback is not exact")
+	}
+	byCorrelation := make(map[projectidentity.CorrelationV3]projectidentity.ComparisonObservationV3, len(observations))
+	for _, observation := range observations {
+		if err := ar2AddControlledFixtureObservation(byCorrelation, requested, observation); err != nil {
+			return nil, err
+		}
+	}
+	if len(byCorrelation) != len(requested) {
+		return nil, fmt.Errorf("missing persisted controlled-fixture comparison")
+	}
+	return byCorrelation, nil
+}
+
+func ar2AddControlledFixtureObservation(byCorrelation map[projectidentity.CorrelationV3]projectidentity.ComparisonObservationV3, requested map[projectidentity.CorrelationV3]struct{}, observation projectidentity.ComparisonObservationV3) error {
+	if !observation.ValidPersistedLegacyReadback() {
+		return fmt.Errorf("invalid persisted controlled-fixture comparison")
+	}
+	if _, ok := requested[observation.Correlation]; !ok {
+		return fmt.Errorf("unrequested persisted controlled-fixture comparison")
+	}
+	if _, duplicate := byCorrelation[observation.Correlation]; duplicate {
+		return fmt.Errorf("duplicate persisted controlled-fixture comparison")
+	}
+	byCorrelation[observation.Correlation] = observation
+	return nil
+}
+
+func ar2ControlledFixtureCoverage(ordered [len(ar2ControlledFixtureCallables)]projectidentity.CorrelationV3, observations map[projectidentity.CorrelationV3]projectidentity.ComparisonObservationV3) ([]AR2SupportedAdapter, []AR2CallableCoverage, error) {
+	adapters := make([]AR2SupportedAdapter, 0, len(ar2ControlledFixtureCallables))
+	coverage := make([]AR2CallableCoverage, 0, len(ar2ControlledFixtureCallables))
+	for index, spec := range ar2ControlledFixtureCallables {
+		observation, ok := observations[ordered[index]]
+		if !ok {
+			return nil, nil, fmt.Errorf("missing %s controlled-fixture comparison", spec.adapter)
+		}
+		counts, err := ar2CallableCoverage(spec, observation)
+		if err != nil {
+			return nil, nil, err
+		}
+		coverage = append(coverage, counts)
+		adapters = append(adapters, AR2SupportedAdapter{Adapter: spec.adapter, Callable: spec.callable, PhysicalChannel: spec.physicalChannel})
+	}
+	return adapters, coverage, nil
+}
+
+func ar2CallableCoverage(spec ar2CallableSpec, observation projectidentity.ComparisonObservationV3) (AR2CallableCoverage, error) {
+	counts := AR2CallableCoverage{Adapter: spec.adapter, Callable: spec.callable}
+	if err := ar2ClassifyCallableCoverage(&counts, observation.Classification(), spec.adapter); err != nil {
+		return AR2CallableCoverage{}, err
+	}
+	metric, err := operability.EvaluateMetric(operability.MetricInput{
+		Name:             "ar2-" + spec.adapter + "-comparison-coverage",
+		NumeratorName:    "classified_comparisons",
+		NumeratorValue:   1,
+		DenominatorName:  "controlled_fixture_callable_returns",
+		DenominatorValue: 1,
+		Scope:            ar2EvidenceScope,
+		Window:           AR2CompatibilityWindow,
+		Freshness:        "fixture_observation",
+		Source:           operability.DurableRecordSource,
+	})
+	if err != nil {
+		return AR2CallableCoverage{}, fmt.Errorf("%s coverage: %w", spec.adapter, err)
+	}
+	counts.Metric = metric
+	return counts, nil
+}
+
+func ar2ClassifyCallableCoverage(counts *AR2CallableCoverage, classification projectidentity.ComparisonClassV3, adapter string) error {
+	switch classification {
+	case projectidentity.ComparisonEqualV3:
+		counts.Equal = 1
+	case projectidentity.ComparisonMismatchV3:
+		counts.Mismatch = 1
+	case projectidentity.ComparisonRefusalV3:
+		counts.Refusal = 1
+	case projectidentity.ComparisonUnavailableV3:
+		counts.Unavailable = 1
+	default:
+		return fmt.Errorf("invalid %s controlled-fixture classification", adapter)
+	}
+	return nil
 }
 
 func validateAR2CandidateAttestation(attestation ar2CandidateAttestation) error {
