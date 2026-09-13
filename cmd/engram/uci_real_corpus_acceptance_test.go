@@ -774,350 +774,431 @@ type uciRealCorpusAcceptanceInput struct {
 	rerun                  uciRealCorpusRerunRecipe
 }
 
+type uciRealCorpusAcceptanceRuntime struct {
+	input              uciRealCorpusAcceptanceInput
+	root               string
+	semanticQuery      string
+	candidates         map[string]uciInstallHarnessCommand
+	candidateCommit    string
+	candidateTree      string
+	frozenManifest     uciRealCorpusFrozenManifest
+	presentSourceBytes uint64
+	parserBundleDigest string
+	worktrees          uciInstalledAcceptanceWorktreesFixture
+	authority          *uciInstalledAcceptanceAuthority
+	installation       *uciInstallHarnessInstallation
+	reservations       []*uciInstalledAcceptanceReservation
+	activeDaemonPID    int
+	parserPath         string
+	daemonPath         string
+	serverPort         int
+	clientEnvironment  []string
+	client             *uciInstalledAcceptanceMCPClient
+	selection          uciInstalledAcceptanceSelection
+}
+
+type uciRealCorpusInitialEvidence struct {
+	publication      uciInstalledAcceptancePublication
+	embedding        uciRealCorpusEmbeddingStatus
+	counts           uciRealCorpusCounts
+	composition      uciRealCorpusComposition
+	capacityRecovery uciRealCorpusCapacityRecovery
+}
+
+type uciRealCorpusChangedEvidence struct {
+	counts      uciRealCorpusCounts
+	semantic    uciRealCorpusSemantic
+	graph       uciRealCorpusGraph
+	nativeGraph uciRealCorpusNativeGraph
+	identity    uciRealCorpusIdentity
+}
+
 func runUCIRealCorpusInstalledAcceptance(ctx context.Context, input uciRealCorpusAcceptanceInput) (record uciRealCorpusRecord, retErr error) {
-	request := input.request
-	providerURL, providerModel, providerRef := input.providerURL, input.providerModel, input.providerRef
-	preprocessing, sourceTransferApproved, rerun := input.preprocessing, input.sourceTransferApproved, input.rerun
-	root, err := uciInstalledAcceptancePhysicalPath(request.CandidateSourceRoot)
+	runtime, err := newUCIRealCorpusAcceptanceRuntime(ctx, input)
 	if err != nil {
 		return record, err
 	}
+	defer runtime.recordFinalGitClean(&record, &retErr)
+	if err := runtime.freezeCorpus(ctx); err != nil {
+		return record, err
+	}
+	defer runtime.removeCanaries(&retErr)
+	defer runtime.cleanup(&retErr)
+	if err := runtime.start(ctx); err != nil {
+		return record, err
+	}
+	initial, err := runtime.captureInitialEvidence(ctx)
+	if err != nil {
+		return record, err
+	}
+	changed, err := runtime.captureChangedEvidence(ctx, initial)
+	if err != nil {
+		return record, err
+	}
+	return runtime.completeRecord(record, initial, changed)
+}
+
+func newUCIRealCorpusAcceptanceRuntime(ctx context.Context, input uciRealCorpusAcceptanceInput) (*uciRealCorpusAcceptanceRuntime, error) {
+	runtime := &uciRealCorpusAcceptanceRuntime{input: input}
+	root, err := uciInstalledAcceptancePhysicalPath(input.request.CandidateSourceRoot)
+	if err != nil {
+		return nil, err
+	}
+	runtime.root = root
 	semanticQuery, err := uciRealCorpusSemanticQuery()
 	if err != nil {
-		return record, err
+		return nil, err
 	}
-	if err := os.Mkdir(request.FixtureRoot, 0o700); err != nil {
-		return record, err
+	runtime.semanticQuery = semanticQuery
+	if err := os.Mkdir(input.request.FixtureRoot, 0o700); err != nil {
+		return nil, err
 	}
-	if err := os.Mkdir(request.LocalStateRoot, 0o700); err != nil {
-		return record, err
+	if err := os.Mkdir(input.request.LocalStateRoot, 0o700); err != nil {
+		return nil, err
 	}
-	candidates, err := uciBuildInstalledAcceptanceCandidates(ctx, root, filepath.Join(request.FixtureRoot, "candidate-build"))
+	candidates, err := uciBuildInstalledAcceptanceCandidates(ctx, root, filepath.Join(input.request.FixtureRoot, "candidate-build"))
 	if err != nil {
-		return record, err
+		return nil, err
 	}
+	runtime.candidates = candidates
 	candidateCommit, err := uciRealCorpusGitValue(ctx, root, "rev-parse", "HEAD")
 	if err != nil {
-		return record, err
+		return nil, err
 	}
 	candidateTree, err := uciRealCorpusGitValue(ctx, root, "rev-parse", "HEAD^{tree}")
 	if err != nil {
-		return record, err
+		return nil, err
 	}
-	anchorProjectID, err := uciRealCorpusAnchorProjectID(root)
-	if err != nil {
-		return record, err
-	}
-	defer func() {
-		clean, cleanErr := uciRealCorpusGitClean(root)
-		if cleanErr != nil {
-			retErr = errors.Join(retErr, cleanErr)
-			return
-		}
-		record.Pilot.FinalGitClean = clean
-	}()
-	if err := uciRealCorpusWriteCanaries(root); err != nil {
-		return record, err
-	}
-	defer func() {
-		if cleanupErr := uciRealCorpusRemoveCanaries(root); cleanupErr != nil {
-			retErr = errors.Join(retErr, cleanupErr)
-		}
-	}()
-	frozenManifest, err := uciFreezeRealCorpusManifest(ctx, root, semanticQuery)
-	if err != nil {
-		return record, err
-	}
-	presentSourceBytes, err := uciRealCorpusFrozenPresentSourceBytes(root, frozenManifest)
-	if err != nil {
-		return record, err
-	}
+	runtime.candidateCommit, runtime.candidateTree = candidateCommit, candidateTree
+	return runtime, nil
+}
 
-	parserBundleDigest := uciInstalledAcceptanceParserBundleDigest()
-	worktrees := uciInstalledAcceptanceWorktreesFixture{primaryRoot: root, linkedRoot: root, head: candidateCommit}
-	var authority *uciInstalledAcceptanceAuthority
-	var installation *uciInstallHarnessInstallation
-	var reservations []*uciInstalledAcceptanceReservation
-	activeDaemonPID := 0
-	defer func() {
-		stopErr := uciStopInstalledAcceptanceDaemon(filepath.Join(request.LocalStateRoot, "temp"), activeDaemonPID)
-		if stopErr != nil {
-			retErr = errors.Join(retErr, stopErr)
-		} else if activeDaemonPID > 0 {
-			if waitErr := uciWaitInstalledAcceptanceProcessExit(activeDaemonPID, 15*time.Second); waitErr != nil {
-				retErr = errors.Join(retErr, waitErr)
-			}
-		}
-		if installation != nil {
-			if closeErr := installation.Close(); closeErr != nil {
-				retErr = errors.Join(retErr, closeErr)
-			}
-		}
-		for _, reservation := range reservations {
-			if reservation != nil && reservation.listener != nil {
-				_ = reservation.listener.Close()
-			}
-		}
-		if authority != nil {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			retErr = errors.Join(retErr, authority.Close(cleanupCtx))
-			cancel()
-		}
-	}()
-
-	authority, err = uciPrepareInstalledAcceptanceAuthority(ctx, request.TestPostgresDSN, worktrees, parserBundleDigest, anchorProjectID)
+func (runtime *uciRealCorpusAcceptanceRuntime) recordFinalGitClean(record *uciRealCorpusRecord, retErr *error) {
+	clean, err := uciRealCorpusGitClean(runtime.root)
 	if err != nil {
-		return record, err
+		*retErr = errors.Join(*retErr, err)
+		return
 	}
-	if err := uciAssertInstalledAcceptanceNoProjection(ctx, authority); err != nil {
-		return record, err
+	record.Pilot.FinalGitClean = clean
+}
+
+func (runtime *uciRealCorpusAcceptanceRuntime) freezeCorpus(ctx context.Context) error {
+	if err := uciRealCorpusWriteCanaries(runtime.root); err != nil {
+		return err
 	}
+	frozenManifest, err := uciFreezeRealCorpusManifest(ctx, runtime.root, runtime.semanticQuery)
+	if err != nil {
+		return err
+	}
+	presentSourceBytes, err := uciRealCorpusFrozenPresentSourceBytes(runtime.root, frozenManifest)
+	if err != nil {
+		return err
+	}
+	runtime.frozenManifest, runtime.presentSourceBytes = frozenManifest, presentSourceBytes
+	return nil
+}
+
+func (runtime *uciRealCorpusAcceptanceRuntime) removeCanaries(retErr *error) {
+	if err := uciRealCorpusRemoveCanaries(runtime.root); err != nil {
+		*retErr = errors.Join(*retErr, err)
+	}
+}
+
+func (runtime *uciRealCorpusAcceptanceRuntime) cleanup(retErr *error) {
+	if stopErr := uciStopInstalledAcceptanceDaemon(filepath.Join(runtime.input.request.LocalStateRoot, "temp"), runtime.activeDaemonPID); stopErr != nil {
+		*retErr = errors.Join(*retErr, stopErr)
+	} else if runtime.activeDaemonPID > 0 {
+		if waitErr := uciWaitInstalledAcceptanceProcessExit(runtime.activeDaemonPID, 15*time.Second); waitErr != nil {
+			*retErr = errors.Join(*retErr, waitErr)
+		}
+	}
+	if runtime.installation != nil {
+		if closeErr := runtime.installation.Close(); closeErr != nil {
+			*retErr = errors.Join(*retErr, closeErr)
+		}
+	}
+	for _, reservation := range runtime.reservations {
+		if reservation != nil && reservation.listener != nil {
+			_ = reservation.listener.Close()
+		}
+	}
+	if runtime.authority != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		*retErr = errors.Join(*retErr, runtime.authority.Close(cleanupCtx))
+		cancel()
+	}
+}
+
+func (runtime *uciRealCorpusAcceptanceRuntime) start(ctx context.Context) error {
+	if err := runtime.prepareAuthority(ctx); err != nil {
+		return err
+	}
+	if err := runtime.materialize(ctx); err != nil {
+		return err
+	}
+	if err := runtime.startServer(ctx); err != nil {
+		return err
+	}
+	return runtime.startClient(ctx)
+}
+
+func (runtime *uciRealCorpusAcceptanceRuntime) prepareAuthority(ctx context.Context) error {
+	runtime.parserBundleDigest = uciInstalledAcceptanceParserBundleDigest()
+	anchorProjectID, err := uciRealCorpusAnchorProjectID(runtime.root)
+	if err != nil {
+		return err
+	}
+	runtime.worktrees = uciInstalledAcceptanceWorktreesFixture{primaryRoot: runtime.root, linkedRoot: runtime.root, head: runtime.candidateCommit}
+	authority, err := uciPrepareInstalledAcceptanceAuthority(ctx, runtime.input.request.TestPostgresDSN, runtime.worktrees, runtime.parserBundleDigest, anchorProjectID)
+	if err != nil {
+		return err
+	}
+	runtime.authority = authority
+	return uciAssertInstalledAcceptanceNoProjection(ctx, authority)
+}
+
+func (runtime *uciRealCorpusAcceptanceRuntime) materialize(ctx context.Context) error {
 	installResult, err := runUCIInstallHarness(ctx, uciInstallHarnessRequest{
-		Version:          request.InstallHarnessVersion,
+		Version:          runtime.input.request.InstallHarnessVersion,
 		Scenario:         uciInstallHarnessScenarioMaterialize,
-		InstallRoot:      request.InstallRoot,
-		Server:           candidates["server"],
-		Daemon:           candidates["daemon"],
-		Parser:           candidates["parser"],
-		ReadinessTimeout: request.ReadinessTimeout,
+		InstallRoot:      runtime.input.request.InstallRoot,
+		Server:           runtime.candidates["server"],
+		Daemon:           runtime.candidates["daemon"],
+		Parser:           runtime.candidates["parser"],
+		ReadinessTimeout: runtime.input.request.ReadinessTimeout,
 	})
 	if err != nil {
-		return record, err
+		return err
 	}
-	installation = installResult.Installation
-	if installation == nil {
-		return record, errors.New("real-corpus installation is unavailable")
+	runtime.installation = installResult.Installation
+	if runtime.installation == nil {
+		return errors.New("real-corpus installation is unavailable")
 	}
-	parserPath, err := installation.Executable("parser")
+	parserPath, err := runtime.installation.Executable("parser")
 	if err != nil {
-		return record, err
+		return err
 	}
-	daemonPath, err := installation.Executable("daemon")
+	daemonPath, err := runtime.installation.Executable("daemon")
 	if err != nil {
-		return record, err
+		return err
 	}
-	reservations, err = uciReserveInstalledAcceptanceLoopback(request.LoopbackHost, request.ReservedLoopbackPortCount)
+	runtime.parserPath, runtime.daemonPath = parserPath, daemonPath
+	return nil
+}
+
+func (runtime *uciRealCorpusAcceptanceRuntime) startServer(ctx context.Context) error {
+	reservations, err := uciReserveInstalledAcceptanceLoopback(runtime.input.request.LoopbackHost, runtime.input.request.ReservedLoopbackPortCount)
 	if err != nil {
-		return record, err
+		return err
 	}
-	serverPort := reservations[0].port
+	runtime.reservations = reservations
+	runtime.serverPort = reservations[0].port
 	if err := reservations[0].listener.Close(); err != nil {
-		return record, err
+		return err
 	}
 	reservations[0].listener = nil
-
-	serverEnvironment, clientEnvironment, err := uciInstalledAcceptanceEnvironment(request, authority, serverPort, parserBundleDigest, parserPath)
+	serverEnvironment, clientEnvironment, err := uciInstalledAcceptanceEnvironment(runtime.input.request, runtime.authority, runtime.serverPort, runtime.parserBundleDigest, runtime.parserPath)
 	if err != nil {
-		return record, err
+		return err
 	}
+	runtime.clientEnvironment = clientEnvironment
 	serverEnvironment = append(serverEnvironment,
-		uciRealCorpusEmbeddingURLEnv+"="+providerURL,
-		uciRealCorpusEmbeddingModelEnv+"="+providerModel,
+		uciRealCorpusEmbeddingURLEnv+"="+runtime.input.providerURL,
+		uciRealCorpusEmbeddingModelEnv+"="+runtime.input.providerModel,
 		uciRealCorpusEmbeddingAPIKeyEnv+"="+os.Getenv(uciRealCorpusEmbeddingAPIKeyEnv),
 	)
-	if _, err := installation.Start(ctx, uciInstalledHarnessLaunchRequest{Role: "server", Environment: serverEnvironment}); err != nil {
-		return record, err
+	if _, err := runtime.installation.Start(ctx, uciInstalledHarnessLaunchRequest{Role: "server", Environment: serverEnvironment}); err != nil {
+		return err
 	}
-	readinessCtx, cancelReadiness := context.WithTimeout(ctx, request.ReadinessTimeout)
-	err = uciWaitForInstalledAcceptanceLoopback(readinessCtx, request.LoopbackHost, serverPort)
-	cancelReadiness()
+	readinessCtx, cancel := context.WithTimeout(ctx, runtime.input.request.ReadinessTimeout)
+	err = uciWaitForInstalledAcceptanceLoopback(readinessCtx, runtime.input.request.LoopbackHost, runtime.serverPort)
+	cancel()
+	return err
+}
+
+func (runtime *uciRealCorpusAcceptanceRuntime) startClient(ctx context.Context) error {
+	process, err := runtime.installation.Start(ctx, uciInstalledHarnessLaunchRequest{Role: "daemon", WorkingDirectory: runtime.root, Environment: runtime.clientEnvironment, WithStdio: true})
 	if err != nil {
-		return record, err
+		return err
 	}
-	clientProcess, err := installation.Start(ctx, uciInstalledHarnessLaunchRequest{
-		Role:             "daemon",
-		WorkingDirectory: root,
-		Environment:      clientEnvironment,
-		WithStdio:        true,
-	})
+	client, err := newUCIInstalledAcceptanceMCPClient("real-corpus-client", process)
 	if err != nil {
-		return record, err
-	}
-	client, err := newUCIInstalledAcceptanceMCPClient("real-corpus-client", clientProcess)
-	if err != nil {
-		return record, err
+		return err
 	}
 	if err := client.InitializeAndList(ctx); err != nil {
-		return record, err
+		return err
 	}
 	if err := uciRequireInstalledAcceptanceTools(client.Transcript()); err != nil {
-		return record, err
+		return err
 	}
-	activeDaemonPID, err = uciWaitForInstalledAcceptanceDaemonPID(ctx, filepath.Join(request.LocalStateRoot, "temp"), daemonPath)
+	activeDaemonPID, err := uciWaitForInstalledAcceptanceDaemonPID(ctx, filepath.Join(runtime.input.request.LocalStateRoot, "temp"), runtime.daemonPath)
 	if err != nil {
-		return record, err
+		return err
 	}
-	selection, err := uciSelectInstalledAcceptanceCheckout(ctx, client, uciInstalledAcceptanceClientA, authority)
+	selection, err := uciSelectInstalledAcceptanceCheckout(ctx, client, uciInstalledAcceptanceClientA, runtime.authority)
 	if err != nil {
-		return record, err
+		return err
 	}
 	if selection.viewID != "" {
-		return record, errors.New("real-corpus checkout was not fresh before initial index")
+		return errors.New("real-corpus checkout was not fresh before initial index")
 	}
-	started, err := client.Tool(ctx, "codebase_index", map[string]any{"context_handle": selection.contextHandle, "root": root})
+	runtime.client, runtime.activeDaemonPID, runtime.selection = client, activeDaemonPID, selection
+	return nil
+}
+
+func (runtime *uciRealCorpusAcceptanceRuntime) captureInitialEvidence(ctx context.Context) (uciRealCorpusInitialEvidence, error) {
+	started, err := runtime.client.Tool(ctx, "codebase_index", map[string]any{"context_handle": runtime.selection.contextHandle, "root": runtime.root})
 	if err != nil {
-		return record, err
+		return uciRealCorpusInitialEvidence{}, err
 	}
 	var start struct {
 		Status string `json:"status"`
 		RunID  string `json:"run_id"`
 	}
 	if err := json.Unmarshal(started, &start); err != nil || start.Status != "started" || start.RunID == "" {
-		return record, errors.New("real-corpus codebase_index did not start")
+		return uciRealCorpusInitialEvidence{}, errors.New("real-corpus codebase_index did not start")
 	}
-	selection.runID = start.RunID
-	initialPublication, err := uciWaitForRealCorpusPublication(ctx, client, selection)
+	runtime.selection.runID = start.RunID
+	publication, err := uciWaitForRealCorpusPublication(ctx, runtime.client, runtime.selection)
 	if err != nil {
-		return record, err
+		return uciRealCorpusInitialEvidence{}, err
 	}
-	initialEmbedding, initialPublication, err := uciWaitForRealCorpusEmbeddings(ctx, client, selection, initialPublication)
+	embedding, publication, err := uciWaitForRealCorpusEmbeddings(ctx, runtime.client, runtime.selection, publication)
 	if err != nil {
-		return record, err
+		return uciRealCorpusInitialEvidence{}, err
 	}
-	if err := uciRealCorpusVerifyProviderProfile(ctx, authority, initialEmbedding, providerRef, providerModel, preprocessing); err != nil {
-		return record, err
+	if err := uciRealCorpusVerifyProviderProfile(ctx, runtime.authority, embedding, runtime.input.providerRef, runtime.input.providerModel, runtime.input.preprocessing); err != nil {
+		return uciRealCorpusInitialEvidence{}, err
 	}
-	initialCounts, err := uciRealCorpusCountsFor(ctx, authority, initialPublication, initialEmbedding)
+	counts, err := uciRealCorpusCountsFor(ctx, runtime.authority, publication, embedding)
 	if err != nil {
-		return record, err
+		return uciRealCorpusInitialEvidence{}, err
 	}
-	composition, err := uciVerifyRealCorpusComposition(ctx, authority, initialPublication, frozenManifest)
+	composition, err := uciVerifyRealCorpusComposition(ctx, runtime.authority, publication, runtime.frozenManifest)
 	if err != nil {
-		return record, err
+		return uciRealCorpusInitialEvidence{}, err
 	}
-	if composition.MembershipCount != uint64(initialCounts.Memberships) {
-		return record, errors.New("real-corpus exact composition and count receipt disagree")
+	if composition.MembershipCount != uint64(counts.Memberships) {
+		return uciRealCorpusInitialEvidence{}, errors.New("real-corpus exact composition and count receipt disagree")
 	}
-	if initialCounts.StagedParts < 0 || initialCounts.StagedPartBytes < 0 || uint64(initialCounts.StagedParts) != composition.Packing.ObservedPartCount || uint64(initialCounts.StagedPartBytes) != composition.Packing.ObservedTotalEncodedBytes {
-		return record, errors.New("real-corpus packed part receipt and count observation disagree")
+	if counts.StagedParts < 0 || counts.StagedPartBytes < 0 || uint64(counts.StagedParts) != composition.Packing.ObservedPartCount || uint64(counts.StagedPartBytes) != composition.Packing.ObservedTotalEncodedBytes {
+		return uciRealCorpusInitialEvidence{}, errors.New("real-corpus packed part receipt and count observation disagree")
 	}
-	capacityRecovery, err := uciVerifyRealCorpusCapacityRecovery(ctx, authority, initialPublication, composition)
+	capacityRecovery, err := uciVerifyRealCorpusCapacityRecovery(ctx, runtime.authority, publication, composition)
 	if err != nil {
-		return record, err
+		return uciRealCorpusInitialEvidence{}, err
 	}
+	return uciRealCorpusInitialEvidence{publication: publication, embedding: embedding, counts: counts, composition: composition, capacityRecovery: capacityRecovery}, nil
+}
 
-	semantic, err := uciRealCorpusSemanticProof(ctx, client, selection, initialPublication, root, semanticQuery)
+func (runtime *uciRealCorpusAcceptanceRuntime) captureChangedEvidence(ctx context.Context, initial uciRealCorpusInitialEvidence) (uciRealCorpusChangedEvidence, error) {
+	semantic, err := uciRealCorpusSemanticProof(ctx, runtime.client, runtime.selection, initial.publication, runtime.root, runtime.semanticQuery)
 	if err != nil {
-		return record, err
+		return uciRealCorpusChangedEvidence{}, err
 	}
-	initialEdge, err := uciRealCorpusCanaryEdge(ctx, authority, initialPublication, uciRealCorpusGoCallerPath, uciRealCorpusGoCalleePath)
+	initialEdge, err := uciRealCorpusCanaryEdge(ctx, runtime.authority, initial.publication, uciRealCorpusGoCallerPath, uciRealCorpusGoCalleePath)
 	if err != nil {
-		return record, err
+		return uciRealCorpusChangedEvidence{}, err
 	}
-	graph, err := uciRealCorpusGraphProof(ctx, client, selection, initialPublication, authority, initialEdge)
+	graph, err := uciRealCorpusGraphProof(ctx, runtime.client, runtime.selection, initial.publication, runtime.authority, initialEdge)
 	if err != nil {
-		return record, err
+		return uciRealCorpusChangedEvidence{}, err
 	}
-	nativeGraph, err := uciVerifyRealCorpusNativeGraph(ctx, authority, initialPublication)
+	nativeGraph, err := uciVerifyRealCorpusNativeGraph(ctx, runtime.authority, initial.publication)
 	if err != nil {
-		return record, err
+		return uciRealCorpusChangedEvidence{}, err
 	}
-
-	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(uciRealCorpusGoCalleePath)), []byte(uciRealCorpusChangedCallee), 0o600); err != nil {
-		return record, err
+	if err := os.WriteFile(filepath.Join(runtime.root, filepath.FromSlash(uciRealCorpusGoCalleePath)), []byte(uciRealCorpusChangedCallee), 0o600); err != nil {
+		return uciRealCorpusChangedEvidence{}, err
 	}
-	changedEmbedding, changedPublication, err := uciWaitForRealCorpusWatcherState(ctx, client, selection, initialPublication, "UCIRealCorpusCallee", uciRealCorpusGoCalleePath, true)
+	changedEmbedding, changedPublication, err := uciWaitForRealCorpusWatcherState(ctx, runtime.client, runtime.selection, initial.publication, "UCIRealCorpusCallee", uciRealCorpusGoCalleePath, true)
 	if err != nil {
-		return record, err
+		return uciRealCorpusChangedEvidence{}, err
 	}
-	changedCounts, err := uciRealCorpusCountsFor(ctx, authority, changedPublication, changedEmbedding)
+	counts, err := uciRealCorpusCountsFor(ctx, runtime.authority, changedPublication, changedEmbedding)
 	if err != nil {
-		return record, err
+		return uciRealCorpusChangedEvidence{}, err
 	}
-	changedEdge, err := uciRealCorpusCanaryEdge(ctx, authority, changedPublication, uciRealCorpusGoCallerPath, uciRealCorpusGoCalleePath)
+	changedEdge, err := uciRealCorpusCanaryEdge(ctx, runtime.authority, changedPublication, uciRealCorpusGoCallerPath, uciRealCorpusGoCalleePath)
 	if err != nil {
-		return record, err
+		return uciRealCorpusChangedEvidence{}, err
 	}
 	graph.CallerArtifactStable = initialEdge.SourceArtifact == changedEdge.SourceArtifact
 	graph.CalleeArtifactChanged = initialEdge.TargetArtifact != changedEdge.TargetArtifact
 	graph.ChangedTargetPublished = changedEdge.TargetSymbol == "func:UCIRealCorpusCallee"
 	graph.InitialTargetDigest = uciInstalledAcceptanceStringDigest(initialEdge.TargetArtifact)
 	graph.ChangedTargetDigest = uciInstalledAcceptanceStringDigest(changedEdge.TargetArtifact)
-	graph.InitialViewDigest = uciInstalledAcceptanceStringDigest(initialPublication.viewID)
+	graph.InitialViewDigest = uciInstalledAcceptanceStringDigest(initial.publication.viewID)
 	graph.ChangedViewDigest = uciInstalledAcceptanceStringDigest(changedPublication.viewID)
-	if !graph.CallerArtifactStable || !graph.CalleeArtifactChanged || !graph.ChangedTargetPublished || initialPublication.viewID == changedPublication.viewID {
-		return record, errors.New("real-corpus changed-callee invalidation did not publish the expected new target")
+	if !graph.CallerArtifactStable || !graph.CalleeArtifactChanged || !graph.ChangedTargetPublished || initial.publication.viewID == changedPublication.viewID {
+		return uciRealCorpusChangedEvidence{}, errors.New("real-corpus changed-callee invalidation did not publish the expected new target")
 	}
-	identity, err := uciRealCorpusBuildReceiptIdentity(initialPublication, changedPublication, changedEmbedding)
+	identity, err := uciRealCorpusBuildReceiptIdentity(initial.publication, changedPublication, changedEmbedding)
 	if err != nil {
-		return record, err
+		return uciRealCorpusChangedEvidence{}, err
 	}
+	return uciRealCorpusChangedEvidence{counts: counts, semantic: semantic, graph: graph, nativeGraph: nativeGraph, identity: identity}, nil
+}
 
+func (runtime *uciRealCorpusAcceptanceRuntime) completeRecord(record uciRealCorpusRecord, initial uciRealCorpusInitialEvidence, changed uciRealCorpusChangedEvidence) (uciRealCorpusRecord, error) {
 	record.SchemaVersion = uciRealCorpusRecordSchemaVersion
 	record.RecordedAt = time.Now().UTC().Format(time.RFC3339)
-	record.Candidate = uciRealCorpusCandidate{Commit: candidateCommit, Tree: candidateTree}
-	record.Identity = identity
-	record.Rerun = rerun
+	record.Candidate = uciRealCorpusCandidate{Commit: runtime.candidateCommit, Tree: runtime.candidateTree}
+	record.Identity = changed.identity
+	record.Rerun = runtime.input.rerun
 	record.Pilot.Source = "engram-production-scanner-corpus"
 	record.Pilot.CorpusDefinition = "tracked-and-nonignored-untracked"
-	record.Pilot.PresentSourceBytes = presentSourceBytes
-	record.Pilot.SizeSanity = initialCounts.Memberships >= 1000 && initialCounts.Artifacts >= 1000
-	record.Pilot.ExactComposition = composition.MembershipCount == composition.BaselineMembershipCount+composition.CanaryMembershipCount && composition.MembershipCount > 0
-	record.Pilot.FullScannerCorpus = record.Pilot.ExactComposition &&
-		composition.Packing.ObservedPartCount > 0 &&
-		composition.Packing.ObservedPartCount <= composition.Packing.ConfiguredMaxPartCount &&
-		composition.Packing.ObservedTotalEncodedBytes <= composition.Packing.ConfiguredMaxTotalBytes &&
-		composition.Packing.ObservedMaxEncodedPartBytes <= composition.Packing.ConfiguredMaxPartBytes
+	record.Pilot.PresentSourceBytes = runtime.presentSourceBytes
+	record.Pilot.SizeSanity = initial.counts.Memberships >= 1000 && initial.counts.Artifacts >= 1000
+	record.Pilot.ExactComposition = initial.composition.MembershipCount == initial.composition.BaselineMembershipCount+initial.composition.CanaryMembershipCount && initial.composition.MembershipCount > 0
+	record.Pilot.FullScannerCorpus = record.Pilot.ExactComposition && initial.composition.Packing.ObservedPartCount > 0 && initial.composition.Packing.ObservedPartCount <= initial.composition.Packing.ConfiguredMaxPartCount && initial.composition.Packing.ObservedTotalEncodedBytes <= initial.composition.Packing.ConfiguredMaxTotalBytes && initial.composition.Packing.ObservedMaxEncodedPartBytes <= initial.composition.Packing.ConfiguredMaxPartBytes
 	record.Pilot.IgnoredFilesIncluded = false
 	record.Pilot.InitialGitClean = true
-	record.Provider = uciRealCorpusProvider{
-		EndpointDigest:         uciInstalledAcceptanceStringDigest(providerURL),
-		ProviderRef:            providerRef,
-		Model:                  providerModel,
-		Dimension:              1536,
-		CandidatePageSize:      uci.DefaultEmbeddingWorkerLimits().CandidatePageSize,
-		ProviderBatchSize:      uci.DefaultEmbeddingWorkerLimits().ProviderBatchSize,
-		ProviderConcurrency:    uci.DefaultEmbeddingWorkerLimits().ProviderConcurrency,
-		PreprocessingRevision:  preprocessing,
-		CredentialRetained:     false,
-		SourceTransferApproved: sourceTransferApproved,
+	record.Provider = uciRealCorpusProvider{EndpointDigest: uciInstalledAcceptanceStringDigest(runtime.input.providerURL), ProviderRef: runtime.input.providerRef, Model: runtime.input.providerModel, Dimension: 1536, CandidatePageSize: uci.DefaultEmbeddingWorkerLimits().CandidatePageSize, ProviderBatchSize: uci.DefaultEmbeddingWorkerLimits().ProviderBatchSize, ProviderConcurrency: uci.DefaultEmbeddingWorkerLimits().ProviderConcurrency, PreprocessingRevision: runtime.input.preprocessing, CredentialRetained: false, SourceTransferApproved: runtime.input.sourceTransferApproved}
+	record.Initial, record.AfterChange = initial.counts, changed.counts
+	record.Semantic, record.Graph, record.Composition, record.CapacityRecovery, record.NativeGraph = changed.semantic, changed.graph, initial.composition, initial.capacityRecovery, changed.nativeGraph
+	if err := runtime.populateInstalledArtifactHashes(&record); err != nil {
+		return uciRealCorpusRecord{}, err
 	}
-	record.Initial = initialCounts
-	record.AfterChange = changedCounts
-	record.Semantic = semantic
-	record.Graph = graph
-	record.Composition = composition
-	record.CapacityRecovery = capacityRecovery
-	record.NativeGraph = nativeGraph
-	for role, destination := range map[string]*string{
-		"server": &record.Installed.ServerSHA256,
-		"daemon": &record.Installed.DaemonSHA256,
-		"parser": &record.Installed.ParserSHA256,
-	} {
-		candidateHash, hashErr := uciInstalledAcceptanceFileSHA256(candidates[role].Executable)
-		if hashErr != nil {
-			return record, hashErr
-		}
-		installedPath, pathErr := installation.Executable(role)
-		if pathErr != nil {
-			return record, pathErr
-		}
-		installedHash, hashErr := uciInstalledAcceptanceFileSHA256(installedPath)
-		if hashErr != nil {
-			return record, hashErr
-		}
-		if candidateHash != installedHash {
-			return record, fmt.Errorf("real-corpus installed %s artifact differs from candidate", role)
-		}
-		*destination = installedHash
-	}
-	record.Installed.StandardMCP = client.Transcript().UsedStdio
 	record.Scope.EvidenceRecordSecretsRetained = false
 	record.Scope.EvidenceRecordSourceBodiesRetained = false
 	record.Scope.EvidenceRecordPrivateLocatorsRetained = false
 	record.Scope.ProcessRestartProof = false
 	record.Scope.ProductionMutation = false
 	record.Scope.ReleaseClaim = false
-	if err := uciRealCorpusValidateEvidenceRecord(record, root, request.TestPostgresDSN, providerURL, os.Getenv(uciRealCorpusEmbeddingAPIKeyEnv)); err != nil {
-		return record, err
+	if err := uciRealCorpusValidateEvidenceRecord(record, runtime.root, runtime.input.request.TestPostgresDSN, runtime.input.providerURL, os.Getenv(uciRealCorpusEmbeddingAPIKeyEnv)); err != nil {
+		return uciRealCorpusRecord{}, err
 	}
 	if err := uciRealCorpusValidateRecordForWrite(record); err != nil {
-		return record, err
+		return uciRealCorpusRecord{}, err
 	}
 	if !record.Pilot.FullScannerCorpus || !record.Pilot.SizeSanity || !record.Pilot.ExactComposition || !record.Installed.StandardMCP || !record.CapacityRecovery.AllGuaranteesObserved || record.Scope.ProcessRestartProof {
-		return record, errors.New("real-corpus result did not prove exact production-scanner corpus, capacity recovery, and installed standard-MCP coverage within configured limits")
+		return uciRealCorpusRecord{}, errors.New("real-corpus result did not prove exact production-scanner corpus, capacity recovery, and installed standard-MCP coverage within configured limits")
 	}
 	return record, nil
+}
+
+func (runtime *uciRealCorpusAcceptanceRuntime) populateInstalledArtifactHashes(record *uciRealCorpusRecord) error {
+	for role, destination := range map[string]*string{"server": &record.Installed.ServerSHA256, "daemon": &record.Installed.DaemonSHA256, "parser": &record.Installed.ParserSHA256} {
+		candidateHash, err := uciInstalledAcceptanceFileSHA256(runtime.candidates[role].Executable)
+		if err != nil {
+			return err
+		}
+		installedPath, err := runtime.installation.Executable(role)
+		if err != nil {
+			return err
+		}
+		installedHash, err := uciInstalledAcceptanceFileSHA256(installedPath)
+		if err != nil {
+			return err
+		}
+		if candidateHash != installedHash {
+			return fmt.Errorf("real-corpus installed %s artifact differs from candidate", role)
+		}
+		*destination = installedHash
+	}
+	record.Installed.StandardMCP = runtime.client.Transcript().UsedStdio
+	return nil
 }
 
 func uciWaitForRealCorpusPublication(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection) (uciInstalledAcceptancePublication, error) {
