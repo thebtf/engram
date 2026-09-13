@@ -1357,38 +1357,37 @@ func NewIndexAdmissionArtifactFromJSONYAML(sourceID string, admissionProfile Ind
 	if err := indexAdmissionValidateArtifactCapacity(len(source), len(extracted.Definitions), len(extracted.References), len(extracted.Chunks), len(extracted.Diagnostics)); err != nil {
 		return IndexAdmissionArtifact{}, err
 	}
-	expectedProfile, err := JSONYAMLIndexAdmissionArtifactProfile(extractionProfile)
+	input, err := indexAdmissionJSONYAMLBuildInput(sourceID, admissionProfile, extractionProfile, source, extracted)
 	if err != nil {
 		return IndexAdmissionArtifact{}, err
 	}
+	return indexAdmissionBuildJSONYAMLArtifact(input, extracted)
+}
+
+func indexAdmissionJSONYAMLBuildInput(sourceID string, admissionProfile IndexAdmissionArtifactProfile, extractionProfile JSONYAMLExtractionProfile, source []byte, extracted JSONYAMLArtifact) (indexAdmissionArtifactBuildInput, error) {
+	expectedProfile, err := JSONYAMLIndexAdmissionArtifactProfile(extractionProfile)
+	if err != nil {
+		return indexAdmissionArtifactBuildInput{}, err
+	}
 	if !indexAdmissionStructuredProfileMatches(admissionProfile, expectedProfile) {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: JSON/YAML artifact profile does not match extraction policy")
+		return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: JSON/YAML artifact profile does not match extraction policy")
 	}
 	if extracted.Format != extractionProfile.Format {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: JSON/YAML artifact format does not match extraction policy")
+		return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: JSON/YAML artifact format does not match extraction policy")
 	}
 	if extracted.Text != string(source) {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: JSON/YAML artifact text does not match source bytes")
+		return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: JSON/YAML artifact text does not match source bytes")
 	}
 	contentDigest := indexAdmissionDigestBytes(source)
 	if extracted.Proof.ContentDigest != contentDigest {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: JSON/YAML artifact source digest mismatch")
+		return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: JSON/YAML artifact source digest mismatch")
 	}
-	if extracted.Proof.DefinitionCount != uint64(len(extracted.Definitions)) ||
-		extracted.Proof.ReferenceSiteCount != uint64(len(extracted.References)) ||
-		extracted.Proof.ChunkCount != uint64(len(extracted.Chunks)) {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: JSON/YAML artifact proof counts are invalid")
+	if extracted.Proof.DefinitionCount != uint64(len(extracted.Definitions)) || extracted.Proof.ReferenceSiteCount != uint64(len(extracted.References)) || extracted.Proof.ChunkCount != uint64(len(extracted.Chunks)) {
+		return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: JSON/YAML artifact proof counts are invalid")
 	}
-	status := IndexAdmissionArtifactPartial
-	switch extracted.Coverage {
-	case IndexCoverageComplete:
-		if len(extracted.Diagnostics) != 0 {
-			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: complete JSON/YAML artifact has diagnostics")
-		}
-		status = IndexAdmissionArtifactComplete
-	case IndexCoveragePartial:
-	default:
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: JSON/YAML extraction has unsupported coverage")
+	status, err := indexAdmissionStructuredStatus(extracted.Coverage, len(extracted.Diagnostics), "JSON/YAML")
+	if err != nil {
+		return indexAdmissionArtifactBuildInput{}, err
 	}
 	verified := jsonYAMLFinalizeArtifact(source, extractionProfile, JSONYAMLArtifact{
 		Coverage:    extracted.Coverage,
@@ -1400,37 +1399,81 @@ func NewIndexAdmissionArtifactFromJSONYAML(sourceID string, admissionProfile Ind
 		Diagnostics: append([]JSONYAMLDiagnostic(nil), extracted.Diagnostics...),
 	})
 	if verified.Proof != extracted.Proof {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: JSON/YAML artifact proof is invalid")
+		return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: JSON/YAML artifact proof is invalid")
 	}
 	artifactID, err := DeriveIndexAdmissionArtifactID(sourceID, contentDigest, admissionProfile)
 	if err != nil {
+		return indexAdmissionArtifactBuildInput{}, err
+	}
+	return indexAdmissionArtifactBuildInput{
+		artifactID:      artifactID,
+		contentDigest:   contentDigest,
+		profile:         admissionProfile,
+		status:          status,
+		source:          source,
+		definitionCount: len(extracted.Definitions),
+		referenceCount:  len(extracted.References),
+		chunkCount:      len(extracted.Chunks),
+		diagnosticCount: len(extracted.Diagnostics),
+	}, nil
+}
+
+func indexAdmissionStructuredStatus(coverage IndexCoverageState, diagnosticCount int, label string) (IndexAdmissionArtifactStatus, error) {
+	switch coverage {
+	case IndexCoverageComplete:
+		if diagnosticCount != 0 {
+			return "", fmt.Errorf("uci index admission: complete %s artifact has diagnostics", label)
+		}
+		return IndexAdmissionArtifactComplete, nil
+	case IndexCoveragePartial:
+		return IndexAdmissionArtifactPartial, nil
+	default:
+		return "", fmt.Errorf("uci index admission: %s extraction has unsupported coverage", label)
+	}
+}
+
+func indexAdmissionBuildJSONYAMLArtifact(input indexAdmissionArtifactBuildInput, extracted JSONYAMLArtifact) (IndexAdmissionArtifact, error) {
+	artifact := input.artifact()
+	artifact.Definitions = indexAdmissionJSONYAMLDefinitions(extracted.Definitions)
+	references, err := indexAdmissionJSONYAMLReferences(input.source, extracted.References)
+	if err != nil {
 		return IndexAdmissionArtifact{}, err
 	}
-	artifact := IndexAdmissionArtifact{
-		ArtifactID:    artifactID,
-		ContentDigest: contentDigest,
-		Profile:       admissionProfile,
-		Status:        status,
-		Body:          indexAdmissionCloneBytes(source),
-		Definitions:   make([]IndexAdmissionDefinition, 0, len(extracted.Definitions)),
-		References:    make([]IndexAdmissionReference, 0, len(extracted.References)),
-		Chunks:        make([]IndexAdmissionChunk, 0, len(extracted.Chunks)),
-		Diagnostics:   make([]IndexAdmissionDiagnostic, 0, len(extracted.Diagnostics)+1),
+	artifact.References = references
+	chunks, err := indexAdmissionJSONYAMLChunks(input.source, extracted.Chunks)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
 	}
-	for _, definition := range extracted.Definitions {
-		artifact.Definitions = append(artifact.Definitions, IndexAdmissionDefinition{
+	artifact.Chunks = chunks
+	artifact.Diagnostics = indexAdmissionJSONYAMLDiagnostics(extracted.Diagnostics)
+	artifact.Diagnostics, err = indexAdmissionAddPartialDiagnostic(artifact.Diagnostics, input.status, "JSON_YAML_PARTIAL_COVERAGE", "JSON/YAML extraction coverage is partial")
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	return indexAdmissionFinalizeArtifact(artifact)
+}
+
+func indexAdmissionJSONYAMLDefinitions(definitions []JSONYAMLDefinition) []IndexAdmissionDefinition {
+	converted := make([]IndexAdmissionDefinition, 0, len(definitions))
+	for _, definition := range definitions {
+		converted = append(converted, IndexAdmissionDefinition{
 			LocalSymbolKey: definition.SymbolKey,
 			Kind:           definition.Kind,
 			SymbolKey:      definition.SymbolKey,
 			Span:           definition.Span,
 		})
 	}
-	for _, reference := range extracted.References {
+	return converted
+}
+
+func indexAdmissionJSONYAMLReferences(source []byte, references []JSONYAMLReferenceSite) ([]IndexAdmissionReference, error) {
+	converted := make([]IndexAdmissionReference, 0, len(references))
+	for _, reference := range references {
 		rawTarget, err := indexAdmissionTextAtSpan(source, reference.Span)
 		if err != nil {
-			return IndexAdmissionArtifact{}, err
+			return nil, err
 		}
-		artifact.References = append(artifact.References, IndexAdmissionReference{
+		converted = append(converted, IndexAdmissionReference{
 			SiteKey:   reference.SymbolKey,
 			Kind:      reference.Kind,
 			SymbolKey: reference.SymbolKey,
@@ -1439,15 +1482,20 @@ func NewIndexAdmissionArtifactFromJSONYAML(sourceID string, admissionProfile Ind
 			Span:      reference.Span,
 		})
 	}
-	for index, chunk := range extracted.Chunks {
+	return converted, nil
+}
+
+func indexAdmissionJSONYAMLChunks(source []byte, chunks []JSONYAMLChunk) ([]IndexAdmissionChunk, error) {
+	converted := make([]IndexAdmissionChunk, 0, len(chunks))
+	for index, chunk := range chunks {
 		text, err := indexAdmissionTextAtSpan(source, chunk.Span)
 		if err != nil {
-			return IndexAdmissionArtifact{}, err
+			return nil, err
 		}
 		if chunk.Text != text || chunk.ContentDigest != indexAdmissionDigestBytes([]byte(text)) {
-			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: JSON/YAML source chunk does not match source bytes")
+			return nil, fmt.Errorf("uci index admission: JSON/YAML source chunk does not match source bytes")
 		}
-		artifact.Chunks = append(artifact.Chunks, IndexAdmissionChunk{
+		converted = append(converted, IndexAdmissionChunk{
 			Ordinal:       index,
 			Kind:          "source",
 			Span:          chunk.Span,
@@ -1455,37 +1503,29 @@ func NewIndexAdmissionArtifactFromJSONYAML(sourceID string, admissionProfile Ind
 			Text:          chunk.Text,
 		})
 	}
-	for _, diagnostic := range extracted.Diagnostics {
-		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
+	return converted, nil
+}
+
+func indexAdmissionJSONYAMLDiagnostics(diagnostics []JSONYAMLDiagnostic) []IndexAdmissionDiagnostic {
+	converted := make([]IndexAdmissionDiagnostic, 0, len(diagnostics)+1)
+	for _, diagnostic := range diagnostics {
+		converted = append(converted, IndexAdmissionDiagnostic{
 			Code:    diagnostic.Code,
 			Span:    diagnostic.Span,
 			Message: diagnostic.Message,
 		})
 	}
-	if status == IndexAdmissionArtifactPartial {
-		if len(artifact.Diagnostics) == indexAdmissionMaxDiagnosticsPerArtifact {
-			return IndexAdmissionArtifact{}, newIndexCapacityError(
-				IndexCapacityScopeArtifact,
-				IndexCapacityResourceDiagnostics,
-				uint64(len(artifact.Diagnostics)+1),
-				uint64(indexAdmissionMaxDiagnosticsPerArtifact),
-			)
-		}
-		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
-			Code:    "JSON_YAML_PARTIAL_COVERAGE",
-			Message: "JSON/YAML extraction coverage is partial",
-		})
+	return converted
+}
+
+func indexAdmissionAddPartialDiagnostic(diagnostics []IndexAdmissionDiagnostic, status IndexAdmissionArtifactStatus, code, message string) ([]IndexAdmissionDiagnostic, error) {
+	if status != IndexAdmissionArtifactPartial {
+		return diagnostics, nil
 	}
-	canonical, err := indexAdmissionCanonicalizeArtifact(artifact)
-	if err != nil {
-		return IndexAdmissionArtifact{}, err
+	if len(diagnostics) == indexAdmissionMaxDiagnosticsPerArtifact {
+		return nil, newIndexCapacityError(IndexCapacityScopeArtifact, IndexCapacityResourceDiagnostics, uint64(len(diagnostics)+1), uint64(indexAdmissionMaxDiagnosticsPerArtifact))
 	}
-	factsDigest, err := indexAdmissionArtifactFactsDigest(canonical)
-	if err != nil {
-		return IndexAdmissionArtifact{}, err
-	}
-	canonical.FactsDigest = factsDigest
-	return canonical, nil
+	return append(diagnostics, IndexAdmissionDiagnostic{Code: code, Message: message}), nil
 }
 
 // NewIndexAdmissionArtifactFromSQL converts verified SQL extraction evidence into one source-scoped generic admission artifact.
