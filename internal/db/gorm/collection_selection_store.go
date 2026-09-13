@@ -283,53 +283,74 @@ func (store *CollectionSelectionStore) load(ctx context.Context, scope Collectio
 	if err := store.requireDB("load"); err != nil {
 		return CollectionSelection{}, err
 	}
+	return store.loadCurrent(ctx, scope, token, frozenOnly)
+}
+
+func (store *CollectionSelectionStore) loadCurrent(ctx context.Context, scope CollectionSelectionScope, token string, frozenOnly bool) (CollectionSelection, error) {
 	var current CollectionSelection
 	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
-			collectionSelectionScopeWhere, scope.SubjectUserID, scope.SessionID, scope.Domain,
-		)
-		if frozenOnly {
-			query = query.Where("selection_token = ?", token)
+		record, found, err := loadCollectionSelectionRecord(tx, scope, token, frozenOnly)
+		if err != nil {
+			return err
 		}
-		var record CollectionSelectionRecord
-		lookup := query.First(&record)
-		if errors.Is(lookup.Error, gorm.ErrRecordNotFound) {
+		if !found {
 			if frozenOnly {
 				return ErrCollectionSelectionDenied
 			}
 			current = CollectionSelection{Kind: CollectionSelectionNone}
 			return nil
 		}
-		if lookup.Error != nil {
-			return fmt.Errorf("collection selection load: %w", lookup.Error)
+		if err := reconfirmCollectionSelection(tx, &record, scope); err != nil {
+			return err
 		}
-		if frozenOnly && record.Kind != CollectionSelectionFrozenFilter {
-			return ErrCollectionSelectionDenied
+		parsed, err := collectionSelectionFromRecord(record)
+		if err != nil {
+			return err
 		}
-
-		if reason, changed := collectionSelectionChangeReason(record, scope, time.Now().UTC()); changed && !record.ReconfirmationRequired {
-			record.ReconfirmationRequired = true
-			record.ReconfirmationReason = reason
-			record.SelectionVersion++
-			record.UpdatedAt = time.Now().UTC()
-			if err := tx.Save(&record).Error; err != nil {
-				return fmt.Errorf("collection selection invalidate: %w", err)
-			}
-		}
-		parsed, parseErr := collectionSelectionFromRecord(record)
-		if parseErr != nil {
-			return parseErr
-		}
-		current = parsed
-		if frozenOnly && current.ReconfirmationRequired {
+		if frozenOnly && parsed.ReconfirmationRequired {
 			return ErrCollectionSelectionReconfirmationRequired
 		}
+		current = parsed
 		return nil
 	})
 	if err != nil {
 		return CollectionSelection{}, err
 	}
 	return current, nil
+}
+
+func loadCollectionSelectionRecord(tx *gorm.DB, scope CollectionSelectionScope, token string, frozenOnly bool) (CollectionSelectionRecord, bool, error) {
+	query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(collectionSelectionScopeWhere, scope.SubjectUserID, scope.SessionID, scope.Domain)
+	if frozenOnly {
+		query = query.Where("selection_token = ?", token)
+	}
+	var record CollectionSelectionRecord
+	lookup := query.First(&record)
+	if errors.Is(lookup.Error, gorm.ErrRecordNotFound) {
+		return CollectionSelectionRecord{}, false, nil
+	}
+	if lookup.Error != nil {
+		return CollectionSelectionRecord{}, false, fmt.Errorf("collection selection load: %w", lookup.Error)
+	}
+	if frozenOnly && record.Kind != CollectionSelectionFrozenFilter {
+		return CollectionSelectionRecord{}, false, ErrCollectionSelectionDenied
+	}
+	return record, true, nil
+}
+
+func reconfirmCollectionSelection(tx *gorm.DB, record *CollectionSelectionRecord, scope CollectionSelectionScope) error {
+	reason, changed := collectionSelectionChangeReason(*record, scope, time.Now().UTC())
+	if !changed || record.ReconfirmationRequired {
+		return nil
+	}
+	record.ReconfirmationRequired = true
+	record.ReconfirmationReason = reason
+	record.SelectionVersion++
+	record.UpdatedAt = time.Now().UTC()
+	if err := tx.Save(record).Error; err != nil {
+		return fmt.Errorf("collection selection invalidate: %w", err)
+	}
+	return nil
 }
 
 func newCollectionSelectionRecord(scope CollectionSelectionScope, selection CollectionSelection, selectionID string, version int64, createdAt, now time.Time) (CollectionSelectionRecord, error) {
