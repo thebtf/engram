@@ -129,14 +129,15 @@ func TestCallTool_V3ResolvesBeforeHandlerWithoutV2Fallback(t *testing.T) {
 	}
 }
 
+type grpcV3ReadFilterCase struct {
+	name      string
+	toolName  string
+	arguments string
+	fields    []string
+}
+
 func TestCallTool_V3ReadFiltersAuthorizeBeforeDispatch(t *testing.T) {
-	const rawProject = "foreign-project-must-not-reach-handler"
-	for _, test := range []struct {
-		name      string
-		toolName  string
-		arguments string
-		fields    []string
-	}{
+	for _, test := range []grpcV3ReadFilterCase{
 		{name: "issues target", toolName: "issues", arguments: `{"action":"list","project":"foreign-project-must-not-reach-handler"}`, fields: []string{"project"}},
 		{name: "issues source", toolName: "issues", arguments: `{"action":"list","source_project":"foreign-project-must-not-reach-handler"}`, fields: []string{"source_project"}},
 		{name: "review metrics", toolName: "review_metrics.read", arguments: `{"project":"foreign-project-must-not-reach-handler"}`, fields: []string{"project"}},
@@ -147,39 +148,53 @@ func TestCallTool_V3ReadFiltersAuthorizeBeforeDispatch(t *testing.T) {
 		{name: "governance usefulness", toolName: "rule_governance_usefulness", arguments: `{"project":"foreign-project-must-not-reach-handler"}`, fields: []string{"project"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			steps := []string{}
-			var captured []byte
-			resolverCalls := 0
-			srv := &Server{handler: identityOrderHandler{steps: &steps, arguments: &captured}}
-			srv.identityResolverV3 = func(_ context.Context, _ *gormlib.DB, request projectidentity.ResolveProjectRequestV3) (projectidentity.ResolutionResultV3, error) {
-				resolverCalls++
-				if request.Intent != projectidentity.ReadFilterIntentV3 || request.ReadFilter == nil || request.ReadFilter.Authorization() == "" || request.ReadFilter.Correlation() != request.Correlation {
-					t.Fatalf("request=%#v", request)
-				}
-				return grpcV3Result(t, request.Intent, projectidentity.ProjectResolvedOutcomeV3)
-			}
-
-			response, err := srv.CallTool(context.Background(), &pb.CallToolRequest{ToolName: test.toolName, ProjectIdentityV3: grpcV3Identity(), ArgumentsJson: []byte(test.arguments)})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if response.CanonicalProject != grpcV3ProjectKey || resolverCalls != 1 || !reflect.DeepEqual(steps, []string{"handler"}) {
-				t.Fatalf("response=%#v resolver_calls=%d steps=%v", response, resolverCalls, steps)
-			}
-			if strings.Contains(string(captured), rawProject) {
-				t.Fatalf("handler received raw V3 filter: %s", captured)
-			}
-			var delivered map[string]json.RawMessage
-			if err := json.Unmarshal(captured, &delivered); err != nil {
-				t.Fatalf("decode handler args: %v", err)
-			}
-			for _, field := range test.fields {
-				var project string
-				if err := json.Unmarshal(delivered[field], &project); err != nil || project != grpcV3ProjectKey {
-					t.Fatalf("field %q=%q err=%v, want %q", field, project, err, grpcV3ProjectKey)
-				}
-			}
+			assertV3ReadFilterAuthorizedBeforeDispatch(t, test)
 		})
+	}
+}
+
+func assertV3ReadFilterAuthorizedBeforeDispatch(t *testing.T, test grpcV3ReadFilterCase) {
+	t.Helper()
+	steps := []string{}
+	var captured []byte
+	resolverCalls := 0
+	response, err := grpcV3ReadFilterServer(t, &steps, &captured, &resolverCalls).CallTool(context.Background(), &pb.CallToolRequest{ToolName: test.toolName, ProjectIdentityV3: grpcV3Identity(), ArgumentsJson: []byte(test.arguments)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.CanonicalProject != grpcV3ProjectKey || resolverCalls != 1 || !reflect.DeepEqual(steps, []string{"handler"}) {
+		t.Fatalf("response=%#v resolver_calls=%d steps=%v", response, resolverCalls, steps)
+	}
+	assertV3ReadFilterArguments(t, captured, test.fields)
+}
+
+func grpcV3ReadFilterServer(t *testing.T, steps *[]string, captured *[]byte, resolverCalls *int) *Server {
+	srv := &Server{handler: identityOrderHandler{steps: steps, arguments: captured}}
+	srv.identityResolverV3 = func(_ context.Context, _ *gormlib.DB, request projectidentity.ResolveProjectRequestV3) (projectidentity.ResolutionResultV3, error) {
+		(*resolverCalls)++
+		if request.Intent != projectidentity.ReadFilterIntentV3 || request.ReadFilter == nil || request.ReadFilter.Authorization() == "" || request.ReadFilter.Correlation() != request.Correlation {
+			t.Fatalf("request=%#v", request)
+		}
+		return grpcV3Result(t, request.Intent, projectidentity.ProjectResolvedOutcomeV3)
+	}
+	return srv
+}
+
+func assertV3ReadFilterArguments(t *testing.T, captured []byte, fields []string) {
+	t.Helper()
+	const rawProject = "foreign-project-must-not-reach-handler"
+	if strings.Contains(string(captured), rawProject) {
+		t.Fatalf("handler received raw V3 filter: %s", captured)
+	}
+	var delivered map[string]json.RawMessage
+	if err := json.Unmarshal(captured, &delivered); err != nil {
+		t.Fatalf("decode handler args: %v", err)
+	}
+	for _, field := range fields {
+		var project string
+		if err := json.Unmarshal(delivered[field], &project); err != nil || project != grpcV3ProjectKey {
+			t.Fatalf("field %q=%q err=%v, want %q", field, project, err, grpcV3ProjectKey)
+		}
 	}
 }
 
