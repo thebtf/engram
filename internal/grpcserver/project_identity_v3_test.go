@@ -617,25 +617,33 @@ func TestResolveProjectIdentityV3RecordsChannelValidatedOrigins(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			observer := &grpcComparisonObserverV3{outcome: projectidentity.LegacyComparisonResolvedV2}
 			store := &grpcComparisonStoreV3{}
-			srv := &Server{handler: identityOrderHandler{steps: &[]string{}}, comparisonObserverV3: observer, comparisonStoreV3: store}
-			srv.identityResolverV3 = func(_ context.Context, _ *gormlib.DB, request projectidentity.ResolveProjectRequestV3) (projectidentity.ResolutionResultV3, error) {
-				return grpcV3Result(t, request.Intent, projectidentity.ProjectResolvedOutcomeV3)
-			}
-
-			response, err := srv.Initialize(test.ctx, &pb.InitializeRequest{ProjectIdentityV3: grpcV3Identity()})
-			if err != nil || response.GetProjectResolutionV3().GetOutcome() != pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED {
-				t.Fatalf("response=%#v err=%v", response, err)
-			}
-			if !test.observed {
-				if observer.calls != 0 || len(store.observations) != 0 {
-					t.Fatalf("unsafe telemetry observer_calls=%d observations=%#v", observer.calls, store.observations)
-				}
-				return
-			}
-			if observer.calls != 1 || len(store.observations) != 1 || store.observations[0].Transport != test.transport {
-				t.Fatalf("transport=%q observer_calls=%d observations=%#v", test.transport, observer.calls, store.observations)
-			}
+			response, err := grpcV3ChannelObservationServer(t, observer, store).Initialize(test.ctx, &pb.InitializeRequest{ProjectIdentityV3: grpcV3Identity()})
+			assertV3ChannelObservation(t, response, err, observer, store, test.transport, test.observed)
 		})
+	}
+}
+
+func grpcV3ChannelObservationServer(t *testing.T, observer *grpcComparisonObserverV3, store *grpcComparisonStoreV3) *Server {
+	srv := &Server{handler: identityOrderHandler{steps: &[]string{}}, comparisonObserverV3: observer, comparisonStoreV3: store}
+	srv.identityResolverV3 = func(_ context.Context, _ *gormlib.DB, request projectidentity.ResolveProjectRequestV3) (projectidentity.ResolutionResultV3, error) {
+		return grpcV3Result(t, request.Intent, projectidentity.ProjectResolvedOutcomeV3)
+	}
+	return srv
+}
+
+func assertV3ChannelObservation(t *testing.T, response *pb.InitializeResponse, err error, observer *grpcComparisonObserverV3, store *grpcComparisonStoreV3, transport projectidentity.ComparisonTransportV3, observed bool) {
+	t.Helper()
+	if err != nil || response.GetProjectResolutionV3().GetOutcome() != pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if !observed {
+		if observer.calls != 0 || len(store.observations) != 0 {
+			t.Fatalf("unsafe telemetry observer_calls=%d observations=%#v", observer.calls, store.observations)
+		}
+		return
+	}
+	if observer.calls != 1 || len(store.observations) != 1 || store.observations[0].Transport != transport {
+		t.Fatalf("transport=%q observer_calls=%d observations=%#v", transport, observer.calls, store.observations)
 	}
 }
 
