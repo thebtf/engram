@@ -65,27 +65,10 @@ func (a *RuntimeAdvisor) Advise(ctx context.Context, input AdviseInput) (Decisio
 	if a == nil || ctx == nil || !input.binding.valid() || !input.binding.AllowsAdvise() || !input.occurrence.valid() {
 		return Decision{}, ErrInvalidInput
 	}
-
-	prepared, err := a.preparer.Prepare(ctx, taskmemory.PrepareRequest{
-		Project: input.ProjectEvidence(),
-		Task:    input.Occurrence().Facts().TaskFacts(),
-	})
-	if err != nil {
-		return a.unavailable(ctx, input, unavailableCodeForContext(ctx, UnavailableDependency))
+	prepared, epoch, axis, code, unavailable := a.prepareAdviceContext(ctx, input)
+	if unavailable {
+		return a.unavailable(ctx, input, code)
 	}
-
-	if !a.hasCommitAndResponseReserve(ctx) {
-		return a.unavailable(ctx, input, UnavailableDeadline)
-	}
-	epoch, current := a.keyProvider.Current()
-	if !current {
-		return a.unavailable(ctx, input, UnavailableDependency)
-	}
-	axis, err := NewReceiptAxis(epoch, input.binding, prepared.Context(), input.occurrence)
-	if err != nil {
-		return a.unavailable(ctx, input, UnavailableDependency)
-	}
-
 	winner, found, err := a.receipts.Lookup(ctx, axis)
 	if err != nil {
 		return a.unavailable(ctx, input, unavailableCodeForContext(ctx, UnavailableReceipt))
@@ -93,7 +76,32 @@ func (a *RuntimeAdvisor) Advise(ctx context.Context, input AdviseInput) (Decisio
 	if found {
 		return a.replay(ctx, input, epoch, axis, winner)
 	}
+	return a.adviseCandidates(ctx, input, epoch, axis, prepared)
+}
 
+func (a *RuntimeAdvisor) prepareAdviceContext(ctx context.Context, input AdviseInput) (taskmemory.PreparedTaskMemory, KeyEpoch, ReceiptAxis, UnavailableCode, bool) {
+	prepared, err := a.preparer.Prepare(ctx, taskmemory.PrepareRequest{
+		Project: input.ProjectEvidence(),
+		Task:    input.Occurrence().Facts().TaskFacts(),
+	})
+	if err != nil {
+		return taskmemory.PreparedTaskMemory{}, KeyEpoch{}, ReceiptAxis{}, unavailableCodeForContext(ctx, UnavailableDependency), true
+	}
+	if !a.hasCommitAndResponseReserve(ctx) {
+		return taskmemory.PreparedTaskMemory{}, KeyEpoch{}, ReceiptAxis{}, UnavailableDeadline, true
+	}
+	epoch, current := a.keyProvider.Current()
+	if !current {
+		return taskmemory.PreparedTaskMemory{}, KeyEpoch{}, ReceiptAxis{}, UnavailableDependency, true
+	}
+	axis, err := NewReceiptAxis(epoch, input.binding, prepared.Context(), input.occurrence)
+	if err != nil {
+		return taskmemory.PreparedTaskMemory{}, KeyEpoch{}, ReceiptAxis{}, UnavailableDependency, true
+	}
+	return prepared, epoch, axis, 0, false
+}
+
+func (a *RuntimeAdvisor) adviseCandidates(ctx context.Context, input AdviseInput, epoch KeyEpoch, axis ReceiptAxis, prepared taskmemory.PreparedTaskMemory) (Decision, error) {
 	candidates := prepared.Candidates()
 	if len(candidates) > taskmemory.MaxPreparedCandidates {
 		return a.unavailable(ctx, input, UnavailableDependency)
@@ -105,31 +113,40 @@ func (a *RuntimeAdvisor) Advise(ctx context.Context, input AdviseInput) (Decisio
 		return a.commitAbstention(ctx, input, epoch, axis, AbstentionNoCandidates, 0)
 	}
 	if a.materializer != nil {
-		for index, candidate := range candidates {
-			if !a.hasCommitAndResponseReserve(ctx) {
-				return a.unavailable(ctx, input, UnavailableDeadline)
-			}
-			materialized, found, err := a.materializer.Materialize(ctx, prepared.Context(), candidate)
-			if err != nil {
-				return a.unavailable(ctx, input, unavailableCodeForContext(ctx, UnavailableDependency))
-			}
-			if !found || !materialized.Valid() {
-				continue
-			}
-			reference := materialized.Reference()
-			if reference.ID() != candidate.ID() || reference.Version() != candidate.Version() || reference.SourceTier() != candidate.SourceTier() {
-				continue
-			}
-			return a.commitContextReference(ctx, input, epoch, axis, materialized, index+1)
-		}
-		if !a.hasCommitAndResponseReserve(ctx) {
-			return a.unavailable(ctx, input, UnavailableDeadline)
-		}
-		return a.commitAbstention(ctx, input, epoch, axis, AbstentionEvidenceInsufficient, len(candidates))
+		return a.adviseMaterializedCandidates(ctx, input, epoch, axis, prepared, candidates)
 	}
 	if a.policyReader == nil {
 		return a.unavailable(ctx, input, UnavailableDependency)
 	}
+	return a.advisePolicyCandidates(ctx, input, epoch, axis, prepared, candidates)
+}
+
+func (a *RuntimeAdvisor) adviseMaterializedCandidates(ctx context.Context, input AdviseInput, epoch KeyEpoch, axis ReceiptAxis, prepared taskmemory.PreparedTaskMemory, candidates []taskmemory.AuthorizedCandidateRef) (Decision, error) {
+	for index, candidate := range candidates {
+		if !a.hasCommitAndResponseReserve(ctx) {
+			return a.unavailable(ctx, input, UnavailableDeadline)
+		}
+		materialized, found, err := a.materializer.Materialize(ctx, prepared.Context(), candidate)
+		if err != nil {
+			return a.unavailable(ctx, input, unavailableCodeForContext(ctx, UnavailableDependency))
+		}
+		if !found || !materialized.Valid() || !sameMaterializedCandidate(materialized, candidate) {
+			continue
+		}
+		return a.commitContextReference(ctx, input, epoch, axis, materialized, index+1)
+	}
+	if !a.hasCommitAndResponseReserve(ctx) {
+		return a.unavailable(ctx, input, UnavailableDeadline)
+	}
+	return a.commitAbstention(ctx, input, epoch, axis, AbstentionEvidenceInsufficient, len(candidates))
+}
+
+func sameMaterializedCandidate(materialized taskmemory.MaterializedCandidate, candidate taskmemory.AuthorizedCandidateRef) bool {
+	reference := materialized.Reference()
+	return reference.ID() == candidate.ID() && reference.Version() == candidate.Version() && reference.SourceTier() == candidate.SourceTier()
+}
+
+func (a *RuntimeAdvisor) advisePolicyCandidates(ctx context.Context, input AdviseInput, epoch KeyEpoch, axis ReceiptAxis, prepared taskmemory.PreparedTaskMemory, candidates []taskmemory.AuthorizedCandidateRef) (Decision, error) {
 	if !a.hasCommitAndResponseReserve(ctx) {
 		return a.unavailable(ctx, input, UnavailableDeadline)
 	}
@@ -264,19 +281,10 @@ func reduceCandidatePolicyStates(epoch KeyEpoch, candidates []taskmemory.Authori
 	anyInsufficientOrMissing := false
 	for index, candidate := range candidates {
 		policy := policies[index]
-		ref := policy.Ref()
-		if ref.ID() != candidate.ID() || ref.Version() != candidate.Version() || ref.SourceTier() != candidate.SourceTier() {
+		if !sameCandidatePolicyReference(policy.Ref(), candidate) {
 			return 0, false
 		}
-		state := policy.State()
-		if state == CandidatePolicyValid || state == CandidatePolicyInsufficient {
-			scope, present := policy.CurrentScope()
-			currentCommitment, err := epoch.DerivePolicyScope(scope)
-			if !present || err != nil || !sameDigestConstantTime(currentCommitment, policy.ScopeCommitment()) {
-				state = CandidatePolicySourceStale
-			}
-		}
-		switch state {
+		switch currentCandidatePolicyState(epoch, policy) {
 		case CandidatePolicyValid:
 			anyValid = true
 		case CandidatePolicyInsufficient, CandidatePolicyMissing:
@@ -293,6 +301,23 @@ func reduceCandidatePolicyStates(epoch KeyEpoch, candidates []taskmemory.Authori
 		return AbstentionEvidenceInsufficient, true
 	}
 	return AbstentionEvidenceState, true
+}
+
+func sameCandidatePolicyReference(reference taskmemory.AuthorizedCandidateRef, candidate taskmemory.AuthorizedCandidateRef) bool {
+	return reference.ID() == candidate.ID() && reference.Version() == candidate.Version() && reference.SourceTier() == candidate.SourceTier()
+}
+
+func currentCandidatePolicyState(epoch KeyEpoch, policy CandidatePolicy) CandidatePolicyState {
+	state := policy.State()
+	if state != CandidatePolicyValid && state != CandidatePolicyInsufficient {
+		return state
+	}
+	scope, present := policy.CurrentScope()
+	currentCommitment, err := epoch.DerivePolicyScope(scope)
+	if !present || err != nil || !sameDigestConstantTime(currentCommitment, policy.ScopeCommitment()) {
+		return CandidatePolicySourceStale
+	}
+	return state
 }
 
 // Observe remains deliberately unavailable until migration 172 introduces the
