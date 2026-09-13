@@ -1564,38 +1564,54 @@ function functionBody(source, name) {
   return null;
 }
 
-function reachableSkipReasons(source, test) {
+function skipfPattern(template) {
+  const placeholders = /%(?:[-+ #0]*\d*(?:\.\d+)?[vTtbcdoOqxXUeEfFgGsp])/g;
+  const pieces = template.split(placeholders);
+  return new RegExp(pieces.map((piece) => piece.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*?"));
+}
+
+function reachableSkipMatchers(source, test) {
   const pending = [test];
   const visited = new Set();
-  const reasons = new Set();
+  const matchers = [];
   while (pending.length) {
     const name = pending.pop();
     if (visited.has(name)) continue;
     visited.add(name);
     const body = functionBody(source, name);
     if (!body) continue;
-    for (const match of body.matchAll(/t\.Skip(?:f)?\("([^"]+)"/g)) reasons.add(match[1]);
+    for (const match of body.matchAll(/\b[A-Za-z_]\w*\.Skip\("([^"]+)"/g)) {
+      matchers.push({ source_reason: match[1], matches: (reason) => reason.includes(match[1]) });
+    }
+    for (const match of body.matchAll(/\b[A-Za-z_]\w*\.Skipf\("([^"]+)"/g)) {
+      const pattern = skipfPattern(match[1]);
+      matchers.push({ source_reason: match[1], matches: (reason) => pattern.test(reason) });
+    }
     for (const match of body.matchAll(/\b([A-Za-z_]\w*)\s*\(/g)) {
       if (!visited.has(match[1]) && functionBody(source, match[1])) pending.push(match[1]);
     }
   }
-  return reasons;
+  return matchers;
 }
 
 function conditionalSkipObligation(profile, skipped, candidate) {
   if (profile.name !== "base" && !profile.baseUnit) return null;
   const packageSuffix = skipped.package.replace(/^.*?(?=\/internal\/|\/cmd\/|\/pkg\/)/, "");
+  const sources = [];
   for (const inventory of candidate.inventory || []) {
     const sourceDirectory = dirname(inventory.path).replaceAll("\\", "/");
     if (inventory.type !== "file" || !inventory.path.endsWith("_test.go")) continue;
     if (profile.unitDirectory ? sourceDirectory !== profile.unitDirectory : !packageSuffix.endsWith(`/${sourceDirectory}`)) continue;
     const sourcePath = join(candidate.repository_path, inventory.path);
     if (!existsSync(sourcePath) || shaFile(sourcePath) !== inventory.sha256) continue;
-    const source = readFileSync(sourcePath, "utf8");
-    const reason = [...reachableSkipReasons(source, skipped.test)].find((value) => skipped.reason.includes(value));
-    if (reason) return { kind: "conditional", package: skipped.package, test: skipped.test, source: inventory.path, source_sha256: inventory.sha256, reason };
+    sources.push({ inventory, source: readFileSync(sourcePath, "utf8") });
   }
-  return null;
+  const rootTest = skipped.test.split("/")[0];
+  const root = sources.find((item) => functionBody(item.source, rootTest));
+  if (!root) return null;
+  const matcher = reachableSkipMatchers(sources.map((item) => item.source).join("\n"), rootTest).find((item) => item.matches(skipped.reason));
+  if (!matcher) return null;
+  return { kind: "conditional", package: skipped.package, test: skipped.test, source: root.inventory.path, source_sha256: root.inventory.sha256, source_reason: matcher.source_reason, reason: skipped.reason };
 }
 
 function skipAdmission(profile, skipped, candidate) {

@@ -251,28 +251,33 @@ test("unit work plan and heartbeat expose exact phase and overall denominators",
   }
 });
 
-test("package unit accepts only source-bound conditional skips and records mandatory ownership", async () => {
+test("package unit admits retained-shaped source skips and rejects forged or unowned skips", async () => {
   const directory = temporaryDirectory();
   try {
-    const conditionalReason = "DATABASE_DSN not set, skipping installed acceptance";
-    const source = "cmd/engram/installed_test.go";
-    const sourceText = `func TestInstalledGate(t *testing.T) { t.Skip("${conditionalReason}") }`;
-    write(join(directory, source), sourceText);
-    const currentCandidate = { ...candidate(), repository_path: directory, inventory: [{ path: source, type: "file", sha256: sha256(sourceText) }] };
-    const conditionalProfile = { name: "base-race-installed", target: "example/cmd/engram", race: true, packageConcurrency: 1, baseUnit: true, unitPhase: "race", workPhase: "race", unitDirectory: "cmd/engram" };
-    const conditionalEvents = `{"Action":"output","Package":"example/cmd/engram","Test":"TestInstalledGate","Output":"${conditionalReason}"}\n{"Action":"skip","Package":"example/cmd/engram","Test":"TestInstalledGate"}\n{"Action":"pass","Package":"example/cmd/engram"}\n`;
-    const conditional = await runRaceUnit(directory, conditionalProfile, currentCandidate, [{ package: "example/cmd/engram", test: "TestInstalledGate" }], conditionalEvents);
-    assert.deepEqual(conditional.allowed_skip_obligations.map((item) => item.kind), ["conditional"]);
-    await assert.rejects(
-      runRaceUnit(directory, conditionalProfile, currentCandidate, [{ package: "example/cmd/engram", test: "TestInstalledGate" }], conditionalEvents.replace(conditionalReason, "forged skip reason")),
-      /unexpected skipped/,
-    );
-
-    const mandatoryProfile = { name: "base-race-gorm", target: "example/internal/db/gorm", race: true, packageConcurrency: 1, baseUnit: true, unitPhase: "race", workPhase: "race", unitDirectory: "internal/db/gorm" };
-    const mandatory = await runRaceUnit(directory, mandatoryProfile, { ...candidate(), repository_path: directory, inventory: [] }, [{ package: "example/internal/db/gorm", test: "TestUCI" }], '{"Action":"skip","Package":"example/internal/db/gorm","Test":"TestUCI"}\n{"Action":"pass","Package":"example/internal/db/gorm"}\n');
-    assert.equal(mandatory.allowed_skip_obligations[0].required_profile, "uci");
-    assert.throws(() => assertUnitDedicatedOwnership([mandatory], [{ name: "uci", status: "failed" }]), /without a passed dedicated uci profile/);
-    assert.doesNotThrow(() => assertUnitDedicatedOwnership([mandatory], [{ name: "uci", status: "passed" }]));
+    const sources = new Map([
+      ["cmd/engram/uci1_scenarios_test.go", "func TestUCI1Scenarios(t *testing.T) { uciInstalledAcceptanceConfiguredRequest(t) }"],
+      ["cmd/engram/uci_installed_acceptance_test.go", 'func uciInstalledAcceptanceConfiguredRequest(tb testing.TB) { tb.Skip("installed acceptance requires an explicit disposable PostgreSQL target") } func TestUCIInstalledStandardClientsKeepDirtyViewsIsolated(t *testing.T) { t.Skip("native Windows installed standard-client acceptance") }'],
+      ["cmd/engram/uci_real_corpus_acceptance_test.go", 'func TestUCIRealCorpusInstalledProviderLifecycle(t *testing.T) { t.Skip("real-corpus installed acceptance requires ENGRAM_UCI_REAL_CORPUS_ENABLED=1") }'],
+      ["cmd/engram/uci_watcher_slo_recorder_test.go", 'func TestUCIRecordInstalledWatcherSLO(t *testing.T) { t.Skipf("%s=1 is required to run the installed watcher recorder: %s", "ignored", "ignored") }'],
+    ]);
+    for (const [path, source] of sources) write(join(directory, path), source);
+    const currentCandidate = { ...candidate(), repository_path: directory, inventory: [...sources].map(([path, source]) => ({ path, type: "file", sha256: sha256(source) })) };
+    const profile = { name: "base-race-installed", target: "example/cmd/engram", race: true, packageConcurrency: 1, baseUnit: true, unitPhase: "race", workPhase: "race", unitDirectory: "cmd/engram" };
+    const packageName = "example/cmd/engram";
+    const expected = ["TestUCI1Scenarios", "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated", "TestUCIRealCorpusInstalledProviderLifecycle", "TestUCIRecordInstalledWatcherSLO"].map((test) => ({ package: packageName, test }));
+    const event = (action, test, output = null) => `${JSON.stringify({ Action: action, Package: packageName, ...(test ? { Test: test } : {}), ...(output ? { Output: output } : {}) })}\n`;
+    const events = [
+      event("output", "TestUCI1Scenarios", "uci1_scenarios_test.go:122: installed acceptance requires an explicit disposable PostgreSQL target\n"), event("skip", "TestUCI1Scenarios"),
+      event("output", "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated", "uci_installed_acceptance_test.go:127: installed acceptance requires an explicit disposable PostgreSQL target\n"), event("skip", "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated"),
+      event("output", "TestUCIRealCorpusInstalledProviderLifecycle", "uci_real_corpus_acceptance_test.go:315: real-corpus installed acceptance requires ENGRAM_UCI_REAL_CORPUS_ENABLED=1\n"), event("skip", "TestUCIRealCorpusInstalledProviderLifecycle"),
+      event("output", "TestUCIRecordInstalledWatcherSLO", "uci_watcher_slo_recorder_test.go:1112: ENGRAM_UCI_WATCHER_SLO_RECORD_ENABLED=1 is required to run the installed watcher recorder: go test ./cmd/engram\n"), event("skip", "TestUCIRecordInstalledWatcherSLO"), event("pass", null),
+    ].join("");
+    const admitted = await runRaceUnit(directory, profile, currentCandidate, expected, events);
+    assert.deepEqual(admitted.allowed_skip_obligations.map((item) => item.kind), ["conditional", undefined, "conditional", "conditional"]);
+    assert.equal(admitted.allowed_skip_obligations[1].required_profile, "uci-installed");
+    assert.throws(() => assertUnitDedicatedOwnership([admitted], [{ name: "uci-installed", status: "failed" }]), /without a passed dedicated uci-installed profile/);
+    assert.doesNotThrow(() => assertUnitDedicatedOwnership([admitted], [{ name: "uci-installed", status: "passed" }]));
+    await assert.rejects(runRaceUnit(directory, profile, currentCandidate, expected, events.replace("real-corpus installed acceptance requires ENGRAM_UCI_REAL_CORPUS_ENABLED=1", "forged skip reason")), /unexpected skipped/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
