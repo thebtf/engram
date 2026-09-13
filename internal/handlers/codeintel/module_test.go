@@ -627,28 +627,18 @@ func TestCodebaseIndex_NoViewBindingsUseDistinctScopeKeys(t *testing.T) {
 		require.Equal(t, "started", started["status"])
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	statusByHandle := map[string]string{}
-	sawRunningByHandle := map[string]bool{}
-	for time.Now().Before(deadline) {
-		for _, contextHandle := range []string{handleA, handleB} {
-			raw, err := h.CallToolWithProject(testTransportContext(p), p, "codebase_status", testStatusArgsForHandle(contextHandle))
-			if err != nil {
-				continue
-			}
-			var status map[string]any
-			if json.Unmarshal(raw, &status) == nil {
-				statusByHandle[contextHandle], _ = status["status"].(string)
-				if statusByHandle[contextHandle] == "running" {
-					sawRunningByHandle[contextHandle] = true
-				}
-			}
+	statusByHandle, sawRunningByHandle := awaitNoViewIndexStatuses([]string{handleA, handleB}, time.Now().Add(2*time.Second), func(contextHandle string) (string, error) {
+		raw, err := h.CallToolWithProject(testTransportContext(p), p, "codebase_status", testStatusArgsForHandle(contextHandle))
+		if err != nil {
+			return "", err
 		}
-		if statusByHandle[handleA] == "idle" && statusByHandle[handleB] == "idle" {
-			break
+		var status map[string]any
+		if err := json.Unmarshal(raw, &status); err != nil {
+			return "", err
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		value, _ := status["status"].(string)
+		return value, nil
+	})
 	require.Equal(t, "idle", statusByHandle[handleA])
 	require.Equal(t, "idle", statusByHandle[handleB])
 	require.True(t, sawRunningByHandle[handleA], "no-View liveness must expose running before completion")
@@ -660,6 +650,35 @@ func TestCodebaseIndex_NoViewBindingsUseDistinctScopeKeys(t *testing.T) {
 	require.Equal(t, 2, called, "no-View bindings with distinct scopes must not share liveness state")
 	_, proxyCalls := core.callCounts()
 	require.Zero(t, proxyCalls, "no-View status must remain locally observable without a View-dependent server proxy")
+}
+
+func awaitNoViewIndexStatuses(handles []string, deadline time.Time, observe func(string) (string, error)) (map[string]string, map[string]bool) {
+	statusByHandle := map[string]string{}
+	sawRunningByHandle := map[string]bool{}
+	for time.Now().Before(deadline) {
+		for _, contextHandle := range handles {
+			status, err := observe(contextHandle)
+			if err != nil {
+				continue
+			}
+			statusByHandle[contextHandle] = status
+			if status == "running" {
+				sawRunningByHandle[contextHandle] = true
+			}
+		}
+		allIdle := true
+		for _, contextHandle := range handles {
+			if statusByHandle[contextHandle] != "idle" {
+				allIdle = false
+				break
+			}
+		}
+		if allIdle {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return statusByHandle, sawRunningByHandle
 }
 
 func TestCodebaseStatusKeepsRunAcrossNoViewPublication(t *testing.T) {
