@@ -96,10 +96,25 @@ type uciRuntime struct {
 	registry                 *UCILocalRegistry
 	treeSitterParser         UCIPreparedTreeSitterParser
 	scannerAggregateObserver uciPreparedScannerAggregateObserver
-	authorizedTarget         map[string]uciRuntimeAuthorizedTarget
+	authorizedTarget         map[uciRuntimeAuthorizedTargetKey]uciRuntimeAuthorizedTarget
 
 	watcherMu sync.Mutex
 	watchers  map[string]uciRuntimeWatcher
+}
+
+type uciRuntimeAuthorizedTargetKey struct {
+	checkoutID      string
+	clientSessionID string
+	contextHandle   string
+}
+
+func uciRuntimeAuthorizedTargetKeyFor(target engramcore.ResolvedIndexTarget) uciRuntimeAuthorizedTargetKey {
+	binding := target.BindingClone()
+	return uciRuntimeAuthorizedTargetKey{
+		checkoutID:      binding.Scope.CheckoutID,
+		clientSessionID: target.ClientSessionID,
+		contextHandle:   target.ContextHandle,
+	}
 }
 
 type uciRuntimeAuthorizedTarget struct {
@@ -122,6 +137,7 @@ type uciRuntimeWatcherChangeSource struct {
 	checkoutID    string
 	incarnationID string
 	rootPath      string
+	targetKey     uciRuntimeAuthorizedTargetKey
 	changes       <-chan struct{}
 }
 
@@ -305,7 +321,7 @@ func newUCIRuntime(core *engramcore.Module, configuration UCIRuntimeConfig) (*uc
 		config:                   configuration,
 		treeSitterParser:         treeSitterParser,
 		scannerAggregateObserver: newUCIPreparedScannerAggregateObserverFromEnvironment(),
-		authorizedTarget:         make(map[string]uciRuntimeAuthorizedTarget),
+		authorizedTarget:         make(map[uciRuntimeAuthorizedTargetKey]uciRuntimeAuthorizedTarget),
 		watchers:                 make(map[string]uciRuntimeWatcher),
 	}, nil
 }
@@ -551,6 +567,14 @@ func (runtimeState *uciRuntime) Prepare(ctx context.Context, target engramcore.R
 	if err := binding.Validate(); err != nil {
 		return "", fmt.Errorf("uci runtime: server binding is invalid: %w", err)
 	}
+	targetKey := uciRuntimeAuthorizedTargetKeyFor(target)
+	if authorized, found := runtimeState.authorizedTarget[targetKey]; found &&
+		sameUCIRuntimeTargetIdentity(authorized.target, target) &&
+		uciRuntimeSamePath(selectedRoot, authorized.rootPath) &&
+		(uciRuntimeSamePath(requestedRoot, selectedRoot) || uciRuntimeSamePath(requestedRoot, authorized.rootPath)) {
+		return authorized.rootPath, nil
+	}
+
 	evidence, err := runtimeState.currentWorktreeEvidence(ctx, selectedRoot)
 	if err != nil {
 		return "", err
@@ -584,7 +608,7 @@ func (runtimeState *uciRuntime) Prepare(ctx context.Context, target engramcore.R
 	if err := runtimeState.ensureWatcher(ctx, runtimeState.registry, registration, evidence); err != nil {
 		return "", err
 	}
-	runtimeState.authorizedTarget[registration.CheckoutID] = uciRuntimeAuthorizedTarget{
+	runtimeState.authorizedTarget[targetKey] = uciRuntimeAuthorizedTarget{
 		target:        target.Clone(),
 		rootPath:      evidence.rootPath,
 		incarnationID: registration.IncarnationID,
@@ -645,8 +669,9 @@ func (runtimeState *uciRuntime) watcherChangeSource(target engramcore.ResolvedIn
 	if err := binding.Validate(); err != nil {
 		return uciRuntimeWatcherChangeSource{}, errors.New("uci runtime: server binding is invalid")
 	}
+	targetKey := uciRuntimeAuthorizedTargetKeyFor(target)
 	runtimeState.stateMu.RLock()
-	authorized, found := runtimeState.authorizedTarget[binding.Scope.CheckoutID]
+	authorized, found := runtimeState.authorizedTarget[targetKey]
 	available := runtimeState.started && !runtimeState.closed
 	runtimeState.stateMu.RUnlock()
 	if !available || !found || !sameUCIRuntimeTargetIdentity(authorized.target, target) {
@@ -663,16 +688,17 @@ func (runtimeState *uciRuntime) watcherChangeSource(target engramcore.ResolvedIn
 		checkoutID:    binding.Scope.CheckoutID,
 		incarnationID: authorized.incarnationID,
 		rootPath:      authorized.rootPath,
+		targetKey:     targetKey,
 		changes:       retained.watcher.Changes(),
 	}, nil
 }
 
 func (runtimeState *uciRuntime) watcherIndexSnapshot(source uciRuntimeWatcherChangeSource) (uciRuntimeIndexSnapshot, bool) {
-	if runtimeState == nil || source.checkoutID == "" || source.incarnationID == "" || source.rootPath == "" || source.changes == nil {
+	if runtimeState == nil || source.checkoutID == "" || source.incarnationID == "" || source.rootPath == "" || source.targetKey.clientSessionID == "" || source.targetKey.contextHandle == "" || source.changes == nil {
 		return uciRuntimeIndexSnapshot{}, false
 	}
 	runtimeState.stateMu.RLock()
-	authorized, found := runtimeState.authorizedTarget[source.checkoutID]
+	authorized, found := runtimeState.authorizedTarget[source.targetKey]
 	available := runtimeState.started && !runtimeState.closed
 	runtimeState.stateMu.RUnlock()
 	if !found || !available || authorized.incarnationID != source.incarnationID || authorized.rootPath != source.rootPath {
@@ -684,7 +710,7 @@ func (runtimeState *uciRuntime) watcherIndexSnapshot(source uciRuntimeWatcherCha
 	if !found || retained.incarnationID != source.incarnationID || retained.rootPath != source.rootPath || !uciRuntimeWatcherAlive(retained.watcher) || retained.watcher.Changes() != source.changes {
 		return uciRuntimeIndexSnapshot{}, false
 	}
-	return uciRuntimeIndexSnapshot{target: authorized.target.Clone(), rootPath: authorized.rootPath}, true
+	return uciRuntimeIndexSnapshot{target: authorized.target.Clone(), rootPath: source.rootPath}, true
 }
 
 func (runtimeState *uciRuntime) indexIntentTargets() []uciRuntimeIndexSnapshot {
@@ -713,12 +739,13 @@ func (runtimeState *uciRuntime) updateReboundTarget(target engramcore.ResolvedIn
 	}
 	runtimeState.stateMu.Lock()
 	defer runtimeState.stateMu.Unlock()
-	authorized, found := runtimeState.authorizedTarget[binding.Scope.CheckoutID]
+	targetKey := uciRuntimeAuthorizedTargetKeyFor(target)
+	authorized, found := runtimeState.authorizedTarget[targetKey]
 	if !found || !runtimeState.started || runtimeState.closed || !sameUCIRuntimeTargetIdentity(authorized.target, target) {
 		return errors.New("uci runtime: rebound target changed authorization")
 	}
 	authorized.target = target.Clone()
-	runtimeState.authorizedTarget[binding.Scope.CheckoutID] = authorized
+	runtimeState.authorizedTarget[targetKey] = authorized
 	return nil
 }
 
@@ -775,7 +802,7 @@ func (runtimeState *uciRuntime) Close(ctx context.Context) error {
 	db := runtimeState.db
 	runtimeState.db = nil
 	runtimeState.registry = nil
-	runtimeState.authorizedTarget = make(map[string]uciRuntimeAuthorizedTarget)
+	runtimeState.authorizedTarget = make(map[uciRuntimeAuthorizedTargetKey]uciRuntimeAuthorizedTarget)
 	runtimeState.stateMu.Unlock()
 
 	runtimeState.watcherMu.Lock()
