@@ -353,29 +353,49 @@ func (a *UCIIndexAdapter) PollIndexIntent(ctx context.Context, target ResolvedIn
 	if response == nil || response.GetOffer() == nil {
 		return nil, nil
 	}
-	offer := response.GetOffer()
-	var previous *uci.ContextRef
-	if wirePrevious := offer.GetPreviousContext(); wirePrevious != nil {
-		value := uciClientContextRefFromProto(wirePrevious)
-		if value.SourceID != target.Binding.Scope.SourceID || value.CheckoutID != target.Binding.Scope.CheckoutID || value.AnalysisProfileID != target.Binding.ProfileID {
-			return nil, errUCIClientInvalidResponse
-		}
-		previous = &value
+	return uciClientIndexIntentOffer(target, response.GetOffer())
+}
+
+func uciClientIndexIntentOffer(target ResolvedIndexTarget, offer *pb.CodeIndexIntentOffer) (*IndexIntentOffer, error) {
+	previous, err := uciClientIndexIntentPreviousContext(target, offer)
+	if err != nil {
+		return nil, err
 	}
 	state := uci.IndexIntentState(offer.GetState())
-	if !validUCIClientIdentifier(offer.GetIntentRef(), maxUCIClientIdentifierBytes) ||
-		(offer.GetKind() != string(uci.IndexIntentReindex) && offer.GetKind() != string(uci.IndexIntentReconcile)) ||
-		(state != uci.IndexIntentQueued && state != uci.IndexIntentAcknowledged && state != uci.IndexIntentRunning) {
+	if !uciClientValidIndexIntentOffer(offer, state) {
 		return nil, errUCIClientInvalidResponse
 	}
 	result := &IndexIntentOffer{IntentID: offer.GetIntentRef(), Kind: uci.IndexIntentKind(offer.GetKind()), PreviousView: previous, State: state, ClaimEpoch: int64(offer.GetOwnerEpoch())}
 	if offer.GetLeaseExpiresAt() != nil {
 		result.LeaseExpiresAt = offer.GetLeaseExpiresAt().AsTime().UTC()
 	}
-	if (state == uci.IndexIntentQueued && (result.ClaimEpoch != 0 || !result.LeaseExpiresAt.IsZero())) || (state != uci.IndexIntentQueued && (result.ClaimEpoch < 1 || result.LeaseExpiresAt.IsZero())) {
+	if !uciClientValidIndexIntentLease(state, result) {
 		return nil, errUCIClientInvalidResponse
 	}
 	return result, nil
+}
+
+func uciClientIndexIntentPreviousContext(target ResolvedIndexTarget, offer *pb.CodeIndexIntentOffer) (*uci.ContextRef, error) {
+	wirePrevious := offer.GetPreviousContext()
+	if wirePrevious == nil {
+		return nil, nil
+	}
+	value := uciClientContextRefFromProto(wirePrevious)
+	if value.SourceID != target.Binding.Scope.SourceID || value.CheckoutID != target.Binding.Scope.CheckoutID || value.AnalysisProfileID != target.Binding.ProfileID {
+		return nil, errUCIClientInvalidResponse
+	}
+	return &value, nil
+}
+
+func uciClientValidIndexIntentOffer(offer *pb.CodeIndexIntentOffer, state uci.IndexIntentState) bool {
+	return validUCIClientIdentifier(offer.GetIntentRef(), maxUCIClientIdentifierBytes) &&
+		(offer.GetKind() == string(uci.IndexIntentReindex) || offer.GetKind() == string(uci.IndexIntentReconcile)) &&
+		(state == uci.IndexIntentQueued || state == uci.IndexIntentAcknowledged || state == uci.IndexIntentRunning)
+}
+
+func uciClientValidIndexIntentLease(state uci.IndexIntentState, offer *IndexIntentOffer) bool {
+	return (state == uci.IndexIntentQueued && offer.ClaimEpoch == 0 && offer.LeaseExpiresAt.IsZero()) ||
+		(state != uci.IndexIntentQueued && offer.ClaimEpoch >= 1 && !offer.LeaseExpiresAt.IsZero())
 }
 
 func (a *UCIIndexAdapter) UpdateIndexIntent(ctx context.Context, target ResolvedIndexTarget, clientInstanceID, processNonce, intentID string, update uci.IndexIntentUpdate) (uci.IndexIntentUpdateResult, error) {

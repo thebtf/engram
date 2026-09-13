@@ -993,36 +993,41 @@ func newIndexRunID() (string, error) {
 }
 
 func (m *Module) launchIndexRun(request indexRunRequest, state *indexState, record *indexRunRecord) {
-	go func() {
-		var terminal *indexState
-		var cancel context.CancelFunc
-		var renewDone chan struct{}
-		if request.intent != nil {
-			request.runCtx, cancel = context.WithCancel(m.daemonIndexContext())
-			renewDone = make(chan struct{})
-			go m.renewIndexIntent(request.runCtx, request, cancel, renewDone)
+	go m.runIndexGoroutine(request, state, record)
+}
+
+func (m *Module) runIndexGoroutine(request indexRunRequest, state *indexState, record *indexRunRecord) {
+	var cancel context.CancelFunc
+	var renewDone chan struct{}
+	if request.intent != nil {
+		request.runCtx, cancel = context.WithCancel(m.daemonIndexContext())
+		renewDone = make(chan struct{})
+		go m.renewIndexIntent(request.runCtx, request, cancel, renewDone)
+	}
+	terminal := m.executeIndexRunSafely(request, state)
+	if cancel != nil {
+		cancel()
+		<-renewDone
+	}
+	if terminal.Status == statusError {
+		m.failIndexIntent(request)
+	}
+	m.completeIndexRun(request, terminal, record)
+}
+
+func (m *Module) executeIndexRunSafely(request indexRunRequest, state *indexState) (terminal *indexState) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if logger := m.deps.Logger; logger != nil {
+				logger.Error("codeintel: index goroutine panicked", "client_session_id", request.target.ClientSessionID, "context_handle", request.target.ContextHandle, "run_id", state.RunID, "panic", fmt.Sprintf("%v", recovered), "stack", string(debug.Stack()))
+			}
+			terminal = m.failedIndexState(request, state, fmt.Errorf("panic: %v", recovered))
 		}
-		defer func() {
-			if cancel != nil {
-				cancel()
-				<-renewDone
-			}
-			if recovered := recover(); recovered != nil {
-				if logger := m.deps.Logger; logger != nil {
-					logger.Error("codeintel: index goroutine panicked", "client_session_id", request.target.ClientSessionID, "context_handle", request.target.ContextHandle, "run_id", state.RunID, "panic", fmt.Sprintf("%v", recovered), "stack", string(debug.Stack()))
-				}
-				terminal = m.failedIndexState(request, state, fmt.Errorf("panic: %v", recovered))
-			}
-			if terminal == nil {
-				terminal = m.failedIndexState(request, state, fmt.Errorf("index execution did not complete"))
-			}
-			if terminal.Status == statusError {
-				m.failIndexIntent(request)
-			}
-			m.completeIndexRun(request, terminal, record)
-		}()
-		terminal = m.executeIndexRun(request, state)
+		if terminal == nil {
+			terminal = m.failedIndexState(request, state, fmt.Errorf("index execution did not complete"))
+		}
 	}()
+	return m.executeIndexRun(request, state)
 }
 
 func (m *Module) executeIndexRun(request indexRunRequest, state *indexState) *indexState {
