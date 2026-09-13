@@ -484,64 +484,9 @@ func (row interventionReceiptRow) receipt() (intervention.Receipt, error) {
 		closedReason = &reason
 	}
 
-	selectionPresent := row.SelectedMemoryID.Valid ||
-		row.SelectedMemoryVersion.Valid ||
-		row.SelectedSourceProject.Valid ||
-		row.SelectedSourceTier.Valid ||
-		row.SelectedPolicyID != nil ||
-		row.SelectedSnapshotID.Valid ||
-		row.SelectedSnapshotVersion.Valid ||
-		row.SelectedTextDigest != nil
-	var selection *intervention.ReceiptSelectionRecord
-	if selectionPresent {
-		if !row.SelectedMemoryID.Valid || !row.SelectedMemoryVersion.Valid || row.SelectedTextDigest == nil {
-			return intervention.Receipt{}, fmt.Errorf("persisted intervention receipt has a partial selected reference")
-		}
-		memoryVersion, err := interventionReceiptMemoryVersion(row.SelectedMemoryVersion.Int64)
-		if err != nil {
-			return intervention.Receipt{}, err
-		}
-		textDigest, err := interventionReceiptDigestFromBytes("selected_text_digest", row.SelectedTextDigest)
-		if err != nil {
-			return intervention.Receipt{}, err
-		}
-
-		var parsed intervention.ReceiptSelectionRecord
-		switch decisionMode {
-		case intervention.ReceiptDecisionModeContextReference:
-			if !row.SelectedSourceProject.Valid || !row.SelectedSourceTier.Valid || row.SelectedPolicyID != nil || row.SelectedSnapshotID.Valid || row.SelectedSnapshotVersion.Valid {
-				return intervention.Receipt{}, fmt.Errorf("persisted context reference receipt has a mixed selected reference")
-			}
-			parsed, err = intervention.NewContextReferenceReceiptSelection(
-				row.SelectedMemoryID.Int64,
-				memoryVersion,
-				row.SelectedSourceProject.String,
-				intervention.CandidateTier(row.SelectedSourceTier.Int64),
-				intervention.Digest(textDigest),
-			)
-		case intervention.ReceiptDecisionModeEligible, intervention.ReceiptDecisionModeCanary:
-			if row.SelectedSourceProject.Valid || row.SelectedSourceTier.Valid || row.SelectedPolicyID == nil || !row.SelectedSnapshotID.Valid || !row.SelectedSnapshotVersion.Valid {
-				return intervention.Receipt{}, fmt.Errorf("persisted learned intervention receipt has a mixed selected reference")
-			}
-			policyID, err := interventionReceiptDigestFromBytes("selected_policy_id", row.SelectedPolicyID)
-			if err != nil {
-				return intervention.Receipt{}, err
-			}
-			parsed, err = intervention.NewLearnedInterventionReceiptSelection(
-				row.SelectedMemoryID.Int64,
-				memoryVersion,
-				intervention.Digest(policyID),
-				row.SelectedSnapshotID.String,
-				row.SelectedSnapshotVersion.Int64,
-				intervention.Digest(textDigest),
-			)
-		default:
-			return intervention.Receipt{}, fmt.Errorf("persisted intervention receipt has a selected reference for a non-emitted mode")
-		}
-		if err != nil {
-			return intervention.Receipt{}, fmt.Errorf("restore persisted intervention receipt selection: %w", err)
-		}
-		selection = &parsed
+	selection, err := row.selection(decisionMode)
+	if err != nil {
+		return intervention.Receipt{}, err
 	}
 
 	return intervention.RestoreUnverifiedReceipt(intervention.ReceiptPersistenceRecord{
@@ -569,6 +514,66 @@ func (row interventionReceiptRow) receipt() (intervention.Receipt, error) {
 		CreatedAt:            row.CreatedAt,
 		ExpiresAt:            row.ExpiresAt,
 	})
+}
+
+func (row interventionReceiptRow) selection(decisionMode intervention.ReceiptDecisionMode) (*intervention.ReceiptSelectionRecord, error) {
+	if !row.hasSelectedReference() {
+		return nil, nil
+	}
+	memoryVersion, textDigest, err := row.selectionParts()
+	if err != nil {
+		return nil, err
+	}
+	var selection intervention.ReceiptSelectionRecord
+	switch decisionMode {
+	case intervention.ReceiptDecisionModeContextReference:
+		selection, err = row.contextReferenceSelection(memoryVersion, textDigest)
+	case intervention.ReceiptDecisionModeEligible, intervention.ReceiptDecisionModeCanary:
+		selection, err = row.learnedInterventionSelection(memoryVersion, textDigest)
+	default:
+		return nil, fmt.Errorf("persisted intervention receipt has a selected reference for a non-emitted mode")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("restore persisted intervention receipt selection: %w", err)
+	}
+	return &selection, nil
+}
+
+func (row interventionReceiptRow) hasSelectedReference() bool {
+	return row.SelectedMemoryID.Valid || row.SelectedMemoryVersion.Valid || row.SelectedSourceProject.Valid || row.SelectedSourceTier.Valid || row.SelectedPolicyID != nil || row.SelectedSnapshotID.Valid || row.SelectedSnapshotVersion.Valid || row.SelectedTextDigest != nil
+}
+
+func (row interventionReceiptRow) selectionParts() (int, intervention.Digest, error) {
+	if !row.SelectedMemoryID.Valid || !row.SelectedMemoryVersion.Valid || row.SelectedTextDigest == nil {
+		return 0, intervention.Digest{}, fmt.Errorf("persisted intervention receipt has a partial selected reference")
+	}
+	memoryVersion, err := interventionReceiptMemoryVersion(row.SelectedMemoryVersion.Int64)
+	if err != nil {
+		return 0, intervention.Digest{}, err
+	}
+	textDigest, err := interventionReceiptDigestFromBytes("selected_text_digest", row.SelectedTextDigest)
+	if err != nil {
+		return 0, intervention.Digest{}, err
+	}
+	return memoryVersion, intervention.Digest(textDigest), nil
+}
+
+func (row interventionReceiptRow) contextReferenceSelection(memoryVersion int, textDigest intervention.Digest) (intervention.ReceiptSelectionRecord, error) {
+	if !row.SelectedSourceProject.Valid || !row.SelectedSourceTier.Valid || row.SelectedPolicyID != nil || row.SelectedSnapshotID.Valid || row.SelectedSnapshotVersion.Valid {
+		return intervention.ReceiptSelectionRecord{}, fmt.Errorf("persisted context reference receipt has a mixed selected reference")
+	}
+	return intervention.NewContextReferenceReceiptSelection(row.SelectedMemoryID.Int64, memoryVersion, row.SelectedSourceProject.String, intervention.CandidateTier(row.SelectedSourceTier.Int64), textDigest)
+}
+
+func (row interventionReceiptRow) learnedInterventionSelection(memoryVersion int, textDigest intervention.Digest) (intervention.ReceiptSelectionRecord, error) {
+	if row.SelectedSourceProject.Valid || row.SelectedSourceTier.Valid || row.SelectedPolicyID == nil || !row.SelectedSnapshotID.Valid || !row.SelectedSnapshotVersion.Valid {
+		return intervention.ReceiptSelectionRecord{}, fmt.Errorf("persisted learned intervention receipt has a mixed selected reference")
+	}
+	policyID, err := interventionReceiptDigestFromBytes("selected_policy_id", row.SelectedPolicyID)
+	if err != nil {
+		return intervention.ReceiptSelectionRecord{}, err
+	}
+	return intervention.NewLearnedInterventionReceiptSelection(row.SelectedMemoryID.Int64, memoryVersion, intervention.Digest(policyID), row.SelectedSnapshotID.String, row.SelectedSnapshotVersion.Int64, textDigest)
 }
 
 func interventionReceiptMemoryVersion(value int64) (int, error) {
