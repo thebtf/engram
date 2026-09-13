@@ -3493,17 +3493,18 @@ func (fault *uciInstalledAcceptanceExposureFault) Close() error {
 	return errors.Join(triggerErr, functionErr)
 }
 
-func uciExerciseInstalledAcceptanceRecorder(
-	ctx context.Context,
-	client *uciInstalledAcceptanceMCPClient,
-	selection uciInstalledAcceptanceSelection,
-	authority *uciInstalledAcceptanceAuthority,
-	mismatchQuery string,
-	result *uciInstalledAcceptanceResult,
-) (retErr error) {
+type uciInstalledAcceptanceRecorderInput struct {
+	client    *uciInstalledAcceptanceMCPClient
+	selection uciInstalledAcceptanceSelection
+	authority *uciInstalledAcceptanceAuthority
+	result    *uciInstalledAcceptanceResult
+}
+
+func uciExerciseInstalledAcceptanceRecorder(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection, authority *uciInstalledAcceptanceAuthority, mismatchQuery string, result *uciInstalledAcceptanceResult) (retErr error) {
 	if client == nil || selection.contextHandle == "" || mismatchQuery == "" || result == nil {
 		return errors.New("installed acceptance recorder matrix is incomplete")
 	}
+	input := uciInstalledAcceptanceRecorderInput{client: client, selection: selection, authority: authority, result: result}
 	beforeUnavailable, err := uciInstalledAcceptanceExposureCount(ctx, authority)
 	if err != nil {
 		return err
@@ -3515,118 +3516,133 @@ func uciExerciseInstalledAcceptanceRecorder(
 	defer func() {
 		retErr = errors.Join(retErr, fault.Close())
 	}()
-
-	unavailable, err := client.ToolWithCall(ctx, "codebase_search", uciInstalledAcceptanceSearchArguments(selection.contextHandle, "recorder-unavailable"))
+	afterUnavailable, err := uciExerciseInstalledAcceptanceRecorderFailure(ctx, input, beforeUnavailable)
 	if err != nil {
 		return err
-	}
-	if unavailable.isError {
-		return errors.New("installed standard MCP recorder failure returned a protocol-level tool error")
-	}
-	result.Recorder.InitialUnavailable, err = uciDecodeInstalledAcceptanceClosedOutcome(unavailable.payload)
-	if err != nil {
-		return fmt.Errorf("decode initial exposure-unavailable response: %w", err)
-	}
-	if result.Recorder.InitialUnavailable.Status != "unavailable" || result.Recorder.InitialUnavailable.ErrorCode != "EXPOSURE_UNAVAILABLE" {
-		return errors.New("installed standard MCP recorder failure did not return EXPOSURE_UNAVAILABLE")
-	}
-	afterUnavailable, err := uciInstalledAcceptanceExposureCount(ctx, authority)
-	if err != nil {
-		return err
-	}
-	if afterUnavailable != beforeUnavailable {
-		return errors.New("installed standard MCP recorder failure appended UCI exposure evidence")
-	}
-	statusAfterUnavailable, err := uciInstalledAcceptanceStatusForSelection(ctx, client, selection)
-	if err != nil {
-		return err
-	}
-	result.Recorder.HealthAfterInitialUnavailable = statusAfterUnavailable.evidenceRecorder.state
-	if statusAfterUnavailable.evidenceRecorder.state != "unavailable" || statusAfterUnavailable.evidenceRecorder.lastFailureCode != "EXPOSURE_UNAVAILABLE" {
-		return errors.New("installed standard MCP recorder failure did not make health unavailable")
 	}
 	if err := fault.Close(); err != nil {
 		return err
 	}
-
-	first, err := client.ToolWithCall(ctx, "codebase_search", uciInstalledAcceptanceSearchArguments(selection.contextHandle, "recorder-exact-retry"))
+	first, afterRetry, err := uciExerciseInstalledAcceptanceRecorderRetry(ctx, input, afterUnavailable)
 	if err != nil {
 		return err
 	}
+	return uciExerciseInstalledAcceptanceRecorderMismatch(ctx, input, first, afterRetry, mismatchQuery)
+}
+
+func uciExerciseInstalledAcceptanceRecorderFailure(ctx context.Context, input uciInstalledAcceptanceRecorderInput, beforeUnavailable int64) (int64, error) {
+	unavailable, err := input.client.ToolWithCall(ctx, "codebase_search", uciInstalledAcceptanceSearchArguments(input.selection.contextHandle, "recorder-unavailable"))
+	if err != nil {
+		return 0, err
+	}
+	if unavailable.isError {
+		return 0, errors.New("installed standard MCP recorder failure returned a protocol-level tool error")
+	}
+	input.result.Recorder.InitialUnavailable, err = uciDecodeInstalledAcceptanceClosedOutcome(unavailable.payload)
+	if err != nil {
+		return 0, fmt.Errorf("decode initial exposure-unavailable response: %w", err)
+	}
+	if input.result.Recorder.InitialUnavailable.Status != "unavailable" || input.result.Recorder.InitialUnavailable.ErrorCode != "EXPOSURE_UNAVAILABLE" {
+		return 0, errors.New("installed standard MCP recorder failure did not return EXPOSURE_UNAVAILABLE")
+	}
+	afterUnavailable, err := uciInstalledAcceptanceExposureCount(ctx, input.authority)
+	if err != nil {
+		return 0, err
+	}
+	if afterUnavailable != beforeUnavailable {
+		return 0, errors.New("installed standard MCP recorder failure appended UCI exposure evidence")
+	}
+	status, err := uciInstalledAcceptanceStatusForSelection(ctx, input.client, input.selection)
+	if err != nil {
+		return 0, err
+	}
+	input.result.Recorder.HealthAfterInitialUnavailable = status.evidenceRecorder.state
+	if status.evidenceRecorder.state != "unavailable" || status.evidenceRecorder.lastFailureCode != "EXPOSURE_UNAVAILABLE" {
+		return 0, errors.New("installed standard MCP recorder failure did not make health unavailable")
+	}
+	return afterUnavailable, nil
+}
+
+func uciExerciseInstalledAcceptanceRecorderRetry(ctx context.Context, input uciInstalledAcceptanceRecorderInput, afterUnavailable int64) (uciInstalledAcceptanceMCPToolResult, int64, error) {
+	first, err := input.client.ToolWithCall(ctx, "codebase_search", uciInstalledAcceptanceSearchArguments(input.selection.contextHandle, "recorder-exact-retry"))
+	if err != nil {
+		return uciInstalledAcceptanceMCPToolResult{}, 0, err
+	}
 	if first.isError {
-		return errors.New("installed standard MCP recorder success returned a protocol-level tool error")
+		return uciInstalledAcceptanceMCPToolResult{}, 0, errors.New("installed standard MCP recorder success returned a protocol-level tool error")
 	}
 	firstExposure, err := uciInstalledAcceptanceExposureReference(first.payload)
 	if err != nil {
-		return err
+		return uciInstalledAcceptanceMCPToolResult{}, 0, err
 	}
-	result.Recorder.FirstExposureDigest = uciInstalledAcceptanceStringDigest(firstExposure)
-	afterFirst, err := uciInstalledAcceptanceExposureCount(ctx, authority)
+	input.result.Recorder.FirstExposureDigest = uciInstalledAcceptanceStringDigest(firstExposure)
+	afterFirst, err := uciInstalledAcceptanceExposureCount(ctx, input.authority)
 	if err != nil {
-		return err
+		return uciInstalledAcceptanceMCPToolResult{}, 0, err
 	}
 	if afterFirst != afterUnavailable+1 {
-		return errors.New("installed standard MCP recorder success did not append one UCI exposure")
+		return uciInstalledAcceptanceMCPToolResult{}, 0, errors.New("installed standard MCP recorder success did not append one UCI exposure")
 	}
-
-	retry, err := client.RetryTool(ctx, first.call)
+	retry, err := input.client.RetryTool(ctx, first.call)
 	if err != nil {
-		return err
+		return uciInstalledAcceptanceMCPToolResult{}, 0, err
 	}
 	if retry.isError {
-		return errors.New("installed standard MCP recorder exact retry returned a protocol-level tool error")
+		return uciInstalledAcceptanceMCPToolResult{}, 0, errors.New("installed standard MCP recorder exact retry returned a protocol-level tool error")
 	}
 	retryExposure, err := uciInstalledAcceptanceExposureReference(retry.payload)
 	if err != nil {
-		return err
+		return uciInstalledAcceptanceMCPToolResult{}, 0, err
 	}
 	if retryExposure != firstExposure {
-		return errors.New("installed standard MCP recorder exact retry changed its exposure reference")
+		return uciInstalledAcceptanceMCPToolResult{}, 0, errors.New("installed standard MCP recorder exact retry changed its exposure reference")
 	}
-	result.Recorder.ExactRetryExposureDigest = uciInstalledAcceptanceStringDigest(retryExposure)
-	afterRetry, err := uciInstalledAcceptanceExposureCount(ctx, authority)
+	input.result.Recorder.ExactRetryExposureDigest = uciInstalledAcceptanceStringDigest(retryExposure)
+	afterRetry, err := uciInstalledAcceptanceExposureCount(ctx, input.authority)
 	if err != nil {
-		return err
+		return uciInstalledAcceptanceMCPToolResult{}, 0, err
 	}
 	if afterRetry != afterFirst {
-		return errors.New("installed standard MCP recorder exact retry appended a second UCI exposure")
+		return uciInstalledAcceptanceMCPToolResult{}, 0, errors.New("installed standard MCP recorder exact retry appended a second UCI exposure")
 	}
+	return first, afterRetry, nil
+}
 
-	statusBeforeMismatch, err := uciInstalledAcceptanceStatusForSelection(ctx, client, selection)
+func uciExerciseInstalledAcceptanceRecorderMismatch(ctx context.Context, input uciInstalledAcceptanceRecorderInput, first uciInstalledAcceptanceMCPToolResult, afterRetry int64, mismatchQuery string) error {
+	statusBeforeMismatch, err := uciInstalledAcceptanceStatusForSelection(ctx, input.client, input.selection)
 	if err != nil {
 		return err
 	}
-	result.Recorder.HealthBeforeMismatch = statusBeforeMismatch.evidenceRecorder.state
+	input.result.Recorder.HealthBeforeMismatch = statusBeforeMismatch.evidenceRecorder.state
 	if statusBeforeMismatch.evidenceRecorder.state != "healthy" || statusBeforeMismatch.evidenceRecorder.lastFailureCode != "NONE" {
 		return errors.New("installed standard MCP recorder did not recover healthy state")
 	}
-
-	mismatch, err := client.ReplayToolWithSameJSONRPCID(ctx, first.call, "codebase_search", uciInstalledAcceptanceSearchArguments(selection.contextHandle, mismatchQuery))
+	mismatch, err := input.client.ReplayToolWithSameJSONRPCID(ctx, first.call, "codebase_search", uciInstalledAcceptanceSearchArguments(input.selection.contextHandle, mismatchQuery))
 	if err != nil {
 		return err
 	}
 	if mismatch.isError {
 		return errors.New("installed standard MCP recorder mismatch returned a protocol-level tool error")
 	}
-	afterMismatch, err := uciInstalledAcceptanceExposureCount(ctx, authority)
+	afterMismatch, err := uciInstalledAcceptanceExposureCount(ctx, input.authority)
 	if err != nil {
 		return err
 	}
 	if afterMismatch != afterRetry {
 		return errors.New("installed standard MCP recorder mismatch appended UCI exposure evidence under a different idempotency key")
 	}
-	result.Recorder.Mismatch, err = uciDecodeInstalledAcceptanceClosedOutcome(mismatch.payload)
+	input.result.Recorder.Mismatch, err = uciDecodeInstalledAcceptanceClosedOutcome(mismatch.payload)
 	if err != nil {
 		return fmt.Errorf("decode exposure idempotency-mismatch response: %w", err)
 	}
-	if result.Recorder.Mismatch.Status != "unavailable" || result.Recorder.Mismatch.ErrorCode != "IDEMPOTENCY_MISMATCH" {
+	if input.result.Recorder.Mismatch.Status != "unavailable" || input.result.Recorder.Mismatch.ErrorCode != "IDEMPOTENCY_MISMATCH" {
 		return errors.New("installed standard MCP recorder mismatch did not return IDEMPOTENCY_MISMATCH")
 	}
-	statusAfterMismatch, err := uciInstalledAcceptanceStatusForSelection(ctx, client, selection)
+	statusAfterMismatch, err := uciInstalledAcceptanceStatusForSelection(ctx, input.client, input.selection)
 	if err != nil {
 		return err
 	}
-	result.Recorder.HealthAfterMismatch = statusAfterMismatch.evidenceRecorder.state
+	input.result.Recorder.HealthAfterMismatch = statusAfterMismatch.evidenceRecorder.state
 	if statusAfterMismatch.evidenceRecorder.state != "healthy" || statusAfterMismatch.evidenceRecorder.lastFailureCode != "NONE" {
 		return errors.New("installed standard MCP recorder mismatch changed healthy state")
 	}
