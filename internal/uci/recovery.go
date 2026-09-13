@@ -172,34 +172,13 @@ func NewRecoveryService(current RecoveryCurrentByteSource, publisher RecoveryPub
 // high-water, then acknowledges that high-water only after durable publication
 // and idempotent enrichment succeed.
 func (service *RecoveryService) Recover(ctx context.Context, request RecoveryRequest) (RecoveryResult, error) {
-	if service == nil || semanticNil(service.current) || semanticNil(service.publisher) || semanticNil(service.state) || semanticNil(service.embeddings) {
-		return RecoveryResult{}, fmt.Errorf("uci recovery: service is not configured")
-	}
-	if semanticNil(ctx) {
-		return RecoveryResult{}, fmt.Errorf("uci recovery: nil context")
-	}
-	if err := ctx.Err(); err != nil {
-		return RecoveryResult{}, err
-	}
-
-	canonicalRequest, err := canonicalRecoveryRequest(request)
+	preparation, err := service.prepareRecovery(ctx, request)
 	if err != nil {
 		return RecoveryResult{}, err
 	}
-
-	local, found, err := service.state.Snapshot(ctx, canonicalRequest.Scope.CheckoutID)
-	if err != nil {
-		return RecoveryResult{}, fmt.Errorf("uci recovery: load local state: %w", err)
-	}
-	if !found {
-		return RecoveryResult{}, fmt.Errorf("uci recovery: local checkout state is missing")
-	}
-	if err := validateRecoveryLocalState(local, canonicalRequest.Scope); err != nil {
-		return RecoveryResult{}, err
-	}
-	observedHighWater := local.DirtySequence
-
-	update := service.beginRecoveryUpdate(canonicalRequest.Scope, canonicalRequest.ProfileID, observedHighWater)
+	canonicalRequest := preparation.request
+	observedHighWater := preparation.observedHighWater
+	update := preparation.update
 	if update != nil {
 		defer service.recordRecoveryUpdate(update)
 	}
@@ -302,6 +281,40 @@ func (service *RecoveryService) Recover(ctx context.Context, request RecoveryReq
 	}
 
 	return RecoveryResult{View: cloneReconcilePublishedView(view)}, nil
+}
+
+type recoveryPreparation struct {
+	request           RecoveryRequest
+	observedHighWater int64
+	update            *RecoveryUpdateAccounting
+}
+
+func (service *RecoveryService) prepareRecovery(ctx context.Context, request RecoveryRequest) (recoveryPreparation, error) {
+	if service == nil || semanticNil(service.current) || semanticNil(service.publisher) || semanticNil(service.state) || semanticNil(service.embeddings) {
+		return recoveryPreparation{}, fmt.Errorf("uci recovery: service is not configured")
+	}
+	if semanticNil(ctx) {
+		return recoveryPreparation{}, fmt.Errorf("uci recovery: nil context")
+	}
+	if err := ctx.Err(); err != nil {
+		return recoveryPreparation{}, err
+	}
+	canonicalRequest, err := canonicalRecoveryRequest(request)
+	if err != nil {
+		return recoveryPreparation{}, err
+	}
+	local, found, err := service.state.Snapshot(ctx, canonicalRequest.Scope.CheckoutID)
+	if err != nil {
+		return recoveryPreparation{}, fmt.Errorf("uci recovery: load local state: %w", err)
+	}
+	if !found {
+		return recoveryPreparation{}, fmt.Errorf("uci recovery: local checkout state is missing")
+	}
+	if err := validateRecoveryLocalState(local, canonicalRequest.Scope); err != nil {
+		return recoveryPreparation{}, err
+	}
+	observedHighWater := local.DirtySequence
+	return recoveryPreparation{request: canonicalRequest, observedHighWater: observedHighWater, update: service.beginRecoveryUpdate(canonicalRequest.Scope, canonicalRequest.ProfileID, observedHighWater)}, nil
 }
 
 func canonicalRecoveryRequest(request RecoveryRequest) (RecoveryRequest, error) {
@@ -533,6 +546,25 @@ func ValidateRecoveryUpdateAccounting(update RecoveryUpdateAccounting) error {
 	if err := validateRecoveryUpdateTiming(update.Scan, true); err != nil {
 		return fmt.Errorf("uci recovery update: scan timing: %w", err)
 	}
+	if err := validateRecoveryUpdateStages(update); err != nil {
+		return err
+	}
+	if err := validateRecoveryUpdateTimeline(update); err != nil {
+		return err
+	}
+	if update.View != nil && !validRecoveryUpdateView(*update.View, update.Scope, update.ProfileID, update.ObservedFSSeq) {
+		return fmt.Errorf("uci recovery update: View is not the observed durable publication")
+	}
+	if err := validateRecoveryProviderCalls(update.ProviderCalls); err != nil {
+		return err
+	}
+	if update.EmbeddingCandidateCount < 0 || update.EmbeddedCandidateCount < 0 || update.EmbeddedCandidateCount > update.EmbeddingCandidateCount {
+		return fmt.Errorf("uci recovery update: embedding candidate counters are invalid")
+	}
+	return validateRecoveryUpdateOutcome(update)
+}
+
+func validateRecoveryUpdateStages(update RecoveryUpdateAccounting) error {
 	for _, stage := range []struct {
 		name   string
 		timing RecoveryUpdateTiming
@@ -545,10 +577,12 @@ func ValidateRecoveryUpdateAccounting(update RecoveryUpdateAccounting) error {
 			return fmt.Errorf("uci recovery update: %s timing: %w", stage.name, err)
 		}
 	}
-	if update.StructuralFTS.Measured {
-		if update.View == nil || !recoveryUpdateTimingFollows(update.StructuralFTS, update.Scan) {
-			return fmt.Errorf("uci recovery update: structural/FTS readiness is not bound to scan and View")
-		}
+	return nil
+}
+
+func validateRecoveryUpdateTimeline(update RecoveryUpdateAccounting) error {
+	if update.StructuralFTS.Measured && (update.View == nil || !recoveryUpdateTimingFollows(update.StructuralFTS, update.Scan)) {
+		return fmt.Errorf("uci recovery update: structural/FTS readiness is not bound to scan and View")
 	}
 	if update.EmbeddingReadiness.Measured && (!update.StructuralFTS.Measured || !recoveryUpdateTimingFollows(update.EmbeddingReadiness, update.StructuralFTS)) {
 		return fmt.Errorf("uci recovery update: embedding readiness precedes structural/FTS readiness")
@@ -556,20 +590,23 @@ func ValidateRecoveryUpdateAccounting(update RecoveryUpdateAccounting) error {
 	if update.LocalACK.Measured && (!update.EmbeddingReadiness.Measured || !recoveryUpdateTimingFollows(update.LocalACK, update.EmbeddingReadiness)) {
 		return fmt.Errorf("uci recovery update: local acknowledgement precedes embedding readiness")
 	}
-	if update.View != nil && !validRecoveryUpdateView(*update.View, update.Scope, update.ProfileID, update.ObservedFSSeq) {
-		return fmt.Errorf("uci recovery update: View is not the observed durable publication")
-	}
-	if update.ProviderCalls.Measured {
-		if update.ProviderCalls.Before < 0 || update.ProviderCalls.After < update.ProviderCalls.Before {
+	return nil
+}
+
+func validateRecoveryProviderCalls(counters RecoveryProviderCallCounters) error {
+	if counters.Measured {
+		if counters.Before < 0 || counters.After < counters.Before {
 			return fmt.Errorf("uci recovery update: provider-call counters are invalid")
 		}
-	} else if update.ProviderCalls.Before != 0 || update.ProviderCalls.After != 0 {
+		return nil
+	}
+	if counters.Before != 0 || counters.After != 0 {
 		return fmt.Errorf("uci recovery update: unresolved provider-call counters carry values")
 	}
-	if update.EmbeddingCandidateCount < 0 || update.EmbeddedCandidateCount < 0 || update.EmbeddedCandidateCount > update.EmbeddingCandidateCount {
-		return fmt.Errorf("uci recovery update: embedding candidate counters are invalid")
-	}
+	return nil
+}
 
+func validateRecoveryUpdateOutcome(update RecoveryUpdateAccounting) error {
 	switch update.Outcome {
 	case RecoveryUpdateOutcomeHealthy:
 		if update.FailureStage != RecoveryUpdateFailureNone || update.ScanOutcome != IndexScanComplete || update.Coverage.Structural != IndexCoverageComplete || update.View == nil || !update.StructuralFTS.Measured || !update.EmbeddingReadiness.Measured || !update.LocalACK.Measured || !update.ProviderCalls.Measured || update.EmbeddedCandidateCount != update.EmbeddingCandidateCount || update.StructuralFTS.Latency <= 0 || update.EmbeddingReadiness.Latency <= 0 {
