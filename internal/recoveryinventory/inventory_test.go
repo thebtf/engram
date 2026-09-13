@@ -275,9 +275,21 @@ func TestFlagScanCoversCurrentRuntimeReaderSyntax(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []struct {
-		path, name, parser, defaultKind, classification string
-	}{
+	assertRuntimeFlagReaders(t, flags)
+	assertNoTestOrLocalFlagReaders(t, flags)
+	assertNoLiteralFlagReaders(t, flags)
+	assertDynamicFlagReaders(t, flags)
+	assertNoFlagTestPaths(t, flags)
+	assertRuntimeSourceFiles(t, root)
+}
+
+type runtimeFlagReader struct {
+	path, name, parser, defaultKind, classification string
+}
+
+func assertRuntimeFlagReaders(t *testing.T, flags Report) {
+	t.Helper()
+	for _, want := range []runtimeFlagReader{
 		{"internal/worker/routes.go", "ENGRAM_FEATURE", "exact-lowercase-true", "false-unless-exact-true", "feature-flag-reader"},
 		{"internal/worker/routes.go", "redacted", "source-uncertain", "source-unspecified", "credential-reader"},
 		{"internal/worker/routes.go", "ENGRAM_DB_PATH", "source-uncertain", "source-unspecified", "configuration-reader"},
@@ -304,25 +316,44 @@ func TestFlagScanCoversCurrentRuntimeReaderSyntax(t *testing.T) {
 			t.Fatalf("missing runtime environment reader %#v: %#v", want, flags.Records)
 		}
 	}
+}
+
+func assertNoTestOrLocalFlagReaders(t *testing.T, flags Report) {
+	t.Helper()
 	for _, record := range flags.Records {
 		if isTestSource(record.Path) || strings.HasSuffix(record.Name, "_LOCAL") {
 			t.Fatalf("test-only or local reader leaked into runtime inventory: %#v", record)
 		}
 	}
+}
+
+func assertNoLiteralFlagReaders(t *testing.T, flags Report) {
+	t.Helper()
 	for _, forbidden := range []string{"ENGRAM_JS_COMMENT", "ENGRAM_JS_STRING", "ENGRAM_CJS_COMMENT", "ENGRAM_CJS_STRING", "ENGRAM_PS_COMMENT", "ENGRAM_PS_STRING", "ENGRAM_PS_ESCAPED"} {
 		if hasRecord(flags, "environment-reader", forbidden, "") {
 			t.Fatalf("comment or string produced an environment reader %q: %#v", forbidden, flags.Records)
 		}
 	}
+}
+
+func assertDynamicFlagReaders(t *testing.T, flags Report) {
+	t.Helper()
 	if !hasReader(flags, "internal/worker/dynamic.go", "", "source-uncertain", "source-unspecified", "source-uncertain") || !hasReader(flags, "plugin/engram/hooks/runtime.js", "", "source-uncertain", "source-unspecified", "source-uncertain") {
 		t.Fatalf("dynamic environment readers must remain source-uncertain: %#v", flags.Records)
 	}
+}
+
+func assertNoFlagTestPaths(t *testing.T, flags Report) {
+	t.Helper()
 	for _, path := range []string{"Tests/reader.go", "ui/__TESTS__/reader.js", "playwright.config.ts"} {
 		if hasPathRecord(flags, "environment-reader", path) {
 			t.Fatalf("test source %q leaked into runtime flag inventory: %#v", path, flags.Records)
 		}
 	}
+}
 
+func assertRuntimeSourceFiles(t *testing.T, root string) {
+	t.Helper()
 	source, err := ScanSource(root)
 	if err != nil {
 		t.Fatal(err)
@@ -556,6 +587,7 @@ func hasUncertainGoProjectFamily(report Report, path string) bool {
 	}
 	return false
 }
+
 func projectDataRecordCount(report Report, path string) int {
 	count := 0
 	for _, record := range report.Records {
