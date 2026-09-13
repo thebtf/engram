@@ -1697,38 +1697,37 @@ func NewIndexAdmissionArtifactFromOpenAPI(sourceID string, admissionProfile Inde
 	if err := indexAdmissionValidateArtifactCapacity(len(source), len(extracted.Definitions), len(extracted.References), len(extracted.Chunks), len(extracted.Diagnostics)); err != nil {
 		return IndexAdmissionArtifact{}, err
 	}
-	expectedProfile, err := OpenAPIIndexAdmissionArtifactProfile(extractionProfile)
+	input, err := indexAdmissionOpenAPIBuildInput(sourceID, admissionProfile, extractionProfile, source, extracted)
 	if err != nil {
 		return IndexAdmissionArtifact{}, err
 	}
+	return indexAdmissionBuildOpenAPIArtifact(input, extracted)
+}
+
+func indexAdmissionOpenAPIBuildInput(sourceID string, admissionProfile IndexAdmissionArtifactProfile, extractionProfile OpenAPIExtractionProfile, source []byte, extracted OpenAPIArtifact) (indexAdmissionArtifactBuildInput, error) {
+	expectedProfile, err := OpenAPIIndexAdmissionArtifactProfile(extractionProfile)
+	if err != nil {
+		return indexAdmissionArtifactBuildInput{}, err
+	}
 	if !indexAdmissionStructuredProfileMatches(admissionProfile, expectedProfile) {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: OpenAPI artifact profile does not match extraction policy")
+		return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: OpenAPI artifact profile does not match extraction policy")
 	}
 	if extracted.Format != extractionProfile.Format {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: OpenAPI artifact format does not match extraction policy")
+		return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: OpenAPI artifact format does not match extraction policy")
 	}
 	if extracted.Text != string(source) {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: OpenAPI artifact text does not match source bytes")
+		return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: OpenAPI artifact text does not match source bytes")
 	}
 	contentDigest := indexAdmissionDigestBytes(source)
 	if extracted.Proof.ContentDigest != contentDigest {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: OpenAPI artifact source digest mismatch")
+		return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: OpenAPI artifact source digest mismatch")
 	}
-	if extracted.Proof.DefinitionCount != uint64(len(extracted.Definitions)) ||
-		extracted.Proof.ReferenceSiteCount != uint64(len(extracted.References)) ||
-		extracted.Proof.ChunkCount != uint64(len(extracted.Chunks)) {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: OpenAPI artifact proof counts are invalid")
+	if extracted.Proof.DefinitionCount != uint64(len(extracted.Definitions)) || extracted.Proof.ReferenceSiteCount != uint64(len(extracted.References)) || extracted.Proof.ChunkCount != uint64(len(extracted.Chunks)) {
+		return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: OpenAPI artifact proof counts are invalid")
 	}
-	status := IndexAdmissionArtifactPartial
-	switch extracted.Coverage {
-	case IndexCoverageComplete:
-		if len(extracted.Diagnostics) != 0 {
-			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: complete OpenAPI artifact has diagnostics")
-		}
-		status = IndexAdmissionArtifactComplete
-	case IndexCoveragePartial:
-	default:
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: OpenAPI extraction has unsupported coverage")
+	status, err := indexAdmissionStructuredStatus(extracted.Coverage, len(extracted.Diagnostics), "OpenAPI")
+	if err != nil {
+		return indexAdmissionArtifactBuildInput{}, err
 	}
 	verified := openAPIFinalizeArtifact(source, extractionProfile, OpenAPIArtifact{
 		Coverage:    extracted.Coverage,
@@ -1740,37 +1739,67 @@ func NewIndexAdmissionArtifactFromOpenAPI(sourceID string, admissionProfile Inde
 		Diagnostics: append([]OpenAPIDiagnostic(nil), extracted.Diagnostics...),
 	})
 	if verified.Proof != extracted.Proof {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: OpenAPI artifact proof is invalid")
+		return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: OpenAPI artifact proof is invalid")
 	}
 	artifactID, err := DeriveIndexAdmissionArtifactID(sourceID, contentDigest, admissionProfile)
 	if err != nil {
+		return indexAdmissionArtifactBuildInput{}, err
+	}
+	return indexAdmissionArtifactBuildInput{
+		artifactID:      artifactID,
+		contentDigest:   contentDigest,
+		profile:         admissionProfile,
+		status:          status,
+		source:          source,
+		definitionCount: len(extracted.Definitions),
+		referenceCount:  len(extracted.References),
+		chunkCount:      len(extracted.Chunks),
+		diagnosticCount: len(extracted.Diagnostics),
+	}, nil
+}
+
+func indexAdmissionBuildOpenAPIArtifact(input indexAdmissionArtifactBuildInput, extracted OpenAPIArtifact) (IndexAdmissionArtifact, error) {
+	artifact := input.artifact()
+	artifact.Definitions = indexAdmissionOpenAPIDefinitions(extracted.Definitions)
+	references, err := indexAdmissionOpenAPIReferences(input.source, extracted.References)
+	if err != nil {
 		return IndexAdmissionArtifact{}, err
 	}
-	artifact := IndexAdmissionArtifact{
-		ArtifactID:    artifactID,
-		ContentDigest: contentDigest,
-		Profile:       admissionProfile,
-		Status:        status,
-		Body:          indexAdmissionCloneBytes(source),
-		Definitions:   make([]IndexAdmissionDefinition, 0, len(extracted.Definitions)),
-		References:    make([]IndexAdmissionReference, 0, len(extracted.References)),
-		Chunks:        make([]IndexAdmissionChunk, 0, len(extracted.Chunks)),
-		Diagnostics:   make([]IndexAdmissionDiagnostic, 0, len(extracted.Diagnostics)+1),
+	artifact.References = references
+	chunks, err := indexAdmissionOpenAPIChunks(input.source, extracted.Chunks)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
 	}
-	for _, definition := range extracted.Definitions {
-		artifact.Definitions = append(artifact.Definitions, IndexAdmissionDefinition{
+	artifact.Chunks = chunks
+	artifact.Diagnostics = indexAdmissionOpenAPIDiagnostics(extracted.Diagnostics)
+	artifact.Diagnostics, err = indexAdmissionAddPartialDiagnostic(artifact.Diagnostics, input.status, "OPENAPI_PARTIAL_COVERAGE", "OpenAPI extraction coverage is partial")
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	return indexAdmissionFinalizeArtifact(artifact)
+}
+
+func indexAdmissionOpenAPIDefinitions(definitions []OpenAPIDefinition) []IndexAdmissionDefinition {
+	converted := make([]IndexAdmissionDefinition, 0, len(definitions))
+	for _, definition := range definitions {
+		converted = append(converted, IndexAdmissionDefinition{
 			LocalSymbolKey: definition.LocalKey,
 			Kind:           definition.Kind,
 			SymbolKey:      definition.SymbolKey,
 			Span:           definition.Span,
 		})
 	}
-	for _, reference := range extracted.References {
+	return converted
+}
+
+func indexAdmissionOpenAPIReferences(source []byte, references []OpenAPIReferenceSite) ([]IndexAdmissionReference, error) {
+	converted := make([]IndexAdmissionReference, 0, len(references))
+	for _, reference := range references {
 		rawTarget, err := indexAdmissionTextAtSpan(source, reference.Span)
 		if err != nil {
-			return IndexAdmissionArtifact{}, err
+			return nil, err
 		}
-		artifact.References = append(artifact.References, IndexAdmissionReference{
+		converted = append(converted, IndexAdmissionReference{
 			SiteKey:   reference.LocalKey,
 			Kind:      reference.Kind,
 			SymbolKey: reference.SymbolKey,
@@ -1779,15 +1808,20 @@ func NewIndexAdmissionArtifactFromOpenAPI(sourceID string, admissionProfile Inde
 			Span:      reference.Span,
 		})
 	}
-	for index, chunk := range extracted.Chunks {
+	return converted, nil
+}
+
+func indexAdmissionOpenAPIChunks(source []byte, chunks []OpenAPIChunk) ([]IndexAdmissionChunk, error) {
+	converted := make([]IndexAdmissionChunk, 0, len(chunks))
+	for index, chunk := range chunks {
 		text, err := indexAdmissionTextAtSpan(source, chunk.Span)
 		if err != nil {
-			return IndexAdmissionArtifact{}, err
+			return nil, err
 		}
 		if chunk.Text != text || chunk.ContentDigest != indexAdmissionDigestBytes([]byte(text)) {
-			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: OpenAPI source chunk does not match source bytes")
+			return nil, fmt.Errorf("uci index admission: OpenAPI source chunk does not match source bytes")
 		}
-		artifact.Chunks = append(artifact.Chunks, IndexAdmissionChunk{
+		converted = append(converted, IndexAdmissionChunk{
 			Ordinal:       index,
 			Kind:          "source",
 			Span:          chunk.Span,
@@ -1795,37 +1829,19 @@ func NewIndexAdmissionArtifactFromOpenAPI(sourceID string, admissionProfile Inde
 			Text:          chunk.Text,
 		})
 	}
-	for _, diagnostic := range extracted.Diagnostics {
-		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
+	return converted, nil
+}
+
+func indexAdmissionOpenAPIDiagnostics(diagnostics []OpenAPIDiagnostic) []IndexAdmissionDiagnostic {
+	converted := make([]IndexAdmissionDiagnostic, 0, len(diagnostics)+1)
+	for _, diagnostic := range diagnostics {
+		converted = append(converted, IndexAdmissionDiagnostic{
 			Code:    diagnostic.Code,
 			Span:    diagnostic.Span,
 			Message: diagnostic.Message,
 		})
 	}
-	if status == IndexAdmissionArtifactPartial {
-		if len(artifact.Diagnostics) == indexAdmissionMaxDiagnosticsPerArtifact {
-			return IndexAdmissionArtifact{}, newIndexCapacityError(
-				IndexCapacityScopeArtifact,
-				IndexCapacityResourceDiagnostics,
-				uint64(len(artifact.Diagnostics)+1),
-				uint64(indexAdmissionMaxDiagnosticsPerArtifact),
-			)
-		}
-		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
-			Code:    "OPENAPI_PARTIAL_COVERAGE",
-			Message: "OpenAPI extraction coverage is partial",
-		})
-	}
-	canonical, err := indexAdmissionCanonicalizeArtifact(artifact)
-	if err != nil {
-		return IndexAdmissionArtifact{}, err
-	}
-	factsDigest, err := indexAdmissionArtifactFactsDigest(canonical)
-	if err != nil {
-		return IndexAdmissionArtifact{}, err
-	}
-	canonical.FactsDigest = factsDigest
-	return canonical, nil
+	return converted
 }
 
 func indexAdmissionCanonicalizeFrame(frame *IndexAdmissionFrame) error {
