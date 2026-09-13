@@ -320,25 +320,44 @@ func validDescriptorEvidence(value string) bool {
 }
 
 func validNormalizedRemote(remote string) bool {
+	host, path, split := strings.Cut(remote, "/")
+	return validNormalizedRemoteParts(remote, host, path, split) && validNormalizedRemoteHost(host)
+}
+
+func validNormalizedRemoteParts(remote, host, path string, split bool) bool {
 	if remote == "" || strings.TrimSpace(remote) != remote || strings.ContainsAny(remote, " \t\r\n@?#\\") || strings.Contains(remote, "://") {
 		return false
 	}
-	host, path, ok := strings.Cut(remote, "/")
-	if !ok || host == "" || path == "" || host != strings.ToLower(host) || strings.HasPrefix(path, "/") || strings.HasSuffix(path, ".git") || strings.HasSuffix(path, "/") || strings.Contains(path, "//") {
+	if !split || host == "" || !validNormalizedRemotePath(path) {
 		return false
 	}
+	return host == strings.ToLower(host)
+}
+
+func validNormalizedRemotePath(path string) bool {
+	return path != "" && !strings.HasPrefix(path, "/") && !strings.HasSuffix(path, ".git") && !strings.HasSuffix(path, "/") && !strings.Contains(path, "//")
+}
+
+func validNormalizedRemoteHost(host string) bool {
 	hostname, port, hasPort := strings.Cut(host, ":")
 	if hostname == "" || strings.Contains(hostname, ":") || (hasPort && (port == "" || strings.Trim(port, "0123456789") != "")) {
 		return false
 	}
 	for _, label := range strings.Split(hostname, ".") {
-		if label == "" || label[0] == '-' || label[len(label)-1] == '-' {
+		if !validNormalizedRemoteHostLabel(label) {
 			return false
 		}
-		for _, character := range label {
-			if character != '-' && (character < 'a' || character > 'z') && (character < '0' || character > '9') {
-				return false
-			}
+	}
+	return true
+}
+
+func validNormalizedRemoteHostLabel(label string) bool {
+	if label == "" || label[0] == '-' || label[len(label)-1] == '-' {
+		return false
+	}
+	for _, character := range label {
+		if character != '-' && (character < 'a' || character > 'z') && (character < '0' || character > '9') {
+			return false
 		}
 	}
 	return true

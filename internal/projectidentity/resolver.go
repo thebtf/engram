@@ -288,91 +288,104 @@ func (resolver ResolverV3) ResolveProjectV3(ctx context.Context, request Resolve
 	if !validAnchorV3(request.Anchor) {
 		return refusalV3(request, ProjectAnchorInvalidOutcomeV3)
 	}
-	if request.Descriptor.Version != 3 {
-		return refusalV3(request, ProjectDescriptorUnsupportedOutcomeV3)
-	}
-	if !validDescriptorV3(request.Descriptor) {
-		return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
-	}
-	if request.Descriptor.AnchorProjectID != request.Anchor.ProjectID || request.Descriptor.Name != request.Anchor.Name {
+	if request.Descriptor.Version != 3 || !validDescriptorV3(request.Descriptor) || request.Descriptor.AnchorProjectID != request.Anchor.ProjectID || request.Descriptor.Name != request.Anchor.Name {
 		return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
 	}
 	if request.Descriptor.Scope != request.Anchor.Scope {
 		return refusalV3(request, ProjectScopeMismatchOutcomeV3)
 	}
+	return resolver.resolveProjectIntentV3(ctx, request, &attemptRecorded)
+}
 
+func (resolver ResolverV3) resolveProjectIntentV3(ctx context.Context, request ResolveProjectRequestV3, attemptRecorded *bool) (ResolveProjectResultV3, error) {
 	switch request.Intent {
 	case ResolveExistingIntentV3:
-		authorization, err := NewAuthorizationReferenceV3(string(request.ResolveExistingAuthorization))
-		if err != nil || request.RegistrationAuthorization != "" || request.ReadFilter != nil || request.AdminTarget != nil {
-			return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
-		}
-		verification, ok := resolver.verifiedAuthorizationV3(ctx, request, authorization)
-		if !ok || !verification.PermitsAnchorLookup() {
-			return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
-		}
-		return resolver.resolveAnchorV3(ctx, request, verification)
+		return resolver.resolveExistingProjectV3(ctx, request)
 	case RegisterAnchorIntentV3:
-		authorization, err := NewAuthorizationReferenceV3(string(request.RegistrationAuthorization))
-		if err != nil || request.ResolveExistingAuthorization != "" || request.ReadFilter != nil || request.AdminTarget != nil {
-			return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
-		}
-		verification, ok := resolver.verifiedAuthorizationV3(ctx, request, authorization)
-		if !ok {
-			return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
-		}
-		if resolver.store == nil {
-			return ResolveProjectResultV3{}, errResolverStorageV3
-		}
-		command := AnchorRegistrationV3{
-			anchorProjectID: request.Anchor.ProjectID,
-			scope:           resolvedScopeV3(request.Anchor.Scope),
-			verification:    verification,
-			fence: CausalFirstMutationFenceV3{
-				correlation: request.Correlation,
-				intent:      request.Intent,
-				valid:       true,
-			},
-		}
-		var registrationResult ResolveProjectResultV3
-		var registrationResultErr error
-		err = resolver.store.RegisterAnchorBindingAndRecordAttemptV3(ctx, command, func(binding AnchorBindingV3) (ResolutionAttemptV3, error) {
-			registrationResult, registrationResultErr = bindingResultV3(request, binding)
-			return newResolutionAttemptV3(request, registrationResult.Resolution())
-		})
-		if err != nil {
-			return ResolveProjectResultV3{}, errResolverStorageV3
-		}
-		attemptRecorded = true
-		return registrationResult, registrationResultErr
+		return resolver.registerAnchorProjectV3(ctx, request, attemptRecorded)
 	case ReadFilterIntentV3:
-		if request.ResolveExistingAuthorization != "" || request.RegistrationAuthorization != "" || request.AdminTarget != nil || !validReadFilterV3(request.ReadFilter, request.Correlation) {
-			return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
-		}
-		verification, ok := resolver.verifiedAuthorizationV3(ctx, request, request.ReadFilter.Authorization())
-		if !ok || !verification.PermitsAnchorLookup() {
-			return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
-		}
-		return resolver.resolveAnchorV3(ctx, request, verification)
+		return resolver.resolveReadFilterProjectV3(ctx, request)
 	case AdminTargetIntentV3:
-		if request.ResolveExistingAuthorization != "" || request.RegistrationAuthorization != "" || request.ReadFilter != nil || !validAdminTargetV3(request.AdminTarget, request.Correlation) {
-			return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
-		}
-		verification, ok := resolver.verifiedAuthorizationV3(ctx, request, request.AdminTarget.Authorization())
-		if !ok {
-			return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
-		}
-		if resolver.store == nil {
-			return ResolveProjectResultV3{}, errResolverStorageV3
-		}
-		binding, err := resolver.store.LookupAdministrativeTargetV3(ctx, verification)
-		if err != nil {
-			return ResolveProjectResultV3{}, errResolverStorageV3
-		}
-		return bindingResultV3(request, binding)
+		return resolver.resolveAdminTargetProjectV3(ctx, request)
 	default:
 		return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
 	}
+}
+
+func (resolver ResolverV3) resolveExistingProjectV3(ctx context.Context, request ResolveProjectRequestV3) (ResolveProjectResultV3, error) {
+	authorization, err := NewAuthorizationReferenceV3(string(request.ResolveExistingAuthorization))
+	if err != nil || request.RegistrationAuthorization != "" || request.ReadFilter != nil || request.AdminTarget != nil {
+		return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
+	}
+	verification, ok := resolver.verifiedAuthorizationV3(ctx, request, authorization)
+	if !ok || !verification.PermitsAnchorLookup() {
+		return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
+	}
+	return resolver.resolveAnchorV3(ctx, request, verification)
+}
+
+func (resolver ResolverV3) registerAnchorProjectV3(ctx context.Context, request ResolveProjectRequestV3, attemptRecorded *bool) (ResolveProjectResultV3, error) {
+	authorization, err := NewAuthorizationReferenceV3(string(request.RegistrationAuthorization))
+	if err != nil || request.ResolveExistingAuthorization != "" || request.ReadFilter != nil || request.AdminTarget != nil {
+		return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
+	}
+	verification, ok := resolver.verifiedAuthorizationV3(ctx, request, authorization)
+	if !ok {
+		return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
+	}
+	if resolver.store == nil {
+		return ResolveProjectResultV3{}, errResolverStorageV3
+	}
+	command := AnchorRegistrationV3{
+		anchorProjectID: request.Anchor.ProjectID,
+		scope:           resolvedScopeV3(request.Anchor.Scope),
+		verification:    verification,
+		fence: CausalFirstMutationFenceV3{
+			correlation: request.Correlation,
+			intent:      request.Intent,
+			valid:       true,
+		},
+	}
+	var registrationResult ResolveProjectResultV3
+	var registrationResultErr error
+	err = resolver.store.RegisterAnchorBindingAndRecordAttemptV3(ctx, command, func(binding AnchorBindingV3) (ResolutionAttemptV3, error) {
+		registrationResult, registrationResultErr = bindingResultV3(request, binding)
+		return newResolutionAttemptV3(request, registrationResult.Resolution())
+	})
+	if err != nil {
+		return ResolveProjectResultV3{}, errResolverStorageV3
+	}
+	*attemptRecorded = true
+	return registrationResult, registrationResultErr
+}
+
+func (resolver ResolverV3) resolveReadFilterProjectV3(ctx context.Context, request ResolveProjectRequestV3) (ResolveProjectResultV3, error) {
+	if request.ResolveExistingAuthorization != "" || request.RegistrationAuthorization != "" || request.AdminTarget != nil || !validReadFilterV3(request.ReadFilter, request.Correlation) {
+		return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
+	}
+	verification, ok := resolver.verifiedAuthorizationV3(ctx, request, request.ReadFilter.Authorization())
+	if !ok || !verification.PermitsAnchorLookup() {
+		return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
+	}
+	return resolver.resolveAnchorV3(ctx, request, verification)
+}
+
+func (resolver ResolverV3) resolveAdminTargetProjectV3(ctx context.Context, request ResolveProjectRequestV3) (ResolveProjectResultV3, error) {
+	if request.ResolveExistingAuthorization != "" || request.RegistrationAuthorization != "" || request.ReadFilter != nil || !validAdminTargetV3(request.AdminTarget, request.Correlation) {
+		return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
+	}
+	verification, ok := resolver.verifiedAuthorizationV3(ctx, request, request.AdminTarget.Authorization())
+	if !ok {
+		return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
+	}
+	if resolver.store == nil {
+		return ResolveProjectResultV3{}, errResolverStorageV3
+	}
+	binding, err := resolver.store.LookupAdministrativeTargetV3(ctx, verification)
+	if err != nil {
+		return ResolveProjectResultV3{}, errResolverStorageV3
+	}
+	return bindingResultV3(request, binding)
 }
 
 func (resolver ResolverV3) verifiedAuthorizationV3(ctx context.Context, request ResolveProjectRequestV3, authorization AuthorizationReferenceV3) (VerifiedAuthorizationV3, bool) {
