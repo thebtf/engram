@@ -391,6 +391,30 @@ func TestHandleListMemories_PrincipalPrivateCrossPrincipalInvisible_FlagOff(t *t
 	assert.Equal(t, "visible legacy row", rows[0]["content"])
 }
 
+func TestHandleListMemories_ContinuesPastAHiddenBatchWithoutLeakingIt(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	rows := make([]*models.Memory, 0, 501)
+	for id := int64(1); id <= 500; id++ {
+		rows = append(rows, &models.Memory{
+			ID: id, Project: "page-through-hidden", Content: "other-workstation-private", PrivacyScope: "private", SourceWorkstationID: "ws-bob",
+		})
+	}
+	rows = append(rows, &models.Memory{ID: 501, Project: "page-through-hidden", Content: "visible-after-hidden-page"})
+	service := &Service{memoryStoreSeam: &fakeMemoryListStore{rows: rows}}
+	identity := auth.ClientWithPrincipal("read-write", "ws-alice", "agent/alice", auth.PrincipalKindAgent)
+	req := httptest.NewRequest(http.MethodGet, "/api/memories?project=page-through-hidden&limit=1", nil).
+		WithContext(auth.WithIdentity(context.Background(), identity))
+	w := httptest.NewRecorder()
+
+	service.handleListMemories(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var got []models.Memory
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.Equal(t, []int64{501}, []int64{got[0].ID})
+	assert.NotContains(t, w.Body.String(), "other-workstation-private")
+}
+
 func TestHandleListMemories_DomainOwnedCrossPrincipalInvisible_FlagOff(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
 
@@ -832,6 +856,9 @@ func TestHandleGetMemoryByID_ReadVisibility(t *testing.T) {
 
 			require.Equal(t, tc.wantStatus, w.Code, w.Body.String())
 			assert.Equal(t, 1, store.calls)
+			if tc.wantStatus == http.StatusNotFound {
+				assert.NotContains(t, w.Body.String(), tc.memory.Content, "a visibility denial must not disclose the guessed memory content")
+			}
 			if tc.wantStatus == http.StatusOK {
 				var got models.Memory
 				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))

@@ -272,6 +272,32 @@ func TestHandleCreateBehavioralRule_Success(t *testing.T) {
 	assert.Equal(t, created.ID, rows[0].ID)
 }
 
+func TestHandleCreateBehavioralRule_NormalizesStoredFields(t *testing.T) {
+	project := "test-rules-handler-normalized"
+	svc, brs := newRulesTestService(t, project)
+
+	body := `{"project":"  ` + project + `  ","content":"  normalized rule content  ","edited_by":"  operator-console  "}`
+	req := httptest.NewRequest(http.MethodPost, "/api/rules", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	svc.handleCreateBehavioralRule(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	var created models.BehavioralRule
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+	require.NotNil(t, created.Project)
+	assert.Equal(t, project, *created.Project)
+	assert.Equal(t, "normalized rule content", created.Content)
+	assert.Equal(t, "operator-console", created.EditedBy)
+
+	rows, err := brs.List(context.Background(), &project, 1)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, created.ID, rows[0].ID)
+	assert.Equal(t, project, *rows[0].Project)
+	assert.Equal(t, "normalized rule content", rows[0].Content)
+	assert.Equal(t, "operator-console", rows[0].EditedBy)
+}
+
 func TestHandleUpdateBehavioralRule_PartialSuccess(t *testing.T) {
 	project := "test-rules-handler-update-success"
 	svc, brs := newRulesTestService(t, project)

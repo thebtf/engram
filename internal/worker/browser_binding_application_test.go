@@ -16,7 +16,10 @@ type recordingBrowserTabBindingStore struct {
 	creates     []gormdb.BrowserTabBindingCreate
 	copyCreates []gormdb.BrowserTabBindingCopyCreate
 	resumes     []gormdb.BrowserTabBindingResume
+	guards      []gormdb.BrowserTabBindingGuard
 
+	guardBinding  gormdb.BrowserTabBinding
+	guardErr      error
 	copyCollision bool
 	resumeState   gormdb.BrowserTabBindingResumeState
 }
@@ -36,8 +39,9 @@ func (store *recordingBrowserTabBindingStore) Resume(_ context.Context, in gormd
 	return gormdb.BrowserTabBinding{TabBindingID: in.TabBindingID}, store.resumeState, nil
 }
 
-func (store *recordingBrowserTabBindingStore) Guard(context.Context, gormdb.BrowserTabBindingGuard) (gormdb.BrowserTabBinding, error) {
-	return gormdb.BrowserTabBinding{}, nil
+func (store *recordingBrowserTabBindingStore) Guard(_ context.Context, in gormdb.BrowserTabBindingGuard) (gormdb.BrowserTabBinding, error) {
+	store.guards = append(store.guards, in)
+	return store.guardBinding, store.guardErr
 }
 
 func (store *recordingBrowserTabBindingStore) Renew(context.Context, gormdb.BrowserTabBindingLease) error {
@@ -165,6 +169,87 @@ func TestBrowserBindingApplication_DeniesNonBrowserSessionBeforeAnyTransition(t 
 	require.Empty(t, store.creates)
 	require.Empty(t, store.copyCreates)
 	require.Empty(t, store.resumes)
+}
+
+func TestBrowserBindingApplication_GuardMapsDeniedAndOnlyReturnsCompletePin(t *testing.T) {
+	caller := auth.SessionForBrowserUser("operator", 41)
+	proof := BrowserBindingProof{TabBindingID: uuid.NewString(), DocumentProof: "proof-current"}
+	store := &recordingBrowserTabBindingStore{guardBinding: gormdb.BrowserTabBinding{TabBindingID: proof.TabBindingID}}
+	app := &BrowserBindingApplication{store: store}
+
+	guarded, err := app.Guard(context.Background(), caller, "browser-session-1", proof)
+	require.NoError(t, err)
+	require.Equal(t, proof.TabBindingID, guarded.TabBindingID)
+	require.Nil(t, guarded.Pinned, "a partial persisted pin must not become a browser context")
+
+	sourceID, checkoutID, viewID, profileID := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	generation := int64(7)
+	store.guardBinding = gormdb.BrowserTabBinding{
+		TabBindingID:            proof.TabBindingID,
+		PinnedSourceID:          &sourceID,
+		PinnedCheckoutID:        &checkoutID,
+		PinnedViewID:            &viewID,
+		PinnedAnalysisProfileID: &profileID,
+		PinnedGeneration:        &generation,
+	}
+	guarded, err = app.Guard(context.Background(), caller, "browser-session-1", proof)
+	require.NoError(t, err)
+	require.Equal(t, &BrowserBindingContext{SourceID: sourceID, CheckoutID: checkoutID, ViewID: viewID, AnalysisProfileID: profileID, Generation: generation}, guarded.Pinned)
+
+	store.guardErr = gormdb.ErrBrowserTabBindingDenied
+	guarded, err = app.Guard(context.Background(), caller, "browser-session-1", proof)
+	require.ErrorIs(t, err, ErrBrowserBindingDenied)
+	require.Empty(t, guarded)
+	require.Len(t, store.guards, 3)
+}
+
+func TestBrowserBindingApplication_ResumeRejectsUnknownStoreStateWithoutMaterial(t *testing.T) {
+	store := &recordingBrowserTabBindingStore{resumeState: gormdb.BrowserTabBindingResumeState("unexpected")}
+	app := &BrowserBindingApplication{store: store}
+
+	transition, err := app.Resume(context.Background(), auth.SessionForBrowserUser("operator", 41), "browser-session-1", BrowserBindingResumeInput{
+		TabBindingID: uuid.NewString(), ResumeNonce: "resume-nonce", ReloadToken: "reload-token", DocumentNonce: "document-nonce",
+	})
+	require.ErrorIs(t, err, ErrBrowserBindingDenied)
+	require.Empty(t, transition, "an unrecognized persistence state must not expose new document material")
+	require.Len(t, store.resumes, 1)
+}
+
+func TestBrowserBindingApplication_PersistsPinnedDocumentLifecycle(t *testing.T) {
+	store := openWorkerUCIContextCompositionStore(t)
+	app := NewBrowserBindingApplication(gormdb.NewBrowserTabBindingStore(store.GetDB()))
+	caller := auth.SessionForBrowserUser("operator", 41)
+	sessionID := "browser-binding-application-" + uuid.NewString()
+	ctx := context.Background()
+
+	first, err := app.Handshake(ctx, caller, sessionID, BrowserBindingHandshakeInput{DocumentNonce: "initial-document"})
+	require.NoError(t, err)
+	firstProof := BrowserBindingProof{TabBindingID: first.TabBindingID, DocumentProof: first.DocumentProof}
+	pinned := BrowserBindingContext{
+		SourceID: uuid.NewString(), CheckoutID: uuid.NewString(), ViewID: uuid.NewString(), AnalysisProfileID: uuid.NewString(), Generation: 7,
+	}
+	require.NoError(t, app.Pin(ctx, caller, sessionID, firstProof, pinned))
+	require.NoError(t, app.Renew(ctx, caller, sessionID, firstProof))
+	guarded, err := app.Guard(ctx, caller, sessionID, firstProof)
+	require.NoError(t, err)
+	require.Equal(t, &pinned, guarded.Pinned)
+
+	require.NoError(t, app.Close(ctx, caller, sessionID, firstProof))
+	_, err = app.Guard(ctx, caller, sessionID, firstProof)
+	require.ErrorIs(t, err, ErrBrowserBindingDenied, "a closed proof must not remain usable")
+
+	resumed, err := app.Resume(ctx, caller, sessionID, BrowserBindingResumeInput{
+		TabBindingID: first.TabBindingID, ResumeNonce: first.ResumeNonce, ReloadToken: first.ReloadToken, DocumentNonce: "reloaded-document",
+	})
+	require.NoError(t, err)
+	require.Equal(t, BrowserBindingReady, resumed.State)
+	guarded, err = app.Guard(ctx, caller, sessionID, BrowserBindingProof{TabBindingID: resumed.TabBindingID, DocumentProof: resumed.DocumentProof})
+	require.NoError(t, err)
+	require.Equal(t, &pinned, guarded.Pinned, "resume must preserve the server-authorized context pin")
+
+	require.NoError(t, app.DestroySession(ctx, sessionID))
+	_, err = app.Guard(ctx, caller, sessionID, BrowserBindingProof{TabBindingID: resumed.TabBindingID, DocumentProof: resumed.DocumentProof})
+	require.ErrorIs(t, err, ErrBrowserBindingDenied, "session destruction must revoke every document proof")
 }
 
 func browserBindingTestDigest(value string) []byte {

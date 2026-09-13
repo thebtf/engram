@@ -492,6 +492,33 @@ func TestOperatorCodeServerAuthorizerDerivesSourceOwnerScope(t *testing.T) {
 	require.Equal(t, "operator-code/"+operatorCodeHTTPTestBindingID, resolver.input.ClientSessionID)
 }
 
+func TestOperatorCodeServerAuthorizer_FailsClosedBeforeResolverOnUnavailableContext(t *testing.T) {
+	ref := uci.ContextRef{
+		SourceID: "20000000-0000-4000-8000-000000000001", CheckoutID: "30000000-0000-4000-8000-000000000001", ViewID: "40000000-0000-4000-8000-000000000001", AnalysisProfileID: "50000000-0000-4000-8000-000000000001",
+	}
+	caller := operatorCodeVerifiedCaller{Subject: auth.BrowserSubjectForUser(41), BindingID: operatorCodeHTTPTestBindingID, Context: ref}
+
+	t.Run("source unavailable", func(t *testing.T) {
+		contexts := &operatorCodeRouteTestContextStore{}
+		resolver := &operatorCodeRouteTestResolver{}
+		_, err := newOperatorCodeServerAuthorizer(contexts, resolver).AuthorizeOperatorCode(context.Background(), caller)
+		require.ErrorContains(t, err, "source scope is unavailable")
+		require.Zero(t, resolver.calls)
+		require.Empty(t, contexts.checkoutCalls)
+	})
+
+	t.Run("checkout belongs to a different source", func(t *testing.T) {
+		contexts := &operatorCodeRouteTestContextStore{
+			source:   &gormstore.UCISource{SourceID: ref.SourceID},
+			checkout: &gormstore.UCICheckout{CheckoutID: ref.CheckoutID, SourceID: "other-source"},
+		}
+		resolver := &operatorCodeRouteTestResolver{}
+		_, err := newOperatorCodeServerAuthorizer(contexts, resolver).AuthorizeOperatorCode(context.Background(), caller)
+		require.ErrorContains(t, err, "checkout scope is unavailable")
+		require.Zero(t, resolver.calls, "a mismatched persisted checkout must never reach UCI authorization")
+	})
+}
+
 type operatorCodeRouteTestCalls struct {
 	status int
 	search int
