@@ -29,10 +29,54 @@ type uci1GraphCallInput struct {
 	maxEdges                       int
 }
 
+type uci1GraphFixtureState struct {
+	selection   uciInstalledAcceptanceSelection
+	publication uciInstalledAcceptancePublication
+	path        string
+	baseline    []byte
+	mutated     bool
+	restored    bool
+}
+
 // uci1ProbeGraphInstalled observes the graph contract through the live installed
 // MCP client. Each source mutation is published before it is queried and the
 // original fixture bytes are republished before the callback returns.
 func uci1ProbeGraphInstalled(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime) (evidence map[string]uciInstalledAcceptanceScenarioEvidence, retErr error) {
+	state, err := uci1GraphPrepareFixture(ctx, runtime)
+	if err != nil {
+		return nil, err
+	}
+	defer uci1GraphRestoreFixture(&retErr, runtime, state)
+
+	u20Digest, err := uci1GraphObserveAmbiguity(ctx, runtime, state)
+	if err != nil {
+		return nil, err
+	}
+	u21Digest, err := uci1GraphObserveMalformed(ctx, runtime, state)
+	if err != nil {
+		return nil, err
+	}
+	u29Digest, err := uci1GraphObserveDenseCycle(ctx, runtime, state)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := state.restore(ctx, runtime.ClientA); err != nil {
+		return nil, fmt.Errorf("restore installed graph fixture publication: %w", err)
+	}
+	if _, err := uciObserveInstalledAcceptanceSearchGraphRead(ctx, runtime.ClientA, state.selection, state.publication, runtime.Request.Fixture, runtime.Request.Fixture.PrimaryCallee); err != nil {
+		return nil, fmt.Errorf("verify restored installed graph publication: %w", err)
+	}
+	state.restored = true
+
+	return map[string]uciInstalledAcceptanceScenarioEvidence{
+		"U20": {Code: uciInstalledAcceptanceScenarioCodeObserved, Digest: u20Digest},
+		"U21": {Code: uciInstalledAcceptanceScenarioCodeObserved, Digest: u21Digest},
+		"U29": {Code: uciInstalledAcceptanceScenarioCodeObserved, Digest: u29Digest},
+	}, nil
+}
+
+func uci1GraphPrepareFixture(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime) (*uci1GraphFixtureState, error) {
 	if ctx == nil || runtime.ClientA == nil || runtime.Worktrees.primaryRoot == "" || runtime.Request.Fixture.RelativePath == "" {
 		return nil, errors.New("installed graph probe runtime is incomplete")
 	}
@@ -43,9 +87,8 @@ func uci1ProbeGraphInstalled(ctx context.Context, runtime uciInstalledAcceptance
 	if filepath.IsAbs(runtime.Request.Fixture.RelativePath) || strings.HasPrefix(filepath.Clean(runtime.Request.Fixture.RelativePath), "..") {
 		return nil, errors.New("installed graph probe fixture path is unsafe")
 	}
-
-	fixturePath := filepath.Join(runtime.Worktrees.primaryRoot, filepath.FromSlash(runtime.Request.Fixture.RelativePath))
-	baseline, err := os.ReadFile(fixturePath)
+	path := filepath.Join(runtime.Worktrees.primaryRoot, filepath.FromSlash(runtime.Request.Fixture.RelativePath))
+	baseline, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read installed graph fixture baseline: %w", err)
 	}
@@ -53,50 +96,58 @@ func uci1ProbeGraphInstalled(ctx context.Context, runtime uciInstalledAcceptance
 	if err != nil {
 		return nil, err
 	}
+	return &uci1GraphFixtureState{selection: selection, publication: publication, path: path, baseline: baseline}, nil
+}
 
-	mutated := false
-	restored := false
-	defer func() {
-		if !mutated || restored {
-			return
-		}
-		restoreCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		restoredPublication, wrote, restoreErr := uci1GraphWriteAndPublish(restoreCtx, runtime.ClientA, selection, publication, fixturePath, baseline)
-		if wrote {
-			mutated = true
-		}
-		if restoreErr == nil {
-			selection.runID = restoredPublication.runID
-			selection.viewID = restoredPublication.viewID
-			if _, restoreErr = uciObserveInstalledAcceptanceSearchGraphRead(restoreCtx, runtime.ClientA, selection, restoredPublication, runtime.Request.Fixture, runtime.Request.Fixture.PrimaryCallee); restoreErr == nil {
-				restored = true
-			}
-		}
-		if restoreErr != nil {
-			retErr = errors.Join(retErr, fmt.Errorf("restore installed graph fixture and publication: %w", restoreErr))
-		}
-	}()
+func (state *uci1GraphFixtureState) publish(ctx context.Context, client *uciInstalledAcceptanceMCPClient, source []byte) error {
+	publication, wrote, err := uci1GraphWriteAndPublish(ctx, client, state.selection, state.publication, state.path, source)
+	state.mutated = state.mutated || wrote
+	if err != nil {
+		return err
+	}
+	state.publication = publication
+	state.selection.runID = publication.runID
+	state.selection.viewID = publication.viewID
+	return nil
+}
 
-	publication, wrote, err := uci1GraphWriteAndPublish(ctx, runtime.ClientA, selection, publication, fixturePath, []byte(uci1GraphAmbiguousSource()))
-	mutated = mutated || wrote
+func (state *uci1GraphFixtureState) restore(ctx context.Context, client *uciInstalledAcceptanceMCPClient) error {
+	return state.publish(ctx, client, state.baseline)
+}
+
+func uci1GraphRestoreFixture(retErr *error, runtime uciInstalledAcceptanceScenarioRuntime, state *uci1GraphFixtureState) {
+	if !state.mutated || state.restored {
+		return
+	}
+	restoreCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := state.restore(restoreCtx, runtime.ClientA); err != nil {
+		*retErr = errors.Join(*retErr, fmt.Errorf("restore installed graph fixture and publication: %w", err))
+		return
+	}
+	if _, err := uciObserveInstalledAcceptanceSearchGraphRead(restoreCtx, runtime.ClientA, state.selection, state.publication, runtime.Request.Fixture, runtime.Request.Fixture.PrimaryCallee); err != nil {
+		*retErr = errors.Join(*retErr, fmt.Errorf("restore installed graph fixture and publication: %w", err))
+		return
+	}
+	state.restored = true
+}
+
+func uci1GraphObserveAmbiguity(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, state *uci1GraphFixtureState) (string, error) {
+	if err := state.publish(ctx, runtime.ClientA, []byte(uci1GraphAmbiguousSource())); err != nil {
+		return "", fmt.Errorf("publish U20 ambiguous graph fixture: %w", err)
+	}
+	item, search, err := uci1GraphFindItem(ctx, runtime.ClientA, state.selection, state.publication, runtime.Request.Fixture.RelativePath, uci1GraphAmbiguousCaller)
 	if err != nil {
-		return nil, fmt.Errorf("publish U20 ambiguous graph fixture: %w", err)
+		return "", fmt.Errorf("observe U20 caller through installed search: %w", err)
 	}
-	selection.runID = publication.runID
-	selection.viewID = publication.viewID
-	ambiguousItem, ambiguousSearch, err := uci1GraphFindItem(ctx, runtime.ClientA, selection, publication, runtime.Request.Fixture.RelativePath, uci1GraphAmbiguousCaller)
-	if err != nil {
-		return nil, fmt.Errorf("observe U20 caller through installed search: %w", err)
+	if _, err := uci1GraphReadItem(ctx, runtime.ClientA, state.selection, state.publication, item); err != nil {
+		return "", fmt.Errorf("observe U20 caller through installed read: %w", err)
 	}
-	if _, err := uci1GraphReadItem(ctx, runtime.ClientA, selection, publication, ambiguousItem); err != nil {
-		return nil, fmt.Errorf("observe U20 caller through installed read: %w", err)
-	}
-	ambiguousByName, err := uci1GraphCall(ctx, runtime.ClientA, selection, publication, uci1GraphCallInput{
+	byName, err := uci1GraphCall(ctx, runtime.ClientA, state.selection, state.publication, uci1GraphCallInput{
 		action: "explain",
 		target: map[string]any{
-			"source_id": publication.sourceID,
-			"view_id":   publication.viewID,
+			"source_id": state.publication.sourceID,
+			"view_id":   state.publication.viewID,
 			"name":      uci1GraphAmbiguousName,
 		},
 		direction:  "both",
@@ -106,49 +157,47 @@ func uci1ProbeGraphInstalled(ctx context.Context, runtime uciInstalledAcceptance
 		maxEdges:   32,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("observe U20 ambiguous installed graph target: %w", err)
+		return "", fmt.Errorf("observe U20 ambiguous installed graph target: %w", err)
 	}
-	if err := uci1GraphRequireAmbiguousName(ambiguousByName); err != nil {
-		return nil, fmt.Errorf("observe U20 ambiguous same-name methods: %w", err)
+	if err := uci1GraphRequireAmbiguousName(byName); err != nil {
+		return "", fmt.Errorf("observe U20 ambiguous same-name methods: %w", err)
 	}
-	ambiguousCallerGraph, err := uci1GraphCall(ctx, runtime.ClientA, selection, publication, uci1GraphCallInput{action: "neighbors", target: uci1GraphTarget(ambiguousItem.Ref), direction: "outgoing", maxDepth: 4, maxVisited: 64, maxNodes: 16, maxEdges: 32})
+	callerGraph, err := uci1GraphCall(ctx, runtime.ClientA, state.selection, state.publication, uci1GraphCallInput{action: "neighbors", target: uci1GraphTarget(item.Ref), direction: "outgoing", maxDepth: 4, maxVisited: 64, maxNodes: 16, maxEdges: 32})
 	if err != nil {
-		return nil, fmt.Errorf("observe U20 ambiguous caller graph: %w", err)
+		return "", fmt.Errorf("observe U20 ambiguous caller graph: %w", err)
 	}
-	if err := uci1GraphRequireUnresolvedCaller(ambiguousCallerGraph, ambiguousItem.Ref); err != nil {
-		return nil, fmt.Errorf("observe U20 ambiguous call remains unresolved: %w", err)
+	if err := uci1GraphRequireUnresolvedCaller(callerGraph, item.Ref); err != nil {
+		return "", fmt.Errorf("observe U20 ambiguous call remains unresolved: %w", err)
 	}
-	u20Digest := uci1GraphEvidenceDigest("U20", publication, ambiguousItem, ambiguousSearch, ambiguousByName, ambiguousCallerGraph)
+	return uci1GraphEvidenceDigest("U20", state.publication, item, search, byName, callerGraph), nil
+}
 
-	publication, wrote, err = uci1GraphWriteAndPublish(ctx, runtime.ClientA, selection, publication, fixturePath, []byte(uci1GraphMalformedSource()))
-	mutated = mutated || wrote
+func uci1GraphObserveMalformed(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, state *uci1GraphFixtureState) (string, error) {
+	if err := state.publish(ctx, runtime.ClientA, []byte(uci1GraphMalformedSource())); err != nil {
+		return "", fmt.Errorf("publish U21 malformed graph fixture: %w", err)
+	}
+	item, search, err := uci1GraphFindItem(ctx, runtime.ClientA, state.selection, state.publication, runtime.Request.Fixture.RelativePath, uci1GraphMalformedFresh)
 	if err != nil {
-		return nil, fmt.Errorf("publish U21 malformed graph fixture: %w", err)
+		return "", fmt.Errorf("observe U21 fresh partial through installed search: %w", err)
 	}
-	selection.runID = publication.runID
-	selection.viewID = publication.viewID
-	malformedItem, malformedSearch, err := uci1GraphFindItem(ctx, runtime.ClientA, selection, publication, runtime.Request.Fixture.RelativePath, uci1GraphMalformedFresh)
+	if search.Status != uci.QueryStatusPartial || search.Coverage == nil || search.Coverage.Structural != uci.IndexCoveragePartial {
+		return "", errors.New("U21 malformed source was not exposed as a fresh partial search result")
+	}
+	if _, err := uci1GraphReadItem(ctx, runtime.ClientA, state.selection, state.publication, item); err != nil {
+		return "", fmt.Errorf("observe U21 fresh partial through installed read: %w", err)
+	}
+	graph, err := uci1GraphCall(ctx, runtime.ClientA, state.selection, state.publication, uci1GraphCallInput{action: "neighbors", target: uci1GraphTarget(item.Ref), direction: "outgoing", maxDepth: 4, maxVisited: 64, maxNodes: 16, maxEdges: 32})
 	if err != nil {
-		return nil, fmt.Errorf("observe U21 fresh partial through installed search: %w", err)
+		return "", fmt.Errorf("observe U21 fresh partial graph: %w", err)
 	}
-	if malformedSearch.Status != uci.QueryStatusPartial || malformedSearch.Coverage == nil || malformedSearch.Coverage.Structural != uci.IndexCoveragePartial {
-		return nil, errors.New("U21 malformed source was not exposed as a fresh partial search result")
+	if graph.Graph == nil || (graph.Status != uci.QueryStatusOK && graph.Status != uci.QueryStatusPartial && graph.Status != uci.QueryStatusEmpty) {
+		return "", errors.New("U21 malformed graph response is not bounded")
 	}
-	if _, err := uci1GraphReadItem(ctx, runtime.ClientA, selection, publication, malformedItem); err != nil {
-		return nil, fmt.Errorf("observe U21 fresh partial through installed read: %w", err)
-	}
-	malformedGraph, err := uci1GraphCall(ctx, runtime.ClientA, selection, publication, uci1GraphCallInput{action: "neighbors", target: uci1GraphTarget(malformedItem.Ref), direction: "outgoing", maxDepth: 4, maxVisited: 64, maxNodes: 16, maxEdges: 32})
-	if err != nil {
-		return nil, fmt.Errorf("observe U21 fresh partial graph: %w", err)
-	}
-	if malformedGraph.Graph == nil || (malformedGraph.Status != uci.QueryStatusOK && malformedGraph.Status != uci.QueryStatusPartial && malformedGraph.Status != uci.QueryStatusEmpty) {
-		return nil, errors.New("U21 malformed graph response is not bounded")
-	}
-	oldGraph, err := uci1GraphCall(ctx, runtime.ClientA, selection, publication, uci1GraphCallInput{
+	oldGraph, err := uci1GraphCall(ctx, runtime.ClientA, state.selection, state.publication, uci1GraphCallInput{
 		action: "explain",
 		target: map[string]any{
-			"source_id": publication.sourceID,
-			"view_id":   publication.viewID,
+			"source_id": state.publication.sourceID,
+			"view_id":   state.publication.viewID,
 			"name":      runtime.Request.Fixture.SharedSymbol,
 		},
 		direction:  "both",
@@ -158,53 +207,33 @@ func uci1ProbeGraphInstalled(ctx context.Context, runtime uciInstalledAcceptance
 		maxEdges:   32,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("observe U21 no stale current graph edge: %w", err)
+		return "", fmt.Errorf("observe U21 no stale current graph edge: %w", err)
 	}
 	if oldGraph.Graph == nil || len(oldGraph.Graph.Edges) != 0 {
-		return nil, errors.New("U21 malformed current View retained a stale graph edge")
+		return "", errors.New("U21 malformed current View retained a stale graph edge")
 	}
-	u21Digest := uci1GraphEvidenceDigest("U21", publication, malformedItem, malformedSearch, malformedGraph, oldGraph)
+	return uci1GraphEvidenceDigest("U21", state.publication, item, search, graph, oldGraph), nil
+}
 
-	publication, wrote, err = uci1GraphWriteAndPublish(ctx, runtime.ClientA, selection, publication, fixturePath, []byte(uci1GraphDenseCycleSource()))
-	mutated = mutated || wrote
+func uci1GraphObserveDenseCycle(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, state *uci1GraphFixtureState) (string, error) {
+	if err := state.publish(ctx, runtime.ClientA, []byte(uci1GraphDenseCycleSource())); err != nil {
+		return "", fmt.Errorf("publish U29 dense cyclic graph fixture: %w", err)
+	}
+	item, search, err := uci1GraphFindItem(ctx, runtime.ClientA, state.selection, state.publication, runtime.Request.Fixture.RelativePath, uci1GraphCycleEntry)
 	if err != nil {
-		return nil, fmt.Errorf("publish U29 dense cyclic graph fixture: %w", err)
+		return "", fmt.Errorf("observe U29 dense cycle through installed search: %w", err)
 	}
-	selection.runID = publication.runID
-	selection.viewID = publication.viewID
-	cycleItem, cycleSearch, err := uci1GraphFindItem(ctx, runtime.ClientA, selection, publication, runtime.Request.Fixture.RelativePath, uci1GraphCycleEntry)
+	if _, err := uci1GraphReadItem(ctx, runtime.ClientA, state.selection, state.publication, item); err != nil {
+		return "", fmt.Errorf("observe U29 dense cycle through installed read: %w", err)
+	}
+	graph, err := uci1GraphCall(ctx, runtime.ClientA, state.selection, state.publication, uci1GraphCallInput{action: "flow", target: uci1GraphTarget(item.Ref), direction: "outgoing", maxDepth: 8, maxVisited: 64, maxNodes: 2, maxEdges: 1})
 	if err != nil {
-		return nil, fmt.Errorf("observe U29 dense cycle through installed search: %w", err)
+		return "", fmt.Errorf("observe U29 capped installed graph: %w", err)
 	}
-	if _, err := uci1GraphReadItem(ctx, runtime.ClientA, selection, publication, cycleItem); err != nil {
-		return nil, fmt.Errorf("observe U29 dense cycle through installed read: %w", err)
+	if err := uci1GraphRequireCapped(graph, 2, 1); err != nil {
+		return "", fmt.Errorf("observe U29 bounded partial graph: %w", err)
 	}
-	cappedGraph, err := uci1GraphCall(ctx, runtime.ClientA, selection, publication, uci1GraphCallInput{action: "flow", target: uci1GraphTarget(cycleItem.Ref), direction: "outgoing", maxDepth: 8, maxVisited: 64, maxNodes: 2, maxEdges: 1})
-	if err != nil {
-		return nil, fmt.Errorf("observe U29 capped installed graph: %w", err)
-	}
-	if err := uci1GraphRequireCapped(cappedGraph, 2, 1); err != nil {
-		return nil, fmt.Errorf("observe U29 bounded partial graph: %w", err)
-	}
-	u29Digest := uci1GraphEvidenceDigest("U29", publication, cycleItem, cycleSearch, cappedGraph)
-
-	restoredPublication, wrote, err := uci1GraphWriteAndPublish(ctx, runtime.ClientA, selection, publication, fixturePath, baseline)
-	mutated = mutated || wrote
-	if err != nil {
-		return nil, fmt.Errorf("restore installed graph fixture publication: %w", err)
-	}
-	selection.runID = restoredPublication.runID
-	selection.viewID = restoredPublication.viewID
-	restored = true
-	if _, err := uciObserveInstalledAcceptanceSearchGraphRead(ctx, runtime.ClientA, selection, restoredPublication, runtime.Request.Fixture, runtime.Request.Fixture.PrimaryCallee); err != nil {
-		return nil, fmt.Errorf("verify restored installed graph publication: %w", err)
-	}
-
-	return map[string]uciInstalledAcceptanceScenarioEvidence{
-		"U20": {Code: uciInstalledAcceptanceScenarioCodeObserved, Digest: u20Digest},
-		"U21": {Code: uciInstalledAcceptanceScenarioCodeObserved, Digest: u21Digest},
-		"U29": {Code: uciInstalledAcceptanceScenarioCodeObserved, Digest: u29Digest},
-	}, nil
+	return uci1GraphEvidenceDigest("U29", state.publication, item, search, graph), nil
 }
 
 func uci1GraphCurrentPublication(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection) (uciInstalledAcceptanceSelection, uciInstalledAcceptancePublication, error) {
