@@ -1256,13 +1256,20 @@ type uciWatcherSLORecordedBatches struct {
 	batches            []acceptance.UCIWatcherSLOBatch
 	healthyWarmBatches int
 }
+type uciWatcherSLOBatchRecordingInput struct {
+	live                     uciInstalledAcceptanceScenarioRuntime
+	journal                  *uciWatcherSLOStageJournal
+	run                      *uciWatcherSLOStageRun
+	scannerAggregateObserver *uciWatcherSLOScannerAggregateObserver
+	embeddingTimingObserver  *uciWatcherSLOEmbeddingTimingObserver
+}
 
 func uciRecordInstalledWatcherSLOObserved(ctx context.Context, live uciInstalledAcceptanceScenarioRuntime, provider *uciInstalledAcceptanceEmbeddingProvider, journal *uciWatcherSLOStageJournal, run *uciWatcherSLOStageRun, scannerAggregateObserver *uciWatcherSLOScannerAggregateObserver, embeddingTimingObserver *uciWatcherSLOEmbeddingTimingObserver) (acceptance.UCIWatcherSLOInput, error) {
 	candidate, err := uciWatcherSLORecordCandidate(ctx, live, provider, journal, run)
 	if err != nil {
 		return acceptance.UCIWatcherSLOInput{}, err
 	}
-	recorded, err := uciWatcherSLORecordBatches(ctx, live, journal, run, scannerAggregateObserver, embeddingTimingObserver)
+	recorded, err := uciWatcherSLORecordBatches(ctx, uciWatcherSLOBatchRecordingInput{live: live, journal: journal, run: run, scannerAggregateObserver: scannerAggregateObserver, embeddingTimingObserver: embeddingTimingObserver})
 	if err != nil {
 		return acceptance.UCIWatcherSLOInput{}, err
 	}
@@ -1295,65 +1302,90 @@ func uciWatcherSLORecordCandidate(ctx context.Context, live uciInstalledAcceptan
 	return candidate, nil
 }
 
-func uciWatcherSLORecordBatches(ctx context.Context, live uciInstalledAcceptanceScenarioRuntime, journal *uciWatcherSLOStageJournal, run *uciWatcherSLOStageRun, scannerAggregateObserver *uciWatcherSLOScannerAggregateObserver, embeddingTimingObserver *uciWatcherSLOEmbeddingTimingObserver) (uciWatcherSLORecordedBatches, error) {
-	recorded := uciWatcherSLORecordedBatches{
+func uciWatcherSLORecordBatches(ctx context.Context, input uciWatcherSLOBatchRecordingInput) (uciWatcherSLORecordedBatches, error) {
+	recorded := uciWatcherSLOInitialRecordedBatches(input.live)
+	if err := uciWatcherSLOPrepareRecordedBatches(input.live, &recorded); err != nil {
+		return uciWatcherSLORecordedBatches{}, err
+	}
+	for sequence := 1; sequence <= uciWatcherSLORecordMaximumAttempts && recorded.healthyWarmBatches < uciWatcherSLORecordRequiredWarmBatches; sequence++ {
+		if err := uciWatcherSLORecordBatchAttempt(ctx, input, &recorded, sequence); err != nil {
+			return uciWatcherSLORecordedBatches{}, err
+		}
+	}
+	if recorded.healthyWarmBatches < uciWatcherSLORecordRequiredWarmBatches {
+		return uciWatcherSLORecordedBatches{}, fmt.Errorf("installed watcher recorder reached %d attempts with %d healthy warm samples, want %d", len(recorded.batches), recorded.healthyWarmBatches, uciWatcherSLORecordRequiredWarmBatches)
+	}
+	return recorded, nil
+}
+
+func uciWatcherSLOInitialRecordedBatches(live uciInstalledAcceptanceScenarioRuntime) uciWatcherSLORecordedBatches {
+	return uciWatcherSLORecordedBatches{
 		selectionA: live.Selections[uciInstalledAcceptanceClientA],
 		selectionB: live.Selections[uciInstalledAcceptanceClientB],
 		beforeA:    live.Publications[uciInstalledAcceptanceClientA],
 		beforeB:    live.Publications[uciInstalledAcceptanceClientB],
 		batches:    make([]acceptance.UCIWatcherSLOBatch, 0, uciWatcherSLORecordMaximumAttempts),
 	}
+}
+
+func uciWatcherSLOPrepareRecordedBatches(live uciInstalledAcceptanceScenarioRuntime, recorded *uciWatcherSLORecordedBatches) error {
 	if recorded.selectionA.contextHandle == "" || recorded.selectionB.contextHandle == "" || recorded.beforeA.viewID == "" || recorded.beforeB.viewID == "" {
-		return uciWatcherSLORecordedBatches{}, errors.New("installed watcher recorder has no A/B baseline")
+		return errors.New("installed watcher recorder has no A/B baseline")
 	}
-	var err error
-	recorded.previousSource, err = os.ReadFile(filepath.Join(live.Worktrees.primaryRoot, filepath.FromSlash(live.Request.Fixture.RelativePath)))
+	previousSource, err := os.ReadFile(filepath.Join(live.Worktrees.primaryRoot, filepath.FromSlash(live.Request.Fixture.RelativePath)))
 	if err != nil {
-		return uciWatcherSLORecordedBatches{}, fmt.Errorf("read installed watcher A baseline: %w", err)
+		return fmt.Errorf("read installed watcher A baseline: %w", err)
 	}
-	for sequence := 1; sequence <= uciWatcherSLORecordMaximumAttempts && recorded.healthyWarmBatches < uciWatcherSLORecordRequiredWarmBatches; sequence++ {
-		warmth := "warm"
-		if sequence == 1 {
-			warmth = "cold"
-		}
+	recorded.previousSource = previousSource
+	return nil
+}
+
+func uciWatcherSLORecordBatchAttempt(ctx context.Context, input uciWatcherSLOBatchRecordingInput, recorded *uciWatcherSLORecordedBatches, sequence int) error {
+	if input.run != nil {
+		input.run.Attempted++
+	}
+	batchInput := uciWatcherSLOBatchInput{
+		live:                     input.live,
+		selectionA:               recorded.selectionA,
+		selectionB:               recorded.selectionB,
+		beforeA:                  recorded.beforeA,
+		beforeB:                  recorded.beforeB,
+		previousSource:           recorded.previousSource,
+		sequence:                 sequence,
+		warmth:                   uciWatcherSLOBatchWarmth(sequence),
+		journal:                  input.journal,
+		scannerAggregateObserver: input.scannerAggregateObserver,
+		embeddingTimingObserver:  input.embeddingTimingObserver,
+	}
+	batch, nextSource, afterA, err := uciWatcherSLORecordObservedBatch(ctx, batchInput)
+	if err != nil {
+		return err
+	}
+	uciWatcherSLOStoreRecordedBatch(input.run, recorded, batch, nextSource, afterA)
+	return nil
+}
+
+func uciWatcherSLOBatchWarmth(sequence int) string {
+	if sequence == 1 {
+		return "cold"
+	}
+	return "warm"
+}
+
+func uciWatcherSLOStoreRecordedBatch(run *uciWatcherSLOStageRun, recorded *uciWatcherSLORecordedBatches, batch acceptance.UCIWatcherSLOBatch, nextSource []byte, afterA uciInstalledAcceptancePublication) {
+	if run != nil {
+		run.Finished++
+	}
+	recorded.batches = append(recorded.batches, batch)
+	if batch.Warmth == "warm" && batch.Outcome == "healthy" {
+		recorded.healthyWarmBatches++
 		if run != nil {
-			run.Attempted++
+			run.HealthyWarm++
 		}
-		batchInput := uciWatcherSLOBatchInput{
-			live:                     live,
-			selectionA:               recorded.selectionA,
-			selectionB:               recorded.selectionB,
-			beforeA:                  recorded.beforeA,
-			beforeB:                  recorded.beforeB,
-			previousSource:           recorded.previousSource,
-			sequence:                 sequence,
-			warmth:                   warmth,
-			journal:                  journal,
-			scannerAggregateObserver: scannerAggregateObserver,
-			embeddingTimingObserver:  embeddingTimingObserver,
-		}
-		batch, nextSource, afterA, err := uciWatcherSLORecordObservedBatch(ctx, batchInput)
-		if err != nil {
-			return uciWatcherSLORecordedBatches{}, err
-		}
-		if run != nil {
-			run.Finished++
-		}
-		recorded.batches = append(recorded.batches, batch)
-		if batch.Warmth == "warm" && batch.Outcome == "healthy" {
-			recorded.healthyWarmBatches++
-			if run != nil {
-				run.HealthyWarm++
-			}
-		}
-		recorded.previousSource = nextSource
-		recorded.beforeA = afterA
-		recorded.selectionA.runID = afterA.runID
 	}
-	if recorded.healthyWarmBatches < uciWatcherSLORecordRequiredWarmBatches {
-		return uciWatcherSLORecordedBatches{}, fmt.Errorf("installed watcher recorder reached %d attempts with %d healthy warm samples, want %d", len(recorded.batches), recorded.healthyWarmBatches, uciWatcherSLORecordRequiredWarmBatches)
-	}
-	return recorded, nil
+	recorded.previousSource = nextSource
+	recorded.beforeA = afterA
+	recorded.selectionA.runID = afterA.runID
 }
 
 func uciWatcherSLORecordObservedBatch(ctx context.Context, input uciWatcherSLOBatchInput) (acceptance.UCIWatcherSLOBatch, []byte, uciInstalledAcceptancePublication, error) {
@@ -1621,7 +1653,7 @@ func uciWatcherSLOAwaitSearchable(ctx context.Context, client *uciInstalledAccep
 		watched := selection
 		watched.runID = publication.runID
 		canaryStarted := time.Now()
-		response, canaryErr := uciRequireInstalledAcceptanceWatcherCanaryResponse(ctx, client, watched, publication, functionName, relativePath, true)
+		response, canaryErr := uciRequireInstalledAcceptanceWatcherCanaryResponse(ctx, uciInstalledAcceptanceWatcherCanaryInput{client: client, selection: watched, publication: publication, functionName: functionName, relativePath: relativePath, wantPresent: true})
 		canaryCompleted := time.Now()
 		trace.observeCall("canary_search", canaryStarted, canaryCompleted, canaryErr)
 		if canaryErr != nil {

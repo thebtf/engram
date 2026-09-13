@@ -148,6 +148,28 @@ type uciInstalledAcceptanceRestartInput struct {
 	publications       map[string]uciInstalledAcceptancePublication
 	result             *uciInstalledAcceptanceResult
 }
+type uciInstalledAcceptanceRestartState struct {
+	input             uciInstalledAcceptanceRestartInput
+	oldDaemonPID      int
+	next              *uciInstallHarnessInstallation
+	installedPaths    map[string]string
+	serverEnvironment []string
+	clientEnvironment []string
+	clients           map[string]*uciInstalledAcceptanceMCPClient
+	selections        map[string]uciInstalledAcceptanceSelection
+	publications      map[string]uciInstalledAcceptancePublication
+	serverPID         int
+	daemonPID         int
+}
+
+type uciInstalledAcceptanceWatcherCanaryInput struct {
+	client       *uciInstalledAcceptanceMCPClient
+	selection    uciInstalledAcceptanceSelection
+	publication  uciInstalledAcceptancePublication
+	functionName string
+	relativePath string
+	wantPresent  bool
+}
 
 type uciInstalledAcceptanceWatcherInput struct {
 	fixture                         uciInstalledAcceptanceFixture
@@ -3079,31 +3101,56 @@ func uciInstalledAcceptanceFindSearchCitation(items uci.QueryItems, publication 
 	var searchItem *uci.QueryItem
 	for index := range items {
 		item := &items[index]
-		if item.Ref.SourceID != publication.sourceID || item.Ref.ViewID != publication.viewID {
-			return uci.QueryItem{}, errors.New("installed standard MCP search disclosed an item outside the selected View")
+		if err := uciInstalledAcceptanceValidateSearchCitationPublication(*item, publication); err != nil {
+			return uci.QueryItem{}, err
 		}
-		caller, callerOK := uciInstalledAcceptanceGoFunctionName(item.Ref.EntityKey)
-		if item.Path != fixture.RelativePath || !callerOK || caller != fixture.SharedSymbol {
+		if !uciInstalledAcceptanceMatchesSearchCitation(*item, fixture) {
 			continue
 		}
-		if !uciInstalledAcceptanceIsBareSHA256(string(item.ContentDigest)) {
-			return uci.QueryItem{}, errors.New("installed standard MCP search citation has an invalid content digest")
-		}
-		if searchItem != nil && searchItem.ContentDigest != item.ContentDigest {
-			return uci.QueryItem{}, errors.New("installed standard MCP search returned conflicting SharedTarget artifacts")
-		}
-		if searchItem == nil || item.Span.ByteEnd-item.Span.ByteStart < searchItem.Span.ByteEnd-searchItem.Span.ByteStart {
-			searchItem = item
+		if err := uciInstalledAcceptanceSelectSearchCitation(&searchItem, item); err != nil {
+			return uci.QueryItem{}, err
 		}
 	}
 	if searchItem == nil {
 		return uci.QueryItem{}, errors.New("installed standard MCP search omitted the qualified SharedTarget citation")
 	}
-	caller, callerOK := uciInstalledAcceptanceGoFunctionName(searchItem.Ref.EntityKey)
-	if !callerOK || caller != fixture.SharedSymbol {
-		return uci.QueryItem{}, errors.New("installed standard MCP search did not cite the qualified SharedTarget entity")
+	if err := uciInstalledAcceptanceValidateSearchCitationEntity(*searchItem, fixture); err != nil {
+		return uci.QueryItem{}, err
 	}
 	return *searchItem, nil
+}
+
+func uciInstalledAcceptanceValidateSearchCitationPublication(item uci.QueryItem, publication uciInstalledAcceptancePublication) error {
+	if item.Ref.SourceID != publication.sourceID || item.Ref.ViewID != publication.viewID {
+		return errors.New("installed standard MCP search disclosed an item outside the selected View")
+	}
+	return nil
+}
+
+func uciInstalledAcceptanceMatchesSearchCitation(item uci.QueryItem, fixture uciInstalledAcceptanceFixture) bool {
+	caller, callerOK := uciInstalledAcceptanceGoFunctionName(item.Ref.EntityKey)
+	return item.Path == fixture.RelativePath && callerOK && caller == fixture.SharedSymbol
+}
+
+func uciInstalledAcceptanceSelectSearchCitation(current **uci.QueryItem, candidate *uci.QueryItem) error {
+	if !uciInstalledAcceptanceIsBareSHA256(string(candidate.ContentDigest)) {
+		return errors.New("installed standard MCP search citation has an invalid content digest")
+	}
+	if *current != nil && (*current).ContentDigest != candidate.ContentDigest {
+		return errors.New("installed standard MCP search returned conflicting SharedTarget artifacts")
+	}
+	if *current == nil || candidate.Span.ByteEnd-candidate.Span.ByteStart < (*current).Span.ByteEnd-(*current).Span.ByteStart {
+		*current = candidate
+	}
+	return nil
+}
+
+func uciInstalledAcceptanceValidateSearchCitationEntity(item uci.QueryItem, fixture uciInstalledAcceptanceFixture) error {
+	caller, callerOK := uciInstalledAcceptanceGoFunctionName(item.Ref.EntityKey)
+	if !callerOK || caller != fixture.SharedSymbol {
+		return errors.New("installed standard MCP search did not cite the qualified SharedTarget entity")
+	}
+	return nil
 }
 
 func uciInstalledAcceptanceGraphCallee(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection, publication uciInstalledAcceptancePublication, searchItem uci.QueryItem, expectedCallee string) (string, error) {
@@ -3953,22 +4000,86 @@ func uciWaitForInstalledAcceptanceRestartParserPID(ctx context.Context, installa
 }
 
 func uciRestartInstalledAcceptance(ctx context.Context, input uciInstalledAcceptanceRestartInput) (next *uciInstallHarnessInstallation, newDaemonPID int, retErr error) {
-	request, candidates, authority, worktrees := input.request, input.candidates, input.authority, input.worktrees
-	serverPort, parserBundleDigest, daemonControlRoot := input.serverPort, input.parserBundleDigest, input.daemonControlRoot
-	oldInstallation, daemonOwner, oldClients := input.oldInstallation, input.daemonOwner, input.oldClients
-	selections, publications, result := input.selections, input.publications, input.result
-	if daemonOwner == nil {
-		return nil, 0, errors.New("installed acceptance restart daemon owner is unavailable")
+	state, err := uciPrepareInstalledAcceptanceRestart(ctx, input)
+	if err != nil {
+		return nil, 0, err
 	}
-	oldDaemonPID := *daemonOwner
-	if oldInstallation == nil || authority == nil || result == nil || oldDaemonPID <= 0 || result.Processes.DaemonPID != oldDaemonPID || result.Processes.ServerPID <= 0 || result.Processes.ParserPID <= 0 {
-		return nil, 0, errors.New("installed acceptance restart baseline is incomplete")
+	if err := state.materialize(ctx); err != nil {
+		return nil, 0, err
+	}
+	defer func() {
+		if retErr == nil || state.next == nil {
+			return
+		}
+		retErr = errors.Join(retErr, state.cleanup())
+		next = nil
+		newDaemonPID = 0
+	}()
+	if err := state.startServer(ctx); err != nil {
+		return nil, 0, err
+	}
+	state.clients = make(map[string]*uciInstalledAcceptanceMCPClient, 3)
+	defer state.captureClientTranscripts()
+	if err := state.startClients(ctx); err != nil {
+		return nil, 0, err
+	}
+	if err := state.restartPublications(ctx); err != nil {
+		return nil, 0, err
+	}
+	if err := state.recordRestartedProcesses(ctx); err != nil {
+		return nil, 0, err
+	}
+	if err := state.verifyRestartedObservations(ctx); err != nil {
+		return nil, 0, err
+	}
+	if err := state.verifyRestartedProjections(ctx); err != nil {
+		return nil, 0, err
+	}
+	if err := state.runScenarioProbe(ctx); err != nil {
+		return nil, 0, err
+	}
+	return state.next, state.daemonPID, nil
+}
+
+func uciPrepareInstalledAcceptanceRestart(ctx context.Context, input uciInstalledAcceptanceRestartInput) (uciInstalledAcceptanceRestartState, error) {
+	state, err := uciNewInstalledAcceptanceRestartState(input)
+	if err != nil {
+		return uciInstalledAcceptanceRestartState{}, err
+	}
+	if err := state.captureBaseline(ctx); err != nil {
+		return uciInstalledAcceptanceRestartState{}, err
+	}
+	if err := state.retire(ctx); err != nil {
+		return uciInstalledAcceptanceRestartState{}, err
+	}
+	// The restarted lifecycle now owns successor cleanup. A later failure must
+	// not stop the retired PID against a successor daemon control record.
+	*state.input.daemonOwner = 0
+	if err := uciWaitForInstalledAcceptanceLoopbackRelease(ctx, state.input.request.LoopbackHost, state.input.serverPort); err != nil {
+		return uciInstalledAcceptanceRestartState{}, err
+	}
+	return state, nil
+}
+
+func uciNewInstalledAcceptanceRestartState(input uciInstalledAcceptanceRestartInput) (uciInstalledAcceptanceRestartState, error) {
+	if input.daemonOwner == nil {
+		return uciInstalledAcceptanceRestartState{}, errors.New("installed acceptance restart daemon owner is unavailable")
+	}
+	state := uciInstalledAcceptanceRestartState{input: input, oldDaemonPID: *input.daemonOwner}
+	result := input.result
+	if input.oldInstallation == nil || input.authority == nil || result == nil || state.oldDaemonPID <= 0 || result.Processes.DaemonPID != state.oldDaemonPID || result.Processes.ServerPID <= 0 || result.Processes.ParserPID <= 0 {
+		return uciInstalledAcceptanceRestartState{}, errors.New("installed acceptance restart baseline is incomplete")
 	}
 	for _, client := range []string{uciInstalledAcceptanceClientA, uciInstalledAcceptanceClientB, uciInstalledAcceptanceClientC} {
-		if oldClients[client] == nil || oldClients[client].process == nil {
-			return nil, 0, errors.New("installed acceptance restart client is incomplete")
+		if input.oldClients[client] == nil || input.oldClients[client].process == nil {
+			return uciInstalledAcceptanceRestartState{}, errors.New("installed acceptance restart client is incomplete")
 		}
 	}
+	return state, nil
+}
+
+func (state *uciInstalledAcceptanceRestartState) captureBaseline(ctx context.Context) error {
+	result := state.input.result
 	if result.Restart.BeforeClientContexts == nil {
 		result.Restart.BeforeClientContexts = make(map[string]uciInstalledAcceptanceContext)
 	}
@@ -3976,299 +4087,320 @@ func uciRestartInstalledAcceptance(ctx context.Context, input uciInstalledAccept
 		result.Restart.BeforeObservations = make(map[string]uciInstalledAcceptanceObservations)
 	}
 	for _, client := range []string{uciInstalledAcceptanceClientA, uciInstalledAcceptanceClientB} {
-		publication, found := publications[client]
-		if !found || selections[client].contextHandle == "" || publication.sourceID == "" || publication.checkoutID == "" || publication.viewID == "" || publication.profileID == "" || publication.generation < 1 || publication.runID == "" {
-			return nil, 0, errors.New("installed acceptance restart selected publication is incomplete")
+		publication, found := state.input.publications[client]
+		if !found || state.input.selections[client].contextHandle == "" || publication.sourceID == "" || publication.checkoutID == "" || publication.viewID == "" || publication.profileID == "" || publication.generation < 1 || publication.runID == "" {
+			return errors.New("installed acceptance restart selected publication is incomplete")
 		}
 		observation, found := result.Observations[client]
 		if !found {
-			return nil, 0, errors.New("installed acceptance restart has no observation baseline")
+			return errors.New("installed acceptance restart has no observation baseline")
 		}
 		result.Restart.BeforeClientContexts[client] = uciInstalledAcceptanceContextForPublication(publication)
 		result.Restart.BeforeObservations[client] = uciInstalledAcceptanceCloneObservations(observation)
 	}
-
 	result.Restart.BeforeProcesses = result.Processes
-	beforeCounts, err := uciInstalledAcceptanceProjectionCountsForAuthority(ctx, authority)
+	beforeCounts, err := uciInstalledAcceptanceProjectionCountsForAuthority(ctx, state.input.authority)
 	if err != nil {
-		return nil, 0, err
+		return err
 	}
 	result.Restart.BeforeProjectionCounts = beforeCounts
+	return nil
+}
 
+func (state *uciInstalledAcceptanceRestartState) retire(ctx context.Context) error {
 	var shutdownErrors []error
 	for _, client := range []string{uciInstalledAcceptanceClientA, uciInstalledAcceptanceClientB, uciInstalledAcceptanceClientC} {
-		if closeErr := oldClients[client].process.closePipes(); closeErr != nil {
+		if closeErr := state.input.oldClients[client].process.closePipes(); closeErr != nil {
 			shutdownErrors = append(shutdownErrors, fmt.Errorf("close installed acceptance %s stdio: %w", client, closeErr))
 		}
 	}
-	if stopErr := uciStopInstalledAcceptanceDaemon(daemonControlRoot, oldDaemonPID); stopErr != nil {
+	if stopErr := uciStopInstalledAcceptanceDaemon(state.input.daemonControlRoot, state.oldDaemonPID); stopErr != nil {
 		shutdownErrors = append(shutdownErrors, stopErr)
 	}
-	if waitErr := uciWaitInstalledAcceptanceProcessExit(oldDaemonPID, 5*time.Second); waitErr != nil {
+	if waitErr := uciWaitInstalledAcceptanceProcessExit(state.oldDaemonPID, 5*time.Second); waitErr != nil {
 		shutdownErrors = append(shutdownErrors, waitErr)
 	}
-	if closeErr := oldInstallation.Close(); closeErr != nil {
+	if closeErr := state.input.oldInstallation.Close(); closeErr != nil {
 		shutdownErrors = append(shutdownErrors, closeErr)
 	}
-	if shutdownErr := errors.Join(shutdownErrors...); shutdownErr != nil {
-		return nil, 0, shutdownErr
-	}
-	// The restarted lifecycle now owns successor cleanup. A later failure must
-	// not stop the retired PID against a successor daemon control record.
-	*daemonOwner = 0
-	if err := uciWaitForInstalledAcceptanceLoopbackRelease(ctx, request.LoopbackHost, serverPort); err != nil {
-		return nil, 0, err
-	}
+	return errors.Join(shutdownErrors...)
+}
 
+func (state *uciInstalledAcceptanceRestartState) materialize(ctx context.Context) error {
+	request := state.input.request
 	installResult, err := runUCIInstallHarness(ctx, uciInstallHarnessRequest{
 		Version:          request.InstallHarnessVersion,
 		Scenario:         uciInstallHarnessScenarioMaterialize,
 		InstallRoot:      request.InstallRoot,
-		Server:           candidates["server"],
-		Daemon:           candidates["daemon"],
-		Parser:           candidates["parser"],
+		Server:           state.input.candidates["server"],
+		Daemon:           state.input.candidates["daemon"],
+		Parser:           state.input.candidates["parser"],
 		ReadinessTimeout: request.ReadinessTimeout,
 	})
 	if err != nil {
-		return nil, 0, fmt.Errorf("rematerialize installed UCI candidates: %w", err)
+		return fmt.Errorf("rematerialize installed UCI candidates: %w", err)
 	}
-	next = installResult.Installation
-	if next == nil {
-		return nil, 0, errors.New("rematerialize installed UCI candidates returned no installation")
+	state.next = installResult.Installation
+	if state.next == nil {
+		return errors.New("rematerialize installed UCI candidates returned no installation")
 	}
-	defer func() {
-		if retErr == nil || next == nil {
-			return
-		}
-		var cleanupErrors []error
-		if newDaemonPID > 0 {
-			if stopErr := uciStopInstalledAcceptanceDaemon(daemonControlRoot, newDaemonPID); stopErr != nil {
-				cleanupErrors = append(cleanupErrors, stopErr)
-			}
-			if waitErr := uciWaitInstalledAcceptanceProcessExit(newDaemonPID, 5*time.Second); waitErr != nil {
-				cleanupErrors = append(cleanupErrors, waitErr)
-			}
-		}
-		if closeErr := next.Close(); closeErr != nil {
-			cleanupErrors = append(cleanupErrors, closeErr)
-		}
-		retErr = errors.Join(retErr, errors.Join(cleanupErrors...))
-		next = nil
-		newDaemonPID = 0
-	}()
+	return nil
+}
 
-	installedPaths, err := uciVerifyInstalledAcceptanceRestartArtifacts(candidates, next, result.Artifacts)
-	if err != nil {
-		return nil, 0, err
+func (state *uciInstalledAcceptanceRestartState) cleanup() error {
+	var cleanupErrors []error
+	if state.daemonPID > 0 {
+		if stopErr := uciStopInstalledAcceptanceDaemon(state.input.daemonControlRoot, state.daemonPID); stopErr != nil {
+			cleanupErrors = append(cleanupErrors, stopErr)
+		}
+		if waitErr := uciWaitInstalledAcceptanceProcessExit(state.daemonPID, 5*time.Second); waitErr != nil {
+			cleanupErrors = append(cleanupErrors, waitErr)
+		}
 	}
-	serverEnvironment, clientEnvironment, err := uciInstalledAcceptanceEnvironment(request, authority, serverPort, parserBundleDigest, installedPaths["parser"])
-	if err != nil {
-		return nil, 0, err
+	if closeErr := state.next.Close(); closeErr != nil {
+		cleanupErrors = append(cleanupErrors, closeErr)
 	}
-	server, err := next.Start(ctx, uciInstalledHarnessLaunchRequest{Role: "server", Environment: serverEnvironment})
+	return errors.Join(cleanupErrors...)
+}
+
+func (state *uciInstalledAcceptanceRestartState) startServer(ctx context.Context) error {
+	var err error
+	state.installedPaths, err = uciVerifyInstalledAcceptanceRestartArtifacts(state.input.candidates, state.next, state.input.result.Artifacts)
 	if err != nil {
-		return nil, 0, err
+		return err
+	}
+	state.serverEnvironment, state.clientEnvironment, err = uciInstalledAcceptanceEnvironment(state.input.request, state.input.authority, state.input.serverPort, state.input.parserBundleDigest, state.installedPaths["parser"])
+	if err != nil {
+		return err
+	}
+	server, err := state.next.Start(ctx, uciInstalledHarnessLaunchRequest{Role: "server", Environment: state.serverEnvironment})
+	if err != nil {
+		return err
 	}
 	if server == nil || server.command == nil || server.command.Process == nil || server.command.Process.Pid <= 0 {
-		return nil, 0, errors.New("restarted installed server has no process")
+		return errors.New("restarted installed server has no process")
 	}
-	restartedServerPID := server.command.Process.Pid
-	readinessCtx, cancelReadiness := context.WithTimeout(ctx, request.ReadinessTimeout)
-	if err := uciWaitForInstalledAcceptanceLoopback(readinessCtx, request.LoopbackHost, serverPort); err != nil {
+	state.serverPID = server.command.Process.Pid
+	readinessCtx, cancelReadiness := context.WithTimeout(ctx, state.input.request.ReadinessTimeout)
+	if err := uciWaitForInstalledAcceptanceLoopback(readinessCtx, state.input.request.LoopbackHost, state.input.serverPort); err != nil {
 		cancelReadiness()
-		return nil, 0, err
+		return err
 	}
 	cancelReadiness()
+	return nil
+}
 
-	restartedClients := make(map[string]*uciInstalledAcceptanceMCPClient, 3)
-	defer func() {
-		for name, client := range restartedClients {
-			result.Restart.ClientTranscripts[name] = client.Transcript()
-		}
-	}()
-	startClient := func(name, workingDirectory string) (*uciInstalledAcceptanceMCPClient, error) {
-		process, startErr := next.Start(ctx, uciInstalledHarnessLaunchRequest{
-			Role:             "daemon",
-			WorkingDirectory: workingDirectory,
-			Environment:      clientEnvironment,
-			WithStdio:        true,
-		})
-		if startErr != nil {
-			return nil, startErr
-		}
-		client, clientErr := newUCIInstalledAcceptanceMCPClient(name, process)
-		if clientErr != nil {
-			return nil, clientErr
-		}
-		if initErr := client.InitializeAndList(ctx); initErr != nil {
-			return nil, initErr
-		}
-		if toolErr := uciRequireInstalledAcceptanceTools(client.Transcript()); toolErr != nil {
-			return nil, toolErr
-		}
-		restartedClients[name] = client
-		return client, nil
+func (state *uciInstalledAcceptanceRestartState) captureClientTranscripts() {
+	for name, client := range state.clients {
+		state.input.result.Restart.ClientTranscripts[name] = client.Transcript()
 	}
+}
 
-	first, err := startClient(uciInstalledAcceptanceClientA, worktrees.primaryRoot)
+func (state *uciInstalledAcceptanceRestartState) startClients(ctx context.Context) error {
+	if err := state.startClient(ctx, uciInstalledAcceptanceClientA, state.input.worktrees.primaryRoot); err != nil {
+		return err
+	}
+	var err error
+	state.daemonPID, err = uciWaitForInstalledAcceptanceDaemonPID(ctx, state.input.daemonControlRoot, state.installedPaths["daemon"])
 	if err != nil {
-		return nil, 0, err
+		return err
 	}
-	newDaemonPID, err = uciWaitForInstalledAcceptanceDaemonPID(ctx, daemonControlRoot, installedPaths["daemon"])
-	if err != nil {
-		return nil, 0, err
+	if state.daemonPID == state.oldDaemonPID {
+		return errors.New("restarted installed daemon retained its previous PID")
 	}
-	if newDaemonPID == oldDaemonPID {
-		return nil, 0, errors.New("restarted installed daemon retained its previous PID")
+	if err := state.startClient(ctx, uciInstalledAcceptanceClientB, state.input.worktrees.linkedRoot); err != nil {
+		return err
 	}
-	second, err := startClient(uciInstalledAcceptanceClientB, worktrees.linkedRoot)
-	if err != nil {
-		return nil, 0, err
-	}
-	third, err := startClient(uciInstalledAcceptanceClientC, worktrees.primaryRoot)
-	if err != nil {
-		return nil, 0, err
-	}
+	return state.startClient(ctx, uciInstalledAcceptanceClientC, state.input.worktrees.primaryRoot)
+}
 
-	firstSelection, secondSelection, err := uciSelectInstalledAcceptanceCheckouts(ctx, first, second, authority)
+func (state *uciInstalledAcceptanceRestartState) startClient(ctx context.Context, name, workingDirectory string) error {
+	process, err := state.next.Start(ctx, uciInstalledHarnessLaunchRequest{
+		Role:             "daemon",
+		WorkingDirectory: workingDirectory,
+		Environment:      state.clientEnvironment,
+		WithStdio:        true,
+	})
 	if err != nil {
-		return nil, 0, err
+		return err
 	}
-	thirdSelection, err := uciSelectInstalledAcceptanceCheckout(ctx, third, uciInstalledAcceptanceClientA, authority)
+	client, err := newUCIInstalledAcceptanceMCPClient(name, process)
 	if err != nil {
-		return nil, 0, err
+		return err
+	}
+	if err := client.InitializeAndList(ctx); err != nil {
+		return err
+	}
+	if err := uciRequireInstalledAcceptanceTools(client.Transcript()); err != nil {
+		return err
+	}
+	state.clients[name] = client
+	return nil
+}
+
+func (state *uciInstalledAcceptanceRestartState) restartPublications(ctx context.Context) error {
+	first, second, third := state.clients[uciInstalledAcceptanceClientA], state.clients[uciInstalledAcceptanceClientB], state.clients[uciInstalledAcceptanceClientC]
+	firstSelection, secondSelection, err := uciSelectInstalledAcceptanceCheckouts(ctx, first, second, state.input.authority)
+	if err != nil {
+		return err
+	}
+	thirdSelection, err := uciSelectInstalledAcceptanceCheckout(ctx, third, uciInstalledAcceptanceClientA, state.input.authority)
+	if err != nil {
+		return err
 	}
 	if firstSelection.viewID == "" || secondSelection.viewID == "" || thirdSelection.viewID == "" {
-		return nil, 0, errors.New("restarted installed clients did not select published Views")
+		return errors.New("restarted installed clients did not select published Views")
 	}
-
-	primaryBefore, primaryFound := publications[uciInstalledAcceptanceClientA]
-	linkedBefore, linkedFound := publications[uciInstalledAcceptanceClientB]
+	primaryBefore, primaryFound := state.input.publications[uciInstalledAcceptanceClientA]
+	linkedBefore, linkedFound := state.input.publications[uciInstalledAcceptanceClientB]
 	if !primaryFound || !linkedFound {
-		return nil, 0, errors.New("installed acceptance restart publication baseline is incomplete")
+		return errors.New("installed acceptance restart publication baseline is incomplete")
 	}
-	firstSelection, secondSelection, err = uciStartInstalledAcceptanceIndexes(ctx, first, second, firstSelection, secondSelection, worktrees)
+	firstSelection, secondSelection, err = uciStartInstalledAcceptanceIndexes(ctx, first, second, firstSelection, secondSelection, state.input.worktrees)
 	if err != nil {
-		return nil, 0, err
+		return err
 	}
-	restartedPublications := make(map[string]uciInstalledAcceptancePublication, 3)
+	state.selections = map[string]uciInstalledAcceptanceSelection{
+		uciInstalledAcceptanceClientA: firstSelection,
+		uciInstalledAcceptanceClientB: secondSelection,
+		uciInstalledAcceptanceClientC: thirdSelection,
+	}
+	state.publications = make(map[string]uciInstalledAcceptancePublication, 3)
+	if err := state.observeRestartedABPublications(ctx, primaryBefore, linkedBefore); err != nil {
+		return err
+	}
+	thirdPublication, err := uciWaitForInstalledAcceptanceRestartQuiescence(ctx, third, thirdSelection, primaryBefore)
+	if err != nil {
+		return err
+	}
+	state.publications[uciInstalledAcceptanceClientC] = thirdPublication
+	state.input.result.Restart.ClientContexts[uciInstalledAcceptanceClientC] = uciInstalledAcceptanceContextForPublication(thirdPublication)
+	return nil
+}
+
+func (state *uciInstalledAcceptanceRestartState) observeRestartedABPublications(ctx context.Context, primaryBefore, linkedBefore uciInstalledAcceptancePublication) error {
 	for _, item := range []struct {
 		name      string
 		client    *uciInstalledAcceptanceMCPClient
 		selection uciInstalledAcceptanceSelection
 		expected  uciInstalledAcceptancePublication
 	}{
-		{name: uciInstalledAcceptanceClientA, client: first, selection: firstSelection, expected: primaryBefore},
-		{name: uciInstalledAcceptanceClientB, client: second, selection: secondSelection, expected: linkedBefore},
+		{name: uciInstalledAcceptanceClientA, client: state.clients[uciInstalledAcceptanceClientA], selection: state.selections[uciInstalledAcceptanceClientA], expected: primaryBefore},
+		{name: uciInstalledAcceptanceClientB, client: state.clients[uciInstalledAcceptanceClientB], selection: state.selections[uciInstalledAcceptanceClientB], expected: linkedBefore},
 	} {
-		barrier, waitErr := uciWaitForInstalledAcceptanceBarrier(ctx, item.client, item.selection)
-		if waitErr != nil {
-			return nil, 0, waitErr
+		barrier, err := uciWaitForInstalledAcceptanceBarrier(ctx, item.client, item.selection)
+		if err != nil {
+			return err
 		}
-		publication, waitErr := uciWaitForInstalledAcceptanceQuiescence(ctx, item.client, item.selection, barrier)
-		if waitErr != nil {
-			return nil, 0, waitErr
+		publication, err := uciWaitForInstalledAcceptanceQuiescence(ctx, item.client, item.selection, barrier)
+		if err != nil {
+			return err
 		}
 		contextRef := uciInstalledAcceptanceContextForPublication(publication)
 		if !uciInstalledAcceptanceSameViewPublication(publication, item.expected) {
-			delta := uciInstalledAcceptanceViewDelta(ctx, authority, item.expected.viewID, publication.viewID)
-			return nil, 0, fmt.Errorf("restarted installed client %s advanced from generation %d/view %s to generation %d/view %s (%s)", item.name, item.expected.generation, uciInstalledAcceptanceStringDigest(item.expected.viewID), publication.generation, uciInstalledAcceptanceStringDigest(publication.viewID), delta)
+			delta := uciInstalledAcceptanceViewDelta(ctx, state.input.authority, item.expected.viewID, publication.viewID)
+			return fmt.Errorf("restarted installed client %s advanced from generation %d/view %s to generation %d/view %s (%s)", item.name, item.expected.generation, uciInstalledAcceptanceStringDigest(item.expected.viewID), publication.generation, uciInstalledAcceptanceStringDigest(publication.viewID), delta)
 		}
-		if before := result.Restart.BeforeClientContexts[item.name]; before != contextRef {
-			return nil, 0, fmt.Errorf("restarted installed client %s context digest changed", item.name)
+		if before := state.input.result.Restart.BeforeClientContexts[item.name]; before != contextRef {
+			return fmt.Errorf("restarted installed client %s context digest changed", item.name)
 		}
-		restartedPublications[item.name] = publication
-		result.Restart.ClientContexts[item.name] = contextRef
+		state.publications[item.name] = publication
+		state.input.result.Restart.ClientContexts[item.name] = contextRef
 	}
-	thirdPublication, err := uciWaitForInstalledAcceptanceRestartQuiescence(ctx, third, thirdSelection, primaryBefore)
-	if err != nil {
-		return nil, 0, err
-	}
-	restartedPublications[uciInstalledAcceptanceClientC] = thirdPublication
-	result.Restart.ClientContexts[uciInstalledAcceptanceClientC] = uciInstalledAcceptanceContextForPublication(thirdPublication)
+	return nil
+}
 
-	restartedParserPID, err := uciWaitForInstalledAcceptanceRestartParserPID(ctx, next, installedPaths["parser"], result.Processes.ParserPID)
+func (state *uciInstalledAcceptanceRestartState) recordRestartedProcesses(ctx context.Context) error {
+	restartedParserPID, err := uciWaitForInstalledAcceptanceRestartParserPID(ctx, state.next, state.installedPaths["parser"], state.input.result.Processes.ParserPID)
 	if err != nil {
-		return nil, 0, err
+		return err
 	}
-	afterProcesses := uciInstalledAcceptanceProcesses{
-		ServerPID: restartedServerPID,
-		DaemonPID: newDaemonPID,
-		ParserPID: restartedParserPID,
+	afterProcesses := uciInstalledAcceptanceProcesses{ServerPID: state.serverPID, DaemonPID: state.daemonPID, ParserPID: restartedParserPID}
+	if afterProcesses.ServerPID == state.input.result.Processes.ServerPID || afterProcesses.DaemonPID == state.input.result.Processes.DaemonPID || afterProcesses.ParserPID == state.input.result.Processes.ParserPID {
+		return errors.New("restarted installed process retained a previous PID")
 	}
-	if afterProcesses.ServerPID == result.Processes.ServerPID || afterProcesses.DaemonPID == result.Processes.DaemonPID || afterProcesses.ParserPID == result.Processes.ParserPID {
-		return nil, 0, errors.New("restarted installed process retained a previous PID")
-	}
-	result.Restart.AfterProcesses = afterProcesses
+	state.input.result.Restart.AfterProcesses = afterProcesses
+	return nil
+}
 
+func (state *uciInstalledAcceptanceRestartState) verifyRestartedObservations(ctx context.Context) error {
 	for _, item := range []struct {
 		name           string
 		client         *uciInstalledAcceptanceMCPClient
 		selection      uciInstalledAcceptanceSelection
 		expectedCallee string
 	}{
-		{name: uciInstalledAcceptanceClientA, client: first, selection: firstSelection, expectedCallee: request.Fixture.PrimaryCallee},
-		{name: uciInstalledAcceptanceClientB, client: second, selection: secondSelection, expectedCallee: request.Fixture.LinkedCallee},
+		{name: uciInstalledAcceptanceClientA, client: state.clients[uciInstalledAcceptanceClientA], selection: state.selections[uciInstalledAcceptanceClientA], expectedCallee: state.input.request.Fixture.PrimaryCallee},
+		{name: uciInstalledAcceptanceClientB, client: state.clients[uciInstalledAcceptanceClientB], selection: state.selections[uciInstalledAcceptanceClientB], expectedCallee: state.input.request.Fixture.LinkedCallee},
 	} {
-		observation, observationErr := uciObserveInstalledAcceptanceSearchGraphRead(ctx, item.client, item.selection, restartedPublications[item.name], request.Fixture, item.expectedCallee)
-		if observationErr != nil {
-			return nil, 0, fmt.Errorf("restarted installed standard MCP observation for %s: %w", item.name, observationErr)
+		observation, err := uciObserveInstalledAcceptanceSearchGraphRead(ctx, item.client, item.selection, state.publications[item.name], state.input.request.Fixture, item.expectedCallee)
+		if err != nil {
+			return fmt.Errorf("restarted installed standard MCP observation for %s: %w", item.name, err)
 		}
-		beforeObservation, found := result.Restart.BeforeObservations[item.name]
+		beforeObservation, found := state.input.result.Restart.BeforeObservations[item.name]
 		if !found || !uciInstalledAcceptanceSameObservations(beforeObservation, observation) {
-			return nil, 0, errors.New("restarted installed standard MCP observation changed")
+			return errors.New("restarted installed standard MCP observation changed")
 		}
-		result.Restart.Observations[item.name] = observation
+		state.input.result.Restart.Observations[item.name] = observation
 	}
+	return nil
+}
 
-	afterCounts, err := uciInstalledAcceptanceProjectionCountsForAuthority(ctx, authority)
+func (state *uciInstalledAcceptanceRestartState) verifyRestartedProjections(ctx context.Context) error {
+	afterCounts, err := uciInstalledAcceptanceProjectionCountsForAuthority(ctx, state.input.authority)
 	if err != nil {
-		return nil, 0, err
+		return err
 	}
-	result.Restart.AfterProjectionCounts = afterCounts
-	result.Restart.UnchangedInputReembedded = afterCounts.Embeddings > beforeCounts.Embeddings || afterCounts.ChunkEmbeddings > beforeCounts.ChunkEmbeddings
-	if result.Restart.UnchangedInputReembedded {
-		return nil, 0, errors.New("restarted installed runtime re-embedded unchanged input")
+	beforeCounts := state.input.result.Restart.BeforeProjectionCounts
+	state.input.result.Restart.AfterProjectionCounts = afterCounts
+	state.input.result.Restart.UnchangedInputReembedded = afterCounts.Embeddings > beforeCounts.Embeddings || afterCounts.ChunkEmbeddings > beforeCounts.ChunkEmbeddings
+	if state.input.result.Restart.UnchangedInputReembedded {
+		return errors.New("restarted installed runtime re-embedded unchanged input")
 	}
 	if afterCounts.Embeddings != beforeCounts.Embeddings || afterCounts.ChunkEmbeddings != beforeCounts.ChunkEmbeddings {
-		return nil, 0, errors.New("restarted installed runtime changed unchanged-input embedding counts")
+		return errors.New("restarted installed runtime changed unchanged-input embedding counts")
 	}
 	if afterCounts.ResolvedEdges != beforeCounts.ResolvedEdges {
-		return nil, 0, errors.New("restarted installed runtime changed unchanged-input link counts")
+		return errors.New("restarted installed runtime changed unchanged-input link counts")
 	}
-	if request.ScenarioProbe != nil {
-		scenarioRuntime := uciInstalledAcceptanceScenarioRuntime{
-			Request:      request,
-			Installation: next,
-			Authority:    authority,
-			Worktrees:    worktrees,
-			ClientA:      first,
-			ClientB:      second,
-			ClientC:      third,
-			Recorder:     first,
-			Selections: map[string]uciInstalledAcceptanceSelection{
-				uciInstalledAcceptanceClientA:        firstSelection,
-				uciInstalledAcceptanceClientB:        secondSelection,
-				uciInstalledAcceptanceClientC:        thirdSelection,
-				uciInstalledAcceptanceClientRecorder: firstSelection,
-			},
-			Publications: map[string]uciInstalledAcceptancePublication{
-				uciInstalledAcceptanceClientA:        restartedPublications[uciInstalledAcceptanceClientA],
-				uciInstalledAcceptanceClientB:        restartedPublications[uciInstalledAcceptanceClientB],
-				uciInstalledAcceptanceClientC:        restartedPublications[uciInstalledAcceptanceClientC],
-				uciInstalledAcceptanceClientRecorder: restartedPublications[uciInstalledAcceptanceClientA],
-			},
-			ParserBundleDigest: parserBundleDigest,
-			Candidates:         candidates,
-			ServerEnvironment:  serverEnvironment,
-			ClientEnvironment:  clientEnvironment,
-		}
-		if err := uciRunInstalledAcceptanceScenarioProbe(ctx, scenarioRuntime, result); err != nil {
-			return nil, 0, fmt.Errorf("installed UCI scenario probe: %w", err)
-		}
-	}
+	return nil
+}
 
-	return next, newDaemonPID, nil
+func (state *uciInstalledAcceptanceRestartState) runScenarioProbe(ctx context.Context) error {
+	if state.input.request.ScenarioProbe == nil {
+		return nil
+	}
+	first := state.clients[uciInstalledAcceptanceClientA]
+	scenarioRuntime := uciInstalledAcceptanceScenarioRuntime{
+		Request:      state.input.request,
+		Installation: state.next,
+		Authority:    state.input.authority,
+		Worktrees:    state.input.worktrees,
+		ClientA:      first,
+		ClientB:      state.clients[uciInstalledAcceptanceClientB],
+		ClientC:      state.clients[uciInstalledAcceptanceClientC],
+		Recorder:     first,
+		Selections: map[string]uciInstalledAcceptanceSelection{
+			uciInstalledAcceptanceClientA:        state.selections[uciInstalledAcceptanceClientA],
+			uciInstalledAcceptanceClientB:        state.selections[uciInstalledAcceptanceClientB],
+			uciInstalledAcceptanceClientC:        state.selections[uciInstalledAcceptanceClientC],
+			uciInstalledAcceptanceClientRecorder: state.selections[uciInstalledAcceptanceClientA],
+		},
+		Publications: map[string]uciInstalledAcceptancePublication{
+			uciInstalledAcceptanceClientA:        state.publications[uciInstalledAcceptanceClientA],
+			uciInstalledAcceptanceClientB:        state.publications[uciInstalledAcceptanceClientB],
+			uciInstalledAcceptanceClientC:        state.publications[uciInstalledAcceptanceClientC],
+			uciInstalledAcceptanceClientRecorder: state.publications[uciInstalledAcceptanceClientA],
+		},
+		ParserBundleDigest: state.input.parserBundleDigest,
+		Candidates:         state.input.candidates,
+		ServerEnvironment:  state.serverEnvironment,
+		ClientEnvironment:  state.clientEnvironment,
+	}
+	if err := uciRunInstalledAcceptanceScenarioProbe(ctx, scenarioRuntime, state.input.result); err != nil {
+		return fmt.Errorf("installed UCI scenario probe: %w", err)
+	}
+	return nil
 }
 
 func uciExerciseInstalledAcceptanceWatcher(ctx context.Context, input uciInstalledAcceptanceWatcherInput) (after map[string]uciInstalledAcceptancePublication, retErr error) {
@@ -4752,22 +4884,29 @@ func uciRequireInstalledAcceptanceWatcherCanary(
 	functionName, relativePath string,
 	wantPresent bool,
 ) error {
-	_, err := uciRequireInstalledAcceptanceWatcherCanaryResponse(ctx, client, selection, publication, functionName, relativePath, wantPresent)
+	_, err := uciRequireInstalledAcceptanceWatcherCanaryResponse(ctx, uciInstalledAcceptanceWatcherCanaryInput{client: client, selection: selection, publication: publication, functionName: functionName, relativePath: relativePath, wantPresent: wantPresent})
 	return err
 }
 
-func uciRequireInstalledAcceptanceWatcherCanaryResponse(
-	ctx context.Context,
-	client *uciInstalledAcceptanceMCPClient,
-	selection uciInstalledAcceptanceSelection,
-	publication uciInstalledAcceptancePublication,
-	functionName, relativePath string,
-	wantPresent bool,
-) (uci.QueryResponse, error) {
-	payload, err := client.Tool(ctx, "codebase_search", map[string]any{
-		"context_handle": selection.contextHandle,
-		"query":          functionName,
-		"path_prefix":    relativePath,
+func uciRequireInstalledAcceptanceWatcherCanaryResponse(ctx context.Context, input uciInstalledAcceptanceWatcherCanaryInput) (uci.QueryResponse, error) {
+	response, err := uciInstalledAcceptanceWatcherCanarySearch(ctx, input)
+	if err != nil {
+		return uci.QueryResponse{}, err
+	}
+	if !input.wantPresent {
+		return uciInstalledAcceptanceValidateWatcherCanaryAbsent(response)
+	}
+	if err := uciInstalledAcceptanceValidateWatcherCanaryPresent(response, input); err != nil {
+		return uci.QueryResponse{}, err
+	}
+	return response, nil
+}
+
+func uciInstalledAcceptanceWatcherCanarySearch(ctx context.Context, input uciInstalledAcceptanceWatcherCanaryInput) (uci.QueryResponse, error) {
+	payload, err := input.client.Tool(ctx, "codebase_search", map[string]any{
+		"context_handle": input.selection.contextHandle,
+		"query":          input.functionName,
+		"path_prefix":    input.relativePath,
 		"limit":          10,
 	})
 	if err != nil {
@@ -4777,35 +4916,41 @@ func uciRequireInstalledAcceptanceWatcherCanaryResponse(
 	if err != nil {
 		return uci.QueryResponse{}, err
 	}
-	if !uciInstalledAcceptanceQueryMatchesPublication(response, publication) {
+	if !uciInstalledAcceptanceQueryMatchesPublication(response, input.publication) {
 		return uci.QueryResponse{}, errors.New("installed standard MCP watcher search did not retain the selected View")
 	}
-	if !wantPresent {
-		if (response.Status != uci.QueryStatusEmpty && response.Status != uci.QueryStatusPartial) || (response.Items != nil && len(*response.Items) != 0) {
-			return uci.QueryResponse{}, errUCIInstalledAcceptanceWatcherCanaryPresent
-		}
-		return response, nil
+	return response, nil
+}
+
+func uciInstalledAcceptanceValidateWatcherCanaryAbsent(response uci.QueryResponse) (uci.QueryResponse, error) {
+	if (response.Status != uci.QueryStatusEmpty && response.Status != uci.QueryStatusPartial) || (response.Items != nil && len(*response.Items) != 0) {
+		return uci.QueryResponse{}, errUCIInstalledAcceptanceWatcherCanaryPresent
 	}
+	return response, nil
+}
+
+func uciInstalledAcceptanceValidateWatcherCanaryPresent(response uci.QueryResponse, input uciInstalledAcceptanceWatcherCanaryInput) error {
 	if (response.Status != uci.QueryStatusOK && response.Status != uci.QueryStatusPartial) || response.Items == nil {
-		return uci.QueryResponse{}, errors.New("installed standard MCP watcher write did not return the canary")
+		return errors.New("installed standard MCP watcher write did not return the canary")
 	}
 	found := false
 	for _, item := range *response.Items {
-		if item.Ref.SourceID != publication.sourceID || item.Ref.ViewID != publication.viewID {
-			return uci.QueryResponse{}, errors.New("installed standard MCP watcher search disclosed an item outside the selected View")
+		if item.Ref.SourceID != input.publication.sourceID || item.Ref.ViewID != input.publication.viewID {
+			return errors.New("installed standard MCP watcher search disclosed an item outside the selected View")
 		}
 		name, nameOK := uciInstalledAcceptanceGoFunctionName(item.Ref.EntityKey)
-		if item.Path == relativePath && nameOK && name == functionName {
-			if !uciInstalledAcceptanceIsBareSHA256(string(item.ContentDigest)) {
-				return uci.QueryResponse{}, errors.New("installed standard MCP watcher canary has an invalid content digest")
-			}
-			found = true
+		if item.Path != input.relativePath || !nameOK || name != input.functionName {
+			continue
 		}
+		if !uciInstalledAcceptanceIsBareSHA256(string(item.ContentDigest)) {
+			return errors.New("installed standard MCP watcher canary has an invalid content digest")
+		}
+		found = true
 	}
 	if !found {
-		return uci.QueryResponse{}, errUCIInstalledAcceptanceWatcherCanaryMissing
+		return errUCIInstalledAcceptanceWatcherCanaryMissing
 	}
-	return response, nil
+	return nil
 }
 
 func uciInstalledAcceptancePublicationEvidenceFor(publication uciInstalledAcceptancePublication) uciInstalledAcceptancePublicationEvidence {

@@ -238,25 +238,44 @@ func (runner *uciRealCorpusRecordingGitRunner) captureStageModes(output []byte) 
 		runner.stageModes = make(map[string]string)
 	}
 	for start := 0; start < len(output); {
-		end := start
-		for end < len(output) && output[end] != 0 {
-			end++
-		}
-		if end == start || end == len(output) {
-			return errors.New("real-corpus composition scanner stage output is malformed")
-		}
-		candidatePath, mode, err := uciRealCorpusStageMode(string(output[start:end]))
+		record, next, err := uciRealCorpusStageModeRecord(output, start)
 		if err != nil {
 			return err
 		}
-		if mode != "" {
-			if previous, found := runner.stageModes[candidatePath]; !found || (previous != "160000" && mode == "160000") {
-				runner.stageModes[candidatePath] = mode
-			}
-		}
-		start = end + 1
+		runner.recordStageMode(record)
+		start = next
 	}
 	return nil
+}
+
+type uciRealCorpusStageModeEntry struct {
+	path string
+	mode string
+}
+
+func uciRealCorpusStageModeRecord(output []byte, start int) (uciRealCorpusStageModeEntry, int, error) {
+	end := start
+	for end < len(output) && output[end] != 0 {
+		end++
+	}
+	if end == start || end == len(output) {
+		return uciRealCorpusStageModeEntry{}, 0, errors.New("real-corpus composition scanner stage output is malformed")
+	}
+	path, mode, err := uciRealCorpusStageMode(string(output[start:end]))
+	if err != nil {
+		return uciRealCorpusStageModeEntry{}, 0, err
+	}
+	return uciRealCorpusStageModeEntry{path: path, mode: mode}, end + 1, nil
+}
+
+func (runner *uciRealCorpusRecordingGitRunner) recordStageMode(record uciRealCorpusStageModeEntry) {
+	if record.mode == "" {
+		return
+	}
+	previous, found := runner.stageModes[record.path]
+	if !found || (previous != "160000" && record.mode == "160000") {
+		runner.stageModes[record.path] = record.mode
+	}
 }
 
 func uciRealCorpusStageMode(record string) (string, string, error) {
@@ -488,6 +507,39 @@ type uciRealCorpusCapacityRecoveryOutcome struct {
 	resumedPartsDigest       string
 	publishedView            *gormdb.UCIView
 }
+type uciRealCorpusCapacityRecoveryInput struct {
+	ctx        context.Context
+	tx         *gorm.DB
+	contexts   *gormdb.UCIContextStore
+	authorizer *gormdb.UCIContextAuthorizer
+	authority  *uciInstalledAcceptanceAuthority
+	caller     uci.IndexCaller
+	source     uciRealCorpusCapacitySource
+	run        uciRealCorpusCapacityRun
+	legacy     uciRealCorpusCapacityLegacyFailures
+}
+
+type uciRealCorpusCapacityResumeInput struct {
+	ctx        context.Context
+	tx         *gorm.DB
+	authorizer *gormdb.UCIContextAuthorizer
+	caller     uci.IndexCaller
+	run        uciRealCorpusCapacityRun
+	recovery   uciRealCorpusCapacityRecoveryBuild
+	parts      []uci.IndexPart
+	actualAcks []uci.IndexPartAck
+}
+
+type uciRealCorpusCapacityPublicationInput struct {
+	ctx       context.Context
+	tx        *gorm.DB
+	contexts  *gormdb.UCIContextStore
+	caller    uci.IndexCaller
+	run       uciRealCorpusCapacityRun
+	publisher uci.IndexStore
+	build     uci.IndexBuildRef
+	manifest  uci.IndexManifestCompletion
+}
 
 func uciVerifyRealCorpusCapacityRecovery(ctx context.Context, authority *uciInstalledAcceptanceAuthority, publication uciInstalledAcceptancePublication, composition uciRealCorpusComposition) (uciRealCorpusCapacityRecovery, error) {
 	source, err := uciRealCorpusCapacitySourceFor(ctx, authority, publication, composition)
@@ -584,7 +636,7 @@ func uciRealCorpusExecuteCapacityRecovery(ctx context.Context, tx *gorm.DB, auth
 	if err != nil {
 		return uciRealCorpusCapacityRecovery{}, err
 	}
-	outcome, err := uciRealCorpusCapacityRecover(ctx, tx, contexts, authorizer, authority, caller, source, run, legacy)
+	outcome, err := uciRealCorpusCapacityRecover(uciRealCorpusCapacityRecoveryInput{ctx: ctx, tx: tx, contexts: contexts, authorizer: authorizer, authority: authority, caller: caller, source: source, run: run, legacy: legacy})
 	if err != nil {
 		return uciRealCorpusCapacityRecovery{}, err
 	}
@@ -668,28 +720,29 @@ func uciRealCorpusCapacityStartRun(ctx context.Context, tx *gorm.DB, contexts *g
 	return uciRealCorpusCapacityRun{checkout: checkout, publisher: publisher, profileID: authority.profile.ProfileID, priorContext: priorPublished.Context, priorView: priorView, priorViewCount: priorViewCount}, nil
 }
 
-func uciRealCorpusCapacityRecover(ctx context.Context, tx *gorm.DB, contexts *gormdb.UCIContextStore, authorizer *gormdb.UCIContextAuthorizer, authority *uciInstalledAcceptanceAuthority, caller uci.IndexCaller, source uciRealCorpusCapacitySource, run uciRealCorpusCapacityRun, legacy uciRealCorpusCapacityLegacyFailures) (uciRealCorpusCapacityRecoveryOutcome, error) {
-	recovery, err := uciRealCorpusCapacityBeginRecovery(ctx, authority, caller, source, run)
+func uciRealCorpusCapacityRecover(input uciRealCorpusCapacityRecoveryInput) (uciRealCorpusCapacityRecoveryOutcome, error) {
+	recovery, err := uciRealCorpusCapacityBeginRecovery(input.ctx, input.authority, input.caller, input.source, input.run)
 	if err != nil {
 		return uciRealCorpusCapacityRecoveryOutcome{}, err
 	}
-	actualAcks, afterIncompleteViewCount, err := uciRealCorpusCapacityStageInterrupted(ctx, tx, contexts, caller, run, recovery, source.parts)
+	actualAcks, afterIncompleteViewCount, err := uciRealCorpusCapacityStageInterrupted(input.ctx, input.tx, input.contexts, input.caller, input.run, recovery, input.source.parts)
 	if err != nil {
 		return uciRealCorpusCapacityRecoveryOutcome{}, err
 	}
-	resumedPublisher, resumedBuild, actualAcks, err := uciRealCorpusCapacityResumeStaging(ctx, tx, authorizer, caller, run, recovery, source.parts, actualAcks)
+	resumedPublisher, resumedBuild, actualAcks, err := uciRealCorpusCapacityResumeStaging(uciRealCorpusCapacityResumeInput{ctx: input.ctx, tx: input.tx, authorizer: input.authorizer, caller: input.caller, run: input.run, recovery: recovery, parts: input.source.parts, actualAcks: actualAcks})
 	if err != nil {
 		return uciRealCorpusCapacityRecoveryOutcome{}, err
 	}
-	resumedPartsDigest, err := uciRealCorpusCapacityRequireExactResume(actualAcks, recovery.expectedAcks, source.sourcePartsDigest, legacy)
+	resumedPartsDigest, err := uciRealCorpusCapacityRequireExactResume(actualAcks, recovery.expectedAcks, input.source.sourcePartsDigest, input.legacy)
 	if err != nil {
 		return uciRealCorpusCapacityRecoveryOutcome{}, err
 	}
-	afterConflictViewCount, err := uciRealCorpusCapacityRejectConflictingFinalize(ctx, tx, contexts, caller, run, resumedPublisher, resumedBuild, recovery.manifest)
+	publicationInput := uciRealCorpusCapacityPublicationInput{ctx: input.ctx, tx: input.tx, contexts: input.contexts, caller: input.caller, run: input.run, publisher: resumedPublisher, build: resumedBuild, manifest: recovery.manifest}
+	afterConflictViewCount, err := uciRealCorpusCapacityRejectConflictingFinalize(publicationInput)
 	if err != nil {
 		return uciRealCorpusCapacityRecoveryOutcome{}, err
 	}
-	publishedView, publishedViewCount, replayViewCount, err := uciRealCorpusCapacityFinalizeAndReplay(ctx, tx, contexts, caller, run, resumedPublisher, resumedBuild, recovery.manifest)
+	publishedView, publishedViewCount, replayViewCount, err := uciRealCorpusCapacityFinalizeAndReplay(publicationInput)
 	if err != nil {
 		return uciRealCorpusCapacityRecoveryOutcome{}, err
 	}
@@ -738,28 +791,28 @@ func uciRealCorpusCapacityStageInterrupted(ctx context.Context, tx *gorm.DB, con
 	return actualAcks, count, nil
 }
 
-func uciRealCorpusCapacityResumeStaging(ctx context.Context, tx *gorm.DB, authorizer *gormdb.UCIContextAuthorizer, caller uci.IndexCaller, run uciRealCorpusCapacityRun, recovery uciRealCorpusCapacityRecoveryBuild, parts []uci.IndexPart, actualAcks []uci.IndexPartAck) (uci.IndexStore, uci.IndexBuildRef, []uci.IndexPartAck, error) {
-	publisher, err := gormdb.NewUCIProjectionStore(tx).Publisher(authorizer, uci.IndexPublicationConfig{Limits: uci.DefaultIndexPublicationLimits()})
+func uciRealCorpusCapacityResumeStaging(input uciRealCorpusCapacityResumeInput) (uci.IndexStore, uci.IndexBuildRef, []uci.IndexPartAck, error) {
+	publisher, err := gormdb.NewUCIProjectionStore(input.tx).Publisher(input.authorizer, uci.IndexPublicationConfig{Limits: uci.DefaultIndexPublicationLimits()})
 	if err != nil {
 		return nil, uci.IndexBuildRef{}, nil, errors.New("real-corpus capacity resumed publisher is unavailable")
 	}
-	input := uciRealCorpusCapacityBeginInput("uci-real-corpus-capacity-resume-"+uuid.NewString(), run.checkout, run.profileID, &run.priorContext, uci.IndexJobRecovery)
-	begin, err := publisher.Begin(ctx, caller, input)
-	if err != nil || begin.Build != recovery.build || begin.Published != nil {
+	beginInput := uciRealCorpusCapacityBeginInput("uci-real-corpus-capacity-resume-"+uuid.NewString(), input.run.checkout, input.run.profileID, &input.run.priorContext, uci.IndexJobRecovery)
+	begin, err := publisher.Begin(input.ctx, input.caller, beginInput)
+	if err != nil || begin.Build != input.recovery.build || begin.Published != nil {
 		return nil, uci.IndexBuildRef{}, nil, errors.New("real-corpus capacity staged build did not resume")
 	}
-	replayedAck, err := uciRealCorpusCapacityStage(ctx, publisher, caller, begin.Build, 0, parts[0])
-	if err != nil || replayedAck != actualAcks[0] {
+	replayedAck, err := uciRealCorpusCapacityStage(input.ctx, publisher, input.caller, begin.Build, 0, input.parts[0])
+	if err != nil || replayedAck != input.actualAcks[0] {
 		return nil, uci.IndexBuildRef{}, nil, errors.New("real-corpus capacity resumed stage did not replay the exact part digest")
 	}
-	for sequence := recovery.interruptedPartCount; sequence < len(parts); sequence++ {
-		ack, err := uciRealCorpusCapacityStage(ctx, publisher, caller, begin.Build, uint32(sequence), parts[sequence])
-		if err != nil || ack != recovery.expectedAcks[sequence] {
+	for sequence := input.recovery.interruptedPartCount; sequence < len(input.parts); sequence++ {
+		ack, err := uciRealCorpusCapacityStage(input.ctx, publisher, input.caller, begin.Build, uint32(sequence), input.parts[sequence])
+		if err != nil || ack != input.recovery.expectedAcks[sequence] {
 			return nil, uci.IndexBuildRef{}, nil, errors.New("real-corpus capacity resumed stage did not retain the exact part digest")
 		}
-		actualAcks = append(actualAcks, ack)
+		input.actualAcks = append(input.actualAcks, ack)
 	}
-	return publisher, begin.Build, actualAcks, nil
+	return publisher, begin.Build, input.actualAcks, nil
 }
 
 func uciRealCorpusCapacityRequireExactResume(actual, expected []uci.IndexPartAck, sourcePartsDigest string, legacy uciRealCorpusCapacityLegacyFailures) (string, error) {
@@ -779,37 +832,37 @@ func uciRealCorpusCapacityRequireCurrentView(ctx context.Context, tx *gorm.DB, c
 	return count, nil
 }
 
-func uciRealCorpusCapacityRejectConflictingFinalize(ctx context.Context, tx *gorm.DB, contexts *gormdb.UCIContextStore, caller uci.IndexCaller, run uciRealCorpusCapacityRun, publisher uci.IndexStore, build uci.IndexBuildRef, manifest uci.IndexManifestCompletion) (uint64, error) {
-	conflicting := manifest
-	digest, err := uciRealCorpusCapacityConflictingDigest(manifest.PartsDigest)
+func uciRealCorpusCapacityRejectConflictingFinalize(input uciRealCorpusCapacityPublicationInput) (uint64, error) {
+	conflicting := input.manifest
+	digest, err := uciRealCorpusCapacityConflictingDigest(input.manifest.PartsDigest)
 	if err != nil {
 		return 0, err
 	}
 	conflicting.PartsDigest = digest
-	if _, err := publisher.Finalize(ctx, caller, uci.IndexFinalizeInput{Build: build, ExpectedParent: &run.priorContext, Manifest: conflicting}); err == nil {
+	if _, err := input.publisher.Finalize(input.ctx, input.caller, uci.IndexFinalizeInput{Build: input.build, ExpectedParent: &input.run.priorContext, Manifest: conflicting}); err == nil {
 		return 0, errors.New("real-corpus capacity conflicting finalize published a View")
 	}
-	count, err := uciRealCorpusCapacityRequireCurrentView(ctx, tx, contexts, run.checkout, run.priorView, run.priorViewCount)
+	count, err := uciRealCorpusCapacityRequireCurrentView(input.ctx, input.tx, input.contexts, input.run.checkout, input.run.priorView, input.run.priorViewCount)
 	if err != nil {
 		return 0, errors.New("real-corpus capacity conflicting finalize changed the selected View")
 	}
 	return count, nil
 }
 
-func uciRealCorpusCapacityFinalizeAndReplay(ctx context.Context, tx *gorm.DB, contexts *gormdb.UCIContextStore, caller uci.IndexCaller, run uciRealCorpusCapacityRun, publisher uci.IndexStore, build uci.IndexBuildRef, manifest uci.IndexManifestCompletion) (*gormdb.UCIView, uint64, uint64, error) {
-	published, err := publisher.Finalize(ctx, caller, uci.IndexFinalizeInput{Build: build, ExpectedParent: &run.priorContext, Manifest: manifest})
+func uciRealCorpusCapacityFinalizeAndReplay(input uciRealCorpusCapacityPublicationInput) (*gormdb.UCIView, uint64, uint64, error) {
+	published, err := input.publisher.Finalize(input.ctx, input.caller, uci.IndexFinalizeInput{Build: input.build, ExpectedParent: &input.run.priorContext, Manifest: input.manifest})
 	if err != nil {
 		return nil, 0, 0, errors.New("real-corpus capacity resumed finalize failed")
 	}
-	publishedView, publishedCount, err := uciRealCorpusCapacityPublishedView(ctx, tx, contexts, run.checkout, run.priorViewCount+1, published)
+	publishedView, publishedCount, err := uciRealCorpusCapacityPublishedView(input.ctx, input.tx, input.contexts, input.run.checkout, input.run.priorViewCount+1, published)
 	if err != nil {
 		return nil, 0, 0, errors.New("real-corpus capacity finalize was not atomic")
 	}
-	replayed, err := publisher.Finalize(ctx, caller, uci.IndexFinalizeInput{Build: build, ExpectedParent: &run.priorContext, Manifest: manifest})
+	replayed, err := input.publisher.Finalize(input.ctx, input.caller, uci.IndexFinalizeInput{Build: input.build, ExpectedParent: &input.run.priorContext, Manifest: input.manifest})
 	if err != nil || !uciRealCorpusCapacitySamePublished(published, replayed) {
 		return nil, 0, 0, errors.New("real-corpus capacity finalize did not replay one publication")
 	}
-	_, replayCount, err := uciRealCorpusCapacityPublishedView(ctx, tx, contexts, run.checkout, run.priorViewCount+1, published)
+	_, replayCount, err := uciRealCorpusCapacityPublishedView(input.ctx, input.tx, input.contexts, input.run.checkout, input.run.priorViewCount+1, published)
 	if err != nil || replayCount != publishedCount {
 		return nil, 0, 0, errors.New("real-corpus capacity finalize replay changed the selected View")
 	}

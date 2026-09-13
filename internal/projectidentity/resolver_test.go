@@ -84,98 +84,100 @@ func (verifier *resolverVerifierV3Fake) VerifyAuthorizationV3(_ context.Context,
 type resolverV3IntentCase struct {
 	name      string
 	intent    ResolutionIntentV3
-	configure func(*ResolveProjectRequestV3)
+	configure func(*testing.T, *ResolveProjectRequestV3)
 	assert    func(*testing.T, *resolverStoreV3Fake, ResolveProjectResultV3)
 }
 
 func TestResolveProjectV3EveryIntent(t *testing.T) {
-	for _, test := range resolverV3IntentCases(t) {
+	for _, test := range resolverV3IntentCases() {
 		t.Run(test.name, func(t *testing.T) {
 			runResolverV3IntentCase(t, test)
 		})
 	}
 }
 
-func resolverV3IntentCases(t *testing.T) []resolverV3IntentCase {
+func resolverV3IntentCases() []resolverV3IntentCase {
 	return []resolverV3IntentCase{
-		{
-			name:   "resolve existing",
-			intent: ResolveExistingIntentV3,
-			assert: func(t *testing.T, store *resolverStoreV3Fake, result ResolveProjectResultV3) {
-				if store.lookupCalls != 1 || !store.lookupAuthorization.PermitsAnchorLookup() || store.registerCalls != 0 || store.adminCalls != 0 {
-					t.Fatalf("resolve_existing port calls = lookup:%d authorization=%#v register:%d admin:%d", store.lookupCalls, store.lookupAuthorization, store.registerCalls, store.adminCalls)
-				}
-				assertFirstMutationFenceV3(t, result)
-			},
-		},
-		{
-			name:   "register anchor",
-			intent: RegisterAnchorIntentV3,
-			configure: func(request *ResolveProjectRequestV3) {
-				request.RegistrationAuthorization = resolverAuthorizationV3(t)
-			},
-			assert: func(t *testing.T, store *resolverStoreV3Fake, result ResolveProjectResultV3) {
-				if store.lookupCalls != 0 || store.registerCalls != 1 || store.adminCalls != 0 || store.creates != 1 {
-					t.Fatalf("register_anchor port calls = lookup:%d register:%d admin:%d creates:%d", store.lookupCalls, store.registerCalls, store.adminCalls, store.creates)
-				}
-				if !store.registration.IsCausallyBoundFirstMutation() || store.registration.CausalFirstMutationFence().Correlation() != result.Resolution().Correlation() {
-					t.Fatalf("registration was not bound to the successful resolution: %#v", store.registration)
-				}
-				assertFirstMutationFenceV3(t, result)
-			},
-		},
-		{
-			name:   "read filter",
-			intent: ReadFilterIntentV3,
-			configure: func(request *ResolveProjectRequestV3) {
-				requirement, err := NewReadFilterRequirementV3(resolverAuthorizationV3(t), request.Correlation)
-				if err != nil {
-					t.Fatalf("new read-filter requirement: %v", err)
-				}
-				request.ReadFilter = &requirement
-			},
-			assert: func(t *testing.T, store *resolverStoreV3Fake, result ResolveProjectResultV3) {
-				if store.lookupCalls != 1 || !store.lookupAuthorization.PermitsAnchorLookup() || store.registerCalls != 0 || store.adminCalls != 0 {
-					t.Fatalf("read_filter port calls = lookup:%d authorization=%#v register:%d admin:%d", store.lookupCalls, store.lookupAuthorization, store.registerCalls, store.adminCalls)
-				}
-				if result.Resolution().RedirectReference() != "" {
-					t.Fatalf("read_filter redirected: %#v", result.Resolution())
-				}
-				if _, ok := result.FirstMutationFence(); ok || result.Resolution().PermitsScopedMutation() {
-					t.Fatalf("read_filter received mutation authority: %#v", result)
-				}
-			},
-		},
-		{
-			name:   "admin target",
-			intent: AdminTargetIntentV3,
-			configure: func(request *ResolveProjectRequestV3) {
-				audit, err := NewAdminAuditV3("admin-17", "repair-17", "approved-17", "retain-17")
-				if err != nil {
-					t.Fatalf("new admin audit: %v", err)
-				}
-				target, err := NewAdministrativeTargetReferenceV3("opaque-admin-target-17")
-				if err != nil {
-					t.Fatalf("new administrative target: %v", err)
-				}
-				requirement, err := NewAdminTargetRequirementV3(resolverAuthorizationV3(t), request.Correlation, target, audit)
-				if err != nil {
-					t.Fatalf("new admin-target requirement: %v", err)
-				}
-				request.AdminTarget = &requirement
-			},
-			assert: func(t *testing.T, store *resolverStoreV3Fake, result ResolveProjectResultV3) {
-				if store.lookupCalls != 0 || store.registerCalls != 0 || store.adminCalls != 1 {
-					t.Fatalf("admin_target port calls = lookup:%d register:%d admin:%d", store.lookupCalls, store.registerCalls, store.adminCalls)
-				}
-				projectKey, ok := store.adminAuthorization.AdministrativeTargetProjectKey()
-				if !ok || projectKey != result.Resolution().CanonicalProjectKey() {
-					t.Fatalf("admin target did not receive a verified server target: %#v", store.adminAuthorization)
-				}
-				assertFirstMutationFenceV3(t, result)
-			},
-		},
+		{name: "resolve existing", intent: ResolveExistingIntentV3, assert: assertResolverV3ResolveExisting},
+		{name: "register anchor", intent: RegisterAnchorIntentV3, configure: configureResolverV3RegisterAnchor, assert: assertResolverV3RegisterAnchor},
+		{name: "read filter", intent: ReadFilterIntentV3, configure: configureResolverV3ReadFilter, assert: assertResolverV3ReadFilter},
+		{name: "admin target", intent: AdminTargetIntentV3, configure: configureResolverV3AdminTarget, assert: assertResolverV3AdminTarget},
 	}
+}
+
+func configureResolverV3RegisterAnchor(t *testing.T, request *ResolveProjectRequestV3) {
+	t.Helper()
+	request.RegistrationAuthorization = resolverAuthorizationV3(t)
+}
+
+func configureResolverV3ReadFilter(t *testing.T, request *ResolveProjectRequestV3) {
+	t.Helper()
+	requirement, err := NewReadFilterRequirementV3(resolverAuthorizationV3(t), request.Correlation)
+	if err != nil {
+		t.Fatalf("new read-filter requirement: %v", err)
+	}
+	request.ReadFilter = &requirement
+}
+
+func configureResolverV3AdminTarget(t *testing.T, request *ResolveProjectRequestV3) {
+	t.Helper()
+	audit, err := NewAdminAuditV3("admin-17", "repair-17", "approved-17", "retain-17")
+	if err != nil {
+		t.Fatalf("new admin audit: %v", err)
+	}
+	target, err := NewAdministrativeTargetReferenceV3("opaque-admin-target-17")
+	if err != nil {
+		t.Fatalf("new administrative target: %v", err)
+	}
+	requirement, err := NewAdminTargetRequirementV3(resolverAuthorizationV3(t), request.Correlation, target, audit)
+	if err != nil {
+		t.Fatalf("new admin-target requirement: %v", err)
+	}
+	request.AdminTarget = &requirement
+}
+
+func assertResolverV3ResolveExisting(t *testing.T, store *resolverStoreV3Fake, result ResolveProjectResultV3) {
+	t.Helper()
+	if store.lookupCalls != 1 || !store.lookupAuthorization.PermitsAnchorLookup() || store.registerCalls != 0 || store.adminCalls != 0 {
+		t.Fatalf("resolve_existing port calls = lookup:%d authorization=%#v register:%d admin:%d", store.lookupCalls, store.lookupAuthorization, store.registerCalls, store.adminCalls)
+	}
+	assertFirstMutationFenceV3(t, result)
+}
+
+func assertResolverV3RegisterAnchor(t *testing.T, store *resolverStoreV3Fake, result ResolveProjectResultV3) {
+	t.Helper()
+	if store.lookupCalls != 0 || store.registerCalls != 1 || store.adminCalls != 0 || store.creates != 1 {
+		t.Fatalf("register_anchor port calls = lookup:%d register:%d admin:%d creates:%d", store.lookupCalls, store.registerCalls, store.adminCalls, store.creates)
+	}
+	if !store.registration.IsCausallyBoundFirstMutation() || store.registration.CausalFirstMutationFence().Correlation() != result.Resolution().Correlation() {
+		t.Fatalf("registration was not bound to the successful resolution: %#v", store.registration)
+	}
+	assertFirstMutationFenceV3(t, result)
+}
+
+func assertResolverV3ReadFilter(t *testing.T, store *resolverStoreV3Fake, result ResolveProjectResultV3) {
+	t.Helper()
+	if store.lookupCalls != 1 || !store.lookupAuthorization.PermitsAnchorLookup() || store.registerCalls != 0 || store.adminCalls != 0 {
+		t.Fatalf("read_filter port calls = lookup:%d authorization=%#v register:%d admin:%d", store.lookupCalls, store.lookupAuthorization, store.registerCalls, store.adminCalls)
+	}
+	if result.Resolution().RedirectReference() != "" {
+		t.Fatalf("read_filter redirected: %#v", result.Resolution())
+	}
+	if _, ok := result.FirstMutationFence(); ok || result.Resolution().PermitsScopedMutation() {
+		t.Fatalf("read_filter received mutation authority: %#v", result)
+	}
+}
+
+func assertResolverV3AdminTarget(t *testing.T, store *resolverStoreV3Fake, result ResolveProjectResultV3) {
+	t.Helper()
+	if store.lookupCalls != 0 || store.registerCalls != 0 || store.adminCalls != 1 {
+		t.Fatalf("admin_target port calls = lookup:%d register:%d admin:%d", store.lookupCalls, store.registerCalls, store.adminCalls)
+	}
+	projectKey, ok := store.adminAuthorization.AdministrativeTargetProjectKey()
+	if !ok || projectKey != result.Resolution().CanonicalProjectKey() {
+		t.Fatalf("admin target did not receive a verified server target: %#v", store.adminAuthorization)
+	}
+	assertFirstMutationFenceV3(t, result)
 }
 
 func runResolverV3IntentCase(t *testing.T, test resolverV3IntentCase) {
@@ -185,7 +187,7 @@ func runResolverV3IntentCase(t *testing.T, test resolverV3IntentCase) {
 	}
 	request := resolverRequestV3(test.intent)
 	if test.configure != nil {
-		test.configure(&request)
+		test.configure(t, &request)
 	}
 	result, err := resolverV3(t, store).ResolveProjectV3(context.Background(), request)
 	assertResolvedV3(t, result, err)

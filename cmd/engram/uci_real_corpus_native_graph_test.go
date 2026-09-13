@@ -305,12 +305,26 @@ func uciRealCorpusNativeGraphIncomingEdge(ctx context.Context, authority *uciIns
 }
 
 func uciRealCorpusNativeGraphValidateRow(row uciRealCorpusNativeGraphRow, expected uciRealCorpusNativeGraphExpectation) error {
+	if err := uciRealCorpusNativeGraphValidateExpectedPaths(expected); err != nil {
+		return err
+	}
+	if err := uciRealCorpusNativeGraphValidateRowIdentity(row, expected); err != nil {
+		return err
+	}
+	return uciRealCorpusNativeGraphValidateRowEvidence(row, expected)
+}
+
+func uciRealCorpusNativeGraphValidateExpectedPaths(expected uciRealCorpusNativeGraphExpectation) error {
 	if expected.sourcePath == "" || expected.targetPath == "" || expected.sourcePath == expected.targetPath {
 		return errors.New("real-corpus native graph expected source and target paths must be distinct")
 	}
 	if expected.sourceLanguage == "" || expected.targetLanguage == "" {
 		return errors.New("real-corpus native graph expected languages are incomplete")
 	}
+	return nil
+}
+
+func uciRealCorpusNativeGraphValidateRowIdentity(row uciRealCorpusNativeGraphRow, expected uciRealCorpusNativeGraphExpectation) error {
 	if row.SourcePath != expected.sourcePath || row.TargetPath != expected.targetPath || row.Relation != expected.relation || row.SourceSymbol != expected.sourceSymbol || row.TargetSymbol != expected.targetSymbol {
 		return errors.New("real-corpus native graph edge does not match the expected source, target, relation, or symbols")
 	}
@@ -323,6 +337,10 @@ func uciRealCorpusNativeGraphValidateRow(row uciRealCorpusNativeGraphRow, expect
 	if row.TargetArtifactID == "" || row.SourceContentDigest == "" || row.TargetContentDigest == "" || row.EdgeKey == "" || row.ReferenceSiteID == "" || row.ReferenceSiteKey == "" || row.ReferenceRawTarget == "" || len(row.SourceBody) == 0 {
 		return errors.New("real-corpus native graph edge source, target, or reference evidence is incomplete")
 	}
+	return nil
+}
+
+func uciRealCorpusNativeGraphValidateRowEvidence(row uciRealCorpusNativeGraphRow, expected uciRealCorpusNativeGraphExpectation) error {
 	referenceSpan, evidence, hints, err := uciRealCorpusNativeGraphDecodeRowEvidence(row)
 	if err != nil {
 		return err
