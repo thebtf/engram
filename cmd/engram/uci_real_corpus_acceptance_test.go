@@ -371,7 +371,15 @@ func TestUCIRealCorpusInstalledProviderLifecycle(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), request.OperationTimeout)
 	defer cancel()
-	record, err := runUCIRealCorpusInstalledAcceptance(ctx, request, providerURL, providerModel, providerRef, preprocessing, sourceTransferApproved, rerun)
+	record, err := runUCIRealCorpusInstalledAcceptance(ctx, uciRealCorpusAcceptanceInput{
+		request:                request,
+		providerURL:            providerURL,
+		providerModel:          providerModel,
+		providerRef:            providerRef,
+		preprocessing:          preprocessing,
+		sourceTransferApproved: sourceTransferApproved,
+		rerun:                  rerun,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -756,13 +764,20 @@ func uciRealCorpusFrozenPresentSourceBytes(root string, frozen uciRealCorpusFroz
 	return total, nil
 }
 
-func runUCIRealCorpusInstalledAcceptance(
-	ctx context.Context,
-	request uciInstalledAcceptanceRequest,
-	providerURL, providerModel, providerRef, preprocessing string,
-	sourceTransferApproved bool,
-	rerun uciRealCorpusRerunRecipe,
-) (record uciRealCorpusRecord, retErr error) {
+type uciRealCorpusAcceptanceInput struct {
+	request                uciInstalledAcceptanceRequest
+	providerURL            string
+	providerModel          string
+	providerRef            string
+	preprocessing          string
+	sourceTransferApproved bool
+	rerun                  uciRealCorpusRerunRecipe
+}
+
+func runUCIRealCorpusInstalledAcceptance(ctx context.Context, input uciRealCorpusAcceptanceInput) (record uciRealCorpusRecord, retErr error) {
+	request := input.request
+	providerURL, providerModel, providerRef := input.providerURL, input.providerModel, input.providerRef
+	preprocessing, sourceTransferApproved, rerun := input.preprocessing, input.sourceTransferApproved, input.rerun
 	root, err := uciInstalledAcceptancePhysicalPath(request.CandidateSourceRoot)
 	if err != nil {
 		return record, err
