@@ -870,18 +870,33 @@ func uciValidateInstalledAcceptanceRequest(ctx context.Context, request uciInsta
 	if err := uciValidateInstalledAcceptanceEmbeddingProvider(request.EmbeddingProvider); err != nil {
 		return err
 	}
-	switch request.ScenarioProbePhase {
-	case "":
-	case uciInstalledAcceptanceScenarioProbeBeforeBaseWatcher:
-		if request.ScenarioProbe == nil {
-			return errors.New("installed acceptance pre-base scenario phase requires a probe")
-		}
-	default:
-		return fmt.Errorf("installed acceptance scenario probe phase = %q", request.ScenarioProbePhase)
+	if err := uciValidateInstalledAcceptanceScenarioProbe(request); err != nil {
+		return err
 	}
 	if err := uciValidateInstalledAcceptanceSourceRoot(request.CandidateSourceRoot); err != nil {
 		return err
 	}
+	if err := uciValidateInstalledAcceptanceDisposableRoots(request); err != nil {
+		return err
+	}
+	return uciValidateInstalledAcceptanceFixture(request.Fixture)
+}
+
+func uciValidateInstalledAcceptanceScenarioProbe(request uciInstalledAcceptanceRequest) error {
+	switch request.ScenarioProbePhase {
+	case "":
+		return nil
+	case uciInstalledAcceptanceScenarioProbeBeforeBaseWatcher:
+		if request.ScenarioProbe == nil {
+			return errors.New("installed acceptance pre-base scenario phase requires a probe")
+		}
+		return nil
+	default:
+		return fmt.Errorf("installed acceptance scenario probe phase = %q", request.ScenarioProbePhase)
+	}
+}
+
+func uciValidateInstalledAcceptanceDisposableRoots(request uciInstalledAcceptanceRequest) error {
 	roots := []string{request.InstallRoot, request.FixtureRoot, request.LocalStateRoot}
 	for index, root := range roots {
 		if root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root {
@@ -897,9 +912,6 @@ func uciValidateInstalledAcceptanceRequest(ctx context.Context, request uciInsta
 				return errors.New("UCI installed acceptance disposable roots overlap")
 			}
 		}
-	}
-	if err := uciValidateInstalledAcceptanceFixture(request.Fixture); err != nil {
-		return err
 	}
 	return nil
 }
@@ -1798,25 +1810,12 @@ func uciWaitForInstalledAcceptanceDaemonPID(ctx context.Context, controlRoot, in
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		status, found := readMuxcoreDaemonStatusIdentity(controlPath)
-		if found && status.PID > 0 && !status.ShuttingDown {
-			marker, markerErr := readMuxcoreDaemonVersionMarker(markerPath)
-			switch {
-			case markerErr == nil:
-				if marker.PID != status.PID || marker.DaemonGeneration != status.DaemonGeneration {
-					return 0, errors.New("installed acceptance daemon marker does not match its live control status")
-				}
-				matches, matchErr := uciInstalledAcceptanceSamePhysicalPath(marker.Exe, installedExecutable)
-				if matchErr != nil {
-					return 0, fmt.Errorf("verify installed acceptance daemon executable: %w", matchErr)
-				}
-				if !matches {
-					return 0, errors.New("installed acceptance daemon marker does not name the materialized executable")
-				}
-				return status.PID, nil
-			case !errors.Is(markerErr, os.ErrNotExist):
-				return 0, fmt.Errorf("read installed acceptance daemon marker: %w", markerErr)
-			}
+		pid, found, err := uciInstalledAcceptanceDaemonPID(controlPath, markerPath, installedExecutable)
+		if err != nil {
+			return 0, err
+		}
+		if found {
+			return pid, nil
 		}
 		select {
 		case <-ctx.Done():
@@ -1824,6 +1823,31 @@ func uciWaitForInstalledAcceptanceDaemonPID(ctx context.Context, controlRoot, in
 		case <-ticker.C:
 		}
 	}
+}
+
+func uciInstalledAcceptanceDaemonPID(controlPath, markerPath, installedExecutable string) (int, bool, error) {
+	status, found := readMuxcoreDaemonStatusIdentity(controlPath)
+	if !found || status.PID <= 0 || status.ShuttingDown {
+		return 0, false, nil
+	}
+	marker, markerErr := readMuxcoreDaemonVersionMarker(markerPath)
+	if errors.Is(markerErr, os.ErrNotExist) {
+		return 0, false, nil
+	}
+	if markerErr != nil {
+		return 0, false, fmt.Errorf("read installed acceptance daemon marker: %w", markerErr)
+	}
+	if marker.PID != status.PID || marker.DaemonGeneration != status.DaemonGeneration {
+		return 0, false, errors.New("installed acceptance daemon marker does not match its live control status")
+	}
+	matches, matchErr := uciInstalledAcceptanceSamePhysicalPath(marker.Exe, installedExecutable)
+	if matchErr != nil {
+		return 0, false, fmt.Errorf("verify installed acceptance daemon executable: %w", matchErr)
+	}
+	if !matches {
+		return 0, false, errors.New("installed acceptance daemon marker does not name the materialized executable")
+	}
+	return status.PID, true, nil
 }
 
 type uciInstalledAcceptanceMCPToolObserver func(name string, started, returned time.Time, payload json.RawMessage, err error)
