@@ -1824,23 +1824,23 @@ func uciRealCorpusEvidenceValueHasPrivateLocator(value any) bool {
 }
 
 func uciRealCorpusEvidenceContainsSensitiveValue(value any, candidates []string) bool {
-	switch typed := value.(type) {
-	case string:
-		for _, candidate := range candidates {
-			if candidate != "" && strings.Contains(typed, candidate) {
-				return true
+	values := []any{value}
+	for len(values) > 0 {
+		last := len(values) - 1
+		current := values[last]
+		values = values[:last]
+		switch typed := current.(type) {
+		case string:
+			for _, candidate := range candidates {
+				if candidate != "" && strings.Contains(typed, candidate) {
+					return true
+				}
 			}
-		}
-	case []any:
-		for _, child := range typed {
-			if uciRealCorpusEvidenceContainsSensitiveValue(child, candidates) {
-				return true
-			}
-		}
-	case map[string]any:
-		for _, child := range typed {
-			if uciRealCorpusEvidenceContainsSensitiveValue(child, candidates) {
-				return true
+		case []any:
+			values = append(values, typed...)
+		case map[string]any:
+			for _, child := range typed {
+				values = append(values, child)
 			}
 		}
 	}
