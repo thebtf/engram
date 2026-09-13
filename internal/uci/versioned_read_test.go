@@ -17,9 +17,21 @@ func TestUCIVersionedReadReturnsExactPreExposureResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
+	versionedReadRequireExactResponse(t, response, fixture, store)
+}
+
+func versionedReadRequireExactResponse(t *testing.T, response QueryResponse, fixture versionedReadTestFixture, store *versionedReadTestStore) {
+	t.Helper()
 	if err := response.ValidatePreExposure(); err != nil {
 		t.Fatalf("ValidatePreExposure() error = %v", err)
 	}
+	versionedReadRequireExactMetadata(t, response)
+	versionedReadRequireExactItem(t, response, fixture)
+	versionedReadRequireExactStoreCall(t, store, fixture)
+}
+
+func versionedReadRequireExactMetadata(t *testing.T, response QueryResponse) {
+	t.Helper()
 	if response.Exposure != nil {
 		t.Fatalf("exposure = %#v, want nil before the MCP boundary", response.Exposure)
 	}
@@ -35,6 +47,10 @@ func TestUCIVersionedReadReturnsExactPreExposureResponse(t *testing.T) {
 	if response.Freshness == nil || response.Freshness.State != QueryFreshnessHistorical || response.Freshness.Method != QueryFreshnessPinnedHistory {
 		t.Fatalf("freshness = %#v, want pinned historical evidence", response.Freshness)
 	}
+}
+
+func versionedReadRequireExactItem(t *testing.T, response QueryResponse, fixture versionedReadTestFixture) {
+	t.Helper()
 	if response.Items == nil || len(*response.Items) != 1 {
 		t.Fatalf("items = %#v, want one exact item", response.Items)
 	}
@@ -45,6 +61,10 @@ func TestUCIVersionedReadReturnsExactPreExposureResponse(t *testing.T) {
 	if item.Excerpt != fixture.hit.Text || item.MatchSources[0] != QueryMatchExact {
 		t.Fatalf("item = %#v, want persisted exact text", item)
 	}
+}
+
+func versionedReadRequireExactStoreCall(t *testing.T, store *versionedReadTestStore, fixture versionedReadTestFixture) {
+	t.Helper()
 	if len(store.calls) != 1 || store.calls[0].authorized.Ref() != fixture.context || store.calls[0].spec != fixture.spec {
 		t.Fatalf("store calls = %#v, want one unchanged authorized exact read", store.calls)
 	}
@@ -88,19 +108,24 @@ func TestUCIVersionedReadMapsClosedMissCoverageAndUnavailableStates(t *testing.T
 			if err != nil {
 				t.Fatalf("Read() error = %v", err)
 			}
-			if err := response.ValidatePreExposure(); err != nil {
-				t.Fatalf("ValidatePreExposure() error = %v", err)
-			}
-			if response.Exposure != nil || response.Status != test.wantStatus || response.Error == nil && test.wantError != nil || response.Error != nil && (test.wantError == nil || *response.Error != *test.wantError) {
-				t.Fatalf("response = %#v, want closed status %q and error %#v", response, test.wantStatus, test.wantError)
-			}
-			if response.Coverage == nil || response.Coverage.Structural != test.wantCoverage {
-				t.Fatalf("coverage = %#v, want %q", response.Coverage, test.wantCoverage)
-			}
-			if response.Items == nil || len(*response.Items) != 0 {
-				t.Fatalf("items = %#v, want no body on non-hit", response.Items)
-			}
+			versionedReadRequireClosedMiss(t, response, test.wantStatus, test.wantError, test.wantCoverage)
 		})
+	}
+}
+
+func versionedReadRequireClosedMiss(t *testing.T, response QueryResponse, wantStatus QueryResponseStatus, wantError *QueryError, wantCoverage IndexCoverageState) {
+	t.Helper()
+	if err := response.ValidatePreExposure(); err != nil {
+		t.Fatalf("ValidatePreExposure() error = %v", err)
+	}
+	if response.Exposure != nil || response.Status != wantStatus || response.Error == nil && wantError != nil || response.Error != nil && (wantError == nil || *response.Error != *wantError) {
+		t.Fatalf("response = %#v, want closed status %q and error %#v", response, wantStatus, wantError)
+	}
+	if response.Coverage == nil || response.Coverage.Structural != wantCoverage {
+		t.Fatalf("coverage = %#v, want %q", response.Coverage, wantCoverage)
+	}
+	if response.Items == nil || len(*response.Items) != 0 {
+		t.Fatalf("items = %#v, want no body on non-hit", response.Items)
 	}
 }
 

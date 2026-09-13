@@ -431,21 +431,31 @@ func uciSQLTypeUsesDatabase(typ reflect.Type, seen map[reflect.Type]bool) bool {
 	case reflect.Map:
 		return uciSQLTypeUsesDatabase(typ.Key(), seen) || uciSQLTypeUsesDatabase(typ.Elem(), seen)
 	case reflect.Struct:
-		for index := range typ.NumField() {
-			if uciSQLTypeUsesDatabase(typ.Field(index).Type, seen) {
-				return true
-			}
-		}
+		return uciSQLStructUsesDatabase(typ, seen)
 	case reflect.Func:
-		for index := range typ.NumIn() {
-			if uciSQLTypeUsesDatabase(typ.In(index), seen) {
-				return true
-			}
+		return uciSQLFunctionUsesDatabase(typ, seen)
+	}
+	return false
+}
+
+func uciSQLStructUsesDatabase(typ reflect.Type, seen map[reflect.Type]bool) bool {
+	for index := range typ.NumField() {
+		if uciSQLTypeUsesDatabase(typ.Field(index).Type, seen) {
+			return true
 		}
-		for index := range typ.NumOut() {
-			if uciSQLTypeUsesDatabase(typ.Out(index), seen) {
-				return true
-			}
+	}
+	return false
+}
+
+func uciSQLFunctionUsesDatabase(typ reflect.Type, seen map[reflect.Type]bool) bool {
+	for index := range typ.NumIn() {
+		if uciSQLTypeUsesDatabase(typ.In(index), seen) {
+			return true
+		}
+	}
+	for index := range typ.NumOut() {
+		if uciSQLTypeUsesDatabase(typ.Out(index), seen) {
+			return true
 		}
 	}
 	return false

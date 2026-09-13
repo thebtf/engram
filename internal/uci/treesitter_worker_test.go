@@ -1094,63 +1094,90 @@ func uciRequireBuiltTreeSitterFacts(t *testing.T, artifact TreeSitterArtifact, d
 	for _, name := range definitionNames {
 		uciRequireBuiltDefinitionName(t, artifact.Definitions, name)
 	}
-
-	seenKinds := make(map[string]struct{}, len(artifact.References))
-	seenSiteKeys := make(map[string]struct{}, len(artifact.References))
-	seenSymbolKeys := make(map[string]struct{}, len(artifact.References))
-	defaultImportSeen := false
-	commonJSImportSeen := commonJSImportTarget == ""
-	selfClosingSeen := selfClosingComponent == ""
-	repeatedCalls := make(map[string]struct{})
+	facts := newUCIBuiltTreeSitterFacts()
 	for _, reference := range artifact.References {
-		if reference.TargetKey != "" {
-			t.Fatalf("built parser fabricated target %q for %#v", reference.TargetKey, reference)
-		}
-		suffix := TreeSitterReferenceSiteKey("", reference.Span)
-		if !strings.HasSuffix(reference.LocalKey, suffix) || !strings.HasSuffix(reference.SymbolKey, suffix) {
-			t.Fatalf("built parser reference site is not span-bound: %#v", reference)
-		}
-		if _, exists := seenSiteKeys[reference.LocalKey]; exists {
-			t.Fatalf("built parser collapsed repeated site key %q", reference.LocalKey)
-		}
-		if _, exists := seenSymbolKeys[reference.SymbolKey]; exists {
-			t.Fatalf("built parser collapsed repeated symbol key %q", reference.SymbolKey)
-		}
-		seenSiteKeys[reference.LocalKey] = struct{}{}
-		seenSymbolKeys[reference.SymbolKey] = struct{}{}
-		seenKinds[reference.Kind] = struct{}{}
-		if reference.Kind == "import_alias" && reference.RawTarget == defaultImportTarget {
-			defaultImportSeen = true
-		}
-		if reference.Kind == "import_alias" && reference.RawTarget == commonJSImportTarget {
-			commonJSImportSeen = true
-		}
-		if reference.Kind == "call" && reference.RawTarget == "DefaultValue" {
-			repeatedCalls[reference.LocalKey] = struct{}{}
-		}
-		if reference.Kind == "jsx_reference" && reference.RawTarget == selfClosingComponent {
-			start, end := int(reference.Span.ByteStart), int(reference.Span.ByteEnd)
-			if start == 0 || end > len(artifact.Text) || artifact.Text[start-1] != '<' || !strings.HasPrefix(artifact.Text[end:], " />") {
-				t.Fatalf("built parser did not retain self-closing JSX name span: %#v", reference)
-			}
-			selfClosingSeen = true
-		}
+		facts.observe(t, artifact, reference, defaultImportTarget, commonJSImportTarget, selfClosingComponent)
 	}
+	facts.require(t, artifact, referenceKinds, defaultImportTarget, commonJSImportTarget, selfClosingComponent)
+}
+
+type uciBuiltTreeSitterFacts struct {
+	seenKinds      map[string]struct{}
+	seenSiteKeys   map[string]struct{}
+	seenSymbolKeys map[string]struct{}
+	repeatedCalls  map[string]struct{}
+	defaultImport  bool
+	commonJSImport bool
+	selfClosingJSX bool
+}
+
+func newUCIBuiltTreeSitterFacts() *uciBuiltTreeSitterFacts {
+	return &uciBuiltTreeSitterFacts{
+		seenKinds:      make(map[string]struct{}),
+		seenSiteKeys:   make(map[string]struct{}),
+		seenSymbolKeys: make(map[string]struct{}),
+		repeatedCalls:  make(map[string]struct{}),
+	}
+}
+
+func (facts *uciBuiltTreeSitterFacts) observe(t *testing.T, artifact TreeSitterArtifact, reference TreeSitterReferenceSite, defaultImportTarget, commonJSImportTarget, selfClosingComponent string) {
+	t.Helper()
+	if reference.TargetKey != "" {
+		t.Fatalf("built parser fabricated target %q for %#v", reference.TargetKey, reference)
+	}
+	suffix := TreeSitterReferenceSiteKey("", reference.Span)
+	if !strings.HasSuffix(reference.LocalKey, suffix) || !strings.HasSuffix(reference.SymbolKey, suffix) {
+		t.Fatalf("built parser reference site is not span-bound: %#v", reference)
+	}
+	if _, exists := facts.seenSiteKeys[reference.LocalKey]; exists {
+		t.Fatalf("built parser collapsed repeated site key %q", reference.LocalKey)
+	}
+	if _, exists := facts.seenSymbolKeys[reference.SymbolKey]; exists {
+		t.Fatalf("built parser collapsed repeated symbol key %q", reference.SymbolKey)
+	}
+	facts.seenSiteKeys[reference.LocalKey] = struct{}{}
+	facts.seenSymbolKeys[reference.SymbolKey] = struct{}{}
+	facts.seenKinds[reference.Kind] = struct{}{}
+	if reference.Kind == "import_alias" && reference.RawTarget == defaultImportTarget {
+		facts.defaultImport = true
+	}
+	if reference.Kind == "import_alias" && reference.RawTarget == commonJSImportTarget {
+		facts.commonJSImport = true
+	}
+	if reference.Kind == "call" && reference.RawTarget == "DefaultValue" {
+		facts.repeatedCalls[reference.LocalKey] = struct{}{}
+	}
+	if reference.Kind == "jsx_reference" && reference.RawTarget == selfClosingComponent {
+		uciRequireBuiltSelfClosingJSX(t, artifact, reference)
+		facts.selfClosingJSX = true
+	}
+}
+
+func uciRequireBuiltSelfClosingJSX(t *testing.T, artifact TreeSitterArtifact, reference TreeSitterReferenceSite) {
+	t.Helper()
+	start, end := int(reference.Span.ByteStart), int(reference.Span.ByteEnd)
+	if start == 0 || end > len(artifact.Text) || artifact.Text[start-1] != '<' || !strings.HasPrefix(artifact.Text[end:], " />") {
+		t.Fatalf("built parser did not retain self-closing JSX name span: %#v", reference)
+	}
+}
+
+func (facts *uciBuiltTreeSitterFacts) require(t *testing.T, artifact TreeSitterArtifact, referenceKinds []string, defaultImportTarget, commonJSImportTarget, selfClosingComponent string) {
+	t.Helper()
 	for _, kind := range referenceKinds {
-		if _, found := seenKinds[kind]; !found {
+		if _, found := facts.seenKinds[kind]; !found {
 			t.Fatalf("built parser omitted %q from its closed vocabulary: %#v", kind, artifact.References)
 		}
 	}
-	if !defaultImportSeen {
+	if !facts.defaultImport {
 		t.Fatalf("built parser omitted default import binding %q: %#v", defaultImportTarget, artifact.References)
 	}
-	if !commonJSImportSeen {
+	if commonJSImportTarget != "" && !facts.commonJSImport {
 		t.Fatalf("built parser omitted CommonJS import binding %q: %#v", commonJSImportTarget, artifact.References)
 	}
-	if !selfClosingSeen {
+	if selfClosingComponent != "" && !facts.selfClosingJSX {
 		t.Fatalf("built parser omitted self-closing JSX component %q: %#v", selfClosingComponent, artifact.References)
 	}
-	if len(repeatedCalls) != 2 {
+	if len(facts.repeatedCalls) != 2 {
 		t.Fatalf("built parser collapsed repeated DefaultValue calls: %#v", artifact.References)
 	}
 }
