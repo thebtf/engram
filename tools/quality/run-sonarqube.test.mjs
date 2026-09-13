@@ -15,6 +15,7 @@ import {
   collectCoverage,
   consumeGoEvents,
   createLogWriter,
+  coverageWorkPlan,
   coverageProfiles,
   executeAnalysis,
   fingerprintProfile,
@@ -193,6 +194,45 @@ test("dedicated coverage profiles remain serialized and stop after failure", asy
   assert.equal(results.has("operator-code-fixture"), false);
 });
 
+test("unit work plan and heartbeat expose exact phase and overall denominators", () => {
+  const directory = temporaryDirectory();
+  try {
+    const now = { value: 0 };
+    const { campaign, progress, events } = progressHarness(directory, now);
+    const plan = coverageWorkPlan([
+      { phase: "race" },
+      { phase: "coverage" },
+      { phase: "coverage" },
+    ], 2);
+    assert.deepEqual(plan, {
+      overall: { completed: 0, required: 5, reused: 0 },
+      race: { completed: 0, required: 1, reused: 0 },
+      coverage: { completed: 0, required: 2, reused: 0 },
+      dedicated: { completed: 0, required: 2, reused: 0 },
+    });
+    progress.configureWork(plan);
+    progress.complete("race", { reused: true });
+    progress.activate("coverage-unit", 1000, "coverage");
+    const heartbeat = progress.heartbeat();
+    assert.equal(heartbeat.work_phase, "coverage");
+    assert.equal(heartbeat.phase_completed, 0);
+    assert.equal(heartbeat.phase_required, 2);
+    assert.equal(heartbeat.overall_completed, 1);
+    assert.equal(heartbeat.overall_required, 5);
+    assert.equal(campaign.manifest.work.overall.completed, 1);
+    const event = events().at(-1);
+    assert.equal(event.phase_completed, 0);
+    assert.equal(event.phase_required, 2);
+    assert.equal(event.overall_completed, 1);
+    assert.equal(event.overall_required, 5);
+    progress.complete("coverage");
+    progress.complete("coverage");
+    assert.throws(() => progress.complete("coverage"), /exceeds declared denominator/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("unitized base replaces the monolithic Go descriptor", () => {
   const base = coverageProfiles.find((profile) => profile.name === "base");
   const dedicated = coverageProfiles.find((profile) => profile.name === "uci");
@@ -343,7 +383,7 @@ test("cold collector reaches actual scheduling without an undefined pending-prof
     const environment = { values: { image_id: `sha256:${"a".repeat(64)}` }, sha256: "environment", testEnvironment: {} };
     const deadline = new Deadline({ overallTimeout: 1000, coverageTimeout: 60, profileTimeout: 30, scannerTimeout: 60, qualityGateTimeout: 60 });
     await assert.rejects(
-      collectCoverage(campaign, { ...candidate(), repository_path: directory }, environment, { fresh: true, jobs: 1 }, { signal: new AbortController().signal }, deadline, { meaningful() { } }, { goCommand: "fake-go", dockerCommand: "fake-docker", profiles: [] }),
+      collectCoverage(campaign, { ...candidate(), repository_path: directory }, environment, { fresh: true, jobs: 1 }, { signal: new AbortController().signal }, deadline, { configureWork() { }, complete() { }, meaningful() { } }, { goCommand: "fake-go", dockerCommand: "fake-docker", profiles: [] }),
       /Coverage mode must be atomic, got none/,
     );
     assert.equal(campaign.manifest.result.coverage, "failed");
@@ -367,7 +407,7 @@ test("base-only retains package-unit evidence without projecting full coverage o
     mkdirSync(campaign.runDir, { recursive: true });
     const options = parseOptions(["--mode", "coverage", "--base-only"]);
     const deadline = new Deadline({ overallTimeout: 1000, coverageTimeout: 60, profileTimeout: 30, scannerTimeout: 60, qualityGateTimeout: 60 });
-    const progress = { completed: 0, reused: 0, activate() { }, meaningful() { }, deactivate() { }, location() { }, semantic() { }, output() { } };
+    const progress = { configureWork() { }, complete() { }, activate() { }, meaningful() { }, deactivate() { }, location() { }, semantic() { }, output() { } };
     const unitRuntime = {
       expectedTests: async () => [{ package: packagePath, test: "TestExample" }],
       runProcess: async (_command, args, context) => {

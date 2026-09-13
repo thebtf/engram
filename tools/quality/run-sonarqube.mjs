@@ -1092,6 +1092,7 @@ function newManifest(runId, mode, candidate, environment, options, runDir) {
     },
     paths: { manifest: join(runDir, "manifest.json") },
     selection: { base_only: options.baseOnly, selected_profiles: options.baseOnly ? ["base"] : coverageProfiles.map((profile) => profile.name), required_profiles: coverageProfiles.length },
+    work: coverageWorkPlan([], 0),
     profiles: [],
     merged: { status: "pending" },
     analysis: { state: "not_submitted", project_key: projectKey, attempts: [] },
@@ -1119,6 +1120,18 @@ function event(campaign, phase, kind, details = {}) {
   appendFileSync(join(campaign.runDir, "events.ndjson"), `${JSON.stringify({ at_utc: new Date().toISOString(), run_id: campaign.manifest.run_id, phase, kind, ...details })}\n`, { encoding: "utf8", mode: 0o600 });
 }
 
+export function coverageWorkPlan(units, dedicatedProfiles) {
+  const required = { race: 0, coverage: 0, dedicated: dedicatedProfiles };
+  for (const unit of units) required[unit.phase] += 1;
+  const phase = (count) => ({ completed: 0, required: count, reused: 0 });
+  return {
+    overall: phase(required.race + required.coverage + required.dedicated),
+    race: phase(required.race),
+    coverage: phase(required.coverage),
+    dedicated: phase(required.dedicated),
+  };
+}
+
 export class Progress {
   constructor(campaign, deadline, now = () => Date.now()) {
     this.campaign = campaign;
@@ -1128,8 +1141,8 @@ export class Progress {
     this.phase = "preflight";
     this.phaseStarted = this.startedMs;
     this.active = new Map();
-    this.completed = 0;
-    this.reused = 0;
+    this.work = coverageWorkPlan([], 0);
+    this.currentWorkPhase = "race";
     this.lastProgressMs = this.now();
     this.lastProgress = new Date(this.lastProgressMs).toISOString();
     this.lastProgressAction = null;
@@ -1140,18 +1153,61 @@ export class Progress {
     this.timer = null;
   }
 
+  workDetails() {
+    const phase = this.work[this.currentWorkPhase] || this.work.overall;
+    return {
+      work_phase: this.currentWorkPhase,
+      phase_completed: phase.completed,
+      phase_required: phase.required,
+      phase_reused: phase.reused,
+      overall_completed: this.work.overall.completed,
+      overall_required: this.work.overall.required,
+      overall_reused: this.work.overall.reused,
+    };
+  }
+
+  syncWork() {
+    this.campaign.manifest.work = structuredClone(this.work);
+    saveCampaign(this.campaign);
+  }
+
+  configureWork(work) {
+    this.work = structuredClone(work);
+    this.currentWorkPhase = this.work.race.required ? "race" : this.work.coverage.required ? "coverage" : "dedicated";
+    this.syncWork();
+    event(this.campaign, "coverage", "work_planned", this.workDetails());
+  }
+
+  complete(workPhase, { reused = false } = {}) {
+    const phase = this.work[workPhase];
+    if (!phase) throw new RunnerError(`Unknown work phase: ${workPhase}`);
+    if (phase.completed >= phase.required || this.work.overall.completed >= this.work.overall.required) {
+      throw new RunnerError(`Work progress exceeds declared denominator for ${workPhase}`);
+    }
+    phase.completed += 1;
+    this.work.overall.completed += 1;
+    if (reused) {
+      phase.reused += 1;
+      this.work.overall.reused += 1;
+    }
+    this.currentWorkPhase = workPhase;
+    this.syncWork();
+    event(this.campaign, this.phase, "work_completed", { ...this.workDetails(), reused });
+  }
+
   meaningful(phase, details = {}) {
     const now = this.now();
     if (phase !== this.phase) this.phaseStarted = now;
     this.phase = phase;
     this.lastProgressMs = now;
     this.lastProgress = new Date(now).toISOString();
-    event(this.campaign, phase, "progress", { ...details, observed_at_utc: this.lastProgress, elapsed_ms: now - this.startedMs, phase_elapsed_ms: now - this.phaseStarted, last_progress_utc: this.lastProgress });
+    event(this.campaign, phase, "progress", { ...details, ...this.workDetails(), observed_at_utc: this.lastProgress, elapsed_ms: now - this.startedMs, phase_elapsed_ms: now - this.phaseStarted, last_progress_utc: this.lastProgress });
   }
 
-  activate(profile, deadlineAt = null) {
+  activate(profile, deadlineAt = null, workPhase = "dedicated") {
     const now = this.now();
-    this.active.set(profile, { started_ms: now, deadline_at_ms: deadlineAt, current_test: null, current_package: null, last_progress_ms: now, last_progress_utc: new Date(now).toISOString(), last_progress_action: "profile_started", last_progress_package: null, last_progress_test: null });
+    this.currentWorkPhase = workPhase;
+    this.active.set(profile, { started_ms: now, deadline_at_ms: deadlineAt, work_phase: workPhase, current_test: null, current_package: null, last_progress_ms: now, last_progress_utc: new Date(now).toISOString(), last_progress_action: "profile_started", last_progress_package: null, last_progress_test: null });
   }
 
   output() {
@@ -1174,6 +1230,7 @@ export class Progress {
     const active = this.active.get(profile);
     if (!active) return;
     const now = this.now();
+    this.currentWorkPhase = active.work_phase;
     this.location(profile, transition.package, transition.test);
     active.last_progress_ms = now;
     active.last_progress_utc = new Date(now).toISOString();
@@ -1185,7 +1242,7 @@ export class Progress {
     this.lastProgressAction = transition.action;
     this.lastProgressPackage = transition.package;
     this.lastProgressTest = transition.test;
-    event(this.campaign, this.phase, "progress", { profile, observation: "go-lifecycle", action: transition.action, package: transition.package, test: transition.test, observed_at_utc: this.lastProgress, elapsed_ms: now - this.startedMs, phase_elapsed_ms: now - this.phaseStarted, last_progress_utc: this.lastProgress });
+    event(this.campaign, this.phase, "progress", { profile, observation: "go-lifecycle", action: transition.action, package: transition.package, test: transition.test, ...this.workDetails(), observed_at_utc: this.lastProgress, elapsed_ms: now - this.startedMs, phase_elapsed_ms: now - this.phaseStarted, last_progress_utc: this.lastProgress });
   }
 
   deactivate(profile) {
@@ -1197,6 +1254,7 @@ export class Progress {
     const age = now - this.lastProgressMs;
     const activeProfiles = [...this.active.entries()].map(([name, value]) => ({
       profile: name,
+      work_phase: value.work_phase,
       elapsed_ms: now - value.started_ms,
       deadline_remaining_ms: value.deadline_at_ms === null ? this.deadline.remaining(this.phase) : Math.max(0, value.deadline_at_ms - now),
       current_test: value.current_test,
@@ -1213,9 +1271,7 @@ export class Progress {
     event(this.campaign, this.phase, kind, {
       head: this.campaign.manifest.candidate.head,
       active_profiles: activeProfiles,
-      completed_profiles: this.completed,
-      required_profiles: coverageProfiles.length,
-      reused_profiles: this.reused,
+      ...this.workDetails(),
       elapsed_ms: now - this.startedMs,
       phase_elapsed_ms: now - this.phaseStarted,
       deadline_remaining_ms: this.deadline.remaining(this.phase),
@@ -1231,8 +1287,9 @@ export class Progress {
       stall_reason: semanticIdle ? "no_semantic_transition_observed" : null,
     });
     const activeSummary = activeProfiles.map((profile) => `${profile.profile}:${profile.last_progress_action || "none"}:${profile.last_progress_age_ms}ms`).join(",");
-    console.log(`sonar run ${this.campaign.manifest.run_id}: ${this.phase}; ${this.completed}/${coverageProfiles.length}; semantic_idle=${semanticIdle}; active=${activeSummary || "none"}; diagnostics ${this.campaign.runDir}`);
-    return { kind, active_profiles: activeProfiles, semantic_idle: semanticIdle };
+    const work = this.workDetails();
+    console.log(`sonar run ${this.campaign.manifest.run_id}: ${this.phase} ${work.work_phase} ${work.phase_completed}/${work.phase_required}; overall ${work.overall_completed}/${work.overall_required}; semantic_idle=${semanticIdle}; active=${activeSummary || "none"}; diagnostics ${this.campaign.runDir}`);
+    return { kind, active_profiles: activeProfiles, semantic_idle: semanticIdle, ...work };
   }
 
   start() {
@@ -1565,7 +1622,7 @@ export async function runCoverageProfile(goCommand, profile, campaign, entry, cw
   entry.inventory = { state: "running" };
   entry.effective_argv = args.filter((argument) => !argument.includes(databasePassword));
   saveCampaign(campaign);
-  progress.activate(profile.name, deadlineAt);
+  progress.activate(profile.name, deadlineAt, profile.workPhase || "dedicated");
   progress.meaningful("coverage", { profile: profile.name, state: "inventory_started" });
   try {
     const databaseDSN = profile.databasePrefix ? await postgres.createDatabase(profile.databasePrefix, deadlineAt) : null;
@@ -1614,7 +1671,7 @@ export async function runCoverageProfile(goCommand, profile, campaign, entry, cw
     entry.package_counts = { passed: state.passedPackages.size, failed: 0, tests_passed: state.passedTests.size, tests_skipped: state.skippedTests.size };
     entry.allowed_skip_obligations = allowedSkips;
     entry.unexpected_skip_count = 0;
-    progress.completed += 1;
+    progress.complete(profile.workPhase || "dedicated");
     progress.meaningful("coverage", { profile: profile.name, state: "passed", elapsed_ms: entry.elapsed_ms });
   } catch (error) {
     if (testWriter) finishGoEvents(state, (line) => testWriter.write(line), observeGoEvent);
@@ -1691,6 +1748,7 @@ function packageUnitProfile(unit) {
     resourceGroup: unit.classification === "serial" ? "exclusive" : "ordinary-package",
     baseUnit: true,
     unitPhase: unit.phase,
+    workPhase: unit.phase,
   };
 }
 
@@ -1758,6 +1816,9 @@ async function runBasePackageUnits(baseEntry, campaign, candidate, environment, 
     units = options.baseOnly ? discoveredUnits.filter((unit) => unit.core) : discoveredUnits;
     if (!units.length) throw new RunnerError("base selected no first-party packages with tests");
     baseEntry.unit_plan = { selected_units: units.length, race_units: units.filter((unit) => unit.phase === "race").length, coverage_units: units.filter((unit) => unit.phase === "coverage").length, core_only: options.baseOnly };
+    const dedicatedEntries = options.baseOnly ? [] : campaign.manifest.profiles.filter((entry) => entry.name !== "base");
+    progress.configureWork(coverageWorkPlan(units, dedicatedEntries.length));
+    for (const entry of dedicatedEntries.filter((entry) => entry.source_run_id)) progress.complete("dedicated", { reused: true });
     const reusable = options.fresh ? new Map() : findReusablePackageUnits(campaign.namespace, units, candidate, environment);
     for (const unit of units) {
       const profile = packageUnitProfile(unit);
@@ -1765,8 +1826,7 @@ async function runBasePackageUnits(baseEntry, campaign, candidate, environment, 
       const entry = { id: unit.id, unit, name: unit.id, descriptor: profileDescriptor(profile), fingerprint: fingerprintPackageUnit(unit, candidate, environment), status: "pending", attempt: 1, classification: unit.classification, invalidation_reasons: cached ? [] : [options.fresh ? "fresh-requested" : "no-exact-valid-attempt"] };
       if (cached) {
         Object.assign(entry, cached.entry, { source_run_id: cached.sourceRun, source_artifact: cached.entry.coverage?.status === "not_applicable" ? null : { path: cached.entry.coverage.path, sha256: cached.entry.coverage.sha256, bytes: cached.entry.coverage.bytes } });
-        progress.completed += 1;
-        progress.reused += 1;
+        progress.complete(unit.phase, { reused: true });
         event(campaign, "coverage", "unit_reused", { unit: unit.id, package: unit.importPath, source_run_id: cached.sourceRun });
       }
       baseEntry.units.push(entry);
@@ -1840,8 +1900,6 @@ export async function collectCoverage(campaign, candidate, environment, options,
       entry.package_counts = cached.entry.package_counts;
       entry.allowed_skip_obligations = cached.entry.allowed_skip_obligations;
       entry.unexpected_skip_count = 0;
-      progress.completed += 1;
-      progress.reused += 1;
       event(campaign, "coverage", "profile_reused", { profile: profile.name, source_run_id: cached.sourceRun });
     }
     campaign.manifest.profiles.push(entry);
@@ -1854,6 +1912,10 @@ export async function collectCoverage(campaign, candidate, environment, options,
     if (!postgresPromise) postgresPromise = startPostgres(dockerCommand, candidate.repository_path, imageId, campaign, execution, deadline).then((value) => (postgres = value));
     return postgresPromise;
   };
+  if (!base) {
+    progress.configureWork(coverageWorkPlan([], dedicated.length));
+    for (const entry of campaign.manifest.profiles.filter((entry) => entry.source_run_id)) progress.complete("dedicated", { reused: true });
+  }
   const entries = new Map(campaign.manifest.profiles.map((entry) => [entry.name, entry]));
   let primaryError = null;
   try {
