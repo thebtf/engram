@@ -1285,37 +1285,44 @@ func (s *UCIProjectionStore) verifyUCIIndexAdmissionReferences(ctx context.Conte
 		referencesByKey[reference.SiteKey] = reference
 	}
 	for _, expected := range artifact.References {
-		binding := ucidomain.IndexAdmissionReferenceKey{ArtifactID: artifact.ArtifactID, SiteKey: expected.SiteKey}
-		referenceSiteID, found := bindings[binding]
-		if !found {
-			return fmt.Errorf("uci index admission: stored reference has no deterministic binding: %w", errUCIProjectionImmutable)
-		}
-		syntaxSpan, err := marshalUCIIndexAdmissionSpan(expected.Span)
-		if err != nil {
+		if err := verifyUCIIndexAdmissionReference(artifact.ArtifactID, bindings, referencesByKey, expected); err != nil {
 			return err
 		}
-		resolverHints, err := marshalUCIIndexAdmissionReferenceHints(expected)
-		if err != nil {
-			return err
-		}
-		actual, found := referencesByKey[expected.SiteKey]
-		if !found {
-			return fmt.Errorf("uci index admission: stored reference differs: %w", errUCIProjectionImmutable)
-		}
-		actualSyntaxSpan, err := normalizeUCIJSONObject("syntax_span", actual.SyntaxSpan)
-		if err != nil {
-			return errUCIProjectionImmutable
-		}
-		actualResolverHints, err := normalizeUCIJSONObject("resolver_hints", actual.ResolverHints)
-		if err != nil {
-			return errUCIProjectionImmutable
-		}
-		if actual.ReferenceSiteID != referenceSiteID ||
-			!sameUCIOptionalString(actual.OwnerSymbolKey, expected.OwnerSymbolKey) ||
-			actual.RawTarget != expected.RawTarget || actual.Relation != string(expected.Relation) ||
-			actualSyntaxSpan != syntaxSpan || actualResolverHints != resolverHints {
-			return fmt.Errorf("uci index admission: stored reference differs: %w", errUCIProjectionImmutable)
-		}
+	}
+	return nil
+}
+
+func verifyUCIIndexAdmissionReference(artifactID string, bindings ucidomain.IndexAdmissionReferenceBindings, referencesByKey map[string]UCIReferenceSite, expected ucidomain.IndexAdmissionReference) error {
+	binding := ucidomain.IndexAdmissionReferenceKey{ArtifactID: artifactID, SiteKey: expected.SiteKey}
+	referenceSiteID, found := bindings[binding]
+	if !found {
+		return fmt.Errorf("uci index admission: stored reference has no deterministic binding: %w", errUCIProjectionImmutable)
+	}
+	syntaxSpan, err := marshalUCIIndexAdmissionSpan(expected.Span)
+	if err != nil {
+		return err
+	}
+	resolverHints, err := marshalUCIIndexAdmissionReferenceHints(expected)
+	if err != nil {
+		return err
+	}
+	actual, found := referencesByKey[expected.SiteKey]
+	if !found {
+		return fmt.Errorf("uci index admission: stored reference differs: %w", errUCIProjectionImmutable)
+	}
+	actualSyntaxSpan, err := normalizeUCIJSONObject("syntax_span", actual.SyntaxSpan)
+	if err != nil {
+		return errUCIProjectionImmutable
+	}
+	actualResolverHints, err := normalizeUCIJSONObject("resolver_hints", actual.ResolverHints)
+	if err != nil {
+		return errUCIProjectionImmutable
+	}
+	if actual.ReferenceSiteID != referenceSiteID ||
+		!sameUCIOptionalString(actual.OwnerSymbolKey, expected.OwnerSymbolKey) ||
+		actual.RawTarget != expected.RawTarget || actual.Relation != string(expected.Relation) ||
+		actualSyntaxSpan != syntaxSpan || actualResolverHints != resolverHints {
+		return fmt.Errorf("uci index admission: stored reference differs: %w", errUCIProjectionImmutable)
 	}
 	return nil
 }
@@ -3593,7 +3600,8 @@ func (publisher *uciPublisher) stageUCIPublicationPartTx(ctx context.Context, tx
 		return ucidomain.IndexPartAck{}, errUCIPublicationLeaseStale
 	}
 	leaseExpiry := now.Add(publisher.limits.LeaseTTL)
-	if err := renewUCIPublicationStageLease(ctx, tx, caller, input, job, checkout, intentRow, leaseExpiry, now); err != nil {
+	lease := uciPublicationStageLease{caller: caller, input: input, job: job, checkout: checkout, intentRow: intentRow, expiry: leaseExpiry, now: now}
+	if err := renewUCIPublicationStageLease(ctx, tx, lease); err != nil {
 		return ucidomain.IndexPartAck{}, err
 	}
 	if err := publisher.validateUCIPublicationStageCapacity(ctx, tx, input, payload); err != nil {
@@ -3619,10 +3627,20 @@ func loadUCIPublicationStagedAcknowledgement(ctx context.Context, tx *gorm.DB, i
 	return ucidomain.IndexPartAck{}, false, nil
 }
 
-func renewUCIPublicationStageLease(ctx context.Context, tx *gorm.DB, caller ucidomain.IndexCaller, input ucidomain.IndexStageInput, job *UCIJob, checkout *UCICheckout, intentRow *indexIntentRow, leaseExpiry, now time.Time) error {
+type uciPublicationStageLease struct {
+	caller    ucidomain.IndexCaller
+	input     ucidomain.IndexStageInput
+	job       *UCIJob
+	checkout  *UCICheckout
+	intentRow *indexIntentRow
+	expiry    time.Time
+	now       time.Time
+}
+
+func renewUCIPublicationStageLease(ctx context.Context, tx *gorm.DB, lease uciPublicationStageLease) error {
 	checkoutUpdate := tx.WithContext(ctx).Model(&UCICheckout{}).
-		Where("checkout_id = ? AND lease_epoch = ? AND owner_instance = ?", checkout.CheckoutID, input.Build.LeaseEpoch, caller.OwnerInstance).
-		Updates(map[string]any{"lease_expires_at": leaseExpiry, "updated_at": now})
+		Where("checkout_id = ? AND lease_epoch = ? AND owner_instance = ?", lease.checkout.CheckoutID, lease.input.Build.LeaseEpoch, lease.caller.OwnerInstance).
+		Updates(map[string]any{"lease_expires_at": lease.expiry, "updated_at": lease.now})
 	if checkoutUpdate.Error != nil {
 		return fmt.Errorf("uci publication renew checkout lease: %w", checkoutUpdate.Error)
 	}
@@ -3630,20 +3648,20 @@ func renewUCIPublicationStageLease(ctx context.Context, tx *gorm.DB, caller ucid
 		return errUCIPublicationLeaseStale
 	}
 	jobUpdate := tx.WithContext(ctx).Model(&UCIJob{}).
-		Where("job_id = ? AND owner_epoch = ? AND lease_owner = ? AND state = ?", job.JobID, input.Build.LeaseEpoch, caller.OwnerInstance, UCIJobRunning).
-		Updates(map[string]any{"lease_expiry": leaseExpiry, "updated_at": now})
+		Where("job_id = ? AND owner_epoch = ? AND lease_owner = ? AND state = ?", lease.job.JobID, lease.input.Build.LeaseEpoch, lease.caller.OwnerInstance, UCIJobRunning).
+		Updates(map[string]any{"lease_expiry": lease.expiry, "updated_at": lease.now})
 	if jobUpdate.Error != nil {
 		return fmt.Errorf("uci publication renew build lease: %w", jobUpdate.Error)
 	}
 	if jobUpdate.RowsAffected != 1 {
 		return errUCIPublicationLeaseStale
 	}
-	if intentRow == nil {
+	if lease.intentRow == nil {
 		return nil
 	}
-	intentRow.ClaimExpiresAt = indexIntentTime(leaseExpiry)
-	intentRow.UpdatedAt = now
-	if err := updateIndexIntentRow(ctx, tx, *intentRow, string(ucidomain.IndexIntentRunning), input.IntentClaim); err != nil {
+	lease.intentRow.ClaimExpiresAt = indexIntentTime(lease.expiry)
+	lease.intentRow.UpdatedAt = lease.now
+	if err := updateIndexIntentRow(ctx, tx, *lease.intentRow, string(ucidomain.IndexIntentRunning), lease.input.IntentClaim); err != nil {
 		return errUCIPublicationLeaseStale
 	}
 	return nil
@@ -3832,7 +3850,6 @@ func (publisher *uciPublisher) Finalize(ctx context.Context, caller ucidomain.In
 	if err != nil {
 		return ucidomain.IndexPublishedView{}, errUCIPublicationRejected
 	}
-
 	var preflight UCIJob
 	if err := publisher.store.db.WithContext(ctx).Where(
 		"job_id = ? AND source_id = ? AND checkout_id = ?", input.Build.BuildID, input.Build.Scope.SourceID, input.Build.Scope.CheckoutID,
@@ -3855,166 +3872,232 @@ func (publisher *uciPublisher) Finalize(ctx context.Context, caller ucidomain.In
 			return ucidomain.IndexPublishedView{}, err
 		}
 	}
-
+	state := uciPublicationFinalizeState{caller: caller, input: input, digest: finalizeDigest, candidate: candidate}
 	var published ucidomain.IndexPublishedView
 	err = publisher.store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		checkout, err := lockUCIPublicationCheckout(ctx, tx, input.Build.Scope)
-		if err != nil {
-			return err
-		}
-		job, err := lockUCIPublicationJobByID(ctx, tx, input.Build.BuildID)
-		if err != nil || job.ProfileID == nil {
-			return errUCIPublicationRejected
-		}
-		now, err := uciDatabaseClock(ctx, tx)
-		if err != nil {
-			return err
-		}
-		intentRow, err := validateUCIPublicationIntentClaim(ctx, tx, uciPublicationIntentClaimValidation{
-			job:            job,
-			claim:          input.IntentClaim,
-			scope:          input.Build.Scope,
-			profileID:      *job.ProfileID,
-			now:            now,
-			allowCompleted: job.ResultViewID != nil,
-		})
-		if err != nil {
-			return err
-		}
-		// A durable result is replayed before lease freshness so a lost response
-		// cannot rewind current or allocate a second publication.
-		if job.ResultViewID != nil {
-			if job.FinalizeBindingDigest == nil || *job.FinalizeBindingDigest != finalizeDigest {
-				return errUCIPublicationIdempotencyMismatch
-			}
-			published, err = loadUCIPublishedViewForJob(ctx, tx, *job)
-			if err != nil {
-				return err
-			}
-			if intentRow != nil {
-				return completeIndexIntentRowFromPublication(ctx, tx, intentRow, published.Context)
-			}
-			return nil
-		}
-		if !matchesUCIPublicationBuild(*job, checkout, caller, input.Build) ||
-			!sameUCIOptionalString(job.ExpectedParentViewID, uciPublicationParentID(input.ExpectedParent)) {
-			return errUCIPublicationRejected
-		}
-		current, err := loadUCICurrentViewForCheckout(ctx, tx, checkout)
-		if err != nil {
-			return err
-		}
-		if !matchesUCIPublicationParent(input.ExpectedParent, current, input.Build.Scope, *job.ProfileID) {
-			return errUCIPublicationRejected
-		}
-		if !activeUCIPublicationLease(*job, checkout, caller, input.Build, now) {
-			return errUCIPublicationLeaseStale
-		}
-		if current != nil && canReuseUCIPublishedView(ctx, tx, *job, *current, input, candidate) {
-			sealedManifest, err := json.Marshal(input.Manifest)
-			if err != nil {
-				return err
-			}
-			resultViewID := current.ViewID
-			if err := tx.WithContext(ctx).Model(&UCIJob{}).Where(uciProjectionJobIDWhere, job.JobID).Updates(map[string]any{
-				"state": UCIJobSucceeded, "result_view_id": resultViewID, "sealed_manifest": string(sealedManifest),
-				"finalize_binding_digest": finalizeDigest, "updated_at": now,
-			}).Error; err != nil {
-				return fmt.Errorf("uci publication store no-op result: %w", err)
-			}
-			if err := tx.WithContext(ctx).Model(&UCICheckout{}).Where(uciProjectionCheckoutIDWhere, checkout.CheckoutID).Updates(map[string]any{
-				"owner_instance": nil, "lease_expires_at": nil, "updated_at": now,
-			}).Error; err != nil {
-				return fmt.Errorf("uci publication release checkout lease: %w", err)
-			}
-			published = ucidomain.IndexPublishedView{
-				BuildID: job.JobID, Context: uciContextRefFromView(*current), ManifestDigest: ucidomain.IndexDigest(current.ManifestDigest),
-				AcceptedFSSeq: current.ObservedFSSeq, PublishedAt: current.PublishedAt.UTC(),
-			}
-			if intentRow != nil {
-				return completeIndexIntentRowFromPublication(ctx, tx, intentRow, published.Context)
-			}
-			return nil
-		}
-
-		nextGeneration := int64(1)
-		if current != nil {
-			nextGeneration = current.Generation + 1
-		}
-		if err := publisher.sealUCIPublicationArtifacts(ctx, tx, input.Build.Scope.SourceID, candidate.ArtifactProofs, now); err != nil {
-			return err
-		}
-		if err := applyUCIPublicationMemberships(ctx, tx, input.Build.Scope, nextGeneration, candidate.CurrentMemberships, candidate.Memberships); err != nil {
-			return err
-		}
-		if err := applyUCIPublicationEdges(ctx, tx, input.Build.Scope, nextGeneration, candidate.CurrentEdges, candidate.EdgeReplacements); err != nil {
-			return err
-		}
-		coverageJSON, err := marshalUCIPublicationCoverage(input.Manifest.Coverage)
-		if err != nil {
-			return err
-		}
-		publishedAt := now
-		view := UCIView{
-			ViewID: uuid.NewString(), CheckoutID: input.Build.Scope.CheckoutID, SourceID: input.Build.Scope.SourceID,
-			IncarnationID: input.Build.Scope.IncarnationID, Generation: nextGeneration, ProfileID: *job.ProfileID,
-			HeadOID: input.Manifest.Observation.HeadOID, ObjectFormat: input.Manifest.Observation.ObjectFormat,
-			RefLabel: input.Manifest.Observation.RefLabel, Dirty: input.Manifest.Observation.Dirty,
-			ObservedFSSeq: input.Manifest.Observation.ObservedFSSeq, ScanStart: input.Manifest.Observation.ScanStart.UTC(),
-			ScanEnd: input.Manifest.Observation.ScanEnd.UTC(), ManifestDigest: string(input.Manifest.ManifestDigest),
-			State: UCIViewPublished, CoverageJSON: coverageJSON, PublishedAt: &publishedAt,
-			CreatedAt: now, UpdatedAt: now,
-		}
-		if err := tx.WithContext(ctx).Create(&view).Error; err != nil {
-			return fmt.Errorf("uci publication create view: %w", err)
-		}
-		if err := tx.WithContext(ctx).Model(&UCICheckout{}).Where(uciProjectionCheckoutIDWhere, checkout.CheckoutID).Updates(map[string]any{
-			"current_view_id": view.ViewID, "owner_instance": nil, "lease_expires_at": nil, "updated_at": now,
-		}).Error; err != nil {
-			return fmt.Errorf("uci publication switch current pointer: %w", err)
-		}
-		if publisher.embeddingProfile != nil {
-			totalCandidates, complete, err := uciPublicationEmbeddingCandidateCount(candidate)
-			if err != nil {
-				return err
-			}
-			var candidateTotal *uint64
-			if complete {
-				candidateTotal = &totalCandidates
-			}
-			if err := enqueueUCIEmbeddingJob(ctx, tx, caller.AuthRealm, caller.Principal, view, *publisher.embeddingProfile, candidateTotal); err != nil {
-				return fmt.Errorf("uci publication enqueue embedding: %w", err)
-			}
-		}
-		if current != nil {
-			if err := tx.WithContext(ctx).Model(&UCIView{}).Where(uciProjectionViewIDWhere, current.ViewID).Updates(map[string]any{
-				"state": UCIViewSuperseded, "updated_at": now,
-			}).Error; err != nil {
-				return fmt.Errorf("uci publication supersede parent: %w", err)
-			}
-		}
-		sealedManifest, err := json.Marshal(input.Manifest)
-		if err != nil {
-			return err
-		}
-		resultViewID := view.ViewID
-		if err := tx.WithContext(ctx).Model(&UCIJob{}).Where(uciProjectionJobIDWhere, job.JobID).Updates(map[string]any{
-			"state": UCIJobSucceeded, "result_view_id": resultViewID, "sealed_manifest": string(sealedManifest),
-			"finalize_binding_digest": finalizeDigest, "updated_at": now,
-		}).Error; err != nil {
-			return fmt.Errorf("uci publication store result: %w", err)
-		}
-		published = ucidomain.IndexPublishedView{
-			BuildID: job.JobID, Context: uciContextRefFromView(view), ManifestDigest: input.Manifest.ManifestDigest,
-			AcceptedFSSeq: input.Manifest.Observation.ObservedFSSeq, PublishedAt: publishedAt,
-		}
-		if intentRow != nil {
-			return completeIndexIntentRowFromPublication(ctx, tx, intentRow, published.Context)
-		}
-		return nil
+		var transactionErr error
+		published, transactionErr = publisher.finalizeUCIPublicationTx(ctx, tx, state)
+		return transactionErr
 	})
 	if err != nil {
 		return ucidomain.IndexPublishedView{}, err
+	}
+	return published, nil
+}
+
+type uciPublicationFinalizeState struct {
+	caller    ucidomain.IndexCaller
+	input     ucidomain.IndexFinalizeInput
+	digest    string
+	candidate *uciPublicationCandidate
+}
+
+type uciPublicationFinalization struct {
+	state     uciPublicationFinalizeState
+	checkout  *UCICheckout
+	job       *UCIJob
+	current   *UCIView
+	intentRow *indexIntentRow
+	now       time.Time
+}
+
+func (publisher *uciPublisher) finalizeUCIPublicationTx(ctx context.Context, tx *gorm.DB, state uciPublicationFinalizeState) (ucidomain.IndexPublishedView, error) {
+	checkout, err := lockUCIPublicationCheckout(ctx, tx, state.input.Build.Scope)
+	if err != nil {
+		return ucidomain.IndexPublishedView{}, err
+	}
+	job, err := lockUCIPublicationJobByID(ctx, tx, state.input.Build.BuildID)
+	if err != nil || job.ProfileID == nil {
+		return ucidomain.IndexPublishedView{}, errUCIPublicationRejected
+	}
+	now, err := uciDatabaseClock(ctx, tx)
+	if err != nil {
+		return ucidomain.IndexPublishedView{}, err
+	}
+	intentRow, err := validateUCIPublicationIntentClaim(ctx, tx, uciPublicationIntentClaimValidation{
+		job:            job,
+		claim:          state.input.IntentClaim,
+		scope:          state.input.Build.Scope,
+		profileID:      *job.ProfileID,
+		now:            now,
+		allowCompleted: job.ResultViewID != nil,
+	})
+	if err != nil {
+		return ucidomain.IndexPublishedView{}, err
+	}
+	finalization := uciPublicationFinalization{state: state, checkout: checkout, job: job, intentRow: intentRow, now: now}
+	if job.ResultViewID != nil {
+		return publisher.replayUCIPublicationFinalization(ctx, tx, finalization)
+	}
+	if err := finalization.validateActive(ctx, tx); err != nil {
+		return ucidomain.IndexPublishedView{}, err
+	}
+	if finalization.current != nil && canReuseUCIPublishedView(ctx, tx, *job, *finalization.current, state.input, state.candidate) {
+		return publisher.finalizeUCIPublicationNoOp(ctx, tx, finalization)
+	}
+	return publisher.finalizeUCIPublicationNew(ctx, tx, finalization)
+}
+
+func (finalization *uciPublicationFinalization) validateActive(ctx context.Context, tx *gorm.DB) error {
+	if !matchesUCIPublicationBuild(*finalization.job, finalization.checkout, finalization.state.caller, finalization.state.input.Build) ||
+		!sameUCIOptionalString(finalization.job.ExpectedParentViewID, uciPublicationParentID(finalization.state.input.ExpectedParent)) {
+		return errUCIPublicationRejected
+	}
+	current, err := loadUCICurrentViewForCheckout(ctx, tx, finalization.checkout)
+	if err != nil {
+		return err
+	}
+	if !matchesUCIPublicationParent(finalization.state.input.ExpectedParent, current, finalization.state.input.Build.Scope, *finalization.job.ProfileID) {
+		return errUCIPublicationRejected
+	}
+	if !activeUCIPublicationLease(*finalization.job, finalization.checkout, finalization.state.caller, finalization.state.input.Build, finalization.now) {
+		return errUCIPublicationLeaseStale
+	}
+	finalization.current = current
+	return nil
+}
+
+func (publisher *uciPublisher) replayUCIPublicationFinalization(ctx context.Context, tx *gorm.DB, finalization uciPublicationFinalization) (ucidomain.IndexPublishedView, error) {
+	if finalization.job.FinalizeBindingDigest == nil || *finalization.job.FinalizeBindingDigest != finalization.state.digest {
+		return ucidomain.IndexPublishedView{}, errUCIPublicationIdempotencyMismatch
+	}
+	published, err := loadUCIPublishedViewForJob(ctx, tx, *finalization.job)
+	if err != nil {
+		return ucidomain.IndexPublishedView{}, err
+	}
+	if finalization.intentRow != nil {
+		if err := completeIndexIntentRowFromPublication(ctx, tx, finalization.intentRow, published.Context); err != nil {
+			return ucidomain.IndexPublishedView{}, err
+		}
+	}
+	return published, nil
+}
+
+func (publisher *uciPublisher) finalizeUCIPublicationNoOp(ctx context.Context, tx *gorm.DB, finalization uciPublicationFinalization) (ucidomain.IndexPublishedView, error) {
+	sealedManifest, err := json.Marshal(finalization.state.input.Manifest)
+	if err != nil {
+		return ucidomain.IndexPublishedView{}, err
+	}
+	resultViewID := finalization.current.ViewID
+	if err := tx.WithContext(ctx).Model(&UCIJob{}).Where(uciProjectionJobIDWhere, finalization.job.JobID).Updates(map[string]any{
+		"state": UCIJobSucceeded, "result_view_id": resultViewID, "sealed_manifest": string(sealedManifest),
+		"finalize_binding_digest": finalization.state.digest, "updated_at": finalization.now,
+	}).Error; err != nil {
+		return ucidomain.IndexPublishedView{}, fmt.Errorf("uci publication store no-op result: %w", err)
+	}
+	if err := tx.WithContext(ctx).Model(&UCICheckout{}).Where(uciProjectionCheckoutIDWhere, finalization.checkout.CheckoutID).Updates(map[string]any{
+		"owner_instance": nil, "lease_expires_at": nil, "updated_at": finalization.now,
+	}).Error; err != nil {
+		return ucidomain.IndexPublishedView{}, fmt.Errorf("uci publication release checkout lease: %w", err)
+	}
+	published := ucidomain.IndexPublishedView{
+		BuildID: finalization.job.JobID, Context: uciContextRefFromView(*finalization.current), ManifestDigest: ucidomain.IndexDigest(finalization.current.ManifestDigest),
+		AcceptedFSSeq: finalization.current.ObservedFSSeq, PublishedAt: finalization.current.PublishedAt.UTC(),
+	}
+	if finalization.intentRow != nil {
+		if err := completeIndexIntentRowFromPublication(ctx, tx, finalization.intentRow, published.Context); err != nil {
+			return ucidomain.IndexPublishedView{}, err
+		}
+	}
+	return published, nil
+}
+
+func (publisher *uciPublisher) finalizeUCIPublicationNew(ctx context.Context, tx *gorm.DB, finalization uciPublicationFinalization) (ucidomain.IndexPublishedView, error) {
+	nextGeneration := int64(1)
+	if finalization.current != nil {
+		nextGeneration = finalization.current.Generation + 1
+	}
+	view, err := publisher.publishUCIPublicationView(ctx, tx, finalization, nextGeneration)
+	if err != nil {
+		return ucidomain.IndexPublishedView{}, err
+	}
+	if err := publisher.enqueueUCIPublicationEmbedding(ctx, tx, finalization, view); err != nil {
+		return ucidomain.IndexPublishedView{}, err
+	}
+	return completeUCIPublicationFinalization(ctx, tx, finalization, view)
+}
+
+func (publisher *uciPublisher) publishUCIPublicationView(ctx context.Context, tx *gorm.DB, finalization uciPublicationFinalization, nextGeneration int64) (UCIView, error) {
+	if err := publisher.sealUCIPublicationArtifacts(ctx, tx, finalization.state.input.Build.Scope.SourceID, finalization.state.candidate.ArtifactProofs, finalization.now); err != nil {
+		return UCIView{}, err
+	}
+	if err := applyUCIPublicationMemberships(ctx, tx, finalization.state.input.Build.Scope, nextGeneration, finalization.state.candidate.CurrentMemberships, finalization.state.candidate.Memberships); err != nil {
+		return UCIView{}, err
+	}
+	if err := applyUCIPublicationEdges(ctx, tx, finalization.state.input.Build.Scope, nextGeneration, finalization.state.candidate.CurrentEdges, finalization.state.candidate.EdgeReplacements); err != nil {
+		return UCIView{}, err
+	}
+	coverageJSON, err := marshalUCIPublicationCoverage(finalization.state.input.Manifest.Coverage)
+	if err != nil {
+		return UCIView{}, err
+	}
+	publishedAt := finalization.now
+	view := UCIView{
+		ViewID: uuid.NewString(), CheckoutID: finalization.state.input.Build.Scope.CheckoutID, SourceID: finalization.state.input.Build.Scope.SourceID,
+		IncarnationID: finalization.state.input.Build.Scope.IncarnationID, Generation: nextGeneration, ProfileID: *finalization.job.ProfileID,
+		HeadOID: finalization.state.input.Manifest.Observation.HeadOID, ObjectFormat: finalization.state.input.Manifest.Observation.ObjectFormat,
+		RefLabel: finalization.state.input.Manifest.Observation.RefLabel, Dirty: finalization.state.input.Manifest.Observation.Dirty,
+		ObservedFSSeq: finalization.state.input.Manifest.Observation.ObservedFSSeq, ScanStart: finalization.state.input.Manifest.Observation.ScanStart.UTC(),
+		ScanEnd: finalization.state.input.Manifest.Observation.ScanEnd.UTC(), ManifestDigest: string(finalization.state.input.Manifest.ManifestDigest),
+		State: UCIViewPublished, CoverageJSON: coverageJSON, PublishedAt: &publishedAt,
+		CreatedAt: finalization.now, UpdatedAt: finalization.now,
+	}
+	if err := tx.WithContext(ctx).Create(&view).Error; err != nil {
+		return UCIView{}, fmt.Errorf("uci publication create view: %w", err)
+	}
+	if err := tx.WithContext(ctx).Model(&UCICheckout{}).Where(uciProjectionCheckoutIDWhere, finalization.checkout.CheckoutID).Updates(map[string]any{
+		"current_view_id": view.ViewID, "owner_instance": nil, "lease_expires_at": nil, "updated_at": finalization.now,
+	}).Error; err != nil {
+		return UCIView{}, fmt.Errorf("uci publication switch current pointer: %w", err)
+	}
+	return view, nil
+}
+
+func (publisher *uciPublisher) enqueueUCIPublicationEmbedding(ctx context.Context, tx *gorm.DB, finalization uciPublicationFinalization, view UCIView) error {
+	if publisher.embeddingProfile == nil {
+		return nil
+	}
+	totalCandidates, complete, err := uciPublicationEmbeddingCandidateCount(finalization.state.candidate)
+	if err != nil {
+		return err
+	}
+	var candidateTotal *uint64
+	if complete {
+		candidateTotal = &totalCandidates
+	}
+	if err := enqueueUCIEmbeddingJob(ctx, tx, finalization.state.caller.AuthRealm, finalization.state.caller.Principal, view, *publisher.embeddingProfile, candidateTotal); err != nil {
+		return fmt.Errorf("uci publication enqueue embedding: %w", err)
+	}
+	return nil
+}
+
+func completeUCIPublicationFinalization(ctx context.Context, tx *gorm.DB, finalization uciPublicationFinalization, view UCIView) (ucidomain.IndexPublishedView, error) {
+	if finalization.current != nil {
+		if err := tx.WithContext(ctx).Model(&UCIView{}).Where(uciProjectionViewIDWhere, finalization.current.ViewID).Updates(map[string]any{
+			"state": UCIViewSuperseded, "updated_at": finalization.now,
+		}).Error; err != nil {
+			return ucidomain.IndexPublishedView{}, fmt.Errorf("uci publication supersede parent: %w", err)
+		}
+	}
+	sealedManifest, err := json.Marshal(finalization.state.input.Manifest)
+	if err != nil {
+		return ucidomain.IndexPublishedView{}, err
+	}
+	resultViewID := view.ViewID
+	if err := tx.WithContext(ctx).Model(&UCIJob{}).Where(uciProjectionJobIDWhere, finalization.job.JobID).Updates(map[string]any{
+		"state": UCIJobSucceeded, "result_view_id": resultViewID, "sealed_manifest": string(sealedManifest),
+		"finalize_binding_digest": finalization.state.digest, "updated_at": finalization.now,
+	}).Error; err != nil {
+		return ucidomain.IndexPublishedView{}, fmt.Errorf("uci publication store result: %w", err)
+	}
+	published := ucidomain.IndexPublishedView{
+		BuildID: finalization.job.JobID, Context: uciContextRefFromView(view), ManifestDigest: finalization.state.input.Manifest.ManifestDigest,
+		AcceptedFSSeq: finalization.state.input.Manifest.Observation.ObservedFSSeq, PublishedAt: finalization.now,
+	}
+	if finalization.intentRow != nil {
+		if err := completeIndexIntentRowFromPublication(ctx, tx, finalization.intentRow, published.Context); err != nil {
+			return ucidomain.IndexPublishedView{}, err
+		}
 	}
 	return published, nil
 }
@@ -4257,13 +4340,27 @@ func (publisher *uciPublisher) prepareUCIPublicationCandidate(ctx context.Contex
 	if err != nil || partsDigest != input.Manifest.PartsDigest {
 		return nil, errUCIPublicationBuildIncomplete
 	}
-	currentMemberships, currentEdges, err := loadUCIPublicationCurrentProjection(ctx, publisher.store.db, input.Build.Scope)
+	candidate, mode, err := publisher.newUCIPublicationCandidate(ctx, job, input.Build.Scope)
 	if err != nil {
 		return nil, err
 	}
+	if err := publisher.mergeUCIPublicationCandidateParts(ctx, input.Build.Scope, *job.ProfileID, mode, candidate, parts); err != nil {
+		return nil, err
+	}
+	if err := publisher.validateUCIPublicationCandidate(ctx, input, job, mode, candidate); err != nil {
+		return nil, err
+	}
+	return candidate, nil
+}
+
+func (publisher *uciPublisher) newUCIPublicationCandidate(ctx context.Context, job UCIJob, scope ucidomain.IndexScope) (*uciPublicationCandidate, ucidomain.IndexManifestMode, error) {
+	currentMemberships, currentEdges, err := loadUCIPublicationCurrentProjection(ctx, publisher.store.db, scope)
+	if err != nil {
+		return nil, "", err
+	}
 	mode := ucidomain.IndexManifestMode(*job.ManifestMode)
 	if mode != ucidomain.IndexManifestFull && mode != ucidomain.IndexManifestDelta {
-		return nil, errUCIPublicationRejected
+		return nil, "", errUCIPublicationRejected
 	}
 	candidate := &uciPublicationCandidate{
 		ArtifactProofs:     make(map[string]ucidomain.IndexArtifactProof),
@@ -4273,97 +4370,157 @@ func (publisher *uciPublisher) prepareUCIPublicationCandidate(ctx context.Contex
 		EdgeReplacements:   make(map[string]ucidomain.IndexEdgeReplacement),
 		DeletedPaths:       make(map[string]struct{}),
 	}
-	if mode == ucidomain.IndexManifestDelta {
-		for path, membership := range currentMemberships {
-			candidate.Memberships[path] = indexMembershipFromRow(membership)
-		}
-		for sourcePath, rows := range currentEdges {
-			replacement, err := indexEdgeReplacementFromRows(sourcePath, rows)
-			if err != nil {
-				return nil, errUCIPublicationRejected
-			}
-			candidate.EdgeReplacements[sourcePath] = replacement
-		}
+	if mode != ucidomain.IndexManifestDelta {
+		return candidate, mode, nil
 	}
+	for path, membership := range currentMemberships {
+		candidate.Memberships[path] = indexMembershipFromRow(membership)
+	}
+	for sourcePath, rows := range currentEdges {
+		replacement, err := indexEdgeReplacementFromRows(sourcePath, rows)
+		if err != nil {
+			return nil, "", errUCIPublicationRejected
+		}
+		candidate.EdgeReplacements[sourcePath] = replacement
+	}
+	return candidate, mode, nil
+}
 
-	seenMemberships := make(map[string]struct{})
-	seenDeletions := make(map[string]struct{})
-	seenReplacements := make(map[string]struct{})
+type uciPublicationCandidateMerge struct {
+	scope            ucidomain.IndexScope
+	profileID        string
+	mode             ucidomain.IndexManifestMode
+	candidate        *uciPublicationCandidate
+	seenMemberships  map[string]struct{}
+	seenDeletions    map[string]struct{}
+	seenReplacements map[string]struct{}
+}
+
+func (publisher *uciPublisher) mergeUCIPublicationCandidateParts(ctx context.Context, scope ucidomain.IndexScope, profileID string, mode ucidomain.IndexManifestMode, candidate *uciPublicationCandidate, parts []ucidomain.IndexPart) error {
+	merge := uciPublicationCandidateMerge{
+		scope:            scope,
+		profileID:        profileID,
+		mode:             mode,
+		candidate:        candidate,
+		seenMemberships:  make(map[string]struct{}),
+		seenDeletions:    make(map[string]struct{}),
+		seenReplacements: make(map[string]struct{}),
+	}
 	for _, part := range parts {
-		if err := publisher.validateStagedPart(ctx, input.Build.Scope, *job.ProfileID, part); err != nil {
-			return nil, err
-		}
-		for _, proof := range part.Artifacts {
-			if existing, exists := candidate.ArtifactProofs[proof.ArtifactID]; exists && !sameUCIIndexArtifactProof(existing, proof) {
-				return nil, errUCIPublicationRejected
-			}
-			candidate.ArtifactProofs[proof.ArtifactID] = proof
-		}
-		if mode == ucidomain.IndexManifestFull && len(part.Deletions) != 0 {
-			return nil, errUCIPublicationRejected
-		}
-		for _, membership := range part.Memberships {
-			if _, exists := seenMemberships[membership.PathKey]; exists {
-				return nil, errUCIPublicationRejected
-			}
-			if _, deleted := seenDeletions[membership.PathKey]; deleted {
-				return nil, errUCIPublicationRejected
-			}
-			seenMemberships[membership.PathKey] = struct{}{}
-			candidate.Memberships[membership.PathKey] = membership
-		}
-		for _, deletion := range part.Deletions {
-			if !deletion.ConfirmedMissing {
-				return nil, errUCIPublicationRejected
-			}
-			if _, exists := seenDeletions[deletion.PathKey]; exists {
-				return nil, errUCIPublicationRejected
-			}
-			if _, membership := seenMemberships[deletion.PathKey]; membership {
-				return nil, errUCIPublicationRejected
-			}
-			seenDeletions[deletion.PathKey] = struct{}{}
-			delete(candidate.Memberships, deletion.PathKey)
-			candidate.DeletedPaths[deletion.PathKey] = struct{}{}
-		}
-		for _, replacement := range part.EdgeReplacements {
-			if _, exists := seenReplacements[replacement.SourcePath]; exists {
-				return nil, errUCIPublicationRejected
-			}
-			seenReplacements[replacement.SourcePath] = struct{}{}
-			candidate.EdgeReplacements[replacement.SourcePath] = replacement
+		if err := merge.mergePart(ctx, publisher, part); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+func (merge *uciPublicationCandidateMerge) mergePart(ctx context.Context, publisher *uciPublisher, part ucidomain.IndexPart) error {
+	if err := publisher.validateStagedPart(ctx, merge.scope, merge.profileID, part); err != nil {
+		return err
+	}
+	if err := mergeUCIPublicationCandidateArtifacts(merge.candidate, part.Artifacts); err != nil {
+		return err
+	}
+	if merge.mode == ucidomain.IndexManifestFull && len(part.Deletions) != 0 {
+		return errUCIPublicationRejected
+	}
+	if err := mergeUCIPublicationCandidateMemberships(merge.candidate, part.Memberships, merge.seenMemberships, merge.seenDeletions); err != nil {
+		return err
+	}
+	if err := mergeUCIPublicationCandidateDeletions(merge.candidate, part.Deletions, merge.seenMemberships, merge.seenDeletions); err != nil {
+		return err
+	}
+	return mergeUCIPublicationCandidateReplacements(merge.candidate, part.EdgeReplacements, merge.seenReplacements)
+}
+
+func mergeUCIPublicationCandidateArtifacts(candidate *uciPublicationCandidate, proofs []ucidomain.IndexArtifactProof) error {
+	for _, proof := range proofs {
+		if existing, exists := candidate.ArtifactProofs[proof.ArtifactID]; exists && !sameUCIIndexArtifactProof(existing, proof) {
+			return errUCIPublicationRejected
+		}
+		candidate.ArtifactProofs[proof.ArtifactID] = proof
+	}
+	return nil
+}
+
+func mergeUCIPublicationCandidateMemberships(candidate *uciPublicationCandidate, memberships []ucidomain.IndexMembership, seenMemberships, seenDeletions map[string]struct{}) error {
+	for _, membership := range memberships {
+		if _, exists := seenMemberships[membership.PathKey]; exists {
+			return errUCIPublicationRejected
+		}
+		if _, deleted := seenDeletions[membership.PathKey]; deleted {
+			return errUCIPublicationRejected
+		}
+		seenMemberships[membership.PathKey] = struct{}{}
+		candidate.Memberships[membership.PathKey] = membership
+	}
+	return nil
+}
+
+func mergeUCIPublicationCandidateDeletions(candidate *uciPublicationCandidate, deletions []ucidomain.IndexDeletion, seenMemberships, seenDeletions map[string]struct{}) error {
+	for _, deletion := range deletions {
+		if !deletion.ConfirmedMissing {
+			return errUCIPublicationRejected
+		}
+		if _, exists := seenDeletions[deletion.PathKey]; exists {
+			return errUCIPublicationRejected
+		}
+		if _, membership := seenMemberships[deletion.PathKey]; membership {
+			return errUCIPublicationRejected
+		}
+		seenDeletions[deletion.PathKey] = struct{}{}
+		delete(candidate.Memberships, deletion.PathKey)
+		candidate.DeletedPaths[deletion.PathKey] = struct{}{}
+	}
+	return nil
+}
+
+func mergeUCIPublicationCandidateReplacements(candidate *uciPublicationCandidate, replacements []ucidomain.IndexEdgeReplacement, seenReplacements map[string]struct{}) error {
+	for _, replacement := range replacements {
+		if _, exists := seenReplacements[replacement.SourcePath]; exists {
+			return errUCIPublicationRejected
+		}
+		seenReplacements[replacement.SourcePath] = struct{}{}
+		candidate.EdgeReplacements[replacement.SourcePath] = replacement
+	}
+	return nil
+}
+
+func (publisher *uciPublisher) validateUCIPublicationCandidate(ctx context.Context, input ucidomain.IndexFinalizeInput, job UCIJob, mode ucidomain.IndexManifestMode, candidate *uciPublicationCandidate) error {
 	if uint64(len(candidate.Memberships)) > publisher.limits.MaxManifestEntries {
-		return nil, errUCIPublicationBuildIncomplete
+		return errUCIPublicationBuildIncomplete
 	}
 	if len(candidate.Memberships) == 0 && mode != ucidomain.IndexManifestFull {
-		return nil, errUCIPublicationRejected
+		return errUCIPublicationRejected
 	}
 	if err := validateUCIPublicationCandidateShape(candidate, mode); err != nil {
-		return nil, err
+		return err
 	}
 	if err := publisher.validateUCIPublicationCandidateArtifacts(ctx, input.Build.Scope, *job.ProfileID, candidate); err != nil {
-		return nil, err
+		return err
 	}
 	if err := validateUCIPublicationCandidateEdges(candidate); err != nil {
-		return nil, err
+		return err
 	}
+	return publisher.validateUCIPublicationCandidateManifest(input.Manifest, candidate)
+}
+
+func (publisher *uciPublisher) validateUCIPublicationCandidateManifest(manifest ucidomain.IndexManifestCompletion, candidate *uciPublicationCandidate) error {
 	memberships := sortedUCIPublicationMemberships(candidate.Memberships)
 	replacements := sortedUCIPublicationReplacements(candidate.EdgeReplacements)
 	manifestDigest, err := ucidomain.DigestIndexManifest(memberships)
-	if err != nil || uint64(len(memberships)) != input.Manifest.EntryCount || manifestDigest != input.Manifest.ManifestDigest {
-		return nil, errUCIPublicationBuildIncomplete
+	if err != nil || uint64(len(memberships)) != manifest.EntryCount || manifestDigest != manifest.ManifestDigest {
+		return errUCIPublicationBuildIncomplete
 	}
 	edgeCount := uint64(0)
 	for _, replacement := range replacements {
 		edgeCount += uint64(len(replacement.Edges))
 	}
 	edgesDigest, err := ucidomain.DigestIndexEdges(replacements)
-	if err != nil || edgeCount != input.Manifest.EdgeCount || edgeCount > publisher.limits.MaxEdges || edgesDigest != input.Manifest.EdgesDigest {
-		return nil, errUCIPublicationBuildIncomplete
+	if err != nil || edgeCount != manifest.EdgeCount || edgeCount > publisher.limits.MaxEdges || edgesDigest != manifest.EdgesDigest {
+		return errUCIPublicationBuildIncomplete
 	}
-	return candidate, nil
+	return nil
 }
 
 func loadUCIPublicationParts(ctx context.Context, db *gorm.DB, buildID string) ([]ucidomain.IndexPart, []ucidomain.IndexPartAck, error) {
@@ -4508,22 +4665,7 @@ func (publisher *uciPublisher) validateUCIPublicationCandidateArtifactsForProfil
 			continue
 		}
 		referenced[artifactID] = struct{}{}
-		var artifact UCIParseArtifact
-		if err := publisher.store.db.WithContext(ctx).Where(uciProjectionSourceArtifactWhere, scope.SourceID, artifactID).First(&artifact).Error; err != nil {
-			return errUCIPublicationRejected
-		}
-		if artifact.ExtractionProfileDigest != profile.ParserBundleDigest ||
-			(artifact.Status != UCIParseArtifactComplete && artifact.Status != UCIParseArtifactPartial) {
-			return errUCIPublicationRejected
-		}
-		if artifact.SealedAt == nil {
-			if _, proven := candidate.ArtifactProofs[artifactID]; !proven {
-				return errUCIPublicationRejected
-			}
-		} else if artifact.FactsDigest == nil {
-			return errUCIPublicationRejected
-		}
-		if err := publisher.validateArtifactSize(ctx, scope.SourceID, artifactID); err != nil {
+		if err := publisher.validateUCIPublicationCandidateArtifact(ctx, scope, profile, candidate, artifactID); err != nil {
 			return err
 		}
 	}
@@ -4531,6 +4673,28 @@ func (publisher *uciPublisher) validateUCIPublicationCandidateArtifactsForProfil
 		if _, used := referenced[artifactID]; !used {
 			return errUCIPublicationRejected
 		}
+	}
+	return nil
+}
+
+func (publisher *uciPublisher) validateUCIPublicationCandidateArtifact(ctx context.Context, scope ucidomain.IndexScope, profile UCIAnalysisProfile, candidate *uciPublicationCandidate, artifactID string) error {
+	var artifact UCIParseArtifact
+	if err := publisher.store.db.WithContext(ctx).Where(uciProjectionSourceArtifactWhere, scope.SourceID, artifactID).First(&artifact).Error; err != nil {
+		return errUCIPublicationRejected
+	}
+	if artifact.ExtractionProfileDigest != profile.ParserBundleDigest ||
+		(artifact.Status != UCIParseArtifactComplete && artifact.Status != UCIParseArtifactPartial) {
+		return errUCIPublicationRejected
+	}
+	if artifact.SealedAt == nil {
+		if _, proven := candidate.ArtifactProofs[artifactID]; !proven {
+			return errUCIPublicationRejected
+		}
+	} else if artifact.FactsDigest == nil {
+		return errUCIPublicationRejected
+	}
+	if err := publisher.validateArtifactSize(ctx, scope.SourceID, artifactID); err != nil {
+		return err
 	}
 	return nil
 }
@@ -4667,45 +4831,39 @@ func applyUCIPublicationMemberships(ctx context.Context, tx *gorm.DB, scope ucid
 	return nil
 }
 
+type uciPublicationEdgeMutation struct {
+	scope      ucidomain.IndexScope
+	generation int64
+	now        time.Time
+	current    map[string][]UCIResolvedEdge
+	candidate  map[string]ucidomain.IndexEdgeReplacement
+}
+
 func applyUCIPublicationEdges(ctx context.Context, tx *gorm.DB, scope ucidomain.IndexScope, generation int64, current map[string][]UCIResolvedEdge, candidate map[string]ucidomain.IndexEdgeReplacement) error {
 	paths := unionUCIPublicationEdgePaths(current, candidate)
 	now, err := uciDatabaseClock(ctx, tx)
 	if err != nil {
 		return err
 	}
+	mutation := uciPublicationEdgeMutation{scope: scope, generation: generation, now: now, current: current, candidate: candidate}
 	for _, path := range paths {
-		if err := applyUCIPublicationEdgePath(ctx, tx, scope, generation, now, path, current[path], candidate[path], candidate); err != nil {
+		if err := applyUCIPublicationEdgePath(ctx, tx, path, mutation); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func unionUCIPublicationEdgePaths(current map[string][]UCIResolvedEdge, candidate map[string]ucidomain.IndexEdgeReplacement) []string {
-	paths := make(map[string]struct{}, len(current)+len(candidate))
-	for path := range current {
-		paths[path] = struct{}{}
-	}
-	for path := range candidate {
-		paths[path] = struct{}{}
-	}
-	orderedPaths := make([]string, 0, len(paths))
-	for path := range paths {
-		orderedPaths = append(orderedPaths, path)
-	}
-	sort.Strings(orderedPaths)
-	return orderedPaths
-}
-
-func applyUCIPublicationEdgePath(ctx context.Context, tx *gorm.DB, scope ucidomain.IndexScope, generation int64, now time.Time, path string, existing []UCIResolvedEdge, next ucidomain.IndexEdgeReplacement, candidate map[string]ucidomain.IndexEdgeReplacement) error {
-	_, hasNext := candidate[path]
+func applyUCIPublicationEdgePath(ctx context.Context, tx *gorm.DB, path string, mutation uciPublicationEdgeMutation) error {
+	existing := mutation.current[path]
+	next, hasNext := mutation.candidate[path]
 	if hasNext && sameUCIPublicationEdgeReplacement(existing, next) {
 		return nil
 	}
 	if len(existing) != 0 {
 		if err := tx.WithContext(ctx).Model(&UCIResolvedEdge{}).Where(
-			"checkout_id = ? AND source_path = ? AND valid_to_generation IS NULL", scope.CheckoutID, path,
-		).Updates(map[string]any{"valid_to_generation": generation}).Error; err != nil {
+			"checkout_id = ? AND source_path = ? AND valid_to_generation IS NULL", mutation.scope.CheckoutID, path,
+		).Updates(map[string]any{"valid_to_generation": mutation.generation}).Error; err != nil {
 			return fmt.Errorf("uci publication close edges: %w", err)
 		}
 	}
@@ -4725,8 +4883,8 @@ func applyUCIPublicationEdgePath(ctx context.Context, tx *gorm.DB, scope ucidoma
 		}
 		row := UCIResolvedEdge{
 			ResolvedEdgeID:      uuid.NewString(),
-			SourceID:            scope.SourceID,
-			CheckoutID:          scope.CheckoutID,
+			SourceID:            mutation.scope.SourceID,
+			CheckoutID:          mutation.scope.CheckoutID,
 			EdgeKey:             edge.EdgeKey,
 			SourcePath:          next.SourcePath,
 			SourceArtifact:      edge.SourceArtifactID,
@@ -4739,14 +4897,30 @@ func applyUCIPublicationEdgePath(ctx context.Context, tx *gorm.DB, scope ucidoma
 			ResolverRevision:    edge.ResolverRevision,
 			EvidenceJSON:        string(evidenceJSON),
 			ResolutionState:     UCIResolvedEdgeState(edge.ResolutionState),
-			ValidFromGeneration: generation,
-			CreatedAt:           now,
+			ValidFromGeneration: mutation.generation,
+			CreatedAt:           mutation.now,
 		}
 		if err := tx.WithContext(ctx).Create(&row).Error; err != nil {
 			return fmt.Errorf("uci publication insert edge: %w", err)
 		}
 	}
 	return nil
+}
+
+func unionUCIPublicationEdgePaths(current map[string][]UCIResolvedEdge, candidate map[string]ucidomain.IndexEdgeReplacement) []string {
+	paths := make(map[string]struct{}, len(current)+len(candidate))
+	for path := range current {
+		paths[path] = struct{}{}
+	}
+	for path := range candidate {
+		paths[path] = struct{}{}
+	}
+	orderedPaths := make([]string, 0, len(paths))
+	for path := range paths {
+		orderedPaths = append(orderedPaths, path)
+	}
+	sort.Strings(orderedPaths)
+	return orderedPaths
 }
 
 func unionUCIPublicationPaths(current map[string]UCIMembership, candidate map[string]ucidomain.IndexMembership) []string {
