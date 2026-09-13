@@ -228,6 +228,20 @@ func (freshness ComparisonFreshnessV3) valid() bool {
 	}
 }
 
+// ComparisonObservationInputV3 contains the closed, redacted facts accepted
+// to construct a comparison observation.
+type ComparisonObservationInputV3 struct {
+	IdempotencyKey      string
+	Correlation         CorrelationV3
+	V3Outcome           ResolutionOutcomeV3
+	LegacyOutcome       LegacyComparisonOutcomeV2
+	ClientInstanceID    string
+	Transport           ComparisonTransportV3
+	Scope               ComparisonScopeV3
+	Freshness           ComparisonFreshnessV3
+	EvidenceFingerprint string
+}
+
 // ComparisonObservationV3 is one complete, explicit comparison boundary. Its
 // fields are constrained to redacted taxonomies, opaque references, and SHA-256
 // fingerprints; it has no descriptor, V2 selector, canonical key, or target.
@@ -245,17 +259,17 @@ type ComparisonObservationV3 struct {
 
 // NewComparisonObservationV3 validates the redacted comparison boundary before
 // it reaches a durable telemetry store.
-func NewComparisonObservationV3(idempotencyKey string, correlation CorrelationV3, v3Outcome ResolutionOutcomeV3, legacyOutcome LegacyComparisonOutcomeV2, clientInstanceID string, transport ComparisonTransportV3, scope ComparisonScopeV3, freshness ComparisonFreshnessV3, evidenceFingerprint string) (ComparisonObservationV3, error) {
+func NewComparisonObservationV3(input ComparisonObservationInputV3) (ComparisonObservationV3, error) {
 	observation := ComparisonObservationV3{
-		IdempotencyKey:      idempotencyKey,
-		Correlation:         correlation,
-		V3Outcome:           v3Outcome,
-		LegacyOutcome:       legacyOutcome,
-		ClientInstanceID:    clientInstanceID,
-		Transport:           transport,
-		Scope:               scope,
-		Freshness:           freshness,
-		EvidenceFingerprint: evidenceFingerprint,
+		IdempotencyKey:      input.IdempotencyKey,
+		Correlation:         input.Correlation,
+		V3Outcome:           input.V3Outcome,
+		LegacyOutcome:       input.LegacyOutcome,
+		ClientInstanceID:    input.ClientInstanceID,
+		Transport:           input.Transport,
+		Scope:               input.Scope,
+		Freshness:           input.Freshness,
+		EvidenceFingerprint: input.EvidenceFingerprint,
 	}
 	if !observation.Valid() {
 		return ComparisonObservationV3{}, errInvalidComparisonV3

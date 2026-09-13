@@ -243,17 +243,17 @@ func TestProjectIdentityV3BehaviorMatrixComparisonClasses(t *testing.T) {
 			if err != nil {
 				t.Fatalf("new correlation: %v", err)
 			}
-			observation, err := NewComparisonObservationV3(
-				comparisonTestFingerprint("matrix-idempotency-"+name),
-				correlation,
-				test.v3Outcome,
-				test.legacy,
-				"matrix-client-"+name,
-				ComparisonTransportHTTPV3,
-				ComparisonRepositoryScopeV3,
-				ComparisonFreshV3,
-				comparisonTestFingerprint("matrix-evidence-"+name),
-			)
+			observation, err := NewComparisonObservationV3(ComparisonObservationInputV3{
+				IdempotencyKey:      comparisonTestFingerprint("matrix-idempotency-" + name),
+				Correlation:         correlation,
+				V3Outcome:           test.v3Outcome,
+				LegacyOutcome:       test.legacy,
+				ClientInstanceID:    "matrix-client-" + name,
+				Transport:           ComparisonTransportHTTPV3,
+				Scope:               ComparisonRepositoryScopeV3,
+				Freshness:           ComparisonFreshV3,
+				EvidenceFingerprint: comparisonTestFingerprint("matrix-evidence-" + name),
+			})
 			if err != nil {
 				t.Fatalf("new observation: %v", err)
 			}
