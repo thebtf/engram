@@ -48,10 +48,9 @@ const (
 )
 
 func TestAR2CandidateCommitRequiresCleanWorktree(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
 	t.Run("clean", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
 		commit, err := ar2CandidateCommitFromWorktree(ctx, ar2CandidateTestWorktree(t, ctx))
 		if err != nil || !validCommit(commit) {
 			t.Fatalf("clean worktree commit = %q, %v", commit, err)
@@ -60,10 +59,12 @@ func TestAR2CandidateCommitRequiresCleanWorktree(t *testing.T) {
 
 	for _, testCase := range []struct {
 		name   string
+		want   string
 		mutate func(t *testing.T, root string)
 	}{
 		{
 			name: "ordinary tracked change",
+			want: "candidate source worktree is dirty",
 			mutate: func(t *testing.T, root string) {
 				t.Helper()
 				if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("modified\n"), 0o600); err != nil {
@@ -73,6 +74,7 @@ func TestAR2CandidateCommitRequiresCleanWorktree(t *testing.T) {
 		},
 		{
 			name: "staged change",
+			want: "candidate source worktree is dirty",
 			mutate: func(t *testing.T, root string) {
 				t.Helper()
 				if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("staged\n"), 0o600); err != nil {
@@ -83,6 +85,7 @@ func TestAR2CandidateCommitRequiresCleanWorktree(t *testing.T) {
 		},
 		{
 			name: "untracked change",
+			want: "candidate source worktree is dirty",
 			mutate: func(t *testing.T, root string) {
 				t.Helper()
 				if err := os.WriteFile(filepath.Join(root, "untracked.txt"), []byte("untracked\n"), 0o600); err != nil {
@@ -92,6 +95,7 @@ func TestAR2CandidateCommitRequiresCleanWorktree(t *testing.T) {
 		},
 		{
 			name: "assume unchanged scan relevant source",
+			want: "index-hidden scan-relevant source",
 			mutate: func(t *testing.T, root string) {
 				t.Helper()
 				ar2RunFixtureGit(t, context.Background(), root, "update-index", "--assume-unchanged", "--", "internal/fixture.go")
@@ -102,6 +106,7 @@ func TestAR2CandidateCommitRequiresCleanWorktree(t *testing.T) {
 		},
 		{
 			name: "ignored scan relevant source",
+			want: "ignored scan-relevant source",
 			mutate: func(t *testing.T, root string) {
 				t.Helper()
 				path := filepath.Join(root, "ignored", "forged.go")
@@ -115,19 +120,18 @@ func TestAR2CandidateCommitRequiresCleanWorktree(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
 			root := ar2CandidateTestWorktree(t, ctx)
 			testCase.mutate(t, root)
-			if _, err := ar2CandidateCommitFromWorktree(ctx, root); err == nil {
-				t.Fatal("candidate guard accepted dirty source")
+			if _, err := ar2CandidateCommitFromWorktree(ctx, root); err == nil || !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("candidate guard error = %v, want %q", err, testCase.want)
 			}
 		})
 	}
 }
 
 func TestAR2CandidateCommitAllowsOnlyFixtureGeneratedArtifacts(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
 	for _, testCase := range []struct {
 		name    string
 		files   map[string]string
@@ -161,6 +165,8 @@ func TestAR2CandidateCommitAllowsOnlyFixtureGeneratedArtifacts(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
 			root := ar2CandidateTestWorktree(t, ctx)
 			for path, content := range testCase.files {
 				if err := os.MkdirAll(filepath.Dir(filepath.Join(root, filepath.FromSlash(path))), 0o700); err != nil {
@@ -740,7 +746,9 @@ func ar2CandidateTestWorktree(t *testing.T, ctx context.Context) string {
 func ar2RunFixtureGit(t *testing.T, ctx context.Context, root string, args ...string) {
 	t.Helper()
 	if _, err := ar2Command(ctx, root, "git", args...); err != nil {
-		t.Fatalf("git %s failed", strings.Join(args, " "))
+		diagnostic := strings.ReplaceAll(err.Error(), root, "[REDACTED]")
+		diagnostic = strings.ReplaceAll(diagnostic, filepath.ToSlash(root), "[REDACTED]")
+		t.Fatalf("git %s failed: %s", strings.Join(args, " "), diagnostic)
 	}
 }
 
