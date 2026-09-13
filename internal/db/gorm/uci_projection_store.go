@@ -3374,42 +3374,55 @@ type uciPublicationIntentClaimValidation struct {
 }
 
 func validateUCIPublicationIntentClaim(ctx context.Context, tx *gorm.DB, input uciPublicationIntentClaimValidation) (*indexIntentRow, error) {
-	job, claim := input.job, input.claim
-	scope, profileID, now := input.scope, input.profileID, input.now
-	allowCompleted := input.allowCompleted
-	if claim == nil {
-		if job != nil && job.IndexIntentID != nil {
+	if input.claim == nil {
+		if input.job != nil && input.job.IndexIntentID != nil {
 			return nil, errUCIPublicationRejected
 		}
 		return nil, nil
 	}
-	if claim.Validate() != nil {
+	row, err := loadUCIPublicationIntentClaim(ctx, tx, input)
+	if err != nil {
+		return nil, err
+	}
+	if input.job == nil {
+		return row, validateUCIPublicationUnboundIntentClaim(row, input.now)
+	}
+	return row, validateUCIPublicationBoundIntentClaim(row, input)
+}
+
+func loadUCIPublicationIntentClaim(ctx context.Context, tx *gorm.DB, input uciPublicationIntentClaimValidation) (*indexIntentRow, error) {
+	if input.claim.Validate() != nil {
 		return nil, errUCIPublicationRejected
 	}
-	row, err := lockIndexIntentRow(ctx, tx, claim.IntentID, false)
+	row, err := lockIndexIntentRow(ctx, tx, input.claim.IntentID, false)
 	if err != nil {
 		return nil, errUCIPublicationRejected
 	}
-	if row.SourceID != scope.SourceID || row.CheckoutID != scope.CheckoutID || row.IncarnationID != scope.IncarnationID || row.ProfileID != profileID ||
-		!indexIntentClaimMatches(*row, *claim) {
+	if row.SourceID != input.scope.SourceID || row.CheckoutID != input.scope.CheckoutID || row.IncarnationID != input.scope.IncarnationID || row.ProfileID != input.profileID || !indexIntentClaimMatches(*row, *input.claim) {
 		return nil, errUCIPublicationRejected
-	}
-	if job == nil {
-		if row.PublicationBuildID != nil || row.State != string(ucidomain.IndexIntentRunning) || row.ClaimExpiresAt == nil || !row.ClaimExpiresAt.After(now) {
-			return nil, errUCIPublicationLeaseStale
-		}
-		return row, nil
-	}
-	if job.IndexIntentID == nil || *job.IndexIntentID != row.IntentID || row.PublicationBuildID == nil || *row.PublicationBuildID != job.JobID {
-		return nil, errUCIPublicationRejected
-	}
-	if allowCompleted && job.ResultViewID != nil && row.State == string(ucidomain.IndexIntentCompleted) {
-		return row, nil
-	}
-	if row.State != string(ucidomain.IndexIntentRunning) || row.ClaimExpiresAt == nil || !row.ClaimExpiresAt.After(now) {
-		return nil, errUCIPublicationLeaseStale
 	}
 	return row, nil
+}
+
+func validateUCIPublicationUnboundIntentClaim(row *indexIntentRow, now time.Time) error {
+	if row.PublicationBuildID != nil || row.State != string(ucidomain.IndexIntentRunning) || row.ClaimExpiresAt == nil || !row.ClaimExpiresAt.After(now) {
+		return errUCIPublicationLeaseStale
+	}
+	return nil
+}
+
+func validateUCIPublicationBoundIntentClaim(row *indexIntentRow, input uciPublicationIntentClaimValidation) error {
+	job := input.job
+	if job.IndexIntentID == nil || *job.IndexIntentID != row.IntentID || row.PublicationBuildID == nil || *row.PublicationBuildID != job.JobID {
+		return errUCIPublicationRejected
+	}
+	if input.allowCompleted && job.ResultViewID != nil && row.State == string(ucidomain.IndexIntentCompleted) {
+		return nil
+	}
+	if row.State != string(ucidomain.IndexIntentRunning) || row.ClaimExpiresAt == nil || !row.ClaimExpiresAt.After(input.now) {
+		return errUCIPublicationLeaseStale
+	}
+	return nil
 }
 
 func canonicalUCIPublicationDigest(kind string, value any) (string, error) {
