@@ -431,65 +431,72 @@ func ValidateIndexPublicationParts(parts []IndexPart, limits IndexPublicationLim
 		return fmt.Errorf("uci publication: invalid publication limits")
 	}
 	if uint64(len(parts)) > uint64(limits.MaxParts) {
-		return newIndexCapacityError(
-			IndexCapacityScopePublicationBuild,
-			IndexCapacityResourceParts,
-			uint64(len(parts)),
-			uint64(limits.MaxParts),
-		)
+		return newIndexCapacityError(IndexCapacityScopePublicationBuild, IndexCapacityResourceParts, uint64(len(parts)), uint64(limits.MaxParts))
 	}
-
-	var totalBytes, memberships, edges uint64
+	capacity := indexPublicationCapacity{}
 	for index, part := range parts {
-		normalized, err := normalizeIndexPart(part)
-		if err != nil {
-			return fmt.Errorf("uci publication: normalize part %d: %w", index, err)
+		if err := capacity.addPart(part, index, limits); err != nil {
+			return err
 		}
-		encoded, err := json.Marshal(normalized)
-		if err != nil {
-			return fmt.Errorf("uci publication: encode part %d: %w", index, err)
+	}
+	return nil
+}
+
+type indexPublicationCapacity struct {
+	bytes       uint64
+	memberships uint64
+	edges       uint64
+}
+
+func (capacity *indexPublicationCapacity) addPart(part IndexPart, index int, limits IndexPublicationLimits) error {
+	normalized, err := normalizeIndexPart(part)
+	if err != nil {
+		return fmt.Errorf("uci publication: normalize part %d: %w", index, err)
+	}
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return fmt.Errorf("uci publication: encode part %d: %w", index, err)
+	}
+	if err := capacity.addBytes(uint64(len(encoded)), limits); err != nil {
+		return err
+	}
+	if err := capacity.addMemberships(uint64(len(normalized.Memberships)), limits); err != nil {
+		return err
+	}
+	for _, replacement := range normalized.EdgeReplacements {
+		if err := capacity.addEdges(uint64(len(replacement.Edges)), limits); err != nil {
+			return err
 		}
-		partBytes := uint64(len(encoded))
-		if partBytes > uint64(limits.MaxPartBytes) {
-			return newIndexCapacityError(
-				IndexCapacityScopePublicationPart,
-				IndexCapacityResourceEncodedBytes,
-				partBytes,
-				uint64(limits.MaxPartBytes),
-			)
-		}
-		if required := indexCapacityAdd(totalBytes, partBytes); required > uint64(limits.MaxBuildBytes) {
-			return newIndexCapacityError(
-				IndexCapacityScopePublicationBuild,
-				IndexCapacityResourceEncodedBytes,
-				required,
-				uint64(limits.MaxBuildBytes),
-			)
-		} else {
-			totalBytes = required
-		}
-		if required := indexCapacityAdd(memberships, uint64(len(normalized.Memberships))); required > limits.MaxManifestEntries {
-			return newIndexCapacityError(
-				IndexCapacityScopePublicationBuild,
-				IndexCapacityResourceManifestEntries,
-				required,
-				limits.MaxManifestEntries,
-			)
-		} else {
-			memberships = required
-		}
-		for _, replacement := range normalized.EdgeReplacements {
-			if required := indexCapacityAdd(edges, uint64(len(replacement.Edges))); required > limits.MaxEdges {
-				return newIndexCapacityError(
-					IndexCapacityScopePublicationBuild,
-					IndexCapacityResourceEdges,
-					required,
-					limits.MaxEdges,
-				)
-			} else {
-				edges = required
-			}
-		}
+	}
+	return nil
+}
+
+func (capacity *indexPublicationCapacity) addBytes(additional uint64, limits IndexPublicationLimits) error {
+	if additional > uint64(limits.MaxPartBytes) {
+		return newIndexCapacityError(IndexCapacityScopePublicationPart, IndexCapacityResourceEncodedBytes, additional, uint64(limits.MaxPartBytes))
+	}
+	if required := indexCapacityAdd(capacity.bytes, additional); required > uint64(limits.MaxBuildBytes) {
+		return newIndexCapacityError(IndexCapacityScopePublicationBuild, IndexCapacityResourceEncodedBytes, required, uint64(limits.MaxBuildBytes))
+	} else {
+		capacity.bytes = required
+	}
+	return nil
+}
+
+func (capacity *indexPublicationCapacity) addMemberships(additional uint64, limits IndexPublicationLimits) error {
+	if required := indexCapacityAdd(capacity.memberships, additional); required > limits.MaxManifestEntries {
+		return newIndexCapacityError(IndexCapacityScopePublicationBuild, IndexCapacityResourceManifestEntries, required, limits.MaxManifestEntries)
+	} else {
+		capacity.memberships = required
+	}
+	return nil
+}
+
+func (capacity *indexPublicationCapacity) addEdges(additional uint64, limits IndexPublicationLimits) error {
+	if required := indexCapacityAdd(capacity.edges, additional); required > limits.MaxEdges {
+		return newIndexCapacityError(IndexCapacityScopePublicationBuild, IndexCapacityResourceEdges, required, limits.MaxEdges)
+	} else {
+		capacity.edges = required
 	}
 	return nil
 }
@@ -626,29 +633,36 @@ func normalizeIndexMemberships(memberships []IndexMembership) ([]IndexMembership
 		return normalized[left].PathKey < normalized[right].PathKey
 	})
 	for index, membership := range normalized {
-		if !validIndexText(membership.PathKey) || !validIndexText(membership.DisplayPath) || !validIndexText(membership.Mode) {
-			return nil, fmt.Errorf("uci publication: invalid membership")
+		if err := validateIndexMembership(membership); err != nil {
+			return nil, err
 		}
 		if index > 0 && normalized[index-1].PathKey == membership.PathKey {
 			return nil, fmt.Errorf("uci publication: duplicate membership path")
-		}
-		switch membership.State {
-		case IndexFilePresent:
-			if membership.ArtifactID == nil || !canonicalContextUUID(*membership.ArtifactID) {
-				return nil, fmt.Errorf("uci publication: present membership requires an artifact")
-			}
-		case IndexFileExcluded, IndexFileUnreadable:
-			if membership.ArtifactID != nil {
-				return nil, fmt.Errorf("uci publication: non-present membership must not carry an artifact")
-			}
-		default:
-			return nil, fmt.Errorf("uci publication: unsupported membership state")
 		}
 	}
 	if normalized == nil {
 		normalized = []IndexMembership{}
 	}
 	return normalized, nil
+}
+
+func validateIndexMembership(membership IndexMembership) error {
+	if !validIndexText(membership.PathKey) || !validIndexText(membership.DisplayPath) || !validIndexText(membership.Mode) {
+		return fmt.Errorf("uci publication: invalid membership")
+	}
+	switch membership.State {
+	case IndexFilePresent:
+		if membership.ArtifactID == nil || !canonicalContextUUID(*membership.ArtifactID) {
+			return fmt.Errorf("uci publication: present membership requires an artifact")
+		}
+	case IndexFileExcluded, IndexFileUnreadable:
+		if membership.ArtifactID != nil {
+			return fmt.Errorf("uci publication: non-present membership must not carry an artifact")
+		}
+	default:
+		return fmt.Errorf("uci publication: unsupported membership state")
+	}
+	return nil
 }
 
 func normalizeIndexDeletions(deletions []IndexDeletion) ([]IndexDeletion, error) {
@@ -677,31 +691,46 @@ func normalizeIndexEdgeReplacements(replacements []IndexEdgeReplacement) ([]Inde
 	})
 	for index := range normalized {
 		replacement := &normalized[index]
-		if !validIndexText(replacement.SourcePath) {
-			return nil, fmt.Errorf("uci publication: invalid edge replacement path")
+		if err := validateIndexEdgeReplacement(*replacement); err != nil {
+			return nil, err
 		}
 		if index > 0 && normalized[index-1].SourcePath == replacement.SourcePath {
 			return nil, fmt.Errorf("uci publication: duplicate edge replacement path")
 		}
-		edges := append([]IndexEdge(nil), replacement.Edges...)
-		sort.Slice(edges, func(left, right int) bool {
-			return edges[left].EdgeKey < edges[right].EdgeKey
-		})
-		for edgeIndex, edge := range edges {
-			if err := validateIndexEdge(edge); err != nil {
-				return nil, err
-			}
-			if edgeIndex > 0 && edges[edgeIndex-1].EdgeKey == edge.EdgeKey {
-				return nil, fmt.Errorf("uci publication: duplicate edge key")
-			}
-		}
-		if edges == nil {
-			edges = []IndexEdge{}
+		edges, err := normalizeIndexEdges(replacement.Edges)
+		if err != nil {
+			return nil, err
 		}
 		replacement.Edges = edges
 	}
 	if normalized == nil {
 		normalized = []IndexEdgeReplacement{}
+	}
+	return normalized, nil
+}
+
+func validateIndexEdgeReplacement(replacement IndexEdgeReplacement) error {
+	if !validIndexText(replacement.SourcePath) {
+		return fmt.Errorf("uci publication: invalid edge replacement path")
+	}
+	return nil
+}
+
+func normalizeIndexEdges(edges []IndexEdge) ([]IndexEdge, error) {
+	normalized := append([]IndexEdge(nil), edges...)
+	sort.Slice(normalized, func(left, right int) bool {
+		return normalized[left].EdgeKey < normalized[right].EdgeKey
+	})
+	for index, edge := range normalized {
+		if err := validateIndexEdge(edge); err != nil {
+			return nil, err
+		}
+		if index > 0 && normalized[index-1].EdgeKey == edge.EdgeKey {
+			return nil, fmt.Errorf("uci publication: duplicate edge key")
+		}
+	}
+	if normalized == nil {
+		normalized = []IndexEdge{}
 	}
 	return normalized, nil
 }

@@ -300,7 +300,8 @@ func (service *SemanticService) availableResult(input semanticAvailableResultInp
 		}
 		continuation.Value = &token
 	}
-	degradation := append([]string(nil), input.degradationReasons...)
+	degradation := make([]string, len(input.degradationReasons))
+	copy(degradation, input.degradationReasons)
 	response := queryAvailableResponse(input.ref, input.spec, input.coverage, items, warnings, truncated, continuation)
 	response.Retrieval = &QueryRetrieval{
 		Mode:               input.mode,
