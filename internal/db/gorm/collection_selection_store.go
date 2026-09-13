@@ -450,46 +450,71 @@ func validateCollectionSelectionScope(scope CollectionSelectionScope) error {
 }
 
 func validateCollectionSelection(selection CollectionSelection, now time.Time, input bool) error {
+	if err := validateCollectionSelectionState(selection, input); err != nil {
+		return err
+	}
+	switch selection.Kind {
+	case CollectionSelectionNone:
+		return validateEmptyCollectionSelection(selection)
+	case CollectionSelectionExplicit:
+		return validateExplicitCollectionSelection(selection)
+	case CollectionSelectionPage:
+		return validatePagedCollectionSelection(selection)
+	case CollectionSelectionFrozenFilter:
+		return validateFrozenCollectionSelection(selection, now, input)
+	default:
+		return ErrCollectionSelectionInvalid
+	}
+}
+
+func validateCollectionSelectionState(selection CollectionSelection, input bool) error {
 	if input {
 		if selection.Version != 0 || selection.ReconfirmationRequired || selection.ReconfirmationReason != "" || selection.Token != "" {
 			return ErrCollectionSelectionInvalid
 		}
-	} else if selection.Version < 1 || (selection.ReconfirmationRequired && !validCollectionSelectionReconfirmationReason(selection.ReconfirmationReason)) || (!selection.ReconfirmationRequired && selection.ReconfirmationReason != "") {
+		return nil
+	}
+	if selection.Version < 1 || (selection.ReconfirmationRequired && !validCollectionSelectionReconfirmationReason(selection.ReconfirmationReason)) || (!selection.ReconfirmationRequired && selection.ReconfirmationReason != "") {
 		return ErrCollectionSelectionInvalid
 	}
-	switch selection.Kind {
-	case CollectionSelectionNone:
-		if len(selection.Targets) != 0 || selection.Cursor != "" || selection.FilterFingerprint != "" || len(selection.ExcludedIDs) != 0 || !selection.ExpiresAt.IsZero() || selection.Token != "" {
-			return ErrCollectionSelectionInvalid
-		}
-		return nil
-	case CollectionSelectionExplicit:
-		if selection.Cursor != "" || selection.FilterFingerprint != "" || len(selection.ExcludedIDs) != 0 || !selection.ExpiresAt.IsZero() || selection.Token != "" || !validCollectionSelectionTargets(selection.Targets, false, CollectionSelectionMaxTargets) {
-			return ErrCollectionSelectionInvalid
-		}
-		return nil
-	case CollectionSelectionPage:
-		if !validCollectionSelectionCursor(selection.Cursor) || selection.FilterFingerprint != "" || len(selection.ExcludedIDs) != 0 || !selection.ExpiresAt.IsZero() || selection.Token != "" || !validCollectionSelectionTargets(selection.Targets, false, CollectionPageMaxSize) {
-			return ErrCollectionSelectionInvalid
-		}
-		return nil
-	case CollectionSelectionFrozenFilter:
-		if selection.Cursor != "" || !validCollectionSelectionFingerprint(selection.FilterFingerprint) || !validCollectionSelectionTargets(selection.Targets, true, CollectionSelectionMaxTargets) || !validCollectionSelectionExclusions(selection.ExcludedIDs, selection.Targets) {
-			return ErrCollectionSelectionInvalid
-		}
-		if input && selection.Token != "" {
-			return ErrCollectionSelectionInvalid
-		}
-		if !input && !validCollectionSelectionToken(selection.Token) {
-			return ErrCollectionSelectionInvalid
-		}
-		if selection.ExpiresAt.IsZero() || (input && (!selection.ExpiresAt.After(now) || selection.ExpiresAt.After(now.Add(collectionSelectionMaxTTL)))) {
-			return ErrCollectionSelectionInvalid
-		}
-		return nil
-	default:
+	return nil
+}
+
+func validateEmptyCollectionSelection(selection CollectionSelection) error {
+	if len(selection.Targets) != 0 || selection.Cursor != "" || selection.FilterFingerprint != "" || len(selection.ExcludedIDs) != 0 || !selection.ExpiresAt.IsZero() || selection.Token != "" {
 		return ErrCollectionSelectionInvalid
 	}
+	return nil
+}
+
+func validateExplicitCollectionSelection(selection CollectionSelection) error {
+	if selection.Cursor != "" || selection.FilterFingerprint != "" || len(selection.ExcludedIDs) != 0 || !selection.ExpiresAt.IsZero() || selection.Token != "" || !validCollectionSelectionTargets(selection.Targets, false, CollectionSelectionMaxTargets) {
+		return ErrCollectionSelectionInvalid
+	}
+	return nil
+}
+
+func validatePagedCollectionSelection(selection CollectionSelection) error {
+	if !validCollectionSelectionCursor(selection.Cursor) || selection.FilterFingerprint != "" || len(selection.ExcludedIDs) != 0 || !selection.ExpiresAt.IsZero() || selection.Token != "" || !validCollectionSelectionTargets(selection.Targets, false, CollectionPageMaxSize) {
+		return ErrCollectionSelectionInvalid
+	}
+	return nil
+}
+
+func validateFrozenCollectionSelection(selection CollectionSelection, now time.Time, input bool) error {
+	if selection.Cursor != "" || !validCollectionSelectionFingerprint(selection.FilterFingerprint) || !validCollectionSelectionTargets(selection.Targets, true, CollectionSelectionMaxTargets) || !validCollectionSelectionExclusions(selection.ExcludedIDs, selection.Targets) {
+		return ErrCollectionSelectionInvalid
+	}
+	if input && selection.Token != "" {
+		return ErrCollectionSelectionInvalid
+	}
+	if !input && !validCollectionSelectionToken(selection.Token) {
+		return ErrCollectionSelectionInvalid
+	}
+	if selection.ExpiresAt.IsZero() || (input && (!selection.ExpiresAt.After(now) || selection.ExpiresAt.After(now.Add(collectionSelectionMaxTTL)))) {
+		return ErrCollectionSelectionInvalid
+	}
+	return nil
 }
 
 // ValidateCollectionSelectionInput validates only browser-supplied selection
