@@ -1687,138 +1687,159 @@ func indexAdmissionCanonicalizeFrame(frame *IndexAdmissionFrame) error {
 	if !canonicalContextUUID(frame.Profile.ID) {
 		return fmt.Errorf("uci index admission: invalid profile ID")
 	}
+	if err := indexAdmissionValidateFrameCapacity(*frame); err != nil {
+		return err
+	}
+	artifacts, err := indexAdmissionCanonicalizeArtifacts(frame.Artifacts)
+	if err != nil {
+		return err
+	}
+	frame.Artifacts = artifacts
+	memberships, membershipByPath, err := indexAdmissionCanonicalizeMemberships(frame.Memberships)
+	if err != nil {
+		return err
+	}
+	frame.Memberships = memberships
+	deletions, err := indexAdmissionCanonicalizeDeletions(frame.Deletions, membershipByPath)
+	if err != nil {
+		return err
+	}
+	frame.Deletions = deletions
+	replacements, err := indexAdmissionCanonicalizeEdgeReplacements(frame.EdgeReplacements)
+	if err != nil {
+		return err
+	}
+	frame.EdgeReplacements = replacements
+	return nil
+}
+
+func indexAdmissionValidateFrameCapacity(frame IndexAdmissionFrame) error {
 	if len(frame.Artifacts) > indexAdmissionMaxArtifactsPerFrame {
-		return newIndexCapacityError(
-			IndexCapacityScopeAdmissionFrame,
-			IndexCapacityResourceArtifacts,
-			uint64(len(frame.Artifacts)),
-			uint64(indexAdmissionMaxArtifactsPerFrame),
-		)
+		return newIndexCapacityError(IndexCapacityScopeAdmissionFrame, IndexCapacityResourceArtifacts, uint64(len(frame.Artifacts)), uint64(indexAdmissionMaxArtifactsPerFrame))
 	}
 	if len(frame.Memberships) > indexAdmissionMaxMembershipsPerFrame {
-		return newIndexCapacityError(
-			IndexCapacityScopeAdmissionFrame,
-			IndexCapacityResourceMemberships,
-			uint64(len(frame.Memberships)),
-			uint64(indexAdmissionMaxMembershipsPerFrame),
-		)
+		return newIndexCapacityError(IndexCapacityScopeAdmissionFrame, IndexCapacityResourceMemberships, uint64(len(frame.Memberships)), uint64(indexAdmissionMaxMembershipsPerFrame))
 	}
 	if len(frame.Deletions) > indexAdmissionMaxDeletionsPerFrame {
-		return newIndexCapacityError(
-			IndexCapacityScopeAdmissionFrame,
-			IndexCapacityResourceDeletions,
-			uint64(len(frame.Deletions)),
-			uint64(indexAdmissionMaxDeletionsPerFrame),
-		)
+		return newIndexCapacityError(IndexCapacityScopeAdmissionFrame, IndexCapacityResourceDeletions, uint64(len(frame.Deletions)), uint64(indexAdmissionMaxDeletionsPerFrame))
 	}
 	if len(frame.EdgeReplacements) > indexAdmissionMaxEdgeReplacementsPerFrame {
-		return newIndexCapacityError(
-			IndexCapacityScopeAdmissionFrame,
-			IndexCapacityResourceEdgeReplacements,
-			uint64(len(frame.EdgeReplacements)),
-			uint64(indexAdmissionMaxEdgeReplacementsPerFrame),
-		)
+		return newIndexCapacityError(IndexCapacityScopeAdmissionFrame, IndexCapacityResourceEdgeReplacements, uint64(len(frame.EdgeReplacements)), uint64(indexAdmissionMaxEdgeReplacementsPerFrame))
 	}
+	return nil
+}
 
-	if frame.Artifacts == nil {
-		frame.Artifacts = []IndexAdmissionArtifact{}
+func indexAdmissionCanonicalizeArtifacts(artifacts []IndexAdmissionArtifact) ([]IndexAdmissionArtifact, error) {
+	if artifacts == nil {
+		artifacts = []IndexAdmissionArtifact{}
 	}
-	for index, artifact := range frame.Artifacts {
+	for index, artifact := range artifacts {
 		canonical, err := indexAdmissionCanonicalizeArtifact(artifact)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if !isIndexDigest(canonical.FactsDigest) {
-			return fmt.Errorf("uci index admission: invalid facts digest")
+			return nil, fmt.Errorf("uci index admission: invalid facts digest")
 		}
 		expected, err := indexAdmissionArtifactFactsDigest(canonical)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if canonical.FactsDigest != expected {
-			return fmt.Errorf("uci index admission: facts digest mismatch")
+			return nil, fmt.Errorf("uci index admission: facts digest mismatch")
 		}
-		frame.Artifacts[index] = canonical
+		artifacts[index] = canonical
 	}
-	sort.Slice(frame.Artifacts, func(left, right int) bool {
-		return frame.Artifacts[left].ArtifactID < frame.Artifacts[right].ArtifactID
+	sort.Slice(artifacts, func(left, right int) bool {
+		return artifacts[left].ArtifactID < artifacts[right].ArtifactID
 	})
-	for index, artifact := range frame.Artifacts {
-		if index > 0 && frame.Artifacts[index-1].ArtifactID == artifact.ArtifactID {
-			return fmt.Errorf("uci index admission: duplicate artifact ID")
+	for index, artifact := range artifacts {
+		if index > 0 && artifacts[index-1].ArtifactID == artifact.ArtifactID {
+			return nil, fmt.Errorf("uci index admission: duplicate artifact ID")
 		}
 	}
+	return artifacts, nil
+}
 
-	if frame.Memberships == nil {
-		frame.Memberships = []IndexAdmissionMembership{}
+func indexAdmissionCanonicalizeMemberships(memberships []IndexAdmissionMembership) ([]IndexAdmissionMembership, map[string]IndexAdmissionMembership, error) {
+	if memberships == nil {
+		memberships = []IndexAdmissionMembership{}
 	}
-	sort.Slice(frame.Memberships, func(left, right int) bool {
-		return frame.Memberships[left].PathKey < frame.Memberships[right].PathKey
+	sort.Slice(memberships, func(left, right int) bool {
+		return memberships[left].PathKey < memberships[right].PathKey
 	})
-	memberships := make(map[string]IndexAdmissionMembership, len(frame.Memberships))
-	for index, membership := range frame.Memberships {
+	byPath := make(map[string]IndexAdmissionMembership, len(memberships))
+	for index, membership := range memberships {
 		if err := indexAdmissionValidateMembership(membership); err != nil {
-			return err
+			return nil, nil, err
 		}
-		if index > 0 && frame.Memberships[index-1].PathKey == membership.PathKey {
-			return fmt.Errorf("uci index admission: duplicate membership path")
+		if index > 0 && memberships[index-1].PathKey == membership.PathKey {
+			return nil, nil, fmt.Errorf("uci index admission: duplicate membership path")
 		}
-		memberships[membership.PathKey] = membership
+		byPath[membership.PathKey] = membership
 	}
+	return memberships, byPath, nil
+}
 
-	if frame.Deletions == nil {
-		frame.Deletions = []IndexAdmissionDeletion{}
+func indexAdmissionCanonicalizeDeletions(deletions []IndexAdmissionDeletion, memberships map[string]IndexAdmissionMembership) ([]IndexAdmissionDeletion, error) {
+	if deletions == nil {
+		deletions = []IndexAdmissionDeletion{}
 	}
-	sort.Slice(frame.Deletions, func(left, right int) bool {
-		return frame.Deletions[left].PathKey < frame.Deletions[right].PathKey
+	sort.Slice(deletions, func(left, right int) bool {
+		return deletions[left].PathKey < deletions[right].PathKey
 	})
-	for index, deletion := range frame.Deletions {
+	for index, deletion := range deletions {
 		if !indexAdmissionValidPath(deletion.PathKey) || !deletion.ConfirmedMissing {
-			return fmt.Errorf("uci index admission: invalid deletion")
+			return nil, fmt.Errorf("uci index admission: invalid deletion")
 		}
-		if index > 0 && frame.Deletions[index-1].PathKey == deletion.PathKey {
-			return fmt.Errorf("uci index admission: duplicate deletion path")
+		if index > 0 && deletions[index-1].PathKey == deletion.PathKey {
+			return nil, fmt.Errorf("uci index admission: duplicate deletion path")
 		}
 		if _, found := memberships[deletion.PathKey]; found {
-			return fmt.Errorf("uci index admission: deletion conflicts with membership")
+			return nil, fmt.Errorf("uci index admission: deletion conflicts with membership")
 		}
 	}
+	return deletions, nil
+}
 
-	if frame.EdgeReplacements == nil {
-		frame.EdgeReplacements = []IndexAdmissionEdgeReplacement{}
+func indexAdmissionCanonicalizeEdgeReplacements(replacements []IndexAdmissionEdgeReplacement) ([]IndexAdmissionEdgeReplacement, error) {
+	if replacements == nil {
+		replacements = []IndexAdmissionEdgeReplacement{}
 	}
-	sort.Slice(frame.EdgeReplacements, func(left, right int) bool {
-		return frame.EdgeReplacements[left].SourcePath < frame.EdgeReplacements[right].SourcePath
+	sort.Slice(replacements, func(left, right int) bool {
+		return replacements[left].SourcePath < replacements[right].SourcePath
 	})
-	for replacementIndex := range frame.EdgeReplacements {
-		replacement := &frame.EdgeReplacements[replacementIndex]
+	for index := range replacements {
+		replacement := &replacements[index]
 		if !indexAdmissionValidPath(replacement.SourcePath) {
-			return fmt.Errorf("uci index admission: invalid edge replacement path")
+			return nil, fmt.Errorf("uci index admission: invalid edge replacement path")
 		}
-		if replacementIndex > 0 && frame.EdgeReplacements[replacementIndex-1].SourcePath == replacement.SourcePath {
-			return fmt.Errorf("uci index admission: duplicate edge replacement path")
+		if index > 0 && replacements[index-1].SourcePath == replacement.SourcePath {
+			return nil, fmt.Errorf("uci index admission: duplicate edge replacement path")
 		}
-		if len(replacement.Edges) > indexAdmissionMaxEdgesPerReplacement {
-			return newIndexCapacityError(
-				IndexCapacityScopeEdgeReplacement,
-				IndexCapacityResourceEdges,
-				uint64(len(replacement.Edges)),
-				uint64(indexAdmissionMaxEdgesPerReplacement),
-			)
+		if err := indexAdmissionCanonicalizeReplacementEdges(replacement); err != nil {
+			return nil, err
 		}
-		if replacement.Edges == nil {
-			replacement.Edges = []IndexAdmissionEdge{}
+	}
+	return replacements, nil
+}
+
+func indexAdmissionCanonicalizeReplacementEdges(replacement *IndexAdmissionEdgeReplacement) error {
+	if len(replacement.Edges) > indexAdmissionMaxEdgesPerReplacement {
+		return newIndexCapacityError(IndexCapacityScopeEdgeReplacement, IndexCapacityResourceEdges, uint64(len(replacement.Edges)), uint64(indexAdmissionMaxEdgesPerReplacement))
+	}
+	if replacement.Edges == nil {
+		replacement.Edges = []IndexAdmissionEdge{}
+	}
+	sort.Slice(replacement.Edges, func(left, right int) bool {
+		return replacement.Edges[left].EdgeKey < replacement.Edges[right].EdgeKey
+	})
+	for index, edge := range replacement.Edges {
+		if index > 0 && replacement.Edges[index-1].EdgeKey == edge.EdgeKey {
+			return fmt.Errorf("uci index admission: duplicate edge key")
 		}
-		sort.Slice(replacement.Edges, func(left, right int) bool {
-			return replacement.Edges[left].EdgeKey < replacement.Edges[right].EdgeKey
-		})
-		for edgeIndex, edge := range replacement.Edges {
-			if edgeIndex > 0 && replacement.Edges[edgeIndex-1].EdgeKey == edge.EdgeKey {
-				return fmt.Errorf("uci index admission: duplicate edge key")
-			}
-			if err := indexAdmissionValidateEdgeShape(edge); err != nil {
-				return err
-			}
+		if err := indexAdmissionValidateEdgeShape(edge); err != nil {
+			return err
 		}
 	}
 	return nil
