@@ -123,85 +123,15 @@ func goExtractParsedGo(file *ast.File, tokenFile *token.File, source []byte, lin
 	if file == nil || file.Name == nil || file.Name.Name == "" {
 		return nil, nil, true
 	}
-
 	packageName := file.Name.Name
 	definitions := make([]GoDefinition, 0, len(file.Decls)+1)
 	references := make([]GoReferenceSite, 0, len(file.Imports)+len(file.Decls))
-	incomplete := false
-
-	if span, valid := goSpanFromTokenPositions(tokenFile, source, lineStarts, file.Package, file.Name.End()); valid {
-		if !goAppendDefinition(&definitions, GoDefinition{
-			Kind:      "package",
-			LocalKey:  "pkg:" + packageName,
-			SymbolKey: goQualifiedKey(packageName, "pkg:"+packageName),
-			Span:      span,
-		}) {
+	incomplete := !goAppendPackageDefinition(&definitions, file, tokenFile, source, lineStarts, packageName)
+	for _, declaration := range file.Decls {
+		if !goAppendParsedDeclaration(&definitions, declaration, tokenFile, source, lineStarts, packageName) {
 			incomplete = true
 		}
-	} else {
-		incomplete = true
 	}
-
-	for _, declaration := range file.Decls {
-		switch declaration := declaration.(type) {
-		case *ast.GenDecl:
-			for _, specification := range declaration.Specs {
-				typeSpecification, ok := specification.(*ast.TypeSpec)
-				if !ok || typeSpecification.Name == nil || typeSpecification.Name.Name == "" {
-					continue
-				}
-
-				start, end := typeSpecification.Pos(), typeSpecification.End()
-				if len(declaration.Specs) == 1 {
-					start, end = declaration.Pos(), declaration.End()
-				}
-				span, valid := goSpanFromTokenPositions(tokenFile, source, lineStarts, start, end)
-				if !valid {
-					incomplete = true
-					continue
-				}
-				localKey := "type:" + typeSpecification.Name.Name
-				if !goAppendDefinition(&definitions, GoDefinition{
-					Kind:      "type",
-					LocalKey:  localKey,
-					SymbolKey: goQualifiedKey(packageName, localKey),
-					Span:      span,
-				}) {
-					incomplete = true
-				}
-			}
-		case *ast.FuncDecl:
-			if declaration.Name == nil || declaration.Name.Name == "" {
-				incomplete = true
-				continue
-			}
-			span, valid := goSpanFromTokenPositions(tokenFile, source, lineStarts, declaration.Pos(), declaration.End())
-			if !valid {
-				incomplete = true
-				continue
-			}
-			kind := "function"
-			localKey := "func:" + declaration.Name.Name
-			if declaration.Recv != nil {
-				receiver, known := goReceiverName(declaration.Recv)
-				if !known {
-					incomplete = true
-					continue
-				}
-				kind = "method"
-				localKey = "method:" + receiver + "." + declaration.Name.Name
-			}
-			if !goAppendDefinition(&definitions, GoDefinition{
-				Kind:      kind,
-				LocalKey:  localKey,
-				SymbolKey: goQualifiedKey(packageName, localKey),
-				Span:      span,
-			}) {
-				incomplete = true
-			}
-		}
-	}
-
 	parsedReferences, referencesIncomplete := goExtractGoReferences(file, tokenFile, source, lineStarts, packageName)
 	for _, reference := range parsedReferences {
 		if !goAppendReference(&references, reference) {
@@ -209,6 +139,80 @@ func goExtractParsedGo(file *ast.File, tokenFile *token.File, source []byte, lin
 		}
 	}
 	return definitions, references, incomplete || referencesIncomplete
+}
+
+func goAppendPackageDefinition(definitions *[]GoDefinition, file *ast.File, tokenFile *token.File, source []byte, lineStarts []int, packageName string) bool {
+	span, valid := goSpanFromTokenPositions(tokenFile, source, lineStarts, file.Package, file.Name.End())
+	if !valid {
+		return false
+	}
+	localKey := "pkg:" + packageName
+	return goAppendDefinition(definitions, GoDefinition{Kind: "package", LocalKey: localKey, SymbolKey: goQualifiedKey(packageName, localKey), Span: span})
+}
+
+func goAppendParsedDeclaration(definitions *[]GoDefinition, declaration ast.Decl, tokenFile *token.File, source []byte, lineStarts []int, packageName string) bool {
+	switch declaration := declaration.(type) {
+	case *ast.GenDecl:
+		return goAppendTypeSpecifications(definitions, declaration, tokenFile, source, lineStarts, packageName)
+	case *ast.FuncDecl:
+		return goAppendFunctionDefinition(definitions, declaration, tokenFile, source, lineStarts, packageName)
+	default:
+		return true
+	}
+}
+
+func goAppendTypeSpecifications(definitions *[]GoDefinition, declaration *ast.GenDecl, tokenFile *token.File, source []byte, lineStarts []int, packageName string) bool {
+	complete := true
+	for _, specification := range declaration.Specs {
+		typeSpecification, ok := specification.(*ast.TypeSpec)
+		if !ok || typeSpecification.Name == nil || typeSpecification.Name.Name == "" {
+			continue
+		}
+		start, end := goTypeSpecificationBounds(declaration, typeSpecification)
+		span, valid := goSpanFromTokenPositions(tokenFile, source, lineStarts, start, end)
+		if !valid {
+			complete = false
+			continue
+		}
+		localKey := "type:" + typeSpecification.Name.Name
+		if !goAppendDefinition(definitions, GoDefinition{Kind: "type", LocalKey: localKey, SymbolKey: goQualifiedKey(packageName, localKey), Span: span}) {
+			complete = false
+		}
+	}
+	return complete
+}
+
+func goTypeSpecificationBounds(declaration *ast.GenDecl, specification *ast.TypeSpec) (token.Pos, token.Pos) {
+	if len(declaration.Specs) == 1 {
+		return declaration.Pos(), declaration.End()
+	}
+	return specification.Pos(), specification.End()
+}
+
+func goAppendFunctionDefinition(definitions *[]GoDefinition, declaration *ast.FuncDecl, tokenFile *token.File, source []byte, lineStarts []int, packageName string) bool {
+	if declaration.Name == nil || declaration.Name.Name == "" {
+		return false
+	}
+	span, valid := goSpanFromTokenPositions(tokenFile, source, lineStarts, declaration.Pos(), declaration.End())
+	if !valid {
+		return false
+	}
+	kind, localKey, valid := goFunctionDefinitionIdentity(declaration)
+	if !valid {
+		return false
+	}
+	return goAppendDefinition(definitions, GoDefinition{Kind: kind, LocalKey: localKey, SymbolKey: goQualifiedKey(packageName, localKey), Span: span})
+}
+
+func goFunctionDefinitionIdentity(declaration *ast.FuncDecl) (string, string, bool) {
+	if declaration.Recv == nil {
+		return "function", "func:" + declaration.Name.Name, true
+	}
+	receiver, known := goReceiverName(declaration.Recv)
+	if !known {
+		return "", "", false
+	}
+	return "method", "method:" + receiver + "." + declaration.Name.Name, true
 }
 
 func goReceiverName(receivers *ast.FieldList) (string, bool) {
@@ -219,114 +223,126 @@ func goReceiverName(receivers *ast.FieldList) (string, bool) {
 }
 
 func goExtractGoReferences(file *ast.File, tokenFile *token.File, source []byte, lineStarts []int, packageName string) ([]GoReferenceSite, bool) {
-	references := make([]GoReferenceSite, 0, len(file.Imports)+len(file.Decls))
-	incomplete := false
-
-	for _, importSpecification := range file.Imports {
-		if importSpecification == nil || importSpecification.Path == nil {
-			incomplete = true
-			continue
-		}
-		path, err := strconv.Unquote(importSpecification.Path.Value)
-		if err != nil || path == "" {
-			incomplete = true
-			continue
-		}
-		span, valid := goSpanFromTokenPositions(tokenFile, source, lineStarts, importSpecification.Path.Pos(), importSpecification.Path.End())
-		if !valid {
-			incomplete = true
-			continue
-		}
-		localKey := "import:" + path
-		references = append(references, GoReferenceSite{
-			Kind:      "import",
-			LocalKey:  localKey,
-			SymbolKey: goQualifiedKey(packageName, localKey),
-			Span:      span,
-		})
+	collector := goReferenceCollector{
+		tokenFile:   tokenFile,
+		source:      source,
+		lineStarts:  lineStarts,
+		packageName: packageName,
+		excluded:    goReferenceExclusions(file),
+		callSyntax:  make(map[ast.Node]struct{}),
+		references:  make([]GoReferenceSite, 0, len(file.Imports)+len(file.Decls)),
 	}
+	collector.collectImports(file.Imports)
+	ast.Inspect(file, collector.collectCallSyntax)
+	ast.Inspect(file, collector.collectCompoundReference)
+	ast.Inspect(file, collector.collectIdentifierReference)
+	return collector.references, collector.incomplete
+}
 
-	excluded := goReferenceExclusions(file)
-	callSyntax := make(map[ast.Node]struct{})
-	ast.Inspect(file, func(node ast.Node) bool {
-		call, ok := node.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		goMarkExpressionNodes(call.Fun, callSyntax, excluded)
+type goReferenceCollector struct {
+	tokenFile   *token.File
+	source      []byte
+	lineStarts  []int
+	packageName string
+	excluded    map[*ast.Ident]struct{}
+	callSyntax  map[ast.Node]struct{}
+	references  []GoReferenceSite
+	incomplete  bool
+}
+
+func (collector *goReferenceCollector) collectImports(imports []*ast.ImportSpec) {
+	for _, specification := range imports {
+		collector.collectImport(specification)
+	}
+}
+
+func (collector *goReferenceCollector) collectImport(specification *ast.ImportSpec) {
+	if specification == nil || specification.Path == nil {
+		collector.incomplete = true
+		return
+	}
+	path, err := strconv.Unquote(specification.Path.Value)
+	if err != nil || path == "" {
+		collector.incomplete = true
+		return
+	}
+	span, valid := goSpanFromTokenPositions(collector.tokenFile, collector.source, collector.lineStarts, specification.Path.Pos(), specification.Path.End())
+	if !valid {
+		collector.incomplete = true
+		return
+	}
+	collector.add("import", "import:"+path, span)
+}
+
+func (collector *goReferenceCollector) collectCallSyntax(node ast.Node) bool {
+	call, ok := node.(*ast.CallExpr)
+	if ok {
+		goMarkExpressionNodes(call.Fun, collector.callSyntax, collector.excluded)
+	}
+	return true
+}
+
+func (collector *goReferenceCollector) collectCompoundReference(node ast.Node) bool {
+	switch node := node.(type) {
+	case *ast.CallExpr:
+		collector.collectCall(node)
+	case *ast.SelectorExpr:
+		collector.collectSelector(node)
+	}
+	return true
+}
+
+func (collector *goReferenceCollector) collectCall(call *ast.CallExpr) {
+	name, known := goNamedExpression(call.Fun)
+	if !known {
+		collector.incomplete = true
+		return
+	}
+	span, valid := goSpanFromTokenPositions(collector.tokenFile, collector.source, collector.lineStarts, call.Fun.Pos(), call.Fun.End())
+	if !valid {
+		collector.incomplete = true
+		return
+	}
+	collector.add("call", "call:"+name, span)
+}
+
+func (collector *goReferenceCollector) collectSelector(selector *ast.SelectorExpr) {
+	if _, partOfCall := collector.callSyntax[selector]; partOfCall {
+		return
+	}
+	name, known := goNamedExpression(selector)
+	if !known {
+		collector.incomplete = true
+		return
+	}
+	span, valid := goSpanFromTokenPositions(collector.tokenFile, collector.source, collector.lineStarts, selector.Pos(), selector.End())
+	if !valid {
+		collector.incomplete = true
+		return
+	}
+	collector.add("reference", "ref:"+name, span)
+	goMarkExpressionIdentifiers(selector, collector.excluded)
+}
+
+func (collector *goReferenceCollector) collectIdentifierReference(node ast.Node) bool {
+	identifier, ok := node.(*ast.Ident)
+	if !ok || identifier.Name == "_" {
 		return true
-	})
-
-	ast.Inspect(file, func(node ast.Node) bool {
-		switch node := node.(type) {
-		case *ast.CallExpr:
-			name, known := goNamedExpression(node.Fun)
-			if !known {
-				incomplete = true
-				return true
-			}
-			span, valid := goSpanFromTokenPositions(tokenFile, source, lineStarts, node.Fun.Pos(), node.Fun.End())
-			if !valid {
-				incomplete = true
-				return true
-			}
-			localKey := "call:" + name
-			references = append(references, GoReferenceSite{
-				Kind:      "call",
-				LocalKey:  localKey,
-				SymbolKey: goQualifiedKey(packageName, localKey),
-				Span:      span,
-			})
-		case *ast.SelectorExpr:
-			if _, partOfCall := callSyntax[node]; partOfCall {
-				return true
-			}
-			name, known := goNamedExpression(node)
-			if !known {
-				incomplete = true
-				return true
-			}
-			span, valid := goSpanFromTokenPositions(tokenFile, source, lineStarts, node.Pos(), node.End())
-			if !valid {
-				incomplete = true
-				return true
-			}
-			localKey := "ref:" + name
-			references = append(references, GoReferenceSite{
-				Kind:      "reference",
-				LocalKey:  localKey,
-				SymbolKey: goQualifiedKey(packageName, localKey),
-				Span:      span,
-			})
-			goMarkExpressionIdentifiers(node, excluded)
-		}
+	}
+	if _, skip := collector.excluded[identifier]; skip {
 		return true
-	})
-
-	ast.Inspect(file, func(node ast.Node) bool {
-		identifier, ok := node.(*ast.Ident)
-		if !ok || identifier.Name == "_" {
-			return true
-		}
-		if _, skip := excluded[identifier]; skip {
-			return true
-		}
-		span, valid := goSpanFromTokenPositions(tokenFile, source, lineStarts, identifier.Pos(), identifier.End())
-		if !valid {
-			incomplete = true
-			return true
-		}
-		localKey := "ref:" + identifier.Name
-		references = append(references, GoReferenceSite{
-			Kind:      "reference",
-			LocalKey:  localKey,
-			SymbolKey: goQualifiedKey(packageName, localKey),
-			Span:      span,
-		})
+	}
+	span, valid := goSpanFromTokenPositions(collector.tokenFile, collector.source, collector.lineStarts, identifier.Pos(), identifier.End())
+	if !valid {
+		collector.incomplete = true
 		return true
-	})
+	}
+	collector.add("reference", "ref:"+identifier.Name, span)
+	return true
+}
 
-	return references, incomplete
+func (collector *goReferenceCollector) add(kind, localKey string, span IndexSpan) {
+	collector.references = append(collector.references, GoReferenceSite{Kind: kind, LocalKey: localKey, SymbolKey: goQualifiedKey(collector.packageName, localKey), Span: span})
 }
 
 func goReferenceExclusions(file *ast.File) map[*ast.Ident]struct{} {
@@ -335,54 +351,69 @@ func goReferenceExclusions(file *ast.File) map[*ast.Ident]struct{} {
 		excluded[file.Name] = struct{}{}
 	}
 	ast.Inspect(file, func(node ast.Node) bool {
-		switch node := node.(type) {
-		case *ast.FuncDecl:
-			goExcludeIdentifier(node.Name, excluded)
-			if node.Recv != nil {
-				goMarkNodeIdentifiers(node.Recv, excluded)
-			}
-			if node.Type != nil {
-				if node.Type.TypeParams != nil {
-					goMarkNodeIdentifiers(node.Type.TypeParams, excluded)
-				}
-				if node.Type.Params != nil {
-					goMarkNodeIdentifiers(node.Type.Params, excluded)
-				}
-				if node.Type.Results != nil {
-					goMarkNodeIdentifiers(node.Type.Results, excluded)
-				}
-			}
-		case *ast.TypeSpec:
-			goExcludeIdentifier(node.Name, excluded)
-		case *ast.ValueSpec:
-			for _, name := range node.Names {
-				goExcludeIdentifier(name, excluded)
-			}
-		case *ast.ImportSpec:
-			goExcludeIdentifier(node.Name, excluded)
-		case *ast.Field:
-			for _, name := range node.Names {
-				goExcludeIdentifier(name, excluded)
-			}
-		case *ast.AssignStmt:
-			if node.Tok == token.DEFINE {
-				for _, expression := range node.Lhs {
-					goMarkBindingIdentifier(expression, excluded)
-				}
-			}
-		case *ast.RangeStmt:
-			if node.Tok == token.DEFINE {
-				goMarkBindingIdentifier(node.Key, excluded)
-				goMarkBindingIdentifier(node.Value, excluded)
-			}
-		case *ast.LabeledStmt:
-			goExcludeIdentifier(node.Label, excluded)
-		case *ast.BranchStmt:
-			goExcludeIdentifier(node.Label, excluded)
-		}
+		goExcludeReferenceNode(node, excluded)
 		return true
 	})
 	return excluded
+}
+
+func goExcludeReferenceNode(node ast.Node, excluded map[*ast.Ident]struct{}) {
+	switch node := node.(type) {
+	case *ast.FuncDecl:
+		goExcludeFunctionDeclaration(node, excluded)
+	case *ast.TypeSpec:
+		goExcludeIdentifier(node.Name, excluded)
+	case *ast.ValueSpec:
+		goExcludeIdentifiers(node.Names, excluded)
+	case *ast.ImportSpec:
+		goExcludeIdentifier(node.Name, excluded)
+	case *ast.Field:
+		goExcludeIdentifiers(node.Names, excluded)
+	case *ast.AssignStmt:
+		goExcludeAssignmentBindings(node, excluded)
+	case *ast.RangeStmt:
+		goExcludeRangeBindings(node, excluded)
+	case *ast.LabeledStmt:
+		goExcludeIdentifier(node.Label, excluded)
+	case *ast.BranchStmt:
+		goExcludeIdentifier(node.Label, excluded)
+	}
+}
+
+func goExcludeFunctionDeclaration(declaration *ast.FuncDecl, excluded map[*ast.Ident]struct{}) {
+	goExcludeIdentifier(declaration.Name, excluded)
+	if declaration.Recv != nil {
+		goMarkNodeIdentifiers(declaration.Recv, excluded)
+	}
+	if declaration.Type == nil {
+		return
+	}
+	goMarkNodeIdentifiers(declaration.Type.TypeParams, excluded)
+	goMarkNodeIdentifiers(declaration.Type.Params, excluded)
+	goMarkNodeIdentifiers(declaration.Type.Results, excluded)
+}
+
+func goExcludeIdentifiers(identifiers []*ast.Ident, excluded map[*ast.Ident]struct{}) {
+	for _, identifier := range identifiers {
+		goExcludeIdentifier(identifier, excluded)
+	}
+}
+
+func goExcludeAssignmentBindings(statement *ast.AssignStmt, excluded map[*ast.Ident]struct{}) {
+	if statement.Tok != token.DEFINE {
+		return
+	}
+	for _, expression := range statement.Lhs {
+		goMarkBindingIdentifier(expression, excluded)
+	}
+}
+
+func goExcludeRangeBindings(statement *ast.RangeStmt, excluded map[*ast.Ident]struct{}) {
+	if statement.Tok != token.DEFINE {
+		return
+	}
+	goMarkBindingIdentifier(statement.Key, excluded)
+	goMarkBindingIdentifier(statement.Value, excluded)
 }
 
 func goExcludeIdentifier(identifier *ast.Ident, excluded map[*ast.Ident]struct{}) {
