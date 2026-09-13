@@ -745,27 +745,46 @@ func validateIndexEdge(edge IndexEdge) error {
 	if !isIndexRelation(edge.Relation) || !isIndexEvidenceKind(edge.EvidenceKind) || !isIndexResolutionState(edge.ResolutionState) {
 		return fmt.Errorf("uci publication: unsupported edge vocabulary")
 	}
-	if edge.Target != nil {
-		if !validIndexText(edge.Target.PathKey) || !canonicalContextUUID(edge.Target.ArtifactID) {
-			return fmt.Errorf("uci publication: invalid edge target")
-		}
-		if edge.Target.SymbolKey != nil && !validIndexText(*edge.Target.SymbolKey) {
-			return fmt.Errorf("uci publication: invalid target symbol")
-		}
+	if err := validateIndexEdgeTarget(edge.Target); err != nil {
+		return err
 	}
+	if err := validateIndexEdgeResolution(edge); err != nil {
+		return err
+	}
+	return validateIndexEdgeEvidence(edge.Evidence)
+}
+
+func validateIndexEdgeTarget(target *IndexEdgeTarget) error {
+	if target == nil {
+		return nil
+	}
+	if !validIndexText(target.PathKey) || !canonicalContextUUID(target.ArtifactID) {
+		return fmt.Errorf("uci publication: invalid edge target")
+	}
+	if target.SymbolKey != nil && !validIndexText(*target.SymbolKey) {
+		return fmt.Errorf("uci publication: invalid target symbol")
+	}
+	return nil
+}
+
+func validateIndexEdgeResolution(edge IndexEdge) error {
 	if edge.ResolutionState == IndexResolutionState("resolved") && edge.Target == nil {
 		return fmt.Errorf("uci publication: resolved edge requires a target")
 	}
 	if edge.ResolutionState != IndexResolutionState("resolved") && edge.Target != nil {
 		return fmt.Errorf("uci publication: unresolved edge must not carry a target")
 	}
-	if edge.Evidence.ReferenceSiteID != nil && !canonicalContextUUID(*edge.Evidence.ReferenceSiteID) {
+	return nil
+}
+
+func validateIndexEdgeEvidence(evidence IndexEdgeEvidence) error {
+	if evidence.ReferenceSiteID != nil && !canonicalContextUUID(*evidence.ReferenceSiteID) {
 		return fmt.Errorf("uci publication: invalid edge reference site")
 	}
-	if err := validateIndexSpan(edge.Evidence.Span); err != nil {
+	if err := validateIndexSpan(evidence.Span); err != nil {
 		return err
 	}
-	if !validIndexText(edge.Evidence.RuleKey) || !validIndexText(edge.Evidence.Explanation) {
+	if !validIndexText(evidence.RuleKey) || !validIndexText(evidence.Explanation) {
 		return fmt.Errorf("uci publication: invalid edge evidence")
 	}
 	return nil

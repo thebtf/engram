@@ -183,32 +183,8 @@ func (service *RecoveryService) Recover(ctx context.Context, request RecoveryReq
 		defer service.recordRecoveryUpdate(update)
 	}
 
-	current, err := service.current.ScanCurrent(ctx, canonicalRequest.Root)
-	if update != nil {
-		update.Scan = completeRecoveryUpdateTiming(update.Scan.StartedAt, service.recoveryUpdateNow())
-		if isIndexScanOutcome(current.Scan.Census.Outcome) {
-			update.ScanOutcome = current.Scan.Census.Outcome
-			update.Coverage = canonicalRecoveryUpdateCoverage(current.Scan.Coverage)
-		} else {
-			update.ScanOutcome = IndexScanFailed
-			update.Coverage = unavailableRecoveryUpdateCoverage()
-		}
-	}
+	canonicalCurrent, _, _, err := service.recoveryCurrent(ctx, canonicalRequest.Root, observedHighWater, update)
 	if err != nil {
-		markRecoveryUpdateFailure(update, RecoveryUpdateOutcomeFailed, RecoveryUpdateFailureScan)
-		return RecoveryResult{}, fmt.Errorf("uci recovery: scan current bytes: %w", err)
-	}
-	canonicalCurrent, currentParts, memberships, err := canonicalRecoveryCurrent(current, observedHighWater)
-	if err != nil {
-		markRecoveryUpdateFailure(update, RecoveryUpdateOutcomeFailed, RecoveryUpdateFailureScan)
-		return RecoveryResult{}, err
-	}
-	if update != nil {
-		update.ScanOutcome = canonicalCurrent.Scan.Census.Outcome
-		update.Coverage = canonicalRecoveryUpdateCoverage(canonicalCurrent.Scan.Coverage)
-	}
-	if err := validateRecoveryCandidateSources(canonicalCurrent.EmbeddingCandidates, currentParts, memberships); err != nil {
-		markRecoveryUpdateFailure(update, RecoveryUpdateOutcomeFailed, RecoveryUpdateFailureScan)
 		return RecoveryResult{}, err
 	}
 
@@ -281,6 +257,38 @@ func (service *RecoveryService) Recover(ctx context.Context, request RecoveryReq
 	}
 
 	return RecoveryResult{View: cloneReconcilePublishedView(view)}, nil
+}
+
+func (service *RecoveryService) recoveryCurrent(ctx context.Context, root string, observedHighWater int64, update *RecoveryUpdateAccounting) (RecoveryCurrent, []IndexPart, []IndexMembership, error) {
+	current, err := service.current.ScanCurrent(ctx, root)
+	if update != nil {
+		update.Scan = completeRecoveryUpdateTiming(update.Scan.StartedAt, service.recoveryUpdateNow())
+		if isIndexScanOutcome(current.Scan.Census.Outcome) {
+			update.ScanOutcome = current.Scan.Census.Outcome
+			update.Coverage = canonicalRecoveryUpdateCoverage(current.Scan.Coverage)
+		} else {
+			update.ScanOutcome = IndexScanFailed
+			update.Coverage = unavailableRecoveryUpdateCoverage()
+		}
+	}
+	if err != nil {
+		markRecoveryUpdateFailure(update, RecoveryUpdateOutcomeFailed, RecoveryUpdateFailureScan)
+		return RecoveryCurrent{}, nil, nil, fmt.Errorf("uci recovery: scan current bytes: %w", err)
+	}
+	canonicalCurrent, currentParts, memberships, err := canonicalRecoveryCurrent(current, observedHighWater)
+	if err != nil {
+		markRecoveryUpdateFailure(update, RecoveryUpdateOutcomeFailed, RecoveryUpdateFailureScan)
+		return RecoveryCurrent{}, nil, nil, err
+	}
+	if update != nil {
+		update.ScanOutcome = canonicalCurrent.Scan.Census.Outcome
+		update.Coverage = canonicalRecoveryUpdateCoverage(canonicalCurrent.Scan.Coverage)
+	}
+	if err := validateRecoveryCandidateSources(canonicalCurrent.EmbeddingCandidates, currentParts, memberships); err != nil {
+		markRecoveryUpdateFailure(update, RecoveryUpdateOutcomeFailed, RecoveryUpdateFailureScan)
+		return RecoveryCurrent{}, nil, nil, err
+	}
+	return canonicalCurrent, currentParts, memberships, nil
 }
 
 type recoveryPreparation struct {
