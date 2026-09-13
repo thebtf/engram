@@ -2696,77 +2696,110 @@ func indexAdmissionConsumeJSONValue(decoder *json.Decoder) error {
 	}
 	switch delimiter {
 	case '{':
-		keys := make(map[string]struct{})
-		for decoder.More() {
-			keyToken, err := decoder.Token()
-			if err != nil {
-				return err
-			}
-			key, ok := keyToken.(string)
-			if !ok {
-				return fmt.Errorf("object key is not a string")
-			}
-			if _, duplicate := keys[key]; duplicate {
-				return fmt.Errorf("duplicate JSON object key")
-			}
-			keys[key] = struct{}{}
-			if err := indexAdmissionConsumeJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-		end, err := decoder.Token()
-		if err != nil || end != json.Delim('}') {
-			return fmt.Errorf("unterminated JSON object")
-		}
-		return nil
+		return indexAdmissionConsumeJSONObject(decoder)
 	case '[':
-		for decoder.More() {
-			if err := indexAdmissionConsumeJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-		end, err := decoder.Token()
-		if err != nil || end != json.Delim(']') {
-			return fmt.Errorf("unterminated JSON array")
-		}
-		return nil
+		return indexAdmissionConsumeJSONArray(decoder)
 	default:
 		return fmt.Errorf("unexpected JSON delimiter")
 	}
+}
+
+func indexAdmissionConsumeJSONObject(decoder *json.Decoder) error {
+	keys := make(map[string]struct{})
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return fmt.Errorf("object key is not a string")
+		}
+		if _, duplicate := keys[key]; duplicate {
+			return fmt.Errorf("duplicate JSON object key")
+		}
+		keys[key] = struct{}{}
+		if err := indexAdmissionConsumeJSONValue(decoder); err != nil {
+			return err
+		}
+	}
+	return indexAdmissionConsumeJSONEnd(decoder, '}', "unterminated JSON object")
+}
+
+func indexAdmissionConsumeJSONArray(decoder *json.Decoder) error {
+	for decoder.More() {
+		if err := indexAdmissionConsumeJSONValue(decoder); err != nil {
+			return err
+		}
+	}
+	return indexAdmissionConsumeJSONEnd(decoder, ']', "unterminated JSON array")
+}
+
+func indexAdmissionConsumeJSONEnd(decoder *json.Decoder, delimiter json.Delim, message string) error {
+	end, err := decoder.Token()
+	if err != nil || end != delimiter {
+		return fmt.Errorf("%s", message)
+	}
+	return nil
 }
 
 func indexAdmissionCloneArtifacts(artifacts []IndexAdmissionArtifact) []IndexAdmissionArtifact {
 	if artifacts == nil {
 		return nil
 	}
-	copy := make([]IndexAdmissionArtifact, len(artifacts))
+	cloned := make([]IndexAdmissionArtifact, len(artifacts))
 	for index, artifact := range artifacts {
-		copy[index] = artifact
-		copy[index].Body = indexAdmissionCloneBytes(artifact.Body)
-		copy[index].Definitions = append([]IndexAdmissionDefinition(nil), artifact.Definitions...)
-		if artifact.Definitions != nil && copy[index].Definitions == nil {
-			copy[index].Definitions = []IndexAdmissionDefinition{}
-		}
-		copy[index].References = append([]IndexAdmissionReference(nil), artifact.References...)
-		if artifact.References != nil && copy[index].References == nil {
-			copy[index].References = []IndexAdmissionReference{}
-		}
-		for referenceIndex := range copy[index].References {
-			copy[index].References[referenceIndex].OwnerSymbolKey = indexAdmissionCopyStringPointer(artifact.References[referenceIndex].OwnerSymbolKey)
-		}
-		copy[index].Chunks = append([]IndexAdmissionChunk(nil), artifact.Chunks...)
-		if artifact.Chunks != nil && copy[index].Chunks == nil {
-			copy[index].Chunks = []IndexAdmissionChunk{}
-		}
-		for chunkIndex := range copy[index].Chunks {
-			copy[index].Chunks[chunkIndex].SymbolKey = indexAdmissionCopyStringPointer(artifact.Chunks[chunkIndex].SymbolKey)
-		}
-		copy[index].Diagnostics = append([]IndexAdmissionDiagnostic(nil), artifact.Diagnostics...)
-		if artifact.Diagnostics != nil && copy[index].Diagnostics == nil {
-			copy[index].Diagnostics = []IndexAdmissionDiagnostic{}
-		}
+		cloned[index] = indexAdmissionCloneArtifact(artifact)
 	}
-	return copy
+	return cloned
+}
+
+func indexAdmissionCloneArtifact(artifact IndexAdmissionArtifact) IndexAdmissionArtifact {
+	cloned := artifact
+	cloned.Body = indexAdmissionCloneBytes(artifact.Body)
+	cloned.Definitions = indexAdmissionCloneDefinitions(artifact.Definitions)
+	cloned.References = indexAdmissionCloneReferences(artifact.References)
+	cloned.Chunks = indexAdmissionCloneChunks(artifact.Chunks)
+	cloned.Diagnostics = indexAdmissionCloneDiagnostics(artifact.Diagnostics)
+	return cloned
+}
+
+func indexAdmissionCloneDefinitions(definitions []IndexAdmissionDefinition) []IndexAdmissionDefinition {
+	cloned := append([]IndexAdmissionDefinition(nil), definitions...)
+	if definitions != nil && cloned == nil {
+		return []IndexAdmissionDefinition{}
+	}
+	return cloned
+}
+
+func indexAdmissionCloneReferences(references []IndexAdmissionReference) []IndexAdmissionReference {
+	cloned := append([]IndexAdmissionReference(nil), references...)
+	if references != nil && cloned == nil {
+		return []IndexAdmissionReference{}
+	}
+	for index := range cloned {
+		cloned[index].OwnerSymbolKey = indexAdmissionCopyStringPointer(references[index].OwnerSymbolKey)
+	}
+	return cloned
+}
+
+func indexAdmissionCloneChunks(chunks []IndexAdmissionChunk) []IndexAdmissionChunk {
+	cloned := append([]IndexAdmissionChunk(nil), chunks...)
+	if chunks != nil && cloned == nil {
+		return []IndexAdmissionChunk{}
+	}
+	for index := range cloned {
+		cloned[index].SymbolKey = indexAdmissionCopyStringPointer(chunks[index].SymbolKey)
+	}
+	return cloned
+}
+
+func indexAdmissionCloneDiagnostics(diagnostics []IndexAdmissionDiagnostic) []IndexAdmissionDiagnostic {
+	cloned := append([]IndexAdmissionDiagnostic(nil), diagnostics...)
+	if diagnostics != nil && cloned == nil {
+		return []IndexAdmissionDiagnostic{}
+	}
+	return cloned
 }
 
 func indexAdmissionCloneMemberships(memberships []IndexAdmissionMembership) []IndexAdmissionMembership {
