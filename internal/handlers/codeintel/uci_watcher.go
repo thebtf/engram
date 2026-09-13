@@ -258,127 +258,165 @@ func (watcher *UCIWatcher) run(parent context.Context, nextSequence int64) error
 }
 
 func (watcher *UCIWatcher) collect(ctx context.Context, batches chan<- uciWatcherBatch, rescans chan<- UCILocalRescanCause) {
-	events := watcher.config.Source.Events()
-	sourceErrors := watcher.config.Source.Errors()
-	queuedRescans := make(map[UCILocalRescanCause]struct{}, uciWatcherRescanQueueCapacity)
+	newUCIWatcherCollector(watcher, batches, rescans).collect(ctx)
+}
 
-	queueRescan := func(cause UCILocalRescanCause) {
-		if _, found := queuedRescans[cause]; found {
-			return
-		}
-		queuedRescans[cause] = struct{}{}
-		// Overflow, move, Git transition, and dynamic directory-registration
-		// failures are distinct durable rescan causes.
-		rescans <- cause
-	}
+type uciWatcherCollector struct {
+	watcher       *UCIWatcher
+	batches       chan<- uciWatcherBatch
+	rescans       chan<- UCILocalRescanCause
+	events        <-chan fsnotify.Event
+	sourceErrors  <-chan error
+	queuedRescans map[UCILocalRescanCause]struct{}
+	paths         []string
+	pathSet       map[string]struct{}
+	debounceTimer UCIWatcherTimer
+	maxTimer      UCIWatcherTimer
+	debounceC     <-chan time.Time
+	maxC          <-chan time.Time
+}
 
-	var (
-		paths         []string
-		pathSet       = make(map[string]struct{})
-		debounceTimer UCIWatcherTimer
-		maxTimer      UCIWatcherTimer
-		debounceC     <-chan time.Time
-		maxC          <-chan time.Time
-	)
-	stopTimers := func() {
-		if debounceTimer != nil {
-			debounceTimer.Stop()
-		}
-		if maxTimer != nil {
-			maxTimer.Stop()
-		}
-		debounceTimer = nil
-		maxTimer = nil
-		debounceC = nil
-		maxC = nil
+func newUCIWatcherCollector(watcher *UCIWatcher, batches chan<- uciWatcherBatch, rescans chan<- UCILocalRescanCause) *uciWatcherCollector {
+	return &uciWatcherCollector{
+		watcher:       watcher,
+		batches:       batches,
+		rescans:       rescans,
+		events:        watcher.config.Source.Events(),
+		sourceErrors:  watcher.config.Source.Errors(),
+		queuedRescans: make(map[UCILocalRescanCause]struct{}, uciWatcherRescanQueueCapacity),
+		pathSet:       make(map[string]struct{}),
 	}
-	flush := func() {
-		if len(paths) != 0 {
-			batch := uciWatcherBatch{paths: append([]string(nil), paths...)}
-			select {
-			case batches <- batch:
-			default:
-				queueRescan(UCILocalRescanOverflow)
-			}
-		}
-		paths = nil
-		pathSet = make(map[string]struct{})
-		stopTimers()
-	}
-	defer stopTimers()
+}
 
+func (collector *uciWatcherCollector) collect(ctx context.Context) {
+	defer collector.stopTimers()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case event, open := <-events:
-			if ctx.Err() != nil {
+		case event, open := <-collector.events:
+			if !collector.handleEvent(ctx, event, open) {
 				return
 			}
-			if !open {
-				events = nil
-				if sourceErrors == nil {
-					flush()
-					queueRescan(UCILocalRescanOverflow)
-					return
-				}
-				continue
-			}
-			if admittingSource, ok := watcher.config.Source.(uciWatcherEventAdmitter); ok && !admittingSource.AcceptsEvent(event) {
-				continue
-			}
-			if event.Op&fsnotify.Create != 0 {
-				if err := watcher.config.Source.Add(event.Name); err != nil {
-					queueRescan(UCILocalRescanWatcherRegistrationFailure)
-				}
-			}
-			if watcher.eventIsGitTransition(event) {
-				queueRescan(UCILocalRescanGitTransition)
-				continue
-			}
-			if relativePath, found := watcher.relativeEventPath(event.Name); found {
-				_, exists := pathSet[relativePath]
-				if !exists && len(paths) >= watcher.config.QueueCapacity {
-					queueRescan(UCILocalRescanOverflow)
-				} else {
-					if !exists {
-						pathSet[relativePath] = struct{}{}
-						paths = append(paths, relativePath)
-					}
-					if debounceTimer != nil {
-						debounceTimer.Stop()
-					}
-					debounceTimer = watcher.config.Clock.NewTimer(watcher.config.DebounceDelay)
-					debounceC = debounceTimer.C()
-					if maxTimer == nil {
-						maxTimer = watcher.config.Clock.NewTimer(watcher.config.MaxBatchDelay)
-						maxC = maxTimer.C()
-					}
-				}
-			}
-			if event.Op&(fsnotify.Rename|fsnotify.Remove) != 0 {
-				queueRescan(UCILocalRescanMove)
-			}
-		case _, open := <-sourceErrors:
-			if ctx.Err() != nil {
+		case _, open := <-collector.sourceErrors:
+			if !collector.handleSourceError(ctx, open) {
 				return
 			}
-			if !open {
-				sourceErrors = nil
-				if events == nil {
-					flush()
-					queueRescan(UCILocalRescanOverflow)
-					return
-				}
-				continue
-			}
-			queueRescan(UCILocalRescanOverflow)
-		case <-debounceC:
-			flush()
-		case <-maxC:
-			flush()
+		case <-collector.debounceC:
+			collector.flush()
+		case <-collector.maxC:
+			collector.flush()
 		}
 	}
+}
+
+func (collector *uciWatcherCollector) queueRescan(cause UCILocalRescanCause) {
+	if _, found := collector.queuedRescans[cause]; found {
+		return
+	}
+	collector.queuedRescans[cause] = struct{}{}
+	collector.rescans <- cause
+}
+
+func (collector *uciWatcherCollector) stopTimers() {
+	if collector.debounceTimer != nil {
+		collector.debounceTimer.Stop()
+	}
+	if collector.maxTimer != nil {
+		collector.maxTimer.Stop()
+	}
+	collector.debounceTimer = nil
+	collector.maxTimer = nil
+	collector.debounceC = nil
+	collector.maxC = nil
+}
+
+func (collector *uciWatcherCollector) flush() {
+	if len(collector.paths) != 0 {
+		batch := uciWatcherBatch{paths: append([]string(nil), collector.paths...)}
+		select {
+		case collector.batches <- batch:
+		default:
+			collector.queueRescan(UCILocalRescanOverflow)
+		}
+	}
+	collector.paths = nil
+	collector.pathSet = make(map[string]struct{})
+	collector.stopTimers()
+}
+
+func (collector *uciWatcherCollector) handleEvent(ctx context.Context, event fsnotify.Event, open bool) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	if !open {
+		collector.events = nil
+		if collector.sourceErrors == nil {
+			collector.flush()
+			collector.queueRescan(UCILocalRescanOverflow)
+			return false
+		}
+		return true
+	}
+	if admittingSource, ok := collector.watcher.config.Source.(uciWatcherEventAdmitter); ok && !admittingSource.AcceptsEvent(event) {
+		return true
+	}
+	if event.Op&fsnotify.Create != 0 {
+		if err := collector.watcher.config.Source.Add(event.Name); err != nil {
+			collector.queueRescan(UCILocalRescanWatcherRegistrationFailure)
+		}
+	}
+	if collector.watcher.eventIsGitTransition(event) {
+		collector.queueRescan(UCILocalRescanGitTransition)
+		return true
+	}
+	collector.queuePath(event.Name)
+	if event.Op&(fsnotify.Rename|fsnotify.Remove) != 0 {
+		collector.queueRescan(UCILocalRescanMove)
+	}
+	return true
+}
+
+func (collector *uciWatcherCollector) queuePath(eventPath string) {
+	relativePath, found := collector.watcher.relativeEventPath(eventPath)
+	if !found {
+		return
+	}
+	_, exists := collector.pathSet[relativePath]
+	if !exists && len(collector.paths) >= collector.watcher.config.QueueCapacity {
+		collector.queueRescan(UCILocalRescanOverflow)
+		return
+	}
+	if !exists {
+		collector.pathSet[relativePath] = struct{}{}
+		collector.paths = append(collector.paths, relativePath)
+	}
+	if collector.debounceTimer != nil {
+		collector.debounceTimer.Stop()
+	}
+	collector.debounceTimer = collector.watcher.config.Clock.NewTimer(collector.watcher.config.DebounceDelay)
+	collector.debounceC = collector.debounceTimer.C()
+	if collector.maxTimer == nil {
+		collector.maxTimer = collector.watcher.config.Clock.NewTimer(collector.watcher.config.MaxBatchDelay)
+		collector.maxC = collector.maxTimer.C()
+	}
+}
+
+func (collector *uciWatcherCollector) handleSourceError(ctx context.Context, open bool) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	if open {
+		collector.queueRescan(UCILocalRescanOverflow)
+		return true
+	}
+	collector.sourceErrors = nil
+	if collector.events != nil {
+		return true
+	}
+	collector.flush()
+	collector.queueRescan(UCILocalRescanOverflow)
+	return false
 }
 
 func (watcher *UCIWatcher) persist(ctx context.Context, batches <-chan uciWatcherBatch, rescans <-chan UCILocalRescanCause, nextSequence int64) error {
@@ -394,44 +432,58 @@ func (watcher *UCIWatcher) persist(ctx context.Context, batches <-chan uciWatche
 				rescans = nil
 				continue
 			}
-			if _, err := watcher.config.Registry.RequireRescan(ctx, watcher.config.CheckoutID, cause); err != nil {
+			if err := watcher.persistRescan(ctx, cause); err != nil {
 				if ctx.Err() != nil {
 					return nil
 				}
-				return fmt.Errorf("uci watcher: persist rescan cause %q: %w", cause, err)
-			}
-			if cause != UCILocalRescanRestart {
-				watcher.signalChange()
+				return err
 			}
 		case batch, open := <-batches:
 			if !open {
 				batches = nil
 				continue
 			}
-			for _, relativePath := range batch.paths {
-				record, err := watcher.config.Registry.RecordDirty(ctx, UCILocalDirtyChange{
-					CheckoutID:   watcher.config.CheckoutID,
-					RelativePath: relativePath,
-					Sequence:     nextSequence,
-				})
-				if err != nil {
-					if ctx.Err() != nil {
-						return nil
-					}
-					return fmt.Errorf("uci watcher: persist dirty path %q: %w", relativePath, err)
+			if err := watcher.persistBatch(ctx, batch, &nextSequence); err != nil {
+				if ctx.Err() != nil {
+					return nil
 				}
-				if record.DirtySequence >= nextSequence {
-					nextSequence = record.DirtySequence + 1
-				} else {
-					nextSequence++
-				}
-				if nextSequence <= 0 {
-					return errors.New("uci watcher: dirty sequence exhausted")
-				}
+				return err
 			}
-			watcher.signalChange()
 		}
 	}
+	return nil
+}
+
+func (watcher *UCIWatcher) persistRescan(ctx context.Context, cause UCILocalRescanCause) error {
+	if _, err := watcher.config.Registry.RequireRescan(ctx, watcher.config.CheckoutID, cause); err != nil {
+		return fmt.Errorf("uci watcher: persist rescan cause %q: %w", cause, err)
+	}
+	if cause != UCILocalRescanRestart {
+		watcher.signalChange()
+	}
+	return nil
+}
+
+func (watcher *UCIWatcher) persistBatch(ctx context.Context, batch uciWatcherBatch, nextSequence *int64) error {
+	for _, relativePath := range batch.paths {
+		record, err := watcher.config.Registry.RecordDirty(ctx, UCILocalDirtyChange{
+			CheckoutID:   watcher.config.CheckoutID,
+			RelativePath: relativePath,
+			Sequence:     *nextSequence,
+		})
+		if err != nil {
+			return fmt.Errorf("uci watcher: persist dirty path %q: %w", relativePath, err)
+		}
+		if record.DirtySequence >= *nextSequence {
+			*nextSequence = record.DirtySequence + 1
+		} else {
+			*nextSequence = *nextSequence + 1
+		}
+		if *nextSequence <= 0 {
+			return errors.New("uci watcher: dirty sequence exhausted")
+		}
+	}
+	watcher.signalChange()
 	return nil
 }
 
