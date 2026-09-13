@@ -306,13 +306,30 @@ func (scanner *Scanner) Scan(ctx context.Context, evidence AuthorizedRootEvidenc
 		return scanner.classifyGitError(result, started, err)
 	}
 	result.Diagnostics.CandidateCount = len(candidates)
+	partial, interrupted, err := scanner.scanCandidateFiles(ctx, root, candidates, &result, started)
+	if err != nil {
+		if interrupted {
+			return scanner.incomplete(result, started, err)
+		}
+		return scanner.failed(result, started, err)
+	}
+
+	if partial {
+		scanner.finish(&result, started, IndexScanIncomplete)
+	} else {
+		scanner.finish(&result, started, IndexScanComplete)
+	}
+	return result, nil
+}
+
+func (scanner *Scanner) scanCandidateFiles(ctx context.Context, root string, candidates []scannerCandidate, result *ScannerResult, started time.Time) (bool, bool, error) {
 	result.Files = make([]ScannerFile, 0, len(candidates))
 	partial := false
 	candidateLoopStarted := time.Now()
 	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
 			result.Diagnostics.CandidateLoopDuration = time.Since(candidateLoopStarted)
-			return scanner.incomplete(result, started, err)
+			return partial, true, err
 		}
 		if candidate.path == scannerProjectAnchorPath {
 			continue
@@ -322,7 +339,7 @@ func (scanner *Scanner) Scan(ctx context.Context, evidence AuthorizedRootEvidenc
 		result.Diagnostics.BytesRead += bytesRead
 		if err != nil {
 			result.Diagnostics.CandidateLoopDuration = time.Since(candidateLoopStarted)
-			return scanner.failed(result, started, err)
+			return partial, false, err
 		}
 		if incomplete {
 			partial = true
@@ -340,13 +357,7 @@ func (scanner *Scanner) Scan(ctx context.Context, evidence AuthorizedRootEvidenc
 		}
 	}
 	result.Diagnostics.CandidateLoopDuration = time.Since(candidateLoopStarted)
-
-	if partial {
-		scanner.finish(&result, started, IndexScanIncomplete)
-	} else {
-		scanner.finish(&result, started, IndexScanComplete)
-	}
-	return result, nil
+	return partial, false, nil
 }
 
 type scannerTopologyCache struct {
@@ -675,14 +686,8 @@ func (scanner *Scanner) readStableFile(ctx context.Context, fullPath, relativePa
 			}
 			return scannerUnreadableFile(relativePath), true, bytesRead, nil
 		}
-		if scannerInfoIsReparse(initial) {
-			return scannerExcludedFile(relativePath, ScannerExclusionReparseEscape), false, bytesRead, nil
-		}
-		if !initial.Mode.IsRegular() {
-			return scannerExcludedFile(relativePath, ScannerExclusionUnsupportedType), false, bytesRead, nil
-		}
-		if initial.Size < 0 || (initial.Size > maxBytes && !scannerMayInspectForSecret(initial.Size, scanner.policy.SecretDetector)) {
-			return scannerExcludedFile(relativePath, ScannerExclusionTooLarge), false, bytesRead, nil
+		if file, excluded := scanner.initialReadExclusion(relativePath, initial, maxBytes); excluded {
+			return file, false, bytesRead, nil
 		}
 
 		body, err := scanner.files.ReadFile(fullPath)
@@ -697,38 +702,47 @@ func (scanner *Scanner) readStableFile(ctx context.Context, fullPath, relativePa
 			return ScannerFile{}, true, bytesRead, err
 		}
 
-		current, err := scanner.files.Lstat(fullPath)
-		if err != nil || !scannerSameFileInfo(initial, current) || int64(len(body)) != current.Size {
-			if attempt+1 < scannerReadAttempts {
-				continue
-			}
-			return ScannerFile{
-				Path:      relativePath,
-				State:     IndexFileUnreadable,
-				Exclusion: ScannerExclusionChanging,
-			}, true, bytesRead, nil
+		file, changing := scanner.stableReadResult(fullPath, relativePath, initial, body, maxBytes)
+		if changing && attempt+1 < scannerReadAttempts {
+			continue
 		}
-		if current.Size < 0 || (current.Size > maxBytes && !scannerMayInspectForSecret(current.Size, scanner.policy.SecretDetector)) {
-			return scannerExcludedFile(relativePath, ScannerExclusionTooLarge), false, bytesRead, nil
-		}
-		if scannerBinary(body) {
-			return scannerExcludedFile(relativePath, ScannerExclusionBinary), false, bytesRead, nil
-		}
-		if detector := scanner.policy.SecretDetector; detector != nil && detector.ContainsSecret(relativePath, body) {
-			return scannerExcludedFile(relativePath, ScannerExclusionSecret), false, bytesRead, nil
-		}
-		if current.Size > maxBytes {
-			return scannerExcludedFile(relativePath, ScannerExclusionTooLarge), false, bytesRead, nil
-		}
-
-		return ScannerFile{
-			Path:  relativePath,
-			Body:  append([]byte(nil), body...),
-			State: IndexFilePresent,
-		}, false, bytesRead, nil
+		return file, changing, bytesRead, nil
 	}
 
 	return scannerUnreadableFile(relativePath), true, bytesRead, nil
+}
+
+func (scanner *Scanner) initialReadExclusion(relativePath string, initial ScannerFileInfo, maxBytes int64) (ScannerFile, bool) {
+	if scannerInfoIsReparse(initial) {
+		return scannerExcludedFile(relativePath, ScannerExclusionReparseEscape), true
+	}
+	if !initial.Mode.IsRegular() {
+		return scannerExcludedFile(relativePath, ScannerExclusionUnsupportedType), true
+	}
+	if initial.Size < 0 || (initial.Size > maxBytes && !scannerMayInspectForSecret(initial.Size, scanner.policy.SecretDetector)) {
+		return scannerExcludedFile(relativePath, ScannerExclusionTooLarge), true
+	}
+	return ScannerFile{}, false
+}
+
+func (scanner *Scanner) stableReadResult(fullPath, relativePath string, initial ScannerFileInfo, body []byte, maxBytes int64) (ScannerFile, bool) {
+	current, err := scanner.files.Lstat(fullPath)
+	if err != nil || !scannerSameFileInfo(initial, current) || int64(len(body)) != current.Size {
+		return ScannerFile{Path: relativePath, State: IndexFileUnreadable, Exclusion: ScannerExclusionChanging}, true
+	}
+	if current.Size < 0 || (current.Size > maxBytes && !scannerMayInspectForSecret(current.Size, scanner.policy.SecretDetector)) {
+		return scannerExcludedFile(relativePath, ScannerExclusionTooLarge), false
+	}
+	if scannerBinary(body) {
+		return scannerExcludedFile(relativePath, ScannerExclusionBinary), false
+	}
+	if detector := scanner.policy.SecretDetector; detector != nil && detector.ContainsSecret(relativePath, body) {
+		return scannerExcludedFile(relativePath, ScannerExclusionSecret), false
+	}
+	if current.Size > maxBytes {
+		return scannerExcludedFile(relativePath, ScannerExclusionTooLarge), false
+	}
+	return ScannerFile{Path: relativePath, Body: append([]byte(nil), body...), State: IndexFilePresent}, false
 }
 
 func (scanner *Scanner) gitOutput(ctx context.Context, root string, duration *time.Duration, command ...string) ([]byte, error) {
@@ -867,49 +881,64 @@ func scannerCombinedCandidates(output []byte, objectFormat string) ([]scannerCan
 func scannerStatusUntrackedCandidates(records []string) ([]scannerCandidate, error) {
 	candidates := make([]scannerCandidate, 0, len(records))
 	for index := 0; index < len(records); index++ {
-		record := records[index]
-		if len(record) < 2 || record[1] != ' ' {
-			return nil, fmt.Errorf("%w: status record", ErrScannerMalformed)
+		candidate, include, consumeNext, err := scannerStatusUntrackedCandidate(records, index)
+		if err != nil {
+			return nil, err
 		}
-		switch record[0] {
-		case '?':
-			candidate := scannerCandidate{path: record[2:]}
-			if err := scannerValidateGitPath(candidate.path); err != nil {
-				return nil, err
-			}
+		if include {
 			candidates = append(candidates, candidate)
-		case '!':
-			if err := scannerValidateGitPath(record[2:]); err != nil {
-				return nil, err
-			}
-		case '1':
-			fields, candidatePath, err := scannerStatusRecordFields(record, 8)
-			if err != nil || fields[0] != "1" || !scannerValidStatusXY(fields[1]) || scannerValidateGitPath(candidatePath) != nil {
-				return nil, fmt.Errorf("%w: ordinary status record", ErrScannerMalformed)
-			}
-		case '2':
-			fields, candidatePath, err := scannerStatusRecordFields(record, 9)
-			if err != nil || fields[0] != "2" || !scannerValidStatusXY(fields[1]) || scannerValidateGitPath(candidatePath) != nil || index+1 >= len(records) {
-				return nil, fmt.Errorf("%w: rename status record", ErrScannerMalformed)
-			}
-			originalPath := records[index+1]
-			if err := scannerValidateGitPath(originalPath); err != nil {
-				return nil, err
-			}
+		}
+		if consumeNext {
 			index++
-			if fields[1][0] == '.' && (fields[1][1] == 'R' || fields[1][1] == 'C') {
-				candidates = append(candidates, scannerCandidate{path: candidatePath})
-			}
-		case 'u':
-			fields, candidatePath, err := scannerStatusRecordFields(record, 10)
-			if err != nil || fields[0] != "u" || !scannerValidStatusXY(fields[1]) || scannerValidateGitPath(candidatePath) != nil {
-				return nil, fmt.Errorf("%w: unmerged status record", ErrScannerMalformed)
-			}
-		default:
-			return nil, fmt.Errorf("%w: status record kind", ErrScannerMalformed)
 		}
 	}
 	return candidates, nil
+}
+
+func scannerStatusUntrackedCandidate(records []string, index int) (scannerCandidate, bool, bool, error) {
+	record := records[index]
+	if len(record) < 2 || record[1] != ' ' {
+		return scannerCandidate{}, false, false, fmt.Errorf("%w: status record", ErrScannerMalformed)
+	}
+	switch record[0] {
+	case '?':
+		candidate := scannerCandidate{path: record[2:]}
+		if err := scannerValidateGitPath(candidate.path); err != nil {
+			return scannerCandidate{}, false, false, err
+		}
+		return candidate, true, false, nil
+	case '!':
+		if err := scannerValidateGitPath(record[2:]); err != nil {
+			return scannerCandidate{}, false, false, err
+		}
+		return scannerCandidate{}, false, false, nil
+	case '1':
+		fields, candidatePath, err := scannerStatusRecordFields(record, 8)
+		if err != nil || fields[0] != "1" || !scannerValidStatusXY(fields[1]) || scannerValidateGitPath(candidatePath) != nil {
+			return scannerCandidate{}, false, false, fmt.Errorf("%w: ordinary status record", ErrScannerMalformed)
+		}
+		return scannerCandidate{}, false, false, nil
+	case '2':
+		fields, candidatePath, err := scannerStatusRecordFields(record, 9)
+		if err != nil || fields[0] != "2" || !scannerValidStatusXY(fields[1]) || scannerValidateGitPath(candidatePath) != nil || index+1 >= len(records) {
+			return scannerCandidate{}, false, false, fmt.Errorf("%w: rename status record", ErrScannerMalformed)
+		}
+		if err := scannerValidateGitPath(records[index+1]); err != nil {
+			return scannerCandidate{}, false, false, err
+		}
+		if fields[1][0] == '.' && (fields[1][1] == 'R' || fields[1][1] == 'C') {
+			return scannerCandidate{path: candidatePath}, true, true, nil
+		}
+		return scannerCandidate{}, false, true, nil
+	case 'u':
+		fields, candidatePath, err := scannerStatusRecordFields(record, 10)
+		if err != nil || fields[0] != "u" || !scannerValidStatusXY(fields[1]) || scannerValidateGitPath(candidatePath) != nil {
+			return scannerCandidate{}, false, false, fmt.Errorf("%w: unmerged status record", ErrScannerMalformed)
+		}
+		return scannerCandidate{}, false, false, nil
+	default:
+		return scannerCandidate{}, false, false, fmt.Errorf("%w: status record kind", ErrScannerMalformed)
+	}
 }
 
 func scannerStatusRecordFields(record string, count int) ([]string, string, error) {
@@ -982,42 +1011,59 @@ func scannerUntrackedCandidates(output []byte) ([]scannerCandidate, error) {
 
 func scannerMergeCandidates(staged, untracked []scannerCandidate, includeUntracked bool) ([]scannerCandidate, error) {
 	byPath := make(map[string]scannerCandidate, len(staged)+len(untracked))
+	scannerMergeStagedCandidates(byPath, staged)
+	if includeUntracked {
+		scannerMergeUntrackedCandidates(byPath, untracked)
+	}
+	if err := scannerRejectCaseAmbiguity(byPath); err != nil {
+		return nil, err
+	}
+	return scannerSortedCandidates(byPath), nil
+}
+
+func scannerMergeStagedCandidates(byPath map[string]scannerCandidate, staged []scannerCandidate) {
 	for _, candidate := range staged {
 		existing, exists := byPath[candidate.path]
 		if !exists || (existing.mode != "160000" && candidate.mode == "160000") {
 			byPath[candidate.path] = candidate
 		}
 	}
-	if includeUntracked {
-		for _, candidate := range untracked {
-			if _, exists := byPath[candidate.path]; !exists {
-				byPath[candidate.path] = candidate
-			}
+}
+
+func scannerMergeUntrackedCandidates(byPath map[string]scannerCandidate, untracked []scannerCandidate) {
+	for _, candidate := range untracked {
+		if _, exists := byPath[candidate.path]; !exists {
+			byPath[candidate.path] = candidate
 		}
 	}
+}
 
-	if runtime.GOOS == "windows" {
-		caseFolded := make(map[string]string, len(byPath))
-		for candidatePath := range byPath {
-			key := strings.ToLower(candidatePath)
-			if previous, exists := caseFolded[key]; exists && previous != candidatePath {
-				return nil, fmt.Errorf("%w: case-ambiguous candidates", ErrScannerMalformed)
-			}
-			caseFolded[key] = candidatePath
-		}
+func scannerRejectCaseAmbiguity(byPath map[string]scannerCandidate) error {
+	if runtime.GOOS != "windows" {
+		return nil
 	}
+	caseFolded := make(map[string]string, len(byPath))
+	for candidatePath := range byPath {
+		key := strings.ToLower(candidatePath)
+		if previous, exists := caseFolded[key]; exists && previous != candidatePath {
+			return fmt.Errorf("%w: case-ambiguous candidates", ErrScannerMalformed)
+		}
+		caseFolded[key] = candidatePath
+	}
+	return nil
+}
 
+func scannerSortedCandidates(byPath map[string]scannerCandidate) []scannerCandidate {
 	paths := make([]string, 0, len(byPath))
 	for candidatePath := range byPath {
 		paths = append(paths, candidatePath)
 	}
 	sort.Strings(paths)
-
 	merged := make([]scannerCandidate, 0, len(paths))
 	for _, candidatePath := range paths {
 		merged = append(merged, byPath[candidatePath])
 	}
-	return merged, nil
+	return merged
 }
 
 func scannerNULRecords(output []byte) ([]string, error) {
@@ -1071,46 +1117,75 @@ func scannerStatusBranchRecords(output []byte, objectFormat string) ([]string, s
 		return nil, "", false, "", false, err
 	}
 	status := make([]string, 0, len(records))
-	var head, refLabel string
-	var hasHead, hasRefLabel, sawOID, sawHead bool
+	state := scannerBranchState{}
 	for _, record := range records {
-		switch {
-		case strings.HasPrefix(record, "# branch.oid "):
-			if sawOID {
-				return nil, "", false, "", false, fmt.Errorf("%w: duplicate branch OID", ErrScannerMalformed)
-			}
-			sawOID = true
-			value := strings.TrimPrefix(record, "# branch.oid ")
-			if value != "(initial)" {
-				if !scannerValidOID(value, objectFormat) {
-					return nil, "", false, "", false, fmt.Errorf("%w: branch OID", ErrScannerMalformed)
-				}
-				head, hasHead = value, true
-			}
-		case strings.HasPrefix(record, "# branch.head "):
-			if sawHead {
-				return nil, "", false, "", false, fmt.Errorf("%w: duplicate branch head", ErrScannerMalformed)
-			}
-			sawHead = true
-			value := strings.TrimPrefix(record, "# branch.head ")
-			if value != "(detached)" && value != "(unknown)" {
-				if value == "" || !utf8.ValidString(value) {
-					return nil, "", false, "", false, fmt.Errorf("%w: branch head", ErrScannerMalformed)
-				}
-				refLabel, hasRefLabel = value, true
-			}
-		case strings.HasPrefix(record, "# "):
-			if !utf8.ValidString(record) {
-				return nil, "", false, "", false, fmt.Errorf("%w: branch metadata", ErrScannerMalformed)
-			}
-		default:
-			status = append(status, record)
+		statusRecord, include, err := scannerBranchRecord(record, objectFormat, &state)
+		if err != nil {
+			return nil, "", false, "", false, err
+		}
+		if include {
+			status = append(status, statusRecord)
 		}
 	}
-	if !sawOID || !sawHead {
+	if !state.sawOID || !state.sawHead {
 		return nil, "", false, "", false, fmt.Errorf("%w: branch metadata omitted", ErrScannerMalformed)
 	}
-	return status, head, hasHead, refLabel, hasRefLabel, nil
+	return status, state.head, state.hasHead, state.refLabel, state.hasRefLabel, nil
+}
+
+type scannerBranchState struct {
+	head        string
+	refLabel    string
+	hasHead     bool
+	hasRefLabel bool
+	sawOID      bool
+	sawHead     bool
+}
+
+func scannerBranchRecord(record, objectFormat string, state *scannerBranchState) (string, bool, error) {
+	switch {
+	case strings.HasPrefix(record, "# branch.oid "):
+		return "", false, scannerSetBranchOID(strings.TrimPrefix(record, "# branch.oid "), objectFormat, state)
+	case strings.HasPrefix(record, "# branch.head "):
+		return "", false, scannerSetBranchHead(strings.TrimPrefix(record, "# branch.head "), state)
+	case strings.HasPrefix(record, "# "):
+		if !utf8.ValidString(record) {
+			return "", false, fmt.Errorf("%w: branch metadata", ErrScannerMalformed)
+		}
+		return "", false, nil
+	default:
+		return record, true, nil
+	}
+}
+
+func scannerSetBranchOID(value, objectFormat string, state *scannerBranchState) error {
+	if state.sawOID {
+		return fmt.Errorf("%w: duplicate branch OID", ErrScannerMalformed)
+	}
+	state.sawOID = true
+	if value == "(initial)" {
+		return nil
+	}
+	if !scannerValidOID(value, objectFormat) {
+		return fmt.Errorf("%w: branch OID", ErrScannerMalformed)
+	}
+	state.head, state.hasHead = value, true
+	return nil
+}
+
+func scannerSetBranchHead(value string, state *scannerBranchState) error {
+	if state.sawHead {
+		return fmt.Errorf("%w: duplicate branch head", ErrScannerMalformed)
+	}
+	state.sawHead = true
+	if value == "(detached)" || value == "(unknown)" {
+		return nil
+	}
+	if value == "" || !utf8.ValidString(value) {
+		return fmt.Errorf("%w: branch head", ErrScannerMalformed)
+	}
+	state.refLabel, state.hasRefLabel = value, true
+	return nil
 }
 
 func scannerValidOID(value, objectFormat string) bool {
