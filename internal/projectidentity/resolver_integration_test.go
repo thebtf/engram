@@ -148,22 +148,31 @@ func TestResolveProjectV3TopologyBehaviorMatrix(t *testing.T) {
 	}
 }
 
+type resolverRefusalBehaviorMatrixCase struct {
+	name        string
+	vectorID    string
+	binding     AnchorBindingV3
+	admin       bool
+	mutate      func(*ResolveProjectRequestV3)
+	lookupCalls int
+	adminCalls  int
+}
+
 func TestResolveProjectV3RefusalBehaviorMatrix(t *testing.T) {
 	corpus := loadProjectIdentityV3Corpus(t)
 	anchor, err := ParseAnchorV3(corpus.vector(t, "repository-primary-resolves").Input.Anchor)
 	if err != nil {
 		t.Fatalf("parse matrix anchor: %v", err)
 	}
+	for _, test := range resolverRefusalBehaviorMatrixCases() {
+		t.Run(test.name, func(t *testing.T) {
+			runResolverRefusalBehaviorMatrixCase(t, corpus, anchor, test)
+		})
+	}
+}
 
-	for _, test := range []struct {
-		name        string
-		vectorID    string
-		binding     AnchorBindingV3
-		admin       bool
-		mutate      func(*ResolveProjectRequestV3)
-		lookupCalls int
-		adminCalls  int
-	}{
+func resolverRefusalBehaviorMatrixCases() []resolverRefusalBehaviorMatrixCase {
+	return []resolverRefusalBehaviorMatrixCase{
 		{name: "missing binding", vectorID: "missing-anchor-requires-onboarding", lookupCalls: 1},
 		{name: "unbound anchor", vectorID: "unbound-anchor-requires-onboarding", lookupCalls: 1},
 		{name: "legacy anchor", vectorID: "legacy-name-only-anchor-is-invalid", mutate: func(request *ResolveProjectRequestV3) { request.Anchor = AnchorV3{Version: 3, Name: "legacy"} }},
@@ -176,30 +185,29 @@ func TestResolveProjectV3RefusalBehaviorMatrix(t *testing.T) {
 			request.Descriptor.NormalizedGitRemotes = []string{"https://fixture-user:fixture-password@git.example.test/private/repo"}
 		}},
 		{name: "ambiguous target", vectorID: "read-filter-ambiguous-legacy-identifier-is-refused", admin: true, adminCalls: 1},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			store := &resolverMatrixStoreV3{bindings: map[string]AnchorBindingV3{}, admin: AnchorBindingV3{State: AnchorBindingMissingV3}}
-			if test.binding.State != "" {
-				store.bindings[anchor.ProjectID] = test.binding
-			}
-			name := strings.ReplaceAll(test.name, " ", "-")
-			request := matrixResolveExistingRequestV3(t, anchor, matrixDescriptorV3(t, anchor, "matrix-"+name), "refusal-"+name)
-			if test.admin {
-				request = matrixAdminTargetRequestV3(t, anchor, matrixDescriptorV3(t, anchor, "matrix-admin"))
-			}
-			if test.mutate != nil {
-				test.mutate(&request)
-			}
+	}
+}
 
-			result, err := matrixResolverV3(t, store).ResolveProjectV3(context.Background(), request)
-			assertRefusalV3(t, result, err, corpus.vector(t, test.vectorID).Expected.Outcome)
-			if store.registerCalls != 0 || len(store.lookupIDs) != test.lookupCalls || store.adminCalls != test.adminCalls || len(store.attempts) != 1 {
-				t.Fatalf("refusal mutated or crossed an unexpected store boundary: registers=%d lookups=%d admin=%d attempts=%d", store.registerCalls, len(store.lookupIDs), store.adminCalls, len(store.attempts))
-			}
-			if test.name == "credential remote" && strings.Contains(strings.Join([]string{store.attempts[0].Provenance(), string(store.attempts[0].Outcome()), store.attempts[0].AnchorProjectID()}, "|"), "fixture-password") {
-				t.Fatal("credential-bearing descriptor reached the redacted resolution attempt")
-			}
-		})
+func runResolverRefusalBehaviorMatrixCase(t *testing.T, corpus projectIdentityV3Corpus, anchor AnchorV3, test resolverRefusalBehaviorMatrixCase) {
+	store := &resolverMatrixStoreV3{bindings: map[string]AnchorBindingV3{}, admin: AnchorBindingV3{State: AnchorBindingMissingV3}}
+	if test.binding.State != "" {
+		store.bindings[anchor.ProjectID] = test.binding
+	}
+	name := strings.ReplaceAll(test.name, " ", "-")
+	request := matrixResolveExistingRequestV3(t, anchor, matrixDescriptorV3(t, anchor, "matrix-"+name), "refusal-"+name)
+	if test.admin {
+		request = matrixAdminTargetRequestV3(t, anchor, matrixDescriptorV3(t, anchor, "matrix-admin"))
+	}
+	if test.mutate != nil {
+		test.mutate(&request)
+	}
+	result, err := matrixResolverV3(t, store).ResolveProjectV3(context.Background(), request)
+	assertRefusalV3(t, result, err, corpus.vector(t, test.vectorID).Expected.Outcome)
+	if store.registerCalls != 0 || len(store.lookupIDs) != test.lookupCalls || store.adminCalls != test.adminCalls || len(store.attempts) != 1 {
+		t.Fatalf("refusal mutated or crossed an unexpected store boundary: registers=%d lookups=%d admin=%d attempts=%d", store.registerCalls, len(store.lookupIDs), store.adminCalls, len(store.attempts))
+	}
+	if test.name == "credential remote" && strings.Contains(strings.Join([]string{store.attempts[0].Provenance(), string(store.attempts[0].Outcome()), store.attempts[0].AnchorProjectID()}, "|"), "fixture-password") {
+		t.Fatal("credential-bearing descriptor reached the redacted resolution attempt")
 	}
 }
 

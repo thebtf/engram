@@ -146,114 +146,88 @@ func uciFreshnessPlanKey(ref uci.ContextRef, token string) string {
 	return fmt.Sprintf("%s/%s/%s/%s/%d/%s/%s", spaceID, ref.SourceID, ref.CheckoutID, ref.ViewID, ref.Generation, ref.AnalysisProfileID, token)
 }
 
+type uciFreshnessPublicStateCase struct {
+	name             string
+	freshness        uci.QueryFreshness
+	queryStatus      uci.QueryResponseStatus
+	queryError       uci.QueryErrorCode
+	hasQueryError    bool
+	wantSearchCalls  int
+	hasPending       bool
+	wantPending      int64
+	wantWatermarkSeq int64
+	historicalView   bool
+}
+
 func TestUCIFreshnessPublicStatesAreScopedAndClosed(t *testing.T) {
-	tests := []struct {
-		name             string
-		freshness        uci.QueryFreshness
-		queryStatus      uci.QueryResponseStatus
-		queryError       uci.QueryErrorCode
-		hasQueryError    bool
-		wantSearchCalls  int
-		hasPending       bool
-		wantPending      int64
-		wantWatermarkSeq int64
-		historicalView   bool
-	}{
-		{
-			name:             "observed current",
-			freshness:        uciFreshnessObservedCurrent(7),
-			queryStatus:      uci.QueryStatusOK,
-			wantSearchCalls:  1,
-			hasPending:       true,
-			wantPending:      0,
-			wantWatermarkSeq: 7,
-		},
-		{
-			name:             "catching up retains pending watermark",
-			freshness:        uciFreshnessCatchingUp(3, 6),
-			queryStatus:      uci.QueryStatusStale,
-			wantSearchCalls:  1,
-			hasPending:       true,
-			wantPending:      3,
-			wantWatermarkSeq: 6,
-		},
-		{
-			name:             "offline is an authorized unavailable outcome",
-			freshness:        uciFreshnessOffline(7),
-			queryStatus:      uci.QueryStatusUnavailable,
-			hasQueryError:    true,
-			queryError:       uci.QueryErrorCheckoutOffline,
-			wantSearchCalls:  1,
-			wantWatermarkSeq: 7,
-		},
-		{
-			name:             "pinned view remains historical",
-			freshness:        uciFreshnessHistorical(6),
-			queryStatus:      uci.QueryStatusOK,
-			historicalView:   true,
-			wantSearchCalls:  1,
-			wantWatermarkSeq: 6,
-		},
-	}
-
-	for _, test := range tests {
-		test := test
+	for _, test := range uciFreshnessPublicStateCases() {
 		t.Run(test.name, func(t *testing.T) {
-			fixture := newUCIFreshnessFixture(t)
-			target := fixture.refA
-			if test.historicalView {
-				target.ViewID = "40000000-0000-4000-8000-000000000004"
-				target.Generation = 6
-				fixture.catalog.records[target.CheckoutID] = uci.ContextRecord{Ref: target, AuthRealm: uciCodebaseContextTestRealm}
-				fixture.application.queryResponses[target.CheckoutID] = uciCodeIntelCompatibilityQueryResponse(t, target, uciCodeIntelCompatibilityBodyA, uciCodeIntelCompatibilityExposureA, uciCodeIntelCompatibilityDigestA)
-			}
-			handle := fixture.selectContext(t, fixture.clientA, target)
-			fixture.application.setPlan(target, "", uciFreshnessTestPlan{freshness: test.freshness})
-			if test.queryStatus == uci.QueryStatusUnavailable {
-				response := fixture.application.queryResponses[target.CheckoutID]
-				emptyItems := uci.QueryItems{}
-				response.Status = uci.QueryStatusUnavailable
-				response.Error = &uci.QueryError{Code: uci.QueryErrorCheckoutOffline}
-				response.Items = &emptyItems
-				fixture.application.queryResponses[target.CheckoutID] = response
-			}
-
-			status := requireUCIFreshnessStatus(t, callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_status", map[string]any{
-				"context_handle": handle,
-			}), target, test.freshness)
-			assert.Equal(t, int64(17), status.TotalChunks)
-			assert.Equal(t, int64(11), status.EmbeddedChunks)
-			assert.Equal(t, CodebaseEvidenceRecorderHealth{State: "healthy", LastFailureCode: "NONE"}, status.EvidenceRecorder)
-
-			response := requireUCIFreshnessQuery(t, callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", uciFreshnessSearchArguments(handle, nil)), target, test.freshness, test.queryStatus, test.hasQueryError, test.queryError)
-			if test.queryStatus == uci.QueryStatusUnavailable {
-				require.NotNil(t, response.Items)
-				assert.Empty(t, *response.Items, "offline requests must not expose an old View as current")
-			}
-
-			requireUCIFreshnessValue(t, response.Freshness, test.freshness)
-			if !test.hasPending {
-				require.Nil(t, response.Freshness.PendingChanges)
-			} else {
-				require.NotNil(t, response.Freshness.PendingChanges)
-				assert.Equal(t, test.wantPending, *response.Freshness.PendingChanges)
-			}
-			assert.Equal(t, test.wantWatermarkSeq, response.Freshness.EnrichmentWatermark.Sequence)
-
-			freshnessCalls := fixture.application.freshnessCalls()
-			require.Len(t, freshnessCalls, 2, "status and search must each ask the authorized freshness application")
-			for _, call := range freshnessCalls {
-				assert.Equal(t, target, call.ref)
-				assert.Empty(t, call.token)
-				assert.False(t, call.hasDeadline, "a non-barrier request must not create a wait")
-			}
-			require.Len(t, fixture.application.statusCalls, 1)
-			assert.Equal(t, target, fixture.application.statusCalls[0])
-			require.Len(t, fixture.application.searchCalls, test.wantSearchCalls)
-			for _, call := range fixture.application.searchCalls {
-				assert.Equal(t, target, call.ref, "the query store may only receive the authorized View")
-			}
+			runUCIFreshnessPublicStateCase(t, test)
 		})
+	}
+}
+
+func uciFreshnessPublicStateCases() []uciFreshnessPublicStateCase {
+	return []uciFreshnessPublicStateCase{
+		{name: "observed current", freshness: uciFreshnessObservedCurrent(7), queryStatus: uci.QueryStatusOK, wantSearchCalls: 1, hasPending: true, wantPending: 0, wantWatermarkSeq: 7},
+		{name: "catching up retains pending watermark", freshness: uciFreshnessCatchingUp(3, 6), queryStatus: uci.QueryStatusStale, wantSearchCalls: 1, hasPending: true, wantPending: 3, wantWatermarkSeq: 6},
+		{name: "offline is an authorized unavailable outcome", freshness: uciFreshnessOffline(7), queryStatus: uci.QueryStatusUnavailable, hasQueryError: true, queryError: uci.QueryErrorCheckoutOffline, wantSearchCalls: 1, wantWatermarkSeq: 7},
+		{name: "pinned view remains historical", freshness: uciFreshnessHistorical(6), queryStatus: uci.QueryStatusOK, historicalView: true, wantSearchCalls: 1, wantWatermarkSeq: 6},
+	}
+}
+
+func runUCIFreshnessPublicStateCase(t *testing.T, test uciFreshnessPublicStateCase) {
+	fixture := newUCIFreshnessFixture(t)
+	target := fixture.refA
+	if test.historicalView {
+		target.ViewID = "40000000-0000-4000-8000-000000000004"
+		target.Generation = 6
+		fixture.catalog.records[target.CheckoutID] = uci.ContextRecord{Ref: target, AuthRealm: uciCodebaseContextTestRealm}
+		fixture.application.queryResponses[target.CheckoutID] = uciCodeIntelCompatibilityQueryResponse(t, target, uciCodeIntelCompatibilityBodyA, uciCodeIntelCompatibilityExposureA, uciCodeIntelCompatibilityDigestA)
+	}
+	handle := fixture.selectContext(t, fixture.clientA, target)
+	fixture.application.setPlan(target, "", uciFreshnessTestPlan{freshness: test.freshness})
+	if test.queryStatus == uci.QueryStatusUnavailable {
+		response := fixture.application.queryResponses[target.CheckoutID]
+		emptyItems := uci.QueryItems{}
+		response.Status = uci.QueryStatusUnavailable
+		response.Error = &uci.QueryError{Code: uci.QueryErrorCheckoutOffline}
+		response.Items = &emptyItems
+		fixture.application.queryResponses[target.CheckoutID] = response
+	}
+	status := requireUCIFreshnessStatus(t, callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_status", map[string]any{"context_handle": handle}), target, test.freshness)
+	assert.Equal(t, int64(17), status.TotalChunks)
+	assert.Equal(t, int64(11), status.EmbeddedChunks)
+	assert.Equal(t, CodebaseEvidenceRecorderHealth{State: "healthy", LastFailureCode: "NONE"}, status.EvidenceRecorder)
+	response := requireUCIFreshnessQuery(t, callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", uciFreshnessSearchArguments(handle, nil)), target, test.freshness, test.queryStatus, test.hasQueryError, test.queryError)
+	if test.queryStatus == uci.QueryStatusUnavailable {
+		require.NotNil(t, response.Items)
+		assert.Empty(t, *response.Items, "offline requests must not expose an old View as current")
+	}
+	requireUCIFreshnessValue(t, response.Freshness, test.freshness)
+	if !test.hasPending {
+		require.Nil(t, response.Freshness.PendingChanges)
+	} else {
+		require.NotNil(t, response.Freshness.PendingChanges)
+		assert.Equal(t, test.wantPending, *response.Freshness.PendingChanges)
+	}
+	assert.Equal(t, test.wantWatermarkSeq, response.Freshness.EnrichmentWatermark.Sequence)
+	uciRequireFreshnessCalls(t, fixture, target, test.wantSearchCalls)
+}
+
+func uciRequireFreshnessCalls(t *testing.T, fixture *uciFreshnessFixture, target uci.ContextRef, wantSearchCalls int) {
+	freshnessCalls := fixture.application.freshnessCalls()
+	require.Len(t, freshnessCalls, 2, "status and search must each ask the authorized freshness application")
+	for _, call := range freshnessCalls {
+		assert.Equal(t, target, call.ref)
+		assert.Empty(t, call.token)
+		assert.False(t, call.hasDeadline, "a non-barrier request must not create a wait")
+	}
+	require.Len(t, fixture.application.statusCalls, 1)
+	assert.Equal(t, target, fixture.application.statusCalls[0])
+	require.Len(t, fixture.application.searchCalls, wantSearchCalls)
+	for _, call := range fixture.application.searchCalls {
+		assert.Equal(t, target, call.ref, "the query store may only receive the authorized View")
 	}
 }
 

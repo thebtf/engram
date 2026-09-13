@@ -81,13 +81,23 @@ func (verifier *resolverVerifierV3Fake) VerifyAuthorizationV3(_ context.Context,
 	return response, nil
 }
 
+type resolverV3IntentCase struct {
+	name      string
+	intent    ResolutionIntentV3
+	configure func(*ResolveProjectRequestV3)
+	assert    func(*testing.T, *resolverStoreV3Fake, ResolveProjectResultV3)
+}
+
 func TestResolveProjectV3EveryIntent(t *testing.T) {
-	for _, test := range []struct {
-		name      string
-		intent    ResolutionIntentV3
-		configure func(*ResolveProjectRequestV3)
-		assert    func(*testing.T, *resolverStoreV3Fake, ResolveProjectResultV3)
-	}{
+	for _, test := range resolverV3IntentCases(t) {
+		t.Run(test.name, func(t *testing.T) {
+			runResolverV3IntentCase(t, test)
+		})
+	}
+}
+
+func resolverV3IntentCases(t *testing.T) []resolverV3IntentCase {
+	return []resolverV3IntentCase{
 		{
 			name:   "resolve existing",
 			intent: ResolveExistingIntentV3,
@@ -165,22 +175,22 @@ func TestResolveProjectV3EveryIntent(t *testing.T) {
 				assertFirstMutationFenceV3(t, result)
 			},
 		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			store := &resolverStoreV3Fake{anchor: resolverActiveBindingV3(), admin: resolverActiveBindingV3()}
-			if test.intent == RegisterAnchorIntentV3 {
-				store.anchor = AnchorBindingV3{State: AnchorBindingMissingV3}
-			}
-			request := resolverRequestV3(test.intent)
-			if test.configure != nil {
-				test.configure(&request)
-			}
-			result, err := resolverV3(t, store).ResolveProjectV3(context.Background(), request)
-			assertResolvedV3(t, result, err)
-			test.assert(t, store, result)
-			assertResolutionAttemptV3(t, store, result.Resolution())
-		})
 	}
+}
+
+func runResolverV3IntentCase(t *testing.T, test resolverV3IntentCase) {
+	store := &resolverStoreV3Fake{anchor: resolverActiveBindingV3(), admin: resolverActiveBindingV3()}
+	if test.intent == RegisterAnchorIntentV3 {
+		store.anchor = AnchorBindingV3{State: AnchorBindingMissingV3}
+	}
+	request := resolverRequestV3(test.intent)
+	if test.configure != nil {
+		test.configure(&request)
+	}
+	result, err := resolverV3(t, store).ResolveProjectV3(context.Background(), request)
+	assertResolvedV3(t, result, err)
+	test.assert(t, store, result)
+	assertResolutionAttemptV3(t, store, result.Resolution())
 }
 
 func TestResolveProjectV3RegistrationIsIdempotent(t *testing.T) {
