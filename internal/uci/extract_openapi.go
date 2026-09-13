@@ -100,81 +100,110 @@ type OpenAPIDiagnostic struct {
 // caller-owned OpenAPI JSON or YAML buffer. It never executes schema hooks, follows a
 // reference, reads files, fetches URLs, or contacts a network.
 func ExtractOpenAPI(source []byte, profile OpenAPIExtractionProfile) OpenAPIArtifact {
-	base := ExtractJSONYAML(source, JSONYAMLExtractionProfile{
-		ProfileKey: profile.ProfileKey,
-		ParserKey:  profile.ParserKey,
-		Format:     JSONYAMLFormat(profile.Format),
-	})
+	base := ExtractJSONYAML(source, JSONYAMLExtractionProfile{ProfileKey: profile.ProfileKey, ParserKey: profile.ParserKey, Format: JSONYAMLFormat(profile.Format)})
 	artifact := openAPIArtifactFromJSONYAML(base, profile.Format)
-	if !openAPIExtractionProfileValid(profile) {
+	if !openAPIExtractionInputValid(source, profile) {
 		return openAPIFinalizeArtifact(source, profile, artifact)
 	}
-	if !utf8.Valid(source) || len(source) > jsonYAMLExtractionMaxSourceBytes {
-		return openAPIFinalizeArtifact(source, profile, artifact)
-	}
-
 	definitionsByPointer := openAPIGenericDefinitions(base)
-	structure := openAPIStructureIndex{}
-	structureParsed := false
-	structureProblem := "parse_error"
-	if profile.Format == OpenAPIFormatJSON && openAPIHasJSONYAMLDiagnostic(base, "PARSE_ERROR") {
-		structure, structureParsed, structureProblem = openAPIRecoverJSONStructure(source)
-	} else {
-		structure, structureParsed, structureProblem = openAPIBuildStructure(source)
-	}
-	version, versionFound := openAPIVersionFromStructure(structure, structureParsed)
-	if !versionFound {
-		version, versionFound = openAPIVersionFromSource(source, profile.Format, definitionsByPointer)
-	}
+	structure := openAPIResolveStructure(source, profile, base)
+	version, versionFound := openAPIExtractionVersion(source, profile, definitionsByPointer, structure)
 	if !versionFound || !openAPISupportedVersion(version) {
-		if base.Coverage == IndexCoverageComplete {
-			artifact.Coverage = IndexCoverageUnavailable
-			code := "UNSUPPORTED_OPENAPI"
-			message := "source is not a supported single-document OpenAPI 3.x structure"
-			switch {
-			case structureProblem == "multiple_documents":
-				code = "UNSUPPORTED_DOCUMENT"
-				message = "OpenAPI extraction supports one source document"
-			case versionFound:
-				code = "UNSUPPORTED_OPENAPI_VERSION"
-				message = "OpenAPI version is not in the supported 3.x family"
-			}
-			openAPIAddDiagnosticOnce(&artifact, code, IndexSpan{}, message)
-		}
+		openAPIRecordUnsupportedVersion(&artifact, base, structure.problem, versionFound)
 		return openAPIFinalizeArtifact(source, profile, artifact)
 	}
+	openAPIEnrichArtifact(source, base, definitionsByPointer, version, structure, &artifact)
+	return openAPIFinalizeArtifact(source, profile, artifact)
+}
 
-	collector := newOpenAPICollector(&artifact)
-	var definitionStructure *openAPIStructureIndex
-	if structureParsed && structure.singleDocument && structure.root != nil && structure.root.Kind == yaml.MappingNode {
-		definitionStructure = &structure
+type openAPIResolvedStructure struct {
+	index   openAPIStructureIndex
+	parsed  bool
+	problem string
+}
+
+func openAPIExtractionInputValid(source []byte, profile OpenAPIExtractionProfile) bool {
+	return openAPIExtractionProfileValid(profile) && utf8.Valid(source) && len(source) <= jsonYAMLExtractionMaxSourceBytes
+}
+
+func openAPIResolveStructure(source []byte, profile OpenAPIExtractionProfile, base JSONYAMLArtifact) openAPIResolvedStructure {
+	index, parsed, problem := openAPIBuildStructure(source)
+	if profile.Format == OpenAPIFormatJSON && openAPIHasJSONYAMLDiagnostic(base, "PARSE_ERROR") {
+		index, parsed, problem = openAPIRecoverJSONStructure(source)
 	}
+	return openAPIResolvedStructure{index: index, parsed: parsed, problem: problem}
+}
+
+func openAPIExtractionVersion(source []byte, profile OpenAPIExtractionProfile, definitions map[string]JSONYAMLDefinition, structure openAPIResolvedStructure) (string, bool) {
+	if version, found := openAPIVersionFromStructure(structure.index, structure.parsed); found {
+		return version, true
+	}
+	return openAPIVersionFromSource(source, profile.Format, definitions)
+}
+
+func openAPIRecordUnsupportedVersion(artifact *OpenAPIArtifact, base JSONYAMLArtifact, problem string, versionFound bool) {
+	if base.Coverage != IndexCoverageComplete {
+		return
+	}
+	artifact.Coverage = IndexCoverageUnavailable
+	code, message := openAPIUnsupportedVersionDiagnostic(problem, versionFound)
+	openAPIAddDiagnosticOnce(artifact, code, IndexSpan{}, message)
+}
+
+func openAPIUnsupportedVersionDiagnostic(problem string, versionFound bool) (string, string) {
+	if problem == "multiple_documents" {
+		return "UNSUPPORTED_DOCUMENT", "OpenAPI extraction supports one source document"
+	}
+	if versionFound {
+		return "UNSUPPORTED_OPENAPI_VERSION", "OpenAPI version is not in the supported 3.x family"
+	}
+	return "UNSUPPORTED_OPENAPI", "source is not a supported single-document OpenAPI 3.x structure"
+}
+
+func openAPIEnrichArtifact(source []byte, base JSONYAMLArtifact, definitionsByPointer map[string]JSONYAMLDefinition, version string, structure openAPIResolvedStructure, artifact *OpenAPIArtifact) {
+	collector := newOpenAPICollector(artifact)
+	definitionStructure := openAPIEligibleDefinitionStructure(structure)
 	semanticDefinitions := openAPIExtractDefinitions(base, version, definitionStructure, collector)
-	if !structureParsed {
+	openAPIRecordStructureDiagnostics(collector, structure)
+	openAPIExtractReferences(source, base, definitionsByPointer, semanticDefinitions, structure, collector)
+	artifact.Coverage = openAPIArtifactCoverage(base, structure, collector)
+}
+
+func openAPIEligibleDefinitionStructure(structure openAPIResolvedStructure) *openAPIStructureIndex {
+	if structure.parsed && structure.index.singleDocument && structure.index.root != nil && structure.index.root.Kind == yaml.MappingNode {
+		return &structure.index
+	}
+	return nil
+}
+
+func openAPIRecordStructureDiagnostics(collector *openAPICollector, structure openAPIResolvedStructure) {
+	if !structure.parsed {
 		collector.limit("OPENAPI_STRUCTURE_UNAVAILABLE", IndexSpan{}, "OpenAPI structure could not be parsed without executing source content")
 	}
-	if structureProblem == "multiple_documents" {
+	if structure.problem == "multiple_documents" {
 		collector.limit("UNSUPPORTED_DOCUMENT", IndexSpan{}, "OpenAPI extraction supports one source document")
 	}
-	if structureParsed && structure.root == nil {
+	if structure.parsed && structure.index.root == nil {
 		collector.limit("OPENAPI_STRUCTURE_UNAVAILABLE", IndexSpan{}, "OpenAPI parser produced no document root")
 	}
-	if structureParsed && structure.root != nil && structure.root.Kind != yaml.MappingNode {
+	if structure.parsed && structure.index.root != nil && structure.index.root.Kind != yaml.MappingNode {
 		collector.limit("UNSUPPORTED_OPENAPI", IndexSpan{}, "OpenAPI root must be a mapping")
 	}
+}
 
-	if structureParsed && structure.singleDocument && structure.root != nil && structure.root.Kind == yaml.MappingNode {
-		openAPIExtractStructuralReferences(source, base, structure, semanticDefinitions, collector)
-	} else {
-		openAPIExtractFallbackReferences(base, definitionsByPointer, semanticDefinitions, collector)
+func openAPIExtractReferences(source []byte, base JSONYAMLArtifact, definitionsByPointer map[string]JSONYAMLDefinition, semanticDefinitions map[string]string, structure openAPIResolvedStructure, collector *openAPICollector) {
+	if structure.parsed && structure.index.singleDocument && structure.index.root != nil && structure.index.root.Kind == yaml.MappingNode {
+		openAPIExtractStructuralReferences(source, base, structure.index, semanticDefinitions, collector)
+		return
 	}
+	openAPIExtractFallbackReferences(base, definitionsByPointer, semanticDefinitions, collector)
+}
 
-	if base.Coverage == IndexCoverageComplete && structureParsed && structure.singleDocument && structure.root != nil && structure.root.Kind == yaml.MappingNode && !structure.incomplete && !collector.incomplete {
-		artifact.Coverage = IndexCoverageComplete
-	} else {
-		artifact.Coverage = IndexCoveragePartial
+func openAPIArtifactCoverage(base JSONYAMLArtifact, structure openAPIResolvedStructure, collector *openAPICollector) IndexCoverageState {
+	if base.Coverage == IndexCoverageComplete && structure.parsed && structure.index.singleDocument && structure.index.root != nil && structure.index.root.Kind == yaml.MappingNode && !structure.index.incomplete && !collector.incomplete {
+		return IndexCoverageComplete
 	}
-	return openAPIFinalizeArtifact(source, profile, artifact)
+	return IndexCoveragePartial
 }
 
 func openAPIArtifactFromJSONYAML(base JSONYAMLArtifact, format OpenAPIFormat) OpenAPIArtifact {
@@ -409,53 +438,68 @@ func openAPIJSONQuotedEnd(source []byte, start int) (int, bool) {
 }
 
 func openAPIYAMLValueAfterKey(source []byte, start int) (string, bool) {
-	for start < len(source) && (source[start] == ' ' || source[start] == '\t') {
-		start++
-	}
+	start = openAPIYAMLSkipWhitespace(source, start, len(source))
 	if start >= len(source) || source[start] != ':' {
 		return "", false
 	}
-	start++
-	lineEnd := jsonYAMLLineEnd(source, start)
-	for start < lineEnd && (source[start] == ' ' || source[start] == '\t') {
-		start++
-	}
+	lineEnd := jsonYAMLLineEnd(source, start+1)
+	start = openAPIYAMLSkipWhitespace(source, start+1, lineEnd)
 	if start >= lineEnd {
 		return "", false
 	}
+	return openAPIYAMLValue(source, start, lineEnd)
+}
 
+func openAPIYAMLSkipWhitespace(source []byte, start, end int) int {
+	for start < end && (source[start] == ' ' || source[start] == '\t') {
+		start++
+	}
+	return start
+}
+
+func openAPIYAMLValue(source []byte, start, lineEnd int) (string, bool) {
 	switch source[start] {
 	case '"':
-		end := jsonYAMLDoubleQuotedEnd(source, start, lineEnd)
-		if end <= start || end > lineEnd {
-			return "", false
-		}
-		value, err := strconv.Unquote(string(source[start:end]))
-		if err != nil {
-			return "", false
-		}
-		return value, true
+		return openAPIYAMLDoubleQuotedValue(source, start, lineEnd)
 	case '\'':
-		end := jsonYAMLSingleQuotedEnd(source, start, lineEnd)
-		if end <= start+1 || end > lineEnd || source[end-1] != '\'' {
-			return "", false
-		}
-		return strings.ReplaceAll(string(source[start+1:end-1]), "''", "'"), true
+		return openAPIYAMLSingleQuotedValue(source, start, lineEnd)
 	default:
-		end := start
-		for end < lineEnd {
-			value := source[end]
-			if value == ',' || value == '}' || value == ']' {
-				break
-			}
-			if value == '#' && (end == start || source[end-1] == ' ' || source[end-1] == '\t') {
-				break
-			}
-			end++
-		}
-		value := strings.TrimSpace(string(source[start:end]))
-		return value, value != ""
+		return openAPIYAMLPlainValue(source, start, lineEnd)
 	}
+}
+
+func openAPIYAMLDoubleQuotedValue(source []byte, start, lineEnd int) (string, bool) {
+	end := jsonYAMLDoubleQuotedEnd(source, start, lineEnd)
+	if end <= start || end > lineEnd {
+		return "", false
+	}
+	value, err := strconv.Unquote(string(source[start:end]))
+	return value, err == nil
+}
+
+func openAPIYAMLSingleQuotedValue(source []byte, start, lineEnd int) (string, bool) {
+	end := jsonYAMLSingleQuotedEnd(source, start, lineEnd)
+	if end <= start+1 || end > lineEnd || source[end-1] != '\'' {
+		return "", false
+	}
+	return strings.ReplaceAll(string(source[start+1:end-1]), "''", "'"), true
+}
+
+func openAPIYAMLPlainValue(source []byte, start, lineEnd int) (string, bool) {
+	end := start
+	for end < lineEnd && !openAPIYAMLValueTerminator(source, start, end) {
+		end++
+	}
+	value := strings.TrimSpace(string(source[start:end]))
+	return value, value != ""
+}
+
+func openAPIYAMLValueTerminator(source []byte, start, end int) bool {
+	value := source[end]
+	if value == ',' || value == '}' || value == ']' {
+		return true
+	}
+	return value == '#' && (end == start || source[end-1] == ' ' || source[end-1] == '\t')
 }
 
 func openAPISupportedVersion(version string) bool {
@@ -473,41 +517,44 @@ func openAPISupportedVersion(version string) bool {
 func openAPIExtractDefinitions(base JSONYAMLArtifact, version string, structure *openAPIStructureIndex, collector *openAPICollector) map[string]string {
 	definitions := make(map[string]string)
 	for _, generic := range base.Definitions {
-		if generic.Document != 0 || (generic.Kind != "key" && generic.Kind != "index") {
-			continue
-		}
-		kind, localKey, valid := openAPIClassifyDefinition(generic, version)
-		if !valid {
-			continue
-		}
-		if _, exists := definitions[generic.LocalKey]; exists {
-			continue
-		}
-		if len(localKey) > openAPIExtractionMaxEntityKeyBytes {
-			collector.limit("ENTITY_KEY_LIMIT", generic.Span, "OpenAPI entity key exceeded the bounded extraction limit")
-			continue
-		}
-		span := generic.Span
-		if kind == "parameter" && strings.HasPrefix(localKey, openAPIParameterKeyPrefix+"#/paths/") {
-			parameterSpan, valid := openAPIInlineParameterSpan(generic.LocalKey, structure)
-			if !valid {
-				collector.limit("PARAMETER_NAME_UNAVAILABLE", generic.Span, "inline parameter name span could not be represented")
-			} else {
-				span = parameterSpan
-			}
-		}
-		symbolKey := openAPIEntitySymbol(generic.LocalKey)
-		if !collector.addDefinition(OpenAPIDefinition{
-			Kind:      kind,
-			SymbolKey: symbolKey,
-			LocalKey:  localKey,
-			Span:      span,
-		}) {
-			continue
-		}
-		definitions[generic.LocalKey] = symbolKey
+		openAPIExtractDefinition(generic, version, structure, collector, definitions)
 	}
 	return definitions
+}
+
+func openAPIExtractDefinition(generic JSONYAMLDefinition, version string, structure *openAPIStructureIndex, collector *openAPICollector, definitions map[string]string) {
+	if generic.Document != 0 || (generic.Kind != "key" && generic.Kind != "index") {
+		return
+	}
+	kind, localKey, valid := openAPIClassifyDefinition(generic, version)
+	if !valid {
+		return
+	}
+	if _, exists := definitions[generic.LocalKey]; exists {
+		return
+	}
+	if len(localKey) > openAPIExtractionMaxEntityKeyBytes {
+		collector.limit("ENTITY_KEY_LIMIT", generic.Span, "OpenAPI entity key exceeded the bounded extraction limit")
+		return
+	}
+	span := openAPIExtractionDefinitionSpan(generic, kind, localKey, structure, collector)
+	symbolKey := openAPIEntitySymbol(generic.LocalKey)
+	if !collector.addDefinition(OpenAPIDefinition{Kind: kind, SymbolKey: symbolKey, LocalKey: localKey, Span: span}) {
+		return
+	}
+	definitions[generic.LocalKey] = symbolKey
+}
+
+func openAPIExtractionDefinitionSpan(generic JSONYAMLDefinition, kind, localKey string, structure *openAPIStructureIndex, collector *openAPICollector) IndexSpan {
+	if kind != "parameter" || !strings.HasPrefix(localKey, openAPIParameterKeyPrefix+"#/paths/") {
+		return generic.Span
+	}
+	span, valid := openAPIInlineParameterSpan(generic.LocalKey, structure)
+	if !valid {
+		collector.limit("PARAMETER_NAME_UNAVAILABLE", generic.Span, "inline parameter name span could not be represented")
+		return generic.Span
+	}
+	return span
 }
 
 func openAPIInlineParameterSpan(pointer string, structure *openAPIStructureIndex) (IndexSpan, bool) {
@@ -673,6 +720,13 @@ func (index *openAPIStructureIndex) walk(node *yaml.Node, pointer string, depth 
 	}
 }
 
+type openAPIMappingEntry struct {
+	key          *yaml.Node
+	value        *yaml.Node
+	childPointer string
+	valid        bool
+}
+
 func (index *openAPIStructureIndex) walkMapping(node *yaml.Node, pointer string, depth int, inheritedAmbiguous bool) {
 	if index == nil || node == nil {
 		return
@@ -680,53 +734,55 @@ func (index *openAPIStructureIndex) walkMapping(node *yaml.Node, pointer string,
 	if len(node.Content)%2 != 0 {
 		index.incomplete = true
 	}
-	type entry struct {
-		key          *yaml.Node
-		value        *yaml.Node
-		childPointer string
-		valid        bool
+	entries, counts := index.mappingEntries(node, pointer)
+	for _, entry := range entries {
+		index.walkMappingEntry(entry, counts, depth, inheritedAmbiguous)
 	}
-	entries := make([]entry, 0, len(node.Content)/2)
+}
+
+func (index *openAPIStructureIndex) mappingEntries(node *yaml.Node, pointer string) ([]openAPIMappingEntry, map[string]int) {
+	entries := make([]openAPIMappingEntry, 0, len(node.Content)/2)
 	counts := make(map[string]int, len(node.Content)/2)
 	for position := 0; position+1 < len(node.Content); position += 2 {
-		key := node.Content[position]
-		value := node.Content[position+1]
+		key, value := node.Content[position], node.Content[position+1]
+		entry := openAPIMappingEntry{key: key, value: value}
 		if key == nil || key.Kind != yaml.ScalarNode {
 			index.incomplete = true
-			entries = append(entries, entry{key: key, value: value})
+			entries = append(entries, entry)
 			continue
 		}
-		childPointer, valid := openAPIChildPointer(pointer, key.Value)
-		if !valid {
+		entry.childPointer, entry.valid = openAPIChildPointer(pointer, key.Value)
+		if !entry.valid {
 			index.incomplete = true
-		}
-		if valid {
+		} else {
 			counts[key.Value]++
 		}
-		entries = append(entries, entry{key: key, value: value, childPointer: childPointer, valid: valid})
+		entries = append(entries, entry)
 	}
+	return entries, counts
+}
 
-	for _, entry := range entries {
-		if !entry.valid {
-			index.walk(entry.value, "#", depth+1, true)
-			continue
-		}
-		ambiguous := inheritedAmbiguous || counts[entry.key.Value] > 1
-		if counts[entry.key.Value] > 1 {
-			index.ambiguous[entry.childPointer] = struct{}{}
-		}
-		if !ambiguous && entry.value != nil {
-			index.nodes[entry.childPointer] = entry.value
-		}
-		if entry.key.Value == "$ref" && entry.value != nil && entry.value.Kind == yaml.ScalarNode {
-			index.references = append(index.references, openAPIStructuralReference{
-				localKey:  entry.childPointer,
-				rawTarget: entry.value.Value,
-				span:      index.nodeSpan(entry.value),
-			})
-		}
-		index.walk(entry.value, entry.childPointer, depth+1, ambiguous)
+func (index *openAPIStructureIndex) walkMappingEntry(entry openAPIMappingEntry, counts map[string]int, depth int, inheritedAmbiguous bool) {
+	if !entry.valid {
+		index.walk(entry.value, "#", depth+1, true)
+		return
 	}
+	ambiguous := inheritedAmbiguous || counts[entry.key.Value] > 1
+	if counts[entry.key.Value] > 1 {
+		index.ambiguous[entry.childPointer] = struct{}{}
+	}
+	if !ambiguous && entry.value != nil {
+		index.nodes[entry.childPointer] = entry.value
+	}
+	index.recordStructuralReference(entry)
+	index.walk(entry.value, entry.childPointer, depth+1, ambiguous)
+}
+
+func (index *openAPIStructureIndex) recordStructuralReference(entry openAPIMappingEntry) {
+	if entry.key.Value != "$ref" || entry.value == nil || entry.value.Kind != yaml.ScalarNode {
+		return
+	}
+	index.references = append(index.references, openAPIStructuralReference{localKey: entry.childPointer, rawTarget: entry.value.Value, span: index.nodeSpan(entry.value)})
 }
 
 func (index *openAPIStructureIndex) nodeSpan(node *yaml.Node) IndexSpan {
