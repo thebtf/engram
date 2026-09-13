@@ -266,50 +266,12 @@ func TestUCIApplicationUsesConfiguredSharedEmbeddingClient(t *testing.T) {
 	var providerCalls atomic.Int32
 	var corpusProviderInputs atomic.Int32
 	var queryProviderInputs atomic.Int32
-	provider := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodPost || request.URL.Path != "/v1/embeddings" {
-			t.Errorf("embedding request = %s %s, want POST /v1/embeddings", request.Method, request.URL.Path)
-			http.Error(writer, "unexpected embedding request", http.StatusBadRequest)
-			return
-		}
-		var payload struct {
-			Model      string   `json:"model"`
-			Dimensions int      `json:"dimensions"`
-			Input      []string `json:"input"`
-		}
-		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
-			t.Errorf("decode embedding request: %v", err)
-			http.Error(writer, "invalid embedding request", http.StatusBadRequest)
-			return
-		}
-		if payload.Model != model || payload.Dimensions != embedding.EmbeddingDim || len(payload.Input) == 0 {
-			t.Errorf("embedding request payload = %#v", payload)
-			http.Error(writer, "unexpected embedding payload", http.StatusBadRequest)
-			return
-		}
-		providerCalls.Add(1)
-		for _, input := range payload.Input {
-			if strings.Contains(input, `"content_digest"`) {
-				corpusProviderInputs.Add(1)
-			} else {
-				queryProviderInputs.Add(1)
-			}
-		}
-		data := make([]map[string]any, len(payload.Input))
-		for index := range payload.Input {
-			vector := make([]float32, embedding.EmbeddingDim)
-			vector[0] = 1
-			data[index] = map[string]any{
-				"embedding": vector,
-				"index":     index,
-			}
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(writer).Encode(map[string]any{"data": data}); err != nil {
-			t.Errorf("encode embedding response: %v", err)
-		}
-	}))
-	t.Cleanup(provider.Close)
+	provider := newWorkerUCIApplicationEmbeddingProvider(t, workerUCIApplicationEmbeddingProviderInput{
+		model:                model,
+		providerCalls:        &providerCalls,
+		corpusProviderInputs: &corpusProviderInputs,
+		queryProviderInputs:  &queryProviderInputs,
+	})
 	t.Setenv("ENGRAM_EMBEDDING_URL", provider.URL)
 	t.Setenv("ENGRAM_EMBEDDING_MODEL", model)
 
@@ -426,6 +388,73 @@ func TestUCIApplicationUsesConfiguredSharedEmbeddingClient(t *testing.T) {
 	require.Equal(t, int32(3), corpusProviderInputs.Load(), "the runtime producer must embed each current corpus input exactly once")
 	require.Equal(t, int32(1), queryProviderInputs.Load(), "only the post-coverage semantic query may call the provider")
 	require.Equal(t, int32(2), providerCalls.Load(), "the producer batches corpus inputs once and the ready semantic query makes one call")
+}
+
+func newWorkerUCIApplicationEmbeddingProvider(t *testing.T, input workerUCIApplicationEmbeddingProviderInput) *httptest.Server {
+	t.Helper()
+	provider := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		inputs, ok := workerUCIApplicationEmbeddingInputs(t, writer, request, input.model)
+		if !ok {
+			return
+		}
+		input.providerCalls.Add(1)
+		workerUCIApplicationTrackEmbeddingInputs(inputs, input)
+		workerUCIApplicationWriteEmbeddingResponse(t, writer, len(inputs))
+	}))
+	t.Cleanup(provider.Close)
+	return provider
+}
+
+func workerUCIApplicationEmbeddingInputs(t *testing.T, writer http.ResponseWriter, request *http.Request, model string) ([]string, bool) {
+	t.Helper()
+	if request.Method != http.MethodPost || request.URL.Path != "/v1/embeddings" {
+		t.Errorf("embedding request = %s %s, want POST /v1/embeddings", request.Method, request.URL.Path)
+		http.Error(writer, "unexpected embedding request", http.StatusBadRequest)
+		return nil, false
+	}
+	var payload struct {
+		Model      string   `json:"model"`
+		Dimensions int      `json:"dimensions"`
+		Input      []string `json:"input"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		t.Errorf("decode embedding request: %v", err)
+		http.Error(writer, "invalid embedding request", http.StatusBadRequest)
+		return nil, false
+	}
+	if payload.Model != model || payload.Dimensions != embedding.EmbeddingDim || len(payload.Input) == 0 {
+		t.Errorf("embedding request payload = %#v", payload)
+		http.Error(writer, "unexpected embedding payload", http.StatusBadRequest)
+		return nil, false
+	}
+	return payload.Input, true
+}
+
+func workerUCIApplicationTrackEmbeddingInputs(inputs []string, provider workerUCIApplicationEmbeddingProviderInput) {
+	for _, embeddingInput := range inputs {
+		if strings.Contains(embeddingInput, `"content_digest"`) {
+			provider.corpusProviderInputs.Add(1)
+		} else {
+			provider.queryProviderInputs.Add(1)
+		}
+	}
+}
+
+func workerUCIApplicationWriteEmbeddingResponse(t *testing.T, writer http.ResponseWriter, length int) {
+	t.Helper()
+	data := make([]map[string]any, length)
+	for index := range data {
+		vector := make([]float32, embedding.EmbeddingDim)
+		vector[0] = 1
+		data[index] = map[string]any{
+			"embedding": vector,
+			"index":     index,
+		}
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(writer).Encode(map[string]any{"data": data}); err != nil {
+		t.Errorf("encode embedding response: %v", err)
+	}
 }
 
 func TestUCIApplicationGraphResponseKeepsNonconclusiveOutcomesExplicit(t *testing.T) {
@@ -606,6 +635,35 @@ type workerUCIApplicationStatusResponse struct {
 	Freshness        uci.QueryFreshness                          `json:"freshness"`
 }
 
+type workerUCIApplicationArtifactInput struct {
+	sourceID      string
+	profileDigest string
+	label         string
+	name          string
+	symbol        string
+	source        string
+	rawTarget     string
+}
+
+type workerUCIApplicationPublicationInput struct {
+	checkout     *gormstore.UCICheckout
+	profileID    string
+	key          string
+	jobKind      uci.IndexJobKind
+	parent       *uci.ContextRef
+	part         uci.IndexPart
+	memberships  []uci.IndexMembership
+	replacements []uci.IndexEdgeReplacement
+	sequence     int64
+}
+
+type workerUCIApplicationEmbeddingProviderInput struct {
+	model                string
+	providerCalls        *atomic.Int32
+	corpusProviderInputs *atomic.Int32
+	queryProviderInputs  *atomic.Int32
+}
+
 func newWorkerUCIApplicationFixture(t *testing.T, composition *uciContextComposition) workerUCIApplicationFixture {
 	t.Helper()
 
@@ -639,9 +697,31 @@ func newWorkerUCIApplicationFixture(t *testing.T, composition *uciContextComposi
 	})
 	require.NoError(t, err)
 
-	alphaOld := workerUCIApplicationAddArtifact(t, composition.projectionStore, source.SourceID, profile.ParserBundleDigest, "alpha-old-"+token, "Alpha", "alpha", "func Alpha() { Beta(); _ = \"historical-published-body SearchNeedle\" }\n", "Beta")
-	beta := workerUCIApplicationAddArtifact(t, composition.projectionStore, source.SourceID, profile.ParserBundleDigest, "beta-"+token, "Beta", "beta", "func Beta() { _ = \"beta SearchNeedle\" }\n", "")
-	outside := workerUCIApplicationAddArtifact(t, composition.projectionStore, source.SourceID, profile.ParserBundleDigest, "outside-"+token, "Outside", "outside", "func Outside() { _ = \"outside SearchNeedle\" }\n", "")
+	alphaOld := workerUCIApplicationAddArtifact(t, composition.projectionStore, workerUCIApplicationArtifactInput{
+		sourceID:      source.SourceID,
+		profileDigest: profile.ParserBundleDigest,
+		label:         "alpha-old-" + token,
+		name:          "Alpha",
+		symbol:        "alpha",
+		source:        "func Alpha() { Beta(); _ = \"historical-published-body SearchNeedle\" }\n",
+		rawTarget:     "Beta",
+	})
+	beta := workerUCIApplicationAddArtifact(t, composition.projectionStore, workerUCIApplicationArtifactInput{
+		sourceID:      source.SourceID,
+		profileDigest: profile.ParserBundleDigest,
+		label:         "beta-" + token,
+		name:          "Beta",
+		symbol:        "beta",
+		source:        "func Beta() { _ = \"beta SearchNeedle\" }\n",
+	})
+	outside := workerUCIApplicationAddArtifact(t, composition.projectionStore, workerUCIApplicationArtifactInput{
+		sourceID:      source.SourceID,
+		profileDigest: profile.ParserBundleDigest,
+		label:         "outside-" + token,
+		name:          "Outside",
+		symbol:        "outside",
+		source:        "func Outside() { _ = \"outside SearchNeedle\" }\n",
+	})
 
 	firstMemberships := []uci.IndexMembership{
 		workerUCIApplicationMembership("internal/alpha.go", alphaOld),
@@ -664,9 +744,26 @@ func newWorkerUCIApplicationFixture(t *testing.T, composition *uciContextComposi
 		Principal:     principal,
 		OwnerInstance: "worker-uci-application-owner-" + token,
 	}
-	historical := workerUCIApplicationPublish(t, publisher, caller, checkout, profile.ProfileID, "worker-uci-historical-"+token, uci.IndexJobInitial, nil, firstPart, firstMemberships, firstReplacements, 11)
+	historical := workerUCIApplicationPublish(t, publisher, caller, workerUCIApplicationPublicationInput{
+		checkout:     checkout,
+		profileID:    profile.ProfileID,
+		key:          "worker-uci-historical-" + token,
+		jobKind:      uci.IndexJobInitial,
+		part:         firstPart,
+		memberships:  firstMemberships,
+		replacements: firstReplacements,
+		sequence:     11,
+	})
 
-	alphaCurrent := workerUCIApplicationAddArtifact(t, composition.projectionStore, source.SourceID, profile.ParserBundleDigest, "alpha-current-"+token, "Alpha", "alpha", "func Alpha() { Beta(); _ = \"current-published-body SearchNeedle\" }\n", "Beta")
+	alphaCurrent := workerUCIApplicationAddArtifact(t, composition.projectionStore, workerUCIApplicationArtifactInput{
+		sourceID:      source.SourceID,
+		profileDigest: profile.ParserBundleDigest,
+		label:         "alpha-current-" + token,
+		name:          "Alpha",
+		symbol:        "alpha",
+		source:        "func Alpha() { Beta(); _ = \"current-published-body SearchNeedle\" }\n",
+		rawTarget:     "Beta",
+	})
 	currentMemberships := []uci.IndexMembership{
 		workerUCIApplicationMembership("internal/alpha.go", alphaCurrent),
 		workerUCIApplicationMembership("internal/beta.go", beta),
@@ -679,7 +776,17 @@ func newWorkerUCIApplicationFixture(t *testing.T, composition *uciContextComposi
 	}
 	currentPart := workerUCIApplicationPart([]workerUCIApplicationArtifact{alphaCurrent, beta, outside}, currentMemberships, currentReplacements)
 	parent := historical.Context
-	current := workerUCIApplicationPublish(t, publisher, caller, checkout, profile.ProfileID, "worker-uci-current-"+token, uci.IndexJobReconcile, &parent, currentPart, currentMemberships, currentReplacements, 12)
+	current := workerUCIApplicationPublish(t, publisher, caller, workerUCIApplicationPublicationInput{
+		checkout:     checkout,
+		profileID:    profile.ProfileID,
+		key:          "worker-uci-current-" + token,
+		jobKind:      uci.IndexJobReconcile,
+		parent:       &parent,
+		part:         currentPart,
+		memberships:  currentMemberships,
+		replacements: currentReplacements,
+		sequence:     12,
+	})
 
 	legacyProject := "legacy-worker-uci-" + token
 	sourceID := source.SourceID
@@ -709,42 +816,40 @@ func newWorkerUCIApplicationFixture(t *testing.T, composition *uciContextComposi
 	}
 }
 
-func workerUCIApplicationAddArtifact(t *testing.T, projection *gormstore.UCIProjectionStore, sourceID, profileDigest, label, name, symbol, source, rawTarget string) workerUCIApplicationArtifact {
+func workerUCIApplicationAddArtifact(t *testing.T, projection *gormstore.UCIProjectionStore, input workerUCIApplicationArtifactInput) workerUCIApplicationArtifact {
 	t.Helper()
 
-	body := []byte("package fixture\n" + source)
+	body := []byte("package fixture\n" + input.source)
 	digest := workerUCIApplicationDigestBytes(body)
 	blob, err := projection.UpsertBlob(context.Background(), gormstore.UpsertUCIBlobInput{
-		SourceID:         sourceID,
+		SourceID:         input.sourceID,
 		ProtectionDomain: "source-private",
-		ContentDigest:    digest,
-		ByteLength:       int64(len(body)),
 		SafeContent:      body,
 		Encoding:         "utf-8",
 		StorageState:     gormstore.UCIBlobStored,
 	})
 	require.NoError(t, err)
 	artifact, err := projection.UpsertParseArtifact(context.Background(), gormstore.UpsertUCIParseArtifactInput{
-		SourceID:                sourceID,
+		SourceID:                input.sourceID,
 		BlobID:                  blob.BlobID,
 		Language:                "go",
-		ParserRevision:          "worker-uci-application-parser-" + label,
-		GrammarDigest:           workerUCIApplicationDigest("grammar-" + label),
-		ExtractionProfileDigest: profileDigest,
+		ParserRevision:          "worker-uci-application-parser-" + input.label,
+		GrammarDigest:           workerUCIApplicationDigest("grammar-" + input.label),
+		ExtractionProfileDigest: input.profileDigest,
 		Status:                  gormstore.UCIParseArtifactComplete,
 		Diagnostics:             `{}`,
 	})
 	require.NoError(t, err)
 
-	definitionStart := int64(strings.Index(string(body), "func "+name))
+	definitionStart := int64(strings.Index(string(body), "func "+input.name))
 	require.GreaterOrEqual(t, definitionStart, int64(0))
 	definition, err := projection.UpsertDefinition(context.Background(), gormstore.UpsertUCIDefinitionInput{
 		ArtifactID:         artifact.ArtifactID,
-		LocalSymbolKey:     symbol,
+		LocalSymbolKey:     input.symbol,
 		Kind:               "function",
-		Name:               name,
-		QualifiedLocalName: "fixture." + name,
-		Signature:          "func " + name + "()",
+		Name:               input.name,
+		QualifiedLocalName: "fixture." + input.name,
+		Signature:          "func " + input.name + "()",
 		ByteStart:          definitionStart,
 		ByteEnd:            int64(len(body) - 1),
 		LineStart:          2,
@@ -752,7 +857,7 @@ func workerUCIApplicationAddArtifact(t *testing.T, projection *gormstore.UCIProj
 	})
 	require.NoError(t, err)
 	chunk, err := projection.UpsertChunk(context.Background(), gormstore.UpsertUCIChunkInput{
-		SourceID:      sourceID,
+		SourceID:      input.sourceID,
 		ArtifactID:    artifact.ArtifactID,
 		SymbolKey:     &definition.LocalSymbolKey,
 		ChunkKind:     "definition",
@@ -765,12 +870,12 @@ func workerUCIApplicationAddArtifact(t *testing.T, projection *gormstore.UCIProj
 	require.NoError(t, err)
 
 	var reference *gormstore.UCIReferenceSite
-	if rawTarget != "" {
+	if input.rawTarget != "" {
 		reference, err = projection.UpsertReferenceSite(context.Background(), gormstore.UpsertUCIReferenceSiteInput{
 			ArtifactID:     artifact.ArtifactID,
-			SiteKey:        "reference-" + label,
+			SiteKey:        "reference-" + input.label,
 			OwnerSymbolKey: &definition.LocalSymbolKey,
-			RawTarget:      rawTarget,
+			RawTarget:      input.rawTarget,
 			Relation:       "calls",
 			SyntaxSpan:     `{"byte_start":0,"byte_end":1,"line_start":1,"line_end":1}`,
 			ResolverHints:  `{}`,
@@ -778,7 +883,7 @@ func workerUCIApplicationAddArtifact(t *testing.T, projection *gormstore.UCIProj
 		require.NoError(t, err)
 	}
 
-	proof, err := projection.DescribeIndexArtifact(context.Background(), sourceID, artifact.ArtifactID)
+	proof, err := projection.DescribeIndexArtifact(context.Background(), input.sourceID, artifact.ArtifactID)
 	require.NoError(t, err)
 	require.Equal(t, chunk.ArtifactID, proof.ArtifactID)
 	return workerUCIApplicationArtifact{artifact: artifact, definition: definition, reference: reference, proof: proof}
@@ -834,49 +939,48 @@ func workerUCIApplicationPart(artifacts []workerUCIApplicationArtifact, membersh
 	return uci.IndexPart{Artifacts: proofs, Memberships: memberships, EdgeReplacements: replacements}
 }
 
-func workerUCIApplicationPublish(t *testing.T, publisher uci.IndexStore, caller uci.IndexCaller, checkout *gormstore.UCICheckout, profileID, key string, jobKind uci.IndexJobKind, parent *uci.ContextRef, part uci.IndexPart, memberships []uci.IndexMembership, replacements []uci.IndexEdgeReplacement, sequence int64) uci.IndexPublishedView {
+func workerUCIApplicationPublish(t *testing.T, publisher uci.IndexStore, caller uci.IndexCaller, input workerUCIApplicationPublicationInput) uci.IndexPublishedView {
 	t.Helper()
 	build, err := publisher.Begin(context.Background(), caller, uci.IndexBeginInput{
-		BuildKey: key,
+		BuildKey: input.key,
 		Scope: uci.IndexScope{
-			SourceID:      checkout.SourceID,
-			CheckoutID:    checkout.CheckoutID,
-			IncarnationID: checkout.IncarnationID,
+			SourceID:      input.checkout.SourceID,
+			CheckoutID:    input.checkout.CheckoutID,
+			IncarnationID: input.checkout.IncarnationID,
 		},
-		ProfileID:      profileID,
-		ExpectedParent: parent,
+		ProfileID:      input.profileID,
+		ExpectedParent: input.parent,
 		Mode:           uci.IndexManifestFull,
-		JobKind:        jobKind,
+		JobKind:        input.jobKind,
 	})
 	require.NoError(t, err)
-	partDigest, err := uci.DigestIndexPart(part)
+	partDigest, err := uci.DigestIndexPart(input.part)
 	require.NoError(t, err)
 	ack, err := publisher.Stage(context.Background(), caller, uci.IndexStageInput{
 		Build:    build.Build,
 		Sequence: 0,
 		Digest:   partDigest,
-		Part:     part,
+		Part:     input.part,
 	})
 	require.NoError(t, err)
 	partsDigest, err := uci.DigestIndexParts([]uci.IndexPartAck{ack})
 	require.NoError(t, err)
-	manifestDigest, err := uci.DigestIndexManifest(memberships)
+	manifestDigest, err := uci.DigestIndexManifest(input.memberships)
 	require.NoError(t, err)
-	edgesDigest, err := uci.DigestIndexEdges(replacements)
-	require.NoError(t, err)
+	edgesDigest, err := uci.DigestIndexEdges(input.replacements)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	headOID := strings.Repeat("a", 40)
 	objectFormat := "sha1"
 	refLabel := "refs/heads/worker-uci-application"
 	published, err := publisher.Finalize(context.Background(), caller, uci.IndexFinalizeInput{
 		Build:          build.Build,
-		ExpectedParent: parent,
+		ExpectedParent: input.parent,
 		Manifest: uci.IndexManifestCompletion{
 			PartCount:      1,
 			PartsDigest:    partsDigest,
-			EntryCount:     uint64(len(memberships)),
+			EntryCount:     uint64(len(input.memberships)),
 			ManifestDigest: manifestDigest,
-			EdgeCount:      uint64(workerUCIApplicationEdgeCount(replacements)),
+			EdgeCount:      uint64(workerUCIApplicationEdgeCount(input.replacements)),
 			EdgesDigest:    edgesDigest,
 			ScanOutcome:    uci.IndexScanComplete,
 			CensusComplete: true,
@@ -884,7 +988,7 @@ func workerUCIApplicationPublish(t *testing.T, publisher uci.IndexStore, caller 
 				HeadOID:       &headOID,
 				ObjectFormat:  &objectFormat,
 				RefLabel:      &refLabel,
-				ObservedFSSeq: sequence,
+				ObservedFSSeq: input.sequence,
 				ScanStart:     now,
 				ScanEnd:       now.Add(time.Second),
 			},
