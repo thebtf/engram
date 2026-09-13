@@ -217,121 +217,146 @@ func (s *UCIProjectionStore) ClaimEmbeddingJob(ctx context.Context, profile ucid
 	if ctx == nil || ctx.Err() != nil || validateUCISemanticProfile(profile) != nil || !validUCIEmbeddingOwner(owner) || leaseTTL <= 0 {
 		return ucidomain.EmbeddingJobClaim{}, false, fmt.Errorf("uci embedding claim: invalid request")
 	}
-	var claim ucidomain.EmbeddingJobClaim
-	claimed := false
+	request := uciEmbeddingClaimRequest{profile: profile, owner: owner, leaseTTL: leaseTTL}
+	var result uciEmbeddingClaimResult
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now, err := uciDatabaseClock(ctx, tx)
 		if err != nil {
 			return err
 		}
-		var source UCISource
-		result := tx.WithContext(ctx).Raw(`
-			SELECT source.*
-			FROM sources AS source
-			WHERE source.state = ?
-				AND EXISTS (
-					SELECT 1
-					FROM ci_jobs AS job
-					JOIN ci_embedding_profiles AS profile_row ON profile_row.embedding_profile_id = job.embedding_profile_id
-					WHERE job.source_id = source.source_id
-						AND job.job_kind = 'embed'
-						AND profile_row.provider_ref = ?
-						AND profile_row.model = ?
-						AND profile_row.dimension = ?
-						AND profile_row.preprocessing_revision = ?
-						AND profile_row.include_relative_path = ?
-						AND (
-							job.state = 'queued'
-							OR (job.state = 'retry_scheduled' AND (job.retry_after IS NULL OR job.retry_after <= ?))
-							OR (job.state = 'running' AND job.lease_expiry IS NOT NULL AND job.lease_expiry <= ?)
-						)
-				)
-			ORDER BY source.source_id ASC
-			FOR UPDATE SKIP LOCKED
-			LIMIT 1`, UCISourceActive, profile.ProviderRef, profile.Model, profile.Dimension, profile.PreprocessingRevision, profile.IncludeRelativePath, now, now).Scan(&source)
-		if result.Error != nil {
-			return fmt.Errorf("uci embedding claim select source: %w", result.Error)
-		}
-		if result.RowsAffected == 0 {
-			return nil
-		}
-		var job UCIJob
-		result = tx.WithContext(ctx).Raw(`
-			SELECT job.*
-			FROM ci_jobs AS job
-			JOIN ci_embedding_profiles AS profile_row ON profile_row.embedding_profile_id = job.embedding_profile_id
-			WHERE job.source_id = ?
-				AND job.job_kind = 'embed'
-				AND profile_row.provider_ref = ?
-				AND profile_row.model = ?
-				AND profile_row.dimension = ?
-				AND profile_row.preprocessing_revision = ?
-				AND profile_row.include_relative_path = ?
-				AND (
-					job.state = 'queued'
-					OR (job.state = 'retry_scheduled' AND (job.retry_after IS NULL OR job.retry_after <= ?))
-					OR (job.state = 'running' AND job.lease_expiry IS NOT NULL AND job.lease_expiry <= ?)
-				)
-			ORDER BY job.created_at ASC, job.job_id ASC
-			FOR UPDATE SKIP LOCKED
-			LIMIT 1`, source.SourceID, profile.ProviderRef, profile.Model, profile.Dimension, profile.PreprocessingRevision, profile.IncludeRelativePath, now, now).Scan(&job)
-		if result.Error != nil {
-			return fmt.Errorf("uci embedding claim select job: %w", result.Error)
-		}
-		if result.RowsAffected == 0 {
-			return nil
-		}
-		facts, disposition, err := loadUCIEmbeddingClaimFacts(ctx, tx, job, source, profile)
+		source, found, err := selectUCIEmbeddingClaimSource(ctx, tx, request.profile, now)
 		if err != nil {
 			return err
 		}
-		if disposition != "" {
-			if err := setUCIEmbeddingUnclaimedState(ctx, tx, job.JobID, disposition, now); err != nil {
-				return err
-			}
+		if !found {
 			return nil
 		}
-		nextEpoch := *job.OwnerEpoch + 1
-		leaseExpiry := now.Add(leaseTTL)
-		result = tx.WithContext(ctx).Model(&UCIJob{}).Where("job_id = ? AND state = ? AND owner_epoch = ?", job.JobID, job.State, *job.OwnerEpoch).Updates(map[string]any{
-			"state":        UCIJobRunning,
-			"attempt":      job.Attempt + 1,
-			"owner_epoch":  nextEpoch,
-			"lease_owner":  owner,
-			"lease_expiry": leaseExpiry,
-			"retry_after":  nil,
-			"error_code":   nil,
-			"updated_at":   now,
-		})
-		if result.Error != nil {
-			return fmt.Errorf("uci embedding claim update: %w", result.Error)
-		}
-		if result.RowsAffected != 1 {
-			return nil
-		}
-		ref := embeddingJobRefFromRows(job, facts.View, owner, nextEpoch)
-		claim = ucidomain.EmbeddingJobClaim{
-			Ref: ref,
-			Access: ucidomain.ContextAccess{
-				AuthRealm:  facts.Source.AuthRealm,
-				Principal:  *job.RequestedBy,
-				SourceID:   job.SourceID,
-				CheckoutID: *job.CheckoutID,
-			},
-			Profile:        profile,
-			Attempt:        job.Attempt + 1,
-			LeaseExpiresAt: leaseExpiry,
-		}
-		if !claim.Ref.Context.ValidForEmbeddingJob() {
-			return fmt.Errorf("uci embedding claim: invalid claimed context")
-		}
-		claimed = true
-		return nil
+		return claimUCIEmbeddingJobForSource(ctx, tx, source, request, now, &result)
 	})
 	if err != nil {
 		return ucidomain.EmbeddingJobClaim{}, false, err
 	}
-	return claim, claimed, nil
+	return result.claim, result.claimed, nil
+}
+
+type uciEmbeddingClaimRequest struct {
+	profile  ucidomain.VectorProfile
+	owner    string
+	leaseTTL time.Duration
+}
+
+type uciEmbeddingClaimResult struct {
+	claim   ucidomain.EmbeddingJobClaim
+	claimed bool
+}
+
+func selectUCIEmbeddingClaimSource(ctx context.Context, tx *gorm.DB, profile ucidomain.VectorProfile, now time.Time) (UCISource, bool, error) {
+	var source UCISource
+	result := tx.WithContext(ctx).Raw(`
+		SELECT source.*
+		FROM sources AS source
+		WHERE source.state = ?
+			AND EXISTS (
+				SELECT 1
+				FROM ci_jobs AS job
+				JOIN ci_embedding_profiles AS profile_row ON profile_row.embedding_profile_id = job.embedding_profile_id
+				WHERE job.source_id = source.source_id
+					AND job.job_kind = 'embed'
+					AND profile_row.provider_ref = ?
+					AND profile_row.model = ?
+					AND profile_row.dimension = ?
+					AND profile_row.preprocessing_revision = ?
+					AND profile_row.include_relative_path = ?
+					AND (
+						job.state = 'queued'
+						OR (job.state = 'retry_scheduled' AND (job.retry_after IS NULL OR job.retry_after <= ?))
+						OR (job.state = 'running' AND job.lease_expiry IS NOT NULL AND job.lease_expiry <= ?)
+					)
+			)
+		ORDER BY source.source_id ASC
+		FOR UPDATE SKIP LOCKED
+		LIMIT 1`, UCISourceActive, profile.ProviderRef, profile.Model, profile.Dimension, profile.PreprocessingRevision, profile.IncludeRelativePath, now, now).Scan(&source)
+	if result.Error != nil {
+		return UCISource{}, false, fmt.Errorf("uci embedding claim select source: %w", result.Error)
+	}
+	return source, result.RowsAffected != 0, nil
+}
+
+func claimUCIEmbeddingJobForSource(ctx context.Context, tx *gorm.DB, source UCISource, request uciEmbeddingClaimRequest, now time.Time, result *uciEmbeddingClaimResult) error {
+	job, found, err := selectUCIEmbeddingClaimJob(ctx, tx, source.SourceID, request.profile, now)
+	if err != nil || !found {
+		return err
+	}
+	facts, disposition, err := loadUCIEmbeddingClaimFacts(ctx, tx, job, source, request.profile)
+	if err != nil {
+		return err
+	}
+	if disposition != "" {
+		return setUCIEmbeddingUnclaimedState(ctx, tx, job.JobID, disposition, now)
+	}
+	nextEpoch := *job.OwnerEpoch + 1
+	leaseExpiry := now.Add(request.leaseTTL)
+	updated := tx.WithContext(ctx).Model(&UCIJob{}).Where("job_id = ? AND state = ? AND owner_epoch = ?", job.JobID, job.State, *job.OwnerEpoch).Updates(map[string]any{
+		"state":        UCIJobRunning,
+		"attempt":      job.Attempt + 1,
+		"owner_epoch":  nextEpoch,
+		"lease_owner":  request.owner,
+		"lease_expiry": leaseExpiry,
+		"retry_after":  nil,
+		"error_code":   nil,
+		"updated_at":   now,
+	})
+	if updated.Error != nil {
+		return fmt.Errorf("uci embedding claim update: %w", updated.Error)
+	}
+	if updated.RowsAffected != 1 {
+		return nil
+	}
+	claim := ucidomain.EmbeddingJobClaim{
+		Ref: embeddingJobRefFromRows(job, facts.View, request.owner, nextEpoch),
+		Access: ucidomain.ContextAccess{
+			AuthRealm:  facts.Source.AuthRealm,
+			Principal:  *job.RequestedBy,
+			SourceID:   job.SourceID,
+			CheckoutID: *job.CheckoutID,
+		},
+		Profile:        request.profile,
+		Attempt:        job.Attempt + 1,
+		LeaseExpiresAt: leaseExpiry,
+	}
+	if !claim.Ref.Context.ValidForEmbeddingJob() {
+		return fmt.Errorf("uci embedding claim: invalid claimed context")
+	}
+	result.claim = claim
+	result.claimed = true
+	return nil
+}
+
+func selectUCIEmbeddingClaimJob(ctx context.Context, tx *gorm.DB, sourceID string, profile ucidomain.VectorProfile, now time.Time) (UCIJob, bool, error) {
+	var job UCIJob
+	result := tx.WithContext(ctx).Raw(`
+		SELECT job.*
+		FROM ci_jobs AS job
+		JOIN ci_embedding_profiles AS profile_row ON profile_row.embedding_profile_id = job.embedding_profile_id
+		WHERE job.source_id = ?
+			AND job.job_kind = 'embed'
+			AND profile_row.provider_ref = ?
+			AND profile_row.model = ?
+			AND profile_row.dimension = ?
+			AND profile_row.preprocessing_revision = ?
+			AND profile_row.include_relative_path = ?
+			AND (
+				job.state = 'queued'
+				OR (job.state = 'retry_scheduled' AND (job.retry_after IS NULL OR job.retry_after <= ?))
+				OR (job.state = 'running' AND job.lease_expiry IS NOT NULL AND job.lease_expiry <= ?)
+			)
+		ORDER BY job.created_at ASC, job.job_id ASC
+		FOR UPDATE SKIP LOCKED
+		LIMIT 1`, sourceID, profile.ProviderRef, profile.Model, profile.Dimension, profile.PreprocessingRevision, profile.IncludeRelativePath, now, now).Scan(&job)
+	if result.Error != nil {
+		return UCIJob{}, false, fmt.Errorf("uci embedding claim select job: %w", result.Error)
+	}
+	return job, result.RowsAffected != 0, nil
 }
 
 func (s *UCIProjectionStore) RenewEmbeddingJob(ctx context.Context, ref ucidomain.EmbeddingJobRef, leaseTTL time.Duration) error {
