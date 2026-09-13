@@ -448,99 +448,148 @@ func (s *UCIIndexIntentStore) UpdateIndexIntent(ctx context.Context, binding uci
 	if ctx == nil || ctx.Err() != nil || binding.Validate() != nil || !validUCIIndexIntentID(intentID) || update.Validate() != nil || err != nil {
 		return ucidomain.IndexIntentUpdateResult{}, fmt.Errorf("uci index intent update: invalid request")
 	}
-
+	request := indexIntentUpdateRequest{binding: binding, ownerKey: ownerKey, intentID: intentID, update: update}
 	var result ucidomain.IndexIntentUpdateResult
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		row, err := lockIndexIntentRow(ctx, tx, intentID, false)
+		updated, err := updateLockedIndexIntent(ctx, tx, request)
 		if err != nil {
 			return err
 		}
-		if !indexIntentRowMatchesBinding(*row, binding) {
-			return ucidomain.ErrIndexIntentBindingMismatch
-		}
-		if receipt, found, err := loadIndexIntentReceipt(ctx, tx, intentID, update.OperationRef); err != nil {
-			return err
-		} else if found {
-			if receipt.Operation != string(update.Operation) || receipt.OwnerKey != ownerKey ||
-				(update.Operation != ucidomain.IndexIntentAcknowledge && receipt.ClaimEpoch != update.ClaimEpoch) {
-				return ucidomain.ErrIndexIntentBindingMismatch
-			}
-			result, err = indexIntentUpdateResultFromReceipt(receipt)
-			return err
-		}
-
-		now, err := uciDatabaseClock(ctx, tx)
-		if err != nil {
-			return err
-		}
-		leaseExpiry := now.Add(ucidomain.DefaultIndexPublicationLimits().LeaseTTL)
-		expectedState := row.State
-		switch update.Operation {
-		case ucidomain.IndexIntentAcknowledge:
-			if row.State != string(ucidomain.IndexIntentQueued) {
-				return ucidomain.ErrIndexIntentInvalidTransition
-			}
-			row.State = string(ucidomain.IndexIntentAcknowledged)
-			row.Attempt++
-			row.AcknowledgementEpoch++
-			row.AcknowledgedOwner = indexIntentString(ownerKey)
-			row.AcknowledgedAt = indexIntentTime(now)
-			row.ClaimExpiresAt = indexIntentTime(leaseExpiry)
-		case ucidomain.IndexIntentStart:
-			if err := requireIndexIntentActiveClaim(*row, ownerKey, update.ClaimEpoch, now); err != nil {
-				return err
-			}
-			if row.State != string(ucidomain.IndexIntentAcknowledged) {
-				return ucidomain.ErrIndexIntentInvalidTransition
-			}
-			row.State = string(ucidomain.IndexIntentRunning)
-		case ucidomain.IndexIntentRenew:
-			if err := requireIndexIntentActiveClaim(*row, ownerKey, update.ClaimEpoch, now); err != nil {
-				return err
-			}
-			if row.State != string(ucidomain.IndexIntentAcknowledged) && row.State != string(ucidomain.IndexIntentRunning) {
-				return ucidomain.ErrIndexIntentInvalidTransition
-			}
-			row.ClaimExpiresAt = indexIntentTime(leaseExpiry)
-		case ucidomain.IndexIntentFail:
-			if row.State == string(ucidomain.IndexIntentCompleted) {
-				if row.AcknowledgedOwner == nil || *row.AcknowledgedOwner != ownerKey || row.AcknowledgementEpoch != update.ClaimEpoch {
-					return ucidomain.ErrIndexIntentOwnerLost
-				}
-				break
-			}
-			if err := requireIndexIntentActiveClaim(*row, ownerKey, update.ClaimEpoch, now); err != nil {
-				return err
-			}
-			if row.State != string(ucidomain.IndexIntentAcknowledged) && row.State != string(ucidomain.IndexIntentRunning) {
-				return ucidomain.ErrIndexIntentInvalidTransition
-			}
-			row.State = string(ucidomain.IndexIntentFailed)
-		default:
-			return ucidomain.ErrIndexIntentInvalidTransition
-		}
-		row.UpdatedAt = now
-		if err := updateIndexIntentRow(ctx, tx, *row, expectedState, nil); err != nil {
-			return err
-		}
-		result = ucidomain.IndexIntentUpdateResult{
-			IntentID: row.IntentID, State: ucidomain.IndexIntentState(row.State), Attempt: row.Attempt,
-			ClaimEpoch: row.AcknowledgementEpoch, LeaseExpiresAt: *row.ClaimExpiresAt,
-		}
-		if err := result.Validate(); err != nil {
-			return err
-		}
-		receipt := indexIntentReceiptRow{
-			IntentID: row.IntentID, OperationRef: update.OperationRef, Operation: string(update.Operation), OwnerKey: ownerKey,
-			ClaimEpoch: row.AcknowledgementEpoch, ResultState: row.State, ResultAttempt: row.Attempt,
-			LeaseExpiresAt: indexIntentTime(result.LeaseExpiresAt), CreatedAt: now,
-		}
-		return tx.WithContext(ctx).Create(&receipt).Error
+		result = updated
+		return nil
 	})
 	if err != nil {
 		return ucidomain.IndexIntentUpdateResult{}, err
 	}
 	return result, nil
+}
+
+type indexIntentUpdateRequest struct {
+	binding  ucidomain.IndexBinding
+	ownerKey string
+	intentID string
+	update   ucidomain.IndexIntentUpdate
+}
+
+func updateLockedIndexIntent(ctx context.Context, tx *gorm.DB, request indexIntentUpdateRequest) (ucidomain.IndexIntentUpdateResult, error) {
+	row, err := lockIndexIntentRow(ctx, tx, request.intentID, false)
+	if err != nil {
+		return ucidomain.IndexIntentUpdateResult{}, err
+	}
+	if !indexIntentRowMatchesBinding(*row, request.binding) {
+		return ucidomain.IndexIntentUpdateResult{}, ucidomain.ErrIndexIntentBindingMismatch
+	}
+	receipt, found, err := loadIndexIntentReceipt(ctx, tx, request.intentID, request.update.OperationRef)
+	if err != nil {
+		return ucidomain.IndexIntentUpdateResult{}, err
+	}
+	if found {
+		return replayIndexIntentUpdate(receipt, request.update, request.ownerKey)
+	}
+	return commitIndexIntentUpdate(ctx, tx, row, request)
+}
+
+func replayIndexIntentUpdate(receipt indexIntentReceiptRow, update ucidomain.IndexIntentUpdate, ownerKey string) (ucidomain.IndexIntentUpdateResult, error) {
+	if receipt.Operation != string(update.Operation) || receipt.OwnerKey != ownerKey || (update.Operation != ucidomain.IndexIntentAcknowledge && receipt.ClaimEpoch != update.ClaimEpoch) {
+		return ucidomain.IndexIntentUpdateResult{}, ucidomain.ErrIndexIntentBindingMismatch
+	}
+	return indexIntentUpdateResultFromReceipt(receipt)
+}
+
+func commitIndexIntentUpdate(ctx context.Context, tx *gorm.DB, row *indexIntentRow, request indexIntentUpdateRequest) (ucidomain.IndexIntentUpdateResult, error) {
+	now, err := uciDatabaseClock(ctx, tx)
+	if err != nil {
+		return ucidomain.IndexIntentUpdateResult{}, err
+	}
+	expectedState := row.State
+	leaseExpiry := now.Add(ucidomain.DefaultIndexPublicationLimits().LeaseTTL)
+	if err := applyIndexIntentTransition(row, request.update, request.ownerKey, now, leaseExpiry); err != nil {
+		return ucidomain.IndexIntentUpdateResult{}, err
+	}
+	row.UpdatedAt = now
+	if err := updateIndexIntentRow(ctx, tx, *row, expectedState, nil); err != nil {
+		return ucidomain.IndexIntentUpdateResult{}, err
+	}
+	result := ucidomain.IndexIntentUpdateResult{IntentID: row.IntentID, State: ucidomain.IndexIntentState(row.State), Attempt: row.Attempt, ClaimEpoch: row.AcknowledgementEpoch, LeaseExpiresAt: *row.ClaimExpiresAt}
+	if err := result.Validate(); err != nil {
+		return ucidomain.IndexIntentUpdateResult{}, err
+	}
+	receipt := indexIntentReceiptRow{
+		IntentID: row.IntentID, OperationRef: request.update.OperationRef, Operation: string(request.update.Operation), OwnerKey: request.ownerKey,
+		ClaimEpoch: row.AcknowledgementEpoch, ResultState: row.State, ResultAttempt: row.Attempt,
+		LeaseExpiresAt: indexIntentTime(result.LeaseExpiresAt), CreatedAt: now,
+	}
+	if err := tx.WithContext(ctx).Create(&receipt).Error; err != nil {
+		return ucidomain.IndexIntentUpdateResult{}, err
+	}
+	return result, nil
+}
+
+func applyIndexIntentTransition(row *indexIntentRow, update ucidomain.IndexIntentUpdate, ownerKey string, now, leaseExpiry time.Time) error {
+	switch update.Operation {
+	case ucidomain.IndexIntentAcknowledge:
+		return acknowledgeIndexIntent(row, ownerKey, now, leaseExpiry)
+	case ucidomain.IndexIntentStart:
+		return startIndexIntent(row, ownerKey, update.ClaimEpoch, now)
+	case ucidomain.IndexIntentRenew:
+		return renewIndexIntent(row, ownerKey, update.ClaimEpoch, now, leaseExpiry)
+	case ucidomain.IndexIntentFail:
+		return failIndexIntent(row, ownerKey, update.ClaimEpoch, now)
+	default:
+		return ucidomain.ErrIndexIntentInvalidTransition
+	}
+}
+
+func acknowledgeIndexIntent(row *indexIntentRow, ownerKey string, now, leaseExpiry time.Time) error {
+	if row.State != string(ucidomain.IndexIntentQueued) {
+		return ucidomain.ErrIndexIntentInvalidTransition
+	}
+	row.State = string(ucidomain.IndexIntentAcknowledged)
+	row.Attempt++
+	row.AcknowledgementEpoch++
+	row.AcknowledgedOwner = indexIntentString(ownerKey)
+	row.AcknowledgedAt = indexIntentTime(now)
+	row.ClaimExpiresAt = indexIntentTime(leaseExpiry)
+	return nil
+}
+
+func startIndexIntent(row *indexIntentRow, ownerKey string, epoch int64, now time.Time) error {
+	if err := requireIndexIntentActiveClaim(*row, ownerKey, epoch, now); err != nil {
+		return err
+	}
+	if row.State != string(ucidomain.IndexIntentAcknowledged) {
+		return ucidomain.ErrIndexIntentInvalidTransition
+	}
+	row.State = string(ucidomain.IndexIntentRunning)
+	return nil
+}
+
+func renewIndexIntent(row *indexIntentRow, ownerKey string, epoch int64, now, leaseExpiry time.Time) error {
+	if err := requireIndexIntentActiveClaim(*row, ownerKey, epoch, now); err != nil {
+		return err
+	}
+	if row.State != string(ucidomain.IndexIntentAcknowledged) && row.State != string(ucidomain.IndexIntentRunning) {
+		return ucidomain.ErrIndexIntentInvalidTransition
+	}
+	row.ClaimExpiresAt = indexIntentTime(leaseExpiry)
+	return nil
+}
+
+func failIndexIntent(row *indexIntentRow, ownerKey string, epoch int64, now time.Time) error {
+	if row.State == string(ucidomain.IndexIntentCompleted) {
+		if row.AcknowledgedOwner == nil || *row.AcknowledgedOwner != ownerKey || row.AcknowledgementEpoch != epoch {
+			return ucidomain.ErrIndexIntentOwnerLost
+		}
+		return nil
+	}
+	if err := requireIndexIntentActiveClaim(*row, ownerKey, epoch, now); err != nil {
+		return err
+	}
+	if row.State != string(ucidomain.IndexIntentAcknowledged) && row.State != string(ucidomain.IndexIntentRunning) {
+		return ucidomain.ErrIndexIntentInvalidTransition
+	}
+	row.State = string(ucidomain.IndexIntentFailed)
+	return nil
 }
 
 func (s *UCIIndexIntentStore) ReconcileIndexIntents(ctx context.Context, binding ucidomain.IndexBinding) error {
