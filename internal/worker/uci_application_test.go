@@ -824,6 +824,8 @@ func workerUCIApplicationAddArtifact(t *testing.T, projection *gormstore.UCIProj
 	blob, err := projection.UpsertBlob(context.Background(), gormstore.UpsertUCIBlobInput{
 		SourceID:         input.sourceID,
 		ProtectionDomain: "source-private",
+		ContentDigest:    digest,
+		ByteLength:       int64(len(body)),
 		SafeContent:      body,
 		Encoding:         "utf-8",
 		StorageState:     gormstore.UCIBlobStored,
