@@ -447,6 +447,7 @@ function profileEnvironment(baseEnvironment, profile, databaseDSN) {
 function runCoverageProfile(goCommand, profile, coveragePath, cwd, environment, databaseDSN) {
   const args = [
     "test",
+    "-p=1",
     "-count=1",
     ...(databaseDSN ? ["-parallel=1"] : []),
     profile.target,
