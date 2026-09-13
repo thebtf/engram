@@ -471,36 +471,67 @@ func (state *goEnvironmentSemanticState) result() (string, string) {
 
 func goEnvironmentAliases(file *ast.File, environmentCall *ast.CallExpr) map[*ast.Object]bool {
 	aliases := make(map[*ast.Object]bool)
-	changed := true
-	for changed {
-		changed = false
-		ast.Inspect(file, func(node ast.Node) bool {
-			switch node := node.(type) {
-			case *ast.AssignStmt:
-				for index, value := range node.Rhs {
-					if index >= len(node.Lhs) || !goAliasExpression(value, aliases, environmentCall) {
-						continue
-					}
-					if name, ok := node.Lhs[index].(*ast.Ident); ok && name.Obj != nil && !aliases[name.Obj] {
-						aliases[name.Obj] = true
-						changed = true
-					}
-				}
-			case *ast.ValueSpec:
-				for index, value := range node.Values {
-					if index >= len(node.Names) || !goAliasExpression(value, aliases, environmentCall) {
-						continue
-					}
-					if name := node.Names[index]; name.Obj != nil && !aliases[name.Obj] {
-						aliases[name.Obj] = true
-						changed = true
-					}
-				}
-			}
-			return true
-		})
+	for goEnvironmentAliasPass(file, aliases, environmentCall) {
 	}
 	return aliases
+}
+
+func goEnvironmentAliasPass(file *ast.File, aliases map[*ast.Object]bool, environmentCall *ast.CallExpr) bool {
+	changed := false
+	ast.Inspect(file, func(node ast.Node) bool {
+		switch node := node.(type) {
+		case *ast.AssignStmt:
+			markGoEnvironmentAliasChange(&changed, goAssignmentAliases(node, aliases, environmentCall))
+		case *ast.ValueSpec:
+			markGoEnvironmentAliasChange(&changed, goValueSpecAliases(node, aliases, environmentCall))
+		}
+		return true
+	})
+	return changed
+}
+
+func markGoEnvironmentAliasChange(changed *bool, aliasAdded bool) {
+	if aliasAdded {
+		*changed = true
+	}
+}
+
+func goAssignmentAliases(statement *ast.AssignStmt, aliases map[*ast.Object]bool, environmentCall *ast.CallExpr) bool {
+	changed := false
+	for index, value := range statement.Rhs {
+		if index >= len(statement.Lhs) {
+			continue
+		}
+		markGoEnvironmentAliasChange(&changed, goAssignmentAlias(statement.Lhs[index], value, aliases, environmentCall))
+	}
+	return changed
+}
+
+func goAssignmentAlias(destination ast.Expr, value ast.Expr, aliases map[*ast.Object]bool, environmentCall *ast.CallExpr) bool {
+	name, ok := destination.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return goEnvironmentAlias(value, name.Obj, aliases, environmentCall)
+}
+
+func goValueSpecAliases(specification *ast.ValueSpec, aliases map[*ast.Object]bool, environmentCall *ast.CallExpr) bool {
+	changed := false
+	for index, value := range specification.Values {
+		if index >= len(specification.Names) {
+			continue
+		}
+		markGoEnvironmentAliasChange(&changed, goEnvironmentAlias(value, specification.Names[index].Obj, aliases, environmentCall))
+	}
+	return changed
+}
+
+func goEnvironmentAlias(value ast.Expr, object *ast.Object, aliases map[*ast.Object]bool, environmentCall *ast.CallExpr) bool {
+	if object == nil || aliases[object] || !goAliasExpression(value, aliases, environmentCall) {
+		return false
+	}
+	aliases[object] = true
+	return true
 }
 
 func goAliasExpression(expression ast.Expr, aliases map[*ast.Object]bool, environmentCall *ast.CallExpr) bool {
@@ -940,66 +971,86 @@ func javaScriptExactComparison(code, source string, end int, want string) bool {
 func powerShellCodeMask(line string) string {
 	masked := []byte(line)
 	for index := 0; index < len(masked); {
-		switch masked[index] {
-		case '#':
-			blankBytes(masked, index, len(masked))
+		next, done := powerShellCodeMaskToken(line, masked, index)
+		if done {
 			return string(masked)
-		case '\'':
-			end := index + 1
-			for end < len(masked) {
-				if masked[end] == '\'' {
-					end++
-					if end < len(masked) && masked[end] == '\'' {
-						end++
-						continue
-					}
-					break
-				}
-				end++
-			}
-			blankBytes(masked, index, end)
-			index = end
+		}
+		index = next
+	}
+	return string(masked)
+}
+
+func powerShellCodeMaskToken(line string, masked []byte, index int) (int, bool) {
+	switch masked[index] {
+	case '#':
+		blankBytes(masked, index, len(masked))
+		return index, true
+	case '\'':
+		return maskPowerShellSingleQuote(masked, index), false
+	case '"':
+		return maskPowerShellDoubleQuote(line, masked, index), false
+	case '`':
+		return maskPowerShellEscape(masked, index), false
+	default:
+		return index + 1, false
+	}
+}
+
+func maskPowerShellSingleQuote(masked []byte, index int) int {
+	end := index + 1
+	for end < len(masked) {
+		if masked[end] != '\'' {
+			end++
 			continue
-		case '"':
-			end := index + 1
-			masked[index] = ' '
-			for end < len(masked) && line[end] != '"' {
-				if line[end] == '`' {
-					masked[end] = ' '
-					end++
-					if end < len(masked) {
-						masked[end] = ' '
-						end++
-					}
-					continue
-				}
-				if line[end] == '$' {
-					if variableEnd, ok := powerShellEnvironmentEnd(line, end); ok {
-						end = variableEnd
-						continue
-					}
-				}
-				masked[end] = ' '
-				end++
-			}
+		}
+		end++
+		if end < len(masked) && masked[end] == '\'' {
+			end++
+			continue
+		}
+		break
+	}
+	blankBytes(masked, index, end)
+	return end
+}
+
+func maskPowerShellDoubleQuote(line string, masked []byte, index int) int {
+	end := index + 1
+	masked[index] = ' '
+	for end < len(masked) && line[end] != '"' {
+		if line[end] == '`' {
+			masked[end] = ' '
+			end++
 			if end < len(masked) {
 				masked[end] = ' '
 				end++
 			}
-			index = end
-			continue
-		case '`':
-			masked[index] = ' '
-			index++
-			if index < len(masked) {
-				masked[index] = ' '
-				index++
-			}
 			continue
 		}
+		if line[end] == '$' {
+			if variableEnd, ok := powerShellEnvironmentEnd(line, end); ok {
+				end = variableEnd
+				continue
+			}
+		}
+		masked[end] = ' '
+		end++
+	}
+	if end < len(masked) {
+		masked[end] = ' '
+		end++
+	}
+	return end
+}
+
+func maskPowerShellEscape(masked []byte, index int) int {
+	masked[index] = ' '
+	index++
+	if index < len(masked) {
+		masked[index] = ' '
 		index++
 	}
-	return string(masked)
+	return index
 }
 
 type powerShellLexState struct {
@@ -1258,33 +1309,41 @@ func shellEnvironmentRead(code string, start int) (string, string, bool) {
 		return "", "", false
 	}
 	if code[start+1] == '{' {
-		end := start + 2
-		if end >= len(code) || !isShellNameStart(code[end]) {
-			return "", "", false
-		}
-		for end < len(code) && isShellNamePart(code[end]) {
-			end++
-		}
-		name := code[start+2 : end]
-		if end >= len(code) {
-			return "", "", false
-		}
-		operator := ""
-		if code[end] == ':' {
-			end++
-		}
-		if end < len(code) && strings.ContainsRune("-=+?", rune(code[end])) {
-			operator = string(code[end])
-		}
-		switch operator {
-		case "-", "=":
-			return name, environmentDefaultSourceExpression, true
-		case "?":
-			return name, "required-environment", true
-		default:
-			return name, environmentDefaultEmptyUnset, true
-		}
+		return bracedShellEnvironmentRead(code, start)
 	}
+	return bareShellEnvironmentRead(code, start)
+}
+
+func bracedShellEnvironmentRead(code string, start int) (string, string, bool) {
+	end := start + 2
+	if end >= len(code) || !isShellNameStart(code[end]) {
+		return "", "", false
+	}
+	for end < len(code) && isShellNamePart(code[end]) {
+		end++
+	}
+	name := code[start+2 : end]
+	if end >= len(code) {
+		return "", "", false
+	}
+	operator := ""
+	if code[end] == ':' {
+		end++
+	}
+	if end < len(code) && strings.ContainsRune("-=+?", rune(code[end])) {
+		operator = string(code[end])
+	}
+	switch operator {
+	case "-", "=":
+		return name, environmentDefaultSourceExpression, true
+	case "?":
+		return name, "required-environment", true
+	default:
+		return name, environmentDefaultEmptyUnset, true
+	}
+}
+
+func bareShellEnvironmentRead(code string, start int) (string, string, bool) {
 	if !isShellNameStart(code[start+1]) {
 		return "", "", false
 	}
