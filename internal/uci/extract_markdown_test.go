@@ -51,15 +51,15 @@ func TestUCIMarkdownExtractionProducesStableHeadingLinkAndProseFacts(t *testing.
 		t.Fatalf("duplicate headings need distinct deterministic keys: atx=%#v setext=%#v", atx, setext)
 	}
 
-	uciRequireMarkdownReference(t, first.References, "local_link", atx.LocalKey, "docs/guide.md#install", "docs/guide.md", "install", uciMarkdownExtractionSpan(t, source, "[guide](docs/guide.md#install)", 0))
-	sameDocument := uciRequireMarkdownReference(t, first.References, "local_link", atx.LocalKey, "#overview", "", "overview", uciMarkdownExtractionSpan(t, source, "[same document](#overview)", 0))
-	uciRequireMarkdownReference(t, first.References, "local_link", atx.LocalKey, "missing.md#absent", "missing.md", "absent", uciMarkdownExtractionSpan(t, source, "[missing](missing.md#absent)", 0))
-	ambiguous := uciRequireMarkdownReference(t, first.References, "local_link", atx.LocalKey, "#overview", "", "overview", uciMarkdownExtractionSpan(t, source, "[ambiguous heading](#overview)", 0))
+	uciRequireMarkdownReference(t, first.References, uciMarkdownReferenceExpectation{kind: "local_link", ownerLocalKey: atx.LocalKey, rawTarget: "docs/guide.md#install", targetPath: "docs/guide.md", fragment: "install", span: uciMarkdownExtractionSpan(t, source, "[guide](docs/guide.md#install)", 0)})
+	sameDocument := uciRequireMarkdownReference(t, first.References, uciMarkdownReferenceExpectation{kind: "local_link", ownerLocalKey: atx.LocalKey, rawTarget: "#overview", fragment: "overview", span: uciMarkdownExtractionSpan(t, source, "[same document](#overview)", 0)})
+	uciRequireMarkdownReference(t, first.References, uciMarkdownReferenceExpectation{kind: "local_link", ownerLocalKey: atx.LocalKey, rawTarget: "missing.md#absent", targetPath: "missing.md", fragment: "absent", span: uciMarkdownExtractionSpan(t, source, "[missing](missing.md#absent)", 0)})
+	ambiguous := uciRequireMarkdownReference(t, first.References, uciMarkdownReferenceExpectation{kind: "local_link", ownerLocalKey: atx.LocalKey, rawTarget: "#overview", fragment: "overview", span: uciMarkdownExtractionSpan(t, source, "[ambiguous heading](#overview)", 0)})
 	if sameDocument.LocalKey == ambiguous.LocalKey || sameDocument.SymbolKey == ambiguous.SymbolKey {
 		t.Fatalf("duplicate link sites need distinct deterministic keys: same=%#v ambiguous=%#v", sameDocument, ambiguous)
 	}
-	uciRequireMarkdownReference(t, first.References, "external_link", external.LocalKey, "https://example.test/spec#section", "", "", uciMarkdownExtractionSpan(t, source, "[web](https://example.test/spec#section)", 0))
-	uciRequireMarkdownReference(t, first.References, "external_link", external.LocalKey, "file:///tmp/source.md#section", "", "", uciMarkdownExtractionSpan(t, source, "[file](file:///tmp/source.md#section)", 0))
+	uciRequireMarkdownReference(t, first.References, uciMarkdownReferenceExpectation{kind: "external_link", ownerLocalKey: external.LocalKey, rawTarget: "https://example.test/spec#section", span: uciMarkdownExtractionSpan(t, source, "[web](https://example.test/spec#section)", 0)})
+	uciRequireMarkdownReference(t, first.References, uciMarkdownReferenceExpectation{kind: "external_link", ownerLocalKey: external.LocalKey, rawTarget: "file:///tmp/source.md#section", span: uciMarkdownExtractionSpan(t, source, "[file](file:///tmp/source.md#section)", 0)})
 	if len(first.References) != 6 {
 		t.Fatalf("ExtractMarkdown() reference count = %d, want only six observed link facts", len(first.References))
 	}
@@ -171,8 +171,8 @@ func TestUCIMarkdownExtractionRecordsExternalURLsOnlyAsObservedReferences(t *tes
 	}
 	uciRequireMarkdownExtractionProof(t, artifact)
 	heading := uciRequireMarkdownHeading(t, artifact.Headings, "Sources", 1, 0, uciMarkdownExtractionSpan(t, source, "# Sources", 0))
-	uciRequireMarkdownReference(t, artifact.References, "external_link", heading.LocalKey, "https://example.test/spec#section", "", "", uciMarkdownExtractionSpan(t, source, "[web](https://example.test/spec#section)", 0))
-	uciRequireMarkdownReference(t, artifact.References, "external_link", heading.LocalKey, "file:///tmp/source.md#section", "", "", uciMarkdownExtractionSpan(t, source, "[file](file:///tmp/source.md#section)", 0))
+	uciRequireMarkdownReference(t, artifact.References, uciMarkdownReferenceExpectation{kind: "external_link", ownerLocalKey: heading.LocalKey, rawTarget: "https://example.test/spec#section", span: uciMarkdownExtractionSpan(t, source, "[web](https://example.test/spec#section)", 0)})
+	uciRequireMarkdownReference(t, artifact.References, uciMarkdownReferenceExpectation{kind: "external_link", ownerLocalKey: heading.LocalKey, rawTarget: "file:///tmp/source.md#section", span: uciMarkdownExtractionSpan(t, source, "[file](file:///tmp/source.md#section)", 0)})
 }
 
 func TestUCIMarkdownExtractionDoesNotInferProseSimilarity(t *testing.T) {
@@ -256,28 +256,37 @@ func uciRequireMarkdownHeading(t *testing.T, headings []MarkdownHeading, title s
 	return MarkdownHeading{}
 }
 
-func uciRequireMarkdownReference(t *testing.T, references []MarkdownReferenceSite, kind, ownerLocalKey, rawTarget, targetPath, fragment string, wantSpan IndexSpan) MarkdownReferenceSite {
+type uciMarkdownReferenceExpectation struct {
+	kind          string
+	ownerLocalKey string
+	rawTarget     string
+	targetPath    string
+	fragment      string
+	span          IndexSpan
+}
+
+func uciRequireMarkdownReference(t *testing.T, references []MarkdownReferenceSite, want uciMarkdownReferenceExpectation) MarkdownReferenceSite {
 	t.Helper()
 	for _, reference := range references {
-		if reference.Kind != kind || reference.RawTarget != rawTarget || reference.OwnerLocalKey != ownerLocalKey || reference.Span != wantSpan {
+		if reference.Kind != want.kind || reference.RawTarget != want.rawTarget || reference.OwnerLocalKey != want.ownerLocalKey || reference.Span != want.span {
 			continue
 		}
 		if reference.SymbolKey == "" || reference.LocalKey == "" {
-			t.Fatalf("reference %q has empty key: %#v", rawTarget, reference)
+			t.Fatalf("reference %q has empty key: %#v", want.rawTarget, reference)
 		}
-		if reference.TargetPath != targetPath {
-			t.Fatalf("reference %q target path = %q, want %q", rawTarget, reference.TargetPath, targetPath)
+		if reference.TargetPath != want.targetPath {
+			t.Fatalf("reference %q target path = %q, want %q", want.rawTarget, reference.TargetPath, want.targetPath)
 		}
-		if reference.Fragment != fragment {
-			t.Fatalf("reference %q fragment = %q, want %q", rawTarget, reference.Fragment, fragment)
+		if reference.Fragment != want.fragment {
+			t.Fatalf("reference %q fragment = %q, want %q", want.rawTarget, reference.Fragment, want.fragment)
 		}
 		if reference.ResolutionState != IndexResolutionState("unresolved") {
-			t.Fatalf("reference %q resolution = %q, want unresolved source fact", rawTarget, reference.ResolutionState)
+			t.Fatalf("reference %q resolution = %q, want unresolved source fact", want.rawTarget, reference.ResolutionState)
 		}
-		uciRequireMarkdownSpan(t, reference.Span, wantSpan, "reference "+rawTarget)
+		uciRequireMarkdownSpan(t, reference.Span, want.span, "reference "+want.rawTarget)
 		return reference
 	}
-	t.Fatalf("missing %s reference %q owned by %q; got %#v", kind, rawTarget, ownerLocalKey, references)
+	t.Fatalf("missing %s reference %q owned by %q; got %#v", want.kind, want.rawTarget, want.ownerLocalKey, references)
 	return MarkdownReferenceSite{}
 }
 

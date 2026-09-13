@@ -227,7 +227,16 @@ func (service *SemanticService) Query(ctx context.Context, authorized Authorized
 
 	semantic := semanticCurrentCandidates(semanticResult.Candidates, ref)
 	fused := semanticFuseCandidates(lexical, semantic, normalized.Mode, normalized.Order)
-	return service.availableResult(ref, normalized, start, fused, lexicalResult.Coverage, QueryRetrievalHybrid, &semanticResult.VectorCoverage, []string{})
+	return service.availableResult(semanticAvailableResultInput{
+		ref:                ref,
+		spec:               normalized,
+		start:              start,
+		candidates:         fused,
+		coverage:           lexicalResult.Coverage,
+		mode:               QueryRetrievalHybrid,
+		vectorCoverage:     &semanticResult.VectorCoverage,
+		degradationReasons: []string{},
+	})
 }
 
 func (service *SemanticService) lexicalOnlyResult(ref ContextRef, spec QuerySpec, start int, candidates []QueryCandidate, coverage IndexCoverageState, reason string) (QueryResult, error) {
@@ -241,42 +250,61 @@ func (service *SemanticService) lexicalOnlyResult(ref ContextRef, spec QuerySpec
 		})
 	}
 	zero := float64(0)
-	return service.availableResult(ref, spec, start, results, coverage, QueryRetrievalLexical, &zero, []string{reason})
+	return service.availableResult(semanticAvailableResultInput{
+		ref:                ref,
+		spec:               spec,
+		start:              start,
+		candidates:         results,
+		coverage:           coverage,
+		mode:               QueryRetrievalLexical,
+		vectorCoverage:     &zero,
+		degradationReasons: []string{reason},
+	})
 }
 
-func (service *SemanticService) availableResult(ref ContextRef, spec QuerySpec, start int, candidates []semanticResultCandidate, coverage IndexCoverageState, mode QueryRetrievalMode, vectorCoverage *float64, degradationReasons []string) (QueryResult, error) {
-	if start > 0 && len(candidates) == 0 {
+type semanticAvailableResultInput struct {
+	ref                ContextRef
+	spec               QuerySpec
+	start              int
+	candidates         []semanticResultCandidate
+	coverage           IndexCoverageState
+	mode               QueryRetrievalMode
+	vectorCoverage     *float64
+	degradationReasons []string
+}
+
+func (service *SemanticService) availableResult(input semanticAvailableResultInput) (QueryResult, error) {
+	if input.start > 0 && len(input.candidates) == 0 {
 		return QueryResult{}, fmt.Errorf("uci semantic: continuation position is outside the selected view")
 	}
-	end := spec.Limit
-	if end > len(candidates) {
-		end = len(candidates)
+	end := input.spec.Limit
+	if end > len(input.candidates) {
+		end = len(input.candidates)
 	}
 	items := make(QueryItems, 0, end)
 	warnings := QueryWarnings{}
-	for _, candidate := range candidates[:end] {
-		item, excerptOmitted := semanticQueryItem(candidate, spec)
+	for _, candidate := range input.candidates[:end] {
+		item, excerptOmitted := semanticQueryItem(candidate, input.spec)
 		items = append(items, item)
 		if excerptOmitted && !containsQueryWarning(warnings, "excerpt_omitted_response_bound") {
 			warnings = append(warnings, "excerpt_omitted_response_bound")
 		}
 	}
 
-	truncated := end < len(candidates)
+	truncated := end < len(input.candidates)
 	continuation := QueryContinuation{}
 	if truncated {
-		token, err := service.lexical.encodeContinuation(ref, spec, start+end)
+		token, err := service.lexical.encodeContinuation(input.ref, input.spec, input.start+end)
 		if err != nil {
 			return QueryResult{}, err
 		}
 		continuation.Value = &token
 	}
-	degradation := make([]string, len(degradationReasons))
-	copy(degradation, degradationReasons)
-	response := queryAvailableResponse(ref, spec, coverage, items, warnings, truncated, continuation)
+	degradation := append([]string(nil), input.degradationReasons...)
+	response := queryAvailableResponse(input.ref, input.spec, input.coverage, items, warnings, truncated, continuation)
 	response.Retrieval = &QueryRetrieval{
-		Mode:               mode,
-		VectorCoverage:     vectorCoverage,
+		Mode:               input.mode,
+		VectorCoverage:     input.vectorCoverage,
 		DegradationReasons: degradation,
 	}
 	return QueryResult{Response: response}, nil

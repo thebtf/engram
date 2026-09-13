@@ -73,7 +73,7 @@ func TreeSitterBundleDigest() IndexDigest {
 		_, _ = state.Write(length[:])
 		_, _ = state.Write([]byte(part))
 	}
-	return IndexDigest("sha256:" + hex.EncodeToString(state.Sum(nil)))
+	return IndexDigest(indexDigestPrefix + hex.EncodeToString(state.Sum(nil)))
 }
 
 var (
@@ -445,7 +445,7 @@ func TreeSitterWireRequestDigest(request TreeSitterParseRequest) (IndexDigest, e
 		return "", err
 	}
 	sum := sha256.Sum256(requestLine)
-	return IndexDigest("sha256:" + hex.EncodeToString(sum[:])), nil
+	return IndexDigest(indexDigestPrefix + hex.EncodeToString(sum[:])), nil
 }
 
 func treeSitterPrepareWireRequest(request TreeSitterParseRequest, maximumInputBytes int) ([]byte, error) {
@@ -623,11 +623,10 @@ func treeSitterProfileKeyValid(value string) bool {
 }
 
 func treeSitterDigestValid(value IndexDigest) bool {
-	const prefix = "sha256:"
-	if !strings.HasPrefix(string(value), prefix) || len(value) != len(prefix)+sha256.Size*2 {
+	if !strings.HasPrefix(string(value), indexDigestPrefix) || len(value) != len(indexDigestPrefix)+sha256.Size*2 {
 		return false
 	}
-	for _, character := range value[len(prefix):] {
+	for _, character := range value[len(indexDigestPrefix):] {
 		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
 			return false
 		}

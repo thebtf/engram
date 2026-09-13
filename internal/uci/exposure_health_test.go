@@ -37,29 +37,6 @@ func TestExposureHealthControllerClosedStateMachine(t *testing.T) {
 	assertExposureHealthSnapshot(t, unconfigured.Snapshot(), uci.ExposureHealthUnavailable, uci.ExposureHealthFailureExposureUnavailable)
 }
 
-func TestExposureHealthControllerIdempotencyMismatchIsNoOp(t *testing.T) {
-	for _, prepare := range []struct {
-		name  string
-		apply func(*uci.ExposureHealthController)
-	}{
-		{name: "healthy", apply: func(*uci.ExposureHealthController) {}},
-		{name: "degraded", apply: func(health *uci.ExposureHealthController) { health.RecordCompletionFailure() }},
-		{name: "unavailable", apply: func(health *uci.ExposureHealthController) { health.RecordInitialExposureFailure() }},
-	} {
-		t.Run(prepare.name, func(t *testing.T) {
-			health := uci.NewExposureHealthController(true)
-			prepare.apply(health)
-			before := health.Snapshot()
-
-			health.RecordIdempotencyMismatch()
-
-			if got := health.Snapshot(); got != before {
-				t.Fatalf("snapshot after idempotency mismatch = %#v, want unchanged %#v", got, before)
-			}
-		})
-	}
-}
-
 func TestExposureHealthSnapshotIsImmutableAndSecretFree(t *testing.T) {
 	health := uci.NewExposureHealthController(true)
 	snapshot := health.Snapshot()

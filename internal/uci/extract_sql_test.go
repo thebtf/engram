@@ -63,7 +63,14 @@ func TestUCISQLExtractionProducesStableDDLFacts(t *testing.T) {
 	uciRequireSQLColumn(t, first.Definitions, "column:\"Billing\".\"Invoice\".\"Invoice ID\"", "table:\"Billing\".\"Invoice\"", "UUID", uciSQLSpan(t, original, "\"Invoice ID\" UUID NOT NULL", 0))
 	uciRequireSQLColumn(t, first.Definitions, "column:\"Billing\".\"Invoice\".account_id", "table:\"Billing\".\"Invoice\"", "BIGINT", uciSQLSpan(t, original, "account_id BIGINT NOT NULL", 0))
 	uciRequireSQLColumn(t, first.Definitions, "column:\"Billing\".\"Invoice\".\"Résumé\"", "table:\"Billing\".\"Invoice\"", "VARCHAR(255)", uciSQLSpan(t, original, "\"Résumé\" VARCHAR(255) NOT NULL", 0))
-	uciRequireSQLReference(t, first.References, "foreign_key", "table:\"Billing\".\"Invoice\"", "table:public.accounts", []string{"account_id"}, []string{"id"}, uciSQLSpan(t, original, "REFERENCES public.accounts (id)", 0))
+	uciRequireSQLReference(t, first.References, uciSQLReferenceExpectation{
+		kind:           "foreign_key",
+		ownerLocalKey:  "table:\"Billing\".\"Invoice\"",
+		targetLocalKey: "table:public.accounts",
+		columns:        []string{"account_id"},
+		targetColumns:  []string{"id"},
+		span:           uciSQLSpan(t, original, "REFERENCES public.accounts (id)", 0),
+	})
 }
 
 func TestUCISQLExtractionSeparatesArtifactIdentityFromInputMutation(t *testing.T) {
@@ -311,22 +318,31 @@ func uciRequireSQLConstraint(t *testing.T, definitions []SQLDefinition, kind, ow
 	return SQLDefinition{}
 }
 
-func uciRequireSQLReference(t *testing.T, references []SQLReferenceSite, kind, ownerLocalKey, targetLocalKey string, columns, targetColumns []string, wantSpan IndexSpan) SQLReferenceSite {
+type uciSQLReferenceExpectation struct {
+	kind           string
+	ownerLocalKey  string
+	targetLocalKey string
+	columns        []string
+	targetColumns  []string
+	span           IndexSpan
+}
+
+func uciRequireSQLReference(t *testing.T, references []SQLReferenceSite, want uciSQLReferenceExpectation) SQLReferenceSite {
 	t.Helper()
 	for _, reference := range references {
-		if reference.Kind != kind || reference.OwnerLocalKey != ownerLocalKey || reference.TargetLocalKey != targetLocalKey || !reflect.DeepEqual(reference.Columns, columns) || !reflect.DeepEqual(reference.TargetColumns, targetColumns) {
+		if reference.Kind != want.kind || reference.OwnerLocalKey != want.ownerLocalKey || reference.TargetLocalKey != want.targetLocalKey || !reflect.DeepEqual(reference.Columns, want.columns) || !reflect.DeepEqual(reference.TargetColumns, want.targetColumns) {
 			continue
 		}
 		if reference.SymbolKey == "" || reference.LocalKey == "" {
-			t.Fatalf("%s reference has no stable source identity: %#v", kind, reference)
+			t.Fatalf("%s reference has no stable source identity: %#v", want.kind, reference)
 		}
-		if want := "sql:" + targetLocalKey; reference.TargetKey != want {
-			t.Fatalf("%s reference target key = %q, want %q", kind, reference.TargetKey, want)
+		if targetKey := "sql:" + want.targetLocalKey; reference.TargetKey != targetKey {
+			t.Fatalf("%s reference target key = %q, want %q", want.kind, reference.TargetKey, targetKey)
 		}
-		uciRequireSQLSpan(t, reference.Span, wantSpan, kind+" reference")
+		uciRequireSQLSpan(t, reference.Span, want.span, want.kind+" reference")
 		return reference
 	}
-	t.Fatalf("missing %s reference from %q to %q; got %#v", kind, ownerLocalKey, targetLocalKey, references)
+	t.Fatalf("missing %s reference from %q to %q; got %#v", want.kind, want.ownerLocalKey, want.targetLocalKey, references)
 	return SQLReferenceSite{}
 }
 

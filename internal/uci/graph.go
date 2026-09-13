@@ -249,7 +249,14 @@ func (service *GraphService) exploreNeighbors(ctx context.Context, authorized Au
 	if traversal.coverage != IndexCoverageComplete {
 		traversal.mark(QueryGraphCoverageGap)
 	}
-	if err := traversal.addStoreResult(result, contextRef, spec.Filter, []QueryEntityRef{start}, spec.Budget.MaxVisited, graphTraversalEdgeLimit(spec.Budget), false, nil, nil); err != nil {
+	if err := traversal.addStoreResult(graphStoreResultInput{
+		result:            result,
+		contextRef:        contextRef,
+		filter:            spec.Filter,
+		queried:           []QueryEntityRef{start},
+		maxVisited:        spec.Budget.MaxVisited,
+		maxTraversalEdges: graphTraversalEdgeLimit(spec.Budget),
+	}); err != nil {
 		return graphTraversal{}, err
 	}
 	return traversal, nil
@@ -300,10 +307,20 @@ func (service *GraphService) exploreReachable(ctx context.Context, authorized Au
 		if traversal.coverage != IndexCoverageComplete {
 			traversal.mark(QueryGraphCoverageGap)
 		}
-		if err := traversal.addStoreResult(result, contextRef, spec.Filter, []QueryEntityRef{item.ref}, spec.Budget.MaxVisited, graphTraversalEdgeLimit(spec.Budget), true, &queue, &graphTraversalExpansion{
-			seen:        seen,
-			depth:       item.depth + 1,
-			destination: destination,
+		if err := traversal.addStoreResult(graphStoreResultInput{
+			result:            result,
+			contextRef:        contextRef,
+			filter:            spec.Filter,
+			queried:           []QueryEntityRef{item.ref},
+			maxVisited:        spec.Budget.MaxVisited,
+			maxTraversalEdges: graphTraversalEdgeLimit(spec.Budget),
+			expand:            true,
+			queue:             &queue,
+			expansion: graphTraversalExpansion{
+				seen:        seen,
+				depth:       item.depth + 1,
+				destination: destination,
+			},
 		}); err != nil {
 			return graphTraversal{}, err
 		}
@@ -315,6 +332,18 @@ type graphTraversalExpansion struct {
 	seen        map[string]struct{}
 	depth       int
 	destination *QueryEntityRef
+}
+
+type graphStoreResultInput struct {
+	result            GraphStoreResult
+	contextRef        ContextRef
+	filter            GraphFilter
+	queried           []QueryEntityRef
+	maxVisited        int
+	maxTraversalEdges int
+	expand            bool
+	queue             *[]graphWorkItem
+	expansion         graphTraversalExpansion
 }
 
 func graphTraversalEdgeLimit(budget GraphBudget) int {
@@ -333,69 +362,101 @@ func newGraphTraversal(coverage IndexCoverageState) graphTraversal {
 	}
 }
 
-func (traversal *graphTraversal) addStoreResult(result GraphStoreResult, contextRef ContextRef, filter GraphFilter, queried []QueryEntityRef, maxVisited, maxTraversalEdges int, expand bool, queue *[]graphWorkItem, expansion *graphTraversalExpansion) error {
-	for _, rawSite := range result.Unresolved {
-		site, accepted, err := graphScopedUnresolved(rawSite, contextRef)
-		if err != nil {
-			return err
-		}
-		if !accepted || !graphFilterMatchesUnresolved(site, filter) || !graphUnresolvedTouches(site, queried, filter.Direction) {
-			continue
-		}
-		graphMergeUnresolved(&traversal.unresolved, site)
-		traversal.addNode(site.From)
-		traversal.mark(QueryGraphCoverageGap)
+func (traversal *graphTraversal) addStoreResult(input graphStoreResultInput) error {
+	if err := traversal.addUnresolved(input); err != nil {
+		return err
 	}
-
-	edges := make([]QueryGraphEdge, 0, len(result.Edges))
-	for _, rawEdge := range result.Edges {
-		edge, accepted, err := graphScopedEdge(rawEdge, contextRef)
-		if err != nil {
-			return err
-		}
-		if !accepted || !graphFilterMatchesEdge(edge, filter) || !graphEdgeTouches(edge, queried, filter.Direction) {
-			continue
-		}
-		edges = append(edges, edge)
+	edges, err := graphAcceptedEdges(input)
+	if err != nil {
+		return err
 	}
-	graphOrderEdges(edges)
 	for _, edge := range edges {
-		newEdge := graphMergeEdge(&traversal.edges, edge)
-		if newEdge && len(traversal.edges) > maxTraversalEdges {
-			traversal.edges = traversal.edges[:len(traversal.edges)-1]
-			traversal.mark(QueryGraphNodeCap)
-			continue
-		}
-		traversal.addNode(edge.From)
-		traversal.addNode(edge.To)
-		if !expand || !newEdge {
-			continue
-		}
-		if queue == nil || expansion == nil {
-			return fmt.Errorf("uci graph: internal traversal queue is invalid")
-		}
-		for _, next := range graphNextRefs(edge, queried, filter.Direction) {
-			key := graphRefKey(next)
-			if _, found := expansion.seen[key]; found {
-				continue
-			}
-			if len(expansion.seen) >= maxVisited {
-				traversal.mark(QueryGraphNodeCap)
-				continue
-			}
-			expansion.seen[key] = struct{}{}
-			traversal.parents[key] = graphPathParent{previous: queried[0], edge: edge}
-			*queue = append(*queue, graphWorkItem{ref: next, depth: expansion.depth})
-			if expansion.destination != nil && graphRefsEqual(next, *expansion.destination) {
-				traversal.foundPath = true
-				break
-			}
+		if err := traversal.addEdge(input, edge); err != nil {
+			return err
 		}
 		if traversal.foundPath {
 			break
 		}
 	}
 	return nil
+}
+
+func (traversal *graphTraversal) addUnresolved(input graphStoreResultInput) error {
+	for _, rawSite := range input.result.Unresolved {
+		site, accepted, err := graphScopedUnresolved(rawSite, input.contextRef)
+		if err != nil {
+			return err
+		}
+		if !accepted || !graphFilterMatchesUnresolved(site, input.filter) || !graphUnresolvedTouches(site, input.queried, input.filter.Direction) {
+			continue
+		}
+		graphMergeUnresolved(&traversal.unresolved, site)
+		traversal.addNode(site.From)
+		traversal.mark(QueryGraphCoverageGap)
+	}
+	return nil
+}
+
+func graphAcceptedEdges(input graphStoreResultInput) ([]QueryGraphEdge, error) {
+	edges := make([]QueryGraphEdge, 0, len(input.result.Edges))
+	for _, rawEdge := range input.result.Edges {
+		edge, accepted, err := graphScopedEdge(rawEdge, input.contextRef)
+		if err != nil {
+			return nil, err
+		}
+		if !accepted || !graphFilterMatchesEdge(edge, input.filter) || !graphEdgeTouches(edge, input.queried, input.filter.Direction) {
+			continue
+		}
+		edges = append(edges, edge)
+	}
+	graphOrderEdges(edges)
+	return edges, nil
+}
+
+func (traversal *graphTraversal) addEdge(input graphStoreResultInput, edge QueryGraphEdge) error {
+	newEdge := graphMergeEdge(&traversal.edges, edge)
+	if newEdge && len(traversal.edges) > input.maxTraversalEdges {
+		traversal.edges = traversal.edges[:len(traversal.edges)-1]
+		traversal.mark(QueryGraphNodeCap)
+		return nil
+	}
+	traversal.addNode(edge.From)
+	traversal.addNode(edge.To)
+	if !input.expand || !newEdge {
+		return nil
+	}
+	if input.queue == nil {
+		return fmt.Errorf("uci graph: internal traversal queue is invalid")
+	}
+	return traversal.enqueueNeighbors(input, edge)
+}
+
+func (traversal *graphTraversal) enqueueNeighbors(input graphStoreResultInput, edge QueryGraphEdge) error {
+	for _, next := range graphNextRefs(edge, input.queried, input.filter.Direction) {
+		if traversal.enqueueNeighbor(input, edge, next) {
+			return nil
+		}
+	}
+	return nil
+}
+
+func (traversal *graphTraversal) enqueueNeighbor(input graphStoreResultInput, edge QueryGraphEdge, next QueryEntityRef) bool {
+	key := graphRefKey(next)
+	if _, found := input.expansion.seen[key]; found {
+		return false
+	}
+	if len(input.expansion.seen) >= input.maxVisited {
+		traversal.mark(QueryGraphNodeCap)
+		return false
+	}
+	input.expansion.seen[key] = struct{}{}
+	traversal.parents[key] = graphPathParent{previous: input.queried[0], edge: edge}
+	*input.queue = append(*input.queue, graphWorkItem{ref: next, depth: input.expansion.depth})
+	if input.expansion.destination == nil || !graphRefsEqual(next, *input.expansion.destination) {
+		return false
+	}
+	traversal.foundPath = true
+	return true
 }
 
 func (traversal *graphTraversal) addNode(ref QueryEntityRef) {
@@ -701,7 +762,7 @@ func graphUnknownResult(coverage IndexCoverageState, stop QueryGraphStopReason) 
 
 func graphOperationContext(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
 	if deadline.IsZero() {
-		return ctx, func() {}
+		return context.WithCancel(ctx)
 	}
 	return context.WithDeadline(ctx, deadline)
 }

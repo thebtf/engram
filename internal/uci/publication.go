@@ -12,7 +12,10 @@ import (
 	"time"
 )
 
-const indexDigestVersion = 1
+const (
+	indexDigestVersion = 1
+	indexDigestPrefix  = "sha256:"
+)
 
 // IndexDigest is a complete SHA-256 digest over a canonical publication value.
 type IndexDigest string
@@ -578,7 +581,7 @@ func digestIndexValue(kind string, value any) (IndexDigest, error) {
 		return "", fmt.Errorf("uci publication: encode canonical %s: %w", kind, err)
 	}
 	sum := sha256.Sum256(encoded)
-	return IndexDigest("sha256:" + hex.EncodeToString(sum[:])), nil
+	return IndexDigest(indexDigestPrefix + hex.EncodeToString(sum[:])), nil
 }
 
 func normalizeIndexPart(part IndexPart) (IndexPart, error) {
@@ -767,11 +770,11 @@ func validIndexText(value string) bool {
 }
 
 func isIndexDigest(value IndexDigest) bool {
-	if !strings.HasPrefix(string(value), "sha256:") || len(value) != len("sha256:")+64 {
+	if !strings.HasPrefix(string(value), indexDigestPrefix) || len(value) != len(indexDigestPrefix)+64 {
 		return false
 	}
-	_, err := hex.DecodeString(string(value[len("sha256:"):]))
-	return err == nil && strings.ToLower(string(value[len("sha256:"):])) == string(value[len("sha256:"):])
+	_, err := hex.DecodeString(string(value[len(indexDigestPrefix):]))
+	return err == nil && strings.ToLower(string(value[len(indexDigestPrefix):])) == string(value[len(indexDigestPrefix):])
 }
 
 func isIndexManifestMode(mode IndexManifestMode) bool {

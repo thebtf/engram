@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"reflect"
 	"sort"
@@ -1192,7 +1193,7 @@ func semanticRequireRealVector(t *testing.T, vector []float32, dimension int, la
 		t.Fatalf("%s vector dimension = %d, want profile dimension %d", label, len(vector), dimension)
 	}
 	for index, value := range vector {
-		if value != value {
+		if math.IsNaN(float64(value)) {
 			t.Fatalf("%s vector contains NaN at index %d", label, index)
 		}
 	}

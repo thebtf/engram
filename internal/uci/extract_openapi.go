@@ -23,6 +23,8 @@ const (
 	openAPIExtractionMaxEntityKeyBytes    = 4 << 10
 	openAPIExtractionMaxJSONRecoveryBytes = 128
 	openAPIExtractionMaxDiagnosticBytes   = 512
+	openAPIVersionPointer                 = "#/openapi"
+	openAPIParameterKeyPrefix             = "parameter:"
 )
 
 // OpenAPIFormat is the caller-selected syntax family. Extraction never sniffs
@@ -333,10 +335,10 @@ func openAPIGenericDefinitions(base JSONYAMLArtifact) map[string]JSONYAMLDefinit
 }
 
 func openAPIVersionFromStructure(structure openAPIStructureIndex, parsed bool) (string, bool) {
-	if !parsed || !structure.singleDocument || structure.root == nil || structure.root.Kind != yaml.MappingNode || structure.pointerAmbiguous("#/openapi") {
+	if !parsed || !structure.singleDocument || structure.root == nil || structure.root.Kind != yaml.MappingNode || structure.pointerAmbiguous(openAPIVersionPointer) {
 		return "", false
 	}
-	node, exists := structure.nodes["#/openapi"]
+	node, exists := structure.nodes[openAPIVersionPointer]
 	if !exists || node == nil || node.Kind != yaml.ScalarNode || openAPIHasCustomYAMLTag(node) {
 		return "", false
 	}
@@ -344,7 +346,7 @@ func openAPIVersionFromStructure(structure openAPIStructureIndex, parsed bool) (
 }
 
 func openAPIVersionFromSource(source []byte, format OpenAPIFormat, definitions map[string]JSONYAMLDefinition) (string, bool) {
-	definition, exists := definitions["#/openapi"]
+	definition, exists := definitions[openAPIVersionPointer]
 	if !exists || definition.Kind != "key" || definition.Span.ByteEnd < 0 || definition.Span.ByteEnd > int64(len(source)) {
 		return "", false
 	}
@@ -486,7 +488,7 @@ func openAPIExtractDefinitions(base JSONYAMLArtifact, version string, structure 
 			continue
 		}
 		span := generic.Span
-		if kind == "parameter" && strings.HasPrefix(localKey, "parameter:#/paths/") {
+		if kind == "parameter" && strings.HasPrefix(localKey, openAPIParameterKeyPrefix+"#/paths/") {
 			parameterSpan, valid := openAPIInlineParameterSpan(generic.LocalKey, structure)
 			if !valid {
 				collector.limit("PARAMETER_NAME_UNAVAILABLE", generic.Span, "inline parameter name span could not be represented")
@@ -535,13 +537,13 @@ func openAPIClassifyDefinition(definition JSONYAMLDefinition, version string) (s
 	case len(segments) == 3 && segments[0] == "paths" && openAPIHTTPMethod(segments[2]) && definition.Kind == "key":
 		return "operation", "operation:" + segments[2] + ":" + segments[1], true
 	case len(segments) == 3 && segments[0] == "components" && segments[1] == "parameters" && definition.Kind == "key":
-		return "parameter", "parameter:" + segments[2], true
+		return "parameter", openAPIParameterKeyPrefix + segments[2], true
 	case len(segments) == 3 && segments[0] == "components" && segments[1] == "schemas" && definition.Kind == "key":
 		return "schema", "schema:" + segments[2], true
 	case len(segments) == 4 && segments[0] == "paths" && segments[2] == "parameters" && definition.Kind == "index":
-		return "parameter", "parameter:" + definition.LocalKey, true
+		return "parameter", openAPIParameterKeyPrefix + definition.LocalKey, true
 	case len(segments) == 5 && segments[0] == "paths" && openAPIHTTPMethod(segments[2]) && segments[3] == "parameters" && definition.Kind == "index":
-		return "parameter", "parameter:" + definition.LocalKey, true
+		return "parameter", openAPIParameterKeyPrefix + definition.LocalKey, true
 	default:
 		return "", "", false
 	}

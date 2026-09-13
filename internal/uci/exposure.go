@@ -232,7 +232,6 @@ func (recorder *ExposureRecorder) Record(ctx context.Context, authorized Authori
 	stored, err := recorder.store.AppendExposure(ctx, record)
 	if err != nil {
 		if errors.Is(err, ErrIdempotencyMismatch) {
-			recorder.health.RecordIdempotencyMismatch()
 			return QueryExposure{}, ErrIdempotencyMismatch
 		}
 		recorder.health.RecordInitialExposureFailure()
@@ -263,7 +262,6 @@ func (recorder *ExposureRecorder) RecordCompletion(ctx context.Context, callback
 	stored, err := recorder.store.AppendCompletion(ctx, evidence)
 	if err != nil {
 		if errors.Is(err, ErrIdempotencyMismatch) {
-			recorder.health.RecordIdempotencyMismatch()
 			return CompletionEvidence{}, ErrIdempotencyMismatch
 		}
 		recorder.health.RecordCompletionFailure()
@@ -662,7 +660,7 @@ func canonicalExposureDigest(value any) (string, error) {
 		return "", fmt.Errorf("canonicalize UCI exposure binding: %w", err)
 	}
 	sum := sha256.Sum256(encoded)
-	return "sha256:" + hex.EncodeToString(sum[:]), nil
+	return indexDigestPrefix + hex.EncodeToString(sum[:]), nil
 }
 
 func opaqueExposureHash(kind string, value any) (string, error) {
@@ -691,10 +689,10 @@ func validExposureUUID(value string) bool {
 }
 
 func validExposureDigest(value string) bool {
-	if len(value) != len("sha256:")+sha256.Size*2 || !strings.HasPrefix(value, "sha256:") {
+	if len(value) != len(indexDigestPrefix)+sha256.Size*2 || !strings.HasPrefix(value, indexDigestPrefix) {
 		return false
 	}
-	for _, character := range value[len("sha256:"):] {
+	for _, character := range value[len(indexDigestPrefix):] {
 		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
 			return false
 		}

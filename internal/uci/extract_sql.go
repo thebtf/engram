@@ -30,6 +30,9 @@ const (
 	sqlExtractionMaxIdentifierBytes   = 4 << 10
 	sqlExtractionMaxDiagnosticBytes   = 512
 	sqlExtractionMaxOutputBytes       = 16 << 20
+	sqlTableLocalKeyPrefix            = "table:"
+	sqlTableSymbolKeyPrefix           = "sql:table:"
+	sqlNestingDepthExceeded           = "SQL nesting depth exceeded the bounded parser limit"
 )
 
 // SQLExtractionProfile identifies the caller-selected SQL extraction policy.
@@ -609,8 +612,8 @@ func (parser *sqlParser) parseAlterTable(tokens []sqlToken, statementSpan IndexS
 	}
 	table := sqlTableInfo{
 		name:      tableName,
-		localKey:  "table:" + tableName,
-		symbolKey: "sql:table:" + tableName,
+		localKey:  sqlTableLocalKeyPrefix + tableName,
+		symbolKey: sqlTableSymbolKeyPrefix + tableName,
 	}
 	position = next
 	if position >= len(tokens) {
@@ -663,8 +666,8 @@ func (parser *sqlParser) parseCreateTable(tokens []sqlToken, statementSpan Index
 	}
 	table := sqlTableInfo{
 		name:      tableName,
-		localKey:  "table:" + tableName,
-		symbolKey: "sql:table:" + tableName,
+		localKey:  sqlTableLocalKeyPrefix + tableName,
+		symbolKey: sqlTableSymbolKeyPrefix + tableName,
 	}
 	parser.collector.addDefinition(SQLDefinition{
 		Kind:      "table",
@@ -715,7 +718,7 @@ func (parser *sqlParser) entryRanges(tokens []sqlToken, start, end int) ([]sqlTo
 		case sqlTokenPunctuation(parser.source, tokens[index], '('):
 			depth++
 			if depth > sqlExtractionMaxDepth {
-				parser.collector.limit("DEPTH_LIMIT", parser.spanTokens(tokens[index:index+1]), "SQL nesting depth exceeded the bounded parser limit")
+				parser.collector.limit("DEPTH_LIMIT", parser.spanTokens(tokens[index:index+1]), sqlNestingDepthExceeded)
 				return ranges, false
 			}
 		case sqlTokenPunctuation(parser.source, tokens[index], ')'):
@@ -913,7 +916,7 @@ func (parser *sqlParser) tokensBalanced(tokens []sqlToken, span IndexSpan) bool 
 		case sqlTokenPunctuation(parser.source, tokens[index], '('):
 			depth++
 			if depth > sqlExtractionMaxDepth {
-				parser.collector.limit("DEPTH_LIMIT", parser.spanTokens(tokens[:index+1]), "SQL nesting depth exceeded the bounded parser limit")
+				parser.collector.limit("DEPTH_LIMIT", parser.spanTokens(tokens[:index+1]), sqlNestingDepthExceeded)
 				return false
 			}
 		case sqlTokenPunctuation(parser.source, tokens[index], ')'):
@@ -974,8 +977,8 @@ func (parser *sqlParser) parseReference(table *sqlTableInfo, columns []string, t
 		SymbolKey:      symbolKey,
 		LocalKey:       localKey,
 		OwnerLocalKey:  table.localKey,
-		TargetKey:      "sql:table:" + targetName,
-		TargetLocalKey: "table:" + targetName,
+		TargetKey:      sqlTableSymbolKeyPrefix + targetName,
+		TargetLocalKey: sqlTableLocalKeyPrefix + targetName,
 		Columns:        columns,
 		TargetColumns:  targetColumns,
 		Span:           parser.spanTokens(tokens[start:end]),
@@ -1075,7 +1078,7 @@ func (parser *sqlParser) matchingParen(tokens []sqlToken, position int) (int, bo
 		case sqlTokenPunctuation(parser.source, tokens[index], '('):
 			depth++
 			if depth > sqlExtractionMaxDepth {
-				parser.collector.limit("DEPTH_LIMIT", parser.spanTokens(tokens[position:index+1]), "SQL nesting depth exceeded the bounded parser limit")
+				parser.collector.limit("DEPTH_LIMIT", parser.spanTokens(tokens[position:index+1]), sqlNestingDepthExceeded)
 				return index, false
 			}
 		case sqlTokenPunctuation(parser.source, tokens[index], ')'):

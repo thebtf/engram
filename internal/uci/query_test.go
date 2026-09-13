@@ -218,16 +218,16 @@ func TestUCIQueryContinuationTraversesBeyondOneStoreWindow(t *testing.T) {
 	store := &queryTestStore{coverage: IndexCoverageComplete}
 	const candidateCount = 65
 	for index := range candidateCount {
-		store.candidates = append(store.candidates, queryTestCandidate(
-			fixture.contextA,
-			fmt.Sprintf("70000000-0000-4000-8000-%012x", index+100),
-			"a",
-			fmt.Sprintf("Symbol%02d", index),
-			fmt.Sprintf("fixture.Symbol%02d", index),
-			fmt.Sprintf("pkg/%02d.go", index),
-			fmt.Sprintf("func Symbol%02d() {}", index),
-			float64(candidateCount-index),
-		))
+		store.candidates = append(store.candidates, queryTestCandidate(queryTestCandidateInput{
+			contextRef:      fixture.contextA,
+			artifactID:      fmt.Sprintf("70000000-0000-4000-8000-%012x", index+100),
+			digestCharacter: "a",
+			localName:       fmt.Sprintf("Symbol%02d", index),
+			qualifiedSymbol: fmt.Sprintf("fixture.Symbol%02d", index),
+			relativePath:    fmt.Sprintf("pkg/%02d.go", index),
+			text:            fmt.Sprintf("func Symbol%02d() {}", index),
+			score:           float64(candidateCount - index),
+		}))
 	}
 	service := NewQueryService(store)
 	spec := QuerySpec{
@@ -397,10 +397,10 @@ func TestUCIQueryContinuationBindsClientViewProfileQueryFilterAndOrder(t *testin
 func TestUCIQueryPathPrefixNormalizesAndScopesCandidates(t *testing.T) {
 	fixture := newQueryTestFixture()
 	store := &queryTestStore{candidates: []QueryCandidate{
-		queryTestCandidate(fixture.contextA, "70000000-0000-4000-8000-000000000051", "a", "PathPrefixNeedle", "fixture.api.Handler", "src/api/handler.go", "func PathPrefixNeedle() {}", 1),
-		queryTestCandidate(fixture.contextA, "70000000-0000-4000-8000-000000000052", "b", "PathPrefixNeedle", "fixture.api.Router", "src/api/nested/router.go", "func PathPrefixNeedle() {}", 2),
-		queryTestCandidate(fixture.contextA, "70000000-0000-4000-8000-000000000053", "c", "PathPrefixNeedle", "fixture.apix.Sibling", "src/apix/sibling.go", "func PathPrefixNeedle() {}", 3),
-		queryTestCandidate(fixture.contextA, "70000000-0000-4000-8000-000000000054", "d", "PathPrefixNeedle", "fixture.api.File", "src/api.go", "func PathPrefixNeedle() {}", 4),
+		queryTestCandidate(queryTestCandidateInput{contextRef: fixture.contextA, artifactID: "70000000-0000-4000-8000-000000000051", digestCharacter: "a", localName: "PathPrefixNeedle", qualifiedSymbol: "fixture.api.Handler", relativePath: "src/api/handler.go", text: "func PathPrefixNeedle() {}", score: 1}),
+		queryTestCandidate(queryTestCandidateInput{contextRef: fixture.contextA, artifactID: "70000000-0000-4000-8000-000000000052", digestCharacter: "b", localName: "PathPrefixNeedle", qualifiedSymbol: "fixture.api.Router", relativePath: "src/api/nested/router.go", text: "func PathPrefixNeedle() {}", score: 2}),
+		queryTestCandidate(queryTestCandidateInput{contextRef: fixture.contextA, artifactID: "70000000-0000-4000-8000-000000000053", digestCharacter: "c", localName: "PathPrefixNeedle", qualifiedSymbol: "fixture.apix.Sibling", relativePath: "src/apix/sibling.go", text: "func PathPrefixNeedle() {}", score: 3}),
+		queryTestCandidate(queryTestCandidateInput{contextRef: fixture.contextA, artifactID: "70000000-0000-4000-8000-000000000054", digestCharacter: "d", localName: "PathPrefixNeedle", qualifiedSymbol: "fixture.api.File", relativePath: "src/api.go", text: "func PathPrefixNeedle() {}", score: 4}),
 	}}
 	service := NewQueryService(store)
 	spec := QuerySpec{
@@ -593,71 +593,41 @@ func newQueryTestFixture() queryTestFixture {
 		contextA:             contextA,
 		contextAOtherProfile: contextAOtherProfile,
 		contextB:             contextB,
-		sharedA: queryTestCandidate(
-			contextA,
-			"70000000-0000-4000-8000-000000000031",
-			"a",
-			"SharedSymbol",
-			"shared.SharedSymbol",
-			"pkg/shared.go",
-			"func SharedSymbol() string { return \"A-current-body\" }",
-			1,
-		),
-		sharedB: queryTestCandidate(
-			contextB,
-			"70000000-0000-4000-8000-000000000032",
-			"b",
-			"SharedSymbol",
-			"shared.SharedSymbol",
-			"pkg/shared.go",
-			"func SharedSymbol() string { return \"B-foreign-body\" }",
-			99,
-		),
-		httpServer: queryTestCandidate(
-			contextA,
-			"70000000-0000-4000-8000-000000000033",
-			"c",
-			"HTTPServer",
-			"net.HTTPServer",
-			"net/http_server.go",
-			"type HTTPServer struct{}",
-			3,
-		),
-		parseConfig: queryTestCandidate(
-			contextA,
-			"70000000-0000-4000-8000-000000000034",
-			"d",
-			"parseConfig",
-			"config.parseConfig",
-			"config/parse.go",
-			"func parseConfig() {}",
-			4,
-		),
-		refreshCache: queryTestCandidate(
-			contextA,
-			"70000000-0000-4000-8000-000000000035",
-			"e",
-			"refresh_cache",
-			"cache.refresh_cache",
-			"cache/refresh.go",
-			"func refresh_cache() {}",
-			5,
-		),
-		cyrillic: queryTestCandidate(
-			contextA,
-			"70000000-0000-4000-8000-000000000036",
-			"f",
-			"СохранитьОтчёт",
-			"report.СохранитьОтчёт",
-			"report/save.go",
-			"// Сохранение отчёта\nfunc СохранитьОтчёт() {}",
-			6,
-		),
+		sharedA: queryTestCandidate(queryTestCandidateInput{
+			contextRef: contextA, artifactID: "70000000-0000-4000-8000-000000000031", digestCharacter: "a",
+			localName: "SharedSymbol", qualifiedSymbol: "shared.SharedSymbol", relativePath: "pkg/shared.go",
+			text: "func SharedSymbol() string { return \"A-current-body\" }", score: 1,
+		}),
+		sharedB: queryTestCandidate(queryTestCandidateInput{
+			contextRef: contextB, artifactID: "70000000-0000-4000-8000-000000000032", digestCharacter: "b",
+			localName: "SharedSymbol", qualifiedSymbol: "shared.SharedSymbol", relativePath: "pkg/shared.go",
+			text: "func SharedSymbol() string { return \"B-foreign-body\" }", score: 99,
+		}),
+		httpServer: queryTestCandidate(queryTestCandidateInput{
+			contextRef: contextA, artifactID: "70000000-0000-4000-8000-000000000033", digestCharacter: "c",
+			localName: "HTTPServer", qualifiedSymbol: "net.HTTPServer", relativePath: "net/http_server.go",
+			text: "type HTTPServer struct{}", score: 3,
+		}),
+		parseConfig: queryTestCandidate(queryTestCandidateInput{
+			contextRef: contextA, artifactID: "70000000-0000-4000-8000-000000000034", digestCharacter: "d",
+			localName: "parseConfig", qualifiedSymbol: "config.parseConfig", relativePath: "config/parse.go",
+			text: "func parseConfig() {}", score: 4,
+		}),
+		refreshCache: queryTestCandidate(queryTestCandidateInput{
+			contextRef: contextA, artifactID: "70000000-0000-4000-8000-000000000035", digestCharacter: "e",
+			localName: "refresh_cache", qualifiedSymbol: "cache.refresh_cache", relativePath: "cache/refresh.go",
+			text: "func refresh_cache() {}", score: 5,
+		}),
+		cyrillic: queryTestCandidate(queryTestCandidateInput{
+			contextRef: contextA, artifactID: "70000000-0000-4000-8000-000000000036", digestCharacter: "f",
+			localName: "СохранитьОтчёт", qualifiedSymbol: "report.СохранитьОтчёт", relativePath: "report/save.go",
+			text: "// Сохранение отчёта\nfunc СохранитьОтчёт() {}", score: 6,
+		}),
 	}
 	fixture.ordered = []QueryCandidate{
-		queryTestCandidate(contextA, "70000000-0000-4000-8000-000000000037", "1", "OrderedGamma", "ordered.OrderedGamma", "c/ordered.go", "func OrderedGamma() { /* ordered */ }", 3),
-		queryTestCandidate(contextA, "70000000-0000-4000-8000-000000000038", "2", "OrderedBeta", "ordered.OrderedBeta", "b/ordered.go", "func OrderedBeta() { /* ordered */ }", 2),
-		queryTestCandidate(contextA, "70000000-0000-4000-8000-000000000039", "3", "OrderedAlpha", "ordered.OrderedAlpha", "a/ordered.go", "func OrderedAlpha() { /* ordered */ }", 1),
+		queryTestCandidate(queryTestCandidateInput{contextRef: contextA, artifactID: "70000000-0000-4000-8000-000000000037", digestCharacter: "1", localName: "OrderedGamma", qualifiedSymbol: "ordered.OrderedGamma", relativePath: "c/ordered.go", text: "func OrderedGamma() { /* ordered */ }", score: 3}),
+		queryTestCandidate(queryTestCandidateInput{contextRef: contextA, artifactID: "70000000-0000-4000-8000-000000000038", digestCharacter: "2", localName: "OrderedBeta", qualifiedSymbol: "ordered.OrderedBeta", relativePath: "b/ordered.go", text: "func OrderedBeta() { /* ordered */ }", score: 2}),
+		queryTestCandidate(queryTestCandidateInput{contextRef: contextA, artifactID: "70000000-0000-4000-8000-000000000039", digestCharacter: "3", localName: "OrderedAlpha", qualifiedSymbol: "ordered.OrderedAlpha", relativePath: "a/ordered.go", text: "func OrderedAlpha() { /* ordered */ }", score: 1}),
 	}
 	fixture.candidates = append(fixture.candidates,
 		fixture.sharedA,
@@ -687,31 +657,42 @@ func queryTestContextRef(sourceID, checkoutID, viewID, profileID string, generat
 	}
 }
 
-func queryTestCandidate(contextRef ContextRef, artifactID, digestCharacter, localName, qualifiedSymbol, relativePath, text string, score float64) QueryCandidate {
+type queryTestCandidateInput struct {
+	contextRef      ContextRef
+	artifactID      string
+	digestCharacter string
+	localName       string
+	qualifiedSymbol string
+	relativePath    string
+	text            string
+	score           float64
+}
+
+func queryTestCandidate(input queryTestCandidateInput) QueryCandidate {
 	return QueryCandidate{
-		Context: contextRef,
+		Context: input.contextRef,
 		Proof: IndexArtifactProof{
-			ArtifactID:         artifactID,
-			ContentDigest:      queryTestDigest(digestCharacter),
+			ArtifactID:         input.artifactID,
+			ContentDigest:      queryTestDigest(input.digestCharacter),
 			FactsDigest:        queryTestDigest("f"),
 			DefinitionCount:    1,
 			ReferenceSiteCount: 0,
 			ChunkCount:         1,
 		},
-		EntityKey:       qualifiedSymbol,
-		LocalName:       localName,
-		QualifiedSymbol: qualifiedSymbol,
-		RelativePath:    relativePath,
+		EntityKey:       input.qualifiedSymbol,
+		LocalName:       input.localName,
+		QualifiedSymbol: input.qualifiedSymbol,
+		RelativePath:    input.relativePath,
 		Span: IndexSpan{
 			ByteStart: 0,
-			ByteEnd:   int64(len(text)),
+			ByteEnd:   int64(len(input.text)),
 			LineStart: 1,
 			LineEnd:   1,
 		},
-		Text:     text,
+		Text:     input.text,
 		Kind:     QueryItemCode,
 		Language: "go",
-		Score:    score,
+		Score:    input.score,
 	}
 }
 

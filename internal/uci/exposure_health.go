@@ -35,7 +35,6 @@ type ExposureHealthTracker interface {
 	RecordCompletionSuccess()
 	RecordCompletionFailure()
 	RecordIntegrityFailure()
-	RecordIdempotencyMismatch()
 }
 
 // ExposureHealthController is an in-memory, concurrency-safe tracker for one recorder.
@@ -101,9 +100,6 @@ func (controller *ExposureHealthController) RecordCompletionFailure() {
 func (controller *ExposureHealthController) RecordIntegrityFailure() {
 	controller.set(unavailableExposureHealthSnapshot())
 }
-
-// RecordIdempotencyMismatch deliberately leaves prior recorder health unchanged.
-func (*ExposureHealthController) RecordIdempotencyMismatch() {}
 
 func (controller *ExposureHealthController) set(snapshot ExposureHealthSnapshot) {
 	if controller == nil {
