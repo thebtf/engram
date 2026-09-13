@@ -54,9 +54,19 @@ func scanProjectDataFile(report *Report, file sourceFile) error {
 		report.add(Record{Kind: "project-data-family", Path: file.relative, Classification: classificationSourceUncertain})
 		return nil
 	}
+	found := scanProjectBearingStructs(report, file.relative, fset, parsed)
+	if scanProjectBearingGoMapLiterals(report, file.relative, fset, parsed) {
+		found = true
+	}
+	if !found && projectBearingGoCode(parsed) {
+		report.add(Record{Kind: "project-data-family", Path: file.relative, Name: "unresolved-declaration", Classification: classificationSourceUncertain})
+	}
+	return nil
+}
 
+func scanProjectBearingStructs(report *Report, path string, fset *token.FileSet, file *ast.File) bool {
 	found := false
-	for _, declaration := range parsed.Decls {
+	for _, declaration := range file.Decls {
 		general, ok := declaration.(*ast.GenDecl)
 		if !ok {
 			continue
@@ -70,30 +80,32 @@ func scanProjectDataFile(report *Report, file sourceFile) error {
 			if !ok {
 				continue
 			}
-			for _, field := range structType.Fields.List {
-				for _, name := range field.Names {
-					if !projectBearingName(typeSpec.Name.Name) && !projectBearingName(name.Name) && !projectBearingTag(field.Tag) {
-						continue
-					}
-					found = true
-					report.add(Record{
-						Kind:           "project-bearing-field",
-						Path:           file.relative,
-						Line:           fset.Position(field.Pos()).Line,
-						Name:           redactedName(typeSpec.Name.Name + "." + name.Name),
-						Classification: projectDataClassification(file.relative, typeSpec.Name.Name, field),
-					})
-				}
+			if scanProjectBearingFields(report, path, fset, typeSpec.Name.Name, structType) {
+				found = true
 			}
 		}
 	}
-	if scanProjectBearingGoMapLiterals(report, file.relative, fset, parsed) {
-		found = true
+	return found
+}
+
+func scanProjectBearingFields(report *Report, path string, fset *token.FileSet, typeName string, structType *ast.StructType) bool {
+	found := false
+	for _, field := range structType.Fields.List {
+		for _, name := range field.Names {
+			if !projectBearingName(typeName) && !projectBearingName(name.Name) && !projectBearingTag(field.Tag) {
+				continue
+			}
+			found = true
+			report.add(Record{
+				Kind:           "project-bearing-field",
+				Path:           path,
+				Line:           fset.Position(field.Pos()).Line,
+				Name:           redactedName(typeName + "." + name.Name),
+				Classification: projectDataClassification(path, typeName, field),
+			})
+		}
 	}
-	if !found && projectBearingGoCode(parsed) {
-		report.add(Record{Kind: "project-data-family", Path: file.relative, Name: "unresolved-declaration", Classification: classificationSourceUncertain})
-	}
-	return nil
+	return found
 }
 
 func projectBearingGoCode(file *ast.File) bool {
@@ -190,94 +202,111 @@ type javaScriptTemplateProjectMode struct {
 func (state *javaScriptTemplateProjectState) hasProjectContext(line string) bool {
 	found := false
 	for index := 0; index < len(line); {
-		if state.blockComment {
-			end := strings.Index(line[index:], "*/")
-			if end < 0 {
-				return found
-			}
-			state.blockComment = false
-			index += end + len("*/")
-			continue
+		next, hit, done := state.nextProjectContext(line, index)
+		found = found || hit
+		if done {
+			return found
 		}
-		if state.quote != 0 {
-			end, closed := quotedStringEnd(line, index, state.quote)
-			if !closed {
-				if !javaScriptContinuesString(line) {
-					state.quote = 0
-				}
-				return found
-			}
-			state.quote = 0
-			index = end
-			continue
-		}
-
-		if state.inTemplate() {
-			switch line[index] {
-			case '\\':
-				index += 2
-			case '`':
-				state.modes = state.modes[:len(state.modes)-1]
-				index++
-			case '$':
-				if index+1 < len(line) && line[index+1] == '{' {
-					state.modes = append(state.modes, javaScriptTemplateProjectMode{interpolation: true, braces: 1})
-					index += 2
-					continue
-				}
-				index++
-			default:
-				index++
-			}
-			continue
-		}
-
-		if line[index] == '/' && index+1 < len(line) {
-			switch line[index+1] {
-			case '/':
-				return found
-			case '*':
-				state.blockComment = true
-				index += 2
-				continue
-			}
-		}
-		switch line[index] {
-		case '\'', '"':
-			state.quote = line[index]
-			index++
-		case '`':
-			state.modes = append(state.modes, javaScriptTemplateProjectMode{})
-			index++
-		case '{':
-			if state.inInterpolation() {
-				state.modes[len(state.modes)-1].braces++
-			}
-			index++
-		case '}':
-			if state.inInterpolation() {
-				state.modes[len(state.modes)-1].braces--
-				if state.modes[len(state.modes)-1].braces == 0 {
-					state.modes = state.modes[:len(state.modes)-1]
-				}
-			}
-			index++
-		default:
-			end := index
-			for end < len(line) && (line[end] == '$' || line[end] == '_' || line[end] >= '0' && line[end] <= '9' || line[end] >= 'A' && line[end] <= 'Z' || line[end] >= 'a' && line[end] <= 'z') {
-				end++
-			}
-			if state.inInterpolation() && end > index && projectBearingName(line[index:end]) {
-				found = true
-			}
-			if end == index {
-				index++
-			} else {
-				index = end
-			}
-		}
+		index = next
 	}
 	return found
+}
+
+func (state *javaScriptTemplateProjectState) nextProjectContext(line string, index int) (int, bool, bool) {
+	switch {
+	case state.blockComment:
+		return state.nextProjectBlockComment(line, index)
+	case state.quote != 0:
+		return state.nextProjectQuotedString(line, index)
+	case state.inTemplate():
+		return state.nextProjectTemplateByte(line, index)
+	default:
+		return state.nextProjectCodeByte(line, index)
+	}
+}
+
+func (state *javaScriptTemplateProjectState) nextProjectBlockComment(line string, index int) (int, bool, bool) {
+	end := strings.Index(line[index:], "*/")
+	if end < 0 {
+		return len(line), false, true
+	}
+	state.blockComment = false
+	return index + end + len("*/"), false, false
+}
+
+func (state *javaScriptTemplateProjectState) nextProjectQuotedString(line string, index int) (int, bool, bool) {
+	end, closed := quotedStringEnd(line, index, state.quote)
+	if !closed {
+		if !javaScriptContinuesString(line) {
+			state.quote = 0
+		}
+		return end, false, true
+	}
+	state.quote = 0
+	return end, false, false
+}
+
+func (state *javaScriptTemplateProjectState) nextProjectTemplateByte(line string, index int) (int, bool, bool) {
+	switch line[index] {
+	case '\\':
+		return index + 2, false, false
+	case '`':
+		state.modes = state.modes[:len(state.modes)-1]
+		return index + 1, false, false
+	case '$':
+		if index+1 < len(line) && line[index+1] == '{' {
+			state.modes = append(state.modes, javaScriptTemplateProjectMode{interpolation: true, braces: 1})
+			return index + 2, false, false
+		}
+	}
+	return index + 1, false, false
+}
+
+func (state *javaScriptTemplateProjectState) nextProjectCodeByte(line string, index int) (int, bool, bool) {
+	if line[index] == '/' && index+1 < len(line) {
+		switch line[index+1] {
+		case '/':
+			return len(line), false, true
+		case '*':
+			state.blockComment = true
+			return index + 2, false, false
+		}
+	}
+	switch line[index] {
+	case '\'', '"':
+		state.quote = line[index]
+		return index + 1, false, false
+	case '`':
+		state.modes = append(state.modes, javaScriptTemplateProjectMode{})
+		return index + 1, false, false
+	case '{':
+		if state.inInterpolation() {
+			state.modes[len(state.modes)-1].braces++
+		}
+		return index + 1, false, false
+	case '}':
+		if state.inInterpolation() {
+			state.modes[len(state.modes)-1].braces--
+			if state.modes[len(state.modes)-1].braces == 0 {
+				state.modes = state.modes[:len(state.modes)-1]
+			}
+		}
+		return index + 1, false, false
+	default:
+		end := projectIdentifierEnd(line, index)
+		if end == index {
+			return index + 1, false, false
+		}
+		return end, state.inInterpolation() && projectBearingName(line[index:end]), false
+	}
+}
+
+func projectIdentifierEnd(line string, start int) int {
+	end := start
+	for end < len(line) && (line[end] == '$' || line[end] == '_' || line[end] >= '0' && line[end] <= '9' || line[end] >= 'A' && line[end] <= 'Z' || line[end] >= 'a' && line[end] <= 'z') {
+		end++
+	}
+	return end
 }
 
 func (state *javaScriptTemplateProjectState) inTemplate() bool {
