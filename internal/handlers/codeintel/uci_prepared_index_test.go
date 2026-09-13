@@ -110,60 +110,19 @@ func (client *preparedIndexClient) Stage(_ context.Context, frames []*pb.StageCo
 	if len(frames) == 0 {
 		return nil, errors.New("empty stage")
 	}
-	payloads := make([][]byte, len(frames))
-	decodedFrames := make([]uci.IndexAdmissionFrame, len(frames))
-	for index, frame := range frames {
-		if frame.GetBuildId() != preparedBuildID || frame.GetLeaseEpoch() != 1 || frame.GetSequence() != uint64(index) {
-			return nil, fmt.Errorf("invalid stage frame %d", index)
-		}
-		if frame.GetScope().GetSourceId() != client.binding.Scope.SourceID ||
-			frame.GetScope().GetCheckoutId() != client.binding.Scope.CheckoutID ||
-			frame.GetScope().GetIncarnationId() != client.binding.Scope.IncarnationID ||
-			frame.GetScope().GetAnalysisProfileId() != client.binding.ProfileID {
-			return nil, fmt.Errorf("invalid stage scope %d", index)
-		}
-		if string(uci.DigestIndexAdmissionPayload(frame.GetPayload())) != frame.GetPayloadDigest() {
-			return nil, fmt.Errorf("invalid stage digest %d", index)
-		}
-		decoded, err := uci.DecodeIndexAdmissionFrame(frame.GetPayload())
-		if err != nil {
-			return nil, err
-		}
-		payloads[index] = append([]byte(nil), frame.GetPayload()...)
-		decodedFrames[index] = decoded
+	payloads, decodedFrames, err := client.decodeStageFrames(frames)
+	if err != nil {
+		return nil, err
 	}
 	if err := uci.ValidateIndexAdmissionFramesForBinding(decodedFrames, client.binding); err != nil {
 		return nil, err
 	}
-	for _, frame := range decodedFrames {
-		for _, artifact := range frame.Artifacts {
-			switch artifact.Profile.Language {
-			case uci.IndexAdmissionLanguageGo,
-				uci.IndexAdmissionLanguageJavaScript,
-				uci.IndexAdmissionLanguageTypeScript,
-				uci.IndexAdmissionLanguageTSX,
-				uci.IndexAdmissionLanguageMarkdown,
-				uci.IndexAdmissionLanguageJSON,
-				uci.IndexAdmissionLanguageYAML,
-				uci.IndexAdmissionLanguageSQL,
-				uci.IndexAdmissionLanguageOpenAPI:
-				if artifact.Profile.ExtractionProfileDigest != uci.IndexDigest(preparedParserBundleDigest) {
-					return nil, errors.New("artifact profile does not match selected parser bundle")
-				}
-			}
-		}
+	if err := preparedValidateArtifactProfiles(decodedFrames); err != nil {
+		return nil, err
 	}
-	acks := make([]uci.IndexPartAck, len(decodedFrames))
-	for index, decoded := range decodedFrames {
-		part, err := decoded.PublicationPart()
-		if err != nil {
-			return nil, err
-		}
-		digest, err := uci.DigestIndexPart(part)
-		if err != nil {
-			return nil, err
-		}
-		acks[index] = uci.IndexPartAck{BuildID: preparedBuildID, Sequence: uint32(index), Digest: digest}
+	acks, err := preparedStageAcks(decodedFrames)
+	if err != nil {
+		return nil, err
 	}
 	partDigest, err := uci.DigestIndexParts(acks)
 	if err != nil {
@@ -180,6 +139,74 @@ func (client *preparedIndexClient) Stage(_ context.Context, frames []*pb.StageCo
 		AcceptedPartCount: uint64(len(frames)),
 		PartDigest:        string(partDigest),
 	}, nil
+}
+
+func (client *preparedIndexClient) decodeStageFrames(frames []*pb.StageCodeIndexFrame) ([][]byte, []uci.IndexAdmissionFrame, error) {
+	payloads := make([][]byte, len(frames))
+	decodedFrames := make([]uci.IndexAdmissionFrame, len(frames))
+	for index, frame := range frames {
+		decoded, err := client.decodeStageFrame(frame, index)
+		if err != nil {
+			return nil, nil, err
+		}
+		payloads[index] = append([]byte(nil), frame.GetPayload()...)
+		decodedFrames[index] = decoded
+	}
+	return payloads, decodedFrames, nil
+}
+
+func (client *preparedIndexClient) decodeStageFrame(frame *pb.StageCodeIndexFrame, index int) (uci.IndexAdmissionFrame, error) {
+	if frame.GetBuildId() != preparedBuildID || frame.GetLeaseEpoch() != 1 || frame.GetSequence() != uint64(index) {
+		return uci.IndexAdmissionFrame{}, fmt.Errorf("invalid stage frame %d", index)
+	}
+	if frame.GetScope().GetSourceId() != client.binding.Scope.SourceID ||
+		frame.GetScope().GetCheckoutId() != client.binding.Scope.CheckoutID ||
+		frame.GetScope().GetIncarnationId() != client.binding.Scope.IncarnationID ||
+		frame.GetScope().GetAnalysisProfileId() != client.binding.ProfileID {
+		return uci.IndexAdmissionFrame{}, fmt.Errorf("invalid stage scope %d", index)
+	}
+	if string(uci.DigestIndexAdmissionPayload(frame.GetPayload())) != frame.GetPayloadDigest() {
+		return uci.IndexAdmissionFrame{}, fmt.Errorf("invalid stage digest %d", index)
+	}
+	return uci.DecodeIndexAdmissionFrame(frame.GetPayload())
+}
+
+func preparedValidateArtifactProfiles(frames []uci.IndexAdmissionFrame) error {
+	for _, frame := range frames {
+		for _, artifact := range frame.Artifacts {
+			switch artifact.Profile.Language {
+			case uci.IndexAdmissionLanguageGo,
+				uci.IndexAdmissionLanguageJavaScript,
+				uci.IndexAdmissionLanguageTypeScript,
+				uci.IndexAdmissionLanguageTSX,
+				uci.IndexAdmissionLanguageMarkdown,
+				uci.IndexAdmissionLanguageJSON,
+				uci.IndexAdmissionLanguageYAML,
+				uci.IndexAdmissionLanguageSQL,
+				uci.IndexAdmissionLanguageOpenAPI:
+				if artifact.Profile.ExtractionProfileDigest != uci.IndexDigest(preparedParserBundleDigest) {
+					return errors.New("artifact profile does not match selected parser bundle")
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func preparedStageAcks(decodedFrames []uci.IndexAdmissionFrame) ([]uci.IndexPartAck, error) {
+	acks := make([]uci.IndexPartAck, len(decodedFrames))
+	for index, decoded := range decodedFrames {
+		part, err := decoded.PublicationPart()
+		if err != nil {
+			return nil, err
+		}
+		digest, err := uci.DigestIndexPart(part)
+		if err != nil {
+			return nil, err
+		}
+		acks[index] = uci.IndexPartAck{BuildID: preparedBuildID, Sequence: uint32(index), Digest: digest}
+	}
+	return acks, nil
 }
 
 func (client *preparedIndexClient) Finalize(_ context.Context, request *pb.FinalizeCodeIndexRequest) (*pb.FinalizeCodeIndexResponse, error) {
@@ -1848,31 +1875,38 @@ func preparedTreeSitterSpan(source []byte, start, end int) uci.IndexSpan {
 
 func preparedArtifactForPath(t *testing.T, frames []uci.IndexAdmissionFrame, path string) uci.IndexAdmissionArtifact {
 	t.Helper()
-	var artifactID string
-	for _, frame := range frames {
-		for _, membership := range frame.Memberships {
-			if membership.PathKey == path && membership.ArtifactID != nil {
-				artifactID = *membership.ArtifactID
-				break
-			}
-		}
-		if artifactID != "" {
-			break
-		}
-	}
+	artifactID := preparedArtifactIDForPath(frames, path)
 	if artifactID == "" {
 		require.Failf(t, "artifact missing", "path %q has no admitted artifact", path)
 		return uci.IndexAdmissionArtifact{}
 	}
-	for _, frame := range frames {
-		for _, artifact := range frame.Artifacts {
-			if artifact.ArtifactID == artifactID {
-				return artifact
-			}
-		}
+	if artifact, found := preparedArtifactWithID(frames, artifactID); found {
+		return artifact
 	}
 	require.Failf(t, "artifact missing", "path %q has no admitted artifact", path)
 	return uci.IndexAdmissionArtifact{}
+}
+
+func preparedArtifactIDForPath(frames []uci.IndexAdmissionFrame, path string) string {
+	for _, frame := range frames {
+		for _, membership := range frame.Memberships {
+			if membership.PathKey == path && membership.ArtifactID != nil {
+				return *membership.ArtifactID
+			}
+		}
+	}
+	return ""
+}
+
+func preparedArtifactWithID(frames []uci.IndexAdmissionFrame, artifactID string) (uci.IndexAdmissionArtifact, bool) {
+	for _, frame := range frames {
+		for _, artifact := range frame.Artifacts {
+			if artifact.ArtifactID == artifactID {
+				return artifact, true
+			}
+		}
+	}
+	return uci.IndexAdmissionArtifact{}, false
 }
 
 func preparedArtifactHasDiagnostic(artifact uci.IndexAdmissionArtifact, code string) bool {
