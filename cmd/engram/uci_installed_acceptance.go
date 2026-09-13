@@ -2073,43 +2073,21 @@ func (client *uciInstalledAcceptanceMCPClient) ReplayToolWithSameJSONRPCID(ctx c
 	return uciInstalledAcceptanceDecodeToolResult(raw, call)
 }
 
-func uciInstalledAcceptanceDecodeToolResult(raw json.RawMessage, call uciInstalledAcceptanceMCPToolCall) (uciInstalledAcceptanceMCPToolResult, error) {
-	decodeEnvelope := func(encoded json.RawMessage) (json.RawMessage, bool, bool, error) {
-		var envelope struct {
-			Content []json.RawMessage `json:"content"`
-			IsError bool              `json:"isError"`
-		}
-		if err := json.Unmarshal(encoded, &envelope); err != nil || len(envelope.Content) == 0 {
-			return nil, false, false, nil
-		}
-		for _, content := range envelope.Content {
-			var textBlock struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			}
-			if json.Unmarshal(content, &textBlock) == nil && textBlock.Type == "text" {
-				payload := json.RawMessage(textBlock.Text)
-				if !json.Valid(payload) {
-					return nil, false, true, errors.New("installed standard MCP tools/call text is not JSON")
-				}
-				return append(json.RawMessage(nil), payload...), envelope.IsError, true, nil
-			}
-			if json.Valid(content) {
-				return append(json.RawMessage(nil), content...), envelope.IsError, true, nil
-			}
-		}
-		return nil, false, true, errors.New("installed standard MCP tools/call did not return valid JSON content")
-	}
+type uciInstalledAcceptanceToolEnvelope struct {
+	Content []json.RawMessage `json:"content"`
+	IsError bool              `json:"isError"`
+}
 
-	payload, isError, wrapped, err := decodeEnvelope(raw)
+func uciInstalledAcceptanceDecodeToolResult(raw json.RawMessage, call uciInstalledAcceptanceMCPToolCall) (uciInstalledAcceptanceMCPToolResult, error) {
+	payload, isError, wrapped, err := uciInstalledAcceptanceDecodeToolEnvelope(raw)
 	if err != nil {
 		return uciInstalledAcceptanceMCPToolResult{}, err
 	}
 	if !wrapped {
 		return uciInstalledAcceptanceMCPToolResult{}, errors.New("installed standard MCP tools/call response is invalid")
 	}
-	for depth := 0; depth < 2; depth++ {
-		nested, nestedError, nestedWrapped, nestedErr := decodeEnvelope(payload)
+	for range 2 {
+		nested, nestedError, nestedWrapped, nestedErr := uciInstalledAcceptanceDecodeToolEnvelope(payload)
 		if nestedErr != nil {
 			return uciInstalledAcceptanceMCPToolResult{}, nestedErr
 		}
@@ -2120,6 +2098,30 @@ func uciInstalledAcceptanceDecodeToolResult(raw json.RawMessage, call uciInstall
 		isError = isError || nestedError
 	}
 	return uciInstalledAcceptanceMCPToolResult{payload: payload, isError: isError, call: call}, nil
+}
+
+func uciInstalledAcceptanceDecodeToolEnvelope(encoded json.RawMessage) (json.RawMessage, bool, bool, error) {
+	var envelope uciInstalledAcceptanceToolEnvelope
+	if err := json.Unmarshal(encoded, &envelope); err != nil || len(envelope.Content) == 0 {
+		return nil, false, false, nil
+	}
+	for _, content := range envelope.Content {
+		var textBlock struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(content, &textBlock) == nil && textBlock.Type == "text" {
+			payload := json.RawMessage(textBlock.Text)
+			if !json.Valid(payload) {
+				return nil, false, true, errors.New("installed standard MCP tools/call text is not JSON")
+			}
+			return append(json.RawMessage(nil), payload...), envelope.IsError, true, nil
+		}
+		if json.Valid(content) {
+			return append(json.RawMessage(nil), content...), envelope.IsError, true, nil
+		}
+	}
+	return nil, false, true, errors.New("installed standard MCP tools/call did not return valid JSON content")
 }
 
 func (client *uciInstalledAcceptanceMCPClient) call(ctx context.Context, method string, params any) (json.RawMessage, uciInstalledAcceptanceMCPRequest, error) {
@@ -2190,62 +2192,73 @@ func (client *uciInstalledAcceptanceMCPClient) notification(method string, param
 	return client.writer.Flush()
 }
 
+type uciInstalledAcceptanceMCPResponseResult struct {
+	payload json.RawMessage
+	err     error
+}
+
+type uciInstalledAcceptanceMCPResponseFrame struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Result  json.RawMessage `json:"result"`
+	Error   *struct {
+		Code    json.RawMessage `json:"code"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data"`
+	} `json:"error"`
+}
+
 func (client *uciInstalledAcceptanceMCPClient) readResponse(ctx context.Context, wantID, method string) (json.RawMessage, error) {
-	type responseResult struct {
-		payload json.RawMessage
-		err     error
-	}
-	responses := make(chan responseResult, 1)
-	go func() {
-		for client.scanner.Scan() {
-			var frame struct {
-				JSONRPC string          `json:"jsonrpc"`
-				ID      json.RawMessage `json:"id"`
-				Result  json.RawMessage `json:"result"`
-				Error   *struct {
-					Code    json.RawMessage `json:"code"`
-					Message string          `json:"message"`
-					Data    json.RawMessage `json:"data"`
-				} `json:"error"`
-			}
-			if err := json.Unmarshal(client.scanner.Bytes(), &frame); err != nil {
-				continue
-			}
-			var id string
-			if err := json.Unmarshal(frame.ID, &id); err != nil || id != wantID {
-				continue
-			}
-			if frame.JSONRPC != "2.0" {
-				responses <- responseResult{err: errors.New("installed standard MCP response has an invalid protocol")}
-				return
-			}
-			if frame.Error != nil {
-				code := uciInstalledAcceptanceErrorCode(frame.Error.Code)
-				if code == "" {
-					code = uciInstalledAcceptancePublicErrorCode(frame.Error.Data)
-				}
-				detail := uciInstalledAcceptancePublicErrorDetail(frame.Error.Data)
-				if detail == "" || strings.HasPrefix(detail, "JSON ") || detail == "unknown JSON payload" {
-					detail = uciInstalledAcceptanceSafeErrorDetail(frame.Error.Message)
-				}
-				responses <- responseResult{err: &uciInstalledAcceptanceMCPError{method: method, code: code, detail: detail}}
-				return
-			}
-			responses <- responseResult{payload: append(json.RawMessage(nil), frame.Result...)}
-			return
-		}
-		if err := client.scanner.Err(); err != nil {
-			responses <- responseResult{err: fmt.Errorf("read installed standard MCP %s: %w", method, err)}
-			return
-		}
-		responses <- responseResult{err: errors.New("installed standard MCP closed before its response")}
-	}()
+	responses := make(chan uciInstalledAcceptanceMCPResponseResult, 1)
+	go client.scanResponse(wantID, method, responses)
 	select {
 	case response := <-responses:
 		return response.payload, response.err
 	case <-ctx.Done():
 		return nil, fmt.Errorf("wait for installed standard MCP %s: %w", method, ctx.Err())
 	}
+}
+
+func (client *uciInstalledAcceptanceMCPClient) scanResponse(wantID, method string, responses chan<- uciInstalledAcceptanceMCPResponseResult) {
+	for client.scanner.Scan() {
+		response, matched := uciInstalledAcceptanceDecodeResponseFrame(client.scanner.Bytes(), wantID, method)
+		if !matched {
+			continue
+		}
+		responses <- response
+		return
+	}
+	if err := client.scanner.Err(); err != nil {
+		responses <- uciInstalledAcceptanceMCPResponseResult{err: fmt.Errorf("read installed standard MCP %s: %w", method, err)}
+		return
+	}
+	responses <- uciInstalledAcceptanceMCPResponseResult{err: errors.New("installed standard MCP closed before its response")}
+}
+
+func uciInstalledAcceptanceDecodeResponseFrame(raw []byte, wantID, method string) (uciInstalledAcceptanceMCPResponseResult, bool) {
+	var frame uciInstalledAcceptanceMCPResponseFrame
+	if err := json.Unmarshal(raw, &frame); err != nil {
+		return uciInstalledAcceptanceMCPResponseResult{}, false
+	}
+	var id string
+	if err := json.Unmarshal(frame.ID, &id); err != nil || id != wantID {
+		return uciInstalledAcceptanceMCPResponseResult{}, false
+	}
+	if frame.JSONRPC != "2.0" {
+		return uciInstalledAcceptanceMCPResponseResult{err: errors.New("installed standard MCP response has an invalid protocol")}, true
+	}
+	if frame.Error == nil {
+		return uciInstalledAcceptanceMCPResponseResult{payload: append(json.RawMessage(nil), frame.Result...)}, true
+	}
+	code := uciInstalledAcceptanceErrorCode(frame.Error.Code)
+	if code == "" {
+		code = uciInstalledAcceptancePublicErrorCode(frame.Error.Data)
+	}
+	detail := uciInstalledAcceptancePublicErrorDetail(frame.Error.Data)
+	if detail == "" || strings.HasPrefix(detail, "JSON ") || detail == "unknown JSON payload" {
+		detail = uciInstalledAcceptanceSafeErrorDetail(frame.Error.Message)
+	}
+	return uciInstalledAcceptanceMCPResponseResult{err: &uciInstalledAcceptanceMCPError{method: method, code: code, detail: detail}}, true
 }
 
 func uciInstalledAcceptancePublicErrorCode(payload json.RawMessage) string {
