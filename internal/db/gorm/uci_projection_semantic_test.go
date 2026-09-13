@@ -22,10 +22,11 @@ func TestUCIProjectionStoreSemanticMethodsKeepVectorsScopedAndCovered(t *testing
 
 	oldArtifact := fixture.admitArtifact(t, fixture.source.SourceID, "semantic-shared", `func SemanticShared() string { return "semantic old" }
 `, UCIParseArtifactComplete)
-	oldPublished := uciSemanticPublish(t, fixture, "semantic-primary-v1", fixture.checkout, nil, ucidomain.IndexJobInitial,
-		[]uciPublicationArtifact{oldArtifact},
-		[]ucidomain.IndexMembership{uciPublicationPresentMembership("shared/semantic.go", oldArtifact)},
-	)
+	oldPublished := uciSemanticPublish(t, fixture, uciSemanticPublishInput{
+		key: "semantic-primary-v1", checkout: fixture.checkout, jobKind: ucidomain.IndexJobInitial,
+		artifacts:   []uciPublicationArtifact{oldArtifact},
+		memberships: []ucidomain.IndexMembership{uciPublicationPresentMembership("shared/semantic.go", oldArtifact)},
+	})
 	oldAuthorized := uciSemanticAuthorize(t, fixture, oldPublished.Context)
 	oldCandidate := uciSemanticCandidateAtPath(t, fixture.projection, oldAuthorized, "shared/semantic.go", oldArtifact.Artifact.ArtifactID)
 	oldVector := uciSemanticVector(1, 0)
@@ -82,10 +83,11 @@ func TestUCIProjectionStoreSemanticMethodsKeepVectorsScopedAndCovered(t *testing
 
 	siblingArtifact := fixture.admitArtifact(t, fixture.source.SourceID, "semantic-shared", `func SemanticShared() string { return "semantic sibling" }
 `, UCIParseArtifactComplete)
-	siblingPublished := uciSemanticPublish(t, fixture, "semantic-sibling-v1", fixture.sibling, nil, ucidomain.IndexJobInitial,
-		[]uciPublicationArtifact{siblingArtifact},
-		[]ucidomain.IndexMembership{uciPublicationPresentMembership("shared/semantic.go", siblingArtifact)},
-	)
+	siblingPublished := uciSemanticPublish(t, fixture, uciSemanticPublishInput{
+		key: "semantic-sibling-v1", checkout: fixture.sibling, jobKind: ucidomain.IndexJobInitial,
+		artifacts:   []uciPublicationArtifact{siblingArtifact},
+		memberships: []ucidomain.IndexMembership{uciPublicationPresentMembership("shared/semantic.go", siblingArtifact)},
+	})
 	siblingAuthorized := uciSemanticAuthorize(t, fixture, siblingPublished.Context)
 	siblingCandidate := uciSemanticCandidateAtPath(t, fixture.projection, siblingAuthorized, "shared/semantic.go", siblingArtifact.Artifact.ArtifactID)
 	require.Equal(t, oldCandidate.RelativePath, siblingCandidate.RelativePath)
@@ -107,13 +109,14 @@ func TestUCIProjectionStoreSemanticMethodsKeepVectorsScopedAndCovered(t *testing
 `, UCIParseArtifactComplete)
 	otherCurrentArtifact := fixture.admitArtifact(t, fixture.source.SourceID, "semantic-other", `func SemanticOther() string { return "semantic other" }
 `, UCIParseArtifactComplete)
-	currentPublished := uciSemanticPublish(t, fixture, "semantic-primary-v2", fixture.checkout, uciPublicationParent(oldPublished), ucidomain.IndexJobReconcile,
-		[]uciPublicationArtifact{currentArtifact, otherCurrentArtifact},
-		[]ucidomain.IndexMembership{
+	currentPublished := uciSemanticPublish(t, fixture, uciSemanticPublishInput{
+		key: "semantic-primary-v2", checkout: fixture.checkout, parent: uciPublicationParent(oldPublished), jobKind: ucidomain.IndexJobReconcile,
+		artifacts: []uciPublicationArtifact{currentArtifact, otherCurrentArtifact},
+		memberships: []ucidomain.IndexMembership{
 			uciPublicationPresentMembership("shared/semantic.go", currentArtifact),
 			uciPublicationPresentMembership("other/semantic.go", otherCurrentArtifact),
 		},
-	)
+	})
 	currentAuthorized := uciSemanticAuthorize(t, fixture, currentPublished.Context)
 	currentCandidate := uciSemanticCandidateAtPath(t, fixture.projection, currentAuthorized, "shared/semantic.go", currentArtifact.Artifact.ArtifactID)
 	otherCurrentCandidate := uciSemanticCandidateAtPath(t, fixture.projection, currentAuthorized, "other/semantic.go", otherCurrentArtifact.Artifact.ArtifactID)
@@ -177,21 +180,23 @@ func TestUCIProjectionStoreSelectCandidatesScopesLiteralPathPrefixBeforeLimit(t 
 	literal := fixture.admitArtifact(t, fixture.source.SourceID, "path-prefix-literal", "// literal\nfunc PathPrefixNeedle() {}\n", UCIParseArtifactComplete)
 	nested := fixture.admitArtifact(t, fixture.source.SourceID, "path-prefix-nested", "// nested\nfunc PathPrefixNeedle() {}\n", UCIParseArtifactComplete)
 	wildcard := fixture.admitArtifact(t, fixture.source.SourceID, "path-prefix-wildcard", "// wildcard\nfunc PathPrefixNeedle() {}\n", UCIParseArtifactComplete)
-	primary := uciSemanticPublish(t, fixture, "path-prefix-primary", fixture.checkout, nil, ucidomain.IndexJobInitial,
-		[]uciPublicationArtifact{outside, literal, nested, wildcard},
-		[]ucidomain.IndexMembership{
+	primary := uciSemanticPublish(t, fixture, uciSemanticPublishInput{
+		key: "path-prefix-primary", checkout: fixture.checkout, jobKind: ucidomain.IndexJobInitial,
+		artifacts: []uciPublicationArtifact{outside, literal, nested, wildcard},
+		memberships: []ucidomain.IndexMembership{
 			uciPublicationPresentMembership("a-before.go", outside),
 			uciPublicationPresentMembership("src/special%_dir/target.go", literal),
 			uciPublicationPresentMembership("src/special%_dir/nested/child.go", nested),
 			uciPublicationPresentMembership("src/special!xdir/wildcard.go", wildcard),
 		},
-	)
+	})
 
 	sibling := fixture.admitArtifact(t, fixture.source.SourceID, "path-prefix-sibling", "// sibling\nfunc PathPrefixNeedle() {}\n", UCIParseArtifactComplete)
-	siblingView := uciSemanticPublish(t, fixture, "path-prefix-sibling", fixture.sibling, nil, ucidomain.IndexJobInitial,
-		[]uciPublicationArtifact{sibling},
-		[]ucidomain.IndexMembership{uciPublicationPresentMembership("src/special%_dir/foreign.go", sibling)},
-	)
+	siblingView := uciSemanticPublish(t, fixture, uciSemanticPublishInput{
+		key: "path-prefix-sibling", checkout: fixture.sibling, jobKind: ucidomain.IndexJobInitial,
+		artifacts:   []uciPublicationArtifact{sibling},
+		memberships: []ucidomain.IndexMembership{uciPublicationPresentMembership("src/special%_dir/foreign.go", sibling)},
+	})
 	require.Equal(t, primary.Context.SourceID, siblingView.Context.SourceID)
 	require.NotEqual(t, primary.Context.ViewID, siblingView.Context.ViewID)
 
@@ -228,20 +233,28 @@ func TestUCIProjectionStoreSelectCandidatesScopesLiteralPathPrefixBeforeLimit(t 
 	require.Equal(t, "src/special%_dir/target.go", file.Candidates[0].RelativePath)
 }
 
-func uciSemanticPublish(t *testing.T, fixture *uciPublicationFixture, key string, checkout *UCICheckout, parent *ucidomain.ContextRef, jobKind ucidomain.IndexJobKind, artifacts []uciPublicationArtifact, memberships []ucidomain.IndexMembership) ucidomain.IndexPublishedView {
-	t.Helper()
+type uciSemanticPublishInput struct {
+	key         string
+	checkout    *UCICheckout
+	parent      *ucidomain.ContextRef
+	jobKind     ucidomain.IndexJobKind
+	artifacts   []uciPublicationArtifact
+	memberships []ucidomain.IndexMembership
+}
 
-	replacements := make([]ucidomain.IndexEdgeReplacement, 0, len(memberships))
-	for _, membership := range memberships {
+func uciSemanticPublish(t *testing.T, fixture *uciPublicationFixture, input uciSemanticPublishInput) ucidomain.IndexPublishedView {
+	t.Helper()
+	replacements := make([]ucidomain.IndexEdgeReplacement, 0, len(input.memberships))
+	for _, membership := range input.memberships {
 		replacements = append(replacements, ucidomain.IndexEdgeReplacement{SourcePath: membership.PathKey})
 	}
 	draft := newUCIPublicationDraft(
-		[]ucidomain.IndexPart{uciPublicationPart(artifacts, memberships, nil, replacements)},
-		memberships,
+		[]ucidomain.IndexPart{uciPublicationPart(input.artifacts, input.memberships, nil, replacements)},
+		input.memberships,
 		replacements,
 	)
 	draft.coverage.Vector = ucidomain.IndexCoverageComplete
-	_, published := fixture.publish(t, fixture.publisher, fixture.caller("semantic-"+key), key, checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestFull, jobKind, draft)
+	_, published := fixture.publish(t, fixture.publisher, fixture.caller("semantic-"+input.key), input.key, input.checkout, fixture.profile.ProfileID, input.parent, ucidomain.IndexManifestFull, input.jobKind, draft)
 	return published
 }
 

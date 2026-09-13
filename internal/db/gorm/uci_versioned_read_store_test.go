@@ -17,7 +17,7 @@ func TestUCIVersionedReadStoreReadsBoundedHistoricalBytesAndIsolatesCurrentView(
 `, UCIParseArtifactComplete)
 	oldStart, oldEnd, oldText := uciVersionedReadAddBoundedChunk(t, fixture, &oldArtifact, `return "old"`)
 	oldArtifact.Proof = uciVersionedReadDescribeArtifact(t, fixture, oldArtifact)
-	oldPublished := uciVersionedReadPublish(t, fixture, "versioned-read-v1", "shared/versioned_read.go", fixture.checkout, nil, ucidomain.IndexJobInitial, oldArtifact)
+	oldPublished := uciVersionedReadPublish(t, fixture, uciVersionedReadPublishInput{key: "versioned-read-v1", path: "shared/versioned_read.go", checkout: fixture.checkout, kind: ucidomain.IndexJobInitial, artifact: oldArtifact})
 	oldAuthorized := uciSemanticAuthorize(t, fixture, oldPublished.Context)
 	oldSpec := uciVersionedReadSpecForPathAndSpan(t, fixture, oldAuthorized, "shared/versioned_read.go", oldStart, oldEnd)
 	oldSpec.MaxBytes += len(` } // trailing-secret-must-not-leak`)
@@ -37,7 +37,7 @@ func TestUCIVersionedReadStoreReadsBoundedHistoricalBytesAndIsolatesCurrentView(
 `, UCIParseArtifactComplete)
 	currentStart, currentEnd, currentText := uciVersionedReadAddBoundedChunk(t, fixture, &currentArtifact, `return "new"`)
 	currentArtifact.Proof = uciVersionedReadDescribeArtifact(t, fixture, currentArtifact)
-	currentPublished := uciVersionedReadPublish(t, fixture, "versioned-read-v2", "shared/versioned_read.go", fixture.checkout, uciPublicationParent(oldPublished), ucidomain.IndexJobReconcile, currentArtifact)
+	currentPublished := uciVersionedReadPublish(t, fixture, uciVersionedReadPublishInput{key: "versioned-read-v2", path: "shared/versioned_read.go", checkout: fixture.checkout, parent: uciPublicationParent(oldPublished), kind: ucidomain.IndexJobReconcile, artifact: currentArtifact})
 	currentAuthorized := uciSemanticAuthorize(t, fixture, currentPublished.Context)
 	currentSpec := uciVersionedReadSpecForPathAndSpan(t, fixture, currentAuthorized, "shared/versioned_read.go", currentStart, currentEnd)
 
@@ -63,7 +63,7 @@ func TestUCIVersionedReadStoreReturnsEmptyForStaleAndCrossScopedEvidence(t *test
 	fixture := openUCIPublicationFixture(t)
 	artifact := fixture.admitArtifact(t, fixture.source.SourceID, "versioned-read-refusal", `func VersionedReadRefusal() string { return "stored-only" }
 `, UCIParseArtifactComplete)
-	published := uciVersionedReadPublish(t, fixture, "versioned-read-refusal-v1", "refusal/versioned_read.go", fixture.checkout, nil, ucidomain.IndexJobInitial, artifact)
+	published := uciVersionedReadPublish(t, fixture, uciVersionedReadPublishInput{key: "versioned-read-refusal-v1", path: "refusal/versioned_read.go", checkout: fixture.checkout, kind: ucidomain.IndexJobInitial, artifact: artifact})
 	authorized := uciSemanticAuthorize(t, fixture, published.Context)
 	spec := uciVersionedReadSpecForPathAndSpan(t, fixture, authorized, "refusal/versioned_read.go", 0, int64(len(artifact.Body)))
 	service := ucidomain.NewVersionedReadService(fixture.projection)
@@ -114,7 +114,7 @@ func TestUCIVersionedReadStoreReportsPartialAndUnavailableCoverage(t *testing.T)
 	fixture := openUCIPublicationFixture(t)
 	artifact := fixture.admitArtifact(t, fixture.source.SourceID, "versioned-read-coverage", `func VersionedReadCoverage() string { return "coverage" }
 `, UCIParseArtifactComplete)
-	published := uciVersionedReadPublish(t, fixture, "versioned-read-coverage-v1", "coverage/versioned_read.go", fixture.checkout, nil, ucidomain.IndexJobInitial, artifact)
+	published := uciVersionedReadPublish(t, fixture, uciVersionedReadPublishInput{key: "versioned-read-coverage-v1", path: "coverage/versioned_read.go", checkout: fixture.checkout, kind: ucidomain.IndexJobInitial, artifact: artifact})
 	authorized := uciSemanticAuthorize(t, fixture, published.Context)
 	spec := uciVersionedReadSpecForPathAndSpan(t, fixture, authorized, "coverage/versioned_read.go", 0, int64(len(artifact.Body)))
 
@@ -137,7 +137,7 @@ func TestUCIVersionedReadStoreNeverFallsBackWithoutStoredBytes(t *testing.T) {
 	fixture := openUCIPublicationFixture(t)
 	artifact := fixture.admitArtifact(t, fixture.source.SourceID, "versioned-read-no-disk", `func VersionedReadNoDisk() string { return "persisted" }
 `, UCIParseArtifactComplete)
-	published := uciVersionedReadPublish(t, fixture, "versioned-read-no-disk-v1", "no_disk/versioned_read.go", fixture.checkout, nil, ucidomain.IndexJobInitial, artifact)
+	published := uciVersionedReadPublish(t, fixture, uciVersionedReadPublishInput{key: "versioned-read-no-disk-v1", path: "no_disk/versioned_read.go", checkout: fixture.checkout, kind: ucidomain.IndexJobInitial, artifact: artifact})
 	authorized := uciSemanticAuthorize(t, fixture, published.Context)
 	spec := uciVersionedReadSpecForPathAndSpan(t, fixture, authorized, "no_disk/versioned_read.go", 0, int64(len(artifact.Body)))
 
@@ -149,16 +149,24 @@ func TestUCIVersionedReadStoreNeverFallsBackWithoutStoredBytes(t *testing.T) {
 	require.Equal(t, ucidomain.IndexCoverageComplete, result.Coverage)
 }
 
-func uciVersionedReadPublish(t *testing.T, fixture *uciPublicationFixture, key, path string, checkout *UCICheckout, parent *ucidomain.ContextRef, kind ucidomain.IndexJobKind, artifact uciPublicationArtifact) ucidomain.IndexPublishedView {
+type uciVersionedReadPublishInput struct {
+	key, path string
+	checkout  *UCICheckout
+	parent    *ucidomain.ContextRef
+	kind      ucidomain.IndexJobKind
+	artifact  uciPublicationArtifact
+}
+
+func uciVersionedReadPublish(t *testing.T, fixture *uciPublicationFixture, input uciVersionedReadPublishInput) ucidomain.IndexPublishedView {
 	t.Helper()
-	membership := uciPublicationPresentMembership(path, artifact)
+	membership := uciPublicationPresentMembership(input.path, input.artifact)
 	replacement := ucidomain.IndexEdgeReplacement{SourcePath: membership.PathKey}
 	draft := newUCIPublicationDraft(
-		[]ucidomain.IndexPart{uciPublicationPart([]uciPublicationArtifact{artifact}, []ucidomain.IndexMembership{membership}, nil, []ucidomain.IndexEdgeReplacement{replacement})},
+		[]ucidomain.IndexPart{uciPublicationPart([]uciPublicationArtifact{input.artifact}, []ucidomain.IndexMembership{membership}, nil, []ucidomain.IndexEdgeReplacement{replacement})},
 		[]ucidomain.IndexMembership{membership},
 		[]ucidomain.IndexEdgeReplacement{replacement},
 	)
-	_, published := fixture.publish(t, fixture.publisher, fixture.caller("versioned-read-"+key), key, checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestFull, kind, draft)
+	_, published := fixture.publish(t, fixture.publisher, fixture.caller("versioned-read-"+input.key), input.key, input.checkout, fixture.profile.ProfileID, input.parent, ucidomain.IndexManifestFull, input.kind, draft)
 	return published
 }
 

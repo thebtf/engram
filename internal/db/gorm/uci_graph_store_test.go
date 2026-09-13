@@ -18,67 +18,64 @@ func TestUCIGraphStorePinsTargetsAndEdgesToExactTemporalView(t *testing.T) {
 	entryV1 := uciGraphStoreArtifact(t, fixture, "graph-entry-v1", "func EntryV1() {}\n", "Entry", "graph.Entry", "imports")
 	callerV1 := fixture.admitArtifact(t, fixture.source.SourceID, "graph-caller", "func CallerV1() {}\n", UCIParseArtifactComplete)
 	targetV1 := fixture.admitArtifact(t, fixture.source.SourceID, "graph-target-v1", "func TargetV1() {}\n", UCIParseArtifactComplete)
-	primaryV1 := uciGraphStorePublish(t, fixture, "graph-primary-v1", fixture.checkout, nil,
-		[]uciPublicationArtifact{entryV1, callerV1, targetV1},
-		[]ucidomain.IndexMembership{
+	primaryV1 := uciGraphStorePublish(t, fixture, uciGraphStorePublishInput{
+		key: "graph-primary-v1", checkout: fixture.checkout,
+		artifacts: []uciPublicationArtifact{entryV1, callerV1, targetV1},
+		memberships: []ucidomain.IndexMembership{
 			uciPublicationPresentMembership("entry.go", entryV1),
 			uciPublicationPresentMembership("caller.go", callerV1),
 			uciPublicationPresentMembership("target.go", targetV1),
 		},
-		[]ucidomain.IndexEdgeReplacement{
+		replacements: []ucidomain.IndexEdgeReplacement{
 			{SourcePath: "entry.go", Edges: []ucidomain.IndexEdge{uciGraphStoreResolvedEdge(entryV1, "entry.go", callerV1, "caller.go", "imports", "extracted")}},
-			{SourcePath: "caller.go", Edges: []ucidomain.IndexEdge{
-				uciGraphStoreResolvedEdge(callerV1, "caller.go", targetV1, "target.go", "calls", "resolved"),
-				uciGraphStoreUnresolvedEdge(callerV1, "caller.go", "missing-v1"),
-			}},
+			{SourcePath: "caller.go", Edges: []ucidomain.IndexEdge{uciGraphStoreResolvedEdge(callerV1, "caller.go", targetV1, "target.go", "calls", "resolved"), uciGraphStoreUnresolvedEdge(callerV1, "caller.go", "missing-v1")}},
 			{SourcePath: "target.go"},
 		},
-		uciGraphStoreCoverage(ucidomain.IndexCoverageComplete),
-	)
+		coverage: uciGraphStoreCoverage(ucidomain.IndexCoverageComplete),
+	})
 
 	entrySibling := uciGraphStoreArtifact(t, fixture, "graph-entry-sibling", "func EntrySibling() {}\n", "Entry", "graph.Entry", "imports")
 	callerSibling := fixture.admitArtifact(t, fixture.source.SourceID, "graph-caller", "func CallerSibling() {}\n", UCIParseArtifactComplete)
 	targetSibling := fixture.admitArtifact(t, fixture.source.SourceID, "graph-target-sibling", "func TargetSibling() {}\n", UCIParseArtifactComplete)
-	siblingV1 := uciGraphStorePublish(t, fixture, "graph-sibling-v1", fixture.sibling, nil,
-		[]uciPublicationArtifact{entrySibling, callerSibling, targetSibling},
-		[]ucidomain.IndexMembership{
+	siblingV1 := uciGraphStorePublish(t, fixture, uciGraphStorePublishInput{
+		key: "graph-sibling-v1", checkout: fixture.sibling,
+		artifacts: []uciPublicationArtifact{entrySibling, callerSibling, targetSibling},
+		memberships: []ucidomain.IndexMembership{
 			uciPublicationPresentMembership("entry.go", entrySibling),
 			uciPublicationPresentMembership("caller.go", callerSibling),
 			uciPublicationPresentMembership("target.go", targetSibling),
 		},
-		[]ucidomain.IndexEdgeReplacement{
+		replacements: []ucidomain.IndexEdgeReplacement{
 			{SourcePath: "entry.go", Edges: []ucidomain.IndexEdge{uciGraphStoreResolvedEdge(entrySibling, "entry.go", callerSibling, "caller.go", "imports", "extracted")}},
 			{SourcePath: "caller.go", Edges: []ucidomain.IndexEdge{uciGraphStoreResolvedEdge(callerSibling, "caller.go", targetSibling, "target.go", "calls", "resolved")}},
 			{SourcePath: "target.go"},
 		},
-		uciGraphStoreCoverage(ucidomain.IndexCoverageComplete),
-	)
+		coverage: uciGraphStoreCoverage(ucidomain.IndexCoverageComplete),
+	})
 
 	callerV2 := fixture.admitArtifact(t, fixture.source.SourceID, "graph-caller", "func CallerV2() {}\n", UCIParseArtifactComplete)
 	targetV2 := fixture.admitArtifact(t, fixture.source.SourceID, "graph-target-v2", "func TargetV2() {}\n", UCIParseArtifactComplete)
 	handlerA := uciGraphStoreArtifact(t, fixture, "graph-handler-a", "func HandleA() {}\n", "Handle", "graph.http.Handle", "calls")
 	handlerB := uciGraphStoreArtifact(t, fixture, "graph-handler-b", "func HandleB() {}\n", "Handle", "graph.queue.Handle", "calls")
-	primaryV2 := uciGraphStorePublish(t, fixture, "graph-primary-v2", fixture.checkout, uciPublicationParent(primaryV1),
-		[]uciPublicationArtifact{entryV1, callerV2, targetV2, handlerA, handlerB},
-		[]ucidomain.IndexMembership{
+	primaryV2 := uciGraphStorePublish(t, fixture, uciGraphStorePublishInput{
+		key: "graph-primary-v2", checkout: fixture.checkout, parent: uciPublicationParent(primaryV1),
+		artifacts: []uciPublicationArtifact{entryV1, callerV2, targetV2, handlerA, handlerB},
+		memberships: []ucidomain.IndexMembership{
 			uciPublicationPresentMembership("entry.go", entryV1),
 			uciPublicationPresentMembership("caller.go", callerV2),
 			uciPublicationPresentMembership("target.go", targetV2),
 			uciPublicationPresentMembership("handler-a.go", handlerA),
 			uciPublicationPresentMembership("handler-b.go", handlerB),
 		},
-		[]ucidomain.IndexEdgeReplacement{
+		replacements: []ucidomain.IndexEdgeReplacement{
 			{SourcePath: "entry.go", Edges: []ucidomain.IndexEdge{uciGraphStoreResolvedEdge(entryV1, "entry.go", callerV2, "caller.go", "imports", "extracted")}},
-			{SourcePath: "caller.go", Edges: []ucidomain.IndexEdge{
-				uciGraphStoreResolvedEdge(callerV2, "caller.go", targetV2, "target.go", "calls", "resolved"),
-				uciGraphStoreUnresolvedEdge(callerV2, "caller.go", "missing-v2"),
-			}},
+			{SourcePath: "caller.go", Edges: []ucidomain.IndexEdge{uciGraphStoreResolvedEdge(callerV2, "caller.go", targetV2, "target.go", "calls", "resolved"), uciGraphStoreUnresolvedEdge(callerV2, "caller.go", "missing-v2")}},
 			{SourcePath: "target.go"},
 			{SourcePath: "handler-a.go"},
 			{SourcePath: "handler-b.go"},
 		},
-		uciGraphStoreCoverage(ucidomain.IndexCoveragePartial),
-	)
+		coverage: uciGraphStoreCoverage(ucidomain.IndexCoveragePartial),
+	})
 
 	var historical UCIView
 	require.NoError(t, fixture.db.Where("view_id = ?", primaryV1.Context.ViewID).First(&historical).Error)
@@ -206,8 +203,8 @@ func TestUCIGraphStorePinsTargetsAndEdgesToExactTemporalView(t *testing.T) {
 	})
 
 	t.Run("applies scope and filters before the bounded adjacency result", func(t *testing.T) {
-		uciGraphStoreInsertNoiseEdges(t, fixture, fixture.checkout, primaryV2.Context.Generation, callerV2, "caller.go", targetV2, "target.go", "imports", "current-filter-noise", uciGraphStoreAdjacencyLimit+1)
-		uciGraphStoreInsertNoiseEdges(t, fixture, fixture.sibling, siblingV1.Context.Generation, callerSibling, "caller.go", targetSibling, "target.go", "calls", "sibling-scope-noise", uciGraphStoreAdjacencyLimit+1)
+		uciGraphStoreInsertNoiseEdges(t, fixture, uciGraphStoreNoiseInput{checkout: fixture.checkout, generation: primaryV2.Context.Generation, source: callerV2, sourcePath: "caller.go", target: targetV2, targetPath: "target.go", relation: "imports", prefix: "current-filter-noise", count: uciGraphStoreAdjacencyLimit + 1})
+		uciGraphStoreInsertNoiseEdges(t, fixture, uciGraphStoreNoiseInput{checkout: fixture.sibling, generation: siblingV1.Context.Generation, source: callerSibling, sourcePath: "caller.go", target: targetSibling, targetPath: "target.go", relation: "calls", prefix: "sibling-scope-noise", count: uciGraphStoreAdjacencyLimit + 1})
 
 		selected, err := fixture.projection.SelectGraphEdges(ctx, currentAuthorized, ucidomain.GraphEdgeQuery{
 			Nodes: []ucidomain.QueryEntityRef{uciGraphStoreRef(primaryV2.Context, callerV2.Definition.QualifiedLocalName)},
@@ -244,20 +241,29 @@ func uciGraphStoreArtifact(t *testing.T, fixture *uciPublicationFixture, label, 
 	return artifact
 }
 
-func uciGraphStorePublish(t *testing.T, fixture *uciPublicationFixture, key string, checkout *UCICheckout, parent *ucidomain.ContextRef, artifacts []uciPublicationArtifact, memberships []ucidomain.IndexMembership, replacements []ucidomain.IndexEdgeReplacement, coverage ucidomain.IndexCoverage) ucidomain.IndexPublishedView {
-	t.Helper()
+type uciGraphStorePublishInput struct {
+	key          string
+	checkout     *UCICheckout
+	parent       *ucidomain.ContextRef
+	artifacts    []uciPublicationArtifact
+	memberships  []ucidomain.IndexMembership
+	replacements []ucidomain.IndexEdgeReplacement
+	coverage     ucidomain.IndexCoverage
+}
 
+func uciGraphStorePublish(t *testing.T, fixture *uciPublicationFixture, input uciGraphStorePublishInput) ucidomain.IndexPublishedView {
+	t.Helper()
 	draft := newUCIPublicationDraft(
-		[]ucidomain.IndexPart{uciPublicationPart(artifacts, memberships, nil, replacements)},
-		memberships,
-		replacements,
+		[]ucidomain.IndexPart{uciPublicationPart(input.artifacts, input.memberships, nil, input.replacements)},
+		input.memberships,
+		input.replacements,
 	)
-	draft.coverage = coverage
+	draft.coverage = input.coverage
 	kind := ucidomain.IndexJobInitial
-	if parent != nil {
+	if input.parent != nil {
 		kind = ucidomain.IndexJobReconcile
 	}
-	_, published := fixture.publish(t, fixture.publisher, fixture.caller("graph-store-"+key), key, checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestFull, kind, draft)
+	_, published := fixture.publish(t, fixture.publisher, fixture.caller("graph-store-"+input.key), input.key, input.checkout, fixture.profile.ProfileID, input.parent, ucidomain.IndexManifestFull, kind, draft)
 	return published
 }
 
@@ -356,32 +362,43 @@ func uciGraphStoreRequireEdge(t *testing.T, edges []ucidomain.QueryGraphEdge, re
 	t.Fatalf("missing graph edge %#v in %#v", want, edges)
 }
 
-func uciGraphStoreInsertNoiseEdges(t *testing.T, fixture *uciPublicationFixture, checkout *UCICheckout, generation int64, source uciPublicationArtifact, sourcePath string, target uciPublicationArtifact, targetPath, relation, prefix string, count int) {
-	t.Helper()
+type uciGraphStoreNoiseInput struct {
+	checkout   *UCICheckout
+	generation int64
+	source     uciPublicationArtifact
+	sourcePath string
+	target     uciPublicationArtifact
+	targetPath string
+	relation   string
+	prefix     string
+	count      int
+}
 
-	sourceSymbol := source.Definition.LocalSymbolKey
-	targetArtifactID := target.Artifact.ArtifactID
-	targetSymbol := target.Definition.LocalSymbolKey
+func uciGraphStoreInsertNoiseEdges(t *testing.T, fixture *uciPublicationFixture, input uciGraphStoreNoiseInput) {
+	t.Helper()
+	sourceSymbol := input.source.Definition.LocalSymbolKey
+	targetArtifactID := input.target.Artifact.ArtifactID
+	targetSymbol := input.target.Definition.LocalSymbolKey
 	now := time.Now().UTC()
-	rows := make([]UCIResolvedEdge, 0, count)
-	for index := 0; index < count; index++ {
+	rows := make([]UCIResolvedEdge, 0, input.count)
+	for index := range input.count {
 		rows = append(rows, UCIResolvedEdge{
 			ResolvedEdgeID:      uuid.NewString(),
 			SourceID:            fixture.source.SourceID,
-			CheckoutID:          checkout.CheckoutID,
-			EdgeKey:             fmt.Sprintf("%s-%06d", prefix, index),
-			SourcePath:          sourcePath,
-			SourceArtifact:      source.Artifact.ArtifactID,
+			CheckoutID:          input.checkout.CheckoutID,
+			EdgeKey:             fmt.Sprintf("%s-%06d", input.prefix, index),
+			SourcePath:          input.sourcePath,
+			SourceArtifact:      input.source.Artifact.ArtifactID,
 			SourceSymbol:        &sourceSymbol,
-			TargetPath:          &targetPath,
+			TargetPath:          &input.targetPath,
 			TargetArtifact:      &targetArtifactID,
 			TargetSymbol:        &targetSymbol,
-			Relation:            relation,
+			Relation:            input.relation,
 			EvidenceKind:        UCIResolvedEdgeEvidenceResolved,
 			ResolverRevision:    "graph-store-noise",
 			EvidenceJSON:        `{}`,
 			ResolutionState:     UCIResolvedEdgeResolved,
-			ValidFromGeneration: generation,
+			ValidFromGeneration: input.generation,
 			CreatedAt:           now,
 		})
 	}
