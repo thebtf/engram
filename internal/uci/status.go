@@ -256,11 +256,19 @@ func (status EmbeddingStatus) Validate() error {
 		return fmt.Errorf("uci embedding status: invalid coverage counts")
 	}
 	if status.EmbeddingProfileID == nil {
-		if status.Coverage != IndexCoverageUnavailable || status.TotalCandidates != 0 || status.ReadyCandidates != 0 || status.PendingJobs != 0 || status.JobState != nil || status.ErrorCode != nil || status.RetryAfter != nil {
-			return fmt.Errorf("uci embedding status: unavailable profile has state")
-		}
-		return nil
+		return status.validateUnavailableProfile()
 	}
+	return status.validateConfiguredProfile()
+}
+
+func (status EmbeddingStatus) validateUnavailableProfile() error {
+	if status.Coverage != IndexCoverageUnavailable || status.TotalCandidates != 0 || status.ReadyCandidates != 0 || status.PendingJobs != 0 || status.JobState != nil || status.ErrorCode != nil || status.RetryAfter != nil {
+		return fmt.Errorf("uci embedding status: unavailable profile has state")
+	}
+	return nil
+}
+
+func (status EmbeddingStatus) validateConfiguredProfile() error {
 	if !canonicalContextUUID(*status.EmbeddingProfileID) {
 		return fmt.Errorf("uci embedding status: invalid profile")
 	}
@@ -276,14 +284,23 @@ func (status EmbeddingStatus) Validate() error {
 	if status.PendingJobs > 0 && (status.JobState == nil || !status.JobState.pending()) {
 		return fmt.Errorf("uci embedding status: pending jobs lack a pending state")
 	}
-	if status.Coverage == IndexCoverageComplete {
-		if status.TotalCandidates == 0 || status.ReadyCandidates != status.TotalCandidates || status.PendingJobs != 0 || status.JobState == nil || *status.JobState != IndexStatusJobSucceeded || status.ErrorCode != nil || status.RetryAfter != nil {
-			return fmt.Errorf("uci embedding status: complete coverage lacks exact completion proof")
-		}
+	if err := status.validateCompleteCoverage(); err != nil {
+		return err
 	}
 	if status.TotalCandidates == 0 && status.ReadyCandidates != 0 {
 		return fmt.Errorf("uci embedding status: empty denominator has ready candidates")
 	}
+	return status.validateNoCandidatesState()
+}
+
+func (status EmbeddingStatus) validateCompleteCoverage() error {
+	if status.Coverage == IndexCoverageComplete && (status.TotalCandidates == 0 || status.ReadyCandidates != status.TotalCandidates || status.PendingJobs != 0 || status.JobState == nil || *status.JobState != IndexStatusJobSucceeded || status.ErrorCode != nil || status.RetryAfter != nil) {
+		return fmt.Errorf("uci embedding status: complete coverage lacks exact completion proof")
+	}
+	return nil
+}
+
+func (status EmbeddingStatus) validateNoCandidatesState() error {
 	if status.ErrorCode != nil && *status.ErrorCode == EmbeddingFailureNoCandidates && (status.TotalCandidates != 0 || status.ReadyCandidates != 0 || status.Coverage != IndexCoverageUnavailable || status.JobState == nil || *status.JobState != IndexStatusJobSucceeded) {
 		return fmt.Errorf("uci embedding status: no-candidates state is invalid")
 	}
@@ -327,6 +344,26 @@ func (snapshot IndexStatusSnapshot) Clone() IndexStatusSnapshot {
 // Validate checks closed status vocabularies and the exact freshness evidence
 // derived from the selected View's durable state.
 func (snapshot IndexStatusSnapshot) Validate() error {
+	if err := snapshot.validateIdentity(); err != nil {
+		return err
+	}
+	if err := snapshot.validateJobs(); err != nil {
+		return err
+	}
+	if err := snapshot.Embedding.Validate(); err != nil {
+		return err
+	}
+	if err := snapshot.Freshness.Validate(); err != nil {
+		return fmt.Errorf("uci index status: invalid freshness: %w", err)
+	}
+	disposition, err := ClassifyQueryFreshness(snapshot.Freshness)
+	if err != nil {
+		return fmt.Errorf("uci index status: classify freshness: %w", err)
+	}
+	return snapshot.validateStatusFreshness(disposition)
+}
+
+func (snapshot IndexStatusSnapshot) validateIdentity() error {
 	if !snapshot.Context.valid() {
 		return fmt.Errorf("uci index status: invalid context")
 	}
@@ -351,44 +388,43 @@ func (snapshot IndexStatusSnapshot) Validate() error {
 	if !isIndexCoverageState(snapshot.Coverage.Structural) || !isIndexCoverageState(snapshot.Coverage.Lexical) || !isIndexCoverageState(snapshot.Coverage.Vector) {
 		return fmt.Errorf("uci index status: invalid coverage")
 	}
+	return nil
+}
+
+func (snapshot IndexStatusSnapshot) validateJobs() error {
 	if snapshot.PublicationJob != nil {
 		if err := snapshot.PublicationJob.Validate(); err != nil {
 			return err
 		}
 	}
-	if snapshot.PendingPublicationJobCount > 0 {
-		if snapshot.PublicationJob == nil || !snapshot.PublicationJob.State.pending() {
-			return fmt.Errorf("uci index status: pending publication jobs lack a pending publication state")
-		}
+	if snapshot.PendingPublicationJobCount > 0 && (snapshot.PublicationJob == nil || !snapshot.PublicationJob.State.pending()) {
+		return fmt.Errorf("uci index status: pending publication jobs lack a pending publication state")
 	}
-	if err := snapshot.Embedding.Validate(); err != nil {
-		return err
-	}
-	if err := snapshot.Freshness.Validate(); err != nil {
-		return fmt.Errorf("uci index status: invalid freshness: %w", err)
-	}
-	disposition, err := ClassifyQueryFreshness(snapshot.Freshness)
-	if err != nil {
-		return fmt.Errorf("uci index status: classify freshness: %w", err)
-	}
+	return nil
+}
 
+func (snapshot IndexStatusSnapshot) validateStatusFreshness(disposition QueryFreshnessDisposition) error {
 	switch {
 	case snapshot.SourceState == IndexStatusSourceOffline || snapshot.CheckoutState == IndexStatusCheckoutOffline:
 		return snapshot.validateFreshness(QueryFreshnessOffline, QueryFreshnessNone, QueryEnrichmentUnavailable, nil, QueryFreshnessDispositionOffline, disposition)
 	case snapshot.ViewState == IndexStatusViewSuperseded:
 		return snapshot.validateFreshness(QueryFreshnessHistorical, QueryFreshnessPinnedHistory, QueryEnrichmentCurrent, nil, QueryFreshnessDispositionCurrent, disposition)
 	case snapshot.ViewState == IndexStatusViewPublished:
-		if snapshot.CurrentViewRelation != IndexStatusCurrentViewSelected {
-			return fmt.Errorf("uci index status: published view is not the checkout current pointer")
-		}
-		if snapshot.CheckoutState == IndexStatusCheckoutCatchingUp || snapshot.PendingPublicationJobCount > 0 {
-			return snapshot.validateFreshness(QueryFreshnessCatchingUp, QueryFreshnessWatchWatermark, QueryEnrichmentPending, nil, QueryFreshnessDispositionStale, disposition)
-		}
-		zero := int64(0)
-		return snapshot.validateFreshness(QueryFreshnessObservedCurrent, QueryFreshnessWatchWatermark, QueryEnrichmentCurrent, &zero, QueryFreshnessDispositionCurrent, disposition)
+		return snapshot.validatePublishedFreshness(disposition)
 	default:
 		return fmt.Errorf("uci index status: unsupported status combination")
 	}
+}
+
+func (snapshot IndexStatusSnapshot) validatePublishedFreshness(disposition QueryFreshnessDisposition) error {
+	if snapshot.CurrentViewRelation != IndexStatusCurrentViewSelected {
+		return fmt.Errorf("uci index status: published view is not the checkout current pointer")
+	}
+	if snapshot.CheckoutState == IndexStatusCheckoutCatchingUp || snapshot.PendingPublicationJobCount > 0 {
+		return snapshot.validateFreshness(QueryFreshnessCatchingUp, QueryFreshnessWatchWatermark, QueryEnrichmentPending, nil, QueryFreshnessDispositionStale, disposition)
+	}
+	zero := int64(0)
+	return snapshot.validateFreshness(QueryFreshnessObservedCurrent, QueryFreshnessWatchWatermark, QueryEnrichmentCurrent, &zero, QueryFreshnessDispositionCurrent, disposition)
 }
 
 func (snapshot IndexStatusSnapshot) validateFreshness(

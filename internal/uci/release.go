@@ -107,11 +107,7 @@ func Release(ctx context.Context, request ReleaseRequest, gate ReleaseGate) Rele
 	if !validCategory || gate == nil {
 		return releaseFailureDecision(ReleaseFailureExposureUnavailable)
 	}
-	if recordsExposure {
-		if request.Response == nil || request.Response.ValidatePreExposure() != nil {
-			return releaseFailureDecision(ReleaseFailureExposureUnavailable)
-		}
-	} else if request.Response != nil {
+	if !releaseRequestValid(request, recordsExposure) {
 		return releaseFailureDecision(ReleaseFailureExposureUnavailable)
 	}
 
@@ -138,6 +134,13 @@ func Release(ctx context.Context, request ReleaseRequest, gate ReleaseGate) Rele
 		return releaseFailureDecision(failure)
 	}
 	return ReleaseDecision{Authorized: authorized, Exposure: &receipt}
+}
+
+func releaseRequestValid(request ReleaseRequest, recordsExposure bool) bool {
+	if !recordsExposure {
+		return request.Response == nil
+	}
+	return request.Response != nil && request.Response.ValidatePreExposure() == nil
 }
 
 // ReleaseQueryResponse releases the UCI response form used by search, graph,
