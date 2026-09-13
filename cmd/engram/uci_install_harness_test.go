@@ -22,6 +22,7 @@ const (
 	uciInstallHarnessHelperProbeEnv        = "ENGRAM_UCI_INSTALL_HARNESS_TEST_PROBE"
 	uciInstallHarnessHelperProbeValue      = "value with spaces Кириллица"
 	uciInstallHarnessReadinessRaceHeadroom = 2 * time.Second
+	uciInstallHarnessWindowsStartupTimeout = 15 * time.Second
 )
 
 var (
@@ -148,12 +149,15 @@ func TestUCIInstallHarnessBoundsReadinessAndPropagatesCancellation(t *testing.T)
 			done <- err
 		}()
 
+		// These are three coverage-shaped copies of the Windows test binary,
+		// launched serially before the driver owns its readiness deadline.
+		// Keep startup bounded independently from the post-driver audit.
 		select {
 		case <-driverStarted:
 		case err := <-done:
 			completed = true
 			t.Fatalf("install harness stopped before MCP driver started: %v", err)
-		case <-time.After(request.ReadinessTimeout + uciInstallHarnessReadinessRaceHeadroom):
+		case <-time.After(uciInstallHarnessWindowsStartupTimeout):
 			t.Fatal("install harness did not reach its MCP driver")
 		}
 		uciWaitForInstallHarnessAudit(t, auditDir, "daemon")
