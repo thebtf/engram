@@ -566,77 +566,102 @@ func (s *UCIIndexIntentStore) ReconcileIndexIntent(ctx context.Context, intentID
 	if s == nil || s.db == nil || ctx == nil || ctx.Err() != nil || !validUCIIndexIntentID(intentID) {
 		return nil
 	}
-	var snapshot indexIntentRow
-	if err := s.db.WithContext(ctx).Where(uciIndexIntentIDWhere, intentID).First(&snapshot).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil
-		}
+	snapshot, found, err := reconciliationIndexIntentSnapshot(ctx, s.db, intentID)
+	if err != nil || !found {
 		return err
 	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return reconcileLockedIndexIntent(ctx, tx, snapshot, intentID)
+	})
+}
+
+func reconciliationIndexIntentSnapshot(ctx context.Context, db *gorm.DB, intentID string) (indexIntentRow, bool, error) {
+	var snapshot indexIntentRow
+	if err := db.WithContext(ctx).Where(uciIndexIntentIDWhere, intentID).First(&snapshot).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return indexIntentRow{}, false, nil
+		}
+		return indexIntentRow{}, false, err
+	}
 	if snapshot.State != string(ucidomain.IndexIntentAcknowledged) && snapshot.State != string(ucidomain.IndexIntentRunning) {
+		return indexIntentRow{}, false, nil
+	}
+	return snapshot, true, nil
+}
+
+func reconcileLockedIndexIntent(ctx context.Context, tx *gorm.DB, snapshot indexIntentRow, intentID string) error {
+	checkout, err := lockUCIPublicationCheckout(ctx, tx, ucidomain.IndexScope{SourceID: snapshot.SourceID, CheckoutID: snapshot.CheckoutID, IncarnationID: snapshot.IncarnationID})
+	if err != nil {
 		return nil
 	}
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		checkout, err := lockUCIPublicationCheckout(ctx, tx, ucidomain.IndexScope{
-			SourceID: snapshot.SourceID, CheckoutID: snapshot.CheckoutID, IncarnationID: snapshot.IncarnationID,
-		})
-		if err != nil {
-			return nil
-		}
-		var job *UCIJob
-		if snapshot.PublicationBuildID != nil {
-			job, err = lockUCIPublicationJobByID(ctx, tx, *snapshot.PublicationBuildID)
-			if err != nil {
-				return err
-			}
-		}
-		row, err := lockIndexIntentRow(ctx, tx, intentID, false)
-		if err != nil {
-			return err
-		}
-		if row.State != string(ucidomain.IndexIntentAcknowledged) && row.State != string(ucidomain.IndexIntentRunning) {
-			return nil
-		}
-		if job != nil && (job.IndexIntentID == nil || *job.IndexIntentID != row.IntentID) {
-			return ucidomain.ErrIndexIntentBindingMismatch
-		}
-		if job != nil && job.ResultViewID != nil {
-			published, err := loadUCIPublishedViewForJob(ctx, tx, *job)
-			if err != nil {
-				return err
-			}
-			return completeIndexIntentRowFromPublication(ctx, tx, row, published.Context)
-		}
-		now, err := uciDatabaseClock(ctx, tx)
-		if err != nil {
-			return err
-		}
-		if row.ClaimExpiresAt != nil && row.ClaimExpiresAt.After(now) {
-			return nil
-		}
-		expectedState := row.State
-		row.State = string(ucidomain.IndexIntentFailed)
-		row.UpdatedAt = now
-		if err := updateIndexIntentRow(ctx, tx, *row, expectedState, nil); err != nil {
-			return err
-		}
-		if job != nil && job.IndexIntentID != nil && *job.IndexIntentID == row.IntentID && job.State == UCIJobRunning {
-			code := "INDEX_INTENT_LEASE_EXPIRED"
-			if err := tx.WithContext(ctx).Model(&UCIJob{}).Where("job_id = ?", job.JobID).Updates(map[string]any{
-				"state": UCIJobFailedTerminal, "error_code": code, "lease_expiry": nil, "updated_at": now,
-			}).Error; err != nil {
-				return err
-			}
-			if checkout.OwnerInstance != nil && job.LeaseOwner != nil && *checkout.OwnerInstance == *job.LeaseOwner && checkout.LeaseEpoch == *job.OwnerEpoch {
-				if err := tx.WithContext(ctx).Model(&UCICheckout{}).Where("checkout_id = ?", checkout.CheckoutID).Updates(map[string]any{
-					"owner_instance": nil, "lease_expires_at": nil, "updated_at": now,
-				}).Error; err != nil {
-					return err
-				}
-			}
-		}
+	job, err := reconciliationIndexIntentPublicationJob(ctx, tx, snapshot)
+	if err != nil {
+		return err
+	}
+	row, err := lockIndexIntentRow(ctx, tx, intentID, false)
+	if err != nil {
+		return err
+	}
+	if row.State != string(ucidomain.IndexIntentAcknowledged) && row.State != string(ucidomain.IndexIntentRunning) {
 		return nil
-	})
+	}
+	if job != nil && (job.IndexIntentID == nil || *job.IndexIntentID != row.IntentID) {
+		return ucidomain.ErrIndexIntentBindingMismatch
+	}
+	if job != nil && job.ResultViewID != nil {
+		published, err := loadUCIPublishedViewForJob(ctx, tx, *job)
+		if err != nil {
+			return err
+		}
+		return completeIndexIntentRowFromPublication(ctx, tx, row, published.Context)
+	}
+	now, err := uciDatabaseClock(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if row.ClaimExpiresAt != nil && row.ClaimExpiresAt.After(now) {
+		return nil
+	}
+	if err := failExpiredIndexIntent(ctx, tx, row, now); err != nil {
+		return err
+	}
+	return failExpiredIndexIntentJob(ctx, tx, checkout, job, row.IntentID, now)
+}
+
+func reconciliationIndexIntentPublicationJob(ctx context.Context, tx *gorm.DB, snapshot indexIntentRow) (*UCIJob, error) {
+	if snapshot.PublicationBuildID == nil {
+		return nil, nil
+	}
+	return lockUCIPublicationJobByID(ctx, tx, *snapshot.PublicationBuildID)
+}
+
+func failExpiredIndexIntent(ctx context.Context, tx *gorm.DB, row *indexIntentRow, now time.Time) error {
+	expectedState := row.State
+	row.State = string(ucidomain.IndexIntentFailed)
+	row.UpdatedAt = now
+	return updateIndexIntentRow(ctx, tx, *row, expectedState, nil)
+}
+
+func failExpiredIndexIntentJob(ctx context.Context, tx *gorm.DB, checkout *UCICheckout, job *UCIJob, intentID string, now time.Time) error {
+	if job == nil || job.IndexIntentID == nil || *job.IndexIntentID != intentID || job.State != UCIJobRunning {
+		return nil
+	}
+	code := "INDEX_INTENT_LEASE_EXPIRED"
+	if err := tx.WithContext(ctx).Model(&UCIJob{}).Where("job_id = ?", job.JobID).Updates(map[string]any{
+		"state": UCIJobFailedTerminal, "error_code": code, "lease_expiry": nil, "updated_at": now,
+	}).Error; err != nil {
+		return err
+	}
+	return releaseExpiredIndexIntentCheckout(ctx, tx, checkout, job, now)
+}
+
+func releaseExpiredIndexIntentCheckout(ctx context.Context, tx *gorm.DB, checkout *UCICheckout, job *UCIJob, now time.Time) error {
+	if checkout.OwnerInstance == nil || job.LeaseOwner == nil || *checkout.OwnerInstance != *job.LeaseOwner || checkout.LeaseEpoch != *job.OwnerEpoch {
+		return nil
+	}
+	return tx.WithContext(ctx).Model(&UCICheckout{}).Where("checkout_id = ?", checkout.CheckoutID).Updates(map[string]any{
+		"owner_instance": nil, "lease_expires_at": nil, "updated_at": now,
+	}).Error
 }
 
 func completeIndexIntentRowFromPublication(ctx context.Context, tx *gorm.DB, row *indexIntentRow, result ucidomain.ContextRef) error {
