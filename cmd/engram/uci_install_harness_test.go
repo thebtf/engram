@@ -100,11 +100,38 @@ func TestUCIInstallHarnessBoundsReadinessAndPropagatesCancellation(t *testing.T)
 		auditDir := t.TempDir()
 		request := uciInstallHarnessTestRequest(t, installRoot, auditDir, "stall", 2*time.Second)
 		readinessElapsed := make(chan time.Duration, 1)
-		request.MCPDriver = uciInstallHarnessDeadlineProbe{elapsed: readinessElapsed}
-		outer, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+		driverStarted := make(chan struct{})
+		request.MCPDriver = uciInstallHarnessDeadlineProbe{elapsed: readinessElapsed, started: driverStarted}
+		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+		done := make(chan error, 1)
+		completed := false
+		t.Cleanup(func() {
+			if completed {
+				return
+			}
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+			}
+		})
+		go func() {
+			_, err := runUCIInstallHarness(ctx, request)
+			done <- err
+		}()
 
-		_, err := runUCIInstallHarness(outer, request)
+		select {
+		case <-driverStarted:
+		case err := <-done:
+			completed = true
+			t.Fatalf("install harness stopped before its readiness driver started: %v", err)
+		case <-time.After(uciInstallHarnessWindowsStartupTimeout):
+			t.Fatal("install harness did not reach its readiness driver")
+		}
+
+		err := <-done
+		completed = true
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("unready stdio harness error = %v, want wrapped context deadline", err)
 		}
@@ -248,6 +275,7 @@ type uciInstallHarnessMCPProbe struct{}
 // uciInstallHarnessDeadlineProbe observes only the driver's readiness window.
 type uciInstallHarnessDeadlineProbe struct {
 	elapsed chan<- time.Duration
+	started chan<- struct{}
 }
 
 type uciInstallHarnessStartedProbe struct {
@@ -260,6 +288,9 @@ func (probe uciInstallHarnessStartedProbe) InitializeAndList(ctx context.Context
 }
 
 func (probe uciInstallHarnessDeadlineProbe) InitializeAndList(ctx context.Context, process uciMCPStdioProcess) ([]string, error) {
+	if probe.started != nil {
+		close(probe.started)
+	}
 	started := time.Now()
 	tools, err := (uciInstallHarnessMCPProbe{}).InitializeAndList(ctx, process)
 	probe.elapsed <- time.Since(started)
