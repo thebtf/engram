@@ -3046,153 +3046,165 @@ func (publisher *uciPublisher) Begin(ctx context.Context, caller ucidomain.Index
 	if err != nil {
 		return ucidomain.IndexBeginResult{}, errUCIPublicationRejected
 	}
-
 	var result ucidomain.IndexBeginResult
 	err = publisher.store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		checkout, err := lockUCIPublicationCheckout(ctx, tx, input.Scope)
-		if err != nil {
-			return err
-		}
-
-		job, found, err := lockUCIPublicationJobByKey(ctx, tx, input.Scope, input.BuildKey)
-		if err != nil {
-			return err
-		}
-		if found {
-			now, err := uciDatabaseClock(ctx, tx)
-			if err != nil {
-				return err
-			}
-			if _, err := validateUCIPublicationIntentClaim(ctx, tx, uciPublicationIntentClaimValidation{
-				job:            job,
-				claim:          input.IntentClaim,
-				scope:          input.Scope,
-				profileID:      input.ProfileID,
-				now:            now,
-				allowCompleted: job.ResultViewID != nil,
-			}); err != nil {
-				return err
-			}
-		}
-		if found {
-			if !sameUCIPublicationBegin(*job, caller, input, bindingDigest) {
-				return errUCIPublicationIdempotencyMismatch
-			}
-			build, err := indexBuildRefFromJob(*job, input.Scope)
-			if err != nil {
-				return errUCIPublicationRejected
-			}
-			result.Build = build
-			if job.LeaseExpiry != nil {
-				result.LeaseExpiresAt = job.LeaseExpiry.UTC()
-			}
-			if job.ResultViewID != nil {
-				published, err := loadUCIPublishedViewForJob(ctx, tx, *job)
-				if err != nil {
-					return err
-				}
-				result.Published = &published
-			}
-			return nil
-		}
-
-		var profile UCIAnalysisProfile
-		if err := tx.WithContext(ctx).Where(uciProjectionProfileIDWhere, input.ProfileID).First(&profile).Error; err != nil {
-			return errUCIPublicationRejected
-		}
-		current, err := loadUCICurrentViewForCheckout(ctx, tx, checkout)
-		if err != nil {
-			return err
-		}
-		if !matchesUCIPublicationParent(input.ExpectedParent, current, input.Scope, input.ProfileID) {
-			return errUCIPublicationRejected
-		}
-		now, err := uciDatabaseClock(ctx, tx)
-		if err != nil {
-			return err
-		}
-		intentRow, err := validateUCIPublicationIntentClaim(ctx, tx, uciPublicationIntentClaimValidation{
-			claim:     input.IntentClaim,
-			scope:     input.Scope,
-			profileID: input.ProfileID,
-			now:       now,
-		})
-		if err != nil {
-			return err
-		}
-		if checkout.LeaseExpiresAt != nil && checkout.LeaseExpiresAt.After(now) {
-			return errUCIPublicationLeaseStale
-		}
-		nextEpoch := checkout.LeaseEpoch + 1
-		leaseExpiry := now.Add(publisher.limits.LeaseTTL)
-		if err := tx.WithContext(ctx).Model(&UCICheckout{}).Where(uciProjectionCheckoutIDWhere, checkout.CheckoutID).Updates(map[string]any{
-			"lease_epoch":      nextEpoch,
-			"owner_instance":   caller.OwnerInstance,
-			"lease_expires_at": leaseExpiry,
-			"updated_at":       now,
-		}).Error; err != nil {
-			return fmt.Errorf("uci publication acquire checkout lease: %w", err)
-		}
-		expectedParentID := uciPublicationParentID(input.ExpectedParent)
-		checkoutID := input.Scope.CheckoutID
-		incarnationID := input.Scope.IncarnationID
-		profileID := input.ProfileID
-		requestedBy := caller.Principal
-		publicationKey := input.BuildKey
-		manifestMode := string(input.Mode)
-		leaseOwner := caller.OwnerInstance
-		epoch := nextEpoch
-		var intentID *string
-		if input.IntentClaim != nil {
-			intentID = indexIntentString(input.IntentClaim.IntentID)
-		}
-		newJob := UCIJob{
-			JobID:                uuid.NewString(),
-			SourceID:             input.Scope.SourceID,
-			CheckoutID:           &checkoutID,
-			JobKind:              string(input.JobKind),
-			InputFingerprint:     bindingDigest,
-			OwnerEpoch:           &epoch,
-			State:                UCIJobRunning,
-			Attempt:              1,
-			LeaseOwner:           &leaseOwner,
-			LeaseExpiry:          &leaseExpiry,
-			Counts:               `{}`,
-			PublicationKey:       &publicationKey,
-			RequestedBy:          &requestedBy,
-			IncarnationID:        &incarnationID,
-			ProfileID:            &profileID,
-			ExpectedParentViewID: expectedParentID,
-			ManifestMode:         &manifestMode,
-			IndexIntentID:        intentID,
-			CreatedAt:            now,
-			UpdatedAt:            now,
-		}
-		if err := tx.WithContext(ctx).Create(&newJob).Error; err != nil {
-			return fmt.Errorf("uci publication create build: %w", err)
-		}
-		if intentRow != nil {
-			intentRow.PublicationBuildID = indexIntentString(newJob.JobID)
-			intentRow.UpdatedAt = now
-			if err := updateIndexIntentRow(ctx, tx, *intentRow, string(ucidomain.IndexIntentRunning), input.IntentClaim); err != nil {
-				return err
-			}
-		}
-		result = ucidomain.IndexBeginResult{
-			Build: ucidomain.IndexBuildRef{
-				BuildID:       newJob.JobID,
-				Scope:         input.Scope,
-				OwnerInstance: caller.OwnerInstance,
-				LeaseEpoch:    nextEpoch,
-			},
-			LeaseExpiresAt: leaseExpiry,
-		}
-		return nil
+		var transactionErr error
+		result, transactionErr = publisher.beginUCIPublicationTx(ctx, tx, caller, input, bindingDigest)
+		return transactionErr
 	})
 	if err != nil {
 		return ucidomain.IndexBeginResult{}, err
 	}
 	return result, nil
+}
+
+func (publisher *uciPublisher) beginUCIPublicationTx(ctx context.Context, tx *gorm.DB, caller ucidomain.IndexCaller, input ucidomain.IndexBeginInput, bindingDigest string) (ucidomain.IndexBeginResult, error) {
+	checkout, err := lockUCIPublicationCheckout(ctx, tx, input.Scope)
+	if err != nil {
+		return ucidomain.IndexBeginResult{}, err
+	}
+	job, found, err := lockUCIPublicationJobByKey(ctx, tx, input.Scope, input.BuildKey)
+	if err != nil {
+		return ucidomain.IndexBeginResult{}, err
+	}
+	if found {
+		return publisher.replayUCIPublicationBegin(ctx, tx, caller, input, bindingDigest, job)
+	}
+	return publisher.createUCIPublicationBegin(ctx, tx, caller, input, bindingDigest, checkout)
+}
+
+func (publisher *uciPublisher) replayUCIPublicationBegin(ctx context.Context, tx *gorm.DB, caller ucidomain.IndexCaller, input ucidomain.IndexBeginInput, bindingDigest string, job *UCIJob) (ucidomain.IndexBeginResult, error) {
+	now, err := uciDatabaseClock(ctx, tx)
+	if err != nil {
+		return ucidomain.IndexBeginResult{}, err
+	}
+	if _, err := validateUCIPublicationIntentClaim(ctx, tx, uciPublicationIntentClaimValidation{
+		job:            job,
+		claim:          input.IntentClaim,
+		scope:          input.Scope,
+		profileID:      input.ProfileID,
+		now:            now,
+		allowCompleted: job.ResultViewID != nil,
+	}); err != nil {
+		return ucidomain.IndexBeginResult{}, err
+	}
+	if !sameUCIPublicationBegin(*job, caller, input, bindingDigest) {
+		return ucidomain.IndexBeginResult{}, errUCIPublicationIdempotencyMismatch
+	}
+	build, err := indexBuildRefFromJob(*job, input.Scope)
+	if err != nil {
+		return ucidomain.IndexBeginResult{}, errUCIPublicationRejected
+	}
+	result := ucidomain.IndexBeginResult{Build: build}
+	if job.LeaseExpiry != nil {
+		result.LeaseExpiresAt = job.LeaseExpiry.UTC()
+	}
+	if job.ResultViewID != nil {
+		published, err := loadUCIPublishedViewForJob(ctx, tx, *job)
+		if err != nil {
+			return ucidomain.IndexBeginResult{}, err
+		}
+		result.Published = &published
+	}
+	return result, nil
+}
+
+func (publisher *uciPublisher) createUCIPublicationBegin(ctx context.Context, tx *gorm.DB, caller ucidomain.IndexCaller, input ucidomain.IndexBeginInput, bindingDigest string, checkout *UCICheckout) (ucidomain.IndexBeginResult, error) {
+	var profile UCIAnalysisProfile
+	if err := tx.WithContext(ctx).Where(uciProjectionProfileIDWhere, input.ProfileID).First(&profile).Error; err != nil {
+		return ucidomain.IndexBeginResult{}, errUCIPublicationRejected
+	}
+	current, err := loadUCICurrentViewForCheckout(ctx, tx, checkout)
+	if err != nil {
+		return ucidomain.IndexBeginResult{}, err
+	}
+	if !matchesUCIPublicationParent(input.ExpectedParent, current, input.Scope, input.ProfileID) {
+		return ucidomain.IndexBeginResult{}, errUCIPublicationRejected
+	}
+	now, err := uciDatabaseClock(ctx, tx)
+	if err != nil {
+		return ucidomain.IndexBeginResult{}, err
+	}
+	intentRow, err := validateUCIPublicationIntentClaim(ctx, tx, uciPublicationIntentClaimValidation{
+		claim:     input.IntentClaim,
+		scope:     input.Scope,
+		profileID: input.ProfileID,
+		now:       now,
+	})
+	if err != nil {
+		return ucidomain.IndexBeginResult{}, err
+	}
+	if checkout.LeaseExpiresAt != nil && checkout.LeaseExpiresAt.After(now) {
+		return ucidomain.IndexBeginResult{}, errUCIPublicationLeaseStale
+	}
+	nextEpoch := checkout.LeaseEpoch + 1
+	leaseExpiry := now.Add(publisher.limits.LeaseTTL)
+	if err := tx.WithContext(ctx).Model(&UCICheckout{}).Where(uciProjectionCheckoutIDWhere, checkout.CheckoutID).Updates(map[string]any{
+		"lease_epoch":      nextEpoch,
+		"owner_instance":   caller.OwnerInstance,
+		"lease_expires_at": leaseExpiry,
+		"updated_at":       now,
+	}).Error; err != nil {
+		return ucidomain.IndexBeginResult{}, fmt.Errorf("uci publication acquire checkout lease: %w", err)
+	}
+	newJob := publisher.newUCIPublicationJob(caller, input, bindingDigest, nextEpoch, leaseExpiry, now)
+	if err := tx.WithContext(ctx).Create(&newJob).Error; err != nil {
+		return ucidomain.IndexBeginResult{}, fmt.Errorf("uci publication create build: %w", err)
+	}
+	if intentRow != nil {
+		intentRow.PublicationBuildID = indexIntentString(newJob.JobID)
+		intentRow.UpdatedAt = now
+		if err := updateIndexIntentRow(ctx, tx, *intentRow, string(ucidomain.IndexIntentRunning), input.IntentClaim); err != nil {
+			return ucidomain.IndexBeginResult{}, err
+		}
+	}
+	return ucidomain.IndexBeginResult{
+		Build: ucidomain.IndexBuildRef{
+			BuildID:       newJob.JobID,
+			Scope:         input.Scope,
+			OwnerInstance: caller.OwnerInstance,
+			LeaseEpoch:    nextEpoch,
+		},
+		LeaseExpiresAt: leaseExpiry,
+	}, nil
+}
+
+func (publisher *uciPublisher) newUCIPublicationJob(caller ucidomain.IndexCaller, input ucidomain.IndexBeginInput, bindingDigest string, nextEpoch int64, leaseExpiry, now time.Time) UCIJob {
+	expectedParentID := uciPublicationParentID(input.ExpectedParent)
+	checkoutID := input.Scope.CheckoutID
+	incarnationID := input.Scope.IncarnationID
+	profileID := input.ProfileID
+	requestedBy := caller.Principal
+	publicationKey := input.BuildKey
+	manifestMode := string(input.Mode)
+	leaseOwner := caller.OwnerInstance
+	epoch := nextEpoch
+	var intentID *string
+	if input.IntentClaim != nil {
+		intentID = indexIntentString(input.IntentClaim.IntentID)
+	}
+	return UCIJob{
+		JobID:                uuid.NewString(),
+		SourceID:             input.Scope.SourceID,
+		CheckoutID:           &checkoutID,
+		JobKind:              string(input.JobKind),
+		InputFingerprint:     bindingDigest,
+		OwnerEpoch:           &epoch,
+		State:                UCIJobRunning,
+		Attempt:              1,
+		LeaseOwner:           &leaseOwner,
+		LeaseExpiry:          &leaseExpiry,
+		Counts:               `{}`,
+		PublicationKey:       &publicationKey,
+		RequestedBy:          &requestedBy,
+		IncarnationID:        &incarnationID,
+		ProfileID:            &profileID,
+		ExpectedParentViewID: expectedParentID,
+		ManifestMode:         &manifestMode,
+		IndexIntentID:        intentID,
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}
 }
 
 func (publisher *uciPublisher) authorize(ctx context.Context, caller ucidomain.IndexCaller, scope ucidomain.IndexScope) error {
@@ -3526,7 +3538,6 @@ func (publisher *uciPublisher) Stage(ctx context.Context, caller ucidomain.Index
 	if err != nil || int64(len(payload)) > publisher.limits.MaxPartBytes {
 		return ucidomain.IndexPartAck{}, errUCIPublicationRejected
 	}
-
 	var preflight UCIJob
 	if err := publisher.store.db.WithContext(ctx).Where(
 		"job_id = ? AND source_id = ? AND checkout_id = ?", input.Build.BuildID, input.Build.Scope.SourceID, input.Build.Scope.CheckoutID,
@@ -3536,109 +3547,139 @@ func (publisher *uciPublisher) Stage(ctx context.Context, caller ucidomain.Index
 	if err := publisher.validateStagedPart(ctx, input.Build.Scope, *preflight.ProfileID, input.Part); err != nil {
 		return ucidomain.IndexPartAck{}, errUCIPublicationRejected
 	}
-
 	var acknowledgement ucidomain.IndexPartAck
 	err = publisher.store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		checkout, err := lockUCIPublicationCheckout(ctx, tx, input.Build.Scope)
-		if err != nil {
-			return err
-		}
-		job, err := lockUCIPublicationJobByID(ctx, tx, input.Build.BuildID)
-		if err != nil {
-			return err
-		}
-		now, err := uciDatabaseClock(ctx, tx)
-		if err != nil {
-			return err
-		}
-		intentRow, err := validateUCIPublicationIntentClaim(ctx, tx, uciPublicationIntentClaimValidation{
-			job:       job,
-			claim:     input.IntentClaim,
-			scope:     input.Build.Scope,
-			profileID: *job.ProfileID,
-			now:       now,
-		})
-		if err != nil {
-			return err
-		}
-		if !matchesUCIPublicationBuild(*job, checkout, caller, input.Build) {
-			return errUCIPublicationRejected
-		}
-		var existing UCIIndexBuildPart
-		err = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where(
-			"build_id = ? AND sequence = ?", input.Build.BuildID, input.Sequence,
-		).First(&existing).Error
-		if err == nil {
-			if existing.PartDigest != string(input.Digest) {
-				return errUCIPublicationIdempotencyMismatch
-			}
-			acknowledgement = ucidomain.IndexPartAck{BuildID: input.Build.BuildID, Sequence: input.Sequence, Digest: input.Digest}
-			return nil
-		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return fmt.Errorf("uci publication load staged part: %w", err)
-		}
-		if !activeUCIPublicationLease(*job, checkout, caller, input.Build, now) {
-			return errUCIPublicationLeaseStale
-		}
-		leaseExpiry := now.Add(publisher.limits.LeaseTTL)
-		checkoutUpdate := tx.WithContext(ctx).Model(&UCICheckout{}).
-			Where("checkout_id = ? AND lease_epoch = ? AND owner_instance = ?", checkout.CheckoutID, input.Build.LeaseEpoch, caller.OwnerInstance).
-			Updates(map[string]any{"lease_expires_at": leaseExpiry, "updated_at": now})
-		if checkoutUpdate.Error != nil {
-			return fmt.Errorf("uci publication renew checkout lease: %w", checkoutUpdate.Error)
-		}
-		if checkoutUpdate.RowsAffected != 1 {
-			return errUCIPublicationLeaseStale
-		}
-		jobUpdate := tx.WithContext(ctx).Model(&UCIJob{}).
-			Where("job_id = ? AND owner_epoch = ? AND lease_owner = ? AND state = ?", job.JobID, input.Build.LeaseEpoch, caller.OwnerInstance, UCIJobRunning).
-			Updates(map[string]any{"lease_expiry": leaseExpiry, "updated_at": now})
-		if jobUpdate.Error != nil {
-			return fmt.Errorf("uci publication renew build lease: %w", jobUpdate.Error)
-		}
-		if jobUpdate.RowsAffected != 1 {
-			return errUCIPublicationLeaseStale
-		}
-		if intentRow != nil {
-			intentRow.ClaimExpiresAt = indexIntentTime(leaseExpiry)
-			intentRow.UpdatedAt = now
-			if err := updateIndexIntentRow(ctx, tx, *intentRow, string(ucidomain.IndexIntentRunning), input.IntentClaim); err != nil {
-				return errUCIPublicationLeaseStale
-			}
-		}
-		var partCount int64
-		if err := tx.WithContext(ctx).Model(&UCIIndexBuildPart{}).Where(uciProjectionBuildIDWhere, input.Build.BuildID).Count(&partCount).Error; err != nil {
-			return fmt.Errorf("uci publication count staged parts: %w", err)
-		}
-		if partCount >= int64(publisher.limits.MaxParts) || input.Sequence != uint32(partCount) {
-			return errUCIPublicationBuildIncomplete
-		}
-		var totalBytes int64
-		if err := tx.WithContext(ctx).Model(&UCIIndexBuildPart{}).Where(uciProjectionBuildIDWhere, input.Build.BuildID).Select("COALESCE(SUM(payload_bytes), 0)").Scan(&totalBytes).Error; err != nil {
-			return fmt.Errorf("uci publication total staged bytes: %w", err)
-		}
-		if totalBytes > publisher.limits.MaxBuildBytes-int64(len(payload)) {
-			return errUCIPublicationBuildIncomplete
-		}
-		row := UCIIndexBuildPart{
-			BuildID:      input.Build.BuildID,
-			Sequence:     input.Sequence,
-			PartDigest:   string(input.Digest),
-			Payload:      string(payload),
-			PayloadBytes: int64(len(payload)),
-			CreatedAt:    now,
-		}
-		if err := tx.WithContext(ctx).Create(&row).Error; err != nil {
-			return fmt.Errorf("uci publication store staged part: %w", err)
-		}
-		acknowledgement = ucidomain.IndexPartAck{BuildID: input.Build.BuildID, Sequence: input.Sequence, Digest: input.Digest}
-		return nil
+		var transactionErr error
+		acknowledgement, transactionErr = publisher.stageUCIPublicationPartTx(ctx, tx, caller, input, payload)
+		return transactionErr
 	})
 	if err != nil {
 		return ucidomain.IndexPartAck{}, err
 	}
 	return acknowledgement, nil
+}
+
+func (publisher *uciPublisher) stageUCIPublicationPartTx(ctx context.Context, tx *gorm.DB, caller ucidomain.IndexCaller, input ucidomain.IndexStageInput, payload []byte) (ucidomain.IndexPartAck, error) {
+	checkout, err := lockUCIPublicationCheckout(ctx, tx, input.Build.Scope)
+	if err != nil {
+		return ucidomain.IndexPartAck{}, err
+	}
+	job, err := lockUCIPublicationJobByID(ctx, tx, input.Build.BuildID)
+	if err != nil {
+		return ucidomain.IndexPartAck{}, err
+	}
+	now, err := uciDatabaseClock(ctx, tx)
+	if err != nil {
+		return ucidomain.IndexPartAck{}, err
+	}
+	intentRow, err := validateUCIPublicationIntentClaim(ctx, tx, uciPublicationIntentClaimValidation{
+		job:       job,
+		claim:     input.IntentClaim,
+		scope:     input.Build.Scope,
+		profileID: *job.ProfileID,
+		now:       now,
+	})
+	if err != nil {
+		return ucidomain.IndexPartAck{}, err
+	}
+	if !matchesUCIPublicationBuild(*job, checkout, caller, input.Build) {
+		return ucidomain.IndexPartAck{}, errUCIPublicationRejected
+	}
+	acknowledgement, found, err := loadUCIPublicationStagedAcknowledgement(ctx, tx, input)
+	if err != nil || found {
+		return acknowledgement, err
+	}
+	if !activeUCIPublicationLease(*job, checkout, caller, input.Build, now) {
+		return ucidomain.IndexPartAck{}, errUCIPublicationLeaseStale
+	}
+	leaseExpiry := now.Add(publisher.limits.LeaseTTL)
+	if err := renewUCIPublicationStageLease(ctx, tx, caller, input, job, checkout, intentRow, leaseExpiry, now); err != nil {
+		return ucidomain.IndexPartAck{}, err
+	}
+	if err := publisher.validateUCIPublicationStageCapacity(ctx, tx, input, payload); err != nil {
+		return ucidomain.IndexPartAck{}, err
+	}
+	return storeUCIPublicationStagedPart(ctx, tx, input, payload, now)
+}
+
+func loadUCIPublicationStagedAcknowledgement(ctx context.Context, tx *gorm.DB, input ucidomain.IndexStageInput) (ucidomain.IndexPartAck, bool, error) {
+	var existing UCIIndexBuildPart
+	err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where(
+		"build_id = ? AND sequence = ?", input.Build.BuildID, input.Sequence,
+	).First(&existing).Error
+	if err == nil {
+		if existing.PartDigest != string(input.Digest) {
+			return ucidomain.IndexPartAck{}, false, errUCIPublicationIdempotencyMismatch
+		}
+		return ucidomain.IndexPartAck{BuildID: input.Build.BuildID, Sequence: input.Sequence, Digest: input.Digest}, true, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return ucidomain.IndexPartAck{}, false, fmt.Errorf("uci publication load staged part: %w", err)
+	}
+	return ucidomain.IndexPartAck{}, false, nil
+}
+
+func renewUCIPublicationStageLease(ctx context.Context, tx *gorm.DB, caller ucidomain.IndexCaller, input ucidomain.IndexStageInput, job *UCIJob, checkout *UCICheckout, intentRow *indexIntentRow, leaseExpiry, now time.Time) error {
+	checkoutUpdate := tx.WithContext(ctx).Model(&UCICheckout{}).
+		Where("checkout_id = ? AND lease_epoch = ? AND owner_instance = ?", checkout.CheckoutID, input.Build.LeaseEpoch, caller.OwnerInstance).
+		Updates(map[string]any{"lease_expires_at": leaseExpiry, "updated_at": now})
+	if checkoutUpdate.Error != nil {
+		return fmt.Errorf("uci publication renew checkout lease: %w", checkoutUpdate.Error)
+	}
+	if checkoutUpdate.RowsAffected != 1 {
+		return errUCIPublicationLeaseStale
+	}
+	jobUpdate := tx.WithContext(ctx).Model(&UCIJob{}).
+		Where("job_id = ? AND owner_epoch = ? AND lease_owner = ? AND state = ?", job.JobID, input.Build.LeaseEpoch, caller.OwnerInstance, UCIJobRunning).
+		Updates(map[string]any{"lease_expiry": leaseExpiry, "updated_at": now})
+	if jobUpdate.Error != nil {
+		return fmt.Errorf("uci publication renew build lease: %w", jobUpdate.Error)
+	}
+	if jobUpdate.RowsAffected != 1 {
+		return errUCIPublicationLeaseStale
+	}
+	if intentRow == nil {
+		return nil
+	}
+	intentRow.ClaimExpiresAt = indexIntentTime(leaseExpiry)
+	intentRow.UpdatedAt = now
+	if err := updateIndexIntentRow(ctx, tx, *intentRow, string(ucidomain.IndexIntentRunning), input.IntentClaim); err != nil {
+		return errUCIPublicationLeaseStale
+	}
+	return nil
+}
+
+func (publisher *uciPublisher) validateUCIPublicationStageCapacity(ctx context.Context, tx *gorm.DB, input ucidomain.IndexStageInput, payload []byte) error {
+	var partCount int64
+	if err := tx.WithContext(ctx).Model(&UCIIndexBuildPart{}).Where(uciProjectionBuildIDWhere, input.Build.BuildID).Count(&partCount).Error; err != nil {
+		return fmt.Errorf("uci publication count staged parts: %w", err)
+	}
+	if partCount >= int64(publisher.limits.MaxParts) || input.Sequence != uint32(partCount) {
+		return errUCIPublicationBuildIncomplete
+	}
+	var totalBytes int64
+	if err := tx.WithContext(ctx).Model(&UCIIndexBuildPart{}).Where(uciProjectionBuildIDWhere, input.Build.BuildID).Select("COALESCE(SUM(payload_bytes), 0)").Scan(&totalBytes).Error; err != nil {
+		return fmt.Errorf("uci publication total staged bytes: %w", err)
+	}
+	if totalBytes > publisher.limits.MaxBuildBytes-int64(len(payload)) {
+		return errUCIPublicationBuildIncomplete
+	}
+	return nil
+}
+
+func storeUCIPublicationStagedPart(ctx context.Context, tx *gorm.DB, input ucidomain.IndexStageInput, payload []byte, now time.Time) (ucidomain.IndexPartAck, error) {
+	row := UCIIndexBuildPart{
+		BuildID:      input.Build.BuildID,
+		Sequence:     input.Sequence,
+		PartDigest:   string(input.Digest),
+		Payload:      string(payload),
+		PayloadBytes: int64(len(payload)),
+		CreatedAt:    now,
+	}
+	if err := tx.WithContext(ctx).Create(&row).Error; err != nil {
+		return ucidomain.IndexPartAck{}, fmt.Errorf("uci publication store staged part: %w", err)
+	}
+	return ucidomain.IndexPartAck{BuildID: input.Build.BuildID, Sequence: input.Sequence, Digest: input.Digest}, nil
 }
 
 func validUCIPublicationBuild(build ucidomain.IndexBuildRef) bool {
