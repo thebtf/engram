@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -390,37 +391,67 @@ func requiresUCIRequestCorrelation(req *pb.CallToolRequest) bool {
 }
 
 func v3CallToolIntent(toolName string, args []byte) (projectidentity.ResolutionIntentV3, bool) {
-	var values map[string]json.RawMessage
-	if len(bytes.TrimSpace(args)) == 0 || json.Unmarshal(args, &values) != nil || values == nil {
+	values, action, ok := v3CallToolArguments(args)
+	if !ok {
 		return projectidentity.ResolveExistingIntentV3, false
 	}
-	action := ""
-	if rawAction, ok := values["action"]; ok && !bytes.Equal(bytes.TrimSpace(rawAction), []byte("null")) {
-		if json.Unmarshal(rawAction, &action) != nil {
-			return projectidentity.ResolveExistingIntentV3, false
-		}
+	return v3CallToolIntentForArguments(toolName, action, values)
+}
+
+func v3CallToolArguments(args []byte) (map[string]json.RawMessage, string, bool) {
+	var values map[string]json.RawMessage
+	if len(bytes.TrimSpace(args)) == 0 || json.Unmarshal(args, &values) != nil || values == nil {
+		return nil, "", false
 	}
+	rawAction, hasAction := values["action"]
+	if !hasAction || bytes.Equal(bytes.TrimSpace(rawAction), []byte("null")) {
+		return values, "", true
+	}
+	var action string
+	if json.Unmarshal(rawAction, &action) != nil {
+		return nil, "", false
+	}
+	return values, action, true
+}
+
+func v3CallToolIntentForArguments(toolName, action string, values map[string]json.RawMessage) (projectidentity.ResolutionIntentV3, bool) {
 	if toolName == "admin" && action == "purge_project" {
 		return projectidentity.ResolveExistingIntentV3, true
 	}
-	rawProject, hasProject := values["project"]
-	hasProject = hasProject && !bytes.Equal(bytes.TrimSpace(rawProject), []byte("null"))
 	if toolName == "issues" {
-		rawSourceProject, hasSourceProject := values["source_project"]
-		hasSourceProject = hasSourceProject && !bytes.Equal(bytes.TrimSpace(rawSourceProject), []byte("null"))
-		if (action == "" || action == "list") && (hasProject || hasSourceProject) {
-			return projectidentity.ReadFilterIntentV3, false
-		}
-		return projectidentity.ResolveExistingIntentV3, false
+		return v3IssueCallToolIntent(action, values)
 	}
-	if hasProject {
-		switch toolName {
-		case "review_metrics.read", "review_queue.read",
-			"rule_governance_health", "rule_governance_queue", "rule_governance_snapshots", "rule_governance_usefulness":
-			return projectidentity.ReadFilterIntentV3, false
-		}
+	if v3ReadFilterToolWithProject(toolName, values) {
+		return projectidentity.ReadFilterIntentV3, false
 	}
 	return projectidentity.ResolveExistingIntentV3, false
+}
+
+func v3IssueCallToolIntent(action string, values map[string]json.RawMessage) (projectidentity.ResolutionIntentV3, bool) {
+	if action != "" && action != "list" {
+		return projectidentity.ResolveExistingIntentV3, false
+	}
+	if v3CallToolArgumentPresent(values, "project") || v3CallToolArgumentPresent(values, "source_project") {
+		return projectidentity.ReadFilterIntentV3, false
+	}
+	return projectidentity.ResolveExistingIntentV3, false
+}
+
+func v3ReadFilterToolWithProject(toolName string, values map[string]json.RawMessage) bool {
+	if !v3CallToolArgumentPresent(values, "project") {
+		return false
+	}
+	switch toolName {
+	case "review_metrics.read", "review_queue.read", "rule_governance_health", "rule_governance_queue", "rule_governance_snapshots", "rule_governance_usefulness":
+		return true
+	default:
+		return false
+	}
+}
+
+func v3CallToolArgumentPresent(values map[string]json.RawMessage, name string) bool {
+	raw, found := values[name]
+	return found && !bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }
 
 const projectIdentityResolutionUnavailableMessage = "project identity resolution unavailable"
@@ -440,69 +471,118 @@ func canonicalizeProjectArgument(toolName string, args []byte, canonicalProject 
 	if canonicalProject == "" || len(bytes.TrimSpace(args)) == 0 {
 		return args, nil
 	}
+	input, found, err := parseCanonicalProjectArguments(toolName, args, preserveV2Target)
+	if err != nil {
+		return nil, err
+	}
+	if !found || (input.project == "" && input.sourceProject == "") || (preserveV2Target && preservesV2ProjectArgument(toolName, input.action)) {
+		return args, nil
+	}
+	return replaceCanonicalProjectArguments(args, input, canonicalProject)
+}
 
+type canonicalProjectArguments struct {
+	values        map[string]json.RawMessage
+	project       string
+	sourceProject string
+	action        string
+}
+
+func parseCanonicalProjectArguments(toolName string, args []byte, preserveV2Target bool) (canonicalProjectArguments, bool, error) {
+	values, found, err := decodeCanonicalProjectArguments(args)
+	if err != nil || !found {
+		return canonicalProjectArguments{}, found, err
+	}
+	project, err := canonicalProjectString(values, "project")
+	if err != nil {
+		return canonicalProjectArguments{}, false, err
+	}
+	sourcePresent := v3CallToolArgumentPresent(values, "source_project")
+	parseAction := project != "" || (!preserveV2Target && toolName == "issues" && sourcePresent)
+	action, err := canonicalProjectAction(values, parseAction)
+	if err != nil {
+		return canonicalProjectArguments{}, false, err
+	}
+	sourceProject := ""
+	if !preserveV2Target && toolName == "issues" && (action == "" || action == "list") && sourcePresent {
+		sourceProject, err = canonicalProjectString(values, "source_project")
+		if err != nil {
+			return canonicalProjectArguments{}, false, err
+		}
+	}
+	return canonicalProjectArguments{values: values, project: project, sourceProject: sourceProject, action: action}, true, nil
+}
+
+func decodeCanonicalProjectArguments(args []byte) (map[string]json.RawMessage, bool, error) {
 	var values map[string]json.RawMessage
 	if err := json.Unmarshal(args, &values); err != nil || values == nil {
-		return args, nil
+		return nil, false, nil
 	}
 	for key := range values {
 		if key != "project" && strings.EqualFold(key, "project") {
-			return nil, errors.New(`tool arguments.project must use the lowercase "project" key`)
+			return nil, false, errors.New(`tool arguments.project must use the lowercase "project" key`)
 		}
 	}
-	rawProject, hasProject := values["project"]
-	project := ""
-	if hasProject && !bytes.Equal(bytes.TrimSpace(rawProject), []byte("null")) {
-		if err := json.Unmarshal(rawProject, &project); err != nil {
-			return nil, errors.New("tool arguments.project must be a string")
-		}
-	}
-	rawSourceProject, hasSourceProject := values["source_project"]
-	parseAction := project != "" || (!preserveV2Target && toolName == "issues" && hasSourceProject && !bytes.Equal(bytes.TrimSpace(rawSourceProject), []byte("null")))
-	var action string
-	if rawAction, ok := values["action"]; parseAction && ok {
-		if bytes.Equal(bytes.TrimSpace(rawAction), []byte("null")) || json.Unmarshal(rawAction, &action) != nil {
-			return nil, errors.New("tool arguments.action must be a string")
-		}
-	}
-	sourceProject := ""
-	if !preserveV2Target && toolName == "issues" && (action == "" || action == "list") && hasSourceProject && !bytes.Equal(bytes.TrimSpace(rawSourceProject), []byte("null")) {
-		if err := json.Unmarshal(rawSourceProject, &sourceProject); err != nil {
-			return nil, errors.New("tool arguments.source_project must be a string")
-		}
-	}
-	if project == "" && sourceProject == "" {
-		return args, nil
-	}
-	if preserveV2Target {
-		if (toolName == "admin" && action == "purge_project") ||
-			(toolName == "issues" && (action == "" || action == "list")) {
-			return args, nil
-		}
-		switch toolName {
-		case "review_metrics.read", "review_queue.read",
-			"rule_governance_health", "rule_governance_queue", "rule_governance_snapshots", "rule_governance_usefulness":
-			return args, nil
-		}
-	}
+	return values, true, nil
+}
 
+func canonicalProjectString(values map[string]json.RawMessage, key string) (string, error) {
+	raw, present := values[key]
+	if !present || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "", nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", fmt.Errorf("tool arguments.%s must be a string", key)
+	}
+	return value, nil
+}
+
+func canonicalProjectAction(values map[string]json.RawMessage, required bool) (string, error) {
+	if !required {
+		return "", nil
+	}
+	raw, present := values["action"]
+	if !present || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "", errors.New("tool arguments.action must be a string")
+	}
+	var action string
+	if err := json.Unmarshal(raw, &action); err != nil {
+		return "", errors.New("tool arguments.action must be a string")
+	}
+	return action, nil
+}
+
+func preservesV2ProjectArgument(toolName, action string) bool {
+	if (toolName == "admin" && action == "purge_project") || (toolName == "issues" && (action == "" || action == "list")) {
+		return true
+	}
+	switch toolName {
+	case "review_metrics.read", "review_queue.read", "rule_governance_health", "rule_governance_queue", "rule_governance_snapshots", "rule_governance_usefulness":
+		return true
+	default:
+		return false
+	}
+}
+
+func replaceCanonicalProjectArguments(args []byte, input canonicalProjectArguments, canonicalProject string) ([]byte, error) {
 	encodedProject, err := json.Marshal(canonicalProject)
 	if err != nil {
 		return nil, err
 	}
 	changed := false
-	if project != "" && project != canonicalProject {
-		values["project"] = encodedProject
+	if input.project != "" && input.project != canonicalProject {
+		input.values["project"] = encodedProject
 		changed = true
 	}
-	if sourceProject != "" && sourceProject != canonicalProject {
-		values["source_project"] = encodedProject
+	if input.sourceProject != "" && input.sourceProject != canonicalProject {
+		input.values["source_project"] = encodedProject
 		changed = true
 	}
 	if !changed {
 		return args, nil
 	}
-	return json.Marshal(values)
+	return json.Marshal(input.values)
 }
 
 // grpcV3AuthorizationVerifier admits only the opaque reference generated in
