@@ -259,7 +259,7 @@ func (service *RecoveryService) Recover(ctx context.Context, request RecoveryReq
 	return RecoveryResult{View: cloneReconcilePublishedView(view)}, nil
 }
 
-func (service *RecoveryService) recoveryCurrent(ctx context.Context, root string, observedHighWater int64, update *RecoveryUpdateAccounting) (RecoveryCurrent, []IndexPart, []IndexMembership, error) {
+func (service *RecoveryService) recoveryCurrent(ctx context.Context, root AuthorizedRootEvidence, observedHighWater int64, update *RecoveryUpdateAccounting) (RecoveryCurrentBytes, []IndexPart, []IndexMembership, error) {
 	current, err := service.current.ScanCurrent(ctx, root)
 	if update != nil {
 		update.Scan = completeRecoveryUpdateTiming(update.Scan.StartedAt, service.recoveryUpdateNow())
@@ -273,12 +273,12 @@ func (service *RecoveryService) recoveryCurrent(ctx context.Context, root string
 	}
 	if err != nil {
 		markRecoveryUpdateFailure(update, RecoveryUpdateOutcomeFailed, RecoveryUpdateFailureScan)
-		return RecoveryCurrent{}, nil, nil, fmt.Errorf("uci recovery: scan current bytes: %w", err)
+		return RecoveryCurrentBytes{}, nil, nil, fmt.Errorf("uci recovery: scan current bytes: %w", err)
 	}
 	canonicalCurrent, currentParts, memberships, err := canonicalRecoveryCurrent(current, observedHighWater)
 	if err != nil {
 		markRecoveryUpdateFailure(update, RecoveryUpdateOutcomeFailed, RecoveryUpdateFailureScan)
-		return RecoveryCurrent{}, nil, nil, err
+		return RecoveryCurrentBytes{}, nil, nil, err
 	}
 	if update != nil {
 		update.ScanOutcome = canonicalCurrent.Scan.Census.Outcome
@@ -286,7 +286,7 @@ func (service *RecoveryService) recoveryCurrent(ctx context.Context, root string
 	}
 	if err := validateRecoveryCandidateSources(canonicalCurrent.EmbeddingCandidates, currentParts, memberships); err != nil {
 		markRecoveryUpdateFailure(update, RecoveryUpdateOutcomeFailed, RecoveryUpdateFailureScan)
-		return RecoveryCurrent{}, nil, nil, err
+		return RecoveryCurrentBytes{}, nil, nil, err
 	}
 	return canonicalCurrent, currentParts, memberships, nil
 }
