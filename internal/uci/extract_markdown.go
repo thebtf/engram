@@ -655,10 +655,7 @@ func markdownBareDestination(line []byte, rawStart int) (int, int, int, bool) {
 		}
 		if line[index] == ')' {
 			if depth == 0 {
-				if rawStart == index {
-					return 0, 0, 0, false
-				}
-				return rawStart, index, index, true
+				return markdownBareDestinationClose(rawStart, index)
 			}
 			depth--
 			continue
@@ -668,6 +665,13 @@ func markdownBareDestination(line []byte, rawStart int) (int, int, int, bool) {
 		}
 	}
 	return 0, 0, 0, false
+}
+
+func markdownBareDestinationClose(rawStart, index int) (int, int, int, bool) {
+	if rawStart == index {
+		return 0, 0, 0, false
+	}
+	return rawStart, index, index, true
 }
 
 func markdownBareTitleClose(line []byte, rawStart, index int) (int, int, int, bool) {
