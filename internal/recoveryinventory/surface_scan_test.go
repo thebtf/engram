@@ -247,33 +247,35 @@ func TestScanSurfacesClassifiesUnresolvedHookActivation(t *testing.T) {
 		"direct":           "node plugin/engram/hooks/dispatcher.cjs",
 		"custom":           "node custom-dispatcher.cjs",
 	} {
-		t.Run(name, func(t *testing.T) {
-			root := t.TempDir()
-			writeSurfaceSource(t, root, "plugin/engram/hooks/hooks.json", `{"hooks":{"SessionStart":[{"hooks":[{"command":"`+command+`"}]}]}}`)
-			writeSurfaceSource(t, root, "plugin/engram/hooks/dispatcher.cjs", "module.exports.main = () => {}\n")
+		t.Run(name, func(t *testing.T) { assertHookActivationClassification(t, name, command) })
+	}
+}
 
-			report, err := ScanSurfaces(root)
-			if err != nil {
-				t.Fatal(err)
-			}
-			found := false
-			for _, record := range report.Records {
-				if record.Kind != "hook" || record.Name != "dispatcher" {
-					continue
-				}
-				found = true
-				want := "source-uncertain"
-				if name == "direct" {
-					want = "source-declared"
-				}
-				if record.Classification != want {
-					t.Fatalf("dispatcher classification = %q, want %q: %#v", record.Classification, want, report.Records)
-				}
-			}
-			if found != (name != "custom") {
-				t.Fatalf("dispatcher record = %t, want %t: %#v", found, name != "custom", report.Records)
-			}
-		})
+func assertHookActivationClassification(t *testing.T, name, command string) {
+	t.Helper()
+	root := t.TempDir()
+	writeSurfaceSource(t, root, "plugin/engram/hooks/hooks.json", `{"hooks":{"SessionStart":[{"hooks":[{"command":"`+command+`"}]}]}}`)
+	writeSurfaceSource(t, root, "plugin/engram/hooks/dispatcher.cjs", "module.exports.main = () => {}\n")
+	report, err := ScanSurfaces(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, record := range report.Records {
+		if record.Kind != "hook" || record.Name != "dispatcher" {
+			continue
+		}
+		found = true
+		want := "source-uncertain"
+		if name == "direct" {
+			want = "source-declared"
+		}
+		if record.Classification != want {
+			t.Fatalf("dispatcher classification = %q, want %q: %#v", record.Classification, want, report.Records)
+		}
+	}
+	if found != (name != "custom") {
+		t.Fatalf("dispatcher record = %t, want %t: %#v", found, name != "custom", report.Records)
 	}
 }
 
@@ -302,6 +304,16 @@ func TestScanSurfacesMarksUnavailableHookManifestUncertain(t *testing.T) {
 
 func TestScanSurfacesMarksUnresolvedSourceSemanticsUncertain(t *testing.T) {
 	root := t.TempDir()
+	writeUnresolvedSurfaceSources(t, root)
+	report, err := ScanSurfaces(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertUnresolvedSurfaceRecords(t, report)
+}
+
+func writeUnresolvedSurfaceSources(t *testing.T, root string) {
+	t.Helper()
 	writeSurfaceSource(t, root, "internal/worker/routes.go", `package worker
 
 import chi "github.com/go-chi/chi/v5"
@@ -335,11 +347,10 @@ func (*Dynamic) Tools() []module.ToolDef { return factory() }
 
 func (*DynamicName) Tools() []module.ToolDef { return []module.ToolDef{{Name: dynamicName}} }
 `)
+}
 
-	report, err := ScanSurfaces(root)
-	if err != nil {
-		t.Fatal(err)
-	}
+func assertUnresolvedSurfaceRecords(t *testing.T, report Report) {
+	t.Helper()
 	if !hasSurfaceRecord(report, "http-route", "GET /exact") || !hasSurfaceRecord(report, "daemon-tool", "literal") {
 		t.Fatalf("literal routes or tools missing: %#v", report.Records)
 	}
@@ -514,6 +525,7 @@ const raw = `+"`createPresetTool('preset_template')`"+`;
 		}
 	}
 }
+
 func TestScanSurfacesLexesToolAndRPCDeclarationsWithoutSourceInjection(t *testing.T) {
 	root := t.TempDir()
 	writeSurfaceSource(t, root, "internal/mcp/tools.go", "package mcp\n\n"+
@@ -592,6 +604,7 @@ service Example {
 		}
 	}
 }
+
 func hasSurfaceRecord(report Report, kind, name string) bool {
 	for _, record := range report.Records {
 		if record.Kind == kind && record.Name == name {
