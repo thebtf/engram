@@ -586,45 +586,54 @@ func (s CandidateSnapshot) Candidates() []AuthorizedCandidateRef {
 }
 
 func (s CandidateSnapshot) valid() bool {
-	if len(s.candidates) > MaxPreparedCandidates {
-		return false
-	}
-	switch s.mode {
+	return len(s.candidates) <= MaxPreparedCandidates &&
+		validSnapshotCandidates(s.mode, s.candidates) &&
+		uniqueCandidateIDs(s.candidates)
+}
+
+func validSnapshotCandidates(mode RetrievalMode, candidates []AuthorizedCandidateRef) bool {
+	switch mode {
 	case RetrievalEmpty:
-		return len(s.candidates) == 0
+		return len(candidates) == 0
 	case RetrievalExact:
-		if len(s.candidates) == 0 {
-			return false
-		}
-		for _, candidate := range s.candidates {
-			if !candidate.valid() || candidate.tier != CandidateExact {
-				return false
-			}
-		}
+		return candidatesHaveTier(candidates, CandidateExact)
 	case RetrievalLexicalDegraded:
-		if len(s.candidates) == 0 {
-			return false
-		}
-		for _, candidate := range s.candidates {
-			if !candidate.valid() || candidate.tier != CandidateFTS {
-				return false
-			}
-		}
+		return candidatesHaveTier(candidates, CandidateFTS)
 	case RetrievalHybrid:
-		if len(s.candidates) == 0 {
-			return false
-		}
-		for _, candidate := range s.candidates {
-			if !candidate.valid() || (candidate.tier != CandidateFTS && candidate.tier != CandidateVector) {
-				return false
-			}
-		}
+		return candidatesHaveHybridTiers(candidates)
 	default:
 		return false
 	}
-	for index, candidate := range s.candidates {
+}
+
+func candidatesHaveTier(candidates []AuthorizedCandidateRef, tier CandidateSourceTier) bool {
+	if len(candidates) == 0 {
+		return false
+	}
+	for _, candidate := range candidates {
+		if !candidate.valid() || candidate.tier != tier {
+			return false
+		}
+	}
+	return true
+}
+
+func candidatesHaveHybridTiers(candidates []AuthorizedCandidateRef) bool {
+	if len(candidates) == 0 {
+		return false
+	}
+	for _, candidate := range candidates {
+		if !candidate.valid() || (candidate.tier != CandidateFTS && candidate.tier != CandidateVector) {
+			return false
+		}
+	}
+	return true
+}
+
+func uniqueCandidateIDs(candidates []AuthorizedCandidateRef) bool {
+	for index, candidate := range candidates {
 		for previous := range index {
-			if s.candidates[previous].id == candidate.id {
+			if candidates[previous].id == candidate.id {
 				return false
 			}
 		}
