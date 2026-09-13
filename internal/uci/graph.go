@@ -77,6 +77,17 @@ type graphWorkItem struct {
 	depth int
 }
 
+type graphExplorationInput struct {
+	authorized  AuthorizedContext
+	contextRef  ContextRef
+	spec        GraphSpec
+	cursor      graphCursor
+	start       QueryEntityRef
+	destination *QueryEntityRef
+	coverage    IndexCoverageState
+	unresolved  []GraphUnresolvedSite
+}
+
 // Explore evaluates one graph request inside an already-authorized immutable View.
 // Relations are static index evidence only. In particular, calls and may_call never
 // assert runtime execution.
@@ -108,79 +119,103 @@ func (service *GraphService) Explore(ctx context.Context, authorized AuthorizedC
 
 	operationCtx, cancel := graphOperationContext(ctx, normalized.Budget.Deadline)
 	defer cancel()
-
-	resolved, expired, err := service.resolveTarget(operationCtx, authorized, normalized.Target)
+	start, destination, coverage, unresolved, early, err := service.resolveGraphTargets(operationCtx, authorized, normalized)
 	if err != nil {
 		return GraphResult{}, err
 	}
-	if expired {
-		return graphUnknownResult(IndexCoveragePartial, QueryGraphDeadline), nil
+	if early != nil {
+		return *early, nil
 	}
-	if len(resolved.Candidates) > 1 {
-		return GraphResult{
-			Outcome:    GraphOutcomeAmbiguous,
-			Semantics:  GraphSemanticsStatic,
-			Coverage:   resolved.Coverage,
-			Graph:      QueryGraph{Nodes: []QueryEntityRef{}, Edges: []QueryGraphEdge{}, StopReason: QueryGraphComplete},
-			Candidates: resolved.Candidates,
-			Unresolved: resolved.Unresolved,
-		}, nil
-	}
-	if len(resolved.Candidates) == 0 {
-		return graphTargetUnknownResult(resolved), nil
-	}
-
-	start := resolved.Candidates[0]
-	var destination *QueryEntityRef
-	coverage := resolved.Coverage
-	unresolved := append([]GraphUnresolvedSite(nil), resolved.Unresolved...)
-	if normalized.Action == GraphActionPath {
-		resolvedDestination, expired, err := service.resolveTarget(operationCtx, authorized, *normalized.Destination)
-		if err != nil {
-			return GraphResult{}, err
-		}
-		if expired {
-			return graphUnknownResult(graphCombineCoverage(coverage, IndexCoveragePartial), QueryGraphDeadline), nil
-		}
-		coverage = graphCombineCoverage(coverage, resolvedDestination.Coverage)
-		for _, site := range resolvedDestination.Unresolved {
-			graphMergeUnresolved(&unresolved, site)
-		}
-		graphOrderUnresolved(unresolved)
-		if len(resolvedDestination.Candidates) > 1 {
-			return GraphResult{
-				Outcome:    GraphOutcomeAmbiguous,
-				Semantics:  GraphSemanticsStatic,
-				Coverage:   coverage,
-				Graph:      QueryGraph{Nodes: []QueryEntityRef{}, Edges: []QueryGraphEdge{}, StopReason: QueryGraphComplete},
-				Candidates: resolvedDestination.Candidates,
-				Unresolved: unresolved,
-			}, nil
-		}
-		if len(resolvedDestination.Candidates) == 0 {
-			return graphTargetUnknownResult(GraphTargetResolution{Coverage: coverage, Unresolved: unresolved}), nil
-		}
-		value := resolvedDestination.Candidates[0]
-		destination = &value
-	}
-
 	if graphDeadlineExpired(normalized.Budget.Deadline) {
 		return graphUnknownResult(graphCombineCoverage(coverage, IndexCoveragePartial), QueryGraphDeadline), nil
 	}
+	return service.completeGraphExploration(operationCtx, graphExplorationInput{
+		authorized:  authorized,
+		contextRef:  contextRef,
+		spec:        normalized,
+		cursor:      cursor,
+		start:       start,
+		destination: destination,
+		coverage:    coverage,
+		unresolved:  unresolved,
+	})
+}
 
+func (service *GraphService) resolveGraphTargets(ctx context.Context, authorized AuthorizedContext, spec GraphSpec) (QueryEntityRef, *QueryEntityRef, IndexCoverageState, []GraphUnresolvedSite, *GraphResult, error) {
+	resolved, expired, err := service.resolveTarget(ctx, authorized, spec.Target)
+	if err != nil {
+		return QueryEntityRef{}, nil, IndexCoverageUnavailable, nil, nil, err
+	}
+	if expired {
+		result := graphUnknownResult(IndexCoveragePartial, QueryGraphDeadline)
+		return QueryEntityRef{}, nil, IndexCoverageUnavailable, nil, &result, nil
+	}
+	if len(resolved.Candidates) > 1 {
+		result := graphAmbiguousTargetResult(resolved.Coverage, resolved.Candidates, resolved.Unresolved)
+		return QueryEntityRef{}, nil, IndexCoverageUnavailable, nil, &result, nil
+	}
+	if len(resolved.Candidates) == 0 {
+		result := graphTargetUnknownResult(resolved)
+		return QueryEntityRef{}, nil, IndexCoverageUnavailable, nil, &result, nil
+	}
+	start := resolved.Candidates[0]
+	coverage := resolved.Coverage
+	unresolved := append([]GraphUnresolvedSite(nil), resolved.Unresolved...)
+	if spec.Action != GraphActionPath {
+		return start, nil, coverage, unresolved, nil, nil
+	}
+
+	resolvedDestination, expired, err := service.resolveTarget(ctx, authorized, *spec.Destination)
+	if err != nil {
+		return QueryEntityRef{}, nil, IndexCoverageUnavailable, nil, nil, err
+	}
+	if expired {
+		result := graphUnknownResult(graphCombineCoverage(coverage, IndexCoveragePartial), QueryGraphDeadline)
+		return QueryEntityRef{}, nil, IndexCoverageUnavailable, nil, &result, nil
+	}
+	coverage = graphCombineCoverage(coverage, resolvedDestination.Coverage)
+	for _, site := range resolvedDestination.Unresolved {
+		graphMergeUnresolved(&unresolved, site)
+	}
+	graphOrderUnresolved(unresolved)
+	if len(resolvedDestination.Candidates) > 1 {
+		result := graphAmbiguousTargetResult(coverage, resolvedDestination.Candidates, unresolved)
+		return QueryEntityRef{}, nil, IndexCoverageUnavailable, nil, &result, nil
+	}
+	if len(resolvedDestination.Candidates) == 0 {
+		result := graphTargetUnknownResult(GraphTargetResolution{Coverage: coverage, Unresolved: unresolved})
+		return QueryEntityRef{}, nil, IndexCoverageUnavailable, nil, &result, nil
+	}
+	destination := resolvedDestination.Candidates[0]
+	return start, &destination, coverage, unresolved, nil, nil
+}
+
+func graphAmbiguousTargetResult(coverage IndexCoverageState, candidates []QueryEntityRef, unresolved []GraphUnresolvedSite) GraphResult {
+	return GraphResult{
+		Outcome:    GraphOutcomeAmbiguous,
+		Semantics:  GraphSemanticsStatic,
+		Coverage:   coverage,
+		Graph:      QueryGraph{Nodes: []QueryEntityRef{}, Edges: []QueryGraphEdge{}, StopReason: QueryGraphComplete},
+		Candidates: candidates,
+		Unresolved: unresolved,
+	}
+}
+
+func (service *GraphService) completeGraphExploration(ctx context.Context, input graphExplorationInput) (GraphResult, error) {
 	var traversal graphTraversal
-	switch normalized.Action {
+	var err error
+	switch input.spec.Action {
 	case GraphActionExplain, GraphActionNeighbors:
-		traversal, err = service.exploreNeighbors(operationCtx, authorized, contextRef, normalized, start, coverage)
+		traversal, err = service.exploreNeighbors(ctx, input.authorized, input.contextRef, input.spec, input.start, input.coverage)
 	case GraphActionPath, GraphActionImpact, GraphActionFlow, GraphActionCycles:
-		traversal, err = service.exploreReachable(operationCtx, authorized, contextRef, normalized, start, destination, coverage)
+		traversal, err = service.exploreReachable(ctx, input.authorized, input.contextRef, input.spec, input.start, input.destination, input.coverage)
 	default:
 		return GraphResult{}, fmt.Errorf("uci graph: action is invalid")
 	}
 	if err != nil {
 		return GraphResult{}, err
 	}
-	for _, site := range unresolved {
+	for _, site := range input.unresolved {
 		graphMergeUnresolved(&traversal.unresolved, site)
 	}
 	graphOrderUnresolved(traversal.unresolved)
@@ -190,12 +225,11 @@ func (service *GraphService) Explore(ctx context.Context, authorized AuthorizedC
 	if traversal.coverage != IndexCoverageComplete {
 		traversal.mark(QueryGraphCoverageGap)
 	}
-
-	nodes, edges := graphResultShape(normalized.Action, traversal, start, destination)
-	if normalized.Action == GraphActionPath && traversal.foundPath {
-		nodes, edges = graphPathShape(traversal, start, *destination)
+	nodes, edges := graphResultShape(input.spec.Action, traversal, input.start, input.destination)
+	if input.spec.Action == GraphActionPath && traversal.foundPath {
+		nodes, edges = graphPathShape(traversal, input.start, *input.destination)
 	}
-	return service.graphResult(contextRef, normalized, cursor, traversal, nodes, edges), nil
+	return service.graphResult(input.contextRef, input.spec, input.cursor, traversal, nodes, edges), nil
 }
 
 func (service *GraphService) resolveTarget(ctx context.Context, authorized AuthorizedContext, target GraphTarget) (GraphTargetResolution, bool, error) {
@@ -263,14 +297,11 @@ func (service *GraphService) exploreNeighbors(ctx context.Context, authorized Au
 }
 
 func (service *GraphService) exploreReachable(ctx context.Context, authorized AuthorizedContext, contextRef ContextRef, spec GraphSpec, start QueryEntityRef, destination *QueryEntityRef, coverage IndexCoverageState) (graphTraversal, error) {
-	traversal := newGraphTraversal(coverage)
-	traversal.addNode(start)
-	if destination != nil && graphRefsEqual(start, *destination) {
-		traversal.addNode(*destination)
-		traversal.foundPath = true
+	if traversal, found := graphImmediatePath(coverage, start, destination); found {
 		return traversal, nil
 	}
-
+	traversal := newGraphTraversal(coverage)
+	traversal.addNode(start)
 	queue := []graphWorkItem{{ref: start, depth: 0}}
 	seen := map[string]struct{}{graphRefKey(start): {}}
 	for len(queue) != 0 && !traversal.foundPath {
@@ -326,6 +357,17 @@ func (service *GraphService) exploreReachable(ctx context.Context, authorized Au
 		}
 	}
 	return traversal, nil
+}
+
+func graphImmediatePath(coverage IndexCoverageState, start QueryEntityRef, destination *QueryEntityRef) (graphTraversal, bool) {
+	if destination == nil || !graphRefsEqual(start, *destination) {
+		return graphTraversal{}, false
+	}
+	traversal := newGraphTraversal(coverage)
+	traversal.addNode(start)
+	traversal.addNode(*destination)
+	traversal.foundPath = true
+	return traversal, true
 }
 
 type graphTraversalExpansion struct {
@@ -606,80 +648,108 @@ func graphCycleShape(traversal graphTraversal) ([]QueryEntityRef, []QueryGraphEd
 		adjacency[key] = graphUniqueRefs(adjacency[key])
 	}
 
-	index := 0
-	indexes := make(map[string]int, len(vertices))
-	lowlinks := make(map[string]int, len(vertices))
-	onStack := make(map[string]bool, len(vertices))
-	stack := make([]QueryEntityRef, 0, len(vertices))
-	cyclic := make(map[string]bool, len(vertices))
-	var visit func(QueryEntityRef)
-	visit = func(node QueryEntityRef) {
-		key := graphRefKey(node)
-		index++
-		indexes[key] = index
-		lowlinks[key] = index
-		stack = append(stack, node)
-		onStack[key] = true
-		for _, next := range adjacency[key] {
-			nextKey := graphRefKey(next)
-			if indexes[nextKey] == 0 {
-				visit(next)
-				if lowlinks[nextKey] < lowlinks[key] {
-					lowlinks[key] = lowlinks[nextKey]
-				}
-			} else if onStack[nextKey] && indexes[nextKey] < lowlinks[key] {
-				lowlinks[key] = indexes[nextKey]
-			}
-		}
-		if lowlinks[key] != indexes[key] {
-			return
-		}
-		component := []QueryEntityRef{}
-		for {
-			last := len(stack) - 1
-			member := stack[last]
-			stack = stack[:last]
-			memberKey := graphRefKey(member)
-			onStack[memberKey] = false
-			component = append(component, member)
-			if graphRefsEqual(member, node) {
-				break
-			}
-		}
-		if len(component) > 1 {
-			for _, member := range component {
-				cyclic[graphRefKey(member)] = true
-			}
-			return
-		}
-		member := component[0]
-		for _, next := range adjacency[graphRefKey(member)] {
-			if graphRefsEqual(member, next) {
-				cyclic[graphRefKey(member)] = true
-				return
-			}
+	finder := newGraphCycleFinder(adjacency, len(vertices))
+	for _, vertex := range vertices {
+		if finder.indexes[graphRefKey(vertex)] == 0 {
+			finder.visit(vertex)
 		}
 	}
+	nodes := make([]QueryEntityRef, 0, len(finder.cyclic))
 	for _, vertex := range vertices {
-		if indexes[graphRefKey(vertex)] == 0 {
-			visit(vertex)
-		}
-	}
-
-	nodes := make([]QueryEntityRef, 0, len(cyclic))
-	for _, vertex := range vertices {
-		if cyclic[graphRefKey(vertex)] {
+		if finder.cyclic[graphRefKey(vertex)] {
 			nodes = append(nodes, vertex)
 		}
 	}
 	edges := make([]QueryGraphEdge, 0, len(traversal.edges))
 	for _, edge := range traversal.edges {
-		if cyclic[graphRefKey(edge.From)] && cyclic[graphRefKey(edge.To)] {
+		if finder.cyclic[graphRefKey(edge.From)] && finder.cyclic[graphRefKey(edge.To)] {
 			edges = append(edges, edge)
 		}
 	}
 	graphOrderEdges(edges)
 	return nodes, edges
+}
+
+type graphCycleFinder struct {
+	adjacency map[string][]QueryEntityRef
+	index     int
+	indexes   map[string]int
+	lowlinks  map[string]int
+	onStack   map[string]bool
+	stack     []QueryEntityRef
+	cyclic    map[string]bool
+}
+
+func newGraphCycleFinder(adjacency map[string][]QueryEntityRef, capacity int) *graphCycleFinder {
+	return &graphCycleFinder{
+		adjacency: adjacency,
+		indexes:   make(map[string]int, capacity),
+		lowlinks:  make(map[string]int, capacity),
+		onStack:   make(map[string]bool, capacity),
+		stack:     make([]QueryEntityRef, 0, capacity),
+		cyclic:    make(map[string]bool, capacity),
+	}
+}
+
+func (finder *graphCycleFinder) visit(node QueryEntityRef) {
+	key := graphRefKey(node)
+	finder.index++
+	finder.indexes[key] = finder.index
+	finder.lowlinks[key] = finder.index
+	finder.stack = append(finder.stack, node)
+	finder.onStack[key] = true
+	for _, next := range finder.adjacency[key] {
+		finder.visitNeighbor(node, key, next)
+	}
+	finder.completeComponent(node, key)
+}
+
+func (finder *graphCycleFinder) visitNeighbor(node QueryEntityRef, key string, next QueryEntityRef) {
+	nextKey := graphRefKey(next)
+	if finder.indexes[nextKey] == 0 {
+		finder.visit(next)
+		if finder.lowlinks[nextKey] < finder.lowlinks[key] {
+			finder.lowlinks[key] = finder.lowlinks[nextKey]
+		}
+		return
+	}
+	if finder.onStack[nextKey] && finder.indexes[nextKey] < finder.lowlinks[key] {
+		finder.lowlinks[key] = finder.indexes[nextKey]
+	}
+}
+
+func (finder *graphCycleFinder) completeComponent(node QueryEntityRef, key string) {
+	if finder.lowlinks[key] != finder.indexes[key] {
+		return
+	}
+	component := make([]QueryEntityRef, 0)
+	for {
+		last := len(finder.stack) - 1
+		member := finder.stack[last]
+		finder.stack = finder.stack[:last]
+		finder.onStack[graphRefKey(member)] = false
+		component = append(component, member)
+		if graphRefsEqual(member, node) {
+			break
+		}
+	}
+	finder.markComponent(component)
+}
+
+func (finder *graphCycleFinder) markComponent(component []QueryEntityRef) {
+	if len(component) > 1 {
+		for _, member := range component {
+			finder.cyclic[graphRefKey(member)] = true
+		}
+		return
+	}
+	member := component[0]
+	for _, next := range finder.adjacency[graphRefKey(member)] {
+		if graphRefsEqual(member, next) {
+			finder.cyclic[graphRefKey(member)] = true
+			return
+		}
+	}
 }
 
 func (service *GraphService) graphResult(contextRef ContextRef, spec GraphSpec, cursor graphCursor, traversal graphTraversal, nodes []QueryEntityRef, edges []QueryGraphEdge) GraphResult {
