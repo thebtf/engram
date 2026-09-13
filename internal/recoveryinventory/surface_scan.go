@@ -803,65 +803,71 @@ func (s *routeScanner) scanBlock(block *ast.BlockStmt, scope routeScope) {
 func (s *routeScanner) scanStatement(statement ast.Stmt, scope routeScope) {
 	switch statement := statement.(type) {
 	case *ast.DeclStmt:
-		declaration, ok := statement.Decl.(*ast.GenDecl)
-		if !ok || declaration.Tok != token.VAR {
-			return
-		}
-		for _, spec := range declaration.Specs {
-			value, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
-			s.bindRouterValues(value.Names, value.Values, scope)
-		}
+		s.scanRouterDeclaration(statement, scope)
 	case *ast.AssignStmt:
-		names := make([]*ast.Ident, 0, len(statement.Lhs))
-		for _, left := range statement.Lhs {
-			name, ok := left.(*ast.Ident)
-			if !ok {
-				return
-			}
-			names = append(names, name)
-		}
-		s.bindRouterValues(names, statement.Rhs, scope)
+		s.scanRouterAssignment(statement, scope)
 	case *ast.ExprStmt:
 		s.scanCall(statement.X, scope)
 	case *ast.IfStmt:
-		if statement.Init != nil {
-			s.scanStatement(statement.Init, scope)
-		}
-		s.scanBlock(statement.Body, scope.clone())
-		if statement.Else != nil {
-			s.scanStatement(statement.Else, scope.clone())
-		}
+		s.scanIfStatement(statement, scope)
 	case *ast.ForStmt:
 		s.scanBlock(statement.Body, scope.clone())
 	case *ast.RangeStmt:
 		s.scanBlock(statement.Body, scope.clone())
 	case *ast.SwitchStmt:
-		for _, clause := range statement.Body.List {
-			caseClause, ok := clause.(*ast.CaseClause)
-			if !ok {
-				continue
-			}
-			for _, nested := range caseClause.Body {
-				s.scanStatement(nested, scope.clone())
-			}
-		}
+		s.scanCaseClauses(statement.Body.List, scope)
 	case *ast.TypeSwitchStmt:
-		for _, clause := range statement.Body.List {
-			caseClause, ok := clause.(*ast.CaseClause)
-			if !ok {
-				continue
-			}
-			for _, nested := range caseClause.Body {
-				s.scanStatement(nested, scope.clone())
-			}
-		}
+		s.scanCaseClauses(statement.Body.List, scope)
 	case *ast.BlockStmt:
 		s.scanBlock(statement, scope.clone())
 	case *ast.LabeledStmt:
 		s.scanStatement(statement.Stmt, scope)
+	}
+}
+
+func (s *routeScanner) scanRouterDeclaration(statement *ast.DeclStmt, scope routeScope) {
+	declaration, ok := statement.Decl.(*ast.GenDecl)
+	if !ok || declaration.Tok != token.VAR {
+		return
+	}
+	for _, spec := range declaration.Specs {
+		if value, ok := spec.(*ast.ValueSpec); ok {
+			s.bindRouterValues(value.Names, value.Values, scope)
+		}
+	}
+}
+
+func (s *routeScanner) scanRouterAssignment(statement *ast.AssignStmt, scope routeScope) {
+	names := make([]*ast.Ident, 0, len(statement.Lhs))
+	for _, left := range statement.Lhs {
+		name, ok := left.(*ast.Ident)
+		if !ok {
+			return
+		}
+		names = append(names, name)
+	}
+	s.bindRouterValues(names, statement.Rhs, scope)
+}
+
+func (s *routeScanner) scanIfStatement(statement *ast.IfStmt, scope routeScope) {
+	if statement.Init != nil {
+		s.scanStatement(statement.Init, scope)
+	}
+	s.scanBlock(statement.Body, scope.clone())
+	if statement.Else != nil {
+		s.scanStatement(statement.Else, scope.clone())
+	}
+}
+
+func (s *routeScanner) scanCaseClauses(clauses []ast.Stmt, scope routeScope) {
+	for _, clause := range clauses {
+		caseClause, ok := clause.(*ast.CaseClause)
+		if !ok {
+			continue
+		}
+		for _, nested := range caseClause.Body {
+			s.scanStatement(nested, scope.clone())
+		}
 	}
 }
 
@@ -892,78 +898,102 @@ func isChiNewRouter(expression ast.Expr, aliases map[string]struct{}) bool {
 }
 
 func (s *routeScanner) scanCall(expression ast.Expr, scope routeScope) {
-	call, ok := expression.(*ast.CallExpr)
+	call, selector, router, ok := s.routeCall(expression, scope)
 	if !ok {
 		return
 	}
+	switch selector.Sel.Name {
+	case "Route", "Group":
+		s.scanNestedRoute(call, router, selector.Sel.Name, scope)
+	case "Mount":
+		s.scanMountedRoute(call, router, scope)
+	default:
+		s.scanEndpointRoute(call, router)
+	}
+}
+
+func (s *routeScanner) routeCall(expression ast.Expr, scope routeScope) (*ast.CallExpr, *ast.SelectorExpr, string, bool) {
+	call, ok := expression.(*ast.CallExpr)
+	if !ok {
+		return nil, nil, "", false
+	}
 	selector, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
-		return
+		return nil, nil, "", false
 	}
 	router, ok := s.routerID(selector.X, scope)
 	if !ok {
 		if len(s.chiAliases) > 0 && isRouteCall(selector.Sel.Name) {
 			s.emitUncertainRoute(call)
 		}
+		return nil, nil, "", false
+	}
+	return call, selector, router, true
+}
+
+func (s *routeScanner) scanNestedRoute(call *ast.CallExpr, router, kind string, scope routeScope) {
+	prefix, callback, ok := nestedRouteCallback(call, kind)
+	if !ok {
+		s.emitUncertainRoute(call)
 		return
 	}
-	switch selector.Sel.Name {
-	case "Route", "Group":
-		prefix := ""
-		callbackIndex := 0
-		if selector.Sel.Name == "Route" {
-			if len(call.Args) != 2 {
-				s.emitUncertainRoute(call)
-				return
-			}
-			var valid bool
-			prefix, valid = stringLiteral(call.Args[0])
-			if !valid {
-				s.emitUncertainRoute(call)
-				return
-			}
-			callbackIndex = 1
-		} else if len(call.Args) != 1 {
-			s.emitUncertainRoute(call)
-			return
-		}
-		callback, ok := call.Args[callbackIndex].(*ast.FuncLit)
-		if !ok || callback.Type.Params == nil || len(callback.Type.Params.List) == 0 || len(callback.Type.Params.List[0].Names) != 1 {
-			s.emitUncertainRoute(call)
-			return
-		}
-		callbackScope := scope.clone()
-		child := s.newRouter(false)
-		callbackScope.routers[callback.Type.Params.List[0].Names[0].Name] = child
-		s.relations = append(s.relations, routeRelation{parent: router, child: child, prefix: prefix})
-		s.scanBlock(callback.Body, callbackScope)
-	case "Mount":
+	callbackScope := scope.clone()
+	child := s.newRouter(false)
+	callbackScope.routers[callback.Type.Params.List[0].Names[0].Name] = child
+	s.relations = append(s.relations, routeRelation{parent: router, child: child, prefix: prefix})
+	s.scanBlock(callback.Body, callbackScope)
+}
+
+func nestedRouteCallback(call *ast.CallExpr, kind string) (string, *ast.FuncLit, bool) {
+	prefix, callbackIndex := "", 0
+	if kind == "Route" {
 		if len(call.Args) != 2 {
-			s.emitUncertainRoute(call)
-			return
+			return "", nil, false
 		}
-		prefix, ok := stringLiteral(call.Args[0])
+		var ok bool
+		prefix, ok = stringLiteral(call.Args[0])
 		if !ok {
-			s.emitUncertainRoute(call)
-			return
+			return "", nil, false
 		}
-		child, ok := s.routerID(call.Args[1], scope)
-		if !ok {
-			s.emitUncertainRoute(call)
-			return
-		}
-		s.relations = append(s.relations, routeRelation{parent: router, child: child, prefix: prefix})
-	default:
-		method, route, endpoint, resolved := routeEndpoint(call)
-		if !endpoint {
-			return
-		}
-		if !resolved {
-			s.emitUncertainRoute(call)
-			return
-		}
-		s.routes = append(s.routes, routeDefinition{router: router, method: method, path: route, line: s.fset.Position(call.Pos()).Line})
+		callbackIndex = 1
+	} else if len(call.Args) != 1 {
+		return "", nil, false
 	}
+	callback, ok := call.Args[callbackIndex].(*ast.FuncLit)
+	if !ok || callback.Type.Params == nil || len(callback.Type.Params.List) == 0 || len(callback.Type.Params.List[0].Names) != 1 {
+		return "", nil, false
+	}
+	return prefix, callback, true
+}
+
+func (s *routeScanner) scanMountedRoute(call *ast.CallExpr, router string, scope routeScope) {
+	if len(call.Args) != 2 {
+		s.emitUncertainRoute(call)
+		return
+	}
+	prefix, ok := stringLiteral(call.Args[0])
+	if !ok {
+		s.emitUncertainRoute(call)
+		return
+	}
+	child, ok := s.routerID(call.Args[1], scope)
+	if !ok {
+		s.emitUncertainRoute(call)
+		return
+	}
+	s.relations = append(s.relations, routeRelation{parent: router, child: child, prefix: prefix})
+}
+
+func (s *routeScanner) scanEndpointRoute(call *ast.CallExpr, router string) {
+	method, route, endpoint, resolved := routeEndpoint(call)
+	if !endpoint {
+		return
+	}
+	if !resolved {
+		s.emitUncertainRoute(call)
+		return
+	}
+	s.routes = append(s.routes, routeDefinition{router: router, method: method, path: route, line: s.fset.Position(call.Pos()).Line})
 }
 
 func (s *routeScanner) emitUncertainRoute(call *ast.CallExpr) {
@@ -1005,63 +1035,94 @@ func routeEndpoint(call *ast.CallExpr) (string, string, bool, bool) {
 	if !ok {
 		return "", "", false, false
 	}
-	switch selector.Sel.Name {
+	if isStandardRouteMethod(selector.Sel.Name) {
+		return standardRouteEndpoint(call, selector.Sel.Name)
+	}
+	if selector.Sel.Name == "Method" || selector.Sel.Name == "MethodFunc" {
+		return customRouteEndpoint(call)
+	}
+	return "", "", false, false
+}
+
+func isStandardRouteMethod(name string) bool {
+	switch name {
 	case "Get", "Post", "Put", "Patch", "Delete", "Head", "Options":
-		if len(call.Args) < 2 {
-			return "", "", true, false
-		}
-		route, ok := stringLiteral(call.Args[0])
-		return strings.ToUpper(selector.Sel.Name), route, true, ok
-	case "Method", "MethodFunc":
-		if len(call.Args) < 3 {
-			return "", "", true, false
-		}
-		method, methodOK := httpMethod(call.Args[0])
-		route, routeOK := stringLiteral(call.Args[1])
-		return method, route, true, methodOK && routeOK
+		return true
 	default:
-		return "", "", false, false
+		return false
 	}
 }
 
+func standardRouteEndpoint(call *ast.CallExpr, method string) (string, string, bool, bool) {
+	if len(call.Args) < 2 {
+		return "", "", true, false
+	}
+	route, ok := stringLiteral(call.Args[0])
+	return strings.ToUpper(method), route, true, ok
+}
+
+func customRouteEndpoint(call *ast.CallExpr) (string, string, bool, bool) {
+	if len(call.Args) < 3 {
+		return "", "", true, false
+	}
+	method, methodOK := httpMethod(call.Args[0])
+	route, routeOK := stringLiteral(call.Args[1])
+	return method, route, true, methodOK && routeOK
+}
+
 func (s *routeScanner) emitRoutes() {
+	edges, mounted := routeRelations(s.relations)
+	prefixes := s.routePrefixes(edges, mounted)
+	for _, route := range s.routes {
+		for prefix := range prefixes[route.router] {
+			s.report.add(Record{Kind: httpRouteKind, Path: s.path, Line: route.line, Name: route.method + " " + joinRoute(prefix, route.path), Classification: classificationSourceDeclared})
+		}
+	}
+}
+
+func routeRelations(relations []routeRelation) (map[string][]routeRelation, map[string]struct{}) {
 	edges := make(map[string][]routeRelation)
 	mounted := make(map[string]struct{})
-	for _, relation := range s.relations {
+	for _, relation := range relations {
 		edges[relation.parent] = append(edges[relation.parent], relation)
 		mounted[relation.child] = struct{}{}
 	}
+	return edges, mounted
+}
+
+func (s *routeScanner) routePrefixes(edges map[string][]routeRelation, mounted map[string]struct{}) map[string]map[string]struct{} {
 	prefixes := make(map[string]map[string]struct{})
 	queue := make([]routeRelation, 0, len(s.roots))
 	for router := range s.roots {
-		if _, isMounted := mounted[router]; isMounted {
-			continue
+		if _, isMounted := mounted[router]; !isMounted {
+			prefixes[router] = map[string]struct{}{"": {}}
+			queue = append(queue, routeRelation{child: router})
 		}
-		prefixes[router] = map[string]struct{}{"": {}}
-		queue = append(queue, routeRelation{child: router})
 	}
 	for len(queue) > 0 {
 		current := queue[0].child
 		queue = queue[1:]
 		for _, relation := range edges[current] {
 			for prefix := range prefixes[current] {
-				childPrefix := joinRoute(prefix, relation.prefix)
-				if prefixes[relation.child] == nil {
-					prefixes[relation.child] = make(map[string]struct{})
+				if s.addRoutePrefix(prefixes, relation, prefix) {
+					queue = append(queue, routeRelation{child: relation.child})
 				}
-				if _, seen := prefixes[relation.child][childPrefix]; seen {
-					continue
-				}
-				prefixes[relation.child][childPrefix] = struct{}{}
-				queue = append(queue, routeRelation{child: relation.child})
 			}
 		}
 	}
-	for _, route := range s.routes {
-		for prefix := range prefixes[route.router] {
-			s.report.add(Record{Kind: httpRouteKind, Path: s.path, Line: route.line, Name: route.method + " " + joinRoute(prefix, route.path), Classification: classificationSourceDeclared})
-		}
+	return prefixes
+}
+
+func (s *routeScanner) addRoutePrefix(prefixes map[string]map[string]struct{}, relation routeRelation, prefix string) bool {
+	childPrefix := joinRoute(prefix, relation.prefix)
+	if prefixes[relation.child] == nil {
+		prefixes[relation.child] = make(map[string]struct{})
 	}
+	if _, seen := prefixes[relation.child][childPrefix]; seen {
+		return false
+	}
+	prefixes[relation.child][childPrefix] = struct{}{}
+	return true
 }
 
 func scanDaemonTools(report *Report, path string, source []byte) {
@@ -1074,50 +1135,79 @@ func scanDaemonTools(report *Report, path string, source []byte) {
 	if len(aliases) == 0 {
 		return
 	}
-	constants := stringConstants(parsed)
+	scanner := daemonToolScanner{report: report, path: path, fset: fset, aliases: aliases, constants: stringConstants(parsed)}
 	for _, declaration := range parsed.Decls {
-		function, ok := declaration.(*ast.FuncDecl)
-		if !ok || function.Recv == nil || (function.Name.Name != "Tools" && function.Name.Name != "ProxyTools") {
-			continue
+		if function, ok := declaration.(*ast.FuncDecl); ok {
+			scanner.scanFunction(function)
 		}
-		toolDefResult, ok := moduleToolDefResult(function, aliases)
-		if !ok {
-			continue
-		}
-		ast.Inspect(function.Body, func(node ast.Node) bool {
-			statement, ok := node.(*ast.ReturnStmt)
-			if !ok {
-				return true
-			}
-			if toolDefResult >= len(statement.Results) {
-				emitUncertainTool(report, path, fset.Position(statement.Pos()).Line)
-				return false
-			}
-			expression := statement.Results[toolDefResult]
-			if identifier, ok := expression.(*ast.Ident); ok && identifier.Name == "nil" {
-				return false
-			}
-			list, ok := expression.(*ast.CompositeLit)
-			if !ok || !isModuleToolDefList(list.Type, aliases) {
-				emitUncertainTool(report, path, fset.Position(statement.Pos()).Line)
-				return false
-			}
-			for _, element := range list.Elts {
-				definition, ok := element.(*ast.CompositeLit)
-				if !ok {
-					emitUncertainTool(report, path, fset.Position(element.Pos()).Line)
-					continue
-				}
-				name, ok := moduleToolName(definition, constants)
-				if !ok {
-					emitUncertainTool(report, path, fset.Position(definition.Pos()).Line)
-					continue
-				}
-				report.add(Record{Kind: "daemon-tool", Path: path, Line: fset.Position(definition.Pos()).Line, Name: redactedName(name), Classification: classificationSourceDeclared})
-			}
-			return false
-		})
 	}
+}
+
+type daemonToolScanner struct {
+	report    *Report
+	path      string
+	fset      *token.FileSet
+	aliases   map[string]struct{}
+	constants map[string]string
+	result    int
+}
+
+func (scanner *daemonToolScanner) scanFunction(function *ast.FuncDecl) {
+	if function.Recv == nil || function.Name.Name != "Tools" && function.Name.Name != "ProxyTools" {
+		return
+	}
+	result, ok := moduleToolDefResult(function, scanner.aliases)
+	if !ok {
+		return
+	}
+	scanner.result = result
+	ast.Inspect(function.Body, scanner.scanReturn)
+}
+
+func (scanner *daemonToolScanner) scanReturn(node ast.Node) bool {
+	statement, ok := node.(*ast.ReturnStmt)
+	if !ok {
+		return true
+	}
+	scanner.scanReturnStatement(statement)
+	return false
+}
+
+func (scanner *daemonToolScanner) scanReturnStatement(statement *ast.ReturnStmt) {
+	if scanner.result >= len(statement.Results) {
+		scanner.emitUncertain(statement.Pos())
+		return
+	}
+	expression := statement.Results[scanner.result]
+	if identifier, ok := expression.(*ast.Ident); ok && identifier.Name == "nil" {
+		return
+	}
+	list, ok := expression.(*ast.CompositeLit)
+	if !ok || !isModuleToolDefList(list.Type, scanner.aliases) {
+		scanner.emitUncertain(statement.Pos())
+		return
+	}
+	for _, element := range list.Elts {
+		scanner.scanToolDefinition(element)
+	}
+}
+
+func (scanner *daemonToolScanner) scanToolDefinition(element ast.Expr) {
+	definition, ok := element.(*ast.CompositeLit)
+	if !ok {
+		scanner.emitUncertain(element.Pos())
+		return
+	}
+	name, ok := moduleToolName(definition, scanner.constants)
+	if !ok {
+		scanner.emitUncertain(definition.Pos())
+		return
+	}
+	scanner.report.add(Record{Kind: "daemon-tool", Path: scanner.path, Line: scanner.fset.Position(definition.Pos()).Line, Name: redactedName(name), Classification: classificationSourceDeclared})
+}
+
+func (scanner *daemonToolScanner) emitUncertain(position token.Pos) {
+	emitUncertainTool(scanner.report, scanner.path, scanner.fset.Position(position).Line)
 }
 
 func emitUncertainTool(report *Report, path string, line int) {
