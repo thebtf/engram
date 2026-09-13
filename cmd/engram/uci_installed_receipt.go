@@ -461,6 +461,16 @@ func ValidateUCIInstalledReceipt(receipt UCIInstalledReceipt) error {
 }
 
 func validateUCIInstalledAcceptanceResultForReceipt(result uciInstalledAcceptanceResult) error {
+	if err := uciValidateInstalledAcceptanceResultCore(result); err != nil {
+		return err
+	}
+	if err := uciValidateInstalledAcceptanceResultInitialState(result); err != nil {
+		return err
+	}
+	return uciValidateInstalledAcceptanceResultEvidence(result)
+}
+
+func uciValidateInstalledAcceptanceResultCore(result uciInstalledAcceptanceResult) error {
 	if result.AcceptanceVersion != uciInstalledAcceptanceVersionV1 || result.InstallHarnessVersion != uciInstallHarnessVersionV1 {
 		return fmt.Errorf("installed acceptance version binding is incomplete")
 	}
@@ -488,6 +498,10 @@ func validateUCIInstalledAcceptanceResultForReceipt(result uciInstalledAcceptanc
 	if !result.Parser.UsedInstalledArtifact || result.Parser.InvocationCount < 1 || !uciInstalledReceiptValidSHA256(result.Parser.RequestDigest) {
 		return fmt.Errorf("installed acceptance installed-parser evidence is incomplete")
 	}
+	return nil
+}
+
+func uciValidateInstalledAcceptanceResultInitialState(result uciInstalledAcceptanceResult) error {
 	if err := uciValidateInstalledAcceptanceFixtureEvidence(result.Fixture); err != nil {
 		return err
 	}
@@ -529,6 +543,10 @@ func validateUCIInstalledAcceptanceResultForReceipt(result uciInstalledAcceptanc
 			return fmt.Errorf("installed acceptance third-client default evidence is incomplete")
 		}
 	}
+	return nil
+}
+
+func uciValidateInstalledAcceptanceResultEvidence(result uciInstalledAcceptanceResult) error {
 	if err := uciInstalledReceiptRequireExactMapKeys(result.Refusals, uciInstalledReceiptRefusalNames(), "refusal outcomes"); err != nil {
 		return err
 	}
