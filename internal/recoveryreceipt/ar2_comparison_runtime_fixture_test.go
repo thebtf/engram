@@ -2541,6 +2541,14 @@ func TestAR2CommandEnvSanitizesBoundedCredentialFailure(t *testing.T) {
 	}
 }
 
+type ar2HookDriverDiagnosticCase struct {
+	name             string
+	hookBody         string
+	resolverResponse string
+	code             string
+	success          bool
+}
+
 func TestAR2HookDriverDiagnosticClassification(t *testing.T) {
 	const (
 		bootstrapAdminToken = "fixture-hook-bootstrap-token"
@@ -2576,13 +2584,7 @@ await fetch(process.env.AR2_SERVER_URL + '/api/context/inject', {
 });
 `
 
-	for _, testCase := range []struct {
-		name             string
-		hookBody         string
-		resolverResponse string
-		code             string
-		success          bool
-	}{
+	for _, testCase := range []ar2HookDriverDiagnosticCase{
 		{
 			name:     "unexpected request",
 			hookBody: `await fetch(process.env.AR2_SERVER_URL + '/unexpected', { method: 'POST' });`,
@@ -2681,67 +2683,80 @@ context.Project = body.project_resolution_v3.project_key;`,
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-				writer.Header().Set("Content-Type", "application/json")
-				_, _ = io.WriteString(writer, testCase.resolverResponse)
-			}))
-			defer server.Close()
-
-			fixtureDir := t.TempDir()
-			driver := filepath.Join(fixtureDir, "hook-driver.cjs")
-			if err := os.WriteFile(driver, []byte(ar2HookDriverSource()), 0o600); err != nil {
-				t.Fatal("write Hook diagnostic driver")
-			}
-			hook := filepath.Join(fixtureDir, "hook.cjs")
-			hookSource := "module.exports = { registerProjectIdentityV3: async (context) => {" + testCase.hookBody + "} };\n"
-			if err := os.WriteFile(hook, []byte(hookSource), 0o600); err != nil {
-				t.Fatal("write Hook diagnostic module")
-			}
-
-			output, err := ar2CommandEnv(context.Background(), fixtureDir, ar2FixtureEnvironment(t, "", map[string]string{
-				"AR2_DESCRIPTOR":  descriptor,
-				"AR2_HOOK_LIB":    hook,
-				"AR2_PROJECT_KEY": projectKey,
-				"AR2_SERVER_URL":  server.URL,
-			}), "node", driver)
-			if testCase.success {
-				if err != nil {
-					t.Fatalf("successful Hook driver: %v", err)
-				}
-				var result struct {
-					Step        string `json:"step"`
-					Correlation string `json:"correlation"`
-				}
-				if err := json.Unmarshal(output, &result); err != nil || result.Step != "hook" || result.Correlation != correlation {
-					t.Fatalf("successful Hook driver output = %q, %v", output, err)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatal("failing Hook driver returned nil error")
-			}
-			if len(output) != 0 {
-				t.Fatalf("failing Hook driver emitted stdout: %q", output)
-			}
-			var exitError *exec.ExitError
-			if !errors.As(err, &exitError) {
-				t.Fatalf("Hook driver error did not wrap ExitError: %v", err)
-			}
-			diagnostic := err.Error()
-			for _, expected := range []string{testCase.code, ar2HookDriverFailureMessage} {
-				if !strings.Contains(diagnostic, expected) {
-					t.Fatalf("Hook driver omitted stable diagnostic %q: %s", expected, diagnostic)
-				}
-			}
-			if testCase.code != ar2HookDriverFailureCode && strings.Contains(diagnostic, ar2HookDriverFailureCode) {
-				t.Fatalf("known Hook assertion used generic failure code: %s", diagnostic)
-			}
-			for _, forbidden := range []string{"fixture simulated Hook rejection", descriptor, projectKey, server.URL, bootstrapAdminToken} {
-				if strings.Contains(diagnostic, forbidden) {
-					t.Fatalf("Hook driver leaked %q: %s", forbidden, diagnostic)
-				}
-			}
+			runAR2HookDiagnosticCase(t, testCase, descriptor, projectKey, correlation, bootstrapAdminToken)
 		})
+	}
+}
+
+func runAR2HookDiagnosticCase(t *testing.T, testCase ar2HookDriverDiagnosticCase, descriptor, projectKey, correlation, bootstrapAdminToken string) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, testCase.resolverResponse)
+	}))
+	defer server.Close()
+	fixtureDir := t.TempDir()
+	driver := filepath.Join(fixtureDir, "hook-driver.cjs")
+	if err := os.WriteFile(driver, []byte(ar2HookDriverSource()), 0o600); err != nil {
+		t.Fatal("write Hook diagnostic driver")
+	}
+	hook := filepath.Join(fixtureDir, "hook.cjs")
+	hookSource := "module.exports = { registerProjectIdentityV3: async (context) => {" + testCase.hookBody + "} };\n"
+	if err := os.WriteFile(hook, []byte(hookSource), 0o600); err != nil {
+		t.Fatal("write Hook diagnostic module")
+	}
+	output, err := ar2CommandEnv(context.Background(), fixtureDir, ar2FixtureEnvironment(t, "", map[string]string{
+		"AR2_DESCRIPTOR":  descriptor,
+		"AR2_HOOK_LIB":    hook,
+		"AR2_PROJECT_KEY": projectKey,
+		"AR2_SERVER_URL":  server.URL,
+	}), "node", driver)
+	if testCase.success {
+		assertAR2HookDiagnosticSuccess(t, err, output, correlation)
+		return
+	}
+	assertAR2HookDiagnosticFailure(t, err, output, testCase.code, descriptor, projectKey, server.URL, bootstrapAdminToken)
+}
+
+func assertAR2HookDiagnosticSuccess(t *testing.T, err error, output []byte, correlation string) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("successful Hook driver: %v", err)
+	}
+	var result struct {
+		Step        string `json:"step"`
+		Correlation string `json:"correlation"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil || result.Step != "hook" || result.Correlation != correlation {
+		t.Fatalf("successful Hook driver output = %q, %v", output, err)
+	}
+}
+
+func assertAR2HookDiagnosticFailure(t *testing.T, err error, output []byte, code, descriptor, projectKey, serverURL, bootstrapAdminToken string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("failing Hook driver returned nil error")
+	}
+	if len(output) != 0 {
+		t.Fatalf("failing Hook driver emitted stdout: %q", output)
+	}
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) {
+		t.Fatalf("Hook driver error did not wrap ExitError: %v", err)
+	}
+	diagnostic := err.Error()
+	for _, expected := range []string{code, ar2HookDriverFailureMessage} {
+		if !strings.Contains(diagnostic, expected) {
+			t.Fatalf("Hook driver omitted stable diagnostic %q: %s", expected, diagnostic)
+		}
+	}
+	if code != ar2HookDriverFailureCode && strings.Contains(diagnostic, ar2HookDriverFailureCode) {
+		t.Fatalf("known Hook assertion used generic failure code: %s", diagnostic)
+	}
+	for _, forbidden := range []string{"fixture simulated Hook rejection", descriptor, projectKey, serverURL, bootstrapAdminToken} {
+		if strings.Contains(diagnostic, forbidden) {
+			t.Fatalf("Hook driver leaked %q: %s", forbidden, diagnostic)
+		}
 	}
 }
 
