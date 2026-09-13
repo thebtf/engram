@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.49.0] - 2026-09-13
+
+### Added
+
+- Unified Code Intelligence semantic search for Russian-language queries, with Source, Checkout, and View/worktree identity carried through ACL-bound access.
+- First-index requests now execute their intended action on the real daemon.
+- Interactive Code Explorer search, continuation, graph traversal, and exact-source inspection.
+
+### Fixed
+
+- Reliability and security hardening across Code Intelligence indexing, identity, and access paths.
+
+### Changed
+
+- **OpenClaw plugin 3.9.0.** Code Intelligence identity compatibility across OpenClaw contexts.
+
 ## [6.48.0] - 2026-08-18
 
 ### Added

@@ -28,6 +28,7 @@ func TestDaemonVersionMatchesPluginManifests(t *testing.T) {
 	want := strings.TrimPrefix(Daemon, "v")
 
 	for _, rel := range []string{
+		filepath.Join("plugin", "engram", "package.json"),
 		filepath.Join("plugin", "engram", ".codex-plugin", "plugin.json"),
 		filepath.Join("plugin", "engram", ".claude-plugin", "plugin.json"),
 		filepath.Join("plugin", "engram", ".omp-plugin", "plugin.json"),
