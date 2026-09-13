@@ -167,6 +167,40 @@ func TestFixtureFrameCarriesSearchableAAndResolvedGraphB(t *testing.T) {
 }
 
 func TestRunProvisionsIsolatedPostgresFixture(t *testing.T) {
+	fixture := newPostgresFixtureEnvironment(t)
+
+	published := fixture.runPublished(t)
+	fixture.assertPublishedDurableState(t, published)
+
+	noView := fixture.runNoView(t)
+	fixture.assertNoViewDurableState(t, noView)
+}
+
+type postgresFixtureEnvironment struct {
+	adminStore       *gormdb.Store
+	store            *gormdb.Store
+	schema           string
+	scopedDSN        string
+	projectPrefix    string
+	publishedProject string
+	noViewProject    string
+	email            string
+	password         string
+	root             string
+	dsnFile          string
+	sourceFile       string
+	passwordFile     string
+	keycardFile      string
+}
+
+type fixtureRunReceipt struct {
+	output fixtureOutput
+	stdout string
+	stderr string
+}
+
+func newPostgresFixtureEnvironment(t *testing.T) *postgresFixtureEnvironment {
+	t.Helper()
 	dsn := strings.TrimSpace(os.Getenv("DATABASE_DSN"))
 	if dsn == "" {
 		t.Skip("DATABASE_DSN is required for the PostgreSQL fixture integration test")
@@ -181,136 +215,142 @@ func TestRunProvisionsIsolatedPostgresFixture(t *testing.T) {
 		adminStore.Close()
 		t.Fatalf("create isolated fixture schema: %v", err)
 	}
-	scopedDSN, err := fixtureSchemaDSN(dsn, schema)
+
+	fixture := &postgresFixtureEnvironment{
+		adminStore: adminStore,
+		schema:     schema,
+		root:       t.TempDir(),
+	}
+	t.Cleanup(func() { fixture.cleanup(t) })
+
+	fixture.scopedDSN, err = fixtureSchemaDSN(dsn, schema)
 	if err != nil {
-		adminStore.DB.Exec("DROP SCHEMA " + schema + " CASCADE")
-		adminStore.Close()
 		t.Fatalf("scope fixture database: %v", err)
 	}
-	projectPrefix := fmt.Sprintf("operator-code-live-%d", time.Now().UnixNano())
-	publishedProject := projectPrefix + "-published"
-	noViewProject := projectPrefix + "-no-view"
-	email := projectPrefix + "@fixture.invalid"
-	password := "fixture-browser-password-" + projectPrefix
-	root := t.TempDir()
-	dsnFile := filepath.Join(root, "private-dsn.txt")
-	sourceFile := filepath.Join(root, fixtureSourcePath)
-	passwordFile := filepath.Join(root, "private-password.txt")
-	keycardFile := filepath.Join(root, "private-keycard.txt")
-	for path, content := range map[string][]byte{
-		dsnFile:      []byte(scopedDSN + "\n"),
-		sourceFile:   fixtureSource,
-		passwordFile: []byte(password + "\n"),
-	} {
-		if err := os.WriteFile(path, content, 0o600); err != nil {
-			t.Fatalf("write private fixture input %q: %v", filepath.Base(path), err)
-		}
-	}
-	t.Cleanup(func() {
-		defer adminStore.Close()
-		if err := adminStore.DB.Exec("DROP SCHEMA " + schema + " CASCADE").Error; err != nil {
-			t.Errorf("drop isolated fixture schema: %v", err)
-		}
-		var remaining int64
-		if err := adminStore.DB.Raw("SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = ?", schema).Scan(&remaining).Error; err != nil || remaining != 0 {
-			t.Errorf("isolated fixture schema remains after cleanup: %d, %v", remaining, err)
-		}
-		if err := os.RemoveAll(root); err != nil {
-			t.Errorf("remove private fixture files: %v", err)
-		}
-		if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("private fixture root remains after cleanup: %v", err)
-		}
-	})
+	fixture.projectPrefix = fmt.Sprintf("operator-code-live-%d", time.Now().UnixNano())
+	fixture.publishedProject = fixture.projectPrefix + "-published"
+	fixture.noViewProject = fixture.projectPrefix + "-no-view"
+	fixture.email = fixture.projectPrefix + "@fixture.invalid"
+	fixture.password = "fixture-browser-password-" + fixture.projectPrefix
+	fixture.dsnFile = filepath.Join(fixture.root, "private-dsn.txt")
+	fixture.sourceFile = filepath.Join(fixture.root, fixtureSourcePath)
+	fixture.passwordFile = filepath.Join(fixture.root, "private-password.txt")
+	fixture.keycardFile = filepath.Join(fixture.root, "private-keycard.txt")
+	fixture.writePrivateInputs(t)
+	return fixture
+}
 
-	ctx := context.Background()
-	var publishedStdout, publishedStderr bytes.Buffer
-	if status := run(ctx, []string{
-		"--dsn-file", dsnFile,
-		"--browser-email", email,
-		"--project", publishedProject,
-		"--source-file", sourceFile,
-		"--password-file", passwordFile,
-	}, &publishedStdout, &publishedStderr, defaultCommandDependencies()); status != 0 {
-		t.Fatalf("published fixture run = %d, stderr = %q", status, publishedStderr.String())
+func (fixture *postgresFixtureEnvironment) writePrivateInputs(t *testing.T) {
+	t.Helper()
+	fixture.writePrivateInput(t, fixture.dsnFile, []byte(fixture.scopedDSN+"\n"))
+	fixture.writePrivateInput(t, fixture.sourceFile, fixtureSource)
+	fixture.writePrivateInput(t, fixture.passwordFile, []byte(fixture.password+"\n"))
+}
+
+func (fixture *postgresFixtureEnvironment) writePrivateInput(t *testing.T, path string, content []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("write private fixture input %q: %v", filepath.Base(path), err)
 	}
-	var published fixtureOutput
-	if err := json.Unmarshal(publishedStdout.Bytes(), &published); err != nil {
-		t.Fatalf("decode published fixture receipt: %v", err)
+}
+
+func (fixture *postgresFixtureEnvironment) runPublished(t *testing.T) fixtureRunReceipt {
+	t.Helper()
+	return fixture.run(t, "published", []string{
+		"--dsn-file", fixture.dsnFile,
+		"--browser-email", fixture.email,
+		"--project", fixture.publishedProject,
+		"--source-file", fixture.sourceFile,
+		"--password-file", fixture.passwordFile,
+	})
+}
+
+func (fixture *postgresFixtureEnvironment) runNoView(t *testing.T) fixtureRunReceipt {
+	t.Helper()
+	return fixture.run(t, "no-view", []string{
+		"--dsn-file", fixture.dsnFile,
+		"--browser-email", fixture.email,
+		"--project", fixture.noViewProject,
+		"--source-file", fixture.sourceFile,
+		"--mode", fixtureModeNoView,
+		"--keycard-file", fixture.keycardFile,
+	})
+}
+
+func (fixture *postgresFixtureEnvironment) run(t *testing.T, mode string, args []string) fixtureRunReceipt {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	if status := run(context.Background(), args, &stdout, &stderr, defaultCommandDependencies()); status != 0 {
+		t.Fatalf("%s fixture run = %d, stderr = %q", mode, status, stderr.String())
 	}
+	var output fixtureOutput
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode %s fixture receipt: %v", mode, err)
+	}
+	return fixtureRunReceipt{output: output, stdout: stdout.String(), stderr: stderr.String()}
+}
+
+func (fixture *postgresFixtureEnvironment) assertPublishedDurableState(t *testing.T, receipt fixtureRunReceipt) {
+	t.Helper()
+	published := receipt.output
 	if published.NoView != nil || published.Query != fixtureQuery || published.ExpectedSearch != fixtureQuery || published.ExpectedGraph != fixtureExpectedGraph || published.ExpectedSource != fixtureExpectedSource || published.ExpectedMarker != "operator-code-fixture" {
 		t.Fatalf("published fixture receipt = %#v", published)
 	}
-	assertFixtureOutputRedacted(t, publishedStdout.String(), publishedStderr.String(), scopedDSN, password)
+	assertFixtureOutputRedacted(t, receipt.stdout, receipt.stderr, fixture.scopedDSN, fixture.password)
 
-	store, err := gormdb.NewStore(gormdb.Config{DSN: scopedDSN, MaxConns: 2, LogLevel: logger.Silent})
-	if err != nil {
-		t.Fatalf("open fixture verification store: %v", err)
-	}
-	defer store.Close()
+	store := fixture.verificationStore(t)
 	users := gormdb.NewUserStore(store.DB)
-	user, err := users.GetUserByEmail(email)
+	user, err := users.GetUserByEmail(fixture.email)
 	if err != nil || user.Role != gormdb.DashboardRoleOperator {
 		t.Fatalf("load provisioned browser user = %#v, %v", user, err)
 	}
-	var publishedSource gormdb.UCISource
-	if err := store.DB.Where("auth_realm = ? AND display_name = ?", fixtureAuthRealm, "Operator Code Fixture "+publishedProject).First(&publishedSource).Error; err != nil {
+	var source gormdb.UCISource
+	if err := store.DB.Where("auth_realm = ? AND display_name = ?", fixtureAuthRealm, "Operator Code Fixture "+fixture.publishedProject).First(&source).Error; err != nil {
 		t.Fatalf("load published fixture source: %v", err)
 	}
-	var publishedCheckout gormdb.UCICheckout
-	if err := store.DB.Where("source_id = ?", publishedSource.SourceID).First(&publishedCheckout).Error; err != nil {
+	var checkout gormdb.UCICheckout
+	if err := store.DB.Where("source_id = ?", source.SourceID).First(&checkout).Error; err != nil {
 		t.Fatalf("load published fixture checkout: %v", err)
 	}
 	contexts := gormdb.NewUCIContextStore(store.DB)
-	publishedView, err := contexts.GetCurrentView(ctx, publishedCheckout.CheckoutID)
-	if err != nil || publishedView.State != gormdb.UCIViewPublished || publishedView.SourceID != publishedSource.SourceID || publishedView.ProfileID == "" {
-		t.Fatalf("published fixture view = %#v, %v", publishedView, err)
+	view, err := contexts.GetCurrentView(context.Background(), checkout.CheckoutID)
+	if err != nil || view.State != gormdb.UCIViewPublished || view.SourceID != source.SourceID || view.ProfileID == "" {
+		t.Fatalf("published fixture view = %#v, %v", view, err)
 	}
-	var chunks, edges int64
-	if err := store.DB.Model(&gormdb.UCIChunk{}).Where("source_id = ?", publishedSource.SourceID).Count(&chunks).Error; err != nil || chunks == 0 {
-		t.Fatalf("published fixture chunks = %d, %v", chunks, err)
-	}
-	if err := store.DB.Model(&gormdb.UCIResolvedEdge{}).Where("source_id = ?", publishedSource.SourceID).Count(&edges).Error; err != nil || edges == 0 {
-		t.Fatalf("published fixture edges = %d, %v", edges, err)
-	}
-	candidates, err := gormdb.NewCandidateStore(store.DB, nil).ListByStatus(ctx, publishedProject, models.CandidateStatusPending, fixtureQueueSeedCount+1)
+	fixture.assertPublishedIndexState(t, store, source.SourceID)
+	candidates, err := gormdb.NewCandidateStore(store.DB, nil).ListByStatus(context.Background(), fixture.publishedProject, models.CandidateStatusPending, fixtureQueueSeedCount+1)
 	if err != nil || len(candidates) != fixtureQueueSeedCount {
 		t.Fatalf("published fixture queue candidates = %d, %v", len(candidates), err)
 	}
 	grants := gormdb.NewBrowserReadGrantStore(store.DB)
-	if allowed, err := grants.CanRead(ctx, user.ID, publishedSource.SourceID, publishedCheckout.CheckoutID); err != nil || !allowed {
+	if allowed, err := grants.CanRead(context.Background(), user.ID, source.SourceID, checkout.CheckoutID); err != nil || !allowed {
 		t.Fatalf("published fixture grant allowed = %t, %v", allowed, err)
 	}
+}
 
-	var noViewStdout, noViewStderr bytes.Buffer
-	if status := run(ctx, []string{
-		"--dsn-file", dsnFile,
-		"--browser-email", email,
-		"--project", noViewProject,
-		"--source-file", sourceFile,
-		"--mode", fixtureModeNoView,
-		"--keycard-file", keycardFile,
-	}, &noViewStdout, &noViewStderr, defaultCommandDependencies()); status != 0 {
-		t.Fatalf("no-view fixture run = %d, stderr = %q", status, noViewStderr.String())
+func (fixture *postgresFixtureEnvironment) assertPublishedIndexState(t *testing.T, store *gormdb.Store, sourceID string) {
+	t.Helper()
+	var chunks, edges int64
+	if err := store.DB.Model(&gormdb.UCIChunk{}).Where("source_id = ?", sourceID).Count(&chunks).Error; err != nil || chunks == 0 {
+		t.Fatalf("published fixture chunks = %d, %v", chunks, err)
 	}
-	var noView fixtureOutput
-	if err := json.Unmarshal(noViewStdout.Bytes(), &noView); err != nil {
-		t.Fatalf("decode no-view fixture receipt: %v", err)
+	if err := store.DB.Model(&gormdb.UCIResolvedEdge{}).Where("source_id = ?", sourceID).Count(&edges).Error; err != nil || edges == 0 {
+		t.Fatalf("published fixture edges = %d, %v", edges, err)
 	}
+}
+
+func (fixture *postgresFixtureEnvironment) assertNoViewDurableState(t *testing.T, receipt fixtureRunReceipt) {
+	t.Helper()
+	noView := receipt.output
 	if noView.NoView == nil || noView.Query != fixtureQuery || noView.ExpectedSearch != fixtureQuery || noView.ExpectedGraph != fixtureExpectedGraph || noView.ExpectedSource != fixtureExpectedSource || noView.ExpectedMarker != "operator-code-fixture" || noView.NoView.ParserBundleDigest != string(uci.TreeSitterBundleDigest()) {
 		t.Fatalf("no-view fixture receipt = %#v", noView)
 	}
-	keycardBytes, err := os.ReadFile(keycardFile)
-	if err != nil {
-		t.Fatalf("read private no-view keycard: %v", err)
-	}
-	keycard := strings.TrimSpace(string(keycardBytes))
-	if !strings.HasPrefix(keycard, auth.TokenRawPrefix) {
-		t.Fatal("no-view fixture keycard is unavailable")
-	}
-	assertFixtureOutputRedacted(t, noViewStdout.String(), noViewStderr.String(), scopedDSN, password, keycard)
+	keycard := fixture.noViewKeycard(t)
+	assertFixtureOutputRedacted(t, receipt.stdout, receipt.stderr, fixture.scopedDSN, fixture.password, keycard)
+
+	store := fixture.verificationStore(t)
 	var token gormdb.APIToken
-	if err := store.DB.Where("name = ?", fixtureWorkstationPrefix+noViewProject).First(&token).Error; err != nil || bcrypt.CompareHashAndPassword([]byte(token.TokenHash), []byte(keycard)) != nil {
+	if err := store.DB.Where("name = ?", fixtureWorkstationPrefix+fixture.noViewProject).First(&token).Error; err != nil || bcrypt.CompareHashAndPassword([]byte(token.TokenHash), []byte(keycard)) != nil {
 		t.Fatalf("no-view fixture keycard is not durably stored: %v", err)
 	}
 	selector, err := uci.CheckoutIndexBindingSelector(uci.RegisteredCheckoutSelector{
@@ -320,12 +360,68 @@ func TestRunProvisionsIsolatedPostgresFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("select no-view fixture binding: %v", err)
 	}
-	binding, err := contexts.LoadIndexBinding(ctx, selector)
+	contexts := gormdb.NewUCIContextStore(store.DB)
+	binding, err := contexts.LoadIndexBinding(context.Background(), selector)
 	if err != nil || binding.Context != nil || binding.Scope.SourceID != noView.NoView.SourceID || binding.Scope.CheckoutID != noView.NoView.CheckoutID || binding.Scope.IncarnationID != noView.NoView.IncarnationID || binding.ProfileID != noView.NoView.AnalysisProfileID {
 		t.Fatalf("no-view fixture binding = %#v, %v", binding, err)
 	}
-	if allowed, err := grants.CanRead(ctx, user.ID, noView.NoView.SourceID, noView.NoView.CheckoutID); err != nil || !allowed {
+	user, err := gormdb.NewUserStore(store.DB).GetUserByEmail(fixture.email)
+	if err != nil {
+		t.Fatalf("load provisioned browser user: %v", err)
+	}
+	grants := gormdb.NewBrowserReadGrantStore(store.DB)
+	if allowed, err := grants.CanRead(context.Background(), user.ID, noView.NoView.SourceID, noView.NoView.CheckoutID); err != nil || !allowed {
 		t.Fatalf("no-view fixture grant allowed = %t, %v", allowed, err)
+	}
+}
+
+func (fixture *postgresFixtureEnvironment) noViewKeycard(t *testing.T) string {
+	t.Helper()
+	keycardBytes, err := os.ReadFile(fixture.keycardFile)
+	if err != nil {
+		t.Fatalf("read private no-view keycard: %v", err)
+	}
+	keycard := strings.TrimSpace(string(keycardBytes))
+	if !strings.HasPrefix(keycard, auth.TokenRawPrefix) {
+		t.Fatal("no-view fixture keycard is unavailable")
+	}
+	return keycard
+}
+
+func (fixture *postgresFixtureEnvironment) verificationStore(t *testing.T) *gormdb.Store {
+	t.Helper()
+	if fixture.store != nil {
+		return fixture.store
+	}
+	store, err := gormdb.NewStore(gormdb.Config{DSN: fixture.scopedDSN, MaxConns: 2, LogLevel: logger.Silent})
+	if err != nil {
+		t.Fatalf("open fixture verification store: %v", err)
+	}
+	fixture.store = store
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
+func (fixture *postgresFixtureEnvironment) cleanup(t *testing.T) {
+	t.Helper()
+	defer fixture.adminStore.Close()
+	if err := fixture.adminStore.DB.Exec("DROP SCHEMA " + fixture.schema + " CASCADE").Error; err != nil {
+		t.Errorf("drop isolated fixture schema: %v", err)
+	}
+	if err := os.RemoveAll(fixture.root); err != nil {
+		t.Errorf("remove private fixture files: %v", err)
+	}
+	fixture.assertCleanedUp(t)
+}
+
+func (fixture *postgresFixtureEnvironment) assertCleanedUp(t *testing.T) {
+	t.Helper()
+	var remaining int64
+	if err := fixture.adminStore.DB.Raw("SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = ?", fixture.schema).Scan(&remaining).Error; err != nil || remaining != 0 {
+		t.Errorf("isolated fixture schema remains after cleanup: %d, %v", remaining, err)
+	}
+	if _, err := os.Stat(fixture.root); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("private fixture root remains after cleanup: %v", err)
 	}
 }
 
