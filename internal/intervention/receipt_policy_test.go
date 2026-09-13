@@ -14,7 +14,7 @@ func TestPolicyAbstentionReceiptClosedShape(t *testing.T) {
 	axis := receiptTestAxis(t, epoch)
 	for _, reason := range []AbstentionReason{AbstentionPolicyObserving, AbstentionEvidenceInsufficient, AbstentionEvidenceState} {
 		t.Run(fmt.Sprintf("reason-%d", reason), func(t *testing.T) {
-			receipt, err := NewPolicyAbstentionReceipt(ctx, epoch, axis, "70000000-0000-4000-8000-000000000001", "70000000-0000-4000-8000-000000000002", interventionTestTime, reason, 3)
+			receipt, err := NewPolicyAbstentionReceipt(ctx, epoch, axis, ReceiptCreation{ReceiptID: "70000000-0000-4000-8000-000000000001", OperationID: "70000000-0000-4000-8000-000000000002", CreatedAt: interventionTestTime}, reason, 3)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -46,7 +46,7 @@ func TestPolicyAbstentionReceiptRejectsNonT03Shapes(t *testing.T) {
 		{name: "too many candidates", reason: AbstentionPolicyObserving, evaluated: maxReceiptSnapshotRefs + 1},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			if _, err := NewPolicyAbstentionReceipt(ctx, epoch, axis, "70000000-0000-4000-8000-000000000003", "70000000-0000-4000-8000-000000000004", interventionTestTime, testCase.reason, testCase.evaluated); err == nil {
+			if _, err := NewPolicyAbstentionReceipt(ctx, epoch, axis, ReceiptCreation{ReceiptID: "70000000-0000-4000-8000-000000000003", OperationID: "70000000-0000-4000-8000-000000000004", CreatedAt: interventionTestTime}, testCase.reason, testCase.evaluated); err == nil {
 				t.Fatal("invalid policy abstention shape was signed")
 			}
 		})

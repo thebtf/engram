@@ -202,7 +202,7 @@ func TestRuntimeAdvisorContextReferenceMaterializationIsMemoryOnly(t *testing.T)
 			t.Fatal(err)
 		}
 		axis := runtimeAxis(t, epoch, input, prepared)
-		winner, err := NewContextReferenceReceipt(ctx, epoch, axis, "40000000-0000-4000-8000-000000000009", "40000000-0000-4000-8000-000000000010", now, materialized, 1)
+		winner, err := NewContextReferenceReceipt(ctx, epoch, axis, ReceiptCreation{ReceiptID: "40000000-0000-4000-8000-000000000009", OperationID: "40000000-0000-4000-8000-000000000010", CreatedAt: now}, materialized, 1)
 		if err != nil {
 			t.Fatal(err)
 		}

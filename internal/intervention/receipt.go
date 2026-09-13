@@ -190,7 +190,7 @@ type ReceiptSelectionRecord struct {
 }
 
 type receiptSelectionVariant interface {
-	receiptSelectionVariant()
+	valid() bool
 }
 
 type contextReferenceSelection struct {
@@ -200,8 +200,6 @@ type contextReferenceSelection struct {
 	sourceTier    CandidateTier
 	textDigest    Digest
 }
-
-func (contextReferenceSelection) receiptSelectionVariant() {}
 
 func (s contextReferenceSelection) valid() bool {
 	return s.memoryID > 0 &&
@@ -220,8 +218,6 @@ type learnedInterventionSelection struct {
 	snapshotVersion int64
 	textDigest      Digest
 }
-
-func (learnedInterventionSelection) receiptSelectionVariant() {}
 
 func (s learnedInterventionSelection) valid() bool {
 	return s.memoryID > 0 &&
@@ -346,6 +342,14 @@ type ReceiptStore interface {
 	Commit(context.Context, Receipt) (Receipt, bool, error)
 }
 
+// ReceiptCreation carries the immutable identity and timestamp for one newly
+// authorable receipt.
+type ReceiptCreation struct {
+	ReceiptID   string
+	OperationID string
+	CreatedAt   time.Time
+}
+
 // NewNoCandidatesReceipt creates the one T02 authorable receipt state. Its
 // expiry is always the already-bounded callback context deadline.
 func NewNoCandidatesReceipt(ctx context.Context, epoch KeyEpoch, axis ReceiptAxis, receiptID, operationID string, createdAt time.Time) (Receipt, error) {
@@ -383,7 +387,7 @@ func NewNoCandidatesReceipt(ctx context.Context, epoch KeyEpoch, axis ReceiptAxi
 
 // NewPolicyAbstentionReceipt creates one T03-only receipt-backed abstention
 // for a nonempty prepared candidate set. It never selects a candidate.
-func NewPolicyAbstentionReceipt(ctx context.Context, epoch KeyEpoch, axis ReceiptAxis, receiptID, operationID string, createdAt time.Time, reason AbstentionReason, evaluatedCount int) (Receipt, error) {
+func NewPolicyAbstentionReceipt(ctx context.Context, epoch KeyEpoch, axis ReceiptAxis, creation ReceiptCreation, reason AbstentionReason, evaluatedCount int) (Receipt, error) {
 	if ctx == nil || !epoch.valid() || !axis.valid() || !validT03PolicyAbstentionReason(reason) ||
 		evaluatedCount < 1 || evaluatedCount > maxReceiptSnapshotRefs {
 		return Receipt{}, ErrInvalidInput
@@ -393,8 +397,8 @@ func NewPolicyAbstentionReceipt(ctx context.Context, epoch KeyEpoch, axis Receip
 		return Receipt{}, ErrInvalidInput
 	}
 	record := ReceiptPersistenceRecord{
-		ReceiptID:            receiptID,
-		OperationID:          operationID,
+		ReceiptID:            creation.ReceiptID,
+		OperationID:          creation.OperationID,
 		KeyEpochCommitment:   epoch.EpochCommitment(),
 		ChannelKey:           [32]byte(axis.channelKey),
 		HostFamily:           axis.hostFamily,
@@ -412,7 +416,7 @@ func NewPolicyAbstentionReceipt(ctx context.Context, epoch KeyEpoch, axis Receip
 		EvaluatedCount:       evaluatedCount,
 		EligibleCount:        0,
 		SnapshotRefsJSON:     []byte("[]"),
-		CreatedAt:            normalizeReceiptTimestamp(createdAt),
+		CreatedAt:            normalizeReceiptTimestamp(creation.CreatedAt),
 		ExpiresAt:            normalizeReceiptTimestamp(expiresAt),
 	}
 	return signReceipt(epoch, record)
@@ -421,7 +425,7 @@ func NewPolicyAbstentionReceipt(ctx context.Context, epoch KeyEpoch, axis Receip
 // NewContextReferenceReceipt creates the M1 authorable memory-reference
 // receipt. It records the exact materialized source without inventing learned
 // policy or snapshot facts.
-func NewContextReferenceReceipt(ctx context.Context, epoch KeyEpoch, axis ReceiptAxis, receiptID, operationID string, createdAt time.Time, materialized taskmemory.MaterializedCandidate, evaluatedCount int) (Receipt, error) {
+func NewContextReferenceReceipt(ctx context.Context, epoch KeyEpoch, axis ReceiptAxis, creation ReceiptCreation, materialized taskmemory.MaterializedCandidate, evaluatedCount int) (Receipt, error) {
 	if ctx == nil || !epoch.valid() || !axis.valid() || !materialized.Valid() || evaluatedCount < 1 || evaluatedCount > maxReceiptSnapshotRefs {
 		return Receipt{}, ErrInvalidInput
 	}
@@ -445,8 +449,8 @@ func NewContextReferenceReceipt(ctx context.Context, epoch KeyEpoch, axis Receip
 		return Receipt{}, err
 	}
 	record := ReceiptPersistenceRecord{
-		ReceiptID:            receiptID,
-		OperationID:          operationID,
+		ReceiptID:            creation.ReceiptID,
+		OperationID:          creation.OperationID,
 		KeyEpochCommitment:   epoch.EpochCommitment(),
 		ChannelKey:           [32]byte(axis.channelKey),
 		HostFamily:           axis.hostFamily,
@@ -464,7 +468,7 @@ func NewContextReferenceReceipt(ctx context.Context, epoch KeyEpoch, axis Receip
 		EligibleCount:        0,
 		SnapshotRefsJSON:     []byte("[]"),
 		Selection:            &selection,
-		CreatedAt:            normalizeReceiptTimestamp(createdAt),
+		CreatedAt:            normalizeReceiptTimestamp(creation.CreatedAt),
 		ExpiresAt:            normalizeReceiptTimestamp(expiresAt),
 	}
 	return signReceipt(epoch, record)

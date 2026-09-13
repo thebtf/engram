@@ -165,7 +165,7 @@ func (a *RuntimeAdvisor) commitAbstention(ctx context.Context, input AdviseInput
 	if reason == AbstentionNoCandidates {
 		receipt, err = NewNoCandidatesReceipt(ctx, epoch, axis, receiptID, operationID, createdAt)
 	} else {
-		receipt, err = NewPolicyAbstentionReceipt(ctx, epoch, axis, receiptID, operationID, createdAt, reason, evaluatedCount)
+		receipt, err = NewPolicyAbstentionReceipt(ctx, epoch, axis, ReceiptCreation{ReceiptID: receiptID, OperationID: operationID, CreatedAt: createdAt}, reason, evaluatedCount)
 	}
 	if err != nil {
 		return a.unavailable(ctx, input, UnavailableDeadline)
@@ -201,7 +201,7 @@ func (a *RuntimeAdvisor) commitContextReference(ctx context.Context, input Advis
 	if createdAt.IsZero() {
 		return a.unavailable(ctx, input, UnavailableDependency)
 	}
-	receipt, err := NewContextReferenceReceipt(ctx, epoch, axis, receiptID, operationID, createdAt, materialized, evaluatedCount)
+	receipt, err := NewContextReferenceReceipt(ctx, epoch, axis, ReceiptCreation{ReceiptID: receiptID, OperationID: operationID, CreatedAt: createdAt}, materialized, evaluatedCount)
 	if err != nil {
 		return a.unavailable(ctx, input, unavailableCodeForContext(ctx, UnavailableDependency))
 	}
