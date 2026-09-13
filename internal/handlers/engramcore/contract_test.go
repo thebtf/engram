@@ -771,6 +771,9 @@ func TestProxyHandleToolPreservesLegacySessionForNonUCITools(t *testing.T) {
 	grpcAddr := startMockGRPC(t, srv)
 	_, mod, project := buildContractDispatcher(t, grpcAddr)
 	project.Env[config.EnvClaudeSessionID] = "legacy-host-session"
+	const legacySelector = "legacy-selector-fixture"
+	mod.cache.identities.Store(cacheKey(project), &pb.ProjectIdentityV2{Version: 2, LegacyProjectId: legacySelector})
+	t.Setenv("PATH", t.TempDir())
 	ctx := auditcontext.WithUCITransportSession(context.Background(), "transport-tag-a")
 
 	_, err := mod.ProxyHandleTool(ctx, project, "memory_store", json.RawMessage(`{}`))
@@ -783,6 +786,9 @@ func TestProxyHandleToolPreservesLegacySessionForNonUCITools(t *testing.T) {
 	srv.mu.Unlock()
 	if request == nil || request.GetSessionId() != "legacy-host-session" {
 		t.Fatalf("non-UCI CallTool session ID = %#v, want legacy host session", request)
+	}
+	if request.GetProject() != project.ID || request.GetProjectIdentity().GetLegacyProjectId() != legacySelector {
+		t.Fatalf("non-UCI CallTool selector=%q identity=%#v, want selector=%q legacy=%q", request.GetProject(), request.GetProjectIdentity(), project.ID, legacySelector)
 	}
 	if got := metadata.Get(auditcontext.SourceSessionMetadataKey); len(got) != 0 {
 		t.Fatalf("non-UCI CallTool unexpectedly forwarded transport metadata %v", got)
