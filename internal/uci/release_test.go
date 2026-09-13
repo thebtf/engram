@@ -73,40 +73,51 @@ func TestReleaseMapsBrowserCallerAndNonContentCategories(t *testing.T) {
 				response := exposureTestResponse(QueryStatusOK)
 				request.Response = &response
 			}
-
 			decision := Release(context.Background(), request, gate)
-			if !decision.Released() {
-				t.Fatalf("Release() failure = %q", decision.Failure)
-			}
-			if gate.reauthorizeCalls != 1 {
-				t.Fatalf("reauthorize calls = %d, want 1", gate.reauthorizeCalls)
-			}
-			if testCase.recordsExposure {
-				if gate.appendCalls != 1 || decision.Exposure == nil {
-					t.Fatalf("append calls/receipt = %d/%#v, want 1/non-nil", gate.appendCalls, decision.Exposure)
-				}
-				if gate.appendInput.ClientKeycard != "" || gate.appendInput.BrowserSubject == nil || gate.appendInput.BrowserDocumentBinding != caller.Browser.DocumentBinding || gate.appendInput.Operation != testCase.operation {
-					t.Fatalf("browser exposure input = %#v", gate.appendInput)
-				}
-				record, err := deriveExposureRecord(authorized, gate.appendInput)
-				if err != nil {
-					t.Fatalf("deriveExposureRecord() error = %v", err)
-				}
-				wantClientRef, err := opaqueExposureHash("browser_subject", subject)
-				if err != nil {
-					t.Fatalf("opaque browser subject hash error = %v", err)
-				}
-				keycardRef, err := opaqueExposureHash("client_keycard", subject.Principal)
-				if err != nil {
-					t.Fatalf("opaque keycard hash error = %v", err)
-				}
-				if record.ClientRef != wantClientRef || record.ClientRef == keycardRef {
-					t.Fatalf("browser client reference = %q, want browser-subject hash and never keycard alias", record.ClientRef)
-				}
-			} else if gate.appendCalls != 0 || decision.Exposure != nil {
-				t.Fatalf("non-content category append/receipt = %d/%#v, want 0/nil", gate.appendCalls, decision.Exposure)
-			}
+			releaseTestRequireBrowserDecision(t, gate, decision, caller, subject, testCase.operation, testCase.recordsExposure)
 		})
+	}
+}
+
+func releaseTestRequireBrowserDecision(t *testing.T, gate *releaseGateFake, decision ReleaseDecision, caller ReleaseCaller, subject releaseTestBrowserSubject, operation ExposureOperation, recordsExposure bool) {
+	t.Helper()
+	if !decision.Released() {
+		t.Fatalf("Release() failure = %q", decision.Failure)
+	}
+	if gate.reauthorizeCalls != 1 {
+		t.Fatalf("reauthorize calls = %d, want 1", gate.reauthorizeCalls)
+	}
+	if !recordsExposure {
+		if gate.appendCalls != 0 || decision.Exposure != nil {
+			t.Fatalf("non-content category append/receipt = %d/%#v, want 0/nil", gate.appendCalls, decision.Exposure)
+		}
+		return
+	}
+	if gate.appendCalls != 1 || decision.Exposure == nil {
+		t.Fatalf("append calls/receipt = %d/%#v, want 1/non-nil", gate.appendCalls, decision.Exposure)
+	}
+	releaseTestRequireBrowserExposure(t, gate, caller, subject, operation)
+}
+
+func releaseTestRequireBrowserExposure(t *testing.T, gate *releaseGateFake, caller ReleaseCaller, subject releaseTestBrowserSubject, operation ExposureOperation) {
+	t.Helper()
+	if gate.appendInput.ClientKeycard != "" || gate.appendInput.BrowserSubject == nil || gate.appendInput.BrowserDocumentBinding != caller.Browser.DocumentBinding || gate.appendInput.Operation != operation {
+		t.Fatalf("browser exposure input = %#v", gate.appendInput)
+	}
+	record, err := deriveExposureRecord(gate.authorized, gate.appendInput)
+	if err != nil {
+		t.Fatalf("deriveExposureRecord() error = %v", err)
+	}
+	wantClientRef, err := opaqueExposureHash("browser_subject", subject)
+	if err != nil {
+		t.Fatalf("opaque browser subject hash error = %v", err)
+	}
+	keycardRef, err := opaqueExposureHash("client_keycard", subject.Principal)
+	if err != nil {
+		t.Fatalf("opaque keycard hash error = %v", err)
+	}
+	if record.ClientRef != wantClientRef || record.ClientRef == keycardRef {
+		t.Fatalf("browser client reference = %q, want browser-subject hash and never keycard alias", record.ClientRef)
 	}
 }
 

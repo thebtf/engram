@@ -104,69 +104,65 @@ func TestUCIQueryResponseContractKeepsResultCoverageAndCompletionDistinct(t *tes
 
 func TestUCIQueryResponseContractSeparatesSecurityEnvelopes(t *testing.T) {
 	fixtures := uciQueryResponseFixturesByName(t)
-
 	for _, tc := range []struct {
 		name               string
 		fixture            string
 		wantErrorCode      string
 		wantContextualBody bool
 	}{
-		{
-			name:               "recordable authorized unavailable result",
-			fixture:            "synthetic_authorized_source_unavailable",
-			wantErrorCode:      "SOURCE_UNAVAILABLE",
-			wantContextualBody: true,
-		},
-		{
-			name:               "initial recorder failure suppression",
-			fixture:            "synthetic_exposure_recorder_unavailable",
-			wantErrorCode:      "EXPOSURE_UNAVAILABLE",
-			wantContextualBody: false,
-		},
-		{
-			name:               "idempotency mismatch suppression",
-			fixture:            "synthetic_exposure_idempotency_mismatch",
-			wantErrorCode:      "IDEMPOTENCY_MISMATCH",
-			wantContextualBody: false,
-		},
+		{name: "recordable authorized unavailable result", fixture: "synthetic_authorized_source_unavailable", wantErrorCode: "SOURCE_UNAVAILABLE", wantContextualBody: true},
+		{name: "initial recorder failure suppression", fixture: "synthetic_exposure_recorder_unavailable", wantErrorCode: "EXPOSURE_UNAVAILABLE", wantContextualBody: false},
+		{name: "idempotency mismatch suppression", fixture: "synthetic_exposure_idempotency_mismatch", wantErrorCode: "IDEMPOTENCY_MISMATCH", wantContextualBody: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			payload := fixtures[tc.fixture]
 			uciRequireQueryResponseAccepted(t, payload)
-
 			response := uciQueryResponseFixtureObject(t, fixtures, tc.fixture)
 			if got := uciQueryResponseString(t, uciQueryResponseObject(t, response["error"], "error"), "code"); got != tc.wantErrorCode {
 				t.Fatalf("error.code = %q, want %q", got, tc.wantErrorCode)
 			}
-
-			exposure, found := response["exposure"]
-			if !found {
-				t.Fatal("response omitted exposure")
-			}
-			if tc.wantContextualBody {
-				if exposure == nil {
-					t.Fatal("recordable authorized result omitted exposure receipt")
-				}
-				for _, field := range []string{"contexts", "freshness", "retrieval", "coverage", "items", "truncated", "warnings", "continuation"} {
-					if _, found := response[field]; !found {
-						t.Fatalf("recordable authorized result omitted %q", field)
-					}
-				}
-				if items := uciQueryResponseArray(t, response["items"], "items"); len(items) != 0 {
-					t.Fatalf("authorized unavailable items = %d, want 0", len(items))
-				}
-				return
-			}
-
-			if exposure != nil {
-				t.Fatalf("suppressed failure returned stale exposure receipt %#v", exposure)
-			}
-			for _, field := range []string{"contexts", "freshness", "retrieval", "coverage", "items", "truncated", "warnings", "continuation", "graph"} {
-				if _, found := response[field]; found {
-					t.Fatalf("suppressed failure disclosed contextual field %q", field)
-				}
-			}
+			uciRequireQueryResponseSecurityEnvelope(t, response, tc.wantContextualBody)
 		})
+	}
+}
+
+func uciRequireQueryResponseSecurityEnvelope(t *testing.T, response map[string]any, wantContextualBody bool) {
+	t.Helper()
+	exposure, found := response["exposure"]
+	if !found {
+		t.Fatal("response omitted exposure")
+	}
+	if wantContextualBody {
+		uciRequireQueryResponseContextualBody(t, response, exposure)
+		return
+	}
+	uciRequireQueryResponseSuppressedBody(t, response, exposure)
+}
+
+func uciRequireQueryResponseContextualBody(t *testing.T, response map[string]any, exposure any) {
+	t.Helper()
+	if exposure == nil {
+		t.Fatal("recordable authorized result omitted exposure receipt")
+	}
+	for _, field := range []string{"contexts", "freshness", "retrieval", "coverage", "items", "truncated", "warnings", "continuation"} {
+		if _, found := response[field]; !found {
+			t.Fatalf("recordable authorized result omitted %q", field)
+		}
+	}
+	if items := uciQueryResponseArray(t, response["items"], "items"); len(items) != 0 {
+		t.Fatalf("authorized unavailable items = %d, want 0", len(items))
+	}
+}
+
+func uciRequireQueryResponseSuppressedBody(t *testing.T, response map[string]any, exposure any) {
+	t.Helper()
+	if exposure != nil {
+		t.Fatalf("suppressed failure returned stale exposure receipt %#v", exposure)
+	}
+	for _, field := range []string{"contexts", "freshness", "retrieval", "coverage", "items", "truncated", "warnings", "continuation", "graph"} {
+		if _, found := response[field]; found {
+			t.Fatalf("suppressed failure disclosed contextual field %q", field)
+		}
 	}
 }
 

@@ -179,19 +179,38 @@ func TestEmbeddingWorkerPollsAtConfiguredCadenceAndProcessesOneQueuedClaim(t *te
 	run := make(chan error, 1)
 	go func() { run <- worker.Run(root, claim.Ref.LeaseOwner) }()
 
+	embeddingWorkerPollingWaitForIdle(t, store)
+	queuedAt, claimedAt := embeddingWorkerPollingQueueAndWait(t, store)
+	embeddingWorkerPollingWaitForStop(t, run)
+	claimAttempts, claims, prepares, commits, completes := store.snapshot()
+	embeddingWorkerPollingRequireCadence(t, claimAttempts, limits, queuedAt, claimedAt)
+	embeddingWorkerPollingRequireOutcome(t, root, claims, prepares, commits, completes)
+}
+
+func embeddingWorkerPollingWaitForIdle(t *testing.T, store *embeddingWorkerPollingStore) {
+	t.Helper()
 	select {
 	case <-store.idleReached:
 	case <-time.After(2 * time.Second):
 		t.Fatal("worker did not make the expected idle claim attempts")
 	}
+}
+
+func embeddingWorkerPollingQueueAndWait(t *testing.T, store *embeddingWorkerPollingStore) (time.Time, time.Time) {
+	t.Helper()
 	queuedAt := time.Now()
 	close(store.queued)
-	var claimedAt time.Time
 	select {
-	case claimedAt = <-store.claimed:
+	case claimedAt := <-store.claimed:
+		return queuedAt, claimedAt
 	case <-time.After(2 * time.Second):
 		t.Fatal("worker did not claim queued work promptly")
+		return time.Time{}, time.Time{}
 	}
+}
+
+func embeddingWorkerPollingWaitForStop(t *testing.T, run <-chan error) {
+	t.Helper()
 	select {
 	case err := <-run:
 		if err != nil {
@@ -200,11 +219,22 @@ func TestEmbeddingWorkerPollsAtConfiguredCadenceAndProcessesOneQueuedClaim(t *te
 	case <-time.After(2 * time.Second):
 		t.Fatal("worker did not stop after cancellation")
 	}
+}
 
-	claimAttempts, claims, prepares, commits, completes := store.snapshot()
+func embeddingWorkerPollingRequireCadence(t *testing.T, claimAttempts []embeddingWorkerPollingClaimAttempt, limits EmbeddingWorkerLimits, queuedAt, claimedAt time.Time) {
+	t.Helper()
 	if claimedAt.Sub(queuedAt) > 4*limits.PollInterval {
 		t.Fatalf("queued claim latency = %s, want at most %s", claimedAt.Sub(queuedAt), 4*limits.PollInterval)
 	}
+	claimedAttempt := embeddingWorkerPollingClaimedAttempt(t, claimAttempts, limits)
+	if claimedAttempt < 0 {
+		t.Fatal("worker did not claim queued work")
+	}
+	embeddingWorkerPollingRequireContinuation(t, claimAttempts, claimedAttempt, limits)
+}
+
+func embeddingWorkerPollingClaimedAttempt(t *testing.T, claimAttempts []embeddingWorkerPollingClaimAttempt, limits EmbeddingWorkerLimits) int {
+	t.Helper()
 	claimedAttempt := -1
 	for index, attempt := range claimAttempts {
 		if attempt.claimed {
@@ -213,19 +243,18 @@ func TestEmbeddingWorkerPollsAtConfiguredCadenceAndProcessesOneQueuedClaim(t *te
 			}
 			claimedAttempt = index
 		}
-		if index == 0 {
-			continue
-		}
-		previous := claimAttempts[index-1]
-		if !previous.claimed && !attempt.claimed {
-			if interval := attempt.at.Sub(previous.at); interval < limits.PollInterval {
-				t.Fatalf("idle claim interval %d = %s, want at least %s", index, interval, limits.PollInterval)
+		if index > 0 {
+			previous := claimAttempts[index-1]
+			if !previous.claimed && !attempt.claimed && attempt.at.Sub(previous.at) < limits.PollInterval {
+				t.Fatalf("idle claim interval %d = %s, want at least %s", index, attempt.at.Sub(previous.at), limits.PollInterval)
 			}
 		}
 	}
-	if claimedAttempt < 0 {
-		t.Fatal("worker did not claim queued work")
-	}
+	return claimedAttempt
+}
+
+func embeddingWorkerPollingRequireContinuation(t *testing.T, claimAttempts []embeddingWorkerPollingClaimAttempt, claimedAttempt int, limits EmbeddingWorkerLimits) {
+	t.Helper()
 	if claimedAttempt+1 >= len(claimAttempts) {
 		t.Fatal("worker did not continue immediately after the successful claim")
 	}
@@ -239,6 +268,10 @@ func TestEmbeddingWorkerPollsAtConfiguredCadenceAndProcessesOneQueuedClaim(t *te
 	if len(claimAttempts) != claimedAttempt+2 {
 		t.Fatalf("claim attempts after immediate continuation = %d, want 1", len(claimAttempts)-claimedAttempt-1)
 	}
+}
+
+func embeddingWorkerPollingRequireOutcome(t *testing.T, root context.Context, claims, prepares, commits, completes int) {
+	t.Helper()
 	if root.Err() != context.Canceled {
 		t.Fatalf("worker cancellation = %v, want %v", root.Err(), context.Canceled)
 	}

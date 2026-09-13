@@ -59,48 +59,54 @@ func TestExposureHealthControllerConcurrentTransitions(t *testing.T) {
 	start := make(chan struct{})
 	invalid := make(chan uci.ExposureHealthSnapshot, 1)
 	var workers sync.WaitGroup
-
 	for worker := range 8 {
 		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			<-start
-			for iteration := range 500 {
-				switch (worker + iteration) % 5 {
-				case 0:
-					health.RecordInitialExposureSuccess()
-				case 1:
-					health.RecordInitialExposureFailure()
-				case 2:
-					health.RecordCompletionSuccess()
-				case 3:
-					health.RecordCompletionFailure()
-				case 4:
-					health.RecordIntegrityFailure()
-				}
-			}
-		}()
+		go exposureHealthRunTransitions(health, start, &workers, worker)
 	}
 	for range 8 {
 		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			<-start
-			for range 500 {
-				snapshot := health.Snapshot()
-				if !isClosedExposureHealthSnapshot(snapshot) {
-					select {
-					case invalid <- snapshot:
-					default:
-					}
-				}
-			}
-		}()
+		go exposureHealthReadSnapshots(health, start, invalid, &workers)
 	}
-
 	close(start)
 	workers.Wait()
+	exposureHealthRequireClosedSnapshots(t, health, invalid)
+}
 
+func exposureHealthRunTransitions(health *uci.ExposureHealthController, start <-chan struct{}, workers *sync.WaitGroup, worker int) {
+	defer workers.Done()
+	<-start
+	for iteration := range 500 {
+		switch (worker + iteration) % 5 {
+		case 0:
+			health.RecordInitialExposureSuccess()
+		case 1:
+			health.RecordInitialExposureFailure()
+		case 2:
+			health.RecordCompletionSuccess()
+		case 3:
+			health.RecordCompletionFailure()
+		case 4:
+			health.RecordIntegrityFailure()
+		}
+	}
+}
+
+func exposureHealthReadSnapshots(health *uci.ExposureHealthController, start <-chan struct{}, invalid chan<- uci.ExposureHealthSnapshot, workers *sync.WaitGroup) {
+	defer workers.Done()
+	<-start
+	for range 500 {
+		snapshot := health.Snapshot()
+		if !isClosedExposureHealthSnapshot(snapshot) {
+			select {
+			case invalid <- snapshot:
+			default:
+			}
+		}
+	}
+}
+
+func exposureHealthRequireClosedSnapshots(t *testing.T, health *uci.ExposureHealthController, invalid <-chan uci.ExposureHealthSnapshot) {
+	t.Helper()
 	select {
 	case snapshot := <-invalid:
 		t.Fatalf("concurrent snapshot escaped closed state machine: %#v", snapshot)
