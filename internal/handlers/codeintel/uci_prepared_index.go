@@ -242,16 +242,19 @@ type uciPreparedSourceCapability struct {
 	prepare            uciPreparedSourcePreparer
 }
 
-type uciPreparedSourcePreparer func(
-	*UCIPreparedIndexCollaborator,
-	context.Context,
-	string,
-	string,
-	uci.IndexAdmissionArtifactProfile,
-	uci.ScannerFile,
-	uciPreparedAdmissionFile,
-	*uciPreparedSourceCapability,
-) (uciPreparedAdmissionFile, error)
+// uciPreparedAdmissionInput carries one path-selected source preparation
+// request without widening the preparer contract as formats are added.
+type uciPreparedAdmissionInput struct {
+	ctx               context.Context
+	sourceID          string
+	analysisProfileID string
+	goProfile         uci.IndexAdmissionArtifactProfile
+	file              uci.ScannerFile
+	prepared          uciPreparedAdmissionFile
+	capability        *uciPreparedSourceCapability
+}
+
+type uciPreparedSourcePreparer func(*UCIPreparedIndexCollaborator, uciPreparedAdmissionInput) (uciPreparedAdmissionFile, error)
 
 var uciPreparedSourceCapabilities = [...]uciPreparedSourceCapability{
 	{
@@ -461,7 +464,7 @@ func (collaborator *UCIPreparedIndexCollaborator) prepareAdmissionFile(ctx conte
 		if capability.prepare == nil {
 			return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: source capability %q has no preparer", capability.key)
 		}
-		return capability.prepare(collaborator, ctx, sourceID, analysisProfileID, goProfile, file, prepared, capability)
+		return capability.prepare(collaborator, uciPreparedAdmissionInput{ctx: ctx, sourceID: sourceID, analysisProfileID: analysisProfileID, goProfile: goProfile, file: file, prepared: prepared, capability: capability})
 	default:
 		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: scanner returned unsupported state %q for %q", file.State, file.Path)
 	}
@@ -501,94 +504,94 @@ func uciPreparedStructuredProfileKey(analysisProfileID string, capability *uciPr
 	return uciPreparedStructuredProfileKeyVersion + ":" + analysisProfileID + ":" + capability.key + ":" + capability.version
 }
 
-func uciPreparedPrepareGoAdmissionFile(collaborator *UCIPreparedIndexCollaborator, _ context.Context, sourceID, _ string, goProfile uci.IndexAdmissionArtifactProfile, file uci.ScannerFile, prepared uciPreparedAdmissionFile, capability *uciPreparedSourceCapability) (uciPreparedAdmissionFile, error) {
-	extracted := uci.ExtractGo(file.Body, collaborator.goProfile)
-	artifact, err := uci.NewIndexAdmissionArtifactFromGo(sourceID, goProfile, file.Body, extracted)
+func uciPreparedPrepareGoAdmissionFile(collaborator *UCIPreparedIndexCollaborator, input uciPreparedAdmissionInput) (uciPreparedAdmissionFile, error) {
+	extracted := uci.ExtractGo(input.file.Body, collaborator.goProfile)
+	artifact, err := uci.NewIndexAdmissionArtifactFromGo(input.sourceID, input.goProfile, input.file.Body, extracted)
 	if err != nil {
 		if uci.IsIndexCapacityError(err) {
 			return uciPreparedAdmissionFile{}, err
 		}
-		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: normalize Go source %q: %w", file.Path, err)
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: normalize Go source %q: %w", input.file.Path, err)
 	}
-	return uciPreparedAttachAdmissionArtifact(prepared, artifact, capability.partialMessage), nil
+	return uciPreparedAttachAdmissionArtifact(input.prepared, artifact, input.capability.partialMessage), nil
 }
 
-func uciPreparedPrepareTreeSitterAdmissionFile(collaborator *UCIPreparedIndexCollaborator, ctx context.Context, sourceID, analysisProfileID string, _ uci.IndexAdmissionArtifactProfile, file uci.ScannerFile, prepared uciPreparedAdmissionFile, capability *uciPreparedSourceCapability) (uciPreparedAdmissionFile, error) {
-	return collaborator.prepareTreeSitterAdmissionFile(ctx, sourceID, analysisProfileID, file, prepared, capability.treeSitterLanguage)
+func uciPreparedPrepareTreeSitterAdmissionFile(collaborator *UCIPreparedIndexCollaborator, input uciPreparedAdmissionInput) (uciPreparedAdmissionFile, error) {
+	return collaborator.prepareTreeSitterAdmissionFile(input.ctx, input.sourceID, input.analysisProfileID, input.file, input.prepared, input.capability.treeSitterLanguage)
 }
 
-func uciPreparedPrepareMarkdownAdmissionFile(collaborator *UCIPreparedIndexCollaborator, _ context.Context, sourceID, analysisProfileID string, _ uci.IndexAdmissionArtifactProfile, file uci.ScannerFile, prepared uciPreparedAdmissionFile, capability *uciPreparedSourceCapability) (uciPreparedAdmissionFile, error) {
-	profile := uci.DefaultMarkdownExtractionProfile(uciPreparedStructuredProfileKey(analysisProfileID, capability))
+func uciPreparedPrepareMarkdownAdmissionFile(collaborator *UCIPreparedIndexCollaborator, input uciPreparedAdmissionInput) (uciPreparedAdmissionFile, error) {
+	profile := uci.DefaultMarkdownExtractionProfile(uciPreparedStructuredProfileKey(input.analysisProfileID, input.capability))
 	admissionProfile, err := uci.MarkdownIndexAdmissionArtifactProfile(profile)
 	if err != nil {
 		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: configure Markdown admission profile: %w", err)
 	}
 	admissionProfile.ExtractionProfileDigest = collaborator.parserBundleDigest
-	artifact, err := uci.NewIndexAdmissionArtifactFromMarkdown(sourceID, admissionProfile, profile, file.Body, uci.ExtractMarkdown(file.Body, profile))
+	artifact, err := uci.NewIndexAdmissionArtifactFromMarkdown(input.sourceID, admissionProfile, profile, input.file.Body, uci.ExtractMarkdown(input.file.Body, profile))
 	if err != nil {
 		if uci.IsIndexCapacityError(err) {
 			return uciPreparedAdmissionFile{}, err
 		}
-		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: normalize Markdown source %q: %w", file.Path, err)
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: normalize Markdown source %q: %w", input.file.Path, err)
 	}
-	return uciPreparedAttachAdmissionArtifact(prepared, artifact, capability.partialMessage), nil
+	return uciPreparedAttachAdmissionArtifact(input.prepared, artifact, input.capability.partialMessage), nil
 }
 
-func uciPreparedPrepareJSONYAMLAdmissionFile(collaborator *UCIPreparedIndexCollaborator, _ context.Context, sourceID, analysisProfileID string, _ uci.IndexAdmissionArtifactProfile, file uci.ScannerFile, prepared uciPreparedAdmissionFile, capability *uciPreparedSourceCapability) (uciPreparedAdmissionFile, error) {
-	profile := uci.DefaultJSONYAMLExtractionProfile(uciPreparedStructuredProfileKey(analysisProfileID, capability), capability.jsonYAMLFormat)
+func uciPreparedPrepareJSONYAMLAdmissionFile(collaborator *UCIPreparedIndexCollaborator, input uciPreparedAdmissionInput) (uciPreparedAdmissionFile, error) {
+	profile := uci.DefaultJSONYAMLExtractionProfile(uciPreparedStructuredProfileKey(input.analysisProfileID, input.capability), input.capability.jsonYAMLFormat)
 	admissionProfile, err := uci.JSONYAMLIndexAdmissionArtifactProfile(profile)
 	if err != nil {
-		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: configure %s admission profile: %w", capability.key, err)
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: configure %s admission profile: %w", input.capability.key, err)
 	}
 	admissionProfile.ExtractionProfileDigest = collaborator.parserBundleDigest
-	artifact, err := uci.NewIndexAdmissionArtifactFromJSONYAML(sourceID, admissionProfile, profile, file.Body, uci.ExtractJSONYAML(file.Body, profile))
+	artifact, err := uci.NewIndexAdmissionArtifactFromJSONYAML(input.sourceID, admissionProfile, profile, input.file.Body, uci.ExtractJSONYAML(input.file.Body, profile))
 	if err != nil {
 		if uci.IsIndexCapacityError(err) {
 			return uciPreparedAdmissionFile{}, err
 		}
-		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: normalize %s source %q: %w", capability.key, file.Path, err)
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: normalize %s source %q: %w", input.capability.key, input.file.Path, err)
 	}
-	return uciPreparedAttachAdmissionArtifact(prepared, artifact, capability.partialMessage), nil
+	return uciPreparedAttachAdmissionArtifact(input.prepared, artifact, input.capability.partialMessage), nil
 }
 
-func uciPreparedPrepareSQLAdmissionFile(collaborator *UCIPreparedIndexCollaborator, _ context.Context, sourceID, analysisProfileID string, _ uci.IndexAdmissionArtifactProfile, file uci.ScannerFile, prepared uciPreparedAdmissionFile, capability *uciPreparedSourceCapability) (uciPreparedAdmissionFile, error) {
-	profile := uci.DefaultSQLExtractionProfile(uciPreparedStructuredProfileKey(analysisProfileID, capability))
+func uciPreparedPrepareSQLAdmissionFile(collaborator *UCIPreparedIndexCollaborator, input uciPreparedAdmissionInput) (uciPreparedAdmissionFile, error) {
+	profile := uci.DefaultSQLExtractionProfile(uciPreparedStructuredProfileKey(input.analysisProfileID, input.capability))
 	admissionProfile, err := uci.SQLIndexAdmissionArtifactProfile(profile)
 	if err != nil {
 		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: configure SQL admission profile: %w", err)
 	}
 	admissionProfile.ExtractionProfileDigest = collaborator.parserBundleDigest
-	artifact, err := uci.NewIndexAdmissionArtifactFromSQL(sourceID, admissionProfile, profile, file.Body, uci.ExtractSQL(file.Body, profile))
+	artifact, err := uci.NewIndexAdmissionArtifactFromSQL(input.sourceID, admissionProfile, profile, input.file.Body, uci.ExtractSQL(input.file.Body, profile))
 	if err != nil {
 		if uci.IsIndexCapacityError(err) {
 			return uciPreparedAdmissionFile{}, err
 		}
-		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: normalize SQL source %q: %w", file.Path, err)
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: normalize SQL source %q: %w", input.file.Path, err)
 	}
-	return uciPreparedAttachAdmissionArtifact(prepared, artifact, capability.partialMessage), nil
+	return uciPreparedAttachAdmissionArtifact(input.prepared, artifact, input.capability.partialMessage), nil
 }
 
-func uciPreparedPrepareOpenAPIAdmissionFile(collaborator *UCIPreparedIndexCollaborator, _ context.Context, sourceID, analysisProfileID string, _ uci.IndexAdmissionArtifactProfile, file uci.ScannerFile, prepared uciPreparedAdmissionFile, capability *uciPreparedSourceCapability) (uciPreparedAdmissionFile, error) {
-	profile := uci.DefaultOpenAPIExtractionProfile(uciPreparedStructuredProfileKey(analysisProfileID, capability), capability.openAPIFormat)
+func uciPreparedPrepareOpenAPIAdmissionFile(collaborator *UCIPreparedIndexCollaborator, input uciPreparedAdmissionInput) (uciPreparedAdmissionFile, error) {
+	profile := uci.DefaultOpenAPIExtractionProfile(uciPreparedStructuredProfileKey(input.analysisProfileID, input.capability), input.capability.openAPIFormat)
 	admissionProfile, err := uci.OpenAPIIndexAdmissionArtifactProfile(profile)
 	if err != nil {
 		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: configure OpenAPI admission profile: %w", err)
 	}
 	admissionProfile.ExtractionProfileDigest = collaborator.parserBundleDigest
-	extracted := uci.ExtractOpenAPI(file.Body, profile)
+	extracted := uci.ExtractOpenAPI(input.file.Body, profile)
 	// A path-selected OpenAPI document with unavailable semantic coverage must
 	// not be recast as generic JSON/YAML or published as partial facts.
 	if extracted.Coverage == uci.IndexCoverageUnavailable {
-		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: %s for %q", uciPreparedOpenAPIUnavailableMessage, file.Path)
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: %s for %q", uciPreparedOpenAPIUnavailableMessage, input.file.Path)
 	}
-	artifact, err := uci.NewIndexAdmissionArtifactFromOpenAPI(sourceID, admissionProfile, profile, file.Body, extracted)
+	artifact, err := uci.NewIndexAdmissionArtifactFromOpenAPI(input.sourceID, admissionProfile, profile, input.file.Body, extracted)
 	if err != nil {
 		if uci.IsIndexCapacityError(err) {
 			return uciPreparedAdmissionFile{}, err
 		}
-		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: normalize OpenAPI source %q: %w", file.Path, err)
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: normalize OpenAPI source %q: %w", input.file.Path, err)
 	}
-	return uciPreparedAttachAdmissionArtifact(prepared, artifact, capability.partialMessage), nil
+	return uciPreparedAttachAdmissionArtifact(input.prepared, artifact, input.capability.partialMessage), nil
 }
 
 func uciPreparedAttachAdmissionArtifact(prepared uciPreparedAdmissionFile, artifact uci.IndexAdmissionArtifact, partialMessage string) uciPreparedAdmissionFile {
@@ -787,13 +790,23 @@ func uciPreparedEncodeFrames(frames []uci.IndexAdmissionFrame) ([][]byte, error)
 	return payloads, nil
 }
 
+type uciPreparedGoDefinitionTarget struct {
+	path       string
+	artifactID string
+	localKey   string
+}
+
 func uciPreparedAddResolvedGoCallEdges(files []uciPreparedAdmissionFile) (uint64, error) {
-	type definitionTarget struct {
-		path       string
-		artifactID string
-		localKey   string
+	definitions := uciPreparedGoDefinitions(files)
+	var unresolved uint64
+	for index := range files {
+		unresolved += uciPreparedAddGoFileCallEdges(&files[index], definitions)
 	}
-	definitions := make(map[string][]definitionTarget)
+	return unresolved, nil
+}
+
+func uciPreparedGoDefinitions(files []uciPreparedAdmissionFile) map[string][]uciPreparedGoDefinitionTarget {
+	definitions := make(map[string][]uciPreparedGoDefinitionTarget)
 	for _, prepared := range files {
 		if prepared.artifact == nil || prepared.membership.State != uci.IndexAdmissionMembershipPresent || prepared.artifact.Profile.Language != uci.IndexAdmissionLanguageGo {
 			continue
@@ -802,64 +815,62 @@ func uciPreparedAddResolvedGoCallEdges(files []uciPreparedAdmissionFile) (uint64
 			if definition.Kind != "function" || !strings.HasPrefix(definition.LocalSymbolKey, "func:") {
 				continue
 			}
-			definitions[definition.SymbolKey] = append(definitions[definition.SymbolKey], definitionTarget{
+			definitions[definition.SymbolKey] = append(definitions[definition.SymbolKey], uciPreparedGoDefinitionTarget{
 				path:       prepared.path,
 				artifactID: prepared.artifact.ArtifactID,
 				localKey:   definition.LocalSymbolKey,
 			})
 		}
 	}
+	return definitions
+}
 
+func uciPreparedAddGoFileCallEdges(prepared *uciPreparedAdmissionFile, definitions map[string][]uciPreparedGoDefinitionTarget) uint64 {
+	if prepared.artifact == nil || prepared.membership.State != uci.IndexAdmissionMembershipPresent || prepared.artifact.Profile.Language != uci.IndexAdmissionLanguageGo {
+		return 0
+	}
 	var unresolved uint64
-	for index := range files {
-		prepared := &files[index]
-		if prepared.artifact == nil || prepared.membership.State != uci.IndexAdmissionMembershipPresent || prepared.artifact.Profile.Language != uci.IndexAdmissionLanguageGo {
-			continue
-		}
-		for _, reference := range prepared.artifact.References {
-			if reference.Kind != "call" {
-				continue
-			}
-			targetSymbol, established := uciPreparedGoCallTargetSymbol(reference)
-			if !established {
-				unresolved++
-				continue
-			}
-			if reference.OwnerSymbolKey == nil {
-				unresolved++
-				continue
-			}
-			sourceSymbolKey := *reference.OwnerSymbolKey
-			targets := definitions[targetSymbol]
-			if len(targets) != 1 {
-				unresolved++
-				continue
-			}
-			target := targets[0]
-			targetSymbolKey := target.localKey
-			prepared.edges = append(prepared.edges, uci.IndexAdmissionEdge{
-				EdgeKey:          uciPreparedEdgeKey(prepared.path, reference.SiteKey, target.path, target.localKey),
-				SourceArtifactID: prepared.artifact.ArtifactID,
-				SourceSymbolKey:  &sourceSymbolKey,
-				Target: &uci.IndexAdmissionEdgeTarget{
-					PathKey:    target.path,
-					ArtifactID: target.artifactID,
-					SymbolKey:  &targetSymbolKey,
-				},
-				Relation:         uci.IndexRelation("calls"),
-				EvidenceKind:     uci.IndexEvidenceKind("resolved"),
-				ResolutionState:  uci.IndexResolutionState("resolved"),
-				ResolverRevision: uciPreparedGoResolverRevision,
-				Evidence: uci.IndexAdmissionEdgeEvidence{
-					ReferenceSiteKey: reference.SiteKey,
-					Span:             reference.Span,
-					RuleKey:          uciPreparedGoResolverRule,
-					Explanation:      uciPreparedGoResolverExplanation,
-				},
-			})
+	for _, reference := range prepared.artifact.References {
+		if reference.Kind == "call" && !uciPreparedAppendGoCallEdge(prepared, reference, definitions) {
+			unresolved++
 		}
 	}
-	return unresolved, nil
+	return unresolved
+}
+
+func uciPreparedAppendGoCallEdge(prepared *uciPreparedAdmissionFile, reference uci.IndexAdmissionReference, definitions map[string][]uciPreparedGoDefinitionTarget) bool {
+	targetSymbol, established := uciPreparedGoCallTargetSymbol(reference)
+	if !established || reference.OwnerSymbolKey == nil {
+		return false
+	}
+	targets := definitions[targetSymbol]
+	if len(targets) != 1 {
+		return false
+	}
+	target := targets[0]
+	sourceSymbolKey := *reference.OwnerSymbolKey
+	targetSymbolKey := target.localKey
+	prepared.edges = append(prepared.edges, uci.IndexAdmissionEdge{
+		EdgeKey:          uciPreparedEdgeKey(prepared.path, reference.SiteKey, target.path, target.localKey),
+		SourceArtifactID: prepared.artifact.ArtifactID,
+		SourceSymbolKey:  &sourceSymbolKey,
+		Target: &uci.IndexAdmissionEdgeTarget{
+			PathKey:    target.path,
+			ArtifactID: target.artifactID,
+			SymbolKey:  &targetSymbolKey,
+		},
+		Relation:         uci.IndexRelation("calls"),
+		EvidenceKind:     uci.IndexEvidenceKind("resolved"),
+		ResolutionState:  uci.IndexResolutionState("resolved"),
+		ResolverRevision: uciPreparedGoResolverRevision,
+		Evidence: uci.IndexAdmissionEdgeEvidence{
+			ReferenceSiteKey: reference.SiteKey,
+			Span:             reference.Span,
+			RuleKey:          uciPreparedGoResolverRule,
+			Explanation:      uciPreparedGoResolverExplanation,
+		},
+	})
+	return true
 }
 
 func uciPreparedAddResolvedSourceEdges(files []uciPreparedAdmissionFile) (uint64, error) {
@@ -884,6 +895,15 @@ type uciPreparedTreeSitterTarget struct {
 }
 
 func uciPreparedAddResolvedTreeSitterEdges(files []uciPreparedAdmissionFile) (uint64, error) {
+	byPath, definitions := uciPreparedTreeSitterSources(files)
+	var unresolved uint64
+	for index := range files {
+		unresolved += uciPreparedAddTreeSitterFileEdges(&files[index], byPath, definitions)
+	}
+	return unresolved, nil
+}
+
+func uciPreparedTreeSitterSources(files []uciPreparedAdmissionFile) (map[string]*uciPreparedAdmissionFile, map[string]map[string][]uciPreparedTreeSitterTarget) {
 	byPath := make(map[string]*uciPreparedAdmissionFile, len(files))
 	definitions := make(map[string]map[string][]uciPreparedTreeSitterTarget, len(files))
 	for index := range files {
@@ -901,92 +921,121 @@ func uciPreparedAddResolvedTreeSitterEdges(files []uciPreparedAdmissionFile) (ui
 			if !ok {
 				continue
 			}
-			byName[name] = append(byName[name], uciPreparedTreeSitterTarget{
-				path:       file.path,
-				artifactID: file.artifact.ArtifactID,
-				symbolKey:  definition.LocalSymbolKey,
-			})
+			byName[name] = append(byName[name], uciPreparedTreeSitterTarget{path: file.path, artifactID: file.artifact.ArtifactID, symbolKey: definition.LocalSymbolKey})
 		}
 		definitions[file.path] = byName
 	}
+	return byPath, definitions
+}
 
+func uciPreparedAddTreeSitterFileEdges(file *uciPreparedAdmissionFile, byPath map[string]*uciPreparedAdmissionFile, definitions map[string]map[string][]uciPreparedTreeSitterTarget) uint64 {
+	if file.artifact == nil || file.membership.State != uci.IndexAdmissionMembershipPresent || !uciPreparedTreeSitterLanguage(file.artifact.Profile.Language) {
+		return 0
+	}
+	aliases, namespaces, unresolved := uciPreparedAddTreeSitterModuleEdges(file, byPath, definitions)
+	unresolved += uciPreparedAddTreeSitterLocalEdges(file, aliases, namespaces, definitions)
+	unresolved += uciPreparedAddTreeSitterExportEdges(file, definitions)
+	return unresolved
+}
+
+func uciPreparedAddTreeSitterModuleEdges(file *uciPreparedAdmissionFile, byPath map[string]*uciPreparedAdmissionFile, definitions map[string]map[string][]uciPreparedTreeSitterTarget) (map[string]uciPreparedTreeSitterTarget, map[string]uciPreparedTreeSitterTarget, uint64) {
+	aliases := make(map[string]uciPreparedTreeSitterTarget)
+	namespaces := make(map[string]uciPreparedTreeSitterTarget)
 	var unresolved uint64
-	for index := range files {
-		file := &files[index]
-		if file.artifact == nil || file.membership.State != uci.IndexAdmissionMembershipPresent || !uciPreparedTreeSitterLanguage(file.artifact.Profile.Language) {
+	for _, reference := range file.artifact.References {
+		module, imported, local, ok := uciPreparedTreeSitterModuleReference(reference)
+		if !ok {
 			continue
 		}
-		aliases := make(map[string]uciPreparedTreeSitterTarget)
-		namespaces := make(map[string]uciPreparedTreeSitterTarget)
-		for _, reference := range file.artifact.References {
-			module, imported, local, ok := uciPreparedTreeSitterModuleReference(reference)
-			if !ok {
-				continue
-			}
-			targetFile, found := uciPreparedResolveTreeSitterModule(byPath, file.path, module)
-			if !found || targetFile.artifact == nil {
-				unresolved++
-				continue
-			}
-			target := uciPreparedTreeSitterTarget{path: targetFile.path, artifactID: targetFile.artifact.ArtifactID}
-			if imported != "" && imported != "*" && imported != "default" {
-				matches := definitions[targetFile.path][imported]
-				if len(matches) != 1 {
-					unresolved++
-					continue
-				}
-				target = matches[0]
-			}
-			file.edges = append(file.edges, uciPreparedTreeSitterEdge(file.path, *file.artifact, reference, target))
-			if local == "" {
-				continue
-			}
-			switch {
-			case imported == "*":
-				namespaces[local] = target
-			case target.symbolKey != "":
-				aliases[local] = target
-			}
+		target, found := uciPreparedTreeSitterModuleTarget(byPath, definitions, file.path, module, imported)
+		if !found {
+			unresolved++
+			continue
 		}
-
-		for _, reference := range file.artifact.References {
-			local, ok := uciPreparedTreeSitterLocalReference(reference)
-			if !ok {
-				continue
-			}
-			target, found := aliases[local]
-			if !found {
-				if separator := strings.IndexByte(local, '.'); separator > 0 && separator < len(local)-1 {
-					namespace, namespaceFound := namespaces[local[:separator]]
-					if namespaceFound {
-						matches := definitions[namespace.path][local[separator+1:]]
-						if len(matches) == 1 {
-							target, found = matches[0], true
-						}
-					}
-				}
-			}
-			if !found {
-				unresolved++
-				continue
-			}
-			file.edges = append(file.edges, uciPreparedTreeSitterEdge(file.path, *file.artifact, reference, target))
-		}
-
-		for _, reference := range file.artifact.References {
-			imported, _, ok := uciPreparedTreeSitterExportAlias(reference)
-			if !ok {
-				continue
-			}
-			matches := definitions[file.path][imported]
-			if len(matches) != 1 {
-				unresolved++
-				continue
-			}
-			file.edges = append(file.edges, uciPreparedTreeSitterEdge(file.path, *file.artifact, reference, matches[0]))
-		}
+		file.edges = append(file.edges, uciPreparedTreeSitterEdge(file.path, *file.artifact, reference, target))
+		uciPreparedRememberTreeSitterLocal(aliases, namespaces, local, imported, target)
 	}
-	return unresolved, nil
+	return aliases, namespaces, unresolved
+}
+
+func uciPreparedTreeSitterModuleTarget(byPath map[string]*uciPreparedAdmissionFile, definitions map[string]map[string][]uciPreparedTreeSitterTarget, sourcePath, module, imported string) (uciPreparedTreeSitterTarget, bool) {
+	targetFile, found := uciPreparedResolveTreeSitterModule(byPath, sourcePath, module)
+	if !found || targetFile.artifact == nil {
+		return uciPreparedTreeSitterTarget{}, false
+	}
+	target := uciPreparedTreeSitterTarget{path: targetFile.path, artifactID: targetFile.artifact.ArtifactID}
+	if imported == "" || imported == "*" || imported == "default" {
+		return target, true
+	}
+	matches := definitions[targetFile.path][imported]
+	if len(matches) != 1 {
+		return uciPreparedTreeSitterTarget{}, false
+	}
+	return matches[0], true
+}
+
+func uciPreparedRememberTreeSitterLocal(aliases, namespaces map[string]uciPreparedTreeSitterTarget, local, imported string, target uciPreparedTreeSitterTarget) {
+	if local == "" {
+		return
+	}
+	if imported == "*" {
+		namespaces[local] = target
+	} else if target.symbolKey != "" {
+		aliases[local] = target
+	}
+}
+
+func uciPreparedAddTreeSitterLocalEdges(file *uciPreparedAdmissionFile, aliases, namespaces map[string]uciPreparedTreeSitterTarget, definitions map[string]map[string][]uciPreparedTreeSitterTarget) uint64 {
+	var unresolved uint64
+	for _, reference := range file.artifact.References {
+		local, ok := uciPreparedTreeSitterLocalReference(reference)
+		if !ok {
+			continue
+		}
+		target, found := uciPreparedTreeSitterLocalTarget(local, aliases, namespaces, definitions)
+		if !found {
+			unresolved++
+			continue
+		}
+		file.edges = append(file.edges, uciPreparedTreeSitterEdge(file.path, *file.artifact, reference, target))
+	}
+	return unresolved
+}
+
+func uciPreparedTreeSitterLocalTarget(local string, aliases, namespaces map[string]uciPreparedTreeSitterTarget, definitions map[string]map[string][]uciPreparedTreeSitterTarget) (uciPreparedTreeSitterTarget, bool) {
+	if target, found := aliases[local]; found {
+		return target, true
+	}
+	separator := strings.IndexByte(local, '.')
+	if separator <= 0 || separator == len(local)-1 {
+		return uciPreparedTreeSitterTarget{}, false
+	}
+	namespace, found := namespaces[local[:separator]]
+	if !found {
+		return uciPreparedTreeSitterTarget{}, false
+	}
+	matches := definitions[namespace.path][local[separator+1:]]
+	if len(matches) != 1 {
+		return uciPreparedTreeSitterTarget{}, false
+	}
+	return matches[0], true
+}
+
+func uciPreparedAddTreeSitterExportEdges(file *uciPreparedAdmissionFile, definitions map[string]map[string][]uciPreparedTreeSitterTarget) uint64 {
+	var unresolved uint64
+	for _, reference := range file.artifact.References {
+		imported, _, ok := uciPreparedTreeSitterExportAlias(reference)
+		if !ok {
+			continue
+		}
+		matches := definitions[file.path][imported]
+		if len(matches) != 1 {
+			unresolved++
+			continue
+		}
+		file.edges = append(file.edges, uciPreparedTreeSitterEdge(file.path, *file.artifact, reference, matches[0]))
+	}
+	return unresolved
 }
 
 func uciPreparedTreeSitterLanguage(language uci.IndexAdmissionLanguage) bool {
