@@ -270,45 +270,61 @@ func sqlSourceChunks(source []byte, lineStarts []int) ([]SQLChunk, bool) {
 		return nil, false
 	}
 
-	limit := len(source)
-	if limit > sqlExtractionMaxArtifactTextBytes {
-		limit = goSafeUTF8Boundary(source, sqlExtractionMaxArtifactTextBytes)
-	}
-	capacity := (limit + sqlExtractionMaxChunkBytes - 1) / sqlExtractionMaxChunkBytes
-	if capacity > sqlExtractionMaxChunks {
-		capacity = sqlExtractionMaxChunks
-	}
-	chunks := make([]SQLChunk, 0, capacity)
+	limit := sqlSourceChunkLimit(source)
+	chunks := make([]SQLChunk, 0, sqlSourceChunkCapacity(limit))
 	start := 0
 	for start < limit && len(chunks) < sqlExtractionMaxChunks {
-		end := start + sqlExtractionMaxChunkBytes
-		if end > limit {
-			end = limit
-		} else {
-			end = goSafeUTF8Boundary(source, end)
-		}
-		if end <= start {
-			end = start + sqlExtractionMaxChunkBytes
-			if end > limit {
-				end = limit
-			}
-		}
-		span, valid := goSpanFromOffsets(lineStarts, len(source), start, end)
+		chunk, end, valid, truncated := sqlSourceChunk(source, lineStarts, start, limit)
 		if !valid {
 			return chunks, true
 		}
-		text, textTruncated := goSafeText(source[start:end], sqlExtractionMaxChunkBytes)
-		chunks = append(chunks, SQLChunk{
-			Span:          span,
-			Text:          text,
-			ContentDigest: goSourceDigest(source[start:end]),
-		})
-		if textTruncated {
+		chunks = append(chunks, chunk)
+		if truncated {
 			return chunks, true
 		}
 		start = end
 	}
 	return chunks, start < len(source)
+}
+
+func sqlSourceChunkLimit(source []byte) int {
+	if len(source) <= sqlExtractionMaxArtifactTextBytes {
+		return len(source)
+	}
+	return goSafeUTF8Boundary(source, sqlExtractionMaxArtifactTextBytes)
+}
+
+func sqlSourceChunkCapacity(limit int) int {
+	capacity := (limit + sqlExtractionMaxChunkBytes - 1) / sqlExtractionMaxChunkBytes
+	if capacity > sqlExtractionMaxChunks {
+		return sqlExtractionMaxChunks
+	}
+	return capacity
+}
+
+func sqlSourceChunk(source []byte, lineStarts []int, start, limit int) (SQLChunk, int, bool, bool) {
+	end := start + sqlExtractionMaxChunkBytes
+	if end > limit {
+		end = limit
+	} else {
+		end = goSafeUTF8Boundary(source, end)
+	}
+	if end <= start {
+		end = start + sqlExtractionMaxChunkBytes
+		if end > limit {
+			end = limit
+		}
+	}
+	span, valid := goSpanFromOffsets(lineStarts, len(source), start, end)
+	if !valid {
+		return SQLChunk{}, start, false, false
+	}
+	text, truncated := goSafeText(source[start:end], sqlExtractionMaxChunkBytes)
+	return SQLChunk{
+		Span:          span,
+		Text:          text,
+		ContentDigest: goSourceDigest(source[start:end]),
+	}, end, true, truncated
 }
 
 type sqlTokenKind uint8
@@ -328,101 +344,122 @@ type sqlToken struct {
 func sqlLex(source []byte, lineStarts []int, collector *sqlCollector) ([]sqlToken, bool) {
 	tokens := make([]sqlToken, 0, min(sqlExtractionMaxTokens, len(source)/4+1))
 	for offset := 0; offset < len(source); {
-		if sqlWhitespace(source[offset]) {
-			offset++
-			continue
-		}
-		if source[offset] == '-' && offset+1 < len(source) && source[offset+1] == '-' {
-			offset += 2
-			for offset < len(source) && source[offset] != '\n' {
-				offset++
-			}
-			continue
-		}
-		if source[offset] == '/' && offset+1 < len(source) && source[offset+1] == '*' {
-			start := offset
-			offset += 2
-			depth := 1
-			for offset < len(source) && depth > 0 {
-				if source[offset] == '/' && offset+1 < len(source) && source[offset+1] == '*' {
-					depth++
-					if depth > sqlExtractionMaxDepth {
-						collector.limit("DEPTH_LIMIT", sqlSpan(lineStarts, len(source), start, offset+2), "nested SQL comment depth exceeded the bounded parser limit")
-						return tokens, false
-					}
-					offset += 2
-					continue
-				}
-				if source[offset] == '*' && offset+1 < len(source) && source[offset+1] == '/' {
-					depth--
-					offset += 2
-					continue
-				}
-				offset++
-			}
-			if depth != 0 {
-				collector.limit("SQL_PARSE_ERROR", sqlSpan(lineStarts, len(source), start, len(source)), "unterminated SQL block comment")
-				return tokens, false
-			}
-			continue
-		}
-
-		start := offset
-		var kind sqlTokenKind
-		switch source[offset] {
-		case '\'', '"', '`':
-			kind = sqlTokenString
-			if source[offset] != '\'' {
-				kind = sqlTokenQuotedIdentifier
-			}
-			var complete bool
-			offset, complete = sqlQuotedEnd(source, offset, source[start])
-			if !complete {
-				collector.limit("SQL_PARSE_ERROR", sqlSpan(lineStarts, len(source), start, len(source)), "unterminated SQL quoted value")
-				return tokens, false
-			}
-		case '[':
-			kind = sqlTokenQuotedIdentifier
-			var complete bool
-			offset, complete = sqlBracketIdentifierEnd(source, offset)
-			if !complete {
-				collector.limit("SQL_PARSE_ERROR", sqlSpan(lineStarts, len(source), start, len(source)), "unterminated bracketed SQL identifier")
-				return tokens, false
-			}
-		case '$':
-			if delimiter := sqlDollarQuoteDelimiter(source, offset); len(delimiter) != 0 {
-				end := offset + len(delimiter)
-				closeOffset := bytes.Index(source[end:], delimiter)
-				if closeOffset < 0 {
-					collector.limit("SQL_PARSE_ERROR", sqlSpan(lineStarts, len(source), start, len(source)), "unterminated SQL dollar-quoted string")
-					return tokens, false
-				}
-				offset = end + closeOffset + len(delimiter)
-				kind = sqlTokenString
-			} else {
-				offset = sqlWordEnd(source, offset)
-				kind = sqlTokenWord
-			}
-		default:
-			if sqlPunctuation(source[offset]) {
-				offset++
-				kind = sqlTokenPunctuationKind
-			} else {
-				offset = sqlWordEnd(source, offset)
-				kind = sqlTokenWord
-			}
-		}
-		if offset <= start {
-			collector.limit("SQL_PARSE_ERROR", sqlSpan(lineStarts, len(source), start, start+1), "SQL lexer made no progress")
+		token, next, emit, complete := sqlLexToken(source, lineStarts, collector, offset)
+		if !complete {
 			return tokens, false
+		}
+		offset = next
+		if !emit {
+			continue
 		}
 		if len(tokens) >= sqlExtractionMaxTokens {
-			collector.limit("TOKEN_LIMIT", sqlSpan(lineStarts, len(source), start, len(source)), "SQL token count exceeded the bounded parser limit")
+			collector.limit("TOKEN_LIMIT", sqlSpan(lineStarts, len(source), token.start, len(source)), "SQL token count exceeded the bounded parser limit")
 			return tokens, false
 		}
-		tokens = append(tokens, sqlToken{kind: kind, start: start, end: offset})
+		tokens = append(tokens, token)
 	}
 	return tokens, true
+}
+
+func sqlLexToken(source []byte, lineStarts []int, collector *sqlCollector, offset int) (sqlToken, int, bool, bool) {
+	if sqlWhitespace(source[offset]) {
+		return sqlToken{}, offset + 1, false, true
+	}
+	if sqlLineCommentStart(source, offset) {
+		return sqlToken{}, sqlLineCommentEnd(source, offset+2), false, true
+	}
+	if sqlBlockCommentStart(source, offset) {
+		next, complete := sqlBlockCommentEnd(source, lineStarts, collector, offset)
+		return sqlToken{}, next, false, complete
+	}
+	start := offset
+	kind, next, message, complete := sqlLexValue(source, offset)
+	if !complete {
+		collector.limit("SQL_PARSE_ERROR", sqlSpan(lineStarts, len(source), start, len(source)), message)
+		return sqlToken{}, offset, false, false
+	}
+	if next <= start {
+		collector.limit("SQL_PARSE_ERROR", sqlSpan(lineStarts, len(source), start, start+1), "SQL lexer made no progress")
+		return sqlToken{}, offset, false, false
+	}
+	return sqlToken{kind: kind, start: start, end: next}, next, true, true
+}
+
+func sqlLineCommentStart(source []byte, offset int) bool {
+	return offset+1 < len(source) && source[offset] == '-' && source[offset+1] == '-'
+}
+
+func sqlLineCommentEnd(source []byte, offset int) int {
+	for offset < len(source) && source[offset] != '\n' {
+		offset++
+	}
+	return offset
+}
+
+func sqlBlockCommentStart(source []byte, offset int) bool {
+	return offset+1 < len(source) && source[offset] == '/' && source[offset+1] == '*'
+}
+
+func sqlBlockCommentEnd(source []byte, lineStarts []int, collector *sqlCollector, start int) (int, bool) {
+	offset := start + 2
+	depth := 1
+	for offset < len(source) && depth > 0 {
+		if sqlBlockCommentStart(source, offset) {
+			depth++
+			if depth > sqlExtractionMaxDepth {
+				collector.limit("DEPTH_LIMIT", sqlSpan(lineStarts, len(source), start, offset+2), "nested SQL comment depth exceeded the bounded parser limit")
+				return offset, false
+			}
+			offset += 2
+			continue
+		}
+		if source[offset] == '*' && offset+1 < len(source) && source[offset+1] == '/' {
+			depth--
+			offset += 2
+			continue
+		}
+		offset++
+	}
+	if depth != 0 {
+		collector.limit("SQL_PARSE_ERROR", sqlSpan(lineStarts, len(source), start, len(source)), "unterminated SQL block comment")
+		return offset, false
+	}
+	return offset, true
+}
+
+func sqlLexValue(source []byte, offset int) (sqlTokenKind, int, string, bool) {
+	switch source[offset] {
+	case '\'', '"', '`':
+		kind := sqlTokenString
+		if source[offset] != '\'' {
+			kind = sqlTokenQuotedIdentifier
+		}
+		end, complete := sqlQuotedEnd(source, offset, source[offset])
+		return kind, end, "unterminated SQL quoted value", complete
+	case '[':
+		end, complete := sqlBracketIdentifierEnd(source, offset)
+		return sqlTokenQuotedIdentifier, end, "unterminated bracketed SQL identifier", complete
+	case '$':
+		return sqlLexDollarValue(source, offset)
+	default:
+		if sqlPunctuation(source[offset]) {
+			return sqlTokenPunctuationKind, offset + 1, "", true
+		}
+		return sqlTokenWord, sqlWordEnd(source, offset), "", true
+	}
+}
+
+func sqlLexDollarValue(source []byte, offset int) (sqlTokenKind, int, string, bool) {
+	delimiter := sqlDollarQuoteDelimiter(source, offset)
+	if len(delimiter) == 0 {
+		return sqlTokenWord, sqlWordEnd(source, offset), "", true
+	}
+	end := offset + len(delimiter)
+	closeOffset := bytes.Index(source[end:], delimiter)
+	if closeOffset < 0 {
+		return sqlTokenString, offset, "unterminated SQL dollar-quoted string", false
+	}
+	return sqlTokenString, end + closeOffset + len(delimiter), "", true
 }
 
 func sqlWhitespace(value byte) bool {
@@ -593,29 +630,10 @@ func (parser *sqlParser) parseStatement(tokens []sqlToken, span IndexSpan) bool 
 }
 
 func (parser *sqlParser) parseAlterTable(tokens []sqlToken, statementSpan IndexSpan) bool {
-	position := 1
-	if position >= len(tokens) || !sqlTokenKeyword(parser.source, tokens[position], "TABLE") {
-		parser.collector.limit("UNSUPPORTED_STATEMENT", statementSpan, "only lexical ALTER TABLE ADD statements are extracted")
-		return false
-	}
-	position++
-	if position+1 < len(tokens) && sqlTokenKeyword(parser.source, tokens[position], "IF") && sqlTokenKeyword(parser.source, tokens[position+1], "EXISTS") {
-		position += 2
-	}
-	if position < len(tokens) && sqlTokenKeyword(parser.source, tokens[position], "ONLY") {
-		position++
-	}
-	tableName, next, _, valid := parser.parseQualifiedIdentifier(tokens, position)
+	table, position, valid := parser.parseAlterTableHeader(tokens, statementSpan)
 	if !valid {
-		parser.parseError(statementSpan, "ALTER TABLE requires a table identifier")
 		return false
 	}
-	table := sqlTableInfo{
-		name:      tableName,
-		localKey:  sqlTableLocalKeyPrefix + tableName,
-		symbolKey: sqlTableSymbolKeyPrefix + tableName,
-	}
-	position = next
 	if position >= len(tokens) {
 		parser.parseError(statementSpan, "ALTER TABLE requires an action")
 		return false
@@ -624,13 +642,7 @@ func (parser *sqlParser) parseAlterTable(tokens []sqlToken, statementSpan IndexS
 		parser.collector.limit("UNSUPPORTED_STATEMENT", statementSpan, "only lexical ALTER TABLE ADD statements are extracted")
 		return false
 	}
-	position++
-	if position < len(tokens) && sqlTokenKeyword(parser.source, tokens[position], "COLUMN") {
-		position++
-	}
-	if position+2 < len(tokens) && sqlTokenKeyword(parser.source, tokens[position], "IF") && sqlTokenKeyword(parser.source, tokens[position+1], "NOT") && sqlTokenKeyword(parser.source, tokens[position+2], "EXISTS") {
-		position += 3
-	}
+	position = parser.skipAlterTableAddModifiers(tokens, position+1)
 	if position >= len(tokens) {
 		parser.parseError(statementSpan, "ALTER TABLE ADD requires a column or constraint")
 		return false
@@ -640,6 +652,45 @@ func (parser *sqlParser) parseAlterTable(tokens []sqlToken, statementSpan IndexS
 		return parser.parseEntry(&table, tokens[position:], actionSpan)
 	}
 	return parser.parseColumn(&table, tokens[position:], 0, actionSpan)
+}
+
+func (parser *sqlParser) parseAlterTableHeader(tokens []sqlToken, statementSpan IndexSpan) (sqlTableInfo, int, bool) {
+	position := 1
+	if position >= len(tokens) || !sqlTokenKeyword(parser.source, tokens[position], "TABLE") {
+		parser.collector.limit("UNSUPPORTED_STATEMENT", statementSpan, "only lexical ALTER TABLE ADD statements are extracted")
+		return sqlTableInfo{}, 0, false
+	}
+	position = parser.skipAlterTableModifiers(tokens, position+1)
+	tableName, next, _, valid := parser.parseQualifiedIdentifier(tokens, position)
+	if !valid {
+		parser.parseError(statementSpan, "ALTER TABLE requires a table identifier")
+		return sqlTableInfo{}, 0, false
+	}
+	return sqlTableInfo{
+		name:      tableName,
+		localKey:  sqlTableLocalKeyPrefix + tableName,
+		symbolKey: sqlTableSymbolKeyPrefix + tableName,
+	}, next, true
+}
+
+func (parser *sqlParser) skipAlterTableModifiers(tokens []sqlToken, position int) int {
+	if position+1 < len(tokens) && sqlTokenKeyword(parser.source, tokens[position], "IF") && sqlTokenKeyword(parser.source, tokens[position+1], "EXISTS") {
+		position += 2
+	}
+	if position < len(tokens) && sqlTokenKeyword(parser.source, tokens[position], "ONLY") {
+		position++
+	}
+	return position
+}
+
+func (parser *sqlParser) skipAlterTableAddModifiers(tokens []sqlToken, position int) int {
+	if position < len(tokens) && sqlTokenKeyword(parser.source, tokens[position], "COLUMN") {
+		position++
+	}
+	if position+2 < len(tokens) && sqlTokenKeyword(parser.source, tokens[position], "IF") && sqlTokenKeyword(parser.source, tokens[position+1], "NOT") && sqlTokenKeyword(parser.source, tokens[position+2], "EXISTS") {
+		position += 3
+	}
+	return position
 }
 
 func (parser *sqlParser) parseCreateTable(tokens []sqlToken, statementSpan IndexSpan) bool {
@@ -714,25 +765,17 @@ func (parser *sqlParser) entryRanges(tokens []sqlToken, start, end int) ([]sqlTo
 	entryStart := start
 	depth := 0
 	for index := start; index < end; index++ {
-		switch {
-		case sqlTokenPunctuation(parser.source, tokens[index], '('):
-			depth++
-			if depth > sqlExtractionMaxDepth {
-				parser.collector.limit("DEPTH_LIMIT", parser.spanTokens(tokens[index:index+1]), sqlNestingDepthExceeded)
-				return ranges, false
-			}
-		case sqlTokenPunctuation(parser.source, tokens[index], ')'):
-			if depth == 0 {
-				parser.parseError(parser.spanTokens(tokens[index:index+1]), "unexpected closing parenthesis in SQL table body")
-				return ranges, false
-			}
-			depth--
-		case sqlTokenPunctuation(parser.source, tokens[index], ',') && depth == 0:
-			if entryStart < index {
-				ranges = append(ranges, sqlTokenRange{start: entryStart, end: index})
-			}
-			entryStart = index + 1
+		separator, valid := parser.entrySeparator(tokens[index], &depth)
+		if !valid {
+			return ranges, false
 		}
+		if !separator {
+			continue
+		}
+		if entryStart < index {
+			ranges = append(ranges, sqlTokenRange{start: entryStart, end: index})
+		}
+		entryStart = index + 1
 	}
 	if depth != 0 {
 		parser.parseError(parser.spanTokens(tokens[start:end]), "unbalanced parenthesis in SQL table body")
@@ -742,6 +785,26 @@ func (parser *sqlParser) entryRanges(tokens []sqlToken, start, end int) ([]sqlTo
 		ranges = append(ranges, sqlTokenRange{start: entryStart, end: end})
 	}
 	return ranges, true
+}
+
+func (parser *sqlParser) entrySeparator(token sqlToken, depth *int) (bool, bool) {
+	switch {
+	case sqlTokenPunctuation(parser.source, token, '('):
+		*depth++
+		if *depth > sqlExtractionMaxDepth {
+			parser.collector.limit("DEPTH_LIMIT", parser.spanTokens([]sqlToken{token}), sqlNestingDepthExceeded)
+			return false, false
+		}
+	case sqlTokenPunctuation(parser.source, token, ')'):
+		if *depth == 0 {
+			parser.parseError(parser.spanTokens([]sqlToken{token}), "unexpected closing parenthesis in SQL table body")
+			return false, false
+		}
+		*depth--
+	case sqlTokenPunctuation(parser.source, token, ','):
+		return *depth == 0, true
+	}
+	return false, true
 }
 
 func (parser *sqlParser) parseEntry(table *sqlTableInfo, tokens []sqlToken, span IndexSpan) bool {
@@ -832,7 +895,8 @@ func (parser *sqlParser) parseColumn(table *sqlTableInfo, tokens []sqlToken, pos
 	}
 	constraintStart := parser.columnConstraintStart(tokens, next)
 	dataType := ""
-	if next < constraintStart {
+	complete := next < constraintStart
+	if complete {
 		dataType = sqlTokenText(parser.source, tokens[next:constraintStart])
 	} else {
 		parser.parseError(span, "SQL column has no lexical type")
@@ -847,49 +911,63 @@ func (parser *sqlParser) parseColumn(table *sqlTableInfo, tokens []sqlToken, pos
 		Span:          span,
 	})
 
-	complete := next < constraintStart
 	for position = constraintStart; position < len(tokens); {
-		switch {
-		case sqlTokenKeyword(parser.source, tokens[position], "CONSTRAINT"):
-			_, next, _, named := parser.parseIdentifier(tokens, position+1)
-			if !named {
-				parser.parseError(parser.spanTokens(tokens[position:]), "column CONSTRAINT requires an identifier")
-				return false
-			}
-			position = next
-		case sqlTokenKeyword(parser.source, tokens[position], "PRIMARY"):
-			if position+1 >= len(tokens) || !sqlTokenKeyword(parser.source, tokens[position+1], "KEY") {
-				parser.parseError(parser.spanTokens(tokens[position:]), "PRIMARY must be followed by KEY")
-				return false
-			}
-			parser.addConstraint(table, "primary_key", []string{columnName}, span)
-			position += 2
-		case sqlTokenKeyword(parser.source, tokens[position], "UNIQUE"):
-			parser.addConstraint(table, "unique", []string{columnName}, span)
-			position++
-		case sqlTokenKeyword(parser.source, tokens[position], "REFERENCES"):
-			next, referenceValid := parser.parseReference(table, []string{columnName}, tokens, position)
-			if !referenceValid {
-				return false
-			}
-			position = next
-		case sqlTokenKeyword(parser.source, tokens[position], "CHECK"):
-			if position+1 < len(tokens) && sqlTokenPunctuation(parser.source, tokens[position+1], '(') {
-				close, closed := parser.matchingParen(tokens, position+1)
-				if !closed {
-					parser.parseError(parser.spanTokens(tokens[position:]), "CHECK expression is not balanced")
-					return false
-				}
-				position = close + 1
-			} else {
-				parser.parseError(parser.spanTokens(tokens[position:]), "CHECK requires a parenthesized expression")
-				return false
-			}
-		default:
-			position++
+		next, valid := parser.parseColumnConstraint(table, columnName, tokens, position, span)
+		if !valid {
+			return false
 		}
+		position = next
 	}
 	return complete
+}
+
+func (parser *sqlParser) parseColumnConstraint(table *sqlTableInfo, columnName string, tokens []sqlToken, position int, span IndexSpan) (int, bool) {
+	switch {
+	case sqlTokenKeyword(parser.source, tokens[position], "CONSTRAINT"):
+		return parser.parseColumnConstraintName(tokens, position)
+	case sqlTokenKeyword(parser.source, tokens[position], "PRIMARY"):
+		return parser.parseColumnPrimaryKey(table, columnName, tokens, position, span)
+	case sqlTokenKeyword(parser.source, tokens[position], "UNIQUE"):
+		parser.addConstraint(table, "unique", []string{columnName}, span)
+		return position + 1, true
+	case sqlTokenKeyword(parser.source, tokens[position], "REFERENCES"):
+		return parser.parseReference(table, []string{columnName}, tokens, position)
+	case sqlTokenKeyword(parser.source, tokens[position], "CHECK"):
+		return parser.parseColumnCheck(tokens, position)
+	default:
+		return position + 1, true
+	}
+}
+
+func (parser *sqlParser) parseColumnConstraintName(tokens []sqlToken, position int) (int, bool) {
+	_, next, _, named := parser.parseIdentifier(tokens, position+1)
+	if !named {
+		parser.parseError(parser.spanTokens(tokens[position:]), "column CONSTRAINT requires an identifier")
+		return 0, false
+	}
+	return next, true
+}
+
+func (parser *sqlParser) parseColumnPrimaryKey(table *sqlTableInfo, columnName string, tokens []sqlToken, position int, span IndexSpan) (int, bool) {
+	if position+1 >= len(tokens) || !sqlTokenKeyword(parser.source, tokens[position+1], "KEY") {
+		parser.parseError(parser.spanTokens(tokens[position:]), "PRIMARY must be followed by KEY")
+		return 0, false
+	}
+	parser.addConstraint(table, "primary_key", []string{columnName}, span)
+	return position + 2, true
+}
+
+func (parser *sqlParser) parseColumnCheck(tokens []sqlToken, position int) (int, bool) {
+	if position+1 >= len(tokens) || !sqlTokenPunctuation(parser.source, tokens[position+1], '(') {
+		parser.parseError(parser.spanTokens(tokens[position:]), "CHECK requires a parenthesized expression")
+		return 0, false
+	}
+	close, closed := parser.matchingParen(tokens, position+1)
+	if !closed {
+		parser.parseError(parser.spanTokens(tokens[position:]), "CHECK expression is not balanced")
+		return 0, false
+	}
+	return close + 1, true
 }
 
 func (parser *sqlParser) columnConstraintStart(tokens []sqlToken, start int) int {
