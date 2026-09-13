@@ -752,7 +752,11 @@ func (trace *uciWatcherSLOAttemptTrace) embeddingTimingSummary(view acceptance.U
 			matching = append(matching, span)
 		}
 	}
-	summary := &uciWatcherSLOEmbeddingTimingSummary{Missing: len(matching) == 0, Capped: trace.embeddingTimingDropped > 0, DroppedSpans: trace.embeddingTimingDropped}
+	return uciWatcherSLOEmbeddingTimingSummaryFor(matching, trace.embeddingTimingDropped)
+}
+
+func uciWatcherSLOEmbeddingTimingSummaryFor(matching []uciWatcherSLOEmbeddingTimingSpan, dropped int) *uciWatcherSLOEmbeddingTimingSummary {
+	summary := &uciWatcherSLOEmbeddingTimingSummary{Missing: len(matching) == 0, Capped: dropped > 0, DroppedSpans: dropped}
 	if len(matching) == 0 {
 		return summary
 	}
@@ -2737,6 +2741,11 @@ func TestUCIWatcherSLOClassifiesPartialSearchAsDegraded(t *testing.T) {
 
 func TestUCIWatcherSLOUnchangedWindowWaitsForReadyQuiescentBaseline(t *testing.T) {
 	stable := uciInstalledAcceptancePublication{sourceID: "source", checkoutID: "checkout", viewID: "view", profileID: "profile", generation: 2}
+	assertUCIWatcherSLOUnchangedWindowStable(t, stable)
+	assertUCIWatcherSLOUnchangedWindowRejectsPublishedView(t, stable)
+}
+
+func assertUCIWatcherSLOUnchangedWindowStable(t *testing.T, stable uciInstalledAcceptancePublication) {
 	step := 0
 	before, after, err := uciWatcherSLOObserveUnchangedWindow(
 		func() (uciInstalledAcceptancePublication, error) {
@@ -2764,9 +2773,11 @@ func TestUCIWatcherSLOUnchangedWindowWaitsForReadyQuiescentBaseline(t *testing.T
 	if err != nil || step != 5 || before.readyCandidates != 7 || after.readyCandidates != 7 {
 		t.Fatalf("unchanged sequence = before=%#v after=%#v step=%d err=%v", before, after, step, err)
 	}
+}
 
+func assertUCIWatcherSLOUnchangedWindowRejectsPublishedView(t *testing.T, stable uciInstalledAcceptancePublication) {
 	waits := 0
-	_, _, err = uciWatcherSLOObserveUnchangedWindow(
+	_, _, err := uciWatcherSLOObserveUnchangedWindow(
 		func() (uciInstalledAcceptancePublication, error) { return stable, nil },
 		func(expected uciInstalledAcceptancePublication) (uciInstalledAcceptancePublication, error) {
 			waits++
