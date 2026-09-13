@@ -440,16 +440,15 @@ func (f *Fixture) Seed(ctx context.Context, requestFile, secretsOut string) (See
 		tokenStore := gormdb.NewTokenStore(txStore)
 		issued = make([]issuedKeycard, 0, len(cards))
 		for _, card := range cards {
-			record, err := tokenStore.CreateWithPrincipal(
-				ctx,
-				card.name,
-				card.tokenHash,
-				card.tokenPrefix,
-				fixtureReadWriteScope,
-				card.principal,
-				string(card.principalKind),
-				card.expiresAt,
-			)
+			record, err := tokenStore.CreateWithPrincipal(ctx, gormdb.TokenCreatePrincipalInput{
+				Name:          card.name,
+				TokenHash:     card.tokenHash,
+				TokenPrefix:   card.tokenPrefix,
+				Scope:         fixtureReadWriteScope,
+				Principal:     card.principal,
+				PrincipalKind: string(card.principalKind),
+				ExpiresAt:     card.expiresAt,
+			})
 			if err != nil {
 				return err
 			}
@@ -769,16 +768,15 @@ func (f *Fixture) rotateProjectKeycard(ctx context.Context, secrets secretsFile)
 		if err != nil {
 			return err
 		}
-		created, err := tokenStore.CreateWithPrincipal(
-			ctx,
-			pending.name,
-			pending.tokenHash,
-			pending.tokenPrefix,
-			fixtureReadWriteScope,
-			pending.principal,
-			string(pending.principalKind),
-			pending.expiresAt,
-		)
+		created, err := tokenStore.CreateWithPrincipal(ctx, gormdb.TokenCreatePrincipalInput{
+			Name:          pending.name,
+			TokenHash:     pending.tokenHash,
+			TokenPrefix:   pending.tokenPrefix,
+			Scope:         fixtureReadWriteScope,
+			Principal:     pending.principal,
+			PrincipalKind: string(pending.principalKind),
+			ExpiresAt:     pending.expiresAt,
+		})
 		if err != nil {
 			return err
 		}
