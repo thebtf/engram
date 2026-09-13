@@ -285,27 +285,17 @@ func (s *Server) ExploreCode(ctx context.Context, request *pb.ExploreCodeRequest
 
 func collectUCIStageFrames(ctx context.Context, stream pb.EngramService_StageCodeIndexServer) ([]*pb.StageCodeIndexFrame, error) {
 	frames := make([]*pb.StageCodeIndexFrame, 0, 16)
-	var totalPayloadBytes int
-
+	totalPayloadBytes := 0
 	for {
-		frame, err := stream.Recv()
+		frame, finished, err := receiveUCIStageFrame(ctx, stream, len(frames))
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				if len(frames) == 0 {
-					return nil, uciTransportInvalidArgument()
-				}
-				return frames, nil
-			}
-			return nil, uciTransportHandlerError(ctx, err)
+			return nil, err
 		}
-		if len(frames) >= maxUCITransportStageFrames || !validUCIStageFrame(frame) {
-			return nil, uciTransportInvalidArgument()
+		if finished {
+			return frames, nil
 		}
-		if len(frames) > 0 && !sameUCIStageIdentity(frames[0], frame) {
-			return nil, uciTransportInvalidArgument()
-		}
-		if frame.GetSequence() != uint64(len(frames)) {
-			return nil, uciTransportInvalidArgument()
+		if err := validateUCIStageFrame(frames, frame); err != nil {
+			return nil, err
 		}
 		payload := frame.GetPayload()
 		if totalPayloadBytes > maxUCITransportStageBytes-len(payload) {
@@ -314,6 +304,33 @@ func collectUCIStageFrames(ctx context.Context, stream pb.EngramService_StageCod
 		totalPayloadBytes += len(payload)
 		frames = append(frames, frame)
 	}
+}
+
+func receiveUCIStageFrame(ctx context.Context, stream pb.EngramService_StageCodeIndexServer, count int) (*pb.StageCodeIndexFrame, bool, error) {
+	frame, err := stream.Recv()
+	if errors.Is(err, io.EOF) {
+		if count == 0 {
+			return nil, false, uciTransportInvalidArgument()
+		}
+		return nil, true, nil
+	}
+	if err != nil {
+		return nil, false, uciTransportHandlerError(ctx, err)
+	}
+	return frame, false, nil
+}
+
+func validateUCIStageFrame(frames []*pb.StageCodeIndexFrame, frame *pb.StageCodeIndexFrame) error {
+	if len(frames) >= maxUCITransportStageFrames || !validUCIStageFrame(frame) {
+		return uciTransportInvalidArgument()
+	}
+	if len(frames) > 0 && !sameUCIStageIdentity(frames[0], frame) {
+		return uciTransportInvalidArgument()
+	}
+	if frame.GetSequence() != uint64(len(frames)) {
+		return uciTransportInvalidArgument()
+	}
+	return nil
 }
 
 func sameUCIStageIdentity(first, next *pb.StageCodeIndexFrame) bool {

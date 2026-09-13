@@ -279,39 +279,9 @@ func (runtime *contextAwareUCIRuntime) StageCodeIndex(ctx context.Context, bindi
 	if err != nil {
 		return nil, err
 	}
-	if len(frames) == 0 || len(frames) > uci.IndexAdmissionMaxFrames || frames[0] == nil {
-		return nil, errUCIContextRuntimeInvalid
-	}
-
-	first := frames[0]
-	if !contextAwareIndexScopeMatchesBinding(first.GetScope(), binding) || !validUCIUUID(first.GetBuildId()) ||
-		first.GetLeaseEpoch() == 0 || first.GetLeaseEpoch() > math.MaxInt64 {
-		return nil, errUCIContextRuntimeInvalid
-	}
-	admissions := make([]uci.IndexAdmissionFrame, len(frames))
-	totalPayloadBytes := 0
-	for index, frame := range frames {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if frame == nil || !contextAwareIndexScopeMatchesBinding(frame.GetScope(), binding) ||
-			frame.GetBuildId() != first.GetBuildId() || frame.GetLeaseEpoch() != first.GetLeaseEpoch() ||
-			frame.GetSequence() != uint64(index) || !sameUCIIndexIntentClaim(first.GetIntentClaim(), frame.GetIntentClaim()) {
-			return nil, errUCIContextRuntimeInvalid
-		}
-		payload := frame.GetPayload()
-		if len(payload) > uci.IndexAdmissionMaxTotalEncodedBytes-totalPayloadBytes {
-			return nil, errUCIContextRuntimeInvalid
-		}
-		totalPayloadBytes += len(payload)
-		if uci.DigestIndexAdmissionPayload(payload) != uci.IndexDigest(frame.GetPayloadDigest()) {
-			return nil, errUCIContextRuntimeInvalid
-		}
-		admission, err := uci.DecodeIndexAdmissionFrame(payload)
-		if err != nil {
-			return nil, fmt.Errorf("uci stage: decode frame: %w", err)
-		}
-		admissions[index] = admission
+	first, admissions, err := decodeUCIStageAdmissions(ctx, binding, frames)
+	if err != nil {
+		return nil, err
 	}
 	if err := uci.ValidateIndexAdmissionFramesForBinding(admissions, binding); err != nil {
 		return nil, fmt.Errorf("uci stage: authorize packed build: %w", err)
@@ -334,28 +304,8 @@ func (runtime *contextAwareUCIRuntime) StageCodeIndex(ctx context.Context, bindi
 	if len(parts) != len(frames) {
 		return nil, errUCIContextRuntimeInvalid
 	}
-
-	acks := make([]uci.IndexPartAck, 0, len(parts))
-	for index, part := range parts {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		partDigest, err := uci.DigestIndexPart(part)
-		if err != nil {
-			return nil, fmt.Errorf("uci stage: digest admitted part: %w", err)
-		}
-		ack, err := runtime.publisher.Stage(ctx, caller, uci.IndexStageInput{
-			Build: build, Sequence: uint32(index), Digest: partDigest, Part: part, IntentClaim: intentClaim,
-		})
-		if err != nil {
-			return nil, err
-		}
-		if ack.BuildID != build.BuildID || ack.Sequence != uint32(index) || ack.Digest != partDigest {
-			return nil, errUCIContextRuntimeInvalid
-		}
-		acks = append(acks, ack)
-	}
-	if err := ctx.Err(); err != nil {
+	acks, err := runtime.stageUCIAdmissionParts(ctx, caller, build, intentClaim, parts)
+	if err != nil {
 		return nil, err
 	}
 	partsDigest, err := uci.DigestIndexParts(acks)
@@ -368,6 +318,67 @@ func (runtime *contextAwareUCIRuntime) StageCodeIndex(ctx context.Context, bindi
 		AcceptedPartCount: uint64(len(acks)),
 		PartDigest:        string(partsDigest),
 	}, nil
+}
+
+func decodeUCIStageAdmissions(ctx context.Context, binding uci.IndexBinding, frames []*pb.StageCodeIndexFrame) (*pb.StageCodeIndexFrame, []uci.IndexAdmissionFrame, error) {
+	if len(frames) == 0 || len(frames) > uci.IndexAdmissionMaxFrames || frames[0] == nil {
+		return nil, nil, errUCIContextRuntimeInvalid
+	}
+	first := frames[0]
+	if !contextAwareIndexScopeMatchesBinding(first.GetScope(), binding) || !validUCIUUID(first.GetBuildId()) || first.GetLeaseEpoch() == 0 || first.GetLeaseEpoch() > math.MaxInt64 {
+		return nil, nil, errUCIContextRuntimeInvalid
+	}
+	admissions := make([]uci.IndexAdmissionFrame, len(frames))
+	totalPayloadBytes := 0
+	for index, frame := range frames {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		if err := validateUCIStageAdmissionFrame(binding, first, frame, index, totalPayloadBytes); err != nil {
+			return nil, nil, err
+		}
+		payload := frame.GetPayload()
+		totalPayloadBytes += len(payload)
+		admission, err := uci.DecodeIndexAdmissionFrame(payload)
+		if err != nil {
+			return nil, nil, fmt.Errorf("uci stage: decode frame: %w", err)
+		}
+		admissions[index] = admission
+	}
+	return first, admissions, nil
+}
+
+func validateUCIStageAdmissionFrame(binding uci.IndexBinding, first, frame *pb.StageCodeIndexFrame, index, totalPayloadBytes int) error {
+	if frame == nil || !contextAwareIndexScopeMatchesBinding(frame.GetScope(), binding) || frame.GetBuildId() != first.GetBuildId() || frame.GetLeaseEpoch() != first.GetLeaseEpoch() || frame.GetSequence() != uint64(index) || !sameUCIIndexIntentClaim(first.GetIntentClaim(), frame.GetIntentClaim()) {
+		return errUCIContextRuntimeInvalid
+	}
+	payload := frame.GetPayload()
+	if len(payload) > uci.IndexAdmissionMaxTotalEncodedBytes-totalPayloadBytes || uci.DigestIndexAdmissionPayload(payload) != uci.IndexDigest(frame.GetPayloadDigest()) {
+		return errUCIContextRuntimeInvalid
+	}
+	return nil
+}
+
+func (runtime *contextAwareUCIRuntime) stageUCIAdmissionParts(ctx context.Context, caller uci.IndexCaller, build uci.IndexBuildRef, intentClaim *uci.IndexIntentClaim, parts []uci.IndexPart) ([]uci.IndexPartAck, error) {
+	acks := make([]uci.IndexPartAck, 0, len(parts))
+	for index, part := range parts {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		partDigest, err := uci.DigestIndexPart(part)
+		if err != nil {
+			return nil, fmt.Errorf("uci stage: digest admitted part: %w", err)
+		}
+		ack, err := runtime.publisher.Stage(ctx, caller, uci.IndexStageInput{Build: build, Sequence: uint32(index), Digest: partDigest, Part: part, IntentClaim: intentClaim})
+		if err != nil {
+			return nil, err
+		}
+		if ack.BuildID != build.BuildID || ack.Sequence != uint32(index) || ack.Digest != partDigest {
+			return nil, errUCIContextRuntimeInvalid
+		}
+		acks = append(acks, ack)
+	}
+	return acks, nil
 }
 
 func (runtime *contextAwareUCIRuntime) FinalizeCodeIndex(ctx context.Context, binding uci.IndexBinding, request *pb.FinalizeCodeIndexRequest) (*pb.FinalizeCodeIndexResponse, error) {
