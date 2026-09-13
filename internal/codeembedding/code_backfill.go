@@ -77,41 +77,62 @@ func runCodeBackfill(ctx context.Context, store codeChunkSource, client embedder
 	}
 	processed := 0
 	for {
-		if err := ctx.Err(); err != nil {
-			log.Info().Int("processed", processed).Msg("code backfill: interrupted")
-			return err
-		}
-		batch, complete, retry, err := loadCodeEmbeddingBatch(ctx, store, client, batchSize, rec)
+		var complete bool
+		var err error
+		processed, complete, err = runCodeBackfillBatch(ctx, store, client, batchSize, rec, processed)
 		if err != nil {
 			return err
 		}
 		if complete {
-			log.Info().Int("total_processed", processed).Msg("code backfill: complete")
 			return nil
-		}
-		if retry {
-			continue
-		}
-		batchSuccess, dimMismatch := persistCodeEmbeddingBatch(ctx, store, batch, rec)
-		if rec != nil && batchSuccess > 0 {
-			rec.RecordSuccess(batchSuccess)
-		}
-		processed += batchSuccess
-		if batchSuccess == 0 && dimMismatch == len(batch.chunks) {
-			disableCodeBackfillForDimensionMismatch(len(batch.chunks), rec)
-			return nil
-		}
-		if batchSuccess == 0 {
-			log.Warn().Int("batch_size", len(batch.chunks)).Msg("code backfill: batch persisted zero embeddings (all rows guard-rejected); backing off")
-			if err := codeBackfillWait(ctx); err != nil {
-				return err
-			}
-			continue
-		}
-		if processed%100 == 0 || len(batch.chunks) < batchSize {
-			log.Info().Int("processed", processed).Msg("code backfill: progress")
 		}
 	}
+}
+
+func runCodeBackfillBatch(ctx context.Context, store codeChunkSource, client embedder, batchSize int, rec *embedding.BackfillRecorder, processed int) (int, bool, error) {
+	if err := ctx.Err(); err != nil {
+		log.Info().Int("processed", processed).Msg("code backfill: interrupted")
+		return processed, false, err
+	}
+	batch, complete, retry, err := loadCodeEmbeddingBatch(ctx, store, client, batchSize, rec)
+	if err != nil {
+		return processed, false, err
+	}
+	if complete {
+		log.Info().Int("total_processed", processed).Msg("code backfill: complete")
+		return processed, true, nil
+	}
+	if retry {
+		return processed, false, nil
+	}
+	batchSuccess, complete, err := persistCodeEmbeddingBatchResult(ctx, store, batch, rec)
+	if err != nil {
+		return processed, false, err
+	}
+	processed += batchSuccess
+	if complete {
+		return processed, true, nil
+	}
+	if processed%100 == 0 || len(batch.chunks) < batchSize {
+		log.Info().Int("processed", processed).Msg("code backfill: progress")
+	}
+	return processed, false, nil
+}
+
+func persistCodeEmbeddingBatchResult(ctx context.Context, store codeChunkSource, batch codeEmbeddingBatch, rec *embedding.BackfillRecorder) (int, bool, error) {
+	batchSuccess, dimMismatch := persistCodeEmbeddingBatch(ctx, store, batch, rec)
+	if rec != nil && batchSuccess > 0 {
+		rec.RecordSuccess(batchSuccess)
+	}
+	if batchSuccess == 0 && dimMismatch == len(batch.chunks) {
+		disableCodeBackfillForDimensionMismatch(len(batch.chunks), rec)
+		return batchSuccess, true, nil
+	}
+	if batchSuccess != 0 {
+		return batchSuccess, false, nil
+	}
+	log.Warn().Int("batch_size", len(batch.chunks)).Msg("code backfill: batch persisted zero embeddings (all rows guard-rejected); backing off")
+	return batchSuccess, false, codeBackfillWait(ctx)
 }
 
 func loadCodeEmbeddingBatch(ctx context.Context, store codeChunkSource, client embedder, batchSize int, rec *embedding.BackfillRecorder) (codeEmbeddingBatch, bool, bool, error) {
