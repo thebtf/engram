@@ -648,6 +648,13 @@ func validateBehavioralRuleSelectionOperation(operation BehavioralRuleSelectionO
 	if operation.SelectionVersion < 1 {
 		return fmt.Errorf("%w: selection version is required", ErrBehavioralRuleSelectionInvalid)
 	}
+	if err := validateBehavioralRuleSelectionKind(operation); err != nil {
+		return err
+	}
+	return validateBehavioralRuleSelectionAction(operation)
+}
+
+func validateBehavioralRuleSelectionKind(operation BehavioralRuleSelectionOperation) error {
 	switch operation.SelectionKind {
 	case CollectionSelectionExplicit, CollectionSelectionPage:
 		if operation.SelectionToken != "" {
@@ -660,6 +667,10 @@ func validateBehavioralRuleSelectionOperation(operation BehavioralRuleSelectionO
 	default:
 		return fmt.Errorf("%w: selection kind is unsupported", ErrBehavioralRuleSelectionInvalid)
 	}
+	return nil
+}
+
+func validateBehavioralRuleSelectionAction(operation BehavioralRuleSelectionOperation) error {
 	switch operation.Action {
 	case BehavioralRuleSelectionEnable, BehavioralRuleSelectionDisable:
 		if operation.Content != nil || operation.Priority != nil || operation.Scope != nil || len(operation.Order) != 0 {
