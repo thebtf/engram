@@ -3814,31 +3814,13 @@ func uciWaitForInstalledAcceptanceRestartQuiescence(
 		if status.error != "" {
 			return uciInstalledAcceptancePublication{}, fmt.Errorf("installed standard MCP restart status error: %s", uciInstalledAcceptanceSafeErrorDetail(status.error))
 		}
-		if status.status == "idle" && status.context != nil && status.freshness != nil && status.freshness.state == "observed_current" && status.freshness.pendingChanges != nil && *status.freshness.pendingChanges == 0 {
-			publication := uciInstalledAcceptancePublication{
-				sourceID:         status.context.sourceID,
-				checkoutID:       status.context.checkoutID,
-				viewID:           status.context.viewID,
-				profileID:        status.context.profileID,
-				generation:       status.context.generation,
-				runID:            status.runID,
-				freshnessState:   status.freshness.state,
-				evidenceRecorder: status.evidenceRecorder.state,
-			}
-			if !uciInstalledAcceptanceSameViewPublication(publication, expected) {
-				return uciInstalledAcceptancePublication{}, errors.New("installed standard MCP restart selected a changed View")
-			}
-			if observations == 0 || !uciInstalledAcceptanceSameViewPublication(candidate, publication) || candidate.runID != publication.runID {
-				candidate = publication
-				observations = 1
-			} else {
-				observations++
-			}
-			if observations >= uciInstalledAcceptanceQuiescenceObservations {
-				return candidate, nil
-			}
-		} else {
-			observations = 0
+		var ready bool
+		candidate, observations, ready, err = uciInstalledAcceptanceRestartQuiescenceObservation(status, expected, candidate, observations)
+		if err != nil {
+			return uciInstalledAcceptancePublication{}, err
+		}
+		if ready {
+			return candidate, nil
 		}
 		select {
 		case <-ctx.Done():
@@ -3846,6 +3828,25 @@ func uciWaitForInstalledAcceptanceRestartQuiescence(
 		case <-ticker.C:
 		}
 	}
+}
+
+func uciInstalledAcceptanceRestartQuiescenceObservation(status uciInstalledAcceptanceStatus, expected, candidate uciInstalledAcceptancePublication, observations int) (uciInstalledAcceptancePublication, int, bool, error) {
+	if status.status != "idle" || status.context == nil || status.freshness == nil || status.freshness.state != "observed_current" || status.freshness.pendingChanges == nil || *status.freshness.pendingChanges != 0 {
+		return uciInstalledAcceptancePublication{}, 0, false, nil
+	}
+	publication := uciInstalledAcceptancePublication{
+		sourceID: status.context.sourceID, checkoutID: status.context.checkoutID, viewID: status.context.viewID, profileID: status.context.profileID,
+		generation: status.context.generation, runID: status.runID, freshnessState: status.freshness.state, evidenceRecorder: status.evidenceRecorder.state,
+	}
+	if !uciInstalledAcceptanceSameViewPublication(publication, expected) {
+		return uciInstalledAcceptancePublication{}, 0, false, errors.New("installed standard MCP restart selected a changed View")
+	}
+	if observations == 0 || !uciInstalledAcceptanceSameViewPublication(candidate, publication) || candidate.runID != publication.runID {
+		candidate, observations = publication, 1
+	} else {
+		observations++
+	}
+	return candidate, observations, observations >= uciInstalledAcceptanceQuiescenceObservations, nil
 }
 
 func uciInstalledAcceptanceSameViewPublication(left, right uciInstalledAcceptancePublication) bool {
