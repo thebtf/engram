@@ -664,37 +664,55 @@ func validateIssueSelectionOperation(operation IssueSelectionOperation) ([]issue
 }
 
 func validateIssueSelectionAction(action IssueSelectionAction) error {
-	noFields := action.Status == nil && action.Priority == nil && action.Labels == nil && action.Comment == nil && action.AuthorProject == "" && action.AuthorAgent == ""
 	switch action.Kind {
 	case IssueSelectionAcknowledge, IssueSelectionDelete:
-		if !noFields {
-			return fmt.Errorf("%w: %s action accepts no payload", ErrIssueInvalidInput, action.Kind)
-		}
+		return validateIssueSelectionNoPayload(action)
 	case IssueSelectionStatus:
-		if action.Status == nil || action.Priority != nil || action.Labels != nil {
-			return fmt.Errorf("%w: status action requires only status and optional comment", ErrIssueInvalidInput)
-		}
-		switch *action.Status {
-		case "open", "acknowledged", "resolved", "reopened", "closed", "rejected":
-		default:
-			return fmt.Errorf("%w: invalid status %q", ErrIssueInvalidInput, *action.Status)
-		}
-		if *action.Status == "rejected" && (action.Comment == nil || *action.Comment == "") {
-			return fmt.Errorf("%w: comment is required when rejecting an issue", ErrIssueInvalidInput)
-		}
+		return validateIssueSelectionStatusAction(action)
 	case IssueSelectionPriority:
-		if action.Priority == nil || action.Status != nil || action.Labels != nil || action.Comment != nil || action.AuthorProject != "" || action.AuthorAgent != "" {
-			return fmt.Errorf("%w: priority action requires only priority", ErrIssueInvalidInput)
-		}
-		if !map[string]bool{"critical": true, "high": true, "medium": true, "low": true}[*action.Priority] {
-			return fmt.Errorf("%w: invalid priority %q", ErrIssueInvalidInput, *action.Priority)
-		}
+		return validateIssueSelectionPriorityAction(action)
 	case IssueSelectionLabels:
-		if action.Labels == nil || action.Status != nil || action.Priority != nil || action.Comment != nil || action.AuthorProject != "" || action.AuthorAgent != "" {
-			return fmt.Errorf("%w: labels action requires only labels", ErrIssueInvalidInput)
-		}
+		return validateIssueSelectionLabelsAction(action)
 	default:
 		return fmt.Errorf("%w: unsupported selected issue action", ErrIssueInvalidInput)
+	}
+}
+
+func validateIssueSelectionNoPayload(action IssueSelectionAction) error {
+	if action.Status != nil || action.Priority != nil || action.Labels != nil || action.Comment != nil || action.AuthorProject != "" || action.AuthorAgent != "" {
+		return fmt.Errorf("%w: %s action accepts no payload", ErrIssueInvalidInput, action.Kind)
+	}
+	return nil
+}
+
+func validateIssueSelectionStatusAction(action IssueSelectionAction) error {
+	if action.Status == nil || action.Priority != nil || action.Labels != nil {
+		return fmt.Errorf("%w: status action requires only status and optional comment", ErrIssueInvalidInput)
+	}
+	switch *action.Status {
+	case "open", "acknowledged", "resolved", "reopened", "closed", "rejected":
+	default:
+		return fmt.Errorf("%w: invalid status %q", ErrIssueInvalidInput, *action.Status)
+	}
+	if *action.Status == "rejected" && (action.Comment == nil || *action.Comment == "") {
+		return fmt.Errorf("%w: comment is required when rejecting an issue", ErrIssueInvalidInput)
+	}
+	return nil
+}
+
+func validateIssueSelectionPriorityAction(action IssueSelectionAction) error {
+	if action.Priority == nil || action.Status != nil || action.Labels != nil || action.Comment != nil || action.AuthorProject != "" || action.AuthorAgent != "" {
+		return fmt.Errorf("%w: priority action requires only priority", ErrIssueInvalidInput)
+	}
+	if !map[string]bool{"critical": true, "high": true, "medium": true, "low": true}[*action.Priority] {
+		return fmt.Errorf("%w: invalid priority %q", ErrIssueInvalidInput, *action.Priority)
+	}
+	return nil
+}
+
+func validateIssueSelectionLabelsAction(action IssueSelectionAction) error {
+	if action.Labels == nil || action.Status != nil || action.Priority != nil || action.Comment != nil || action.AuthorProject != "" || action.AuthorAgent != "" {
+		return fmt.Errorf("%w: labels action requires only labels", ErrIssueInvalidInput)
 	}
 	return nil
 }
