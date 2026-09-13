@@ -410,6 +410,8 @@ function profileEnvironment(baseEnvironment, profile, databaseDSN) {
 function runCoverageProfile(goCommand, profile, coveragePath, cwd, environment, databaseDSN) {
   const args = [
     "test",
+    "-count=1",
+    ...(databaseDSN ? ["-parallel=1"] : []),
     profile.target,
     "-covermode=atomic",
     `-coverprofile=${relative(cwd, coveragePath)}`,
