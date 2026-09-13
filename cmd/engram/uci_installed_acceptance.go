@@ -378,432 +378,473 @@ type uciInstalledAcceptanceReservation struct {
 // runUCIInstalledAcceptance deliberately stops at the first public installed
 // behavior that cannot satisfy the contract. It never invents an index,
 // parser, query, authorization, recorder, or restart result.
+type uciInstalledAcceptanceRuntime struct {
+	request            uciInstalledAcceptanceRequest
+	result             *uciInstalledAcceptanceResult
+	installation       *uciInstallHarnessInstallation
+	authority          *uciInstalledAcceptanceAuthority
+	reservations       []*uciInstalledAcceptanceReservation
+	activeDaemonPID    int
+	daemonControlRoot  string
+	candidates         map[string]uciInstallHarnessCommand
+	parserBundleDigest string
+	worktrees          uciInstalledAcceptanceWorktreesFixture
+	parserPath         string
+	daemonPath         string
+	serverPort         int
+	serverEnvironment  []string
+	clientEnvironment  []string
+	clientA            *uciInstalledAcceptanceMCPClient
+	clientB            *uciInstalledAcceptanceMCPClient
+	clientC            *uciInstalledAcceptanceMCPClient
+	selectedA          uciInstalledAcceptanceSelection
+	selectedB          uciInstalledAcceptanceSelection
+	publications       map[string]uciInstalledAcceptancePublication
+}
+
 func runUCIInstalledAcceptance(ctx context.Context, request uciInstalledAcceptanceRequest) (result uciInstalledAcceptanceResult, err error) {
 	result = uciNewInstalledAcceptanceResult(request)
 	if err := uciValidateInstalledAcceptanceRequest(ctx, request); err != nil {
 		return result, err
 	}
-
 	operationCtx, cancelOperation := context.WithTimeout(ctx, request.OperationTimeout)
 	defer cancelOperation()
-
-	var installation *uciInstallHarnessInstallation
-	var authority *uciInstalledAcceptanceAuthority
-	var reservations []*uciInstalledAcceptanceReservation
-	activeDaemonPID := 0
-	daemonControlRoot := filepath.Join(request.LocalStateRoot, "temp")
-	defer func() {
-		daemonPID := activeDaemonPID
-		if stopErr := uciStopInstalledAcceptanceDaemon(daemonControlRoot, daemonPID); stopErr != nil {
-			err = errors.Join(err, stopErr)
-		}
-		if installation != nil && installation.tree != nil {
-			if closeErr := installation.tree.Close(); closeErr != nil {
-				err = errors.Join(err, fmt.Errorf("close installed acceptance process tree: %w", closeErr))
-			}
-		}
-		daemonExited := true
-		if daemonPID > 0 {
-			if waitErr := uciWaitInstalledAcceptanceProcessExit(daemonPID, 5*time.Second); waitErr != nil {
-				err = errors.Join(err, waitErr)
-				daemonExited = false
-			}
-		}
-		if installation != nil && daemonExited {
-			if closeErr := installation.Close(); closeErr != nil {
-				err = errors.Join(err, closeErr)
-			} else {
-				result.Cleanup.ProcessTreeClosed = true
-			}
-		}
-		for _, reservation := range reservations {
-			if reservation != nil && reservation.listener != nil {
-				if closeErr := reservation.listener.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
-					err = errors.Join(err, fmt.Errorf("close reserved UCI loopback port: %w", closeErr))
-				}
-			}
-		}
-		if authority != nil && daemonExited {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			cleanupErr := authority.Close(cleanupCtx)
-			cancel()
-			if cleanupErr != nil {
-				err = errors.Join(err, cleanupErr)
-			}
-		} else if authority != nil {
-			err = errors.Join(err, errors.New("installed acceptance schema retained because daemon exit is unconfirmed"))
-		}
-		if installation == nil || daemonExited {
-			result.Cleanup.InstallRootRemoved = uciInstalledAcceptanceRemoveRoot(&err, request.InstallRoot)
-			result.Cleanup.FixtureRootRemoved = uciInstalledAcceptanceRemoveRoot(&err, request.FixtureRoot)
-			result.Cleanup.LocalStateRootRemoved = uciInstalledAcceptanceRemoveRoot(&err, request.LocalStateRoot)
-		}
-	}()
-
-	if err := os.Mkdir(request.FixtureRoot, 0o700); err != nil {
-		return result, fmt.Errorf("create installed acceptance fixture root: %w", err)
-	}
-	if err := os.Mkdir(request.LocalStateRoot, 0o700); err != nil {
-		return result, fmt.Errorf("create installed acceptance local state root: %w", err)
-	}
-
-	candidates, err := uciBuildInstalledAcceptanceCandidates(operationCtx, request.CandidateSourceRoot, filepath.Join(request.FixtureRoot, "candidate-build"))
-	if err != nil {
+	runtime := &uciInstalledAcceptanceRuntime{request: request, result: &result, daemonControlRoot: filepath.Join(request.LocalStateRoot, "temp")}
+	defer runtime.cleanup(&err)
+	if err := runtime.setupRootsAndAuthority(operationCtx); err != nil {
 		return result, err
 	}
-	parserBundleDigest := uciInstalledAcceptanceParserBundleDigest()
-	anchorProjectID := uuid.NewString()
-	worktrees, worktreeResult, err := uciCreateInstalledAcceptanceWorktrees(operationCtx, request.FixtureRoot, request.Fixture, anchorProjectID)
-	if err != nil {
+	if err := runtime.materialize(operationCtx); err != nil {
 		return result, err
 	}
-	result.Worktrees = worktreeResult
-
-	authority, err = uciPrepareInstalledAcceptanceAuthority(operationCtx, request.TestPostgresDSN, worktrees, parserBundleDigest, anchorProjectID)
-	if err != nil {
+	if err := runtime.startServer(operationCtx); err != nil {
 		return result, err
 	}
-	if err := uciAssertInstalledAcceptanceNoProjection(operationCtx, authority); err != nil {
+	if err := runtime.startClientsAndBootstrap(operationCtx); err != nil {
 		return result, err
 	}
-	for _, client := range []string{uciInstalledAcceptanceClientA, uciInstalledAcceptanceClientB} {
-		result.Worktrees.Registered[client] = true
-	}
-
-	installResult, err := runUCIInstallHarness(operationCtx, uciInstallHarnessRequest{
-		Version:          request.InstallHarnessVersion,
-		Scenario:         uciInstallHarnessScenarioMaterialize,
-		InstallRoot:      request.InstallRoot,
-		Server:           candidates["server"],
-		Daemon:           candidates["daemon"],
-		Parser:           candidates["parser"],
-		ReadinessTimeout: request.ReadinessTimeout,
-	})
-	if err != nil {
-		return result, fmt.Errorf("materialize installed UCI candidates: %w", err)
-	}
-	installation = installResult.Installation
-	if installation == nil {
-		return result, errors.New("materialize installed UCI candidates returned no installation")
-	}
-	for _, role := range []string{"server", "daemon", "parser"} {
-		candidateHash, hashErr := uciInstalledAcceptanceFileSHA256(candidates[role].Executable)
-		if hashErr != nil {
-			return result, hashErr
-		}
-		installedPath, pathErr := installation.Executable(role)
-		if pathErr != nil {
-			return result, pathErr
-		}
-		installedHash, hashErr := uciInstalledAcceptanceFileSHA256(installedPath)
-		if hashErr != nil {
-			return result, hashErr
-		}
-		if candidateHash != installedHash {
-			return result, fmt.Errorf("installed %s artifact bytes do not match its candidate", role)
-		}
-		result.Artifacts[role] = uciInstalledAcceptanceArtifact{CandidateSHA256: candidateHash, InstalledSHA256: installedHash}
-	}
-	parserPath, err := installation.Executable("parser")
-	if err != nil {
-		return result, err
-	}
-	daemonPath, err := installation.Executable("daemon")
-	if err != nil {
-		return result, err
-	}
-
-	reservations, err = uciReserveInstalledAcceptanceLoopback(request.LoopbackHost, request.ReservedLoopbackPortCount)
-	if err != nil {
-		return result, err
-	}
-	result.ReservedLoopbackPorts = uciInstalledAcceptanceReservationPorts(reservations)
-	serverPort := reservations[0].port
-	if err := reservations[0].listener.Close(); err != nil {
-		return result, fmt.Errorf("release reserved server loopback port: %w", err)
-	}
-	reservations[0].listener = nil
-
-	serverEnvironment, clientEnvironment, err := uciInstalledAcceptanceEnvironment(request, authority, serverPort, parserBundleDigest, parserPath)
-	if err != nil {
-		return result, err
-	}
-	server, err := installation.Start(operationCtx, uciInstalledHarnessLaunchRequest{
-		Role:        "server",
-		Environment: serverEnvironment,
-	})
-	if err != nil {
-		return result, err
-	}
-	result.Processes.ServerPID = server.command.Process.Pid
-	readinessCtx, cancelReadiness := context.WithTimeout(operationCtx, request.ReadinessTimeout)
-	if err := uciWaitForInstalledAcceptanceLoopback(readinessCtx, request.LoopbackHost, serverPort); err != nil {
-		cancelReadiness()
-		return result, err
-	}
-	cancelReadiness()
-
-	clientAProcess, err := installation.Start(operationCtx, uciInstalledHarnessLaunchRequest{
-		Role:             "daemon",
-		WorkingDirectory: worktrees.primaryRoot,
-		Environment:      clientEnvironment,
-		WithStdio:        true,
-	})
-	if err != nil {
-		return result, err
-	}
-	clientA, err := newUCIInstalledAcceptanceMCPClient(uciInstalledAcceptanceClientA, clientAProcess)
-	if err != nil {
-		return result, errors.Join(err, clientAProcess.closePipes(), installation.tree.Close(), clientAProcess.wait())
-	}
-	if err := clientA.InitializeAndList(operationCtx); err != nil {
-		return result, errors.Join(err, clientAProcess.closePipes(), installation.tree.Close(), clientAProcess.wait())
-	}
-	result.Processes.DaemonPID, err = uciWaitForInstalledAcceptanceDaemonPID(operationCtx, filepath.Join(request.LocalStateRoot, "temp"), daemonPath)
-	if err != nil {
-		return result, err
-	}
-	activeDaemonPID = result.Processes.DaemonPID
-
-	clientBProcess, err := installation.Start(operationCtx, uciInstalledHarnessLaunchRequest{
-		Role:             "daemon",
-		WorkingDirectory: worktrees.linkedRoot,
-		Environment:      clientEnvironment,
-		WithStdio:        true,
-	})
-	if err != nil {
-		return result, err
-	}
-	clientB, err := newUCIInstalledAcceptanceMCPClient(uciInstalledAcceptanceClientB, clientBProcess)
-	if err != nil {
-		return result, err
-	}
-	if err := clientB.InitializeAndList(operationCtx); err != nil {
-		return result, err
-	}
-	defer func() {
-		result.ClientTranscripts[uciInstalledAcceptanceClientA] = clientA.Transcript()
-		result.ClientTranscripts[uciInstalledAcceptanceClientB] = clientB.Transcript()
-	}()
-	result.SimultaneousAB = true
-	if err := uciRequireInstalledAcceptanceTools(clientA.Transcript()); err != nil {
-		return result, err
-	}
-	if err := uciRequireInstalledAcceptanceTools(clientB.Transcript()); err != nil {
-		return result, err
-	}
-
-	selectedA, selectedB, err := uciSelectInstalledAcceptanceCheckouts(operationCtx, clientA, clientB, authority)
-	if err != nil {
-		return result, err
-	}
-	result.Bootstrap.InitialViewAbsent[uciInstalledAcceptanceClientA] = selectedA.viewID == ""
-	result.Bootstrap.InitialViewAbsent[uciInstalledAcceptanceClientB] = selectedB.viewID == ""
-
-	if !result.Bootstrap.InitialViewAbsent[uciInstalledAcceptanceClientA] || !result.Bootstrap.InitialViewAbsent[uciInstalledAcceptanceClientB] {
-		return result, errors.New("installed UCI checkout selection was not View-free before the first index")
-	}
-
-	selectedA, selectedB, err = uciStartInstalledAcceptanceIndexes(operationCtx, clientA, clientB, selectedA, selectedB, worktrees)
-	if err != nil {
-		return result, err
-	}
-	result.Bootstrap.IndexStarted[uciInstalledAcceptanceClientA] = true
-	result.Bootstrap.IndexStarted[uciInstalledAcceptanceClientB] = true
-	publications, err := uciObserveInstalledAcceptancePublications(operationCtx, clientA, clientB, selectedA, selectedB, &result)
-	if err != nil {
-		return result, fmt.Errorf("%w: %v", errUCIInstalledAcceptanceBarrierBoundary, err)
-	}
-
+	defer runtime.captureClientTranscripts()
 	if uciInstalledAcceptanceScenarioRunsBeforeBaseWatcher(request) {
-		runtime := uciInstalledAcceptanceScenarioRuntime{
-			Request:            request,
-			Installation:       installation,
-			Authority:          authority,
-			Worktrees:          worktrees,
-			ClientA:            clientA,
-			ClientB:            clientB,
-			Recorder:           clientA,
-			Selections:         map[string]uciInstalledAcceptanceSelection{uciInstalledAcceptanceClientA: selectedA, uciInstalledAcceptanceClientB: selectedB, uciInstalledAcceptanceClientRecorder: selectedA},
-			Publications:       map[string]uciInstalledAcceptancePublication{uciInstalledAcceptanceClientA: publications[uciInstalledAcceptanceClientA], uciInstalledAcceptanceClientB: publications[uciInstalledAcceptanceClientB], uciInstalledAcceptanceClientRecorder: publications[uciInstalledAcceptanceClientA]},
-			ParserBundleDigest: parserBundleDigest,
-			Candidates:         candidates,
-			ServerEnvironment:  serverEnvironment,
-			ClientEnvironment:  clientEnvironment,
-		}
-		if err := uciRunInstalledAcceptanceScenarioProbe(operationCtx, runtime, &result); err != nil {
+		if err := runtime.runScenarioProbe(operationCtx); err != nil {
 			return result, fmt.Errorf("installed UCI pre-base scenario probe: %w", err)
 		}
 		return result, nil
 	}
+	if err := runtime.exerciseBase(operationCtx); err != nil {
+		return result, err
+	}
+	return result, nil
+}
 
-	parserPIDs := uciWaitForInstalledAcceptanceParserPIDs(operationCtx, installation, parserPath)
+func (runtime *uciInstalledAcceptanceRuntime) cleanup(retErr *error) {
+	runtime.stopDaemon(retErr)
+	runtime.closeProcessTree(retErr)
+	daemonExited := runtime.waitForDaemonExit(retErr)
+	runtime.closeInstallation(daemonExited, retErr)
+	runtime.closeReservations(retErr)
+	runtime.closeAuthority(daemonExited, retErr)
+	if runtime.installation == nil || daemonExited {
+		runtime.result.Cleanup.InstallRootRemoved = uciInstalledAcceptanceRemoveRoot(retErr, runtime.request.InstallRoot)
+		runtime.result.Cleanup.FixtureRootRemoved = uciInstalledAcceptanceRemoveRoot(retErr, runtime.request.FixtureRoot)
+		runtime.result.Cleanup.LocalStateRootRemoved = uciInstalledAcceptanceRemoveRoot(retErr, runtime.request.LocalStateRoot)
+	}
+}
+
+func (runtime *uciInstalledAcceptanceRuntime) stopDaemon(retErr *error) {
+	if stopErr := uciStopInstalledAcceptanceDaemon(runtime.daemonControlRoot, runtime.activeDaemonPID); stopErr != nil {
+		*retErr = errors.Join(*retErr, stopErr)
+	}
+}
+
+func (runtime *uciInstalledAcceptanceRuntime) waitForDaemonExit(retErr *error) bool {
+	if runtime.activeDaemonPID <= 0 {
+		return true
+	}
+	if waitErr := uciWaitInstalledAcceptanceProcessExit(runtime.activeDaemonPID, 5*time.Second); waitErr != nil {
+		*retErr = errors.Join(*retErr, waitErr)
+		return false
+	}
+	return true
+}
+
+func (runtime *uciInstalledAcceptanceRuntime) closeProcessTree(retErr *error) {
+	if runtime.installation == nil || runtime.installation.tree == nil {
+		return
+	}
+	if closeErr := runtime.installation.tree.Close(); closeErr != nil {
+		*retErr = errors.Join(*retErr, fmt.Errorf("close installed acceptance process tree: %w", closeErr))
+	}
+}
+
+func (runtime *uciInstalledAcceptanceRuntime) closeInstallation(daemonExited bool, retErr *error) {
+	if runtime.installation == nil || !daemonExited {
+		return
+	}
+	if closeErr := runtime.installation.Close(); closeErr != nil {
+		*retErr = errors.Join(*retErr, closeErr)
+		return
+	}
+	runtime.result.Cleanup.ProcessTreeClosed = true
+}
+
+func (runtime *uciInstalledAcceptanceRuntime) closeReservations(retErr *error) {
+	for _, reservation := range runtime.reservations {
+		if reservation != nil && reservation.listener != nil {
+			if closeErr := reservation.listener.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
+				*retErr = errors.Join(*retErr, fmt.Errorf("close reserved UCI loopback port: %w", closeErr))
+			}
+		}
+	}
+}
+
+func (runtime *uciInstalledAcceptanceRuntime) closeAuthority(daemonExited bool, retErr *error) {
+	if runtime.authority == nil {
+		return
+	}
+	if !daemonExited {
+		*retErr = errors.Join(*retErr, errors.New("installed acceptance schema retained because daemon exit is unconfirmed"))
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	cleanupErr := runtime.authority.Close(cleanupCtx)
+	cancel()
+	if cleanupErr != nil {
+		*retErr = errors.Join(*retErr, cleanupErr)
+	}
+}
+
+func (runtime *uciInstalledAcceptanceRuntime) setupRootsAndAuthority(ctx context.Context) error {
+	if err := os.Mkdir(runtime.request.FixtureRoot, 0o700); err != nil {
+		return fmt.Errorf("create installed acceptance fixture root: %w", err)
+	}
+	if err := os.Mkdir(runtime.request.LocalStateRoot, 0o700); err != nil {
+		return fmt.Errorf("create installed acceptance local state root: %w", err)
+	}
+	candidates, err := uciBuildInstalledAcceptanceCandidates(ctx, runtime.request.CandidateSourceRoot, filepath.Join(runtime.request.FixtureRoot, "candidate-build"))
+	if err != nil {
+		return err
+	}
+	runtime.candidates = candidates
+	runtime.parserBundleDigest = uciInstalledAcceptanceParserBundleDigest()
+	anchorProjectID := uuid.NewString()
+	worktrees, worktreeResult, err := uciCreateInstalledAcceptanceWorktrees(ctx, runtime.request.FixtureRoot, runtime.request.Fixture, anchorProjectID)
+	if err != nil {
+		return err
+	}
+	runtime.worktrees = worktrees
+	runtime.result.Worktrees = worktreeResult
+	authority, err := uciPrepareInstalledAcceptanceAuthority(ctx, runtime.request.TestPostgresDSN, worktrees, runtime.parserBundleDigest, anchorProjectID)
+	if err != nil {
+		return err
+	}
+	runtime.authority = authority
+	if err := uciAssertInstalledAcceptanceNoProjection(ctx, authority); err != nil {
+		return err
+	}
+	for _, client := range []string{uciInstalledAcceptanceClientA, uciInstalledAcceptanceClientB} {
+		runtime.result.Worktrees.Registered[client] = true
+	}
+	return nil
+}
+
+func (runtime *uciInstalledAcceptanceRuntime) materialize(ctx context.Context) error {
+	installResult, err := runUCIInstallHarness(ctx, uciInstallHarnessRequest{
+		Version:          runtime.request.InstallHarnessVersion,
+		Scenario:         uciInstallHarnessScenarioMaterialize,
+		InstallRoot:      runtime.request.InstallRoot,
+		Server:           runtime.candidates["server"],
+		Daemon:           runtime.candidates["daemon"],
+		Parser:           runtime.candidates["parser"],
+		ReadinessTimeout: runtime.request.ReadinessTimeout,
+	})
+	if err != nil {
+		return fmt.Errorf("materialize installed UCI candidates: %w", err)
+	}
+	runtime.installation = installResult.Installation
+	if runtime.installation == nil {
+		return errors.New("materialize installed UCI candidates returned no installation")
+	}
+	if err := runtime.verifyMaterializedArtifacts(); err != nil {
+		return err
+	}
+	parserPath, err := runtime.installation.Executable("parser")
+	if err != nil {
+		return err
+	}
+	daemonPath, err := runtime.installation.Executable("daemon")
+	if err != nil {
+		return err
+	}
+	runtime.parserPath, runtime.daemonPath = parserPath, daemonPath
+	return nil
+}
+
+func (runtime *uciInstalledAcceptanceRuntime) verifyMaterializedArtifacts() error {
+	for _, role := range []string{"server", "daemon", "parser"} {
+		candidateHash, err := uciInstalledAcceptanceFileSHA256(runtime.candidates[role].Executable)
+		if err != nil {
+			return err
+		}
+		installedPath, err := runtime.installation.Executable(role)
+		if err != nil {
+			return err
+		}
+		installedHash, err := uciInstalledAcceptanceFileSHA256(installedPath)
+		if err != nil {
+			return err
+		}
+		if candidateHash != installedHash {
+			return fmt.Errorf("installed %s artifact bytes do not match its candidate", role)
+		}
+		runtime.result.Artifacts[role] = uciInstalledAcceptanceArtifact{CandidateSHA256: candidateHash, InstalledSHA256: installedHash}
+	}
+	return nil
+}
+
+func (runtime *uciInstalledAcceptanceRuntime) startServer(ctx context.Context) error {
+	reservations, err := uciReserveInstalledAcceptanceLoopback(runtime.request.LoopbackHost, runtime.request.ReservedLoopbackPortCount)
+	if err != nil {
+		return err
+	}
+	runtime.reservations = reservations
+	runtime.result.ReservedLoopbackPorts = uciInstalledAcceptanceReservationPorts(reservations)
+	runtime.serverPort = reservations[0].port
+	if err := reservations[0].listener.Close(); err != nil {
+		return fmt.Errorf("release reserved server loopback port: %w", err)
+	}
+	reservations[0].listener = nil
+	serverEnvironment, clientEnvironment, err := uciInstalledAcceptanceEnvironment(runtime.request, runtime.authority, runtime.serverPort, runtime.parserBundleDigest, runtime.parserPath)
+	if err != nil {
+		return err
+	}
+	runtime.serverEnvironment, runtime.clientEnvironment = serverEnvironment, clientEnvironment
+	server, err := runtime.installation.Start(ctx, uciInstalledHarnessLaunchRequest{Role: "server", Environment: serverEnvironment})
+	if err != nil {
+		return err
+	}
+	runtime.result.Processes.ServerPID = server.command.Process.Pid
+	readinessCtx, cancel := context.WithTimeout(ctx, runtime.request.ReadinessTimeout)
+	err = uciWaitForInstalledAcceptanceLoopback(readinessCtx, runtime.request.LoopbackHost, runtime.serverPort)
+	cancel()
+	return err
+}
+
+func (runtime *uciInstalledAcceptanceRuntime) startClientsAndBootstrap(ctx context.Context) error {
+	clientA, err := runtime.startPrimaryClient(ctx)
+	if err != nil {
+		return err
+	}
+	runtime.clientA = clientA
+	runtime.result.Processes.DaemonPID, err = uciWaitForInstalledAcceptanceDaemonPID(ctx, runtime.daemonControlRoot, runtime.daemonPath)
+	if err != nil {
+		return err
+	}
+	runtime.activeDaemonPID = runtime.result.Processes.DaemonPID
+	clientB, err := runtime.startClient(ctx, uciInstalledAcceptanceClientB, runtime.worktrees.linkedRoot)
+	if err != nil {
+		return err
+	}
+	runtime.clientB = clientB
+	runtime.result.SimultaneousAB = true
+	if err := uciRequireInstalledAcceptanceTools(clientA.Transcript()); err != nil {
+		return err
+	}
+	if err := uciRequireInstalledAcceptanceTools(clientB.Transcript()); err != nil {
+		return err
+	}
+	selectedA, selectedB, err := uciSelectInstalledAcceptanceCheckouts(ctx, clientA, clientB, runtime.authority)
+	if err != nil {
+		return err
+	}
+	runtime.selectedA, runtime.selectedB = selectedA, selectedB
+	runtime.result.Bootstrap.InitialViewAbsent[uciInstalledAcceptanceClientA] = selectedA.viewID == ""
+	runtime.result.Bootstrap.InitialViewAbsent[uciInstalledAcceptanceClientB] = selectedB.viewID == ""
+	if !runtime.result.Bootstrap.InitialViewAbsent[uciInstalledAcceptanceClientA] || !runtime.result.Bootstrap.InitialViewAbsent[uciInstalledAcceptanceClientB] {
+		return errors.New("installed UCI checkout selection was not View-free before the first index")
+	}
+	selectedA, selectedB, err = uciStartInstalledAcceptanceIndexes(ctx, clientA, clientB, selectedA, selectedB, runtime.worktrees)
+	if err != nil {
+		return err
+	}
+	runtime.selectedA, runtime.selectedB = selectedA, selectedB
+	runtime.result.Bootstrap.IndexStarted[uciInstalledAcceptanceClientA] = true
+	runtime.result.Bootstrap.IndexStarted[uciInstalledAcceptanceClientB] = true
+	publications, err := uciObserveInstalledAcceptancePublications(ctx, clientA, clientB, selectedA, selectedB, runtime.result)
+	if err != nil {
+		return fmt.Errorf("%w: %v", errUCIInstalledAcceptanceBarrierBoundary, err)
+	}
+	runtime.publications = publications
+	return nil
+}
+
+func (runtime *uciInstalledAcceptanceRuntime) startPrimaryClient(ctx context.Context) (*uciInstalledAcceptanceMCPClient, error) {
+	process, err := runtime.installation.Start(ctx, uciInstalledHarnessLaunchRequest{Role: "daemon", WorkingDirectory: runtime.worktrees.primaryRoot, Environment: runtime.clientEnvironment, WithStdio: true})
+	if err != nil {
+		return nil, err
+	}
+	client, err := newUCIInstalledAcceptanceMCPClient(uciInstalledAcceptanceClientA, process)
+	if err != nil {
+		return nil, errors.Join(err, process.closePipes(), runtime.installation.tree.Close(), process.wait())
+	}
+	if err := client.InitializeAndList(ctx); err != nil {
+		return nil, errors.Join(err, process.closePipes(), runtime.installation.tree.Close(), process.wait())
+	}
+	return client, nil
+}
+
+func (runtime *uciInstalledAcceptanceRuntime) startClient(ctx context.Context, name, workingDirectory string) (*uciInstalledAcceptanceMCPClient, error) {
+	process, err := runtime.installation.Start(ctx, uciInstalledHarnessLaunchRequest{Role: "daemon", WorkingDirectory: workingDirectory, Environment: runtime.clientEnvironment, WithStdio: true})
+	if err != nil {
+		return nil, err
+	}
+	client, err := newUCIInstalledAcceptanceMCPClient(name, process)
+	if err != nil {
+		return nil, err
+	}
+	if err := client.InitializeAndList(ctx); err != nil {
+		return client, err
+	}
+	return client, nil
+}
+
+func (runtime *uciInstalledAcceptanceRuntime) captureClientTranscripts() {
+	if runtime.clientA != nil {
+		runtime.result.ClientTranscripts[uciInstalledAcceptanceClientA] = runtime.clientA.Transcript()
+	}
+	if runtime.clientB != nil {
+		runtime.result.ClientTranscripts[uciInstalledAcceptanceClientB] = runtime.clientB.Transcript()
+	}
+	if runtime.clientC != nil {
+		runtime.result.ClientTranscripts[uciInstalledAcceptanceClientC] = runtime.clientC.Transcript()
+	}
+}
+
+func (runtime *uciInstalledAcceptanceRuntime) runScenarioProbe(ctx context.Context) error {
+	return uciRunInstalledAcceptanceScenarioProbe(ctx, uciInstalledAcceptanceScenarioRuntime{
+		Request:            runtime.request,
+		Installation:       runtime.installation,
+		Authority:          runtime.authority,
+		Worktrees:          runtime.worktrees,
+		ClientA:            runtime.clientA,
+		ClientB:            runtime.clientB,
+		Recorder:           runtime.clientA,
+		Selections:         map[string]uciInstalledAcceptanceSelection{uciInstalledAcceptanceClientA: runtime.selectedA, uciInstalledAcceptanceClientB: runtime.selectedB, uciInstalledAcceptanceClientRecorder: runtime.selectedA},
+		Publications:       map[string]uciInstalledAcceptancePublication{uciInstalledAcceptanceClientA: runtime.publications[uciInstalledAcceptanceClientA], uciInstalledAcceptanceClientB: runtime.publications[uciInstalledAcceptanceClientB], uciInstalledAcceptanceClientRecorder: runtime.publications[uciInstalledAcceptanceClientA]},
+		ParserBundleDigest: runtime.parserBundleDigest,
+		Candidates:         runtime.candidates,
+		ServerEnvironment:  runtime.serverEnvironment,
+		ClientEnvironment:  runtime.clientEnvironment,
+	}, runtime.result)
+}
+
+func (runtime *uciInstalledAcceptanceRuntime) exerciseBase(ctx context.Context) error {
+	if err := runtime.recordParserAndObservations(ctx); err != nil {
+		return err
+	}
+	if err := runtime.exerciseThirdClientAndRecorder(ctx); err != nil {
+		return err
+	}
+	return runtime.exerciseWatcherAndRestart(ctx)
+}
+
+func (runtime *uciInstalledAcceptanceRuntime) recordParserAndObservations(ctx context.Context) error {
+	parserPIDs := uciWaitForInstalledAcceptanceParserPIDs(ctx, runtime.installation, runtime.parserPath)
 	if len(parserPIDs) == 0 {
-		return result, fmt.Errorf("%w: codebase_index reached published Views without an installed parser process", errUCIInstalledAcceptanceParserBoundary)
+		return fmt.Errorf("%w: codebase_index reached published Views without an installed parser process", errUCIInstalledAcceptanceParserBoundary)
 	}
-	parserCanarySource, err := uciRequireInstalledAcceptanceParserCanaryPublished(operationCtx, authority, worktrees, publications, parserBundleDigest)
+	parserCanarySource, err := uciRequireInstalledAcceptanceParserCanaryPublished(ctx, runtime.authority, runtime.worktrees, runtime.publications, runtime.parserBundleDigest)
 	if err != nil {
-		return result, fmt.Errorf("%w: %v", errUCIInstalledAcceptanceParserBoundary, err)
+		return fmt.Errorf("%w: %v", errUCIInstalledAcceptanceParserBoundary, err)
 	}
-	requestDigest, err := uci.TreeSitterWireRequestDigest(uciInstalledAcceptanceParserCanaryRequest(authority.profile.ProfileID, parserBundleDigest, parserCanarySource))
+	requestDigest, err := uci.TreeSitterWireRequestDigest(uciInstalledAcceptanceParserCanaryRequest(runtime.authority.profile.ProfileID, runtime.parserBundleDigest, parserCanarySource))
 	if err != nil {
-		return result, fmt.Errorf("%w: hash installed parser canary request: %v", errUCIInstalledAcceptanceParserBoundary, err)
+		return fmt.Errorf("%w: hash installed parser canary request: %v", errUCIInstalledAcceptanceParserBoundary, err)
 	}
 	parserRequestDigest, err := uciInstalledAcceptanceBareSHA256(string(requestDigest))
 	if err != nil {
-		return result, fmt.Errorf("%w: validate installed parser request digest: %v", errUCIInstalledAcceptanceParserBoundary, err)
+		return fmt.Errorf("%w: validate installed parser request digest: %v", errUCIInstalledAcceptanceParserBoundary, err)
 	}
-	result.Processes.ParserPID = parserPIDs[0]
-	result.Parser = uciInstalledAcceptanceParserEvidence{
-		UsedInstalledArtifact: true,
-		InvocationCount:       len(parserPIDs),
-		RequestDigest:         parserRequestDigest,
-	}
-
+	runtime.result.Processes.ParserPID = parserPIDs[0]
+	runtime.result.Parser = uciInstalledAcceptanceParserEvidence{UsedInstalledArtifact: true, InvocationCount: len(parserPIDs), RequestDigest: parserRequestDigest}
 	for _, item := range []struct {
 		name           string
 		client         *uciInstalledAcceptanceMCPClient
 		selection      uciInstalledAcceptanceSelection
 		expectedCallee string
 	}{
-		{uciInstalledAcceptanceClientA, clientA, selectedA, request.Fixture.PrimaryCallee},
-		{uciInstalledAcceptanceClientB, clientB, selectedB, request.Fixture.LinkedCallee},
+		{uciInstalledAcceptanceClientA, runtime.clientA, runtime.selectedA, runtime.request.Fixture.PrimaryCallee},
+		{uciInstalledAcceptanceClientB, runtime.clientB, runtime.selectedB, runtime.request.Fixture.LinkedCallee},
 	} {
-		observation, observationErr := uciObserveInstalledAcceptanceSearchGraphRead(operationCtx, item.client, item.selection, publications[item.name], request.Fixture, item.expectedCallee)
-		if observationErr != nil {
-			return result, fmt.Errorf("installed standard MCP public isolation for %s: %w", item.name, observationErr)
+		observation, err := uciObserveInstalledAcceptanceSearchGraphRead(ctx, item.client, item.selection, runtime.publications[item.name], runtime.request.Fixture, item.expectedCallee)
+		if err != nil {
+			return fmt.Errorf("installed standard MCP public isolation for %s: %w", item.name, err)
 		}
-		result.Observations[item.name] = observation
+		runtime.result.Observations[item.name] = observation
 	}
+	return nil
+}
 
-	clientCProcess, err := installation.Start(operationCtx, uciInstalledHarnessLaunchRequest{
-		Role:             "daemon",
-		WorkingDirectory: worktrees.primaryRoot,
-		Environment:      clientEnvironment,
-		WithStdio:        true,
-	})
+func (runtime *uciInstalledAcceptanceRuntime) exerciseThirdClientAndRecorder(ctx context.Context) error {
+	clientC, err := runtime.startClient(ctx, uciInstalledAcceptanceClientC, runtime.worktrees.primaryRoot)
+	runtime.clientC = clientC
 	if err != nil {
-		return result, err
-	}
-	clientC, err := newUCIInstalledAcceptanceMCPClient(uciInstalledAcceptanceClientC, clientCProcess)
-	if err != nil {
-		return result, err
-	}
-	defer func() {
-		result.ClientTranscripts[uciInstalledAcceptanceClientC] = clientC.Transcript()
-	}()
-	if err := clientC.InitializeAndList(operationCtx); err != nil {
-		return result, err
+		return err
 	}
 	if err := uciRequireInstalledAcceptanceTools(clientC.Transcript()); err != nil {
-		return result, err
+		return err
 	}
-	if err := uciExerciseInstalledAcceptanceThirdClient(operationCtx, clientA, clientB, clientC, authority, &result); err != nil {
-		return result, fmt.Errorf("installed standard MCP third-client default isolation: %w", err)
+	if err := uciExerciseInstalledAcceptanceThirdClient(ctx, runtime.clientA, runtime.clientB, clientC, runtime.authority, runtime.result); err != nil {
+		return fmt.Errorf("installed standard MCP third-client default isolation: %w", err)
 	}
+	if err := uciExerciseInstalledAcceptanceRefusals(ctx, uciInstalledAcceptanceRefusalInput{first: runtime.clientA, second: runtime.clientB, third: clientC, firstSelection: runtime.selectedA, secondSelection: runtime.selectedB, authority: runtime.authority, result: runtime.result}); err != nil {
+		return fmt.Errorf("installed standard MCP authorization-negative matrix: %w", err)
+	}
+	recorder, err := runtime.startClient(ctx, "client-recorder", runtime.worktrees.primaryRoot)
+	if err != nil {
+		return err
+	}
+	if err := uciRequireInstalledAcceptanceTools(recorder.Transcript()); err != nil {
+		return err
+	}
+	selection, err := uciSelectInstalledAcceptanceCheckout(ctx, recorder, uciInstalledAcceptanceClientA, runtime.authority)
+	if err != nil {
+		return err
+	}
+	if err := uciExerciseInstalledAcceptanceRecorder(ctx, recorder, selection, runtime.authority, runtime.request.Fixture.SharedSymbol, runtime.result); err != nil {
+		return fmt.Errorf("installed standard MCP recorder matrix: %w", err)
+	}
+	if err := recorder.process.closePipes(); err != nil {
+		return fmt.Errorf("close installed recorder client: %w", err)
+	}
+	return nil
+}
 
-	if err := uciExerciseInstalledAcceptanceRefusals(
-		operationCtx,
-		uciInstalledAcceptanceRefusalInput{
-			first:           clientA,
-			second:          clientB,
-			third:           clientC,
-			firstSelection:  selectedA,
-			secondSelection: selectedB,
-			authority:       authority,
-			result:          &result,
-		},
-	); err != nil {
-		return result, fmt.Errorf("installed standard MCP authorization-negative matrix: %w", err)
+func (runtime *uciInstalledAcceptanceRuntime) exerciseWatcherAndRestart(ctx context.Context) error {
+	publications, err := uciExerciseInstalledAcceptanceWatcher(ctx, uciInstalledAcceptanceWatcherInput{fixture: runtime.request.Fixture, authority: runtime.authority, worktrees: runtime.worktrees, first: runtime.clientA, second: runtime.clientB, firstSelection: runtime.selectedA, secondSelection: runtime.selectedB, before: runtime.publications, result: runtime.result})
+	if err != nil {
+		return fmt.Errorf("installed standard MCP watcher A/B dirty-view isolation: %w", err)
 	}
-	recorderProcess, err := installation.Start(operationCtx, uciInstalledHarnessLaunchRequest{
-		Role:             "daemon",
-		WorkingDirectory: worktrees.primaryRoot,
-		Environment:      clientEnvironment,
-		WithStdio:        true,
+	primary, primaryFound := publications[uciInstalledAcceptanceClientA]
+	linked, linkedFound := publications[uciInstalledAcceptanceClientB]
+	if !primaryFound || !linkedFound {
+		return errors.New("installed standard MCP watcher did not retain both publication baselines")
+	}
+	runtime.publications = publications
+	runtime.selectedA.viewID, runtime.selectedA.runID = primary.viewID, primary.runID
+	runtime.selectedB.viewID, runtime.selectedB.runID = linked.viewID, linked.runID
+	installation, daemonPID, err := uciRestartInstalledAcceptance(ctx, uciInstalledAcceptanceRestartInput{
+		request: runtime.request, candidates: runtime.candidates, authority: runtime.authority, worktrees: runtime.worktrees,
+		serverPort: runtime.serverPort, parserBundleDigest: runtime.parserBundleDigest, daemonControlRoot: runtime.daemonControlRoot,
+		oldInstallation: runtime.installation, daemonOwner: &runtime.activeDaemonPID,
+		oldClients:   map[string]*uciInstalledAcceptanceMCPClient{uciInstalledAcceptanceClientA: runtime.clientA, uciInstalledAcceptanceClientB: runtime.clientB, uciInstalledAcceptanceClientC: runtime.clientC},
+		selections:   map[string]uciInstalledAcceptanceSelection{uciInstalledAcceptanceClientA: runtime.selectedA, uciInstalledAcceptanceClientB: runtime.selectedB},
+		publications: runtime.publications, result: runtime.result,
 	})
 	if err != nil {
-		return result, err
+		return fmt.Errorf("installed standard MCP restart matrix: %w", err)
 	}
-	recorderClient, err := newUCIInstalledAcceptanceMCPClient("client-recorder", recorderProcess)
-	if err != nil {
-		return result, err
-	}
-	if err := recorderClient.InitializeAndList(operationCtx); err != nil {
-		return result, err
-	}
-	if err := uciRequireInstalledAcceptanceTools(recorderClient.Transcript()); err != nil {
-		return result, err
-	}
-	recorderSelection, err := uciSelectInstalledAcceptanceCheckout(operationCtx, recorderClient, uciInstalledAcceptanceClientA, authority)
-	if err != nil {
-		return result, err
-	}
-	if err := uciExerciseInstalledAcceptanceRecorder(operationCtx, recorderClient, recorderSelection, authority, request.Fixture.SharedSymbol, &result); err != nil {
-		return result, fmt.Errorf("installed standard MCP recorder matrix: %w", err)
-	}
-	if err := recorderProcess.closePipes(); err != nil {
-		return result, fmt.Errorf("close installed recorder client: %w", err)
-	}
-	watcherPublications, watcherErr := uciExerciseInstalledAcceptanceWatcher(
-		operationCtx,
-		uciInstalledAcceptanceWatcherInput{
-			fixture:         request.Fixture,
-			authority:       authority,
-			worktrees:       worktrees,
-			first:           clientA,
-			second:          clientB,
-			firstSelection:  selectedA,
-			secondSelection: selectedB,
-			before:          publications,
-			result:          &result,
-		},
-	)
-	if watcherErr != nil {
-		return result, fmt.Errorf("installed standard MCP watcher A/B dirty-view isolation: %w", watcherErr)
-	}
-	primaryWatcherPublication, primaryWatcherFound := watcherPublications[uciInstalledAcceptanceClientA]
-	linkedWatcherPublication, linkedWatcherFound := watcherPublications[uciInstalledAcceptanceClientB]
-	if !primaryWatcherFound || !linkedWatcherFound {
-		return result, errors.New("installed standard MCP watcher did not retain both publication baselines")
-	}
-	publications = watcherPublications
-	selectedA.viewID = primaryWatcherPublication.viewID
-	selectedA.runID = primaryWatcherPublication.runID
-	selectedB.viewID = linkedWatcherPublication.viewID
-	selectedB.runID = linkedWatcherPublication.runID
-
-	restartedInstallation, restartedDaemonPID, restartErr := uciRestartInstalledAcceptance(
-		operationCtx,
-		uciInstalledAcceptanceRestartInput{
-			request:            request,
-			candidates:         candidates,
-			authority:          authority,
-			worktrees:          worktrees,
-			serverPort:         serverPort,
-			parserBundleDigest: parserBundleDigest,
-			daemonControlRoot:  daemonControlRoot,
-			oldInstallation:    installation,
-			daemonOwner:        &activeDaemonPID,
-			oldClients: map[string]*uciInstalledAcceptanceMCPClient{
-				uciInstalledAcceptanceClientA: clientA,
-				uciInstalledAcceptanceClientB: clientB,
-				uciInstalledAcceptanceClientC: clientC,
-			},
-			selections: map[string]uciInstalledAcceptanceSelection{
-				uciInstalledAcceptanceClientA: selectedA,
-				uciInstalledAcceptanceClientB: selectedB,
-			},
-			publications: publications,
-			result:       &result,
-		},
-	)
-	if restartErr != nil {
-		return result, fmt.Errorf("installed standard MCP restart matrix: %w", restartErr)
-	}
-	installation = restartedInstallation
-	activeDaemonPID = restartedDaemonPID
-	return result, nil
+	runtime.installation, runtime.activeDaemonPID = installation, daemonPID
+	return nil
 }
 
 func uciNewInstalledAcceptanceResult(request uciInstalledAcceptanceRequest) uciInstalledAcceptanceResult {
