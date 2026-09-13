@@ -1272,6 +1272,14 @@ func uciRealCorpusLoadCompositionPublication(ctx context.Context, authority *uci
 	return row, completion, nil
 }
 
+type uciRealCorpusStagedBuildAccumulator struct {
+	staged       *uciRealCorpusCompositionStagedBuild
+	buildID      string
+	acks         []uci.IndexPartAck
+	memberships  []uci.IndexMembership
+	replacements []uci.IndexEdgeReplacement
+}
+
 func uciRealCorpusLoadStagedBuild(ctx context.Context, authority *uciInstalledAcceptanceAuthority, buildID string) (uciRealCorpusCompositionStagedBuild, error) {
 	rows := make([]uciRealCorpusCompositionPartRow, 0)
 	query := authority.store.GetDB().WithContext(ctx).Raw(`
@@ -1288,77 +1296,126 @@ func uciRealCorpusLoadStagedBuild(ctx context.Context, authority *uciInstalledAc
 		memberships:    make(map[string]uci.IndexMembership),
 		artifactProofs: make(map[string]uci.IndexArtifactProof),
 	}
-	acks := make([]uci.IndexPartAck, 0, len(rows))
-	memberships := make([]uci.IndexMembership, 0)
-	replacements := make([]uci.IndexEdgeReplacement, 0)
+	accumulator := uciRealCorpusStagedBuildAccumulator{
+		staged:       &staged,
+		buildID:      buildID,
+		acks:         make([]uci.IndexPartAck, 0, len(rows)),
+		memberships:  make([]uci.IndexMembership, 0),
+		replacements: make([]uci.IndexEdgeReplacement, 0),
+	}
 	for sequence, row := range rows {
-		if row.Sequence != int64(sequence) || row.PayloadBytes < 0 || !uciRealCorpusCompositionDigest(row.PartDigest) {
-			return uciRealCorpusCompositionStagedBuild{}, errors.New("real-corpus composition staged part is invalid")
+		if err := accumulator.append(row, sequence); err != nil {
+			return uciRealCorpusCompositionStagedBuild{}, err
 		}
-		payloadBytes := uint64(row.PayloadBytes)
-
-		var part uci.IndexPart
-		if err := json.Unmarshal([]byte(row.Payload), &part); err != nil {
-			return uciRealCorpusCompositionStagedBuild{}, errors.New("real-corpus composition staged part is invalid")
-		}
-		encodedPart, err := json.Marshal(part)
-		if err != nil || payloadBytes != uint64(len(encodedPart)) {
-			return uciRealCorpusCompositionStagedBuild{}, errors.New("real-corpus composition staged payload bytes do not match the encoded part")
-		}
-		digest, err := uci.DigestIndexPart(part)
-		if err != nil || string(digest) != row.PartDigest {
-			return uciRealCorpusCompositionStagedBuild{}, errors.New("real-corpus composition staged part digest does not match")
-		}
-		if len(part.Deletions) != 0 {
-			return uciRealCorpusCompositionStagedBuild{}, errors.New("real-corpus composition full publication contains deletions")
-		}
-		for _, membership := range part.Memberships {
-			if _, found := staged.memberships[membership.PathKey]; found {
-				return uciRealCorpusCompositionStagedBuild{}, errors.New("real-corpus composition staged publication repeats a path")
-			}
-			staged.memberships[membership.PathKey] = membership
-			memberships = append(memberships, membership)
-		}
-		for _, proof := range part.Artifacts {
-			if prior, found := staged.artifactProofs[proof.ArtifactID]; found && prior != proof {
-				return uciRealCorpusCompositionStagedBuild{}, errors.New("real-corpus composition staged artifact proof conflicts")
-			}
-			staged.artifactProofs[proof.ArtifactID] = proof
-		}
-		for _, replacement := range part.EdgeReplacements {
-			if ^uint64(0)-staged.edgeCount < uint64(len(replacement.Edges)) {
-				return uciRealCorpusCompositionStagedBuild{}, errors.New("real-corpus composition staged edge count overflow")
-			}
-			staged.edgeCount += uint64(len(replacement.Edges))
-			replacements = append(replacements, replacement)
-		}
-		if ^uint64(0)-staged.payloadBytes < payloadBytes {
-			return uciRealCorpusCompositionStagedBuild{}, errors.New("real-corpus composition staged payload count overflow")
-		}
-		staged.payloadBytes += payloadBytes
-		if payloadBytes > staged.maxPayloadBytes {
-			staged.maxPayloadBytes = payloadBytes
-		}
-		staged.partCount++
-		acks = append(acks, uci.IndexPartAck{BuildID: buildID, Sequence: uint32(row.Sequence), Digest: digest})
 	}
-
-	partsDigest, err := uci.DigestIndexParts(acks)
-	if err != nil {
-		return uciRealCorpusCompositionStagedBuild{}, errors.New("real-corpus composition staged parts digest failed")
+	if err := accumulator.finish(); err != nil {
+		return uciRealCorpusCompositionStagedBuild{}, err
 	}
-	manifestDigest, err := uci.DigestIndexManifest(memberships)
-	if err != nil {
-		return uciRealCorpusCompositionStagedBuild{}, errors.New("real-corpus composition reconstructed manifest is invalid")
-	}
-	edgesDigest, err := uci.DigestIndexEdges(replacements)
-	if err != nil {
-		return uciRealCorpusCompositionStagedBuild{}, errors.New("real-corpus composition reconstructed edges are invalid")
-	}
-	staged.partsDigest = string(partsDigest)
-	staged.manifestDigest = string(manifestDigest)
-	staged.edgesDigest = string(edgesDigest)
 	return staged, nil
+}
+
+func (accumulator *uciRealCorpusStagedBuildAccumulator) append(row uciRealCorpusCompositionPartRow, sequence int) error {
+	part, digest, payloadBytes, err := uciRealCorpusDecodeStagedPart(row, sequence)
+	if err != nil {
+		return err
+	}
+	if err := accumulator.appendMemberships(part.Memberships); err != nil {
+		return err
+	}
+	if err := accumulator.appendProofs(part.Artifacts); err != nil {
+		return err
+	}
+	if err := accumulator.appendEdges(part.EdgeReplacements); err != nil {
+		return err
+	}
+	return accumulator.appendPart(payloadBytes, uint32(sequence), digest)
+}
+
+func uciRealCorpusDecodeStagedPart(row uciRealCorpusCompositionPartRow, sequence int) (uci.IndexPart, uci.IndexDigest, uint64, error) {
+	if row.Sequence != int64(sequence) || row.PayloadBytes < 0 || !uciRealCorpusCompositionDigest(row.PartDigest) {
+		return uci.IndexPart{}, "", 0, errors.New("real-corpus composition staged part is invalid")
+	}
+	payloadBytes := uint64(row.PayloadBytes)
+	var part uci.IndexPart
+	if err := json.Unmarshal([]byte(row.Payload), &part); err != nil {
+		return uci.IndexPart{}, "", 0, errors.New("real-corpus composition staged part is invalid")
+	}
+	encodedPart, err := json.Marshal(part)
+	if err != nil || payloadBytes != uint64(len(encodedPart)) {
+		return uci.IndexPart{}, "", 0, errors.New("real-corpus composition staged payload bytes do not match the encoded part")
+	}
+	digest, err := uci.DigestIndexPart(part)
+	if err != nil || string(digest) != row.PartDigest {
+		return uci.IndexPart{}, "", 0, errors.New("real-corpus composition staged part digest does not match")
+	}
+	if len(part.Deletions) != 0 {
+		return uci.IndexPart{}, "", 0, errors.New("real-corpus composition full publication contains deletions")
+	}
+	return part, digest, payloadBytes, nil
+}
+
+func (accumulator *uciRealCorpusStagedBuildAccumulator) appendMemberships(memberships []uci.IndexMembership) error {
+	for _, membership := range memberships {
+		if _, found := accumulator.staged.memberships[membership.PathKey]; found {
+			return errors.New("real-corpus composition staged publication repeats a path")
+		}
+		accumulator.staged.memberships[membership.PathKey] = membership
+		accumulator.memberships = append(accumulator.memberships, membership)
+	}
+	return nil
+}
+
+func (accumulator *uciRealCorpusStagedBuildAccumulator) appendProofs(proofs []uci.IndexArtifactProof) error {
+	for _, proof := range proofs {
+		if prior, found := accumulator.staged.artifactProofs[proof.ArtifactID]; found && prior != proof {
+			return errors.New("real-corpus composition staged artifact proof conflicts")
+		}
+		accumulator.staged.artifactProofs[proof.ArtifactID] = proof
+	}
+	return nil
+}
+
+func (accumulator *uciRealCorpusStagedBuildAccumulator) appendEdges(replacements []uci.IndexEdgeReplacement) error {
+	for _, replacement := range replacements {
+		if ^uint64(0)-accumulator.staged.edgeCount < uint64(len(replacement.Edges)) {
+			return errors.New("real-corpus composition staged edge count overflow")
+		}
+		accumulator.staged.edgeCount += uint64(len(replacement.Edges))
+		accumulator.replacements = append(accumulator.replacements, replacement)
+	}
+	return nil
+}
+
+func (accumulator *uciRealCorpusStagedBuildAccumulator) appendPart(payloadBytes uint64, sequence uint32, digest uci.IndexDigest) error {
+	if ^uint64(0)-accumulator.staged.payloadBytes < payloadBytes {
+		return errors.New("real-corpus composition staged payload count overflow")
+	}
+	accumulator.staged.payloadBytes += payloadBytes
+	if payloadBytes > accumulator.staged.maxPayloadBytes {
+		accumulator.staged.maxPayloadBytes = payloadBytes
+	}
+	accumulator.staged.partCount++
+	accumulator.acks = append(accumulator.acks, uci.IndexPartAck{BuildID: accumulator.buildID, Sequence: sequence, Digest: digest})
+	return nil
+}
+
+func (accumulator *uciRealCorpusStagedBuildAccumulator) finish() error {
+	partsDigest, err := uci.DigestIndexParts(accumulator.acks)
+	if err != nil {
+		return errors.New("real-corpus composition staged parts digest failed")
+	}
+	manifestDigest, err := uci.DigestIndexManifest(accumulator.memberships)
+	if err != nil {
+		return errors.New("real-corpus composition reconstructed manifest is invalid")
+	}
+	edgesDigest, err := uci.DigestIndexEdges(accumulator.replacements)
+	if err != nil {
+		return errors.New("real-corpus composition reconstructed edges are invalid")
+	}
+	accumulator.staged.partsDigest = string(partsDigest)
+	accumulator.staged.manifestDigest = string(manifestDigest)
+	accumulator.staged.edgesDigest = string(edgesDigest)
+	return nil
 }
 
 func uciRealCorpusObservePackedPartCapacity(staged uciRealCorpusCompositionStagedBuild) (uciRealCorpusPackedPartCapacity, error) {
