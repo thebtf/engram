@@ -649,12 +649,23 @@ func uci1ObserveScannerUnicodeCRLFSpans(ctx context.Context, runtime uciInstalle
 }
 
 func uci1ScannerReadExactFunction(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, publication uciInstalledAcceptancePublication, path, functionName string, source []byte) (uci.QueryItem, error) {
-	response, err := uci1ScannerSearch(ctx, runtime, publication, functionName, path)
+	item, spanText, err := uci1ScannerFindExactFunction(ctx, runtime, publication, path, functionName, source)
 	if err != nil {
 		return uci.QueryItem{}, err
 	}
+	if err := uci1ScannerVerifyExactRead(ctx, runtime, publication, *item, spanText); err != nil {
+		return uci.QueryItem{}, err
+	}
+	return *item, nil
+}
+
+func uci1ScannerFindExactFunction(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, publication uciInstalledAcceptancePublication, path, functionName string, source []byte) (*uci.QueryItem, string, error) {
+	response, err := uci1ScannerSearch(ctx, runtime, publication, functionName, path)
+	if err != nil {
+		return nil, "", err
+	}
 	if response.Items == nil {
-		return uci.QueryItem{}, errors.New("installed scanner search omitted the Unicode source")
+		return nil, "", errors.New("installed scanner search omitted the Unicode source")
 	}
 	var item *uci.QueryItem
 	for index := range *response.Items {
@@ -662,20 +673,23 @@ func uci1ScannerReadExactFunction(ctx context.Context, runtime uciInstalledAccep
 		name, nameOK := uciInstalledAcceptanceGoFunctionName(candidate.Ref.EntityKey)
 		if candidate.Path == path && nameOK && name == functionName {
 			if item != nil {
-				return uci.QueryItem{}, errors.New("installed scanner search returned duplicate Unicode functions")
+				return nil, "", errors.New("installed scanner search returned duplicate Unicode functions")
 			}
 			item = candidate
 		}
 	}
 	if item == nil || item.Span.ByteStart < 0 || item.Span.ByteEnd <= item.Span.ByteStart || item.Span.ByteEnd > int64(len(source)) {
-		return uci.QueryItem{}, errors.New("installed scanner search returned an invalid Unicode byte span")
+		return nil, "", errors.New("installed scanner search returned an invalid Unicode byte span")
 	}
 	spanText := string(source[item.Span.ByteStart:item.Span.ByteEnd])
 	contentDigest := strings.TrimPrefix(string(item.ContentDigest), "sha256:")
 	if !strings.Contains(spanText, "\r\n") || !uciInstalledAcceptanceIsBareSHA256(contentDigest) {
-		return uci.QueryItem{}, errors.New("installed scanner search did not bind the exact CRLF source artifact")
+		return nil, "", errors.New("installed scanner search did not bind the exact CRLF source artifact")
 	}
+	return item, spanText, nil
+}
 
+func uci1ScannerVerifyExactRead(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, publication uciInstalledAcceptancePublication, item uci.QueryItem, spanText string) error {
 	selection := runtime.Selections[uciInstalledAcceptanceClientA]
 	payload, err := runtime.ClientA.Tool(ctx, "codebase_read", map[string]any{
 		"context_handle": selection.contextHandle,
@@ -695,20 +709,20 @@ func uci1ScannerReadExactFunction(ctx context.Context, runtime uciInstalledAccep
 		"max_bytes":           8_192,
 	})
 	if err != nil {
-		return uci.QueryItem{}, err
+		return err
 	}
 	read, err := uciDecodeInstalledAcceptanceQuery(payload)
 	if err != nil {
-		return uci.QueryItem{}, err
+		return err
 	}
 	if read.Status != uci.QueryStatusOK || !uciInstalledAcceptanceQueryMatchesPublication(read, publication) || read.Items == nil || len(*read.Items) != 1 {
-		return uci.QueryItem{}, errors.New("installed scanner read did not return one exact Unicode source span")
+		return errors.New("installed scanner read did not return one exact Unicode source span")
 	}
 	readItem := (*read.Items)[0]
 	if readItem.Ref != item.Ref || readItem.Path != item.Path || readItem.Span != item.Span || readItem.ContentDigest != item.ContentDigest || readItem.Excerpt != spanText {
-		return uci.QueryItem{}, errors.New("installed scanner read did not preserve its exact Unicode CRLF citation")
+		return errors.New("installed scanner read did not preserve its exact Unicode CRLF citation")
 	}
-	return *item, nil
+	return nil
 }
 
 func uci1ObserveScannerNestedBoundaries(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, fixture *uci1ScannerProbeFixture) (string, bool, error) {
