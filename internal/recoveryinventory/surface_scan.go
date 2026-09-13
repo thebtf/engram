@@ -130,22 +130,30 @@ func isSurfaceTestFile(path string) bool {
 }
 
 func scanSurfaceFile(report *Report, file sourceFile, activeHooks map[string]string) error {
+	if classifySurfaceFile(report, file, activeHooks) {
+		return nil
+	}
+	source, err := os.ReadFile(file.absolute)
+	if err != nil {
+		return err
+	}
+	scanSurfaceSource(report, file.relative, source)
+	return nil
+}
+
+func classifySurfaceFile(report *Report, file sourceFile, activeHooks map[string]string) bool {
 	path := file.relative
 	lowerPath := strings.ToLower(path)
 	if strings.HasPrefix(path, "ui/") || strings.HasPrefix(path, "apps/operator-console/") {
 		report.add(Record{Kind: "ui-claim", Path: path, Classification: "claim-only", ClaimOnly: true})
-		return nil
+		return true
 	}
 	if strings.HasSuffix(lowerPath, ".md") {
 		report.add(Record{Kind: "current-documentation-claim", Path: path, Classification: classificationSourceDeclared, ClaimOnly: true})
-		return nil
+		return true
 	}
 	if strings.Contains(path, "/hooks/") || strings.HasPrefix(path, "plugin/engram/hooks/") {
-		if filepath.Ext(path) != ".cjs" {
-			report.add(Record{Kind: "hook", Path: path, Name: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)), Classification: classificationSourceDeclared})
-		} else if classification, active := activeHooks[path]; active {
-			report.add(Record{Kind: "hook", Path: path, Name: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)), Classification: classification})
-		}
+		classifyHookSurface(report, path, activeHooks)
 	}
 	if strings.HasPrefix(path, "internal/mcp/") {
 		report.add(Record{Kind: "mcp-surface", Path: path, Classification: classificationSourceDeclared})
@@ -153,25 +161,34 @@ func scanSurfaceFile(report *Report, file sourceFile, activeHooks map[string]str
 	if strings.HasPrefix(path, "cmd/engram/") || strings.HasPrefix(path, "internal/handlers/") {
 		report.add(Record{Kind: "daemon-surface", Path: path, Classification: classificationSourceDeclared})
 	}
+	return false
+}
 
-	source, err := os.ReadFile(file.absolute)
-	if err != nil {
-		return err
+func classifyHookSurface(report *Report, path string, activeHooks map[string]string) {
+	if filepath.Ext(path) != ".cjs" {
+		report.add(Record{Kind: "hook", Path: path, Name: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)), Classification: classificationSourceDeclared})
+		return
 	}
-	if filepath.Ext(path) == ".go" {
+	if classification, active := activeHooks[path]; active {
+		report.add(Record{Kind: "hook", Path: path, Name: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)), Classification: classification})
+	}
+}
+
+func scanSurfaceSource(report *Report, path string, source []byte) {
+	extension := filepath.Ext(path)
+	if extension == ".go" {
 		scanGoRoutes(report, path, source)
 		scanDaemonTools(report, path, source)
 	}
-	if strings.HasPrefix(path, "internal/mcp/") && filepath.Ext(path) == ".go" {
+	if strings.HasPrefix(path, "internal/mcp/") && extension == ".go" {
 		scanMCPTools(report, path, source)
 	}
 	if strings.HasPrefix(path, "plugin/openclaw-engram/src/tools/") {
 		scanOpenClawTools(report, path, source)
 	}
-	if filepath.Ext(path) == ".proto" {
+	if extension == ".proto" {
 		scanProtoMethods(report, path, source)
 	}
-	return nil
 }
 
 func scanMCPTools(report *Report, path string, source []byte) {
@@ -181,34 +198,52 @@ func scanMCPTools(report *Report, path string, source []byte) {
 		emitUncertainSurface(report, mcpToolKind, path, 1)
 		return
 	}
-	constants := stringConstants(parsed)
-	uncertain := false
-	emitUncertain := func(line int) {
-		if uncertain {
-			return
-		}
-		emitUncertainSurface(report, mcpToolKind, path, line)
-		uncertain = true
+	scanner := newMCPToolScanner(report, path, fset, parsed)
+	ast.Inspect(parsed, scanner.scan)
+}
+
+type mcpToolScanner struct {
+	report    *Report
+	path      string
+	fset      *token.FileSet
+	constants map[string]string
+	uncertain bool
+}
+
+func newMCPToolScanner(report *Report, path string, fset *token.FileSet, parsed *ast.File) *mcpToolScanner {
+	return &mcpToolScanner{report: report, path: path, fset: fset, constants: stringConstants(parsed)}
+}
+
+func (scanner *mcpToolScanner) scan(node ast.Node) bool {
+	literal, ok := node.(*ast.CompositeLit)
+	if !ok {
+		return true
 	}
-	ast.Inspect(parsed, func(node ast.Node) bool {
-		literal, ok := node.(*ast.CompositeLit)
-		if !ok {
-			return true
-		}
-		if isMCPToolList(literal.Type) {
-			for _, element := range literal.Elts {
-				if definition, ok := element.(*ast.CompositeLit); ok {
-					scanMCPToolDefinition(report, path, fset, definition, constants, emitUncertain)
-				}
+	if isMCPToolList(literal.Type) {
+		for _, element := range literal.Elts {
+			if definition, ok := element.(*ast.CompositeLit); ok {
+				scanner.scanDefinition(definition)
 			}
-			return false
 		}
-		if !isMCPToolType(literal.Type) {
-			return true
-		}
-		scanMCPToolDefinition(report, path, fset, literal, constants, emitUncertain)
 		return false
-	})
+	}
+	if isMCPToolType(literal.Type) {
+		scanner.scanDefinition(literal)
+		return false
+	}
+	return true
+}
+
+func (scanner *mcpToolScanner) scanDefinition(definition *ast.CompositeLit) {
+	scanMCPToolDefinition(scanner.report, scanner.path, scanner.fset, definition, scanner.constants, scanner.emitUncertain)
+}
+
+func (scanner *mcpToolScanner) emitUncertain(line int) {
+	if scanner.uncertain {
+		return
+	}
+	emitUncertainSurface(scanner.report, mcpToolKind, scanner.path, line)
+	scanner.uncertain = true
 }
 
 func isMCPToolList(expression ast.Expr) bool {
@@ -272,59 +307,87 @@ func scanOpenClawTools(report *Report, path string, source []byte) {
 		emitUncertainSurface(report, openClawToolKind, path, 1)
 		return
 	}
-	uncertain := false
-	emitUncertain := func(line int) {
-		if uncertain {
-			return
-		}
-		emitUncertainSurface(report, openClawToolKind, path, line)
-		uncertain = true
-	}
-	objectStack := make([]bool, 0)
+	scanner := openClawToolScanner{report: report, path: path}
 	for index, token := range tokens {
-		switch token.text {
-		case "{":
-			objectStack = append(objectStack, index > 0 && tokens[index-1].text == "return")
-			continue
-		case "}":
-			if len(objectStack) > 0 {
-				objectStack = objectStack[:len(objectStack)-1]
-			}
+		if scanner.scanObjectToken(tokens, index) {
 			continue
 		}
-		if !token.stringLiteral && (token.text == "createSearchTool" || token.text == "createPresetTool") && (index == 0 || tokens[index-1].text != "." && tokens[index-1].text != "function") && index+1 < len(tokens) && tokens[index+1].text == "(" {
-			if index+2 >= len(tokens) {
-				emitUncertain(token.line)
-				continue
-			}
-			name := tokens[index+2]
-			if !name.stringLiteral || !name.static || !isSurfaceToolName(name.text) {
-				emitUncertain(token.line)
-				continue
-			}
-			report.add(Record{Kind: openClawToolKind, Path: path, Line: name.line, Name: redactedName(name.text), Classification: classificationSourceDeclared})
-		}
-		if len(objectStack) == 0 || token.stringLiteral || token.text != "name" || index+1 >= len(tokens) {
-			continue
-		}
-		next := tokens[index+1]
-		if next.text == ":" {
-			if index+2 >= len(tokens) {
-				emitUncertain(token.line)
-				continue
-			}
-			value := tokens[index+2]
-			if !value.stringLiteral || !value.static || !isSurfaceToolName(value.text) {
-				emitUncertain(token.line)
-				continue
-			}
-			report.add(Record{Kind: openClawToolKind, Path: path, Line: token.line, Name: redactedName(value.text), Classification: classificationSourceDeclared})
-			continue
-		}
-		if objectStack[len(objectStack)-1] && (next.text == "," || next.text == "}") {
-			emitUncertain(token.line)
-		}
+		scanner.scanFactoryToken(tokens, index, token)
+		scanner.scanNameToken(tokens, index, token)
 	}
+}
+
+type openClawToolScanner struct {
+	report      *Report
+	path        string
+	uncertain   bool
+	objectStack []bool
+}
+
+func (scanner *openClawToolScanner) scanObjectToken(tokens []surfaceToken, index int) bool {
+	switch tokens[index].text {
+	case "{":
+		scanner.objectStack = append(scanner.objectStack, index > 0 && tokens[index-1].text == "return")
+		return true
+	case "}":
+		if len(scanner.objectStack) > 0 {
+			scanner.objectStack = scanner.objectStack[:len(scanner.objectStack)-1]
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func (scanner *openClawToolScanner) scanFactoryToken(tokens []surfaceToken, index int, token surfaceToken) {
+	if token.stringLiteral || (token.text != "createSearchTool" && token.text != "createPresetTool") || index > 0 && (tokens[index-1].text == "." || tokens[index-1].text == "function") || index+1 >= len(tokens) || tokens[index+1].text != "(" {
+		return
+	}
+	if index+2 >= len(tokens) {
+		scanner.emitUncertain(token.line)
+		return
+	}
+	name := tokens[index+2]
+	if !name.stringLiteral || !name.static || !isSurfaceToolName(name.text) {
+		scanner.emitUncertain(token.line)
+		return
+	}
+	scanner.report.add(Record{Kind: openClawToolKind, Path: scanner.path, Line: name.line, Name: redactedName(name.text), Classification: classificationSourceDeclared})
+}
+
+func (scanner *openClawToolScanner) scanNameToken(tokens []surfaceToken, index int, token surfaceToken) {
+	if len(scanner.objectStack) == 0 || token.stringLiteral || token.text != "name" || index+1 >= len(tokens) {
+		return
+	}
+	next := tokens[index+1]
+	if next.text == ":" {
+		scanner.scanNamedObjectValue(tokens, index, token)
+		return
+	}
+	if scanner.objectStack[len(scanner.objectStack)-1] && (next.text == "," || next.text == "}") {
+		scanner.emitUncertain(token.line)
+	}
+}
+
+func (scanner *openClawToolScanner) scanNamedObjectValue(tokens []surfaceToken, index int, token surfaceToken) {
+	if index+2 >= len(tokens) {
+		scanner.emitUncertain(token.line)
+		return
+	}
+	value := tokens[index+2]
+	if !value.stringLiteral || !value.static || !isSurfaceToolName(value.text) {
+		scanner.emitUncertain(token.line)
+		return
+	}
+	scanner.report.add(Record{Kind: openClawToolKind, Path: scanner.path, Line: token.line, Name: redactedName(value.text), Classification: classificationSourceDeclared})
+}
+
+func (scanner *openClawToolScanner) emitUncertain(line int) {
+	if scanner.uncertain {
+		return
+	}
+	emitUncertainSurface(scanner.report, openClawToolKind, scanner.path, line)
+	scanner.uncertain = true
 }
 
 func scanProtoMethods(report *Report, path string, source []byte) {
@@ -365,78 +428,117 @@ type surfaceToken struct {
 }
 
 func lexSurfaceTokens(source []byte) ([]surfaceToken, bool) {
-	tokens := make([]surfaceToken, 0)
-	for index, line := 0, 1; index < len(source); {
-		switch source[index] {
-		case ' ', '\t', '\r':
-			index++
-		case '\n':
-			index++
-			line++
-		case '/':
-			if index+1 >= len(source) || source[index+1] != '/' && source[index+1] != '*' {
-				tokens = append(tokens, surfaceToken{text: "/", line: line})
-				index++
-				continue
-			}
-			if source[index+1] == '/' {
-				index += 2
-				for index < len(source) && source[index] != '\n' {
-					index++
-				}
-				continue
-			}
-			index += 2
-			for index+1 < len(source) && (source[index] != '*' || source[index+1] != '/') {
-				if source[index] == '\n' {
-					line++
-				}
-				index++
-			}
-			if index+1 >= len(source) {
-				return tokens, false
-			}
-			index += 2
-		case '"', '\'', '`':
-			quote, start, startLine := source[index], index+1, line
-			closed := false
-			index++
-			for index < len(source) {
-				if source[index] == '\\' {
-					if index+1 < len(source) && source[index+1] == '\n' {
-						line++
-					}
-					index += 2
-					continue
-				}
-				if source[index] == '\n' {
-					line++
-				}
-				if source[index] == quote {
-					tokens = append(tokens, surfaceToken{text: string(source[start:index]), line: startLine, stringLiteral: true, static: quote != '`'})
-					index++
-					closed = true
-					break
-				}
-				index++
-			}
-			if !closed {
-				return tokens, false
-			}
-		default:
-			start := index
-			if isSurfaceIdentifierStart(source[index]) {
-				index++
-				for index < len(source) && isSurfaceIdentifierPart(source[index]) {
-					index++
-				}
-			} else {
-				index++
-			}
-			tokens = append(tokens, surfaceToken{text: string(source[start:index]), line: line})
+	lexer := surfaceLexer{source: source, line: 1}
+	return lexer.lex()
+}
+
+type surfaceLexer struct {
+	source []byte
+	tokens []surfaceToken
+	index  int
+	line   int
+}
+
+func (lexer *surfaceLexer) lex() ([]surfaceToken, bool) {
+	for lexer.index < len(lexer.source) {
+		if !lexer.lexByte() {
+			return lexer.tokens, false
 		}
 	}
-	return tokens, true
+	return lexer.tokens, true
+}
+
+func (lexer *surfaceLexer) lexByte() bool {
+	switch lexer.source[lexer.index] {
+	case ' ', '\t', '\r':
+		lexer.index++
+	case '\n':
+		lexer.index++
+		lexer.line++
+	case '/':
+		return lexer.lexSlash()
+	case '"', '\'', '`':
+		return lexer.lexString()
+	default:
+		lexer.lexToken()
+	}
+	return true
+}
+
+func (lexer *surfaceLexer) lexSlash() bool {
+	if lexer.index+1 >= len(lexer.source) || lexer.source[lexer.index+1] != '/' && lexer.source[lexer.index+1] != '*' {
+		lexer.tokens = append(lexer.tokens, surfaceToken{text: "/", line: lexer.line})
+		lexer.index++
+		return true
+	}
+	if lexer.source[lexer.index+1] == '/' {
+		lexer.skipLineComment()
+		return true
+	}
+	return lexer.skipBlockComment()
+}
+
+func (lexer *surfaceLexer) skipLineComment() {
+	lexer.index += 2
+	for lexer.index < len(lexer.source) && lexer.source[lexer.index] != '\n' {
+		lexer.index++
+	}
+}
+
+func (lexer *surfaceLexer) skipBlockComment() bool {
+	lexer.index += 2
+	for lexer.index+1 < len(lexer.source) && (lexer.source[lexer.index] != '*' || lexer.source[lexer.index+1] != '/') {
+		if lexer.source[lexer.index] == '\n' {
+			lexer.line++
+		}
+		lexer.index++
+	}
+	if lexer.index+1 >= len(lexer.source) {
+		return false
+	}
+	lexer.index += 2
+	return true
+}
+
+func (lexer *surfaceLexer) lexString() bool {
+	quote, start, startLine := lexer.source[lexer.index], lexer.index+1, lexer.line
+	lexer.index++
+	for lexer.index < len(lexer.source) {
+		if lexer.source[lexer.index] == '\\' {
+			lexer.skipEscapedStringByte()
+			continue
+		}
+		if lexer.source[lexer.index] == '\n' {
+			lexer.line++
+		}
+		if lexer.source[lexer.index] == quote {
+			lexer.tokens = append(lexer.tokens, surfaceToken{text: string(lexer.source[start:lexer.index]), line: startLine, stringLiteral: true, static: quote != '`'})
+			lexer.index++
+			return true
+		}
+		lexer.index++
+	}
+	return false
+}
+
+func (lexer *surfaceLexer) skipEscapedStringByte() {
+	if lexer.index+1 < len(lexer.source) && lexer.source[lexer.index+1] == '\n' {
+		lexer.line++
+	}
+	lexer.index += 2
+}
+
+func (lexer *surfaceLexer) lexToken() {
+	start := lexer.index
+	if isSurfaceIdentifierStart(lexer.source[lexer.index]) {
+		lexer.index++
+		for lexer.index < len(lexer.source) && isSurfaceIdentifierPart(lexer.source[lexer.index]) {
+			lexer.index++
+		}
+	} else {
+		lexer.index++
+	}
+	lexer.tokens = append(lexer.tokens, surfaceToken{text: string(lexer.source[start:lexer.index]), line: lexer.line})
 }
 
 func isSurfaceIdentifierStart(value byte) bool {
@@ -578,17 +680,23 @@ func isChiRouterModule(path string) bool {
 func importedAliases(file *ast.File, importPrefix, defaultName string) map[string]struct{} {
 	aliases := make(map[string]struct{})
 	for _, spec := range file.Imports {
-		path, err := strconv.Unquote(spec.Path.Value)
-		if err != nil || (path != importPrefix && !strings.HasPrefix(path, importPrefix+"/")) {
-			continue
+		name, ok := importedAlias(spec, importPrefix, defaultName)
+		if ok {
+			aliases[name] = struct{}{}
 		}
-		name := defaultName
-		if spec.Name != nil && spec.Name.Name != "." && spec.Name.Name != "_" {
-			name = spec.Name.Name
-		}
-		aliases[name] = struct{}{}
 	}
 	return aliases
+}
+
+func importedAlias(spec *ast.ImportSpec, importPrefix, defaultName string) (string, bool) {
+	path, err := strconv.Unquote(spec.Path.Value)
+	if err != nil || path != importPrefix && !strings.HasPrefix(path, importPrefix+"/") {
+		return "", false
+	}
+	if spec.Name != nil && spec.Name.Name != "." && spec.Name.Name != "_" {
+		return spec.Name.Name, true
+	}
+	return defaultName, true
 }
 
 func chiRouterFields(file *ast.File, aliases map[string]struct{}) map[string]map[string]struct{} {
