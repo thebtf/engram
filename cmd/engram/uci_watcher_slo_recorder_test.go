@@ -1287,7 +1287,19 @@ func uciRecordInstalledWatcherSLOObserved(ctx context.Context, live uciInstalled
 		if run != nil {
 			run.Attempted++
 		}
-		batch, nextSource, measureErr := uciRecordInstalledWatcherSLOBatch(ctx, live, selectionA, selectionB, beforeA, beforeB, previousSource, sequence, warmth, journal, scannerAggregateObserver, embeddingTimingObserver)
+		batch, nextSource, measureErr := uciRecordInstalledWatcherSLOBatch(ctx, uciWatcherSLOBatchInput{
+			live:                     live,
+			selectionA:               selectionA,
+			selectionB:               selectionB,
+			beforeA:                  beforeA,
+			beforeB:                  beforeB,
+			previousSource:           previousSource,
+			sequence:                 sequence,
+			warmth:                   warmth,
+			journal:                  journal,
+			scannerAggregateObserver: scannerAggregateObserver,
+			embeddingTimingObserver:  embeddingTimingObserver,
+		})
 		if measureErr != nil {
 			return acceptance.UCIWatcherSLOInput{}, measureErr
 		}
@@ -1341,7 +1353,28 @@ func uciRecordInstalledWatcherSLOObserved(ctx context.Context, live uciInstalled
 	}, nil
 }
 
-func uciRecordInstalledWatcherSLOBatch(ctx context.Context, live uciInstalledAcceptanceScenarioRuntime, selectionA, selectionB uciInstalledAcceptanceSelection, beforeA, beforeB uciInstalledAcceptancePublication, previousSource []byte, sequence int, warmth string, journal *uciWatcherSLOStageJournal, scannerAggregateObserver *uciWatcherSLOScannerAggregateObserver, embeddingTimingObserver *uciWatcherSLOEmbeddingTimingObserver) (batch acceptance.UCIWatcherSLOBatch, nextSource []byte, retErr error) {
+type uciWatcherSLOBatchInput struct {
+	live                     uciInstalledAcceptanceScenarioRuntime
+	selectionA               uciInstalledAcceptanceSelection
+	selectionB               uciInstalledAcceptanceSelection
+	beforeA                  uciInstalledAcceptancePublication
+	beforeB                  uciInstalledAcceptancePublication
+	previousSource           []byte
+	sequence                 int
+	warmth                   string
+	journal                  *uciWatcherSLOStageJournal
+	scannerAggregateObserver *uciWatcherSLOScannerAggregateObserver
+	embeddingTimingObserver  *uciWatcherSLOEmbeddingTimingObserver
+}
+
+func uciRecordInstalledWatcherSLOBatch(ctx context.Context, input uciWatcherSLOBatchInput) (batch acceptance.UCIWatcherSLOBatch, nextSource []byte, retErr error) {
+	live := input.live
+	selectionA, selectionB := input.selectionA, input.selectionB
+	beforeA, beforeB := input.beforeA, input.beforeB
+	previousSource, sequence, warmth := input.previousSource, input.sequence, input.warmth
+	journal := input.journal
+	scannerAggregateObserver := input.scannerAggregateObserver
+	embeddingTimingObserver := input.embeddingTimingObserver
 	stage := "pre_save"
 	var trace *uciWatcherSLOAttemptTrace
 	var attempt uciWatcherSLOStageAttempt
