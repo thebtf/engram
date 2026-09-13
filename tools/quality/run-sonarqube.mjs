@@ -410,9 +410,11 @@ function runProcess(command, args, {
     }
     if (signal) {
       abortListener = async () => {
+        if (terminationCause) return;
+        terminationCause = signal.reason || new SignalError("SIGTERM");
         try {
           await terminateOwnedChild(record);
-          finish(rejectProcess, signal.reason || new SignalError("SIGTERM"));
+          finish(rejectProcess, terminationCause);
         } catch (error) {
           finish(rejectProcess, error, true);
         }
@@ -562,17 +564,19 @@ export function normalizeCoverage(reports) {
     mode = header[1];
     for (const line of lines.slice(1)) {
       if (!line.trim()) continue;
-      const block = /^(.*\s+\d+)\s+(\d+)$/.exec(line);
+      const block = /^(.*:\d+\.\d+,\d+\.\d+)\s+(\d+)\s+(\d+)$/.exec(line);
       if (!block) throw new RunnerError(`Malformed coverprofile block in ${source}: ${line}`);
-      const hitCount = Number(block[2]);
-      if (!Number.isSafeInteger(hitCount) || hitCount < 0) throw new RunnerError(`Invalid coverprofile hit count in ${source}: ${line}`);
+      const statements = Number(block[2]);
+      const hits = Number(block[3]);
+      if (!Number.isSafeInteger(statements) || statements < 1 || !Number.isSafeInteger(hits) || hits < 0) throw new RunnerError(`Invalid coverprofile block in ${source}: ${line}`);
       const previous = blocks.get(block[1]);
-      if (previous === undefined || hitCount > previous) blocks.set(block[1], hitCount);
+      if (previous && previous.statements !== statements) throw new RunnerError(`Conflicting coverprofile statement count in ${source}: ${line}`);
+      blocks.set(block[1], { statements, hits: Math.max(previous?.hits || 0, hits) });
     }
   }
   if (mode !== "atomic") throw new RunnerError(`Coverage mode must be atomic, got ${mode || "none"}`);
   if (blocks.size === 0) throw new RunnerError("No Go coverage blocks were collected");
-  return `mode: ${mode}\n${[...blocks.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([block, hitCount]) => `${block} ${hitCount}`).join("\n")}\n`;
+  return `mode: ${mode}\n${[...blocks.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([range, block]) => `${range} ${block.statements} ${block.hits}`).join("\n")}\n`;
 }
 
 export function mergeCoverProfiles(profilePaths, destination) {
