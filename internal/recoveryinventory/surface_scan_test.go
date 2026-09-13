@@ -462,25 +462,18 @@ const dynamic = createSearchTool(dynamicName);
 const text = "createSearchTool('engram_string')";
 const raw = `+"`createSearchTool('engram_template')`"+`;
 `)
-	writeSurfaceSource(t, root, "plugin/openclaw-engram/src/tools/engram-presets.ts", `function createPresetTool(name: string) {
-	return { name };
-}
-
-const declared = createPresetTool('engram_changes');
-const dynamic = createPresetTool(dynamicName);
-// createPresetTool('preset_comment')
-const text = "createPresetTool('preset_string')";
-const raw = `+"`createPresetTool('preset_template')`"+`;
-`)
-
 	report, err := ScanSurfaces(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []struct {
-		path string
-		name string
-	}{
+	assertLiteralOpenClawFactories(t, report)
+	assertNoFabricatedOpenClawFactories(t, report)
+	assertOpenClawFactoryUncertainty(t, report)
+}
+
+func assertLiteralOpenClawFactories(t *testing.T, report Report) {
+	t.Helper()
+	for _, want := range []struct{ path, name string }{
 		{"plugin/openclaw-engram/src/tools/engram-search.ts", "engram_search"},
 		{"plugin/openclaw-engram/src/tools/engram-presets.ts", "engram_changes"},
 	} {
@@ -498,18 +491,20 @@ const raw = `+"`createPresetTool('preset_template')`"+`;
 			t.Fatalf("missing literal OpenClaw factory declaration %q: %#v", want.name, report.Records)
 		}
 	}
-	for _, name := range []string{
-		"engram_comment", "engram_string", "engram_template",
-		"preset_comment", "preset_string", "preset_template",
-	} {
+}
+
+func assertNoFabricatedOpenClawFactories(t *testing.T, report Report) {
+	t.Helper()
+	for _, name := range []string{"engram_comment", "engram_string", "engram_template", "preset_comment", "preset_string", "preset_template"} {
 		if hasSurfaceRecord(report, "openclaw-tool", name) {
 			t.Fatalf("fabricated OpenClaw factory declaration %q: %#v", name, report.Records)
 		}
 	}
-	for _, path := range []string{
-		"plugin/openclaw-engram/src/tools/engram-search.ts",
-		"plugin/openclaw-engram/src/tools/engram-presets.ts",
-	} {
+}
+
+func assertOpenClawFactoryUncertainty(t *testing.T, report Report) {
+	t.Helper()
+	for _, path := range []string{"plugin/openclaw-engram/src/tools/engram-search.ts", "plugin/openclaw-engram/src/tools/engram-presets.ts"} {
 		uncertain := 0
 		for _, record := range report.Records {
 			if record.Kind != "openclaw-tool" || record.Path != path || record.Classification != "source-uncertain" {
@@ -553,42 +548,32 @@ service Example {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []struct {
-		kind string
-		name string
-	}{
-		{"mcp-tool", "mcp_declared"},
-		{"openclaw-tool", "openclaw_declared"},
-		{"grpc-method", "Declared"},
-	} {
+	assertDeclaredSurfaceRecords(t, report)
+	assertNoFabricatedSurfaceRecords(t, report)
+	assertUncertainSurfaceRecords(t, report)
+}
+
+func assertDeclaredSurfaceRecords(t *testing.T, report Report) {
+	t.Helper()
+	for _, want := range []struct{ kind, name string }{{"mcp-tool", "mcp_declared"}, {"openclaw-tool", "openclaw_declared"}, {"grpc-method", "Declared"}} {
 		if !hasSurfaceRecord(report, want.kind, want.name) {
 			t.Fatalf("missing static %s declaration %q: %#v", want.kind, want.name, report.Records)
 		}
 	}
-	for _, fabricated := range []struct {
-		kind string
-		name string
-	}{
-		{"mcp-tool", "mcp_comment"},
-		{"mcp-tool", "mcp_raw"},
-		{"openclaw-tool", "openclaw_comment"},
-		{"openclaw-tool", "openclaw_string"},
-		{"openclaw-tool", "openclaw_template"},
-		{"grpc-method", "Comment"},
-		{"grpc-method", "StringValue"},
-	} {
+}
+
+func assertNoFabricatedSurfaceRecords(t *testing.T, report Report) {
+	t.Helper()
+	for _, fabricated := range []struct{ kind, name string }{{"mcp-tool", "mcp_comment"}, {"mcp-tool", "mcp_raw"}, {"openclaw-tool", "openclaw_comment"}, {"openclaw-tool", "openclaw_string"}, {"openclaw-tool", "openclaw_template"}, {"grpc-method", "Comment"}, {"grpc-method", "StringValue"}} {
 		if hasSurfaceRecord(report, fabricated.kind, fabricated.name) {
 			t.Fatalf("fabricated %s declaration %q: %#v", fabricated.kind, fabricated.name, report.Records)
 		}
 	}
-	for _, want := range []struct {
-		kind string
-		path string
-	}{
-		{"mcp-tool", "internal/mcp/tools.go"},
-		{"openclaw-tool", "plugin/openclaw-engram/src/tools/tools.ts"},
-		{"grpc-method", "proto/example.proto"},
-	} {
+}
+
+func assertUncertainSurfaceRecords(t *testing.T, report Report) {
+	t.Helper()
+	for _, want := range []struct{ kind, path string }{{"mcp-tool", "internal/mcp/tools.go"}, {"openclaw-tool", "plugin/openclaw-engram/src/tools/tools.ts"}, {"grpc-method", "proto/example.proto"}} {
 		uncertain := 0
 		for _, record := range report.Records {
 			if record.Kind != want.kind || record.Path != want.path || record.Classification != "source-uncertain" {
