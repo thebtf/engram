@@ -138,6 +138,34 @@ func TestContextInject_LegacyAliasWithInternalWhitespaceRemainsCompatible(t *tes
 	}
 }
 
+func TestContextInject_LegacyMetadataDoesNotClaimForeignAlias(t *testing.T) {
+	db, cleanup := setupProjectTestDB(t)
+	defer cleanup()
+	canonical := "prc-http-legacy-new-canonical"
+	legacy := "prc-http-legacy-owned-alias"
+	owner := "prc-http-legacy-alias-owner"
+	db.Exec(`DELETE FROM projects WHERE id IN (?, ?) OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, canonical, owner, legacy)
+	defer db.Exec(`DELETE FROM projects WHERE id IN (?, ?) OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, canonical, owner, legacy)
+	if err := gormdb.UpsertProject(t.Context(), db, owner, legacy, "", "", "owner"); err != nil {
+		t.Fatal(err)
+	}
+
+	payload, _ := json.Marshal(map[string]any{"project": canonical, "legacy_project": legacy, "identity_only": true})
+	rec := httptest.NewRecorder()
+	(&Service{store: &gormdb.Store{DB: db}}).handleContextInject(rec, httptest.NewRequest(http.MethodPost, "/api/context/inject", bytes.NewReader(payload)))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var canonicalCount int64
+	if err := db.Model(&gormdb.Project{}).Where("id = ?", canonical).Count(&canonicalCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if canonicalCount != 0 {
+		t.Fatalf("conflicting legacy metadata created %d canonical rows", canonicalCount)
+	}
+}
+
 func TestContextInject_FailsClosedWithoutIdentityStore(t *testing.T) {
 	payload, err := json.Marshal(map[string]any{"project": "prc-http-no-store"})
 	if err != nil {

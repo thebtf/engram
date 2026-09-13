@@ -875,7 +875,7 @@ func grpcCodeToHTTP(code codes.Code) int {
 // @Router /api/context/inject [post]
 // @Router /api/context/inject [get]
 func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
-	var project, agentID, cwd, legacyProject, sessionID string
+	var project, agentID, cwd, legacyProject, gitRemote, relativePath, sessionID string
 	var filesBeingEdited []string
 	var projectIdentity *gorm.ProjectIdentityV2
 	var projectDescriptor json.RawMessage
@@ -903,6 +903,8 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		agentID = req.AgentID
 		cwd = req.Cwd
 		legacyProject = req.LegacyProject
+		gitRemote = req.GitRemote
+		relativePath = req.RelativePath
 		sessionID = req.SessionID
 		filesBeingEdited = req.FilesBeingEdited
 		projectIdentity = req.ProjectIdentity
@@ -914,6 +916,8 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		agentID = r.URL.Query().Get("agent_id")
 		cwd = r.URL.Query().Get("cwd")
 		legacyProject = r.URL.Query().Get("legacy_project")
+		gitRemote = r.URL.Query().Get("git_remote")
+		relativePath = r.URL.Query().Get("relative_path")
 		sessionID = r.URL.Query().Get("session_id")
 		filesBeingEdited = r.URL.Query()["files_being_edited"]
 	}
@@ -976,20 +980,23 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			writeProjectIdentityHTTPError(w, &gorm.ProjectIdentityError{Code: gorm.ProjectIdentityUnavailable, UpgradeAction: gorm.UpgradeActionRetryProjectRegistration, Err: fmt.Errorf("project identity database is not ready")})
 			return
 		}
+		if projectIdentity == nil && legacyProject != "" && legacyProject != project {
+			displayName := project
+			if index := strings.Index(project, "_"); index > 0 {
+				displayName = project[:index]
+			}
+			if err := gorm.RegisterLegacyProject(r.Context(), s.store.DB, project, legacyProject, gitRemote, relativePath, displayName); err != nil {
+				writeProjectIdentityHTTPError(w, err)
+				return
+			}
+		}
+
 		resolution, resolveErr := gorm.RegisterAndResolve(r.Context(), s.store.DB, project, projectIdentity)
 		if resolveErr != nil {
 			writeProjectIdentityHTTPError(w, resolveErr)
 			return
 		}
 		project = resolution.CanonicalProjectID
-		// Preserve the old HTTP contract: project is the canonical outer selector
-		// and legacy_project is only an alias. Never reverse them on a fresh DB.
-		if projectIdentity == nil && legacyProject != "" && legacyProject != project {
-			if err := gorm.AttachLegacyAlias(r.Context(), s.store.DB, project, legacyProject); err != nil {
-				writeProjectIdentityHTTPError(w, err)
-				return
-			}
-		}
 	}
 	if s.rejectLegacyDirectDelivery(w, r.Context(), project) {
 		return

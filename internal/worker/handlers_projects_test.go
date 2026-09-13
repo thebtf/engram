@@ -19,9 +19,8 @@ import (
 	"github.com/thebtf/engram/internal/worker/projectevents"
 )
 
-// setupProjectTestDB opens a postgres test DB (via DATABASE_DSN) and ensures
-// the projects table exists with the lifecycle columns from migration 082.
-// The caller is responsible for calling cleanup().
+// setupProjectTestDB opens a postgres test DB (via DATABASE_DSN) with the
+// current Project model columns. The caller is responsible for cleanup.
 func setupProjectTestDB(t *testing.T) (*gorm.DB, func()) {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_DSN")
@@ -40,17 +39,21 @@ func setupProjectTestDB(t *testing.T) (*gorm.DB, func()) {
 		t.Fatalf("get sql.DB: %v", err)
 	}
 
-	// Minimal schema for the projects table with lifecycle columns.
+	// Minimal schema for tests that exercise the current Project model.
 	ddl := []string{
 		`CREATE TABLE IF NOT EXISTS projects (
-			id            TEXT PRIMARY KEY,
-			git_remote    TEXT,
-			relative_path TEXT,
-			display_name  TEXT,
-			legacy_ids    TEXT[],
-			created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			removed_at    TIMESTAMPTZ NULL,
-			last_heartbeat TIMESTAMPTZ DEFAULT NOW()
+			id                TEXT PRIMARY KEY,
+			git_remote        TEXT,
+			relative_path     TEXT,
+			display_name      TEXT,
+			project_key       UUID,
+			anchor_project_id UUID,
+			identity_scope    TEXT,
+			identity_status   TEXT,
+			legacy_ids        TEXT[],
+			created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			removed_at        TIMESTAMPTZ NULL,
+			last_heartbeat    TIMESTAMPTZ DEFAULT NOW()
 		)`,
 	}
 	for _, stmt := range ddl {

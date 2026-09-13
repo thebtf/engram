@@ -632,6 +632,15 @@ END $$`, functionName, legacyID)
 	if legacyClaims != 1 {
 		t.Fatalf("legacy row claims=%d, want exactly one: %#v", legacyClaims, results)
 	}
+	for i, identity := range identities {
+		replayed, err := RegisterAndResolve(ctx, db, aliases[i], identity)
+		if err != nil {
+			t.Fatalf("replay %d: %v", i, err)
+		}
+		if replayed.CanonicalProjectID != results[i].CanonicalProjectID {
+			t.Fatalf("replay %d canonical=%q, want %q", i, replayed.CanonicalProjectID, results[i].CanonicalProjectID)
+		}
+	}
 }
 
 func TestRegisterAndResolve_FailsClosedOnSoftDeletedBindingCollision(t *testing.T) {
