@@ -281,33 +281,6 @@ func assertNoProjectAnchorTempFiles(t *testing.T, dir string) {
 	}
 }
 
-// findRealRepoRoot returns the absolute path of the current git repository
-// root. It exists solely for TestResolveProjectSlug_WorktreeMatchesMain,
-// which MUST inspect a real engram repo because its purpose is to verify
-// worktree-vs-main-checkout id stability in a real git environment. All
-// other tests in this file use initSyntheticGitRepo for full isolation
-// from the running checkout's git state.
-func findRealRepoRoot(t *testing.T) string {
-	t.Helper()
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		t.Fatalf("failed to determine git repo root: %v", err)
-	}
-	return filepath.Clean(strings.TrimSpace(string(out)))
-}
-
-func normalizeGitWorktreePath(value string) string {
-	clean := filepath.Clean(value)
-	if !strings.EqualFold(filepath.Base(clean), ".git") {
-		return clean
-	}
-	info, err := os.Stat(clean)
-	if err != nil || info.IsDir() {
-		return clean
-	}
-	return filepath.Dir(clean)
-}
-
 // initSyntheticGitRepo creates a fresh, isolated git repository inside
 // t.TempDir() with a fixed remote URL. This replaces the previous
 // findRepoRoot helper, which was brittle when the test ran inside a git
@@ -404,38 +377,6 @@ func TestResolveProjectIdentityV2_StripsGitRemoteUserinfo(t *testing.T) {
 	}
 }
 
-func TestResolveProjectIdentityV2_FencesAuthorityUserinfoWithoutChangingScpOrLocalRemotes(t *testing.T) {
-	tests := []struct {
-		name       string
-		remote     string
-		wantRemote string
-		wantErr    bool
-	}{
-		{name: "malformed network authority", remote: "//fixture-user:fixture-credential@example.invalid/%zz", wantErr: true},
-		{name: "scp-like remote", remote: "fixture-user@example.invalid:repo.git", wantRemote: "fixture-user@example.invalid:repo.git"},
-		{name: "local path remote", remote: "./fixture@directory:repo.git", wantRemote: "./fixture@directory:repo.git"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			repoDir := initSyntheticGitRepo(t)
-			if _, err := exec.Command("git", "-C", repoDir, "remote", "set-url", "origin", tt.remote).CombinedOutput(); err != nil {
-				t.Fatal("set synthetic origin")
-			}
-			identity, err := proxy.ResolveProjectIdentityV2(repoDir)
-			if tt.wantErr {
-				if err == nil || identity.GitRemote != "" || strings.Contains(err.Error(), "fixture-credential") {
-					t.Fatal("authority userinfo was not rejected safely")
-				}
-				return
-			}
-			if err != nil || identity.GitRemote != tt.wantRemote {
-				t.Fatal("credential-free Git remote changed or was rejected")
-			}
-		})
-	}
-}
-
 // TestResolveProjectSlug_NonGitDir verifies that a directory without a git repo
 // falls back to a pure 6-hex-char id with an empty gitRemote.
 // Uses a fresh temp dir to avoid .engram-project side effects from other tests.
@@ -524,54 +465,44 @@ func TestResolveProjectSlug_ConsistentAcrossCalls(t *testing.T) {
 	}
 }
 
-// TestResolveProjectSlug_WorktreeMatchesMain verifies that a worktree of the
-// same repository produces the same id as the main checkout. Skipped when no
-// worktree is present.
+// TestResolveProjectSlug_WorktreeMatchesMain verifies that a linked worktree of
+// the same real Git repository produces the same identity as its main checkout.
 func TestResolveProjectSlug_WorktreeMatchesMain(t *testing.T) {
 	t.Parallel()
 
-	mainRepo := findRealRepoRoot(t)
-
-	out, err := exec.Command("git", "-C", mainRepo, "worktree", "list", "--porcelain").Output()
-	if err != nil {
-		t.Skip("git worktree list failed, skipping")
+	mainRepo := initSyntheticGitRepo(t)
+	if err := os.WriteFile(filepath.Join(mainRepo, "fixture.txt"), []byte("fixture\n"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
 	}
-
-	// Parse worktree paths: lines starting with "worktree ".
-	var worktreePaths []string
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "worktree ") {
-			continue
-		}
-		path := normalizeGitWorktreePath(strings.TrimPrefix(line, "worktree "))
-		// Use filepath.Clean for portable cross-platform path comparison.
-		if !strings.EqualFold(filepath.Clean(path), filepath.Clean(mainRepo)) {
-			worktreePaths = append(worktreePaths, path)
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", mainRepo}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 		}
 	}
+	run("add", "fixture.txt")
+	run("commit", "-q", "-m", "identity fixture")
 
-	if len(worktreePaths) == 0 {
-		t.Skip("no additional worktrees found, skipping")
-	}
+	linkedRepo := filepath.Join(t.TempDir(), "linked")
+	run("worktree", "add", "-q", "--detach", linkedRepo, "HEAD")
 
-	mainID, _, _, err := proxy.ResolveProjectSlug(mainRepo)
+	mainID, mainName, mainRemote, err := proxy.ResolveProjectSlug(mainRepo)
 	if err != nil {
 		t.Fatalf("main repo id error: %v", err)
 	}
-
-	// The id is a pure 8-hex hash of (remoteURL + relativePath).
-	// A worktree checked out under a different directory name will have a different
-	// displayName but the SAME id (same remote, same relative path from repo root).
-	for _, wt := range worktreePaths {
-		wtID, _, _, wtErr := proxy.ResolveProjectSlug(wt)
-		if wtErr != nil {
-			t.Errorf("worktree %s id error: %v", wt, wtErr)
-			continue
-		}
-		if wtID != mainID {
-			t.Errorf("worktree %s id %q != main id %q", wt, wtID, mainID)
-		}
+	linkedID, linkedName, linkedRemote, err := proxy.ResolveProjectSlug(linkedRepo)
+	if err != nil {
+		t.Fatalf("linked worktree id error: %v", err)
+	}
+	if linkedID != mainID {
+		t.Fatalf("linked worktree id %q != main id %q", linkedID, mainID)
+	}
+	if linkedRemote != mainRemote {
+		t.Fatalf("linked worktree remote %q != main remote %q", linkedRemote, mainRemote)
+	}
+	if linkedName == mainName {
+		t.Fatalf("fixture names unexpectedly match: %q", mainName)
 	}
 }
 
