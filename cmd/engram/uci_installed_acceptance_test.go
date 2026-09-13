@@ -372,6 +372,11 @@ func uciInstalledAcceptanceRequireMethodSubsequence(t *testing.T, methods []stri
 	}
 }
 
+type uciInstalledAcceptanceClosedOutcomeExpectation struct {
+	status    string
+	errorCode string
+}
+
 func uciInstalledAcceptanceRequireBootstrap(t *testing.T, result uciInstalledAcceptanceResult) {
 	t.Helper()
 
@@ -386,14 +391,11 @@ func uciInstalledAcceptanceRequireBootstrap(t *testing.T, result uciInstalledAcc
 	outcome := result.Bootstrap.UnboundClient
 	uciInstalledAcceptanceRequireClosedOutcome(
 		t,
-		outcome.Status,
-		outcome.ErrorCode,
-		outcome.ContextDigest,
-		outcome.ContentDigests,
-		outcome.GraphDigests,
-		outcome.ExposureDigest,
-		"context_required",
-		"CONTEXT_REQUIRED",
+		outcome,
+		uciInstalledAcceptanceClosedOutcomeExpectation{
+			status:    "context_required",
+			errorCode: "CONTEXT_REQUIRED",
+		},
 	)
 }
 
@@ -507,14 +509,11 @@ func uciInstalledAcceptanceRequireRefusals(t *testing.T, result uciInstalledAcce
 		}
 		uciInstalledAcceptanceRequireClosedOutcome(
 			t,
-			outcome.Status,
-			outcome.ErrorCode,
-			outcome.ContextDigest,
-			outcome.ContentDigests,
-			outcome.GraphDigests,
-			outcome.ExposureDigest,
-			test.status,
-			test.code,
+			outcome,
+			uciInstalledAcceptanceClosedOutcomeExpectation{
+				status:    test.status,
+				errorCode: test.code,
+			},
 		)
 	}
 }
@@ -525,14 +524,11 @@ func uciInstalledAcceptanceRequireRecorderBehavior(t *testing.T, result uciInsta
 	unavailable := result.Recorder.InitialUnavailable
 	uciInstalledAcceptanceRequireClosedOutcome(
 		t,
-		unavailable.Status,
-		unavailable.ErrorCode,
-		unavailable.ContextDigest,
-		unavailable.ContentDigests,
-		unavailable.GraphDigests,
-		unavailable.ExposureDigest,
-		"unavailable",
-		"EXPOSURE_UNAVAILABLE",
+		unavailable,
+		uciInstalledAcceptanceClosedOutcomeExpectation{
+			status:    "unavailable",
+			errorCode: "EXPOSURE_UNAVAILABLE",
+		},
 	)
 	if result.Recorder.HealthAfterInitialUnavailable != "unavailable" ||
 		!uciInstalledAcceptanceIsSHA256(result.Recorder.FirstExposureDigest) ||
@@ -545,14 +541,11 @@ func uciInstalledAcceptanceRequireRecorderBehavior(t *testing.T, result uciInsta
 	mismatch := result.Recorder.Mismatch
 	uciInstalledAcceptanceRequireClosedOutcome(
 		t,
-		mismatch.Status,
-		mismatch.ErrorCode,
-		mismatch.ContextDigest,
-		mismatch.ContentDigests,
-		mismatch.GraphDigests,
-		mismatch.ExposureDigest,
-		"unavailable",
-		"IDEMPOTENCY_MISMATCH",
+		mismatch,
+		uciInstalledAcceptanceClosedOutcomeExpectation{
+			status:    "unavailable",
+			errorCode: "IDEMPOTENCY_MISMATCH",
+		},
 	)
 }
 
@@ -678,21 +671,11 @@ func uciInstalledAcceptanceRequireRestartContinuity(t *testing.T, request uciIns
 	)
 }
 
-func uciInstalledAcceptanceRequireClosedOutcome(
-	t *testing.T,
-	status string,
-	errorCode string,
-	contextDigest string,
-	contentDigests []string,
-	graphDigests []string,
-	exposureDigest string,
-	wantStatus string,
-	wantErrorCode string,
-) {
+func uciInstalledAcceptanceRequireClosedOutcome(t *testing.T, outcome uciInstalledAcceptanceClosedOutcome, want uciInstalledAcceptanceClosedOutcomeExpectation) {
 	t.Helper()
 
-	if status != wantStatus || errorCode != wantErrorCode ||
-		contextDigest != "" || len(contentDigests) != 0 || len(graphDigests) != 0 || exposureDigest != "" {
+	if outcome.Status != want.status || outcome.ErrorCode != want.errorCode ||
+		outcome.ContextDigest != "" || len(outcome.ContentDigests) != 0 || len(outcome.GraphDigests) != 0 || outcome.ExposureDigest != "" {
 		t.Fatal("closed UCI outcome disclosed context, content, graph, or exposure data")
 	}
 }
