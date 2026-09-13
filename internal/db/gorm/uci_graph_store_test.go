@@ -263,7 +263,7 @@ func uciGraphStorePublish(t *testing.T, fixture *uciPublicationFixture, input uc
 	if input.parent != nil {
 		kind = ucidomain.IndexJobReconcile
 	}
-	_, published := fixture.publish(t, fixture.publisher, fixture.caller("graph-store-"+input.key), input.key, input.checkout, fixture.profile.ProfileID, input.parent, ucidomain.IndexManifestFull, kind, draft)
+	_, published := fixture.publish(t, fixture.publisher, fixture.caller("graph-store-"+input.key), fixture.publishInput(input.key, input.checkout, fixture.profile.ProfileID, input.parent, ucidomain.IndexManifestFull, kind, draft))
 	return published
 }
 

@@ -26,7 +26,7 @@ func TestUCIEmbeddingPublicationCreatesOneProfileViewJobAndReplays(t *testing.T)
 	draft := uciEmbeddingJobsDraft([]uciPublicationArtifact{artifact}, memberships)
 	caller := fixture.publication.caller("embedding-replay")
 
-	build := fixture.publication.begin(t, fixture.publisher, caller, "embedding-replay", fixture.publication.checkout, fixture.publication.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	build := fixture.publication.begin(t, fixture.publisher, caller, fixture.publication.beginInput("embedding-replay", fixture.publication.checkout, fixture.publication.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 	acks := fixture.publication.stageDraft(t, fixture.publisher, caller, build.Build, draft.parts)
 	manifest := fixture.publication.manifest(t, acks, draft)
 	published, err := fixture.publisher.Finalize(ctx, caller, ucidomain.IndexFinalizeInput{Build: build.Build, Manifest: manifest})
@@ -635,13 +635,7 @@ func (fixture *uciEmbeddingJobsFixture) publish(t *testing.T, key string, checko
 		t,
 		fixture.publisher,
 		fixture.publication.caller("embedding-"+key),
-		key,
-		checkout,
-		fixture.publication.profile.ProfileID,
-		parent,
-		ucidomain.IndexManifestFull,
-		kind,
-		draft,
+		fixture.publication.publishInput(key, checkout, fixture.publication.profile.ProfileID, parent, ucidomain.IndexManifestFull, kind, draft),
 	)
 	return published
 }
@@ -819,7 +813,7 @@ func (fixture *uciEmbeddingJobsFixture) publishAdmitted(t *testing.T, publisher 
 		replacements = append(replacements, part.EdgeReplacements...)
 	}
 	draft := newUCIPublicationDraft(staged, memberships, replacements)
-	_, published := fixture.publication.publish(t, publisher, fixture.publication.caller("embedding-"+key), key, fixture.publication.checkout, fixture.publication.profile.ProfileID, parent, ucidomain.IndexManifestFull, kind, draft)
+	_, published := fixture.publication.publish(t, publisher, fixture.publication.caller("embedding-"+key), fixture.publication.publishInput(key, fixture.publication.checkout, fixture.publication.profile.ProfileID, parent, ucidomain.IndexManifestFull, kind, draft))
 	return published
 }
 

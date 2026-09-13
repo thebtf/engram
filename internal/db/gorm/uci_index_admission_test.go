@@ -54,17 +54,7 @@ func TestUCIIndexAdmissionPinsArtifactIDAndRejectsTupleCollision(t *testing.T) {
 func TestUCIIndexAdmissionLoadsBuildOwnerFromExactFence(t *testing.T) {
 	fixture := openUCIPublicationFixture(t)
 	caller := fixture.caller("admission-runtime")
-	begin := fixture.begin(
-		t,
-		fixture.publisher,
-		caller,
-		"admission-runtime-build",
-		fixture.checkout,
-		fixture.profile.ProfileID,
-		nil,
-		ucidomain.IndexManifestFull,
-		ucidomain.IndexJobInitial,
-	)
+	begin := fixture.begin(t, fixture.publisher, caller, fixture.beginInput("admission-runtime-build", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 
 	loaded, err := fixture.projection.LoadIndexBuildRef(
 		context.Background(),
@@ -478,7 +468,7 @@ func TestUCIIndexAdmissionPackedCrossFrameSealsAndReplays(t *testing.T) {
 	replacements := append(append([]ucidomain.IndexEdgeReplacement(nil), parts[0].EdgeReplacements...), parts[1].EdgeReplacements...)
 	draft := newUCIPublicationDraft(parts, memberships, replacements)
 	caller := fixture.caller("admission-packed")
-	begin := fixture.begin(t, fixture.publisher, caller, "admission-packed", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	begin := fixture.begin(t, fixture.publisher, caller, fixture.beginInput("admission-packed", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 	acks := fixture.stageDraft(t, fixture.publisher, caller, begin.Build, parts)
 	published := fixture.finalizeDraft(t, fixture.publisher, caller, begin.Build, nil, acks, draft)
 	require.Equal(t, int64(1), published.Context.Generation)

@@ -166,7 +166,7 @@ func uciVersionedReadPublish(t *testing.T, fixture *uciPublicationFixture, input
 		[]ucidomain.IndexMembership{membership},
 		[]ucidomain.IndexEdgeReplacement{replacement},
 	)
-	_, published := fixture.publish(t, fixture.publisher, fixture.caller("versioned-read-"+input.key), input.key, input.checkout, fixture.profile.ProfileID, input.parent, ucidomain.IndexManifestFull, input.kind, draft)
+	_, published := fixture.publish(t, fixture.publisher, fixture.caller("versioned-read-"+input.key), fixture.publishInput(input.key, input.checkout, fixture.profile.ProfileID, input.parent, ucidomain.IndexManifestFull, input.kind, draft))
 	return published
 }
 

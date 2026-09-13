@@ -254,7 +254,7 @@ func uciSemanticPublish(t *testing.T, fixture *uciPublicationFixture, input uciS
 		replacements,
 	)
 	draft.coverage.Vector = ucidomain.IndexCoverageComplete
-	_, published := fixture.publish(t, fixture.publisher, fixture.caller("semantic-"+input.key), input.key, input.checkout, fixture.profile.ProfileID, input.parent, ucidomain.IndexManifestFull, input.jobKind, draft)
+	_, published := fixture.publish(t, fixture.publisher, fixture.caller("semantic-"+input.key), fixture.publishInput(input.key, input.checkout, fixture.profile.ProfileID, input.parent, ucidomain.IndexManifestFull, input.jobKind, draft))
 	return published
 }
 

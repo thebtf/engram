@@ -1558,9 +1558,9 @@ func (fixture *uciPublicationFixture) beginInput(key string, checkout *UCIChecko
 	}
 }
 
-func (fixture *uciPublicationFixture) begin(t *testing.T, publisher ucidomain.IndexStore, caller ucidomain.IndexCaller, arguments ...any) ucidomain.IndexBeginResult {
+func (fixture *uciPublicationFixture) begin(t *testing.T, publisher ucidomain.IndexStore, caller ucidomain.IndexCaller, input ucidomain.IndexBeginInput) ucidomain.IndexBeginResult {
 	t.Helper()
-	return fixture.assertBegin(t, publisher, caller, fixture.resolveBeginInput(t, arguments))
+	return fixture.assertBegin(t, publisher, caller, input)
 }
 
 func (fixture *uciPublicationFixture) assertBegin(t *testing.T, publisher ucidomain.IndexStore, caller ucidomain.IndexCaller, input ucidomain.IndexBeginInput) ucidomain.IndexBeginResult {
@@ -1571,33 +1571,6 @@ func (fixture *uciPublicationFixture) assertBegin(t *testing.T, publisher ucidom
 	return result
 }
 
-func (fixture *uciPublicationFixture) resolveBeginInput(t *testing.T, arguments []any) ucidomain.IndexBeginInput {
-	t.Helper()
-	if len(arguments) == 1 {
-		return uciPublicationArgument[ucidomain.IndexBeginInput](t, arguments[0])
-	}
-	require.Len(t, arguments, 6)
-	var parent *ucidomain.ContextRef
-	if arguments[3] != nil {
-		parent = uciPublicationArgument[*ucidomain.ContextRef](t, arguments[3])
-	}
-	return fixture.beginInput(
-		uciPublicationArgument[string](t, arguments[0]),
-		uciPublicationArgument[*UCICheckout](t, arguments[1]),
-		uciPublicationArgument[string](t, arguments[2]),
-		parent,
-		uciPublicationArgument[ucidomain.IndexManifestMode](t, arguments[4]),
-		uciPublicationArgument[ucidomain.IndexJobKind](t, arguments[5]),
-	)
-}
-
-func uciPublicationArgument[T any](t *testing.T, value any) T {
-	t.Helper()
-	argument, ok := value.(T)
-	require.Truef(t, ok, "publication helper argument type = %T, want %T", value, *new(T))
-	return argument
-}
-
 func (fixture *uciPublicationFixture) publishInput(key string, checkout *UCICheckout, profileID string, parent *ucidomain.ContextRef, mode ucidomain.IndexManifestMode, kind ucidomain.IndexJobKind, draft uciPublicationDraft) uciPublicationPublishInput {
 	return uciPublicationPublishInput{
 		begin: fixture.beginInput(key, checkout, profileID, parent, mode, kind),
@@ -1605,33 +1578,11 @@ func (fixture *uciPublicationFixture) publishInput(key string, checkout *UCIChec
 	}
 }
 
-func (fixture *uciPublicationFixture) publish(t *testing.T, publisher ucidomain.IndexStore, caller ucidomain.IndexCaller, arguments ...any) (ucidomain.IndexBeginResult, ucidomain.IndexPublishedView) {
+func (fixture *uciPublicationFixture) publish(t *testing.T, publisher ucidomain.IndexStore, caller ucidomain.IndexCaller, input uciPublicationPublishInput) (ucidomain.IndexBeginResult, ucidomain.IndexPublishedView) {
 	t.Helper()
-	input := fixture.resolvePublishInput(t, arguments)
 	build := fixture.assertBegin(t, publisher, caller, input.begin)
 	acks := fixture.stageDraft(t, publisher, caller, build.Build, input.draft.parts)
 	return build, fixture.finalizeDraft(t, publisher, caller, build.Build, input.begin.ExpectedParent, acks, input.draft)
-}
-
-func (fixture *uciPublicationFixture) resolvePublishInput(t *testing.T, arguments []any) uciPublicationPublishInput {
-	t.Helper()
-	if len(arguments) == 1 {
-		return uciPublicationArgument[uciPublicationPublishInput](t, arguments[0])
-	}
-	require.Len(t, arguments, 7)
-	var parent *ucidomain.ContextRef
-	if arguments[3] != nil {
-		parent = uciPublicationArgument[*ucidomain.ContextRef](t, arguments[3])
-	}
-	return fixture.publishInput(
-		uciPublicationArgument[string](t, arguments[0]),
-		uciPublicationArgument[*UCICheckout](t, arguments[1]),
-		uciPublicationArgument[string](t, arguments[2]),
-		parent,
-		uciPublicationArgument[ucidomain.IndexManifestMode](t, arguments[4]),
-		uciPublicationArgument[ucidomain.IndexJobKind](t, arguments[5]),
-		uciPublicationArgument[uciPublicationDraft](t, arguments[6]),
-	)
 }
 
 func (fixture *uciPublicationFixture) stageDraft(t *testing.T, publisher ucidomain.IndexStore, caller ucidomain.IndexCaller, build ucidomain.IndexBuildRef, parts []ucidomain.IndexPart) []ucidomain.IndexPartAck {

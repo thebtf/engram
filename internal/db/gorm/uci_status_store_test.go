@@ -29,7 +29,7 @@ func TestUCIStatusStoreReadsExactViewLifecycleAndScopedCounts(t *testing.T) {
 		[]ucidomain.IndexEdgeReplacement{{SourcePath: "first.go"}, {SourcePath: "second.go"}},
 	)
 	initialDraft.fsSeq = 17
-	_, initial := fixture.publish(t, fixture.publisher, fixture.caller("status-initial"), "status-initial", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, initialDraft)
+	_, initial := fixture.publish(t, fixture.publisher, fixture.caller("status-initial"), fixture.publishInput("status-initial", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, initialDraft))
 	require.NoError(t, fixture.db.Model(&UCIView{}).Where("view_id = ?", initial.Context.ViewID).Update("dirty", true).Error)
 	initialAuthorized := uciStatusStoreAuthorize(t, fixture, initial.Context)
 
@@ -89,7 +89,7 @@ func TestUCIStatusStoreReadsExactViewLifecycleAndScopedCounts(t *testing.T) {
 		siblingMemberships,
 		[]ucidomain.IndexEdgeReplacement{{SourcePath: "sibling.go"}},
 	)
-	_, sibling := fixture.publish(t, fixture.publisher, fixture.caller("status-sibling"), "status-sibling", fixture.sibling, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, siblingDraft)
+	_, sibling := fixture.publish(t, fixture.publisher, fixture.caller("status-sibling"), fixture.publishInput("status-sibling", fixture.sibling, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, siblingDraft))
 	siblingAuthorized := uciStatusStoreAuthorize(t, fixture, sibling.Context)
 	siblingCandidate := uciSemanticCandidateAtPath(t, fixture.projection, siblingAuthorized, "sibling.go", siblingArtifact.Artifact.ArtifactID)
 	require.NoError(t, fixture.projection.StoreCandidateEmbedding(ctx, siblingAuthorized, semanticProfile, siblingCandidate, uciSemanticVector(0, 1)))
@@ -150,7 +150,7 @@ func TestUCIStatusStoreReadsExactViewLifecycleAndScopedCounts(t *testing.T) {
 		UnreadableFiles:      3,
 		UnresolvedReferences: 5,
 	}
-	_, currentPublished := fixture.publish(t, fixture.publisher, fixture.caller("status-current"), "status-current", fixture.checkout, fixture.profile.ProfileID, uciPublicationParent(initial), ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile, currentDraft)
+	_, currentPublished := fixture.publish(t, fixture.publisher, fixture.caller("status-current"), fixture.publishInput("status-current", fixture.checkout, fixture.profile.ProfileID, uciPublicationParent(initial), ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile, currentDraft))
 	currentAuthorized := uciStatusStoreAuthorize(t, fixture, currentPublished.Context)
 
 	historical, err := store.LoadIndexStatus(ctx, initialAuthorized, &semanticProfile)
