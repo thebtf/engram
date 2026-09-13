@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   Deadline,
   boundedCoverpkg,
+  canonicalJson,
   classifyPackageUnit,
   collectCoverage,
   consumeGoEvents,
@@ -17,6 +18,7 @@ import {
   normalizeCoverage,
   planPackageUnits,
   reusableProfile,
+  runCoverageProfile,
   runOwnedCommand,
   schedulePackageUnits,
   sha256,
@@ -488,4 +490,294 @@ test("coverage normalization fails closed on corrupt or missing headers", () => 
   assert.throws(() => normalizeCoverage([{ source: "missing", contents: "example/file.go:1.1,2.2 1 1\n" }]), /Malformed coverprofile header/);
   assert.throws(() => normalizeCoverage([{ source: "corrupt", contents: "mode: atomic\nnot a coverage block\n" }]), /Malformed coverprofile block/);
   assert.throws(() => normalizeCoverage([{ source: "wrong-mode", contents: "mode: set\nexample/file.go:1.1,2.2 1 1\n" }]), /Coverage mode must be atomic/);
+});
+
+const r15SavedRun = "D:/Dev/engram/.agent/e/sonarqube/worktrees/634b6b14e6f9b058e723e998f9411b0357a430a06ba267336a6d6b712b27b8f9/runs/543a1e2a-2a95-4530-8c88-782824a71b3e";
+
+function r15Event(action, packageName, testName, output = null) {
+  return `${JSON.stringify({ Action: action, Package: packageName, ...(testName ? { Test: testName } : {}), ...(output === null ? {} : { Output: output }) })}\n`;
+}
+
+function r15Candidate(root, sources) {
+  for (const [path, source] of sources) write(join(root, path), source);
+  return {
+    ...candidate(root),
+    repository_path: root,
+    inventory: sources.map(([path, source]) => ({ path, type: "file", sha256: sha256(source) })),
+  };
+}
+
+function r15UnitProfile(unit, name = unit.id) {
+  return {
+    name,
+    target: unit.importPath,
+    race: true,
+    packageConcurrency: 1,
+    baseUnit: true,
+    unitPhase: "race",
+    workPhase: "race",
+    unitDirectory: unit.directory,
+  };
+}
+
+function r15Progress() {
+  return { activate() { }, meaningful() { }, deactivate() { }, location() { }, semantic() { }, output() { }, complete() { } };
+}
+
+async function r15Execute(root, profile, currentCandidate, expected, events, options = {}) {
+  const entry = { id: profile.name, name: profile.name, attempt: 1 };
+  const currentCampaign = { runDir: join(root, "execution", profile.name), manifest: { profiles: [entry] } };
+  mkdirSync(currentCampaign.runDir, { recursive: true });
+  const execution = options.execution || { signal: new AbortController().signal };
+  try {
+    await runCoverageProfile("fake-go", profile, currentCampaign, entry, root, {}, null, execution, deadline(), r15Progress(), [], options.profileDeadline || Date.now() + 30_000, currentCandidate, {
+      expectedTests: async () => expected,
+      runProcess: async (_command, _args, context) => {
+        if (options.failure) throw new Error(options.failure);
+        context.onStdout(events);
+        return { stdout: "", stderr: "" };
+      },
+    });
+    return { passed: true, entry };
+  } catch (error) {
+    return { passed: false, entry, error };
+  }
+}
+
+function r15OwnerEvidence(root, currentCandidate, environment, ownerConfig) {
+  const config = typeof ownerConfig === "string" ? { state: ownerConfig } : ownerConfig;
+  const owner = coverageProfiles.find((profile) => profile.name === "uci-installed");
+  const packageName = config.packageName || "example/cmd/engram";
+  const test = config.test || "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated";
+  const events = config.state === "passed"
+    ? `${r15Event("pass", packageName, test)}${r15Event("pass", packageName, null)}`
+    : `${r15Event("skip", packageName, test)}${r15Event("pass", packageName, null)}`;
+  const coverage = "mode: atomic\nowner.go:1.1,1.2 1 1\n";
+  write(join(root, "owner-events.ndjson"), events);
+  write(join(root, "owner-coverage.out"), coverage);
+  return {
+    name: owner.name,
+    status: config.state === "pending" ? "pending" : "passed",
+    fingerprint: fingerprintProfile(owner, currentCandidate, environment),
+    coverage: { path: "owner-coverage.out", sha256: sha256(coverage), bytes: Buffer.byteLength(coverage) },
+    test_events: { path: "owner-events.ndjson", sha256: sha256(events), bytes: Buffer.byteLength(events) },
+    expected_tests: [{ package: packageName, test }],
+    expected_test_inventory_sha256: sha256(canonicalJson([{ package: packageName, test }])),
+    package_counts: { passed: 1, failed: 0, tests_passed: config.state === "passed" ? 1 : 0, tests_skipped: config.state === "passed" ? 0 : 1 },
+  };
+}
+
+function r15Retained(root, currentCandidate, expected, events, counts, owner = null, status = "passed") {
+  const environment = { sha256: "r15-environment" };
+  const profile = coverageProfiles.find((item) => item.name === "base");
+  const sourceRunId = "11111111-1111-4111-8111-111111111111";
+  const reloadRunId = "22222222-2222-4222-8222-222222222222";
+  const sourceDir = join(root, "retained", "runs", sourceRunId);
+  const reloadDir = join(root, "retained", "runs", reloadRunId);
+  const coverage = "mode: atomic\nfixture.go:1.1,1.2 1 1\n";
+  mkdirSync(sourceDir, { recursive: true });
+  mkdirSync(reloadDir, { recursive: true });
+  write(join(sourceDir, "events.ndjson"), events);
+  write(join(sourceDir, "coverage.out"), coverage);
+  const entry = {
+    name: profile.name,
+    status,
+    fingerprint: fingerprintProfile(profile, currentCandidate, environment),
+    coverage: { path: "coverage.out", sha256: sha256(coverage), bytes: Buffer.byteLength(coverage) },
+    test_events: { path: "events.ndjson", sha256: sha256(events), bytes: Buffer.byteLength(events) },
+    expected_tests: expected,
+    expected_test_inventory_sha256: sha256(canonicalJson(expected)),
+    package_counts: counts,
+  };
+  const owners = owner ? [r15OwnerEvidence(sourceDir, currentCandidate, environment, owner)] : [];
+  const source = {
+    schema_version: 2,
+    run_id: sourceRunId,
+    candidate: currentCandidate,
+    fingerprints: { coverage_environment: environment.sha256 },
+    profiles: [entry, ...owners],
+  };
+  write(join(sourceDir, "manifest.json"), JSON.stringify(source));
+  const reloaded = {
+    schema_version: 2,
+    run_id: reloadRunId,
+    candidate: currentCandidate,
+    fingerprints: { coverage_environment: environment.sha256 },
+    profiles: [{ ...entry, source_run_id: sourceRunId }],
+  };
+  return {
+    retained: { runDir: sourceDir, manifest: source },
+    reloaded: { runDir: reloadDir, manifest: reloaded },
+    profile,
+    environment,
+  };
+}
+
+function r15Counts(events) {
+  const summary = summarizeGoEvents(events);
+  return {
+    passed: summary.passed_packages.length,
+    failed: 0,
+    tests_passed: summary.passed_tests.length,
+    tests_skipped: summary.skipped_tests.length,
+  };
+}
+
+function r15Obligations(entry) {
+  return (entry.allowed_skip_obligations || []).map(({ kind, required_profile: requiredProfile, test }) => ({
+    ...(kind === undefined ? {} : { kind }),
+    ...(requiredProfile === undefined ? {} : { required_profile: requiredProfile }),
+    test,
+  }));
+}
+
+test("R15 compact skip cases have an exact execution, retained, and reload/reuse matrix", async () => {
+  const root = temporaryDirectory();
+  try {
+    const packageName = "example/cmd/engram";
+    const unit = { id: "base-race-r15", importPath: packageName, directory: "cmd/engram" };
+    const make = (name, testName, sources, events, owner = null) => ({ name, testName, sources, events, owner });
+    const cases = [
+      make("package and test pass", "TestPass", [["cmd/engram/pass_test.go", "func TestPass(t *testing.T) {}"]], `${r15Event("pass", packageName, "TestPass")}${r15Event("pass", packageName, null)}`),
+      make("known conditional skip", "TestConditional", [["cmd/engram/conditional_test.go", 'func TestConditional(t *testing.T) { t.Skip("explicit conditional") }']], `${r15Event("output", packageName, "TestConditional", "explicit conditional")}${r15Event("skip", packageName, "TestConditional")}${r15Event("pass", packageName, null)}`),
+      make("nested owner skip", "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated/nested", [["cmd/engram/nested_test.go", 'func TestUCIInstalledStandardClientsKeepDirtyViewsIsolated(t *testing.T) { t.Run("nested", func(t *testing.T) { t.Skip("requires installed database") }) }']], `${r15Event("output", packageName, "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated/nested", "requires installed database")}${r15Event("skip", packageName, "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated/nested")}${r15Event("pass", packageName, null)}`, "passed"),
+      make("neighboring helper", "TestHelper", [["cmd/engram/helper_test.go", "func TestHelper(t *testing.T) { skipFromNeighbor(t) }"], ["cmd/engram/skip_helper_test.go", 'func skipFromNeighbor(t *testing.T) { t.Skip("helper controlled") }']], `${r15Event("output", packageName, "TestHelper", "helper controlled")}${r15Event("skip", packageName, "TestHelper")}${r15Event("pass", packageName, null)}`),
+      make("pending owner", "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated", [["cmd/engram/pending_test.go", 'func TestUCIInstalledStandardClientsKeepDirtyViewsIsolated(t *testing.T) { t.Skip("requires installed database") }']], `${r15Event("output", packageName, "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated", "requires installed database")}${r15Event("skip", packageName, "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated")}${r15Event("pass", packageName, null)}`, "pending"),
+      make("owner real pass", "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated", [["cmd/engram/owner_test.go", 'func TestUCIInstalledStandardClientsKeepDirtyViewsIsolated(t *testing.T) { t.Skip("requires installed database") }']], `${r15Event("output", packageName, "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated", "requires installed database")}${r15Event("skip", packageName, "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated")}${r15Event("pass", packageName, null)}`, "passed"),
+      make("owner skipped", "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated", [["cmd/engram/owner_skipped_test.go", 'func TestUCIInstalledStandardClientsKeepDirtyViewsIsolated(t *testing.T) { t.Skip("requires installed database") }']], `${r15Event("output", packageName, "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated", "requires installed database")}${r15Event("skip", packageName, "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated")}${r15Event("pass", packageName, null)}`, "skipped"),
+      make("unknown reason", "TestUnknown", [["cmd/engram/unknown_test.go", 'func TestUnknown(t *testing.T) { t.Skip("known reason") }']], `${r15Event("output", packageName, "TestUnknown", "forged reason")}${r15Event("skip", packageName, "TestUnknown")}${r15Event("pass", packageName, null)}`),
+      make("test failure", "TestFailed", [["cmd/engram/failure_test.go", "func TestFailed(t *testing.T) {}"]], `${r15Event("fail", packageName, "TestFailed")}${r15Event("fail", packageName, null)}`),
+      make("package failure", "TestPackageFailed", [["cmd/engram/package_failure_test.go", "func TestPackageFailed(t *testing.T) {}"]], `${r15Event("pass", packageName, "TestPackageFailed")}${r15Event("fail", packageName, null)}`),
+      make("missing terminal package", "TestNoPackage", [["cmd/engram/no_package_test.go", "func TestNoPackage(t *testing.T) {}"]], r15Event("pass", packageName, "TestNoPackage")),
+    ];
+    const actual = [];
+    for (const item of cases) {
+      const caseRoot = join(root, item.name.replaceAll(" ", "-"));
+      const currentCandidate = r15Candidate(caseRoot, item.sources);
+      const expected = [{ package: packageName, test: item.testName }];
+      const execution = await r15Execute(caseRoot, r15UnitProfile(unit), currentCandidate, expected, item.events);
+      const retained = r15Retained(caseRoot, currentCandidate, expected, item.events, r15Counts(item.events), item.owner);
+      actual.push({
+        name: item.name,
+        execution: execution.passed,
+        retained: Boolean(reusableProfile(retained.retained, retained.profile, currentCandidate, retained.environment)),
+        reload_reuse: Boolean(reusableProfile(retained.reloaded, retained.profile, currentCandidate, retained.environment)),
+        obligations: r15Obligations(execution.entry),
+      });
+    }
+    assert.deepEqual(actual, [
+      { name: "package and test pass", execution: true, retained: true, reload_reuse: true, obligations: [] },
+      { name: "known conditional skip", execution: true, retained: true, reload_reuse: true, obligations: [{ kind: "conditional", test: "TestConditional" }] },
+      { name: "nested owner skip", execution: true, retained: true, reload_reuse: true, obligations: [{ required_profile: "uci-installed", test: "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated/nested" }] },
+      { name: "neighboring helper", execution: true, retained: true, reload_reuse: true, obligations: [{ kind: "conditional", test: "TestHelper" }] },
+      { name: "pending owner", execution: true, retained: false, reload_reuse: false, obligations: [{ required_profile: "uci-installed", test: "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated" }] },
+      { name: "owner real pass", execution: true, retained: true, reload_reuse: true, obligations: [{ required_profile: "uci-installed", test: "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated" }] },
+      { name: "owner skipped", execution: true, retained: false, reload_reuse: false, obligations: [{ required_profile: "uci-installed", test: "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated" }] },
+      { name: "unknown reason", execution: false, retained: false, reload_reuse: false, obligations: [] },
+      { name: "test failure", execution: false, retained: false, reload_reuse: false, obligations: [] },
+      { name: "package failure", execution: false, retained: false, reload_reuse: false, obligations: [] },
+      { name: "missing terminal package", execution: false, retained: false, reload_reuse: false, obligations: [] },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("R15 rejects timeout, cancellation, invalid hashes, and incomplete retained logs", async () => {
+  const root = temporaryDirectory();
+  try {
+    const packageName = "example/internal/books";
+    const currentCandidate = r15Candidate(root, [["internal/books/books_test.go", "func TestBook(t *testing.T) {}"]]);
+    const expected = [{ package: packageName, test: "TestBook" }];
+    const events = `${r15Event("pass", packageName, "TestBook")}${r15Event("pass", packageName, null)}`;
+    const profile = r15UnitProfile({ id: "r15-timeout", importPath: packageName, directory: "internal/books" });
+    const timedOut = await r15Execute(root, profile, currentCandidate, expected, events, { profileDeadline: Date.now() - 1 });
+    const controller = new AbortController();
+    controller.abort(new Error("r15 cancelled"));
+    const cancelled = await r15Execute(root, { ...profile, name: "r15-cancelled" }, currentCandidate, expected, events, { execution: { signal: controller.signal }, failure: "cancelled command" });
+    assert.equal(timedOut.entry.status, "timed_out");
+    assert.equal(cancelled.entry.status, "cancelled");
+    const retained = r15Retained(root, currentCandidate, expected, events, r15Counts(events));
+    assert.ok(reusableProfile(retained.retained, retained.profile, currentCandidate, retained.environment));
+    retained.retained.manifest.profiles[0].test_events.sha256 = "0".repeat(64);
+    assert.equal(reusableProfile(retained.retained, retained.profile, currentCandidate, retained.environment), null);
+    const incomplete = r15Retained(join(root, "incomplete"), currentCandidate, expected, r15Event("pass", packageName, "TestBook"), { passed: 0, failed: 0, tests_passed: 1, tests_skipped: 0 });
+    assert.equal(reusableProfile(incomplete.retained, incomplete.profile, currentCandidate, incomplete.environment), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("R15 deferred owner does not block coverage, but genuine race failure does", async () => {
+  const units = [
+    { id: "race-deferred-owner", phase: "race", classification: "ordinary" },
+    { id: "coverage-after-deferral", phase: "coverage", classification: "ordinary" },
+  ];
+  const launched = [];
+  await schedulePackageUnits(units, 1, async (unit) => {
+    launched.push(unit.id);
+    return { status: "passed", deferred_owner: unit.id === "race-deferred-owner" ? "uci-installed" : null };
+  });
+  assert.deepEqual(launched, ["race-deferred-owner", "coverage-after-deferral"]);
+  const blocked = [];
+  const outcomes = await schedulePackageUnits(units, 1, async (unit) => {
+    blocked.push(unit.id);
+    if (unit.id === "race-deferred-owner") throw new Error("race failure");
+    return { status: "passed" };
+  });
+  assert.equal(outcomes.get("race-deferred-owner").status, "failed");
+  assert.deepEqual(blocked, ["race-deferred-owner"]);
+});
+
+test("R15 unit rename preserves the full test identity and skip policy", async () => {
+  const root = temporaryDirectory();
+  try {
+    const packageName = "example/internal/books";
+    const testName = "TestRenamed/nested";
+    const currentCandidate = r15Candidate(root, [["internal/books/books_test.go", 'func TestRenamed(t *testing.T) { t.Run("nested", func(t *testing.T) { t.Skip("stable policy") }) }']]);
+    const expected = [{ package: packageName, test: testName }];
+    const events = `${r15Event("output", packageName, testName, "stable policy")}${r15Event("skip", packageName, testName)}${r15Event("pass", packageName, null)}`;
+    const unit = { id: "base-race-original", importPath: packageName, directory: "internal/books" };
+    const original = await r15Execute(root, r15UnitProfile(unit), currentCandidate, expected, events);
+    const renamed = await r15Execute(root, r15UnitProfile({ ...unit, id: "base-race-renamed" }), currentCandidate, expected, events);
+    assert.equal(original.passed, true);
+    assert.equal(renamed.passed, true);
+    assert.deepEqual(r15Obligations(renamed.entry), r15Obligations(original.entry));
+    assert.deepEqual(r15Obligations(renamed.entry), [{ kind: "conditional", test: testName }]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("R15 replays every saved failed unit log through execution and retained reload/reuse", async () => {
+  const root = temporaryDirectory();
+  try {
+    const saved = JSON.parse(readFileSync(join(r15SavedRun, "manifest.json"), "utf8"));
+    const failedUnits = saved.profiles.find((profile) => profile.name === "base").units.filter((unit) => unit.status === "failed");
+    assert.equal(failedUnits.length, 12);
+    const actual = [];
+    for (const unitEntry of failedUnits) {
+      const events = readFileSync(join(r15SavedRun, unitEntry.test_events.path.replaceAll("\\", "/")), "utf8");
+      const replayRoot = join(root, unitEntry.id);
+      const replay = await r15Execute(replayRoot, r15UnitProfile(unitEntry.unit, `replay-${unitEntry.id}`), saved.candidate, unitEntry.expected_tests, events);
+      const owner = unitEntry.unit.importPath === "github.com/thebtf/engram/cmd/engram"
+        ? { state: "passed", packageName: unitEntry.unit.importPath, test: "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated" }
+        : null;
+      const retained = r15Retained(replayRoot, saved.candidate, unitEntry.expected_tests, events, unitEntry.package_counts, owner);
+      actual.push({
+        id: unitEntry.id,
+        execution: replay.passed,
+        retained: Boolean(reusableProfile(retained.retained, retained.profile, saved.candidate, retained.environment)),
+        reload_reuse: Boolean(reusableProfile(retained.reloaded, retained.profile, saved.candidate, retained.environment)),
+      });
+    }
+    assert.deepEqual(actual, failedUnits.map((unit) => ({
+      id: unit.id,
+      execution: true,
+      retained: unit.id !== "base-race-cdfda1f895eb3580" && unit.id !== "base-coverage-cdfda1f895eb3580",
+      reload_reuse: unit.id !== "base-race-cdfda1f895eb3580" && unit.id !== "base-coverage-cdfda1f895eb3580",
+    })));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
