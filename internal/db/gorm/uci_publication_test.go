@@ -77,6 +77,11 @@ type uciPublicationDraft struct {
 	fsSeq        int64
 }
 
+type uciPublicationPublishInput struct {
+	begin ucidomain.IndexBeginInput
+	draft uciPublicationDraft
+}
+
 func TestUCIPublishInitialCheckoutAndCoherentCurrent(t *testing.T) {
 	fixture := openUCIPublicationFixture(t)
 	main := fixture.admitArtifact(t, fixture.source.SourceID, "initial-main", "func Main() {}\n", UCIParseArtifactComplete)
@@ -96,7 +101,7 @@ func TestUCIPublishInitialCheckoutAndCoherentCurrent(t *testing.T) {
 	)
 
 	fixture.assertNoCurrentView(t, fixture.checkout)
-	build := fixture.begin(t, fixture.publisher, fixture.caller("initial-owner"), "initial", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	build := fixture.begin(t, fixture.publisher, fixture.caller("initial-owner"), fixture.beginInput("initial", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 	acks := fixture.stageDraft(t, fixture.publisher, fixture.caller("initial-owner"), build.Build, draft.parts)
 	fixture.assertNoCurrentView(t, fixture.checkout)
 	fixture.assertCurrentIntervals(t, fixture.checkout, nil, nil)
@@ -188,7 +193,7 @@ func TestUCIPublishStagingInvisibleAndHistoricalIntervals(t *testing.T) {
 		membersV1,
 		edgesV1,
 	)
-	_, first := fixture.publish(t, fixture.publisher, fixture.caller("history-owner"), "history-v1", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, firstDraft)
+	_, first := fixture.publish(t, fixture.publisher, fixture.caller("history-owner"), fixture.publishInput("history-v1", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, firstDraft))
 
 	mainV2 := fixture.admitArtifact(t, fixture.source.SourceID, "history-main-v2", "func MainV2() {}\n", UCIParseArtifactComplete)
 	targetV2 := fixture.admitArtifact(t, fixture.source.SourceID, "history-target-v2", "func TargetV2() {}\n", UCIParseArtifactComplete)
@@ -208,7 +213,7 @@ func TestUCIPublishStagingInvisibleAndHistoricalIntervals(t *testing.T) {
 		edgesV2,
 	)
 	parent := uciPublicationParent(first)
-	build := fixture.begin(t, fixture.publisher, fixture.caller("history-owner"), "history-v2", fixture.checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile)
+	build := fixture.begin(t, fixture.publisher, fixture.caller("history-owner"), fixture.beginInput("history-v2", fixture.checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile))
 	acks := fixture.stageDraft(t, fixture.publisher, fixture.caller("history-owner"), build.Build, secondDraft.parts)
 
 	fixture.assertCurrentProjection(t, fixture.checkout, first, membersV1, edgesV1, ucidomain.IndexCoverage{
@@ -243,7 +248,7 @@ func TestUCIPublishExpectedParentAndNoGenerationReservation(t *testing.T) {
 		initialMembers,
 		initialEdges,
 	)
-	_, current := fixture.publish(t, fixture.publisher, fixture.caller("parent-owner"), "parent-initial", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, initialDraft)
+	_, current := fixture.publish(t, fixture.publisher, fixture.caller("parent-owner"), fixture.publishInput("parent-initial", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, initialDraft))
 	parent := uciPublicationParent(current)
 
 	before, err := fixture.context.GetCheckout(context.Background(), fixture.checkout.CheckoutID)
@@ -265,12 +270,12 @@ func TestUCIPublishExpectedParentAndNoGenerationReservation(t *testing.T) {
 		candidateMembers,
 		candidateEdges,
 	)
-	first := fixture.begin(t, fixture.publisher, fixture.caller("first-owner"), "first-candidate", fixture.checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile)
+	first := fixture.begin(t, fixture.publisher, fixture.caller("first-owner"), fixture.beginInput("first-candidate", fixture.checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile))
 	firstAcks := fixture.stageDraft(t, fixture.publisher, fixture.caller("first-owner"), first.Build, candidateDraft.parts)
 	fixture.assertViewCount(t, fixture.checkout, 1)
 	fixture.expireBuild(t, first.Build, fixture.checkout)
 
-	second := fixture.begin(t, fixture.publisher, fixture.caller("second-owner"), "second-candidate", fixture.checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile)
+	second := fixture.begin(t, fixture.publisher, fixture.caller("second-owner"), fixture.beginInput("second-candidate", fixture.checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile))
 	require.Greater(t, second.Build.LeaseEpoch, first.Build.LeaseEpoch)
 	fixture.assertViewCount(t, fixture.checkout, 1)
 	secondAcks := fixture.stageDraft(t, fixture.publisher, fixture.caller("second-owner"), second.Build, candidateDraft.parts)
@@ -301,7 +306,7 @@ func TestUCIPublishIncompletePartsAndEOF(t *testing.T) {
 	replacements := []ucidomain.IndexEdgeReplacement{{SourcePath: "main.go"}, {SourcePath: "target.go"}}
 	part0 := uciPublicationPart([]uciPublicationArtifact{main}, memberships[:1], nil, replacements[:1])
 	part1 := uciPublicationPart([]uciPublicationArtifact{target}, memberships[1:], nil, replacements[1:])
-	build := fixture.begin(t, fixture.publisher, fixture.caller("parts-owner"), "parts", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	build := fixture.begin(t, fixture.publisher, fixture.caller("parts-owner"), fixture.beginInput("parts", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 
 	_, err := fixture.stagePart(fixture.publisher, fixture.caller("parts-owner"), build.Build, 1, part1)
 	require.Error(t, err, "a gapped upload must not create a durable part")
@@ -325,7 +330,7 @@ func TestUCIPublishIncompletePartsAndEOF(t *testing.T) {
 		Vector:     ucidomain.IndexCoverageUnavailable,
 	})
 
-	eofBuild := fixture.begin(t, fixture.publisher, fixture.caller("eof-owner"), "ordinary-eof", fixture.sibling, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	eofBuild := fixture.begin(t, fixture.publisher, fixture.caller("eof-owner"), fixture.beginInput("ordinary-eof", fixture.sibling, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 	eofDraft := newUCIPublicationDraft(nil, nil, nil)
 	eofDraft.scanOutcome = ucidomain.IndexScanIncomplete
 	eofDraft.census = false
@@ -344,8 +349,8 @@ func TestUCIReplayBeginAndStageBinding(t *testing.T) {
 	replacements := []ucidomain.IndexEdgeReplacement{{SourcePath: "main.go"}}
 	part := uciPublicationPart([]uciPublicationArtifact{artifact}, memberships, nil, replacements)
 	caller := fixture.caller("replay-owner")
-	first := fixture.begin(t, fixture.publisher, caller, "replay-key", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
-	retry := fixture.begin(t, fixture.publisher, caller, "replay-key", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	first := fixture.begin(t, fixture.publisher, caller, fixture.beginInput("replay-key", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
+	retry := fixture.begin(t, fixture.publisher, caller, fixture.beginInput("replay-key", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 	require.Equal(t, first.Build, retry.Build, "an exact Begin retry must retain its original fence")
 
 	otherProfile := fixture.createProfile(t, "replay-other-profile")
@@ -376,7 +381,7 @@ func TestUCIStageRenewsActivePublicationLease(t *testing.T) {
 		[]ucidomain.IndexEdgeReplacement{{SourcePath: "renewed.go"}},
 	)
 	caller := fixture.caller("lease-renewal-owner")
-	build := fixture.begin(t, fixture.publisher, caller, "lease-renewal", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	build := fixture.begin(t, fixture.publisher, caller, fixture.beginInput("lease-renewal", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 	shortExpiry := time.Now().UTC().Add(30 * time.Second).Truncate(time.Microsecond)
 	require.NoError(t, fixture.db.Model(&UCIJob{}).Where("job_id = ?", build.Build.BuildID).Update("lease_expiry", shortExpiry).Error)
 	require.NoError(t, fixture.db.Model(&UCICheckout{}).Where("checkout_id = ?", fixture.checkout.CheckoutID).Update("lease_expires_at", shortExpiry).Error)
@@ -403,7 +408,7 @@ func TestUCILeaseExpiryTakeoverAndStaleWriter(t *testing.T) {
 		replacements,
 	)
 	firstCaller := fixture.caller("lease-first")
-	first := fixture.begin(t, fixture.publisher, firstCaller, "lease-first", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	first := fixture.begin(t, fixture.publisher, firstCaller, fixture.beginInput("lease-first", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 	firstAcks := fixture.stageDraft(t, fixture.publisher, firstCaller, first.Build, draft.parts)
 
 	peerDB, peerApplicationName := fixture.openPeerDB(t)
@@ -458,7 +463,7 @@ func TestUCILeaseExpiryTakeoverAndStaleWriter(t *testing.T) {
 		siblingMembers,
 		siblingEdges,
 	)
-	_, siblingPublished := fixture.publish(t, fixture.publisher, fixture.caller("sibling-owner"), "lease-sibling", fixture.sibling, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, siblingDraft)
+	_, siblingPublished := fixture.publish(t, fixture.publisher, fixture.caller("sibling-owner"), fixture.publishInput("lease-sibling", fixture.sibling, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, siblingDraft))
 	fixture.assertCurrentProjection(t, fixture.sibling, siblingPublished, siblingMembers, siblingEdges, ucidomain.IndexCoverage{
 		Structural: ucidomain.IndexCoverageComplete,
 		Lexical:    ucidomain.IndexCoverageComplete,
@@ -477,7 +482,7 @@ func TestUCIReplayFinalizeAfterLostACKAndLaterPublish(t *testing.T) {
 		firstEdges,
 	)
 	caller := fixture.caller("lost-ack-owner")
-	firstBuild := fixture.begin(t, fixture.publisher, caller, "lost-ack-first", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	firstBuild := fixture.begin(t, fixture.publisher, caller, fixture.beginInput("lost-ack-first", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 	firstAcks := fixture.stageDraft(t, fixture.publisher, caller, firstBuild.Build, firstDraft.parts)
 	first := fixture.finalizeDraft(t, fixture.publisher, caller, firstBuild.Build, nil, firstAcks, firstDraft)
 	firstManifest := fixture.manifest(t, firstAcks, firstDraft)
@@ -492,7 +497,7 @@ func TestUCIReplayFinalizeAfterLostACKAndLaterPublish(t *testing.T) {
 		secondEdges,
 	)
 	parent := uciPublicationParent(first)
-	_, second := fixture.publish(t, fixture.newPublisher(t, fixture.db), fixture.caller("later-owner"), "lost-ack-later", fixture.checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile, secondDraft)
+	_, second := fixture.publish(t, fixture.newPublisher(t, fixture.db), fixture.caller("later-owner"), fixture.publishInput("lost-ack-later", fixture.checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile, secondDraft))
 	intervalsBefore := fixture.intervalCount(t, fixture.checkout)
 
 	replayed, err := fixture.newPublisher(t, fixture.db).Finalize(context.Background(), caller, ucidomain.IndexFinalizeInput{
@@ -535,7 +540,7 @@ func TestUCIPublishSemanticNoOpReusesCurrentView(t *testing.T) {
 		replacements,
 	)
 	caller := fixture.caller("no-op-owner")
-	firstBuild := fixture.begin(t, fixture.publisher, caller, "no-op-first", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	firstBuild := fixture.begin(t, fixture.publisher, caller, fixture.beginInput("no-op-first", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 	firstAcks := fixture.stageDraft(t, fixture.publisher, caller, firstBuild.Build, draft.parts)
 	firstManifest := fixture.manifest(t, firstAcks, draft)
 	firstManifest.Observation.ScanStart = firstManifest.Observation.ScanStart.Add(321 * time.Nanosecond)
@@ -547,7 +552,7 @@ func TestUCIPublishSemanticNoOpReusesCurrentView(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	secondBuild := fixture.begin(t, fixture.publisher, caller, "no-op-rescan", fixture.checkout, fixture.profile.ProfileID, uciPublicationParent(first), ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile)
+	secondBuild := fixture.begin(t, fixture.publisher, caller, fixture.beginInput("no-op-rescan", fixture.checkout, fixture.profile.ProfileID, uciPublicationParent(first), ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile))
 	secondAcks := fixture.stageDraft(t, fixture.publisher, caller, secondBuild.Build, draft.parts)
 	secondManifest := fixture.manifest(t, secondAcks, draft)
 	secondManifest.Observation.ScanStart = firstManifest.Observation.ScanStart.Add(time.Minute)
@@ -714,10 +719,10 @@ func TestUCIPublishSemanticChangesCreateNewView(t *testing.T) {
 				replacements,
 			)
 			caller := fixture.caller("semantic-owner")
-			_, first := fixture.publish(t, fixture.publisher, caller, "semantic-first", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, firstDraft)
+			_, first := fixture.publish(t, fixture.publisher, caller, fixture.publishInput("semantic-first", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, firstDraft))
 
 			secondDraft := test.draft(t, fixture, main, target, firstDraft)
-			secondBuild := fixture.begin(t, fixture.publisher, caller, "semantic-change-"+test.name, fixture.checkout, fixture.profile.ProfileID, uciPublicationParent(first), ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile)
+			secondBuild := fixture.begin(t, fixture.publisher, caller, fixture.beginInput("semantic-change-"+test.name, fixture.checkout, fixture.profile.ProfileID, uciPublicationParent(first), ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile))
 			secondAcks := fixture.stageDraft(t, fixture.publisher, caller, secondBuild.Build, secondDraft.parts)
 			manifest := fixture.manifest(t, secondAcks, secondDraft)
 			if test.mutateManifest != nil {
@@ -776,7 +781,7 @@ func TestUCIPublishUnverifiablePriorManifestCreatesNewView(t *testing.T) {
 				replacements,
 			)
 			caller := fixture.caller("unverifiable-owner")
-			firstBuild := fixture.begin(t, fixture.publisher, caller, "unverifiable-first", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+			firstBuild := fixture.begin(t, fixture.publisher, caller, fixture.beginInput("unverifiable-first", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 			firstAcks := fixture.stageDraft(t, fixture.publisher, caller, firstBuild.Build, draft.parts)
 			firstManifest := fixture.manifest(t, firstAcks, draft)
 			first, err := fixture.publisher.Finalize(context.Background(), caller, ucidomain.IndexFinalizeInput{
@@ -786,7 +791,7 @@ func TestUCIPublishUnverifiablePriorManifestCreatesNewView(t *testing.T) {
 			require.NoError(t, err)
 			test.corrupt(fixture, firstBuild.Build.BuildID)
 
-			secondBuild := fixture.begin(t, fixture.publisher, caller, "unverifiable-second", fixture.checkout, fixture.profile.ProfileID, uciPublicationParent(first), ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile)
+			secondBuild := fixture.begin(t, fixture.publisher, caller, fixture.beginInput("unverifiable-second", fixture.checkout, fixture.profile.ProfileID, uciPublicationParent(first), ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile))
 			secondAcks := fixture.stageDraft(t, fixture.publisher, caller, secondBuild.Build, draft.parts)
 			secondManifest := fixture.manifest(t, secondAcks, draft)
 			secondManifest.Observation.ScanStart = firstManifest.Observation.ScanStart.Add(time.Minute)
@@ -814,7 +819,7 @@ func TestUCIDeleteAllRequiresCompleteFullCensus(t *testing.T) {
 		members,
 		edges,
 	)
-	_, first := fixture.publish(t, fixture.publisher, fixture.caller("delete-owner"), "delete-initial", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, initialDraft)
+	_, first := fixture.publish(t, fixture.publisher, fixture.caller("delete-owner"), fixture.publishInput("delete-initial", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, initialDraft))
 	parent := uciPublicationParent(first)
 
 	delta := newUCIPublicationDraft(
@@ -825,7 +830,7 @@ func TestUCIDeleteAllRequiresCompleteFullCensus(t *testing.T) {
 		nil,
 		nil,
 	)
-	deltaBuild := fixture.begin(t, fixture.publisher, fixture.caller("delete-owner"), "delete-delta", fixture.checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestDelta, ucidomain.IndexJobReconcile)
+	deltaBuild := fixture.begin(t, fixture.publisher, fixture.caller("delete-owner"), fixture.beginInput("delete-delta", fixture.checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestDelta, ucidomain.IndexJobReconcile))
 	deltaAcks := fixture.stageDraft(t, fixture.publisher, fixture.caller("delete-owner"), deltaBuild.Build, delta.parts)
 	_, err := fixture.publisher.Finalize(context.Background(), fixture.caller("delete-owner"), ucidomain.IndexFinalizeInput{
 		Build:          deltaBuild.Build,
@@ -841,7 +846,7 @@ func TestUCIDeleteAllRequiresCompleteFullCensus(t *testing.T) {
 	})
 
 	empty := newUCIPublicationDraft(nil, nil, nil)
-	_, deleted := fixture.publish(t, fixture.publisher, fixture.caller("delete-owner"), "delete-full", fixture.checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile, empty)
+	_, deleted := fixture.publish(t, fixture.publisher, fixture.caller("delete-owner"), fixture.publishInput("delete-full", fixture.checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile, empty))
 	fixture.assertCurrentProjection(t, fixture.checkout, deleted, nil, nil, ucidomain.IndexCoverage{
 		Structural: ucidomain.IndexCoverageComplete,
 		Lexical:    ucidomain.IndexCoverageComplete,
@@ -852,7 +857,7 @@ func TestUCIDeleteAllRequiresCompleteFullCensus(t *testing.T) {
 	incomplete := newUCIPublicationDraft(nil, nil, nil)
 	incomplete.scanOutcome = ucidomain.IndexScanIncomplete
 	incomplete.census = false
-	badBuild := fixture.begin(t, fixture.publisher, fixture.caller("delete-owner"), "delete-no-census", fixture.checkout, fixture.profile.ProfileID, uciPublicationParent(deleted), ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile)
+	badBuild := fixture.begin(t, fixture.publisher, fixture.caller("delete-owner"), fixture.beginInput("delete-no-census", fixture.checkout, fixture.profile.ProfileID, uciPublicationParent(deleted), ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile))
 	_, err = fixture.publisher.Finalize(context.Background(), fixture.caller("delete-owner"), ucidomain.IndexFinalizeInput{
 		Build:          badBuild.Build,
 		ExpectedParent: uciPublicationParent(deleted),
@@ -876,7 +881,7 @@ func TestUCIPublishFailedScanPreservesCurrent(t *testing.T) {
 		oldMembers,
 		oldEdges,
 	)
-	_, published := fixture.publish(t, fixture.publisher, fixture.caller("scan-owner"), "scan-old", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, oldDraft)
+	_, published := fixture.publish(t, fixture.publisher, fixture.caller("scan-owner"), fixture.publishInput("scan-old", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, oldDraft))
 	parent := uciPublicationParent(published)
 
 	for _, outcome := range []ucidomain.IndexScanOutcome{ucidomain.IndexScanIncomplete, ucidomain.IndexScanFailed} {
@@ -891,7 +896,7 @@ func TestUCIPublishFailedScanPreservesCurrent(t *testing.T) {
 			)
 			draft.scanOutcome = outcome
 			draft.census = false
-			build := fixture.begin(t, fixture.publisher, fixture.caller("scan-owner"), "scan-"+string(outcome), fixture.checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile)
+			build := fixture.begin(t, fixture.publisher, fixture.caller("scan-owner"), fixture.beginInput("scan-"+string(outcome), fixture.checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile))
 			acks := fixture.stageDraft(t, fixture.publisher, fixture.caller("scan-owner"), build.Build, draft.parts)
 			_, err := fixture.publisher.Finalize(context.Background(), fixture.caller("scan-owner"), ucidomain.IndexFinalizeInput{
 				Build:          build.Build,
@@ -921,7 +926,7 @@ func TestUCIPublishFailedScanPreservesCurrent(t *testing.T) {
 		Vector:          ucidomain.IndexCoverageUnavailable,
 		UnreadableFiles: 1,
 	}
-	_, unreadable := fixture.publish(t, fixture.publisher, fixture.caller("scan-owner"), "scan-unreadable", fixture.checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile, unreadableDraft)
+	_, unreadable := fixture.publish(t, fixture.publisher, fixture.caller("scan-owner"), fixture.publishInput("scan-unreadable", fixture.checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile, unreadableDraft))
 	fixture.assertCurrentProjection(t, fixture.checkout, unreadable, unreadableMembers, unreadableEdges, unreadableDraft.coverage)
 }
 
@@ -966,7 +971,7 @@ func TestUCIPublishFaultRollsBackEveryVisibleSurface(t *testing.T) {
 				oldMembers,
 				oldEdges,
 			)
-			_, oldPublished := fixture.publish(t, fixture.publisher, fixture.caller("fault-owner"), "fault-old-"+fault.name, fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, oldDraft)
+			_, oldPublished := fixture.publish(t, fixture.publisher, fixture.caller("fault-owner"), fixture.publishInput("fault-old-"+fault.name, fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, oldDraft))
 
 			fresh := fixture.admitArtifact(t, fixture.source.SourceID, "fault-new-"+fault.name, "func Fresh() {}\n", UCIParseArtifactComplete)
 			freshMembers := []ucidomain.IndexMembership{uciPublicationPresentMembership("main.go", fresh)}
@@ -977,7 +982,7 @@ func TestUCIPublishFaultRollsBackEveryVisibleSurface(t *testing.T) {
 				freshEdges,
 			)
 			parent := uciPublicationParent(oldPublished)
-			build := fixture.begin(t, fixture.publisher, fixture.caller("fault-owner"), "fault-new-"+fault.name, fixture.checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile)
+			build := fixture.begin(t, fixture.publisher, fixture.caller("fault-owner"), fixture.beginInput("fault-new-"+fault.name, fixture.checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile))
 			acks := fixture.stageDraft(t, fixture.publisher, fixture.caller("fault-owner"), build.Build, freshDraft.parts)
 			beforeIntervals := fixture.intervalCount(t, fixture.checkout)
 			removeFault := installUCIPublicationFault(t, fixture.db, fault.table, fault.time, fault.event, fault.when)
@@ -1016,7 +1021,7 @@ func TestUCIPublishRejectsIncompleteOrMutableArtifact(t *testing.T) {
 		edges := []ucidomain.IndexEdgeReplacement{{SourcePath: "main.go"}}
 		part := uciPublicationPart([]uciPublicationArtifact{artifact}, memberships, nil, edges)
 		part.Artifacts[0].ContentDigest = ucidomain.IndexDigest(uciPublicationDigest("forged-content"))
-		build := fixture.begin(t, fixture.publisher, fixture.caller("artifact-owner"), "artifact-forged", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+		build := fixture.begin(t, fixture.publisher, fixture.caller("artifact-owner"), fixture.beginInput("artifact-forged", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 		_, err := fixture.stagePart(fixture.publisher, fixture.caller("artifact-owner"), build.Build, 0, part)
 		require.Error(t, err, "the publisher must recompute the admitted blob hash")
 		fixture.assertBuildPartCount(t, build.Build.BuildID, 0)
@@ -1026,7 +1031,7 @@ func TestUCIPublishRejectsIncompleteOrMutableArtifact(t *testing.T) {
 		require.NoError(t, fixture.db.Where("chunk_id = ?", artifact.Chunk.ChunkID).Delete(&UCIChunk{}).Error)
 		missingPart := uciPublicationPart([]uciPublicationArtifact{artifact}, memberships, nil, edges)
 		missingPart.Artifacts[0] = completeProof
-		missingBuild := fixture.begin(t, fixture.publisher, fixture.caller("artifact-owner"), "artifact-missing", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+		missingBuild := fixture.begin(t, fixture.publisher, fixture.caller("artifact-owner"), fixture.beginInput("artifact-missing", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 		fixture.requireStageOrFinalizeError(t, fixture.publisher, fixture.caller("artifact-owner"), missingBuild.Build, nil, newUCIPublicationDraft([]ucidomain.IndexPart{missingPart}, memberships, edges))
 	})
 
@@ -1051,7 +1056,7 @@ func TestUCIPublishRejectsIncompleteOrMutableArtifact(t *testing.T) {
 			memberships,
 			edges,
 		)
-		spanBuild := fixture.begin(t, fixture.publisher, fixture.caller("artifact-owner"), "artifact-span", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+		spanBuild := fixture.begin(t, fixture.publisher, fixture.caller("artifact-owner"), fixture.beginInput("artifact-span", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 		fixture.requireStageOrFinalizeError(t, fixture.publisher, fixture.caller("artifact-owner"), spanBuild.Build, nil, spanDraft)
 		fixture.expireBuild(t, spanBuild.Build, fixture.checkout)
 
@@ -1061,7 +1066,7 @@ func TestUCIPublishRejectsIncompleteOrMutableArtifact(t *testing.T) {
 			memberships,
 			[]ucidomain.IndexEdgeReplacement{{SourcePath: "main.go"}},
 		)
-		profileBuild := fixture.begin(t, fixture.publisher, fixture.caller("artifact-owner"), "artifact-profile", fixture.checkout, otherProfile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+		profileBuild := fixture.begin(t, fixture.publisher, fixture.caller("artifact-owner"), fixture.beginInput("artifact-profile", fixture.checkout, otherProfile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 		fixture.requireStageOrFinalizeError(t, fixture.publisher, fixture.caller("artifact-owner"), profileBuild.Build, nil, profileDraft)
 	})
 
@@ -1075,7 +1080,7 @@ func TestUCIPublishRejectsIncompleteOrMutableArtifact(t *testing.T) {
 			memberships,
 			edges,
 		)
-		fixture.publish(t, fixture.publisher, fixture.caller("artifact-owner"), "artifact-sealed", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, draft)
+		fixture.publish(t, fixture.publisher, fixture.caller("artifact-owner"), fixture.publishInput("artifact-sealed", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, draft))
 
 		_, err := fixture.projection.UpsertBlob(context.Background(), UpsertUCIBlobInput{
 			SourceID:         fixture.source.SourceID,
@@ -1116,7 +1121,7 @@ func TestUCIPublishRequiresProvenArtifactsAndWorkingTree(t *testing.T) {
 	unprovenPart := uciPublicationPart(nil, memberships, nil, replacements)
 	unprovenDraft := newUCIPublicationDraft([]ucidomain.IndexPart{unprovenPart}, memberships, replacements)
 	caller := fixture.caller("proof-required")
-	unprovenBuild := fixture.begin(t, fixture.publisher, caller, "proof-required", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	unprovenBuild := fixture.begin(t, fixture.publisher, caller, fixture.beginInput("proof-required", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 	unprovenAck := fixture.stage(t, fixture.publisher, caller, unprovenBuild.Build, 0, unprovenPart)
 	_, err := fixture.publisher.Finalize(context.Background(), caller, ucidomain.IndexFinalizeInput{
 		Build:    unprovenBuild.Build,
@@ -1139,7 +1144,7 @@ func TestUCIPublishRequiresProvenArtifactsAndWorkingTree(t *testing.T) {
 		{SourcePath: "target.go"},
 	}
 	badPart := uciPublicationPart([]uciPublicationArtifact{artifact, target}, symbolMembers, nil, symbolReplacements)
-	symbolBuild := fixture.begin(t, fixture.publisher, caller, "symbol-required", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	symbolBuild := fixture.begin(t, fixture.publisher, caller, fixture.beginInput("symbol-required", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 	_, err = fixture.stagePart(fixture.publisher, caller, symbolBuild.Build, 0, badPart)
 	require.Error(t, err, "graph symbol endpoints must name admitted artifact facts")
 	fixture.assertBuildPartCount(t, symbolBuild.Build.BuildID, 0)
@@ -1166,7 +1171,7 @@ func TestUCIPublishSealingRevalidatesAfterConcurrentFactWrite(t *testing.T) {
 	part := uciPublicationPart([]uciPublicationArtifact{artifact}, memberships, nil, replacements)
 	draft := newUCIPublicationDraft([]ucidomain.IndexPart{part}, memberships, replacements)
 	caller := fixture.caller("concurrent-seal")
-	build := fixture.begin(t, fixture.publisher, caller, "concurrent-seal", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	build := fixture.begin(t, fixture.publisher, caller, fixture.beginInput("concurrent-seal", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 	ack := fixture.stage(t, fixture.publisher, caller, build.Build, 0, part)
 
 	lockTx := fixture.db.Begin()
@@ -1215,7 +1220,7 @@ func TestUCIPublishScopedEndpointsAndChangedCallee(t *testing.T) {
 	foreignArtifact := fixture.admitArtifact(t, fixture.foreign.SourceID, "foreign", "func Foreign() {}\n", UCIParseArtifactComplete)
 	foreignMembers := []ucidomain.IndexMembership{uciPublicationPresentMembership("foreign.go", foreignArtifact)}
 	foreignEdges := []ucidomain.IndexEdgeReplacement{{SourcePath: "foreign.go"}}
-	foreignBuild := fixture.begin(t, fixture.publisher, fixture.caller("scope-owner"), "foreign-artifact", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	foreignBuild := fixture.begin(t, fixture.publisher, fixture.caller("scope-owner"), fixture.beginInput("foreign-artifact", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 	fixture.requireStageOrFinalizeError(t, fixture.publisher, fixture.caller("scope-owner"), foreignBuild.Build, nil, newUCIPublicationDraft(
 		[]ucidomain.IndexPart{uciPublicationPart([]uciPublicationArtifact{foreignArtifact}, foreignMembers, nil, foreignEdges)},
 		foreignMembers,
@@ -1227,11 +1232,11 @@ func TestUCIPublishScopedEndpointsAndChangedCallee(t *testing.T) {
 	siblingArtifact := fixture.admitArtifact(t, fixture.source.SourceID, "sibling-target", "func SiblingTarget() {}\n", UCIParseArtifactComplete)
 	siblingMembers := []ucidomain.IndexMembership{uciPublicationPresentMembership("sibling.go", siblingArtifact)}
 	siblingEdges := []ucidomain.IndexEdgeReplacement{{SourcePath: "sibling.go"}}
-	_, siblingPublished := fixture.publish(t, fixture.publisher, fixture.caller("sibling-owner"), "scope-sibling", fixture.sibling, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, newUCIPublicationDraft(
+	_, siblingPublished := fixture.publish(t, fixture.publisher, fixture.caller("sibling-owner"), fixture.publishInput("scope-sibling", fixture.sibling, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, newUCIPublicationDraft(
 		[]ucidomain.IndexPart{uciPublicationPart([]uciPublicationArtifact{siblingArtifact}, siblingMembers, nil, siblingEdges)},
 		siblingMembers,
 		siblingEdges,
-	))
+	)))
 	fixture.assertCurrentProjection(t, fixture.sibling, siblingPublished, siblingMembers, siblingEdges, ucidomain.IndexCoverage{
 		Structural: ucidomain.IndexCoverageComplete,
 		Lexical:    ucidomain.IndexCoverageComplete,
@@ -1244,7 +1249,7 @@ func TestUCIPublishScopedEndpointsAndChangedCallee(t *testing.T) {
 		SourcePath: "caller.go",
 		Edges:      []ucidomain.IndexEdge{uciPublicationResolvedEdge(callerArtifact, "caller.go", siblingArtifact, "sibling.go")},
 	}}
-	nonmemberBuild := fixture.begin(t, fixture.publisher, fixture.caller("scope-owner"), "same-source-nonmember", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	nonmemberBuild := fixture.begin(t, fixture.publisher, fixture.caller("scope-owner"), fixture.beginInput("same-source-nonmember", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
 	fixture.requireStageOrFinalizeError(t, fixture.publisher, fixture.caller("scope-owner"), nonmemberBuild.Build, nil, newUCIPublicationDraft(
 		[]ucidomain.IndexPart{uciPublicationPart([]uciPublicationArtifact{callerArtifact}, nonmemberMembers, nil, nonmemberEdges)},
 		nonmemberMembers,
@@ -1263,15 +1268,15 @@ func TestUCIPublishScopedEndpointsAndChangedCallee(t *testing.T) {
 		{SourcePath: "caller.go", Edges: []ucidomain.IndexEdge{uciPublicationResolvedEdge(callerV1, "caller.go", calleeV1, "callee.go")}},
 		{SourcePath: "callee.go"},
 	}
-	_, first := fixture.publish(t, fixture.publisher, fixture.caller("scope-owner"), "callee-v1", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, newUCIPublicationDraft(
+	_, first := fixture.publish(t, fixture.publisher, fixture.caller("scope-owner"), fixture.publishInput("callee-v1", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, newUCIPublicationDraft(
 		[]ucidomain.IndexPart{uciPublicationPart([]uciPublicationArtifact{callerV1, calleeV1}, membersV1, nil, edgesV1)},
 		membersV1,
 		edgesV1,
-	))
+	)))
 	parent := uciPublicationParent(first)
 	deletedMembers := []ucidomain.IndexMembership{uciPublicationPresentMembership("caller.go", callerV1)}
 	missingCallerReplacement := uciPublicationPart(nil, nil, []ucidomain.IndexDeletion{{PathKey: "callee.go", ConfirmedMissing: true}}, []ucidomain.IndexEdgeReplacement{{SourcePath: "callee.go"}})
-	deltaBuild := fixture.begin(t, fixture.publisher, fixture.caller("scope-owner"), "callee-delta", fixture.checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestDelta, ucidomain.IndexJobReconcile)
+	deltaBuild := fixture.begin(t, fixture.publisher, fixture.caller("scope-owner"), fixture.beginInput("callee-delta", fixture.checkout, fixture.profile.ProfileID, parent, ucidomain.IndexManifestDelta, ucidomain.IndexJobReconcile))
 	ack0 := fixture.stage(t, fixture.publisher, fixture.caller("scope-owner"), deltaBuild.Build, 0, missingCallerReplacement)
 	deltaDraft := newUCIPublicationDraft([]ucidomain.IndexPart{missingCallerReplacement}, deletedMembers, nil)
 	_, err := fixture.publisher.Finalize(context.Background(), fixture.caller("scope-owner"), ucidomain.IndexFinalizeInput{
@@ -1310,7 +1315,7 @@ func TestUCIPublishScopedEndpointsAndChangedCallee(t *testing.T) {
 		Lexical:    ucidomain.IndexCoveragePartial,
 		Vector:     ucidomain.IndexCoverageUnavailable,
 	}
-	_, partialPublished := fixture.publish(t, fixture.publisher, fixture.caller("scope-owner"), "partial-caller", fixture.checkout, fixture.profile.ProfileID, uciPublicationParent(deleted), ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile, partialDraft)
+	_, partialPublished := fixture.publish(t, fixture.publisher, fixture.caller("scope-owner"), fixture.publishInput("partial-caller", fixture.checkout, fixture.profile.ProfileID, uciPublicationParent(deleted), ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile, partialDraft))
 	fixture.assertCurrentProjection(t, fixture.checkout, partialPublished, partialMembers, partialEdges, partialDraft.coverage)
 }
 
@@ -1553,20 +1558,27 @@ func (fixture *uciPublicationFixture) beginInput(key string, checkout *UCIChecko
 	}
 }
 
-func (fixture *uciPublicationFixture) begin(t *testing.T, publisher ucidomain.IndexStore, caller ucidomain.IndexCaller, key string, checkout *UCICheckout, profileID string, parent *ucidomain.ContextRef, mode ucidomain.IndexManifestMode, kind ucidomain.IndexJobKind) ucidomain.IndexBeginResult {
+func (fixture *uciPublicationFixture) begin(t *testing.T, publisher ucidomain.IndexStore, caller ucidomain.IndexCaller, input ucidomain.IndexBeginInput) ucidomain.IndexBeginResult {
 	t.Helper()
 
-	result, err := publisher.Begin(context.Background(), caller, fixture.beginInput(key, checkout, profileID, parent, mode, kind))
+	result, err := publisher.Begin(context.Background(), caller, input)
 	require.NoError(t, err)
 	return result
 }
 
-func (fixture *uciPublicationFixture) publish(t *testing.T, publisher ucidomain.IndexStore, caller ucidomain.IndexCaller, key string, checkout *UCICheckout, profileID string, parent *ucidomain.ContextRef, mode ucidomain.IndexManifestMode, kind ucidomain.IndexJobKind, draft uciPublicationDraft) (ucidomain.IndexBeginResult, ucidomain.IndexPublishedView) {
+func (fixture *uciPublicationFixture) publishInput(key string, checkout *UCICheckout, profileID string, parent *ucidomain.ContextRef, mode ucidomain.IndexManifestMode, kind ucidomain.IndexJobKind, draft uciPublicationDraft) uciPublicationPublishInput {
+	return uciPublicationPublishInput{
+		begin: fixture.beginInput(key, checkout, profileID, parent, mode, kind),
+		draft: draft,
+	}
+}
+
+func (fixture *uciPublicationFixture) publish(t *testing.T, publisher ucidomain.IndexStore, caller ucidomain.IndexCaller, input uciPublicationPublishInput) (ucidomain.IndexBeginResult, ucidomain.IndexPublishedView) {
 	t.Helper()
 
-	build := fixture.begin(t, publisher, caller, key, checkout, profileID, parent, mode, kind)
-	acks := fixture.stageDraft(t, publisher, caller, build.Build, draft.parts)
-	return build, fixture.finalizeDraft(t, publisher, caller, build.Build, parent, acks, draft)
+	build := fixture.begin(t, publisher, caller, input.begin)
+	acks := fixture.stageDraft(t, publisher, caller, build.Build, input.draft.parts)
+	return build, fixture.finalizeDraft(t, publisher, caller, build.Build, input.begin.ExpectedParent, acks, input.draft)
 }
 
 func (fixture *uciPublicationFixture) stageDraft(t *testing.T, publisher ucidomain.IndexStore, caller ucidomain.IndexCaller, build ucidomain.IndexBuildRef, parts []ucidomain.IndexPart) []ucidomain.IndexPartAck {
