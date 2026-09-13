@@ -386,104 +386,56 @@ func TestV2DynamicRegistrationToolIsHiddenAndNeverProxied(t *testing.T) {
 	}
 }
 
+type v3RegistrationFailureCase struct {
+	name       string
+	resolution *pb.ProjectResolutionResultV3
+	mustHide   []string
+}
+
 func TestV3RegistrationResponseValidationFailsClosed(t *testing.T) {
 	projectKey := daemonV3CanonicalProject
 	repositoryScope := "repository"
 	directoryScope := "directory"
-	tests := []struct {
-		name       string
-		resolution *pb.ProjectResolutionResultV3
-		mustHide   []string
-	}{
-		{name: "nil resolution"},
-		{
-			name: "refusal with authority",
-			resolution: &pb.ProjectResolutionResultV3{
-				Outcome:       pb.ProjectResolutionOutcomeV3_PROJECT_SCOPE_MISMATCH,
-				Correlation:   "refusal-correlation",
-				ProjectKey:    &projectKey,
-				ResolvedScope: &repositoryScope,
-			},
-			mustHide: []string{projectKey},
-		},
-		{
-			name: "invalid canonical key",
-			resolution: &pb.ProjectResolutionResultV3{
-				Outcome:       pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED,
-				Correlation:   "invalid-key-correlation",
-				ProjectKey:    stringPtr("private-client-asserted-key"),
-				ResolvedScope: &repositoryScope,
-			},
-			mustHide: []string{"private-client-asserted-key"},
-		},
-		{
-			name: "descriptor scope mismatch",
-			resolution: &pb.ProjectResolutionResultV3{
-				Outcome:       pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED,
-				Correlation:   "scope-mismatch-correlation",
-				ProjectKey:    &projectKey,
-				ResolvedScope: &directoryScope,
-			},
-			mustHide: []string{projectKey},
-		},
-		{
-			name: "unsafe correlation",
-			resolution: &pb.ProjectResolutionResultV3{
-				Outcome:       pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED,
-				Correlation:   "private/path/correlation",
-				ProjectKey:    &projectKey,
-				ResolvedScope: &repositoryScope,
-			},
-			mustHide: []string{"private/path/correlation", projectKey},
-		},
-		{
-			name: "resolved outcome with redirect reference",
-			resolution: &pb.ProjectResolutionResultV3{
-				Outcome:           pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED,
-				Correlation:       "resolved-redirect-correlation",
-				ProjectKey:        &projectKey,
-				ResolvedScope:     &repositoryScope,
-				RedirectReference: stringPtr("redirect-audit-17"),
-			},
-			mustHide: []string{"redirect-audit-17", projectKey},
-		},
-		{
-			name: "redirected outcome without reference",
-			resolution: &pb.ProjectResolutionResultV3{
-				Outcome:       pb.ProjectResolutionOutcomeV3_PROJECT_REDIRECTED,
-				Correlation:   "redirect-correlation",
-				ProjectKey:    &projectKey,
-				ResolvedScope: &repositoryScope,
-			},
-			mustHide: []string{projectKey},
-		},
-	}
-
-	for _, test := range tests {
+	for _, test := range v3RegistrationFailureCases(projectKey, repositoryScope, directoryScope) {
 		t.Run(test.name, func(t *testing.T) {
-			srv := &mockEngramServer{registerResp: &pb.RegisterProjectIdentityV3Response{ProjectResolutionV3: test.resolution}}
-			grpcAddr := startMockGRPC(t, srv)
-			dispatcher, mod, project := buildV3ContractDispatcher(t, grpcAddr)
-			project.ID = "raw-mux-project-must-not-be-forwarded"
-			project.Cwd = daemonV3Repository(t)
-			mod.cache.ForceCacheEntry(project, "raw-slug-must-not-survive-invalid-registration")
-
-			response, err := dispatcher.HandleRequest(context.Background(), project, jsonrpcCallReq(1, projectIdentityV3RegistrationTool))
-			if err != nil {
-				t.Fatalf("registration: %v", err)
-			}
-			if !strings.Contains(string(response), `"isError":true`) || !strings.Contains(string(response), "PROJECT_RESOLUTION_UNAVAILABLE") {
-				t.Fatalf("registration response=%s, want safe typed error", response)
-			}
-			for _, private := range append(test.mustHide, project.ID, project.Cwd) {
-				if strings.Contains(string(response), private) {
-					t.Fatalf("invalid registration leaked %q: %s", private, response)
-				}
-			}
-			if mod.cache.HasEntry(project.ID) {
-				t.Fatal("invalid registration retained a compatibility cache entry")
-			}
+			runV3RegistrationFailureCase(t, test)
 		})
+	}
+}
+
+func v3RegistrationFailureCases(projectKey, repositoryScope, directoryScope string) []v3RegistrationFailureCase {
+	return []v3RegistrationFailureCase{
+		{name: "nil resolution"},
+		{name: "refusal with authority", resolution: &pb.ProjectResolutionResultV3{Outcome: pb.ProjectResolutionOutcomeV3_PROJECT_SCOPE_MISMATCH, Correlation: "refusal-correlation", ProjectKey: &projectKey, ResolvedScope: &repositoryScope}, mustHide: []string{projectKey}},
+		{name: "invalid canonical key", resolution: &pb.ProjectResolutionResultV3{Outcome: pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED, Correlation: "invalid-key-correlation", ProjectKey: stringPtr("private-client-asserted-key"), ResolvedScope: &repositoryScope}, mustHide: []string{"private-client-asserted-key"}},
+		{name: "descriptor scope mismatch", resolution: &pb.ProjectResolutionResultV3{Outcome: pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED, Correlation: "scope-mismatch-correlation", ProjectKey: &projectKey, ResolvedScope: &directoryScope}, mustHide: []string{projectKey}},
+		{name: "unsafe correlation", resolution: &pb.ProjectResolutionResultV3{Outcome: pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED, Correlation: "private/path/correlation", ProjectKey: &projectKey, ResolvedScope: &repositoryScope}, mustHide: []string{"private/path/correlation", projectKey}},
+		{name: "resolved outcome with redirect reference", resolution: &pb.ProjectResolutionResultV3{Outcome: pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED, Correlation: "resolved-redirect-correlation", ProjectKey: &projectKey, ResolvedScope: &repositoryScope, RedirectReference: stringPtr("redirect-audit-17")}, mustHide: []string{"redirect-audit-17", projectKey}},
+		{name: "redirected outcome without reference", resolution: &pb.ProjectResolutionResultV3{Outcome: pb.ProjectResolutionOutcomeV3_PROJECT_REDIRECTED, Correlation: "redirect-correlation", ProjectKey: &projectKey, ResolvedScope: &repositoryScope}, mustHide: []string{projectKey}},
+	}
+}
+
+func runV3RegistrationFailureCase(t *testing.T, test v3RegistrationFailureCase) {
+	srv := &mockEngramServer{registerResp: &pb.RegisterProjectIdentityV3Response{ProjectResolutionV3: test.resolution}}
+	grpcAddr := startMockGRPC(t, srv)
+	dispatcher, mod, project := buildV3ContractDispatcher(t, grpcAddr)
+	project.ID = "raw-mux-project-must-not-be-forwarded"
+	project.Cwd = daemonV3Repository(t)
+	mod.cache.ForceCacheEntry(project, "raw-slug-must-not-survive-invalid-registration")
+	response, err := dispatcher.HandleRequest(context.Background(), project, jsonrpcCallReq(1, projectIdentityV3RegistrationTool))
+	if err != nil {
+		t.Fatalf("registration: %v", err)
+	}
+	if !strings.Contains(string(response), `"isError":true`) || !strings.Contains(string(response), "PROJECT_RESOLUTION_UNAVAILABLE") {
+		t.Fatalf("registration response=%s, want safe typed error", response)
+	}
+	for _, private := range append(test.mustHide, project.ID, project.Cwd) {
+		if strings.Contains(string(response), private) {
+			t.Fatalf("invalid registration leaked %q: %s", private, response)
+		}
+	}
+	if mod.cache.HasEntry(project.ID) {
+		t.Fatal("invalid registration retained a compatibility cache entry")
 	}
 }
 
