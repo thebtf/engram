@@ -23,11 +23,21 @@ const (
 // leaves IDs without a live vector-profile denominator absent from the evidence
 // map rather than converting a zero-count database observation into proof.
 func uci1ProbeSearchInstalled(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime) (map[string]uciInstalledAcceptanceScenarioEvidence, error) {
-	primary, primarySelection, primaryPublication, linked, linkedSelection, linkedPublication, err := uci1SearchInstalledRuntime(runtime)
+	state, err := uci1SearchPrepareProbeState(ctx, runtime)
 	if err != nil {
 		return nil, err
 	}
+	if err := uci1SearchRunObservations(ctx, state); err != nil {
+		return nil, err
+	}
+	return state.evidence, nil
+}
 
+func uci1SearchPrepareProbeState(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime) (*uci1SearchProbeState, error) {
+	primaryClient, primarySelection, primaryPublication, linkedClient, linkedSelection, linkedPublication, err := uci1SearchInstalledRuntime(runtime)
+	if err != nil {
+		return nil, err
+	}
 	primaryPath := filepath.Join(runtime.Worktrees.primaryRoot, filepath.FromSlash(runtime.Request.Fixture.RelativePath))
 	linkedPath := filepath.Join(runtime.Worktrees.linkedRoot, filepath.FromSlash(runtime.Request.Fixture.RelativePath))
 	primarySource, err := os.ReadFile(primaryPath)
@@ -38,87 +48,73 @@ func uci1ProbeSearchInstalled(ctx context.Context, runtime uciInstalledAcceptanc
 	if err != nil || len(linkedSource) == 0 {
 		return nil, errors.New("read installed search linked source")
 	}
-
-	evidence := make(map[string]uciInstalledAcceptanceScenarioEvidence)
-	primaryStatus, err := uci1SearchInstalledStatusFor(ctx, primary, primarySelection)
+	primaryStatus, err := uci1SearchInstalledStatusFor(ctx, primaryClient, primarySelection)
 	if err != nil {
 		return nil, err
 	}
-	linkedStatus, err := uci1SearchInstalledStatusFor(ctx, linked, linkedSelection)
+	linkedStatus, err := uci1SearchInstalledStatusFor(ctx, linkedClient, linkedSelection)
 	if err != nil {
 		return nil, err
 	}
 	if !uci1SearchStatusMatchesPublication(primaryStatus, primaryPublication) || !uci1SearchStatusMatchesPublication(linkedStatus, linkedPublication) {
 		return nil, errors.New("installed search status escaped its selected publication")
 	}
+	return &uci1SearchProbeState{
+		runtime:  runtime,
+		primary:  uci1SearchCheckout{client: primaryClient, selection: primarySelection, publication: primaryPublication, status: primaryStatus, source: primarySource, path: primaryPath},
+		linked:   uci1SearchCheckout{client: linkedClient, selection: linkedSelection, publication: linkedPublication, status: linkedStatus, source: linkedSource, path: linkedPath},
+		evidence: make(map[string]uciInstalledAcceptanceScenarioEvidence),
+	}, nil
+}
 
-	if observation, observed, observeErr := uci1SearchObserveUnchangedCheckout(
-		ctx,
-		runtime,
-		uci1SearchCheckout{client: primary, selection: primarySelection, publication: primaryPublication, status: primaryStatus, source: primarySource, path: primaryPath},
-		uci1SearchCheckout{client: linked, selection: linkedSelection, publication: linkedPublication, status: linkedStatus, source: linkedSource, path: linkedPath},
-	); observeErr != nil {
-		return nil, observeErr
-	} else if observed {
-		evidence["U24"] = uci1SearchInstalledEvidence("U24", observation.seed())
+func uci1SearchRunObservations(ctx context.Context, state *uci1SearchProbeState) error {
+	unchanged, observed, err := uci1SearchObserveUnchangedCheckout(ctx, state.runtime, state.primary, state.linked)
+	if err := state.record("U24", unchanged, observed, err); err != nil {
+		return err
 	}
+	if err := state.refresh(ctx, &state.primary, "installed search primary status has no current publication"); err != nil {
+		return err
+	}
+	saved, observed, err := uci1SearchObserveSavedBytes(ctx, state.runtime, state.primary)
+	if err := state.record("U17", saved, observed, err); err != nil {
+		return err
+	}
+	if err := state.refresh(ctx, &state.primary, "installed search primary status lost its current publication"); err != nil {
+		return err
+	}
+	invisible, observed, err := uci1SearchObserveInvisibleCandidates(ctx, state.runtime, state.primary)
+	if err := state.record("U18", invisible, observed, err); err != nil {
+		return err
+	}
+	if err := state.refresh(ctx, &state.linked, "installed search linked status has no current publication"); err != nil {
+		return err
+	}
+	profiles, observed, err := uci1SearchObserveSameDimensionProfiles(ctx, state.runtime, state.primary, state.linked)
+	return state.record("U38", profiles, observed, err)
+}
 
-	primaryStatus, err = uci1SearchInstalledStatusFor(ctx, primary, primarySelection)
+func (state *uci1SearchProbeState) refresh(ctx context.Context, checkout *uci1SearchCheckout, missingPublicationMessage string) error {
+	status, err := uci1SearchInstalledStatusFor(ctx, checkout.client, checkout.selection)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	primaryPublication, ok := uci1SearchPublicationFromStatus(primaryStatus)
+	publication, ok := uci1SearchPublicationFromStatus(status)
 	if !ok {
-		return nil, errors.New("installed search primary status has no current publication")
+		return errors.New(missingPublicationMessage)
 	}
-	if observation, observed, observeErr := uci1SearchObserveSavedBytes(
-		ctx,
-		runtime,
-		uci1SearchCheckout{client: primary, selection: primarySelection, publication: primaryPublication, status: primaryStatus, source: primarySource, path: primaryPath},
-	); observeErr != nil {
-		return nil, observeErr
-	} else if observed {
-		evidence["U17"] = uci1SearchInstalledEvidence("U17", observation.seed())
-	}
+	checkout.status = status
+	checkout.publication = publication
+	return nil
+}
 
-	primaryStatus, err = uci1SearchInstalledStatusFor(ctx, primary, primarySelection)
+func (state *uci1SearchProbeState) record(scenarioID string, observation uci1SearchObservation, observed bool, err error) error {
 	if err != nil {
-		return nil, err
+		return err
 	}
-	primaryPublication, ok = uci1SearchPublicationFromStatus(primaryStatus)
-	if !ok {
-		return nil, errors.New("installed search primary status lost its current publication")
+	if observed {
+		state.evidence[scenarioID] = uci1SearchInstalledEvidence(scenarioID, observation.seed())
 	}
-	if observation, observed, observeErr := uci1SearchObserveInvisibleCandidates(
-		ctx,
-		runtime,
-		uci1SearchCheckout{client: primary, selection: primarySelection, publication: primaryPublication, status: primaryStatus, source: primarySource, path: primaryPath},
-	); observeErr != nil {
-		return nil, observeErr
-	} else if observed {
-		evidence["U18"] = uci1SearchInstalledEvidence("U18", observation.seed())
-	}
-
-	linkedStatus, err = uci1SearchInstalledStatusFor(ctx, linked, linkedSelection)
-	if err != nil {
-		return nil, err
-	}
-	linkedPublication, ok = uci1SearchPublicationFromStatus(linkedStatus)
-	if !ok {
-		return nil, errors.New("installed search linked status has no current publication")
-	}
-	if observation, observed, observeErr := uci1SearchObserveSameDimensionProfiles(
-		ctx,
-		runtime,
-		uci1SearchCheckout{client: primary, selection: primarySelection, publication: primaryPublication, status: primaryStatus, source: primarySource, path: primaryPath},
-		uci1SearchCheckout{client: linked, selection: linkedSelection, publication: linkedPublication, status: linkedStatus, source: linkedSource, path: linkedPath},
-	); observeErr != nil {
-		return nil, observeErr
-	} else if observed {
-		evidence["U38"] = uci1SearchInstalledEvidence("U38", observation.seed())
-	}
-
-	return evidence, nil
+	return nil
 }
 
 type uci1SearchInstalledStatus struct {
@@ -148,6 +144,17 @@ type uci1SearchCheckout struct {
 	status      uci1SearchInstalledStatus
 	source      []byte
 	path        string
+}
+
+type uci1SearchProbeState struct {
+	runtime  uciInstalledAcceptanceScenarioRuntime
+	primary  uci1SearchCheckout
+	linked   uci1SearchCheckout
+	evidence map[string]uciInstalledAcceptanceScenarioEvidence
+}
+
+type uci1SearchObservation interface {
+	seed() []string
 }
 
 type uci1SearchCacheCounts struct {
