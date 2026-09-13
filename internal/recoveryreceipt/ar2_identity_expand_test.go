@@ -204,17 +204,17 @@ func ar2ControlledFixtureInput(t *testing.T) (*ar2ControlledFixtureCapture, []pr
 	}
 	observations := make([]projectidentity.ComparisonObservationV3, 0, len(ordered))
 	for index, correlation := range ordered {
-		observation, err := projectidentity.NewComparisonObservationV3(
-			ar2ReceiptFingerprint("idempotency-"+string(correlation)),
-			correlation,
-			classes[index].outcome,
-			classes[index].legacy,
-			"ar2-receipt-client-"+ar2ControlledFixtureCallables[index].adapter,
-			projectidentity.ComparisonTransportOpenClawV3,
-			projectidentity.ComparisonRepositoryScopeV3,
-			projectidentity.ComparisonFreshV3,
-			ar2ReceiptFingerprint("evidence-"+string(correlation)),
-		)
+		observation, err := projectidentity.NewComparisonObservationV3(projectidentity.ComparisonObservationInputV3{
+			IdempotencyKey:      ar2ReceiptFingerprint("idempotency-" + string(correlation)),
+			Correlation:         correlation,
+			V3Outcome:           classes[index].outcome,
+			LegacyOutcome:       classes[index].legacy,
+			ClientInstanceID:    "ar2-receipt-client-" + ar2ControlledFixtureCallables[index].adapter,
+			Transport:           projectidentity.ComparisonTransportOpenClawV3,
+			Scope:               projectidentity.ComparisonRepositoryScopeV3,
+			Freshness:           projectidentity.ComparisonFreshV3,
+			EvidenceFingerprint: ar2ReceiptFingerprint("evidence-" + string(correlation)),
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
