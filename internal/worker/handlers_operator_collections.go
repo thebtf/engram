@@ -79,44 +79,9 @@ func (adapter *OperatorCollectionHTTPAdapter) HandleSnapshot(w http.ResponseWrit
 		return
 	}
 
-	selection, err := request.selection()
-	if err != nil {
-		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+	selection, ok := adapter.snapshotSelection(w, r, resolved, request)
+	if !ok {
 		return
-	}
-	switch selection.Kind {
-	case gormdb.CollectionSelectionFrozenFilter:
-		filter, normalized := adapter.normalizeFilter(w, r.Context(), resolved, request.Selection.Filter)
-		if !normalized {
-			return
-		}
-		selection.FilterFingerprint = filter.Fingerprint
-		if err := gormdb.ValidateCollectionFrozenSelectionRequest(selection.FilterFingerprint, selection.ExcludedIDs); err != nil {
-			operatorCodeWriteBodyless(w, http.StatusBadRequest)
-			return
-		}
-		if adapter.freezer == nil {
-			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
-			return
-		}
-		frozen, freezeErr := adapter.freezer.FreezeCollectionSelection(r.Context(), resolved, filter)
-		if freezeErr != nil {
-			operatorCollectionWriteSnapshotError(w, freezeErr)
-			return
-		}
-		selection.Targets = frozen.Targets
-		selection.ExpiresAt = frozen.ExpiresAt
-	case gormdb.CollectionSelectionPage:
-		if adapter.freezer == nil {
-			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
-			return
-		}
-		targets, freezeErr := adapter.freezer.FreezeCollectionPageSelection(r.Context(), resolved, selection.Cursor)
-		if freezeErr != nil {
-			operatorCollectionWriteSnapshotError(w, freezeErr)
-			return
-		}
-		selection.Targets = targets
 	}
 	if err := gormdb.ValidateCollectionSelectionInput(selection); err != nil {
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
@@ -132,6 +97,48 @@ func (adapter *OperatorCollectionHTTPAdapter) HandleSnapshot(w http.ResponseWrit
 		return
 	}
 	writeJSON(w, operatorCollectionSnapshotResponse{Selection: newOperatorCollectionSnapshotDTO(request.Domain, saved)})
+}
+
+func (adapter *OperatorCollectionHTTPAdapter) snapshotSelection(w http.ResponseWriter, r *http.Request, scope gormdb.CollectionSelectionScope, request operatorCollectionSnapshotRequest) (gormdb.CollectionSelection, bool) {
+	selection, err := request.selection()
+	if err != nil {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return gormdb.CollectionSelection{}, false
+	}
+	switch selection.Kind {
+	case gormdb.CollectionSelectionFrozenFilter:
+		filter, normalized := adapter.normalizeFilter(w, r.Context(), scope, request.Selection.Filter)
+		if !normalized {
+			return gormdb.CollectionSelection{}, false
+		}
+		selection.FilterFingerprint = filter.Fingerprint
+		if err := gormdb.ValidateCollectionFrozenSelectionRequest(selection.FilterFingerprint, selection.ExcludedIDs); err != nil {
+			operatorCodeWriteBodyless(w, http.StatusBadRequest)
+			return gormdb.CollectionSelection{}, false
+		}
+		if adapter.freezer == nil {
+			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+			return gormdb.CollectionSelection{}, false
+		}
+		frozen, err := adapter.freezer.FreezeCollectionSelection(r.Context(), scope, filter)
+		if err != nil {
+			operatorCollectionWriteSnapshotError(w, err)
+			return gormdb.CollectionSelection{}, false
+		}
+		selection.Targets, selection.ExpiresAt = frozen.Targets, frozen.ExpiresAt
+	case gormdb.CollectionSelectionPage:
+		if adapter.freezer == nil {
+			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+			return gormdb.CollectionSelection{}, false
+		}
+		targets, err := adapter.freezer.FreezeCollectionPageSelection(r.Context(), scope, selection.Cursor)
+		if err != nil {
+			operatorCollectionWriteSnapshotError(w, err)
+			return gormdb.CollectionSelection{}, false
+		}
+		selection.Targets = targets
+	}
+	return selection, true
 }
 
 // HandleCurrent resolves only the current browser-scoped snapshot. An opaque
