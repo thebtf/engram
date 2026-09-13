@@ -385,15 +385,9 @@ func (s *UCIProjectionStore) PrepareEmbeddingBatch(ctx context.Context, claim uc
 		if err != nil {
 			return err
 		}
-		missing := make([]int, 0, len(candidates))
-		for index, candidate := range candidates {
-			hit, err := attachUCIEmbeddingCacheHit(ctx, tx, scope, candidate)
-			if err != nil {
-				return err
-			}
-			if !hit {
-				missing = append(missing, index)
-			}
+		missing, err := attachUCIEmbeddingBatchCacheHits(ctx, tx, scope, candidates)
+		if err != nil {
+			return err
 		}
 		next := progress.Cursor
 		if len(candidates) != 0 {
@@ -431,6 +425,20 @@ func (s *UCIProjectionStore) PrepareEmbeddingBatch(ctx context.Context, claim uc
 		return ucidomain.EmbeddingBatch{}, err
 	}
 	return batch, nil
+}
+
+func attachUCIEmbeddingBatchCacheHits(ctx context.Context, tx *gorm.DB, scope uciEmbeddingJobScope, candidates []ucidomain.EmbeddingCandidate) ([]int, error) {
+	missing := make([]int, 0, len(candidates))
+	for index, candidate := range candidates {
+		hit, err := attachUCIEmbeddingCacheHit(ctx, tx, scope, candidate)
+		if err != nil {
+			return nil, err
+		}
+		if !hit {
+			missing = append(missing, index)
+		}
+	}
+	return missing, nil
 }
 
 func (s *UCIProjectionStore) CommitEmbeddingBatch(ctx context.Context, claim ucidomain.EmbeddingJobClaim, authorized ucidomain.AuthorizedContext, batch ucidomain.EmbeddingBatch, vectors [][]float32) error {
