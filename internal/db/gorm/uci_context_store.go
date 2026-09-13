@@ -1139,70 +1139,14 @@ func isUCIIndexBindingCheckoutState(state UCICheckoutState) bool {
 }
 
 func uciViewFromInput(in CreateViewInput) (*UCIView, error) {
-	for _, field := range []struct {
-		name  string
-		value string
-	}{
-		{"checkout_id", in.CheckoutID},
-		{"source_id", in.SourceID},
-		{"incarnation_id", in.IncarnationID},
-		{"profile_id", in.ProfileID},
-	} {
-		if err := validateUCIUUID(field.name, field.value); err != nil {
-			return nil, err
-		}
-	}
-	if in.Generation <= 0 {
-		return nil, fmt.Errorf("uci context create view: generation must be positive")
-	}
-	if in.ObservedFSSeq < 0 {
-		return nil, fmt.Errorf("uci context create view: observed_fs_seq must be non-negative")
-	}
-	if in.ScanStart.IsZero() || in.ScanEnd.IsZero() || in.ScanEnd.Before(in.ScanStart) {
-		return nil, fmt.Errorf("uci context create view: scan window is invalid")
-	}
-	if err := validateUCIDigest("manifest_digest", in.ManifestDigest); err != nil {
-		return nil, err
-	}
-	coverage, err := normalizeUCIJSONObject("coverage_json", in.CoverageJSON)
+	coverage, err := uciViewRequiredCoverage(in)
 	if err != nil {
 		return nil, err
 	}
-	state := in.State
-	if state == "" {
-		state = UCIViewStaging
-	}
-	if state != UCIViewStaging {
-		return nil, fmt.Errorf("uci context create view: only staging views may be created before publication")
-	}
-	headOID, err := copyUCIOptionalTextPointer("head_oid", in.HeadOID)
+	headOID, objectFormat, refLabel, err := uciViewRevisionFromInput(in)
 	if err != nil {
 		return nil, err
 	}
-	objectFormat, err := copyUCIOptionalTextPointer("object_format", in.ObjectFormat)
-	if err != nil {
-		return nil, err
-	}
-	refLabel, err := copyUCIOptionalTextPointer("ref_label", in.RefLabel)
-	if err != nil {
-		return nil, err
-	}
-	if objectFormat != nil && *objectFormat != "sha1" && *objectFormat != "sha256" {
-		return nil, fmt.Errorf("uci context create view: unsupported object_format %q", *objectFormat)
-	}
-	if headOID != nil {
-		if objectFormat == nil {
-			return nil, fmt.Errorf("uci context create view: object_format is required with head_oid")
-		}
-		length := 40
-		if *objectFormat == "sha256" {
-			length = 64
-		}
-		if !isUCILowerHex(*headOID, length) {
-			return nil, fmt.Errorf("uci context create view: invalid head_oid for object_format %q", *objectFormat)
-		}
-	}
-
 	now := time.Now().UTC()
 	return &UCIView{
 		ViewID:         uuid.NewString(),
@@ -1224,6 +1168,81 @@ func uciViewFromInput(in CreateViewInput) (*UCIView, error) {
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}, nil
+}
+
+func uciViewRequiredCoverage(in CreateViewInput) (string, error) {
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{"checkout_id", in.CheckoutID},
+		{"source_id", in.SourceID},
+		{"incarnation_id", in.IncarnationID},
+		{"profile_id", in.ProfileID},
+	} {
+		if err := validateUCIUUID(field.name, field.value); err != nil {
+			return "", err
+		}
+	}
+	if in.Generation <= 0 {
+		return "", fmt.Errorf("uci context create view: generation must be positive")
+	}
+	if in.ObservedFSSeq < 0 {
+		return "", fmt.Errorf("uci context create view: observed_fs_seq must be non-negative")
+	}
+	if in.ScanStart.IsZero() || in.ScanEnd.IsZero() || in.ScanEnd.Before(in.ScanStart) {
+		return "", fmt.Errorf("uci context create view: scan window is invalid")
+	}
+	if err := validateUCIDigest("manifest_digest", in.ManifestDigest); err != nil {
+		return "", err
+	}
+	coverage, err := normalizeUCIJSONObject("coverage_json", in.CoverageJSON)
+	if err != nil {
+		return "", err
+	}
+	if in.State != "" && in.State != UCIViewStaging {
+		return "", fmt.Errorf("uci context create view: only staging views may be created before publication")
+	}
+	return coverage, nil
+}
+
+func uciViewRevisionFromInput(in CreateViewInput) (*string, *string, *string, error) {
+	headOID, err := copyUCIOptionalTextPointer("head_oid", in.HeadOID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	objectFormat, err := copyUCIOptionalTextPointer("object_format", in.ObjectFormat)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	refLabel, err := copyUCIOptionalTextPointer("ref_label", in.RefLabel)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := validateUCIViewRevision(headOID, objectFormat); err != nil {
+		return nil, nil, nil, err
+	}
+	return headOID, objectFormat, refLabel, nil
+}
+
+func validateUCIViewRevision(headOID, objectFormat *string) error {
+	if objectFormat != nil && *objectFormat != "sha1" && *objectFormat != "sha256" {
+		return fmt.Errorf("uci context create view: unsupported object_format %q", *objectFormat)
+	}
+	if headOID == nil {
+		return nil
+	}
+	if objectFormat == nil {
+		return fmt.Errorf("uci context create view: object_format is required with head_oid")
+	}
+	length := 40
+	if *objectFormat == "sha256" {
+		length = 64
+	}
+	if !isUCILowerHex(*headOID, length) {
+		return fmt.Errorf("uci context create view: invalid head_oid for object_format %q", *objectFormat)
+	}
+	return nil
 }
 
 func validateCreateSpaceInput(in CreateSpaceInput) error {
