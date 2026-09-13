@@ -89,6 +89,10 @@ func (s *Server) Advise(ctx context.Context, request *pb.HostAdvisorAdviseReques
 	if advisor == nil {
 		return s.hostAdvisorAdviseUnavailable(ctx, enteredAt, deadline.Deadline(), intervention.UnavailableDependency)
 	}
+	return s.invokeHostAdvisor(ctx, enteredAt, deadline, advisor, input)
+}
+
+func (s *Server) invokeHostAdvisor(ctx context.Context, enteredAt time.Time, deadline intervention.EffectiveDeadline, advisor intervention.Advisor, input intervention.AdviseInput) (*pb.HostAdvisorAdviseResponse, error) {
 	if !deadline.AllowsWork(time.Now().UTC()) {
 		return s.hostAdvisorAdviseUnavailable(ctx, enteredAt, deadline.Deadline(), intervention.UnavailableDeadline)
 	}
@@ -106,19 +110,23 @@ func (s *Server) Advise(ctx context.Context, request *pb.HostAdvisorAdviseReques
 		return s.hostAdvisorAdviseUnavailable(ctx, enteredAt, deadline.Deadline(), intervention.UnavailableDependency)
 	}
 	if !deadline.AllowsResponse(time.Now().UTC()) {
-		if receipt, _, emitted := decision.Emit(); emitted {
-			ambiguous, err := intervention.NewDeliveryAmbiguousDecision(receipt)
-			if err == nil {
-				return hostAdvisorDecisionProto(ambiguous)
-			}
-		}
-		return s.hostAdvisorAdviseUnavailable(ctx, enteredAt, deadline.Deadline(), intervention.UnavailableDeadline)
+		return hostAdvisorLateDecision(ctx, s, enteredAt, deadline, decision)
 	}
 	response, err := hostAdvisorDecisionProto(decision)
 	if err != nil {
 		return s.hostAdvisorAdviseUnavailable(ctx, enteredAt, deadline.Deadline(), intervention.UnavailableDependency)
 	}
 	return response, nil
+}
+
+func hostAdvisorLateDecision(ctx context.Context, server *Server, enteredAt time.Time, deadline intervention.EffectiveDeadline, decision intervention.Decision) (*pb.HostAdvisorAdviseResponse, error) {
+	if receipt, _, emitted := decision.Emit(); emitted {
+		ambiguous, err := intervention.NewDeliveryAmbiguousDecision(receipt)
+		if err == nil {
+			return hostAdvisorDecisionProto(ambiguous)
+		}
+	}
+	return server.hostAdvisorAdviseUnavailable(ctx, enteredAt, deadline.Deadline(), intervention.UnavailableDeadline)
 }
 
 // Observe validates an adapter attestation or semantic gap on the independently
@@ -273,51 +281,67 @@ func hostAdvisorObserveInputFromProto(request *pb.HostAdvisorObserveRequest, bin
 	}
 	switch target := request.GetTarget().(type) {
 	case *pb.HostAdvisorObserveRequest_ReceiptBound:
-		if target.ReceiptBound == nil || hostAdvisorMessageMalformed(target.ReceiptBound) {
-			return intervention.ObserveInput{}, intervention.ErrInvalidInput
-		}
-		receipt, err := hostAdvisorReceiptIdentityFromProto(target.ReceiptBound.GetDecisionReceipt())
-		if err != nil {
-			return intervention.ObserveInput{}, err
-		}
-		switch evidence := target.ReceiptBound.GetEvidence().(type) {
-		case *pb.HostAdvisorReceiptBoundObservation_AdapterAttested:
-			if evidence.AdapterAttested == nil || hostAdvisorMessageMalformed(evidence.AdapterAttested) {
-				return intervention.ObserveInput{}, intervention.ErrInvalidInput
-			}
-			attestation, ok := hostAdvisorAttestationKindFromProto(evidence.AdapterAttested.GetKind())
-			if !ok {
-				return intervention.ObserveInput{}, intervention.ErrInvalidInput
-			}
-			return intervention.NewObserveReceiptAttestation(binding, receipt, target.ReceiptBound.GetObservationAnchorRef(), attestation)
-		case *pb.HostAdvisorReceiptBoundObservation_AdapterSemanticGap:
-			if evidence.AdapterSemanticGap == nil || hostAdvisorMessageMalformed(evidence.AdapterSemanticGap) {
-				return intervention.ObserveInput{}, intervention.ErrInvalidInput
-			}
-			gap, ok := hostAdvisorSemanticGapCodeFromProto(evidence.AdapterSemanticGap.GetCode())
-			if !ok {
-				return intervention.ObserveInput{}, intervention.ErrInvalidInput
-			}
-			return intervention.NewObserveReceiptSemanticGap(binding, receipt, target.ReceiptBound.GetObservationAnchorRef(), gap)
-		default:
-			return intervention.ObserveInput{}, intervention.ErrInvalidInput
-		}
+		return hostAdvisorReceiptObserveInput(target.ReceiptBound, binding)
 	case *pb.HostAdvisorObserveRequest_ChannelGap:
-		if target.ChannelGap == nil || hostAdvisorMessageMalformed(target.ChannelGap) {
-			return intervention.ObserveInput{}, intervention.ErrInvalidInput
-		}
-		gapWire := target.ChannelGap.GetAdapterSemanticGap()
-		if hostAdvisorMessageMalformed(gapWire) {
-			return intervention.ObserveInput{}, intervention.ErrInvalidInput
-		}
-		gap, ok := hostAdvisorSemanticGapCodeFromProto(gapWire.GetCode())
-		if !ok {
-			return intervention.ObserveInput{}, intervention.ErrInvalidInput
-		}
-		return intervention.NewObserveChannelSemanticGap(binding, target.ChannelGap.GetObservationAnchorRef(), gap)
+		return hostAdvisorChannelGapObserveInput(target.ChannelGap, binding)
 	default:
 		return intervention.ObserveInput{}, intervention.ErrInvalidInput
 	}
+}
+
+func hostAdvisorReceiptObserveInput(target *pb.HostAdvisorReceiptBoundObservation, binding intervention.BindingFacts) (intervention.ObserveInput, error) {
+	if target == nil || hostAdvisorMessageMalformed(target) {
+		return intervention.ObserveInput{}, intervention.ErrInvalidInput
+	}
+	receipt, err := hostAdvisorReceiptIdentityFromProto(target.GetDecisionReceipt())
+	if err != nil {
+		return intervention.ObserveInput{}, err
+	}
+	switch evidence := target.GetEvidence().(type) {
+	case *pb.HostAdvisorReceiptBoundObservation_AdapterAttested:
+		return hostAdvisorReceiptAttestationInput(target, receipt, binding, evidence.AdapterAttested)
+	case *pb.HostAdvisorReceiptBoundObservation_AdapterSemanticGap:
+		return hostAdvisorReceiptGapInput(target, receipt, binding, evidence.AdapterSemanticGap)
+	default:
+		return intervention.ObserveInput{}, intervention.ErrInvalidInput
+	}
+}
+
+func hostAdvisorReceiptAttestationInput(target *pb.HostAdvisorReceiptBoundObservation, receipt intervention.ReceiptIdentity, binding intervention.BindingFacts, evidence *pb.HostAdvisorAdapterAttestation) (intervention.ObserveInput, error) {
+	if evidence == nil || hostAdvisorMessageMalformed(evidence) {
+		return intervention.ObserveInput{}, intervention.ErrInvalidInput
+	}
+	attestation, ok := hostAdvisorAttestationKindFromProto(evidence.GetKind())
+	if !ok {
+		return intervention.ObserveInput{}, intervention.ErrInvalidInput
+	}
+	return intervention.NewObserveReceiptAttestation(binding, receipt, target.GetObservationAnchorRef(), attestation)
+}
+
+func hostAdvisorReceiptGapInput(target *pb.HostAdvisorReceiptBoundObservation, receipt intervention.ReceiptIdentity, binding intervention.BindingFacts, evidence *pb.HostAdvisorAdapterSemanticGap) (intervention.ObserveInput, error) {
+	if evidence == nil || hostAdvisorMessageMalformed(evidence) {
+		return intervention.ObserveInput{}, intervention.ErrInvalidInput
+	}
+	gap, ok := hostAdvisorSemanticGapCodeFromProto(evidence.GetCode())
+	if !ok {
+		return intervention.ObserveInput{}, intervention.ErrInvalidInput
+	}
+	return intervention.NewObserveReceiptSemanticGap(binding, receipt, target.GetObservationAnchorRef(), gap)
+}
+
+func hostAdvisorChannelGapObserveInput(target *pb.HostAdvisorChannelSemanticGap, binding intervention.BindingFacts) (intervention.ObserveInput, error) {
+	if target == nil || hostAdvisorMessageMalformed(target) {
+		return intervention.ObserveInput{}, intervention.ErrInvalidInput
+	}
+	evidence := target.GetAdapterSemanticGap()
+	if hostAdvisorMessageMalformed(evidence) {
+		return intervention.ObserveInput{}, intervention.ErrInvalidInput
+	}
+	gap, ok := hostAdvisorSemanticGapCodeFromProto(evidence.GetCode())
+	if !ok {
+		return intervention.ObserveInput{}, intervention.ErrInvalidInput
+	}
+	return intervention.NewObserveChannelSemanticGap(binding, target.GetObservationAnchorRef(), gap)
 }
 
 func hostAdvisorReceiptIdentityFromProto(value *pb.HostAdvisorReceiptIdentity) (intervention.ReceiptIdentity, error) {
@@ -498,8 +522,7 @@ func capabilityFromProto(message *pb.HostCapability) (hostadvisor.Capability, er
 	if hostAdvisorMessageMalformed(message) {
 		return hostadvisor.Capability{}, hostadvisor.ErrInvalidInput
 	}
-	correlation := message.GetCorrelation()
-	callback := message.GetCallback()
+	correlation, callback := message.GetCorrelation(), message.GetCallback()
 	if hostAdvisorMessageMalformed(correlation) || hostAdvisorMessageMalformed(callback) {
 		return hostadvisor.Capability{}, hostadvisor.ErrInvalidInput
 	}
@@ -515,49 +538,45 @@ func capabilityFromProto(message *pb.HostCapability) (hostadvisor.Capability, er
 	if !ok {
 		return hostadvisor.Capability{}, hostadvisor.ErrInvalidInput
 	}
-
-	actionsWire := message.GetAllowedActions()
-	if len(actionsWire) == 0 || len(actionsWire) > maxHostAdvisorActions {
-		return hostadvisor.Capability{}, hostadvisor.ErrInvalidInput
+	actions, err := hostAdvisorActionsFromProto(message.GetAllowedActions())
+	if err != nil {
+		return hostadvisor.Capability{}, err
 	}
-	actions := make([]hostadvisor.Action, len(actionsWire))
-	for index, action := range actionsWire {
+	modes, err := hostAdvisorInjectionModesFromProto(message.GetContextInjectionModes())
+	if err != nil {
+		return hostadvisor.Capability{}, err
+	}
+	return hostadvisor.Capability{Semantic: semantic, Actions: actions, InjectionModes: modes, Correlation: hostadvisor.Correlation{Session: correlation.GetSession(), Turn: correlation.GetTurn(), ToolAction: correlation.GetToolAction(), StablePhaseAnchor: correlation.GetStablePhaseAnchor()}, Callback: hostadvisor.CallbackContract{Awaited: callback.GetAwaited(), Deadline: time.Duration(callback.GetDeadlineMs()) * time.Millisecond, Ordering: ordering}, Acknowledgement: acknowledgement}, nil
+}
+
+func hostAdvisorActionsFromProto(wire []pb.HostAdvisorAction) ([]hostadvisor.Action, error) {
+	if len(wire) == 0 || len(wire) > maxHostAdvisorActions {
+		return nil, hostadvisor.ErrInvalidInput
+	}
+	actions := make([]hostadvisor.Action, len(wire))
+	for index, action := range wire {
 		converted, ok := actionFromProto(action)
 		if !ok {
-			return hostadvisor.Capability{}, hostadvisor.ErrInvalidInput
+			return nil, hostadvisor.ErrInvalidInput
 		}
 		actions[index] = converted
 	}
-	modesWire := message.GetContextInjectionModes()
-	if len(modesWire) == 0 || len(modesWire) > maxHostAdvisorInjectionModes {
-		return hostadvisor.Capability{}, hostadvisor.ErrInvalidInput
+	return actions, nil
+}
+
+func hostAdvisorInjectionModesFromProto(wire []pb.HostAdvisorContextInjectionMode) ([]hostadvisor.InjectionMode, error) {
+	if len(wire) == 0 || len(wire) > maxHostAdvisorInjectionModes {
+		return nil, hostadvisor.ErrInvalidInput
 	}
-	modes := make([]hostadvisor.InjectionMode, len(modesWire))
-	for index, mode := range modesWire {
+	modes := make([]hostadvisor.InjectionMode, len(wire))
+	for index, mode := range wire {
 		converted, ok := injectionModeFromProto(mode)
 		if !ok {
-			return hostadvisor.Capability{}, hostadvisor.ErrInvalidInput
+			return nil, hostadvisor.ErrInvalidInput
 		}
 		modes[index] = converted
 	}
-
-	return hostadvisor.Capability{
-		Semantic:       semantic,
-		Actions:        actions,
-		InjectionModes: modes,
-		Correlation: hostadvisor.Correlation{
-			Session:           correlation.GetSession(),
-			Turn:              correlation.GetTurn(),
-			ToolAction:        correlation.GetToolAction(),
-			StablePhaseAnchor: correlation.GetStablePhaseAnchor(),
-		},
-		Callback: hostadvisor.CallbackContract{
-			Awaited:  callback.GetAwaited(),
-			Deadline: time.Duration(callback.GetDeadlineMs()) * time.Millisecond,
-			Ordering: ordering,
-		},
-		Acknowledgement: acknowledgement,
-	}, nil
+	return modes, nil
 }
 
 func digestFromProto(value []byte) (hostadvisor.Digest, error) {
