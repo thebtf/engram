@@ -45,7 +45,7 @@ const coverageProfiles = [
   {
     name: "browser-context",
     target: "./internal/db/gorm",
-    run: "^(TestBrowser(ReadGrant|TabBinding)|TestCollectionSelection|TestBrowserCodeContextStore_)",
+    run: "^(TestBrowser(ReadGrant|TabBinding)|TestCollectionSelection|TestBrowserCodeContextStore)",
     databasePrefix: "sonar_browser",
   },
   {
@@ -105,6 +105,43 @@ const coverageProfiles = [
     target: "./internal/db/gorm",
     run: "^TestTaskMemoryCandidateStore_",
     databasePrefix: "sonar_task_memory",
+  },
+  {
+    name: "worker-auth",
+    target: "./internal/worker",
+    run: "^(TestAuthHandlersLifecycle|TestAuthHandlersSetup|TestAuthTokenHandlers|TestHandleCreateToken)",
+    skip: "^(TestAuthHandlersLifecycle_LastAdminDemoteRaceLeavesOneAdmin|TestAuthHandlersLifecycle_LastAdminDemoteDisableRaceLeavesOneAdmin|TestAuthHandlersLifecycle_DisabledAdminCanBeDemotedWithoutLastAdminError)$",
+    databasePrefix: "sonar_worker_auth",
+  },
+  {
+    name: "worker-uci",
+    target: "./internal/worker",
+    run: "^TestUCIApplication",
+    databasePrefix: "sonar_worker_uci",
+  },
+  {
+    name: "worker-memory",
+    target: "./internal/worker",
+    run: "^(TestHandleStoreMemoryExplicit|TestApplyPrincipalMemoryMetadataREST|TestHandleListMemories|TestHandleDeleteMemory|TestHandleGetMemoryAudit|TestHandleSuppressMemory|TestHandleGetMemoryByID|TestMemoryCollectionSelection|TestMemoryDomainsHandlers|TestMemoryDomainManageAllowedREST)",
+    databasePrefix: "sonar_worker_memory",
+  },
+  {
+    name: "worker-issues",
+    target: "./internal/worker",
+    run: "^(TestIssueHTTP|TestIssueSelection)",
+    databasePrefix: "sonar_worker_issues",
+  },
+  {
+    name: "worker-context",
+    target: "./internal/worker",
+    run: "^Test(ContextInject_(IdentityOnlyRegistersSynchronouslyAndIdempotently|LegacyMetadataPreservesOuterCanonical|LegacyAliasWithInternalWhitespaceRemainsCompatible|LegacyMetadataDoesNotClaimForeignAlias|FailsClosedWithoutIdentityStore|AmbiguousLegacyFailsWithUpgradeActionBeforeAccess|RejectsRawSelectorAndMetadataBeforeProjectMutation|UnknownSelectorOnlyFailsBeforeProjectMutation)|ProjectIdentityHTTPError_(DoesNotExposeDatabaseDiagnostics|TypedNilFailsClosed))$",
+    databasePrefix: "sonar_worker_context",
+  },
+  {
+    name: "worker-admin-race",
+    target: "./internal/worker",
+    run: "^TestAuthHandlersLifecycle_LastAdminDemoteRaceLeavesOneAdmin$",
+    databasePrefix: "sonar_worker_admin_race",
   },
   {
     name: "worker",
