@@ -19,7 +19,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
-	authpkg "github.com/thebtf/engram/internal/auth"
+authpkg "github.com/thebtf/engram/internal/auth"
+gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
 
 // isAuthDisabled returns true when ENGRAM_AUTH_DISABLED enables disabled-auth mode.

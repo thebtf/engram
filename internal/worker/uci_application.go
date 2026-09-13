@@ -344,7 +344,7 @@ func uciApplicationGraphResponse(ref uci.ContextRef, result uci.GraphResult, bud
 	return uci.QueryResponse{Schema: uci.QueryResponseSchema, Status: status, Contexts: &contexts, Freshness: uciApplicationPinnedFreshness(ref.Generation), Retrieval: &uci.QueryRetrieval{Mode: uci.QueryRetrievalGraph, DegradationReasons: []string{}}, Coverage: &uci.QueryCoverage{Structural: result.Coverage, UnresolvedSites: &unresolved, UnsupportedFiles: &unsupported}, Items: &items, Graph: &graph, Truncated: &truncated, Warnings: &warnings, Continuation: &continuation}, nil
 }
 
-func uciApplicationGraphOutcome(outcome uci.GraphOutcome) (uci.QueryStatus, uci.QueryWarnings, error) {
+func uciApplicationGraphOutcome(outcome uci.GraphOutcome) (uci.QueryResponseStatus, uci.QueryWarnings, error) {
 	switch outcome {
 	case uci.GraphOutcomeComplete:
 		return uci.QueryStatusOK, uci.QueryWarnings{}, nil
