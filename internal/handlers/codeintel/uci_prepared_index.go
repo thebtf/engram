@@ -1153,12 +1153,16 @@ func uciPreparedDecimal(value string) bool {
 }
 
 func uciPreparedResolveTreeSitterModule(files map[string]*uciPreparedAdmissionFile, sourcePath, module string) (*uciPreparedAdmissionFile, bool) {
+	return uciPreparedUniqueModuleFile(files, uciPreparedTreeSitterModuleCandidates(sourcePath, module))
+}
+
+func uciPreparedTreeSitterModuleCandidates(sourcePath, module string) []string {
 	if module == "" || !strings.HasPrefix(module, ".") || path.IsAbs(module) {
-		return nil, false
+		return nil
 	}
 	base := path.Clean(path.Join(path.Dir(sourcePath), module))
 	if base == "." || base == ".." || strings.HasPrefix(base, "../") {
-		return nil, false
+		return nil
 	}
 	candidates := []string{base}
 	extension := strings.ToLower(path.Ext(base))
@@ -1170,6 +1174,10 @@ func uciPreparedResolveTreeSitterModule(files map[string]*uciPreparedAdmissionFi
 		stem := strings.TrimSuffix(base, path.Ext(base))
 		candidates = append(candidates, stem+".ts", stem+".tsx")
 	}
+	return candidates
+}
+
+func uciPreparedUniqueModuleFile(files map[string]*uciPreparedAdmissionFile, candidates []string) (*uciPreparedAdmissionFile, bool) {
 	var matched *uciPreparedAdmissionFile
 	seen := make(map[string]struct{}, len(candidates))
 	for _, candidate := range candidates {
@@ -1453,37 +1461,9 @@ func (collaborator *UCIPreparedIndexCollaborator) IndexPreparedCodebase(ctx cont
 }
 
 func (plan uciPreparedAdmissionPlan) publication() (uciPreparedPublication, error) {
-	publication := uciPreparedPublication{
-		memberships:  make([]uci.IndexMembership, 0),
-		replacements: make([]uci.IndexEdgeReplacement, 0),
-	}
-	parts := make([]uci.IndexPart, 0, len(plan.frames))
-	seenMemberships := make(map[string]struct{})
-	seenReplacements := make(map[string]struct{})
-	for frameIndex, frame := range plan.frames {
-		part, err := frame.PublicationPart()
-		if err != nil {
-			return uciPreparedPublication{}, fmt.Errorf("uci prepared index: derive publication part %d: %w", frameIndex, err)
-		}
-		parts = append(parts, part)
-		for _, membership := range part.Memberships {
-			if _, found := seenMemberships[membership.PathKey]; found {
-				return uciPreparedPublication{}, fmt.Errorf("uci prepared index: duplicate packed membership %q", membership.PathKey)
-			}
-			seenMemberships[membership.PathKey] = struct{}{}
-			publication.memberships = append(publication.memberships, membership)
-		}
-		for _, replacement := range part.EdgeReplacements {
-			if _, found := seenReplacements[replacement.SourcePath]; found {
-				return uciPreparedPublication{}, fmt.Errorf("uci prepared index: duplicate packed edge replacement %q", replacement.SourcePath)
-			}
-			seenReplacements[replacement.SourcePath] = struct{}{}
-			if ^uint64(0)-publication.edgeCount < uint64(len(replacement.Edges)) {
-				return uciPreparedPublication{}, fmt.Errorf("uci prepared index: edge count overflow")
-			}
-			publication.edgeCount += uint64(len(replacement.Edges))
-			publication.replacements = append(publication.replacements, replacement)
-		}
+	parts, publication, err := uciPreparedPublicationParts(plan.frames)
+	if err != nil {
+		return uciPreparedPublication{}, err
 	}
 	if err := uci.ValidateIndexPublicationParts(parts, uci.DefaultIndexPublicationLimits()); err != nil {
 		return uciPreparedPublication{}, fmt.Errorf("uci prepared index: validate publication parts: %w", err)
@@ -1499,6 +1479,57 @@ func (plan uciPreparedAdmissionPlan) publication() (uciPreparedPublication, erro
 	publication.manifestDigest = manifestDigest
 	publication.edgesDigest = edgesDigest
 	return publication, nil
+}
+
+func uciPreparedPublicationParts(frames []uci.IndexAdmissionFrame) ([]uci.IndexPart, uciPreparedPublication, error) {
+	publication := uciPreparedPublication{memberships: make([]uci.IndexMembership, 0), replacements: make([]uci.IndexEdgeReplacement, 0)}
+	parts := make([]uci.IndexPart, 0, len(frames))
+	seenMemberships := make(map[string]struct{})
+	seenReplacements := make(map[string]struct{})
+	for frameIndex, frame := range frames {
+		part, err := frame.PublicationPart()
+		if err != nil {
+			return nil, uciPreparedPublication{}, fmt.Errorf("uci prepared index: derive publication part %d: %w", frameIndex, err)
+		}
+		parts = append(parts, part)
+		if err := uciPreparedAppendPublicationPart(&publication, part, seenMemberships, seenReplacements); err != nil {
+			return nil, uciPreparedPublication{}, err
+		}
+	}
+	return parts, publication, nil
+}
+
+func uciPreparedAppendPublicationPart(publication *uciPreparedPublication, part uci.IndexPart, seenMemberships, seenReplacements map[string]struct{}) error {
+	if err := uciPreparedAppendMemberships(publication, part.Memberships, seenMemberships); err != nil {
+		return err
+	}
+	return uciPreparedAppendEdgeReplacements(publication, part.EdgeReplacements, seenReplacements)
+}
+
+func uciPreparedAppendMemberships(publication *uciPreparedPublication, memberships []uci.IndexMembership, seen map[string]struct{}) error {
+	for _, membership := range memberships {
+		if _, found := seen[membership.PathKey]; found {
+			return fmt.Errorf("uci prepared index: duplicate packed membership %q", membership.PathKey)
+		}
+		seen[membership.PathKey] = struct{}{}
+		publication.memberships = append(publication.memberships, membership)
+	}
+	return nil
+}
+
+func uciPreparedAppendEdgeReplacements(publication *uciPreparedPublication, replacements []uci.IndexEdgeReplacement, seen map[string]struct{}) error {
+	for _, replacement := range replacements {
+		if _, found := seen[replacement.SourcePath]; found {
+			return fmt.Errorf("uci prepared index: duplicate packed edge replacement %q", replacement.SourcePath)
+		}
+		if ^uint64(0)-publication.edgeCount < uint64(len(replacement.Edges)) {
+			return fmt.Errorf("uci prepared index: edge count overflow")
+		}
+		seen[replacement.SourcePath] = struct{}{}
+		publication.edgeCount += uint64(len(replacement.Edges))
+		publication.replacements = append(publication.replacements, replacement)
+	}
+	return nil
 }
 
 func uciPreparedBuildKey(local uciPreparedLocalTarget, scan uci.ScannerResult, plan uciPreparedAdmissionPlan, publication uciPreparedPublication) (string, error) {
