@@ -429,7 +429,7 @@ func goMarkBindingIdentifier(expression ast.Expr, excluded map[*ast.Ident]struct
 	}
 }
 
-func goMarkNodeIdentifiers(node ast.Node, excluded map[*ast.Ident]struct{}) {
+func goMarkNodeIdentifiers(node *ast.FieldList, excluded map[*ast.Ident]struct{}) {
 	if node == nil {
 		return
 	}
