@@ -543,7 +543,10 @@ func canonicalProjectAction(values map[string]json.RawMessage, required bool) (s
 		return "", nil
 	}
 	raw, present := values["action"]
-	if !present || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+	if !present {
+		return "", nil
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return "", errors.New("tool arguments.action must be a string")
 	}
 	var action string
