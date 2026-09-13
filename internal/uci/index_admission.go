@@ -843,149 +843,192 @@ func TreeSitterIndexAdmissionArtifactProfile(language TreeSitterLanguage, bundle
 // NewIndexAdmissionArtifactFromGo converts an ExtractGo result and its exact
 // caller-owned source bytes into one validated generic admission artifact.
 func NewIndexAdmissionArtifactFromGo(sourceID string, profile IndexAdmissionArtifactProfile, source []byte, extracted GoArtifact) (IndexAdmissionArtifact, error) {
-	if profile.Language != IndexAdmissionLanguageGo {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Go artifact requires Go profile")
-	}
-	if len(source) > IndexAdmissionMaxArtifactBodyBytes {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceArtifactBodyBytes,
-			uint64(len(source)),
-			uint64(IndexAdmissionMaxArtifactBodyBytes),
-		)
-	}
-	contentDigest := indexAdmissionDigestBytes(source)
-	if extracted.Proof.ContentDigest != contentDigest {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Go artifact source digest mismatch")
-	}
-
-	status := IndexAdmissionArtifactPartial
-	switch extracted.Coverage {
-	case IndexCoverageComplete:
-		status = IndexAdmissionArtifactComplete
-	case IndexCoveragePartial:
-		status = IndexAdmissionArtifactPartial
-	default:
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Go extraction has unsupported coverage")
-	}
-	artifactID, err := DeriveIndexAdmissionArtifactID(sourceID, contentDigest, profile)
+	input, err := indexAdmissionGoBuildInput(sourceID, profile, source, extracted)
 	if err != nil {
 		return IndexAdmissionArtifact{}, err
 	}
-	artifact := IndexAdmissionArtifact{
-		ArtifactID:    artifactID,
-		ContentDigest: contentDigest,
-		Profile:       profile,
-		Status:        status,
-		Body:          indexAdmissionCloneBytes(source),
-		Definitions:   make([]IndexAdmissionDefinition, 0, len(extracted.Definitions)),
-		References:    make([]IndexAdmissionReference, 0, len(extracted.References)),
-		Chunks:        make([]IndexAdmissionChunk, 0, len(extracted.Chunks)),
-		Diagnostics:   make([]IndexAdmissionDiagnostic, 0, len(extracted.Diagnostics)),
-	}
-	for _, definition := range extracted.Definitions {
-		artifact.Definitions = append(artifact.Definitions, IndexAdmissionDefinition{
-			LocalSymbolKey: definition.LocalKey,
-			Kind:           definition.Kind,
-			SymbolKey:      definition.SymbolKey,
-			Span:           definition.Span,
-		})
-	}
-	for _, reference := range extracted.References {
-		rawTarget, err := indexAdmissionTextAtSpan(source, reference.Span)
-		if err != nil {
-			return IndexAdmissionArtifact{}, err
-		}
-		relation, err := indexAdmissionGoReferenceRelation(reference.Kind)
-		if err != nil {
-			return IndexAdmissionArtifact{}, err
-		}
-		artifact.References = append(artifact.References, IndexAdmissionReference{
-			SiteKey:        indexAdmissionGoReferenceSiteKey(reference),
-			Kind:           reference.Kind,
-			SymbolKey:      reference.SymbolKey,
-			OwnerSymbolKey: indexAdmissionGoReferenceOwner(artifact.Definitions, reference.Span),
-			RawTarget:      rawTarget,
-			Relation:       relation,
-			Span:           reference.Span,
-		})
-	}
-	for _, diagnostic := range extracted.Diagnostics {
-		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
-			Code:    diagnostic.Code,
-			Span:    diagnostic.Span,
-			Message: diagnostic.Message,
-		})
-	}
+	return indexAdmissionBuildGoArtifact(input, extracted)
+}
 
-	chunkLimitReached := false
-	lineStarts := indexAdmissionLineStarts(source)
-definitionChunks:
-	for _, definition := range artifact.Definitions {
-		for chunkStart := int(definition.Span.ByteStart); chunkStart < int(definition.Span.ByteEnd); {
-			if len(artifact.Chunks) == indexAdmissionMaxChunksPerArtifact {
-				chunkLimitReached = true
-				break definitionChunks
-			}
-			chunkEnd := chunkStart + indexAdmissionMaxTextBytes
-			if definitionEnd := int(definition.Span.ByteEnd); chunkEnd > definitionEnd {
-				chunkEnd = definitionEnd
-			}
-			for chunkEnd > chunkStart && chunkEnd < len(source) && !utf8.RuneStart(source[chunkEnd]) {
-				chunkEnd--
-			}
-			if chunkEnd <= chunkStart {
-				return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: cannot split Go definition chunk")
-			}
-			span := IndexSpan{
-				ByteStart: int64(chunkStart),
-				ByteEnd:   int64(chunkEnd),
-				LineStart: indexAdmissionLineForOffset(lineStarts, chunkStart),
-				LineEnd:   indexAdmissionLineForOffset(lineStarts, chunkEnd-1),
-			}
-			text := string(source[chunkStart:chunkEnd])
-			symbolKey := definition.LocalSymbolKey
-			artifact.Chunks = append(artifact.Chunks, IndexAdmissionChunk{
-				Ordinal:       len(artifact.Chunks),
-				SymbolKey:     &symbolKey,
-				Kind:          "definition",
-				Span:          span,
-				ContentDigest: indexAdmissionDigestBytes([]byte(text)),
-				Text:          text,
-			})
-			chunkStart = chunkEnd
-		}
+func indexAdmissionGoBuildInput(sourceID string, profile IndexAdmissionArtifactProfile, source []byte, extracted GoArtifact) (indexAdmissionArtifactBuildInput, error) {
+	if profile.Language != IndexAdmissionLanguageGo {
+		return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: Go artifact requires Go profile")
 	}
-	for _, chunk := range extracted.Chunks {
-		if len(artifact.Chunks) == indexAdmissionMaxChunksPerArtifact {
-			chunkLimitReached = true
-			break
-		}
-		artifact.Chunks = append(artifact.Chunks, IndexAdmissionChunk{
-			Ordinal:       len(artifact.Chunks),
-			Kind:          "source",
-			Span:          chunk.Span,
-			ContentDigest: chunk.ContentDigest,
-			Text:          chunk.Text,
-		})
+	if err := indexAdmissionValidateCapacity(len(source), IndexAdmissionMaxArtifactBodyBytes, IndexCapacityResourceArtifactBodyBytes); err != nil {
+		return indexAdmissionArtifactBuildInput{}, err
 	}
-	if chunkLimitReached {
+	contentDigest := indexAdmissionDigestBytes(source)
+	if extracted.Proof.ContentDigest != contentDigest {
+		return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: Go artifact source digest mismatch")
+	}
+	status, err := indexAdmissionGoStatus(extracted.Coverage)
+	if err != nil {
+		return indexAdmissionArtifactBuildInput{}, err
+	}
+	artifactID, err := DeriveIndexAdmissionArtifactID(sourceID, contentDigest, profile)
+	if err != nil {
+		return indexAdmissionArtifactBuildInput{}, err
+	}
+	return indexAdmissionArtifactBuildInput{
+		artifactID:      artifactID,
+		contentDigest:   contentDigest,
+		profile:         profile,
+		status:          status,
+		source:          source,
+		definitionCount: len(extracted.Definitions),
+		referenceCount:  len(extracted.References),
+		chunkCount:      len(extracted.Chunks),
+		diagnosticCount: len(extracted.Diagnostics),
+	}, nil
+}
+
+func indexAdmissionGoStatus(coverage IndexCoverageState) (IndexAdmissionArtifactStatus, error) {
+	switch coverage {
+	case IndexCoverageComplete:
+		return IndexAdmissionArtifactComplete, nil
+	case IndexCoveragePartial:
+		return IndexAdmissionArtifactPartial, nil
+	default:
+		return "", fmt.Errorf("uci index admission: Go extraction has unsupported coverage")
+	}
+}
+
+func indexAdmissionBuildGoArtifact(input indexAdmissionArtifactBuildInput, extracted GoArtifact) (IndexAdmissionArtifact, error) {
+	artifact := input.artifact()
+	artifact.Definitions = indexAdmissionGoDefinitions(extracted.Definitions)
+	references, err := indexAdmissionGoReferences(input.source, artifact.Definitions, extracted.References)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	artifact.References = references
+	artifact.Diagnostics = indexAdmissionGoDiagnostics(extracted.Diagnostics)
+	chunks, limited, err := indexAdmissionGoChunks(input.source, artifact.Definitions, extracted.Chunks)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	artifact.Chunks = chunks
+	if limited {
 		artifact.Status = IndexAdmissionArtifactPartial
 		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
 			Code:    "CHUNK_LIMIT",
 			Message: "symbol and source chunks exceeded the admission limit",
 		})
 	}
-	canonical, err := indexAdmissionCanonicalizeArtifact(artifact)
-	if err != nil {
-		return IndexAdmissionArtifact{}, err
+	return indexAdmissionFinalizeArtifact(artifact)
+}
+
+func indexAdmissionGoDefinitions(definitions []GoDefinition) []IndexAdmissionDefinition {
+	converted := make([]IndexAdmissionDefinition, 0, len(definitions))
+	for _, definition := range definitions {
+		converted = append(converted, IndexAdmissionDefinition{
+			LocalSymbolKey: definition.LocalKey,
+			Kind:           definition.Kind,
+			SymbolKey:      definition.SymbolKey,
+			Span:           definition.Span,
+		})
 	}
-	factsDigest, err := indexAdmissionArtifactFactsDigest(canonical)
-	if err != nil {
-		return IndexAdmissionArtifact{}, err
+	return converted
+}
+
+func indexAdmissionGoReferences(source []byte, definitions []IndexAdmissionDefinition, references []GoReferenceSite) ([]IndexAdmissionReference, error) {
+	converted := make([]IndexAdmissionReference, 0, len(references))
+	for _, reference := range references {
+		rawTarget, err := indexAdmissionTextAtSpan(source, reference.Span)
+		if err != nil {
+			return nil, err
+		}
+		relation, err := indexAdmissionGoReferenceRelation(reference.Kind)
+		if err != nil {
+			return nil, err
+		}
+		converted = append(converted, IndexAdmissionReference{
+			SiteKey:        indexAdmissionGoReferenceSiteKey(reference),
+			Kind:           reference.Kind,
+			SymbolKey:      reference.SymbolKey,
+			OwnerSymbolKey: indexAdmissionGoReferenceOwner(definitions, reference.Span),
+			RawTarget:      rawTarget,
+			Relation:       relation,
+			Span:           reference.Span,
+		})
 	}
-	canonical.FactsDigest = factsDigest
-	return canonical, nil
+	return converted, nil
+}
+
+func indexAdmissionGoDiagnostics(diagnostics []GoDiagnostic) []IndexAdmissionDiagnostic {
+	converted := make([]IndexAdmissionDiagnostic, 0, len(diagnostics))
+	for _, diagnostic := range diagnostics {
+		converted = append(converted, IndexAdmissionDiagnostic{
+			Code:    diagnostic.Code,
+			Span:    diagnostic.Span,
+			Message: diagnostic.Message,
+		})
+	}
+	return converted
+}
+
+func indexAdmissionGoChunks(source []byte, definitions []IndexAdmissionDefinition, sourceChunks []GoChunk) ([]IndexAdmissionChunk, bool, error) {
+	chunks := make([]IndexAdmissionChunk, 0, len(sourceChunks))
+	lineStarts := indexAdmissionLineStarts(source)
+	for _, definition := range definitions {
+		var limited bool
+		var err error
+		chunks, limited, err = indexAdmissionAppendGoDefinitionChunks(chunks, source, lineStarts, definition)
+		if err != nil {
+			return nil, false, err
+		}
+		if limited {
+			return chunks, true, nil
+		}
+	}
+	for _, chunk := range sourceChunks {
+		if len(chunks) == indexAdmissionMaxChunksPerArtifact {
+			return chunks, true, nil
+		}
+		chunks = append(chunks, IndexAdmissionChunk{
+			Ordinal:       len(chunks),
+			Kind:          "source",
+			Span:          chunk.Span,
+			ContentDigest: chunk.ContentDigest,
+			Text:          chunk.Text,
+		})
+	}
+	return chunks, false, nil
+}
+
+func indexAdmissionAppendGoDefinitionChunks(chunks []IndexAdmissionChunk, source []byte, lineStarts []int, definition IndexAdmissionDefinition) ([]IndexAdmissionChunk, bool, error) {
+	for chunkStart := int(definition.Span.ByteStart); chunkStart < int(definition.Span.ByteEnd); {
+		if len(chunks) == indexAdmissionMaxChunksPerArtifact {
+			return chunks, true, nil
+		}
+		chunkEnd := chunkStart + indexAdmissionMaxTextBytes
+		if definitionEnd := int(definition.Span.ByteEnd); chunkEnd > definitionEnd {
+			chunkEnd = definitionEnd
+		}
+		for chunkEnd > chunkStart && chunkEnd < len(source) && !utf8.RuneStart(source[chunkEnd]) {
+			chunkEnd--
+		}
+		if chunkEnd <= chunkStart {
+			return nil, false, fmt.Errorf("uci index admission: cannot split Go definition chunk")
+		}
+		span := IndexSpan{
+			ByteStart: int64(chunkStart),
+			ByteEnd:   int64(chunkEnd),
+			LineStart: indexAdmissionLineForOffset(lineStarts, chunkStart),
+			LineEnd:   indexAdmissionLineForOffset(lineStarts, chunkEnd-1),
+		}
+		text := string(source[chunkStart:chunkEnd])
+		symbolKey := definition.LocalSymbolKey
+		chunks = append(chunks, IndexAdmissionChunk{
+			Ordinal:       len(chunks),
+			SymbolKey:     &symbolKey,
+			Kind:          "definition",
+			Span:          span,
+			ContentDigest: indexAdmissionDigestBytes([]byte(text)),
+			Text:          text,
+		})
+		chunkStart = chunkEnd
+	}
+	return chunks, false, nil
 }
 
 // NewIndexAdmissionArtifactFromTreeSitter converts one worker-validated
