@@ -95,14 +95,8 @@ func LegacyUnscopedCodeHybridSearch(
 	store LegacyUnscopedCodeSearchStore,
 	opts LegacyUnscopedCodeHybridOptions,
 ) ([]LegacyUnscopedCodeHit, error) {
-	if projectID == "" {
-		return nil, fmt.Errorf("legacy_unscoped_code_hybrid_search: projectID must not be empty")
-	}
-	if query == "" {
-		return nil, fmt.Errorf("legacy_unscoped_code_hybrid_search: query must not be empty")
-	}
-	if limit < 1 {
-		return nil, fmt.Errorf("legacy_unscoped_code_hybrid_search: limit must be at least 1")
+	if err := validateLegacyUnscopedCodeSearch(projectID, query, limit); err != nil {
+		return nil, err
 	}
 
 	const (
@@ -207,4 +201,17 @@ func LegacyUnscopedCodeHybridSearch(
 		}
 	}
 	return out, nil
+}
+
+func validateLegacyUnscopedCodeSearch(projectID, query string, limit int) error {
+	if projectID == "" {
+		return fmt.Errorf("legacy_unscoped_code_hybrid_search: projectID must not be empty")
+	}
+	if query == "" {
+		return fmt.Errorf("legacy_unscoped_code_hybrid_search: query must not be empty")
+	}
+	if limit < 1 {
+		return fmt.Errorf("legacy_unscoped_code_hybrid_search: limit must be at least 1")
+	}
+	return nil
 }

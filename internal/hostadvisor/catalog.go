@@ -92,40 +92,56 @@ type normalizedHello struct {
 }
 
 func normalizeProfile(profile AcceptedProfile) (AcceptedProfile, error) {
-	if !validText(profile.CapabilityRevision) || !validText(profile.SnapshotID) || profile.SnapshotRevision == 0 {
-		return AcceptedProfile{}, fmt.Errorf("%w: profile snapshot metadata is invalid", ErrInvalidInput)
+	if err := validateProfileMetadata(profile); err != nil {
+		return AcceptedProfile{}, err
 	}
-	if !validProtocolRange(profile.Protocol) || !validHostFamily(profile.HostFamily) || !validText(profile.HostVersion) || !validText(profile.AdapterID) || !validText(profile.AdapterVersion) {
-		return AcceptedProfile{}, fmt.Errorf("%w: profile host identity is invalid", ErrInvalidInput)
-	}
-	if !validEvidence(profile.Evidence) {
-		return AcceptedProfile{}, fmt.Errorf("%w: profile evidence is invalid", ErrInvalidInput)
-	}
-	if profile.BindingTTL <= 0 || len(profile.Capabilities) == 0 || len(profile.Capabilities) > maxAdvisorCapabilities {
-		return AcceptedProfile{}, fmt.Errorf("%w: profile binding contract is invalid", ErrInvalidInput)
-	}
-
 	profile.Capabilities = cloneCapabilities(profile.Capabilities)
-	var prior Semantic
-	var callbackDeadline time.Duration
-	for index, capability := range profile.Capabilities {
-		if !validCapability(capability) {
-			return AcceptedProfile{}, fmt.Errorf("%w: profile capability is invalid", ErrInvalidInput)
-		}
-		if index != 0 && capability.Semantic <= prior {
-			return AcceptedProfile{}, fmt.Errorf("%w: profile capabilities are not canonical", ErrInvalidInput)
-		}
-		if index == 0 {
-			callbackDeadline = capability.Callback.Deadline
-		} else if capability.Callback.Deadline != callbackDeadline {
-			return AcceptedProfile{}, fmt.Errorf("%w: profile callback deadlines disagree", ErrInvalidInput)
-		}
-		prior = capability.Semantic
+	if err := validateProfileCapabilities(profile.Capabilities); err != nil {
+		return AcceptedProfile{}, err
 	}
 	if !isOMPAdvisor1Profile(profile) && !isOMPAdvisor2Profile(profile) {
 		return AcceptedProfile{}, fmt.Errorf("%w: profile capability contract is not code-owned", ErrInvalidInput)
 	}
 	return profile, nil
+}
+
+func validateProfileMetadata(profile AcceptedProfile) error {
+	if !validText(profile.CapabilityRevision) || !validText(profile.SnapshotID) || profile.SnapshotRevision == 0 {
+		return fmt.Errorf("%w: profile snapshot metadata is invalid", ErrInvalidInput)
+	}
+	if !validProtocolRange(profile.Protocol) || !validHostFamily(profile.HostFamily) || !validText(profile.HostVersion) || !validText(profile.AdapterID) || !validText(profile.AdapterVersion) {
+		return fmt.Errorf("%w: profile host identity is invalid", ErrInvalidInput)
+	}
+	if !validEvidence(profile.Evidence) {
+		return fmt.Errorf("%w: profile evidence is invalid", ErrInvalidInput)
+	}
+	if profile.BindingTTL <= 0 {
+		return fmt.Errorf("%w: profile binding contract is invalid", ErrInvalidInput)
+	}
+	return nil
+}
+
+func validateProfileCapabilities(capabilities []Capability) error {
+	if len(capabilities) == 0 || len(capabilities) > maxAdvisorCapabilities {
+		return fmt.Errorf("%w: profile binding contract is invalid", ErrInvalidInput)
+	}
+	var prior Semantic
+	var callbackDeadline time.Duration
+	for index, capability := range capabilities {
+		if !validCapability(capability) {
+			return fmt.Errorf("%w: profile capability is invalid", ErrInvalidInput)
+		}
+		if index != 0 && capability.Semantic <= prior {
+			return fmt.Errorf("%w: profile capabilities are not canonical", ErrInvalidInput)
+		}
+		if index == 0 {
+			callbackDeadline = capability.Callback.Deadline
+		} else if capability.Callback.Deadline != callbackDeadline {
+			return fmt.Errorf("%w: profile callback deadlines disagree", ErrInvalidInput)
+		}
+		prior = capability.Semantic
+	}
+	return nil
 }
 
 func isOMPAdvisor1Profile(profile AcceptedProfile) bool {
