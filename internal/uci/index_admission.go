@@ -1130,131 +1130,40 @@ func NewIndexAdmissionArtifactFromMarkdown(sourceID string, admissionProfile Ind
 	if err := indexAdmissionValidateArtifactCapacity(len(source), len(extracted.Headings), len(extracted.References), len(extracted.Chunks), len(extracted.Diagnostics)); err != nil {
 		return IndexAdmissionArtifact{}, err
 	}
-	expectedProfile, err := MarkdownIndexAdmissionArtifactProfile(extractionProfile)
+	input, err := indexAdmissionMarkdownBuildInput(sourceID, admissionProfile, extractionProfile, source, extracted)
 	if err != nil {
 		return IndexAdmissionArtifact{}, err
 	}
-	if !indexAdmissionStructuredProfileMatches(admissionProfile, expectedProfile) {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Markdown artifact profile does not match extraction policy")
+	return indexAdmissionBuildMarkdownArtifact(input, extracted)
+}
+
+type indexAdmissionArtifactBuildInput struct {
+	artifactID      string
+	contentDigest   IndexDigest
+	profile         IndexAdmissionArtifactProfile
+	status          IndexAdmissionArtifactStatus
+	source          []byte
+	definitionCount int
+	referenceCount  int
+	chunkCount      int
+	diagnosticCount int
+}
+
+func (input indexAdmissionArtifactBuildInput) artifact() IndexAdmissionArtifact {
+	return IndexAdmissionArtifact{
+		ArtifactID:    input.artifactID,
+		ContentDigest: input.contentDigest,
+		Profile:       input.profile,
+		Status:        input.status,
+		Body:          indexAdmissionCloneBytes(input.source),
+		Definitions:   make([]IndexAdmissionDefinition, 0, input.definitionCount),
+		References:    make([]IndexAdmissionReference, 0, input.referenceCount),
+		Chunks:        make([]IndexAdmissionChunk, 0, input.chunkCount),
+		Diagnostics:   make([]IndexAdmissionDiagnostic, 0, input.diagnosticCount+1),
 	}
-	if extracted.Text != string(source) {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Markdown artifact text does not match source bytes")
-	}
-	contentDigest := indexAdmissionDigestBytes(source)
-	if extracted.Proof.ContentDigest != contentDigest {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Markdown artifact source digest mismatch")
-	}
-	if extracted.Proof.DefinitionCount != uint64(len(extracted.Headings)) ||
-		extracted.Proof.ReferenceSiteCount != uint64(len(extracted.References)) ||
-		extracted.Proof.ChunkCount != uint64(len(extracted.Chunks)) {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Markdown artifact proof counts are invalid")
-	}
-	status := IndexAdmissionArtifactPartial
-	switch extracted.Coverage {
-	case IndexCoverageComplete:
-		if len(extracted.Diagnostics) != 0 {
-			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: complete Markdown artifact has diagnostics")
-		}
-		status = IndexAdmissionArtifactComplete
-	case IndexCoveragePartial:
-	default:
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Markdown extraction has unsupported coverage")
-	}
-	verified := markdownFinalizeArtifact(source, extractionProfile, MarkdownArtifact{
-		Coverage:    extracted.Coverage,
-		Text:        extracted.Text,
-		Headings:    append([]MarkdownHeading(nil), extracted.Headings...),
-		References:  append([]MarkdownReferenceSite(nil), extracted.References...),
-		Chunks:      append([]MarkdownChunk(nil), extracted.Chunks...),
-		Diagnostics: append([]MarkdownDiagnostic(nil), extracted.Diagnostics...),
-	})
-	if verified.Proof != extracted.Proof {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Markdown artifact proof is invalid")
-	}
-	artifactID, err := DeriveIndexAdmissionArtifactID(sourceID, contentDigest, admissionProfile)
-	if err != nil {
-		return IndexAdmissionArtifact{}, err
-	}
-	artifact := IndexAdmissionArtifact{
-		ArtifactID:    artifactID,
-		ContentDigest: contentDigest,
-		Profile:       admissionProfile,
-		Status:        status,
-		Body:          indexAdmissionCloneBytes(source),
-		Definitions:   make([]IndexAdmissionDefinition, 0, len(extracted.Headings)),
-		References:    make([]IndexAdmissionReference, 0, len(extracted.References)),
-		Chunks:        make([]IndexAdmissionChunk, 0, len(extracted.Chunks)),
-		Diagnostics:   make([]IndexAdmissionDiagnostic, 0, len(extracted.Diagnostics)+1),
-	}
-	for _, heading := range extracted.Headings {
-		artifact.Definitions = append(artifact.Definitions, IndexAdmissionDefinition{
-			LocalSymbolKey: heading.LocalKey,
-			Kind:           "heading",
-			SymbolKey:      heading.SymbolKey,
-			Span:           heading.Span,
-		})
-	}
-	definitionKeys := indexAdmissionDefinitionSet(artifact.Definitions)
-	for _, reference := range extracted.References {
-		rawTarget, err := indexAdmissionTextAtSpan(source, reference.Span)
-		if err != nil {
-			return IndexAdmissionArtifact{}, err
-		}
-		var ownerSymbolKey *string
-		if reference.OwnerLocalKey != "" && reference.OwnerLocalKey != "preamble" {
-			if _, found := definitionKeys[reference.OwnerLocalKey]; !found {
-				return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Markdown reference owner is not defined by artifact")
-			}
-			ownerSymbolKey = indexAdmissionStringPointer(reference.OwnerLocalKey)
-		}
-		siteKey := fmt.Sprintf("reference:%s:%d:%d", reference.Kind, reference.Span.ByteStart, reference.Span.ByteEnd)
-		artifact.References = append(artifact.References, IndexAdmissionReference{
-			SiteKey:        siteKey,
-			Kind:           reference.Kind,
-			SymbolKey:      "markdown:" + siteKey,
-			OwnerSymbolKey: ownerSymbolKey,
-			RawTarget:      rawTarget,
-			Relation:       IndexRelation("references"),
-			Span:           reference.Span,
-		})
-	}
-	for index, chunk := range extracted.Chunks {
-		text, err := indexAdmissionTextAtSpan(source, chunk.Span)
-		if err != nil {
-			return IndexAdmissionArtifact{}, err
-		}
-		if chunk.Text != text || chunk.ContentDigest != indexAdmissionDigestBytes([]byte(text)) {
-			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Markdown source chunk does not match source bytes")
-		}
-		artifact.Chunks = append(artifact.Chunks, IndexAdmissionChunk{
-			Ordinal:       index,
-			Kind:          "source",
-			Span:          chunk.Span,
-			ContentDigest: chunk.ContentDigest,
-			Text:          chunk.Text,
-		})
-	}
-	for _, diagnostic := range extracted.Diagnostics {
-		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
-			Code:    diagnostic.Code,
-			Span:    diagnostic.Span,
-			Message: diagnostic.Message,
-		})
-	}
-	if status == IndexAdmissionArtifactPartial {
-		if len(artifact.Diagnostics) == indexAdmissionMaxDiagnosticsPerArtifact {
-			return IndexAdmissionArtifact{}, newIndexCapacityError(
-				IndexCapacityScopeArtifact,
-				IndexCapacityResourceDiagnostics,
-				uint64(len(artifact.Diagnostics)+1),
-				uint64(indexAdmissionMaxDiagnosticsPerArtifact),
-			)
-		}
-		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
-			Code:    "MARKDOWN_PARTIAL_COVERAGE",
-			Message: "Markdown extraction coverage is partial",
-		})
-	}
+}
+
+func indexAdmissionFinalizeArtifact(artifact IndexAdmissionArtifact) (IndexAdmissionArtifact, error) {
 	canonical, err := indexAdmissionCanonicalizeArtifact(artifact)
 	if err != nil {
 		return IndexAdmissionArtifact{}, err
@@ -1265,6 +1174,182 @@ func NewIndexAdmissionArtifactFromMarkdown(sourceID string, admissionProfile Ind
 	}
 	canonical.FactsDigest = factsDigest
 	return canonical, nil
+}
+
+func indexAdmissionMarkdownBuildInput(sourceID string, admissionProfile IndexAdmissionArtifactProfile, extractionProfile MarkdownExtractionProfile, source []byte, extracted MarkdownArtifact) (indexAdmissionArtifactBuildInput, error) {
+	expectedProfile, err := MarkdownIndexAdmissionArtifactProfile(extractionProfile)
+	if err != nil {
+		return indexAdmissionArtifactBuildInput{}, err
+	}
+	if !indexAdmissionStructuredProfileMatches(admissionProfile, expectedProfile) {
+		return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: Markdown artifact profile does not match extraction policy")
+	}
+	if extracted.Text != string(source) {
+		return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: Markdown artifact text does not match source bytes")
+	}
+	contentDigest := indexAdmissionDigestBytes(source)
+	if extracted.Proof.ContentDigest != contentDigest {
+		return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: Markdown artifact source digest mismatch")
+	}
+	if extracted.Proof.DefinitionCount != uint64(len(extracted.Headings)) || extracted.Proof.ReferenceSiteCount != uint64(len(extracted.References)) || extracted.Proof.ChunkCount != uint64(len(extracted.Chunks)) {
+		return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: Markdown artifact proof counts are invalid")
+	}
+	status, err := indexAdmissionMarkdownStatus(extracted)
+	if err != nil {
+		return indexAdmissionArtifactBuildInput{}, err
+	}
+	verified := markdownFinalizeArtifact(source, extractionProfile, MarkdownArtifact{
+		Coverage:    extracted.Coverage,
+		Text:        extracted.Text,
+		Headings:    append([]MarkdownHeading(nil), extracted.Headings...),
+		References:  append([]MarkdownReferenceSite(nil), extracted.References...),
+		Chunks:      append([]MarkdownChunk(nil), extracted.Chunks...),
+		Diagnostics: append([]MarkdownDiagnostic(nil), extracted.Diagnostics...),
+	})
+	if verified.Proof != extracted.Proof {
+		return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: Markdown artifact proof is invalid")
+	}
+	artifactID, err := DeriveIndexAdmissionArtifactID(sourceID, contentDigest, admissionProfile)
+	if err != nil {
+		return indexAdmissionArtifactBuildInput{}, err
+	}
+	return indexAdmissionArtifactBuildInput{
+		artifactID:      artifactID,
+		contentDigest:   contentDigest,
+		profile:         admissionProfile,
+		status:          status,
+		source:          source,
+		definitionCount: len(extracted.Headings),
+		referenceCount:  len(extracted.References),
+		chunkCount:      len(extracted.Chunks),
+		diagnosticCount: len(extracted.Diagnostics),
+	}, nil
+}
+
+func indexAdmissionMarkdownStatus(extracted MarkdownArtifact) (IndexAdmissionArtifactStatus, error) {
+	switch extracted.Coverage {
+	case IndexCoverageComplete:
+		if len(extracted.Diagnostics) != 0 {
+			return "", fmt.Errorf("uci index admission: complete Markdown artifact has diagnostics")
+		}
+		return IndexAdmissionArtifactComplete, nil
+	case IndexCoveragePartial:
+		return IndexAdmissionArtifactPartial, nil
+	default:
+		return "", fmt.Errorf("uci index admission: Markdown extraction has unsupported coverage")
+	}
+}
+
+func indexAdmissionBuildMarkdownArtifact(input indexAdmissionArtifactBuildInput, extracted MarkdownArtifact) (IndexAdmissionArtifact, error) {
+	artifact := input.artifact()
+	artifact.Definitions = indexAdmissionMarkdownDefinitions(extracted.Headings)
+	references, err := indexAdmissionMarkdownReferences(input.source, artifact.Definitions, extracted.References)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	artifact.References = references
+	chunks, err := indexAdmissionMarkdownChunks(input.source, extracted.Chunks)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	artifact.Chunks = chunks
+	diagnostics, err := indexAdmissionMarkdownDiagnostics(extracted.Diagnostics, input.status)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	artifact.Diagnostics = diagnostics
+	return indexAdmissionFinalizeArtifact(artifact)
+}
+
+func indexAdmissionMarkdownDefinitions(headings []MarkdownHeading) []IndexAdmissionDefinition {
+	definitions := make([]IndexAdmissionDefinition, 0, len(headings))
+	for _, heading := range headings {
+		definitions = append(definitions, IndexAdmissionDefinition{
+			LocalSymbolKey: heading.LocalKey,
+			Kind:           "heading",
+			SymbolKey:      heading.SymbolKey,
+			Span:           heading.Span,
+		})
+	}
+	return definitions
+}
+
+func indexAdmissionMarkdownReferences(source []byte, definitions []IndexAdmissionDefinition, references []MarkdownReferenceSite) ([]IndexAdmissionReference, error) {
+	definitionKeys := indexAdmissionDefinitionSet(definitions)
+	converted := make([]IndexAdmissionReference, 0, len(references))
+	for _, reference := range references {
+		rawTarget, err := indexAdmissionTextAtSpan(source, reference.Span)
+		if err != nil {
+			return nil, err
+		}
+		ownerSymbolKey, err := indexAdmissionMarkdownOwner(reference.OwnerLocalKey, definitionKeys)
+		if err != nil {
+			return nil, err
+		}
+		siteKey := fmt.Sprintf("reference:%s:%d:%d", reference.Kind, reference.Span.ByteStart, reference.Span.ByteEnd)
+		converted = append(converted, IndexAdmissionReference{
+			SiteKey:        siteKey,
+			Kind:           reference.Kind,
+			SymbolKey:      "markdown:" + siteKey,
+			OwnerSymbolKey: ownerSymbolKey,
+			RawTarget:      rawTarget,
+			Relation:       IndexRelation("references"),
+			Span:           reference.Span,
+		})
+	}
+	return converted, nil
+}
+
+func indexAdmissionMarkdownOwner(localKey string, definitions map[string]struct{}) (*string, error) {
+	if localKey == "" || localKey == "preamble" {
+		return nil, nil
+	}
+	if _, found := definitions[localKey]; !found {
+		return nil, fmt.Errorf("uci index admission: Markdown reference owner is not defined by artifact")
+	}
+	return indexAdmissionStringPointer(localKey), nil
+}
+
+func indexAdmissionMarkdownChunks(source []byte, chunks []MarkdownChunk) ([]IndexAdmissionChunk, error) {
+	converted := make([]IndexAdmissionChunk, 0, len(chunks))
+	for index, chunk := range chunks {
+		text, err := indexAdmissionTextAtSpan(source, chunk.Span)
+		if err != nil {
+			return nil, err
+		}
+		if chunk.Text != text || chunk.ContentDigest != indexAdmissionDigestBytes([]byte(text)) {
+			return nil, fmt.Errorf("uci index admission: Markdown source chunk does not match source bytes")
+		}
+		converted = append(converted, IndexAdmissionChunk{
+			Ordinal:       index,
+			Kind:          "source",
+			Span:          chunk.Span,
+			ContentDigest: chunk.ContentDigest,
+			Text:          chunk.Text,
+		})
+	}
+	return converted, nil
+}
+
+func indexAdmissionMarkdownDiagnostics(diagnostics []MarkdownDiagnostic, status IndexAdmissionArtifactStatus) ([]IndexAdmissionDiagnostic, error) {
+	converted := make([]IndexAdmissionDiagnostic, 0, len(diagnostics)+1)
+	for _, diagnostic := range diagnostics {
+		converted = append(converted, IndexAdmissionDiagnostic{
+			Code:    diagnostic.Code,
+			Span:    diagnostic.Span,
+			Message: diagnostic.Message,
+		})
+	}
+	if status != IndexAdmissionArtifactPartial {
+		return converted, nil
+	}
+	if len(converted) == indexAdmissionMaxDiagnosticsPerArtifact {
+		return nil, newIndexCapacityError(IndexCapacityScopeArtifact, IndexCapacityResourceDiagnostics, uint64(len(converted)+1), uint64(indexAdmissionMaxDiagnosticsPerArtifact))
+	}
+	return append(converted, IndexAdmissionDiagnostic{
+		Code:    "MARKDOWN_PARTIAL_COVERAGE",
+		Message: "Markdown extraction coverage is partial",
+	}), nil
 }
 
 // NewIndexAdmissionArtifactFromJSONYAML converts verified JSON or YAML extraction evidence into one source-scoped generic admission artifact.
