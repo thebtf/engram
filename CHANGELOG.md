@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Made the mandatory SonarQube release gate retain exact-input coverage evidence, bound scanner submission to resumable CE task identity, and expose bounded profile progress without weakening Quality Gate requirements.
+
 ## [6.49.0] - 2026-09-13
 
 ### Added

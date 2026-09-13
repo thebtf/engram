@@ -1,33 +1,48 @@
-import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { spawn, spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import {
+  appendFileSync,
+  copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { arch, hostname, platform } from "node:os";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const scriptRoot = dirname(scriptPath);
 const defaultRepository = resolve(scriptRoot, "../..");
-const commandTimeoutMs = 2 * 60 * 1000;
-const coverageTestTimeoutMs = 30 * 60 * 1000;
-const dockerStartupTimeoutMs = 2 * 60 * 1000;
-const dockerReadyTimeoutMs = 60 * 1000;
 const databaseUser = "engram_sonar";
 const databasePassword = "engram_sonar_disposable";
+const imageReference = "pgvector/pgvector:pg17";
 const installedUCIDatabaseEnv = "ENGRAM_UCI_INSTALLED_TEST_DATABASE_DSN";
 const hapFixtureDatabaseEnv = "HAP01C_FIXTURE_TEST_DSN";
-const coverageProfiles = [
-  { name: "base", target: "./...", race: true },
+const projectKey = "thebtf_engram";
+const schemaVersion = 2;
+const commandTimeoutSeconds = 120;
+const dockerReadyTimeoutSeconds = 60;
+const cleanupReserveSeconds = 120;
+const safeDurationLimitSeconds = 24 * 60 * 60;
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+
+export const coverageProfiles = Object.freeze([
   {
-    name: "cross-package",
+    name: "base",
     target: "./...",
+    race: true,
     coverpkg: "./cmd/...,./internal/...,./pkg/...",
+    resourceGroup: "exclusive",
   },
   { name: "uci", target: "./internal/db/gorm", run: "^TestUCI", databasePrefix: "sonar_uci" },
   {
@@ -74,24 +89,14 @@ const coverageProfiles = [
     skip: "^TestMemoryStore_QueryMetaIndex_FTSVisibilityStopsAtScanBudget$",
     databasePrefix: "sonar_memory",
   },
-  {
-    name: "session-store",
-    target: "./internal/db/gorm",
-    run: "^TestSessionStore",
-    databasePrefix: "sonar_session",
-  },
+  { name: "session-store", target: "./internal/db/gorm", run: "^TestSessionStore", databasePrefix: "sonar_session" },
   {
     name: "project-identity",
     target: "./internal/db/gorm",
     run: "^(TestProjectIdentity|TestRegisterAndResolve|TestValidateProjectIdentity|TestUpsertProject|TestAttachLegacyAlias|TestObserveLegacyOutcome)",
     databasePrefix: "sonar_project_identity",
   },
-  {
-    name: "code-chunk",
-    target: "./internal/db/gorm",
-    run: "^(TestCodeChunkStore_|TestMigration139_)",
-    databasePrefix: "sonar_code_chunk",
-  },
+  { name: "code-chunk", target: "./internal/db/gorm", run: "^(TestCodeChunkStore_|TestMigration139_)", databasePrefix: "sonar_code_chunk" },
   {
     name: "issues",
     target: "./internal/db/gorm",
@@ -113,12 +118,7 @@ const coverageProfiles = [
     skip: "^(TestAuthHandlersLifecycle_LastAdminDemoteRaceLeavesOneAdmin|TestAuthHandlersLifecycle_LastAdminDemoteDisableRaceLeavesOneAdmin|TestAuthHandlersLifecycle_DisabledAdminCanBeDemotedWithoutLastAdminError)$",
     databasePrefix: "sonar_worker_auth",
   },
-  {
-    name: "worker-uci",
-    target: "./internal/worker",
-    run: "^TestUCIApplication",
-    databasePrefix: "sonar_worker_uci",
-  },
+  { name: "worker-uci", target: "./internal/worker", run: "^TestUCIApplication", databasePrefix: "sonar_worker_uci" },
   {
     name: "worker-memory",
     target: "./internal/worker",
@@ -162,47 +162,72 @@ const coverageProfiles = [
     run: "^TestFixtureSeedRotateAndSnapshotIntegration$",
     databasePrefix: "hap01c",
     databaseEnvironment: hapFixtureDatabaseEnv,
+    resourceGroup: "isolated-fixture",
   },
   {
     name: "operator-code-fixture",
     target: "./cmd/operator-code-live-fixture",
     databasePrefix: "operator_code",
+    resourceGroup: "isolated-fixture",
   },
-];
+].map((profile) => Object.freeze({ resourceGroup: "exclusive", ...profile })));
 
-let statusPublication = null;
-
-export function parseOptions(argv) {
-  const options = {
-    publishStatus: false,
-    qualityGateTimeout: 600,
-    repository: defaultRepository,
-    scannerCommand: "sonar-scanner",
-  };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const option = argv[index];
-    if (option === "--publish-status") {
-      options.publishStatus = true;
-      continue;
-    }
-
-    const value = argv[index + 1];
-    if (!value) throw new Error(`Missing value for ${option}`);
-    if (option === "--repository") options.repository = resolve(value);
-    else if (option === "--scanner") options.scannerCommand = value;
-    else if (option === "--timeout") {
-      if (!/^[1-9]\d*$/.test(value)) throw new Error("--timeout must be a positive integer");
-      options.qualityGateTimeout = Number(value);
-      if (!Number.isSafeInteger(options.qualityGateTimeout)) {
-        throw new Error("--timeout exceeds the safe integer range");
-      }
-    } else {
-      throw new Error(`Unknown option: ${option}`);
-    }
-    index += 1;
+class RunnerError extends Error {
+  constructor(message, exitCode = 1, retryable = false) {
+    super(message);
+    this.name = "RunnerError";
+    this.exitCode = exitCode;
+    this.retryable = retryable;
   }
-  return options;
+}
+
+class BudgetError extends RunnerError {
+  constructor(message) {
+    super(message, 124);
+    this.name = "BudgetError";
+  }
+}
+
+class SignalError extends RunnerError {
+  constructor(signal) {
+    super(`${signal} received; runner-owned processes were cancelled`, signal === "SIGINT" ? 130 : 143);
+    this.name = "SignalError";
+  }
+}
+
+export function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+  }
+  return value;
+}
+
+export function canonicalJson(value) {
+  return JSON.stringify(canonicalize(value));
+}
+
+function shaFile(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function atomicWrite(path, contents, mode = 0o600) {
+  mkdirSync(dirname(path), { recursive: true });
+  const temporary = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(temporary, contents, { encoding: "utf8", mode });
+    renameSync(temporary, path);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
+
+function writeJson(path, value) {
+  atomicWrite(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function commandInvocation(command, args) {
@@ -213,111 +238,300 @@ function commandInvocation(command, args) {
   };
 }
 
-function commandError(command, result) {
-  if (result.error?.code === "ETIMEDOUT") return new Error(`${command} timed out`);
-  if (result.error) return new Error(`${command} failed: ${result.error.message}`);
-  if (result.status === null) return new Error(`${command} ended without an exit code`);
-  return new Error(`${command} failed with exit code ${result.status}`);
+function commandFailure(command, result) {
+  if (result.error) return new RunnerError(`${command} failed: ${result.error.message}`);
+  if (result.signal) return new RunnerError(`${command} was terminated by ${result.signal}`);
+  return new RunnerError(`${command} failed with exit code ${result.code}`);
 }
 
-function capture(command, args, cwd, { env = process.env, timeoutMs = commandTimeoutMs } = {}) {
-  const invocation = commandInvocation(command, args);
-  const result = spawnSync(invocation.executable, invocation.args, {
-    cwd,
-    encoding: "utf8",
-    env,
-    timeout: timeoutMs,
-    windowsHide: true,
+function redacted(value, secrets) {
+  let result = String(value);
+  for (const secret of secrets) {
+    if (secret && secret.length >= 3) result = result.split(secret).join("[REDACTED]");
+  }
+  return result.replace(/postgres(?:ql)?:\/\/[^\s"']+/gi, "[REDACTED_DSN]");
+}
+
+function safeRedactionBoundary(value, boundary, secrets) {
+  for (const secret of secrets) {
+    if (!secret || secret.length < 3) continue;
+    for (let length = Math.min(secret.length - 1, boundary); length > 0; length -= 1) {
+      if (value.slice(boundary - length, boundary) === secret.slice(0, length)) boundary -= length;
+    }
+  }
+  const dsn = Math.max(value.lastIndexOf("postgres://", boundary), value.lastIndexOf("postgresql://", boundary));
+  return dsn >= 0 && dsn >= boundary - 1024 ? dsn : boundary;
+}
+
+export function redactChunks(chunks, secrets) {
+  let tail = "";
+  let output = "";
+  const tailLength = Math.max(1024, ...secrets.map((secret) => secret?.length || 0) + 1);
+  for (const chunk of chunks) {
+    const value = tail + String(chunk);
+    const boundary = safeRedactionBoundary(value, Math.max(0, value.length - tailLength), secrets);
+    output += redacted(value.slice(0, boundary), secrets);
+    tail = value.slice(boundary);
+  }
+  return output + redacted(tail, secrets);
+}
+
+function createLogWriter(path, secrets) {
+  let tail = "";
+  const tailLength = Math.max(1024, ...secrets.map((secret) => secret?.length || 0) + 1);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, "", { encoding: "utf8", mode: 0o600 });
+  return {
+    write(chunk) {
+      const value = tail + String(chunk);
+      const boundary = safeRedactionBoundary(value, Math.max(0, value.length - tailLength), secrets);
+      if (boundary) appendFileSync(path, redacted(value.slice(0, boundary), secrets), { encoding: "utf8", mode: 0o600 });
+      tail = value.slice(boundary);
+    },
+    finish() {
+      if (tail) appendFileSync(path, redacted(tail, secrets), { encoding: "utf8", mode: 0o600 });
+      tail = "";
+    },
+  };
+}
+
+async function waitForOwnedExit(record, timeoutMs = 5000) {
+  if (record.child.exitCode !== null || record.child.signalCode) return;
+  const exited = await new Promise((resolveExit) => {
+    const timeout = setTimeout(() => resolveExit(false), timeoutMs);
+    record.child.once("close", () => {
+      clearTimeout(timeout);
+      resolveExit(true);
+    });
   });
-  if (result.error || result.status !== 0) throw commandError(command, result);
+  if (!exited && record.child.exitCode === null && !record.child.signalCode) {
+    throw new RunnerError(`Runner-owned child did not exit: ${record.label || record.command}`);
+  }
+}
+
+async function terminateOwnedChild(record) {
+  if (record.child.exitCode !== null || record.child.signalCode) return;
+  if (process.platform === "win32") {
+    await new Promise((resolveTermination, rejectTermination) => {
+      const killer = spawn("taskkill.exe", ["/pid", String(record.child.pid), "/t", "/f"], { stdio: "ignore", windowsHide: true });
+      killer.once("error", rejectTermination);
+      killer.once("close", (code) => code === 0 ? resolveTermination() : rejectTermination(new RunnerError(`taskkill failed for owned PID ${record.child.pid}`)));
+    });
+    await waitForOwnedExit(record);
+    return;
+  }
+  try { process.kill(-record.child.pid, "SIGTERM"); } catch { }
+  try {
+    await waitForOwnedExit(record, 2000);
+  } catch {
+    try { process.kill(-record.child.pid, "SIGKILL"); } catch { }
+    await waitForOwnedExit(record);
+  }
+}
+
+async function terminateOwnedChildren(children) {
+  await Promise.all([...children.values()].map(terminateOwnedChild));
+}
+
+export function cleanupExecution(execution) {
+  return { ...execution, signal: new AbortController().signal };
+}
+
+function runProcess(command, args, {
+  cwd,
+  env = process.env,
+  timeoutMs,
+  signal,
+  children,
+  label,
+  onStdout,
+  onStderr,
+  onStart,
+} = {}) {
+  const invocation = commandInvocation(command, args);
+  return new Promise((resolveProcess, rejectProcess) => {
+    let settled = false;
+    let timeout = null;
+    let abortListener = null;
+    let stdout = "";
+    let stderr = "";
+    const child = spawn(invocation.executable, invocation.args, {
+      cwd,
+      env,
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    const record = { child, label, command, started_at_utc: new Date().toISOString() };
+    children?.set(child.pid, record);
+    children?.history?.push({ pid: child.pid, label, started_at_utc: record.started_at_utc });
+    onStart?.(record);
+    const finish = (callback, value, retainChild = false) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (signal && abortListener) signal.removeEventListener("abort", abortListener);
+      if (!retainChild) children?.delete(child.pid);
+      callback(value);
+    };
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      onStdout?.(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+      onStderr?.(chunk);
+    });
+    child.once("error", (error) => finish(rejectProcess, new RunnerError(`${command} failed: ${error.message}`)));
+    child.once("close", (code, childSignal) => {
+      const result = { code, signal: childSignal, stdout, stderr };
+      if (code === 0) finish(resolveProcess, result);
+      else finish(rejectProcess, commandFailure(command, result));
+    });
+    if (timeoutMs) {
+      timeout = setTimeout(async () => {
+        try {
+          await terminateOwnedChild(record);
+          finish(rejectProcess, new BudgetError(`${label || command} exceeded its budget`));
+        } catch (error) {
+          finish(rejectProcess, error, true);
+        }
+      }, timeoutMs);
+    }
+    if (signal) {
+      abortListener = async () => {
+        try {
+          await terminateOwnedChild(record);
+          finish(rejectProcess, signal.reason || new SignalError("SIGTERM"));
+        } catch (error) {
+          finish(rejectProcess, error, true);
+        }
+      };
+      if (signal.aborted) abortListener();
+      else signal.addEventListener("abort", abortListener, { once: true });
+    }
+  });
+}
+
+export async function runOwnedCommand(command, args, options = {}) {
+  const children = new Map();
+  children.history = [];
+  try {
+    return await runProcess(command, args, { ...options, children });
+  } finally {
+    await terminateOwnedChildren(children);
+  }
+}
+
+async function capture(command, args, cwd, options = {}) {
+  const timeoutMs = options.timeoutMs ?? (options.deadline ? options.deadline.commandTimeout(commandTimeoutSeconds * 1000) : commandTimeoutSeconds * 1000);
+  const result = await runProcess(command, args, { ...options, cwd, timeoutMs });
   return result.stdout.trim();
 }
 
-function run(command, args, cwd, { env = process.env, timeoutMs = commandTimeoutMs } = {}) {
-  const invocation = commandInvocation(command, args);
-  const result = spawnSync(invocation.executable, invocation.args, {
-    cwd,
-    env,
-    stdio: "inherit",
-    timeout: timeoutMs,
-    windowsHide: true,
-  });
-  if (result.error || result.status !== 0) throw commandError(command, result);
+async function bestEffortCapture(command, args, cwd, options = {}) {
+  try {
+    return await capture(command, args, cwd, options);
+  } catch {
+    return "unavailable";
+  }
 }
 
 function locate(command) {
   if (existsSync(command)) return resolve(command);
-  const locator = process.platform === "win32" ? "where.exe" : "which";
-  const result = spawnSync(locator, [command], {
-    encoding: "utf8",
-    timeout: commandTimeoutMs,
-    windowsHide: true,
-  });
-  if (!result.error && result.status === 0) {
-    return result.stdout.split(/\r?\n/, 1)[0].trim();
+  const extensions = process.platform === "win32" ? (process.env.PATHEXT || ".EXE;.CMD;.BAT").split(";") : [""];
+  for (const directory of (process.env.PATH || "").split(process.platform === "win32" ? ";" : ":")) {
+    if (!directory) continue;
+    for (const extension of extensions) {
+      const path = join(directory, process.platform === "win32" ? command.endsWith(extension.toLowerCase()) ? command : `${command}${extension}` : command);
+      if (existsSync(path)) return path;
+    }
   }
   return null;
 }
 
-function parseReport(path) {
-  if (!existsSync(path)) throw new Error(`SonarScanner did not write ${path}`);
-  const values = new Map();
-  for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    const separator = line.indexOf("=");
-    if (separator < 1) throw new Error(`Malformed report-task line: ${line}`);
-    const key = line.slice(0, separator).trim();
-    if (!key || values.has(key)) throw new Error(`Malformed report-task key: ${line}`);
-    values.set(key, line.slice(separator + 1).trim());
+function resolveScanner(command) {
+  const located = locate(command);
+  if (located) return located;
+  if (process.platform === "win32" && command === "sonar-scanner" && process.env.LOCALAPPDATA) {
+    const fallback = join(process.env.LOCALAPPDATA, "SonarScanner", "8.1.0.6389", "sonar-scanner-8.1.0.6389-windows-x64", "bin", "sonar-scanner.bat");
+    if (existsSync(fallback)) return fallback;
   }
-  for (const key of ["ceTaskUrl", "dashboardUrl"]) {
-    if (!values.get(key)) throw new Error(`report-task.txt is missing ${key}`);
-  }
-  return values;
+  return null;
 }
 
-function reportTarget(path) {
-  try {
-    const report = parseReport(path);
-    return report.get("dashboardUrl") || report.get("ceTaskUrl") || null;
-  } catch {
-    return null;
+function validDuration(option, value) {
+  if (!/^[1-9]\d*$/.test(value)) throw new RunnerError(`${option} must be a positive integer`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed > safeDurationLimitSeconds) {
+    throw new RunnerError(`${option} exceeds the safe duration limit`);
   }
+  return parsed;
 }
 
-function readSonarDotEnv(path) {
-  const values = new Map();
-  if (!existsSync(path)) return values;
-  for (const rawLine of readFileSync(path, "utf8").split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const match = /^(?:export\s+)?(SONAR_TOKEN|SONAR_HOST_URL)\s*=\s*(.*)$/.exec(line);
-    if (!match) continue;
-    if (values.has(match[1])) throw new Error(`Duplicate ${match[1]} in ${path}`);
-    let value = match[2].trim();
-    if (
-      value.length >= 2 &&
-      ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'")))
-    ) {
-      value = value.slice(1, -1);
+export function parseOptions(argv) {
+  const options = {
+    mode: "gate",
+    run: null,
+    fresh: false,
+    jobs: 2,
+    publishStatus: false,
+    repository: defaultRepository,
+    scannerCommand: "sonar-scanner",
+    qualityGateTimeout: 600,
+    overallTimeout: 4500,
+    coverageTimeout: 3600,
+    profileTimeout: 1800,
+    scannerTimeout: 300,
+  };
+  const seen = new Set();
+  for (let index = 0; index < argv.length; index += 1) {
+    const option = argv[index];
+    if (!option.startsWith("--")) throw new RunnerError(`Unknown option: ${option}`);
+    if (seen.has(option)) throw new RunnerError(`Duplicate option: ${option}`);
+    seen.add(option);
+    if (option === "--publish-status") {
+      options.publishStatus = true;
+      continue;
     }
-    values.set(match[1], value);
+    if (option === "--fresh") {
+      options.fresh = true;
+      continue;
+    }
+    const value = argv[index + 1];
+    if (!value || value.startsWith("--")) throw new RunnerError(`Missing value for ${option}`);
+    if (option === "--repository") options.repository = resolve(value);
+    else if (option === "--scanner") options.scannerCommand = value;
+    else if (option === "--mode") {
+      if (!new Set(["gate", "coverage", "scan", "resume"]).has(value)) {
+        throw new RunnerError("--mode must be gate, coverage, scan, or resume");
+      }
+      options.mode = value;
+    } else if (option === "--run") options.run = value;
+    else if (option === "--jobs") {
+      if (value !== "1" && value !== "2") throw new RunnerError("--jobs must be 1 or 2");
+      options.jobs = Number(value);
+    } else if (option === "--timeout") options.qualityGateTimeout = validDuration(option, value);
+    else if (option === "--overall-timeout") options.overallTimeout = validDuration(option, value);
+    else if (option === "--coverage-timeout") options.coverageTimeout = validDuration(option, value);
+    else if (option === "--profile-timeout") options.profileTimeout = validDuration(option, value);
+    else if (option === "--scanner-timeout") options.scannerTimeout = validDuration(option, value);
+    else throw new RunnerError(`Unknown option: ${option}`);
+    index += 1;
   }
-  return values;
-}
-
-function scrubTestEnvironment() {
-  const environment = { ...process.env };
-  delete environment.DATABASE_DSN;
-  delete environment[installedUCIDatabaseEnv];
-  delete environment[hapFixtureDatabaseEnv];
-  delete environment.SONAR_TOKEN;
-  return environment;
-}
-
-function sleep(milliseconds) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+  if (options.mode === "resume" && (!options.run || !uuidPattern.test(options.run))) {
+    throw new RunnerError("--mode resume requires --run <UUID>");
+  }
+  if (options.mode !== "resume" && options.run) throw new RunnerError("--run is only valid with --mode resume");
+  if (options.mode !== "gate" && options.fresh && options.mode !== "coverage") {
+    throw new RunnerError("--fresh is only valid with gate or coverage mode");
+  }
+  if (options.mode === "coverage" && options.publishStatus) {
+    throw new RunnerError("--publish-status is invalid in coverage mode");
+  }
+  return options;
 }
 
 export function parseDockerPort(output) {
@@ -327,429 +541,1524 @@ export function parseDockerPort(output) {
     const port = Number(match[1]);
     if (Number.isInteger(port) && port > 0 && port <= 65535) return port;
   }
-  throw new Error(`Docker did not report a valid PostgreSQL host port: ${output.trim()}`);
-}
-
-function waitForPostgres(dockerCommand, containerName, cwd) {
-  const deadline = Date.now() + dockerReadyTimeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      run(
-        dockerCommand,
-        ["exec", containerName, "pg_isready", "--username", databaseUser, "--dbname", "postgres"],
-        cwd,
-        { timeoutMs: 5 * 1000 },
-      );
-      return;
-    } catch {
-      sleep(1000);
-    }
-  }
-  throw new Error("Timed out waiting for the runner-owned PostgreSQL container");
-}
-
-function stopContainer(dockerCommand, containerName, cwd) {
-  run(dockerCommand, ["rm", "--force", "--volumes", containerName], cwd, {
-    timeoutMs: commandTimeoutMs,
-  });
-}
-
-function startPostgres(dockerCommand, cwd) {
-  const runID = `q${process.pid}_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-  const containerName = `engram-sonarqube-${runID}`;
-  let started = false;
-  try {
-    run(
-      dockerCommand,
-      [
-        "run",
-        "--detach",
-        "--name",
-        containerName,
-        "--publish",
-        "127.0.0.1::5432",
-        "--env",
-        `POSTGRES_USER=${databaseUser}`,
-        "--env",
-        `POSTGRES_PASSWORD=${databasePassword}`,
-        "--env",
-        "POSTGRES_DB=postgres",
-        "pgvector/pgvector:pg17",
-      ],
-      cwd,
-      { timeoutMs: dockerStartupTimeoutMs },
-    );
-    started = true;
-    waitForPostgres(dockerCommand, containerName, cwd);
-    const port = parseDockerPort(
-      capture(dockerCommand, ["port", containerName, "5432/tcp"], cwd, {
-        timeoutMs: commandTimeoutMs,
-      }),
-    );
-    let databaseNumber = 0;
-    return {
-      createDatabase(prefix) {
-        databaseNumber += 1;
-        const name = `${prefix}_${runID}_${databaseNumber}`;
-        if (!/^[a-z][a-z0-9_]{0,62}$/.test(name)) {
-          throw new Error(`Invalid runner database name: ${name}`);
-        }
-        run(dockerCommand, ["exec", containerName, "createdb", "--username", databaseUser, name], cwd, {
-          timeoutMs: commandTimeoutMs,
-        });
-        run(
-          dockerCommand,
-          [
-            "exec",
-            containerName,
-            "psql",
-            "--username",
-            databaseUser,
-            "--dbname",
-            name,
-            "--command",
-            "CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;",
-          ],
-          cwd,
-          { timeoutMs: commandTimeoutMs },
-        );
-        return `postgres://${databaseUser}:${databasePassword}@127.0.0.1:${port}/${name}?sslmode=disable`;
-      },
-      stop() {
-        stopContainer(dockerCommand, containerName, cwd);
-      },
-    };
-  } catch (error) {
-    if (started) {
-      try {
-        stopContainer(dockerCommand, containerName, cwd);
-      } catch (cleanupError) {
-        console.error(`Could not remove runner-owned PostgreSQL container: ${cleanupError.message}`);
-      }
-    }
-    throw error;
-  }
-}
-
-function profileEnvironment(baseEnvironment, profile, databaseDSN) {
-  if (!databaseDSN) return baseEnvironment;
-  const environment = { ...baseEnvironment };
-  if (profile.databaseEnvironment === installedUCIDatabaseEnv) {
-    environment[installedUCIDatabaseEnv] = databaseDSN;
-  } else if (profile.databaseEnvironment === hapFixtureDatabaseEnv) {
-    environment[hapFixtureDatabaseEnv] = databaseDSN;
-  } else {
-    environment.DATABASE_DSN = databaseDSN;
-  }
-  return environment;
-}
-
-function runCoverageProfile(goCommand, profile, coveragePath, cwd, environment, databaseDSN) {
-  const args = [
-    "test",
-    "-p=1",
-    "-count=1",
-    ...(databaseDSN ? ["-parallel=1"] : []),
-    profile.target,
-    "-covermode=atomic",
-    `-coverprofile=${relative(cwd, coveragePath)}`,
-  ];
-  if (profile.race) args.push("-race");
-  if (profile.coverpkg) args.push(`-coverpkg=${profile.coverpkg}`);
-  if (profile.run) args.push(`-run=${profile.run}`);
-  if (profile.skip) args.push(`-skip=${profile.skip}`);
-  run(goCommand, args, cwd, {
-    env: profileEnvironment(environment, profile, databaseDSN),
-    timeoutMs: coverageTestTimeoutMs,
-  });
-}
-
-function compareCoverageBlocks([left], [right]) {
-  if (left < right) return -1;
-  if (left > right) return 1;
-  return 0;
+  throw new RunnerError(`Docker did not report a valid PostgreSQL host port: ${output.trim()}`);
 }
 
 export function mergeCoverProfiles(profilePaths, destination) {
   let mode = null;
   const blocks = new Map();
   for (const profilePath of profilePaths) {
-    if (!existsSync(profilePath)) throw new Error(`Go test did not write ${profilePath}`);
+    if (!existsSync(profilePath)) throw new RunnerError(`Go test did not write ${profilePath}`);
     const lines = readFileSync(profilePath, "utf8").split(/\r?\n/);
     const header = /^mode:\s*(\S+)\s*$/.exec(lines[0] || "");
-    if (!header) throw new Error(`Malformed coverprofile header: ${profilePath}`);
-    if (mode && mode !== header[1]) {
-      throw new Error(`Coverage mode mismatch: ${mode} and ${header[1]}`);
-    }
+    if (!header) throw new RunnerError(`Malformed coverprofile header: ${profilePath}`);
+    if (mode && mode !== header[1]) throw new RunnerError(`Coverage mode mismatch: ${mode} and ${header[1]}`);
     mode = header[1];
     for (const line of lines.slice(1)) {
       if (!line.trim()) continue;
       const block = /^(.*\s+\d+)\s+(\d+)$/.exec(line);
-      if (!block) throw new Error(`Malformed coverprofile block in ${profilePath}: ${line}`);
+      if (!block) throw new RunnerError(`Malformed coverprofile block in ${profilePath}: ${line}`);
       const hitCount = Number(block[2]);
-      if (!Number.isSafeInteger(hitCount) || hitCount < 0) {
-        throw new Error(`Invalid coverprofile hit count in ${profilePath}: ${line}`);
-      }
+      if (!Number.isSafeInteger(hitCount) || hitCount < 0) throw new RunnerError(`Invalid coverprofile hit count in ${profilePath}: ${line}`);
       const previous = blocks.get(block[1]);
       if (previous === undefined || hitCount > previous) blocks.set(block[1], hitCount);
     }
   }
-  if (mode !== "atomic") throw new Error(`Coverage mode must be atomic, got ${mode || "none"}`);
-  if (blocks.size === 0) throw new Error("No Go coverage blocks were collected");
-  writeFileSync(
-    destination,
-    `mode: ${mode}\n${[...blocks.entries()]
-      .sort(compareCoverageBlocks)
-      .map(([block, hitCount]) => `${block} ${hitCount}`)
-      .join("\n")}\n`,
-    "utf8",
-  );
+  if (mode !== "atomic") throw new RunnerError(`Coverage mode must be atomic, got ${mode || "none"}`);
+  if (blocks.size === 0) throw new RunnerError("No Go coverage blocks were collected");
+  const contents = `mode: ${mode}\n${[...blocks.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([block, hitCount]) => `${block} ${hitCount}`)
+    .join("\n")}\n`;
+  atomicWrite(destination, contents);
 }
 
-function collectCoverage(goCommand, dockerCommand, cwd, coverageDirectory, outputPath, environment) {
-  const profilePaths = [];
+function validateCoverage(path, expectedDigest = null) {
+  if (!existsSync(path) || statSync(path).size === 0) throw new RunnerError(`Coverage artifact is missing or empty: ${path}`);
+  const digest = shaFile(path);
+  if (expectedDigest && digest !== expectedDigest) throw new RunnerError(`Coverage digest mismatch: ${path}`);
+  const lines = readFileSync(path, "utf8").split(/\r?\n/);
+  if (!/^mode:\s*atomic\s*$/.test(lines[0] || "") || !lines.slice(1).some((line) => line.trim())) {
+    throw new RunnerError(`Coverage artifact is not a nonempty atomic coverprofile: ${path}`);
+  }
+  return { sha256: digest, bytes: statSync(path).size };
+}
+
+function safeRelative(root, value) {
+  const rootPath = realpathSync(root);
+  const lexical = resolve(rootPath, value);
+  if (lexical !== rootPath && !lexical.startsWith(`${rootPath}${sep}`)) throw new RunnerError(`Artifact path escapes its campaign: ${value}`);
+  const path = realpathSync(lexical);
+  if (path !== rootPath && !path.startsWith(`${rootPath}${sep}`)) throw new RunnerError(`Artifact path resolves outside its campaign: ${value}`);
+  return path;
+}
+function digestPath(path) {
+  const info = lstatSync(path);
+  if (info.isSymbolicLink()) return digestPath(realpathSync(path));
+  if (info.isFile()) return shaFile(path);
+  if (info.isDirectory()) return sha256(canonicalJson(inventoryEntries(path).sort((left, right) => left.path.localeCompare(right.path))));
+  return "unsupported";
+}
+
+function inventoryEntries(root, directory = root, entries = [], deadline = null) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    deadline?.commandTimeout(1);
+    const path = join(directory, entry.name);
+    const rel = relative(root, path).replaceAll("\\", "/");
+    if (!rel) continue;
+    if (rel === ".git" || rel.startsWith(".git/") || rel === ".agent" || rel.startsWith(".agent/")) continue;
+    if (rel === ".scannerwork" || rel.startsWith(".scannerwork/") || rel === "coverage.out" || rel === ".env") continue;
+    const info = lstatSync(path);
+    if (info.isSymbolicLink()) {
+      const resolved = realpathSync(path);
+      entries.push({ path: rel, type: "symlink", target: readlinkSync(path), resolved_sha256: digestPath(resolved) });
+    } else if (info.isDirectory()) {
+      entries.push({ path: rel, type: "directory" });
+      inventoryEntries(root, path, entries, deadline);
+    } else if (info.isFile()) {
+      entries.push({ path: rel, type: "file", sha256: shaFile(path), bytes: info.size });
+    }
+  }
+  return entries;
+}
+
+export function sourceInventory(root, deadline = null) {
+  const entries = inventoryEntries(root, root, [], deadline).sort((left, right) => left.path.localeCompare(right.path));
+  return { entries, sha256: sha256(canonicalJson(entries)) };
+}
+
+async function sourceInventoryAsync(root, deadline) {
+  const entries = [];
+  let visited = 0;
+  const walk = async (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      deadline.commandTimeout(1);
+      visited += 1;
+      if (visited % 64 === 0) await new Promise((resolveYield) => setImmediate(resolveYield));
+      const path = join(directory, entry.name);
+      const rel = relative(root, path).replaceAll("\\", "/");
+      if (!rel || rel === ".git" || rel.startsWith(".git/") || rel === ".agent" || rel.startsWith(".agent/") || rel === ".scannerwork" || rel.startsWith(".scannerwork/") || rel === "coverage.out" || rel === ".env") continue;
+      const info = lstatSync(path);
+      if (info.isSymbolicLink()) {
+        const resolved = realpathSync(path);
+        entries.push({ path: rel, type: "symlink", target: readlinkSync(path), resolved_sha256: digestPath(resolved) });
+      } else if (info.isDirectory()) {
+        entries.push({ path: rel, type: "directory" });
+        await walk(path);
+      } else if (info.isFile()) {
+        entries.push({ path: rel, type: "file", sha256: shaFile(path), bytes: info.size });
+      }
+    }
+  };
+  await walk(root);
+  entries.sort((left, right) => left.path.localeCompare(right.path));
+  return { entries, sha256: sha256(canonicalJson(entries)) };
+}
+
+function scrubTestEnvironment() {
+  const environment = { ...process.env };
+  delete environment.DATABASE_DSN;
+  delete environment[installedUCIDatabaseEnv];
+  delete environment[hapFixtureDatabaseEnv];
+  delete environment.SONAR_TOKEN;
+  delete environment.SONAR_HOST_URL;
+  return environment;
+}
+
+function localWorkspaceInputs(root, environment) {
+  const inputs = [];
+  for (const config of [join(root, "go.mod"), join(root, "go.work")]) {
+    if (!existsSync(config)) continue;
+    inputs.push({ name: relative(root, config), sha256: shaFile(config) });
+    for (const line of readFileSync(config, "utf8").split(/\r?\n/)) {
+      const match = /(?:=>|^\s*use\s+)(\.?\.?[\\/][^\s)]+|[A-Za-z]:[\\/][^\s)]+)/.exec(line);
+      if (!match) continue;
+      const input = resolve(dirname(config), match[1]);
+      if (existsSync(input)) inputs.push({ name: relative(root, input).replaceAll("\\", "/"), sha256: digestPath(realpathSync(input)) });
+    }
+  }
+  for (const name of ["ENGRAM_UCI_PARSER_EXECUTABLE", "CC", "CXX", "GOMOD", "GOWORK"]) {
+    const value = environment[name];
+    if (typeof value !== "string" || !value || !existsSync(value)) continue;
+    inputs.push({ name, sha256: digestPath(realpathSync(value)) });
+  }
+  return inputs.sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right)));
+}
+
+async function resolveImage(dockerCommand, cwd, execution) {
+  let image = await bestEffortCapture(dockerCommand, ["image", "inspect", "--format", "{{.Id}}", imageReference], cwd, execution);
+  if (!/^sha256:[0-9a-f]{64}$/i.test(image)) {
+    await capture(dockerCommand, ["pull", imageReference], cwd, execution);
+    image = await capture(dockerCommand, ["image", "inspect", "--format", "{{.Id}}", imageReference], cwd, execution);
+  }
+  if (!/^sha256:[0-9a-f]{64}$/i.test(image)) throw new RunnerError("Docker did not return an immutable pgvector image ID");
+  return image.toLowerCase();
+}
+
+async function coverageEnvironment(repoRoot, { goCommand, dockerCommand, imageId, execution }) {
+  const testEnvironment = scrubTestEnvironment();
+  const values = {
+    node: process.version,
+    platform: platform(),
+    architecture: arch(),
+    git: await bestEffortCapture("git", ["--version"], repoRoot, execution),
+    go: goCommand ? await bestEffortCapture(goCommand, ["version"], repoRoot, execution) : "unavailable",
+    go_env: goCommand ? await bestEffortCapture(goCommand, ["env", "GOOS", "GOARCH", "GOAMD64", "GOVERSION", "GOTOOLCHAIN", "CGO_ENABLED", "CC", "CXX", "GOFLAGS", "GOEXPERIMENT", "GOMOD", "GOWORK", "GOROOT"], repoRoot, execution) : "unavailable",
+    cc: await bestEffortCapture(testEnvironment.CC || "cc", ["--version"], repoRoot, execution),
+    cxx: await bestEffortCapture(testEnvironment.CXX || "c++", ["--version"], repoRoot, execution),
+    image_id: imageId,
+    file_inputs: localWorkspaceInputs(repoRoot, testEnvironment),
+    test_environment_sha256: sha256(canonicalJson(testEnvironment)),
+  };
+  return { values, sha256: sha256(canonicalJson(values)), testEnvironment };
+}
+
+function profileDescriptor(profile) {
+  const args = ["test", "-json", "-p=1", "-count=1", profile.target, "-covermode=atomic"];
+  if (profile.databasePrefix) args.push("-parallel=1");
+  if (profile.race) args.push("-race");
+  if (profile.coverpkg) args.push(`-coverpkg=${profile.coverpkg}`);
+  if (profile.run) args.push(`-run=${profile.run}`);
+  if (profile.skip) args.push(`-skip=${profile.skip}`);
+  return { ...profile, effective_argv: args };
+}
+
+function testInventoryFingerprint(profile, candidate) {
+  const prefix = profile.target === "./..." ? "" : `${profile.target.slice(2)}/`;
+  return sha256(canonicalJson((candidate.inventory || []).filter((entry) => entry.type === "file" && entry.path.endsWith("_test.go") && (!prefix || entry.path.startsWith(prefix)))));
+}
+
+export function fingerprintProfile(profile, candidate, environment) {
+  return sha256(canonicalJson({
+    descriptor: profileDescriptor(profile),
+    candidate_inputs_sha256: candidate.inputs_sha256,
+    test_inventory_sha256: testInventoryFingerprint(profile, candidate),
+    environment_sha256: environment.sha256,
+    runner_sha256: shaFile(scriptPath),
+  }));
+}
+
+async function candidateFor(repoRoot, execution) {
+  const root = realpathSync(repoRoot);
+  const head = (await capture("git", ["rev-parse", "--verify", "HEAD^{commit}"], root, execution)).toLowerCase();
+  const tree = (await capture("git", ["rev-parse", "--verify", "HEAD^{tree}"], root, execution)).toLowerCase();
+  const commonGitDir = realpathSync(await capture("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], root, execution));
+  if (!/^[0-9a-f]{40}$/.test(head) || !/^[0-9a-f]{40}$/.test(tree)) throw new RunnerError("Git did not return a full commit/tree identity");
+  const inventory = await sourceInventoryAsync(root, execution.deadline);
+  execution.deadline.commandTimeout(1);
+  return {
+    repository_path: root,
+    repository_id: sha256(commonGitDir),
+    worktree_id: sha256(root),
+    head,
+    tree,
+    inputs_sha256: inventory.sha256,
+    inventory: inventory.entries,
+    coordination_root: dirname(commonGitDir),
+  };
+}
+
+async function assertCandidate(candidate, execution, { requireClean = false } = {}) {
+  const current = await candidateFor(candidate.repository_path, execution);
+  for (const key of ["repository_id", "worktree_id", "head", "tree", "inputs_sha256"]) {
+    if (current[key] !== candidate[key]) throw new RunnerError(`Candidate changed while running (${key})`);
+  }
+  if (requireClean && await capture("git", ["status", "--porcelain"], candidate.repository_path, execution)) {
+    throw new RunnerError("Refusing to run SonarQube against a dirty working tree");
+  }
+}
+
+function readJson(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function manifestsIn(namespace) {
+  const runs = join(namespace, "runs");
+  if (!existsSync(runs)) return [];
+  return readdirSync(runs, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && uuidPattern.test(entry.name))
+    .map((entry) => ({ runDir: join(runs, entry.name), manifest: readJson(join(runs, entry.name, "manifest.json")) }))
+    .filter(({ manifest }) => manifest?.schema_version === schemaVersion && uuidPattern.test(manifest.run_id))
+    .sort(({ manifest: left }, { manifest: right }) => String(right.started_at_utc).localeCompare(String(left.started_at_utc)));
+}
+
+function referencedRun(record, runId, candidate, environment) {
+  if (!uuidPattern.test(runId)) return null;
+  try {
+    const runsRoot = realpathSync(dirname(record.runDir));
+    const runDir = realpathSync(join(runsRoot, runId));
+    if (dirname(runDir) !== runsRoot) return null;
+    const manifest = readJson(join(runDir, "manifest.json"));
+    if (!manifest || manifest.schema_version !== schemaVersion || manifest.run_id !== runId || !sameCandidate(manifest.candidate, candidate) || manifest.fingerprints?.coverage_environment !== environment.sha256) return null;
+    return { runDir, manifest };
+  } catch {
+    return null;
+  }
+}
+
+function sameCandidate(left, right) {
+  return left && right && ["repository_id", "worktree_id", "head", "tree", "inputs_sha256"].every((key) => left[key] === right[key]);
+}
+
+function artifactFrom(manifestRecord, artifact) {
+  if (!artifact?.path || !artifact.sha256) throw new RunnerError("Profile artifact metadata is incomplete");
+  const path = safeRelative(manifestRecord.runDir, artifact.path);
+  const verified = validateCoverage(path, artifact.sha256);
+  if (artifact.bytes !== verified.bytes) throw new RunnerError("Profile artifact byte count mismatch");
+  return { path, ...verified };
+}
+
+function validTestEvidence(manifestRecord, entry, profile, candidate, environment) {
+  if (!Array.isArray(entry.expected_tests) || !entry.expected_tests.length || entry.expected_tests.some((item) => !item?.package || !item?.test)) return false;
+  if (entry.expected_test_inventory_sha256 !== sha256(canonicalJson(entry.expected_tests))) return false;
+  if (!entry.test_events?.path || !entry.test_events.sha256 || !Number.isSafeInteger(entry.test_events.bytes)) return false;
+  let path;
+  try { path = safeRelative(manifestRecord.runDir, entry.test_events.path); } catch { return false; }
+  if (!existsSync(path) || statSync(path).size !== entry.test_events.bytes || shaFile(path) !== entry.test_events.sha256) return false;
+  const passedTests = new Set();
+  const passedPackages = new Set();
+  const skipped = [];
+  const reasons = new Map();
+  for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let value;
+    try { value = JSON.parse(line); } catch { return false; }
+    const key = value.Test ? testIdentity(value.Package || "", value.Test) : null;
+    if (value.Action === "fail") return false;
+    if (key && value.Action === "output") reasons.set(key, `${reasons.get(key) || ""}${value.Output || ""}`);
+    if (key && value.Action === "pass") passedTests.add(key);
+    if (value.Package && value.Action === "pass") passedPackages.add(value.Package);
+    if (key && value.Action === "skip") skipped.push({ package: value.Package || "", test: value.Test, reason: reasons.get(key)?.trim() || "" });
+  }
+  const obligations = skipped.map((skip) => skipAdmission(profile, skip, candidate));
+  if (obligations.some((obligation) => !obligation)) return false;
+  for (const obligation of obligations.filter((obligation) => obligation.kind !== "conditional")) {
+    const owner = coverageProfiles.find((candidateProfile) => candidateProfile.name === obligation.required_profile);
+    const ownerEntry = manifestRecord.manifest.profiles?.find((item) => item.name === obligation.required_profile);
+    if (!owner || !ownerEntry || ownerEntry.status !== "passed" || ownerEntry.fingerprint !== fingerprintProfile(owner, candidate, environment)) return false;
+  }
+  const acceptedTests = new Set([...passedTests, ...obligations.map((obligation) => testIdentity(obligation.package, obligation.test))]);
+  const counts = entry.package_counts || {};
+  return Number.isSafeInteger(counts.passed) && counts.passed > 0 &&
+    counts.passed === passedPackages.size && counts.tests_passed === passedTests.size && counts.tests_skipped === skipped.length &&
+    entry.expected_tests.every((item) => acceptedTests.has(testIdentity(item.package, item.test))) && !entry.unexpected_skip_count;
+}
+
+export function reusableProfile(manifestRecord, profile, candidate, environment) {
+  const manifest = manifestRecord?.manifest;
+  if (!manifest || !sameCandidate(manifest.candidate, candidate)) return null;
+  const entry = manifest.profiles?.find((item) => item.name === profile.name);
+  if (!entry || entry.status !== "passed" || entry.fingerprint !== fingerprintProfile(profile, candidate, environment)) return null;
+  const sourceRecord = entry.source_run_id ? referencedRun(manifestRecord, entry.source_run_id, candidate, environment) : manifestRecord;
+  if (!sourceRecord) return null;
+  const sourceEntry = sourceRecord.manifest?.profiles?.find((item) => item.name === profile.name);
+  try {
+    if (!sourceEntry || !validTestEvidence(sourceRecord, sourceEntry, profile, candidate, environment)) return null;
+    return { entry, artifact: artifactFrom(sourceRecord, sourceEntry.coverage), sourceRun: entry.source_run_id || manifest.run_id };
+  } catch {
+    return null;
+  }
+}
+
+function findReusableProfiles(namespace, profiles, candidate, environment) {
+  const found = new Map();
+  for (const record of manifestsIn(namespace)) {
+    for (const profile of profiles) {
+      if (!found.has(profile.name)) {
+        const reusable = reusableProfile(record, profile, candidate, environment);
+        if (reusable) found.set(profile.name, reusable);
+      }
+    }
+  }
+  return found;
+}
+
+function completeCoverage(record, candidate, environment) {
+  const manifest = record.manifest;
+  if (!sameCandidate(manifest.candidate, candidate) || manifest.fingerprints?.coverage_environment !== environment.sha256) return null;
+  if (manifest.result?.coverage !== "passed" || manifest.merged?.status !== "passed") return null;
+  if (!Array.isArray(manifest.profiles) || manifest.profiles.length !== coverageProfiles.length) return null;
+  if (coverageProfiles.some((profile) => !reusableProfile(record, profile, candidate, environment))) return null;
+  const sourceRecord = manifest.merged.source_run_id
+    ? referencedRun(record, manifest.merged.source_run_id, candidate, environment)
+    : record;
+  if (!sourceRecord) return null;
+  try {
+    const coverage = artifactFrom(sourceRecord, manifest.merged);
+    return { ...record, coverage };
+  } catch {
+    return null;
+  }
+}
+
+export function validAnalysisEvidence(record) {
+  const analysis = record.manifest?.analysis;
+  if (!analysis?.host || !analysis?.ce_task_id || !analysis?.report?.path || !analysis.report.sha256 || !Number.isSafeInteger(analysis.report.bytes)) return false;
+  try {
+    const path = safeRelative(record.runDir, analysis.report.path);
+    if (statSync(path).size !== analysis.report.bytes || shaFile(path) !== analysis.report.sha256) return false;
+    const report = validateReport(parseReport(path), analysis.host);
+    return report.ce_task_id === analysis.ce_task_id && report.ce_task_url === analysis.ce_task_url && report.dashboard_url === analysis.dashboard_url;
+  } catch {
+    return false;
+  }
+}
+
+function findCompleteCoverage(namespace, candidate, environment) {
+  for (const record of manifestsIn(namespace)) {
+    const complete = completeCoverage(record, candidate, environment);
+    if (complete) return complete;
+  }
+  return null;
+}
+
+function resumableAnalysis(namespace, candidate, environment) {
+  for (const record of manifestsIn(namespace)) {
+    const { manifest } = record;
+    if (!sameCandidate(manifest.candidate, candidate) || manifest.fingerprints?.coverage_environment !== environment.sha256) continue;
+    if (!["submitted", "ce_running"].includes(manifest.analysis?.state) || !manifest.analysis.ce_task_id) continue;
+    if (completeCoverage(record, candidate, environment) && validAnalysisEvidence(record)) return record;
+  }
+  return null;
+}
+
+function lockPath(namespace) {
+  return join(namespace, "lock.json");
+}
+
+export function acquireLock(namespace, runId) {
+  mkdirSync(namespace, { recursive: true });
+  const path = lockPath(namespace);
+  const lock = { run_id: runId, pid: process.pid, host: hostname(), started_at_utc: new Date().toISOString() };
+  try {
+    writeFileSync(path, `${JSON.stringify(lock)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  } catch (error) {
+    if (error.code === "EEXIST") throw new RunnerError(`A Sonar runner already owns this worktree: ${path}`);
+    throw error;
+  }
+  return () => rmSync(path, { force: true });
+}
+
+function newManifest(runId, mode, candidate, environment, options, runDir) {
+  const started = new Date().toISOString();
+  return {
+    schema_version: schemaVersion,
+    run_id: runId,
+    mode,
+    started_at_utc: started,
+    candidate: {
+      repository_id: candidate.repository_id,
+      worktree_id: candidate.worktree_id,
+      repository_path: candidate.repository_path,
+      head: candidate.head,
+      tree: candidate.tree,
+      inputs_sha256: candidate.inputs_sha256,
+      inventory: candidate.inventory,
+    },
+    fingerprints: {
+      coverage_environment: environment.sha256,
+      profile_set: sha256(canonicalJson(coverageProfiles.map(profileDescriptor))),
+      analysis_inputs: sha256(canonicalJson({ candidate: candidate.inputs_sha256, sonar_project: shaFile(join(candidate.repository_path, "sonar-project.properties")) })),
+    },
+    budgets: {
+      overall_seconds: options.overallTimeout,
+      coverage_seconds: options.coverageTimeout,
+      profile_seconds: options.profileTimeout,
+      scanner_seconds: options.scannerTimeout,
+      quality_gate_seconds: options.qualityGateTimeout,
+      command_seconds: commandTimeoutSeconds,
+      cleanup_reserve_seconds: cleanupReserveSeconds,
+      started_at_utc: started,
+    },
+    paths: { manifest: join(runDir, "manifest.json") },
+    profiles: [],
+    merged: { status: "pending" },
+    analysis: { state: "not_submitted", project_key: projectKey, attempts: [] },
+    publication: { requested: options.publishStatus, state: options.publishStatus ? "pending" : "not_requested" },
+    resources: { children: [], cleanup: { state: "pending", errors: [] } },
+    result: { coverage: "incomplete", technical_gate: "incomplete", effect: options.publishStatus ? "pending" : "not_requested", disposition: "incomplete" },
+  };
+}
+
+function createCampaign(namespace, mode, candidate, environment, options) {
+  const runId = randomUUID();
+  const runDir = join(namespace, "runs", runId);
+  const manifest = newManifest(runId, mode, candidate, environment, options, runDir);
+  mkdirSync(runDir, { recursive: true, mode: 0o700 });
+  atomicWrite(join(runDir, "events.ndjson"), "");
+  writeJson(join(runDir, "manifest.json"), manifest);
+  return { runId, runDir, manifest };
+}
+
+function saveCampaign(campaign) {
+  writeJson(join(campaign.runDir, "manifest.json"), campaign.manifest);
+}
+
+function event(campaign, phase, kind, details = {}) {
+  appendFileSync(join(campaign.runDir, "events.ndjson"), `${JSON.stringify({ at_utc: new Date().toISOString(), run_id: campaign.manifest.run_id, phase, kind, ...details })}\n`, { encoding: "utf8", mode: 0o600 });
+}
+
+class Progress {
+  constructor(campaign, deadline) {
+    this.campaign = campaign;
+    this.deadline = deadline;
+    this.startedMs = deadline.started;
+    this.phase = "preflight";
+    this.phaseStarted = this.startedMs;
+    this.active = new Map();
+    this.completed = 0;
+    this.reused = 0;
+    this.lastProgress = new Date().toISOString();
+    this.lastOutput = null;
+    this.timer = null;
+  }
+
+  meaningful(phase, details = {}) {
+    if (phase !== this.phase) this.phaseStarted = Date.now();
+    this.phase = phase;
+    this.lastProgress = new Date().toISOString();
+    event(this.campaign, phase, "progress", { ...details, elapsed_ms: Date.now() - this.startedMs, phase_elapsed_ms: Date.now() - this.phaseStarted, last_progress_utc: this.lastProgress });
+  }
+
+  activate(profile) {
+    this.active.set(profile, { started_ms: Date.now(), current_test: null, current_package: null });
+  }
+
+  output(profile, currentTest = null, currentPackage = null) {
+    const active = this.active.get(profile);
+    if (active) {
+      active.current_test = currentTest || active.current_test;
+      active.current_package = currentPackage || active.current_package;
+    }
+    this.lastOutput = new Date().toISOString();
+  }
+
+  deactivate(profile) {
+    this.active.delete(profile);
+  }
+
+  start() {
+    this.timer = setInterval(() => {
+      const now = Date.now();
+      const age = now - Date.parse(this.lastProgress);
+      const activeProfiles = [...this.active.entries()].map(([name, value]) => ({ profile: name, elapsed_ms: now - value.started_ms, current_test: value.current_test, current_package: value.current_package }));
+      event(this.campaign, this.phase, age >= 120000 ? "stalled" : "heartbeat", {
+        head: this.campaign.manifest.candidate.head,
+        active_profiles: activeProfiles,
+        completed_profiles: this.completed,
+        required_profiles: coverageProfiles.length,
+        reused_profiles: this.reused,
+        elapsed_ms: now - this.startedMs,
+        phase_elapsed_ms: now - this.phaseStarted,
+        deadline_remaining_ms: this.deadline.remaining(this.phase),
+        last_progress_utc: this.lastProgress,
+        last_progress_age_ms: age,
+        last_output_utc: this.lastOutput,
+        last_output_age_ms: this.lastOutput ? now - Date.parse(this.lastOutput) : null,
+        ce_status: this.campaign.manifest.analysis?.last_ce_status || null,
+      });
+      console.log(`sonar run ${this.campaign.manifest.run_id}: ${this.phase}; ${this.completed}/${coverageProfiles.length}; reused ${this.reused}; diagnostics ${this.campaign.runDir}`);
+    }, 10000);
+    this.timer.unref?.();
+  }
+
+  stop() {
+    clearInterval(this.timer);
+  }
+}
+
+export class Deadline {
+  constructor(options) {
+    this.started = Date.now();
+    this.overall = this.started + options.overallTimeout * 1000;
+    this.limits = { coverage: options.coverageTimeout * 1000, scanner: options.scannerTimeout * 1000, quality: options.qualityGateTimeout * 1000 };
+    this.profile = options.profileTimeout * 1000;
+    this.phaseDeadlines = { coverage: null, scanner: null, quality: null };
+  }
+
+  phaseFor(phase) {
+    if (phase === "scanner") return "scanner";
+    if (["ce", "quality", "quality-gate"].includes(phase)) return "quality";
+    return "coverage";
+  }
+
+  begin(phase) {
+    const resolved = this.phaseFor(phase);
+    if (!this.phaseDeadlines[resolved]) this.phaseDeadlines[resolved] = Date.now() + this.limits[resolved];
+    return resolved;
+  }
+
+  remaining(phase) {
+    const resolved = this.phaseFor(phase);
+    const phaseDeadline = this.phaseDeadlines[resolved] || (Date.now() + this.limits[resolved]);
+    return Math.max(0, Math.min(this.overall - Date.now() - cleanupReserveSeconds * 1000, phaseDeadline - Date.now()));
+  }
+
+  timeoutFor(phase, ownMs) {
+    const resolved = this.begin(phase);
+    const timeout = Math.min(ownMs, this.phaseDeadlines[resolved] - Date.now(), this.overall - Date.now() - cleanupReserveSeconds * 1000);
+    if (timeout <= 0) throw new BudgetError(`${resolved} budget exhausted`);
+    return timeout;
+  }
+
+  commandTimeout(ownMs) {
+    const timeout = Math.min(ownMs, this.overall - Date.now() - cleanupReserveSeconds * 1000);
+    if (timeout <= 0) throw new BudgetError("Overall runner budget exhausted; cleanup reserve retained");
+    return timeout;
+  }
+}
+
+async function wait(milliseconds, signal) {
+  if (signal?.aborted) throw signal.reason;
+  return new Promise((resolveWait, rejectWait) => {
+    const timeout = setTimeout(resolveWait, milliseconds);
+    const abort = () => {
+      clearTimeout(timeout);
+      rejectWait(signal.reason);
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+async function waitForPostgres(dockerCommand, containerId, cwd, execution, deadline) {
+  const until = Date.now() + dockerReadyTimeoutSeconds * 1000;
+  while (Date.now() < until) {
+    try {
+      await capture(dockerCommand, ["exec", containerId, "pg_isready", "--username", databaseUser, "--dbname", "postgres"], cwd, {
+        ...execution,
+        timeoutMs: Math.min(5000, deadline.timeoutFor("coverage", 5000)),
+      });
+      return;
+    } catch (error) {
+      if (error instanceof SignalError || error instanceof BudgetError) throw error;
+      await wait(1000, execution.signal);
+    }
+  }
+  throw new BudgetError("Timed out waiting for the runner-owned PostgreSQL container");
+}
+
+async function startPostgres(dockerCommand, cwd, imageId, campaign, execution, deadline) {
+  const name = `engram-sonarqube-${campaign.manifest.run_id.replaceAll("-", "").slice(0, 20)}`;
+  let containerId = null;
+  const remove = async () => {
+    const cleanup = cleanupExecution(execution);
+    const inspected = await capture(dockerCommand, ["inspect", "--format", "{{.Id}} {{index .Config.Labels \"engram.sonar.run\"}}", containerId], cwd, { ...cleanup, timeoutMs: commandTimeoutSeconds * 1000 });
+    if (!inspected.startsWith(containerId) || !inspected.endsWith(campaign.manifest.run_id)) throw new RunnerError("Refusing to remove a PostgreSQL container without the current runner ownership label");
+    await capture(dockerCommand, ["rm", "--force", "--volumes", containerId], cwd, { ...cleanup, timeoutMs: commandTimeoutSeconds * 1000 });
+    campaign.manifest.resources.container.state = "removed";
+    saveCampaign(campaign);
+  };
+  try {
+    const output = await capture(dockerCommand, [
+      "run", "--detach", "--name", name, "--publish", "127.0.0.1::5432",
+      "--label", "engram.sonar.owner=run-sonarqube", "--label", `engram.sonar.run=${campaign.manifest.run_id}`,
+      "--env", `POSTGRES_USER=${databaseUser}`, "--env", `POSTGRES_PASSWORD=${databasePassword}`, "--env", "POSTGRES_DB=postgres", imageId,
+    ], cwd, { ...execution, timeoutMs: deadline.timeoutFor("coverage", commandTimeoutSeconds * 1000), label: "PostgreSQL startup" });
+    containerId = output.trim();
+    if (!/^[0-9a-f]{12,64}$/i.test(containerId)) throw new RunnerError("Docker did not return a container ID for the runner-owned PostgreSQL container");
+    campaign.manifest.resources.container = { id: containerId, name, image_id: imageId, owner_label: campaign.manifest.run_id, state: "running" };
+    saveCampaign(campaign);
+    await waitForPostgres(dockerCommand, containerId, cwd, execution, deadline);
+    const port = parseDockerPort(await capture(dockerCommand, ["port", containerId, "5432/tcp"], cwd, { ...execution, timeoutMs: deadline.timeoutFor("coverage", commandTimeoutSeconds * 1000) }));
+    let serial = 0;
+    let provisioning = Promise.resolve();
+    return {
+      async createDatabase(prefix, profileDeadline) {
+        serial += 1;
+        const database = `${prefix}_${campaign.manifest.run_id.replaceAll("-", "").slice(0, 16)}_${serial}`;
+        if (!/^[a-z][a-z0-9_]{0,62}$/.test(database)) throw new RunnerError(`Invalid runner database name: ${database}`);
+        const current = provisioning.then(async () => {
+          const timeoutMs = profileTimeout(deadline, profileDeadline, commandTimeoutSeconds * 1000);
+          await capture(dockerCommand, ["exec", containerId, "createdb", "--username", databaseUser, database], cwd, { ...execution, timeoutMs });
+          await capture(dockerCommand, ["exec", containerId, "psql", "--username", databaseUser, "--dbname", database, "--command", "CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;"], cwd, { ...execution, timeoutMs: profileTimeout(deadline, profileDeadline, commandTimeoutSeconds * 1000) });
+        });
+        provisioning = current.catch(() => { });
+        await current;
+        return `postgres://${databaseUser}:${databasePassword}@127.0.0.1:${port}/${database}?sslmode=disable`;
+      },
+      stop: remove,
+    };
+  } catch (error) {
+    if (containerId && campaign.manifest.resources.container?.state === "running") {
+      try { await remove(); } catch (cleanupError) {
+        campaign.manifest.resources.cleanup.errors.push(cleanupError.message);
+        saveCampaign(campaign);
+      }
+    }
+    throw error;
+  }
+}
+function profileEnvironment(baseEnvironment, profile, databaseDSN) {
+  if (!databaseDSN) return baseEnvironment;
+  const environment = { ...baseEnvironment };
+  if (profile.databaseEnvironment === installedUCIDatabaseEnv) environment[installedUCIDatabaseEnv] = databaseDSN;
+  else if (profile.databaseEnvironment === hapFixtureDatabaseEnv) environment[hapFixtureDatabaseEnv] = databaseDSN;
+  else environment.DATABASE_DSN = databaseDSN;
+  return environment;
+}
+
+function testIdentity(packageName, test) {
+  return `${packageName}/${test}`;
+}
+
+function parseTestList(output, profile) {
+  const run = profile.run ? new RegExp(profile.run) : null;
+  const skip = profile.skip ? new RegExp(profile.skip) : null;
+  const tests = [];
+  let pending = [];
+  for (const raw of output.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (/^Test/.test(line)) {
+      pending.push(line);
+      continue;
+    }
+    const packageMatch = /^ok\s+(\S+)/.exec(line);
+    if (!packageMatch) continue;
+    for (const test of pending) {
+      if ((!run || run.test(test)) && (!skip || !skip.test(test))) tests.push({ package: packageMatch[1], test });
+    }
+    pending = [];
+  }
+  return tests.sort((left, right) => testIdentity(left.package, left.test).localeCompare(testIdentity(right.package, right.test)));
+}
+
+function profileTimeout(deadline, profileDeadline, ownMs) {
+  const timeout = Math.min(deadline.timeoutFor("profile", ownMs), profileDeadline - Date.now());
+  if (timeout <= 0) throw new BudgetError("profile budget exhausted");
+  return timeout;
+}
+
+async function expectedTests(goCommand, profile, cwd, environment, execution, deadline, profileDeadline) {
+  const result = await runProcess(goCommand, ["test", "-list", ".", profile.target], {
+    ...execution,
+    cwd,
+    env: environment,
+    timeoutMs: profileTimeout(deadline, profileDeadline, commandTimeoutSeconds * 1000),
+    label: `${profile.name} test inventory`,
+  });
+  const tests = parseTestList(result.stdout, profile);
+  if (!tests.length) throw new RunnerError(`${profile.name} selected no tests`);
+  return tests;
+}
+
+function consumeGoEvents(chunk, state, write) {
+  state.buffer += chunk;
+  const lines = state.buffer.split(/\r?\n/);
+  state.buffer = lines.pop();
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    write(`${line}\n`);
+    let eventValue;
+    try { eventValue = JSON.parse(line); } catch { continue; }
+    if (eventValue.Test) {
+      const key = testIdentity(eventValue.Package || "", eventValue.Test);
+      state.currentTest = eventValue.Test;
+      state.currentPackage = eventValue.Package || state.currentPackage;
+      if (eventValue.Action === "output") state.skipReasons.set(key, `${state.skipReasons.get(key) || ""}${eventValue.Output || ""}`);
+      if (eventValue.Action === "pass") state.passedTests.add(key);
+      if (eventValue.Action === "skip") state.skippedTests.set(key, { package: eventValue.Package || "", test: eventValue.Test, reason: state.skipReasons.get(key)?.trim() || "" });
+      if (eventValue.Action === "fail") state.failedTests.add(key);
+      if (eventValue.Action === "run") state.startedTests.add(key);
+    }
+    if (eventValue.Package && eventValue.Action === "pass") state.passedPackages.add(eventValue.Package);
+    if (eventValue.Package && eventValue.Action === "fail") state.failedPackages.add(eventValue.Package);
+  }
+}
+
+function finishGoEvents(state, write) {
+  if (state.buffer.trim()) consumeGoEvents(`${state.buffer}\n`, state, write);
+  state.buffer = "";
+}
+
+export function summarizeGoEvents(events) {
+  const state = { buffer: "", currentTest: null, currentPackage: null, passedTests: new Set(), skippedTests: new Map(), skipReasons: new Map(), failedTests: new Set(), startedTests: new Set(), passedPackages: new Set(), failedPackages: new Set() };
+  consumeGoEvents(events, state, () => { });
+  finishGoEvents(state, () => { });
+  return { passed_tests: [...state.passedTests], passed_packages: [...state.passedPackages], failed_tests: [...state.failedTests], skipped_tests: [...state.skippedTests.keys()] };
+}
+
+function skipObligation(profile, skipped) {
+  if (profile.name !== "base") return null;
+  const owner = coverageProfiles.find((candidate) => {
+    if (!candidate.databasePrefix || candidate.name === profile.name) return false;
+    if (!skipped.package.endsWith(`/${candidate.target.slice(2)}`)) return false;
+    if (candidate.run && !new RegExp(candidate.run).test(skipped.test)) return false;
+    return !candidate.skip || !new RegExp(candidate.skip).test(skipped.test);
+  });
+  return owner ? { test: skipped.test, package: skipped.package, required_profile: owner.name } : null;
+}
+
+function functionBody(source, name) {
+  const match = new RegExp(`func\\s+${name}\\s*\\([^)]*\\)[^{]*\\{`).exec(source);
+  if (!match) return null;
+  let depth = 1;
+  for (let index = match.index + match[0].length; index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    if (source[index] === "}") depth -= 1;
+    if (depth === 0) return source.slice(match.index, index + 1);
+  }
+  return null;
+}
+
+function reachableSkipReasons(source, test) {
+  const pending = [test];
+  const visited = new Set();
+  const reasons = new Set();
+  while (pending.length) {
+    const name = pending.pop();
+    if (visited.has(name)) continue;
+    visited.add(name);
+    const body = functionBody(source, name);
+    if (!body) continue;
+    for (const match of body.matchAll(/t\.Skip(?:f)?\("([^"]+)"/g)) reasons.add(match[1]);
+    for (const match of body.matchAll(/\b([A-Za-z_]\w*)\s*\(/g)) {
+      if (!visited.has(match[1]) && functionBody(source, match[1])) pending.push(match[1]);
+    }
+  }
+  return reasons;
+}
+
+function conditionalSkipObligation(profile, skipped, candidate) {
+  if (profile.name !== "base") return null;
+  const packageSuffix = skipped.package.replace(/^.*?(?=\/internal\/|\/cmd\/|\/pkg\/)/, "");
+  for (const inventory of candidate.inventory || []) {
+    if (inventory.type !== "file" || !inventory.path.endsWith("_test.go") || !packageSuffix.endsWith(`/${dirname(inventory.path).replaceAll("\\", "/")}`)) continue;
+    const sourcePath = join(candidate.repository_path, inventory.path);
+    if (!existsSync(sourcePath) || shaFile(sourcePath) !== inventory.sha256) continue;
+    const source = readFileSync(sourcePath, "utf8");
+    const reason = [...reachableSkipReasons(source, skipped.test)].find((value) => skipped.reason.includes(value));
+    if (reason) return { kind: "conditional", package: skipped.package, test: skipped.test, source: inventory.path, source_sha256: inventory.sha256, reason };
+  }
+  return null;
+}
+
+function skipAdmission(profile, skipped, candidate) {
+  return skipObligation(profile, skipped) || conditionalSkipObligation(profile, skipped, candidate);
+}
+
+async function runCoverageProfile(goCommand, profile, campaign, entry, cwd, baseEnvironment, postgres, execution, deadline, progress, secrets, profileDeadline, candidate) {
+  const started = Date.now();
+  const deadlineAt = profileDeadline || started + deadline.profile;
+  const attemptDirectory = join(campaign.runDir, "profiles", profile.name, `attempt-${entry.attempt}`);
+  mkdirSync(attemptDirectory, { recursive: true, mode: 0o700 });
+  const coveragePath = join(attemptDirectory, "coverage.out");
+  const eventPath = join(attemptDirectory, "test-events.ndjson");
+  const stderrPath = join(attemptDirectory, "stderr.log");
+  const databaseDSN = profile.databasePrefix ? await postgres.createDatabase(profile.databasePrefix, deadlineAt) : null;
+  const environment = profileEnvironment(baseEnvironment, profile, databaseDSN);
+  const tests = await expectedTests(goCommand, profile, cwd, environment, execution, deadline, deadlineAt);
+  const testWriter = createLogWriter(eventPath, secrets);
+  const stderrWriter = createLogWriter(stderrPath, secrets);
+  const state = { buffer: "", currentTest: null, currentPackage: null, passedTests: new Set(), skippedTests: new Map(), skipReasons: new Map(), failedTests: new Set(), startedTests: new Set(), passedPackages: new Set(), failedPackages: new Set() };
+  const args = ["test", "-json", "-p=1", "-count=1", ...(databaseDSN ? ["-parallel=1"] : []), profile.target, "-covermode=atomic", `-coverprofile=${relative(cwd, coveragePath)}`];
+  if (profile.race) args.push("-race");
+  if (profile.coverpkg) args.push(`-coverpkg=${profile.coverpkg}`);
+  if (profile.run) args.push(`-run=${profile.run}`);
+  if (profile.skip) args.push(`-skip=${profile.skip}`);
+  entry.started_at_utc = new Date().toISOString();
+  entry.status = "running";
+  entry.expected_test_inventory_sha256 = sha256(canonicalJson(tests));
+  entry.expected_tests = tests;
+  entry.effective_argv = args.filter((argument) => !argument.includes(databasePassword));
+  saveCampaign(campaign);
+  progress.activate(profile.name);
+  progress.meaningful("coverage", { profile: profile.name, state: "started" });
+  try {
+    await runProcess(goCommand, args, {
+      ...execution,
+      cwd,
+      env: environment,
+      timeoutMs: profileTimeout(deadline, deadlineAt, deadline.profile),
+      label: `${profile.name} coverage`,
+      onStdout: (chunk) => {
+        consumeGoEvents(chunk, state, (line) => testWriter.write(line));
+        progress.output(profile.name, state.currentTest, state.currentPackage);
+      },
+      onStderr: (chunk) => {
+        stderrWriter.write(chunk);
+        progress.output(profile.name, state.currentTest, state.currentPackage);
+      },
+    });
+    finishGoEvents(state, (line) => testWriter.write(line));
+    if (state.failedTests.size || state.failedPackages.size) throw new RunnerError(`${profile.name} reported failed Go test events`);
+    const allowedSkips = [...state.skippedTests.values()].map((skipped) => skipAdmission(profile, skipped, candidate)).filter(Boolean);
+    const allowedSkippedNames = new Set(allowedSkips.map((skip) => testIdentity(skip.package, skip.test)));
+    const unexpectedSkips = state.skippedTests.size - allowedSkips.length;
+    if (unexpectedSkips) throw new RunnerError(`${profile.name} reported unexpected skipped Go test events`);
+    const missing = tests.filter((item) => !state.passedTests.has(testIdentity(item.package, item.test)) && !allowedSkippedNames.has(testIdentity(item.package, item.test)));
+    if (missing.length) throw new RunnerError(`${profile.name} did not pass required selected tests: ${missing.map((item) => testIdentity(item.package, item.test)).join(", ")}`);
+    if (!state.passedPackages.size) throw new RunnerError(`${profile.name} emitted no passing package event`);
+    const coverage = validateCoverage(coveragePath);
+    testWriter.finish();
+    stderrWriter.finish();
+    entry.status = "passed";
+    entry.completed_at_utc = new Date().toISOString();
+    entry.elapsed_ms = Date.now() - started;
+    entry.coverage = { path: relative(campaign.runDir, coveragePath), ...coverage };
+    entry.test_events = { path: relative(campaign.runDir, eventPath), sha256: shaFile(eventPath), bytes: statSync(eventPath).size };
+    entry.stderr = { path: relative(campaign.runDir, stderrPath), sha256: shaFile(stderrPath), bytes: statSync(stderrPath).size };
+    entry.package_counts = { passed: state.passedPackages.size, failed: 0, tests_passed: state.passedTests.size, tests_skipped: state.skippedTests.size };
+    entry.allowed_skip_obligations = allowedSkips;
+    entry.unexpected_skip_count = 0;
+    progress.completed += 1;
+    progress.meaningful("coverage", { profile: profile.name, state: "passed", elapsed_ms: entry.elapsed_ms });
+  } catch (error) {
+    finishGoEvents(state, (line) => testWriter.write(line));
+    testWriter.finish();
+    stderrWriter.finish();
+    entry.status = error instanceof BudgetError ? "timed_out" : execution.signal?.aborted ? "cancelled" : "failed";
+    entry.completed_at_utc = new Date().toISOString();
+    entry.elapsed_ms = Date.now() - started;
+    entry.failure = redacted(error.message, secrets);
+    entry.package_counts = { passed: state.passedPackages.size, failed: state.failedPackages.size, tests_passed: state.passedTests.size, tests_skipped: state.skippedTests.size };
+    entry.unexpected_skip_count = [...state.skippedTests.values()].filter((skipped) => !skipObligation(profile, skipped)).length;
+    if (existsSync(coveragePath)) entry.coverage = { path: relative(campaign.runDir, coveragePath), sha256: shaFile(coveragePath), bytes: statSync(coveragePath).size };
+    if (existsSync(eventPath)) entry.test_events = { path: relative(campaign.runDir, eventPath), sha256: shaFile(eventPath), bytes: statSync(eventPath).size };
+    if (existsSync(stderrPath)) entry.stderr = { path: relative(campaign.runDir, stderrPath), sha256: shaFile(stderrPath), bytes: statSync(stderrPath).size };
+    throw error;
+  } finally {
+    progress.deactivate(profile.name);
+    saveCampaign(campaign);
+  }
+}
+
+export async function scheduleProfiles(profiles, jobs, runProfile) {
+  if (![1, 2].includes(jobs)) throw new RunnerError("jobs must be 1 or 2");
+  const pair = profiles.filter((profile) => profile.resourceGroup === "isolated-fixture");
+  if (pair.some((profile) => !["hap-fixture", "operator-code-fixture"].includes(profile.name)) || pair.length > 2) {
+    throw new RunnerError("Only the architect-approved fixture pair may use isolated overlap");
+  }
+  const serial = profiles.filter((profile) => profile.resourceGroup !== "isolated-fixture");
+  const outcomes = new Map();
+  for (const profile of serial) {
+    try { outcomes.set(profile.name, await runProfile(profile)); }
+    catch (error) { outcomes.set(profile.name, { status: "failed", error }); return outcomes; }
+  }
+  if (!pair.length) return outcomes;
+  if (jobs === 1 || pair.length === 1) {
+    for (const profile of pair) {
+      try { outcomes.set(profile.name, await runProfile(profile)); }
+      catch (error) { outcomes.set(profile.name, { status: "failed", error }); break; }
+    }
+    return outcomes;
+  }
+  const settled = await Promise.allSettled(pair.map((profile) => runProfile(profile)));
+  for (let index = 0; index < pair.length; index += 1) {
+    outcomes.set(pair[index].name, settled[index].status === "fulfilled" ? settled[index].value : { status: "failed", error: settled[index].reason });
+  }
+  return outcomes;
+}
+
+async function collectCoverage(campaign, candidate, environment, options, execution, deadline, progress) {
+  const goCommand = locate("go");
+  const dockerCommand = locate("docker");
+  if (!goCommand) throw new RunnerError("Go is required to generate coverage");
+  if (!dockerCommand) throw new RunnerError("Docker is required to generate isolated coverage");
+  const imageId = environment.values.image_id;
+  if (!/^sha256:[0-9a-f]{64}$/i.test(imageId)) throw new RunnerError("An immutable PostgreSQL image is required for coverage");
+  const reusable = options.fresh ? new Map() : findReusableProfiles(campaign.namespace, coverageProfiles, candidate, environment);
+  for (const profile of coverageProfiles) {
+    const cached = reusable.get(profile.name);
+    const entry = {
+      name: profile.name,
+      descriptor: profileDescriptor(profile),
+      fingerprint: fingerprintProfile(profile, candidate, environment),
+      status: "pending",
+      attempt: 1,
+      invalidation_reasons: cached ? [] : [options.fresh ? "fresh-requested" : "no-exact-valid-attempt"],
+      resource_group: profile.resourceGroup,
+      execution_environment_sha256: environment.sha256,
+    };
+    if (cached) {
+      entry.status = "passed";
+      entry.source_run_id = cached.sourceRun;
+      entry.source_artifact = { path: cached.entry.coverage.path, sha256: cached.artifact.sha256, bytes: cached.artifact.bytes };
+      entry.coverage = { path: cached.entry.coverage.path, sha256: cached.artifact.sha256, bytes: cached.artifact.bytes };
+      entry.test_events = cached.entry.test_events;
+      entry.expected_tests = cached.entry.expected_tests;
+      entry.expected_test_inventory_sha256 = cached.entry.expected_test_inventory_sha256;
+      entry.package_counts = cached.entry.package_counts;
+      entry.allowed_skip_obligations = cached.entry.allowed_skip_obligations;
+      entry.unexpected_skip_count = 0;
+      progress.completed += 1;
+      progress.reused += 1;
+      event(campaign, "coverage", "profile_reused", { profile: profile.name, source_run_id: cached.sourceRun });
+    }
+    campaign.manifest.profiles.push(entry);
+  }
+  saveCampaign(campaign);
   let postgres = null;
+  let postgresPromise = null;
+  const secrets = [process.env.SONAR_TOKEN, process.env.DATABASE_DSN, databasePassword];
+  const getPostgres = async () => {
+    if (!postgresPromise) postgresPromise = startPostgres(dockerCommand, candidate.repository_path, imageId, campaign, execution, deadline).then((value) => (postgres = value));
+    return postgresPromise;
+  };
+  const entries = new Map(campaign.manifest.profiles.map((entry) => [entry.name, entry]));
   let primaryError = null;
   try {
-    for (const profile of coverageProfiles) {
-      if (profile.databasePrefix && !postgres) postgres = startPostgres(dockerCommand, cwd);
-      const databaseDSN = profile.databasePrefix ? postgres.createDatabase(profile.databasePrefix) : null;
-      const coveragePath = join(coverageDirectory, `${profile.name}.out`);
-      runCoverageProfile(goCommand, profile, coveragePath, cwd, environment, databaseDSN);
-      profilePaths.push(coveragePath);
-    }
-    mergeCoverProfiles(profilePaths, outputPath);
+    const outcomes = await scheduleProfiles(needed, options.jobs, async (profile) => {
+      const profileDeadline = Date.now() + deadline.profile;
+      const database = profile.databasePrefix ? await getPostgres() : null;
+      const entry = entries.get(profile.name);
+      await runCoverageProfile(goCommand, profile, campaign, entry, candidate.repository_path, environment.testEnvironment, database, execution, deadline, progress, secrets, profileDeadline, candidate);
+      return { status: "passed" };
+    });
+    const failed = [...outcomes.values()].find((outcome) => outcome?.status === "failed");
+    if (failed) throw failed.error;
+    if (campaign.manifest.profiles.some((entry) => entry.status !== "passed")) throw new RunnerError("Coverage did not complete every required profile");
+    const mergePath = join(campaign.runDir, "coverage.out");
+    mergeCoverProfiles(coverageProfiles.map((profile) => {
+      const entry = entries.get(profile.name);
+      if (entry.source_run_id) {
+        const source = manifestsIn(campaign.namespace).find((record) => record.manifest.run_id === entry.source_run_id);
+        return artifactFrom(source, entry.source_artifact).path;
+      }
+      return safeRelative(campaign.runDir, entry.coverage.path);
+    }), mergePath);
+    const coverage = validateCoverage(mergePath);
+    campaign.manifest.merged = { status: "passed", path: relative(campaign.runDir, mergePath), ...coverage, profile_digests: coverageProfiles.map((profile) => entries.get(profile.name).coverage.sha256) };
+    campaign.manifest.result.coverage = "passed";
+    progress.meaningful("coverage", { state: "complete", coverage_sha256: coverage.sha256 });
+    saveCampaign(campaign);
   } catch (error) {
     primaryError = error;
+    campaign.manifest.merged = { status: "incomplete" };
+    campaign.manifest.result.coverage = "failed";
+    campaign.manifest.result.failure = redacted(error.message, secrets);
+    saveCampaign(campaign);
     throw error;
   } finally {
     if (postgres) {
-      try {
-        postgres.stop();
-      } catch (cleanupError) {
-        if (primaryError) {
-          console.error(`Could not remove runner-owned PostgreSQL container: ${cleanupError.message}`);
-        } else {
-          throw cleanupError;
-        }
+      try { await postgres.stop(); } catch (error) {
+        campaign.manifest.resources.cleanup.errors.push(redacted(error.message, secrets));
+        if (!primaryError) throw error;
       }
     }
   }
 }
 
-function ensureDocker(dockerCommand, cwd) {
-  try {
-    capture(dockerCommand, ["version", "--format", "{{.Server.Version}}"], cwd);
-  } catch (error) {
-    throw new Error(`Docker is required for isolated coverage: ${error.message}`);
+function parseReport(path) {
+  if (!existsSync(path)) throw new RunnerError(`SonarScanner did not write ${path}`);
+  const values = new Map();
+  for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const separator = line.indexOf("=");
+    if (separator < 1) throw new RunnerError(`Malformed report-task line: ${line}`);
+    const key = line.slice(0, separator).trim();
+    if (!key || values.has(key)) throw new RunnerError(`Malformed report-task key: ${line}`);
+    values.set(key, line.slice(separator + 1).trim());
   }
+  for (const key of ["ceTaskId", "ceTaskUrl", "dashboardUrl", "projectKey", "serverUrl"]) {
+    if (!values.get(key)) throw new RunnerError(`report-task.txt is missing ${key}`);
+  }
+  return values;
 }
 
-function createStatusPublication(repoRoot, head) {
-  const ghCommand = locate("gh");
-  if (!ghCommand) throw new Error("GitHub CLI is required for --publish-status");
-  try {
-    capture(ghCommand, ["auth", "status"], repoRoot);
-  } catch (error) {
-    throw new Error(`An authenticated GitHub CLI session is required for --publish-status: ${error.message}`);
-  }
-  const repository = capture(
-    ghCommand,
-    ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
-    repoRoot,
-  );
-  if (!/^[^/\s]+\/[^/\s]+$/.test(repository)) {
-    throw new Error(`GitHub CLI returned an invalid owner/repository: ${repository}`);
-  }
-  return { ghCommand, head, repository, repoRoot, targetUrl: null };
-}
-
-function publishCommitStatus(publication, state) {
-  const args = [
-    "api",
-    "--method",
-    "POST",
-    `repos/${publication.repository}/statuses/${publication.head}`,
-    "--raw-field",
-    `state=${state}`,
-    "--raw-field",
-    "context=SonarQube Quality Gate",
-    "--raw-field",
-    `description=${state === "pending" ? "SonarQube Quality Gate is running" : state === "success" ? "SonarQube Quality Gate passed" : "SonarQube Quality Gate failed"}`,
-  ];
-  if (publication.targetUrl) args.push("--raw-field", `target_url=${publication.targetUrl}`);
-  run(publication.ghCommand, args, publication.repoRoot);
-}
-
-function assertExactHeadAndCleanTree(repoRoot, head) {
-  const finalHead = capture("git", ["rev-parse", "--verify", "HEAD^{commit}"], repoRoot).toLowerCase();
-  if (finalHead !== head) throw new Error(`Git HEAD changed during analysis: ${head} -> ${finalHead}`);
-  if (capture("git", ["status", "--porcelain"], repoRoot)) {
-    throw new Error("Working tree changed during SonarQube analysis");
-  }
-}
-
-export function main(options = parseOptions(process.argv.slice(2))) {
-  const repoRoot = resolve(capture("git", ["rev-parse", "--show-toplevel"], options.repository));
-  if (!existsSync(join(repoRoot, "sonar-project.properties"))) {
-    throw new Error(`Repository has no sonar-project.properties: ${repoRoot}`);
-  }
-  const head = capture("git", ["rev-parse", "--verify", "HEAD^{commit}"], repoRoot).toLowerCase();
-  if (!/^[0-9a-f]{40}$/.test(head)) throw new Error(`Invalid Git HEAD: ${head}`);
-
-  const commonGitDir = resolve(
-    capture("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], repoRoot),
-  );
-  const coordinationRoot = dirname(commonGitDir);
-  const receiptDirectory = join(coordinationRoot, ".agent", "e", "sonarqube");
-  const receiptPath = join(receiptDirectory, `${head}.json`);
-  const scannerDirectory = join(repoRoot, ".scannerwork");
-  const reportTaskPath = join(scannerDirectory, "report-task.txt");
-  const temporaryCoverageDirectory = join(scannerDirectory, "coverage");
-  const coverageOutputPath = join(repoRoot, "coverage.out");
-  mkdirSync(receiptDirectory, { recursive: true });
-  rmSync(receiptPath, { force: true });
-  rmSync(reportTaskPath, { force: true });
-  rmSync(temporaryCoverageDirectory, { force: true, recursive: true });
-  rmSync(coverageOutputPath, { force: true });
-
-  if (capture("git", ["status", "--porcelain"], repoRoot)) {
-    throw new Error("Refusing to run SonarQube against a dirty working tree");
-  }
-  if (options.publishStatus) {
-    statusPublication = createStatusPublication(repoRoot, head);
-    publishCommitStatus(statusPublication, "pending");
-  }
-
-  const worktreeDotEnv = readSonarDotEnv(join(repoRoot, ".env"));
-  const sharedDotEnv =
-    coordinationRoot === repoRoot ? new Map() : readSonarDotEnv(join(coordinationRoot, ".env"));
-  const sonarToken =
-    process.env.SONAR_TOKEN?.trim() ||
-    worktreeDotEnv.get("SONAR_TOKEN")?.trim() ||
-    sharedDotEnv.get("SONAR_TOKEN")?.trim();
-  if (!sonarToken) throw new Error("SONAR_TOKEN is required in the process environment or project .env");
-  const sonarHostUrl =
-    process.env.SONAR_HOST_URL?.trim() ||
-    worktreeDotEnv.get("SONAR_HOST_URL")?.trim() ||
-    sharedDotEnv.get("SONAR_HOST_URL")?.trim();
-  if (!sonarHostUrl) {
-    throw new Error("SONAR_HOST_URL is required in the process environment or project .env");
-  }
-  const parsedHost = new URL(sonarHostUrl);
-  if (!['http:', 'https:'].includes(parsedHost.protocol)) {
-    throw new Error("SONAR_HOST_URL must use http or https");
-  }
+export function validateReport(report, sonarHost) {
+  const configured = new URL(sonarHost);
+  const server = new URL(report.get("serverUrl"));
+  const taskUrl = new URL(report.get("ceTaskUrl"));
   if (
-    parsedHost.username ||
-    parsedHost.password ||
-    parsedHost.search ||
-    parsedHost.hash ||
-    (parsedHost.pathname !== "/" && parsedHost.pathname !== "")
-  ) {
-    throw new Error("SONAR_HOST_URL must be a credential-free server base URL");
+    configured.username || configured.password || configured.pathname !== "/" || configured.search || configured.hash ||
+    server.username || server.password || server.href !== configured.href ||
+    taskUrl.username || taskUrl.password || taskUrl.origin !== configured.origin || taskUrl.pathname !== "/api/ce/task" || taskUrl.hash ||
+    taskUrl.searchParams.size !== 1 || taskUrl.searchParams.get("id") !== report.get("ceTaskId") ||
+    report.get("projectKey") !== projectKey || !/^[\w-]+$/.test(report.get("ceTaskId"))
+  ) throw new RunnerError("report-task.txt does not bind to the intended Sonar server/project/task");
+  const dashboard = new URL(report.get("dashboardUrl"));
+  if (dashboard.origin !== configured.origin || dashboard.username || dashboard.password || dashboard.hash || dashboard.pathname !== "/dashboard" || dashboard.searchParams.size !== 1 || dashboard.searchParams.get("id") !== projectKey) throw new RunnerError("report-task.txt has an unsafe dashboardUrl");
+  return { ce_task_id: report.get("ceTaskId"), dashboard_url: report.get("dashboardUrl"), ce_task_url: report.get("ceTaskUrl") };
+}
+
+function readSonarDotEnv(path) {
+  const values = new Map();
+  for (const rawLine of readFileSync(path, "utf8").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const match = /^(?:export\s+)?(SONAR_TOKEN|SONAR_HOST_URL)\s*=\s*(.*)$/.exec(line);
+    if (!match) continue;
+    if (values.has(match[1])) throw new RunnerError(`Duplicate ${match[1]} in ${path}`);
+    let value = match[2].trim();
+    if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) value = value.slice(1, -1);
+    values.set(match[1], value);
   }
+  return values;
+}
 
-  const goCommand = locate("go");
-  if (!goCommand) throw new Error("Go is required to generate coverage");
-  const dockerCommand = locate("docker");
-  if (!dockerCommand) throw new Error("Docker is required to generate isolated coverage");
-  let scannerPath = locate(options.scannerCommand);
-  if (!scannerPath && process.platform === "win32" && options.scannerCommand === "sonar-scanner") {
-    const localAppData = process.env.LOCALAPPDATA;
-    if (localAppData) {
-      const perUserScanner = join(
-        localAppData,
-        "SonarScanner",
-        "8.1.0.6389",
-        "sonar-scanner-8.1.0.6389-windows-x64",
-        "bin",
-        "sonar-scanner.bat",
-      );
-      if (existsSync(perUserScanner)) scannerPath = perUserScanner;
-    }
+function sonarCredentials(candidate) {
+  const worktree = readSonarDotEnv(join(candidate.repository_path, ".env"));
+  const shared = candidate.coordination_root === candidate.repository_path ? new Map() : readSonarDotEnv(join(candidate.coordination_root, ".env"));
+  const token = process.env.SONAR_TOKEN?.trim() || worktree.get("SONAR_TOKEN")?.trim() || shared.get("SONAR_TOKEN")?.trim();
+  const host = process.env.SONAR_HOST_URL?.trim() || worktree.get("SONAR_HOST_URL")?.trim() || shared.get("SONAR_HOST_URL")?.trim();
+  if (!token) throw new RunnerError("SONAR_TOKEN is required in the process environment or project .env");
+  if (!host) throw new RunnerError("SONAR_HOST_URL is required in the process environment or project .env");
+  const parsed = new URL(host);
+  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash || !["", "/"].includes(parsed.pathname)) {
+    throw new RunnerError("SONAR_HOST_URL must be a credential-free server base URL");
   }
-  if (!scannerPath) throw new Error(`SonarScanner was not found: ${options.scannerCommand}`);
-  ensureDocker(dockerCommand, repoRoot);
+  return { token, host: parsed.origin };
+}
 
-
-  const testEnvironment = scrubTestEnvironment();
-  const scannerEnvironment = { ...testEnvironment, SONAR_TOKEN: sonarToken };
-  let complete = false;
+async function fetchJson(host, token, pathname, deadline, execution) {
+  const url = new URL(pathname, host);
+  const signal = AbortSignal.any([execution.signal, AbortSignal.timeout(Math.min(30000, deadline.timeoutFor("quality", 30000)))]);
+  let response;
   try {
-    mkdirSync(temporaryCoverageDirectory, { recursive: true });
-    collectCoverage(
-      goCommand,
-      dockerCommand,
-      repoRoot,
-      temporaryCoverageDirectory,
-      coverageOutputPath,
-      testEnvironment,
-    );
-    run(
-      scannerPath,
-      [
-        `-Dsonar.host.url=${sonarHostUrl}`,
-        `-Dsonar.scm.revision=${head}`,
-        `-Dsonar.buildString=${head}`,
-        "-Dsonar.qualitygate.wait=true",
-        `-Dsonar.qualitygate.timeout=${options.qualityGateTimeout}`,
-      ],
-      repoRoot,
-      { env: scannerEnvironment, timeoutMs: (options.qualityGateTimeout + 300) * 1000 },
-    );
+    response = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, redirect: "error", signal });
+  } catch (error) {
+    if (execution.signal.aborted) throw execution.signal.reason;
+    throw new RunnerError(`Sonar API request failed: ${error.message}`, 1, true);
+  }
+  const text = await response.text();
+  if (response.status === 401 || response.status === 403) throw new RunnerError(`Sonar API authorization failed (${response.status})`);
+  if (response.status >= 500) throw new RunnerError(`Sonar API transient failure (${response.status})`, 1, true);
+  if (!response.ok) throw new RunnerError(`Sonar API failure (${response.status})`);
+  try { return JSON.parse(text); } catch { throw new RunnerError("Sonar API returned invalid JSON"); }
+}
 
-    assertExactHeadAndCleanTree(repoRoot, head);
-    const report = parseReport(reportTaskPath);
-    if (statusPublication) {
-      statusPublication.targetUrl = report.get("dashboardUrl") || report.get("ceTaskUrl") || null;
-    }
-    const receipt = {
-      schema_version: 1,
-      gate: "sonarqube",
-      project_key: "thebtf_engram",
-      sonar_host_url: sonarHostUrl,
-      verdict: "PASS",
-      head,
-      completed_at_utc: new Date().toISOString(),
-      ce_task_url: report.get("ceTaskUrl"),
-      dashboard_url: report.get("dashboardUrl"),
-    };
-    const receiptJson = `${JSON.stringify(receipt, null, 2)}\n`;
-    if (receiptJson.includes(sonarToken) || /postgres(?:ql)?:\/\//i.test(receiptJson)) {
-      throw new Error("Receipt contains secret connection data");
-    }
-    const temporaryReceipt = join(receiptDirectory, `.${head}.${randomUUID()}.tmp`);
+function analysisPath(campaign, file) {
+  return join(campaign.runDir, "analysis", file);
+}
+
+function saveAnalysisJson(campaign, file, value) {
+  const path = analysisPath(campaign, file);
+  writeJson(path, value);
+  return { path: relative(campaign.runDir, path), sha256: shaFile(path), bytes: statSync(path).size };
+}
+
+export function materializeCoverage(campaign, candidate) {
+  const sourceRun = campaign.manifest.merged.source_run_id;
+  const sourceRecord = sourceRun
+    ? referencedRun({ runDir: campaign.runDir }, sourceRun, campaign.manifest.candidate, { sha256: campaign.manifest.fingerprints.coverage_environment })
+    : { runDir: campaign.runDir, manifest: campaign.manifest };
+  if (!sourceRecord) throw new RunnerError("Retained coverage source run is invalid");
+  const source = safeRelative(sourceRecord.runDir, campaign.manifest.merged.path);
+  const destination = join(candidate.repository_path, "coverage.out");
+  validateCoverage(source, campaign.manifest.merged.sha256);
+  const temporary = `${destination}.${campaign.manifest.run_id}.tmp`;
+  copyFileSync(source, temporary);
+  renameSync(temporary, destination);
+  return destination;
+}
+
+async function scannerSubmit(campaign, candidate, credentials, options, execution, deadline, progress) {
+  const scanner = resolveScanner(options.scannerCommand);
+  if (!scanner) throw new RunnerError(`SonarScanner was not found: ${options.scannerCommand}`);
+  await assertCandidate(candidate, execution, { requireClean: true });
+  const materializedCoverage = materializeCoverage(campaign, candidate);
+  const reportPath = analysisPath(campaign, "report-task.txt");
+  const scannerLogPath = analysisPath(campaign, "scanner.log");
+  const attemptId = randomUUID();
+  campaign.manifest.analysis = {
+    ...campaign.manifest.analysis,
+    state: "submitting",
+    attempt_id: attemptId,
+    host: credentials.host,
+    project_key: projectKey,
+    scm_revision: candidate.head,
+    build_string: `${candidate.head}:${attemptId}`,
+    report_path: relative(campaign.runDir, reportPath),
+    submitted_at_utc: new Date().toISOString(),
+  };
+  saveCampaign(campaign);
+  event(campaign, "scanner", "submission_started", { attempt_id: attemptId });
+  const log = createLogWriter(scannerLogPath, [credentials.token]);
+  try {
     try {
-      writeFileSync(temporaryReceipt, receiptJson, { encoding: "utf8", mode: 0o600 });
-      renameSync(temporaryReceipt, receiptPath);
-    } finally {
-      rmSync(temporaryReceipt, { force: true });
+      await runProcess(scanner, [
+        `-Dsonar.host.url=${credentials.host}`,
+        `-Dsonar.scm.revision=${candidate.head}`,
+        `-Dsonar.buildString=${candidate.head}:${attemptId}`,
+        "-Dsonar.qualitygate.wait=false",
+        `-Dsonar.scanner.metadataFilePath=${reportPath}`,
+      ], {
+        ...execution,
+        cwd: candidate.repository_path,
+        env: { ...scrubTestEnvironment(), SONAR_TOKEN: credentials.token },
+        timeoutMs: deadline.timeoutFor("scanner", deadline.limits.scanner),
+        label: "SonarScanner submission",
+        onStdout: (chunk) => log.write(chunk),
+        onStderr: (chunk) => log.write(chunk),
+      });
+    } catch (error) {
+      log.finish();
+      if (!existsSync(reportPath)) {
+        campaign.manifest.analysis.state = "submission_unknown";
+        campaign.manifest.analysis.failure = redacted(error.message, [credentials.token]);
+        campaign.manifest.analysis.scanner_log = { path: relative(campaign.runDir, scannerLogPath), sha256: shaFile(scannerLogPath), bytes: statSync(scannerLogPath).size };
+        saveCampaign(campaign);
+        throw new RunnerError("SonarScanner failed before a durable CE task ID; automatic resubmission is unsafe");
+      }
     }
-    if (statusPublication) publishCommitStatus(statusPublication, "success");
-    complete = true;
-    console.log(receiptPath);
+    log.finish();
+    const report = validateReport(parseReport(reportPath), credentials.host);
+    campaign.manifest.analysis = {
+      ...campaign.manifest.analysis,
+      ...report,
+      scanner_identity: { path: scanner, sha256: shaFile(scanner) },
+      state: "submitted",
+      report: { path: relative(campaign.runDir, reportPath), sha256: shaFile(reportPath), bytes: statSync(reportPath).size },
+      scanner_log: { path: relative(campaign.runDir, scannerLogPath), sha256: shaFile(scannerLogPath), bytes: statSync(scannerLogPath).size },
+    };
+    campaign.manifest.fingerprints.analysis_inputs = sha256(canonicalJson({
+      candidate: candidate.inputs_sha256,
+      sonar_project: shaFile(join(candidate.repository_path, "sonar-project.properties")),
+      scanner: campaign.manifest.analysis.scanner_identity,
+    }));
+    saveCampaign(campaign);
+    progress.meaningful("scanner", { state: "submitted", ce_task_id: report.ce_task_id });
   } finally {
-    rmSync(temporaryCoverageDirectory, { force: true, recursive: true });
-    if (!complete) rmSync(coverageOutputPath, { force: true });
+    log.finish();
+    rmSync(materializedCoverage, { force: true });
+  }
+}
+
+export async function waitForAnalysis(campaign, candidate, credentials, execution, deadline, progress) {
+  const analysis = campaign.manifest.analysis;
+  if (!analysis?.ce_task_id || !["submitted", "ce_running"].includes(analysis.state)) throw new RunnerError("Campaign has no resumable submitted CE task");
+  if (analysis.host !== credentials.host || analysis.project_key !== projectKey || analysis.scm_revision !== candidate.head) {
+    throw new RunnerError("Saved Sonar task does not bind to the current exact candidate/server");
+  }
+  const attempt = { started_at_utc: new Date().toISOString(), state: "waiting" };
+  analysis.attempts ||= [];
+  analysis.attempts.push(attempt);
+  analysis.state = "ce_running";
+  saveCampaign(campaign);
+  let lastStatus = null;
+  while (true) {
+    let task;
+    try {
+      task = await fetchJson(credentials.host, credentials.token, `/api/ce/task?id=${encodeURIComponent(analysis.ce_task_id)}`, deadline, execution);
+    } catch (error) {
+      if (error instanceof SignalError || error instanceof BudgetError || !error.retryable) throw error;
+      event(campaign, "ce", "transient_failure", { message: redacted(error.message, [credentials.token]) });
+      await wait(5000, execution.signal);
+      continue;
+    }
+    const current = task.task;
+    if (!current || current.id !== analysis.ce_task_id || current.componentKey !== projectKey) throw new RunnerError("Sonar CE response did not match the saved task/project");
+    analysis.last_ce_status = current.status;
+    analysis.ce = saveAnalysisJson(campaign, "ce.json", task);
+    if (current.status !== lastStatus) {
+      lastStatus = current.status;
+      progress.meaningful("ce", { ce_status: current.status, ce_task_id: analysis.ce_task_id });
+    }
+    if (["PENDING", "IN_PROGRESS"].includes(current.status)) {
+      saveCampaign(campaign);
+      await wait(5000, execution.signal);
+      continue;
+    }
+    if (current.status !== "SUCCESS" || !current.analysisId) {
+      analysis.state = "ce_failed";
+      attempt.state = "failed";
+      attempt.completed_at_utc = new Date().toISOString();
+      campaign.manifest.result.technical_gate = "failed";
+      campaign.manifest.result.disposition = "failed";
+      saveCampaign(campaign);
+      throw new RunnerError(`Sonar CE task ended ${current.status}`);
+    }
+    analysis.analysis_id = current.analysisId;
+    const gate = await fetchJson(credentials.host, credentials.token, `/api/qualitygates/project_status?analysisId=${encodeURIComponent(current.analysisId)}`, deadline, execution);
+    analysis.quality_gate = saveAnalysisJson(campaign, "quality-gate.json", gate);
+    if (gate?.projectStatus?.status !== "OK") {
+      analysis.state = "gate_failed";
+      attempt.state = "gate_failed";
+      attempt.completed_at_utc = new Date().toISOString();
+      campaign.manifest.result.technical_gate = "failed";
+      campaign.manifest.result.disposition = "failed";
+      saveCampaign(campaign);
+      throw new RunnerError(`QUALITY GATE STATUS: ${gate?.projectStatus?.status || "unknown"}`);
+    }
+    analysis.state = "passed";
+    attempt.state = "passed";
+    attempt.completed_at_utc = new Date().toISOString();
+    campaign.manifest.result.technical_gate = "passed";
+    campaign.manifest.result.disposition = "passed";
+    saveCampaign(campaign);
+    progress.meaningful("quality-gate", { state: "OK", analysis_id: current.analysisId });
+    return;
+  }
+}
+
+export async function executeAnalysis(analysis, { submit, wait: waitForSubmitted, resumeOnly = false }) {
+  if (analysis.state === "submission_unknown") {
+    throw new RunnerError("Submission is ambiguous; automatic scanner resubmission is unsafe");
+  }
+  if (["submitted", "ce_running"].includes(analysis.state)) {
+    await waitForSubmitted();
+    return "resumed";
+  }
+  if (analysis.state === "passed") return "completed";
+  if (analysis.state !== "not_submitted") throw new RunnerError(`Analysis cannot be resumed from ${analysis.state}`);
+  if (resumeOnly) throw new RunnerError("Resume requires a durable submitted CE task and never submits a new analysis");
+  await submit();
+  await waitForSubmitted();
+  return "submitted";
+}
+
+function createStatusPublication(candidate) {
+  const gh = locate("gh");
+  if (!gh) throw new RunnerError("GitHub CLI is required for --publish-status");
+  return { gh, candidate };
+}
+
+async function publishStatus(publication, state, targetUrl, execution) {
+  await capture(publication.gh, [
+    "api", "--method", "POST", `repos/${await capture(publication.gh, ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], publication.candidate.repository_path, execution)}/statuses/${publication.candidate.head}`,
+    "--raw-field", `state=${state}`,
+    "--raw-field", "context=SonarQube Quality Gate",
+    "--raw-field", `description=${state === "success" ? "SonarQube Quality Gate passed" : state === "pending" ? "SonarQube Quality Gate is running" : "SonarQube Quality Gate failed"}`,
+    ...(targetUrl ? ["--raw-field", `target_url=${targetUrl}`] : []),
+  ], publication.candidate.repository_path, execution);
+}
+
+function legacyReceiptPath(candidate) {
+  return join(candidate.coordination_root, ".agent", "e", "sonarqube", `${candidate.head}.json`);
+}
+
+export function writeReceipt(campaign, candidate, credentials) {
+  const cleanup = campaign.manifest.resources?.cleanup;
+  const container = campaign.manifest.resources?.container;
+  if (cleanup?.state !== "complete" || cleanup.errors?.length || (container && container.state !== "removed")) {
+    throw new RunnerError("Refusing PASS receipt while runner-owned cleanup is unresolved");
+  }
+  if (campaign.manifest.result?.technical_gate !== "passed" || campaign.manifest.analysis?.state !== "passed" || !campaign.manifest.analysis?.analysis_id) {
+    throw new RunnerError("Refusing PASS receipt without an exact Quality Gate result");
+  }
+  if (campaign.manifest.publication?.requested && campaign.manifest.result?.effect !== "success") {
+    throw new RunnerError("Refusing PASS receipt while requested status publication failed");
+  }
+  const receipt = {
+    schema_version: 2,
+    gate: "sonarqube",
+    project_key: projectKey,
+    sonar_host_url: credentials.host,
+    verdict: "PASS",
+    head: candidate.head,
+    completed_at_utc: new Date().toISOString(),
+    ce_task_url: campaign.manifest.analysis.ce_task_url,
+    dashboard_url: campaign.manifest.analysis.dashboard_url,
+    manifest_path: join(campaign.runDir, "manifest.json"),
+    manifest_sha256: shaFile(join(campaign.runDir, "manifest.json")),
+    analysis_id: campaign.manifest.analysis.analysis_id,
+    coverage_sha256: campaign.manifest.merged.sha256,
+    fingerprint: campaign.manifest.fingerprints.analysis_inputs,
+  };
+  atomicWrite(legacyReceiptPath(candidate), `${JSON.stringify(receipt, null, 2)}\n`);
+  return legacyReceiptPath(candidate);
+}
+
+async function cleanupCampaign(campaign, children) {
+  const cleanup = campaign.manifest.resources.cleanup;
+  try {
+    await terminateOwnedChildren(children);
+    if (children.size) throw new RunnerError("Runner-owned children remain after cleanup");
+    const container = campaign.manifest.resources.container;
+    if (container && container.state !== "removed") throw new RunnerError("Runner-owned PostgreSQL container remains after cleanup");
+    if (cleanup.errors.length) throw new RunnerError("Runner-owned cleanup recorded errors");
+    cleanup.state = "complete";
+  } catch (error) {
+    cleanup.state = "failed";
+    cleanup.errors.push(error.message);
+  }
+  campaign.manifest.resources.children = children.history || [];
+  saveCampaign(campaign);
+}
+
+function campaignFromRecord(record) {
+  return { runDir: record.runDir, manifest: record.manifest, runId: record.manifest.run_id };
+}
+
+async function runWithCampaign(campaign, candidate, environment, options, execution, deadline, progress) {
+  if (options.mode === "coverage" || options.mode === "gate") {
+    if (campaign.manifest.result.coverage !== "passed") await collectCoverage(campaign, candidate, environment, options, execution, deadline, progress);
+    if (options.mode === "coverage") {
+      campaign.manifest.result.disposition = "coverage_ready";
+      saveCampaign(campaign);
+      console.log(`COVERAGE_READY ${campaign.runId}`);
+      return;
+    }
+  }
+  if (options.mode === "scan") {
+    const source = findCompleteCoverage(campaign.namespace, candidate, environment);
+    if (!source) throw new RunnerError("No complete exact-worktree coverage manifest is available for scan mode");
+    campaign.manifest.profiles = source.manifest.profiles;
+    campaign.manifest.merged = { ...source.manifest.merged, source_run_id: source.manifest.merged.source_run_id || source.manifest.run_id };
+    campaign.manifest.result.coverage = "passed";
+    campaign.manifest.coverage_source_run_id = campaign.manifest.merged.source_run_id;
+    saveCampaign(campaign);
+  }
+  const credentials = sonarCredentials(candidate);
+  const publicationRequested = options.publishStatus || campaign.manifest.publication?.requested;
+  campaign.manifest.publication.requested = Boolean(publicationRequested);
+  let publication = null;
+  if (publicationRequested) {
+    publication = createStatusPublication(candidate);
+    try {
+      await publishStatus(publication, "pending", null, execution);
+      campaign.manifest.publication.state = "pending";
+      campaign.manifest.result.effect = "pending";
+    } catch (error) {
+      campaign.manifest.publication.state = "failed";
+      campaign.manifest.publication.error = error.message;
+      campaign.manifest.result.effect = "failed";
+    }
+    saveCampaign(campaign);
+  }
+  await executeAnalysis(campaign.manifest.analysis, {
+    submit: () => scannerSubmit(campaign, candidate, credentials, options, execution, deadline, progress),
+    wait: () => waitForAnalysis(campaign, candidate, credentials, execution, deadline, progress),
+    resumeOnly: options.mode === "resume",
+  });
+  try {
+    await assertCandidate(candidate, execution, { requireClean: true });
+  } catch (error) {
+    campaign.manifest.result.disposition = "failed";
+    campaign.manifest.result.failure = redacted(error.message, [credentials.token]);
+    if (publication) {
+      try {
+        await publishStatus(publication, "failure", campaign.manifest.analysis.dashboard_url, execution);
+        campaign.manifest.publication.failure_status_published = true;
+      } catch (statusError) {
+        campaign.manifest.publication.failure_status_error = redacted(statusError.message, [credentials.token]);
+      }
+    }
+    saveCampaign(campaign);
+    throw error;
+  }
+  await cleanupCampaign(campaign, execution.children);
+  saveCampaign(campaign);
+  if (campaign.manifest.resources.cleanup.state !== "complete") {
+    if (publication) {
+      try {
+        await publishStatus(publication, "failure", campaign.manifest.analysis.dashboard_url, execution);
+        campaign.manifest.publication.failure_status_published = true;
+      } catch (statusError) {
+        campaign.manifest.publication.failure_status_error = redacted(statusError.message, [credentials.token]);
+      }
+    }
+    saveCampaign(campaign);
+    throw new RunnerError("Runner-owned cleanup failed after technical Quality Gate success");
+  }
+  if (publication) {
+    try {
+      await publishStatus(publication, "success", campaign.manifest.analysis.dashboard_url, execution);
+      campaign.manifest.publication.state = "success";
+      campaign.manifest.result.effect = "success";
+    } catch (error) {
+      campaign.manifest.publication.state = "failed";
+      campaign.manifest.publication.error = error.message;
+      campaign.manifest.result.effect = "failed";
+      campaign.manifest.result.disposition = "failed";
+      await cleanupCampaign(campaign, execution.children);
+      saveCampaign(campaign);
+      throw new RunnerError(`Technical Quality Gate passed but commit-status publication failed: ${error.message}`);
+    }
+  }
+  await cleanupCampaign(campaign, execution.children);
+  saveCampaign(campaign);
+  console.log(writeReceipt(campaign, candidate, credentials));
+}
+export async function main(options = parseOptions(process.argv.slice(2))) {
+  const children = new Map();
+  children.history = [];
+  const controller = new AbortController();
+  const onSignal = (signal) => () => controller.abort(new SignalError(signal));
+  const onInterrupt = onSignal("SIGINT");
+  const onTerminate = onSignal("SIGTERM");
+  process.once("SIGINT", onInterrupt);
+  process.once("SIGTERM", onTerminate);
+  let campaign = null;
+  let releaseLock = null;
+  let progress = null;
+  let candidate = null;
+  const deadline = new Deadline(options);
+  const preflightStarted = Date.now();
+  const preflightHeartbeat = setInterval(() => {
+    console.log(`sonar preflight: elapsed_ms=${Date.now() - preflightStarted} deadline_remaining_ms=${Math.max(0, deadline.overall - Date.now() - cleanupReserveSeconds * 1000)}`);
+  }, 10000);
+  preflightHeartbeat.unref?.();
+  try {
+    const preliminaryExecution = { children, signal: controller.signal, deadline };
+    const repoRoot = resolve(await capture("git", ["rev-parse", "--show-toplevel"], options.repository, preliminaryExecution));
+    if (!existsSync(join(repoRoot, "sonar-project.properties"))) throw new RunnerError(`Repository has no sonar-project.properties: ${repoRoot}`);
+    candidate = await candidateFor(repoRoot, preliminaryExecution);
+    if ((options.mode === "gate" || options.mode === "coverage") && await capture("git", ["status", "--porcelain"], candidate.repository_path, preliminaryExecution)) {
+      throw new RunnerError("Refusing to run SonarQube against a dirty working tree");
+    }
+    const namespace = join(candidate.coordination_root, ".agent", "e", "sonarqube", "worktrees", candidate.worktree_id);
+    const dockerCommand = locate("docker");
+    const existingImage = dockerCommand ? await bestEffortCapture(dockerCommand, ["image", "inspect", "--format", "{{.Id}}", imageReference], repoRoot, preliminaryExecution) : "unavailable";
+    const imageId = /^sha256:[0-9a-f]{64}$/i.test(existingImage) ? existingImage : (options.mode === "coverage" || options.mode === "gate") && dockerCommand ? await resolveImage(dockerCommand, repoRoot, preliminaryExecution) : "unavailable";
+    const environment = await coverageEnvironment(repoRoot, { goCommand: locate("go"), dockerCommand, imageId, execution: preliminaryExecution });
+    if (options.mode === "resume") {
+      const record = manifestsIn(namespace).find((item) => item.manifest.run_id === options.run);
+      if (!record) throw new RunnerError(`No campaign found for --run ${options.run}`);
+      if (!sameCandidate(record.manifest.candidate, candidate) || record.manifest.fingerprints.coverage_environment !== environment.sha256) {
+        throw new RunnerError("Resume campaign no longer matches the exact candidate/environment");
+      }
+      if (!["submitted", "ce_running"].includes(record.manifest.analysis?.state) || !completeCoverage(record, candidate, environment) || !validAnalysisEvidence(record)) {
+        throw new RunnerError("Resume requires complete retained coverage and a validated submitted CE task");
+      }
+      campaign = campaignFromRecord(record);
+      campaign.namespace = namespace;
+    } else {
+      if ((options.mode === "gate" || options.mode === "scan") && !options.fresh) {
+        const pending = resumableAnalysis(namespace, candidate, environment);
+        if (pending) {
+          campaign = campaignFromRecord(pending);
+          campaign.namespace = namespace;
+        }
+      }
+      if (!campaign) {
+        campaign = createCampaign(namespace, options.mode, candidate, environment, options);
+        campaign.namespace = namespace;
+      }
+    }
+    releaseLock = acquireLock(namespace, campaign.runId);
+    progress = new Progress(campaign, deadline);
+    progress.start();
+    clearInterval(preflightHeartbeat);
+    event(campaign, "preflight", "started", { mode: options.mode, head: candidate.head, profiles: coverageProfiles.length, jobs: options.jobs, manifest_path: join(campaign.runDir, "manifest.json"), budgets: campaign.manifest.budgets });
+    console.log(`Sonar mode=${options.mode} head=${candidate.head} profiles=${coverageProfiles.length} jobs=${options.jobs} manifest=${campaign.runDir}`);
+    await assertCandidate(candidate, preliminaryExecution, { requireClean: options.mode === "gate" || options.mode === "coverage" });
+    await runWithCampaign(campaign, candidate, environment, options, preliminaryExecution, deadline, progress);
+  } catch (error) {
+    if (campaign && campaign.manifest.result.technical_gate !== "passed") {
+      campaign.manifest.result.disposition = error instanceof SignalError || error instanceof BudgetError ? "incomplete" : "failed";
+      campaign.manifest.result.failure = redacted(error.message, [process.env.SONAR_TOKEN]);
+      if (campaign.manifest.publication?.requested && candidate) {
+        try {
+          await publishStatus(createStatusPublication(candidate), "failure", campaign.manifest.analysis?.dashboard_url || null, cleanupExecution({ children, signal: controller.signal }));
+          campaign.manifest.publication.failure_status_published = true;
+        } catch (statusError) {
+          campaign.manifest.publication.failure_status_error = redacted(statusError.message, [process.env.SONAR_TOKEN]);
+        }
+      }
+      saveCampaign(campaign);
+    }
+    throw error;
+  }
+  finally {
+    clearInterval(preflightHeartbeat);
+    progress?.stop();
+    if (campaign) await cleanupCampaign(campaign, children);
+    releaseLock?.();
+    process.removeListener("SIGINT", onInterrupt);
+    process.removeListener("SIGTERM", onTerminate);
   }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === scriptPath) {
   try {
-    main();
+    await main();
   } catch (error) {
-    if (statusPublication) {
-      statusPublication.targetUrl ||= reportTarget(
-        join(statusPublication.repoRoot, ".scannerwork", "report-task.txt"),
-      );
-      try {
-        publishCommitStatus(statusPublication, "failure");
-      } catch (statusError) {
-        console.error(`Failed to publish GitHub failure status: ${statusError.message}`);
-      }
-    }
     console.error(error.stack || error.message);
-    process.exitCode = 1;
+    process.exitCode = error instanceof RunnerError ? error.exitCode : 1;
   }
 }

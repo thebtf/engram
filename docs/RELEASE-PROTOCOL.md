@@ -31,6 +31,7 @@
 | Docker image acceptance | `final-image-set.json` retained from the release workflow | manifest is missing, not `status: PASS`, does not cover `server`, `operator-console`, and `postgres`, or lacks exact IDs, zero HIGH/CRITICAL findings in the three canonical-image SARIF files, runtime proof, or cleanup PASS |
 | Released-image rescan | post-publication `ScanPublished` evidence: one summary JSON plus per-image SARIF/log for `server`, `operator-console`, and `postgres` | after publication, first run is not started within 24h, later evidence is older than 36h by `started_at`/`completed_at`, evidence is missing, HIGH/CRITICAL findings exist, or scanner/database/tag-resolution errors prevent complete evidence; blocks rollout/continued deployment, not initial digest publication |
 | Diff hygiene | `git diff --check` | whitespace/conflict marker errors |
+| SonarQube Quality Gate | `node tools/quality/run-sonarqube.mjs` | exact candidate coverage is incomplete, scanner/CE/QG is non-OK, or requested status publication fails |
 
 ## Release Autonomy
 
@@ -103,6 +104,17 @@ a separate reviewed security change, not an operator-side escape hatch.
 - For rollout, verify deployed `server` version and at least one server/client MCP smoke before declaring deployment complete.
 - Plugin/local daemon consumers must be checked for version parity after release; runtime consumer-home updates remain explicit consumer update flows.
 - Canonical image publication is incomplete until the accepted three-image `final-image-set.json` is recorded. The released-digest rescan is post-publication monitoring: its first run is due within 24h and later evidence must be no older than 36h from `started_at`/`completed_at`; missing, stale, finding-bearing, scanner-failing, database-failing, or tag-resolution-failing evidence blocks rollout/continued deployment, not initial digest publication.
+
+## SonarQube Gate Recovery
+
+Run the default command for the complete exact-candidate release gate. It retains immutable per-profile evidence under the shared repository `.agent/e/sonarqube` namespace and only reuses a passed profile when the same worktree, HEAD/tree, source/test/config/dependency inputs, profile descriptor, and test environment fingerprints match.
+
+- `--mode coverage` collects or validates coverage only and prints `COVERAGE_READY` when all profiles are admissible.
+- `--mode scan` consumes an existing complete exact-worktree coverage manifest, submits one fresh analysis, and waits for that exact analysis ID.
+- `--mode resume --run <UUID>` only resumes the durable submitted CE task or saved analysis ID; it never runs Go tests or submits another scanner analysis.
+- `--mode gate` remains the default one-command release gate. `--fresh` bypasses reuse while preserving old evidence; `--jobs 1|2` permits only the isolated fixture pair to overlap.
+
+The runner prints run/profile progress, phase and overall budgets, event-log location, reuse/invalidation reasons, and persists partial diagnostics. Scanner, CE/QG, network, cancellation, and status-publication failures never delete successful coverage evidence. A completed `PASS` receipt remains valid only for its exact manifest and analysis bytes; resume preserves task identity rather than querying project-latest state.
 
 ## Terminal Verdict
 
