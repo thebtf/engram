@@ -393,21 +393,8 @@ func RegisterLegacyProject(ctx context.Context, db *gorm.DB, canonical, alias, g
 			return ambiguousProjectIdentity("legacy alias already selects a different canonical project")
 		}
 
-		canonicalCandidates, err := findProjectCandidates(ctx, tx, canonical)
-		if err != nil {
-			return unavailableProjectIdentity(err)
-		}
-		switch len(canonicalCandidates) {
-		case 0:
-			if err := createProjectIdentityRow(ctx, tx, canonical, gitRemote, relativePath, displayName, nil); err != nil {
-				return projectIdentityWriteError(err)
-			}
-		case 1:
-			if canonicalCandidates[0].ID != canonical {
-				return ambiguousProjectIdentity("canonical selector already selects a different project")
-			}
-		default:
-			return ambiguousProjectIdentity("canonical selector maps to multiple projects")
+		if err := registerLegacyCanonicalProject(ctx, tx, canonical, gitRemote, relativePath, displayName); err != nil {
+			return err
 		}
 
 		if err := appendProjectAliases(ctx, tx, canonical, alias); err != nil {
@@ -415,6 +402,26 @@ func RegisterLegacyProject(ctx context.Context, db *gorm.DB, canonical, alias, g
 		}
 		return nil
 	})
+}
+
+func registerLegacyCanonicalProject(ctx context.Context, tx *gorm.DB, canonical, gitRemote, relativePath, displayName string) error {
+	canonicalCandidates, err := findProjectCandidates(ctx, tx, canonical)
+	if err != nil {
+		return unavailableProjectIdentity(err)
+	}
+	switch len(canonicalCandidates) {
+	case 0:
+		if err := createProjectIdentityRow(ctx, tx, canonical, gitRemote, relativePath, displayName, nil); err != nil {
+			return projectIdentityWriteError(err)
+		}
+	case 1:
+		if canonicalCandidates[0].ID != canonical {
+			return ambiguousProjectIdentity("canonical selector already selects a different project")
+		}
+	default:
+		return ambiguousProjectIdentity("canonical selector maps to multiple projects")
+	}
+	return nil
 }
 
 // ValidateProjectAliasV2 validates a legacy selector without applying the
