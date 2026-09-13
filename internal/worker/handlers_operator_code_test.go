@@ -811,6 +811,142 @@ func TestOperatorCodeHTTPAdapter_IndexIntentDigestIsCanonical(t *testing.T) {
 	require.NotEqual(t, first, operatorCodeIndexIntentDigest("operator-code-index-intent-submit", proof, "", "request-2", uci.IndexIntentReindex))
 }
 
+func TestOperatorCodeHTTPAdapter_CatalogAndPinFailuresStayPrivate(t *testing.T) {
+	pathRequest := func(body string, identity auth.Identity) *http.Request {
+		request := operatorCodeHTTPTestRequest(t, body, identity)
+		routeContext := chi.NewRouteContext()
+		routeContext.URLParams.Add("tab_binding_id", operatorCodeHTTPTestBindingID)
+		return request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, routeContext))
+	}
+
+	t.Run("catalog failure withholds context labels", func(t *testing.T) {
+		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+		fixture.contexts.listErr = errors.New("catalog unavailable")
+		recorder := httptest.NewRecorder()
+
+		adapter.HandleContexts(recorder, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current"}`, fixture.identity))
+
+		require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+		require.Empty(t, recorder.Body.String())
+	})
+
+	t.Run("unlisted context cannot become the selected view", func(t *testing.T) {
+		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+		foreign := fixture.ref.Clone()
+		foreign.ViewID = uuid.NewString()
+		recorder := httptest.NewRecorder()
+
+		adapter.HandlePin(recorder, pathRequest(`{"document_proof":"proof-current","context_ref":{"source_id":"`+foreign.SourceID+`","checkout_id":"`+foreign.CheckoutID+`","view_id":"`+foreign.ViewID+`","analysis_profile_id":"`+foreign.AnalysisProfileID+`","generation":7}}`, fixture.identity))
+
+		require.Equal(t, http.StatusForbidden, recorder.Code)
+		require.Empty(t, recorder.Body.String())
+	})
+
+	t.Run("pin persistence failure leaves the current selection unchanged", func(t *testing.T) {
+		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+		fixture.binding.pinned = nil
+		fixture.contexts.pinErr = errors.New("pin store unavailable")
+		recorder := httptest.NewRecorder()
+
+		adapter.HandlePin(recorder, pathRequest(`{"document_proof":"proof-current","context_ref":`+operatorCodeHTTPTestContextRefJSON+`}`, fixture.identity))
+
+		require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+		require.Empty(t, recorder.Body.String())
+		followUp := httptest.NewRecorder()
+		adapter.HandleSearch(followUp, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","query":"Fixture"}`, fixture.identity))
+		require.Equal(t, http.StatusForbidden, followUp.Code)
+		require.Empty(t, followUp.Body.String())
+	})
+}
+
+func TestOperatorCodeHTTPAdapter_SearchCursorWriteFailureWithholdsResult(t *testing.T) {
+	body := `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","query":"Fixture"}`
+
+	t.Run("initial page", func(t *testing.T) {
+		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+		fixture.app.search = operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalLexical)
+		fixture.contexts.createErr = errors.New("cursor store unavailable")
+		recorder := httptest.NewRecorder()
+
+		adapter.HandleSearch(recorder, operatorCodeHTTPTestRequest(t, body, fixture.identity))
+
+		require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+		require.Empty(t, recorder.Body.String())
+		require.Empty(t, fixture.recorder.inputs)
+	})
+
+	t.Run("continued page", func(t *testing.T) {
+		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+		serviceCursor := "service-cursor"
+		firstResponse := operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalLexical)
+		firstResponse.Continuation = &uci.QueryContinuation{Value: &serviceCursor}
+		truncated := true
+		firstResponse.Truncated = &truncated
+		fixture.app.searchResponses = []uci.QueryResponse{firstResponse, operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalLexical)}
+		fixture.contexts.createCursorRef = "80000000-0000-4000-8000-000000000012"
+
+		first := httptest.NewRecorder()
+		adapter.HandleSearch(first, operatorCodeHTTPTestRequest(t, body, fixture.identity))
+		require.Equal(t, http.StatusOK, first.Code, first.Body.String())
+
+		fixture.contexts.advanceErr = errors.New("cursor store unavailable")
+		second := httptest.NewRecorder()
+		adapter.HandleSearch(second, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","query":"Fixture","continuation":"`+fixture.contexts.createCursorRef+`"}`, fixture.identity))
+
+		require.Equal(t, http.StatusServiceUnavailable, second.Code)
+		require.Empty(t, second.Body.String())
+		require.Len(t, fixture.recorder.inputs, 1)
+	})
+}
+
+func TestOperatorCodeHTTPAdapter_GraphRevocationWithholdsContent(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	fixture.app.graph = operatorCodeHTTPTestGraphResponse(t, fixture.ref)
+	fixture.grants.revokeOnSecondCheck = true
+	recorder := httptest.NewRecorder()
+
+	adapter.HandleGraph(recorder, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","action":"neighbors","target":{"entity_key":"Fixture.Symbol"}}`, fixture.identity))
+
+	require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+	require.NotContains(t, recorder.Body.String(), "package demo")
+	require.NotContains(t, recorder.Body.String(), fixture.ref.SourceID)
+	require.NotContains(t, recorder.Body.String(), fixture.ref.ViewID)
+	require.Empty(t, fixture.recorder.inputs)
+}
+
+func TestOperatorCodeHTTPAdapter_NoViewIntentBindingMismatchIsBodyless(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	fixture.binding.pinned = nil
+	fixture.contexts.entries[0].Context = nil
+	fixture.app.indexSubmitErr = uci.ErrIndexIntentBindingMismatch
+	recorder := httptest.NewRecorder()
+	target := `{"source_id":"` + operatorCodeHTTPTestSourceID + `","checkout_id":"` + operatorCodeHTTPTestCheckoutID + `"}`
+
+	adapter.HandleIndexIntentSubmit(recorder, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"first-index-mismatch","kind":"reindex","target":`+target+`}`, fixture.identity))
+
+	require.Equal(t, http.StatusConflict, recorder.Code)
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestOperatorCodeHTTPAdapter_SearchPreservesSuppressedResponse(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	fixture.app.search = uci.QueryResponse{
+		Schema: uci.QueryResponseSchema,
+		Status: uci.QueryStatusContextRequired,
+		Error:  &uci.QueryError{Code: uci.QueryErrorContextRequired},
+	}
+	require.NoError(t, fixture.app.search.Validate())
+	recorder := httptest.NewRecorder()
+
+	adapter.HandleSearch(recorder, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","query":"Fixture"}`, fixture.identity))
+
+	require.Equal(t, http.StatusConflict, recorder.Code, recorder.Body.String())
+	require.Contains(t, recorder.Body.String(), `"status":"context_required"`)
+	require.NotContains(t, recorder.Body.String(), `"continuation"`)
+	require.NotContains(t, recorder.Body.String(), "package demo")
+	require.Empty(t, fixture.recorder.inputs)
+}
+
 const (
 	operatorCodeHTTPTestSourceID       = "20000000-0000-4000-8000-000000000001"
 	operatorCodeHTTPTestCheckoutID     = "30000000-0000-4000-8000-000000000001"
@@ -928,11 +1064,14 @@ func (grants *operatorCodeHTTPTestGrants) Active(_ context.Context, caller auth.
 
 type operatorCodeHTTPTestContextStore struct {
 	entries          []gormdb.BrowserCodeContextCatalogEntry
+	listErr          error
 	pins             []gormdb.BrowserCodeContextPin
 	cursor           string
 	createCursorRef  string
 	advanceCursorRef string
 	loadErr          error
+	createErr        error
+	advanceErr       error
 	createdBindings  []gormdb.BrowserCodeContinuationBinding
 	loadedBindings   []gormdb.BrowserCodeContinuationBinding
 	advancedBindings []gormdb.BrowserCodeContinuationBinding
@@ -948,6 +1087,9 @@ type operatorCodeHTTPTestContextStore struct {
 }
 
 func (store *operatorCodeHTTPTestContextStore) ListCatalog(_ context.Context, _ int64) ([]gormdb.BrowserCodeContextCatalogEntry, error) {
+	if store.listErr != nil {
+		return nil, store.listErr
+	}
 	return append([]gormdb.BrowserCodeContextCatalogEntry(nil), store.entries...), nil
 }
 
@@ -1035,6 +1177,9 @@ func (store *operatorCodeHTTPTestContextStore) LoadContinuation(_ context.Contex
 
 func (store *operatorCodeHTTPTestContextStore) CreateContinuation(_ context.Context, binding gormdb.BrowserCodeContinuationBinding, cursor string) (string, error) {
 	store.createdBindings = append(store.createdBindings, binding)
+	if store.createErr != nil {
+		return "", store.createErr
+	}
 	store.cursor = cursor
 	if cursor == "" {
 		return "", nil
@@ -1048,6 +1193,9 @@ func (store *operatorCodeHTTPTestContextStore) CreateContinuation(_ context.Cont
 func (store *operatorCodeHTTPTestContextStore) AdvanceContinuation(_ context.Context, cursorRef string, binding gormdb.BrowserCodeContinuationBinding, cursor string) (string, error) {
 	store.advancedRefs = append(store.advancedRefs, cursorRef)
 	store.advancedBindings = append(store.advancedBindings, binding)
+	if store.advanceErr != nil {
+		return "", store.advanceErr
+	}
 	store.cursor = cursor
 	if cursor == "" {
 		return "", nil

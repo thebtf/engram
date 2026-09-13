@@ -644,6 +644,12 @@ func (adapter *OperatorCodeHTTPAdapter) handleOperatorCodeSearch(w http.Response
 		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 		return
 	}
+	if response.Status == uci.QueryStatusContextRequired || response.Status == uci.QueryStatusForbidden {
+		adapter.writeReleasedQuery(w, r.Context(), identity, caller, uci.ReleaseCategoryCodeSearch, response, func(candidate uci.QueryResponse, authorized uci.AuthorizedContext) bool {
+			return operatorCodeSearchResponseValid(candidate, authorized)
+		})
+		return
+	}
 	nextCursor, err := adapter.operatorCodeSearchNextContinuation(r.Context(), request.Continuation, binding, response)
 	if err != nil {
 		operatorCodeWriteCursorFailure(w, err)
