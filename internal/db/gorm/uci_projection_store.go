@@ -573,7 +573,29 @@ func (s *UCIProjectionStore) AdmitIndexFrames(ctx context.Context, sourceID, pro
 	if len(frames) == 0 || len(frames) > ucidomain.IndexAdmissionMaxFrames {
 		return nil, fmt.Errorf("uci index admission: invalid packed frame count")
 	}
+	canonicalFrames, err := validateUCIIndexAdmissionFrames(ctx, sourceID, profileID, frames)
+	if err != nil {
+		return nil, err
+	}
+	var admitted []ucidomain.IndexPart
+	var insertedFactRows int64
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var transactionErr error
+		admitted, insertedFactRows, transactionErr = s.admitUCIIndexAdmissionFramesTx(ctx, tx, sourceID, profileID, canonicalFrames)
+		return transactionErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	if insertedFactRows >= uciIndexAdmissionAnalyzeThreshold {
+		if err := s.refreshUCIProjectionStatistics(ctx); err != nil {
+			log.Warn().Err(err).Int64("inserted_fact_rows", insertedFactRows).Msg("uci index admission statistics refresh failed")
+		}
+	}
+	return admitted, nil
+}
 
+func validateUCIIndexAdmissionFrames(ctx context.Context, sourceID, profileID string, frames []ucidomain.IndexAdmissionFrame) ([]ucidomain.IndexAdmissionFrame, error) {
 	canonicalFrames := make([]ucidomain.IndexAdmissionFrame, len(frames))
 	for index, frame := range frames {
 		if err := ctx.Err(); err != nil {
@@ -583,95 +605,122 @@ func (s *UCIProjectionStore) AdmitIndexFrames(ctx context.Context, sourceID, pro
 		if err != nil {
 			return nil, fmt.Errorf("uci index admission: validate frame %d: %w", index, err)
 		}
-		if canonical.Profile.ID != profileID {
-			return nil, fmt.Errorf("uci index admission: frame profile does not match authorized profile")
-		}
-		for _, artifact := range canonical.Artifacts {
-			expectedID, err := ucidomain.DeriveIndexAdmissionArtifactID(sourceID, artifact.ContentDigest, artifact.Profile)
-			if err != nil {
-				return nil, fmt.Errorf("uci index admission: derive artifact ID: %w", err)
-			}
-			if artifact.ArtifactID != expectedID {
-				return nil, fmt.Errorf("uci index admission: artifact ID does not match authorized source")
-			}
-			for _, definition := range artifact.Definitions {
-				if _, err := uciIndexAdmissionDefinitionName(artifact.Profile.Language, definition); err != nil {
-					return nil, err
-				}
-			}
+		if err := validateUCIIndexAdmissionFrame(sourceID, profileID, canonical); err != nil {
+			return nil, err
 		}
 		canonicalFrames[index] = canonical
 	}
 	if err := ucidomain.ValidateIndexAdmissionFrames(canonicalFrames); err != nil {
 		return nil, fmt.Errorf("uci index admission: validate packed build: %w", err)
 	}
+	return canonicalFrames, nil
+}
 
-	var admitted []ucidomain.IndexPart
-	var insertedFactRows int64
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		store := &UCIProjectionStore{db: tx}
-		bindings := make(ucidomain.IndexAdmissionReferenceBindings)
-		for _, frame := range canonicalFrames {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if err := store.validateUCIIndexAdmissionProfile(ctx, profileID, frame); err != nil {
-				return err
-			}
-			frameBindings, err := frame.ReferenceBindings()
-			if err != nil {
-				return fmt.Errorf("uci index admission: derive reference bindings: %w", err)
-			}
-			for key, referenceSiteID := range frameBindings {
-				if existing, found := bindings[key]; found && existing != referenceSiteID {
-					return errUCIProjectionImmutable
-				}
-				bindings[key] = referenceSiteID
-			}
-		}
-
-		proofs := make(map[string]ucidomain.IndexArtifactProof)
-		for _, frame := range canonicalFrames {
-			for _, artifact := range frame.Artifacts {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				proof, inserted, err := store.admitUCIIndexAdmissionArtifact(ctx, sourceID, artifact, bindings)
-				if err != nil {
-					return err
-				}
-				insertedFactRows += inserted
-				proofs[artifact.ArtifactID] = proof
-			}
-		}
-
-		admitted = make([]ucidomain.IndexPart, len(canonicalFrames))
-		for frameIndex, frame := range canonicalFrames {
-			part, err := frame.IndexPart(bindings)
-			if err != nil {
-				return fmt.Errorf("uci index admission: canonical publication part: %w", err)
-			}
-			for artifactIndex := range part.Artifacts {
-				proof, found := proofs[part.Artifacts[artifactIndex].ArtifactID]
-				if !found {
-					return fmt.Errorf("uci index admission: missing stored artifact proof")
-				}
-				part.Artifacts[artifactIndex] = proof
-			}
-			if _, err := ucidomain.DigestIndexPart(part); err != nil {
-				return fmt.Errorf("uci index admission: validate stored publication part: %w", err)
-			}
-			admitted[frameIndex] = part
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
+func validateUCIIndexAdmissionFrame(sourceID, profileID string, frame ucidomain.IndexAdmissionFrame) error {
+	if frame.Profile.ID != profileID {
+		return fmt.Errorf("uci index admission: frame profile does not match authorized profile")
 	}
-	if insertedFactRows >= uciIndexAdmissionAnalyzeThreshold {
-		if err := s.refreshUCIProjectionStatistics(ctx); err != nil {
-			log.Warn().Err(err).Int64("inserted_fact_rows", insertedFactRows).Msg("uci index admission statistics refresh failed")
+	for _, artifact := range frame.Artifacts {
+		if err := validateUCIIndexAdmissionArtifact(sourceID, artifact); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+func validateUCIIndexAdmissionArtifact(sourceID string, artifact ucidomain.IndexAdmissionArtifact) error {
+	expectedID, err := ucidomain.DeriveIndexAdmissionArtifactID(sourceID, artifact.ContentDigest, artifact.Profile)
+	if err != nil {
+		return fmt.Errorf("uci index admission: derive artifact ID: %w", err)
+	}
+	if artifact.ArtifactID != expectedID {
+		return fmt.Errorf("uci index admission: artifact ID does not match authorized source")
+	}
+	for _, definition := range artifact.Definitions {
+		if _, err := uciIndexAdmissionDefinitionName(artifact.Profile.Language, definition); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *UCIProjectionStore) admitUCIIndexAdmissionFramesTx(ctx context.Context, tx *gorm.DB, sourceID, profileID string, frames []ucidomain.IndexAdmissionFrame) ([]ucidomain.IndexPart, int64, error) {
+	store := &UCIProjectionStore{db: tx}
+	bindings, err := store.uciIndexAdmissionReferenceBindings(ctx, profileID, frames)
+	if err != nil {
+		return nil, 0, err
+	}
+	proofs, insertedFactRows, err := store.admitUCIIndexAdmissionArtifacts(ctx, sourceID, frames, bindings)
+	if err != nil {
+		return nil, 0, err
+	}
+	admitted, err := uciIndexAdmissionPartsWithProofs(frames, bindings, proofs)
+	if err != nil {
+		return nil, 0, err
+	}
+	return admitted, insertedFactRows, nil
+}
+
+func (s *UCIProjectionStore) uciIndexAdmissionReferenceBindings(ctx context.Context, profileID string, frames []ucidomain.IndexAdmissionFrame) (ucidomain.IndexAdmissionReferenceBindings, error) {
+	bindings := make(ucidomain.IndexAdmissionReferenceBindings)
+	for _, frame := range frames {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if err := s.validateUCIIndexAdmissionProfile(ctx, profileID, frame); err != nil {
+			return nil, err
+		}
+		frameBindings, err := frame.ReferenceBindings()
+		if err != nil {
+			return nil, fmt.Errorf("uci index admission: derive reference bindings: %w", err)
+		}
+		for key, referenceSiteID := range frameBindings {
+			if existing, found := bindings[key]; found && existing != referenceSiteID {
+				return nil, errUCIProjectionImmutable
+			}
+			bindings[key] = referenceSiteID
+		}
+	}
+	return bindings, nil
+}
+
+func (s *UCIProjectionStore) admitUCIIndexAdmissionArtifacts(ctx context.Context, sourceID string, frames []ucidomain.IndexAdmissionFrame, bindings ucidomain.IndexAdmissionReferenceBindings) (map[string]ucidomain.IndexArtifactProof, int64, error) {
+	proofs := make(map[string]ucidomain.IndexArtifactProof)
+	var insertedFactRows int64
+	for _, frame := range frames {
+		for _, artifact := range frame.Artifacts {
+			if err := ctx.Err(); err != nil {
+				return nil, 0, err
+			}
+			proof, inserted, err := s.admitUCIIndexAdmissionArtifact(ctx, sourceID, artifact, bindings)
+			if err != nil {
+				return nil, 0, err
+			}
+			insertedFactRows += inserted
+			proofs[artifact.ArtifactID] = proof
+		}
+	}
+	return proofs, insertedFactRows, nil
+}
+
+func uciIndexAdmissionPartsWithProofs(frames []ucidomain.IndexAdmissionFrame, bindings ucidomain.IndexAdmissionReferenceBindings, proofs map[string]ucidomain.IndexArtifactProof) ([]ucidomain.IndexPart, error) {
+	admitted := make([]ucidomain.IndexPart, len(frames))
+	for frameIndex, frame := range frames {
+		part, err := frame.IndexPart(bindings)
+		if err != nil {
+			return nil, fmt.Errorf("uci index admission: canonical publication part: %w", err)
+		}
+		for artifactIndex := range part.Artifacts {
+			proof, found := proofs[part.Artifacts[artifactIndex].ArtifactID]
+			if !found {
+				return nil, fmt.Errorf("uci index admission: missing stored artifact proof")
+			}
+			part.Artifacts[artifactIndex] = proof
+		}
+		if _, err := ucidomain.DigestIndexPart(part); err != nil {
+			return nil, fmt.Errorf("uci index admission: validate stored publication part: %w", err)
+		}
+		admitted[frameIndex] = part
 	}
 	return admitted, nil
 }
@@ -907,8 +956,7 @@ func uciIndexAdmissionJSONYAMLDefinitionName(language ucidomain.IndexAdmissionLa
 	if !strings.HasPrefix(definition.LocalSymbolKey, prefix) || definition.SymbolKey != definition.LocalSymbolKey {
 		return "", fmt.Errorf("uci index admission: unparseable %s definition key %q", language, definition.LocalSymbolKey)
 	}
-	remainder := strings.TrimPrefix(definition.LocalSymbolKey, prefix)
-	document, suffix, hasSuffix := strings.Cut(remainder, "#")
+	document, suffix, hasSuffix := strings.Cut(strings.TrimPrefix(definition.LocalSymbolKey, prefix), "#")
 	if !uciIndexAdmissionDocumentNumber(document) {
 		return "", fmt.Errorf("uci index admission: unparseable %s definition key %q", language, definition.LocalSymbolKey)
 	}
@@ -918,6 +966,10 @@ func uciIndexAdmissionJSONYAMLDefinitionName(language ucidomain.IndexAdmissionLa
 		}
 		return "document " + document, nil
 	}
+	return uciIndexAdmissionJSONYAMLDefinitionSuffixName(language, definition, suffix)
+}
+
+func uciIndexAdmissionJSONYAMLDefinitionSuffixName(language ucidomain.IndexAdmissionLanguage, definition ucidomain.IndexAdmissionDefinition, suffix string) (string, error) {
 	if suffix == "" {
 		return "", fmt.Errorf("uci index admission: unparseable %s definition key %q", language, definition.LocalSymbolKey)
 	}
@@ -1177,6 +1229,16 @@ func uciIndexAdmissionTreeSitterQualifiedName(value string) (string, bool) {
 }
 
 func (s *UCIProjectionStore) verifyUCIIndexAdmissionFacts(ctx context.Context, artifact ucidomain.IndexAdmissionArtifact, bindings ucidomain.IndexAdmissionReferenceBindings) error {
+	if err := s.verifyUCIIndexAdmissionDefinitions(ctx, artifact); err != nil {
+		return err
+	}
+	if err := s.verifyUCIIndexAdmissionReferences(ctx, artifact, bindings); err != nil {
+		return err
+	}
+	return s.verifyUCIIndexAdmissionChunks(ctx, artifact)
+}
+
+func (s *UCIProjectionStore) verifyUCIIndexAdmissionDefinitions(ctx context.Context, artifact ucidomain.IndexAdmissionArtifact) error {
 	var definitions []UCIDefinition
 	if err := s.db.WithContext(ctx).Where(uciProjectionArtifactIDWhere, artifact.ArtifactID).Find(&definitions).Error; err != nil {
 		return fmt.Errorf("uci index admission: load definitions: %w", err)
@@ -1204,7 +1266,10 @@ func (s *UCIProjectionStore) verifyUCIIndexAdmissionFacts(ctx context.Context, a
 			return fmt.Errorf("uci index admission: stored definition differs: %w", errUCIProjectionImmutable)
 		}
 	}
+	return nil
+}
 
+func (s *UCIProjectionStore) verifyUCIIndexAdmissionReferences(ctx context.Context, artifact ucidomain.IndexAdmissionArtifact, bindings ucidomain.IndexAdmissionReferenceBindings) error {
 	var references []UCIReferenceSite
 	if err := s.db.WithContext(ctx).Where(uciProjectionArtifactIDWhere, artifact.ArtifactID).Find(&references).Error; err != nil {
 		return fmt.Errorf("uci index admission: load reference sites: %w", err)
@@ -1252,7 +1317,10 @@ func (s *UCIProjectionStore) verifyUCIIndexAdmissionFacts(ctx context.Context, a
 			return fmt.Errorf("uci index admission: stored reference differs: %w", errUCIProjectionImmutable)
 		}
 	}
+	return nil
+}
 
+func (s *UCIProjectionStore) verifyUCIIndexAdmissionChunks(ctx context.Context, artifact ucidomain.IndexAdmissionArtifact) error {
 	var chunks []UCIChunk
 	if err := s.db.WithContext(ctx).Where(uciProjectionArtifactIDWhere, artifact.ArtifactID).Order("ordinal ASC").Find(&chunks).Error; err != nil {
 		return fmt.Errorf("uci index admission: load chunks: %w", err)
@@ -4343,26 +4411,38 @@ func indexEdgeReplacementFromRows(sourcePath string, rows []UCIResolvedEdge) (uc
 
 func validateUCIPublicationCandidateShape(candidate *uciPublicationCandidate, mode ucidomain.IndexManifestMode) error {
 	for sourcePath, replacement := range candidate.EdgeReplacements {
-		_, member := candidate.Memberships[sourcePath]
-		_, deleted := candidate.DeletedPaths[sourcePath]
-		if mode == ucidomain.IndexManifestFull && !member {
-			return errUCIPublicationRejected
-		}
-		if mode == ucidomain.IndexManifestDelta && !member && !deleted {
-			return errUCIPublicationRejected
-		}
-		if !member && len(replacement.Edges) != 0 {
-			return errUCIPublicationRejected
+		if err := validateUCIPublicationCandidateReplacementShape(candidate, mode, sourcePath, replacement); err != nil {
+			return err
 		}
 	}
-	if mode == ucidomain.IndexManifestFull {
-		if len(candidate.EdgeReplacements) != len(candidate.Memberships) {
+	if mode != ucidomain.IndexManifestFull {
+		return nil
+	}
+	return validateUCIPublicationFullCandidateShape(candidate)
+}
+
+func validateUCIPublicationCandidateReplacementShape(candidate *uciPublicationCandidate, mode ucidomain.IndexManifestMode, sourcePath string, replacement ucidomain.IndexEdgeReplacement) error {
+	_, member := candidate.Memberships[sourcePath]
+	_, deleted := candidate.DeletedPaths[sourcePath]
+	if mode == ucidomain.IndexManifestFull && !member {
+		return errUCIPublicationRejected
+	}
+	if mode == ucidomain.IndexManifestDelta && !member && !deleted {
+		return errUCIPublicationRejected
+	}
+	if !member && len(replacement.Edges) != 0 {
+		return errUCIPublicationRejected
+	}
+	return nil
+}
+
+func validateUCIPublicationFullCandidateShape(candidate *uciPublicationCandidate) error {
+	if len(candidate.EdgeReplacements) != len(candidate.Memberships) {
+		return errUCIPublicationRejected
+	}
+	for path := range candidate.Memberships {
+		if _, exists := candidate.EdgeReplacements[path]; !exists {
 			return errUCIPublicationRejected
-		}
-		for path := range candidate.Memberships {
-			if _, exists := candidate.EdgeReplacements[path]; !exists {
-				return errUCIPublicationRejected
-			}
 		}
 	}
 	return nil
@@ -4373,6 +4453,10 @@ func (publisher *uciPublisher) validateUCIPublicationCandidateArtifacts(ctx cont
 	if err := publisher.store.db.WithContext(ctx).Where(uciProjectionProfileIDWhere, profileID).First(&profile).Error; err != nil {
 		return errUCIPublicationRejected
 	}
+	return publisher.validateUCIPublicationCandidateArtifactsForProfile(ctx, scope, profile, candidate)
+}
+
+func (publisher *uciPublisher) validateUCIPublicationCandidateArtifactsForProfile(ctx context.Context, scope ucidomain.IndexScope, profile UCIAnalysisProfile, candidate *uciPublicationCandidate) error {
 	referenced := make(map[string]struct{})
 	for _, membership := range candidate.Memberships {
 		if membership.State != ucidomain.IndexFilePresent || membership.ArtifactID == nil {
@@ -4413,23 +4497,30 @@ func (publisher *uciPublisher) validateUCIPublicationCandidateArtifacts(ctx cont
 func validateUCIPublicationCandidateEdges(candidate *uciPublicationCandidate) error {
 	seenEdgeKeys := make(map[string]struct{})
 	for sourcePath, replacement := range candidate.EdgeReplacements {
-		sourceMembership, sourceExists := candidate.Memberships[sourcePath]
 		for _, edge := range replacement.Edges {
-			if _, duplicate := seenEdgeKeys[edge.EdgeKey]; duplicate {
-				return errUCIPublicationRejected
-			}
-			seenEdgeKeys[edge.EdgeKey] = struct{}{}
-			if !sourceExists || sourceMembership.State != ucidomain.IndexFilePresent || sourceMembership.ArtifactID == nil || *sourceMembership.ArtifactID != edge.SourceArtifactID {
-				return errUCIPublicationRejected
-			}
-			if edge.Target == nil {
-				continue
-			}
-			targetMembership, targetExists := candidate.Memberships[edge.Target.PathKey]
-			if !targetExists || targetMembership.State != ucidomain.IndexFilePresent || targetMembership.ArtifactID == nil || *targetMembership.ArtifactID != edge.Target.ArtifactID {
-				return errUCIPublicationRejected
+			if err := validateUCIPublicationCandidateEdge(candidate, seenEdgeKeys, sourcePath, edge); err != nil {
+				return err
 			}
 		}
+	}
+	return nil
+}
+
+func validateUCIPublicationCandidateEdge(candidate *uciPublicationCandidate, seenEdgeKeys map[string]struct{}, sourcePath string, edge ucidomain.IndexEdge) error {
+	if _, duplicate := seenEdgeKeys[edge.EdgeKey]; duplicate {
+		return errUCIPublicationRejected
+	}
+	seenEdgeKeys[edge.EdgeKey] = struct{}{}
+	sourceMembership, sourceExists := candidate.Memberships[sourcePath]
+	if !sourceExists || sourceMembership.State != ucidomain.IndexFilePresent || sourceMembership.ArtifactID == nil || *sourceMembership.ArtifactID != edge.SourceArtifactID {
+		return errUCIPublicationRejected
+	}
+	if edge.Target == nil {
+		return nil
+	}
+	targetMembership, targetExists := candidate.Memberships[edge.Target.PathKey]
+	if !targetExists || targetMembership.State != ucidomain.IndexFilePresent || targetMembership.ArtifactID == nil || *targetMembership.ArtifactID != edge.Target.ArtifactID {
+		return errUCIPublicationRejected
 	}
 	return nil
 }
@@ -4536,6 +4627,20 @@ func applyUCIPublicationMemberships(ctx context.Context, tx *gorm.DB, scope ucid
 }
 
 func applyUCIPublicationEdges(ctx context.Context, tx *gorm.DB, scope ucidomain.IndexScope, generation int64, current map[string][]UCIResolvedEdge, candidate map[string]ucidomain.IndexEdgeReplacement) error {
+	paths := unionUCIPublicationEdgePaths(current, candidate)
+	now, err := uciDatabaseClock(ctx, tx)
+	if err != nil {
+		return err
+	}
+	for _, path := range paths {
+		if err := applyUCIPublicationEdgePath(ctx, tx, scope, generation, now, path, current[path], candidate[path], candidate); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func unionUCIPublicationEdgePaths(current map[string][]UCIResolvedEdge, candidate map[string]ucidomain.IndexEdgeReplacement) []string {
 	paths := make(map[string]struct{}, len(current)+len(candidate))
 	for path := range current {
 		paths[path] = struct{}{}
@@ -4548,60 +4653,56 @@ func applyUCIPublicationEdges(ctx context.Context, tx *gorm.DB, scope ucidomain.
 		orderedPaths = append(orderedPaths, path)
 	}
 	sort.Strings(orderedPaths)
-	now, err := uciDatabaseClock(ctx, tx)
-	if err != nil {
-		return err
+	return orderedPaths
+}
+
+func applyUCIPublicationEdgePath(ctx context.Context, tx *gorm.DB, scope ucidomain.IndexScope, generation int64, now time.Time, path string, existing []UCIResolvedEdge, next ucidomain.IndexEdgeReplacement, candidate map[string]ucidomain.IndexEdgeReplacement) error {
+	_, hasNext := candidate[path]
+	if hasNext && sameUCIPublicationEdgeReplacement(existing, next) {
+		return nil
 	}
-	for _, path := range orderedPaths {
-		existing := current[path]
-		next, hasNext := candidate[path]
-		unchanged := hasNext && sameUCIPublicationEdgeReplacement(existing, next)
-		if unchanged {
-			continue
+	if len(existing) != 0 {
+		if err := tx.WithContext(ctx).Model(&UCIResolvedEdge{}).Where(
+			"checkout_id = ? AND source_path = ? AND valid_to_generation IS NULL", scope.CheckoutID, path,
+		).Updates(map[string]any{"valid_to_generation": generation}).Error; err != nil {
+			return fmt.Errorf("uci publication close edges: %w", err)
 		}
-		if len(existing) != 0 {
-			if err := tx.WithContext(ctx).Model(&UCIResolvedEdge{}).Where(
-				"checkout_id = ? AND source_path = ? AND valid_to_generation IS NULL", scope.CheckoutID, path,
-			).Updates(map[string]any{"valid_to_generation": generation}).Error; err != nil {
-				return fmt.Errorf("uci publication close edges: %w", err)
-			}
+	}
+	if !hasNext {
+		return nil
+	}
+	for _, edge := range next.Edges {
+		evidenceJSON, err := json.Marshal(edge.Evidence)
+		if err != nil {
+			return err
 		}
-		if !hasNext {
-			continue
+		var targetPath, targetArtifact, targetSymbol *string
+		if edge.Target != nil {
+			targetPath = cloneUCIOptionalString(&edge.Target.PathKey)
+			targetArtifact = cloneUCIOptionalString(&edge.Target.ArtifactID)
+			targetSymbol = cloneUCIOptionalString(edge.Target.SymbolKey)
 		}
-		for _, edge := range next.Edges {
-			evidenceJSON, err := json.Marshal(edge.Evidence)
-			if err != nil {
-				return err
-			}
-			var targetPath, targetArtifact, targetSymbol *string
-			if edge.Target != nil {
-				targetPath = cloneUCIOptionalString(&edge.Target.PathKey)
-				targetArtifact = cloneUCIOptionalString(&edge.Target.ArtifactID)
-				targetSymbol = cloneUCIOptionalString(edge.Target.SymbolKey)
-			}
-			row := UCIResolvedEdge{
-				ResolvedEdgeID:      uuid.NewString(),
-				SourceID:            scope.SourceID,
-				CheckoutID:          scope.CheckoutID,
-				EdgeKey:             edge.EdgeKey,
-				SourcePath:          next.SourcePath,
-				SourceArtifact:      edge.SourceArtifactID,
-				SourceSymbol:        cloneUCIOptionalString(edge.SourceSymbolKey),
-				TargetPath:          targetPath,
-				TargetArtifact:      targetArtifact,
-				TargetSymbol:        targetSymbol,
-				Relation:            string(edge.Relation),
-				EvidenceKind:        UCIResolvedEdgeEvidenceKind(edge.EvidenceKind),
-				ResolverRevision:    edge.ResolverRevision,
-				EvidenceJSON:        string(evidenceJSON),
-				ResolutionState:     UCIResolvedEdgeState(edge.ResolutionState),
-				ValidFromGeneration: generation,
-				CreatedAt:           now,
-			}
-			if err := tx.WithContext(ctx).Create(&row).Error; err != nil {
-				return fmt.Errorf("uci publication insert edge: %w", err)
-			}
+		row := UCIResolvedEdge{
+			ResolvedEdgeID:      uuid.NewString(),
+			SourceID:            scope.SourceID,
+			CheckoutID:          scope.CheckoutID,
+			EdgeKey:             edge.EdgeKey,
+			SourcePath:          next.SourcePath,
+			SourceArtifact:      edge.SourceArtifactID,
+			SourceSymbol:        cloneUCIOptionalString(edge.SourceSymbolKey),
+			TargetPath:          targetPath,
+			TargetArtifact:      targetArtifact,
+			TargetSymbol:        targetSymbol,
+			Relation:            string(edge.Relation),
+			EvidenceKind:        UCIResolvedEdgeEvidenceKind(edge.EvidenceKind),
+			ResolverRevision:    edge.ResolverRevision,
+			EvidenceJSON:        string(evidenceJSON),
+			ResolutionState:     UCIResolvedEdgeState(edge.ResolutionState),
+			ValidFromGeneration: generation,
+			CreatedAt:           now,
+		}
+		if err := tx.WithContext(ctx).Create(&row).Error; err != nil {
+			return fmt.Errorf("uci publication insert edge: %w", err)
 		}
 	}
 	return nil
