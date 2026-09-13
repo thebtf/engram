@@ -866,6 +866,13 @@ func (s *UCIProjectionStore) storeUCIIndexAdmissionFacts(ctx context.Context, so
 }
 
 func uciIndexAdmissionDefinitionName(language ucidomain.IndexAdmissionLanguage, definition ucidomain.IndexAdmissionDefinition) (string, error) {
+	if language == ucidomain.IndexAdmissionLanguageJSON || language == ucidomain.IndexAdmissionLanguageYAML {
+		return uciIndexAdmissionJSONYAMLDefinitionName(language, definition)
+	}
+	return uciIndexAdmissionNonDocumentDefinitionName(language, definition)
+}
+
+func uciIndexAdmissionNonDocumentDefinitionName(language ucidomain.IndexAdmissionLanguage, definition ucidomain.IndexAdmissionDefinition) (string, error) {
 	switch language {
 	case ucidomain.IndexAdmissionLanguageGo:
 		return uciIndexAdmissionGoDefinitionName(definition)
@@ -873,8 +880,6 @@ func uciIndexAdmissionDefinitionName(language ucidomain.IndexAdmissionLanguage, 
 		return uciIndexAdmissionTreeSitterDefinitionName(definition)
 	case ucidomain.IndexAdmissionLanguageMarkdown:
 		return uciIndexAdmissionMarkdownDefinitionName(definition)
-	case ucidomain.IndexAdmissionLanguageJSON, ucidomain.IndexAdmissionLanguageYAML:
-		return uciIndexAdmissionJSONYAMLDefinitionName(language, definition)
 	case ucidomain.IndexAdmissionLanguageSQL:
 		return uciIndexAdmissionSQLDefinitionName(definition)
 	case ucidomain.IndexAdmissionLanguageOpenAPI:
