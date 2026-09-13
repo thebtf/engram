@@ -225,6 +225,15 @@ func TestHostAdvisorBindMapsStrictBoundaryAndCatalogErrors(t *testing.T) {
 
 func TestHostAdvisorDescriptorsStayOnOneServiceAndUseFinalEnvelopes(t *testing.T) {
 	file := pb.File_proto_engram_v1_engram_proto
+	service := requireHostAdvisorService(t, file)
+	requireHostAdvisorMethods(t, service)
+	requireHostAdvisorInitializeProof(t, file)
+	requireHostAdvisorAdviseDescriptors(t, file)
+	requireHostAdvisorObserveDescriptors(t, file)
+}
+
+func requireHostAdvisorService(t *testing.T, file protoreflect.FileDescriptor) protoreflect.ServiceDescriptor {
+	t.Helper()
 	services := file.Services()
 	if services.Len() != 1 {
 		t.Fatalf("services = %d, want one", services.Len())
@@ -233,65 +242,81 @@ func TestHostAdvisorDescriptorsStayOnOneServiceAndUseFinalEnvelopes(t *testing.T
 	if service.FullName() != "engram.v1.EngramService" {
 		t.Fatalf("service = %s", service.FullName())
 	}
+	return service
+}
+
+func requireHostAdvisorMethods(t *testing.T, service protoreflect.ServiceDescriptor) {
+	t.Helper()
 	for _, methodName := range []protoreflect.Name{"Bind", "Advise", "Observe"} {
 		if service.Methods().ByName(methodName) == nil {
 			t.Fatalf("missing %s descriptor", methodName)
 		}
 	}
+}
+
+func requireHostAdvisorInitializeProof(t *testing.T, file protoreflect.FileDescriptor) {
+	t.Helper()
 	initialize := file.Messages().ByName("InitializeResponse")
 	proof := initialize.Fields().ByName("authenticated_subject_proof_sha256")
 	if proof == nil || proof.Number() != 6 || proof.Kind() != protoreflect.BytesKind {
 		t.Fatalf("Initialize proof descriptor = %#v", proof)
 	}
+}
 
-	requireField := func(messageName, fieldName protoreflect.Name, number protoreflect.FieldNumber, kind protoreflect.Kind) protoreflect.FieldDescriptor {
-		t.Helper()
-		message := file.Messages().ByName(messageName)
-		if message == nil {
-			t.Fatalf("missing %s", messageName)
-		}
-		field := message.Fields().ByName(fieldName)
-		if field == nil || field.Number() != number || field.Kind() != kind {
-			t.Fatalf("%s.%s descriptor = %#v", messageName, fieldName, field)
-		}
-		return field
+func requireHostAdvisorField(t *testing.T, file protoreflect.FileDescriptor, messageName, fieldName protoreflect.Name, number protoreflect.FieldNumber, kind protoreflect.Kind) protoreflect.FieldDescriptor {
+	t.Helper()
+	message := file.Messages().ByName(messageName)
+	if message == nil {
+		t.Fatalf("missing %s", messageName)
 	}
+	field := message.Fields().ByName(fieldName)
+	if field == nil || field.Number() != number || field.Kind() != kind {
+		t.Fatalf("%s.%s descriptor = %#v", messageName, fieldName, field)
+	}
+	return field
+}
 
-	requireField("HostAdvisorAdviseRequest", "binding_id", 1, protoreflect.StringKind)
-	if field := requireField("HostAdvisorAdviseRequest", "project_evidence", 2, protoreflect.MessageKind); field.Message().FullName() != "engram.v1.ProjectIdentityV3" {
+func requireHostAdvisorAdviseDescriptors(t *testing.T, file protoreflect.FileDescriptor) {
+	t.Helper()
+	requireHostAdvisorField(t, file, "HostAdvisorAdviseRequest", "binding_id", 1, protoreflect.StringKind)
+	if field := requireHostAdvisorField(t, file, "HostAdvisorAdviseRequest", "project_evidence", 2, protoreflect.MessageKind); field.Message().FullName() != "engram.v1.ProjectIdentityV3" {
 		t.Fatalf("project evidence descriptor = %#v", field)
 	}
-	if field := requireField("HostAdvisorAdviseRequest", "occurrence", 3, protoreflect.MessageKind); field.Message().FullName() != "engram.v1.HostAdvisorOccurrence" {
+	if field := requireHostAdvisorField(t, file, "HostAdvisorAdviseRequest", "occurrence", 3, protoreflect.MessageKind); field.Message().FullName() != "engram.v1.HostAdvisorOccurrence" {
 		t.Fatalf("occurrence descriptor = %#v", field)
 	}
 	advise := file.Messages().ByName("HostAdvisorAdviseResponse")
 	if advise == nil || advise.Oneofs().ByName("decision") == nil {
 		t.Fatalf("Advise response descriptor = %#v", advise)
 	}
-	for _, fieldName := range []protoreflect.Name{"emit", "abstain", "delivery_ambiguous", "unavailable"} {
-		field := advise.Fields().ByName(fieldName)
-		if field == nil || field.Kind() != protoreflect.MessageKind || field.ContainingOneof() != advise.Oneofs().ByName("decision") {
-			t.Fatalf("Advise decision field %s = %#v", fieldName, field)
-		}
-	}
-	requireField("HostAdvisorKnowledgeReference", "memory_id", 1, protoreflect.Int64Kind)
-	requireField("HostAdvisorKnowledgeReference", "memory_version", 2, protoreflect.Uint32Kind)
-	requireField("HostAdvisorKnowledgeReference", "source_project", 5, protoreflect.StringKind)
+	requireHostAdvisorOneofFields(t, advise, "decision", "Advise decision field", []protoreflect.Name{"emit", "abstain", "delivery_ambiguous", "unavailable"})
+	requireHostAdvisorField(t, file, "HostAdvisorKnowledgeReference", "memory_id", 1, protoreflect.Int64Kind)
+	requireHostAdvisorField(t, file, "HostAdvisorKnowledgeReference", "memory_version", 2, protoreflect.Uint32Kind)
+	requireHostAdvisorField(t, file, "HostAdvisorKnowledgeReference", "source_project", 5, protoreflect.StringKind)
+}
 
-	requireField("HostAdvisorObserveRequest", "binding_id", 1, protoreflect.StringKind)
+func requireHostAdvisorObserveDescriptors(t *testing.T, file protoreflect.FileDescriptor) {
+	t.Helper()
+	requireHostAdvisorField(t, file, "HostAdvisorObserveRequest", "binding_id", 1, protoreflect.StringKind)
 	observe := file.Messages().ByName("HostAdvisorObserveRequest")
 	if observe == nil || observe.Oneofs().ByName("target") == nil {
 		t.Fatalf("Observe request descriptor = %#v", observe)
 	}
-	for _, fieldName := range []protoreflect.Name{"receipt_bound", "channel_gap"} {
-		field := observe.Fields().ByName(fieldName)
-		if field == nil || field.Kind() != protoreflect.MessageKind || field.ContainingOneof() != observe.Oneofs().ByName("target") {
-			t.Fatalf("Observe target field %s = %#v", fieldName, field)
+	requireHostAdvisorOneofFields(t, observe, "target", "Observe target field", []protoreflect.Name{"receipt_bound", "channel_gap"})
+	requireHostAdvisorField(t, file, "HostAdvisorObserveResponse", "state", 1, protoreflect.EnumKind)
+	requireHostAdvisorField(t, file, "HostAdvisorObserveResponse", "observation_id", 2, protoreflect.StringKind)
+	requireHostAdvisorField(t, file, "HostAdvisorObserveResponse", "reason", 3, protoreflect.EnumKind)
+}
+
+func requireHostAdvisorOneofFields(t *testing.T, message protoreflect.MessageDescriptor, oneofName, label string, fieldNames []protoreflect.Name) {
+	t.Helper()
+	oneof := message.Oneofs().ByName(protoreflect.Name(oneofName))
+	for _, fieldName := range fieldNames {
+		field := message.Fields().ByName(fieldName)
+		if field == nil || field.Kind() != protoreflect.MessageKind || field.ContainingOneof() != oneof {
+			t.Fatalf("%s %s = %#v", label, fieldName, field)
 		}
 	}
-	requireField("HostAdvisorObserveResponse", "state", 1, protoreflect.EnumKind)
-	requireField("HostAdvisorObserveResponse", "observation_id", 2, protoreflect.StringKind)
-	requireField("HostAdvisorObserveResponse", "reason", 3, protoreflect.EnumKind)
 }
 
 func TestAuthenticatedSubjectDigestUsesOnlyIdentityFacts(t *testing.T) {
@@ -498,24 +523,7 @@ func TestHostAdvisorObserveSeparatesReceiptAndChannelTargets(t *testing.T) {
 	}
 	bindingID := bound.GetBinding().GetBindingId()
 	advisor := &recordingInterventionAdvisor{}
-	advisor.observe = func(_ context.Context, input intervention.ObserveInput) (intervention.ObservationAck, error) {
-		switch input.TargetKind() {
-		case intervention.ObservationTargetReceiptBound:
-			target, ok := input.ReceiptBound()
-			if !ok || target.Receipt().ID() != "receipt-one" {
-				t.Fatalf("receipt target = %#v", input)
-			}
-			return intervention.NewAcceptedObservationAck("observation-one", intervention.ObservationReasonAcceptedAttestation)
-		case intervention.ObservationTargetChannelGap:
-			target, ok := input.ChannelGap()
-			if !ok || target.SemanticGap() != intervention.SemanticGapCallbackUnavailable {
-				t.Fatalf("channel gap target = %#v", input)
-			}
-			return intervention.NewAcceptedObservationAck("observation-two", intervention.ObservationReasonAcceptedSemanticGap)
-		default:
-			return intervention.ObservationAck{}, errors.New("unexpected observation target")
-		}
-	}
+	advisor.observe = hostAdvisorObserveAcceptance(t)
 	server.SetInterventionAdvisor(advisor)
 
 	receiptBound := &pb.HostAdvisorObserveRequest{
@@ -565,6 +573,28 @@ func TestHostAdvisorObserveSeparatesReceiptAndChannelTargets(t *testing.T) {
 	}
 	if advisor.observeCalls != 2 {
 		t.Fatal("missing observation binding reached the advisor")
+	}
+}
+
+func hostAdvisorObserveAcceptance(t *testing.T) func(context.Context, intervention.ObserveInput) (intervention.ObservationAck, error) {
+	t.Helper()
+	return func(_ context.Context, input intervention.ObserveInput) (intervention.ObservationAck, error) {
+		switch input.TargetKind() {
+		case intervention.ObservationTargetReceiptBound:
+			target, ok := input.ReceiptBound()
+			if !ok || target.Receipt().ID() != "receipt-one" {
+				t.Fatalf("receipt target = %#v", input)
+			}
+			return intervention.NewAcceptedObservationAck("observation-one", intervention.ObservationReasonAcceptedAttestation)
+		case intervention.ObservationTargetChannelGap:
+			target, ok := input.ChannelGap()
+			if !ok || target.SemanticGap() != intervention.SemanticGapCallbackUnavailable {
+				t.Fatalf("channel gap target = %#v", input)
+			}
+			return intervention.NewAcceptedObservationAck("observation-two", intervention.ObservationReasonAcceptedSemanticGap)
+		default:
+			return intervention.ObservationAck{}, errors.New("unexpected observation target")
+		}
 	}
 }
 

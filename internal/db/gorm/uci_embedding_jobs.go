@@ -549,45 +549,49 @@ func (s *UCIProjectionStore) CompleteEmbeddingJob(ctx context.Context, claim uci
 		return fmt.Errorf("uci embedding complete: invalid request")
 	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		scope, now, err := lockUCIEmbeddingJobScope(ctx, tx, claim.Ref)
-		if err != nil {
-			return err
-		}
-		if !uciEmbeddingProfileMatches(scope.Profile, claim.Profile) {
-			return ucidomain.ErrEmbeddingJobObsolete
-		}
-		progress, err := parseUCIEmbeddingProgress(scope.Job.Counts)
-		if err != nil || !progress.Exhausted {
-			return fmt.Errorf("uci embedding complete: enumeration is incomplete")
-		}
-		total, ready, last, err := loadUCIEmbeddingCoverage(ctx, tx, claim.Ref.Context, scope.Profile.EmbeddingProfileID, claim.Profile)
-		if err != nil {
-			return err
-		}
-		if !uciEmbeddingCursorsEqual(progress.Cursor, last) || progress.Total != total || progress.Scanned != total || progress.Ready != ready || total != ready {
-			return fmt.Errorf("uci embedding complete: exact coverage is incomplete")
-		}
-		updates := map[string]any{
-			"state":        UCIJobSucceeded,
-			"lease_owner":  nil,
-			"lease_expiry": nil,
-			"retry_after":  nil,
-			"updated_at":   now,
-		}
-		if total == 0 {
-			updates["error_code"] = string(ucidomain.EmbeddingFailureNoCandidates)
-		} else {
-			updates["error_code"] = nil
-		}
-		result := tx.WithContext(ctx).Model(&UCIJob{}).Where(uciEmbeddingJobLeaseWhere, scope.Job.JobID, UCIJobRunning, claim.Ref.LeaseEpoch, claim.Ref.LeaseOwner, now).Updates(updates)
-		if result.Error != nil {
-			return fmt.Errorf("uci embedding complete update: %w", result.Error)
-		}
-		if result.RowsAffected != 1 {
-			return ucidomain.ErrEmbeddingJobLeaseLost
-		}
-		return nil
+		return completeUCIEmbeddingJob(ctx, tx, claim)
 	})
+}
+
+func completeUCIEmbeddingJob(ctx context.Context, tx *gorm.DB, claim ucidomain.EmbeddingJobClaim) error {
+	scope, now, err := lockUCIEmbeddingJobScope(ctx, tx, claim.Ref)
+	if err != nil {
+		return err
+	}
+	if !uciEmbeddingProfileMatches(scope.Profile, claim.Profile) {
+		return ucidomain.ErrEmbeddingJobObsolete
+	}
+	progress, err := parseUCIEmbeddingProgress(scope.Job.Counts)
+	if err != nil || !progress.Exhausted {
+		return fmt.Errorf("uci embedding complete: enumeration is incomplete")
+	}
+	total, ready, last, err := loadUCIEmbeddingCoverage(ctx, tx, claim.Ref.Context, scope.Profile.EmbeddingProfileID, claim.Profile)
+	if err != nil {
+		return err
+	}
+	if !uciEmbeddingCursorsEqual(progress.Cursor, last) || progress.Total != total || progress.Scanned != total || progress.Ready != ready || total != ready {
+		return fmt.Errorf("uci embedding complete: exact coverage is incomplete")
+	}
+	updates := map[string]any{
+		"state":        UCIJobSucceeded,
+		"lease_owner":  nil,
+		"lease_expiry": nil,
+		"retry_after":  nil,
+		"updated_at":   now,
+	}
+	if total == 0 {
+		updates["error_code"] = string(ucidomain.EmbeddingFailureNoCandidates)
+	} else {
+		updates["error_code"] = nil
+	}
+	result := tx.WithContext(ctx).Model(&UCIJob{}).Where(uciEmbeddingJobLeaseWhere, scope.Job.JobID, UCIJobRunning, claim.Ref.LeaseEpoch, claim.Ref.LeaseOwner, now).Updates(updates)
+	if result.Error != nil {
+		return fmt.Errorf("uci embedding complete update: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return ucidomain.ErrEmbeddingJobLeaseLost
+	}
+	return nil
 }
 
 func (s *UCIProjectionStore) FailEmbeddingJob(ctx context.Context, ref ucidomain.EmbeddingJobRef, failure ucidomain.EmbeddingFailure) error {

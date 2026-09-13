@@ -9,6 +9,7 @@ import (
 
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/crypto"
+	"github.com/thebtf/engram/internal/intervention"
 )
 
 const interventionKeyTestHex = "a10102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
@@ -88,41 +89,46 @@ func TestOpenInterventionKeyProviderAdmitsOnlyCurrentEpoch(t *testing.T) {
 func assertInterventionKeyProviderCase(t *testing.T, cfg *config.Config, vaultDirectory, vaultPath string, vault *crypto.Vault, current [32]byte, test interventionKeyProviderCase) {
 	t.Helper()
 	provider, err := openInterventionKeyProvider(context.Background(), cfg, test.reader)
-	if test.wantErr {
+	assertInterventionKeyProviderResult(t, provider, err, vault, current, test.wantErr)
+	assertOnlyExistingInterventionVault(t, vaultDirectory, vaultPath)
+}
+
+func assertInterventionKeyProviderResult(t *testing.T, provider intervention.KeyProvider, err error, vault *crypto.Vault, current [32]byte, wantErr bool) {
+	t.Helper()
+	if wantErr {
 		if err == nil {
 			t.Fatal("openInterventionKeyProvider returned nil error")
 		}
 		if provider != nil {
 			t.Fatal("openInterventionKeyProvider returned a provider with an invalid retained epoch")
 		}
-	} else {
-		if err != nil {
-			t.Fatalf("openInterventionKeyProvider: %v", err)
-		}
-		if provider == nil {
-			t.Fatal("openInterventionKeyProvider returned a nil provider")
-		}
-		keyEpoch, ok := provider.Current()
-		if !ok {
-			t.Fatal("provider has no current key epoch")
-		}
-		if keyEpoch.EpochCommitment() != current {
-			t.Fatal("provider current epoch does not match the vault commitment")
-		}
-		if keyEpoch.ChannelKey() != vault.DeriveKey("engram.hap03/channel/v1") {
-			t.Fatal("provider channel key does not use the HAP-03 channel domain")
-		}
-		if keyEpoch.OccurrenceKey() != vault.DeriveKey("engram.hap03/occurrence/v1") {
-			t.Fatal("provider occurrence key does not use the HAP-03 occurrence domain")
-		}
-		if keyEpoch.ContentKey() != vault.DeriveKey("engram.hap03/content/v1") {
-			t.Fatal("provider content key does not use the HAP-03 content domain")
-		}
-		if keyEpoch.ReceiptKey() != vault.DeriveKey("engram.hap03/receipt/v1") {
-			t.Fatal("provider receipt key does not use the HAP-03 receipt domain")
-		}
+		return
 	}
-	assertOnlyExistingInterventionVault(t, vaultDirectory, vaultPath)
+	if err != nil {
+		t.Fatalf("openInterventionKeyProvider: %v", err)
+	}
+	if provider == nil {
+		t.Fatal("openInterventionKeyProvider returned a nil provider")
+	}
+	keyEpoch, ok := provider.Current()
+	if !ok {
+		t.Fatal("provider has no current key epoch")
+	}
+	if keyEpoch.EpochCommitment() != current {
+		t.Fatal("provider current epoch does not match the vault commitment")
+	}
+	if keyEpoch.ChannelKey() != vault.DeriveKey("engram.hap03/channel/v1") {
+		t.Fatal("provider channel key does not use the HAP-03 channel domain")
+	}
+	if keyEpoch.OccurrenceKey() != vault.DeriveKey("engram.hap03/occurrence/v1") {
+		t.Fatal("provider occurrence key does not use the HAP-03 occurrence domain")
+	}
+	if keyEpoch.ContentKey() != vault.DeriveKey("engram.hap03/content/v1") {
+		t.Fatal("provider content key does not use the HAP-03 content domain")
+	}
+	if keyEpoch.ReceiptKey() != vault.DeriveKey("engram.hap03/receipt/v1") {
+		t.Fatal("provider receipt key does not use the HAP-03 receipt domain")
+	}
 }
 
 func TestOpenInterventionKeyProviderRejectsMissingInputsWithoutGeneratingVault(t *testing.T) {

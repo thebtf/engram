@@ -246,9 +246,21 @@ func TestContextInjectV3_ResolvesBeforeRetrievalAndIgnoresRawSelectors(t *testin
 	writer := httptest.NewRecorder()
 	service.handleContextInject(writer, v3ContextInjectRequest(t, validContextProjectDescriptorV3()))
 
+	requireContextInjectV3Status(t, writer)
+	requireContextInjectV3Workflow(t, workflow)
+	requireContextInjectV3Retrieval(t, projectKey, retrievedProject, fallbackScopes)
+	requireContextInjectV3Response(t, writer, projectKey)
+}
+
+func requireContextInjectV3Status(t *testing.T, writer *httptest.ResponseRecorder) {
+	t.Helper()
 	if writer.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", writer.Code, writer.Body.String())
 	}
+}
+
+func requireContextInjectV3Workflow(t *testing.T, workflow *contextInjectV3Workflow) {
+	t.Helper()
 	if workflow.calls != 1 || workflow.request == nil {
 		t.Fatalf("central workflow calls=%d request=%#v", workflow.calls, workflow.request)
 	}
@@ -263,6 +275,10 @@ func TestContextInjectV3_ResolvesBeforeRetrievalAndIgnoresRawSelectors(t *testin
 	if !ok || caller.KeycardID != "keycard-v3" || caller.Role != "read-only" {
 		t.Fatalf("authenticated identity was not forwarded: %#v", caller)
 	}
+}
+
+func requireContextInjectV3Retrieval(t *testing.T, projectKey, retrievedProject string, fallbackScopes []retrievalScope) {
+	t.Helper()
 	if retrievedProject != projectKey {
 		t.Fatalf("retrieval project=%q, want resolved key %q", retrievedProject, projectKey)
 	}
@@ -274,6 +290,10 @@ func TestContextInjectV3_ResolvesBeforeRetrievalAndIgnoresRawSelectors(t *testin
 			t.Fatalf("raw V3 scope bypassed resolver: %#v", scope)
 		}
 	}
+}
+
+func requireContextInjectV3Response(t *testing.T, writer *httptest.ResponseRecorder, projectKey string) {
+	t.Helper()
 	var response struct {
 		ProjectResolution projectIdentityV3HTTPResolution `json:"project_resolution_v3"`
 	}
@@ -436,15 +456,17 @@ func sessionStartV3Refusal(t *testing.T, outcome projectidentity.ResolutionOutco
 	return status.Err()
 }
 
+type sessionStartV3RefusalCase struct {
+	name       string
+	descriptor map[string]any
+	err        error
+	status     int
+	code       string
+	calls      int
+}
+
 func TestSessionStartV3_RefusalsAreTypedAndRedacted(t *testing.T) {
-	for _, test := range []struct {
-		name       string
-		descriptor map[string]any
-		err        error
-		status     int
-		code       string
-		calls      int
-	}{
+	for _, test := range []sessionStartV3RefusalCase{
 		{
 			name: "client key assertion",
 			descriptor: func() map[string]any {
@@ -474,31 +496,34 @@ func TestSessionStartV3_RefusalsAreTypedAndRedacted(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			provider := &sessionStartV3Provider{err: test.err}
-			service := &Service{grpcInternalServer: provider}
-			writer := httptest.NewRecorder()
-
-			service.handleSessionStartContextStatic(writer, v3SessionStartRequest(t, test.descriptor))
-
-			if writer.Code != test.status {
-				t.Fatalf("status=%d body=%s", writer.Code, writer.Body.String())
-			}
-			if provider.calls != test.calls {
-				t.Fatalf("calls=%d, want %d", provider.calls, test.calls)
-			}
-			var response map[string]string
-			if err := json.Unmarshal(writer.Body.Bytes(), &response); err != nil {
-				t.Fatal(err)
-			}
-			if len(response) != 3 || response["code"] != test.code {
-				t.Fatalf("refusal=%v", response)
-			}
-			for _, forbidden := range []string{"attacker-selected-project", "attacker-selected-agent", "22222222-2222", "raw project resolution diagnostic", "raw session-start backend diagnostic"} {
-				if strings.Contains(writer.Body.String(), forbidden) {
-					t.Fatalf("V3 refusal leaked %q: %s", forbidden, writer.Body.String())
-				}
-			}
+			assertSessionStartV3Refusal(t, test)
 		})
+	}
+}
+
+func assertSessionStartV3Refusal(t *testing.T, test sessionStartV3RefusalCase) {
+	t.Helper()
+	provider := &sessionStartV3Provider{err: test.err}
+	service := &Service{grpcInternalServer: provider}
+	writer := httptest.NewRecorder()
+	service.handleSessionStartContextStatic(writer, v3SessionStartRequest(t, test.descriptor))
+	if writer.Code != test.status {
+		t.Fatalf("status=%d body=%s", writer.Code, writer.Body.String())
+	}
+	if provider.calls != test.calls {
+		t.Fatalf("calls=%d, want %d", provider.calls, test.calls)
+	}
+	var response map[string]string
+	if err := json.Unmarshal(writer.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response) != 3 || response["code"] != test.code {
+		t.Fatalf("refusal=%v", response)
+	}
+	for _, forbidden := range []string{"attacker-selected-project", "attacker-selected-agent", "22222222-2222", "raw project resolution diagnostic", "raw session-start backend diagnostic"} {
+		if strings.Contains(writer.Body.String(), forbidden) {
+			t.Fatalf("V3 refusal leaked %q: %s", forbidden, writer.Body.String())
+		}
 	}
 }
 

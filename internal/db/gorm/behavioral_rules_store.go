@@ -673,32 +673,51 @@ func validateBehavioralRuleSelectionKind(operation BehavioralRuleSelectionOperat
 func validateBehavioralRuleSelectionAction(operation BehavioralRuleSelectionOperation) error {
 	switch operation.Action {
 	case BehavioralRuleSelectionEnable, BehavioralRuleSelectionDisable:
-		if operation.Content != nil || operation.Priority != nil || operation.Scope != nil || len(operation.Order) != 0 {
-			return fmt.Errorf("%w: toggle accepts no field or reorder payload", ErrBehavioralRuleSelectionInvalid)
-		}
+		return validateBehavioralRuleSelectionToggle(operation)
 	case BehavioralRuleSelectionDelete:
-		if operation.Content != nil || operation.Priority != nil || operation.EditedBy != nil || operation.Scope != nil || len(operation.Order) != 0 {
-			return fmt.Errorf("%w: delete accepts no field or reorder payload", ErrBehavioralRuleSelectionInvalid)
-		}
+		return validateBehavioralRuleSelectionDelete(operation)
 	case BehavioralRuleSelectionUpdate:
-		if operation.Content == nil && operation.Priority == nil {
-			return fmt.Errorf("%w: update requires content or priority", ErrBehavioralRuleSelectionInvalid)
-		}
-		if operation.Content != nil && strings.TrimSpace(*operation.Content) == "" {
-			return fmt.Errorf("%w: content must not be empty", ErrBehavioralRuleSelectionInvalid)
-		}
-		if operation.Scope != nil || len(operation.Order) != 0 {
-			return fmt.Errorf("%w: update accepts no reorder payload", ErrBehavioralRuleSelectionInvalid)
-		}
+		return validateBehavioralRuleSelectionUpdate(operation)
 	case BehavioralRuleSelectionReorder:
-		if operation.Scope == nil || len(operation.Order) == 0 || operation.Content != nil || operation.Priority != nil || operation.EditedBy != nil {
-			return fmt.Errorf("%w: reorder requires only a scope and complete order", ErrBehavioralRuleSelectionInvalid)
-		}
-		if operation.Scope.Project != nil && (strings.TrimSpace(*operation.Scope.Project) == "" || strings.TrimSpace(*operation.Scope.Project) != *operation.Scope.Project) {
-			return fmt.Errorf("%w: reorder scope project is invalid", ErrBehavioralRuleSelectionInvalid)
-		}
+		return validateBehavioralRuleSelectionReorder(operation)
 	default:
 		return fmt.Errorf("%w: unsupported action", ErrBehavioralRuleSelectionInvalid)
+	}
+}
+
+func validateBehavioralRuleSelectionToggle(operation BehavioralRuleSelectionOperation) error {
+	if operation.Content != nil || operation.Priority != nil || operation.Scope != nil || len(operation.Order) != 0 {
+		return fmt.Errorf("%w: toggle accepts no field or reorder payload", ErrBehavioralRuleSelectionInvalid)
+	}
+	return nil
+}
+
+func validateBehavioralRuleSelectionDelete(operation BehavioralRuleSelectionOperation) error {
+	if operation.Content != nil || operation.Priority != nil || operation.EditedBy != nil || operation.Scope != nil || len(operation.Order) != 0 {
+		return fmt.Errorf("%w: delete accepts no field or reorder payload", ErrBehavioralRuleSelectionInvalid)
+	}
+	return nil
+}
+
+func validateBehavioralRuleSelectionUpdate(operation BehavioralRuleSelectionOperation) error {
+	if operation.Content == nil && operation.Priority == nil {
+		return fmt.Errorf("%w: update requires content or priority", ErrBehavioralRuleSelectionInvalid)
+	}
+	if operation.Content != nil && strings.TrimSpace(*operation.Content) == "" {
+		return fmt.Errorf("%w: content must not be empty", ErrBehavioralRuleSelectionInvalid)
+	}
+	if operation.Scope != nil || len(operation.Order) != 0 {
+		return fmt.Errorf("%w: update accepts no reorder payload", ErrBehavioralRuleSelectionInvalid)
+	}
+	return nil
+}
+
+func validateBehavioralRuleSelectionReorder(operation BehavioralRuleSelectionOperation) error {
+	if operation.Scope == nil || len(operation.Order) == 0 || operation.Content != nil || operation.Priority != nil || operation.EditedBy != nil {
+		return fmt.Errorf("%w: reorder requires only a scope and complete order", ErrBehavioralRuleSelectionInvalid)
+	}
+	if operation.Scope.Project != nil && (strings.TrimSpace(*operation.Scope.Project) == "" || strings.TrimSpace(*operation.Scope.Project) != *operation.Scope.Project) {
+		return fmt.Errorf("%w: reorder scope project is invalid", ErrBehavioralRuleSelectionInvalid)
 	}
 	return nil
 }

@@ -311,34 +311,38 @@ func requireUCITransportMethod(t *testing.T, service protoreflect.ServiceDescrip
 
 func requireUCITransportFields(t *testing.T, file protoreflect.FileDescriptor, messageName string, specs ...uciTransportFieldSpec) {
 	t.Helper()
-
 	message := file.Messages().ByName(protoreflect.Name(messageName))
 	if message == nil {
 		t.Fatalf("missing %s descriptor", messageName)
 	}
 	for _, spec := range specs {
-		field := message.Fields().ByName(protoreflect.Name(spec.name))
-		if field == nil {
-			t.Fatalf("missing %s.%s descriptor", messageName, spec.name)
-		}
-		if got := field.Number(); got != spec.number {
-			t.Fatalf("%s.%s number = %d, want %d", messageName, spec.name, got, spec.number)
-		}
-		if got := field.Kind(); got != spec.kind {
-			t.Fatalf("%s.%s kind = %s, want %s", messageName, spec.name, got, spec.kind)
-		}
-		if got := field.Cardinality(); got != spec.cardinality {
-			t.Fatalf("%s.%s cardinality = %s, want %s", messageName, spec.name, got, spec.cardinality)
-		}
-		if spec.proto3Optional && !field.HasOptionalKeyword() {
-			t.Fatalf("%s.%s must preserve optional presence", messageName, spec.name)
-		}
-		if spec.message == "" {
-			continue
-		}
-		if got := field.Message(); got == nil || got.FullName() != protoreflect.FullName(spec.message) {
-			t.Fatalf("%s.%s message = %v, want %s", messageName, spec.name, got, spec.message)
-		}
+		requireUCITransportField(t, message, messageName, spec)
+	}
+}
+
+func requireUCITransportField(t *testing.T, message protoreflect.MessageDescriptor, messageName string, spec uciTransportFieldSpec) {
+	t.Helper()
+	field := message.Fields().ByName(protoreflect.Name(spec.name))
+	if field == nil {
+		t.Fatalf("missing %s.%s descriptor", messageName, spec.name)
+	}
+	if got := field.Number(); got != spec.number {
+		t.Fatalf("%s.%s number = %d, want %d", messageName, spec.name, got, spec.number)
+	}
+	if got := field.Kind(); got != spec.kind {
+		t.Fatalf("%s.%s kind = %s, want %s", messageName, spec.name, got, spec.kind)
+	}
+	if got := field.Cardinality(); got != spec.cardinality {
+		t.Fatalf("%s.%s cardinality = %s, want %s", messageName, spec.name, got, spec.cardinality)
+	}
+	if spec.proto3Optional && !field.HasOptionalKeyword() {
+		t.Fatalf("%s.%s must preserve optional presence", messageName, spec.name)
+	}
+	if spec.message == "" {
+		return
+	}
+	if got := field.Message(); got == nil || got.FullName() != protoreflect.FullName(spec.message) {
+		t.Fatalf("%s.%s message = %v, want %s", messageName, spec.name, got, spec.message)
 	}
 }
 
@@ -486,15 +490,29 @@ func TestUCITransportContractAcceptsUnbornHeadObservation(t *testing.T) {
 	}
 }
 
+type uciTransportInvalidStageCase struct {
+	name   string
+	frames []*pb.StageCodeIndexFrame
+}
+
 func TestUCITransportContractStagesOnlyValidatedConsistentFrames(t *testing.T) {
 	server := &Server{}
 	runtime := &uciTransportContractFake{}
 	server.SetUCITransport(runtime)
 
-	for _, test := range []struct {
-		name   string
-		frames []*pb.StageCodeIndexFrame
-	}{
+	for _, test := range uciTransportInvalidStageCases() {
+		t.Run(test.name, func(t *testing.T) {
+			assertUCITransportInvalidStage(t, server, test.frames)
+		})
+	}
+	if runtime.stageCalls != 0 {
+		t.Fatalf("runtime received %d invalid stage calls", runtime.stageCalls)
+	}
+	assertUCITransportValidStage(t, server, runtime)
+}
+
+func uciTransportInvalidStageCases() []uciTransportInvalidStageCase {
+	return []uciTransportInvalidStageCase{
 		{name: "empty EOF", frames: nil},
 		{name: "first sequence is not zero", frames: []*pb.StageCodeIndexFrame{uciTransportContractStageFrame(1)}},
 		{name: "sequence gap", frames: []*pb.StageCodeIndexFrame{uciTransportContractStageFrame(0), uciTransportContractStageFrame(2)}},
@@ -520,21 +538,22 @@ func TestUCITransportContractStagesOnlyValidatedConsistentFrames(t *testing.T) {
 			frames[1].IntentClaim.ProcessNonce = "other-process"
 			return frames
 		}()},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			stream := &uciTransportContractStageStream{ctx: context.Background(), frames: test.frames}
-			if err := server.StageCodeIndex(stream); status.Code(err) != codes.InvalidArgument {
-				t.Fatalf("StageCodeIndex() code = %s, want %s", status.Code(err), codes.InvalidArgument)
-			}
-			if stream.response != nil {
-				t.Fatal("invalid stream received a close response")
-			}
-		})
 	}
-	if runtime.stageCalls != 0 {
-		t.Fatalf("runtime received %d invalid stage calls", runtime.stageCalls)
-	}
+}
 
+func assertUCITransportInvalidStage(t *testing.T, server *Server, frames []*pb.StageCodeIndexFrame) {
+	t.Helper()
+	stream := &uciTransportContractStageStream{ctx: context.Background(), frames: frames}
+	if err := server.StageCodeIndex(stream); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("StageCodeIndex() code = %s, want %s", status.Code(err), codes.InvalidArgument)
+	}
+	if stream.response != nil {
+		t.Fatal("invalid stream received a close response")
+	}
+}
+
+func assertUCITransportValidStage(t *testing.T, server *Server, runtime *uciTransportContractFake) {
+	t.Helper()
 	frames := []*pb.StageCodeIndexFrame{uciTransportContractStageFrame(0), uciTransportContractStageFrame(1)}
 	stream := &uciTransportContractStageStream{ctx: context.Background(), frames: frames}
 	if err := server.StageCodeIndex(stream); err != nil {
