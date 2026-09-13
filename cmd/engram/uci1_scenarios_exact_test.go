@@ -223,52 +223,15 @@ func uci1CollectExactCandidateEvidence(ctx context.Context, root string) (map[st
 }
 
 func uci1ExactCandidateValidateGroups() error {
-	expected := make(map[string]struct{}, len(uci1ExactCandidateRequiredScenarioIDs))
-	for _, scenarioID := range uci1ExactCandidateRequiredScenarioIDs {
-		if _, duplicate := expected[scenarioID]; duplicate {
-			return errors.New("exact candidate scenario set is duplicated")
-		}
-		expected[scenarioID] = struct{}{}
+	expected, err := uci1ExactCandidateExpectedScenarios()
+	if err != nil {
+		return err
 	}
-
 	groups := make(map[string]struct{}, len(uci1ExactCandidateGroups))
 	covered := make(map[string]struct{}, len(uci1ExactCandidateRequiredScenarioIDs))
 	for _, group := range uci1ExactCandidateGroups {
-		if group.name == "" || len(group.commands) == 0 {
-			return errors.New("exact candidate group is incomplete")
-		}
-		if _, duplicate := groups[group.name]; duplicate {
-			return errors.New("exact candidate group is duplicated")
-		}
-		groups[group.name] = struct{}{}
-		if group.evidenceOnly == (len(group.scenarioIDs) != 0) {
-			return errors.New("exact candidate group evidence mode is invalid")
-		}
-
-		for _, command := range group.commands {
-			if !strings.HasPrefix(command.packagePath, "./") || len(command.testNames) == 0 || command.timeout <= 0 {
-				return errors.New("exact candidate command is incomplete")
-			}
-			tests := make(map[string]struct{}, len(command.testNames))
-			for _, testName := range command.testNames {
-				if testName == "" || testName == "TestUCI1Scenarios" {
-					return errors.New("exact candidate command includes an unsafe test")
-				}
-				if _, duplicate := tests[testName]; duplicate {
-					return errors.New("exact candidate command repeats a test")
-				}
-				tests[testName] = struct{}{}
-			}
-		}
-
-		for _, scenarioID := range group.scenarioIDs {
-			if _, expectedScenario := expected[scenarioID]; !expectedScenario {
-				return errors.New("exact candidate group assigns an excluded scenario")
-			}
-			if _, duplicate := covered[scenarioID]; duplicate {
-				return errors.New("exact candidate group assigns a scenario more than once")
-			}
-			covered[scenarioID] = struct{}{}
+		if err := uci1ExactCandidateValidateGroup(group, expected, groups, covered); err != nil {
+			return err
 		}
 	}
 	if len(covered) != len(expected) {
@@ -278,6 +241,62 @@ func uci1ExactCandidateValidateGroups() error {
 		if _, found := covered[scenarioID]; !found {
 			return errors.New("exact candidate groups miss an assigned scenario")
 		}
+	}
+	return nil
+}
+
+func uci1ExactCandidateExpectedScenarios() (map[string]struct{}, error) {
+	expected := make(map[string]struct{}, len(uci1ExactCandidateRequiredScenarioIDs))
+	for _, scenarioID := range uci1ExactCandidateRequiredScenarioIDs {
+		if _, duplicate := expected[scenarioID]; duplicate {
+			return nil, errors.New("exact candidate scenario set is duplicated")
+		}
+		expected[scenarioID] = struct{}{}
+	}
+	return expected, nil
+}
+
+func uci1ExactCandidateValidateGroup(group uci1ExactCandidateGroup, expected, groups, covered map[string]struct{}) error {
+	if group.name == "" || len(group.commands) == 0 {
+		return errors.New("exact candidate group is incomplete")
+	}
+	if _, duplicate := groups[group.name]; duplicate {
+		return errors.New("exact candidate group is duplicated")
+	}
+	groups[group.name] = struct{}{}
+	if group.evidenceOnly == (len(group.scenarioIDs) != 0) {
+		return errors.New("exact candidate group evidence mode is invalid")
+	}
+	for _, command := range group.commands {
+		if err := uci1ExactCandidateValidateCommand(command); err != nil {
+			return err
+		}
+	}
+	for _, scenarioID := range group.scenarioIDs {
+		if _, expectedScenario := expected[scenarioID]; !expectedScenario {
+			return errors.New("exact candidate group assigns an excluded scenario")
+		}
+		if _, duplicate := covered[scenarioID]; duplicate {
+			return errors.New("exact candidate group assigns a scenario more than once")
+		}
+		covered[scenarioID] = struct{}{}
+	}
+	return nil
+}
+
+func uci1ExactCandidateValidateCommand(command uci1ExactCandidateCommand) error {
+	if !strings.HasPrefix(command.packagePath, "./") || len(command.testNames) == 0 || command.timeout <= 0 {
+		return errors.New("exact candidate command is incomplete")
+	}
+	tests := make(map[string]struct{}, len(command.testNames))
+	for _, testName := range command.testNames {
+		if testName == "" || testName == "TestUCI1Scenarios" {
+			return errors.New("exact candidate command includes an unsafe test")
+		}
+		if _, duplicate := tests[testName]; duplicate {
+			return errors.New("exact candidate command repeats a test")
+		}
+		tests[testName] = struct{}{}
 	}
 	return nil
 }
