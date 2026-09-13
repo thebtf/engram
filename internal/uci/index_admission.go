@@ -503,19 +503,42 @@ func (frame IndexAdmissionFrame) IndexPart(bindings IndexAdmissionReferenceBindi
 			return IndexPart{}, err
 		}
 	}
-
-	part := IndexPart{
-		Artifacts:        make([]IndexArtifactProof, 0, len(canonical.Artifacts)),
-		Memberships:      make([]IndexMembership, 0, len(canonical.Memberships)),
-		Deletions:        make([]IndexDeletion, 0, len(canonical.Deletions)),
-		EdgeReplacements: make([]IndexEdgeReplacement, 0, len(canonical.EdgeReplacements)),
+	part, err := indexAdmissionPartFromFrame(canonical, bindings, deriveMissingBindings)
+	if err != nil {
+		return IndexPart{}, err
 	}
-	for _, artifact := range canonical.Artifacts {
+	return normalizeIndexPart(part)
+}
+
+func indexAdmissionPartFromFrame(frame IndexAdmissionFrame, bindings IndexAdmissionReferenceBindings, deriveMissingBindings bool) (IndexPart, error) {
+	artifacts, err := indexAdmissionPartArtifacts(frame.Artifacts)
+	if err != nil {
+		return IndexPart{}, err
+	}
+	memberships, err := indexAdmissionPartMemberships(frame.Memberships)
+	if err != nil {
+		return IndexPart{}, err
+	}
+	replacements, err := indexAdmissionPartEdgeReplacements(frame.EdgeReplacements, bindings, deriveMissingBindings)
+	if err != nil {
+		return IndexPart{}, err
+	}
+	return IndexPart{
+		Artifacts:        artifacts,
+		Memberships:      memberships,
+		Deletions:        indexAdmissionPartDeletions(frame.Deletions),
+		EdgeReplacements: replacements,
+	}, nil
+}
+
+func indexAdmissionPartArtifacts(artifacts []IndexAdmissionArtifact) ([]IndexArtifactProof, error) {
+	proofs := make([]IndexArtifactProof, 0, len(artifacts))
+	for _, artifact := range artifacts {
 		factsDigest, err := indexAdmissionArtifactFactsDigest(artifact)
 		if err != nil {
-			return IndexPart{}, err
+			return nil, err
 		}
-		part.Artifacts = append(part.Artifacts, IndexArtifactProof{
+		proofs = append(proofs, IndexArtifactProof{
 			ArtifactID:         artifact.ArtifactID,
 			ContentDigest:      artifact.ContentDigest,
 			FactsDigest:        factsDigest,
@@ -524,12 +547,17 @@ func (frame IndexAdmissionFrame) IndexPart(bindings IndexAdmissionReferenceBindi
 			ChunkCount:         uint64(len(artifact.Chunks)),
 		})
 	}
-	for _, membership := range canonical.Memberships {
+	return proofs, nil
+}
+
+func indexAdmissionPartMemberships(memberships []IndexAdmissionMembership) ([]IndexMembership, error) {
+	converted := make([]IndexMembership, 0, len(memberships))
+	for _, membership := range memberships {
 		state, err := indexAdmissionIndexFileState(membership.State)
 		if err != nil {
-			return IndexPart{}, err
+			return nil, err
 		}
-		part.Memberships = append(part.Memberships, IndexMembership{
+		converted = append(converted, IndexMembership{
 			PathKey:     membership.PathKey,
 			DisplayPath: membership.DisplayPath,
 			Mode:        membership.Mode,
@@ -537,60 +565,81 @@ func (frame IndexAdmissionFrame) IndexPart(bindings IndexAdmissionReferenceBindi
 			ArtifactID:  indexAdmissionCopyStringPointer(membership.ArtifactID),
 		})
 	}
-	for _, deletion := range canonical.Deletions {
-		part.Deletions = append(part.Deletions, IndexDeletion{
+	return converted, nil
+}
+
+func indexAdmissionPartDeletions(deletions []IndexAdmissionDeletion) []IndexDeletion {
+	converted := make([]IndexDeletion, 0, len(deletions))
+	for _, deletion := range deletions {
+		converted = append(converted, IndexDeletion{
 			PathKey:          deletion.PathKey,
 			ConfirmedMissing: deletion.ConfirmedMissing,
 		})
 	}
-	for _, replacement := range canonical.EdgeReplacements {
-		converted := IndexEdgeReplacement{
-			SourcePath: replacement.SourcePath,
-			Edges:      make([]IndexEdge, 0, len(replacement.Edges)),
+	return converted
+}
+
+func indexAdmissionPartEdgeReplacements(replacements []IndexAdmissionEdgeReplacement, bindings IndexAdmissionReferenceBindings, deriveMissingBindings bool) ([]IndexEdgeReplacement, error) {
+	converted := make([]IndexEdgeReplacement, 0, len(replacements))
+	for _, replacement := range replacements {
+		edges, err := indexAdmissionPartEdges(replacement.Edges, bindings, deriveMissingBindings)
+		if err != nil {
+			return nil, err
 		}
-		for _, edge := range replacement.Edges {
-			key := IndexAdmissionReferenceKey{
-				ArtifactID: edge.SourceArtifactID,
-				SiteKey:    edge.Evidence.ReferenceSiteKey,
-			}
-			referenceID, found := bindings[key]
-			if !found && deriveMissingBindings {
-				referenceID, err = DeriveIndexAdmissionReferenceSiteID(key.ArtifactID, key.SiteKey)
-				if err != nil {
-					return IndexPart{}, err
-				}
-				found = true
-			}
-			if !found || !canonicalContextUUID(referenceID) {
-				return IndexPart{}, fmt.Errorf("uci index admission: missing durable reference-site binding")
-			}
-			convertedEdge := IndexEdge{
-				EdgeKey:          edge.EdgeKey,
-				SourceArtifactID: edge.SourceArtifactID,
-				SourceSymbolKey:  indexAdmissionCopyStringPointer(edge.SourceSymbolKey),
-				Relation:         edge.Relation,
-				EvidenceKind:     edge.EvidenceKind,
-				ResolutionState:  edge.ResolutionState,
-				ResolverRevision: edge.ResolverRevision,
-				Evidence: IndexEdgeEvidence{
-					ReferenceSiteID: indexAdmissionStringPointer(referenceID),
-					Span:            edge.Evidence.Span,
-					RuleKey:         edge.Evidence.RuleKey,
-					Explanation:     edge.Evidence.Explanation,
-				},
-			}
-			if edge.Target != nil {
-				convertedEdge.Target = &IndexEdgeTarget{
-					PathKey:    edge.Target.PathKey,
-					ArtifactID: edge.Target.ArtifactID,
-					SymbolKey:  indexAdmissionCopyStringPointer(edge.Target.SymbolKey),
-				}
-			}
-			converted.Edges = append(converted.Edges, convertedEdge)
-		}
-		part.EdgeReplacements = append(part.EdgeReplacements, converted)
+		converted = append(converted, IndexEdgeReplacement{SourcePath: replacement.SourcePath, Edges: edges})
 	}
-	return normalizeIndexPart(part)
+	return converted, nil
+}
+
+func indexAdmissionPartEdges(edges []IndexAdmissionEdge, bindings IndexAdmissionReferenceBindings, deriveMissingBindings bool) ([]IndexEdge, error) {
+	converted := make([]IndexEdge, 0, len(edges))
+	for _, edge := range edges {
+		convertedEdge, err := indexAdmissionPartEdge(edge, bindings, deriveMissingBindings)
+		if err != nil {
+			return nil, err
+		}
+		converted = append(converted, convertedEdge)
+	}
+	return converted, nil
+}
+
+func indexAdmissionPartEdge(edge IndexAdmissionEdge, bindings IndexAdmissionReferenceBindings, deriveMissingBindings bool) (IndexEdge, error) {
+	key := IndexAdmissionReferenceKey{ArtifactID: edge.SourceArtifactID, SiteKey: edge.Evidence.ReferenceSiteKey}
+	referenceID, found := bindings[key]
+	if !found && deriveMissingBindings {
+		var err error
+		referenceID, err = DeriveIndexAdmissionReferenceSiteID(key.ArtifactID, key.SiteKey)
+		if err != nil {
+			return IndexEdge{}, err
+		}
+		found = true
+	}
+	if !found || !canonicalContextUUID(referenceID) {
+		return IndexEdge{}, fmt.Errorf("uci index admission: missing durable reference-site binding")
+	}
+	converted := IndexEdge{
+		EdgeKey:          edge.EdgeKey,
+		SourceArtifactID: edge.SourceArtifactID,
+		SourceSymbolKey:  indexAdmissionCopyStringPointer(edge.SourceSymbolKey),
+		Relation:         edge.Relation,
+		EvidenceKind:     edge.EvidenceKind,
+		ResolutionState:  edge.ResolutionState,
+		ResolverRevision: edge.ResolverRevision,
+		Evidence: IndexEdgeEvidence{
+			ReferenceSiteID: indexAdmissionStringPointer(referenceID),
+			Span:            edge.Evidence.Span,
+			RuleKey:         edge.Evidence.RuleKey,
+			Explanation:     edge.Evidence.Explanation,
+		},
+	}
+	if edge.Target != nil {
+		converted.Target = &IndexEdgeTarget{
+			PathKey:    edge.Target.PathKey,
+			ArtifactID: edge.Target.ArtifactID,
+			SymbolKey:  indexAdmissionCopyStringPointer(edge.Target.SymbolKey),
+		}
+	}
+	return converted, nil
 }
 
 // DeriveIndexAdmissionArtifactID deterministically derives the canonical UUID
