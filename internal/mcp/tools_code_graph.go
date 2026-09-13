@@ -285,9 +285,12 @@ func (s *Server) handleCodebaseGraph(ctx context.Context, raw json.RawMessage) (
 		return codebaseSearchContextRefusal(uci.ContextMismatch)
 	}
 	if response.Status == uci.QueryStatusContextRequired || response.Status == uci.QueryStatusForbidden {
-		return s.releaseCodebaseQueryResponse(operationCtx, epoch, authorized, args.ContextHandle, uci.ExposureOperationCodeGraph, response, func(candidate uci.QueryResponse) bool {
-			return validCodebaseGraphPreExposureResponse(candidate, authorized, input)
-		}, "codebase_graph")
+		return s.releaseCodebaseQueryResponse(codebaseQueryReleaseInput{
+			ctx: operationCtx, epoch: epoch, authorized: authorized, contextHandle: args.ContextHandle, operation: uci.ExposureOperationCodeGraph, response: response,
+			matches: func(candidate uci.QueryResponse) bool {
+				return validCodebaseGraphPreExposureResponse(candidate, authorized, input)
+			}, tool: "codebase_graph",
+		})
 	}
 	if freshness != nil && (response.Freshness == nil || response.Freshness.State != uci.QueryFreshnessHistorical) {
 		if disposition == uci.QueryFreshnessDispositionOffline && !codebaseOfflineResponseRecordable(response) {
@@ -301,9 +304,12 @@ func (s *Server) handleCodebaseGraph(ctx context.Context, raw json.RawMessage) (
 			}
 		}
 	}
-	return s.releaseCodebaseQueryResponse(operationCtx, epoch, authorized, args.ContextHandle, uci.ExposureOperationCodeGraph, response, func(candidate uci.QueryResponse) bool {
-		return validCodebaseGraphPreExposureResponse(candidate, authorized, input)
-	}, "codebase_graph")
+	return s.releaseCodebaseQueryResponse(codebaseQueryReleaseInput{
+		ctx: operationCtx, epoch: epoch, authorized: authorized, contextHandle: args.ContextHandle, operation: uci.ExposureOperationCodeGraph, response: response,
+		matches: func(candidate uci.QueryResponse) bool {
+			return validCodebaseGraphPreExposureResponse(candidate, authorized, input)
+		}, tool: "codebase_graph",
+	})
 }
 
 func decodeCodebaseGraphArgs(raw json.RawMessage) (codebaseGraphArgs, error) {

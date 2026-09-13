@@ -167,9 +167,12 @@ func (s *Server) handleCodebaseRead(ctx context.Context, raw json.RawMessage) (s
 	if !s.codebaseContextEpochCurrent(epoch) {
 		return codebaseSearchContextRefusal(uci.ContextMismatch)
 	}
-	return s.releaseCodebaseQueryResponse(ctx, epoch, authorized, args.ContextHandle, uci.ExposureOperationVersionedRead, response, func(candidate uci.QueryResponse) bool {
-		return validCodebaseReadPreExposureResponse(candidate, authorized, input)
-	}, "codebase_read")
+	return s.releaseCodebaseQueryResponse(codebaseQueryReleaseInput{
+		ctx: ctx, epoch: epoch, authorized: authorized, contextHandle: args.ContextHandle, operation: uci.ExposureOperationVersionedRead, response: response,
+		matches: func(candidate uci.QueryResponse) bool {
+			return validCodebaseReadPreExposureResponse(candidate, authorized, input)
+		}, tool: "codebase_read",
+	})
 }
 
 func decodeCodebaseReadArgs(raw json.RawMessage) (codebaseReadArgs, error) {

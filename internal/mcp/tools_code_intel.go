@@ -589,62 +589,112 @@ func (s *Server) handleUCICodebaseSearch(ctx context.Context, raw json.RawMessag
 	if err != nil {
 		return "", fmt.Errorf("codebase_search: invalid args: %w", err)
 	}
+	application, authorized, epoch, refusal, err := s.prepareCodebaseSearch(ctx, args)
+	if err != nil {
+		return "", err
+	}
+	if refusal != "" {
+		return refusal, nil
+	}
+	freshness, disposition, refusal, err := s.codebaseSearchFreshness(ctx, application, authorized, epoch, args.AfterBarrier)
+	if err != nil {
+		return "", err
+	}
+	if refusal != "" {
+		return refusal, nil
+	}
+	response, refusal, err := s.codebaseSearchApplicationResponse(ctx, application, authorized, epoch, args.searchInput())
+	if err != nil {
+		return "", err
+	}
+	if refusal != "" {
+		return refusal, nil
+	}
+	response, err = codebaseSearchWithFreshness(response, freshness, disposition)
+	if err != nil {
+		return "", err
+	}
+	return s.releaseCodebaseQueryResponse(codebaseQueryReleaseInput{
+		ctx: ctx, epoch: epoch, authorized: authorized, contextHandle: args.ContextHandle, operation: uci.ExposureOperationCodeSearch, response: response,
+		matches: func(candidate uci.QueryResponse) bool {
+			return codebaseQueryResponseHasExactContext(candidate, authorized)
+		}, tool: "codebase_search",
+	})
+}
+
+func (s *Server) prepareCodebaseSearch(ctx context.Context, args codebaseSearchArgs) (CodebaseIntelligenceApplication, uci.AuthorizedContext, uint64, string, error) {
 	application, authorized, epoch, contextCode := s.resolveCodebaseIntelligenceContext(ctx, args.ContextHandle)
 	if contextCode != "" {
-		return codebaseSearchContextRefusal(contextCode)
+		refusal, err := codebaseSearchContextRefusal(contextCode)
+		return nil, uci.AuthorizedContext{}, 0, refusal, err
 	}
 	if contextCode = resolveCodebaseCompatibilityEvidence(ctx, application, authorized, args.Project); contextCode != "" {
-		return codebaseSearchContextRefusal(contextCode)
+		refusal, err := codebaseSearchContextRefusal(contextCode)
+		return nil, uci.AuthorizedContext{}, 0, refusal, err
 	}
 	if !s.codebaseContextEpochCurrent(epoch) {
-		return codebaseSearchContextRefusal(uci.ContextMismatch)
+		refusal, err := codebaseSearchContextRefusal(uci.ContextMismatch)
+		return nil, uci.AuthorizedContext{}, 0, refusal, err
 	}
+	return application, authorized, epoch, "", nil
+}
 
-	freshness, disposition, err := codebaseFreshness(ctx, application, authorized, args.AfterBarrier)
+func (s *Server) codebaseSearchFreshness(ctx context.Context, application CodebaseIntelligenceApplication, authorized uci.AuthorizedContext, epoch uint64, afterBarrier *codebaseAfterBarrierArgs) (*uci.QueryFreshness, uci.QueryFreshnessDisposition, string, error) {
+	freshness, disposition, err := codebaseFreshness(ctx, application, authorized, afterBarrier)
 	if err != nil {
 		if code, isContextFailure := codebaseContextErrorCode(err); isContextFailure {
-			return codebaseSearchContextRefusal(code)
+			refusal, refusalErr := codebaseSearchContextRefusal(code)
+			return nil, "", refusal, refusalErr
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", ctxErr
+			return nil, "", "", ctxErr
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return "", err
+			return nil, "", "", err
 		}
-		return "", errors.New("codebase_search: UCI freshness unavailable")
+		return nil, "", "", errors.New("codebase_search: UCI freshness unavailable")
 	}
 	if !s.codebaseContextEpochCurrent(epoch) {
-		return codebaseSearchContextRefusal(uci.ContextMismatch)
+		refusal, refusalErr := codebaseSearchContextRefusal(uci.ContextMismatch)
+		return nil, "", refusal, refusalErr
 	}
+	return freshness, disposition, "", nil
+}
 
-	response, err := application.SearchCodebase(ctx, authorized, args.searchInput())
+func (s *Server) codebaseSearchApplicationResponse(ctx context.Context, application CodebaseIntelligenceApplication, authorized uci.AuthorizedContext, epoch uint64, input CodebaseSearchInput) (uci.QueryResponse, string, error) {
+	response, err := application.SearchCodebase(ctx, authorized, input)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", ctxErr
+			return uci.QueryResponse{}, "", ctxErr
 		}
 		if code, isContextFailure := codebaseContextErrorCode(err); isContextFailure {
-			return codebaseSearchContextRefusal(code)
+			refusal, refusalErr := codebaseSearchContextRefusal(code)
+			return uci.QueryResponse{}, refusal, refusalErr
 		}
-		return "", errors.New("codebase_search: UCI application unavailable")
+		return uci.QueryResponse{}, "", errors.New("codebase_search: UCI application unavailable")
 	}
-	if !codebaseQueryResponseHasExactContext(response, authorized) {
-		return codebaseSearchContextRefusal(uci.ContextMismatch)
+	if !s.codebaseContextEpochCurrent(epoch) || !codebaseQueryResponseHasExactContext(response, authorized) {
+		refusal, refusalErr := codebaseSearchContextRefusal(uci.ContextMismatch)
+		return uci.QueryResponse{}, refusal, refusalErr
 	}
-	if freshness != nil && (response.Freshness == nil || response.Freshness.State != uci.QueryFreshnessHistorical) {
-		if disposition == uci.QueryFreshnessDispositionOffline && !codebaseOfflineResponseRecordable(response) {
-			return "", errors.New("codebase_search: invalid offline UCI response")
+	return response, "", nil
+}
+
+func codebaseSearchWithFreshness(response uci.QueryResponse, freshness *uci.QueryFreshness, disposition uci.QueryFreshnessDisposition) (uci.QueryResponse, error) {
+	if freshness == nil || (response.Freshness != nil && response.Freshness.State == uci.QueryFreshnessHistorical) {
+		return response, nil
+	}
+	if disposition == uci.QueryFreshnessDispositionOffline && !codebaseOfflineResponseRecordable(response) {
+		return uci.QueryResponse{}, errors.New("codebase_search: invalid offline UCI response")
+	}
+	response.Freshness = freshness
+	if disposition == uci.QueryFreshnessDispositionStale {
+		switch response.Status {
+		case uci.QueryStatusOK, uci.QueryStatusEmpty, uci.QueryStatusPartial, uci.QueryStatusStale:
+			response.Status = uci.QueryStatusStale
 		}
-		response.Freshness = freshness
-		if disposition == uci.QueryFreshnessDispositionStale {
-			switch response.Status {
-			case uci.QueryStatusOK, uci.QueryStatusEmpty, uci.QueryStatusPartial, uci.QueryStatusStale:
-				response.Status = uci.QueryStatusStale
-			}
-		}
 	}
-	return s.releaseCodebaseQueryResponse(ctx, epoch, authorized, args.ContextHandle, uci.ExposureOperationCodeSearch, response, func(candidate uci.QueryResponse) bool {
-		return codebaseQueryResponseHasExactContext(candidate, authorized)
-	}, "codebase_search")
+	return response, nil
 }
 
 func (s *Server) handleUCICodebaseStatus(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -652,76 +702,28 @@ func (s *Server) handleUCICodebaseStatus(ctx context.Context, raw json.RawMessag
 	if err != nil {
 		return "", fmt.Errorf("codebase_status: invalid args: %w", err)
 	}
-	application, authorized, epoch, contextCode := s.resolveCodebaseIntelligenceContext(ctx, args.ContextHandle)
-	if contextCode != "" {
-		return "", codebaseContextClosedError(contextCode)
+	application, authorized, epoch, err := s.prepareCodebaseStatus(ctx, args)
+	if err != nil {
+		return "", err
 	}
-	if contextCode = resolveCodebaseCompatibilityEvidence(ctx, application, authorized, args.Project); contextCode != "" {
-		return "", codebaseContextClosedError(contextCode)
-	}
-	if !s.codebaseContextEpochCurrent(epoch) {
-		return "", codebaseContextClosedError(uci.ContextMismatch)
-	}
-
 	for attempt := range codebaseStatusStabilizationAttempts {
 		var freshness *uci.QueryFreshness
 		if args.AfterBarrier != nil {
-			freshness, _, err = codebaseFreshness(ctx, application, authorized, args.AfterBarrier)
+			freshness, err = s.codebaseStatusRequestedFreshness(ctx, application, authorized, epoch, args.AfterBarrier)
 			if err != nil {
-				if code, isContextFailure := codebaseContextErrorCode(err); isContextFailure {
-					return "", codebaseContextClosedError(code)
-				}
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					return "", ctxErr
-				}
-				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					return "", err
-				}
-				return "", errors.New("codebase_status: UCI freshness unavailable")
-			}
-			if !s.codebaseContextEpochCurrent(epoch) {
-				return "", codebaseContextClosedError(uci.ContextMismatch)
+				return "", err
 			}
 		}
-
-		snapshot, err := application.CodebaseStatus(ctx, authorized)
+		snapshot, err := s.codebaseStatusSnapshot(ctx, application, authorized, epoch)
 		if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return "", ctxErr
-			}
-			if code, isContextFailure := codebaseContextErrorCode(err); isContextFailure {
-				return "", codebaseContextClosedError(code)
-			}
-			return "", errors.New("codebase_status: UCI application unavailable")
-		}
-		if !s.codebaseContextEpochCurrent(epoch) {
-			return "", codebaseContextClosedError(uci.ContextMismatch)
+			return "", err
 		}
 		if args.AfterBarrier == nil {
-			switch {
-			case snapshot.Freshness != nil:
-				value := *snapshot.Freshness
-				if err := value.Validate(); err != nil {
-					return "", errors.New("codebase_status: UCI snapshot freshness unavailable")
-				}
-				freshness = &value
-			default:
-				freshness, _, err = codebaseFreshness(ctx, application, authorized, nil)
-				if err != nil {
-					if code, isContextFailure := codebaseContextErrorCode(err); isContextFailure {
-						return "", codebaseContextClosedError(code)
-					}
-					if ctxErr := ctx.Err(); ctxErr != nil {
-						return "", ctxErr
-					}
-					return "", errors.New("codebase_status: UCI freshness unavailable")
-				}
-				if !s.codebaseContextEpochCurrent(epoch) {
-					return "", codebaseContextClosedError(uci.ContextMismatch)
-				}
+			freshness, err = s.codebaseStatusObservedFreshness(ctx, application, authorized, epoch, snapshot)
+			if err != nil {
+				return "", err
 			}
 		}
-
 		reauthorized, contextCode := s.reauthorizeCodebaseContext(ctx, epoch, authorized, args.ContextHandle)
 		if contextCode != "" {
 			return "", codebaseContextClosedError(contextCode)
@@ -729,26 +731,102 @@ func (s *Server) handleUCICodebaseStatus(ctx context.Context, raw json.RawMessag
 		currentRef := authorized.Ref()
 		reauthorizedRef := reauthorized.Ref()
 		if codebaseContextRefsEqual(reauthorizedRef, currentRef) {
-			encoded, err := json.Marshal(codebaseStatusResponse{
-				Context:          codebaseQueryContextRef(reauthorizedRef),
-				TotalChunks:      snapshot.TotalChunks,
-				EmbeddedChunks:   snapshot.EmbeddedChunks,
-				Embedding:        codebaseEmbeddingStatusResponseFrom(snapshot.Embedding),
-				EvidenceRecorder: s.codebaseExposureRecorderHealth(),
-				Freshness:        freshness,
-			})
-			if err != nil {
-				return "", errors.New("codebase_status: marshal UCI response")
-			}
-			return string(encoded), nil
+			return s.marshalCodebaseStatus(snapshot, reauthorizedRef, freshness)
 		}
 		if attempt+1 == codebaseStatusStabilizationAttempts || !codebaseStatusContextAdvanced(currentRef, reauthorizedRef) {
 			return "", codebaseContextClosedError(uci.ContextMismatch)
 		}
 		authorized = reauthorized
 	}
-
 	return "", codebaseContextClosedError(uci.ContextMismatch)
+}
+
+func (s *Server) prepareCodebaseStatus(ctx context.Context, args codebaseStatusArgs) (CodebaseIntelligenceApplication, uci.AuthorizedContext, uint64, error) {
+	application, authorized, epoch, contextCode := s.resolveCodebaseIntelligenceContext(ctx, args.ContextHandle)
+	if contextCode != "" {
+		return nil, uci.AuthorizedContext{}, 0, codebaseContextClosedError(contextCode)
+	}
+	if contextCode = resolveCodebaseCompatibilityEvidence(ctx, application, authorized, args.Project); contextCode != "" {
+		return nil, uci.AuthorizedContext{}, 0, codebaseContextClosedError(contextCode)
+	}
+	if !s.codebaseContextEpochCurrent(epoch) {
+		return nil, uci.AuthorizedContext{}, 0, codebaseContextClosedError(uci.ContextMismatch)
+	}
+	return application, authorized, epoch, nil
+}
+
+func (s *Server) codebaseStatusSnapshot(ctx context.Context, application CodebaseIntelligenceApplication, authorized uci.AuthorizedContext, epoch uint64) (CodebaseStatusSnapshot, error) {
+	snapshot, err := application.CodebaseStatus(ctx, authorized)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return CodebaseStatusSnapshot{}, ctxErr
+		}
+		if code, isContextFailure := codebaseContextErrorCode(err); isContextFailure {
+			return CodebaseStatusSnapshot{}, codebaseContextClosedError(code)
+		}
+		return CodebaseStatusSnapshot{}, errors.New("codebase_status: UCI application unavailable")
+	}
+	if !s.codebaseContextEpochCurrent(epoch) {
+		return CodebaseStatusSnapshot{}, codebaseContextClosedError(uci.ContextMismatch)
+	}
+	return snapshot, nil
+}
+
+func (s *Server) codebaseStatusRequestedFreshness(ctx context.Context, application CodebaseIntelligenceApplication, authorized uci.AuthorizedContext, epoch uint64, afterBarrier *codebaseAfterBarrierArgs) (*uci.QueryFreshness, error) {
+	freshness, _, err := codebaseFreshness(ctx, application, authorized, afterBarrier)
+	if err != nil {
+		return nil, codebaseStatusFreshnessError(ctx, err)
+	}
+	if !s.codebaseContextEpochCurrent(epoch) {
+		return nil, codebaseContextClosedError(uci.ContextMismatch)
+	}
+	return freshness, nil
+}
+
+func (s *Server) codebaseStatusObservedFreshness(ctx context.Context, application CodebaseIntelligenceApplication, authorized uci.AuthorizedContext, epoch uint64, snapshot CodebaseStatusSnapshot) (*uci.QueryFreshness, error) {
+	if snapshot.Freshness != nil {
+		freshness := *snapshot.Freshness
+		if err := freshness.Validate(); err != nil {
+			return nil, errors.New("codebase_status: UCI snapshot freshness unavailable")
+		}
+		return &freshness, nil
+	}
+	freshness, _, err := codebaseFreshness(ctx, application, authorized, nil)
+	if err != nil {
+		return nil, codebaseStatusFreshnessError(ctx, err)
+	}
+	if !s.codebaseContextEpochCurrent(epoch) {
+		return nil, codebaseContextClosedError(uci.ContextMismatch)
+	}
+	return freshness, nil
+}
+
+func codebaseStatusFreshnessError(ctx context.Context, err error) error {
+	if code, isContextFailure := codebaseContextErrorCode(err); isContextFailure {
+		return codebaseContextClosedError(code)
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return errors.New("codebase_status: UCI freshness unavailable")
+}
+
+func (s *Server) marshalCodebaseStatus(snapshot CodebaseStatusSnapshot, context uci.ContextRef, freshness *uci.QueryFreshness) (string, error) {
+	encoded, err := json.Marshal(codebaseStatusResponse{
+		Context:          codebaseQueryContextRef(context),
+		TotalChunks:      snapshot.TotalChunks,
+		EmbeddedChunks:   snapshot.EmbeddedChunks,
+		Embedding:        codebaseEmbeddingStatusResponseFrom(snapshot.Embedding),
+		EvidenceRecorder: s.codebaseExposureRecorderHealth(),
+		Freshness:        freshness,
+	})
+	if err != nil {
+		return "", errors.New("codebase_status: marshal UCI response")
+	}
+	return string(encoded), nil
 }
 
 func codebaseStatusContextAdvanced(previous, current uci.ContextRef) bool {
@@ -777,19 +855,28 @@ func (s *Server) hasLegacyUnscopedCodeChunkStore() bool {
 	return s.legacyUnscopedCodeChunkStore != nil
 }
 
-// releaseCodebaseQueryResponse adapts the MCP context registry to the shared
-// UCI release mapper. The mapper owns typed caller mapping, closed suppression,
-// and receipt attachment; this adapter retains MCP's epoch-atomic recheck.
-func (s *Server) releaseCodebaseQueryResponse(
-	ctx context.Context,
-	epoch uint64,
-	authorized uci.AuthorizedContext,
-	contextHandle *string,
-	operation uci.ExposureOperation,
-	response uci.QueryResponse,
-	matches func(uci.QueryResponse) bool,
-	tool string,
-) (string, error) {
+// codebaseQueryReleaseInput keeps one completed query release together so the
+// epoch, authorization, and pre-exposure matcher cannot drift at call sites.
+type codebaseQueryReleaseInput struct {
+	ctx           context.Context
+	epoch         uint64
+	authorized    uci.AuthorizedContext
+	contextHandle *string
+	operation     uci.ExposureOperation
+	response      uci.QueryResponse
+	matches       func(uci.QueryResponse) bool
+	tool          string
+}
+
+func (s *Server) releaseCodebaseQueryResponse(input codebaseQueryReleaseInput) (string, error) {
+	ctx := input.ctx
+	epoch := input.epoch
+	authorized := input.authorized
+	contextHandle := input.contextHandle
+	operation := input.operation
+	response := input.response
+	matches := input.matches
+	tool := input.tool
 	if response.Status == uci.QueryStatusContextRequired || response.Status == uci.QueryStatusForbidden {
 		return marshalValidatedCodebaseQueryResponse(response)
 	}
