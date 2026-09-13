@@ -178,26 +178,35 @@ func TestV3OnboardingKeepsStaticRegistrationVisibleAndResumesProxy(t *testing.T)
 	project.Cwd = daemonV3Repository(t)
 	mod.cache.ForceCacheEntry(project, "raw-slug-must-not-survive-refusal")
 
-	before, err := dispatcher.HandleRequest(context.Background(), project, jsonrpcListReq(1))
+	invoke := func(request []byte) ([]byte, error) {
+		return dispatcher.HandleRequest(context.Background(), project, request)
+	}
+	assertCache := func() bool {
+		return mod.cache.HasEntry(project.ID)
+	}
+	assertV3OnboardingStaticRegistration(t, srv, project.ID, project.Cwd, assertCache, invoke)
+	assertV3OnboardingProxy(t, srv, assertCache, invoke)
+}
+
+func assertV3OnboardingStaticRegistration(t *testing.T, srv *mockEngramServer, projectID, projectCWD string, hasCache func() bool, invoke func([]byte) ([]byte, error)) {
+	before, err := invoke(jsonrpcListReq(1))
 	if err != nil {
 		t.Fatalf("onboarding tools/list: %v", err)
 	}
 	assertOnlyRegistrationTool(t, before)
-	if mod.cache.HasEntry(project.ID) {
+	if hasCache() {
 		t.Fatal("onboarding refusal retained a compatibility cache entry")
 	}
-	if strings.Contains(string(before), project.ID) || strings.Contains(string(before), project.Cwd) {
+	if strings.Contains(string(before), projectID) || strings.Contains(string(before), projectCWD) {
 		t.Fatalf("onboarding tools/list leaked local identity material: %s", before)
 	}
-
 	for id := 2; id <= 3; id++ {
-		registration, err := dispatcher.HandleRequest(context.Background(), project, jsonrpcCallReq(id, "project_identity.register_v3"))
+		registration, err := invoke(jsonrpcCallReq(id, "project_identity.register_v3"))
 		if err != nil {
 			t.Fatalf("registration %d: %v", id, err)
 		}
 		assertRegistrationResolved(t, registration)
 	}
-
 	srv.mu.Lock()
 	srv.initErr = nil
 	srv.initResp = &pb.InitializeResponse{
@@ -220,21 +229,23 @@ func TestV3OnboardingKeepsStaticRegistrationVisibleAndResumesProxy(t *testing.T)
 		t.Fatalf("registration request=%#v, want descriptor-only request", registerReq)
 	}
 	assertV3Descriptor(t, registerReq.GetProjectIdentityV3())
-	if strings.Contains(registerReq.String(), project.ID) || strings.Contains(registerReq.String(), project.Cwd) {
+	if strings.Contains(registerReq.String(), projectID) || strings.Contains(registerReq.String(), projectCWD) {
 		t.Fatalf("registration request leaked raw mux identity: %s", registerReq)
 	}
+}
 
-	after, err := dispatcher.HandleRequest(context.Background(), project, jsonrpcListReq(4))
+func assertV3OnboardingProxy(t *testing.T, srv *mockEngramServer, hasCache func() bool, invoke func([]byte) ([]byte, error)) {
+	after, err := invoke(jsonrpcListReq(4))
 	if err != nil {
 		t.Fatalf("post-registration tools/list: %v", err)
 	}
 	assertRegistrationAndProxyTool(t, after, "recall")
-	if _, err := dispatcher.HandleRequest(context.Background(), project, jsonrpcCallReq(5, "recall")); err != nil {
+	if _, err := invoke(jsonrpcCallReq(5, "recall")); err != nil {
 		t.Fatalf("post-registration V3 tool: %v", err)
 	}
 	assertV3InitializeRequest(t, srv.initReq)
 	assertV3CallRequest(t, srv.callReq)
-	if mod.cache.HasEntry(project.ID) {
+	if hasCache() {
 		t.Fatal("V3 registration or normal proxy route populated a compatibility cache entry")
 	}
 }
