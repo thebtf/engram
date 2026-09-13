@@ -316,114 +316,88 @@ func uciApplicationGraphResponse(ref uci.ContextRef, result uci.GraphResult, bud
 	if result.Semantics != uci.GraphSemanticsStatic {
 		return uci.QueryResponse{}, fmt.Errorf("UCI application graph semantics %q are unsupported", result.Semantics)
 	}
-
+	status, warnings, err := uciApplicationGraphOutcome(result.Outcome)
+	if err != nil {
+		return uci.QueryResponse{}, err
+	}
 	contexts := uci.QueryContexts{uciApplicationQueryContextRef(ref)}
 	items := uci.QueryItems{}
-	warnings := uci.QueryWarnings{}
-	status := uci.QueryStatusOK
-	switch result.Outcome {
-	case uci.GraphOutcomeComplete:
-	case uci.GraphOutcomeAmbiguous:
-		status = uci.QueryStatusPartial
-		warnings = append(warnings, "graph_outcome:ambiguous")
-	case uci.GraphOutcomeUnknownOrTruncated:
-		status = uci.QueryStatusPartial
-		warnings = append(warnings, "graph_outcome:unknown_or_truncated")
-	case uci.GraphOutcomeNoPath:
-		status = uci.QueryStatusEmpty
-		warnings = append(warnings, "graph_outcome:no_path")
-	case uci.GraphOutcomeNoImpact:
-		status = uci.QueryStatusEmpty
-		warnings = append(warnings, "graph_outcome:no_impact")
-	default:
-		return uci.QueryResponse{}, fmt.Errorf("UCI application graph outcome %q is invalid", result.Outcome)
-	}
-
 	if result.Coverage == uci.IndexCoverageUnavailable {
-		warnings = append(warnings, "graph_outcome:unknown_or_truncated", "graph_unavailable")
-		truncated := false
-		continuation := uci.QueryContinuation{}
-		return uci.QueryResponse{
-			Schema:    uci.QueryResponseSchema,
-			Status:    uci.QueryStatusUnavailable,
-			Contexts:  &contexts,
-			Freshness: uciApplicationPinnedFreshness(ref.Generation),
-			Retrieval: &uci.QueryRetrieval{
-				Mode:               uci.QueryRetrievalGraph,
-				DegradationReasons: []string{},
-			},
-			Coverage:     &uci.QueryCoverage{Structural: uci.IndexCoverageUnavailable},
-			Error:        &uci.QueryError{Code: uci.QueryErrorBuildIncomplete},
-			Items:        &items,
-			Truncated:    &truncated,
-			Warnings:     &warnings,
-			Continuation: &continuation,
-		}, nil
+		return uciApplicationUnavailableGraphResponse(ref, contexts, items, warnings), nil
 	}
 	if result.Coverage != uci.IndexCoverageComplete && result.Coverage != uci.IndexCoveragePartial {
 		return uci.QueryResponse{}, fmt.Errorf("UCI application graph coverage %q is invalid", result.Coverage)
 	}
-	if budget.MaxNodes < 1 || budget.MaxEdges < 1 {
-		return uci.QueryResponse{}, errors.New("UCI application graph budget is invalid")
+	graph, candidateNodesTruncated, err := uciApplicationGraphWithinBudget(result, budget)
+	if err != nil {
+		return uci.QueryResponse{}, err
 	}
-
-	graph := uci.QueryGraph{
-		Nodes:      append([]uci.QueryEntityRef{}, result.Graph.Nodes...),
-		Edges:      append([]uci.QueryGraphEdge{}, result.Graph.Edges...),
-		StopReason: result.Graph.StopReason,
+	if candidateNodesTruncated {
+		warnings = append(warnings, "graph_candidates_truncated")
 	}
-	if len(graph.Nodes) > budget.MaxNodes || len(graph.Edges) > budget.MaxEdges {
-		return uci.QueryResponse{}, errors.New("UCI application graph result exceeds its budget")
-	}
-	candidateNodesTruncated := false
-	if result.Outcome == uci.GraphOutcomeAmbiguous {
-		known := make(map[uci.QueryEntityRef]struct{}, len(graph.Nodes))
-		for _, node := range graph.Nodes {
-			known[node] = struct{}{}
-		}
-		for _, candidate := range result.Candidates {
-			if _, exists := known[candidate]; exists {
-				continue
-			}
-			if len(graph.Nodes) == budget.MaxNodes {
-				candidateNodesTruncated = true
-				break
-			}
-			known[candidate] = struct{}{}
-			graph.Nodes = append(graph.Nodes, candidate)
-		}
-		if candidateNodesTruncated {
-			warnings = append(warnings, "graph_candidates_truncated")
-		}
-	}
-
 	if result.Coverage != uci.IndexCoverageComplete {
 		status = uci.QueryStatusPartial
 	}
-	unresolved := int64(len(result.Unresolved))
-	unsupported := int64(0)
+	unresolved, unsupported := int64(len(result.Unresolved)), int64(0)
 	truncated := result.Continuation != nil
 	continuation := uci.QueryContinuation{Value: result.Continuation}
-	return uci.QueryResponse{
-		Schema:    uci.QueryResponseSchema,
-		Status:    status,
-		Contexts:  &contexts,
-		Freshness: uciApplicationPinnedFreshness(ref.Generation),
-		Retrieval: &uci.QueryRetrieval{
-			Mode:               uci.QueryRetrievalGraph,
-			DegradationReasons: []string{},
-		},
-		Coverage: &uci.QueryCoverage{
-			Structural:       result.Coverage,
-			UnresolvedSites:  &unresolved,
-			UnsupportedFiles: &unsupported,
-		},
-		Items:        &items,
-		Graph:        &graph,
-		Truncated:    &truncated,
-		Warnings:     &warnings,
-		Continuation: &continuation,
-	}, nil
+	return uci.QueryResponse{Schema: uci.QueryResponseSchema, Status: status, Contexts: &contexts, Freshness: uciApplicationPinnedFreshness(ref.Generation), Retrieval: &uci.QueryRetrieval{Mode: uci.QueryRetrievalGraph, DegradationReasons: []string{}}, Coverage: &uci.QueryCoverage{Structural: result.Coverage, UnresolvedSites: &unresolved, UnsupportedFiles: &unsupported}, Items: &items, Graph: &graph, Truncated: &truncated, Warnings: &warnings, Continuation: &continuation}, nil
+}
+
+func uciApplicationGraphOutcome(outcome uci.GraphOutcome) (uci.QueryStatus, uci.QueryWarnings, error) {
+	switch outcome {
+	case uci.GraphOutcomeComplete:
+		return uci.QueryStatusOK, uci.QueryWarnings{}, nil
+	case uci.GraphOutcomeAmbiguous:
+		return uci.QueryStatusPartial, uci.QueryWarnings{"graph_outcome:ambiguous"}, nil
+	case uci.GraphOutcomeUnknownOrTruncated:
+		return uci.QueryStatusPartial, uci.QueryWarnings{"graph_outcome:unknown_or_truncated"}, nil
+	case uci.GraphOutcomeNoPath:
+		return uci.QueryStatusEmpty, uci.QueryWarnings{"graph_outcome:no_path"}, nil
+	case uci.GraphOutcomeNoImpact:
+		return uci.QueryStatusEmpty, uci.QueryWarnings{"graph_outcome:no_impact"}, nil
+	default:
+		return "", nil, fmt.Errorf("UCI application graph outcome %q is invalid", outcome)
+	}
+}
+
+func uciApplicationUnavailableGraphResponse(ref uci.ContextRef, contexts uci.QueryContexts, items uci.QueryItems, warnings uci.QueryWarnings) uci.QueryResponse {
+	warnings = append(warnings, "graph_outcome:unknown_or_truncated", "graph_unavailable")
+	truncated := false
+	continuation := uci.QueryContinuation{}
+	return uci.QueryResponse{Schema: uci.QueryResponseSchema, Status: uci.QueryStatusUnavailable, Contexts: &contexts, Freshness: uciApplicationPinnedFreshness(ref.Generation), Retrieval: &uci.QueryRetrieval{Mode: uci.QueryRetrievalGraph, DegradationReasons: []string{}}, Coverage: &uci.QueryCoverage{Structural: uci.IndexCoverageUnavailable}, Error: &uci.QueryError{Code: uci.QueryErrorBuildIncomplete}, Items: &items, Truncated: &truncated, Warnings: &warnings, Continuation: &continuation}
+}
+
+func uciApplicationGraphWithinBudget(result uci.GraphResult, budget uci.GraphBudget) (uci.QueryGraph, bool, error) {
+	if budget.MaxNodes < 1 || budget.MaxEdges < 1 {
+		return uci.QueryGraph{}, false, errors.New("UCI application graph budget is invalid")
+	}
+	graph := uci.QueryGraph{Nodes: append([]uci.QueryEntityRef{}, result.Graph.Nodes...), Edges: append([]uci.QueryGraphEdge{}, result.Graph.Edges...), StopReason: result.Graph.StopReason}
+	if len(graph.Nodes) > budget.MaxNodes || len(graph.Edges) > budget.MaxEdges {
+		return uci.QueryGraph{}, false, errors.New("UCI application graph result exceeds its budget")
+	}
+	if result.Outcome != uci.GraphOutcomeAmbiguous {
+		return graph, false, nil
+	}
+	return uciApplicationAppendGraphCandidates(graph, result.Candidates, budget.MaxNodes), len(graph.Nodes)+len(result.Candidates) > budget.MaxNodes, nil
+}
+
+func uciApplicationAppendGraphCandidates(graph uci.QueryGraph, candidates []uci.QueryEntityRef, maximum int) uci.QueryGraph {
+	known := make(map[uci.QueryEntityRef]struct{}, len(graph.Nodes))
+	for _, node := range graph.Nodes {
+		known[node] = struct{}{}
+	}
+	for _, candidate := range candidates {
+		if _, exists := known[candidate]; exists {
+			continue
+		}
+		if len(graph.Nodes) == maximum {
+			break
+		}
+		known[candidate] = struct{}{}
+		graph.Nodes = append(graph.Nodes, candidate)
+	}
+	return graph
 }
 
 func uciApplicationQueryContextRef(ref uci.ContextRef) uci.QueryContextRef {
