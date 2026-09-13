@@ -15,7 +15,14 @@ func TestReceiptTrustSeparatesPersistenceFromAuthoring(t *testing.T) {
 	epoch := fixtureKeyEpoch(t)
 	axis := receiptTestAxis(t, epoch)
 	receipt := mustNoCandidatesReceipt(t, ctx, epoch, axis, "10000000-0000-4000-8000-000000000001", "10000000-0000-4000-8000-000000000002")
+	verified := assertReceiptTrustLifecycle(t, receipt, axis, epoch)
+	assertReceiptProjectionCopies(t, receipt, axis)
+	assertTamperedReceiptRemainsUntrusted(t, receipt, epoch)
+	assertReceiptRejectsOtherEpoch(t, verified)
+}
 
+func assertReceiptTrustLifecycle(t *testing.T, receipt Receipt, axis ReceiptAxis, epoch KeyEpoch) Receipt {
+	t.Helper()
 	if !receipt.valid() || !receipt.CanCommit() || !receipt.Verify(epoch) {
 		t.Fatal("signed constructor receipt was not trusted and authorable")
 	}
@@ -23,7 +30,6 @@ func TestReceiptTrustSeparatesPersistenceFromAuthoring(t *testing.T) {
 	if !signedIdentity.valid() {
 		t.Fatal("signed constructor receipt did not expose identity")
 	}
-
 	restored, err := RestoreUnverifiedReceipt(receipt.PersistenceRecord())
 	if err != nil || restored.Axis() != axis {
 		t.Fatalf("RestoreUnverifiedReceipt() = (%#v, %v)", restored, err)
@@ -41,7 +47,11 @@ func TestReceiptTrustSeparatesPersistenceFromAuthoring(t *testing.T) {
 	if verified.Identity() != signedIdentity {
 		t.Fatal("verified replay receipt did not retain the signed identity")
 	}
+	return verified
+}
 
+func assertReceiptProjectionCopies(t *testing.T, receipt Receipt, axis ReceiptAxis) {
+	t.Helper()
 	copyRecord := receipt.PersistenceRecord()
 	copyRecord.SnapshotRefsJSON[0] = '{'
 	*copyRecord.ClosedReason = AbstentionPolicyShadow
@@ -53,7 +63,10 @@ func TestReceiptTrustSeparatesPersistenceFromAuthoring(t *testing.T) {
 	if receipt.Axis().ChannelKey() != axis.ChannelKey() {
 		t.Fatal("Axis leaked mutation")
 	}
+}
 
+func assertTamperedReceiptRemainsUntrusted(t *testing.T, receipt Receipt, epoch KeyEpoch) {
+	t.Helper()
 	tamperedRecord := receipt.PersistenceRecord()
 	tamperedRecord.ContentCommitment[0] ^= 0x80
 	tampered, err := RestoreUnverifiedReceipt(tamperedRecord)
@@ -66,7 +79,10 @@ func TestReceiptTrustSeparatesPersistenceFromAuthoring(t *testing.T) {
 	if verifiedTampered, ok := tampered.VerifyTrusted(epoch); ok || verifiedTampered.valid() {
 		t.Fatalf("VerifyTrusted(tampered) = (%#v, %t)", verifiedTampered, ok)
 	}
+}
 
+func assertReceiptRejectsOtherEpoch(t *testing.T, verified Receipt) {
+	t.Helper()
 	otherEpoch, err := NewKeyEpoch(testBytes(6), testBytes(7), testBytes(8), testBytes(9), testBytes(10))
 	if err != nil {
 		t.Fatal(err)

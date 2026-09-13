@@ -13,47 +13,52 @@ import (
 
 func TestRuntimeAdvisorReducesCurrentPolicyStates(t *testing.T) {
 	now := interventionTestTime
-	cases := []struct {
-		name   string
-		states []CandidatePolicyState
-		want   AbstentionReason
-	}{
+	for _, testCase := range []runtimePolicyReductionCase{
 		{name: "valid wins mixed set", states: []CandidatePolicyState{CandidatePolicyMissing, CandidatePolicyValid}, want: AbstentionPolicyObserving},
 		{name: "missing and insufficient", states: []CandidatePolicyState{CandidatePolicyInsufficient, CandidatePolicyMissing}, want: AbstentionEvidenceInsufficient},
 		{name: "all stale", states: []CandidatePolicyState{CandidatePolicySourceStale, CandidatePolicySourceStale}, want: AbstentionEvidenceState},
-	}
-	for _, testCase := range cases {
+	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			ctx, cancel := context.WithDeadline(context.Background(), now.Add(time.Second))
-			defer cancel()
-			prepared := runtimePreparedTaskMemory(t, len(testCase.states))
-			order := []string{}
-			preparer := &runtimeRecordingPreparer{prepared: prepared, order: &order}
-			store := &runtimeReceiptStore{order: &order}
-			epoch := fixtureKeyEpoch(t)
-			reader := &runtimePolicyReader{policies: runtimeCandidatePolicies(t, epoch, prepared.Candidates(), testCase.states), order: &order}
-			advisor := newRuntimeAdvisorWithPolicyReader(t, preparer, store, epoch, now, reader)
-
-			decision, err := advisor.Advise(ctx, runtimeAdviseInput(t, "policy read"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, reason, ok := decision.Abstain()
-			if !ok || reason != testCase.want {
-				t.Fatalf("Advise() = %#v, want %v", decision, testCase.want)
-			}
-			if reader.calls != 1 || store.commitCalls != 1 {
-				t.Fatalf("reader=%d commits=%d", reader.calls, store.commitCalls)
-			}
-			if got, want := order, []string{"prepare", "lookup", "policy", "commit"}; !reflect.DeepEqual(got, want) {
-				t.Fatalf("operation order = %v, want %v", got, want)
-			}
-			record := store.committed.PersistenceRecord()
-			if record.ClosedReason == nil || *record.ClosedReason != testCase.want || record.EvaluatedCount != len(testCase.states) ||
-				record.EligibleCount != 0 || string(record.SnapshotRefsJSON) != "[]" || record.Selection != nil {
-				t.Fatalf("policy abstention record = %#v", record)
-			}
+			assertRuntimePolicyReduction(t, now, testCase)
 		})
+	}
+}
+
+type runtimePolicyReductionCase struct {
+	name   string
+	states []CandidatePolicyState
+	want   AbstentionReason
+}
+
+func assertRuntimePolicyReduction(t *testing.T, now time.Time, testCase runtimePolicyReductionCase) {
+	t.Helper()
+	ctx, cancel := context.WithDeadline(context.Background(), now.Add(time.Second))
+	defer cancel()
+	prepared := runtimePreparedTaskMemory(t, len(testCase.states))
+	order := []string{}
+	preparer := &runtimeRecordingPreparer{prepared: prepared, order: &order}
+	store := &runtimeReceiptStore{order: &order}
+	epoch := fixtureKeyEpoch(t)
+	reader := &runtimePolicyReader{policies: runtimeCandidatePolicies(t, epoch, prepared.Candidates(), testCase.states), order: &order}
+	advisor := newRuntimeAdvisorWithPolicyReader(t, preparer, store, epoch, now, reader)
+	decision, err := advisor.Advise(ctx, runtimeAdviseInput(t, "policy read"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, reason, ok := decision.Abstain()
+	if !ok || reason != testCase.want {
+		t.Fatalf("Advise() = %#v, want %v", decision, testCase.want)
+	}
+	if reader.calls != 1 || store.commitCalls != 1 {
+		t.Fatalf("reader=%d commits=%d", reader.calls, store.commitCalls)
+	}
+	if got, want := order, []string{"prepare", "lookup", "policy", "commit"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("operation order = %v, want %v", got, want)
+	}
+	record := store.committed.PersistenceRecord()
+	if record.ClosedReason == nil || *record.ClosedReason != testCase.want || record.EvaluatedCount != len(testCase.states) ||
+		record.EligibleCount != 0 || string(record.SnapshotRefsJSON) != "[]" || record.Selection != nil {
+		t.Fatalf("policy abstention record = %#v", record)
 	}
 }
 
