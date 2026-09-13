@@ -169,7 +169,7 @@ test("working-byte inventory invalidates source, test, fixture, dependency, and 
   }
 });
 
-test("scheduler overlaps only the approved fixture pair and retains a successful sibling", async () => {
+test("dedicated coverage profiles remain serialized and stop after failure", async () => {
   const profiles = [
     { name: "base", resourceGroup: "exclusive" },
     { name: "hap-fixture", resourceGroup: "isolated-fixture" },
@@ -187,19 +187,20 @@ test("scheduler overlaps only the approved fixture pair and retains a successful
     if (profile.name === "hap-fixture") throw new Error("fixture failed");
     return { status: "passed" };
   });
-  assert.equal(maximum, 2);
-  assert.deepEqual(seen.slice(0, 1), ["base"]);
+  assert.equal(maximum, 1);
+  assert.deepEqual(seen, ["base", "hap-fixture"]);
   assert.equal(results.get("hap-fixture").status, "failed");
-  assert.equal(results.get("operator-code-fixture").status, "passed");
+  assert.equal(results.has("operator-code-fixture"), false);
 });
 
-test("descriptor restores base p=1 after the bounded p=2 budget expiry", () => {
+test("unitized base replaces the monolithic Go descriptor", () => {
   const base = coverageProfiles.find((profile) => profile.name === "base");
   const dedicated = coverageProfiles.find((profile) => profile.name === "uci");
-  assert.deepEqual(profileDescriptor(base).effective_argv.slice(0, 4), ["test", "-json", "-p=1", "-count=1"]);
-  assert.deepEqual(testInventoryArguments(base), ["test", "-p=1", "-list", ".", "./..."]);
+  assert.deepEqual(profileDescriptor(base).effective_argv, []);
+  assert.deepEqual(testInventoryArguments(base), []);
   assert.equal(profileDescriptor(dedicated).effective_argv[2], "-p=1");
   assert.equal(testInventoryArguments(dedicated)[1], "-p=1");
+  assert.equal(base.unitized, true);
   assert.notEqual(fingerprintProfile(base, candidate(), { sha256: "environment" }), fingerprintProfile({ ...base, packageConcurrency: 2 }, candidate(), { sha256: "environment" }));
 });
 
@@ -352,33 +353,34 @@ test("cold collector reaches actual scheduling without an undefined pending-prof
   }
 });
 
-test("base-only retains exact base evidence without projecting full coverage or scanner readiness", async () => {
+test("base-only retains package-unit evidence without projecting full coverage or scanner readiness", async () => {
   const directory = temporaryDirectory();
   try {
-    const sourceId = "11111111-1111-4111-8111-111111111111";
-    const sourceRun = join(directory, "runs", sourceId);
-    const base = coverageProfiles.find((profile) => profile.name === "base");
     const currentCandidate = { ...candidate(), repository_path: directory };
     const environment = { values: { image_id: `sha256:${"a".repeat(64)}` }, sha256: "environment", testEnvironment: {} };
-    const coverage = "mode: atomic\nexample.go:1.1,1.2 1 1\n";
-    const events = '{"Action":"pass","Package":"example","Test":"TestExample"}\n{"Action":"pass","Package":"example"}\n';
-    write(join(sourceRun, "profiles", "base", "attempt-1", "coverage.out"), coverage);
-    write(join(sourceRun, "profiles", "base", "attempt-1", "test-events.ndjson"), events);
-    write(join(sourceRun, "manifest.json"), JSON.stringify({
-      schema_version: 2,
-      run_id: sourceId,
-      candidate: currentCandidate,
-      fingerprints: { coverage_environment: environment.sha256 },
-      profiles: [{ name: "base", status: "passed", fingerprint: fingerprintProfile(base, currentCandidate, environment), coverage: { path: "profiles/base/attempt-1/coverage.out", sha256: sha256(coverage), bytes: Buffer.byteLength(coverage) }, test_events: { path: "profiles/base/attempt-1/test-events.ndjson", sha256: sha256(events), bytes: Buffer.byteLength(events) }, expected_tests: [{ package: "example", test: "TestExample" }], expected_test_inventory_sha256: sha256('[{"package":"example","test":"TestExample"}]'), package_counts: { passed: 1, failed: 0, tests_passed: 1, tests_skipped: 0 }, unexpected_skip_count: 0 }],
-    }));
+    const packagePath = "example/core";
+    const packageUnits = [
+      { id: "base-race-core", phase: "race", importPath: packagePath, directory: "core", classification: "ordinary", core: true, coverpkg: [] },
+      { id: "base-coverage-core", phase: "coverage", importPath: packagePath, directory: "core", classification: "ordinary", core: true, coverpkg: [packagePath] },
+    ];
     const campaign = { namespace: directory, runId: "22222222-2222-4222-8222-222222222222", runDir: join(directory, "run"), manifest: { run_id: "22222222-2222-4222-8222-222222222222", candidate: currentCandidate, profiles: [], merged: { status: "pending" }, analysis: { state: "not_submitted" }, publication: { requested: false, state: "not_requested" }, resources: { cleanup: { errors: [] } }, result: { coverage: "incomplete", technical_gate: "incomplete", effect: "not_requested", disposition: "incomplete" } } };
     mkdirSync(campaign.runDir, { recursive: true });
     const options = parseOptions(["--mode", "coverage", "--base-only"]);
     const deadline = new Deadline({ overallTimeout: 1000, coverageTimeout: 60, profileTimeout: 30, scannerTimeout: 60, qualityGateTimeout: 60 });
-    const progress = { completed: 0, reused: 0, meaningful() { } };
-    await runWithCampaign(campaign, currentCandidate, environment, options, { signal: new AbortController().signal, children: new Map() }, deadline, progress);
+    const progress = { completed: 0, reused: 0, activate() { }, meaningful() { }, deactivate() { }, location() { }, semantic() { }, output() { } };
+    const unitRuntime = {
+      expectedTests: async () => [{ package: packagePath, test: "TestExample" }],
+      runProcess: async (_command, args, context) => {
+        const coverage = args.find((argument) => argument.startsWith("-coverprofile="));
+        if (coverage) write(join(context.cwd, coverage.slice("-coverprofile=".length)), "mode: atomic\ncore.go:1.1,1.2 1 1\n");
+        context.onStdout(`{"Action":"run","Package":"${packagePath}","Test":"TestExample"}\n{"Action":"pass","Package":"${packagePath}","Test":"TestExample"}\n{"Action":"pass","Package":"${packagePath}"}\n`);
+        return { stdout: "", stderr: "" };
+      },
+    };
+    await runWithCampaign(campaign, currentCandidate, environment, options, { signal: new AbortController().signal, children: new Map() }, deadline, progress, { coverage: { goCommand: "fake-go", dockerCommand: "fake-docker", packageUnits, unitRuntime } });
     assert.equal(campaign.manifest.profiles.length, 1);
     assert.equal(campaign.manifest.profiles[0].status, "passed");
+    assert.equal(campaign.manifest.profiles[0].units.length, 2);
     assert.equal(campaign.manifest.merged.status, "incomplete");
     assert.equal(campaign.manifest.result.coverage, "incomplete");
     assert.equal(campaign.manifest.result.disposition, "base_profile_ready");

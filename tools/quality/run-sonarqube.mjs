@@ -39,9 +39,7 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}
 export const coverageProfiles = Object.freeze([
   {
     name: "base",
-    target: "./...",
-    race: true,
-    coverpkg: "./cmd/...,./internal/...,./pkg/...",
+    unitized: true,
     resourceGroup: "exclusive",
     packageConcurrency: 1,
   },
@@ -552,33 +550,37 @@ export function parseDockerPort(output) {
   throw new RunnerError(`Docker did not report a valid PostgreSQL host port: ${output.trim()}`);
 }
 
-export function mergeCoverProfiles(profilePaths, destination) {
+export function normalizeCoverage(reports) {
   let mode = null;
   const blocks = new Map();
-  for (const profilePath of profilePaths) {
-    if (!existsSync(profilePath)) throw new RunnerError(`Go test did not write ${profilePath}`);
-    const lines = readFileSync(profilePath, "utf8").split(/\r?\n/);
+  for (const report of reports) {
+    const source = report.source || "coverage";
+    const lines = String(report.contents).split(/\r?\n/);
     const header = /^mode:\s*(\S+)\s*$/.exec(lines[0] || "");
-    if (!header) throw new RunnerError(`Malformed coverprofile header: ${profilePath}`);
+    if (!header) throw new RunnerError(`Malformed coverprofile header: ${source}`);
     if (mode && mode !== header[1]) throw new RunnerError(`Coverage mode mismatch: ${mode} and ${header[1]}`);
     mode = header[1];
     for (const line of lines.slice(1)) {
       if (!line.trim()) continue;
       const block = /^(.*\s+\d+)\s+(\d+)$/.exec(line);
-      if (!block) throw new RunnerError(`Malformed coverprofile block in ${profilePath}: ${line}`);
+      if (!block) throw new RunnerError(`Malformed coverprofile block in ${source}: ${line}`);
       const hitCount = Number(block[2]);
-      if (!Number.isSafeInteger(hitCount) || hitCount < 0) throw new RunnerError(`Invalid coverprofile hit count in ${profilePath}: ${line}`);
+      if (!Number.isSafeInteger(hitCount) || hitCount < 0) throw new RunnerError(`Invalid coverprofile hit count in ${source}: ${line}`);
       const previous = blocks.get(block[1]);
       if (previous === undefined || hitCount > previous) blocks.set(block[1], hitCount);
     }
   }
   if (mode !== "atomic") throw new RunnerError(`Coverage mode must be atomic, got ${mode || "none"}`);
   if (blocks.size === 0) throw new RunnerError("No Go coverage blocks were collected");
-  const contents = `mode: ${mode}\n${[...blocks.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([block, hitCount]) => `${block} ${hitCount}`)
-    .join("\n")}\n`;
-  atomicWrite(destination, contents);
+  return `mode: ${mode}\n${[...blocks.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([block, hitCount]) => `${block} ${hitCount}`).join("\n")}\n`;
+}
+
+export function mergeCoverProfiles(profilePaths, destination) {
+  const reports = profilePaths.map((profilePath) => {
+    if (!existsSync(profilePath)) throw new RunnerError(`Go test did not write ${profilePath}`);
+    return { source: profilePath, contents: readFileSync(profilePath, "utf8") };
+  });
+  atomicWrite(destination, normalizeCoverage(reports));
 }
 
 function validateCoverage(path, expectedDigest = null) {
@@ -725,8 +727,98 @@ function profilePackageConcurrency(profile) {
   return profile.packageConcurrency;
 }
 
+const serializedPackageSuffixes = Object.freeze([
+  "/internal/db/gorm",
+  "/internal/hap01cfixture",
+  "/internal/hostadvisor",
+  "/internal/worker",
+  "/cmd/engram",
+  "/cmd/operator-code-live-fixture",
+]);
+
+export function classifyPackageUnit(packageInfo) {
+  const packagePath = typeof packageInfo === "string" ? packageInfo : packageInfo.importPath;
+  return packageInfo.serial || serializedPackageSuffixes.some((suffix) => packagePath.endsWith(suffix)) ? "serial" : "ordinary";
+}
+
+export function boundedCoverpkg(packagePath, directImports, firstPartyPackages) {
+  const available = new Set(firstPartyPackages);
+  return [packagePath, ...directImports.filter((item) => item !== packagePath && available.has(item))]
+    .filter((item, index, values) => values.indexOf(item) === index)
+    .sort();
+}
+
+export function planPackageUnits(packages, { coreOnly = false } = {}) {
+  const firstPartyPackages = packages.map((item) => item.importPath);
+  const units = [];
+  for (const packageInfo of packages) {
+    if (!packageInfo.importPath || !(packageInfo.testGoFiles?.length || packageInfo.xTestGoFiles?.length)) continue;
+    const classification = classifyPackageUnit(packageInfo);
+    if (coreOnly && classification !== "ordinary") continue;
+    for (const phase of ["race", "coverage"]) {
+      const coverpkg = phase === "coverage" ? boundedCoverpkg(packageInfo.importPath, packageInfo.imports || [], firstPartyPackages) : [];
+      units.push(Object.freeze({
+        id: `base-${phase}-${sha256(packageInfo.importPath).slice(0, 16)}`,
+        phase,
+        importPath: packageInfo.importPath,
+        directory: packageInfo.directory,
+        classification,
+        core: classification === "ordinary",
+        coverpkg,
+      }));
+    }
+  }
+  return units.sort((left, right) => (left.phase === right.phase ? left.importPath.localeCompare(right.importPath) : left.phase === "race" ? -1 : 1));
+}
+
+function parseGoList(output) {
+  const values = [];
+  let start = null;
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index < output.length; index += 1) {
+    const character = output[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') quoted = false;
+      continue;
+    }
+    if (character === '"') { quoted = true; continue; }
+    if (character === "{") {
+      if (depth === 0) start = index;
+      depth += 1;
+      continue;
+    }
+    if (character !== "}") continue;
+    depth -= 1;
+    if (depth === 0 && start !== null) {
+      values.push(JSON.parse(output.slice(start, index + 1)));
+      start = null;
+    }
+  }
+  if (depth !== 0 || quoted) throw new RunnerError("go list returned malformed package metadata");
+  return values;
+}
+
+async function discoverPackageUnits(goCommand, cwd, execution, deadline, profileDeadline, coreOnly) {
+  const result = await runProcess(goCommand, ["list", "-json", "./..."], {
+    ...execution,
+    cwd,
+    timeoutMs: profileTimeout(deadline, profileDeadline, commandTimeoutSeconds * 1000),
+    label: "base package discovery",
+  });
+  const packages = parseGoList(result.stdout)
+    .filter((item) => item.ImportPath && item.Module?.Path && item.ImportPath.startsWith(item.Module.Path))
+    .map((item) => ({ importPath: item.ImportPath, directory: relative(cwd, item.Dir).replaceAll("\\", "/"), imports: item.Imports || [], testGoFiles: item.TestGoFiles || [], xTestGoFiles: item.XTestGoFiles || [] }));
+  return planPackageUnits(packages, { coreOnly });
+}
+
 export function profileDescriptor(profile) {
-  const args = ["test", "-json", `-p=${profilePackageConcurrency(profile)}`, "-count=1", profile.target, "-covermode=atomic"];
+  if (profile.unitized) return { ...profile, effective_argv: [] };
+  const args = ["test", "-json", `-p=${profilePackageConcurrency(profile)}`, "-count=1", profile.target];
+  if (profile.unitPhase !== "race") args.push("-covermode=atomic");
   if (profile.databasePrefix) args.push("-parallel=1");
   if (profile.race) args.push("-race");
   if (profile.coverpkg) args.push(`-coverpkg=${profile.coverpkg}`);
@@ -736,10 +828,12 @@ export function profileDescriptor(profile) {
 }
 
 export function testInventoryArguments(profile) {
+  if (profile.unitized) return [];
   return ["test", `-p=${profilePackageConcurrency(profile)}`, "-list", ".", profile.target];
 }
 
 function testInventoryFingerprint(profile, candidate) {
+  if (profile.unitized) return sha256(canonicalJson([]));
   const prefix = profile.target === "./..." ? "" : `${profile.target.slice(2)}/`;
   return sha256(canonicalJson((candidate.inventory || []).filter((entry) => entry.type === "file" && entry.path.endsWith("_test.go") && (!prefix || entry.path.startsWith(prefix)))));
 }
@@ -898,7 +992,9 @@ function completeCoverage(record, candidate, environment) {
   if (!sameCandidate(manifest.candidate, candidate) || manifest.fingerprints?.coverage_environment !== environment.sha256) return null;
   if (manifest.result?.coverage !== "passed" || manifest.merged?.status !== "passed") return null;
   if (!Array.isArray(manifest.profiles) || manifest.profiles.length !== coverageProfiles.length) return null;
-  if (coverageProfiles.some((profile) => !reusableProfile(record, profile, candidate, environment))) return null;
+  if (coverageProfiles.some((profile) => profile.name === "base"
+    ? !validBasePackageEvidence(record, manifest.profiles.find((entry) => entry.name === "base"), candidate, environment)
+    : !reusableProfile(record, profile, candidate, environment))) return null;
   const sourceRecord = manifest.merged.source_run_id
     ? referencedRun(record, manifest.merged.source_run_id, candidate, environment)
     : record;
@@ -1385,7 +1481,7 @@ export function summarizeGoEvents(events) {
 }
 
 function skipObligation(profile, skipped) {
-  if (profile.name !== "base") return null;
+  if (profile.name !== "base" && !profile.baseUnit) return null;
   const owner = coverageProfiles.find((candidate) => {
     if (!candidate.databasePrefix || candidate.name === profile.name) return false;
     if (!skipped.package.endsWith(`/${candidate.target.slice(2)}`)) return false;
@@ -1426,7 +1522,7 @@ function reachableSkipReasons(source, test) {
 }
 
 function conditionalSkipObligation(profile, skipped, candidate) {
-  if (profile.name !== "base") return null;
+  if (profile.name !== "base" && !profile.baseUnit) return null;
   const packageSuffix = skipped.package.replace(/^.*?(?=\/internal\/|\/cmd\/|\/pkg\/)/, "");
   for (const inventory of candidate.inventory || []) {
     if (inventory.type !== "file" || !inventory.path.endsWith("_test.go") || !packageSuffix.endsWith(`/${dirname(inventory.path).replaceAll("\\", "/")}`)) continue;
@@ -1452,7 +1548,8 @@ export async function runCoverageProfile(goCommand, profile, campaign, entry, cw
   const eventPath = join(attemptDirectory, "test-events.ndjson");
   const stderrPath = join(attemptDirectory, "stderr.log");
   const state = { buffer: "", currentTest: null, currentPackage: null, passedTests: new Set(), skippedTests: new Map(), skipReasons: new Map(), failedTests: new Set(), startedTests: new Set(), passedPackages: new Set(), failedPackages: new Set(), lifecycle: new Set() };
-  const args = [...profileDescriptor(profile).effective_argv, `-coverprofile=${relative(cwd, coveragePath)}`];
+  const coveragePhase = profile.unitPhase !== "race";
+  const args = [...profileDescriptor(profile).effective_argv, ...(coveragePhase ? [`-coverprofile=${relative(cwd, coveragePath)}`] : [])];
   const observeGoEvent = (eventValue, transition) => {
     progress.location(profile.name, eventValue.Package || null, eventValue.Test || null);
     if (transition) progress.semantic(profile.name, transition);
@@ -1500,13 +1597,14 @@ export async function runCoverageProfile(goCommand, profile, campaign, entry, cw
     const missing = tests.filter((item) => !state.passedTests.has(testIdentity(item.package, item.test)) && !allowedSkippedNames.has(testIdentity(item.package, item.test)));
     if (missing.length) throw new RunnerError(`${profile.name} did not pass required selected tests: ${missing.map((item) => testIdentity(item.package, item.test)).join(", ")}`);
     if (!state.passedPackages.size) throw new RunnerError(`${profile.name} emitted no passing package event`);
-    const coverage = validateCoverage(coveragePath);
+    const coverage = coveragePhase ? validateCoverage(coveragePath) : null;
     testWriter.finish();
     stderrWriter.finish();
     entry.status = "passed";
     entry.completed_at_utc = new Date().toISOString();
     entry.elapsed_ms = Date.now() - started;
-    entry.coverage = { path: relative(campaign.runDir, coveragePath), ...coverage };
+    if (coverage) entry.coverage = { path: relative(campaign.runDir, coveragePath), ...coverage };
+    else entry.coverage = { status: "not_applicable" };
     entry.test_events = { path: relative(campaign.runDir, eventPath), sha256: shaFile(eventPath), bytes: statSync(eventPath).size };
     entry.stderr = { path: relative(campaign.runDir, stderrPath), sha256: shaFile(stderrPath), bytes: statSync(stderrPath).size };
     entry.package_counts = { passed: state.passedPackages.size, failed: 0, tests_passed: state.passedTests.size, tests_skipped: state.skippedTests.size };
@@ -1536,32 +1634,171 @@ export async function runCoverageProfile(goCommand, profile, campaign, entry, cw
     saveCampaign(campaign);
   }
 }
-
 export async function scheduleProfiles(profiles, jobs, runProfile) {
   if (![1, 2].includes(jobs)) throw new RunnerError("jobs must be 1 or 2");
-  const pair = profiles.filter((profile) => profile.resourceGroup === "isolated-fixture");
-  if (pair.some((profile) => !["hap-fixture", "operator-code-fixture"].includes(profile.name)) || pair.length > 2) {
-    throw new RunnerError("Only the architect-approved fixture pair may use isolated overlap");
-  }
-  const serial = profiles.filter((profile) => profile.resourceGroup !== "isolated-fixture");
   const outcomes = new Map();
-  for (const profile of serial) {
+  for (const profile of profiles) {
     try { outcomes.set(profile.name, await runProfile(profile)); }
     catch (error) { outcomes.set(profile.name, { status: "failed", error }); return outcomes; }
   }
-  if (!pair.length) return outcomes;
-  if (jobs === 1 || pair.length === 1) {
-    for (const profile of pair) {
-      try { outcomes.set(profile.name, await runProfile(profile)); }
-      catch (error) { outcomes.set(profile.name, { status: "failed", error }); break; }
-    }
-    return outcomes;
-  }
-  const settled = await Promise.allSettled(pair.map((profile) => runProfile(profile)));
-  for (let index = 0; index < pair.length; index += 1) {
-    outcomes.set(pair[index].name, settled[index].status === "fulfilled" ? settled[index].value : { status: "failed", error: settled[index].reason });
+  return outcomes;
+}
+export async function schedulePackageUnits(units, jobs, runUnit) {
+  if (![1, 2].includes(jobs)) throw new RunnerError("jobs must be 1 or 2");
+  const outcomes = new Map();
+  const run = async (unit) => {
+    try { outcomes.set(unit.id, await runUnit(unit)); }
+    catch (error) { outcomes.set(unit.id, { status: "failed", error }); }
+  };
+  for (const phase of ["race", "coverage"]) {
+    const phaseUnits = units.filter((unit) => unit.phase === phase);
+    for (const unit of phaseUnits.filter((unit) => unit.classification === "serial")) await run(unit);
+    const ordinary = phaseUnits.filter((unit) => unit.classification === "ordinary");
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(jobs, ordinary.length) }, async () => {
+      while (next < ordinary.length) {
+        const unit = ordinary[next];
+        next += 1;
+        await run(unit);
+      }
+    }));
   }
   return outcomes;
+}
+
+export function terminalPackageSummary(entries) {
+  const summary = { total: entries.length, race: 0, coverage: 0, passed: 0, failed: 0, timed_out: 0, cancelled: 0, pending: 0 };
+  for (const entry of entries) {
+    if (entry.unit?.phase === "race") summary.race += 1;
+    if (entry.unit?.phase === "coverage") summary.coverage += 1;
+    if (Object.hasOwn(summary, entry.status)) summary[entry.status] += 1;
+    else summary.pending += 1;
+  }
+  return summary;
+}
+
+function packageUnitProfile(unit) {
+  return {
+    name: unit.id,
+    target: unit.importPath,
+    race: unit.phase === "race",
+    coverpkg: unit.phase === "coverage" ? unit.coverpkg.join(",") : null,
+    packageConcurrency: 1,
+    resourceGroup: unit.classification === "serial" ? "exclusive" : "ordinary-package",
+    baseUnit: true,
+    unitPhase: unit.phase,
+  };
+}
+
+function fingerprintPackageUnit(unit, candidate, environment) {
+  return sha256(canonicalJson({
+    unit,
+    candidate_inputs_sha256: candidate.inputs_sha256,
+    environment_sha256: environment.sha256,
+    runner_sha256: shaFile(scriptPath),
+  }));
+}
+
+function validPackageUnitEvidence(record, entry, unit, candidate, environment) {
+  if (!entry || entry.status !== "passed" || entry.fingerprint !== fingerprintPackageUnit(unit, candidate, environment)) return false;
+  const sourceRecord = entry.source_run_id ? referencedRun(record, entry.source_run_id, candidate, environment) : record;
+  const sourceEntry = sourceRecord?.manifest.profiles?.find((profile) => profile.name === "base")?.units?.find((item) => item.id === unit.id) || entry;
+  if (!sourceRecord || sourceEntry.status !== "passed" || sourceEntry.fingerprint !== fingerprintPackageUnit(unit, candidate, environment)) return false;
+  if (!Array.isArray(sourceEntry.expected_tests) || !sourceEntry.expected_tests.length || sourceEntry.expected_test_inventory_sha256 !== sha256(canonicalJson(sourceEntry.expected_tests))) return false;
+  try {
+    const events = safeRelative(sourceRecord.runDir, sourceEntry.test_events?.path);
+    if (!sourceEntry.test_events?.sha256 || statSync(events).size !== sourceEntry.test_events.bytes || shaFile(events) !== sourceEntry.test_events.sha256) return false;
+    const values = readFileSync(events, "utf8").split(/\r?\n/).filter(Boolean).map(JSON.parse);
+    if (values.some((value) => value.Action === "fail")) return false;
+    const passed = new Set(values.filter((value) => value.Action === "pass" && value.Test).map((value) => testIdentity(value.Package || "", value.Test)));
+    if (!sourceEntry.expected_tests.every((test) => passed.has(testIdentity(test.package, test.test)))) return false;
+    if (unit.phase === "coverage") artifactFrom(sourceRecord, sourceEntry.coverage);
+    return unit.phase !== "coverage" || sourceEntry.coverage?.status !== "not_applicable";
+  } catch {
+    return false;
+  }
+}
+
+function validBasePackageEvidence(record, entry, candidate, environment) {
+  return entry?.status === "passed" && Array.isArray(entry.units) && entry.units.length > 0 && entry.units.every((unitEntry) => validPackageUnitEvidence(record, unitEntry, unitEntry.unit, candidate, environment));
+}
+
+function findReusablePackageUnits(namespace, units, candidate, environment) {
+  const found = new Map();
+  for (const record of manifestsIn(namespace)) {
+    const base = record.manifest.profiles?.find((entry) => entry.name === "base");
+    for (const unit of units) {
+      if (found.has(unit.id)) continue;
+      const entry = base?.units?.find((item) => item.id === unit.id);
+      if (validPackageUnitEvidence(record, entry, unit, candidate, environment)) found.set(unit.id, { entry, sourceRun: record.manifest.run_id });
+    }
+  }
+  return found;
+}
+
+function packageUnitCoveragePath(campaign, entry) {
+  if (!entry.source_run_id) return safeRelative(campaign.runDir, entry.coverage.path);
+  const source = manifestsIn(campaign.namespace).find((record) => record.manifest.run_id === entry.source_run_id);
+  return artifactFrom(source, entry.coverage).path;
+}
+
+async function runBasePackageUnits(baseEntry, campaign, candidate, environment, options, execution, deadline, progress, goCommand, runtime) {
+  const profileDeadline = Date.now() + deadline.profile;
+  baseEntry.status = "running";
+  baseEntry.started_at_utc = new Date().toISOString();
+  baseEntry.units = [];
+  saveCampaign(campaign);
+  let units;
+  try {
+    const discoveredUnits = runtime.packageUnits ?? await discoverPackageUnits(goCommand, candidate.repository_path, execution, deadline, profileDeadline, options.baseOnly);
+    units = options.baseOnly ? discoveredUnits.filter((unit) => unit.core) : discoveredUnits;
+    if (!units.length) throw new RunnerError("base selected no first-party packages with tests");
+    baseEntry.unit_plan = { selected_units: units.length, race_units: units.filter((unit) => unit.phase === "race").length, coverage_units: units.filter((unit) => unit.phase === "coverage").length, core_only: options.baseOnly };
+    const reusable = options.fresh ? new Map() : findReusablePackageUnits(campaign.namespace, units, candidate, environment);
+    for (const unit of units) {
+      const profile = packageUnitProfile(unit);
+      const cached = reusable.get(unit.id);
+      const entry = { id: unit.id, unit, name: unit.id, descriptor: profileDescriptor(profile), fingerprint: fingerprintPackageUnit(unit, candidate, environment), status: "pending", attempt: 1, classification: unit.classification, invalidation_reasons: cached ? [] : [options.fresh ? "fresh-requested" : "no-exact-valid-attempt"] };
+      if (cached) {
+        Object.assign(entry, cached.entry, { source_run_id: cached.sourceRun, source_artifact: cached.entry.coverage?.status === "not_applicable" ? null : { path: cached.entry.coverage.path, sha256: cached.entry.coverage.sha256, bytes: cached.entry.coverage.bytes } });
+        progress.completed += 1;
+        progress.reused += 1;
+        event(campaign, "coverage", "unit_reused", { unit: unit.id, package: unit.importPath, source_run_id: cached.sourceRun });
+      }
+      baseEntry.units.push(entry);
+    }
+    saveCampaign(campaign);
+    const entries = new Map(baseEntry.units.map((entry) => [entry.id, entry]));
+    const outcomes = await schedulePackageUnits(units.filter((unit) => !reusable.has(unit.id)), options.jobs, async (unit) => {
+      const profile = packageUnitProfile(unit);
+      await runCoverageProfile(goCommand, profile, campaign, entries.get(unit.id), candidate.repository_path, environment.testEnvironment, null, execution, deadline, progress, [process.env.SONAR_TOKEN, process.env.DATABASE_DSN, databasePassword], Date.now() + deadline.profile, candidate, runtime.unitRuntime);
+      return { status: "passed" };
+    });
+    baseEntry.unit_summary = terminalPackageSummary(baseEntry.units);
+    const failed = [...outcomes.values()].find((outcome) => outcome.status === "failed");
+    if (failed) throw failed.error;
+    if (baseEntry.units.some((entry) => entry.status !== "passed")) throw new RunnerError("base package units did not complete");
+    const coverageUnits = units.filter((unit) => unit.phase === "coverage");
+    const mergePath = join(campaign.runDir, "profiles", "base", "coverage.out");
+    mergeCoverProfiles(coverageUnits.map((unit) => packageUnitCoveragePath(campaign, entries.get(unit.id))), mergePath);
+    const coverage = validateCoverage(mergePath);
+    baseEntry.coverage = { path: relative(campaign.runDir, mergePath), ...coverage };
+    baseEntry.status = "passed";
+    baseEntry.completed_at_utc = new Date().toISOString();
+    baseEntry.elapsed_ms = Date.now() - Date.parse(baseEntry.started_at_utc);
+    return baseEntry;
+  } catch (error) {
+    const failure = classifyProfileFailure(error, execution);
+    baseEntry.status = failure.status;
+    baseEntry.failure_reason = failure.reason;
+    baseEntry.failure = redacted(error.message, [process.env.SONAR_TOKEN, process.env.DATABASE_DSN, databasePassword]);
+    baseEntry.completed_at_utc = new Date().toISOString();
+    baseEntry.elapsed_ms = Date.now() - Date.parse(baseEntry.started_at_utc);
+    baseEntry.unit_summary = terminalPackageSummary(baseEntry.units);
+    throw error;
+  } finally {
+    saveCampaign(campaign);
+  }
 }
 
 export async function collectCoverage(campaign, candidate, environment, options, execution, deadline, progress, runtime = {}) {
@@ -1573,12 +1810,14 @@ export async function collectCoverage(campaign, candidate, environment, options,
   if (!/^sha256:[0-9a-f]{64}$/i.test(imageId)) throw new RunnerError("An immutable PostgreSQL image is required for coverage");
   const profiles = runtime.profiles ?? (options.baseOnly ? coverageProfiles.filter((profile) => profile.name === "base") : coverageProfiles);
   if (options.baseOnly && (profiles.length !== 1 || profiles[0]?.name !== "base")) throw new RunnerError("base-only coverage must select exactly the base profile");
-  const reusable = options.fresh ? new Map() : findReusableProfiles(campaign.namespace, profiles, candidate, environment);
+  const base = profiles.find((profile) => profile.name === "base");
+  const dedicated = profiles.filter((profile) => profile.name !== "base");
+  const reusable = options.fresh ? new Map() : findReusableProfiles(campaign.namespace, dedicated, candidate, environment);
   for (const profile of profiles) {
     const cached = reusable.get(profile.name);
     const entry = {
       name: profile.name,
-      descriptor: profileDescriptor(profile),
+      descriptor: profile.name === "base" ? { kind: "package-units" } : profileDescriptor(profile),
       fingerprint: fingerprintProfile(profile, candidate, environment),
       status: "pending",
       attempt: 1,
@@ -1612,27 +1851,26 @@ export async function collectCoverage(campaign, candidate, environment, options,
     return postgresPromise;
   };
   const entries = new Map(campaign.manifest.profiles.map((entry) => [entry.name, entry]));
-  const needed = profiles.filter((profile) => !reusable.has(profile.name));
   let primaryError = null;
   try {
-    const outcomes = await scheduleProfiles(needed, options.jobs, async (profile) => {
+    if (base) await runBasePackageUnits(entries.get("base"), campaign, candidate, environment, options, execution, deadline, progress, goCommand, runtime);
+    if (options.baseOnly) {
+      campaign.manifest.merged = { status: "incomplete", reason: "base_only", selected_profiles: 1, required_profiles: coverageProfiles.length, selected_units: entries.get("base").unit_plan?.selected_units || 0 };
+      campaign.manifest.result.coverage = "incomplete";
+      campaign.manifest.result.disposition = "base_profile_ready";
+      progress.meaningful("coverage", { state: "base_profile_ready", selected_profiles: 1, required_profiles: coverageProfiles.length, selected_units: entries.get("base").unit_plan?.selected_units || 0 });
+      saveCampaign(campaign);
+      return;
+    }
+    const outcomes = await scheduleProfiles(dedicated.filter((profile) => !reusable.has(profile.name)), options.jobs, async (profile) => {
       const profileDeadline = Date.now() + deadline.profile;
       const database = profile.databasePrefix ? await getPostgres() : null;
-      const entry = entries.get(profile.name);
-      await runCoverageProfile(goCommand, profile, campaign, entry, candidate.repository_path, environment.testEnvironment, database, execution, deadline, progress, secrets, profileDeadline, candidate);
+      await runCoverageProfile(goCommand, profile, campaign, entries.get(profile.name), candidate.repository_path, environment.testEnvironment, database, execution, deadline, progress, secrets, profileDeadline, candidate);
       return { status: "passed" };
     });
     const failed = [...outcomes.values()].find((outcome) => outcome?.status === "failed");
     if (failed) throw failed.error;
     if (campaign.manifest.profiles.some((entry) => entry.status !== "passed")) throw new RunnerError("Coverage did not complete every required profile");
-    if (options.baseOnly) {
-      campaign.manifest.merged = { status: "incomplete", reason: "base_only", selected_profiles: 1, required_profiles: coverageProfiles.length };
-      campaign.manifest.result.coverage = "incomplete";
-      campaign.manifest.result.disposition = "base_profile_ready";
-      progress.meaningful("coverage", { state: "base_profile_ready", selected_profiles: 1, required_profiles: coverageProfiles.length });
-      saveCampaign(campaign);
-      return;
-    }
     const mergePath = join(campaign.runDir, "coverage.out");
     mergeCoverProfiles(profiles.map((profile) => {
       const entry = entries.get(profile.name);
@@ -1996,9 +2234,9 @@ function campaignFromRecord(record) {
   return { runDir: record.runDir, manifest: record.manifest, runId: record.manifest.run_id };
 }
 
-export async function runWithCampaign(campaign, candidate, environment, options, execution, deadline, progress) {
+export async function runWithCampaign(campaign, candidate, environment, options, execution, deadline, progress, runtime = {}) {
   if (options.mode === "coverage" || options.mode === "gate") {
-    if (campaign.manifest.result.coverage !== "passed") await collectCoverage(campaign, candidate, environment, options, execution, deadline, progress);
+    if (campaign.manifest.result.coverage !== "passed") await collectCoverage(campaign, candidate, environment, options, execution, deadline, progress, runtime.coverage);
     if (options.mode === "coverage") {
       if (options.baseOnly) {
         console.log(`BASE_PROFILE_READY ${campaign.runId}`);
