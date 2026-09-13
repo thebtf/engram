@@ -126,6 +126,49 @@ type uciInstalledAcceptanceScenarioRuntime struct {
 	ClientEnvironment  []string
 }
 
+type uciInstalledAcceptanceRefusalInput struct {
+	first, second, third            *uciInstalledAcceptanceMCPClient
+	firstSelection, secondSelection uciInstalledAcceptanceSelection
+	authority                       *uciInstalledAcceptanceAuthority
+	result                          *uciInstalledAcceptanceResult
+}
+
+type uciInstalledAcceptanceRestartInput struct {
+	request            uciInstalledAcceptanceRequest
+	candidates         map[string]uciInstallHarnessCommand
+	authority          *uciInstalledAcceptanceAuthority
+	worktrees          uciInstalledAcceptanceWorktreesFixture
+	serverPort         int
+	parserBundleDigest string
+	daemonControlRoot  string
+	oldInstallation    *uciInstallHarnessInstallation
+	daemonOwner        *int
+	oldClients         map[string]*uciInstalledAcceptanceMCPClient
+	selections         map[string]uciInstalledAcceptanceSelection
+	publications       map[string]uciInstalledAcceptancePublication
+	result             *uciInstalledAcceptanceResult
+}
+
+type uciInstalledAcceptanceWatcherInput struct {
+	fixture                         uciInstalledAcceptanceFixture
+	authority                       *uciInstalledAcceptanceAuthority
+	worktrees                       uciInstalledAcceptanceWorktreesFixture
+	first, second                   *uciInstalledAcceptanceMCPClient
+	firstSelection, secondSelection uciInstalledAcceptanceSelection
+	before                          map[string]uciInstalledAcceptancePublication
+	result                          *uciInstalledAcceptanceResult
+}
+
+type uciInstalledAcceptanceWatcherSnapshotInput struct {
+	authority      *uciInstalledAcceptanceAuthority
+	client         *uciInstalledAcceptanceMCPClient
+	selection      uciInstalledAcceptanceSelection
+	publication    uciInstalledAcceptancePublication
+	root           string
+	fixture        uciInstalledAcceptanceFixture
+	expectedCallee string
+}
+
 // uciInstalledAcceptanceScenarioEvidence retains only the safe receipt fields
 // a live installed scenario may contribute.
 type uciInstalledAcceptanceScenarioEvidence struct {
@@ -659,7 +702,18 @@ func runUCIInstalledAcceptance(ctx context.Context, request uciInstalledAcceptan
 		return result, fmt.Errorf("installed standard MCP third-client default isolation: %w", err)
 	}
 
-	if err := uciExerciseInstalledAcceptanceRefusals(operationCtx, clientA, clientB, clientC, selectedA, selectedB, authority, &result); err != nil {
+	if err := uciExerciseInstalledAcceptanceRefusals(
+		operationCtx,
+		uciInstalledAcceptanceRefusalInput{
+			first:           clientA,
+			second:          clientB,
+			third:           clientC,
+			firstSelection:  selectedA,
+			secondSelection: selectedB,
+			authority:       authority,
+			result:          &result,
+		},
+	); err != nil {
 		return result, fmt.Errorf("installed standard MCP authorization-negative matrix: %w", err)
 	}
 	recorderProcess, err := installation.Start(operationCtx, uciInstalledHarnessLaunchRequest{
@@ -691,7 +745,20 @@ func runUCIInstalledAcceptance(ctx context.Context, request uciInstalledAcceptan
 	if err := recorderProcess.closePipes(); err != nil {
 		return result, fmt.Errorf("close installed recorder client: %w", err)
 	}
-	watcherPublications, watcherErr := uciExerciseInstalledAcceptanceWatcher(operationCtx, request.Fixture, authority, worktrees, clientA, clientB, selectedA, selectedB, publications, &result)
+	watcherPublications, watcherErr := uciExerciseInstalledAcceptanceWatcher(
+		operationCtx,
+		uciInstalledAcceptanceWatcherInput{
+			fixture:         request.Fixture,
+			authority:       authority,
+			worktrees:       worktrees,
+			first:           clientA,
+			second:          clientB,
+			firstSelection:  selectedA,
+			secondSelection: selectedB,
+			before:          publications,
+			result:          &result,
+		},
+	)
 	if watcherErr != nil {
 		return result, fmt.Errorf("installed standard MCP watcher A/B dirty-view isolation: %w", watcherErr)
 	}
@@ -708,26 +775,28 @@ func runUCIInstalledAcceptance(ctx context.Context, request uciInstalledAcceptan
 
 	restartedInstallation, restartedDaemonPID, restartErr := uciRestartInstalledAcceptance(
 		operationCtx,
-		request,
-		candidates,
-		authority,
-		worktrees,
-		serverPort,
-		parserBundleDigest,
-		daemonControlRoot,
-		installation,
-		&activeDaemonPID,
-		map[string]*uciInstalledAcceptanceMCPClient{
-			uciInstalledAcceptanceClientA: clientA,
-			uciInstalledAcceptanceClientB: clientB,
-			uciInstalledAcceptanceClientC: clientC,
+		uciInstalledAcceptanceRestartInput{
+			request:            request,
+			candidates:         candidates,
+			authority:          authority,
+			worktrees:          worktrees,
+			serverPort:         serverPort,
+			parserBundleDigest: parserBundleDigest,
+			daemonControlRoot:  daemonControlRoot,
+			oldInstallation:    installation,
+			daemonOwner:        &activeDaemonPID,
+			oldClients: map[string]*uciInstalledAcceptanceMCPClient{
+				uciInstalledAcceptanceClientA: clientA,
+				uciInstalledAcceptanceClientB: clientB,
+				uciInstalledAcceptanceClientC: clientC,
+			},
+			selections: map[string]uciInstalledAcceptanceSelection{
+				uciInstalledAcceptanceClientA: selectedA,
+				uciInstalledAcceptanceClientB: selectedB,
+			},
+			publications: publications,
+			result:       &result,
 		},
-		map[string]uciInstalledAcceptanceSelection{
-			uciInstalledAcceptanceClientA: selectedA,
-			uciInstalledAcceptanceClientB: selectedB,
-		},
-		publications,
-		&result,
 	)
 	if restartErr != nil {
 		return result, fmt.Errorf("installed standard MCP restart matrix: %w", restartErr)
@@ -3146,13 +3215,10 @@ func uciInstalledAcceptanceIsBareSHA256(value string) bool {
 	return err == nil
 }
 
-func uciExerciseInstalledAcceptanceRefusals(
-	ctx context.Context,
-	first, second, third *uciInstalledAcceptanceMCPClient,
-	firstSelection, secondSelection uciInstalledAcceptanceSelection,
-	authority *uciInstalledAcceptanceAuthority,
-	result *uciInstalledAcceptanceResult,
-) error {
+func uciExerciseInstalledAcceptanceRefusals(ctx context.Context, input uciInstalledAcceptanceRefusalInput) error {
+	first, second, third := input.first, input.second, input.third
+	firstSelection, secondSelection := input.firstSelection, input.secondSelection
+	authority, result := input.authority, input.result
 	if first == nil || second == nil || third == nil || result == nil {
 		return errors.New("installed acceptance authorization-negative matrix is incomplete")
 	}
@@ -3764,21 +3830,11 @@ func uciWaitForInstalledAcceptanceRestartParserPID(ctx context.Context, installa
 	}
 }
 
-func uciRestartInstalledAcceptance(
-	ctx context.Context,
-	request uciInstalledAcceptanceRequest,
-	candidates map[string]uciInstallHarnessCommand,
-	authority *uciInstalledAcceptanceAuthority,
-	worktrees uciInstalledAcceptanceWorktreesFixture,
-	serverPort int,
-	parserBundleDigest, daemonControlRoot string,
-	oldInstallation *uciInstallHarnessInstallation,
-	daemonOwner *int,
-	oldClients map[string]*uciInstalledAcceptanceMCPClient,
-	selections map[string]uciInstalledAcceptanceSelection,
-	publications map[string]uciInstalledAcceptancePublication,
-	result *uciInstalledAcceptanceResult,
-) (next *uciInstallHarnessInstallation, newDaemonPID int, retErr error) {
+func uciRestartInstalledAcceptance(ctx context.Context, input uciInstalledAcceptanceRestartInput) (next *uciInstallHarnessInstallation, newDaemonPID int, retErr error) {
+	request, candidates, authority, worktrees := input.request, input.candidates, input.authority, input.worktrees
+	serverPort, parserBundleDigest, daemonControlRoot := input.serverPort, input.parserBundleDigest, input.daemonControlRoot
+	oldInstallation, daemonOwner, oldClients := input.oldInstallation, input.daemonOwner, input.oldClients
+	selections, publications, result := input.selections, input.publications, input.result
 	if daemonOwner == nil {
 		return nil, 0, errors.New("installed acceptance restart daemon owner is unavailable")
 	}
@@ -4093,16 +4149,11 @@ func uciRestartInstalledAcceptance(
 	return next, newDaemonPID, nil
 }
 
-func uciExerciseInstalledAcceptanceWatcher(
-	ctx context.Context,
-	fixture uciInstalledAcceptanceFixture,
-	authority *uciInstalledAcceptanceAuthority,
-	worktrees uciInstalledAcceptanceWorktreesFixture,
-	first, second *uciInstalledAcceptanceMCPClient,
-	firstSelection, secondSelection uciInstalledAcceptanceSelection,
-	before map[string]uciInstalledAcceptancePublication,
-	result *uciInstalledAcceptanceResult,
-) (after map[string]uciInstalledAcceptancePublication, retErr error) {
+func uciExerciseInstalledAcceptanceWatcher(ctx context.Context, input uciInstalledAcceptanceWatcherInput) (after map[string]uciInstalledAcceptancePublication, retErr error) {
+	fixture, authority, worktrees := input.fixture, input.authority, input.worktrees
+	first, second := input.first, input.second
+	firstSelection, secondSelection := input.firstSelection, input.secondSelection
+	before, result := input.before, input.result
 	if first == nil || second == nil || authority == nil || result == nil || firstSelection.contextHandle == "" || secondSelection.contextHandle == "" || worktrees.primaryRoot == "" || worktrees.linkedRoot == "" {
 		return nil, errors.New("installed acceptance watcher proof is incomplete")
 	}
@@ -4126,11 +4177,27 @@ func uciExerciseInstalledAcceptanceWatcher(
 		return nil, errors.New("installed acceptance watcher cannot construct A v2 source")
 	}
 
-	initialA, err := uciSnapshotInstalledAcceptanceWatcher(ctx, authority, first, firstSelection, primaryBefore, worktrees.primaryRoot, fixture, fixture.PrimaryCallee)
+	initialA, err := uciSnapshotInstalledAcceptanceWatcher(ctx, uciInstalledAcceptanceWatcherSnapshotInput{
+		authority:      authority,
+		client:         first,
+		selection:      firstSelection,
+		publication:    primaryBefore,
+		root:           worktrees.primaryRoot,
+		fixture:        fixture,
+		expectedCallee: fixture.PrimaryCallee,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("snapshot installed acceptance watcher A v1: %w", err)
 	}
-	initialB, err := uciSnapshotInstalledAcceptanceWatcher(ctx, authority, second, secondSelection, linkedBefore, worktrees.linkedRoot, fixture, fixture.LinkedCallee)
+	initialB, err := uciSnapshotInstalledAcceptanceWatcher(ctx, uciInstalledAcceptanceWatcherSnapshotInput{
+		authority:      authority,
+		client:         second,
+		selection:      secondSelection,
+		publication:    linkedBefore,
+		root:           worktrees.linkedRoot,
+		fixture:        fixture,
+		expectedCallee: fixture.LinkedCallee,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("snapshot installed acceptance watcher B baseline: %w", err)
 	}
@@ -4162,11 +4229,27 @@ func uciExerciseInstalledAcceptanceWatcher(
 	if !uciInstalledAcceptanceSameViewPublication(afterUpdateB, linkedBefore) {
 		return nil, errors.New("installed acceptance watcher A v1 to v2 update changed B View")
 	}
-	updatedA, err := uciSnapshotInstalledAcceptanceWatcher(ctx, authority, first, firstSelection, afterUpdateA, worktrees.primaryRoot, fixture, updatedCallee)
+	updatedA, err := uciSnapshotInstalledAcceptanceWatcher(ctx, uciInstalledAcceptanceWatcherSnapshotInput{
+		authority:      authority,
+		client:         first,
+		selection:      firstSelection,
+		publication:    afterUpdateA,
+		root:           worktrees.primaryRoot,
+		fixture:        fixture,
+		expectedCallee: updatedCallee,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("snapshot installed acceptance watcher A v2: %w", err)
 	}
-	updatedB, err := uciSnapshotInstalledAcceptanceWatcher(ctx, authority, second, secondSelection, afterUpdateB, worktrees.linkedRoot, fixture, fixture.LinkedCallee)
+	updatedB, err := uciSnapshotInstalledAcceptanceWatcher(ctx, uciInstalledAcceptanceWatcherSnapshotInput{
+		authority:      authority,
+		client:         second,
+		selection:      secondSelection,
+		publication:    afterUpdateB,
+		root:           worktrees.linkedRoot,
+		fixture:        fixture,
+		expectedCallee: fixture.LinkedCallee,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("snapshot installed acceptance watcher B after A v2: %w", err)
 	}
@@ -4189,11 +4272,27 @@ func uciExerciseInstalledAcceptanceWatcher(
 	if !uciInstalledAcceptanceSameViewPublication(afterRestoreB, linkedBefore) {
 		return nil, errors.New("installed acceptance watcher A restore changed B View")
 	}
-	restoredA, err := uciSnapshotInstalledAcceptanceWatcher(ctx, authority, first, firstSelection, afterRestoreA, worktrees.primaryRoot, fixture, fixture.PrimaryCallee)
+	restoredA, err := uciSnapshotInstalledAcceptanceWatcher(ctx, uciInstalledAcceptanceWatcherSnapshotInput{
+		authority:      authority,
+		client:         first,
+		selection:      firstSelection,
+		publication:    afterRestoreA,
+		root:           worktrees.primaryRoot,
+		fixture:        fixture,
+		expectedCallee: fixture.PrimaryCallee,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("snapshot restored installed acceptance watcher A v1: %w", err)
 	}
-	restoredB, err := uciSnapshotInstalledAcceptanceWatcher(ctx, authority, second, secondSelection, afterRestoreB, worktrees.linkedRoot, fixture, fixture.LinkedCallee)
+	restoredB, err := uciSnapshotInstalledAcceptanceWatcher(ctx, uciInstalledAcceptanceWatcherSnapshotInput{
+		authority:      authority,
+		client:         second,
+		selection:      secondSelection,
+		publication:    afterRestoreB,
+		root:           worktrees.linkedRoot,
+		fixture:        fixture,
+		expectedCallee: fixture.LinkedCallee,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("snapshot installed acceptance watcher B after A restore: %w", err)
 	}
@@ -4216,16 +4315,9 @@ func uciExerciseInstalledAcceptanceWatcher(
 	}, nil
 }
 
-func uciSnapshotInstalledAcceptanceWatcher(
-	ctx context.Context,
-	authority *uciInstalledAcceptanceAuthority,
-	client *uciInstalledAcceptanceMCPClient,
-	selection uciInstalledAcceptanceSelection,
-	publication uciInstalledAcceptancePublication,
-	root string,
-	fixture uciInstalledAcceptanceFixture,
-	expectedCallee string,
-) (uciInstalledAcceptanceWatcherSnapshot, error) {
+func uciSnapshotInstalledAcceptanceWatcher(ctx context.Context, input uciInstalledAcceptanceWatcherSnapshotInput) (uciInstalledAcceptanceWatcherSnapshot, error) {
+	authority, client, selection, publication := input.authority, input.client, input.selection, input.publication
+	root, fixture, expectedCallee := input.root, input.fixture, input.expectedCallee
 	if authority == nil || authority.store == nil || client == nil || root == "" || fixture.RelativePath == "" || expectedCallee == "" {
 		return uciInstalledAcceptanceWatcherSnapshot{}, errors.New("installed acceptance watcher snapshot target is incomplete")
 	}
