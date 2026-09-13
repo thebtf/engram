@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gorm.io/gorm"
 )
 
 func uci1ProbePublicationFaults(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime) (map[string]uciInstalledAcceptanceScenarioEvidence, error) {
@@ -619,11 +620,9 @@ func uci1PublicationFaultRestoreBuild(ctx context.Context, authority *uciInstall
 			_ = tx.Rollback().Error
 		}
 	}()
-	var published struct {
-		ResultViewID sql.NullString `gorm:"column:result_view_id"`
-	}
-	if err := tx.Raw(`SELECT result_view_id FROM ci_jobs WHERE job_id = ? FOR UPDATE`, buildID).Scan(&published).Error; err != nil {
-		return fmt.Errorf("read installed publication fault build for restore: %w", err)
+	published, err := uci1PublicationFaultLockedResultViewID(tx, buildID)
+	if err != nil {
+		return err
 	}
 	restored := tx.Exec(`
 		UPDATE ci_checkouts
@@ -636,6 +635,27 @@ func uci1PublicationFaultRestoreBuild(ctx context.Context, authority *uciInstall
 	if restored.RowsAffected != 1 {
 		return errors.New("restore installed publication checkout lease did not match one checkout")
 	}
+	if err := uci1PublicationFaultClearBuild(tx, buildID, baseline.checkoutID, published); err != nil {
+		return err
+	}
+	if err := tx.Commit().Error; err != nil {
+		return fmt.Errorf("commit installed publication fault restore: %w", err)
+	}
+	failed = false
+	return uci1PublicationFaultAssertBaseline(ctx, authority, baseline)
+}
+
+func uci1PublicationFaultLockedResultViewID(tx *gorm.DB, buildID string) (sql.NullString, error) {
+	var published struct {
+		ResultViewID sql.NullString `gorm:"column:result_view_id"`
+	}
+	if err := tx.Raw(`SELECT result_view_id FROM ci_jobs WHERE job_id = ? FOR UPDATE`, buildID).Scan(&published).Error; err != nil {
+		return sql.NullString{}, fmt.Errorf("read installed publication fault build for restore: %w", err)
+	}
+	return published.ResultViewID, nil
+}
+
+func uci1PublicationFaultClearBuild(tx *gorm.DB, buildID, checkoutID string, resultViewID sql.NullString) error {
 	if err := tx.Exec(`DELETE FROM ci_index_build_parts WHERE build_id = ?`, buildID).Error; err != nil {
 		return fmt.Errorf("clear installed publication fault staged parts: %w", err)
 	}
@@ -646,8 +666,8 @@ func uci1PublicationFaultRestoreBuild(ctx context.Context, authority *uciInstall
 	if removed.RowsAffected != 1 {
 		return errors.New("clear installed publication fault build did not match one job")
 	}
-	if published.ResultViewID.Valid {
-		removedView := tx.Exec(`DELETE FROM ci_views WHERE view_id = ? AND checkout_id = ?`, published.ResultViewID.String, baseline.checkoutID)
+	if resultViewID.Valid {
+		removedView := tx.Exec(`DELETE FROM ci_views WHERE view_id = ? AND checkout_id = ?`, resultViewID.String, checkoutID)
 		if removedView.Error != nil {
 			return fmt.Errorf("clear installed publication fault View: %w", removedView.Error)
 		}
@@ -655,9 +675,5 @@ func uci1PublicationFaultRestoreBuild(ctx context.Context, authority *uciInstall
 			return errors.New("clear installed publication fault View did not match one View")
 		}
 	}
-	if err := tx.Commit().Error; err != nil {
-		return fmt.Errorf("commit installed publication fault restore: %w", err)
-	}
-	failed = false
-	return uci1PublicationFaultAssertBaseline(ctx, authority, baseline)
+	return nil
 }
