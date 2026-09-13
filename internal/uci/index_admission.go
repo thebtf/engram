@@ -1873,107 +1873,143 @@ func indexAdmissionCanonicalizeArtifact(artifact IndexAdmissionArtifact) (IndexA
 	if artifact.Diagnostics == nil {
 		artifact.Diagnostics = []IndexAdmissionDiagnostic{}
 	}
-
 	lineStarts := indexAdmissionLineStarts(artifact.Body)
-	sort.Slice(artifact.Definitions, func(left, right int) bool {
-		return artifact.Definitions[left].LocalSymbolKey < artifact.Definitions[right].LocalSymbolKey
-	})
-	definitions := make(map[string]struct{}, len(artifact.Definitions))
-	for index, definition := range artifact.Definitions {
-		if !indexAdmissionValidKey(definition.LocalSymbolKey) || !indexAdmissionValidMetadataText(definition.Kind, indexAdmissionMaxKeyBytes) || !indexAdmissionValidKey(definition.SymbolKey) {
-			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: invalid definition")
-		}
-		if index > 0 && artifact.Definitions[index-1].LocalSymbolKey == definition.LocalSymbolKey {
-			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: duplicate definition key")
-		}
-		if err := indexAdmissionValidateSourceSpan(artifact.Body, lineStarts, definition.Span); err != nil {
-			return IndexAdmissionArtifact{}, err
-		}
-		definitions[definition.LocalSymbolKey] = struct{}{}
+	definitions, err := indexAdmissionCanonicalizeDefinitions(artifact.Definitions, artifact.Body, lineStarts)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
 	}
-
-	sort.Slice(artifact.References, func(left, right int) bool {
-		return artifact.References[left].SiteKey < artifact.References[right].SiteKey
-	})
-	references := make(map[string]IndexAdmissionReference, len(artifact.References))
-	for index, reference := range artifact.References {
-		if !indexAdmissionValidKey(reference.SiteKey) || !indexAdmissionValidMetadataText(reference.Kind, indexAdmissionMaxKeyBytes) ||
-			!indexAdmissionValidKey(reference.SymbolKey) || !indexAdmissionValidSourceText(reference.RawTarget, indexAdmissionMaxTextBytes) ||
-			!isIndexRelation(reference.Relation) {
-			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: invalid reference")
-		}
-		if index > 0 && artifact.References[index-1].SiteKey == reference.SiteKey {
-			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: duplicate reference site key")
-		}
-		if reference.OwnerSymbolKey != nil {
-			if !indexAdmissionValidKey(*reference.OwnerSymbolKey) {
-				return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: invalid reference owner symbol")
-			}
-			if _, found := definitions[*reference.OwnerSymbolKey]; !found {
-				return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: reference owner symbol is not defined by artifact")
-			}
-		}
-		if err := indexAdmissionValidateSourceSpan(artifact.Body, lineStarts, reference.Span); err != nil {
-			return IndexAdmissionArtifact{}, err
-		}
-		text, err := indexAdmissionTextForValidatedSpan(artifact.Body, reference.Span)
-		if err != nil || reference.RawTarget != text {
-			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: reference target does not match source body")
-		}
-		references[reference.SiteKey] = reference
+	if err := indexAdmissionCanonicalizeReferences(artifact.References, definitions, artifact.Body, lineStarts); err != nil {
+		return IndexAdmissionArtifact{}, err
 	}
-
-	sort.Slice(artifact.Chunks, func(left, right int) bool {
-		return artifact.Chunks[left].Ordinal < artifact.Chunks[right].Ordinal
-	})
-	for index, chunk := range artifact.Chunks {
-		if chunk.Ordinal < 0 || !indexAdmissionValidMetadataText(chunk.Kind, indexAdmissionMaxKeyBytes) || !isIndexDigest(chunk.ContentDigest) ||
-			!indexAdmissionValidSourceText(chunk.Text, indexAdmissionMaxTextBytes) {
-			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: invalid chunk")
-		}
-		if index > 0 && artifact.Chunks[index-1].Ordinal == chunk.Ordinal {
-			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: duplicate chunk ordinal")
-		}
-		if chunk.SymbolKey != nil {
-			if !indexAdmissionValidKey(*chunk.SymbolKey) {
-				return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: invalid chunk symbol key")
-			}
-			if _, found := definitions[*chunk.SymbolKey]; !found {
-				return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: chunk symbol is not defined by artifact")
-			}
-		}
-		if err := indexAdmissionValidateSourceSpan(artifact.Body, lineStarts, chunk.Span); err != nil {
-			return IndexAdmissionArtifact{}, err
-		}
-		text, err := indexAdmissionTextForValidatedSpan(artifact.Body, chunk.Span)
-		if err != nil || chunk.Text != text || chunk.ContentDigest != indexAdmissionDigestBytes([]byte(text)) {
-			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: chunk does not match source body")
-		}
+	if err := indexAdmissionCanonicalizeChunks(artifact.Chunks, definitions, artifact.Body, lineStarts); err != nil {
+		return IndexAdmissionArtifact{}, err
 	}
-
-	sort.Slice(artifact.Diagnostics, func(left, right int) bool {
-		if compare := indexAdmissionCompareSpans(artifact.Diagnostics[left].Span, artifact.Diagnostics[right].Span); compare != 0 {
-			return compare < 0
-		}
-		if artifact.Diagnostics[left].Code != artifact.Diagnostics[right].Code {
-			return artifact.Diagnostics[left].Code < artifact.Diagnostics[right].Code
-		}
-		return artifact.Diagnostics[left].Message < artifact.Diagnostics[right].Message
-	})
-	for _, diagnostic := range artifact.Diagnostics {
-		if !indexAdmissionValidMetadataText(diagnostic.Code, indexAdmissionMaxKeyBytes) || !indexAdmissionValidMetadataText(diagnostic.Message, indexAdmissionMaxDiagnosticBytes) {
-			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: invalid diagnostic")
-		}
-		if !indexAdmissionZeroSpan(diagnostic.Span) {
-			if err := indexAdmissionValidateSourceSpan(artifact.Body, lineStarts, diagnostic.Span); err != nil {
-				return IndexAdmissionArtifact{}, err
-			}
-		}
+	if err := indexAdmissionCanonicalizeDiagnostics(artifact.Diagnostics, artifact.Body, lineStarts); err != nil {
+		return IndexAdmissionArtifact{}, err
 	}
 	if artifact.Status == IndexAdmissionArtifactComplete && len(artifact.Diagnostics) != 0 {
 		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: complete artifact has diagnostics")
 	}
 	return artifact, nil
+}
+
+func indexAdmissionCanonicalizeDefinitions(definitions []IndexAdmissionDefinition, body []byte, lineStarts []int) (map[string]struct{}, error) {
+	sort.Slice(definitions, func(left, right int) bool {
+		return definitions[left].LocalSymbolKey < definitions[right].LocalSymbolKey
+	})
+	keys := make(map[string]struct{}, len(definitions))
+	for index, definition := range definitions {
+		if !indexAdmissionValidKey(definition.LocalSymbolKey) || !indexAdmissionValidMetadataText(definition.Kind, indexAdmissionMaxKeyBytes) || !indexAdmissionValidKey(definition.SymbolKey) {
+			return nil, fmt.Errorf("uci index admission: invalid definition")
+		}
+		if index > 0 && definitions[index-1].LocalSymbolKey == definition.LocalSymbolKey {
+			return nil, fmt.Errorf("uci index admission: duplicate definition key")
+		}
+		if err := indexAdmissionValidateSourceSpan(body, lineStarts, definition.Span); err != nil {
+			return nil, err
+		}
+		keys[definition.LocalSymbolKey] = struct{}{}
+	}
+	return keys, nil
+}
+
+func indexAdmissionCanonicalizeReferences(references []IndexAdmissionReference, definitions map[string]struct{}, body []byte, lineStarts []int) error {
+	sort.Slice(references, func(left, right int) bool {
+		return references[left].SiteKey < references[right].SiteKey
+	})
+	for index, reference := range references {
+		if !indexAdmissionValidKey(reference.SiteKey) || !indexAdmissionValidMetadataText(reference.Kind, indexAdmissionMaxKeyBytes) || !indexAdmissionValidKey(reference.SymbolKey) || !indexAdmissionValidSourceText(reference.RawTarget, indexAdmissionMaxTextBytes) || !isIndexRelation(reference.Relation) {
+			return fmt.Errorf("uci index admission: invalid reference")
+		}
+		if index > 0 && references[index-1].SiteKey == reference.SiteKey {
+			return fmt.Errorf("uci index admission: duplicate reference site key")
+		}
+		if err := indexAdmissionValidateReferenceOwner(reference.OwnerSymbolKey, definitions); err != nil {
+			return err
+		}
+		if err := indexAdmissionValidateSourceSpan(body, lineStarts, reference.Span); err != nil {
+			return err
+		}
+		text, err := indexAdmissionTextForValidatedSpan(body, reference.Span)
+		if err != nil || reference.RawTarget != text {
+			return fmt.Errorf("uci index admission: reference target does not match source body")
+		}
+	}
+	return nil
+}
+
+func indexAdmissionValidateReferenceOwner(owner *string, definitions map[string]struct{}) error {
+	if owner == nil {
+		return nil
+	}
+	if !indexAdmissionValidKey(*owner) {
+		return fmt.Errorf("uci index admission: invalid reference owner symbol")
+	}
+	if _, found := definitions[*owner]; !found {
+		return fmt.Errorf("uci index admission: reference owner symbol is not defined by artifact")
+	}
+	return nil
+}
+
+func indexAdmissionCanonicalizeChunks(chunks []IndexAdmissionChunk, definitions map[string]struct{}, body []byte, lineStarts []int) error {
+	sort.Slice(chunks, func(left, right int) bool {
+		return chunks[left].Ordinal < chunks[right].Ordinal
+	})
+	for index, chunk := range chunks {
+		if chunk.Ordinal < 0 || !indexAdmissionValidMetadataText(chunk.Kind, indexAdmissionMaxKeyBytes) || !isIndexDigest(chunk.ContentDigest) || !indexAdmissionValidSourceText(chunk.Text, indexAdmissionMaxTextBytes) {
+			return fmt.Errorf("uci index admission: invalid chunk")
+		}
+		if index > 0 && chunks[index-1].Ordinal == chunk.Ordinal {
+			return fmt.Errorf("uci index admission: duplicate chunk ordinal")
+		}
+		if err := indexAdmissionValidateChunkSymbol(chunk.SymbolKey, definitions); err != nil {
+			return err
+		}
+		if err := indexAdmissionValidateSourceSpan(body, lineStarts, chunk.Span); err != nil {
+			return err
+		}
+		text, err := indexAdmissionTextForValidatedSpan(body, chunk.Span)
+		if err != nil || chunk.Text != text || chunk.ContentDigest != indexAdmissionDigestBytes([]byte(text)) {
+			return fmt.Errorf("uci index admission: chunk does not match source body")
+		}
+	}
+	return nil
+}
+
+func indexAdmissionValidateChunkSymbol(symbol *string, definitions map[string]struct{}) error {
+	if symbol == nil {
+		return nil
+	}
+	if !indexAdmissionValidKey(*symbol) {
+		return fmt.Errorf("uci index admission: invalid chunk symbol key")
+	}
+	if _, found := definitions[*symbol]; !found {
+		return fmt.Errorf("uci index admission: chunk symbol is not defined by artifact")
+	}
+	return nil
+}
+
+func indexAdmissionCanonicalizeDiagnostics(diagnostics []IndexAdmissionDiagnostic, body []byte, lineStarts []int) error {
+	sort.Slice(diagnostics, func(left, right int) bool {
+		if compare := indexAdmissionCompareSpans(diagnostics[left].Span, diagnostics[right].Span); compare != 0 {
+			return compare < 0
+		}
+		if diagnostics[left].Code != diagnostics[right].Code {
+			return diagnostics[left].Code < diagnostics[right].Code
+		}
+		return diagnostics[left].Message < diagnostics[right].Message
+	})
+	for _, diagnostic := range diagnostics {
+		if !indexAdmissionValidMetadataText(diagnostic.Code, indexAdmissionMaxKeyBytes) || !indexAdmissionValidMetadataText(diagnostic.Message, indexAdmissionMaxDiagnosticBytes) {
+			return fmt.Errorf("uci index admission: invalid diagnostic")
+		}
+		if !indexAdmissionZeroSpan(diagnostic.Span) {
+			if err := indexAdmissionValidateSourceSpan(body, lineStarts, diagnostic.Span); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func indexAdmissionValidateArtifactProfile(profile IndexAdmissionArtifactProfile) error {
