@@ -46,18 +46,7 @@ func TestUCIRealCorpusPreparedCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var present, excluded, unreadable, sourceBytes int
-	for _, file := range scan.Files {
-		switch file.State {
-		case uci.IndexFilePresent:
-			present++
-			sourceBytes += len(file.Body)
-		case uci.IndexFileExcluded:
-			excluded++
-		case uci.IndexFileUnreadable:
-			unreadable++
-		}
-	}
+	metrics := uciRealCorpusCapacityScanMetrics(scan)
 	binding := uci.IndexBinding{
 		Scope: uci.IndexScope{
 			SourceID:      "11111111-1111-4111-8111-111111111111",
@@ -72,38 +61,12 @@ func TestUCIRealCorpusPreparedCapacity(t *testing.T) {
 	if err != nil {
 		var capacity *uci.IndexCapacityError
 		if errors.As(err, &capacity) {
-			t.Fatalf("capacity refusal scope=%s resource=%s required=%d limit=%d files=%d present=%d excluded=%d unreadable=%d source_bytes=%d", capacity.Scope(), capacity.Resource(), capacity.Required(), capacity.Limit(), len(scan.Files), present, excluded, unreadable, sourceBytes)
+			t.Fatalf("capacity refusal scope=%s resource=%s required=%d limit=%d files=%d present=%d excluded=%d unreadable=%d source_bytes=%d", capacity.Scope(), capacity.Resource(), capacity.Required(), capacity.Limit(), len(scan.Files), metrics.present, metrics.excluded, metrics.unreadable, metrics.sourceBytes)
 		}
 		t.Fatal(err)
 	}
-	payloadBytes := 0
-	maxPayloadBytes := 0
-	artifacts := 0
-	memberships := 0
-	definitions := 0
-	references := 0
-	chunks := 0
-	edgeReplacements := 0
-	edges := 0
-	for index, payload := range plan.payloads {
-		payloadBytes += len(payload)
-		if len(payload) > maxPayloadBytes {
-			maxPayloadBytes = len(payload)
-		}
-		frame := plan.frames[index]
-		artifacts += len(frame.Artifacts)
-		memberships += len(frame.Memberships)
-		for _, artifact := range frame.Artifacts {
-			definitions += len(artifact.Definitions)
-			references += len(artifact.References)
-			chunks += len(artifact.Chunks)
-		}
-		edgeReplacements += len(frame.EdgeReplacements)
-		for _, replacement := range frame.EdgeReplacements {
-			edges += len(replacement.Edges)
-		}
-	}
-	t.Logf("real corpus capacity files=%d present=%d excluded=%d unreadable=%d source_bytes=%d frames=%d payload_bytes=%d max_payload_bytes=%d artifacts=%d definitions=%d references=%d chunks=%d memberships=%d edge_replacements=%d edges=%d uploaded=%d coverage=%+v errors=%d", len(scan.Files), present, excluded, unreadable, sourceBytes, len(plan.frames), payloadBytes, maxPayloadBytes, artifacts, definitions, references, chunks, memberships, edgeReplacements, edges, plan.uploaded, plan.coverage, len(plan.errors))
+	metrics.addPlan(plan)
+	t.Logf("real corpus capacity files=%d present=%d excluded=%d unreadable=%d source_bytes=%d frames=%d payload_bytes=%d max_payload_bytes=%d artifacts=%d definitions=%d references=%d chunks=%d memberships=%d edge_replacements=%d edges=%d uploaded=%d coverage=%+v errors=%d", len(scan.Files), metrics.present, metrics.excluded, metrics.unreadable, metrics.sourceBytes, len(plan.frames), metrics.payloadBytes, metrics.maxPayloadBytes, metrics.artifacts, metrics.definitions, metrics.references, metrics.chunks, metrics.memberships, metrics.edgeReplacements, metrics.edges, plan.uploaded, plan.coverage, len(plan.errors))
 	if os.Getenv("ENGRAM_UCI_REAL_CORPUS_ADMIT") != "1" {
 		return
 	}
@@ -138,5 +101,58 @@ func TestUCIRealCorpusPreparedCapacity(t *testing.T) {
 	})
 	if !errors.Is(err, rollbackProbe) {
 		t.Fatalf("real corpus direct admission: %v", err)
+	}
+}
+
+type uciRealCorpusCapacityMetrics struct {
+	present          int
+	excluded         int
+	unreadable       int
+	sourceBytes      int
+	payloadBytes     int
+	maxPayloadBytes  int
+	artifacts        int
+	memberships      int
+	definitions      int
+	references       int
+	chunks           int
+	edgeReplacements int
+	edges            int
+}
+
+func uciRealCorpusCapacityScanMetrics(scan uci.ScannerResult) uciRealCorpusCapacityMetrics {
+	metrics := uciRealCorpusCapacityMetrics{}
+	for _, file := range scan.Files {
+		switch file.State {
+		case uci.IndexFilePresent:
+			metrics.present++
+			metrics.sourceBytes += len(file.Body)
+		case uci.IndexFileExcluded:
+			metrics.excluded++
+		case uci.IndexFileUnreadable:
+			metrics.unreadable++
+		}
+	}
+	return metrics
+}
+
+func (metrics *uciRealCorpusCapacityMetrics) addPlan(plan uciPreparedAdmissionPlan) {
+	for index, payload := range plan.payloads {
+		metrics.payloadBytes += len(payload)
+		if len(payload) > metrics.maxPayloadBytes {
+			metrics.maxPayloadBytes = len(payload)
+		}
+		frame := plan.frames[index]
+		metrics.artifacts += len(frame.Artifacts)
+		metrics.memberships += len(frame.Memberships)
+		for _, artifact := range frame.Artifacts {
+			metrics.definitions += len(artifact.Definitions)
+			metrics.references += len(artifact.References)
+			metrics.chunks += len(artifact.Chunks)
+		}
+		metrics.edgeReplacements += len(frame.EdgeReplacements)
+		for _, replacement := range frame.EdgeReplacements {
+			metrics.edges += len(replacement.Edges)
+		}
 	}
 }
