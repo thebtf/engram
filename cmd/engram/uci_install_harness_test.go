@@ -230,9 +230,6 @@ func TestUCIInstallHarnessProcessHelper(t *testing.T) {
 			time.Sleep(time.Hour)
 		}
 	case "daemon":
-		auditDir := os.Getenv(uciInstallHarnessHelperAuditDir)
-		uciWaitForInstallHarnessAudit(t, auditDir, "server")
-		uciWaitForInstallHarnessAudit(t, auditDir, "parser")
 		uciServeInstallHarnessMCP(t, &audit)
 	default:
 		t.Fatalf("unknown UCI install-harness helper role %q", audit.Role)
