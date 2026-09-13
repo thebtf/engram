@@ -43,6 +43,14 @@ func TestUCITransportSessionRejectsInvalidTags(t *testing.T) {
 }
 
 func TestUCIRequestCorrelationPreservesCanonicalIdentityAndAuditClaims(t *testing.T) {
+	first := canonicalUCIRequestCorrelation(t)
+	assertUCIRequestCorrelationMetadata(t, first)
+	assertUCIRequestCorrelationStringRoundTrips(t)
+	assertUCIRequestCorrelationContext(t, first)
+}
+
+func canonicalUCIRequestCorrelation(t *testing.T) UCIRequestCorrelation {
+	t.Helper()
 	first, ok := NewUCIRequestCorrelation(json.RawMessage(`"client-operation-42"`))
 	if !ok {
 		t.Fatal("NewUCIRequestCorrelation() rejected a valid string ID")
@@ -71,8 +79,12 @@ func TestUCIRequestCorrelationPreservesCanonicalIdentityAndAuditClaims(t *testin
 	if !ok || quotedNumeric == numeric || quotedNumeric.MetadataValue() == numeric.MetadataValue() {
 		t.Fatalf("string numeric correlation = %#v, %t; want a distinct canonical string", quotedNumeric, ok)
 	}
+	return first
+}
 
-	metadataValue := first.MetadataValue()
+func assertUCIRequestCorrelationMetadata(t *testing.T, correlation UCIRequestCorrelation) {
+	t.Helper()
+	metadataValue := correlation.MetadataValue()
 	if metadataValue == "" || strings.Contains(metadataValue, "client-operation-42") || strings.ContainsAny(metadataValue, "+/=") {
 		t.Fatalf("metadata value %q is not opaque base64url", metadataValue)
 	}
@@ -82,14 +94,17 @@ func TestUCIRequestCorrelationPreservesCanonicalIdentityAndAuditClaims(t *testin
 		}
 	}
 	parsed, ok := ParseUCIRequestCorrelation(metadataValue)
-	if !ok || parsed != first {
-		t.Fatalf("ParseUCIRequestCorrelation(%q) = %#v, %t; want %#v, true", metadataValue, parsed, ok, first)
+	if !ok || parsed != correlation {
+		t.Fatalf("ParseUCIRequestCorrelation(%q) = %#v, %t; want %#v, true", metadataValue, parsed, ok, correlation)
 	}
-	jsonID, ok := first.JSONRPCID()
+	jsonID, ok := correlation.JSONRPCID()
 	if !ok || string(jsonID) != `"client-operation-42"` {
 		t.Fatalf("JSONRPCID() = %q, %t; want canonical outer JSON-RPC ID", jsonID, ok)
 	}
+}
 
+func assertUCIRequestCorrelationStringRoundTrips(t *testing.T) {
+	t.Helper()
 	for _, test := range []struct {
 		name      string
 		requestID json.RawMessage
@@ -116,11 +131,14 @@ func TestUCIRequestCorrelationPreservesCanonicalIdentityAndAuditClaims(t *testin
 			}
 		})
 	}
+}
 
+func assertUCIRequestCorrelationContext(t *testing.T, correlation UCIRequestCorrelation) {
+	t.Helper()
 	ctx := WithActor(context.Background(), "agent/alice")
 	ctx = WithSourceSession(ctx, "legacy-source-session")
 	ctx = WithUCITransportSession(ctx, "transport-tag-1")
-	ctx = WithUCIRequestCorrelation(ctx, first)
+	ctx = WithUCIRequestCorrelation(ctx, correlation)
 	if UCIRequestCorrelationRequired(ctx) {
 		t.Fatal("unmarked context requires a UCI request correlation")
 	}
@@ -129,8 +147,8 @@ func TestUCIRequestCorrelationPreservesCanonicalIdentityAndAuditClaims(t *testin
 		t.Fatal("marked context does not require a UCI request correlation")
 	}
 	carried, ok := UCIRequestCorrelationFromContext(ctx)
-	if !ok || carried != first {
-		t.Fatalf("UCIRequestCorrelationFromContext() = %#v, %t; want %#v, true", carried, ok, first)
+	if !ok || carried != correlation {
+		t.Fatalf("UCIRequestCorrelationFromContext() = %#v, %t; want %#v, true", carried, ok, correlation)
 	}
 	if got := Actor(ctx); got != "agent/alice" {
 		t.Fatalf("actor = %q, want agent/alice", got)
