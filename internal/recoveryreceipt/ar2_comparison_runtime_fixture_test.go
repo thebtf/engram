@@ -2207,30 +2207,52 @@ func ar2EnsureFixtureOverrideDirectories(overrides map[string]string) error {
 }
 
 func ar2ScrubFixtureEnvironment(base []string, bootstrapAdminToken string, overrides map[string]string) ([]string, error) {
+	canonicalOverrides, err := ar2CanonicalFixtureOverrides(bootstrapAdminToken, overrides)
+	if err != nil {
+		return nil, err
+	}
+	baseValues, err := ar2AllowedFixtureBaseValues(base, canonicalOverrides)
+	if err != nil {
+		return nil, err
+	}
+	return ar2FixtureEnvironmentEntries(baseValues, canonicalOverrides, bootstrapAdminToken, overrides), nil
+}
+
+func ar2CanonicalFixtureOverrides(bootstrapAdminToken string, overrides map[string]string) (map[string]string, error) {
 	if overrides == nil {
 		overrides = map[string]string{}
 	}
 	canonicalOverrides := make(map[string]string, len(overrides)+1)
 	for key := range overrides {
 		canonical := strings.ToUpper(key)
-		if _, forbidden := ar2FixtureCredentialAliases[canonical]; forbidden {
-			return nil, fmt.Errorf("fixture override %q is a credential alias", key)
-		}
-		if _, forbidden := ar2FixtureSessionOnlyAliases[canonical]; forbidden {
-			return nil, fmt.Errorf("fixture override %q is reserved for the mux session", key)
-		}
-		if _, allowed := ar2FixtureControlAliases[canonical]; !allowed {
-			return nil, fmt.Errorf("fixture override %q is outside the allowlist", key)
-		}
-		if _, duplicate := canonicalOverrides[canonical]; duplicate {
-			return nil, fmt.Errorf("fixture overrides repeat %q with a case variant", key)
+		if err := ar2ValidateFixtureOverride(key, canonical, canonicalOverrides); err != nil {
+			return nil, err
 		}
 		canonicalOverrides[canonical] = key
 	}
 	if bootstrapAdminToken != "" {
 		canonicalOverrides["ENGRAM_AUTH_ADMIN_TOKEN"] = "ENGRAM_AUTH_ADMIN_TOKEN"
 	}
+	return canonicalOverrides, nil
+}
 
+func ar2ValidateFixtureOverride(key, canonical string, canonicalOverrides map[string]string) error {
+	if _, forbidden := ar2FixtureCredentialAliases[canonical]; forbidden {
+		return fmt.Errorf("fixture override %q is a credential alias", key)
+	}
+	if _, forbidden := ar2FixtureSessionOnlyAliases[canonical]; forbidden {
+		return fmt.Errorf("fixture override %q is reserved for the mux session", key)
+	}
+	if _, allowed := ar2FixtureControlAliases[canonical]; !allowed {
+		return fmt.Errorf("fixture override %q is outside the allowlist", key)
+	}
+	if _, duplicate := canonicalOverrides[canonical]; duplicate {
+		return fmt.Errorf("fixture overrides repeat %q with a case variant", key)
+	}
+	return nil
+}
+
+func ar2AllowedFixtureBaseValues(base []string, canonicalOverrides map[string]string) (map[string]string, error) {
 	baseValues := make(map[string]string, len(base))
 	for _, entry := range base {
 		key, _, found := strings.Cut(entry, "=")
@@ -2249,65 +2271,46 @@ func ar2ScrubFixtureEnvironment(base []string, bootstrapAdminToken string, overr
 		}
 		baseValues[canonical] = entry
 	}
+	return baseValues, nil
+}
 
-	baseKeys := make([]string, 0, len(baseValues))
-	for canonical := range baseValues {
-		baseKeys = append(baseKeys, canonical)
-	}
-	sort.Strings(baseKeys)
+func ar2FixtureEnvironmentEntries(baseValues, canonicalOverrides map[string]string, bootstrapAdminToken string, overrides map[string]string) []string {
+	baseKeys := sortedFixtureEnvironmentKeys(baseValues)
 	output := make([]string, 0, len(baseKeys)+len(canonicalOverrides))
 	for _, canonical := range baseKeys {
 		output = append(output, baseValues[canonical])
 	}
-	overrideKeys := make([]string, 0, len(canonicalOverrides))
-	for canonical := range canonicalOverrides {
-		overrideKeys = append(overrideKeys, canonical)
-	}
-	sort.Strings(overrideKeys)
-	for _, canonical := range overrideKeys {
+	for _, canonical := range sortedFixtureEnvironmentKeys(canonicalOverrides) {
 		if canonical == "ENGRAM_AUTH_ADMIN_TOKEN" {
 			output = append(output, canonical+"="+bootstrapAdminToken)
-			continue
+		} else {
+			key := canonicalOverrides[canonical]
+			output = append(output, key+"="+overrides[key])
 		}
-		key := canonicalOverrides[canonical]
-		output = append(output, key+"="+overrides[key])
 	}
-	return output, nil
+	return output
+}
+
+func sortedFixtureEnvironmentKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func ar2ValidateFixtureEnvironment(environment []string, bootstrapAdminToken string) error {
 	adminTokenEntries := 0
 	seen := make(map[string]struct{}, len(environment))
 	for _, entry := range environment {
-		key, value, found := strings.Cut(entry, "=")
-		if !found {
-			return fmt.Errorf("malformed environment entry")
+		adminToken, err := ar2ValidateFixtureEnvironmentEntry(entry, bootstrapAdminToken, seen)
+		if err != nil {
+			return err
 		}
-		canonical := strings.ToUpper(key)
-		if _, duplicate := seen[canonical]; duplicate {
-			return fmt.Errorf("fixture environment repeats %q", key)
-		}
-		seen[canonical] = struct{}{}
-		if _, reserved := ar2FixtureSessionOnlyAliases[canonical]; reserved {
-			return fmt.Errorf("fixture environment contains session-only alias %q", key)
-		}
-		if _, forbidden := ar2FixtureCredentialAliases[canonical]; forbidden {
-			if canonical != "ENGRAM_AUTH_ADMIN_TOKEN" || bootstrapAdminToken == "" || key != "ENGRAM_AUTH_ADMIN_TOKEN" || value != bootstrapAdminToken {
-				return fmt.Errorf("fixture environment contains prohibited credential alias %q", key)
-			}
+		if adminToken {
 			adminTokenEntries++
-			continue
 		}
-		if _, allowed := ar2FixtureSystemEnvironmentAliases[canonical]; allowed {
-			continue
-		}
-		if _, allowed := ar2FixtureControlAliases[canonical]; allowed {
-			continue
-		}
-		if _, allowed := ar2FixtureBuildEnvironmentAliases[canonical]; allowed {
-			continue
-		}
-		return fmt.Errorf("fixture environment contains non-allowlisted alias %q", key)
 	}
 	if bootstrapAdminToken == "" && adminTokenEntries != 0 {
 		return fmt.Errorf("runtime fixture environment retained an admin token")
@@ -2316,6 +2319,42 @@ func ar2ValidateFixtureEnvironment(environment []string, bootstrapAdminToken str
 		return fmt.Errorf("bootstrap fixture environment did not contain exactly one admin token")
 	}
 	return nil
+}
+
+func ar2ValidateFixtureEnvironmentEntry(entry, bootstrapAdminToken string, seen map[string]struct{}) (bool, error) {
+	key, value, found := strings.Cut(entry, "=")
+	if !found {
+		return false, fmt.Errorf("malformed environment entry")
+	}
+	canonical := strings.ToUpper(key)
+	if _, duplicate := seen[canonical]; duplicate {
+		return false, fmt.Errorf("fixture environment repeats %q", key)
+	}
+	seen[canonical] = struct{}{}
+	if _, reserved := ar2FixtureSessionOnlyAliases[canonical]; reserved {
+		return false, fmt.Errorf("fixture environment contains session-only alias %q", key)
+	}
+	if _, forbidden := ar2FixtureCredentialAliases[canonical]; forbidden {
+		if canonical != "ENGRAM_AUTH_ADMIN_TOKEN" || bootstrapAdminToken == "" || key != "ENGRAM_AUTH_ADMIN_TOKEN" || value != bootstrapAdminToken {
+			return false, fmt.Errorf("fixture environment contains prohibited credential alias %q", key)
+		}
+		return true, nil
+	}
+	if ar2AllowedFixtureEnvironmentAlias(canonical) {
+		return false, nil
+	}
+	return false, fmt.Errorf("fixture environment contains non-allowlisted alias %q", key)
+}
+
+func ar2AllowedFixtureEnvironmentAlias(canonical string) bool {
+	if _, allowed := ar2FixtureSystemEnvironmentAliases[canonical]; allowed {
+		return true
+	}
+	if _, allowed := ar2FixtureControlAliases[canonical]; allowed {
+		return true
+	}
+	_, allowed := ar2FixtureBuildEnvironmentAliases[canonical]
+	return allowed
 }
 
 func TestAR2FixtureEnvironmentScrubsCredentialAliases(t *testing.T) {
@@ -2853,49 +2892,75 @@ func ar2SanitizeFixtureCommandStderr(stderr []byte, environment, args []string) 
 }
 
 func ar2FixtureCommandSensitiveValues(environment, args []string) []string {
-	seen := make(map[string]struct{})
-	values := make([]string, 0)
-	add := func(value string) {
-		if value == "" {
-			return
-		}
-		if _, duplicate := seen[value]; duplicate {
-			return
-		}
-		seen[value] = struct{}{}
-		values = append(values, value)
+	values := sensitiveFixtureValues{}
+	values.addEnvironment(environment)
+	values.addArguments(args)
+	return values.values
+}
+
+type sensitiveFixtureValues struct {
+	seen   map[string]struct{}
+	values []string
+}
+
+func (values *sensitiveFixtureValues) add(value string) {
+	if value == "" {
+		return
 	}
+	if values.seen == nil {
+		values.seen = make(map[string]struct{})
+	}
+	if _, duplicate := values.seen[value]; duplicate {
+		return
+	}
+	values.seen[value] = struct{}{}
+	values.values = append(values.values, value)
+}
+
+func (values *sensitiveFixtureValues) addEnvironment(environment []string) {
 	for _, entry := range environment {
 		key, value, found := strings.Cut(entry, "=")
 		if found && ar2FixtureDiagnosticSensitiveEnvironmentKey(key) {
-			add(value)
+			values.add(value)
 		}
 	}
+}
+
+func (values *sensitiveFixtureValues) addArguments(args []string) {
 	for index, argument := range args {
-		key, value, hasValue := strings.Cut(argument, "=")
-		if hasValue && ar2FixtureSensitiveCommandKey(key) {
-			add(value)
-		}
-		if hasValue && strings.EqualFold(strings.TrimLeft(key, "-"), "env") {
-			environmentKey, environmentValue, environmentAssignment := strings.Cut(value, "=")
-			if environmentAssignment && ar2FixtureSensitiveCommandKey(environmentKey) {
-				add(environmentValue)
-			}
-		}
-		if ar2FixtureSensitiveCommandKey(argument) && index+1 < len(args) {
-			add(args[index+1])
-		}
-		if strings.EqualFold(strings.TrimLeft(argument, "-"), "env") && index+1 < len(args) {
-			environmentKey, environmentValue, environmentAssignment := strings.Cut(args[index+1], "=")
-			if environmentAssignment && ar2FixtureSensitiveCommandKey(environmentKey) {
-				add(environmentValue)
-			}
-		}
-		if strings.EqualFold(argument, "Bearer") && index+1 < len(args) {
-			add(args[index+1])
-		}
+		values.addAssignedArgument(argument)
+		values.addFollowingArgument(argument, index, args)
 	}
-	return values
+}
+
+func (values *sensitiveFixtureValues) addAssignedArgument(argument string) {
+	key, value, hasValue := strings.Cut(argument, "=")
+	if hasValue && ar2FixtureSensitiveCommandKey(key) {
+		values.add(value)
+	}
+	if hasValue && strings.EqualFold(strings.TrimLeft(key, "-"), "env") {
+		values.addEnvironmentAssignment(value)
+	}
+}
+
+func (values *sensitiveFixtureValues) addFollowingArgument(argument string, index int, args []string) {
+	if index+1 >= len(args) {
+		return
+	}
+	following := args[index+1]
+	if ar2FixtureSensitiveCommandKey(argument) || strings.EqualFold(argument, "Bearer") {
+		values.add(following)
+	}
+	if strings.EqualFold(strings.TrimLeft(argument, "-"), "env") {
+		values.addEnvironmentAssignment(following)
+	}
+}
+
+func (values *sensitiveFixtureValues) addEnvironmentAssignment(assignment string) {
+	key, value, ok := strings.Cut(assignment, "=")
+	if ok && ar2FixtureSensitiveCommandKey(key) {
+		values.add(value)
+	}
 }
 
 func ar2FixtureDiagnosticSensitiveEnvironmentKey(key string) bool {
