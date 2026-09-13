@@ -15,11 +15,17 @@ import (
 var interventionTestTime = time.Date(2030, time.January, 2, 3, 4, 5, 0, time.UTC)
 
 func TestBeforeAgentStartFactsBoundsCanonicalOrderAndCopies(t *testing.T) {
+	keyword, facts := assertCanonicalBeforeAgentStartFacts(t)
+	assertBeforeAgentStartFactRejections(t, keyword)
+	assertBeforeAgentStartOccurrence(t, facts)
+}
+
+func assertCanonicalBeforeAgentStartFacts(t *testing.T) (TypedFact, BeforeAgentStartFacts) {
+	t.Helper()
 	keyword := mustTypedFact(t, FactKindKeyword, "advisor")
 	pathFact := mustTypedFact(t, FactKindPath, "internal/intervention/types.go")
 	tool := mustTypedFact(t, FactKindTool, "read")
 	input := []TypedFact{tool, pathFact, keyword}
-
 	facts, err := NewBeforeAgentStartFacts("  implement immutable HAP values  ", input)
 	if err != nil {
 		t.Fatalf("NewBeforeAgentStartFacts() error = %v", err)
@@ -31,21 +37,23 @@ func TestBeforeAgentStartFactsBoundsCanonicalOrderAndCopies(t *testing.T) {
 	if len(canonical) != 3 || canonical[0].Kind() != FactKindKeyword || canonical[1].Kind() != FactKindPath || canonical[2].Kind() != FactKindTool {
 		t.Fatalf("Facts() canonical order = %#v", canonical)
 	}
-
 	input[0].value = "mutated-input"
 	canonical[0].value = "mutated-output"
 	fresh := facts.Facts()
 	if fresh[0].Value() != "advisor" || fresh[2].Value() != "read" {
 		t.Fatalf("facts leaked caller slice mutation: %#v", fresh)
 	}
+	return keyword, facts
+}
 
+func assertBeforeAgentStartFactRejections(t *testing.T, keyword TypedFact) {
+	t.Helper()
 	if _, err := NewBeforeAgentStartFacts("query", []TypedFact{keyword, keyword}); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("duplicate facts error = %v, want ErrInvalidInput", err)
 	}
 	if _, err := NewBeforeAgentStartFacts("query\nwith-control", nil); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("control query error = %v, want ErrInvalidInput", err)
 	}
-
 	tooMany := make([]TypedFact, MaxTypedFacts+1)
 	for index := range tooMany {
 		tooMany[index] = mustTypedFact(t, FactKindKeyword, fmt.Sprintf("keyword-%02d", index))
@@ -53,7 +61,6 @@ func TestBeforeAgentStartFactsBoundsCanonicalOrderAndCopies(t *testing.T) {
 	if _, err := NewBeforeAgentStartFacts("query", tooMany); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("too many facts error = %v, want ErrInvalidInput", err)
 	}
-
 	overBudget := make([]TypedFact, 9)
 	for index := range overBudget {
 		overBudget[index] = mustTypedFact(t, FactKindKeyword, strings.Repeat("x", MaxTypedFactBytes-1)+string(rune('a'+index)))
@@ -61,7 +68,6 @@ func TestBeforeAgentStartFactsBoundsCanonicalOrderAndCopies(t *testing.T) {
 	if _, err := NewBeforeAgentStartFacts("query", overBudget); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("fact byte budget error = %v, want ErrInvalidInput", err)
 	}
-
 	if _, err := NewTypedFact(FactKindPath, "../outside"); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("parent path error = %v, want ErrInvalidInput", err)
 	}
@@ -71,7 +77,10 @@ func TestBeforeAgentStartFactsBoundsCanonicalOrderAndCopies(t *testing.T) {
 	if _, err := NewTypedFact(FactKindKeyword, strings.Repeat("x", MaxTypedFactBytes+1)); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("oversized fact error = %v, want ErrInvalidInput", err)
 	}
+}
 
+func assertBeforeAgentStartOccurrence(t *testing.T, facts BeforeAgentStartFacts) {
+	t.Helper()
 	occurrence, err := NewBeforeAgentStartOccurrence("session-1", "turn-1", facts)
 	if err != nil || occurrence.Semantic() != SemanticBeforeAgentStart {
 		t.Fatalf("NewBeforeAgentStartOccurrence() = (%#v, %v)", occurrence, err)
@@ -295,7 +304,15 @@ func TestFinalTaggedDecisionAndObservationValues(t *testing.T) {
 	knowledge := mustKnowledgeReference(t, 99, 7, CandidateTierExact, 42)
 	presentation := mustPresentation(t, "[untrusted reference]")
 	packet := mustPacket(t, receipt, interventionTestTime.Add(time.Hour), knowledge, presentation)
+	assertEmitDecision(t, receipt, packet)
+	assertAbstainDecisionValue(t, receipt)
+	assertDeliveryAmbiguousDecisionValue(t, receipt)
+	assertUnavailableDecisionValue(t)
+	assertObservationAckValues(t)
+}
 
+func assertEmitDecision(t *testing.T, receipt ReceiptIdentity, packet Packet) {
+	t.Helper()
 	emit, err := NewEmitDecision(receipt, packet)
 	if err != nil || !emit.Valid() || emit.Kind() != DecisionEmit {
 		t.Fatalf("NewEmitDecision() = (%#v, %v)", emit, err)
@@ -311,7 +328,10 @@ func TestFinalTaggedDecisionAndObservationValues(t *testing.T) {
 	if _, err := NewEmitDecision(otherReceipt, packet); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("mixed receipt packet error = %v, want ErrInvalidInput", err)
 	}
+}
 
+func assertAbstainDecisionValue(t *testing.T, receipt ReceiptIdentity) {
+	t.Helper()
 	abstain, err := NewAbstainDecision(receipt, AbstentionNoCandidates)
 	if err != nil || abstain.Kind() != DecisionAbstain {
 		t.Fatalf("NewAbstainDecision() = (%#v, %v)", abstain, err)
@@ -319,7 +339,10 @@ func TestFinalTaggedDecisionAndObservationValues(t *testing.T) {
 	if gotReceipt, reason, ok := abstain.Abstain(); !ok || gotReceipt != receipt || reason != AbstentionNoCandidates {
 		t.Fatalf("Abstain() = (%#v, %v, %t)", gotReceipt, reason, ok)
 	}
+}
 
+func assertDeliveryAmbiguousDecisionValue(t *testing.T, receipt ReceiptIdentity) {
+	t.Helper()
 	ambiguous, err := NewDeliveryAmbiguousDecision(receipt)
 	if err != nil || ambiguous.Kind() != DecisionDeliveryAmbiguous {
 		t.Fatalf("NewDeliveryAmbiguousDecision() = (%#v, %v)", ambiguous, err)
@@ -327,7 +350,10 @@ func TestFinalTaggedDecisionAndObservationValues(t *testing.T) {
 	if gotReceipt, ok := ambiguous.DeliveryAmbiguous(); !ok || gotReceipt != receipt {
 		t.Fatalf("DeliveryAmbiguous() = (%#v, %t)", gotReceipt, ok)
 	}
+}
 
+func assertUnavailableDecisionValue(t *testing.T) {
+	t.Helper()
 	unavailable, err := NewUnavailableDecision("correlation-1", interventionTestTime.Add(time.Minute), UnavailableDependency)
 	if err != nil || unavailable.Kind() != DecisionUnavailable {
 		t.Fatalf("NewUnavailableDecision() = (%#v, %v)", unavailable, err)
@@ -335,7 +361,10 @@ func TestFinalTaggedDecisionAndObservationValues(t *testing.T) {
 	if value, ok := unavailable.Unavailable(); !ok || value.Code() != UnavailableDependency || value.CorrelationID() != "correlation-1" {
 		t.Fatalf("Unavailable() = (%#v, %t)", value, ok)
 	}
+}
 
+func assertObservationAckValues(t *testing.T) {
+	t.Helper()
 	accepted, err := NewAcceptedObservationAck("observation-1", ObservationReasonAcceptedAttestation)
 	if err != nil || !accepted.Valid() || accepted.State() != ObservationAccepted {
 		t.Fatalf("NewAcceptedObservationAck() = (%#v, %v)", accepted, err)
@@ -354,9 +383,9 @@ func TestFinalTaggedDecisionAndObservationValues(t *testing.T) {
 	if _, ok := rejected.ObservationID(); ok {
 		t.Fatal("rejected acknowledgement exposed an impossible observation ID")
 	}
-	unavailableAck, err := NewUnavailableObservationAck(ObservationReasonDependencyUnavailable)
-	if err != nil || !unavailableAck.Valid() || unavailableAck.State() != ObservationUnavailable {
-		t.Fatalf("NewUnavailableObservationAck() = (%#v, %v)", unavailableAck, err)
+	unavailable, err := NewUnavailableObservationAck(ObservationReasonDependencyUnavailable)
+	if err != nil || !unavailable.Valid() || unavailable.State() != ObservationUnavailable {
+		t.Fatalf("NewUnavailableObservationAck() = (%#v, %v)", unavailable, err)
 	}
 	if _, err := NewUnavailableObservationAck(ObservationReasonDuplicate); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("invalid unavailable reason error = %v, want ErrInvalidInput", err)
