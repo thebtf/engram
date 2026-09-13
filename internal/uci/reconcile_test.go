@@ -712,45 +712,37 @@ func TestUCIReplayAfterCrashAndLostACKIsDurableAndIdempotent(t *testing.T) {
 		}
 	})
 
-	t.Run("same caller key with changed payload is not an exact replay", func(t *testing.T) {
-		fixture := newReconcileTestFixture(t)
-		firstArtifact := fixture.artifact(621, "symbol:first-payload", "FirstPayload")
-		changedArtifact := fixture.artifact(622, "symbol:changed-payload", "ChangedPayload")
+	t.Run("same caller key with changed payload is not an exact replay", reconcileTestRejectsChangedReplay)
+}
 
-		firstRequest := fixture.request(
-			"reused-caller-key",
-			fixture.scopeA,
-			nil,
-			fixture.completeScan(10, reconcileTestSnapshotFile("value.go", firstArtifact)),
-			reconcileTestPart(
-				[]reconcileTestArtifact{firstArtifact},
-				[]IndexMembership{reconcileTestMembership("value.go", firstArtifact)},
-				[]IndexEdgeReplacement{{SourcePath: "value.go"}},
-			),
-		)
-		published := fixture.mustReconcile(t, firstRequest)
-		viewCount := fixture.store.viewCount(fixture.scopeA.CheckoutID)
-
-		changedRequest := fixture.request(
-			"reused-caller-key",
-			fixture.scopeA,
-			nil,
-			fixture.completeScan(11, reconcileTestSnapshotFile("value.go", changedArtifact)),
-			reconcileTestPart(
-				[]reconcileTestArtifact{changedArtifact},
-				[]IndexMembership{reconcileTestMembership("value.go", changedArtifact)},
-				[]IndexEdgeReplacement{{SourcePath: "value.go"}},
-			),
-		)
-		if _, err := fixture.reconcile(changedRequest); err == nil {
-			t.Fatal("changed payload under one caller key replayed the prior durable result")
-		}
-		fixture.requireCurrent(t, fixture.scopeA.CheckoutID, published.View.Context)
-		fixture.requirePath(t, published.View.Context, "value.go", firstArtifact)
-		if got := fixture.store.viewCount(fixture.scopeA.CheckoutID); got != viewCount {
-			t.Fatalf("changed replay created %d Views, want %d", got, viewCount)
-		}
-	})
+func reconcileTestRejectsChangedReplay(t *testing.T) {
+	fixture := newReconcileTestFixture(t)
+	firstArtifact := fixture.artifact(621, "symbol:first-payload", "FirstPayload")
+	changedArtifact := fixture.artifact(622, "symbol:changed-payload", "ChangedPayload")
+	firstRequest := fixture.request(
+		"reused-caller-key",
+		fixture.scopeA,
+		nil,
+		fixture.completeScan(10, reconcileTestSnapshotFile("value.go", firstArtifact)),
+		reconcileTestPart([]reconcileTestArtifact{firstArtifact}, []IndexMembership{reconcileTestMembership("value.go", firstArtifact)}, []IndexEdgeReplacement{{SourcePath: "value.go"}}),
+	)
+	published := fixture.mustReconcile(t, firstRequest)
+	viewCount := fixture.store.viewCount(fixture.scopeA.CheckoutID)
+	changedRequest := fixture.request(
+		"reused-caller-key",
+		fixture.scopeA,
+		nil,
+		fixture.completeScan(11, reconcileTestSnapshotFile("value.go", changedArtifact)),
+		reconcileTestPart([]reconcileTestArtifact{changedArtifact}, []IndexMembership{reconcileTestMembership("value.go", changedArtifact)}, []IndexEdgeReplacement{{SourcePath: "value.go"}}),
+	)
+	if _, err := fixture.reconcile(changedRequest); err == nil {
+		t.Fatal("changed payload under one caller key replayed the prior durable result")
+	}
+	fixture.requireCurrent(t, fixture.scopeA.CheckoutID, published.View.Context)
+	fixture.requirePath(t, published.View.Context, "value.go", firstArtifact)
+	if got := fixture.store.viewCount(fixture.scopeA.CheckoutID); got != viewCount {
+		t.Fatalf("changed replay created %d Views, want %d", got, viewCount)
+	}
 }
 
 type reconcileTestFixture struct {
@@ -1487,35 +1479,46 @@ func (store *reconcileTestStore) buildByRefLocked(ref IndexBuildRef) (*reconcile
 }
 
 func (store *reconcileTestStore) buildViewLocked(build *reconcileTestBuild, manifest IndexManifestCompletion) (reconcileTestView, error) {
-	parts, acknowledgements, err := reconcileTestStagedParts(build)
+	parts, memberships, replacements, err := reconcileTestValidatedPublication(build, manifest)
 	if err != nil {
 		return reconcileTestView{}, err
 	}
-	partsDigest, err := DigestIndexParts(acknowledgements)
+	view, candidatesByPath, err := store.reconcileTestViewWithCandidates(build, manifest, parts, memberships)
 	if err != nil {
 		return reconcileTestView{}, err
+	}
+	if err := reconcileTestApplyViewEdges(&view, candidatesByPath, replacements); err != nil {
+		return reconcileTestView{}, err
+	}
+	return view, nil
+}
+
+func reconcileTestValidatedPublication(build *reconcileTestBuild, manifest IndexManifestCompletion) ([]IndexPart, []IndexMembership, []IndexEdgeReplacement, error) {
+	parts, acknowledgements, err := reconcileTestStagedParts(build)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	partsDigest, err := DigestIndexParts(acknowledgements)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	memberships, replacements := reconcileTestPublicationValues(parts)
 	manifestDigest, err := DigestIndexManifest(memberships)
 	if err != nil {
-		return reconcileTestView{}, err
+		return nil, nil, nil, err
 	}
 	edgesDigest, err := DigestIndexEdges(replacements)
 	if err != nil {
-		return reconcileTestView{}, err
+		return nil, nil, nil, err
 	}
-	if manifest.ScanOutcome != IndexScanComplete || !manifest.CensusComplete ||
-		manifest.PartCount != uint32(len(parts)) || manifest.PartsDigest != partsDigest ||
-		manifest.EntryCount != uint64(len(memberships)) || manifest.ManifestDigest != manifestDigest ||
-		manifest.EdgeCount != reconcileTestEdgeCount(replacements) || manifest.EdgesDigest != edgesDigest {
-		return reconcileTestView{}, errReconcileTestRejected
+	if manifest.ScanOutcome != IndexScanComplete || !manifest.CensusComplete || manifest.PartCount != uint32(len(parts)) || manifest.PartsDigest != partsDigest || manifest.EntryCount != uint64(len(memberships)) || manifest.ManifestDigest != manifestDigest || manifest.EdgeCount != reconcileTestEdgeCount(replacements) || manifest.EdgesDigest != edgesDigest {
+		return nil, nil, nil, errReconcileTestRejected
 	}
+	return parts, memberships, replacements, nil
+}
 
-	current, hasCurrent := store.current[build.ref.Scope.CheckoutID]
-	generation := int64(1)
-	if hasCurrent {
-		generation = current.published.Context.Generation + 1
-	}
+func (store *reconcileTestStore) reconcileTestViewWithCandidates(build *reconcileTestBuild, manifest IndexManifestCompletion, parts []IndexPart, memberships []IndexMembership) (reconcileTestView, map[string]QueryCandidate, error) {
+	generation := store.reconcileTestGeneration(build.ref.Scope.CheckoutID)
 	contextRef := ContextRef{
 		SourceID:          build.ref.Scope.SourceID,
 		CheckoutID:        build.ref.Scope.CheckoutID,
@@ -1524,36 +1527,45 @@ func (store *reconcileTestStore) buildViewLocked(build *reconcileTestBuild, mani
 		Generation:        generation,
 	}
 	view := reconcileTestView{
-		published: IndexPublishedView{
-			BuildID:        build.ref.BuildID,
-			Context:        contextRef,
-			ManifestDigest: manifest.ManifestDigest,
-			AcceptedFSSeq:  manifest.Observation.ObservedFSSeq,
-			PublishedAt:    time.Unix(generation, 0).UTC(),
-		},
+		published:   IndexPublishedView{BuildID: build.ref.BuildID, Context: contextRef, ManifestDigest: manifest.ManifestDigest, AcceptedFSSeq: manifest.Observation.ObservedFSSeq, PublishedAt: time.Unix(generation, 0).UTC()},
 		memberships: make(map[string]IndexMembership),
 		coverage:    manifest.Coverage.Structural,
 	}
 	if view.coverage == "" {
 		view.coverage = IndexCoverageComplete
 	}
-	candidatesByPath := make(map[string]QueryCandidate)
+	candidatesByPath, err := store.reconcileTestAddCandidates(&view, parts, memberships)
+	if err != nil {
+		return reconcileTestView{}, nil, err
+	}
+	return view, candidatesByPath, nil
+}
+
+func (store *reconcileTestStore) reconcileTestGeneration(checkoutID string) int64 {
+	if current, hasCurrent := store.current[checkoutID]; hasCurrent {
+		return current.published.Context.Generation + 1
+	}
+	return 1
+}
+
+func (store *reconcileTestStore) reconcileTestAddCandidates(view *reconcileTestView, parts []IndexPart, memberships []IndexMembership) (map[string]QueryCandidate, error) {
 	stagedArtifacts := reconcileTestStagedArtifactIDs(parts)
+	candidatesByPath := make(map[string]QueryCandidate)
 	for _, membership := range memberships {
 		if membership.State != IndexFilePresent {
 			continue
 		}
 		if membership.ArtifactID == nil {
-			return reconcileTestView{}, errReconcileTestRejected
+			return nil, errReconcileTestRejected
 		}
 		if _, found := stagedArtifacts[*membership.ArtifactID]; !found {
-			return reconcileTestView{}, errReconcileTestRejected
+			return nil, errReconcileTestRejected
 		}
 		artifact, found := store.artifacts[*membership.ArtifactID]
 		if !found {
-			return reconcileTestView{}, errReconcileTestRejected
+			return nil, errReconcileTestRejected
 		}
-		candidate := artifact.candidate(contextRef, membership.DisplayPath)
+		candidate := artifact.candidate(view.published.Context, membership.DisplayPath)
 		view.memberships[membership.PathKey] = membership
 		view.candidates = append(view.candidates, candidate)
 		candidatesByPath[membership.PathKey] = candidate
@@ -1561,53 +1573,53 @@ func (store *reconcileTestStore) buildViewLocked(build *reconcileTestBuild, mani
 	sort.Slice(view.candidates, func(left, right int) bool {
 		return view.candidates[left].RelativePath < view.candidates[right].RelativePath
 	})
+	return candidatesByPath, nil
+}
 
+func reconcileTestApplyViewEdges(view *reconcileTestView, candidatesByPath map[string]QueryCandidate, replacements []IndexEdgeReplacement) error {
 	replacementByPath := make(map[string]IndexEdgeReplacement, len(replacements))
 	for _, replacement := range replacements {
 		if _, duplicate := replacementByPath[replacement.SourcePath]; duplicate {
-			return reconcileTestView{}, errReconcileTestRejected
+			return errReconcileTestRejected
 		}
 		replacementByPath[replacement.SourcePath] = replacement
 	}
 	for path := range candidatesByPath {
 		if _, found := replacementByPath[path]; !found {
-			return reconcileTestView{}, errReconcileTestRejected
+			return errReconcileTestRejected
 		}
 	}
 	for sourcePath, replacement := range replacementByPath {
-		source, found := candidatesByPath[sourcePath]
-		if !found {
-			if len(replacement.Edges) == 0 {
-				continue
-			}
-			return reconcileTestView{}, errReconcileTestRejected
-		}
-		for _, edge := range replacement.Edges {
-			if err := validateIndexEdge(edge); err != nil || edge.SourceArtifactID != source.Proof.ArtifactID {
-				return reconcileTestView{}, errReconcileTestRejected
-			}
-			if edge.ResolutionState == IndexResolutionState("resolved") {
-				target, found := candidatesByPath[edge.Target.PathKey]
-				if !found || target.Proof.ArtifactID != edge.Target.ArtifactID {
-					return reconcileTestView{}, errReconcileTestRejected
-				}
-				view.edges = append(view.edges, QueryGraphEdge{
-					From:         reconcileTestEntityRef(source),
-					To:           reconcileTestEntityRef(target),
-					Relation:     edge.Relation,
-					EvidenceKind: reconcileTestEvidenceKind(edge.EvidenceKind),
-					EvidenceRefs: []QueryEntityRef{reconcileTestEntityRef(source)},
-				})
-				continue
-			}
-			view.unresolved = append(view.unresolved, GraphUnresolvedSite{
-				From:         reconcileTestEntityRef(source),
-				Relation:     edge.Relation,
-				EvidenceRefs: []QueryEntityRef{reconcileTestEntityRef(source)},
-			})
+		if err := reconcileTestApplyReplacement(view, candidatesByPath, sourcePath, replacement); err != nil {
+			return err
 		}
 	}
-	return view, nil
+	return nil
+}
+
+func reconcileTestApplyReplacement(view *reconcileTestView, candidatesByPath map[string]QueryCandidate, sourcePath string, replacement IndexEdgeReplacement) error {
+	source, found := candidatesByPath[sourcePath]
+	if !found {
+		if len(replacement.Edges) == 0 {
+			return nil
+		}
+		return errReconcileTestRejected
+	}
+	for _, edge := range replacement.Edges {
+		if err := validateIndexEdge(edge); err != nil || edge.SourceArtifactID != source.Proof.ArtifactID {
+			return errReconcileTestRejected
+		}
+		if edge.ResolutionState == IndexResolutionState("resolved") {
+			target, found := candidatesByPath[edge.Target.PathKey]
+			if !found || target.Proof.ArtifactID != edge.Target.ArtifactID {
+				return errReconcileTestRejected
+			}
+			view.edges = append(view.edges, QueryGraphEdge{From: reconcileTestEntityRef(source), To: reconcileTestEntityRef(target), Relation: edge.Relation, EvidenceKind: reconcileTestEvidenceKind(edge.EvidenceKind), EvidenceRefs: []QueryEntityRef{reconcileTestEntityRef(source)}})
+			continue
+		}
+		view.unresolved = append(view.unresolved, GraphUnresolvedSite{From: reconcileTestEntityRef(source), Relation: edge.Relation, EvidenceRefs: []QueryEntityRef{reconcileTestEntityRef(source)}})
+	}
+	return nil
 }
 
 func (store *reconcileTestStore) currentHas(checkoutID string) bool {

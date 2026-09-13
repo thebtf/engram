@@ -206,67 +206,52 @@ func TestUCISemanticEmbeddingInputUsesChunkScopedV2Identity(t *testing.T) {
 func TestUCISemanticProviderFailuresRemainLexicalAndVisible(t *testing.T) {
 	fixture := newSemanticTestFixture()
 	profile := semanticTestProfile("uci-semantic-test-model")
-
 	for _, tc := range []struct {
 		name     string
 		provider SemanticEmbedder
 		reason   string
 	}{
-		{
-			name:     "provider absent",
-			provider: nil,
-			reason:   "vector_provider_unavailable",
-		},
-		{
-			name: "provider quota exhausted",
-			provider: &semanticTestEmbedder{
-				model: profile.Model,
-				err:   semanticTestStatusError{code: 429},
-			},
-			reason: "vector_provider_quota",
-		},
-		{
-			name: "provider deadline exceeded",
-			provider: &semanticTestEmbedder{
-				model: profile.Model,
-				err:   context.DeadlineExceeded,
-			},
-			reason: "vector_provider_timeout",
-		},
+		{name: "provider absent", provider: nil, reason: "vector_provider_unavailable"},
+		{name: "provider quota exhausted", provider: &semanticTestEmbedder{model: profile.Model, err: semanticTestStatusError{code: 429}}, reason: "vector_provider_quota"},
+		{name: "provider deadline exceeded", provider: &semanticTestEmbedder{model: profile.Model, err: context.DeadlineExceeded}, reason: "vector_provider_timeout"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			lexical := &semanticTestLexicalStore{candidates: []QueryCandidate{fixture.lexical}}
-			store := newSemanticMemoryStore()
-			service := NewSemanticService(profile, tc.provider, store, lexical)
-
-			result, err := service.Query(context.Background(), newAuthorizedContext(fixture.contextA), semanticTestQuerySpec("fallback-token"))
-			if err != nil {
-				t.Fatalf("Query() error = %v, want lexical-only degraded response", err)
-			}
-			semanticAssertResponseBoundTo(t, result.Response, fixture.contextA)
-			if result.Response.Retrieval == nil {
-				t.Fatal("degraded response retrieval = nil")
-			}
-			if got := result.Response.Retrieval.Mode; got != QueryRetrievalLexical {
-				t.Fatalf("degraded response retrieval mode = %q, want lexical", got)
-			}
-			if !semanticTestContains(result.Response.Retrieval.DegradationReasons, tc.reason) {
-				t.Fatalf("degradation reasons = %#v, want %q", result.Response.Retrieval.DegradationReasons, tc.reason)
-			}
-			items := semanticResponseItems(t, result)
-			if len(items) != 1 {
-				t.Fatalf("lexical fallback item count = %d, want 1", len(items))
-			}
-			if got, want := items[0].Ref.EntityKey, fixture.lexical.EntityKey; got != want {
-				t.Fatalf("lexical fallback entity key = %q, want %q", got, want)
-			}
-			if got, want := items[0].MatchSources, []QueryMatchSource{QueryMatchFTS}; !reflect.DeepEqual(got, want) {
-				t.Fatalf("lexical fallback match sources = %#v, want %#v", got, want)
-			}
-			if got := store.SelectCallCount(); got != 0 {
-				t.Fatalf("semantic store calls = %d, want 0 after provider degradation", got)
-			}
+			semanticRequireProviderFailureFallback(t, fixture, profile, tc.provider, tc.reason)
 		})
+	}
+}
+
+func semanticRequireProviderFailureFallback(t *testing.T, fixture semanticTestFixture, profile VectorProfile, provider SemanticEmbedder, reason string) {
+	t.Helper()
+	lexical := &semanticTestLexicalStore{candidates: []QueryCandidate{fixture.lexical}}
+	store := newSemanticMemoryStore()
+	service := NewSemanticService(profile, provider, store, lexical)
+	result, err := service.Query(context.Background(), newAuthorizedContext(fixture.contextA), semanticTestQuerySpec("fallback-token"))
+	if err != nil {
+		t.Fatalf("Query() error = %v, want lexical-only degraded response", err)
+	}
+	semanticAssertResponseBoundTo(t, result.Response, fixture.contextA)
+	if result.Response.Retrieval == nil {
+		t.Fatal("degraded response retrieval = nil")
+	}
+	if got := result.Response.Retrieval.Mode; got != QueryRetrievalLexical {
+		t.Fatalf("degraded response retrieval mode = %q, want lexical", got)
+	}
+	if !semanticTestContains(result.Response.Retrieval.DegradationReasons, reason) {
+		t.Fatalf("degradation reasons = %#v, want %q", result.Response.Retrieval.DegradationReasons, reason)
+	}
+	items := semanticResponseItems(t, result)
+	if len(items) != 1 {
+		t.Fatalf("lexical fallback item count = %d, want 1", len(items))
+	}
+	if got, want := items[0].Ref.EntityKey, fixture.lexical.EntityKey; got != want {
+		t.Fatalf("lexical fallback entity key = %q, want %q", got, want)
+	}
+	if got, want := items[0].MatchSources, []QueryMatchSource{QueryMatchFTS}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("lexical fallback match sources = %#v, want %#v", got, want)
+	}
+	if got := store.SelectCallCount(); got != 0 {
+		t.Fatalf("semantic store calls = %d, want 0 after provider degradation", got)
 	}
 }
 
@@ -301,151 +286,169 @@ func TestUCISemanticQueryProviderTimeoutLeavesParentAliveForLexicalFallback(t *t
 
 func TestUCISemanticRealProviderConceptualHitMatchesScopedPostgresBaseline(t *testing.T) {
 	t.Run("real configured provider produces a non-lexical conceptual result", func(t *testing.T) {
-		real := newSemanticRealProviderFixture(t)
-		fixture := newSemanticTestFixture()
-		profile := real.profile
-		if overlap := semanticLexicalOverlap(semanticConceptualQuery, fixture.current.Text); len(overlap) != 0 {
-			t.Fatalf("conceptual fixture has lexical overlap %v; it cannot prove semantic retrieval", overlap)
-		}
-
-		wrongProvider := profile
-		wrongProvider.ProviderRef = profile.ProviderRef + "-wrong"
-		wrongModel := profile
-		wrongModel.Model = profile.Model + "-wrong"
-		wrongPreprocessing := profile
-		wrongPreprocessing.PreprocessingRevision = profile.PreprocessingRevision + "-wrong"
-
-		stale := fixture.current
-		stale.EntityKey = "symbol:advisory-lock-retired"
-		stale.Text = "A transaction lock used an obsolete byte sequence."
-		stale.Span.ByteEnd = int64(len(stale.Text))
-		stale.Proof.ArtifactID = semanticTestArtifactID("retired")
-		stale.Proof.ContentDigest = semanticTestDigest(stale.Text)
-		stale.Proof.FactsDigest = semanticTestDigest("facts:" + stale.Text)
-
-		foreign := fixture.current
-		foreign.EntityKey = "symbol:advisory-lock-foreign-view"
-		foreign.Context = fixture.contextB
-		foreign.Proof.ArtifactID = semanticTestArtifactID("foreign")
-		foreign.Proof.FactsDigest = semanticTestDigest("facts:foreign")
-
-		wrongProfileCandidate := fixture.current
-		wrongProfileCandidate.EntityKey = "symbol:advisory-lock-wrong-provider"
-		wrongProfileCandidate.Proof.ArtifactID = semanticTestArtifactID("wrong-provider")
-		wrongProfileCandidate.Proof.FactsDigest = semanticTestDigest("facts:wrong-provider")
-
-		wrongModelCandidate := fixture.current
-		wrongModelCandidate.EntityKey = "symbol:advisory-lock-wrong-model"
-		wrongModelCandidate.Proof.ArtifactID = semanticTestArtifactID("wrong-model")
-		wrongModelCandidate.Proof.FactsDigest = semanticTestDigest("facts:wrong-model")
-
-		wrongPreprocessingCandidate := fixture.current
-		wrongPreprocessingCandidate.EntityKey = "symbol:advisory-lock-wrong-preprocessing"
-		wrongPreprocessingCandidate.Proof.ArtifactID = semanticTestArtifactID("wrong-preprocessing")
-		wrongPreprocessingCandidate.Proof.FactsDigest = semanticTestDigest("facts:wrong-preprocessing")
-
-		seeds := []semanticTestSeed{
-			{candidate: fixture.current, profile: profile, currentDigest: fixture.current.Proof.ContentDigest},
-			{candidate: fixture.distractorA, profile: profile, currentDigest: fixture.distractorA.Proof.ContentDigest},
-			{candidate: fixture.distractorB, profile: profile, currentDigest: fixture.distractorB.Proof.ContentDigest},
-			{candidate: stale, profile: profile, currentDigest: fixture.current.Proof.ContentDigest},
-			{candidate: foreign, profile: profile, currentDigest: foreign.Proof.ContentDigest},
-			{candidate: wrongProfileCandidate, profile: wrongProvider, currentDigest: wrongProfileCandidate.Proof.ContentDigest},
-			{candidate: wrongModelCandidate, profile: wrongModel, currentDigest: wrongModelCandidate.Proof.ContentDigest},
-			{candidate: wrongPreprocessingCandidate, profile: wrongPreprocessing, currentDigest: wrongPreprocessingCandidate.Proof.ContentDigest},
-		}
-
-		seedInputs := make([]string, len(seeds))
-		for index, seed := range seeds {
-			input, _, err := SemanticEmbeddingInput(seed.profile, seed.candidate)
-			if err != nil {
-				t.Fatalf("build canonical semantic input for seed %q: %v", seed.candidate.EntityKey, err)
-			}
-			seedInputs[index] = input
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		seedVectors, err := real.provider.Embed(ctx, seedInputs)
-		if err != nil {
-			t.Fatalf("real provider Embed(seed corpus) error = %v", err)
-		}
-		if len(seedVectors) != len(seeds) {
-			t.Fatalf("real provider seed vector count = %d, want %d", len(seedVectors), len(seeds))
-		}
-		for index, seed := range seeds {
-			semanticRequireRealVector(t, seedVectors[index], profile.Dimension, "seed "+seed.candidate.EntityKey)
-			if err := real.store.Insert(seed.candidate, seed.profile, seedVectors[index], seed.currentDigest); err != nil {
-				t.Fatalf("insert real provider vector for %q: %v", seed.candidate.EntityKey, err)
-			}
-		}
-
-		service := NewSemanticService(profile, real.provider, real.store, &semanticTestLexicalStore{})
-		spec := semanticTestQuerySpec(semanticConceptualQuery)
-		result, err := service.Query(ctx, newAuthorizedContext(fixture.contextA), spec)
-		if err != nil {
-			t.Fatalf("Query() with real provider error = %v", err)
-		}
-		if result.Response.Retrieval == nil {
-			t.Fatal("real semantic response retrieval = nil")
-		}
-		if got := result.Response.Retrieval.Mode; got != QueryRetrievalHybrid {
-			t.Fatalf("real semantic retrieval mode = %q, want hybrid", got)
-		}
-		if result.Response.Retrieval.VectorCoverage == nil || *result.Response.Retrieval.VectorCoverage <= 0 {
-			t.Fatalf("real semantic vector coverage = %#v, want a positive scoped value", result.Response.Retrieval.VectorCoverage)
-		}
-		semanticAssertResponseBoundTo(t, result.Response, fixture.contextA)
-
-		call, ok := real.store.LastSelectCall()
-		if !ok {
-			t.Fatal("semantic store received no vector selection call")
-		}
-		if got := real.provider.LastInput(); len(got) != 1 || !strings.Contains(strings.ToLower(got[0]), strings.ToLower(semanticConceptualQuery)) {
-			t.Fatalf("real provider query input = %#v, want one input containing conceptual query %q", got, semanticConceptualQuery)
-		}
-		if got := call.Context; !semanticContextRefsEqual(got, fixture.contextA) {
-			t.Fatalf("semantic store context = %#v, want %#v", got, fixture.contextA)
-		}
-		if !semanticProfilesEqual(call.Profile, profile) {
-			t.Fatalf("semantic store profile = %#v, want %#v", call.Profile, profile)
-		}
-		semanticRequireRealVector(t, call.Vector, profile.Dimension, "provider-generated query")
-
-		baseline, err := real.store.ExactBaseline(ctx, newAuthorizedContext(fixture.contextA), profile, call.Vector, spec)
-		if err != nil {
-			t.Fatalf("exact PostgreSQL scoped distance baseline error = %v", err)
-		}
-		if len(baseline) != 3 {
-			t.Fatalf("exact PostgreSQL scoped baseline count = %d, want only three current compatible candidates", len(baseline))
-		}
-		if got, want := baseline[0].Candidate.EntityKey, fixture.current.EntityKey; got != want {
-			t.Fatalf("exact PostgreSQL conceptual top hit = %q, want %q", got, want)
-		}
-		for _, forbidden := range []string{
-			stale.EntityKey,
-			foreign.EntityKey,
-			wrongProfileCandidate.EntityKey,
-			wrongModelCandidate.EntityKey,
-			wrongPreprocessingCandidate.EntityKey,
-		} {
-			if semanticBaselineContains(baseline, forbidden) {
-				t.Fatalf("exact PostgreSQL baseline leaked incompatible candidate %q", forbidden)
-			}
-		}
-
-		items := semanticResponseItems(t, result)
-		if len(items) != len(baseline) {
-			t.Fatalf("semantic response item count = %d, want exact baseline count %d", len(items), len(baseline))
-		}
-		for index, hit := range baseline {
-			if got, want := items[index].Ref.EntityKey, hit.Candidate.EntityKey; got != want {
-				t.Fatalf("semantic response item %d entity key = %q, want exact PostgreSQL baseline %q", index, got, want)
-			}
-			if got, want := items[index].MatchSources, []QueryMatchSource{QueryMatchVector}; !reflect.DeepEqual(got, want) {
-				t.Fatalf("semantic response item %d match sources = %#v, want vector provenance %#v", index, got, want)
-			}
-		}
+		semanticRequireRealProviderConceptualHit(t)
 	})
+}
+
+func semanticRequireRealProviderConceptualHit(t *testing.T) {
+	t.Helper()
+	real := newSemanticRealProviderFixture(t)
+	fixture := newSemanticTestFixture()
+	semanticRequireConceptualFixture(t, fixture)
+	seeds, excluded := semanticRealProviderSeeds(fixture, real.profile)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	semanticEmbedRealProviderSeeds(t, ctx, real, seeds)
+	result, call, spec := semanticRequireRealProviderQuery(t, ctx, real, fixture)
+	baseline := semanticRequireRealProviderBaseline(t, ctx, real, fixture, call, spec, excluded)
+	semanticRequireRealProviderResponse(t, result, baseline)
+}
+
+func semanticRequireConceptualFixture(t *testing.T, fixture semanticTestFixture) {
+	t.Helper()
+	if overlap := semanticLexicalOverlap(semanticConceptualQuery, fixture.current.Text); len(overlap) != 0 {
+		t.Fatalf("conceptual fixture has lexical overlap %v; it cannot prove semantic retrieval", overlap)
+	}
+}
+
+func semanticRealProviderSeeds(fixture semanticTestFixture, profile VectorProfile) ([]semanticTestSeed, []string) {
+	wrongProvider := profile
+	wrongProvider.ProviderRef = profile.ProviderRef + "-wrong"
+	wrongModel := profile
+	wrongModel.Model = profile.Model + "-wrong"
+	wrongPreprocessing := profile
+	wrongPreprocessing.PreprocessingRevision = profile.PreprocessingRevision + "-wrong"
+	stale := fixture.current
+	stale.EntityKey = "symbol:advisory-lock-retired"
+	stale.Text = "A transaction lock used an obsolete byte sequence."
+	stale.Span.ByteEnd = int64(len(stale.Text))
+	stale.Proof.ArtifactID = semanticTestArtifactID("retired")
+	stale.Proof.ContentDigest = semanticTestDigest(stale.Text)
+	stale.Proof.FactsDigest = semanticTestDigest("facts:" + stale.Text)
+	foreign := fixture.current
+	foreign.EntityKey = "symbol:advisory-lock-foreign-view"
+	foreign.Context = fixture.contextB
+	foreign.Proof.ArtifactID = semanticTestArtifactID("foreign")
+	foreign.Proof.FactsDigest = semanticTestDigest("facts:foreign")
+	wrongProfileCandidate := fixture.current
+	wrongProfileCandidate.EntityKey = "symbol:advisory-lock-wrong-provider"
+	wrongProfileCandidate.Proof.ArtifactID = semanticTestArtifactID("wrong-provider")
+	wrongProfileCandidate.Proof.FactsDigest = semanticTestDigest("facts:wrong-provider")
+	wrongModelCandidate := fixture.current
+	wrongModelCandidate.EntityKey = "symbol:advisory-lock-wrong-model"
+	wrongModelCandidate.Proof.ArtifactID = semanticTestArtifactID("wrong-model")
+	wrongModelCandidate.Proof.FactsDigest = semanticTestDigest("facts:wrong-model")
+	wrongPreprocessingCandidate := fixture.current
+	wrongPreprocessingCandidate.EntityKey = "symbol:advisory-lock-wrong-preprocessing"
+	wrongPreprocessingCandidate.Proof.ArtifactID = semanticTestArtifactID("wrong-preprocessing")
+	wrongPreprocessingCandidate.Proof.FactsDigest = semanticTestDigest("facts:wrong-preprocessing")
+	seeds := []semanticTestSeed{
+		{candidate: fixture.current, profile: profile, currentDigest: fixture.current.Proof.ContentDigest},
+		{candidate: fixture.distractorA, profile: profile, currentDigest: fixture.distractorA.Proof.ContentDigest},
+		{candidate: fixture.distractorB, profile: profile, currentDigest: fixture.distractorB.Proof.ContentDigest},
+		{candidate: stale, profile: profile, currentDigest: fixture.current.Proof.ContentDigest},
+		{candidate: foreign, profile: profile, currentDigest: foreign.Proof.ContentDigest},
+		{candidate: wrongProfileCandidate, profile: wrongProvider, currentDigest: wrongProfileCandidate.Proof.ContentDigest},
+		{candidate: wrongModelCandidate, profile: wrongModel, currentDigest: wrongModelCandidate.Proof.ContentDigest},
+		{candidate: wrongPreprocessingCandidate, profile: wrongPreprocessing, currentDigest: wrongPreprocessingCandidate.Proof.ContentDigest},
+	}
+	return seeds, []string{stale.EntityKey, foreign.EntityKey, wrongProfileCandidate.EntityKey, wrongModelCandidate.EntityKey, wrongPreprocessingCandidate.EntityKey}
+}
+
+func semanticEmbedRealProviderSeeds(t *testing.T, ctx context.Context, real semanticRealProviderFixture, seeds []semanticTestSeed) {
+	t.Helper()
+	inputs := make([]string, len(seeds))
+	for index, seed := range seeds {
+		input, _, err := SemanticEmbeddingInput(seed.profile, seed.candidate)
+		if err != nil {
+			t.Fatalf("build canonical semantic input for seed %q: %v", seed.candidate.EntityKey, err)
+		}
+		inputs[index] = input
+	}
+	vectors, err := real.provider.Embed(ctx, inputs)
+	if err != nil {
+		t.Fatalf("real provider Embed(seed corpus) error = %v", err)
+	}
+	if len(vectors) != len(seeds) {
+		t.Fatalf("real provider seed vector count = %d, want %d", len(vectors), len(seeds))
+	}
+	for index, seed := range seeds {
+		semanticRequireRealVector(t, vectors[index], real.profile.Dimension, "seed "+seed.candidate.EntityKey)
+		if err := real.store.Insert(seed.candidate, seed.profile, vectors[index], seed.currentDigest); err != nil {
+			t.Fatalf("insert real provider vector for %q: %v", seed.candidate.EntityKey, err)
+		}
+	}
+}
+
+func semanticRequireRealProviderQuery(t *testing.T, ctx context.Context, real semanticRealProviderFixture, fixture semanticTestFixture) (QueryResult, semanticPostgresSelectCall, QuerySpec) {
+	t.Helper()
+	spec := semanticTestQuerySpec(semanticConceptualQuery)
+	service := NewSemanticService(real.profile, real.provider, real.store, &semanticTestLexicalStore{})
+	result, err := service.Query(ctx, newAuthorizedContext(fixture.contextA), spec)
+	if err != nil {
+		t.Fatalf("Query() with real provider error = %v", err)
+	}
+	if result.Response.Retrieval == nil {
+		t.Fatal("real semantic response retrieval = nil")
+	}
+	if got := result.Response.Retrieval.Mode; got != QueryRetrievalHybrid {
+		t.Fatalf("real semantic retrieval mode = %q, want hybrid", got)
+	}
+	if result.Response.Retrieval.VectorCoverage == nil || *result.Response.Retrieval.VectorCoverage <= 0 {
+		t.Fatalf("real semantic vector coverage = %#v, want a positive scoped value", result.Response.Retrieval.VectorCoverage)
+	}
+	semanticAssertResponseBoundTo(t, result.Response, fixture.contextA)
+	call, ok := real.store.LastSelectCall()
+	if !ok {
+		t.Fatal("semantic store received no vector selection call")
+	}
+	if got := real.provider.LastInput(); len(got) != 1 || !strings.Contains(strings.ToLower(got[0]), strings.ToLower(semanticConceptualQuery)) {
+		t.Fatalf("real provider query input = %#v, want one input containing conceptual query %q", got, semanticConceptualQuery)
+	}
+	if got := call.Context; !semanticContextRefsEqual(got, fixture.contextA) {
+		t.Fatalf("semantic store context = %#v, want %#v", got, fixture.contextA)
+	}
+	if !semanticProfilesEqual(call.Profile, real.profile) {
+		t.Fatalf("semantic store profile = %#v, want %#v", call.Profile, real.profile)
+	}
+	semanticRequireRealVector(t, call.Vector, real.profile.Dimension, "provider-generated query")
+	return result, call, spec
+}
+
+func semanticRequireRealProviderBaseline(t *testing.T, ctx context.Context, real semanticRealProviderFixture, fixture semanticTestFixture, call semanticPostgresSelectCall, spec QuerySpec, excluded []string) []semanticPostgresBaselineHit {
+	t.Helper()
+	baseline, err := real.store.ExactBaseline(ctx, newAuthorizedContext(fixture.contextA), real.profile, call.Vector, spec)
+	if err != nil {
+		t.Fatalf("exact PostgreSQL scoped distance baseline error = %v", err)
+	}
+	if len(baseline) != 3 {
+		t.Fatalf("exact PostgreSQL scoped baseline count = %d, want only three current compatible candidates", len(baseline))
+	}
+	if got, want := baseline[0].Candidate.EntityKey, fixture.current.EntityKey; got != want {
+		t.Fatalf("exact PostgreSQL conceptual top hit = %q, want %q", got, want)
+	}
+	for _, forbidden := range excluded {
+		if semanticBaselineContains(baseline, forbidden) {
+			t.Fatalf("exact PostgreSQL baseline leaked incompatible candidate %q", forbidden)
+		}
+	}
+	return baseline
+}
+
+func semanticRequireRealProviderResponse(t *testing.T, result QueryResult, baseline []semanticPostgresBaselineHit) {
+	t.Helper()
+	items := semanticResponseItems(t, result)
+	if len(items) != len(baseline) {
+		t.Fatalf("semantic response item count = %d, want exact baseline count %d", len(items), len(baseline))
+	}
+	for index, hit := range baseline {
+		if got, want := items[index].Ref.EntityKey, hit.Candidate.EntityKey; got != want {
+			t.Fatalf("semantic response item %d entity key = %q, want exact PostgreSQL baseline %q", index, got, want)
+		}
+		if got, want := items[index].MatchSources, []QueryMatchSource{QueryMatchVector}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("semantic response item %d match sources = %#v, want vector provenance %#v", index, got, want)
+		}
+	}
 }
 
 // SemanticEmbedder is intentionally exercised through *embedding.Client in the

@@ -125,38 +125,44 @@ func TestIndexAdmissionGoDefinitionChunksBindEachFunction(t *testing.T) {
 	t.Parallel()
 	source := []byte("package sample\n\nfunc Caller() {}\n\nfunc Target() {}\n")
 	artifact := indexAdmissionTestArtifact(t, indexAdmissionTestSourceA, source)
-
 	functions := 0
 	for _, definition := range artifact.Definitions {
 		if definition.Kind != "function" {
 			continue
 		}
 		functions++
-		var matched *IndexAdmissionChunk
-		for index := range artifact.Chunks {
-			chunk := &artifact.Chunks[index]
-			if chunk.SymbolKey != nil && *chunk.SymbolKey == definition.LocalSymbolKey {
-				matched = chunk
-				break
-			}
-		}
-		if matched == nil {
-			t.Fatalf("function %q has no symbol-bound chunk", definition.LocalSymbolKey)
-		}
-		if matched.Span != definition.Span {
-			t.Fatalf("function chunk span = %#v, want %#v", matched.Span, definition.Span)
-		}
-		text, err := indexAdmissionTextAtSpan(source, definition.Span)
-		if err != nil {
-			t.Fatalf("definition text error = %v", err)
-		}
-		if matched.Text != text || matched.ContentDigest != indexAdmissionDigestBytes([]byte(text)) {
-			t.Fatalf("function chunk does not exactly bind %q", definition.LocalSymbolKey)
-		}
+		indexAdmissionRequireDefinitionChunk(t, source, artifact.Chunks, definition)
 	}
 	if functions != 2 {
 		t.Fatalf("function definitions = %d, want 2", functions)
 	}
+}
+
+func indexAdmissionRequireDefinitionChunk(t *testing.T, source []byte, chunks []IndexAdmissionChunk, definition IndexAdmissionDefinition) {
+	t.Helper()
+	matched := indexAdmissionDefinitionChunk(chunks, definition.LocalSymbolKey)
+	if matched == nil {
+		t.Fatalf("function %q has no symbol-bound chunk", definition.LocalSymbolKey)
+	}
+	if matched.Span != definition.Span {
+		t.Fatalf("function chunk span = %#v, want %#v", matched.Span, definition.Span)
+	}
+	text, err := indexAdmissionTextAtSpan(source, definition.Span)
+	if err != nil {
+		t.Fatalf("definition text error = %v", err)
+	}
+	if matched.Text != text || matched.ContentDigest != indexAdmissionDigestBytes([]byte(text)) {
+		t.Fatalf("function chunk does not exactly bind %q", definition.LocalSymbolKey)
+	}
+}
+
+func indexAdmissionDefinitionChunk(chunks []IndexAdmissionChunk, key string) *IndexAdmissionChunk {
+	for index := range chunks {
+		if chunks[index].SymbolKey != nil && *chunks[index].SymbolKey == key {
+			return &chunks[index]
+		}
+	}
+	return nil
 }
 
 func TestIndexAdmissionGoDefinitionChunksSplitWithoutLoss(t *testing.T) {
@@ -426,20 +432,6 @@ func TestIndexAdmissionBuildValidationRejectsMissingMismatchedAndDuplicateGlobal
 }
 
 func TestIndexAdmissionCapacityErrorsAreTyped(t *testing.T) {
-	requireCapacity := func(t *testing.T, err error, scope IndexCapacityScope, resource IndexCapacityResource, required, limit uint64) {
-		t.Helper()
-		var capacity *IndexCapacityError
-		if !errors.As(err, &capacity) {
-			t.Fatalf("error type = %T (%v), want *IndexCapacityError", err, err)
-		}
-		if capacity.Code() != IndexCapacityExceeded || capacity.Error() != string(IndexCapacityExceeded) {
-			t.Fatalf("capacity code = %q / %q, want %q", capacity.Code(), capacity.Error(), IndexCapacityExceeded)
-		}
-		if capacity.Scope() != scope || capacity.Resource() != resource || capacity.Required() != required || capacity.Limit() != limit {
-			t.Fatalf("capacity facts = (%q, %q, %d, %d), want (%q, %q, %d, %d)", capacity.Scope(), capacity.Resource(), capacity.Required(), capacity.Limit(), scope, resource, required, limit)
-		}
-	}
-
 	t.Run("near-limit artifact fits the bounded encoded frame", func(t *testing.T) {
 		source := []byte("package sample\n//" + strings.Repeat("x", IndexAdmissionMaxArtifactBodyBytes-32))
 		artifact := indexAdmissionTestArtifact(t, indexAdmissionTestSourceA, source)
@@ -467,7 +459,7 @@ func TestIndexAdmissionCapacityErrorsAreTyped(t *testing.T) {
 
 	t.Run("frame count", func(t *testing.T) {
 		err := ValidateIndexAdmissionPayloads(make([][]byte, IndexAdmissionMaxFrames+1))
-		requireCapacity(t, err, IndexCapacityScopeAdmissionBuild, IndexCapacityResourceFrames, uint64(IndexAdmissionMaxFrames+1), uint64(IndexAdmissionMaxFrames))
+		indexAdmissionRequireCapacity(t, err, IndexCapacityScopeAdmissionBuild, IndexCapacityResourceFrames, uint64(IndexAdmissionMaxFrames+1), uint64(IndexAdmissionMaxFrames))
 	})
 
 	t.Run("aggregate encoded bytes", func(t *testing.T) {
@@ -499,7 +491,7 @@ func TestIndexAdmissionCapacityErrorsAreTyped(t *testing.T) {
 			payloads[index] = payload
 		}
 		err = ValidateIndexAdmissionPayloads(payloads)
-		requireCapacity(t, err, IndexCapacityScopeAdmissionBuild, IndexCapacityResourceEncodedBytes, uint64(count*len(payload)), uint64(IndexAdmissionMaxTotalEncodedBytes))
+		indexAdmissionRequireCapacity(t, err, IndexCapacityScopeAdmissionBuild, IndexCapacityResourceEncodedBytes, uint64(count*len(payload)), uint64(IndexAdmissionMaxTotalEncodedBytes))
 	})
 
 	t.Run("complete edge replacement", func(t *testing.T) {
@@ -512,7 +504,7 @@ func TestIndexAdmissionCapacityErrorsAreTyped(t *testing.T) {
 			}},
 		}
 		_, err := EncodeIndexAdmissionFrame(frame)
-		requireCapacity(t, err, IndexCapacityScopeEdgeReplacement, IndexCapacityResourceEdges, uint64(indexAdmissionMaxEdgesPerReplacement+1), uint64(indexAdmissionMaxEdgesPerReplacement))
+		indexAdmissionRequireCapacity(t, err, IndexCapacityScopeEdgeReplacement, IndexCapacityResourceEdges, uint64(indexAdmissionMaxEdgesPerReplacement+1), uint64(indexAdmissionMaxEdgesPerReplacement))
 	})
 
 	t.Run("canonical publication part", func(t *testing.T) {
@@ -527,8 +519,22 @@ func TestIndexAdmissionCapacityErrorsAreTyped(t *testing.T) {
 		if !errors.As(err, &capacity) {
 			t.Fatalf("ValidateIndexPublicationParts() error = %T (%v), want *IndexCapacityError", err, err)
 		}
-		requireCapacity(t, err, IndexCapacityScopePublicationPart, IndexCapacityResourceEncodedBytes, capacity.Required(), 1)
+		indexAdmissionRequireCapacity(t, err, IndexCapacityScopePublicationPart, IndexCapacityResourceEncodedBytes, capacity.Required(), 1)
 	})
+}
+
+func indexAdmissionRequireCapacity(t *testing.T, err error, scope IndexCapacityScope, resource IndexCapacityResource, required, limit uint64) {
+	t.Helper()
+	var capacity *IndexCapacityError
+	if !errors.As(err, &capacity) {
+		t.Fatalf("error type = %T (%v), want *IndexCapacityError", err, err)
+	}
+	if capacity.Code() != IndexCapacityExceeded || capacity.Error() != string(IndexCapacityExceeded) {
+		t.Fatalf("capacity code = %q / %q, want %q", capacity.Code(), capacity.Error(), IndexCapacityExceeded)
+	}
+	if capacity.Scope() != scope || capacity.Resource() != resource || capacity.Required() != required || capacity.Limit() != limit {
+		t.Fatalf("capacity facts = (%q, %q, %d, %d), want (%q, %q, %d, %d)", capacity.Scope(), capacity.Resource(), capacity.Required(), capacity.Limit(), scope, resource, required, limit)
+	}
 }
 
 func TestIndexAdmissionUnsupportedMembershipCarriesNoArtifactBody(t *testing.T) {
@@ -765,6 +771,15 @@ func TestIndexAdmissionTreeSitterArtifactIsSourceScopedAndFactBound(t *testing.T
 		"export function run() {\n" +
 		"\treturn localShared();\n" +
 		"}\n")
+	profile, extracted, artifact, same, otherSource := indexAdmissionTreeSitterArtifacts(t, source)
+	indexAdmissionRequireTreeSitterIdentity(t, source, profile, artifact, same, otherSource)
+	indexAdmissionRequireTreeSitterReferences(t, artifact)
+	indexAdmissionRequireTreeSitterPublication(t, artifact)
+	indexAdmissionRequireTreeSitterCoverage(t, source, profile, extracted)
+}
+
+func indexAdmissionTreeSitterArtifacts(t *testing.T, source []byte) (IndexAdmissionArtifactProfile, TreeSitterArtifact, IndexAdmissionArtifact, IndexAdmissionArtifact, IndexAdmissionArtifact) {
+	t.Helper()
 	profile, err := TreeSitterIndexAdmissionArtifactProfile(TreeSitterLanguageJavaScript, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	if err != nil {
 		t.Fatalf("TreeSitterIndexAdmissionArtifactProfile() error = %v", err)
@@ -782,6 +797,11 @@ func TestIndexAdmissionTreeSitterArtifactIsSourceScopedAndFactBound(t *testing.T
 	if err != nil {
 		t.Fatalf("other-source artifact error = %v", err)
 	}
+	return profile, extracted, artifact, same, otherSource
+}
+
+func indexAdmissionRequireTreeSitterIdentity(t *testing.T, source []byte, profile IndexAdmissionArtifactProfile, artifact, same, otherSource IndexAdmissionArtifact) {
+	t.Helper()
 	if artifact.ArtifactID != same.ArtifactID {
 		t.Fatalf("same Source/content/profile ArtifactID differs: %q != %q", artifact.ArtifactID, same.ArtifactID)
 	}
@@ -797,9 +817,14 @@ func TestIndexAdmissionTreeSitterArtifactIsSourceScopedAndFactBound(t *testing.T
 	if artifact.Chunks[0].Text != string(source) || artifact.Chunks[0].ContentDigest != indexAdmissionDigestBytes(source) {
 		t.Fatalf("Tree-sitter source chunk does not bind exact bytes: %#v", artifact.Chunks[0])
 	}
-	if definition := artifact.Definitions[0]; definition.LocalSymbolKey != "function:run" || definition.SymbolKey != "javascript:function:run" || definition.Span != indexAdmissionTestTreeSitterSpan(t, source, "export function run() {\n\treturn localShared();\n}", 0) {
+	definition := artifact.Definitions[0]
+	if definition.LocalSymbolKey != "function:run" || definition.SymbolKey != "javascript:function:run" || definition.Span != indexAdmissionTestTreeSitterSpan(t, source, "export function run() {\n\treturn localShared();\n}", 0) {
 		t.Fatalf("Tree-sitter definition = %#v", definition)
 	}
+}
+
+func indexAdmissionRequireTreeSitterReferences(t *testing.T, artifact IndexAdmissionArtifact) {
+	t.Helper()
 	wantReferences := map[string]struct {
 		relation IndexRelation
 		raw      string
@@ -820,7 +845,10 @@ func TestIndexAdmissionTreeSitterArtifactIsSourceScopedAndFactBound(t *testing.T
 			t.Fatalf("Tree-sitter reference = %#v, want relation/raw %#v", reference, want)
 		}
 	}
+}
 
+func indexAdmissionRequireTreeSitterPublication(t *testing.T, artifact IndexAdmissionArtifact) {
+	t.Helper()
 	artifactID := artifact.ArtifactID
 	frame := IndexAdmissionFrame{
 		Version:   IndexAdmissionFrameVersion,
@@ -844,7 +872,10 @@ func TestIndexAdmissionTreeSitterArtifactIsSourceScopedAndFactBound(t *testing.T
 	if len(part.EdgeReplacements) != 0 {
 		t.Fatalf("grammar-only Tree-sitter references fabricated edges: %#v", part.EdgeReplacements)
 	}
+}
 
+func indexAdmissionRequireTreeSitterCoverage(t *testing.T, source []byte, profile IndexAdmissionArtifactProfile, extracted TreeSitterArtifact) {
+	t.Helper()
 	partialInput := extracted
 	partialInput.Coverage = IndexCoveragePartial
 	partialInput.Diagnostics = []TreeSitterDiagnostic{{Code: "PARSE_ERROR", Message: "source could not be parsed completely"}}
@@ -855,7 +886,6 @@ func TestIndexAdmissionTreeSitterArtifactIsSourceScopedAndFactBound(t *testing.T
 	if partial.Status != IndexAdmissionArtifactPartial || !indexAdmissionTestArtifactHasDiagnostic(partial, "PARSE_ERROR") || !indexAdmissionTestArtifactHasDiagnostic(partial, "TREE_SITTER_PARTIAL_COVERAGE") {
 		t.Fatalf("partial Tree-sitter artifact did not preserve explicit diagnostics: %#v", partial)
 	}
-
 	unavailable := extracted
 	unavailable.Coverage = IndexCoverageUnavailable
 	if _, err := NewIndexAdmissionArtifactFromTreeSitter(indexAdmissionTestSourceA, profile, source, unavailable); err == nil {
@@ -1073,24 +1103,156 @@ func TestDefaultStructuredExtractionProfiles(t *testing.T) {
 }
 
 func TestIndexAdmissionStructuredExtractionConversions(t *testing.T) {
+	for _, fixture := range indexAdmissionStructuredFixtures() {
+		t.Run(fixture.name, func(t *testing.T) {
+			indexAdmissionRequireStructuredConversion(t, fixture)
+		})
+	}
+}
+
+type indexAdmissionStructuredFixture struct {
+	name              string
+	language          IndexAdmissionLanguage
+	source            []byte
+	partialDiagnostic string
+	sourceDiagnostic  string
+	convert           func(string, []byte) (IndexAdmissionArtifact, error)
+	sourceMismatch    func() error
+	profileMismatch   func() error
+	proofMismatch     func() error
+	partial           func() (IndexAdmissionArtifact, error)
+}
+
+func indexAdmissionRequireStructuredConversion(t *testing.T, fixture indexAdmissionStructuredFixture) {
+	t.Helper()
+	first, same, other := indexAdmissionStructuredConvert(t, fixture)
+	indexAdmissionRequireStructuredIdentity(t, fixture, first, same, other)
+	indexAdmissionRequireStructuredReferences(t, fixture, first)
+	indexAdmissionRequireStructuredChunks(t, fixture.source, first.Chunks)
+	indexAdmissionRequireJSONYAMLStructuredKeys(t, fixture.language, first)
+	indexAdmissionRequireStructuredFailures(t, fixture)
+}
+
+func indexAdmissionStructuredConvert(t *testing.T, fixture indexAdmissionStructuredFixture) (IndexAdmissionArtifact, IndexAdmissionArtifact, IndexAdmissionArtifact) {
+	t.Helper()
+	first, err := fixture.convert(indexAdmissionTestSourceA, fixture.source)
+	if err != nil {
+		t.Fatalf("convert() error = %v", err)
+	}
+	same, err := fixture.convert(indexAdmissionTestSourceA, append([]byte(nil), fixture.source...))
+	if err != nil {
+		t.Fatalf("same-source convert() error = %v", err)
+	}
+	other, err := fixture.convert(indexAdmissionTestSourceB, fixture.source)
+	if err != nil {
+		t.Fatalf("other-source convert() error = %v", err)
+	}
+	return first, same, other
+}
+
+func indexAdmissionRequireStructuredIdentity(t *testing.T, fixture indexAdmissionStructuredFixture, first, same, other IndexAdmissionArtifact) {
+	t.Helper()
+	if first.ArtifactID != same.ArtifactID || first.FactsDigest != same.FactsDigest {
+		t.Fatalf("same source facts are not stable: first=%#v same=%#v", first, same)
+	}
+	if first.ArtifactID == other.ArtifactID {
+		t.Fatalf("different Sources reused structured artifact ID %q", first.ArtifactID)
+	}
+	if first.Profile.Language != fixture.language || first.ContentDigest != indexAdmissionDigestBytes(fixture.source) || !bytes.Equal(first.Body, fixture.source) {
+		t.Fatalf("artifact lost language or exact source evidence: %#v", first)
+	}
+	factsDigest, err := DigestIndexAdmissionArtifactFacts(first)
+	if err != nil || factsDigest != first.FactsDigest {
+		t.Fatalf("generic facts digest = %q, %v; want %q", factsDigest, err, first.FactsDigest)
+	}
+	if len(first.Definitions) == 0 || len(first.References) == 0 || len(first.Chunks) == 0 {
+		t.Fatalf("structured extraction lost definitions, observed references, or source chunks: %#v", first)
+	}
+}
+
+func indexAdmissionRequireStructuredReferences(t *testing.T, fixture indexAdmissionStructuredFixture, artifact IndexAdmissionArtifact) {
+	t.Helper()
+	definitionKeys := indexAdmissionDefinitionSet(artifact.Definitions)
+	ownedReferences := 0
+	sites := make(map[string]struct{}, len(artifact.References))
+	for _, reference := range artifact.References {
+		if reference.Relation != IndexRelation("references") {
+			t.Fatalf("structured reference relation = %q, want references", reference.Relation)
+		}
+		if _, exists := sites[reference.SiteKey]; exists {
+			t.Fatalf("duplicate structured reference site key %q", reference.SiteKey)
+		}
+		sites[reference.SiteKey] = struct{}{}
+		rawTarget, err := indexAdmissionTextAtSpan(fixture.source, reference.Span)
+		if err != nil || reference.RawTarget != rawTarget {
+			t.Fatalf("reference raw target/span mismatch: reference=%#v text=%q err=%v", reference, rawTarget, err)
+		}
+		if reference.OwnerSymbolKey != nil {
+			ownedReferences++
+			if _, found := definitionKeys[*reference.OwnerSymbolKey]; !found {
+				t.Fatalf("reference owner %q is not an admitted definition", *reference.OwnerSymbolKey)
+			}
+		}
+	}
+	if (fixture.language == IndexAdmissionLanguageMarkdown || fixture.language == IndexAdmissionLanguageSQL) && ownedReferences == 0 {
+		t.Fatal("structured extractor owner-local keys were not preserved")
+	}
+}
+
+func indexAdmissionRequireStructuredChunks(t *testing.T, source []byte, chunks []IndexAdmissionChunk) {
+	t.Helper()
+	for _, chunk := range chunks {
+		text, err := indexAdmissionTextAtSpan(source, chunk.Span)
+		if err != nil || chunk.Text != text || chunk.ContentDigest != indexAdmissionDigestBytes([]byte(text)) {
+			t.Fatalf("chunk/source digest mismatch: chunk=%#v text=%q err=%v", chunk, text, err)
+		}
+	}
+}
+
+func indexAdmissionRequireJSONYAMLStructuredKeys(t *testing.T, language IndexAdmissionLanguage, artifact IndexAdmissionArtifact) {
+	t.Helper()
+	if language != IndexAdmissionLanguageJSON && language != IndexAdmissionLanguageYAML {
+		return
+	}
+	for _, definition := range artifact.Definitions {
+		if definition.LocalSymbolKey != definition.SymbolKey {
+			t.Fatalf("JSON/YAML definition lost document-qualified local identity: %#v", definition)
+		}
+	}
+	for _, reference := range artifact.References {
+		if reference.SiteKey != reference.SymbolKey {
+			t.Fatalf("JSON/YAML reference lost document-qualified site identity: %#v", reference)
+		}
+	}
+}
+
+func indexAdmissionRequireStructuredFailures(t *testing.T, fixture indexAdmissionStructuredFixture) {
+	t.Helper()
+	if err := fixture.sourceMismatch(); err == nil {
+		t.Fatal("converter accepted mismatched source bytes")
+	}
+	if err := fixture.profileMismatch(); err == nil {
+		t.Fatal("converter accepted mismatched extraction profile")
+	}
+	if err := fixture.proofMismatch(); err == nil {
+		t.Fatal("converter accepted tampered extractor proof")
+	}
+	partial, err := fixture.partial()
+	if err != nil {
+		t.Fatalf("partial conversion error = %v", err)
+	}
+	if partial.Status != IndexAdmissionArtifactPartial || !indexAdmissionTestArtifactHasDiagnostic(partial, fixture.partialDiagnostic) || !indexAdmissionTestArtifactHasDiagnostic(partial, fixture.sourceDiagnostic) {
+		t.Fatalf("partial conversion lost diagnostics %q or %q: %#v", fixture.partialDiagnostic, fixture.sourceDiagnostic, partial)
+	}
+}
+
+func indexAdmissionStructuredFixtures() []indexAdmissionStructuredFixture {
 	markdownSource := []byte(uciMarkdownExtractionFixture)
 	jsonSource := []byte(uciJSONYAMLJSONFixture)
 	yamlSource := []byte(uciJSONYAMLYAMLFixture)
 	sqlSource := []byte(uciSQLDDLFixture)
 	openAPISource := []byte(uciOpenAPIJSONFixture)
-
-	fixtures := []struct {
-		name              string
-		language          IndexAdmissionLanguage
-		source            []byte
-		partialDiagnostic string
-		sourceDiagnostic  string
-		convert           func(string, []byte) (IndexAdmissionArtifact, error)
-		sourceMismatch    func() error
-		profileMismatch   func() error
-		proofMismatch     func() error
-		partial           func() (IndexAdmissionArtifact, error)
-	}{
+	fixtures := []indexAdmissionStructuredFixture{
 		{
 			name:              "markdown",
 			language:          IndexAdmissionLanguageMarkdown,
@@ -1347,100 +1509,7 @@ func TestIndexAdmissionStructuredExtractionConversions(t *testing.T) {
 			},
 		},
 	}
-
-	for _, fixture := range fixtures {
-		t.Run(fixture.name, func(t *testing.T) {
-			first, err := fixture.convert(indexAdmissionTestSourceA, fixture.source)
-			if err != nil {
-				t.Fatalf("convert() error = %v", err)
-			}
-			same, err := fixture.convert(indexAdmissionTestSourceA, append([]byte(nil), fixture.source...))
-			if err != nil {
-				t.Fatalf("same-source convert() error = %v", err)
-			}
-			other, err := fixture.convert(indexAdmissionTestSourceB, fixture.source)
-			if err != nil {
-				t.Fatalf("other-source convert() error = %v", err)
-			}
-			if first.ArtifactID != same.ArtifactID || first.FactsDigest != same.FactsDigest {
-				t.Fatalf("same source facts are not stable: first=%#v same=%#v", first, same)
-			}
-			if first.ArtifactID == other.ArtifactID {
-				t.Fatalf("different Sources reused structured artifact ID %q", first.ArtifactID)
-			}
-			if first.Profile.Language != fixture.language || first.ContentDigest != indexAdmissionDigestBytes(fixture.source) || !bytes.Equal(first.Body, fixture.source) {
-				t.Fatalf("artifact lost language or exact source evidence: %#v", first)
-			}
-			factsDigest, err := DigestIndexAdmissionArtifactFacts(first)
-			if err != nil || factsDigest != first.FactsDigest {
-				t.Fatalf("generic facts digest = %q, %v; want %q", factsDigest, err, first.FactsDigest)
-			}
-			if len(first.Definitions) == 0 || len(first.References) == 0 || len(first.Chunks) == 0 {
-				t.Fatalf("structured extraction lost definitions, observed references, or source chunks: %#v", first)
-			}
-			definitionKeys := indexAdmissionDefinitionSet(first.Definitions)
-			ownedReferences := 0
-			sites := make(map[string]struct{}, len(first.References))
-			for _, reference := range first.References {
-				if reference.Relation != IndexRelation("references") {
-					t.Fatalf("structured reference relation = %q, want references", reference.Relation)
-				}
-				if _, exists := sites[reference.SiteKey]; exists {
-					t.Fatalf("duplicate structured reference site key %q", reference.SiteKey)
-				}
-				sites[reference.SiteKey] = struct{}{}
-				rawTarget, err := indexAdmissionTextAtSpan(fixture.source, reference.Span)
-				if err != nil || reference.RawTarget != rawTarget {
-					t.Fatalf("reference raw target/span mismatch: reference=%#v text=%q err=%v", reference, rawTarget, err)
-				}
-				if reference.OwnerSymbolKey != nil {
-					ownedReferences++
-					if _, found := definitionKeys[*reference.OwnerSymbolKey]; !found {
-						t.Fatalf("reference owner %q is not an admitted definition", *reference.OwnerSymbolKey)
-					}
-				}
-			}
-			if (fixture.language == IndexAdmissionLanguageMarkdown || fixture.language == IndexAdmissionLanguageSQL) && ownedReferences == 0 {
-				t.Fatal("structured extractor owner-local keys were not preserved")
-			}
-			for _, chunk := range first.Chunks {
-				text, err := indexAdmissionTextAtSpan(fixture.source, chunk.Span)
-				if err != nil || chunk.Text != text || chunk.ContentDigest != indexAdmissionDigestBytes([]byte(text)) {
-					t.Fatalf("chunk/source digest mismatch: chunk=%#v text=%q err=%v", chunk, text, err)
-				}
-			}
-			if fixture.language == IndexAdmissionLanguageJSON || fixture.language == IndexAdmissionLanguageYAML {
-				for _, definition := range first.Definitions {
-					if definition.LocalSymbolKey != definition.SymbolKey {
-						t.Fatalf("JSON/YAML definition lost document-qualified local identity: %#v", definition)
-					}
-				}
-				for _, reference := range first.References {
-					if reference.SiteKey != reference.SymbolKey {
-						t.Fatalf("JSON/YAML reference lost document-qualified site identity: %#v", reference)
-					}
-				}
-			}
-			if err := fixture.sourceMismatch(); err == nil {
-				t.Fatal("converter accepted mismatched source bytes")
-			}
-			if err := fixture.profileMismatch(); err == nil {
-				t.Fatal("converter accepted mismatched extraction profile")
-			}
-			if err := fixture.proofMismatch(); err == nil {
-				t.Fatal("converter accepted tampered extractor proof")
-			}
-			partial, err := fixture.partial()
-			if err != nil {
-				t.Fatalf("partial conversion error = %v", err)
-			}
-			if partial.Status != IndexAdmissionArtifactPartial ||
-				!indexAdmissionTestArtifactHasDiagnostic(partial, fixture.partialDiagnostic) ||
-				!indexAdmissionTestArtifactHasDiagnostic(partial, fixture.sourceDiagnostic) {
-				t.Fatalf("partial conversion lost diagnostics %q or %q: %#v", fixture.partialDiagnostic, fixture.sourceDiagnostic, partial)
-			}
-		})
-	}
+	return fixtures
 }
 
 func indexAdmissionTestMarkdownStructuredArtifact(sourceID string, source []byte) (IndexAdmissionArtifact, error) {

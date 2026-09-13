@@ -13,135 +13,98 @@ import (
 // View validation, result ordering, budgets, and opaque continuation binding.
 func TestUCIGraphExplainAndNeighborsAreViewPinnedAndEvidenceLabeled(t *testing.T) {
 	fixture := newGraphTestFixture()
-
 	t.Run("explain returns only current-view static evidence", func(t *testing.T) {
-		store := fixture.store()
-		store.injectedEdges = []QueryGraphEdge{
-			graphTestEdge(
-				fixture.gateway,
-				fixture.oldCallee,
-				"calls",
-				QueryEvidenceResolved,
-				fixture.gateway,
-			),
-		}
-		service := NewGraphService(store)
-
-		result, err := service.Explore(context.Background(), newAuthorizedContext(fixture.contextA), GraphSpec{
-			ClientSessionID: "graph-client-a",
-			Action:          GraphActionExplain,
-			Target:          GraphTarget{EntityKey: fixture.gateway.EntityKey},
-			Filter: GraphFilter{
-				Direction:     GraphDirectionBoth,
-				Relations:     []IndexRelation{IndexRelation("calls"), IndexRelation("may_call")},
-				EvidenceKinds: []QueryEvidenceKind{QueryEvidenceResolved, QueryEvidenceHeuristic},
-			},
-			Budget: graphTestBudget(),
-		})
-		if err != nil {
-			t.Fatalf("Explore(explain) error = %v", err)
-		}
-
-		if got := result.Outcome; got != GraphOutcomeComplete {
-			t.Fatalf("explain outcome = %q, want %q", got, GraphOutcomeComplete)
-		}
-		if got := result.Semantics; got != GraphSemanticsStatic {
-			t.Fatalf("explain semantics = %q, want static graph semantics", got)
-		}
-		if got := result.Coverage; got != IndexCoverageComplete {
-			t.Fatalf("explain coverage = %q, want %q", got, IndexCoverageComplete)
-		}
-		graphTestAssertGraphBoundTo(t, result, fixture.contextA)
-		graphTestAssertNodeKeys(t, result.Graph.Nodes, []string{
-			fixture.dynamic.EntityKey,
-			fixture.entry.EntityKey,
-			fixture.gateway.EntityKey,
-			fixture.worker.EntityKey,
-		})
-		graphTestAssertEdgeKeys(t, result.Graph.Edges, []string{
-			graphTestEdgeKey(fixture.entry, fixture.gateway, "calls", QueryEvidenceResolved),
-			graphTestEdgeKey(fixture.gateway, fixture.dynamic, "may_call", QueryEvidenceHeuristic),
-			graphTestEdgeKey(fixture.gateway, fixture.worker, "calls", QueryEvidenceResolved),
-		})
-		graphTestAssertEdge(t, result.Graph.Edges, fixture.entry, fixture.gateway, "calls", QueryEvidenceResolved, fixture.entry)
-		graphTestAssertEdge(t, result.Graph.Edges, fixture.gateway, fixture.worker, "calls", QueryEvidenceResolved, fixture.gateway)
-		graphTestAssertEdge(t, result.Graph.Edges, fixture.gateway, fixture.dynamic, "may_call", QueryEvidenceHeuristic, fixture.gateway)
-		graphTestAssertStoreBoundTo(t, store, fixture.contextA)
+		graphTestRequireExplain(t, fixture)
 	})
-
-	for _, tc := range []struct {
-		name   string
-		filter GraphFilter
-		want   []string
-	}{
-		{
-			name: "incoming resolved calls",
-			filter: GraphFilter{
-				Direction:     GraphDirectionIncoming,
-				Relations:     []IndexRelation{IndexRelation("calls")},
-				EvidenceKinds: []QueryEvidenceKind{QueryEvidenceResolved},
-			},
-			want: []string{
-				graphTestEdgeKey(fixture.entry, fixture.gateway, "calls", QueryEvidenceResolved),
-			},
-		},
-		{
-			name: "outgoing resolved calls",
-			filter: GraphFilter{
-				Direction:     GraphDirectionOutgoing,
-				Relations:     []IndexRelation{IndexRelation("calls")},
-				EvidenceKinds: []QueryEvidenceKind{QueryEvidenceResolved},
-			},
-			want: []string{
-				graphTestEdgeKey(fixture.gateway, fixture.worker, "calls", QueryEvidenceResolved),
-			},
-		},
-		{
-			name: "outgoing heuristic may call",
-			filter: GraphFilter{
-				Direction:     GraphDirectionOutgoing,
-				Relations:     []IndexRelation{IndexRelation("may_call")},
-				EvidenceKinds: []QueryEvidenceKind{QueryEvidenceHeuristic},
-			},
-			want: []string{
-				graphTestEdgeKey(fixture.gateway, fixture.dynamic, "may_call", QueryEvidenceHeuristic),
-			},
-		},
+	for _, tc := range []graphTestNeighborCase{
+		{name: "incoming resolved calls", filter: GraphFilter{Direction: GraphDirectionIncoming, Relations: []IndexRelation{IndexRelation("calls")}, EvidenceKinds: []QueryEvidenceKind{QueryEvidenceResolved}}, want: []string{graphTestEdgeKey(fixture.entry, fixture.gateway, "calls", QueryEvidenceResolved)}},
+		{name: "outgoing resolved calls", filter: GraphFilter{Direction: GraphDirectionOutgoing, Relations: []IndexRelation{IndexRelation("calls")}, EvidenceKinds: []QueryEvidenceKind{QueryEvidenceResolved}}, want: []string{graphTestEdgeKey(fixture.gateway, fixture.worker, "calls", QueryEvidenceResolved)}},
+		{name: "outgoing heuristic may call", filter: GraphFilter{Direction: GraphDirectionOutgoing, Relations: []IndexRelation{IndexRelation("may_call")}, EvidenceKinds: []QueryEvidenceKind{QueryEvidenceHeuristic}}, want: []string{graphTestEdgeKey(fixture.gateway, fixture.dynamic, "may_call", QueryEvidenceHeuristic)}},
 	} {
 		t.Run("neighbors "+tc.name, func(t *testing.T) {
-			store := fixture.store()
-			service := NewGraphService(store)
-			spec := GraphSpec{
-				ClientSessionID: "graph-client-a",
-				Action:          GraphActionNeighbors,
-				Target:          GraphTarget{EntityKey: fixture.gateway.EntityKey},
-				Filter:          tc.filter,
-				Budget:          graphTestBudget(),
-			}
-
-			first, err := service.Explore(context.Background(), newAuthorizedContext(fixture.contextA), spec)
-			if err != nil {
-				t.Fatalf("first Explore(neighbors) error = %v", err)
-			}
-			retry, err := service.Explore(context.Background(), newAuthorizedContext(fixture.contextA), spec)
-			if err != nil {
-				t.Fatalf("retry Explore(neighbors) error = %v", err)
-			}
-
-			if got := first.Outcome; got != GraphOutcomeComplete {
-				t.Fatalf("neighbors outcome = %q, want %q", got, GraphOutcomeComplete)
-			}
-			if got := first.Semantics; got != GraphSemanticsStatic {
-				t.Fatalf("neighbors semantics = %q, want static graph semantics", got)
-			}
-			if !reflect.DeepEqual(first.Graph, retry.Graph) {
-				t.Fatalf("neighbors graph is not deterministic:\nfirst: %#v\nretry: %#v", first.Graph, retry.Graph)
-			}
-			graphTestAssertGraphBoundTo(t, first, fixture.contextA)
-			graphTestAssertEdgeKeys(t, first.Graph.Edges, tc.want)
-			graphTestAssertEdgeQueries(t, store, fixture.contextA, tc.filter)
+			graphTestRequireNeighbors(t, fixture, tc)
 		})
 	}
+}
+
+type graphTestNeighborCase struct {
+	name   string
+	filter GraphFilter
+	want   []string
+}
+
+func graphTestRequireExplain(t *testing.T, fixture graphTestFixture) {
+	t.Helper()
+	store := fixture.store()
+	store.injectedEdges = []QueryGraphEdge{graphTestEdge(fixture.gateway, fixture.oldCallee, "calls", QueryEvidenceResolved, fixture.gateway)}
+	service := NewGraphService(store)
+	result, err := service.Explore(context.Background(), newAuthorizedContext(fixture.contextA), GraphSpec{
+		ClientSessionID: "graph-client-a",
+		Action:          GraphActionExplain,
+		Target:          GraphTarget{EntityKey: fixture.gateway.EntityKey},
+		Filter: GraphFilter{
+			Direction:     GraphDirectionBoth,
+			Relations:     []IndexRelation{IndexRelation("calls"), IndexRelation("may_call")},
+			EvidenceKinds: []QueryEvidenceKind{QueryEvidenceResolved, QueryEvidenceHeuristic},
+		},
+		Budget: graphTestBudget(),
+	})
+	if err != nil {
+		t.Fatalf("Explore(explain) error = %v", err)
+	}
+	if got := result.Outcome; got != GraphOutcomeComplete {
+		t.Fatalf("explain outcome = %q, want %q", got, GraphOutcomeComplete)
+	}
+	if got := result.Semantics; got != GraphSemanticsStatic {
+		t.Fatalf("explain semantics = %q, want static graph semantics", got)
+	}
+	if got := result.Coverage; got != IndexCoverageComplete {
+		t.Fatalf("explain coverage = %q, want %q", got, IndexCoverageComplete)
+	}
+	graphTestAssertGraphBoundTo(t, result, fixture.contextA)
+	graphTestAssertNodeKeys(t, result.Graph.Nodes, []string{fixture.dynamic.EntityKey, fixture.entry.EntityKey, fixture.gateway.EntityKey, fixture.worker.EntityKey})
+	graphTestAssertEdgeKeys(t, result.Graph.Edges, []string{
+		graphTestEdgeKey(fixture.entry, fixture.gateway, "calls", QueryEvidenceResolved),
+		graphTestEdgeKey(fixture.gateway, fixture.dynamic, "may_call", QueryEvidenceHeuristic),
+		graphTestEdgeKey(fixture.gateway, fixture.worker, "calls", QueryEvidenceResolved),
+	})
+	graphTestAssertEdge(t, result.Graph.Edges, fixture.entry, fixture.gateway, "calls", QueryEvidenceResolved, fixture.entry)
+	graphTestAssertEdge(t, result.Graph.Edges, fixture.gateway, fixture.worker, "calls", QueryEvidenceResolved, fixture.gateway)
+	graphTestAssertEdge(t, result.Graph.Edges, fixture.gateway, fixture.dynamic, "may_call", QueryEvidenceHeuristic, fixture.gateway)
+	graphTestAssertStoreBoundTo(t, store, fixture.contextA)
+}
+
+func graphTestRequireNeighbors(t *testing.T, fixture graphTestFixture, tc graphTestNeighborCase) {
+	t.Helper()
+	store := fixture.store()
+	service := NewGraphService(store)
+	spec := GraphSpec{
+		ClientSessionID: "graph-client-a",
+		Action:          GraphActionNeighbors,
+		Target:          GraphTarget{EntityKey: fixture.gateway.EntityKey},
+		Filter:          tc.filter,
+		Budget:          graphTestBudget(),
+	}
+	first, err := service.Explore(context.Background(), newAuthorizedContext(fixture.contextA), spec)
+	if err != nil {
+		t.Fatalf("first Explore(neighbors) error = %v", err)
+	}
+	retry, err := service.Explore(context.Background(), newAuthorizedContext(fixture.contextA), spec)
+	if err != nil {
+		t.Fatalf("retry Explore(neighbors) error = %v", err)
+	}
+	if got := first.Outcome; got != GraphOutcomeComplete {
+		t.Fatalf("neighbors outcome = %q, want %q", got, GraphOutcomeComplete)
+	}
+	if got := first.Semantics; got != GraphSemanticsStatic {
+		t.Fatalf("neighbors semantics = %q, want static graph semantics", got)
+	}
+	if !reflect.DeepEqual(first.Graph, retry.Graph) {
+		t.Fatalf("neighbors graph is not deterministic:\nfirst: %#v\nretry: %#v", first.Graph, retry.Graph)
+	}
+	graphTestAssertGraphBoundTo(t, first, fixture.contextA)
+	graphTestAssertEdgeKeys(t, first.Graph.Edges, tc.want)
+	graphTestAssertEdgeQueries(t, store, fixture.contextA, tc.filter)
 }
 
 func TestUCIGraphPathImpactFlowAndCyclesRemainStaticAndViewPinned(t *testing.T) {
@@ -517,32 +480,40 @@ func TestUCIGraphDistinguishesConclusiveAbsenceFromUnknownOrTruncated(t *testing
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			store := fixture.store()
-			if tc.prepare != nil {
-				tc.prepare(store)
-			}
-			service := NewGraphService(store)
-
-			result, err := service.Explore(context.Background(), newAuthorizedContext(fixture.contextA), tc.spec)
-			if err != nil {
-				t.Fatalf("Explore(%s) error = %v", tc.spec.Action, err)
-			}
-			if got := result.Outcome; got != tc.wantOutcome {
-				t.Fatalf("outcome = %q, want %q", got, tc.wantOutcome)
-			}
-			if got := result.Graph.StopReason; got != tc.wantStop {
-				t.Fatalf("stop reason = %q, want %q", got, tc.wantStop)
-			}
-			if tc.checkBounds {
-				if got := len(result.Graph.Nodes); got > tc.spec.Budget.MaxNodes {
-					t.Fatalf("result nodes = %d, exceeds budget %d", got, tc.spec.Budget.MaxNodes)
-				}
-				if got := len(result.Graph.Edges); got > tc.spec.Budget.MaxEdges {
-					t.Fatalf("result edges = %d, exceeds budget %d", got, tc.spec.Budget.MaxEdges)
-				}
-			}
-			graphTestAssertGraphBoundTo(t, result, fixture.contextA)
+			graphTestRequireOutcome(t, fixture, tc.prepare, tc.spec, tc.wantOutcome, tc.wantStop, tc.checkBounds)
 		})
+	}
+}
+
+func graphTestRequireOutcome(t *testing.T, fixture graphTestFixture, prepare func(*graphTestStore), spec GraphSpec, wantOutcome GraphOutcome, wantStop QueryGraphStopReason, checkBounds bool) {
+	t.Helper()
+	store := fixture.store()
+	if prepare != nil {
+		prepare(store)
+	}
+	result, err := NewGraphService(store).Explore(context.Background(), newAuthorizedContext(fixture.contextA), spec)
+	if err != nil {
+		t.Fatalf("Explore(%s) error = %v", spec.Action, err)
+	}
+	if got := result.Outcome; got != wantOutcome {
+		t.Fatalf("outcome = %q, want %q", got, wantOutcome)
+	}
+	if got := result.Graph.StopReason; got != wantStop {
+		t.Fatalf("stop reason = %q, want %q", got, wantStop)
+	}
+	if checkBounds {
+		graphTestRequireBudgetBounds(t, result, spec.Budget)
+	}
+	graphTestAssertGraphBoundTo(t, result, fixture.contextA)
+}
+
+func graphTestRequireBudgetBounds(t *testing.T, result GraphResult, budget GraphBudget) {
+	t.Helper()
+	if got := len(result.Graph.Nodes); got > budget.MaxNodes {
+		t.Fatalf("result nodes = %d, exceeds budget %d", got, budget.MaxNodes)
+	}
+	if got := len(result.Graph.Edges); got > budget.MaxEdges {
+		t.Fatalf("result edges = %d, exceeds budget %d", got, budget.MaxEdges)
 	}
 }
 
