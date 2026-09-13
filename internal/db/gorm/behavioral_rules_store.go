@@ -871,81 +871,96 @@ func updateSelectedBehavioralRule(tx *gorm.DB, row *BehavioralRule, operation Be
 }
 
 func applyBehavioralRuleReorder(tx *gorm.DB, targets []behavioralRuleSelectionTarget, operation BehavioralRuleSelectionOperation, result *BehavioralRuleSelectionOperationResult) error {
-	if len(operation.Order) != len(targets) {
-		return fmt.Errorf("%w: reorder must include every selected rule", ErrBehavioralRuleSelectionInvalid)
+	ordered, err := behavioralRuleReorderOrders(targets, operation.Order)
+	if err != nil {
+		return err
+	}
+	rows, err := lockBehavioralRuleReorderRows(tx, operation.Scope.Project, ordered, len(operation.Order))
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	for index, order := range operation.Order {
+		item, err := updateReorderedBehavioralRule(tx, rows[order.RuleID], (len(operation.Order)-index)*10, now)
+		if err != nil {
+			return err
+		}
+		result.Items = append(result.Items, item)
+	}
+	return nil
+}
+
+func behavioralRuleReorderOrders(targets []behavioralRuleSelectionTarget, order []BehavioralRuleOrder) (map[int64]BehavioralRuleOrder, error) {
+	if len(order) != len(targets) {
+		return nil, fmt.Errorf("%w: reorder must include every selected rule", ErrBehavioralRuleSelectionInvalid)
 	}
 	selected := make(map[int64]uint64, len(targets))
 	for _, target := range targets {
 		selected[target.id] = target.expectedVersion
 	}
-	ordered := make(map[int64]BehavioralRuleOrder, len(operation.Order))
-	for _, order := range operation.Order {
-		if order.RuleID <= 0 || order.ExpectedVersion == 0 {
-			return fmt.Errorf("%w: reorder target is invalid", ErrBehavioralRuleSelectionInvalid)
+	ordered := make(map[int64]BehavioralRuleOrder, len(order))
+	for _, item := range order {
+		if item.RuleID <= 0 || item.ExpectedVersion == 0 {
+			return nil, fmt.Errorf("%w: reorder target is invalid", ErrBehavioralRuleSelectionInvalid)
 		}
-		if _, duplicate := ordered[order.RuleID]; duplicate {
-			return fmt.Errorf("%w: reorder target is duplicated", ErrBehavioralRuleSelectionInvalid)
+		if _, duplicate := ordered[item.RuleID]; duplicate {
+			return nil, fmt.Errorf("%w: reorder target is duplicated", ErrBehavioralRuleSelectionInvalid)
 		}
-		if expected, selected := selected[order.RuleID]; !selected || expected != order.ExpectedVersion {
-			return fmt.Errorf("%w: reorder target is not the selected revision", ErrBehavioralRuleSelectionInvalid)
+		if expected, selected := selected[item.RuleID]; !selected || expected != item.ExpectedVersion {
+			return nil, fmt.Errorf("%w: reorder target is not the selected revision", ErrBehavioralRuleSelectionInvalid)
 		}
-		ordered[order.RuleID] = order
+		ordered[item.RuleID] = item
 	}
+	return ordered, nil
+}
 
+func lockBehavioralRuleReorderRows(tx *gorm.DB, project *string, ordered map[int64]BehavioralRuleOrder, count int) (map[int64]*BehavioralRule, error) {
 	query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(behavioralRuleUndeletedWhere)
-	if operation.Scope.Project == nil {
+	if project == nil {
 		query = query.Where(behavioralRuleGlobalProjectWhere)
 	} else {
-		query = query.Where("project = ?", *operation.Scope.Project)
+		query = query.Where("project = ?", *project)
 	}
 	var rows []BehavioralRule
 	if err := query.Order("id ASC").Find(&rows).Error; err != nil {
-		return fmt.Errorf("lock behavioral rule reorder scope: %w", err)
+		return nil, fmt.Errorf("lock behavioral rule reorder scope: %w", err)
 	}
-	if len(rows) != len(operation.Order) {
-		return ErrBehavioralRuleSelectionConflict
+	if len(rows) != count {
+		return nil, ErrBehavioralRuleSelectionConflict
 	}
 	byID := make(map[int64]*BehavioralRule, len(rows))
 	for index := range rows {
 		row := &rows[index]
-		order, found := ordered[row.ID]
-		if !found || uint64(row.Version) != order.ExpectedVersion {
-			return ErrBehavioralRuleSelectionConflict
+		item, found := ordered[row.ID]
+		if !found || uint64(row.Version) != item.ExpectedVersion {
+			return nil, ErrBehavioralRuleSelectionConflict
 		}
 		byID[row.ID] = row
 	}
+	return byID, nil
+}
 
-	now := time.Now().UTC()
-	for index, order := range operation.Order {
-		row := byID[order.RuleID]
-		priority := (len(operation.Order) - index) * 10
-		updates := map[string]any{
-			"priority":   priority,
-			"updated_at": now,
-			"version":    gorm.Expr(behavioralRuleVersionIncrement),
-		}
-		updated := tx.Model(&BehavioralRule{}).
-			Where(behavioralRuleVersionActiveWhere, row.ID, row.Version).
-			Updates(updates)
-		if updated.Error != nil {
-			return fmt.Errorf("reorder behavioral rule id=%d: %w", row.ID, updated.Error)
-		}
-		if updated.RowsAffected != 1 {
-			return ErrBehavioralRuleSelectionConflict
-		}
-		row.Priority = priority
-		row.Version++
-		row.UpdatedAt = now
-		observedVersion := new(int)
-		*observedVersion = row.Version
-		result.Items = append(result.Items, BehavioralRuleSelectionOperationItem{
-			TargetID:        row.ID,
-			Outcome:         BehavioralRuleSelectionCommitted,
-			ObservedVersion: observedVersion,
-			Rule:            behavioralRuleRowToModel(row),
-		})
+func updateReorderedBehavioralRule(tx *gorm.DB, row *BehavioralRule, priority int, now time.Time) (BehavioralRuleSelectionOperationItem, error) {
+	updates := map[string]any{
+		"priority":   priority,
+		"updated_at": now,
+		"version":    gorm.Expr(behavioralRuleVersionIncrement),
 	}
-	return nil
+	updated := tx.Model(&BehavioralRule{}).
+		Where(behavioralRuleVersionActiveWhere, row.ID, row.Version).
+		Updates(updates)
+	if updated.Error != nil {
+		return BehavioralRuleSelectionOperationItem{}, fmt.Errorf("reorder behavioral rule id=%d: %w", row.ID, updated.Error)
+	}
+	if updated.RowsAffected != 1 {
+		return BehavioralRuleSelectionOperationItem{}, ErrBehavioralRuleSelectionConflict
+	}
+	row.Priority = priority
+	row.Version++
+	row.UpdatedAt = now
+	observedVersion := new(int)
+	*observedVersion = row.Version
+	return BehavioralRuleSelectionOperationItem{TargetID: row.ID, Outcome: BehavioralRuleSelectionCommitted, ObservedVersion: observedVersion, Rule: behavioralRuleRowToModel(row)}, nil
 }
 
 func (s *BehavioralRulesStore) readBehavioralRuleSelectionReadback(ctx context.Context, operation BehavioralRuleSelectionOperation, result *BehavioralRuleSelectionOperationResult) {
