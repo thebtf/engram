@@ -288,7 +288,10 @@ func (resolver ResolverV3) ResolveProjectV3(ctx context.Context, request Resolve
 	if !validAnchorV3(request.Anchor) {
 		return refusalV3(request, ProjectAnchorInvalidOutcomeV3)
 	}
-	if request.Descriptor.Version != 3 || !validDescriptorV3(request.Descriptor) || request.Descriptor.AnchorProjectID != request.Anchor.ProjectID || request.Descriptor.Name != request.Anchor.Name {
+	if request.Descriptor.Version != 3 {
+		return refusalV3(request, ProjectDescriptorUnsupportedOutcomeV3)
+	}
+	if !validDescriptorV3(request.Descriptor) || request.Descriptor.AnchorProjectID != request.Anchor.ProjectID || request.Descriptor.Name != request.Anchor.Name {
 		return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
 	}
 	if request.Descriptor.Scope != request.Anchor.Scope {
