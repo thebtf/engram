@@ -39,7 +39,7 @@ import (
 const (
 	seedReceiptSchema     = "hap-01c-fixture-seed-receipt/1"
 	rotationReceiptSchema = "hap-01c-fixture-rotation-receipt/1"
-	snapshotReceiptSchema = "hap-01c-fixture-snapshot/1"
+	snapshotReceiptSchema = "hap-01c-fixture-snapshot-receipt/1"
 	secretsSchema         = "hap-01c-fixture-secrets/1"
 
 	maxDSNBytes          = 4 * 1024
@@ -47,8 +47,10 @@ const (
 	maxSecretsBytes      = 16 * 1024
 	maxAmbientQueryBytes = 512
 
-	fixtureSourceAgent = "hap01c-fixture"
-	legacyDirectTTL    = time.Hour
+	fixtureSourceAgent    = "hap01c-fixture"
+	fixtureRunPrefix      = "hap01c-"
+	fixtureReadWriteScope = "read-write"
+	legacyDirectTTL       = time.Hour
 )
 
 var (
@@ -177,38 +179,13 @@ func parseDedicatedDSN(raw []byte, runID string) (dedicatedDSN, error) {
 	if dsn == "" || strings.IndexByte(dsn, 0) >= 0 {
 		return dedicatedDSN{}, boundary("INVALID_DSN")
 	}
-
 	parsed, err := url.ParseRequestURI(dsn)
 	if err != nil || parsed.Opaque != "" || parsed.Fragment != "" || parsed.RawFragment != "" {
 		return dedicatedDSN{}, boundary("INVALID_DSN")
 	}
-	scheme := strings.ToLower(parsed.Scheme)
-	if scheme != "postgres" && scheme != "postgresql" {
-		return dedicatedDSN{}, boundary("INVALID_DSN_SCHEME")
-	}
-	if parsed.User == nil || parsed.User.Username() == "" {
-		return dedicatedDSN{}, boundary("DSN_USER_REQUIRED")
-	}
-	if _, passwordPresent := parsed.User.Password(); !passwordPresent {
-		return dedicatedDSN{}, boundary("DSN_PASSWORD_REQUIRED")
-	}
-	host := strings.ToLower(parsed.Hostname())
-	if !isLoopbackHost(host) {
-		return dedicatedDSN{}, boundary("NON_LOOPBACK_DSN_HOST")
-	}
-	port := parsed.Port()
-	if port != "" {
-		value, parseErr := strconv.Atoi(port)
-		if parseErr != nil || value < 1 || value > 65535 {
-			return dedicatedDSN{}, boundary("INVALID_DSN_PORT")
-		}
-	} else {
-		parsed.Host = net.JoinHostPort(host, "5432")
-	}
-
-	expectedDatabase := "hap01c_" + runID
-	if parsed.Path != "/"+expectedDatabase {
-		return dedicatedDSN{}, boundary("NON_DEDICATED_DATABASE")
+	expectedDatabase, err := dedicatedDSNDatabase(parsed, runID)
+	if err != nil {
+		return dedicatedDSN{}, err
 	}
 	query, err := url.ParseQuery(parsed.RawQuery)
 	if err != nil || len(query) != 1 || len(query["sslmode"]) != 1 || query.Get("sslmode") != "disable" {
@@ -216,6 +193,37 @@ func parseDedicatedDSN(raw []byte, runID string) (dedicatedDSN, error) {
 	}
 	parsed.RawQuery = "sslmode=disable"
 	return dedicatedDSN{dsn: parsed.String(), database: expectedDatabase}, nil
+}
+
+func dedicatedDSNDatabase(parsed *url.URL, runID string) (string, error) {
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "postgres" && scheme != "postgresql" {
+		return "", boundary("INVALID_DSN_SCHEME")
+	}
+	if parsed.User == nil || parsed.User.Username() == "" {
+		return "", boundary("DSN_USER_REQUIRED")
+	}
+	if _, passwordPresent := parsed.User.Password(); !passwordPresent {
+		return "", boundary("DSN_PASSWORD_REQUIRED")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if !isLoopbackHost(host) {
+		return "", boundary("NON_LOOPBACK_DSN_HOST")
+	}
+	port := parsed.Port()
+	if port != "" {
+		value, err := strconv.Atoi(port)
+		if err != nil || value < 1 || value > 65535 {
+			return "", boundary("INVALID_DSN_PORT")
+		}
+	} else {
+		parsed.Host = net.JoinHostPort(host, "5432")
+	}
+	expectedDatabase := "hap01c_" + runID
+	if parsed.Path != "/"+expectedDatabase {
+		return "", boundary("NON_DEDICATED_DATABASE")
+	}
+	return expectedDatabase, nil
 }
 
 func isLoopbackHost(host string) bool {
@@ -422,7 +430,7 @@ func (f *Fixture) Seed(ctx context.Context, requestFile, secretsOut string) (See
 			IdentityScope:   validNullString("repository"),
 			IdentityStatus:  validNullString("active"),
 			LegacyIDs:       pq.StringArray{request.LegacyProjectID, request.LegacyDirectProjectID},
-			DisplayName:     validNullString("hap01c-" + f.runID),
+			DisplayName:     validNullString(fixtureRunPrefix + f.runID),
 		}
 		if err := tx.Create(project).Error; err != nil {
 			return err
@@ -437,7 +445,7 @@ func (f *Fixture) Seed(ctx context.Context, requestFile, secretsOut string) (See
 				card.name,
 				card.tokenHash,
 				card.tokenPrefix,
-				"read-write",
+				fixtureReadWriteScope,
 				card.principal,
 				string(card.principalKind),
 				card.expiresAt,
@@ -705,47 +713,7 @@ func (f *Fixture) RotateProjectKeycard(ctx context.Context, secretsPath string) 
 	}
 
 	ctx = nonNilContext(ctx)
-	var oldCard, replacement issuedKeycard
-	err = f.store.GetDB().WithContext(ctx).Transaction(func(tx *gormlib.DB) error {
-		txStore := &gormdb.Store{DB: tx}
-		tokenStore := gormdb.NewTokenStore(txStore)
-		current, err := tokenStore.GetByID(ctx, secrets.ProjectTokenID)
-		if err != nil || current == nil || current.Revoked || !f.isCurrentProjectCard(tx, current) {
-			return boundary("PROJECT_KEYCARD_NOT_CURRENT")
-		}
-		oldCard = issuedKeycard{
-			pending: pendingKeycard{class: projectServiceCard, raw: secrets.ProjectToken},
-			record:  current,
-		}
-
-		replacementName, err := f.rotatedProjectTokenName()
-		if err != nil {
-			return err
-		}
-		pending, err := f.newKeycard(projectServiceCard, replacementName, current.Principal, auth.PrincipalKindService, current.ExpiresAt)
-		if err != nil {
-			return err
-		}
-		created, err := tokenStore.CreateWithPrincipal(
-			ctx,
-			pending.name,
-			pending.tokenHash,
-			pending.tokenPrefix,
-			"read-write",
-			pending.principal,
-			string(pending.principalKind),
-			pending.expiresAt,
-		)
-		if err != nil {
-			return err
-		}
-		if err := tokenStore.Revoke(ctx, current.ID); err != nil {
-			return err
-		}
-		oldCard.record = &gormdb.APIToken{ID: current.ID, Revoked: true}
-		replacement = issuedKeycard{pending: pending, record: created}
-		return nil
-	})
+	oldCard, replacement, err := f.rotateProjectKeycard(ctx, secrets)
 	if err != nil {
 		if IsBoundaryError(err) {
 			return RotationReceipt{}, err
@@ -778,6 +746,53 @@ func (f *Fixture) RotateProjectKeycard(ctx context.Context, secretsPath string) 
 		}
 	}
 	return RotationReceipt{}, boundary("PROJECT_KEYCARD_RECONCILIATION_FAILED")
+}
+
+func (f *Fixture) rotateProjectKeycard(ctx context.Context, secrets secretsFile) (issuedKeycard, issuedKeycard, error) {
+	var oldCard, replacement issuedKeycard
+	err := f.store.GetDB().WithContext(ctx).Transaction(func(tx *gormlib.DB) error {
+		txStore := &gormdb.Store{DB: tx}
+		tokenStore := gormdb.NewTokenStore(txStore)
+		current, err := tokenStore.GetByID(ctx, secrets.ProjectTokenID)
+		if err != nil || current == nil || current.Revoked || !f.isCurrentProjectCard(tx, current) {
+			return boundary("PROJECT_KEYCARD_NOT_CURRENT")
+		}
+		oldCard = issuedKeycard{
+			pending: pendingKeycard{class: projectServiceCard, raw: secrets.ProjectToken},
+			record:  current,
+		}
+		replacementName, err := f.rotatedProjectTokenName()
+		if err != nil {
+			return err
+		}
+		pending, err := f.newKeycard(projectServiceCard, replacementName, current.Principal, auth.PrincipalKindService, current.ExpiresAt)
+		if err != nil {
+			return err
+		}
+		created, err := tokenStore.CreateWithPrincipal(
+			ctx,
+			pending.name,
+			pending.tokenHash,
+			pending.tokenPrefix,
+			fixtureReadWriteScope,
+			pending.principal,
+			string(pending.principalKind),
+			pending.expiresAt,
+		)
+		if err != nil {
+			return err
+		}
+		if err := tokenStore.Revoke(ctx, current.ID); err != nil {
+			return err
+		}
+		oldCard.record = &gormdb.APIToken{ID: current.ID, Revoked: true}
+		replacement = issuedKeycard{pending: pending, record: created}
+		return nil
+	})
+	if err != nil {
+		return issuedKeycard{}, issuedKeycard{}, err
+	}
+	return oldCard, replacement, nil
 }
 
 func rotationReceipt(runID string, oldCard, replacement issuedKeycard) RotationReceipt {
@@ -814,7 +829,7 @@ func (f *Fixture) compensateProjectKeycardRotation(ctx context.Context, oldToken
 }
 
 func (f *Fixture) isCurrentProjectCard(tx *gormlib.DB, token *gormdb.APIToken) bool {
-	if token == nil || token.Scope != "read-write" || token.PrincipalKind != string(auth.PrincipalKindService) {
+	if token == nil || token.Scope != fixtureReadWriteScope || token.PrincipalKind != string(auth.PrincipalKindService) {
 		return false
 	}
 	baseName := tokenName(f.runID, projectServiceCard)
@@ -1242,7 +1257,7 @@ func fixtureTag(runID string) string {
 }
 
 func fixtureSessionPrefix(runID string) string {
-	return "hap01c-" + runID + "-"
+	return fixtureRunPrefix + runID + "-"
 }
 
 func fixtureSessionID(runID string) string {
