@@ -86,6 +86,14 @@ type MarkdownDiagnostic struct {
 	Message string
 }
 
+type markdownReferenceLineContext struct {
+	lineStarts    []int
+	sourceLength  int
+	ownerLocalKey string
+	references    *[]MarkdownReferenceSite
+	artifact      *MarkdownArtifact
+}
+
 // ExtractMarkdown derives deterministic, checkout-independent evidence from one caller-owned Markdown source buffer.
 func ExtractMarkdown(source []byte, profile MarkdownExtractionProfile) MarkdownArtifact {
 	lineStarts := goLineStarts(source)
@@ -476,7 +484,14 @@ func markdownExtractReferenceSites(source []byte, lineStarts []int, ignored []bo
 			continue
 		}
 		lineStart, lineEnd := markdownLineBounds(source, lineStarts, index)
-		linePartial, lineLimited := markdownExtractReferenceLine(source[lineStart:lineEnd], lineStart, lineStarts, len(source), ownerLocalKey, &references, artifact)
+		context := markdownReferenceLineContext{
+			lineStarts:    lineStarts,
+			sourceLength:  len(source),
+			ownerLocalKey: ownerLocalKey,
+			references:    &references,
+			artifact:      artifact,
+		}
+		linePartial, lineLimited := markdownExtractReferenceLine(source[lineStart:lineEnd], lineStart, context)
 		if linePartial {
 			partial = true
 		}
@@ -487,11 +502,11 @@ func markdownExtractReferenceSites(source []byte, lineStarts []int, ignored []bo
 	return references, partial, limited
 }
 
-func markdownExtractReferenceLine(line []byte, lineStart int, lineStarts []int, sourceLength int, ownerLocalKey string, references *[]MarkdownReferenceSite, artifact *MarkdownArtifact) (bool, bool) {
+func markdownExtractReferenceLine(line []byte, lineStart int, context markdownReferenceLineContext) (bool, bool) {
 	partial := false
 	limited := false
 	for index := 0; index < len(line); {
-		next, linePartial, lineLimited := markdownReferenceLineStep(line, index, lineStart, sourceLength, lineStarts, ownerLocalKey, references, artifact)
+		next, linePartial, lineLimited := markdownReferenceLineStep(line, index, lineStart, context)
 		if linePartial {
 			partial = true
 		}
@@ -503,7 +518,7 @@ func markdownExtractReferenceLine(line []byte, lineStart int, lineStarts []int, 
 	return partial, limited
 }
 
-func markdownReferenceLineStep(line []byte, index, lineStart, sourceLength int, lineStarts []int, ownerLocalKey string, references *[]MarkdownReferenceSite, artifact *MarkdownArtifact) (int, bool, bool) {
+func markdownReferenceLineStep(line []byte, index, lineStart int, context markdownReferenceLineContext) (int, bool, bool) {
 	switch line[index] {
 	case '\\':
 		if index+1 < len(line) {
@@ -517,13 +532,13 @@ func markdownReferenceLineStep(line []byte, index, lineStart, sourceLength int, 
 		}
 		return index + width, false, false
 	case '[':
-		return markdownExtractInlineReference(line, index, lineStart, lineStarts, sourceLength, ownerLocalKey, references, artifact)
+		return markdownExtractInlineReference(line, index, lineStart, context)
 	default:
 		return index + 1, false, false
 	}
 }
 
-func markdownExtractInlineReference(line []byte, index, lineStart int, lineStarts []int, sourceLength int, ownerLocalKey string, references *[]MarkdownReferenceSite, artifact *MarkdownArtifact) (int, bool, bool) {
+func markdownExtractInlineReference(line []byte, index, lineStart int, context markdownReferenceLineContext) (int, bool, bool) {
 	labelEnd, valid := markdownClosingBracket(line, index+1)
 	if !valid || labelEnd+1 >= len(line) || line[labelEnd+1] != '(' {
 		return index + 1, false, false
@@ -534,9 +549,9 @@ func markdownExtractInlineReference(line []byte, index, lineStart int, lineStart
 	}
 	rawStart, rawEnd, closing, valid := markdownInlineDestination(line, labelEnd+1)
 	if !valid {
-		return index + 1, markdownMarkUnterminatedReference(line, labelEnd+1, spanStart, lineStart, lineStarts, sourceLength, artifact), false
+		return index + 1, markdownMarkUnterminatedReference(line, labelEnd+1, spanStart, lineStart, context.lineStarts, context.sourceLength, context.artifact), false
 	}
-	partial, limited := markdownAppendInlineReference(string(line[rawStart:rawEnd]), lineStart, spanStart, closing, lineStarts, sourceLength, ownerLocalKey, references)
+	partial, limited := markdownAppendInlineReference(string(line[rawStart:rawEnd]), lineStart, spanStart, closing, context)
 	return closing + 1, partial, limited
 }
 
@@ -552,11 +567,11 @@ func markdownMarkUnterminatedReference(line []byte, opening, spanStart, lineStar
 	return true
 }
 
-func markdownAppendInlineReference(rawTarget string, lineStart, spanStart, closing int, lineStarts []int, sourceLength int, ownerLocalKey string, references *[]MarkdownReferenceSite) (bool, bool) {
+func markdownAppendInlineReference(rawTarget string, lineStart, spanStart, closing int, context markdownReferenceLineContext) (bool, bool) {
 	if rawTarget == "" {
 		return false, false
 	}
-	span, spanValid := goSpanFromOffsets(lineStarts, sourceLength, lineStart+spanStart, lineStart+closing+1)
+	span, spanValid := goSpanFromOffsets(context.lineStarts, context.sourceLength, lineStart+spanStart, lineStart+closing+1)
 	if !spanValid {
 		return true, false
 	}
@@ -568,11 +583,11 @@ func markdownAppendInlineReference(rawTarget string, lineStart, spanStart, closi
 		targetPath = ""
 		fragment = ""
 	}
-	if !markdownAppendReference(references, MarkdownReferenceSite{
+	if !markdownAppendReference(context.references, MarkdownReferenceSite{
 		Kind:            kind,
 		SymbolKey:       "markdown:" + localKey,
 		LocalKey:        localKey,
-		OwnerLocalKey:   ownerLocalKey,
+		OwnerLocalKey:   context.ownerLocalKey,
 		RawTarget:       rawTarget,
 		TargetPath:      targetPath,
 		Fragment:        fragment,
