@@ -1205,6 +1205,12 @@ func uciRequireTreeSitterFixtureArtifact(t *testing.T, fixture uciTreeSitterFixt
 
 func uciRequireTreeSitterArtifactProof(t *testing.T, artifact TreeSitterArtifact) {
 	t.Helper()
+	uciRequireTreeSitterArtifactProofIdentity(t, artifact)
+	uciRequireTreeSitterArtifactChunks(t, artifact)
+}
+
+func uciRequireTreeSitterArtifactProofIdentity(t *testing.T, artifact TreeSitterArtifact) {
+	t.Helper()
 	if !canonicalContextUUID(artifact.Proof.ArtifactID) {
 		t.Fatalf("artifact ID %q is not a canonical UUID", artifact.Proof.ArtifactID)
 	}
@@ -1226,6 +1232,10 @@ func uciRequireTreeSitterArtifactProof(t *testing.T, artifact TreeSitterArtifact
 	if artifact.Proof.ChunkCount != uint64(len(artifact.Chunks)) {
 		t.Fatalf("chunk count = %d, want %d", artifact.Proof.ChunkCount, len(artifact.Chunks))
 	}
+}
+
+func uciRequireTreeSitterArtifactChunks(t *testing.T, artifact TreeSitterArtifact) {
+	t.Helper()
 	if len(artifact.Chunks) == 0 {
 		t.Fatal("Parse() returned no source chunks")
 	}

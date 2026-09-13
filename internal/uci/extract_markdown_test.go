@@ -198,6 +198,12 @@ func uciMarkdownExtractionProfile() MarkdownExtractionProfile {
 
 func uciRequireMarkdownExtractionProof(t *testing.T, artifact MarkdownArtifact) {
 	t.Helper()
+	uciRequireMarkdownArtifactProofIdentity(t, artifact)
+	uciRequireMarkdownArtifactChunks(t, artifact)
+}
+
+func uciRequireMarkdownArtifactProofIdentity(t *testing.T, artifact MarkdownArtifact) {
+	t.Helper()
 	if !canonicalContextUUID(artifact.Proof.ArtifactID) {
 		t.Fatalf("artifact ID %q is not a canonical UUID", artifact.Proof.ArtifactID)
 	}
@@ -216,6 +222,10 @@ func uciRequireMarkdownExtractionProof(t *testing.T, artifact MarkdownArtifact) 
 	if artifact.Proof.ChunkCount != uint64(len(artifact.Chunks)) {
 		t.Fatalf("chunk count = %d, want %d", artifact.Proof.ChunkCount, len(artifact.Chunks))
 	}
+}
+
+func uciRequireMarkdownArtifactChunks(t *testing.T, artifact MarkdownArtifact) {
+	t.Helper()
 	if len(artifact.Chunks) == 0 {
 		t.Fatal("extraction returned no prose chunks")
 	}

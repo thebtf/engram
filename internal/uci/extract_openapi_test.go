@@ -362,6 +362,14 @@ func uciOpenAPIProfile(format OpenAPIFormat) OpenAPIExtractionProfile {
 
 func uciRequireOpenAPIExtractionProof(t *testing.T, artifact OpenAPIArtifact) {
 	t.Helper()
+	uciRequireOpenAPIArtifactProofIdentity(t, artifact)
+	uciRequireOpenAPIDefinitionProof(t, artifact)
+	uciRequireOpenAPIReferenceProof(t, artifact)
+	uciRequireOpenAPIChunkProof(t, artifact)
+}
+
+func uciRequireOpenAPIArtifactProofIdentity(t *testing.T, artifact OpenAPIArtifact) {
+	t.Helper()
 	if !canonicalContextUUID(artifact.Proof.ArtifactID) {
 		t.Fatalf("artifact ID %q is not a canonical UUID", artifact.Proof.ArtifactID)
 	}
@@ -383,7 +391,10 @@ func uciRequireOpenAPIExtractionProof(t *testing.T, artifact OpenAPIArtifact) {
 	if len(artifact.Chunks) == 0 {
 		t.Fatal("extraction returned no source chunks")
 	}
+}
 
+func uciRequireOpenAPIDefinitionProof(t *testing.T, artifact OpenAPIArtifact) {
+	t.Helper()
 	definitionKeys := make(map[string]struct{}, len(artifact.Definitions))
 	for _, definition := range artifact.Definitions {
 		if definition.Kind == "" || definition.LocalKey == "" || definition.SymbolKey == "" {
@@ -395,7 +406,10 @@ func uciRequireOpenAPIExtractionProof(t *testing.T, artifact OpenAPIArtifact) {
 		definitionKeys[definition.SymbolKey] = struct{}{}
 		uciRequireOpenAPISpanWithinText(t, definition.Span, artifact.Text, "definition "+definition.SymbolKey)
 	}
+}
 
+func uciRequireOpenAPIReferenceProof(t *testing.T, artifact OpenAPIArtifact) {
+	t.Helper()
 	referenceKeys := make(map[string]struct{}, len(artifact.References))
 	for _, reference := range artifact.References {
 		if reference.Kind == "" || reference.LocalKey == "" || reference.SymbolKey == "" {
@@ -416,7 +430,10 @@ func uciRequireOpenAPIExtractionProof(t *testing.T, artifact OpenAPIArtifact) {
 		referenceKeys[reference.SymbolKey] = struct{}{}
 		uciRequireOpenAPISpanWithinText(t, reference.Span, artifact.Text, "reference "+reference.SymbolKey)
 	}
+}
 
+func uciRequireOpenAPIChunkProof(t *testing.T, artifact OpenAPIArtifact) {
+	t.Helper()
 	var rebuilt strings.Builder
 	var nextStart int64
 	for index, chunk := range artifact.Chunks {

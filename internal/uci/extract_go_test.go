@@ -162,6 +162,12 @@ func uciGoExtractionProfile() GoExtractionProfile {
 
 func uciRequireGoExtractionProof(t *testing.T, artifact GoArtifact) {
 	t.Helper()
+	uciRequireGoArtifactProofIdentity(t, artifact)
+	uciRequireGoArtifactChunks(t, artifact)
+}
+
+func uciRequireGoArtifactProofIdentity(t *testing.T, artifact GoArtifact) {
+	t.Helper()
 	if !canonicalContextUUID(artifact.Proof.ArtifactID) {
 		t.Fatalf("artifact ID %q is not a canonical UUID", artifact.Proof.ArtifactID)
 	}
@@ -180,6 +186,10 @@ func uciRequireGoExtractionProof(t *testing.T, artifact GoArtifact) {
 	if artifact.Proof.ChunkCount != uint64(len(artifact.Chunks)) {
 		t.Fatalf("chunk count = %d, want %d", artifact.Proof.ChunkCount, len(artifact.Chunks))
 	}
+}
+
+func uciRequireGoArtifactChunks(t *testing.T, artifact GoArtifact) {
+	t.Helper()
 	if len(artifact.Chunks) == 0 {
 		t.Fatal("extraction returned no text chunks")
 	}

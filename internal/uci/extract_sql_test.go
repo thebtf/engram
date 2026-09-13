@@ -227,6 +227,12 @@ func uciSQLExtractionProfile() SQLExtractionProfile {
 
 func uciRequireSQLExtractionProof(t *testing.T, artifact SQLArtifact) {
 	t.Helper()
+	uciRequireSQLArtifactProofIdentity(t, artifact)
+	uciRequireSQLArtifactChunks(t, artifact)
+}
+
+func uciRequireSQLArtifactProofIdentity(t *testing.T, artifact SQLArtifact) {
+	t.Helper()
 	if !canonicalContextUUID(artifact.Proof.ArtifactID) {
 		t.Fatalf("artifact ID %q is not a canonical UUID", artifact.Proof.ArtifactID)
 	}
@@ -245,6 +251,10 @@ func uciRequireSQLExtractionProof(t *testing.T, artifact SQLArtifact) {
 	if artifact.Proof.ChunkCount != uint64(len(artifact.Chunks)) {
 		t.Fatalf("chunk count = %d, want %d", artifact.Proof.ChunkCount, len(artifact.Chunks))
 	}
+}
+
+func uciRequireSQLArtifactChunks(t *testing.T, artifact SQLArtifact) {
+	t.Helper()
 	if len(artifact.Chunks) == 0 {
 		t.Fatal("extraction returned no source chunks")
 	}

@@ -253,6 +253,12 @@ func uciJSONYAMLProfile(format JSONYAMLFormat) JSONYAMLExtractionProfile {
 
 func uciRequireJSONYAMLExtractionProof(t *testing.T, artifact JSONYAMLArtifact) {
 	t.Helper()
+	uciRequireJSONYAMLArtifactProofIdentity(t, artifact)
+	uciRequireJSONYAMLArtifactChunks(t, artifact)
+}
+
+func uciRequireJSONYAMLArtifactProofIdentity(t *testing.T, artifact JSONYAMLArtifact) {
+	t.Helper()
 	if !canonicalContextUUID(artifact.Proof.ArtifactID) {
 		t.Fatalf("artifact ID %q is not a canonical UUID", artifact.Proof.ArtifactID)
 	}
@@ -271,6 +277,10 @@ func uciRequireJSONYAMLExtractionProof(t *testing.T, artifact JSONYAMLArtifact) 
 	if artifact.Proof.ChunkCount != uint64(len(artifact.Chunks)) {
 		t.Fatalf("chunk count = %d, want %d", artifact.Proof.ChunkCount, len(artifact.Chunks))
 	}
+}
+
+func uciRequireJSONYAMLArtifactChunks(t *testing.T, artifact JSONYAMLArtifact) {
+	t.Helper()
 	if len(artifact.Chunks) == 0 {
 		t.Fatal("extraction returned no text chunks")
 	}
