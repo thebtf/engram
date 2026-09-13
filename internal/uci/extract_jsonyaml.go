@@ -710,39 +710,49 @@ func (parser *jsonYAMLJSONParser) parseValue(pointer string, depth int, emit boo
 		return jsonYAMLJSONValue{}, false
 	}
 	parser.nodes++
-
-	switch parser.source[parser.offset] {
-	case '{':
+	if parser.source[start] == '{' {
 		return parser.parseObject(pointer, depth, emit)
-	case '[':
+	}
+	if parser.source[start] == '[' {
 		return parser.parseArray(pointer, depth, emit)
-	case '"':
-		value, stringStart, stringEnd, ok := parser.parseString()
-		if !ok {
-			return jsonYAMLJSONValue{}, false
-		}
-		return jsonYAMLJSONValue{kind: jsonYAMLJSONValueString, stringValue: value, start: stringStart, end: stringEnd}, true
-	case 't':
-		if parser.parseLiteral("true") {
-			return jsonYAMLJSONValue{start: start, end: parser.offset}, true
-		}
-	case 'f':
-		if parser.parseLiteral("false") {
-			return jsonYAMLJSONValue{start: start, end: parser.offset}, true
-		}
-	case 'n':
-		if parser.parseLiteral("null") {
-			return jsonYAMLJSONValue{start: start, end: parser.offset}, true
-		}
-	default:
-		if parser.source[parser.offset] == '-' || (parser.source[parser.offset] >= '0' && parser.source[parser.offset] <= '9') {
-			if parser.parseNumber() {
-				return jsonYAMLJSONValue{start: start, end: parser.offset}, true
-			}
-		}
+	}
+	value, parsed, recognized := parser.parseScalar(start)
+	if recognized {
+		return value, parsed
 	}
 	parser.fail("PARSE_ERROR", start, "JSON value is malformed")
 	return jsonYAMLJSONValue{}, false
+}
+
+func (parser *jsonYAMLJSONParser) parseScalar(start int) (jsonYAMLJSONValue, bool, bool) {
+	switch parser.source[parser.offset] {
+	case '"':
+		value, stringStart, stringEnd, ok := parser.parseString()
+		if !ok {
+			return jsonYAMLJSONValue{}, false, true
+		}
+		return jsonYAMLJSONValue{kind: jsonYAMLJSONValueString, stringValue: value, start: stringStart, end: stringEnd}, true, true
+	case 't':
+		return parser.parseLiteralValue("true", start)
+	case 'f':
+		return parser.parseLiteralValue("false", start)
+	case 'n':
+		return parser.parseLiteralValue("null", start)
+	default:
+		if parser.source[parser.offset] == '-' || (parser.source[parser.offset] >= '0' && parser.source[parser.offset] <= '9') {
+			if parser.parseNumber() {
+				return jsonYAMLJSONValue{start: start, end: parser.offset}, true, true
+			}
+		}
+	}
+	return jsonYAMLJSONValue{}, false, false
+}
+
+func (parser *jsonYAMLJSONParser) parseLiteralValue(literal string, start int) (jsonYAMLJSONValue, bool, bool) {
+	if !parser.parseLiteral(literal) {
+		return jsonYAMLJSONValue{}, false, false
+	}
+	return jsonYAMLJSONValue{start: start, end: parser.offset}, true, true
 }
 
 func (parser *jsonYAMLJSONParser) parseObject(pointer string, depth int, emit bool) (jsonYAMLJSONValue, bool) {
@@ -757,61 +767,13 @@ func (parser *jsonYAMLJSONParser) parseObject(pointer string, depth int, emit bo
 	referenceBase := len(parser.collector.artifact.References)
 	entries := make([]jsonYAMLFactRange, 0)
 	for {
-		parser.skipWhitespace()
-		if parser.offset >= len(parser.source) || parser.source[parser.offset] != '"' {
-			parser.fail("PARSE_ERROR", parser.offset, "JSON object key must be a string")
+		entry, include, parsed := parser.parseObjectEntry(pointer, depth, emit)
+		if !parsed {
 			return jsonYAMLJSONValue{}, false
 		}
-		key, keyStart, keyEnd, ok := parser.parseString()
-		if !ok {
-			return jsonYAMLJSONValue{}, false
+		if include {
+			entries = append(entries, entry)
 		}
-		parser.skipWhitespace()
-		if !parser.consume(':') {
-			parser.fail("PARSE_ERROR", parser.offset, "JSON object key is missing its colon")
-			return jsonYAMLJSONValue{}, false
-		}
-
-		nextPointer, pointerValid := jsonYAMLPointerAppend(pointer, key)
-		childEmit := emit && pointerValid
-		if emit && !pointerValid {
-			parser.collector.limit("POINTER_LIMIT", parser.span(keyStart, keyEnd), "JSON pointer exceeded the bounded extraction limit")
-		}
-		definitionStart := len(parser.collector.artifact.Definitions)
-		referenceStart := len(parser.collector.artifact.References)
-		value, ok := parser.parseValue(nextPointer, depth+1, childEmit)
-		if !ok {
-			return jsonYAMLJSONValue{}, false
-		}
-		if childEmit {
-			if key == "$ref" && value.kind == jsonYAMLJSONValueString {
-				parser.addPointerReference(nextPointer, value)
-			}
-			span := parser.span(keyStart, keyEnd)
-			if span.ByteEnd <= span.ByteStart {
-				parser.collector.limit("SPAN_UNAVAILABLE", IndexSpan{}, "JSON key span could not be represented")
-			} else if !parser.collector.addDefinition(JSONYAMLDefinition{
-				Kind:      "key",
-				SymbolKey: jsonYAMLSymbolKey(parser.profile.Format, 0, nextPointer),
-				LocalKey:  "#" + nextPointer,
-				Document:  0,
-				Span:      span,
-			}) {
-				return jsonYAMLJSONValue{}, false
-			}
-		}
-		if emit {
-			entries = append(entries, jsonYAMLFactRange{
-				key:             key,
-				pointer:         nextPointer,
-				span:            parser.span(keyStart, keyEnd),
-				definitionStart: definitionStart,
-				definitionEnd:   len(parser.collector.artifact.Definitions),
-				referenceStart:  referenceStart,
-				referenceEnd:    len(parser.collector.artifact.References),
-			})
-		}
-
 		parser.skipWhitespace()
 		if parser.consume('}') {
 			break
@@ -827,6 +789,68 @@ func (parser *jsonYAMLJSONParser) parseObject(pointer string, depth int, emit bo
 	return jsonYAMLJSONValue{start: start, end: parser.offset}, true
 }
 
+func (parser *jsonYAMLJSONParser) parseObjectEntry(pointer string, depth int, emit bool) (jsonYAMLFactRange, bool, bool) {
+	parser.skipWhitespace()
+	if parser.offset >= len(parser.source) || parser.source[parser.offset] != '"' {
+		parser.fail("PARSE_ERROR", parser.offset, "JSON object key must be a string")
+		return jsonYAMLFactRange{}, false, false
+	}
+	key, keyStart, keyEnd, ok := parser.parseString()
+	if !ok {
+		return jsonYAMLFactRange{}, false, false
+	}
+	parser.skipWhitespace()
+	if !parser.consume(':') {
+		parser.fail("PARSE_ERROR", parser.offset, "JSON object key is missing its colon")
+		return jsonYAMLFactRange{}, false, false
+	}
+
+	nextPointer, pointerValid := jsonYAMLPointerAppend(pointer, key)
+	childEmit := emit && pointerValid
+	if emit && !pointerValid {
+		parser.collector.limit("POINTER_LIMIT", parser.span(keyStart, keyEnd), "JSON pointer exceeded the bounded extraction limit")
+	}
+	definitionStart := len(parser.collector.artifact.Definitions)
+	referenceStart := len(parser.collector.artifact.References)
+	value, ok := parser.parseValue(nextPointer, depth+1, childEmit)
+	if !ok {
+		return jsonYAMLFactRange{}, false, false
+	}
+	if childEmit && !parser.addObjectKey(key, nextPointer, value, keyStart, keyEnd) {
+		return jsonYAMLFactRange{}, false, false
+	}
+	if !emit {
+		return jsonYAMLFactRange{}, false, true
+	}
+	return jsonYAMLFactRange{
+		key:             key,
+		pointer:         nextPointer,
+		span:            parser.span(keyStart, keyEnd),
+		definitionStart: definitionStart,
+		definitionEnd:   len(parser.collector.artifact.Definitions),
+		referenceStart:  referenceStart,
+		referenceEnd:    len(parser.collector.artifact.References),
+	}, true, true
+}
+
+func (parser *jsonYAMLJSONParser) addObjectKey(key, pointer string, value jsonYAMLJSONValue, start, end int) bool {
+	if key == "$ref" && value.kind == jsonYAMLJSONValueString {
+		parser.addPointerReference(pointer, value)
+	}
+	span := parser.span(start, end)
+	if span.ByteEnd <= span.ByteStart {
+		parser.collector.limit("SPAN_UNAVAILABLE", IndexSpan{}, "JSON key span could not be represented")
+		return true
+	}
+	return parser.collector.addDefinition(JSONYAMLDefinition{
+		Kind:      "key",
+		SymbolKey: jsonYAMLSymbolKey(parser.profile.Format, 0, pointer),
+		LocalKey:  "#" + pointer,
+		Document:  0,
+		Span:      span,
+	})
+}
+
 func (parser *jsonYAMLJSONParser) parseArray(pointer string, depth int, emit bool) (jsonYAMLJSONValue, bool) {
 	start := parser.offset
 	parser.offset++
@@ -836,30 +860,9 @@ func (parser *jsonYAMLJSONParser) parseArray(pointer string, depth int, emit boo
 	}
 
 	for index := 0; ; index++ {
-		nextPointer, pointerValid := jsonYAMLPointerAppend(pointer, strconv.Itoa(index))
-		childEmit := emit && pointerValid
-		if emit && !pointerValid {
-			parser.collector.limit("POINTER_LIMIT", parser.pointSpan(parser.offset), "JSON pointer exceeded the bounded extraction limit")
-		}
-		value, ok := parser.parseValue(nextPointer, depth+1, childEmit)
-		if !ok {
+		if !parser.parseArrayItem(pointer, depth, emit, index) {
 			return jsonYAMLJSONValue{}, false
 		}
-		if childEmit {
-			span := parser.span(value.start, value.end)
-			if span.ByteEnd <= span.ByteStart {
-				parser.collector.limit("SPAN_UNAVAILABLE", IndexSpan{}, "JSON array item span could not be represented")
-			} else if !parser.collector.addDefinition(JSONYAMLDefinition{
-				Kind:      "index",
-				SymbolKey: jsonYAMLSymbolKey(parser.profile.Format, 0, nextPointer),
-				LocalKey:  "#" + nextPointer,
-				Document:  0,
-				Span:      span,
-			}) {
-				return jsonYAMLJSONValue{}, false
-			}
-		}
-
 		parser.skipWhitespace()
 		if parser.consume(']') {
 			break
@@ -873,6 +876,33 @@ func (parser *jsonYAMLJSONParser) parseArray(pointer string, depth int, emit boo
 	return jsonYAMLJSONValue{start: start, end: parser.offset}, true
 }
 
+func (parser *jsonYAMLJSONParser) parseArrayItem(pointer string, depth int, emit bool, index int) bool {
+	nextPointer, pointerValid := jsonYAMLPointerAppend(pointer, strconv.Itoa(index))
+	childEmit := emit && pointerValid
+	if emit && !pointerValid {
+		parser.collector.limit("POINTER_LIMIT", parser.pointSpan(parser.offset), "JSON pointer exceeded the bounded extraction limit")
+	}
+	value, ok := parser.parseValue(nextPointer, depth+1, childEmit)
+	if !ok {
+		return false
+	}
+	if !childEmit {
+		return true
+	}
+	span := parser.span(value.start, value.end)
+	if span.ByteEnd <= span.ByteStart {
+		parser.collector.limit("SPAN_UNAVAILABLE", IndexSpan{}, "JSON array item span could not be represented")
+		return true
+	}
+	return parser.collector.addDefinition(JSONYAMLDefinition{
+		Kind:      "index",
+		SymbolKey: jsonYAMLSymbolKey(parser.profile.Format, 0, nextPointer),
+		LocalKey:  "#" + nextPointer,
+		Document:  0,
+		Span:      span,
+	})
+}
+
 func (parser *jsonYAMLJSONParser) parseString() (string, int, int, bool) {
 	start := parser.offset
 	if start >= len(parser.source) || parser.source[start] != '"' {
@@ -882,8 +912,7 @@ func (parser *jsonYAMLJSONParser) parseString() (string, int, int, bool) {
 	parser.offset++
 	for parser.offset < len(parser.source) {
 		value := parser.source[parser.offset]
-		switch value {
-		case '"':
+		if value == '"' {
 			parser.offset++
 			decoded, err := strconv.Unquote(string(parser.source[start:parser.offset]))
 			if err != nil {
@@ -891,35 +920,44 @@ func (parser *jsonYAMLJSONParser) parseString() (string, int, int, bool) {
 				return "", 0, 0, false
 			}
 			return decoded, start, parser.offset, true
-		case '\\':
-			if parser.offset+1 >= len(parser.source) {
-				parser.fail("PARSE_ERROR", parser.offset, "JSON string ends in an incomplete escape")
-				return "", 0, 0, false
-			}
-			escape := parser.source[parser.offset+1]
-			switch escape {
-			case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
-				parser.offset += 2
-			case 'u':
-				if parser.offset+5 >= len(parser.source) || !jsonYAMLHex(parser.source[parser.offset+2]) || !jsonYAMLHex(parser.source[parser.offset+3]) || !jsonYAMLHex(parser.source[parser.offset+4]) || !jsonYAMLHex(parser.source[parser.offset+5]) {
-					parser.fail("PARSE_ERROR", parser.offset, "JSON string contains an invalid unicode escape")
-					return "", 0, 0, false
-				}
-				parser.offset += 6
-			default:
-				parser.fail("PARSE_ERROR", parser.offset, "JSON string contains an invalid escape")
-				return "", 0, 0, false
-			}
-		default:
-			if value < 0x20 {
-				parser.fail("PARSE_ERROR", parser.offset, "JSON string contains a control byte")
-				return "", 0, 0, false
-			}
-			parser.offset++
 		}
+		if value == '\\' {
+			if !parser.parseStringEscape() {
+				return "", 0, 0, false
+			}
+			continue
+		}
+		if value < 0x20 {
+			parser.fail("PARSE_ERROR", parser.offset, "JSON string contains a control byte")
+			return "", 0, 0, false
+		}
+		parser.offset++
 	}
 	parser.fail("PARSE_ERROR", start, "JSON string is unterminated")
 	return "", 0, 0, false
+}
+
+func (parser *jsonYAMLJSONParser) parseStringEscape() bool {
+	if parser.offset+1 >= len(parser.source) {
+		parser.fail("PARSE_ERROR", parser.offset, "JSON string ends in an incomplete escape")
+		return false
+	}
+	escape := parser.source[parser.offset+1]
+	switch escape {
+	case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
+		parser.offset += 2
+		return true
+	case 'u':
+		if parser.offset+5 >= len(parser.source) || !jsonYAMLHex(parser.source[parser.offset+2]) || !jsonYAMLHex(parser.source[parser.offset+3]) || !jsonYAMLHex(parser.source[parser.offset+4]) || !jsonYAMLHex(parser.source[parser.offset+5]) {
+			parser.fail("PARSE_ERROR", parser.offset, "JSON string contains an invalid unicode escape")
+			return false
+		}
+		parser.offset += 6
+		return true
+	default:
+		parser.fail("PARSE_ERROR", parser.offset, "JSON string contains an invalid escape")
+		return false
+	}
 }
 
 func jsonYAMLHex(value byte) bool {
@@ -939,44 +977,54 @@ func (parser *jsonYAMLJSONParser) parseNumber() bool {
 	if parser.consume('-') && parser.offset >= len(parser.source) {
 		return false
 	}
+	if !parser.parseNumberInteger() || !parser.parseNumberFraction() || !parser.parseNumberExponent() {
+		parser.offset = start
+		return false
+	}
+	return true
+}
+
+func (parser *jsonYAMLJSONParser) parseNumberInteger() bool {
 	if parser.offset >= len(parser.source) {
 		return false
 	}
 	if parser.source[parser.offset] == '0' {
 		parser.offset++
-	} else if parser.source[parser.offset] >= '1' && parser.source[parser.offset] <= '9' {
-		for parser.offset < len(parser.source) && parser.source[parser.offset] >= '0' && parser.source[parser.offset] <= '9' {
-			parser.offset++
-		}
-	} else {
-		parser.offset = start
+		return true
+	}
+	if parser.source[parser.offset] < '1' || parser.source[parser.offset] > '9' {
 		return false
 	}
-	if parser.consume('.') {
-		fractionStart := parser.offset
-		for parser.offset < len(parser.source) && parser.source[parser.offset] >= '0' && parser.source[parser.offset] <= '9' {
-			parser.offset++
-		}
-		if fractionStart == parser.offset {
-			parser.offset = start
-			return false
-		}
-	}
-	if parser.offset < len(parser.source) && (parser.source[parser.offset] == 'e' || parser.source[parser.offset] == 'E') {
+	for parser.offset < len(parser.source) && parser.source[parser.offset] >= '0' && parser.source[parser.offset] <= '9' {
 		parser.offset++
-		if parser.offset < len(parser.source) && (parser.source[parser.offset] == '+' || parser.source[parser.offset] == '-') {
-			parser.offset++
-		}
-		exponentStart := parser.offset
-		for parser.offset < len(parser.source) && parser.source[parser.offset] >= '0' && parser.source[parser.offset] <= '9' {
-			parser.offset++
-		}
-		if exponentStart == parser.offset {
-			parser.offset = start
-			return false
-		}
 	}
 	return true
+}
+
+func (parser *jsonYAMLJSONParser) parseNumberFraction() bool {
+	if !parser.consume('.') {
+		return true
+	}
+	return parser.parseNumberDigits()
+}
+
+func (parser *jsonYAMLJSONParser) parseNumberExponent() bool {
+	if parser.offset >= len(parser.source) || (parser.source[parser.offset] != 'e' && parser.source[parser.offset] != 'E') {
+		return true
+	}
+	parser.offset++
+	if parser.offset < len(parser.source) && (parser.source[parser.offset] == '+' || parser.source[parser.offset] == '-') {
+		parser.offset++
+	}
+	return parser.parseNumberDigits()
+}
+
+func (parser *jsonYAMLJSONParser) parseNumberDigits() bool {
+	start := parser.offset
+	for parser.offset < len(parser.source) && parser.source[parser.offset] >= '0' && parser.source[parser.offset] <= '9' {
+		parser.offset++
+	}
+	return parser.offset != start
 }
 
 func (parser *jsonYAMLJSONParser) addPointerReference(pointer string, value jsonYAMLJSONValue) {
@@ -1240,61 +1288,73 @@ func (walker *jsonYAMLYAMLWalker) walkMapping(node *yaml.Node, pointer string, d
 	referenceBase := len(walker.collector.artifact.References)
 	entries := make([]jsonYAMLFactRange, 0, len(node.Content)/2)
 	for index := 0; index+1 < len(node.Content); index += 2 {
-		keyNode := node.Content[index]
-		valueNode := node.Content[index+1]
-		if keyNode == nil || valueNode == nil || keyNode.Kind != yaml.ScalarNode {
-			walker.collector.limit("UNSUPPORTED_MAPPING_KEY", walker.nodeSpanOrZero(keyNode), "YAML mapping key is not a scalar")
-			if valueNode != nil && !walker.walk(valueNode, "", depth+1, false) {
-				complete = false
-			}
-			complete = false
-			continue
-		}
-
-		nextPointer, pointerValid := jsonYAMLPointerAppend(pointer, keyNode.Value)
-		childEmit := emit && pointerValid
-		keySpan := walker.keySpanOrZero(keyNode)
-		if emit && !pointerValid {
-			walker.collector.limit("POINTER_LIMIT", keySpan, "YAML pointer exceeded the bounded extraction limit")
-		}
-		definitionStart := len(walker.collector.artifact.Definitions)
-		referenceStart := len(walker.collector.artifact.References)
-		if !walker.walk(valueNode, nextPointer, depth+1, childEmit) {
+		entry, include, entryComplete := walker.walkMappingEntry(node.Content[index], node.Content[index+1], pointer, depth, emit)
+		if !entryComplete {
 			complete = false
 		}
-		if childEmit {
-			if keyNode.Value == "$ref" && valueNode.Kind == yaml.ScalarNode {
-				walker.addPointerReference(nextPointer, valueNode)
-			}
-			if keySpan.ByteEnd <= keySpan.ByteStart {
-				walker.collector.limit("SPAN_UNAVAILABLE", IndexSpan{}, "YAML key span could not be represented")
-				complete = false
-			} else if !walker.collector.addDefinition(JSONYAMLDefinition{
-				Kind:      "key",
-				SymbolKey: jsonYAMLSymbolKey(walker.profile.Format, walker.document, nextPointer),
-				LocalKey:  "#" + nextPointer,
-				Document:  walker.document,
-				Span:      keySpan,
-			}) {
-				complete = false
-			}
-		}
-		if emit {
-			entries = append(entries, jsonYAMLFactRange{
-				key:             keyNode.Value,
-				pointer:         nextPointer,
-				span:            keySpan,
-				definitionStart: definitionStart,
-				definitionEnd:   len(walker.collector.artifact.Definitions),
-				referenceStart:  referenceStart,
-				referenceEnd:    len(walker.collector.artifact.References),
-			})
+		if include {
+			entries = append(entries, entry)
 		}
 	}
 	if emit {
 		jsonYAMLFilterDuplicateEntries(walker.collector, walker.profile.Format, walker.document, definitionBase, referenceBase, entries, walker.ambiguous)
 	}
 	return complete
+}
+
+func (walker *jsonYAMLYAMLWalker) walkMappingEntry(keyNode, valueNode *yaml.Node, pointer string, depth int, emit bool) (jsonYAMLFactRange, bool, bool) {
+	if keyNode == nil || valueNode == nil || keyNode.Kind != yaml.ScalarNode {
+		walker.collector.limit("UNSUPPORTED_MAPPING_KEY", walker.nodeSpanOrZero(keyNode), "YAML mapping key is not a scalar")
+		if valueNode != nil {
+			walker.walk(valueNode, "", depth+1, false)
+		}
+		return jsonYAMLFactRange{}, false, false
+	}
+	return walker.walkValidMappingEntry(keyNode, valueNode, pointer, depth, emit)
+}
+
+func (walker *jsonYAMLYAMLWalker) walkValidMappingEntry(keyNode, valueNode *yaml.Node, pointer string, depth int, emit bool) (jsonYAMLFactRange, bool, bool) {
+	nextPointer, pointerValid := jsonYAMLPointerAppend(pointer, keyNode.Value)
+	childEmit := emit && pointerValid
+	keySpan := walker.keySpanOrZero(keyNode)
+	if emit && !pointerValid {
+		walker.collector.limit("POINTER_LIMIT", keySpan, "YAML pointer exceeded the bounded extraction limit")
+	}
+	definitionStart := len(walker.collector.artifact.Definitions)
+	referenceStart := len(walker.collector.artifact.References)
+	complete := walker.walk(valueNode, nextPointer, depth+1, childEmit)
+	if childEmit && !walker.addMappingKey(keyNode, valueNode, nextPointer, keySpan) {
+		complete = false
+	}
+	if !emit {
+		return jsonYAMLFactRange{}, false, complete
+	}
+	return jsonYAMLFactRange{
+		key:             keyNode.Value,
+		pointer:         nextPointer,
+		span:            keySpan,
+		definitionStart: definitionStart,
+		definitionEnd:   len(walker.collector.artifact.Definitions),
+		referenceStart:  referenceStart,
+		referenceEnd:    len(walker.collector.artifact.References),
+	}, true, complete
+}
+
+func (walker *jsonYAMLYAMLWalker) addMappingKey(keyNode, valueNode *yaml.Node, pointer string, keySpan IndexSpan) bool {
+	if keyNode.Value == "$ref" && valueNode.Kind == yaml.ScalarNode {
+		walker.addPointerReference(pointer, valueNode)
+	}
+	if keySpan.ByteEnd <= keySpan.ByteStart {
+		walker.collector.limit("SPAN_UNAVAILABLE", IndexSpan{}, "YAML key span could not be represented")
+		return false
+	}
+	return walker.collector.addDefinition(JSONYAMLDefinition{
+		Kind:      "key",
+		SymbolKey: jsonYAMLSymbolKey(walker.profile.Format, walker.document, pointer),
+		LocalKey:  "#" + pointer,
+		Document:  walker.document,
+		Span:      keySpan,
+	})
 }
 
 func (walker *jsonYAMLYAMLWalker) walkSequence(node *yaml.Node, pointer string, depth int, emit bool) bool {
@@ -1492,27 +1552,43 @@ func jsonYAMLYAMLNodeEnd(source []byte, start int, node *yaml.Node, key bool) in
 			return end
 		}
 	}
+	if end, quoted := jsonYAMLQuotedNodeEnd(source, start, lineEnd); quoted {
+		return end
+	}
+	return jsonYAMLPlainNodeEnd(source, start, lineEnd, key)
+}
+
+func jsonYAMLQuotedNodeEnd(source []byte, start, lineEnd int) (int, bool) {
 	switch source[start] {
 	case '"':
-		return jsonYAMLDoubleQuotedEnd(source, start, lineEnd)
+		return jsonYAMLDoubleQuotedEnd(source, start, lineEnd), true
 	case '\'':
-		return jsonYAMLSingleQuotedEnd(source, start, lineEnd)
+		return jsonYAMLSingleQuotedEnd(source, start, lineEnd), true
+	default:
+		return 0, false
 	}
+}
+
+func jsonYAMLPlainNodeEnd(source []byte, start, lineEnd int, key bool) int {
 	end := start
 	for end < lineEnd {
-		value := source[end]
-		if value == '\r' || value == '\n' || value == ' ' || value == '\t' || value == ',' || value == '[' || value == ']' || value == '{' || value == '}' {
-			break
-		}
-		if key && value == ':' {
-			break
-		}
-		if value == '#' && (end == start || source[end-1] == ' ' || source[end-1] == '\t') {
+		if jsonYAMLPlainNodeBoundary(source, start, end, key) {
 			break
 		}
 		end++
 	}
 	return end
+}
+
+func jsonYAMLPlainNodeBoundary(source []byte, start, end int, key bool) bool {
+	value := source[end]
+	if value == '\r' || value == '\n' || value == ' ' || value == '\t' || value == ',' || value == '[' || value == ']' || value == '{' || value == '}' {
+		return true
+	}
+	if key && value == ':' {
+		return true
+	}
+	return value == '#' && (end == start || source[end-1] == ' ' || source[end-1] == '\t')
 }
 
 func jsonYAMLDoubleQuotedEnd(source []byte, start, lineEnd int) int {
