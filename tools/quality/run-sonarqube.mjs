@@ -926,40 +926,110 @@ function artifactFrom(manifestRecord, artifact) {
   return { path, ...verified };
 }
 
-function validTestEvidence(manifestRecord, entry, profile, candidate, environment) {
-  if (!Array.isArray(entry.expected_tests) || !entry.expected_tests.length || entry.expected_tests.some((item) => !item?.package || !item?.test)) return false;
-  if (entry.expected_test_inventory_sha256 !== sha256(canonicalJson(entry.expected_tests))) return false;
-  if (!entry.test_events?.path || !entry.test_events.sha256 || !Number.isSafeInteger(entry.test_events.bytes)) return false;
+function retainedEvidence(record, entry, candidate, environment) {
+  const visited = new Set();
+  let sourceRecord = record;
+  let sourceEntry = entry;
+  while (sourceEntry?.source_run_id) {
+    if (visited.has(sourceEntry.source_run_id)) return null;
+    visited.add(sourceEntry.source_run_id);
+    sourceRecord = referencedRun(sourceRecord, sourceEntry.source_run_id, candidate, environment);
+    sourceEntry = sourceRecord?.manifest?.profiles?.find((profile) => profile.name === entry.name);
+    if (!sourceRecord || !sourceEntry) return null;
+  }
+  return sourceRecord && sourceEntry ? { record: sourceRecord, entry: sourceEntry } : null;
+}
+
+function rejectedTestEvidence(localArtifact, reason) {
+  return {
+    execution: "rejected",
+    local_artifact: localArtifact ? "passed" : "rejected",
+    campaign_obligations: "rejected",
+    allowed_skip_obligations: [],
+    passed_tests: new Set(),
+    passed_packages: new Set(),
+    reason,
+  };
+}
+
+function ownerHasPassedRequiredTest(record, obligation, candidate, environment) {
+  const ownerProfile = coverageProfiles.find((profile) => profile.name === obligation.required_profile);
+  const ownerEntry = record.manifest?.profiles?.find((profile) => profile.name === obligation.required_profile);
+  if (!ownerProfile || !ownerEntry) return false;
+  const source = retainedEvidence(record, ownerEntry, candidate, environment);
+  if (!source || source.entry.status !== "passed" || source.entry.fingerprint !== fingerprintProfile(ownerProfile, candidate, environment)) return false;
+  const evidence = evaluateTestEvidence(source.record, source.entry, ownerProfile, candidate, environment, { checkCampaignObligations: false });
+  const requiredTest = obligation.test.split("/")[0];
+  if (evidence.execution !== "passed" || evidence.local_artifact !== "passed" ||
+    !source.entry.expected_tests.some((test) => test.package === obligation.package && test.test === requiredTest) ||
+    !evidence.passed_tests.has(testIdentity(obligation.package, requiredTest)) ||
+    !evidence.passed_packages.has(obligation.package)) return false;
+  try {
+    artifactFrom(source.record, source.entry.coverage);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function evaluateTestEvidence(manifestRecord, entry, profile, candidate, environment, { checkCampaignObligations = true } = {}) {
+  if (!Array.isArray(entry.expected_tests) || !entry.expected_tests.length || entry.expected_tests.some((item) => !item?.package || !item?.test)) return rejectedTestEvidence(false, "expected tests are incomplete");
+  if (entry.expected_test_inventory_sha256 !== sha256(canonicalJson(entry.expected_tests))) return rejectedTestEvidence(false, "expected test inventory digest mismatched");
+  if (!entry.test_events?.path || !entry.test_events.sha256 || !Number.isSafeInteger(entry.test_events.bytes)) return rejectedTestEvidence(false, "test event metadata is incomplete");
   let path;
-  try { path = safeRelative(manifestRecord.runDir, entry.test_events.path); } catch { return false; }
-  if (!existsSync(path) || statSync(path).size !== entry.test_events.bytes || shaFile(path) !== entry.test_events.sha256) return false;
+  try {
+    path = safeRelative(manifestRecord.runDir, entry.test_events.path);
+    if (!existsSync(path) || statSync(path).size !== entry.test_events.bytes || shaFile(path) !== entry.test_events.sha256) return rejectedTestEvidence(false, "test event artifact mismatched");
+  } catch {
+    return rejectedTestEvidence(false, "test event artifact is unavailable");
+  }
   const passedTests = new Set();
   const passedPackages = new Set();
   const skipped = [];
   const reasons = new Map();
-  for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    let value;
-    try { value = JSON.parse(line); } catch { return false; }
-    const key = value.Test ? testIdentity(value.Package || "", value.Test) : null;
-    if (value.Action === "fail") return false;
-    if (key && value.Action === "output") reasons.set(key, `${reasons.get(key) || ""}${value.Output || ""}`);
-    if (key && value.Action === "pass") passedTests.add(key);
-    if (value.Package && value.Action === "pass") passedPackages.add(value.Package);
-    if (key && value.Action === "skip") skipped.push({ package: value.Package || "", test: value.Test, reason: reasons.get(key)?.trim() || "" });
+  try {
+    for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      const value = JSON.parse(line);
+      const key = value.Test ? testIdentity(value.Package || "", value.Test) : null;
+      if (value.Action === "fail") return rejectedTestEvidence(true, "Go test events reported failure");
+      if (key && value.Action === "output") reasons.set(key, `${reasons.get(key) || ""}${value.Output || ""}`);
+      if (key && value.Action === "pass") passedTests.add(key);
+      if (value.Package && !value.Test && value.Action === "pass") passedPackages.add(value.Package);
+      if (key && value.Action === "skip") skipped.push({ package: value.Package || "", test: value.Test, reason: reasons.get(key)?.trim() || "" });
+    }
+  } catch {
+    return rejectedTestEvidence(true, "test event artifact is malformed");
   }
   const obligations = skipped.map((skip) => skipAdmission(profile, skip, candidate));
-  if (obligations.some((obligation) => !obligation)) return false;
-  for (const obligation of obligations.filter((obligation) => obligation.kind !== "conditional")) {
-    const owner = coverageProfiles.find((candidateProfile) => candidateProfile.name === obligation.required_profile);
-    const ownerEntry = manifestRecord.manifest.profiles?.find((item) => item.name === obligation.required_profile);
-    if (!owner || !ownerEntry || ownerEntry.status !== "passed" || ownerEntry.fingerprint !== fingerprintProfile(owner, candidate, environment)) return false;
-  }
+  if (obligations.some((obligation) => !obligation)) return rejectedTestEvidence(true, "Go test events reported an unapproved skip");
   const acceptedTests = new Set([...passedTests, ...obligations.map((obligation) => testIdentity(obligation.package, obligation.test))]);
   const counts = entry.package_counts || {};
-  return Number.isSafeInteger(counts.passed) && counts.passed > 0 &&
-    counts.passed === passedPackages.size && counts.tests_passed === passedTests.size && counts.tests_skipped === skipped.length &&
-    entry.expected_tests.every((item) => acceptedTests.has(testIdentity(item.package, item.test))) && !entry.unexpected_skip_count;
+  if (!passedPackages.size || !Number.isSafeInteger(counts.passed) || !Number.isSafeInteger(counts.failed) ||
+    !Number.isSafeInteger(counts.tests_passed) || !Number.isSafeInteger(counts.tests_skipped) ||
+    counts.passed !== passedPackages.size || counts.failed !== 0 || counts.tests_passed !== passedTests.size || counts.tests_skipped !== skipped.length ||
+    !entry.expected_tests.every((test) => acceptedTests.has(testIdentity(test.package, test.test))) || entry.unexpected_skip_count) {
+    return rejectedTestEvidence(true, "test event evidence is incomplete");
+  }
+  const direct = obligations.filter((obligation) => obligation.kind !== "conditional");
+  const campaignObligations = !checkCampaignObligations || direct.every((obligation) => ownerHasPassedRequiredTest(manifestRecord, obligation, candidate, environment))
+    ? "passed"
+    : "deferred";
+  return {
+    execution: "passed",
+    local_artifact: "passed",
+    campaign_obligations: campaignObligations,
+    allowed_skip_obligations: obligations,
+    passed_tests: passedTests,
+    passed_packages: passedPackages,
+    reason: null,
+  };
+}
+
+function validTestEvidence(manifestRecord, entry, profile, candidate, environment) {
+  if (entry.status !== "passed" || entry.fingerprint !== fingerprintProfile(profile, candidate, environment)) return false;
+  const evidence = evaluateTestEvidence(manifestRecord, entry, profile, candidate, environment);
+  return evidence.execution === "passed" && evidence.local_artifact === "passed" && evidence.campaign_obligations === "passed";
 }
 
 export function reusableProfile(manifestRecord, profile, candidate, environment) {
@@ -1522,8 +1592,8 @@ export function consumeGoEvents(chunk, state, write, observe = () => { }) {
       if (eventValue.Action === "fail") state.failedTests.add(key);
       if (eventValue.Action === "run") state.startedTests.add(key);
     }
-    if (eventValue.Package && eventValue.Action === "pass") state.passedPackages.add(eventValue.Package);
-    if (eventValue.Package && eventValue.Action === "fail") state.failedPackages.add(eventValue.Package);
+    if (eventValue.Package && !eventValue.Test && eventValue.Action === "pass") state.passedPackages.add(eventValue.Package);
+    if (eventValue.Package && !eventValue.Test && eventValue.Action === "fail") state.failedPackages.add(eventValue.Package);
     observe(eventValue, goLifecycleTransition(state, eventValue));
   }
 }
@@ -1543,11 +1613,12 @@ export function summarizeGoEvents(events) {
 
 function skipObligation(profile, skipped) {
   if (profile.name !== "base" && !profile.baseUnit) return null;
+  const rootTest = skipped.test.split("/")[0];
   const owner = coverageProfiles.find((candidate) => {
     if (!candidate.databasePrefix || candidate.name === profile.name) return false;
     if (!skipped.package.endsWith(`/${candidate.target.slice(2)}`)) return false;
-    if (candidate.run && !new RegExp(candidate.run).test(skipped.test)) return false;
-    return !candidate.skip || !new RegExp(candidate.skip).test(skipped.test);
+    if (candidate.run && !new RegExp(candidate.run).test(rootTest)) return false;
+    return !candidate.skip || !new RegExp(candidate.skip).test(rootTest);
   });
   return owner ? { test: skipped.test, package: skipped.package, required_profile: owner.name } : null;
 }
@@ -1668,29 +1739,23 @@ export async function runCoverageProfile(goCommand, profile, campaign, entry, cw
       },
     });
     finishGoEvents(state, (line) => testWriter.write(line), observeGoEvent);
-    if (state.failedTests.size || state.failedPackages.size) throw new RunnerError(`${profile.name} reported failed Go test events`);
-    const allowedSkips = [...state.skippedTests.values()].map((skipped) => skipAdmission(profile, skipped, candidate)).filter(Boolean);
-    const allowedSkippedNames = new Set(allowedSkips.map((skip) => testIdentity(skip.package, skip.test)));
-    const unexpectedSkips = state.skippedTests.size - allowedSkips.length;
-    if (unexpectedSkips) throw new RunnerError(`${profile.name} reported unexpected skipped Go test events`);
-    const missing = tests.filter((item) => !state.passedTests.has(testIdentity(item.package, item.test)) && !allowedSkippedNames.has(testIdentity(item.package, item.test)));
-    if (missing.length) throw new RunnerError(`${profile.name} did not pass required selected tests: ${missing.map((item) => testIdentity(item.package, item.test)).join(", ")}`);
-    if (!state.passedPackages.size) throw new RunnerError(`${profile.name} emitted no passing package event`);
     const coverage = coveragePhase ? validateCoverage(coveragePath) : null;
     testWriter.finish();
     stderrWriter.finish();
-    entry.status = "passed";
-    entry.completed_at_utc = new Date().toISOString();
-    entry.elapsed_ms = Date.now() - started;
     if (coverage) entry.coverage = { path: relative(campaign.runDir, coveragePath), ...coverage };
     else entry.coverage = { status: "not_applicable" };
     entry.test_events = { path: relative(campaign.runDir, eventPath), sha256: shaFile(eventPath), bytes: statSync(eventPath).size };
     entry.stderr = { path: relative(campaign.runDir, stderrPath), sha256: shaFile(stderrPath), bytes: statSync(stderrPath).size };
-    entry.package_counts = { passed: state.passedPackages.size, failed: 0, tests_passed: state.passedTests.size, tests_skipped: state.skippedTests.size };
-    entry.allowed_skip_obligations = allowedSkips;
+    entry.package_counts = { passed: state.passedPackages.size, failed: state.failedPackages.size, tests_passed: state.passedTests.size, tests_skipped: state.skippedTests.size };
     entry.unexpected_skip_count = 0;
+    const evidence = evaluateTestEvidence({ runDir: campaign.runDir, manifest: campaign.manifest }, entry, profile, candidate, baseEnvironment);
+    if (evidence.execution !== "passed" || evidence.local_artifact !== "passed") throw new RunnerError(`${profile.name} ${evidence.reason}`);
+    entry.allowed_skip_obligations = evidence.allowed_skip_obligations;
+    entry.status = "passed";
+    entry.completed_at_utc = new Date().toISOString();
+    entry.elapsed_ms = Date.now() - started;
     progress.complete(profile.workPhase || "dedicated");
-    progress.meaningful("coverage", { profile: profile.name, state: "passed", elapsed_ms: entry.elapsed_ms });
+    progress.meaningful("coverage", { profile: profile.name, state: "passed", elapsed_ms: entry.elapsed_ms, campaign_obligations: evidence.campaign_obligations });
   } catch (error) {
     if (testWriter) finishGoEvents(state, (line) => testWriter.write(line), observeGoEvent);
     testWriter?.finish();
@@ -1757,13 +1822,14 @@ export function terminalPackageSummary(entries) {
   return summary;
 }
 
-export function assertUnitDedicatedOwnership(units, profiles) {
-  const byName = new Map(profiles.map((profile) => [profile.name, profile]));
+export function assertUnitDedicatedOwnership(units, record, candidate, environment) {
   for (const unit of units) {
-    for (const obligation of unit.allowed_skip_obligations || []) {
-      if (obligation.kind === "conditional") continue;
-      const owner = byName.get(obligation.required_profile);
-      if (owner?.status !== "passed") throw new RunnerError(`${unit.id} skipped ${obligation.package}/${obligation.test} without a passed dedicated ${obligation.required_profile} profile`);
+    if (unit.status !== "passed") throw new RunnerError(`${unit.id} did not retain a passed package unit`);
+    const evidence = evaluateTestEvidence(record, unit, packageUnitProfile(unit.unit), candidate, environment);
+    if (evidence.execution !== "passed" || evidence.local_artifact !== "passed") throw new RunnerError(`${unit.id} did not retain admissible test evidence`);
+    if (evidence.campaign_obligations !== "passed") {
+      const obligation = evidence.allowed_skip_obligations.find((item) => item.kind !== "conditional");
+      throw new RunnerError(`${unit.id} skipped ${obligation.package}/${obligation.test} without a revalidated passed dedicated ${obligation.required_profile} profile`);
     }
   }
 }
@@ -1792,36 +1858,29 @@ function fingerprintPackageUnit(unit, candidate, environment) {
   }));
 }
 
+function retainedUnitEvidence(record, entry, unit, candidate, environment) {
+  const visited = new Set();
+  let sourceRecord = record;
+  let sourceEntry = entry;
+  while (sourceEntry?.source_run_id) {
+    if (visited.has(sourceEntry.source_run_id)) return null;
+    visited.add(sourceEntry.source_run_id);
+    sourceRecord = referencedRun(sourceRecord, sourceEntry.source_run_id, candidate, environment);
+    sourceEntry = sourceRecord?.manifest?.profiles?.find((profile) => profile.name === "base")?.units?.find((item) => item.id === unit.id);
+    if (!sourceRecord || !sourceEntry) return null;
+  }
+  return sourceRecord && sourceEntry ? { record: sourceRecord, entry: sourceEntry } : null;
+}
+
 function validPackageUnitEvidence(record, entry, unit, candidate, environment) {
   if (!entry || entry.status !== "passed" || entry.fingerprint !== fingerprintPackageUnit(unit, candidate, environment)) return false;
-  const sourceRecord = entry.source_run_id ? referencedRun(record, entry.source_run_id, candidate, environment) : record;
-  const sourceEntry = sourceRecord?.manifest.profiles?.find((profile) => profile.name === "base")?.units?.find((item) => item.id === unit.id) || entry;
-  if (!sourceRecord || sourceEntry.status !== "passed" || sourceEntry.fingerprint !== fingerprintPackageUnit(unit, candidate, environment)) return false;
-  if (!Array.isArray(sourceEntry.expected_tests) || !sourceEntry.expected_tests.length || sourceEntry.expected_test_inventory_sha256 !== sha256(canonicalJson(sourceEntry.expected_tests))) return false;
+  const source = retainedUnitEvidence(record, entry, unit, candidate, environment);
+  if (!source || source.entry.status !== "passed" || source.entry.fingerprint !== fingerprintPackageUnit(unit, candidate, environment)) return false;
+  const evidence = evaluateTestEvidence(source.record, source.entry, packageUnitProfile(unit), candidate, environment);
+  if (evidence.execution !== "passed" || evidence.local_artifact !== "passed" || evidence.campaign_obligations !== "passed") return false;
   try {
-    const events = safeRelative(sourceRecord.runDir, sourceEntry.test_events?.path);
-    if (!sourceEntry.test_events?.sha256 || statSync(events).size !== sourceEntry.test_events.bytes || shaFile(events) !== sourceEntry.test_events.sha256) return false;
-    const passed = new Set();
-    const reasons = new Map();
-    const skipped = [];
-    for (const line of readFileSync(events, "utf8").split(/\r?\n/)) {
-      if (!line.trim()) continue;
-      const value = JSON.parse(line);
-      const key = value.Test ? testIdentity(value.Package || "", value.Test) : null;
-      if (value.Action === "fail") return false;
-      if (key && value.Action === "output") reasons.set(key, `${reasons.get(key) || ""}${value.Output || ""}`);
-      if (key && value.Action === "pass") passed.add(key);
-      if (key && value.Action === "skip") skipped.push({ package: value.Package || "", test: value.Test, reason: reasons.get(key)?.trim() || "" });
-    }
-    const obligations = skipped.map((skip) => skipAdmission(packageUnitProfile(unit), skip, candidate));
-    if (obligations.some((obligation) => !obligation)) return false;
-    for (const obligation of obligations.filter((obligation) => obligation.kind !== "conditional")) {
-      if (sourceRecord.manifest.profiles?.find((profile) => profile.name === obligation.required_profile)?.status !== "passed") return false;
-    }
-    const accepted = new Set([...passed, ...obligations.map((obligation) => testIdentity(obligation.package, obligation.test))]);
-    if (!sourceEntry.expected_tests.every((test) => accepted.has(testIdentity(test.package, test.test)))) return false;
-    if (unit.phase === "coverage") artifactFrom(sourceRecord, sourceEntry.coverage);
-    return unit.phase !== "coverage" || sourceEntry.coverage?.status !== "not_applicable";
+    if (unit.phase === "coverage") artifactFrom(source.record, source.entry.coverage);
+    return unit.phase !== "coverage" || source.entry.coverage?.status !== "not_applicable";
   } catch {
     return false;
   }
@@ -1982,8 +2041,7 @@ export async function collectCoverage(campaign, candidate, environment, options,
     });
     const failed = [...outcomes.values()].find((outcome) => outcome?.status === "failed");
     if (failed) throw failed.error;
-    if (campaign.manifest.profiles.some((entry) => entry.status !== "passed")) throw new RunnerError("Coverage did not complete every required profile");
-    if (base) assertUnitDedicatedOwnership(entries.get("base").units, [...entries.values()]);
+    if (base) assertUnitDedicatedOwnership(entries.get("base").units, { runDir: campaign.runDir, manifest: campaign.manifest }, candidate, environment);
     const mergePath = join(campaign.runDir, "coverage.out");
     mergeCoverProfiles(profiles.map((profile) => {
       const entry = entries.get(profile.name);

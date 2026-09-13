@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Made SonarQube runner heartbeats follow parsed Go lifecycle progress, stream redacted test-event evidence during execution, bind Go package concurrency to each profile fingerprint, and add a base-only diagnostic coverage measurement that cannot project a full release gate.
 - Reverted the bounded SonarQube base `-p=2` experiment after run `ebc133e3...` exceeded its fixed 900-second profile budget at 901,283 ms; base now uses descriptor-bound `-p=1`, and profile budget expiry is retained as `timed_out` with an explicit budget reason.
 - Replaced the monolithic SonarQube base test with reusable first-party package race and bounded-coverage units, preserving dedicated-profile isolation while retaining successful unit evidence across sibling failures.
+- Made SonarQube retained skip evidence require a revalidated dedicated owner’s exact top-level test and terminal package pass, while preserving deferred base-unit execution and full nested test identities.
 
 ## [6.49.0] - 2026-09-13
 

@@ -264,20 +264,42 @@ test("package unit admits retained-shaped source skips and rejects forged or uno
     const currentCandidate = { ...candidate(), repository_path: directory, inventory: [...sources].map(([path, source]) => ({ path, type: "file", sha256: sha256(source) })) };
     const profile = { name: "base-race-installed", target: "example/cmd/engram", race: true, packageConcurrency: 1, baseUnit: true, unitPhase: "race", workPhase: "race", unitDirectory: "cmd/engram" };
     const packageName = "example/cmd/engram";
-    const expected = ["TestUCI1Scenarios", "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated", "TestUCIRealCorpusInstalledProviderLifecycle", "TestUCIRecordInstalledWatcherSLO"].map((test) => ({ package: packageName, test }));
+    const expected = ["TestUCI1Scenarios", "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated/nested", "TestUCIRealCorpusInstalledProviderLifecycle", "TestUCIRecordInstalledWatcherSLO"].map((test) => ({ package: packageName, test }));
     const event = (action, test, output = null) => `${JSON.stringify({ Action: action, Package: packageName, ...(test ? { Test: test } : {}), ...(output ? { Output: output } : {}) })}\n`;
     const events = [
       event("output", "TestUCI1Scenarios", "uci1_scenarios_test.go:122: installed acceptance requires an explicit disposable PostgreSQL target\n"), event("skip", "TestUCI1Scenarios"),
-      event("output", "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated", "uci_installed_acceptance_test.go:127: installed acceptance requires an explicit disposable PostgreSQL target\n"), event("skip", "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated"),
+      event("output", "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated/nested", "uci_installed_acceptance_test.go:127: installed acceptance requires an explicit disposable PostgreSQL target\n"), event("skip", "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated/nested"),
       event("output", "TestUCIRealCorpusInstalledProviderLifecycle", "uci_real_corpus_acceptance_test.go:315: real-corpus installed acceptance requires ENGRAM_UCI_REAL_CORPUS_ENABLED=1\n"), event("skip", "TestUCIRealCorpusInstalledProviderLifecycle"),
       event("output", "TestUCIRecordInstalledWatcherSLO", "uci_watcher_slo_recorder_test.go:1112: ENGRAM_UCI_WATCHER_SLO_RECORD_ENABLED=1 is required to run the installed watcher recorder: go test ./cmd/engram\n"), event("skip", "TestUCIRecordInstalledWatcherSLO"), event("pass", null),
     ].join("");
     const admitted = await runRaceUnit(directory, profile, currentCandidate, expected, events);
     assert.deepEqual(admitted.allowed_skip_obligations.map((item) => item.kind), ["conditional", undefined, "conditional", "conditional"]);
     assert.equal(admitted.allowed_skip_obligations[1].required_profile, "uci-installed");
-    assert.throws(() => assertUnitDedicatedOwnership([admitted], [{ name: "uci-installed", status: "failed" }]), /without a passed dedicated uci-installed profile/);
-    assert.doesNotThrow(() => assertUnitDedicatedOwnership([admitted], [{ name: "uci-installed", status: "passed" }]));
-    await assert.rejects(runRaceUnit(directory, profile, currentCandidate, expected, events.replace("real-corpus installed acceptance requires ENGRAM_UCI_REAL_CORPUS_ENABLED=1", "forged skip reason")), /unexpected skipped/);
+    assert.equal(admitted.allowed_skip_obligations[1].test, "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated/nested");
+    const unit = { id: profile.name, phase: "race", importPath: packageName, directory: "cmd/engram", classification: "ordinary", coverpkg: [] };
+    const owner = coverageProfiles.find((item) => item.name === "uci-installed");
+    const ownerTest = "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated";
+    const ownerCoverage = "mode: atomic\nowner.go:1.1,1.2 1 1\n";
+    const ownerEvents = event("pass", ownerTest) + event("pass", null);
+    write(join(directory, "run", "owner-coverage.out"), ownerCoverage);
+    write(join(directory, "run", "owner-events.ndjson"), ownerEvents);
+    const ownerEntry = {
+      name: owner.name,
+      status: "passed",
+      fingerprint: fingerprintProfile(owner, currentCandidate, { sha256: undefined }),
+      coverage: { path: "owner-coverage.out", sha256: sha256(ownerCoverage), bytes: Buffer.byteLength(ownerCoverage) },
+      test_events: { path: "owner-events.ndjson", sha256: sha256(ownerEvents), bytes: Buffer.byteLength(ownerEvents) },
+      expected_tests: [{ package: packageName, test: ownerTest }],
+      expected_test_inventory_sha256: sha256(`[{"package":"${packageName}","test":"${ownerTest}"}]`),
+      package_counts: { passed: 1, failed: 0, tests_passed: 1, tests_skipped: 0 },
+    };
+    const record = { runDir: join(directory, "run"), manifest: { candidate: currentCandidate, profiles: [{ ...admitted, unit }, ownerEntry] } };
+    assert.doesNotThrow(() => assertUnitDedicatedOwnership([{ ...admitted, unit }], record, currentCandidate, { sha256: undefined }));
+    write(join(directory, "run", "owner-events.ndjson"), event("skip", ownerTest) + event("pass", null));
+    ownerEntry.test_events = { path: "owner-events.ndjson", sha256: sha256(readFileSync(join(directory, "run", "owner-events.ndjson"), "utf8")), bytes: readFileSync(join(directory, "run", "owner-events.ndjson"), "utf8").length };
+    ownerEntry.package_counts = { passed: 1, failed: 0, tests_passed: 0, tests_skipped: 1 };
+    assert.throws(() => assertUnitDedicatedOwnership([{ ...admitted, unit }], record, currentCandidate, { sha256: undefined }), /without a revalidated passed dedicated uci-installed profile/);
+    await assert.rejects(runRaceUnit(directory, profile, currentCandidate, expected, events.replace("real-corpus installed acceptance requires ENGRAM_UCI_REAL_CORPUS_ENABLED=1", "forged skip reason")), /unapproved skip/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -651,10 +673,10 @@ test("Go JSON lower-case actions preserve package-qualified terminal evidence", 
   );
 });
 
-test("package-qualified event identities do not collapse duplicate test names", () => {
+test("test-level Go passes do not substitute terminal package evidence", () => {
   assert.deepEqual(
     summarizeGoEvents('{"Action":"pass","Package":"a/pkg","Test":"TestSame"}\n{"Action":"pass","Package":"b/pkg","Test":"TestSame"}\n'),
-    { passed_tests: ["a/pkg/TestSame", "b/pkg/TestSame"], passed_packages: ["a/pkg", "b/pkg"], failed_tests: [], skipped_tests: [] },
+    { passed_tests: ["a/pkg/TestSame", "b/pkg/TestSame"], passed_packages: [], failed_tests: [], skipped_tests: [] },
   );
 });
 

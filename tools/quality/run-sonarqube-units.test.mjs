@@ -225,7 +225,7 @@ test("interleaved same-name Go tests retain package-qualified terminal events", 
   assert.equal(retained.length, 6);
   assert.deepEqual(
     summarizeGoEvents(events),
-    { passed_tests: ["example/b/TestSame", "example/a/TestSame"], passed_packages: ["example/b", "example/a"], failed_tests: [], skipped_tests: [] },
+    { passed_tests: ["example/b/TestSame", "example/a/TestSame"], passed_packages: ["example/a", "example/b"], failed_tests: [], skipped_tests: [] },
   );
 });
 
