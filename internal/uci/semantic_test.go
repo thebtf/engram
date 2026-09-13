@@ -284,6 +284,80 @@ func TestUCISemanticQueryProviderTimeoutLeavesParentAliveForLexicalFallback(t *t
 	}
 }
 
+func TestUCISemanticQueryFusesCompleteScopedLexicalAndVectorCandidates(t *testing.T) {
+	fixture := newSemanticTestFixture()
+	profile := semanticTestProfile("uci-semantic-test-model")
+	lexical := &semanticTestLexicalStore{candidates: []QueryCandidate{fixture.lexical, fixture.current}}
+	store := newSemanticMemoryStore()
+	store.semanticResult = SemanticStoreResult{
+		Candidates:     []QueryCandidate{fixture.current, fixture.distractorA},
+		Coverage:       IndexCoverageComplete,
+		VectorCoverage: 1,
+	}
+	service := NewSemanticService(profile, &semanticTestEmbedder{model: profile.Model, vector: semanticTestVector(1)}, store, lexical)
+
+	result, err := service.Query(context.Background(), newAuthorizedContext(fixture.contextA), semanticTestQuerySpec("fallback-token"))
+	if err != nil {
+		t.Fatalf("Query() error = %v", err)
+	}
+	semanticAssertResponseBoundTo(t, result.Response, fixture.contextA)
+	if result.Response.Retrieval == nil || result.Response.Retrieval.Mode != QueryRetrievalHybrid {
+		t.Fatalf("retrieval = %#v, want complete hybrid result", result.Response.Retrieval)
+	}
+	if result.Response.Retrieval.VectorCoverage == nil || *result.Response.Retrieval.VectorCoverage != 1 {
+		t.Fatalf("vector coverage = %#v, want complete coverage", result.Response.Retrieval.VectorCoverage)
+	}
+	if len(result.Response.Retrieval.DegradationReasons) != 0 {
+		t.Fatalf("complete hybrid degradation reasons = %#v, want none", result.Response.Retrieval.DegradationReasons)
+	}
+
+	matchSources := make(map[string][]QueryMatchSource)
+	for _, item := range semanticResponseItems(t, result) {
+		matchSources[item.Ref.EntityKey] = item.MatchSources
+	}
+	for entityKey, want := range map[string][]QueryMatchSource{
+		fixture.current.EntityKey:     {QueryMatchFTS, QueryMatchVector},
+		fixture.lexical.EntityKey:     {QueryMatchFTS},
+		fixture.distractorA.EntityKey: {QueryMatchVector},
+	} {
+		if got := matchSources[entityKey]; !reflect.DeepEqual(got, want) {
+			t.Fatalf("match sources for %q = %#v, want %#v", entityKey, got, want)
+		}
+	}
+}
+
+func TestUCISemanticQueryFallsBackWhenVectorCoverageIsIncomplete(t *testing.T) {
+	fixture := newSemanticTestFixture()
+	profile := semanticTestProfile("uci-semantic-test-model")
+	lexical := &semanticTestLexicalStore{candidates: []QueryCandidate{fixture.lexical}}
+	store := newSemanticMemoryStore()
+	store.semanticResult = SemanticStoreResult{
+		Candidates:     []QueryCandidate{fixture.current},
+		Coverage:       IndexCoveragePartial,
+		VectorCoverage: 0.5,
+	}
+	service := NewSemanticService(profile, &semanticTestEmbedder{model: profile.Model, vector: semanticTestVector(1)}, store, lexical)
+
+	result, err := service.Query(context.Background(), newAuthorizedContext(fixture.contextA), semanticTestQuerySpec("fallback-token"))
+	if err != nil {
+		t.Fatalf("Query() error = %v, want lexical fallback", err)
+	}
+	semanticAssertResponseBoundTo(t, result.Response, fixture.contextA)
+	if result.Response.Retrieval == nil || result.Response.Retrieval.Mode != QueryRetrievalLexical {
+		t.Fatalf("retrieval = %#v, want lexical fallback", result.Response.Retrieval)
+	}
+	if !semanticTestContains(result.Response.Retrieval.DegradationReasons, "vector_coverage_incomplete") {
+		t.Fatalf("degradation reasons = %#v, want incomplete vector coverage", result.Response.Retrieval.DegradationReasons)
+	}
+	items := semanticResponseItems(t, result)
+	if len(items) != 1 || items[0].Ref.EntityKey != fixture.lexical.EntityKey || !reflect.DeepEqual(items[0].MatchSources, []QueryMatchSource{QueryMatchFTS}) {
+		t.Fatalf("lexical fallback items = %#v", items)
+	}
+	if got := store.SelectCallCount(); got != 1 {
+		t.Fatalf("semantic store calls = %d, want one incomplete coverage result", got)
+	}
+}
+
 func TestUCISemanticRealProviderConceptualHitMatchesScopedPostgresBaseline(t *testing.T) {
 	t.Run("real configured provider produces a non-lexical conceptual result", func(t *testing.T) {
 		semanticRequireRealProviderConceptualHit(t)
@@ -587,8 +661,10 @@ func (store *semanticTestLexicalStore) SelectCandidates(_ context.Context, autho
 type semanticMemoryStore struct {
 	mu sync.Mutex
 
-	cache       map[semanticMemoryCacheKey][]float32
-	selectCalls int
+	cache          map[semanticMemoryCacheKey][]float32
+	selectCalls    int
+	semanticResult SemanticStoreResult
+	semanticErr    error
 }
 
 type semanticMemoryCacheKey struct {
@@ -608,7 +684,10 @@ type semanticMemoryCacheKey struct {
 var _ SemanticStore = (*semanticMemoryStore)(nil)
 
 func newSemanticMemoryStore() *semanticMemoryStore {
-	return &semanticMemoryStore{cache: make(map[semanticMemoryCacheKey][]float32)}
+	return &semanticMemoryStore{
+		cache:          make(map[semanticMemoryCacheKey][]float32),
+		semanticResult: SemanticStoreResult{Coverage: IndexCoverageComplete, VectorCoverage: 1},
+	}
 }
 
 func (store *semanticMemoryStore) LookupCandidateEmbedding(_ context.Context, authorized AuthorizedContext, profile VectorProfile, candidate QueryCandidate) ([]float32, bool, error) {
@@ -635,9 +714,9 @@ func (store *semanticMemoryStore) StoreCandidateEmbedding(_ context.Context, aut
 
 func (store *semanticMemoryStore) SelectSemanticCandidates(_ context.Context, _ AuthorizedContext, _ VectorProfile, _ []float32, _ QuerySpec) (SemanticStoreResult, error) {
 	store.mu.Lock()
+	defer store.mu.Unlock()
 	store.selectCalls++
-	store.mu.Unlock()
-	return SemanticStoreResult{Coverage: IndexCoverageComplete, VectorCoverage: 1}, nil
+	return store.semanticResult, store.semanticErr
 }
 
 func (store *semanticMemoryStore) SelectCallCount() int {

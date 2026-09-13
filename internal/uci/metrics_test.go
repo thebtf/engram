@@ -71,6 +71,37 @@ func TestCalculateUCISLOReportRejectsDuplicateOrZeroHealthySamples(t *testing.T)
 	})
 }
 
+func TestValidateUCISLOReportRejectsSlowHealthyTailOmittedFromPercentile(t *testing.T) {
+	report, err := CalculateUCISLOReport(uciSLOTestMeasurementInput())
+	if err != nil {
+		t.Fatalf("CalculateUCISLOReport() error = %v", err)
+	}
+
+	var gate *UCISLOGateReport
+	for index := range report.Gates {
+		if report.Gates[index].Name == "update.structural_fts" {
+			gate = &report.Gates[index]
+			break
+		}
+	}
+	if gate == nil {
+		t.Fatal("report omitted update.structural_fts")
+	}
+	for index := len(gate.Samples) - 6; index < len(gate.Samples); index++ {
+		gate.Samples[index].Latency = 3 * time.Second
+	}
+
+	codes := make(map[string]bool)
+	for _, violation := range ValidateUCISLOReport(report) {
+		codes[violation.Code] = true
+	}
+	for _, code := range []string{"healthy_latency_input_mismatch", "p95_mismatch", "max_mismatch"} {
+		if !codes[code] {
+			t.Fatalf("ValidateUCISLOReport() violations = %#v, want %q after slow healthy tail was omitted from percentile accounting", codes, code)
+		}
+	}
+}
+
 func uciSLOTestMeasurementInput() UCISLOMeasurementInput {
 	candidate := UCISLOCandidate{
 		Branch: "uci/test",

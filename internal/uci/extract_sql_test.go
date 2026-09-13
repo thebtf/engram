@@ -128,6 +128,27 @@ func TestUCISQLExtractionRetainsPartialFactsForMalformedDDL(t *testing.T) {
 	uciRequireSQLTable(t, artifact.Definitions, "table:public.kept", uciSQLSpan(t, source, "CREATE TABLE public.kept", 0))
 }
 
+func TestUCISQLExtractionRetainsCompletedStatementsBeforeMalformedSuffix(t *testing.T) {
+	source := []byte("CREATE TABLE public.kept (id BIGINT NOT NULL);\nALTER TABLE public.kept ADD;")
+	artifact := ExtractSQL(source, uciSQLExtractionProfile())
+
+	if artifact.Coverage != IndexCoveragePartial {
+		t.Fatalf("ExtractSQL(malformed suffix) coverage = %q, want %q", artifact.Coverage, IndexCoveragePartial)
+	}
+	uciRequireSQLExtractionProof(t, artifact)
+	uciRequireSQLTable(t, artifact.Definitions, "table:public.kept", uciSQLSpan(t, source, "CREATE TABLE public.kept", 0))
+	for _, diagnostic := range artifact.Diagnostics {
+		if diagnostic.Code != "SQL_PARSE_ERROR" {
+			continue
+		}
+		if got, want := artifact.Text[diagnostic.Span.ByteStart:diagnostic.Span.ByteEnd], "ALTER TABLE public.kept ADD;"; got != want {
+			t.Fatalf("malformed suffix diagnostic covers %q, want %q", got, want)
+		}
+		return
+	}
+	t.Fatalf("malformed suffix diagnostics = %#v, want SQL_PARSE_ERROR", artifact.Diagnostics)
+}
+
 func TestUCISQLExtractionObservesButExcludesUnsupportedDML(t *testing.T) {
 	source := []byte("CREATE TABLE public.events (id BIGINT);\nINSERT INTO public.events (id) VALUES (1);\nUPDATE public.events SET id = 2;\nDELETE FROM public.events;\n")
 	artifact := ExtractSQL(source, uciSQLExtractionProfile())

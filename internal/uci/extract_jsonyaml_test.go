@@ -133,6 +133,43 @@ func TestUCIJSONYAMLExtractionBoundsUnicodeChunks(t *testing.T) {
 	}
 }
 
+func TestUCIJSONYAMLExtractionTruncatesOversizeUTF8WithoutBreakingSpans(t *testing.T) {
+	prefix := " {\"payload\":\""
+	fillerBytes := jsonYAMLExtractionMaxArtifactTextBytes - len(prefix) + 1
+	source := []byte(prefix + strings.Repeat("α", fillerBytes/2) + "\"}")
+	if len(source) <= jsonYAMLExtractionMaxSourceBytes {
+		t.Fatalf("oversize fixture is %d bytes, want more than source cap %d", len(source), jsonYAMLExtractionMaxSourceBytes)
+	}
+
+	artifact := ExtractJSONYAML(source, uciJSONYAMLProfile(JSONYAMLFormatJSON))
+	if artifact.Coverage != IndexCoveragePartial {
+		t.Fatalf("ExtractJSONYAML(oversize UTF-8) coverage = %q, want %q", artifact.Coverage, IndexCoveragePartial)
+	}
+	if len(artifact.Text) >= jsonYAMLExtractionMaxArtifactTextBytes || !utf8.ValidString(artifact.Text) {
+		t.Fatalf("retained text is %d valid UTF-8 bytes, want a safe prefix below %d", len(artifact.Text), jsonYAMLExtractionMaxArtifactTextBytes)
+	}
+	if !bytes.Equal([]byte(artifact.Text), source[:len(artifact.Text)]) {
+		t.Fatal("retained text is not the original valid UTF-8 prefix")
+	}
+	uciRequireJSONYAMLExtractionProof(t, artifact)
+	for _, code := range []string{"TEXT_LIMIT", "CHUNK_LIMIT", "SOURCE_LIMIT"} {
+		uciRequireJSONYAMLDiagnostic(t, artifact.Diagnostics, code)
+	}
+
+	var rebuilt strings.Builder
+	var nextStart int64
+	for index, chunk := range artifact.Chunks {
+		if chunk.Span.ByteStart != nextStart {
+			t.Fatalf("chunk %d starts at %d, want contiguous offset %d", index, chunk.Span.ByteStart, nextStart)
+		}
+		rebuilt.WriteString(chunk.Text)
+		nextStart = chunk.Span.ByteEnd
+	}
+	if nextStart != int64(len(artifact.Text)) || rebuilt.String() != artifact.Text {
+		t.Fatalf("bounded chunks end at %d and rebuild %d bytes, want lossless %d-byte retained text", nextStart, rebuilt.Len(), len(artifact.Text))
+	}
+}
+
 func TestUCIJSONYAMLExtractionRetainsPartialFactsForMalformedSource(t *testing.T) {
 	for _, test := range []struct {
 		name      string
