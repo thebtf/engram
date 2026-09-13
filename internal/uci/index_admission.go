@@ -2334,33 +2334,47 @@ func indexAdmissionValidateMembership(membership IndexAdmissionMembership) error
 }
 
 func indexAdmissionValidateEdgeShape(edge IndexAdmissionEdge) error {
-	if !indexAdmissionValidKey(edge.EdgeKey) || !canonicalContextUUID(edge.SourceArtifactID) ||
-		!indexAdmissionValidMetadataText(edge.ResolverRevision, indexAdmissionMaxProfileBytes) || !isIndexRelation(edge.Relation) ||
-		!isIndexEvidenceKind(edge.EvidenceKind) || !isIndexResolutionState(edge.ResolutionState) {
-		return fmt.Errorf("uci index admission: invalid edge")
+	if err := indexAdmissionValidateEdgeIdentity(edge); err != nil {
+		return err
 	}
 	if edge.SourceSymbolKey != nil && !indexAdmissionValidKey(*edge.SourceSymbolKey) {
 		return fmt.Errorf("uci index admission: invalid edge source symbol")
 	}
-	if !indexAdmissionValidKey(edge.Evidence.ReferenceSiteKey) || !indexAdmissionValidKey(edge.Evidence.RuleKey) ||
-		!indexAdmissionValidMetadataText(edge.Evidence.Explanation, indexAdmissionMaxTextBytes) || validateIndexSpan(edge.Evidence.Span) != nil {
+	if err := indexAdmissionValidateEdgeEvidence(edge.Evidence); err != nil {
+		return err
+	}
+	return indexAdmissionValidateEdgeTargetShape(edge)
+}
+
+func indexAdmissionValidateEdgeIdentity(edge IndexAdmissionEdge) error {
+	if !indexAdmissionValidKey(edge.EdgeKey) || !canonicalContextUUID(edge.SourceArtifactID) || !indexAdmissionValidMetadataText(edge.ResolverRevision, indexAdmissionMaxProfileBytes) || !isIndexRelation(edge.Relation) || !isIndexEvidenceKind(edge.EvidenceKind) || !isIndexResolutionState(edge.ResolutionState) {
+		return fmt.Errorf("uci index admission: invalid edge")
+	}
+	return nil
+}
+
+func indexAdmissionValidateEdgeEvidence(evidence IndexAdmissionEdgeEvidence) error {
+	if !indexAdmissionValidKey(evidence.ReferenceSiteKey) || !indexAdmissionValidKey(evidence.RuleKey) || !indexAdmissionValidMetadataText(evidence.Explanation, indexAdmissionMaxTextBytes) || validateIndexSpan(evidence.Span) != nil {
 		return fmt.Errorf("uci index admission: invalid edge evidence")
 	}
-	switch edge.ResolutionState {
-	case IndexResolutionState("resolved"):
-		if edge.Target == nil {
-			return fmt.Errorf("uci index admission: resolved edge requires target")
-		}
-		if !indexAdmissionValidPath(edge.Target.PathKey) || !canonicalContextUUID(edge.Target.ArtifactID) {
-			return fmt.Errorf("uci index admission: invalid edge target")
-		}
-		if edge.Target.SymbolKey != nil && !indexAdmissionValidKey(*edge.Target.SymbolKey) {
-			return fmt.Errorf("uci index admission: invalid edge target symbol")
-		}
-	default:
+	return nil
+}
+
+func indexAdmissionValidateEdgeTargetShape(edge IndexAdmissionEdge) error {
+	if edge.ResolutionState != IndexResolutionState("resolved") {
 		if edge.Target != nil {
 			return fmt.Errorf("uci index admission: non-resolved edge must not carry target")
 		}
+		return nil
+	}
+	if edge.Target == nil {
+		return fmt.Errorf("uci index admission: resolved edge requires target")
+	}
+	if !indexAdmissionValidPath(edge.Target.PathKey) || !canonicalContextUUID(edge.Target.ArtifactID) {
+		return fmt.Errorf("uci index admission: invalid edge target")
+	}
+	if edge.Target.SymbolKey != nil && !indexAdmissionValidKey(*edge.Target.SymbolKey) {
+		return fmt.Errorf("uci index admission: invalid edge target symbol")
 	}
 	return nil
 }
@@ -2423,62 +2437,126 @@ func indexAdmissionCanonicalFrameEncodedSize(frame IndexAdmissionFrame) (int, er
 }
 
 func indexAdmissionValidateFrameSet(frames []IndexAdmissionFrame) error {
-	artifacts := make(map[string]IndexAdmissionArtifact)
-	memberships := make(map[string]IndexAdmissionMembership)
-	deletions := make(map[string]struct{})
-	replacements := make(map[string]IndexAdmissionEdgeReplacement)
+	set, err := indexAdmissionCollectFrameSet(frames)
+	if err != nil {
+		return err
+	}
+	if err := indexAdmissionValidateFrameSetMemberships(set); err != nil {
+		return err
+	}
+	return indexAdmissionValidateFrameSetReplacements(set)
+}
+
+type indexAdmissionFrameSet struct {
+	artifacts    map[string]IndexAdmissionArtifact
+	memberships  map[string]IndexAdmissionMembership
+	deletions    map[string]struct{}
+	replacements map[string]IndexAdmissionEdgeReplacement
+}
+
+func indexAdmissionCollectFrameSet(frames []IndexAdmissionFrame) (indexAdmissionFrameSet, error) {
+	set := indexAdmissionFrameSet{
+		artifacts:    make(map[string]IndexAdmissionArtifact),
+		memberships:  make(map[string]IndexAdmissionMembership),
+		deletions:    make(map[string]struct{}),
+		replacements: make(map[string]IndexAdmissionEdgeReplacement),
+	}
 	for _, frame := range frames {
-		for _, artifact := range frame.Artifacts {
-			if _, duplicate := artifacts[artifact.ArtifactID]; duplicate {
-				return fmt.Errorf("uci index admission: duplicate artifact ID across frames")
-			}
-			artifacts[artifact.ArtifactID] = artifact
+		if err := indexAdmissionCollectArtifacts(set.artifacts, frame.Artifacts); err != nil {
+			return indexAdmissionFrameSet{}, err
 		}
-		for _, membership := range frame.Memberships {
-			if _, duplicate := memberships[membership.PathKey]; duplicate {
-				return fmt.Errorf("uci index admission: duplicate membership path across frames")
-			}
-			memberships[membership.PathKey] = membership
+		if err := indexAdmissionCollectMemberships(set.memberships, frame.Memberships); err != nil {
+			return indexAdmissionFrameSet{}, err
 		}
-		for _, deletion := range frame.Deletions {
-			if _, duplicate := deletions[deletion.PathKey]; duplicate {
-				return fmt.Errorf("uci index admission: duplicate deletion path across frames")
-			}
-			deletions[deletion.PathKey] = struct{}{}
+		if err := indexAdmissionCollectDeletions(set.deletions, frame.Deletions); err != nil {
+			return indexAdmissionFrameSet{}, err
 		}
-		for _, replacement := range frame.EdgeReplacements {
-			if _, duplicate := replacements[replacement.SourcePath]; duplicate {
-				return fmt.Errorf("uci index admission: duplicate edge replacement path across frames")
-			}
-			replacements[replacement.SourcePath] = replacement
+		if err := indexAdmissionCollectReplacements(set.replacements, frame.EdgeReplacements); err != nil {
+			return indexAdmissionFrameSet{}, err
 		}
 	}
-	for pathKey, membership := range memberships {
-		if _, deleted := deletions[pathKey]; deleted {
+	return set, nil
+}
+
+func indexAdmissionCollectArtifacts(artifacts map[string]IndexAdmissionArtifact, additions []IndexAdmissionArtifact) error {
+	for _, artifact := range additions {
+		if _, duplicate := artifacts[artifact.ArtifactID]; duplicate {
+			return fmt.Errorf("uci index admission: duplicate artifact ID across frames")
+		}
+		artifacts[artifact.ArtifactID] = artifact
+	}
+	return nil
+}
+
+func indexAdmissionCollectMemberships(memberships map[string]IndexAdmissionMembership, additions []IndexAdmissionMembership) error {
+	for _, membership := range additions {
+		if _, duplicate := memberships[membership.PathKey]; duplicate {
+			return fmt.Errorf("uci index admission: duplicate membership path across frames")
+		}
+		memberships[membership.PathKey] = membership
+	}
+	return nil
+}
+
+func indexAdmissionCollectDeletions(deletions map[string]struct{}, additions []IndexAdmissionDeletion) error {
+	for _, deletion := range additions {
+		if _, duplicate := deletions[deletion.PathKey]; duplicate {
+			return fmt.Errorf("uci index admission: duplicate deletion path across frames")
+		}
+		deletions[deletion.PathKey] = struct{}{}
+	}
+	return nil
+}
+
+func indexAdmissionCollectReplacements(replacements map[string]IndexAdmissionEdgeReplacement, additions []IndexAdmissionEdgeReplacement) error {
+	for _, replacement := range additions {
+		if _, duplicate := replacements[replacement.SourcePath]; duplicate {
+			return fmt.Errorf("uci index admission: duplicate edge replacement path across frames")
+		}
+		replacements[replacement.SourcePath] = replacement
+	}
+	return nil
+}
+
+func indexAdmissionValidateFrameSetMemberships(set indexAdmissionFrameSet) error {
+	for pathKey, membership := range set.memberships {
+		if _, deleted := set.deletions[pathKey]; deleted {
 			return fmt.Errorf("uci index admission: deletion conflicts with membership across frames")
 		}
-		if membership.State == IndexAdmissionMembershipPresent {
-			if membership.ArtifactID == nil {
-				return fmt.Errorf("uci index admission: present membership requires artifact")
-			}
-			if _, found := artifacts[*membership.ArtifactID]; !found {
-				return fmt.Errorf("uci index admission: membership artifact is absent from build")
-			}
+		if membership.State != IndexAdmissionMembershipPresent {
+			continue
+		}
+		if membership.ArtifactID == nil {
+			return fmt.Errorf("uci index admission: present membership requires artifact")
+		}
+		if _, found := set.artifacts[*membership.ArtifactID]; !found {
+			return fmt.Errorf("uci index admission: membership artifact is absent from build")
 		}
 	}
-	for sourcePath, replacement := range replacements {
-		membership, present := memberships[sourcePath]
-		_, deleted := deletions[sourcePath]
-		if !present && !deleted {
-			return fmt.Errorf("uci index admission: edge replacement has no current path in build")
+	return nil
+}
+
+func indexAdmissionValidateFrameSetReplacements(set indexAdmissionFrameSet) error {
+	for sourcePath, replacement := range set.replacements {
+		if err := indexAdmissionValidateFrameSetReplacement(sourcePath, replacement, set); err != nil {
+			return err
 		}
-		for _, edge := range replacement.Edges {
-			if !present || membership.State != IndexAdmissionMembershipPresent || membership.ArtifactID == nil {
-				return fmt.Errorf("uci index admission: edges require present source membership")
-			}
-			if err := indexAdmissionValidateEdge(edge, *membership.ArtifactID, artifacts, memberships); err != nil {
-				return err
-			}
+	}
+	return nil
+}
+
+func indexAdmissionValidateFrameSetReplacement(sourcePath string, replacement IndexAdmissionEdgeReplacement, set indexAdmissionFrameSet) error {
+	membership, present := set.memberships[sourcePath]
+	_, deleted := set.deletions[sourcePath]
+	if !present && !deleted {
+		return fmt.Errorf("uci index admission: edge replacement has no current path in build")
+	}
+	for _, edge := range replacement.Edges {
+		if !present || membership.State != IndexAdmissionMembershipPresent || membership.ArtifactID == nil {
+			return fmt.Errorf("uci index admission: edges require present source membership")
+		}
+		if err := indexAdmissionValidateEdge(edge, *membership.ArtifactID, set.artifacts, set.memberships); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -2488,19 +2566,36 @@ func indexAdmissionValidateEdge(edge IndexAdmissionEdge, sourceArtifactID string
 	if err := indexAdmissionValidateEdgeShape(edge); err != nil {
 		return err
 	}
+	sourceArtifact, err := indexAdmissionEdgeSourceArtifact(edge, sourceArtifactID, artifacts)
+	if err != nil {
+		return err
+	}
+	if err := indexAdmissionValidateEdgeReference(edge, sourceArtifact); err != nil {
+		return err
+	}
+	if edge.ResolutionState != IndexResolutionState("resolved") {
+		return nil
+	}
+	return indexAdmissionValidateEdgeTarget(edge, artifacts, memberships)
+}
+
+func indexAdmissionEdgeSourceArtifact(edge IndexAdmissionEdge, sourceArtifactID string, artifacts map[string]IndexAdmissionArtifact) (IndexAdmissionArtifact, error) {
 	if edge.SourceArtifactID != sourceArtifactID {
-		return fmt.Errorf("uci index admission: edge source artifact does not match current membership")
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: edge source artifact does not match current membership")
 	}
 	sourceArtifact, found := artifacts[edge.SourceArtifactID]
 	if !found {
-		return fmt.Errorf("uci index admission: edge source artifact is absent from build")
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: edge source artifact is absent from build")
 	}
-	definitions := indexAdmissionDefinitionSet(sourceArtifact.Definitions)
 	if edge.SourceSymbolKey != nil {
-		if _, found := definitions[*edge.SourceSymbolKey]; !found {
-			return fmt.Errorf("uci index admission: edge source symbol not defined by artifact")
+		if _, found := indexAdmissionDefinitionSet(sourceArtifact.Definitions)[*edge.SourceSymbolKey]; !found {
+			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: edge source symbol not defined by artifact")
 		}
 	}
+	return sourceArtifact, nil
+}
+
+func indexAdmissionValidateEdgeReference(edge IndexAdmissionEdge, sourceArtifact IndexAdmissionArtifact) error {
 	reference, found := indexAdmissionReferenceByKey(sourceArtifact.References, edge.Evidence.ReferenceSiteKey)
 	if !found || edge.Evidence.Span != reference.Span {
 		return fmt.Errorf("uci index admission: edge evidence is not bound to source reference")
@@ -2512,12 +2607,15 @@ func indexAdmissionValidateEdge(edge IndexAdmissionEdge, sourceArtifactID string
 		if edge.SourceSymbolKey != nil {
 			return fmt.Errorf("uci index admission: edge source symbol does not match reference owner")
 		}
-	} else if edge.SourceSymbolKey == nil || *edge.SourceSymbolKey != *reference.OwnerSymbolKey {
-		return fmt.Errorf("uci index admission: edge source symbol does not match reference owner")
-	}
-	if edge.ResolutionState != IndexResolutionState("resolved") {
 		return nil
 	}
+	if edge.SourceSymbolKey == nil || *edge.SourceSymbolKey != *reference.OwnerSymbolKey {
+		return fmt.Errorf("uci index admission: edge source symbol does not match reference owner")
+	}
+	return nil
+}
+
+func indexAdmissionValidateEdgeTarget(edge IndexAdmissionEdge, artifacts map[string]IndexAdmissionArtifact, memberships map[string]IndexAdmissionMembership) error {
 	targetMembership, found := memberships[edge.Target.PathKey]
 	if !found || targetMembership.State != IndexAdmissionMembershipPresent || targetMembership.ArtifactID == nil || *targetMembership.ArtifactID != edge.Target.ArtifactID {
 		return fmt.Errorf("uci index admission: edge target does not match current membership")
