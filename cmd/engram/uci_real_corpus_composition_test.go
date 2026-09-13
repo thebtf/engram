@@ -320,39 +320,9 @@ func uciFreezeRealCorpusManifest(ctx context.Context, root, semanticQuery string
 		return uciRealCorpusFrozenManifest{}, errors.New("real-corpus composition scanner census is incomplete")
 	}
 
-	entries := make([]uciRealCorpusFrozenEntry, 0, len(scan.Files))
-	lexicalOverlap := make(map[string]struct{})
-	for _, file := range scan.Files {
-		if err := ctx.Err(); err != nil {
-			return uciRealCorpusFrozenManifest{}, err
-		}
-		membershipState, reason, err := uciRealCorpusFrozenMembershipState(file)
-		if err != nil {
-			return uciRealCorpusFrozenManifest{}, errors.New("real-corpus composition scanner file state is invalid")
-		}
-		if membershipState == uci.IndexFilePresent {
-			for _, token := range uciRealCorpusLexicalOverlap(semanticQuery, string(file.Body)) {
-				lexicalOverlap[token] = struct{}{}
-			}
-		}
-		contentDigest := ""
-		if file.State == uci.IndexFilePresent {
-			contentDigest = uciRealCorpusSHA256(file.Body)
-		}
-		mode := runner.stageModes[file.Path]
-		if mode == "" {
-			mode = uciRealCorpusScannerModeUnavailable
-		}
-		_, canary := uciRealCorpusCanaries[file.Path]
-		entries = append(entries, uciRealCorpusFrozenEntry{
-			path:            file.Path,
-			scannerState:    file.State,
-			membershipState: membershipState,
-			reason:          reason,
-			scannerMode:     mode,
-			contentDigest:   contentDigest,
-			canary:          canary,
-		})
+	entries, lexicalOverlap, err := uciRealCorpusFreezeEntries(ctx, scan.Files, runner.stageModes, semanticQuery)
+	if err != nil {
+		return uciRealCorpusFrozenManifest{}, err
 	}
 	if len(lexicalOverlap) != 0 {
 		tokens := make([]string, 0, len(lexicalOverlap))
@@ -367,6 +337,39 @@ func uciFreezeRealCorpusManifest(ctx context.Context, root, semanticQuery string
 		return uciRealCorpusFrozenManifest{}, err
 	}
 	return manifest, nil
+}
+
+func uciRealCorpusFreezeEntries(ctx context.Context, files []uci.ScannerFile, stageModes map[string]string, semanticQuery string) ([]uciRealCorpusFrozenEntry, map[string]struct{}, error) {
+	entries := make([]uciRealCorpusFrozenEntry, 0, len(files))
+	lexicalOverlap := make(map[string]struct{})
+	for _, file := range files {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		membershipState, reason, err := uciRealCorpusFrozenMembershipState(file)
+		if err != nil {
+			return nil, nil, errors.New("real-corpus composition scanner file state is invalid")
+		}
+		if membershipState == uci.IndexFilePresent {
+			for _, token := range uciRealCorpusLexicalOverlap(semanticQuery, string(file.Body)) {
+				lexicalOverlap[token] = struct{}{}
+			}
+		}
+		contentDigest := ""
+		if file.State == uci.IndexFilePresent {
+			contentDigest = uciRealCorpusSHA256(file.Body)
+		}
+		mode := stageModes[file.Path]
+		if mode == "" {
+			mode = uciRealCorpusScannerModeUnavailable
+		}
+		_, canary := uciRealCorpusCanaries[file.Path]
+		entries = append(entries, uciRealCorpusFrozenEntry{
+			path: file.Path, scannerState: file.State, membershipState: membershipState, reason: reason,
+			scannerMode: mode, contentDigest: contentDigest, canary: canary,
+		})
+	}
+	return entries, lexicalOverlap, nil
 }
 
 // uciVerifyRealCorpusComposition proves that one successful publication is an
