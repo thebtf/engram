@@ -245,38 +245,49 @@ func (runner *uciRealCorpusRecordingGitRunner) captureStageModes(output []byte) 
 		if end == start || end == len(output) {
 			return errors.New("real-corpus composition scanner stage output is malformed")
 		}
-		record := string(output[start:end])
-		if len(record) < 3 || record[1] != ' ' {
-			return errors.New("real-corpus composition scanner stage output is malformed")
+		candidatePath, mode, err := uciRealCorpusStageMode(string(output[start:end]))
+		if err != nil {
+			return err
 		}
-		switch record[0] {
-		case '?':
-			if !uciRealCorpusCompositionPath(record[2:]) {
-				return errors.New("real-corpus composition scanner stage output is malformed")
+		if mode != "" {
+			if previous, found := runner.stageModes[candidatePath]; !found || (previous != "160000" && mode == "160000") {
+				runner.stageModes[candidatePath] = mode
 			}
-		case 'H', 'S', 'M':
-			stageRecord := record[2:]
-			separator := strings.IndexByte(stageRecord, '\t')
-			if separator < 0 || separator == len(stageRecord)-1 {
-				return errors.New("real-corpus composition scanner stage output is malformed")
-			}
-			header := strings.Fields(stageRecord[:separator])
-			if len(header) != 3 || !uciRealCorpusGitMode(header[0]) {
-				return errors.New("real-corpus composition scanner stage output is malformed")
-			}
-			candidatePath := stageRecord[separator+1:]
-			if !uciRealCorpusCompositionPath(candidatePath) {
-				return errors.New("real-corpus composition scanner stage output is malformed")
-			}
-			if previous, found := runner.stageModes[candidatePath]; !found || (previous != "160000" && header[0] == "160000") {
-				runner.stageModes[candidatePath] = header[0]
-			}
-		default:
-			return errors.New("real-corpus composition scanner stage output is malformed")
 		}
 		start = end + 1
 	}
 	return nil
+}
+
+func uciRealCorpusStageMode(record string) (string, string, error) {
+	if len(record) < 3 || record[1] != ' ' {
+		return "", "", errors.New("real-corpus composition scanner stage output is malformed")
+	}
+	switch record[0] {
+	case '?':
+		candidatePath := record[2:]
+		if !uciRealCorpusCompositionPath(candidatePath) {
+			return "", "", errors.New("real-corpus composition scanner stage output is malformed")
+		}
+		return candidatePath, "", nil
+	case 'H', 'S', 'M':
+		stageRecord := record[2:]
+		separator := strings.IndexByte(stageRecord, '\t')
+		if separator < 0 || separator == len(stageRecord)-1 {
+			return "", "", errors.New("real-corpus composition scanner stage output is malformed")
+		}
+		header := strings.Fields(stageRecord[:separator])
+		if len(header) != 3 || !uciRealCorpusGitMode(header[0]) {
+			return "", "", errors.New("real-corpus composition scanner stage output is malformed")
+		}
+		candidatePath := stageRecord[separator+1:]
+		if !uciRealCorpusCompositionPath(candidatePath) {
+			return "", "", errors.New("real-corpus composition scanner stage output is malformed")
+		}
+		return candidatePath, header[0], nil
+	default:
+		return "", "", errors.New("real-corpus composition scanner stage output is malformed")
+	}
 }
 
 // uciFreezeRealCorpusManifest scans through the same scanner policy as the
@@ -1052,38 +1063,8 @@ func uciRealCorpusBuildFrozenManifest(entries []uciRealCorpusFrozenEntry) (uciRe
 	seen := make(map[string]struct{}, len(normalized))
 	canaries := make(map[string]uciRealCorpusFrozenEntry, len(uciRealCorpusCanaries))
 	for _, entry := range normalized {
-		if !uciRealCorpusCompositionPath(entry.path) || entry.scannerMode == "" {
-			return uciRealCorpusFrozenManifest{}, errors.New("real-corpus composition frozen path is invalid")
-		}
-		if _, found := seen[entry.path]; found {
-			return uciRealCorpusFrozenManifest{}, errors.New("real-corpus composition scanner repeated a path")
-		}
-		seen[entry.path] = struct{}{}
-		if entry.scannerState == uci.IndexFilePresent {
-			if !uciRealCorpusCompositionDigest(entry.contentDigest) {
-				return uciRealCorpusFrozenManifest{}, errors.New("real-corpus composition present file has no digest")
-			}
-		} else if entry.contentDigest != "" {
-			return uciRealCorpusFrozenManifest{}, errors.New("real-corpus composition non-present scanner file carries a digest")
-		}
-		if _, knownCanary := uciRealCorpusCanaries[entry.path]; entry.canary != knownCanary {
-			return uciRealCorpusFrozenManifest{}, errors.New("real-corpus composition canary classification is invalid")
-		}
-
-		manifest.EntryCount++
-		manifest.ScannerStateHistogram[string(entry.scannerState)]++
-		manifest.MembershipStateHistogram[string(entry.membershipState)]++
-		manifest.ScannerModeHistogram[entry.scannerMode]++
-		if entry.reason != "" {
-			manifest.ReasonHistogram[entry.reason]++
-		}
-		if entry.canary {
-			manifest.CanaryEntryCount++
-			manifest.CanaryStateHistogram[string(entry.membershipState)]++
-			canaries[entry.path] = entry
-		} else {
-			manifest.BaselineEntryCount++
-			manifest.BaselineStateHistogram[string(entry.membershipState)]++
+		if err := uciRealCorpusRecordFrozenEntry(&manifest, seen, canaries, entry); err != nil {
+			return uciRealCorpusFrozenManifest{}, err
 		}
 	}
 	for canaryPath, body := range uciRealCorpusCanaries {
@@ -1117,6 +1098,42 @@ func uciRealCorpusBuildFrozenManifest(entries []uciRealCorpusFrozenEntry) (uciRe
 	manifest.BaselineManifestDigest = baselineDigest
 	manifest.CanaryDeltaDigest = canaryDigest
 	return manifest, nil
+}
+
+func uciRealCorpusRecordFrozenEntry(manifest *uciRealCorpusFrozenManifest, seen map[string]struct{}, canaries map[string]uciRealCorpusFrozenEntry, entry uciRealCorpusFrozenEntry) error {
+	if !uciRealCorpusCompositionPath(entry.path) || entry.scannerMode == "" {
+		return errors.New("real-corpus composition frozen path is invalid")
+	}
+	if _, found := seen[entry.path]; found {
+		return errors.New("real-corpus composition scanner repeated a path")
+	}
+	seen[entry.path] = struct{}{}
+	if entry.scannerState == uci.IndexFilePresent {
+		if !uciRealCorpusCompositionDigest(entry.contentDigest) {
+			return errors.New("real-corpus composition present file has no digest")
+		}
+	} else if entry.contentDigest != "" {
+		return errors.New("real-corpus composition non-present scanner file carries a digest")
+	}
+	if _, knownCanary := uciRealCorpusCanaries[entry.path]; entry.canary != knownCanary {
+		return errors.New("real-corpus composition canary classification is invalid")
+	}
+	manifest.EntryCount++
+	manifest.ScannerStateHistogram[string(entry.scannerState)]++
+	manifest.MembershipStateHistogram[string(entry.membershipState)]++
+	manifest.ScannerModeHistogram[entry.scannerMode]++
+	if entry.reason != "" {
+		manifest.ReasonHistogram[entry.reason]++
+	}
+	if entry.canary {
+		manifest.CanaryEntryCount++
+		manifest.CanaryStateHistogram[string(entry.membershipState)]++
+		canaries[entry.path] = entry
+		return nil
+	}
+	manifest.BaselineEntryCount++
+	manifest.BaselineStateHistogram[string(entry.membershipState)]++
+	return nil
 }
 
 func uciRealCorpusValidateFrozenManifest(frozen uciRealCorpusFrozenManifest) error {
@@ -1428,13 +1445,17 @@ func uciRealCorpusVerifyMembershipProjection(entries []uciRealCorpusFrozenEntry,
 			return err
 		}
 	}
+	return uciRealCorpusVerifyMembershipPathSets(expectedPaths, staged, persisted, proofs, usedArtifacts)
+}
+
+func uciRealCorpusVerifyMembershipPathSets(expected map[string]struct{}, staged map[string]uci.IndexMembership, persisted map[string]uciRealCorpusCompositionMembershipRow, proofs map[string]uci.IndexArtifactProof, usedArtifacts map[string]struct{}) error {
 	for pathKey := range staged {
-		if _, expected := expectedPaths[pathKey]; !expected {
+		if _, found := expected[pathKey]; !found {
 			return errors.New("real-corpus composition staged publication contains a foreign path")
 		}
 	}
 	for pathKey := range persisted {
-		if _, expected := expectedPaths[pathKey]; !expected {
+		if _, found := expected[pathKey]; !found {
 			return errors.New("real-corpus composition temporal projection contains a foreign path")
 		}
 	}
