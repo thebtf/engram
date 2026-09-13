@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
-	"github.com/thebtf/engram/pkg/models"
 )
 
 func TestOpenRefusesUnsafeDSNBeforeConnecting(t *testing.T) {
@@ -374,7 +373,7 @@ func assertHAPFixtureRotation(t *testing.T, fixture *Fixture, request seedReques
 
 func assertHAPFixtureSnapshot(t *testing.T, fixture *Fixture, request seedRequest, secretsPath string) {
 	t.Helper()
-	var target models.Memory
+	var target gormdb.Memory
 	if err := fixture.store.GetDB().Where("project = ? AND source_agent = ?", request.CanonicalProjectKey, fixtureSourceAgent).First(&target).Error; err != nil {
 		t.Fatalf("read target memory: %v", err)
 	}
