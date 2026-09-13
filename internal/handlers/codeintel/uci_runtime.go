@@ -49,6 +49,11 @@ const (
 	uciRuntimeGitFingerprintDomain = "engram.uci.local-git-directory/v1"
 )
 
+const (
+	uciRuntimeAgentDirectoryName = ".agent"
+	uciRuntimeGitRevParse        = "rev-parse"
+)
+
 // UCIRuntimeConfig is the daemon-owned, source-independent configuration for
 // the UCI prepared-index path. The server remains authoritative for selecting
 // a checkout and profile; this configuration only proves which local scanner
@@ -239,7 +244,7 @@ func (source *uciRuntimeWatcherSource) admittedPath(path string) (string, bool) 
 		return "", false
 	}
 	path = filepath.Clean(path)
-	if uciRuntimePathContains(filepath.Join(source.rootPath, ".agent", "worktrees"), path) {
+	if uciRuntimePathContains(filepath.Join(source.rootPath, uciRuntimeAgentDirectoryName, "worktrees"), path) {
 		return "", false
 	}
 	if source.privateGitDir != "" && uciRuntimePathContains(source.privateGitDir, path) {
@@ -262,7 +267,7 @@ func uciRuntimeWatcherProtectedRelativePath(relativePath string) bool {
 			return true
 		}
 		switch component {
-		case ".agent", ".cache", "build", "coverage", "dist", "keys", "node_modules", "target", "transcripts", "vendor":
+		case uciRuntimeAgentDirectoryName, ".cache", "build", "coverage", "dist", "keys", "node_modules", "target", "transcripts", "vendor":
 			return true
 		}
 	}
@@ -466,7 +471,7 @@ func newUCIRuntimeScanner() *uci.Scanner {
 		uci.ScannerPolicy{
 			IncludeUntracked: true,
 			ProtectedPaths: []string{
-				".agent",
+				uciRuntimeAgentDirectoryName,
 				".env",
 				".env.*",
 				".cache",
@@ -795,7 +800,7 @@ func (runtimeState *uciRuntime) currentWorktreeEvidence(ctx context.Context, sel
 	if err != nil {
 		return uciRuntimeWorktreeEvidence{}, err
 	}
-	rootPath, err := runtimeState.gitPath(ctx, selectedRoot, "resolve worktree root", "rev-parse", "--show-toplevel")
+	rootPath, err := runtimeState.gitPath(ctx, selectedRoot, "resolve worktree root", uciRuntimeGitRevParse, "--show-toplevel")
 	if err != nil {
 		return uciRuntimeWorktreeEvidence{}, err
 	}
@@ -806,7 +811,7 @@ func (runtimeState *uciRuntime) currentWorktreeEvidence(ctx context.Context, sel
 	if !uciRuntimePathContains(rootPath, selectedRoot) {
 		return uciRuntimeWorktreeEvidence{}, errors.New("uci runtime: selected root is outside resolved worktree")
 	}
-	privateGitDir, err := runtimeState.gitPath(ctx, rootPath, "resolve private Git directory", "rev-parse", "--absolute-git-dir")
+	privateGitDir, err := runtimeState.gitPath(ctx, rootPath, "resolve private Git directory", uciRuntimeGitRevParse, "--absolute-git-dir")
 	if err != nil {
 		return uciRuntimeWorktreeEvidence{}, err
 	}
@@ -814,7 +819,7 @@ func (runtimeState *uciRuntime) currentWorktreeEvidence(ctx context.Context, sel
 	if err != nil {
 		return uciRuntimeWorktreeEvidence{}, err
 	}
-	commonGitDir, err := runtimeState.gitPath(ctx, rootPath, "resolve common Git directory", "rev-parse", "--path-format=absolute", "--git-common-dir")
+	commonGitDir, err := runtimeState.gitPath(ctx, rootPath, "resolve common Git directory", uciRuntimeGitRevParse, "--path-format=absolute", "--git-common-dir")
 	if err != nil {
 		return uciRuntimeWorktreeEvidence{}, err
 	}

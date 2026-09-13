@@ -20,6 +20,14 @@ const (
 	boundaryExitCode = 10
 )
 
+const (
+	hapBoundaryRefusalMessage    = "hap-01c-fixture: boundary refusal"
+	hapReceiptWriteFailedMessage = "hap-01c-fixture: receipt write failed"
+	hapFlagRequestFile           = "--request-file"
+	hapFlagRunID                 = "--run-id"
+	hapFlagDSNFile               = "--dsn-file"
+)
+
 type fixtureController interface {
 	Close() error
 	Seed(context.Context, string, string) (hap01cfixture.SeedReceipt, error)
@@ -69,12 +77,12 @@ func runWithDependencies(parent context.Context, args []string, stdout, stderr i
 		return failureExitCode
 	}
 	if err := hap01cfixture.ValidateRunID(invocation.runID); err != nil {
-		fmt.Fprintln(stderr, "hap-01c-fixture: boundary refusal")
+		fmt.Fprintln(stderr, hapBoundaryRefusalMessage)
 		return boundaryExitCode
 	}
 	workingDirectory, err := deps.workingDirectory()
 	if err != nil || !validateScratchPaths(workingDirectory, invocation) {
-		fmt.Fprintln(stderr, "hap-01c-fixture: boundary refusal")
+		fmt.Fprintln(stderr, hapBoundaryRefusalMessage)
 		return boundaryExitCode
 	}
 
@@ -93,7 +101,7 @@ func runWithDependencies(parent context.Context, args []string, stdout, stderr i
 			return exitCodeFor(err)
 		}
 		if err := writeJSON(stdout, receipt); err != nil {
-			fmt.Fprintln(stderr, "hap-01c-fixture: receipt write failed")
+			fmt.Fprintln(stderr, hapReceiptWriteFailedMessage)
 			return failureExitCode
 		}
 		return 0
@@ -104,7 +112,7 @@ func runWithDependencies(parent context.Context, args []string, stdout, stderr i
 			return exitCodeFor(err)
 		}
 		if err := writeJSON(stdout, receipt); err != nil {
-			fmt.Fprintln(stderr, "hap-01c-fixture: receipt write failed")
+			fmt.Fprintln(stderr, hapReceiptWriteFailedMessage)
 			return failureExitCode
 		}
 		return 0
@@ -115,7 +123,7 @@ func runWithDependencies(parent context.Context, args []string, stdout, stderr i
 			return exitCodeFor(err)
 		}
 		if err := writePrivateJSON(invocation.outFile, receipt); err != nil {
-			fmt.Fprintln(stderr, "hap-01c-fixture: receipt write failed")
+			fmt.Fprintln(stderr, hapReceiptWriteFailedMessage)
 			return failureExitCode
 		}
 		return 0
@@ -134,15 +142,15 @@ func parseInvocation(args []string) (invocation, error) {
 	switch parsed.command {
 	case "seed":
 		required = map[string]struct{}{
-			"--run-id": {}, "--dsn-file": {}, "--request-file": {}, "--secrets-out": {},
+			hapFlagRunID: {}, hapFlagDSNFile: {}, hapFlagRequestFile: {}, "--secrets-out": {},
 		}
 	case "rotate-project-keycard":
 		required = map[string]struct{}{
-			"--run-id": {}, "--dsn-file": {}, "--secrets-file": {},
+			hapFlagRunID: {}, hapFlagDSNFile: {}, "--secrets-file": {},
 		}
 	case "snapshot":
 		required = map[string]struct{}{
-			"--run-id": {}, "--dsn-file": {}, "--request-file": {}, "--out": {},
+			hapFlagRunID: {}, hapFlagDSNFile: {}, hapFlagRequestFile: {}, "--out": {},
 		}
 	default:
 		return invocation{}, fmt.Errorf("unknown command")
@@ -164,11 +172,11 @@ func parseInvocation(args []string) (invocation, error) {
 		}
 		seen[flag] = struct{}{}
 		switch flag {
-		case "--run-id":
+		case hapFlagRunID:
 			parsed.runID = value
-		case "--dsn-file":
+		case hapFlagDSNFile:
 			parsed.dsnFile = value
-		case "--request-file":
+		case hapFlagRequestFile:
 			parsed.requestFile = value
 		case "--secrets-out", "--secrets-file":
 			parsed.secretsFile = value
@@ -337,7 +345,7 @@ func writePrivateJSON(path string, value interface{}) error {
 
 func writeOperationFailure(stderr io.Writer, err error) {
 	if hap01cfixture.IsBoundaryError(err) {
-		fmt.Fprintln(stderr, "hap-01c-fixture: boundary refusal")
+		fmt.Fprintln(stderr, hapBoundaryRefusalMessage)
 		return
 	}
 	fmt.Fprintln(stderr, "hap-01c-fixture: operation failed")

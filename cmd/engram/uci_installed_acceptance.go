@@ -51,6 +51,13 @@ const (
 	uciInstalledAcceptanceScenarioCodeObserved     = "OBSERVED_INSTALLED_LIFECYCLE"
 )
 
+const (
+	uciInstalledAcceptanceGitRevParse          = "rev-parse"
+	uciInstalledAcceptanceSHA256Prefix         = "sha256:"
+	uciInstalledAcceptanceToolsCallMethod      = "tools/call"
+	uciInstalledAcceptanceViewDeltaUnavailable = "view_delta=unavailable"
+)
+
 var (
 	errUCIInstalledAcceptanceNonTestPostgres      = errors.New("UCI installed acceptance requires an explicit loopback test PostgreSQL database")
 	errUCIInstalledAcceptanceParserBoundary       = errors.New("UCI installed acceptance parser boundary is not observable through the installed runtime")
@@ -1131,16 +1138,16 @@ func uciCreateInstalledAcceptanceWorktrees(ctx context.Context, fixtureRoot stri
 	if err := os.WriteFile(filepath.Join(linkedRoot, fixture.RelativePath), []byte(fixture.LinkedSource), 0o600); err != nil {
 		return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, fmt.Errorf("write installed acceptance linked dirty source: %w", err)
 	}
-	primaryHead, err := uciReadInstalledAcceptanceGit(ctx, primaryRoot, "rev-parse", "HEAD")
+	primaryHead, err := uciReadInstalledAcceptanceGit(ctx, primaryRoot, uciInstalledAcceptanceGitRevParse, "HEAD")
 	if err != nil {
 		return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, err
 	}
-	linkedHead, err := uciReadInstalledAcceptanceGit(ctx, linkedRoot, "rev-parse", "HEAD")
+	linkedHead, err := uciReadInstalledAcceptanceGit(ctx, linkedRoot, uciInstalledAcceptanceGitRevParse, "HEAD")
 	if err != nil {
 		return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, err
 	}
 	for _, root := range auxiliaryRoots {
-		auxiliaryHead, auxiliaryErr := uciReadInstalledAcceptanceGit(ctx, root, "rev-parse", "HEAD")
+		auxiliaryHead, auxiliaryErr := uciReadInstalledAcceptanceGit(ctx, root, uciInstalledAcceptanceGitRevParse, "HEAD")
 		if auxiliaryErr != nil || auxiliaryHead != primaryHead {
 			return uciInstalledAcceptanceWorktreesFixture{}, uciInstalledAcceptanceWorktrees{}, errors.New("installed acceptance auxiliary worktree is not at the shared HEAD")
 		}
@@ -1334,7 +1341,7 @@ func uciPrepareInstalledAcceptanceAuthority(ctx context.Context, dsn string, wor
 		ParserBundleDigest:   parserBundleDigest,
 		ResolverRevision:     "uci-installed-resolver-v1",
 		ChunkerRevision:      "uci-installed-chunker-v1",
-		IgnorePolicyDigest:   "sha256:" + uciInstalledAcceptanceStringDigest("uci-installed-ignore-policy-v1"),
+		IgnorePolicyDigest:   uciInstalledAcceptanceSHA256Prefix + uciInstalledAcceptanceStringDigest("uci-installed-ignore-policy-v1"),
 		BuildContextJSON:     `{"mode":"uci-installed-acceptance"}`,
 		SecretPolicyRevision: "uci-installed-secret-policy-v1",
 	})
@@ -1924,7 +1931,7 @@ func (client *uciInstalledAcceptanceMCPClient) ToolWithCall(ctx context.Context,
 	if err != nil {
 		return uciInstalledAcceptanceMCPToolResult{}, fmt.Errorf("marshal installed standard MCP tools/call: %w", err)
 	}
-	raw, request, err := client.call(ctx, "tools/call", json.RawMessage(params))
+	raw, request, err := client.call(ctx, uciInstalledAcceptanceToolsCallMethod, json.RawMessage(params))
 	call := uciInstalledAcceptanceMCPToolCall{client: client.name, name: name, request: request}
 	if err != nil {
 		return uciInstalledAcceptanceMCPToolResult{call: call}, fmt.Errorf("installed standard MCP %s tools/call failed: %w", name, err)
@@ -1936,7 +1943,7 @@ func (client *uciInstalledAcceptanceMCPClient) ToolWithCall(ctx context.Context,
 // JSON-RPC ID. It deliberately does not advance the client's ordinary ID
 // sequence, which remains monotonic for every non-retry call.
 func (client *uciInstalledAcceptanceMCPClient) RetryTool(ctx context.Context, call uciInstalledAcceptanceMCPToolCall) (uciInstalledAcceptanceMCPToolResult, error) {
-	if call.client != client.name || call.name == "" || call.request.method != "tools/call" {
+	if call.client != client.name || call.name == "" || call.request.method != uciInstalledAcceptanceToolsCallMethod {
 		return uciInstalledAcceptanceMCPToolResult{}, errors.New("installed standard MCP retry does not belong to this client")
 	}
 	raw, err := client.callWithRequest(ctx, call.request)
@@ -1950,7 +1957,7 @@ func (client *uciInstalledAcceptanceMCPClient) RetryTool(ctx context.Context, ca
 // RetryTool: it retains one prior JSON-RPC ID while changing a tools/call
 // payload so the installed recorder must return IDEMPOTENCY_MISMATCH.
 func (client *uciInstalledAcceptanceMCPClient) ReplayToolWithSameJSONRPCID(ctx context.Context, prior uciInstalledAcceptanceMCPToolCall, name string, arguments any) (uciInstalledAcceptanceMCPToolResult, error) {
-	if prior.client != client.name || prior.request.method != "tools/call" || prior.request.id == "" {
+	if prior.client != client.name || prior.request.method != uciInstalledAcceptanceToolsCallMethod || prior.request.id == "" {
 		return uciInstalledAcceptanceMCPToolResult{}, errors.New("installed standard MCP replay does not belong to this client")
 	}
 	params, err := json.Marshal(map[string]any{"name": name, "arguments": arguments})
@@ -2482,7 +2489,7 @@ func uciRequireInstalledAcceptanceParserCanaryPublished(ctx context.Context, aut
 		if client == uciInstalledAcceptanceClientA {
 			primarySource = append([]byte(nil), source...)
 		}
-		contentDigest := "sha256:" + uciInstalledAcceptanceStringDigest(string(source))
+		contentDigest := uciInstalledAcceptanceSHA256Prefix + uciInstalledAcceptanceStringDigest(string(source))
 		var count int64
 		if err := authority.store.GetDB().WithContext(ctx).Raw(`
 			SELECT COUNT(*)
@@ -2525,7 +2532,7 @@ func uciRequireInstalledAcceptanceParserCanaryPublished(ctx context.Context, aut
 }
 
 func uciInstalledAcceptanceBareSHA256(value string) (string, error) {
-	const prefix = "sha256:"
+	const prefix = uciInstalledAcceptanceSHA256Prefix
 	if !strings.HasPrefix(value, prefix) {
 		return "", errors.New("digest has no SHA-256 prefix")
 	}
@@ -3540,7 +3547,7 @@ func uciInstalledAcceptanceProjectionCountsForAuthority(ctx context.Context, aut
 
 func uciInstalledAcceptanceViewDelta(ctx context.Context, authority *uciInstalledAcceptanceAuthority, beforeViewID, afterViewID string) string {
 	if authority == nil || authority.store == nil || beforeViewID == "" || afterViewID == "" {
-		return "view_delta=unavailable"
+		return uciInstalledAcceptanceViewDeltaUnavailable
 	}
 	type viewRow struct {
 		ViewID         string         `gorm:"column:view_id"`
@@ -3557,7 +3564,7 @@ func uciInstalledAcceptanceViewDelta(ctx context.Context, authority *uciInstalle
 		SELECT view_id, observed_fs_seq, manifest_digest, coverage_json::text AS coverage_json,
 		       head_oid, object_format, ref_label, dirty
 		FROM ci_views WHERE view_id IN (?, ?)`, beforeViewID, afterViewID).Scan(&rows).Error; err != nil || len(rows) != 2 {
-		return "view_delta=unavailable"
+		return uciInstalledAcceptanceViewDeltaUnavailable
 	}
 	byID := make(map[string]viewRow, 2)
 	for _, row := range rows {
@@ -3566,7 +3573,7 @@ func uciInstalledAcceptanceViewDelta(ctx context.Context, authority *uciInstalle
 	before, beforeOK := byID[beforeViewID]
 	after, afterOK := byID[afterViewID]
 	if !beforeOK || !afterOK {
-		return "view_delta=unavailable"
+		return uciInstalledAcceptanceViewDeltaUnavailable
 	}
 	gitSame := before.HeadOID == after.HeadOID && before.ObjectFormat == after.ObjectFormat && before.RefLabel == after.RefLabel && before.Dirty == after.Dirty
 	var producerCount int64
@@ -4226,11 +4233,11 @@ func uciSnapshotInstalledAcceptanceWatcher(
 	if err != nil {
 		return uciInstalledAcceptanceWatcherSnapshot{}, fmt.Errorf("read installed acceptance watcher snapshot bytes: %w", err)
 	}
-	head, err := uciReadInstalledAcceptanceGit(ctx, root, "rev-parse", "HEAD")
+	head, err := uciReadInstalledAcceptanceGit(ctx, root, uciInstalledAcceptanceGitRevParse, "HEAD")
 	if err != nil {
 		return uciInstalledAcceptanceWatcherSnapshot{}, err
 	}
-	tree, err := uciReadInstalledAcceptanceGit(ctx, root, "rev-parse", "HEAD^{tree}")
+	tree, err := uciReadInstalledAcceptanceGit(ctx, root, uciInstalledAcceptanceGitRevParse, "HEAD^{tree}")
 	if err != nil {
 		return uciInstalledAcceptanceWatcherSnapshot{}, err
 	}

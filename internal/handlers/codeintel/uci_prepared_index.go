@@ -20,6 +20,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+const uciPreparedSHA256Prefix = "sha256:"
+
 // UCIPreparedIndexScanner is the read-only scanner boundary used by the
 // prepared index collaborator. It never selects a source or checkout.
 type UCIPreparedIndexScanner interface {
@@ -1576,10 +1578,10 @@ func validUCIPreparedIndexIdentity(value string) bool {
 
 func validUCIPreparedIndexDigest(value uci.IndexDigest) bool {
 	encoded := string(value)
-	if len(encoded) != len("sha256:")+sha256.Size*2 || !strings.HasPrefix(encoded, "sha256:") {
+	if len(encoded) != len(uciPreparedSHA256Prefix)+sha256.Size*2 || !strings.HasPrefix(encoded, uciPreparedSHA256Prefix) {
 		return false
 	}
-	for _, character := range encoded[len("sha256:"):] {
+	for _, character := range encoded[len(uciPreparedSHA256Prefix):] {
 		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
 			return false
 		}

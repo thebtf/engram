@@ -19,12 +19,13 @@ const (
 	uciLocalRegistrySchemaVersion = 2
 	uciLocalSQLiteBusyTimeoutMS   = 5000
 
-	uciLocalMaxOpaqueIDBytes      = 512
-	uciLocalMaxFingerprintBytes   = 512
-	uciLocalMaxRootPathBytes      = 4096
-	uciLocalMaxRelativePathBytes  = 4096
-	uciLocalMaxDirtyPaths         = int64(4096)
-	uciLocalMaxRecoveryDirtyPaths = int64(4096)
+	uciLocalMaxOpaqueIDBytes              = 512
+	uciLocalMaxFingerprintBytes           = 512
+	uciLocalMaxRootPathBytes              = 4096
+	uciLocalMaxRelativePathBytes          = 4096
+	uciLocalMaxDirtyPaths                 = int64(4096)
+	uciLocalMaxRecoveryDirtyPaths         = int64(4096)
+	uciLocalRegistryOpenDatabaseOperation = "open database connection"
 )
 
 // UCILocalRescanCause describes why incremental reconciliation is no longer
@@ -512,7 +513,7 @@ func (registry *UCILocalRegistry) Snapshot(ctx context.Context, checkoutID strin
 func (registry *UCILocalRegistry) initialize(ctx context.Context) error {
 	conn, err := registry.db.Conn(ctx)
 	if err != nil {
-		return uciLocalRegistryOperationError("open database connection", err)
+		return uciLocalRegistryOperationError(uciLocalRegistryOpenDatabaseOperation, err)
 	}
 	defer conn.Close()
 
@@ -574,7 +575,7 @@ func (registry *UCILocalRegistry) withImmediate(ctx context.Context, operation f
 	}
 	conn, err := registry.db.Conn(ctx)
 	if err != nil {
-		return uciLocalRegistryOperationError("open database connection", err)
+		return uciLocalRegistryOperationError(uciLocalRegistryOpenDatabaseOperation, err)
 	}
 	defer conn.Close()
 	if err := configureUCILocalSQLiteConnection(ctx, conn, false); err != nil {
@@ -606,7 +607,7 @@ func (registry *UCILocalRegistry) withRead(ctx context.Context, operation func(*
 	}
 	conn, err := registry.db.Conn(ctx)
 	if err != nil {
-		return uciLocalRegistryOperationError("open database connection", err)
+		return uciLocalRegistryOperationError(uciLocalRegistryOpenDatabaseOperation, err)
 	}
 	defer conn.Close()
 	if err := configureUCILocalSQLiteConnection(ctx, conn, false); err != nil {

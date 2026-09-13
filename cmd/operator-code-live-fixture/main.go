@@ -29,13 +29,15 @@ import (
 )
 
 const (
-	fixtureAuthRealm       = "browser"
-	fixtureClientAuthRealm = string(auth.SourceClient)
-	fixtureQuery           = "CodeExplorerFixtureA"
-	fixtureExpectedGraph   = "CodeExplorerFixtureB"
-	fixtureExpectedSource  = "CodeExplorerFixtureA"
-	fixtureSourcePath      = "fixture.go"
-	fixtureQueueSeedCount  = 5
+	fixtureAuthRealm         = "browser"
+	fixtureClientAuthRealm   = string(auth.SourceClient)
+	fixtureQuery             = "CodeExplorerFixtureA"
+	fixtureExpectedGraph     = "CodeExplorerFixtureB"
+	fixtureExpectedSource    = "CodeExplorerFixtureA"
+	fixtureSourcePath        = "fixture.go"
+	fixtureQueueSeedCount    = 5
+	fixtureModeNoView        = "no-view"
+	fixtureWorkstationPrefix = "operator-code-live-"
 )
 
 var fixtureSource = []byte(`package fixture
@@ -156,7 +158,7 @@ func parseInvocation(args []string) (invocation, error) {
 	if in.mode == "" {
 		in.mode = "published"
 	}
-	if in.dsnFile == "" || !validFixtureEmail(in.browserEmail) || !validFixtureID(in.project) || (in.mode != "published" && in.mode != "no-view") || (in.mode == "no-view" && (in.sourceFile == "" || in.keycardFile == "")) {
+	if in.dsnFile == "" || !validFixtureEmail(in.browserEmail) || !validFixtureID(in.project) || (in.mode != "published" && in.mode != fixtureModeNoView) || (in.mode == fixtureModeNoView && (in.sourceFile == "" || in.keycardFile == "")) {
 		return invocation{}, fmt.Errorf("invalid fixture arguments")
 	}
 	return in, nil
@@ -198,7 +200,7 @@ func provision(ctx context.Context, dsn string, in invocation) (fixtureOutput, e
 	if !subject.Valid() {
 		return fixtureOutput{}, fmt.Errorf("fixture browser subject is invalid")
 	}
-	if in.mode == "no-view" {
+	if in.mode == fixtureModeNoView {
 		return provisionNoView(ctx, store, user, subject, in, marker)
 	}
 	if err := seedFixtureQueueCandidates(ctx, store.GetDB(), project); err != nil {
@@ -216,7 +218,7 @@ func provision(ctx context.Context, dsn string, in invocation) (fixtureOutput, e
 	}
 	checkout, err := contexts.RegisterCheckout(ctx, gormdb.RegisterCheckoutInput{
 		SourceID:       source.SourceID,
-		WorkstationID:  "operator-code-live-" + project,
+		WorkstationID:  fixtureWorkstationPrefix + project,
 		Kind:           gormdb.UCICheckoutWorkingTree,
 		OwnerPrincipal: subject.Principal,
 		LocatorRef:     "fixture://operator-code/" + project,
@@ -251,10 +253,10 @@ func provision(ctx context.Context, dsn string, in invocation) (fixtureOutput, e
 	caller := uci.IndexCaller{
 		AuthRealm:     source.AuthRealm,
 		Principal:     subject.Principal,
-		OwnerInstance: "operator-code-live-" + project,
+		OwnerInstance: fixtureWorkstationPrefix + project,
 	}
 	build, err := publisher.Begin(ctx, caller, uci.IndexBeginInput{
-		BuildKey: "operator-code-live-" + project,
+		BuildKey: fixtureWorkstationPrefix + project,
 		Scope: uci.IndexScope{
 			SourceID:      source.SourceID,
 			CheckoutID:    checkout.CheckoutID,
@@ -325,7 +327,7 @@ func provisionNoView(ctx context.Context, store *gormdb.Store, user *gormdb.User
 	if err != nil {
 		return fixtureOutput{}, fmt.Errorf("resolve no-view fixture root: %w", err)
 	}
-	keycard, workstationID, err := fixtureClientKeycard(ctx, store, "operator-code-live-"+in.project, subject)
+	keycard, workstationID, err := fixtureClientKeycard(ctx, store, fixtureWorkstationPrefix+in.project, subject)
 	if err != nil {
 		return fixtureOutput{}, err
 	}

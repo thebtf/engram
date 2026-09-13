@@ -54,6 +54,11 @@ const (
 	maxUCIClientManifestEdges     = 5_000_000
 )
 
+const (
+	uciClientServerUnavailableMessage         = "UCI server is unavailable"
+	uciClientResolvedTargetUnavailableMessage = "resolved target is unavailable"
+)
+
 var (
 	errUCIClientUnavailable     = errors.New("client is unavailable")
 	errUCIClientInvalidContext  = errors.New("context is invalid")
@@ -256,18 +261,18 @@ func (a *UCIIndexAdapter) ResolveIndexTarget(ctx context.Context, project muxcor
 		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("resolved context handle is unavailable")
 	}
 	if a == nil || a.module == nil {
-		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("UCI server is unavailable")
+		return ResolvedIndexTarget{}, uciIndexSourceUnavailable(uciClientServerUnavailableMessage)
 	}
 	m := a.module
 
 	serverURL, err := m.requireServerURL(project)
 	if err != nil {
-		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("UCI server is unavailable")
+		return ResolvedIndexTarget{}, uciIndexSourceUnavailable(uciClientServerUnavailableMessage)
 	}
 	token := m.envFor(project, config.EnvWorkstationToken)
 	conn, err := m.pool.getOrDialGRPC(serverURL, token)
 	if err != nil {
-		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("UCI server is unavailable")
+		return ResolvedIndexTarget{}, uciIndexSourceUnavailable(uciClientServerUnavailableMessage)
 	}
 
 	bound, err := newUCIClient(pb.NewEngramServiceClient(conn)).Bind(ctx,
@@ -303,7 +308,7 @@ func (a *UCIIndexAdapter) RebindIndexTarget(ctx context.Context, target Resolved
 		return ResolvedIndexTarget{}, err
 	}
 	if a == nil || a.module == nil || !validResolvedIndexTarget(target) || target.ClientSessionID != clientSessionID {
-		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("resolved target is unavailable")
+		return ResolvedIndexTarget{}, uciIndexSourceUnavailable(uciClientResolvedTargetUnavailableMessage)
 	}
 	conn, err := a.connectionForResolvedIndexTarget(target)
 	if err != nil {
@@ -482,7 +487,7 @@ func (a *UCIIndexAdapter) ProxyHandleTool(ctx context.Context, target ResolvedIn
 		return nil, err
 	}
 	if a == nil || a.module == nil || name == "" || !validResolvedIndexTarget(target) || target.ClientSessionID != clientSessionID {
-		return nil, uciIndexSourceUnavailable("resolved target is unavailable")
+		return nil, uciIndexSourceUnavailable(uciClientResolvedTargetUnavailableMessage)
 	}
 	conn, err := a.connectionForResolvedIndexTarget(target)
 	if err != nil {
@@ -512,7 +517,7 @@ func (a *UCIIndexAdapter) ProxyHandleTool(ctx context.Context, target ResolvedIn
 
 func (a *UCIIndexAdapter) connectionForResolvedIndexTarget(target ResolvedIndexTarget) (*grpc.ClientConn, error) {
 	if a == nil || a.module == nil || target.connection == nil || !validResolvedIndexTarget(target) {
-		return nil, uciIndexSourceUnavailable("resolved target is unavailable")
+		return nil, uciIndexSourceUnavailable(uciClientResolvedTargetUnavailableMessage)
 	}
 	return target.connection, nil
 }

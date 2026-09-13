@@ -28,6 +28,11 @@ const (
 	projectIdentityV3RegistrationTool = "project_identity.register_v3"
 )
 
+const (
+	projectIdentityResolutionRefusedMessage     = "project identity resolution refused"
+	projectIdentityResolutionUnavailableMessage = "project identity resolution unavailable"
+)
+
 var projectIdentityV3RegistrationSchema = json.RawMessage(`{"type":"object","additionalProperties":false}`)
 
 func daemonComparisonContextV3(ctx context.Context) context.Context {
@@ -155,18 +160,18 @@ func (m *Module) HandleTool(ctx context.Context, p muxcore.ProjectContext, name 
 		return nil, err
 	}
 	if !v3Enabled {
-		return nil, &module.ModuleError{Code: "PROJECT_DESCRIPTOR_UNSUPPORTED", Message: "project identity resolution refused"}
+		return nil, &module.ModuleError{Code: "PROJECT_DESCRIPTOR_UNSUPPORTED", Message: projectIdentityResolutionRefusedMessage}
 	}
 	if identity == nil {
-		return nil, &module.ModuleError{Code: "PROJECT_ANCHOR_INVALID", Message: "project identity resolution refused"}
+		return nil, &module.ModuleError{Code: "PROJECT_ANCHOR_INVALID", Message: projectIdentityResolutionRefusedMessage}
 	}
 	serverURL, err := m.requireServerURL(p)
 	if err != nil {
-		return nil, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
+		return nil, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: projectIdentityResolutionUnavailableMessage}
 	}
 	conn, err := m.pool.getOrDialGRPC(serverURL, m.envFor(p, config.EnvWorkstationToken))
 	if err != nil {
-		return nil, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
+		return nil, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: projectIdentityResolutionUnavailableMessage}
 	}
 	response, err := pb.NewEngramServiceClient(conn).RegisterProjectIdentityV3(daemonComparisonContextV3(ctx),
 		&pb.RegisterProjectIdentityV3Request{ProjectIdentityV3: identity}, grpc.WaitForReady(true))
@@ -179,7 +184,7 @@ func (m *Module) HandleTool(ctx context.Context, p muxcore.ProjectContext, name 
 	}
 	result, err := protojson.Marshal(resolution)
 	if err != nil {
-		return nil, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
+		return nil, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: projectIdentityResolutionUnavailableMessage}
 	}
 	return result, nil
 }
@@ -214,7 +219,7 @@ func hasNoRegistrationArguments(args json.RawMessage) bool {
 //	    to v4.2.0 both in content and in the isError boolean.
 func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, name string, args json.RawMessage) (json.RawMessage, error) {
 	if name == projectIdentityV3RegistrationTool {
-		return nil, &module.ModuleError{Code: "PROJECT_DESCRIPTOR_UNSUPPORTED", Message: "project identity resolution refused"}
+		return nil, &module.ModuleError{Code: "PROJECT_DESCRIPTOR_UNSUPPORTED", Message: projectIdentityResolutionRefusedMessage}
 	}
 
 	var (
@@ -257,7 +262,7 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 		}
 		if v3Enabled {
 			if v3Identity == nil {
-				return nil, &module.ModuleError{Code: "PROJECT_ANCHOR_INVALID", Message: "project identity resolution refused"}
+				return nil, &module.ModuleError{Code: "PROJECT_ANCHOR_INVALID", Message: projectIdentityResolutionRefusedMessage}
 			}
 			request.ProjectIdentityV3 = v3Identity
 			ctx = daemonComparisonContextV3(ctx)
@@ -320,9 +325,9 @@ func (m *Module) v3Identity(p muxcore.ProjectContext) (*pb.ProjectIdentityV3, bo
 	}
 	var inputErr *projectIdentityV3InputError
 	if errors.As(err, &inputErr) {
-		return nil, true, &module.ModuleError{Code: inputErr.code, Message: "project identity resolution refused"}
+		return nil, true, &module.ModuleError{Code: inputErr.code, Message: projectIdentityResolutionRefusedMessage}
 	}
-	return nil, true, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
+	return nil, true, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: projectIdentityResolutionUnavailableMessage}
 }
 
 func isV3OnboardingRequired(err error) bool {
@@ -350,11 +355,11 @@ func v3ProxyError(err error) error {
 			}
 			outcome := projectidentity.ResolutionOutcomeV3(info.GetReason())
 			if outcome.IsRefusal() {
-				return &module.ModuleError{Code: info.GetReason(), Message: "project identity resolution refused"}
+				return &module.ModuleError{Code: info.GetReason(), Message: projectIdentityResolutionRefusedMessage}
 			}
 		}
 	}
-	return &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
+	return &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: projectIdentityResolutionUnavailableMessage}
 }
 
 // validateV3Resolution admits only a complete, server-issued canonical scope
@@ -362,15 +367,15 @@ func v3ProxyError(err error) error {
 // the result as client authority.
 func validateV3Resolution(resolution *pb.ProjectResolutionResultV3, canonicalProject string, identity *pb.ProjectIdentityV3) error {
 	if resolution == nil || identity == nil || canonicalProject != resolution.GetProjectKey() || identity.GetScope() != resolution.GetResolvedScope() {
-		return &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
+		return &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: projectIdentityResolutionUnavailableMessage}
 	}
 	projectKey, err := projectidentity.NewProjectKeyV3(resolution.GetProjectKey())
 	if err != nil {
-		return &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
+		return &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: projectIdentityResolutionUnavailableMessage}
 	}
 	correlation, err := projectidentity.NewCorrelationV3(resolution.GetCorrelation())
 	if err != nil {
-		return &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
+		return &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: projectIdentityResolutionUnavailableMessage}
 	}
 	if _, err := projectidentity.NewSuccessResultV3(
 		projectidentity.ResolveExistingIntentV3,
@@ -380,7 +385,7 @@ func validateV3Resolution(resolution *pb.ProjectResolutionResultV3, canonicalPro
 		projectidentity.RedirectReferenceV3(resolution.GetRedirectReference()),
 		correlation,
 	); err != nil {
-		return &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
+		return &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: projectIdentityResolutionUnavailableMessage}
 	}
 	return nil
 }

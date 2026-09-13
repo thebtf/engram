@@ -16,6 +16,11 @@ import (
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
 
+const (
+	gitRevParse     = "rev-parse"
+	gitShowTopLevel = "--show-toplevel"
+)
+
 // slugCache caches the compatibility slug and v2 project identity by project
 // and cwd. One muxcore project ID can serve sessions rooted at different
 // subdirectories, and their routing metadata must stay aligned.
@@ -157,7 +162,7 @@ func (c *slugCache) ResolveIdentityV3(p muxcore.ProjectContext, clientInstanceID
 }
 
 func repositoryRootV3(cwd string) (string, error) {
-	output, err := exec.Command("git", "-C", cwd, "rev-parse", "--show-toplevel").Output()
+	output, err := exec.Command("git", "-C", cwd, gitRevParse, gitShowTopLevel).Output()
 	root := strings.TrimSpace(string(output))
 	if err != nil || root == "" {
 		return "", v3InputError("PROJECT_ANCHOR_INVALID")
@@ -166,22 +171,22 @@ func repositoryRootV3(cwd string) (string, error) {
 }
 
 func verifiedUnbornRepositoryV3(cwd, root string) bool {
-	prefix, err := exec.Command("git", "-C", cwd, "rev-parse", "--show-prefix").Output()
+	prefix, err := exec.Command("git", "-C", cwd, gitRevParse, "--show-prefix").Output()
 	if err != nil || strings.TrimSpace(string(prefix)) != "" {
 		return false
 	}
 	if _, err := os.Lstat(filepath.Join(root, ".engram-project")); err == nil || !errors.Is(err, os.ErrNotExist) {
 		return false
 	}
-	parentRoot, err := exec.Command("git", "-C", filepath.Dir(root), "rev-parse", "--show-toplevel").Output()
+	parentRoot, err := exec.Command("git", "-C", filepath.Dir(root), gitRevParse, gitShowTopLevel).Output()
 	if err == nil && filepath.Clean(strings.TrimSpace(string(parentRoot))) != filepath.Clean(root) {
 		return false
 	}
-	objectFormat, err := exec.Command("git", "-C", root, "rev-parse", "--show-object-format").Output()
+	objectFormat, err := exec.Command("git", "-C", root, gitRevParse, "--show-object-format").Output()
 	if err != nil || (strings.TrimSpace(string(objectFormat)) != "sha1" && strings.TrimSpace(string(objectFormat)) != "sha256") {
 		return false
 	}
-	head, err := exec.Command("git", "-C", root, "rev-parse", "--verify", "HEAD").Output()
+	head, err := exec.Command("git", "-C", root, gitRevParse, "--verify", "HEAD").Output()
 	if err == nil || strings.TrimSpace(string(head)) != "" {
 		return false
 	}
@@ -204,7 +209,7 @@ func verifiedAnchorlessDirectoryV3(cwd string) bool {
 			return false
 		}
 	}
-	output, err := exec.Command("git", "-C", root, "rev-parse", "--show-toplevel").Output()
+	output, err := exec.Command("git", "-C", root, gitRevParse, gitShowTopLevel).Output()
 	return err != nil && strings.TrimSpace(string(output)) == ""
 }
 
