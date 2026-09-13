@@ -241,11 +241,11 @@ func (s *Server) RegisterProjectIdentityV3(ctx context.Context, req *pb.Register
 		return nil, err
 	}
 	if req == nil || len(req.ProtoReflect().GetUnknown()) != 0 {
-		return nil, v3RegistrationDescriptorInvalid()
+		return nil, v3DescriptorInvalid()
 	}
 	projectIdentity := req.GetProjectIdentityV3()
 	if projectIdentity == nil || len(projectIdentity.ProtoReflect().GetUnknown()) != 0 {
-		return nil, v3RegistrationDescriptorInvalid()
+		return nil, v3DescriptorInvalid()
 	}
 	if req.GetRelayRevision() != "" {
 		ctx = withHAPRelayRegistration(ctx)
@@ -328,7 +328,7 @@ func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.Cal
 	if identity := req.GetProjectIdentityV3(); identity != nil {
 		intent, adminPurge := v3CallToolIntent(req.ToolName, req.ArgumentsJson)
 		if adminPurge {
-			return nil, v3AdminTargetUnavailable()
+			return nil, v3DescriptorInvalid()
 		}
 		resolution, err := s.resolveProjectIdentityV3(ctx, identity, intent)
 		if err != nil {
@@ -423,18 +423,12 @@ func v3CallToolIntent(toolName string, args []byte) (projectidentity.ResolutionI
 	return projectidentity.ResolveExistingIntentV3, false
 }
 
-func v3AdminTargetUnavailable() error {
-	correlation, err := projectidentity.NewCorrelationV3(uuid.NewString())
-	if err != nil {
-		return status.Error(codes.Unavailable, "project identity resolution unavailable")
-	}
-	return projectIdentityV3RefusalStatus(projectidentity.ProjectDescriptorInvalidOutcomeV3, correlation)
-}
+const projectIdentityResolutionUnavailableMessage = "project identity resolution unavailable"
 
-func v3RegistrationDescriptorInvalid() error {
+func v3DescriptorInvalid() error {
 	correlation, err := projectidentity.NewCorrelationV3(uuid.NewString())
 	if err != nil {
-		return status.Error(codes.Unavailable, "project identity resolution unavailable")
+		return status.Error(codes.Unavailable, projectIdentityResolutionUnavailableMessage)
 	}
 	return projectIdentityV3RefusalStatus(projectidentity.ProjectDescriptorInvalidOutcomeV3, correlation)
 }
@@ -617,7 +611,7 @@ func (s *Server) resolveProjectIdentityV3(ctx context.Context, identity *pb.Proj
 	}
 	request, err := grpcProjectIdentityV3Request(identity, intent, correlation)
 	if err != nil {
-		return projectidentity.ResolutionResultV3{}, status.Error(codes.Internal, "project identity resolution unavailable")
+		return projectidentity.ResolutionResultV3{}, status.Error(codes.Internal, projectIdentityResolutionUnavailableMessage)
 	}
 	resolver := s.identityResolverV3
 	if resolver == nil {
@@ -713,7 +707,7 @@ func projectIdentityV3Error(resolution projectidentity.ResolutionResultV3, resol
 		return projectIdentityV3RefusalStatus(refusal.Outcome(), refusal.Correlation())
 	}
 	if resolverErr != nil || !resolution.Outcome().IsSuccess() {
-		return status.Error(codes.Unavailable, "project identity resolution unavailable")
+		return status.Error(codes.Unavailable, projectIdentityResolutionUnavailableMessage)
 	}
 	return nil
 }

@@ -1114,7 +1114,7 @@ func uciIndexBindingFromRows(checkout *UCICheckout, profileID string, view *UCIV
 	}
 	if view != nil {
 		contextRef := uci.ContextRef{
-			SpaceID:           cloneUCIIndexBindingSpaceID(spaceID),
+			SpaceID:           copyUCIAliasTarget(spaceID),
 			SourceID:          view.SourceID,
 			CheckoutID:        view.CheckoutID,
 			ViewID:            view.ViewID,
@@ -1127,14 +1127,6 @@ func uciIndexBindingFromRows(checkout *UCICheckout, profileID string, view *UCIV
 		return uci.IndexBinding{}, fmt.Errorf("uci context load index binding: invalid stored binding: %w", err)
 	}
 	return binding.Clone(), nil
-}
-
-func cloneUCIIndexBindingSpaceID(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	copy := *value
-	return &copy
 }
 
 func isUCIIndexBindingCheckoutState(state UCICheckoutState) bool {
