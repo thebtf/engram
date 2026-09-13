@@ -50,51 +50,52 @@ func TestRuntimeAdvisorMapsExactReceiptReplays(t *testing.T) {
 	input := runtimeAdviseInput(t, "same replay")
 	prepared := runtimePreparedTaskMemory(t, 0)
 	axis := runtimeAxis(t, epoch, input, prepared)
-
-	for _, testCase := range []struct {
-		name    string
-		receipt Receipt
-		assert  func(t *testing.T, decision Decision)
-	}{
-		{
-			name:    "abstain",
-			receipt: mustUnverifiedReceipt(t, mustNoCandidatesReceipt(t, ctx, epoch, axis, "30000000-0000-4000-8000-000000000001", "30000000-0000-4000-8000-000000000002")),
-			assert: func(t *testing.T, decision Decision) {
-				t.Helper()
-				if receipt, reason, ok := decision.Abstain(); !ok || !receipt.valid() || reason != AbstentionNoCandidates {
-					t.Fatalf("exact ABSTAIN replay = %#v", decision)
-				}
-			},
-		},
-		{
-			name:    "emit becomes delivery ambiguous",
-			receipt: mustUnverifiedReceipt(t, mustEmittedReceipt(t, ctx, epoch, axis, "30000000-0000-4000-8000-000000000003", "30000000-0000-4000-8000-000000000004")),
-			assert: func(t *testing.T, decision Decision) {
-				t.Helper()
-				if receipt, ok := decision.DeliveryAmbiguous(); !ok || !receipt.valid() {
-					t.Fatalf("exact EMIT replay = %#v", decision)
-				}
-				if _, _, ok := decision.Emit(); ok {
-					t.Fatal("exact EMIT replay returned a packet")
-				}
-			},
-		},
+	for _, testCase := range []runtimeReplayCase{
+		{name: "abstain", receipt: mustUnverifiedReceipt(t, mustNoCandidatesReceipt(t, ctx, epoch, axis, "30000000-0000-4000-8000-000000000001", "30000000-0000-4000-8000-000000000002")), assert: assertRuntimeAbstainReplay},
+		{name: "emit becomes delivery ambiguous", receipt: mustUnverifiedReceipt(t, mustEmittedReceipt(t, ctx, epoch, axis, "30000000-0000-4000-8000-000000000003", "30000000-0000-4000-8000-000000000004")), assert: assertRuntimeEmitReplay},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			order := []string{}
-			preparer := &runtimeRecordingPreparer{prepared: prepared, order: &order}
-			store := &runtimeReceiptStore{lookupReceipt: testCase.receipt, lookupFound: true, order: &order}
-			advisor := newRuntimeAdvisorForTest(t, preparer, store, epoch, now)
-
-			decision, err := advisor.Advise(ctx, input)
-			if err != nil {
-				t.Fatalf("Advise() error = %v", err)
-			}
-			testCase.assert(t, decision)
-			if preparer.calls != 1 || store.lookupCalls != 1 || store.commitCalls != 0 {
-				t.Fatalf("prepare=%d lookup=%d commit=%d", preparer.calls, store.lookupCalls, store.commitCalls)
-			}
+			assertRuntimeReceiptReplay(t, ctx, input, prepared, epoch, now, testCase)
 		})
+	}
+}
+
+type runtimeReplayCase struct {
+	name    string
+	receipt Receipt
+	assert  func(*testing.T, Decision)
+}
+
+func assertRuntimeReceiptReplay(t *testing.T, ctx context.Context, input AdviseInput, prepared taskmemory.PreparedTaskMemory, epoch KeyEpoch, now time.Time, testCase runtimeReplayCase) {
+	t.Helper()
+	order := []string{}
+	preparer := &runtimeRecordingPreparer{prepared: prepared, order: &order}
+	store := &runtimeReceiptStore{lookupReceipt: testCase.receipt, lookupFound: true, order: &order}
+	advisor := newRuntimeAdvisorForTest(t, preparer, store, epoch, now)
+	decision, err := advisor.Advise(ctx, input)
+	if err != nil {
+		t.Fatalf("Advise() error = %v", err)
+	}
+	testCase.assert(t, decision)
+	if preparer.calls != 1 || store.lookupCalls != 1 || store.commitCalls != 0 {
+		t.Fatalf("prepare=%d lookup=%d commit=%d", preparer.calls, store.lookupCalls, store.commitCalls)
+	}
+}
+
+func assertRuntimeAbstainReplay(t *testing.T, decision Decision) {
+	t.Helper()
+	if receipt, reason, ok := decision.Abstain(); !ok || !receipt.valid() || reason != AbstentionNoCandidates {
+		t.Fatalf("exact ABSTAIN replay = %#v", decision)
+	}
+}
+
+func assertRuntimeEmitReplay(t *testing.T, decision Decision) {
+	t.Helper()
+	if receipt, ok := decision.DeliveryAmbiguous(); !ok || !receipt.valid() {
+		t.Fatalf("exact EMIT replay = %#v", decision)
+	}
+	if _, _, ok := decision.Emit(); ok {
+		t.Fatal("exact EMIT replay returned a packet")
 	}
 }
 
@@ -152,92 +153,105 @@ func TestRuntimeAdvisorLeavesNonemptyCandidatesUnavailable(t *testing.T) {
 func TestRuntimeAdvisorContextReferenceMaterializationIsMemoryOnly(t *testing.T) {
 	now := interventionTestTime
 	epoch := fixtureKeyEpoch(t)
-
 	t.Run("inserted winner emits exact materialization before policy", func(t *testing.T) {
-		ctx, cancel := context.WithDeadline(context.Background(), now.Add(time.Second))
-		defer cancel()
-		prepared := runtimePreparedTaskMemory(t, 1)
-		candidate := prepared.Candidates()[0]
-		materialized, err := taskmemory.NewMaterializedCandidate(candidate, string(prepared.Context().CanonicalProject()), "Use the exact retry reference.")
-		if err != nil {
-			t.Fatal(err)
-		}
-		order := []string{}
-		preparer := &runtimeRecordingPreparer{prepared: prepared, order: &order}
-		store := &runtimeReceiptStore{order: &order}
-		reader := &runtimePolicyReader{order: &order}
-		materializer := &runtimeMaterializer{materialized: materialized, found: true, order: &order}
-		advisor := newRuntimeAdvisorWithMaterializer(t, preparer, store, epoch, now, materializer, reader)
-
-		decision, err := advisor.Advise(ctx, runtimeAdviseInput(t, "context reference"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		receipt, packet, ok := decision.Emit()
-		if !ok || !receipt.valid() || packet.Knowledge().MemoryID() != candidate.ID() || packet.Knowledge().MemoryVersion() != uint32(candidate.Version()) {
-			t.Fatalf("context-reference decision = %#v", decision)
-		}
-		if reader.calls != 0 || materializer.calls != 1 || store.commitCalls != 1 {
-			t.Fatalf("reader=%d materializer=%d commits=%d", reader.calls, materializer.calls, store.commitCalls)
-		}
-		if got, want := fmt.Sprint(order), fmt.Sprint([]string{"prepare", "lookup", "materialize", "commit"}); got != want {
-			t.Fatalf("operation order = %s, want %s", got, want)
-		}
-		record := store.committed.PersistenceRecord()
-		memoryID, memoryVersion, sourceProject, sourceTier, textDigest, selected := record.Selection.ContextReference()
-		if record.DecisionMode != ReceiptDecisionModeContextReference || record.EligibleCount != 0 || !selected ||
-			memoryID != candidate.ID() || memoryVersion != candidate.Version() || sourceProject != string(prepared.Context().CanonicalProject()) || sourceTier != CandidateTierExact || textDigest != Digest(materialized.TextDigest()) {
-			t.Fatalf("context-reference receipt = %#v", record)
-		}
+		assertRuntimeAdvisorMaterializesContextReference(t, now, epoch)
 	})
-
 	t.Run("commit loser never returns a body", func(t *testing.T) {
-		ctx, cancel := context.WithDeadline(context.Background(), now.Add(time.Second))
-		defer cancel()
-		input := runtimeAdviseInput(t, "context reference loser")
-		prepared := runtimePreparedTaskMemory(t, 1)
-		candidate := prepared.Candidates()[0]
-		materialized, err := taskmemory.NewMaterializedCandidate(candidate, string(prepared.Context().CanonicalProject()), "Use the exact retry reference.")
-		if err != nil {
-			t.Fatal(err)
-		}
-		axis := runtimeAxis(t, epoch, input, prepared)
-		winner, err := NewContextReferenceReceipt(ctx, epoch, axis, ReceiptCreation{ReceiptID: "40000000-0000-4000-8000-000000000009", OperationID: "40000000-0000-4000-8000-000000000010", CreatedAt: now}, materialized, 1)
-		if err != nil {
-			t.Fatal(err)
-		}
-		store := &runtimeReceiptStore{commitReceipt: winner}
-		advisor := newRuntimeAdvisorWithMaterializer(t, &runtimeRecordingPreparer{prepared: prepared}, store, epoch, now, &runtimeMaterializer{materialized: materialized, found: true}, nil)
-
-		decision, err := advisor.Advise(ctx, input)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if receipt, ok := decision.DeliveryAmbiguous(); !ok || receipt != winner.Identity() {
-			t.Fatalf("commit-loser decision = %#v", decision)
-		}
-		if _, _, ok := decision.Emit(); ok {
-			t.Fatal("commit loser returned a packet body")
-		}
+		assertRuntimeAdvisorContextReferenceCommitLoser(t, now, epoch)
 	})
-
 	t.Run("unsafe or absent materialization abstains without policy fallback", func(t *testing.T) {
-		ctx, cancel := context.WithDeadline(context.Background(), now.Add(time.Second))
-		defer cancel()
-		prepared := runtimePreparedTaskMemory(t, 1)
-		reader := &runtimePolicyReader{policies: runtimeCandidatePolicies(t, epoch, prepared.Candidates(), []CandidatePolicyState{CandidatePolicyValid})}
-		store := &runtimeReceiptStore{}
-		advisor := newRuntimeAdvisorWithMaterializer(t, &runtimeRecordingPreparer{prepared: prepared}, store, epoch, now, &runtimeMaterializer{}, reader)
-
-		decision, err := advisor.Advise(ctx, runtimeAdviseInput(t, "unsafe context reference"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, reason, ok := decision.Abstain()
-		if !ok || reason != AbstentionEvidenceInsufficient || reader.calls != 0 {
-			t.Fatalf("unsafe materialization decision = %#v, policy calls = %d", decision, reader.calls)
-		}
+		assertRuntimeAdvisorUnsafeMaterializationAbstains(t, now, epoch)
 	})
+}
+
+func assertRuntimeAdvisorMaterializesContextReference(t *testing.T, now time.Time, epoch KeyEpoch) {
+	t.Helper()
+	ctx, cancel := context.WithDeadline(context.Background(), now.Add(time.Second))
+	defer cancel()
+	prepared := runtimePreparedTaskMemory(t, 1)
+	candidate := prepared.Candidates()[0]
+	materialized, err := taskmemory.NewMaterializedCandidate(candidate, string(prepared.Context().CanonicalProject()), "Use the exact retry reference.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := []string{}
+	preparer := &runtimeRecordingPreparer{prepared: prepared, order: &order}
+	store := &runtimeReceiptStore{order: &order}
+	reader := &runtimePolicyReader{order: &order}
+	materializer := &runtimeMaterializer{materialized: materialized, found: true, order: &order}
+	advisor := newRuntimeAdvisorWithMaterializer(t, preparer, store, epoch, now, materializer, reader)
+	decision, err := advisor.Advise(ctx, runtimeAdviseInput(t, "context reference"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, packet, ok := decision.Emit()
+	if !ok || !receipt.valid() || packet.Knowledge().MemoryID() != candidate.ID() || packet.Knowledge().MemoryVersion() != uint32(candidate.Version()) {
+		t.Fatalf("context-reference decision = %#v", decision)
+	}
+	if reader.calls != 0 || materializer.calls != 1 || store.commitCalls != 1 {
+		t.Fatalf("reader=%d materializer=%d commits=%d", reader.calls, materializer.calls, store.commitCalls)
+	}
+	if got, want := fmt.Sprint(order), fmt.Sprint([]string{"prepare", "lookup", "materialize", "commit"}); got != want {
+		t.Fatalf("operation order = %s, want %s", got, want)
+	}
+	assertContextReferenceReceipt(t, store.committed.PersistenceRecord(), candidate, prepared, materialized)
+}
+
+func assertContextReferenceReceipt(t *testing.T, record ReceiptPersistenceRecord, candidate taskmemory.AuthorizedCandidateRef, prepared taskmemory.PreparedTaskMemory, materialized taskmemory.MaterializedCandidate) {
+	t.Helper()
+	memoryID, memoryVersion, sourceProject, sourceTier, textDigest, selected := record.Selection.ContextReference()
+	if record.DecisionMode != ReceiptDecisionModeContextReference || record.EligibleCount != 0 || !selected ||
+		memoryID != candidate.ID() || memoryVersion != candidate.Version() || sourceProject != string(prepared.Context().CanonicalProject()) || sourceTier != CandidateTierExact || textDigest != Digest(materialized.TextDigest()) {
+		t.Fatalf("context-reference receipt = %#v", record)
+	}
+}
+
+func assertRuntimeAdvisorContextReferenceCommitLoser(t *testing.T, now time.Time, epoch KeyEpoch) {
+	t.Helper()
+	ctx, cancel := context.WithDeadline(context.Background(), now.Add(time.Second))
+	defer cancel()
+	input := runtimeAdviseInput(t, "context reference loser")
+	prepared := runtimePreparedTaskMemory(t, 1)
+	candidate := prepared.Candidates()[0]
+	materialized, err := taskmemory.NewMaterializedCandidate(candidate, string(prepared.Context().CanonicalProject()), "Use the exact retry reference.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	axis := runtimeAxis(t, epoch, input, prepared)
+	winner, err := NewContextReferenceReceipt(ctx, epoch, axis, ReceiptCreation{ReceiptID: "40000000-0000-4000-8000-000000000009", OperationID: "40000000-0000-4000-8000-000000000010", CreatedAt: now}, materialized, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &runtimeReceiptStore{commitReceipt: winner}
+	advisor := newRuntimeAdvisorWithMaterializer(t, &runtimeRecordingPreparer{prepared: prepared}, store, epoch, now, &runtimeMaterializer{materialized: materialized, found: true}, nil)
+	decision, err := advisor.Advise(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt, ok := decision.DeliveryAmbiguous(); !ok || receipt != winner.Identity() {
+		t.Fatalf("commit-loser decision = %#v", decision)
+	}
+	if _, _, ok := decision.Emit(); ok {
+		t.Fatal("commit loser returned a packet body")
+	}
+}
+
+func assertRuntimeAdvisorUnsafeMaterializationAbstains(t *testing.T, now time.Time, epoch KeyEpoch) {
+	t.Helper()
+	ctx, cancel := context.WithDeadline(context.Background(), now.Add(time.Second))
+	defer cancel()
+	prepared := runtimePreparedTaskMemory(t, 1)
+	reader := &runtimePolicyReader{policies: runtimeCandidatePolicies(t, epoch, prepared.Candidates(), []CandidatePolicyState{CandidatePolicyValid})}
+	store := &runtimeReceiptStore{}
+	advisor := newRuntimeAdvisorWithMaterializer(t, &runtimeRecordingPreparer{prepared: prepared}, store, epoch, now, &runtimeMaterializer{}, reader)
+	decision, err := advisor.Advise(ctx, runtimeAdviseInput(t, "unsafe context reference"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, reason, ok := decision.Abstain()
+	if !ok || reason != AbstentionEvidenceInsufficient || reader.calls != 0 {
+		t.Fatalf("unsafe materialization decision = %#v, policy calls = %d", decision, reader.calls)
+	}
 }
 
 func TestRuntimeAdvisorDeadlineBeforeStoreWritesNothing(t *testing.T) {
