@@ -52,7 +52,12 @@ func uci1ProbeSearchInstalled(ctx context.Context, runtime uciInstalledAcceptanc
 		return nil, errors.New("installed search status escaped its selected publication")
 	}
 
-	if observation, observed, observeErr := uci1SearchObserveUnchangedCheckout(ctx, runtime, primary, primarySelection, primaryPublication, primaryStatus, linked, linkedSelection, linkedPublication, linkedStatus, primarySource, linkedSource, linkedPath); observeErr != nil {
+	if observation, observed, observeErr := uci1SearchObserveUnchangedCheckout(
+		ctx,
+		runtime,
+		uci1SearchCheckout{client: primary, selection: primarySelection, publication: primaryPublication, status: primaryStatus, source: primarySource, path: primaryPath},
+		uci1SearchCheckout{client: linked, selection: linkedSelection, publication: linkedPublication, status: linkedStatus, source: linkedSource, path: linkedPath},
+	); observeErr != nil {
 		return nil, observeErr
 	} else if observed {
 		evidence["U24"] = uci1SearchInstalledEvidence("U24", observation.seed())
@@ -66,7 +71,11 @@ func uci1ProbeSearchInstalled(ctx context.Context, runtime uciInstalledAcceptanc
 	if !ok {
 		return nil, errors.New("installed search primary status has no current publication")
 	}
-	if observation, observed, observeErr := uci1SearchObserveSavedBytes(ctx, runtime, primary, primarySelection, primaryPublication, primaryStatus, primarySource, primaryPath); observeErr != nil {
+	if observation, observed, observeErr := uci1SearchObserveSavedBytes(
+		ctx,
+		runtime,
+		uci1SearchCheckout{client: primary, selection: primarySelection, publication: primaryPublication, status: primaryStatus, source: primarySource, path: primaryPath},
+	); observeErr != nil {
 		return nil, observeErr
 	} else if observed {
 		evidence["U17"] = uci1SearchInstalledEvidence("U17", observation.seed())
@@ -80,7 +89,11 @@ func uci1ProbeSearchInstalled(ctx context.Context, runtime uciInstalledAcceptanc
 	if !ok {
 		return nil, errors.New("installed search primary status lost its current publication")
 	}
-	if observation, observed, observeErr := uci1SearchObserveInvisibleCandidates(ctx, runtime, primary, primarySelection, primaryPublication, primaryStatus); observeErr != nil {
+	if observation, observed, observeErr := uci1SearchObserveInvisibleCandidates(
+		ctx,
+		runtime,
+		uci1SearchCheckout{client: primary, selection: primarySelection, publication: primaryPublication, status: primaryStatus, source: primarySource, path: primaryPath},
+	); observeErr != nil {
 		return nil, observeErr
 	} else if observed {
 		evidence["U18"] = uci1SearchInstalledEvidence("U18", observation.seed())
@@ -94,7 +107,12 @@ func uci1ProbeSearchInstalled(ctx context.Context, runtime uciInstalledAcceptanc
 	if !ok {
 		return nil, errors.New("installed search linked status has no current publication")
 	}
-	if observation, observed, observeErr := uci1SearchObserveSameDimensionProfiles(ctx, runtime, primary, primarySelection, primaryPublication, primaryStatus, linked, linkedSelection, linkedPublication, linkedStatus); observeErr != nil {
+	if observation, observed, observeErr := uci1SearchObserveSameDimensionProfiles(
+		ctx,
+		runtime,
+		uci1SearchCheckout{client: primary, selection: primarySelection, publication: primaryPublication, status: primaryStatus, source: primarySource, path: primaryPath},
+		uci1SearchCheckout{client: linked, selection: linkedSelection, publication: linkedPublication, status: linkedStatus, source: linkedSource, path: linkedPath},
+	); observeErr != nil {
 		return nil, observeErr
 	} else if observed {
 		evidence["U38"] = uci1SearchInstalledEvidence("U38", observation.seed())
@@ -121,6 +139,15 @@ type uci1SearchInstalledStatus struct {
 		ReadyCandidates    uint64  `json:"ready_candidates"`
 		PendingJobs        uint64  `json:"pending_jobs"`
 	} `json:"embedding"`
+}
+
+type uci1SearchCheckout struct {
+	client      *uciInstalledAcceptanceMCPClient
+	selection   uciInstalledAcceptanceSelection
+	publication uciInstalledAcceptancePublication
+	status      uci1SearchInstalledStatus
+	source      []byte
+	path        string
 }
 
 type uci1SearchCacheCounts struct {
@@ -267,20 +294,9 @@ func uci1SearchInstalledEvidence(scenarioID string, values []string) uciInstalle
 	}
 }
 
-func uci1SearchObserveUnchangedCheckout(
-	ctx context.Context,
-	runtime uciInstalledAcceptanceScenarioRuntime,
-	primary *uciInstalledAcceptanceMCPClient,
-	primarySelection uciInstalledAcceptanceSelection,
-	primaryPublication uciInstalledAcceptancePublication,
-	primaryStatus uci1SearchInstalledStatus,
-	linked *uciInstalledAcceptanceMCPClient,
-	linkedSelection uciInstalledAcceptanceSelection,
-	linkedPublication uciInstalledAcceptancePublication,
-	linkedStatus uci1SearchInstalledStatus,
-	primarySource, linkedSource []byte,
-	linkedPath string,
-) (observation uci1SearchUnchangedCheckoutObservation, observed bool, retErr error) {
+func uci1SearchObserveUnchangedCheckout(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, primaryCheckout, linkedCheckout uci1SearchCheckout) (observation uci1SearchUnchangedCheckoutObservation, observed bool, retErr error) {
+	primaryStatus, primarySource := primaryCheckout.status, primaryCheckout.source
+	linked, linkedSelection, linkedPublication, linkedStatus, linkedSource, linkedPath := linkedCheckout.client, linkedCheckout.selection, linkedCheckout.publication, linkedCheckout.status, linkedCheckout.source, linkedCheckout.path
 	if !uci1SearchComplete(primaryStatus) || !uci1SearchComplete(linkedStatus) || primaryStatus.Embedding.EmbeddingProfileID == nil || linkedStatus.Embedding.EmbeddingProfileID == nil || *primaryStatus.Embedding.EmbeddingProfileID != *linkedStatus.Embedding.EmbeddingProfileID || string(primarySource) == string(linkedSource) {
 		return observation, false, nil
 	}
@@ -331,16 +347,8 @@ func uci1SearchObserveUnchangedCheckout(
 	return uci1SearchUnchangedCheckoutObservation{Before: before, After: after, Ready: status.Embedding.ReadyCandidates}, true, nil
 }
 
-func uci1SearchObserveSavedBytes(
-	ctx context.Context,
-	runtime uciInstalledAcceptanceScenarioRuntime,
-	client *uciInstalledAcceptanceMCPClient,
-	selection uciInstalledAcceptanceSelection,
-	baseline uciInstalledAcceptancePublication,
-	before uci1SearchInstalledStatus,
-	original []byte,
-	path string,
-) (observation uci1SearchSavedBytesObservation, observed bool, retErr error) {
+func uci1SearchObserveSavedBytes(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, checkout uci1SearchCheckout) (observation uci1SearchSavedBytesObservation, observed bool, retErr error) {
+	client, selection, baseline, before, original, path := checkout.client, checkout.selection, checkout.publication, checkout.status, checkout.source, checkout.path
 	if !uci1SearchComplete(before) || before.Embedding.EmbeddingProfileID == nil || runtime.Request.Fixture.PrimaryCallee == "" {
 		return observation, false, nil
 	}
@@ -396,14 +404,8 @@ func uci1SearchObserveSavedBytes(
 	}, true, nil
 }
 
-func uci1SearchObserveInvisibleCandidates(
-	ctx context.Context,
-	runtime uciInstalledAcceptanceScenarioRuntime,
-	client *uciInstalledAcceptanceMCPClient,
-	selection uciInstalledAcceptanceSelection,
-	publication uciInstalledAcceptancePublication,
-	status uci1SearchInstalledStatus,
-) (uci1SearchInvisibleCandidatesObservation, bool, error) {
+func uci1SearchObserveInvisibleCandidates(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, checkout uci1SearchCheckout) (uci1SearchInvisibleCandidatesObservation, bool, error) {
+	client, selection, publication, status := checkout.client, checkout.selection, checkout.publication, checkout.status
 	if !uci1SearchComplete(status) || status.Embedding.EmbeddingProfileID == nil {
 		return uci1SearchInvisibleCandidatesObservation{}, false, nil
 	}
@@ -428,18 +430,9 @@ func uci1SearchObserveInvisibleCandidates(
 	return uci1SearchInvisibleCandidatesObservation{Visible: visible, Invisible: invisible, Status: string(response.Status)}, true, nil
 }
 
-func uci1SearchObserveSameDimensionProfiles(
-	ctx context.Context,
-	runtime uciInstalledAcceptanceScenarioRuntime,
-	primary *uciInstalledAcceptanceMCPClient,
-	primarySelection uciInstalledAcceptanceSelection,
-	primaryPublication uciInstalledAcceptancePublication,
-	primaryStatus uci1SearchInstalledStatus,
-	linked *uciInstalledAcceptanceMCPClient,
-	linkedSelection uciInstalledAcceptanceSelection,
-	linkedPublication uciInstalledAcceptancePublication,
-	linkedStatus uci1SearchInstalledStatus,
-) (uci1SearchProfileSeparationObservation, bool, error) {
+func uci1SearchObserveSameDimensionProfiles(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, primaryCheckout, linkedCheckout uci1SearchCheckout) (uci1SearchProfileSeparationObservation, bool, error) {
+	primary, primarySelection, primaryPublication, primaryStatus := primaryCheckout.client, primaryCheckout.selection, primaryCheckout.publication, primaryCheckout.status
+	linked, linkedSelection, linkedPublication, linkedStatus := linkedCheckout.client, linkedCheckout.selection, linkedCheckout.publication, linkedCheckout.status
 	if !uci1SearchComplete(primaryStatus) || !uci1SearchComplete(linkedStatus) || primaryStatus.Embedding.EmbeddingProfileID == nil || linkedStatus.Embedding.EmbeddingProfileID == nil || *primaryStatus.Embedding.EmbeddingProfileID == *linkedStatus.Embedding.EmbeddingProfileID {
 		return uci1SearchProfileSeparationObservation{}, false, nil
 	}
