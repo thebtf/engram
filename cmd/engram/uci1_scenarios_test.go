@@ -553,30 +553,44 @@ func uci1MergeScenarioEvidence(installed, installedProbe, exactCandidate, histor
 	}
 	merged := make(map[string]uci1ScenarioEvidence, len(uci1RequiredScenarioIDs))
 	for _, source := range sources {
-		for scenarioID, scenarioEvidence := range source.evidence {
-			if !uci1RequiredScenarioID(scenarioID) {
-				return nil, errors.New("UCI-1 scenario evidence contains an unknown scenario")
-			}
-			if scenarioEvidence.Mode != source.mode || !uci1ValidScenarioPassEvidence(scenarioEvidence) {
-				return nil, errors.New("UCI-1 scenario evidence source is invalid")
-			}
-			if existing, found := merged[scenarioID]; found {
-				existingPrecedence := uci1ScenarioEvidencePrecedence(existing.Mode)
-				candidatePrecedence := uci1ScenarioEvidencePrecedence(scenarioEvidence.Mode)
-				if existingPrecedence == candidatePrecedence {
-					if existing != scenarioEvidence {
-						return nil, errors.New("UCI-1 scenario evidence conflicts at the same precedence")
-					}
-					continue
-				}
-				if existingPrecedence > candidatePrecedence {
-					continue
-				}
-			}
-			merged[scenarioID] = scenarioEvidence
+		if err := uci1MergeScenarioEvidenceSource(merged, source.mode, source.evidence); err != nil {
+			return nil, err
 		}
 	}
 	return merged, nil
+}
+
+func uci1MergeScenarioEvidenceSource(merged map[string]uci1ScenarioEvidence, mode string, source map[string]uci1ScenarioEvidence) error {
+	for scenarioID, scenarioEvidence := range source {
+		if !uci1RequiredScenarioID(scenarioID) {
+			return errors.New("UCI-1 scenario evidence contains an unknown scenario")
+		}
+		if scenarioEvidence.Mode != mode || !uci1ValidScenarioPassEvidence(scenarioEvidence) {
+			return errors.New("UCI-1 scenario evidence source is invalid")
+		}
+		if err := uci1MergeScenarioEvidenceEntry(merged, scenarioID, scenarioEvidence); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func uci1MergeScenarioEvidenceEntry(merged map[string]uci1ScenarioEvidence, scenarioID string, candidate uci1ScenarioEvidence) error {
+	if existing, found := merged[scenarioID]; found {
+		existingPrecedence := uci1ScenarioEvidencePrecedence(existing.Mode)
+		candidatePrecedence := uci1ScenarioEvidencePrecedence(candidate.Mode)
+		if existingPrecedence == candidatePrecedence {
+			if existing != candidate {
+				return errors.New("UCI-1 scenario evidence conflicts at the same precedence")
+			}
+			return nil
+		}
+		if existingPrecedence > candidatePrecedence {
+			return nil
+		}
+	}
+	merged[scenarioID] = candidate
+	return nil
 }
 
 func uci1AllowedHistoricalInstalledEvidence(input map[string]uci1ScenarioEvidence) (map[string]uci1ScenarioEvidence, error) {
