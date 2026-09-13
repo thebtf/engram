@@ -73,7 +73,11 @@ func TestInterventionReceiptStoreRoundTripsContextReferenceSelection(t *testing.
 	require.NoError(t, err)
 	materialized, err := taskmemory.NewMaterializedCandidate(reference, fixture.canonicalProject, "Use the immutable retry receipt.")
 	require.NoError(t, err)
-	receipt, err := intervention.NewContextReferenceReceipt(ctx, fixture.epoch, axis, uuid.NewString(), uuid.NewString(), createdAt, materialized, 1)
+	receipt, err := intervention.NewContextReferenceReceipt(ctx, fixture.epoch, axis, intervention.ReceiptCreation{
+		ReceiptID:   uuid.NewString(),
+		OperationID: uuid.NewString(),
+		CreatedAt:   createdAt,
+	}, materialized, 1)
 	require.NoError(t, err)
 
 	committed, inserted, err := store.Commit(context.Background(), receipt)
