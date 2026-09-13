@@ -14,6 +14,21 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
 
+type uci1RecoveryPrimaryRestoreInput struct {
+	selection       uciInstalledAcceptanceSelection
+	root            string
+	branch          string
+	head            string
+	sourcePath      string
+	source          []byte
+	temporaryBranch string
+}
+
+func (input uci1RecoveryPrimaryRestoreInput) withTemporaryBranch(branch string) uci1RecoveryPrimaryRestoreInput {
+	input.temporaryBranch = branch
+	return input
+}
+
 // uci1ProbeRecoveryGit exercises only the installed stdio clients against real
 // disposable Git worktrees. It leaves the primary checkout on its original
 // branch and bytes, and reconciles those restored bytes through the public MCP
@@ -48,9 +63,17 @@ func uci1ProbeRecoveryGit(ctx context.Context, runtime uciInstalledAcceptanceSce
 	if err != nil {
 		return nil, fmt.Errorf("read UCI-1 primary fixture source: %w", err)
 	}
+	restore := uci1RecoveryPrimaryRestoreInput{
+		selection:  selection,
+		root:       root,
+		branch:     branch,
+		head:       head,
+		sourcePath: sourcePath,
+		source:     originalSource,
+	}
 
 	defer func() {
-		_, restoreErr := uci1RecoveryRestorePrimary(ctx, runtime, selection, root, branch, head, sourcePath, originalSource, "")
+		_, restoreErr := uci1RecoveryRestorePrimary(ctx, runtime, restore)
 		if restoreErr != nil {
 			retErr = errors.Join(retErr, fmt.Errorf("restore UCI-1 recovery Git primary fixture: %w", restoreErr))
 		}
@@ -64,7 +87,7 @@ func uci1ProbeRecoveryGit(ctx context.Context, runtime uciInstalledAcceptanceSce
 		return nil, err
 	}
 	evidence["U07"] = uci1RecoveryEvidence("U07", offlinePublication, nonce)
-	if _, err := uci1RecoveryRestorePrimary(ctx, runtime, selection, root, branch, head, sourcePath, originalSource, ""); err != nil {
+	if _, err := uci1RecoveryRestorePrimary(ctx, runtime, restore); err != nil {
 		return nil, err
 	}
 
@@ -73,7 +96,7 @@ func uci1ProbeRecoveryGit(ctx context.Context, runtime uciInstalledAcceptanceSce
 		return nil, err
 	}
 	evidence["U09"] = uci1RecoveryEvidence("U09", branchPublication, branchName)
-	if _, err := uci1RecoveryRestorePrimary(ctx, runtime, selection, root, branch, head, sourcePath, originalSource, branchName); err != nil {
+	if _, err := uci1RecoveryRestorePrimary(ctx, runtime, restore.withTemporaryBranch(branchName)); err != nil {
 		return nil, err
 	}
 
@@ -82,7 +105,7 @@ func uci1ProbeRecoveryGit(ctx context.Context, runtime uciInstalledAcceptanceSce
 		return nil, err
 	}
 	evidence["U10"] = uci1RecoveryEvidence("U10", detachedPublication, unbornPublication.viewID, nonce)
-	if _, err := uci1RecoveryRestorePrimary(ctx, runtime, selection, root, branch, head, sourcePath, originalSource, ""); err != nil {
+	if _, err := uci1RecoveryRestorePrimary(ctx, runtime, restore); err != nil {
 		return nil, err
 	}
 
@@ -311,7 +334,9 @@ func uci1RecoveryObserveUnborn(ctx context.Context, runtime uciInstalledAcceptan
 	return publication, nil
 }
 
-func uci1RecoveryRestorePrimary(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, selection uciInstalledAcceptanceSelection, root, branch, head, sourcePath string, source []byte, temporaryBranch string) (uciInstalledAcceptancePublication, error) {
+func uci1RecoveryRestorePrimary(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, input uci1RecoveryPrimaryRestoreInput) (uciInstalledAcceptancePublication, error) {
+	selection, root, branch, head := input.selection, input.root, input.branch, input.head
+	sourcePath, source, temporaryBranch := input.sourcePath, input.source, input.temporaryBranch
 	if err := uciRunInstalledAcceptanceGit(ctx, root, "checkout", branch); err != nil {
 		return uciInstalledAcceptancePublication{}, fmt.Errorf("restore UCI-1 primary branch: %w", err)
 	}
