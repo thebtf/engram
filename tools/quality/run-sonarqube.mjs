@@ -1801,10 +1801,25 @@ function validPackageUnitEvidence(record, entry, unit, candidate, environment) {
   try {
     const events = safeRelative(sourceRecord.runDir, sourceEntry.test_events?.path);
     if (!sourceEntry.test_events?.sha256 || statSync(events).size !== sourceEntry.test_events.bytes || shaFile(events) !== sourceEntry.test_events.sha256) return false;
-    const values = readFileSync(events, "utf8").split(/\r?\n/).filter(Boolean).map(JSON.parse);
-    if (values.some((value) => value.Action === "fail")) return false;
-    const passed = new Set(values.filter((value) => value.Action === "pass" && value.Test).map((value) => testIdentity(value.Package || "", value.Test)));
-    if (!sourceEntry.expected_tests.every((test) => passed.has(testIdentity(test.package, test.test)))) return false;
+    const passed = new Set();
+    const reasons = new Map();
+    const skipped = [];
+    for (const line of readFileSync(events, "utf8").split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      const value = JSON.parse(line);
+      const key = value.Test ? testIdentity(value.Package || "", value.Test) : null;
+      if (value.Action === "fail") return false;
+      if (key && value.Action === "output") reasons.set(key, `${reasons.get(key) || ""}${value.Output || ""}`);
+      if (key && value.Action === "pass") passed.add(key);
+      if (key && value.Action === "skip") skipped.push({ package: value.Package || "", test: value.Test, reason: reasons.get(key)?.trim() || "" });
+    }
+    const obligations = skipped.map((skip) => skipAdmission(packageUnitProfile(unit), skip, candidate));
+    if (obligations.some((obligation) => !obligation)) return false;
+    for (const obligation of obligations.filter((obligation) => obligation.kind !== "conditional")) {
+      if (sourceRecord.manifest.profiles?.find((profile) => profile.name === obligation.required_profile)?.status !== "passed") return false;
+    }
+    const accepted = new Set([...passed, ...obligations.map((obligation) => testIdentity(obligation.package, obligation.test))]);
+    if (!sourceEntry.expected_tests.every((test) => accepted.has(testIdentity(test.package, test.test)))) return false;
     if (unit.phase === "coverage") artifactFrom(sourceRecord, sourceEntry.coverage);
     return unit.phase !== "coverage" || sourceEntry.coverage?.status !== "not_applicable";
   } catch {
