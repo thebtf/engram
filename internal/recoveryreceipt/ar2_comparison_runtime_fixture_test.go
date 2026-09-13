@@ -1597,6 +1597,22 @@ type ar2OpenClawDiagnosticCase struct {
 	wantResultOrCategory string
 }
 
+type ar2FixturePrivacyEvidence struct {
+	descriptor string
+	projectKey string
+	serverURL  string
+	secret     string
+}
+
+type ar2OpenClawDiagnosticInputs struct {
+	clientSource     func(string, string) string
+	validResponse    string
+	descriptor       string
+	projectKey       string
+	correlation      string
+	typedErrorSecret string
+}
+
 func TestAR2OpenClawDriverClosedPayloadAndDiagnostics(t *testing.T) {
 	const (
 		projectKey  = "fixture-openclaw-project-key"
@@ -1625,6 +1641,14 @@ export class EngramRestClient {
   }
 }
 `, body, result)
+	}
+	inputs := ar2OpenClawDiagnosticInputs{
+		clientSource:     clientSource,
+		validResponse:    validResponse,
+		descriptor:       descriptor,
+		projectKey:       projectKey,
+		correlation:      correlation,
+		typedErrorSecret: typedErrorSecret,
 	}
 	for _, testCase := range []ar2OpenClawDiagnosticCase{
 		{
@@ -1684,12 +1708,12 @@ export class EngramRestClient {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			runAR2OpenClawDiagnosticCase(t, testCase, clientSource, validResponse, descriptor, projectKey, correlation, typedErrorSecret)
+			runAR2OpenClawDiagnosticCase(t, testCase, inputs)
 		})
 	}
 }
 
-func runAR2OpenClawDiagnosticCase(t *testing.T, testCase ar2OpenClawDiagnosticCase, clientSource func(string, string) string, validResponse, descriptor, projectKey, correlation, typedErrorSecret string) {
+func runAR2OpenClawDiagnosticCase(t *testing.T, testCase ar2OpenClawDiagnosticCase, inputs ar2OpenClawDiagnosticInputs) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		status := testCase.responseStatus
@@ -1698,7 +1722,7 @@ func runAR2OpenClawDiagnosticCase(t *testing.T, testCase ar2OpenClawDiagnosticCa
 		}
 		response := testCase.resolverResponse
 		if response == "" {
-			response = validResponse
+			response = inputs.validResponse
 		}
 		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(status)
@@ -1711,20 +1735,25 @@ func runAR2OpenClawDiagnosticCase(t *testing.T, testCase ar2OpenClawDiagnosticCa
 		t.Fatal("write OpenClaw diagnostic driver")
 	}
 	client := filepath.Join(fixtureDir, "client.mjs")
-	if err := os.WriteFile(client, []byte(clientSource(testCase.body, testCase.result)), 0o600); err != nil {
+	if err := os.WriteFile(client, []byte(inputs.clientSource(testCase.body, testCase.result)), 0o600); err != nil {
 		t.Fatal("write OpenClaw diagnostic client")
 	}
 	output, err := ar2CommandEnv(context.Background(), fixtureDir, ar2FixtureEnvironment(t, "", map[string]string{
-		"AR2_DESCRIPTOR":      descriptor,
+		"AR2_DESCRIPTOR":      inputs.descriptor,
 		"AR2_OPENCLAW_CLIENT": client,
-		"AR2_PROJECT_KEY":     projectKey,
+		"AR2_PROJECT_KEY":     inputs.projectKey,
 		"AR2_SERVER_URL":      server.URL,
 	}), "node", driver)
 	if testCase.success {
-		assertAR2OpenClawDiagnosticSuccess(t, err, output, correlation)
+		assertAR2OpenClawDiagnosticSuccess(t, err, output, inputs.correlation)
 		return
 	}
-	assertAR2OpenClawDiagnosticFailure(t, err, output, testCase, descriptor, projectKey, server.URL, typedErrorSecret)
+	assertAR2OpenClawDiagnosticFailure(t, err, output, testCase, ar2FixturePrivacyEvidence{
+		descriptor: inputs.descriptor,
+		projectKey: inputs.projectKey,
+		serverURL:  server.URL,
+		secret:     inputs.typedErrorSecret,
+	})
 }
 
 func assertAR2OpenClawDiagnosticSuccess(t *testing.T, err error, output []byte, correlation string) {
@@ -1741,7 +1770,7 @@ func assertAR2OpenClawDiagnosticSuccess(t *testing.T, err error, output []byte, 
 	}
 }
 
-func assertAR2OpenClawDiagnosticFailure(t *testing.T, err error, output []byte, testCase ar2OpenClawDiagnosticCase, descriptor, projectKey, serverURL, typedErrorSecret string) {
+func assertAR2OpenClawDiagnosticFailure(t *testing.T, err error, output []byte, testCase ar2OpenClawDiagnosticCase, evidence ar2FixturePrivacyEvidence) {
 	t.Helper()
 	if err == nil {
 		t.Fatal("failing OpenClaw driver returned nil error")
@@ -1764,7 +1793,7 @@ func assertAR2OpenClawDiagnosticFailure(t *testing.T, err error, output []byte, 
 	if (actual.ResponseStatus == nil) != (testCase.wantResponseStatus == nil) || actual.ResponseStatus != nil && *actual.ResponseStatus != *testCase.wantResponseStatus {
 		t.Fatalf("OpenClaw response status = %#v, want %#v", actual.ResponseStatus, testCase.wantResponseStatus)
 	}
-	for _, forbidden := range []string{descriptor, projectKey, serverURL, typedErrorSecret} {
+	for _, forbidden := range []string{evidence.descriptor, evidence.projectKey, evidence.serverURL, evidence.secret} {
 		if strings.Contains(diagnosticText, forbidden) {
 			t.Fatalf("OpenClaw diagnostic leaked %q: %s", forbidden, diagnosticText)
 		}
@@ -2715,7 +2744,12 @@ func runAR2HookDiagnosticCase(t *testing.T, testCase ar2HookDriverDiagnosticCase
 		assertAR2HookDiagnosticSuccess(t, err, output, correlation)
 		return
 	}
-	assertAR2HookDiagnosticFailure(t, err, output, testCase.code, descriptor, projectKey, server.URL, bootstrapAdminToken)
+	assertAR2HookDiagnosticFailure(t, err, output, testCase.code, ar2FixturePrivacyEvidence{
+		descriptor: descriptor,
+		projectKey: projectKey,
+		serverURL:  server.URL,
+		secret:     bootstrapAdminToken,
+	})
 }
 
 func assertAR2HookDiagnosticSuccess(t *testing.T, err error, output []byte, correlation string) {
@@ -2732,7 +2766,7 @@ func assertAR2HookDiagnosticSuccess(t *testing.T, err error, output []byte, corr
 	}
 }
 
-func assertAR2HookDiagnosticFailure(t *testing.T, err error, output []byte, code, descriptor, projectKey, serverURL, bootstrapAdminToken string) {
+func assertAR2HookDiagnosticFailure(t *testing.T, err error, output []byte, code string, evidence ar2FixturePrivacyEvidence) {
 	t.Helper()
 	if err == nil {
 		t.Fatal("failing Hook driver returned nil error")
@@ -2753,7 +2787,7 @@ func assertAR2HookDiagnosticFailure(t *testing.T, err error, output []byte, code
 	if code != ar2HookDriverFailureCode && strings.Contains(diagnostic, ar2HookDriverFailureCode) {
 		t.Fatalf("known Hook assertion used generic failure code: %s", diagnostic)
 	}
-	for _, forbidden := range []string{"fixture simulated Hook rejection", descriptor, projectKey, serverURL, bootstrapAdminToken} {
+	for _, forbidden := range []string{"fixture simulated Hook rejection", evidence.descriptor, evidence.projectKey, evidence.serverURL, evidence.secret} {
 		if strings.Contains(diagnostic, forbidden) {
 			t.Fatalf("Hook driver leaked %q: %s", forbidden, diagnostic)
 		}
