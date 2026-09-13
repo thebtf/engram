@@ -353,7 +353,9 @@ type IdentityRegistrationRequest struct {
 	descriptor  ProjectIdentityV3Descriptor
 }
 
-func (IdentityRegistrationRequest) incomingRequestSeal()                 {}
+func (IdentityRegistrationRequest) incomingRequestSeal() {
+	// This unexported marker seals IncomingRequest to codec-created variants.
+}
 func (r IdentityRegistrationRequest) Route() Route                       { return RouteIdentityRegistration }
 func (r IdentityRegistrationRequest) RequestID() RequestID               { return r.header.requestID }
 func (r IdentityRegistrationRequest) DaemonGeneration() DaemonGeneration { return r.header.generation }
@@ -373,7 +375,9 @@ type SessionStartRequest struct {
 	capability  Capability
 }
 
-func (SessionStartRequest) incomingRequestSeal()                 {}
+func (SessionStartRequest) incomingRequestSeal() {
+	// This unexported marker seals IncomingRequest to codec-created variants.
+}
 func (r SessionStartRequest) Route() Route                       { return RouteSessionStartContext }
 func (r SessionStartRequest) RequestID() RequestID               { return r.header.requestID }
 func (r SessionStartRequest) DaemonGeneration() DaemonGeneration { return r.header.generation }
@@ -391,7 +395,9 @@ type AmbientRequest struct {
 	queryText   string
 }
 
-func (AmbientRequest) incomingRequestSeal()                 {}
+func (AmbientRequest) incomingRequestSeal() {
+	// This unexported marker seals IncomingRequest to codec-created variants.
+}
 func (r AmbientRequest) Route() Route                       { return RouteAmbientCandidates }
 func (r AmbientRequest) RequestID() RequestID               { return r.header.requestID }
 func (r AmbientRequest) DaemonGeneration() DaemonGeneration { return r.header.generation }
@@ -469,23 +475,33 @@ type identityDelivery struct {
 	project    CanonicalProjectRef
 }
 
-func (identityDelivery) relayResultSeal() {}
+func (identityDelivery) relayResultSeal() {
+	// This unexported marker seals relayResult to local response variants.
+}
 
 type sessionStartDelivery struct{ payload SessionStartPayload }
 
-func (sessionStartDelivery) relayResultSeal() {}
+func (sessionStartDelivery) relayResultSeal() {
+	// This unexported marker seals relayResult to local response variants.
+}
 
 type ambientDelivery struct{ context AdditionalContext }
 
-func (ambientDelivery) relayResultSeal() {}
+func (ambientDelivery) relayResultSeal() {
+	// This unexported marker seals relayResult to local response variants.
+}
 
 type noDelivery struct{ reason noDeliveryReason }
 
-func (noDelivery) relayResultSeal() {}
+func (noDelivery) relayResultSeal() {
+	// This unexported marker seals relayResult to local response variants.
+}
 
 type rejected struct{ reason rejectionReason }
 
-func (rejected) relayResultSeal() {}
+func (rejected) relayResultSeal() {
+	// This unexported marker seals relayResult to local response variants.
+}
 
 type responseEnvelope struct {
 	requestID  RequestID

@@ -184,29 +184,11 @@ func (source *uciRuntimeWatcherSource) addDirectoryTree(rootPath string) error {
 	for len(pending) != 0 {
 		current := pending[0]
 		pending = pending[1:]
-		current, admitted := source.admittedPath(current)
-		if !admitted {
-			continue
-		}
-		info, err := os.Lstat(current)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
+		physical, watchable, err := source.watchableDirectory(current)
 		if err != nil {
-			return fmt.Errorf("uci runtime watcher source: inspect %q: %w", current, err)
+			return err
 		}
-		if !info.IsDir() || uciRuntimeWatcherIsReparse(info) {
-			continue
-		}
-		physical, err := uciRuntimeCanonicalPath(current)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("uci runtime watcher source: resolve %q: %w", current, err)
-		}
-		physical, admitted = source.admittedPath(physical)
-		if !admitted {
+		if !watchable {
 			continue
 		}
 		if err := source.addDirectory(physical); err != nil {
@@ -224,6 +206,32 @@ func (source *uciRuntimeWatcherSource) addDirectoryTree(rootPath string) error {
 		}
 	}
 	return nil
+}
+
+func (source *uciRuntimeWatcherSource) watchableDirectory(current string) (string, bool, error) {
+	current, admitted := source.admittedPath(current)
+	if !admitted {
+		return "", false, nil
+	}
+	info, err := os.Lstat(current)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("uci runtime watcher source: inspect %q: %w", current, err)
+	}
+	if !info.IsDir() || uciRuntimeWatcherIsReparse(info) {
+		return "", false, nil
+	}
+	physical, err := uciRuntimeCanonicalPath(current)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("uci runtime watcher source: resolve %q: %w", current, err)
+	}
+	physical, admitted = source.admittedPath(physical)
+	return physical, admitted, nil
 }
 
 func (source *uciRuntimeWatcherSource) addDirectory(path string) error {

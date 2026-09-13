@@ -69,26 +69,9 @@ func parseRelayProjectTokens(raw string) (map[string]string, error) {
 	}
 	result := make(map[string]string)
 	for decoder.More() {
-		keyToken, err := decoder.Token()
-		if err != nil {
-			return nil, errors.New("relay project keycard map is invalid")
+		if err := decodeRelayProjectToken(decoder, result); err != nil {
+			return nil, err
 		}
-		project, ok := keyToken.(string)
-		if !ok || len(result) >= maxRelayProjectCredentials {
-			return nil, errors.New("relay project keycard map is invalid")
-		}
-		if _, duplicate := result[project]; duplicate {
-			return nil, errors.New("relay project keycard map has duplicate project")
-		}
-		parsedProject, err := uuid.Parse(project)
-		if err != nil || parsedProject.String() != project {
-			return nil, errors.New("relay project keycard map has invalid canonical project")
-		}
-		var keycard string
-		if err := decoder.Decode(&keycard); err != nil || !validRelayKeycard(keycard) {
-			return nil, errors.New("relay project keycard map has invalid keycard")
-		}
-		result[project] = keycard
 	}
 	closing, err := decoder.Token()
 	if err != nil || closing != json.Delim('}') {
@@ -102,6 +85,30 @@ func parseRelayProjectTokens(raw string) (map[string]string, error) {
 		return nil, errors.New("relay project keycard map is empty")
 	}
 	return result, nil
+}
+
+func decodeRelayProjectToken(decoder *json.Decoder, result map[string]string) error {
+	keyToken, err := decoder.Token()
+	if err != nil {
+		return errors.New("relay project keycard map is invalid")
+	}
+	project, ok := keyToken.(string)
+	if !ok || len(result) >= maxRelayProjectCredentials {
+		return errors.New("relay project keycard map is invalid")
+	}
+	if _, duplicate := result[project]; duplicate {
+		return errors.New("relay project keycard map has duplicate project")
+	}
+	parsedProject, err := uuid.Parse(project)
+	if err != nil || parsedProject.String() != project {
+		return errors.New("relay project keycard map has invalid canonical project")
+	}
+	var keycard string
+	if err := decoder.Decode(&keycard); err != nil || !validRelayKeycard(keycard) {
+		return errors.New("relay project keycard map has invalid keycard")
+	}
+	result[project] = keycard
+	return nil
 }
 
 func validRelayKeycard(raw string) bool {

@@ -75,26 +75,7 @@ func (b Bootstrapper) SelectPeer(peerPID int) (BootstrapSelection, error) {
 		return BootstrapSelection{}, ErrBootstrapUnavailable
 	}
 
-	var matches []ChildBinding
-	for _, candidate := range b.children.acceptedRecords() {
-		if !b.children.current(candidate.binding) {
-			continue
-		}
-		liveChild, err := b.inspector.Inspect(candidate.binding.process.pid)
-		if err != nil || !sameProcess(candidate.binding.process, liveChild) {
-			continue
-		}
-		if !b.hostIsAncestor(liveChild, host) {
-			continue
-		}
-		// Re-read the child once after its ancestry walk. This catches a process
-		// exit or PID reuse that raced the evidence walk without storing ancestry.
-		afterWalk, err := b.inspector.Inspect(candidate.binding.process.pid)
-		if err != nil || !sameProcess(candidate.binding.process, afterWalk) {
-			continue
-		}
-		matches = append(matches, candidate.binding)
-	}
+	matches := b.descendantAcceptedChildren(host)
 
 	if len(matches) == 0 {
 		return BootstrapSelection{}, ErrBootstrapUnavailable
@@ -107,6 +88,29 @@ func (b Bootstrapper) SelectPeer(peerPID int) (BootstrapSelection, error) {
 		return BootstrapSelection{}, ErrBootstrapUnavailable
 	}
 	return BootstrapSelection{host: host, child: matches[0]}, nil
+}
+
+func (b Bootstrapper) descendantAcceptedChildren(host ProcessIdentity) []ChildBinding {
+	var matches []ChildBinding
+	for _, candidate := range b.children.acceptedRecords() {
+		if !b.currentChildDescendsFrom(candidate.binding, host) {
+			continue
+		}
+		matches = append(matches, candidate.binding)
+	}
+	return matches
+}
+
+func (b Bootstrapper) currentChildDescendsFrom(candidate ChildBinding, host ProcessIdentity) bool {
+	if !b.children.current(candidate) {
+		return false
+	}
+	liveChild, err := b.inspector.Inspect(candidate.process.pid)
+	if err != nil || !sameProcess(candidate.process, liveChild) || !b.hostIsAncestor(liveChild, host) {
+		return false
+	}
+	afterWalk, err := b.inspector.Inspect(candidate.process.pid)
+	return err == nil && sameProcess(candidate.process, afterWalk)
 }
 
 func (b Bootstrapper) hostIsAncestor(child, host ProcessIdentity) bool {

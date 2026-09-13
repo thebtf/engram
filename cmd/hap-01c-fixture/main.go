@@ -259,11 +259,7 @@ func containedScratchPath(workingDirectory, root, candidate string) (string, boo
 }
 
 func existingPathComponentsAreSafe(root, relative string) bool {
-	info, err := os.Lstat(root)
-	if err == nil && info.Mode()&os.ModeSymlink != 0 {
-		return false
-	}
-	if err != nil && !os.IsNotExist(err) {
+	if !existingPathRootIsSafe(root) {
 		return false
 	}
 	current := root
@@ -273,18 +269,31 @@ func existingPathComponentsAreSafe(root, relative string) bool {
 			return false
 		}
 		current = filepath.Join(current, part)
-		info, err := os.Lstat(current)
-		if os.IsNotExist(err) {
+		safe, missing := existingPathComponentIsSafe(current, index == len(parts)-1)
+		if missing {
 			return true
 		}
-		if err != nil || info.Mode()&os.ModeSymlink != 0 {
-			return false
-		}
-		if index < len(parts)-1 && !info.IsDir() {
+		if !safe {
 			return false
 		}
 	}
 	return true
+}
+
+func existingPathRootIsSafe(root string) bool {
+	info, err := os.Lstat(root)
+	return os.IsNotExist(err) || (err == nil && info.Mode()&os.ModeSymlink == 0)
+}
+
+func existingPathComponentIsSafe(path string, final bool) (safe, missing bool) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, true
+	}
+	if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		return false, false
+	}
+	return final || info.IsDir(), false
 }
 
 func writeJSON(writer io.Writer, value interface{}) error {

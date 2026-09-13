@@ -372,21 +372,25 @@ func hasCredentialShape(value string) bool {
 }
 
 func validUUID(value string) bool {
-	if len(value) != 36 {
-		return false
-	}
-	for index, char := range value {
-		switch index {
-		case 8, 13, 18, 23:
-			if char != '-' {
+	return len(value) == 36 && validUUIDLayout(value) && validUUIDVersionAndVariant(value)
+}
+
+func validUUIDLayout(value string) bool {
+	for index, character := range value {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			if character != '-' {
 				return false
 			}
-		default:
-			if !(char >= '0' && char <= '9' || char >= 'a' && char <= 'f' || char >= 'A' && char <= 'F') {
-				return false
-			}
+			continue
+		}
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F')) {
+			return false
 		}
 	}
+	return true
+}
+
+func validUUIDVersionAndVariant(value string) bool {
 	return value[14] >= '1' && value[14] <= '5' && (value[19] == '8' || value[19] == '9' || value[19] == 'a' || value[19] == 'b' || value[19] == 'A' || value[19] == 'B')
 }
 
@@ -406,27 +410,9 @@ func decodeExactObject(raw []byte, expected map[string]struct{}) (map[string]jso
 	}
 	result := make(map[string]json.RawMessage, len(expected))
 	for decoder.More() {
-		keyToken, err := decoder.Token()
-		if err != nil {
-			return nil, fmt.Errorf("%w: malformed object key", ErrInvalidFrame)
+		if err := decodeExactObjectField(decoder, expected, result); err != nil {
+			return nil, err
 		}
-		key, ok := keyToken.(string)
-		if !ok {
-			return nil, fmt.Errorf("%w: object key is not a string", ErrInvalidFrame)
-		}
-		if _, duplicate := result[key]; duplicate {
-			return nil, fmt.Errorf("%w: duplicate field %q", ErrInvalidFrame, key)
-		}
-		if expected != nil {
-			if _, allowed := expected[key]; !allowed {
-				return nil, fmt.Errorf("%w: unexpected field %q", ErrInvalidFrame, key)
-			}
-		}
-		var value json.RawMessage
-		if err := decoder.Decode(&value); err != nil {
-			return nil, fmt.Errorf("%w: malformed field %q", ErrInvalidFrame, key)
-		}
-		result[key] = bytes.Clone(value)
 	}
 	closing, err := decoder.Token()
 	if err != nil {
@@ -442,6 +428,31 @@ func decodeExactObject(raw []byte, expected map[string]struct{}) (map[string]jso
 		return nil, fmt.Errorf("%w: missing required field", ErrInvalidFrame)
 	}
 	return result, nil
+}
+
+func decodeExactObjectField(decoder *json.Decoder, expected map[string]struct{}, result map[string]json.RawMessage) error {
+	keyToken, err := decoder.Token()
+	if err != nil {
+		return fmt.Errorf("%w: malformed object key", ErrInvalidFrame)
+	}
+	key, ok := keyToken.(string)
+	if !ok {
+		return fmt.Errorf("%w: object key is not a string", ErrInvalidFrame)
+	}
+	if _, duplicate := result[key]; duplicate {
+		return fmt.Errorf("%w: duplicate field %q", ErrInvalidFrame, key)
+	}
+	if expected != nil {
+		if _, allowed := expected[key]; !allowed {
+			return fmt.Errorf("%w: unexpected field %q", ErrInvalidFrame, key)
+		}
+	}
+	var value json.RawMessage
+	if err := decoder.Decode(&value); err != nil {
+		return fmt.Errorf("%w: malformed field %q", ErrInvalidFrame, key)
+	}
+	result[key] = bytes.Clone(value)
+	return nil
 }
 
 func validateJSONObject(raw []byte) error {
