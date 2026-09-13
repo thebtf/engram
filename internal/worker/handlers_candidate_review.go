@@ -148,6 +148,8 @@ func (request queueCandidateSelectionOperationRequest) valid() bool {
 	}
 }
 
+const queueCandidateSelectionInvalidMessage = "invalid queue candidate selection"
+
 func (handler *QueueCandidateSelectionHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	request, err := decodeQueueCandidateSelectionOperationRequest(r)
 	if err != nil || !request.valid() || r.Header.Get("X-Engram-Request-ID") != request.RequestID {
@@ -168,7 +170,7 @@ func (handler *QueueCandidateSelectionHandler) Handle(w http.ResponseWriter, r *
 	for _, target := range selection.Targets {
 		id, err := strconv.ParseInt(target.ID, 10, 64)
 		if err != nil || id < 1 {
-			http.Error(w, "invalid queue candidate selection", http.StatusBadRequest)
+			http.Error(w, queueCandidateSelectionInvalidMessage, http.StatusBadRequest)
 			return
 		}
 		items = append(items, handler.executeAction(r, id, request.Action, request.Reason))
@@ -294,7 +296,7 @@ func writeQueueCandidateSelectionError(w http.ResponseWriter, err error) {
 	case errors.Is(err, gormdb.ErrCollectionSelectionReconfirmationRequired):
 		http.Error(w, "queue candidate selection is stale", http.StatusPreconditionFailed)
 	case errors.Is(err, gormdb.ErrCollectionSelectionInvalid):
-		http.Error(w, "invalid queue candidate selection", http.StatusBadRequest)
+		http.Error(w, queueCandidateSelectionInvalidMessage, http.StatusBadRequest)
 	default:
 		http.Error(w, "queue candidate selection unavailable", http.StatusServiceUnavailable)
 	}
@@ -302,7 +304,7 @@ func writeQueueCandidateSelectionError(w http.ResponseWriter, err error) {
 
 func writeQueueCandidateSelectionResult(w http.ResponseWriter, requestID string, items []queueCandidateSelectionOperationItemResult) {
 	if len(items) == 0 {
-		http.Error(w, "invalid queue candidate selection", http.StatusBadRequest)
+		http.Error(w, queueCandidateSelectionInvalidMessage, http.StatusBadRequest)
 		return
 	}
 	committed := 0

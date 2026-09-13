@@ -1182,6 +1182,8 @@ func (s *Service) memoryCollectionPage(ctx context.Context, project, cursor stri
 	return response, nil
 }
 
+const memorySelectionForbiddenMessage = "memory selection forbidden"
+
 func memoryCollectionSelectionSnapshotError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errMemorySelectionDenied):
@@ -1204,7 +1206,7 @@ func (s *Service) handleMemoryCollectionSelection(w http.ResponseWriter, r *http
 	}
 	scope, err := memoryCollectionSelectionScope(r)
 	if err != nil {
-		http.Error(w, "memory selection forbidden", http.StatusForbidden)
+		http.Error(w, memorySelectionForbiddenMessage, http.StatusForbidden)
 		return
 	}
 	store, err := s.memoryCollectionSelectionStore()
@@ -1255,7 +1257,7 @@ func (s *Service) handleMemoryCollectionSelection(w http.ResponseWriter, r *http
 func (s *Service) handleMemoryCollectionSelectionCurrent(w http.ResponseWriter, r *http.Request) {
 	scope, err := memoryCollectionSelectionScope(r)
 	if err != nil {
-		http.Error(w, "memory selection forbidden", http.StatusForbidden)
+		http.Error(w, memorySelectionForbiddenMessage, http.StatusForbidden)
 		return
 	}
 	store, err := s.memoryCollectionSelectionStore()
@@ -1278,7 +1280,7 @@ func (s *Service) handleMemoryCollectionSelectionPage(w http.ResponseWriter, r *
 		return
 	}
 	if _, err := memoryCollectionSelectionScope(r); err != nil {
-		http.Error(w, "memory selection forbidden", http.StatusForbidden)
+		http.Error(w, memorySelectionForbiddenMessage, http.StatusForbidden)
 		return
 	}
 	page, err := s.memoryCollectionPage(r.Context(), request.Project, request.Cursor, request.Limit)

@@ -14,10 +14,12 @@ import (
 	pb "github.com/thebtf/engram/proto/engram/v1"
 )
 
+const taskMemoryAuthorityUnavailableMessage = "task memory authority unavailable"
+
 // ResolveTaskMemoryAuthority adapts authenticated context and gRPC V3 resolution to task-memory authority.
 func (s *Server) ResolveTaskMemoryAuthority(ctx context.Context, evidence taskmemory.ProjectEvidenceV3) (taskmemory.AuthorizedTaskContext, error) {
 	if s == nil {
-		return taskmemory.AuthorizedTaskContext{}, status.Error(codes.Unavailable, "task memory authority unavailable")
+		return taskmemory.AuthorizedTaskContext{}, status.Error(codes.Unavailable, taskMemoryAuthorityUnavailableMessage)
 	}
 	if ctx == nil {
 		return taskmemory.AuthorizedTaskContext{}, status.Error(codes.InvalidArgument, "task memory authority context required")
@@ -50,7 +52,7 @@ func (s *Server) ResolveTaskMemoryAuthority(ctx context.Context, evidence taskme
 		if errors.Is(err, taskmemory.ErrUnauthorized) {
 			return taskmemory.AuthorizedTaskContext{}, status.Error(codes.PermissionDenied, "task memory authority denied")
 		}
-		return taskmemory.AuthorizedTaskContext{}, status.Error(codes.Unavailable, "task memory authority unavailable")
+		return taskmemory.AuthorizedTaskContext{}, status.Error(codes.Unavailable, taskMemoryAuthorityUnavailableMessage)
 	}
 
 	legacyIdentifiers := make([]*pb.ProjectLegacyIdentifierV3, len(evidence.Descriptor.LegacyIdentifiers))
@@ -79,7 +81,7 @@ func (s *Server) ResolveTaskMemoryAuthority(ctx context.Context, evidence taskme
 		if errors.Is(err, taskmemory.ErrUnauthorized) {
 			return taskmemory.AuthorizedTaskContext{}, status.Error(codes.PermissionDenied, "task memory authority denied")
 		}
-		return taskmemory.AuthorizedTaskContext{}, status.Error(codes.Unavailable, "task memory authority unavailable")
+		return taskmemory.AuthorizedTaskContext{}, status.Error(codes.Unavailable, taskMemoryAuthorityUnavailableMessage)
 	}
 	return authority, nil
 }

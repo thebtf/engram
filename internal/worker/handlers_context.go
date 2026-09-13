@@ -175,6 +175,11 @@ func writeContextInjectJSON(w http.ResponseWriter, resolution *pb.ProjectResolut
 	writeJSON(w, withContextProjectResolutionV3(response, resolution))
 }
 
+const (
+	contextJSONContentTypeHeader = "Content-Type"
+	contextJSONContentType       = "application/json"
+)
+
 func writeProjectIdentityV3HTTPError(w http.ResponseWriter, err error) {
 	statusCode := http.StatusServiceUnavailable
 	code := "PROJECT_RESOLUTION_UNAVAILABLE"
@@ -207,7 +212,7 @@ func writeProjectIdentityV3HTTPError(w http.ResponseWriter, err error) {
 		writeProjectIdentityV3HTTPError(w, mustProjectIdentityV3ResolutionError(requestErr.outcome))
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(contextJSONContentTypeHeader, contextJSONContentType)
 	w.WriteHeader(statusCode)
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"code":           code,
@@ -995,7 +1000,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			writeContextInjectJSON(w, resolutionV3, map[string]any{})
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(contextJSONContentTypeHeader, contextJSONContentType)
 		_ = json.NewEncoder(w).Encode(map[string]string{"canonical_project": project})
 		return
 	}
@@ -1469,7 +1474,7 @@ func writeProjectIdentityHTTPError(w http.ResponseWriter, err error) {
 			statusCode = http.StatusConflict
 		}
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(contextJSONContentTypeHeader, contextJSONContentType)
 	w.WriteHeader(statusCode)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"error": map[string]string{

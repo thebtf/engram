@@ -349,9 +349,11 @@ func (a *BrowserBindingApplication) DestroySession(ctx context.Context, sessionI
 	return browserBindingStoreError(a.store.DestroySession(ctx, sessionID))
 }
 
+const browserBindingForbiddenDelimiters = "\x00\r\n"
+
 func (a *BrowserBindingApplication) caller(identity auth.Identity, sessionID string) (gormdb.BrowserTabBindingCaller, error) {
 	subject, ok := identity.SessionBrowserSubject()
-	if !ok || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(sessionID) != sessionID || strings.ContainsAny(sessionID, "\x00\r\n") {
+	if !ok || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(sessionID) != sessionID || strings.ContainsAny(sessionID, browserBindingForbiddenDelimiters) {
 		return gormdb.BrowserTabBindingCaller{}, ErrBrowserBindingDenied
 	}
 	return gormdb.BrowserTabBindingCaller{SubjectUserID: subject.UserID, SessionID: sessionID}, nil
@@ -432,7 +434,7 @@ func newBrowserBindingMaterial() (string, error) {
 }
 
 func validateBrowserBindingDocumentNonce(value string) error {
-	if strings.TrimSpace(value) == "" || strings.TrimSpace(value) != value || strings.ContainsAny(value, "\x00\r\n") {
+	if strings.TrimSpace(value) == "" || strings.TrimSpace(value) != value || strings.ContainsAny(value, browserBindingForbiddenDelimiters) {
 		return ErrBrowserBindingDenied
 	}
 	return nil
@@ -444,7 +446,7 @@ func validateBrowserBindingResumeInput(in BrowserBindingResumeInput) error {
 	}
 	if strings.TrimSpace(in.TabBindingID) == "" || strings.TrimSpace(in.ResumeNonce) == "" || strings.TrimSpace(in.ReloadToken) == "" ||
 		strings.TrimSpace(in.TabBindingID) != in.TabBindingID || strings.TrimSpace(in.ResumeNonce) != in.ResumeNonce || strings.TrimSpace(in.ReloadToken) != in.ReloadToken ||
-		strings.ContainsAny(in.TabBindingID+in.ResumeNonce+in.ReloadToken, "\x00\r\n") {
+		strings.ContainsAny(in.TabBindingID+in.ResumeNonce+in.ReloadToken, browserBindingForbiddenDelimiters) {
 		return ErrBrowserBindingDenied
 	}
 	return nil
@@ -453,7 +455,7 @@ func validateBrowserBindingResumeInput(in BrowserBindingResumeInput) error {
 func validateBrowserBindingProof(proof BrowserBindingProof) error {
 	if strings.TrimSpace(proof.TabBindingID) == "" || strings.TrimSpace(proof.DocumentProof) == "" ||
 		strings.TrimSpace(proof.TabBindingID) != proof.TabBindingID || strings.TrimSpace(proof.DocumentProof) != proof.DocumentProof ||
-		strings.ContainsAny(proof.TabBindingID+proof.DocumentProof, "\x00\r\n") {
+		strings.ContainsAny(proof.TabBindingID+proof.DocumentProof, browserBindingForbiddenDelimiters) {
 		return ErrBrowserBindingDenied
 	}
 	return nil

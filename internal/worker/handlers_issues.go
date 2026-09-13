@@ -682,6 +682,8 @@ type issueSelectionPage struct {
 	Total      int64
 }
 
+const issueSelectionDigestPrefix = "sha256:"
+
 func (s *Service) issueSelectionRequestScope(w http.ResponseWriter, r *http.Request, target any) (auth.Identity, gormdb.CollectionSelectionScope, *gormdb.CollectionSelectionStore, bool) {
 	if s == nil || s.store == nil || s.issueStore == nil || r == nil {
 		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
@@ -715,7 +717,7 @@ func (s *Service) issueSelectionRequestScope(w http.ResponseWriter, r *http.Requ
 		SubjectUserID:      subject.UserID,
 		SessionID:          sessionID,
 		Domain:             issueSelectionDomain,
-		ContextFingerprint: "sha256:" + hex.EncodeToString(digest[:]),
+		ContextFingerprint: issueSelectionDigestPrefix + hex.EncodeToString(digest[:]),
 		AuthorizationEpoch: 1,
 		CollectionVersion:  1,
 	}, gormdb.NewCollectionSelectionStore(s.store.GetDB()), true
@@ -917,7 +919,7 @@ func validIssueSelectionStatus(value string) bool {
 
 func (filter issueSelectionFilter) collectionFilter() gormdb.CollectionFilter {
 	digest := sha256.Sum256([]byte("issues-collection-filter/v1\x00priority:asc\x00created_at:desc\x00" + filter.Project + "\x00" + filter.SourceProject + "\x00" + strings.Join(filter.Statuses, ",") + "\x00" + filter.Type))
-	return gormdb.CollectionFilter{Fingerprint: "sha256:" + hex.EncodeToString(digest[:]), Value: "issues"}
+	return gormdb.CollectionFilter{Fingerprint: issueSelectionDigestPrefix + hex.EncodeToString(digest[:]), Value: "issues"}
 }
 
 func issueSelectionRevisionDigest(filter gormdb.CollectionFilter, rows []gormdb.IssueWithCount) string {
@@ -929,7 +931,7 @@ func issueSelectionRevisionDigest(filter gormdb.CollectionFilter, rows []gormdb.
 		hash.Write([]byte(strconv.FormatUint(issueSelectionRevision(row.UpdatedAt), 10)))
 		hash.Write([]byte{0})
 	}
-	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+	return issueSelectionDigestPrefix + hex.EncodeToString(hash.Sum(nil))
 }
 
 func issueSelectionTargets(rows []gormdb.IssueWithCount) []gormdb.CollectionSelectionTarget {
@@ -986,10 +988,10 @@ func decodeIssueSelectionCursor(cursor string) (issueSelectionCursor, error) {
 }
 
 func validIssueSelectionRevision(value string) bool {
-	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") {
+	if len(value) != len(issueSelectionDigestPrefix)+64 || !strings.HasPrefix(value, issueSelectionDigestPrefix) {
 		return false
 	}
-	for _, character := range value[len("sha256:"):] {
+	for _, character := range value[len(issueSelectionDigestPrefix):] {
 		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
 			return false
 		}

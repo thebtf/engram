@@ -1190,6 +1190,12 @@ type operatorCodeAuthorizedRequest struct {
 	authRealm  string
 }
 
+const (
+	operatorCodeRequestIDHeader   = "X-Engram-Request-ID"
+	operatorCodeContentTypeHeader = "Content-Type"
+	operatorCodeJSONContentType   = "application/json"
+)
+
 func (adapter *OperatorCodeHTTPAdapter) decode(w http.ResponseWriter, r *http.Request, endpoint string, target any) (operatorCodeRequestIdentity, bool) {
 	identity, ok := adapter.decodeIdentity(w, r, endpoint)
 	if !ok {
@@ -1219,7 +1225,7 @@ func (adapter *OperatorCodeHTTPAdapter) decodeIdentity(w http.ResponseWriter, r 
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return operatorCodeRequestIdentity{}, false
 	}
-	requestID := r.Header.Get("X-Engram-Request-ID")
+	requestID := r.Header.Get(operatorCodeRequestIDHeader)
 	if !operatorCodeText(requestID) {
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
 		return operatorCodeRequestIdentity{}, false
@@ -1228,7 +1234,7 @@ func (adapter *OperatorCodeHTTPAdapter) decodeIdentity(w http.ResponseWriter, r 
 }
 
 func (adapter *OperatorCodeHTTPAdapter) decodeIndexIntentJSON(w http.ResponseWriter, r *http.Request, endpoint string, target any) (operatorCodeRequestIdentity, bool) {
-	if r == nil || r.URL == nil || r.Method != http.MethodPost || r.URL.RawQuery != "" || len(r.Header.Values("X-Engram-Request-ID")) != 1 {
+	if r == nil || r.URL == nil || r.Method != http.MethodPost || r.URL.RawQuery != "" || len(r.Header.Values(operatorCodeRequestIDHeader)) != 1 {
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
 		return operatorCodeRequestIdentity{}, false
 	}
@@ -1244,7 +1250,7 @@ func (adapter *OperatorCodeHTTPAdapter) decodeIndexIntentJSON(w http.ResponseWri
 }
 
 func (adapter *OperatorCodeHTTPAdapter) decodeIndexIntentStatus(w http.ResponseWriter, r *http.Request, endpoint string) (operatorCodeRequestIdentity, string, BrowserBindingProof, bool) {
-	if r == nil || r.URL == nil || r.Method != http.MethodGet || r.URL.RawQuery != "" || !operatorCodeEmptyBody(r) || len(r.Header.Values("X-Engram-Request-ID")) != 1 {
+	if r == nil || r.URL == nil || r.Method != http.MethodGet || r.URL.RawQuery != "" || !operatorCodeEmptyBody(r) || len(r.Header.Values(operatorCodeRequestIDHeader)) != 1 {
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
 		return operatorCodeRequestIdentity{}, "", BrowserBindingProof{}, false
 	}
@@ -1583,7 +1589,7 @@ func (adapter *OperatorCodeHTTPAdapter) writeReleasedQuery(
 	case uci.QueryStatusUnavailable:
 		status = http.StatusServiceUnavailable
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(operatorCodeContentTypeHeader, operatorCodeJSONContentType)
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(released)
 }
@@ -1658,13 +1664,13 @@ func operatorCodeWriteQueryResponse(w http.ResponseWriter, response uci.QueryRes
 	case uci.QueryStatusUnavailable:
 		status = http.StatusServiceUnavailable
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(operatorCodeContentTypeHeader, operatorCodeJSONContentType)
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(response)
 }
 
 func operatorCodeWriteGraphResponse(w http.ResponseWriter, response uci.QueryResponse, navigation operatorCodeGraphNavigation) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(operatorCodeContentTypeHeader, operatorCodeJSONContentType)
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(struct {
 		uci.QueryResponse
@@ -2041,7 +2047,7 @@ func operatorCodeWriteIndexIntentAcknowledgement(w http.ResponseWriter, intent u
 		response.State = uci.IndexIntentSubmitted
 	}
 	response.Retryable = false
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(operatorCodeContentTypeHeader, operatorCodeJSONContentType)
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(response)
 }
