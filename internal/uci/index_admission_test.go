@@ -1176,27 +1176,35 @@ func indexAdmissionRequireStructuredReferences(t *testing.T, fixture indexAdmiss
 	ownedReferences := 0
 	sites := make(map[string]struct{}, len(artifact.References))
 	for _, reference := range artifact.References {
-		if reference.Relation != IndexRelation("references") {
-			t.Fatalf("structured reference relation = %q, want references", reference.Relation)
-		}
-		if _, exists := sites[reference.SiteKey]; exists {
-			t.Fatalf("duplicate structured reference site key %q", reference.SiteKey)
-		}
-		sites[reference.SiteKey] = struct{}{}
-		rawTarget, err := indexAdmissionTextAtSpan(fixture.source, reference.Span)
-		if err != nil || reference.RawTarget != rawTarget {
-			t.Fatalf("reference raw target/span mismatch: reference=%#v text=%q err=%v", reference, rawTarget, err)
-		}
-		if reference.OwnerSymbolKey != nil {
+		if indexAdmissionRequireStructuredReference(t, fixture.source, reference, definitionKeys, sites) {
 			ownedReferences++
-			if _, found := definitionKeys[*reference.OwnerSymbolKey]; !found {
-				t.Fatalf("reference owner %q is not an admitted definition", *reference.OwnerSymbolKey)
-			}
 		}
 	}
 	if (fixture.language == IndexAdmissionLanguageMarkdown || fixture.language == IndexAdmissionLanguageSQL) && ownedReferences == 0 {
 		t.Fatal("structured extractor owner-local keys were not preserved")
 	}
+}
+
+func indexAdmissionRequireStructuredReference(t *testing.T, source []byte, reference IndexAdmissionReference, definitionKeys map[string]struct{}, sites map[string]struct{}) bool {
+	t.Helper()
+	if reference.Relation != IndexRelation("references") {
+		t.Fatalf("structured reference relation = %q, want references", reference.Relation)
+	}
+	if _, exists := sites[reference.SiteKey]; exists {
+		t.Fatalf("duplicate structured reference site key %q", reference.SiteKey)
+	}
+	sites[reference.SiteKey] = struct{}{}
+	rawTarget, err := indexAdmissionTextAtSpan(source, reference.Span)
+	if err != nil || reference.RawTarget != rawTarget {
+		t.Fatalf("reference raw target/span mismatch: reference=%#v text=%q err=%v", reference, rawTarget, err)
+	}
+	if reference.OwnerSymbolKey != nil {
+		if _, found := definitionKeys[*reference.OwnerSymbolKey]; !found {
+			t.Fatalf("reference owner %q is not an admitted definition", *reference.OwnerSymbolKey)
+		}
+		return true
+	}
+	return false
 }
 
 func indexAdmissionRequireStructuredChunks(t *testing.T, source []byte, chunks []IndexAdmissionChunk) {

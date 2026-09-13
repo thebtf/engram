@@ -491,83 +491,97 @@ func markdownExtractReferenceLine(line []byte, lineStart int, lineStarts []int, 
 	partial := false
 	limited := false
 	for index := 0; index < len(line); {
-		if line[index] == '\\' {
-			if index+1 < len(line) {
-				index += 2
-				continue
-			}
-			index++
-			continue
+		next, linePartial, lineLimited := markdownReferenceLineStep(line, index, lineStart, sourceLength, lineStarts, ownerLocalKey, references, artifact)
+		if linePartial {
+			partial = true
 		}
-		if line[index] == '`' {
-			width := markdownRunLength(line, index, '`')
-			if closing := markdownMatchingRun(line, index+width, '`', width); closing >= 0 {
-				index = closing + width
-				continue
-			}
-			index += width
-			continue
+		if lineLimited {
+			limited = true
 		}
-		if line[index] != '[' {
-			index++
-			continue
-		}
-
-		labelEnd, valid := markdownClosingBracket(line, index+1)
-		if !valid || labelEnd+1 >= len(line) || line[labelEnd+1] != '(' {
-			index++
-			continue
-		}
-		spanStart := index
-		if index > 0 && line[index-1] == '!' && !markdownEscaped(line, index-1) {
-			spanStart--
-		}
-		rawStart, rawEnd, closing, valid := markdownInlineDestination(line, labelEnd+1)
-		if !valid {
-			if markdownInlineDestinationUnterminated(line, labelEnd+1) {
-				span, spanValid := goSpanFromOffsets(lineStarts, sourceLength, lineStart+spanStart, lineStart+len(line))
-				if !spanValid {
-					span = IndexSpan{}
-				}
-				markdownAddDiagnostic(artifact, "MARKDOWN_LINK_UNTERMINATED", span, "inline Markdown link destination did not terminate on its source line")
-				partial = true
-			}
-			index++
-			continue
-		}
-		rawTarget := string(line[rawStart:rawEnd])
-		if rawTarget != "" {
-			span, spanValid := goSpanFromOffsets(lineStarts, sourceLength, lineStart+spanStart, lineStart+closing+1)
-			if !spanValid {
-				partial = true
-			} else {
-				targetPath, fragment := markdownTargetParts(rawTarget)
-				localKey := "link:" + rawTarget + "@" + strconv.FormatInt(span.ByteStart, 10)
-				kind := "local_link"
-				if markdownExternalTarget(targetPath) {
-					kind = "external_link"
-					targetPath = ""
-					fragment = ""
-				}
-				if !markdownAppendReference(references, MarkdownReferenceSite{
-					Kind:            kind,
-					SymbolKey:       "markdown:" + localKey,
-					LocalKey:        localKey,
-					OwnerLocalKey:   ownerLocalKey,
-					RawTarget:       rawTarget,
-					TargetPath:      targetPath,
-					Fragment:        fragment,
-					ResolutionState: IndexResolutionState("unresolved"),
-					Span:            span,
-				}) {
-					partial = true
-					limited = true
-				}
-			}
-		}
-		index = closing + 1
+		index = next
 	}
 	return partial, limited
+}
+
+func markdownReferenceLineStep(line []byte, index, lineStart, sourceLength int, lineStarts []int, ownerLocalKey string, references *[]MarkdownReferenceSite, artifact *MarkdownArtifact) (int, bool, bool) {
+	switch line[index] {
+	case '\\':
+		if index+1 < len(line) {
+			return index + 2, false, false
+		}
+		return index + 1, false, false
+	case '`':
+		width := markdownRunLength(line, index, '`')
+		if closing := markdownMatchingRun(line, index+width, '`', width); closing >= 0 {
+			return closing + width, false, false
+		}
+		return index + width, false, false
+	case '[':
+		return markdownExtractInlineReference(line, index, lineStart, lineStarts, sourceLength, ownerLocalKey, references, artifact)
+	default:
+		return index + 1, false, false
+	}
+}
+
+func markdownExtractInlineReference(line []byte, index, lineStart int, lineStarts []int, sourceLength int, ownerLocalKey string, references *[]MarkdownReferenceSite, artifact *MarkdownArtifact) (int, bool, bool) {
+	labelEnd, valid := markdownClosingBracket(line, index+1)
+	if !valid || labelEnd+1 >= len(line) || line[labelEnd+1] != '(' {
+		return index + 1, false, false
+	}
+	spanStart := index
+	if index > 0 && line[index-1] == '!' && !markdownEscaped(line, index-1) {
+		spanStart--
+	}
+	rawStart, rawEnd, closing, valid := markdownInlineDestination(line, labelEnd+1)
+	if !valid {
+		return index + 1, markdownMarkUnterminatedReference(line, labelEnd+1, spanStart, lineStart, lineStarts, sourceLength, artifact), false
+	}
+	partial, limited := markdownAppendInlineReference(string(line[rawStart:rawEnd]), lineStart, spanStart, closing, lineStarts, sourceLength, ownerLocalKey, references)
+	return closing + 1, partial, limited
+}
+
+func markdownMarkUnterminatedReference(line []byte, opening, spanStart, lineStart int, lineStarts []int, sourceLength int, artifact *MarkdownArtifact) bool {
+	if !markdownInlineDestinationUnterminated(line, opening) {
+		return false
+	}
+	span, spanValid := goSpanFromOffsets(lineStarts, sourceLength, lineStart+spanStart, lineStart+len(line))
+	if !spanValid {
+		span = IndexSpan{}
+	}
+	markdownAddDiagnostic(artifact, "MARKDOWN_LINK_UNTERMINATED", span, "inline Markdown link destination did not terminate on its source line")
+	return true
+}
+
+func markdownAppendInlineReference(rawTarget string, lineStart, spanStart, closing int, lineStarts []int, sourceLength int, ownerLocalKey string, references *[]MarkdownReferenceSite) (bool, bool) {
+	if rawTarget == "" {
+		return false, false
+	}
+	span, spanValid := goSpanFromOffsets(lineStarts, sourceLength, lineStart+spanStart, lineStart+closing+1)
+	if !spanValid {
+		return true, false
+	}
+	targetPath, fragment := markdownTargetParts(rawTarget)
+	localKey := "link:" + rawTarget + "@" + strconv.FormatInt(span.ByteStart, 10)
+	kind := "local_link"
+	if markdownExternalTarget(targetPath) {
+		kind = "external_link"
+		targetPath = ""
+		fragment = ""
+	}
+	if !markdownAppendReference(references, MarkdownReferenceSite{
+		Kind:            kind,
+		SymbolKey:       "markdown:" + localKey,
+		LocalKey:        localKey,
+		OwnerLocalKey:   ownerLocalKey,
+		RawTarget:       rawTarget,
+		TargetPath:      targetPath,
+		Fragment:        fragment,
+		ResolutionState: IndexResolutionState("unresolved"),
+		Span:            span,
+	}) {
+		return true, true
+	}
+	return false, false
 }
 
 func markdownRunLength(line []byte, start int, value byte) int {

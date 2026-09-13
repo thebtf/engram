@@ -913,32 +913,44 @@ func scannerStatusUntrackedCandidate(records []string, index int) (scannerCandid
 		}
 		return scannerCandidate{}, false, false, nil
 	case '1':
-		fields, candidatePath, err := scannerStatusRecordFields(record, 8)
-		if err != nil || fields[0] != "1" || !scannerValidStatusXY(fields[1]) || scannerValidateGitPath(candidatePath) != nil {
-			return scannerCandidate{}, false, false, fmt.Errorf("%w: ordinary status record", ErrScannerMalformed)
-		}
-		return scannerCandidate{}, false, false, nil
+		return scannerStatusOrdinaryCandidate(record)
 	case '2':
-		fields, candidatePath, err := scannerStatusRecordFields(record, 9)
-		if err != nil || fields[0] != "2" || !scannerValidStatusXY(fields[1]) || scannerValidateGitPath(candidatePath) != nil || index+1 >= len(records) {
-			return scannerCandidate{}, false, false, fmt.Errorf("%w: rename status record", ErrScannerMalformed)
-		}
-		if err := scannerValidateGitPath(records[index+1]); err != nil {
-			return scannerCandidate{}, false, false, err
-		}
-		if fields[1][0] == '.' && (fields[1][1] == 'R' || fields[1][1] == 'C') {
-			return scannerCandidate{path: candidatePath}, true, true, nil
-		}
-		return scannerCandidate{}, false, true, nil
+		return scannerStatusRenameCandidate(records, index)
 	case 'u':
-		fields, candidatePath, err := scannerStatusRecordFields(record, 10)
-		if err != nil || fields[0] != "u" || !scannerValidStatusXY(fields[1]) || scannerValidateGitPath(candidatePath) != nil {
-			return scannerCandidate{}, false, false, fmt.Errorf("%w: unmerged status record", ErrScannerMalformed)
-		}
-		return scannerCandidate{}, false, false, nil
+		return scannerStatusUnmergedCandidate(record)
 	default:
 		return scannerCandidate{}, false, false, fmt.Errorf("%w: status record kind", ErrScannerMalformed)
 	}
+}
+
+func scannerStatusOrdinaryCandidate(record string) (scannerCandidate, bool, bool, error) {
+	fields, candidatePath, err := scannerStatusRecordFields(record, 8)
+	if err != nil || fields[0] != "1" || !scannerValidStatusXY(fields[1]) || scannerValidateGitPath(candidatePath) != nil {
+		return scannerCandidate{}, false, false, fmt.Errorf("%w: ordinary status record", ErrScannerMalformed)
+	}
+	return scannerCandidate{}, false, false, nil
+}
+
+func scannerStatusRenameCandidate(records []string, index int) (scannerCandidate, bool, bool, error) {
+	fields, candidatePath, err := scannerStatusRecordFields(records[index], 9)
+	if err != nil || fields[0] != "2" || !scannerValidStatusXY(fields[1]) || scannerValidateGitPath(candidatePath) != nil || index+1 >= len(records) {
+		return scannerCandidate{}, false, false, fmt.Errorf("%w: rename status record", ErrScannerMalformed)
+	}
+	if err := scannerValidateGitPath(records[index+1]); err != nil {
+		return scannerCandidate{}, false, false, err
+	}
+	if fields[1][0] == '.' && (fields[1][1] == 'R' || fields[1][1] == 'C') {
+		return scannerCandidate{path: candidatePath}, true, true, nil
+	}
+	return scannerCandidate{}, false, true, nil
+}
+
+func scannerStatusUnmergedCandidate(record string) (scannerCandidate, bool, bool, error) {
+	fields, candidatePath, err := scannerStatusRecordFields(record, 10)
+	if err != nil || fields[0] != "u" || !scannerValidStatusXY(fields[1]) || scannerValidateGitPath(candidatePath) != nil {
+		return scannerCandidate{}, false, false, fmt.Errorf("%w: unmerged status record", ErrScannerMalformed)
+	}
+	return scannerCandidate{}, false, false, nil
 }
 
 func scannerStatusRecordFields(record string, count int) ([]string, string, error) {
