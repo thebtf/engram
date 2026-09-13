@@ -21,6 +21,14 @@ const (
 	uci1GraphCycleCount      = 8
 )
 
+type uci1GraphCallInput struct {
+	action                         string
+	target                         map[string]any
+	direction                      string
+	maxDepth, maxVisited, maxNodes int
+	maxEdges                       int
+}
+
 // uci1ProbeGraphInstalled observes the graph contract through the live installed
 // MCP client. Each source mutation is published before it is queried and the
 // original fixture bytes are republished before the callback returns.
@@ -84,18 +92,26 @@ func uci1ProbeGraphInstalled(ctx context.Context, runtime uciInstalledAcceptance
 	if _, err := uci1GraphReadItem(ctx, runtime.ClientA, selection, publication, ambiguousItem); err != nil {
 		return nil, fmt.Errorf("observe U20 caller through installed read: %w", err)
 	}
-	ambiguousByName, err := uci1GraphCall(ctx, runtime.ClientA, selection, publication, "explain", map[string]any{
-		"source_id": publication.sourceID,
-		"view_id":   publication.viewID,
-		"name":      uci1GraphAmbiguousName,
-	}, "both", 4, 64, 16, 32)
+	ambiguousByName, err := uci1GraphCall(ctx, runtime.ClientA, selection, publication, uci1GraphCallInput{
+		action: "explain",
+		target: map[string]any{
+			"source_id": publication.sourceID,
+			"view_id":   publication.viewID,
+			"name":      uci1GraphAmbiguousName,
+		},
+		direction:  "both",
+		maxDepth:   4,
+		maxVisited: 64,
+		maxNodes:   16,
+		maxEdges:   32,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("observe U20 ambiguous installed graph target: %w", err)
 	}
 	if err := uci1GraphRequireAmbiguousName(ambiguousByName); err != nil {
 		return nil, fmt.Errorf("observe U20 ambiguous same-name methods: %w", err)
 	}
-	ambiguousCallerGraph, err := uci1GraphCall(ctx, runtime.ClientA, selection, publication, "neighbors", uci1GraphTarget(ambiguousItem.Ref), "outgoing", 4, 64, 16, 32)
+	ambiguousCallerGraph, err := uci1GraphCall(ctx, runtime.ClientA, selection, publication, uci1GraphCallInput{action: "neighbors", target: uci1GraphTarget(ambiguousItem.Ref), direction: "outgoing", maxDepth: 4, maxVisited: 64, maxNodes: 16, maxEdges: 32})
 	if err != nil {
 		return nil, fmt.Errorf("observe U20 ambiguous caller graph: %w", err)
 	}
@@ -121,18 +137,26 @@ func uci1ProbeGraphInstalled(ctx context.Context, runtime uciInstalledAcceptance
 	if _, err := uci1GraphReadItem(ctx, runtime.ClientA, selection, publication, malformedItem); err != nil {
 		return nil, fmt.Errorf("observe U21 fresh partial through installed read: %w", err)
 	}
-	malformedGraph, err := uci1GraphCall(ctx, runtime.ClientA, selection, publication, "neighbors", uci1GraphTarget(malformedItem.Ref), "outgoing", 4, 64, 16, 32)
+	malformedGraph, err := uci1GraphCall(ctx, runtime.ClientA, selection, publication, uci1GraphCallInput{action: "neighbors", target: uci1GraphTarget(malformedItem.Ref), direction: "outgoing", maxDepth: 4, maxVisited: 64, maxNodes: 16, maxEdges: 32})
 	if err != nil {
 		return nil, fmt.Errorf("observe U21 fresh partial graph: %w", err)
 	}
 	if malformedGraph.Graph == nil || (malformedGraph.Status != uci.QueryStatusOK && malformedGraph.Status != uci.QueryStatusPartial && malformedGraph.Status != uci.QueryStatusEmpty) {
 		return nil, errors.New("U21 malformed graph response is not bounded")
 	}
-	oldGraph, err := uci1GraphCall(ctx, runtime.ClientA, selection, publication, "explain", map[string]any{
-		"source_id": publication.sourceID,
-		"view_id":   publication.viewID,
-		"name":      runtime.Request.Fixture.SharedSymbol,
-	}, "both", 4, 64, 16, 32)
+	oldGraph, err := uci1GraphCall(ctx, runtime.ClientA, selection, publication, uci1GraphCallInput{
+		action: "explain",
+		target: map[string]any{
+			"source_id": publication.sourceID,
+			"view_id":   publication.viewID,
+			"name":      runtime.Request.Fixture.SharedSymbol,
+		},
+		direction:  "both",
+		maxDepth:   4,
+		maxVisited: 64,
+		maxNodes:   16,
+		maxEdges:   32,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("observe U21 no stale current graph edge: %w", err)
 	}
@@ -155,7 +179,7 @@ func uci1ProbeGraphInstalled(ctx context.Context, runtime uciInstalledAcceptance
 	if _, err := uci1GraphReadItem(ctx, runtime.ClientA, selection, publication, cycleItem); err != nil {
 		return nil, fmt.Errorf("observe U29 dense cycle through installed read: %w", err)
 	}
-	cappedGraph, err := uci1GraphCall(ctx, runtime.ClientA, selection, publication, "flow", uci1GraphTarget(cycleItem.Ref), "outgoing", 8, 64, 2, 1)
+	cappedGraph, err := uci1GraphCall(ctx, runtime.ClientA, selection, publication, uci1GraphCallInput{action: "flow", target: uci1GraphTarget(cycleItem.Ref), direction: "outgoing", maxDepth: 8, maxVisited: 64, maxNodes: 2, maxEdges: 1})
 	if err != nil {
 		return nil, fmt.Errorf("observe U29 capped installed graph: %w", err)
 	}
@@ -285,7 +309,9 @@ func uci1GraphReadItem(ctx context.Context, client *uciInstalledAcceptanceMCPCli
 	return response, nil
 }
 
-func uci1GraphCall(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection, publication uciInstalledAcceptancePublication, action string, target map[string]any, direction string, maxDepth, maxVisited, maxNodes, maxEdges int) (uci.QueryResponse, error) {
+func uci1GraphCall(ctx context.Context, client *uciInstalledAcceptanceMCPClient, selection uciInstalledAcceptanceSelection, publication uciInstalledAcceptancePublication, input uci1GraphCallInput) (uci.QueryResponse, error) {
+	action, target, direction := input.action, input.target, input.direction
+	maxDepth, maxVisited, maxNodes, maxEdges := input.maxDepth, input.maxVisited, input.maxNodes, input.maxEdges
 	payload, err := client.Tool(ctx, "codebase_graph", map[string]any{
 		"context_handle": selection.contextHandle,
 		"action":         action,
