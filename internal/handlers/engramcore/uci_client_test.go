@@ -706,6 +706,103 @@ func TestUCIIndexAdapterRejectsMissingTransportTagForBoundTarget(t *testing.T) {
 	require.Empty(t, server.callRequestsSnapshot(), "missing transport context must fail before CallTool")
 }
 
+func TestUCIIndexAdapterRejectsForeignTransportForResolvedTarget(t *testing.T) {
+	server := &uciIndexAdapterGRPCServer{}
+	serverURL := startUCIIndexAdapterGRPC(t, server)
+	mod := NewModuleWithClientInstanceID("")
+	t.Cleanup(mod.pool.closeAll)
+	adapter := NewUCIIndexAdapter(mod)
+	project := uciClientTestProject(serverURL)
+	target, err := adapter.ResolveIndexTarget(auditcontext.WithUCITransportSession(context.Background(), "client-a"), project, "context-handle")
+	require.NoError(t, err)
+
+	block, err := adapter.ProxyHandleTool(auditcontext.WithUCITransportSession(context.Background(), "client-b"), target, "codebase_status", json.RawMessage(`{}`))
+	require.Nil(t, block)
+	require.ErrorContains(t, err, "resolved target is unavailable")
+	require.Empty(t, server.callRequestsSnapshot(), "a target resolved for one transport must not be reusable by another")
+}
+
+func TestUCIClientDiscardsResponseWhenCallCancelsContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rpc := &uciClientRPCFake{query: func(_ context.Context, request *pb.QueryCodeRequest) (*pb.QueryCodeResponse, error) {
+		cancel()
+		return &pb.QueryCodeResponse{Context: request.GetContext(), ResponseJson: []byte(`{"status":"ok"}`)}, nil
+	}}
+
+	response, err := newUCIClient(rpc).Query(ctx, uciClientTestQueryRequest(uciClientTestContextA()))
+	require.Nil(t, response)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Len(t, rpc.queryRequests, 1)
+}
+
+func TestUCIClientRejectsUnknownQueryResponseWithoutReturningPrivatePayload(t *testing.T) {
+	const privatePayload = `{"access_token":"must-not-be-returned"}`
+	rpc := &uciClientRPCFake{query: func(_ context.Context, request *pb.QueryCodeRequest) (*pb.QueryCodeResponse, error) {
+		response := &pb.QueryCodeResponse{Context: request.GetContext(), ResponseJson: []byte(privatePayload)}
+		response.ProtoReflect().SetUnknown([]byte{0x98, 0x06, 0x01})
+		return response, nil
+	}}
+
+	response, err := newUCIClient(rpc).Query(context.Background(), uciClientTestQueryRequest(uciClientTestContextA()))
+	require.Nil(t, response)
+	require.ErrorIs(t, err, errUCIClientInvalidResponse)
+	require.NotContains(t, err.Error(), privatePayload)
+}
+
+func TestUCIClientReplacesSpoofedProvenanceMetadata(t *testing.T) {
+	ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(
+		auditcontext.SourceSessionMetadataKey, "untrusted-session",
+		auditcontext.UCIRequestCorrelationMetadataKey, "untrusted-correlation",
+	))
+	ctx = auditcontext.WithUCITransportSession(ctx, "client-a")
+	correlation, ok := auditcontext.NewUCIRequestCorrelation(json.RawMessage(`"client-operation-42"`))
+	require.True(t, ok)
+	ctx = auditcontext.WithUCIRequestCorrelation(ctx, correlation)
+	rpc := &uciClientRPCFake{bind: func(callCtx context.Context, request *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {
+		outgoing, ok := metadata.FromOutgoingContext(callCtx)
+		require.True(t, ok)
+		require.Equal(t, []string{"client-a"}, outgoing.Get(auditcontext.SourceSessionMetadataKey))
+		require.Equal(t, []string{correlation.MetadataValue()}, outgoing.Get(auditcontext.UCIRequestCorrelationMetadataKey))
+		return uciClientTestBindResponse(request), nil
+	}}
+
+	_, err := newUCIClient(rpc).Bind(ctx, &pb.BindCodeContextRequest{ClientSessionId: "client-a", RequestedContext: uciClientTestContextA()})
+	require.NoError(t, err)
+}
+
+func TestUCIClientMapsStageTransportFailurePhase(t *testing.T) {
+	frames := []*pb.StageCodeIndexFrame{uciClientTestStageFrame(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, 0)}
+	t.Run("opening stream", func(t *testing.T) {
+		cause := errors.New("open failed")
+		rpc := &uciClientRPCFake{stageOpen: func(context.Context) (grpc.ClientStreamingClient[pb.StageCodeIndexFrame, pb.StageCodeIndexResponse], error) {
+			return nil, cause
+		}}
+		response, err := newUCIClient(rpc).Stage(context.Background(), frames)
+		require.Nil(t, response)
+		require.ErrorIs(t, err, cause)
+		require.ErrorContains(t, err, "UCI Stage open")
+	})
+	t.Run("sending frame", func(t *testing.T) {
+		cause := errors.New("send failed")
+		rpc := &uciClientRPCFake{stageStream: &uciClientStageStream{send: func(*pb.StageCodeIndexFrame) error { return cause }}}
+		response, err := newUCIClient(rpc).Stage(context.Background(), frames)
+		require.Nil(t, response)
+		require.ErrorIs(t, err, cause)
+		require.ErrorContains(t, err, "UCI Stage send")
+	})
+	t.Run("closing stream", func(t *testing.T) {
+		cause := errors.New("close failed")
+		rpc := &uciClientRPCFake{stageStream: &uciClientStageStream{close: func([]*pb.StageCodeIndexFrame) (*pb.StageCodeIndexResponse, error) {
+			return nil, cause
+		}}}
+		response, err := newUCIClient(rpc).Stage(context.Background(), frames)
+		require.Nil(t, response)
+		require.ErrorIs(t, err, cause)
+		require.ErrorContains(t, err, "UCI Stage close")
+	})
+}
+
 type uciIndexAdapterGRPCServer struct {
 	pb.UnimplementedEngramServiceServer
 	mu sync.Mutex
@@ -813,12 +910,14 @@ func (fake *uciIndexCollaboratorFake) snapshot() (int, ResolvedIndexTarget, stri
 }
 
 type uciClientRPCFake struct {
-	bindRequests     []*pb.BindCodeContextRequest
-	pollRequests     []*pb.PollCodeIndexIntentsRequest
-	updateRequests   []*pb.UpdateCodeIndexIntentRequest
-	beginRequests    []*pb.BeginCodeIndexRequest
-	stageOpenCalls   int
-	stageStream      *uciClientStageStream
+	bindRequests   []*pb.BindCodeContextRequest
+	pollRequests   []*pb.PollCodeIndexIntentsRequest
+	updateRequests []*pb.UpdateCodeIndexIntentRequest
+	beginRequests  []*pb.BeginCodeIndexRequest
+	stageOpenCalls int
+	stageOpen      func(context.Context) (grpc.ClientStreamingClient[pb.StageCodeIndexFrame, pb.StageCodeIndexResponse], error)
+	stageStream    *uciClientStageStream
+
 	finalizeRequests []*pb.FinalizeCodeIndexRequest
 	queryRequests    []*pb.QueryCodeRequest
 	exploreRequests  []*pb.ExploreCodeRequest
@@ -878,8 +977,11 @@ func (fake *uciClientRPCFake) BeginCodeIndex(ctx context.Context, request *pb.Be
 	}, nil
 }
 
-func (fake *uciClientRPCFake) StageCodeIndex(_ context.Context, _ ...grpc.CallOption) (grpc.ClientStreamingClient[pb.StageCodeIndexFrame, pb.StageCodeIndexResponse], error) {
+func (fake *uciClientRPCFake) StageCodeIndex(ctx context.Context, _ ...grpc.CallOption) (grpc.ClientStreamingClient[pb.StageCodeIndexFrame, pb.StageCodeIndexResponse], error) {
 	fake.stageOpenCalls++
+	if fake.stageOpen != nil {
+		return fake.stageOpen(ctx)
+	}
 	if fake.stageStream == nil {
 		fake.stageStream = &uciClientStageStream{}
 	}
@@ -923,11 +1025,15 @@ var _ uciClientRPC = (*uciClientRPCFake)(nil)
 
 type uciClientStageStream struct {
 	grpc.ClientStream
+	send  func(*pb.StageCodeIndexFrame) error
 	sent  []*pb.StageCodeIndexFrame
 	close func([]*pb.StageCodeIndexFrame) (*pb.StageCodeIndexResponse, error)
 }
 
 func (stream *uciClientStageStream) Send(frame *pb.StageCodeIndexFrame) error {
+	if stream.send != nil {
+		return stream.send(frame)
+	}
 	stream.sent = append(stream.sent, frame)
 	return nil
 }

@@ -1072,6 +1072,48 @@ func TestCodebaseStatusPreservesCallerCancellation(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestCodebaseStatusRejectsForeignResolvedHandleBeforeProxying(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	p := testProjectContext("proj-foreign-status-handle", t.TempDir())
+	core := &fakeCore{resolveHandle: func(string) string { return "foreign-handle" }}
+
+	raw, err := newTestModule(core).HandleTool(testTransportContext(p), p, "codebase_status", testStatusArgs(p))
+	require.Nil(t, raw)
+	require.ErrorContains(t, err, "resolved target does not match the requesting client handle")
+	resolved, proxied := core.callCounts()
+	require.Equal(t, 1, resolved)
+	require.Zero(t, proxied, "a status request must not cross a resolved handle boundary")
+}
+
+func TestCodebaseStatusBarrierRejectsSatisfiedRunWithoutPublishedView(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	const contextHandle = "handle-proj-barrier-no-view"
+	core := &fakeCore{bindings: map[string]uci.IndexBinding{
+		contextHandle: fakeNoViewIndexBinding("33333333-3333-4333-8333-333333333333", "66666666-6666-4666-8666-666666666666"),
+	}}
+	mod := newTestModule(core)
+	h := moduletest.New(t)
+	require.NoError(t, h.Register(mod))
+	h.Freeze()
+	p := testProjectContext("proj-barrier-no-view", t.TempDir())
+	ctx := testTransportContext(p)
+
+	raw, err := h.CallToolWithProject(ctx, p, "codebase_index", testIndexArgsForHandle(p, contextHandle))
+	require.NoError(t, err)
+	var started struct {
+		RunID string `json:"run_id"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &started))
+	require.NotEmpty(t, started.RunID)
+	drainIndex(t, h, p)
+
+	raw, err = h.CallToolWithProject(ctx, p, "codebase_status", testStatusArgsWithBarrier(contextHandle, started.RunID, 1))
+	require.Nil(t, raw)
+	require.ErrorContains(t, err, "satisfied after_barrier requires a published View")
+	_, proxied := core.callCounts()
+	require.Zero(t, proxied, "a completed local barrier must not claim fresh server state without a View")
+}
+
 // TestCodebaseIndex_FlagOffReturnsError verifies that tools return an error
 // when ENGRAM_CODE_INTEL_ENABLED is not set to "true".
 func TestCodebaseIndex_FlagOffReturnsError(t *testing.T) {

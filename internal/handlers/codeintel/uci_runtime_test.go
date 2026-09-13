@@ -150,3 +150,98 @@ func newUCIRuntimeGitRoot(t *testing.T) string {
 	}
 	return root
 }
+
+func TestCodeintelModuleInitFailsBeforeRuntimeRegistration(t *testing.T) {
+	core := engramcore.NewModuleWithClientInstanceID("uci-runtime-client")
+	mod, err := NewModuleWithRuntimeConfig(core, UCIRuntimeConfig{
+		ClientInstanceID:   "uci-runtime-client",
+		ParserBundleDigest: uci.IndexDigest("sha256:" + strings.Repeat("c", 64)),
+		GoProfile:          uci.GoExtractionProfile{ProfileKey: "go-structure-v1", ParserKey: "go-parser-v1"},
+	})
+	if err != nil {
+		t.Fatalf("construct module: %v", err)
+	}
+	storagePath := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(storagePath, []byte("fixture"), 0o600); err != nil {
+		t.Fatalf("create non-directory storage path: %v", err)
+	}
+	daemonCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	err = mod.Init(context.Background(), module.ModuleDeps{DaemonCtx: daemonCtx, StorageDir: storagePath})
+	if err == nil || !strings.Contains(err.Error(), "initialise codeintel runtime") {
+		t.Fatalf("initialization error = %v", err)
+	}
+	if mod.runtime.started || mod.runtime.registry != nil {
+		t.Fatal("failed runtime initialization registered local state")
+	}
+}
+
+func TestCodeintelModuleInitializesAndStopsRuntimeRegistration(t *testing.T) {
+	core := engramcore.NewModuleWithClientInstanceID("uci-runtime-client")
+	mod, err := NewModuleWithRuntimeConfig(core, UCIRuntimeConfig{
+		ClientInstanceID:   "uci-runtime-client",
+		ParserBundleDigest: uci.IndexDigest("sha256:" + strings.Repeat("e", 64)),
+		GoProfile:          uci.GoExtractionProfile{ProfileKey: "go-structure-v1", ParserKey: "go-parser-v1"},
+	})
+	if err != nil {
+		t.Fatalf("construct module: %v", err)
+	}
+	daemonCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	if err := mod.Init(context.Background(), module.ModuleDeps{DaemonCtx: daemonCtx, StorageDir: t.TempDir()}); err != nil {
+		t.Fatalf("initialize module: %v", err)
+	}
+	if err := mod.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shut down module: %v", err)
+	}
+}
+
+func TestUCIRuntimePrepareInvalidatesFastPathForAnotherWorktree(t *testing.T) {
+	selected := newUCIRuntimeGitRoot(t)
+	other := newUCIRuntimeGitRoot(t)
+	core := engramcore.NewModuleWithClientInstanceID("uci-runtime-client")
+	runtimeState, err := newUCIRuntime(core, UCIRuntimeConfig{
+		ClientInstanceID:   "uci-runtime-client",
+		ParserBundleDigest: uci.IndexDigest("sha256:" + strings.Repeat("d", 64)),
+		GoProfile:          uci.GoExtractionProfile{ProfileKey: "go-structure-v1", ParserKey: "go-parser-v1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemonCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		if err := runtimeState.Close(context.Background()); err != nil {
+			t.Errorf("close UCI runtime: %v", err)
+		}
+	})
+	if err := runtimeState.Start(module.ModuleDeps{DaemonCtx: daemonCtx, StorageDir: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+
+	target := engramcore.ResolvedIndexTarget{
+		ClientSessionID: "uci-runtime-session",
+		ContextHandle:   "uci-runtime-handle",
+		Binding:         uciRuntimeTestBinding(selected, "keycard-workstation-a"),
+	}
+	preparedRoot, err := runtimeState.Prepare(context.Background(), target, selected, selected)
+	if err != nil {
+		t.Fatalf("prepare selected worktree: %v", err)
+	}
+	if !uciRuntimeSamePath(preparedRoot, selected) {
+		t.Fatalf("prepared root = %q, want %q", preparedRoot, selected)
+	}
+
+	_, err = runtimeState.Prepare(context.Background(), target, other, other)
+	if err == nil || !strings.Contains(err.Error(), "locator does not match") {
+		t.Fatalf("prepare with a different selected worktree error = %v", err)
+	}
+	runtimeState.stateMu.RLock()
+	authorized, found := runtimeState.authorizedTarget[uciRuntimeAuthorizedTargetKeyFor(target)]
+	runtimeState.stateMu.RUnlock()
+	if !found || !uciRuntimeSamePath(authorized.rootPath, selected) {
+		t.Fatal("rejected worktree replaced the retained authorized target")
+	}
+}
