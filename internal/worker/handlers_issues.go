@@ -799,26 +799,9 @@ func (s *Service) issueSelectionRows(ctx context.Context, filter issueSelectionF
 }
 
 func (s *Service) issueSelectionPage(ctx context.Context, requestedFilter *issueSelectionFilter, cursor string, requestedLimit int) (issueSelectionPage, error) {
-	var filter issueSelectionFilter
-	var state issueSelectionCursor
-	var err error
-	if cursor != "" {
-		state, err = decodeIssueSelectionCursor(cursor)
-		if err != nil {
-			return issueSelectionPage{}, err
-		}
-		filter = state.Filter
-		if requestedFilter != nil {
-			normalized, normalizeErr := normalizeIssueSelectionFilter(requestedFilter)
-			if normalizeErr != nil || !sameIssueSelectionFilter(normalized, filter) {
-				return issueSelectionPage{}, gormdb.ErrCollectionSelectionInvalid
-			}
-		}
-	} else {
-		filter, err = normalizeIssueSelectionFilter(requestedFilter)
-		if err != nil {
-			return issueSelectionPage{}, err
-		}
+	filter, state, err := issueSelectionPageFilter(requestedFilter, cursor)
+	if err != nil {
+		return issueSelectionPage{}, err
 	}
 	limit := requestedLimit
 	if limit == 0 && cursor != "" {
@@ -827,6 +810,29 @@ func (s *Service) issueSelectionPage(ctx context.Context, requestedFilter *issue
 	if limit < 1 || limit > gormdb.CollectionPageMaxSize {
 		return issueSelectionPage{}, gormdb.ErrCollectionSelectionInvalid
 	}
+	return s.issueSelectionPageResult(ctx, filter, state, cursor, limit)
+}
+
+func issueSelectionPageFilter(requestedFilter *issueSelectionFilter, cursor string) (issueSelectionFilter, issueSelectionCursor, error) {
+	if cursor == "" {
+		filter, err := normalizeIssueSelectionFilter(requestedFilter)
+		return filter, issueSelectionCursor{}, err
+	}
+	state, err := decodeIssueSelectionCursor(cursor)
+	if err != nil {
+		return issueSelectionFilter{}, issueSelectionCursor{}, err
+	}
+	if requestedFilter == nil {
+		return state.Filter, state, nil
+	}
+	normalized, normalizeErr := normalizeIssueSelectionFilter(requestedFilter)
+	if normalizeErr != nil || !sameIssueSelectionFilter(normalized, state.Filter) {
+		return issueSelectionFilter{}, issueSelectionCursor{}, gormdb.ErrCollectionSelectionInvalid
+	}
+	return state.Filter, state, nil
+}
+
+func (s *Service) issueSelectionPageResult(ctx context.Context, filter issueSelectionFilter, state issueSelectionCursor, cursor string, limit int) (issueSelectionPage, error) {
 	rows, err := s.issueSelectionRows(ctx, filter)
 	if err != nil {
 		return issueSelectionPage{}, err

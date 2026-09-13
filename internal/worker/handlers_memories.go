@@ -22,6 +22,7 @@ import (
 
 	"github.com/thebtf/engram/internal/auth"
 	dbgorm "github.com/thebtf/engram/internal/db/gorm"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/principalmemory"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
@@ -1392,90 +1393,112 @@ func (s *Service) handleMemoryCollectionSelectionOperation(w http.ResponseWriter
 		memoryCollectionSelectionOperationError(w, err)
 		return
 	}
-
-	response := memoryCollectionSelectionOperationResponse{RequestID: request.RequestID, ItemResults: make([]memoryCollectionSelectionItemResponse, 0, len(targets))}
-	current := make([]memoryCollectionSelectionCurrentState, 0, len(targets))
-	partial := false
-	readbackPending := false
-	nonDisclosing := false
-	for _, target := range targets {
-		id, parseErr := strconv.ParseInt(target.ID, 10, 64)
-		if parseErr != nil || id <= 0 || target.ExpectedVersion == 0 {
-			memoryCollectionSelectionOperationAppend(&response, "redacted", "validation_error", nil)
-			partial = true
-			continue
-		}
-		memory, getErr := s.memoryStore.Get(r.Context(), id)
-		if getErr != nil {
-			outcome := "failed"
-			if errors.Is(getErr, gormlib.ErrRecordNotFound) {
-				outcome = "conflict"
-			}
-			memoryCollectionSelectionOperationAppend(&response, "redacted", outcome, nil)
-			partial = true
-			continue
-		}
-		if memory == nil || !memoryVisibleREST(r.Context(), memory) || !memoryDomainManageAllowedREST(r.Context(), memory) {
-			memoryCollectionSelectionOperationAppend(&response, "redacted", "denied", nil)
-			partial = true
-			continue
-		}
-		if uint64(memory.Version) != target.ExpectedVersion {
-			memoryCollectionSelectionOperationAppend(&response, "redacted", "conflict", nil)
-			partial = true
-			continue
-		}
-		nextStatus, validTransition := memoryCollectionNextStatus(request.Action, memory.Status)
-		if !validTransition {
-			memoryCollectionSelectionOperationAppend(&response, "redacted", "conflict", nil)
-			partial = true
-			continue
-		}
-		update := s.memoryStore.GetDB().WithContext(r.Context()).Model(&dbgorm.Memory{}).
-			Where("id = ? AND deleted_at IS NULL AND version = ? AND status = ?", memory.ID, memory.Version, memory.Status).
-			Updates(map[string]any{"status": nextStatus, "updated_at": time.Now().UTC(), "version": gormlib.Expr("version + 1")})
-		if update.Error != nil {
-			memoryCollectionSelectionOperationAppend(&response, "redacted", "failed", nil)
-			partial = true
-			continue
-		}
-		if update.RowsAffected != 1 {
-			memoryCollectionSelectionOperationAppend(&response, "redacted", "conflict", nil)
-			partial = true
-			continue
-		}
-		observedVersion := memory.Version + 1
-		memoryCollectionSelectionOperationAppend(&response, target.ID, "committed", &observedVersion)
-		after, afterErr := s.memoryStore.Get(r.Context(), memory.ID)
-		if afterErr != nil || after == nil {
-			readbackPending = true
-			continue
-		}
-		if !memoryVisibleREST(r.Context(), after) || !memoryDomainManageAllowedREST(r.Context(), after) {
-			nonDisclosing = true
-			continue
-		}
-		current = append(current, memoryCollectionSelectionCurrentState{ID: after.ID, Status: after.Status, Version: after.Version})
+	state := memoryCollectionSelectionOperationState{
+		ctx: r.Context(), action: request.Action,
+		response: memoryCollectionSelectionOperationResponse{RequestID: request.RequestID, ItemResults: make([]memoryCollectionSelectionItemResponse, 0, len(targets))},
+		current:  make([]memoryCollectionSelectionCurrentState, 0, len(targets)),
 	}
-	if partial {
-		response.OperationState = "partial"
+	for _, target := range targets {
+		s.applyMemoryCollectionSelectionTarget(target, &state)
+	}
+	s.writeMemoryCollectionSelectionOperation(w, &state)
+}
+
+type memoryCollectionSelectionOperationState struct {
+	ctx             context.Context
+	action          string
+	response        memoryCollectionSelectionOperationResponse
+	current         []memoryCollectionSelectionCurrentState
+	partial         bool
+	readbackPending bool
+	nonDisclosing   bool
+}
+
+func (state *memoryCollectionSelectionOperationState) append(targetID, outcome string, observedVersion *int) {
+	memoryCollectionSelectionOperationAppend(&state.response, targetID, outcome, observedVersion)
+}
+
+func (s *Service) applyMemoryCollectionSelectionTarget(target gormdb.CollectionSelectionTarget, state *memoryCollectionSelectionOperationState) {
+	memory, outcome := s.memoryCollectionSelectionTarget(state.ctx, target)
+	if outcome != "" {
+		state.append("redacted", outcome, nil)
+		state.partial = true
+		return
+	}
+	nextStatus, validTransition := memoryCollectionNextStatus(state.action, memory.Status)
+	if !validTransition {
+		state.append("redacted", "conflict", nil)
+		state.partial = true
+		return
+	}
+	update := s.memoryStore.GetDB().WithContext(state.ctx).Model(&dbgorm.Memory{}).
+		Where("id = ? AND deleted_at IS NULL AND version = ? AND status = ?", memory.ID, memory.Version, memory.Status).
+		Updates(map[string]any{"status": nextStatus, "updated_at": time.Now().UTC(), "version": gormlib.Expr("version + 1")})
+	if update.Error != nil {
+		state.append("redacted", "failed", nil)
+		state.partial = true
+		return
+	}
+	if update.RowsAffected != 1 {
+		state.append("redacted", "conflict", nil)
+		state.partial = true
+		return
+	}
+	observedVersion := memory.Version + 1
+	state.append(target.ID, "committed", &observedVersion)
+	after, afterErr := s.memoryStore.Get(state.ctx, memory.ID)
+	if afterErr != nil || after == nil {
+		state.readbackPending = true
+		return
+	}
+	if !memoryVisibleREST(state.ctx, after) || !memoryDomainManageAllowedREST(state.ctx, after) {
+		state.nonDisclosing = true
+		return
+	}
+	state.current = append(state.current, memoryCollectionSelectionCurrentState{ID: after.ID, Status: after.Status, Version: after.Version})
+}
+
+func (s *Service) memoryCollectionSelectionTarget(ctx context.Context, target gormdb.CollectionSelectionTarget) (*models.Memory, string) {
+	id, parseErr := strconv.ParseInt(target.ID, 10, 64)
+	if parseErr != nil || id <= 0 || target.ExpectedVersion == 0 {
+		return nil, "validation_error"
+	}
+	memory, getErr := s.memoryStore.Get(ctx, id)
+	if getErr != nil {
+		if errors.Is(getErr, gormlib.ErrRecordNotFound) {
+			return nil, "conflict"
+		}
+		return nil, "failed"
+	}
+	if memory == nil || !memoryVisibleREST(ctx, memory) || !memoryDomainManageAllowedREST(ctx, memory) {
+		return nil, "denied"
+	}
+	if uint64(memory.Version) != target.ExpectedVersion {
+		return nil, "conflict"
+	}
+	return memory, ""
+}
+
+func (s *Service) writeMemoryCollectionSelectionOperation(w http.ResponseWriter, state *memoryCollectionSelectionOperationState) {
+	if state.partial {
+		state.response.OperationState = "partial"
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusMultiStatus)
-		writeJSON(w, response)
+		writeJSON(w, state.response)
 		return
 	}
-	if readbackPending {
-		response.OperationState = "committed"
-		writeJSON(w, response)
+	if state.readbackPending {
+		state.response.OperationState = "committed"
+		writeJSON(w, state.response)
 		return
 	}
-	response.OperationState = "completed"
-	if nonDisclosing {
-		response.Readback = &memoryCollectionSelectionReadback{Authoritative: true, Kind: "non_disclosing", OperationStatus: request.Action}
+	state.response.OperationState = "completed"
+	if state.nonDisclosing {
+		state.response.Readback = &memoryCollectionSelectionReadback{Authoritative: true, Kind: "non_disclosing", OperationStatus: state.action}
 	} else {
-		response.Readback = &memoryCollectionSelectionReadback{Authoritative: true, Kind: "current", CurrentState: current}
+		state.response.Readback = &memoryCollectionSelectionReadback{Authoritative: true, Kind: "current", CurrentState: state.current}
 	}
-	writeJSON(w, response)
+	writeJSON(w, state.response)
 }
 
 func memoryCollectionSelectionOperationAppend(response *memoryCollectionSelectionOperationResponse, targetID, outcome string, observedVersion *int) {
