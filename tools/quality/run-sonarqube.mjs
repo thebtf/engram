@@ -358,6 +358,7 @@ function runProcess(command, args, {
     let abortListener = null;
     let stdout = "";
     let stderr = "";
+    let terminationCause = null;
     const child = spawn(invocation.executable, invocation.args, {
       cwd,
       env,
@@ -387,17 +388,23 @@ function runProcess(command, args, {
       stderr += chunk;
       onStderr?.(chunk);
     });
-    child.once("error", (error) => finish(rejectProcess, new RunnerError(`${command} failed: ${error.message}`)));
+    child.once("error", (error) => finish(rejectProcess, terminationCause || new RunnerError(`${command} failed: ${error.message}`)));
     child.once("close", (code, childSignal) => {
+      if (terminationCause) {
+        finish(rejectProcess, terminationCause);
+        return;
+      }
       const result = { code, signal: childSignal, stdout, stderr };
       if (code === 0) finish(resolveProcess, result);
       else finish(rejectProcess, commandFailure(command, result));
     });
     if (timeoutMs) {
       timeout = setTimeout(async () => {
+        if (terminationCause) return;
+        terminationCause = new BudgetError(`${label || command} exceeded its budget`);
         try {
           await terminateOwnedChild(record);
-          finish(rejectProcess, new BudgetError(`${label || command} exceeded its budget`));
+          finish(rejectProcess, terminationCause);
         } catch (error) {
           finish(rejectProcess, error, true);
         }
@@ -1436,7 +1443,7 @@ function skipAdmission(profile, skipped, candidate) {
   return skipObligation(profile, skipped) || conditionalSkipObligation(profile, skipped, candidate);
 }
 
-async function runCoverageProfile(goCommand, profile, campaign, entry, cwd, baseEnvironment, postgres, execution, deadline, progress, secrets, profileDeadline, candidate) {
+export async function runCoverageProfile(goCommand, profile, campaign, entry, cwd, baseEnvironment, postgres, execution, deadline, progress, secrets, profileDeadline, candidate, runtime = {}) {
   const started = Date.now();
   const deadlineAt = profileDeadline || started + deadline.profile;
   const attemptDirectory = join(campaign.runDir, "profiles", profile.name, `attempt-${entry.attempt}`);
@@ -1444,27 +1451,32 @@ async function runCoverageProfile(goCommand, profile, campaign, entry, cwd, base
   const coveragePath = join(attemptDirectory, "coverage.out");
   const eventPath = join(attemptDirectory, "test-events.ndjson");
   const stderrPath = join(attemptDirectory, "stderr.log");
-  const databaseDSN = profile.databasePrefix ? await postgres.createDatabase(profile.databasePrefix, deadlineAt) : null;
-  const environment = profileEnvironment(baseEnvironment, profile, databaseDSN);
-  const tests = await expectedTests(goCommand, profile, cwd, environment, execution, deadline, deadlineAt);
+  const state = { buffer: "", currentTest: null, currentPackage: null, passedTests: new Set(), skippedTests: new Map(), skipReasons: new Map(), failedTests: new Set(), startedTests: new Set(), passedPackages: new Set(), failedPackages: new Set(), lifecycle: new Set() };
+  const args = [...profileDescriptor(profile).effective_argv, `-coverprofile=${relative(cwd, coveragePath)}`];
   const observeGoEvent = (eventValue, transition) => {
     progress.location(profile.name, eventValue.Package || null, eventValue.Test || null);
     if (transition) progress.semantic(profile.name, transition);
   };
-  const testWriter = createLogWriter(eventPath, secrets);
-  const stderrWriter = createLogWriter(stderrPath, secrets);
-  const state = { buffer: "", currentTest: null, currentPackage: null, passedTests: new Set(), skippedTests: new Map(), skipReasons: new Map(), failedTests: new Set(), startedTests: new Set(), passedPackages: new Set(), failedPackages: new Set(), lifecycle: new Set() };
-  const args = [...profileDescriptor(profile).effective_argv, `-coverprofile=${relative(cwd, coveragePath)}`];
+  let testWriter = null;
+  let stderrWriter = null;
   entry.started_at_utc = new Date().toISOString();
   entry.status = "running";
-  entry.expected_test_inventory_sha256 = sha256(canonicalJson(tests));
-  entry.expected_tests = tests;
+  entry.inventory = { state: "running" };
   entry.effective_argv = args.filter((argument) => !argument.includes(databasePassword));
   saveCampaign(campaign);
   progress.activate(profile.name, deadlineAt);
-  progress.meaningful("coverage", { profile: profile.name, state: "started" });
+  progress.meaningful("coverage", { profile: profile.name, state: "inventory_started" });
   try {
-    await runProcess(goCommand, args, {
+    const databaseDSN = profile.databasePrefix ? await postgres.createDatabase(profile.databasePrefix, deadlineAt) : null;
+    const environment = profileEnvironment(baseEnvironment, profile, databaseDSN);
+    const tests = await (runtime.expectedTests || expectedTests)(goCommand, profile, cwd, environment, execution, deadline, deadlineAt);
+    entry.expected_test_inventory_sha256 = sha256(canonicalJson(tests));
+    entry.expected_tests = tests;
+    entry.inventory = { state: "passed", expected_test_inventory_sha256: entry.expected_test_inventory_sha256, test_count: tests.length };
+    saveCampaign(campaign);
+    testWriter = createLogWriter(eventPath, secrets);
+    stderrWriter = createLogWriter(stderrPath, secrets);
+    await (runtime.runProcess || runProcess)(goCommand, args, {
       ...execution,
       cwd,
       env: environment,
@@ -1503,12 +1515,13 @@ async function runCoverageProfile(goCommand, profile, campaign, entry, cwd, base
     progress.completed += 1;
     progress.meaningful("coverage", { profile: profile.name, state: "passed", elapsed_ms: entry.elapsed_ms });
   } catch (error) {
-    finishGoEvents(state, (line) => testWriter.write(line), observeGoEvent);
-    testWriter.finish();
-    stderrWriter.finish();
+    if (testWriter) finishGoEvents(state, (line) => testWriter.write(line), observeGoEvent);
+    testWriter?.finish();
+    stderrWriter?.finish();
     const failure = classifyProfileFailure(error, execution);
     entry.status = failure.status;
     entry.failure_reason = failure.reason;
+    entry.inventory = { state: "failed", failure_reason: failure.reason };
     entry.completed_at_utc = new Date().toISOString();
     entry.elapsed_ms = Date.now() - started;
     entry.failure = redacted(error.message, secrets);

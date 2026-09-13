@@ -27,6 +27,7 @@ import {
   profileDescriptor,
   runOwnedCommand,
   profileTimeout,
+  runCoverageProfile,
   scheduleProfiles,
   sha256,
   runWithCampaign,
@@ -212,6 +213,33 @@ test("profile budget expiry is retained as timed_out with an explicit budget rea
   assert.deepEqual(classifyProfileFailure(expiry, { signal: new AbortController().signal }), { status: "timed_out", reason: "profile_budget_exhausted" });
 });
 
+test("inventory budget expiry retains a timed-out profile attempt", async () => {
+  const directory = temporaryDirectory();
+  try {
+    const base = coverageProfiles.find((profile) => profile.name === "base");
+    const entry = { name: base.name, attempt: 1 };
+    const campaign = { runDir: join(directory, "run"), manifest: { profiles: [entry] } };
+    mkdirSync(campaign.runDir, { recursive: true });
+    const deadline = new Deadline({ overallTimeout: 1000, coverageTimeout: 60, profileTimeout: 30, scannerTimeout: 60, qualityGateTimeout: 60 });
+    const progress = { activate() { }, meaningful() { }, deactivate() { }, location() { }, semantic() { }, output() { }, completed: 0 };
+    const execution = { signal: new AbortController().signal };
+    await assert.rejects(
+      runCoverageProfile("fake-go", base, campaign, entry, directory, {}, null, execution, deadline, progress, [], Date.now() + 30000, { repository_path: directory, inventory: [] }, {
+        expectedTests: async () => profileTimeout(deadline, Date.now() - 1, 1000),
+      }),
+      /profile budget exhausted/,
+    );
+    assert.equal(entry.status, "timed_out");
+    assert.equal(entry.failure_reason, "profile_budget_exhausted");
+    assert.equal(entry.inventory.state, "failed");
+    assert.equal(entry.inventory.failure_reason, "profile_budget_exhausted");
+    assert.match(entry.failure, /profile budget exhausted/);
+    assert.equal(JSON.parse(readFileSync(join(campaign.runDir, "manifest.json"), "utf8")).profiles[0].status, "timed_out");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("log writer streams ordinary test events while retaining split-secret redaction", () => {
   const directory = temporaryDirectory();
   try {
@@ -391,6 +419,7 @@ test("submitted CE tasks resume without invoking scanner submission and reports 
 test("owned cancellation terminates a descendant while preserving an unrelated sentinel", async () => {
   let rootPid = null;
   let descendantPid = null;
+  let timeoutError = null;
   const sentinel = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
   try {
     await assert.rejects(
@@ -399,10 +428,15 @@ test("owned cancellation terminates a descendant while preserving an unrelated s
         onStart: (record) => { rootPid = record.child.pid; },
         onStdout: (chunk) => { descendantPid ||= Number(String(chunk).trim()); },
       }),
+      (error) => {
+        timeoutError = error;
+        return /exceeded its budget/.test(error.message);
+      },
     );
     assert.ok(rootPid);
     assert.ok(descendantPid);
     await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.deepEqual(classifyProfileFailure(timeoutError, { signal: new AbortController().signal }), { status: "timed_out", reason: "profile_budget_exhausted" });
     assert.throws(() => process.kill(rootPid, 0));
     assert.throws(() => process.kill(descendantPid, 0));
     assert.doesNotThrow(() => process.kill(sentinel.pid, 0));
