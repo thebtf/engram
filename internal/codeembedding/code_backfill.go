@@ -36,6 +36,11 @@ type embedder interface {
 	Embed(ctx context.Context, texts []string) ([][]float32, error)
 }
 
+type codeEmbeddingBatch struct {
+	chunks  []*db_gorm.CodeChunk
+	vectors [][]float32
+}
+
 // CodeBackfill processes existing code_chunks rows whose embedding IS NULL,
 // embedding them in batches and persisting the resulting vectors via
 // CodeChunkStore.UpdateEmbedding. The loop is interruptible via ctx cancellation.
@@ -70,172 +75,119 @@ func runCodeBackfill(ctx context.Context, store codeChunkSource, client embedder
 	if batchSize <= 0 {
 		batchSize = 50
 	}
-
 	processed := 0
 	for {
-		// Respect context cancellation at the top of every iteration, mirroring
-		// the pattern in Backfill to ensure the goroutine exits promptly on
-		// server shutdown.
-		select {
-		case <-ctx.Done():
+		if err := ctx.Err(); err != nil {
 			log.Info().Int("processed", processed).Msg("code backfill: interrupted")
-			return ctx.Err()
-		default:
+			return err
 		}
-
-		// Work query: rows with embedding IS NULL, id ASC for deterministic order.
-		chunks, err := store.ListUnembedded(ctx, batchSize)
+		batch, complete, retry, err := loadCodeEmbeddingBatch(ctx, store, client, batchSize, rec)
 		if err != nil {
-			log.Error().Err(err).Msg("code backfill: list unembedded failed")
-			if rec != nil {
-				rec.RecordFailure(0, err.Error())
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(5 * time.Second):
-			}
-			continue
+			return err
 		}
-		if len(chunks) == 0 {
+		if complete {
 			log.Info().Int("total_processed", processed).Msg("code backfill: complete")
 			return nil
 		}
-
-		// Build the text batch in chunk order so vector index i matches chunk i.
-		texts := make([]string, len(chunks))
-		for i, c := range chunks {
-			texts[i] = c.Content
-		}
-
-		vectors, err := client.Embed(ctx, texts)
-		if err != nil {
-			log.Error().Err(err).Msg("code backfill: embed batch failed")
-			if rec != nil {
-				rec.RecordFailure(0, err.Error())
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(5 * time.Second):
-			}
+		if retry {
 			continue
 		}
-		if len(vectors) == 0 {
-			// Zero vectors from a 200-OK embed response (empty data array) makes
-			// zero progress and is reached BEFORE the per-row persist loop, so it
-			// bypasses the batchSuccess==0 backoff below. Back off here too —
-			// otherwise this requeries the same NULL rows and hammers the embed
-			// API at full loop speed (one ListUnembedded+Embed per iteration).
-			log.Warn().Int("batch_size", len(texts)).Msg("code backfill: embed returned zero vectors, backing off")
-			if rec != nil {
-				rec.RecordFailure(0, "embed API returned zero vectors")
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(5 * time.Second):
-			}
-			continue
-		}
-
-		// Persist each vector. Per-row dimension guard: a wrong-dim vector would
-		// corrupt the pgvector column or fail at DB level — skip and record.
-		// dimMismatch counts rows rejected specifically for a wrong dimension —
-		// a DETERMINISTIC, model-level config error (vs transient embed/DB
-		// failures). When a whole batch fails for this reason the loop disables
-		// itself below rather than retrying the same rows forever.
-		batchSuccess := 0
-		dimMismatch := 0
-		for i, chunk := range chunks {
-			if i >= len(vectors) {
-				// Embed returned fewer vectors than texts; remaining rows stay
-				// unembedded and will be retried in the next iteration.
-				log.Warn().
-					Int64("chunk_id", chunk.ID).
-					Int("expected_index", i).
-					Int("vectors_returned", len(vectors)).
-					Msg("code backfill: vector missing for chunk, deferring")
-				break
-			}
-			vec := vectors[i]
-			if len(vec) == 0 {
-				log.Warn().Int64("chunk_id", chunk.ID).Msg("code backfill: empty vector for chunk, skipping")
-				if rec != nil {
-					rec.RecordFailure(0, "empty vector returned by embed API")
-				}
-				continue
-			}
-			if len(vec) != expectedDim {
-				// Dimension mismatch guard: persisting a vector with the wrong
-				// dimension silently corrupts pgvector search or fails at INSERT.
-				log.Error().
-					Int64("chunk_id", chunk.ID).
-					Int("got_dim", len(vec)).
-					Int("expected_dim", expectedDim).
-					Msg("code backfill: dimension mismatch, skipping chunk to avoid corrupt embedding")
-				if rec != nil {
-					rec.RecordFailure(0, "dimension mismatch: expected 1536, got "+strconv.Itoa(len(vec)))
-				}
-				dimMismatch++
-				continue
-			}
-			if err := store.UpdateEmbedding(ctx, chunk.ID, pgvector.NewVector(vec)); err != nil {
-				log.Error().Err(err).Int64("chunk_id", chunk.ID).Msg("code backfill: UpdateEmbedding failed")
-				if rec != nil {
-					rec.RecordFailure(0, err.Error())
-				}
-				continue
-			}
-			batchSuccess++
-		}
-
+		batchSuccess, dimMismatch := persistCodeEmbeddingBatch(ctx, store, batch, rec)
 		if rec != nil && batchSuccess > 0 {
 			rec.RecordSuccess(batchSuccess)
 		}
 		processed += batchSuccess
-
-		// Deterministic-config guard: if EVERY row this batch was rejected for a
-		// dimension mismatch, the configured embed model's output dimension is not
-		// 1536 and never will be — retrying cannot help. This is the realistic OQ-5
-		// misconfiguration where an operator points ENGRAM_EMBEDDING_URL at their
-		// existing memory model (content_chunks is vector(4096) vs code_chunks
-		// vector(1536)). DISABLE code backfill with a fatal-config log rather than
-		// resending the same chunks to the external API forever and inflating
-		// failure telemetry. Memory backfill (separate goroutine) is unaffected.
-		// Returning nil (not an error) keeps the goroutine wrapper quiet — this is
-		// a deliberate, logged stop, not a crash.
-		if batchSuccess == 0 && dimMismatch == len(chunks) {
-			log.Error().
-				Int("batch_size", len(chunks)).
-				Int("expected_dim", expectedDim).
-				Msg("code backfill: every chunk rejected for dimension mismatch — embed model output dim != 1536; " +
-					"disabling code backfill (check ENGRAM_EMBEDDING_MODEL — code_chunks requires a 1536-dim model)")
-			if rec != nil {
-				rec.RecordFailure(0, "code backfill disabled: embed model dimension != 1536")
-			}
+		if batchSuccess == 0 && dimMismatch == len(batch.chunks) {
+			disableCodeBackfillForDimensionMismatch(len(batch.chunks), rec)
 			return nil
 		}
-
-		// Hot-loop guard: a non-empty batch that persisted ZERO embeddings (for
-		// reasons OTHER than a uniform dim mismatch — transient embed errors, a
-		// flaky DB, a mix of failures) leaves those rows embedding IS NULL, so the
-		// next ListUnembedded returns the SAME rows. Without a backoff this spins
-		// at full CPU and hammers the embed API. Sleep so the retry is rate-limited;
-		// a transient cause still recovers on the next pass.
 		if batchSuccess == 0 {
-			log.Warn().Int("batch_size", len(chunks)).
-				Msg("code backfill: batch persisted zero embeddings (all rows guard-rejected); backing off")
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(5 * time.Second):
+			log.Warn().Int("batch_size", len(batch.chunks)).Msg("code backfill: batch persisted zero embeddings (all rows guard-rejected); backing off")
+			if err := codeBackfillWait(ctx); err != nil {
+				return err
 			}
 			continue
 		}
-
-		if processed%100 == 0 || len(chunks) < batchSize {
+		if processed%100 == 0 || len(batch.chunks) < batchSize {
 			log.Info().Int("processed", processed).Msg("code backfill: progress")
 		}
+	}
+}
+
+func loadCodeEmbeddingBatch(ctx context.Context, store codeChunkSource, client embedder, batchSize int, rec *embedding.BackfillRecorder) (codeEmbeddingBatch, bool, bool, error) {
+	chunks, err := store.ListUnembedded(ctx, batchSize)
+	if err != nil {
+		log.Error().Err(err).Msg("code backfill: list unembedded failed")
+		recordCodeBackfillFailure(rec, err.Error())
+		return codeEmbeddingBatch{}, false, true, codeBackfillWait(ctx)
+	}
+	if len(chunks) == 0 {
+		return codeEmbeddingBatch{}, true, false, nil
+	}
+	texts := make([]string, len(chunks))
+	for index, chunk := range chunks {
+		texts[index] = chunk.Content
+	}
+	vectors, err := client.Embed(ctx, texts)
+	if err != nil {
+		log.Error().Err(err).Msg("code backfill: embed batch failed")
+		recordCodeBackfillFailure(rec, err.Error())
+		return codeEmbeddingBatch{}, false, true, codeBackfillWait(ctx)
+	}
+	if len(vectors) == 0 {
+		log.Warn().Int("batch_size", len(texts)).Msg("code backfill: embed returned zero vectors, backing off")
+		recordCodeBackfillFailure(rec, "embed API returned zero vectors")
+		return codeEmbeddingBatch{}, false, true, codeBackfillWait(ctx)
+	}
+	return codeEmbeddingBatch{chunks: chunks, vectors: vectors}, false, false, nil
+}
+
+func persistCodeEmbeddingBatch(ctx context.Context, store codeChunkSource, batch codeEmbeddingBatch, rec *embedding.BackfillRecorder) (int, int) {
+	batchSuccess := 0
+	dimMismatch := 0
+	for index, chunk := range batch.chunks {
+		if index >= len(batch.vectors) {
+			log.Warn().Int64("chunk_id", chunk.ID).Int("expected_index", index).Int("vectors_returned", len(batch.vectors)).Msg("code backfill: vector missing for chunk, deferring")
+			break
+		}
+		vector := batch.vectors[index]
+		if len(vector) == 0 {
+			log.Warn().Int64("chunk_id", chunk.ID).Msg("code backfill: empty vector for chunk, skipping")
+			recordCodeBackfillFailure(rec, "empty vector returned by embed API")
+			continue
+		}
+		if len(vector) != expectedDim {
+			log.Error().Int64("chunk_id", chunk.ID).Int("got_dim", len(vector)).Int("expected_dim", expectedDim).Msg("code backfill: dimension mismatch, skipping chunk to avoid corrupt embedding")
+			recordCodeBackfillFailure(rec, "dimension mismatch: expected 1536, got "+strconv.Itoa(len(vector)))
+			dimMismatch++
+			continue
+		}
+		if err := store.UpdateEmbedding(ctx, chunk.ID, pgvector.NewVector(vector)); err != nil {
+			log.Error().Err(err).Int64("chunk_id", chunk.ID).Msg("code backfill: UpdateEmbedding failed")
+			recordCodeBackfillFailure(rec, err.Error())
+			continue
+		}
+		batchSuccess++
+	}
+	return batchSuccess, dimMismatch
+}
+
+func recordCodeBackfillFailure(rec *embedding.BackfillRecorder, reason string) {
+	if rec != nil {
+		rec.RecordFailure(0, reason)
+	}
+}
+
+func disableCodeBackfillForDimensionMismatch(batchSize int, rec *embedding.BackfillRecorder) {
+	log.Error().Int("batch_size", batchSize).Int("expected_dim", expectedDim).Msg("code backfill: every chunk rejected for dimension mismatch — embed model output dim != 1536; disabling code backfill (check ENGRAM_EMBEDDING_MODEL — code_chunks requires a 1536-dim model)")
+	recordCodeBackfillFailure(rec, "code backfill disabled: embed model dimension != 1536")
+}
+
+func codeBackfillWait(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(5 * time.Second):
+		return nil
 	}
 }
