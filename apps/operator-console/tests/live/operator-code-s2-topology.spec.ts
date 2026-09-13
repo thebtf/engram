@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
 import type { Browser, BrowserContext, Page } from '@playwright/test'
 import { browserUserID, intervalsOverlap, issueReadOnlyKeycard, observeOperation } from './agent-topology'
@@ -358,16 +358,18 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
     }
     lifecycle.externalMCP = externalMCP
     const state = await appendBrowserTraffic(traffic)
+    const evidence = JSON.stringify({
+      evidenceKind: 'real-authenticated-go-postgresql-browser-linked-worktrees',
+      candidate: state.candidate,
+      backend: { sourceCommit: state.backend.sourceCommit, binarySha256: state.backend.binarySha256 },
+      worktrees: state.worktrees,
+      lifecycle,
+      traffic: state.traffic,
+    }, null, 2)
+    await writeFile(testInfo.outputPath('s2-live-code-topology.json'), evidence, 'utf8')
     await testInfo.attach('s2-linked-worktree-browser-topology', {
       contentType: 'application/json',
-      body: new TextEncoder().encode(JSON.stringify({
-        evidenceKind: 'real-authenticated-go-postgresql-browser-linked-worktrees',
-        candidate: state.candidate,
-        backend: { sourceCommit: state.backend.sourceCommit, binarySha256: state.backend.binarySha256 },
-        worktrees: state.worktrees,
-        lifecycle,
-        traffic: state.traffic,
-      }, null, 2)),
+      body: new TextEncoder().encode(evidence),
     })
     await Promise.all([a?.context.close(), b?.context.close()])
   }
