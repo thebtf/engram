@@ -703,179 +703,182 @@ func uciInstalledAcceptanceContains(values []string, want string) bool {
 }
 
 func TestUCIInstalledReceiptContract(t *testing.T) {
-	t.Run("complete synthetic result is deterministic and redacted", func(t *testing.T) {
-		result := uciCompleteInstalledReceiptResult()
-		first, err := BuildUCIInstalledReceipt(result)
-		if err != nil {
-			t.Fatalf("build first receipt: %v", err)
-		}
-		second, err := BuildUCIInstalledReceipt(result)
-		if err != nil {
-			t.Fatalf("build second receipt: %v", err)
-		}
-		firstJSON, err := EncodeUCIInstalledReceipt(first)
-		if err != nil {
-			t.Fatalf("encode first receipt: %v", err)
-		}
-		secondJSON, err := EncodeUCIInstalledReceipt(second)
-		if err != nil {
-			t.Fatalf("encode second receipt: %v", err)
-		}
-		if string(firstJSON) != string(secondJSON) || !json.Valid(firstJSON) {
-			t.Fatal("receipt bytes are not deterministic valid JSON")
-		}
+	t.Run("complete synthetic result is deterministic and redacted", testUCIInstalledReceiptDeterministic)
+	t.Run("rejects incomplete unsafe and unstable result evidence", testUCIInstalledReceiptRejectsIncompleteEvidence)
+	t.Run("rejects receipt tampering", testUCIInstalledReceiptRejectsTampering)
+}
 
-		reordered := uciCompleteInstalledReceiptResult()
-		tools := reordered.ClientTranscripts[uciInstalledAcceptanceClientA].Tools
-		for left, right := 0, len(tools)-1; left < right; left, right = left+1, right-1 {
-			tools[left], tools[right] = tools[right], tools[left]
-		}
-		transcript := reordered.ClientTranscripts[uciInstalledAcceptanceClientA]
-		transcript.Tools = tools
-		reordered.ClientTranscripts[uciInstalledAcceptanceClientA] = transcript
-		reorderedReceipt, err := BuildUCIInstalledReceipt(reordered)
-		if err != nil {
-			t.Fatalf("build receipt with reordered tool surface: %v", err)
-		}
-		reorderedJSON, err := EncodeUCIInstalledReceipt(reorderedReceipt)
-		if err != nil {
-			t.Fatalf("encode receipt with reordered tool surface: %v", err)
-		}
-		if string(firstJSON) != string(reorderedJSON) {
-			t.Fatal("receipt retained unstable tool-list ordering")
-		}
+func testUCIInstalledReceiptDeterministic(t *testing.T) {
+	result := uciCompleteInstalledReceiptResult()
+	first, err := BuildUCIInstalledReceipt(result)
+	if err != nil {
+		t.Fatalf("build first receipt: %v", err)
+	}
+	second, err := BuildUCIInstalledReceipt(result)
+	if err != nil {
+		t.Fatalf("build second receipt: %v", err)
+	}
+	firstJSON, err := EncodeUCIInstalledReceipt(first)
+	if err != nil {
+		t.Fatalf("encode first receipt: %v", err)
+	}
+	secondJSON, err := EncodeUCIInstalledReceipt(second)
+	if err != nil {
+		t.Fatalf("encode second receipt: %v", err)
+	}
+	if string(firstJSON) != string(secondJSON) || !json.Valid(firstJSON) {
+		t.Fatal("receipt bytes are not deterministic valid JSON")
+	}
 
-		for _, raw := range []string{
-			"postgres://fixture:secret@127.0.0.1/private_test",
-			`D:\private\uci-installed-root`,
-			"fixture source body must never be retained",
-			"fixture-token-must-never-be-retained",
-		} {
-			if strings.Contains(string(firstJSON), raw) {
-				t.Fatalf("receipt retained raw private input %q", raw)
+	reordered := uciCompleteInstalledReceiptResult()
+	tools := reordered.ClientTranscripts[uciInstalledAcceptanceClientA].Tools
+	for left, right := 0, len(tools)-1; left < right; left, right = left+1, right-1 {
+		tools[left], tools[right] = tools[right], tools[left]
+	}
+	transcript := reordered.ClientTranscripts[uciInstalledAcceptanceClientA]
+	transcript.Tools = tools
+	reordered.ClientTranscripts[uciInstalledAcceptanceClientA] = transcript
+	reorderedReceipt, err := BuildUCIInstalledReceipt(reordered)
+	if err != nil {
+		t.Fatalf("build receipt with reordered tool surface: %v", err)
+	}
+	reorderedJSON, err := EncodeUCIInstalledReceipt(reorderedReceipt)
+	if err != nil {
+		t.Fatalf("encode receipt with reordered tool surface: %v", err)
+	}
+	if string(firstJSON) != string(reorderedJSON) {
+		t.Fatal("receipt retained unstable tool-list ordering")
+	}
+	for _, raw := range []string{
+		"postgres://fixture:secret@127.0.0.1/private_test",
+		`D:\private\uci-installed-root`,
+		"fixture source body must never be retained",
+		"fixture-token-must-never-be-retained",
+	} {
+		if strings.Contains(string(firstJSON), raw) {
+			t.Fatalf("receipt retained raw private input %q", raw)
+		}
+	}
+	if first.SchemaVersion != UCIInstalledReceiptSchemaVersion || first.Completion != uciInstalledReceiptCompletionVerified || first.Scope.Production != uciInstalledReceiptNotClaimed || first.Fixture.PrimarySourceDigest == "fixture source body must never be retained" {
+		t.Fatalf("receipt schema or redaction boundary = %#v", first)
+	}
+}
+
+func testUCIInstalledReceiptRejectsIncompleteEvidence(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*uciInstalledAcceptanceResult)
+	}{
+		{
+			name: "missing candidate digest",
+			mutate: func(result *uciInstalledAcceptanceResult) {
+				artifact := result.Artifacts[uciInstalledAcceptanceArtifactParser]
+				artifact.CandidateSHA256 = ""
+				result.Artifacts[uciInstalledAcceptanceArtifactParser] = artifact
+			},
+		},
+		{
+			name: "missing fixture manifest digest",
+			mutate: func(result *uciInstalledAcceptanceResult) {
+				result.Fixture.ManifestDigest = ""
+			},
+		},
+		{
+			name: "false completion before cleanup",
+			mutate: func(result *uciInstalledAcceptanceResult) {
+				result.Cleanup.ProcessTreeClosed = false
+			},
+		},
+		{
+			name: "raw DSN in transcript",
+			mutate: func(result *uciInstalledAcceptanceResult) {
+				transcript := result.ClientTranscripts[uciInstalledAcceptanceClientA]
+				transcript.Tools = append(transcript.Tools, "postgres://fixture:secret@127.0.0.1/private_test")
+				result.ClientTranscripts[uciInstalledAcceptanceClientA] = transcript
+			},
+		},
+		{
+			name: "absolute private locator in transcript",
+			mutate: func(result *uciInstalledAcceptanceResult) {
+				transcript := result.ClientTranscripts[uciInstalledAcceptanceClientA]
+				transcript.Tools = append(transcript.Tools, `D:\private\uci-installed-root`)
+				result.ClientTranscripts[uciInstalledAcceptanceClientA] = transcript
+			},
+		},
+		{
+			name: "source body substituted for digest",
+			mutate: func(result *uciInstalledAcceptanceResult) {
+				result.Fixture.PrimarySourceDigest = "fixture source body must never be retained"
+			},
+		},
+		{
+			name: "unstable map key set",
+			mutate: func(result *uciInstalledAcceptanceResult) {
+				result.Artifacts["unexpected"] = result.Artifacts[uciInstalledAcceptanceArtifactServer]
+			},
+		},
+		{
+			name: "missing refusal outcome",
+			mutate: func(result *uciInstalledAcceptanceResult) {
+				delete(result.Refusals, "private")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := uciCompleteInstalledReceiptResult()
+			test.mutate(&result)
+			if _, err := BuildUCIInstalledReceipt(result); err == nil {
+				t.Fatal("receipt assembly accepted incomplete or unsafe evidence")
 			}
-		}
-		if first.SchemaVersion != UCIInstalledReceiptSchemaVersion || first.Completion != uciInstalledReceiptCompletionVerified || first.Scope.Production != uciInstalledReceiptNotClaimed || first.Fixture.PrimarySourceDigest == "fixture source body must never be retained" {
-			t.Fatalf("receipt schema or redaction boundary = %#v", first)
-		}
-	})
+		})
+	}
+}
 
-	t.Run("rejects incomplete unsafe and unstable result evidence", func(t *testing.T) {
-		tests := []struct {
-			name   string
-			mutate func(*uciInstalledAcceptanceResult)
-		}{
-			{
-				name: "missing candidate digest",
-				mutate: func(result *uciInstalledAcceptanceResult) {
-					artifact := result.Artifacts[uciInstalledAcceptanceArtifactParser]
-					artifact.CandidateSHA256 = ""
-					result.Artifacts[uciInstalledAcceptanceArtifactParser] = artifact
-				},
+func testUCIInstalledReceiptRejectsTampering(t *testing.T) {
+	receipt, err := BuildUCIInstalledReceipt(uciCompleteInstalledReceiptResult())
+	if err != nil {
+		t.Fatalf("build receipt: %v", err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*UCIInstalledReceipt)
+	}{
+		{
+			name: "false completion",
+			mutate: func(receipt *UCIInstalledReceipt) {
+				receipt.Completion = "complete"
 			},
-			{
-				name: "missing fixture manifest digest",
-				mutate: func(result *uciInstalledAcceptanceResult) {
-					result.Fixture.ManifestDigest = ""
-				},
+		},
+		{
+			name: "candidate artifact mismatch",
+			mutate: func(receipt *UCIInstalledReceipt) {
+				receipt.Candidate.Artifacts[0].InstalledSHA256 = uciInstalledAcceptanceDigest("tampered installed artifact")
 			},
-			{
-				name: "false completion before cleanup",
-				mutate: func(result *uciInstalledAcceptanceResult) {
-					result.Cleanup.ProcessTreeClosed = false
-				},
+		},
+		{
+			name: "unsupported production claim",
+			mutate: func(receipt *UCIInstalledReceipt) {
+				receipt.Scope.Production = "proven"
 			},
-			{
-				name: "raw DSN in transcript",
-				mutate: func(result *uciInstalledAcceptanceResult) {
-					transcript := result.ClientTranscripts[uciInstalledAcceptanceClientA]
-					transcript.Tools = append(transcript.Tools, "postgres://fixture:secret@127.0.0.1/private_test")
-					result.ClientTranscripts[uciInstalledAcceptanceClientA] = transcript
-				},
+		},
+		{
+			name: "watcher isolation mismatch",
+			mutate: func(receipt *UCIInstalledReceipt) {
+				receipt.Watcher.AfterDeleteB.ViewDigest = uciInstalledAcceptanceDigest("tampered linked view")
 			},
-			{
-				name: "absolute private locator in transcript",
-				mutate: func(result *uciInstalledAcceptanceResult) {
-					transcript := result.ClientTranscripts[uciInstalledAcceptanceClientA]
-					transcript.Tools = append(transcript.Tools, `D:\private\uci-installed-root`)
-					result.ClientTranscripts[uciInstalledAcceptanceClientA] = transcript
-				},
-			},
-			{
-				name: "source body substituted for digest",
-				mutate: func(result *uciInstalledAcceptanceResult) {
-					result.Fixture.PrimarySourceDigest = "fixture source body must never be retained"
-				},
-			},
-			{
-				name: "unstable map key set",
-				mutate: func(result *uciInstalledAcceptanceResult) {
-					result.Artifacts["unexpected"] = result.Artifacts[uciInstalledAcceptanceArtifactServer]
-				},
-			},
-			{
-				name: "missing refusal outcome",
-				mutate: func(result *uciInstalledAcceptanceResult) {
-					delete(result.Refusals, "private")
-				},
-			},
-		}
-		for _, test := range tests {
-			t.Run(test.name, func(t *testing.T) {
-				result := uciCompleteInstalledReceiptResult()
-				test.mutate(&result)
-				if _, err := BuildUCIInstalledReceipt(result); err == nil {
-					t.Fatal("receipt assembly accepted incomplete or unsafe evidence")
-				}
-			})
-		}
-	})
-
-	t.Run("rejects receipt tampering", func(t *testing.T) {
-		receipt, err := BuildUCIInstalledReceipt(uciCompleteInstalledReceiptResult())
-		if err != nil {
-			t.Fatalf("build receipt: %v", err)
-		}
-		tests := []struct {
-			name   string
-			mutate func(*UCIInstalledReceipt)
-		}{
-			{
-				name: "false completion",
-				mutate: func(receipt *UCIInstalledReceipt) {
-					receipt.Completion = "complete"
-				},
-			},
-			{
-				name: "candidate artifact mismatch",
-				mutate: func(receipt *UCIInstalledReceipt) {
-					receipt.Candidate.Artifacts[0].InstalledSHA256 = uciInstalledAcceptanceDigest("tampered installed artifact")
-				},
-			},
-			{
-				name: "unsupported production claim",
-				mutate: func(receipt *UCIInstalledReceipt) {
-					receipt.Scope.Production = "proven"
-				},
-			},
-			{
-				name: "watcher isolation mismatch",
-				mutate: func(receipt *UCIInstalledReceipt) {
-					receipt.Watcher.AfterDeleteB.ViewDigest = uciInstalledAcceptanceDigest("tampered linked view")
-				},
-			},
-		}
-		for _, test := range tests {
-			t.Run(test.name, func(t *testing.T) {
-				mutated := receipt
-				mutated.Candidate.Artifacts = append([]UCIInstalledReceiptArtifactDigest(nil), receipt.Candidate.Artifacts...)
-				test.mutate(&mutated)
-				if err := ValidateUCIInstalledReceipt(mutated); err == nil {
-					t.Fatal("receipt validator accepted tampering")
-				}
-			})
-		}
-	})
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := receipt
+			mutated.Candidate.Artifacts = append([]UCIInstalledReceiptArtifactDigest(nil), receipt.Candidate.Artifacts...)
+			test.mutate(&mutated)
+			if err := ValidateUCIInstalledReceipt(mutated); err == nil {
+				t.Fatal("receipt validator accepted tampering")
+			}
+		})
+	}
 }
 
 func uciCompleteInstalledReceiptResult() uciInstalledAcceptanceResult {
