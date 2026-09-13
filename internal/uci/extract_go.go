@@ -455,43 +455,47 @@ func goMarkExpressionIdentifiers(expression ast.Expr, identifiers map[*ast.Ident
 }
 
 func goNamedExpression(expression ast.Expr) (string, bool) {
-	switch expression := expression.(type) {
-	case *ast.Ident:
-		if expression == nil || expression.Name == "" || expression.Name == "_" {
-			return "", false
-		}
-		return expression.Name, true
-	case *ast.SelectorExpr:
-		if expression == nil || expression.Sel == nil || expression.Sel.Name == "" {
-			return "", false
-		}
-		base, known := goNamedExpression(expression.X)
-		if !known {
-			return "", false
-		}
-		return base + "." + expression.Sel.Name, true
-	case *ast.ParenExpr:
-		if expression == nil {
-			return "", false
-		}
-		return goNamedExpression(expression.X)
-	case *ast.StarExpr:
-		if expression == nil {
-			return "", false
-		}
-		return goNamedExpression(expression.X)
-	case *ast.IndexExpr:
-		if expression == nil {
-			return "", false
-		}
-		return goNamedExpression(expression.X)
-	case *ast.IndexListExpr:
-		if expression == nil {
-			return "", false
-		}
-		return goNamedExpression(expression.X)
-	default:
+	if expression == nil {
 		return "", false
+	}
+	if identifier, ok := expression.(*ast.Ident); ok {
+		if identifier.Name == "" || identifier.Name == "_" {
+			return "", false
+		}
+		return identifier.Name, true
+	}
+	if selector, ok := expression.(*ast.SelectorExpr); ok {
+		return goNamedSelector(selector)
+	}
+	if child := goNamedExpressionChild(expression); child != nil {
+		return goNamedExpression(child)
+	}
+	return "", false
+}
+
+func goNamedSelector(selector *ast.SelectorExpr) (string, bool) {
+	if selector == nil || selector.Sel == nil || selector.Sel.Name == "" {
+		return "", false
+	}
+	base, known := goNamedExpression(selector.X)
+	if !known {
+		return "", false
+	}
+	return base + "." + selector.Sel.Name, true
+}
+
+func goNamedExpressionChild(expression ast.Expr) ast.Expr {
+	switch expression := expression.(type) {
+	case *ast.ParenExpr:
+		return expression.X
+	case *ast.StarExpr:
+		return expression.X
+	case *ast.IndexExpr:
+		return expression.X
+	case *ast.IndexListExpr:
+		return expression.X
+	default:
+		return nil
 	}
 }
 
