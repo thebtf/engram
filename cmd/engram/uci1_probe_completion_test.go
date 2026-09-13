@@ -18,6 +18,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+type uci1CompletionProbeState struct {
+	firstExposure  string
+	secondExposure string
+	firstBefore    uci1CompletionParent
+	secondBefore   uci1CompletionParent
+}
+
 // uci1ProbeCompletionInstalled exercises the supported-host callback strictly
 // through the installed gRPC transport. It leaves only redacted U42/U45 proof.
 func uci1ProbeCompletionInstalled(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime) (_ map[string]uciInstalledAcceptanceScenarioEvidence, retErr error) {
@@ -68,111 +75,134 @@ func uci1ProbeCompletionInstalled(ctx context.Context, runtime uciInstalledAccep
 		retErr = errors.Join(retErr, cleanupErr)
 	}()
 
-	firstExposure, err := uci1CompletionCreateExposure(ctx, runtime, selection)
+	state, err := uci1CompletionPrepareProbeState(ctx, runtime, selection)
 	if err != nil {
 		return nil, err
-	}
-	secondExposure, err := uci1CompletionCreateExposure(ctx, runtime, selection)
-	if err != nil {
-		return nil, err
-	}
-	if firstExposure == secondExposure {
-		return nil, errors.New("installed completion probe did not create fresh exposure parents")
-	}
-	firstBefore, err := uci1CompletionReadParent(ctx, runtime.Authority, firstExposure)
-	if err != nil {
-		return nil, err
-	}
-	secondBefore, err := uci1CompletionReadParent(ctx, runtime.Authority, secondExposure)
-	if err != nil {
-		return nil, err
-	}
-	if firstBefore.CompletionCount != 0 || firstBefore.CompletionOutcome != "" || secondBefore.CompletionCount != 0 || secondBefore.CompletionOutcome != "" {
-		return nil, errors.New("fresh installed completion parent already has child evidence")
 	}
 
-	firstCallback := uci1InstalledCompletionCallback{
-		CanonicalProject: runtime.Authority.projectKey,
-		ExposureRef:      firstExposure,
-		SupportedHostRef: "uci1-supported-host-" + uuid.NewString(),
-		CallbackRef:      "uci1-completion-" + uuid.NewString(),
-		Outcome:          pb.UCICompletionOutcome_UCI_COMPLETION_OUTCOME_PARTIAL,
-		IdempotencyKey:   "uci1-completion-" + uuid.NewString(),
-	}
-	accepted, err := uci1RecordInstalledCompletion(ctx, runtime, rawKeycard, firstCallback)
-	if err != nil || !accepted {
-		return nil, errors.New("installed partial completion callback was not accepted")
-	}
-	accepted, err = uci1RecordInstalledCompletion(ctx, runtime, rawKeycard, firstCallback)
-	if err != nil || !accepted {
-		return nil, errors.New("installed completion exact retry was not accepted")
-	}
-	firstAfterRetry, err := uci1CompletionReadParent(ctx, runtime.Authority, firstExposure)
+	u42Digest, firstAfterMismatch, err := uci1CompletionObserveU42(ctx, runtime, state, rawKeycard)
 	if err != nil {
 		return nil, err
-	}
-	secondAfterU42, err := uci1CompletionReadParent(ctx, runtime.Authority, secondExposure)
-	if err != nil {
-		return nil, err
-	}
-	if firstAfterRetry.CompletionCount != 1 || firstAfterRetry.CompletionOutcome != "partial" || secondAfterU42.CompletionCount != 0 || secondAfterU42.CompletionOutcome != "" ||
-		!uci1CompletionRetrievalUnchanged(firstBefore, firstAfterRetry) || !uci1CompletionRetrievalUnchanged(secondBefore, secondAfterU42) {
-		return nil, errors.New("installed completion U42 parent state is not durable and unchanged")
-	}
-	u42Digest := uci1CompletionEvidenceDigest("U42", firstExposure, secondExposure, firstAfterRetry, secondAfterU42, "partial_exact_retry")
-
-	mismatchCallback := firstCallback
-	mismatchCallback.CallbackRef = "uci1-completion-mismatch-" + uuid.NewString()
-	mismatchCallback.Outcome = pb.UCICompletionOutcome_UCI_COMPLETION_OUTCOME_FAILED
-	accepted, err = uci1RecordInstalledCompletion(ctx, runtime, rawKeycard, mismatchCallback)
-	mismatchCode, mismatchMessage := uci1CompletionGRPCStatus(err)
-	if accepted || err == nil || mismatchCode != codes.FailedPrecondition || mismatchMessage != "IDEMPOTENCY_MISMATCH" {
-		return nil, errors.New("installed completion mismatch did not return safe FailedPrecondition IDEMPOTENCY_MISMATCH")
-	}
-	firstAfterMismatch, err := uci1CompletionReadParent(ctx, runtime.Authority, firstExposure)
-	if err != nil {
-		return nil, err
-	}
-	if !uci1CompletionParentEqual(firstAfterRetry, firstAfterMismatch) {
-		return nil, errors.New("installed completion mismatch changed retained parent state")
 	}
 
-	fault, err := uci1InstallCompletionInsertFault(ctx, runtime.Authority)
+	u45Digest, err := uci1CompletionObserveU45(ctx, runtime, state, rawKeycard, firstAfterMismatch)
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		retErr = errors.Join(retErr, fault.Close())
-	}()
-	secondCallback := uci1InstalledCompletionCallback{
-		CanonicalProject: runtime.Authority.projectKey,
-		ExposureRef:      secondExposure,
-		SupportedHostRef: "uci1-supported-host-" + uuid.NewString(),
-		CallbackRef:      "uci1-completion-fault-" + uuid.NewString(),
-		Outcome:          pb.UCICompletionOutcome_UCI_COMPLETION_OUTCOME_FAILED,
-		IdempotencyKey:   "uci1-completion-fault-" + uuid.NewString(),
-	}
-	accepted, err = uci1RecordInstalledCompletion(ctx, runtime, rawKeycard, secondCallback)
-	failureCode, failureMessage := uci1CompletionGRPCStatus(err)
-	if accepted || err == nil || failureCode != codes.Unavailable || failureMessage != "COMPLETION_EVIDENCE_UNAVAILABLE" {
-		return nil, errors.New("installed completion insert fault did not return safe Unavailable")
-	}
-	if err := fault.Close(); err != nil {
-		return nil, err
-	}
-	secondAfterFault, err := uci1CompletionReadParent(ctx, runtime.Authority, secondExposure)
-	if err != nil {
-		return nil, err
-	}
-	if secondAfterFault.CompletionCount != 0 || secondAfterFault.CompletionOutcome != "" || !uci1CompletionRetrievalUnchanged(secondBefore, secondAfterFault) {
-		return nil, errors.New("installed completion fault did not preserve unknown parent without child evidence")
-	}
-	u45Digest := uci1CompletionEvidenceDigest("U45", firstExposure, secondExposure, firstAfterMismatch, secondAfterFault, "idempotency_mismatch", "completion_insert_unavailable")
 
 	return map[string]uciInstalledAcceptanceScenarioEvidence{
 		"U42": {Code: uciInstalledAcceptanceScenarioCodeObserved, Digest: u42Digest},
 		"U45": {Code: uciInstalledAcceptanceScenarioCodeObserved, Digest: u45Digest},
 	}, nil
+}
+
+func uci1CompletionPrepareProbeState(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, selection uciInstalledAcceptanceSelection) (uci1CompletionProbeState, error) {
+	firstExposure, err := uci1CompletionCreateExposure(ctx, runtime, selection)
+	if err != nil {
+		return uci1CompletionProbeState{}, err
+	}
+	secondExposure, err := uci1CompletionCreateExposure(ctx, runtime, selection)
+	if err != nil {
+		return uci1CompletionProbeState{}, err
+	}
+	if firstExposure == secondExposure {
+		return uci1CompletionProbeState{}, errors.New("installed completion probe did not create fresh exposure parents")
+	}
+	firstBefore, err := uci1CompletionReadParent(ctx, runtime.Authority, firstExposure)
+	if err != nil {
+		return uci1CompletionProbeState{}, err
+	}
+	secondBefore, err := uci1CompletionReadParent(ctx, runtime.Authority, secondExposure)
+	if err != nil {
+		return uci1CompletionProbeState{}, err
+	}
+	if firstBefore.CompletionCount != 0 || firstBefore.CompletionOutcome != "" || secondBefore.CompletionCount != 0 || secondBefore.CompletionOutcome != "" {
+		return uci1CompletionProbeState{}, errors.New("fresh installed completion parent already has child evidence")
+	}
+	return uci1CompletionProbeState{firstExposure: firstExposure, secondExposure: secondExposure, firstBefore: firstBefore, secondBefore: secondBefore}, nil
+}
+
+func uci1CompletionObserveU42(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, state uci1CompletionProbeState, rawKeycard string) (string, uci1CompletionParent, error) {
+	callback := uci1InstalledCompletionCallback{
+		CanonicalProject: runtime.Authority.projectKey,
+		ExposureRef:      state.firstExposure,
+		SupportedHostRef: "uci1-supported-host-" + uuid.NewString(),
+		CallbackRef:      "uci1-completion-" + uuid.NewString(),
+		Outcome:          pb.UCICompletionOutcome_UCI_COMPLETION_OUTCOME_PARTIAL,
+		IdempotencyKey:   "uci1-completion-" + uuid.NewString(),
+	}
+	accepted, err := uci1RecordInstalledCompletion(ctx, runtime, rawKeycard, callback)
+	if err != nil || !accepted {
+		return "", uci1CompletionParent{}, errors.New("installed partial completion callback was not accepted")
+	}
+	accepted, err = uci1RecordInstalledCompletion(ctx, runtime, rawKeycard, callback)
+	if err != nil || !accepted {
+		return "", uci1CompletionParent{}, errors.New("installed completion exact retry was not accepted")
+	}
+	firstAfterRetry, err := uci1CompletionReadParent(ctx, runtime.Authority, state.firstExposure)
+	if err != nil {
+		return "", uci1CompletionParent{}, err
+	}
+	secondAfterU42, err := uci1CompletionReadParent(ctx, runtime.Authority, state.secondExposure)
+	if err != nil {
+		return "", uci1CompletionParent{}, err
+	}
+	if firstAfterRetry.CompletionCount != 1 || firstAfterRetry.CompletionOutcome != "partial" || secondAfterU42.CompletionCount != 0 || secondAfterU42.CompletionOutcome != "" ||
+		!uci1CompletionRetrievalUnchanged(state.firstBefore, firstAfterRetry) || !uci1CompletionRetrievalUnchanged(state.secondBefore, secondAfterU42) {
+		return "", uci1CompletionParent{}, errors.New("installed completion U42 parent state is not durable and unchanged")
+	}
+	digest := uci1CompletionEvidenceDigest("U42", state.firstExposure, state.secondExposure, firstAfterRetry, secondAfterU42, "partial_exact_retry")
+
+	mismatchCallback := callback
+	mismatchCallback.CallbackRef = "uci1-completion-mismatch-" + uuid.NewString()
+	mismatchCallback.Outcome = pb.UCICompletionOutcome_UCI_COMPLETION_OUTCOME_FAILED
+	accepted, err = uci1RecordInstalledCompletion(ctx, runtime, rawKeycard, mismatchCallback)
+	mismatchCode, mismatchMessage := uci1CompletionGRPCStatus(err)
+	if accepted || err == nil || mismatchCode != codes.FailedPrecondition || mismatchMessage != "IDEMPOTENCY_MISMATCH" {
+		return "", uci1CompletionParent{}, errors.New("installed completion mismatch did not return safe FailedPrecondition IDEMPOTENCY_MISMATCH")
+	}
+	firstAfterMismatch, err := uci1CompletionReadParent(ctx, runtime.Authority, state.firstExposure)
+	if err != nil {
+		return "", uci1CompletionParent{}, err
+	}
+	if !uci1CompletionParentEqual(firstAfterRetry, firstAfterMismatch) {
+		return "", uci1CompletionParent{}, errors.New("installed completion mismatch changed retained parent state")
+	}
+	return digest, firstAfterMismatch, nil
+}
+
+func uci1CompletionObserveU45(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, state uci1CompletionProbeState, rawKeycard string, firstAfterMismatch uci1CompletionParent) (digest string, retErr error) {
+	fault, err := uci1InstallCompletionInsertFault(ctx, runtime.Authority)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		retErr = errors.Join(retErr, fault.Close())
+	}()
+	callback := uci1InstalledCompletionCallback{
+		CanonicalProject: runtime.Authority.projectKey,
+		ExposureRef:      state.secondExposure,
+		SupportedHostRef: "uci1-supported-host-" + uuid.NewString(),
+		CallbackRef:      "uci1-completion-fault-" + uuid.NewString(),
+		Outcome:          pb.UCICompletionOutcome_UCI_COMPLETION_OUTCOME_FAILED,
+		IdempotencyKey:   "uci1-completion-fault-" + uuid.NewString(),
+	}
+	accepted, err := uci1RecordInstalledCompletion(ctx, runtime, rawKeycard, callback)
+	failureCode, failureMessage := uci1CompletionGRPCStatus(err)
+	if accepted || err == nil || failureCode != codes.Unavailable || failureMessage != "COMPLETION_EVIDENCE_UNAVAILABLE" {
+		return "", errors.New("installed completion insert fault did not return safe Unavailable")
+	}
+	if err := fault.Close(); err != nil {
+		return "", err
+	}
+	secondAfterFault, err := uci1CompletionReadParent(ctx, runtime.Authority, state.secondExposure)
+	if err != nil {
+		return "", err
+	}
+	if secondAfterFault.CompletionCount != 0 || secondAfterFault.CompletionOutcome != "" || !uci1CompletionRetrievalUnchanged(state.secondBefore, secondAfterFault) {
+		return "", errors.New("installed completion fault did not preserve unknown parent without child evidence")
+	}
+	return uci1CompletionEvidenceDigest("U45", state.firstExposure, state.secondExposure, firstAfterMismatch, secondAfterFault, "idempotency_mismatch", "completion_insert_unavailable"), nil
 }
 
 type uci1CompletionParent struct {
