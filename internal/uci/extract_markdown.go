@@ -172,20 +172,29 @@ func markdownIgnoredLines(source []byte, lineStarts []int) []bool {
 	if len(lineStarts) == 0 {
 		return ignored
 	}
+	markdownIgnoreFrontMatter(source, lineStarts, ignored)
+	markdownIgnoreCodeLines(source, lineStarts, ignored)
+	return ignored
+}
 
-	if start, end := markdownLineBounds(source, lineStarts, 0); markdownFrontMatterDelimiter(source[start:end]) {
-		for index := 1; index < len(lineStarts); index++ {
-			start, end := markdownLineBounds(source, lineStarts, index)
-			if !markdownFrontMatterDelimiter(source[start:end]) && !markdownFrontMatterEnd(source[start:end]) {
-				continue
-			}
-			for ignoredIndex := 0; ignoredIndex <= index; ignoredIndex++ {
-				ignored[ignoredIndex] = true
-			}
-			break
-		}
+func markdownIgnoreFrontMatter(source []byte, lineStarts []int, ignored []bool) {
+	start, end := markdownLineBounds(source, lineStarts, 0)
+	if !markdownFrontMatterDelimiter(source[start:end]) {
+		return
 	}
+	for index := 1; index < len(lineStarts); index++ {
+		start, end = markdownLineBounds(source, lineStarts, index)
+		if !markdownFrontMatterDelimiter(source[start:end]) && !markdownFrontMatterEnd(source[start:end]) {
+			continue
+		}
+		for ignoredIndex := 0; ignoredIndex <= index; ignoredIndex++ {
+			ignored[ignoredIndex] = true
+		}
+		return
+	}
+}
 
+func markdownIgnoreCodeLines(source []byte, lineStarts []int, ignored []bool) {
 	var marker byte
 	width := 0
 	for index := range lineStarts {
@@ -197,22 +206,19 @@ func markdownIgnoredLines(source []byte, lineStarts []int) []bool {
 		if marker != 0 {
 			ignored[index] = true
 			if markdownFenceCloser(line, marker, width) {
-				marker = 0
-				width = 0
+				marker, width = 0, 0
 			}
 			continue
 		}
 		if nextMarker, nextWidth, ok := markdownFencePrefix(line); ok {
 			ignored[index] = true
-			marker = nextMarker
-			width = nextWidth
+			marker, width = nextMarker, nextWidth
 			continue
 		}
 		if markdownIndentedCode(line) {
 			ignored[index] = true
 		}
 	}
-	return ignored
 }
 
 func markdownFrontMatterDelimiter(line []byte) bool {
@@ -612,35 +618,42 @@ func markdownInlineDestination(line []byte, opening int) (int, int, int, bool) {
 		return 0, 0, 0, false
 	}
 	if line[index] == '<' {
-		rawStart := index + 1
-		for index = rawStart; index < len(line); index++ {
-			if line[index] == '\\' {
-				index++
-				continue
-			}
-			if line[index] != '>' {
-				continue
-			}
-			closing, valid := markdownLinkCloseAfterTitle(line, index+1)
-			if !valid || rawStart == index {
-				return 0, 0, 0, false
-			}
-			return rawStart, index, closing, true
-		}
-		return 0, 0, 0, false
+		return markdownAngleDestination(line, index)
 	}
+	return markdownBareDestination(line, index)
+}
 
-	rawStart := index
-	depth := 0
-	for ; index < len(line); index++ {
+func markdownAngleDestination(line []byte, opening int) (int, int, int, bool) {
+	rawStart := opening + 1
+	for index := rawStart; index < len(line); index++ {
 		if line[index] == '\\' {
 			index++
 			continue
 		}
-		switch line[index] {
-		case '(':
+		if line[index] != '>' {
+			continue
+		}
+		closing, valid := markdownLinkCloseAfterTitle(line, index+1)
+		if !valid || rawStart == index {
+			return 0, 0, 0, false
+		}
+		return rawStart, index, closing, true
+	}
+	return 0, 0, 0, false
+}
+
+func markdownBareDestination(line []byte, rawStart int) (int, int, int, bool) {
+	depth := 0
+	for index := rawStart; index < len(line); index++ {
+		if line[index] == '\\' {
+			index++
+			continue
+		}
+		if line[index] == '(' {
 			depth++
-		case ')':
+			continue
+		}
+		if line[index] == ')' {
 			if depth == 0 {
 				if rawStart == index {
 					return 0, 0, 0, false
@@ -648,18 +661,21 @@ func markdownInlineDestination(line []byte, opening int) (int, int, int, bool) {
 				return rawStart, index, index, true
 			}
 			depth--
-		case ' ', '\t':
-			if depth != 0 {
-				continue
-			}
-			closing, valid := markdownLinkCloseAfterTitle(line, index)
-			if !valid || rawStart == index {
-				return 0, 0, 0, false
-			}
-			return rawStart, index, closing, true
+			continue
+		}
+		if markdownInlineWhitespace(line[index]) && depth == 0 {
+			return markdownBareTitleClose(line, rawStart, index)
 		}
 	}
 	return 0, 0, 0, false
+}
+
+func markdownBareTitleClose(line []byte, rawStart, index int) (int, int, int, bool) {
+	closing, valid := markdownLinkCloseAfterTitle(line, index)
+	if !valid || rawStart == index {
+		return 0, 0, 0, false
+	}
+	return rawStart, index, closing, true
 }
 
 func markdownInlineDestinationUnterminated(line []byte, opening int) bool {
@@ -683,8 +699,7 @@ func markdownInlineDestinationUnterminated(line []byte, opening int) bool {
 }
 
 func markdownLinkCloseAfterTitle(line []byte, start int) (int, bool) {
-	index := start
-	for {
+	for index := start; ; {
 		index = markdownSkipInlineWhitespace(line, index)
 		if index >= len(line) {
 			return 0, false
@@ -693,34 +708,40 @@ func markdownLinkCloseAfterTitle(line []byte, start int) (int, bool) {
 			return index, true
 		}
 		if line[index] == '\'' || line[index] == '"' {
-			quote := line[index]
-			index++
-			closed := false
-			for index < len(line) {
-				if line[index] == '\\' {
-					index += 2
-					continue
-				}
-				if line[index] == quote {
-					index++
-					closed = true
-					break
-				}
-				index++
-			}
+			next, closed := markdownQuotedTitleEnd(line, index)
 			if !closed {
 				return 0, false
 			}
+			index = next
 			continue
 		}
-		for index < len(line) && !markdownInlineWhitespace(line[index]) && line[index] != ')' {
-			if line[index] == '\\' && index+1 < len(line) {
-				index += 2
-				continue
-			}
+		index = markdownUnquotedTitleEnd(line, index)
+	}
+}
+
+func markdownQuotedTitleEnd(line []byte, start int) (int, bool) {
+	quote := line[start]
+	for index := start + 1; index < len(line); index++ {
+		if line[index] == '\\' {
 			index++
+			continue
+		}
+		if line[index] == quote {
+			return index + 1, true
 		}
 	}
+	return 0, false
+}
+
+func markdownUnquotedTitleEnd(line []byte, start int) int {
+	for start < len(line) && !markdownInlineWhitespace(line[start]) && line[start] != ')' {
+		if line[start] == '\\' && start+1 < len(line) {
+			start += 2
+			continue
+		}
+		start++
+	}
+	return start
 }
 
 func markdownTargetParts(rawTarget string) (string, string) {
@@ -796,53 +817,70 @@ func markdownSourceChunks(source []byte, lineStarts []int, sectionStarts []int) 
 	if len(source) == 0 {
 		return nil, false
 	}
-	starts := make([]int, 0, len(sectionStarts)+1)
-	starts = append(starts, 0)
-	for _, start := range sectionStarts {
-		if start <= starts[len(starts)-1] || start >= len(source) {
-			continue
-		}
-		starts = append(starts, start)
-	}
-
-	capacity := (len(source) + markdownExtractionMaxChunkBytes - 1) / markdownExtractionMaxChunkBytes
-	if capacity < len(starts) {
-		capacity = len(starts)
-	}
-	if capacity > markdownExtractionMaxChunks {
-		capacity = markdownExtractionMaxChunks
-	}
-	chunks := make([]MarkdownChunk, 0, capacity)
+	starts := markdownChunkStarts(source, sectionStarts)
+	chunks := make([]MarkdownChunk, 0, markdownChunkCapacity(source, starts))
 	for index, start := range starts {
 		end := len(source)
 		if index+1 < len(starts) {
 			end = starts[index+1]
 		}
-		for offset := start; offset < end; {
-			if len(chunks) >= markdownExtractionMaxChunks {
-				return chunks, true
-			}
-			chunkEnd := markdownChunkEnd(source, offset, end)
-			if chunkEnd <= offset {
-				return chunks, true
-			}
-			span, valid := goSpanFromOffsets(lineStarts, len(source), offset, chunkEnd)
-			if !valid {
-				return chunks, true
-			}
-			text, truncated := goSafeText(source[offset:chunkEnd], markdownExtractionMaxChunkBytes)
-			chunks = append(chunks, MarkdownChunk{
-				Span:          span,
-				Text:          text,
-				ContentDigest: goSourceDigest(source[offset:chunkEnd]),
-			})
-			if truncated {
-				return chunks, true
-			}
-			offset = chunkEnd
+		var truncated bool
+		chunks, truncated = markdownAppendSectionChunks(chunks, source, lineStarts, start, end)
+		if truncated {
+			return chunks, true
 		}
 	}
 	return chunks, false
+}
+
+func markdownChunkStarts(source []byte, sectionStarts []int) []int {
+	starts := make([]int, 0, len(sectionStarts)+1)
+	starts = append(starts, 0)
+	for _, start := range sectionStarts {
+		if start > starts[len(starts)-1] && start < len(source) {
+			starts = append(starts, start)
+		}
+	}
+	return starts
+}
+
+func markdownChunkCapacity(source []byte, starts []int) int {
+	capacity := (len(source) + markdownExtractionMaxChunkBytes - 1) / markdownExtractionMaxChunkBytes
+	if capacity < len(starts) {
+		capacity = len(starts)
+	}
+	return min(capacity, markdownExtractionMaxChunks)
+}
+
+func markdownAppendSectionChunks(chunks []MarkdownChunk, source []byte, lineStarts []int, start, end int) ([]MarkdownChunk, bool) {
+	for offset := start; offset < end; {
+		if len(chunks) >= markdownExtractionMaxChunks {
+			return chunks, true
+		}
+		chunk, next, truncated := markdownChunkAt(source, lineStarts, offset, end)
+		if next <= offset {
+			return chunks, true
+		}
+		chunks = append(chunks, chunk)
+		if truncated {
+			return chunks, true
+		}
+		offset = next
+	}
+	return chunks, false
+}
+
+func markdownChunkAt(source []byte, lineStarts []int, start, end int) (MarkdownChunk, int, bool) {
+	chunkEnd := markdownChunkEnd(source, start, end)
+	if chunkEnd <= start {
+		return MarkdownChunk{}, start, true
+	}
+	span, valid := goSpanFromOffsets(lineStarts, len(source), start, chunkEnd)
+	if !valid {
+		return MarkdownChunk{}, start, true
+	}
+	text, truncated := goSafeText(source[start:chunkEnd], markdownExtractionMaxChunkBytes)
+	return MarkdownChunk{Span: span, Text: text, ContentDigest: goSourceDigest(source[start:chunkEnd])}, chunkEnd, truncated
 }
 
 func markdownChunkEnd(source []byte, start, sectionEnd int) int {
