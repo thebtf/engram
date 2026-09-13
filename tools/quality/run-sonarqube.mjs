@@ -1453,15 +1453,16 @@ export async function scheduleProfiles(profiles, jobs, runProfile) {
   return outcomes;
 }
 
-async function collectCoverage(campaign, candidate, environment, options, execution, deadline, progress) {
-  const goCommand = locate("go");
-  const dockerCommand = locate("docker");
+export async function collectCoverage(campaign, candidate, environment, options, execution, deadline, progress, runtime = {}) {
+  const goCommand = runtime.goCommand ?? locate("go");
+  const dockerCommand = runtime.dockerCommand ?? locate("docker");
   if (!goCommand) throw new RunnerError("Go is required to generate coverage");
   if (!dockerCommand) throw new RunnerError("Docker is required to generate isolated coverage");
   const imageId = environment.values.image_id;
   if (!/^sha256:[0-9a-f]{64}$/i.test(imageId)) throw new RunnerError("An immutable PostgreSQL image is required for coverage");
-  const reusable = options.fresh ? new Map() : findReusableProfiles(campaign.namespace, coverageProfiles, candidate, environment);
-  for (const profile of coverageProfiles) {
+  const profiles = runtime.profiles ?? coverageProfiles;
+  const reusable = options.fresh ? new Map() : findReusableProfiles(campaign.namespace, profiles, candidate, environment);
+  for (const profile of profiles) {
     const cached = reusable.get(profile.name);
     const entry = {
       name: profile.name,
@@ -1499,6 +1500,7 @@ async function collectCoverage(campaign, candidate, environment, options, execut
     return postgresPromise;
   };
   const entries = new Map(campaign.manifest.profiles.map((entry) => [entry.name, entry]));
+  const needed = profiles.filter((profile) => !reusable.has(profile.name));
   let primaryError = null;
   try {
     const outcomes = await scheduleProfiles(needed, options.jobs, async (profile) => {
@@ -1512,7 +1514,7 @@ async function collectCoverage(campaign, candidate, environment, options, execut
     if (failed) throw failed.error;
     if (campaign.manifest.profiles.some((entry) => entry.status !== "passed")) throw new RunnerError("Coverage did not complete every required profile");
     const mergePath = join(campaign.runDir, "coverage.out");
-    mergeCoverProfiles(coverageProfiles.map((profile) => {
+    mergeCoverProfiles(profiles.map((profile) => {
       const entry = entries.get(profile.name);
       if (entry.source_run_id) {
         const source = manifestsIn(campaign.namespace).find((record) => record.manifest.run_id === entry.source_run_id);
@@ -1521,7 +1523,7 @@ async function collectCoverage(campaign, candidate, environment, options, execut
       return safeRelative(campaign.runDir, entry.coverage.path);
     }), mergePath);
     const coverage = validateCoverage(mergePath);
-    campaign.manifest.merged = { status: "passed", path: relative(campaign.runDir, mergePath), ...coverage, profile_digests: coverageProfiles.map((profile) => entries.get(profile.name).coverage.sha256) };
+    campaign.manifest.merged = { status: "passed", path: relative(campaign.runDir, mergePath), ...coverage, profile_digests: profiles.map((profile) => entries.get(profile.name).coverage.sha256) };
     campaign.manifest.result.coverage = "passed";
     progress.meaningful("coverage", { state: "complete", coverage_sha256: coverage.sha256 });
     saveCampaign(campaign);

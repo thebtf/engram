@@ -10,6 +10,7 @@ import {
   Deadline,
   acquireLock,
   cleanupExecution,
+  collectCoverage,
   coverageProfiles,
   executeAnalysis,
   fingerprintProfile,
@@ -166,6 +167,28 @@ test("scheduler overlaps only the approved fixture pair and retains a successful
   assert.deepEqual(seen.slice(0, 1), ["base"]);
   assert.equal(results.get("hap-fixture").status, "failed");
   assert.equal(results.get("operator-code-fixture").status, "passed");
+});
+
+test("cold collector reaches actual scheduling without an undefined pending-profile variable", async () => {
+  const directory = temporaryDirectory();
+  try {
+    const campaign = {
+      namespace: directory,
+      runDir: join(directory, "run"),
+      manifest: { run_id: "11111111-1111-4111-8111-111111111111", profiles: [], resources: { cleanup: { errors: [] } }, result: {} },
+    };
+    mkdirSync(campaign.runDir, { recursive: true });
+    const environment = { values: { image_id: `sha256:${"a".repeat(64)}` }, sha256: "environment", testEnvironment: {} };
+    const deadline = new Deadline({ overallTimeout: 1000, coverageTimeout: 60, profileTimeout: 30, scannerTimeout: 60, qualityGateTimeout: 60 });
+    await assert.rejects(
+      collectCoverage(campaign, { ...candidate(), repository_path: directory }, environment, { fresh: true, jobs: 1 }, { signal: new AbortController().signal }, deadline, { meaningful() { } }, { goCommand: "fake-go", dockerCommand: "fake-docker", profiles: [] }),
+      /Coverage mode must be atomic, got none/,
+    );
+    assert.equal(campaign.manifest.result.coverage, "failed");
+    assert.equal(JSON.parse(readFileSync(join(campaign.runDir, "manifest.json"), "utf8")).result.coverage, "failed");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("submitted CE tasks resume without invoking scanner submission and reports bind identity", async () => {
