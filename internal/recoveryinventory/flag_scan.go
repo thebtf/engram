@@ -366,20 +366,21 @@ func capture(value string, start, end int) string {
 }
 
 func goEnvironmentSemantics(file *ast.File, environmentCall *ast.CallExpr) (string, string) {
-	state := goEnvironmentSemanticState{aliases: goEnvironmentAliases(file, environmentCall), environmentCall: environmentCall}
+	state := goEnvironmentSemanticState{aliases: goEnvironmentAliases(file, environmentCall), environmentCall: environmentCall, booleanDescendants: make(map[*ast.BinaryExpr]bool)}
 	ast.Inspect(file, state.inspect)
 	return state.result()
 }
 
 type goEnvironmentSemanticState struct {
-	aliases         map[*ast.Object]bool
-	environmentCall *ast.CallExpr
-	parserKind      string
-	parserConflict  bool
-	booleanKind     string
-	booleanDefault  string
-	booleanConflict bool
-	trimmed         bool
+	aliases            map[*ast.Object]bool
+	environmentCall    *ast.CallExpr
+	parserKind         string
+	parserConflict     bool
+	booleanKind        string
+	booleanDefault     string
+	booleanDescendants map[*ast.BinaryExpr]bool
+	booleanConflict    bool
+	trimmed            bool
 }
 
 func (state *goEnvironmentSemanticState) inspect(node ast.Node) bool {
@@ -387,7 +388,9 @@ func (state *goEnvironmentSemanticState) inspect(node ast.Node) bool {
 	case *ast.CallExpr:
 		state.noteCall(node)
 	case *ast.BinaryExpr:
-		state.noteBoolean(node)
+		if !state.booleanDescendants[node] {
+			state.noteBoolean(node)
+		}
 	}
 	return true
 }
@@ -433,11 +436,21 @@ func (state *goEnvironmentSemanticState) noteBoolean(expression *ast.BinaryExpr)
 	if !ok {
 		return
 	}
+	state.markBooleanDescendants(expression)
 	if state.booleanKind == "" {
 		state.booleanKind, state.booleanDefault = kind, defaultKind
 	} else if state.booleanKind != kind {
 		state.booleanConflict = true
 	}
+}
+
+func (state *goEnvironmentSemanticState) markBooleanDescendants(expression *ast.BinaryExpr) {
+	ast.Inspect(expression, func(node ast.Node) bool {
+		if descendant, ok := node.(*ast.BinaryExpr); ok && descendant != expression {
+			state.booleanDescendants[descendant] = true
+		}
+		return true
+	})
 }
 
 func (state *goEnvironmentSemanticState) result() (string, string) {
