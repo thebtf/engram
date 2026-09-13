@@ -354,28 +354,43 @@ func assertUnresolvedSurfaceRecords(t *testing.T, report Report) {
 	if !hasSurfaceRecord(report, "http-route", "GET /exact") || !hasSurfaceRecord(report, "daemon-tool", "literal") {
 		t.Fatalf("literal routes or tools missing: %#v", report.Records)
 	}
-	uncertainRoutes, uncertainTools := 0, 0
-	for _, record := range report.Records {
-		switch record.Kind {
-		case "http-route":
-			if record.Classification == "source-uncertain" {
-				if record.Name != "" {
-					t.Fatalf("unresolved route fabricated a name: %#v", record)
-				}
-				uncertainRoutes++
-			}
-		case "daemon-tool":
-			if record.Classification == "source-uncertain" {
-				if record.Name != "" {
-					t.Fatalf("unresolved daemon tool fabricated a name: %#v", record)
-				}
-				uncertainTools++
-			}
-		}
-	}
+	uncertainRoutes, uncertainTools := countUnresolvedSurfaceRecords(t, report.Records)
 	if uncertainRoutes != 2 || uncertainTools != 3 {
 		t.Fatalf("unresolved records routes=%d tools=%d, want 2 and 3: %#v", uncertainRoutes, uncertainTools, report.Records)
 	}
+}
+
+func countUnresolvedSurfaceRecords(t *testing.T, records []Record) (int, int) {
+	uncertainRoutes, uncertainTools := 0, 0
+	for _, record := range records {
+		switch record.Kind {
+		case "http-route":
+			uncertainRoutes += countUnresolvedRoute(t, record)
+		case "daemon-tool":
+			uncertainTools += countUnresolvedTool(t, record)
+		}
+	}
+	return uncertainRoutes, uncertainTools
+}
+
+func countUnresolvedRoute(t *testing.T, record Record) int {
+	if record.Classification != "source-uncertain" {
+		return 0
+	}
+	if record.Name != "" {
+		t.Fatalf("unresolved route fabricated a name: %#v", record)
+	}
+	return 1
+}
+
+func countUnresolvedTool(t *testing.T, record Record) int {
+	if record.Classification != "source-uncertain" {
+		return 0
+	}
+	if record.Name != "" {
+		t.Fatalf("unresolved daemon tool fabricated a name: %#v", record)
+	}
+	return 1
 }
 
 func TestScanSurfacesMarksDynamicProxyToolsUncertain(t *testing.T) {

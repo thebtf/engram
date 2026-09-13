@@ -702,33 +702,45 @@ func importedAlias(spec *ast.ImportSpec, importPrefix, defaultName string) (stri
 func chiRouterFields(file *ast.File, aliases map[string]struct{}) map[string]map[string]struct{} {
 	fields := make(map[string]map[string]struct{})
 	for _, declaration := range file.Decls {
-		gen, ok := declaration.(*ast.GenDecl)
-		if !ok || gen.Tok != token.TYPE {
-			continue
-		}
-		for _, spec := range gen.Specs {
-			typeSpec, ok := spec.(*ast.TypeSpec)
-			if !ok {
-				continue
-			}
-			structType, ok := typeSpec.Type.(*ast.StructType)
-			if !ok {
-				continue
-			}
-			for _, field := range structType.Fields.List {
-				if !isChiRouterType(field.Type, aliases) {
-					continue
-				}
-				for _, name := range field.Names {
-					if fields[typeSpec.Name.Name] == nil {
-						fields[typeSpec.Name.Name] = make(map[string]struct{})
-					}
-					fields[typeSpec.Name.Name][name.Name] = struct{}{}
-				}
-			}
-		}
+		collectChiRouterFields(fields, declaration, aliases)
 	}
 	return fields
+}
+
+func collectChiRouterFields(fields map[string]map[string]struct{}, declaration ast.Decl, aliases map[string]struct{}) {
+	gen, ok := declaration.(*ast.GenDecl)
+	if !ok || gen.Tok != token.TYPE {
+		return
+	}
+	for _, spec := range gen.Specs {
+		collectChiRouterFieldsFromSpec(fields, spec, aliases)
+	}
+}
+
+func collectChiRouterFieldsFromSpec(fields map[string]map[string]struct{}, spec ast.Spec, aliases map[string]struct{}) {
+	typeSpec, ok := spec.(*ast.TypeSpec)
+	if !ok {
+		return
+	}
+	structType, ok := typeSpec.Type.(*ast.StructType)
+	if !ok {
+		return
+	}
+	for _, field := range structType.Fields.List {
+		if !isChiRouterType(field.Type, aliases) {
+			continue
+		}
+		for _, name := range field.Names {
+			addChiRouterField(fields, typeSpec.Name.Name, name.Name)
+		}
+	}
+}
+
+func addChiRouterField(fields map[string]map[string]struct{}, typeName, fieldName string) {
+	if fields[typeName] == nil {
+		fields[typeName] = make(map[string]struct{})
+	}
+	fields[typeName][fieldName] = struct{}{}
 }
 
 func isChiRouterType(expression ast.Expr, aliases map[string]struct{}) bool {
