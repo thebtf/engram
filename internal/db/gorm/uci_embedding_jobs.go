@@ -448,35 +448,15 @@ func (s *UCIProjectionStore) CommitEmbeddingBatch(ctx context.Context, claim uci
 		if err != nil {
 			return err
 		}
-		if !uciEmbeddingProfileMatches(scope.Profile, claim.Profile) {
-			return ucidomain.ErrEmbeddingJobObsolete
-		}
-		digest, err := digestUCIEmbeddingBatch(batch)
-		if err != nil || digest != batch.BatchDigest {
-			return fmt.Errorf("uci embedding commit: batch digest is invalid")
-		}
-		progress, err := parseUCIEmbeddingProgress(scope.Job.Counts)
+		progress, replay, err := prepareUCIEmbeddingBatchCommit(scope, claim, batch)
 		if err != nil {
 			return err
 		}
-		if progress.LastBatchDigest == string(batch.BatchDigest) && uciEmbeddingCursorsEqual(progress.Cursor, batch.NextAfter) {
+		if replay {
 			return nil
 		}
-		if !uciEmbeddingCursorsEqual(progress.Cursor, batch.StartAfter) || progress.Exhausted {
-			return fmt.Errorf("uci embedding commit: cursor is stale")
-		}
-		for vectorIndex, candidateIndex := range batch.MissingInputIndexes {
-			if err := validateUCISemanticVector(vectors[vectorIndex], claim.Profile.Dimension); err != nil {
-				return fmt.Errorf("uci embedding commit: provider vector is invalid")
-			}
-			candidate := batch.Candidates[candidateIndex]
-			embedding, err := upsertUCIReadyEmbedding(ctx, tx, scope, candidate, vectors[vectorIndex], now)
-			if err != nil {
-				return err
-			}
-			if err := linkUCIEmbeddingCandidate(ctx, tx, scope, candidate, embedding.EmbeddingID); err != nil {
-				return err
-			}
+		if err := writeUCIEmbeddingBatch(ctx, tx, scope, claim, batch, vectors, now); err != nil {
+			return err
 		}
 		progress.Cursor = cloneUCIEmbeddingCursor(batch.NextAfter)
 		progress.Scanned += uint64(len(batch.Candidates))
@@ -485,6 +465,44 @@ func (s *UCIProjectionStore) CommitEmbeddingBatch(ctx context.Context, claim uci
 		progress.Exhausted = false
 		return updateUCIEmbeddingProgress(ctx, tx, scope.Job, claim.Ref, progress)
 	})
+}
+
+func prepareUCIEmbeddingBatchCommit(scope uciEmbeddingJobScope, claim ucidomain.EmbeddingJobClaim, batch ucidomain.EmbeddingBatch) (uciEmbeddingProgress, bool, error) {
+	if !uciEmbeddingProfileMatches(scope.Profile, claim.Profile) {
+		return uciEmbeddingProgress{}, false, ucidomain.ErrEmbeddingJobObsolete
+	}
+	digest, err := digestUCIEmbeddingBatch(batch)
+	if err != nil || digest != batch.BatchDigest {
+		return uciEmbeddingProgress{}, false, fmt.Errorf("uci embedding commit: batch digest is invalid")
+	}
+	progress, err := parseUCIEmbeddingProgress(scope.Job.Counts)
+	if err != nil {
+		return uciEmbeddingProgress{}, false, err
+	}
+	if progress.LastBatchDigest == string(batch.BatchDigest) && uciEmbeddingCursorsEqual(progress.Cursor, batch.NextAfter) {
+		return progress, true, nil
+	}
+	if !uciEmbeddingCursorsEqual(progress.Cursor, batch.StartAfter) || progress.Exhausted {
+		return uciEmbeddingProgress{}, false, fmt.Errorf("uci embedding commit: cursor is stale")
+	}
+	return progress, false, nil
+}
+
+func writeUCIEmbeddingBatch(ctx context.Context, tx *gorm.DB, scope uciEmbeddingJobScope, claim ucidomain.EmbeddingJobClaim, batch ucidomain.EmbeddingBatch, vectors [][]float32, now time.Time) error {
+	for vectorIndex, candidateIndex := range batch.MissingInputIndexes {
+		if err := validateUCISemanticVector(vectors[vectorIndex], claim.Profile.Dimension); err != nil {
+			return fmt.Errorf("uci embedding commit: provider vector is invalid")
+		}
+		candidate := batch.Candidates[candidateIndex]
+		embedding, err := upsertUCIReadyEmbedding(ctx, tx, scope, candidate, vectors[vectorIndex], now)
+		if err != nil {
+			return err
+		}
+		if err := linkUCIEmbeddingCandidate(ctx, tx, scope, candidate, embedding.EmbeddingID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *UCIProjectionStore) CompleteEmbeddingJob(ctx context.Context, claim ucidomain.EmbeddingJobClaim, authorized ucidomain.AuthorizedContext) error {
