@@ -462,6 +462,16 @@ const dynamic = createSearchTool(dynamicName);
 const text = "createSearchTool('engram_string')";
 const raw = `+"`createSearchTool('engram_template')`"+`;
 `)
+	writeSurfaceSource(t, root, "plugin/openclaw-engram/src/tools/engram-presets.ts", `function createPresetTool(name: string) {
+return { name };
+}
+
+const declared = createPresetTool('engram_changes');
+const dynamic = createPresetTool(dynamicName);
+// createPresetTool('preset_comment')
+const text = "createPresetTool('preset_string')";
+const raw = `+"`createPresetTool('preset_template')`"+`;
+`)
 	report, err := ScanSurfaces(root)
 	if err != nil {
 		t.Fatal(err)
