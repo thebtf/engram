@@ -293,56 +293,9 @@ func (s *Server) handleCodebaseContext(ctx context.Context, raw json.RawMessage)
 
 	switch *args.Action {
 	case "resolve":
-		if args.hasSelector() {
-			return "", codebaseContextClosedError(uci.ContextMismatch)
-		}
-		application, epoch, ok := s.codebaseContextApplicationSnapshot()
-		if !ok {
-			return "", fmt.Errorf("unknown tool: codebase_context")
-		}
-		if indexApplication, ok := application.(codebaseContextIndexApplication); ok {
-			if selector, selected := indexApplication.BoundSelector(input.ClientSessionID); selected {
-				if _, checkout := selector.Checkout(); checkout {
-					binding, err := indexApplication.ResolveIndexBinding(ctx, codebaseContextIndexInput(input, &selector))
-					if err != nil {
-						return "", codebaseContextApplicationError(err)
-					}
-					return s.presentCodebaseContextBinding(ctx, application, epoch, input.ClientSessionID, selector, binding.Binding())
-				}
-			}
-		}
-		resolved, err := application.Resolve(ctx, input)
-		if err != nil {
-			return "", codebaseContextApplicationError(err)
-		}
-		return s.presentCodebaseContext(ctx, application, epoch, input.ClientSessionID, resolved.Ref())
+		return s.resolveCodebaseContext(ctx, input, args)
 	case "list":
-		if args.hasSelector() {
-			return "", codebaseContextClosedError(uci.ContextMismatch)
-		}
-		application, epoch, ok := s.codebaseContextApplicationSnapshot()
-		if !ok {
-			return "", fmt.Errorf("unknown tool: codebase_context")
-		}
-		refs, err := application.List(ctx, input)
-		if err != nil {
-			return "", codebaseContextApplicationError(err)
-		}
-		payloads := make([]codebaseContextPayload, 0, len(refs))
-		for _, ref := range refs {
-			payload, err := s.codebaseContextPayload(ctx, application, epoch, input.ClientSessionID, ref)
-			if err != nil {
-				return "", err
-			}
-			payloads = append(payloads, payload)
-		}
-		encoded, err := json.Marshal(struct {
-			Contexts []codebaseContextPayload `json:"contexts"`
-		}{Contexts: payloads})
-		if err != nil {
-			return "", codebaseContextClosedError(uci.ContextMismatch)
-		}
-		return string(encoded), nil
+		return s.listCodebaseContexts(ctx, input, args)
 	case "select":
 		return s.selectCodebaseContext(ctx, input, args)
 	default:
@@ -350,43 +303,104 @@ func (s *Server) handleCodebaseContext(ctx context.Context, raw json.RawMessage)
 	}
 }
 
+func (s *Server) resolveCodebaseContext(ctx context.Context, input uci.ResolveContextInput, args codebaseContextArgs) (string, error) {
+	if args.hasSelector() {
+		return "", codebaseContextClosedError(uci.ContextMismatch)
+	}
+	application, epoch, ok := s.codebaseContextApplicationSnapshot()
+	if !ok {
+		return "", fmt.Errorf("unknown tool: codebase_context")
+	}
+	if indexApplication, ok := application.(codebaseContextIndexApplication); ok {
+		if selector, selected := indexApplication.BoundSelector(input.ClientSessionID); selected {
+			if _, checkout := selector.Checkout(); checkout {
+				binding, err := indexApplication.ResolveIndexBinding(ctx, codebaseContextIndexInput(input, &selector))
+				if err != nil {
+					return "", codebaseContextApplicationError(err)
+				}
+				return s.presentCodebaseContextBinding(ctx, application, epoch, input.ClientSessionID, selector, binding.Binding())
+			}
+		}
+	}
+	resolved, err := application.Resolve(ctx, input)
+	if err != nil {
+		return "", codebaseContextApplicationError(err)
+	}
+	return s.presentCodebaseContext(ctx, application, epoch, input.ClientSessionID, resolved.Ref())
+}
+
+func (s *Server) listCodebaseContexts(ctx context.Context, input uci.ResolveContextInput, args codebaseContextArgs) (string, error) {
+	if args.hasSelector() {
+		return "", codebaseContextClosedError(uci.ContextMismatch)
+	}
+	application, epoch, ok := s.codebaseContextApplicationSnapshot()
+	if !ok {
+		return "", fmt.Errorf("unknown tool: codebase_context")
+	}
+	refs, err := application.List(ctx, input)
+	if err != nil {
+		return "", codebaseContextApplicationError(err)
+	}
+	payloads := make([]codebaseContextPayload, 0, len(refs))
+	for _, ref := range refs {
+		payload, err := s.codebaseContextPayload(ctx, application, epoch, input.ClientSessionID, ref)
+		if err != nil {
+			return "", err
+		}
+		payloads = append(payloads, payload)
+	}
+	encoded, err := json.Marshal(struct {
+		Contexts []codebaseContextPayload `json:"contexts"`
+	}{Contexts: payloads})
+	if err != nil {
+		return "", codebaseContextClosedError(uci.ContextMismatch)
+	}
+	return string(encoded), nil
+}
+
 func (s *Server) selectCodebaseContext(ctx context.Context, input uci.ResolveContextInput, args codebaseContextArgs) (string, error) {
 	selection, err := args.selection()
 	if err != nil {
 		return "", codebaseContextClosedError(uci.ContextMismatch)
 	}
-
 	if selection.handle != "" {
-		application, epoch, selector, found := s.codebaseContextSelectorForHandle(input.ClientSessionID, selection.handle)
-		if !found {
+		return s.selectCodebaseContextHandle(ctx, input, selection)
+	}
+	return s.selectCodebaseContextSelection(ctx, input, selection)
+}
+
+func (s *Server) selectCodebaseContextHandle(ctx context.Context, input uci.ResolveContextInput, selection codebaseContextSelection) (string, error) {
+	application, epoch, selector, found := s.codebaseContextSelectorForHandle(input.ClientSessionID, selection.handle)
+	if !found {
+		return "", codebaseContextClosedError(uci.ContextMismatch)
+	}
+	if checkout, following := selector.Checkout(); following {
+		indexApplication, ok := application.(codebaseContextIndexApplication)
+		if !ok {
 			return "", codebaseContextClosedError(uci.ContextMismatch)
 		}
-		if checkout, following := selector.Checkout(); following {
-			indexApplication, ok := application.(codebaseContextIndexApplication)
-			if !ok {
-				return "", codebaseContextClosedError(uci.ContextMismatch)
-			}
-			binding, err := indexApplication.ResolveIndexBinding(ctx, codebaseContextIndexInput(input, &selector))
-			if err != nil {
-				return "", codebaseContextApplicationError(err)
-			}
-			if current, ok := selector.Checkout(); !ok || current != checkout {
-				return "", codebaseContextClosedError(uci.ContextMismatch)
-			}
-			return s.presentCodebaseContextBinding(ctx, application, epoch, input.ClientSessionID, selector, binding.Binding())
-		}
-		ref, pinned := selector.Context()
-		if !pinned {
-			return "", codebaseContextClosedError(uci.ContextMismatch)
-		}
-		input.Ref = &ref
-		resolved, err := application.Resolve(ctx, input)
+		binding, err := indexApplication.ResolveIndexBinding(ctx, codebaseContextIndexInput(input, &selector))
 		if err != nil {
 			return "", codebaseContextApplicationError(err)
 		}
-		return s.presentCodebaseContext(ctx, application, epoch, input.ClientSessionID, resolved.Ref())
+		if current, ok := selector.Checkout(); !ok || current != checkout {
+			return "", codebaseContextClosedError(uci.ContextMismatch)
+		}
+		return s.presentCodebaseContextBinding(ctx, application, epoch, input.ClientSessionID, selector, binding.Binding())
 	}
+	ref, pinned := selector.Context()
+	if !pinned {
+		return "", codebaseContextClosedError(uci.ContextMismatch)
+	}
+	input.Ref = &ref
+	resolved, err := application.Resolve(ctx, input)
+	if err != nil {
+		return "", codebaseContextApplicationError(err)
+	}
+	return s.presentCodebaseContext(ctx, application, epoch, input.ClientSessionID, resolved.Ref())
+}
 
+func (s *Server) selectCodebaseContextSelection(ctx context.Context, input uci.ResolveContextInput, selection codebaseContextSelection) (string, error) {
 	application, epoch, ok := s.codebaseContextApplicationSnapshot()
 	if !ok {
 		return "", fmt.Errorf("unknown tool: codebase_context")
@@ -406,7 +420,6 @@ func (s *Server) selectCodebaseContext(ctx context.Context, input uci.ResolveCon
 		}
 		return s.presentCodebaseContextBinding(ctx, application, epoch, input.ClientSessionID, selector, binding.Binding())
 	}
-
 	input.Ref = selection.ref
 	resolved, err := application.Resolve(ctx, input)
 	if err != nil {
