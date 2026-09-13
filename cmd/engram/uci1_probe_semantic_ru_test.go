@@ -123,29 +123,39 @@ func uci1SemanticRUSearchCitation(ctx context.Context, runtime uciInstalledAccep
 }
 
 func uci1SemanticRUValidateSearch(response uci.QueryResponse, publication uciInstalledAcceptancePublication) error {
-	if (response.Status != uci.QueryStatusOK && response.Status != uci.QueryStatusPartial) || !uciInstalledAcceptanceQueryMatchesPublication(response, publication) || response.Retrieval == nil || response.Retrieval.Mode != uci.QueryRetrievalHybrid || response.Retrieval.VectorCoverage == nil || *response.Retrieval.VectorCoverage < 1 || response.Items == nil {
-		mode := uci.QueryRetrievalMode("")
-		coverage := -1.0
-		if response.Retrieval != nil {
-			mode = response.Retrieval.Mode
-			if response.Retrieval.VectorCoverage != nil {
-				coverage = *response.Retrieval.VectorCoverage
-			}
-		}
-		structural := uci.IndexCoverageState("")
-		unresolved, unsupported := int64(-1), int64(-1)
-		if response.Coverage != nil {
-			structural = response.Coverage.Structural
-			if response.Coverage.UnresolvedSites != nil {
-				unresolved = *response.Coverage.UnresolvedSites
-			}
-			if response.Coverage.UnsupportedFiles != nil {
-				unsupported = *response.Coverage.UnsupportedFiles
-			}
-		}
-		return fmt.Errorf("U16 Russian semantic search incomplete: status=%s current_view=%t retrieval=%s vector_coverage=%g structural=%s unresolved=%d unsupported=%d items=%t", response.Status, uciInstalledAcceptanceQueryMatchesPublication(response, publication), mode, coverage, structural, unresolved, unsupported, response.Items != nil)
+	if (response.Status == uci.QueryStatusOK || response.Status == uci.QueryStatusPartial) &&
+		uciInstalledAcceptanceQueryMatchesPublication(response, publication) &&
+		response.Retrieval != nil &&
+		response.Retrieval.Mode == uci.QueryRetrievalHybrid &&
+		response.Retrieval.VectorCoverage != nil &&
+		*response.Retrieval.VectorCoverage >= 1 &&
+		response.Items != nil {
+		return nil
 	}
-	return nil
+	mode, coverage, structural, unresolved, unsupported := uci1SemanticRUSearchDiagnostics(response)
+	return fmt.Errorf("U16 Russian semantic search incomplete: status=%s current_view=%t retrieval=%s vector_coverage=%g structural=%s unresolved=%d unsupported=%d items=%t", response.Status, uciInstalledAcceptanceQueryMatchesPublication(response, publication), mode, coverage, structural, unresolved, unsupported, response.Items != nil)
+}
+
+func uci1SemanticRUSearchDiagnostics(response uci.QueryResponse) (uci.QueryRetrievalMode, float64, uci.IndexCoverageState, int64, int64) {
+	mode, coverage := uci.QueryRetrievalMode(""), -1.0
+	if response.Retrieval != nil {
+		mode = response.Retrieval.Mode
+		if response.Retrieval.VectorCoverage != nil {
+			coverage = *response.Retrieval.VectorCoverage
+		}
+	}
+	structural, unresolved, unsupported := uci.IndexCoverageState(""), int64(-1), int64(-1)
+	if response.Coverage == nil {
+		return mode, coverage, structural, unresolved, unsupported
+	}
+	structural = response.Coverage.Structural
+	if response.Coverage.UnresolvedSites != nil {
+		unresolved = *response.Coverage.UnresolvedSites
+	}
+	if response.Coverage.UnsupportedFiles != nil {
+		unsupported = *response.Coverage.UnsupportedFiles
+	}
+	return mode, coverage, structural, unresolved, unsupported
 }
 
 func uci1SemanticRUFindCitation(response uci.QueryResponse, publication uciInstalledAcceptancePublication, fixture uciInstalledAcceptanceFixture) (uci.QueryItem, error) {
