@@ -125,37 +125,46 @@ func scanJavaScriptFlagFile(report *Report, file sourceFile) error {
 	}
 	var state javaScriptLexState
 	for index, line := range strings.Split(string(source), "\n") {
-		code, templateUncertain := javaScriptCodeMask(line, &state)
-		if templateUncertain {
-			addUncertainEnvironmentReader(report, file.relative, index+1)
-		}
-		for _, start := range javaScriptEnvironmentStart.FindAllStringIndex(code, -1) {
-			match := javaScriptEnvironmentRead.FindStringSubmatchIndex(code[start[0]:])
-			if match == nil || match[0] != 0 {
-				if !environmentAssignment(code, start[1]) {
-					addUncertainEnvironmentReader(report, file.relative, index+1)
-				}
-				continue
-			}
-			end := start[0] + match[1]
-			if environmentAssignment(code, end) {
-				continue
-			}
-			name := ""
-			if match[6] >= 0 {
-				name = capture(line, start[0]+match[6], start[0]+match[7])
-			} else if match[10] >= 0 {
-				name = capture(line, start[0]+match[10], start[0]+match[11])
-			}
-			if name == "" {
-				addUncertainEnvironmentReader(report, file.relative, index+1)
-				continue
-			}
-			parserKind, defaultKind := javaScriptSemantics(code, line, start[0], end)
-			addEnvironmentReader(report, file.relative, index+1, name, parserKind, defaultKind)
-		}
+		scanJavaScriptFlagLine(report, file.relative, line, index+1, &state)
 	}
 	return nil
+}
+
+func scanJavaScriptFlagLine(report *Report, path, line string, lineNumber int, state *javaScriptLexState) {
+	code, templateUncertain := javaScriptCodeMask(line, state)
+	if templateUncertain {
+		addUncertainEnvironmentReader(report, path, lineNumber)
+	}
+	for _, start := range javaScriptEnvironmentStart.FindAllStringIndex(code, -1) {
+		match := javaScriptEnvironmentRead.FindStringSubmatchIndex(code[start[0]:])
+		if match == nil || match[0] != 0 {
+			if !environmentAssignment(code, start[1]) {
+				addUncertainEnvironmentReader(report, path, lineNumber)
+			}
+			continue
+		}
+		end := start[0] + match[1]
+		if environmentAssignment(code, end) {
+			continue
+		}
+		name := javaScriptEnvironmentName(line, start[0], match)
+		if name == "" {
+			addUncertainEnvironmentReader(report, path, lineNumber)
+			continue
+		}
+		parserKind, defaultKind := javaScriptSemantics(code, line, start[0], end)
+		addEnvironmentReader(report, path, lineNumber, name, parserKind, defaultKind)
+	}
+}
+
+func javaScriptEnvironmentName(line string, offset int, match []int) string {
+	if match[6] >= 0 {
+		return capture(line, offset+match[6], offset+match[7])
+	}
+	if match[10] >= 0 {
+		return capture(line, offset+match[10], offset+match[11])
+	}
+	return ""
 }
 
 func scanShellFlagFile(report *Report, file sourceFile) error {
@@ -195,34 +204,47 @@ func scanPowerShellFlagFile(report *Report, file sourceFile) error {
 	var state powerShellLexState
 	for index, line := range strings.Split(string(source), "\n") {
 		code := powerShellCodeMaskWithState(line, &state)
-		for _, match := range powerShellEnvironmentRead.FindAllStringSubmatchIndex(code, -1) {
-			if environmentAssignment(code, match[1]) {
-				continue
-			}
-			name := capture(line, match[2], match[3])
-			if name == "" {
-				name = capture(line, match[4], match[5])
-			}
-			if name == "" {
-				addUncertainEnvironmentReader(report, file.relative, index+1)
-				continue
-			}
-			defaultKind := environmentDefaultEmptyUnset
-			if strings.HasPrefix(strings.TrimSpace(code[match[1]:]), "??") {
-				defaultKind = environmentDefaultSourceExpression
-			}
-			addEnvironmentReader(report, file.relative, index+1, name, "powershell-string", defaultKind)
-		}
-		for _, match := range powerShellEnvironmentAPI.FindAllStringSubmatchIndex(code, -1) {
-			name, literal := powerShellEnvironmentAPILiteral(line, match[1])
-			if strings.EqualFold(capture(line, match[2], match[3]), "GetEnvironmentVariables") || !literal {
-				addUncertainEnvironmentReader(report, file.relative, index+1)
-				continue
-			}
-			addEnvironmentReader(report, file.relative, index+1, name, "powershell-environment-api", environmentDefaultEmptyUnset)
-		}
+		scanPowerShellStringReaders(report, file.relative, line, code, index+1)
+		scanPowerShellAPIReaders(report, file.relative, line, code, index+1)
 	}
 	return nil
+}
+
+func scanPowerShellStringReaders(report *Report, path, line, code string, lineNumber int) {
+	for _, match := range powerShellEnvironmentRead.FindAllStringSubmatchIndex(code, -1) {
+		if environmentAssignment(code, match[1]) {
+			continue
+		}
+		name := powerShellEnvironmentName(line, match)
+		if name == "" {
+			addUncertainEnvironmentReader(report, path, lineNumber)
+			continue
+		}
+		defaultKind := environmentDefaultEmptyUnset
+		if strings.HasPrefix(strings.TrimSpace(code[match[1]:]), "??") {
+			defaultKind = environmentDefaultSourceExpression
+		}
+		addEnvironmentReader(report, path, lineNumber, name, "powershell-string", defaultKind)
+	}
+}
+
+func powerShellEnvironmentName(line string, match []int) string {
+	name := capture(line, match[2], match[3])
+	if name == "" {
+		return capture(line, match[4], match[5])
+	}
+	return name
+}
+
+func scanPowerShellAPIReaders(report *Report, path, line, code string, lineNumber int) {
+	for _, match := range powerShellEnvironmentAPI.FindAllStringSubmatchIndex(code, -1) {
+		name, literal := powerShellEnvironmentAPILiteral(line, match[1])
+		if strings.EqualFold(capture(line, match[2], match[3]), "GetEnvironmentVariables") || !literal {
+			addUncertainEnvironmentReader(report, path, lineNumber)
+			continue
+		}
+		addEnvironmentReader(report, path, lineNumber, name, "powershell-environment-api", environmentDefaultEmptyUnset)
+	}
 }
 
 func scanPythonFlagFile(report *Report, file sourceFile) error {
@@ -575,7 +597,7 @@ func pythonCodeMask(line string, state *pythonLexState) string {
 			continue
 		}
 		if state.quote != 0 {
-			end, closed := pythonStringEnd(line, index, state.quote)
+			end, closed := quotedStringEnd(line, index, state.quote)
 			blankBytes(masked, index, end)
 			if !closed {
 				if !pythonContinuesString(line) {
@@ -604,7 +626,7 @@ func pythonCodeMask(line string, state *pythonLexState) string {
 				index = end
 				continue
 			}
-			end, closed := pythonStringEnd(line, index+1, quote)
+			end, closed := quotedStringEnd(line, index+1, quote)
 			if !pythonLiteralArgument.Match(masked[:index]) {
 				blankBytes(masked, index, end)
 			}
@@ -635,7 +657,7 @@ func pythonTripleStringEnd(line string, start int, quote byte) (int, bool) {
 	return len(line), false
 }
 
-func pythonStringEnd(line string, start int, quote byte) (int, bool) {
+func quotedStringEnd(line string, start int, quote byte) (int, bool) {
 	for index := start; index < len(line); index++ {
 		if line[index] == '\\' {
 			index++
@@ -668,7 +690,7 @@ func javaScriptCodeMask(line string, state *javaScriptLexState) (string, bool) {
 	sourceUncertain := false
 	for index := 0; index < len(masked); {
 		if state.quote != 0 {
-			end, closed := javaScriptQuotedStringEnd(line, index, state.quote)
+			end, closed := quotedStringEnd(line, index, state.quote)
 			blankBytes(masked, index, end)
 			if !closed {
 				if !javaScriptContinuesString(line) {
@@ -729,7 +751,7 @@ func javaScriptCodeMask(line string, state *javaScriptLexState) (string, bool) {
 			}
 		case '\'', '"':
 			quote := masked[index]
-			end, closed := javaScriptQuotedStringEnd(line, index+1, quote)
+			end, closed := quotedStringEnd(line, index+1, quote)
 			if !javaScriptBracketReader.Match(masked[:index]) {
 				blankBytes(masked, index, end)
 			}
@@ -779,21 +801,8 @@ func javaScriptTemplateEnd(line string, start int) (end int, closed, interpolate
 }
 
 func javaScriptStringEnd(line string, start int) int {
-	end, _ := javaScriptQuotedStringEnd(line, start+1, line[start])
+	end, _ := quotedStringEnd(line, start+1, line[start])
 	return end
-}
-
-func javaScriptQuotedStringEnd(line string, start int, quote byte) (int, bool) {
-	for index := start; index < len(line); index++ {
-		if line[index] == '\\' {
-			index++
-			continue
-		}
-		if line[index] == quote {
-			return index + 1, true
-		}
-	}
-	return len(line), false
 }
 
 func javaScriptContinuesString(line string) bool {

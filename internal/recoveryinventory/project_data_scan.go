@@ -200,7 +200,7 @@ func (state *javaScriptTemplateProjectState) hasProjectContext(line string) bool
 			continue
 		}
 		if state.quote != 0 {
-			end, closed := javaScriptQuotedStringEnd(line, index, state.quote)
+			end, closed := quotedStringEnd(line, index, state.quote)
 			if !closed {
 				if !javaScriptContinuesString(line) {
 					state.quote = 0
