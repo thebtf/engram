@@ -95,6 +95,7 @@ func TestBrowserCodeContextStore_PinRequiresExactPublishedContextAndAudits(t *te
 func TestBrowserCodeContextStore_PinAuditFailureRollsBackPin(t *testing.T) {
 	fixture := newBrowserCodeContextFixture(t)
 	require.NoError(t, fixture.db.Migrator().DropTable(&AuditLogEntry{}))
+	require.NoError(t, fixture.db.Exec(`CREATE TABLE audit_log (id BIGINT PRIMARY KEY)`).Error)
 
 	err := fixture.store.Pin(context.Background(), fixture.pin(fixture.reference()))
 	require.Error(t, err)
@@ -170,6 +171,36 @@ func TestBrowserCodeContextStore_InitialIntentReauthorizationAndContinuations(t 
 	}).Error)
 	_, err = fixture.store.LoadContinuation(ctx, expiredCursor, continuation)
 	require.ErrorIs(t, err, ErrBrowserCodeContinuationDenied, "expired opaque cursors fail closed")
+}
+
+func TestBrowserCodeContextStoreExpiredGrantDeniesPinAndReauthorization(t *testing.T) {
+	fixture := newBrowserCodeContextFixture(t)
+	ctx := context.Background()
+	target := fixture.indexTarget(fixture.checkout)
+
+	bound, err := fixture.store.ReauthorizeIndexIntent(ctx, target)
+	require.NoError(t, err)
+	require.Equal(t, fixture.checkout.IncarnationID, bound.Scope.IncarnationID)
+
+	expiredAt := time.Now().UTC().Add(-time.Minute)
+	require.NoError(t, fixture.db.Model(&BrowserReadGrant{}).Where("grant_ref = ?", fixture.grant.GrantRef).Updates(map[string]any{
+		"issued_at":  expiredAt.Add(-time.Minute),
+		"expires_at": expiredAt,
+	}).Error)
+
+	err = fixture.store.Pin(ctx, fixture.pin(fixture.reference()))
+	require.ErrorIs(t, err, ErrBrowserCodeContextDenied)
+	fixture.requireUnpinned(t)
+	assertBrowserCodeContextAuditCount(t, fixture.db, "code_context_pinned", 0)
+	_, err = fixture.store.ReauthorizeIndexIntent(ctx, target)
+	require.ErrorIs(t, err, ErrBrowserCodeContextDenied)
+	entries, err := fixture.store.ListCatalog(ctx, fixture.user.ID)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+
+	var expired BrowserReadGrant
+	require.NoError(t, fixture.db.Where("grant_ref = ?", fixture.grant.GrantRef).First(&expired).Error)
+	require.Equal(t, BrowserReadGrantExpired, expired.State)
 }
 
 func newBrowserCodeContextFixture(t *testing.T) browserCodeContextFixture {

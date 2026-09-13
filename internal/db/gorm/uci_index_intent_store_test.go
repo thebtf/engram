@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -271,6 +272,106 @@ func TestUCIIndexIntentStoreUnavailableRetryAndFailurePreservePriorView(t *testi
 	require.NoError(t, err)
 	require.Equal(t, failed.ID, failedReplay.ID)
 	require.Equal(t, ucidomain.IndexIntentFailed, failedReplay.State)
+}
+
+func TestUCIIndexIntentStoreFencesReceiptReplaysAndRecoversExpiredPublication(t *testing.T) {
+	t.Run("a receipt cannot become another operation", func(t *testing.T) {
+		store, fixture := openUCIIndexIntentStore(t)
+		ctx := context.Background()
+		input, previous, _ := newUCIIndexIntentInput(fixture, ucidomain.IndexIntentReconcile)
+		submitted, err := store.SubmitIndexIntent(ctx, input)
+		require.NoError(t, err)
+		_, err = store.QueueIndexIntent(ctx, submitted.ID)
+		require.NoError(t, err)
+
+		binding := ucidomain.IndexBinding{
+			Context:       &previous,
+			Scope:         input.Scope,
+			ProfileID:     input.ProfileID,
+			LocalRootID:   uuid.NewString(),
+			WorkstationID: uuid.NewString(),
+		}
+		owner := ucidomain.IndexIntentOwnerBinding{
+			AuthRealm: "runtime-realm", Principal: "agent/runtime", WorkstationID: binding.WorkstationID,
+			ClientSessionID: "runtime-session", ClientInstanceID: "runtime-instance", ProcessNonce: "runtime-process",
+		}
+		acknowledged, err := store.UpdateIndexIntent(ctx, binding, owner, submitted.ID, ucidomain.IndexIntentUpdate{
+			OperationRef: "receipt-fence/ack", Operation: ucidomain.IndexIntentAcknowledge,
+		})
+		require.NoError(t, err)
+
+		_, err = store.UpdateIndexIntent(ctx, binding, owner, submitted.ID, ucidomain.IndexIntentUpdate{
+			OperationRef: "receipt-fence/ack", Operation: ucidomain.IndexIntentStart, ClaimEpoch: acknowledged.ClaimEpoch,
+		})
+		require.ErrorIs(t, err, ucidomain.ErrIndexIntentBindingMismatch)
+
+		started, err := store.UpdateIndexIntent(ctx, binding, owner, submitted.ID, ucidomain.IndexIntentUpdate{
+			OperationRef: "receipt-fence/start", Operation: ucidomain.IndexIntentStart, ClaimEpoch: acknowledged.ClaimEpoch,
+		})
+		require.NoError(t, err)
+		failed, err := store.UpdateIndexIntent(ctx, binding, owner, submitted.ID, ucidomain.IndexIntentUpdate{
+			OperationRef: "receipt-fence/fail", Operation: ucidomain.IndexIntentFail, ClaimEpoch: started.ClaimEpoch,
+		})
+		require.NoError(t, err)
+		require.Equal(t, ucidomain.IndexIntentFailed, failed.State)
+		replayed, err := store.UpdateIndexIntent(ctx, binding, owner, submitted.ID, ucidomain.IndexIntentUpdate{
+			OperationRef: "receipt-fence/fail", Operation: ucidomain.IndexIntentFail, ClaimEpoch: started.ClaimEpoch,
+		})
+		require.NoError(t, err)
+		require.Equal(t, failed.IntentID, replayed.IntentID)
+		require.Equal(t, failed.State, replayed.State)
+		require.Equal(t, failed.Attempt, replayed.Attempt)
+		require.Equal(t, failed.ClaimEpoch, replayed.ClaimEpoch)
+		require.True(t, failed.LeaseExpiresAt.Equal(replayed.LeaseExpiresAt))
+	})
+
+	t.Run("an expired publisher claim releases its checkout", func(t *testing.T) {
+		fixture := openUCIPublicationFixture(t)
+		ctx := context.Background()
+		store := NewUCIIndexIntentStore(fixture.db)
+		input := ucidomain.IndexIntentInput{
+			RequestRef: "expired-publication-intent-" + uuid.NewString(),
+			Kind:       ucidomain.IndexIntentReconcile,
+			Scope: ucidomain.IndexScope{
+				SourceID: fixture.checkout.SourceID, CheckoutID: fixture.checkout.CheckoutID, IncarnationID: fixture.checkout.IncarnationID,
+			},
+			ProfileID: fixture.profile.ProfileID,
+		}
+		submitted, err := store.SubmitIndexIntent(ctx, input)
+		require.NoError(t, err)
+		_, err = store.QueueIndexIntent(ctx, submitted.ID)
+		require.NoError(t, err)
+		claim, err := store.AcknowledgeIndexIntent(ctx, submitted.ID, "expired-publication-owner")
+		require.NoError(t, err)
+		_, err = store.StartIndexIntent(ctx, claim)
+		require.NoError(t, err)
+
+		begin := fixture.beginInput("expired-publication", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+		begin.IntentClaim = &claim
+		_, err = fixture.publisher.Begin(ctx, fixture.caller("expired-publication-owner"), begin)
+		require.NoError(t, err)
+		createdAt := time.Now().UTC().Add(-4 * time.Minute).Truncate(time.Microsecond)
+		acknowledgedAt := createdAt.Add(time.Minute)
+		claimExpiresAt := acknowledgedAt.Add(time.Minute)
+		require.NoError(t, fixture.db.Model(&indexIntentRow{}).Where("intent_id = ?", submitted.ID).Updates(map[string]any{
+			"created_at": createdAt, "acknowledged_at": acknowledgedAt, "claim_expires_at": claimExpiresAt, "updated_at": claimExpiresAt,
+		}).Error)
+
+		require.NoError(t, store.ReconcileIndexIntent(ctx, submitted.ID))
+		recovered, err := store.GetIndexIntent(ctx, submitted.ID)
+		require.NoError(t, err)
+		require.Equal(t, ucidomain.IndexIntentFailed, recovered.State)
+		var job UCIJob
+		require.NoError(t, fixture.db.Where("index_intent_id = ?", submitted.ID).First(&job).Error)
+		require.Equal(t, UCIJobFailedTerminal, job.State)
+		require.Equal(t, "INDEX_INTENT_LEASE_EXPIRED", *job.ErrorCode)
+		var checkout UCICheckout
+		require.NoError(t, fixture.db.Where("checkout_id = ?", fixture.checkout.CheckoutID).First(&checkout).Error)
+		require.Nil(t, checkout.OwnerInstance)
+		require.Nil(t, checkout.LeaseExpiresAt)
+
+		require.NoError(t, store.ReconcileIndexIntent(ctx, submitted.ID), "recovery is idempotent once the intent is terminal")
+	})
 }
 
 func openUCIIndexIntentStore(t *testing.T) (*UCIIndexIntentStore, *uciProjectionMigrationFixture) {

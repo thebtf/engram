@@ -554,6 +554,55 @@ func TestUCIEmbeddingDriftObsoletesStaleWork(t *testing.T) {
 	})
 }
 
+func TestUCIEmbeddingJobRenewsRetriesThenTerminatesWithoutReclaim(t *testing.T) {
+	fixture := openUCIEmbeddingJobsFixture(t)
+	ctx := context.Background()
+	artifact := fixture.publication.admitArtifact(t, fixture.publication.source.SourceID, "embedding-terminal", "func EmbeddingTerminal() {}\n", UCIParseArtifactComplete)
+	published := fixture.publish(t, "embedding-terminal", fixture.publication.checkout, nil, ucidomain.IndexJobInitial,
+		[]uciPublicationArtifact{artifact},
+		[]ucidomain.IndexMembership{uciPublicationPresentMembership("terminal.go", artifact)},
+	)
+	authorized := uciEmbeddingJobsAuthorize(t, fixture.publication, published.Context)
+	claim, claimed, err := fixture.store.ClaimEmbeddingJob(ctx, fixture.profile, "embedding-terminal-owner-"+fixture.publication.token, time.Minute)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.NoError(t, fixture.store.RenewEmbeddingJob(ctx, claim.Ref, time.Minute))
+
+	retry := ucidomain.EmbeddingFailure{Code: ucidomain.EmbeddingFailureProviderUnavailable, Disposition: ucidomain.EmbeddingFailureRetry}
+	require.NoError(t, fixture.store.FailEmbeddingJob(ctx, claim.Ref, retry))
+	first := uciEmbeddingJobsJob(t, fixture.publication, claim.Ref.JobID)
+	require.Equal(t, UCIJobRetryScheduled, first.State)
+	require.NotNil(t, first.RetryAfter)
+	require.Nil(t, first.LeaseOwner)
+	require.NoError(t, fixture.publication.db.Model(&UCIJob{}).Where("job_id = ?", claim.Ref.JobID).Update("retry_after", time.Now().UTC().Add(-time.Minute)).Error)
+
+	retryClaim, claimed, err := fixture.store.ClaimEmbeddingJob(ctx, fixture.profile, "embedding-terminal-retry-"+fixture.publication.token, time.Minute)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.Equal(t, claim.Attempt+1, retryClaim.Attempt)
+	terminal := ucidomain.EmbeddingFailure{Code: ucidomain.EmbeddingFailureProviderContract, Disposition: ucidomain.EmbeddingFailureTerminal}
+	require.NoError(t, fixture.store.FailEmbeddingJob(ctx, retryClaim.Ref, terminal))
+
+	stored := uciEmbeddingJobsJob(t, fixture.publication, retryClaim.Ref.JobID)
+	require.Equal(t, UCIJobFailedTerminal, stored.State)
+	require.NotNil(t, stored.ErrorCode)
+	require.Equal(t, string(ucidomain.EmbeddingFailureProviderContract), *stored.ErrorCode)
+	require.Nil(t, stored.RetryAfter)
+	require.Nil(t, stored.LeaseOwner)
+	require.Nil(t, stored.LeaseExpiry)
+	_, claimed, err = fixture.store.ClaimEmbeddingJob(ctx, fixture.profile, "embedding-terminal-late-"+fixture.publication.token, time.Minute)
+	require.NoError(t, err)
+	require.False(t, claimed, "a terminal job must not become claimable again")
+
+	status := fixture.status(t, authorized)
+	require.Equal(t, ucidomain.IndexCoveragePartial, status.Embedding.Coverage)
+	require.NotNil(t, status.Embedding.JobState)
+	require.Equal(t, ucidomain.IndexStatusJobFailedTerminal, *status.Embedding.JobState)
+	require.NotNil(t, status.Embedding.ErrorCode)
+	require.Equal(t, ucidomain.EmbeddingFailureProviderContract, *status.Embedding.ErrorCode)
+	require.Nil(t, status.Embedding.RetryAfter)
+}
+
 func TestUCIEmbeddingNoCandidatesCompletesTruthfully(t *testing.T) {
 	fixture := openUCIEmbeddingJobsFixture(t)
 	ctx := context.Background()

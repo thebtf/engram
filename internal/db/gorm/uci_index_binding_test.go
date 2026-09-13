@@ -126,6 +126,46 @@ func TestUCIContextStoreLoadIndexBindingRejectsMismatches(t *testing.T) {
 	})
 }
 
+func TestUCIContextStoreReadAuthorizationTracksLivePublicationAuthority(t *testing.T) {
+	fixture := newUCIIndexBindingFixture(t, true)
+	selector := fixture.viewSelector(t)
+	ref, pinned := selector.Context()
+	require.True(t, pinned)
+	access := ucidomain.ContextAccess{
+		AuthRealm: fixture.realm, Principal: fixture.checkout.OwnerPrincipal,
+		SourceID: fixture.source.SourceID, CheckoutID: fixture.checkout.CheckoutID,
+	}
+
+	require.NoError(t, fixture.db.Model(&UCICheckout{}).Where("checkout_id = ?", fixture.checkout.CheckoutID).Update("state", UCICheckoutWatching).Error)
+	_, err := fixture.store.LoadContext(fixture.ctx, ref)
+	require.NoError(t, err)
+	require.NoError(t, NewUCIContextAuthorizer(fixture.store).AuthorizeContext(fixture.ctx, access))
+	listed, err := fixture.store.ListAuthorizedContexts(fixture.ctx, fixture.realm, fixture.checkout.OwnerPrincipal, 1)
+	require.NoError(t, err)
+	require.Equal(t, []ucidomain.ContextRef{{
+		SourceID: fixture.source.SourceID, CheckoutID: fixture.checkout.CheckoutID, ViewID: fixture.view.ViewID,
+		AnalysisProfileID: fixture.profile.ProfileID, Generation: fixture.view.Generation,
+	}}, listed)
+	bound, err := fixture.store.LoadIndexBinding(fixture.ctx, selector)
+	require.NoError(t, err)
+	require.NotNil(t, bound.Context)
+
+	require.NoError(t, fixture.db.Model(&UCISpace{}).Where("space_id = ?", fixture.space.SpaceID).Update("state", UCISpaceRetired).Error)
+	_, err = fixture.store.LoadContext(fixture.ctx, ref)
+	require.ErrorIs(t, err, errUCIContextCatalogNotFound)
+	_, err = fixture.store.LoadIndexBinding(fixture.ctx, selector)
+	require.Error(t, err)
+	require.NoError(t, NewUCIContextAuthorizer(fixture.store).AuthorizeContext(fixture.ctx, access), "space selection must not broaden or replace owner authorization")
+
+	require.NoError(t, fixture.db.Model(&UCISource{}).Where("source_id = ?", fixture.source.SourceID).Update("state", UCISourceOffline).Error)
+	_, err = fixture.store.LoadContext(fixture.ctx, ref)
+	require.ErrorIs(t, err, errUCIContextCatalogNotFound)
+	require.ErrorIs(t, NewUCIContextAuthorizer(fixture.store).AuthorizeContext(fixture.ctx, access), errUCIContextAuthorizationDenied)
+	listed, err = fixture.store.ListAuthorizedContexts(fixture.ctx, fixture.realm, fixture.checkout.OwnerPrincipal, 1)
+	require.NoError(t, err)
+	require.Empty(t, listed)
+}
+
 type uciIndexBindingFixture struct {
 	ctx      context.Context
 	db       *gormlib.DB
