@@ -21,7 +21,12 @@ var (
 	errUCIContextAuthorizationDenied = uci.NewContextError(uci.PermissionDenied, errors.New("uci context authorization denied"))
 )
 
-const uciContextListMax = 64
+const (
+	uciContextListMax        = 64
+	uciContextProfileIDWhere = "profile_id = ?"
+	uciContextSourceIDWhere  = "source_id = ?"
+	uciContextViewIDWhere    = "view_id = ?"
+)
 
 type UCIContextStore struct {
 	db *gorm.DB
@@ -582,7 +587,7 @@ func (s *UCIContextStore) CreateView(ctx context.Context, in CreateViewInput) (*
 	}
 
 	var profile UCIAnalysisProfile
-	if err := s.db.WithContext(ctx).Where("profile_id = ?", row.ProfileID).First(&profile).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where(uciContextProfileIDWhere, row.ProfileID).First(&profile).Error; err != nil {
 		return nil, fmt.Errorf("uci context create view: profile %q: %w", row.ProfileID, err)
 	}
 
@@ -616,7 +621,7 @@ func (s *UCIContextStore) GetSource(ctx context.Context, sourceID string) (*UCIS
 	}
 
 	var row UCISource
-	if err := s.db.WithContext(ctx).Where("source_id = ?", sourceID).First(&row).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where(uciContextSourceIDWhere, sourceID).First(&row).Error; err != nil {
 		return nil, fmt.Errorf("uci context get source %q: %w", sourceID, err)
 	}
 	return &row, nil
@@ -631,7 +636,7 @@ func (s *UCIContextStore) GetProfile(ctx context.Context, profileID string) (*UC
 	}
 
 	var row UCIAnalysisProfile
-	if err := s.db.WithContext(ctx).Where("profile_id = ?", profileID).First(&row).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where(uciContextProfileIDWhere, profileID).First(&row).Error; err != nil {
 		return nil, fmt.Errorf("uci context get profile %q: %w", profileID, err)
 	}
 	return &row, nil
@@ -661,7 +666,7 @@ func (s *UCIContextStore) GetView(ctx context.Context, viewID string) (*UCIView,
 	}
 
 	var row UCIView
-	if err := s.db.WithContext(ctx).Where("view_id = ?", viewID).First(&row).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where(uciContextViewIDWhere, viewID).First(&row).Error; err != nil {
 		return nil, fmt.Errorf("uci context get view %q: %w", viewID, err)
 	}
 	return &row, nil
@@ -712,7 +717,7 @@ func (s *UCIContextStore) ListCheckoutsBySource(ctx context.Context, sourceID st
 
 	rows := make([]UCICheckout, 0)
 	if err := s.db.WithContext(ctx).
-		Where("source_id = ?", sourceID).
+		Where(uciContextSourceIDWhere, sourceID).
 		Order("created_at ASC, checkout_id ASC").
 		Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("uci context list checkouts for source %q: %w", sourceID, err)
@@ -985,7 +990,7 @@ func (s *UCIContextStore) loadUCIIndexBindingForContext(ctx context.Context, ref
 	}
 
 	var view UCIView
-	if err := s.db.WithContext(ctx).Where("view_id = ?", ref.ViewID).First(&view).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where(uciContextViewIDWhere, ref.ViewID).First(&view).Error; err != nil {
 		return uci.IndexBinding{}, fmt.Errorf("uci context load index binding: view %q: %w", ref.ViewID, err)
 	}
 	if view.CheckoutID != checkout.CheckoutID ||
@@ -1022,7 +1027,7 @@ func (s *UCIContextStore) loadUCIIndexBindingForCheckout(ctx context.Context, sc
 
 func (s *UCIContextStore) loadUCIIndexBindingCheckout(ctx context.Context, sourceID, checkoutID, incarnationID string) (*UCISource, *UCICheckout, error) {
 	var source UCISource
-	if err := s.db.WithContext(ctx).Where("source_id = ?", sourceID).First(&source).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where(uciContextSourceIDWhere, sourceID).First(&source).Error; err != nil {
 		return nil, nil, fmt.Errorf("uci context load index binding: source %q: %w", sourceID, err)
 	}
 	if source.State != UCISourceActive {
@@ -1050,7 +1055,7 @@ func (s *UCIContextStore) loadUCIIndexBindingCheckout(ctx context.Context, sourc
 
 func (s *UCIContextStore) loadUCIIndexBindingProfile(ctx context.Context, profileID string) (*UCIAnalysisProfile, error) {
 	var profile UCIAnalysisProfile
-	if err := s.db.WithContext(ctx).Where("profile_id = ?", profileID).First(&profile).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where(uciContextProfileIDWhere, profileID).First(&profile).Error; err != nil {
 		return nil, fmt.Errorf("uci context load index binding: profile %q: %w", profileID, err)
 	}
 	return &profile, nil
@@ -1061,7 +1066,7 @@ func (s *UCIContextStore) loadUCICurrentIndexBindingView(ctx context.Context, ch
 		return nil, nil
 	}
 	var view UCIView
-	if err := s.db.WithContext(ctx).Where("view_id = ?", *checkout.CurrentViewID).First(&view).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where(uciContextViewIDWhere, *checkout.CurrentViewID).First(&view).Error; err != nil {
 		return nil, fmt.Errorf("uci context load index binding: current view %q: %w", *checkout.CurrentViewID, err)
 	}
 	if view.CheckoutID != checkout.CheckoutID || view.SourceID != checkout.SourceID || view.IncarnationID != checkout.IncarnationID {

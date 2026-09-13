@@ -18,6 +18,11 @@ import (
 
 var _ ucidomain.EmbeddingJobStore = (*UCIProjectionStore)(nil)
 
+const (
+	uciEmbeddingJobLeaseWhere = "job_id = ? AND state = ? AND owner_epoch = ? AND lease_owner = ? AND lease_expiry > ?"
+	uciEmbeddingJobIDWhere    = "job_id = ?"
+)
+
 type uciEmbeddingProgress struct {
 	Version         int                              `json:"version"`
 	Cursor          *ucidomain.EmbeddingCandidateKey `json:"cursor,omitempty"`
@@ -324,7 +329,7 @@ func (s *UCIProjectionStore) RenewEmbeddingJob(ctx context.Context, ref ucidomai
 			return err
 		}
 		leaseExpiry := now.Add(leaseTTL)
-		result := tx.WithContext(ctx).Model(&UCIJob{}).Where("job_id = ? AND state = ? AND owner_epoch = ? AND lease_owner = ? AND lease_expiry > ?", scope.Job.JobID, UCIJobRunning, ref.LeaseEpoch, ref.LeaseOwner, now).Updates(map[string]any{
+		result := tx.WithContext(ctx).Model(&UCIJob{}).Where(uciEmbeddingJobLeaseWhere, scope.Job.JobID, UCIJobRunning, ref.LeaseEpoch, ref.LeaseOwner, now).Updates(map[string]any{
 			"lease_expiry": leaseExpiry,
 			"updated_at":   now,
 		})
@@ -502,7 +507,7 @@ func (s *UCIProjectionStore) CompleteEmbeddingJob(ctx context.Context, claim uci
 		} else {
 			updates["error_code"] = nil
 		}
-		result := tx.WithContext(ctx).Model(&UCIJob{}).Where("job_id = ? AND state = ? AND owner_epoch = ? AND lease_owner = ? AND lease_expiry > ?", scope.Job.JobID, UCIJobRunning, claim.Ref.LeaseEpoch, claim.Ref.LeaseOwner, now).Updates(updates)
+		result := tx.WithContext(ctx).Model(&UCIJob{}).Where(uciEmbeddingJobLeaseWhere, scope.Job.JobID, UCIJobRunning, claim.Ref.LeaseEpoch, claim.Ref.LeaseOwner, now).Updates(updates)
 		if result.Error != nil {
 			return fmt.Errorf("uci embedding complete update: %w", result.Error)
 		}
@@ -522,7 +527,7 @@ func (s *UCIProjectionStore) FailEmbeddingJob(ctx context.Context, ref ucidomain
 	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var job UCIJob
-		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("job_id = ?", ref.JobID).First(&job).Error; err != nil {
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where(uciEmbeddingJobIDWhere, ref.JobID).First(&job).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ucidomain.ErrEmbeddingJobLeaseLost
 			}
@@ -558,7 +563,7 @@ func (s *UCIProjectionStore) FailEmbeddingJob(ctx context.Context, ref ucidomain
 		default:
 			return fmt.Errorf("uci embedding failure: unsupported disposition")
 		}
-		result := tx.WithContext(ctx).Model(&UCIJob{}).Where("job_id = ? AND state = ? AND owner_epoch = ? AND lease_owner = ? AND lease_expiry > ?", job.JobID, UCIJobRunning, ref.LeaseEpoch, ref.LeaseOwner, now).Updates(updates)
+		result := tx.WithContext(ctx).Model(&UCIJob{}).Where(uciEmbeddingJobLeaseWhere, job.JobID, UCIJobRunning, ref.LeaseEpoch, ref.LeaseOwner, now).Updates(updates)
 		if result.Error != nil {
 			return fmt.Errorf("uci embedding failure update: %w", result.Error)
 		}
@@ -726,7 +731,7 @@ func setUCIEmbeddingUnclaimedState(ctx context.Context, tx *gorm.DB, jobID, stat
 	if state == string(UCIJobCancelled) {
 		code = ucidomain.EmbeddingFailureAuthorityLost
 	}
-	return tx.WithContext(ctx).Model(&UCIJob{}).Where("job_id = ?", jobID).Updates(map[string]any{
+	return tx.WithContext(ctx).Model(&UCIJob{}).Where(uciEmbeddingJobIDWhere, jobID).Updates(map[string]any{
 		"state":        UCIJobState(state),
 		"error_code":   string(code),
 		"retry_after":  nil,
@@ -752,7 +757,7 @@ func lockUCIEmbeddingJobScope(ctx context.Context, tx *gorm.DB, ref ucidomain.Em
 		return uciEmbeddingJobScope{}, time.Time{}, err
 	}
 	var job UCIJob
-	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("job_id = ?", ref.JobID).First(&job).Error; err != nil {
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where(uciEmbeddingJobIDWhere, ref.JobID).First(&job).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return uciEmbeddingJobScope{}, time.Time{}, ucidomain.ErrEmbeddingJobLeaseLost
 		}

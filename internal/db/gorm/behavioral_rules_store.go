@@ -19,7 +19,13 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
-// BehavioralRulesStore provides behavioral-rule database operations using GORM.
+const (
+	behavioralRuleUndeletedWhere     = "deleted_at IS NULL"
+	behavioralRuleGlobalProjectWhere = "project IS NULL"
+	behavioralRuleVersionIncrement   = "version + 1"
+	behavioralRuleVersionActiveWhere = "id = ? AND version = ? AND deleted_at IS NULL"
+)
+
 // It targets the dedicated behavioral_rules table created by migration 089.
 //
 // Global rules (project IS NULL) are always included in List results regardless of the
@@ -285,11 +291,11 @@ func (s *BehavioralRulesStore) behavioralRuleCollectionRows(ctx context.Context,
 	if s == nil || s.db == nil {
 		return nil, errors.New("behavioral rules store is not configured")
 	}
-	query := s.db.WithContext(ctx).Where("deleted_at IS NULL")
+	query := s.db.WithContext(ctx).Where(behavioralRuleUndeletedWhere)
 	switch filter.scope {
 	case behavioralRuleCollectionAll:
 	case behavioralRuleCollectionGlobal:
-		query = query.Where("project IS NULL")
+		query = query.Where(behavioralRuleGlobalProjectWhere)
 	default:
 		query = query.Where("project = ? OR project IS NULL", filter.scope)
 	}
@@ -445,12 +451,12 @@ func (s *BehavioralRulesStore) list(ctx context.Context, project *string, limit 
 	}
 
 	q := s.db.WithContext(ctx).
-		Where("deleted_at IS NULL").
+		Where(behavioralRuleUndeletedWhere).
 		Order("priority DESC, created_at DESC, id DESC").
 		Limit(limit)
 
 	if project == nil {
-		q = q.Where("project IS NULL")
+		q = q.Where(behavioralRuleGlobalProjectWhere)
 	} else {
 		q = q.Where("project = ? OR project IS NULL", *project)
 	}
@@ -479,7 +485,7 @@ func (s *BehavioralRulesStore) ListAll(ctx context.Context, limit int) ([]*model
 
 	var rows []BehavioralRule
 	if err := s.db.WithContext(ctx).
-		Where("deleted_at IS NULL").
+		Where(behavioralRuleUndeletedWhere).
 		Order("priority DESC, created_at DESC, id DESC").
 		Limit(limit).
 		Find(&rows).Error; err != nil {
@@ -513,7 +519,7 @@ func (s *BehavioralRulesStore) Update(ctx context.Context, rule *models.Behavior
 		"priority":   rule.Priority,
 		"edited_by":  rule.EditedBy,
 		"updated_at": now,
-		"version":    gorm.Expr("version + 1"),
+		"version":    gorm.Expr(behavioralRuleVersionIncrement),
 	}
 	// project is intentionally excluded from partial updates — changing a rule's scope
 	// (global → project-scoped or vice versa) is a design-time concern, not a runtime one.
@@ -542,7 +548,7 @@ func (s *BehavioralRulesStore) SetEnabled(ctx context.Context, id int64, enabled
 	updates := map[string]any{
 		"enabled":    enabled,
 		"updated_at": now,
-		"version":    gorm.Expr("version + 1"),
+		"version":    gorm.Expr(behavioralRuleVersionIncrement),
 	}
 	if editedBy != nil {
 		if trimmed := strings.TrimSpace(*editedBy); trimmed != "" {
@@ -800,7 +806,7 @@ func updateSelectedBehavioralRule(tx *gorm.DB, row *BehavioralRule, operation Be
 	if operation.Action == BehavioralRuleSelectionDelete {
 		updates["deleted_at"] = now
 		result := tx.Model(&BehavioralRule{}).
-			Where("id = ? AND version = ? AND deleted_at IS NULL", row.ID, row.Version).
+			Where(behavioralRuleVersionActiveWhere, row.ID, row.Version).
 			Updates(updates)
 		if result.Error != nil {
 			return BehavioralRuleSelectionOperationItem{}, fmt.Errorf("delete selected behavioral rule id=%d: %w", row.ID, result.Error)
@@ -811,7 +817,7 @@ func updateSelectedBehavioralRule(tx *gorm.DB, row *BehavioralRule, operation Be
 		return item, nil
 	}
 
-	updates["version"] = gorm.Expr("version + 1")
+	updates["version"] = gorm.Expr(behavioralRuleVersionIncrement)
 	switch operation.Action {
 	case BehavioralRuleSelectionEnable:
 		updates["enabled"] = true
@@ -836,7 +842,7 @@ func updateSelectedBehavioralRule(tx *gorm.DB, row *BehavioralRule, operation Be
 		}
 	}
 	result := tx.Model(&BehavioralRule{}).
-		Where("id = ? AND version = ? AND deleted_at IS NULL", row.ID, row.Version).
+		Where(behavioralRuleVersionActiveWhere, row.ID, row.Version).
 		Updates(updates)
 	if result.Error != nil {
 		return BehavioralRuleSelectionOperationItem{}, fmt.Errorf("update selected behavioral rule id=%d: %w", row.ID, result.Error)
@@ -875,9 +881,9 @@ func applyBehavioralRuleReorder(tx *gorm.DB, targets []behavioralRuleSelectionTa
 		ordered[order.RuleID] = order
 	}
 
-	query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("deleted_at IS NULL")
+	query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(behavioralRuleUndeletedWhere)
 	if operation.Scope.Project == nil {
-		query = query.Where("project IS NULL")
+		query = query.Where(behavioralRuleGlobalProjectWhere)
 	} else {
 		query = query.Where("project = ?", *operation.Scope.Project)
 	}
@@ -905,10 +911,10 @@ func applyBehavioralRuleReorder(tx *gorm.DB, targets []behavioralRuleSelectionTa
 		updates := map[string]any{
 			"priority":   priority,
 			"updated_at": now,
-			"version":    gorm.Expr("version + 1"),
+			"version":    gorm.Expr(behavioralRuleVersionIncrement),
 		}
 		updated := tx.Model(&BehavioralRule{}).
-			Where("id = ? AND version = ? AND deleted_at IS NULL", row.ID, row.Version).
+			Where(behavioralRuleVersionActiveWhere, row.ID, row.Version).
 			Updates(updates)
 		if updated.Error != nil {
 			return fmt.Errorf("reorder behavioral rule id=%d: %w", row.ID, updated.Error)

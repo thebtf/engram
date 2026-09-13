@@ -19,6 +19,8 @@ const (
 	browserCodeContinuationMaxLength   = 2_048
 	browserCodeContinuationPageMaxSize = 50
 	browserCodeContinuationTTL         = 10 * time.Minute
+	browserCodeContinuationCursorWhere = "cursor_ref = ?"
+	browserCodeDigestPrefix            = "sha256:"
 )
 
 var (
@@ -49,6 +51,7 @@ type BrowserCodeContextPin struct {
 	DocumentProofDigest []byte
 	Context             uci.ContextRef
 }
+
 // BrowserCodeIndexIntentTarget contains the only browser-carried target facts
 // for an initial index request. Realm, owner, incarnation, and paths are
 // deliberately derived in the same server transaction.
@@ -68,7 +71,6 @@ type BrowserCodeIndexIntentBinding struct {
 	ProfileID string
 	AuthRealm string
 }
-
 
 // BrowserCodeSearchContinuation is an internal server-owned cursor. It stores
 // only normalized request digests and the application continuation, never raw
@@ -265,6 +267,7 @@ func (s *BrowserCodeContextStore) Pin(ctx context.Context, in BrowserCodeContext
 		return nil
 	})
 }
+
 // AuthorizeInitialIndexIntent atomically rechecks the current browser document,
 // active grant, source realm, registered checkout, and configured profile before
 // admitting an intent for a checkout that has not yet published a View.
@@ -323,7 +326,7 @@ func (s *BrowserCodeContextStore) LoadContinuation(ctx context.Context, cursorRe
 		return "", fmt.Errorf("browser code continuation clock: %w", err)
 	}
 	var row BrowserCodeSearchContinuation
-	result := s.db.WithContext(ctx).Where("cursor_ref = ?", cursorRef).First(&row)
+	result := s.db.WithContext(ctx).Where(browserCodeContinuationCursorWhere, cursorRef).First(&row)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		return "", ErrBrowserCodeContinuationDenied
 	}
@@ -385,7 +388,7 @@ func (s *BrowserCodeContextStore) AdvanceContinuation(ctx context.Context, curso
 			return err
 		}
 		var row BrowserCodeSearchContinuation
-		result := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("cursor_ref = ?", cursorRef).First(&row)
+		result := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where(browserCodeContinuationCursorWhere, cursorRef).First(&row)
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			return ErrBrowserCodeContinuationDenied
 		}
@@ -395,7 +398,7 @@ func (s *BrowserCodeContextStore) AdvanceContinuation(ctx context.Context, curso
 		if !browserCodeContinuationMatches(row, binding) || row.ConsumedAt != nil || !row.ExpiresAt.After(now) {
 			return ErrBrowserCodeContinuationDenied
 		}
-		if err := tx.WithContext(ctx).Model(&BrowserCodeSearchContinuation{}).Where("cursor_ref = ?", row.CursorRef).Updates(map[string]any{
+		if err := tx.WithContext(ctx).Model(&BrowserCodeSearchContinuation{}).Where(browserCodeContinuationCursorWhere, row.CursorRef).Updates(map[string]any{
 			"consumed_at": now,
 			"updated_at":  now,
 		}).Error; err != nil {
@@ -694,10 +697,10 @@ func validBrowserCodeServiceCursor(value string) bool {
 }
 
 func validBrowserCodeDigest(value string) bool {
-	if len(value) != len("sha256:")+64 || value[:len("sha256:")] != "sha256:" {
+	if len(value) != len(browserCodeDigestPrefix)+64 || value[:len(browserCodeDigestPrefix)] != browserCodeDigestPrefix {
 		return false
 	}
-	for _, character := range value[len("sha256:"):] {
+	for _, character := range value[len(browserCodeDigestPrefix):] {
 		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
 			return false
 		}

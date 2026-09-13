@@ -20,6 +20,7 @@ const (
 	BrowserTabBindingLeaseLive    BrowserTabBindingLeaseState = "live"
 	BrowserTabBindingLeaseClosed  BrowserTabBindingLeaseState = "closed"
 	BrowserTabBindingLeaseExpired BrowserTabBindingLeaseState = "expired"
+	browserTabBindingIDWhere                                  = "tab_binding_id = ?"
 )
 
 // BrowserTabBindingResumeState describes whether a resume replaced the document or
@@ -190,12 +191,12 @@ func (s *BrowserTabBindingStore) CreateFromCopy(ctx context.Context, in BrowserT
 			return clockErr
 		}
 		var original BrowserTabBinding
-		lookup := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("tab_binding_id = ?", in.CopiedTabBindingID).First(&original)
+		lookup := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where(browserTabBindingIDWhere, in.CopiedTabBindingID).First(&original)
 		if lookup.Error != nil && !errors.Is(lookup.Error, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("browser tab binding copy lookup: %w", lookup.Error)
 		}
 		if lookup.Error == nil && !original.BindingExpiresAt.After(now) {
-			if err := tx.WithContext(ctx).Where("tab_binding_id = ?", original.TabBindingID).Delete(&BrowserTabBinding{}).Error; err != nil {
+			if err := tx.WithContext(ctx).Where(browserTabBindingIDWhere, original.TabBindingID).Delete(&BrowserTabBinding{}).Error; err != nil {
 				return fmt.Errorf("browser tab binding expire copied binding: %w", err)
 			}
 		}
@@ -242,7 +243,7 @@ func (s *BrowserTabBindingStore) Resume(ctx context.Context, in BrowserTabBindin
 			return nil
 		}
 		if binding.DocumentLeaseState == BrowserTabBindingLeaseLive && !binding.DocumentLeaseExpiresAt.After(now) {
-			if err := tx.WithContext(ctx).Model(&BrowserTabBinding{}).Where("tab_binding_id = ?", binding.TabBindingID).Updates(map[string]any{
+			if err := tx.WithContext(ctx).Model(&BrowserTabBinding{}).Where(browserTabBindingIDWhere, binding.TabBindingID).Updates(map[string]any{
 				"document_lease_state": BrowserTabBindingLeaseExpired,
 				"updated_at":           now,
 			}).Error; err != nil {
@@ -258,7 +259,7 @@ func (s *BrowserTabBindingStore) Resume(ctx context.Context, in BrowserTabBindin
 			denied = true
 			return nil
 		}
-		if err := tx.WithContext(ctx).Model(&BrowserTabBinding{}).Where("tab_binding_id = ?", binding.TabBindingID).Updates(map[string]any{
+		if err := tx.WithContext(ctx).Model(&BrowserTabBinding{}).Where(browserTabBindingIDWhere, binding.TabBindingID).Updates(map[string]any{
 			"document_proof_digest":     cloneBrowserTabBindingDigest(in.NewDocumentProofDigest),
 			"reload_token_digest":       cloneBrowserTabBindingDigest(in.NewReloadTokenDigest),
 			"document_lease_state":      BrowserTabBindingLeaseLive,
@@ -305,7 +306,7 @@ func (s *BrowserTabBindingStore) Guard(ctx context.Context, in BrowserTabBinding
 			return err
 		}
 		if binding.DocumentLeaseState == BrowserTabBindingLeaseLive && !binding.DocumentLeaseExpiresAt.After(now) {
-			if err := tx.WithContext(ctx).Model(&BrowserTabBinding{}).Where("tab_binding_id = ?", binding.TabBindingID).Updates(map[string]any{
+			if err := tx.WithContext(ctx).Model(&BrowserTabBinding{}).Where(browserTabBindingIDWhere, binding.TabBindingID).Updates(map[string]any{
 				"document_lease_state": BrowserTabBindingLeaseExpired,
 				"updated_at":           now,
 			}).Error; err != nil {
@@ -335,7 +336,7 @@ func (s *BrowserTabBindingStore) Renew(ctx context.Context, in BrowserTabBinding
 		return err
 	}
 	return s.mutateLiveLease(ctx, in.BrowserTabBindingGuard, func(tx *gorm.DB, binding BrowserTabBinding, now time.Time) error {
-		return tx.WithContext(ctx).Model(&BrowserTabBinding{}).Where("tab_binding_id = ?", binding.TabBindingID).Updates(map[string]any{
+		return tx.WithContext(ctx).Model(&BrowserTabBinding{}).Where(browserTabBindingIDWhere, binding.TabBindingID).Updates(map[string]any{
 			"document_lease_expires_at": in.DocumentLeaseExpiresAt.UTC(),
 			"updated_at":                now,
 		}).Error
@@ -349,7 +350,7 @@ func (s *BrowserTabBindingStore) Close(ctx context.Context, in BrowserTabBinding
 		return err
 	}
 	return s.mutateLiveLease(ctx, in.BrowserTabBindingGuard, func(tx *gorm.DB, binding BrowserTabBinding, now time.Time) error {
-		return tx.WithContext(ctx).Model(&BrowserTabBinding{}).Where("tab_binding_id = ?", binding.TabBindingID).Updates(map[string]any{
+		return tx.WithContext(ctx).Model(&BrowserTabBinding{}).Where(browserTabBindingIDWhere, binding.TabBindingID).Updates(map[string]any{
 			"document_lease_state":      BrowserTabBindingLeaseClosed,
 			"document_lease_expires_at": now,
 			"updated_at":                now,
@@ -367,7 +368,7 @@ func (s *BrowserTabBindingStore) Pin(ctx context.Context, in BrowserTabBindingPi
 		return err
 	}
 	return s.mutateLiveLease(ctx, in.BrowserTabBindingGuard, func(tx *gorm.DB, binding BrowserTabBinding, now time.Time) error {
-		return tx.WithContext(ctx).Model(&BrowserTabBinding{}).Where("tab_binding_id = ?", binding.TabBindingID).Updates(map[string]any{
+		return tx.WithContext(ctx).Model(&BrowserTabBinding{}).Where(browserTabBindingIDWhere, binding.TabBindingID).Updates(map[string]any{
 			"pinned_source_id":           in.Context.SourceID,
 			"pinned_checkout_id":         in.Context.CheckoutID,
 			"pinned_view_id":             in.Context.ViewID,
@@ -415,7 +416,7 @@ func (s *BrowserTabBindingStore) mutateLiveLease(ctx context.Context, guard Brow
 			return nil
 		}
 		if binding.DocumentLeaseState == BrowserTabBindingLeaseLive && !binding.DocumentLeaseExpiresAt.After(now) {
-			if err := tx.WithContext(ctx).Model(&BrowserTabBinding{}).Where("tab_binding_id = ?", binding.TabBindingID).Updates(map[string]any{
+			if err := tx.WithContext(ctx).Model(&BrowserTabBinding{}).Where(browserTabBindingIDWhere, binding.TabBindingID).Updates(map[string]any{
 				"document_lease_state": BrowserTabBindingLeaseExpired,
 				"updated_at":           now,
 			}).Error; err != nil {
@@ -444,7 +445,7 @@ func (s *BrowserTabBindingStore) mutateLiveLease(ctx context.Context, guard Brow
 
 func (s *BrowserTabBindingStore) lockBindingForCaller(ctx context.Context, tx *gorm.DB, bindingID string, caller BrowserTabBindingCaller, now time.Time) (BrowserTabBinding, bool, error) {
 	var binding BrowserTabBinding
-	result := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("tab_binding_id = ?", bindingID).First(&binding)
+	result := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where(browserTabBindingIDWhere, bindingID).First(&binding)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		return BrowserTabBinding{}, true, nil
 	}
@@ -452,7 +453,7 @@ func (s *BrowserTabBindingStore) lockBindingForCaller(ctx context.Context, tx *g
 		return BrowserTabBinding{}, false, fmt.Errorf("browser tab binding lookup: %w", result.Error)
 	}
 	if !binding.BindingExpiresAt.After(now) {
-		if err := tx.WithContext(ctx).Where("tab_binding_id = ?", binding.TabBindingID).Delete(&BrowserTabBinding{}).Error; err != nil {
+		if err := tx.WithContext(ctx).Where(browserTabBindingIDWhere, binding.TabBindingID).Delete(&BrowserTabBinding{}).Error; err != nil {
 			return BrowserTabBinding{}, false, fmt.Errorf("browser tab binding expire: %w", err)
 		}
 		return BrowserTabBinding{}, true, nil

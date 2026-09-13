@@ -12,6 +12,8 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const uciIndexIntentIDWhere = "intent_id = ?"
+
 var (
 	_ ucidomain.IndexIntentStore = (*UCIIndexIntentStore)(nil)
 
@@ -83,7 +85,7 @@ func (s *UCIIndexIntentStore) GetIndexIntent(ctx context.Context, intentID strin
 	}
 
 	var row indexIntentRow
-	if err := s.db.WithContext(ctx).Where("intent_id = ?", intentID).First(&row).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where(uciIndexIntentIDWhere, intentID).First(&row).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ucidomain.IndexIntent{}, ucidomain.ErrIndexIntentNotFound
 		}
@@ -412,7 +414,7 @@ func (s *UCIIndexIntentStore) LoadIndexIntentClaim(ctx context.Context, binding 
 		return ucidomain.IndexIntentClaim{}, fmt.Errorf("uci index intent claim: invalid request")
 	}
 	var row indexIntentRow
-	if err := s.db.WithContext(ctx).Where("intent_id = ?", intentID).First(&row).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where(uciIndexIntentIDWhere, intentID).First(&row).Error; err != nil {
 		return ucidomain.IndexIntentClaim{}, err
 	}
 	if !indexIntentRowMatchesBinding(row, binding) || row.AcknowledgedOwner == nil || *row.AcknowledgedOwner != ownerKey || row.AcknowledgementEpoch != epoch {
@@ -565,7 +567,7 @@ func (s *UCIIndexIntentStore) ReconcileIndexIntent(ctx context.Context, intentID
 		return nil
 	}
 	var snapshot indexIntentRow
-	if err := s.db.WithContext(ctx).Where("intent_id = ?", intentID).First(&snapshot).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where(uciIndexIntentIDWhere, intentID).First(&snapshot).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil
 		}
@@ -783,7 +785,7 @@ func lockIndexIntentRow(ctx context.Context, tx *gorm.DB, value string, byReques
 	if byRequestRef {
 		query = query.Where("request_ref = ?", value)
 	} else {
-		query = query.Where("intent_id = ?", value)
+		query = query.Where(uciIndexIntentIDWhere, value)
 	}
 	if err := query.First(&row).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {

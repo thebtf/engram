@@ -15,10 +15,12 @@ import (
 )
 
 const (
-	CollectionSelectionMaxTargets = 1_000
-	CollectionPageMaxSize         = 200
-	collectionSelectionMaxCursor  = 512
-	collectionSelectionMaxTTL     = time.Hour
+	CollectionSelectionMaxTargets   = 1_000
+	CollectionPageMaxSize           = 200
+	collectionSelectionMaxCursor    = 512
+	collectionSelectionMaxTTL       = time.Hour
+	collectionSelectionScopeWhere   = "subject_user_id = ? AND session_id = ? AND domain = ?"
+	collectionSelectionDigestPrefix = "sha256:"
 )
 
 var (
@@ -174,7 +176,7 @@ func (store *CollectionSelectionStore) Save(ctx context.Context, scope Collectio
 	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var current CollectionSelectionRecord
 		lookup := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
-			"subject_user_id = ? AND session_id = ? AND domain = ?", scope.SubjectUserID, scope.SessionID, scope.Domain,
+			collectionSelectionScopeWhere, scope.SubjectUserID, scope.SessionID, scope.Domain,
 		).First(&current)
 		if lookup.Error != nil && !errors.Is(lookup.Error, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("collection selection lookup: %w", lookup.Error)
@@ -241,7 +243,7 @@ func (store *CollectionSelectionStore) RequireReconfirmation(ctx context.Context
 	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var record CollectionSelectionRecord
 		lookup := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
-			"subject_user_id = ? AND session_id = ? AND domain = ?", scope.SubjectUserID, scope.SessionID, scope.Domain,
+			collectionSelectionScopeWhere, scope.SubjectUserID, scope.SessionID, scope.Domain,
 		).First(&record)
 		if errors.Is(lookup.Error, gorm.ErrRecordNotFound) {
 			return ErrCollectionSelectionDenied
@@ -284,7 +286,7 @@ func (store *CollectionSelectionStore) load(ctx context.Context, scope Collectio
 	var current CollectionSelection
 	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
-			"subject_user_id = ? AND session_id = ? AND domain = ?", scope.SubjectUserID, scope.SessionID, scope.Domain,
+			collectionSelectionScopeWhere, scope.SubjectUserID, scope.SessionID, scope.Domain,
 		)
 		if frozenOnly {
 			query = query.Where("selection_token = ?", token)
@@ -578,10 +580,10 @@ func validCollectionSelectionDomain(domain string) bool {
 }
 
 func validCollectionSelectionFingerprint(value string) bool {
-	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") {
+	if len(value) != len(collectionSelectionDigestPrefix)+64 || !strings.HasPrefix(value, collectionSelectionDigestPrefix) {
 		return false
 	}
-	for _, character := range value[len("sha256:"):] {
+	for _, character := range value[len(collectionSelectionDigestPrefix):] {
 		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
 			return false
 		}
