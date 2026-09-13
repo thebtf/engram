@@ -443,97 +443,114 @@ func (response QueryResponse) validate(preExposure bool) error {
 
 	switch response.Status {
 	case QueryStatusOK, QueryStatusEmpty, QueryStatusPartial, QueryStatusStale:
-		if response.Error != nil {
-			return fmt.Errorf("uci query response: successful status %q cannot contain an error", response.Status)
-		}
-		if err := response.validateExposure(preExposure, "successful"); err != nil {
-			return err
-		}
-		if _, err := response.validateContextual(); err != nil {
-			return err
-		}
-		if response.Status == QueryStatusEmpty && len(*response.Items) != 0 {
-			return fmt.Errorf("uci query response: empty status cannot contain items")
-		}
-		return nil
-
+		return response.validateSuccessful(preExposure)
 	case QueryStatusUnavailable:
-		if response.Error == nil {
-			return fmt.Errorf("uci query response: unavailable status requires an error")
-		}
-		if err := response.Error.Validate(); err != nil {
-			return err
-		}
-		if response.Error.Code.isRecorderFailure() {
-			if preExposure {
-				return errors.New("uci query response: pre-exposure state must be an authorized contextual result")
-			}
-			if response.Exposure != nil {
-				return fmt.Errorf("uci query response: recorder failure cannot expose a receipt")
-			}
-			return response.validateSuppressed()
-		}
-		if !response.Error.Code.isAuthorizedUnavailable() {
-			return fmt.Errorf("uci query response: unavailable status cannot use error %q", response.Error.Code)
-		}
-		if err := response.validateExposure(preExposure, "authorized unavailable"); err != nil {
-			return err
-		}
-		if _, err := response.validateContextual(); err != nil {
-			return err
-		}
-		if len(*response.Items) != 0 {
-			return fmt.Errorf("uci query response: authorized unavailable status cannot contain items")
-		}
-		if response.Graph != nil {
-			return fmt.Errorf("uci query response: authorized unavailable status cannot contain a graph")
-		}
-		return nil
-
+		return response.validateUnavailable(preExposure)
 	case QueryStatusContextRequired:
-		if preExposure {
-			return errors.New("uci query response: pre-exposure state must be an authorized contextual result")
-		}
-		if response.Exposure != nil {
-			return fmt.Errorf("uci query response: context refusal cannot expose a receipt")
-		}
-		if err := response.validateSuppressed(); err != nil {
-			return err
-		}
-		if response.Error == nil {
-			return fmt.Errorf("uci query response: context refusal requires an error")
-		}
-		if err := response.Error.Validate(); err != nil {
-			return err
-		}
-		if response.Error.Code != QueryErrorContextRequired && response.Error.Code != QueryErrorContextMismatch {
-			return fmt.Errorf("uci query response: context refusal cannot use error %q", response.Error.Code)
-		}
-		return nil
-
+		return response.validateContextRefusal(preExposure)
 	case QueryStatusForbidden:
-		if preExposure {
-			return errors.New("uci query response: pre-exposure state must be an authorized contextual result")
-		}
-		if response.Exposure != nil {
-			return fmt.Errorf("uci query response: forbidden status cannot expose a receipt")
-		}
-		if err := response.validateSuppressed(); err != nil {
-			return err
-		}
-		if response.Error == nil {
-			return fmt.Errorf("uci query response: forbidden status requires an error")
-		}
-		if err := response.Error.Validate(); err != nil {
-			return err
-		}
-		if response.Error.Code != QueryErrorPermissionDenied {
-			return fmt.Errorf("uci query response: forbidden status cannot use error %q", response.Error.Code)
-		}
-		return nil
+		return response.validateForbidden(preExposure)
+	default:
+		return fmt.Errorf("uci query response: invalid status %q", response.Status)
 	}
+}
 
-	return fmt.Errorf("uci query response: invalid status %q", response.Status)
+func (response QueryResponse) validateSuccessful(preExposure bool) error {
+	if response.Error != nil {
+		return fmt.Errorf("uci query response: successful status %q cannot contain an error", response.Status)
+	}
+	if err := response.validateExposure(preExposure, "successful"); err != nil {
+		return err
+	}
+	if _, err := response.validateContextual(); err != nil {
+		return err
+	}
+	if response.Status == QueryStatusEmpty && len(*response.Items) != 0 {
+		return fmt.Errorf("uci query response: empty status cannot contain items")
+	}
+	return nil
+}
+
+func (response QueryResponse) validateUnavailable(preExposure bool) error {
+	if response.Error == nil {
+		return fmt.Errorf("uci query response: unavailable status requires an error")
+	}
+	if err := response.Error.Validate(); err != nil {
+		return err
+	}
+	if response.Error.Code.isRecorderFailure() {
+		return response.validateRecorderFailure(preExposure)
+	}
+	if !response.Error.Code.isAuthorizedUnavailable() {
+		return fmt.Errorf("uci query response: unavailable status cannot use error %q", response.Error.Code)
+	}
+	if err := response.validateExposure(preExposure, "authorized unavailable"); err != nil {
+		return err
+	}
+	if _, err := response.validateContextual(); err != nil {
+		return err
+	}
+	if len(*response.Items) != 0 {
+		return fmt.Errorf("uci query response: authorized unavailable status cannot contain items")
+	}
+	if response.Graph != nil {
+		return fmt.Errorf("uci query response: authorized unavailable status cannot contain a graph")
+	}
+	return nil
+}
+
+func (response QueryResponse) validateRecorderFailure(preExposure bool) error {
+	if preExposure {
+		return errors.New("uci query response: pre-exposure state must be an authorized contextual result")
+	}
+	if response.Exposure != nil {
+		return fmt.Errorf("uci query response: recorder failure cannot expose a receipt")
+	}
+	return response.validateSuppressed()
+}
+
+func (response QueryResponse) validateContextRefusal(preExposure bool) error {
+	if preExposure {
+		return errors.New("uci query response: pre-exposure state must be an authorized contextual result")
+	}
+	if response.Exposure != nil {
+		return fmt.Errorf("uci query response: context refusal cannot expose a receipt")
+	}
+	if err := response.validateSuppressed(); err != nil {
+		return err
+	}
+	if response.Error == nil {
+		return fmt.Errorf("uci query response: context refusal requires an error")
+	}
+	if err := response.Error.Validate(); err != nil {
+		return err
+	}
+	if response.Error.Code != QueryErrorContextRequired && response.Error.Code != QueryErrorContextMismatch {
+		return fmt.Errorf("uci query response: context refusal cannot use error %q", response.Error.Code)
+	}
+	return nil
+}
+
+func (response QueryResponse) validateForbidden(preExposure bool) error {
+	if preExposure {
+		return errors.New("uci query response: pre-exposure state must be an authorized contextual result")
+	}
+	if response.Exposure != nil {
+		return fmt.Errorf("uci query response: forbidden status cannot expose a receipt")
+	}
+	if err := response.validateSuppressed(); err != nil {
+		return err
+	}
+	if response.Error == nil {
+		return fmt.Errorf("uci query response: forbidden status requires an error")
+	}
+	if err := response.Error.Validate(); err != nil {
+		return err
+	}
+	if response.Error.Code != QueryErrorPermissionDenied {
+		return fmt.Errorf("uci query response: forbidden status cannot use error %q", response.Error.Code)
+	}
+	return nil
 }
 
 func (response QueryResponse) validateExposure(preExposure bool, state string) error {
@@ -550,6 +567,17 @@ func (response QueryResponse) validateExposure(preExposure bool, state string) e
 }
 
 func (response QueryResponse) validateContextual() (queryContextSet, error) {
+	contexts, err := response.validateContexts()
+	if err != nil {
+		return nil, err
+	}
+	if err := response.validateContextualComponents(contexts); err != nil {
+		return nil, err
+	}
+	return contexts, nil
+}
+
+func (response QueryResponse) validateContexts() (queryContextSet, error) {
 	if response.Contexts == nil {
 		return nil, fmt.Errorf("uci query response: contextual envelope requires contexts")
 	}
@@ -567,69 +595,97 @@ func (response QueryResponse) validateContextual() (queryContextSet, error) {
 		}
 		contexts[key] = struct{}{}
 	}
+	return contexts, nil
+}
 
+func (response QueryResponse) validateContextualComponents(contexts queryContextSet) error {
+	if err := response.validateContextualState(); err != nil {
+		return err
+	}
+	if err := response.validateContextualItems(contexts); err != nil {
+		return err
+	}
+	if err := response.validateContextualWarnings(); err != nil {
+		return err
+	}
+	if err := response.validateContextualContinuation(); err != nil {
+		return err
+	}
+	if response.Graph != nil {
+		return response.Graph.Validate(contexts)
+	}
+	return nil
+}
+
+func (response QueryResponse) validateContextualState() error {
 	if response.Freshness == nil {
-		return nil, fmt.Errorf("uci query response: contextual envelope requires freshness")
+		return fmt.Errorf("uci query response: contextual envelope requires freshness")
 	}
 	if err := response.Freshness.Validate(); err != nil {
-		return nil, err
+		return err
 	}
 	if response.Retrieval == nil {
-		return nil, fmt.Errorf("uci query response: contextual envelope requires retrieval")
+		return fmt.Errorf("uci query response: contextual envelope requires retrieval")
 	}
 	if err := response.Retrieval.Validate(); err != nil {
-		return nil, err
+		return err
 	}
 	if response.Coverage == nil {
-		return nil, fmt.Errorf("uci query response: contextual envelope requires coverage")
+		return fmt.Errorf("uci query response: contextual envelope requires coverage")
 	}
-	if err := response.Coverage.Validate(); err != nil {
-		return nil, err
-	}
+	return response.Coverage.Validate()
+}
+
+func (response QueryResponse) validateContextualItems(contexts queryContextSet) error {
 	if response.Items == nil {
-		return nil, fmt.Errorf("uci query response: contextual envelope requires items")
+		return fmt.Errorf("uci query response: contextual envelope requires items")
 	}
 	if len(*response.Items) > queryMaxItems {
-		return nil, fmt.Errorf("uci query response: item count exceeds limit")
+		return fmt.Errorf("uci query response: item count exceeds limit")
 	}
 	for _, item := range *response.Items {
 		if err := item.Validate(contexts); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if response.Truncated == nil {
-		return nil, fmt.Errorf("uci query response: contextual envelope requires truncated")
+		return fmt.Errorf("uci query response: contextual envelope requires truncated")
 	}
+	return nil
+}
+
+func (response QueryResponse) validateContextualWarnings() error {
 	if response.Warnings == nil {
-		return nil, fmt.Errorf("uci query response: contextual envelope requires warnings")
+		return fmt.Errorf("uci query response: contextual envelope requires warnings")
 	}
 	if len(*response.Warnings) > queryMaxWarnings {
-		return nil, fmt.Errorf("uci query response: warning count exceeds limit")
+		return fmt.Errorf("uci query response: warning count exceeds limit")
 	}
 	for _, warning := range *response.Warnings {
 		if !queryBoundedText(warning, 0, queryMaxWarning) {
-			return nil, fmt.Errorf("uci query response: warning exceeds limit")
+			return fmt.Errorf("uci query response: warning exceeds limit")
 		}
 	}
+	return nil
+}
+
+func (response QueryResponse) validateContextualContinuation() error {
 	if response.Continuation == nil {
-		return nil, fmt.Errorf("uci query response: contextual envelope requires continuation")
+		return fmt.Errorf("uci query response: contextual envelope requires continuation")
 	}
 	if err := response.Continuation.Validate(); err != nil {
-		return nil, err
+		return err
 	}
 	if *response.Truncated {
 		if response.Continuation.Value == nil {
-			return nil, fmt.Errorf("uci query response: truncated response requires a continuation")
+			return fmt.Errorf("uci query response: truncated response requires a continuation")
 		}
-	} else if response.Continuation.Value != nil {
-		return nil, fmt.Errorf("uci query response: untruncated response cannot contain a continuation")
+		return nil
 	}
-	if response.Graph != nil {
-		if err := response.Graph.Validate(contexts); err != nil {
-			return nil, err
-		}
+	if response.Continuation.Value != nil {
+		return fmt.Errorf("uci query response: untruncated response cannot contain a continuation")
 	}
-	return contexts, nil
+	return nil
 }
 
 func (response QueryResponse) validateSuppressed() error {
