@@ -278,6 +278,21 @@ func CalculateUCISLOReport(input UCISLOMeasurementInput) (UCISLOReport, error) {
 }
 
 func validateUCISLOMeasurementInput(input UCISLOMeasurementInput) error {
+	if err := validateUCISLOMeasurementIdentity(input); err != nil {
+		return err
+	}
+	seenSampleIDs := make(map[string]struct{})
+	seenGates, contextID, err := validateUCISLOWarmGates(input, seenSampleIDs)
+	if err != nil {
+		return err
+	}
+	if err := validateUCISLOExpectedGates(seenGates); err != nil {
+		return err
+	}
+	return validateUCISLOColdMeasurementObservations(input, contextID, seenSampleIDs)
+}
+
+func validateUCISLOMeasurementIdentity(input UCISLOMeasurementInput) error {
 	if input.SchemaVersion != UCISLOReportSchemaVersion {
 		return fmt.Errorf("uci SLO input: unsupported schema %q", input.SchemaVersion)
 	}
@@ -296,83 +311,123 @@ func validateUCISLOMeasurementInput(input UCISLOMeasurementInput) error {
 	if len(input.Gates) != len(uciSLOExpectedGateNames) {
 		return fmt.Errorf("uci SLO input: got %d warm gates, want %d", len(input.Gates), len(uciSLOExpectedGateNames))
 	}
+	return nil
+}
 
+func validateUCISLOWarmGates(input UCISLOMeasurementInput, seenSampleIDs map[string]struct{}) (map[string]struct{}, string, error) {
 	seenGates := make(map[string]struct{}, len(input.Gates))
-	seenSampleIDs := make(map[string]struct{})
 	contextID := ""
 	for _, gate := range input.Gates {
-		definition, found := uciSLOGateDefinitionFor(gate.Name)
-		if !found {
-			return fmt.Errorf("uci SLO input: unknown gate %q", gate.Name)
+		nextContextID, err := validateUCISLOWarmGate(gate, input, seenGates, seenSampleIDs, contextID)
+		if err != nil {
+			return nil, "", err
 		}
-		if _, duplicate := seenGates[gate.Name]; duplicate {
-			return fmt.Errorf("uci SLO input: duplicate gate %q", gate.Name)
-		}
-		seenGates[gate.Name] = struct{}{}
-		if gate.Operation != definition.Operation || gate.Warmth != "warm" {
-			return fmt.Errorf("uci SLO input: gate %q has operation %q and warmth %q", gate.Name, gate.Operation, gate.Warmth)
-		}
-		if gate.WaitBound <= 0 {
-			return fmt.Errorf("uci SLO input: gate %q has an unbounded wait", gate.Name)
-		}
-		if gate.ProfileID != input.Profile.ID || strings.TrimSpace(gate.ContextID) == "" {
-			return fmt.Errorf("uci SLO input: gate %q does not identify the accepted profile and context", gate.Name)
-		}
-		if contextID == "" {
-			contextID = gate.ContextID
-		} else if gate.ContextID != contextID {
-			return fmt.Errorf("uci SLO input: gate %q has mixed context %q", gate.Name, gate.ContextID)
-		}
-		if definition.MaxGraphDepth != 0 && (gate.MaxGraphDepth <= 0 || gate.MaxGraphDepth > definition.MaxGraphDepth || len(gate.QueryCaps) == 0) {
-			return fmt.Errorf("uci SLO input: graph gate %q lacks bounded graph caps", gate.Name)
-		}
-		for sampleIndex, sample := range gate.Samples {
-			if !validUCISLOSampleID(sample.ID) {
-				return fmt.Errorf("uci SLO input: gate %q sample %d has no bounded identity", gate.Name, sampleIndex)
-			}
-			if _, duplicate := seenSampleIDs[sample.ID]; duplicate {
-				return fmt.Errorf("uci SLO input: duplicate sample ID %q", sample.ID)
-			}
-			seenSampleIDs[sample.ID] = struct{}{}
-			if err := validateUCISLOSample(sample, input.Candidate, input.Environment, gate.ProfileID, gate.ContextID, gate.Warmth); err != nil {
-				return fmt.Errorf("uci SLO input: gate %q sample %d: %w", gate.Name, sampleIndex, err)
-			}
+		contextID = nextContextID
+	}
+	return seenGates, contextID, nil
+}
+
+func validateUCISLOWarmGate(gate UCISLOGateInput, input UCISLOMeasurementInput, seenGates, seenSampleIDs map[string]struct{}, contextID string) (string, error) {
+	definition, found := uciSLOGateDefinitionFor(gate.Name)
+	if !found {
+		return "", fmt.Errorf("uci SLO input: unknown gate %q", gate.Name)
+	}
+	if _, duplicate := seenGates[gate.Name]; duplicate {
+		return "", fmt.Errorf("uci SLO input: duplicate gate %q", gate.Name)
+	}
+	seenGates[gate.Name] = struct{}{}
+	if gate.Operation != definition.Operation || gate.Warmth != "warm" {
+		return "", fmt.Errorf("uci SLO input: gate %q has operation %q and warmth %q", gate.Name, gate.Operation, gate.Warmth)
+	}
+	if gate.WaitBound <= 0 {
+		return "", fmt.Errorf("uci SLO input: gate %q has an unbounded wait", gate.Name)
+	}
+	if gate.ProfileID != input.Profile.ID || strings.TrimSpace(gate.ContextID) == "" {
+		return "", fmt.Errorf("uci SLO input: gate %q does not identify the accepted profile and context", gate.Name)
+	}
+	if contextID != "" && gate.ContextID != contextID {
+		return "", fmt.Errorf("uci SLO input: gate %q has mixed context %q", gate.Name, gate.ContextID)
+	}
+	if definition.MaxGraphDepth != 0 && (gate.MaxGraphDepth <= 0 || gate.MaxGraphDepth > definition.MaxGraphDepth || len(gate.QueryCaps) == 0) {
+		return "", fmt.Errorf("uci SLO input: graph gate %q lacks bounded graph caps", gate.Name)
+	}
+	for sampleIndex, sample := range gate.Samples {
+		if err := validateUCISLOGateMeasurementSample(sample, sampleIndex, input, gate, seenSampleIDs); err != nil {
+			return "", err
 		}
 	}
+	if contextID == "" {
+		return gate.ContextID, nil
+	}
+	return contextID, nil
+}
+
+func validateUCISLOGateMeasurementSample(sample UCISLOSample, sampleIndex int, input UCISLOMeasurementInput, gate UCISLOGateInput, seenSampleIDs map[string]struct{}) error {
+	if !validUCISLOSampleID(sample.ID) {
+		return fmt.Errorf("uci SLO input: gate %q sample %d has no bounded identity", gate.Name, sampleIndex)
+	}
+	if _, duplicate := seenSampleIDs[sample.ID]; duplicate {
+		return fmt.Errorf("uci SLO input: duplicate sample ID %q", sample.ID)
+	}
+	seenSampleIDs[sample.ID] = struct{}{}
+	if err := validateUCISLOSample(sample, input.Candidate, input.Environment, gate.ProfileID, gate.ContextID, gate.Warmth); err != nil {
+		return fmt.Errorf("uci SLO input: gate %q sample %d: %w", gate.Name, sampleIndex, err)
+	}
+	return nil
+}
+
+func validateUCISLOExpectedGates(seenGates map[string]struct{}) error {
 	for _, name := range uciSLOExpectedGateNames {
 		if _, found := seenGates[name]; !found {
 			return fmt.Errorf("uci SLO input: missing gate %q", name)
 		}
 	}
+	return nil
+}
 
+func validateUCISLOColdMeasurementObservations(input UCISLOMeasurementInput, contextID string, seenSampleIDs map[string]struct{}) error {
 	if len(input.ColdObservations) == 0 {
 		return fmt.Errorf("uci SLO input: missing separately labelled cold observations")
 	}
 	for observationIndex, observation := range input.ColdObservations {
-		if len(observation.Samples) == 0 {
-			return fmt.Errorf("uci SLO input: cold observation %d has no retained sample evidence", observationIndex)
+		if err := validateUCISLOColdMeasurementObservation(observation, observationIndex, input, contextID, seenSampleIDs); err != nil {
+			return err
 		}
-		if observation.Warmth != "cold" || strings.TrimSpace(observation.Operation) == "" {
-			return fmt.Errorf("uci SLO input: cold observation %d is not labelled cold with an operation", observationIndex)
+	}
+	return nil
+}
+
+func validateUCISLOColdMeasurementObservation(observation UCISLOColdObservation, observationIndex int, input UCISLOMeasurementInput, contextID string, seenSampleIDs map[string]struct{}) error {
+	if len(observation.Samples) == 0 {
+		return fmt.Errorf("uci SLO input: cold observation %d has no retained sample evidence", observationIndex)
+	}
+	if observation.Warmth != "cold" || strings.TrimSpace(observation.Operation) == "" {
+		return fmt.Errorf("uci SLO input: cold observation %d is not labelled cold with an operation", observationIndex)
+	}
+	if observation.ProfileID != input.Profile.ID || observation.ContextID != contextID {
+		return fmt.Errorf("uci SLO input: cold observation %d has mixed profile or context", observationIndex)
+	}
+	if observation.WaitBound <= 0 {
+		return fmt.Errorf("uci SLO input: cold observation %d has an unbounded wait", observationIndex)
+	}
+	for sampleIndex, sample := range observation.Samples {
+		if err := validateUCISLOColdMeasurementSample(sample, sampleIndex, observationIndex, input, observation, seenSampleIDs); err != nil {
+			return err
 		}
-		if observation.ProfileID != input.Profile.ID || observation.ContextID != contextID {
-			return fmt.Errorf("uci SLO input: cold observation %d has mixed profile or context", observationIndex)
-		}
-		if observation.WaitBound <= 0 {
-			return fmt.Errorf("uci SLO input: cold observation %d has an unbounded wait", observationIndex)
-		}
-		for sampleIndex, sample := range observation.Samples {
-			if !validUCISLOSampleID(sample.ID) {
-				return fmt.Errorf("uci SLO input: cold observation %d sample %d has no bounded identity", observationIndex, sampleIndex)
-			}
-			if _, duplicate := seenSampleIDs[sample.ID]; duplicate {
-				return fmt.Errorf("uci SLO input: duplicate sample ID %q", sample.ID)
-			}
-			seenSampleIDs[sample.ID] = struct{}{}
-			if err := validateUCISLOSample(sample, input.Candidate, input.Environment, observation.ProfileID, observation.ContextID, observation.Warmth); err != nil {
-				return fmt.Errorf("uci SLO input: cold observation %d sample %d: %w", observationIndex, sampleIndex, err)
-			}
-		}
+	}
+	return nil
+}
+
+func validateUCISLOColdMeasurementSample(sample UCISLOSample, sampleIndex, observationIndex int, input UCISLOMeasurementInput, observation UCISLOColdObservation, seenSampleIDs map[string]struct{}) error {
+	if !validUCISLOSampleID(sample.ID) {
+		return fmt.Errorf("uci SLO input: cold observation %d sample %d has no bounded identity", observationIndex, sampleIndex)
+	}
+	if _, duplicate := seenSampleIDs[sample.ID]; duplicate {
+		return fmt.Errorf("uci SLO input: duplicate sample ID %q", sample.ID)
+	}
+	seenSampleIDs[sample.ID] = struct{}{}
+	if err := validateUCISLOSample(sample, input.Candidate, input.Environment, observation.ProfileID, observation.ContextID, observation.Warmth); err != nil {
+		return fmt.Errorf("uci SLO input: cold observation %d sample %d: %w", observationIndex, sampleIndex, err)
 	}
 	return nil
 }
@@ -475,6 +530,22 @@ func uciSLONearestRankP95(sorted []time.Duration) time.Duration {
 // denominator accounting, accepted thresholds, and deterministic report order.
 func ValidateUCISLOReport(report UCISLOReport) []UCISLOViolation {
 	violations := newUCISLOViolationCollector()
+	validateUCISLOReportIdentity(violations, report)
+	seenGates := make(map[string]struct{}, len(report.Gates))
+	seenSampleIDs := make(map[string]struct{})
+	contextID := ""
+	for _, gate := range report.Gates {
+		validateUCISLOReportGate(violations, report, gate, seenGates, seenSampleIDs, &contextID)
+	}
+	validateUCISLOExpectedReportGates(violations, seenGates)
+	validateUCISLOColdObservations(violations, report, contextID, seenSampleIDs)
+	if report.Passed != uciSLOReportPasses(report) {
+		violations.add("report_verdict_mismatch", "", "report pass verdict does not match its disclosed inputs")
+	}
+	return violations.values()
+}
+
+func validateUCISLOReportIdentity(violations *uciSLOViolationCollector, report UCISLOReport) {
 	if report.SchemaVersion != UCISLOReportSchemaVersion {
 		violations.add("unsupported_schema", "", "report schema is not the accepted UCI SLO schema")
 	}
@@ -496,41 +567,58 @@ func ValidateUCISLOReport(report UCISLOReport) []UCISLOViolation {
 	if !sort.SliceIsSorted(report.Gates, func(i, j int) bool { return report.Gates[i].Name < report.Gates[j].Name }) {
 		violations.add("nondeterministic_order", "", "gates are not deterministically ordered")
 	}
+}
 
-	seenGates := make(map[string]struct{}, len(report.Gates))
-	seenSampleIDs := make(map[string]struct{})
-	contextID := ""
-	for _, gate := range report.Gates {
-		definition, known := uciSLOGateDefinitionFor(gate.Name)
-		if !known {
-			violations.add("unexpected_gate", gate.Name, "gate is not in the accepted UCI SLO profile")
-			continue
-		}
-		if _, duplicate := seenGates[gate.Name]; duplicate {
-			violations.add("duplicate_gate", gate.Name, "report contains the gate more than once")
-		}
-		seenGates[gate.Name] = struct{}{}
-		if contextID == "" && strings.TrimSpace(gate.ContextID) != "" {
-			contextID = gate.ContextID
-		} else if contextID != "" && gate.ContextID != contextID {
-			violations.add("mixed_context", gate.Name, "gate context differs from the homogeneous report context")
-		}
-		validateUCISLOGateReport(violations, report, gate, definition, seenSampleIDs)
+func validateUCISLOReportGate(violations *uciSLOViolationCollector, report UCISLOReport, gate UCISLOGateReport, seenGates, seenSampleIDs map[string]struct{}, contextID *string) {
+	definition, known := uciSLOGateDefinitionFor(gate.Name)
+	if !known {
+		violations.add("unexpected_gate", gate.Name, "gate is not in the accepted UCI SLO profile")
+		return
 	}
+	if _, duplicate := seenGates[gate.Name]; duplicate {
+		violations.add("duplicate_gate", gate.Name, "report contains the gate more than once")
+	}
+	seenGates[gate.Name] = struct{}{}
+	if *contextID == "" && strings.TrimSpace(gate.ContextID) != "" {
+		*contextID = gate.ContextID
+	} else if *contextID != "" && gate.ContextID != *contextID {
+		violations.add("mixed_context", gate.Name, "gate context differs from the homogeneous report context")
+	}
+	validateUCISLOGateReport(violations, report, gate, definition, seenSampleIDs)
+}
+
+func validateUCISLOExpectedReportGates(violations *uciSLOViolationCollector, seenGates map[string]struct{}) {
 	for _, name := range uciSLOExpectedGateNames {
 		if _, found := seenGates[name]; !found {
 			violations.add("missing_gate", name, "report omits an accepted warm SLO gate")
 		}
 	}
-
-	validateUCISLOColdObservations(violations, report, contextID, seenSampleIDs)
-	if report.Passed != uciSLOReportPasses(report) {
-		violations.add("report_verdict_mismatch", "", "report pass verdict does not match its disclosed inputs")
-	}
-	return violations.values()
 }
 
 func validateUCISLOGateReport(violations *uciSLOViolationCollector, report UCISLOReport, gate UCISLOGateReport, definition uciSLOGateDefinition, seenSampleIDs map[string]struct{}) {
+	validateUCISLOGateContract(violations, report, gate, definition)
+	evidence := uciSLOGateEvidence{waitBoundObserved: true}
+	for _, sample := range gate.Samples {
+		validateUCISLOGateEvidenceSample(violations, report, gate, sample, seenSampleIDs, &evidence)
+	}
+	sort.Slice(evidence.healthyLatencies, func(i, j int) bool { return evidence.healthyLatencies[i] < evidence.healthyLatencies[j] })
+	validateUCISLOGateCounts(violations, gate, evidence)
+	validateUCISLOGateLatencies(violations, gate, evidence.healthyLatencies)
+	validateUCISLOPercentileDisclosure(violations, gate, len(evidence.healthyLatencies))
+	validateUCISLOGateDisclosures(violations, gate, definition, evidence)
+}
+
+type uciSLOGateEvidence struct {
+	healthyLatencies   []time.Duration
+	degradedReasons    []string
+	unavailableReasons []string
+	degradedCount      int
+	unavailableCount   int
+	failureCount       int
+	waitBoundObserved  bool
+}
+
+func validateUCISLOGateContract(violations *uciSLOViolationCollector, report UCISLOReport, gate UCISLOGateReport, definition uciSLOGateDefinition) {
 	if gate.Operation != definition.Operation || gate.Warmth != "warm" {
 		violations.add("gate_partition_mismatch", gate.Name, "gate operation or warmth differs from the accepted definition")
 	}
@@ -555,85 +643,84 @@ func validateUCISLOGateReport(violations *uciSLOViolationCollector, report UCISL
 	if !sort.SliceIsSorted(gate.Samples, func(i, j int) bool { return uciSLOSampleLess(gate.Samples[i], gate.Samples[j]) }) {
 		violations.add("nondeterministic_order", gate.Name, "raw samples are not deterministically ordered")
 	}
+}
 
-	healthyLatencies := make([]time.Duration, 0, len(gate.Samples))
-	degradedReasons := make([]string, 0, len(gate.Samples))
-	unavailableReasons := make([]string, 0, len(gate.Samples))
-	degradedCount := 0
-	unavailableCount := 0
-	failureCount := 0
-	waitBoundObserved := true
-	for _, sample := range gate.Samples {
-		if !validUCISLOSampleID(sample.ID) {
-			violations.add("sample_identity_missing", gate.Name, "sample omits a bounded unique ID")
-		} else if _, duplicate := seenSampleIDs[sample.ID]; duplicate {
-			violations.add("duplicate_sample_id", gate.Name, "sample ID is repeated in the report")
-		} else {
-			seenSampleIDs[sample.ID] = struct{}{}
-		}
-		if sample.Warmth != gate.Warmth {
-			violations.add("mixed_warmth", gate.Name, "sample warmth differs from its gate")
-		}
-		if sample.ProfileID != gate.ProfileID {
-			violations.add("mixed_profile", gate.Name, "sample profile differs from its gate")
-		}
-		if sample.ContextID != gate.ContextID {
-			violations.add("mixed_context", gate.Name, "sample context differs from its gate")
-		}
-		validateUCISLOSampleIdentity(violations, gate.Name, report, sample)
-		if sample.Waited > gate.WaitBound {
-			waitBoundObserved = false
-			violations.add("wait_bound_exceeded", gate.Name, "sample waited beyond the disclosed bound")
-		}
-		if sample.Latency < 0 || sample.Waited < 0 {
-			violations.add("negative_duration", gate.Name, "sample records a negative duration")
-		}
-		switch sample.Outcome {
-		case "healthy":
-			if sample.Latency <= 0 {
-				violations.add("healthy_latency_nonpositive", gate.Name, "healthy sample has no positive latency")
-			}
-			if uciSLOSampleIndicatesDegradation(sample) {
-				violations.add("degraded_sample_counted_healthy", gate.Name, "healthy outcome carries degraded result state, coverage, or reason")
-			}
-			healthyLatencies = append(healthyLatencies, sample.Latency)
-		case "degraded":
-			degradedCount++
-			if len(uciSLOSampleReasons(sample)) == 0 {
-				violations.add("degraded_reason_missing", gate.Name, "degraded sample has no reason")
-			}
-			degradedReasons = append(degradedReasons, uciSLOSampleReasons(sample)...)
-		case "unavailable":
-			unavailableCount++
-			if len(uciSLOSampleReasons(sample)) == 0 {
-				violations.add("unavailable_reason_missing", gate.Name, "unavailable sample has no reason")
-			}
-			unavailableReasons = append(unavailableReasons, uciSLOSampleReasons(sample)...)
-		case "failed":
-			failureCount++
-		default:
-			violations.add("unsupported_outcome", gate.Name, "sample outcome is not closed")
-		}
+func validateUCISLOGateEvidenceSample(violations *uciSLOViolationCollector, report UCISLOReport, gate UCISLOGateReport, sample UCISLOSample, seenSampleIDs map[string]struct{}, evidence *uciSLOGateEvidence) {
+	if !validUCISLOSampleID(sample.ID) {
+		violations.add("sample_identity_missing", gate.Name, "sample omits a bounded unique ID")
+	} else if _, duplicate := seenSampleIDs[sample.ID]; duplicate {
+		violations.add("duplicate_sample_id", gate.Name, "sample ID is repeated in the report")
+	} else {
+		seenSampleIDs[sample.ID] = struct{}{}
 	}
-	sort.Slice(healthyLatencies, func(i, j int) bool { return healthyLatencies[i] < healthyLatencies[j] })
-	if gate.HealthySampleCount != len(healthyLatencies) {
+	if sample.Warmth != gate.Warmth {
+		violations.add("mixed_warmth", gate.Name, "sample warmth differs from its gate")
+	}
+	if sample.ProfileID != gate.ProfileID {
+		violations.add("mixed_profile", gate.Name, "sample profile differs from its gate")
+	}
+	if sample.ContextID != gate.ContextID {
+		violations.add("mixed_context", gate.Name, "sample context differs from its gate")
+	}
+	validateUCISLOSampleIdentity(violations, gate.Name, report, sample)
+	if sample.Waited > gate.WaitBound {
+		evidence.waitBoundObserved = false
+		violations.add("wait_bound_exceeded", gate.Name, "sample waited beyond the disclosed bound")
+	}
+	validateUCISLOGateSampleOutcome(violations, gate, sample, evidence)
+}
+
+func validateUCISLOGateSampleOutcome(violations *uciSLOViolationCollector, gate UCISLOGateReport, sample UCISLOSample, evidence *uciSLOGateEvidence) {
+	switch sample.Outcome {
+	case "healthy":
+		if sample.Latency <= 0 {
+			violations.add("healthy_latency_nonpositive", gate.Name, "healthy sample has no positive latency")
+		}
+		if uciSLOSampleIndicatesDegradation(sample) {
+			violations.add("degraded_sample_counted_healthy", gate.Name, "healthy outcome carries degraded result state, coverage, or reason")
+		}
+		evidence.healthyLatencies = append(evidence.healthyLatencies, sample.Latency)
+	case "degraded":
+		evidence.degradedCount++
+		if len(uciSLOSampleReasons(sample)) == 0 {
+			violations.add("degraded_reason_missing", gate.Name, "degraded sample has no reason")
+		}
+		evidence.degradedReasons = append(evidence.degradedReasons, uciSLOSampleReasons(sample)...)
+	case "unavailable":
+		evidence.unavailableCount++
+		if len(uciSLOSampleReasons(sample)) == 0 {
+			violations.add("unavailable_reason_missing", gate.Name, "unavailable sample has no reason")
+		}
+		evidence.unavailableReasons = append(evidence.unavailableReasons, uciSLOSampleReasons(sample)...)
+	case "failed":
+		evidence.failureCount++
+	default:
+		violations.add("unsupported_outcome", gate.Name, "sample outcome is not closed")
+	}
+}
+
+func validateUCISLOGateCounts(violations *uciSLOViolationCollector, gate UCISLOGateReport, evidence uciSLOGateEvidence) {
+	if gate.HealthySampleCount != len(evidence.healthyLatencies) {
 		violations.add("healthy_sample_count_mismatch", gate.Name, "healthy sample count differs from retained healthy outcomes")
-		if gate.HealthySampleCount > len(healthyLatencies) {
+		if gate.HealthySampleCount > len(evidence.healthyLatencies) {
 			violations.add("degraded_sample_counted_healthy", gate.Name, "reported healthy count exceeds healthy raw outcomes")
 		}
 	}
 	if gate.HealthySampleCount < UCISLOMinimumHealthySamples {
 		violations.add("minimum_healthy_samples", gate.Name, "healthy percentile denominator is below 100")
 	}
-	if gate.DegradedCount != degradedCount {
+	if gate.DegradedCount != evidence.degradedCount {
 		violations.add("degraded_count_mismatch", gate.Name, "degraded count differs from retained raw outcomes")
 	}
-	if gate.UnavailableCount != unavailableCount {
+	if gate.UnavailableCount != evidence.unavailableCount {
 		violations.add("unavailable_count_mismatch", gate.Name, "unavailable count differs from retained raw outcomes")
 	}
-	if gate.FailureCount != failureCount {
+	if gate.FailureCount != evidence.failureCount {
 		violations.add("failure_count_mismatch", gate.Name, "failure count differs from retained raw outcomes")
 	}
+}
+
+func validateUCISLOGateLatencies(violations *uciSLOViolationCollector, gate UCISLOGateReport, healthyLatencies []time.Duration) {
 	if !uciSLODurationSlicesEqual(gate.HealthyLatencyInputs, healthyLatencies) || !sort.SliceIsSorted(gate.HealthyLatencyInputs, func(i, j int) bool { return gate.HealthyLatencyInputs[i] < gate.HealthyLatencyInputs[j] }) {
 		violations.add("healthy_latency_input_mismatch", gate.Name, "percentile inputs do not equal every sorted healthy latency")
 	}
@@ -641,25 +728,27 @@ func validateUCISLOGateReport(violations *uciSLOViolationCollector, report UCISL
 		if gate.P95 != 0 || gate.Max != 0 {
 			violations.add("zero_denominator_percentile", gate.Name, "zero healthy denominator cannot report a percentile or maximum")
 		}
-	} else {
-		if gate.P95 != uciSLONearestRankP95(healthyLatencies) {
-			violations.add("p95_mismatch", gate.Name, "p95 is not nearest-rank over every healthy latency")
-		}
-		if gate.Max != healthyLatencies[len(healthyLatencies)-1] {
-			violations.add("max_mismatch", gate.Name, "max is not the largest healthy latency")
-		}
+		return
 	}
-	validateUCISLOPercentileDisclosure(violations, gate, len(healthyLatencies))
-	if !uciSLOReasonDisclosureComplete(gate.DegradedReasons, degradedReasons) {
+	if gate.P95 != uciSLONearestRankP95(healthyLatencies) {
+		violations.add("p95_mismatch", gate.Name, "p95 is not nearest-rank over every healthy latency")
+	}
+	if gate.Max != healthyLatencies[len(healthyLatencies)-1] {
+		violations.add("max_mismatch", gate.Name, "max is not the largest healthy latency")
+	}
+}
+
+func validateUCISLOGateDisclosures(violations *uciSLOViolationCollector, gate UCISLOGateReport, definition uciSLOGateDefinition, evidence uciSLOGateEvidence) {
+	if !uciSLOReasonDisclosureComplete(gate.DegradedReasons, evidence.degradedReasons) {
 		violations.add("degraded_reason_undisclosed", gate.Name, "degraded reason summary omits a raw sample reason")
 	}
-	if !uciSLOReasonDisclosureComplete(gate.UnavailableReasons, unavailableReasons) {
+	if !uciSLOReasonDisclosureComplete(gate.UnavailableReasons, evidence.unavailableReasons) {
 		violations.add("unavailable_reason_undisclosed", gate.Name, "unavailable reason summary omits a raw sample reason")
 	}
 	if !sort.StringsAreSorted(gate.DegradedReasons) || !sort.StringsAreSorted(gate.UnavailableReasons) {
 		violations.add("nondeterministic_order", gate.Name, "reason summaries are not deterministically ordered")
 	}
-	if gate.Passed != uciSLOGatePasses(gate, definition) || !waitBoundObserved && gate.Passed {
+	if gate.Passed != uciSLOGatePasses(gate, definition) || !evidence.waitBoundObserved && gate.Passed {
 		violations.add("gate_verdict_mismatch", gate.Name, "gate pass verdict does not match its disclosed inputs")
 	}
 }
@@ -707,58 +796,69 @@ func validateUCISLOColdObservations(violations *uciSLOViolationCollector, report
 		return
 	}
 	if !sort.SliceIsSorted(report.ColdObservations, func(i, j int) bool {
-		left, right := report.ColdObservations[i], report.ColdObservations[j]
-		if left.Operation != right.Operation {
-			return left.Operation < right.Operation
-		}
-		if left.ContextID != right.ContextID {
-			return left.ContextID < right.ContextID
-		}
-		return left.ProfileID < right.ProfileID
+		return uciSLOColdObservationLess(report.ColdObservations[i], report.ColdObservations[j])
 	}) {
 		violations.add("nondeterministic_order", "", "cold observations are not deterministically ordered")
 	}
 	for _, observation := range report.ColdObservations {
-		if observation.Warmth != "cold" || strings.TrimSpace(observation.Operation) == "" {
-			violations.add("cold_observation_invalid", observation.Operation, "cold observation is not labelled cold with an operation")
-		}
-		if observation.ProfileID != report.Profile.ID {
-			violations.add("mixed_profile", observation.Operation, "cold observation profile differs from the report profile")
-		}
-		if observation.ContextID != contextID {
-			violations.add("mixed_context", observation.Operation, "cold observation context differs from the warm report context")
-		}
-		if observation.WaitBound <= 0 {
-			violations.add("unbounded_wait", observation.Operation, "cold observation does not disclose a positive bounded wait")
-		}
-		if observation.SampleCount != len(observation.Samples) {
-			violations.add("sample_count_mismatch", observation.Operation, "cold observation count differs from retained samples")
-		}
-		if !sort.SliceIsSorted(observation.Samples, func(i, j int) bool { return uciSLOSampleLess(observation.Samples[i], observation.Samples[j]) }) {
-			violations.add("nondeterministic_order", observation.Operation, "cold samples are not deterministically ordered")
-		}
-		for _, sample := range observation.Samples {
-			if !validUCISLOSampleID(sample.ID) {
-				violations.add("sample_identity_missing", observation.Operation, "cold sample omits a bounded unique ID")
-			} else if _, duplicate := seenSampleIDs[sample.ID]; duplicate {
-				violations.add("duplicate_sample_id", observation.Operation, "sample ID is repeated in the report")
-			} else {
-				seenSampleIDs[sample.ID] = struct{}{}
-			}
-			if sample.Warmth != observation.Warmth {
-				violations.add("mixed_warmth", observation.Operation, "cold sample warmth differs from its observation")
-			}
-			if sample.ProfileID != observation.ProfileID {
-				violations.add("mixed_profile", observation.Operation, "cold sample profile differs from its observation")
-			}
-			if sample.ContextID != observation.ContextID {
-				violations.add("mixed_context", observation.Operation, "cold sample context differs from its observation")
-			}
-			validateUCISLOSampleIdentity(violations, observation.Operation, report, sample)
-			if sample.Waited > observation.WaitBound {
-				violations.add("wait_bound_exceeded", observation.Operation, "cold sample waited beyond the disclosed bound")
-			}
-		}
+		validateUCISLOColdObservation(violations, report, observation, contextID, seenSampleIDs)
+	}
+}
+
+func uciSLOColdObservationLess(left, right UCISLOColdObservation) bool {
+	if left.Operation != right.Operation {
+		return left.Operation < right.Operation
+	}
+	if left.ContextID != right.ContextID {
+		return left.ContextID < right.ContextID
+	}
+	return left.ProfileID < right.ProfileID
+}
+
+func validateUCISLOColdObservation(violations *uciSLOViolationCollector, report UCISLOReport, observation UCISLOColdObservation, contextID string, seenSampleIDs map[string]struct{}) {
+	if observation.Warmth != "cold" || strings.TrimSpace(observation.Operation) == "" {
+		violations.add("cold_observation_invalid", observation.Operation, "cold observation is not labelled cold with an operation")
+	}
+	if observation.ProfileID != report.Profile.ID {
+		violations.add("mixed_profile", observation.Operation, "cold observation profile differs from the report profile")
+	}
+	if observation.ContextID != contextID {
+		violations.add("mixed_context", observation.Operation, "cold observation context differs from the warm report context")
+	}
+	if observation.WaitBound <= 0 {
+		violations.add("unbounded_wait", observation.Operation, "cold observation does not disclose a positive bounded wait")
+	}
+	if observation.SampleCount != len(observation.Samples) {
+		violations.add("sample_count_mismatch", observation.Operation, "cold observation count differs from retained samples")
+	}
+	if !sort.SliceIsSorted(observation.Samples, func(i, j int) bool { return uciSLOSampleLess(observation.Samples[i], observation.Samples[j]) }) {
+		violations.add("nondeterministic_order", observation.Operation, "cold samples are not deterministically ordered")
+	}
+	for _, sample := range observation.Samples {
+		validateUCISLOColdObservationSample(violations, report, observation, sample, seenSampleIDs)
+	}
+}
+
+func validateUCISLOColdObservationSample(violations *uciSLOViolationCollector, report UCISLOReport, observation UCISLOColdObservation, sample UCISLOSample, seenSampleIDs map[string]struct{}) {
+	if !validUCISLOSampleID(sample.ID) {
+		violations.add("sample_identity_missing", observation.Operation, "cold sample omits a bounded unique ID")
+	} else if _, duplicate := seenSampleIDs[sample.ID]; duplicate {
+		violations.add("duplicate_sample_id", observation.Operation, "sample ID is repeated in the report")
+	} else {
+		seenSampleIDs[sample.ID] = struct{}{}
+	}
+	if sample.Warmth != observation.Warmth {
+		violations.add("mixed_warmth", observation.Operation, "cold sample warmth differs from its observation")
+	}
+	if sample.ProfileID != observation.ProfileID {
+		violations.add("mixed_profile", observation.Operation, "cold sample profile differs from its observation")
+	}
+	if sample.ContextID != observation.ContextID {
+		violations.add("mixed_context", observation.Operation, "cold sample context differs from its observation")
+	}
+	validateUCISLOSampleIdentity(violations, observation.Operation, report, sample)
+	if sample.Waited > observation.WaitBound {
+		violations.add("wait_bound_exceeded", observation.Operation, "cold sample waited beyond the disclosed bound")
 	}
 }
 
