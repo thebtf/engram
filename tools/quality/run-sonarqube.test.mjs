@@ -11,6 +11,7 @@ import {
   acquireLock,
   cleanupExecution,
   Progress,
+  classifyProfileFailure,
   collectCoverage,
   consumeGoEvents,
   createLogWriter,
@@ -25,6 +26,7 @@ import {
   reusableProfile,
   profileDescriptor,
   runOwnedCommand,
+  profileTimeout,
   scheduleProfiles,
   sha256,
   runWithCampaign,
@@ -190,14 +192,24 @@ test("scheduler overlaps only the approved fixture pair and retains a successful
   assert.equal(results.get("operator-code-fixture").status, "passed");
 });
 
-test("descriptor binds base p=2 and dedicated p=1 for inventory and execution fingerprints", () => {
+test("descriptor restores base p=1 after the bounded p=2 budget expiry", () => {
   const base = coverageProfiles.find((profile) => profile.name === "base");
   const dedicated = coverageProfiles.find((profile) => profile.name === "uci");
-  assert.deepEqual(profileDescriptor(base).effective_argv.slice(0, 4), ["test", "-json", "-p=2", "-count=1"]);
-  assert.deepEqual(testInventoryArguments(base), ["test", "-p=2", "-list", ".", "./..."]);
+  assert.deepEqual(profileDescriptor(base).effective_argv.slice(0, 4), ["test", "-json", "-p=1", "-count=1"]);
+  assert.deepEqual(testInventoryArguments(base), ["test", "-p=1", "-list", ".", "./..."]);
   assert.equal(profileDescriptor(dedicated).effective_argv[2], "-p=1");
   assert.equal(testInventoryArguments(dedicated)[1], "-p=1");
-  assert.notEqual(fingerprintProfile(base, candidate(), { sha256: "environment" }), fingerprintProfile({ ...base, packageConcurrency: 1 }, candidate(), { sha256: "environment" }));
+  assert.notEqual(fingerprintProfile(base, candidate(), { sha256: "environment" }), fingerprintProfile({ ...base, packageConcurrency: 2 }, candidate(), { sha256: "environment" }));
+});
+
+test("profile budget expiry is retained as timed_out with an explicit budget reason", () => {
+  const deadline = new Deadline({ overallTimeout: 1000, coverageTimeout: 60, profileTimeout: 30, scannerTimeout: 60, qualityGateTimeout: 60 });
+  let expiry;
+  assert.throws(() => profileTimeout(deadline, Date.now() - 1, 1000), (error) => {
+    expiry = error;
+    return /profile budget exhausted/.test(error.message);
+  });
+  assert.deepEqual(classifyProfileFailure(expiry, { signal: new AbortController().signal }), { status: "timed_out", reason: "profile_budget_exhausted" });
 });
 
 test("log writer streams ordinary test events while retaining split-secret redaction", () => {

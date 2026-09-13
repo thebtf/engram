@@ -43,7 +43,7 @@ export const coverageProfiles = Object.freeze([
     race: true,
     coverpkg: "./cmd/...,./internal/...,./pkg/...",
     resourceGroup: "exclusive",
-    packageConcurrency: 2,
+    packageConcurrency: 1,
   },
   { name: "uci", target: "./internal/db/gorm", run: "^TestUCI", databasePrefix: "sonar_uci" },
   {
@@ -1293,10 +1293,16 @@ function parseTestList(output, profile) {
   return tests.sort((left, right) => testIdentity(left.package, left.test).localeCompare(testIdentity(right.package, right.test)));
 }
 
-function profileTimeout(deadline, profileDeadline, ownMs) {
+export function profileTimeout(deadline, profileDeadline, ownMs) {
   const timeout = Math.min(deadline.timeoutFor("profile", ownMs), profileDeadline - Date.now());
   if (timeout <= 0) throw new BudgetError("profile budget exhausted");
   return timeout;
+}
+
+export function classifyProfileFailure(error, execution) {
+  if (error instanceof BudgetError) return { status: "timed_out", reason: "profile_budget_exhausted" };
+  if (execution.signal?.aborted) return { status: "cancelled", reason: "runner_cancelled" };
+  return { status: "failed", reason: "command_failed" };
 }
 
 async function expectedTests(goCommand, profile, cwd, environment, execution, deadline, profileDeadline) {
@@ -1500,7 +1506,9 @@ async function runCoverageProfile(goCommand, profile, campaign, entry, cwd, base
     finishGoEvents(state, (line) => testWriter.write(line), observeGoEvent);
     testWriter.finish();
     stderrWriter.finish();
-    entry.status = error instanceof BudgetError ? "timed_out" : execution.signal?.aborted ? "cancelled" : "failed";
+    const failure = classifyProfileFailure(error, execution);
+    entry.status = failure.status;
+    entry.failure_reason = failure.reason;
     entry.completed_at_utc = new Date().toISOString();
     entry.elapsed_ms = Date.now() - started;
     entry.failure = redacted(error.message, secrets);
