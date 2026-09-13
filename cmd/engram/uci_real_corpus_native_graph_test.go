@@ -323,18 +323,9 @@ func uciRealCorpusNativeGraphValidateRow(row uciRealCorpusNativeGraphRow, expect
 	if row.TargetArtifactID == "" || row.SourceContentDigest == "" || row.TargetContentDigest == "" || row.EdgeKey == "" || row.ReferenceSiteID == "" || row.ReferenceSiteKey == "" || row.ReferenceRawTarget == "" || len(row.SourceBody) == 0 {
 		return errors.New("real-corpus native graph edge source, target, or reference evidence is incomplete")
 	}
-
-	var referenceSpan uciRealCorpusNativeGraphSpan
-	if err := json.Unmarshal([]byte(row.ReferenceSyntaxSpan), &referenceSpan); err != nil {
-		return fmt.Errorf("decode real-corpus native graph reference span: %w", err)
-	}
-	var evidence uciRealCorpusNativeGraphEvidence
-	if err := json.Unmarshal([]byte(row.EvidenceJSON), &evidence); err != nil {
-		return fmt.Errorf("decode real-corpus native graph edge evidence: %w", err)
-	}
-	var hints uciRealCorpusNativeGraphReferenceHints
-	if err := json.Unmarshal([]byte(row.ReferenceResolverHints), &hints); err != nil {
-		return fmt.Errorf("decode real-corpus native graph reference hints: %w", err)
+	referenceSpan, evidence, hints, err := uciRealCorpusNativeGraphDecodeRowEvidence(row)
+	if err != nil {
+		return err
 	}
 	if evidence.ReferenceSiteID == nil || *evidence.ReferenceSiteID != row.ReferenceSiteID || evidence.RuleKey != uciRealCorpusNativeGraphRuleKey || evidence.Explanation == "" || hints.Kind != expected.kind || hints.SymbolKey == "" {
 		return errors.New("real-corpus native graph edge is not bound to the expected source reference")
@@ -343,19 +334,39 @@ func uciRealCorpusNativeGraphValidateRow(row uciRealCorpusNativeGraphRow, expect
 		return errors.New("real-corpus native graph edge source reference does not match the expected symbol")
 	}
 	if expected.localAlias != "" {
-		if expected.importedSymbol == "" || expected.referenceKey == "" || expected.rawTarget != expected.importedSymbol+" as "+expected.localAlias || expected.targetSymbol != "function:"+expected.importedSymbol {
-			return errors.New("real-corpus native graph alias expectation is inconsistent")
-		}
-		expectedReferenceSiteKey := fmt.Sprintf("%s@%d:%d", expected.referenceKey, referenceSpan.ByteStart, referenceSpan.ByteEnd)
-		if row.ReferenceSiteKey != expectedReferenceSiteKey || hints.SymbolKey != expected.sourceLanguage+":"+expectedReferenceSiteKey {
-			return errors.New("real-corpus native graph alias reference does not prove the expected renamed binding")
+		if err := uciRealCorpusNativeGraphValidateAlias(row, expected, referenceSpan, hints); err != nil {
+			return err
 		}
 	}
 	if !uciRealCorpusNativeGraphEqualSpans(referenceSpan, evidence.Span) {
 		return errors.New("real-corpus native graph edge and source reference span differ")
 	}
-	if err := uciRealCorpusNativeGraphValidateSpan(row.SourceBody, row.ReferenceRawTarget, referenceSpan); err != nil {
-		return err
+	return uciRealCorpusNativeGraphValidateSpan(row.SourceBody, row.ReferenceRawTarget, referenceSpan)
+}
+
+func uciRealCorpusNativeGraphDecodeRowEvidence(row uciRealCorpusNativeGraphRow) (uciRealCorpusNativeGraphSpan, uciRealCorpusNativeGraphEvidence, uciRealCorpusNativeGraphReferenceHints, error) {
+	var referenceSpan uciRealCorpusNativeGraphSpan
+	if err := json.Unmarshal([]byte(row.ReferenceSyntaxSpan), &referenceSpan); err != nil {
+		return uciRealCorpusNativeGraphSpan{}, uciRealCorpusNativeGraphEvidence{}, uciRealCorpusNativeGraphReferenceHints{}, fmt.Errorf("decode real-corpus native graph reference span: %w", err)
+	}
+	var evidence uciRealCorpusNativeGraphEvidence
+	if err := json.Unmarshal([]byte(row.EvidenceJSON), &evidence); err != nil {
+		return uciRealCorpusNativeGraphSpan{}, uciRealCorpusNativeGraphEvidence{}, uciRealCorpusNativeGraphReferenceHints{}, fmt.Errorf("decode real-corpus native graph edge evidence: %w", err)
+	}
+	var hints uciRealCorpusNativeGraphReferenceHints
+	if err := json.Unmarshal([]byte(row.ReferenceResolverHints), &hints); err != nil {
+		return uciRealCorpusNativeGraphSpan{}, uciRealCorpusNativeGraphEvidence{}, uciRealCorpusNativeGraphReferenceHints{}, fmt.Errorf("decode real-corpus native graph reference hints: %w", err)
+	}
+	return referenceSpan, evidence, hints, nil
+}
+
+func uciRealCorpusNativeGraphValidateAlias(row uciRealCorpusNativeGraphRow, expected uciRealCorpusNativeGraphExpectation, referenceSpan uciRealCorpusNativeGraphSpan, hints uciRealCorpusNativeGraphReferenceHints) error {
+	if expected.importedSymbol == "" || expected.referenceKey == "" || expected.rawTarget != expected.importedSymbol+" as "+expected.localAlias || expected.targetSymbol != "function:"+expected.importedSymbol {
+		return errors.New("real-corpus native graph alias expectation is inconsistent")
+	}
+	expectedReferenceSiteKey := fmt.Sprintf("%s@%d:%d", expected.referenceKey, referenceSpan.ByteStart, referenceSpan.ByteEnd)
+	if row.ReferenceSiteKey != expectedReferenceSiteKey || hints.SymbolKey != expected.sourceLanguage+":"+expectedReferenceSiteKey {
+		return errors.New("real-corpus native graph alias reference does not prove the expected renamed binding")
 	}
 	return nil
 }
