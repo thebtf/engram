@@ -26,50 +26,104 @@ type uci1SemanticRUEmbeddingProfile struct {
 	IncludeRelativePath   bool   `gorm:"column:include_relative_path"`
 }
 
+type uci1SemanticRUProbeState struct {
+	providerURL string
+	model       string
+	selection   uciInstalledAcceptanceSelection
+	publication uciInstalledAcceptancePublication
+}
+
 func uci1ProbeSemanticRUInstalled(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime) (map[string]uciInstalledAcceptanceScenarioEvidence, error) {
+	state, err := uci1SemanticRUPrepareProbe(ctx, runtime)
+	if err != nil {
+		return nil, err
+	}
+	citation, err := uci1SemanticRUSearchCitation(ctx, runtime, state)
+	if err != nil {
+		return nil, err
+	}
+	readItem, err := uci1SemanticRUReadCitation(ctx, runtime, state, citation)
+	if err != nil {
+		return nil, err
+	}
+	profile, err := uci1SemanticRUEmbeddingProfileFor(ctx, runtime.Authority, state.publication, state.providerURL, state.model)
+	if err != nil {
+		return nil, err
+	}
+	digest := uciInstalledAcceptanceStringDigest(strings.Join([]string{
+		"U16",
+		uci1SemanticRUQuery,
+		profile.ProviderRef,
+		profile.Model,
+		profile.EmbeddingProfileID,
+		profile.PreprocessingRevision,
+		state.publication.sourceID,
+		state.publication.checkoutID,
+		state.publication.profileID,
+		state.publication.viewID,
+		strconv.FormatInt(state.publication.generation, 10),
+		citation.Ref.EntityKey,
+		citation.Path,
+		string(citation.ContentDigest),
+		string(readItem.ContentDigest),
+	}, "\n"))
+	return map[string]uciInstalledAcceptanceScenarioEvidence{
+		"U16": {Code: uciInstalledAcceptanceScenarioCodeObserved, Digest: digest},
+	}, nil
+}
+
+func uci1SemanticRUPrepareProbe(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime) (uci1SemanticRUProbeState, error) {
 	providerURL, model, configured := uci1SemanticRUProviderEnvironment(runtime.ServerEnvironment)
 	if !configured {
-		return nil, errors.New(uci1SemanticRUMissingProviderSeam)
+		return uci1SemanticRUProbeState{}, errors.New(uci1SemanticRUMissingProviderSeam)
 	}
 	if uci1SemanticRUHasLexicalOverlap(uci1SemanticRUQuery, runtime.Request.Fixture.PrimarySource, runtime.Request.Fixture.LinkedSource) {
-		return nil, errors.New("U16 Russian semantic query has lexical overlap with the English fixture code")
+		return uci1SemanticRUProbeState{}, errors.New("U16 Russian semantic query has lexical overlap with the English fixture code")
 	}
 	if ctx == nil || runtime.ClientA == nil || runtime.Authority == nil || runtime.Authority.store == nil {
-		return nil, errors.New("U16 installed semantic probe runtime is incomplete")
+		return uci1SemanticRUProbeState{}, errors.New("U16 installed semantic probe runtime is incomplete")
 	}
-
 	selection, selected := runtime.Selections[uciInstalledAcceptanceClientA]
 	publication, published := runtime.Publications[uciInstalledAcceptanceClientA]
 	if !selected || !published || selection.contextHandle == "" || selection.runID == "" {
-		return nil, errors.New("U16 installed semantic probe has no selected current View")
+		return uci1SemanticRUProbeState{}, errors.New("U16 installed semantic probe has no selected current View")
 	}
-
 	status, err := uciInstalledAcceptanceStatusForSelection(ctx, runtime.ClientA, selection)
 	if err != nil {
-		return nil, fmt.Errorf("observe U16 installed current View: %w", err)
+		return uci1SemanticRUProbeState{}, fmt.Errorf("observe U16 installed current View: %w", err)
 	}
 	current, err := uciInstalledAcceptanceStatusPublication(status, selection)
 	if err != nil {
-		return nil, fmt.Errorf("bind U16 installed current View: %w", err)
+		return uci1SemanticRUProbeState{}, fmt.Errorf("bind U16 installed current View: %w", err)
 	}
 	if !uci1SemanticRUPublicationMatches(current, publication) {
-		return nil, errors.New("U16 installed current View differs from the published baseline")
+		return uci1SemanticRUProbeState{}, errors.New("U16 installed current View differs from the published baseline")
 	}
+	return uci1SemanticRUProbeState{providerURL: providerURL, model: model, selection: selection, publication: current}, nil
+}
 
+func uci1SemanticRUSearchCitation(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, state uci1SemanticRUProbeState) (uci.QueryItem, error) {
 	payload, err := runtime.ClientA.Tool(ctx, "codebase_search", map[string]any{
-		"context_handle": selection.contextHandle,
+		"context_handle": state.selection.contextHandle,
 		"query":          uci1SemanticRUQuery,
 		"path_prefix":    "pkg",
 		"limit":          5,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("run U16 Russian semantic search through installed client: %w", err)
+		return uci.QueryItem{}, fmt.Errorf("run U16 Russian semantic search through installed client: %w", err)
 	}
 	response, err := uciDecodeInstalledAcceptanceQuery(payload)
 	if err != nil {
-		return nil, fmt.Errorf("decode U16 Russian semantic search: %w", err)
+		return uci.QueryItem{}, fmt.Errorf("decode U16 Russian semantic search: %w", err)
 	}
-	if (response.Status != uci.QueryStatusOK && response.Status != uci.QueryStatusPartial) || !uciInstalledAcceptanceQueryMatchesPublication(response, current) || response.Retrieval == nil || response.Retrieval.Mode != uci.QueryRetrievalHybrid || response.Retrieval.VectorCoverage == nil || *response.Retrieval.VectorCoverage < 1 || response.Items == nil {
+	if err := uci1SemanticRUValidateSearch(response, state.publication); err != nil {
+		return uci.QueryItem{}, err
+	}
+	return uci1SemanticRUFindCitation(response, state.publication, runtime.Request.Fixture)
+}
+
+func uci1SemanticRUValidateSearch(response uci.QueryResponse, publication uciInstalledAcceptancePublication) error {
+	if (response.Status != uci.QueryStatusOK && response.Status != uci.QueryStatusPartial) || !uciInstalledAcceptanceQueryMatchesPublication(response, publication) || response.Retrieval == nil || response.Retrieval.Mode != uci.QueryRetrievalHybrid || response.Retrieval.VectorCoverage == nil || *response.Retrieval.VectorCoverage < 1 || response.Items == nil {
 		mode := uci.QueryRetrievalMode("")
 		coverage := -1.0
 		if response.Retrieval != nil {
@@ -89,36 +143,42 @@ func uci1ProbeSemanticRUInstalled(ctx context.Context, runtime uciInstalledAccep
 				unsupported = *response.Coverage.UnsupportedFiles
 			}
 		}
-		return nil, fmt.Errorf("U16 Russian semantic search incomplete: status=%s current_view=%t retrieval=%s vector_coverage=%g structural=%s unresolved=%d unsupported=%d items=%t", response.Status, uciInstalledAcceptanceQueryMatchesPublication(response, current), mode, coverage, structural, unresolved, unsupported, response.Items != nil)
+		return fmt.Errorf("U16 Russian semantic search incomplete: status=%s current_view=%t retrieval=%s vector_coverage=%g structural=%s unresolved=%d unsupported=%d items=%t", response.Status, uciInstalledAcceptanceQueryMatchesPublication(response, publication), mode, coverage, structural, unresolved, unsupported, response.Items != nil)
 	}
+	return nil
+}
 
+func uci1SemanticRUFindCitation(response uci.QueryResponse, publication uciInstalledAcceptancePublication, fixture uciInstalledAcceptanceFixture) (uci.QueryItem, error) {
 	var citation *uci.QueryItem
 	for index := range *response.Items {
 		item := &(*response.Items)[index]
-		if item.Ref.SourceID != current.sourceID || item.Ref.ViewID != current.viewID {
-			return nil, errors.New("U16 Russian semantic search disclosed an item outside the current View")
+		if item.Ref.SourceID != publication.sourceID || item.Ref.ViewID != publication.viewID {
+			return uci.QueryItem{}, errors.New("U16 Russian semantic search disclosed an item outside the current View")
 		}
 		name, isGoFunction := uciInstalledAcceptanceGoFunctionName(item.Ref.EntityKey)
-		if item.Path != runtime.Request.Fixture.RelativePath || !isGoFunction || name != runtime.Request.Fixture.SharedSymbol {
+		if item.Path != fixture.RelativePath || !isGoFunction || name != fixture.SharedSymbol {
 			continue
 		}
 		if !uciInstalledAcceptanceIsBareSHA256(string(item.ContentDigest)) {
-			return nil, errors.New("U16 Russian semantic search citation has an invalid digest")
+			return uci.QueryItem{}, errors.New("U16 Russian semantic search citation has an invalid digest")
 		}
 		if len(item.MatchSources) != 1 || item.MatchSources[0] != uci.QueryMatchVector {
-			return nil, errors.New("U16 Russian semantic search did not prove vector-only retrieval")
+			return uci.QueryItem{}, errors.New("U16 Russian semantic search did not prove vector-only retrieval")
 		}
 		if citation != nil {
-			return nil, errors.New("U16 Russian semantic search returned multiple target citations")
+			return uci.QueryItem{}, errors.New("U16 Russian semantic search returned multiple target citations")
 		}
 		citation = item
 	}
 	if citation == nil {
-		return nil, errors.New("U16 Russian semantic search omitted the delegated-call fixture citation")
+		return uci.QueryItem{}, errors.New("U16 Russian semantic search omitted the delegated-call fixture citation")
 	}
+	return *citation, nil
+}
 
-	readPayload, err := runtime.ClientA.Tool(ctx, "codebase_read", map[string]any{
-		"context_handle": selection.contextHandle,
+func uci1SemanticRUReadCitation(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, state uci1SemanticRUProbeState, citation uci.QueryItem) (uci.QueryItem, error) {
+	payload, err := runtime.ClientA.Tool(ctx, "codebase_read", map[string]any{
+		"context_handle": state.selection.contextHandle,
 		"ref": map[string]any{
 			"source_id":  citation.Ref.SourceID,
 			"view_id":    citation.Ref.ViewID,
@@ -135,48 +195,20 @@ func uci1ProbeSemanticRUInstalled(ctx context.Context, runtime uciInstalledAccep
 		"max_bytes":           8_192,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("read U16 Russian semantic citation through installed client: %w", err)
+		return uci.QueryItem{}, fmt.Errorf("read U16 Russian semantic citation through installed client: %w", err)
 	}
-	read, err := uciDecodeInstalledAcceptanceQuery(readPayload)
+	read, err := uciDecodeInstalledAcceptanceQuery(payload)
 	if err != nil {
-		return nil, fmt.Errorf("decode U16 Russian citation readback: %w", err)
+		return uci.QueryItem{}, fmt.Errorf("decode U16 Russian citation readback: %w", err)
 	}
-	if read.Status != uci.QueryStatusOK || !uciInstalledAcceptanceQueryMatchesPublication(read, current) || read.Items == nil || len(*read.Items) != 1 {
-		return nil, errors.New("U16 Russian semantic citation readback is not a one-item current-View result")
+	if read.Status != uci.QueryStatusOK || !uciInstalledAcceptanceQueryMatchesPublication(read, state.publication) || read.Items == nil || len(*read.Items) != 1 {
+		return uci.QueryItem{}, errors.New("U16 Russian semantic citation readback is not a one-item current-View result")
 	}
-	readItem := (*read.Items)[0]
-	if readItem.Ref != citation.Ref || readItem.Span != citation.Span || readItem.ContentDigest != citation.ContentDigest {
-		return nil, errors.New("U16 Russian semantic citation did not read back exactly")
+	item := (*read.Items)[0]
+	if item.Ref != citation.Ref || item.Span != citation.Span || item.ContentDigest != citation.ContentDigest {
+		return uci.QueryItem{}, errors.New("U16 Russian semantic citation did not read back exactly")
 	}
-
-	profile, err := uci1SemanticRUEmbeddingProfileFor(ctx, runtime.Authority, current, providerURL, model)
-	if err != nil {
-		return nil, err
-	}
-	digest := uciInstalledAcceptanceStringDigest(strings.Join([]string{
-		"U16",
-		uci1SemanticRUQuery,
-		profile.ProviderRef,
-		profile.Model,
-		profile.EmbeddingProfileID,
-		profile.PreprocessingRevision,
-		current.sourceID,
-		current.checkoutID,
-		current.profileID,
-		current.viewID,
-		strconv.FormatInt(current.generation, 10),
-		citation.Ref.EntityKey,
-		citation.Path,
-		string(citation.ContentDigest),
-		string(readItem.ContentDigest),
-	}, "\n"))
-
-	return map[string]uciInstalledAcceptanceScenarioEvidence{
-		"U16": {
-			Code:   uciInstalledAcceptanceScenarioCodeObserved,
-			Digest: digest,
-		},
-	}, nil
+	return item, nil
 }
 
 func uci1SemanticRUProviderEnvironment(entries []string) (string, string, bool) {
