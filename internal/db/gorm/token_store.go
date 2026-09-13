@@ -15,6 +15,17 @@ type TokenStore struct {
 	db *gorm.DB
 }
 
+// TokenCreatePrincipalInput is the immutable token payload accepted by CreateWithPrincipal.
+type TokenCreatePrincipalInput struct {
+	Name          string
+	TokenHash     string
+	TokenPrefix   string
+	Scope         string
+	Principal     string
+	PrincipalKind string
+	ExpiresAt     *time.Time
+}
+
 // NewTokenStore creates a new token store.
 func NewTokenStore(store *Store) *TokenStore {
 	return &TokenStore{db: store.DB}
@@ -22,22 +33,32 @@ func NewTokenStore(store *Store) *TokenStore {
 
 // Create stores a new API token record.
 func (s *TokenStore) Create(ctx context.Context, name, tokenHash, tokenPrefix, scope string, expiresAt ...*time.Time) (*APIToken, error) {
-	return s.CreateWithPrincipal(ctx, name, tokenHash, tokenPrefix, scope, "", "", expiresAt...)
-}
-
-// CreateWithPrincipal stores a new API token record with optional principal
-// metadata. Empty principal preserves legacy keycard semantics.
-func (s *TokenStore) CreateWithPrincipal(ctx context.Context, name, tokenHash, tokenPrefix, scope, principal, principalKind string, expiresAt ...*time.Time) (*APIToken, error) {
 	if len(expiresAt) > 1 {
 		return nil, fmt.Errorf("invalid_expires_at: at most one expiry is allowed")
 	}
 	var expiry *time.Time
-	if len(expiresAt) == 1 && expiresAt[0] != nil {
-		value := expiresAt[0].UTC()
+	if len(expiresAt) == 1 {
+		expiry = expiresAt[0]
+	}
+	return s.CreateWithPrincipal(ctx, TokenCreatePrincipalInput{
+		Name:        name,
+		TokenHash:   tokenHash,
+		TokenPrefix: tokenPrefix,
+		Scope:       scope,
+		ExpiresAt:   expiry,
+	})
+}
+
+// CreateWithPrincipal stores a new API token record with optional principal
+// metadata. Empty principal preserves legacy keycard semantics.
+func (s *TokenStore) CreateWithPrincipal(ctx context.Context, input TokenCreatePrincipalInput) (*APIToken, error) {
+	var expiry *time.Time
+	if input.ExpiresAt != nil {
+		value := input.ExpiresAt.UTC()
 		expiry = &value
 	}
-	principal = strings.TrimSpace(principal)
-	principalKind = strings.TrimSpace(principalKind)
+	principal := strings.TrimSpace(input.Principal)
+	principalKind := strings.TrimSpace(input.PrincipalKind)
 	if principal == "" && principalKind != "" {
 		return nil, fmt.Errorf("invalid_principal: principal is required when principal_kind is set")
 	}
@@ -45,10 +66,10 @@ func (s *TokenStore) CreateWithPrincipal(ctx context.Context, name, tokenHash, t
 		principalKind = "human"
 	}
 	token := &APIToken{
-		Name:          name,
-		TokenHash:     tokenHash,
-		TokenPrefix:   tokenPrefix,
-		Scope:         scope,
+		Name:          input.Name,
+		TokenHash:     input.TokenHash,
+		TokenPrefix:   input.TokenPrefix,
+		Scope:         input.Scope,
 		Principal:     principal,
 		PrincipalKind: principalKind,
 		ExpiresAt:     expiry,

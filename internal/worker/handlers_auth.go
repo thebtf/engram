@@ -401,7 +401,15 @@ func (s *Service) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := tokenStore.CreateWithPrincipal(r.Context(), req.Name, string(hash), prefix, scope, principal, principalKind, req.ExpiresAt)
+	token, err := tokenStore.CreateWithPrincipal(r.Context(), gormdb.TokenCreatePrincipalInput{
+		Name:          req.Name,
+		TokenHash:     string(hash),
+		TokenPrefix:   prefix,
+		Scope:         scope,
+		Principal:     principal,
+		PrincipalKind: principalKind,
+		ExpiresAt:     req.ExpiresAt,
+	})
 	if err != nil {
 		// Check for unique constraint violation (duplicate name)
 		if isDuplicateKeyError(err) {

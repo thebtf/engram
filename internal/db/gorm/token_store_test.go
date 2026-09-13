@@ -22,7 +22,14 @@ func TestTokenStore_CreateWithPrincipalRoundTrip(t *testing.T) {
 		_ = db.Exec(`DELETE FROM api_tokens WHERE name = ?`, name).Error
 	})
 
-	created, err := store.CreateWithPrincipal(ctx, name, "hash-principal", prefix, "read-write", "agent/codex", "agent")
+	created, err := store.CreateWithPrincipal(ctx, TokenCreatePrincipalInput{
+		Name:          name,
+		TokenHash:     "hash-principal",
+		TokenPrefix:   prefix,
+		Scope:         "read-write",
+		Principal:     "agent/codex",
+		PrincipalKind: "agent",
+	})
 	require.NoError(t, err)
 	require.Equal(t, "agent/codex", created.Principal)
 	require.Equal(t, "agent", created.PrincipalKind)
@@ -52,15 +59,13 @@ func TestTokenStore_CreateWithPrincipalRejectsKindWithoutPrincipal(t *testing.T)
 	defer cleanup()
 
 	store := NewTokenStore(&Store{DB: db})
-	_, err := store.CreateWithPrincipal(
-		context.Background(),
-		"zz-test-invalid-principal-token",
-		"hash-invalid-principal",
-		"pim2bad1",
-		"read-write",
-		"",
-		"agent",
-	)
+	_, err := store.CreateWithPrincipal(context.Background(), TokenCreatePrincipalInput{
+		Name:          "zz-test-invalid-principal-token",
+		TokenHash:     "hash-invalid-principal",
+		TokenPrefix:   "pim2bad1",
+		Scope:         "read-write",
+		PrincipalKind: "agent",
+	})
 	require.Error(t, err)
 	require.True(t, strings.HasPrefix(err.Error(), "invalid_principal:"), err.Error())
 }
