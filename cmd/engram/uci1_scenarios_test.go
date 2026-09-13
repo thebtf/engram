@@ -386,6 +386,19 @@ func BuildUCI1ScenarioReceipt(candidate UCI1ScenarioCandidate, installed UCIInst
 // does not contain all 36 assigned rows, or attempts to encode an unsupported
 // evidence state.
 func ValidateUCI1ScenarioReceipt(receipt UCI1ScenarioReceipt) error {
+	if err := uci1ValidateScenarioReceiptHeader(receipt); err != nil {
+		return err
+	}
+	if err := uci1ValidateScenarioReceiptRows(receipt.Scenarios); err != nil {
+		return err
+	}
+	if !uciInstalledReceiptValidSHA256(receipt.Digest) || receipt.Digest != uci1ScenarioReceiptDigest(receipt) {
+		return errors.New("UCI-1 scenario receipt digest does not bind its rows")
+	}
+	return nil
+}
+
+func uci1ValidateScenarioReceiptHeader(receipt UCI1ScenarioReceipt) error {
 	if receipt.SchemaVersion != UCI1ScenarioReceiptSchemaVersion {
 		return errors.New("UCI-1 scenario receipt schema is not accepted")
 	}
@@ -413,32 +426,36 @@ func ValidateUCI1ScenarioReceipt(receipt UCI1ScenarioReceipt) error {
 			return errors.New("UCI-1 scenario receipt installed artifact binding is incomplete")
 		}
 	}
-	if len(receipt.Scenarios) != len(uci1RequiredScenarioIDs) {
+	return nil
+}
+
+func uci1ValidateScenarioReceiptRows(scenarios []UCI1ScenarioResult) error {
+	if len(scenarios) != len(uci1RequiredScenarioIDs) {
 		return errors.New("UCI-1 scenario receipt does not contain every assigned scenario")
 	}
-	for index, scenario := range receipt.Scenarios {
+	for index, scenario := range scenarios {
 		if scenario.ID != uci1RequiredScenarioIDs[index] || !uci1SafeScenarioArea(scenario.Area) {
 			return errors.New("UCI-1 scenario receipt scenario identity is invalid")
 		}
-		switch scenario.Status {
-		case uci1ScenarioStatusPass:
-			if !uci1ValidScenarioPassEvidence(uci1ScenarioEvidence{
-				Mode:   scenario.EvidenceMode,
-				Code:   scenario.Code,
-				Digest: scenario.Digest,
-			}) {
-				return errors.New("UCI-1 scenario receipt pass evidence is invalid")
-			}
-		case uci1ScenarioStatusMissing:
-			if scenario.EvidenceMode != uci1ScenarioModeMissing || scenario.Code != uci1ScenarioCodeUnavailable || scenario.Digest != "" {
-				return errors.New("UCI-1 scenario receipt missing evidence is unsafe")
-			}
-		default:
-			return errors.New("UCI-1 scenario receipt status is not accepted")
+		if err := uci1ValidateScenarioReceiptRow(scenario); err != nil {
+			return err
 		}
 	}
-	if !uciInstalledReceiptValidSHA256(receipt.Digest) || receipt.Digest != uci1ScenarioReceiptDigest(receipt) {
-		return errors.New("UCI-1 scenario receipt digest does not bind its rows")
+	return nil
+}
+
+func uci1ValidateScenarioReceiptRow(scenario UCI1ScenarioResult) error {
+	switch scenario.Status {
+	case uci1ScenarioStatusPass:
+		if !uci1ValidScenarioPassEvidence(uci1ScenarioEvidence{Mode: scenario.EvidenceMode, Code: scenario.Code, Digest: scenario.Digest}) {
+			return errors.New("UCI-1 scenario receipt pass evidence is invalid")
+		}
+	case uci1ScenarioStatusMissing:
+		if scenario.EvidenceMode != uci1ScenarioModeMissing || scenario.Code != uci1ScenarioCodeUnavailable || scenario.Digest != "" {
+			return errors.New("UCI-1 scenario receipt missing evidence is unsafe")
+		}
+	default:
+		return errors.New("UCI-1 scenario receipt status is not accepted")
 	}
 	return nil
 }
