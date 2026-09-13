@@ -239,6 +239,29 @@ type IndexAdmissionReferenceKey struct {
 // associate the same key with their internal row identity.
 type IndexAdmissionReferenceBindings map[IndexAdmissionReferenceKey]string
 
+func indexAdmissionValidateArtifactCapacity(bodyBytes, definitions, references, chunks, diagnostics int) error {
+	if err := indexAdmissionValidateCapacity(bodyBytes, IndexAdmissionMaxArtifactBodyBytes, IndexCapacityResourceArtifactBodyBytes); err != nil {
+		return err
+	}
+	if err := indexAdmissionValidateCapacity(definitions, indexAdmissionMaxDefinitionsPerArtifact, IndexCapacityResourceDefinitions); err != nil {
+		return err
+	}
+	if err := indexAdmissionValidateCapacity(references, indexAdmissionMaxReferencesPerArtifact, IndexCapacityResourceReferences); err != nil {
+		return err
+	}
+	if err := indexAdmissionValidateCapacity(chunks, indexAdmissionMaxChunksPerArtifact, IndexCapacityResourceChunks); err != nil {
+		return err
+	}
+	return indexAdmissionValidateCapacity(diagnostics, indexAdmissionMaxDiagnosticsPerArtifact, IndexCapacityResourceDiagnostics)
+}
+
+func indexAdmissionValidateCapacity(required, limit int, resource IndexCapacityResource) error {
+	if required <= limit {
+		return nil
+	}
+	return newIndexCapacityError(IndexCapacityScopeArtifact, resource, uint64(required), uint64(limit))
+}
+
 // ReferenceBindings derives the deterministic source-site IDs used by a
 // canonical publication part. The IDs are stable across daemon and server
 // processes because ArtifactID is already source-scoped.
@@ -1104,45 +1127,8 @@ func NewIndexAdmissionArtifactFromTreeSitter(sourceID string, profile IndexAdmis
 
 // NewIndexAdmissionArtifactFromMarkdown converts verified Markdown extraction evidence into one source-scoped generic admission artifact.
 func NewIndexAdmissionArtifactFromMarkdown(sourceID string, admissionProfile IndexAdmissionArtifactProfile, extractionProfile MarkdownExtractionProfile, source []byte, extracted MarkdownArtifact) (IndexAdmissionArtifact, error) {
-	if len(source) > IndexAdmissionMaxArtifactBodyBytes {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceArtifactBodyBytes,
-			uint64(len(source)),
-			uint64(IndexAdmissionMaxArtifactBodyBytes),
-		)
-	}
-	if len(extracted.Headings) > indexAdmissionMaxDefinitionsPerArtifact {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceDefinitions,
-			uint64(len(extracted.Headings)),
-			uint64(indexAdmissionMaxDefinitionsPerArtifact),
-		)
-	}
-	if len(extracted.References) > indexAdmissionMaxReferencesPerArtifact {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceReferences,
-			uint64(len(extracted.References)),
-			uint64(indexAdmissionMaxReferencesPerArtifact),
-		)
-	}
-	if len(extracted.Chunks) > indexAdmissionMaxChunksPerArtifact {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceChunks,
-			uint64(len(extracted.Chunks)),
-			uint64(indexAdmissionMaxChunksPerArtifact),
-		)
-	}
-	if len(extracted.Diagnostics) > indexAdmissionMaxDiagnosticsPerArtifact {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceDiagnostics,
-			uint64(len(extracted.Diagnostics)),
-			uint64(indexAdmissionMaxDiagnosticsPerArtifact),
-		)
+	if err := indexAdmissionValidateArtifactCapacity(len(source), len(extracted.Headings), len(extracted.References), len(extracted.Chunks), len(extracted.Diagnostics)); err != nil {
+		return IndexAdmissionArtifact{}, err
 	}
 	expectedProfile, err := MarkdownIndexAdmissionArtifactProfile(extractionProfile)
 	if err != nil {
@@ -1283,45 +1269,8 @@ func NewIndexAdmissionArtifactFromMarkdown(sourceID string, admissionProfile Ind
 
 // NewIndexAdmissionArtifactFromJSONYAML converts verified JSON or YAML extraction evidence into one source-scoped generic admission artifact.
 func NewIndexAdmissionArtifactFromJSONYAML(sourceID string, admissionProfile IndexAdmissionArtifactProfile, extractionProfile JSONYAMLExtractionProfile, source []byte, extracted JSONYAMLArtifact) (IndexAdmissionArtifact, error) {
-	if len(source) > IndexAdmissionMaxArtifactBodyBytes {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceArtifactBodyBytes,
-			uint64(len(source)),
-			uint64(IndexAdmissionMaxArtifactBodyBytes),
-		)
-	}
-	if len(extracted.Definitions) > indexAdmissionMaxDefinitionsPerArtifact {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceDefinitions,
-			uint64(len(extracted.Definitions)),
-			uint64(indexAdmissionMaxDefinitionsPerArtifact),
-		)
-	}
-	if len(extracted.References) > indexAdmissionMaxReferencesPerArtifact {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceReferences,
-			uint64(len(extracted.References)),
-			uint64(indexAdmissionMaxReferencesPerArtifact),
-		)
-	}
-	if len(extracted.Chunks) > indexAdmissionMaxChunksPerArtifact {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceChunks,
-			uint64(len(extracted.Chunks)),
-			uint64(indexAdmissionMaxChunksPerArtifact),
-		)
-	}
-	if len(extracted.Diagnostics) > indexAdmissionMaxDiagnosticsPerArtifact {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceDiagnostics,
-			uint64(len(extracted.Diagnostics)),
-			uint64(indexAdmissionMaxDiagnosticsPerArtifact),
-		)
+	if err := indexAdmissionValidateArtifactCapacity(len(source), len(extracted.Definitions), len(extracted.References), len(extracted.Chunks), len(extracted.Diagnostics)); err != nil {
+		return IndexAdmissionArtifact{}, err
 	}
 	expectedProfile, err := JSONYAMLIndexAdmissionArtifactProfile(extractionProfile)
 	if err != nil {
@@ -1456,45 +1405,8 @@ func NewIndexAdmissionArtifactFromJSONYAML(sourceID string, admissionProfile Ind
 
 // NewIndexAdmissionArtifactFromSQL converts verified SQL extraction evidence into one source-scoped generic admission artifact.
 func NewIndexAdmissionArtifactFromSQL(sourceID string, admissionProfile IndexAdmissionArtifactProfile, extractionProfile SQLExtractionProfile, source []byte, extracted SQLArtifact) (IndexAdmissionArtifact, error) {
-	if len(source) > IndexAdmissionMaxArtifactBodyBytes {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceArtifactBodyBytes,
-			uint64(len(source)),
-			uint64(IndexAdmissionMaxArtifactBodyBytes),
-		)
-	}
-	if len(extracted.Definitions) > indexAdmissionMaxDefinitionsPerArtifact {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceDefinitions,
-			uint64(len(extracted.Definitions)),
-			uint64(indexAdmissionMaxDefinitionsPerArtifact),
-		)
-	}
-	if len(extracted.References) > indexAdmissionMaxReferencesPerArtifact {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceReferences,
-			uint64(len(extracted.References)),
-			uint64(indexAdmissionMaxReferencesPerArtifact),
-		)
-	}
-	if len(extracted.Chunks) > indexAdmissionMaxChunksPerArtifact {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceChunks,
-			uint64(len(extracted.Chunks)),
-			uint64(indexAdmissionMaxChunksPerArtifact),
-		)
-	}
-	if len(extracted.Diagnostics) > indexAdmissionMaxDiagnosticsPerArtifact {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceDiagnostics,
-			uint64(len(extracted.Diagnostics)),
-			uint64(indexAdmissionMaxDiagnosticsPerArtifact),
-		)
+	if err := indexAdmissionValidateArtifactCapacity(len(source), len(extracted.Definitions), len(extracted.References), len(extracted.Chunks), len(extracted.Diagnostics)); err != nil {
+		return IndexAdmissionArtifact{}, err
 	}
 	expectedProfile, err := SQLIndexAdmissionArtifactProfile(extractionProfile)
 	if err != nil {
@@ -1634,45 +1546,8 @@ func NewIndexAdmissionArtifactFromSQL(sourceID string, admissionProfile IndexAdm
 
 // NewIndexAdmissionArtifactFromOpenAPI converts verified OpenAPI extraction evidence into one source-scoped generic admission artifact.
 func NewIndexAdmissionArtifactFromOpenAPI(sourceID string, admissionProfile IndexAdmissionArtifactProfile, extractionProfile OpenAPIExtractionProfile, source []byte, extracted OpenAPIArtifact) (IndexAdmissionArtifact, error) {
-	if len(source) > IndexAdmissionMaxArtifactBodyBytes {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceArtifactBodyBytes,
-			uint64(len(source)),
-			uint64(IndexAdmissionMaxArtifactBodyBytes),
-		)
-	}
-	if len(extracted.Definitions) > indexAdmissionMaxDefinitionsPerArtifact {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceDefinitions,
-			uint64(len(extracted.Definitions)),
-			uint64(indexAdmissionMaxDefinitionsPerArtifact),
-		)
-	}
-	if len(extracted.References) > indexAdmissionMaxReferencesPerArtifact {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceReferences,
-			uint64(len(extracted.References)),
-			uint64(indexAdmissionMaxReferencesPerArtifact),
-		)
-	}
-	if len(extracted.Chunks) > indexAdmissionMaxChunksPerArtifact {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceChunks,
-			uint64(len(extracted.Chunks)),
-			uint64(indexAdmissionMaxChunksPerArtifact),
-		)
-	}
-	if len(extracted.Diagnostics) > indexAdmissionMaxDiagnosticsPerArtifact {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceDiagnostics,
-			uint64(len(extracted.Diagnostics)),
-			uint64(indexAdmissionMaxDiagnosticsPerArtifact),
-		)
+	if err := indexAdmissionValidateArtifactCapacity(len(source), len(extracted.Definitions), len(extracted.References), len(extracted.Chunks), len(extracted.Diagnostics)); err != nil {
+		return IndexAdmissionArtifact{}, err
 	}
 	expectedProfile, err := OpenAPIIndexAdmissionArtifactProfile(extractionProfile)
 	if err != nil {
@@ -1962,45 +1837,8 @@ func indexAdmissionCanonicalizeArtifact(artifact IndexAdmissionArtifact) (IndexA
 	if artifact.Body == nil {
 		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: invalid artifact body")
 	}
-	if len(artifact.Body) > IndexAdmissionMaxArtifactBodyBytes {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceArtifactBodyBytes,
-			uint64(len(artifact.Body)),
-			uint64(IndexAdmissionMaxArtifactBodyBytes),
-		)
-	}
-	if len(artifact.Definitions) > indexAdmissionMaxDefinitionsPerArtifact {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceDefinitions,
-			uint64(len(artifact.Definitions)),
-			uint64(indexAdmissionMaxDefinitionsPerArtifact),
-		)
-	}
-	if len(artifact.References) > indexAdmissionMaxReferencesPerArtifact {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceReferences,
-			uint64(len(artifact.References)),
-			uint64(indexAdmissionMaxReferencesPerArtifact),
-		)
-	}
-	if len(artifact.Chunks) > indexAdmissionMaxChunksPerArtifact {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceChunks,
-			uint64(len(artifact.Chunks)),
-			uint64(indexAdmissionMaxChunksPerArtifact),
-		)
-	}
-	if len(artifact.Diagnostics) > indexAdmissionMaxDiagnosticsPerArtifact {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceDiagnostics,
-			uint64(len(artifact.Diagnostics)),
-			uint64(indexAdmissionMaxDiagnosticsPerArtifact),
-		)
+	if err := indexAdmissionValidateArtifactCapacity(len(artifact.Body), len(artifact.Definitions), len(artifact.References), len(artifact.Chunks), len(artifact.Diagnostics)); err != nil {
+		return IndexAdmissionArtifact{}, err
 	}
 	if artifact.Definitions == nil {
 		artifact.Definitions = []IndexAdmissionDefinition{}
