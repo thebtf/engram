@@ -1229,26 +1229,40 @@ func emitUncertainTool(report *Report, path string, line int) {
 func stringConstants(file *ast.File) map[string]string {
 	constants := make(map[string]string)
 	for _, declaration := range file.Decls {
-		gen, ok := declaration.(*ast.GenDecl)
-		if !ok || gen.Tok != token.CONST {
-			continue
-		}
-		for _, spec := range gen.Specs {
-			value, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
-			for index, name := range value.Names {
-				if index >= len(value.Values) {
-					continue
-				}
-				if literal, ok := stringLiteral(value.Values[index]); ok {
-					constants[name.Name] = literal
-				}
-			}
-		}
+		collectStringConstants(constants, declaration)
 	}
 	return constants
+}
+
+func collectStringConstants(constants map[string]string, declaration ast.Decl) {
+	gen, ok := declaration.(*ast.GenDecl)
+	if !ok || gen.Tok != token.CONST {
+		return
+	}
+	for _, spec := range gen.Specs {
+		collectStringConstantsFromSpec(constants, spec)
+	}
+}
+
+func collectStringConstantsFromSpec(constants map[string]string, spec ast.Spec) {
+	value, ok := spec.(*ast.ValueSpec)
+	if !ok {
+		return
+	}
+	for index, name := range value.Names {
+		if index >= len(value.Values) {
+			continue
+		}
+		collectStringConstant(constants, name, value.Values[index])
+	}
+}
+
+func collectStringConstant(constants map[string]string, name *ast.Ident, value ast.Expr) {
+	literal, ok := stringLiteral(value)
+	if !ok {
+		return
+	}
+	constants[name.Name] = literal
 }
 
 func moduleToolDefResult(function *ast.FuncDecl, aliases map[string]struct{}) (int, bool) {
