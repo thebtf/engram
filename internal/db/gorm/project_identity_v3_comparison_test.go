@@ -25,17 +25,17 @@ func TestProjectIdentityV3ComparisonStoreRedactsAndReplaysReceipt(t *testing.T) 
 	require.NoError(t, err)
 	refusal, err := projectidentity.NewRefusalResultV3(projectidentity.ResolveExistingIntentV3, projectidentity.ProjectDescriptorInvalidOutcomeV3, correlation)
 	require.NoError(t, err)
-	observation, err := projectidentity.NewComparisonObservationV3(
-		idempotencyKey,
-		correlation,
-		refusal.Outcome(),
-		projectidentity.LegacyComparisonRefusalV2,
-		"comparison-client-"+uuid.NewString(),
-		projectidentity.ComparisonTransportHTTPV3,
-		projectidentity.ComparisonRepositoryScopeV3,
-		projectidentity.ComparisonFreshV3,
-		comparisonStoreFingerprint("evidence-"+uuid.NewString()),
-	)
+	observation, err := projectidentity.NewComparisonObservationV3(projectidentity.ComparisonObservationInputV3{
+		IdempotencyKey:      idempotencyKey,
+		Correlation:         correlation,
+		V3Outcome:           refusal.Outcome(),
+		LegacyOutcome:       projectidentity.LegacyComparisonRefusalV2,
+		ClientInstanceID:    "comparison-client-" + uuid.NewString(),
+		Transport:           projectidentity.ComparisonTransportHTTPV3,
+		Scope:               projectidentity.ComparisonRepositoryScopeV3,
+		Freshness:           projectidentity.ComparisonFreshV3,
+		EvidenceFingerprint: comparisonStoreFingerprint("evidence-" + uuid.NewString()),
+	})
 	require.NoError(t, err)
 
 	var projectsBefore, mergesBefore int64

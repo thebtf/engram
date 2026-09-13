@@ -655,17 +655,17 @@ func (s *Server) observeProjectIdentityComparisonV3(ctx context.Context, request
 	if request.Descriptor.Scope == "directory" {
 		scope = projectidentity.ComparisonDirectoryScopeV3
 	}
-	observation, err := projectidentity.NewComparisonObservationV3(
-		references.IdempotencyKey,
-		resolution.Correlation(),
-		resolution.Outcome(),
-		legacyOutcome,
-		request.Descriptor.ClientInstanceID,
-		origin.Transport(),
-		scope,
-		projectidentity.ComparisonUnknownV3,
-		references.EvidenceFingerprint,
-	)
+	observation, err := projectidentity.NewComparisonObservationV3(projectidentity.ComparisonObservationInputV3{
+		IdempotencyKey:      references.IdempotencyKey,
+		Correlation:         resolution.Correlation(),
+		V3Outcome:           resolution.Outcome(),
+		LegacyOutcome:       legacyOutcome,
+		ClientInstanceID:    request.Descriptor.ClientInstanceID,
+		Transport:           origin.Transport(),
+		Scope:               scope,
+		Freshness:           projectidentity.ComparisonUnknownV3,
+		EvidenceFingerprint: references.EvidenceFingerprint,
+	})
 	if err != nil {
 		log.Print("project identity comparison skipped: invalid redacted observation")
 		return
