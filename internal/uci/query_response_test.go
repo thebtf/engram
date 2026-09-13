@@ -667,3 +667,26 @@ func uciQueryResponseFirstGraphEdge(t *testing.T, response map[string]any) map[s
 	}
 	return uciQueryResponseObject(t, edges[0], "graph.edges[0]")
 }
+
+func TestUCIQueryResponseRecorderFailurePrecedesUnavailableEnvelope(t *testing.T) {
+	fixtures := uciQueryResponseFixturesByName(t)
+	response := uciQueryResponseFixtureObject(t, fixtures, "synthetic_authorized_source_unavailable")
+	response["error"] = map[string]any{"code": "EXPOSURE_UNAVAILABLE"}
+	response["exposure"] = nil
+	for _, field := range []string{"contexts", "freshness", "retrieval", "coverage", "items", "graph", "truncated", "warnings", "continuation"} {
+		delete(response, field)
+	}
+	payload := uciMarshalQueryResponseFixture(t, response)
+	uciRequireQueryResponseAccepted(t, payload)
+
+	var decoded QueryResponse
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("decode recorder failure response: %v", err)
+	}
+	if decoded.Status != QueryStatusUnavailable || decoded.Error == nil || decoded.Error.Code != QueryErrorExposureUnavailable || decoded.Exposure != nil {
+		t.Fatalf("decoded recorder failure = %#v, want suppressed unavailable recorder failure", decoded)
+	}
+	if err := decoded.ValidatePreExposure(); err == nil {
+		t.Fatal("ValidatePreExposure() accepted a recorder failure that must remain suppressed")
+	}
+}

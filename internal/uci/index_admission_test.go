@@ -1723,3 +1723,36 @@ func TestIndexAdmissionStructuredConversionsRejectOverCapacityBeforeProof(t *tes
 		})
 	}
 }
+
+func TestIndexAdmissionPartialConversionReservesDiagnosticCapacity(t *testing.T) {
+	source := []byte("remote:\n  $ref: https://example.invalid/schema.yaml#/Thing\n")
+	profile := DefaultJSONYAMLExtractionProfile("structured-admission-v1", JSONYAMLFormatYAML)
+	admission, err := JSONYAMLIndexAdmissionArtifactProfile(profile)
+	if err != nil {
+		t.Fatalf("JSONYAMLIndexAdmissionArtifactProfile() error = %v", err)
+	}
+	extracted := ExtractJSONYAML(source, profile)
+	if extracted.Coverage != IndexCoveragePartial {
+		t.Fatalf("ExtractJSONYAML() coverage = %q, want %q", extracted.Coverage, IndexCoveragePartial)
+	}
+	for len(extracted.Diagnostics) < indexAdmissionMaxDiagnosticsPerArtifact {
+		extracted.Diagnostics = append(extracted.Diagnostics, JSONYAMLDiagnostic{
+			Code:    fmt.Sprintf("fixture_capacity_%d", len(extracted.Diagnostics)),
+			Message: "retained bounded extraction diagnostic",
+		})
+	}
+	extracted = jsonYAMLFinalizeArtifact(source, profile, extracted)
+
+	_, err = NewIndexAdmissionArtifactFromJSONYAML(indexAdmissionTestSourceA, admission, profile, source, extracted)
+	indexAdmissionRequireCapacity(t, err, IndexCapacityScopeArtifact, IndexCapacityResourceDiagnostics, uint64(indexAdmissionMaxDiagnosticsPerArtifact+1), uint64(indexAdmissionMaxDiagnosticsPerArtifact))
+}
+
+func TestIndexAdmissionCanonicalizationRejectsCollidingReferenceSites(t *testing.T) {
+	frame := indexAdmissionTestFrame(t)
+	artifact := &frame.Artifacts[0]
+	artifact.References = append(artifact.References, artifact.References[0])
+
+	if _, err := EncodeIndexAdmissionFrame(frame); err == nil {
+		t.Fatal("EncodeIndexAdmissionFrame() accepted colliding source reference sites")
+	}
+}

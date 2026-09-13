@@ -2,6 +2,7 @@ package uci
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -191,5 +192,124 @@ func uciSLOTestMeasurementInput() UCISLOMeasurementInput {
 		ColdObservations: []UCISLOColdObservation{
 			{Operation: "index", Warmth: "cold", ProfileID: profile.ID, ContextID: "context-a", WaitBound: 2 * time.Second, Samples: []UCISLOSample{coldSample}},
 		},
+	}
+}
+
+func TestCalculateUCISLOReportAccountsUnavailableAndFailedObservations(t *testing.T) {
+	input := uciSLOTestMeasurementInput()
+	unavailable := input.Gates[0].Samples[0]
+	unavailable.ID = "update.structural_fts-unavailable"
+	unavailable.Outcome = "unavailable"
+	unavailable.ResultStatus = "unavailable"
+	unavailable.Coverage = "unavailable"
+	unavailable.Reason = "provider_retrying"
+	unavailable.DegradationReasons = []string{"database_catching_up", "provider_retrying"}
+	unavailable.Latency = 0
+	failed := input.Gates[0].Samples[1]
+	failed.ID = "update.structural_fts-failed"
+	failed.Outcome = "failed"
+	failed.ResultStatus = "error"
+	failed.Coverage = "unavailable"
+	failed.Latency = 0
+	input.Gates[0].Samples = append(input.Gates[0].Samples, unavailable, failed)
+
+	report, err := CalculateUCISLOReport(input)
+	if err != nil {
+		t.Fatalf("CalculateUCISLOReport() error = %v", err)
+	}
+	if violations := ValidateUCISLOReport(report); len(violations) != 0 {
+		t.Fatalf("ValidateUCISLOReport() violations = %#v", violations)
+	}
+
+	for _, gate := range report.Gates {
+		if gate.Name != "update.structural_fts" {
+			continue
+		}
+		if gate.SampleCount != 102 || gate.HealthySampleCount != 100 || gate.UnavailableCount != 1 || gate.FailureCount != 1 || !gate.Passed {
+			t.Fatalf("gate accounting = %#v, want complete healthy population plus unavailable and failed observations", gate)
+		}
+		if got, want := gate.UnavailableReasons, []string{"database_catching_up", "provider_retrying"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("unavailable reasons = %#v, want %#v", got, want)
+		}
+		return
+	}
+	t.Fatal("report omitted update.structural_fts")
+}
+
+func TestValidateUCISLOReportExplainsCompoundEvidenceConflicts(t *testing.T) {
+	report, err := CalculateUCISLOReport(uciSLOTestMeasurementInput())
+	if err != nil {
+		t.Fatalf("CalculateUCISLOReport() error = %v", err)
+	}
+	report.SchemaVersion = "uci-slo/unsupported"
+	report.Candidate.Branch = ""
+	report.Environment.Provider.Status = "degraded"
+	report.Profile.ID = ""
+	report.Gates[0], report.Gates[1] = report.Gates[1], report.Gates[0]
+
+	var gate *UCISLOGateReport
+	for index := range report.Gates {
+		if report.Gates[index].Name == "graph.small_explain_neighbors_impact" {
+			gate = &report.Gates[index]
+			break
+		}
+	}
+	if gate == nil {
+		t.Fatal("report omitted graph.small_explain_neighbors_impact")
+	}
+	gate.Operation = "rewrite"
+	gate.Warmth = "cold"
+	gate.Threshold = 0
+	gate.WaitBound = 0
+	gate.ProfileID = "wrong-profile"
+	gate.ContextID = ""
+	gate.MaxGraphDepth = 5
+	gate.QueryCaps = nil
+	gate.SampleCount = 1
+	gate.HealthySampleCount = 99
+	gate.DegradedCount = 0
+	gate.UnavailableCount = 0
+	gate.FailureCount = 0
+	gate.DegradedReasons = []string{"z", "a"}
+	gate.UnavailableReasons = []string{"z", "a"}
+	gate.Percentile = UCISLOPercentileDisclosure{Population: "subset", InputSampleCount: 1, OmittedSampleCount: 1}
+	gate.Samples[0].ID = ""
+	gate.Samples[0].Latency = 0
+	gate.Samples[0].ResultStatus = "partial"
+	gate.Samples[0].Coverage = "partial"
+	gate.Samples[1].ID = gate.Samples[2].ID
+	gate.Samples[1].Outcome = "degraded"
+	gate.Samples[1].Reason = "degraded_reason"
+	gate.Samples[2].Outcome = "unavailable"
+	gate.Samples[2].Reason = "unavailable_reason"
+	gate.Samples[3].Outcome = "failed"
+	gate.Samples[4].Outcome = "mystery"
+
+	cold := &report.ColdObservations[0]
+	cold.Operation = ""
+	cold.Warmth = "warm"
+	cold.ProfileID = "wrong-profile"
+	cold.ContextID = "wrong-context"
+	cold.WaitBound = 0
+	cold.SampleCount = 2
+	cold.Samples[0].ID = gate.Samples[1].ID
+	cold.Samples[0].Warmth = "cold"
+
+	codes := make(map[string]bool)
+	for _, violation := range ValidateUCISLOReport(report) {
+		codes[violation.Code] = true
+	}
+	for _, code := range []string{
+		"candidate_identity_missing",
+		"gate_partition_mismatch",
+		"unbounded_graph",
+		"unsupported_outcome",
+		"degraded_reason_undisclosed",
+		"cold_observation_invalid",
+		"report_verdict_mismatch",
+	} {
+		if !codes[code] {
+			t.Fatalf("ValidateUCISLOReport() violations = %#v, want %q", codes, code)
+		}
 	}
 }

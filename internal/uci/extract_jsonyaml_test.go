@@ -443,3 +443,63 @@ func uciJSONYAMLSpan(t *testing.T, source []byte, fragment string, occurrence in
 		searchFrom = offset + len(fragment)
 	}
 }
+
+func TestUCIJSONYAMLExtractionScopesRepeatedAnchorsToTheirDocuments(t *testing.T) {
+	source := []byte("---\n" +
+		"defaults: &shared\n" +
+		"  region: east\n" +
+		"consumer: *shared\n" +
+		"---\n" +
+		"defaults: &shared\n" +
+		"  region: west\n" +
+		"consumer: *shared\n")
+	artifact := ExtractJSONYAML(source, uciJSONYAMLProfile(JSONYAMLFormatYAML))
+
+	if artifact.Coverage != IndexCoverageComplete {
+		t.Fatalf("ExtractJSONYAML(document-scoped anchors) coverage = %q, want %q; diagnostics=%#v", artifact.Coverage, IndexCoverageComplete, artifact.Diagnostics)
+	}
+	uciRequireJSONYAMLExtractionProof(t, artifact)
+
+	for document := range 2 {
+		anchorKey := jsonYAMLAnchorSymbolKey(document, "shared")
+		anchor := uciRequireJSONYAMLDefinition(t, artifact.Definitions, "anchor", anchorKey, "anchor:shared", document, uciJSONYAMLSpan(t, source, "&shared", document))
+		uciRequireJSONYAMLAlias(t, artifact.References, anchor.SymbolKey, document, uciJSONYAMLSpan(t, source, "*shared", document))
+	}
+	if len(artifact.References) != 2 {
+		t.Fatalf("document-scoped aliases = %#v, want one retained alias per document", artifact.References)
+	}
+}
+
+func TestUCIJSONYAMLExtractionRetainsEscapedLocalJSONPointers(t *testing.T) {
+	source := []byte(`{"a/b":{"~key":[-12.5e+3,true,null,"Caf\u00e9"]},"$ref":"#/a~1b/~0key/0"}`)
+	artifact := ExtractJSONYAML(source, uciJSONYAMLProfile(JSONYAMLFormatJSON))
+
+	if artifact.Coverage != IndexCoverageComplete {
+		t.Fatalf("ExtractJSONYAML(escaped pointer) coverage = %q, want %q; diagnostics=%#v", artifact.Coverage, IndexCoverageComplete, artifact.Diagnostics)
+	}
+	uciRequireJSONYAMLExtractionProof(t, artifact)
+	uciRequireJSONYAMLDefinition(t, artifact.Definitions, "key", "json:document:0#/a~1b", "#/a~1b", 0, uciJSONYAMLSpan(t, source, `"a/b"`, 0))
+	uciRequireJSONYAMLDefinition(t, artifact.Definitions, "key", "json:document:0#/a~1b/~0key", "#/a~1b/~0key", 0, uciJSONYAMLSpan(t, source, `"~key"`, 0))
+	uciRequireJSONYAMLDefinition(t, artifact.Definitions, "index", "json:document:0#/a~1b/~0key/0", "#/a~1b/~0key/0", 0, uciJSONYAMLSpan(t, source, "-12.5e+3", 0))
+	uciRequireJSONYAMLReference(t, artifact.References, "pointer", "#/$ref", "json:document:0#/a~1b/~0key/0", 0, uciJSONYAMLSpan(t, source, `"#/a~1b/~0key/0"`, 0))
+}
+
+func TestUCIJSONYAMLExtractionRetainsQuotedYAMLSyntaxWithoutResolvingAliases(t *testing.T) {
+	source := []byte(`---
+"quoted/key": &shared "escaped \"value\""
+single: 'it''s retained'
+list:
+  - *shared
+  - "x\ty" # comment
+`)
+	artifact := ExtractJSONYAML(source, uciJSONYAMLProfile(JSONYAMLFormatYAML))
+
+	if artifact.Coverage != IndexCoverageComplete {
+		t.Fatalf("ExtractJSONYAML(quoted YAML) coverage = %q, want %q; diagnostics=%#v", artifact.Coverage, IndexCoverageComplete, artifact.Diagnostics)
+	}
+	uciRequireJSONYAMLExtractionProof(t, artifact)
+	uciRequireJSONYAMLDefinition(t, artifact.Definitions, "key", "yaml:document:0#/quoted~1key", "#/quoted~1key", 0, uciJSONYAMLSpan(t, source, `"quoted/key"`, 0))
+	anchor := uciRequireJSONYAMLDefinition(t, artifact.Definitions, "anchor", "yaml:document:0#anchor:shared", "anchor:shared", 0, uciJSONYAMLSpan(t, source, "&shared", 0))
+	uciRequireJSONYAMLAlias(t, artifact.References, anchor.SymbolKey, 0, uciJSONYAMLSpan(t, source, "*shared", 0))
+	uciRequireJSONYAMLDefinition(t, artifact.Definitions, "index", "yaml:document:0#/list/1", "#/list/1", 0, uciJSONYAMLSpan(t, source, `"x\ty"`, 0))
+}

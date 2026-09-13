@@ -521,3 +521,91 @@ func uciSQLSpan(t *testing.T, source []byte, fragment string, occurrence int) In
 		searchFrom = offset + len(fragment)
 	}
 }
+
+func TestUCISQLExtractionCapturesConstrainedAlterDDL(t *testing.T) {
+	source := []byte("CREATE UNLOGGED TABLE IF NOT EXISTS public.audit_log (\n" +
+		"  id UUID CONSTRAINT audit_log_pkey PRIMARY KEY,\n" +
+		"  source_id BIGINT CONSTRAINT audit_log_source_fkey REFERENCES public.sources (id) DEFERRABLE INITIALLY DEFERRED,\n" +
+		"  token TEXT UNIQUE NULLS NOT DISTINCT,\n" +
+		"  state TEXT CHECK (state IN ('open', 'closed'))\n" +
+		");\n" +
+		"ALTER TABLE IF EXISTS ONLY public.audit_log ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL;\n" +
+		"ALTER TABLE public.audit_log ADD CONSTRAINT audit_log_token_key UNIQUE (source_id, token);\n" +
+		"ALTER TABLE public.audit_log ADD CONSTRAINT audit_log_source_fkey FOREIGN KEY (source_id) REFERENCES public.sources (id);\n")
+	artifact := ExtractSQL(source, uciSQLExtractionProfile())
+
+	if artifact.Coverage != IndexCoverageComplete {
+		t.Fatalf("ExtractSQL(constrained DDL) coverage = %q, want %q; diagnostics=%#v", artifact.Coverage, IndexCoverageComplete, artifact.Diagnostics)
+	}
+	uciRequireSQLExtractionProof(t, artifact)
+	uciRequireSQLTable(t, artifact.Definitions, "table:public.audit_log", uciSQLSpan(t, source, "CREATE UNLOGGED TABLE IF NOT EXISTS public.audit_log", 0))
+	uciRequireSQLColumn(t, artifact.Definitions, "column:public.audit_log.id", "table:public.audit_log", "UUID", uciSQLSpan(t, source, "id UUID CONSTRAINT audit_log_pkey PRIMARY KEY", 0))
+	uciRequireSQLColumn(t, artifact.Definitions, "column:public.audit_log.source_id", "table:public.audit_log", "BIGINT", uciSQLSpan(t, source, "source_id BIGINT CONSTRAINT audit_log_source_fkey REFERENCES public.sources (id) DEFERRABLE INITIALLY DEFERRED", 0))
+	uciRequireSQLColumn(t, artifact.Definitions, "column:public.audit_log.token", "table:public.audit_log", "TEXT", uciSQLSpan(t, source, "token TEXT UNIQUE NULLS NOT DISTINCT", 0))
+	uciRequireSQLColumn(t, artifact.Definitions, "column:public.audit_log.state", "table:public.audit_log", "TEXT", uciSQLSpan(t, source, "state TEXT CHECK (state IN ('open', 'closed'))", 0))
+	uciRequireSQLColumn(t, artifact.Definitions, "column:public.audit_log.metadata", "table:public.audit_log", "JSONB", uciSQLSpan(t, source, "metadata JSONB NOT NULL", 0))
+	uciRequireSQLConstraint(t, artifact.Definitions, "primary_key", "table:public.audit_log", []string{"id"}, uciSQLSpan(t, source, "id UUID CONSTRAINT audit_log_pkey PRIMARY KEY", 0))
+	uciRequireSQLConstraint(t, artifact.Definitions, "unique", "table:public.audit_log", []string{"token"}, uciSQLSpan(t, source, "token TEXT UNIQUE NULLS NOT DISTINCT", 0))
+	uciRequireSQLConstraint(t, artifact.Definitions, "unique", "table:public.audit_log", []string{"source_id", "token"}, uciSQLSpan(t, source, "CONSTRAINT audit_log_token_key UNIQUE (source_id, token)", 0))
+	if len(artifact.References) != 2 {
+		t.Fatalf("foreign key references = %#v, want two distinct source sites", artifact.References)
+	}
+	for index, reference := range artifact.References {
+		if reference.Kind != "foreign_key" || reference.OwnerLocalKey != "table:public.audit_log" || reference.TargetKey != "sql:table:public.sources" || reference.TargetLocalKey != "table:public.sources" || !reflect.DeepEqual(reference.Columns, []string{"source_id"}) || !reflect.DeepEqual(reference.TargetColumns, []string{"id"}) {
+			t.Fatalf("reference %d = %#v, want source-to-public.sources foreign-key evidence", index, reference)
+		}
+		if reference.SymbolKey == "" || reference.LocalKey == "" {
+			t.Fatalf("reference %d lost its distinct source identity: %#v", index, reference)
+		}
+		uciRequireSQLSpan(t, reference.Span, uciSQLSpan(t, source, "REFERENCES public.sources (id)", index), "foreign key reference")
+	}
+}
+
+func TestUCISQLExtractionKeepsDollarQuotedDefaultsInsideOneStatement(t *testing.T) {
+	source := []byte("CREATE TEMPORARY TABLE IF NOT EXISTS public.session_events (\n" +
+		"  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,\n" +
+		"  payload TEXT DEFAULT $payload$literal; semicolon$payload$,\n" +
+		"  occurred_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP\n" +
+		");\n" +
+		"ALTER TABLE public.session_events ADD COLUMN IF NOT EXISTS source TEXT;\n")
+	artifact := ExtractSQL(source, uciSQLExtractionProfile())
+
+	if artifact.Coverage != IndexCoverageComplete {
+		t.Fatalf("ExtractSQL(dollar-quoted default) coverage = %q, want %q; diagnostics=%#v", artifact.Coverage, IndexCoverageComplete, artifact.Diagnostics)
+	}
+	uciRequireSQLExtractionProof(t, artifact)
+	uciRequireSQLTable(t, artifact.Definitions, "table:public.session_events", uciSQLSpan(t, source, "CREATE TEMPORARY TABLE IF NOT EXISTS public.session_events", 0))
+	uciRequireSQLColumn(t, artifact.Definitions, "column:public.session_events.payload", "table:public.session_events", "TEXT", uciSQLSpan(t, source, "payload TEXT DEFAULT $payload$literal; semicolon$payload$", 0))
+	uciRequireSQLColumn(t, artifact.Definitions, "column:public.session_events.occurred_at", "table:public.session_events", "TIMESTAMP WITH TIME ZONE", uciSQLSpan(t, source, "occurred_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP", 0))
+	uciRequireSQLColumn(t, artifact.Definitions, "column:public.session_events.source", "table:public.session_events", "TEXT", uciSQLSpan(t, source, "source TEXT", 0))
+	uciRequireSQLConstraint(t, artifact.Definitions, "primary_key", "table:public.session_events", []string{"id"}, uciSQLSpan(t, source, "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY", 0))
+}
+
+func TestUCISQLExtractionRetainsBracketIdentifiersAndEscapedStringDefaults(t *testing.T) {
+	source := []byte("CREATE TABLE [dbo].[event_log] (\n" +
+		"  [id] BIGINT IDENTITY(1, 1) PRIMARY KEY,\n" +
+		"  [note] NVARCHAR(MAX) DEFAULT N'quoted ''value''; semicolon'\n" +
+		");\n")
+	artifact := ExtractSQL(source, uciSQLExtractionProfile())
+
+	if artifact.Coverage != IndexCoverageComplete {
+		t.Fatalf("ExtractSQL(bracket identifiers) coverage = %q, want %q; diagnostics=%#v", artifact.Coverage, IndexCoverageComplete, artifact.Diagnostics)
+	}
+	uciRequireSQLExtractionProof(t, artifact)
+	uciRequireSQLTable(t, artifact.Definitions, "table:[dbo].[event_log]", uciSQLSpan(t, source, "CREATE TABLE [dbo].[event_log]", 0))
+	uciRequireSQLColumn(t, artifact.Definitions, "column:[dbo].[event_log].[note]", "table:[dbo].[event_log]", "NVARCHAR(MAX)", uciSQLSpan(t, source, "[note] NVARCHAR(MAX) DEFAULT N'quoted ''value''; semicolon'", 0))
+	uciRequireSQLConstraint(t, artifact.Definitions, "primary_key", "table:[dbo].[event_log]", []string{"[id]"}, uciSQLSpan(t, source, "[id] BIGINT IDENTITY(1, 1) PRIMARY KEY", 0))
+}
+
+func TestUCISQLExtractionRetainsEscapedBracketIdentifiers(t *testing.T) {
+	source := []byte("CREATE TABLE [dbo].[audit]]trail] ([id]]value] INT PRIMARY KEY);\n")
+	artifact := ExtractSQL(source, uciSQLExtractionProfile())
+
+	if artifact.Coverage != IndexCoverageComplete {
+		t.Fatalf("ExtractSQL(escaped brackets) coverage = %q, want %q; diagnostics=%#v", artifact.Coverage, IndexCoverageComplete, artifact.Diagnostics)
+	}
+	uciRequireSQLExtractionProof(t, artifact)
+	uciRequireSQLTable(t, artifact.Definitions, "table:[dbo].[audit]]trail]", uciSQLSpan(t, source, "CREATE TABLE [dbo].[audit]]trail]", 0))
+	uciRequireSQLColumn(t, artifact.Definitions, "column:[dbo].[audit]]trail].[id]]value]", "table:[dbo].[audit]]trail]", "INT", uciSQLSpan(t, source, "[id]]value] INT PRIMARY KEY", 0))
+	uciRequireSQLConstraint(t, artifact.Definitions, "primary_key", "table:[dbo].[audit]]trail]", []string{"[id]]value]"}, uciSQLSpan(t, source, "[id]]value] INT PRIMARY KEY", 0))
+}
