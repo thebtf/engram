@@ -1036,105 +1036,141 @@ func indexAdmissionAppendGoDefinitionChunks(chunks []IndexAdmissionChunk, source
 // generic admission artifact. It retains syntax facts but intentionally emits
 // no resolved graph edges: grammar-only references have no proven target.
 func NewIndexAdmissionArtifactFromTreeSitter(sourceID string, profile IndexAdmissionArtifactProfile, source []byte, extracted TreeSitterArtifact) (IndexAdmissionArtifact, error) {
-	if len(source) > IndexAdmissionMaxArtifactBodyBytes {
-		return IndexAdmissionArtifact{}, newIndexCapacityError(
-			IndexCapacityScopeArtifact,
-			IndexCapacityResourceArtifactBodyBytes,
-			uint64(len(source)),
-			uint64(IndexAdmissionMaxArtifactBodyBytes),
-		)
-	}
-	expectedLanguage, err := indexAdmissionTreeSitterLanguage(extracted.Language)
+	input, err := indexAdmissionTreeSitterBuildInput(sourceID, profile, source, extracted)
 	if err != nil {
 		return IndexAdmissionArtifact{}, err
 	}
-	if err := indexAdmissionValidateArtifactProfile(profile); err != nil {
-		return IndexAdmissionArtifact{}, err
-	}
-	if profile.Language != expectedLanguage || profile.ParserRevision != TreeSitterWorkerProtocolVersion ||
-		profile.GrammarDigest != extracted.BundleDigest || profile.ExtractionProfileDigest != extracted.BundleDigest {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Tree-sitter artifact profile does not match parser evidence")
-	}
-	contentDigest := indexAdmissionDigestBytes(source)
-	if extracted.Proof.ContentDigest != contentDigest {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Tree-sitter artifact source digest mismatch")
-	}
-	if !canonicalContextUUID(extracted.Proof.ArtifactID) || !isIndexDigest(extracted.Proof.FactsDigest) ||
-		extracted.Proof.DefinitionCount != uint64(len(extracted.Definitions)) ||
-		extracted.Proof.ReferenceSiteCount != uint64(len(extracted.References)) ||
-		extracted.Proof.ChunkCount != uint64(len(extracted.Chunks)) {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Tree-sitter artifact proof is invalid")
-	}
-	if !utf8.Valid(source) || extracted.Text != string(source) {
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Tree-sitter artifact text does not match source bytes")
-	}
+	return indexAdmissionBuildTreeSitterArtifact(input, extracted)
+}
 
-	status := IndexAdmissionArtifactPartial
-	switch extracted.Coverage {
-	case IndexCoverageComplete:
-		if len(extracted.Diagnostics) != 0 {
-			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: complete Tree-sitter artifact has diagnostics")
-		}
-		status = IndexAdmissionArtifactComplete
-	case IndexCoveragePartial:
-		status = IndexAdmissionArtifactPartial
-	default:
-		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Tree-sitter extraction has unsupported coverage")
+func indexAdmissionTreeSitterBuildInput(sourceID string, profile IndexAdmissionArtifactProfile, source []byte, extracted TreeSitterArtifact) (indexAdmissionArtifactBuildInput, error) {
+	if err := indexAdmissionValidateCapacity(len(source), IndexAdmissionMaxArtifactBodyBytes, IndexCapacityResourceArtifactBodyBytes); err != nil {
+		return indexAdmissionArtifactBuildInput{}, err
 	}
-
+	if err := indexAdmissionValidateTreeSitterProfile(profile, extracted); err != nil {
+		return indexAdmissionArtifactBuildInput{}, err
+	}
+	contentDigest, err := indexAdmissionTreeSitterProof(source, extracted)
+	if err != nil {
+		return indexAdmissionArtifactBuildInput{}, err
+	}
+	status, err := indexAdmissionStructuredStatus(extracted.Coverage, len(extracted.Diagnostics), "Tree-sitter")
+	if err != nil {
+		return indexAdmissionArtifactBuildInput{}, err
+	}
 	artifactID, err := DeriveIndexAdmissionArtifactID(sourceID, contentDigest, profile)
 	if err != nil {
+		return indexAdmissionArtifactBuildInput{}, err
+	}
+	return indexAdmissionArtifactBuildInput{
+		artifactID:      artifactID,
+		contentDigest:   contentDigest,
+		profile:         profile,
+		status:          status,
+		source:          source,
+		definitionCount: len(extracted.Definitions),
+		referenceCount:  len(extracted.References),
+		chunkCount:      len(extracted.Chunks),
+		diagnosticCount: len(extracted.Diagnostics),
+	}, nil
+}
+
+func indexAdmissionValidateTreeSitterProfile(profile IndexAdmissionArtifactProfile, extracted TreeSitterArtifact) error {
+	expectedLanguage, err := indexAdmissionTreeSitterLanguage(extracted.Language)
+	if err != nil {
+		return err
+	}
+	if err := indexAdmissionValidateArtifactProfile(profile); err != nil {
+		return err
+	}
+	if profile.Language != expectedLanguage || profile.ParserRevision != TreeSitterWorkerProtocolVersion || profile.GrammarDigest != extracted.BundleDigest || profile.ExtractionProfileDigest != extracted.BundleDigest {
+		return fmt.Errorf("uci index admission: Tree-sitter artifact profile does not match parser evidence")
+	}
+	return nil
+}
+
+func indexAdmissionTreeSitterProof(source []byte, extracted TreeSitterArtifact) (IndexDigest, error) {
+	contentDigest := indexAdmissionDigestBytes(source)
+	if extracted.Proof.ContentDigest != contentDigest {
+		return "", fmt.Errorf("uci index admission: Tree-sitter artifact source digest mismatch")
+	}
+	if !canonicalContextUUID(extracted.Proof.ArtifactID) || !isIndexDigest(extracted.Proof.FactsDigest) || extracted.Proof.DefinitionCount != uint64(len(extracted.Definitions)) || extracted.Proof.ReferenceSiteCount != uint64(len(extracted.References)) || extracted.Proof.ChunkCount != uint64(len(extracted.Chunks)) {
+		return "", fmt.Errorf("uci index admission: Tree-sitter artifact proof is invalid")
+	}
+	if !utf8.Valid(source) || extracted.Text != string(source) {
+		return "", fmt.Errorf("uci index admission: Tree-sitter artifact text does not match source bytes")
+	}
+	return contentDigest, nil
+}
+
+func indexAdmissionBuildTreeSitterArtifact(input indexAdmissionArtifactBuildInput, extracted TreeSitterArtifact) (IndexAdmissionArtifact, error) {
+	artifact := input.artifact()
+	artifact.Definitions = indexAdmissionTreeSitterDefinitions(extracted.Definitions)
+	references, err := indexAdmissionTreeSitterReferences(input.source, extracted.References)
+	if err != nil {
 		return IndexAdmissionArtifact{}, err
 	}
-	artifact := IndexAdmissionArtifact{
-		ArtifactID:    artifactID,
-		ContentDigest: contentDigest,
-		Profile:       profile,
-		Status:        status,
-		Body:          indexAdmissionCloneBytes(source),
-		Definitions:   make([]IndexAdmissionDefinition, 0, len(extracted.Definitions)),
-		References:    make([]IndexAdmissionReference, 0, len(extracted.References)),
-		Chunks:        make([]IndexAdmissionChunk, 0, len(extracted.Chunks)),
-		Diagnostics:   make([]IndexAdmissionDiagnostic, 0, len(extracted.Diagnostics)+1),
+	artifact.References = references
+	artifact.Chunks = indexAdmissionTreeSitterChunks(extracted.Chunks)
+	artifact.Diagnostics = indexAdmissionTreeSitterDiagnostics(extracted.Diagnostics)
+	artifact.Diagnostics, err = indexAdmissionAddPartialDiagnostic(artifact.Diagnostics, input.status, "TREE_SITTER_PARTIAL_COVERAGE", "Tree-sitter parser coverage is partial")
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
 	}
-	for _, definition := range extracted.Definitions {
-		artifact.Definitions = append(artifact.Definitions, IndexAdmissionDefinition{
+	return indexAdmissionFinalizeArtifact(artifact)
+}
+
+func indexAdmissionTreeSitterDefinitions(definitions []TreeSitterDefinition) []IndexAdmissionDefinition {
+	converted := make([]IndexAdmissionDefinition, 0, len(definitions))
+	for _, definition := range definitions {
+		converted = append(converted, IndexAdmissionDefinition{
 			LocalSymbolKey: definition.LocalKey,
 			Kind:           definition.Kind,
 			SymbolKey:      definition.SymbolKey,
 			Span:           definition.Span,
 		})
 	}
-	for _, reference := range extracted.References {
+	return converted
+}
+
+func indexAdmissionTreeSitterReferences(source []byte, references []TreeSitterReferenceSite) ([]IndexAdmissionReference, error) {
+	converted := make([]IndexAdmissionReference, 0, len(references))
+	for _, reference := range references {
 		if reference.RawTarget == "" || reference.TargetKey != "" || !indexAdmissionTreeSitterResolutionValid(reference.Resolution) {
-			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Tree-sitter reference has unsupported resolution evidence")
+			return nil, fmt.Errorf("uci index admission: Tree-sitter reference has unsupported resolution evidence")
 		}
 		relation, err := indexAdmissionTreeSitterReferenceRelation(reference.Kind)
 		if err != nil {
-			return IndexAdmissionArtifact{}, err
+			return nil, err
 		}
 		rawTarget, err := indexAdmissionTextAtSpan(source, reference.Span)
 		if err != nil {
-			return IndexAdmissionArtifact{}, err
+			return nil, err
 		}
-		var ownerSymbolKey *string
-		if reference.OwnerLocalKey != "" {
-			ownerSymbolKey = indexAdmissionStringPointer(reference.OwnerLocalKey)
-		}
-		siteKey := indexAdmissionTreeSitterSafeReferenceKey("site", reference.LocalKey)
-		symbolKey := indexAdmissionTreeSitterSafeReferenceKey("symbol", reference.SymbolKey)
-		artifact.References = append(artifact.References, IndexAdmissionReference{
-			SiteKey:        siteKey,
+		converted = append(converted, IndexAdmissionReference{
+			SiteKey:        indexAdmissionTreeSitterSafeReferenceKey("site", reference.LocalKey),
 			Kind:           reference.Kind,
-			SymbolKey:      symbolKey,
-			OwnerSymbolKey: ownerSymbolKey,
+			SymbolKey:      indexAdmissionTreeSitterSafeReferenceKey("symbol", reference.SymbolKey),
+			OwnerSymbolKey: indexAdmissionTreeSitterOwner(reference.OwnerLocalKey),
 			RawTarget:      rawTarget,
 			Relation:       relation,
 			Span:           reference.Span,
 		})
 	}
-	for index, chunk := range extracted.Chunks {
-		artifact.Chunks = append(artifact.Chunks, IndexAdmissionChunk{
+	return converted, nil
+}
+
+func indexAdmissionTreeSitterOwner(localKey string) *string {
+	if localKey == "" {
+		return nil
+	}
+	return indexAdmissionStringPointer(localKey)
+}
+
+func indexAdmissionTreeSitterChunks(chunks []TreeSitterChunk) []IndexAdmissionChunk {
+	converted := make([]IndexAdmissionChunk, 0, len(chunks))
+	for index, chunk := range chunks {
+		converted = append(converted, IndexAdmissionChunk{
 			Ordinal:       index,
 			Kind:          "source",
 			Span:          chunk.Span,
@@ -1142,30 +1178,19 @@ func NewIndexAdmissionArtifactFromTreeSitter(sourceID string, profile IndexAdmis
 			Text:          chunk.Text,
 		})
 	}
-	for _, diagnostic := range extracted.Diagnostics {
-		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
+	return converted
+}
+
+func indexAdmissionTreeSitterDiagnostics(diagnostics []TreeSitterDiagnostic) []IndexAdmissionDiagnostic {
+	converted := make([]IndexAdmissionDiagnostic, 0, len(diagnostics)+1)
+	for _, diagnostic := range diagnostics {
+		converted = append(converted, IndexAdmissionDiagnostic{
 			Code:    diagnostic.Code,
 			Span:    diagnostic.Span,
 			Message: diagnostic.Message,
 		})
 	}
-	if extracted.Coverage == IndexCoveragePartial {
-		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
-			Code:    "TREE_SITTER_PARTIAL_COVERAGE",
-			Message: "Tree-sitter parser coverage is partial",
-		})
-	}
-
-	canonical, err := indexAdmissionCanonicalizeArtifact(artifact)
-	if err != nil {
-		return IndexAdmissionArtifact{}, err
-	}
-	factsDigest, err := indexAdmissionArtifactFactsDigest(canonical)
-	if err != nil {
-		return IndexAdmissionArtifact{}, err
-	}
-	canonical.FactsDigest = factsDigest
-	return canonical, nil
+	return converted
 }
 
 // NewIndexAdmissionArtifactFromMarkdown converts verified Markdown extraction evidence into one source-scoped generic admission artifact.
