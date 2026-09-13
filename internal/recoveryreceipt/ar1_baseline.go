@@ -23,6 +23,9 @@ const (
 	AR1BaselineSchemaVersion = "engram.recovery.ar1-baseline-receipt.v1"
 	AR1BaselineAuthority     = "sole_ar1_baseline_receipt"
 
+	fingerprintPrefix  = "sha256:"
+	gitRevParseCommand = "rev-parse"
+
 	testScenarioReceiptEnv       = "ENGRAM_AR1_TEST_SCENARIO_RECEIPT"
 	testSourceRootEnv            = "ENGRAM_AR1_TEST_SOURCE_ROOT"
 	testPrimaryRepositoryRootEnv = "ENGRAM_AR1_TEST_PRIMARY_REPOSITORY_ROOT"
@@ -366,41 +369,84 @@ func scenarioProcessMetric(s ScenarioEvidence) (operability.Metric, error) {
 }
 
 func validateScenario(s ScenarioEvidence) error {
+	for _, validate := range []func(ScenarioEvidence) error{
+		validateScenarioEnvelope,
+		validateScenarioFixture,
+		validateScenarioHealth,
+		validateScenarioCandidate,
+		validateScenarioBehavior,
+		validateScenarioObservations,
+	} {
+		if err := validate(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateScenarioEnvelope(s ScenarioEvidence) error {
 	if s.SchemaVersion != "engram.recovery.scenario-evidence.v2" || s.EvidenceKind != "fixture_scenario" || s.Release != "AR-1" || s.Scenario != "baseline" || s.Scope != "synthetic_fixture_only" {
 		return fmt.Errorf("scenario envelope is not the AR-1 synthetic baseline")
 	}
 	if _, err := time.Parse(time.RFC3339, s.ObservedAtUTC); err != nil {
 		return fmt.Errorf("scenario observed_at_utc: %w", err)
 	}
+	return nil
+}
+
+func validateScenarioFixture(s ScenarioEvidence) error {
 	f := s.Fixture
 	if f.FixtureID != "synthetic-redacted-legacy" || !safeRelativeReference(f.FixtureRoot) || !validRunID(f.RunID) || !validFingerprint(f.ManifestFingerprint) || !validFingerprint(f.DatabaseIdentityFingerprint) || !safeRelativeReference(f.ExportReference) || !validFingerprint(f.ExportFingerprint) || !safeRelativeReference(f.RestoreReference) || f.SelectorInventoryCount < 0 || !validFingerprint(f.StructuralFingerprints.Projects) || !validFingerprint(f.StructuralFingerprints.LegacyPayloads) || !validFingerprint(f.ServerMarkerFingerprint) {
 		return fmt.Errorf("scenario fixture provenance is invalid")
 	}
+	return nil
+}
+
+func validateScenarioHealth(s ScenarioEvidence) error {
 	h := s.Health
-	if h.Status != "ready" || !validFingerprint(h.ReceiptFingerprint) || !validFingerprint(h.ServerFingerprint) || !validCommit(h.SourceCommit) || h.RunID != f.RunID || h.ProcessID < 1 || h.ProcessStartUTCTicks < 1 || h.Port < 1024 || h.Port > 65535 {
+	if h.Status != "ready" || !validFingerprint(h.ReceiptFingerprint) || !validFingerprint(h.ServerFingerprint) || !validCommit(h.SourceCommit) || h.RunID != s.Fixture.RunID || h.ProcessID < 1 || h.ProcessStartUTCTicks < 1 || h.Port < 1024 || h.Port > 65535 {
 		return fmt.Errorf("scenario health provenance is invalid")
 	}
+	return nil
+}
+
+func validateScenarioCandidate(s ScenarioEvidence) error {
 	c := s.Candidate
-	if !validCommit(c.SourceCommit) || c.SourceCommit != h.SourceCommit || !validFingerprint(c.BuiltPayloadFingerprint) || c.BuiltPayloadFingerprint != h.ServerFingerprint || !validFingerprint(c.StagedPayloadFingerprint) || c.StagedPayloadFingerprint != h.ServerFingerprint {
+	if !validCommit(c.SourceCommit) || c.SourceCommit != s.Health.SourceCommit || !validFingerprint(c.BuiltPayloadFingerprint) || c.BuiltPayloadFingerprint != s.Health.ServerFingerprint || !validFingerprint(c.StagedPayloadFingerprint) || c.StagedPayloadFingerprint != s.Health.ServerFingerprint {
 		return fmt.Errorf("scenario candidate provenance is invalid")
 	}
-	callbacks := []string{"/api/sessions/claude-session/propagate-outcome", "/api/sessions/openclaw-session/outcome"}
-	if len(s.Behavior.RetiredOutcomeCallbacks) != len(callbacks) {
-		return fmt.Errorf("scenario lacks both retired outcome callback contracts")
-	}
-	for i, callback := range s.Behavior.RetiredOutcomeCallbacks {
-		if callback.Path != callbacks[i] || callback.StatusCode != 410 || callback.ContentType != "application/json" || callback.ContractVersion != "engram.outcome-retirement.v1" || callback.Code != "OUTCOME_CALLBACK_RETIRED" || callback.Action != "upgrade_outcome_adapter" {
-			return fmt.Errorf("scenario retired callback %d is invalid", i)
-		}
+	return nil
+}
+
+func validateScenarioBehavior(s ScenarioEvidence) error {
+	if err := validateRetiredOutcomeCallbacks(s.Behavior.RetiredOutcomeCallbacks); err != nil {
+		return err
 	}
 	selector := s.Behavior.SelectorOnlyContextInject
 	if selector.Path != "/api/context/inject" || selector.StatusCode != 409 || selector.ErrorCode != "PROJECT_IDENTITY_AMBIGUOUS" || selector.UpgradeAction != "send_project_identity_v2" || selector.CanonicalProjectReturned {
 		return fmt.Errorf("scenario selector-only behavior is invalid")
 	}
 	postBehavior := s.Behavior.HealthAfterBehavior
-	if postBehavior.StatusCode != 200 || postBehavior.Status != "ready" || postBehavior.SourceCommit != c.SourceCommit {
+	if postBehavior.StatusCode != 200 || postBehavior.Status != "ready" || postBehavior.SourceCommit != s.Candidate.SourceCommit {
 		return fmt.Errorf("scenario does not prove post-behavior health provenance")
 	}
+	return nil
+}
+
+func validateRetiredOutcomeCallbacks(callbacks []RetiredOutcomeCallback) error {
+	wantPaths := []string{"/api/sessions/claude-session/propagate-outcome", "/api/sessions/openclaw-session/outcome"}
+	if len(callbacks) != len(wantPaths) {
+		return fmt.Errorf("scenario lacks both retired outcome callback contracts")
+	}
+	for index, callback := range callbacks {
+		if callback.Path != wantPaths[index] || callback.StatusCode != 410 || callback.ContentType != "application/json" || callback.ContractVersion != "engram.outcome-retirement.v1" || callback.Code != "OUTCOME_CALLBACK_RETIRED" || callback.Action != "upgrade_outcome_adapter" {
+			return fmt.Errorf("scenario retired callback %d is invalid", index)
+		}
+	}
+	return nil
+}
+
+func validateScenarioObservations(s ScenarioEvidence) error {
 	o := s.Observations
 	if o.FixtureContainment != "validated" || o.SyntheticRestore != "validated" || o.FixtureDatabaseBinding != "validated" || o.OwnedLiveProcess != "validated" || o.StagedPayloadProvenance != "validated" || o.RuntimeHealthProvenance != "validated" || o.FixtureServerHealth != "ready" || o.LiveDataObserved || o.InstalledReleaseAuthority != "not_claimed" || o.AR1BaselineReceiptAuthority != "not_claimed" {
 		return fmt.Errorf("scenario fixture-only authority boundary is invalid")
@@ -512,10 +558,10 @@ func rejectDuplicateJSONValue(decoder *json.Decoder) error {
 }
 
 func validFingerprint(value string) bool {
-	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") {
+	if len(value) != len(fingerprintPrefix)+64 || !strings.HasPrefix(value, fingerprintPrefix) {
 		return false
 	}
-	_, err := hex.DecodeString(value[len("sha256:"):])
+	_, err := hex.DecodeString(value[len(fingerprintPrefix):])
 	return err == nil && value == strings.ToLower(value)
 }
 
@@ -541,7 +587,7 @@ func safeRelativeReference(value string) bool {
 
 func fingerprint(data []byte) string {
 	sum := sha256.Sum256(data)
-	return "sha256:" + hex.EncodeToString(sum[:])
+	return fingerprintPrefix + hex.EncodeToString(sum[:])
 }
 
 func absoluteDirectory(path string) (string, error) {
@@ -713,7 +759,7 @@ func containedPath(root, path string) error {
 }
 
 func candidateCommit(root string) (string, error) {
-	output, err := gitOutput(root, "rev-parse", "HEAD")
+	output, err := gitOutput(root, gitRevParseCommand, "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("resolve candidate source commit: %w", err)
 	}
@@ -725,7 +771,7 @@ func candidateCommit(root string) (string, error) {
 }
 
 func requireCandidateWorktreeRoot(root string) error {
-	output, err := gitOutput(root, "rev-parse", "--show-toplevel")
+	output, err := gitOutput(root, gitRevParseCommand, "--show-toplevel")
 	if err != nil {
 		return fmt.Errorf("resolve candidate Git worktree root: %w", err)
 	}
@@ -763,7 +809,7 @@ func sameGitCommonDirectory(primary, candidate string) error {
 }
 
 func gitCommonDirectory(root string) (string, error) {
-	output, err := gitOutput(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	output, err := gitOutput(root, gitRevParseCommand, "--path-format=absolute", "--git-common-dir")
 	if err != nil {
 		return "", err
 	}
@@ -847,23 +893,25 @@ func ignoredScanRelevantSource(root, ignored string, allowance ignoredScanReleva
 	if err != nil {
 		return "", err
 	}
-	if info.IsDir() && skippedScanDirectory(info.Name()) {
-		return "", nil
-	}
-	if skippedPathComponent(root, path) {
-		return "", nil
-	}
-	if allowance != nil && allowance(relative) {
+	if info.IsDir() && skippedScanDirectory(info.Name()) || skippedPathComponent(root, path) || allowance != nil && allowance(relative) {
 		return "", nil
 	}
 	if !info.IsDir() {
-		if scanRelevantSourceFile(info) {
-			return filepath.ToSlash(relative), nil
-		}
-		return "", nil
+		return ignoredRelevantFile(info, relative), nil
 	}
+	return ignoredRelevantDirectory(root, relative, path, allowance)
+}
+
+func ignoredRelevantFile(info os.FileInfo, relative string) string {
+	if scanRelevantSourceFile(info) {
+		return filepath.ToSlash(relative)
+	}
+	return ""
+}
+
+func ignoredRelevantDirectory(root, relative, path string, allowance ignoredScanRelevantSourceAllowance) (string, error) {
 	var relevant string
-	err = filepath.Walk(path, func(path string, info os.FileInfo, walkErr error) error {
+	err := filepath.Walk(path, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
