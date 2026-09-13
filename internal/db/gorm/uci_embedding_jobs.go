@@ -346,19 +346,22 @@ func (s *UCIProjectionStore) RenewEmbeddingJob(ctx context.Context, ref ucidomai
 		if err != nil {
 			return err
 		}
-		leaseExpiry := now.Add(leaseTTL)
-		result := tx.WithContext(ctx).Model(&UCIJob{}).Where(uciEmbeddingJobLeaseWhere, scope.Job.JobID, UCIJobRunning, ref.LeaseEpoch, ref.LeaseOwner, now).Updates(map[string]any{
-			"lease_expiry": leaseExpiry,
-			"updated_at":   now,
-		})
-		if result.Error != nil {
-			return fmt.Errorf("uci embedding renew update: %w", result.Error)
-		}
-		if result.RowsAffected != 1 {
-			return ucidomain.ErrEmbeddingJobLeaseLost
-		}
-		return nil
+		return renewUCIEmbeddingLease(ctx, tx, scope.Job, ref, now.Add(leaseTTL), now)
 	})
+}
+
+func renewUCIEmbeddingLease(ctx context.Context, tx *gorm.DB, job UCIJob, ref ucidomain.EmbeddingJobRef, leaseExpiry, now time.Time) error {
+	result := tx.WithContext(ctx).Model(&UCIJob{}).Where(uciEmbeddingJobLeaseWhere, job.JobID, UCIJobRunning, ref.LeaseEpoch, ref.LeaseOwner, now).Updates(map[string]any{
+		"lease_expiry": leaseExpiry,
+		"updated_at":   now,
+	})
+	if result.Error != nil {
+		return fmt.Errorf("uci embedding renew update: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return ucidomain.ErrEmbeddingJobLeaseLost
+	}
+	return nil
 }
 
 func (s *UCIProjectionStore) PrepareEmbeddingBatch(ctx context.Context, claim ucidomain.EmbeddingJobClaim, authorized ucidomain.AuthorizedContext, limit int) (ucidomain.EmbeddingBatch, error) {
