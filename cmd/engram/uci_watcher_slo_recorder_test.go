@@ -2465,6 +2465,25 @@ func uciWatcherSLORequireSearchableDiagnostics(t *testing.T, trace *uciWatcherSL
 	}
 }
 
+func TestUCIWatcherSLOSearchableDiagnosticsAllowsSharedBoundaryTimestamps(t *testing.T) {
+	origin := time.Unix(0, 0).UTC()
+	trace := newUCIWatcherSLOAttemptTrace(origin, uciInstalledAcceptancePublication{})
+	canary := uciWatcherSLOStageSpan{StartedElapsedNS: 5, ReturnedElapsedNS: 10, ElapsedNS: 5}
+	barrier := uciWatcherSLOStageSpan{StartedElapsedNS: 10, ReturnedElapsedNS: 20, ElapsedNS: 10}
+	quiescence := uciWatcherSLOStageSpan{StartedElapsedNS: 20, ReturnedElapsedNS: 30, ElapsedNS: 10}
+	if canary.ReturnedElapsedNS != barrier.StartedElapsedNS || barrier.ReturnedElapsedNS != quiescence.StartedElapsedNS {
+		t.Fatalf("test setup must share adjacent boundary timestamps: canary=%#v barrier=%#v quiescence=%#v", canary, barrier, quiescence)
+	}
+	trace.events = []uciWatcherSLOStageEvent{
+		{Name: "search_return", Span: canary},
+		{Name: "client_view_first_seen", Span: canary},
+		{Name: "canary_search_return", Span: canary},
+		{Name: "post_endpoint_barrier_begin", Span: barrier},
+		{Name: "post_endpoint_quiescence_begin", Span: quiescence},
+	}
+	uciWatcherSLORequireSearchableDiagnostics(t, trace, origin.Add(10*time.Nanosecond))
+}
+
 func TestUCIInstalledWatcherFirstCurrentPublicationUsesNewRunForSubsequentStatus(t *testing.T) {
 	before := uciInstalledAcceptancePublication{sourceID: "source", checkoutID: "checkout", profileID: "profile", viewID: "view-before", generation: 1, runID: "run-before"}
 	after := before
