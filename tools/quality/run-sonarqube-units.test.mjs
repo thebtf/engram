@@ -15,6 +15,7 @@ import {
   coverageProfiles,
   fingerprintProfile,
   finishGoEvents,
+  mergeCoverProfiles,
   normalizeCoverage,
   planPackageUnits,
   reusableProfile,
@@ -534,6 +535,8 @@ async function r15Execute(root, profile, currentCandidate, expected, events, opt
       expectedTests: async () => expected,
       runProcess: async (_command, _args, context) => {
         if (options.failure) throw new Error(options.failure);
+        const coverageArgument = _args.find((argument) => argument.startsWith("-coverprofile="));
+        if (options.coverage !== undefined && coverageArgument) write(join(context.cwd, coverageArgument.slice("-coverprofile=".length)), options.coverage);
         context.onStdout(events);
         return { stdout: "", stderr: "" };
       },
@@ -567,14 +570,14 @@ function r15OwnerEvidence(root, currentCandidate, environment, ownerConfig) {
   };
 }
 
-function r15Retained(root, currentCandidate, expected, events, counts, owner = null, status = "passed") {
+function r15Retained(root, currentCandidate, expected, events, counts, owner = null, status = "passed", coverageContent = "mode: atomic\nfixture.go:1.1,1.2 1 1\n") {
   const environment = { sha256: "r15-environment" };
   const profile = coverageProfiles.find((item) => item.name === "base");
   const sourceRunId = "11111111-1111-4111-8111-111111111111";
   const reloadRunId = "22222222-2222-4222-8222-222222222222";
   const sourceDir = join(root, "retained", "runs", sourceRunId);
   const reloadDir = join(root, "retained", "runs", reloadRunId);
-  const coverage = "mode: atomic\nfixture.go:1.1,1.2 1 1\n";
+  const coverage = coverageContent;
   mkdirSync(sourceDir, { recursive: true });
   mkdirSync(reloadDir, { recursive: true });
   write(join(sourceDir, "events.ndjson"), events);
@@ -777,6 +780,90 @@ test("R15 replays every saved failed unit log through execution and retained rel
       retained: unit.id !== "base-race-cdfda1f895eb3580" && unit.id !== "base-coverage-cdfda1f895eb3580",
       reload_reuse: unit.id !== "base-race-cdfda1f895eb3580" && unit.id !== "base-coverage-cdfda1f895eb3580",
     })));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+const r15ZeroSavedRun = "D:/Dev/engram/.agent/e/sonarqube/worktrees/634b6b14e6f9b058e723e998f9411b0357a430a06ba267336a6d6b712b27b8f9/runs/89bfb55e-0bdb-467d-a5d8-08db3e6929b0";
+
+function r15CoverageProfile(unit) {
+  return {
+    ...r15UnitProfile(unit),
+    race: false,
+    coverpkg: unit.coverpkg.join(","),
+    unitPhase: "coverage",
+    workPhase: "coverage",
+  };
+}
+
+function r15ZeroEvents(packageName, test = "TestZero", action = "pass", marker = "coverage: [no statements]\n") {
+  return `${r15Event("pass", packageName, test)}${r15Event("output", packageName, null, marker)}${r15Event(action, packageName, null)}`;
+}
+
+test("R15 replays saved header-only internal/version coverage as a completed zero-statement unit", async () => {
+  const root = temporaryDirectory();
+  try {
+    const saved = JSON.parse(readFileSync(join(r15ZeroSavedRun, "manifest.json"), "utf8"));
+    const unit = saved.profiles.find((profile) => profile.name === "base").units.find((entry) => entry.id === "base-coverage-c65178eeb44dc297");
+    const header = readFileSync(join(r15ZeroSavedRun, unit.coverage.path.replaceAll("\\", "/")), "utf8");
+    const events = readFileSync(join(r15ZeroSavedRun, unit.test_events.path.replaceAll("\\", "/")), "utf8");
+    const execution = await r15Execute(root, r15CoverageProfile(unit.unit), saved.candidate, unit.expected_tests, events, { coverage: header });
+    const retained = r15Retained(root, saved.candidate, unit.expected_tests, events, unit.package_counts, null, "passed", header);
+    const ordinary = join(root, "ordinary.out");
+    const merged = join(root, "merged.out");
+    write(ordinary, "mode: atomic\ninternal/other/other.go:1.1,1.2 1 1\n");
+    mergeCoverProfiles([join(retained.retained.runDir, "coverage.out"), ordinary], merged);
+    assert.throws(() => mergeCoverProfiles([join(retained.retained.runDir, "coverage.out")], join(root, "all-zero.out")), /No Go coverage blocks/);
+    assert.deepEqual({
+      execution: execution.passed,
+      retained: Boolean(reusableProfile(retained.retained, retained.profile, saved.candidate, retained.environment)),
+      reload_reuse: Boolean(reusableProfile(retained.reloaded, retained.profile, saved.candidate, retained.environment)),
+      merged: readFileSync(merged, "utf8"),
+    }, {
+      execution: true,
+      retained: true,
+      reload_reuse: true,
+      merged: "mode: atomic\ninternal/other/other.go:1.1,1.2 1 1\n",
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("R15 rejects unproven or malformed header-only coverage evidence", async () => {
+  const root = temporaryDirectory();
+  try {
+    const packageName = "example/internal/version";
+    const expected = [{ package: packageName, test: "TestZero" }];
+    const unit = { id: "r15-zero-coverage", importPath: packageName, directory: "internal/version", coverpkg: [packageName] };
+    const header = "mode: atomic\n";
+    const cases = [
+      { name: "missing no-statements marker", events: r15ZeroEvents(packageName, "TestZero", "pass", "coverage: [statements missing]\n"), coverage: header, execution: false },
+      { name: "failed package", events: r15ZeroEvents(packageName, "TestZero", "fail"), coverage: header, execution: false },
+      { name: "incomplete package", events: r15ZeroEvents(packageName).replace(r15Event("pass", packageName, null), ""), coverage: header, execution: false },
+      { name: "malformed extra bytes", events: r15ZeroEvents(packageName), coverage: "mode: atomic\nmalformed\n", execution: false },
+      { name: "wrong coverage mode", events: r15ZeroEvents(packageName), coverage: "mode: set\n", execution: false },
+      { name: "wrong coverage hash", events: r15ZeroEvents(packageName), coverage: header, execution: true, wrongHash: true },
+    ];
+    const actual = [];
+    for (const item of cases) {
+      const caseRoot = join(root, item.name.replaceAll(" ", "-"));
+      const currentCandidate = r15Candidate(caseRoot, [["internal/version/version_test.go", "func TestZero(t *testing.T) {}"]]);
+      const execution = await r15Execute(caseRoot, r15CoverageProfile(unit), currentCandidate, expected, item.events, { coverage: item.coverage });
+      const retained = r15Retained(caseRoot, currentCandidate, expected, item.events, { passed: 1, failed: 0, tests_passed: 1, tests_skipped: 0 }, null, "passed", item.coverage);
+      if (item.wrongHash) {
+        retained.retained.manifest.profiles[0].coverage.sha256 = "0".repeat(64);
+        write(join(retained.retained.runDir, "manifest.json"), JSON.stringify(retained.retained.manifest));
+      }
+      actual.push({
+        name: item.name,
+        execution: execution.passed,
+        retained: Boolean(reusableProfile(retained.retained, retained.profile, currentCandidate, retained.environment)),
+        reload_reuse: Boolean(reusableProfile(retained.reloaded, retained.profile, currentCandidate, retained.environment)),
+      });
+    }
+    assert.deepEqual(actual, cases.map((item) => ({ name: item.name, execution: item.execution, retained: false, reload_reuse: false })));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
