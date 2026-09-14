@@ -9,8 +9,8 @@
 
 VERSION       := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 SOURCE_COMMIT := $(shell git rev-parse --verify HEAD 2>/dev/null || echo "")
-# Pass version into both the server entry point and the internal version package.
-VERSION_LDFLAGS := -X main.Version=$(VERSION) -X github.com/thebtf/engram/internal/version.Daemon=$(VERSION)
+# Pass build metadata to main entry points; daemon compatibility identity comes from internal/version.
+VERSION_LDFLAGS := -X main.Version=$(VERSION)
 LDFLAGS         := -ldflags "$(VERSION_LDFLAGS) -s -w" -buildvcs=false
 SERVER_LDFLAGS  := -ldflags "$(VERSION_LDFLAGS) -X main.SourceCommit=$(SOURCE_COMMIT) -s -w" -buildvcs=false
 BUILD_DIR := bin

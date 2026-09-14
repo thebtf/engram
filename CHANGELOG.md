@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Reliability and security hardening across Code Intelligence indexing, identity, and access paths.
+- Made local `make build` and `make install` preserve the source-defined daemon compatibility identity.
 
 ### Changed
 
