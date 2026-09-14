@@ -21,6 +21,7 @@ const (
 	semanticInputSchema         = "engram.uci-semantic-input/2"
 	semanticMaxProfileText      = 512
 	semanticQueryProviderBudget = 20 * time.Second
+	semanticMaxFusedCandidates  = queryMaxItems
 )
 
 // VectorProfile names one versioned semantic space. Equal dimensions alone are
@@ -50,8 +51,11 @@ type SemanticStore interface {
 
 // SemanticStoreResult contains vector-ranked candidates and the scoped vector
 // coverage used to decide whether a semantic result is honest to return.
+// CandidateCount is the exact number of scoped candidates before this result's
+// window; it proves a bounded fusion received every vector candidate.
 type SemanticStoreResult struct {
 	Candidates     []QueryCandidate
+	CandidateCount int64
 	Coverage       IndexCoverageState
 	VectorCoverage float64
 }
@@ -172,22 +176,22 @@ func (service *SemanticService) Query(ctx context.Context, authorized Authorized
 		return QueryResult{}, err
 	}
 
-	storeSpec := normalized
-	storeSpec.Offset = start
-	lexicalSelection, unavailable, err := service.selectLexical(ctx, authorized, ref, storeSpec)
+	if reason := service.providerUnavailableReason(); reason != "" {
+		return service.lexicalFallbackResult(ctx, authorized, ref, normalized, start, reason)
+	}
+	if semanticNil(service.store) {
+		return service.lexicalFallbackResult(ctx, authorized, ref, normalized, start, "vector_store_unavailable")
+	}
+
+	fusionSpec := normalized
+	fusionSpec.Limit = semanticMaxFusedCandidates
+	fusionSpec.Offset = 0
+	lexicalSelection, unavailable, err := service.selectLexical(ctx, authorized, ref, fusionSpec)
 	if err != nil {
 		return QueryResult{}, err
 	}
 	if unavailable != nil {
 		return *unavailable, nil
-	}
-	lexical := lexicalSelection.candidates
-
-	if reason := service.providerUnavailableReason(); reason != "" {
-		return service.lexicalOnlyResult(ref, normalized, start, lexical, lexicalSelection.coverage, reason)
-	}
-	if semanticNil(service.store) {
-		return service.lexicalOnlyResult(ref, normalized, start, lexical, lexicalSelection.coverage, "vector_store_unavailable")
 	}
 
 	input, err := semanticQueryEmbeddingInput(service.profile, normalized.Text)
@@ -196,27 +200,36 @@ func (service *SemanticService) Query(ctx context.Context, authorized Authorized
 	}
 	vector, err := service.embedQuery(ctx, input)
 	if err != nil {
-		return service.lexicalOnlyResult(ref, normalized, start, lexical, lexicalSelection.coverage, semanticProviderDegradation(err))
+		return service.lexicalFallbackResult(ctx, authorized, ref, normalized, start, semanticProviderDegradation(err))
 	}
 
-	semanticResult, err := service.store.SelectSemanticCandidates(ctx, authorized, service.profile, vector, storeSpec)
+	semanticResult, err := service.store.SelectSemanticCandidates(ctx, authorized, service.profile, vector, fusionSpec)
 	if err != nil {
-		return service.lexicalOnlyResult(ref, normalized, start, lexical, lexicalSelection.coverage, "vector_store_unavailable")
+		return service.lexicalFallbackResult(ctx, authorized, ref, normalized, start, "vector_store_unavailable")
 	}
-	if !validQueryCoverage(semanticResult.Coverage) || !validSemanticCoverage(semanticResult.VectorCoverage) {
-		return service.lexicalOnlyResult(ref, normalized, start, lexical, lexicalSelection.coverage, "vector_coverage_incomplete")
+	if !validQueryCoverage(semanticResult.Coverage) || !validSemanticCoverage(semanticResult.VectorCoverage) || semanticResult.CandidateCount < 0 {
+		return service.lexicalFallbackResult(ctx, authorized, ref, normalized, start, "vector_coverage_incomplete")
 	}
 	if semanticResult.Coverage != IndexCoverageComplete || semanticResult.VectorCoverage < 1 {
-		return service.lexicalOnlyResult(ref, normalized, start, lexical, lexicalSelection.coverage, "vector_coverage_incomplete")
+		return service.lexicalFallbackResult(ctx, authorized, ref, normalized, start, "vector_coverage_incomplete")
+	}
+	if semanticResult.CandidateCount > int64(semanticMaxFusedCandidates) {
+		return service.lexicalFallbackResult(ctx, authorized, ref, normalized, start, "vector_candidate_limit")
 	}
 
 	semantic := semanticCurrentCandidates(semanticResult.Candidates, ref)
-	fused := semanticFuseCandidates(lexical, semantic, normalized.Mode, normalized.Order)
+	if int64(len(semantic)) != semanticResult.CandidateCount || int64(len(lexicalSelection.candidates)) > semanticResult.CandidateCount {
+		return service.lexicalFallbackResult(ctx, authorized, ref, normalized, start, "vector_coverage_incomplete")
+	}
+	fused := semanticFuseCandidates(lexicalSelection.candidates, semantic, normalized.Mode, normalized.Order)
+	if start > 0 && start >= len(fused) {
+		return QueryResult{}, fmt.Errorf("uci semantic: continuation position is outside the selected view")
+	}
 	return service.availableResult(semanticAvailableResultInput{
 		ref:                ref,
 		spec:               normalized,
 		start:              start,
-		candidates:         fused,
+		candidates:         fused[start:],
 		coverage:           lexicalSelection.coverage,
 		mode:               QueryRetrievalHybrid,
 		vectorCoverage:     &semanticResult.VectorCoverage,
@@ -254,6 +267,19 @@ func (service *SemanticService) selectLexical(ctx context.Context, authorized Au
 	}
 	unavailable := QueryResult{Response: queryUnavailableResponse(ref, result.Coverage, *result.Unavailable)}
 	return semanticLexicalSelection{}, &unavailable, nil
+}
+
+func (service *SemanticService) lexicalFallbackResult(ctx context.Context, authorized AuthorizedContext, ref ContextRef, spec QuerySpec, start int, reason string) (QueryResult, error) {
+	pageSpec := spec
+	pageSpec.Offset = start
+	lexicalSelection, unavailable, err := service.selectLexical(ctx, authorized, ref, pageSpec)
+	if err != nil {
+		return QueryResult{}, err
+	}
+	if unavailable != nil {
+		return *unavailable, nil
+	}
+	return service.lexicalOnlyResult(ref, spec, start, lexicalSelection.candidates, lexicalSelection.coverage, reason)
 }
 
 func (service *SemanticService) lexicalOnlyResult(ref ContextRef, spec QuerySpec, start int, candidates []QueryCandidate, coverage IndexCoverageState, reason string) (QueryResult, error) {

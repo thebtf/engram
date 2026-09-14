@@ -1775,6 +1775,7 @@ func (s *UCIProjectionStore) SelectSemanticCandidates(ctx context.Context, autho
 		vectorCoverage = float64(coverageRow.CompatibleCandidates) / float64(coverageRow.TotalCandidates)
 	}
 	result := ucidomain.SemanticStoreResult{
+		CandidateCount: coverageRow.TotalCandidates,
 		Coverage:       coverage,
 		VectorCoverage: vectorCoverage,
 	}

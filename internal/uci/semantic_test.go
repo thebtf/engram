@@ -291,6 +291,7 @@ func TestUCISemanticQueryFusesCompleteScopedLexicalAndVectorCandidates(t *testin
 	store := newSemanticMemoryStore()
 	store.semanticResult = SemanticStoreResult{
 		Candidates:     []QueryCandidate{fixture.current, fixture.distractorA},
+		CandidateCount: 2,
 		Coverage:       IndexCoverageComplete,
 		VectorCoverage: 1,
 	}
@@ -326,6 +327,73 @@ func TestUCISemanticQueryFusesCompleteScopedLexicalAndVectorCandidates(t *testin
 	}
 }
 
+// TestUCISemanticQueryFusesBeforeApplyingPagination proves the response page
+// is cut from one RRF ordering rather than from independently paginated lanes.
+func TestUCISemanticQueryFusesBeforeApplyingPagination(t *testing.T) {
+	fixture := newSemanticTestFixture()
+	lexical := []QueryCandidate{
+		semanticTestPaginationCandidate(fixture.contextA, "lexical-0", "b/lexical-0.go", 30),
+		semanticTestPaginationCandidate(fixture.contextA, "lexical-1", "d/lexical-1.go", 20),
+		semanticTestPaginationCandidate(fixture.contextA, "lexical-2", "f/lexical-2.go", 10),
+	}
+	vector := []QueryCandidate{
+		semanticTestPaginationCandidate(fixture.contextA, "vector-0", "c/vector-0.go", 30),
+		semanticTestPaginationCandidate(fixture.contextA, "vector-1", "e/vector-1.go", 20),
+		semanticTestPaginationCandidate(fixture.contextA, "vector-2", "g/vector-2.go", 10),
+	}
+	winner := semanticTestPaginationCandidate(fixture.contextA, "winner", "a/winner.go", 1)
+	lexical = append(lexical, winner)
+	vector = append(vector, winner)
+
+	store := &semanticPagingStore{lexical: lexical, vector: vector}
+	service := NewSemanticService(semanticTestProfile("uci-semantic-test-model"), &semanticTestEmbedder{
+		model:  "uci-semantic-test-model",
+		vector: semanticTestVector(1),
+	}, store, store)
+	spec := semanticTestQuerySpec("fusion")
+	spec.Limit = 2
+
+	want := []string{
+		"symbol:winner",
+		"symbol:lexical-0",
+		"symbol:vector-0",
+		"symbol:lexical-1",
+		"symbol:vector-1",
+		"symbol:lexical-2",
+		"symbol:vector-2",
+	}
+	got := make([]string, 0, len(want))
+	for page := 0; ; page++ {
+		result, err := service.Query(context.Background(), newAuthorizedContext(fixture.contextA), spec)
+		if err != nil {
+			t.Fatalf("Query() error = %v", err)
+		}
+		items := semanticResponseItems(t, result)
+		if page == 0 && (len(items) == 0 || items[0].Ref.EntityKey != want[0]) {
+			t.Fatalf("first fused item = %#v, want %q outside both lane windows", items, want[0])
+		}
+		for _, item := range items {
+			got = append(got, item.Ref.EntityKey)
+		}
+		if result.Response.Continuation == nil || result.Response.Continuation.Value == nil {
+			break
+		}
+		token := *result.Response.Continuation.Value
+		spec.Continuation = &token
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("fused pages = %#v, want %#v", got, want)
+	}
+	if len(store.lexicalCalls) != len(store.vectorCalls) {
+		t.Fatalf("lane calls lexical=%d vector=%d, want one lexical call per vector call", len(store.lexicalCalls), len(store.vectorCalls))
+	}
+	for index, call := range store.lexicalCalls {
+		if call.Offset != 0 || call.Limit != queryMaxItems {
+			t.Fatalf("lexical fusion call %d = %#v, want offset 0 and bounded fusion limit %d", index, call, queryMaxItems)
+		}
+	}
+}
+
 func TestUCISemanticQueryFallsBackWhenVectorCoverageIsIncomplete(t *testing.T) {
 	fixture := newSemanticTestFixture()
 	profile := semanticTestProfile("uci-semantic-test-model")
@@ -355,6 +423,31 @@ func TestUCISemanticQueryFallsBackWhenVectorCoverageIsIncomplete(t *testing.T) {
 	}
 	if got := store.SelectCallCount(); got != 1 {
 		t.Fatalf("semantic store calls = %d, want one incomplete coverage result", got)
+	}
+}
+
+func TestUCISemanticQueryFallsBackWhenFusedCandidateCountExceedsBound(t *testing.T) {
+	fixture := newSemanticTestFixture()
+	profile := semanticTestProfile("uci-semantic-test-model")
+	lexical := &semanticTestLexicalStore{candidates: []QueryCandidate{fixture.lexical}}
+	store := newSemanticMemoryStore()
+	store.semanticResult = SemanticStoreResult{
+		CandidateCount: int64(semanticMaxFusedCandidates + 1),
+		Coverage:       IndexCoverageComplete,
+		VectorCoverage: 1,
+	}
+	service := NewSemanticService(profile, &semanticTestEmbedder{model: profile.Model, vector: semanticTestVector(1)}, store, lexical)
+
+	result, err := service.Query(context.Background(), newAuthorizedContext(fixture.contextA), semanticTestQuerySpec("fallback-token"))
+	if err != nil {
+		t.Fatalf("Query() error = %v, want explicit lexical fallback", err)
+	}
+	if result.Response.Retrieval == nil || result.Response.Retrieval.Mode != QueryRetrievalLexical || !semanticTestContains(result.Response.Retrieval.DegradationReasons, "vector_candidate_limit") {
+		t.Fatalf("retrieval = %#v, want lexical vector_candidate_limit fallback", result.Response.Retrieval)
+	}
+	items := semanticResponseItems(t, result)
+	if len(items) != 1 || items[0].Ref.EntityKey != fixture.lexical.EntityKey {
+		t.Fatalf("fallback items = %#v", items)
 	}
 }
 
@@ -836,6 +929,7 @@ func (store *semanticPostgresStore) SelectSemanticCandidates(ctx context.Context
 		return SemanticStoreResult{}, err
 	}
 	result := SemanticStoreResult{
+		CandidateCount: int64(len(baseline)),
 		Coverage:       IndexCoverageComplete,
 		VectorCoverage: 1,
 	}
@@ -1322,4 +1416,63 @@ func semanticTestContains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+type semanticPagingStore struct {
+	lexical []QueryCandidate
+	vector  []QueryCandidate
+
+	lexicalCalls []QuerySpec
+	vectorCalls  []QuerySpec
+}
+
+var (
+	_ QueryStore    = (*semanticPagingStore)(nil)
+	_ SemanticStore = (*semanticPagingStore)(nil)
+)
+
+func (store *semanticPagingStore) SelectCandidates(_ context.Context, authorized AuthorizedContext, spec QuerySpec) (QueryStoreResult, error) {
+	store.lexicalCalls = append(store.lexicalCalls, spec)
+	return QueryStoreResult{
+		Candidates: semanticTestPageCandidates(semanticCurrentCandidates(store.lexical, authorized.Ref()), spec, spec.Order),
+		Coverage:   IndexCoverageComplete,
+	}, nil
+}
+
+func (*semanticPagingStore) LookupCandidateEmbedding(context.Context, AuthorizedContext, VectorProfile, QueryCandidate) ([]float32, bool, error) {
+	return nil, false, nil
+}
+
+func (*semanticPagingStore) StoreCandidateEmbedding(context.Context, AuthorizedContext, VectorProfile, QueryCandidate, []float32) error {
+	return nil
+}
+
+func (store *semanticPagingStore) SelectSemanticCandidates(_ context.Context, authorized AuthorizedContext, _ VectorProfile, _ []float32, spec QuerySpec) (SemanticStoreResult, error) {
+	store.vectorCalls = append(store.vectorCalls, spec)
+	return SemanticStoreResult{
+		Candidates:     semanticTestPageCandidates(semanticCurrentCandidates(store.vector, authorized.Ref()), spec, QueryOrderRelevance),
+		CandidateCount: int64(len(store.vector)),
+		Coverage:       IndexCoverageComplete,
+		VectorCoverage: 1,
+	}, nil
+}
+
+func semanticTestPageCandidates(candidates []QueryCandidate, spec QuerySpec, order QueryOrder) []QueryCandidate {
+	ordered := append([]QueryCandidate(nil), candidates...)
+	orderQueryCandidates(ordered, order)
+	if spec.Offset >= len(ordered) {
+		return nil
+	}
+	end := spec.Offset + spec.Limit + 1
+	if end > len(ordered) {
+		end = len(ordered)
+	}
+	return ordered[spec.Offset:end]
+}
+
+func semanticTestPaginationCandidate(ref ContextRef, name, relativePath string, score float64) QueryCandidate {
+	text := "func " + strings.ReplaceAll(name, "-", "_") + "() {}"
+	candidate := semanticTestCandidate(ref, semanticTestArtifactID(name), "symbol:"+name, name, "fixture."+name, relativePath, text)
+	candidate.Score = score
+	return candidate
 }
