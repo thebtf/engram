@@ -6,11 +6,13 @@ package engramcore
 
 import (
 	"context"
+	"os/exec"
 	"testing"
 	"time"
 
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/moduletest"
+	"github.com/thebtf/engram/internal/proxy"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
@@ -124,6 +126,52 @@ func TestSlugCacheResolutionAndForgetSerialize(t *testing.T) {
 	}
 	if _, ok := cache.identities.Load(key); ok {
 		t.Fatal("Forget left a v2 identity entry")
+	}
+}
+
+func TestSlugCacheResolve_DoesNotCacheCancelledFallback(t *testing.T) {
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"remote", "add", "origin", "https://example.invalid/test/engram-slug-cache-fixture.git"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, output)
+		}
+	}
+
+	project := muxcore.ProjectContext{ID: "cancelled-project", Cwd: dir}
+	want, _, _, err := proxy.ResolveProjectSlug(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("resolve expected slug: %v", err)
+	}
+
+	cache := &slugCache{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := cache.Resolve(ctx, project); got != project.ID {
+		t.Fatalf("cancelled Resolve=%q, want fallback %q", got, project.ID)
+	}
+	if _, ok := cache.entries.Load(cacheKey(project)); ok {
+		t.Fatal("cancelled Resolve cached fallback")
+	}
+	if got := cache.Resolve(context.Background(), project); got != want {
+		t.Fatalf("fresh Resolve=%q, want git-derived slug %q", got, want)
+	}
+}
+
+func TestSlugCacheResolve_CachesFallbackAfterGitFailure(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	cache := &slugCache{}
+	project := muxcore.ProjectContext{ID: "git-failure-project", Cwd: t.TempDir()}
+	if got := cache.Resolve(context.Background(), project); got != project.ID {
+		t.Fatalf("Resolve=%q, want fallback %q", got, project.ID)
+	}
+	if cached, ok := cache.entries.Load(cacheKey(project)); !ok || cached.(resolvedSlug).id != project.ID {
+		t.Fatalf("git failure fallback was not cached: %v", cached)
 	}
 }
 
