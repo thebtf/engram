@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -188,4 +189,62 @@ func TestUCINilExposureRecorderSuppressesAuthorizedResultAndReportsUnavailable(t
 	for _, forbidden := range []string{uciCodeIntelCompatibilityBodyA, uciCodeIntelCompatibilityBodyB, "private_locator"} {
 		assert.NotContains(t, string(encodedStatus), forbidden)
 	}
+}
+
+func TestRunPreservesJSONRPCIDsForUCIIdempotency(t *testing.T) {
+	fixture := newUCICodeIntelCompatibilityFixture(t)
+	handle := fixture.selectContext(t, fixture.clientA, fixture.refA)
+	params, err := json.Marshal(map[string]any{
+		"name": "codebase_search",
+		"arguments": uciCodeIntelCompatibilitySearchArguments(
+			handle,
+			uciCodeIntelCompatibilityProject,
+			10,
+		),
+	})
+	require.NoError(t, err)
+
+	request := func(id json.RawMessage) string {
+		body, err := json.Marshal(struct {
+			JSONRPC string          `json:"jsonrpc"`
+			ID      json.RawMessage `json:"id"`
+			Method  string          `json:"method"`
+			Params  json.RawMessage `json:"params"`
+		}{"2.0", id, "tools/call", params})
+		require.NoError(t, err)
+		return string(body)
+	}
+
+	ids := []json.RawMessage{
+		json.RawMessage(`42`),
+		json.RawMessage(`9007199254740992`),
+		json.RawMessage(`9007199254740993`),
+		json.RawMessage(`"ordinary-id"`),
+	}
+	var output bytes.Buffer
+	fixture.server.stdin = strings.NewReader(strings.Join([]string{
+		request(ids[0]),
+		request(ids[1]),
+		request(ids[2]),
+		request(ids[3]),
+	}, "\n"))
+	fixture.server.stdout = &output
+	require.NoError(t, fixture.server.Run(fixture.clientA))
+
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	require.Len(t, lines, len(ids))
+	for index, line := range lines {
+		var response struct {
+			ID json.RawMessage `json:"id"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(line), &response))
+		require.Equal(t, string(ids[index]), string(response.ID))
+	}
+
+	fixture.exposureStore.mu.Lock()
+	records := append([]uci.ExposureRecord(nil), fixture.exposureStore.exposures...)
+	fixture.exposureStore.mu.Unlock()
+	require.Len(t, records, len(ids))
+	assert.NotEqual(t, records[1].RequestRef, records[2].RequestRef)
+	assert.NotEqual(t, records[1].IdempotencyKey, records[2].IdempotencyKey)
 }

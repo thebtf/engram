@@ -440,7 +440,16 @@ func (s *Server) Run(ctx context.Context) error {
 			}
 
 			var req Request
-			if err := json.Unmarshal([]byte(line), &req); err != nil {
+			decoder := json.NewDecoder(strings.NewReader(line))
+			decoder.UseNumber()
+			if err := decoder.Decode(&req); err != nil {
+				s.sendError(nil, -32700, "Parse error", err)
+				continue
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				if err == nil {
+					err = fmt.Errorf("invalid character after top-level value")
+				}
 				s.sendError(nil, -32700, "Parse error", err)
 				continue
 			}
