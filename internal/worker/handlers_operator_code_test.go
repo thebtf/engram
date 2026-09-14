@@ -232,6 +232,150 @@ func TestOperatorCodeHTTPAdapter_GraphNavigationPublishesOnlyStoredSourceDescrip
 	require.Equal(t, []uci.QueryEntityRef{available, unavailable}, graphSources.calls)
 }
 
+func TestOperatorCodeGraphRequestInputBuildsNormalizedSemantics(t *testing.T) {
+	now := time.Date(2026, time.September, 14, 12, 0, 0, 0, time.UTC)
+	text := func(value string) *string { return &value }
+	integer := func(value int) *int { return &value }
+	milliseconds := func(value int64) *int64 { return &value }
+	for _, testCase := range []struct {
+		name    string
+		request operatorCodeGraphRequest
+		assert  func(mcp.CodebaseGraphInput, int64)
+	}{
+		{
+			name:    "defaults",
+			request: operatorCodeGraphRequest{Action: " Neighbors ", Target: &operatorCodeGraphTargetRequest{EntityKey: text(" Fixture.Symbol ")}},
+			assert: func(input mcp.CodebaseGraphInput, deadlineMS int64) {
+				require.Equal(t, uci.GraphActionNeighbors, input.Action)
+				require.Equal(t, uci.GraphTarget{EntityKey: "Fixture.Symbol"}, input.Target)
+				require.Nil(t, input.Destination)
+				require.Equal(t, uci.GraphFilter{Direction: uci.GraphDirectionBoth}, input.Filter)
+				require.Equal(t, uci.GraphBudget{MaxDepth: 4, MaxVisited: 64, MaxNodes: 32, MaxEdges: 64, Deadline: now.Add(30 * time.Second)}, input.Budget)
+				require.EqualValues(t, 30_000, deadlineMS)
+				require.Nil(t, input.Continuation)
+			},
+		},
+		{
+			name: "path normalizes filters and bounds",
+			request: operatorCodeGraphRequest{
+				Action:        "PATH",
+				Target:        &operatorCodeGraphTargetRequest{Name: text(" Source.Name ")},
+				Destination:   &operatorCodeGraphTargetRequest{EntityKey: text(" Destination.Key ")},
+				Direction:     text(" OUTGOING "),
+				Relations:     []string{"calls", " IMPORTS ", "calls"},
+				EvidenceKinds: []string{"semantic", " EXTRACTED ", "semantic"},
+				MaxDepth:      integer(operatorCodeGraphMaxDepth),
+				MaxVisited:    integer(operatorCodeGraphMaxVisited),
+				MaxNodes:      integer(operatorCodeGraphMaxNodes),
+				MaxEdges:      integer(operatorCodeGraphMaxEdges),
+				DeadlineMS:    milliseconds(operatorCodeGraphMaxWaitMS),
+				Continuation:  text("cursor-1"),
+			},
+			assert: func(input mcp.CodebaseGraphInput, deadlineMS int64) {
+				require.Equal(t, uci.GraphActionPath, input.Action)
+				require.Equal(t, uci.GraphTarget{Name: "Source.Name"}, input.Target)
+				require.Equal(t, &uci.GraphTarget{EntityKey: "Destination.Key"}, input.Destination)
+				require.Equal(t, uci.GraphFilter{Direction: uci.GraphDirectionOutgoing, Relations: []uci.IndexRelation{"calls", "imports"}, EvidenceKinds: []uci.QueryEvidenceKind{uci.QueryEvidenceExtracted, uci.QueryEvidenceSemantic}}, input.Filter)
+				require.Equal(t, uci.GraphBudget{MaxDepth: operatorCodeGraphMaxDepth, MaxVisited: operatorCodeGraphMaxVisited, MaxNodes: operatorCodeGraphMaxNodes, MaxEdges: operatorCodeGraphMaxEdges, Deadline: now.Add(time.Duration(operatorCodeGraphMaxWaitMS) * time.Millisecond)}, input.Budget)
+				require.Equal(t, operatorCodeGraphMaxWaitMS, deadlineMS)
+				require.Equal(t, "cursor-1", *input.Continuation)
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			input, deadlineMS, valid := testCase.request.input(now)
+			require.True(t, valid)
+			testCase.assert(input, deadlineMS)
+		})
+	}
+}
+
+func TestOperatorCodeGraphRequestInputRejectsInvalidComponents(t *testing.T) {
+	text := func(value string) *string { return &value }
+	integer := func(value int) *int { return &value }
+	validTarget := &operatorCodeGraphTargetRequest{EntityKey: text("Fixture.Symbol")}
+	for _, testCase := range []struct {
+		name    string
+		request operatorCodeGraphRequest
+	}{
+		{name: "unknown action", request: operatorCodeGraphRequest{Action: "walk", Target: validTarget}},
+		{name: "missing target", request: operatorCodeGraphRequest{Action: "neighbors"}},
+		{name: "dual target", request: operatorCodeGraphRequest{Action: "neighbors", Target: &operatorCodeGraphTargetRequest{EntityKey: text("key"), Name: text("name")}}},
+		{name: "blank target text", request: operatorCodeGraphRequest{Action: "neighbors", Target: &operatorCodeGraphTargetRequest{Name: text(" ")}}},
+		{name: "invalid target text", request: operatorCodeGraphRequest{Action: "neighbors", Target: &operatorCodeGraphTargetRequest{EntityKey: text(string([]byte{0xff}))}}},
+		{name: "destination without path", request: operatorCodeGraphRequest{Action: "neighbors", Target: validTarget, Destination: &operatorCodeGraphTargetRequest{Name: text("destination")}}},
+		{name: "path without destination", request: operatorCodeGraphRequest{Action: "path", Target: validTarget}},
+		{name: "dual destination", request: operatorCodeGraphRequest{Action: "path", Target: validTarget, Destination: &operatorCodeGraphTargetRequest{EntityKey: text("key"), Name: text("name")}}},
+		{name: "invalid filter", request: operatorCodeGraphRequest{Action: "neighbors", Target: validTarget, Direction: text("sideways")}},
+		{name: "invalid budget", request: operatorCodeGraphRequest{Action: "neighbors", Target: validTarget, MaxDepth: integer(-1)}},
+		{name: "invalid continuation", request: operatorCodeGraphRequest{Action: "neighbors", Target: validTarget, Continuation: text("")}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, _, valid := testCase.request.input(time.Time{})
+			require.False(t, valid)
+		})
+	}
+}
+
+func TestOperatorCodeGraphFilterNormalizesAndRejectsValues(t *testing.T) {
+	text := func(value string) *string { return &value }
+	for _, testCase := range []struct {
+		name      string
+		request   operatorCodeGraphRequest
+		want      uci.GraphFilter
+		wantValid bool
+	}{
+		{name: "defaults", want: uci.GraphFilter{Direction: uci.GraphDirectionBoth}, wantValid: true},
+		{name: "normalized", request: operatorCodeGraphRequest{Direction: text(" incoming "), Relations: []string{"calls", "imports", "calls"}, EvidenceKinds: []string{"resolved", "heuristic", "resolved"}}, want: uci.GraphFilter{Direction: uci.GraphDirectionIncoming, Relations: []uci.IndexRelation{"calls", "imports"}, EvidenceKinds: []uci.QueryEvidenceKind{uci.QueryEvidenceHeuristic, uci.QueryEvidenceResolved}}, wantValid: true},
+		{name: "invalid direction", request: operatorCodeGraphRequest{Direction: text("sideways")}},
+		{name: "invalid relation", request: operatorCodeGraphRequest{Relations: []string{"unknown"}}},
+		{name: "too many relations", request: operatorCodeGraphRequest{Relations: make([]string, 33)}},
+		{name: "invalid evidence kind", request: operatorCodeGraphRequest{EvidenceKinds: []string{"unknown"}}},
+		{name: "too many evidence kinds", request: operatorCodeGraphRequest{EvidenceKinds: make([]string, 5)}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			filter, valid := operatorCodeGraphFilter(testCase.request)
+			require.Equal(t, testCase.wantValid, valid)
+			if valid {
+				require.Equal(t, testCase.want, filter)
+			}
+		})
+	}
+}
+
+func TestOperatorCodeGraphBudgetAndContinuationEnforceBounds(t *testing.T) {
+	now := time.Date(2026, time.September, 14, 12, 0, 0, 0, time.UTC)
+	integer := func(value int) *int { return &value }
+	milliseconds := func(value int64) *int64 { return &value }
+	text := func(value string) *string { return &value }
+	for _, testCase := range []struct {
+		name    string
+		request operatorCodeGraphRequest
+	}{
+		{name: "negative depth", request: operatorCodeGraphRequest{MaxDepth: integer(-1)}},
+		{name: "visited below minimum", request: operatorCodeGraphRequest{MaxVisited: integer(0)}},
+		{name: "nodes above maximum", request: operatorCodeGraphRequest{MaxNodes: integer(operatorCodeGraphMaxNodes + 1)}},
+		{name: "edges above maximum", request: operatorCodeGraphRequest{MaxEdges: integer(operatorCodeGraphMaxEdges + 1)}},
+		{name: "deadline below minimum", request: operatorCodeGraphRequest{DeadlineMS: milliseconds(0)}},
+		{name: "deadline above maximum", request: operatorCodeGraphRequest{DeadlineMS: milliseconds(operatorCodeGraphMaxWaitMS + 1)}},
+		{name: "empty continuation", request: operatorCodeGraphRequest{Continuation: text("")}},
+		{name: "whitespace continuation", request: operatorCodeGraphRequest{Continuation: text(" cursor")}},
+		{name: "control continuation", request: operatorCodeGraphRequest{Continuation: text("cursor\n")}},
+		{name: "oversized continuation", request: operatorCodeGraphRequest{Continuation: text(string(bytes.Repeat([]byte("x"), 2_049)))}},
+		{name: "invalid continuation text", request: operatorCodeGraphRequest{Continuation: text(string([]byte{0xff}))}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if testCase.request.Continuation != nil {
+				_, valid := operatorCodeGraphContinuation(testCase.request)
+				require.False(t, valid)
+				return
+			}
+			_, _, valid := operatorCodeGraphBudget(testCase.request, now)
+			require.False(t, valid)
+		})
+	}
+}
+
 func TestOperatorCodeHTTPAdapter_BindsReleasedReadsToBrowserSession(t *testing.T) {
 	for _, testCase := range []struct {
 		name      string
