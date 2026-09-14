@@ -46,14 +46,23 @@ func RuntimeLocatorPath(baseDir string) string {
 // The generation is hashed only to keep Unix socket paths bounded; the digest
 // is not an authenticator.
 func RuntimeEndpoint(baseDir string, generation DaemonGeneration) (string, error) {
+	endpoint, _, err := runtimeEndpointForListener(baseDir, generation)
+	return endpoint, err
+}
+
+func runtimeEndpointForListener(baseDir string, generation DaemonGeneration) (string, string, error) {
 	if !generation.valid() {
-		return "", ErrStaleGeneration
+		return "", "", ErrStaleGeneration
 	}
 	if strings.TrimSpace(baseDir) == "" {
 		baseDir = os.TempDir()
 	}
+	return runtimeEndpointPath(baseDir, runtimeEndpointFileName(generation))
+}
+
+func runtimeEndpointFileName(generation DaemonGeneration) string {
 	digest := sha256.Sum256([]byte(generation.Value()))
-	return filepath.Join(baseDir, "engram-hap-01b-"+hex.EncodeToString(digest[:8])+".sock"), nil
+	return "engram-hap-01b-" + hex.EncodeToString(digest[:8]) + ".sock"
 }
 
 // PublishLocator atomically writes one strict mode-0600 locator. It never

@@ -28,6 +28,7 @@ type ListenerConfig struct {
 type Listener struct {
 	disabled    bool
 	endpoint    string
+	endpointDir string
 	locatorPath string
 	generation  DaemonGeneration
 	relay       *Relay
@@ -55,24 +56,30 @@ func StartListener(parent context.Context, config ListenerConfig) (*Listener, er
 	if maxConcurrent <= 0 {
 		maxConcurrent = defaultMaxConcurrentConnections
 	}
-	endpoint, err := RuntimeEndpoint(config.BaseDir, config.Generation)
+	endpoint, endpointDir, err := runtimeEndpointForListener(config.BaseDir, config.Generation)
 	if err != nil {
+		return nil, err
+	}
+	if err := prepareRuntimeEndpoint(endpointDir); err != nil {
 		return nil, err
 	}
 	locatorPath := RuntimeLocatorPath(config.BaseDir)
 	listener, err := ipc.Listen(endpoint)
 	if err != nil {
+		cleanupRuntimeEndpoint(endpointDir)
 		return nil, fmt.Errorf("listen on legacy relay endpoint: %w", err)
 	}
 	locator := Locator{Protocol: Protocol, Generation: config.Generation, Endpoint: endpoint}
 	if err := PublishLocator(locatorPath, locator); err != nil {
 		_ = listener.Close()
 		ipc.Cleanup(endpoint)
+		cleanupRuntimeEndpoint(endpointDir)
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(parent)
 	result := &Listener{
 		endpoint:    endpoint,
+		endpointDir: endpointDir,
 		locatorPath: locatorPath,
 		generation:  config.Generation,
 		relay:       config.Relay,
@@ -155,6 +162,7 @@ func (l *Listener) Close() error {
 			l.closeErr = errors.Join(l.closeErr, err)
 		}
 		ipc.Cleanup(l.endpoint)
+		cleanupRuntimeEndpoint(l.endpointDir)
 		close(l.done)
 	})
 	return l.closeErr
