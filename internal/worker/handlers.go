@@ -234,7 +234,7 @@ func (s *Service) requireReady(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.ready.Load() {
 			if err := s.GetInitError(); err != nil {
-				http.Error(w, "service initialization failed: "+err.Error(), http.StatusInternalServerError)
+				http.Error(w, "service initialization failed: "+err.Error(), http.StatusServiceUnavailable)
 				return
 			}
 			http.Error(w, "service initializing", http.StatusServiceUnavailable)
