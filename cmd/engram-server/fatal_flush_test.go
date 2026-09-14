@@ -27,6 +27,20 @@ func (r *fatalFlushMetricReceiver) Export(_ context.Context, req *collector.Expo
 	return &collector.ExportMetricsServiceResponse{}, nil
 }
 
+func TestSourceCommitBuildMetadata(t *testing.T) {
+	if SourceCommit == "" {
+		return
+	}
+	if len(SourceCommit) != 40 {
+		t.Fatalf("SourceCommit length = %d, want 40", len(SourceCommit))
+	}
+	for _, character := range SourceCommit {
+		if character < '0' || character > 'f' || character > '9' && character < 'a' {
+			t.Fatalf("SourceCommit = %q, want lowercase hexadecimal", SourceCommit)
+		}
+	}
+}
+
 // TestFatalStartupFlush proves that a fatal startup caused by missing auth
 // configuration:
 //   - exits non-zero within a bounded time window
