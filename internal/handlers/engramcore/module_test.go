@@ -6,11 +6,16 @@ package engramcore
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/moduletest"
+	"github.com/thebtf/engram/internal/proxy"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
@@ -74,12 +79,12 @@ func TestSlugCacheResolutionAndForgetSerialize(t *testing.T) {
 	identityStarted, identityDone := make(chan struct{}), make(chan struct{})
 	go func() {
 		close(slugStarted)
-		_ = cache.Resolve(project)
+		_ = cache.Resolve(context.Background(), project)
 		close(slugDone)
 	}()
 	go func() {
 		close(identityStarted)
-		_, _ = cache.ResolveIdentity(project)
+		_, _ = cache.ResolveIdentity(context.Background(), project)
 		close(identityDone)
 	}()
 	<-slugStarted
@@ -124,6 +129,83 @@ func TestSlugCacheResolutionAndForgetSerialize(t *testing.T) {
 	}
 	if _, ok := cache.identities.Load(key); ok {
 		t.Fatal("Forget left a v2 identity entry")
+	}
+}
+
+func TestSlugCacheResolve_DoesNotCacheCancelledFallback(t *testing.T) {
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"remote", "add", "origin", "https://example.invalid/test/engram-slug-cache-fixture.git"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, output)
+		}
+	}
+
+	project := muxcore.ProjectContext{ID: "cancelled-project", Cwd: dir}
+	want, _, _, err := proxy.ResolveProjectSlug(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("resolve expected slug: %v", err)
+	}
+
+	cache := &slugCache{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := cache.Resolve(ctx, project); got != project.ID {
+		t.Fatalf("cancelled Resolve=%q, want fallback %q", got, project.ID)
+	}
+	if _, ok := cache.entries.Load(cacheKey(project)); ok {
+		t.Fatal("cancelled Resolve cached fallback")
+	}
+	if got := cache.Resolve(context.Background(), project); got != want {
+		t.Fatalf("fresh Resolve=%q, want git-derived slug %q", got, want)
+	}
+
+	cache = &slugCache{}
+	binDir := t.TempDir()
+	gitPath := filepath.Join(binDir, "git")
+	if runtime.GOOS == "windows" {
+		gitPath += ".exe"
+		sourcePath := filepath.Join(binDir, "delayed-git.go")
+		source := []byte("package main\n\nimport \"time\"\n\nfunc main() { time.Sleep(10 * time.Second) }\n")
+		if err := os.WriteFile(sourcePath, source, 0o600); err != nil {
+			t.Fatalf("write delayed git source: %v", err)
+		}
+		cmd := exec.Command("go", "build", "-o", gitPath, sourcePath)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("build delayed git: %v\n%s", err, output)
+		}
+	} else if err := os.WriteFile(gitPath, []byte("#!/bin/sh\nexec /bin/sleep 10\n"), 0o755); err != nil {
+		t.Fatalf("write delayed git: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", binDir)
+	if got := cache.Resolve(context.Background(), project); got != project.ID {
+		t.Fatalf("derived deadline Resolve=%q, want fallback %q", got, project.ID)
+	}
+	if _, ok := cache.entries.Load(cacheKey(project)); ok {
+		t.Fatal("derived deadline Resolve cached fallback")
+	}
+	t.Setenv("PATH", oldPath)
+	if got := cache.Resolve(context.Background(), project); got != want {
+		t.Fatalf("fresh Resolve after deadline=%q, want git-derived slug %q", got, want)
+	}
+}
+
+func TestSlugCacheResolve_CachesFallbackAfterGitFailure(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	cache := &slugCache{}
+	project := muxcore.ProjectContext{ID: "git-failure-project", Cwd: t.TempDir()}
+	if got := cache.Resolve(context.Background(), project); got != project.ID {
+		t.Fatalf("Resolve=%q, want fallback %q", got, project.ID)
+	}
+	if cached, ok := cache.entries.Load(cacheKey(project)); !ok || cached.(resolvedSlug).id != project.ID {
+		t.Fatalf("git failure fallback was not cached: %v", cached)
 	}
 }
 

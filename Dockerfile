@@ -43,50 +43,50 @@ ARG TARGETARCH=amd64
 # OCI labels. Numeric prerelease identifiers follow the SemVer leading-zero
 # rule; build metadata is intentionally unsupported.
 RUN set -eu; \
-    release_pattern='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; \
-    commit_pattern='^sha-[0-9a-f]{40}$'; \
-    if printf '%s\n' "$VERSION" | grep -Eq "$commit_pattern"; then \
-        :; \
-    elif printf '%s\n' "$VERSION" | grep -Eq "$release_pattern"; then \
-        case "$VERSION" in \
-            *-*) prerelease="${VERSION#*-}"; old_ifs="$IFS"; IFS='.'; \
-                 for identifier in $prerelease; do \
-                     if printf '%s\n' "$identifier" | grep -Eq '^[0-9]+$' \
-                        && [ "${#identifier}" -gt 1 ] \
-                        && [ "${identifier#0}" != "$identifier" ]; then \
-                         echo "invalid numeric prerelease identifier in VERSION" >&2; exit 64; \
-                     fi; \
-                 done; IFS="$old_ifs" ;; \
-        esac; \
-    else \
-        echo "VERSION must be canonical SemVer or sha-<40 lowercase hex>" >&2; exit 64; \
-    fi
+ release_pattern='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; \
+ commit_pattern='^sha-[0-9a-f]{40}$'; \
+ if printf '%s\n' "$VERSION" | grep -Eq "$commit_pattern"; then \
+ :; \
+ elif printf '%s\n' "$VERSION" | grep -Eq "$release_pattern"; then \
+ case "$VERSION" in \
+ *-*) prerelease="${VERSION#*-}"; old_ifs="$IFS"; IFS='.'; \
+ for identifier in $prerelease; do \
+ if printf '%s\n' "$identifier" | grep -Eq '^[0-9]+$' \
+ && [ "${#identifier}" -gt 1 ] \
+ && [ "${identifier#0}" != "$identifier" ]; then \
+ echo "invalid numeric prerelease identifier in VERSION" >&2; exit 64; \
+ fi; \
+ done; IFS="$old_ifs" ;; \
+ esac; \
+ else \
+ echo "VERSION must be canonical SemVer or sha-<40 lowercase hex>" >&2; exit 64; \
+ fi
 
 # Build the accepted CGO server. The ldd transcript is retained in the image as
 # auditable proof that every shared-library dependency resolves before the
 # binary crosses into the distroless runtime stage.
 RUN SOURCE_COMMIT=""; \
-    source_candidate="${VERSION#sha-}"; \
-    if [ "$source_candidate" != "$VERSION" ] && printf '%s\n' "$source_candidate" | grep -Eq '^[0-9a-f]{40}$'; then SOURCE_COMMIT="$source_candidate"; fi; \
-    CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -tags fts5 \
-    -ldflags "-X main.Version=${VERSION} -X main.SourceCommit=${SOURCE_COMMIT} -s -w" -o /out/engram-server ./cmd/engram-server \
-    && ldd /out/engram-server > /out/engram-server.ldd 2>&1 \
-    && ! grep -q "not found" /out/engram-server.ldd \
-    && grep -q "=>" /out/engram-server.ldd
+ source_candidate="${VERSION#sha-}"; \
+ if [ "$source_candidate" != "$VERSION" ] && printf '%s\n' "$source_candidate" | grep -Eq '^[0-9a-f]{40}$'; then SOURCE_COMMIT="$source_candidate"; fi; \
+ CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -tags fts5 \
+ -ldflags "-X main.Version=${VERSION} -X main.SourceCommit=${SOURCE_COMMIT} -s -w" -o /out/engram-server ./cmd/engram-server \
+ && ldd /out/engram-server > /out/engram-server.ldd 2>&1 \
+ && ! grep -q "not found" /out/engram-server.ldd \
+ && grep -q "=>" /out/engram-server.ldd
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
-    -ldflags "-s -w" -o /out/engram-healthcheck ./cmd/engram-healthcheck \
-    && ! ldd /out/engram-healthcheck > /out/engram-healthcheck.ldd 2>&1 \
-    && grep -q "not a dynamic executable" /out/engram-healthcheck.ldd \
-    && install -d -m 0700 /out/server-home
+ -ldflags "-s -w" -o /out/engram-healthcheck ./cmd/engram-healthcheck \
+ && ! ldd /out/engram-healthcheck > /out/engram-healthcheck.ldd 2>&1 \
+ && grep -q "not a dynamic executable" /out/engram-healthcheck.ldd \
+ && install -d -m 0700 /out/server-home
 
 # Build client-side binary for the existing release target.
 RUN CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -tags fts5 \
-    -ldflags "-X main.Version=${VERSION} -s -w" \
-    -o /out/engram ./cmd/engram
+ -ldflags "-X main.Version=${VERSION} -X github.com/thebtf/engram/internal/version.Daemon=${VERSION} -s -w" \
+ -o /out/engram ./cmd/engram
 
 # --- Server image ---
-FROM gcr.io/distroless/base-debian13@sha256:b78832f41c8128046807c24840ebee4f1c18ba7870eed423d8750c272c15e147 AS server
+FROM gcr.io/distroless/base-debian13@sha256:0ebad3510af52aefe45045cc01b07564570be4feecf8d9f93d3a05d1b5f2f93b AS server
 
 COPY --from=builder --chown=65532:65532 --chmod=0755 /out/engram-server /usr/local/bin/engram-server
 COPY --from=builder --chown=65532:65532 --chmod=0755 /out/engram-healthcheck /usr/local/bin/engram-healthcheck
@@ -100,13 +100,13 @@ ENV HOME=/var/lib/engram
 EXPOSE 37777
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
-    CMD ["/usr/local/bin/engram-healthcheck", "http://127.0.0.1:37777/api/ready"]
+ CMD ["/usr/local/bin/engram-healthcheck", "http://127.0.0.1:37777/api/ready"]
 
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/engram-server"]
 
 # --- Operator console image ---
-FROM gcr.io/distroless/nodejs22-debian13@sha256:773a62fbe24a3f8c8b24b16fd59154627f8b406737bc906f83bf1732bc8907dd AS operator-console
+FROM gcr.io/distroless/nodejs22-debian13@sha256:412a5f8fce490bcff01fc2a73ec43bb62071e1b71dd847eeacaae7b8ecef1dc1 AS operator-console
 
 WORKDIR /app
 
@@ -121,7 +121,7 @@ ENV NUXT_OPERATOR_API_TARGET=http://server:37777
 EXPOSE 3000
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
-    CMD ["/usr/local/bin/engram-healthcheck", "http://127.0.0.1:3000/api/ready"]
+ CMD ["/usr/local/bin/engram-healthcheck", "http://127.0.0.1:3000/api/ready"]
 
 USER 65532:65532
 CMD [".output/server/index.mjs"]

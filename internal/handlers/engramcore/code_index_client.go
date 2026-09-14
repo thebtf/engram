@@ -35,7 +35,7 @@ func (m *Module) IndexCodebaseLegacy(ctx context.Context, p muxcore.ProjectConte
 		return nil, err
 	}
 	token := m.envFor(p, config.EnvWorkstationToken)
-	slug := m.cache.Resolve(p)
+	slug := m.cache.Resolve(ctx, p)
 
 	conn, err := m.pool.getOrDialGRPC(serverURL, token)
 	if err != nil {

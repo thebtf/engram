@@ -1,6 +1,7 @@
 package engramcore
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -58,10 +59,12 @@ func cacheKey(p muxcore.ProjectContext) slugCacheKey {
 // Resolve returns the engram project slug for the given session and cwd. On
 // first lookup it calls proxy.ResolveProjectSlug and logs the result once.
 //
-// On error it falls back to the muxcore-provided ID (which is already
-// git-hash-derived inside muxcore's session layer) so the daemon never
-// fails to respond due to a git lookup hiccup.
-func (c *slugCache) Resolve(p muxcore.ProjectContext) string {
+// Non-cancellation errors fall back to the muxcore-provided ID (which is
+// already git-hash-derived inside muxcore's session layer) so the daemon never
+// fails to respond due to a git lookup hiccup. Caller and Git-derived
+// cancellation/deadline errors are transient and return that fallback only to
+// the caller, leaving the key uncached.
+func (c *slugCache) Resolve(ctx context.Context, p muxcore.ProjectContext) string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	key := cacheKey(p)
@@ -69,8 +72,11 @@ func (c *slugCache) Resolve(p muxcore.ProjectContext) string {
 		return cached.(resolvedSlug).id
 	}
 
-	id, displayName, remote, err := proxy.ResolveProjectSlug(p.Cwd)
+	id, displayName, remote, err := proxy.ResolveProjectSlug(ctx, p.Cwd)
 	if err != nil {
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return p.ID
+		}
 		fmt.Fprintf(os.Stderr, "[engram] warning: project identity failed for %s: %v\n", p.Cwd, err)
 		id = p.ID
 		displayName = filepath.Base(p.Cwd)
@@ -88,7 +94,7 @@ func (c *slugCache) Resolve(p muxcore.ProjectContext) string {
 // ResolveCompatibilityEvidence derives one non-authoritative legacy selector
 // without retaining it or substituting a project ID when derivation fails.
 func (c *slugCache) ResolveCompatibilityEvidence(p muxcore.ProjectContext) (string, error) {
-	slug, _, _, err := proxy.ResolveProjectSlug(p.Cwd)
+	slug, _, _, err := proxy.ResolveProjectSlug(context.Background(), p.Cwd)
 	if err != nil || slug == "" {
 		return "", errors.New("compatibility evidence unavailable")
 	}
@@ -98,7 +104,7 @@ func (c *slugCache) ResolveCompatibilityEvidence(p muxcore.ProjectContext) (stri
 // ResolveIdentity returns stable v2 metadata for the given project and cwd.
 // The first successful resolution is reused until OnProjectRemoved calls
 // Forget, avoiding synchronous git subprocesses on every tool request.
-func (c *slugCache) ResolveIdentity(p muxcore.ProjectContext) (*pb.ProjectIdentityV2, error) {
+func (c *slugCache) ResolveIdentity(ctx context.Context, p muxcore.ProjectContext) (*pb.ProjectIdentityV2, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	key := cacheKey(p)
@@ -106,7 +112,7 @@ func (c *slugCache) ResolveIdentity(p muxcore.ProjectContext) (*pb.ProjectIdenti
 		return cached.(*pb.ProjectIdentityV2), nil
 	}
 
-	identity, err := resolveProjectIdentityV2(p.Cwd)
+	identity, err := resolveProjectIdentityV2(ctx, p.Cwd)
 	if err != nil {
 		return nil, err
 	}

@@ -144,7 +144,7 @@ func (m *Module) OnSessionConnect(p muxcore.ProjectContext) {
 	if m.v3ClientInstanceID == "" {
 		// V2 compatibility eagerly resolves the slug. V3 must not resolve or
 		// retain a selector before central resolution.
-		_ = m.cache.Resolve(p)
+		_ = m.cache.Resolve(context.Background(), p)
 	} else {
 		m.cache.Forget(p.ID)
 	}

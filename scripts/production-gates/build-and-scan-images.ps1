@@ -2244,15 +2244,18 @@ try {
         server_ldd_sha256 = $lddHash
         pinned_sources = [ordered]@{
             dockerfile_frontend = 'docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89'
-            server = 'gcr.io/distroless/base-debian13@sha256:b78832f41c8128046807c24840ebee4f1c18ba7870eed423d8750c272c15e147'
-            operator_console = 'gcr.io/distroless/nodejs22-debian13@sha256:773a62fbe24a3f8c8b24b16fd59154627f8b406737bc906f83bf1732bc8907dd'
+            server = 'gcr.io/distroless/base-debian13@sha256:0ebad3510af52aefe45045cc01b07564570be4feecf8d9f93d3a05d1b5f2f93b'
+            operator_console = 'gcr.io/distroless/nodejs22-debian13@sha256:412a5f8fce490bcff01fc2a73ec43bb62071e1b71dd847eeacaae7b8ecef1dc1'
             postgres = 'cgr.dev/chainguard/wolfi-base@sha256:02dab76bd852a70556b5b2002195c8a5fdab77d323c433bf6642aab080489795'
             go_builder = 'golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36'
             node_builder = 'node:22-bookworm-slim@sha256:53ada149d435c38b14476cb57e4a7da73c15595aba79bd6971b547ceb6d018bf'
         }
         pinned_packages = [ordered]@{
             bash = '5.3-r12'
+            busybox = '1.38.0-r2'
             gosu = '1.19-r13'
+            libcrypto3 = '3.6.4-r5'
+            libssl3 = '3.6.4-r5'
             postgresql = '17.10-r1'
             pgvector = '0.8.1-r0'
         }

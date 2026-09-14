@@ -1,6 +1,7 @@
 package proxy_test
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -95,11 +96,11 @@ func TestProjectIdentityV2_SharedVectors(t *testing.T) {
 
 func TestResolveProjectIdentityV2_NonGitAnchorStrictAndStable(t *testing.T) {
 	dir := t.TempDir()
-	first, err := proxy.ResolveProjectIdentityV2(dir)
+	first, err := proxy.ResolveProjectIdentityV2(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("first resolve: %v", err)
 	}
-	second, err := proxy.ResolveProjectIdentityV2(dir)
+	second, err := proxy.ResolveProjectIdentityV2(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("second resolve: %v", err)
 	}
@@ -112,7 +113,7 @@ func TestResolveProjectIdentityV2_NonGitAnchorStrictAndStable(t *testing.T) {
 	if first.AnchorShared == nil || *first.AnchorShared {
 		t.Fatalf("new anchor must explicitly default to unshared: %#v", first.AnchorShared)
 	}
-	other, err := proxy.ResolveProjectIdentityV2(t.TempDir())
+	other, err := proxy.ResolveProjectIdentityV2(context.Background(), t.TempDir())
 	if err != nil {
 		t.Fatalf("resolve independent project: %v", err)
 	}
@@ -137,7 +138,7 @@ func TestResolveProjectIdentityV2_ConcurrentFirstUseConverges(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			identities[i], errs[i] = proxy.ResolveProjectIdentityV2(dir)
+			identities[i], errs[i] = proxy.ResolveProjectIdentityV2(context.Background(), dir)
 		}(i)
 	}
 	wg.Wait()
@@ -168,7 +169,7 @@ func TestResolveProjectIdentityV2_PreExistingAnchorsAreNeverReplaced(t *testing.
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
-				identity, err := proxy.ResolveProjectIdentityV2(dir)
+				identity, err := proxy.ResolveProjectIdentityV2(context.Background(), dir)
 				errs[i] = err
 				if err == nil && identity.NonGitAnchor != "00112233445566778899aabbccddeeff" {
 					errs[i] = &identityTestError{message: "pre-existing anchor changed"}
@@ -199,7 +200,7 @@ func TestResolveProjectIdentityV2_PreExistingAnchorsAreNeverReplaced(t *testing.
 			t.Fatal(err)
 		}
 		for i := 0; i < 8; i++ {
-			_, err := proxy.ResolveProjectIdentityV2(dir)
+			_, err := proxy.ResolveProjectIdentityV2(context.Background(), dir)
 			if err == nil || !strings.Contains(err.Error(), "PROJECT_IDENTITY_INVALID") {
 				t.Fatalf("attempt %d error=%v, want fail-closed invalid", i, err)
 			}
@@ -221,7 +222,7 @@ func TestResolveProjectIdentityV2_PreExistingAnchorsAreNeverReplaced(t *testing.
 		if err := os.WriteFile(anchorPath, original, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		_, err := proxy.ResolveProjectIdentityV2(dir)
+		_, err := proxy.ResolveProjectIdentityV2(context.Background(), dir)
 		if err == nil || !strings.Contains(err.Error(), "PROJECT_IDENTITY_INVALID") {
 			t.Fatalf("error=%v, want missing shared rejection", err)
 		}
@@ -322,7 +323,7 @@ func TestResolveProjectSlug_GitRepo(t *testing.T) {
 
 	repoDir := initSyntheticGitRepo(t)
 
-	id, displayName, gitRemote, err := proxy.ResolveProjectSlug(repoDir)
+	id, displayName, gitRemote, err := proxy.ResolveProjectSlug(context.Background(), repoDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -359,7 +360,7 @@ func TestResolveProjectIdentityV2_StripsGitRemoteUserinfo(t *testing.T) {
 		t.Fatal("set synthetic origin")
 	}
 
-	identity, err := proxy.ResolveProjectIdentityV2(repoDir)
+	identity, err := proxy.ResolveProjectIdentityV2(context.Background(), repoDir)
 	if err != nil {
 		t.Fatal("resolve identity")
 	}
@@ -384,7 +385,7 @@ func TestResolveProjectSlug_NonGitDir(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	id, displayName, gitRemote, err := proxy.ResolveProjectSlug(dir)
+	id, displayName, gitRemote, err := proxy.ResolveProjectSlug(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -411,7 +412,7 @@ func TestResolveProjectIdentityV2_FailsClosedWhenGitCannotExecute(t *testing.T) 
 	workspace := t.TempDir()
 	t.Setenv("PATH", t.TempDir())
 
-	_, err := proxy.ResolveProjectIdentityV2(workspace)
+	_, err := proxy.ResolveProjectIdentityV2(context.Background(), workspace)
 	if err == nil || !strings.Contains(err.Error(), "resolve git identity") {
 		t.Fatalf("error=%v, want fail-closed git identity error", err)
 	}
@@ -426,7 +427,7 @@ func TestResolveProjectIdentityV2_GitRepositoryWithoutOriginUsesAnchor(t *testin
 		t.Fatalf("git init: %v\n%s", err, output)
 	}
 
-	identity, err := proxy.ResolveProjectIdentityV2(workspace)
+	identity, err := proxy.ResolveProjectIdentityV2(context.Background(), workspace)
 	if err != nil {
 		t.Fatalf("resolve repository without origin: %v", err)
 	}
@@ -444,12 +445,12 @@ func TestResolveProjectSlug_ConsistentAcrossCalls(t *testing.T) {
 
 	repoDir := initSyntheticGitRepo(t)
 
-	id1, dn1, remote1, err1 := proxy.ResolveProjectSlug(repoDir)
+	id1, dn1, remote1, err1 := proxy.ResolveProjectSlug(context.Background(), repoDir)
 	if err1 != nil {
 		t.Fatalf("first call error: %v", err1)
 	}
 
-	id2, dn2, remote2, err2 := proxy.ResolveProjectSlug(repoDir)
+	id2, dn2, remote2, err2 := proxy.ResolveProjectSlug(context.Background(), repoDir)
 	if err2 != nil {
 		t.Fatalf("second call error: %v", err2)
 	}
@@ -487,11 +488,11 @@ func TestResolveProjectSlug_WorktreeMatchesMain(t *testing.T) {
 	linkedRepo := filepath.Join(t.TempDir(), "linked")
 	run("worktree", "add", "-q", "--detach", linkedRepo, "HEAD")
 
-	mainID, mainName, mainRemote, err := proxy.ResolveProjectSlug(mainRepo)
+	mainID, mainName, mainRemote, err := proxy.ResolveProjectSlug(context.Background(), mainRepo)
 	if err != nil {
 		t.Fatalf("main repo id error: %v", err)
 	}
-	linkedID, linkedName, linkedRemote, err := proxy.ResolveProjectSlug(linkedRepo)
+	linkedID, linkedName, linkedRemote, err := proxy.ResolveProjectSlug(context.Background(), linkedRepo)
 	if err != nil {
 		t.Fatalf("linked worktree id error: %v", err)
 	}
@@ -522,7 +523,7 @@ func TestResolveProjectSlug_AnchorFile_CustomName(t *testing.T) {
 		t.Fatalf("write anchor: %v", err)
 	}
 
-	_, displayName, _, err := proxy.ResolveProjectSlug(dir)
+	_, displayName, _, err := proxy.ResolveProjectSlug(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -538,7 +539,7 @@ func TestResolveProjectSlug_AnchorFile_AutoCreated(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	id, displayName, _, err := proxy.ResolveProjectSlug(dir)
+	id, displayName, _, err := proxy.ResolveProjectSlug(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -577,7 +578,7 @@ func TestResolveProjectSlug_AnchorFile_NonGitStoredID(t *testing.T) {
 		t.Fatalf("write anchor: %v", err)
 	}
 
-	id, displayName, gitRemote, err := proxy.ResolveProjectSlug(dir)
+	id, displayName, gitRemote, err := proxy.ResolveProjectSlug(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

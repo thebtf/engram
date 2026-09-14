@@ -98,7 +98,7 @@ func TestResolveProjectIdentityV2_ProcessHelper(t *testing.T) {
 		t.Fatalf("unexpected release token %q", release[0])
 	}
 
-	identity, err := proxy.ResolveProjectIdentityV2(workspace)
+	identity, err := proxy.ResolveProjectIdentityV2(context.Background(), workspace)
 	result := projectIdentityProcessResult{OK: err == nil}
 	if err != nil {
 		result.Error = err.Error()

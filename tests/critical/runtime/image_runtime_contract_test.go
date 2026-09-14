@@ -81,7 +81,7 @@ func TestDockerReleaseRefFreshnessGuard(t *testing.T) {
 func TestOperatorConsoleRuntimeTargetContract(t *testing.T) {
 	repo := repositoryRoot(t)
 	requireFileContains(t, filepath.Join(repo, "Dockerfile"),
-		"gcr.io/distroless/nodejs22-debian13@sha256:773a62fbe24a3f8c8b24b16fd59154627f8b406737bc906f83bf1732bc8907dd",
+		"gcr.io/distroless/nodejs22-debian13@sha256:412a5f8fce490bcff01fc2a73ec43bb62071e1b71dd847eeacaae7b8ecef1dc1",
 		"NUXT_OPERATOR_API_TARGET=http://server:37777",
 		"CMD [\".output/server/index.mjs\"]",
 		"http://127.0.0.1:3000/api/ready",
@@ -209,7 +209,7 @@ func TestServerImageContract(t *testing.T) {
 		verifyDockerReleaseRefFreshnessGuard(t, repo)
 	})
 	requireFileContains(t, filepath.Join(repo, "Dockerfile"),
-		"gcr.io/distroless/base-debian13@sha256:b78832f41c8128046807c24840ebee4f1c18ba7870eed423d8750c272c15e147",
+		"gcr.io/distroless/base-debian13@sha256:0ebad3510af52aefe45045cc01b07564570be4feecf8d9f93d3a05d1b5f2f93b",
 		"HOME=/var/lib/engram",
 		"http://127.0.0.1:37777/api/ready",
 		"VERSION must be canonical SemVer or sha-<40 lowercase hex>",
@@ -869,7 +869,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	latest := readFile(t, latestWorkflowPath)
 	for _, required := range []string{
 		"name: Promote Latest Release Images", "workflow_run:\n    workflows: [\"Release\", \"Docker Publish\"]\n    types: [completed]",
-		"if: github.event.workflow_run.conclusion == 'success' && ((github.event.workflow_run.name == 'Release' && github.event.workflow_run.event == 'push') || (github.event.workflow_run.name == 'Docker Publish' && github.event.workflow_run.event == 'workflow_run'))",
+		"if: github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && ((github.event.workflow_run.name == 'Release' && github.event.workflow_run.event == 'push') || (github.event.workflow_run.name == 'Docker Publish' && github.event.workflow_run.event == 'workflow_run')))",
 		"contents: read", "actions: read", "packages: write", "Initialize isolated promotion paths", `"DOCKER_CONFIG=$dockerConfig" | Add-Content -LiteralPath $env:GITHUB_ENV`, `"RECEIPT_DIR=$receiptDir" | Add-Content -LiteralPath $env:GITHUB_ENV`, "path: ${{ env.RECEIPT_DIR }}",
 		"gh api \"repos/$env:REPOSITORY_NAME/releases/latest\" --jq .tag_name", "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
 		"TRIGGERING_WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}", `gh api --paginate --slurp "repos/$env:REPOSITORY_NAME/actions/runs/$triggeringWorkflowRunID/jobs?per_page=100"`, "Where-Object { $_.name -ceq 'publish-images' }", "if ($publishJobs.Count -ne 1)", "status -cne 'completed'", "conclusion -cne 'success'",
@@ -991,7 +991,8 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 		}
 	}
 	if !strings.Contains(latest, "TRIGGERING_WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}") ||
-		!strings.Contains(latest, "if ($env:GITHUB_EVENT_NAME -ne 'workflow_run')") {
+		!strings.Contains(latest, "if ($env:GITHUB_EVENT_NAME -eq 'workflow_run')") ||
+		!strings.Contains(latest, "} elseif ($env:GITHUB_EVENT_NAME -cne 'repository_dispatch') {") {
 		t.Fatal("latest promoter must bind and require the triggering workflow head")
 	}
 	for _, forbidden := range []string{

@@ -82,8 +82,8 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 		request.ProjectIdentityV3 = v3Identity
 		discoveryCtx = daemonComparisonContextV3(discoveryCtx)
 	} else if !v3Enabled {
-		project := m.cache.Resolve(p)
-		projectIdentity, identityErr := m.cache.ResolveIdentity(p)
+		project := m.cache.Resolve(ctx, p)
+		projectIdentity, identityErr := m.cache.ResolveIdentity(ctx, p)
 		if identityErr != nil {
 			return nil, &module.RequiredProxyToolsError{Cause: fmt.Errorf("project identity v2: %w", identityErr)}
 		}
@@ -284,8 +284,8 @@ func (m *Module) proxyToolCallContext(ctx context.Context, project muxcore.Proje
 		request.ProjectIdentityV3 = v3Identity
 		return daemonComparisonContextV3(ctx), v3Identity, true, nil
 	}
-	projectSlug := m.cache.Resolve(project)
-	projectIdentity, err := m.cache.ResolveIdentity(project)
+	projectSlug := m.cache.Resolve(ctx, project)
+	projectIdentity, err := m.cache.ResolveIdentity(ctx, project)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("project identity v2: %w", err)
 	}
@@ -400,8 +400,8 @@ func buildInnerBlock(contentJSON []byte) (json.RawMessage, error) {
 // InitializeRequest. Bumped alongside Constitution §15 unified version.
 var daemonClientVersion = version.Daemon
 
-func resolveProjectIdentityV2(cwd string) (*pb.ProjectIdentityV2, error) {
-	identity, err := proxy.ResolveProjectIdentityV2(cwd)
+func resolveProjectIdentityV2(ctx context.Context, cwd string) (*pb.ProjectIdentityV2, error) {
+	identity, err := proxy.ResolveProjectIdentityV2(ctx, cwd)
 	if err != nil {
 		return nil, err
 	}

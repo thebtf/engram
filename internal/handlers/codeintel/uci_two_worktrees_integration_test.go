@@ -436,9 +436,9 @@ func BaselineCallee() string { return "BASELINE_BODY_MARKER" }
 	require.NoError(t, err)
 	require.False(t, linkedGit.IsDir(), "linked worktree .git must be a pointer file")
 
-	slugA, _, remoteA, err := proxy.ResolveProjectSlug(primary)
+	slugA, _, remoteA, err := proxy.ResolveProjectSlug(context.Background(), primary)
 	require.NoError(t, err)
-	slugB, _, remoteB, err := proxy.ResolveProjectSlug(linked)
+	slugB, _, remoteB, err := proxy.ResolveProjectSlug(context.Background(), linked)
 	require.NoError(t, err)
 	require.Equal(t, slugA, slugB)
 	require.Equal(t, remoteA, remoteB)
