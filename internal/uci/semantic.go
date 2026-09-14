@@ -3,25 +3,27 @@ package uci
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"reflect"
-	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
 
 const (
-	semanticVectorDimension     = 1536
-	semanticRRFConstant         = 60
-	semanticInputSchema         = "engram.uci-semantic-input/2"
-	semanticMaxProfileText      = 512
-	semanticQueryProviderBudget = 20 * time.Second
-	semanticMaxFusedCandidates  = queryMaxItems
+	semanticVectorDimension = 1536
+	// SemanticRRFConstant is the fixed reciprocal-rank-fusion offset used by every semantic lane.
+	SemanticRRFConstant            = 60
+	semanticInputSchema            = "engram.uci-semantic-input/2"
+	semanticMaxProfileText         = 512
+	semanticQueryProviderBudget    = 20 * time.Second
+	semanticHybridRankingRevision  = "engram.uci-semantic-rrf/1"
+	semanticLexicalRankingRevision = "engram.uci-semantic-lexical/1"
 )
 
 // VectorProfile names one versioned semantic space. Equal dimensions alone are
@@ -46,18 +48,22 @@ type SemanticEmbedder interface {
 type SemanticStore interface {
 	LookupCandidateEmbedding(context.Context, AuthorizedContext, VectorProfile, QueryCandidate) ([]float32, bool, error)
 	StoreCandidateEmbedding(context.Context, AuthorizedContext, VectorProfile, QueryCandidate, []float32) error
-	SelectSemanticCandidates(context.Context, AuthorizedContext, VectorProfile, []float32, QuerySpec) (SemanticStoreResult, error)
+	SelectHybridCandidates(context.Context, AuthorizedContext, VectorProfile, []float32, QuerySpec) (SemanticStoreResult, error)
 }
 
-// SemanticStoreResult contains vector-ranked candidates and the scoped vector
-// coverage used to decide whether a semantic result is honest to return.
-// CandidateCount is the exact number of scoped candidates before this result's
-// window; it proves a bounded fusion received every vector candidate.
+// SemanticCandidate is one already-fused, page-ordered semantic retrieval hit.
+type SemanticCandidate struct {
+	Candidate    QueryCandidate
+	MatchSources []QueryMatchSource
+}
+
+// SemanticStoreResult contains a page-sized, globally fused candidate sequence
+// and the scoped availability evidence that makes hybrid retrieval honest.
 type SemanticStoreResult struct {
-	Candidates     []QueryCandidate
-	CandidateCount int64
+	Candidates     []SemanticCandidate
 	Coverage       IndexCoverageState
 	VectorCoverage float64
+	Unavailable    *QueryError
 }
 
 // SemanticService composes provider-backed vector retrieval with the existing
@@ -171,27 +177,30 @@ func (service *SemanticService) Query(ctx context.Context, authorized Authorized
 	if err != nil {
 		return QueryResult{}, err
 	}
-	start, err := service.lexical.continuationOffset(ref, normalized)
+	continuation, err := service.semanticContinuation(ref, normalized)
 	if err != nil {
 		return QueryResult{}, err
 	}
-
+	if continuation.present && continuation.mode == QueryRetrievalLexical {
+		if continuation.rankingDigest != semanticLexicalRankingDigest() {
+			return QueryResult{}, fmt.Errorf("uci semantic: continuation ranking does not match request")
+		}
+		return service.lexicalResult(ctx, authorized, ref, normalized, continuation.offset, []string{})
+	}
+	if continuation.present && continuation.mode != QueryRetrievalHybrid {
+		return QueryResult{}, fmt.Errorf("uci semantic: continuation retrieval mode is invalid")
+	}
 	if reason := service.providerUnavailableReason(); reason != "" {
-		return service.lexicalFallbackResult(ctx, authorized, ref, normalized, start, reason)
+		if continuation.present {
+			return QueryResult{}, fmt.Errorf("uci semantic: continuation ranking is unavailable")
+		}
+		return service.lexicalResult(ctx, authorized, ref, normalized, 0, []string{reason})
 	}
 	if semanticNil(service.store) {
-		return service.lexicalFallbackResult(ctx, authorized, ref, normalized, start, "vector_store_unavailable")
-	}
-
-	fusionSpec := normalized
-	fusionSpec.Limit = semanticMaxFusedCandidates
-	fusionSpec.Offset = 0
-	lexicalSelection, unavailable, err := service.selectLexical(ctx, authorized, ref, fusionSpec)
-	if err != nil {
-		return QueryResult{}, err
-	}
-	if unavailable != nil {
-		return *unavailable, nil
+		if continuation.present {
+			return QueryResult{}, fmt.Errorf("uci semantic: continuation ranking is unavailable")
+		}
+		return service.lexicalResult(ctx, authorized, ref, normalized, 0, []string{"vector_store_unavailable"})
 	}
 
 	input, err := semanticQueryEmbeddingInput(service.profile, normalized.Text)
@@ -200,41 +209,95 @@ func (service *SemanticService) Query(ctx context.Context, authorized Authorized
 	}
 	vector, err := service.embedQuery(ctx, input)
 	if err != nil {
-		return service.lexicalFallbackResult(ctx, authorized, ref, normalized, start, semanticProviderDegradation(err))
+		if continuation.present {
+			return QueryResult{}, fmt.Errorf("uci semantic: continuation ranking is unavailable: %w", err)
+		}
+		return service.lexicalResult(ctx, authorized, ref, normalized, 0, []string{semanticProviderDegradation(err)})
+	}
+	rankingDigest := semanticHybridRankingDigest(service.profile, vector)
+	if continuation.present && continuation.rankingDigest != rankingDigest {
+		return QueryResult{}, fmt.Errorf("uci semantic: continuation ranking does not match request")
 	}
 
-	semanticResult, err := service.store.SelectSemanticCandidates(ctx, authorized, service.profile, vector, fusionSpec)
+	storeSpec := normalized
+	storeSpec.Offset = continuation.offset
+	semanticResult, err := service.store.SelectHybridCandidates(ctx, authorized, service.profile, vector, storeSpec)
 	if err != nil {
-		return service.lexicalFallbackResult(ctx, authorized, ref, normalized, start, "vector_store_unavailable")
+		if continuation.present {
+			return QueryResult{}, err
+		}
+		return service.lexicalResult(ctx, authorized, ref, normalized, 0, []string{"vector_store_unavailable"})
 	}
-	if !validQueryCoverage(semanticResult.Coverage) || !validSemanticCoverage(semanticResult.VectorCoverage) || semanticResult.CandidateCount < 0 {
-		return service.lexicalFallbackResult(ctx, authorized, ref, normalized, start, "vector_coverage_incomplete")
+	if semanticResult.Unavailable != nil {
+		if err := semanticUnavailableResult(ref, semanticResult); err != nil {
+			return QueryResult{}, err
+		}
+		if continuation.present {
+			return QueryResult{}, fmt.Errorf("uci semantic: continuation ranking is unavailable")
+		}
+		return QueryResult{Response: queryUnavailableResponse(ref, semanticResult.Coverage, *semanticResult.Unavailable)}, nil
 	}
-	if semanticResult.Coverage != IndexCoverageComplete || semanticResult.VectorCoverage < 1 {
-		return service.lexicalFallbackResult(ctx, authorized, ref, normalized, start, "vector_coverage_incomplete")
+	if !validQueryCoverage(semanticResult.Coverage) || semanticResult.Coverage == IndexCoverageUnavailable || !validSemanticCoverage(semanticResult.VectorCoverage) {
+		return QueryResult{}, fmt.Errorf("uci semantic: semantic store returned invalid coverage")
 	}
-	if semanticResult.CandidateCount > int64(semanticMaxFusedCandidates) {
-		return service.lexicalFallbackResult(ctx, authorized, ref, normalized, start, "vector_candidate_limit")
+	if semanticResult.VectorCoverage < 1 {
+		if continuation.present {
+			return QueryResult{}, fmt.Errorf("uci semantic: continuation ranking is unavailable")
+		}
+		return service.lexicalResult(ctx, authorized, ref, normalized, 0, []string{"vector_coverage_incomplete"})
 	}
-
-	semantic := semanticCurrentCandidates(semanticResult.Candidates, ref)
-	if int64(len(semantic)) != semanticResult.CandidateCount || int64(len(lexicalSelection.candidates)) > semanticResult.CandidateCount {
-		return service.lexicalFallbackResult(ctx, authorized, ref, normalized, start, "vector_coverage_incomplete")
-	}
-	fused := semanticFuseCandidates(lexicalSelection.candidates, semantic, normalized.Mode, normalized.Order)
-	if start > 0 && start >= len(fused) {
-		return QueryResult{}, fmt.Errorf("uci semantic: continuation position is outside the selected view")
+	for _, candidate := range semanticResult.Candidates {
+		if !semanticHybridCandidateValid(candidate, ref, normalized.Mode) {
+			return QueryResult{}, fmt.Errorf("uci semantic: store returned an invalid fused candidate")
+		}
 	}
 	return service.availableResult(semanticAvailableResultInput{
 		ref:                ref,
 		spec:               normalized,
-		start:              start,
-		candidates:         fused[start:],
-		coverage:           lexicalSelection.coverage,
+		start:              continuation.offset,
+		candidates:         semanticResult.Candidates,
+		coverage:           semanticResult.Coverage,
 		mode:               QueryRetrievalHybrid,
+		rankingDigest:      rankingDigest,
 		vectorCoverage:     &semanticResult.VectorCoverage,
 		degradationReasons: []string{},
 	})
+}
+
+type semanticContinuationState struct {
+	offset        int
+	mode          QueryRetrievalMode
+	rankingDigest string
+	present       bool
+}
+
+func (service *SemanticService) semanticContinuation(ref ContextRef, spec QuerySpec) (semanticContinuationState, error) {
+	if spec.Continuation == nil {
+		return semanticContinuationState{}, nil
+	}
+	payload, err := service.lexical.decodeContinuation(*spec.Continuation)
+	if err != nil {
+		return semanticContinuationState{}, err
+	}
+	if !queryContinuationMatchesBase(payload, ref, spec) || payload.RankingDigest == "" {
+		return semanticContinuationState{}, fmt.Errorf("uci semantic: continuation binding does not match request")
+	}
+	if payload.RetrievalMode != QueryRetrievalHybrid && payload.RetrievalMode != QueryRetrievalLexical {
+		return semanticContinuationState{}, fmt.Errorf("uci semantic: continuation retrieval mode is invalid")
+	}
+	return semanticContinuationState{
+		offset:        payload.Offset,
+		mode:          payload.RetrievalMode,
+		rankingDigest: payload.RankingDigest,
+		present:       true,
+	}, nil
+}
+
+func semanticUnavailableResult(ref ContextRef, result SemanticStoreResult) error {
+	if err := result.Unavailable.Validate(); err != nil || !result.Unavailable.Code.isAuthorizedUnavailable() || result.Coverage != IndexCoverageUnavailable {
+		return fmt.Errorf("uci semantic: store returned invalid unavailable state")
+	}
+	return nil
 }
 
 type semanticLexicalSelection struct {
@@ -269,27 +332,23 @@ func (service *SemanticService) selectLexical(ctx context.Context, authorized Au
 	return semanticLexicalSelection{}, &unavailable, nil
 }
 
-func (service *SemanticService) lexicalFallbackResult(ctx context.Context, authorized AuthorizedContext, ref ContextRef, spec QuerySpec, start int, reason string) (QueryResult, error) {
+func (service *SemanticService) lexicalResult(ctx context.Context, authorized AuthorizedContext, ref ContextRef, spec QuerySpec, start int, degradationReasons []string) (QueryResult, error) {
 	pageSpec := spec
 	pageSpec.Offset = start
-	lexicalSelection, unavailable, err := service.selectLexical(ctx, authorized, ref, pageSpec)
+	selection, unavailable, err := service.selectLexical(ctx, authorized, ref, pageSpec)
 	if err != nil {
 		return QueryResult{}, err
 	}
 	if unavailable != nil {
 		return *unavailable, nil
 	}
-	return service.lexicalOnlyResult(ref, spec, start, lexicalSelection.candidates, lexicalSelection.coverage, reason)
-}
-
-func (service *SemanticService) lexicalOnlyResult(ref ContextRef, spec QuerySpec, start int, candidates []QueryCandidate, coverage IndexCoverageState, reason string) (QueryResult, error) {
-	ordered := append([]QueryCandidate(nil), candidates...)
+	ordered := append([]QueryCandidate(nil), selection.candidates...)
 	orderQueryCandidates(ordered, spec.Order)
-	results := make([]semanticResultCandidate, 0, len(ordered))
+	candidates := make([]SemanticCandidate, 0, len(ordered))
 	for _, candidate := range ordered {
-		results = append(results, semanticResultCandidate{
-			candidate: candidate,
-			sources:   []QueryMatchSource{semanticLexicalMatchSource(spec.Mode)},
+		candidates = append(candidates, SemanticCandidate{
+			Candidate:    candidate,
+			MatchSources: []QueryMatchSource{semanticLexicalMatchSource(spec.Mode)},
 		})
 	}
 	zero := float64(0)
@@ -297,11 +356,12 @@ func (service *SemanticService) lexicalOnlyResult(ref ContextRef, spec QuerySpec
 		ref:                ref,
 		spec:               spec,
 		start:              start,
-		candidates:         results,
-		coverage:           coverage,
+		candidates:         candidates,
+		coverage:           selection.coverage,
 		mode:               QueryRetrievalLexical,
+		rankingDigest:      semanticLexicalRankingDigest(),
 		vectorCoverage:     &zero,
-		degradationReasons: []string{reason},
+		degradationReasons: degradationReasons,
 	})
 }
 
@@ -309,9 +369,10 @@ type semanticAvailableResultInput struct {
 	ref                ContextRef
 	spec               QuerySpec
 	start              int
-	candidates         []semanticResultCandidate
+	candidates         []SemanticCandidate
 	coverage           IndexCoverageState
 	mode               QueryRetrievalMode
+	rankingDigest      string
 	vectorCoverage     *float64
 	degradationReasons []string
 }
@@ -337,7 +398,10 @@ func (service *SemanticService) availableResult(input semanticAvailableResultInp
 	truncated := end < len(input.candidates)
 	continuation := QueryContinuation{}
 	if truncated {
-		token, err := service.lexical.encodeContinuation(input.ref, input.spec, input.start+end)
+		payload := queryContinuationPayloadFor(input.ref, input.spec, input.start+end)
+		payload.RetrievalMode = input.mode
+		payload.RankingDigest = input.rankingDigest
+		token, err := service.lexical.encodeContinuationPayload(payload)
 		if err != nil {
 			return QueryResult{}, err
 		}
@@ -501,136 +565,48 @@ func semanticCurrentCandidates(candidates []QueryCandidate, ref ContextRef) []Qu
 	return current
 }
 
-type semanticResultCandidate struct {
-	candidate QueryCandidate
-	sources   []QueryMatchSource
+func semanticHybridCandidateValid(candidate SemanticCandidate, ref ContextRef, mode QueryMode) bool {
+	if !semanticContextMatches(candidate.Candidate.Context, ref) || !validQueryCandidate(candidate.Candidate) {
+		return false
+	}
+	if len(candidate.MatchSources) == 1 {
+		return candidate.MatchSources[0] == QueryMatchVector
+	}
+	return len(candidate.MatchSources) == 2 &&
+		candidate.MatchSources[0] == semanticLexicalMatchSource(mode) &&
+		candidate.MatchSources[1] == QueryMatchVector
 }
 
-type semanticCandidateKey struct {
-	sourceID          string
-	checkoutID        string
-	viewID            string
-	analysisProfileID string
-	generation        int64
-	artifactID        string
-	contentDigest     IndexDigest
-	entityKey         string
-	relativePath      string
-	byteStart         int64
-	byteEnd           int64
+func semanticHybridRankingDigest(profile VectorProfile, vector []float32) string {
+	hash := sha256.New()
+	writeString := func(value string) {
+		var length [4]byte
+		binary.BigEndian.PutUint32(length[:], uint32(len(value)))
+		_, _ = hash.Write(length[:])
+		_, _ = hash.Write([]byte(value))
+	}
+	writeString(semanticHybridRankingRevision)
+	writeString(profile.ProviderRef)
+	writeString(profile.Model)
+	writeString(profile.PreprocessingRevision)
+	var dimension [8]byte
+	binary.BigEndian.PutUint64(dimension[:], uint64(profile.Dimension))
+	_, _ = hash.Write(dimension[:])
+	if profile.IncludeRelativePath {
+		_, _ = hash.Write([]byte{1})
+	} else {
+		_, _ = hash.Write([]byte{0})
+	}
+	var bits [4]byte
+	for _, value := range vector {
+		binary.BigEndian.PutUint32(bits[:], math.Float32bits(value))
+		_, _ = hash.Write(bits[:])
+	}
+	return hex.EncodeToString(hash.Sum(nil))
 }
 
-type semanticFusionEntry struct {
-	candidate QueryCandidate
-	exact     bool
-	fts       bool
-	vector    bool
-	score     float64
-}
-
-func semanticFuseCandidates(lexical, vector []QueryCandidate, mode QueryMode, order QueryOrder) []semanticResultCandidate {
-	lexical = semanticRankCandidates(lexical)
-	vector = semanticRankCandidates(vector)
-	entries := make(map[semanticCandidateKey]*semanticFusionEntry, len(lexical)+len(vector))
-	for rank, candidate := range lexical {
-		key := semanticKey(candidate)
-		entry := entries[key]
-		if entry == nil {
-			entry = &semanticFusionEntry{candidate: candidate}
-			entries[key] = entry
-		}
-		entry.score += semanticRRFScore(rank)
-		if mode == QueryModeFTS {
-			entry.fts = true
-		} else {
-			entry.exact = true
-		}
-	}
-	for rank, candidate := range vector {
-		key := semanticKey(candidate)
-		entry := entries[key]
-		if entry == nil {
-			entry = &semanticFusionEntry{candidate: candidate}
-			entries[key] = entry
-		}
-		entry.score += semanticRRFScore(rank)
-		entry.vector = true
-	}
-
-	fused := make([]semanticResultCandidate, 0, len(entries))
-	for _, entry := range entries {
-		candidate := entry.candidate
-		candidate.Score = entry.score
-		fused = append(fused, semanticResultCandidate{
-			candidate: candidate,
-			sources:   semanticMatchSources(entry.exact, entry.fts, entry.vector),
-		})
-	}
-	sort.SliceStable(fused, func(left, right int) bool {
-		return semanticCandidateLess(fused[left].candidate, fused[right].candidate, order)
-	})
-	return fused
-}
-
-func semanticRankCandidates(candidates []QueryCandidate) []QueryCandidate {
-	ranked := append([]QueryCandidate(nil), candidates...)
-	sort.SliceStable(ranked, func(left, right int) bool {
-		return semanticCandidateLess(ranked[left], ranked[right], QueryOrderRelevance)
-	})
-	return ranked
-}
-
-func semanticCandidateLess(left, right QueryCandidate, order QueryOrder) bool {
-	if order == QueryOrderRelevance && left.Score != right.Score {
-		return left.Score > right.Score
-	}
-	if left.RelativePath != right.RelativePath {
-		return left.RelativePath < right.RelativePath
-	}
-	if left.Span.ByteStart != right.Span.ByteStart {
-		return left.Span.ByteStart < right.Span.ByteStart
-	}
-	if left.EntityKey != right.EntityKey {
-		return left.EntityKey < right.EntityKey
-	}
-	if left.Proof.ArtifactID != right.Proof.ArtifactID {
-		return left.Proof.ArtifactID < right.Proof.ArtifactID
-	}
-	return left.Proof.ContentDigest < right.Proof.ContentDigest
-}
-
-func semanticRRFScore(rank int) float64 {
-	return 1 / (semanticRRFConstant + float64(rank) + 1)
-}
-
-func semanticKey(candidate QueryCandidate) semanticCandidateKey {
-	return semanticCandidateKey{
-		sourceID:          candidate.Context.SourceID,
-		checkoutID:        candidate.Context.CheckoutID,
-		viewID:            candidate.Context.ViewID,
-		analysisProfileID: candidate.Context.AnalysisProfileID,
-		generation:        candidate.Context.Generation,
-		artifactID:        candidate.Proof.ArtifactID,
-		contentDigest:     candidate.Proof.ContentDigest,
-		entityKey:         candidate.EntityKey,
-		relativePath:      candidate.RelativePath,
-		byteStart:         candidate.Span.ByteStart,
-		byteEnd:           candidate.Span.ByteEnd,
-	}
-}
-
-func semanticMatchSources(exact, fts, vector bool) []QueryMatchSource {
-	sources := make([]QueryMatchSource, 0, 3)
-	if exact {
-		sources = append(sources, QueryMatchExact)
-	}
-	if fts {
-		sources = append(sources, QueryMatchFTS)
-	}
-	if vector {
-		sources = append(sources, QueryMatchVector)
-	}
-	return sources
+func semanticLexicalRankingDigest() string {
+	return queryContinuationDigest("semantic-ranking", []string{semanticLexicalRankingRevision})
 }
 
 func semanticLexicalMatchSource(mode QueryMode) QueryMatchSource {
@@ -640,36 +616,36 @@ func semanticLexicalMatchSource(mode QueryMode) QueryMatchSource {
 	return QueryMatchExact
 }
 
-func semanticQueryItem(candidate semanticResultCandidate, spec QuerySpec) (QueryItem, bool) {
-	excerpt := candidate.candidate.Text
+func semanticQueryItem(candidate SemanticCandidate, spec QuerySpec) (QueryItem, bool) {
+	excerpt := candidate.Candidate.Text
 	excerptOmitted := utf8.RuneCountInString(excerpt) > queryMaxExcerpt
 	if excerptOmitted {
 		excerpt = ""
 	}
 	var score *float64
 	if spec.Order == QueryOrderRelevance {
-		value := candidate.candidate.Score
+		value := candidate.Candidate.Score
 		score = &value
 	}
-	contentDigest, _ := queryBareContentDigest(candidate.candidate.Proof.ContentDigest)
+	contentDigest, _ := queryBareContentDigest(candidate.Candidate.Proof.ContentDigest)
 	return QueryItem{
 		Ref: QueryEntityRef{
-			SourceID:  candidate.candidate.Context.SourceID,
-			ViewID:    candidate.candidate.Context.ViewID,
-			EntityKey: candidate.candidate.EntityKey,
+			SourceID:  candidate.Candidate.Context.SourceID,
+			ViewID:    candidate.Candidate.Context.ViewID,
+			EntityKey: candidate.Candidate.EntityKey,
 		},
-		Path: candidate.candidate.RelativePath,
+		Path: candidate.Candidate.RelativePath,
 		Span: QuerySpan{
-			ByteStart: candidate.candidate.Span.ByteStart,
-			ByteEnd:   candidate.candidate.Span.ByteEnd,
-			LineStart: int64(candidate.candidate.Span.LineStart),
-			LineEnd:   int64(candidate.candidate.Span.LineEnd),
+			ByteStart: candidate.Candidate.Span.ByteStart,
+			ByteEnd:   candidate.Candidate.Span.ByteEnd,
+			LineStart: int64(candidate.Candidate.Span.LineStart),
+			LineEnd:   int64(candidate.Candidate.Span.LineEnd),
 		},
 		ContentDigest: contentDigest,
-		Kind:          candidate.candidate.Kind,
-		Language:      candidate.candidate.Language,
+		Kind:          candidate.Candidate.Kind,
+		Language:      candidate.Candidate.Language,
 		Excerpt:       excerpt,
-		MatchSources:  append([]QueryMatchSource(nil), candidate.sources...),
+		MatchSources:  append([]QueryMatchSource(nil), candidate.MatchSources...),
 		Score:         score,
 	}, excerptOmitted
 }

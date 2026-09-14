@@ -602,19 +602,21 @@ func containsQueryWarning(warnings QueryWarnings, want string) bool {
 }
 
 type queryContinuationPayload struct {
-	Version         string     `json:"version"`
-	ClientSessionID string     `json:"client_session_id"`
-	SpaceID         *string    `json:"space_id,omitempty"`
-	SourceID        string     `json:"source_id"`
-	CheckoutID      string     `json:"checkout_id"`
-	ViewID          string     `json:"view_id"`
-	ProfileID       string     `json:"profile_id"`
-	Generation      int64      `json:"generation"`
-	Mode            QueryMode  `json:"mode"`
-	QueryDigest     string     `json:"query_digest"`
-	FilterDigest    string     `json:"filter_digest"`
-	Order           QueryOrder `json:"order"`
-	Offset          int        `json:"offset"`
+	Version         string             `json:"version"`
+	ClientSessionID string             `json:"client_session_id"`
+	SpaceID         *string            `json:"space_id,omitempty"`
+	SourceID        string             `json:"source_id"`
+	CheckoutID      string             `json:"checkout_id"`
+	ViewID          string             `json:"view_id"`
+	ProfileID       string             `json:"profile_id"`
+	Generation      int64              `json:"generation"`
+	Mode            QueryMode          `json:"mode"`
+	QueryDigest     string             `json:"query_digest"`
+	FilterDigest    string             `json:"filter_digest"`
+	Order           QueryOrder         `json:"order"`
+	Offset          int                `json:"offset"`
+	RetrievalMode   QueryRetrievalMode `json:"retrieval_mode,omitempty"`
+	RankingDigest   string             `json:"ranking_digest,omitempty"`
 }
 
 func (service *QueryService) continuationOffset(ref ContextRef, spec QuerySpec) (int, error) {
@@ -632,10 +634,13 @@ func (service *QueryService) continuationOffset(ref ContextRef, spec QuerySpec) 
 }
 
 func (service *QueryService) encodeContinuation(ref ContextRef, spec QuerySpec, offset int) (string, error) {
-	if offset < 0 {
+	return service.encodeContinuationPayload(queryContinuationPayloadFor(ref, spec, offset))
+}
+
+func (service *QueryService) encodeContinuationPayload(payload queryContinuationPayload) (string, error) {
+	if payload.Offset < 0 {
 		return "", fmt.Errorf("uci query: continuation offset is invalid")
 	}
-	payload := queryContinuationPayloadFor(ref, spec, offset)
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("uci query: encode continuation: %w", err)
@@ -695,6 +700,10 @@ func queryContinuationPayloadFor(ref ContextRef, spec QuerySpec, offset int) que
 }
 
 func queryContinuationMatches(payload queryContinuationPayload, ref ContextRef, spec QuerySpec) bool {
+	return payload.RetrievalMode == "" && payload.RankingDigest == "" && queryContinuationMatchesBase(payload, ref, spec)
+}
+
+func queryContinuationMatchesBase(payload queryContinuationPayload, ref ContextRef, spec QuerySpec) bool {
 	expected := queryContinuationPayloadFor(ref, spec, payload.Offset)
 	return payload.Version == expected.Version &&
 		payload.ClientSessionID == expected.ClientSessionID &&

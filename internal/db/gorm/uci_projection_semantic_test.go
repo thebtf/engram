@@ -3,6 +3,8 @@ package gorm
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -134,42 +136,192 @@ func TestUCIProjectionStoreSemanticMethodsKeepVectorsScopedAndCovered(t *testing
 	otherCurrentVector := uciSemanticVector(0, 1)
 	require.NoError(t, fixture.projection.StoreCandidateEmbedding(ctx, currentAuthorized, profile, currentCandidate, currentVector))
 
-	incomplete, err := fixture.projection.SelectSemanticCandidates(ctx, currentAuthorized, profile, queryVector, uciSemanticSearchSpec())
+	incomplete, err := fixture.projection.SelectHybridCandidates(ctx, currentAuthorized, profile, queryVector, uciSemanticSearchSpec())
 	require.NoError(t, err)
 	require.Equal(t, ucidomain.IndexCoverageComplete, incomplete.Coverage)
 	require.InDelta(t, 0.5, incomplete.VectorCoverage, 0.000001)
 	require.Empty(t, incomplete.Candidates, "semantic candidates must not be returned until every eligible current candidate has a compatible vector")
 
 	require.NoError(t, fixture.projection.StoreCandidateEmbedding(ctx, currentAuthorized, profile, otherCurrentCandidate, otherCurrentVector))
-	complete, err := fixture.projection.SelectSemanticCandidates(ctx, currentAuthorized, profile, queryVector, uciSemanticSearchSpec())
+	complete, err := fixture.projection.SelectHybridCandidates(ctx, currentAuthorized, profile, queryVector, uciSemanticSearchSpec())
 	require.NoError(t, err)
 	require.Equal(t, ucidomain.IndexCoverageComplete, complete.Coverage)
 	require.Equal(t, float64(1), complete.VectorCoverage)
 	require.Len(t, complete.Candidates, 2)
-	require.Equal(t, []string{currentArtifact.Artifact.ArtifactID, otherCurrentArtifact.Artifact.ArtifactID}, []string{
-		complete.Candidates[0].Proof.ArtifactID,
-		complete.Candidates[1].Proof.ArtifactID,
+	require.Equal(t, []string{otherCurrentArtifact.Artifact.ArtifactID, currentArtifact.Artifact.ArtifactID}, []string{
+		complete.Candidates[0].Candidate.Proof.ArtifactID,
+		complete.Candidates[1].Candidate.Proof.ArtifactID,
 	})
 	for _, candidate := range complete.Candidates {
-		require.Equal(t, currentPublished.Context, candidate.Context, "semantic citations must retain the exact current ContextRef")
+		require.Equal(t, currentPublished.Context, candidate.Candidate.Context, "semantic citations must retain the exact current ContextRef")
+		require.Equal(t, []ucidomain.QueryMatchSource{ucidomain.QueryMatchFTS, ucidomain.QueryMatchVector}, candidate.MatchSources)
 	}
-	require.NotEqual(t, oldArtifact.Artifact.ArtifactID, complete.Candidates[0].Proof.ArtifactID)
-	require.NotEqual(t, siblingArtifact.Artifact.ArtifactID, complete.Candidates[0].Proof.ArtifactID)
-	require.Greater(t, complete.Candidates[0].Score, complete.Candidates[1].Score)
+	require.NotEqual(t, oldArtifact.Artifact.ArtifactID, complete.Candidates[0].Candidate.Proof.ArtifactID)
+	require.NotEqual(t, siblingArtifact.Artifact.ArtifactID, complete.Candidates[0].Candidate.Proof.ArtifactID)
+	require.Less(t, complete.Candidates[0].Candidate.RelativePath, complete.Candidates[1].Candidate.RelativePath)
 	filteredSpec := uciSemanticSearchSpec()
 	filteredSpec.Filter.PathPrefix = "shared"
-	filtered, err := fixture.projection.SelectSemanticCandidates(ctx, currentAuthorized, profile, queryVector, filteredSpec)
+	filtered, err := fixture.projection.SelectHybridCandidates(ctx, currentAuthorized, profile, queryVector, filteredSpec)
 	require.NoError(t, err)
 	require.Equal(t, float64(1), filtered.VectorCoverage)
 	require.Len(t, filtered.Candidates, 1)
-	require.Equal(t, "shared/semantic.go", filtered.Candidates[0].RelativePath, "semantic ranking must apply the literal path prefix inside the selected View")
+	require.Equal(t, "shared/semantic.go", filtered.Candidates[0].Candidate.RelativePath, "semantic ranking must apply the literal path prefix inside the selected View")
 
 	// The old and sibling vectors are both closer to queryVector than currentVector.
 	// Repeating the current-view query proves it ranks inside the View instead of taking
 	// global top-N results and filtering them afterward.
-	repeated, err := fixture.projection.SelectSemanticCandidates(ctx, currentAuthorized, profile, queryVector, uciSemanticSearchSpec())
+	repeated, err := fixture.projection.SelectHybridCandidates(ctx, currentAuthorized, profile, queryVector, uciSemanticSearchSpec())
 	require.NoError(t, err)
 	require.Equal(t, complete, repeated)
+}
+
+func TestUCIProjectionStoreHybridRanksFullScopeBeforePaging(t *testing.T) {
+	fixture := openUCIPublicationFixture(t)
+	ctx := context.Background()
+	profile := ucidomain.VectorProfile{
+		ProviderRef:           "hybrid-provider-" + fixture.token,
+		Model:                 "hybrid-model-" + fixture.token,
+		Dimension:             1536,
+		PreprocessingRevision: "hybrid-preprocessing-" + fixture.token,
+		IncludeRelativePath:   true,
+	}
+	const candidateCount = 1050
+	artifacts := make([]uciPublicationArtifact, 0, candidateCount)
+	memberships := make([]ucidomain.IndexMembership, 0, candidateCount)
+	seeds := make([]uciHybridSeed, 0, candidateCount)
+	for index := range candidateCount {
+		path := fmt.Sprintf("pkg/%04d.go", index)
+		artifact := fixture.admitArtifact(t, fixture.source.SourceID, fmt.Sprintf("hybrid-%04d", index), fmt.Sprintf("// semantic\nfunc Hybrid%04d() {}\n", index), UCIParseArtifactComplete)
+		artifacts = append(artifacts, artifact)
+		memberships = append(memberships, uciPublicationPresentMembership(path, artifact))
+		seeds = append(seeds, uciHybridSeed{artifact: artifact, path: path, lexicalRank: index + 1, vectorRank: uciHybridVectorRank(index)})
+	}
+	published := uciSemanticPublish(t, fixture, uciSemanticPublishInput{
+		key: "hybrid-global-rank", checkout: fixture.checkout, jobKind: ucidomain.IndexJobInitial,
+		artifacts: artifacts, memberships: memberships,
+	})
+	authorized := uciSemanticAuthorize(t, fixture, published.Context)
+	for index := range seeds {
+		candidate := uciSemanticCandidateAtPath(t, fixture.projection, authorized, seeds[index].path, seeds[index].artifact.Artifact.ArtifactID)
+		seeds[index].candidate = candidate
+		require.NoError(t, fixture.projection.StoreCandidateEmbedding(ctx, authorized, profile, candidate, uciHybridRankVector(seeds[index].vectorRank)))
+	}
+
+	oracle := uciHybridOracle(seeds)
+	require.Equal(t, "pkg/0050.go", oracle[0].path, "rank 51 in both lanes must beat every one-lane leader")
+	service := ucidomain.NewSemanticService(profile, uciProjectionSemanticEmbedder{model: profile.Model, vector: uciSemanticVector(1, 0)}, fixture.projection, fixture.projection)
+	spec := ucidomain.QuerySpec{
+		ClientSessionID: "hybrid-oracle-" + fixture.token,
+		Mode:            ucidomain.QueryModeFTS,
+		Text:            "semantic",
+		Order:           ucidomain.QueryOrderRelevance,
+		Limit:           17,
+	}
+	seen := make([]string, 0, candidateCount)
+	page := 0
+	for {
+		result, err := service.Query(ctx, authorized, spec)
+		require.NoError(t, err)
+		require.NotNil(t, result.Response.Retrieval)
+		require.Equal(t, ucidomain.QueryRetrievalHybrid, result.Response.Retrieval.Mode)
+		require.Empty(t, result.Response.Retrieval.DegradationReasons)
+		items := *result.Response.Items
+		for _, item := range items {
+			seen = append(seen, item.Path)
+		}
+		if result.Response.Continuation == nil || result.Response.Continuation.Value == nil {
+			break
+		}
+		token := *result.Response.Continuation.Value
+		spec.Continuation = &token
+		if page == 0 {
+			spec.Limit = 50
+		}
+		page++
+	}
+	want := make([]string, len(oracle))
+	for index, seed := range oracle {
+		want[index] = seed.path
+	}
+	require.Equal(t, want, seen, "all response pages must decompose the complete independent RRF order without omissions or duplicates")
+	require.Equal(t, "pkg/0050.go", seen[0])
+}
+
+type uciHybridSeed struct {
+	artifact    uciPublicationArtifact
+	path        string
+	lexicalRank int
+	vectorRank  int
+	candidate   ucidomain.QueryCandidate
+}
+
+func uciHybridVectorRank(index int) int {
+	switch {
+	case index < 50:
+		return 1001 + index
+	case index == 50:
+		return 51
+	case index < 1000:
+		return index + 1
+	default:
+		return index - 999
+	}
+}
+
+func uciHybridRankVector(rank int) []float32 {
+	vector := make([]float32, 1536)
+	vector[0] = 1
+	vector[1] = float32(rank)
+	return vector
+}
+
+func uciHybridOracle(seeds []uciHybridSeed) []uciHybridSeed {
+	oracle := append([]uciHybridSeed(nil), seeds...)
+	sort.Slice(oracle, func(left, right int) bool {
+		leftScore := 1/(float64(ucidomain.SemanticRRFConstant)+float64(oracle[left].lexicalRank)) + 1/(float64(ucidomain.SemanticRRFConstant)+float64(oracle[left].vectorRank))
+		rightScore := 1/(float64(ucidomain.SemanticRRFConstant)+float64(oracle[right].lexicalRank)) + 1/(float64(ucidomain.SemanticRRFConstant)+float64(oracle[right].vectorRank))
+		if leftScore != rightScore {
+			return leftScore > rightScore
+		}
+		return oracle[left].path < oracle[right].path
+	})
+	return oracle
+}
+
+type uciProjectionSemanticEmbedder struct {
+	model  string
+	vector []float32
+}
+
+func (embedder uciProjectionSemanticEmbedder) Model() string {
+	return embedder.model
+}
+
+func (embedder uciProjectionSemanticEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	vectors := make([][]float32, len(texts))
+	for index := range texts {
+		vectors[index] = append([]float32(nil), embedder.vector...)
+	}
+	return vectors, nil
+}
+
+func TestBuildUCIHybridCandidatesSQLFusesBeforePageLimit(t *testing.T) {
+	ref := ucidomain.ContextRef{
+		SourceID:          "10000000-0000-4000-8000-000000000001",
+		CheckoutID:        "20000000-0000-4000-8000-000000000001",
+		ViewID:            "30000000-0000-4000-8000-000000000001",
+		AnalysisProfileID: "40000000-0000-4000-8000-000000000001",
+		Generation:        1,
+	}
+	profile := ucidomain.VectorProfile{ProviderRef: "fixture-provider", Model: "fixture-model", Dimension: 1536, PreprocessingRevision: "fixture-preprocessing", IncludeRelativePath: true}
+	query, _, err := buildUCIHybridCandidatesSQL(ref, profile, uciSemanticVector(1, 0), ucidomain.QuerySpec{Mode: ucidomain.QueryModeFTS, Text: "semantic", Order: ucidomain.QueryOrderRelevance, Limit: 17})
+	require.NoError(t, err)
+	require.Contains(t, query, "ROW_NUMBER() OVER")
+	require.Equal(t, 1, strings.Count(query, "LIMIT ? OFFSET ?"), "only the final fused page may be limited")
+	require.Less(t, strings.Index(query, "fused AS"), strings.Index(query, "LIMIT ? OFFSET ?"))
 }
 
 func TestUCIProjectionStoreSelectCandidatesScopesLiteralPathPrefixBeforeLimit(t *testing.T) {
