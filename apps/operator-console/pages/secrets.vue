@@ -70,14 +70,16 @@ function hideSecret(id: string) {
 
 async function createSecret() {
   if (!canCreate.value) return
-  await runCreateSecret({
+  const result = await runCreateSecret({
     name: createName.value.trim(),
     value: createValue.value,
     project: createProject.value.trim(),
     scope: 'project',
   })
+  if (result.kind !== 'committed_verified') return
   createName.value = ''
   createValue.value = ''
+  await refresh()
 }
 
 async function deleteOpened() {
@@ -88,10 +90,12 @@ async function deleteOpened() {
   }
 
   const cred = selected.value
+  const result = await deleteSecret(cred)
+  if (result.kind !== 'committed_verified') return
   openedName.value = null
   deleteConfirm.value = false
   hideSecret(cred.id)
-  await deleteSecret(cred)
+  await refresh()
 }
 
 async function requestDelete(cred: OperatorCredential) {
@@ -104,7 +108,8 @@ async function requestDelete(cred: OperatorCredential) {
 }
 
 async function cleanupOrphans() {
-  await runCleanupOrphans()
+  const result = await runCleanupOrphans()
+  if (result.kind === 'committed_verified') await refresh()
 }
 </script>
 

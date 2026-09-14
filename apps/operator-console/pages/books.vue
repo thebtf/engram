@@ -39,6 +39,22 @@ function stateForError(error: OperatorSourceError, hasSnapshot: boolean): TruthS
   if (error.category === 'unreachable' || error.status === undefined || error.status === 0) return 'offline'
   return hasSnapshot ? 'stale' : 'error'
 }
+function stateForMutation(result: NonNullable<typeof mutationResult.value>, hasSnapshot: boolean): TruthState {
+  switch (result.kind) {
+    case 'committed_verified': return 'partial'
+    case 'committed_verification_pending': return 'loading'
+    case 'partial': return 'partial'
+    case 'denied': return 'denied'
+    case 'timeout': return 'timeout'
+    case 'offline':
+    case 'network': return 'offline'
+    case 'outcome_unknown': return hasSnapshot ? 'stale' : 'offline'
+    case 'stale': return 'stale'
+    case 'unsupported': return 'unsupported'
+    default: return 'error'
+  }
+}
+
 
 const statusLabelKey = computed(() => {
   const status = currentJob.value?.status || 'idle'
@@ -62,6 +78,7 @@ const booksState = computed<TruthState>(() => {
   if (jobState.value.kind === 'gated' || jobState.value.kind === 'mustbuild') return 'unsupported'
   if (currentJob.value?.status === 'failed') return 'error'
   if (currentJob.value?.status === 'done') return 'partial'
+  if (mutationResult.value) return stateForMutation(mutationResult.value, Boolean(currentJob.value))
   return 'empty'
 })
 const legacyClass = computed<HonestyClass>(() => booksState.value === 'stale' ? 'stale' : 'live')
@@ -118,6 +135,7 @@ async function submitBook() {
   notice.value = null
   fileMessage.value = null
   clearLocalState()
+  mutationResult.value = null
 
   if (!form.sourceRef.trim() || !form.content.trim()) {
     localState.value = 'error'
@@ -132,9 +150,6 @@ async function submitBook() {
     content: form.content,
   })
   mutationResult.value = result
-  if (result.kind === 'committed_verified') {
-    currentProject.value = form.project.trim() || currentProject.value || 'engram'
-  }
 }
 </script>
 

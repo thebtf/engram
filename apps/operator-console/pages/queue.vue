@@ -161,6 +161,10 @@ async function runAction(candidate: OperatorCandidate, action: CandidateAction) 
       selected.value = nextSelected
       if (openId.value === candidate.id) openId.value = null
       clearMatchingConfirm(candidate.id, action)
+      if (result.kind === 'committed_verified') {
+        notice.value = { kind: 'success', text: t(`queue.notice.${action}`, { id: candidate.id }) }
+        await refresh()
+      }
     }
   } finally {
     clearCandidateBusy(candidate.id)

@@ -208,23 +208,38 @@ export function useOperatorBooks(): OperatorBooksComposable {
     }
 
     submittingValue.value = true
+    const request = { requestId: crypto.randomUUID(), action: 'book-ingest', intent }
+    let response: Response
     try {
-      return await executeMutation(
-        { requestId: crypto.randomUUID(), action: 'book-ingest', intent },
-        fetch(operatorApiUrl(BOOKS_CREATE_ENDPOINT), {
-          ...jsonInit('POST', {
-            source_ref: intent.sourceRef,
-            content: intent.content,
-            project: intent.project,
-            author: intent.author,
-          }),
-          credentials: 'include',
+      response = await fetch(operatorApiUrl(BOOKS_CREATE_ENDPOINT), {
+        ...jsonInit('POST', {
+          source_ref: intent.sourceRef,
+          content: intent.content,
+          project: intent.project,
+          author: intent.author,
         }),
-        () => undefined,
-      )
+        credentials: 'include',
+      })
+    } catch (error) {
+      return executeMutation(request, Promise.reject(error), () => undefined)
     } finally {
       submittingValue.value = false
     }
+
+    let acceptedJob: OperatorBookJob | null = null
+    try {
+      acceptedJob = parseBookJobPayload(await response.clone().json(), BOOKS_CREATE_ENDPOINT, 'books-create', 'POST')
+    } catch {
+      acceptedJob = null
+    }
+    const mutation = await executeMutation(request, Promise.resolve(response), () => undefined)
+    if (acceptedJob && mutation.kind === 'committed_verification_pending') {
+      currentJob.value = acceptedJob
+      currentProject.value = intent.project
+      jobStateValue.value = pendingState(statusEvidence(acceptedJob.id), acceptedJob)
+      schedulePolling()
+    }
+    return mutation
   }
 
   onMounted(() => {

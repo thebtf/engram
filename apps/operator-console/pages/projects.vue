@@ -55,6 +55,7 @@ async function submitArchiveProject(project: string) {
   projectArchivePending.value = ''
   mutationResult.value = result
   if (result.kind !== 'committed_verified') return
+  await refresh()
 
   projectArchiveTarget.value = ''
   projectArchiveInput.value = ''

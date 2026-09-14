@@ -252,6 +252,8 @@ async function suppressOpened() {
       selected.value = nextSelected
       openId.value = null
       suppressConfirmId.value = null
+      notice.value = { kind: 'success', text: t('memory.notice.suppressed', { id: memory.id }) }
+      await refresh()
     } else if (result.kind === 'partial' && result.items.some((item) => String(item.targetId) === memory.id && item.outcome === 'committed')) {
       const nextSelected = { ...selected.value }
       delete nextSelected[memory.id]
@@ -281,6 +283,8 @@ async function handleBulkAction() {
     if (result.kind === 'committed_verified') {
       selected.value = {}
       bulkSuppressConfirm.value = false
+      notice.value = { kind: 'success', text: t('memory.notice.bulkSuppressed', { count }) }
+      await refresh()
     } else if (result.kind === 'partial') {
       const nextSelected = { ...selected.value }
       for (const item of result.items) {

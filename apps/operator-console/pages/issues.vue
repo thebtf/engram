@@ -33,6 +33,7 @@ const {
   updateIssue,
   commentIssue,
   rejectIssue,
+  acknowledgeIssue,
   deleteIssue,
   runIssueSelection,
 } = useOperatorIssues()
@@ -194,6 +195,11 @@ function resetCreate() {
 function setNotice(key: string, params: Record<string, unknown> = {}) {
   notice.value = t(key, params)
 }
+async function reconcileIssue(id: number) {
+  await refresh()
+  await openIssue(id)
+}
+
 
 
 function selectedCountText() {
@@ -298,30 +304,34 @@ function clearThreadSelection() {
 
 async function updateCurrentField(field: 'status' | 'priority' | 'type', value: string) {
   if (!activeIssue.value || pending.value) return
+  const id = activeIssue.value.id
   const patch: IssueUpdateInput =
     field === 'status'
       ? { status: value as OperatorIssueStatus }
       : field === 'priority'
         ? { priority: value as OperatorIssuePriority }
         : { type: value as OperatorIssueType }
-  const result = await updateIssue(activeIssue.value.id, {
+  const result = await updateIssue(id, {
     ...patch,
     comment: t('issues.detail.fieldChangeComment', { field: t(`issues.detail.${field}`) }),
   })
   mutationResult.value = result
+  if (result.kind === 'committed_verified') await reconcileIssue(id)
 }
 
 async function toggleIssueLabel(label: string) {
   if (!activeIssue.value || pending.value) return
+  const id = activeIssue.value.id
   const labels = labelDraft.value.includes(label)
     ? labelDraft.value.filter((item) => item !== label)
     : [...labelDraft.value, label]
   labelDraft.value = labels
-  const result = await updateIssue(activeIssue.value.id, {
+  const result = await updateIssue(id, {
     labels,
     comment: t('issues.detail.labelsComment'),
   })
   mutationResult.value = result
+  if (result.kind === 'committed_verified') await reconcileIssue(id)
 }
 
 function showIssueHover(issue: OperatorIssue, event: MouseEvent) {
@@ -399,42 +409,49 @@ async function createNewIssue() {
   if (result.kind === 'committed_verified') {
     showCreate.value = false
     resetCreate()
+    await refresh()
   }
 }
 
 async function acknowledgeCurrent() {
   if (!activeIssue.value) return
-  const result = await acknowledgeIssue(activeIssue.value.id)
+  const id = activeIssue.value.id
+  const result = await acknowledgeIssue(id)
   mutationResult.value = result
+  if (result.kind === 'committed_verified') await reconcileIssue(id)
 }
 
 async function resolveCurrent() {
   if (!activeIssue.value) return
-  const result = await updateIssue(activeIssue.value.id, {
+  const id = activeIssue.value.id
+  const result = await updateIssue(id, {
     status: 'resolved',
     comment: t('issues.detail.resolveComment'),
   })
   mutationResult.value = result
+  if (result.kind === 'committed_verified') await reconcileIssue(id)
 }
 
 async function addComment() {
   if (!activeIssue.value || !canComment.value) return
-  const result = await commentIssue(activeIssue.value.id, commentDraft.value.trim())
+  const id = activeIssue.value.id
+  const result = await commentIssue(id, commentDraft.value.trim())
   mutationResult.value = result
   if (result.kind === 'committed_verified') {
     commentDraft.value = ''
-    await openIssue(activeIssue.value.id)
+    await reconcileIssue(id)
   }
 }
 
 async function rejectCurrent() {
   if (!activeIssue.value || !canReject.value) return
-  const result = await rejectIssue(activeIssue.value.id, rejectComment.value.trim())
+  const id = activeIssue.value.id
+  const result = await rejectIssue(id, rejectComment.value.trim())
   mutationResult.value = result
   if (result.kind === 'committed_verified') {
     showReject.value = false
     rejectComment.value = ''
-    await openIssue(activeIssue.value.id)
+    await reconcileIssue(id)
   }
 }
 
@@ -444,6 +461,7 @@ async function deleteCurrent() {
   const result = await deleteIssue(id)
   mutationResult.value = result
   if (result.kind === 'committed_verified') {
+    await refresh()
     showDelete.value = false
     activeId.value = null
   }

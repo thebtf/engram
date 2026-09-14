@@ -190,12 +190,25 @@ interface ApiIssueDetail {
  target_project_display_name?: string
 }
 
-function submitMutation<TIntent>(action: string, intent: TIntent, path: string, init: RequestInit): Promise<MutationResult<TIntent>> {
- return executeMutation(
-  { requestId: crypto.randomUUID(), action, intent },
-  fetch(operatorApiUrl(path), { ...init, credentials: 'include' }),
-  () => undefined,
- )
+async function issueMutation<TIntent>(
+ request: { requestId: string; action: string; intent: TIntent },
+ path: string,
+ init: RequestInit,
+): Promise<{ mutation: MutationResult<TIntent, OperatorIssue>; body: unknown }> {
+ let response: Response
+ try {
+  response = await fetch(operatorApiUrl(path), { ...init, credentials: 'include' })
+ } catch (error) {
+  return { mutation: await executeMutation<TIntent, OperatorIssue>(request, Promise.reject(error), () => undefined), body: undefined }
+ }
+
+ let body: unknown
+ try {
+  body = await response.clone().json()
+ } catch {
+  body = undefined
+ }
+ return { mutation: await executeMutation<TIntent, OperatorIssue>(request, Promise.resolve(response), () => undefined), body }
 }
 
 
@@ -306,6 +319,53 @@ function mapComment(row: ApiIssueComment): OperatorIssueComment {
   age: compactAge(createdAt),
  }
 }
+async function verifyCurrentIssue<TIntent>(
+ mutation: MutationResult<TIntent, OperatorIssue>,
+ id: number,
+ matches: (issue: OperatorIssue, comments: OperatorIssueComment[]) => boolean,
+): Promise<MutationResult<TIntent, OperatorIssue>> {
+ if (mutation.kind !== 'committed_verification_pending' || mutation.commitment !== 'committed') return mutation
+
+ let issue: OperatorIssue | null = null
+ let comments: OperatorIssueComment[] = []
+ try {
+  const payload = await operatorFetchJson<ApiIssueDetail>(`/api/issues/${id}`, undefined, 'issues-mutation-readback')
+  issue = payload.issue ? mapIssue(payload.issue, payload.comment_count ?? payload.comments?.length) : null
+  comments = (payload.comments || []).map(mapComment)
+ } catch {
+  issue = null
+ }
+ if (!issue || !matches(issue, comments)) return { ...mutation, reason: 'readback_invalid' }
+
+ return {
+  kind: 'committed_verified',
+  request: mutation.request,
+  httpStatus: mutation.httpStatus,
+  ...(mutation.operationId === undefined ? {} : { operationId: mutation.operationId }),
+  ...(mutation.code === undefined ? {} : { code: mutation.code }),
+  readback: { kind: 'current', current: issue },
+ }
+}
+
+async function verifyDeletedIssue<TIntent>(mutation: MutationResult<TIntent>, id: number): Promise<MutationResult<TIntent>> {
+ if (mutation.kind !== 'committed_verification_pending' || mutation.commitment !== 'committed') return mutation
+ try {
+  const response = await fetch(operatorApiUrl(`/api/issues/${id}`), { credentials: 'include' })
+  if (response.status === 404) {
+   return {
+    kind: 'committed_verified',
+    request: mutation.request,
+    httpStatus: mutation.httpStatus,
+    ...(mutation.operationId === undefined ? {} : { operationId: mutation.operationId }),
+    ...(mutation.code === undefined ? {} : { code: mutation.code }),
+    readback: { kind: 'authorized_absence' },
+   }
+  }
+ } catch {
+  // A failed readback never proves deletion.
+ }
+ return { ...mutation, reason: 'readback_invalid' }
+}
 
 function sortIssues(rows: OperatorIssue[]) {
  const priorityRank: Record<OperatorIssuePriority, number> = { critical: 0, high: 1, medium: 2, low: 3 }
@@ -351,10 +411,11 @@ export function useOperatorIssues(): {
  routeChangeAction: OperatorUnsupportedAction
  refresh: () => Promise<void>
  openIssue: (id: number) => Promise<void>
- createIssue: (input: IssueCreateInput) => Promise<MutationResult<IssueCreateInput>>
- updateIssue: (id: number, input: IssueUpdateInput) => Promise<MutationResult<{ id: number; input: IssueUpdateInput }>>
- commentIssue: (id: number, body: string) => Promise<MutationResult<{ id: number; input: IssueUpdateInput }>>
- rejectIssue: (id: number, comment: string) => Promise<MutationResult<{ id: number; input: IssueUpdateInput }>>
+ createIssue: (input: IssueCreateInput) => Promise<MutationResult<IssueCreateInput, OperatorIssue>>
+ updateIssue: (id: number, input: IssueUpdateInput) => Promise<MutationResult<{ id: number; input: IssueUpdateInput }, OperatorIssue>>
+ commentIssue: (id: number, body: string) => Promise<MutationResult<{ id: number; input: IssueUpdateInput }, OperatorIssue>>
+ rejectIssue: (id: number, comment: string) => Promise<MutationResult<{ id: number; input: IssueUpdateInput }, OperatorIssue>>
+ acknowledgeIssue: (id: number) => Promise<MutationResult<{ id: number }, OperatorIssue>>
  saveIssueSelection: (selection: Exclude<OperatorSelection, { kind: 'frozen_filter' }>) => Promise<OperatorSelection>
  freezeIssueSelection: (filter: IssueSelectionFilter, excludedIds: string[]) => Promise<OperatorSelection>
  currentIssueSelection: () => Promise<OperatorSelection>
@@ -469,7 +530,8 @@ export function useOperatorIssues(): {
  }
 
  async function createIssue(input: IssueCreateInput) {
-  return submitMutation('issue-create', input, '/api/issues', jsonInit('POST', {
+  const request = { requestId: crypto.randomUUID(), action: 'issue-create', intent: input }
+  const response = await issueMutation(request, '/api/issues', jsonInit('POST', {
    title: input.title,
    body: input.body || '',
    priority: input.priority,
@@ -479,20 +541,40 @@ export function useOperatorIssues(): {
    source_agent: 'operator-console',
    labels: input.labels || [],
   }))
+  const id = typeof response.body === 'object' && response.body !== null && !Array.isArray(response.body)
+   ? Reflect.get(response.body, 'id')
+   : undefined
+  if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) return response.mutation
+  return verifyCurrentIssue(response.mutation, id, (issue) => issue.title === input.title
+   && issue.body === (input.body || '')
+   && issue.priority === input.priority
+   && issue.type === input.type
+   && issue.sourceProject === (input.sourceProject || 'operator-console')
+   && issue.targetProject === input.targetProject
+   && issue.labels.length === (input.labels || []).length
+   && issue.labels.every((label, index) => label === (input.labels || [])[index]))
  }
 
  async function updateIssue(id: number, input: IssueUpdateInput) {
-  return submitMutation('issue-update', { id, input }, `/api/issues/${id}`, jsonInit('PATCH', {
-   ...(input.title !== undefined ? { title: input.title } : {}),
-   ...(input.body !== undefined ? { body: input.body } : {}),
-   ...(input.priority !== undefined ? { priority: input.priority } : {}),
-   ...(input.type !== undefined ? { type: input.type } : {}),
-   ...(input.status !== undefined ? { status: input.status } : {}),
-   ...(input.comment !== undefined ? { comment: input.comment } : {}),
-   ...(input.labels !== undefined ? { labels: input.labels } : {}),
+  const request = { requestId: crypto.randomUUID(), action: 'issue-update', intent: { id, input } }
+  const response = await issueMutation(request, `/api/issues/${id}`, jsonInit('PATCH', {
+   ...(input.title === undefined ? {} : { title: input.title }),
+   ...(input.body === undefined ? {} : { body: input.body }),
+   ...(input.priority === undefined ? {} : { priority: input.priority }),
+   ...(input.type === undefined ? {} : { type: input.type }),
+   ...(input.status === undefined ? {} : { status: input.status }),
+   ...(input.comment === undefined ? {} : { comment: input.comment }),
+   ...(input.labels === undefined ? {} : { labels: input.labels }),
    source_project: 'dashboard',
    source_agent: 'operator-console',
   }))
+  return verifyCurrentIssue(response.mutation, id, (issue, comments) => (input.title === undefined || issue.title === input.title)
+   && (input.body === undefined || issue.body === input.body)
+   && (input.priority === undefined || issue.priority === input.priority)
+   && (input.type === undefined || issue.type === input.type)
+   && (input.status === undefined || issue.status === input.status)
+   && (input.labels === undefined || (issue.labels.length === input.labels.length && issue.labels.every((label, index) => label === input.labels![index])))
+   && (input.comment === undefined || comments.some((comment) => comment.body === input.comment)))
  }
 
  async function commentIssue(id: number, body: string) {
@@ -501,6 +583,12 @@ export function useOperatorIssues(): {
 
  async function rejectIssue(id: number, comment: string) {
   return updateIssue(id, { status: 'rejected', comment })
+ }
+
+ async function acknowledgeIssue(id: number) {
+  const request = { requestId: crypto.randomUUID(), action: 'issue-acknowledge', intent: { id } }
+  const response = await issueMutation(request, '/api/issues/acknowledge', jsonInit('POST', { ids: [id] }))
+  return verifyCurrentIssue(response.mutation, id, (issue) => issue.status === 'acknowledged')
  }
 
  async function saveIssueSelection(selection: Exclude<OperatorSelection, { kind: 'frozen_filter' }>): Promise<OperatorSelection> {
@@ -578,7 +666,9 @@ export function useOperatorIssues(): {
  }
 
  async function deleteIssue(id: number) {
-  return submitMutation('issue-delete', { id }, `/api/issues/${id}`, jsonInit('DELETE'))
+  const request = { requestId: crypto.randomUUID(), action: 'issue-delete', intent: { id } }
+  const response = await issueMutation(request, `/api/issues/${id}`, jsonInit('DELETE'))
+  return verifyDeletedIssue(response.mutation, id)
  }
 
  startOnce('issues-page', refresh)
@@ -601,6 +691,7 @@ export function useOperatorIssues(): {
   updateIssue,
   commentIssue,
   rejectIssue,
+  acknowledgeIssue,
   saveIssueSelection,
   freezeIssueSelection,
   currentIssueSelection,
