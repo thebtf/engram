@@ -19,8 +19,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
-authpkg "github.com/thebtf/engram/internal/auth"
-gormdb "github.com/thebtf/engram/internal/db/gorm"
+	authpkg "github.com/thebtf/engram/internal/auth"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
 
 // isAuthDisabled returns true when ENGRAM_AUTH_DISABLED enables disabled-auth mode.
@@ -381,8 +381,13 @@ func (s *Service) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := authpkg.ValidateHAPPrincipalForIssuance(principal, authpkg.PrincipalKind(principalKind), req.ExpiresAt, time.Now().UTC()); err != nil {
+	now := time.Now().UTC()
+	if err := authpkg.ValidateHAPPrincipalForIssuance(principal, authpkg.PrincipalKind(principalKind), req.ExpiresAt, now); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.ExpiresAt != nil && !req.ExpiresAt.After(now) {
+		http.Error(w, "expires_at must be in the future", http.StatusBadRequest)
 		return
 	}
 
