@@ -2,6 +2,7 @@ package engramcore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,8 +52,9 @@ func cacheKey(p muxcore.ProjectContext) slugCacheKey {
 //
 // Non-cancellation errors fall back to the muxcore-provided ID (which is
 // already git-hash-derived inside muxcore's session layer) so the daemon never
-// fails to respond due to a git lookup hiccup. Caller cancellation is transient
-// and returns that fallback only to the caller, leaving the key uncached.
+// fails to respond due to a git lookup hiccup. Caller and Git-derived
+// cancellation/deadline errors are transient and return that fallback only to
+// the caller, leaving the key uncached.
 func (c *slugCache) Resolve(ctx context.Context, p muxcore.ProjectContext) string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -63,7 +65,7 @@ func (c *slugCache) Resolve(ctx context.Context, p muxcore.ProjectContext) strin
 
 	id, displayName, remote, err := proxy.ResolveProjectSlug(ctx, p.Cwd)
 	if err != nil {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return p.ID
 		}
 		fmt.Fprintf(os.Stderr, "[engram] warning: project identity failed for %s: %v\n", p.Cwd, err)

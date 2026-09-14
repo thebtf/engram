@@ -6,7 +6,10 @@ package engramcore
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -159,6 +162,31 @@ func TestSlugCacheResolve_DoesNotCacheCancelledFallback(t *testing.T) {
 	}
 	if got := cache.Resolve(context.Background(), project); got != want {
 		t.Fatalf("fresh Resolve=%q, want git-derived slug %q", got, want)
+	}
+
+	cache = &slugCache{}
+	binDir := t.TempDir()
+	gitPath := filepath.Join(binDir, "git")
+	script := "#!/bin/sh\nexec /bin/sleep 10\n"
+	if runtime.GOOS == "windows" {
+		gitPath += ".cmd"
+		script = "@echo off\r\n%SystemRoot%\\System32\\ping.exe -n 10 127.0.0.1 >NUL\r\n"
+	}
+	if err := os.WriteFile(gitPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write delayed git: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", binDir)
+	if got := cache.Resolve(context.Background(), project); got != project.ID {
+		t.Fatalf("derived deadline Resolve=%q, want fallback %q", got, project.ID)
+	}
+	if _, ok := cache.entries.Load(cacheKey(project)); ok {
+		t.Fatal("derived deadline Resolve cached fallback")
+	}
+	t.Setenv("PATH", oldPath)
+	if got := cache.Resolve(context.Background(), project); got != want {
+		t.Fatalf("fresh Resolve after deadline=%q, want git-derived slug %q", got, want)
 	}
 }
 
