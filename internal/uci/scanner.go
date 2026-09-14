@@ -827,6 +827,7 @@ type scannerCandidate struct {
 	path    string
 	mode    string
 	tracked bool
+	removed bool
 }
 
 func scannerStagedCandidates(output []byte, objectFormat string) ([]scannerCandidate, error) {
@@ -927,6 +928,9 @@ func scannerStatusOrdinaryCandidate(record string) (scannerCandidate, bool, bool
 	fields, candidatePath, err := scannerStatusRecordFields(record, 8)
 	if err != nil || fields[0] != "1" || !scannerValidStatusXY(fields[1]) || scannerValidateGitPath(candidatePath) != nil {
 		return scannerCandidate{}, false, false, fmt.Errorf("%w: ordinary status record", ErrScannerMalformed)
+	}
+	if fields[1][1] == 'D' {
+		return scannerCandidate{path: candidatePath, removed: true}, true, false, nil
 	}
 	return scannerCandidate{}, false, false, nil
 }
@@ -1044,6 +1048,10 @@ func scannerMergeStagedCandidates(byPath map[string]scannerCandidate, staged []s
 
 func scannerMergeUntrackedCandidates(byPath map[string]scannerCandidate, untracked []scannerCandidate) {
 	for _, candidate := range untracked {
+		if candidate.removed {
+			delete(byPath, candidate.path)
+			continue
+		}
 		if _, exists := byPath[candidate.path]; !exists {
 			byPath[candidate.path] = candidate
 		}

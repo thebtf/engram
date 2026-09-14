@@ -719,7 +719,8 @@ func TestUCIScannerCandidateCacheMatchesUncachedRealGit(t *testing.T) {
 		if err := os.Remove(filepath.Join(fixture.root, "tracked.go")); err != nil {
 			t.Fatalf("remove tracked file: %v", err)
 		}
-		_, calls := fixture.scanAndCompare(t)
+		result, calls := fixture.scanAndCompare(t)
+		scannerAssertFileAbsent(t, result, "tracked.go")
 		scannerAssertRecordedGitOperations(t, calls, fixture.root, "status --porcelain=v2 --branch -z --untracked-files=all")
 	})
 
