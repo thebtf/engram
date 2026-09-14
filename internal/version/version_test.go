@@ -64,22 +64,35 @@ func TestDockerSHAImageIdentityDoesNotOverrideDaemonCompatibility(t *testing.T) 
 	if err != nil {
 		t.Fatalf("read Dockerfile: %v", err)
 	}
-	if !strings.Contains(string(dockerfile), "commit_pattern='^sha-[0-9a-f]{40}$'") {
-		t.Fatal("Dockerfile must continue to accept SHA image identities")
-	}
 
-	_, clientBuild, found := strings.Cut(string(dockerfile), "# Build client-side binary")
-	if !found {
-		t.Fatal("Dockerfile client build section is absent")
-	}
-	clientBuild, _, found = strings.Cut(clientBuild, "\n\n# --- Server image ---")
-	if !found {
-		t.Fatal("Dockerfile client build section is unterminated")
-	}
-	if !strings.Contains(clientBuild, "-X main.Version=${VERSION}") {
-		t.Fatal("Dockerfile client build must retain image identity injection")
-	}
-	if strings.Contains(clientBuild, "internal/version.Daemon=") {
-		t.Fatal("Dockerfile client build must not override source SemVer daemon compatibility with image identity")
+	dockerfileText := strings.ReplaceAll(string(dockerfile), "\r\n", "\n")
+	for _, tc := range []struct {
+		name       string
+		dockerfile string
+	}{
+		{name: "LF", dockerfile: dockerfileText},
+		{name: "CRLF", dockerfile: strings.ReplaceAll(dockerfileText, "\n", "\r\n")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dockerfile := strings.ReplaceAll(tc.dockerfile, "\r\n", "\n")
+			if !strings.Contains(dockerfile, "commit_pattern='^sha-[0-9a-f]{40}$'") {
+				t.Fatal("Dockerfile must continue to accept SHA image identities")
+			}
+
+			_, clientBuild, found := strings.Cut(dockerfile, "# Build client-side binary")
+			if !found {
+				t.Fatal("Dockerfile client build section is absent")
+			}
+			clientBuild, _, found = strings.Cut(clientBuild, "\n\n# --- Server image ---")
+			if !found {
+				t.Fatal("Dockerfile client build section is unterminated")
+			}
+			if !strings.Contains(clientBuild, "-X main.Version=${VERSION}") {
+				t.Fatal("Dockerfile client build must retain image identity injection")
+			}
+			if strings.Contains(clientBuild, "internal/version.Daemon=") {
+				t.Fatal("Dockerfile client build must not override source SemVer daemon compatibility with image identity")
+			}
+		})
 	}
 }
