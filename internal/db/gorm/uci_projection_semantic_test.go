@@ -206,6 +206,17 @@ func TestUCIProjectionStoreHybridRanksFullScopeBeforePaging(t *testing.T) {
 		seeds[index].candidate = candidate
 		require.NoError(t, fixture.projection.StoreCandidateEmbedding(ctx, authorized, profile, candidate, uciHybridRankVector(seeds[index].vectorRank)))
 	}
+	covered, err := fixture.projection.SelectHybridCandidates(ctx, authorized, profile, uciSemanticVector(1, 0), ucidomain.QuerySpec{
+		Mode:  ucidomain.QueryModeFTS,
+		Text:  "semantic",
+		Order: ucidomain.QueryOrderRelevance,
+		Limit: 17,
+	})
+	require.NoError(t, err)
+	require.Equalf(t, float64(1), covered.VectorCoverage, "hybrid coverage = %#v", covered)
+	if got := len(covered.Candidates); got != 18 {
+		t.Fatalf("hybrid page candidate count = %d, want 18", got)
+	}
 
 	oracle := uciHybridOracle(seeds)
 	require.Equal(t, "pkg/0050.go", oracle[0].path, "rank 51 in both lanes must beat every one-lane leader")

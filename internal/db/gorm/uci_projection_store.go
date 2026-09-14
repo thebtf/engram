@@ -1802,7 +1802,7 @@ func (s *UCIProjectionStore) SelectHybridCandidates(ctx context.Context, authori
 		}
 		result.Candidates = make([]ucidomain.SemanticCandidate, 0, len(rows))
 		for _, row := range rows {
-			candidate, ok := row.uciQueryCandidateRow.queryCandidate(ref)
+			candidate, ok := row.queryCandidate(ref)
 			if !ok {
 				return fmt.Errorf("uci projection select hybrid candidates: invalid page candidate")
 			}
@@ -1832,8 +1832,48 @@ func uciHybridUnavailableResult(code ucidomain.QueryErrorCode) ucidomain.Semanti
 }
 
 type uciHybridQueryCandidateRow struct {
-	uciQueryCandidateRow `gorm:"embedded"`
-	LexicalMatch         bool `gorm:"column:lexical_match"`
+	ArtifactID         string  `gorm:"column:artifact_id"`
+	ChunkContentDigest string  `gorm:"column:chunk_content_digest"`
+	FactsDigest        string  `gorm:"column:facts_digest"`
+	DefinitionCount    int64   `gorm:"column:definition_count"`
+	ReferenceSiteCount int64   `gorm:"column:reference_site_count"`
+	ChunkCount         int64   `gorm:"column:chunk_count"`
+	EntityKey          string  `gorm:"column:entity_key"`
+	LocalName          string  `gorm:"column:local_name"`
+	QualifiedSymbol    string  `gorm:"column:qualified_symbol"`
+	RelativePath       string  `gorm:"column:relative_path"`
+	ByteStart          int64   `gorm:"column:byte_start"`
+	ByteEnd            int64   `gorm:"column:byte_end"`
+	LineStart          int     `gorm:"column:line_start"`
+	LineEnd            int     `gorm:"column:line_end"`
+	Text               string  `gorm:"column:text"`
+	ChunkKind          string  `gorm:"column:chunk_kind"`
+	Language           string  `gorm:"column:language"`
+	Score              float64 `gorm:"column:score"`
+	LexicalMatch       bool    `gorm:"column:lexical_match"`
+}
+
+func (row uciHybridQueryCandidateRow) queryCandidate(ref ucidomain.ContextRef) (ucidomain.QueryCandidate, bool) {
+	return uciQueryCandidateRow{
+		ArtifactID:         row.ArtifactID,
+		ChunkContentDigest: row.ChunkContentDigest,
+		FactsDigest:        row.FactsDigest,
+		DefinitionCount:    row.DefinitionCount,
+		ReferenceSiteCount: row.ReferenceSiteCount,
+		ChunkCount:         row.ChunkCount,
+		EntityKey:          row.EntityKey,
+		LocalName:          row.LocalName,
+		QualifiedSymbol:    row.QualifiedSymbol,
+		RelativePath:       row.RelativePath,
+		ByteStart:          row.ByteStart,
+		ByteEnd:            row.ByteEnd,
+		LineStart:          row.LineStart,
+		LineEnd:            row.LineEnd,
+		Text:               row.Text,
+		ChunkKind:          row.ChunkKind,
+		Language:           row.Language,
+		Score:              row.Score,
+	}.queryCandidate(ref)
 }
 
 type uciSemanticVectorRow struct {
@@ -2160,7 +2200,7 @@ func buildUCIHybridCandidatesSQL(ref ucidomain.ContextRef, profile ucidomain.Vec
 	arguments = append([]any{pgvector.NewVector(vector)}, arguments...)
 	arguments = append(arguments, lexicalScoreArguments...)
 	arguments = append(arguments, lexicalArguments...)
-	arguments = append(arguments, uciQueryStoreMaxExcerptBytes, spec.Limit+1, spec.Offset)
+	arguments = append(arguments, spec.Limit+1, spec.Offset, uciQueryStoreMaxExcerptBytes)
 	vectorCTE := strings.TrimPrefix(strings.TrimSpace(cte), "WITH ")
 	identity := uciHybridIdentityColumns("candidate")
 	vectorColumns := uciHybridCandidateColumns("candidate")
@@ -2201,7 +2241,7 @@ func buildUCIHybridCandidatesSQL(ref ucidomain.ContextRef, profile ucidomain.Vec
 			SELECT DISTINCT ON (` + uciHybridIdentityColumns("vector_scored") + `)
 				*
 			FROM vector_scored
-			ORDER BY ` + uciHybridIdentityColumns("vector_scored") + `, vector_distance ASC, chunk_id COLLATE "C" ASC
+			ORDER BY ` + uciHybridIdentityColumns("vector_scored") + `, vector_distance ASC, chunk_id ASC
 		),
 		vector_ranked AS (
 			SELECT
