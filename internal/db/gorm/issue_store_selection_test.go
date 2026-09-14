@@ -188,3 +188,161 @@ func issueSelectionTargets(rows ...Issue) []IssueSelectionTarget {
 	}
 	return targets
 }
+
+func TestIssueSelectionValidationContracts(t *testing.T) {
+	stringPtr := func(value string) *string { return &value }
+	labelsPtr := func(values ...string) *[]string { return &values }
+	validOperation := func(action IssueSelectionAction) IssueSelectionOperation {
+		return IssueSelectionOperation{
+			Action: action,
+			Targets: []IssueSelectionTarget{{
+				ID:                1,
+				ExpectedUpdatedAt: time.Date(2026, time.January, 2, 3, 4, 5, 987654321, time.UTC),
+			}},
+		}
+	}
+
+	for _, store := range []*IssueStore{nil, NewIssueStore(nil)} {
+		_, err := store.ApplyIssueSelectionOperation(context.Background(), IssueSelectionOperation{})
+		require.EqualError(t, err, "issue store is not configured")
+	}
+
+	store := NewIssueStore(&gorm.DB{})
+	_, err := store.ApplyIssueSelectionOperation(context.Background(), IssueSelectionOperation{})
+	require.ErrorIs(t, err, ErrIssueInvalidInput)
+	_, err = store.ApplyIssueSelectionOperation(context.Background(), validOperation(IssueSelectionAction{Kind: "unknown"}))
+	require.ErrorIs(t, err, ErrIssueInvalidInput)
+
+	targets, err := validateIssueSelectionOperation(validOperation(IssueSelectionAction{Kind: IssueSelectionAcknowledge}))
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2026, time.January, 2, 3, 4, 5, 987654000, time.UTC), targets[0].expectedUpdatedAt)
+
+	overflow := make([]IssueSelectionTarget, CollectionSelectionMaxTargets+1)
+	for index := range overflow {
+		overflow[index] = IssueSelectionTarget{ID: int64(index + 1), ExpectedUpdatedAt: time.Now()}
+	}
+	for _, operation := range []IssueSelectionOperation{
+		{Action: IssueSelectionAction{Kind: IssueSelectionAcknowledge}},
+		{Action: IssueSelectionAction{Kind: IssueSelectionAcknowledge}, Targets: overflow},
+		{Action: IssueSelectionAction{Kind: IssueSelectionAcknowledge}, Targets: []IssueSelectionTarget{{ExpectedUpdatedAt: time.Now()}}},
+		{Action: IssueSelectionAction{Kind: IssueSelectionAcknowledge}, Targets: []IssueSelectionTarget{{ID: 1}}},
+		{Action: IssueSelectionAction{Kind: IssueSelectionAcknowledge}, Targets: []IssueSelectionTarget{{ID: 1, ExpectedUpdatedAt: time.Now()}, {ID: 1, ExpectedUpdatedAt: time.Now()}}},
+	} {
+		_, err := validateIssueSelectionOperation(operation)
+		require.ErrorIs(t, err, ErrIssueInvalidInput)
+	}
+
+	for _, kind := range []IssueSelectionActionKind{IssueSelectionAcknowledge, IssueSelectionDelete} {
+		require.NoError(t, validateIssueSelectionAction(IssueSelectionAction{Kind: kind}))
+	}
+	for _, status := range []string{"open", "acknowledged", "resolved", "reopened", "closed", "rejected"} {
+		action := IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr(status)}
+		if status == "rejected" {
+			action.Comment = stringPtr("required")
+		}
+		require.NoError(t, validateIssueSelectionAction(action))
+	}
+	for _, priority := range []string{"critical", "high", "medium", "low"} {
+		require.NoError(t, validateIssueSelectionAction(IssueSelectionAction{Kind: IssueSelectionPriority, Priority: stringPtr(priority)}))
+	}
+	for _, labels := range []*[]string{labelsPtr(), labelsPtr("selected")} {
+		require.NoError(t, validateIssueSelectionAction(IssueSelectionAction{Kind: IssueSelectionLabels, Labels: labels}))
+	}
+
+	invalidActions := []IssueSelectionAction{
+		{Kind: "unknown"},
+		{Kind: IssueSelectionAcknowledge, Status: stringPtr("open")},
+		{Kind: IssueSelectionDelete, Comment: stringPtr("payload")},
+		{Kind: IssueSelectionStatus},
+		{Kind: IssueSelectionStatus, Status: stringPtr("open"), Priority: stringPtr("high")},
+		{Kind: IssueSelectionStatus, Status: stringPtr("invalid")},
+		{Kind: IssueSelectionStatus, Status: stringPtr("rejected")},
+		{Kind: IssueSelectionPriority},
+		{Kind: IssueSelectionPriority, Priority: stringPtr("high"), Comment: stringPtr("payload")},
+		{Kind: IssueSelectionPriority, Priority: stringPtr("invalid")},
+		{Kind: IssueSelectionLabels},
+		{Kind: IssueSelectionLabels, Labels: labelsPtr("selected"), AuthorProject: "payload"},
+	}
+	for _, action := range invalidActions {
+		require.ErrorIs(t, validateIssueSelectionAction(action), ErrIssueInvalidInput)
+	}
+}
+
+func TestIssueSelectionAuthorizationAndTransitions(t *testing.T) {
+	stringPtr := func(value string) *string { return &value }
+	labels := []string{"selected"}
+	row := &Issue{CreatorKeycardID: "creator"}
+	operator := IssueSelectionActor{IsOperator: true}
+	owner := IssueSelectionActor{KeycardID: "creator"}
+
+	for _, action := range []IssueSelectionAction{
+		{Kind: IssueSelectionAcknowledge},
+		{Kind: IssueSelectionDelete},
+		{Kind: IssueSelectionStatus, Status: stringPtr("open")},
+		{Kind: IssueSelectionPriority, Priority: stringPtr("high")},
+		{Kind: IssueSelectionLabels, Labels: &labels},
+	} {
+		require.NoError(t, authorizeIssueSelectionRow(row, action, operator))
+	}
+
+	require.ErrorIs(t, authorizeIssueSelectionRow(row, IssueSelectionAction{Kind: IssueSelectionPriority, Priority: stringPtr("high")}, IssueSelectionActor{}), ErrIssueForbidden)
+	for _, action := range []IssueSelectionAction{
+		{Kind: IssueSelectionPriority, Priority: stringPtr("high")},
+		{Kind: IssueSelectionLabels, Labels: &labels},
+		{Kind: IssueSelectionStatus, Status: stringPtr("reopened")},
+		{Kind: IssueSelectionStatus, Status: stringPtr("closed")},
+	} {
+		require.ErrorIs(t, authorizeIssueSelectionRow(row, action, IssueSelectionActor{KeycardID: "other"}), ErrIssueForbidden)
+	}
+	require.ErrorIs(t, authorizeIssueSelectionRow(&Issue{}, IssueSelectionAction{Kind: IssueSelectionPriority, Priority: stringPtr("high")}, owner), ErrIssueForbidden)
+	for _, action := range []IssueSelectionAction{
+		{Kind: IssueSelectionAcknowledge},
+		{Kind: IssueSelectionDelete},
+		{Kind: IssueSelectionStatus, Status: stringPtr("open")},
+		{Kind: IssueSelectionStatus, Status: stringPtr("acknowledged")},
+		{Kind: IssueSelectionStatus, Status: stringPtr("rejected")},
+	} {
+		require.ErrorIs(t, authorizeIssueSelectionRow(row, action, owner), ErrIssueForbidden)
+	}
+	require.NoError(t, authorizeIssueSelectionRow(row, IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr("resolved")}, IssueSelectionActor{KeycardID: "other"}))
+
+	for _, scenario := range []struct {
+		name     string
+		status   string
+		action   IssueSelectionAction
+		actor    IssueSelectionActor
+		conflict bool
+	}{
+		{"acknowledge open", "open", IssueSelectionAction{Kind: IssueSelectionAcknowledge}, operator, false},
+		{"acknowledge resolved", "resolved", IssueSelectionAction{Kind: IssueSelectionAcknowledge}, operator, true},
+		{"reopen resolved", "resolved", IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr("reopened")}, owner, false},
+		{"reopen open", "open", IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr("reopened")}, owner, true},
+		{"operator closes open", "open", IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr("closed")}, operator, false},
+		{"owner closes resolved", "resolved", IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr("closed")}, owner, false},
+		{"owner closes reopened", "reopened", IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr("closed")}, owner, false},
+		{"owner closes open", "open", IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr("closed")}, owner, true},
+		{"close already closed", "closed", IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr("closed")}, operator, true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			err := validateIssueSelectionCurrentRow(&Issue{Status: scenario.status}, scenario.action, scenario.actor)
+			if scenario.conflict {
+				require.ErrorIs(t, err, ErrIssueSelectionConflict)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+
+	for _, scenario := range []struct {
+		err     error
+		outcome IssueSelectionOutcome
+	}{
+		{ErrIssueForbidden, IssueSelectionDenied},
+		{ErrIssueNotFound, IssueSelectionConflict},
+		{ErrIssueInvalidTransition, IssueSelectionConflict},
+		{ErrIssueSelectionConflict, IssueSelectionConflict},
+		{fmt.Errorf("database failure"), IssueSelectionFailed},
+	} {
+		require.Equal(t, scenario.outcome, issueSelectionFailureOutcome(scenario.err))
+	}
+}
