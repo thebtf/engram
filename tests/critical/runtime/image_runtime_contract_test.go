@@ -991,7 +991,8 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 		}
 	}
 	if !strings.Contains(latest, "TRIGGERING_WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}") ||
-		!strings.Contains(latest, "if ($env:GITHUB_EVENT_NAME -ne 'workflow_run')") {
+		!strings.Contains(latest, "if ($env:GITHUB_EVENT_NAME -eq 'workflow_run')") ||
+		!strings.Contains(latest, "} elseif ($env:GITHUB_EVENT_NAME -cne 'repository_dispatch') {") {
 		t.Fatal("latest promoter must bind and require the triggering workflow head")
 	}
 	for _, forbidden := range []string{
