@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -264,7 +265,7 @@ func writeAR1BaselineReceiptFromTestEnvironment() (AR1BaselineReceipt, error) {
 	if err := sameGitCommonDirectory(primary, candidate); err != nil {
 		return AR1BaselineReceipt{}, err
 	}
-	scenarioFile, err := openContainedRegularFile(primary, scenarioPath)
+	scenarioFile, err := openContainedRegularFile(primaryRoot, scenarioPath)
 	if err != nil {
 		return AR1BaselineReceipt{}, fmt.Errorf("test scenario receipt: %w", err)
 	}
@@ -302,7 +303,7 @@ func writeAR1BaselineReceiptFromTestEnvironment() (AR1BaselineReceipt, error) {
 	if err != nil {
 		return AR1BaselineReceipt{}, fmt.Errorf("marshal baseline receipt: %w", err)
 	}
-	outputFile, err := createContainedRegularFile(primary, outputPath)
+	outputFile, err := createContainedRegularFile(primaryRoot, outputPath)
 	if err != nil {
 		return AR1BaselineReceipt{}, fmt.Errorf("test output file: %w", err)
 	}
@@ -595,7 +596,7 @@ func absoluteDirectory(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve directory: %w", err)
 	}
-	root, err = filepath.EvalSymlinks(root)
+	root, err = filepath.EvalSymlinks(filepath.Clean(root))
 	if err != nil {
 		return "", fmt.Errorf("resolve directory links: %w", err)
 	}
@@ -603,11 +604,11 @@ func absoluteDirectory(path string) (string, error) {
 	if err != nil || !info.IsDir() {
 		return "", fmt.Errorf("path is not a directory")
 	}
-	return root, nil
+	return filepath.Clean(root), nil
 }
 
 func openContainedRegularFile(root, path string) (*os.File, error) {
-	candidate, err := absoluteContainedPath(root, path)
+	root, candidate, err := absoluteContainedPath(root, path)
 	if err != nil {
 		return nil, err
 	}
@@ -639,7 +640,7 @@ func openContainedRegularFile(root, path string) (*os.File, error) {
 }
 
 func createContainedRegularFile(root, path string) (*os.File, error) {
-	candidate, err := absoluteContainedPath(root, path)
+	root, candidate, err := absoluteContainedPath(root, path)
 	if err != nil {
 		return nil, err
 	}
@@ -674,15 +675,29 @@ func createContainedRegularFile(root, path string) (*os.File, error) {
 	return file, nil
 }
 
-func absoluteContainedPath(root, path string) (string, error) {
+func absoluteContainedPath(root, path string) (string, string, error) {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return "", "", err
+	}
+	root = filepath.Clean(root)
 	candidate, err := filepath.Abs(path)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
+	candidate = filepath.Clean(candidate)
 	if err := containedPath(root, candidate); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return candidate, nil
+	relative, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return "", "", err
+	}
+	root, err = absoluteDirectory(root)
+	if err != nil {
+		return "", "", err
+	}
+	return root, filepath.Join(root, relative), nil
 }
 
 func verifyContainedRegularFile(root, path string) (os.FileInfo, error) {
@@ -771,6 +786,10 @@ func candidateCommit(root string) (string, error) {
 }
 
 func requireCandidateWorktreeRoot(root string) error {
+	root, err := absoluteDirectory(root)
+	if err != nil {
+		return fmt.Errorf("resolve candidate source root: %w", err)
+	}
 	output, err := gitOutput(root, gitRevParseCommand, "--show-toplevel")
 	if err != nil {
 		return fmt.Errorf("resolve candidate Git worktree root: %w", err)
@@ -779,10 +798,17 @@ func requireCandidateWorktreeRoot(root string) error {
 	if err != nil {
 		return fmt.Errorf("resolve candidate Git worktree root: %w", err)
 	}
-	if root != topLevel {
+	if !sameCanonicalPath(root, topLevel) {
 		return fmt.Errorf("candidate source root must equal its Git worktree root")
 	}
 	return nil
+}
+
+func sameCanonicalPath(left, right string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
 }
 
 func sameGitCommonDirectory(primary, candidate string) error {

@@ -208,6 +208,56 @@ func TestWriteAR1BaselineReceiptAcceptsCleanLinkedWorktree(t *testing.T) {
 	assertWrittenReceipt(t, outputPath, receipt, fingerprint(raw))
 }
 
+func TestWriteAR1BaselineReceiptAcceptsPrimaryRootAlias(t *testing.T) {
+	primaryRoot, candidateRoot, sourceCommit := candidateWorktree(t)
+	primaryAlias := filepath.Join(t.TempDir(), "primary-alias")
+	symlinkFile(t, primaryRoot, primaryAlias)
+	raw, outputPath := configureWriter(t, primaryAlias, candidateRoot, sourceCommit)
+
+	receipt, err := writeAR1BaselineReceiptFromTestEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertWrittenReceipt(t, outputPath, receipt, fingerprint(raw))
+}
+
+func TestRequireCandidateWorktreeRootAcceptsAlias(t *testing.T) {
+	_, candidateRoot, _ := candidateWorktree(t)
+	candidateAlias := filepath.Join(t.TempDir(), "candidate-alias")
+	symlinkFile(t, candidateRoot, candidateAlias)
+
+	if err := requireCandidateWorktreeRoot(candidateAlias); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriteAR1BaselineReceiptRejectsPathsOutsidePrimaryRoot(t *testing.T) {
+	t.Run("scenario", func(t *testing.T) {
+		primaryRoot, candidateRoot, sourceCommit := candidateWorktree(t)
+		configureWriter(t, primaryRoot, candidateRoot, sourceCommit)
+		outsideScenario := filepath.Join(t.TempDir(), "scenario.json")
+		writeFile(t, outsideScenario, string(rawScenario(t, validScenario())))
+		t.Setenv(testScenarioReceiptEnv, outsideScenario)
+
+		if _, err := writeAR1BaselineReceiptFromTestEnvironment(); err == nil || !strings.Contains(err.Error(), "path is outside root") {
+			t.Fatalf("outside scenario refusal = %v", err)
+		}
+	})
+	t.Run("output", func(t *testing.T) {
+		primaryRoot, candidateRoot, sourceCommit := candidateWorktree(t)
+		configureWriter(t, primaryRoot, candidateRoot, sourceCommit)
+		outsideOutput := filepath.Join(t.TempDir(), "ar1-baseline.json")
+		t.Setenv(testOutputFileEnv, outsideOutput)
+
+		if _, err := writeAR1BaselineReceiptFromTestEnvironment(); err == nil || !strings.Contains(err.Error(), "path is outside root") {
+			t.Fatalf("outside output refusal = %v", err)
+		}
+		if _, err := os.Lstat(outsideOutput); !os.IsNotExist(err) {
+			t.Fatalf("outside output exists or cannot be checked: %v", err)
+		}
+	})
+}
+
 func TestWriteAR1BaselineReceiptRejectsForeignDirtyOrMismatchedCandidate(t *testing.T) {
 	tests := []struct {
 		name      string
