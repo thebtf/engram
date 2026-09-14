@@ -1725,9 +1725,9 @@ func (s *UCIProjectionStore) StoreCandidateEmbedding(ctx context.Context, author
 	return nil
 }
 
-// SelectHybridCandidates computes both complete lane rankings inside one
-// authorized snapshot, fuses them before pagination, and hydrates only the
-// requested page plus its continuation lookahead.
+// SelectHybridCandidates ranks each authorized lane, retains its fixed top-K
+// retrieval pool, fuses that bounded set before response pagination, and
+// hydrates only the requested page plus its continuation lookahead.
 func (s *UCIProjectionStore) SelectHybridCandidates(ctx context.Context, authorized ucidomain.AuthorizedContext, profile ucidomain.VectorProfile, vector []float32, spec ucidomain.QuerySpec) (ucidomain.SemanticStoreResult, error) {
 	if err := s.requireDB("select hybrid candidates"); err != nil {
 		return ucidomain.SemanticStoreResult{}, err
@@ -2200,7 +2200,13 @@ func buildUCIHybridCandidatesSQL(ref ucidomain.ContextRef, profile ucidomain.Vec
 	arguments = append([]any{pgvector.NewVector(vector)}, arguments...)
 	arguments = append(arguments, lexicalScoreArguments...)
 	arguments = append(arguments, lexicalArguments...)
-	arguments = append(arguments, spec.Limit+1, spec.Offset, uciQueryStoreMaxExcerptBytes)
+	arguments = append(arguments,
+		ucidomain.SemanticRetrievalCandidatePoolLimit,
+		ucidomain.SemanticRetrievalCandidatePoolLimit,
+		spec.Limit+1,
+		spec.Offset,
+		uciQueryStoreMaxExcerptBytes,
+	)
 	vectorCTE := strings.TrimPrefix(strings.TrimSpace(cte), "WITH ")
 	identity := uciHybridIdentityColumns("candidate")
 	vectorColumns := uciHybridCandidateColumns("candidate")
@@ -2249,13 +2255,23 @@ func buildUCIHybridCandidatesSQL(ref ucidomain.ContextRef, profile ucidomain.Vec
 				ROW_NUMBER() OVER (ORDER BY vector_distance ASC, ` + vectorTieOrder + `) AS vector_rank
 			FROM vector_coalesced
 		),
+		pooled_identities AS (
+			SELECT ` + uciHybridIdentityColumns("lexical_ranked") + `
+			FROM lexical_ranked
+			WHERE lexical_rank <= ?
+			UNION
+			SELECT ` + uciHybridIdentityColumns("vector_ranked") + `
+			FROM vector_ranked
+			WHERE vector_rank <= ?
+		),
 		fused AS (
 			SELECT
 				vector_ranked.*,
 				lexical_ranked.lexical_rank IS NOT NULL AS lexical_match,
 				1.0 / (` + strconv.Itoa(ucidomain.SemanticRRFConstant) + ` + vector_ranked.vector_rank)::double precision +
 				COALESCE(1.0 / (` + strconv.Itoa(ucidomain.SemanticRRFConstant) + ` + lexical_ranked.lexical_rank)::double precision, 0.0) AS fused_score
-			FROM vector_ranked
+			FROM pooled_identities AS pool
+			JOIN vector_ranked ON ` + uciHybridIdentityJoin("vector_ranked", "pool") + `
 			LEFT JOIN lexical_ranked ON ` + uciHybridIdentityJoin("vector_ranked", "lexical_ranked") + `
 		),
 		page AS (

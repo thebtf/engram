@@ -175,7 +175,7 @@ func TestUCIProjectionStoreSemanticMethodsKeepVectorsScopedAndCovered(t *testing
 	require.Equal(t, complete, repeated)
 }
 
-func TestUCIProjectionStoreHybridRanksFullScopeBeforePaging(t *testing.T) {
+func TestUCIProjectionStoreHybridRanksBoundedPoolBeforePaging(t *testing.T) {
 	fixture := openUCIPublicationFixture(t)
 	ctx := context.Background()
 	profile := ucidomain.VectorProfile{
@@ -218,8 +218,9 @@ func TestUCIProjectionStoreHybridRanksFullScopeBeforePaging(t *testing.T) {
 		t.Fatalf("hybrid page candidate count = %d, want 18", got)
 	}
 
-	oracle := uciHybridOracle(seeds)
-	require.Equal(t, "pkg/0050.go", oracle[0].path, "rank 51 in both lanes must beat every one-lane leader")
+	oracle := uciHybridBoundedPoolOracle(seeds)
+	require.Less(t, len(oracle), candidateCount, "the bounded retrieval pool must not claim exhaustive corpus ranking")
+	require.Equal(t, "pkg/0050.go", oracle[0].path, "rank 51 in both lanes must win inside the bounded fusion pool")
 	service := ucidomain.NewSemanticService(profile, uciProjectionSemanticEmbedder{model: profile.Model, vector: uciSemanticVector(1, 0)}, fixture.projection, fixture.projection)
 	spec := ucidomain.QuerySpec{
 		ClientSessionID: "hybrid-oracle-" + fixture.token,
@@ -254,8 +255,19 @@ func TestUCIProjectionStoreHybridRanksFullScopeBeforePaging(t *testing.T) {
 	for index, seed := range oracle {
 		want[index] = seed.path
 	}
-	require.Equal(t, want, seen, "all response pages must decompose the complete independent RRF order without omissions or duplicates")
+	require.Equal(t, want, seen, "all response pages must decompose the bounded fused pool without omissions or duplicates")
 	require.Equal(t, "pkg/0050.go", seen[0])
+
+	vectorOnly, err := service.Query(ctx, authorized, ucidomain.QuerySpec{
+		ClientSessionID: "hybrid-vector-only-" + fixture.token,
+		Mode:            ucidomain.QueryModeFTS,
+		Text:            "absent-lexical-token",
+		Order:           ucidomain.QueryOrderRelevance,
+		Limit:           1,
+	})
+	require.NoError(t, err)
+	require.Equal(t, ucidomain.QueryRetrievalHybrid, vectorOnly.Response.Retrieval.Mode)
+	require.Equal(t, []ucidomain.QueryMatchSource{ucidomain.QueryMatchVector}, (*vectorOnly.Response.Items)[0].MatchSources)
 }
 
 type uciHybridSeed struct {
@@ -286,8 +298,13 @@ func uciHybridRankVector(rank int) []float32 {
 	return vector
 }
 
-func uciHybridOracle(seeds []uciHybridSeed) []uciHybridSeed {
-	oracle := append([]uciHybridSeed(nil), seeds...)
+func uciHybridBoundedPoolOracle(seeds []uciHybridSeed) []uciHybridSeed {
+	oracle := make([]uciHybridSeed, 0, len(seeds))
+	for _, seed := range seeds {
+		if seed.lexicalRank <= ucidomain.SemanticRetrievalCandidatePoolLimit || seed.vectorRank <= ucidomain.SemanticRetrievalCandidatePoolLimit {
+			oracle = append(oracle, seed)
+		}
+	}
 	sort.Slice(oracle, func(left, right int) bool {
 		leftScore := 1/(float64(ucidomain.SemanticRRFConstant)+float64(oracle[left].lexicalRank)) + 1/(float64(ucidomain.SemanticRRFConstant)+float64(oracle[left].vectorRank))
 		rightScore := 1/(float64(ucidomain.SemanticRRFConstant)+float64(oracle[right].lexicalRank)) + 1/(float64(ucidomain.SemanticRRFConstant)+float64(oracle[right].vectorRank))
@@ -319,7 +336,7 @@ func (embedder uciProjectionSemanticEmbedder) Embed(ctx context.Context, texts [
 	return vectors, nil
 }
 
-func TestBuildUCIHybridCandidatesSQLFusesBeforePageLimit(t *testing.T) {
+func TestBuildUCIHybridCandidatesSQLBuildsBoundedPoolBeforePageLimit(t *testing.T) {
 	ref := ucidomain.ContextRef{
 		SourceID:          "10000000-0000-4000-8000-000000000001",
 		CheckoutID:        "20000000-0000-4000-8000-000000000001",
@@ -331,8 +348,11 @@ func TestBuildUCIHybridCandidatesSQLFusesBeforePageLimit(t *testing.T) {
 	query, _, err := buildUCIHybridCandidatesSQL(ref, profile, uciSemanticVector(1, 0), ucidomain.QuerySpec{Mode: ucidomain.QueryModeFTS, Text: "semantic", Order: ucidomain.QueryOrderRelevance, Limit: 17})
 	require.NoError(t, err)
 	require.Contains(t, query, "ROW_NUMBER() OVER")
-	require.Equal(t, 1, strings.Count(query, "LIMIT ? OFFSET ?"), "only the final fused page may be limited")
-	require.Less(t, strings.Index(query, "fused AS"), strings.Index(query, "LIMIT ? OFFSET ?"))
+	require.Contains(t, query, "pooled_identities AS")
+	require.Contains(t, query, "WHERE lexical_rank <= ?")
+	require.Contains(t, query, "WHERE vector_rank <= ?")
+	require.Equal(t, 1, strings.Count(query, "LIMIT ? OFFSET ?"), "only response pagination may use a SQL page limit")
+	require.Less(t, strings.Index(query, "pooled_identities AS"), strings.Index(query, "LIMIT ? OFFSET ?"))
 }
 
 func TestUCIProjectionStoreSelectCandidatesScopesLiteralPathPrefixBeforeLimit(t *testing.T) {

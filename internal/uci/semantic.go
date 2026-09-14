@@ -18,12 +18,16 @@ import (
 const (
 	semanticVectorDimension = 1536
 	// SemanticRRFConstant is the fixed reciprocal-rank-fusion offset used by every semantic lane.
-	SemanticRRFConstant            = 60
-	semanticInputSchema            = "engram.uci-semantic-input/2"
-	semanticMaxProfileText         = 512
-	semanticQueryProviderBudget    = 20 * time.Second
-	semanticHybridRankingRevision  = "engram.uci-semantic-rrf/1"
-	semanticLexicalRankingRevision = "engram.uci-semantic-lexical/1"
+	SemanticRRFConstant = 60
+	// SemanticRetrievalCandidatePoolLimit bounds each ranked lane before fusion.
+	// Four response pages retain rank-51 overlap while keeping the retrieval pool
+	// independent from caller-controlled response pagination.
+	SemanticRetrievalCandidatePoolLimit = 4 * queryMaxItems
+	semanticInputSchema                 = "engram.uci-semantic-input/2"
+	semanticMaxProfileText              = 512
+	semanticQueryProviderBudget         = 20 * time.Second
+	semanticHybridRankingRevision       = "engram.uci-semantic-rrf/2"
+	semanticLexicalRankingRevision      = "engram.uci-semantic-lexical/1"
 )
 
 // VectorProfile names one versioned semantic space. Equal dimensions alone are
@@ -51,14 +55,15 @@ type SemanticStore interface {
 	SelectHybridCandidates(context.Context, AuthorizedContext, VectorProfile, []float32, QuerySpec) (SemanticStoreResult, error)
 }
 
-// SemanticCandidate is one already-fused, page-ordered semantic retrieval hit.
+// SemanticCandidate is one bounded-pool-fused, page-ordered semantic retrieval hit.
 type SemanticCandidate struct {
 	Candidate    QueryCandidate
 	MatchSources []QueryMatchSource
 }
 
-// SemanticStoreResult contains a page-sized, globally fused candidate sequence
+// SemanticStoreResult contains one page from the stable fused retrieval pool
 // and the scoped availability evidence that makes hybrid retrieval honest.
+// The pool is a bounded per-lane top-K candidate set, not an exhaustive corpus rank.
 type SemanticStoreResult struct {
 	Candidates     []SemanticCandidate
 	Coverage       IndexCoverageState
