@@ -477,6 +477,20 @@ test("coverage normalization canonicalizes Windows and Unix blocks and keeps eac
   assert.equal(normalized.match(/example\/internal\/alpha\/file\.go:1\.1,2\.2/g).length, 1);
 });
 
+test("coverage normalization preserves Go zero-statement point blocks but rejects reversed ranges", () => {
+  const generated = "github.com/thebtf/engram/cmd/engram/main.go:580.18,580.18 0 1";
+  const coverable = "github.com/thebtf/engram/cmd/engram/main.go:581.1,581.2 1 1";
+  assert.equal(normalizeCoverage([
+    { source: "generated", contents: `mode: atomic\n${generated}\n` },
+    { source: "coverable", contents: `mode: atomic\n${coverable}\n` },
+  ]), `mode: atomic\n${generated}\n${coverable}\n`);
+  assert.throws(() => normalizeCoverage([
+    { source: "reversed", contents: "mode: atomic\ngithub.com/thebtf/engram/cmd/engram/main.go:580.18,580.17 0 1\n" },
+    { source: "coverable", contents: `mode: atomic\n${coverable}\n` },
+  ]), /Invalid coverprofile block/);
+  assert.throws(() => normalizeCoverage([{ source: "zero", contents: `mode: atomic\n${generated}\n` }]), /No Go coverage blocks/);
+});
+
 test("coverage normalization fails closed on conflicting statement counts", () => {
   assert.throws(
     () => normalizeCoverage([

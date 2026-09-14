@@ -565,7 +565,7 @@ function parseAtomicCoverage(contents, source) {
     const [startLine, startColumn, endLine, endColumn, statements, hits] = block.slice(2).map(Number);
     if (![startLine, startColumn, endLine, endColumn, statements, hits].every(Number.isSafeInteger) ||
       startLine < 1 || startColumn < 0 || endLine < startLine || endColumn < 0 ||
-      (endLine === startLine && endColumn <= startColumn) || statements < 1 || hits < 0) {
+      (endLine === startLine && endColumn < startColumn) || hits < 0) {
       throw new RunnerError(`Invalid coverprofile block in ${source}: ${line}`);
     }
     const range = `${block[1]}:${block[2]}.${block[3]},${block[4]}.${block[5]}`;
@@ -574,6 +574,10 @@ function parseAtomicCoverage(contents, source) {
     blocks.set(range, { statements, hits: Math.max(previous?.hits || 0, hits) });
   }
   return blocks;
+}
+function hasCoverableStatements(blocks) {
+  for (const block of blocks.values()) if (block.statements > 0) return true;
+  return false;
 }
 
 export function normalizeCoverage(reports) {
@@ -587,7 +591,7 @@ export function normalizeCoverage(reports) {
       blocks.set(range, { statements: block.statements, hits: Math.max(previous?.hits || 0, block.hits) });
     }
   }
-  if (!blocks.size) throw new RunnerError("No Go coverage blocks were collected");
+  if (!hasCoverableStatements(blocks)) throw new RunnerError("No Go coverage blocks were collected");
   return `mode: atomic\n${[...blocks.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([range, block]) => `${range} ${block.statements} ${block.hits}`).join("\n")}\n`;
 }
 
@@ -604,7 +608,7 @@ function validateCoverage(path, expectedDigest = null, { allowZeroCoverableState
   const digest = shaFile(path);
   if (expectedDigest && digest !== expectedDigest) throw new RunnerError(`Coverage digest mismatch: ${path}`);
   const blocks = parseAtomicCoverage(readFileSync(path, "utf8"), path);
-  const coverage_classification = blocks.size ? "covered" : "zero_coverable_statements";
+  const coverage_classification = hasCoverableStatements(blocks) ? "covered" : "zero_coverable_statements";
   if (coverage_classification === "zero_coverable_statements" && !allowZeroCoverableStatements) throw new RunnerError(`Coverage artifact has no coverable statements: ${path}`);
   return { sha256: digest, bytes: statSync(path).size, coverage_classification };
 }
