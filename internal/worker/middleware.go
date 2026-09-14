@@ -94,8 +94,8 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		if origin := r.Header.Get("Origin"); allowedOrigins[origin] {
 			hdr.Set("Access-Control-Allow-Origin", origin)
 			hdr.Set("Access-Control-Allow-Credentials", "true")
-			hdr.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			hdr.Set("Access-Control-Allow-Headers", "Content-Type, X-Auth-Token, Authorization, X-Request-ID, "+comparisonAdapterHeaderV3)
+			hdr.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			hdr.Set("Access-Control-Allow-Headers", "Content-Type, X-Auth-Token, Authorization, X-Request-ID, X-Engram-Request-ID, X-Engram-Tab-Binding-ID, X-Engram-Document-Proof, "+comparisonAdapterHeaderV3)
 		}
 
 		// Preflight requests terminate here; no further processing needed.
