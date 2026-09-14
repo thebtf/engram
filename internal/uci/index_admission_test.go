@@ -1756,3 +1756,266 @@ func TestIndexAdmissionCanonicalizationRejectsCollidingReferenceSites(t *testing
 		t.Fatal("EncodeIndexAdmissionFrame() accepted colliding source reference sites")
 	}
 }
+
+func TestIndexAdmissionTreeSitterAdmissionRejectsInvalidProfileAndProofEvidence(t *testing.T) {
+	source := []byte("import \"./side-effect.js\";\n" +
+		"import { shared as localShared } from \"./shared.js\";\n" +
+		"export { shared as publicShared } from \"./shared.js\";\n" +
+		"const localOnly = localShared;\n" +
+		"export { localOnly as publicLocal };\n" +
+		"export function run() {\n" +
+		"\treturn localShared();\n" +
+		"}\n")
+	profile, err := TreeSitterIndexAdmissionArtifactProfile(TreeSitterLanguageJavaScript, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("TreeSitterIndexAdmissionArtifactProfile() error = %v", err)
+	}
+	extracted := indexAdmissionTestTreeSitterArtifact(t, source)
+	accepted, err := NewIndexAdmissionArtifactFromTreeSitter(indexAdmissionTestSourceA, profile, source, extracted)
+	if err != nil {
+		t.Fatalf("NewIndexAdmissionArtifactFromTreeSitter() accepted evidence error = %v", err)
+	}
+	indexAdmissionRequireAcceptedArtifact(t, accepted)
+
+	tests := []struct {
+		name     string
+		sourceID string
+		mutate   func(*IndexAdmissionArtifactProfile, *TreeSitterArtifact, *[]byte)
+	}{
+		{
+			name: "source capacity",
+			mutate: func(_ *IndexAdmissionArtifactProfile, _ *TreeSitterArtifact, source *[]byte) {
+				*source = make([]byte, IndexAdmissionMaxArtifactBodyBytes+1)
+			},
+		},
+		{
+			name: "unsupported language",
+			mutate: func(_ *IndexAdmissionArtifactProfile, artifact *TreeSitterArtifact, _ *[]byte) {
+				artifact.Language = TreeSitterLanguage("python")
+			},
+		},
+		{
+			name: "invalid parser revision",
+			mutate: func(profile *IndexAdmissionArtifactProfile, _ *TreeSitterArtifact, _ *[]byte) {
+				profile.ParserRevision = "\x00"
+			},
+		},
+		{
+			name: "language profile mismatch",
+			mutate: func(profile *IndexAdmissionArtifactProfile, _ *TreeSitterArtifact, _ *[]byte) {
+				profile.Language = IndexAdmissionLanguageTypeScript
+			},
+		},
+		{
+			name: "parser revision mismatch",
+			mutate: func(profile *IndexAdmissionArtifactProfile, _ *TreeSitterArtifact, _ *[]byte) {
+				profile.ParserRevision = "tree-sitter-worker/v999"
+			},
+		},
+		{
+			name: "grammar digest mismatch",
+			mutate: func(profile *IndexAdmissionArtifactProfile, _ *TreeSitterArtifact, _ *[]byte) {
+				profile.GrammarDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+			},
+		},
+		{
+			name: "extraction profile digest mismatch",
+			mutate: func(profile *IndexAdmissionArtifactProfile, _ *TreeSitterArtifact, _ *[]byte) {
+				profile.ExtractionProfileDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+			},
+		},
+		{
+			name: "source digest mismatch",
+			mutate: func(_ *IndexAdmissionArtifactProfile, artifact *TreeSitterArtifact, _ *[]byte) {
+				artifact.Proof.ContentDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+			},
+		},
+		{
+			name:     "invalid source identifier",
+			sourceID: "not-a-uuid",
+			mutate:   func(_ *IndexAdmissionArtifactProfile, _ *TreeSitterArtifact, _ *[]byte) {},
+		},
+		{
+			name: "malformed proof artifact identifier",
+			mutate: func(_ *IndexAdmissionArtifactProfile, artifact *TreeSitterArtifact, _ *[]byte) {
+				artifact.Proof.ArtifactID = "not-a-uuid"
+			},
+		},
+		{
+			name: "malformed proof facts digest",
+			mutate: func(_ *IndexAdmissionArtifactProfile, artifact *TreeSitterArtifact, _ *[]byte) {
+				artifact.Proof.FactsDigest = ""
+			},
+		},
+		{
+			name: "definition count mismatch",
+			mutate: func(_ *IndexAdmissionArtifactProfile, artifact *TreeSitterArtifact, _ *[]byte) {
+				artifact.Proof.DefinitionCount++
+			},
+		},
+		{
+			name: "reference count mismatch",
+			mutate: func(_ *IndexAdmissionArtifactProfile, artifact *TreeSitterArtifact, _ *[]byte) {
+				artifact.Proof.ReferenceSiteCount++
+			},
+		},
+		{
+			name: "chunk count mismatch",
+			mutate: func(_ *IndexAdmissionArtifactProfile, artifact *TreeSitterArtifact, _ *[]byte) {
+				artifact.Proof.ChunkCount++
+			},
+		},
+		{
+			name: "invalid source utf8",
+			mutate: func(_ *IndexAdmissionArtifactProfile, artifact *TreeSitterArtifact, source *[]byte) {
+				*source = append(*source, 0xff)
+				artifact.Text = string(*source)
+				artifact.Proof.ContentDigest = indexAdmissionDigestBytes(*source)
+			},
+		},
+		{
+			name: "source text mismatch",
+			mutate: func(_ *IndexAdmissionArtifactProfile, artifact *TreeSitterArtifact, _ *[]byte) {
+				artifact.Text = "unbound source text"
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidateProfile := profile
+			candidateArtifact := extracted
+			candidateSource := append([]byte(nil), source...)
+			candidateSourceID := indexAdmissionTestSourceA
+			if test.sourceID != "" {
+				candidateSourceID = test.sourceID
+			}
+			test.mutate(&candidateProfile, &candidateArtifact, &candidateSource)
+
+			artifact, err := NewIndexAdmissionArtifactFromTreeSitter(candidateSourceID, candidateProfile, candidateSource, candidateArtifact)
+			indexAdmissionRequireRejectedArtifact(t, artifact, err)
+		})
+	}
+}
+
+func TestIndexAdmissionStructuredNameBoundaryRejectsInvalidLabelsAndPointerSegments(t *testing.T) {
+	boundaryKey := func(prefix string) string {
+		return prefix + strings.Repeat("x", indexAdmissionMaxKeyBytes-len(prefix))
+	}
+	tests := []struct {
+		name    string
+		key     string
+		invalid string
+		convert func(string) (IndexAdmissionArtifact, error)
+	}{
+		{
+			name:    "json label",
+			key:     boundaryKey("json:document:0#/"),
+			invalid: "../escaped-pointer",
+			convert: func(symbolKey string) (IndexAdmissionArtifact, error) {
+				source := []byte(uciJSONYAMLJSONFixture)
+				profile := DefaultJSONYAMLExtractionProfile("structured-admission-v1", JSONYAMLFormatJSON)
+				admission, err := JSONYAMLIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return IndexAdmissionArtifact{}, err
+				}
+				extracted := ExtractJSONYAML(source, profile)
+				extracted.Definitions[0].SymbolKey = symbolKey
+				extracted = jsonYAMLFinalizeArtifact(source, profile, extracted)
+				return NewIndexAdmissionArtifactFromJSONYAML(indexAdmissionTestSourceA, admission, profile, source, extracted)
+			},
+		},
+		{
+			name:    "yaml pointer segment",
+			key:     boundaryKey("yaml:document:0#/"),
+			invalid: "file:private-pointer",
+			convert: func(symbolKey string) (IndexAdmissionArtifact, error) {
+				source := []byte(uciJSONYAMLYAMLFixture)
+				profile := DefaultJSONYAMLExtractionProfile("structured-admission-v1", JSONYAMLFormatYAML)
+				admission, err := JSONYAMLIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return IndexAdmissionArtifact{}, err
+				}
+				extracted := ExtractJSONYAML(source, profile)
+				extracted.Definitions[0].SymbolKey = symbolKey
+				extracted = jsonYAMLFinalizeArtifact(source, profile, extracted)
+				return NewIndexAdmissionArtifactFromJSONYAML(indexAdmissionTestSourceA, admission, profile, source, extracted)
+			},
+		},
+		{
+			name:    "sql label",
+			key:     boundaryKey("sql:table:"),
+			invalid: "https://example.invalid/table",
+			convert: func(symbolKey string) (IndexAdmissionArtifact, error) {
+				source := []byte(uciSQLDDLFixture)
+				profile := DefaultSQLExtractionProfile("structured-admission-v1")
+				admission, err := SQLIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return IndexAdmissionArtifact{}, err
+				}
+				extracted := ExtractSQL(source, profile)
+				extracted.Definitions[0].SymbolKey = symbolKey
+				extracted = sqlFinalizeArtifact(source, profile, extracted)
+				return NewIndexAdmissionArtifactFromSQL(indexAdmissionTestSourceA, admission, profile, source, extracted)
+			},
+		},
+		{
+			name:    "openapi pointer segment",
+			key:     boundaryKey("openapi:#/"),
+			invalid: "\x00invalid-pointer",
+			convert: func(symbolKey string) (IndexAdmissionArtifact, error) {
+				source := []byte(uciOpenAPIJSONFixture)
+				profile := DefaultOpenAPIExtractionProfile("structured-admission-v1", OpenAPIFormatJSON)
+				admission, err := OpenAPIIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return IndexAdmissionArtifact{}, err
+				}
+				extracted := ExtractOpenAPI(source, profile)
+				extracted.Definitions[0].SymbolKey = symbolKey
+				extracted = openAPIFinalizeArtifact(source, profile, extracted)
+				return NewIndexAdmissionArtifactFromOpenAPI(indexAdmissionTestSourceA, admission, profile, source, extracted)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			accepted, err := test.convert(test.key)
+			if err != nil {
+				t.Fatalf("boundary structured artifact error = %v", err)
+			}
+			indexAdmissionRequireAcceptedArtifact(t, accepted)
+
+			rejected, err := test.convert(test.invalid)
+			indexAdmissionRequireRejectedArtifact(t, rejected, err)
+		})
+	}
+}
+
+func indexAdmissionRequireAcceptedArtifact(t *testing.T, artifact IndexAdmissionArtifact) {
+	t.Helper()
+	artifactID := artifact.ArtifactID
+	frame := IndexAdmissionFrame{
+		Version:   IndexAdmissionFrameVersion,
+		Profile:   IndexAdmissionProfile{ID: indexAdmissionTestProfile},
+		Artifacts: []IndexAdmissionArtifact{artifact},
+		Memberships: []IndexAdmissionMembership{{
+			PathKey:     "artifact.source",
+			DisplayPath: "artifact.source",
+			Mode:        "100644",
+			State:       IndexAdmissionMembershipPresent,
+			ArtifactID:  &artifactID,
+		}},
+	}
+	if err := ValidateIndexAdmissionFrame(frame); err != nil {
+		t.Fatalf("ValidateIndexAdmissionFrame() error = %v", err)
+	}
+}
+
+func indexAdmissionRequireRejectedArtifact(t *testing.T, artifact IndexAdmissionArtifact, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("invalid admission evidence produced an artifact")
+	}
+	if artifact.ArtifactID != "" || artifact.Body != nil || artifact.FactsDigest != "" {
+		t.Fatalf("invalid admission evidence escaped as an artifact: %#v", artifact)
+	}
+}
