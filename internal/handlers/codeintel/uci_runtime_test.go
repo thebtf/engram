@@ -120,6 +120,14 @@ func TestUCIRuntimeProtectsNestedEnvironmentAndAgentState(t *testing.T) {
 	}
 }
 
+func assertUCIRuntimeError(t *testing.T, err error, stableSubstring, format string, args ...any) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), stableSubstring) {
+		args = append(args, err)
+		t.Fatalf(format+" = %v", args...)
+	}
+}
+
 func uciRuntimeTestBinding(root, workstationID string) uci.IndexBinding {
 	return uci.IndexBinding{
 		Scope: uci.IndexScope{
@@ -364,22 +372,18 @@ func TestUCIRuntimeRejectsUnauthorizedPrepareBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := engramcore.ResolvedIndexTarget{ClientSessionID: "uci-runtime-session", ContextHandle: "uci-runtime-handle", Binding: uciRuntimeTestBinding(root, "keycard-workstation-a")}
-	if _, err := runtimeState.watcherChangeSource(target); err == nil || !strings.Contains(err.Error(), "authorized target is unavailable") {
-		t.Fatalf("unauthorized watcher source error = %v", err)
-	}
-	if err := runtimeState.updateReboundTarget(target); err == nil || !strings.Contains(err.Error(), "changed authorization") {
-		t.Fatalf("unauthorized rebound update error = %v", err)
-	}
+	_, err = runtimeState.watcherChangeSource(target)
+	assertUCIRuntimeError(t, err, "authorized target is unavailable", "unauthorized watcher source error")
+	err = runtimeState.updateReboundTarget(target)
+	assertUCIRuntimeError(t, err, "changed authorization", "unauthorized rebound update error")
 	invalidRebound := target
 	invalidRebound.Binding = target.Binding.Clone()
 	invalidRebound.Binding.Scope.CheckoutID = ""
-	if err := runtimeState.updateReboundTarget(invalidRebound); err == nil || !strings.Contains(err.Error(), "rebound binding is invalid") {
-		t.Fatalf("invalid rebound update error = %v", err)
-	}
+	err = runtimeState.updateReboundTarget(invalidRebound)
+	assertUCIRuntimeError(t, err, "rebound binding is invalid", "invalid rebound update error")
 
-	if _, err := runtimeState.Prepare(nil, target, root, root); err == nil || !strings.Contains(err.Error(), "request context") {
-		t.Fatalf("nil request context error = %v", err)
-	}
+	_, err = runtimeState.Prepare(nil, target, root, root)
+	assertUCIRuntimeError(t, err, "request context", "nil request context error")
 	cancelled, cancelRequest := context.WithCancel(context.Background())
 	cancelRequest()
 	if _, err := runtimeState.Prepare(cancelled, target, root, root); !errors.Is(err, context.Canceled) {
@@ -388,16 +392,14 @@ func TestUCIRuntimeRejectsUnauthorizedPrepareBoundaries(t *testing.T) {
 	invalidBinding := target
 	invalidBinding.Binding = target.Binding.Clone()
 	invalidBinding.Binding.Scope.CheckoutID = ""
-	if _, err := runtimeState.Prepare(context.Background(), invalidBinding, root, root); err == nil || !strings.Contains(err.Error(), "server binding is invalid") {
-		t.Fatalf("invalid binding error = %v", err)
-	}
+	_, err = runtimeState.Prepare(context.Background(), invalidBinding, root, root)
+	assertUCIRuntimeError(t, err, "server binding is invalid", "invalid binding error")
 	for _, locator := range []string{"https://example.test/checkout", "file://example.test/checkout", "file:relative-checkout", "file:///checkout?unexpected=query"} {
 		unauthorized := target
 		unauthorized.Binding = target.Binding.Clone()
 		unauthorized.Binding.LocalRootID = locator
-		if _, err := runtimeState.Prepare(context.Background(), unauthorized, root, root); err == nil || !strings.Contains(err.Error(), "locator does not match") {
-			t.Fatalf("locator %q error = %v", locator, err)
-		}
+		_, err = runtimeState.Prepare(context.Background(), unauthorized, root, root)
+		assertUCIRuntimeError(t, err, "locator does not match", "locator %q error", locator)
 	}
 	runtimeState.stateMu.RLock()
 	defer runtimeState.stateMu.RUnlock()
