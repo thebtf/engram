@@ -1584,8 +1584,22 @@ func uciWriteTreeSitterChildAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(*uciTreeSitterHelperAuditFile, encoded, 0o600); err != nil {
+	temporary, err := os.CreateTemp(filepath.Dir(*uciTreeSitterHelperAuditFile), ".child-audit-*")
+	if err != nil {
+		t.Fatalf("create Tree-sitter child audit: %v", err)
+	}
+	defer func() {
+		_ = temporary.Close()
+		_ = os.Remove(temporary.Name())
+	}()
+	if _, err := temporary.Write(encoded); err != nil {
 		t.Fatalf("write Tree-sitter child audit: %v", err)
+	}
+	if err := temporary.Close(); err != nil {
+		t.Fatalf("close Tree-sitter child audit: %v", err)
+	}
+	if err := os.Rename(temporary.Name(), *uciTreeSitterHelperAuditFile); err != nil {
+		t.Fatalf("publish Tree-sitter child audit: %v", err)
 	}
 }
 
