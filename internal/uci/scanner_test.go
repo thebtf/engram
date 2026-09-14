@@ -92,7 +92,7 @@ func TestUCIScannerCanonicalizesAuthorizedRootAlias(t *testing.T) {
 		t.Fatalf("scan through authorized root alias: %v", err)
 	}
 	scannerAssertCensus(t, result, IndexScanComplete, true, true)
-	scannerAssertRecordedGitOperations(t, fixture.runner.calls, filepath.Clean(fixture.root),
+	scannerAssertRecordedGitOperations(t, fixture.runner.calls, fixture.expectedRoot,
 		"rev-parse --show-toplevel --absolute-git-dir --git-common-dir --git-path HEAD --show-object-format",
 		"status --porcelain=v2 --branch -z --untracked-files=all",
 		"ls-files --stage --others --exclude-standard -t -z",
@@ -738,7 +738,7 @@ func TestUCIScannerCandidateCacheMatchesUncachedRealGit(t *testing.T) {
 		fixture.warm(t)
 		scannerRealWrite(t, fixture.root, "tracked.go", []byte("package fixture\nconst Version = 2\n"))
 		_, calls := fixture.scanAndCompare(t)
-		scannerAssertRecordedGitOperations(t, calls, fixture.root, "status --porcelain=v2 --branch -z --untracked-files=all")
+		scannerAssertRecordedGitOperations(t, calls, fixture.expectedRoot, "status --porcelain=v2 --branch -z --untracked-files=all")
 	})
 
 	t.Run("new untracked file", func(t *testing.T) {
@@ -747,7 +747,7 @@ func TestUCIScannerCandidateCacheMatchesUncachedRealGit(t *testing.T) {
 		scannerRealWrite(t, fixture.root, "new.go", []byte("package fixture\n"))
 		result, calls := fixture.scanAndCompare(t)
 		scannerAssertFile(t, result, "new.go", IndexFilePresent, ScannerExclusionNone, []byte("package fixture\n"))
-		scannerAssertRecordedGitOperations(t, calls, fixture.root, "status --porcelain=v2 --branch -z --untracked-files=all")
+		scannerAssertRecordedGitOperations(t, calls, fixture.expectedRoot, "status --porcelain=v2 --branch -z --untracked-files=all")
 	})
 
 	t.Run("nested ignore negation", func(t *testing.T) {
@@ -759,7 +759,7 @@ func TestUCIScannerCandidateCacheMatchesUncachedRealGit(t *testing.T) {
 		result, calls := fixture.scanAndCompare(t)
 		scannerAssertFile(t, result, "src/kept.go", IndexFilePresent, ScannerExclusionNone, []byte("package kept\n"))
 		scannerAssertFileAbsent(t, result, "src/ignored.go")
-		scannerAssertRecordedGitOperations(t, calls, fixture.root, "status --porcelain=v2 --branch -z --untracked-files=all")
+		scannerAssertRecordedGitOperations(t, calls, fixture.expectedRoot, "status --porcelain=v2 --branch -z --untracked-files=all")
 	})
 
 	t.Run("deleted tracked file", func(t *testing.T) {
@@ -770,7 +770,7 @@ func TestUCIScannerCandidateCacheMatchesUncachedRealGit(t *testing.T) {
 		}
 		result, calls := fixture.scanAndCompare(t)
 		scannerAssertFileAbsent(t, result, "tracked.go")
-		scannerAssertRecordedGitOperations(t, calls, fixture.root, "status --porcelain=v2 --branch -z --untracked-files=all")
+		scannerAssertRecordedGitOperations(t, calls, fixture.expectedRoot, "status --porcelain=v2 --branch -z --untracked-files=all")
 	})
 
 	t.Run("unstaged rename", func(t *testing.T) {
@@ -781,7 +781,7 @@ func TestUCIScannerCandidateCacheMatchesUncachedRealGit(t *testing.T) {
 		}
 		result, calls := fixture.scanAndCompare(t)
 		scannerAssertFile(t, result, "renamed.go", IndexFilePresent, ScannerExclusionNone, []byte("package fixture\nconst Version = 1\n"))
-		scannerAssertRecordedGitOperations(t, calls, fixture.root, "status --porcelain=v2 --branch -z --untracked-files=all")
+		scannerAssertRecordedGitOperations(t, calls, fixture.expectedRoot, "status --porcelain=v2 --branch -z --untracked-files=all")
 	})
 
 	t.Run("staged file and rename", func(t *testing.T) {
@@ -790,7 +790,7 @@ func TestUCIScannerCandidateCacheMatchesUncachedRealGit(t *testing.T) {
 		scannerRealWrite(t, fixture.root, "tracked.go", []byte("package fixture\nconst Version = 3\n"))
 		scannerRealGit(t, fixture.root, "add", "--", "tracked.go")
 		_, calls := fixture.scanAndCompare(t)
-		scannerAssertRecordedGitOperations(t, calls, fixture.root,
+		scannerAssertRecordedGitOperations(t, calls, fixture.expectedRoot,
 			"status --porcelain=v2 --branch -z --untracked-files=all",
 			"ls-files --stage --others --exclude-standard -t -z",
 		)
@@ -798,7 +798,7 @@ func TestUCIScannerCandidateCacheMatchesUncachedRealGit(t *testing.T) {
 		scannerRealGit(t, fixture.root, "mv", "-f", "tracked.go", "renamed.go")
 		result, calls := fixture.scanAndCompare(t)
 		scannerAssertFile(t, result, "renamed.go", IndexFilePresent, ScannerExclusionNone, []byte("package fixture\nconst Version = 3\n"))
-		scannerAssertRecordedGitOperations(t, calls, fixture.root,
+		scannerAssertRecordedGitOperations(t, calls, fixture.expectedRoot,
 			"status --porcelain=v2 --branch -z --untracked-files=all",
 			"ls-files --stage --others --exclude-standard -t -z",
 		)
@@ -811,7 +811,7 @@ func TestUCIScannerCandidateCacheMatchesUncachedRealGit(t *testing.T) {
 		result, calls := fixture.scanAndCompare(t)
 		scannerAssertFile(t, result, "case.go", IndexFilePresent, ScannerExclusionNone, []byte("package fixture\nconst Case = true\n"))
 		scannerAssertFileAbsent(t, result, "Case.go")
-		scannerAssertRecordedGitOperations(t, calls, fixture.root,
+		scannerAssertRecordedGitOperations(t, calls, fixture.expectedRoot,
 			"status --porcelain=v2 --branch -z --untracked-files=all",
 			"ls-files --stage --others --exclude-standard -t -z",
 		)
@@ -824,33 +824,33 @@ func TestUCIScannerCandidateCacheMatchesUncachedRealGit(t *testing.T) {
 		scannerRealGit(t, fixture.root, "switch", "cache-branch")
 		result, calls := fixture.scanAndCompare(t)
 		scannerAssertOptionalString(t, result.Observation.RefLabel, "cache-branch", true, "branch observation.ref_label")
-		scannerAssertRecordedGitOperations(t, calls, fixture.root, "status --porcelain=v2 --branch -z --untracked-files=all")
+		scannerAssertRecordedGitOperations(t, calls, fixture.expectedRoot, "status --porcelain=v2 --branch -z --untracked-files=all")
 
 		scannerRealGit(t, fixture.root, "checkout", "--detach")
 		result, calls = fixture.scanAndCompare(t)
 		scannerAssertOptionalString(t, result.Observation.RefLabel, "", false, "detached observation.ref_label")
-		scannerAssertRecordedGitOperations(t, calls, fixture.root, "status --porcelain=v2 --branch -z --untracked-files=all")
+		scannerAssertRecordedGitOperations(t, calls, fixture.expectedRoot, "status --porcelain=v2 --branch -z --untracked-files=all")
 	})
 
 	t.Run("unborn repository", func(t *testing.T) {
 		root := t.TempDir()
 		scannerRealGit(t, root, "init", "-b", "main")
 		scannerRealWrite(t, root, "unborn.go", []byte("package unborn\n"))
-		fixture := newScannerRealFixtureForRoot(root)
+		fixture := newScannerRealFixtureForRoot(t, root)
 		fixture.warm(t)
 		result, calls := fixture.scanAndCompare(t)
 		scannerAssertFile(t, result, "unborn.go", IndexFilePresent, ScannerExclusionNone, []byte("package unborn\n"))
-		scannerAssertRecordedGitOperations(t, calls, root, "status --porcelain=v2 --branch -z --untracked-files=all")
+		scannerAssertRecordedGitOperations(t, calls, fixture.expectedRoot, "status --porcelain=v2 --branch -z --untracked-files=all")
 	})
 
 	t.Run("linked worktree", func(t *testing.T) {
 		primary := newScannerRealFixture(t)
 		linkedRoot := filepath.Join(t.TempDir(), "linked")
 		scannerRealGit(t, primary.root, "worktree", "add", "--detach", linkedRoot, "HEAD")
-		fixture := newScannerRealFixtureForRoot(linkedRoot)
+		fixture := newScannerRealFixtureForRoot(t, linkedRoot)
 		fixture.warm(t)
 		_, calls := fixture.scanAndCompare(t)
-		scannerAssertRecordedGitOperations(t, calls, linkedRoot, "status --porcelain=v2 --branch -z --untracked-files=all")
+		scannerAssertRecordedGitOperations(t, calls, fixture.expectedRoot, "status --porcelain=v2 --branch -z --untracked-files=all")
 	})
 
 	t.Run("index content changes with identical size and modification time", func(t *testing.T) {
@@ -860,7 +860,7 @@ func TestUCIScannerCandidateCacheMatchesUncachedRealGit(t *testing.T) {
 		scannerRealWrite(t, fixture.root, "tracked.go", []byte("package fixture\nconst Version = 2\n"))
 		scannerRealGit(t, fixture.root, "add", "--", "tracked.go")
 		_, refreshCalls := fixture.scanAndCompare(t)
-		scannerAssertRecordedGitOperations(t, refreshCalls, fixture.root,
+		scannerAssertRecordedGitOperations(t, refreshCalls, fixture.expectedRoot,
 			"status --porcelain=v2 --branch -z --untracked-files=all",
 			"ls-files --stage --others --exclude-standard -t -z",
 		)
@@ -892,7 +892,7 @@ func TestUCIScannerCandidateCacheMatchesUncachedRealGit(t *testing.T) {
 			t.Fatalf("index replacement fingerprint changed despite equal size and modification time")
 		}
 		_, calls := fixture.scanAndCompare(t)
-		scannerAssertRecordedGitOperations(t, calls, fixture.root,
+		scannerAssertRecordedGitOperations(t, calls, fixture.expectedRoot,
 			"status --porcelain=v2 --branch -z --untracked-files=all",
 			"ls-files --stage --others --exclude-standard -t -z",
 		)
@@ -905,13 +905,13 @@ func TestUCIScannerCandidateCacheMatchesUncachedRealGit(t *testing.T) {
 		if _, err := fixture.scanner.Scan(t.Context(), AuthorizedRootEvidence{RootPath: fixture.root}); err == nil {
 			t.Fatal("Scan() error = nil after candidate enumeration failure")
 		}
-		scannerAssertRecordedGitOperations(t, fixture.runner.calls, fixture.root,
+		scannerAssertRecordedGitOperations(t, fixture.runner.calls, fixture.expectedRoot,
 			"rev-parse --show-toplevel --absolute-git-dir --git-common-dir --git-path HEAD --show-object-format",
 			"status --porcelain=v2 --branch -z --untracked-files=all",
 			"ls-files --stage --others --exclude-standard -t -z",
 		)
 		_, calls := fixture.scanAndCompare(t)
-		scannerAssertRecordedGitOperations(t, calls, fixture.root,
+		scannerAssertRecordedGitOperations(t, calls, fixture.expectedRoot,
 			"status --porcelain=v2 --branch -z --untracked-files=all",
 			"ls-files --stage --others --exclude-standard -t -z",
 		)
@@ -919,9 +919,10 @@ func TestUCIScannerCandidateCacheMatchesUncachedRealGit(t *testing.T) {
 }
 
 type scannerRealFixture struct {
-	root    string
-	runner  *scannerRecordingGitRunner
-	scanner *Scanner
+	root         string
+	expectedRoot string
+	runner       *scannerRecordingGitRunner
+	scanner      *Scanner
 }
 
 func newScannerRealFixture(t *testing.T) *scannerRealFixture {
@@ -934,22 +935,32 @@ func newScannerRealFixture(t *testing.T) *scannerRealFixture {
 	scannerRealWrite(t, root, "Case.go", []byte("package fixture\nconst Case = true\n"))
 	scannerRealGit(t, root, "add", "--", "tracked.go", "Case.go")
 	scannerRealGit(t, root, "commit", "-m", "scanner fixture")
-	return newScannerRealFixtureForRoot(root)
+	return newScannerRealFixtureForRoot(t, root)
 }
 
-func newScannerRealFixtureForRoot(root string) *scannerRealFixture {
+func newScannerRealFixtureForRoot(t *testing.T, root string) *scannerRealFixture {
+	t.Helper()
+	expectedRoot, err := scannerAuthorizedRoot(root)
+	if err != nil {
+		t.Fatalf("normalize scanner fixture root: %v", err)
+	}
+	expectedRoot, err = scannerPhysicalRoot(expectedRoot)
+	if err != nil {
+		t.Fatalf("resolve scanner fixture root: %v", err)
+	}
 	runner := &scannerRecordingGitRunner{}
 	return &scannerRealFixture{
-		root:    root,
-		runner:  runner,
-		scanner: NewScanner(runner, OSScannerFileSystem{}, ScannerPolicy{IncludeUntracked: true}),
+		root:         root,
+		expectedRoot: expectedRoot,
+		runner:       runner,
+		scanner:      NewScanner(runner, OSScannerFileSystem{}, ScannerPolicy{IncludeUntracked: true}),
 	}
 }
 
 func (fixture *scannerRealFixture) warm(t *testing.T) {
 	t.Helper()
 	_, calls := fixture.scanAndCompare(t)
-	scannerAssertRecordedGitOperations(t, calls, fixture.root,
+	scannerAssertRecordedGitOperations(t, calls, fixture.expectedRoot,
 		"rev-parse --show-toplevel --absolute-git-dir --git-common-dir --git-path HEAD --show-object-format",
 		"status --porcelain=v2 --branch -z --untracked-files=all",
 		"ls-files --stage --others --exclude-standard -t -z",
