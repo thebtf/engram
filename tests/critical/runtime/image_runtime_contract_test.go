@@ -869,7 +869,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	latest := readFile(t, latestWorkflowPath)
 	for _, required := range []string{
 		"name: Promote Latest Release Images", "workflow_run:\n    workflows: [\"Release\", \"Docker Publish\"]\n    types: [completed]",
-		"if: github.event.workflow_run.conclusion == 'success' && ((github.event.workflow_run.name == 'Release' && github.event.workflow_run.event == 'push') || (github.event.workflow_run.name == 'Docker Publish' && github.event.workflow_run.event == 'workflow_run'))",
+		"if: github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && ((github.event.workflow_run.name == 'Release' && github.event.workflow_run.event == 'push') || (github.event.workflow_run.name == 'Docker Publish' && github.event.workflow_run.event == 'workflow_run')))",
 		"contents: read", "actions: read", "packages: write", "Initialize isolated promotion paths", `"DOCKER_CONFIG=$dockerConfig" | Add-Content -LiteralPath $env:GITHUB_ENV`, `"RECEIPT_DIR=$receiptDir" | Add-Content -LiteralPath $env:GITHUB_ENV`, "path: ${{ env.RECEIPT_DIR }}",
 		"gh api \"repos/$env:REPOSITORY_NAME/releases/latest\" --jq .tag_name", "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
 		"TRIGGERING_WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}", `gh api --paginate --slurp "repos/$env:REPOSITORY_NAME/actions/runs/$triggeringWorkflowRunID/jobs?per_page=100"`, "Where-Object { $_.name -ceq 'publish-images' }", "if ($publishJobs.Count -ne 1)", "status -cne 'completed'", "conclusion -cne 'success'",
