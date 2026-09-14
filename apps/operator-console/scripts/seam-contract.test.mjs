@@ -570,7 +570,7 @@ test('projects control plane archives projects through typed soft-delete confirm
   assert.match(mockOperatorApiSource, /worker_port:\s*\{\s*Int64:\s*37777,\s*Valid:\s*true\s*\}/, 'Mock API must exercise Go sql.NullInt64-shaped session detail fields')
   assert.match(mockOperatorApiSource, /const projectDeleteMatch = path\.match\(\/\^\\\/api\\\/projects\\\/\(\[\^\/\]\+\)\$\/\)/, 'Mock API must implement DELETE /api/projects/{id} for browser smoke')
   assert.match(mockOperatorApiSource, /req\.method === 'DELETE' && projectDeleteMatch/, 'Mock project archive route must be DELETE-only')
-  assert.match(mockOperatorApiSource, /removed_at:\s*new Date\(\)\.toISOString\(\)/, 'Mock project archive must return removed_at like the live server')
+  assert.match(mockOperatorApiSource, /operation_state:\s*['"]completed['"],\s*readback:\s*\{\s*authoritative:\s*true,\s*kind:\s*['"]authorized_absence['"]\s*\}/, 'Mock project archive must return authoritative authorized-absence readback like the live server')
   assert.match(mockOperatorApiSource, /case '\/api\/sessions':/, 'Mock API must expose session detail lookup')
   assert.match(mockOperatorApiSource, /claudeSessionId/, 'Mock session detail must use the same claudeSessionId query seam as the page')
 })
