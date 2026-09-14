@@ -159,7 +159,7 @@ export const coverageProfiles = Object.freeze([
     name: "hap-fixture",
     target: "./internal/hap01cfixture",
     run: "^TestFixtureSeedRotateAndSnapshotIntegration$",
-    databasePrefix: "hap01c",
+    databasePrefix: "hap01c_s",
     databaseEnvironment: hapFixtureDatabaseEnv,
     resourceGroup: "isolated-fixture",
   },
