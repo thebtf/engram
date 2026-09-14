@@ -18,27 +18,18 @@
     "type": "User"
   },
   "transition": {
-    "consumed_epoch": "authority-0040",
-    "event_base_sha": "a5341af95136a12decd8e474759d2500de0bd34b"
+    "consumed_epoch": "authority-0041",
+    "event_base_sha": "af65e61b62c4e5a0249bdfd9d150310bcfeafd60"
   },
   "active_epoch": {
-    "id": "authority-0041",
-    "label": "authority-maintenance:authority-0041",
+    "id": "authority-0042",
+    "label": "authority-maintenance:authority-0042",
     "exact_changes": [
       {
         "status": "M",
         "path": ".github/authority-policy.json"
-      },
-      {
-        "status": "M",
-        "path": "scripts/production-gates/build-and-scan-images.ps1"
       }
     ],
-    "expected_head_blobs": [
-      {
-        "path": "scripts/production-gates/build-and-scan-images.ps1",
-        "git_blob": "ab3cea488d16c60c69aa7727e568fc472ba8ab1d"
-      }
-    ]
+    "expected_head_blobs": []
   }
 }
