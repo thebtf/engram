@@ -2518,22 +2518,20 @@ func TestAR2CommandEnvSanitizesBoundedCredentialFailure(t *testing.T) {
 		inlineEnvironmentKey = "fixture-inline-api-key"
 	)
 	dsn := "postgres://postgres:" + dsnPassword + "@127.0.0.1:5432/engram?sslmode=disable"
-	script := filepath.Join(t.TempDir(), "failure.cmd")
-	if err := os.WriteFile(script, []byte("@echo off\r\necho "+commandPassword+" "+dockerPassword+" "+dsn+" "+apiKey+" "+accessKey+" "+apiKeyAssignment+" "+accessKeyAssignment+" "+genericDSN+" "+bearerToken+" "+inlineEnvironmentKey+" 1>&2\r\nfor /L %%i in (1,1,256) do @echo fixture-diagnostic-padding 1>&2\r\nexit /b 23\r\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	environment := ar2FixtureEnvironment(t, "", map[string]string{"DATABASE_DSN": dsn})
-	output, err := ar2CommandEnv(context.Background(), t.TempDir(), environment, "cmd.exe", "/C", script,
+	args := []string{
 		"--password", commandPassword,
-		"-e", "POSTGRES_PASSWORD="+dockerPassword,
+		"-e", "POSTGRES_PASSWORD=" + dockerPassword,
 		"--api-key", apiKey,
 		"--access-key", accessKey,
-		"API_KEY="+apiKeyAssignment,
-		"ACCESS_KEY="+accessKeyAssignment,
-		"UPSTREAM_DSN="+genericDSN,
+		"API_KEY=" + apiKeyAssignment,
+		"ACCESS_KEY=" + accessKeyAssignment,
+		"UPSTREAM_DSN=" + genericDSN,
 		"Bearer", bearerToken,
-		"--env=API_KEY="+inlineEnvironmentKey,
-	)
+		"--env=API_KEY=" + inlineEnvironmentKey,
+	}
+	childArgs := append([]string{"-test.run=^TestAR2FixtureCommandChildProcess$", "--", ar2FixtureCommandChildMarker, "failure"}, args...)
+	environment := ar2FixtureEnvironment(t, "", map[string]string{"DATABASE_DSN": dsn})
+	output, err := ar2CommandEnv(context.Background(), t.TempDir(), environment, os.Args[0], childArgs...)
 	if err == nil {
 		t.Fatal("failing fixture command returned nil error")
 	}
@@ -2553,7 +2551,7 @@ func TestAR2CommandEnvSanitizesBoundedCredentialFailure(t *testing.T) {
 	if !strings.Contains(diagnostic, "[REDACTED]") {
 		t.Fatalf("fixture command diagnostic did not retain redaction marker: %s", diagnostic)
 	}
-	maxDiagnosticLength := len("cmd.exe failed: ") + len(exitError.Error()) + len(": ") + ar2FixtureCommandStderrLimit
+	maxDiagnosticLength := len(os.Args[0]+" failed: ") + len(exitError.Error()) + len(": ") + ar2FixtureCommandStderrLimit
 	if len(diagnostic) > maxDiagnosticLength {
 		t.Fatalf("fixture command diagnostic exceeded its stderr bound: got=%d want<=%d", len(diagnostic), maxDiagnosticLength)
 	}
@@ -2561,12 +2559,38 @@ func TestAR2CommandEnvSanitizesBoundedCredentialFailure(t *testing.T) {
 		t.Fatalf("fixture command diagnostic did not mark truncation: %s", diagnostic)
 	}
 
-	output, err = ar2CommandEnv(context.Background(), t.TempDir(), environment, "cmd.exe", "/C", "echo fixture-stdout")
+	output, err = ar2CommandEnv(context.Background(), t.TempDir(), environment, os.Args[0], "-test.run=^TestAR2FixtureCommandChildProcess$", "--", ar2FixtureCommandChildMarker, "success")
 	if err != nil {
 		t.Fatalf("successful fixture command: %v", err)
 	}
 	if strings.TrimSpace(string(output)) != "fixture-stdout" {
 		t.Fatalf("fixture command did not preserve stdout: %q", output)
+	}
+}
+
+const ar2FixtureCommandChildMarker = "ar2-fixture-command-child"
+
+func TestAR2FixtureCommandChildProcess(t *testing.T) {
+	for index, argument := range os.Args {
+		if argument != ar2FixtureCommandChildMarker {
+			continue
+		}
+		if index+1 >= len(os.Args) {
+			t.Fatal("fixture command child mode is missing")
+		}
+		switch os.Args[index+1] {
+		case "failure":
+			fmt.Fprintln(os.Stderr, strings.Join(os.Args[index+2:], " "))
+			for range 256 {
+				fmt.Fprintln(os.Stderr, "fixture-diagnostic-padding")
+			}
+			os.Exit(23)
+		case "success":
+			fmt.Fprintln(os.Stdout, "fixture-stdout")
+			os.Exit(0)
+		default:
+			t.Fatalf("fixture command child mode = %q", os.Args[index+1])
+		}
 	}
 }
 
@@ -2844,11 +2868,7 @@ func TestAR2FixtureCallableCaptureOwnsSuccessfulCorrelationsBeforeHookFailure(t 
 
 func TestAR2WrapFixtureCommandErrorRetainsSanitizedDiagnostic(t *testing.T) {
 	const secret = "fixture-hook-diagnostic-secret"
-	script := filepath.Join(t.TempDir(), "failure.cmd")
-	if err := os.WriteFile(script, []byte("@echo off\r\necho "+secret+" 1>&2\r\nexit /b 23\r\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, commandErr := ar2CommandEnv(context.Background(), t.TempDir(), ar2FixtureEnvironment(t, "", nil), "cmd.exe", "/C", script, "--api-key", secret)
+	_, commandErr := ar2CommandEnv(context.Background(), t.TempDir(), ar2FixtureEnvironment(t, "", nil), os.Args[0], "-test.run=^TestAR2FixtureCommandChildProcess$", "--", ar2FixtureCommandChildMarker, "failure", "--api-key", secret)
 	if commandErr == nil {
 		t.Fatal("failing fixture command returned nil error")
 	}
