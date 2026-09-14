@@ -100,11 +100,11 @@ func TestProxyHandleTool_SameProjectIDDifferentCWDKeepsSelectorAligned(t *testin
 		srv.mu.Lock()
 		req := srv.callReq
 		srv.mu.Unlock()
-		wantSelector, _, _, err := proxy.ResolveProjectSlug(cwd)
+		wantSelector, _, _, err := proxy.ResolveProjectSlug(context.Background(), cwd)
 		if err != nil {
 			t.Fatalf("resolve selector for %s: %v", cwd, err)
 		}
-		wantIdentity, err := proxy.ResolveProjectIdentityV2(cwd)
+		wantIdentity, err := proxy.ResolveProjectIdentityV2(context.Background(), cwd)
 		if err != nil {
 			t.Fatalf("resolve v2 identity for %s: %v", cwd, err)
 		}
