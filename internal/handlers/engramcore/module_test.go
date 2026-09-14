@@ -167,12 +167,18 @@ func TestSlugCacheResolve_DoesNotCacheCancelledFallback(t *testing.T) {
 	cache = &slugCache{}
 	binDir := t.TempDir()
 	gitPath := filepath.Join(binDir, "git")
-	script := "#!/bin/sh\nexec /bin/sleep 10\n"
 	if runtime.GOOS == "windows" {
-		gitPath += ".cmd"
-		script = "@echo off\r\n%SystemRoot%\\System32\\ping.exe -n 10 127.0.0.1 >NUL\r\n"
-	}
-	if err := os.WriteFile(gitPath, []byte(script), 0o755); err != nil {
+		gitPath += ".exe"
+		sourcePath := filepath.Join(binDir, "delayed-git.go")
+		source := []byte("package main\n\nimport \"time\"\n\nfunc main() { time.Sleep(10 * time.Second) }\n")
+		if err := os.WriteFile(sourcePath, source, 0o600); err != nil {
+			t.Fatalf("write delayed git source: %v", err)
+		}
+		cmd := exec.Command("go", "build", "-o", gitPath, sourcePath)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("build delayed git: %v\n%s", err, output)
+		}
+	} else if err := os.WriteFile(gitPath, []byte("#!/bin/sh\nexec /bin/sleep 10\n"), 0o755); err != nil {
 		t.Fatalf("write delayed git: %v", err)
 	}
 
