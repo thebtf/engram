@@ -629,17 +629,23 @@ func TestUCIScannerInvalidatesCachedTopologyForMarkerChanges(t *testing.T) {
 			scannerAssertGitCallCount(t, fixture.git, 4)
 
 			marker := fixture.path(".git")
-			if test.linked {
-				if err := os.WriteFile(marker, []byte("gitdir: "+fixture.git.gitDir+"-replacement\n"), 0o600); err != nil {
-					t.Fatalf("replace linked marker content: %v", err)
-				}
-			} else {
-				if err := os.RemoveAll(marker); err != nil {
-					t.Fatalf("remove ordinary marker: %v", err)
-				}
-				if err := os.WriteFile(marker, []byte("gitdir: "+fixture.git.gitDir+"\n"), 0o600); err != nil {
-					t.Fatalf("replace ordinary marker: %v", err)
-				}
+			originalGitDir := fixture.git.gitDir
+			originalCommonGitDir := fixture.git.commonGitDir
+			originalHeadPath := fixture.git.headPath
+			if err := os.WriteFile(filepath.Join(originalGitDir, "index"), []byte("fixture index\n"), 0o600); err != nil {
+				t.Fatalf("write fixture index: %v", err)
+			}
+			replacementGitDir := filepath.Join(t.TempDir(), "replacement git dir")
+			if err := os.Rename(originalGitDir, replacementGitDir); err != nil {
+				t.Fatalf("preserve replacement Git directory: %v", err)
+			}
+			fixture.git.gitDir = replacementGitDir
+			fixture.git.headPath = filepath.Join(replacementGitDir, "HEAD")
+			if !test.linked {
+				fixture.git.commonGitDir = replacementGitDir
+			}
+			if err := os.WriteFile(marker, []byte("gitdir: "+replacementGitDir+"\n"), 0o600); err != nil {
+				t.Fatalf("replace marker content: %v", err)
 			}
 			if _, err := scanner.Scan(t.Context(), evidence); err != nil {
 				t.Fatalf("Scan after marker replacement error = %v", err)
@@ -654,13 +660,15 @@ func TestUCIScannerInvalidatesCachedTopologyForMarkerChanges(t *testing.T) {
 			}
 			scannerAssertGitCallCount(t, fixture.git, 7)
 
+			if err := os.Rename(replacementGitDir, originalGitDir); err != nil {
+				t.Fatalf("restore Git directory: %v", err)
+			}
+			fixture.git.gitDir = originalGitDir
+			fixture.git.commonGitDir = originalCommonGitDir
+			fixture.git.headPath = originalHeadPath
 			if test.linked {
-				if err := os.WriteFile(marker, []byte("gitdir: "+fixture.git.gitDir+"\n"), 0o600); err != nil {
+				if err := os.WriteFile(marker, []byte("gitdir: "+originalGitDir+"\n"), 0o600); err != nil {
 					t.Fatalf("restore linked marker: %v", err)
-				}
-			} else {
-				if err := os.MkdirAll(marker, 0o755); err != nil {
-					t.Fatalf("restore ordinary marker: %v", err)
 				}
 			}
 			if _, err := scanner.Scan(t.Context(), evidence); err != nil {
