@@ -14,14 +14,6 @@ const sessionStartTimeoutMs = 5000;
 const ambientTimeoutMs = 500;
 const hiddenContextLimit = 12000;
 const descriptorCacheLimit = 64;
-const quietEnvironmentKeys = Object.freeze([
-  'ENGRAM_QUIET',
-  'ENGRAM_QUIET_HOOKS',
-  'CLAUDE_PLUGIN_OPTION_ENGRAM_QUIET',
-  'CLAUDE_PLUGIN_OPTION_engram_quiet',
-  'CLAUDE_PLUGIN_OPTION_QUIET',
-  'CLAUDE_PLUGIN_OPTION_quiet',
-]);
 
 function stringField(...values) {
   return values.find((value) => typeof value === 'string' && value !== '') || '';
@@ -68,20 +60,6 @@ function sameCwd(left, right) {
     : canonicalLeft === canonicalRight;
 }
 
-function explicitClientInstanceID() {
-  const value = process.env.ENGRAM_CLIENT_INSTANCE_ID;
-  return typeof value === 'string' && value !== '' ? value : '';
-}
-
-function explicitQuietMode() {
-  for (const key of quietEnvironmentKeys) {
-    const value = process.env[key];
-    if (typeof value === 'string' && value.trim() !== '') {
-      return /^(1|true|yes|on)$/i.test(value.trim());
-    }
-  }
-  return false;
-}
 
 function callbackDeadlineUnixMs(timeoutMs, now) {
   const startedAt = Math.floor(now());
@@ -126,7 +104,7 @@ export function createEngramMemoryExtension(options = {}) {
   const relay = options.relay ?? legacyRelay;
   const now = options.now ?? Date.now;
   const resolveDescriptor = options.resolveHookProjectDescriptorV3 ?? lib.resolveHookProjectDescriptorV3;
-  const isQuiet = options.isQuiet ?? explicitQuietMode;
+  const isQuiet = options.isQuiet ?? lib.isQuietMode;
   const cacheLimit = Number.isInteger(options.descriptorCacheLimit) && options.descriptorCacheLimit > 0
     ? options.descriptorCacheLimit
     : descriptorCacheLimit;
@@ -143,7 +121,7 @@ export function createEngramMemoryExtension(options = {}) {
 
   function sessionIdentity(event, ctx, deadlineUnixMs) {
     const facts = callbackFacts(event, ctx, true);
-    const clientInstanceID = explicitClientInstanceID();
+    const clientInstanceID = lib.getEngramConfig().clientInstanceID;
     if (!facts || !clientInstanceID) return null;
     let projectIdentityV3;
     try {
@@ -159,7 +137,7 @@ export function createEngramMemoryExtension(options = {}) {
 
   function ambientIdentity(event, ctx) {
     const facts = callbackFacts(event, ctx, true);
-    const clientInstanceID = explicitClientInstanceID();
+    const clientInstanceID = lib.getEngramConfig().clientInstanceID;
     if (!facts || !clientInstanceID) return null;
     const cachedEntry = descriptors.get(facts.hostSessionRef);
     const cached = normalizeProjectIdentityV3Descriptor(cachedEntry?.projectIdentityV3);

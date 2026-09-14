@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +31,52 @@ function withClientInstance(t, value = clientInstanceID) {
   t.after(() => {
     if (previous === undefined) delete process.env.ENGRAM_CLIENT_INSTANCE_ID;
     else process.env.ENGRAM_CLIENT_INSTANCE_ID = previous;
+  });
+}
+
+const runtimeConfigEnvironmentKeys = Object.freeze([
+  'ENGRAM_CONFIG_FILE', 'ENGRAM_DATA_DIR', 'CLAUDE_PLUGIN_DATA',
+  'ENGRAM_URL', 'ENGRAM_SERVER_URL', 'CLAUDE_PLUGIN_OPTION_server_url',
+  'CLAUDE_PLUGIN_OPTION_SERVER_URL', 'ENGRAM_CLAUDE_USERCONFIG_URL',
+  'ENGRAM_TOKEN', 'CLAUDE_PLUGIN_OPTION_api_token', 'CLAUDE_PLUGIN_OPTION_API_TOKEN',
+  'ENGRAM_CLAUDE_USERCONFIG_TOKEN',
+  'ENGRAM_CLIENT_INSTANCE_ID', 'CLAUDE_PLUGIN_OPTION_client_instance_id',
+  'CLAUDE_PLUGIN_OPTION_CLIENT_INSTANCE_ID', 'ENGRAM_CLAUDE_USERCONFIG_CLIENT_INSTANCE_ID',
+  'ENGRAM_QUIET', 'ENGRAM_QUIET_HOOKS', 'CLAUDE_PLUGIN_OPTION_ENGRAM_QUIET',
+  'CLAUDE_PLUGIN_OPTION_engram_quiet', 'CLAUDE_PLUGIN_OPTION_QUIET',
+  'CLAUDE_PLUGIN_OPTION_quiet',
+]);
+const clientIdentityEnvironmentKeys = Object.freeze([
+  'ENGRAM_CLIENT_INSTANCE_ID', 'CLAUDE_PLUGIN_OPTION_client_instance_id',
+  'CLAUDE_PLUGIN_OPTION_CLIENT_INSTANCE_ID', 'ENGRAM_CLAUDE_USERCONFIG_CLIENT_INSTANCE_ID',
+]);
+
+function withRuntimeConfig(t, config) {
+  const previous = new Map(runtimeConfigEnvironmentKeys.map((key) => [key, process.env[key]]));
+  for (const key of runtimeConfigEnvironmentKeys) delete process.env[key];
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-extension-config-'));
+  process.env.ENGRAM_CONFIG_FILE = path.join(directory, 'config.json');
+  fs.writeFileSync(process.env.ENGRAM_CONFIG_FILE, JSON.stringify(config));
+  t.after(() => {
+    fs.rmSync(directory, { recursive: true, force: true });
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+  return (values = {}) => {
+    for (const key of clientIdentityEnvironmentKeys) delete process.env[key];
+    Object.assign(process.env, values);
+  };
+}
+
+function runtimeConfigExtension(options = {}) {
+  return createEngramMemoryExtension({
+    now: () => 1_000,
+    resolveHookProjectDescriptorV3(cwd, clientID) {
+      return { ...projectIdentityV3, client_instance_id: clientID };
+    },
+    ...options,
   });
 }
 
@@ -100,6 +147,68 @@ test('factory installs only the supported OMP wrappers', () => {
   const { handlers } = adapterHarness();
   assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start']);
   assert.equal(typeof engramMemory, 'function');
+});
+
+test('standard config without hap_01b delivers the OMP session-start relay', async (t) => {
+  withRuntimeConfig(t, {
+    server_url: 'https://engram.example.test',
+    api_token: 'engram_test_keycard',
+    client_instance_id: 'config-install-alpha',
+  });
+  const calls = [];
+  const extension = runtimeConfigExtension({
+    relay: scriptedRelay([
+      relayResponse('IDENTITY_REGISTRATION'),
+      relayResponse('SESSION_START_CONTEXT'),
+    ], calls),
+  });
+
+  assert.ok(await extension.sessionStartMessage({ cwd: process.cwd(), sessionId: 'config-session' }, {}));
+  assert.equal(calls[0].body.projectIdentityV3.client_instance_id, 'config-install-alpha');
+  assert.deepEqual(calls.map(({ route }) => route), ['IDENTITY_REGISTRATION', 'SESSION_START_CONTEXT']);
+});
+
+test('OMP client identity follows canonical environment, option, then config precedence', async (t) => {
+  const setClientIdentity = withRuntimeConfig(t, {
+    server_url: 'https://engram.example.test',
+    api_token: 'engram_test_keycard',
+    client_instance_id: 'config-install-alpha',
+  });
+
+  for (const [values, expected] of [
+    [{ ENGRAM_CLIENT_INSTANCE_ID: 'env-install-alpha', CLAUDE_PLUGIN_OPTION_client_instance_id: 'option-install-alpha' }, 'env-install-alpha'],
+    [{ CLAUDE_PLUGIN_OPTION_client_instance_id: 'option-install-alpha' }, 'option-install-alpha'],
+    [{}, 'config-install-alpha'],
+  ]) {
+    setClientIdentity(values);
+    const calls = [];
+    const extension = runtimeConfigExtension({
+      relay: scriptedRelay([
+        relayResponse('IDENTITY_REGISTRATION'),
+        relayResponse('SESSION_START_CONTEXT'),
+      ], calls),
+    });
+    assert.ok(await extension.sessionStartMessage({ cwd: process.cwd(), sessionId: `identity-${expected}` }, {}));
+    assert.equal(calls[0].body.projectIdentityV3.client_instance_id, expected);
+  }
+});
+
+test('quiet config suppresses OMP relay injection without env forwarding', async (t) => {
+  const setClientIdentity = withRuntimeConfig(t, {
+    server_url: 'https://engram.example.test',
+    api_token: 'engram_test_keycard',
+    client_instance_id: 'config-install-alpha',
+    quiet: true,
+  });
+  setClientIdentity({ ENGRAM_CLIENT_INSTANCE_ID: 'env-install-alpha' });
+  let calls = 0;
+  const extension = runtimeConfigExtension({
+    relay: { async call() { calls += 1; return relayResponse('IDENTITY_REGISTRATION'); } },
+  });
+
+  assert.equal(await extension.sessionStartMessage({ cwd: process.cwd(), sessionId: 'quiet-config' }, {}), null);
+  assert.equal(await extension.ambientMessage({ cwd: process.cwd(), sessionId: 'quiet-config', prompt: 'prompt' }, {}), null);
+  assert.equal(calls, 0);
 });
 
 test('session start performs relay identity then structured context with one absolute deadline', async (t) => {
