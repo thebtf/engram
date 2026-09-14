@@ -81,7 +81,7 @@ func TestDockerReleaseRefFreshnessGuard(t *testing.T) {
 func TestOperatorConsoleRuntimeTargetContract(t *testing.T) {
 	repo := repositoryRoot(t)
 	requireFileContains(t, filepath.Join(repo, "Dockerfile"),
-		"gcr.io/distroless/nodejs22-debian13@sha256:773a62fbe24a3f8c8b24b16fd59154627f8b406737bc906f83bf1732bc8907dd",
+		"gcr.io/distroless/nodejs22-debian13@sha256:412a5f8fce490bcff01fc2a73ec43bb62071e1b71dd847eeacaae7b8ecef1dc1",
 		"NUXT_OPERATOR_API_TARGET=http://server:37777",
 		"CMD [\".output/server/index.mjs\"]",
 		"http://127.0.0.1:3000/api/ready",
@@ -209,7 +209,7 @@ func TestServerImageContract(t *testing.T) {
 		verifyDockerReleaseRefFreshnessGuard(t, repo)
 	})
 	requireFileContains(t, filepath.Join(repo, "Dockerfile"),
-		"gcr.io/distroless/base-debian13@sha256:b78832f41c8128046807c24840ebee4f1c18ba7870eed423d8750c272c15e147",
+		"gcr.io/distroless/base-debian13@sha256:0ebad3510af52aefe45045cc01b07564570be4feecf8d9f93d3a05d1b5f2f93b",
 		"HOME=/var/lib/engram",
 		"http://127.0.0.1:37777/api/ready",
 		"VERSION must be canonical SemVer or sha-<40 lowercase hex>",
