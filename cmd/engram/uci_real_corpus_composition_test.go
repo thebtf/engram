@@ -333,7 +333,7 @@ func uciFreezeRealCorpusManifest(ctx context.Context, root, semanticQuery string
 	)
 	scan, err := scanner.Scan(ctx, uci.AuthorizedRootEvidence{RootPath: root})
 	if err != nil {
-		return uciRealCorpusFrozenManifest{}, errors.New("real-corpus composition scanner failed")
+		return uciRealCorpusFrozenManifest{}, fmt.Errorf("real-corpus composition scanner failed: %w", err)
 	}
 	if scan.Census.Outcome != uci.IndexScanComplete || !scan.Census.Complete || !scan.Census.CanDeleteAll || scan.Coverage.Structural != uci.IndexCoverageComplete {
 		return uciRealCorpusFrozenManifest{}, errors.New("real-corpus composition scanner census is incomplete")
@@ -1932,6 +1932,13 @@ func TestUCIRealCorpusFreezeIncludesUntrackedCanaryDelta(t *testing.T) {
 	}
 	if _, err := uciFreezeRealCorpusManifest(context.Background(), root, "package"); err == nil {
 		t.Fatal("corpus-overlapping semantic query was accepted")
+	}
+}
+
+func TestUCIRealCorpusFreezeReportsScannerCause(t *testing.T) {
+	_, err := uciFreezeRealCorpusManifest(t.Context(), filepath.Join(t.TempDir(), "missing"), "semanticallydisjointtoken")
+	if !errors.Is(err, uci.ErrScannerInvalidRoot) {
+		t.Fatalf("scanner error = %v, want wrapped invalid-root cause", err)
 	}
 }
 
