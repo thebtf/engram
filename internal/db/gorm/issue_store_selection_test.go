@@ -136,6 +136,12 @@ func TestIssueStoreApplySelectionOperationPostgres(t *testing.T) {
 	require.NoError(t, getErr)
 	require.Empty(t, clearedCurrent.Labels)
 
+	directLabelTarget := issueSelectionTestRows(t, db, []int64{ids[10]})[0]
+	require.NoError(t, store.UpdateIssueFields(ctx, directLabelTarget.ID, "", "", "", "", []string{}))
+	directCleared, _, getErr := store.GetIssue(ctx, directLabelTarget.ID)
+	require.NoError(t, getErr)
+	require.Equal(t, models.JSONStringArray{}, directCleared.Labels)
+
 	statusTarget := issueSelectionTestRows(t, db, []int64{ids[9]})[0]
 	status := "resolved"
 	resolvedResult, err := store.ApplyIssueSelectionOperation(ctx, IssueSelectionOperation{

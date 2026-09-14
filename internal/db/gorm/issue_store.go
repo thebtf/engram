@@ -775,7 +775,7 @@ func applyIssueSelectionActionTx(tx *gorm.DB, row *Issue, action IssueSelectionA
 	case IssueSelectionPriority:
 		err = updateIssueFieldsTx(tx, row.ID, "", "", *action.Priority, "", nil, now)
 	case IssueSelectionLabels:
-		labels := append([]string(nil), (*action.Labels)...)
+		labels := append([]string{}, (*action.Labels)...)
 		err = updateIssueFieldsTx(tx, row.ID, "", "", "", "", labels, now)
 	case IssueSelectionStatus:
 		switch *action.Status {
