@@ -100,7 +100,6 @@ export const coverageProfiles = Object.freeze([
     name: "issues",
     target: "./internal/db/gorm",
     run: "^(TestIssueStore|TestCloseIssue|TestAcknowledge)",
-    skip: "^TestIssueStoreApplySelectionOperationPostgres$",
     databasePrefix: "sonar_issues",
   },
   { name: "purge", target: "./internal/db/gorm", run: "^TestPurge", databasePrefix: "sonar_purge" },
