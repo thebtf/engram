@@ -1134,3 +1134,170 @@ func TestCodebaseIndex_FlagOffReturnsError(t *testing.T) {
 	require.Error(t, err, "codebase_index must return an error when flag is off")
 	assert.Contains(t, err.Error(), "ENGRAM_CODE_INTEL_ENABLED")
 }
+
+func TestCodebaseIndexRejectsMalformedRequestsBeforeResolution(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	p := testProjectContext("proj-malformed-index", t.TempDir())
+
+	for _, test := range []struct {
+		name string
+		args json.RawMessage
+	}{
+		{name: "empty request", args: nil},
+		{name: "empty root", args: json.RawMessage(`{"context_handle":"handle-proj-malformed-index","root":""}`)},
+		{name: "unknown field", args: json.RawMessage(`{"context_handle":"handle-proj-malformed-index","root":"ok","project":"forbidden"}`)},
+		{name: "multiple JSON values", args: json.RawMessage(`{"context_handle":"handle-proj-malformed-index"} {}`)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			core := &fakeCore{}
+			raw, err := newTestModule(core).HandleTool(testTransportContext(p), p, "codebase_index", test.args)
+			require.Nil(t, raw)
+			require.Error(t, err)
+			resolved, proxied := core.callCounts()
+			require.Zero(t, resolved, "invalid index request must not resolve a target")
+			require.Zero(t, proxied)
+		})
+	}
+}
+
+func TestCodebaseStatusDegradesMalformedServerPayloads(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	p := testProjectContext("proj-malformed-status", t.TempDir())
+
+	for _, response := range []json.RawMessage{
+		json.RawMessage(`null`),
+		json.RawMessage(`[]`),
+		json.RawMessage(`{"type":"text"}`),
+		testStatusContentEnvelope(t, []json.RawMessage{testStatusTextBlock(t, json.RawMessage(`{"total_chunks":1}`))}, true),
+	} {
+		mod := newTestModule(&fakeCore{statusResponse: response})
+		raw, err := mod.HandleTool(testTransportContext(p), p, "codebase_status", testStatusArgs(p))
+		require.NoError(t, err)
+		var status struct {
+			ServerCountsAvailable bool   `json:"server_counts_available"`
+			ServerCountsError     string `json:"server_counts_error"`
+		}
+		require.NoError(t, json.Unmarshal(raw, &status))
+		require.False(t, status.ServerCountsAvailable)
+		require.Contains(t, status.ServerCountsError, "failed to parse server response")
+	}
+}
+
+func TestCodebaseStatusBarrierRejectsChangedTargetAndUnavailableServerEvidence(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	p := testProjectContext("proj-barrier-boundary", t.TempDir())
+	contextHandle := "handle-" + p.ID
+
+	t.Run("target changes while waiting", func(t *testing.T) {
+		initial := fakeDefaultIndexBinding()
+		changed := initial.Clone()
+		changed.Scope.CheckoutID = "88888888-8888-4888-8888-888888888888"
+		changed.Context.CheckoutID = changed.Scope.CheckoutID
+		var changeAfterBarrierResolution atomic.Bool
+		var targetChanged atomic.Bool
+		core := &fakeCore{
+			resolveBinding: func(_ int, _ string) uci.IndexBinding {
+				if targetChanged.Load() {
+					return changed
+				}
+				return initial
+			},
+			afterResolve: func(_ int) {
+				if changeAfterBarrierResolution.CompareAndSwap(true, false) {
+					targetChanged.Store(true)
+				}
+			},
+		}
+		mod := newTestModule(core)
+		h := moduletest.New(t)
+		require.NoError(t, h.Register(mod))
+		h.Freeze()
+
+		startedRaw, err := h.CallToolWithProject(testTransportContext(p), p, "codebase_index", testIndexArgsForHandle(p, contextHandle))
+		require.NoError(t, err)
+		var started struct {
+			RunID string `json:"run_id"`
+		}
+		require.NoError(t, json.Unmarshal(startedRaw, &started))
+		drainIndex(t, h, p)
+		_, proxyCallsBeforeBarrier := core.callCounts()
+		changeAfterBarrierResolution.Store(true)
+
+		raw, err := h.CallToolWithProject(testTransportContext(p), p, "codebase_status", testStatusArgsWithBarrier(contextHandle, started.RunID, 1))
+		require.Nil(t, raw)
+		require.ErrorContains(t, err, "target changed while waiting for local barrier")
+		_, proxied := core.callCounts()
+		require.Equal(t, proxyCallsBeforeBarrier, proxied, "a changed authorization target must not proxy old server evidence")
+	})
+
+	t.Run("server evidence is unavailable", func(t *testing.T) {
+		core := &fakeCore{statusErr: context.DeadlineExceeded}
+		mod := newTestModule(core)
+		h := moduletest.New(t)
+		require.NoError(t, h.Register(mod))
+		h.Freeze()
+
+		startedRaw, err := h.CallToolWithProject(testTransportContext(p), p, "codebase_index", testIndexArgsForHandle(p, contextHandle))
+		require.NoError(t, err)
+		var started struct {
+			RunID string `json:"run_id"`
+		}
+		require.NoError(t, json.Unmarshal(startedRaw, &started))
+		drainIndex(t, h, p)
+
+		raw, err := h.CallToolWithProject(testTransportContext(p), p, "codebase_status", testStatusArgsWithBarrier(contextHandle, started.RunID, 1))
+		require.Nil(t, raw)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.ErrorContains(t, err, "load local barrier status")
+	})
+}
+
+func TestCodebaseToolsFailClosedForUnavailableAndUnresolvableCore(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	p := testProjectContext("proj-core-boundary", t.TempDir())
+	ctx := testTransportContext(p)
+
+	for _, test := range []struct {
+		name string
+		tool string
+		args json.RawMessage
+	}{
+		{name: "index", tool: "codebase_index", args: testIndexArgs(p)},
+		{name: "status", tool: "codebase_status", args: testStatusArgs(p)},
+	} {
+		t.Run("unavailable "+test.name, func(t *testing.T) {
+			raw, err := newTestModule(nil).HandleTool(ctx, p, test.tool, test.args)
+			require.Nil(t, raw)
+			require.ErrorContains(t, err, "SOURCE_UNAVAILABLE")
+		})
+		t.Run("resolution failure "+test.name, func(t *testing.T) {
+			expected := errors.New("authoritative target unavailable")
+			core := &fakeCore{resolveErr: expected}
+			raw, err := newTestModule(core).HandleTool(ctx, p, test.tool, test.args)
+			require.Nil(t, raw)
+			require.ErrorIs(t, err, expected)
+			resolved, proxied := core.callCounts()
+			require.Equal(t, 1, resolved)
+			require.Zero(t, proxied)
+		})
+	}
+
+	raw, err := newTestModule(&fakeCore{}).HandleTool(ctx, p, "unknown", json.RawMessage(`{}`))
+	require.Nil(t, raw)
+	require.ErrorContains(t, err, "unknown tool")
+}
+
+func TestCodebaseIndexRequiresSelectedWorkingDirectoryAfterResolution(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	p := testProjectContext("proj-no-working-directory", "")
+	core := &fakeCore{}
+	raw, err := newTestModule(core).HandleTool(testTransportContext(p), p, "codebase_index", json.RawMessage(`{"context_handle":"handle-proj-no-working-directory"}`))
+	require.Nil(t, raw)
+	require.ErrorContains(t, err, "current session working directory is required")
+	resolved, proxied := core.callCounts()
+	require.Equal(t, 1, resolved, "the authoritative target is resolved before local root validation")
+	require.Zero(t, proxied)
+	core.mu.Lock()
+	defer core.mu.Unlock()
+	require.Zero(t, core.indexCalled)
+}
