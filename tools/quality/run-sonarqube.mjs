@@ -552,31 +552,43 @@ export function parseDockerPort(output) {
   throw new RunnerError(`Docker did not report a valid PostgreSQL host port: ${output.trim()}`);
 }
 
+function parseAtomicCoverage(contents, source) {
+  const value = String(contents);
+  const lines = value.split(/\r?\n/);
+  if (/\r?\n$/.test(value)) lines.pop();
+  if (!/^mode:\s*\S+\s*$/.test(lines[0] || "")) throw new RunnerError(`Malformed coverprofile header: ${source}`);
+  if (lines[0] !== "mode: atomic") throw new RunnerError(`Coverage mode must be atomic in ${source}`);
+  const blocks = new Map();
+  for (const line of lines.slice(1)) {
+    const block = /^(.+):(\d+)\.(\d+),(\d+)\.(\d+)\s+(\d+)\s+(\d+)$/.exec(line);
+    if (!block) throw new RunnerError(`Malformed coverprofile block in ${source}: ${line}`);
+    const [startLine, startColumn, endLine, endColumn, statements, hits] = block.slice(2).map(Number);
+    if (![startLine, startColumn, endLine, endColumn, statements, hits].every(Number.isSafeInteger) ||
+      startLine < 1 || startColumn < 0 || endLine < startLine || endColumn < 0 ||
+      (endLine === startLine && endColumn <= startColumn) || statements < 1 || hits < 0) {
+      throw new RunnerError(`Invalid coverprofile block in ${source}: ${line}`);
+    }
+    const range = `${block[1]}:${block[2]}.${block[3]},${block[4]}.${block[5]}`;
+    const previous = blocks.get(range);
+    if (previous && previous.statements !== statements) throw new RunnerError(`Conflicting coverprofile statement count in ${source}: ${line}`);
+    blocks.set(range, { statements, hits: Math.max(previous?.hits || 0, hits) });
+  }
+  return blocks;
+}
+
 export function normalizeCoverage(reports) {
-  let mode = null;
+  if (!reports.length) throw new RunnerError("Coverage mode must be atomic, got none");
   const blocks = new Map();
   for (const report of reports) {
     const source = report.source || "coverage";
-    const lines = String(report.contents).split(/\r?\n/);
-    const header = /^mode:\s*(\S+)\s*$/.exec(lines[0] || "");
-    if (!header) throw new RunnerError(`Malformed coverprofile header: ${source}`);
-    if (mode && mode !== header[1]) throw new RunnerError(`Coverage mode mismatch: ${mode} and ${header[1]}`);
-    mode = header[1];
-    for (const line of lines.slice(1)) {
-      if (!line.trim()) continue;
-      const block = /^(.*:\d+\.\d+,\d+\.\d+)\s+(\d+)\s+(\d+)$/.exec(line);
-      if (!block) throw new RunnerError(`Malformed coverprofile block in ${source}: ${line}`);
-      const statements = Number(block[2]);
-      const hits = Number(block[3]);
-      if (!Number.isSafeInteger(statements) || statements < 1 || !Number.isSafeInteger(hits) || hits < 0) throw new RunnerError(`Invalid coverprofile block in ${source}: ${line}`);
-      const previous = blocks.get(block[1]);
-      if (previous && previous.statements !== statements) throw new RunnerError(`Conflicting coverprofile statement count in ${source}: ${line}`);
-      blocks.set(block[1], { statements, hits: Math.max(previous?.hits || 0, hits) });
+    for (const [range, block] of parseAtomicCoverage(report.contents, source)) {
+      const previous = blocks.get(range);
+      if (previous && previous.statements !== block.statements) throw new RunnerError(`Conflicting coverprofile statement count in ${source}: ${range}`);
+      blocks.set(range, { statements: block.statements, hits: Math.max(previous?.hits || 0, block.hits) });
     }
   }
-  if (mode !== "atomic") throw new RunnerError(`Coverage mode must be atomic, got ${mode || "none"}`);
-  if (blocks.size === 0) throw new RunnerError("No Go coverage blocks were collected");
-  return `mode: ${mode}\n${[...blocks.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([range, block]) => `${range} ${block.statements} ${block.hits}`).join("\n")}\n`;
+  if (!blocks.size) throw new RunnerError("No Go coverage blocks were collected");
+  return `mode: atomic\n${[...blocks.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([range, block]) => `${range} ${block.statements} ${block.hits}`).join("\n")}\n`;
 }
 
 export function mergeCoverProfiles(profilePaths, destination) {
@@ -587,15 +599,14 @@ export function mergeCoverProfiles(profilePaths, destination) {
   atomicWrite(destination, normalizeCoverage(reports));
 }
 
-function validateCoverage(path, expectedDigest = null) {
+function validateCoverage(path, expectedDigest = null, { allowZeroCoverableStatements = false } = {}) {
   if (!existsSync(path) || statSync(path).size === 0) throw new RunnerError(`Coverage artifact is missing or empty: ${path}`);
   const digest = shaFile(path);
   if (expectedDigest && digest !== expectedDigest) throw new RunnerError(`Coverage digest mismatch: ${path}`);
-  const lines = readFileSync(path, "utf8").split(/\r?\n/);
-  if (!/^mode:\s*atomic\s*$/.test(lines[0] || "") || !lines.slice(1).some((line) => line.trim())) {
-    throw new RunnerError(`Coverage artifact is not a nonempty atomic coverprofile: ${path}`);
-  }
-  return { sha256: digest, bytes: statSync(path).size };
+  const blocks = parseAtomicCoverage(readFileSync(path, "utf8"), path);
+  const coverage_classification = blocks.size ? "covered" : "zero_coverable_statements";
+  if (coverage_classification === "zero_coverable_statements" && !allowZeroCoverableStatements) throw new RunnerError(`Coverage artifact has no coverable statements: ${path}`);
+  return { sha256: digest, bytes: statSync(path).size, coverage_classification };
 }
 
 function safeRelative(root, value) {
@@ -918,10 +929,11 @@ function sameCandidate(left, right) {
   return left && right && ["repository_id", "worktree_id", "head", "tree", "inputs_sha256"].every((key) => left[key] === right[key]);
 }
 
-function artifactFrom(manifestRecord, artifact) {
+function artifactFrom(manifestRecord, artifact, { allowZeroCoverableStatements = false } = {}) {
   if (!artifact?.path || !artifact.sha256) throw new RunnerError("Profile artifact metadata is incomplete");
   const path = safeRelative(manifestRecord.runDir, artifact.path);
-  const verified = validateCoverage(path, artifact.sha256);
+  const verified = validateCoverage(path, artifact.sha256, { allowZeroCoverableStatements });
+  if (artifact.coverage_classification && artifact.coverage_classification !== verified.coverage_classification) throw new RunnerError("Coverage artifact classification mismatch");
   if (artifact.bytes !== verified.bytes) throw new RunnerError("Profile artifact byte count mismatch");
   return { path, ...verified };
 }
@@ -948,6 +960,7 @@ function rejectedTestEvidence(localArtifact, reason) {
     allowed_skip_obligations: [],
     passed_tests: new Set(),
     passed_packages: new Set(),
+    package_outputs: new Map(),
     reason,
   };
 }
@@ -985,6 +998,7 @@ function evaluateTestEvidence(manifestRecord, entry, profile, candidate, environ
   }
   const passedTests = new Set();
   const passedPackages = new Set();
+  const packageOutputs = new Map();
   const skipped = [];
   const reasons = new Map();
   try {
@@ -994,6 +1008,7 @@ function evaluateTestEvidence(manifestRecord, entry, profile, candidate, environ
       const key = value.Test ? testIdentity(value.Package || "", value.Test) : null;
       if (value.Action === "fail") return rejectedTestEvidence(true, "Go test events reported failure");
       if (key && value.Action === "output") reasons.set(key, `${reasons.get(key) || ""}${value.Output || ""}`);
+      if (value.Package && !value.Test && value.Action === "output") packageOutputs.set(value.Package, `${packageOutputs.get(value.Package) || ""}${value.Output || ""}`);
       if (key && value.Action === "pass") passedTests.add(key);
       if (value.Package && !value.Test && value.Action === "pass") passedPackages.add(value.Package);
       if (key && value.Action === "skip") skipped.push({ package: value.Package || "", test: value.Test, reason: reasons.get(key)?.trim() || "" });
@@ -1022,14 +1037,17 @@ function evaluateTestEvidence(manifestRecord, entry, profile, candidate, environ
     allowed_skip_obligations: obligations,
     passed_tests: passedTests,
     passed_packages: passedPackages,
+    package_outputs: packageOutputs,
     reason: null,
   };
 }
 
-function validTestEvidence(manifestRecord, entry, profile, candidate, environment) {
-  if (entry.status !== "passed" || entry.fingerprint !== fingerprintProfile(profile, candidate, environment)) return false;
-  const evidence = evaluateTestEvidence(manifestRecord, entry, profile, candidate, environment);
-  return evidence.execution === "passed" && evidence.local_artifact === "passed" && evidence.campaign_obligations === "passed";
+function zeroCoverableEvidence(evidence, entry) {
+  const expectedPackages = new Set(entry.expected_tests.map((test) => test.package));
+  return expectedPackages.size > 0 && [...expectedPackages].every((packageName) =>
+    evidence.passed_packages.has(packageName) &&
+    String(evidence.package_outputs.get(packageName) || "").split(/\r?\n/).some((line) => line === "coverage: [no statements]"),
+  );
 }
 
 export function reusableProfile(manifestRecord, profile, candidate, environment) {
@@ -1040,14 +1058,19 @@ export function reusableProfile(manifestRecord, profile, candidate, environment)
   const sourceRecord = entry.source_run_id ? referencedRun(manifestRecord, entry.source_run_id, candidate, environment) : manifestRecord;
   if (!sourceRecord) return null;
   const sourceEntry = sourceRecord.manifest?.profiles?.find((item) => item.name === profile.name);
+  if (!sourceEntry || sourceEntry.status !== "passed" || sourceEntry.fingerprint !== fingerprintProfile(profile, candidate, environment)) return null;
+  const evidence = evaluateTestEvidence(sourceRecord, sourceEntry, profile, candidate, environment);
+  if (evidence.execution !== "passed" || evidence.local_artifact !== "passed" || evidence.campaign_obligations !== "passed") return null;
   try {
-    if (!sourceEntry || !validTestEvidence(sourceRecord, sourceEntry, profile, candidate, environment)) return null;
-    return { entry, artifact: artifactFrom(sourceRecord, sourceEntry.coverage), sourceRun: entry.source_run_id || manifest.run_id };
+    return {
+      entry,
+      artifact: artifactFrom(sourceRecord, sourceEntry.coverage, { allowZeroCoverableStatements: zeroCoverableEvidence(evidence, sourceEntry) }),
+      sourceRun: entry.source_run_id || manifest.run_id,
+    };
   } catch {
     return null;
   }
 }
-
 function findReusableProfiles(namespace, profiles, candidate, environment) {
   const found = new Map();
   for (const record of manifestsIn(namespace)) {
@@ -1739,17 +1762,18 @@ export async function runCoverageProfile(goCommand, profile, campaign, entry, cw
       },
     });
     finishGoEvents(state, (line) => testWriter.write(line), observeGoEvent);
-    const coverage = coveragePhase ? validateCoverage(coveragePath) : null;
     testWriter.finish();
     stderrWriter.finish();
-    if (coverage) entry.coverage = { path: relative(campaign.runDir, coveragePath), ...coverage };
-    else entry.coverage = { status: "not_applicable" };
     entry.test_events = { path: relative(campaign.runDir, eventPath), sha256: shaFile(eventPath), bytes: statSync(eventPath).size };
     entry.stderr = { path: relative(campaign.runDir, stderrPath), sha256: shaFile(stderrPath), bytes: statSync(stderrPath).size };
     entry.package_counts = { passed: state.passedPackages.size, failed: state.failedPackages.size, tests_passed: state.passedTests.size, tests_skipped: state.skippedTests.size };
     entry.unexpected_skip_count = 0;
+    const coverage = coveragePhase ? validateCoverage(coveragePath, null, { allowZeroCoverableStatements: true }) : null;
     const evidence = evaluateTestEvidence({ runDir: campaign.runDir, manifest: campaign.manifest }, entry, profile, candidate, baseEnvironment);
     if (evidence.execution !== "passed" || evidence.local_artifact !== "passed") throw new RunnerError(`${profile.name} ${evidence.reason}`);
+    if (coverage?.coverage_classification === "zero_coverable_statements" && !zeroCoverableEvidence(evidence, entry)) throw new RunnerError(`${profile.name} did not prove zero coverable statements`);
+    if (coverage) entry.coverage = { path: relative(campaign.runDir, coveragePath), ...coverage };
+    else entry.coverage = { status: "not_applicable" };
     entry.allowed_skip_obligations = evidence.allowed_skip_obligations;
     entry.status = "passed";
     entry.completed_at_utc = new Date().toISOString();
@@ -1879,7 +1903,7 @@ function validPackageUnitEvidence(record, entry, unit, candidate, environment) {
   const evidence = evaluateTestEvidence(source.record, source.entry, packageUnitProfile(unit), candidate, environment);
   if (evidence.execution !== "passed" || evidence.local_artifact !== "passed" || evidence.campaign_obligations !== "passed") return false;
   try {
-    if (unit.phase === "coverage") artifactFrom(source.record, source.entry.coverage);
+    if (unit.phase === "coverage") artifactFrom(source.record, source.entry.coverage, { allowZeroCoverableStatements: zeroCoverableEvidence(evidence, source.entry) });
     return unit.phase !== "coverage" || source.entry.coverage?.status !== "not_applicable";
   } catch {
     return false;
@@ -1906,7 +1930,7 @@ function findReusablePackageUnits(namespace, units, candidate, environment) {
 function packageUnitCoveragePath(campaign, entry) {
   if (!entry.source_run_id) return safeRelative(campaign.runDir, entry.coverage.path);
   const source = manifestsIn(campaign.namespace).find((record) => record.manifest.run_id === entry.source_run_id);
-  return artifactFrom(source, entry.coverage).path;
+  return artifactFrom(source, entry.coverage, { allowZeroCoverableStatements: entry.coverage?.coverage_classification === "zero_coverable_statements" }).path;
 }
 
 async function runBasePackageUnits(baseEntry, campaign, candidate, environment, options, execution, deadline, progress, goCommand, runtime) {
@@ -1930,7 +1954,7 @@ async function runBasePackageUnits(baseEntry, campaign, candidate, environment, 
       const cached = reusable.get(unit.id);
       const entry = { id: unit.id, unit, name: unit.id, descriptor: profileDescriptor(profile), fingerprint: fingerprintPackageUnit(unit, candidate, environment), status: "pending", attempt: 1, classification: unit.classification, invalidation_reasons: cached ? [] : [options.fresh ? "fresh-requested" : "no-exact-valid-attempt"] };
       if (cached) {
-        Object.assign(entry, cached.entry, { source_run_id: cached.sourceRun, source_artifact: cached.entry.coverage?.status === "not_applicable" ? null : { path: cached.entry.coverage.path, sha256: cached.entry.coverage.sha256, bytes: cached.entry.coverage.bytes } });
+        Object.assign(entry, cached.entry, { source_run_id: cached.sourceRun, source_artifact: cached.entry.coverage?.status === "not_applicable" ? null : { path: cached.entry.coverage.path, sha256: cached.entry.coverage.sha256, bytes: cached.entry.coverage.bytes, coverage_classification: cached.entry.coverage.coverage_classification } });
         progress.complete(unit.phase, { reused: true });
         event(campaign, "coverage", "unit_reused", { unit: unit.id, package: unit.importPath, source_run_id: cached.sourceRun });
       }
@@ -1997,8 +2021,8 @@ export async function collectCoverage(campaign, candidate, environment, options,
     if (cached) {
       entry.status = "passed";
       entry.source_run_id = cached.sourceRun;
-      entry.source_artifact = { path: cached.entry.coverage.path, sha256: cached.artifact.sha256, bytes: cached.artifact.bytes };
-      entry.coverage = { path: cached.entry.coverage.path, sha256: cached.artifact.sha256, bytes: cached.artifact.bytes };
+      entry.source_artifact = { path: cached.entry.coverage.path, sha256: cached.artifact.sha256, bytes: cached.artifact.bytes, coverage_classification: cached.artifact.coverage_classification };
+      entry.coverage = { path: cached.entry.coverage.path, sha256: cached.artifact.sha256, bytes: cached.artifact.bytes, coverage_classification: cached.artifact.coverage_classification };
       entry.test_events = cached.entry.test_events;
       entry.expected_tests = cached.entry.expected_tests;
       entry.expected_test_inventory_sha256 = cached.entry.expected_test_inventory_sha256;
@@ -2047,7 +2071,7 @@ export async function collectCoverage(campaign, candidate, environment, options,
       const entry = entries.get(profile.name);
       if (entry.source_run_id) {
         const source = manifestsIn(campaign.namespace).find((record) => record.manifest.run_id === entry.source_run_id);
-        return artifactFrom(source, entry.source_artifact).path;
+        return artifactFrom(source, entry.source_artifact, { allowZeroCoverableStatements: entry.source_artifact?.coverage_classification === "zero_coverable_statements" }).path;
       }
       return safeRelative(campaign.runDir, entry.coverage.path);
     }), mergePath);

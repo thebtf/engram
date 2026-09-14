@@ -149,6 +149,34 @@ test("cold profile evidence is reusable only for the exact candidate, profile, a
     rmSync(directory, { recursive: true, force: true });
   }
 });
+test("header-only atomic coverage is reusable only with proven zero-statement events", async () => {
+  const directory = temporaryDirectory();
+  try {
+    const profile = { name: "zero-coverage", target: "example/internal/version", race: false, coverpkg: "example/internal/version", packageConcurrency: 1, resourceGroup: "ordinary-package", baseUnit: true, unitPhase: "coverage", workPhase: "coverage", unitDirectory: "internal/version" };
+    const currentCandidate = candidate();
+    const currentEnvironment = { sha256: "zero-environment" };
+    const entry = { name: profile.name, attempt: 1, fingerprint: fingerprintProfile(profile, currentCandidate, currentEnvironment) };
+    const campaign = { runDir: join(directory, "run"), manifest: { candidate: currentCandidate, profiles: [entry] } };
+    mkdirSync(campaign.runDir, { recursive: true });
+    const events = '{"Action":"pass","Package":"example/internal/version","Test":"TestZero"}\n{"Action":"output","Package":"example/internal/version","Output":"coverage: [no statements]\\n"}\n{"Action":"pass","Package":"example/internal/version"}\n';
+    await runCoverageProfile("fake-go", profile, campaign, entry, directory, {}, null, { signal: new AbortController().signal }, new Deadline({ overallTimeout: 1000, coverageTimeout: 60, profileTimeout: 30, scannerTimeout: 60, qualityGateTimeout: 60 }), { activate() { }, meaningful() { }, deactivate() { }, location() { }, semantic() { }, output() { }, complete() { } }, [], Date.now() + 30000, currentCandidate, {
+      expectedTests: async () => [{ package: "example/internal/version", test: "TestZero" }],
+      runProcess: async (_command, args, context) => {
+        const coverage = args.find((argument) => argument.startsWith("-coverprofile="));
+        write(join(context.cwd, coverage.slice("-coverprofile=".length)), "mode: atomic\n");
+        context.onStdout(events);
+        return { stdout: "", stderr: "" };
+      },
+    });
+    assert.equal(entry.coverage.coverage_classification, "zero_coverable_statements");
+    assert.ok(reusableProfile({ runDir: campaign.runDir, manifest: { schema_version: 2, run_id: "11111111-1111-4111-8111-111111111111", candidate: currentCandidate, profiles: [entry] } }, profile, currentCandidate, currentEnvironment));
+    entry.coverage.sha256 = "0".repeat(64);
+    assert.equal(reusableProfile({ runDir: campaign.runDir, manifest: { schema_version: 2, run_id: "11111111-1111-4111-8111-111111111111", candidate: currentCandidate, profiles: [entry] } }, profile, currentCandidate, currentEnvironment), null);
+    assert.equal(entry.status, "passed");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("failed, skipped, partial, and digest-mismatched attempts remain retained but are rejected", () => {
   const directory = temporaryDirectory();
