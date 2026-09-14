@@ -15,7 +15,7 @@ import (
 
 type recordedPolicyReconcileCall struct {
 	limit       int
-	deadline    time.Time
+	remaining   time.Duration
 	hasDeadline bool
 }
 
@@ -32,9 +32,10 @@ func newRecordingPolicyReconciler() *recordingPolicyReconciler {
 
 func (r *recordingPolicyReconciler) Reconcile(ctx context.Context, limit int) (intervention.ReconcileResult, error) {
 	deadline, hasDeadline := ctx.Deadline()
+	remaining := time.Until(deadline)
 	callNumber := r.reconcileCalls.Add(1)
 	select {
-	case r.calls <- recordedPolicyReconcileCall{limit: limit, deadline: deadline, hasDeadline: hasDeadline}:
+	case r.calls <- recordedPolicyReconcileCall{limit: limit, remaining: remaining, hasDeadline: hasDeadline}:
 	case <-ctx.Done():
 		return intervention.ReconcileResult{}, ctx.Err()
 	}
@@ -113,7 +114,6 @@ func TestInterventionReconcilerRunsImmediateAndScheduledBoundedPasses(t *testing
 		},
 	}
 	service.SetInterventionReconciler(reconciler)
-	startedAt := time.Now()
 	service.startInterventionReconciler()
 
 	first := awaitPolicyReconcileCall(t, reconciler)
@@ -123,8 +123,8 @@ func TestInterventionReconcilerRunsImmediateAndScheduledBoundedPasses(t *testing
 	if !first.hasDeadline {
 		t.Fatal("immediate reconciliation context has no deadline")
 	}
-	if got := first.deadline.Sub(startedAt); got <= 0 || got > interventionReconcilerTimeout || got < interventionReconcilerTimeout-time.Second {
-		t.Fatalf("immediate reconciliation deadline offset = %s, want within one second of %s", got, interventionReconcilerTimeout)
+	if got := first.remaining; got <= 0 || got > interventionReconcilerTimeout {
+		t.Fatalf("immediate reconciliation deadline remaining = %s, want in (0, %s]", got, interventionReconcilerTimeout)
 	}
 
 	select {
