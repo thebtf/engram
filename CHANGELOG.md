@@ -16,22 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Made SonarQube retained skip evidence require a revalidated dedicated owner’s exact top-level test and terminal package pass, while preserving deferred base-unit execution and full nested test identities.
 - Made SonarQube coverage parsing fail closed on malformed atomic coverprofile blocks while retaining event-proven zero-coverable package units without fabricating coverage blocks.
 
-## [6.49.0] - 2026-09-13
+## [6.49.0] - 2026-09-14
 
 ### Added
 
-- Unified Code Intelligence semantic search for Russian-language queries, with Source, Checkout, and View/worktree identity carried through ACL-bound access.
-- First-index requests now execute their intended action on the real daemon.
-- Interactive Code Explorer search, continuation, graph traversal, and exact-source inspection.
+- Added unified Code Intelligence and the operator console, with multi-language, current-view, graph, and issue workflows.
 
 ### Fixed
 
-- Reliability and security hardening across Code Intelligence indexing, identity, and access paths.
-- Made local `make build` and `make install` preserve the source-defined daemon compatibility identity.
-
-### Changed
-
-- **OpenClaw plugin 3.9.0.** Code Intelligence identity compatibility across OpenClaw contexts.
+- Fixed cross-platform UCI behavior and operator-console readiness.
+- Refreshed image, Go, and npm security inputs to zero HIGH/CRITICAL findings and pinned truthful image provenance.
 
 ## [6.48.0] - 2026-08-18
 

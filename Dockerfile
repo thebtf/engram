@@ -82,7 +82,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
 
 # Build client-side binary for the existing release target.
 RUN CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -tags fts5 \
- -ldflags "-X main.Version=${VERSION} -X github.com/thebtf/engram/internal/version.Daemon=${VERSION} -s -w" \
+ -ldflags "-X main.Version=${VERSION} -s -w" \
  -o /out/engram ./cmd/engram
 
 # --- Server image ---
