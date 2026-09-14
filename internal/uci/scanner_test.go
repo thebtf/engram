@@ -92,6 +92,33 @@ func TestUCIScannerCanonicalizesAuthorizedRootAlias(t *testing.T) {
 		t.Fatalf("scan through authorized root alias: %v", err)
 	}
 	scannerAssertCensus(t, result, IndexScanComplete, true, true)
+	scannerAssertRecordedGitOperations(t, fixture.runner.calls, filepath.Clean(fixture.root),
+		"rev-parse --show-toplevel --absolute-git-dir --git-common-dir --git-path HEAD --show-object-format",
+		"status --porcelain=v2 --branch -z --untracked-files=all",
+		"ls-files --stage --others --exclude-standard -t -z",
+	)
+}
+
+func TestUCIScannerKeepsInjectedFilesystemRootLexical(t *testing.T) {
+	fixture := newScannerFixture(t, false)
+	fixture.write(t, "overlay.go", []byte("package fixture\n"))
+	fixture.git.tracked = []scannerGitPath{{Mode: "100644", Path: "overlay.go"}}
+
+	alias := filepath.Join(t.TempDir(), "overlay-alias")
+	if err := os.Symlink(fixture.root, alias); err != nil {
+		t.Skipf("directory aliases are unavailable: %v", err)
+	}
+	alias = filepath.Clean(alias)
+	fixture.files.setMode(alias, fs.ModeDir)
+	fixture.git.showTopLevel = alias
+
+	result, err := NewScanner(fixture.git, fixture.files, ScannerPolicy{}).Scan(t.Context(), AuthorizedRootEvidence{RootPath: alias})
+	if err != nil {
+		t.Fatalf("scan through injected filesystem alias: %v", err)
+	}
+	scannerAssertCensus(t, result, IndexScanComplete, true, true)
+	scannerAssertFile(t, result, "overlay.go", IndexFilePresent, "", []byte("package fixture\n"))
+	scannerAssertGitPlumbing(t, fixture.git, alias)
 }
 
 func TestUCIScannerSupportsDetachedUnbornAndObjectFormatStates(t *testing.T) {

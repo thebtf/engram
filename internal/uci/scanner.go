@@ -271,6 +271,15 @@ func (scanner *Scanner) Scan(ctx context.Context, evidence AuthorizedRootEvidenc
 	if err != nil {
 		return scanner.failed(result, started, err)
 	}
+	// Injected filesystems model their own namespace, so only the production
+	// filesystem may resolve aliases through the host OS.
+	switch scanner.files.(type) {
+	case OSScannerFileSystem, *OSScannerFileSystem:
+		root, err = scannerPhysicalRoot(root)
+		if err != nil {
+			return scanner.failed(result, started, err)
+		}
+	}
 
 	rootInfo, err := scanner.files.Lstat(root)
 	if err != nil || scannerInfoIsReparse(rootInfo) || !rootInfo.Mode.IsDir() {
@@ -1271,13 +1280,18 @@ func scannerAuthorizedRoot(raw string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%w: root normalization", ErrScannerInvalidRoot)
 	}
-	root = filepath.Clean(root)
-	if physical, err := filepath.EvalSymlinks(root); err == nil {
-		root = filepath.Clean(physical)
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return "", fmt.Errorf("%w: root normalization", ErrScannerInvalidRoot)
+	return filepath.Clean(root), nil
+}
+
+func scannerPhysicalRoot(root string) (string, error) {
+	physical, err := filepath.EvalSymlinks(root)
+	if err == nil {
+		return filepath.Clean(physical), nil
 	}
-	return root, nil
+	if errors.Is(err, fs.ErrNotExist) {
+		return root, nil
+	}
+	return "", fmt.Errorf("%w: root normalization", ErrScannerInvalidRoot)
 }
 
 func scannerJoinRoot(root, relativePath string) (string, error) {
