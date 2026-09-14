@@ -1271,7 +1271,13 @@ func scannerAuthorizedRoot(raw string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%w: root normalization", ErrScannerInvalidRoot)
 	}
-	return filepath.Clean(root), nil
+	root = filepath.Clean(root)
+	if physical, err := filepath.EvalSymlinks(root); err == nil {
+		root = filepath.Clean(physical)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("%w: root normalization", ErrScannerInvalidRoot)
+	}
+	return root, nil
 }
 
 func scannerJoinRoot(root, relativePath string) (string, error) {

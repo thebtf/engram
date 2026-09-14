@@ -80,6 +80,20 @@ func TestUCIScannerExcludesTrackedProjectAnchorFromCodeAdmission(t *testing.T) {
 	scannerAssertFileAbsent(t, result, ".engram-project")
 }
 
+func TestUCIScannerCanonicalizesAuthorizedRootAlias(t *testing.T) {
+	fixture := newScannerRealFixture(t)
+	alias := filepath.Join(t.TempDir(), "repository-alias")
+	if err := os.Symlink(fixture.root, alias); err != nil {
+		t.Skipf("directory aliases are unavailable: %v", err)
+	}
+
+	result, err := fixture.scanner.Scan(t.Context(), AuthorizedRootEvidence{RootPath: alias})
+	if err != nil {
+		t.Fatalf("scan through authorized root alias: %v", err)
+	}
+	scannerAssertCensus(t, result, IndexScanComplete, true, true)
+}
+
 func TestUCIScannerSupportsDetachedUnbornAndObjectFormatStates(t *testing.T) {
 	sha1 := strings.Repeat("a", 40)
 	sha256 := strings.Repeat("b", 64)
