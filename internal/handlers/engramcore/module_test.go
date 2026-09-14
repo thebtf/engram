@@ -74,12 +74,12 @@ func TestSlugCacheResolutionAndForgetSerialize(t *testing.T) {
 	identityStarted, identityDone := make(chan struct{}), make(chan struct{})
 	go func() {
 		close(slugStarted)
-		_ = cache.Resolve(project)
+		_ = cache.Resolve(context.Background(), project)
 		close(slugDone)
 	}()
 	go func() {
 		close(identityStarted)
-		_, _ = cache.ResolveIdentity(project)
+		_, _ = cache.ResolveIdentity(context.Background(), project)
 		close(identityDone)
 	}()
 	<-slugStarted

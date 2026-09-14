@@ -124,17 +124,17 @@ func containsProjectIdentityControl(value string) bool {
 // content-addressed by normalized remote+relative path. Non-git projects use a
 // strict additive anchor file published atomically without replacing an
 // existing identity, so concurrent first use never exposes partial JSON.
-func ResolveProjectIdentityV2(cwd string) (ProjectIdentityV2, error) {
+func ResolveProjectIdentityV2(ctx context.Context, cwd string) (ProjectIdentityV2, error) {
 	resolved, err := filepath.Abs(cwd)
 	if err != nil {
 		return ProjectIdentityV2{}, fmt.Errorf("resolve cwd: %w", err)
 	}
-	selector, displayName, _, err := ResolveProjectSlug(resolved)
+	selector, displayName, _, err := ResolveProjectSlug(ctx, resolved)
 	if err != nil {
 		return ProjectIdentityV2{}, err
 	}
 	legacyID := filepath.Base(resolved) + "_" + sha256Hex(resolved)[:6]
-	remote, relativePath, gitErr := getGitInfo(resolved)
+	remote, relativePath, gitErr := getGitInfo(ctx, resolved)
 	if gitErr != nil && !errors.Is(gitErr, errGitIdentityAbsent) {
 		return ProjectIdentityV2{}, fmt.Errorf("resolve git identity: %w", gitErr)
 	}
@@ -307,7 +307,7 @@ func publishProjectAnchorV2(dir, anchorPath string, anchor projectAnchorV2) (boo
 //
 // In both cases, a .engram-project JSON anchor file in the directory may override
 // displayName and, for non-git projects, the id itself.
-func ResolveProjectSlug(cwd string) (id string, displayName string, gitRemote string, err error) {
+func ResolveProjectSlug(ctx context.Context, cwd string) (id string, displayName string, gitRemote string, err error) {
 	resolved, resolveErr := filepath.Abs(cwd)
 	if resolveErr != nil {
 		return "", "", "", fmt.Errorf("resolve cwd: %w", resolveErr)
@@ -315,7 +315,7 @@ func ResolveProjectSlug(cwd string) (id string, displayName string, gitRemote st
 
 	dirName := filepath.Base(resolved)
 
-	remoteURL, relativePath, gitErr := getGitInfo(resolved)
+	remoteURL, relativePath, gitErr := getGitInfo(ctx, resolved)
 	if gitErr == nil && remoteURL != "" {
 		// Primary: git-remote-based ID (8 hex chars)
 		key := remoteURL + "/" + relativePath
@@ -382,8 +382,8 @@ func applyAnchorFile(dir, id, displayName string, storeID bool) (string, string)
 // getGitInfo runs the two git commands needed for the primary slug.
 // Both commands share a single context so the total timeout is bounded.
 // Returns (remoteURL, relativePath, error).
-func getGitInfo(cwd string) (remoteURL, relativePath string, err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func getGitInfo(ctx context.Context, cwd string) (remoteURL, relativePath string, err error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	rawRemote, err := runGit(ctx, cwd, "remote", "get-url", "origin")

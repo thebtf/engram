@@ -102,7 +102,7 @@ func (m *Module) Shutdown(_ context.Context) error {
 func (m *Module) OnSessionConnect(p muxcore.ProjectContext) {
 	// Trigger slug resolution eagerly so the first tools/call does not pay
 	// the git I/O cost. Ignore the return value — the cache owns it.
-	_ = m.cache.Resolve(p)
+	_ = m.cache.Resolve(context.Background(), p)
 	if m.deps.Logger != nil {
 		m.deps.Logger.Info("session connected",
 			"project_id", p.ID,

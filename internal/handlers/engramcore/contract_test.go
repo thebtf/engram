@@ -219,6 +219,14 @@ func buildContractDispatcher(t *testing.T, grpcAddr string, staticModules ...mod
 	return disp, mod, p
 }
 
+func seedContractProjectIdentity(m *Module, p muxcore.ProjectContext) {
+	m.cache.identities.Store(cacheKey(p), &pb.ProjectIdentityV2{
+		Version:         2,
+		LegacyProjectId: p.ID,
+		DisplayName:     "contract-test",
+	})
+}
+
 // jsonrpcCallReq builds a raw tools/call JSON-RPC request.
 func jsonrpcCallReq(id int, toolName string) []byte {
 	type params struct {
@@ -376,7 +384,8 @@ func TestContract_ToolsList_WaitsForDelayedGRPCReadiness(t *testing.T) {
 		{Name: "memory_search", Description: "search"},
 	}}}
 	grpcAddr, start := startDeferredMockGRPC(t, srv)
-	disp, _, p := buildContractDispatcher(t, grpcAddr)
+	disp, mod, p := buildContractDispatcher(t, grpcAddr)
+	seedContractProjectIdentity(mod, p)
 	startResult := make(chan error, 1)
 	go func() {
 		time.Sleep(75 * time.Millisecond)
@@ -423,6 +432,7 @@ func TestContract_ToolsList_DeadlineIsBoundedAndConnectionIsReusable(t *testing.
 	srv := &mockEngramServer{initResp: &pb.InitializeResponse{Tools: []*pb.ToolDefinition{{Name: "memory_store"}}}}
 	grpcAddr, start := startDeferredMockGRPC(t, srv)
 	disp, mod, p := buildContractDispatcher(t, grpcAddr)
+	seedContractProjectIdentity(mod, p)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 	startedAt := time.Now()

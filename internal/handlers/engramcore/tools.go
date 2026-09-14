@@ -35,8 +35,8 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 		return nil, err
 	}
 	token := m.envFor(p, config.EnvWorkstationToken)
-	project := m.cache.Resolve(p)
-	projectIdentity, err := m.cache.ResolveIdentity(p)
+	project := m.cache.Resolve(ctx, p)
+	projectIdentity, err := m.cache.ResolveIdentity(ctx, p)
 	if err != nil {
 		return nil, &module.RequiredProxyToolsError{Cause: fmt.Errorf("project identity v2: %w", err)}
 	}
@@ -96,8 +96,8 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 		return nil, err
 	}
 	token := m.envFor(p, config.EnvWorkstationToken)
-	project := m.cache.Resolve(p)
-	projectIdentity, err := m.cache.ResolveIdentity(p)
+	project := m.cache.Resolve(ctx, p)
+	projectIdentity, err := m.cache.ResolveIdentity(ctx, p)
 	if err != nil {
 		return nil, fmt.Errorf("project identity v2: %w", err)
 	}
@@ -160,8 +160,8 @@ func buildInnerBlock(contentJSON []byte) (json.RawMessage, error) {
 // InitializeRequest. Bumped alongside Constitution §15 unified version.
 var daemonClientVersion = version.Daemon
 
-func resolveProjectIdentityV2(cwd string) (*pb.ProjectIdentityV2, error) {
-	identity, err := proxy.ResolveProjectIdentityV2(cwd)
+func resolveProjectIdentityV2(ctx context.Context, cwd string) (*pb.ProjectIdentityV2, error) {
+	identity, err := proxy.ResolveProjectIdentityV2(ctx, cwd)
 	if err != nil {
 		return nil, err
 	}
