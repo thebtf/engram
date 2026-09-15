@@ -198,6 +198,9 @@ type Service struct {
 	credentialStore                *gorm.CredentialStore
 	memoryStore                    *gorm.MemoryStore
 	documentStore                  versionedDocumentStore
+	documentSelectionStore         documentSelectionStore
+	documentExportArtifacts        map[string]documentExportArtifact
+	documentExportArtifactsMu      sync.Mutex
 	booksStore                     booksStore
 	booksPipeline                  booksPipelineRunner
 	memoryStoreSeam                memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
@@ -1112,6 +1115,7 @@ func (s *Service) initializeAsync() {
 	mcpServer.SetVersionedDocumentStore(versionedDocumentStore)
 	s.initMu.Lock()
 	s.documentStore = versionedDocumentStore
+	s.documentSelectionStore = gorm.NewCollectionSelectionStore(store.GetDB())
 	s.booksStore = booksStore
 	s.booksPipeline = booksPipeline
 	s.initMu.Unlock()
@@ -1991,6 +1995,10 @@ func (s *Service) setupRoutes() {
 		// Versioned documents bridge (CR-002 documents lane)
 		r.Get("/api/documents", s.handleListDocuments)
 		r.Post("/api/documents", s.handleCreateDocument)
+		r.Post("/api/documents/selection", s.handleDocumentSelectionSnapshot)
+		r.Post("/api/documents/selection/current", s.handleDocumentSelectionCurrent)
+		r.Post("/api/documents/selection/page", s.handleDocumentSelectionPage)
+		r.Get("/api/documents/exports/{artifactID}", s.handleDownloadDocumentExport)
 		r.Get("/api/documents/read", s.handleReadDocument)
 		r.Get("/api/documents/history", s.handleDocumentHistory)
 		r.Get("/api/documents/comments", s.handleListDocumentComments)

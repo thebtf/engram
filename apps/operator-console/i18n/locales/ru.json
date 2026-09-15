@@ -575,7 +575,12 @@
     },
     "actions": {
       "refresh": "Обновить",
-      "selectedPath": "Выбранный путь: {path}"
+      "selectedPath": "Выбранный путь: {path}",
+      "export": "Экспортировать выборку",
+      "exporting": "Экспортируем…",
+      "download": "Скачать экспорт",
+      "exportReady": "Экспорт готов: {filename}",
+      "exportUnavailable": "Не удалось подготовить экспорт для скачивания."
     },
     "state": {
       "pending": "Загружаем документы…",

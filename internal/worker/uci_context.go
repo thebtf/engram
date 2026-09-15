@@ -400,7 +400,10 @@ func composeOperatorCodeHTTPAdapter(db *gormlib.DB, composition *uciContextCompo
 	return adapter, nil
 }
 
-const operatorCollectionSelectionDomain = "rules"
+const (
+	operatorCollectionSelectionDomain = "rules"
+	documentSelectionDomain           = "documents"
+)
 
 // operatorCollectionScopeAuthority owns only selection identity. Domain actions
 // remain responsible for their own authorization and state/version checks.
@@ -412,7 +415,7 @@ func (operatorCollectionScopeAuthority) ResolveOperatorCollectionScope(_ context
 		return gormstore.CollectionSelectionScope{}, errors.New("operator collection scope denied")
 	}
 	switch domain {
-	case operatorCollectionSelectionDomain, queueCandidateSelectionDomain:
+	case operatorCollectionSelectionDomain, queueCandidateSelectionDomain, documentSelectionDomain:
 	default:
 		return gormstore.CollectionSelectionScope{}, errors.New("operator collection scope denied")
 	}

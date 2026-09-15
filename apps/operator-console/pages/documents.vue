@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useOperatorDocuments } from '../composables/useOperatorDocuments'
+import type { DocumentExportArtifact } from '../composables/useOperatorDocuments'
 
 const { t } = useI18n()
 const {
@@ -27,6 +28,7 @@ const {
   selectPrimaryVersion,
   selectSecondaryVersion,
   addComment,
+  runDocumentSelectionOperation,
 } = useOperatorDocuments()
 
 const notice = ref<{ kind: 'success' | 'error'; text: string } | null>(null)
@@ -34,7 +36,9 @@ const commentDraft = ref('')
 const lineStartDraft = ref('')
 const lineEndDraft = ref('')
 const commentBusy = ref(false)
-const mutationResult = ref<Awaited<ReturnType<typeof addComment>> | null>(null)
+const exportBusy = ref(false)
+const exportArtifact = ref<DocumentExportArtifact | null>(null)
+const mutationResult = ref<Awaited<ReturnType<typeof addComment>> | Awaited<ReturnType<typeof runDocumentSelectionOperation>>['mutation'] | null>(null)
 
 const documentCount = computed(() => documents.length)
 const versionCount = computed(() => history.length)
@@ -66,6 +70,28 @@ watch(selectedProject, (next, previous) => {
   notice.value = null
   void refresh()
 })
+
+async function onExport() {
+  const document = activeDocument.value
+  if (!document || exportBusy.value) return
+
+  exportBusy.value = true
+  exportArtifact.value = null
+  try {
+    const result = await runDocumentSelectionOperation({ action: 'export', target: { documentId: Number(document.id), version: document.version } })
+    mutationResult.value = result.mutation
+    if (result.mutation.kind === 'committed_verified' && result.artifact) {
+      exportArtifact.value = result.artifact
+      notice.value = { kind: 'success', text: t('documents.actions.exportReady', { filename: result.artifact.filename }) }
+      return
+    }
+    notice.value = { kind: 'error', text: t('documents.actions.exportUnavailable') }
+  } catch {
+    notice.value = { kind: 'error', text: t('documents.actions.exportUnavailable') }
+  } finally {
+    exportBusy.value = false
+  }
+}
 
 async function onPrimaryChange(event: Event) {
   const value = Number((event.target as HTMLSelectElement | null)?.value || '0')
@@ -164,7 +190,9 @@ async function onCommentSubmit() {
         <button class="tbtn" @click="notice = null; refresh()">{{ t('documents.actions.refresh') }}</button>
       </div>
       <div class="ops-right">
-        <span class="cnt" v-if="activeDocument">{{ t('documents.actions.selectedPath', { path: activeDocument.path }) }}</span>
+        <span v-if="activeDocument" class="cnt">{{ t('documents.actions.selectedPath', { path: activeDocument.path }) }}</span>
+        <button data-testid="document-export" class="tbtn" :disabled="!activeDocument || exportBusy" @click="onExport">{{ exportBusy ? t('documents.actions.exporting') : t('documents.actions.export') }}</button>
+        <a v-if="exportArtifact" :href="exportArtifact.downloadUrl" :download="exportArtifact.filename" class="tbtn" data-testid="document-export-download">{{ t('documents.actions.download') }}</a>
       </div>
     </section>
 
@@ -492,6 +520,10 @@ async function onCommentSubmit() {
   color: var(--fg);
   padding: 9px 14px;
   cursor: pointer;
+}
+
+.ops-right .tbtn {
+  text-decoration: none;
 }
 
 .act.primary {

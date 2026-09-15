@@ -50,17 +50,39 @@ function responseFrom(response: BrowserResponse): Response {
   })
 }
 
-function exportRequest(requestId: string, kind: 'explicit' | 'page' | 'frozen_filter', targets: DocumentTarget[]) {
-  return {
-    request_id: requestId,
-    action: 'export',
-    selection: {
-      kind,
-      selection_version: 1,
-      ...(kind === 'frozen_filter' ? { selection_token: 'opaque-selection-token-not-authority' } : {}),
-    },
-    targets,
+function operationSelection(snapshot: Record<string, unknown>) {
+  const kind = snapshot.kind
+  const version = snapshot.selection_version
+  if ((kind !== 'explicit' && kind !== 'page' && kind !== 'frozen_filter') || typeof version !== 'number') {
+    throw new Error('Documents selection snapshot is invalid')
   }
+  if (kind === 'frozen_filter') {
+    const token = snapshot.selection_token
+    if (typeof token !== 'string') throw new Error('Documents frozen selection token is missing')
+    return { kind, selection_version: version, selection_token: token }
+  }
+  return { kind, selection_version: version }
+}
+
+function selectionTargets(snapshot: Record<string, unknown>): DocumentTarget[] {
+  const targets = snapshot.targets
+  if (!Array.isArray(targets)) throw new Error('Documents selection membership is missing')
+  const excluded = new Set(Array.isArray(snapshot.excluded_ids) ? snapshot.excluded_ids : [])
+  return targets.flatMap((target) => {
+    const row = record(target, 'Documents selection target')
+    if (typeof row.id !== 'string' || typeof row.expected_version !== 'number' || excluded.has(row.id)) return []
+    return [{ document_id: Number(row.id), path: '', project: '', version: row.expected_version }]
+  })
+}
+
+async function saveDocumentSelection(page: Page, requestId: string, selection: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const saved = await requestJSON(page, '/api/documents/selection', { domain: 'documents', selection }, requestId)
+  expect(saved.status).toBe(200)
+  return record(record(saved.body, 'Documents selection response').selection, 'Documents selection')
+}
+
+function exportRequest(requestId: string, selection: Record<string, unknown>) {
+  return { request_id: requestId, action: 'export', selection: operationSelection(selection) }
 }
 
 async function createDocument(page: Page, project: string, path: string, content: string): Promise<DocumentTarget> {
@@ -68,31 +90,20 @@ async function createDocument(page: Page, project: string, path: string, content
   expect(created.status).toBe(201)
   const body = record(created.body, 'document create response')
   expect(body.id).toEqual(expect.any(Number))
-  return {
-    document_id: body.id as number,
-    path,
-    project,
-    version: 1,
-  }
+  return { document_id: body.id as number, path, project, version: 1 }
 }
 
-test('T030 live Documents export rechecks selected versions with safe result status', async ({ page }, testInfo) => {
+test('T030 live Documents export resolves server selection and downloads a non-secret artifact', async ({ page }, testInfo) => {
   const fixture = await readLiveFixture()
   const traffic: RouteTraffic[] = []
   const marker = `t030-${fixture.fixtureId}`
   const project = `${marker}-project`
-  const privateContent = `${marker} document body must not be reported as operation status`
+  const privateContent = `${marker} document body must not be reported as operation status or artifact`
 
   page.on('response', (response) => {
     const url = new URL(response.url())
     if (url.origin === fixture.frontend.baseUrl && url.pathname.startsWith('/api/')) {
-      traffic.push({
-        origin: 'browser',
-        method: response.request().method(),
-        path: url.pathname,
-        status: response.status(),
-        at: new Date().toISOString(),
-      })
+      traffic.push({ origin: 'browser', method: response.request().method(), path: url.pathname, status: response.status(), at: new Date().toISOString() })
     }
   })
 
@@ -102,84 +113,66 @@ test('T030 live Documents export rechecks selected versions with safe result sta
     const shell = await page.goto(`${fixture.frontend.baseUrl}/documents`, { waitUntil: 'domcontentloaded' })
     expect(shell?.status()).toBe(200)
 
-    const unauthenticated = await requestJSON(page, '/api/documents', exportRequest(`${marker}-denied`, 'frozen_filter', [{
-      document_id: 1,
-      path: 'forbidden.md',
-      project,
-      version: 1,
-    }]), `${marker}-denied`)
+    const unauthenticated = await requestJSON(page, '/api/documents', exportRequest(`${marker}-denied`, {
+      kind: 'frozen_filter', selection_version: 1, selection_token: 'b857ebf7-c1cf-4a1f-a733-465ee492d3cb',
+    }), `${marker}-denied`)
     expect(unauthenticated.status).toBe(401)
-    expect(JSON.stringify(unauthenticated.body)).not.toContain('forbidden.md')
 
-    const login = await requestJSON(page, '/api/auth/user-login', {
-      email: fixture.browserCredential.email,
-      password: fixture.browserCredential.password,
-    })
+    const login = await requestJSON(page, '/api/auth/user-login', { email: fixture.browserCredential.email, password: fixture.browserCredential.password })
     expect(login.status).toBe(200)
 
     const primary = await createDocument(page, project, `${marker}/primary.md`, privateContent)
     const secondary = await createDocument(page, project, `${marker}/secondary.md`, `${marker} second document body`)
+    const pageResponse = await requestJSON(page, '/api/documents/selection/page', { project, limit: 1 }, `${marker}-page`)
+    expect(pageResponse.status).toBe(200)
+    const pageSnapshot = record(pageResponse.body, 'Documents page')
+    const pageCursor = pageSnapshot.cursor
+    if (typeof pageCursor !== 'string') throw new Error('Documents page cursor is missing')
 
-    for (const kind of ['explicit', 'page', 'frozen_filter'] as const) {
-      const requestId = `${marker}-${kind}`
-      const exported = await requestJSON(page, '/api/documents', exportRequest(requestId, kind, [primary]), requestId)
+    const selectionInputs = [
+      { name: 'explicit', selection: { kind: 'explicit', targets: [{ id: String(primary.document_id), expected_version: primary.version }] } },
+      { name: 'page', selection: { kind: 'page', cursor: pageCursor } },
+      { name: 'frozen', selection: { kind: 'frozen_filter', filter: { scope: project }, excluded_ids: [String(secondary.document_id)] } },
+    ]
+    let firstSelection: Record<string, unknown> | undefined
+    for (const input of selectionInputs) {
+      const selection = await saveDocumentSelection(page, `${marker}-${input.name}`, input.selection)
+      if (firstSelection === undefined) firstSelection = selection
+      const requestId = `${marker}-${input.name}-export`
+      const expected = selectionTargets(selection)
+      const exported = await requestJSON(page, '/api/documents', exportRequest(requestId, selection), requestId)
       expect(exported.status).toBe(200)
-      const body = record(exported.body, `${kind} export response`)
+      const body = record(exported.body, 'Documents export response')
       expect(body.operation_state).toBe('completed')
-      expect(body.request_id).toBe(requestId)
-      expect(body.item_results).toEqual([{ target_id: primary.document_id, outcome: 'committed', observed_version: primary.version }])
+      expect(body.item_results).toEqual(expected.map((target) => ({ target_id: target.document_id, outcome: 'committed', observed_version: target.version })))
       expect(body.readback).toEqual({ authoritative: true, kind: 'non_disclosing', operation_status: 'export_ready' })
+      const artifact = record(body.artifact, 'Documents export artifact')
+      expect(artifact.filename).toEqual(expect.stringMatching(/^documents-export-[0-9a-f-]+\.json$/))
       expect(JSON.stringify(body)).not.toContain(privateContent)
-      expect(body).not.toHaveProperty('content')
 
-      const outcome = await parseMutationResponse(
-        { requestId, action: 'document-export', intent: { kind, target: primary.document_id } },
-        responseFrom(exported),
-        () => undefined,
-      )
+      const downloaded = await page.evaluate(async (downloadURL) => {
+        const response = await fetch(downloadURL)
+        return { status: response.status, type: response.headers.get('content-type'), disposition: response.headers.get('content-disposition'), text: await response.text() }
+      }, artifact.download_url)
+      expect(downloaded.status).toBe(200)
+      expect(downloaded.type).toContain('application/json')
+      expect(downloaded.disposition).toContain('attachment')
+      const payload = record(JSON.parse(downloaded.text), 'Documents export file')
+      expect(payload.schema_version).toBe('engram.documents.export/v1')
+      expect(payload.documents).toHaveLength(expected.length)
+      expect(downloaded.text).not.toContain(privateContent)
+
+      const outcome = await parseMutationResponse({ requestId, action: 'document-export', intent: { kind: selection.kind } }, responseFrom(exported), () => undefined)
       expect(outcome.kind).toBe('committed_verified')
-      if (outcome.kind !== 'committed_verified' || outcome.readback.kind !== 'non_disclosing') {
-        throw new Error(`Documents ${kind} export was not verified non-disclosing status`)
-      }
-      expect(outcome.readback.operationStatus).toBe('export_ready')
     }
 
-    const missing: DocumentTarget = {
-      document_id: secondary.document_id + 10_000,
-      path: `${marker}/missing.md`,
-      project,
-      version: 1,
-    }
-    const partialRequestId = `${marker}-partial`
-    const partial = await requestJSON(page, '/api/documents', exportRequest(partialRequestId, 'explicit', [secondary, missing]), partialRequestId)
-    expect(partial.status).toBe(207)
-    const partialBody = record(partial.body, 'partial export response')
-    expect(partialBody.operation_state).toBe('partial')
-    expect(partialBody.item_results).toEqual([
-      { target_id: secondary.document_id, outcome: 'committed', observed_version: secondary.version },
-      { target_id: missing.document_id, outcome: 'conflict' },
-    ])
-    expect(JSON.stringify(partialBody)).not.toContain(privateContent)
-    const partialOutcome = await parseMutationResponse(
-      { requestId: partialRequestId, action: 'document-export', intent: { targetIds: [secondary.document_id, missing.document_id] } },
-      responseFrom(partial),
-      () => undefined,
-    )
-    expect(partialOutcome.kind).toBe('partial')
-    if (partialOutcome.kind === 'partial') {
-      expect(partialOutcome.items).toEqual([
-        { targetId: secondary.document_id, outcome: 'committed', observedVersion: secondary.version },
-        { targetId: missing.document_id, outcome: 'conflict' },
-      ])
-    }
-
-    const staleRequestId = `${marker}-version-conflict`
-    const stale = await requestJSON(page, '/api/documents', exportRequest(staleRequestId, 'page', [{ ...primary, version: primary.version + 1 }]), staleRequestId)
+    if (firstSelection === undefined) throw new Error('Documents explicit selection was not saved')
+    const staleRequestId = `${marker}-stale`
+    await saveDocumentSelection(page, `${marker}-replace`, { kind: 'explicit', targets: [{ id: String(secondary.document_id), expected_version: secondary.version }] })
+    const stale = await requestJSON(page, '/api/documents', exportRequest(staleRequestId, firstSelection), staleRequestId)
     expect(stale.status).toBe(409)
-    const staleBody = record(stale.body, 'stale export response')
-    expect(staleBody.operation_state).toBe('failed')
-    expect(staleBody.item_results).toEqual([{ target_id: primary.document_id, outcome: 'conflict' }])
-    expect(JSON.stringify(staleBody)).not.toContain(privateContent)
+    expect(record(stale.body, 'stale export response').operation_state).toBe('failed')
+    expect(JSON.stringify(stale.body)).not.toContain(privateContent)
   } finally {
     const state = await appendBrowserTraffic(traffic)
     await testInfo.attach('t030-documents-selection-operation-live', {
@@ -189,13 +182,7 @@ test('T030 live Documents export rechecks selected versions with safe result sta
         candidate: state.candidate,
         backend: { sourceCommit: state.backend.sourceCommit, binarySha256: state.backend.binarySha256 },
         frontend: { buildEntry: state.frontend.buildEntry, buildEntrySha256: state.frontend.buildEntrySha256 },
-        assertedSafetyBranches: [
-          'unauthenticated frozen token does not authorize export',
-          'explicit page and frozen selection modes recheck exact document versions',
-          'safe non-disclosing completed status',
-          'partial committed and conflict item outcomes',
-          'version conflict after selected version is unavailable',
-        ],
+        assertedSafetyBranches: ['unauthenticated selection does not authorize export', 'explicit page and frozen selection modes resolve server membership', 'completed export carries a user-receivable metadata artifact', 'replaced selection version is rejected'],
         traffic: state.traffic,
       }, null, 2)),
     })

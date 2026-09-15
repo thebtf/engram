@@ -354,7 +354,7 @@ test('dispatched and response-body loss preserve the exact request for manual re
   expect(result.retry).toBe('manual')
  }
 })
-test('documents create, history, and readback render through the current documents surface', async ({ page }) => {
+test('documents create, history, readback, and export render through the current documents surface', async ({ page }) => {
  const path = 'notes/current-readback.md'
  const first = '# Current readback\n\nVersion one.'
  const second = '# Current readback\n\nVersion two.'
@@ -371,11 +371,58 @@ test('documents create, history, and readback render through the current documen
  const readResponse = await page.request.get(`/api/documents/read?path=${encodeURIComponent(path)}&project=operator-console&version=2`)
  expect(await readResponse.json()).toMatchObject({ path, project: 'operator-console', version: 2, content: second })
 
+ const selectionRequests: Array<Record<string, unknown>> = []
+ const exportRequests: Array<Record<string, unknown>> = []
+ const artifactID = 'b857ebf7-c1cf-4a1f-a733-465ee492d3cb'
+ const filename = `documents-export-${artifactID}.json`
+ await page.route('**/api/documents/selection', async (route: Route) => {
+  selectionRequests.push(route.request().postDataJSON() as Record<string, unknown>)
+  await route.fulfill({ json: { selection: { domain: 'documents', kind: 'explicit', selection_version: 7, targets: [{ id: '2', expected_version: 2 }] } } })
+ })
+ await page.route('**/api/documents', async (route: Route) => {
+  if (route.request().method() !== 'POST') return route.continue()
+  const input = route.request().postDataJSON() as Record<string, unknown>
+  if (input.action !== 'export') return route.continue()
+  exportRequests.push(input)
+  await route.fulfill({
+   json: {
+    request_id: input.request_id,
+    operation_id: 'documents-export:browser-proof',
+    operation_state: 'completed',
+    item_results: [{ target_id: 2, outcome: 'committed', observed_version: 2 }],
+    readback: { authoritative: true, kind: 'non_disclosing', operation_status: 'export_ready' },
+    artifact: { download_url: `/api/documents/exports/${artifactID}`, filename, content_type: 'application/json', byte_length: 108 },
+   }
+  })
+ })
+ await page.route(`**/api/documents/exports/${artifactID}`, (route: Route) => route.fulfill({
+  headers: { 'content-type': 'application/json', 'content-disposition': `attachment; filename="${filename}"` },
+  body: JSON.stringify({ schema_version: 'engram.documents.export/v1', documents: [{ id: 2, path, project: 'operator-console', version: 2, content_hash: 'safe-hash' }] }),
+ }))
+
  const failures = collectPageFailures(page)
  await page.goto('/documents?project=operator-console')
  await expect(page.locator('.doc-row').filter({ hasText: path })).toBeVisible()
  await expect(page.locator('.history-list')).toContainText('2')
  await expect(page.locator('.doc-content').first()).toHaveText(second)
+ const operation = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/documents' && response.request().postDataJSON().action === 'export')
+ await page.getByTestId('document-export').click()
+ await operation
+ await expect(page.getByTestId('mutation-result')).toHaveAttribute('data-kind', 'committed_verified')
+ const downloadLink = page.getByTestId('document-export-download')
+ await expect(downloadLink).toHaveAttribute('href', `/api/documents/exports/${artifactID}`)
+ await expect(downloadLink).toHaveAttribute('download', filename)
+ const downloadPromise = page.waitForEvent('download')
+ await downloadLink.click()
+ expect((await downloadPromise).suggestedFilename()).toBe(filename)
+ expect(selectionRequests).toEqual([{
+  domain: 'documents',
+  selection: { kind: 'explicit', targets: [{ id: expect.any(String), expected_version: 2 }] },
+ }])
+ expect(exportRequests).toEqual([expect.objectContaining({
+  action: 'export',
+  selection: { kind: 'explicit', selection_version: 7 },
+ })])
  expect(failures).toEqual([])
 })
 

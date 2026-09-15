@@ -1,6 +1,6 @@
 import type { ComputedRef, Ref } from 'vue'
 import type { OperatorLoadState } from './useOperatorApi'
-import type { OperatorSelection } from './useOperatorSelection'
+import { parseOperatorSelectionSnapshot, type OperatorSelection } from './useOperatorSelection'
 import { executeMutation, type MutationResult } from './useApi'
 import {
   emptyState,
@@ -142,15 +142,57 @@ export type DocumentSelectionOperationAction = 'export'
 
 export interface DocumentSelectionOperationTarget {
   documentId: number
-  path: string
-  project: string
   version: number
 }
 
 export interface DocumentSelectionOperationInput {
   action: DocumentSelectionOperationAction
-  selection: Exclude<OperatorSelection, { kind: 'none' }>
-  targets: DocumentSelectionOperationTarget[]
+  target: DocumentSelectionOperationTarget
+}
+
+export interface DocumentExportArtifact {
+  downloadUrl: string
+  filename: string
+  contentType: string
+  byteLength: number
+}
+
+export interface DocumentSelectionOperationResult {
+  mutation: MutationResult<DocumentSelectionOperationInput>
+  artifact?: DocumentExportArtifact
+}
+
+function documentOperationSelectionPayload(selection: Exclude<OperatorSelection, { kind: 'none' }>): Record<string, unknown> {
+  if (selection.domain !== 'documents' || !Number.isSafeInteger(selection.version) || selection.version < 1 || (selection.kind === 'frozen_filter' && selection.reconfirmationRequired)) {
+    throw new TypeError('the selected Documents snapshot is not server current')
+  }
+
+  switch (selection.kind) {
+    case 'explicit':
+    case 'page':
+      return { kind: selection.kind, selection_version: selection.version }
+    case 'frozen_filter':
+      return { kind: selection.kind, selection_version: selection.version, selection_token: selection.selectionToken }
+  }
+}
+
+function parseDocumentSelection(value: unknown): Exclude<OperatorSelection, { kind: 'none' }> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Documents selection response is invalid')
+  const selection = parseOperatorSelectionSnapshot(Reflect.get(value, 'selection'))
+  if (selection.domain !== 'documents' || selection.kind === 'none') throw new TypeError('Documents selection response is invalid')
+  return selection
+}
+
+function parseDocumentExportArtifact(value: unknown): DocumentExportArtifact | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const artifact = Reflect.get(value, 'artifact')
+  if (artifact === null || typeof artifact !== 'object' || Array.isArray(artifact)) return undefined
+  const downloadUrl = Reflect.get(artifact, 'download_url')
+  const filename = Reflect.get(artifact, 'filename')
+  const contentType = Reflect.get(artifact, 'content_type')
+  const byteLength = Reflect.get(artifact, 'byte_length')
+  if (typeof downloadUrl !== 'string' || !/^\/api\/documents\/exports\/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(downloadUrl) || typeof filename !== 'string' || !filename || contentType !== 'application/json' || !Number.isSafeInteger(byteLength) || byteLength < 1) return undefined
+  return { downloadUrl, filename, contentType, byteLength }
 }
 
 function jsonInit(method: 'POST', body?: unknown): RequestInit {
@@ -160,46 +202,6 @@ function jsonInit(method: 'POST', body?: unknown): RequestInit {
     init.body = JSON.stringify(body)
   }
   return init
-}
-
-function documentOperationSelectionPayload(selection: Exclude<OperatorSelection, { kind: 'none' }>): Record<string, unknown> {
-  if (selection.domain !== 'documents' || !Number.isSafeInteger(selection.version) || selection.version < 1) {
-    throw new TypeError('the selected Documents snapshot is not server current')
-  }
-
-  switch (selection.kind) {
-    case 'explicit':
-    case 'page':
-      return { kind: selection.kind, selection_version: selection.version }
-    case 'frozen_filter':
-      return {
-        kind: selection.kind,
-        selection_version: selection.version,
-        selection_token: selection.selectionToken,
-      }
-  }
-}
-
-function documentOperationTargetsPayload(targets: DocumentSelectionOperationTarget[]): Array<Record<string, unknown>> {
-  if (!targets.length || targets.length > 1_000) {
-    throw new TypeError('Documents export requires one to 1000 selected versions')
-  }
-
-  const ids = new Set<number>()
-  return targets.map((target) => {
-    const path = target.path.trim()
-    const project = target.project.trim()
-    if (!Number.isSafeInteger(target.documentId) || target.documentId < 1 || !Number.isSafeInteger(target.version) || target.version < 1 || !path || !project || ids.has(target.documentId)) {
-      throw new TypeError('Documents export target is invalid')
-    }
-    ids.add(target.documentId)
-    return {
-      document_id: target.documentId,
-      path,
-      project,
-      version: target.version,
-    }
-  })
 }
 
 function documentOperationInit(body: unknown, requestId: string): RequestInit {
@@ -212,6 +214,7 @@ function documentOperationInit(body: unknown, requestId: string): RequestInit {
     body: JSON.stringify(body),
   }
 }
+
 
 function replaceArray<T>(target: T[], next: readonly T[]) {
   target.splice(0, target.length, ...next)
@@ -386,7 +389,7 @@ export function useOperatorDocuments(): {
   selectPrimaryVersion: (version: number) => Promise<void>
   selectSecondaryVersion: (version: number) => Promise<void>
   addComment: (input: DocumentCommentInput) => Promise<MutationResult<DocumentCommentInput>>
-  runDocumentSelectionOperation: (input: DocumentSelectionOperationInput) => Promise<MutationResult<DocumentSelectionOperationInput>>
+  runDocumentSelectionOperation: (input: DocumentSelectionOperationInput) => Promise<DocumentSelectionOperationResult>
 } {
   const listEvidence = endpointEvidence(`/api/documents?project={project}&limit=${DOCUMENT_LIST_LIMIT}`, 'documents-list')
   const historyEvidence = endpointEvidence('/api/documents/history?path={path}&project={project}', 'documents-history')
@@ -696,27 +699,28 @@ export function useOperatorDocuments(): {
     )
   }
 
-  async function runDocumentSelectionOperation(input: DocumentSelectionOperationInput): Promise<MutationResult<DocumentSelectionOperationInput>> {
+  async function runDocumentSelectionOperation(input: DocumentSelectionOperationInput): Promise<DocumentSelectionOperationResult> {
+    if (!Number.isSafeInteger(input.target.documentId) || input.target.documentId < 1 || !Number.isSafeInteger(input.target.version) || input.target.version < 1) {
+      throw new TypeError('Documents export target is invalid')
+    }
+    const selectionRequestId = crypto.randomUUID()
+    const selection = parseDocumentSelection(await operatorFetchJson<unknown>('/api/documents/selection', documentOperationInit({
+      domain: 'documents',
+      selection: { kind: 'explicit', targets: [{ id: String(input.target.documentId), expected_version: input.target.version }] },
+    }, selectionRequestId), 'documents-selection'))
     const requestId = crypto.randomUUID()
-    const request = {
-      requestId,
-      action: `document-${input.action}`,
-      intent: input,
+    const request = { requestId, action: `document-${input.action}`, intent: input }
+    const body = { request_id: requestId, action: input.action, selection: documentOperationSelectionPayload(selection) }
+    let response: Response
+    try {
+      response = await fetch(operatorApiUrl('/api/documents'), { ...documentOperationInit(body, requestId), credentials: 'include' })
+    } catch (error) {
+      return { mutation: await executeMutation(request, Promise.reject(error), () => undefined) }
     }
-    const body = {
-      request_id: requestId,
-      action: input.action,
-      selection: documentOperationSelectionPayload(input.selection),
-      targets: documentOperationTargetsPayload(input.targets),
-    }
-    return executeMutation(
-      request,
-      fetch(operatorApiUrl('/api/documents'), {
-        ...documentOperationInit(body, requestId),
-        credentials: 'include',
-      }),
-      () => undefined,
-    )
+    const artifact = response.ok
+      ? await response.clone().json().then(parseDocumentExportArtifact).catch(() => undefined)
+      : undefined
+    return { mutation: await executeMutation(request, Promise.resolve(response), () => undefined), ...(artifact === undefined ? {} : { artifact }) }
   }
 
   startOnce('documents-page', refresh)

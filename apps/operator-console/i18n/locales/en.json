@@ -575,7 +575,12 @@
     },
     "actions": {
       "refresh": "Refresh",
-      "selectedPath": "Selected path: {path}"
+      "selectedPath": "Selected path: {path}",
+      "export": "Export selection",
+      "exporting": "Exporting…",
+      "download": "Download export",
+      "exportReady": "Export ready: {filename}",
+      "exportUnavailable": "The export could not be prepared for download."
     },
     "state": {
       "pending": "Loading documents…",
