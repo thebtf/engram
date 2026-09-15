@@ -28,9 +28,9 @@ Preserve the promised outcome when fixing defects. A page bound must not disable
 
 Review changed behavior and affected dependencies for correctness and maintainability, not perfection. Explain a meaningful decision once at its natural location; trivial fixes do not each need a new ADR/report.
 
-Give substantive findings one evidenced disposition in existing review/task state: **fix now**, **not applicable**, or **maintainer-accepted follow-up**. Blocking means a failed mandatory gate, violated accepted behavior/compatibility, or credible security/data-integrity risk. A severity label alone is not the reasoning; credible unresolved high-impact risks remain blocking during investigation.
+Give every reported finding one evidenced disposition in existing review/task state: **fix now**, **not applicable**, or **maintainer-accepted follow-up**. Blocking means a failed mandatory gate, violated accepted behavior/compatibility, or credible security/data-integrity risk. A severity label alone is not the reasoning; credible unresolved high-impact risks remain blocking during investigation.
 
-Do not defer real blockers to ship. Do not turn optional polish, speculative future features or personal preference into release requirements. Required approvals/thread resolution still apply; disputes and scanner findings cannot be suppressed or unilaterally marked resolved. Never lower thresholds or hide failures to pass.
+Do not defer real blockers to ship. Nonblocking optional findings do not automatically require release code. Required approvals/thread resolution still apply; disputes and scanner findings cannot be suppressed or unilaterally marked resolved. Never lower thresholds or hide failures to pass.
 
 Finish required review before expensive final validation. Recheck fixes and affected invariants; reopen unchanged accepted areas only for new evidence or affected dependencies. A new reviewer/model or changelog edit alone does not justify another whole-product audit. No fixed review-count permits unsafe release; every additional round needs a concrete unresolved question.
 
@@ -64,7 +64,7 @@ Code queries/traversal/source reads use authorized Source/Checkout/pinned View. 
 
 SocratiCode/Graphify are references for researched native mechanism adaptation, not embedded products or proof of parity. Reuse accepted research; state actual language/corpus coverage. Test doubles are allowed for isolated tests, never as proof of a real provider, daemon or installed user path.
 
-Entry points: `cmd/engram-server/`, `cmd/engram/`. UCI: `internal/uci/`, `internal/handlers/codeintel/`, `internal/db/gorm/uci_*`. Console: `apps/operator-console/`; HTTP/storage: `internal/worker/`, `internal/db/gorm/`; integrations: `plugin/`.
+Entry points: `cmd/engram-server/`, `cmd/engram/`. Current code intelligence: `internal/handlers/codeintel/`, `internal/mcp/tools_code_intel.go`, `internal/db/gorm/code_chunk_store.go`. UCI-native paths are present only when they exist in the current checkout; never direct current sessions to absent paths such as `internal/uci/` or `internal/db/gorm/uci_*`. Console: `apps/operator-console/`; HTTP/storage: `internal/worker/`, `internal/db/gorm/`; integrations: `plugin/`.
 
 Use current `go.mod`, CI and lockfiles for toolchain versions. Base commands: `make build`, `go test ./...`; release commands/environments: `docs/RELEASE-PROTOCOL.md`. QA verifies real flags and selected tests; unexpected SKIP or zero selection is not PASS. Load only relevant available skills.
 
