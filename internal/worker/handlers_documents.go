@@ -20,8 +20,10 @@ import (
 )
 
 const (
-	defaultDocumentListLimit = 50
-	maxDocumentListLimit     = 200
+	defaultDocumentListLimit       = 50
+	maxDocumentListLimit           = 200
+	documentSelectionInvalidMessage = "invalid document selection"
+	engramRequestIDHeader           = "X-Engram-Request-ID"
 )
 
 type versionedDocumentStore interface {
@@ -379,7 +381,7 @@ func writeDocumentSelectionError(w http.ResponseWriter, err error) {
 	case errors.Is(err, gormdb.ErrCollectionSelectionReconfirmationRequired):
 		writeDocumentError(w, http.StatusPreconditionFailed, "document selection is stale")
 	case errors.Is(err, gormdb.ErrCollectionSelectionInvalid):
-		writeDocumentError(w, http.StatusBadRequest, "invalid document selection")
+		writeDocumentError(w, http.StatusBadRequest, documentSelectionInvalidMessage)
 	default:
 		writeDocumentError(w, http.StatusServiceUnavailable, "document selection unavailable")
 	}
@@ -387,8 +389,8 @@ func writeDocumentSelectionError(w http.ResponseWriter, err error) {
 
 func (s *Service) handleDocumentSelectionSnapshot(w http.ResponseWriter, r *http.Request) {
 	var request operatorCollectionSnapshotRequest
-	if !operatorCodeText(r.Header.Get("X-Engram-Request-ID")) || json.NewDecoder(r.Body).Decode(&request) != nil || request.Domain != documentSelectionDomain {
-		writeDocumentError(w, http.StatusBadRequest, "invalid document selection")
+	if !operatorCodeText(r.Header.Get(engramRequestIDHeader)) || json.NewDecoder(r.Body).Decode(&request) != nil || request.Domain != documentSelectionDomain {
+		writeDocumentError(w, http.StatusBadRequest, documentSelectionInvalidMessage)
 		return
 	}
 	scope, err := documentSelectionScope(r)
@@ -454,8 +456,8 @@ func (s *Service) handleDocumentSelectionSnapshot(w http.ResponseWriter, r *http
 
 func (s *Service) handleDocumentSelectionCurrent(w http.ResponseWriter, r *http.Request) {
 	var request operatorCollectionCurrentRequest
-	if !operatorCodeText(r.Header.Get("X-Engram-Request-ID")) || json.NewDecoder(r.Body).Decode(&request) != nil || request.Domain != documentSelectionDomain {
-		writeDocumentError(w, http.StatusBadRequest, "invalid document selection")
+	if !operatorCodeText(r.Header.Get(engramRequestIDHeader)) || json.NewDecoder(r.Body).Decode(&request) != nil || request.Domain != documentSelectionDomain {
+		writeDocumentError(w, http.StatusBadRequest, documentSelectionInvalidMessage)
 		return
 	}
 	scope, err := documentSelectionScope(r)
@@ -478,7 +480,7 @@ func (s *Service) handleDocumentSelectionCurrent(w http.ResponseWriter, r *http.
 
 func (s *Service) handleDocumentSelectionPage(w http.ResponseWriter, r *http.Request) {
 	var request documentSelectionPageRequest
-	if !operatorCodeText(r.Header.Get("X-Engram-Request-ID")) || json.NewDecoder(r.Body).Decode(&request) != nil {
+	if !operatorCodeText(r.Header.Get(engramRequestIDHeader)) || json.NewDecoder(r.Body).Decode(&request) != nil {
 		writeDocumentError(w, http.StatusBadRequest, "invalid document selection page")
 		return
 	}
@@ -704,7 +706,7 @@ func (s *Service) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
 // the current browser owner and only reports an export after its artifact bytes
 // exist. Document contents remain outside the operation status response.
 func (s *Service) handleDocumentSelectionOperation(w http.ResponseWriter, r *http.Request, request *documentCreateRequest) {
-	if request == nil || !operatorCodeText(request.RequestID) || r.Header.Get("X-Engram-Request-ID") != request.RequestID || !documentSelectionOperationValid(request) {
+	if request == nil || !operatorCodeText(request.RequestID) || r.Header.Get(engramRequestIDHeader) != request.RequestID || !documentSelectionOperationValid(request) {
 		writeDocumentOperationFailure(w, http.StatusBadRequest, "", "validation_error")
 		return
 	}
