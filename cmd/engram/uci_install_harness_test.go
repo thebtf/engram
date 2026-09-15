@@ -20,6 +20,7 @@ const (
 	uciInstallHarnessHelperTest            = "^TestUCIInstallHarnessProcessHelper$"
 	uciInstallHarnessHelperAuditDir        = "ENGRAM_UCI_INSTALL_HARNESS_TEST_AUDIT_DIR"
 	uciInstallHarnessHelperProbeEnv        = "ENGRAM_UCI_INSTALL_HARNESS_TEST_PROBE"
+	uciInstallHarnessHelperParserAuditGate = "ENGRAM_UCI_INSTALL_HARNESS_TEST_PARSER_AUDIT_GATE"
 	uciInstallHarnessHelperProbeValue      = "value with spaces Кириллица"
 	uciInstallHarnessReadinessRaceHeadroom = 2 * time.Second
 	uciInstallHarnessWindowsStartupTimeout = 15 * time.Second
@@ -86,6 +87,89 @@ func TestUCIInstallHarnessRunsBuiltComponentsThroughExternalStdio(t *testing.T) 
 	}
 	if !reflect.DeepEqual(audits["daemon"].Methods, []string{"initialize", "notifications/initialized", "tools/list"}) {
 		t.Fatalf("daemon stdio methods = %#v, want initialize/initialized/tools/list", audits["daemon"].Methods)
+	}
+	uciRequireInstallRootRemoved(t, installRoot)
+}
+
+func TestUCIInstallHarnessWaitsForLaunchedComponentAudits(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("native Windows installation proof")
+	}
+
+	installRoot := filepath.Join(t.TempDir(), "UCI component readiness Кириллица")
+	auditDir := t.TempDir()
+	parserAuditGate := filepath.Join(t.TempDir(), "parser-audit-gate")
+	request := uciInstallHarnessTestRequest(t, installRoot, auditDir, "serve", 4*time.Second)
+	request.Environment = append(request.Environment, uciInstallHarnessHelperParserAuditGate+"="+parserAuditGate)
+	driverCompleted := make(chan struct{})
+	request.MCPDriver = uciInstallHarnessCompletedProbe{completed: driverCompleted}
+	componentReady := make(chan struct{})
+	request.ComponentReady = func(ctx context.Context) error {
+		close(componentReady)
+		if err := os.WriteFile(parserAuditGate, []byte("ready"), 0o600); err != nil {
+			return fmt.Errorf("release parser audit gate: %w", err)
+		}
+		return uciAwaitInstallHarnessAudits(ctx, auditDir, "server", "daemon", "parser")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct {
+		result uciInstallHarnessResult
+		err    error
+	}, 1)
+	completed := false
+	t.Cleanup(func() {
+		if completed {
+			return
+		}
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
+	})
+	go func() {
+		result, err := runUCIInstallHarness(ctx, request)
+		done <- struct {
+			result uciInstallHarnessResult
+			err    error
+		}{result: result, err: err}
+	}()
+
+	select {
+	case <-driverCompleted:
+	case outcome := <-done:
+		completed = true
+		t.Fatalf("install harness stopped before its daemon readiness succeeded: %v", outcome.err)
+	case <-time.After(uciInstallHarnessWindowsStartupTimeout):
+		t.Fatal("install harness did not complete its daemon readiness")
+	}
+	select {
+	case <-componentReady:
+	case outcome := <-done:
+		completed = true
+		if outcome.err != nil {
+			t.Fatalf("install harness failed before component readiness: %v", outcome.err)
+		}
+		if _, err := os.Stat(filepath.Join(auditDir, "parser.json")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("parser audit = %v; gate must hold it until component readiness begins", err)
+		}
+		t.Fatal("install harness reported success before launched component readiness began")
+	case <-time.After(uciInstallHarnessWindowsStartupTimeout):
+		t.Fatal("install harness did not begin launched component readiness")
+	}
+
+	outcome := <-done
+	completed = true
+	if outcome.err != nil {
+		t.Fatalf("run built UCI installation harness with component readiness: %v", outcome.err)
+	}
+	if !reflect.DeepEqual(outcome.result.ToolNames, []string{"uci_install_probe"}) {
+		t.Fatalf("MCP tools/list names = %#v, want the actual stdio probe tool", outcome.result.ToolNames)
+	}
+	if audit := uciReadInstallHarnessAudit(t, auditDir, "parser"); audit.Role != "parser" {
+		t.Fatalf("parser audit role = %q, want parser", audit.Role)
 	}
 	uciRequireInstallRootRemoved(t, installRoot)
 }
@@ -253,8 +337,10 @@ func TestUCIInstallHarnessProcessHelper(t *testing.T) {
 		Args:       append([]string(nil), os.Args[1:]...),
 		Probe:      os.Getenv(uciInstallHarnessHelperProbeEnv),
 	}
+	if audit.Role == "parser" {
+		uciWaitForInstallHarnessParserAuditGate(t)
+	}
 	uciWriteInstallHarnessAudit(t, audit)
-
 	switch audit.Role {
 	case "server", "parser":
 		for {
@@ -280,6 +366,18 @@ type uciInstallHarnessDeadlineProbe struct {
 
 type uciInstallHarnessStartedProbe struct {
 	started chan<- struct{}
+}
+
+type uciInstallHarnessCompletedProbe struct {
+	completed chan<- struct{}
+}
+
+func (probe uciInstallHarnessCompletedProbe) InitializeAndList(ctx context.Context, process uciMCPStdioProcess) ([]string, error) {
+	tools, err := (uciInstallHarnessMCPProbe{}).InitializeAndList(ctx, process)
+	if err == nil {
+		close(probe.completed)
+	}
+	return tools, err
 }
 
 func (probe uciInstallHarnessStartedProbe) InitializeAndList(ctx context.Context, process uciMCPStdioProcess) ([]string, error) {
@@ -407,6 +505,9 @@ func uciInstallHarnessTestRequest(t *testing.T, installRoot, auditDir, daemonMod
 		},
 		ReadinessTimeout: readinessTimeout,
 		MCPDriver:        uciInstallHarnessMCPProbe{},
+		ComponentReady: func(ctx context.Context) error {
+			return uciAwaitInstallHarnessAudits(ctx, auditDir, "server", "daemon", "parser")
+		},
 	}
 }
 
@@ -526,6 +627,24 @@ func uciWriteMCPResponse(t *testing.T, id json.RawMessage, result any) {
 	}
 }
 
+func uciWaitForInstallHarnessParserAuditGate(t *testing.T) {
+	t.Helper()
+	gate := os.Getenv(uciInstallHarnessHelperParserAuditGate)
+	if gate == "" {
+		return
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if _, err := os.Stat(gate); err == nil {
+			return
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("inspect parser audit gate %q: %v", gate, err)
+		}
+		<-ticker.C
+	}
+}
+
 func uciWriteInstallHarnessAudit(t *testing.T, audit uciInstallHarnessChildAudit) {
 	t.Helper()
 	dir := os.Getenv(uciInstallHarnessHelperAuditDir)
@@ -552,6 +671,39 @@ func uciReadInstallHarnessAudit(t *testing.T, dir, role string) uciInstallHarnes
 		t.Fatalf("decode %s child audit: %v", role, err)
 	}
 	return audit
+}
+
+func uciAwaitInstallHarnessAudits(ctx context.Context, dir string, roles ...string) error {
+	pending := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		pending[role] = struct{}{}
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for len(pending) > 0 {
+		for role := range pending {
+			payload, err := os.ReadFile(filepath.Join(dir, role+".json"))
+			if err == nil {
+				var audit uciInstallHarnessChildAudit
+				if json.Unmarshal(payload, &audit) == nil && audit.Role == role {
+					delete(pending, role)
+				}
+				continue
+			}
+			if !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("read %s child audit: %w", role, err)
+			}
+		}
+		if len(pending) == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+	return nil
 }
 
 func uciWaitForInstallHarnessAudit(t *testing.T, dir, role string) {

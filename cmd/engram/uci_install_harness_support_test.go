@@ -50,6 +50,7 @@ type uciInstallHarnessRequest struct {
 	Environment      []string
 	ReadinessTimeout time.Duration
 	MCPDriver        uciStandardMCPDriver
+	ComponentReady   func(context.Context) error
 }
 
 type uciInstallHarnessResult struct {
@@ -162,10 +163,21 @@ func runUCIInstallHarness(ctx context.Context, request uciInstallHarnessRequest)
 		}
 		return uciInstallHarnessResult{}, fmt.Errorf("run UCI standard MCP driver: %w", driverErr)
 	}
+
 	if contextErr := readinessCtx.Err(); contextErr != nil {
 		return uciInstallHarnessResult{}, contextErr
 	}
-
+	if request.ComponentReady != nil {
+		if componentErr := request.ComponentReady(readinessCtx); componentErr != nil {
+			if contextErr := readinessCtx.Err(); contextErr != nil {
+				return uciInstallHarnessResult{}, contextErr
+			}
+			return uciInstallHarnessResult{}, fmt.Errorf("wait for UCI install harness component readiness: %w", componentErr)
+		}
+		if contextErr := readinessCtx.Err(); contextErr != nil {
+			return uciInstallHarnessResult{}, contextErr
+		}
+	}
 	return uciInstallHarnessResult{ToolNames: append([]string(nil), toolNames...)}, nil
 }
 
