@@ -244,18 +244,23 @@ func documentSelectionTestScope(t *testing.T, identity auth.Identity) gormdb.Col
 	return scope
 }
 
-func callDocumentSelectionOperation(t *testing.T, service *Service, request documentCreateRequest, identity auth.Identity) *httptest.ResponseRecorder {
+func callDocumentSelectionRoute(t *testing.T, handler func(http.ResponseWriter, *http.Request), path string, payload any, identity auth.Identity, requestID string) *httptest.ResponseRecorder {
 	t.Helper()
-	body, err := json.Marshal(request)
+	body, err := json.Marshal(payload)
 	require.NoError(t, err)
-	httpRequest := httptest.NewRequest(http.MethodPost, "/api/documents", bytes.NewReader(body))
+	httpRequest := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
 	httpRequest.Header.Set("Content-Type", "application/json")
-	httpRequest.Header.Set("X-Engram-Request-ID", request.RequestID)
+	httpRequest.Header.Set(engramRequestIDHeader, requestID)
 	httpRequest.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: documentSelectionTestSession})
 	httpRequest = httpRequest.WithContext(auth.WithIdentity(httpRequest.Context(), identity))
 	recorder := httptest.NewRecorder()
-	service.handleCreateDocument(recorder, httpRequest)
+	handler(recorder, httpRequest)
 	return recorder
+}
+
+func callDocumentSelectionOperation(t *testing.T, service *Service, request documentCreateRequest, identity auth.Identity) *httptest.ResponseRecorder {
+	t.Helper()
+	return callDocumentSelectionRoute(t, service.handleCreateDocument, "/api/documents", request, identity, request.RequestID)
 }
 
 func documentExportRequest(requestID string, kind gormdb.CollectionSelectionKind, version int64, token string) documentCreateRequest {
@@ -655,4 +660,99 @@ func TestHandlersDocuments_SelectionExportKeepsPartialTruthWithoutAnArtifact(t *
 	assert.Nil(t, response.Artifact)
 	assert.Equal(t, []documentOperationItemResult{{TargetID: 51, Outcome: "committed", ObservedVersion: &allowed.Version}, {TargetID: 52, Outcome: "conflict"}}, response.ItemResults)
 	assert.NotContains(t, recorder.Body.String(), allowed.Content)
+}
+
+func TestHandlersDocuments_SelectionRoutesKeepAuthoritativeSnapshotCurrentAndPages(t *testing.T) {
+	t.Parallel()
+	identity := auth.SessionForBrowserUser("operator", 41)
+	scope := documentSelectionTestScope(t, identity)
+	const project = "engram"
+	documents := []gormdb.VersionedDocument{
+		{ID: 101, Project: project, Version: 4},
+		{ID: 102, Project: project, Version: 7},
+	}
+	documentsStore := &fakeDocumentStore{
+		listRows: documents,
+		readByIDDocs: map[int64]*gormdb.VersionedDocument{
+			101: &documents[0],
+		},
+	}
+	selections := &documentSelectionStoreFake{expectedScope: &scope}
+	service := documentsSelectionTestService(documentsStore, selections)
+	call := func(handler func(http.ResponseWriter, *http.Request), path string, payload any, requestID string) *httptest.ResponseRecorder {
+		return callDocumentSelectionRoute(t, handler, path, payload, identity, requestID)
+	}
+
+	t.Run("snapshot resolves explicit document versions", func(t *testing.T) {
+		response := call(service.handleDocumentSelectionSnapshot, "/api/documents/selection", map[string]any{
+			"domain": documentSelectionDomain,
+			"selection": map[string]any{
+				"kind":    gormdb.CollectionSelectionExplicit,
+				"targets": []gormdb.CollectionSelectionTarget{{ID: "101", ExpectedVersion: 4}},
+			},
+		}, "documents-selection-explicit")
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		var snapshot operatorCollectionSnapshotResponse
+		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &snapshot))
+		require.Equal(t, []gormdb.CollectionSelectionTarget{{ID: "101", ExpectedVersion: 4}}, snapshot.Selection.Targets)
+	})
+
+	t.Run("snapshot rejects a stale explicit document version", func(t *testing.T) {
+		response := call(service.handleDocumentSelectionSnapshot, "/api/documents/selection", map[string]any{
+			"domain": documentSelectionDomain,
+			"selection": map[string]any{
+				"kind":    gormdb.CollectionSelectionExplicit,
+				"targets": []gormdb.CollectionSelectionTarget{{ID: "101", ExpectedVersion: 5}},
+			},
+		}, "documents-selection-explicit-stale")
+		require.Equal(t, http.StatusPreconditionFailed, response.Code, response.Body.String())
+	})
+
+	var frozen operatorCollectionSnapshotResponse
+	t.Run("snapshot and current preserve the authoritative member set", func(t *testing.T) {
+		response := call(service.handleDocumentSelectionSnapshot, "/api/documents/selection", map[string]any{
+			"domain": documentSelectionDomain,
+			"selection": map[string]any{
+				"kind":   gormdb.CollectionSelectionFrozenFilter,
+				"filter": map[string]any{"scope": project},
+			},
+		}, "documents-selection-frozen")
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &frozen))
+		require.Equal(t, documentSelectionDomain, frozen.Selection.Domain)
+		require.Equal(t, gormdb.CollectionSelectionFrozenFilter, frozen.Selection.Kind)
+		require.Equal(t, []gormdb.CollectionSelectionTarget{{ID: "101", ExpectedVersion: 4}, {ID: "102", ExpectedVersion: 7}}, frozen.Selection.Targets)
+		require.Equal(t, 2, frozen.Selection.TargetCount)
+		require.NotEmpty(t, frozen.Selection.ExpiresAt)
+
+		current := call(service.handleDocumentSelectionCurrent, "/api/documents/selection/current", map[string]any{"domain": documentSelectionDomain}, "documents-selection-current")
+		require.Equal(t, http.StatusOK, current.Code, current.Body.String())
+		var readback operatorCollectionSnapshotResponse
+		require.NoError(t, json.Unmarshal(current.Body.Bytes(), &readback))
+		require.Equal(t, frozen.Selection, readback.Selection)
+	})
+
+	var firstPage operatorCollectionPageResponse
+	t.Run("page cursor traverses the authoritative document set", func(t *testing.T) {
+		response := call(service.handleDocumentSelectionPage, "/api/documents/selection/page", map[string]any{"project": project, "limit": 1}, "documents-selection-page-one")
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &firstPage))
+		require.Equal(t, []gormdb.CollectionSelectionTarget{{ID: "101", ExpectedVersion: 4}}, firstPage.Targets)
+		require.EqualValues(t, 2, *firstPage.Total)
+		require.NotEmpty(t, firstPage.Cursor)
+		require.NotEmpty(t, firstPage.NextCursor)
+
+		next := call(service.handleDocumentSelectionPage, "/api/documents/selection/page", map[string]any{"project": project, "cursor": firstPage.NextCursor, "limit": 1}, "documents-selection-page-two")
+		require.Equal(t, http.StatusOK, next.Code, next.Body.String())
+		var secondPage operatorCollectionPageResponse
+		require.NoError(t, json.Unmarshal(next.Body.Bytes(), &secondPage))
+		require.Equal(t, []gormdb.CollectionSelectionTarget{{ID: "102", ExpectedVersion: 7}}, secondPage.Targets)
+		require.Empty(t, secondPage.NextCursor)
+	})
+
+	t.Run("stale page cursor fails closed", func(t *testing.T) {
+		documentsStore.listRows = append(documentsStore.listRows, gormdb.VersionedDocument{ID: 103, Project: project, Version: 1})
+		response := call(service.handleDocumentSelectionPage, "/api/documents/selection/page", map[string]any{"project": project, "cursor": firstPage.NextCursor, "limit": 1}, "documents-selection-page-stale")
+		require.Equal(t, http.StatusPreconditionFailed, response.Code, response.Body.String())
+	})
 }
