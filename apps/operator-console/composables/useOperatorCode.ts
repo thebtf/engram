@@ -207,6 +207,8 @@ const REQUEST_TIMEOUT_MS = 30_000
 const INDEX_INTENT_STORAGE_KEY = 'engram.operator-code.index-intent.v1'
 const INDEX_INTENT_POLL_DELAY_MS = 1_000
 const INDEX_INTENT_MAX_POLLS = 30
+const TAB_LEASE_TTL_MS = 2 * 60_000
+const TAB_LEASE_RENEWAL_DELAY_MS = TAB_LEASE_TTL_MS / 2
 
 function text(value: unknown): string | null {
   if (typeof value !== 'string') return null
@@ -802,17 +804,62 @@ export function useOperatorCode() {
   let indexIntentPollTimer: number | null = null
   let indexIntentPollGeneration = 0
   let indexIntentPollCount = 0
+  let leaseRenewalTimer: number | null = null
+  let leaseRenewalAbort: AbortController | null = null
+  let leaseRenewalGeneration = 0
 
   function bindingPayload(extra: Record<string, unknown> = {}): Record<string, unknown> | null {
     if (binding.value === null) return null
     return { tab_binding_id: binding.value.tabBindingId, document_proof: binding.value.documentProof, ...extra }
   }
 
-  async function request(path: string, method: string, body?: Record<string, unknown>, extraHeaders: Record<string, string> = {}): Promise<CodeApiResult> {
+  function stopLeaseRenewal(): void {
+    leaseRenewalGeneration += 1
+    if (leaseRenewalTimer !== null) window.clearTimeout(leaseRenewalTimer)
+    leaseRenewalTimer = null
+    leaseRenewalAbort?.abort()
+    leaseRenewalAbort = null
+  }
+
+  function scheduleLeaseRenewal(): void {
+    if (binding.value === null || leaseRenewalTimer !== null || leaseRenewalAbort !== null) return
+    const generation = leaseRenewalGeneration
+    const tabBindingId = binding.value.tabBindingId
+    leaseRenewalTimer = window.setTimeout(() => {
+      leaseRenewalTimer = null
+      void renewLease(tabBindingId, generation)
+    }, TAB_LEASE_RENEWAL_DELAY_MS)
+  }
+
+  async function renewLease(tabBindingId: string, generation: number): Promise<void> {
+    const current = binding.value
+    if (current === null || current.tabBindingId !== tabBindingId || generation !== leaseRenewalGeneration || leaseRenewalAbort !== null) return
+    const controller = new AbortController()
+    leaseRenewalAbort = controller
+    const result = await request(`/code/tabs/${encodeURIComponent(tabBindingId)}/lease`, 'PUT', { document_proof: current.documentProof }, {}, controller.signal)
+    if (generation !== leaseRenewalGeneration || binding.value !== current || controller.signal.aborted) return
+    leaseRenewalAbort = null
+    if (result.kind === 'success' && result.status === 204) {
+      scheduleLeaseRenewal()
+      return
+    }
+    stopLeaseRenewal()
+    binding.value = null
+    pinnedContext.value = null
+    clearContextualResults()
+    clearIndexIntent()
+    clearPersistedPinCandidate()
+    bootstrapPhase.value = result.kind === 'denied' ? 'denied' : 'error'
+    bootstrapEvidence.value = { ...bootstrapEvidence.value, transition: 'TAB_LEASE_RENEWAL_FAILED' }
+  }
+
+  async function request(path: string, method: string, body?: Record<string, unknown>, extraHeaders: Record<string, string> = {}, cancellation?: AbortSignal): Promise<CodeApiResult> {
     const id = requestId()
     if (id === null) return { kind: 'error', status: 0 }
     if (!navigator.onLine) return { kind: 'offline', status: 0 }
     const controller = new AbortController()
+    const cancel = () => controller.abort()
+    cancellation?.addEventListener('abort', cancel, { once: true })
     const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
     const headers: Record<string, string> = { 'X-Engram-Request-ID': id, ...extraHeaders }
     if (body !== undefined) headers['Content-Type'] = 'application/json'
@@ -844,6 +891,7 @@ export function useOperatorCode() {
         ? { kind: 'timeout', status: 0 }
         : { kind: 'offline', status: 0 }
     } finally {
+      cancellation?.removeEventListener('abort', cancel)
       window.clearTimeout(timeout)
     }
   }
@@ -1040,6 +1088,8 @@ export function useOperatorCode() {
     const previousBinding = binding.value
     const replaced = transition.state === 'TAB_BINDING_COLLISION' || transition.state === 'TAB_BOOTSTRAP_AMBIGUOUS'
       || previousBinding !== null && previousBinding.tabBindingId !== transition.binding?.tabBindingId
+    const renewedDocument = previousBinding?.documentProof !== transition.binding?.documentProof
+    if (renewedDocument) stopLeaseRenewal()
     if (replaced) {
       clearIndexIntent()
       clearPersistedPinCandidate()
@@ -1056,6 +1106,7 @@ export function useOperatorCode() {
       return false
     }
     if (transition.binding === null || !persistResumePair(transition.binding)) {
+      stopLeaseRenewal()
       binding.value = null
       clearResumePair()
       bootstrapPhase.value = 'ambiguous'
@@ -1066,6 +1117,7 @@ export function useOperatorCode() {
       : transition.state === 'TAB_BOOTSTRAP_AMBIGUOUS'
         ? 'ambiguous'
         : 'ready'
+    scheduleLeaseRenewal()
     return true
   }
 
@@ -1356,6 +1408,7 @@ export function useOperatorCode() {
 
   function closeBinding(): void {
     const current = binding.value
+    stopLeaseRenewal()
     if (current !== null) void request(`/code/tabs/${encodeURIComponent(current.tabBindingId)}`, 'DELETE', { document_proof: current.documentProof })
   }
 
@@ -1364,6 +1417,7 @@ export function useOperatorCode() {
   })
 
   onBeforeUnmount(() => {
+    stopLeaseRenewal()
     stopIndexIntentPolling()
     window.removeEventListener('pagehide', closeBinding)
   })
