@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -28,6 +30,36 @@ func TestStartListenerDisabledHasNoFilesystemEffect(t *testing.T) {
 	}
 	if err := listener.Close(); err != nil {
 		t.Fatalf("Close disabled listener: %v", err)
+	}
+}
+
+func TestStartListenerCreatesPrivateMissingRuntimeDirectory(t *testing.T) {
+	baseDir := filepath.Join(t.TempDir(), "missing", "runtime")
+	generation, relay := newTestListenerRelay(t)
+	listener, err := StartListener(context.Background(), ListenerConfig{
+		Enabled:    true,
+		BaseDir:    baseDir,
+		Generation: generation,
+		Relay:      relay,
+	})
+	if err != nil {
+		t.Fatalf("StartListener with missing runtime directory: %v", err)
+	}
+	if got, want := listener.Endpoint(), filepath.Join(baseDir, runtimeEndpointFileName(generation)); got != want {
+		t.Fatalf("endpoint = %q, want bounded runtime path %q", got, want)
+	}
+	if info, err := os.Stat(baseDir); err != nil {
+		t.Fatalf("stat created runtime directory: %v", err)
+	} else if !info.IsDir() || (runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0) {
+		t.Fatalf("runtime directory mode = %v, want private directory", info.Mode())
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatalf("Close listener: %v", err)
+	}
+	if info, err := os.Stat(baseDir); err != nil {
+		t.Fatalf("stat retained runtime directory: %v", err)
+	} else if !info.IsDir() || (runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0) {
+		t.Fatalf("retained runtime directory mode = %v, want private directory", info.Mode())
 	}
 }
 

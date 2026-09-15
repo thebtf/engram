@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/thebtf/mcp-mux/muxcore/ipc"
@@ -60,8 +62,18 @@ func StartListener(parent context.Context, config ListenerConfig) (*Listener, er
 	if err != nil {
 		return nil, err
 	}
-	if err := prepareRuntimeEndpoint(endpointDir); err != nil {
-		return nil, err
+	if endpointDir == "" && strings.TrimSpace(config.BaseDir) != "" {
+		runtimeDir := filepath.Dir(endpoint)
+		if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+			return nil, fmt.Errorf("create private legacy relay runtime directory: %w", err)
+		}
+		if err := os.Chmod(runtimeDir, 0o700); err != nil {
+			return nil, fmt.Errorf("set private legacy relay runtime directory permissions: %w", err)
+		}
+	} else if endpointDir != "" {
+		if err := prepareRuntimeEndpoint(endpointDir); err != nil {
+			return nil, err
+		}
 	}
 	locatorPath := RuntimeLocatorPath(config.BaseDir)
 	listener, err := ipc.Listen(endpoint)

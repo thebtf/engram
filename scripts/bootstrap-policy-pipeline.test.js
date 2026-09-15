@@ -24,7 +24,7 @@ function installerPath(fakeBin) {
 }
 function shellQuote(value) { return `'${value.replaceAll("'", `'\\''`)}'`; }
 function temporaryDirectory() { return fs.mkdtempSync(path.join(root, ".tmp-bootstrap-policy-")); }
-function directInstallerFixture(temp) {
+function directInstallerFixture(temp, version = currentPolicyVersion, includeRelay = true, extension = "tar.gz") {
   const archiveRoot = path.join(temp, "archive");
   const fakeBin = path.join(temp, "bin");
   for (const directory of ["hooks", "scripts", ".claude-plugin", "extensions"]) fs.mkdirSync(path.join(archiveRoot, directory), { recursive: true });
@@ -35,12 +35,26 @@ function directInstallerFixture(temp) {
   fs.copyFileSync(path.join(root, "plugin", "engram", "scripts", "register-plugin.js"), path.join(archiveRoot, "scripts", "register-plugin.js"));
   fs.writeFileSync(path.join(archiveRoot, "package.json"), "{}\n");
   fs.writeFileSync(path.join(archiveRoot, "extensions", "engram-memory.mjs"), "export {};\n");
-  fs.writeFileSync(path.join(archiveRoot, "extensions", "legacy-relay.mjs"), "export {};\n");
+  if (includeRelay) fs.writeFileSync(path.join(archiveRoot, "extensions", "legacy-relay.mjs"), "export {};\n");
   fs.writeFileSync(path.join(archiveRoot, ".claude-plugin", "plugin.json"), "{}\n");
-  fs.copyFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), path.join(archiveRoot, "bootstrap-targets.json"));
-  const archive = path.join(temp, "release.tar.gz");
-  const archived = spawnSync("tar", ["-czf", archive, "-C", archiveRoot, "."], { encoding: "utf8" });
-  assert.equal(archived.status, 0, archived.stderr);
+  if (version === currentPolicyVersion) {
+    fs.copyFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), path.join(archiveRoot, "bootstrap-targets.json"));
+  } else {
+    const bytes = Buffer.from("trusted");
+    fs.writeFileSync(path.join(archiveRoot, "bootstrap-targets.json"), JSON.stringify(createPolicy(version, {
+      "win32-x64": target(version, "engram-windows-amd64.exe", bytes),
+      "linux-x64": target(version, "engram-linux-amd64", bytes),
+      "darwin-arm64": target(version, "engram-darwin-arm64", bytes),
+    })));
+  }
+  const archive = path.join(temp, `release.${extension}`);
+  const entries = ["hooks/hook.js", "hooks/hooks.json", "scripts/bootstrap-policy.js", "scripts/register-plugin.js", "package.json", "extensions/engram-memory.mjs", ".claude-plugin/plugin.json", "bootstrap-targets.json"];
+  if (includeRelay) entries.push("extensions/legacy-relay.mjs");
+  if (extension === "zip") writeZip(archiveRoot, archive, entries);
+  else {
+    const archived = spawnSync("tar", ["-czf", archive, "-C", archiveRoot, "."], { encoding: "utf8" });
+    assert.equal(archived.status, 0, archived.stderr);
+  }
   fs.writeFileSync(path.join(fakeBin, "curl"), "#!/usr/bin/env bash\nwhile [[ $# -gt 0 ]]; do if [[ $1 == -o ]]; then cp \"$FAKE_RELEASE_ARCHIVE\" \"$2\"; exit 0; fi; shift; done\nexit 1\n", { mode: 0o755 });
   return { archive, fakeBin };
 }
@@ -1862,6 +1876,49 @@ test("direct installer rejects archive self-validation before install mutation",
     assert.match(powerShellInstaller, /Node\.js 18\+/);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
+test("shell installer allows a relay-less v6.48 archive but rejects v6.49", () => {
+  const temp = temporaryDirectory();
+  try {
+    for (const [version, accepted] of [["6.48.0", true], ["6.49.0", false]]) {
+      const fixture = directInstallerFixture(path.join(temp, version), version, false);
+      const home = path.join(temp, `home-${version}`);
+      const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fixture.fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(fixture.archive))}`;
+      const result = spawnSync("bash", ["-c", `printf '\n\n' | ${environment} bash scripts/install.sh v${version}`], { cwd: root, encoding: "utf8", env: process.env });
+      assert.ifError(result.error);
+      const output = `${result.stdout}\n${result.stderr}`;
+      if (!accepted) assert.match(output, /missing required OMP relay helper/);
+      assert.equal(result.status === 0, accepted, output);
+      const helper = path.join(home, ".claude", "plugins", "marketplaces", "engram", "extensions", "legacy-relay.mjs");
+      assert.equal(fs.existsSync(helper), false);
+    }
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+windowsTest("PowerShell installer allows a relay-less v6.48 archive but rejects v6.49", () => {
+  const temp = temporaryDirectory();
+  try {
+    for (const [version, accepted] of [["6.48.0", true], ["6.49.0", false]]) {
+      const fixture = directInstallerFixture(path.join(temp, version), version, false, "zip");
+      const home = path.join(temp, `home-${version}`);
+      const ps = `$env:USERPROFILE = '${powerShellQuote(home)}'
+$env:TEMP = '${powerShellQuote(temp)}'
+$source = Get-Content -LiteralPath '${powerShellQuote(path.join(root, "scripts", "install.ps1"))}' -Raw
+$source = $source.Substring($source.IndexOf('$ErrorActionPreference = "Stop"'))
+$source = [regex]::Split($source, '# ---------------------------------------------------------------------------\\r?\\n# Entry point')[0]
+Invoke-Expression $source
+function Invoke-WebRequest { param($Uri, $OutFile, [switch] $UseBasicParsing) Copy-Item -LiteralPath '${powerShellQuote(fixture.archive)}' -Destination $OutFile -Force }
+Install-Release -Ver 'v${version}' -NodeExecutable '${powerShellQuote(process.execPath)}'
+`;
+      const result = spawnSync(nativePwsh(), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", ps], { cwd: root, encoding: "utf8", env: process.env });
+      const output = registryError(result);
+      if (!accepted) assert.match(output, /missing required OMP relay helper/);
+      assert.equal(result.status === 0, accepted, output);
+      const helper = path.join(home, ".claude", "plugins", "marketplaces", "engram", "extensions", "legacy-relay.mjs");
+      assert.equal(fs.existsSync(helper), false);
+    }
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
 
 test("direct installer registers all Claude registries without jq", () => {
   const temp = temporaryDirectory();
