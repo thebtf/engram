@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced the monolithic SonarQube base test with reusable first-party package race and bounded-coverage units, preserving dedicated-profile isolation while retaining successful unit evidence across sibling failures.
 - Made SonarQube retained skip evidence require a revalidated dedicated owner’s exact top-level test and terminal package pass, while preserving deferred base-unit execution and full nested test identities.
 - Made SonarQube coverage parsing fail closed on malformed atomic coverprofile blocks while retaining event-proven zero-coverable package units without fabricating coverage blocks.
+- Fixed document export cross-origin downloads, relay runtime and pre-6.49 installer compatibility, read-only registration and Authentik authorization, one-time Access secrets, and authoritative console mutation receipt refresh.
 
 ## [6.48.0] - 2026-08-18
 
