@@ -34,7 +34,12 @@ func TestStartListenerDisabledHasNoFilesystemEffect(t *testing.T) {
 }
 
 func TestStartListenerCreatesPrivateMissingRuntimeDirectory(t *testing.T) {
-	baseDir := filepath.Join(t.TempDir(), "missing", "runtime")
+	parent, err := os.MkdirTemp("", "e")
+	if err != nil {
+		t.Fatalf("create short temp parent: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(parent) })
+	baseDir := filepath.Join(parent, "r")
 	generation, relay := newTestListenerRelay(t)
 	listener, err := StartListener(context.Background(), ListenerConfig{
 		Enabled:    true,
