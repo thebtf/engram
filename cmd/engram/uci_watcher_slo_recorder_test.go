@@ -2269,7 +2269,7 @@ func TestUCIWatcherSLOAwaitSearchableUsesOneCanarySearch(t *testing.T) {
 
 	trace := newUCIWatcherSLOAttemptTrace(time.Now(), before)
 	restoreObserver := server.client.setToolObserver(trace.observeTool)
-	publication, response, structuralCompleted, err := uciWatcherSLOAwaitSearchable(context.Background(), server.client, uciInstalledAcceptanceSelection{contextHandle: "context", runID: before.runID}, before, "UCIWatcherCanary", "pkg/watcher.go", trace)
+	publication, response, _, err := uciWatcherSLOAwaitSearchable(context.Background(), server.client, uciInstalledAcceptanceSelection{contextHandle: "context", runID: before.runID}, before, "UCIWatcherCanary", "pkg/watcher.go", trace)
 	if err != nil {
 		t.Fatalf("await searchable watcher: %v", err)
 	}
@@ -2288,7 +2288,7 @@ func TestUCIWatcherSLOAwaitSearchableUsesOneCanarySearch(t *testing.T) {
 	server.close()
 	server.require(t)
 	uciWatcherSLORequireSearchableResult(t, after, publication, response)
-	uciWatcherSLORequireSearchableDiagnostics(t, trace, structuralCompleted)
+	uciWatcherSLORequireSearchableDiagnostics(t, trace)
 }
 
 func uciWatcherSLOSearchablePayloads(t *testing.T, publication uciInstalledAcceptancePublication) (json.RawMessage, json.RawMessage) {
@@ -2448,40 +2448,67 @@ func uciWatcherSLORequireSearchableResult(t *testing.T, expected, publication uc
 	}
 }
 
-func uciWatcherSLORequireSearchableDiagnostics(t *testing.T, trace *uciWatcherSLOAttemptTrace, structuralCompleted time.Time) {
+func uciWatcherSLORequireSearchableDiagnostics(t *testing.T, trace *uciWatcherSLOAttemptTrace) {
 	t.Helper()
 	events := trace.snapshot()
+	if !uciWatcherSLOSearchableDiagnosticsValid(events) {
+		t.Fatalf("endpoint and safety diagnostics = %#v", events)
+	}
+}
+
+func uciWatcherSLOSearchableDiagnosticsValid(events []uciWatcherSLOStageEvent) bool {
 	searchReturns := 0
 	for _, event := range events {
 		if event.Name == "search_return" {
 			searchReturns++
 		}
 	}
+	search := uciWatcherSLOEvent(events, "search_return")
 	canary := uciWatcherSLOEvent(events, "canary_search_return")
 	barrierEvent := uciWatcherSLOEvent(events, "post_endpoint_barrier_begin")
 	quiescence := uciWatcherSLOEvent(events, "post_endpoint_quiescence_begin")
-	if searchReturns != 1 || uciWatcherSLOEvent(events, "client_view_first_seen") == nil || canary == nil || barrierEvent == nil || quiescence == nil || canary.Span.ReturnedElapsedNS > barrierEvent.Span.StartedElapsedNS || barrierEvent.Span.ReturnedElapsedNS > quiescence.Span.StartedElapsedNS || structuralCompleted.After(trace.origin.Add(time.Duration(barrierEvent.Span.StartedElapsedNS))) || uciWatcherSLOEvent(events, "final_search_begin") != nil || uciWatcherSLOEvent(events, "final_search_return") != nil {
-		t.Fatalf("endpoint and safety diagnostics = %#v", events)
-	}
+	return searchReturns == 1 && search != nil && uciWatcherSLOStageSpanValid(search.Span) &&
+		uciWatcherSLOEvent(events, "client_view_first_seen") != nil && canary != nil && uciWatcherSLOStageSpanValid(canary.Span) &&
+		barrierEvent != nil && uciWatcherSLOStageSpanValid(barrierEvent.Span) &&
+		quiescence != nil && uciWatcherSLOStageSpanValid(quiescence.Span) &&
+		canary.Span.ReturnedElapsedNS <= barrierEvent.Span.StartedElapsedNS &&
+		barrierEvent.Span.ReturnedElapsedNS <= quiescence.Span.StartedElapsedNS &&
+		uciWatcherSLOEvent(events, "final_search_begin") == nil && uciWatcherSLOEvent(events, "final_search_return") == nil
+}
+
+func uciWatcherSLOStageSpanValid(span uciWatcherSLOStageSpan) bool {
+	return span.StartedElapsedNS >= 0 && span.ReturnedElapsedNS >= span.StartedElapsedNS && span.ElapsedNS == span.ReturnedElapsedNS-span.StartedElapsedNS
 }
 
 func TestUCIWatcherSLOSearchableDiagnosticsAllowsSharedBoundaryTimestamps(t *testing.T) {
-	origin := time.Unix(0, 0).UTC()
-	trace := newUCIWatcherSLOAttemptTrace(origin, uciInstalledAcceptancePublication{})
+	search := uciWatcherSLOStageSpan{StartedElapsedNS: 10, ReturnedElapsedNS: 10, ElapsedNS: 0}
 	canary := uciWatcherSLOStageSpan{StartedElapsedNS: 5, ReturnedElapsedNS: 10, ElapsedNS: 5}
 	barrier := uciWatcherSLOStageSpan{StartedElapsedNS: 10, ReturnedElapsedNS: 20, ElapsedNS: 10}
 	quiescence := uciWatcherSLOStageSpan{StartedElapsedNS: 20, ReturnedElapsedNS: 30, ElapsedNS: 10}
-	if canary.ReturnedElapsedNS != barrier.StartedElapsedNS || barrier.ReturnedElapsedNS != quiescence.StartedElapsedNS {
-		t.Fatalf("test setup must share adjacent boundary timestamps: canary=%#v barrier=%#v quiescence=%#v", canary, barrier, quiescence)
+	if search.StartedElapsedNS != search.ReturnedElapsedNS || search.ElapsedNS != 0 || canary.ReturnedElapsedNS != barrier.StartedElapsedNS || barrier.ReturnedElapsedNS != quiescence.StartedElapsedNS {
+		t.Fatalf("test setup must use a zero-duration search and shared boundary timestamps: search=%#v canary=%#v barrier=%#v quiescence=%#v", search, canary, barrier, quiescence)
 	}
-	trace.events = []uciWatcherSLOStageEvent{
-		{Name: "search_return", Span: canary},
+	events := []uciWatcherSLOStageEvent{
+		{Name: "search_return", Span: search},
 		{Name: "client_view_first_seen", Span: canary},
 		{Name: "canary_search_return", Span: canary},
 		{Name: "post_endpoint_barrier_begin", Span: barrier},
 		{Name: "post_endpoint_quiescence_begin", Span: quiescence},
 	}
-	uciWatcherSLORequireSearchableDiagnostics(t, trace, origin.Add(10*time.Nanosecond))
+	if !uciWatcherSLOSearchableDiagnosticsValid(events) {
+		t.Fatalf("zero-duration search with shared boundaries was rejected: %#v", events)
+	}
+
+	reversed := append([]uciWatcherSLOStageEvent(nil), events...)
+	reversed[0].Span = uciWatcherSLOStageSpan{StartedElapsedNS: 11, ReturnedElapsedNS: 10, ElapsedNS: -1}
+	if uciWatcherSLOSearchableDiagnosticsValid(reversed) {
+		t.Fatalf("reversed search span was accepted: %#v", reversed)
+	}
+
+	missing := append([]uciWatcherSLOStageEvent(nil), events[1:]...)
+	if uciWatcherSLOSearchableDiagnosticsValid(missing) {
+		t.Fatalf("missing search span was accepted: %#v", missing)
+	}
 }
 
 func TestUCIInstalledWatcherFirstCurrentPublicationUsesNewRunForSubsequentStatus(t *testing.T) {

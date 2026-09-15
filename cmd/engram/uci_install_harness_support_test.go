@@ -453,14 +453,14 @@ func uciStartInstalledHarnessComponent(tree *uciInstallHarnessProcessTree, compo
 
 func uciCleanupInstallHarness(tree *uciInstallHarnessProcessTree, processes []*uciStartedInstallHarnessProcess) error {
 	var cleanupErrors []error
-	if tree != nil {
-		if err := tree.Close(); err != nil {
-			cleanupErrors = append(cleanupErrors, fmt.Errorf("terminate UCI install harness process trees: %w", err))
-		}
-	}
 	for _, process := range processes {
 		if err := process.closePipes(); err != nil {
 			cleanupErrors = append(cleanupErrors, err)
+		}
+	}
+	if tree != nil {
+		if err := tree.Close(); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("terminate UCI install harness process trees: %w", err))
 		}
 	}
 	for _, process := range processes {
