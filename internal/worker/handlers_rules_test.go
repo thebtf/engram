@@ -488,7 +488,7 @@ func TestRulesCollectionBridgeRoutesFreezeAndPageOverTwoHundredRules(t *testing.
 		rules[index] = created
 	}
 
-	adapter, err := composeOperatorCollectionHTTPAdapter(ruleStore.DB)
+	adapter, err := composeOperatorCollectionHTTPAdapter(ruleStore.DB, false)
 	require.NoError(t, err)
 	service := newOperatorCollectionRouteTestService(adapter)
 	identity := auth.SessionForBrowserUser("operator", 41)

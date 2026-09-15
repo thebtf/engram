@@ -1263,7 +1263,7 @@ func (s *Service) initializeAsync() {
 		s.initMu.Unlock()
 	}
 
-	operatorCollectionAdapter, composeErr := composeOperatorCollectionHTTPAdapter(store.GetDB())
+	operatorCollectionAdapter, composeErr := composeOperatorCollectionHTTPAdapter(store.GetDB(), s.candidateQueueActive())
 	if composeErr != nil {
 		s.setInitError(fmt.Errorf("compose operator collection HTTP adapter: %w", composeErr))
 		return

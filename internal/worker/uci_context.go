@@ -427,17 +427,21 @@ func (operatorCollectionScopeAuthority) ResolveOperatorCollectionScope(_ context
 	}, nil
 }
 
-func composeOperatorCollectionHTTPAdapter(db *gormlib.DB) (*OperatorCollectionHTTPAdapter, error) {
+func composeOperatorCollectionHTTPAdapter(db *gormlib.DB, queueEnabled bool) (*OperatorCollectionHTTPAdapter, error) {
 	if db == nil {
 		return nil, errors.New("operator collection HTTP composition requires a database")
 	}
 	rules := gormstore.NewBehavioralRulesStoreFromDB(db)
+	providers := operatorCollectionProviderRouter{operatorCollectionSelectionDomain: rules}
+	if queueEnabled {
+		providers[queueCandidateSelectionDomain] = newQueueCandidateCollectionProvider(gormstore.NewCandidateStore(db, nil))
+	}
 	return NewOperatorCollectionHTTPAdapter(
 		gormstore.NewCollectionSelectionStore(db),
 		operatorCollectionScopeAuthority{},
-		rules,
-		rules,
-		rules,
+		providers,
+		providers,
+		providers,
 	), nil
 }
 

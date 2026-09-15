@@ -3,16 +3,21 @@ package worker
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/pkg/models"
 )
 
 const queueCandidateSelectionDomain = "queue"
@@ -30,6 +35,248 @@ type QueueCandidateSelectionHandler struct {
 
 func NewQueueCandidateSelectionHandler(service *Service, selections queueCandidateSelectionStore, resolver operatorCollectionScopeResolver) *QueueCandidateSelectionHandler {
 	return &QueueCandidateSelectionHandler{service: service, selections: selections, resolver: resolver}
+}
+
+const queueCandidateCollectionCursorVersion = 1
+
+// queueCandidateCollectionProvider exposes only pending candidates through the
+// shared selection boundary; candidate actions retain their own rechecks.
+type queueCandidateCollectionProvider struct {
+	candidates candidateReviewStore
+}
+
+type queueCandidateCollectionFilter struct {
+	project string
+}
+
+type queueCandidateCollectionCursor struct {
+	Fingerprint string `json:"f"`
+	Revision    string `json:"r"`
+	Scope       string `json:"s"`
+	Offset      int    `json:"o"`
+	Limit       int    `json:"l"`
+	Version     int    `json:"v"`
+}
+
+func newQueueCandidateCollectionProvider(candidates candidateReviewStore) *queueCandidateCollectionProvider {
+	return &queueCandidateCollectionProvider{candidates: candidates}
+}
+
+func (provider *queueCandidateCollectionProvider) NormalizeCollectionFilter(_ context.Context, scope gormdb.CollectionSelectionScope, rawScope string) (gormdb.CollectionFilter, error) {
+	if scope.Domain != queueCandidateSelectionDomain {
+		return gormdb.CollectionFilter{}, gormdb.ErrCollectionSelectionDenied
+	}
+	filter, err := queueCandidateCollectionFilterForScope(rawScope)
+	if err != nil {
+		return gormdb.CollectionFilter{}, err
+	}
+	return filter.collectionFilter(), nil
+}
+
+func (provider *queueCandidateCollectionProvider) FreezeCollectionSelection(ctx context.Context, scope gormdb.CollectionSelectionScope, filter gormdb.CollectionFilter) (gormdb.CollectionFrozenSelection, error) {
+	if scope.Domain != queueCandidateSelectionDomain {
+		return gormdb.CollectionFrozenSelection{}, gormdb.ErrCollectionSelectionDenied
+	}
+	resolved, err := queueCandidateCollectionFilterFrom(filter)
+	if err != nil {
+		return gormdb.CollectionFrozenSelection{}, err
+	}
+	rows, err := provider.rows(ctx, resolved)
+	if err != nil {
+		return gormdb.CollectionFrozenSelection{}, err
+	}
+	if len(rows) == 0 {
+		return gormdb.CollectionFrozenSelection{}, gormdb.ErrCollectionSelectionDenied
+	}
+	return gormdb.CollectionFrozenSelection{
+		Targets:   queueCandidateCollectionTargets(rows),
+		ExpiresAt: time.Now().UTC().Add(time.Hour),
+	}, nil
+}
+
+func (provider *queueCandidateCollectionProvider) FreezeCollectionPageSelection(ctx context.Context, scope gormdb.CollectionSelectionScope, cursor string) ([]gormdb.CollectionSelectionTarget, error) {
+	if scope.Domain != queueCandidateSelectionDomain {
+		return nil, gormdb.ErrCollectionSelectionDenied
+	}
+	state, filter, err := decodeQueueCandidateCollectionCursor(cursor)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := provider.rows(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	if state.Revision != queueCandidateCollectionRevision(filter.collectionFilter(), rows) {
+		return nil, gormdb.ErrCollectionSelectionReconfirmationRequired
+	}
+	if state.Offset < 0 || state.Offset >= len(rows) {
+		return nil, gormdb.ErrCollectionSelectionInvalid
+	}
+	return queueCandidateCollectionTargets(rows[state.Offset:min(state.Offset+state.Limit, len(rows))]), nil
+}
+
+func (provider *queueCandidateCollectionProvider) PageCollection(ctx context.Context, scope gormdb.CollectionSelectionScope, request gormdb.CollectionPageRequest) (gormdb.CollectionPage, error) {
+	if scope.Domain != queueCandidateSelectionDomain {
+		return gormdb.CollectionPage{}, gormdb.ErrCollectionSelectionDenied
+	}
+	if !request.Valid() || request.Domain != queueCandidateSelectionDomain {
+		return gormdb.CollectionPage{}, gormdb.ErrCollectionSelectionInvalid
+	}
+	filter, err := queueCandidateCollectionFilterFrom(request.Filter)
+	if err != nil {
+		return gormdb.CollectionPage{}, err
+	}
+	rows, err := provider.rows(ctx, filter)
+	if err != nil {
+		return gormdb.CollectionPage{}, err
+	}
+	revision := queueCandidateCollectionRevision(request.Filter, rows)
+	offset := 0
+	cursor := request.Cursor
+	if cursor != "" {
+		state, cursorFilter, cursorErr := decodeQueueCandidateCollectionCursor(cursor)
+		if cursorErr != nil || cursorFilter.project != filter.project || state.Fingerprint != request.Filter.Fingerprint || state.Limit != request.Limit {
+			return gormdb.CollectionPage{}, gormdb.ErrCollectionSelectionInvalid
+		}
+		if state.Revision != revision {
+			return gormdb.CollectionPage{}, gormdb.ErrCollectionSelectionReconfirmationRequired
+		}
+		if state.Offset < 0 || (len(rows) > 0 && state.Offset >= len(rows)) {
+			return gormdb.CollectionPage{}, gormdb.ErrCollectionSelectionInvalid
+		}
+		offset = state.Offset
+	} else {
+		cursor, err = encodeQueueCandidateCollectionCursor(request.Filter, revision, offset, request.Limit)
+		if err != nil {
+			return gormdb.CollectionPage{}, err
+		}
+	}
+	end := min(offset+request.Limit, len(rows))
+	var nextCursor string
+	if end < len(rows) {
+		nextCursor, err = encodeQueueCandidateCollectionCursor(request.Filter, revision, end, request.Limit)
+		if err != nil {
+			return gormdb.CollectionPage{}, err
+		}
+	}
+	total := int64(len(rows))
+	return gormdb.CollectionPage{
+		Cursor:     cursor,
+		Targets:    queueCandidateCollectionTargets(rows[offset:end]),
+		NextCursor: nextCursor,
+		Total:      &total,
+	}, nil
+}
+
+func queueCandidateCollectionFilterForScope(rawScope string) (queueCandidateCollectionFilter, error) {
+	if strings.TrimSpace(rawScope) != rawScope {
+		return queueCandidateCollectionFilter{}, gormdb.ErrCollectionSelectionInvalid
+	}
+	if rawScope == "" || rawScope == "*" || strings.EqualFold(rawScope, candidateQueueAllProjects) {
+		return queueCandidateCollectionFilter{project: candidateQueueAllProjects}, nil
+	}
+	if !operatorCodeText(rawScope) {
+		return queueCandidateCollectionFilter{}, gormdb.ErrCollectionSelectionInvalid
+	}
+	return queueCandidateCollectionFilter{project: rawScope}, nil
+}
+
+func (filter queueCandidateCollectionFilter) collectionFilter() gormdb.CollectionFilter {
+	digest := sha256.Sum256([]byte("queue-candidate-collection-filter/v1\x00status:pending\x00created_at:desc\x00id:desc\x00project:" + filter.project))
+	return gormdb.CollectionFilter{Fingerprint: "sha256:" + hex.EncodeToString(digest[:]), Value: filter.project}
+}
+
+func queueCandidateCollectionFilterFrom(filter gormdb.CollectionFilter) (queueCandidateCollectionFilter, error) {
+	if !filter.Valid() {
+		return queueCandidateCollectionFilter{}, gormdb.ErrCollectionSelectionInvalid
+	}
+	resolved, err := queueCandidateCollectionFilterForScope(filter.Value)
+	if err != nil || resolved.collectionFilter().Fingerprint != filter.Fingerprint {
+		return queueCandidateCollectionFilter{}, gormdb.ErrCollectionSelectionInvalid
+	}
+	return resolved, nil
+}
+
+func (provider *queueCandidateCollectionProvider) rows(ctx context.Context, filter queueCandidateCollectionFilter) ([]*models.CrystallizationCandidate, error) {
+	if provider == nil || provider.candidates == nil {
+		return nil, errors.New("queue candidate collection provider is not configured")
+	}
+	project := filter.project
+	if project == candidateQueueAllProjects {
+		project = ""
+	}
+	rows, err := provider.candidates.ListByStatus(ctx, project, models.CandidateStatusPending, gormdb.CollectionSelectionMaxTargets+1)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) > gormdb.CollectionSelectionMaxTargets {
+		return nil, gormdb.ErrCollectionSelectionInvalid
+	}
+	for _, row := range rows {
+		if row == nil || row.ID < 1 || row.Status != models.CandidateStatusPending {
+			return nil, gormdb.ErrCollectionSelectionInvalid
+		}
+	}
+	return rows, nil
+}
+
+func queueCandidateCollectionRevision(filter gormdb.CollectionFilter, rows []*models.CrystallizationCandidate) string {
+	hash := sha256.New()
+	hash.Write([]byte("queue-candidate-collection-revision/v1\x00" + filter.Fingerprint + "\x00"))
+	for _, row := range rows {
+		var value [32]byte
+		hash.Write(strconv.AppendInt(value[:0], row.ID, 10))
+		hash.Write([]byte{0})
+		hash.Write(strconv.AppendInt(value[:0], row.UpdatedAt.UnixNano(), 10))
+		hash.Write([]byte{0})
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
+
+func queueCandidateCollectionTargets(rows []*models.CrystallizationCandidate) []gormdb.CollectionSelectionTarget {
+	targets := make([]gormdb.CollectionSelectionTarget, len(rows))
+	for index, row := range rows {
+		version := uint64(row.UpdatedAt.UnixNano())
+		if version == 0 {
+			version = 1
+		}
+		targets[index] = gormdb.CollectionSelectionTarget{ID: strconv.FormatInt(row.ID, 10), ExpectedVersion: version}
+	}
+	return targets
+}
+
+func encodeQueueCandidateCollectionCursor(filter gormdb.CollectionFilter, revision string, offset, limit int) (string, error) {
+	if !filter.Valid() || !(gormdb.CollectionFilter{Fingerprint: revision, Value: candidateQueueAllProjects}).Valid() || offset < 0 || limit < 1 || limit > gormdb.CollectionPageMaxSize {
+		return "", gormdb.ErrCollectionSelectionInvalid
+	}
+	payload, err := json.Marshal(queueCandidateCollectionCursor{Fingerprint: filter.Fingerprint, Revision: revision, Scope: filter.Value, Offset: offset, Limit: limit, Version: queueCandidateCollectionCursorVersion})
+	if err != nil {
+		return "", err
+	}
+	cursor := base64.RawURLEncoding.EncodeToString(payload)
+	if cursor == "" || len(cursor) > 512 {
+		return "", gormdb.ErrCollectionSelectionInvalid
+	}
+	return cursor, nil
+}
+
+func decodeQueueCandidateCollectionCursor(cursor string) (queueCandidateCollectionCursor, queueCandidateCollectionFilter, error) {
+	if cursor == "" || len(cursor) > 512 {
+		return queueCandidateCollectionCursor{}, queueCandidateCollectionFilter{}, gormdb.ErrCollectionSelectionInvalid
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return queueCandidateCollectionCursor{}, queueCandidateCollectionFilter{}, gormdb.ErrCollectionSelectionInvalid
+	}
+	var state queueCandidateCollectionCursor
+	if json.Unmarshal(payload, &state) != nil || state.Version != queueCandidateCollectionCursorVersion || state.Offset < 0 || state.Limit < 1 || state.Limit > gormdb.CollectionPageMaxSize || !(gormdb.CollectionFilter{Fingerprint: state.Revision, Value: candidateQueueAllProjects}).Valid() {
+		return queueCandidateCollectionCursor{}, queueCandidateCollectionFilter{}, gormdb.ErrCollectionSelectionInvalid
+	}
+	filter, filterErr := queueCandidateCollectionFilterForScope(state.Scope)
+	if filterErr != nil || filter.collectionFilter().Fingerprint != state.Fingerprint {
+		return queueCandidateCollectionCursor{}, queueCandidateCollectionFilter{}, gormdb.ErrCollectionSelectionInvalid
+	}
+	return state, filter, nil
 }
 
 type queueCandidateSelectionAction string

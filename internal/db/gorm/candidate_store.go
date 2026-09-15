@@ -183,6 +183,7 @@ func (s *CandidateStore) ListByStatus(ctx context.Context, project string, statu
 	q := s.db.WithContext(ctx).
 		Where("status = ?", string(status)).
 		Order("created_at DESC").
+		Order("id DESC").
 		Limit(limit)
 	if project != "" {
 		q = q.Where("? = ANY(affected_projects)", project)

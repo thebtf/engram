@@ -2,11 +2,13 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
@@ -14,19 +16,77 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/worker/sse"
+	"github.com/thebtf/engram/pkg/models"
 	gormlib "gorm.io/gorm"
 )
 
-func TestComposeOperatorCollectionHTTPAdapterBuildsScopedRulesBridge(t *testing.T) {
-	adapter, err := composeOperatorCollectionHTTPAdapter(&gormlib.DB{})
+func TestComposeOperatorCollectionHTTPAdapterBuildsScopedDomainBridge(t *testing.T) {
+	adapter, err := composeOperatorCollectionHTTPAdapter(&gormlib.DB{}, true)
 
 	require.NoError(t, err)
 	require.NotNil(t, adapter)
 	require.IsType(t, &gormdb.CollectionSelectionStore{}, adapter.store)
 	require.NotNil(t, adapter.resolver)
-	require.IsType(t, &gormdb.BehavioralRulesStore{}, adapter.normalizer)
-	require.IsType(t, &gormdb.BehavioralRulesStore{}, adapter.freezer)
-	require.IsType(t, &gormdb.BehavioralRulesStore{}, adapter.pager)
+	providers, ok := adapter.normalizer.(operatorCollectionProviderRouter)
+	require.True(t, ok)
+	require.IsType(t, &gormdb.BehavioralRulesStore{}, providers[operatorCollectionSelectionDomain])
+	require.IsType(t, &queueCandidateCollectionProvider{}, providers[queueCandidateSelectionDomain])
+	_, freezerOK := adapter.freezer.(operatorCollectionProviderRouter)
+	_, pagerOK := adapter.pager.(operatorCollectionProviderRouter)
+	require.True(t, freezerOK)
+	require.True(t, pagerOK)
+}
+
+func TestOperatorCollectionRoutesFreezeQueueDataWithoutRules(t *testing.T) {
+	candidates := &fakeCandidateReviewStore{listRows: []*models.CrystallizationCandidate{
+		{ID: 42, Status: models.CandidateStatusPending, UpdatedAt: time.Date(2026, time.September, 15, 10, 0, 0, 0, time.UTC)},
+		{ID: 43, Status: models.CandidateStatusPending, UpdatedAt: time.Date(2026, time.September, 15, 9, 0, 0, 0, time.UTC)},
+	}}
+	store := &operatorCollectionRouteTestStore{}
+	resolver := &operatorCollectionRouteTestResolver{scope: operatorCollectionRouteTestScope(queueCandidateSelectionDomain)}
+	providers := operatorCollectionProviderRouter{
+		queueCandidateSelectionDomain: newQueueCandidateCollectionProvider(candidates),
+	}
+	service := newOperatorCollectionRouteTestService(NewOperatorCollectionHTTPAdapter(store, resolver, providers, providers, providers))
+	identity := auth.SessionForBrowserUser("operator", 41)
+	call := func(path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		service.router.ServeHTTP(recorder, operatorCollectionRouteTestRequest(t, path, body, identity))
+		return recorder
+	}
+
+	page := call("/api/collections/selection/page", `{"domain":"queue","filter":{"scope":"all"},"limit":1}`)
+	require.Equal(t, http.StatusOK, page.Code, page.Body.String())
+	var pageBody operatorCollectionPageResponse
+	require.NoError(t, json.Unmarshal(page.Body.Bytes(), &pageBody))
+	require.Equal(t, []gormdb.CollectionSelectionTarget{{ID: "42", ExpectedVersion: uint64(candidates.listRows[0].UpdatedAt.UnixNano())}}, pageBody.Targets)
+	require.Equal(t, "", candidates.listProject)
+	require.Equal(t, models.CandidateStatusPending, candidates.listStatus)
+	require.Equal(t, gormdb.CollectionSelectionMaxTargets+1, candidates.listLimit)
+
+	pageSnapshot := call("/api/collections/selection", `{"domain":"queue","selection":{"kind":"page","cursor":"`+pageBody.Cursor+`","targets":[{"id":"rule-1","expected_version":99}]}}`)
+	require.Equal(t, http.StatusOK, pageSnapshot.Code, pageSnapshot.Body.String())
+	require.Len(t, store.saved, 1)
+	require.Equal(t, gormdb.CollectionSelectionPage, store.saved[0].selection.Kind)
+	require.Equal(t, pageBody.Targets, store.saved[0].selection.Targets)
+
+	frozenSnapshot := call("/api/collections/selection", `{"domain":"queue","selection":{"kind":"frozen_filter","filter":{"scope":"all"},"excluded_ids":["43"]}}`)
+	require.Equal(t, http.StatusOK, frozenSnapshot.Code, frozenSnapshot.Body.String())
+	require.Len(t, store.saved, 2)
+	require.Equal(t, gormdb.CollectionSelectionFrozenFilter, store.saved[1].selection.Kind)
+	require.Equal(t, []gormdb.CollectionSelectionTarget{
+		{ID: "42", ExpectedVersion: uint64(candidates.listRows[0].UpdatedAt.UnixNano())},
+		{ID: "43", ExpectedVersion: uint64(candidates.listRows[1].UpdatedAt.UnixNano())},
+	}, store.saved[1].selection.Targets)
+	require.Equal(t, []string{"43"}, store.saved[1].selection.ExcludedIDs)
+
+	invalid := call("/api/collections/selection/page", `{"domain":"queue","filter":{"scope":"all"},"cursor":"not-a-queue-cursor","limit":1}`)
+	require.Equal(t, http.StatusBadRequest, invalid.Code, invalid.Body.String())
+
+	candidates.listRows = append([]*models.CrystallizationCandidate{{ID: 44, Status: models.CandidateStatusPending, UpdatedAt: time.Date(2026, time.September, 15, 11, 0, 0, 0, time.UTC)}}, candidates.listRows...)
+	stale := call("/api/collections/selection/page", `{"domain":"queue","filter":{"scope":"all"},"cursor":"`+pageBody.Cursor+`","limit":1}`)
+	require.Equal(t, http.StatusPreconditionFailed, stale.Code, stale.Body.String())
 }
 
 func TestOperatorCollectionRoutesDelegateScopedSelectionWithoutAuthority(t *testing.T) {

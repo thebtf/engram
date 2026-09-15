@@ -53,6 +53,58 @@ type operatorCollectionPager interface {
 	PageCollection(context.Context, gormdb.CollectionSelectionScope, gormdb.CollectionPageRequest) (gormdb.CollectionPage, error)
 }
 
+// operatorCollectionDomainProvider keeps each collection's filter, snapshot,
+// and page semantics in its domain. It never supplies operation authority.
+type operatorCollectionDomainProvider interface {
+	operatorCollectionFilterNormalizer
+	operatorCollectionFreezer
+	operatorCollectionPager
+}
+
+// operatorCollectionProviderRouter dispatches only by the server-derived
+// selection domain; it has no cross-domain fallback.
+type operatorCollectionProviderRouter map[string]operatorCollectionDomainProvider
+
+func (router operatorCollectionProviderRouter) provider(scope gormdb.CollectionSelectionScope) (operatorCollectionDomainProvider, error) {
+	provider, found := router[scope.Domain]
+	if !found || provider == nil {
+		return nil, gormdb.ErrCollectionSelectionDenied
+	}
+	return provider, nil
+}
+
+func (router operatorCollectionProviderRouter) NormalizeCollectionFilter(ctx context.Context, scope gormdb.CollectionSelectionScope, value string) (gormdb.CollectionFilter, error) {
+	provider, err := router.provider(scope)
+	if err != nil {
+		return gormdb.CollectionFilter{}, err
+	}
+	return provider.NormalizeCollectionFilter(ctx, scope, value)
+}
+
+func (router operatorCollectionProviderRouter) FreezeCollectionSelection(ctx context.Context, scope gormdb.CollectionSelectionScope, filter gormdb.CollectionFilter) (gormdb.CollectionFrozenSelection, error) {
+	provider, err := router.provider(scope)
+	if err != nil {
+		return gormdb.CollectionFrozenSelection{}, err
+	}
+	return provider.FreezeCollectionSelection(ctx, scope, filter)
+}
+
+func (router operatorCollectionProviderRouter) FreezeCollectionPageSelection(ctx context.Context, scope gormdb.CollectionSelectionScope, cursor string) ([]gormdb.CollectionSelectionTarget, error) {
+	provider, err := router.provider(scope)
+	if err != nil {
+		return nil, err
+	}
+	return provider.FreezeCollectionPageSelection(ctx, scope, cursor)
+}
+
+func (router operatorCollectionProviderRouter) PageCollection(ctx context.Context, scope gormdb.CollectionSelectionScope, request gormdb.CollectionPageRequest) (gormdb.CollectionPage, error) {
+	provider, err := router.provider(scope)
+	if err != nil {
+		return gormdb.CollectionPage{}, err
+	}
+	return provider.PageCollection(ctx, scope, request)
+}
+
 func NewOperatorCollectionHTTPAdapter(
 	store operatorCollectionSelectionStore,
 	resolver operatorCollectionScopeResolver,
