@@ -19,7 +19,7 @@
 
 | Gate | Command / evidence | Blocks release when |
 | --- | --- | --- |
-| PR review | PR merged with review approval and zero unresolved review threads | review not approved or unresolved threads remain |
+| PR review | required approval, evidenced disposition of each finding, zero unresolved required threads, and merge | approval missing, a blocking finding is open, or a required thread remains unresolved; disagreement is not unilateral resolution |
 | CI | `gh pr checks <PR>` or checks on release commit | any required check fails |
 | Go tests | `go test ./...` | non-zero exit |
 | Go vet | `go vet ./...` | non-zero exit |
@@ -32,6 +32,28 @@
 | Released-image rescan | post-publication `ScanPublished` evidence: one summary JSON plus per-image SARIF/log for `server`, `operator-console`, and `postgres` | after publication, first run is not started within 24h, later evidence is older than 36h by `started_at`/`completed_at`, evidence is missing, HIGH/CRITICAL findings exist, or scanner/database/tag-resolution errors prevent complete evidence; blocks rollout/continued deployment, not initial digest publication |
 | Diff hygiene | `git diff --check` | whitespace/conflict marker errors |
 | SonarQube Quality Gate | `node tools/quality/run-sonarqube.mjs` | exact candidate coverage is incomplete, scanner/CE/QG is non-OK, or requested status publication fails |
+
+## Release Convergence
+
+Define one independently useful installable slice and its non-goals before implementation, with the required tests and rollout/rollback boundary in the existing feature/run. A sequence of small commits held for one large integration is not a sequence of small releases. Feature completion on a fixture is not delivery to the ordinary consumer.
+
+Classify findings before adding work. **Fix now** covers a failed mandatory gate, demonstrated accepted-behavior/compatibility failure, or credible safety/data-integrity risk. **Not applicable** needs evidence and proper reviewer/maintainer disposition. **Follow-up** is allowed only for nonblocking work accepted by the authorized maintainer, with its reason and a tracked destination. This is not unilateral approval, thread closure, or waiver authority.
+
+Keep the existing thresholds, security scans, supported-platform obligations, migration/rollback requirements and branch protection. A finding excluded from the numeric gate may still block for substantive risk. Conversely, optional polish is not automatically a new release requirement. An unresolved credible high-impact finding remains blocking while investigated. No blanket scanner suppression, false-positive designation, arbitrary pass-count, or policy loosening.
+
+Finish implementation review, accepted blocking repairs, version metadata and generated release inputs before the expensive final gate. Review corrections against the delta and affected invariants; do not start a fresh whole-product review merely because a reviewer/model changed or release prose changed. Reopening unchanged accepted code needs new evidence or an affected dependency. All required reviews remain required.
+
+Freeze the candidate and use its own runner. No parallel cherry-pick, rebase, or candidate-file mutation while it is under validation. If a new blocker is accepted, preserve completed artifacts and explicitly decide the next candidate and necessary revalidation. Do not prematurely start a gate while already-known same-candidate repairs are still in flight.
+
+For evidence reuse, distinguish test inputs, tool/environment inputs, analysis identity and release metadata. Follow only compatibility rules implemented and validated by the current evidence contract; no manual relabeling, cross-worktree assumption or fabricated exact-head PASS. If an overly broad fingerprint causes needless reruns, that is a separate targeted tool defect, not permission to bypass it. Do not extend QC tooling unless a concrete release failure requires it.
+
+Long gates have one QA owner and a durable job identity. A launcher/Task wait timeout is not a reason to terminate a progressing longer gate. Capture phase, elapsed time, last meaningful progress, budgets and failure cause; resume the same job where supported. Never delete a live lock or kill unrelated processes. Reproduce parser/report failures from retained events and compact tests before considering another product-wide run.
+
+For an unchanged intermittent failure, at most one diagnostic retry without new information is useful; after recurrence, change the diagnosis or environment, not the attempt number. This limits blind retry, not mandatory testing. When the same cause invalidates two candidate attempts, Root records a short causal recovery decision in the existing run; it does not create a new process project or waive the requirement.
+
+When mandatory acceptance is satisfied and effects are authorized, proceed to the existing merge/publish/rollout/smoke steps. Do not wait for a fresh user "continue", an optional audit, or future-feature work. If the scope or an irreversible action requires an external decision, request that decision once with candidate, impact and rollback, and keep independent safe work moving.
+
+At meaningful transitions report installed version/availability separately from candidate checks, the actual blockers and the next action. For delivery goals, completion includes an ordinary browser/client verification on the agreed installed instance, not only a tag, a fixture PASS or an updated version string. Diagnosis-only tasks retain their explicitly smaller completion boundary.
 
 ## Release Autonomy
 
@@ -107,19 +129,13 @@ a separate reviewed security change, not an operator-side escape hatch.
 
 ## SonarQube Gate Recovery
 
-Run the default command for the complete exact-candidate release gate. It retains immutable per-profile evidence under the shared repository `.agent/e/sonarqube` namespace and only reuses a passed profile when the same worktree, HEAD/tree, source/test/config/dependency inputs, profile descriptor, and test environment fingerprints match.
+Run `node tools/quality/run-sonarqube.mjs` from the clean, frozen exact candidate for the complete SonarQube release gate. The runner must preserve the exact-head Quality Gate `OK` requirement; successful runs retain the exact-head receipt at the shared repository `.agent/e/sonarqube/<HEAD>.json` path.
 
-- `--mode coverage` collects or validates coverage only and prints `COVERAGE_READY` only when all 25 profiles are admissible.
-- Base coverage is package-unit based: Go tooling discovers each first-party package with tests, then runs one race unit (`go test -json -race -count=1`, no coverage) and one non-race atomic coverage unit. Coverage instruments only the tested package plus bounded direct first-party imports; it never uses a repository-wide `-coverpkg`. Unit coverage merges with maximum hit counts.
-- A header-only `mode: atomic` unit report is classified as `zero_coverable_statements` only when its hashed Go event log proves all selected-test obligations, the exact package terminal `pass`, and a package output line exactly `coverage: [no statements]`. Retained/reused evidence rehashes the report; malformed, partial, marker-free, or digest-mismatched reports are rejected. Valid zero-statement units contribute no blocks to a merge.
-- `--mode coverage --base-only --fresh` is the bounded diagnostic measurement for core package units only. It prints `BASE_PROFILE_READY`, retains exact unit evidence, and leaves merged/full coverage incomplete; it does not start serialized/external-state units or dedicated profiles, or submit a scanner analysis, CE/QG request, or status publication. It is not a release gate or scan input by itself.
-- Known child-process/external-state package units are serialized. At most two ordinary package units may run concurrently; all dedicated DB/installed profiles retain their existing resource isolation.
-- `--mode scan` consumes an existing complete exact-worktree coverage manifest, submits one fresh analysis, and waits for that exact analysis ID.
-- `--mode resume --run <UUID>` only resumes the durable submitted CE task or saved analysis ID; it never runs Go tests or submits another scanner analysis.
-- `--mode gate` remains the default one-command release gate. `--fresh` bypasses reuse while preserving old evidence; `--jobs 1|2` limits ordinary package-unit concurrency while dedicated profiles remain serialized. Dedicated profiles use Go package concurrency `-p=1`, including test inventory; every base-unit fingerprint binds its package, phase, bounded coverpkg, exact input, environment, and runner bytes. The `-p=2` base-only measurement at `ebc133e3...` ran for 901,283 ms but exceeded its fixed 900-second profile budget before completion, so `-p=2` was rejected.
-- A base-unit skip may defer only to its dedicated owner: ownership matches the top-level Go test while retaining the full subtest identity. The base execution may finish before that owner runs, but a retained unit, reused profile, or full merge requires the exact owner test and a terminal package `pass` event under the matching environment; an owner status alone, a skipped owner test, or a test-level `pass` never satisfies the obligation.
+Recovery flags are usable only when the active runner's `node tools/quality/run-sonarqube.mjs --help` advertises every flag and mode-specific behavior invoked. If help errors, has no usable output, or does not advertise a requested flag, that recovery mode is unavailable.
 
-The runner prints run/profile progress, phase and overall budgets, event-log location, reuse/invalidation reasons, and persists partial diagnostics. Parsed Go lifecycle transitions—not raw output—advance semantic progress: a `stalled` heartbeat means no semantic transition was observed for 120 seconds, not a proven deadlock. A profile budget expiration records `status: timed_out` with `failure_reason: profile_budget_exhausted`, not a generic Go-command failure. Scanner, CE/QG, network, cancellation, and status-publication failures never delete successful coverage evidence. A completed `PASS` receipt remains valid only for its exact manifest and analysis bytes; resume preserves task identity rather than querying project-latest state.
+When recovery modes are unavailable, do not guess flags or their semantics. Run the default exact-candidate command above; retain the command, working directory, candidate HEAD/tree, redacted stdout/stderr, exit status, and any runner-written `.scannerwork/report-task.txt` or `.agent/e/sonarqube/<HEAD>.json` diagnostic. Repair the ordinary gate failure, then rerun that same default command.
+
+An advertised recovery mode is never a bypass: it must retain fresh exact-candidate analysis and Quality Gate `OK`, all mandatory coverage, security, review, migration and rollback obligations, and exact evidence. It must not skip required tests, analysis or status publication; alter thresholds or analysis scope; suppress findings; or fabricate an exact-head PASS.
 
 ## Terminal Verdict
 

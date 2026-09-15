@@ -1,11 +1,12 @@
 <!--
 Sync Impact Report
-- Version change: 1.1.0 -> 2.0.0
-- Modified principles: XII. Surface Work Follows Core Truth now permits the separately accepted Operator Code Console and basic collection feature after UCI technical acceptance, before Working Agent Memory R1.
-- Added sections: none.
-- Removed sections: none.
-- Affected references revalidated: recovery feature 001 remains core-only; UCI feature 010 records Feature 011 as separate from UCI-1; Memory R1 feature 009 remains retained after Feature 011 and Book Context.
-- Operator provenance: explicit 2026-09-10 decision that Code UI and basic collections precede Book Context, then Working Agent Memory R1. UCI technical acceptance is PASS_WITH_EXPLICIT_SONAR_WAIVER while Sonar is temporarily deferred.
+- Adopted version change: 2.0.0 -> 3.0.0 (governing finding-resolution requirement changes), effective 2026-09-15.
+- Modified delivery rule: mandatory exact-candidate Sonar OK is retained; every finding requires disposition rather than every finding requiring a code change.
+- Principles XI/XIII clarified: independently installed slices; behavioral evidence scoped to affected outcomes plus mandatory regression, not unrelated feature expansion.
+- Unchanged: architecture, authorization, privacy, migration/rollback, default required capabilities, feature ordering and security policy.
+- Affected consumers checked: AGENTS.md and docs/RELEASE-PROTOCOL.md were synchronized; no tracked active `.specify` checklist/task or executable policy consumer in this worktree contradicted the adopted disposition rule.
+- Operator provenance: approval in OMP session 01a08c71-d2b8-7638-a45f-ef4b606fd786 on 2026-09-15.
+- Revalidation status: adopted; the exact policy worktree at origin/main 0fa636858d350ea8f314f0bff76010e7c636ef82 was checked before application.
 -->
 
 # Engram Constitution
@@ -79,6 +80,9 @@ separate gates.
 Recovery MUST ship as small installable releases from clean current `main`, each with one bounded
 outcome, migration/rollback boundary, behavioral evidence, installed verification, and an
 observation rule. A hidden long-lived replacement branch is forbidden.
+Select that bounded outcome before implementation. Complete its authorized installation and
+consumer verification before accumulating the next dependent product frontier. Independent safe
+work is permitted; an external release dependency must retain an owner and a resumption action.
 
 ### XII. Surface Work Follows Core Truth
 This recovery MUST NOT redesign the operator working surface as core recovery work. Existing surfaces MAY be removed or made honestly unavailable when their backing capability is removed. New working-surface design requires a separate accepted Spec Kit feature.
@@ -90,6 +94,9 @@ Tests and receipts MUST prove cross-session evidence acquisition, identity conve
 reconciliation, task-aware retrieval, exposure, outcome recording, migration, rollback, and
 installed behavior. Hashes, manifests, route existence, flags, or mocked green surfaces alone do
 not establish product acceptance.
+Apply these evidence obligations to the accepted slice and affected dependencies, together with
+all mandatory regression/security/release checks. They MUST NOT silently add unrelated product
+domains to every release. Test doubles prove their stated layer, not installed end-to-end behavior.
 
 ### XIV. Recover Outcomes Without Resurrecting Demolished Implementations
 The historical demolition establishes evidence about obsolete implementations, not a permanent
@@ -125,9 +132,14 @@ contracts.
   terminal failure, and degraded-provider semantics.
 - Any new projection requires a named authority, consumer, rebuild procedure, health contract,
   and no write authority.
-- Before a release tag or publication, the exact candidate MUST pass a fresh SonarQube analysis;
-  every reported finding MUST be fixed; the exact head MUST be rescanned; and the Quality Gate
-  MUST be `OK`.
+- Before a release tag or publication, the exact candidate MUST pass a fresh SonarQube analysis
+  and its Quality Gate MUST be `OK` under the enforced policy. Every reported finding MUST have
+  an evidenced disposition under `docs/RELEASE-PROTOCOL.md`. Findings that violate required
+  checks or the accepted safety, integrity, compatibility, or user-behavior contract MUST be
+  fixed before release. Nonblocking findings may be deferred only by the authorized maintainer;
+  the act of deferral does not satisfy or bypass a failing Quality Gate, required approval, or
+  unresolved mandatory review. Policy thresholds, analysis scope, and scanner/security exceptions
+  MUST NOT be changed merely to make the current candidate pass.
 - A destructive contraction occurs only after backup or export, migration receipts, zero-drift
   observation, compatibility sunset, and rollback boundary evidence exist.
 
@@ -144,4 +156,4 @@ or removes a governing principle; a MINOR version adds or materially expands one
 clarifies without changing meaning. Every release and implementation review MUST check conformance
 to this constitution, preserve evidence of any exception, and reject scope expansion by workaround.
 
-**Version**: 2.0.0 | **Ratified**: 2026-08-21 | **Last Amended**: 2026-09-10
+**Version**: 3.0.0 (effective 2026-09-15) | **Ratified**: 2026-08-21 | **Last Amended**: 2026-09-15
