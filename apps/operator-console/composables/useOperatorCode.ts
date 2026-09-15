@@ -209,6 +209,11 @@ const INDEX_INTENT_POLL_DELAY_MS = 1_000
 const INDEX_INTENT_MAX_POLLS = 30
 const TAB_LEASE_TTL_MS = 2 * 60_000
 const TAB_LEASE_RENEWAL_DELAY_MS = TAB_LEASE_TTL_MS / 2
+interface SpaRemount {
+  pinnedContext: CodeSafeContext | null
+}
+
+let spaRemount: SpaRemount | null = null
 
 function text(value: unknown): string | null {
   if (typeof value !== 'string') return null
@@ -1206,6 +1211,8 @@ export function useOperatorCode() {
   async function initialize(): Promise<void> {
     if (pending.value) return
     bootstrapPhase.value = 'binding'
+    const remount = spaRemount
+    spaRemount = null
     const documentNonce = requestId()
     if (documentNonce === null) {
       bootstrapPhase.value = 'error'
@@ -1225,18 +1232,29 @@ export function useOperatorCode() {
     }
     const evidence: CodeBootstrapEvidence = { navigationType: navType, openerBefore, openerAfter, transition: 'initializing' }
     const pair = openerBefore ? null : loadResumePair()
-    const resumingBinding = !openerBefore && navType === 'reload' && pair !== null
+    const resumingBinding = !openerBefore && pair !== null && (navType === 'reload' || remount !== null)
     if (!resumingBinding) clearIndexIntent()
     const established = openerBefore && openerAfter !== true
       ? await handshake(documentNonce, null, true, evidence)
       : resumingBinding
         ? await resume(documentNonce, pair, evidence)
-        : navType === 'navigate'
+        : pair !== null
           ? await handshake(documentNonce, pair, false, evidence)
           : await handshake(documentNonce, null, true, evidence)
     if (!established) return
     await discoverContext()
-    if (resumingBinding) restorePersistedPinCandidate()
+    if (resumingBinding) {
+      restorePersistedPinCandidate()
+      const priorPinned = remount?.pinnedContext ?? null
+      if (priorPinned !== null) {
+        const pinned = contextCatalog.value.flatMap((entry) => entry.view === null ? [] : [entry.view]).find((entry) => sameView(entry.context, priorPinned.context))
+        if (pinned !== undefined) {
+          contextCandidate.value = pinned
+          pinnedContext.value = pinned
+        }
+      }
+      await refreshIndexIntent()
+    }
   }
 
   async function pinContext(): Promise<void> {
@@ -1412,14 +1430,22 @@ export function useOperatorCode() {
     if (current !== null) void request(`/code/tabs/${encodeURIComponent(current.tabBindingId)}`, 'DELETE', { document_proof: current.documentProof })
   }
 
+  let pageHiding = false
+
+  function closeOnPageHide(): void {
+    pageHiding = true
+    void closeBinding()
+  }
+
   onMounted(() => {
-    window.addEventListener('pagehide', closeBinding, { once: true })
+    window.addEventListener('pagehide', closeOnPageHide, { once: true })
   })
 
   onBeforeUnmount(() => {
     stopLeaseRenewal()
+    if (!pageHiding) spaRemount = { pinnedContext: pinnedContext.value }
     stopIndexIntentPolling()
-    window.removeEventListener('pagehide', closeBinding)
+    window.removeEventListener('pagehide', closeOnPageHide)
   })
 
   return {
