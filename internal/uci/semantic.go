@@ -174,92 +174,108 @@ func (service *SemanticService) Query(ctx context.Context, authorized Authorized
 	if err := service.validate(ctx, false); err != nil {
 		return QueryResult{}, err
 	}
+	query, result, err := service.prepareSemanticQuery(ctx, authorized, spec)
+	if err != nil {
+		return QueryResult{}, err
+	}
+	if result != nil {
+		return *result, nil
+	}
+	return service.queryHybrid(ctx, authorized, query)
+}
+
+type semanticQueryState struct {
+	ref          ContextRef
+	spec         QuerySpec
+	continuation semanticContinuationState
+}
+
+func (service *SemanticService) prepareSemanticQuery(ctx context.Context, authorized AuthorizedContext, spec QuerySpec) (semanticQueryState, *QueryResult, error) {
 	ref := authorized.Ref()
 	if !ref.valid() {
-		return QueryResult{}, fmt.Errorf("uci semantic: authorized context is invalid")
+		return semanticQueryState{}, nil, fmt.Errorf("uci semantic: authorized context is invalid")
 	}
 	normalized, err := normalizeQuerySpec(spec)
 	if err != nil {
-		return QueryResult{}, err
+		return semanticQueryState{}, nil, err
 	}
 	continuation, err := service.semanticContinuation(ref, normalized)
 	if err != nil {
-		return QueryResult{}, err
+		return semanticQueryState{}, nil, err
 	}
+	query := semanticQueryState{ref: ref, spec: normalized, continuation: continuation}
 	if continuation.present && continuation.mode == QueryRetrievalLexical {
 		if continuation.rankingDigest != semanticLexicalRankingDigest() {
-			return QueryResult{}, fmt.Errorf("uci semantic: continuation ranking does not match request")
+			return semanticQueryState{}, nil, fmt.Errorf("uci semantic: continuation ranking does not match request")
 		}
-		return service.lexicalResult(ctx, authorized, ref, normalized, continuation.offset, []string{})
+		result, err := service.lexicalResult(ctx, authorized, ref, normalized, continuation.offset, []string{})
+		if err != nil {
+			return semanticQueryState{}, nil, err
+		}
+		return query, &result, nil
 	}
 	if continuation.present && continuation.mode != QueryRetrievalHybrid {
-		return QueryResult{}, fmt.Errorf("uci semantic: continuation retrieval mode is invalid")
+		return semanticQueryState{}, nil, fmt.Errorf("uci semantic: continuation retrieval mode is invalid")
 	}
+	return query, nil, nil
+}
+
+func (service *SemanticService) queryHybrid(ctx context.Context, authorized AuthorizedContext, query semanticQueryState) (QueryResult, error) {
 	if reason := service.providerUnavailableReason(); reason != "" {
-		if continuation.present {
-			return QueryResult{}, fmt.Errorf("uci semantic: continuation ranking is unavailable")
-		}
-		return service.lexicalResult(ctx, authorized, ref, normalized, 0, []string{reason})
+		return service.fallbackToLexical(ctx, authorized, query, reason, nil)
 	}
 	if semanticNil(service.store) {
-		if continuation.present {
-			return QueryResult{}, fmt.Errorf("uci semantic: continuation ranking is unavailable")
-		}
-		return service.lexicalResult(ctx, authorized, ref, normalized, 0, []string{"vector_store_unavailable"})
+		return service.fallbackToLexical(ctx, authorized, query, "vector_store_unavailable", nil)
 	}
-
-	input, err := semanticQueryEmbeddingInput(service.profile, normalized.Text)
+	input, err := semanticQueryEmbeddingInput(service.profile, query.spec.Text)
 	if err != nil {
 		return QueryResult{}, err
 	}
 	vector, err := service.embedQuery(ctx, input)
 	if err != nil {
-		if continuation.present {
-			return QueryResult{}, fmt.Errorf("uci semantic: continuation ranking is unavailable: %w", err)
-		}
-		return service.lexicalResult(ctx, authorized, ref, normalized, 0, []string{semanticProviderDegradation(err)})
+		return service.fallbackToLexical(ctx, authorized, query, semanticProviderDegradation(err), err)
 	}
 	rankingDigest := semanticHybridRankingDigest(service.profile, vector)
-	if continuation.present && continuation.rankingDigest != rankingDigest {
+	if query.continuation.present && query.continuation.rankingDigest != rankingDigest {
 		return QueryResult{}, fmt.Errorf("uci semantic: continuation ranking does not match request")
 	}
-
-	storeSpec := normalized
-	storeSpec.Offset = continuation.offset
+	storeSpec := query.spec
+	storeSpec.Offset = query.continuation.offset
 	semanticResult, err := service.store.SelectHybridCandidates(ctx, authorized, service.profile, vector, storeSpec)
 	if err != nil {
-		if continuation.present {
+		if query.continuation.present {
 			return QueryResult{}, err
 		}
-		return service.lexicalResult(ctx, authorized, ref, normalized, 0, []string{"vector_store_unavailable"})
+		return service.fallbackToLexical(ctx, authorized, query, "vector_store_unavailable", nil)
 	}
+	return service.hybridResult(ctx, authorized, query, rankingDigest, semanticResult)
+}
+
+func (service *SemanticService) hybridResult(ctx context.Context, authorized AuthorizedContext, query semanticQueryState, rankingDigest string, semanticResult SemanticStoreResult) (QueryResult, error) {
 	if semanticResult.Unavailable != nil {
-		if err := semanticUnavailableResult(ref, semanticResult); err != nil {
+		if err := semanticUnavailableResult(query.ref, semanticResult); err != nil {
 			return QueryResult{}, err
 		}
-		if continuation.present {
+		if query.continuation.present {
 			return QueryResult{}, fmt.Errorf("uci semantic: continuation ranking is unavailable")
 		}
-		return QueryResult{Response: queryUnavailableResponse(ref, semanticResult.Coverage, *semanticResult.Unavailable)}, nil
+		return QueryResult{Response: queryUnavailableResponse(query.ref, semanticResult.Coverage, *semanticResult.Unavailable)}, nil
 	}
 	if !validQueryCoverage(semanticResult.Coverage) || semanticResult.Coverage == IndexCoverageUnavailable || !validSemanticCoverage(semanticResult.VectorCoverage) {
 		return QueryResult{}, fmt.Errorf("uci semantic: semantic store returned invalid coverage")
 	}
 	if semanticResult.VectorCoverage < 1 {
-		if continuation.present {
-			return QueryResult{}, fmt.Errorf("uci semantic: continuation ranking is unavailable")
-		}
-		return service.lexicalResult(ctx, authorized, ref, normalized, 0, []string{"vector_coverage_incomplete"})
+		return service.fallbackToLexical(ctx, authorized, query, "vector_coverage_incomplete", nil)
 	}
 	for _, candidate := range semanticResult.Candidates {
-		if !semanticHybridCandidateValid(candidate, ref, normalized.Mode) {
+		if !semanticHybridCandidateValid(candidate, query.ref, query.spec.Mode) {
 			return QueryResult{}, fmt.Errorf("uci semantic: store returned an invalid fused candidate")
 		}
 	}
 	return service.availableResult(semanticAvailableResultInput{
-		ref:                ref,
-		spec:               normalized,
-		start:              continuation.offset,
+		ref:                query.ref,
+		spec:               query.spec,
+		start:              query.continuation.offset,
 		candidates:         semanticResult.Candidates,
 		coverage:           semanticResult.Coverage,
 		mode:               QueryRetrievalHybrid,
@@ -267,6 +283,16 @@ func (service *SemanticService) Query(ctx context.Context, authorized Authorized
 		vectorCoverage:     &semanticResult.VectorCoverage,
 		degradationReasons: []string{},
 	})
+}
+
+func (service *SemanticService) fallbackToLexical(ctx context.Context, authorized AuthorizedContext, query semanticQueryState, reason string, cause error) (QueryResult, error) {
+	if query.continuation.present {
+		if cause != nil {
+			return QueryResult{}, fmt.Errorf("uci semantic: continuation ranking is unavailable: %w", cause)
+		}
+		return QueryResult{}, fmt.Errorf("uci semantic: continuation ranking is unavailable")
+	}
+	return service.lexicalResult(ctx, authorized, query.ref, query.spec, 0, []string{reason})
 }
 
 type semanticContinuationState struct {
