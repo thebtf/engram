@@ -743,6 +743,14 @@ function readRequestJson(req) {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${host}:${port}`)
   const path = url.pathname.replace(/\/+$/, '') || '/'
+  const origin = req.headers.origin
+  const allowedOrigin = `http://127.0.0.1:${process.env.OPERATOR_CONSOLE_SMOKE_PORT || '37992'}`
+  if (origin === allowedOrigin) {
+    res.setHeader('Access-Control-Allow-Origin', origin)
+    res.setHeader('Access-Control-Allow-Credentials', 'true')
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Engram-Request-ID')
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS')
+  }
 
   if (!path.startsWith('/api')) {
     text(res, 404, 'not found')

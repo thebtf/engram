@@ -612,6 +612,14 @@ func TestHandlersDocuments_SelectionExportUsesAuthoritativeSelectionAndProducesD
 			assert.Equal(t, documentExportPayload{SchemaVersion: "engram.documents.export/v1", Documents: []documentExportDocument{{ID: document.ID, Path: document.Path, Project: document.Project, Version: document.Version, ContentHash: document.ContentHash}}}, payload)
 			assert.NotContains(t, artifactRecorder.Body.String(), document.Content)
 			assert.NotContains(t, artifactRecorder.Body.String(), document.Metadata)
+
+			deniedDownload := httptest.NewRequest(http.MethodGet, response.Artifact.DownloadURL, nil)
+			deniedDownload.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: documentSelectionTestSession})
+			deniedDownload = deniedDownload.WithContext(auth.WithIdentity(context.WithValue(deniedDownload.Context(), chi.RouteCtxKey, route), auth.SessionForBrowserUser("other", 42)))
+			deniedRecorder := httptest.NewRecorder()
+			service.handleDownloadDocumentExport(deniedRecorder, deniedDownload)
+			assert.Equal(t, http.StatusNotFound, deniedRecorder.Code)
+			assert.NotContains(t, deniedRecorder.Body.String(), response.Artifact.Filename)
 		})
 	}
 }

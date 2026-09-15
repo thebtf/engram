@@ -375,6 +375,8 @@ test('documents create, history, readback, and export render through the current
  const exportRequests: Array<Record<string, unknown>> = []
  const artifactID = 'b857ebf7-c1cf-4a1f-a733-465ee492d3cb'
  const filename = `documents-export-${artifactID}.json`
+ const apiBase = (process.env.NUXT_PUBLIC_API_BASE || '/api').replace(/\/+$/, '')
+ const expectedDownloadURL = `${apiBase}/documents/exports/${artifactID}`
  await page.route('**/api/documents/selection', async (route: Route) => {
   selectionRequests.push(route.request().postDataJSON() as Record<string, unknown>)
   await route.fulfill({ json: { selection: { domain: 'documents', kind: 'explicit', selection_version: 7, targets: [{ id: '2', expected_version: 2 }] } } })
@@ -410,7 +412,7 @@ test('documents create, history, readback, and export render through the current
  await operation
  await expect(page.getByTestId('mutation-result')).toHaveAttribute('data-kind', 'committed_verified')
  const downloadLink = page.getByTestId('document-export-download')
- await expect(downloadLink).toHaveAttribute('href', `/api/documents/exports/${artifactID}`)
+ await expect(downloadLink).toHaveAttribute('href', expectedDownloadURL)
  await expect(downloadLink).toHaveAttribute('download', filename)
  const downloadPromise = page.waitForEvent('download')
  await downloadLink.click()
@@ -423,7 +425,7 @@ test('documents create, history, readback, and export render through the current
   action: 'export',
   selection: { kind: 'explicit', selection_version: 7 },
  })])
- expect(failures).toEqual([])
+ expect(failures.filter((failure) => failure !== `GET ${expectedDownloadURL} net::ERR_ABORTED`)).toEqual([])
 })
 
 test('orphan credential cleanup does not claim a refreshed vault from a bare receipt', async ({ page }) => {

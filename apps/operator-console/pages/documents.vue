@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useOperatorDocuments } from '../composables/useOperatorDocuments'
 import type { DocumentExportArtifact } from '../composables/useOperatorDocuments'
+import { operatorApiUrl } from '../composables/useOperatorApi'
 
 const { t } = useI18n()
 const {
@@ -192,7 +193,7 @@ async function onCommentSubmit() {
       <div class="ops-right">
         <span v-if="activeDocument" class="cnt">{{ t('documents.actions.selectedPath', { path: activeDocument.path }) }}</span>
         <button data-testid="document-export" class="tbtn" :disabled="!activeDocument || exportBusy" @click="onExport">{{ exportBusy ? t('documents.actions.exporting') : t('documents.actions.export') }}</button>
-        <a v-if="exportArtifact" :href="exportArtifact.downloadUrl" :download="exportArtifact.filename" class="tbtn" data-testid="document-export-download">{{ t('documents.actions.download') }}</a>
+        <a v-if="exportArtifact" :href="operatorApiUrl(exportArtifact.downloadUrl)" :download="exportArtifact.filename" class="tbtn" data-testid="document-export-download">{{ t('documents.actions.download') }}</a>
       </div>
     </section>
 
