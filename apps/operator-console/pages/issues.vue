@@ -41,6 +41,7 @@ const {
 const priorityOptions: OperatorIssuePriority[] = ['critical', 'high', 'medium', 'low']
 const typeOptions: OperatorIssueType[] = ['bug', 'feature', 'improvement', 'task']
 const statusOptions: OperatorIssueStatus[] = ['open', 'acknowledged', 'reopened', 'resolved', 'closed', 'rejected']
+const bulkStatusOptions = statusOptions.filter((status) => status !== 'rejected')
 const filterOptions: IssueFilter[] = ['all', 'open', 'work', 'closed', 'rejected']
 const templateOptions: CreateTemplate[] = ['bug', 'handoff', 'question', 'improvement']
 
@@ -995,7 +996,7 @@ function renderMarkdown(value: string) {
           <span>{{ t(`issues.bulkField.${bulkField}`) }}</span>
           <select v-model="bulkValue" class="txt" name="issue-bulk-value">
             <option
-              v-for="option in (bulkField === 'status' ? statusOptions : priorityOptions)"
+              v-for="option in (bulkField === 'status' ? bulkStatusOptions : priorityOptions)"
               :key="option"
               :value="option"
             >

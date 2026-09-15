@@ -88,6 +88,24 @@ test('T027 Issues selection actions retain cursor, revision, and readback truth'
   expect(operation.status).toBe(200)
   expect(operation.body).toContain('"operation_state":"completed"')
   expect(operation.body).not.toContain(marker)
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await expect(page.locator('.issue-row').first()).toBeVisible()
+  await page.locator('.issue-row-check').first().click()
+  await page.locator('.bulkbar .act').first().click()
+
+  const bulkStatus = page.locator('select[name="issue-bulk-value"]')
+  await expect(bulkStatus.locator('option[value="rejected"]')).toHaveCount(0)
+  await bulkStatus.selectOption('acknowledged')
+
+  const statusOperation = page.waitForResponse((response) => {
+   const url = new URL(response.url())
+   return url.origin === fixture.frontend.baseUrl && url.pathname === '/api/issues/operations' && response.request().method() === 'POST'
+  })
+  await page.locator('.modal .tbtn.primary').click()
+  const statusResponse = await statusOperation
+  expect(statusResponse.status()).toBe(200)
+  expect(statusResponse.request().postDataJSON()).toMatchObject({ action: 'status', status: 'acknowledged' })
+  expect(await statusResponse.text()).toContain('"operation_state":"completed"')
  } finally {
   const state = await appendBrowserTraffic(traffic)
   await testInfo.attach('t027-issues-selection-live', {
