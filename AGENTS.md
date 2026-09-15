@@ -1,108 +1,71 @@
 # AGENTS.md
 
-## STACKS
+## PRODUCT AND STARTUP
 
-```yaml
-STACKS: [GO]
-```
+Engram's accepted scope includes code intelligence and knowledge workflows for supported coding agents. PostgreSQL is authoritative; the local stdio MCP daemon talks to the server over gRPC. Do not restore server-side HTTP MCP or embed upstream products as a shortcut.
 
-## PROJECT OVERVIEW
+Read this file, the current run/checkpoint, and the active feature contract; for releases, read `docs/RELEASE-PROTOCOL.md`. Reconcile the actual checkout, dirty work, installed version, assignments and next user-visible outcome. Do not load every historical intake or repeat completed Spec Kit stages after compaction.
 
-Persistent shared memory infrastructure for Claude Code workstations.
-Single server (Docker on Unraid/NAS) stores memories, behavioral rules, credentials,
-issues, and documents in PostgreSQL 17. MCP tools are exposed via the `engram` stdio
-client proxy (server-side HTTP MCP transports removed in v5 — permanent architectural shift to the
-stdio daemon + gRPC model); REST API + gRPC on port 37777 (cmux multiplexed).
+Follow the host's actual instruction hierarchy. Within project artifacts, `.specify/memory/constitution.md` governs, then accepted feature decisions/contracts. Explicit operator amendments use that governance. A delegated task cannot remove required functionality or waive safety/release gates. Ask about missing product decisions, not implementation details an engineer can resolve.
 
-## RULES
+## ROOT SOLO
 
-| Rule | Description |
-|------|-------------|
-| **No stubs** | Complete, working implementations only |
-| **No guessing** | Verify with tools before using |
-| **Reasoning first** | Document WHY before implementing |
-| **No silent patching** | Report every discrepancy found |
-| **No time estimates** | Prioritize by value/risk/dependencies, not phantom duration |
-| **No resurrecting demolished code** | A symbol/field/env-var/doc EXISTING ≠ it is wired or correct. Classify before building on it (see V5 DEMOLITION GUARD). |
+One Root Solo session decides, delegates, controls drift and accepts independently checked results. Native Task-subagents author architecture, technical contracts, code, tests, scripts, conflict resolutions, builds, diagnostics and reviews. Root does not do technical patches through shell/eval or become a second implementer. Do not recreate the historical peer PM/Developer model.
 
-## V5 DEMOLITION GUARD (anti-resurrection — read before extending any existing scaffold)
+Use actual operator-managed assignments; subagents never self-promote or rewrite role/control-plane state. One authorized integrator owns the candidate; one authorized release owner coordinates publication. Check existing tags and remote state for consistency, never force-move a published tag. This file grants no extra production or credential access.
 
-engram underwent a **v5 demolition**: graph stage, cross-encoder rerank, `internal/search` scoring passes (ApplyCompositeScoring/LaneWeights/DiversityPenalty/SessionBoost), SDK observation extraction, and server-side MCP HTTP transports were all **removed**. Leftover references survive in docs, Swagger `@Description` strings, `.gitattributes` LFS rules, CHANGELOG, model fields, and env-var templates. **"I found something that looks like it implements X" ≠ "X is designed, wired, and works."** Building on a stale remnant restores demolished (incorrect) behavior.
+Delegate coherent outcomes with context, write boundaries and acceptance. Run ready independent tasks before waiting; shared files have one writer. Choose available models by task difficulty/risk. Avoid duplicate assignments and competing heavy runs on shared resources. An author is not their sole verifier.
 
-Before building on ANY existing scaffold, classify it against the CURRENT code (not memory, not docs, not its mere existence):
+## DEFINE THE FINISH
 
-- **live** — runs on prod today. Verify: trace the call path AND the flag state (e.g. `ENGRAM_VNEXT_ENABLED`).
-- **pre-demolition-stale** — leftover remnant. IGNORE or cleanly delete; never extend, never use as a build target.
-- **dormant-flag-gated** — exists but only active behind an unset flag (e.g. `ENGRAM_LIFECYCLE_ENABLED`). A serve-time feature built on it yields empty/null output in prod.
-- **must-build** — absent; build new.
+Before implementation, select one independently useful installable slice, non-goals, acceptance and migration/rollback boundary in the existing feature/run. Do not regroup small tasks into one long-lived mega-release. New features use Spec Kit; corrections revalidate the affected contract/delta, not the whole history.
 
-**Tombstone tells** (signals a thing is stale, not a contract): a model field the write-path never populates (grep the write handler, not the struct); an env var with **zero `os.Getenv` reads** in `.go` (grep the reads, not the template/docs); a doc-comment whose handler body returns 501 or is FTS-only; a comment literally saying "removed in v5". When in doubt, grep the write-path and the actual `os.Getenv`/call sites — never trust the declaration alone.
+For an authorized delivery goal, done means implemented, accepted, released, installed and exercised through the ordinary consumer. A unit PASS, fixture UI, commit, accepted feature or tag is not delivery. Research-only tasks may end with their requested artifact; do not invent deployment authority.
 
-## DUAL-ROLE PM/DEVELOPER GOVERNANCE (read before running a PM or Developer session on this repo)
+Preserve the promised outcome when fixing defects. A page bound must not disable semantic search on a normal corpus; a fake daemon or manually seeded fixture cannot prove ordinary indexing. Check authorization, actual downloads, first startup, UI navigation and worktree isolation during implementation, not for the first time after declaring readiness.
 
-This repo is developed under an NVMD dual-role loop: one session is PM (governance, review, release), a peer session is Developer (code). Role truth lives in `.agent/session-state/roles/_assignment.json`. Three failures recurred within a single 2026-07 session; each is now a durable guard so the next session inherits the lesson instead of repeating it.
+## REVIEW TO A DECISION
 
-### CODE-REVIEW BEHAVIORAL-EDGE guard
+Review changed behavior and affected dependencies for correctness and maintainability, not perfection. Explain a meaningful decision once at its natural location; trivial fixes do not each need a new ADR/report.
 
-A PM code-review that passes because "the seams exist and tests are green" is **not** a real review. Structure-pass ≠ edge-pass. CR-008's PM review APPROVED a handback that AI-reviewers then flagged with 4 valid behavioral defects the structural pass missed: an audit-snapshot accepted with the **wrong type** (mutation proceeded audit-less), a switch on the **raw** request field instead of the **normalized** one, a **silent limit clamp** where the sibling path returned an error, and metrics computed over a **filtered subset** but presented as the whole. Before APPROVE, for EACH validation/mutation/filter/adapter path, check the edge — wrong type accepted, raw-vs-normalized value, silent clamp vs explicit error, filtered-vs-full counts, ordinary request must-NOT trigger a gated path — not merely that the seam is present. `existing-design-is-a-hypothesis` applies to per-path validation details, not just to the shape.
+Give substantive findings one evidenced disposition in existing review/task state: **fix now**, **not applicable**, or **maintainer-accepted follow-up**. Blocking means a failed mandatory gate, violated accepted behavior/compatibility, or credible security/data-integrity risk. A severity label alone is not the reasoning; credible unresolved high-impact risks remain blocking during investigation.
 
-### RELEASE-RACE guard (shared `.git` object store)
+Do not defer real blockers to ship. Do not turn optional polish, speculative future features or personal preference into release requirements. Required approvals/thread resolution still apply; disputes and scanner findings cannot be suppressed or unilaterally marked resolved. Never lower thresholds or hide failures to pass.
 
-Worktrees share one `.git` object store, so a local release commit is visible to the peer session the instant it exists. During v6.32.0 the peer pushed PM's release commit + created the tag before PM's own `git tag` ran (`fatal: tag already exists`). Release tagging is a **coordination point**, not a solo act. Before cutting a release: announce the exact release commit + tag intent in the PM oracle first, OR on `tag already exists` / `main already at my commit` treat it as a likely peer-push and **verify** consistency (local tag object == remote tag object, deref commit == the intended commit, parent chain correct) rather than force-moving or re-cutting. Never `--force` or re-cut a pushed release tag. `calibrated-doubt-for-irreversible-actions` governs the "tag exists" branch.
+Finish required review before expensive final validation. Recheck fixes and affected invariants; reopen unchanged accepted areas only for new evidence or affected dependencies. A new reviewer/model or changelog edit alone does not justify another whole-product audit. No fixed review-count permits unsafe release; every additional round needs a concrete unresolved question.
 
-### ROLE-STATE GOVERNANCE guard
+## VALIDATION WITHOUT RESET LOOPS
 
-Role/assignment state is CONTROL-PLANE, not a last-writer-wins free-for-all. A Developer session writing `claude=<role>` into `_assignment.json`, or flipping the shared front-door `current.json` to its own session `mode`, is a **hallucinated self-promotion**, not a legitimate coordination write. Role truth comes ONLY from `_assignment.json` as maintained by the operator / `mode` skill; a subordinate Developer never authors it. The correct PM response is NOT capitulation ("don't war over the front-door") — it is: (1) hold the pm role from `_assignment.json` regardless of front-door churn; (2) restore the shared governance surface (front-door `mode=dual-role`) as PM-owned hygiene; (3) surface repeat role-state hallucination to the operator. Distinction: **content** oracles (`roles/developer/current.json` handoff detail) are peer-owned and fine to let the peer own; **role/assignment/front-door-mode** is control-plane and must not be self-authored by a subordinate role. Meta-lesson: do NOT enshrine an observed-but-illegitimate peer behavior as a rule just because it happened — that is how a hallucination becomes durable policy.
+Finish known blocker repairs, version metadata and generated inputs before freezing a candidate. Use its own runner and one QA owner. Do not mutate/rebase the candidate during its gate or launch final validation while same-candidate repairs are outstanding. A new blocker requires an explicit candidate/evidence-impact decision.
 
-## CONVENTIONS
+Reuse evidence only within validated input/environment/provenance contracts. Never relabel an old PASS. Docs-only changes do not justify a new product investigation, but cannot bypass the current tool's exact-input rules. Sonar still analyzes the exact release candidate and must return `OK`; all enforced checks and security rules remain.
 
-- Language: Go 1.26.6+
-- Build: `make build`
-- Test: `go test ./...`
-- Database: PostgreSQL 17
-- Server: `cmd/engram-server/main.go` — HTTP API + gRPC + dashboard on :37777 (cmux)
-- Client: `cmd/engram/main.go` — stdio MCP proxy with git-derived project identity
-- Hooks: `plugin/engram/hooks/` — JavaScript hooks for Claude Code lifecycle
-- Plugin: `plugin/` — Claude Code plugin definition + marketplace
+Long checks have an owned durable job, actual command/path, selected tests, prerequisites, budget and observable result. A short Task wait must not kill a progressing gate. Follow the same job; do not start a replacement or clear a lock without checking ownership. A bad progress counter alone is not cause to cancel useful work.
 
-## KEY DIRECTORIES
+Classify product, test, evidence-parser, environment and gate failures separately. Reproduce the smallest relevant case; replay saved events to debug classification. A repeated unchanged failure without new information requires a different diagnosis, not another identical full run. Do not fix flakiness by unsupported retries, assertion weakening or timeout inflation.
 
-```
-cmd/engram-server/   — server entry point
-cmd/engram/          — local client (stdio MCP proxy)
-internal/mcp/        — MCP protocol, tool handlers (tools_*.go)
-internal/grpcserver/ — gRPC service implementations
-internal/worker/     — HTTP handlers, retrieval, session management
-internal/db/gorm/    — GORM models + stores (memories, behavioral_rules, credentials, issues, documents)
-internal/crypto/     — AES-256-GCM vault for credential encryption
-plugin/engram/hooks/ — JS hooks (SessionStart, UserPromptSubmit, SubagentStop, PreToolUse, PreCompact, Stop, SessionEnd)
-```
+When the same cause invalidates two candidate attempts, Root makes a short recovery decision in the existing run: causal repair, valid-baseline restoration, operator-approved scope change or a specific external decision. This is an escalation trigger, not a waiver or a new QC project. Independent safe work continues.
 
-## CODE INTELLIGENCE (SocratiCode replacement, v6.13.0+)
+## DELIVERY AND CONTINUATION
 
-Set `ENGRAM_CODE_INTEL_ENABLED=true` to activate three drop-in SocratiCode replacement tools:
+Once required gates pass and effects are authorized, proceed to release, rollout and ordinary-consumer verification; do not wait for another user "continue" or discretionary audit. A real external block needs one concrete decision request with impact/rollback, not repeated approval of an already authorized action.
 
-| Tool | Side | Description |
-|------|------|-------------|
-| `codebase_index` | daemon | Triggers async code index for the current project root. Returns `{status:"started",run_id}` immediately. |
-| `codebase_status` | daemon+server | Reports index liveness, chunk counts, and last-indexed timestamp. |
-| `codebase_search` | server | Hybrid FTS+vector search over indexed code chunks. V1: FTS-only (no embedding required). |
+Current recovery order: usable code search/graph/worktrees and Code Explorer, then Book Context, then cognitive memory unless the operator changes it. Preserve queued work; no old-PR cleanup or new capabilities inside release closeout. Do not dismantle an assembled candidate merely to obey a new small-batch slogan.
 
-Flag-off: all three tools are absent from `tools/list` (byte-identical to pre-v6.13.0 surface).
+Keep one continuation pointer: candidate, installed state, causal blockers/owners and next action. Report actual user availability separately from checks. Forecast from evidence/dependencies with uncertainty, not invented dates or blanket bans on estimates. Root owns delivery progress, not just subagent activity.
 
-Key directories:
-- `internal/handlers/codeintel/` — daemon-side module (codebase_index, codebase_status liveness)
-- `internal/mcp/tools_code_intel.go` — server-side codebase_search + codebase_status counts
-- `internal/db/gorm/code_chunk_store.go` — CountEmbeddedByProject, MaxUpdatedAtByProject
+Replace conflicting policy at its source; do not accumulate per-incident instructions, new ledgers, schedulers or report schemas. Land adopted rules in main through existing review so later sessions inherit them. Never silently update a running frozen checkout.
 
-## INSTRUCTION HIERARCHY
+## ARCHITECTURE AND NAVIGATION
 
-```
-System prompts > Task/delegation > Global rules > Project rules > Defaults
-```
+Verify call paths and consumers; distinguish deployed, implemented-but-unshipped, dormant, obsolete and absent. Historical v5 removal rejects obsolete implementations, not accepted outcomes (constitution XIV). Names, flags, docs and green mocks alone prove neither current architecture nor deployment.
 
-## SKILL LOADING
+Code queries/traversal/source reads use authorized Source/Checkout/pinned View. Labels, paths, legacy project aliases and equal vector dimensions are not authority or compatibility. Preserve privacy, migrations, bounded resources and independent worktrees. PostgreSQL projections are rebuildable, not a second write authority.
 
-1. Project skills (`.agent/skills/`) override global skills
-2. Same-name project skill completely replaces global
-3. Skills are loaded by semantic description matching
+SocratiCode/Graphify are references for researched native mechanism adaptation, not embedded products or proof of parity. Reuse accepted research; state actual language/corpus coverage. Test doubles are allowed for isolated tests, never as proof of a real provider, daemon or installed user path.
+
+Entry points: `cmd/engram-server/`, `cmd/engram/`. UCI: `internal/uci/`, `internal/handlers/codeintel/`, `internal/db/gorm/uci_*`. Console: `apps/operator-console/`; HTTP/storage: `internal/worker/`, `internal/db/gorm/`; integrations: `plugin/`.
+
+Use current `go.mod`, CI and lockfiles for toolchain versions. Base commands: `make build`, `go test ./...`; release commands/environments: `docs/RELEASE-PROTOCOL.md`. QA verifies real flags and selected tests; unexpected SKIP or zero selection is not PASS. Load only relevant available skills.
+
+Never reset, clean, stage or overwrite unrelated user work, including inherited main-checkout `AGENTS.md` changes. Check actual owners and shared `.agent`/`.specify` paths before writing. Leave details of safe implementation to the responsible subagent.
