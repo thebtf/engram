@@ -27,15 +27,23 @@ import (
 )
 
 const (
-	uciProjectionMaxSourceTextBytes  = 64 << 10
-	uciProjectionArtifactIDWhere     = "artifact_id = ?"
-	uciProjectionSourceArtifactWhere = "source_id = ? AND artifact_id = ?"
-	uciProjectionProfileIDWhere      = "profile_id = ?"
-	uciProjectionCheckoutIDWhere     = "checkout_id = ?"
-	uciProjectionViewIDWhere         = "view_id = ?"
-	uciProjectionJobIDWhere          = "job_id = ?"
-	uciProjectionBuildIDWhere        = "build_id = ?"
-	uciProjectionDigestPrefix        = "sha256:"
+	uciProjectionMaxSourceTextBytes   = 64 << 10
+	uciProjectionArtifactIDWhere      = "artifact_id = ?"
+	uciProjectionSourceArtifactWhere  = "source_id = ? AND artifact_id = ?"
+	uciProjectionProfileIDWhere       = "profile_id = ?"
+	uciProjectionCheckoutIDWhere      = "checkout_id = ?"
+	uciProjectionViewIDWhere          = "view_id = ?"
+	uciProjectionJobIDWhere           = "job_id = ?"
+	uciProjectionBuildIDWhere         = "build_id = ?"
+	uciProjectionDigestPrefix         = "sha256:"
+	uciHybridConditionSeparator       = "\n\t\t\t\tAND "
+	uciHybridSourceIDColumn           = ".source_id"
+	uciHybridArtifactIDColumn         = ".artifact_id"
+	uciHybridChunkContentDigestColumn = ".chunk_content_digest"
+	uciHybridEntityKeyColumn          = ".entity_key"
+	uciHybridRelativePathColumn       = ".relative_path"
+	uciHybridByteStartColumn          = ".byte_start"
+	uciHybridByteEndColumn            = ".byte_end"
 )
 
 var (
@@ -1729,99 +1737,125 @@ func (s *UCIProjectionStore) StoreCandidateEmbedding(ctx context.Context, author
 // retrieval pool, fuses that bounded set before response pagination, and
 // hydrates only the requested page plus its continuation lookahead.
 func (s *UCIProjectionStore) SelectHybridCandidates(ctx context.Context, authorized ucidomain.AuthorizedContext, profile ucidomain.VectorProfile, vector []float32, spec ucidomain.QuerySpec) (ucidomain.SemanticStoreResult, error) {
-	if err := s.requireDB("select hybrid candidates"); err != nil {
-		return ucidomain.SemanticStoreResult{}, err
-	}
-	ref := authorized.Ref()
-	if err := validateUCIQueryContext(ref); err != nil {
-		return ucidomain.SemanticStoreResult{}, err
-	}
-	if err := validateUCISemanticProfile(profile); err != nil {
-		return ucidomain.SemanticStoreResult{}, err
-	}
-	if err := validateUCISemanticVector(vector, profile.Dimension); err != nil {
-		return ucidomain.SemanticStoreResult{}, err
-	}
-	if err := validateUCIQuerySpec(spec); err != nil {
+	ref, err := s.validateUCIHybridSelection(authorized, profile, vector, spec)
+	if err != nil {
 		return ucidomain.SemanticStoreResult{}, err
 	}
 
 	var result ucidomain.SemanticStoreResult
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		metadata, found, err := loadUCIQueryViewMetadata(tx, ref)
-		if err != nil {
-			return err
-		}
-		if !found || metadata.State == UCIViewRetired || metadata.State == UCIViewStaging {
-			result = uciHybridUnavailableResult(ucidomain.QueryErrorBuildIncomplete)
-			return nil
-		}
-		coverage, coverageOK := parseUCIQueryCoverage(metadata.Structural)
-		if !coverageOK || coverage == ucidomain.IndexCoverageUnavailable {
-			result = uciHybridUnavailableResult(ucidomain.QueryErrorBuildIncomplete)
-			return nil
-		}
-		if spec.Mode == ucidomain.QueryModeFTS {
-			lexical, lexicalOK := parseUCIQueryCoverage(metadata.Lexical)
-			if !lexicalOK || lexical == ucidomain.IndexCoverageUnavailable {
-				result = uciHybridUnavailableResult(ucidomain.QueryErrorParserUnsupported)
-				return nil
-			}
-			if lexical == ucidomain.IndexCoveragePartial && coverage == ucidomain.IndexCoverageComplete {
-				coverage = ucidomain.IndexCoveragePartial
-			}
-		}
-
-		coverageQuery, coverageArguments, err := buildUCIHybridCoverageSQL(ref, profile, spec)
-		if err != nil {
-			return err
-		}
-		var coverageRow uciSemanticCoverageRow
-		if err := tx.Raw(coverageQuery, coverageArguments...).Scan(&coverageRow).Error; err != nil {
-			return fmt.Errorf("uci projection select hybrid coverage: %w", err)
-		}
-		if coverageRow.TotalCandidates < 0 || coverageRow.CompatibleCandidates < 0 || coverageRow.CompatibleCandidates > coverageRow.TotalCandidates {
-			return fmt.Errorf("uci projection select hybrid coverage: invalid counts")
-		}
-		vectorCoverage := float64(1)
-		if coverageRow.TotalCandidates != 0 {
-			vectorCoverage = float64(coverageRow.CompatibleCandidates) / float64(coverageRow.TotalCandidates)
-		}
-		result = ucidomain.SemanticStoreResult{Coverage: coverage, VectorCoverage: vectorCoverage}
-		if vectorCoverage < 1 {
-			return nil
-		}
-
-		query, arguments, err := buildUCIHybridCandidatesSQL(ref, profile, vector, spec)
-		if err != nil {
-			return err
-		}
-		var rows []uciHybridQueryCandidateRow
-		if err := tx.Raw(query, arguments...).Scan(&rows).Error; err != nil {
-			return fmt.Errorf("uci projection select hybrid candidates: %w", err)
-		}
-		result.Candidates = make([]ucidomain.SemanticCandidate, 0, len(rows))
-		for _, row := range rows {
-			candidate, ok := row.queryCandidate(ref)
-			if !ok {
-				return fmt.Errorf("uci projection select hybrid candidates: invalid page candidate")
-			}
-			lexicalSource := ucidomain.QueryMatchExact
-			if spec.Mode == ucidomain.QueryModeFTS {
-				lexicalSource = ucidomain.QueryMatchFTS
-			}
-			sources := []ucidomain.QueryMatchSource{ucidomain.QueryMatchVector}
-			if row.LexicalMatch {
-				sources = []ucidomain.QueryMatchSource{lexicalSource, ucidomain.QueryMatchVector}
-			}
-			result.Candidates = append(result.Candidates, ucidomain.SemanticCandidate{Candidate: candidate, MatchSources: sources})
-		}
-		return nil
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result, err = selectUCIHybridCandidatesTx(tx, ref, profile, vector, spec)
+		return err
 	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
 		return ucidomain.SemanticStoreResult{}, err
 	}
 	return result, nil
+}
+
+func (s *UCIProjectionStore) validateUCIHybridSelection(authorized ucidomain.AuthorizedContext, profile ucidomain.VectorProfile, vector []float32, spec ucidomain.QuerySpec) (ucidomain.ContextRef, error) {
+	if err := s.requireDB("select hybrid candidates"); err != nil {
+		return ucidomain.ContextRef{}, err
+	}
+	ref := authorized.Ref()
+	if err := validateUCIQueryContext(ref); err != nil {
+		return ucidomain.ContextRef{}, err
+	}
+	if err := validateUCISemanticProfile(profile); err != nil {
+		return ucidomain.ContextRef{}, err
+	}
+	if err := validateUCISemanticVector(vector, profile.Dimension); err != nil {
+		return ucidomain.ContextRef{}, err
+	}
+	if err := validateUCIQuerySpec(spec); err != nil {
+		return ucidomain.ContextRef{}, err
+	}
+	return ref, nil
+}
+
+func selectUCIHybridCandidatesTx(tx *gorm.DB, ref ucidomain.ContextRef, profile ucidomain.VectorProfile, vector []float32, spec ucidomain.QuerySpec) (ucidomain.SemanticStoreResult, error) {
+	metadata, found, err := loadUCIQueryViewMetadata(tx, ref)
+	if err != nil {
+		return ucidomain.SemanticStoreResult{}, err
+	}
+	result, ready := uciHybridMetadataResult(metadata, found, spec)
+	if !ready {
+		return result, nil
+	}
+
+	coverageQuery, coverageArguments, err := buildUCIHybridCoverageSQL(ref, profile, spec)
+	if err != nil {
+		return ucidomain.SemanticStoreResult{}, err
+	}
+	var coverageRow uciSemanticCoverageRow
+	if err := tx.Raw(coverageQuery, coverageArguments...).Scan(&coverageRow).Error; err != nil {
+		return ucidomain.SemanticStoreResult{}, fmt.Errorf("uci projection select hybrid coverage: %w", err)
+	}
+	if coverageRow.TotalCandidates < 0 || coverageRow.CompatibleCandidates < 0 || coverageRow.CompatibleCandidates > coverageRow.TotalCandidates {
+		return ucidomain.SemanticStoreResult{}, fmt.Errorf("uci projection select hybrid coverage: invalid counts")
+	}
+	vectorCoverage := float64(1)
+	if coverageRow.TotalCandidates != 0 {
+		vectorCoverage = float64(coverageRow.CompatibleCandidates) / float64(coverageRow.TotalCandidates)
+	}
+	result.VectorCoverage = vectorCoverage
+	if vectorCoverage < 1 {
+		return result, nil
+	}
+
+	query, arguments, err := buildUCIHybridCandidatesSQL(ref, profile, vector, spec)
+	if err != nil {
+		return ucidomain.SemanticStoreResult{}, err
+	}
+	var rows []uciHybridQueryCandidateRow
+	if err := tx.Raw(query, arguments...).Scan(&rows).Error; err != nil {
+		return ucidomain.SemanticStoreResult{}, fmt.Errorf("uci projection select hybrid candidates: %w", err)
+	}
+	result.Candidates, err = uciHybridCandidatesFromRows(rows, ref, spec)
+	if err != nil {
+		return ucidomain.SemanticStoreResult{}, err
+	}
+	return result, nil
+}
+
+func uciHybridMetadataResult(metadata uciQueryViewMetadata, found bool, spec ucidomain.QuerySpec) (ucidomain.SemanticStoreResult, bool) {
+	if !found || metadata.State == UCIViewRetired || metadata.State == UCIViewStaging {
+		return uciHybridUnavailableResult(ucidomain.QueryErrorBuildIncomplete), false
+	}
+	coverage, coverageOK := parseUCIQueryCoverage(metadata.Structural)
+	if !coverageOK || coverage == ucidomain.IndexCoverageUnavailable {
+		return uciHybridUnavailableResult(ucidomain.QueryErrorBuildIncomplete), false
+	}
+	if spec.Mode == ucidomain.QueryModeFTS {
+		lexical, lexicalOK := parseUCIQueryCoverage(metadata.Lexical)
+		if !lexicalOK || lexical == ucidomain.IndexCoverageUnavailable {
+			return uciHybridUnavailableResult(ucidomain.QueryErrorParserUnsupported), false
+		}
+		if lexical == ucidomain.IndexCoveragePartial && coverage == ucidomain.IndexCoverageComplete {
+			coverage = ucidomain.IndexCoveragePartial
+		}
+	}
+	return ucidomain.SemanticStoreResult{Coverage: coverage}, true
+}
+
+func uciHybridCandidatesFromRows(rows []uciHybridQueryCandidateRow, ref ucidomain.ContextRef, spec ucidomain.QuerySpec) ([]ucidomain.SemanticCandidate, error) {
+	candidates := make([]ucidomain.SemanticCandidate, 0, len(rows))
+	lexicalSource := ucidomain.QueryMatchExact
+	if spec.Mode == ucidomain.QueryModeFTS {
+		lexicalSource = ucidomain.QueryMatchFTS
+	}
+	for _, row := range rows {
+		candidate, ok := row.queryCandidate(ref)
+		if !ok {
+			return nil, fmt.Errorf("uci projection select hybrid candidates: invalid page candidate")
+		}
+		sources := []ucidomain.QueryMatchSource{ucidomain.QueryMatchVector}
+		if row.LexicalMatch {
+			sources = []ucidomain.QueryMatchSource{lexicalSource, ucidomain.QueryMatchVector}
+		}
+		candidates = append(candidates, ucidomain.SemanticCandidate{Candidate: candidate, MatchSources: sources})
+	}
+	return candidates, nil
 }
 
 func uciHybridUnavailableResult(code ucidomain.QueryErrorCode) ucidomain.SemanticStoreResult {
@@ -2115,7 +2149,7 @@ func buildUCISemanticScopedCandidatesSQL(ref ucidomain.ContextRef, spec ucidomai
 			LEFT JOIN ci_definitions AS definition
 				ON definition.artifact_id = chunk.artifact_id
 				AND definition.local_symbol_key = chunk.symbol_key
-			WHERE ` + strings.Join(conditions, "\n\t\t\t\tAND ") + `
+			WHERE ` + strings.Join(conditions, uciHybridConditionSeparator) + `
 		)
 `, arguments, nil
 }
@@ -2221,7 +2255,7 @@ func buildUCIHybridCandidatesSQL(ref ucidomain.ContextRef, profile ucidomain.Vec
 		lexical_candidates AS (
 			SELECT candidate.*, ` + lexicalScore + ` AS lexical_score
 			FROM scoped_candidates AS candidate
-			WHERE ` + strings.Join(lexicalConditions, "\n\t\t\t\tAND ") + `
+			WHERE ` + strings.Join(lexicalConditions, uciHybridConditionSeparator) + `
 		),
 		lexical_coalesced AS (
 			SELECT DISTINCT ON (` + identity + `)
@@ -2322,18 +2356,18 @@ func buildUCIHybridCandidatesSQL(ref ucidomain.ContextRef, profile ucidomain.Vec
 
 func uciHybridCandidateColumns(alias string) string {
 	return strings.Join([]string{
-		alias + ".source_id",
+		alias + uciHybridSourceIDColumn,
 		alias + ".checkout_id",
 		alias + ".analysis_profile_id",
-		alias + ".artifact_id",
-		alias + ".chunk_content_digest",
+		alias + uciHybridArtifactIDColumn,
+		alias + uciHybridChunkContentDigestColumn,
 		alias + ".facts_digest",
-		alias + ".entity_key",
+		alias + uciHybridEntityKeyColumn,
 		alias + ".local_name",
 		alias + ".qualified_symbol",
-		alias + ".relative_path",
-		alias + ".byte_start",
-		alias + ".byte_end",
+		alias + uciHybridRelativePathColumn,
+		alias + uciHybridByteStartColumn,
+		alias + uciHybridByteEndColumn,
 		alias + ".chunk_kind",
 		alias + ".language",
 		alias + ".chunk_id",
@@ -2343,36 +2377,36 @@ func uciHybridCandidateColumns(alias string) string {
 
 func uciHybridIdentityColumns(alias string) string {
 	return strings.Join([]string{
-		alias + ".source_id",
-		alias + ".artifact_id",
-		alias + ".chunk_content_digest",
-		alias + ".entity_key",
-		alias + ".relative_path",
-		alias + ".byte_start",
-		alias + ".byte_end",
+		alias + uciHybridSourceIDColumn,
+		alias + uciHybridArtifactIDColumn,
+		alias + uciHybridChunkContentDigestColumn,
+		alias + uciHybridEntityKeyColumn,
+		alias + uciHybridRelativePathColumn,
+		alias + uciHybridByteStartColumn,
+		alias + uciHybridByteEndColumn,
 	}, ", ")
 }
 
 func uciHybridIdentityJoin(left, right string) string {
 	return strings.Join([]string{
-		left + ".source_id = " + right + ".source_id",
-		left + ".artifact_id = " + right + ".artifact_id",
-		left + ".chunk_content_digest = " + right + ".chunk_content_digest",
-		left + ".entity_key = " + right + ".entity_key",
-		left + ".relative_path = " + right + ".relative_path",
-		left + ".byte_start = " + right + ".byte_start",
-		left + ".byte_end = " + right + ".byte_end",
-	}, "\n\t\t\t\tAND ")
+		left + uciHybridSourceIDColumn + " = " + right + uciHybridSourceIDColumn,
+		left + uciHybridArtifactIDColumn + " = " + right + uciHybridArtifactIDColumn,
+		left + uciHybridChunkContentDigestColumn + " = " + right + uciHybridChunkContentDigestColumn,
+		left + uciHybridEntityKeyColumn + " = " + right + uciHybridEntityKeyColumn,
+		left + uciHybridRelativePathColumn + " = " + right + uciHybridRelativePathColumn,
+		left + uciHybridByteStartColumn + " = " + right + uciHybridByteStartColumn,
+		left + uciHybridByteEndColumn + " = " + right + uciHybridByteEndColumn,
+	}, uciHybridConditionSeparator)
 }
 
 func uciHybridTieOrder(alias string) string {
 	return strings.Join([]string{
-		alias + `.relative_path COLLATE "C" ASC`,
-		alias + ".byte_start ASC",
-		alias + `.entity_key COLLATE "C" ASC`,
-		alias + ".artifact_id ASC",
-		alias + `.chunk_content_digest COLLATE "C" ASC`,
-		alias + ".byte_end ASC",
+		alias + uciHybridRelativePathColumn + ` COLLATE "C" ASC`,
+		alias + uciHybridByteStartColumn + " ASC",
+		alias + uciHybridEntityKeyColumn + ` COLLATE "C" ASC`,
+		alias + uciHybridArtifactIDColumn + " ASC",
+		alias + uciHybridChunkContentDigestColumn + ` COLLATE "C" ASC`,
+		alias + uciHybridByteEndColumn + " ASC",
 	}, ", ")
 }
 
