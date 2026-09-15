@@ -952,6 +952,9 @@ func scannerStatusRenameCandidate(records []string, index int) (scannerCandidate
 	if err := scannerValidateGitPath(records[index+1]); err != nil {
 		return scannerCandidate{}, false, false, err
 	}
+	if fields[1][1] == 'D' {
+		return scannerCandidate{path: candidatePath, removed: true}, true, true, nil
+	}
 	if fields[1][0] == '.' && (fields[1][1] == 'R' || fields[1][1] == 'C') {
 		return scannerCandidate{path: candidatePath}, true, true, nil
 	}

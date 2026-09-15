@@ -804,6 +804,23 @@ func TestUCIScannerCandidateCacheMatchesUncachedRealGit(t *testing.T) {
 		)
 	})
 
+	t.Run("staged rename destination deleted", func(t *testing.T) {
+		fixture := newScannerRealFixture(t)
+		fixture.warm(t)
+		scannerRealGit(t, fixture.root, "mv", "-f", "tracked.go", "renamed.go")
+		if err := os.Remove(filepath.Join(fixture.root, "renamed.go")); err != nil {
+			t.Fatalf("remove staged rename destination: %v", err)
+		}
+		result, calls := fixture.scanAndCompare(t)
+		scannerAssertCensus(t, result, IndexScanComplete, true, true)
+		scannerAssertFileAbsent(t, result, "tracked.go")
+		scannerAssertFileAbsent(t, result, "renamed.go")
+		scannerAssertRecordedGitOperations(t, calls, fixture.expectedRoot,
+			"status --porcelain=v2 --branch -z --untracked-files=all",
+			"ls-files --stage --others --exclude-standard -t -z",
+		)
+	})
+
 	t.Run("case-only staged rename", func(t *testing.T) {
 		fixture := newScannerRealFixture(t)
 		fixture.warm(t)
