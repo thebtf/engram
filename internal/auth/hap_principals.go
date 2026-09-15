@@ -148,6 +148,13 @@ func (i Identity) IsHAPRegistrationService() bool {
 	return ok && principal.Class == HAPPrincipalRegistration
 }
 
+// CanHAPRegisterProjectIdentity reports whether this keycard may establish
+// a relay project-identity anchor. Registration requires both the dedicated
+// registration principal and the existing read-write keycard role.
+func (i Identity) CanHAPRegisterProjectIdentity() bool {
+	return i.Role == RoleReadWrite && i.IsHAPRegistrationService()
+}
+
 // IsHAPProjectServiceFor reports whether this identity is a daemon service
 // keycard scoped to exactly the server-resolved canonical project.
 func (i Identity) IsHAPProjectServiceFor(canonicalProject string) bool {

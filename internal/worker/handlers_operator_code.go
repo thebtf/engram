@@ -1408,6 +1408,12 @@ func operatorCodeReadJSON(r *http.Request, target any) ([]byte, error) {
 }
 
 func operatorCodeSessionID(r *http.Request) (string, bool) {
+	if r == nil {
+		return "", false
+	}
+	if sessionID, ok := authenticatedBrowserSessionID(r.Context()); ok {
+		return sessionID, true
+	}
 	cookie, err := r.Cookie(authSessionCookieName)
 	if err != nil || !operatorCodeText(cookie.Value) {
 		return "", false

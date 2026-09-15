@@ -149,6 +149,22 @@ func TestRelayRegistrationUsesTypedAuthorizationPath(t *testing.T) {
 	require.Equal(t, 1, store.registrationCalls, "wrong credential class must not reach V3 resolution")
 }
 
+func TestRelayRegistrationReadOnlyKeycardCannotBindAnchor(t *testing.T) {
+	enableHAPBridge(t)
+	store := &grpcRegistrationStoreV3{binding: projectidentity.AnchorBindingV3{State: projectidentity.AnchorBindingMissingV3}}
+	server := &Server{identityResolverV3: grpcRegistrationResolverV3(t, store)}
+	identity := auth.ClientWithPrincipal("read-only", "registration-keycard", auth.RegistrationServicePrincipal("workstation-a"), auth.PrincipalKindService)
+
+	response, err := server.RegisterProjectIdentityV3(auth.WithIdentity(context.Background(), identity), &pb.RegisterProjectIdentityV3Request{
+		ProjectIdentityV3: grpcV3Identity(),
+		RelayRevision:     hapBridgeRevision,
+	})
+
+	require.Nil(t, response)
+	require.Equal(t, codes.PermissionDenied, status.Code(err))
+	require.Zero(t, store.registrationCalls, "read-only registration keycard must be denied before anchor registration")
+}
+
 func TestGenericGRPCRejectsEveryHAPCredentialClass(t *testing.T) {
 	server := &Server{handler: staticMCPHandler{}, identityResolverV3: hapResolution(t)}
 	registration := auth.ClientWithPrincipal("read-write", "registration-keycard", auth.RegistrationServicePrincipal("workstation-a"), auth.PrincipalKindService)

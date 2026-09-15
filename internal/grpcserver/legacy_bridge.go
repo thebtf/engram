@@ -44,8 +44,8 @@ func (s *Server) authorizeRegistrationIdentity(ctx context.Context, req *pb.Regi
 		if err := requireRelayRevision(req.GetRelayRevision()); err != nil {
 			return err
 		}
-		if !identity.IsHAPRegistrationService() {
-			return status.Error(codes.PermissionDenied, "relay registration requires registration service keycard")
+		if !identity.CanHAPRegisterProjectIdentity() {
+			return status.Error(codes.PermissionDenied, "relay registration requires read-write registration service keycard")
 		}
 		return nil
 	}

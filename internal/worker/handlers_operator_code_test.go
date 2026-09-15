@@ -426,6 +426,20 @@ func TestOperatorCodeHTTPAdapter_BindsReleasedReadsToBrowserSession(t *testing.T
 	}
 }
 
+func TestOperatorCodeHTTPAdapter_UsesAuthenticatedSessionContext(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	fixture.binding.expectedSessionID = authentikBrowserSessionID(41)
+	fixture.app.search = operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalLexical)
+	request := operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","query":"Fixture"}`, fixture.identity)
+	request = request.WithContext(withAuthenticatedBrowserSession(request.Context(), authentikBrowserSessionID(41)))
+	recorder := httptest.NewRecorder()
+
+	adapter.HandleSearch(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, []string{authentikBrowserSessionID(41)}, fixture.app.sourceSessions)
+}
+
 func TestOperatorCodeHTTPAdapter_UsesGrantedSourceRealmForRelease(t *testing.T) {
 	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
 	identity := operatorCodeRequestIdentity{identity: fixture.identity, sessionID: "browser-session-41"}
@@ -1362,16 +1376,18 @@ func (sources *operatorCodeHTTPTestGraphSources) DescribeGraphSource(_ context.C
 }
 
 type operatorCodeHTTPTestBinding struct {
-	pinned     *BrowserBindingContext
-	err        error
-	calls      int
-	failOnCall int
-	guardedID  string
-	handshake  BrowserBindingTransition
-	resume     BrowserBindingTransition
-	renewed    []BrowserBindingProof
-	closed     []BrowserBindingProof
-	pinnedTo   []BrowserBindingContext
+	pinned            *BrowserBindingContext
+	err               error
+	calls             int
+	failOnCall        int
+	guardedID         string
+	handshake         BrowserBindingTransition
+	resume            BrowserBindingTransition
+	renewed           []BrowserBindingProof
+	closed            []BrowserBindingProof
+	pinnedTo          []BrowserBindingContext
+	expectedSessionID string
+	expectedUserID    int64
 }
 
 func (binding *operatorCodeHTTPTestBinding) Guard(_ context.Context, identity auth.Identity, sessionID string, proof BrowserBindingProof) (BrowserBindingGuarded, error) {
@@ -1379,7 +1395,16 @@ func (binding *operatorCodeHTTPTestBinding) Guard(_ context.Context, identity au
 	if binding.err != nil || (binding.failOnCall > 0 && binding.calls >= binding.failOnCall) {
 		return BrowserBindingGuarded{}, errors.New("proof denied")
 	}
-	if _, ok := identity.SessionBrowserSubject(); !ok || sessionID != "browser-session-41" || proof.TabBindingID != operatorCodeHTTPTestBindingID || proof.DocumentProof != "proof-current" {
+	subject, ok := identity.SessionBrowserSubject()
+	expectedSessionID := binding.expectedSessionID
+	if expectedSessionID == "" {
+		expectedSessionID = "browser-session-41"
+	}
+	expectedUserID := binding.expectedUserID
+	if expectedUserID == 0 {
+		expectedUserID = 41
+	}
+	if !ok || subject.UserID != expectedUserID || sessionID != expectedSessionID || proof.TabBindingID != operatorCodeHTTPTestBindingID || proof.DocumentProof != "proof-current" {
 		return BrowserBindingGuarded{}, errors.New("proof denied")
 	}
 	guarded := BrowserBindingGuarded{TabBindingID: proof.TabBindingID}

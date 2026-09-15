@@ -29,6 +29,11 @@ import (
 // requestIDKey is the context key for request IDs.
 type requestIDKey struct{}
 
+// authenticatedBrowserSessionKey carries a session ID established by successful
+// HTTP authentication. It is never read from a request header or cookie by a
+// guarded handler.
+type authenticatedBrowserSessionKey struct{}
+
 // emptyTokenStore satisfies auth.TokenStoreReader with an always-empty
 // candidate set. Used as the bootstrap reader for the validator until
 // SetValidator() swaps in the DB-backed *gormdb.TokenStore.
@@ -467,7 +472,8 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 				if sess, err := authSessStore.GetSession(authCookie.Value); err == nil {
 					if user, err := uStore.GetUserByID(sess.UserID); err == nil && !user.Disabled {
 						id := authpkg.SessionForBrowserUser(user.Role, user.ID)
-						next.ServeHTTP(w, r.WithContext(buildAuthCtx(r.Context(), id)))
+						ctx := withAuthenticatedBrowserSession(r.Context(), authCookie.Value)
+						next.ServeHTTP(w, r.WithContext(buildAuthCtx(ctx, id)))
 						return
 					}
 				}
@@ -490,7 +496,8 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 				}
 				if err == nil && user != nil && !user.Disabled {
 					id := authpkg.SessionForBrowserUser(user.Role, user.ID)
-					next.ServeHTTP(w, r.WithContext(buildAuthCtx(r.Context(), id)))
+					ctx := withAuthenticatedBrowserSession(r.Context(), authentikBrowserSessionID(user.ID))
+					next.ServeHTTP(w, r.WithContext(buildAuthCtx(ctx, id)))
 					return
 				}
 			}
@@ -537,6 +544,21 @@ func buildAuthCtx(ctx context.Context, id authpkg.Identity) context.Context {
 	ctx = authpkg.WithIdentity(ctx, id)
 	ctx = context.WithValue(ctx, authRoleKey{}, string(id.Role))
 	return ctx
+}
+
+func withAuthenticatedBrowserSession(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, authenticatedBrowserSessionKey{}, sessionID)
+}
+
+func authenticatedBrowserSessionID(ctx context.Context) (string, bool) {
+	sessionID, ok := ctx.Value(authenticatedBrowserSessionKey{}).(string)
+	return sessionID, ok && operatorCodeText(sessionID)
+}
+
+// authentikBrowserSessionID derives a non-client-controlled session key from
+// the persisted user loaded after trusted-proxy authentication.
+func authentikBrowserSessionID(userID int64) string {
+	return fmt.Sprintf("authentik/%d", userID)
 }
 
 // authenticateSessionCookie validates an HMAC-signed session cookie.
