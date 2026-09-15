@@ -1,11 +1,11 @@
 import type { ComputedRef } from 'vue'
-import type { OperatorLoadState } from './useOperatorApi'
-import { executeMutation, type MutationResult } from './useApi'
+import { executeMutation, type MutationCurrentStateParser, type MutationResult } from './useApi'
 import {
   endpointEvidence,
   loadOperatorJson,
   operatorApiUrl,
   pendingState,
+  type OperatorLoadState,
 } from './useOperatorApi'
 
 export const DOMAIN_OWNER_KINDS = ['human', 'agent', 'service'] as const
@@ -94,6 +94,34 @@ function startOnce(key: string, run: () => Promise<void>) {
   }
 }
 
+export function upsertDomainCurrentStateParser(input: DomainRegistryDraft): MutationCurrentStateParser<{ domain: string }> {
+  return (value) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+    const domain = Reflect.get(value, 'domain')
+    const ownerPrincipal = Reflect.get(value, 'owner_principal')
+    const ownerPrincipalKind = Reflect.get(value, 'owner_principal_kind')
+    const mode = Reflect.get(value, 'mode')
+    const createdAt = Reflect.get(value, 'created_at')
+    const updatedAt = Reflect.get(value, 'updated_at')
+    if (
+      domain !== input.domain.trim()
+      || ownerPrincipal !== input.ownerPrincipal.trim()
+      || ownerPrincipalKind !== input.ownerPrincipalKind
+      || mode !== input.mode
+      || typeof createdAt !== 'string' || Number.isNaN(Date.parse(createdAt))
+      || typeof updatedAt !== 'string' || Number.isNaN(Date.parse(updatedAt))
+    ) return undefined
+    return { domain }
+  }
+}
+
+export function deleteDomainCurrentStateParser(domain: string): MutationCurrentStateParser<{ domain: string }> {
+  return (value) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+    return Reflect.get(value, 'deleted') === true && Reflect.get(value, 'domain') === domain ? { domain } : undefined
+  }
+}
+
 export function useOperatorDomainRegistry(): {
   domainState: ComputedRef<OperatorLoadState<OperatorMemoryDomain[]>>
   domains: ComputedRef<OperatorMemoryDomain[]>
@@ -101,8 +129,8 @@ export function useOperatorDomainRegistry(): {
   pending: ComputedRef<boolean>
   error: ComputedRef<string | null>
   refreshDomains: () => Promise<void>
-  upsertDomain: (draft: DomainRegistryDraft) => Promise<MutationResult<DomainRegistryDraft>>
-  deleteDomain: (domain: string) => Promise<MutationResult<{ domain: string }>>
+  upsertDomain: (draft: DomainRegistryDraft) => Promise<MutationResult<DomainRegistryDraft, { domain: string }>>
+  deleteDomain: (domain: string) => Promise<MutationResult<{ domain: string }, { domain: string }>>
   listEvidence: ReturnType<typeof endpointEvidence>
 } {
   const listEvidence = endpointEvidence('/api/memory-domains', 'memory-domain-registry')
@@ -166,7 +194,7 @@ export function useOperatorDomainRegistry(): {
         body: JSON.stringify(payload),
         credentials: 'include',
       }),
-      () => undefined,
+      upsertDomainCurrentStateParser(draft),
     )
   }
 
@@ -176,7 +204,7 @@ export function useOperatorDomainRegistry(): {
     return executeMutation(
       { requestId: crypto.randomUUID(), action: 'memory-domain-delete', intent: { domain: normalizedDomain } },
       fetch(operatorApiUrl(endpoint), { method: 'DELETE', credentials: 'include' }),
-      () => undefined,
+      deleteDomainCurrentStateParser(normalizedDomain),
     )
   }
 

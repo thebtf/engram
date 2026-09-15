@@ -9,6 +9,11 @@ import {
 } from '../../composables/useApi.ts'
 import { createRuleCurrentStateParser } from '../../composables/useOperatorRules.ts'
 import { storeMemoryCurrentStateParser } from '../../composables/useOperatorMemoryLab.ts'
+import { createInvitationCurrentStateParser } from '../../composables/useOperatorAccess.ts'
+import { createKeycardCurrentStateParser } from '../../composables/useOperatorKeycards.ts'
+import { upsertDomainCurrentStateParser, deleteDomainCurrentStateParser } from '../../composables/useOperatorDomainRegistry.ts'
+import { projectArchiveCurrentStateParser } from '../../composables/useOperatorProjects.ts'
+import { cleanupOrphansCurrentStateParser, createSecretCurrentStateParser, deleteSecretCurrentStateParser } from '../../composables/useOperatorSecrets.ts'
 
 const request: MutationRequest<{ enabled: boolean; version: number }> = {
  requestId: 'request-42',
@@ -292,4 +297,60 @@ test('bare, action, and 202 responses remain pending despite direct parser suppo
   assertMutationKind(result, 'committed_verification_pending')
  }
  assertMutationKind(results[3], 'committed_verification_pending')
+})
+
+test('one-time keycard and invitation receipts expose only validated create-response secrets', async () => {
+ const keycardInput = { name: 'workstation', scope: 'read-write' as const, principal: 'operator/alice', principalKind: 'human' as const, expiresAt: null }
+ const invitationInput = { email: 'operator@example.test', role: 'operator', expiresInHours: 72 }
+ const keycard = await parseMutationResponse(
+  { requestId: 'keycard-create', action: 'access-create-keycard', intent: keycardInput },
+  jsonResponse(200, { id: 'keycard-1', name: keycardInput.name, token_prefix: '01234567', scope: keycardInput.scope, principal: keycardInput.principal, principal_kind: keycardInput.principalKind, token: 'engram_0123456789abcdef0123456789abcdef' }),
+  createKeycardCurrentStateParser(keycardInput),
+ )
+ const invitation = await parseMutationResponse(
+  { requestId: 'invitation-create', action: 'access-create-invitation', intent: invitationInput },
+  jsonResponse(201, { invitation: { id: 7, code: 'a'.repeat(64), email: invitationInput.email, role: invitationInput.role, created_by: 1, created_by_email: 'admin@example.test', expires_at: '2030-01-01T00:00:00Z', revocation_reason: '', created_at: '2026-01-01T00:00:00Z', status: 'pending' } }),
+  createInvitationCurrentStateParser(invitationInput),
+ )
+
+ assertMutationKind(keycard, 'committed_verified')
+ assertMutationKind(invitation, 'committed_verified')
+ assert.equal(keycard.readback.kind, 'current')
+ assert.equal(invitation.readback.kind, 'current')
+ if (keycard.readback.kind !== 'current' || invitation.readback.kind !== 'current') throw new Error('expected direct create receipts')
+ assert.equal(keycard.readback.current.token, 'engram_0123456789abcdef0123456789abcdef')
+ assert.equal(invitation.readback.current.code, 'a'.repeat(64))
+
+ for (const result of await Promise.all([
+  parseMutationResponse({ requestId: 'keycard-malformed', action: 'access-create-keycard', intent: keycardInput }, jsonResponse(200, { id: 'keycard-1', token: 'not-a-keycard' }), createKeycardCurrentStateParser(keycardInput)),
+  parseMutationResponse({ requestId: 'invitation-pending', action: 'access-create-invitation', intent: invitationInput }, jsonResponse(200, { operation_state: 'pending', invitation: { code: 'a'.repeat(64) } }), createInvitationCurrentStateParser(invitationInput)),
+ ])) {
+  assertMutationKind(result, 'committed_verification_pending')
+ }
+})
+
+test('project, vault, and domain receipts require validated synchronous evidence', async () => {
+ const project = 'project-alpha'
+ const secret = { name: 'API_KEY', value: 'secret', project: 'engram', scope: 'project' as const }
+ const domain = { domain: 'memory-lab', ownerPrincipal: 'agent/alice', ownerPrincipalKind: 'agent' as const, mode: 'warn' as const }
+ const validDomain = { domain: domain.domain, owner_principal: domain.ownerPrincipal, owner_principal_kind: domain.ownerPrincipalKind, mode: domain.mode, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }
+ const valid = await Promise.all([
+  parseMutationResponse({ requestId: 'project', action: 'project-archive', intent: { project } }, jsonResponse(200, { id: project, removed_at: '2026-01-01T00:00:00Z' }), projectArchiveCurrentStateParser(project)),
+  parseMutationResponse({ requestId: 'vault-create', action: 'vault-store', intent: secret }, jsonResponse(201, { id: 9, name: secret.name, scope: secret.scope, message: 'Credential stored successfully' }), createSecretCurrentStateParser(secret)),
+  parseMutationResponse({ requestId: 'vault-delete', action: 'vault-delete', intent: { credentialID: '9' } }, jsonResponse(200, { deleted: true, name: secret.name }), deleteSecretCurrentStateParser(secret.name)),
+  parseMutationResponse({ requestId: 'vault-cleanup', action: 'vault-orphan-cleanup', intent: undefined }, jsonResponse(200, { status: 'ok', deleted: 1 }), cleanupOrphansCurrentStateParser),
+  parseMutationResponse({ requestId: 'domain-upsert', action: 'memory-domain-upsert', intent: domain }, jsonResponse(200, validDomain), upsertDomainCurrentStateParser(domain)),
+  parseMutationResponse({ requestId: 'domain-delete', action: 'memory-domain-delete', intent: { domain: domain.domain } }, jsonResponse(200, { deleted: true, domain: domain.domain }), deleteDomainCurrentStateParser(domain.domain)),
+ ])
+ for (const result of valid) assertMutationKind(result, 'committed_verified')
+
+ const rejected = await Promise.all([
+  parseMutationResponse({ requestId: 'project-malformed', action: 'project-archive', intent: { project } }, jsonResponse(200, { id: project }), projectArchiveCurrentStateParser(project)),
+  parseMutationResponse({ requestId: 'vault-malformed', action: 'vault-store', intent: secret }, jsonResponse(201, { id: '9', name: secret.name }), createSecretCurrentStateParser(secret)),
+  parseMutationResponse({ requestId: 'domain-malformed', action: 'memory-domain-upsert', intent: domain }, jsonResponse(200, { ...validDomain, owner_principal: 'agent/bob' }), upsertDomainCurrentStateParser(domain)),
+  parseMutationResponse({ requestId: 'project-pending', action: 'project-archive', intent: { project } }, jsonResponse(200, { operation_state: 'pending', id: project, removed_at: '2026-01-01T00:00:00Z' }), projectArchiveCurrentStateParser(project)),
+  parseMutationResponse({ requestId: 'vault-pending', action: 'vault-delete', intent: { credentialID: '9' } }, jsonResponse(200, { operation_state: 'pending', deleted: true, name: secret.name }), deleteSecretCurrentStateParser(secret.name)),
+  parseMutationResponse({ requestId: 'domain-pending', action: 'memory-domain-delete', intent: { domain: domain.domain } }, jsonResponse(200, { operation_state: 'pending', deleted: true, domain: domain.domain }), deleteDomainCurrentStateParser(domain.domain)),
+ ])
+ for (const result of rejected) assertMutationKind(result, 'committed_verification_pending')
 })

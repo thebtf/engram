@@ -428,9 +428,28 @@ test('documents create, history, readback, and export render through the current
  expect(failures.filter((failure) => failure !== `GET ${expectedDownloadURL} net::ERR_ABORTED`)).toEqual([])
 })
 
-test('orphan credential cleanup does not claim a refreshed vault from a bare receipt', async ({ page }) => {
+test('orphan credential cleanup refreshes only after its validated synchronous receipt', async ({ page }) => {
  const failures = collectPageFailures(page)
  const statusReads: string[] = []
+ let cleaned = false
+ const credentials = [
+  { id: 1, name: 'primary-token', project: 'engram', scope: 'project', created_at: '2026-01-01T00:00:00Z' },
+  { id: 2, name: 'orphaned-token', project: 'engram', scope: 'project', created_at: '2026-01-01T00:00:00Z' },
+  { id: 3, name: 'shared-token', project: 'beta', scope: 'project', created_at: '2026-01-01T00:00:00Z' },
+ ]
+ await page.route('**/api/vault/status', (route) => route.fulfill({
+  json: {
+   key_configured: true,
+   fingerprint: 'abcddcba11223344',
+   key_source: 'mock',
+   credential_count: cleaned ? 2 : 3,
+  }
+ }))
+ await page.route('**/api/vault/credentials', (route) => route.fulfill({ json: cleaned ? credentials.filter((credential) => credential.name !== 'orphaned-token') : credentials }))
+ await page.route('**/api/vault/orphaned-credentials', (route) => {
+  cleaned = true
+  return route.fulfill({ json: { status: 'ok', deleted: 1 } })
+ })
  page.on('request', (request) => {
   if (request.method() === 'GET' && new URL(request.url()).pathname === '/api/vault/status') {
    statusReads.push(request.url())
@@ -442,9 +461,9 @@ test('orphan credential cleanup does not claim a refreshed vault from a bare rec
  const cleanupResponse = page.waitForResponse((response) => response.request().method() === 'DELETE' && new URL(response.url()).pathname === '/api/vault/orphaned-credentials')
  await page.locator('.rotation-card button.secondary').nth(1).click()
  expect(await (await cleanupResponse).json()).toEqual({ status: 'ok', deleted: 1 })
- await page.waitForTimeout(100)
- expect(statusReads).toHaveLength(1)
- await expect(page.locator('.vault-status')).toContainText('3')
- await expect(page.locator('.vault-tbl')).toContainText('orphaned-token')
+ await expect(page.getByTestId('mutation-result')).toHaveAttribute('data-kind', 'committed_verified')
+ await expect.poll(() => statusReads.length).toBe(2)
+ await expect(page.locator('.vault-status')).toContainText('2')
+ await expect(page.locator('.vault-tbl')).not.toContainText('orphaned-token')
  expect(failures).toEqual([])
 })

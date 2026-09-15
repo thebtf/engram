@@ -78,6 +78,8 @@ const localAuthBlocked = ref(false)
 const keycardBusy = ref(false)
 const keycardActionID = ref<string | null>(null)
 const mutationResult = ref<MutationResult | null>(null)
+const oneTimeKeycardToken = ref<string | null>(null)
+const oneTimeInvitationCode = ref<string | null>(null)
 const route = useRoute()
 
 const enabledProviderCount = computed(() => providers.filter((provider) => provider.enabled).length)
@@ -219,6 +221,26 @@ function keycardTone(keycard: OperatorKeycard) {
   }
 }
 
+async function copyOneTimeSecret(secret: string, success: string, failure: string) {
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable')
+    await navigator.clipboard.writeText(secret)
+    notice.value = { kind: 'success', text: success }
+  } catch {
+    notice.value = { kind: 'error', text: failure }
+  }
+}
+
+function dismissKeycardSecret() {
+  oneTimeKeycardToken.value = null
+  if (mutationResult.value?.request.action === 'access-create-keycard') mutationResult.value = null
+}
+
+function dismissInvitationSecret() {
+  oneTimeInvitationCode.value = null
+  if (mutationResult.value?.request.action === 'access-create-invitation') mutationResult.value = null
+}
+
 async function submitKeycard() {
   if (keycardBusy.value || keycardMutationDisabled.value) return
   const name = keycardForm.value.name.trim()
@@ -228,6 +250,7 @@ async function submitKeycard() {
     return
   }
 
+  dismissKeycardSecret()
   keycardBusy.value = true
   try {
     const result = await createKeycard({
@@ -238,11 +261,13 @@ async function submitKeycard() {
       expiresAt: keycardExpiry(keycardForm.value.expiresAt),
     })
     mutationResult.value = result
-    if (result.kind === 'committed_verified') {
+    if (result.kind === 'committed_verified' && result.readback.kind === 'current') {
+      oneTimeKeycardToken.value = result.readback.current.token
       keycardForm.value.name = ''
       keycardForm.value.principal = ''
       keycardForm.value.expiresAt = ''
-      notice.value = null
+      notice.value = { kind: 'success', text: t('access.notice.keycardCreated') }
+      await refreshKeycards()
     }
   } finally {
     keycardBusy.value = false
@@ -284,6 +309,7 @@ async function submitInvitation() {
     notice.value = { kind: 'error', text: t('access.notice.authDisabled') }
     return
   }
+  dismissInvitationSecret()
   inviteBusy.value = true
   try {
     const result = await createInvitation({
@@ -292,9 +318,11 @@ async function submitInvitation() {
       expiresInHours: inviteForm.value.expiresInHours,
     })
     mutationResult.value = result
-    if (result.kind === 'committed_verified') {
+    if (result.kind === 'committed_verified' && result.readback.kind === 'current') {
+      oneTimeInvitationCode.value = result.readback.current.code
       inviteForm.value.email = ''
       notice.value = null
+      await refresh()
     }
   } finally {
     inviteBusy.value = false
@@ -499,6 +527,15 @@ async function selectUser(user: OperatorAccessUser) {
               </label>
               <button class="act primary" data-testid="keycard-issue" type="submit" :disabled="keycardBusy || keycardMutationDisabled">{{ keycardBusy ? t('access.actions.working') : t('access.keycards.form.submit') }}</button>
             </form>
+            <section v-if="oneTimeKeycardToken" class="one-time-secret" data-testid="keycard-one-time-panel">
+              <strong>{{ t('access.keycards.reveal.title') }}</strong>
+              <p>{{ t('access.keycards.reveal.body') }}</p>
+              <div class="one-time-secret-value">
+                <input :value="oneTimeKeycardToken" readonly class="input mono" data-testid="keycard-one-time-secret">
+                <button class="tbtn" type="button" data-testid="keycard-one-time-copy" @click="copyOneTimeSecret(oneTimeKeycardToken, t('access.notice.keycardCreated'), t('access.notice.error', { message: 'clipboard unavailable' }))">{{ t('common.copy') }}</button>
+              </div>
+              <button class="tbtn" type="button" data-testid="keycard-one-time-dismiss" @click="dismissKeycardSecret">{{ t('access.keycards.reveal.dismiss') }}</button>
+            </section>
             <table class="tbl">
               <thead>
                 <tr>
@@ -574,6 +611,15 @@ async function selectUser(user: OperatorAccessUser) {
             </label>
             <button class="act primary" type="submit" :disabled="inviteBusy || accessMutationDisabled">{{ inviteBusy ? t('access.actions.working') : t('access.invitations.form.submit') }}</button>
           </form>
+          <section v-if="oneTimeInvitationCode" class="one-time-secret" data-testid="invitation-one-time-panel">
+            <strong>{{ t('access.invitations.reveal.title') }}</strong>
+            <p>{{ t('access.invitations.reveal.body') }}</p>
+            <div class="one-time-secret-value">
+              <input :value="oneTimeInvitationCode" readonly class="input mono" data-testid="invitation-one-time-secret">
+              <button class="tbtn" type="button" data-testid="invitation-one-time-copy" @click="copyOneTimeSecret(oneTimeInvitationCode, t('access.invitations.reveal.copySuccess'), t('access.invitations.reveal.copyError'))">{{ t('access.invitations.reveal.copy') }}</button>
+            </div>
+            <button class="tbtn" type="button" data-testid="invitation-one-time-dismiss" @click="dismissInvitationSecret">{{ t('access.invitations.reveal.dismiss') }}</button>
+          </section>
           <table class="tbl">
             <thead>
               <tr>
@@ -829,6 +875,10 @@ async function selectUser(user: OperatorAccessUser) {
 .keycard-state { display:grid; gap:8px; margin:0; padding:14px; border:1px solid color-mix(in oklab,var(--accent),transparent 48%); border-radius:var(--r-sm); background:color-mix(in oklab,var(--accent),transparent 92%); }
 .keycard-state p { margin:0; color:var(--fg-2); font-size:var(--text-sm); }
 .keycard-state.error { border-color:color-mix(in oklab,var(--state-warn),transparent 45%); }
+.one-time-secret { display:grid; gap:8px; margin:0; padding:14px; border:1px solid color-mix(in oklab,var(--accent),transparent 48%); border-radius:var(--r-sm); background:color-mix(in oklab,var(--accent),transparent 92%); }
+.one-time-secret p { margin:0; color:var(--fg-2); font-size:var(--text-sm); }
+.one-time-secret-value { display:flex; gap:8px; }
+.one-time-secret-value input { flex:1; min-width:0; }
 .metric, .brief-copy, .guard-panel, .statebar { padding:14px; }
 .metric { display:flex; flex-direction:column; gap:3px; }
 .metric b { font-family:var(--font-mono); font-size:var(--text-xl); line-height:1; color:var(--fg); }

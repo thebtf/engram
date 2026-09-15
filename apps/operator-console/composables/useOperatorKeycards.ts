@@ -1,5 +1,5 @@
 import { computed, type ComputedRef } from 'vue'
-import { executeMutation, type MutationResult } from './useApi'
+import { executeMutation, type MutationCurrentStateParser, type MutationResult } from './useApi'
 import {
   endpointEvidence,
   errorState,
@@ -48,8 +48,12 @@ export interface OperatorKeycardsComposable {
   loadState: ComputedRef<OperatorLoadState<OperatorKeycard[]>>
   error: ComputedRef<OperatorSourceError | null>
   refresh: () => Promise<void>
-  createKeycard: (input: OperatorKeycardCreateInput) => Promise<MutationResult<OperatorKeycardCreateInput>>
+  createKeycard: (input: OperatorKeycardCreateInput) => Promise<MutationResult<OperatorKeycardCreateInput, OperatorKeycardCreateReceipt>>
   revokeKeycard: (keycardID: string) => Promise<MutationResult<{ keycardID: string }>>
+}
+
+export interface OperatorKeycardCreateReceipt {
+  token: string
 }
 
 function parseKeycard(value: unknown): OperatorKeycard {
@@ -111,6 +115,28 @@ function parseKeycardList(value: unknown): OperatorKeycard[] {
     throw new Error('Invalid keycard list response')
   }
   return value.tokens.map(parseKeycard)
+}
+
+export function createKeycardCurrentStateParser(input: OperatorKeycardCreateInput): MutationCurrentStateParser<OperatorKeycardCreateReceipt> {
+  return (value) => {
+    try {
+      const keycard = parseKeycard(value)
+      const token = typeof value === 'object' && value !== null && !Array.isArray(value)
+        ? Reflect.get(value, 'token')
+        : undefined
+      if (
+        keycard.name !== input.name
+        || keycard.scope !== input.scope
+        || keycard.principal !== input.principal
+        || keycard.principalKind !== input.principalKind
+        || typeof token !== 'string'
+        || !/^engram_[a-f0-9]{32}$/.test(token)
+      ) return undefined
+      return { token }
+    } catch {
+      return undefined
+    }
+  }
 }
 
 
@@ -175,7 +201,7 @@ export function useOperatorKeycards(): OperatorKeycardsComposable {
     return executeMutation(
       { requestId: crypto.randomUUID(), action: 'access-create-keycard', intent: input },
       fetch(operatorApiUrl(KEYCARDS_ENDPOINT), { ...keycardCreateInit(input), credentials: 'include' }),
-      () => undefined,
+      createKeycardCurrentStateParser(input),
     )
   }
 

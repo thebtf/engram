@@ -1,6 +1,5 @@
 import type { ComputedRef, Ref } from 'vue'
-import type { OperatorLoadState } from './useOperatorApi'
-import { executeMutation, type MutationResult } from './useApi'
+import { executeMutation, type MutationCurrentStateParser, type MutationResult } from './useApi'
 import {
   emptyState,
   endpointEvidence,
@@ -12,6 +11,7 @@ import {
   pendingState,
   toOperatorSourceError,
   unsupportedOperatorAction,
+  type OperatorLoadState,
 } from './useOperatorApi'
 
 
@@ -148,6 +148,20 @@ function startOnce(key: string, run: () => Promise<void>) {
   }
 }
 
+export interface OperatorProjectArchiveReceipt {
+  removedAt: string
+}
+
+export function projectArchiveCurrentStateParser(project: string): MutationCurrentStateParser<OperatorProjectArchiveReceipt> {
+  return (value) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+    const id = Reflect.get(value, 'id')
+    const removedAt = Reflect.get(value, 'removed_at')
+    if (id !== project || typeof removedAt !== 'string' || Number.isNaN(Date.parse(removedAt))) return undefined
+    return { removedAt }
+  }
+}
+
 export function useOperatorProjects(): {
   projectRows: ComputedRef<OperatorProjectRow[]>
   sessions: OperatorSessionRow[]
@@ -161,7 +175,7 @@ export function useOperatorProjects(): {
   refresh: () => Promise<void>
   openProject: (project: string) => Promise<void>
   openSession: (session: OperatorSessionRow) => Promise<void>
-  deleteProject: (project: string) => Promise<MutationResult<{ project: string }>>
+  deleteProject: (project: string) => Promise<MutationResult<{ project: string }, OperatorProjectArchiveReceipt>>
   sessionDetailGap: ReturnType<typeof unsupportedOperatorAction>
   sessionRouteGap: ReturnType<typeof unsupportedOperatorAction>
   codeIntelGap: ReturnType<typeof unsupportedOperatorAction>
@@ -309,7 +323,7 @@ export function useOperatorProjects(): {
     return executeMutation(
       { requestId: crypto.randomUUID(), action: 'project-archive', intent: { project } },
       fetch(operatorApiUrl(endpoint), { ...jsonInit('DELETE'), credentials: 'include' }),
-      () => undefined,
+      projectArchiveCurrentStateParser(project),
     )
   }
 

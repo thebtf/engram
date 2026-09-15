@@ -1,6 +1,6 @@
 import type { ComputedRef, Ref } from 'vue'
 import { computed } from 'vue'
-import { executeMutation, type MutationResult } from './useApi'
+import { executeMutation, type MutationCurrentStateParser, type MutationResult } from './useApi'
 import {
   endpointEvidence,
   errorState,
@@ -234,6 +234,29 @@ export interface AccessUpdateUserInput {
   disabled?: boolean
 }
 
+export interface OperatorInvitationCreateReceipt {
+  code: string
+}
+
+export function createInvitationCurrentStateParser(input: AccessCreateInvitationInput): MutationCurrentStateParser<OperatorInvitationCreateReceipt> {
+  return (value) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+    const invitation = Reflect.get(value, 'invitation')
+    if (typeof invitation !== 'object' || invitation === null || Array.isArray(invitation)) return undefined
+    const id = Reflect.get(invitation, 'id')
+    const code = Reflect.get(invitation, 'code')
+    const email = Reflect.get(invitation, 'email')
+    const role = Reflect.get(invitation, 'role')
+    const status = Reflect.get(invitation, 'status')
+    if (
+      typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0
+      || typeof code !== 'string' || !/^[a-f0-9]{64}$/.test(code)
+      || email !== input.email || role !== input.role || status !== 'pending'
+    ) return undefined
+    return { code }
+  }
+}
+
 function jsonInit(method: 'POST' | 'PATCH', body?: unknown): RequestInit {
   return {
     method,
@@ -386,7 +409,7 @@ export interface OperatorAccessComposable {
   refresh: () => Promise<void>
   openUser: (userID: number) => Promise<void>
   closeUser: () => void
-  createInvitation: (input: AccessCreateInvitationInput) => Promise<MutationResult<AccessCreateInvitationInput>>
+  createInvitation: (input: AccessCreateInvitationInput) => Promise<MutationResult<AccessCreateInvitationInput, OperatorInvitationCreateReceipt>>
   revokeInvitation: (invitationID: number, reason?: string) => Promise<MutationResult<{ invitationID: number; reason: string }>>
   updateUser: (userID: number, input: AccessUpdateUserInput) => Promise<MutationResult<{ userID: number; input: AccessUpdateUserInput }>>
   revokeSession: (sessionID: string, reason?: string) => Promise<MutationResult<{ sessionID: string; reason: string }>>
@@ -522,11 +545,14 @@ export function useOperatorAccess(): OperatorAccessComposable {
   }
 
   function createInvitation(input: AccessCreateInvitationInput) {
-    return submitMutation('access-create-invitation', input, `${ACCESS_BASE}/invitations`, jsonInit('POST', {
-      email: input.email,
-      role: input.role,
-      expires_in_hours: input.expiresInHours,
-    }))
+    return executeMutation(
+      { requestId: crypto.randomUUID(), action: 'access-create-invitation', intent: input },
+      fetch(operatorApiUrl(`${ACCESS_BASE}/invitations`), {
+        ...jsonInit('POST', { email: input.email, role: input.role, expires_in_hours: input.expiresInHours }),
+        credentials: 'include',
+      }),
+      createInvitationCurrentStateParser(input),
+    )
   }
 
   function revokeInvitation(invitationID: number, reason = 'operator revoked invitation') {

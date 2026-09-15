@@ -1,6 +1,5 @@
 import type { ComputedRef } from 'vue'
-import type { OperatorLoadState } from './useOperatorApi'
-import { executeMutation, type MutationResult } from './useApi'
+import { executeMutation, type MutationCurrentStateParser, type MutationResult } from './useApi'
 import {
   emptyState,
   endpointEvidence,
@@ -12,12 +11,13 @@ import {
   pendingState,
   toOperatorSourceError,
   unsupportedOperatorAction,
+  type OperatorLoadState,
 } from './useOperatorApi'
-function submitMutation<TIntent>(action: string, intent: TIntent, path: string, init: RequestInit): Promise<MutationResult<TIntent>> {
+function submitMutation<TIntent, TCurrent>(action: string, intent: TIntent, path: string, init: RequestInit, parseCurrentState: MutationCurrentStateParser<TCurrent>): Promise<MutationResult<TIntent, TCurrent>> {
   return executeMutation(
     { requestId: crypto.randomUUID(), action, intent },
     fetch(operatorApiUrl(path), { ...init, credentials: 'include' }),
-    () => undefined,
+    parseCurrentState,
   )
 }
 
@@ -65,6 +65,38 @@ interface ApiVaultReveal {
   name: string
   value: string
   scope?: string
+}
+
+export interface OperatorVaultCreateReceipt {
+  id: number
+  name: string
+  scope: 'project'
+}
+
+export function createSecretCurrentStateParser(input: StoreSecretInput): MutationCurrentStateParser<OperatorVaultCreateReceipt> {
+  return (value) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+    const id = Reflect.get(value, 'id')
+    const name = Reflect.get(value, 'name')
+    const scope = Reflect.get(value, 'scope')
+    if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0 || name !== input.name || scope !== input.scope) return undefined
+    return { id, name, scope }
+  }
+}
+
+export function deleteSecretCurrentStateParser(name: string): MutationCurrentStateParser<{ name: string }> {
+  return (value) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+    return Reflect.get(value, 'deleted') === true && Reflect.get(value, 'name') === name ? { name } : undefined
+  }
+}
+
+export function cleanupOrphansCurrentStateParser(value: unknown): { deleted: number } | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const deleted = Reflect.get(value, 'deleted')
+  return Reflect.get(value, 'status') === 'ok' && typeof deleted === 'number' && Number.isSafeInteger(deleted) && deleted >= 0
+    ? { deleted }
+    : undefined
 }
 
 
@@ -144,9 +176,9 @@ export function useOperatorSecrets(): {
   error: ComputedRef<string | null>
   refresh: () => Promise<void>
   revealSecret: (cred: OperatorCredential) => Promise<string>
-  createSecret: (input: StoreSecretInput) => Promise<MutationResult<StoreSecretInput>>
-  deleteSecret: (cred: OperatorCredential) => Promise<MutationResult<{ credentialID: string }>>
-  cleanupOrphans: () => Promise<MutationResult<undefined>>
+  createSecret: (input: StoreSecretInput) => Promise<MutationResult<StoreSecretInput, OperatorVaultCreateReceipt>>
+  deleteSecret: (cred: OperatorCredential) => Promise<MutationResult<{ credentialID: string }, { name: string }>>
+  cleanupOrphans: () => Promise<MutationResult<undefined, { deleted: number }>>
   rotationGap: ReturnType<typeof unsupportedOperatorAction>
 } {
   const credsEvidence = endpointEvidence('/api/vault/credentials', 'vault-credentials')
@@ -253,16 +285,16 @@ export function useOperatorSecrets(): {
       value: input.value,
       scope: input.scope,
       project: input.project,
-    }))
+    }), createSecretCurrentStateParser(input))
   }
 
   async function deleteSecret(cred: OperatorCredential) {
     const path = credentialUrl(cred)
-    return submitMutation('vault-delete', { credentialID: cred.id }, path, jsonInit('DELETE'))
+    return submitMutation('vault-delete', { credentialID: cred.id }, path, jsonInit('DELETE'), deleteSecretCurrentStateParser(cred.name))
   }
 
   async function cleanupOrphans() {
-    return submitMutation('vault-orphan-cleanup', undefined, '/api/vault/orphaned-credentials', jsonInit('DELETE'))
+    return submitMutation('vault-orphan-cleanup', undefined, '/api/vault/orphaned-credentials', jsonInit('DELETE'), cleanupOrphansCurrentStateParser)
   }
 
   const rotationGap = unsupportedOperatorAction(

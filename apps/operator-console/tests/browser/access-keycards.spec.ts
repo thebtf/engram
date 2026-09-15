@@ -2,7 +2,7 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 
 test.use({ locale: 'ru', screenshot: 'off', trace: 'off' })
 
-const RAW_KEYCARD = 'engram_browser_contract_one_time_keycard'
+const RAW_INVITATION = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 
 const ACCESS_BODIES: Record<string, unknown> = {
   '/providers': {
@@ -18,22 +18,68 @@ const ACCESS_BODIES: Record<string, unknown> = {
   '/log': { entries: [] },
 }
 
-async function routeAccess(page: Page) {
-  await page.route('**/api/access/**', (route: Route) => {
-    const path = new URL(route.request().url()).pathname
+async function routeAccess(page: Page, invitations: Array<Record<string, unknown>>) {
+  await page.route('**/api/access/**', async (route: Route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    if (path === '/api/access/invitations' && request.method() === 'POST') {
+      const payload = request.postDataJSON()
+      if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+        await route.fulfill({ status: 400, json: { error: 'invalid invitation request' } })
+        return
+      }
+      const email = Reflect.get(payload, 'email')
+      const role = Reflect.get(payload, 'role')
+      invitations.push({
+        id: 9,
+        email: typeof email === 'string' ? email : '',
+        role: typeof role === 'string' ? role : '',
+        created_by: 1,
+        created_by_email: 'admin@example.test',
+        expires_at: '2030-01-01T00:00:00Z',
+        revocation_reason: '',
+        created_at: '2026-01-01T00:00:00Z',
+        status: 'pending',
+      })
+      await route.fulfill({
+        status: 201,
+        json: { invitation: { ...invitations[0], code: RAW_INVITATION } },
+      })
+      return
+    }
+    if (path === '/api/access/invitations' && request.method() === 'GET') {
+      await route.fulfill({ json: { invitations } })
+      return
+    }
     const suffix = Object.keys(ACCESS_BODIES).find((candidate) => path.startsWith(`/api/access${candidate}`))
-    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(suffix ? ACCESS_BODIES[suffix] : { entries: [] }) })
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify(suffix ? ACCESS_BODIES[suffix] : { entries: [] }) })
   })
 }
 
-test('Access retains keycard input until authoritative mutation readback', async ({ page }) => {
+test('Access renders one-time keycard and invitation secrets only from validated create receipts', async ({ page }) => {
   const failedRequests: string[] = []
   const badResponses: string[] = []
   const pageErrors: string[] = []
   const consoleMessages: string[] = []
   const revokedIDs: string[] = []
-  let createPayload: Record<string, unknown> | null = null
-  let keycards = [{
+  const createPayloads: Array<Record<string, unknown>> = []
+  const invitations: Array<Record<string, unknown>> = []
+  type KeycardFixture = {
+    id: string
+    name: string
+    token_prefix: string
+    scope: string
+    principal: string
+    principal_kind: string
+    expires_at: string
+    created_at: string
+    last_used_at: string | null
+    request_count: number
+    error_count: number
+    revoked: boolean
+    revoked_at: string | null
+  }
+  let keycards: KeycardFixture[] = [{
     id: 'keycard-existing',
     name: 'existing-workstation',
     token_prefix: 'existing1',
@@ -64,7 +110,7 @@ test('Access retains keycard input until authoritative mutation readback', async
     consoleMessages.push(message.text())
   })
 
-  await routeAccess(page)
+  await routeAccess(page, invitations)
   await page.route('**/api/auth/tokens**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
@@ -75,11 +121,17 @@ test('Access retains keycard input until authoritative mutation readback', async
     }
 
     if (url.pathname === '/api/auth/tokens' && request.method() === 'POST') {
-      createPayload = request.postDataJSON()
-      const issuedKeycard = {
+      const payload = request.postDataJSON()
+      if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+        await route.fulfill({ status: 400, json: { error: 'invalid keycard request' } })
+        return
+      }
+      const createPayload = Object.fromEntries(Object.entries(payload))
+      createPayloads.push(createPayload)
+      const issuedKeycard: KeycardFixture = {
         id: 'keycard-issued',
         name: String(createPayload.name),
-        token_prefix: 'issued12',
+        token_prefix: '01234567',
         scope: String(createPayload.scope),
         principal: String(createPayload.principal),
         principal_kind: String(createPayload.principal_kind),
@@ -92,7 +144,7 @@ test('Access retains keycard input until authoritative mutation readback', async
         revoked_at: null,
       }
       keycards = [...keycards, issuedKeycard]
-      await route.fulfill({ json: { ...issuedKeycard, token: RAW_KEYCARD } })
+      await route.fulfill({ json: { ...issuedKeycard, token: 'engram_0123456789abcdef0123456789abcdef' } })
       return
     }
 
@@ -119,31 +171,45 @@ test('Access retains keycard input until authoritative mutation readback', async
   await page.getByTestId('keycard-issue').click()
 
   const outcome = page.getByTestId('mutation-result')
-  await expect(outcome).toHaveAttribute('data-kind', 'committed_verification_pending')
-  await expect(page.getByTestId('mutation-request-reference')).toHaveText(/\S+/)
-  await expect(page.getByTestId('mutation-retained-input')).toBeVisible()
-  await expect(page.locator('#access-keycard-name')).toHaveValue('browser-workstation')
-  await expect(page.locator('#access-keycard-principal')).toHaveValue('operator/browser')
-  await expect(page.locator('body')).not.toContainText(RAW_KEYCARD)
+  await expect(outcome).toHaveAttribute('data-kind', 'committed_verified')
+  await expect(page.locator('#access-keycard-name')).toHaveValue('')
+  await expect(page.locator('#access-keycard-principal')).toHaveValue('')
+  const keycardSecret = page.getByTestId('keycard-one-time-secret')
+  await expect(keycardSecret).toHaveValue('engram_0123456789abcdef0123456789abcdef')
+  await page.getByTestId('keycard-one-time-dismiss').click()
+  await expect(keycardSecret).toHaveCount(0)
+  await expect(page.getByTestId('keycard-row-keycard-issued')).toBeVisible()
+  await expect(page.locator('body')).not.toContainText('engram_0123456789abcdef0123456789abcdef')
+
+  await page.locator('#access-invitation-email').fill('operator@example.test')
+  await page.locator('#access-invitation-role').selectOption('operator')
+  await page.locator('.invite-form button[type="submit"]').click()
+  const invitationSecret = page.getByTestId('invitation-one-time-secret')
+  await expect(invitationSecret).toHaveValue(RAW_INVITATION)
+  await page.getByTestId('invitation-one-time-dismiss').click()
+  await expect(invitationSecret).toHaveCount(0)
+  await expect(page.getByText('operator@example.test').first()).toBeVisible()
+  await expect(page.locator('body')).not.toContainText(RAW_INVITATION)
+
+  const createPayload = createPayloads.at(0)
+  if (!createPayload) throw new Error('expected keycard create payload')
   expect(createPayload).toMatchObject({
     name: 'browser-workstation',
     scope: 'read-write',
     principal: 'operator/browser',
     principal_kind: 'human',
   })
-  expect(String(createPayload?.expires_at)).toMatch(/Z$/)
+  expect(String(createPayload.expires_at)).toMatch(/Z$/)
 
   const browserState = await page.evaluate(() => ({
     url: location.href,
     localStorage: Object.values(localStorage),
     sessionStorage: Object.values(sessionStorage),
   }))
-  expect(JSON.stringify(browserState)).not.toContain(RAW_KEYCARD)
-  expect(consoleMessages.join('\n')).not.toContain(RAW_KEYCARD)
-
-  await page.getByTestId('mutation-recheck').click()
-  await expect(page.getByTestId('keycard-row-keycard-issued')).toBeVisible()
-  await expect(page.locator('#access-keycard-name')).toHaveValue('browser-workstation')
+  expect(JSON.stringify(browserState)).not.toContain('engram_0123456789abcdef0123456789abcdef')
+  expect(JSON.stringify(browserState)).not.toContain(RAW_INVITATION)
+  expect(consoleMessages.join('\n')).not.toContain('engram_0123456789abcdef0123456789abcdef')
+  expect(consoleMessages.join('\n')).not.toContain(RAW_INVITATION)
 
   await page.getByTestId('keycard-revoke-keycard-existing').click()
   await expect(outcome).toHaveAttribute('data-kind', 'committed_verification_pending')
