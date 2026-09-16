@@ -3,12 +3,14 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { resolvePageSize, usePersistentPageSize } from '../composables/usePersistentPageSize'
 import {
   useOperatorIssues,
+  type IssueSelectionAction,
   type IssueUpdateInput,
   type OperatorIssue,
   type OperatorIssuePriority,
   type OperatorIssueStatus,
   type OperatorIssueType,
 } from '../composables/useOperatorIssues'
+import { createOperatorSelection, type OperatorSelectionTarget } from '../composables/useOperatorSelection'
 import type { MutationResult } from '../composables/useApi'
 
 type IssueFilter = 'all' | 'open' | 'work' | 'closed' | 'rejected'
@@ -35,7 +37,9 @@ const {
   rejectIssue,
   acknowledgeIssue,
   deleteIssue,
-  runIssueSelection,
+  saveIssueSelection,
+  freezeIssueSelection,
+  runIssueSelectionOperation,
 } = useOperatorIssues()
 
 const priorityOptions: OperatorIssuePriority[] = ['critical', 'high', 'medium', 'low']
@@ -43,12 +47,20 @@ const typeOptions: OperatorIssueType[] = ['bug', 'feature', 'improvement', 'task
 const statusOptions: OperatorIssueStatus[] = ['open', 'acknowledged', 'reopened', 'resolved', 'closed', 'rejected']
 const bulkStatusOptions = statusOptions.filter((status) => status !== 'rejected')
 const filterOptions: IssueFilter[] = ['all', 'open', 'work', 'closed', 'rejected']
+const filterStatuses: Record<IssueFilter, OperatorIssueStatus[]> = {
+  all: [],
+  open: ['open'],
+  work: ['acknowledged', 'reopened'],
+  closed: ['resolved', 'closed'],
+  rejected: ['rejected'],
+}
 const templateOptions: CreateTemplate[] = ['bug', 'handoff', 'question', 'improvement']
+
+const selection = createOperatorSelection('issues')
 
 const { pageSize, pageSizeOptions } = usePersistentPageSize('issues', 10)
 const page = ref(1)
 const filter = ref<IssueFilter>('all')
-const selectedIds = ref<number[]>([])
 const activeId = ref<number | null>(null)
 const showCreate = ref(false)
 const showReject = ref(false)
@@ -90,9 +102,8 @@ const activeIssue = computed(() => {
   if (detail.value?.id === activeId.value) return detail.value
   return rows.find((issue) => issue.id === activeId.value) || null
 })
-const selectedIdSet = computed(() => new Set(selectedIds.value))
-const selectedRows = computed(() => rows.filter((issue) => selectedIdSet.value.has(issue.id)))
-const selectedCount = computed(() => selectedIds.value.length)
+const selectedCount = selection.selectedCount
+const selectionActionReady = computed(() => selectedCount.value > 0 && !selection.current.value.reconfirmationRequired)
 const hasLoadedRows = computed(() => rows.length > 0 || (Array.isArray(loadState.value.data) && loadState.value.data.length > 0))
 const showInitialPending = computed(() => pending.value && !hasLoadedRows.value)
 const showStatebar = computed(() => Boolean(notice.value || showInitialPending.value || error.value || loadState.value.kind === 'empty'))
@@ -105,17 +116,9 @@ const stats = computed(() => ({
   total: registryTotal.value,
 }))
 
-const filteredRows = computed(() => {
-  const groups: Record<IssueFilter, OperatorIssueStatus[]> = {
-    all: [],
-    open: ['open'],
-    work: ['acknowledged', 'reopened'],
-    closed: ['resolved', 'closed'],
-    rejected: ['rejected'],
-  }
-  if (filter.value === 'all') return rows
-  return rows.filter((issue) => groups[filter.value].includes(issue.status))
-})
+const filteredRows = computed(() => filterStatuses[filter.value].length
+  ? rows.filter((issue) => filterStatuses[filter.value].includes(issue.status))
+  : rows)
 
 const effectivePageSize = computed(() => resolvePageSize(pageSize.value, filteredRows.value.length))
 const totalPages = computed(() => Math.max(1, Math.ceil(filteredRows.value.length / effectivePageSize.value)))
@@ -157,6 +160,7 @@ const hoverThreadStats = computed(() => {
 
 watch(filter, () => {
   page.value = 1
+  selection.invalidate('filter_changed')
 })
 
 watch(pageSize, () => {
@@ -211,22 +215,66 @@ function rowRoute(issue: OperatorIssue) {
   return `${issue.sourceDisplayName} → ${issue.targetDisplayName}`
 }
 
+function targetFor(issue: OperatorIssue): OperatorSelectionTarget {
+  return { id: String(issue.id) }
+}
+
 function isSelected(id: number) {
-  return selectedIdSet.value.has(id)
+  const current = selection.current.value
+  const targetID = String(id)
+  switch (current.kind) {
+    case 'none':
+      return false
+    case 'explicit':
+    case 'page':
+      return current.targets.some((target) => target.id === targetID)
+    case 'frozen_filter':
+      return !current.excludedIds.includes(targetID)
+  }
 }
 
-function toggleSelection(id: number) {
-  selectedIds.value = isSelected(id)
-    ? selectedIds.value.filter((selected) => selected !== id)
-    : [...selectedIds.value, id]
+function setSelectionError(error: unknown) {
+  notice.value = error instanceof Error ? error.message : t('issues.state.error', { message: '' })
 }
 
-function selectAllFiltered() {
-  selectedIds.value = filteredRows.value.map((issue) => issue.id)
+function selectionFilter() {
+  const statuses = filterStatuses[filter.value]
+  return statuses.length ? { statuses } : {}
+}
+
+async function toggleSelection(issue: OperatorIssue) {
+  const target = targetFor(issue)
+  const current = selection.current.value
+  if (current.kind === 'frozen_filter') {
+    const excludedIds = isSelected(issue.id)
+      ? [...current.excludedIds, target.id]
+      : current.excludedIds.filter((id) => id !== target.id)
+    try {
+      selection.applySnapshot(await freezeIssueSelection(selectionFilter(), excludedIds))
+    } catch (error) {
+      setSelectionError(error)
+    }
+    return
+  }
+
+  const targets = current.kind === 'none'
+    ? []
+    : current.targets.filter((candidate) => candidate.id !== target.id)
+  if (!isSelected(issue.id)) targets.push(target)
+  if (targets.length) selection.selectExplicit(targets)
+  else selection.clear()
+}
+
+async function selectAllFiltered() {
+  try {
+    selection.applySnapshot(await freezeIssueSelection(selectionFilter(), []))
+  } catch (error) {
+    setSelectionError(error)
+  }
 }
 
 function clearSelection() {
-  selectedIds.value = []
+  selection.clear()
 }
 
 function resetFilter() {
@@ -469,30 +517,54 @@ async function deleteCurrent() {
 }
 
 function openBulkEditor(field: BulkField) {
+  if (!selectionActionReady.value) return
   bulkField.value = field
   bulkValue.value = field === 'status' ? 'acknowledged' : 'high'
   showBulkField.value = true
 }
 
-async function applyBulkField() {
-  if (!selectedCount.value) return
-  const result = await runIssueSelection([...selectedIds.value], bulkField.value === 'status'
-    ? { kind: 'status', status: bulkValue.value as OperatorIssueStatus }
-    : { kind: 'priority', priority: bulkValue.value as OperatorIssuePriority })
-  mutationResult.value = result
-  if (result.kind === 'committed_verified') {
-    showBulkField.value = false
+function isBulkStatus(value: string): value is OperatorIssueStatus {
+  return bulkStatusOptions.some((status) => status === value)
+}
+
+function isBulkPriority(value: string): value is OperatorIssuePriority {
+  return priorityOptions.some((priority) => priority === value)
+}
+
+async function applySelectedIssues(action: IssueSelectionAction) {
+  if (!selectionActionReady.value) return false
+  try {
+    let current = selection.current.value
+    if (current.kind !== 'frozen_filter' && current.version === 0) {
+      selection.applySnapshot(await saveIssueSelection(current))
+      current = selection.current.value
+    }
+    if (current.kind === 'none' || current.reconfirmationRequired) return false
+
+    const result = await runIssueSelectionOperation(current, action)
+    mutationResult.value = result
+    if (result.kind !== 'committed_verified') return false
     clearSelection()
+    return true
+  } catch (error) {
+    setSelectionError(error)
+    return false
+  }
+}
+
+async function applyBulkField() {
+  const action = bulkField.value === 'status'
+    ? isBulkStatus(bulkValue.value) ? { kind: 'status', status: bulkValue.value } : null
+    : isBulkPriority(bulkValue.value) ? { kind: 'priority', priority: bulkValue.value } : null
+  if (action && await applySelectedIssues(action)) {
+    showBulkField.value = false
   }
 }
 
 async function applyBulkLabels() {
-  if (!selectedCount.value || !bulkLabelValue.value) return
-  const result = await runIssueSelection([...selectedIds.value], { kind: 'labels', labels: [bulkLabelValue.value] })
-  mutationResult.value = result
-  if (result.kind === 'committed_verified') {
+  if (!bulkLabelValue.value) return
+  if (await applySelectedIssues({ kind: 'labels', labels: [bulkLabelValue.value] })) {
     showBulkLabels.value = false
-    clearSelection()
   }
 }
 
@@ -630,7 +702,7 @@ function renderMarkdown(value: string) {
             <span
               class="echk issue-row-check"
               :class="{ on: isSelected(issue.id) }"
-              @click.stop="toggleSelection(issue.id)"
+              @click.stop="toggleSelection(issue)"
             >{{ isSelected(issue.id) ? '✓' : '' }}</span>
             <span class="issue-row-id">#{{ issue.id }}</span>
             <span class="issue-chip" :data-tone="issue.priority">{{ t(`issues.priority.${issue.priority}`) }}</span>
@@ -656,10 +728,10 @@ function renderMarkdown(value: string) {
         <div class="bulkbar" :class="{ show: selectedCount > 0 }">
           <span class="bc">{{ selectedCountText() }}</span>
           <span class="bsp"></span>
-          <button class="act" @click="openBulkEditor('status')">{{ t('issues.bulk.status') }}</button>
-          <button class="act" @click="openBulkEditor('priority')">{{ t('issues.bulk.priority') }}</button>
+          <button class="act" :disabled="!selectionActionReady" @click="openBulkEditor('status')">{{ t('issues.bulk.status') }}</button>
+          <button class="act" :disabled="!selectionActionReady" @click="openBulkEditor('priority')">{{ t('issues.bulk.priority') }}</button>
           <button class="act" disabled :title="routeChangeAction.evidence.reason">{{ t('issues.bulk.route') }}</button>
-          <button class="act" @click="showBulkLabels = true">{{ t('issues.bulk.labels') }}</button>
+          <button class="act" :disabled="!selectionActionReady" @click="showBulkLabels = true">{{ t('issues.bulk.labels') }}</button>
           <span class="bulk-note">{{ t('issues.bulk.note') }}</span>
           <button class="tbtn" @click="clearSelection">{{ t('issues.bulk.cancel') }}</button>
         </div>
