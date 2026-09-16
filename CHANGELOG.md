@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.49.2] - 2026-09-16
+
+### Fixed
+
+- Corrected the server artifact startup version.
+
 ## [6.49.1] - 2026-09-16
 
 ### Fixed
@@ -2020,7 +2026,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.49.1...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.49.2...HEAD
+[6.49.2]: https://github.com/thebtf/engram/compare/v6.49.1...v6.49.2
 [6.49.1]: https://github.com/thebtf/engram/compare/v6.49.0...v6.49.1
 [6.49.0]: https://github.com/thebtf/engram/compare/v6.48.0...v6.49.0
 [6.48.0]: https://github.com/thebtf/engram/compare/v6.47.7...v6.48.0

@@ -14,13 +14,11 @@ import (
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/logbuf"
 	"github.com/thebtf/engram/internal/module/obs"
+	"github.com/thebtf/engram/internal/version"
 	"github.com/thebtf/engram/internal/worker"
 )
 
-var (
-	Version      = "dev"
-	SourceCommit string
-)
+var SourceCommit string
 
 // @title Engram API
 // @version 1.0.0
@@ -51,10 +49,10 @@ func main() {
 	log.Logger = log.Output(multi)
 
 	log.Info().
-		Str("version", Version).
+		Str("version", version.Daemon).
 		Msg("Starting engram server")
 	telemetryCtx, telemetryCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	telemetry, err := obs.Init(telemetryCtx, Version)
+	telemetry, err := obs.Init(telemetryCtx, version.Daemon)
 	telemetryCancel()
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize observability")
@@ -64,7 +62,7 @@ func main() {
 	obs.RecordRuntimeEvent(context.Background(), "startup", "started")
 
 	// Create service with version and log buffer
-	svc, err := worker.NewService(Version, logRing)
+	svc, err := worker.NewService(version.Daemon, logRing)
 	if err != nil {
 		obs.RecordRuntimeEvent(context.Background(), "worker", "initialization_error")
 		flushTelemetry(telemetry)
