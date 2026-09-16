@@ -34,6 +34,7 @@ const dockerReadyTimeoutSeconds = 60;
 const cleanupReserveSeconds = 120;
 const safeDurationLimitSeconds = 24 * 60 * 60;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const atomicRenameRetryDelaysMs = Object.freeze([25, 50, 100]);
 
 
 export const coverageProfiles = Object.freeze([
@@ -213,12 +214,32 @@ function shaFile(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+function waitForAtomicRename(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)), 0, 0, milliseconds);
+}
+
+export function atomicReplace(source, destination, { rename = renameSync, wait = waitForAtomicRename, isWindows = platform() === "win32" } = {}) {
+  let originalError;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      rename(source, destination);
+      return;
+    } catch (error) {
+      if (!isWindows || !["EPERM", "EACCES", "EBUSY"].includes(error?.code)) throw error;
+      originalError ??= error;
+      const delay = atomicRenameRetryDelaysMs[attempt];
+      if (delay === undefined) throw originalError;
+      wait(delay);
+    }
+  }
+}
+
 function atomicWrite(path, contents, mode = 0o600) {
   mkdirSync(dirname(path), { recursive: true });
   const temporary = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
   try {
     writeFileSync(temporary, contents, { encoding: "utf8", mode });
-    renameSync(temporary, path);
+    atomicReplace(temporary, path);
   } finally {
     rmSync(temporary, { force: true });
   }
@@ -1852,7 +1873,9 @@ export function terminalPackageSummary(entries) {
 export function assertUnitDedicatedOwnership(units, record, candidate, environment) {
   for (const unit of units) {
     if (unit.status !== "passed") throw new RunnerError(`${unit.id} did not retain a passed package unit`);
-    const evidence = evaluateTestEvidence(record, unit, packageUnitProfile(unit.unit), candidate, environment);
+    const source = retainedUnitEvidence(record, unit, unit.unit, candidate, environment);
+    if (!source || source.entry.status !== "passed" || source.entry.fingerprint !== fingerprintPackageUnit(unit.unit, candidate, environment)) throw new RunnerError(`${unit.id} did not retain admissible test evidence`);
+    const evidence = evaluateTestEvidence(source.record, source.entry, packageUnitProfile(unit.unit), candidate, environment);
     if (evidence.execution !== "passed" || evidence.local_artifact !== "passed") throw new RunnerError(`${unit.id} did not retain admissible test evidence`);
     if (evidence.campaign_obligations !== "passed") {
       const obligation = evidence.allowed_skip_obligations.find((item) => item.kind !== "conditional");
@@ -2200,7 +2223,7 @@ export function materializeCoverage(campaign, candidate) {
   validateCoverage(source, campaign.manifest.merged.sha256);
   const temporary = `${destination}.${campaign.manifest.run_id}.tmp`;
   copyFileSync(source, temporary);
-  renameSync(temporary, destination);
+  atomicReplace(temporary, destination);
   return destination;
 }
 
