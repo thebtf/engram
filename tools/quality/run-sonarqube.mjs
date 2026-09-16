@@ -2223,7 +2223,7 @@ export function materializeCoverage(campaign, candidate) {
   validateCoverage(source, campaign.manifest.merged.sha256);
   const temporary = `${destination}.${campaign.manifest.run_id}.tmp`;
   copyFileSync(source, temporary);
-  renameSync(temporary, destination);
+  atomicReplace(temporary, destination);
   return destination;
 }
 
