@@ -51,7 +51,7 @@ func TestDaemonVersionMatchesPluginManifests(t *testing.T) {
 	}
 }
 
-func TestDockerSHAImageIdentityDoesNotOverrideDaemonCompatibility(t *testing.T) {
+func TestDockerBuildVersionLinkage(t *testing.T) {
 	if !semver.IsValid(Daemon) || semver.Canonical(Daemon) != Daemon {
 		t.Fatalf("Daemon must remain canonical SemVer, got %q", Daemon)
 	}
@@ -74,30 +74,30 @@ func TestDockerSHAImageIdentityDoesNotOverrideDaemonCompatibility(t *testing.T) 
 		{name: "CRLF", dockerfile: strings.ReplaceAll(dockerfileText, "\n", "\r\n")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assertDockerfileClientBuildCompatibility(t, tc.dockerfile)
+			assertDockerfileBuildVersionLinkage(t, tc.dockerfile)
 		})
 	}
 }
 
-func assertDockerfileClientBuildCompatibility(t *testing.T, dockerfile string) {
+func assertDockerfileBuildVersionLinkage(t *testing.T, dockerfile string) {
 	t.Helper()
 	dockerfile = strings.ReplaceAll(dockerfile, "\r\n", "\n")
 	if !strings.Contains(dockerfile, "commit_pattern='^sha-[0-9a-f]{40}$'") {
 		t.Fatal("Dockerfile must continue to accept SHA image identities")
 	}
 
-	_, clientBuild, found := strings.Cut(dockerfile, "# Build client-side binary")
+	serverBuild, clientBuild, found := strings.Cut(dockerfile, "# Build client-side binary")
 	if !found {
 		t.Fatal("Dockerfile client build section is absent")
+	}
+	if !strings.Contains(serverBuild, "-X github.com/thebtf/engram/internal/version.Daemon=${VERSION}") {
+		t.Fatal("Dockerfile server build must inject the canonical runtime version")
 	}
 	clientBuild, _, found = strings.Cut(clientBuild, "\n\n# --- Server image ---")
 	if !found {
 		t.Fatal("Dockerfile client build section is unterminated")
 	}
-	if !strings.Contains(clientBuild, "-X main.Version=${VERSION}") {
-		t.Fatal("Dockerfile client build must retain image identity injection")
-	}
-	if strings.Contains(clientBuild, "internal/version.Daemon=") {
-		t.Fatal("Dockerfile client build must not override source SemVer daemon compatibility with image identity")
+	if strings.Contains(clientBuild, "main.Version=") || strings.Contains(clientBuild, "internal/version.Daemon=") {
+		t.Fatal("Dockerfile client build must not inject a dead or image-identity version symbol")
 	}
 }

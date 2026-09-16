@@ -26,7 +26,7 @@ builds:
       - -buildvcs=false
     ldflags:
       - -s -w
-      - -X main.Version={{.Version}}
+      - -X github.com/thebtf/engram/internal/version.Daemon=v{{.Version}}
       - -X main.SourceCommit={{.Commit}}
     goos:
       - darwin

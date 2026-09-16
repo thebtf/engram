@@ -97,6 +97,26 @@ for archive in "${archives[@]}"; do
   cmp -s "$source_manifest" "$manifest" || { echo "archive OMP package manifest differs from tagged source: $archive" >&2; exit 1; }
   cmp -s "$source_extension" "$extension" || { echo "archive OMP extension differs from tagged source: $archive" >&2; exit 1; }
   cmp -s "$source_relay_helper" "$relay_helper" || { echo "archive OMP relay helper differs from tagged source: $archive" >&2; exit 1; }
+  if [[ "${archive##*/}" == "engram_${version}_linux_amd64.tar.gz" ]]; then
+    matches=0
+    for candidate in "${entries[@]}"; do
+      [[ "$candidate" == "engram-server" ]] && ((matches += 1))
+    done
+    [[ "$matches" -eq 1 ]] || { echo "Linux server-plugin archive must contain exactly one engram-server: $archive" >&2; exit 1; }
+
+    server="$work_dir/engram-server"
+    startup="$work_dir/engram-server.startup"
+    extract_entry "$archive" engram-server "$server"
+    chmod +x "$server"
+    mkdir -p "$work_dir/server-home"
+    set +e
+    ENGRAM_AUTH_ADMIN_TOKEN= ENGRAM_AUTH_DISABLED= HOME="$work_dir/server-home" timeout 5s "$server" >"$startup" 2>&1
+    server_status=$?
+    set -e
+    [[ "$server_status" -ne 0 && "$server_status" -ne 124 ]] || { echo "Linux server must exit promptly without authentication: $archive" >&2; cat "$startup" >&2; exit 1; }
+    awk -v expected="version=v${version}" '{ for (i = 1; i <= NF; i++) if ($i == expected) found = 1 } END { exit !found }' "$startup" \
+      || { echo "Linux server startup version mismatch; expected version=v${version}: $archive" >&2; cat "$startup" >&2; exit 1; }
+  fi
 done
 
 printf 'verified OMP payload in %d server-plugin archive(s)\n' "${#archives[@]}"

@@ -82,7 +82,7 @@ function writeZip(archiveRoot, archivePath, entries) {
   fs.writeFileSync(archivePath, Buffer.concat([...records, directory, end]));
 }
 
-function buildArchive(archiveRoot, archivePath, entries = ["package.json", "extensions/engram-memory.mjs", "extensions/legacy-relay.mjs"]) {
+function buildArchive(archiveRoot, archivePath, entries = ["engram-server", "package.json", "extensions/engram-memory.mjs", "extensions/legacy-relay.mjs"]) {
   if (archivePath.endsWith(".tar.gz")) {
     run("tar", ["-czf", archivePath, "-C", archiveRoot, ...entries]);
   } else {
@@ -100,6 +100,7 @@ function createFixture() {
   fs.copyFileSync(manifestPath, path.join(archiveRoot, "package.json"));
   fs.copyFileSync(extensionPath, path.join(archiveRoot, "extensions", "engram-memory.mjs"));
   fs.copyFileSync(relayHelperPath, path.join(archiveRoot, "extensions", "legacy-relay.mjs"));
+  fs.writeFileSync(path.join(archiveRoot, "engram-server"), `#!/usr/bin/env bash\nprintf 'INF Starting engram server version=v${version}\\n' >&2\nexit 1\n`, { mode: 0o755 });
   return { archiveRoot, dist, temporary };
 }
 
@@ -143,6 +144,23 @@ test("server-plugin archive gate accepts exactly the canonical three-archive OMP
     const duplicateArchive = gate(fixture.dist, releaseVersion);
     assert.notEqual(duplicateArchive.status, 0);
     assert.match(`${duplicateArchive.stderr}\n${duplicateArchive.stdout}`, /missing or duplicates/);
+  } finally {
+    fs.rmSync(fixture.temporary, { recursive: true, force: true });
+  }
+});
+
+test("server-plugin archive gate rejects an incorrect Linux server startup version", () => {
+  const fixture = createFixture();
+  try {
+    buildExpectedMatrix(fixture);
+    const accepted = gate(fixture.dist);
+    assert.equal(accepted.status, 0, accepted.stderr || accepted.stdout);
+
+    fs.writeFileSync(path.join(fixture.archiveRoot, "engram-server"), "#!/usr/bin/env bash\nprintf 'INF Starting engram server version=dev\\n' >&2\nexit 1\n", { mode: 0o755 });
+    buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives()[0]));
+    const rejected = gate(fixture.dist);
+    assert.notEqual(rejected.status, 0);
+    assert.match(`${rejected.stderr}\n${rejected.stdout}`, /startup version mismatch/);
   } finally {
     fs.rmSync(fixture.temporary, { recursive: true, force: true });
   }
