@@ -13,6 +13,7 @@ import {
   Progress,
   assertUnitDedicatedOwnership,
   classifyProfileFailure,
+  canonicalJson,
   collectCoverage,
   consumeGoEvents,
   createLogWriter,
@@ -321,12 +322,42 @@ test("package unit admits retained-shaped source skips and rejects forged or uno
       expected_test_inventory_sha256: sha256(`[{"package":"${packageName}","test":"${ownerTest}"}]`),
       package_counts: { passed: 1, failed: 0, tests_passed: 1, tests_skipped: 0 },
     };
-    const record = { runDir: join(directory, "run"), manifest: { candidate: currentCandidate, profiles: [{ ...admitted, unit }, ownerEntry] } };
-    assert.doesNotThrow(() => assertUnitDedicatedOwnership([{ ...admitted, unit }], record, currentCandidate, { sha256: undefined }));
-    write(join(directory, "run", "owner-events.ndjson"), event("skip", ownerTest) + event("pass", null));
-    ownerEntry.test_events = { path: "owner-events.ndjson", sha256: sha256(readFileSync(join(directory, "run", "owner-events.ndjson"), "utf8")), bytes: readFileSync(join(directory, "run", "owner-events.ndjson"), "utf8").length };
+    const sourceRunId = "11111111-1111-4111-8111-111111111111";
+    const sourceRun = join(directory, sourceRunId);
+    const sourceUnit = {
+      ...admitted,
+      unit,
+      fingerprint: sha256(canonicalJson({
+        unit,
+        candidate_inputs_sha256: currentCandidate.inputs_sha256,
+        environment_sha256: undefined,
+        runner_sha256: sha256(readFileSync(new URL("./run-sonarqube.mjs", import.meta.url))),
+      })),
+    };
+    write(join(sourceRun, sourceUnit.test_events.path), readFileSync(join(directory, "run", sourceUnit.test_events.path)));
+    write(join(sourceRun, "owner-events.ndjson"), ownerEvents);
+    write(join(sourceRun, "owner-coverage.out"), ownerCoverage);
+    write(join(sourceRun, "manifest.json"), JSON.stringify({
+      schema_version: 2,
+      run_id: sourceRunId,
+      candidate: currentCandidate,
+      fingerprints: { coverage_environment: undefined },
+      profiles: [{ name: "base", status: "passed", units: [sourceUnit] }, ownerEntry],
+    }));
+    const record = { runDir: join(directory, "run"), manifest: { candidate: currentCandidate, profiles: [{ name: "base", units: [{ ...admitted, unit, source_run_id: sourceRunId }] }] } };
+    assert.doesNotThrow(() => assertUnitDedicatedOwnership(record.manifest.profiles[0].units, record, currentCandidate, { sha256: undefined }));
+    const skippedOwnerEvents = event("skip", ownerTest) + event("pass", null);
+    write(join(sourceRun, "owner-events.ndjson"), skippedOwnerEvents);
+    ownerEntry.test_events = { path: "owner-events.ndjson", sha256: sha256(skippedOwnerEvents), bytes: skippedOwnerEvents.length };
     ownerEntry.package_counts = { passed: 1, failed: 0, tests_passed: 0, tests_skipped: 1 };
-    assert.throws(() => assertUnitDedicatedOwnership([{ ...admitted, unit }], record, currentCandidate, { sha256: undefined }), /without a revalidated passed dedicated uci-installed profile/);
+    write(join(sourceRun, "manifest.json"), JSON.stringify({
+      schema_version: 2,
+      run_id: sourceRunId,
+      candidate: currentCandidate,
+      fingerprints: { coverage_environment: undefined },
+      profiles: [{ name: "base", status: "passed", units: [sourceUnit] }, ownerEntry],
+    }));
+    assert.throws(() => assertUnitDedicatedOwnership(record.manifest.profiles[0].units, record, currentCandidate, { sha256: undefined }), /without a revalidated passed dedicated uci-installed profile/);
     await assert.rejects(runRaceUnit(directory, profile, currentCandidate, expected, events.replace("real-corpus installed acceptance requires ENGRAM_UCI_REAL_CORPUS_ENABLED=1", "forged skip reason")), /unapproved skip/);
   } finally {
     rmSync(directory, { recursive: true, force: true });

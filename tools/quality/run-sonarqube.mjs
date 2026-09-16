@@ -1872,7 +1872,7 @@ export function terminalPackageSummary(entries) {
 
 export function assertUnitDedicatedOwnership(units, record, candidate, environment) {
   for (const unit of units) {
-    if (unit.status !== "passed" || unit.fingerprint !== fingerprintPackageUnit(unit.unit, candidate, environment)) throw new RunnerError(`${unit.id} did not retain a passed package unit`);
+    if (unit.status !== "passed") throw new RunnerError(`${unit.id} did not retain a passed package unit`);
     const source = retainedUnitEvidence(record, unit, unit.unit, candidate, environment);
     if (!source || source.entry.status !== "passed" || source.entry.fingerprint !== fingerprintPackageUnit(unit.unit, candidate, environment)) throw new RunnerError(`${unit.id} did not retain admissible test evidence`);
     const evidence = evaluateTestEvidence(source.record, source.entry, packageUnitProfile(unit.unit), candidate, environment);
