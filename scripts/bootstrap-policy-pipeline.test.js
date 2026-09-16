@@ -1775,6 +1775,20 @@ function buildServerArchive(archiveRoot, archivePath) {
   }
 }
 
+test("GoReleaser client and server empty build IDs match the bootstrap policy generator", () => {
+  const generator = fs.readFileSync(path.join(root, "scripts", "prepare-bootstrap-policy.sh"), "utf8");
+  const generatorBuildIDs = [...generator.matchAll(/-ldflags "([^"]+)"/g)].flatMap(([, ldflags]) => ldflags.split(/\s+/).filter((flag) => flag.startsWith("-buildid=")));
+  assert.deepEqual(generatorBuildIDs, ["-buildid="]);
+
+  const publisher = fs.readFileSync(path.join(root, ".goreleaser.yaml"), "utf8");
+  for (const buildID of ["engram-client", "engram-server"]) {
+    const build = publisher.match(new RegExp(`^  - id: ${buildID}$([\\s\\S]*?)(?=^  - id:|^archives:)`, "m"));
+    assert.ok(build, `missing GoReleaser build ${buildID}`);
+    const buildIDs = [...build[1].matchAll(/^      - (.+)$/gm)].map(([, flag]) => flag).filter((flag) => flag.startsWith("-buildid="));
+    assert.deepEqual(buildIDs, generatorBuildIDs, `${buildID} build ID must match bootstrap policy generation`);
+  }
+});
+
 test("generator check mode and combined artifact gate accept only the shared target rows", () => {
   const temp = temporaryDirectory();
   try {
