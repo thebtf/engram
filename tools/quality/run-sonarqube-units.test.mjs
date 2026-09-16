@@ -7,6 +7,8 @@ import test from "node:test";
 
 import {
   Deadline,
+  atomicReplace,
+  assertUnitDedicatedOwnership,
   boundedCoverpkg,
   canonicalJson,
   classifyPackageUnit,
@@ -40,6 +42,57 @@ function write(path, contents) {
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
+
+function replacementError(code) {
+  return Object.assign(new Error(`${code} replacement failure`), { code });
+}
+
+test("Windows atomic replacement retries bounded transient sharing errors", () => {
+  const waits = [];
+  const failures = [replacementError("EPERM"), replacementError("EACCES"), replacementError("EBUSY")];
+  let attempts = 0;
+  atomicReplace("temporary", "destination", {
+    isWindows: true,
+    rename() {
+      attempts += 1;
+      const failure = failures.shift();
+      if (failure) throw failure;
+    },
+    wait(milliseconds) { waits.push(milliseconds); },
+  });
+  assert.equal(attempts, 4);
+  assert.deepEqual(waits, [25, 50, 100]);
+});
+
+test("Windows atomic replacement preserves the original error after bounded exhaustion", () => {
+  const waits = [];
+  const original = replacementError("EPERM");
+  let attempts = 0;
+  assert.throws(() => atomicReplace("temporary", "destination", {
+    isWindows: true,
+    rename() {
+      attempts += 1;
+      throw attempts === 1 ? original : replacementError("EPERM");
+    },
+    wait(milliseconds) { waits.push(milliseconds); },
+  }), (error) => error === original);
+  assert.equal(attempts, 4);
+  assert.deepEqual(waits, [25, 50, 100]);
+});
+
+test("Windows atomic replacement does not retry non-transient failures", () => {
+  const original = replacementError("EINVAL");
+  let attempts = 0;
+  assert.throws(() => atomicReplace("temporary", "destination", {
+    isWindows: true,
+    rename() {
+      attempts += 1;
+      throw original;
+    },
+    wait() { throw new Error("non-transient rename must not wait"); },
+  }), (error) => error === original);
+  assert.equal(attempts, 1);
+});
 
 function goEventState() {
   return {
@@ -306,6 +359,7 @@ test("base package units retain race terminal evidence, coverage artifacts, reus
     const units = planPackageUnits(packages());
     const initialCandidate = candidate(repository);
     const first = campaign(namespace, 1, initialCandidate);
+    first.manifest.fingerprints = { coverage_environment: coverageEnvironment().sha256 };
     const firstCalls = [];
     await collectBaseUnits(first, initialCandidate, units, firstCalls);
 
@@ -324,6 +378,9 @@ test("base package units retain race terminal evidence, coverage artifacts, reus
     await collectBaseUnits(exact, initialCandidate, units, exactCalls);
     assert.equal(exactCalls.length, 0);
     assert.ok(exact.manifest.profiles[0].units.every((entry) => entry.source_run_id === first.manifest.run_id));
+    assert.doesNotThrow(() => assertUnitDedicatedOwnership(exact.manifest.profiles[0].units, { runDir: exact.runDir, manifest: exact.manifest }, initialCandidate, coverageEnvironment()));
+    exact.manifest.profiles[0].units[0].source_run_id = "33333333-3333-4333-8333-333333333333";
+    assert.throws(() => assertUnitDedicatedOwnership(exact.manifest.profiles[0].units, { runDir: exact.runDir, manifest: exact.manifest }, initialCandidate, coverageEnvironment()), /admissible test evidence/);
 
     for (const [kind, path] of [["code", "internal/alpha/alpha.go"], ["test", "internal/alpha/alpha_test.go"], ["dependency", "go.mod"]]) {
       write(join(repository, path), `changed ${kind}\n`);
