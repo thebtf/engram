@@ -26,7 +26,7 @@ trap 'rm -rf "$workdir"' EXIT
 build_target() {
   local goos="$1" goarch="$2" asset="$3"
   GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 "$go_command" build -trimpath -buildvcs=false \
-    -ldflags "-s -w -X github.com/thebtf/engram/internal/version.Daemon=v${version}" \
+    -ldflags "-s -w -buildid= -X github.com/thebtf/engram/internal/version.Daemon=v${version}" \
     -o "$workdir/$asset" ./cmd/engram
 }
 build_target linux amd64 engram-linux-amd64

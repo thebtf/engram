@@ -1775,6 +1775,20 @@ function buildServerArchive(archiveRoot, archivePath) {
   }
 }
 
+test("GoReleaser client and server empty build IDs match the bootstrap policy generator", () => {
+  const generator = fs.readFileSync(path.join(root, "scripts", "prepare-bootstrap-policy.sh"), "utf8");
+  const generatorBuildIDs = [...generator.matchAll(/-ldflags "([^"]+)"/g)].flatMap(([, ldflags]) => ldflags.split(/\s+/).filter((flag) => flag.startsWith("-buildid=")));
+  assert.deepEqual(generatorBuildIDs, ["-buildid="]);
+
+  const publisher = fs.readFileSync(path.join(root, ".goreleaser.yaml"), "utf8");
+  for (const buildID of ["engram-client", "engram-server"]) {
+    const build = publisher.match(new RegExp(`^  - id: ${buildID}$([\\s\\S]*?)(?=^  - id:|^archives:)`, "m"));
+    assert.ok(build, `missing GoReleaser build ${buildID}`);
+    const buildIDs = [...build[1].matchAll(/^      - (.+)$/gm)].map(([, flag]) => flag).filter((flag) => flag.startsWith("-buildid="));
+    assert.deepEqual(buildIDs, generatorBuildIDs, `${buildID} build ID must match bootstrap policy generation`);
+  }
+});
+
 test("generator check mode and combined artifact gate accept only the shared target rows", () => {
   const temp = temporaryDirectory();
   try {
@@ -1784,7 +1798,7 @@ test("generator check mode and combined artifact gate accept only the shared tar
     const dist = path.join(temp, "dist");
     const currentVersion = parsePolicy(fs.readFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), "utf8")).package_version;
     fs.mkdirSync(fakeBin, { recursive: true });
-    fs.writeFileSync(fakeGo, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then echo 'go version go1.26.6 linux/amd64'; exit 0; fi\nwhile [[ $# -gt 0 ]]; do if [[ $1 == -o ]]; then shift; printf '%s-%s' \"$GOOS\" \"$GOARCH\" > \"$1\"; exit 0; fi; shift; done\nexit 1\n", { mode: 0o755 });
+    fs.writeFileSync(fakeGo, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then echo 'go version go1.26.6 linux/amd64'; exit 0; fi\nwhile [[ $# -gt 0 ]]; do\n  if [[ $1 == -ldflags ]]; then [[ $2 == *' -buildid= '* ]] || exit 1; shift 2; continue; fi\n  if [[ $1 == -o ]]; then shift; printf '%s-%s' \"$GOOS\" \"$GOARCH\" > \"$1\"; exit 0; fi\n  shift\ndone\nexit 1\n", { mode: 0o755 });
     const fakeGoArgument = shellQuote(bashPath(fakeGo));
     const policyArgument = shellQuote(bashPath(policyPath));
     run("bash", ["-c", `ENGRAM_BOOTSTRAP_GO=${fakeGoArgument} scripts/prepare-bootstrap-policy.sh --version ${currentVersion} --output ${policyArgument}`]);
