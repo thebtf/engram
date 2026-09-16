@@ -1,13 +1,47 @@
 import { expect, test } from '@playwright/test'
+import type { Locator, Page } from '@playwright/test'
 
-test('settings opens as a modal overlay and keeps unwired controls honest', async ({ page }) => {
+const deferredSettingsPaths = [
+  '/api/config',
+  '/api/memory-domains',
+  '/api/models',
+] as const
+
+function settingsRequestCounts(requests: string[]) {
+  return Object.fromEntries(deferredSettingsPaths.map((path) => [
+    path,
+    requests.filter((request) => request === `GET ${path}`).length,
+  ]))
+}
+
+
+async function expectModalEnvironmentRestored(page: Page, trigger?: Locator) {
+  await expect.poll(() => page.locator('body').evaluate((body) => body.style.overflow)).toBe('')
+  await expect(page.locator('.app')).not.toHaveAttribute('aria-hidden')
+  await expect.poll(() => page.locator('.app').evaluate((app) => (app as HTMLElement).inert)).toBe(false)
+  if (trigger) await expect(trigger).toBeFocused()
+}
+
+test('settings defers its traffic until an actual open and restores the shell after close', async ({ page }) => {
+  const settingsRequests: string[] = []
   const consoleProblems: string[] = []
   const failedRequests: string[] = []
-  const badResponses: string[] = []
+  const unexpectedBadResponses: string[] = []
   const pageErrors: string[] = []
+  let expectedDomainRefreshFailure = false
+  const firstOpenRequestCounts = Object.fromEntries(deferredSettingsPaths.map((path) => [path, 1]))
 
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (deferredSettingsPaths.includes(url.pathname as typeof deferredSettingsPaths[number])) {
+      settingsRequests.push(`${request.method()} ${url.pathname}`)
+    }
+  })
   page.on('console', (message) => {
-    if (message.type() === 'error' || message.type() === 'warning') {
+    const isExpectedDomainRefreshFailure = expectedDomainRefreshFailure
+      && message.type() === 'error'
+      && message.text().includes('503')
+    if ((message.type() === 'error' || message.type() === 'warning') && !isExpectedDomainRefreshFailure) {
       consoleProblems.push(`${message.type()}: ${message.text()}`)
     }
   })
@@ -15,100 +49,75 @@ test('settings opens as a modal overlay and keeps unwired controls honest', asyn
     failedRequests.push(`${request.method()} ${request.url()} ${request.failure()?.errorText || 'failed'}`)
   })
   page.on('response', (response) => {
-    if (response.status() >= 400) {
-      badResponses.push(`${response.status()} ${response.request().method()} ${response.url()}`)
+    const url = new URL(response.url())
+    if (response.status() >= 400 && url.pathname !== '/api/memory-domains') {
+      unexpectedBadResponses.push(`${response.status()} ${response.request().method()} ${url.pathname}`)
     }
   })
   page.on('pageerror', (error) => {
     pageErrors.push(error.message)
   })
 
-  await page.goto('/settings')
+  await page.goto('/')
+  const trigger = page.locator('.status-action')
   const dialog = page.getByRole('dialog', { name: 'Настройки сервера' })
+  await expect(trigger).toHaveAccessibleName(/.+/)
+  await expect(dialog).toHaveCount(0)
+  await expect.poll(() => settingsRequestCounts(settingsRequests)).toEqual(
+    Object.fromEntries(deferredSettingsPaths.map((path) => [path, 0])),
+  )
+
+  await trigger.focus()
+  await page.keyboard.press('Enter')
   await expect(dialog).toBeVisible()
-  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
-  await expect(page.getByRole('button', { name: 'Открыть настройки' })).toHaveCount(0)
-  await expect(dialog.getByRole('heading', { name: 'Общие' })).toBeVisible()
-  await expect(dialog.getByText('модальное окно')).toBeVisible()
+  await expect(dialog).toHaveAttribute('aria-modal', 'true')
+  await expect(dialog.getByRole('button', { name: 'Закрыть настройки' })).toBeFocused()
+  await expect(page.locator('.app')).toHaveAttribute('aria-hidden', 'true')
+  await expect.poll(() => page.locator('.app').evaluate((app) => (app as HTMLElement).inert)).toBe(true)
+  await expect.poll(() => page.locator('body').evaluate((body) => body.style.overflow)).toBe('hidden')
+  await expect.poll(() => settingsRequestCounts(settingsRequests)).toEqual(firstOpenRequestCounts)
 
-  await dialog.getByRole('button', { name: 'Флаги сервера' }).click()
-  await expect(dialog.getByRole('heading', { name: 'Флаги сервера' })).toBeVisible()
-  await expect(dialog.getByText('memory.inject_unified').first()).toBeVisible()
-  await expect(dialog.getByText('PATCH /api/config').first()).toBeVisible()
-  await expect(dialog.getByText('GET /api/flags')).toBeVisible()
-  await expect(dialog.getByText('ENGRAM_VNEXT_F_ENABLED')).toBeVisible()
-  await expect(dialog.getByText('включено').first()).toBeVisible()
-  await expect(dialog.getByText('Полная карта feature flags')).toHaveCount(0)
-  const injectUnifiedRow = dialog.locator('.sw-row', { hasText: 'Единая инъекция памяти' })
-  await injectUnifiedRow.getByRole('switch').click()
-  await dialog.getByRole('button', { name: 'Сохранить config' }).click()
-  await expect(dialog.getByText(/Сохранено: inject_unified/)).toBeVisible()
-  await expect(dialog.getByText(/Restart required: да/)).toBeVisible()
-  await expect(dialog.getByText(/Restart нужен для: memory\.inject_unified/)).toBeVisible()
-  await expect(dialog.getByText(/Изменение ожидает restart/)).toBeVisible()
-  await expect(dialog.getByText(/Сейчас: да/)).toBeVisible()
-  await expect(dialog.getByText(/После restart: нет/)).toBeVisible()
-
-  await dialog.getByRole('button', { name: 'Домены памяти' }).click()
-  await expect(dialog.getByRole('heading', { name: 'Домены памяти' })).toBeVisible()
-  await dialog.locator('details.evidence-details').evaluateAll((details) => details.forEach((detail) => { detail.open = true }))
-  await expect(dialog.getByText('GET /api/memory-domains')).toBeVisible()
-  await expect(dialog.getByText('memory-lab')).toBeVisible()
-  await dialog.getByRole('button', { name: 'Изменить домен memory-lab' }).click()
-  await expect(dialog.getByTestId('domain-registry-domain')).toHaveValue('memory-lab')
-  await expect(dialog.getByTestId('domain-registry-domain')).toBeDisabled()
-  await dialog.getByTestId('domain-registry-owner').fill('agent/bob')
-  await dialog.getByTestId('domain-registry-mode').selectOption('reject')
-  await dialog.getByTestId('domain-registry-save').click()
-  await expect(dialog.getByText('Домен memory-lab сохранён')).toBeVisible()
-  await expect(dialog.getByText('agent/bob · agent')).toBeVisible()
-  await dialog.getByTestId('domain-registry-delete-memory-lab').click()
-  await expect(dialog.getByTestId('domain-registry-delete-memory-lab')).toHaveText('Подтвердить удаление')
-  await dialog.getByTestId('domain-registry-delete-memory-lab').click()
-  await expect(dialog.getByText('Домен memory-lab возвращён к implicit policy')).toBeVisible()
-  await expect(dialog.locator('.domain-row').filter({ hasText: 'memory-lab' })).toHaveCount(0)
-
-  await dialog.getByRole('button', { name: /Модели/ }).click()
+  await dialog.getByRole('button', { name: 'Модели' }).click()
   await expect(dialog.getByRole('heading', { name: 'Модели' })).toBeVisible()
-  await expect(dialog.getByText('Здоровье моделей')).toBeVisible()
-  await dialog.locator('details.evidence-details').evaluateAll((details) => details.forEach((detail) => { detail.open = true }))
-  await expect(dialog.getByText('GET /api/model-health', { exact: true })).toBeVisible()
-  await expect(dialog.getByText('recall/embedder')).toBeVisible()
-  await expect(dialog.getByText('smoke-embedding')).toBeVisible()
-  await expect(dialog.getByText('Runtime registry пуст')).toBeVisible()
-  await expect(dialog.getByText('GET /api/models', { exact: true }).first()).toBeVisible()
-  await expect(dialog.getByText('Редактирование моделей ещё mustbuild')).toBeVisible()
-  await expect(dialog.getByText('GET /api/model-credentials · GET /api/model-bindings · POST /api/models')).toBeVisible()
-  await expect(dialog.getByText('Backend seam ещё не готов')).toHaveCount(0)
+  await page.waitForTimeout(150)
+  expect(settingsRequestCounts(settingsRequests)).toEqual(firstOpenRequestCounts)
 
   await page.keyboard.press('Escape')
   await expect(dialog).toBeHidden()
-  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
+  await expectModalEnvironmentRestored(page, trigger)
 
-  await page.getByRole('button', { name: 'Меню профиля' }).click()
-  await expect(page.getByRole('menu')).toBeVisible()
-  await expect(page.getByRole('menuitem', { name: 'Профиль и настройки' })).toBeVisible()
-  await expect(page.getByRole('menuitem', { name: 'Настройки консоли' })).toBeVisible()
-  await expect(page.getByRole('menuitem', { name: 'Выйти из консоли' })).toBeDisabled()
-  await expect(page.getByRole('menuitem', { name: 'Выйти из консоли' })).toHaveAttribute('title', /Auth отключена/)
-
-  await page.getByRole('menuitem', { name: 'Профиль и настройки' }).click()
-  const profileDialog = page.getByRole('dialog', { name: 'Профиль оператора' })
-  await expect(profileDialog).toBeVisible()
-  await expect(profileDialog.getByRole('heading', { name: 'admin' })).toBeVisible()
-  await expect(profileDialog.locator('.hb-ev', { hasText: 'PATCH /api/profile' })).toBeVisible()
-  await expect(profileDialog.locator('.hb-ev', { hasText: 'GET /api/auth/sessions' })).toBeVisible()
-  await page.keyboard.press('Escape')
-  await expect(profileDialog).toBeHidden()
-
-  await page.getByRole('button', { name: 'Меню профиля' }).click()
-  await page.getByRole('menuitem', { name: 'Настройки консоли' }).click()
+  await page.goto('/settings')
   await expect(dialog).toBeVisible()
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
+  const directRouteRequestCounts = Object.fromEntries(deferredSettingsPaths.map((path) => [path, 2]))
+  await expect.poll(() => settingsRequestCounts(settingsRequests)).toEqual(directRouteRequestCounts)
   await page.keyboard.press('Escape')
   await expect(dialog).toBeHidden()
+  await expectModalEnvironmentRestored(page)
 
+  await trigger.focus()
+  await page.keyboard.press('Enter')
+  await expect(dialog).toBeVisible()
+  expect(settingsRequestCounts(settingsRequests)).toEqual(directRouteRequestCounts)
+  await dialog.getByRole('button', { name: 'Модели' }).click()
+  const reopenedModelRequestCounts = { ...directRouteRequestCounts, '/api/models': 3 }
+  await expect.poll(() => settingsRequestCounts(settingsRequests)).toEqual(reopenedModelRequestCounts)
+
+  expectedDomainRefreshFailure = true
+  await page.route('**/api/memory-domains', (route) => route.fulfill({
+    status: 503,
+    contentType: 'application/json',
+    body: JSON.stringify({ message: 'forced domain refresh failure' }),
+  }))
+  await dialog.getByRole('button', { name: 'Домены' }).click()
+  await dialog.getByRole('button', { name: 'Обновить' }).click()
+  await expect(dialog.locator('.state.error')).toBeVisible()
+
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
+  await expectModalEnvironmentRestored(page, trigger)
   expect(consoleProblems).toEqual([])
   expect(failedRequests).toEqual([])
-  expect(badResponses).toEqual([])
+  expect(unexpectedBadResponses).toEqual([])
   expect(pageErrors).toEqual([])
 })

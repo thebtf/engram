@@ -1,7 +1,17 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import type { MutationResult } from '../composables/useApi'
+import type {
+  RuleOperationItem,
+  RuleSelectionOperationAction,
+  RuleSelectionPage,
+} from '../composables/useOperatorRules'
 import { useOperatorRules } from '../composables/useOperatorRules'
 import type { RuleRow } from '../composables/useMockData'
+import {
+  createOperatorSelection,
+  type OperatorSelectionTarget,
+} from '../composables/useOperatorSelection'
 
 const { t } = useI18n()
 const {
@@ -12,10 +22,11 @@ const {
   error,
   refresh,
   createRule: runCreateRule,
-  updateRule,
-  toggleRuleEnabled,
-  reorderRules,
-  deleteRule,
+  saveRuleSelection,
+  freezeRuleSelection,
+  currentRuleSelection,
+  loadRulePage,
+  runRuleSelectionOperation,
   scopeChangeGap,
 } = useOperatorRules()
 
@@ -29,14 +40,49 @@ const confirmingDeleteId = ref<number | null>(null)
 const draggingId = ref<number | null>(null)
 const dragOverId = ref<number | null>(null)
 const dragOverAfter = ref(false)
-const isToggling = ref(false)
+const selectionPending = ref(false)
+const selectionError = ref('')
+const selectionPage = ref<RuleSelectionPage | null>(null)
+const mutationResult = ref<MutationResult | null>(null)
+const operationItems = ref<RuleOperationItem[]>([])
+const selection = createOperatorSelection('rules')
 
-const sortedRows = computed(() => [...rows].sort(compareRules))
-const visibleRows = computed(() => sortedRows.value.filter((rule) => scopeFilter.value === 'all' || rule.project === scopeFilter.value))
 const createScopes = computed(() => scopeOptions.value)
-const canCreate = computed(() => createContent.value.trim().length > 0 && !pending.value)
+const busy = computed(() => pending.value || selectionPending.value)
+const selectionTargets = computed(() => selectionPage.value?.targets ?? [])
+const scopedRows = computed(() => rows.filter((rule) => scopeFilter.value === 'all' || rule.project === scopeFilter.value))
+const visibleRows = computed(() => {
+  if (!selectionPage.value) return scopedRows.value
+  const rowsByID = new Map(scopedRows.value.map((rule) => [String(rule.id), rule]))
+  return selectionPage.value.targets.flatMap((target) => {
+    const row = rowsByID.get(target.id)
+    return row === undefined ? [] : [row]
+  })
+})
+const canCreate = computed(() => createContent.value.trim().length > 0 && !busy.value)
 const editingRule = computed(() => rows.find((rule) => rule.id === editingId.value) || null)
-const canSaveEdit = computed(() => Boolean(editingRule.value) && editContent.value.trim().length > 0 && !pending.value)
+const editChanged = computed(() => Boolean(editingRule.value) && editContent.value.trim() !== editingRule.value?.content)
+const canSaveEdit = computed(() => editChanged.value && !busy.value)
+const selectedCount = computed(() => selection.selectedCount.value)
+const selectionActionReady = computed(() => selection.current.value.kind !== 'none'
+  && !selection.current.value.reconfirmationRequired
+  && selectedCount.value > 0
+  && !busy.value)
+const headerAriaChecked = computed<'false' | 'mixed' | 'true'>(() => {
+  if (!selectionTargets.value.length) return 'false'
+  const selected = selectionTargets.value.filter((target) => isTargetSelected(target)).length
+  if (selected === 0) return 'false'
+  if (selected === selectionTargets.value.length) return 'true'
+  return 'mixed'
+})
+const canReorderScope = computed(() => {
+  const page = selectionPage.value
+  if (!page || scopeFilter.value === 'all' || page.nextCursor || page.total !== visibleRows.value.length || page.targets.length !== visibleRows.value.length) {
+    return false
+  }
+  const targetIDs = new Set(page.targets.map((target) => target.id))
+  return visibleRows.value.every((rule) => targetIDs.has(String(rule.id)))
+})
 
 watch(scopeOptions, (options) => {
   if (!options.includes(createScope.value)) {
@@ -47,12 +93,16 @@ watch(scopeOptions, (options) => {
   }
 }, { immediate: true })
 
-function compareRules(left: RuleRow, right: RuleRow) {
-  if (left.priority !== right.priority) {
-    return right.priority - left.priority
-  }
-  return left.content.localeCompare(right.content)
-}
+watch(scopeFilter, (scope) => {
+  selectionPage.value = null
+  selection.invalidate('filter_changed')
+  selectionError.value = ''
+  void refresh(scope)
+})
+
+onMounted(() => {
+  void loadCurrentSelection()
+})
 
 function scopeLabel(scope: string) {
   return scope === 'global' ? t('rules.scope.global') : scope
@@ -74,6 +124,23 @@ function priorityForNewRule() {
   return highest + 10
 }
 
+function targetFor(rule: RuleRow): OperatorSelectionTarget {
+  return { id: String(rule.id), expectedVersion: rule.version }
+}
+
+function isTargetSelected(target: OperatorSelectionTarget) {
+  const current = selection.current.value
+  switch (current.kind) {
+    case 'none':
+      return false
+    case 'explicit':
+    case 'page':
+      return current.targets.some((candidate) => candidate.id === target.id)
+    case 'frozen_filter':
+      return !current.excludedIds.includes(target.id)
+  }
+}
+
 function openCreate() {
   createContent.value = ''
   createScope.value = scopeFilter.value === 'all' ? 'global' : scopeFilter.value
@@ -92,8 +159,13 @@ async function createRule() {
     project: createScope.value === 'global' ? undefined : createScope.value,
     editedBy: 'operator-console',
   })
-  if (isRollback(result)) return
-  closeCreate()
+  mutationResult.value = result
+  operationItems.value = []
+  if (result.kind === 'committed_verified') {
+    closeCreate()
+    await refresh(scopeFilter.value)
+    await loadSelectionPage()
+  }
 }
 
 function startEdit(rule: RuleRow) {
@@ -107,24 +179,193 @@ function cancelEdit() {
   editContent.value = ''
 }
 
+async function loadCurrentSelection() {
+  selectionPending.value = true
+  selectionError.value = ''
+  try {
+    selection.applySnapshot(await currentRuleSelection())
+  } catch (error) {
+    selectionError.value = error instanceof Error ? error.message : t('rules.selection.loadError')
+  } finally {
+    selectionPending.value = false
+  }
+}
+
+async function loadSelectionPage(cursor = '') {
+  selectionPending.value = true
+  selectionError.value = ''
+  try {
+    selectionPage.value = await loadRulePage({ scope: scopeFilter.value }, cursor)
+  } catch (error) {
+    selectionError.value = error instanceof Error ? error.message : t('rules.selection.pageError')
+  } finally {
+    selectionPending.value = false
+  }
+}
+
+async function saveCurrentSelection() {
+  const current = selection.current.value
+  if (current.kind === 'frozen_filter') {
+    selection.applySnapshot(await freezeRuleSelection({ scope: scopeFilter.value }, current.excludedIds))
+    return
+  }
+  selection.applySnapshot(await saveRuleSelection(current))
+}
+
+async function selectCurrentPage() {
+  if (!selectionPage.value) {
+    await loadSelectionPage()
+  }
+  if (!selectionPage.value?.targets.length) return
+
+  selectionPending.value = true
+  selectionError.value = ''
+  try {
+    selection.selectCurrentPage(selectionPage.value.cursor, selectionPage.value.targets)
+    await saveCurrentSelection()
+  } catch (error) {
+    selectionError.value = error instanceof Error ? error.message : t('rules.selection.saveError')
+  } finally {
+    selectionPending.value = false
+  }
+}
+
+async function freezeCurrentFilter() {
+  selectionPending.value = true
+  selectionError.value = ''
+  try {
+    const exclusions = selection.current.value.kind === 'frozen_filter'
+      ? selection.current.value.excludedIds
+      : []
+    selection.applySnapshot(await freezeRuleSelection({ scope: scopeFilter.value }, exclusions))
+  } catch (error) {
+    selectionError.value = error instanceof Error ? error.message : t('rules.selection.freezeError')
+  } finally {
+    selectionPending.value = false
+  }
+}
+
+async function clearSelection() {
+  selectionPending.value = true
+  selectionError.value = ''
+  try {
+    selection.clear()
+    await saveCurrentSelection()
+  } catch (error) {
+    selectionError.value = error instanceof Error ? error.message : t('rules.selection.saveError')
+  } finally {
+    selectionPending.value = false
+  }
+}
+
+async function toggleHeaderSelection(event: KeyboardEvent | Event) {
+  if (event instanceof KeyboardEvent) {
+    if (event.key !== ' ' && event.key !== 'Enter') return
+    const page = selectionPage.value
+    if (selection.current.value.kind !== 'frozen_filter' && page) {
+      selectionPending.value = true
+      selectionError.value = ''
+      try {
+        if (selection.handleHeaderKeydown(event, page.cursor, page.targets)) {
+          await saveCurrentSelection()
+        }
+      } catch (error) {
+        selectionError.value = error instanceof Error ? error.message : t('rules.selection.saveError')
+      } finally {
+        selectionPending.value = false
+      }
+      return
+    }
+    event.preventDefault()
+  }
+
+  if (headerAriaChecked.value === 'true') {
+    await clearSelection()
+    return
+  }
+  await selectCurrentPage()
+}
+
+async function toggleRuleSelection(rule: RuleRow) {
+  const target = targetFor(rule)
+  selectionPending.value = true
+  selectionError.value = ''
+  try {
+    const current = selection.current.value
+    if (current.kind === 'frozen_filter') {
+      const excludedIds = isTargetSelected(target)
+        ? [...current.excludedIds, target.id]
+        : current.excludedIds.filter((id) => id !== target.id)
+      selection.applySnapshot(await freezeRuleSelection({ scope: scopeFilter.value }, excludedIds))
+      return
+    }
+
+    const selected = current.kind === 'none'
+      ? []
+      : current.targets.filter((candidate) => candidate.id !== target.id)
+    if (!isTargetSelected(target)) selected.push(target)
+    if (!selected.length) {
+      selection.clear()
+    } else {
+      selection.selectExplicit(selected)
+    }
+    await saveCurrentSelection()
+  } catch (error) {
+    selectionError.value = error instanceof Error ? error.message : t('rules.selection.saveError')
+  } finally {
+    selectionPending.value = false
+  }
+}
+
+async function runSelectionAction(action: RuleSelectionOperationAction, fields: { content?: string; priority?: number; scope?: string; order?: Array<{ ruleId: number; expectedVersion: number }> } = {}) {
+  if (!selectionActionReady.value) return false
+
+  selectionPending.value = true
+  selectionError.value = ''
+  operationItems.value = []
+  try {
+    let current = selection.current.value
+    if (current.kind !== 'frozen_filter' && current.version === 0) {
+      selection.applySnapshot(await saveRuleSelection(current))
+      current = selection.current.value
+    }
+    if (current.kind === 'none' || current.reconfirmationRequired) return false
+
+    const result = await runRuleSelectionOperation({ action, selection: current, ...fields })
+    mutationResult.value = result.mutation
+    operationItems.value = result.items
+    if (result.mutation.kind !== 'committed_verified') return false
+
+    selection.invalidate('collection_changed')
+    await refresh(scopeFilter.value)
+    await loadSelectionPage()
+    return true
+  } catch (error) {
+    selectionError.value = error instanceof Error ? error.message : t('rules.selection.operationError')
+    return false
+  } finally {
+    selectionPending.value = false
+  }
+}
+
+async function runSingleAction(rule: RuleRow, action: RuleSelectionOperationAction, fields: { content?: string; priority?: number } = {}) {
+  selection.selectExplicit([targetFor(rule)])
+  return runSelectionAction(action, fields)
+}
+
 async function saveEdit(rule: RuleRow) {
-  if (!canSaveEdit.value) return
-  const result = await updateRule(rule.id, {
+  if (!editChanged.value) {
+    selectionError.value = t('rules.selection.noChanges')
+    return
+  }
+  const completed = await runSingleAction(rule, 'update', {
     content: editContent.value.trim(),
-    editedBy: 'operator-console',
   })
-  if (isRollback(result)) return
-  cancelEdit()
+  if (completed) cancelEdit()
 }
 
 async function toggleRule(rule: RuleRow) {
-  if (pending.value || isToggling.value) return
-  isToggling.value = true
-  try {
-    await toggleRuleEnabled(rule.id, !rule.enabled)
-  } finally {
-    isToggling.value = false
-  }
+  await runSingleAction(rule, rule.enabled ? 'disable' : 'enable')
 }
 
 async function confirmDelete(rule: RuleRow) {
@@ -132,40 +373,44 @@ async function confirmDelete(rule: RuleRow) {
     confirmingDeleteId.value = rule.id
     return
   }
-  const result = await deleteRule(rule.id)
-  if (isRollback(result)) return
-  confirmingDeleteId.value = null
-  if (editingId.value === rule.id) {
-    cancelEdit()
-  }
+  const completed = await runSingleAction(rule, 'delete')
+  if (completed && editingId.value === rule.id) cancelEdit()
+  if (completed) confirmingDeleteId.value = null
 }
 
 async function moveRule(ruleId: number, direction: -1 | 1) {
+  if (!canReorderScope.value || busy.value) return
   const current = visibleRows.value
   const from = current.findIndex((rule) => rule.id === ruleId)
   const to = from + direction
-  if (from < 0 || to < 0 || to >= current.length || pending.value) return
+  if (from < 0 || to < 0 || to >= current.length) return
+
   const next = [...current]
   const [moved] = next.splice(from, 1)
   next.splice(to, 0, moved)
-  await reorderRules(next)
+  selection.selectExplicit(next.map(targetFor))
+  await runSelectionAction('reorder', {
+    scope: scopeFilter.value,
+    order: next.map((rule) => ({ ruleId: rule.id, expectedVersion: rule.version })),
+  })
 }
 
 function startDrag(rule: RuleRow) {
-  if (editingId.value === rule.id) return
+  if (editingId.value === rule.id || !canReorderScope.value) return
   draggingId.value = rule.id
 }
 
 function overDrag(event: DragEvent, rule: RuleRow) {
-  if (!draggingId.value || draggingId.value === rule.id) return
-  const target = event.currentTarget as HTMLElement
+  if (!draggingId.value || draggingId.value === rule.id || !canReorderScope.value) return
+  const target = event.currentTarget
+  if (!(target instanceof HTMLElement)) return
   const box = target.getBoundingClientRect()
   dragOverId.value = rule.id
   dragOverAfter.value = event.clientY > box.top + box.height / 2
 }
 
 async function dropRule(rule: RuleRow) {
-  if (!draggingId.value || draggingId.value === rule.id || pending.value) {
+  if (!draggingId.value || draggingId.value === rule.id || !canReorderScope.value || busy.value) {
     clearDrag()
     return
   }
@@ -181,17 +426,17 @@ async function dropRule(rule: RuleRow) {
   const [moved] = current.splice(from, 1)
   current.splice(to, 0, moved)
   clearDrag()
-  await reorderRules(current)
+  selection.selectExplicit(current.map(targetFor))
+  await runSelectionAction('reorder', {
+    scope: scopeFilter.value,
+    order: current.map((row) => ({ ruleId: row.id, expectedVersion: row.version })),
+  })
 }
 
 function clearDrag() {
   draggingId.value = null
   dragOverId.value = null
   dragOverAfter.value = false
-}
-
-function isRollback(result: unknown) {
-  return Boolean(result && typeof result === 'object' && 'kind' in result && (result as { kind?: string }).kind === 'rollback')
 }
 </script>
 
@@ -202,7 +447,7 @@ function isRollback(result: unknown) {
         <h1>{{ t('rules.title') }}</h1>
         <p>{{ t('rules.subtitle') }}</p>
       </div>
-      <button class="primary" :disabled="pending" @click="openCreate">{{ t('rules.create.open') }}</button>
+      <button class="primary" :disabled="busy" @click="openCreate">{{ t('rules.create.open') }}</button>
     </header>
 
     <nav class="tabs" :aria-label="t('rules.tabs.label')">
@@ -219,6 +464,7 @@ function isRollback(result: unknown) {
       <span v-else-if="loadState.kind === 'empty'">{{ t('rules.state.empty') }}</span>
       <button v-if="error" class="tbtn" @click="refresh">{{ t('rules.state.retry') }}</button>
     </section>
+    <MutationResultNotice :result="mutationResult" :recheck-label="t('rules.actions.refresh')" @recheck="refresh" />
 
     <section class="pane">
       <div class="rule-reorder-note">
@@ -230,24 +476,87 @@ function isRollback(result: unknown) {
         <HonestyBadge cls="live" />
         <span>{{ t('rules.reorder.liveCallout') }}</span>
         <code>GET /api/rules?all=true</code>
-        <code>PATCH /api/rules/{id}</code>
+        <code>POST /api/collections/selection</code>
+        <code>POST /api/rules</code>
       </div>
 
       <div class="toolbar">
         <label class="scope-filter">
           <span>{{ t('rules.scope.filter') }}</span>
-          <select v-model="scopeFilter" class="fsel">
+          <select v-model="scopeFilter" class="fsel" :disabled="busy">
             <option value="all">{{ t('rules.scope.all') }}</option>
             <option v-for="scope in createScopes" :key="scope" :value="scope">{{ scopeLabel(scope) }}</option>
           </select>
         </label>
-        <span class="toolbar-count">{{ t('rules.list.shown', { shown: visibleRows.length, total: rows.length }) }}</span>
+        <span class="toolbar-count">{{ t('rules.list.loaded', { count: visibleRows.length }) }}</span>
         <span class="spacer" />
-        <button class="tbtn" :disabled="pending" @click="refresh">{{ t('rules.actions.refresh') }}</button>
+        <button class="tbtn" :disabled="busy" @click="refresh(scopeFilter)">{{ t('rules.actions.refresh') }}</button>
       </div>
 
+      <section class="selection-panel" aria-labelledby="rules-selection-title">
+        <div class="selection-summary">
+          <strong id="rules-selection-title">{{ t('rules.selection.title') }}</strong>
+          <span data-testid="rules-selection-kind">{{ selection.current.value.kind === 'frozen_filter' ? t('rules.selection.kind.frozen_filter') : t(`rules.selection.kind.${selection.current.value.kind}`) }}</span>
+          <span class="mono-data" data-testid="rules-selection-version">{{ selection.current.value.version ? t('rules.selection.version', { version: selection.current.value.version }) : t('rules.selection.unsaved') }}</span>
+          <span v-if="selectedCount" class="selection-count">{{ t('common.selectedCount', { count: selectedCount }) }}</span>
+        </div>
+        <div class="selection-actions">
+          <button class="tbtn" data-testid="rules-selection-load-page" :disabled="busy" @click="loadSelectionPage()">{{ t('rules.selection.loadPage') }}</button>
+          <button class="act" data-testid="rules-selection-page" :disabled="busy || !selectionPage?.targets.length" @click="selectCurrentPage">{{ t('rules.selection.selectPage') }}</button>
+          <button class="act primary-line" data-testid="rules-selection-freeze" :disabled="busy" @click="freezeCurrentFilter">{{ t('rules.selection.freeze') }}</button>
+          <button class="tbtn" :disabled="busy || !selectedCount" @click="clearSelection">{{ t('common.clearSelection') }}</button>
+        </div>
+        <p v-if="selectionPage" class="selection-page" data-testid="rules-selection-page-info">
+          {{ t('rules.selection.pageInfo', { count: selectionPage.targets.length, total: selectionPage.total ?? '?' }) }}
+          <span v-if="selectionPage.nextCursor">{{ t('rules.selection.nextPageBound') }}</span>
+        </p>
+        <p v-if="selection.current.value.kind === 'frozen_filter'" class="selection-page" data-testid="rules-selection-frozen-info">
+          {{ t('rules.selection.frozenInfo', { count: selection.current.value.targetCount, expires: selection.current.value.expiresAt }) }}
+        </p>
+        <p v-if="selection.current.value.reconfirmationRequired" class="selection-warning" data-testid="rules-selection-reconfirm">
+          {{ t('rules.selection.reconfirm', { reason: selection.current.value.reconfirmationReason }) }}
+        </p>
+        <p v-if="selectionError" class="selection-warning" role="status">{{ selectionError }}</p>
+      </section>
+
+      <div v-if="selectedCount" class="bulk-actions" data-testid="rules-bulk-actions">
+        <span>{{ t('common.selectedCount', { count: selectedCount }) }}</span>
+        <button class="act" :disabled="!selectionActionReady" @click="runSelectionAction('enable')">{{ t('rules.selection.enable') }}</button>
+        <button class="act" :disabled="!selectionActionReady" @click="runSelectionAction('disable')">{{ t('rules.selection.disable') }}</button>
+        <button class="act danger" :disabled="!selectionActionReady" @click="runSelectionAction('delete')">{{ t('rules.selection.delete') }}</button>
+      </div>
+
+      <section v-if="operationItems.length" class="operation-readbacks" data-testid="rules-operation-readbacks" aria-live="polite">
+        <strong>{{ t('rules.selection.readbacks') }}</strong>
+        <ul>
+          <li v-for="item in operationItems" :key="item.targetId">
+            <code>#{{ item.targetId }}</code>
+            <span>{{ t(`mutationOutcome.items.${item.outcome}`) }}</span>
+            <template v-if="item.readback?.kind === 'current'">
+              <span>{{ item.readback.current.enabled ? t('rules.detail.enabled') : t('rules.detail.disabled') }}</span>
+              <code>v{{ item.readback.version ?? item.readback.current.version }}</code>
+            </template>
+            <span v-else-if="item.readback?.kind === 'authorized_absence'">{{ t('mutationOutcome.readbackKinds.authorized_absence') }}</span>
+          </li>
+        </ul>
+      </section>
+
       <div class="rules-grid">
-        <div class="grid-h">{{ t('rules.list.header') }}</div>
+        <div class="grid-h rule-grid-header">
+          <input
+            id="rules-page-selection"
+            type="checkbox"
+            data-testid="rules-page-selection"
+            :checked="headerAriaChecked === 'true'"
+            :indeterminate="headerAriaChecked === 'mixed'"
+            :aria-checked="headerAriaChecked"
+            :aria-label="t('rules.selection.header')"
+            :disabled="busy || !selectionTargets.length"
+            @change="toggleHeaderSelection"
+            @keydown="toggleHeaderSelection"
+          >
+          <label for="rules-page-selection">{{ t('rules.list.header') }}</label>
+        </div>
 
         <div
           v-for="(rule, index) in visibleRows"
@@ -260,7 +569,7 @@ function isRollback(result: unknown) {
             'drag-over': dragOverId === rule.id && !dragOverAfter,
             'drag-over-bottom': dragOverId === rule.id && dragOverAfter,
           }"
-          :draggable="editingId !== rule.id"
+          :draggable="editingId !== rule.id && canReorderScope"
           @dragstart="startDrag(rule)"
           @dragover.prevent="overDrag($event, rule)"
           @dragleave="clearDrag"
@@ -283,14 +592,24 @@ function isRollback(result: unknown) {
                 <button class="act" @click="cancelEdit">{{ t('rules.detail.cancel') }}</button>
                 <button class="act primary-line" :disabled="!canSaveEdit" @click="saveEdit(rule)">{{ t('rules.detail.save') }}</button>
               </div>
+              <p v-if="!editChanged" class="selection-page">{{ t('rules.selection.noChanges') }}</p>
             </div>
           </template>
 
           <template v-else>
+            <input
+              class="rule-check"
+              type="checkbox"
+              :checked="isTargetSelected(targetFor(rule))"
+              :aria-label="t('rules.selection.row', { id: rule.id })"
+              :disabled="busy"
+              @change="toggleRuleSelection(rule)"
+            >
             <button
               class="rule-grip"
               :aria-label="t('rules.reorder.gripLabel', { position: index + 1, total: visibleRows.length })"
-              :title="t('rules.reorder.gripTitle')"
+              :title="canReorderScope ? t('rules.reorder.gripTitle') : t('rules.selection.reorderBound')"
+              :disabled="!canReorderScope || busy"
               @keydown.up.prevent="moveRule(rule.id, -1)"
               @keydown.down.prevent="moveRule(rule.id, 1)"
               @click.stop
@@ -307,7 +626,7 @@ function isRollback(result: unknown) {
               </div>
             </div>
             <div class="rule-side">
-              <button class="act" @click="startEdit(rule)">{{ t('rules.detail.edit') }}</button>
+              <button class="act" :disabled="busy" @click="startEdit(rule)">{{ t('rules.detail.edit') }}</button>
               <button
                 class="toggle"
                 :class="{ on: rule.enabled }"
@@ -316,7 +635,7 @@ function isRollback(result: unknown) {
                 :aria-label="rule.enabled ? t('rules.detail.disable') : t('rules.detail.enable')"
                 :title="t('rules.detail.enableBody')"
                 :data-testid="`rule-enable-toggle-${rule.id}`"
-                :disabled="pending || isToggling"
+                :disabled="busy"
                 @click="toggleRule(rule)"
               >
                 <span class="sr-only">{{ rule.enabled ? t('rules.detail.enabled') : t('rules.detail.disabled') }}</span>
@@ -324,7 +643,7 @@ function isRollback(result: unknown) {
               <button
                 class="act danger"
                 :class="{ confirm: confirmingDeleteId === rule.id }"
-                :disabled="pending"
+                :disabled="busy"
                 @click="confirmDelete(rule)"
               >
                 {{ confirmingDeleteId === rule.id ? t('rules.detail.confirmDelete') : t('rules.detail.delete') }}
@@ -397,7 +716,7 @@ function isRollback(result: unknown) {
 .callout { display:flex; align-items:center; gap:9px; flex-wrap:wrap; padding:10px 12px; border-radius:var(--r-sm); font-size:var(--text-sm); }
 .callout.good { border:1px solid color-mix(in oklab,var(--class-live),transparent 65%); background:color-mix(in oklab,var(--class-live),transparent 92%); color:var(--fg-2); }
 .callout code { font-family:var(--font-mono); font-size:var(--text-xs); color:var(--fg); }
-.toolbar, .rule-editor-row, .modal-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.toolbar, .selection-actions, .bulk-actions, .rule-editor-row, .modal-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .scope-filter span, .field span, .scope-readonly span, .priority-preview span { display:block; margin-bottom:5px; color:var(--muted); font-size:var(--text-xs); font-weight:800; text-transform:uppercase; letter-spacing:.06em; }
 .fsel, .text { border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface-warm); color:var(--fg); font:inherit; }
 .fsel { min-height:34px; padding:0 10px; }
@@ -405,9 +724,24 @@ function isRollback(result: unknown) {
 .text.tall { min-height:170px; }
 .toolbar-count { color:var(--muted); font-size:var(--text-sm); }
 .spacer { flex:1; }
+.selection-panel, .operation-readbacks { display:grid; gap:9px; padding:11px 12px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface-warm); }
+.selection-summary { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; font-size:var(--text-sm); color:var(--fg-2); }
+.selection-summary strong { color:var(--fg); }
+.selection-count { color:var(--accent); font-weight:700; }
+.selection-page, .selection-warning { margin:0; font-size:var(--text-xs); color:var(--muted); }
+.selection-warning { color:var(--state-warn); }
+.bulk-actions { padding:10px 12px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); color:var(--fg-2); font-size:var(--text-sm); }
+.operation-readbacks { background:var(--surface); }
+.operation-readbacks strong { font-size:var(--text-sm); }
+.operation-readbacks ul { display:grid; gap:5px; margin:0; padding-left:18px; color:var(--fg-2); font-size:var(--text-xs); }
+.operation-readbacks li { display:flex; flex-wrap:wrap; gap:8px; align-items:baseline; }
+.mono-data, code { font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
 .rules-grid { overflow:hidden; border:1px solid var(--border); border-radius:var(--r-md); background:var(--bg); }
 .grid-h { padding:10px 14px; border-bottom:1px solid var(--border); color:var(--muted); font-size:var(--text-xs); font-weight:900; letter-spacing:.08em; text-transform:uppercase; }
-.rule-row { display:grid; grid-template-columns:30px 30px minmax(0,1fr) auto; gap:12px; align-items:center; min-height:64px; padding:12px 14px; border-bottom:1px solid var(--border-soft); transition:box-shadow var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard); }
+.rule-grid-header { display:flex; align-items:center; gap:10px; }
+.rule-grid-header input, .rule-check { inline-size:16px; block-size:16px; accent-color:var(--accent); }
+.rule-grid-header input:focus-visible, .rule-check:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.rule-row { display:grid; grid-template-columns:24px 30px 30px minmax(0,1fr) auto; gap:12px; align-items:center; min-height:64px; padding:12px 14px; border-bottom:1px solid var(--border-soft); transition:box-shadow var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard); }
 .rule-row:last-child { border-bottom:0; }
 .rule-row:hover { background:var(--surface-warm); }
 .rule-row.disabled-rule { opacity:.72; }
@@ -417,8 +751,9 @@ function isRollback(result: unknown) {
 .rule-row.drag-over-bottom { box-shadow:inset 0 -2px 0 var(--accent); }
 .rule-row.editing { grid-template-columns:1fr; align-items:stretch; background:color-mix(in oklab,var(--accent),transparent 92%); box-shadow:inset 3px 0 0 var(--accent); }
 .rule-grip { width:28px; height:32px; display:grid; place-items:center; border:0; border-radius:var(--r-sm); background:transparent; color:var(--muted); cursor:grab; font-size:18px; }
-.rule-grip:hover, .rule-grip:focus-visible { background:var(--surface-warm); color:var(--fg); outline:none; }
+.rule-grip:hover:not(:disabled), .rule-grip:focus-visible { background:var(--surface-warm); color:var(--fg); outline:none; }
 .rule-grip:active { cursor:grabbing; }
+.rule-grip:disabled { cursor:not-allowed; opacity:.45; }
 .rule-rank { width:28px; height:28px; display:grid; place-items:center; border-radius:var(--radius-pill); background:var(--surface-warm); color:var(--fg); font-family:var(--font-mono); font-size:var(--text-xs); font-variant-numeric:tabular-nums; }
 .rule-body { min-width:0; }
 .rule-preview { color:var(--fg); font-size:var(--text-sm); line-height:1.35; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -457,8 +792,21 @@ function isRollback(result: unknown) {
 .modal-actions { justify-content:flex-end; margin-top:16px; }
 @media (max-width:900px) {
   .head { flex-direction:column; }
-  .rule-row { grid-template-columns:28px 28px minmax(0,1fr); }
-  .rule-side { grid-column:3; justify-content:flex-start; flex-wrap:wrap; }
+  .rule-row { grid-template-columns:24px 28px 28px minmax(0,1fr); }
+  .rule-side { grid-column:4; justify-content:flex-start; flex-wrap:wrap; }
   .modal-row { grid-template-columns:1fr; }
+}
+@media (max-width:480px) {
+  .pane { padding:10px; }
+  .rule-row { grid-template-columns:24px 28px minmax(0,1fr); gap:8px; padding:11px 10px; }
+  .rule-rank { display:none; }
+  .rule-side { grid-column:3; }
+  .selection-actions > * { flex:1 1 132px; }
+}
+@media (pointer:coarse) {
+  .primary, .act, .tbtn { min-height:44px; }
+  .toggle { width:44px; height:28px; }
+  .toggle::after { top:5px; left:5px; width:16px; height:16px; }
+  .toggle.on::after { transform:translateX(16px); }
 }
 </style>

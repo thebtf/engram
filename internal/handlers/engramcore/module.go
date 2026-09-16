@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/module"
@@ -37,25 +38,61 @@ const moduleName = "engramcore"
 //   - module.EngramModule       — core lifecycle (Name/Init/Shutdown)
 //   - module.ProjectLifecycle   — session connect/disconnect logging
 //   - module.ProjectRemovalAware — clear slug cache on project removal
+//   - module.ToolProvider       — explicit V3 project registration
 //   - module.ProxyToolProvider  — dynamic tool set fetched from engram-server
 //
-// It deliberately does NOT implement module.ToolProvider because the engram
-// tool list is not knowable at compile time — the server returns a list via
-// the gRPC Initialize RPC, and the client has no static inventory of tool
-// metadata. FR-11a exists solely for this shape of module.
+// The static registration tool is intentionally separate from the server-owned
+// dynamic tool inventory: it is the only way an unbound V3 descriptor can
+// establish a binding. All ordinary proxy operations remain resolve-only.
 type Module struct {
-	pool  *grpcPool
-	cache *slugCache
-	deps  module.ModuleDeps
+	pool               *grpcPool
+	cache              *slugCache
+	advisorProofs      *advisorProofCache
+	v3ClientInstanceID string
+	deps               module.ModuleDeps
+
+	preparedIndexMu            sync.RWMutex
+	preparedIndex              PreparedIndexCollaborator
+	preparedIndexConfiguration *PreparedIndexConfiguration
+	shuttingDown               bool
 }
 
-// NewModule constructs an unstarted engramcore module. Call Init before
-// HandleTool / ProxyTools. This is the single entry point for the daemon
-// wiring in cmd/engram/main.go.
+var (
+	_ module.EngramModule        = (*Module)(nil)
+	_ module.ProjectLifecycle    = (*Module)(nil)
+	_ module.ProjectRemovalAware = (*Module)(nil)
+	_ module.ToolProvider        = (*Module)(nil)
+	_ module.ProxyToolProvider   = (*Module)(nil)
+)
+
+// NewModule constructs an unstarted V2-compatible engramcore module. Call Init
+// before HandleTool / ProxyTools.
 func NewModule() *Module {
+	return NewModuleWithClientInstanceID("")
+}
+
+// NewModuleWithClientInstanceID constructs a module that submits V3
+// descriptors for every scoped proxy operation. The client instance reference
+// is configured by daemon wiring; identity resolution never generates it.
+func NewModuleWithClientInstanceID(clientInstanceID string) *Module {
+	return newModule(clientInstanceID, nil)
+}
+
+// NewModuleWithPreparedIndexCollaborator constructs a module with the narrow
+// UCI server-binding/prepared-index seam. A nil collaborator still permits
+// server-authorized resolution and status proxying; only prepared local index
+// work returns SOURCE_UNAVAILABLE until a scanner owner is supplied.
+func NewModuleWithPreparedIndexCollaborator(clientInstanceID string, collaborator PreparedIndexCollaborator) *Module {
+	return newModule(clientInstanceID, collaborator)
+}
+
+func newModule(clientInstanceID string, collaborator PreparedIndexCollaborator) *Module {
 	return &Module{
-		pool:  &grpcPool{},
-		cache: &slugCache{},
+		pool:               &grpcPool{},
+		cache:              &slugCache{},
+		advisorProofs:      newAdvisorProofCache(),
+		v3ClientInstanceID: clientInstanceID,
+		preparedIndex:      collaborator,
 	}
 }
 
@@ -86,7 +123,11 @@ func (m *Module) Init(_ context.Context, deps module.ModuleDeps) error {
 // module is typically registered first so it drains last. Closing gRPC
 // connections is idempotent so concurrent Shutdown calls are safe.
 func (m *Module) Shutdown(_ context.Context) error {
+	m.preparedIndexMu.Lock()
+	m.shuttingDown = true
+	m.preparedIndexMu.Unlock()
 	m.pool.closeAll()
+	m.advisorProofs.clear()
 	if m.deps.Logger != nil {
 		m.deps.Logger.Info("engramcore module shut down")
 	}
@@ -100,9 +141,13 @@ func (m *Module) Shutdown(_ context.Context) error {
 // OnSessionConnect logs the first session for a project. Implements
 // module.ProjectLifecycle. Behaviour ported from engramHandler.OnProjectConnect.
 func (m *Module) OnSessionConnect(p muxcore.ProjectContext) {
-	// Trigger slug resolution eagerly so the first tools/call does not pay
-	// the git I/O cost. Ignore the return value — the cache owns it.
-	_ = m.cache.Resolve(context.Background(), p)
+	if m.v3ClientInstanceID == "" {
+		// V2 compatibility eagerly resolves the slug. V3 must not resolve or
+		// retain a selector before central resolution.
+		_ = m.cache.Resolve(context.Background(), p)
+	} else {
+		m.cache.Forget(p.ID)
+	}
 	if m.deps.Logger != nil {
 		m.deps.Logger.Info("session connected",
 			"project_id", p.ID,

@@ -12,58 +12,15 @@ import (
 
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/graph"
+	"github.com/thebtf/engram/internal/rankfusion"
 	"github.com/thebtf/engram/pkg/models"
 )
 
 // RRF performs Reciprocal Rank Fusion on two ranked result lists.
-// k is the RRF constant (typically 60).
-// Tie-breaking is deterministic: score desc → best source rank asc → ID asc.
+// It delegates to the cycle-free shared authority so storage-bound consumers
+// can reuse identical ordering without importing the retrieval orchestration.
 func RRF(listA, listB []int64, k int) []int64 {
-	if k <= 0 {
-		k = 60
-	}
-	scores := make(map[int64]float64)
-	// bestRank tracks the minimum (best) rank seen for each ID across both lists.
-	bestRank := make(map[int64]int)
-	initRank := func(id int64, rank int) {
-		if r, ok := bestRank[id]; !ok || rank < r {
-			bestRank[id] = rank
-		}
-	}
-	for rank, id := range listA {
-		scores[id] += 1.0 / float64(rank+k+1)
-		initRank(id, rank)
-	}
-	for rank, id := range listB {
-		scores[id] += 1.0 / float64(rank+k+1)
-		initRank(id, rank)
-	}
-
-	type scored struct {
-		id    int64
-		score float64
-		best  int
-	}
-	merged := make([]scored, 0, len(scores))
-	for id, s := range scores {
-		merged = append(merged, scored{id: id, score: s, best: bestRank[id]})
-	}
-	// Deterministic tie-breaker: score desc → best source rank asc → ID asc.
-	sort.Slice(merged, func(i, j int) bool {
-		if merged[i].score != merged[j].score {
-			return merged[i].score > merged[j].score
-		}
-		if merged[i].best != merged[j].best {
-			return merged[i].best < merged[j].best
-		}
-		return merged[i].id < merged[j].id
-	})
-
-	result := make([]int64, len(merged))
-	for i, s := range merged {
-		result[i] = s.id
-	}
-	return result
+	return rankfusion.RRF(listA, listB, k)
 }
 
 // MemoryStoreInterface is the minimal interface HybridSearch needs from the GORM memory store.

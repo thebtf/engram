@@ -10,6 +10,14 @@ definitions:
       status_code:
         type: integer
     type: object
+  github_com_thebtf_engram_internal_operability.ResultStatus:
+    enum:
+    - computed
+    - not_computable
+    type: string
+    x-enum-varnames:
+    - Computed
+    - NotComputable
   github_com_thebtf_engram_internal_reviewpacket.CandidateAuditPolicy:
     properties:
       action:
@@ -565,6 +573,8 @@ definitions:
         type: integer
       unrecorded_fraction:
         type: number
+      unrecorded_fraction_result_status:
+        $ref: '#/definitions/github_com_thebtf_engram_internal_operability.ResultStatus'
       unrecorded_sessions:
         type: integer
     type: object
@@ -692,6 +702,8 @@ definitions:
         type: integer
       noise_ratio:
         type: number
+      noise_ratio_result_status:
+        $ref: '#/definitions/github_com_thebtf_engram_internal_operability.ResultStatus'
       outcomes:
         $ref: '#/definitions/internal_worker.outcomeTelemetry'
       project_citation_rates:

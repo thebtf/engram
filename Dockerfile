@@ -65,8 +65,11 @@ RUN set -eu; \
 # Build the accepted CGO server. The ldd transcript is retained in the image as
 # auditable proof that every shared-library dependency resolves before the
 # binary crosses into the distroless runtime stage.
-RUN CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -tags fts5 \
- -ldflags "-X main.Version=${VERSION} -s -w" -o /out/engram-server ./cmd/engram-server \
+RUN SOURCE_COMMIT=""; \
+ source_candidate="${VERSION#sha-}"; \
+ if [ "$source_candidate" != "$VERSION" ] && printf '%s\n' "$source_candidate" | grep -Eq '^[0-9a-f]{40}$'; then SOURCE_COMMIT="$source_candidate"; fi; \
+ CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -tags fts5 \
+ -ldflags "-X main.Version=${VERSION} -X main.SourceCommit=${SOURCE_COMMIT} -s -w" -o /out/engram-server ./cmd/engram-server \
  && ldd /out/engram-server > /out/engram-server.ldd 2>&1 \
  && ! grep -q "not found" /out/engram-server.ldd \
  && grep -q "=>" /out/engram-server.ldd
@@ -79,7 +82,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
 
 # Build client-side binary for the existing release target.
 RUN CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -tags fts5 \
- -ldflags "-X main.Version=${VERSION} -X github.com/thebtf/engram/internal/version.Daemon=${VERSION} -s -w" \
+ -ldflags "-X main.Version=${VERSION} -s -w" \
  -o /out/engram ./cmd/engram
 
 # --- Server image ---

@@ -53,9 +53,9 @@ The list below is generated. Do not edit it by hand; run `go run ./tools/gen-dat
 <!-- BEGIN GENERATED TABLES -->
 Generated from `internal/db/gorm/migrations.go`.
 
-Migration count: **138**.
+Migration count: **152**.
 
-Live table count: **38**.
+Live table count: **68**.
 
 | Table | Creating migration |
 | --- | --- |
@@ -97,4 +97,34 @@ Live table count: **38**.
 | `agent_session_state` | `152_agent_state_plane` |
 | `attention_events` | `158_attention_events` |
 | `project_continuity_slots` | `161_project_continuity_slots` |
+| `task_memory_intervention_receipts` | `168_task_memory_intervention_receipts` |
+| `intervention_evidence_policies` | `169_intervention_evidence_policies` |
+| `ci_checkouts` | `171_uci_context_registry` |
+| `ci_profiles` | `171_uci_context_registry` |
+| `ci_views` | `171_uci_context_registry` |
+| `legacy_context_aliases` | `171_uci_context_registry` |
+| `sources` | `171_uci_context_registry` |
+| `space_sources` | `171_uci_context_registry` |
+| `spaces` | `171_uci_context_registry` |
+| `ci_analyses` | `172_uci_index_projection` |
+| `ci_blobs` | `172_uci_index_projection` |
+| `ci_chunk_embeddings` | `172_uci_index_projection` |
+| `ci_chunks` | `172_uci_index_projection` |
+| `ci_definitions` | `172_uci_index_projection` |
+| `ci_embedding_profiles` | `172_uci_index_projection` |
+| `ci_embeddings` | `172_uci_index_projection` |
+| `ci_jobs` | `172_uci_index_projection` |
+| `ci_memberships` | `172_uci_index_projection` |
+| `ci_parse_artifacts` | `172_uci_index_projection` |
+| `ci_reference_sites` | `172_uci_index_projection` |
+| `ci_resolved_edges` | `172_uci_index_projection` |
+| `uci_completion_evidence` | `172_uci_index_projection` |
+| `uci_exposures` | `172_uci_index_projection` |
+| `ci_index_build_parts` | `173_uci_fenced_publication` |
+| `browser_read_grants` | `176_browser_read_grants` |
+| `browser_tab_bindings` | `177_browser_tab_bindings` |
+| `collection_selections` | `178_collection_selections` |
+| `uci_index_intents` | `179_uci_index_intents` |
+| `uci_index_intent_receipts` | `180_uci_index_intent_delivery` |
+| `browser_code_search_continuations` | `181_browser_code_search_continuations` |
 <!-- END GENERATED TABLES -->

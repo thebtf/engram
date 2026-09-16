@@ -22,7 +22,7 @@ const {
 const projectArchiveTarget = ref('')
 const projectArchiveInput = ref('')
 const projectArchivePending = ref('')
-const projectArchiveError = ref('')
+const mutationResult = ref<Awaited<ReturnType<typeof deleteProject>> | null>(null)
 
 const selectedProjectRow = computed(() => projectRows.value.find((project) => project.id === selectedProject.value) || null)
 const sessionCountLabel = computed(() => t('projects.sessionsCount', sessions.length))
@@ -45,20 +45,17 @@ function toggleArchiveProject(project: string) {
 
   projectArchiveTarget.value = project
   projectArchiveInput.value = ''
-  projectArchiveError.value = ''
 }
 
 async function submitArchiveProject(project: string) {
   if (projectArchivePending.value || projectArchiveTarget.value !== project || projectArchiveInput.value !== project) return
 
   projectArchivePending.value = project
-  projectArchiveError.value = ''
   const result = await deleteProject(project)
   projectArchivePending.value = ''
-  if (result.kind === 'rollback') {
-    projectArchiveError.value = result.error.message
-    return
-  }
+  mutationResult.value = result
+  if (result.kind !== 'committed_verified') return
+  await refresh()
 
   projectArchiveTarget.value = ''
   projectArchiveInput.value = ''
@@ -68,7 +65,6 @@ function cancelArchiveProject() {
   if (projectArchivePending.value) return
   projectArchiveTarget.value = ''
   projectArchiveInput.value = ''
-  projectArchiveError.value = ''
 }
 
 function projectArchiveEndpoint(project: string) {
@@ -183,7 +179,7 @@ function projectArchiveEndpoint(project: string) {
                 {{ projectArchivePending === project.id ? t('projects.actions.archiving') : t('projects.actions.confirmArchive') }}
               </button>
             </div>
-            <p v-if="projectArchiveError" class="archive-error">{{ t('projects.archive.error', { message: projectArchiveError }) }}</p>
+            <MutationResultNotice :result="mutationResult" :recheck-label="t('projects.actions.refresh')" @recheck="refresh" />
           </div>
           </template>
         </div>

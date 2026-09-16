@@ -1,0 +1,260 @@
+package gorm
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
+	ucidomain "github.com/thebtf/engram/internal/uci"
+	gormlib "gorm.io/gorm"
+)
+
+func TestUCIContextStoreLoadIndexBindingFromAuthorizedView(t *testing.T) {
+	fixture := newUCIIndexBindingFixture(t, true)
+	selector := fixture.viewSelector(t)
+
+	binding, err := fixture.store.LoadIndexBinding(fixture.ctx, selector)
+	require.NoError(t, err)
+	require.NoError(t, binding.Validate())
+	require.NotNil(t, binding.Context)
+	require.Equal(t, fixture.source.SourceID, binding.Scope.SourceID)
+	require.Equal(t, fixture.checkout.CheckoutID, binding.Scope.CheckoutID)
+	require.Equal(t, fixture.checkout.IncarnationID, binding.Scope.IncarnationID)
+	require.Equal(t, fixture.profile.ProfileID, binding.ProfileID)
+	require.Equal(t, fixture.checkout.LocatorRef, binding.LocalRootID)
+	require.Equal(t, fixture.checkout.WorkstationID, binding.WorkstationID)
+	require.Equal(t, fixture.view.ViewID, binding.Context.ViewID)
+	require.Equal(t, fixture.view.Generation, binding.Context.Generation)
+	require.Equal(t, fixture.profile.ProfileID, binding.Context.AnalysisProfileID)
+	require.Equal(t, fixture.space.SpaceID, *binding.Context.SpaceID)
+
+	checkoutBinding, err := fixture.store.LoadIndexBinding(fixture.ctx, fixture.checkoutSelector(t, fixture.profile.ProfileID))
+	require.NoError(t, err)
+	require.NoError(t, checkoutBinding.Validate())
+	require.NotNil(t, checkoutBinding.Context)
+	require.Equal(t, fixture.view.ViewID, checkoutBinding.Context.ViewID)
+	require.Equal(t, fixture.view.Generation, checkoutBinding.Context.Generation)
+	require.Nil(t, checkoutBinding.Context.SpaceID, "checkout selection must not infer a Space from a path or label")
+	selectedRef, pinned := selector.Context()
+	require.True(t, pinned)
+	boundSpaceID := *binding.Context.SpaceID
+	*selectedRef.SpaceID = uuid.NewString()
+	replacement, err := ucidomain.ContextIndexBindingSelector(selectedRef)
+	require.NoError(t, err)
+	reloaded, err := fixture.store.LoadIndexBinding(fixture.ctx, replacement)
+	require.Error(t, err)
+	require.Nil(t, reloaded.Context)
+	require.Equal(t, boundSpaceID, *binding.Context.SpaceID, "binding must not retain caller-owned context pointers")
+
+	clone := binding.Clone()
+	require.NotSame(t, binding.Context, clone.Context)
+	require.NotSame(t, binding.Context.SpaceID, clone.Context.SpaceID)
+	*clone.Context.SpaceID = uuid.NewString()
+	require.Equal(t, boundSpaceID, *binding.Context.SpaceID, "binding clone must not mutate the returned binding")
+}
+
+func TestUCIContextStoreLoadIndexBindingForRegisteredCheckoutWithoutView(t *testing.T) {
+	fixture := newUCIIndexBindingFixture(t, false)
+
+	binding, err := fixture.store.LoadIndexBinding(fixture.ctx, fixture.checkoutSelector(t, fixture.profile.ProfileID))
+	require.NoError(t, err)
+	require.NoError(t, binding.Validate())
+	require.Nil(t, binding.Context, "a registered unindexed checkout has no current View rather than a lookup error")
+	require.Equal(t, fixture.source.SourceID, binding.Scope.SourceID)
+	require.Equal(t, fixture.checkout.CheckoutID, binding.Scope.CheckoutID)
+	require.Equal(t, fixture.checkout.IncarnationID, binding.Scope.IncarnationID)
+	require.Equal(t, fixture.profile.ProfileID, binding.ProfileID)
+	require.Equal(t, fixture.checkout.LocatorRef, binding.LocalRootID)
+	require.Equal(t, fixture.checkout.WorkstationID, binding.WorkstationID)
+}
+
+func TestUCIContextStoreLoadIndexBindingRejectsMismatches(t *testing.T) {
+	t.Run("wrong source", func(t *testing.T) {
+		fixture := newUCIIndexBindingFixture(t, true)
+		otherSource, err := fixture.store.CreateSource(fixture.ctx, CreateSourceInput{
+			AuthRealm:   fixture.realm,
+			Kind:        UCISourceDirectory,
+			DisplayName: "other-source-" + uuid.NewString(),
+		})
+		require.NoError(t, err)
+		ref, ok := fixture.viewSelector(t).Context()
+		require.True(t, ok)
+		ref.SourceID = otherSource.SourceID
+		selector, err := ucidomain.ContextIndexBindingSelector(ref)
+		require.NoError(t, err)
+
+		_, err = fixture.store.LoadIndexBinding(fixture.ctx, selector)
+		require.Error(t, err)
+	})
+
+	t.Run("wrong profile", func(t *testing.T) {
+		fixture := newUCIIndexBindingFixture(t, true)
+		otherProfile, err := fixture.store.CreateProfile(fixture.ctx, newUCIContextMigrationProfileInput(uuid.NewString()))
+		require.NoError(t, err)
+
+		_, err = fixture.store.LoadIndexBinding(fixture.ctx, fixture.checkoutSelector(t, otherProfile.ProfileID))
+		require.Error(t, err)
+	})
+
+	t.Run("inactive checkout", func(t *testing.T) {
+		fixture := newUCIIndexBindingFixture(t, true)
+		require.NoError(t, fixture.db.Model(&UCICheckout{}).
+			Where("checkout_id = ?", fixture.checkout.CheckoutID).
+			Update("state", UCICheckoutOffline).Error)
+
+		_, err := fixture.store.LoadIndexBinding(fixture.ctx, fixture.checkoutSelector(t, fixture.profile.ProfileID))
+		require.Error(t, err)
+	})
+
+	t.Run("cross realm space", func(t *testing.T) {
+		fixture := newUCIIndexBindingFixture(t, true)
+		otherSpace, err := fixture.store.CreateSpace(fixture.ctx, CreateSpaceInput{
+			AuthRealm:   "other-realm-" + uuid.NewString(),
+			DisplayName: "other-space-" + uuid.NewString(),
+		})
+		require.NoError(t, err)
+		ref, ok := fixture.viewSelector(t).Context()
+		require.True(t, ok)
+		ref.SpaceID = &otherSpace.SpaceID
+		selector, err := ucidomain.ContextIndexBindingSelector(ref)
+		require.NoError(t, err)
+
+		_, err = fixture.store.LoadIndexBinding(fixture.ctx, selector)
+		require.Error(t, err)
+	})
+}
+
+func TestUCIContextStoreReadAuthorizationTracksLivePublicationAuthority(t *testing.T) {
+	fixture := newUCIIndexBindingFixture(t, true)
+	selector := fixture.viewSelector(t)
+	ref, pinned := selector.Context()
+	require.True(t, pinned)
+	access := ucidomain.ContextAccess{
+		AuthRealm: fixture.realm, Principal: fixture.checkout.OwnerPrincipal,
+		SourceID: fixture.source.SourceID, CheckoutID: fixture.checkout.CheckoutID,
+	}
+
+	require.NoError(t, fixture.db.Model(&UCICheckout{}).Where("checkout_id = ?", fixture.checkout.CheckoutID).Update("state", UCICheckoutWatching).Error)
+	_, err := fixture.store.LoadContext(fixture.ctx, ref)
+	require.NoError(t, err)
+	require.NoError(t, NewUCIContextAuthorizer(fixture.store).AuthorizeContext(fixture.ctx, access))
+	listed, err := fixture.store.ListAuthorizedContexts(fixture.ctx, fixture.realm, fixture.checkout.OwnerPrincipal, 1)
+	require.NoError(t, err)
+	require.Equal(t, []ucidomain.ContextRef{{
+		SourceID: fixture.source.SourceID, CheckoutID: fixture.checkout.CheckoutID, ViewID: fixture.view.ViewID,
+		AnalysisProfileID: fixture.profile.ProfileID, Generation: fixture.view.Generation,
+	}}, listed)
+	bound, err := fixture.store.LoadIndexBinding(fixture.ctx, selector)
+	require.NoError(t, err)
+	require.NotNil(t, bound.Context)
+
+	require.NoError(t, fixture.db.Model(&UCISpace{}).Where("space_id = ?", fixture.space.SpaceID).Update("state", UCISpaceRetired).Error)
+	_, err = fixture.store.LoadContext(fixture.ctx, ref)
+	require.ErrorIs(t, err, errUCIContextCatalogNotFound)
+	_, err = fixture.store.LoadIndexBinding(fixture.ctx, selector)
+	require.Error(t, err)
+	require.NoError(t, NewUCIContextAuthorizer(fixture.store).AuthorizeContext(fixture.ctx, access), "space selection must not broaden or replace owner authorization")
+
+	require.NoError(t, fixture.db.Model(&UCISource{}).Where("source_id = ?", fixture.source.SourceID).Update("state", UCISourceOffline).Error)
+	_, err = fixture.store.LoadContext(fixture.ctx, ref)
+	require.ErrorIs(t, err, errUCIContextCatalogNotFound)
+	require.ErrorIs(t, NewUCIContextAuthorizer(fixture.store).AuthorizeContext(fixture.ctx, access), errUCIContextAuthorizationDenied)
+	listed, err = fixture.store.ListAuthorizedContexts(fixture.ctx, fixture.realm, fixture.checkout.OwnerPrincipal, 1)
+	require.NoError(t, err)
+	require.Empty(t, listed)
+}
+
+type uciIndexBindingFixture struct {
+	ctx      context.Context
+	db       *gormlib.DB
+	store    *UCIContextStore
+	realm    string
+	space    *UCISpace
+	source   *UCISource
+	checkout *UCICheckout
+	profile  *UCIAnalysisProfile
+	view     *UCIView
+}
+
+func newUCIIndexBindingFixture(t *testing.T, publishCurrentView bool) uciIndexBindingFixture {
+	t.Helper()
+	db, store := openUCIContextMigrationStore(t)
+	ctx := context.Background()
+	token := uuid.NewString()
+	realm := "uci-index-binding-realm-" + token
+
+	space, err := store.CreateSpace(ctx, CreateSpaceInput{AuthRealm: realm, DisplayName: "space-" + token})
+	require.NoError(t, err)
+	source, err := store.CreateSource(ctx, CreateSourceInput{AuthRealm: realm, Kind: UCISourceGit, DisplayName: "source-" + token})
+	require.NoError(t, err)
+	require.NoError(t, store.LinkSpaceSource(ctx, LinkSpaceSourceInput{SpaceID: space.SpaceID, SourceID: source.SourceID}))
+	checkout, err := store.RegisterCheckout(ctx, RegisterCheckoutInput{
+		SourceID:       source.SourceID,
+		WorkstationID:  "workstation-" + token,
+		Kind:           UCICheckoutWorkingTree,
+		OwnerPrincipal: "principal-" + token,
+		LocatorRef:     "opaque-local-root-" + token,
+	})
+	require.NoError(t, err)
+	profile, err := store.CreateProfile(ctx, newUCIContextMigrationProfileInput(token))
+	require.NoError(t, err)
+
+	fixture := uciIndexBindingFixture{
+		ctx:      ctx,
+		db:       db,
+		store:    store,
+		realm:    realm,
+		space:    space,
+		source:   source,
+		checkout: checkout,
+		profile:  profile,
+	}
+	if !publishCurrentView {
+		return fixture
+	}
+
+	view, err := store.CreateView(ctx, newUCIContextMigrationViewInput(checkout, profile, 1, token))
+	require.NoError(t, err)
+	publishedAt := time.Now().UTC()
+	require.NoError(t, db.Model(&UCIView{}).Where("view_id = ?", view.ViewID).Updates(map[string]any{
+		"state":        UCIViewPublished,
+		"published_at": publishedAt,
+	}).Error)
+	require.NoError(t, db.Model(&UCICheckout{}).Where("checkout_id = ?", checkout.CheckoutID).Update("current_view_id", view.ViewID).Error)
+	view.State = UCIViewPublished
+	view.PublishedAt = &publishedAt
+	checkout.CurrentViewID = &view.ViewID
+	fixture.view = view
+	return fixture
+}
+
+func (fixture uciIndexBindingFixture) viewSelector(t *testing.T) ucidomain.IndexBindingSelector {
+	t.Helper()
+	spaceID := fixture.space.SpaceID
+	selector, err := ucidomain.ContextIndexBindingSelector(ucidomain.ContextRef{
+		SpaceID:           &spaceID,
+		SourceID:          fixture.source.SourceID,
+		CheckoutID:        fixture.checkout.CheckoutID,
+		ViewID:            fixture.view.ViewID,
+		AnalysisProfileID: fixture.profile.ProfileID,
+		Generation:        fixture.view.Generation,
+	})
+	require.NoError(t, err)
+	return selector
+}
+
+func (fixture uciIndexBindingFixture) checkoutSelector(t *testing.T, profileID string) ucidomain.IndexBindingSelector {
+	t.Helper()
+	selector, err := ucidomain.CheckoutIndexBindingSelector(ucidomain.RegisteredCheckoutSelector{
+		Scope: ucidomain.IndexScope{
+			SourceID:      fixture.source.SourceID,
+			CheckoutID:    fixture.checkout.CheckoutID,
+			IncarnationID: fixture.checkout.IncarnationID,
+		},
+		ProfileID: profileID,
+	})
+	require.NoError(t, err)
+	return selector
+}

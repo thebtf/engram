@@ -85,6 +85,8 @@ func TestSecurityHeaders_OptionsReturns204(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/memory", nil)
 	req.Header.Set("Origin", "http://localhost:3000")
+	req.Header.Set("Access-Control-Request-Method", http.MethodPatch)
+	req.Header.Set("Access-Control-Request-Headers", "Content-Type, X-Engram-Request-ID, X-Engram-Tab-Binding-ID, X-Engram-Document-Proof")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -94,8 +96,14 @@ func TestSecurityHeaders_OptionsReturns204(t *testing.T) {
 	if rec.Header().Get("Access-Control-Allow-Origin") != "http://localhost:3000" {
 		t.Errorf("CORS origin not set for allowed OPTIONS origin")
 	}
-	if rec.Header().Get("Access-Control-Allow-Methods") == "" {
-		t.Error("Access-Control-Allow-Methods must be set for preflight")
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Errorf("Access-Control-Allow-Credentials = %q, want true", got)
+	}
+	if got, want := rec.Header().Get("Access-Control-Allow-Methods"), "GET, POST, PUT, PATCH, DELETE, OPTIONS"; got != want {
+		t.Errorf("Access-Control-Allow-Methods = %q, want %q", got, want)
+	}
+	if got, want := rec.Header().Get("Access-Control-Allow-Headers"), "Content-Type, X-Auth-Token, Authorization, X-Request-ID, X-Engram-Request-ID, X-Engram-Tab-Binding-ID, X-Engram-Document-Proof, "+comparisonAdapterHeaderV3; got != want {
+		t.Errorf("Access-Control-Allow-Headers = %q, want %q", got, want)
 	}
 }
 

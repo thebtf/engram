@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.49.0] - 2026-09-15
+
+### Added
+
+- **Unified Code Intelligence and Operator Console (#487).** Added multi-language, current-view, graph, and issue workflows.
+
+### Changed
+
+- **OpenClaw plugin 3.9.0.** Updated OpenClaw plugin release metadata for the changed plugin source.
+
+### Fixed
+
+- Hardened cross-platform UCI behavior and operator-console readiness.
+- Refreshed image, Go, and npm security inputs to zero HIGH/CRITICAL findings and pinned truthful image provenance.
+- Made the mandatory SonarQube release gate retain exact-input coverage evidence, bound scanner submission to resumable CE task identity, and expose bounded profile progress without weakening Quality Gate requirements.
+- Made SonarQube runner heartbeats follow parsed Go lifecycle progress, stream redacted test-event evidence during execution, bind Go package concurrency to each profile fingerprint, and add a base-only diagnostic coverage measurement that cannot project a full release gate.
+- Reverted the bounded SonarQube base `-p=2` experiment after run `ebc133e3...` exceeded its fixed 900-second profile budget at 901,283 ms; base now uses descriptor-bound `-p=1`, and profile budget expiry is retained as `timed_out` with an explicit budget reason.
+- Replaced the monolithic SonarQube base test with reusable first-party package race and bounded-coverage units, preserving dedicated-profile isolation while retaining successful unit evidence across sibling failures.
+- Made SonarQube retained skip evidence require a revalidated dedicated owner’s exact top-level test and terminal package pass, while preserving deferred base-unit execution and full nested test identities.
+- Made SonarQube coverage parsing fail closed on malformed atomic coverprofile blocks while retaining event-proven zero-coverable package units without fabricating coverage blocks.
+- Fixed document export cross-origin downloads, relay runtime and pre-6.49 installer compatibility, read-only registration and Authentik authorization, one-time Access secrets, and authoritative console mutation receipt refresh.
+
 ## [6.48.0] - 2026-08-18
 
 ### Added
@@ -1992,7 +2014,9 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.46.2...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.49.0...HEAD
+[6.49.0]: https://github.com/thebtf/engram/compare/v6.48.0...v6.49.0
+[6.48.0]: https://github.com/thebtf/engram/compare/v6.47.7...v6.48.0
 [6.46.2]: https://github.com/thebtf/engram/compare/v6.46.1...v6.46.2
 [6.46.1]: https://github.com/thebtf/engram/compare/v6.46.0...v6.46.1
 [6.46.0]: https://github.com/thebtf/engram/compare/v6.45.0...v6.46.0

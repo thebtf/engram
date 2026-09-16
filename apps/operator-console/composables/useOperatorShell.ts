@@ -25,6 +25,9 @@ interface ApiSelfcheck {
 
 interface ApiStatsVnext {
   noise_ratio?: number
+  embedding?: {
+    active_memory_count?: number
+  }
 }
 
 export interface ShellInfo {
@@ -43,6 +46,7 @@ export interface ShellInfo {
   identityInitials: string
   identityProvider: string
   backendStatus: 'ready' | 'degraded' | 'unavailable'
+  activeMemoryCount: number | null
 }
 
 function displayHost(base: string, configuredHost?: string): string {
@@ -69,6 +73,7 @@ function normalizeNoise(value?: number): string {
   if (typeof value !== 'number' || Number.isNaN(value)) return '-'
   return value.toFixed(2)
 }
+
 
 function preferKnownUptime(current: string, fallback?: string): string {
   return current && current !== '-' ? current : fallback || current || '-'
@@ -108,6 +113,7 @@ function initialShellInfo(): ShellInfo {
     identityInitials: 'EG',
     identityProvider: 'session',
     backendStatus: 'unavailable',
+    activeMemoryCount: null,
   }
 }
 
@@ -174,10 +180,18 @@ export function useOperatorShellStatus() {
     }
 
     if (vnextResult.status === 'fulfilled' && isLive(vnextResult.value)) {
-      next.noise = normalizeNoise(vnextResult.value.data.noise_ratio)
+      const stats = vnextResult.value.data
+      const activeMemoryCount = stats.embedding?.active_memory_count
+      next.noise = normalizeNoise(stats.noise_ratio)
+      next.activeMemoryCount = typeof activeMemoryCount === 'number'
+        && Number.isSafeInteger(activeMemoryCount)
+        && activeMemoryCount >= 0
+        ? activeMemoryCount
+        : null
     } else {
       failures.push('/api/stats/vnext')
     }
+
 
     const coreFailures = failures.filter((path) => path === '/api/selfcheck' || path === '/api/stats').length
     next.backendStatus = coreFailures === 2 ? 'unavailable' : failures.length ? 'degraded' : 'ready'

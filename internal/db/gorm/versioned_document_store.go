@@ -152,6 +152,16 @@ func (s *VersionedDocumentStore) ReadVersion(ctx context.Context, path, project 
 	return &doc, nil
 }
 
+// ReadByID returns one immutable document version by its database identity.
+// Returns gorm.ErrRecordNotFound if the selected version no longer exists.
+func (s *VersionedDocumentStore) ReadByID(ctx context.Context, id int64) (*VersionedDocument, error) {
+	var doc VersionedDocument
+	if err := s.db.WithContext(ctx).First(&doc, id).Error; err != nil {
+		return nil, fmt.Errorf("versioned_document_store: read document %d: %w", id, err)
+	}
+	return &doc, nil
+}
+
 // List returns the latest version of each distinct document path in a project.
 // Optional filters: docType (exact match), pathPrefix (LIKE prefix match).
 // limit <= 0 means no row limit.

@@ -1,0 +1,52 @@
+You are the fresh implementation session for Engram Architectural Recovery.
+
+Repository write scope: resolve the repository root from the active checkout through Git; verify
+that it contains the receipt's required relative marker, expected branch, and clean artifact receipt;
+treat the receipt's baseline head as provenance rather than an exact current-HEAD requirement; then
+obtain explicit operator authorization for that resolved root in the implementation session. The
+pipeline receipt binds artifacts but never authorizes a different checkout by itself. Write only
+under the explicitly authorized resolved root; a missing marker, incompatible artifact receipt, or
+absent root-specific authorization is a blocker. Do not modify live databases, deployed servers,
+OMP/user configuration, installed plugins, or other repositories. Do not begin until the operator
+explicitly authorizes implementation.
+
+Read, in order:
+1. .specify/memory/constitution.md
+2. specs/001-engram-architectural-recovery/spec.md
+3. specs/001-engram-architectural-recovery/research.md
+4. specs/001-engram-architectural-recovery/plan.md
+5. specs/001-engram-architectural-recovery/data-model.md
+6. specs/001-engram-architectural-recovery/contracts/
+7. specs/001-engram-architectural-recovery/quickstart.md
+8. specs/001-engram-architectural-recovery/evidence/
+9. specs/001-engram-architectural-recovery/analysis/fr-sc-task-traceability.md
+10. specs/001-engram-architectural-recovery/analysis/spec-kit-analysis-r6.md
+11. specs/001-engram-architectural-recovery/analysis/pipeline-receipt.json
+12. specs/001-engram-architectural-recovery/tasks.md
+13. specs/001-engram-architectural-recovery/IMPLEMENTATION-HANDOFF.md
+
+Before editing, re-derive current source and installed baseline facts. Existing .agent/specs,
+reports, flags, comments, and legacy plans are historical evidence, not authority.
+
+Execute only one release slice at a time, in AR-1 through AR-7 order, using exact task IDs and
+dependencies. Do not implement later-release work early. Each slice must use a bounded maker,
+independent checker, migration verifier where applicable, final release verifier, clean-main build,
+fixture/rollback proof, installed dogfood, observation receipt, and worktree housekeeping.
+
+Hard rules:
+- Canonical Project Identity V3 resolves before every scoped operation.
+- Durable evidence and ProcessingJob state precede provider processing.
+- Reconciliation precedes active knowledge; retrieval is task-aware, bounded, and exposure-recorded.
+- Outcome evidence is automatic where supported and epistemically honest.
+- No maturity-era flag remains as a target architecture mode.
+- Quarantine unsafe/unknown migration data; never guess a merge or widen privacy.
+- Treat projections as rebuildable and adjacent capabilities as separate native contracts.
+- Do not redesign ui/ or apps/operator-console/; only execute explicit honest-retirement/deletion tasks.
+- AR-4 needs a valid RecoveryAcceptancePolicy evidence objective before SC-005; AR-6 needs an
+  active render-budget policy before SC-010/static-context cutover.
+- AR-7 runs exact-head SonarQube, fixes all findings, reruns exact head to Quality Gate OK, then
+  runs fresh final proof on that frozen head. Any source change restarts those final gates.
+
+If a current fact contradicts the active contract, preserve evidence and repair/revalidate the
+owning Spec Kit artifact; do not patch around it. Implementation scope expansion, live production
+mutation, secrets, and destructive irreversible actions remain explicit operator boundaries.

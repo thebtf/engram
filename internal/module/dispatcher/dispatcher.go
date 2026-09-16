@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/module/obs"
 	"github.com/thebtf/engram/internal/module/registry"
@@ -50,6 +51,8 @@ type Dispatcher struct {
 	draining      atomic.Bool
 	tracked       sync.Map // projectID (string) → struct{} — active sessions per US4
 }
+
+var _ muxcore.SessionHandlerWithSessionMeta = (*Dispatcher)(nil)
 
 // New creates a Dispatcher bound to the given frozen registry and logger.
 // The registry MUST be frozen before the dispatcher processes any requests.
@@ -160,10 +163,24 @@ func (d *Dispatcher) HandleRequest(ctx context.Context, p muxcore.ProjectContext
 	case "tools/list":
 		return d.handleToolsList(ctx, p, &req)
 	case "tools/call":
+		if correlation, ok := auditcontext.NewUCIRequestCorrelation(req.ID); ok {
+			ctx = auditcontext.WithUCIRequestCorrelation(ctx, correlation)
+		}
 		return d.handleToolsCall(ctx, p, &req)
 	default:
 		return marshalError(req.ID, -32601, fmt.Sprintf("method not found: %s", req.Method)), nil
 	}
+}
+
+// HandleRequestWithSessionMeta attaches an authorized transport correlation
+// tag for downstream UCI calls. Invalid or unavailable tags are deliberately
+// omitted so UCI modules reject through their normal tool error path while
+// non-UCI tools retain their existing behavior.
+func (d *Dispatcher) HandleRequestWithSessionMeta(ctx context.Context, p muxcore.ProjectContext, meta muxcore.SessionMeta, request []byte) ([]byte, error) {
+	if meta.IsAuthorized() && auditcontext.ValidUCITransportSession(meta.TenantID) {
+		ctx = auditcontext.WithUCITransportSession(ctx, meta.TenantID)
+	}
+	return d.HandleRequest(ctx, p, request)
 }
 
 // ---------------------------------------------------------------------------

@@ -34,6 +34,9 @@ const (
 //  4. UPDATE last_heartbeat for every reported ID that is NOT yet soft-deleted.
 //  5. Return removed[], unknown[], and server_time_unix_ms.
 func (s *Server) SyncProjectState(ctx context.Context, req *pb.SyncProjectStateRequest) (*pb.SyncProjectStateResponse, error) {
+	if err := rejectHAPCredentialWithoutProject(ctx); err != nil {
+		return nil, err
+	}
 	if req.GetClientId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "client_id must not be empty")
 	}

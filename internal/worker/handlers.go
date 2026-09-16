@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/rs/zerolog/log"
 )
@@ -49,6 +50,36 @@ var observationTypeSet = func() map[string]struct{} {
 	}
 	return m
 }()
+
+var runtimeProvenance struct {
+	sync.RWMutex
+	sourceCommit string
+}
+
+// SetSourceCommit records the compile-time source revision for health readback.
+func SetSourceCommit(commit string) {
+	runtimeProvenance.Lock()
+	defer runtimeProvenance.Unlock()
+	runtimeProvenance.sourceCommit = validSourceCommit(commit)
+}
+
+func sourceCommit() string {
+	runtimeProvenance.RLock()
+	defer runtimeProvenance.RUnlock()
+	return runtimeProvenance.sourceCommit
+}
+
+func validSourceCommit(commit string) string {
+	if len(commit) != 40 {
+		return ""
+	}
+	for _, char := range commit {
+		if !(char >= '0' && char <= '9' || char >= 'a' && char <= 'f') {
+			return ""
+		}
+	}
+	return commit
+}
 
 // IsValidObservationType returns true when t is a recognised observation type.
 func IsValidObservationType(t string) bool {
@@ -130,8 +161,9 @@ func (s *Service) handleHealth(w http.ResponseWriter, r *http.Request) {
 		status = "error"
 	}
 	writeJSON(w, map[string]any{
-		"status":  status,
-		"version": s.version,
+		"status":        status,
+		"version":       s.version,
+		"source_commit": sourceCommit(),
 	})
 }
 
@@ -171,7 +203,8 @@ func acceptsHTML(header string) bool {
 // @Router /api/version [get]
 func (s *Service) handleVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{
-		"version": s.version,
+		"version":       s.version,
+		"source_commit": sourceCommit(),
 	})
 }
 
@@ -201,7 +234,7 @@ func (s *Service) requireReady(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.ready.Load() {
 			if err := s.GetInitError(); err != nil {
-				http.Error(w, "service initialization failed: "+err.Error(), http.StatusInternalServerError)
+				http.Error(w, "service initialization failed: "+err.Error(), http.StatusServiceUnavailable)
 				return
 			}
 			http.Error(w, "service initializing", http.StatusServiceUnavailable)

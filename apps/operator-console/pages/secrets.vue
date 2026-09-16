@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useOperatorSecrets, type OperatorCredential } from '../composables/useOperatorSecrets'
+import type { MutationResult } from '../composables/useApi'
 
 const { t } = useI18n()
 const {
@@ -26,6 +27,7 @@ const revealed = ref<{ id: string; value: string } | null>(null)
 const createName = ref('')
 const createProject = ref('engram')
 const createValue = ref('')
+const mutationResult = ref<MutationResult | null>(null)
 let fpTimer: ReturnType<typeof setTimeout> | null = null
 
 const selected = computed(() => creds.find((cred) => cred.id === openedName.value) || null)
@@ -70,14 +72,17 @@ function hideSecret(id: string) {
 
 async function createSecret() {
   if (!canCreate.value) return
-  await runCreateSecret({
+  const result = await runCreateSecret({
     name: createName.value.trim(),
     value: createValue.value,
     project: createProject.value.trim(),
     scope: 'project',
   })
+  mutationResult.value = result
+  if (result.kind !== 'committed_verified') return
   createName.value = ''
   createValue.value = ''
+  await refresh()
 }
 
 async function deleteOpened() {
@@ -88,10 +93,13 @@ async function deleteOpened() {
   }
 
   const cred = selected.value
+  const result = await deleteSecret(cred)
+  mutationResult.value = result
+  if (result.kind !== 'committed_verified') return
   openedName.value = null
   deleteConfirm.value = false
   hideSecret(cred.id)
-  await deleteSecret(cred)
+  await refresh()
 }
 
 async function requestDelete(cred: OperatorCredential) {
@@ -104,7 +112,9 @@ async function requestDelete(cred: OperatorCredential) {
 }
 
 async function cleanupOrphans() {
-  await runCleanupOrphans()
+  const result = await runCleanupOrphans()
+  mutationResult.value = result
+  if (result.kind === 'committed_verified') await refresh()
 }
 </script>
 
@@ -121,6 +131,7 @@ async function cleanupOrphans() {
       <span v-else-if="loadState.kind === 'empty'">{{ t('secrets.state.empty') }}</span>
       <button v-if="error" class="tbtn" @click="refresh">{{ t('secrets.state.retry') }}</button>
     </section>
+    <MutationResultNotice :result="mutationResult" :recheck-label="t('secrets.state.retry')" @recheck="refresh" />
 
     <section class="vault-status">
       <div class="section-head">

@@ -7,6 +7,7 @@
 
 import { z } from 'zod';
 import { Type } from '@sinclair/typebox';
+import { isOutcomeRetirement } from '../client.js';
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { quotedPromptScalar } from '../context/formatter.js';
@@ -54,13 +55,17 @@ export function createEngramOutcomeTool(
         return 'Cannot record outcome — no session ID available';
       }
 
-      const success = await client.setSessionOutcome(
+      const result = await client.setSessionOutcome(
         claudeSessionId,
         parsed.data.outcome,
         parsed.data.reason,
       );
 
-      return success
+      if (isOutcomeRetirement(result)) {
+        return `Session outcome callback retired: contract_version=${result.contract_version} code=${result.code} action=${result.action}`;
+      }
+
+      return result
         ? `Session outcome recorded: ${quotedPromptScalar(parsed.data.outcome)}${parsed.data.reason ? ` reason=${quotedPromptScalar(parsed.data.reason)}` : ''}`
         : 'Failed to record session outcome';
     },

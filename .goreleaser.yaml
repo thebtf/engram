@@ -27,6 +27,7 @@ builds:
     ldflags:
       - -s -w
       - -X main.Version={{.Version}}
+      - -X main.SourceCommit={{.Commit}}
     goos:
       - darwin
       - linux
@@ -98,6 +99,9 @@ archives:
         dst: .
         strip_parent: true
       - src: plugin/engram/extensions/engram-memory.mjs
+        dst: extensions
+        strip_parent: true
+      - src: plugin/engram/extensions/legacy-relay.mjs
         dst: extensions
         strip_parent: true
       - src: plugin/engram/hooks/*.js

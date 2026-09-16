@@ -6,7 +6,7 @@
  * and tracks utility signals for injected observations.
  */
 
-import { resolveAndRegisterProject } from '../client.js';
+import { isOutcomeRetirement, resolveAndRegisterProject } from '../client.js';
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { normalizeEngramContent } from './content.js';
@@ -122,7 +122,11 @@ export async function handleSessionEnd(
     void (async () => {
       try {
         const { outcome, reason } = detectOutcome(messages);
-        await client.setSessionOutcome(sessionId, outcome, reason);
+        const result = await client.setSessionOutcome(sessionId, outcome, reason);
+        if (isOutcomeRetirement(result)) {
+          (logger ?? console).warn(`[engram] session-end: outcome callback retired: contract_version=${result.contract_version} code=${result.code} action=${result.action}`);
+          return;
+        }
         (logger ?? console).warn(`[engram] session-end: outcome=${outcome} (${reason})`);
       } catch (err) {
         (logger ?? console).error('[engram] session-end outcome error:', err);

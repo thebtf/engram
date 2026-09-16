@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -76,7 +77,7 @@ func ValidateProjectIdentityV2(identity ProjectIdentityV2) error {
 		if identity.GitRemote == "" || len(identity.GitRemote) > 2048 {
 			return invalid("git_remote is required and bounded")
 		}
-		if strings.TrimSpace(identity.GitRemote) != identity.GitRemote || containsProjectIdentityControl(identity.GitRemote) {
+		if strings.TrimSpace(identity.GitRemote) != identity.GitRemote || containsProjectIdentityControl(identity.GitRemote) || gitRemoteHasUserinfo(identity.GitRemote) {
 			return invalid("git_remote is not normalized")
 		}
 		if identity.NonGitAnchor != "" || identity.AnchorShared != nil {
@@ -393,7 +394,10 @@ func getGitInfo(ctx context.Context, cwd string) (remoteURL, relativePath string
 		}
 		return "", "", err
 	}
-	remoteURL = strings.TrimSpace(rawRemote)
+	remoteURL, err = normalizeGitRemote(strings.TrimSpace(rawRemote))
+	if err != nil {
+		return "", "", err
+	}
 	if remoteURL == "" {
 		return "", "", errGitIdentityAbsent
 	}
@@ -405,6 +409,51 @@ func getGitInfo(ctx context.Context, cwd string) (remoteURL, relativePath string
 	relativePath = strings.TrimSpace(rawPrefix)
 
 	return remoteURL, relativePath, nil
+}
+
+func normalizeGitRemote(value string) (string, error) {
+	if !gitRemoteHasUserinfo(value) {
+		return value, nil
+	}
+	remoteURL, err := url.Parse(value)
+	if err != nil {
+		return "", errors.New("git remote URL is malformed")
+	}
+	remoteURL.User = nil
+	return remoteURL.String(), nil
+}
+
+func gitRemoteHasUserinfo(value string) bool {
+	authority, ok := gitRemoteAuthority(value)
+	return ok && strings.Contains(authority, "@")
+}
+
+func gitRemoteAuthority(value string) (string, bool) {
+	if strings.HasPrefix(value, "//") {
+		value = value[2:]
+	} else {
+		schemeEnd := strings.Index(value, "://")
+		if schemeEnd <= 0 || !isURLScheme(value[:schemeEnd]) {
+			return "", false
+		}
+		value = value[schemeEnd+3:]
+	}
+	if end := strings.IndexAny(value, "/?#"); end >= 0 {
+		value = value[:end]
+	}
+	return value, true
+}
+
+func isURLScheme(value string) bool {
+	for i := range len(value) {
+		char := value[i]
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' ||
+			i > 0 && (char >= '0' && char <= '9' || char == '+' || char == '-' || char == '.') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func isMissingGitIdentityError(err error) bool {

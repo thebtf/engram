@@ -68,6 +68,18 @@ require_node() {
     fi
 }
 
+# Releases before v6.49.0 did not ship the relay helper. Invalid tags fail
+# closed by requiring it, while historical release lines remain installable.
+relay_helper_required() {
+    local version="${1#v}"
+    if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.([0]|[1-9][0-9]*)\.([0]|[1-9][0-9]*)(-(0|[1-9A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9A-Za-z-][0-9A-Za-z-]*))*)?$ ]]; then
+        return 0
+    fi
+    local major="${BASH_REMATCH[1]}"
+    local minor="${BASH_REMATCH[2]}"
+    (( major > 6 || (major == 6 && minor >= 49) ))
+}
+
 # ---------------------------------------------------------------------------
 # Platform detection
 # ---------------------------------------------------------------------------
@@ -178,6 +190,12 @@ download_release() {
         || error "Release archive is missing required OMP package.json"
     [[ -f "$tmp_dir/extensions/engram-memory.mjs" ]] \
         || error "Release archive is missing required OMP extension"
+    if [[ ! -f "$tmp_dir/extensions/legacy-relay.mjs" ]]; then
+        if relay_helper_required "$version"; then
+            error "Release archive is missing required OMP relay helper"
+        fi
+        warn "Release archive predates the OMP relay helper; continuing without it"
+    fi
     # This validator is part of the trusted installer, not the release archive.
     # A release payload must never be allowed to validate its own policy.
     node - "$tmp_dir/bootstrap-targets.json" "${version#v}" <<'NODE' \
@@ -283,6 +301,10 @@ NODE
         || error "Failed to copy OMP package manifest from release archive"
     cp "$tmp_dir/extensions/engram-memory.mjs" "$INSTALL_DIR/extensions/" \
         || error "Failed to copy OMP extension from release archive"
+    if [[ -f "$tmp_dir/extensions/legacy-relay.mjs" ]]; then
+        cp "$tmp_dir/extensions/legacy-relay.mjs" "$INSTALL_DIR/extensions/" \
+            || error "Failed to copy OMP relay helper from release archive"
+    fi
 
     cp "$tmp_dir/.claude-plugin/"* "$INSTALL_DIR/.claude-plugin/"
 

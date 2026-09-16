@@ -1,20 +1,28 @@
 import type { ComputedRef, Ref } from 'vue'
 import { computed } from 'vue'
+import { executeMutation, type MutationCurrentStateParser, type MutationResult } from './useApi'
 import {
   endpointEvidence,
   errorState,
   liveState,
+  operatorApiUrl,
   operatorFetchJson,
   pendingState,
-  runOperatorMutation,
   toOperatorSourceError,
   type OperatorLoadState,
-  type OperatorMutationResult,
   type OperatorSourceError,
 } from './useOperatorApi'
 
 const ACCESS_BASE = '/api/access'
 const ACCESS_LIMIT = 100
+function submitMutation<TIntent>(action: string, intent: TIntent, path: string, init: RequestInit): Promise<MutationResult<TIntent>> {
+  return executeMutation(
+    { requestId: crypto.randomUUID(), action, intent },
+    fetch(operatorApiUrl(path), { ...init, credentials: 'include' }),
+    () => undefined,
+  )
+}
+
 
 interface ApiAccessProvider {
   id: string
@@ -121,18 +129,6 @@ interface ApiAccessDrilldown {
   audit: ApiAccessAuditEntry[]
 }
 
-interface ApiAccessCreateInvitationResponse {
-  invitation: ApiAccessInvitation
-}
-
-interface ApiAccessUpdateUserResponse {
-  user: ApiAccessUser
-}
-
-interface ApiAccessMutationReceipt {
-  status: string
-  id: string | number
-}
 
 export interface OperatorAccessProvider {
   id: string
@@ -236,6 +232,29 @@ export interface AccessCreateInvitationInput {
 export interface AccessUpdateUserInput {
   role?: string
   disabled?: boolean
+}
+
+export interface OperatorInvitationCreateReceipt {
+  code: string
+}
+
+export function createInvitationCurrentStateParser(input: AccessCreateInvitationInput): MutationCurrentStateParser<OperatorInvitationCreateReceipt> {
+  return (value) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+    const invitation = Reflect.get(value, 'invitation')
+    if (typeof invitation !== 'object' || invitation === null || Array.isArray(invitation)) return undefined
+    const id = Reflect.get(invitation, 'id')
+    const code = Reflect.get(invitation, 'code')
+    const email = Reflect.get(invitation, 'email')
+    const role = Reflect.get(invitation, 'role')
+    const status = Reflect.get(invitation, 'status')
+    if (
+      typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0
+      || typeof code !== 'string' || !/^[a-f0-9]{64}$/.test(code)
+      || email !== input.email || role !== input.role || status !== 'pending'
+    ) return undefined
+    return { code }
+  }
 }
 
 function jsonInit(method: 'POST' | 'PATCH', body?: unknown): RequestInit {
@@ -390,10 +409,10 @@ export interface OperatorAccessComposable {
   refresh: () => Promise<void>
   openUser: (userID: number) => Promise<void>
   closeUser: () => void
-  createInvitation: (input: AccessCreateInvitationInput) => Promise<OperatorMutationResult<ApiAccessCreateInvitationResponse>>
-  revokeInvitation: (invitationID: number, reason?: string) => Promise<OperatorMutationResult<ApiAccessMutationReceipt>>
-  updateUser: (userID: number, input: AccessUpdateUserInput) => Promise<OperatorMutationResult<ApiAccessUpdateUserResponse>>
-  revokeSession: (sessionID: string, reason?: string) => Promise<OperatorMutationResult<ApiAccessMutationReceipt>>
+  createInvitation: (input: AccessCreateInvitationInput) => Promise<MutationResult<AccessCreateInvitationInput, OperatorInvitationCreateReceipt>>
+  revokeInvitation: (invitationID: number, reason?: string) => Promise<MutationResult<{ invitationID: number; reason: string }>>
+  updateUser: (userID: number, input: AccessUpdateUserInput) => Promise<MutationResult<{ userID: number; input: AccessUpdateUserInput }>>
+  revokeSession: (sessionID: string, reason?: string) => Promise<MutationResult<{ sessionID: string; reason: string }>>
 }
 
 export function useOperatorAccess(): OperatorAccessComposable {
@@ -526,53 +545,26 @@ export function useOperatorAccess(): OperatorAccessComposable {
   }
 
   function createInvitation(input: AccessCreateInvitationInput) {
-    return runOperatorMutation<ApiAccessCreateInvitationResponse>({
-      action: 'access-create-invitation',
-      evidence: endpointEvidence(`${ACCESS_BASE}/invitations`, 'access-create-invitation'),
-      run: () => operatorFetchJson<ApiAccessCreateInvitationResponse>(`${ACCESS_BASE}/invitations`, jsonInit('POST', {
-        email: input.email,
-        role: input.role,
-        expires_in_hours: input.expiresInHours,
-      }), 'access-create-invitation'),
-      refresh,
-    })
+    return executeMutation(
+      { requestId: crypto.randomUUID(), action: 'access-create-invitation', intent: input },
+      fetch(operatorApiUrl(`${ACCESS_BASE}/invitations`), {
+        ...jsonInit('POST', { email: input.email, role: input.role, expires_in_hours: input.expiresInHours }),
+        credentials: 'include',
+      }),
+      createInvitationCurrentStateParser(input),
+    )
   }
 
   function revokeInvitation(invitationID: number, reason = 'operator revoked invitation') {
-    return runOperatorMutation<ApiAccessMutationReceipt>({
-      action: 'access-revoke-invitation',
-      evidence: endpointEvidence(`${ACCESS_BASE}/invitations/${invitationID}/revoke`, 'access-revoke-invitation'),
-      run: () => operatorFetchJson<ApiAccessMutationReceipt>(`${ACCESS_BASE}/invitations/${encodeURIComponent(String(invitationID))}/revoke`, jsonInit('POST', { reason }), 'access-revoke-invitation'),
-      refresh,
-    })
+    return submitMutation('access-revoke-invitation', { invitationID, reason }, `${ACCESS_BASE}/invitations/${encodeURIComponent(String(invitationID))}/revoke`, jsonInit('POST', { reason }))
   }
 
   function updateUser(userID: number, input: AccessUpdateUserInput) {
-    return runOperatorMutation<ApiAccessUpdateUserResponse>({
-      action: 'access-update-user',
-      evidence: endpointEvidence(`${ACCESS_BASE}/users/${userID}`, 'access-update-user'),
-      run: () => operatorFetchJson<ApiAccessUpdateUserResponse>(`${ACCESS_BASE}/users/${encodeURIComponent(String(userID))}`, jsonInit('PATCH', input), 'access-update-user'),
-      refresh: async () => {
-        await refresh()
-        if (selectedUserID.value === userID) {
-          await openUser(userID)
-        }
-      },
-    })
+    return submitMutation('access-update-user', { userID, input }, `${ACCESS_BASE}/users/${encodeURIComponent(String(userID))}`, jsonInit('PATCH', input))
   }
 
   function revokeSession(sessionID: string, reason = 'operator revoked session') {
-    return runOperatorMutation<ApiAccessMutationReceipt>({
-      action: 'access-revoke-session',
-      evidence: endpointEvidence(`${ACCESS_BASE}/sessions/${sessionID}/revoke`, 'access-revoke-session'),
-      run: () => operatorFetchJson<ApiAccessMutationReceipt>(`${ACCESS_BASE}/sessions/${encodeURIComponent(sessionID)}/revoke`, jsonInit('POST', { reason }), 'access-revoke-session'),
-      refresh: async () => {
-        await refresh()
-        if (selectedUserID.value) {
-          await openUser(selectedUserID.value)
-        }
-      },
-    })
+    return submitMutation('access-revoke-session', { sessionID, reason }, `${ACCESS_BASE}/sessions/${encodeURIComponent(sessionID)}/revoke`, jsonInit('POST', { reason }))
   }
 
   startOnce('access-page', refresh)

@@ -297,12 +297,13 @@ async function runFindPath() {
 
     <section class="graph-brief">
       <article class="metric">
-        <span>{{ t('graphPage.metrics.nodes') }}</span>
+        <span>{{ t('graphPage.metrics.loadedNodes') }}</span>
         <b>{{ graphDisabled ? '—' : nodes.length }}</b>
       </article>
       <article class="metric">
-        <span>{{ t('graphPage.metrics.edges') }}</span>
+        <span>{{ t('graphPage.metrics.loadedEdges') }}</span>
         <b>{{ graphDisabled ? '—' : connectedEdges.length }}</b>
+
       </article>
       <article class="metric">
         <span>{{ t('graphPage.metrics.selectedDegree') }}</span>

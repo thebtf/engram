@@ -4,9 +4,10 @@ const os = require('node:os');
 const test = require('node:test');
 const crypto = require('crypto');
 const path = require('path');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 
 const lib = require('./lib');
+const NODE_CHILD_TIMEOUT_MS = process.platform === 'win32' ? 10000 : 2000;
 
 test('assertSupportedNodeVersion requires a canonical Node 18+ version', () => {
  for (const version of ['16.20.2', '17.9.1', '018.0.0', '18.00.00', '18', '18.0', 'node-18.0.0', '18.0.0-beta']) {
@@ -422,7 +423,10 @@ const RUNTIME_CONFIG_ENV_KEYS = [
  'ENGRAM_URL', 'ENGRAM_SERVER_URL', 'CLAUDE_PLUGIN_OPTION_server_url',
  'CLAUDE_PLUGIN_OPTION_SERVER_URL', 'ENGRAM_CLAUDE_USERCONFIG_URL',
  'ENGRAM_TOKEN', 'CLAUDE_PLUGIN_OPTION_api_token', 'CLAUDE_PLUGIN_OPTION_API_TOKEN',
- 'ENGRAM_CLAUDE_USERCONFIG_TOKEN', ...QUIET_ENV_ALIASES,
+ 'ENGRAM_CLAUDE_USERCONFIG_TOKEN',
+ 'ENGRAM_CLIENT_INSTANCE_ID', 'CLAUDE_PLUGIN_OPTION_client_instance_id',
+ 'CLAUDE_PLUGIN_OPTION_CLIENT_INSTANCE_ID', 'ENGRAM_CLAUDE_USERCONFIG_CLIENT_INSTANCE_ID',
+ ...QUIET_ENV_ALIASES,
 ];
 
 function setRuntimeConfigEnv(t, values) {
@@ -519,6 +523,50 @@ test('explicit falsey quiet env overrides config-file quiet:true', (t) => {
   ENGRAM_QUIET: '0',
  }), 'false', 'ENGRAM_QUIET=0 must override config-file quiet:true');
 });
+
+test('getEngramConfig resolves the explicit non-secret client instance ID', (t) => {
+ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-client-instance-config-'));
+ const configFile = path.join(dir, 'config.json');
+ fs.writeFileSync(configFile, JSON.stringify({
+  server_url: 'http://config.example.test',
+  api_token: 'config-token',
+  client_instance_id: 'config-install-alpha',
+ }));
+ t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+ setRuntimeConfigEnv(t, {
+  ENGRAM_CONFIG_FILE: configFile,
+  ENGRAM_URL: 'http://env.example.test',
+  ENGRAM_TOKEN: 'env-token',
+ });
+
+ assert.deepEqual(lib.getEngramConfig(), {
+  serverURL: 'http://env.example.test', token: 'env-token', clientInstanceID: 'config-install-alpha',
+ });
+ process.env.ENGRAM_CLIENT_INSTANCE_ID = 'env-install-alpha';
+ assert.deepEqual(lib.getEngramConfig(), {
+  serverURL: 'http://env.example.test', token: 'env-token', clientInstanceID: 'env-install-alpha',
+ });
+});
+test('config readers preserve raw V3 client IDs while normalizing URL and token', async (t) => {
+ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-raw-client-instance-config-'));
+ const configFile = path.join(dir, 'config.json');
+ t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+ fs.writeFileSync(configFile, JSON.stringify({
+  server_url: ' https://config.example.test/root ',
+  api_token: ' config-token ',
+  client_instance_id: ' hook-install-alpha ',
+ }));
+
+ const expected = {
+  server_url: 'https://config.example.test/root',
+  api_token: 'config-token',
+  client_instance_id: ' hook-install-alpha ',
+  quiet: undefined,
+ };
+ assert.deepEqual(lib.readEngramConfigFile(configFile), expected);
+ assert.deepEqual(await lib.readEngramConfigFileAsync(configFile), expected);
+});
+
 
 test('resolveEngramRuntimeConfig independently overlays env credentials with one async config read', async (t) => {
  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-runtime-config-'));
@@ -821,6 +869,26 @@ test('requestPost uses per-request credentials without promoting them to env', a
  assert.equal(process.env.ENGRAM_TOKEN, undefined);
 });
 
+test('requestPost marks hook attempts and reuses a valid retry ID', async (t) => {
+ const originalFetch = global.fetch;
+ const headers = [];
+ global.fetch = async (_url, init) => {
+  headers.push(init.headers);
+  return { ok: true, text: async () => '{}' };
+ };
+ t.after(() => { global.fetch = originalFetch; });
+
+ const retry = { requestID: 'hook-retry-attempt-17' };
+ await lib.requestPost('/api/context/inject', {}, 10, retry);
+ await lib.requestPost('/api/context/inject', {}, 10, retry);
+ await lib.requestPost('/api/context/inject', {}, 10, { requestID: 'https://fixture-user:fixture-credential@example.invalid/private/request' });
+
+ assert.equal(headers[0]['X-Engram-Project-Identity-Adapter'], 'hook');
+ assert.equal(headers[0]['X-Request-ID'], retry.requestID);
+ assert.equal(headers[1]['X-Request-ID'], retry.requestID);
+ assert.match(headers[2]['X-Request-ID'], /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+});
+
 test('requestPost removes its relay listener after an aborted request', async (t) => {
  const originalFetch = global.fetch;
  const controller = new AbortController();
@@ -864,12 +932,12 @@ test('registerProjectIdentityV2 passes options to custom requests and mutates on
  };
 
  await assert.rejects(
-  () => lib.registerProjectIdentityV2(context, requestFn, requestOptions),
+  () => lib.registerProjectIdentity(context, requestFn, requestOptions),
   /PROJECT_IDENTITY_UNAVAILABLE/,
  );
  assert.equal(context.Project, 'legacy-selector');
 
- await lib.registerProjectIdentityV2(context, requestFn, requestOptions);
+ await lib.registerProjectIdentity(context, requestFn, requestOptions);
 
  assert.equal(context.Project, 'canonical-v2');
  assert.equal(calls.length, 2);
@@ -898,7 +966,7 @@ test('registerProjectIdentityV2 does not mutate context after a late abort', asy
  const controller = new AbortController();
 
  await assert.rejects(
-  () => lib.registerProjectIdentityV2(context, async () => {
+  () => lib.registerProjectIdentity(context, async () => {
    controller.abort();
    return { canonical_project: 'canonical-v2' };
   }, { signal: controller.signal }),
@@ -906,6 +974,423 @@ test('registerProjectIdentityV2 does not mutate context after a late abort', asy
  );
 
  assert.equal(context.Project, 'legacy-selector');
+});
+
+test('V3 registration builds and sends only the shared descriptor', async (t) => {
+ const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-v3-registration-'));
+ t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+ execFileSync('git', ['init', '--quiet', repo]);
+ fs.writeFileSync(path.join(repo, '.engram-project'), JSON.stringify({
+  version: 3,
+  project_id: '11111111-1111-4111-8111-111111111111',
+  name: 'hook-v3',
+  scope: 'repository',
+ }));
+ execFileSync('git', ['-C', repo, 'add', '.engram-project']);
+ assert.equal(
+  execFileSync('git', ['-C', repo, 'ls-files', '--error-unmatch', '--', '.engram-project'], { encoding: 'utf8' }).trim(),
+  '.engram-project',
+ );
+ execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://git.example.test/Platform/Hook.git']);
+
+ const descriptor = lib.resolveHookProjectDescriptorV3(repo, 'hook-install-alpha');
+ const context = { Project: 'local-selector', ProjectDescriptorV3: descriptor };
+ const calls = [];
+ await lib.registerProjectIdentity(context, async (_method, endpoint, body) => {
+  calls.push({ endpoint, body });
+  return {
+   project_resolution_v3: {
+    outcome: 'PROJECT_RESOLVED',
+    correlation: 'hook-v3-correlation',
+    project_key: '22222222-2222-4222-8222-222222222222',
+    resolved_scope: 'repository',
+   }
+  };
+ });
+
+ assert.equal(calls.length, 1);
+ assert.equal(calls[0].endpoint, '/api/context/inject');
+ assert.equal(calls[0].body.identity_only, true);
+ assert.deepEqual(calls[0].body.project_descriptor, descriptor);
+ assert.equal(Object.hasOwn(calls[0].body, 'project'), false);
+ assert.equal(Object.hasOwn(calls[0].body, 'legacy_project'), false);
+ assert.equal(context.Project, '22222222-2222-4222-8222-222222222222');
+});
+
+test('Hook V3 sends a selected non-Git directory descriptor to registration and session start', async (t) => {
+ const { handleSessionStart, buildCachedSessionStartPayload } = require('./session-start');
+ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-v3-directory-'));
+ const dataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-v3-directory-data-'));
+ t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+ t.after(() => fs.rmSync(dataDirectory, { recursive: true, force: true }));
+ fs.writeFileSync(path.join(directory, '.engram-project'), JSON.stringify({
+  version: 3,
+  project_id: '33333333-3333-4333-8333-333333333333',
+  name: 'hook-v3-directory',
+  scope: 'directory',
+ }));
+
+ const descriptor = lib.resolveHookProjectDescriptorV3(directory, 'hook-install-alpha');
+ assert.deepEqual(descriptor, {
+  version: 3,
+  anchor_project_id: '33333333-3333-4333-8333-333333333333',
+  name: 'hook-v3-directory',
+  scope: 'directory',
+  normalized_git_remotes: [],
+  legacy_identifiers: [],
+  client_instance_id: 'hook-install-alpha',
+ });
+
+ const registrationCalls = [];
+ const context = { Project: 'local-selector', ProjectDescriptorV3: descriptor };
+ await lib.registerProjectIdentity(context, async (_method, endpoint, body) => {
+  registrationCalls.push({ endpoint, body });
+  return {
+   project_resolution_v3: {
+    outcome: 'PROJECT_RESOLVED',
+    correlation: 'hook-v3-directory-correlation',
+    project_key: '44444444-4444-4444-8444-444444444444',
+    resolved_scope: 'directory',
+   },
+  };
+ });
+ assert.deepEqual(registrationCalls, [{
+  endpoint: '/api/context/inject',
+  body: { project_descriptor: descriptor, identity_only: true },
+ }]);
+
+ const originalRequestPost = lib.requestPost;
+ const originalEngramDataDir = process.env.ENGRAM_DATA_DIR;
+ const originalEngramURL = process.env.ENGRAM_URL;
+ const originalEngramToken = process.env.ENGRAM_TOKEN;
+ const sessionCalls = [];
+ process.env.ENGRAM_DATA_DIR = dataDirectory;
+ process.env.ENGRAM_URL = 'http://example.test/mcp';
+ process.env.ENGRAM_TOKEN = 'test-token';
+ lib.requestPost = async (endpoint, body) => {
+  sessionCalls.push({ endpoint, body });
+  return endpoint === '/api/context/session-start' ? buildCachedSessionStartPayload() : {};
+ };
+ t.after(() => {
+  lib.requestPost = originalRequestPost;
+  if (originalEngramDataDir === undefined) delete process.env.ENGRAM_DATA_DIR;
+  else process.env.ENGRAM_DATA_DIR = originalEngramDataDir;
+  if (originalEngramURL === undefined) delete process.env.ENGRAM_URL;
+  else process.env.ENGRAM_URL = originalEngramURL;
+  if (originalEngramToken === undefined) delete process.env.ENGRAM_TOKEN;
+  else process.env.ENGRAM_TOKEN = originalEngramToken;
+ });
+
+ await handleSessionStart({
+  Project: context.Project,
+  ProjectSelector: 'local-selector',
+  ProjectDescriptorV3: descriptor,
+  SessionID: 'sess-v3-directory',
+ }, {});
+
+ const sessionStart = sessionCalls.find((call) => call.endpoint === '/api/context/session-start');
+ assert.ok(sessionStart, 'expected a V3 session-start POST');
+ assert.deepEqual(sessionStart.body, {
+  session_id: 'sess-v3-directory',
+  project_descriptor: descriptor,
+ });
+});
+
+test('Hook V3 does not discover a directory anchor above the selected root', (t) => {
+ const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-v3-parent-anchor-'));
+ const selectedDirectory = path.join(parent, 'selected');
+ t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+ fs.mkdirSync(selectedDirectory);
+ fs.writeFileSync(path.join(parent, '.engram-project'), JSON.stringify({
+  version: 3,
+  project_id: '55555555-5555-4555-8555-555555555555',
+  name: 'parent-directory',
+  scope: 'directory',
+ }));
+
+ assert.throws(
+  () => lib.resolveHookProjectDescriptorV3(selectedDirectory, 'hook-install-alpha'),
+  /PROJECT_ONBOARDING_REQUIRED/,
+ );
+});
+
+test('configured Hook V3 requires an anchor before making a registration request', (t) => {
+ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-v3-no-anchor-'));
+ const configPath = path.join(directory, 'config.json');
+ t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+ fs.writeFileSync(configPath, JSON.stringify({
+  server_url: 'http://example.test',
+  api_token: 'test-token',
+  client_instance_id: 'hook-install-alpha',
+ }));
+ const environment = { ...process.env };
+ for (const key of RUNTIME_CONFIG_ENV_KEYS) delete environment[key];
+ Object.assign(environment, {
+  ENGRAM_CONFIG_FILE: configPath,
+  ENGRAM_INTERNAL: '0',
+  ENGRAM_QUIET: '0',
+ });
+ const childScript = `
+  const childProcess = require('node:child_process');
+  const originalExecFileSync = childProcess.execFileSync;
+  childProcess.execFileSync = (file, args, options) => {
+   if (file === 'git') {
+    const error = new Error('not a git repository');
+    error.stderr = 'fatal: not a git repository';
+    throw error;
+   }
+   return originalExecFileSync(file, args, options);
+  };
+  let requestCount = 0;
+  global.fetch = async () => {
+   requestCount += 1;
+   return { ok: true, text: async () => '{}' };
+  };
+  const lib = require(process.argv[1]);
+  lib.RunHook('SessionStart', async () => {
+   process.stderr.write('HANDLER_RAN');
+   return '';
+  }).then(() => process.stderr.write(' REQUEST_COUNT=' + requestCount));
+ `;
+ const result = spawnSync(process.execPath, ['-e', childScript, require.resolve('./lib')], {
+  input: JSON.stringify({ session_id: 'v3-no-anchor', cwd: directory }),
+  encoding: 'utf8',
+  timeout: NODE_CHILD_TIMEOUT_MS,
+  windowsHide: true,
+  env: environment,
+ });
+
+ assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
+ assert.equal(result.status, 0, result.stderr);
+ assert.equal(result.stdout.trim(), '{"continue":true}');
+ assert.match(result.stderr, /PROJECT_ONBOARDING_REQUIRED/);
+ assert.doesNotMatch(result.stderr, /HANDLER_RAN/);
+ assert.match(result.stderr, /REQUEST_COUNT=0/);
+});
+test('Hook V3 validates raw config client IDs before registration', (t) => {
+ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-v3-raw-client-id-'));
+ const configPath = path.join(directory, 'config.json');
+ t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+ fs.writeFileSync(path.join(directory, '.engram-project'), JSON.stringify({
+  version: 3,
+  project_id: '88888888-8888-4888-8888-888888888888',
+  name: 'hook-v3-raw-client-id',
+  scope: 'directory',
+ }));
+ const environment = { ...process.env };
+ for (const key of RUNTIME_CONFIG_ENV_KEYS) delete environment[key];
+ Object.assign(environment, {
+  ENGRAM_CONFIG_FILE: configPath,
+  ENGRAM_INTERNAL: '0',
+  ENGRAM_QUIET: '0',
+ });
+ const childScript = `
+  let requestCount = 0;
+  global.fetch = async () => {
+   requestCount += 1;
+   return { ok: true, text: async () => JSON.stringify({
+    project_resolution_v3: {
+     outcome: 'PROJECT_RESOLVED',
+     correlation: 'hook-v3-raw-client-id-correlation',
+     project_key: '99999999-9999-4999-8999-999999999999',
+     resolved_scope: 'directory',
+    },
+   }) };
+  };
+  const lib = require(process.argv[1]);
+  lib.RunHook('SessionStart', async () => {
+   process.stderr.write(' HANDLER_RAN');
+   return '';
+  }).then(() => process.stderr.write(' REQUEST_COUNT=' + requestCount));
+ `;
+ const run = (clientInstanceID) => {
+  fs.writeFileSync(configPath, JSON.stringify({
+   server_url: 'http://example.test',
+   api_token: 'test-token',
+   client_instance_id: clientInstanceID,
+  }));
+  return spawnSync(process.execPath, ['-e', childScript, require.resolve('./lib')], {
+   input: JSON.stringify({ session_id: 'v3-raw-client-id', cwd: directory }),
+   encoding: 'utf8',
+   timeout: NODE_CHILD_TIMEOUT_MS,
+   windowsHide: true,
+   env: environment,
+  });
+ };
+
+ const rejected = run(' hook-install-alpha ');
+ assert.equal(rejected.error, undefined, rejected.error ? rejected.error.message : rejected.stderr);
+ assert.equal(rejected.status, 0, rejected.stderr);
+ assert.equal(rejected.stdout.trim(), '{"continue":true}');
+ assert.match(rejected.stderr, /PROJECT_DESCRIPTOR_INVALID/);
+ assert.doesNotMatch(rejected.stderr, /HANDLER_RAN/);
+ assert.match(rejected.stderr, /REQUEST_COUNT=0/);
+
+ const accepted = run('hook-install-alpha');
+ assert.equal(accepted.error, undefined, accepted.error ? accepted.error.message : accepted.stderr);
+ assert.equal(accepted.status, 0, accepted.stderr);
+ assert.equal(accepted.stdout.trim(), '{"continue":true}');
+ assert.match(accepted.stderr, /HANDLER_RAN/);
+ assert.match(accepted.stderr, /REQUEST_COUNT=1/);
+});
+
+
+test('configured Hook V3 directory registration does not invoke legacy Git resolution', (t) => {
+ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-v3-git-failure-'));
+ const configPath = path.join(directory, 'config.json');
+ t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+ fs.writeFileSync(path.join(directory, '.engram-project'), JSON.stringify({
+  version: 3,
+  project_id: '66666666-6666-4666-8666-666666666666',
+  name: 'hook-v3-git-failure',
+  scope: 'directory',
+ }));
+ fs.writeFileSync(configPath, JSON.stringify({
+  server_url: 'http://example.test',
+  api_token: 'test-token',
+  client_instance_id: 'hook-install-alpha',
+ }));
+ const environment = { ...process.env };
+ for (const key of RUNTIME_CONFIG_ENV_KEYS) delete environment[key];
+ Object.assign(environment, {
+  ENGRAM_CONFIG_FILE: configPath,
+  ENGRAM_INTERNAL: '0',
+  ENGRAM_QUIET: '0',
+ });
+ const childScript = `
+  const childProcess = require('child_process');
+  childProcess.execSync = () => { throw new Error('legacy Git resolution must not run'); };
+  const requests = [];
+  global.fetch = async (_url, init) => {
+   requests.push(JSON.parse(init.body));
+   return {
+    ok: true,
+    text: async () => JSON.stringify({
+     project_resolution_v3: {
+      outcome: 'PROJECT_RESOLVED',
+      correlation: 'hook-v3-git-failure-correlation',
+      project_key: '77777777-7777-4777-8777-777777777777',
+      resolved_scope: 'directory',
+     },
+    }),
+   };
+  };
+  const lib = require(process.argv[1]);
+  lib.RunHook('SessionStart', async (context) => {
+   process.stderr.write(' PROJECT=' + context.Project);
+   return '';
+  }).then(() => process.stderr.write(' REQUESTS=' + JSON.stringify(requests)));
+ `;
+ const result = spawnSync(process.execPath, ['-e', childScript, require.resolve('./lib')], {
+  input: JSON.stringify({ session_id: 'v3-git-failure', cwd: directory }),
+  encoding: 'utf8',
+  timeout: NODE_CHILD_TIMEOUT_MS,
+  windowsHide: true,
+  env: environment,
+ });
+
+ assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
+ assert.equal(result.status, 0, result.stderr);
+ assert.equal(result.stdout.trim(), '{"continue":true}');
+ assert.match(result.stderr, /PROJECT=77777777-7777-4777-8777-777777777777/);
+ assert.match(result.stderr, /"project_descriptor":\{"version":3,"anchor_project_id":"66666666-6666-4666-8666-666666666666"/);
+ assert.doesNotMatch(result.stderr, /legacy Git resolution must not run/);
+});
+
+test('session start sends a V3 descriptor without a project selector', async (t) => {
+ const { handleSessionStart, buildCachedSessionStartPayload } = require('./session-start');
+ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-session-start-v3-'));
+ const originalRequestPost = lib.requestPost;
+ const originalEngramDataDir = process.env.ENGRAM_DATA_DIR;
+ const originalEngramURL = process.env.ENGRAM_URL;
+ const originalEngramToken = process.env.ENGRAM_TOKEN;
+ const descriptor = {
+  version: 3,
+  anchor_project_id: '11111111-1111-4111-8111-111111111111',
+  name: 'hook-v3',
+  scope: 'repository',
+  normalized_git_remotes: ['git.example.test/Platform/Hook'],
+  legacy_identifiers: [],
+  client_instance_id: 'hook-install-alpha',
+ };
+ const postCalls = [];
+ process.env.ENGRAM_DATA_DIR = tmpDir;
+ process.env.ENGRAM_URL = 'http://example.test/mcp';
+ process.env.ENGRAM_TOKEN = 'test-token';
+ lib.requestPost = async (endpoint, body) => {
+  postCalls.push({ endpoint, body });
+  return endpoint === '/api/context/session-start' ? buildCachedSessionStartPayload() : {};
+ };
+ t.after(() => {
+  lib.requestPost = originalRequestPost;
+  if (originalEngramDataDir === undefined) delete process.env.ENGRAM_DATA_DIR;
+  else process.env.ENGRAM_DATA_DIR = originalEngramDataDir;
+  if (originalEngramURL === undefined) delete process.env.ENGRAM_URL;
+  else process.env.ENGRAM_URL = originalEngramURL;
+  if (originalEngramToken === undefined) delete process.env.ENGRAM_TOKEN;
+  else process.env.ENGRAM_TOKEN = originalEngramToken;
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+ });
+
+ await handleSessionStart({
+  Project: '22222222-2222-4222-8222-222222222222',
+  ProjectSelector: 'local-selector',
+  ProjectDescriptorV3: descriptor,
+  SessionID: 'sess-v3',
+ }, {});
+
+ const request = postCalls.find((call) => call.endpoint === '/api/context/session-start');
+ assert.ok(request, 'expected a V3 session-start POST');
+ assert.equal(request.body.session_id, 'sess-v3');
+ assert.deepEqual(request.body.project_descriptor, descriptor);
+ assert.equal(Object.hasOwn(request.body, 'project'), false);
+});
+
+test('V3 registration rejects an invalid client instance before requesting', async () => {
+ const context = {
+  Project: 'local-selector', ProjectDescriptorV3: {
+   version: 3,
+   anchor_project_id: '11111111-1111-4111-8111-111111111111',
+   name: 'hook-v3',
+   scope: 'repository',
+   normalized_git_remotes: [],
+   legacy_identifiers: [],
+   client_instance_id: '/private/operator/path',
+  }
+ };
+ let requests = 0;
+ await assert.rejects(
+  () => lib.registerProjectIdentity(context, async () => {
+   requests += 1;
+   return {};
+  }),
+  /PROJECT_DESCRIPTOR_INVALID/,
+ );
+ assert.equal(requests, 0);
+});
+
+test('V3 registration refuses a client-asserted project key before requesting', async () => {
+ const context = {
+  ProjectDescriptorV3: {
+   version: 3,
+   anchor_project_id: '11111111-1111-4111-8111-111111111111',
+   name: 'hook-v3',
+   scope: 'repository',
+   normalized_git_remotes: [],
+   legacy_identifiers: [],
+   client_instance_id: 'hook-install-alpha',
+   project_key: '22222222-2222-4222-8222-222222222222',
+  }
+ };
+ let requests = 0;
+ await assert.rejects(
+  () => lib.registerProjectIdentity(context, async () => {
+   requests += 1;
+   return {};
+  }),
+  /PROJECT_KEY_CLIENT_ASSERTION_FORBIDDEN/,
+ );
+ assert.equal(requests, 0);
 });
 
 test('requestGet aborts a pending fetch when its private timeout expires', async (t) => {

@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
+import type { HonestyClass } from '../composables/useHonesty'
+import type { OperatorSourceError } from '../composables/useOperatorApi'
 import { useOperatorBooks } from '../composables/useOperatorBooks'
+import type { TruthState } from '../components/HonestyBadge.vue'
 
 const { t } = useI18n()
 const {
@@ -8,7 +11,6 @@ const {
   currentProject,
   jobState,
   submitting,
-  error,
   documentsHref,
   refreshJobStatus,
   ingestBook,
@@ -22,6 +24,37 @@ const form = reactive({
 })
 const notice = ref<{ kind: 'success' | 'error'; text: string } | null>(null)
 const fileMessage = ref<string | null>(null)
+const localState = ref<TruthState | null>(null)
+const localError = ref<OperatorSourceError | null>(null)
+const mutationResult = ref<Awaited<ReturnType<typeof ingestBook>> | null>(null)
+
+function clearLocalState() {
+  localState.value = null
+  localError.value = null
+}
+
+function stateForError(error: OperatorSourceError, hasSnapshot: boolean): TruthState {
+  if (error.status === 401 || error.status === 403) return 'denied'
+  if (error.status === 408) return 'timeout'
+  if (error.category === 'unreachable' || error.status === undefined || error.status === 0) return 'offline'
+  return hasSnapshot ? 'stale' : 'error'
+}
+function stateForMutation(result: NonNullable<typeof mutationResult.value>, hasSnapshot: boolean): TruthState {
+  switch (result.kind) {
+    case 'committed_verified': return 'partial'
+    case 'committed_verification_pending': return 'loading'
+    case 'partial': return 'partial'
+    case 'denied': return 'denied'
+    case 'timeout': return 'timeout'
+    case 'offline':
+    case 'network': return 'offline'
+    case 'outcome_unknown': return hasSnapshot ? 'stale' : 'offline'
+    case 'stale': return 'stale'
+    case 'unsupported': return 'unsupported'
+    default: return 'error'
+  }
+}
+
 
 const statusLabelKey = computed(() => {
   const status = currentJob.value?.status || 'idle'
@@ -37,7 +70,26 @@ const statusTone = computed(() => {
   if (status === 'pending' || status === 'processing') return 'processing'
   return 'idle'
 })
-const showStatebar = computed(() => Boolean(notice.value || error.value || jobState.value.kind === 'pending'))
+const booksState = computed<TruthState>(() => {
+  if (localState.value) return localState.value
+  if (submitting.value || jobState.value.kind === 'pending') return 'loading'
+  if (jobState.value.kind === 'error') return stateForError(jobState.value.error, Boolean(currentJob.value))
+  if (jobState.value.kind === 'stale') return 'stale'
+  if (jobState.value.kind === 'gated' || jobState.value.kind === 'mustbuild') return 'unsupported'
+  if (currentJob.value?.status === 'failed') return 'error'
+  if (currentJob.value?.status === 'done') return 'partial'
+  if (mutationResult.value) return stateForMutation(mutationResult.value, Boolean(currentJob.value))
+  return 'empty'
+})
+const legacyClass = computed<HonestyClass>(() => booksState.value === 'stale' ? 'stale' : 'live')
+const stateCopy = computed(() => ({
+  title: t(`booksPage.states.${booksState.value}.title`),
+  body: t(`booksPage.states.${booksState.value}.body`),
+  action: t(`booksPage.states.${booksState.value}.action`),
+}))
+const stateRole = computed(() => ['denied', 'error', 'timeout', 'offline'].includes(booksState.value) ? 'alert' : 'status')
+const stateError = computed(() => localError.value ?? (jobState.value.kind === 'error' ? jobState.value.error : null))
+const showRefresh = computed(() => Boolean(currentJob.value?.id))
 const documentsPrefix = computed(() => currentJob.value?.documentsPathPrefix || '—')
 const canOpenDocuments = computed(() => currentJob.value?.status === 'done')
 const supportHint = computed(() => {
@@ -58,11 +110,13 @@ async function onFileChange(event: Event) {
   form.sourceRef = file.name
   fileMessage.value = null
   notice.value = null
+  clearLocalState()
 
   const lowerName = file.name.toLowerCase()
   const isTextSource = lowerName.endsWith('.md') || lowerName.endsWith('.mdx') || lowerName.endsWith('.markdown') || lowerName.endsWith('.txt')
   if (!isTextSource) {
     form.content = ''
+    localState.value = 'unsupported'
     fileMessage.value = t('booksPage.form.unsupportedFile')
     return
   }
@@ -71,11 +125,20 @@ async function onFileChange(event: Event) {
   fileMessage.value = t('booksPage.form.loadedFile', { name: file.name })
 }
 
+async function refreshBooksStatus() {
+  notice.value = null
+  clearLocalState()
+  await refreshJobStatus()
+}
+
 async function submitBook() {
   notice.value = null
   fileMessage.value = null
+  clearLocalState()
+  mutationResult.value = null
 
   if (!form.sourceRef.trim() || !form.content.trim()) {
+    localState.value = 'error'
     notice.value = { kind: 'error', text: t('booksPage.form.validation') }
     return
   }
@@ -86,17 +149,7 @@ async function submitBook() {
     author: form.author,
     content: form.content,
   })
-
-  if (result.kind === 'success') {
-    currentProject.value = form.project.trim() || currentProject.value || 'engram'
-    notice.value = { kind: 'success', text: t('booksPage.notice.queued', { id: result.data.id }) }
-    return
-  }
-
-  notice.value = {
-    kind: 'error',
-    text: t('booksPage.notice.failed', { message: result.error.message || t('booksPage.notice.loadError') }),
-  }
+  mutationResult.value = result
 }
 </script>
 
@@ -107,7 +160,7 @@ async function submitBook() {
         <h1>{{ t('booksPage.title') }}</h1>
         <p>{{ t('booksPage.subtitle') }}</p>
       </div>
-      <HonestyBadge cls="live" evidence="/api/books/*" />
+      <HonestyBadge :cls="legacyClass" :state="booksState" :label="t('booksPage.capability.badge')" evidence="POST /api/books" />
     </header>
 
     <section class="books-brief">
@@ -129,12 +182,20 @@ async function submitBook() {
       </div>
     </section>
 
-    <section v-if="showStatebar" class="statebar" :data-state="error ? 'error' : notice?.kind || 'pending'">
-      <span v-if="notice">{{ notice.text }}</span>
-      <span v-else-if="error">{{ t('booksPage.notice.failed', { message: error }) }}</span>
-      <span v-else>{{ t('booksPage.job.processingBody') }}</span>
-      <button class="tbtn" type="button" @click="refreshJobStatus">{{ t('booksPage.actions.refresh') }}</button>
+    <section class="statebar" :data-state="booksState" :role="stateRole" aria-atomic="true" aria-labelledby="books-state-title" aria-describedby="books-state-body books-state-action">
+      <div class="state-copy">
+        <strong id="books-state-title">{{ stateCopy.title }}</strong>
+        <p id="books-state-body">{{ stateCopy.body }}</p>
+        <p id="books-state-action" class="state-action">{{ stateCopy.action }}</p>
+        <p v-if="notice" class="state-notice">{{ notice.text }}</p>
+        <details v-if="stateError" class="state-evidence">
+          <summary>{{ t('booksPage.capability.technical') }}</summary>
+          <code>{{ stateError.method }} {{ stateError.path }}<template v-if="stateError.status"> · HTTP {{ stateError.status }}</template></code>
+        </details>
+      </div>
+      <button v-if="showRefresh" class="tbtn" type="button" @click="refreshBooksStatus">{{ t('booksPage.actions.refresh') }}</button>
     </section>
+    <MutationResultNotice :result="mutationResult" :recheck-label="t('booksPage.actions.refresh')" @recheck="refreshBooksStatus" />
 
     <div class="books-grid">
       <section class="panel form-panel">
@@ -178,7 +239,7 @@ async function submitBook() {
           <button class="act primary" type="button" :disabled="submitting" @click="submitBook">
             {{ submitting ? t('booksPage.form.submitting') : t('booksPage.form.submit') }}
           </button>
-          <button class="tbtn" type="button" @click="refreshJobStatus">{{ t('booksPage.actions.refresh') }}</button>
+          <button class="tbtn" type="button" @click="refreshBooksStatus">{{ t('booksPage.actions.refresh') }}</button>
         </div>
       </section>
 
@@ -213,7 +274,7 @@ async function submitBook() {
           <div class="actions stack">
             <NuxtLink v-if="canOpenDocuments" :to="documentsHref" class="act primary">{{ t('booksPage.job.openDocuments') }}</NuxtLink>
             <button v-else class="act muted" type="button" disabled>{{ t('booksPage.job.openDocuments') }}</button>
-            <button class="tbtn" type="button" @click="refreshJobStatus">{{ t('booksPage.actions.refresh') }}</button>
+            <button class="tbtn" type="button" @click="refreshBooksStatus">{{ t('booksPage.actions.refresh') }}</button>
           </div>
         </template>
       </aside>
@@ -222,7 +283,7 @@ async function submitBook() {
 </template>
 
 <style scoped>
-.books-page { display:flex; flex-direction:column; gap:14px; }
+.books-page { display:flex; flex-direction:column; gap:14px; padding-bottom:42px; }
 .page-head { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; padding-bottom:14px; border-bottom:1px solid var(--border); }
 .page-head h1 { margin:0 0 4px; font-size:var(--text-xl); font-weight:800; letter-spacing:var(--tracking-display); }
 .page-head p { margin:0; color:var(--muted); font-size:var(--text-sm); }
@@ -235,16 +296,25 @@ async function submitBook() {
 .brief-copy { display:flex; flex-direction:column; justify-content:center; gap:5px; }
 .brief-copy strong { color:var(--fg-2); font-size:var(--text-sm); }
 .statebar, .typed-error { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:10px 12px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); font-size:var(--text-sm); }
-.statebar[data-state="pending"] { border-color:color-mix(in oklab,var(--accent),transparent 55%); }
-.statebar[data-state="success"] { border-color:color-mix(in oklab,var(--class-live),transparent 45%); }
-.statebar[data-state="error"], .typed-error { border-color:color-mix(in oklab,var(--state-warn),transparent 45%); }
+.state-copy { min-width:0; display:flex; flex-direction:column; gap:4px; }
+.state-copy strong { color:var(--fg); }
+.state-copy p { margin:0; color:var(--muted); overflow-wrap:anywhere; }
+.state-copy .state-action { color:var(--fg-2); font-weight:700; }
+.state-copy .state-notice { color:var(--class-live); }
+.state-evidence { margin-top:4px; color:var(--muted); font-size:var(--text-xs); }
+.state-evidence summary { cursor:pointer; color:var(--fg-2); }
+.state-evidence code { display:block; margin-top:4px; font-family:var(--font-mono); overflow-wrap:anywhere; }
+.statebar[data-state="loading"] { border-color:color-mix(in oklab,var(--accent),transparent 55%); }
+.statebar[data-state="denied"], .statebar[data-state="error"], .statebar[data-state="timeout"], .statebar[data-state="offline"], .typed-error { border-color:color-mix(in oklab,var(--state-danger),transparent 45%); }
+.statebar[data-state="partial"], .statebar[data-state="unsupported"] { border-color:color-mix(in oklab,var(--class-dormant),transparent 45%); }
+.statebar[data-state="stale"] { border-style:dashed; border-color:color-mix(in oklab,var(--class-stale),transparent 35%); }
 .books-grid { display:grid; grid-template-columns:minmax(0, 1.35fr) minmax(320px, .95fr); gap:12px; align-items:start; }
 .panel { padding:14px; display:flex; flex-direction:column; gap:12px; }
 .panel-head { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
 .panel-head h2 { margin:0; font-size:var(--text-sm); font-weight:900; letter-spacing:.04em; text-transform:uppercase; }
 .form-panel label { display:flex; flex-direction:column; gap:6px; color:var(--muted); font-size:var(--text-xs); }
 .inline-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; }
-.input, .area, .file-input { width:100%; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface); color:var(--fg); font-size:var(--text-sm); }
+.input, .area, .file-input { width:100%; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface); color:var(--fg); font-size:var(--text-sm); scroll-margin-block-end:42px; }
 .input, .file-input { min-height:36px; padding:0 10px; }
 .file-input { padding:6px 10px; }
 .area { min-height:320px; padding:10px; resize:vertical; }

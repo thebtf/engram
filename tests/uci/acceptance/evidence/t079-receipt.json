@@ -1,0 +1,105 @@
+{
+  "candidate": {
+    "artifact_digests": [
+      {
+        "digest": "sha256:1763d82088a6a4a6609a115cea05686a0b889c9fa9242be1767902f04bda9b4a",
+        "name": "engram-daemon"
+      },
+      {
+        "digest": "sha256:cadaaf16eb86ec7aa83004ee56b64c316b17ce4c915e7a4745ec273072e6579b",
+        "name": "engram-server"
+      },
+      {
+        "digest": "sha256:01b046a4d8c9c7780bcc045e6d312eca63e643159ebe256c41b7a2c865c03aa2",
+        "name": "uci-parser"
+      }
+    ],
+    "branch": "uci/unified-code-intelligence-r1",
+    "commit": "22e2e41b044ee08e57d77bfb37cd25acb650a958",
+    "tree": "679f0b46c0738cf152700f04f7df661520998003"
+  },
+  "corpus": {
+    "commit": "08139397016a48e7c9de785e37a60e92a7697831",
+    "dirty_manifest": "sha256:896f4728de0e7876e373bab3963a3472a8e1d6ead1c087936e8a51ae9931bc59"
+  },
+  "product": {
+    "input_sha256": "sha256:3e9eb336da55387da5a86004377ba6085629af7712733e0ab2b96cb1f62f2318",
+    "reduced_reading_count": 12,
+    "relevant_top_five_count": 12,
+    "semantic_provider_task_count": 4,
+    "success_count": 12,
+    "task_count": 12
+  },
+  "provider": {
+    "model": "uci-product-local-model-v1",
+    "profile": "uci-product-local-semantic-v1",
+    "provider": "uci-product-local-http"
+  },
+  "schema_version": "engram.uci-t079-receipt/v1",
+  "scope": {
+    "credentials": "not_retained",
+    "fixture": "synthetic_isolated_postgresql",
+    "private_locators": "not_retained",
+    "production": "not_claimed"
+  },
+  "slo": {
+    "cold_observation_count": 1,
+    "gates": [
+      {
+        "healthy_count": 100,
+        "max_ns": 17997400,
+        "name": "graph.small_explain_neighbors_impact",
+        "non_healthy_count": 0,
+        "p95_ns": 10999700,
+        "sample_count": 100
+      },
+      {
+        "healthy_count": 100,
+        "max_ns": 1370256600,
+        "name": "search.query_embedding",
+        "non_healthy_count": 0,
+        "p95_ns": 1171372300,
+        "sample_count": 100
+      },
+      {
+        "healthy_count": 100,
+        "max_ns": 6499000,
+        "name": "search.server_retrieval",
+        "non_healthy_count": 0,
+        "p95_ns": 5019300,
+        "sample_count": 100
+      },
+      {
+        "healthy_count": 100,
+        "max_ns": 272459700,
+        "name": "update.embedding_readiness",
+        "non_healthy_count": 0,
+        "p95_ns": 192525200,
+        "sample_count": 100
+      },
+      {
+        "healthy_count": 100,
+        "max_ns": 232131200,
+        "name": "update.structural_fts",
+        "non_healthy_count": 0,
+        "p95_ns": 157613500,
+        "sample_count": 100
+      }
+    ],
+    "input_sha256": "sha256:39fd9f33a1c517cabf0ce8f25b17dd47261be52decd3c7c212438dbe208fa4bf"
+  },
+  "validation": [
+    {
+      "command": "go test ./tests/uci/acceptance -run '^TestUCIRecordProductTaskResult$' -count=1 -v -timeout=900s",
+      "status": "PASS"
+    },
+    {
+      "command": "go test ./tests/uci/acceptance -run '^TestUCIRecordSLOMeasurement$' -count=1 -v -timeout=1800s",
+      "status": "PASS"
+    },
+    {
+      "command": "go test ./tests/uci/acceptance -run '^TestUCI(ProductTaskCorpus|SLOProfile)$' -count=1 -v",
+      "status": "PASS"
+    }
+  ]
+}

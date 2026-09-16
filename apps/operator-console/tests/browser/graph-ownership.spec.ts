@@ -10,23 +10,27 @@ async function routeProjects(page: Page) {
 
 async function routeGraph(page: Page, refs = ['node-seven']) {
   await page.route('**/api/graph/nodes**', (route) => route.fulfill({
-    json: { nodes: refs.map((external_ref, index) => ({
-      id: index + 7,
-      node_type: 'skill',
-      external_ref,
-      project: 'alpha',
-      privacy_scope: 'project',
-    })) },
+    json: {
+      nodes: refs.map((external_ref, index) => ({
+        id: index + 7,
+        node_type: 'skill',
+        external_ref,
+        project: 'alpha',
+        privacy_scope: 'project',
+      }))
+    },
   }))
 }
 
 test('latest graph refresh owns graph state over an older delayed response', async ({ page }) => {
   let flagsCalls = 0
+  let deferNextFlagsResponse = false
   let releaseOlder!: () => void
   const older = new Promise<void>((resolve) => { releaseOlder = resolve })
   await page.route('**/api/flags', async (route) => {
     flagsCalls += 1
-    if (flagsCalls === 2) {
+    if (deferNextFlagsResponse) {
+      deferNextFlagsResponse = false
       await older
       await route.fulfill({ json: { flags: { ENGRAM_GRAPH_ENABLED: false } } })
       return
@@ -39,11 +43,14 @@ test('latest graph refresh owns graph state over an older delayed response', asy
 
   await page.goto('/graph')
   await expect(page.locator('.node-row')).toContainText('newer-wins')
+  const initialFlagsCalls = flagsCalls
+  deferNextFlagsResponse = true
   await page.getByRole('button', { name: 'Обновить' }).click()
+  await expect.poll(() => flagsCalls).toBeGreaterThan(initialFlagsCalls)
   await page.getByRole('button', { name: 'Обновить' }).click()
   await expect(page.locator('.node-row')).toContainText('newer-wins')
   releaseOlder()
-  await expect.poll(() => flagsCalls).toBeGreaterThanOrEqual(3)
+  await expect.poll(() => flagsCalls).toBeGreaterThan(initialFlagsCalls + 1)
   await expect(page.locator('.node-row')).toContainText('newer-wins')
   await expect(page.locator('.statebar')).toHaveAttribute('data-state', 'live')
 })
@@ -58,15 +65,19 @@ test('selected-node edge ownership rejects a delayed edge response', async ({ pa
     const nodeID = new URL(route.request().url()).searchParams.get('node_id')
     if (nodeID === '8') {
       await nodeEight
-      await route.fulfill({ json: { edges: [{
-        id: 88,
-        edge_type: 'uses',
-        source_type: 'node',
-        target_type: 'node',
-        node_source_id: 8,
-        node_target_id: 8,
-        reasoning: 'late-edge-for-eight',
-      }] } })
+      await route.fulfill({
+        json: {
+          edges: [{
+            id: 88,
+            edge_type: 'uses',
+            source_type: 'node',
+            target_type: 'node',
+            node_source_id: 8,
+            node_target_id: 8,
+            reasoning: 'late-edge-for-eight',
+          }]
+        }
+      })
       return
     }
     await route.fulfill({ json: { edges: [] } })

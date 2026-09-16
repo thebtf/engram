@@ -391,6 +391,30 @@ func TestHandleListMemories_PrincipalPrivateCrossPrincipalInvisible_FlagOff(t *t
 	assert.Equal(t, "visible legacy row", rows[0]["content"])
 }
 
+func TestHandleListMemories_ContinuesPastAHiddenBatchWithoutLeakingIt(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	rows := make([]*models.Memory, 0, 501)
+	for id := int64(1); id <= 500; id++ {
+		rows = append(rows, &models.Memory{
+			ID: id, Project: "page-through-hidden", Content: "other-workstation-private", PrivacyScope: "private", SourceWorkstationID: "ws-bob",
+		})
+	}
+	rows = append(rows, &models.Memory{ID: 501, Project: "page-through-hidden", Content: "visible-after-hidden-page"})
+	service := &Service{memoryStoreSeam: &fakeMemoryListStore{rows: rows}}
+	identity := auth.ClientWithPrincipal("read-write", "ws-alice", "agent/alice", auth.PrincipalKindAgent)
+	req := httptest.NewRequest(http.MethodGet, "/api/memories?project=page-through-hidden&limit=1", nil).
+		WithContext(auth.WithIdentity(context.Background(), identity))
+	w := httptest.NewRecorder()
+
+	service.handleListMemories(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var got []models.Memory
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.Equal(t, []int64{501}, []int64{got[0].ID})
+	assert.NotContains(t, w.Body.String(), "other-workstation-private")
+}
+
 func TestHandleListMemories_DomainOwnedCrossPrincipalInvisible_FlagOff(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
 
@@ -832,6 +856,9 @@ func TestHandleGetMemoryByID_ReadVisibility(t *testing.T) {
 
 			require.Equal(t, tc.wantStatus, w.Code, w.Body.String())
 			assert.Equal(t, 1, store.calls)
+			if tc.wantStatus == http.StatusNotFound {
+				assert.NotContains(t, w.Body.String(), tc.memory.Content, "a visibility denial must not disclose the guessed memory content")
+			}
 			if tc.wantStatus == http.StatusOK {
 				var got models.Memory
 				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
@@ -839,4 +866,229 @@ func TestHandleGetMemoryByID_ReadVisibility(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMemoryCollectionSelectionOperations_RealFixture(t *testing.T) {
+	project := "test-memory-selection-operations-" + uuid.NewString()
+	service := newMemoryTestService(t, project)
+	identity := auth.SessionForBrowserUser("operator", 41)
+	sessionID := "memory-selection-operations-" + uuid.NewString()
+	deleteMemoryCollectionSelection(t, service, sessionID)
+
+	active := createMemoryCollectionFixture(t, service, project, "memory selection suppress unsuppress archive")
+	suppress := snapshotMemoryCollectionSelection(t, service, identity, sessionID, map[string]any{
+		"kind":    "explicit",
+		"targets": []map[string]any{{"id": strconv.FormatInt(active.ID, 10), "expected_version": active.Version}},
+	})
+	suppressed := invokeMemoryCollectionSelectionOperation(t, service, identity, sessionID, "memory-selection-suppress", "suppress", suppress)
+	require.Equal(t, http.StatusOK, suppressed.Code, suppressed.Body.String())
+	var suppressResult memoryCollectionSelectionOperationResponse
+	require.NoError(t, json.Unmarshal(suppressed.Body.Bytes(), &suppressResult))
+	require.Equal(t, "completed", suppressResult.OperationState)
+	require.Len(t, suppressResult.ItemResults, 1)
+	require.Equal(t, "committed", suppressResult.ItemResults[0].Outcome)
+	require.NotNil(t, suppressResult.Readback)
+	require.Equal(t, "current", suppressResult.Readback.Kind)
+	require.Equal(t, "flagged", suppressResult.Readback.CurrentState[0].Status)
+	assert.NotContains(t, suppressed.Body.String(), active.Content, "operation readback must not serialize memory content")
+	flagged, err := service.memoryStore.Get(context.Background(), active.ID)
+	require.NoError(t, err)
+	require.Equal(t, "flagged", flagged.Status)
+
+	unsuppress := snapshotMemoryCollectionSelection(t, service, identity, sessionID, map[string]any{
+		"kind":    "explicit",
+		"targets": []map[string]any{{"id": strconv.FormatInt(flagged.ID, 10), "expected_version": flagged.Version}},
+	})
+	unsuppressed := invokeMemoryCollectionSelectionOperation(t, service, identity, sessionID, "memory-selection-unsuppress", "unsuppress", unsuppress)
+	require.Equal(t, http.StatusOK, unsuppressed.Code, unsuppressed.Body.String())
+	activeAgain, err := service.memoryStore.Get(context.Background(), active.ID)
+	require.NoError(t, err)
+	require.Equal(t, "active", activeAgain.Status)
+
+	archive := snapshotMemoryCollectionSelection(t, service, identity, sessionID, map[string]any{
+		"kind":    "explicit",
+		"targets": []map[string]any{{"id": strconv.FormatInt(activeAgain.ID, 10), "expected_version": activeAgain.Version}},
+	})
+	archived := invokeMemoryCollectionSelectionOperation(t, service, identity, sessionID, "memory-selection-archive", "archive", archive)
+	require.Equal(t, http.StatusOK, archived.Code, archived.Body.String())
+	archivedMemory, err := service.memoryStore.Get(context.Background(), active.ID)
+	require.NoError(t, err)
+	require.Equal(t, "archived", archivedMemory.Status)
+
+	pageTarget := createMemoryCollectionFixture(t, service, project, "memory selection current page target")
+	page := pageMemoryCollectionSelection(t, service, identity, sessionID, project, 1)
+	require.Equal(t, 1, page.Total)
+	require.Equal(t, []dbgorm.CollectionSelectionTarget{{ID: strconv.FormatInt(pageTarget.ID, 10), ExpectedVersion: uint64(pageTarget.Version)}}, page.Targets)
+	pageSelection := snapshotMemoryCollectionSelection(t, service, identity, sessionID, map[string]any{
+		"kind":   "page",
+		"cursor": page.Cursor,
+	})
+	pageSuppressed := invokeMemoryCollectionSelectionOperation(t, service, identity, sessionID, "memory-selection-page", "suppress", pageSelection)
+	require.Equal(t, http.StatusOK, pageSuppressed.Code, pageSuppressed.Body.String())
+	var pageResult memoryCollectionSelectionOperationResponse
+	require.NoError(t, json.Unmarshal(pageSuppressed.Body.Bytes(), &pageResult))
+	require.Equal(t, "completed", pageResult.OperationState)
+	require.Equal(t, "committed", pageResult.ItemResults[0].Outcome)
+	pageAfter, err := service.memoryStore.Get(context.Background(), pageTarget.ID)
+	require.NoError(t, err)
+	require.Equal(t, "flagged", pageAfter.Status)
+
+	conflictMemory := createMemoryCollectionFixture(t, service, project, "memory selection version conflict")
+	conflictingSelection := snapshotMemoryCollectionSelection(t, service, identity, sessionID, map[string]any{
+		"kind":    "explicit",
+		"targets": []map[string]any{{"id": strconv.FormatInt(conflictMemory.ID, 10), "expected_version": conflictMemory.Version}},
+	})
+	require.NoError(t, service.memoryStore.GetDB().Model(&dbgorm.Memory{}).Where("id = ?", conflictMemory.ID).UpdateColumn("version", gormlib.Expr("version + 1")).Error)
+	conflict := invokeMemoryCollectionSelectionOperation(t, service, identity, sessionID, "memory-selection-conflict", "suppress", conflictingSelection)
+	require.Equal(t, http.StatusMultiStatus, conflict.Code, conflict.Body.String())
+	var conflictResult memoryCollectionSelectionOperationResponse
+	require.NoError(t, json.Unmarshal(conflict.Body.Bytes(), &conflictResult))
+	require.Equal(t, "partial", conflictResult.OperationState)
+	require.Equal(t, "conflict", conflictResult.ItemResults[0].Outcome)
+	assert.Equal(t, "redacted", conflictResult.ItemResults[0].TargetID)
+	assert.NotContains(t, conflict.Body.String(), strconv.FormatInt(conflictMemory.ID, 10), "a stale target must not be disclosed")
+	assert.NotContains(t, conflict.Body.String(), conflictMemory.Content)
+
+	shared := createMemoryCollectionFixture(t, service, project, "memory selection shared row")
+	require.NoError(t, service.memoryStore.GetDB().Model(&dbgorm.Memory{}).Where("id = ?", shared.ID).Updates(map[string]any{
+		"owner_principal":      "agent/other",
+		"owner_principal_kind": "agent",
+		"agent_visibility":     models.AgentVisibilityShared,
+	}).Error)
+	sharedSelection := snapshotMemoryCollectionSelection(t, service, identity, sessionID, map[string]any{
+		"kind":    "explicit",
+		"targets": []map[string]any{{"id": strconv.FormatInt(shared.ID, 10), "expected_version": shared.Version}},
+	})
+	sharedArchived := invokeMemoryCollectionSelectionOperation(t, service, identity, sessionID, "memory-selection-shared", "archive", sharedSelection)
+	require.Equal(t, http.StatusOK, sharedArchived.Code, sharedArchived.Body.String())
+	sharedAfter, err := service.memoryStore.Get(context.Background(), shared.ID)
+	require.NoError(t, err)
+	require.Equal(t, "archived", sharedAfter.Status, "shared visibility remains mutable through the selection action")
+
+	permitted := createMemoryCollectionFixture(t, service, project, "memory selection permitted row")
+	lost := createMemoryCollectionFixture(t, service, project, "memory selection private after preview")
+	partialSelection := snapshotMemoryCollectionSelection(t, service, identity, sessionID, map[string]any{
+		"kind": "explicit",
+		"targets": []map[string]any{
+			{"id": strconv.FormatInt(permitted.ID, 10), "expected_version": permitted.Version},
+			{"id": strconv.FormatInt(lost.ID, 10), "expected_version": lost.Version},
+		},
+	})
+	require.NoError(t, service.memoryStore.GetDB().Model(&dbgorm.Memory{}).Where("id = ?", lost.ID).Updates(map[string]any{
+		"owner_principal":      "agent/other",
+		"owner_principal_kind": "agent",
+		"agent_visibility":     models.AgentVisibilityPrivate,
+	}).Error)
+	partial := invokeMemoryCollectionSelectionOperation(t, service, identity, sessionID, "memory-selection-access-loss", "suppress", partialSelection)
+	require.Equal(t, http.StatusMultiStatus, partial.Code, partial.Body.String())
+	var partialResult memoryCollectionSelectionOperationResponse
+	require.NoError(t, json.Unmarshal(partial.Body.Bytes(), &partialResult))
+	require.Equal(t, "partial", partialResult.OperationState)
+	require.Equal(t, []string{"committed", "denied"}, []string{partialResult.ItemResults[0].Outcome, partialResult.ItemResults[1].Outcome})
+	require.Equal(t, "redacted", partialResult.ItemResults[1].TargetID)
+	assert.NotContains(t, partial.Body.String(), strconv.FormatInt(lost.ID, 10), "access loss must not disclose the row identifier")
+	assert.NotContains(t, partial.Body.String(), lost.Content, "access loss must not disclose the row content")
+	remaining, err := service.memoryStore.Get(context.Background(), lost.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "active", remaining.Status, "denied rows remain unchanged")
+
+	unsupported := invokeMemoryCollectionSelectionOperation(t, service, identity, sessionID, "memory-selection-unsupported", "delete", partialSelection)
+	require.Equal(t, http.StatusBadRequest, unsupported.Code)
+}
+
+func TestMemoryCollectionSelectionFrozenTokenIsScopeBound(t *testing.T) {
+	project := "test-memory-selection-frozen-" + uuid.NewString()
+	service := newMemoryTestService(t, project)
+	owner := auth.SessionForBrowserUser("operator", 41)
+	other := auth.SessionForBrowserUser("operator", 42)
+	sessionID := "memory-selection-frozen-" + uuid.NewString()
+	deleteMemoryCollectionSelection(t, service, sessionID)
+
+	memory := createMemoryCollectionFixture(t, service, project, "memory selection frozen token")
+	frozen := snapshotMemoryCollectionSelection(t, service, owner, sessionID, map[string]any{
+		"kind":    "frozen_filter",
+		"project": project,
+	})
+	require.Equal(t, dbgorm.CollectionSelectionFrozenFilter, frozen.Kind)
+	require.NotEmpty(t, frozen.Token)
+
+	denied := invokeMemoryCollectionSelectionOperation(t, service, other, sessionID, "memory-selection-token-other-user", "archive", frozen)
+	require.Equal(t, http.StatusForbidden, denied.Code, denied.Body.String())
+	assert.NotContains(t, denied.Body.String(), strconv.FormatInt(memory.ID, 10), "a scoped token must not disclose selected rows to another subject")
+	assert.NotContains(t, denied.Body.String(), memory.Content)
+	unchanged, err := service.memoryStore.Get(context.Background(), memory.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "active", unchanged.Status)
+}
+
+func createMemoryCollectionFixture(t *testing.T, service *Service, project, content string) *models.Memory {
+	t.Helper()
+	memory, err := service.memoryStore.Create(context.Background(), &models.Memory{Project: project, Content: content, SourceAgent: "memory-selection-test", Tags: []string{}})
+	require.NoError(t, err)
+	return memory
+}
+
+func deleteMemoryCollectionSelection(t *testing.T, service *Service, sessionID string) {
+	t.Helper()
+	t.Cleanup(func() {
+		require.NoError(t, service.memoryStore.GetDB().Exec("DELETE FROM collection_selections WHERE domain = ? AND session_id = ?", memoryCollectionSelectionDomain, sessionID).Error)
+	})
+}
+
+func snapshotMemoryCollectionSelection(t *testing.T, service *Service, identity auth.Identity, sessionID string, selection map[string]any) memoryCollectionSelectionResponse {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"selection": selection})
+	require.NoError(t, err)
+	request := httptest.NewRequest(http.MethodPost, "/api/memories/selection", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: sessionID})
+	request = request.WithContext(auth.WithIdentity(request.Context(), identity))
+	recorder := httptest.NewRecorder()
+	service.handleMemoryCollectionSelection(recorder, request)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var response struct {
+		Selection memoryCollectionSelectionResponse `json:"selection"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	require.Greater(t, response.Selection.Version, int64(0))
+	return response.Selection
+}
+
+func pageMemoryCollectionSelection(t *testing.T, service *Service, identity auth.Identity, sessionID, project string, limit int) memoryCollectionSelectionPageResponse {
+	t.Helper()
+	body, err := json.Marshal(memoryCollectionSelectionPageRequest{Project: project, Limit: limit})
+	require.NoError(t, err)
+	request := httptest.NewRequest(http.MethodPost, "/api/memories/selection/page", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: sessionID})
+	request = request.WithContext(auth.WithIdentity(request.Context(), identity))
+	recorder := httptest.NewRecorder()
+	service.handleMemoryCollectionSelectionPage(recorder, request)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var page memoryCollectionSelectionPageResponse
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &page))
+	require.NotEmpty(t, page.Cursor)
+	return page
+}
+
+func invokeMemoryCollectionSelectionOperation(t *testing.T, service *Service, identity auth.Identity, sessionID, requestID, action string, selection memoryCollectionSelectionResponse) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"request_id": requestID,
+		"action":     action,
+		"selection": map[string]any{
+			"kind":              selection.Kind,
+			"selection_version": selection.Version,
+			"selection_token":   selection.Token,
+		},
+	})
+	require.NoError(t, err)
+	request := httptest.NewRequest(http.MethodPost, "/api/memories/operations", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Engram-Request-ID", requestID)
+	request.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: sessionID})
+	request = request.WithContext(auth.WithIdentity(request.Context(), identity))
+	recorder := httptest.NewRecorder()
+	service.handleMemoryCollectionSelectionOperation(recorder, request)
+	return recorder
 }

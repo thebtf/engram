@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/config"
 	loomhandler "github.com/thebtf/engram/internal/handlers/loom"
 	"github.com/thebtf/engram/internal/module"
@@ -31,6 +32,7 @@ import (
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -51,15 +53,25 @@ type mockEngramServer struct {
 	// callResp is the response returned by CallTool.
 	callResp *pb.CallToolResponse
 	// callErr, if non-nil, is returned as an error from CallTool.
-	callErr   error
-	initReq   *pb.InitializeRequest
-	callReq   *pb.CallToolRequest
-	initCalls int
+	callErr error
+	// registerResp is the response returned by RegisterProjectIdentityV3.
+	registerResp *pb.RegisterProjectIdentityV3Response
+	// registerErr, if non-nil, is returned by RegisterProjectIdentityV3.
+	registerErr      error
+	initReq          *pb.InitializeRequest
+	callReq          *pb.CallToolRequest
+	registerReq      *pb.RegisterProjectIdentityV3Request
+	initMetadata     metadata.MD
+	callMetadata     metadata.MD
+	registerMetadata metadata.MD
+	initCalls        int
+	registerCalls    int
 }
 
-func (s *mockEngramServer) Initialize(_ context.Context, req *pb.InitializeRequest) (*pb.InitializeResponse, error) {
+func (s *mockEngramServer) Initialize(ctx context.Context, req *pb.InitializeRequest) (*pb.InitializeResponse, error) {
 	s.mu.Lock()
 	s.initReq = req
+	s.initMetadata, _ = metadata.FromIncomingContext(ctx)
 	s.initCalls++
 	resp, err := s.initResp, s.initErr
 	s.mu.Unlock()
@@ -72,9 +84,10 @@ func (s *mockEngramServer) Initialize(_ context.Context, req *pb.InitializeReque
 	return resp, nil
 }
 
-func (s *mockEngramServer) CallTool(_ context.Context, req *pb.CallToolRequest) (*pb.CallToolResponse, error) {
+func (s *mockEngramServer) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.CallToolResponse, error) {
 	s.mu.Lock()
 	s.callReq = req
+	s.callMetadata, _ = metadata.FromIncomingContext(ctx)
 	s.mu.Unlock()
 	if s.callErr != nil {
 		return nil, s.callErr
@@ -85,8 +98,25 @@ func (s *mockEngramServer) CallTool(_ context.Context, req *pb.CallToolRequest) 
 	return s.callResp, nil
 }
 
-// startMockGRPC starts a mock gRPC server on an ephemeral port and returns the
-// listener address ("host:port"). The server is registered for cleanup via t.Cleanup.
+func (s *mockEngramServer) RegisterProjectIdentityV3(ctx context.Context, req *pb.RegisterProjectIdentityV3Request) (*pb.RegisterProjectIdentityV3Response, error) {
+	s.mu.Lock()
+	s.registerReq = req
+	s.registerMetadata, _ = metadata.FromIncomingContext(ctx)
+	s.registerCalls++
+	resp, err := s.registerResp, s.registerErr
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return &pb.RegisterProjectIdentityV3Response{}, nil
+	}
+	return resp, nil
+}
+
+// startMockGRPC starts a mock gRPC server on an ephemeral port, waits for its
+// transport handshake, and returns the listener address ("host:port"). The
+// server and readiness probe are registered for cleanup via t.Cleanup.
 func startMockGRPC(t *testing.T, srv *mockEngramServer) string {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -102,12 +132,20 @@ func startMockGRPC(t *testing.T, srv *mockEngramServer) string {
 		}
 	}()
 	t.Cleanup(func() { gs.GracefulStop() })
+
+	readyCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	readyConn, err := grpc.DialContext(readyCtx, lis.Addr().String(), grpc.WithBlock(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("wait for mock gRPC readiness: %v", err)
+	}
+	t.Cleanup(func() { _ = readyConn.Close() })
 	return lis.Addr().String()
 }
 
-// startDeferredMockGRPC reserves an address but leaves it unreachable until
-// start is called. This forces the client connection through transient failure
-// before the backend becomes ready.
+// startDeferredMockGRPC starts a mock server immediately, but holds the first
+// accepted TCP connection until release observes the client's connection
+// attempt. This exercises the production dial path without scheduler delays.
 func startDeferredMockGRPC(t *testing.T, srv *mockEngramServer) (string, func() error) {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -115,36 +153,83 @@ func startDeferredMockGRPC(t *testing.T, srv *mockEngramServer) (string, func() 
 		t.Fatalf("net.Listen: %v", err)
 	}
 
+	acceptStarted := make(chan struct{})
+	releaseAccept := make(chan struct{})
+	var releaseOnce sync.Once
+	delayedLis := &delayedAcceptListener{
+		Listener:      lis,
+		acceptStarted: acceptStarted,
+		release:       releaseAccept,
+	}
+
 	gs := grpc.NewServer()
 	pb.RegisterEngramServiceServer(gs, srv)
-	var once sync.Once
-	start := func() error {
-		once.Do(func() {
-			go func() { _ = gs.Serve(lis) }()
-		})
-		return nil
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		_ = gs.Serve(delayedLis)
+	}()
+
+	release := func() error {
+		select {
+		case <-acceptStarted:
+			releaseOnce.Do(func() { close(releaseAccept) })
+			return nil
+		case <-time.After(5 * time.Second):
+			return fmt.Errorf("wait for client TCP connection")
+		}
 	}
 	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(releaseAccept) })
 		gs.Stop()
 		_ = lis.Close()
+		select {
+		case <-serveDone:
+		case <-time.After(5 * time.Second):
+			t.Error("mock gRPC Serve did not stop")
+		}
 	})
-	return lis.Addr().String(), start
+	return lis.Addr().String(), release
+}
+
+type delayedAcceptListener struct {
+	net.Listener
+	acceptStarted chan struct{}
+	release       <-chan struct{}
+	acceptOnce    sync.Once
+}
+
+func (l *delayedAcceptListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	l.acceptOnce.Do(func() { close(l.acceptStarted) })
+	<-l.release
+	return conn, nil
 }
 
 // ---------------------------------------------------------------------------
 // Dispatcher bootstrap helpers for contract tests
 // ---------------------------------------------------------------------------
 
-// buildContractDispatcher creates a Dispatcher with one engramcore module whose
-// ENGRAM_URL is injected directly into the project env. The gRPC connection
-// uses plaintext (no TLS) so that it can connect to the mock server on localhost.
-//
-// The slug cache is pre-populated with a synthetic entry to avoid any git I/O
-// during the test (see ForceCacheEntry in slugcache.go).
+// buildContractDispatcher creates a V2-compatible Dispatcher with one
+// engramcore module whose ENGRAM_URL is injected directly into the project env.
 func buildContractDispatcher(t *testing.T, grpcAddr string, staticModules ...module.EngramModule) (*dispatcher.Dispatcher, *Module, muxcore.ProjectContext) {
+	return buildContractDispatcherWithClientInstanceID(t, grpcAddr, "", staticModules...)
+}
+
+// buildV3ContractDispatcher creates a Dispatcher whose core module has V3
+// selected before registry registration, so the static registration tool is
+// present in the immutable ToolProvider inventory.
+func buildV3ContractDispatcher(t *testing.T, grpcAddr string, staticModules ...module.EngramModule) (*dispatcher.Dispatcher, *Module, muxcore.ProjectContext) {
+	return buildContractDispatcherWithClientInstanceID(t, grpcAddr, "fixture-daemon-install", staticModules...)
+}
+
+func buildContractDispatcherWithClientInstanceID(t *testing.T, grpcAddr, clientInstanceID string, staticModules ...module.EngramModule) (*dispatcher.Dispatcher, *Module, muxcore.ProjectContext) {
 	t.Helper()
 
-	mod := NewModule()
+	mod := NewModuleWithClientInstanceID(clientInstanceID)
 
 	reg := registry.New()
 	for _, staticMod := range staticModules {
@@ -383,20 +468,20 @@ func TestContract_ToolsList_WaitsForDelayedGRPCReadiness(t *testing.T) {
 		{Name: "memory_store", Description: "store"},
 		{Name: "memory_search", Description: "search"},
 	}}}
-	grpcAddr, start := startDeferredMockGRPC(t, srv)
-	disp, mod, p := buildContractDispatcher(t, grpcAddr)
+	grpcAddr, release := startDeferredMockGRPC(t, srv)
+	disp, mod, p := buildContractDispatcher(t, "")
+	p.Env[config.EnvServerURL] = "http://" + grpcAddr
 	seedContractProjectIdentity(mod, p)
-	startResult := make(chan error, 1)
+	releaseResult := make(chan error, 1)
 	go func() {
-		time.Sleep(75 * time.Millisecond)
-		startResult <- start()
+		releaseResult <- release()
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), proxyToolsDiscoveryTimeout)
 	defer cancel()
 	resp, err := disp.HandleRequest(ctx, p, jsonrpcListReq(1))
-	if startErr := <-startResult; startErr != nil {
-		t.Fatalf("start delayed gRPC server: %v", startErr)
+	if releaseErr := <-releaseResult; releaseErr != nil {
+		t.Fatalf("release delayed gRPC server: %v", releaseErr)
 	}
 	if err != nil {
 		t.Fatalf("HandleRequest: %v", err)
@@ -430,8 +515,9 @@ func TestContract_ToolsList_DeadlineIsBoundedAndConnectionIsReusable(t *testing.
 	leakBaseline := goleak.IgnoreCurrent()
 	t.Cleanup(func() { goleak.VerifyNone(t, leakBaseline) })
 	srv := &mockEngramServer{initResp: &pb.InitializeResponse{Tools: []*pb.ToolDefinition{{Name: "memory_store"}}}}
-	grpcAddr, start := startDeferredMockGRPC(t, srv)
-	disp, mod, p := buildContractDispatcher(t, grpcAddr)
+	grpcAddr, release := startDeferredMockGRPC(t, srv)
+	disp, mod, p := buildContractDispatcher(t, "")
+	p.Env[config.EnvServerURL] = "http://" + grpcAddr
 	seedContractProjectIdentity(mod, p)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
@@ -442,8 +528,14 @@ func TestContract_ToolsList_DeadlineIsBoundedAndConnectionIsReusable(t *testing.
 		t.Fatalf("HandleRequest: %v", err)
 	}
 	assertToolsListServiceUnavailable(t, resp)
-	if elapsed := time.Since(startedAt); elapsed < 50*time.Millisecond || elapsed > time.Second {
-		t.Fatalf("deadline elapsed=%s, want bounded wait", elapsed)
+	// Race instrumentation can delay an already-fired timer while the full
+	// package gate is saturated. This must still return well before the
+	// production discovery timeout rather than waiting for the full retry budget.
+	if elapsed := time.Since(startedAt); elapsed < 50*time.Millisecond || elapsed > proxyToolsDiscoveryTimeout/4 {
+		t.Fatalf("deadline elapsed=%s, want caller cancellation before discovery timeout", elapsed)
+	}
+	if !strings.Contains(string(resp), context.DeadlineExceeded.Error()) {
+		t.Fatalf("deadline response=%s, want caller deadline exceeded", resp)
 	}
 
 	countConnections := func() int {
@@ -469,8 +561,8 @@ func TestContract_ToolsList_DeadlineIsBoundedAndConnectionIsReusable(t *testing.
 		t.Fatalf("pooled connections grew across retries: first=%d second=%d", connectionsAfterFirst, got)
 	}
 
-	if err := start(); err != nil {
-		t.Fatalf("start gRPC server: %v", err)
+	if err := release(); err != nil {
+		t.Fatalf("release gRPC server: %v", err)
 	}
 	retryCtx, retryCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer retryCancel()
@@ -661,6 +753,99 @@ func TestContract_ToolsCall_Success_MatchesV42(t *testing.T) {
 	}
 }
 
+func TestProxyHandleToolUsesTransportTagForUCITools(t *testing.T) {
+	srv := &mockEngramServer{callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
+	grpcAddr := startMockGRPC(t, srv)
+	_, mod, project := buildContractDispatcher(t, grpcAddr)
+	project.Env[config.EnvClaudeSessionID] = "host-session-must-not-be-used"
+	project.Cwd = "untrusted-cwd-must-not-be-inspected"
+	mod.cache.Forget(project.ID)
+	t.Setenv("PATH", t.TempDir())
+	ctx := auditcontext.WithUCITransportSession(context.Background(), "transport-tag-a")
+
+	_, err := mod.ProxyHandleTool(ctx, project, "codebase_context", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("UCI proxy call: %v", err)
+	}
+	srv.mu.Lock()
+	request := srv.callReq
+	metadata := srv.callMetadata.Copy()
+	srv.mu.Unlock()
+	if request == nil || request.GetSessionId() != "transport-tag-a" {
+		t.Fatalf("UCI CallTool session ID = %#v, want transport tag", request)
+	}
+	if request.GetProject() != "" || request.GetProjectIdentity() != nil || request.GetProjectIdentityV3() != nil {
+		t.Fatalf("UCI CallTool carried project-derived authority: %#v", request)
+	}
+	if got := metadata.Get(auditcontext.SourceSessionMetadataKey); len(got) != 1 || got[0] != "transport-tag-a" {
+		t.Fatalf("UCI CallTool source metadata = %v, want transport tag", got)
+	}
+
+	_, err = mod.ProxyHandleTool(context.Background(), project, "codebase_context", json.RawMessage(`{}`))
+	if err == nil {
+		t.Fatal("UCI proxy accepted a request without a transport tag")
+	}
+	srv.mu.Lock()
+	requestAfterMissingTag := srv.callReq
+	srv.mu.Unlock()
+	if requestAfterMissingTag != request {
+		t.Fatal("UCI proxy dispatched a request without a transport tag")
+	}
+}
+
+func TestProxyHandleToolSkipsProjectV3ForUCITools(t *testing.T) {
+	srv := &mockEngramServer{callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
+	grpcAddr := startMockGRPC(t, srv)
+	_, mod, project := buildV3ContractDispatcher(t, grpcAddr)
+	project.ID = "project-authority-must-not-be-forwarded"
+	project.Cwd = "untrusted-cwd-must-not-be-inspected"
+	ctx := auditcontext.WithUCITransportSession(context.Background(), "transport-tag-v3")
+
+	_, err := mod.ProxyHandleTool(ctx, project, "codebase_context", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("UCI V3 proxy call: %v", err)
+	}
+	srv.mu.Lock()
+	request := srv.callReq
+	registerRequest := srv.registerReq
+	srv.mu.Unlock()
+	if request == nil || request.GetSessionId() != "transport-tag-v3" {
+		t.Fatalf("UCI V3 CallTool session ID = %#v, want transport tag", request)
+	}
+	if request.GetProject() != "" || request.GetProjectIdentity() != nil || request.GetProjectIdentityV3() != nil || registerRequest != nil {
+		t.Fatalf("UCI V3 call reached project identity resolution: request=%#v registration=%#v", request, registerRequest)
+	}
+}
+
+func TestProxyHandleToolPreservesLegacySessionForNonUCITools(t *testing.T) {
+	srv := &mockEngramServer{callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
+	grpcAddr := startMockGRPC(t, srv)
+	_, mod, project := buildContractDispatcher(t, grpcAddr)
+	project.Env[config.EnvClaudeSessionID] = "legacy-host-session"
+	const legacySelector = "legacy-selector-fixture"
+	mod.cache.identities.Store(cacheKey(project), &pb.ProjectIdentityV2{Version: 2, LegacyProjectId: legacySelector})
+	t.Setenv("PATH", t.TempDir())
+	ctx := auditcontext.WithUCITransportSession(context.Background(), "transport-tag-a")
+
+	_, err := mod.ProxyHandleTool(ctx, project, "memory_store", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("non-UCI proxy call: %v", err)
+	}
+	srv.mu.Lock()
+	request := srv.callReq
+	metadata := srv.callMetadata.Copy()
+	srv.mu.Unlock()
+	if request == nil || request.GetSessionId() != "legacy-host-session" {
+		t.Fatalf("non-UCI CallTool session ID = %#v, want legacy host session", request)
+	}
+	if request.GetProject() != project.ID || request.GetProjectIdentity().GetLegacyProjectId() != legacySelector {
+		t.Fatalf("non-UCI CallTool selector=%q identity=%#v, want selector=%q legacy=%q", request.GetProject(), request.GetProjectIdentity(), project.ID, legacySelector)
+	}
+	if got := metadata.Get(auditcontext.SourceSessionMetadataKey); len(got) != 0 {
+		t.Fatalf("non-UCI CallTool unexpectedly forwarded transport metadata %v", got)
+	}
+}
+
 // TestContract_ToolsCall_IsError_MatchesV42 verifies the NFR-5 critical path:
 // when the gRPC server returns IsError=true, the dispatcher emits isError:true
 // in the response envelope, byte-identical to v4.2.0's error envelope.
@@ -836,5 +1021,36 @@ func TestContract_ToolsCall_UnknownTool_Returns32601(t *testing.T) {
 	}
 	if got.Error.Code != -32601 {
 		t.Errorf("error.code: got %d, want -32601", got.Error.Code)
+	}
+}
+
+func TestHAP01SourceDiagnostic_LocalMCPInitializeDoesNotReachBackend(t *testing.T) {
+	t.Parallel()
+
+	srv := &mockEngramServer{initResp: &pb.InitializeResponse{ServerName: "fixture-server", ServerVersion: "fixture-version"}}
+	grpcAddr := startMockGRPC(t, srv)
+	disp, _, project := buildContractDispatcher(t, grpcAddr)
+	response, err := disp.HandleRequest(context.Background(), project, jsonrpcInitReq(1))
+	if err != nil {
+		t.Fatalf("HandleRequest: %v", err)
+	}
+	var projection struct {
+		Result struct {
+			ServerInfo struct {
+				Name string `json:"name"`
+			} `json:"serverInfo"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response, &projection); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if projection.Result.ServerInfo.Name != "engram" {
+		t.Fatalf("local initialize server name = %q, want engram", projection.Result.ServerInfo.Name)
+	}
+	srv.mu.Lock()
+	initCalls := srv.initCalls
+	srv.mu.Unlock()
+	if initCalls != 0 {
+		t.Fatalf("local MCP initialize reached backend %d times", initCalls)
 	}
 }

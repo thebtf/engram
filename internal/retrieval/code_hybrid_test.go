@@ -1,7 +1,7 @@
 package retrieval
 
-// Pure-logic tests for CodeHybridSearch using a fake CodeSearchStoreInterface.
-// No database required — these tests always run in CI.
+// Pure-logic tests for LegacyUnscopedCodeHybridSearch using a fake
+// LegacyUnscopedCodeSearchStore. No database is required.
 //
 // Coverage:
 //   (a) RRF fusion order: a chunk in BOTH legs ranks above one in a single leg.
@@ -19,7 +19,7 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
 
-// fakeCodeStore is a controllable fake implementation of CodeSearchStoreInterface.
+// fakeCodeStore is a controllable LegacyUnscopedCodeSearchStore implementation.
 // Each method returns a canned result or error set by the test.
 type fakeCodeStore struct {
 	ftsResults []gormdb.CodeSearchResult
@@ -55,13 +55,13 @@ func codeResult(id int64, path string, score float64) gormdb.CodeSearchResult {
 	}
 }
 
-// TestCodeHybridSearch_RRFFusionOrder asserts that a chunk appearing in BOTH the
+// TestLegacyUnscopedCodeHybridSearch_RRFFusionOrder asserts that a chunk appearing in BOTH the
 // FTS and vector legs ranks above chunks that appear in only one leg.
 //
 // RRF score for a chunk in both lists = 1/(1+k+1) + 1/(1+k+1) = 2/(k+2).
 // RRF score for a chunk in one list  = 1/(1+k+1) = 1/(k+2).
 // Therefore the shared chunk must always rank first.
-func TestCodeHybridSearch_RRFFusionOrder(t *testing.T) {
+func TestLegacyUnscopedCodeHybridSearch_RRFFusionOrder(t *testing.T) {
 	// ID 10: appears in BOTH legs (rank 0 in FTS, rank 0 in vector).
 	// ID 20: appears in FTS only (rank 1 in FTS).
 	// ID 30: appears in vector only (rank 1 in vector).
@@ -77,7 +77,7 @@ func TestCodeHybridSearch_RRFFusionOrder(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	hits, err := CodeHybridSearch(ctx, "proj", "query", 10, store, CodeHybridOptions{
+	hits, err := LegacyUnscopedCodeHybridSearch(ctx, "proj", "query", 10, store, LegacyUnscopedCodeHybridOptions{
 		QueryVec: []float32{0.1, 0.2, 0.3},
 	})
 	require.NoError(t, err)
@@ -98,9 +98,9 @@ func TestCodeHybridSearch_RRFFusionOrder(t *testing.T) {
 	require.True(t, ids[30], "vector-only chunk must appear in results")
 }
 
-// TestCodeHybridSearch_FTSOnlyWhenQueryVecEmpty asserts that passing an empty
+// TestLegacyUnscopedCodeHybridSearch_FTSOnlyWhenQueryVecEmpty asserts that passing an empty
 // QueryVec skips the vector leg entirely and returns FTS results.
-func TestCodeHybridSearch_FTSOnlyWhenQueryVecEmpty(t *testing.T) {
+func TestLegacyUnscopedCodeHybridSearch_FTSOnlyWhenQueryVecEmpty(t *testing.T) {
 	store := &fakeCodeStore{
 		ftsResults: []gormdb.CodeSearchResult{
 			codeResult(1, "a.go", 0.8),
@@ -112,7 +112,7 @@ func TestCodeHybridSearch_FTSOnlyWhenQueryVecEmpty(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	hits, err := CodeHybridSearch(ctx, "proj", "query", 10, store, CodeHybridOptions{
+	hits, err := LegacyUnscopedCodeHybridSearch(ctx, "proj", "query", 10, store, LegacyUnscopedCodeHybridOptions{
 		QueryVec: nil, // empty → FTS-only
 	})
 	require.NoError(t, err)
@@ -130,9 +130,9 @@ func TestCodeHybridSearch_FTSOnlyWhenQueryVecEmpty(t *testing.T) {
 	}
 }
 
-// TestCodeHybridSearch_DenseOnlySkipsFTS asserts that DenseOnly=true calls only
+// TestLegacyUnscopedCodeHybridSearch_DenseOnlySkipsFTS asserts that DenseOnly=true calls only
 // the vector leg and returns vector results, skipping FTS entirely.
-func TestCodeHybridSearch_DenseOnlySkipsFTS(t *testing.T) {
+func TestLegacyUnscopedCodeHybridSearch_DenseOnlySkipsFTS(t *testing.T) {
 	store := &fakeCodeStore{
 		ftsResults: []gormdb.CodeSearchResult{
 			codeResult(99, "fts_should_not_appear.go", 0.9),
@@ -144,7 +144,7 @@ func TestCodeHybridSearch_DenseOnlySkipsFTS(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	hits, err := CodeHybridSearch(ctx, "proj", "query", 10, store, CodeHybridOptions{
+	hits, err := LegacyUnscopedCodeHybridSearch(ctx, "proj", "query", 10, store, LegacyUnscopedCodeHybridOptions{
 		QueryVec:  []float32{0.1, 0.2},
 		DenseOnly: true,
 	})
@@ -163,10 +163,10 @@ func TestCodeHybridSearch_DenseOnlySkipsFTS(t *testing.T) {
 	}
 }
 
-// TestCodeHybridSearch_FTSErrorDegradesToVector asserts that when the FTS leg
-// returns an error, CodeHybridSearch does not fail but returns the vector leg's
+// TestLegacyUnscopedCodeHybridSearch_FTSErrorDegradesToVector asserts that when the FTS leg
+// returns an error, LegacyUnscopedCodeHybridSearch does not fail but returns the vector leg's
 // results.
-func TestCodeHybridSearch_FTSErrorDegradesToVector(t *testing.T) {
+func TestLegacyUnscopedCodeHybridSearch_FTSErrorDegradesToVector(t *testing.T) {
 	store := &fakeCodeStore{
 		ftsErr: errors.New("FTS index unavailable"),
 		vecResults: []gormdb.CodeSearchResult{
@@ -175,7 +175,7 @@ func TestCodeHybridSearch_FTSErrorDegradesToVector(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	hits, err := CodeHybridSearch(ctx, "proj", "query", 10, store, CodeHybridOptions{
+	hits, err := LegacyUnscopedCodeHybridSearch(ctx, "proj", "query", 10, store, LegacyUnscopedCodeHybridOptions{
 		QueryVec: []float32{0.1, 0.2},
 	})
 	require.NoError(t, err, "FTS error must degrade gracefully, not propagate")
@@ -183,10 +183,10 @@ func TestCodeHybridSearch_FTSErrorDegradesToVector(t *testing.T) {
 	require.Equal(t, int64(5), hits[0].ID, "vector result must be returned after FTS error")
 }
 
-// TestCodeHybridSearch_VectorErrorDegradesToFTS asserts that when the vector leg
-// returns an error, CodeHybridSearch does not fail but returns the FTS leg's
+// TestLegacyUnscopedCodeHybridSearch_VectorErrorDegradesToFTS asserts that when the vector leg
+// returns an error, LegacyUnscopedCodeHybridSearch does not fail but returns the FTS leg's
 // results.
-func TestCodeHybridSearch_VectorErrorDegradesToFTS(t *testing.T) {
+func TestLegacyUnscopedCodeHybridSearch_VectorErrorDegradesToFTS(t *testing.T) {
 	store := &fakeCodeStore{
 		ftsResults: []gormdb.CodeSearchResult{
 			codeResult(7, "fts_fallback.go", 0.8),
@@ -195,7 +195,7 @@ func TestCodeHybridSearch_VectorErrorDegradesToFTS(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	hits, err := CodeHybridSearch(ctx, "proj", "query", 10, store, CodeHybridOptions{
+	hits, err := LegacyUnscopedCodeHybridSearch(ctx, "proj", "query", 10, store, LegacyUnscopedCodeHybridOptions{
 		QueryVec: []float32{0.1, 0.2},
 	})
 	require.NoError(t, err, "vector error must degrade gracefully, not propagate")
@@ -203,25 +203,25 @@ func TestCodeHybridSearch_VectorErrorDegradesToFTS(t *testing.T) {
 	require.Equal(t, int64(7), hits[0].ID, "FTS result must be returned after vector error")
 }
 
-// TestCodeHybridSearch_BothLegsErrorReturnsEmpty asserts that when both legs
+// TestLegacyUnscopedCodeHybridSearch_BothLegsErrorReturnsEmpty asserts that when both legs
 // fail the result is empty (nil) with no error.
-func TestCodeHybridSearch_BothLegsErrorReturnsEmpty(t *testing.T) {
+func TestLegacyUnscopedCodeHybridSearch_BothLegsErrorReturnsEmpty(t *testing.T) {
 	store := &fakeCodeStore{
 		ftsErr: errors.New("FTS down"),
 		vecErr: errors.New("vector down"),
 	}
 
 	ctx := context.Background()
-	hits, err := CodeHybridSearch(ctx, "proj", "query", 10, store, CodeHybridOptions{
+	hits, err := LegacyUnscopedCodeHybridSearch(ctx, "proj", "query", 10, store, LegacyUnscopedCodeHybridOptions{
 		QueryVec: []float32{0.1, 0.2},
 	})
 	require.NoError(t, err, "dual leg failure must not propagate an error")
 	require.Empty(t, hits, "empty result expected when both legs fail")
 }
 
-// TestCodeHybridSearch_LimitRespected asserts that the returned slice is capped
+// TestLegacyUnscopedCodeHybridSearch_LimitRespected asserts that the returned slice is capped
 // at the requested limit even when both legs return more results.
-func TestCodeHybridSearch_LimitRespected(t *testing.T) {
+func TestLegacyUnscopedCodeHybridSearch_LimitRespected(t *testing.T) {
 	var ftsResults, vecResults []gormdb.CodeSearchResult
 	for i := int64(0); i < 30; i++ {
 		ftsResults = append(ftsResults, codeResult(i, fmt.Sprintf("f%d.go", i), float64(30-i)))
@@ -233,22 +233,25 @@ func TestCodeHybridSearch_LimitRespected(t *testing.T) {
 	store := &fakeCodeStore{ftsResults: ftsResults, vecResults: vecResults}
 
 	ctx := context.Background()
-	hits, err := CodeHybridSearch(ctx, "proj", "query", 5, store, CodeHybridOptions{
+	hits, err := LegacyUnscopedCodeHybridSearch(ctx, "proj", "query", 5, store, LegacyUnscopedCodeHybridOptions{
 		QueryVec: []float32{0.1},
 	})
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(hits), 5, "result must be capped at limit=5")
 }
 
-// TestCodeHybridSearch_InvalidInputErrors asserts that empty projectID or query
-// return an error.
-func TestCodeHybridSearch_InvalidInputErrors(t *testing.T) {
+// TestLegacyUnscopedCodeHybridSearch_InvalidInputErrors asserts that empty
+// projectID or query, and non-positive limits, return an error.
+func TestLegacyUnscopedCodeHybridSearch_InvalidInputErrors(t *testing.T) {
 	store := &fakeCodeStore{}
 	ctx := context.Background()
 
-	_, err := CodeHybridSearch(ctx, "", "query", 10, store, CodeHybridOptions{})
+	_, err := LegacyUnscopedCodeHybridSearch(ctx, "", "query", 10, store, LegacyUnscopedCodeHybridOptions{})
 	require.Error(t, err, "empty projectID must return error")
 
-	_, err = CodeHybridSearch(ctx, "proj", "", 10, store, CodeHybridOptions{})
+	_, err = LegacyUnscopedCodeHybridSearch(ctx, "proj", "", 10, store, LegacyUnscopedCodeHybridOptions{})
 	require.Error(t, err, "empty query must return error")
+
+	_, err = LegacyUnscopedCodeHybridSearch(ctx, "proj", "query", 0, store, LegacyUnscopedCodeHybridOptions{})
+	require.Error(t, err, "non-positive limit must return an error")
 }

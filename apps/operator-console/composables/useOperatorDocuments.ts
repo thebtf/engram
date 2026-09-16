@@ -1,19 +1,22 @@
 import type { ComputedRef, Ref } from 'vue'
-import type { OperatorLoadState, OperatorMutationResult } from './useOperatorApi'
+import type { OperatorLoadState } from './useOperatorApi'
+import { parseOperatorSelectionSnapshot, type OperatorSelection } from './useOperatorSelection'
+import { executeMutation, type MutationResult } from './useApi'
 import {
   emptyState,
   endpointEvidence,
   errorState,
   liveState,
   OperatorFetchError,
+  operatorApiUrl,
   operatorFetchJson,
   pendingState,
-  runOperatorMutation,
   toOperatorSourceError,
 } from './useOperatorApi'
 
 const DEFAULT_DOCUMENT_PROJECT = 'engram'
 const DOCUMENT_LIST_LIMIT = 100
+
 
 type ApiProjectList = string[]
 
@@ -81,11 +84,6 @@ interface ApiDocumentCommentsResponse {
   document_id?: number | string
 }
 
-interface ApiDocumentCommentReceipt {
-  comment_id?: number | string
-  document_id?: number | string
-  author?: string
-}
 
 export interface OperatorDocumentSummary {
   id: string
@@ -140,6 +138,63 @@ export interface DocumentCommentInput {
   lineEnd?: number
 }
 
+export type DocumentSelectionOperationAction = 'export'
+
+export interface DocumentSelectionOperationTarget {
+  documentId: number
+  version: number
+}
+
+export interface DocumentSelectionOperationInput {
+  action: DocumentSelectionOperationAction
+  target: DocumentSelectionOperationTarget
+}
+
+export interface DocumentExportArtifact {
+  downloadUrl: string
+  filename: string
+  contentType: string
+  byteLength: number
+}
+
+export interface DocumentSelectionOperationResult {
+  mutation: MutationResult<DocumentSelectionOperationInput>
+  artifact?: DocumentExportArtifact
+}
+
+function documentOperationSelectionPayload(selection: Exclude<OperatorSelection, { kind: 'none' }>): Record<string, unknown> {
+  if (selection.domain !== 'documents' || !Number.isSafeInteger(selection.version) || selection.version < 1 || (selection.kind === 'frozen_filter' && selection.reconfirmationRequired)) {
+    throw new TypeError('the selected Documents snapshot is not server current')
+  }
+
+  switch (selection.kind) {
+    case 'explicit':
+    case 'page':
+      return { kind: selection.kind, selection_version: selection.version }
+    case 'frozen_filter':
+      return { kind: selection.kind, selection_version: selection.version, selection_token: selection.selectionToken }
+  }
+}
+
+function parseDocumentSelection(value: unknown): Exclude<OperatorSelection, { kind: 'none' }> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Documents selection response is invalid')
+  const selection = parseOperatorSelectionSnapshot(Reflect.get(value, 'selection'))
+  if (selection.domain !== 'documents' || selection.kind === 'none') throw new TypeError('Documents selection response is invalid')
+  return selection
+}
+
+function parseDocumentExportArtifact(value: unknown): DocumentExportArtifact | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const artifact = Reflect.get(value, 'artifact')
+  if (artifact === null || typeof artifact !== 'object' || Array.isArray(artifact)) return undefined
+  const downloadUrl = Reflect.get(artifact, 'download_url')
+  const filename = Reflect.get(artifact, 'filename')
+  const contentType = Reflect.get(artifact, 'content_type')
+  const byteLength = Reflect.get(artifact, 'byte_length')
+  if (typeof downloadUrl !== 'string' || !/^\/api\/documents\/exports\/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(downloadUrl) || typeof filename !== 'string' || !filename || contentType !== 'application/json' || !Number.isSafeInteger(byteLength) || byteLength < 1) return undefined
+  return { downloadUrl, filename, contentType, byteLength }
+}
+
 function jsonInit(method: 'POST', body?: unknown): RequestInit {
   const init: RequestInit = { method }
   if (body !== undefined) {
@@ -148,6 +203,18 @@ function jsonInit(method: 'POST', body?: unknown): RequestInit {
   }
   return init
 }
+
+function documentOperationInit(body: unknown, requestId: string): RequestInit {
+  return {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Engram-Request-ID': requestId,
+    },
+    body: JSON.stringify(body),
+  }
+}
+
 
 function replaceArray<T>(target: T[], next: readonly T[]) {
   target.splice(0, target.length, ...next)
@@ -321,7 +388,8 @@ export function useOperatorDocuments(): {
   openDocument: (doc: OperatorDocumentSummary) => Promise<void>
   selectPrimaryVersion: (version: number) => Promise<void>
   selectSecondaryVersion: (version: number) => Promise<void>
-  addComment: (input: DocumentCommentInput) => Promise<OperatorMutationResult<ApiDocumentCommentReceipt>>
+  addComment: (input: DocumentCommentInput) => Promise<MutationResult<DocumentCommentInput>>
+  runDocumentSelectionOperation: (input: DocumentSelectionOperationInput) => Promise<DocumentSelectionOperationResult>
 } {
   const listEvidence = endpointEvidence(`/api/documents?project={project}&limit=${DOCUMENT_LIST_LIMIT}`, 'documents-list')
   const historyEvidence = endpointEvidence('/api/documents/history?path={path}&project={project}', 'documents-history')
@@ -615,22 +683,44 @@ export function useOperatorDocuments(): {
       throw new Error('No current document version selected for comments')
     }
 
-    return runOperatorMutation<ApiDocumentCommentReceipt>({
-      action: 'document-comment',
-      evidence: endpointEvidence('/api/documents/comment', 'documents-comment'),
-      snapshot: () => [...comments.value],
-      run: () => operatorFetchJson<ApiDocumentCommentReceipt>('/api/documents/comment', jsonInit('POST', {
-        document_id: Number(currentVersionEntry.id),
-        author: input.author || 'operator-console',
-        content: input.content,
-        line_start: input.lineStart,
-        line_end: input.lineEnd,
-      }), 'documents-comment'),
-      rollback: (snapshot) => {
-        replaceArray(comments.value, snapshot || [])
-      },
-      refresh: () => refreshCommentsForVersion(currentVersionEntry.version),
-    })
+    return executeMutation(
+      { requestId: crypto.randomUUID(), action: 'document-comment', intent: input },
+      fetch(operatorApiUrl('/api/documents/comment'), {
+        ...jsonInit('POST', {
+          document_id: Number(currentVersionEntry.id),
+          author: input.author || 'operator-console',
+          content: input.content,
+          line_start: input.lineStart,
+          line_end: input.lineEnd,
+        }),
+        credentials: 'include',
+      }),
+      () => undefined,
+    )
+  }
+
+  async function runDocumentSelectionOperation(input: DocumentSelectionOperationInput): Promise<DocumentSelectionOperationResult> {
+    if (!Number.isSafeInteger(input.target.documentId) || input.target.documentId < 1 || !Number.isSafeInteger(input.target.version) || input.target.version < 1) {
+      throw new TypeError('Documents export target is invalid')
+    }
+    const selectionRequestId = crypto.randomUUID()
+    const selection = parseDocumentSelection(await operatorFetchJson<unknown>('/api/documents/selection', documentOperationInit({
+      domain: 'documents',
+      selection: { kind: 'explicit', targets: [{ id: String(input.target.documentId), expected_version: input.target.version }] },
+    }, selectionRequestId), 'documents-selection'))
+    const requestId = crypto.randomUUID()
+    const request = { requestId, action: `document-${input.action}`, intent: input }
+    const body = { request_id: requestId, action: input.action, selection: documentOperationSelectionPayload(selection) }
+    let response: Response
+    try {
+      response = await fetch(operatorApiUrl('/api/documents'), { ...documentOperationInit(body, requestId), credentials: 'include' })
+    } catch (error) {
+      return { mutation: await executeMutation(request, Promise.reject(error), () => undefined) }
+    }
+    const artifact = response.ok
+      ? await response.clone().json().then(parseDocumentExportArtifact).catch(() => undefined)
+      : undefined
+    return { mutation: await executeMutation(request, Promise.resolve(response), () => undefined), ...(artifact === undefined ? {} : { artifact }) }
   }
 
   startOnce('documents-page', refresh)
@@ -659,5 +749,6 @@ export function useOperatorDocuments(): {
     selectPrimaryVersion,
     selectSecondaryVersion,
     addComment,
+    runDocumentSelectionOperation,
   }
 }

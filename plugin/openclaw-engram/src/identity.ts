@@ -15,6 +15,13 @@ import { createHash, randomBytes } from 'node:crypto';
 import { execSync } from 'node:child_process';
 import { closeSync, fsyncSync, linkSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { resolve, basename } from 'node:path';
+import {
+ buildProjectIdentityV3,
+ discoverProjectAnchorV3,
+ isValidClientInstanceIdV3,
+ normalizeGitRemoteV3,
+ type ProjectIdentityV3,
+} from './project-identity-v3.js';
 
 // Module-level memoization cache — keyed by resolved cwd path
 const gitRemoteCache = new Map<string, GitRemoteResult | null>();
@@ -30,6 +37,8 @@ export interface ProjectIdentity {
   relativePath?: string;
   /** Full metadata for v2-aware transports. Never derived from agentId. */
   projectIdentityV2?: ProjectIdentityV2;
+ /** V3 descriptor for explicit opaque-client identity mode. */
+ projectIdentityV3?: ProjectIdentityV3;
 }
 
 export const PROJECT_IDENTITY_VERSION_V2 = 2 as const;
@@ -305,10 +314,74 @@ export function projectIDFromWorkspace(workspaceDir: string): string {
  * @param workspaceDir - Optional workspace directory for git-based ID resolution.
  * @returns          A ProjectIdentity with the resolved projectId.
  */
+function projectDescriptorInvalid(): never {
+ throw new Error('PROJECT_DESCRIPTOR_INVALID');
+}
+
+function resolveV3RepositoryRoot(workspaceDir: string): string | null {
+ try {
+  const root = execSync('git rev-parse --show-toplevel', {
+   cwd: workspaceDir,
+   stdio: ['ignore', 'pipe', 'ignore'],
+   timeout: 3000,
+   env: { ...process.env, LC_ALL: 'C', LANG: 'C' },
+  }).toString().trim();
+  return root ? resolve(root) : null;
+ } catch {
+  return null;
+ }
+}
+
+function resolveV3RemoteEvidence(scopeRoot: string): string[] {
+ try {
+  const remote = execSync('git remote get-url origin', {
+   cwd: scopeRoot,
+   stdio: ['ignore', 'pipe', 'ignore'],
+   timeout: 3000,
+   env: { ...process.env, LC_ALL: 'C', LANG: 'C' },
+  }).toString().trim();
+  const normalized = normalizeGitRemoteV3(remote);
+  if (normalized.disposition === 'refused') projectDescriptorInvalid();
+  return normalized.disposition === 'normalized' ? [normalized.value] : [];
+ } catch (error) {
+  if (error instanceof Error && error.message === 'PROJECT_DESCRIPTOR_INVALID') throw error;
+  return [];
+ }
+}
+
+function resolveIdentityV3(
+ agentId: string,
+ workspaceDir: string | undefined,
+ clientInstanceId: string,
+): ProjectIdentity {
+ if (!isValidClientInstanceIdV3(clientInstanceId) || !workspaceDir) projectDescriptorInvalid();
+ try {
+  const selectedRoot = resolve(workspaceDir);
+  const selectedAnchor = discoverProjectAnchorV3(selectedRoot);
+  const scopeRoot = selectedAnchor?.scope === 'directory'
+   ? selectedRoot
+   : resolveV3RepositoryRoot(selectedRoot);
+  if (!scopeRoot) projectDescriptorInvalid();
+  const anchor = discoverProjectAnchorV3(scopeRoot, selectedAnchor?.scope === 'directory' ? 'directory' : 'repository');
+  if (!anchor) projectDescriptorInvalid();
+  const projectIdentityV3 = buildProjectIdentityV3({
+   anchor,
+   normalized_git_remotes: resolveV3RemoteEvidence(scopeRoot),
+   legacy_identifiers: [],
+   client_instance_id: clientInstanceId,
+  });
+  return { projectId: projectIdentityV3.anchor_project_id, agentId, projectIdentityV3 };
+ } catch {
+  projectDescriptorInvalid();
+ }
+}
+
 export function resolveIdentity(
   agentId: string,
   workspaceDir?: string,
+ clientInstanceId?: string,
 ): ProjectIdentity {
+ if (clientInstanceId !== undefined) return resolveIdentityV3(agentId, workspaceDir, clientInstanceId);
   // agentId-first: when no workspace directory is available, use agentId as scope
   if (!workspaceDir) {
     return { projectId: agentId, agentId };

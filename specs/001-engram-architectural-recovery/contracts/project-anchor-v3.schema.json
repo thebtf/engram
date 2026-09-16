@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://engram.dev/contracts/project-anchor-v3.schema.json",
+  "title": "Engram Project Anchor V3",
+  "description": "The complete V3 `.engram-project` anchor document. It identifies a logical project anchor but never contains a server canonical project key, path, remote, credential, token, principal, or private payload.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "project_id",
+    "name",
+    "scope"
+  ],
+  "properties": {
+    "version": {
+      "description": "Anchor document version.",
+      "const": 3
+    },
+    "project_id": {
+      "description": "Immutable random anchor UUID. When accepted, the server maps it to Project.anchor_project_id and binds that field to one canonical Project.project_key; it is not itself the tenant key.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "name": {
+      "description": "Mutable display metadata. It is not an identifier and never participates in project resolution or merge authorization.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "scope": {
+      "description": "The explicitly declared root kind for this anchor.",
+      "type": "string",
+      "enum": [
+        "repository",
+        "directory"
+      ]
+    }
+  }
+}

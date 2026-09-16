@@ -1,6 +1,5 @@
 {
   "_note": "EN is the first translation target. Keys mirror ru.json exactly. A missing key here falls back to the RU string (i18n.config fallbackLocale), so a partial translation still renders a coherent console. This file is the worked example of 'translate a screen' — the developer extends it screen by screen as pages are keyed.",
-
   "common": {
     "show": "Show",
     "hide": "Hide",
@@ -14,14 +13,100 @@
     "clearSelection": "Clear selection",
     "loadingShort": "…"
   },
-
+  "mutationOutcome": {
+    "request": "Request reference",
+    "action": "Action",
+    "operation": "Operation reference",
+    "code": "Response code",
+    "readback": "Authoritative readback",
+    "version": "Readback version",
+    "manualCheck": "The submitted input is still retained. Check current state before intentionally submitting it again.",
+    "readbackKinds": {
+      "current": "current state",
+      "authorized_absence": "authorized absence",
+      "non_disclosing": "non-disclosing operation status"
+    },
+    "items": {
+      "committed": "committed",
+      "denied": "denied",
+      "conflict": "conflict",
+      "validation_error": "invalid input",
+      "failed": "failed",
+      "outcome_unknown": "outcome unknown"
+    },
+    "outcomes": {
+      "committed_verified": {
+        "title": "Completed and verified",
+        "body": "An authoritative postcondition readback confirms this action."
+      },
+      "committed_verification_pending": {
+        "title": "Committed, verification pending",
+        "body": "The server accepted or committed the action, but no authoritative postcondition is available yet."
+      },
+      "partial": {
+        "title": "Partially completed",
+        "body": "Only the listed item outcomes are known; unresolved selections remain available."
+      },
+      "denied": {
+        "title": "Access denied",
+        "body": "The server denied this request before a known effect."
+      },
+      "conflict": {
+        "title": "Conflict",
+        "body": "The request conflicts with the server's current state."
+      },
+      "validation_error": {
+        "title": "Invalid input",
+        "body": "The server rejected the submitted input."
+      },
+      "stale": {
+        "title": "Stale state",
+        "body": "The request used state that is no longer current."
+      },
+      "unsupported": {
+        "title": "Unsupported action",
+        "body": "This server does not support the requested action."
+      },
+      "offline": {
+        "title": "Offline",
+        "body": "The server reported that this action cannot run while offline."
+      },
+      "timeout": {
+        "title": "Timed out",
+        "body": "The request timed out before a verified outcome was returned."
+      },
+      "network": {
+        "title": "Network failure",
+        "body": "A network failure prevented a verified outcome from being returned."
+      },
+      "failed": {
+        "title": "Operation failed",
+        "body": "The server did not complete this request."
+      },
+      "outcome_unknown": {
+        "title": "Outcome unknown",
+        "body": "The browser cannot determine whether the server committed this request."
+      }
+    }
+  },
   "honesty": {
     "live": "live",
     "dormant": "behind flag",
     "stale": "tombstone",
-    "mustbuild": "must build"
+    "mustbuild": "must build",
+    "a11y": "{classification}; current state: {state}",
+    "states": {
+      "loading": "loading",
+      "empty": "no current result",
+      "denied": "access denied",
+      "error": "request failed",
+      "stale": "previous result",
+      "partial": "legacy result only",
+      "unsupported": "unsupported input",
+      "timeout": "request timed out",
+      "offline": "server unreachable"
+    }
   },
-
   "errors": {
     "diagnosis": {
       "unauthorized": "Sign in again to continue.",
@@ -33,11 +118,9 @@
       "invalid-response": "The Engram server returned an unreadable response."
     }
   },
-
   "switchRow": {
     "restartRequired": "restart"
   },
-
   "shell": {
     "brandHome": "Home — Overview",
     "collapseNav": "Collapse navigation",
@@ -68,16 +151,20 @@
     "authLocked": "login required",
     "authUnknown": "session unknown",
     "online": "online",
-    "backend": { "ready": "console reachable · server ready", "degraded": "console reachable · server degraded", "unavailable": "console reachable · server unavailable" },
+    "backend": {
+      "ready": "console reachable · server ready",
+      "degraded": "console reachable · server degraded",
+      "unavailable": "console reachable · server unavailable"
+    },
     "postgres": "PostgreSQL 17 · pgvector",
     "statusDegradation": "degradation",
     "statusNoise": "noise",
-    "records": "{count} record | {count} records",
-    "recordsLoading": "… records",
-    "reviewQueue": "{count} in review | {count} in review",
+    "activeRecords": "{count} active record | {count} active records",
+    "activeRecordsZero": "no active records",
+    "activeRecordsUnknown": "active records unknown",
+    "reviewQueueUnknown": "review queue unknown",
     "uptime": "running {value}"
   },
-
   "profileModal": {
     "aria": "Operator profile",
     "close": "Close profile",
@@ -95,7 +182,6 @@
     "current": "current",
     "sessionsMustBuildBody": "Full session listing and revoke actions stay mustbuild until an auth sessions endpoint exists."
   },
-
   "nav": {
     "groups": {
       "workspace": "Workspace",
@@ -111,7 +197,7 @@
       "queue": "Review queue",
       "noise": "Noise & value",
       "graph": "Knowledge links",
-      "books": "Context books",
+      "books": "Legacy import",
       "rules": "Behavior rules",
       "issues": "Issues",
       "projects": "Projects & sessions",
@@ -126,7 +212,6 @@
       "booksPipeline": "processing pipeline"
     }
   },
-
   "overview": {
     "pageTitle": "Overview",
     "pageSubtitle": "Summary across memory, product, and service. Cards lead to their sections.",
@@ -190,23 +275,42 @@
       "service": "Service"
     },
     "cards": {
-      "memory": { "sub": "{active} active · {noise} in noise" },
-      "queue": { "sub": "memory candidates waiting for a decision" },
-      "noise": { "sub": "share of noisy injections" },
-      "graph": { "sub": "concept graph and transitions" },
-      "books": { "sub": "author-domain and terminology ingest" },
-      "rules": { "sub": "operator always-inject directives" },
+      "memory": {
+        "sub": "{active} active · {noise} in noise"
+      },
+      "queue": {
+        "sub": "memory candidates waiting for a decision"
+      },
+      "noise": {
+        "sub": "share of noisy injections"
+      },
+      "graph": {
+        "sub": "concept graph and transitions"
+      },
+      "books": {
+        "sub": "author-domain and terminology ingest"
+      },
+      "rules": {
+        "sub": "operator always-inject directives"
+      },
       "issues": {
         "sub": "{open} open · {work} in progress · {total} total",
         "openBadge": "{n} open"
       },
-      "projects": { "sub": "{n} active session(s)" },
-      "health": { "sub": "{ok} model(s) ok · {degraded} degraded" },
-      "secrets": { "sub": "keys in vault · encryption enabled" },
-      "access": { "sub": "users, login providers, roles" }
+      "projects": {
+        "sub": "{n} active session(s)"
+      },
+      "health": {
+        "sub": "{ok} model(s) ok · {degraded} degraded"
+      },
+      "secrets": {
+        "sub": "keys in vault · encryption enabled"
+      },
+      "access": {
+        "sub": "users, login providers, roles"
+      }
     }
   },
-
   "memory": {
     "title": "Memory",
     "subtitle": "Engram knowledge working list: what to use in answers, what to verify, what to remove as noise.",
@@ -376,7 +480,6 @@
       "mustBuildNote": "bulk actions are waiting for server endpoints; selected records can be cleared"
     }
   },
-
   "queue": {
     "title": "Review queue",
     "subtitle": "Memory candidates: promote useful knowledge, reject noise, or mark older candidates as superseded.",
@@ -410,20 +513,20 @@
     },
     "countInFilter": "{shown} candidates · {selected} selected",
     "rowsLabel": "Rows",
-  "allRows": "All",
-  "pageRange": "{from}–{to} of {total}",
-  "pagination": {
-    "first": "Go to first page",
-    "previous": "Go to previous page",
-    "current": "Current page {page}",
-    "next": "Go to next page",
-    "last": "Go to last page"
-  },
-  "aria": {
-    "toggleCandidate": "Select candidate {id}",
-    "action": "{action}: candidate {id}"
-  },
-  "table": {
+    "allRows": "All",
+    "pageRange": "{from}–{to} of {total}",
+    "pagination": {
+      "first": "Go to first page",
+      "previous": "Go to previous page",
+      "current": "Current page {page}",
+      "next": "Go to next page",
+      "last": "Go to last page"
+    },
+    "aria": {
+      "toggleCandidate": "Select candidate {id}",
+      "action": "{action}: candidate {id}"
+    },
+    "table": {
       "candidate": "Candidate · target · project · age",
       "confidence": "Confidence",
       "actions": "Decision"
@@ -472,7 +575,12 @@
     },
     "actions": {
       "refresh": "Refresh",
-      "selectedPath": "Selected path: {path}"
+      "selectedPath": "Selected path: {path}",
+      "export": "Export selection",
+      "exporting": "Exporting…",
+      "download": "Download export",
+      "exportReady": "Export ready: {filename}",
+      "exportUnavailable": "The export could not be prepared for download."
     },
     "state": {
       "pending": "Loading documents…",
@@ -576,7 +684,16 @@
       "body": "Trusted OIDC proxies configured: {proxies}. Invite use is single-use and session revoke is a soft, audited lifecycle event."
     },
     "state": {
-      "runtime": { "pending": "pending", "live": "live", "empty": "empty", "gated": "gated", "unauthorized": "unauthorized", "forbidden": "forbidden", "error": "error", "stale-snapshot": "stale-snapshot" },
+      "runtime": {
+        "pending": "pending",
+        "live": "live",
+        "empty": "empty",
+        "gated": "gated",
+        "unauthorized": "unauthorized",
+        "forbidden": "forbidden",
+        "error": "error",
+        "stale-snapshot": "stale-snapshot"
+      },
       "pending": "Loading access surface…",
       "error": "Could not load access surface: {message}",
       "stale": "Showing the last proven access snapshot from {updatedAt}; refresh failed: {message}",
@@ -617,6 +734,55 @@
         "muted": "Muted"
       }
     },
+    "keycards": {
+      "title": "Workstation keycards",
+      "subtitle": "Issue, list, and revoke workstation credentials through the current admin browser session.",
+      "pending": "Loading workstation keycards…",
+      "errorTitle": "Could not load workstation keycards",
+      "error": "Keycard operation is unavailable: {message}",
+      "form": {
+        "name": "Workstation name",
+        "namePlaceholder": "for example: studio-laptop",
+        "scope": "Scope",
+        "principal": "Principal",
+        "principalPlaceholder": "for example: operator/alice",
+        "principalKind": "Principal kind",
+        "expiresAt": "Expires at",
+        "expiresAtHint": "Optional. The server validates the final expiration.",
+        "submit": "Issue keycard"
+      },
+      "scopes": {
+        "readWrite": "Read / write",
+        "readOnly": "Read only"
+      },
+      "principalKinds": {
+        "human": "Human",
+        "agent": "Agent",
+        "service": "Service"
+      },
+      "reveal": {
+        "title": "Copy this keycard now",
+        "body": "The raw keycard is returned only once and never appears in the keycard list, URL, or browser storage.",
+        "copyHint": "Use the copy control beside the keycard, then dismiss this panel.",
+        "dismiss": "Dismiss"
+      },
+      "columns": {
+        "name": "Workstation",
+        "identity": "Identity",
+        "scope": "Scope",
+        "expires": "Expires",
+        "activity": "Activity",
+        "status": "Status",
+        "actions": "Actions"
+      },
+      "status": {
+        "active": "Active",
+        "revoked": "Revoked",
+        "expired": "Expired"
+      },
+      "requestCount": "Requests: {count} · errors: {errors}",
+      "empty": "No workstation keycards recorded yet."
+    },
     "invitations": {
       "title": "Invitations",
       "subtitle": "Issue expiring single-use invites and revoke them without deleting the audit trail.",
@@ -644,15 +810,15 @@
         "expired": "Expired",
         "revoked": "Revoked"
       },
-    "empty": "No invitations recorded yet.",
-    "reveal": {
-      "title": "Copy this invitation now",
-      "body": "This code is shown once and will not appear in invitation history.",
-      "copy": "Copy code",
-      "copySuccess": "Code copied.",
-      "copyError": "Could not copy the code. Copy it manually before closing this notice.",
-      "dismiss": "Dismiss"
-    }
+      "empty": "No invitations recorded yet.",
+      "reveal": {
+        "title": "Copy this invitation now",
+        "body": "This code is shown once and will not appear in invitation history.",
+        "copy": "Copy code",
+        "copySuccess": "Code copied.",
+        "copyError": "Could not copy the code. Copy it manually before closing this notice.",
+        "dismiss": "Dismiss"
+      }
     },
     "users": {
       "title": "Users",
@@ -754,6 +920,9 @@
       "userEnabled": "Enabled {email}.",
       "sessionRevokedReason": "operator revoked session from access page",
       "sessionRevoked": "Revoked session for {email}.",
+      "keycardInvalid": "Provide a workstation name and principal before issuing a keycard.",
+      "keycardCreated": "Workstation keycard issued. Copy it now; it will not be shown again.",
+      "keycardRevoked": "Revoked workstation keycard {name}.",
       "error": "Operation failed: {message}"
     }
   },
@@ -761,8 +930,8 @@
     "title": "Knowledge graph",
     "subtitle": "Inspect graph nodes and edges, create new links, and run live traverse/path reads from the operator console.",
     "metrics": {
-      "nodes": "nodes in project",
-      "edges": "edges on selected node",
+      "loadedNodes": "nodes loaded for this request",
+      "loadedEdges": "connected edges loaded for this request",
       "selectedDegree": "selected degree"
     },
     "brief": {
@@ -773,7 +942,16 @@
       "project": "Graph project"
     },
     "state": {
-      "runtime": { "pending": "pending", "live": "live", "empty": "empty", "gated": "gated", "unauthorized": "unauthorized", "forbidden": "forbidden", "error": "error", "stale-snapshot": "stale-snapshot" },
+      "runtime": {
+        "pending": "pending",
+        "live": "live",
+        "empty": "empty",
+        "gated": "gated",
+        "unauthorized": "unauthorized",
+        "forbidden": "forbidden",
+        "error": "error",
+        "stale-snapshot": "stale-snapshot"
+      },
       "pending": "Loading graph data…",
       "error": "Could not load graph data: {message}",
       "stale": "Showing the last proven graph snapshot from {updatedAt}; refresh failed: {message}",
@@ -927,7 +1105,6 @@
       "edge": "{source} — {type} → {target}"
     }
   },
-
   "rules": {
     "title": "Behavior rules",
     "subtitle": "Rules enter every new session context from top to bottom. Set the order by dragging — higher rules apply earlier.",
@@ -974,7 +1151,7 @@
       "title": "Active directives",
       "count": "{count} rule | {count} rules",
       "header": "Order · rule · scope · audit",
-      "shown": "{shown} of {total} in current filter"
+      "loaded": "{count} loaded rule | {count} loaded rules in the current filter"
     },
     "meta": {
       "priority": "priority {priority}",
@@ -989,6 +1166,37 @@
       "title": "No rules",
       "body": "Add the first directive with the New rule button.",
       "scopeBody": "Scope {scope} has no rules yet."
+    },
+    "selection": {
+      "title": "Selection",
+      "kind": {
+        "none": "No selection",
+        "explicit": "Selected rules",
+        "page": "Current page",
+        "frozen_filter": "Frozen filter"
+      },
+      "version": "selection v{version}",
+      "unsaved": "not saved on the server",
+      "loadPage": "Load current page",
+      "selectPage": "Select current page",
+      "freeze": "Freeze current filter",
+      "pageInfo": "Page contains {count} rules; authoritative total: {total}",
+      "nextPageBound": "More results remain beyond this page.",
+      "frozenInfo": "Frozen selection has {count} rules and expires at {expires}.",
+      "reconfirm": "Selection needs reconfirmation ({reason}). Freeze the current filter again before applying an action.",
+      "loadError": "Could not load the current selection.",
+      "pageError": "Could not load the current selection page.",
+      "saveError": "Could not save the selection.",
+      "freezeError": "Could not freeze the current filter.",
+      "operationError": "Could not apply the selected Rules action.",
+      "enable": "Enable selected",
+      "disable": "Disable selected",
+      "delete": "Delete selected",
+      "readbacks": "Per-rule authoritative readback",
+      "header": "Select the current rules page",
+      "row": "Select rule {id}",
+      "reorderBound": "Reorder is available only when this page contains the complete scope.",
+      "noChanges": "No changes to apply."
     },
     "detail": {
       "title": "Rule #{id}",
@@ -1008,7 +1216,6 @@
       "disable": "Disable rule"
     }
   },
-
   "issues": {
     "title": "Issues",
     "subtitle": "Issue journal with priority, type, status, route, and comment count.",
@@ -1264,7 +1471,6 @@
       "task": "task"
     }
   },
-
   "secrets": {
     "title": "Secrets",
     "subtitle": "Keys and credentials: values are hidden in the list, revealing is an explicit action.",
@@ -1335,7 +1541,6 @@
     "copySecret": "Copy",
     "hideSecret": "Hide"
   },
-
   "projects": {
     "title": "Projects & sessions",
     "subtitle": "Projects on this server, recent working sessions, and honest boundaries for what can be opened now.",
@@ -1413,7 +1618,6 @@
       "codeIntel": "Code-intelligence summary is still available only through the tool surface."
     }
   },
-
   "health": {
     "title": "Health",
     "subtitle": "Live server snapshot: readiness, selfcheck, vectors, vNext metrics, and update channel.",
@@ -1463,7 +1667,6 @@
       "model": "Model"
     }
   },
-
   "settings": {
     "title": "Settings",
     "subtitle": "Read-only runtime config and actions that require explicit operator confirmation.",
@@ -1483,7 +1686,9 @@
         "detailsTitle": "Implementation details",
         "detailsBody": "The Access page is the live administration surface; this Settings tab does not provide a separate policy editor."
       },
-      "evidence": { "title": "Implementation details" },
+      "evidence": {
+        "title": "Implementation details"
+      },
       "groups": {
         "basic": "Basic",
         "models": "Models",
@@ -1772,7 +1977,6 @@
       "updateAvailable": "available"
     }
   },
-
   "searchPage": {
     "title": "Search",
     "subtitle": "Live context search over Engram server observations, with recent/analytics telemetry and an honest tombstone for old collection search.",
@@ -1813,7 +2017,6 @@
       "body": "Legacy search_collection is not wired as a working UI search; it is a removed/stale surface kept only as evidence."
     }
   },
-
   "noisePage": {
     "title": "Noise & usefulness",
     "subtitle": "Live retrieval/search telemetry: what agents saw, what they used, and where data is sparse or unrecorded.",
@@ -1856,16 +2059,66 @@
       "body": "The server exposes a snapshot today, but no time-series endpoint for the noise trend chart yet."
     }
   },
-
   "booksPage": {
-    "title": "Books as context",
-    "subtitle": "Upload or paste a source text, let the books pipeline chunk it through the markdown adapter, and track the job until produced documents land in Documents.",
+    "title": "Legacy plaintext-to-chunks import",
+    "subtitle": "Submit a plaintext source only to the legacy import endpoint. A completed import writes Documents; it does not create a Book Context catalog, reader, concepts, or readiness claim.",
     "brief": {
-      "title": "Books stay a separate bounded context",
-      "body": "This milestone creates a books job, processes text through the markdown chunker adapter, and writes versioned documents with source_book_job_id provenance metadata."
+      "title": "Legacy import: plaintext → chunks → Documents",
+      "body": "The server must confirm each legacy import job before it is shown as complete. This capability processes Markdown-compatible plaintext into versioned Documents with source_book_job_id provenance; it is not Book Context."
+    },
+    "capability": {
+      "badge": "legacy import",
+      "technical": "Technical evidence"
+    },
+    "states": {
+      "loading": {
+        "title": "Checking the legacy import",
+        "body": "The console is waiting for this import request or current-job readback; no completion is confirmed yet.",
+        "action": "Next: wait for the server response before acting on the result."
+      },
+      "empty": {
+        "title": "No legacy import is active",
+        "body": "No import job has been submitted in this console session.",
+        "action": "Next: choose a text source or paste plaintext to queue a legacy import."
+      },
+      "denied": {
+        "title": "Legacy import access was denied",
+        "body": "The server did not authorize this import request, so no job result is available.",
+        "action": "Next: sign in with an authorized operator session, then submit again."
+      },
+      "error": {
+        "title": "The server did not confirm the import",
+        "body": "The request failed without a usable current result; this is not an empty import queue.",
+        "action": "Next: correct the source or server condition, then submit a new import."
+      },
+      "stale": {
+        "title": "Only an earlier import result is available",
+        "body": "The visible job was confirmed earlier, but its current status could not be read back.",
+        "action": "Next: refresh status before relying on this job or its Documents."
+      },
+      "partial": {
+        "title": "Legacy Documents were produced",
+        "body": "Plaintext-to-chunks processing completed for this job, but Book Context remains unavailable.",
+        "action": "Next: open the produced Documents; do not treat them as a Book Context catalog or reader."
+      },
+      "unsupported": {
+        "title": "This source format is not supported here",
+        "body": "The legacy importer accepts Markdown-compatible plaintext only; no binary extraction was attempted.",
+        "action": "Next: paste extracted text or choose a .md, .mdx, .markdown, or .txt source."
+      },
+      "timeout": {
+        "title": "The import request timed out",
+        "body": "The deadline elapsed before the server confirmed a result.",
+        "action": "Next: refresh an existing job before retrying to avoid assuming its outcome."
+      },
+      "offline": {
+        "title": "The server cannot be reached",
+        "body": "The console has no server confirmation for this import request.",
+        "action": "Next: restore connectivity, then refresh status or submit again."
+      }
     },
     "metrics": {
-      "status": "Current job status",
+      "status": "Current legacy-import status",
       "source": "Source ref",
       "prefix": "Documents tag"
     },
@@ -1873,61 +2126,75 @@
       "refresh": "Refresh status"
     },
     "form": {
-      "title": "Start a books job",
-      "lead": "Current TG5 intake is text/markdown content. Paste the source or load a text file; binary extractors remain outside this lane.",
+      "title": "Queue a legacy import",
+      "lead": "This legacy capability accepts Markdown-compatible text only. Paste a source or load a text file; binary extractors remain outside this capability.",
       "file": "Text source file",
-      "fileHint": "Accepted here: .md, .mdx, .markdown, .txt. PDF/EPUB extraction is not wired in this milestone.",
+      "fileHint": "Accepted here: .md, .mdx, .markdown, .txt. PDF/EPUB extraction is not wired in this capability.",
       "sourceRef": "Source reference",
       "sourceRefHint": "e.g. distributed-systems.md",
       "project": "Project",
       "author": "Actor",
       "content": "Source content",
-      "contentHint": "Paste book or chapter text here. The pipeline will synthesize a heading if the source begins as plain text.",
-      "submit": "Queue ingest",
+      "contentHint": "Paste book or chapter text here. The legacy importer will synthesize a heading if the source begins as plain text.",
+      "submit": "Queue legacy import",
       "submitting": "Queuing…",
-      "unsupportedFile": "This upload control currently accepts text/markdown sources only. Use pasted extracted text for binary books.",
+      "unsupportedFile": "This legacy import accepts text/markdown sources only. Use pasted extracted text for a binary book.",
       "validation": "Source reference and source content are required.",
       "loadedFile": "Loaded {name} into the source editor."
     },
     "job": {
-      "title": "Latest books job",
+      "title": "Current legacy import",
       "status": "Status",
       "source": "Source ref",
       "prefix": "Documents path prefix",
       "createdAt": "Created",
       "updatedAt": "Updated",
       "error": "Pipeline error",
-      "openDocuments": "Open produced documents",
-      "emptyTitle": "No books job yet",
-      "emptyBody": "Queue a source above to create a books job and start polling its lifecycle.",
-      "pendingBody": "The job is recorded and waiting for the pipeline to take it.",
-      "processingBody": "The pipeline is chunking and writing documents. Status polling stays live until a terminal state.",
-      "doneBody": "The job finished. Produced documents are tagged by the visible books/jobs/[job-id]/ path prefix and source_book_job_id metadata.",
-      "failedBody": "The job failed before documents were fully produced. Read the stored error and retry with corrected source content or format.",
+      "openDocuments": "Open produced Documents",
+      "emptyTitle": "No legacy import job yet",
+      "emptyBody": "Queue a plaintext source above to create a legacy import job and start polling its lifecycle.",
+      "pendingBody": "The legacy import is recorded and waiting for the pipeline to take it.",
+      "processingBody": "The legacy pipeline is chunking plaintext and writing Documents. Status polling continues until a terminal state.",
+      "doneBody": "The legacy import finished. Produced Documents are marked by the visible books/jobs/[job-id]/ path prefix and source_book_job_id metadata.",
+      "failedBody": "The legacy import failed before Documents were fully produced. Read the stored error and submit corrected plaintext or format.",
       "stateLabel": {
         "pending": "Pending",
         "processing": "Processing",
         "done": "Done",
         "failed": "Failed",
-        "idle": "Idle"
+        "idle": "No job"
       }
     },
     "notice": {
-      "queued": "Books job #{id} queued.",
-      "failed": "Books request failed: {message}",
-      "loadError": "Unknown books pipeline error"
+      "queued": "Legacy import job #{id} queued.",
+      "failed": "Legacy import request failed: {message}",
+      "loadError": "Unknown legacy import error"
     }
   },
-
   "sectionStub": {
-    "state": {
-      "live": "This section is connected but has no expanded view yet.",
-      "dormant": "This feature is disabled by a flag.",
-      "stale": "This surface is disabled as a tombstone.",
-      "mustbuild": "This section needs to be built."
+    "limitation": {
+      "loading": "The console is waiting for the capability check; no outcome is known yet.",
+      "empty": "The capability returned no current rows or result.",
+      "denied": "The current operator session is not authorized for this capability.",
+      "error": "The server did not provide a usable result for this capability.",
+      "stale": "Only a previously confirmed result is available now.",
+      "partial": "Only the stated part of this capability is available.",
+      "unsupported": "This capability or input is not available on this server.",
+      "timeout": "The server did not confirm a result before the request deadline.",
+      "offline": "The console cannot reach the server for this capability."
+    },
+    "action": {
+      "loading": "Next: wait for the read to finish.",
+      "empty": "Next: use the stated creation or filter action if it is available.",
+      "denied": "Next: use an authorized operator session.",
+      "error": "Next: correct the condition, then retry the read.",
+      "stale": "Next: refresh before relying on the earlier result.",
+      "partial": "Next: use only the available part; the remainder is not ready.",
+      "unsupported": "Next: use a supported input or wait for the server capability.",
+      "timeout": "Next: refresh before retrying to avoid assuming an outcome.",
+      "offline": "Next: restore connectivity, then retry the read."
     }
   },
-
   "deferred": {
     "queue": {
       "title": "Review queue",
@@ -1958,6 +2225,291 @@
       "title": "Access",
       "lead": "Users, login providers, and roles belong to the future control-plane surface.",
       "next": "GET /api/access/users does not exist yet, so fake users and roles are not rendered."
+    }
+  },
+  "codeExplorer": {
+    "title": "Code Explorer",
+    "subtitle": "Inspect a server-authorized immutable source view. Code, graph facts, and source spans are released separately.",
+    "refresh": "Refresh status",
+    "evidence": {
+      "title": "Technical evidence",
+      "unselected": "No contextual response can render before an explicit server pin.",
+      "pinned": "Each status, search, graph, and source response must match pinned View {view}.",
+      "binding": "Binding evidence",
+      "navigation": "Navigation",
+      "openerBefore": "Opener before",
+      "openerReadback": "Opener readback",
+      "transition": "Transition",
+      "present": "present",
+      "none": "none",
+      "notNeeded": "not needed",
+      "normalized": "normalized to null",
+      "failed": "normalization failed"
+    },
+    "context": {
+      "title": "Authorized source views",
+      "lead": "Select one server-presented Source, Checkout, and View before pinning it. Labels never grant access.",
+      "source": "Source",
+      "checkout": "Checkout",
+      "view": "View",
+      "catalog": "Authorized choices",
+      "choose": "Choose a Source / Checkout / View",
+      "selectPrompt": "Choose a server-authorized View. This document stays unpinned until you confirm it.",
+      "selectedPrompt": "Review the selected View, then pin it explicitly for this document.",
+      "refresh": "Refresh authorized choices",
+      "retryReload": "Retry reload binding",
+      "pin": "Pin selected View",
+      "switch": "Switch to selected View",
+      "pinned": "Pinned by server",
+      "emptyTitle": "No selectable view is available.",
+      "emptyBody": "A revoked, expired, or ambiguous binding reveals no context labels or code facts.",
+      "pinnedMessage": "This server pin is active only for the current document binding.",
+      "pinnedReadout": "Server pin confirmed for {source} / {checkout} / {view}.",
+      "noViewIndexAvailable": "Exactly one fresh live daemon target advertises this authorized Checkout. It has no published View, and indexing will not select one.",
+      "noViewUnavailable": "This authorized Checkout has no published View, and no single fresh daemon target can accept its indexing request.",
+      "requestIndex": "Index checkout",
+      "requestIndexFor": "Index {source} / {checkout}",
+      "noViewOnlyTitle": "No published View is available.",
+      "noViewOnlyBody": "The authorized Checkouts below have no pinnable ContextRef. An Index action appears only when one fresh live daemon target advertises that Checkout.",
+      "catalogStates": {
+        "idle": "Waiting to request authorized choices.",
+        "loading": "Loading server-authorized choices.",
+        "ready": "Authorized choices are available.",
+        "empty": "No authorized Source, Checkout, or View is available to this document.",
+        "denied": "The server denied catalog access. Existing contextual content was not changed.",
+        "unavailable": "The server did not provide a readable catalog. No context was selected.",
+        "offline": "The browser cannot reach the server for authorized choices."
+      },
+      "phases": {
+        "idle": "Waiting",
+        "binding": "Binding document",
+        "ready": "Ready",
+        "collision": "Copied tab",
+        "ambiguous": "Ambiguous bootstrap",
+        "reload-pending": "Reload pending",
+        "denied": "Binding denied",
+        "error": "Binding error"
+      },
+      "messages": {
+        "idle": "Waiting to establish the browser binding.",
+        "binding": "Establishing a server-issued browser binding.",
+        "ready": "Authorized choices are ready for explicit selection.",
+        "collision": "The copied tab received a fresh unselected binding.",
+        "ambiguous": "Bootstrap was ambiguous; the new binding starts unselected.",
+        "reload-pending": "The prior document lease is still live. Retry after it closes or expires.",
+        "denied": "The server denied this browser binding.",
+        "error": "The server could not establish a safe browser binding."
+      }
+    },
+    "results": {
+      "title": "Explore the pinned view",
+      "unpinned": "Search, graph, and source remain unavailable until the server confirms a pin.",
+      "pinned": "Every result below is released separately for View {view}."
+    },
+    "status": {
+      "coverage": "Coverage",
+      "indexed": "Indexed",
+      "freshness": "Freshness",
+      "unknown": "unknown"
+    },
+    "emptyIndex": {
+      "title": "This View has no indexed records",
+      "body": "Request daemon-owned indexing to create work. Submission is not completion and does not switch the pinned View.",
+      "action": "Request reindex"
+    },
+    "unselected": {
+      "title": "No contextual result is rendered.",
+      "body": "Pin a server-authorized View to start released code exploration."
+    },
+    "search": {
+      "title": "Search",
+      "label": "Search this immutable View",
+      "placeholder": "Describe a code concept",
+      "action": "Search",
+      "explore": "Explore graph",
+      "source": "Read source",
+      "noMatches": "The released response has no displayable matches.",
+      "evidence": "Retrieval: {mode} · freshness: {freshness} · confidence: {score}"
+    },
+    "states": {
+      "idle": {
+        "label": "Waiting",
+        "search": "Search is ready after a server pin.",
+        "graph": "Choose a released result to traverse code relations.",
+        "source": "Choose a released result to inspect its exact persisted source span."
+      },
+      "loading": {
+        "label": "Loading",
+        "search": "Waiting for the server to release search results.",
+        "graph": "Waiting for the server to release bounded graph evidence.",
+        "source": "Waiting for the server to release the exact source span."
+      },
+      "ready": {
+        "label": "Available",
+        "search": "Released search results describe the pinned View.",
+        "graph": "Released graph evidence remains bounded to the pinned View.",
+        "source": "Released source content is an exact persisted span from the pinned View."
+      },
+      "empty": {
+        "label": "Empty",
+        "search": "The authorized query completed without matches.",
+        "graph": "No authorized graph relations were returned.",
+        "source": "No source span is available for this released result."
+      },
+      "partial": {
+        "label": "Partial",
+        "search": "Only the released partial search result is available.",
+        "graph": "Traversal reached a declared bound; this is not proof of no further relation.",
+        "source": "Only the released portion of this source result is available."
+      },
+      "stale": {
+        "label": "Stale",
+        "search": "This released result carries stale-View evidence.",
+        "graph": "This graph result carries stale-View evidence.",
+        "source": "Refresh before relying on this earlier source result."
+      },
+      "denied": {
+        "label": "Access denied",
+        "search": "Access changed or was revoked; no contextual result is shown.",
+        "graph": "Access changed or was revoked; no graph fact is shown.",
+        "source": "Access changed or was revoked; no source body is shown."
+      },
+      "unsupported": {
+        "label": "Unavailable",
+        "search": "The server requires a supported current context.",
+        "graph": "This graph request is not supported for the current context.",
+        "source": "This exact source read is not supported for the current context."
+      },
+      "timeout": {
+        "label": "Timed out",
+        "search": "The server did not release search results before the deadline.",
+        "graph": "The bounded graph request exceeded its deadline.",
+        "source": "The source read exceeded its deadline."
+      },
+      "offline": {
+        "label": "Offline",
+        "search": "The browser cannot reach the server for this search.",
+        "graph": "The browser cannot reach the server for this traversal.",
+        "source": "The browser cannot reach the server for this source read."
+      },
+      "error": {
+        "label": "Unavailable",
+        "search": "The source provider or release path did not return a readable result.",
+        "graph": "The source provider or release path did not return readable graph evidence.",
+        "source": "The source provider or release path did not return a readable source span."
+      }
+    },
+    "continuation": {
+      "next": "Load next search page",
+      "search": {
+        "denied": "The next-page cursor was not usable. It may have expired, been consumed, or not matched the original query, filter, or pinned View; no page was applied.",
+        "unavailable": "The next-page cursor could not be advanced. The server released no new page."
+      }
+    },
+    "source": {
+      "title": "Exact source",
+      "exactPublished": "exact persisted span from the published View",
+      "copyPath": "Copy path",
+      "copyDigest": "Copy digest",
+      "copyContent": "Copy source",
+      "copy": {
+        "copied": "Copied to the clipboard.",
+        "unavailable": "Clipboard access is unavailable in this browser."
+      }
+    },
+    "graph": {
+      "title": "Graph evidence",
+      "direction": "Direction",
+      "relations": "Relation types",
+      "target": "Result to traverse",
+      "chooseTarget": "Choose a released result",
+      "visual": "Graph",
+      "list": "Relation list",
+      "continue": "Load next bounded relations",
+      "selection": "Selected graph evidence",
+      "inspectSource": "Inspect exact source",
+      "noPublishedSource": "This graph-only node has no released source descriptor. No source request was made.",
+      "traversal": "Traversal: {stop}",
+      "canvasLabel": "Bounded code graph with {count} nodes",
+      "edgeLabel": "{from} {relation} {to}",
+      "nodeLabel": "Select graph node {node}",
+      "directions": {
+        "both": "Both directions",
+        "outgoing": "Outgoing",
+        "incoming": "Incoming"
+      }
+    },
+    "intent": {
+      "title": "Index request",
+      "lead": "Request daemon-owned work for a pinned View or an eligible unindexed Checkout. Admission never selects a View.",
+      "reindex": "Request reindex",
+      "reconcile": "Request reconcile",
+      "retry": "Retry unavailable request",
+      "refresh": "Check current state",
+      "unpinned": "Pin a server-authorized View, or use an available Index checkout action before requesting daemon work.",
+      "attempt": "Daemon attempt {attempt}",
+      "states": {
+        "idle": {
+          "label": "Waiting",
+          "title": "No indexing request",
+          "message": "Pin a source View or use an available Index checkout action before requesting daemon work."
+        },
+        "loading": {
+          "label": "Submitting",
+          "title": "Submitting request",
+          "message": "Waiting for admission; admission is not completion."
+        },
+        "submitted": {
+          "label": "Submitted",
+          "title": "Request submitted",
+          "message": "The server recorded this request. Completion is not confirmed."
+        },
+        "queued": {
+          "label": "Queued",
+          "title": "Queued for the daemon",
+          "message": "The request is eligible for daemon work; the current selection remains unchanged."
+        },
+        "acknowledged": {
+          "label": "Acknowledged",
+          "title": "Daemon acknowledged",
+          "message": "The daemon accepted this request. No new View is available yet."
+        },
+        "running": {
+          "label": "Running",
+          "title": "Indexing is running",
+          "message": "The daemon is working; the current selection remains unchanged."
+        },
+        "completed": {
+          "label": "Completed",
+          "title": "New View available",
+          "message": "The catalog was refreshed. A new server-released View may be available, but this console will not select or pin it automatically."
+        },
+        "unavailable": {
+          "label": "Unavailable",
+          "title": "Daemon unavailable",
+          "message": "The daemon cannot accept this request now. Retry the same request when it is available."
+        },
+        "failed": {
+          "label": "Failed",
+          "title": "Indexing failed",
+          "message": "The daemon reported a terminal failure; the current selection remains unchanged."
+        },
+        "error": {
+          "label": "Unresolved",
+          "title": "Current state unknown",
+          "message": "The server did not establish the current request state. Completion was not assumed."
+        },
+        "denied": {
+          "label": "Access denied",
+          "title": "Request denied",
+          "message": "The server denied this request; the current selection remains unchanged."
+        },
+        "offline": {
+          "label": "Offline",
+          "title": "Offline",
+          "message": "Restore connectivity before checking this request again."
+        }
+      }
     }
   }
 }

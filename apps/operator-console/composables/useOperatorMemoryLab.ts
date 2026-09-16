@@ -1,6 +1,7 @@
 import type { ComputedRef, Ref } from 'vue'
 import type { Memory } from './useMockData'
-import type { OperatorLoadState, OperatorMutationResult, OperatorUnsupportedAction } from './useOperatorApi'
+import type { OperatorLoadState, OperatorUnsupportedAction } from './useOperatorApi'
+import { executeMutation, type MutationCurrentStateParser, type MutationResult } from './useApi'
 import {
   emptyState,
   endpointEvidence,
@@ -10,13 +11,27 @@ import {
   loadOperatorJson,
   mustBuildState,
   OperatorFetchError,
+  operatorApiUrl,
   operatorFetchJson,
   pendingState,
-  runOperatorMutation,
   staleState,
   toOperatorSourceError,
   unsupportedOperatorAction,
 } from './useOperatorApi'
+function submitMutation<TIntent, TCurrent = unknown>(
+  action: string,
+  intent: TIntent,
+  path: string,
+  init: RequestInit,
+  parseCurrentState: MutationCurrentStateParser<TCurrent> = () => undefined,
+): Promise<MutationResult<TIntent, TCurrent>> {
+  return executeMutation(
+    { requestId: crypto.randomUUID(), action, intent },
+    fetch(operatorApiUrl(path), { ...init, credentials: 'include' }),
+    parseCurrentState,
+  )
+}
+
 
 interface ApiMemory {
   id: number | string
@@ -32,6 +47,7 @@ interface ApiMemory {
   created_at?: string
   status?: string
   superseded_by?: number | string | null
+  version?: number
   source_sessions?: string[]
 }
 
@@ -126,12 +142,77 @@ export interface StoreMemoryInput {
   tags?: string[]
 }
 
-export interface MemoryActionReceipt {
-  status: string
-  action: 'suppress'
-  id: number
-  reason?: string
+export type MemoryCollectionSelectionKind = 'explicit' | 'page' | 'frozen_filter'
+
+export interface MemoryCollectionSelection {
+  kind: MemoryCollectionSelectionKind
+  version: number
+  token?: string
 }
+
+export interface MemoryCollectionOperationReadback {
+  id: string
+  status: 'active' | 'flagged' | 'archived'
+  version: number
+}
+
+export interface MemoryCollectionOperationIntent {
+  action: 'suppress' | 'unsuppress' | 'archive'
+  selection: MemoryCollectionSelection
+}
+
+interface CurrentMemory {
+  id: number
+  project: string
+  content: string
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+
+function isMemoryRFC3339Timestamp(value: unknown): value is string {
+  return typeof value === 'string'
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)
+    && !Number.isNaN(Date.parse(value))
+}
+
+function parseCurrentMemory(value: unknown, input: StoreMemoryInput): CurrentMemory | undefined {
+  if (
+    typeof value !== 'object' || value === null || Array.isArray(value)
+    || !('id' in value) || !('project' in value) || !('content' in value)
+    || !('version' in value) || !('created_at' in value) || !('updated_at' in value)
+  ) return undefined
+
+  const id = value.id
+  const project = value.project
+  const content = value.content
+  const version = value.version
+  const createdAt = value.created_at
+  const updatedAt = value.updated_at
+  if (
+    typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0
+    || typeof project !== 'string' || !project || project !== input.project
+    || typeof content !== 'string' || !content || content !== input.content
+    || typeof version !== 'number' || !Number.isSafeInteger(version) || version <= 0
+    || !isMemoryRFC3339Timestamp(createdAt)
+    || !isMemoryRFC3339Timestamp(updatedAt)
+  ) return undefined
+
+  return {
+    id,
+    project,
+    content,
+    version,
+    created_at: createdAt,
+    updated_at: updatedAt,
+  }
+}
+
+export function storeMemoryCurrentStateParser(input: StoreMemoryInput): MutationCurrentStateParser<CurrentMemory> {
+  return (value) => parseCurrentMemory(value, input)
+}
+
 
 export interface MemoryAuditEntry {
   id: number
@@ -366,6 +447,106 @@ function jsonInit(method: 'POST' | 'DELETE', body?: unknown): RequestInit {
     init.body = JSON.stringify(body)
   }
   return init
+}
+
+function parseMemoryCollectionSelection(value: unknown): MemoryCollectionSelection {
+  if (typeof value !== 'object' || value === null || Array.isArray(value) || !('selection' in value)) {
+    throw new Error('invalid memory selection response')
+  }
+  const selection = value.selection
+  if (typeof selection !== 'object' || selection === null || Array.isArray(selection)) {
+    throw new Error('invalid memory selection response')
+  }
+  const selectionValue = selection as { kind?: unknown; selection_version?: unknown; selection_token?: unknown }
+  const kind = selectionValue.kind
+  const version = selectionValue.selection_version
+  const token = selectionValue.selection_token
+  if ((kind !== 'explicit' && kind !== 'page' && kind !== 'frozen_filter') || typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) {
+    throw new Error('invalid memory selection response')
+  }
+  if (kind === 'frozen_filter' && (typeof token !== 'string' || !token)) {
+    throw new Error('invalid frozen memory selection response')
+  }
+  return { kind, version, ...(typeof token === 'string' && token ? { token } : {}) }
+}
+
+function parseMemoryCollectionReadback(value: unknown): MemoryCollectionOperationReadback[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const states: MemoryCollectionOperationReadback[] = []
+  for (const state of value) {
+    if (typeof state !== 'object' || state === null || Array.isArray(state)) return undefined
+    const id = state.id
+    const status = state.status
+    const version = state.version
+    if ((typeof id !== 'number' && typeof id !== 'string') || !String(id) || (status !== 'active' && status !== 'flagged' && status !== 'archived') || typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) {
+      return undefined
+    }
+    states.push({ id: String(id), status, version })
+  }
+  return states
+}
+
+async function memoryCollectionSelectionTarget(id: string): Promise<{ id: string; expectedVersion: number }> {
+  const path = `/api/memories/${encodeURIComponent(id)}`
+  const value = await operatorFetchJson<ApiMemory>(path, undefined, 'memory-selection-target')
+  if ((typeof value.id !== 'number' && typeof value.id !== 'string') || String(value.id) !== id || typeof value.version !== 'number' || !Number.isSafeInteger(value.version) || value.version < 1) {
+    throw new Error('invalid current memory selection target')
+  }
+  return { id, expectedVersion: value.version }
+}
+
+async function snapshotMemoryCollectionSelection(targets: Array<{ id: string; expectedVersion: number }>): Promise<MemoryCollectionSelection> {
+  const value = await operatorFetchJson<unknown>('/api/memories/selection', jsonInit('POST', {
+    selection: {
+      kind: 'explicit',
+      targets: targets.map((target) => ({ id: target.id, expected_version: target.expectedVersion })),
+    },
+  }), 'memory-selection')
+  return parseMemoryCollectionSelection(value)
+}
+
+async function submitMemoryCollectionOperation(
+  action: MemoryCollectionOperationIntent['action'],
+  selection: MemoryCollectionSelection,
+  requestId = crypto.randomUUID(),
+): Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>> {
+  const intent: MemoryCollectionOperationIntent = { action, selection }
+  return executeMutation(
+    { requestId, action: `memory-${action}`, intent },
+    fetch(operatorApiUrl('/api/memories/operations'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Engram-Request-ID': requestId,
+      },
+      body: JSON.stringify({
+        request_id: requestId,
+        action,
+        selection: {
+          kind: selection.kind,
+          selection_version: selection.version,
+          ...(selection.token === undefined ? {} : { selection_token: selection.token }),
+        },
+      }),
+      credentials: 'include',
+    }),
+    parseMemoryCollectionReadback,
+  )
+}
+
+async function applyMemoryCollectionOperation(
+  action: MemoryCollectionOperationIntent['action'],
+  ids: string[],
+): Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>> {
+  const requestId = crypto.randomUUID()
+  const intent: MemoryCollectionOperationIntent = { action, selection: { kind: 'explicit', version: 0 } }
+  try {
+    const targets = await Promise.all(ids.map(memoryCollectionSelectionTarget))
+    const selection = await snapshotMemoryCollectionSelection(targets)
+    return submitMemoryCollectionOperation(action, selection, requestId)
+  } catch {
+    return { kind: 'failed', request: { requestId, action: `memory-${action}`, intent } }
+  }
 }
 
 function replaceArray<T>(target: T[], next: readonly T[]) {
@@ -700,10 +881,12 @@ export function useOperatorMemoryLab(): {
   error: ComputedRef<string | null>
   refresh: () => Promise<void>
   loadMemoryByID: (id: string) => Promise<Memory>
-  storeMemory: (input: StoreMemoryInput) => Promise<OperatorMutationResult<Memory>>
-  deleteMemory: (id: string) => Promise<OperatorMutationResult<unknown>>
-  suppressMemory: (id: string, reason?: string) => Promise<OperatorMutationResult<MemoryActionReceipt>>
-  suppressMemories: (ids: string[], reason?: string) => Promise<OperatorMutationResult<MemoryActionReceipt[]>>
+  storeMemory: (input: StoreMemoryInput) => Promise<MutationResult<StoreMemoryInput>>
+  deleteMemory: (id: string) => Promise<MutationResult<{ id: string }>>
+  suppressMemory: (id: string, reason?: string) => Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>>
+  suppressMemories: (ids: string[], reason?: string) => Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>>
+  unsuppressMemory: (id: string) => Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>>
+  archiveMemory: (id: string) => Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>>
   auditMemory: (id: string, limit?: number) => Promise<OperatorLoadState<MemoryAuditResponse>>
   provenanceGap: ReturnType<typeof unsupportedOperatorAction>
   actionGaps: readonly MemoryActionGap[]
@@ -749,88 +932,41 @@ export function useOperatorMemoryLab(): {
     return row
   }
   async function storeMemory(input: StoreMemoryInput) {
-    return runOperatorMutation({
-      action: 'memory-store',
-      evidence: endpointEvidence('/api/memories', 'memory-store'),
-      snapshot: () => [...rowsState.value],
-      run: async () => {
-        const row = await operatorFetchJson<ApiMemory>('/api/memories', jsonInit('POST', {
-          project: input.project,
-          content: input.content,
-          tags: input.tags || [],
-          source_agent: 'operator-console',
-        }), 'memory-store')
-        return mapMemoryRow(row)
-      },
-      rollback: (snapshot) => {
-        replaceArray(rowsState.value, snapshot || [])
-      },
-      refresh,
-    })
+    return submitMutation('memory-store', input, '/api/memories', jsonInit('POST', {
+      project: input.project,
+      content: input.content,
+      tags: input.tags || [],
+      source_agent: 'operator-console',
+    }), storeMemoryCurrentStateParser(input))
   }
 
   async function deleteMemory(id: string) {
-    return runOperatorMutation({
-      action: 'memory-delete',
-      evidence: endpointEvidence(`/api/memories/${id}`, 'memory-delete'),
-      snapshot: () => [...rowsState.value],
-      optimistic: () => {
-        replaceArray(rowsState.value, rowsState.value.filter((row) => row.id !== id))
-      },
-      run: () => operatorFetchJson(`/api/memories/${id}`, jsonInit('DELETE'), 'memory-delete'),
-      rollback: (snapshot) => {
-        replaceArray(rowsState.value, snapshot || [])
-      },
-      refresh,
-    })
+    return submitMutation('memory-delete', { id }, `/api/memories/${encodeURIComponent(id)}`, jsonInit('DELETE'))
   }
 
-  async function suppressMemory(id: string, reason = 'operator marked as noise') {
-    return runOperatorMutation({
-      action: 'memory-suppress',
-      evidence: endpointEvidence(`/api/memories/${id}/suppress`, 'memory-suppress'),
-      snapshot: () => [...rowsState.value],
-      optimistic: () => {
-        replaceArray(rowsState.value, rowsState.value.filter((row) => row.id !== id))
-      },
-      run: () => operatorFetchJson<MemoryActionReceipt>(`/api/memories/${id}/suppress`, jsonInit('POST', { reason }), 'memory-suppress'),
-      rollback: (snapshot) => {
-        replaceArray(rowsState.value, snapshot || [])
-      },
-      refresh,
-    })
+  async function suppressMemory(id: string, _reason = 'operator marked as noise') {
+    return applyMemoryCollectionOperation('suppress', [id])
   }
 
-  async function suppressMemories(ids: string[], reason = 'operator bulk marked as noise') {
+  async function suppressMemories(ids: string[], _reason = 'operator bulk marked as noise'): Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>> {
     const uniqueIds = [...new Set(ids)].filter(Boolean)
-    return runOperatorMutation({
-      action: 'memory-bulk-suppress',
-      evidence: endpointEvidence('/api/memories/suppress', 'memory-bulk-suppress', {
-        reason: 'Bulk suppression validates the selected memory IDs before applying soft-delete semantics.',
-      }),
-      snapshot: () => [...rowsState.value],
-      optimistic: () => {
-        const suppressed = new Set(uniqueIds)
-        replaceArray(rowsState.value, rowsState.value.filter((row) => !suppressed.has(row.id)))
-      },
-      run: () => {
-        const numericIds = uniqueIds.map((id) => Number.parseInt(id, 10))
-        if (numericIds.some((id) => !Number.isInteger(id) || id <= 0)) {
-          throw new OperatorFetchError('Bulk suppression requires numeric memory IDs', {
-            message: 'Bulk suppression requires numeric memory IDs',
-            source: 'memory-bulk-suppress',
-            path: '/api/memories/suppress',
-            method: 'POST',
-            retryable: false,
-          })
-        }
-        return operatorFetchJson<MemoryActionReceipt[]>('/api/memories/suppress', jsonInit('POST', { ids: numericIds, reason }), 'memory-bulk-suppress')
-      },
-      rollback: (snapshot) => {
-        replaceArray(rowsState.value, snapshot || [])
-      },
-      refresh,
-    })
+    const intent: MemoryCollectionOperationIntent = { action: 'suppress', selection: { kind: 'explicit', version: 0 } }
+    if (!uniqueIds.length || uniqueIds.some((id) => !/^\d+$/.test(id) || Number(id) <= 0)) {
+      return {
+        kind: 'validation_error',
+        request: { requestId: crypto.randomUUID(), action: 'memory-suppress', intent },
+        code: 'invalid_memory_id',
+      }
+    }
+    return applyMemoryCollectionOperation('suppress', uniqueIds)
+  }
+
+  async function unsuppressMemory(id: string) {
+    return applyMemoryCollectionOperation('unsuppress', [id])
+  }
+
+  async function archiveMemory(id: string) {
+    return applyMemoryCollectionOperation('archive', [id])
   }
 
   async function auditMemory(id: string, limit = 10) {
@@ -861,6 +997,8 @@ export function useOperatorMemoryLab(): {
     deleteMemory,
     suppressMemory,
     suppressMemories,
+    unsuppressMemory,
+    archiveMemory,
     auditMemory,
     provenanceGap,
     actionGaps: memoryActionGaps,

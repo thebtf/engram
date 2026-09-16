@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thebtf/engram/internal/proxy"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 )
 
@@ -24,6 +23,9 @@ func TestProxyHandleTool_FirstCallBeforeHookSendsProjectIdentityV2(t *testing.T)
 	srv.mu.Unlock()
 	if req == nil || req.ProjectIdentity == nil {
 		t.Fatal("first CallTool did not carry project_identity v2")
+	}
+	if req.ProjectIdentityV3 != nil {
+		t.Fatal("V2 compatibility path must not submit a V3 descriptor")
 	}
 	if req.ProjectIdentity.Version != 2 {
 		t.Fatalf("identity version=%d", req.ProjectIdentity.Version)
@@ -90,29 +92,33 @@ func TestProxyHandleTool_SameProjectIDDifferentCWDKeepsSelectorAligned(t *testin
 	_, mod, project := buildContractDispatcher(t, grpcAddr)
 	mod.cache.Forget(project.ID)
 
-	selectors := make([]string, 0, 2)
-	for _, cwd := range []string{t.TempDir(), t.TempDir()} {
-		project.Cwd = cwd
+	fixtures := []struct {
+		cwd      string
+		selector string
+		legacy   string
+	}{
+		{cwd: t.TempDir(), selector: "selector-one", legacy: "legacy-one"},
+		{cwd: t.TempDir(), selector: "selector-two", legacy: "legacy-two"},
+	}
+	selectors := make([]string, 0, len(fixtures))
+	for _, fixture := range fixtures {
+		project.Cwd = fixture.cwd
+		key := cacheKey(project)
+		mod.cache.entries.Store(key, resolvedSlug{id: fixture.selector})
+		mod.cache.identities.Store(key, &pb.ProjectIdentityV2{Version: 2, LegacyProjectId: fixture.legacy})
+
 		if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err != nil {
-			t.Fatalf("CallTool for %s: %v", cwd, err)
+			t.Fatalf("CallTool for %s: %v", fixture.cwd, err)
 		}
 
 		srv.mu.Lock()
 		req := srv.callReq
 		srv.mu.Unlock()
-		wantSelector, _, _, err := proxy.ResolveProjectSlug(context.Background(), cwd)
-		if err != nil {
-			t.Fatalf("resolve selector for %s: %v", cwd, err)
-		}
-		wantIdentity, err := proxy.ResolveProjectIdentityV2(context.Background(), cwd)
-		if err != nil {
-			t.Fatalf("resolve v2 identity for %s: %v", cwd, err)
-		}
 		if req == nil || req.ProjectIdentity == nil {
-			t.Fatalf("missing request identity for %s", cwd)
+			t.Fatalf("missing request identity for %s", fixture.cwd)
 		}
-		if req.Project != wantSelector || req.ProjectIdentity.LegacyProjectId != wantIdentity.LegacyProjectID {
-			t.Fatalf("cwd=%s selector=%q legacy=%q, want selector=%q legacy=%q", cwd, req.Project, req.ProjectIdentity.LegacyProjectId, wantSelector, wantIdentity.LegacyProjectID)
+		if req.Project != fixture.selector || req.ProjectIdentity.LegacyProjectId != fixture.legacy {
+			t.Fatalf("cwd=%s selector=%q legacy=%q, want selector=%q legacy=%q", fixture.cwd, req.Project, req.ProjectIdentity.LegacyProjectId, fixture.selector, fixture.legacy)
 		}
 		selectors = append(selectors, req.Project)
 	}

@@ -8,16 +8,19 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	_ "github.com/thebtf/engram/docs"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/logbuf"
 	"github.com/thebtf/engram/internal/module/obs"
 	"github.com/thebtf/engram/internal/worker"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
-var Version = "dev"
+var (
+	Version      = "dev"
+	SourceCommit string
+)
 
 // @title Engram API
 // @version 1.0.0
@@ -56,6 +59,8 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize observability")
 	}
+	worker.SetSourceCommit(SourceCommit)
+
 	obs.RecordRuntimeEvent(context.Background(), "startup", "started")
 
 	// Create service with version and log buffer

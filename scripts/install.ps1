@@ -47,6 +47,18 @@ function Assert-Node {
     return $NodeExecutable
 }
 
+# Releases before v6.49.0 did not ship the relay helper. Invalid tags fail
+# closed by requiring it, while historical release lines remain installable.
+function Test-RelayHelperRequired {
+    param([string]$Ver)
+
+    $VersionClean = $Ver -replace "^v", ""
+    if ($VersionClean -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9A-Za-z-][0-9A-Za-z-]*))*)?$') {
+        return $true
+    }
+    return [int]$Matches[1] -gt 6 -or ([int]$Matches[1] -eq 6 -and [int]$Matches[2] -ge 49)
+}
+
 # ---------------------------------------------------------------------------
 # Fetch latest release tag
 # ---------------------------------------------------------------------------
@@ -114,8 +126,16 @@ function Install-Release {
             Write-Err "Release archive is missing required OMP package.json"
         }
         $ExtensionPath = Join-Path $TempDir "extensions\engram-memory.mjs"
+        $RelayHelperPath = Join-Path $TempDir "extensions\legacy-relay.mjs"
         if (-not (Test-Path -LiteralPath $ExtensionPath -PathType Leaf)) {
             Write-Err "Release archive is missing required OMP extension"
+        }
+        $HasRelayHelper = Test-Path -LiteralPath $RelayHelperPath -PathType Leaf
+        if (-not $HasRelayHelper) {
+            if (Test-RelayHelperRequired $Ver) {
+                Write-Err "Release archive is missing required OMP relay helper"
+            }
+            Write-Warn "Release archive predates the OMP relay helper; continuing without it"
         }
 
         # This validator is part of the trusted installer, not the release archive.
@@ -223,6 +243,9 @@ for (const [key, asset] of Object.entries(assets)) {
         Copy-Item $PolicyPath "$InstallDir\bootstrap-targets.json" -Force -ErrorAction Stop
         Copy-Item $ManifestPath "$InstallDir\package.json" -Force -ErrorAction Stop
         Copy-Item $ExtensionPath "$InstallDir\extensions\engram-memory.mjs" -Force -ErrorAction Stop
+        if ($HasRelayHelper) {
+            Copy-Item $RelayHelperPath "$InstallDir\extensions\legacy-relay.mjs" -Force -ErrorAction Stop
+        }
 
         Copy-Item "$TempDir\.claude-plugin\*" "$InstallDir\.claude-plugin\" -Force
 

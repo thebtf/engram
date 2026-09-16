@@ -4791,11 +4791,2273 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 		ruleGovernanceEscapeConstraintsMigration159(),
 		issueCreatorKeycardMigration160(),
 		continuitySlotMigration161(),
+		projectIdentityV3Migration162(),
+		projectIdentityV3ResolutionAttemptsMigration163(),
+		projectIdentityV3ResolutionAttemptAdminAuditMigration164(),
+		projectIdentityV3ComparisonsMigration165(),
+		projectIdentityV3ComparisonClientInstancePrivacyMigration166(),
+		apiTokenExpiryMigration167(),
+		// Migration 168 intentionally remains an inline gormigrate literal. migrationmeta
+		// reads Migrate bodies in this file to derive the live data model.
+		{
+			ID: "168_task_memory_intervention_receipts",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`CREATE OR REPLACE FUNCTION task_memory_reject_immutable_mutation()
+					RETURNS trigger
+					LANGUAGE plpgsql
+					AS $$
+					BEGIN
+						RAISE EXCEPTION '% rows are immutable and reject %', TG_TABLE_NAME, TG_OP
+							USING ERRCODE = '55000';
+						RETURN NULL;
+					END;
+					$$`,
+					`CREATE TABLE IF NOT EXISTS task_memory_intervention_receipts (
+						receipt_id UUID PRIMARY KEY,
+						operation_id UUID NOT NULL,
+						key_epoch_commitment BYTEA NOT NULL,
+						integrity_digest BYTEA NOT NULL,
+						channel_key BYTEA NOT NULL,
+						host_family TEXT NOT NULL,
+						canonical_project UUID NOT NULL,
+						actor_principal TEXT NOT NULL,
+						actor_kind TEXT NOT NULL,
+						workstation TEXT NOT NULL,
+						session_key BYTEA NOT NULL,
+						occurrence_key BYTEA NOT NULL,
+						content_commitment BYTEA NOT NULL,
+						capability_snapshot_commitment BYTEA NOT NULL,
+						outcome TEXT NOT NULL,
+						closed_reason TEXT,
+						decision_mode TEXT NOT NULL,
+						evaluated_count SMALLINT NOT NULL,
+						eligible_count SMALLINT NOT NULL,
+						snapshot_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+						selected_memory_id BIGINT,
+						selected_memory_version INTEGER,
+						selected_policy_id BYTEA,
+						selected_snapshot_id UUID,
+						selected_snapshot_version BIGINT,
+						selected_text_digest BYTEA,
+						created_at TIMESTAMPTZ NOT NULL,
+						expires_at TIMESTAMPTZ NOT NULL,
+						CONSTRAINT task_memory_intervention_receipts_operation_unique
+							UNIQUE (operation_id),
+						CONSTRAINT task_memory_intervention_receipts_occurrence_unique
+							UNIQUE (channel_key, canonical_project, actor_principal, actor_kind, workstation, occurrence_key),
+						CONSTRAINT task_memory_intervention_receipts_commitment_width
+							CHECK (
+								octet_length(key_epoch_commitment) = 32
+								AND octet_length(integrity_digest) = 32
+								AND octet_length(channel_key) = 32
+								AND octet_length(session_key) = 32
+								AND octet_length(occurrence_key) = 32
+								AND octet_length(content_commitment) = 32
+								AND octet_length(capability_snapshot_commitment) = 32
+							),
+						CONSTRAINT task_memory_intervention_receipts_host_family
+							CHECK (host_family IN ('omp', 'claude_code', 'codex')),
+						CONSTRAINT task_memory_intervention_receipts_actor_pair
+							CHECK (
+								(actor_principal = '' AND actor_kind = '')
+								OR (
+									octet_length(actor_principal) BETWEEN 1 AND 128
+									AND actor_principal = btrim(actor_principal)
+									AND actor_principal !~ '[[:cntrl:]]'
+									AND actor_kind IN ('human', 'agent', 'service')
+								)
+							),
+						CONSTRAINT task_memory_intervention_receipts_workstation
+							CHECK (
+								octet_length(workstation) BETWEEN 1 AND 128
+								AND workstation = btrim(workstation)
+								AND workstation !~ '[[:cntrl:]]'
+							),
+						CONSTRAINT task_memory_intervention_receipts_counts
+							CHECK (eligible_count BETWEEN 0 AND evaluated_count AND evaluated_count BETWEEN 0 AND 8),
+						CONSTRAINT task_memory_intervention_receipts_snapshot_refs
+							CHECK (
+								CASE
+									WHEN jsonb_typeof(snapshot_refs) = 'array' THEN jsonb_array_length(snapshot_refs) <= 8
+									ELSE false
+								END
+							),
+						CONSTRAINT task_memory_intervention_receipts_selected_version
+							CHECK (
+								(selected_memory_id IS NULL OR selected_memory_id > 0)
+								AND (selected_memory_version IS NULL OR selected_memory_version > 0)
+								AND (selected_policy_id IS NULL OR octet_length(selected_policy_id) = 32)
+								AND (selected_snapshot_version IS NULL OR selected_snapshot_version > 0)
+								AND (selected_text_digest IS NULL OR octet_length(selected_text_digest) = 32)
+							),
+						CONSTRAINT task_memory_intervention_receipts_outcome_shape
+							CHECK (
+								(
+									outcome = 'emit'
+									AND closed_reason IS NULL
+									AND decision_mode IN ('eligible', 'canary')
+									AND selected_memory_id IS NOT NULL
+									AND selected_memory_version IS NOT NULL
+									AND selected_policy_id IS NOT NULL
+									AND selected_snapshot_id IS NOT NULL
+									AND selected_snapshot_version IS NOT NULL
+									AND selected_text_digest IS NOT NULL
+								)
+								OR (
+									outcome = 'abstain'
+									AND closed_reason IN (
+										'no_candidates',
+										'policy_observing',
+										'policy_shadow',
+										'policy_canary_budget',
+										'evidence_insufficient',
+										'harm_bound',
+										'policy_suppressed',
+										'task_fit',
+										'actionability',
+										'evidence_state',
+										'already_visible',
+										'context_budget',
+										'ambiguous_conflict'
+									)
+									AND decision_mode = 'none'
+									AND selected_memory_id IS NULL
+									AND selected_memory_version IS NULL
+									AND selected_policy_id IS NULL
+									AND selected_snapshot_id IS NULL
+									AND selected_snapshot_version IS NULL
+									AND selected_text_digest IS NULL
+								)
+							),
+						CONSTRAINT task_memory_intervention_receipts_expiry
+							CHECK (
+								created_at = date_trunc('microseconds', created_at)
+								AND expires_at = date_trunc('microseconds', expires_at)
+								AND expires_at > created_at
+							)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_task_memory_intervention_receipts_session_visibility
+						ON task_memory_intervention_receipts (session_key, selected_memory_id, selected_memory_version)
+						WHERE outcome = 'emit' AND selected_memory_id IS NOT NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_task_memory_intervention_receipts_canary_policy
+						ON task_memory_intervention_receipts (selected_policy_id)
+						WHERE outcome = 'emit' AND decision_mode = 'canary' AND selected_policy_id IS NOT NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_task_memory_intervention_receipts_expires_at
+						ON task_memory_intervention_receipts (expires_at)`,
+					`DROP TRIGGER IF EXISTS task_memory_intervention_receipts_reject_mutation ON task_memory_intervention_receipts`,
+					`CREATE TRIGGER task_memory_intervention_receipts_reject_mutation
+						BEFORE UPDATE OR DELETE ON task_memory_intervention_receipts
+						FOR EACH ROW EXECUTE FUNCTION task_memory_reject_immutable_mutation()`,
+					`DROP TRIGGER IF EXISTS task_memory_intervention_receipts_reject_truncate ON task_memory_intervention_receipts`,
+					`CREATE TRIGGER task_memory_intervention_receipts_reject_truncate
+						BEFORE TRUNCATE ON task_memory_intervention_receipts
+						FOR EACH STATEMENT EXECUTE FUNCTION task_memory_reject_immutable_mutation()`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 168: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackInterventionReceiptMigration168,
+		},
+		// Migration 169 intentionally remains an inline gormigrate literal. migrationmeta
+		// reads Migrate bodies in this file to derive the live data model.
+		{
+			ID: "169_intervention_evidence_policies",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`CREATE TABLE IF NOT EXISTS intervention_evidence_policies (
+						policy_id BYTEA PRIMARY KEY,
+						policy_version BYTEA NOT NULL,
+						scope_commitment BYTEA NOT NULL,
+						descriptor_commitment BYTEA NOT NULL,
+						memory_id BIGINT NOT NULL,
+						memory_version INTEGER NOT NULL,
+						canonical_project UUID NOT NULL,
+						descriptor JSONB NOT NULL,
+						descriptor_status TEXT NOT NULL,
+						descriptor_origin TEXT NOT NULL,
+						compiler_version TEXT NOT NULL,
+						algorithm_version TEXT NOT NULL,
+						normalization_version TEXT NOT NULL,
+						parameter_version TEXT NOT NULL,
+						created_from_event BYTEA NOT NULL,
+						created_at TIMESTAMPTZ NOT NULL,
+						CONSTRAINT intervention_evidence_policies_policy_version_unique
+							UNIQUE (policy_version),
+						CONSTRAINT intervention_evidence_policies_source_semantic_unique
+							UNIQUE (
+								memory_id,
+								memory_version,
+								scope_commitment,
+								descriptor_commitment,
+								compiler_version,
+								algorithm_version,
+								normalization_version,
+								parameter_version
+							),
+						CONSTRAINT intervention_evidence_policies_commitment_width
+							CHECK (
+								octet_length(policy_id) = 32
+								AND octet_length(policy_version) = 32
+								AND octet_length(scope_commitment) = 32
+								AND octet_length(descriptor_commitment) = 32
+								AND octet_length(created_from_event) = 32
+							),
+						CONSTRAINT intervention_evidence_policies_source_pointer
+							CHECK (memory_id > 0 AND memory_version > 0),
+						CONSTRAINT intervention_evidence_policies_descriptor_shape
+							CHECK (jsonb_typeof(descriptor) = 'object'),
+						CONSTRAINT intervention_evidence_policies_descriptor_status
+							CHECK (descriptor_status IN ('valid', 'insufficient')),
+						CONSTRAINT intervention_evidence_policies_descriptor_origin
+							CHECK (descriptor_origin = 'deterministic'),
+						CONSTRAINT intervention_evidence_policies_semantic_versions
+							CHECK (
+								btrim(compiler_version) <> ''
+								AND compiler_version = btrim(compiler_version)
+								AND compiler_version !~ '[[:cntrl:]]'
+								AND btrim(algorithm_version) <> ''
+								AND algorithm_version = btrim(algorithm_version)
+								AND algorithm_version !~ '[[:cntrl:]]'
+								AND btrim(normalization_version) <> ''
+								AND normalization_version = btrim(normalization_version)
+								AND normalization_version !~ '[[:cntrl:]]'
+								AND btrim(parameter_version) <> ''
+								AND parameter_version = btrim(parameter_version)
+								AND parameter_version !~ '[[:cntrl:]]'
+							),
+						CONSTRAINT intervention_evidence_policies_created_at_precision
+							CHECK (created_at = date_trunc('microseconds', created_at))
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_intervention_evidence_policies_reader_current
+						ON intervention_evidence_policies (
+							memory_id,
+							memory_version,
+							compiler_version,
+							algorithm_version,
+							normalization_version,
+							parameter_version,
+							descriptor_status
+						)`,
+					`CREATE INDEX IF NOT EXISTS idx_intervention_evidence_policies_project_status
+						ON intervention_evidence_policies (canonical_project, descriptor_status)`,
+					`CREATE INDEX IF NOT EXISTS idx_intervention_evidence_policies_created_at
+						ON intervention_evidence_policies (created_at)`,
+					`DROP TRIGGER IF EXISTS intervention_evidence_policies_reject_mutation ON intervention_evidence_policies`,
+					`CREATE TRIGGER intervention_evidence_policies_reject_mutation
+						BEFORE UPDATE OR DELETE ON intervention_evidence_policies
+						FOR EACH ROW EXECUTE FUNCTION task_memory_reject_immutable_mutation()`,
+					`DROP TRIGGER IF EXISTS intervention_evidence_policies_reject_truncate ON intervention_evidence_policies`,
+					`CREATE TRIGGER intervention_evidence_policies_reject_truncate
+						BEFORE TRUNCATE ON intervention_evidence_policies
+						FOR EACH STATEMENT EXECUTE FUNCTION task_memory_reject_immutable_mutation()`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 169: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackInterventionPolicyMigration169,
+		},
+		// Migration 170 intentionally remains an inline gormigrate literal. migrationmeta
+		// reads Migrate bodies in this file to derive the live data model.
+		{
+			ID: "170_task_memory_context_reference_receipts",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`ALTER TABLE task_memory_intervention_receipts
+						ADD COLUMN IF NOT EXISTS selected_source_project UUID`,
+					`ALTER TABLE task_memory_intervention_receipts
+						ADD COLUMN IF NOT EXISTS selected_source_tier SMALLINT`,
+					`ALTER TABLE task_memory_intervention_receipts
+						DROP CONSTRAINT IF EXISTS task_memory_intervention_receipts_selected_source`,
+					`ALTER TABLE task_memory_intervention_receipts
+						ADD CONSTRAINT task_memory_intervention_receipts_selected_source
+						CHECK (
+							(selected_source_project IS NULL AND selected_source_tier IS NULL)
+							OR (
+								selected_source_project IS NOT NULL
+								AND selected_source_project <> '00000000-0000-0000-0000-000000000000'::uuid
+								AND selected_source_tier IN (1, 2, 3)
+							)
+						)`,
+					`ALTER TABLE task_memory_intervention_receipts
+						DROP CONSTRAINT IF EXISTS task_memory_intervention_receipts_outcome_shape`,
+					`ALTER TABLE task_memory_intervention_receipts
+						ADD CONSTRAINT task_memory_intervention_receipts_outcome_shape
+						CHECK (
+							(
+								outcome = 'emit'
+								AND closed_reason IS NULL
+								AND decision_mode IN ('eligible', 'canary')
+								AND selected_memory_id IS NOT NULL
+								AND selected_memory_version IS NOT NULL
+								AND selected_source_project IS NULL
+								AND selected_source_tier IS NULL
+								AND selected_policy_id IS NOT NULL
+								AND selected_snapshot_id IS NOT NULL
+								AND selected_snapshot_version IS NOT NULL
+								AND selected_text_digest IS NOT NULL
+							)
+							OR (
+								outcome = 'emit'
+								AND closed_reason IS NULL
+								AND decision_mode = 'context_reference'
+								AND evaluated_count BETWEEN 1 AND 8
+								AND eligible_count = 0
+								AND snapshot_refs = '[]'::jsonb
+								AND selected_memory_id IS NOT NULL
+								AND selected_memory_version BETWEEN 1 AND 4294967295
+								AND selected_source_project IS NOT NULL
+								AND selected_source_project = canonical_project
+								AND selected_source_tier IS NOT NULL
+								AND selected_policy_id IS NULL
+								AND selected_snapshot_id IS NULL
+								AND selected_snapshot_version IS NULL
+								AND selected_text_digest IS NOT NULL
+							)
+							OR (
+								outcome = 'abstain'
+								AND closed_reason IN (
+									'no_candidates',
+									'policy_observing',
+									'policy_shadow',
+									'policy_canary_budget',
+									'evidence_insufficient',
+									'harm_bound',
+									'policy_suppressed',
+									'task_fit',
+									'actionability',
+									'evidence_state',
+									'already_visible',
+									'context_budget',
+									'ambiguous_conflict'
+								)
+								AND decision_mode = 'none'
+								AND selected_memory_id IS NULL
+								AND selected_memory_version IS NULL
+								AND selected_source_project IS NULL
+								AND selected_source_tier IS NULL
+								AND selected_policy_id IS NULL
+								AND selected_snapshot_id IS NULL
+								AND selected_snapshot_version IS NULL
+								AND selected_text_digest IS NULL
+							)
+						)`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 170: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackInterventionContextReferenceMigration170,
+		},
+		// Migration 171 intentionally remains an inline gormigrate literal. migrationmeta
+		// reads Migrate bodies in this file to derive the live data model.
+		{
+			ID: "171_uci_context_registry",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`CREATE TABLE IF NOT EXISTS spaces (
+						space_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						auth_realm TEXT NOT NULL,
+						display_name TEXT NOT NULL,
+						state TEXT NOT NULL DEFAULT 'active',
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT spaces_auth_realm_chk CHECK (
+							btrim(auth_realm) <> ''
+							AND auth_realm = btrim(auth_realm)
+							AND auth_realm !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT spaces_display_name_chk CHECK (
+							btrim(display_name) <> ''
+							AND display_name = btrim(display_name)
+							AND display_name !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT spaces_state_chk CHECK (state IN ('active', 'retired')),
+						CONSTRAINT spaces_space_realm_unique UNIQUE (space_id, auth_realm)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_spaces_realm_state
+						ON spaces (auth_realm, state)`,
+					`CREATE TABLE IF NOT EXISTS sources (
+						source_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						auth_realm TEXT NOT NULL,
+						kind TEXT NOT NULL,
+						display_name TEXT NOT NULL,
+						state TEXT NOT NULL DEFAULT 'active',
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT sources_auth_realm_chk CHECK (
+							btrim(auth_realm) <> ''
+							AND auth_realm = btrim(auth_realm)
+							AND auth_realm !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT sources_kind_chk CHECK (kind IN ('git', 'directory', 'document_set')),
+						CONSTRAINT sources_display_name_chk CHECK (
+							btrim(display_name) <> ''
+							AND display_name = btrim(display_name)
+							AND display_name !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT sources_state_chk CHECK (state IN ('active', 'offline', 'retired')),
+						CONSTRAINT sources_source_realm_unique UNIQUE (source_id, auth_realm)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_sources_realm_state
+						ON sources (auth_realm, state)`,
+					`CREATE TABLE IF NOT EXISTS space_sources (
+						auth_realm TEXT NOT NULL,
+						space_id UUID NOT NULL,
+						source_id UUID NOT NULL,
+						display_order INTEGER NOT NULL DEFAULT 0,
+						PRIMARY KEY (space_id, source_id),
+						CONSTRAINT space_sources_auth_realm_chk CHECK (
+							btrim(auth_realm) <> ''
+							AND auth_realm = btrim(auth_realm)
+							AND auth_realm !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT space_sources_display_order_chk CHECK (display_order >= 0),
+						CONSTRAINT space_sources_space_realm_fkey
+							FOREIGN KEY (space_id, auth_realm)
+							REFERENCES spaces (space_id, auth_realm),
+						CONSTRAINT space_sources_source_realm_fkey
+							FOREIGN KEY (source_id, auth_realm)
+							REFERENCES sources (source_id, auth_realm)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_space_sources_space_order
+						ON space_sources (space_id, display_order, source_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_space_sources_source_order
+						ON space_sources (source_id, display_order, space_id)`,
+					`CREATE TABLE IF NOT EXISTS legacy_context_aliases (
+						alias_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						auth_realm TEXT NOT NULL,
+						legacy_domain TEXT NOT NULL,
+						scheme TEXT NOT NULL,
+						value TEXT NOT NULL,
+						client_namespace TEXT NOT NULL DEFAULT '',
+						space_id UUID,
+						source_id UUID,
+						mapping_state TEXT NOT NULL,
+						revision BIGINT NOT NULL DEFAULT 1,
+						provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT legacy_context_aliases_auth_realm_chk CHECK (
+							btrim(auth_realm) <> ''
+							AND auth_realm = btrim(auth_realm)
+							AND auth_realm !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT legacy_context_aliases_legacy_domain_chk CHECK (
+							btrim(legacy_domain) <> ''
+							AND legacy_domain = btrim(legacy_domain)
+							AND legacy_domain !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT legacy_context_aliases_scheme_chk CHECK (
+							btrim(scheme) <> ''
+							AND scheme = btrim(scheme)
+							AND scheme !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT legacy_context_aliases_value_chk CHECK (
+							btrim(value) <> ''
+							AND value = btrim(value)
+							AND value !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT legacy_context_aliases_client_namespace_chk CHECK (
+							client_namespace = btrim(client_namespace)
+							AND client_namespace !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT legacy_context_aliases_mapping_state_chk
+							CHECK (mapping_state IN ('resolved', 'ambiguous', 'unmapped', 'retired')),
+						CONSTRAINT legacy_context_aliases_revision_chk CHECK (revision > 0),
+						CONSTRAINT legacy_context_aliases_provenance_object_chk
+							CHECK (jsonb_typeof(provenance) = 'object'),
+						CONSTRAINT legacy_context_aliases_target_chk CHECK (
+							(mapping_state = 'resolved' AND (space_id IS NOT NULL OR source_id IS NOT NULL))
+							OR (mapping_state = 'unmapped' AND space_id IS NULL AND source_id IS NULL)
+							OR mapping_state IN ('ambiguous', 'retired')
+						),
+						CONSTRAINT legacy_context_aliases_key_unique
+							UNIQUE (auth_realm, legacy_domain, scheme, value, client_namespace),
+						CONSTRAINT legacy_context_aliases_space_realm_fkey
+							FOREIGN KEY (space_id, auth_realm)
+							REFERENCES spaces (space_id, auth_realm),
+						CONSTRAINT legacy_context_aliases_source_realm_fkey
+							FOREIGN KEY (source_id, auth_realm)
+							REFERENCES sources (source_id, auth_realm)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_legacy_context_aliases_space
+						ON legacy_context_aliases (space_id)
+						WHERE space_id IS NOT NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_legacy_context_aliases_source
+						ON legacy_context_aliases (source_id)
+						WHERE source_id IS NOT NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_legacy_context_aliases_lookup_state
+						ON legacy_context_aliases (auth_realm, legacy_domain, scheme, value, client_namespace, mapping_state)`,
+					`CREATE TABLE IF NOT EXISTS ci_profiles (
+						profile_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						parser_bundle_digest TEXT NOT NULL,
+						resolver_revision TEXT NOT NULL,
+						chunker_revision TEXT NOT NULL,
+						ignore_policy_digest TEXT NOT NULL,
+						build_context_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+						secret_policy_revision TEXT NOT NULL,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT ci_profiles_parser_bundle_digest_chk
+							CHECK (parser_bundle_digest ~ '^sha256:[0-9a-f]{64}$'),
+						CONSTRAINT ci_profiles_resolver_revision_chk CHECK (
+							btrim(resolver_revision) <> ''
+							AND resolver_revision = btrim(resolver_revision)
+							AND resolver_revision !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_profiles_chunker_revision_chk CHECK (
+							btrim(chunker_revision) <> ''
+							AND chunker_revision = btrim(chunker_revision)
+							AND chunker_revision !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_profiles_ignore_policy_digest_chk
+							CHECK (ignore_policy_digest ~ '^sha256:[0-9a-f]{64}$'),
+						CONSTRAINT ci_profiles_build_context_object_chk
+							CHECK (jsonb_typeof(build_context_json) = 'object'),
+						CONSTRAINT ci_profiles_secret_policy_revision_chk CHECK (
+							btrim(secret_policy_revision) <> ''
+							AND secret_policy_revision = btrim(secret_policy_revision)
+							AND secret_policy_revision !~ '[[:cntrl:]]'
+						)
+					)`,
+					`CREATE TABLE IF NOT EXISTS ci_checkouts (
+						checkout_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						source_id UUID NOT NULL,
+						workstation_id TEXT NOT NULL,
+						incarnation_id UUID NOT NULL,
+						kind TEXT NOT NULL,
+						owner_principal TEXT NOT NULL,
+						locator_ref TEXT NOT NULL,
+						current_view_id UUID,
+						state TEXT NOT NULL DEFAULT 'registered',
+						lease_epoch BIGINT NOT NULL DEFAULT 0,
+						owner_instance TEXT,
+						lease_expires_at TIMESTAMPTZ,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT ci_checkouts_source_fkey FOREIGN KEY (source_id)
+							REFERENCES sources (source_id),
+						CONSTRAINT ci_checkouts_incarnation_unique UNIQUE (incarnation_id),
+						CONSTRAINT ci_checkouts_checkout_source_incarnation_unique
+							UNIQUE (checkout_id, source_id, incarnation_id),
+						CONSTRAINT ci_checkouts_workstation_id_chk CHECK (
+							btrim(workstation_id) <> ''
+							AND workstation_id = btrim(workstation_id)
+							AND workstation_id !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_checkouts_kind_chk CHECK (kind IN ('working_tree', 'commit_reader')),
+						CONSTRAINT ci_checkouts_owner_principal_chk CHECK (
+							btrim(owner_principal) <> ''
+							AND owner_principal = btrim(owner_principal)
+							AND owner_principal !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_checkouts_locator_ref_chk CHECK (
+							btrim(locator_ref) <> ''
+							AND locator_ref = btrim(locator_ref)
+							AND locator_ref !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_checkouts_state_chk CHECK (
+							state IN ('configured', 'registered', 'watching', 'catching_up', 'offline', 'unregistered')
+						),
+						CONSTRAINT ci_checkouts_lease_epoch_chk CHECK (lease_epoch >= 0),
+						CONSTRAINT ci_checkouts_owner_instance_chk CHECK (
+							owner_instance IS NULL OR (
+								btrim(owner_instance) <> ''
+								AND owner_instance = btrim(owner_instance)
+								AND owner_instance !~ '[[:cntrl:]]'
+							)
+						),
+						CONSTRAINT ci_checkouts_lease_window_chk CHECK (
+							lease_expires_at IS NULL OR owner_instance IS NOT NULL
+						),
+						CONSTRAINT ci_checkouts_commit_reader_pointer_chk
+							CHECK (kind <> 'commit_reader' OR current_view_id IS NULL)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_checkouts_source_state
+						ON ci_checkouts (source_id, state)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_checkouts_source_workstation
+						ON ci_checkouts (source_id, workstation_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_checkouts_current_view
+						ON ci_checkouts (current_view_id)
+						WHERE current_view_id IS NOT NULL`,
+					`CREATE TABLE IF NOT EXISTS ci_views (
+						view_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						checkout_id UUID NOT NULL,
+						source_id UUID NOT NULL,
+						incarnation_id UUID NOT NULL,
+						generation BIGINT NOT NULL,
+						profile_id UUID NOT NULL,
+						head_oid TEXT,
+						object_format TEXT,
+						ref_label TEXT,
+						dirty BOOLEAN NOT NULL DEFAULT false,
+						observed_fs_seq BIGINT NOT NULL DEFAULT 0,
+						scan_start TIMESTAMPTZ NOT NULL,
+						scan_end TIMESTAMPTZ NOT NULL,
+						manifest_digest TEXT NOT NULL,
+						state TEXT NOT NULL DEFAULT 'staging',
+						coverage_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+						published_at TIMESTAMPTZ,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT ci_views_checkout_generation_unique UNIQUE (checkout_id, generation),
+						CONSTRAINT ci_views_view_checkout_source_incarnation_unique
+							UNIQUE (view_id, checkout_id, source_id, incarnation_id),
+						CONSTRAINT ci_views_source_fkey FOREIGN KEY (source_id)
+							REFERENCES sources (source_id),
+						CONSTRAINT ci_views_checkout_source_incarnation_fkey
+							FOREIGN KEY (checkout_id, source_id, incarnation_id)
+							REFERENCES ci_checkouts (checkout_id, source_id, incarnation_id),
+						CONSTRAINT ci_views_profile_fkey FOREIGN KEY (profile_id)
+							REFERENCES ci_profiles (profile_id),
+						CONSTRAINT ci_views_generation_chk CHECK (generation >= 1),
+						CONSTRAINT ci_views_observed_fs_seq_chk CHECK (observed_fs_seq >= 0),
+						CONSTRAINT ci_views_scan_window_chk CHECK (scan_end >= scan_start),
+						CONSTRAINT ci_views_manifest_digest_chk
+							CHECK (manifest_digest ~ '^sha256:[0-9a-f]{64}$'),
+						CONSTRAINT ci_views_state_chk CHECK (
+							state IN ('staging', 'published', 'superseded', 'retired')
+						),
+						CONSTRAINT ci_views_object_format_chk CHECK (
+							object_format IS NULL OR object_format IN ('sha1', 'sha256')
+						),
+						CONSTRAINT ci_views_head_oid_chk CHECK (
+							head_oid IS NULL OR (
+								(object_format = 'sha1' AND head_oid ~ '^[0-9a-f]{40}$')
+								OR (object_format = 'sha256' AND head_oid ~ '^[0-9a-f]{64}$')
+							)
+						),
+						CONSTRAINT ci_views_ref_label_chk CHECK (
+							ref_label IS NULL OR (
+								btrim(ref_label) <> ''
+								AND ref_label = btrim(ref_label)
+								AND ref_label !~ '[[:cntrl:]]'
+							)
+						),
+						CONSTRAINT ci_views_coverage_object_chk
+							CHECK (jsonb_typeof(coverage_json) = 'object'),
+						CONSTRAINT ci_views_published_at_chk CHECK (
+							(state = 'staging' AND published_at IS NULL)
+							OR (state IN ('published', 'superseded', 'retired') AND published_at IS NOT NULL)
+						)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_views_checkout_generation
+						ON ci_views (checkout_id, generation DESC)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_views_source_state
+						ON ci_views (source_id, state)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_views_profile
+						ON ci_views (profile_id)`,
+					`DO $$
+					BEGIN
+						IF NOT EXISTS (
+							SELECT 1
+							FROM pg_constraint
+							WHERE conname = 'ci_checkouts_current_view_fkey'
+								AND conrelid = 'ci_checkouts'::regclass
+						) THEN
+							ALTER TABLE ci_checkouts
+								ADD CONSTRAINT ci_checkouts_current_view_fkey
+								FOREIGN KEY (current_view_id, checkout_id, source_id, incarnation_id)
+								REFERENCES ci_views (view_id, checkout_id, source_id, incarnation_id);
+						END IF;
+					END $$`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 171: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackUCIContextRegistryMigration171,
+		},
+		// Migration 172 remains inline so migrationmeta can derive the live UCI schema.
+		{
+			ID: "172_uci_index_projection",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`DO $$
+					BEGIN
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_checkouts_source_checkout_unique'
+								AND conrelid = 'ci_checkouts'::regclass
+						) THEN
+							ALTER TABLE ci_checkouts
+								ADD CONSTRAINT ci_checkouts_source_checkout_unique UNIQUE (source_id, checkout_id);
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_views_view_checkout_source_unique'
+								AND conrelid = 'ci_views'::regclass
+						) THEN
+							ALTER TABLE ci_views
+								ADD CONSTRAINT ci_views_view_checkout_source_unique UNIQUE (view_id, checkout_id, source_id);
+						END IF;
+					END $$`,
+					`CREATE TABLE IF NOT EXISTS ci_blobs (
+						blob_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						source_id UUID NOT NULL,
+						protection_domain TEXT NOT NULL,
+						content_digest TEXT NOT NULL,
+						byte_length BIGINT NOT NULL,
+						safe_content BYTEA,
+						encoding TEXT NOT NULL,
+						storage_state TEXT NOT NULL,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT ci_blobs_source_fkey FOREIGN KEY (source_id) REFERENCES sources (source_id),
+						CONSTRAINT ci_blobs_source_blob_unique UNIQUE (source_id, blob_id),
+						CONSTRAINT ci_blobs_source_domain_digest_unique UNIQUE (source_id, protection_domain, content_digest),
+						CONSTRAINT ci_blobs_protection_domain_chk CHECK (
+							btrim(protection_domain) <> '' AND protection_domain = btrim(protection_domain)
+							AND protection_domain !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_blobs_content_digest_chk CHECK (content_digest ~ '^sha256:[0-9a-f]{64}$'),
+						CONSTRAINT ci_blobs_byte_length_chk CHECK (byte_length >= 0),
+						CONSTRAINT ci_blobs_encoding_chk CHECK (
+							btrim(encoding) <> '' AND encoding = btrim(encoding) AND encoding !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_blobs_storage_state_chk CHECK (storage_state IN ('stored', 'metadata_only', 'excluded')),
+						CONSTRAINT ci_blobs_storage_content_chk CHECK (
+							(storage_state = 'stored' AND safe_content IS NOT NULL AND octet_length(safe_content) = byte_length)
+							OR (storage_state IN ('metadata_only', 'excluded') AND safe_content IS NULL)
+						)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_blobs_source_domain ON ci_blobs (source_id, protection_domain)`,
+					`CREATE TABLE IF NOT EXISTS ci_parse_artifacts (
+						artifact_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						source_id UUID NOT NULL,
+						blob_id UUID NOT NULL,
+						language TEXT NOT NULL,
+						parser_revision TEXT NOT NULL,
+						grammar_digest TEXT NOT NULL,
+						extraction_profile_digest TEXT NOT NULL,
+						status TEXT NOT NULL,
+						diagnostics JSONB NOT NULL DEFAULT '{}'::jsonb,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT ci_parse_artifacts_source_artifact_unique UNIQUE (source_id, artifact_id),
+						CONSTRAINT ci_parse_artifacts_cache_unique
+							UNIQUE (source_id, blob_id, language, parser_revision, grammar_digest, extraction_profile_digest),
+						CONSTRAINT ci_parse_artifacts_blob_scope_fkey FOREIGN KEY (source_id, blob_id)
+							REFERENCES ci_blobs (source_id, blob_id),
+						CONSTRAINT ci_parse_artifacts_language_chk CHECK (
+							btrim(language) <> '' AND language = btrim(language) AND language !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_parse_artifacts_parser_revision_chk CHECK (
+							btrim(parser_revision) <> '' AND parser_revision = btrim(parser_revision)
+							AND parser_revision !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_parse_artifacts_grammar_digest_chk CHECK (grammar_digest ~ '^sha256:[0-9a-f]{64}$'),
+						CONSTRAINT ci_parse_artifacts_extraction_profile_digest_chk
+							CHECK (extraction_profile_digest ~ '^sha256:[0-9a-f]{64}$'),
+						CONSTRAINT ci_parse_artifacts_status_chk CHECK (status IN ('complete', 'partial', 'unsupported', 'excluded')),
+						CONSTRAINT ci_parse_artifacts_diagnostics_object_chk CHECK (jsonb_typeof(diagnostics) = 'object')
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_parse_artifacts_source_blob ON ci_parse_artifacts (source_id, blob_id)`,
+					`CREATE TABLE IF NOT EXISTS ci_definitions (
+						definition_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						artifact_id UUID NOT NULL,
+						local_symbol_key TEXT NOT NULL,
+						kind TEXT NOT NULL,
+						name TEXT NOT NULL,
+						qualified_local_name TEXT NOT NULL,
+						signature TEXT NOT NULL DEFAULT '',
+						byte_start BIGINT NOT NULL,
+						byte_end BIGINT NOT NULL,
+						line_start INTEGER NOT NULL,
+						line_end INTEGER NOT NULL,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT ci_definitions_artifact_local_symbol_unique UNIQUE (artifact_id, local_symbol_key),
+						CONSTRAINT ci_definitions_artifact_fkey FOREIGN KEY (artifact_id)
+							REFERENCES ci_parse_artifacts (artifact_id),
+						CONSTRAINT ci_definitions_local_symbol_key_chk CHECK (
+							btrim(local_symbol_key) <> '' AND local_symbol_key = btrim(local_symbol_key)
+							AND local_symbol_key !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_definitions_kind_chk CHECK (
+							btrim(kind) <> '' AND kind = btrim(kind) AND kind !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_definitions_name_chk CHECK (
+							btrim(name) <> '' AND name = btrim(name) AND name !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_definitions_qualified_name_chk CHECK (
+							btrim(qualified_local_name) <> '' AND qualified_local_name = btrim(qualified_local_name)
+							AND qualified_local_name !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_definitions_byte_span_chk CHECK (byte_start >= 0 AND byte_end >= byte_start),
+						CONSTRAINT ci_definitions_line_span_chk CHECK (line_start >= 1 AND line_end >= line_start)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_definitions_qualified_local_name ON ci_definitions (qualified_local_name)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_definitions_artifact_symbol ON ci_definitions (artifact_id, local_symbol_key)`,
+					`CREATE TABLE IF NOT EXISTS ci_reference_sites (
+						reference_site_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						artifact_id UUID NOT NULL,
+						site_key TEXT NOT NULL,
+						owner_symbol_key TEXT,
+						raw_target TEXT NOT NULL,
+						relation TEXT NOT NULL,
+						syntax_span JSONB NOT NULL DEFAULT '{}'::jsonb,
+						resolver_hints JSONB NOT NULL DEFAULT '{}'::jsonb,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT ci_reference_sites_artifact_site_unique UNIQUE (artifact_id, site_key),
+						CONSTRAINT ci_reference_sites_artifact_fkey FOREIGN KEY (artifact_id)
+							REFERENCES ci_parse_artifacts (artifact_id),
+						CONSTRAINT ci_reference_sites_site_key_chk CHECK (
+							btrim(site_key) <> '' AND site_key = btrim(site_key) AND site_key !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_reference_sites_raw_target_chk CHECK (
+							octet_length(raw_target) BETWEEN 1 AND 65536
+						),
+						CONSTRAINT ci_reference_sites_relation_chk CHECK (
+							btrim(relation) <> '' AND relation = btrim(relation) AND relation !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_reference_sites_syntax_span_object_chk CHECK (jsonb_typeof(syntax_span) = 'object'),
+						CONSTRAINT ci_reference_sites_resolver_hints_object_chk CHECK (jsonb_typeof(resolver_hints) = 'object')
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_reference_sites_artifact_owner ON ci_reference_sites (artifact_id, owner_symbol_key)`,
+					`CREATE TABLE IF NOT EXISTS ci_chunks (
+						chunk_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						source_id UUID NOT NULL,
+						artifact_id UUID NOT NULL,
+						symbol_key TEXT,
+						chunk_kind TEXT NOT NULL,
+						ordinal INTEGER NOT NULL,
+						byte_start BIGINT NOT NULL,
+						byte_end BIGINT NOT NULL,
+						content_digest TEXT NOT NULL,
+						text_for_search TEXT NOT NULL DEFAULT '',
+						content_tsv TSVECTOR GENERATED ALWAYS AS (to_tsvector('simple', COALESCE(text_for_search, ''))) STORED,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT ci_chunks_source_chunk_unique UNIQUE (source_id, chunk_id),
+						CONSTRAINT ci_chunks_artifact_ordinal_digest_unique UNIQUE (artifact_id, ordinal, content_digest),
+						CONSTRAINT ci_chunks_artifact_scope_fkey FOREIGN KEY (source_id, artifact_id)
+							REFERENCES ci_parse_artifacts (source_id, artifact_id),
+						CONSTRAINT ci_chunks_chunk_kind_chk CHECK (
+							btrim(chunk_kind) <> '' AND chunk_kind = btrim(chunk_kind) AND chunk_kind !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_chunks_ordinal_chk CHECK (ordinal >= 0),
+						CONSTRAINT ci_chunks_byte_span_chk CHECK (byte_start >= 0 AND byte_end >= byte_start),
+						CONSTRAINT ci_chunks_content_digest_chk CHECK (content_digest ~ '^sha256:[0-9a-f]{64}$')
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_chunks_artifact_ordinal ON ci_chunks (artifact_id, ordinal)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_chunks_content_tsv ON ci_chunks USING GIN (content_tsv)`,
+					`CREATE TABLE IF NOT EXISTS ci_memberships (
+						membership_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						source_id UUID NOT NULL,
+						checkout_id UUID NOT NULL,
+						path_key TEXT NOT NULL,
+						display_path TEXT NOT NULL,
+						artifact_id UUID,
+						file_state TEXT NOT NULL,
+						mode TEXT NOT NULL,
+						valid_from_generation BIGINT NOT NULL,
+						valid_to_generation BIGINT,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT ci_memberships_checkout_path_from_unique UNIQUE (checkout_id, path_key, valid_from_generation),
+						CONSTRAINT ci_memberships_checkout_source_fkey FOREIGN KEY (source_id, checkout_id)
+							REFERENCES ci_checkouts (source_id, checkout_id),
+						CONSTRAINT ci_memberships_artifact_scope_fkey FOREIGN KEY (source_id, artifact_id)
+							REFERENCES ci_parse_artifacts (source_id, artifact_id),
+						CONSTRAINT ci_memberships_path_key_chk CHECK (
+							btrim(path_key) <> '' AND path_key = btrim(path_key) AND path_key !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_memberships_display_path_chk CHECK (
+							btrim(display_path) <> '' AND display_path = btrim(display_path) AND display_path !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_memberships_file_state_chk CHECK (file_state IN ('present', 'excluded', 'unreadable')),
+						CONSTRAINT ci_memberships_mode_chk CHECK (
+							btrim(mode) <> '' AND mode = btrim(mode) AND mode !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_memberships_artifact_state_chk CHECK (
+							(file_state = 'present' AND artifact_id IS NOT NULL)
+							OR (file_state IN ('excluded', 'unreadable') AND artifact_id IS NULL)
+						),
+						CONSTRAINT ci_memberships_valid_from_generation_chk CHECK (valid_from_generation >= 1),
+						CONSTRAINT ci_memberships_valid_interval_chk CHECK (
+							valid_to_generation IS NULL OR valid_to_generation > valid_from_generation
+						)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_memberships_checkout_path_generation
+						ON ci_memberships (checkout_id, path_key, valid_from_generation DESC)`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS idx_ci_memberships_current_checkout_path
+						ON ci_memberships (checkout_id, path_key) WHERE valid_to_generation IS NULL`,
+					`CREATE TABLE IF NOT EXISTS ci_resolved_edges (
+						resolved_edge_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						source_id UUID NOT NULL,
+						checkout_id UUID NOT NULL,
+						edge_key TEXT NOT NULL,
+						source_path TEXT NOT NULL,
+						source_artifact UUID NOT NULL,
+						source_symbol TEXT,
+						target_path TEXT,
+						target_artifact UUID,
+						target_symbol TEXT,
+						relation TEXT NOT NULL,
+						evidence_kind TEXT NOT NULL,
+						resolver_revision TEXT NOT NULL,
+						evidence_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+						resolution_state TEXT NOT NULL,
+						valid_from_generation BIGINT NOT NULL,
+						valid_to_generation BIGINT,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT ci_resolved_edges_checkout_key_from_unique UNIQUE (checkout_id, edge_key, valid_from_generation),
+						CONSTRAINT ci_resolved_edges_checkout_source_fkey FOREIGN KEY (source_id, checkout_id)
+							REFERENCES ci_checkouts (source_id, checkout_id),
+						CONSTRAINT ci_resolved_edges_source_artifact_scope_fkey FOREIGN KEY (source_id, source_artifact)
+							REFERENCES ci_parse_artifacts (source_id, artifact_id),
+						CONSTRAINT ci_resolved_edges_target_artifact_scope_fkey FOREIGN KEY (source_id, target_artifact)
+							REFERENCES ci_parse_artifacts (source_id, artifact_id),
+						CONSTRAINT ci_resolved_edges_edge_key_chk CHECK (
+							btrim(edge_key) <> '' AND edge_key = btrim(edge_key) AND edge_key !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_resolved_edges_source_path_chk CHECK (
+							btrim(source_path) <> '' AND source_path = btrim(source_path) AND source_path !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_resolved_edges_target_tuple_chk CHECK (
+							(target_path IS NULL AND target_artifact IS NULL AND target_symbol IS NULL)
+							OR (target_path IS NOT NULL AND target_artifact IS NOT NULL)
+						),
+						CONSTRAINT ci_resolved_edges_relation_chk CHECK (
+							btrim(relation) <> '' AND relation = btrim(relation) AND relation !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_resolved_edges_evidence_kind_chk
+							CHECK (evidence_kind IN ('extracted', 'resolved', 'heuristic', 'semantic', 'unresolved')),
+						CONSTRAINT ci_resolved_edges_resolver_revision_chk CHECK (
+							btrim(resolver_revision) <> '' AND resolver_revision = btrim(resolver_revision)
+							AND resolver_revision !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_resolved_edges_evidence_object_chk CHECK (jsonb_typeof(evidence_json) = 'object'),
+						CONSTRAINT ci_resolved_edges_resolution_state_chk
+							CHECK (resolution_state IN ('resolved', 'unresolved', 'ambiguous', 'partial')),
+						CONSTRAINT ci_resolved_edges_resolution_target_chk CHECK (
+							(resolution_state = 'resolved' AND target_artifact IS NOT NULL)
+							OR (resolution_state IN ('unresolved', 'ambiguous', 'partial') AND target_artifact IS NULL)
+						),
+						CONSTRAINT ci_resolved_edges_valid_from_generation_chk CHECK (valid_from_generation >= 1),
+						CONSTRAINT ci_resolved_edges_valid_interval_chk CHECK (
+							valid_to_generation IS NULL OR valid_to_generation > valid_from_generation
+						)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_resolved_edges_checkout_source_generation
+						ON ci_resolved_edges (checkout_id, source_artifact, valid_from_generation DESC)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_resolved_edges_checkout_target_generation
+						ON ci_resolved_edges (checkout_id, target_artifact, valid_from_generation DESC)
+						WHERE target_artifact IS NOT NULL`,
+					`CREATE TABLE IF NOT EXISTS ci_embedding_profiles (
+						embedding_profile_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						analysis_profile_id UUID NOT NULL,
+						provider_ref TEXT NOT NULL,
+						model TEXT NOT NULL,
+						dimension INTEGER NOT NULL,
+						preprocessing_revision TEXT NOT NULL,
+						include_relative_path BOOLEAN NOT NULL DEFAULT false,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT ci_embedding_profiles_analysis_provider_model_unique
+							UNIQUE (analysis_profile_id, provider_ref, model, dimension, preprocessing_revision, include_relative_path),
+						CONSTRAINT ci_embedding_profiles_analysis_profile_fkey FOREIGN KEY (analysis_profile_id)
+							REFERENCES ci_profiles (profile_id),
+						CONSTRAINT ci_embedding_profiles_provider_ref_chk CHECK (
+							btrim(provider_ref) <> '' AND provider_ref = btrim(provider_ref) AND provider_ref !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_embedding_profiles_model_chk CHECK (
+							btrim(model) <> '' AND model = btrim(model) AND model !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_embedding_profiles_dimension_chk CHECK (dimension = 1536),
+						CONSTRAINT ci_embedding_profiles_preprocessing_revision_chk CHECK (
+							btrim(preprocessing_revision) <> '' AND preprocessing_revision = btrim(preprocessing_revision)
+							AND preprocessing_revision !~ '[[:cntrl:]]'
+						)
+					)`,
+					`CREATE TABLE IF NOT EXISTS ci_embeddings (
+						embedding_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						embedding_profile_id UUID NOT NULL,
+						embedding_input_digest TEXT NOT NULL,
+						vector vector(1536),
+						source_id UUID NOT NULL,
+						protection_domain TEXT NOT NULL,
+						completion_seq BIGINT NOT NULL DEFAULT 0,
+						status TEXT NOT NULL,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT ci_embeddings_profile_input_source_domain_unique
+							UNIQUE (embedding_profile_id, embedding_input_digest, source_id, protection_domain),
+						CONSTRAINT ci_embeddings_scope_identity_unique
+							UNIQUE (source_id, embedding_id, embedding_profile_id, embedding_input_digest),
+						CONSTRAINT ci_embeddings_profile_input_identity_unique
+							UNIQUE (embedding_id, embedding_profile_id, embedding_input_digest),
+						CONSTRAINT ci_embeddings_embedding_profile_fkey FOREIGN KEY (embedding_profile_id)
+							REFERENCES ci_embedding_profiles (embedding_profile_id),
+						CONSTRAINT ci_embeddings_source_fkey FOREIGN KEY (source_id) REFERENCES sources (source_id),
+						CONSTRAINT ci_embeddings_input_digest_chk CHECK (embedding_input_digest ~ '^sha256:[0-9a-f]{64}$'),
+						CONSTRAINT ci_embeddings_protection_domain_chk CHECK (
+							btrim(protection_domain) <> '' AND protection_domain = btrim(protection_domain)
+							AND protection_domain !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_embeddings_completion_seq_chk CHECK (completion_seq >= 0),
+						CONSTRAINT ci_embeddings_status_chk CHECK (status IN ('pending', 'ready', 'failed')),
+						CONSTRAINT ci_embeddings_ready_vector_chk CHECK (
+							(status = 'ready' AND vector IS NOT NULL)
+							OR (status IN ('pending', 'failed') AND vector IS NULL)
+						)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_embeddings_profile_source_status
+						ON ci_embeddings (embedding_profile_id, source_id, status)`,
+					`CREATE TABLE IF NOT EXISTS ci_chunk_embeddings (
+						chunk_embedding_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						source_id UUID NOT NULL,
+						chunk_id UUID NOT NULL,
+						embedding_id UUID NOT NULL,
+						relative_path_fingerprint TEXT NOT NULL,
+						embedding_profile_id UUID NOT NULL,
+						embedding_input_digest TEXT NOT NULL,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT ci_chunk_embeddings_chunk_path_profile_input_unique
+							UNIQUE (chunk_id, relative_path_fingerprint, embedding_profile_id, embedding_input_digest),
+						CONSTRAINT ci_chunk_embeddings_chunk_scope_fkey FOREIGN KEY (source_id, chunk_id)
+							REFERENCES ci_chunks (source_id, chunk_id),
+						CONSTRAINT ci_chunk_embeddings_embedding_scope_fkey
+							FOREIGN KEY (source_id, embedding_id, embedding_profile_id, embedding_input_digest)
+							REFERENCES ci_embeddings (source_id, embedding_id, embedding_profile_id, embedding_input_digest),
+						CONSTRAINT ci_chunk_embeddings_embedding_profile_fkey FOREIGN KEY (embedding_profile_id)
+							REFERENCES ci_embedding_profiles (embedding_profile_id),
+						CONSTRAINT ci_chunk_embeddings_path_fingerprint_chk CHECK (
+							btrim(relative_path_fingerprint) <> '' AND relative_path_fingerprint = btrim(relative_path_fingerprint)
+							AND relative_path_fingerprint !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_chunk_embeddings_input_digest_chk CHECK (
+							embedding_input_digest ~ '^sha256:[0-9a-f]{64}$'
+						)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_chunk_embeddings_chunk ON ci_chunk_embeddings (chunk_id)`,
+					`CREATE TABLE IF NOT EXISTS ci_jobs (
+						job_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						source_id UUID NOT NULL,
+						checkout_id UUID,
+						job_kind TEXT NOT NULL,
+						input_fingerprint TEXT NOT NULL,
+						owner_epoch BIGINT,
+						target_generation BIGINT,
+						state TEXT NOT NULL,
+						attempt INTEGER NOT NULL DEFAULT 0,
+						retry_after TIMESTAMPTZ,
+						lease_owner TEXT,
+						lease_expiry TIMESTAMPTZ,
+						error_code TEXT,
+						counts JSONB NOT NULL DEFAULT '{}'::jsonb,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT ci_jobs_source_fkey FOREIGN KEY (source_id) REFERENCES sources (source_id),
+						CONSTRAINT ci_jobs_checkout_source_fkey FOREIGN KEY (source_id, checkout_id)
+							REFERENCES ci_checkouts (source_id, checkout_id),
+						CONSTRAINT ci_jobs_source_job_kind_input_unique UNIQUE (source_id, checkout_id, job_kind, input_fingerprint),
+						CONSTRAINT ci_jobs_job_kind_chk CHECK (
+							job_kind IN ('initial_index', 'reconcile', 'parse', 'embed', 'enrich', 'gc', 'recovery')
+						),
+						CONSTRAINT ci_jobs_input_fingerprint_chk CHECK (
+							btrim(input_fingerprint) <> '' AND input_fingerprint = btrim(input_fingerprint)
+							AND input_fingerprint !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_jobs_owner_epoch_chk CHECK (owner_epoch IS NULL OR owner_epoch >= 0),
+						CONSTRAINT ci_jobs_target_generation_chk CHECK (target_generation IS NULL OR target_generation >= 1),
+						CONSTRAINT ci_jobs_state_chk CHECK (
+							state IN ('queued', 'running', 'retry_scheduled', 'succeeded', 'failed_terminal', 'cancelled', 'obsolete')
+						),
+						CONSTRAINT ci_jobs_attempt_chk CHECK (attempt >= 0),
+						CONSTRAINT ci_jobs_lease_owner_chk CHECK (
+							lease_owner IS NULL OR (btrim(lease_owner) <> '' AND lease_owner = btrim(lease_owner)
+							AND lease_owner !~ '[[:cntrl:]]')
+						),
+						CONSTRAINT ci_jobs_lease_window_chk CHECK (lease_expiry IS NULL OR lease_owner IS NOT NULL),
+						CONSTRAINT ci_jobs_counts_object_chk CHECK (jsonb_typeof(counts) = 'object')
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_jobs_state_retry_after ON ci_jobs (state, retry_after)`,
+					`CREATE TABLE IF NOT EXISTS ci_analyses (
+						analysis_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						view_id UUID NOT NULL,
+						kind TEXT NOT NULL,
+						algorithm_revision TEXT NOT NULL,
+						input_digest TEXT NOT NULL,
+						artifact_refs JSONB NOT NULL DEFAULT '{}'::jsonb,
+						result_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+						state TEXT NOT NULL,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT ci_analyses_view_kind_algorithm_input_unique UNIQUE (view_id, kind, algorithm_revision, input_digest),
+						CONSTRAINT ci_analyses_view_fkey FOREIGN KEY (view_id) REFERENCES ci_views (view_id),
+						CONSTRAINT ci_analyses_kind_chk CHECK (
+							btrim(kind) <> '' AND kind = btrim(kind) AND kind !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_analyses_algorithm_revision_chk CHECK (
+							btrim(algorithm_revision) <> '' AND algorithm_revision = btrim(algorithm_revision)
+							AND algorithm_revision !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_analyses_input_digest_chk CHECK (input_digest ~ '^sha256:[0-9a-f]{64}$'),
+						CONSTRAINT ci_analyses_artifact_refs_object_chk CHECK (jsonb_typeof(artifact_refs) = 'object'),
+						CONSTRAINT ci_analyses_result_object_chk CHECK (jsonb_typeof(result_json) = 'object'),
+						CONSTRAINT ci_analyses_state_chk CHECK (state IN ('pending', 'ready', 'failed'))
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_analyses_view_state ON ci_analyses (view_id, state)`,
+					`CREATE TABLE IF NOT EXISTS uci_exposures (
+						exposure_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						exposure_ref TEXT NOT NULL,
+						auth_realm TEXT NOT NULL,
+						source_id UUID NOT NULL,
+						checkout_id UUID NOT NULL,
+						view_id UUID NOT NULL,
+						client_ref TEXT NOT NULL,
+						client_session_ref TEXT NOT NULL,
+						request_ref TEXT NOT NULL,
+						operation_kind TEXT NOT NULL,
+						result_state TEXT NOT NULL,
+						retrieval_mode TEXT NOT NULL,
+						coverage_state TEXT NOT NULL,
+						evidence_source TEXT NOT NULL,
+						certainty TEXT NOT NULL,
+						idempotency_key TEXT NOT NULL,
+						idempotency_binding_digest TEXT NOT NULL,
+						recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT uci_exposures_exposure_ref_unique UNIQUE (exposure_ref),
+						CONSTRAINT uci_exposures_idempotency_unique UNIQUE (auth_realm, client_session_ref, idempotency_key),
+						CONSTRAINT uci_exposures_source_realm_fkey FOREIGN KEY (source_id, auth_realm)
+							REFERENCES sources (source_id, auth_realm),
+						CONSTRAINT uci_exposures_view_scope_fkey FOREIGN KEY (view_id, checkout_id, source_id)
+							REFERENCES ci_views (view_id, checkout_id, source_id),
+						CONSTRAINT uci_exposures_auth_realm_chk CHECK (
+							btrim(auth_realm) <> '' AND auth_realm = btrim(auth_realm) AND auth_realm !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT uci_exposures_exposure_ref_chk CHECK (
+							btrim(exposure_ref) <> '' AND exposure_ref = btrim(exposure_ref) AND exposure_ref !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT uci_exposures_client_ref_chk CHECK (
+							btrim(client_ref) <> '' AND client_ref = btrim(client_ref) AND client_ref !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT uci_exposures_client_session_ref_chk CHECK (
+							btrim(client_session_ref) <> '' AND client_session_ref = btrim(client_session_ref)
+							AND client_session_ref !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT uci_exposures_request_ref_chk CHECK (
+							btrim(request_ref) <> '' AND request_ref = btrim(request_ref) AND request_ref !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT uci_exposures_operation_kind_chk
+							CHECK (operation_kind IN ('code_search', 'code_graph', 'versioned_read')),
+						CONSTRAINT uci_exposures_result_state_chk
+							CHECK (result_state IN ('ok', 'empty', 'partial', 'stale', 'unavailable')),
+						CONSTRAINT uci_exposures_retrieval_mode_chk
+							CHECK (retrieval_mode IN ('exact', 'lexical', 'hybrid', 'graph', 'unavailable')),
+						CONSTRAINT uci_exposures_coverage_state_chk
+							CHECK (coverage_state IN ('complete', 'partial', 'unavailable')),
+						CONSTRAINT uci_exposures_evidence_source_chk
+							CHECK (evidence_source IN ('exact', 'fts', 'vector', 'graph', 'mixed', 'none')),
+						CONSTRAINT uci_exposures_certainty_chk
+							CHECK (certainty IN ('established', 'partial', 'unavailable')),
+						CONSTRAINT uci_exposures_idempotency_key_chk CHECK (
+							btrim(idempotency_key) <> '' AND idempotency_key = btrim(idempotency_key)
+							AND idempotency_key !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT uci_exposures_binding_digest_chk
+							CHECK (idempotency_binding_digest ~ '^sha256:[0-9a-f]{64}$')
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_uci_exposures_idempotency
+						ON uci_exposures (auth_realm, client_session_ref, idempotency_key)`,
+					`CREATE INDEX IF NOT EXISTS idx_uci_exposures_view_recorded_at
+						ON uci_exposures (view_id, recorded_at DESC)`,
+					`CREATE TABLE IF NOT EXISTS uci_completion_evidence (
+						completion_evidence_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						exposure_id UUID NOT NULL,
+						supported_host_ref TEXT NOT NULL,
+						callback_ref TEXT NOT NULL,
+						outcome TEXT NOT NULL,
+						idempotency_key TEXT NOT NULL,
+						idempotency_binding_digest TEXT NOT NULL,
+						occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT uci_completion_evidence_idempotency_unique
+							UNIQUE (exposure_id, supported_host_ref, idempotency_key),
+						CONSTRAINT uci_completion_evidence_exposure_fkey FOREIGN KEY (exposure_id)
+							REFERENCES uci_exposures (exposure_id),
+						CONSTRAINT uci_completion_evidence_supported_host_ref_chk CHECK (
+							btrim(supported_host_ref) <> '' AND supported_host_ref = btrim(supported_host_ref)
+							AND supported_host_ref !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT uci_completion_evidence_callback_ref_chk CHECK (
+							btrim(callback_ref) <> '' AND callback_ref = btrim(callback_ref) AND callback_ref !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT uci_completion_evidence_outcome_chk
+							CHECK (outcome IN ('succeeded', 'partial', 'failed', 'abandoned')),
+						CONSTRAINT uci_completion_evidence_idempotency_key_chk CHECK (
+							btrim(idempotency_key) <> '' AND idempotency_key = btrim(idempotency_key)
+							AND idempotency_key !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT uci_completion_evidence_binding_digest_chk
+							CHECK (idempotency_binding_digest ~ '^sha256:[0-9a-f]{64}$')
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_uci_completion_evidence_idempotency
+						ON uci_completion_evidence (exposure_id, supported_host_ref, idempotency_key)`,
+					`CREATE OR REPLACE FUNCTION uci_require_current_view_published()
+					RETURNS trigger LANGUAGE plpgsql AS $$
+					BEGIN
+						IF NEW.current_view_id IS NULL THEN
+							RETURN NEW;
+						END IF;
+						PERFORM 1
+						FROM ci_views
+						WHERE view_id = NEW.current_view_id
+							AND checkout_id = NEW.checkout_id
+							AND source_id = NEW.source_id
+							AND incarnation_id = NEW.incarnation_id
+							AND state = 'published';
+						IF NOT FOUND THEN
+							RAISE EXCEPTION 'current UCI view must be published and checkout-scoped' USING ERRCODE = '23514';
+						END IF;
+						RETURN NEW;
+					END;
+					$$`,
+					`DROP TRIGGER IF EXISTS ci_checkouts_current_view_published_guard ON ci_checkouts`,
+					`CREATE TRIGGER ci_checkouts_current_view_published_guard
+						BEFORE INSERT OR UPDATE OF current_view_id, checkout_id, source_id, incarnation_id ON ci_checkouts
+						FOR EACH ROW EXECUTE FUNCTION uci_require_current_view_published()`,
+					`CREATE OR REPLACE FUNCTION uci_prevent_unpublished_current_view()
+					RETURNS trigger LANGUAGE plpgsql AS $$
+					BEGIN
+						IF NEW.state <> 'published' AND EXISTS (
+							SELECT 1 FROM ci_checkouts
+							WHERE current_view_id = OLD.view_id
+						) THEN
+							RAISE EXCEPTION 'current UCI view cannot leave published state' USING ERRCODE = '23514';
+						END IF;
+						RETURN NEW;
+					END;
+					$$`,
+					`DROP TRIGGER IF EXISTS ci_views_current_view_published_guard ON ci_views`,
+					`CREATE TRIGGER ci_views_current_view_published_guard
+						BEFORE UPDATE OF state ON ci_views
+						FOR EACH ROW EXECUTE FUNCTION uci_prevent_unpublished_current_view()`,
+					`CREATE OR REPLACE FUNCTION uci_evidence_reject_mutation()
+					RETURNS trigger LANGUAGE plpgsql AS $$
+					BEGIN
+						IF TG_OP = 'DELETE' AND current_setting('app.uci_evidence_retention', true) = 'on' THEN
+							RETURN OLD;
+						END IF;
+						RAISE EXCEPTION 'UCI evidence is append-only outside the recorder retention transaction' USING ERRCODE = '55000';
+					END;
+					$$`,
+					`DROP TRIGGER IF EXISTS uci_exposures_append_only_guard ON uci_exposures`,
+					`CREATE TRIGGER uci_exposures_append_only_guard
+						BEFORE UPDATE OR DELETE ON uci_exposures
+						FOR EACH ROW EXECUTE FUNCTION uci_evidence_reject_mutation()`,
+					`DROP TRIGGER IF EXISTS uci_completion_evidence_append_only_guard ON uci_completion_evidence`,
+					`CREATE TRIGGER uci_completion_evidence_append_only_guard
+						BEFORE UPDATE OR DELETE ON uci_completion_evidence
+						FOR EACH ROW EXECUTE FUNCTION uci_evidence_reject_mutation()`,
+					`CREATE OR REPLACE FUNCTION uci_prune_evidence(p_before TIMESTAMPTZ, p_limit INTEGER)
+					RETURNS TABLE (completions_deleted BIGINT, exposures_deleted BIGINT)
+					LANGUAGE plpgsql AS $$
+					DECLARE
+						selected_ids UUID[];
+						deleted_completions BIGINT := 0;
+						deleted_exposures BIGINT := 0;
+					BEGIN
+						IF p_before IS NULL THEN
+							RAISE EXCEPTION 'evidence retention cutoff is required' USING ERRCODE = '22023';
+						END IF;
+						IF p_limit < 1 OR p_limit > 1000 THEN
+							RAISE EXCEPTION 'evidence retention batch must be between 1 and 1000' USING ERRCODE = '22023';
+						END IF;
+						SELECT COALESCE(array_agg(exposure_id), ARRAY[]::UUID[])
+						INTO selected_ids
+						FROM (
+							SELECT exposure_id
+							FROM uci_exposures
+							WHERE recorded_at < p_before
+							ORDER BY recorded_at ASC, exposure_id ASC
+							LIMIT p_limit
+							FOR UPDATE SKIP LOCKED
+						) AS selected;
+						PERFORM set_config('app.uci_evidence_retention', 'on', true);
+						BEGIN
+							DELETE FROM uci_completion_evidence WHERE exposure_id = ANY(selected_ids);
+							GET DIAGNOSTICS deleted_completions = ROW_COUNT;
+							DELETE FROM uci_exposures WHERE exposure_id = ANY(selected_ids);
+							GET DIAGNOSTICS deleted_exposures = ROW_COUNT;
+						EXCEPTION WHEN OTHERS THEN
+							PERFORM set_config('app.uci_evidence_retention', 'off', true);
+							RAISE;
+						END;
+						PERFORM set_config('app.uci_evidence_retention', 'off', true);
+						RETURN QUERY SELECT deleted_completions, deleted_exposures;
+					END;
+					$$`,
+					`REVOKE ALL ON FUNCTION uci_prune_evidence(TIMESTAMPTZ, INTEGER) FROM PUBLIC`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 172: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackUCIIndexProjectionMigration172,
+		},
+		// Migration 173 is additive: it binds the existing projection tables into the fenced publication state machine.
+		{
+			ID: "173_uci_fenced_publication",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`ALTER TABLE ci_parse_artifacts ADD COLUMN IF NOT EXISTS facts_digest TEXT`,
+					`ALTER TABLE ci_parse_artifacts ADD COLUMN IF NOT EXISTS sealed_at TIMESTAMPTZ`,
+					`DO $$
+					BEGIN
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_parse_artifacts_facts_digest_chk'
+								AND conrelid = 'ci_parse_artifacts'::regclass
+						) THEN
+							ALTER TABLE ci_parse_artifacts
+								ADD CONSTRAINT ci_parse_artifacts_facts_digest_chk
+								CHECK (facts_digest IS NULL OR facts_digest ~ '^sha256:[0-9a-f]{64}$');
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_parse_artifacts_sealed_pair_chk'
+								AND conrelid = 'ci_parse_artifacts'::regclass
+						) THEN
+							ALTER TABLE ci_parse_artifacts
+								ADD CONSTRAINT ci_parse_artifacts_sealed_pair_chk
+								CHECK ((facts_digest IS NULL) = (sealed_at IS NULL));
+						END IF;
+					END $$`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS publication_key TEXT`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS requested_by TEXT`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS incarnation_id UUID`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS profile_id UUID`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS expected_parent_view_id UUID`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS manifest_mode TEXT`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS sealed_manifest JSONB`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS finalize_binding_digest TEXT`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS result_view_id UUID`,
+					`DO $$
+					BEGIN
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_publication_key_chk' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_publication_key_chk CHECK (
+								publication_key IS NULL OR (
+									btrim(publication_key) <> '' AND publication_key = btrim(publication_key)
+									AND publication_key !~ '[[:cntrl:]]'
+								)
+							);
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_requested_by_chk' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_requested_by_chk CHECK (
+								requested_by IS NULL OR (
+									btrim(requested_by) <> '' AND requested_by = btrim(requested_by)
+									AND requested_by !~ '[[:cntrl:]]'
+								)
+							);
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_manifest_mode_chk' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_manifest_mode_chk CHECK (
+								manifest_mode IS NULL OR manifest_mode IN ('full', 'delta')
+							);
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_sealed_manifest_object_chk' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_sealed_manifest_object_chk CHECK (
+								sealed_manifest IS NULL OR jsonb_typeof(sealed_manifest) = 'object'
+							);
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_finalize_binding_digest_chk' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_finalize_binding_digest_chk CHECK (
+								finalize_binding_digest IS NULL OR finalize_binding_digest ~ '^sha256:[0-9a-f]{64}$'
+							);
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_publication_profile_fkey' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_publication_profile_fkey
+								FOREIGN KEY (profile_id) REFERENCES ci_profiles (profile_id);
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_publication_parent_scope_fkey' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_publication_parent_scope_fkey
+								FOREIGN KEY (expected_parent_view_id, checkout_id, source_id, incarnation_id)
+								REFERENCES ci_views (view_id, checkout_id, source_id, incarnation_id);
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_publication_result_scope_fkey' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_publication_result_scope_fkey
+								FOREIGN KEY (result_view_id, checkout_id, source_id, incarnation_id)
+								REFERENCES ci_views (view_id, checkout_id, source_id, incarnation_id);
+						END IF;
+					END $$`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS idx_ci_jobs_publication_key
+						ON ci_jobs (source_id, checkout_id, publication_key)
+						WHERE publication_key IS NOT NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_jobs_result_view_updated_at
+						ON ci_jobs (result_view_id, updated_at)
+						WHERE result_view_id IS NOT NULL AND state = 'succeeded'`,
+					`CREATE TABLE IF NOT EXISTS ci_index_build_parts (
+						build_id UUID NOT NULL,
+						sequence INTEGER NOT NULL,
+						part_digest TEXT NOT NULL,
+						payload JSONB NOT NULL,
+						payload_bytes BIGINT NOT NULL,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT ci_index_build_parts_pkey PRIMARY KEY (build_id, sequence),
+						CONSTRAINT ci_index_build_parts_build_fkey FOREIGN KEY (build_id) REFERENCES ci_jobs (job_id),
+						CONSTRAINT ci_index_build_parts_sequence_chk CHECK (sequence >= 0),
+						CONSTRAINT ci_index_build_parts_digest_chk CHECK (part_digest ~ '^sha256:[0-9a-f]{64}$'),
+						CONSTRAINT ci_index_build_parts_payload_object_chk CHECK (jsonb_typeof(payload) = 'object'),
+						CONSTRAINT ci_index_build_parts_payload_bytes_chk CHECK (payload_bytes >= 0)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_index_build_parts_build_sequence
+						ON ci_index_build_parts (build_id, sequence)`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS idx_ci_resolved_edges_current_checkout_key
+						ON ci_resolved_edges (checkout_id, edge_key)
+						WHERE valid_to_generation IS NULL`,
+					`CREATE OR REPLACE FUNCTION uci_reject_sealed_artifact_mutation()
+					RETURNS trigger LANGUAGE plpgsql AS $$
+					BEGIN
+						IF TG_OP = 'INSERT' THEN
+							IF NEW.facts_digest IS NOT NULL OR NEW.sealed_at IS NOT NULL THEN
+								RAISE EXCEPTION 'new UCI artifact cannot be pre-sealed' USING ERRCODE = '55000';
+							END IF;
+							RETURN NEW;
+						END IF;
+						IF OLD.sealed_at IS NOT NULL THEN
+							RAISE EXCEPTION 'sealed UCI artifact is immutable' USING ERRCODE = '55000';
+						END IF;
+						IF TG_OP = 'DELETE' THEN
+							RETURN OLD;
+						END IF;
+						RETURN NEW;
+					END;
+					$$`,
+					`DROP TRIGGER IF EXISTS ci_parse_artifacts_sealed_guard ON ci_parse_artifacts`,
+					`CREATE TRIGGER ci_parse_artifacts_sealed_guard
+						BEFORE INSERT OR UPDATE OR DELETE ON ci_parse_artifacts
+						FOR EACH ROW EXECUTE FUNCTION uci_reject_sealed_artifact_mutation()`,
+					`CREATE OR REPLACE FUNCTION uci_reject_sealed_artifact_fact_mutation()
+					RETURNS trigger LANGUAGE plpgsql AS $$
+					DECLARE
+						fact_artifact_id UUID;
+						artifact_sealed_at TIMESTAMPTZ;
+					BEGIN
+						IF TG_OP = 'INSERT' THEN
+							fact_artifact_id := NEW.artifact_id;
+						ELSE
+							fact_artifact_id := OLD.artifact_id;
+							IF TG_OP = 'UPDATE' AND NEW.artifact_id IS DISTINCT FROM OLD.artifact_id THEN
+								RAISE EXCEPTION 'UCI artifact fact binding is immutable' USING ERRCODE = '55000';
+							END IF;
+						END IF;
+						SELECT sealed_at INTO artifact_sealed_at
+						FROM ci_parse_artifacts
+						WHERE artifact_id = fact_artifact_id
+						FOR UPDATE;
+						IF artifact_sealed_at IS NOT NULL THEN
+							RAISE EXCEPTION 'sealed UCI artifact facts are immutable' USING ERRCODE = '55000';
+						END IF;
+						IF TG_OP = 'DELETE' THEN
+							RETURN OLD;
+						END IF;
+						RETURN NEW;
+					END;
+					$$`,
+					`DROP TRIGGER IF EXISTS ci_definitions_sealed_artifact_guard ON ci_definitions`,
+					`CREATE TRIGGER ci_definitions_sealed_artifact_guard
+						BEFORE INSERT OR UPDATE OR DELETE ON ci_definitions
+						FOR EACH ROW EXECUTE FUNCTION uci_reject_sealed_artifact_fact_mutation()`,
+					`DROP TRIGGER IF EXISTS ci_reference_sites_sealed_artifact_guard ON ci_reference_sites`,
+					`CREATE TRIGGER ci_reference_sites_sealed_artifact_guard
+						BEFORE INSERT OR UPDATE OR DELETE ON ci_reference_sites
+						FOR EACH ROW EXECUTE FUNCTION uci_reject_sealed_artifact_fact_mutation()`,
+					`DROP TRIGGER IF EXISTS ci_chunks_sealed_artifact_guard ON ci_chunks`,
+					`CREATE TRIGGER ci_chunks_sealed_artifact_guard
+						BEFORE INSERT OR UPDATE OR DELETE ON ci_chunks
+						FOR EACH ROW EXECUTE FUNCTION uci_reject_sealed_artifact_fact_mutation()`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 173: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackUCIFencedPublicationMigration173,
+		},
+		// Migration 174 binds durable embedding work to exact Views and vector profiles.
+		{
+			ID: "174_uci_embedding_jobs",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS target_view_id UUID`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS embedding_profile_id UUID`,
+					`UPDATE ci_jobs
+						SET state = 'obsolete', error_code = 'legacy_unbound', retry_after = NULL, lease_owner = NULL, lease_expiry = NULL, updated_at = now()
+						WHERE job_kind = 'embed'
+							AND (target_view_id IS NULL OR embedding_profile_id IS NULL)
+							AND state NOT IN ('succeeded', 'failed_terminal', 'cancelled', 'obsolete')`,
+					`DO $$
+					BEGIN
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_embed_target_scope_fkey' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_embed_target_scope_fkey
+								FOREIGN KEY (target_view_id, checkout_id, source_id, incarnation_id)
+								REFERENCES ci_views (view_id, checkout_id, source_id, incarnation_id);
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_embed_profile_fkey' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_embed_profile_fkey
+								FOREIGN KEY (embedding_profile_id) REFERENCES ci_embedding_profiles (embedding_profile_id);
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_embed_shape_chk' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_embed_shape_chk CHECK (
+								job_kind <> 'embed'
+								OR (
+									target_view_id IS NULL
+									AND embedding_profile_id IS NULL
+									AND state IN ('succeeded', 'failed_terminal', 'cancelled', 'obsolete')
+								)
+								OR (
+									target_view_id IS NOT NULL
+									AND embedding_profile_id IS NOT NULL
+									AND checkout_id IS NOT NULL
+									AND incarnation_id IS NOT NULL
+									AND profile_id IS NOT NULL
+									AND requested_by IS NOT NULL
+									AND target_generation IS NOT NULL
+									AND owner_epoch IS NOT NULL
+									AND publication_key IS NULL
+									AND expected_parent_view_id IS NULL
+									AND manifest_mode IS NULL
+									AND sealed_manifest IS NULL
+									AND finalize_binding_digest IS NULL
+									AND result_view_id IS NULL
+								)
+							);
+						END IF;
+					END $$`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS idx_ci_jobs_embed_target_profile_unique
+						ON ci_jobs (target_view_id, embedding_profile_id)
+						WHERE job_kind = 'embed' AND target_view_id IS NOT NULL AND embedding_profile_id IS NOT NULL`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS idx_ci_jobs_embed_running_source_profile_unique
+						ON ci_jobs (source_id, embedding_profile_id)
+						WHERE job_kind = 'embed' AND state = 'running' AND embedding_profile_id IS NOT NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_jobs_embed_claim
+						ON ci_jobs (state, retry_after, source_id, job_id)
+						WHERE job_kind = 'embed' AND embedding_profile_id IS NOT NULL`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 174: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackUCIEmbeddingJobsMigration174,
+		},
+		// Migration 175 aligns durable reference targets with the source-span
+		// contract: exact call/reference evidence may contain internal newlines.
+		{
+			ID: "175_uci_reference_source_text",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`ALTER TABLE ci_reference_sites DROP CONSTRAINT IF EXISTS ci_reference_sites_raw_target_chk`,
+					`ALTER TABLE ci_reference_sites ADD CONSTRAINT ci_reference_sites_raw_target_chk
+						CHECK (octet_length(raw_target) BETWEEN 1 AND 65536)`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 175: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackUCIReferenceSourceTextMigration175,
+		},
+		// Migration 176 remains inline so migrationmeta can derive the live browser-grant schema.
+		{
+			ID: "176_browser_read_grants",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`CREATE TABLE IF NOT EXISTS browser_read_grants (
+						grant_ref UUID PRIMARY KEY,
+						auth_realm TEXT NOT NULL,
+						subject_user_id BIGINT NOT NULL,
+						source_id UUID NOT NULL,
+						checkout_id UUID NOT NULL,
+						state TEXT NOT NULL,
+						issuer_principal TEXT NOT NULL,
+						expires_at TIMESTAMPTZ,
+						issued_at TIMESTAMPTZ NOT NULL,
+						revoked_at TIMESTAMPTZ,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT browser_read_grants_auth_realm_chk CHECK (
+							btrim(auth_realm) <> ''
+							AND auth_realm = btrim(auth_realm)
+							AND auth_realm !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT browser_read_grants_subject_user_id_chk CHECK (subject_user_id > 0),
+						CONSTRAINT browser_read_grants_state_chk CHECK (state IN ('active', 'revoked', 'expired')),
+						CONSTRAINT browser_read_grants_issuer_principal_chk CHECK (
+							btrim(issuer_principal) <> ''
+							AND issuer_principal = btrim(issuer_principal)
+							AND issuer_principal !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT browser_read_grants_lifecycle_chk CHECK (
+							(state = 'revoked') = (revoked_at IS NOT NULL)
+							AND (expires_at IS NULL OR expires_at > issued_at)
+							AND (revoked_at IS NULL OR revoked_at >= issued_at)
+						),
+						CONSTRAINT browser_read_grants_tuple_unique
+							UNIQUE (auth_realm, subject_user_id, source_id, checkout_id),
+						CONSTRAINT browser_read_grants_subject_user_fkey
+							FOREIGN KEY (subject_user_id) REFERENCES users (id) ON DELETE RESTRICT,
+						CONSTRAINT browser_read_grants_source_realm_fkey
+							FOREIGN KEY (source_id, auth_realm) REFERENCES sources (source_id, auth_realm) ON DELETE RESTRICT,
+						CONSTRAINT browser_read_grants_checkout_source_fkey
+							FOREIGN KEY (source_id, checkout_id) REFERENCES ci_checkouts (source_id, checkout_id) ON DELETE RESTRICT
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_browser_read_grants_active_exact_read
+						ON browser_read_grants (subject_user_id, source_id, checkout_id, expires_at)
+						WHERE state = 'active'`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 176: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackBrowserReadGrantsMigration176,
+		},
+		// Migration 177 remains inline so migrationmeta can derive the live browser-binding schema.
+		{
+			ID: "177_browser_tab_bindings",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`CREATE TABLE IF NOT EXISTS browser_tab_bindings (
+						tab_binding_id UUID PRIMARY KEY,
+						subject_user_id BIGINT NOT NULL,
+						session_id TEXT NOT NULL,
+						resume_nonce_digest BYTEA NOT NULL,
+						document_proof_digest BYTEA NOT NULL,
+						reload_token_digest BYTEA NOT NULL,
+						document_lease_state TEXT NOT NULL,
+						document_lease_expires_at TIMESTAMPTZ NOT NULL,
+						pinned_source_id UUID,
+						pinned_checkout_id UUID,
+						pinned_view_id UUID,
+						pinned_analysis_profile_id UUID,
+						pinned_generation BIGINT,
+						binding_expires_at TIMESTAMPTZ NOT NULL,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT browser_tab_bindings_subject_user_id_chk CHECK (subject_user_id > 0),
+						CONSTRAINT browser_tab_bindings_session_id_chk CHECK (
+							btrim(session_id) <> ''
+							AND session_id = btrim(session_id)
+							AND session_id !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT browser_tab_bindings_digest_chk CHECK (
+							octet_length(resume_nonce_digest) = 32
+							AND octet_length(document_proof_digest) = 32
+							AND octet_length(reload_token_digest) = 32
+						),
+						CONSTRAINT browser_tab_bindings_document_lease_state_chk CHECK (
+							document_lease_state IN ('live', 'closed', 'expired')
+						),
+						CONSTRAINT browser_tab_bindings_expiry_chk CHECK (
+							binding_expires_at > document_lease_expires_at
+							AND binding_expires_at > created_at
+						),
+						CONSTRAINT browser_tab_bindings_pinned_context_chk CHECK (
+							(
+								pinned_source_id IS NULL
+								AND pinned_checkout_id IS NULL
+								AND pinned_view_id IS NULL
+								AND pinned_analysis_profile_id IS NULL
+								AND pinned_generation IS NULL
+							)
+							OR (
+								pinned_source_id IS NOT NULL
+								AND pinned_checkout_id IS NOT NULL
+								AND pinned_view_id IS NOT NULL
+								AND pinned_analysis_profile_id IS NOT NULL
+								AND pinned_generation > 0
+							)
+						)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_browser_tab_bindings_session_lookup
+						ON browser_tab_bindings (session_id, tab_binding_id)`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 177: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackBrowserTabBindingsMigration177,
+		},
+		// Migration 178 remains inline so migrationmeta can derive the privacy-minimized selection schema.
+		{
+			ID: "178_collection_selections",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`CREATE TABLE IF NOT EXISTS collection_selections (
+						selection_id UUID PRIMARY KEY,
+						subject_user_id BIGINT NOT NULL,
+						session_id TEXT NOT NULL,
+						domain TEXT NOT NULL,
+						kind TEXT NOT NULL,
+						selection_version BIGINT NOT NULL,
+						context_fingerprint TEXT NOT NULL,
+						authorization_epoch BIGINT NOT NULL,
+						collection_version BIGINT NOT NULL,
+						filter_fingerprint TEXT,
+						page_cursor TEXT,
+						targets_json JSONB NOT NULL,
+						excluded_ids_json JSONB NOT NULL,
+						selection_token UUID,
+						frozen_expires_at TIMESTAMPTZ,
+						reconfirmation_required BOOLEAN NOT NULL DEFAULT false,
+						reconfirmation_reason TEXT,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT collection_selections_subject_user_id_chk CHECK (subject_user_id > 0),
+						CONSTRAINT collection_selections_session_id_chk CHECK (
+							btrim(session_id) <> ''
+							AND session_id = btrim(session_id)
+							AND session_id !~ '[[:cntrl:]]'
+							AND octet_length(session_id) <= 256
+						),
+						CONSTRAINT collection_selections_domain_chk CHECK (
+							domain ~ '^[a-z][a-z0-9_-]{0,63}$'
+						),
+						CONSTRAINT collection_selections_kind_chk CHECK (
+							kind IN ('none', 'explicit', 'page', 'frozen_filter')
+						),
+						CONSTRAINT collection_selections_selection_version_chk CHECK (selection_version > 0),
+						CONSTRAINT collection_selections_context_fingerprint_chk CHECK (
+							context_fingerprint ~ '^sha256:[0-9a-f]{64}$'
+						),
+						CONSTRAINT collection_selections_authorization_epoch_chk CHECK (authorization_epoch > 0),
+						CONSTRAINT collection_selections_collection_version_chk CHECK (collection_version > 0),
+						CONSTRAINT collection_selections_filter_fingerprint_chk CHECK (
+							filter_fingerprint IS NULL OR filter_fingerprint ~ '^sha256:[0-9a-f]{64}$'
+						),
+						CONSTRAINT collection_selections_page_cursor_chk CHECK (
+							page_cursor IS NULL OR (
+								btrim(page_cursor) <> ''
+								AND page_cursor = btrim(page_cursor)
+								AND page_cursor !~ '[[:cntrl:]]'
+								AND octet_length(page_cursor) <= 512
+							)
+						),
+						CONSTRAINT collection_selections_json_shape_chk CHECK (
+							jsonb_typeof(targets_json) IN ('array', 'null')
+							AND jsonb_typeof(excluded_ids_json) IN ('array', 'null')
+						),
+						CONSTRAINT collection_selections_selection_shape_chk CHECK (
+							(kind = 'none'
+								AND targets_json IN ('[]'::jsonb, 'null'::jsonb)
+								AND excluded_ids_json IN ('[]'::jsonb, 'null'::jsonb)
+								AND page_cursor IS NULL
+								AND filter_fingerprint IS NULL
+								AND selection_token IS NULL
+								AND frozen_expires_at IS NULL)
+							OR (kind = 'explicit'
+								AND jsonb_array_length(targets_json) > 0
+								AND excluded_ids_json IN ('[]'::jsonb, 'null'::jsonb)
+								AND page_cursor IS NULL
+								AND filter_fingerprint IS NULL
+								AND selection_token IS NULL
+								AND frozen_expires_at IS NULL)
+							OR (kind = 'page'
+								AND jsonb_array_length(targets_json) > 0
+								AND excluded_ids_json IN ('[]'::jsonb, 'null'::jsonb)
+								AND page_cursor IS NOT NULL
+								AND filter_fingerprint IS NULL
+								AND selection_token IS NULL
+								AND frozen_expires_at IS NULL)
+							OR (kind = 'frozen_filter'
+								AND jsonb_array_length(targets_json) > 0
+								AND filter_fingerprint IS NOT NULL
+								AND page_cursor IS NULL
+								AND selection_token IS NOT NULL
+								AND selection_token <> '00000000-0000-0000-0000-000000000000'::uuid
+								AND frozen_expires_at IS NOT NULL
+								AND frozen_expires_at > created_at)
+						),
+						CONSTRAINT collection_selections_reconfirmation_chk CHECK (
+							(NOT reconfirmation_required AND COALESCE(reconfirmation_reason, '') = '')
+							OR (reconfirmation_required AND reconfirmation_reason IN (
+								'filter_changed', 'context_changed', 'grant_changed', 'collection_changed', 'expired'
+							))
+						)
+					)`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS idx_collection_selection_scope
+						ON collection_selections (subject_user_id, session_id, domain)`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS idx_collection_selection_token
+						ON collection_selections (selection_token) WHERE selection_token IS NOT NULL`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 178: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackCollectionSelectionsMigration178,
+		},
+		// Migration 179 remains inline so migrationmeta can derive the durable intent schema.
+		{
+			ID: "179_uci_index_intents",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`CREATE TABLE IF NOT EXISTS uci_index_intents (
+						intent_id UUID PRIMARY KEY,
+						request_ref TEXT NOT NULL,
+						kind TEXT NOT NULL,
+						source_id UUID NOT NULL,
+						checkout_id UUID NOT NULL,
+						incarnation_id UUID NOT NULL,
+						profile_id UUID NOT NULL,
+						previous_space_id UUID,
+						previous_view_id UUID,
+						previous_generation BIGINT,
+						state TEXT NOT NULL,
+						attempt INTEGER NOT NULL,
+						acknowledged_owner TEXT,
+						acknowledgement_epoch BIGINT NOT NULL,
+						acknowledged_at TIMESTAMPTZ,
+						result_space_id UUID,
+						result_view_id UUID,
+						result_generation BIGINT,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT uci_index_intents_request_ref_chk CHECK (
+							btrim(request_ref) <> ''
+							AND request_ref = btrim(request_ref)
+							AND request_ref !~ '[[:cntrl:]]'
+							AND octet_length(request_ref) <= 256
+						),
+						CONSTRAINT uci_index_intents_kind_chk CHECK (kind IN ('reindex', 'reconcile')),
+						CONSTRAINT uci_index_intents_previous_view_shape_chk CHECK (
+							(previous_space_id IS NULL AND previous_view_id IS NULL AND previous_generation IS NULL)
+							OR (previous_view_id IS NOT NULL AND previous_generation IS NOT NULL AND previous_generation >= 1)
+						),
+						CONSTRAINT uci_index_intents_state_chk CHECK (
+							state IN ('submitted', 'queued', 'acknowledged', 'running', 'completed', 'unavailable', 'failed')
+						),
+						CONSTRAINT uci_index_intents_attempt_epoch_chk CHECK (
+							attempt >= 0
+							AND acknowledgement_epoch >= 0
+							AND acknowledgement_epoch = attempt
+						),
+						CONSTRAINT uci_index_intents_acknowledgement_shape_chk CHECK (
+							(state IN ('acknowledged', 'running', 'completed', 'failed')
+								AND attempt >= 1
+								AND acknowledged_owner IS NOT NULL
+								AND btrim(acknowledged_owner) <> ''
+								AND acknowledged_owner = btrim(acknowledged_owner)
+								AND acknowledged_owner !~ '[[:cntrl:]]'
+								AND octet_length(acknowledged_owner) <= 256
+								AND acknowledged_at IS NOT NULL
+								AND acknowledged_at >= created_at
+								AND acknowledged_at <= updated_at)
+							OR (state IN ('submitted', 'queued', 'unavailable')
+								AND attempt = 0
+								AND acknowledged_owner IS NULL
+								AND acknowledged_at IS NULL)
+						),
+						CONSTRAINT uci_index_intents_result_view_shape_chk CHECK (
+							(result_space_id IS NULL AND result_view_id IS NULL AND result_generation IS NULL)
+							OR (result_view_id IS NOT NULL AND result_generation IS NOT NULL AND result_generation >= 1)
+						),
+						CONSTRAINT uci_index_intents_completed_result_chk CHECK (
+							(state = 'completed' AND result_view_id IS NOT NULL AND result_generation IS NOT NULL)
+							OR (state <> 'completed' AND result_space_id IS NULL AND result_view_id IS NULL AND result_generation IS NULL)
+						),
+						CONSTRAINT uci_index_intents_timestamps_chk CHECK (updated_at >= created_at)
+					)`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS uci_index_intents_request_ref
+						ON uci_index_intents (request_ref)`,
+					`CREATE INDEX IF NOT EXISTS idx_uci_index_intents_owner_state
+						ON uci_index_intents (acknowledged_owner, state, updated_at DESC, intent_id)
+						WHERE acknowledged_owner IS NOT NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_uci_index_intents_scope_status
+						ON uci_index_intents (source_id, checkout_id, incarnation_id, profile_id, state, updated_at DESC, intent_id)`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 179: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackUCIIndexIntentsMigration179,
+		},
+		// Migration 180 adds checkout/profile referential integrity, the fenced daemon
+		// claim lease, exact update receipts, and the one-to-one publication build link
+		// used for atomic completion.
+		{
+			ID: "180_uci_index_intent_delivery",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`ALTER TABLE uci_index_intents ADD COLUMN IF NOT EXISTS claim_expires_at TIMESTAMPTZ`,
+					`ALTER TABLE uci_index_intents ADD COLUMN IF NOT EXISTS publication_build_id UUID`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS index_intent_id UUID`,
+					`UPDATE uci_index_intents
+					 SET claim_expires_at = GREATEST(updated_at, acknowledged_at) + INTERVAL '1 microsecond'
+					 WHERE acknowledged_owner IS NOT NULL`,
+					`ALTER TABLE uci_index_intents DROP CONSTRAINT IF EXISTS uci_index_intents_checkout_source_incarnation_fkey`,
+					`ALTER TABLE uci_index_intents ADD CONSTRAINT uci_index_intents_checkout_source_incarnation_fkey
+						FOREIGN KEY (checkout_id, source_id, incarnation_id)
+						REFERENCES ci_checkouts (checkout_id, source_id, incarnation_id)`,
+					`ALTER TABLE uci_index_intents DROP CONSTRAINT IF EXISTS uci_index_intents_profile_fkey`,
+					`ALTER TABLE uci_index_intents ADD CONSTRAINT uci_index_intents_profile_fkey
+						FOREIGN KEY (profile_id) REFERENCES ci_profiles (profile_id)`,
+					`ALTER TABLE uci_index_intents DROP CONSTRAINT IF EXISTS uci_index_intents_acknowledgement_shape_chk`,
+					`ALTER TABLE uci_index_intents ADD CONSTRAINT uci_index_intents_acknowledgement_shape_chk CHECK (
+						(state IN ('acknowledged', 'running', 'completed', 'failed')
+							AND attempt >= 1
+							AND acknowledged_owner IS NOT NULL
+							AND btrim(acknowledged_owner) <> ''
+							AND acknowledged_owner = btrim(acknowledged_owner)
+							AND acknowledged_owner !~ '[[:cntrl:]]'
+							AND octet_length(acknowledged_owner) <= 256
+							AND acknowledged_at IS NOT NULL
+							AND claim_expires_at IS NOT NULL
+							AND claim_expires_at > acknowledged_at
+							AND acknowledged_at >= created_at
+							AND acknowledged_at <= updated_at)
+						OR (state IN ('submitted', 'queued', 'unavailable')
+							AND attempt = 0
+							AND acknowledged_owner IS NULL
+							AND acknowledged_at IS NULL
+							AND claim_expires_at IS NULL)
+					)`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS uci_index_intents_publication_build
+						ON uci_index_intents (publication_build_id) WHERE publication_build_id IS NOT NULL`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS ci_jobs_index_intent
+						ON ci_jobs (index_intent_id) WHERE index_intent_id IS NOT NULL`,
+					`CREATE TABLE IF NOT EXISTS uci_index_intent_receipts (
+						intent_id UUID NOT NULL,
+						operation_ref TEXT NOT NULL,
+						operation TEXT NOT NULL,
+						owner_key TEXT NOT NULL,
+						claim_epoch BIGINT NOT NULL,
+						result_state TEXT NOT NULL,
+						result_attempt INTEGER NOT NULL,
+						lease_expires_at TIMESTAMPTZ,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						PRIMARY KEY (intent_id, operation_ref),
+						CONSTRAINT uci_index_intent_receipts_operation_chk CHECK (operation IN ('acknowledge', 'start', 'renew', 'fail')),
+						CONSTRAINT uci_index_intent_receipts_state_chk CHECK (result_state IN ('acknowledged', 'running', 'completed', 'failed')),
+						CONSTRAINT uci_index_intent_receipts_shape_chk CHECK (
+							btrim(operation_ref) <> '' AND operation_ref = btrim(operation_ref)
+							AND operation_ref !~ '[[:cntrl:]]' AND octet_length(operation_ref) <= 256
+							AND btrim(owner_key) <> '' AND owner_key = btrim(owner_key)
+							AND owner_key !~ '[[:cntrl:]]' AND octet_length(owner_key) <= 256
+							AND claim_epoch >= 1 AND result_attempt >= 1 AND lease_expires_at IS NOT NULL)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_uci_index_intents_delivery
+						ON uci_index_intents (source_id, checkout_id, incarnation_id, profile_id, state, created_at, intent_id)`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 180: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackUCIIndexIntentDeliveryMigration180,
+		},
+		// Migration 181 stores short-lived server-owned browser search cursors.
+		{
+			ID: "181_browser_code_search_continuations",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`CREATE TABLE IF NOT EXISTS browser_code_search_continuations (
+						cursor_ref UUID PRIMARY KEY,
+						subject_user_id BIGINT NOT NULL,
+						auth_realm TEXT NOT NULL,
+						grant_ref UUID NOT NULL,
+						grant_issued_at TIMESTAMPTZ NOT NULL,
+						tab_binding_id UUID NOT NULL,
+						source_id UUID NOT NULL,
+						checkout_id UUID NOT NULL,
+						view_id UUID NOT NULL,
+						profile_id UUID NOT NULL,
+						generation BIGINT NOT NULL,
+						query_digest TEXT NOT NULL,
+						filter_digest TEXT NOT NULL,
+						page_size INTEGER NOT NULL,
+						service_cursor TEXT NOT NULL,
+						expires_at TIMESTAMPTZ NOT NULL,
+						consumed_at TIMESTAMPTZ,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT browser_code_search_continuations_subject_fkey
+							FOREIGN KEY (subject_user_id) REFERENCES users (id) ON DELETE RESTRICT,
+						CONSTRAINT browser_code_search_continuations_grant_fkey
+							FOREIGN KEY (grant_ref) REFERENCES browser_read_grants (grant_ref) ON DELETE RESTRICT,
+						CONSTRAINT browser_code_search_continuations_binding_fkey
+							FOREIGN KEY (tab_binding_id) REFERENCES browser_tab_bindings (tab_binding_id) ON DELETE CASCADE,
+						CONSTRAINT browser_code_search_continuations_checkout_fkey
+							FOREIGN KEY (source_id, checkout_id) REFERENCES ci_checkouts (source_id, checkout_id) ON DELETE RESTRICT,
+						CONSTRAINT browser_code_search_continuations_auth_realm_chk CHECK (
+							btrim(auth_realm) <> ''
+							AND auth_realm = btrim(auth_realm)
+							AND auth_realm !~ '[[:cntrl:]]'
+							AND octet_length(auth_realm) <= 256
+						),
+						CONSTRAINT browser_code_search_continuations_generation_chk CHECK (generation > 0),
+						CONSTRAINT browser_code_search_continuations_digest_chk CHECK (
+							query_digest ~ '^sha256:[0-9a-f]{64}$'
+							AND filter_digest ~ '^sha256:[0-9a-f]{64}$'
+						),
+						CONSTRAINT browser_code_search_continuations_page_size_chk CHECK (page_size BETWEEN 1 AND 50),
+						CONSTRAINT browser_code_search_continuations_service_cursor_chk CHECK (
+							btrim(service_cursor) <> ''
+							AND service_cursor = btrim(service_cursor)
+							AND service_cursor !~ '[[:cntrl:]]'
+							AND octet_length(service_cursor) <= 2048
+						),
+						CONSTRAINT browser_code_search_continuations_lifecycle_chk CHECK (
+							expires_at > created_at
+							AND (consumed_at IS NULL OR consumed_at >= created_at)
+							AND updated_at >= created_at
+						)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_browser_code_search_continuations_subject_expiry
+						ON browser_code_search_continuations (subject_user_id, expires_at, cursor_ref)`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 181: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackBrowserCodeSearchContinuationsMigration181,
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
 	}
 
+	return nil
+}
+
+func rollbackInterventionReceiptMigration168(tx *gorm.DB) error {
+	return tx.Transaction(func(rollbackTx *gorm.DB) error {
+		if !rollbackTx.Migrator().HasTable("task_memory_intervention_receipts") {
+			return nil
+		}
+
+		var retainedRows int64
+		if err := rollbackTx.Table("task_memory_intervention_receipts").Count(&retainedRows).Error; err != nil {
+			return fmt.Errorf("migration 168 rollback preflight: %w", err)
+		}
+		if retainedRows > 0 {
+			return fmt.Errorf("migration 168 rollback blocked: %d retained task_memory_intervention_receipts rows", retainedRows)
+		}
+
+		for _, stmt := range []string{
+			`DROP TABLE IF EXISTS task_memory_intervention_receipts`,
+			`DROP FUNCTION IF EXISTS task_memory_reject_immutable_mutation()`,
+		} {
+			if err := rollbackTx.Exec(stmt).Error; err != nil {
+				return fmt.Errorf("migration 168 rollback: %w", err)
+			}
+		}
+		return nil
+	})
+}
+
+func rollbackInterventionPolicyMigration169(tx *gorm.DB) error {
+	return tx.Transaction(func(rollbackTx *gorm.DB) error {
+		if !rollbackTx.Migrator().HasTable("intervention_evidence_policies") {
+			return nil
+		}
+
+		var retainedRows int64
+		if err := rollbackTx.Table("intervention_evidence_policies").Count(&retainedRows).Error; err != nil {
+			return fmt.Errorf("migration 169 rollback preflight: %w", err)
+		}
+		if retainedRows > 0 {
+			return fmt.Errorf("migration 169 rollback blocked: %d retained intervention_evidence_policies rows", retainedRows)
+		}
+
+		if err := rollbackTx.Exec(`DROP TABLE IF EXISTS intervention_evidence_policies`).Error; err != nil {
+			return fmt.Errorf("migration 169 rollback: %w", err)
+		}
+		return nil
+	})
+}
+
+func rollbackInterventionContextReferenceMigration170(tx *gorm.DB) error {
+	return tx.Transaction(func(rollbackTx *gorm.DB) error {
+		if !rollbackTx.Migrator().HasTable("task_memory_intervention_receipts") {
+			return nil
+		}
+
+		var retainedRows int64
+		if err := rollbackTx.Table("task_memory_intervention_receipts").
+			Where("decision_mode = ?", "context_reference").
+			Count(&retainedRows).Error; err != nil {
+			return fmt.Errorf("migration 170 rollback preflight: %w", err)
+		}
+		if retainedRows > 0 {
+			return fmt.Errorf("migration 170 rollback blocked: %d retained context_reference task_memory_intervention_receipts rows", retainedRows)
+		}
+
+		for _, stmt := range []string{
+			`ALTER TABLE task_memory_intervention_receipts
+				DROP CONSTRAINT IF EXISTS task_memory_intervention_receipts_selected_source`,
+			`ALTER TABLE task_memory_intervention_receipts
+				DROP CONSTRAINT IF EXISTS task_memory_intervention_receipts_outcome_shape`,
+			`ALTER TABLE task_memory_intervention_receipts
+				ADD CONSTRAINT task_memory_intervention_receipts_outcome_shape
+				CHECK (
+					(
+						outcome = 'emit'
+						AND closed_reason IS NULL
+						AND decision_mode IN ('eligible', 'canary')
+						AND selected_memory_id IS NOT NULL
+						AND selected_memory_version IS NOT NULL
+						AND selected_policy_id IS NOT NULL
+						AND selected_snapshot_id IS NOT NULL
+						AND selected_snapshot_version IS NOT NULL
+						AND selected_text_digest IS NOT NULL
+					)
+					OR (
+						outcome = 'abstain'
+						AND closed_reason IN (
+							'no_candidates',
+							'policy_observing',
+							'policy_shadow',
+							'policy_canary_budget',
+							'evidence_insufficient',
+							'harm_bound',
+							'policy_suppressed',
+							'task_fit',
+							'actionability',
+							'evidence_state',
+							'already_visible',
+							'context_budget',
+							'ambiguous_conflict'
+						)
+						AND decision_mode = 'none'
+						AND selected_memory_id IS NULL
+						AND selected_memory_version IS NULL
+						AND selected_policy_id IS NULL
+						AND selected_snapshot_id IS NULL
+						AND selected_snapshot_version IS NULL
+						AND selected_text_digest IS NULL
+					)
+				)`,
+			`ALTER TABLE task_memory_intervention_receipts
+				DROP COLUMN IF EXISTS selected_source_tier`,
+			`ALTER TABLE task_memory_intervention_receipts
+				DROP COLUMN IF EXISTS selected_source_project`,
+		} {
+			if err := rollbackTx.Exec(stmt).Error; err != nil {
+				return fmt.Errorf("migration 170 rollback: %w", err)
+			}
+		}
+		return nil
+	})
+}
+
+func rollbackUCIContextRegistryMigration171(tx *gorm.DB) error {
+	return nil
+}
+
+// rollbackUCIIndexProjectionMigration172 intentionally retains additive code
+// projections and durable UCI evidence. Removing a binary never reconstructs
+// evidence or safely reverses a published storage authority boundary.
+func rollbackUCIIndexProjectionMigration172(tx *gorm.DB) error {
+	return nil
+}
+
+// rollbackUCIFencedPublicationMigration173 deliberately keeps published history and its
+// append-only staging evidence. A binary rollback cannot reconstruct a prior current View.
+func rollbackUCIFencedPublicationMigration173(tx *gorm.DB) error {
+	return nil
+}
+
+// rollbackUCIEmbeddingJobsMigration174 retains additive job bindings and
+// reusable vectors because a binary rollback cannot safely recreate a missing
+// exact-View completion proof.
+func rollbackUCIEmbeddingJobsMigration174(tx *gorm.DB) error {
+	return nil
+}
+
+// rollbackUCIReferenceSourceTextMigration175 retains exact multiline source
+// evidence because restoring the older control-free constraint would reject it.
+func rollbackUCIReferenceSourceTextMigration175(tx *gorm.DB) error {
+	return nil
+}
+
+// rollbackBrowserReadGrantsMigration176 retains grants and audit history: a binary
+// rollback cannot safely reconstruct browser authority or its revocation record.
+func rollbackBrowserReadGrantsMigration176(tx *gorm.DB) error {
+	return nil
+}
+
+// rollbackBrowserTabBindingsMigration177 retains opaque browser binding state:
+// a binary rollback cannot recreate browser-held proof material or a safe lease.
+func rollbackBrowserTabBindingsMigration177(tx *gorm.DB) error {
+	return nil
+}
+
+// rollbackCollectionSelectionsMigration178 retains opaque selection snapshots:
+// a binary rollback cannot safely reconstruct server-authorized frozen membership.
+func rollbackCollectionSelectionsMigration178(tx *gorm.DB) error {
+	return nil
+}
+
+// rollbackUCIIndexIntentsMigration179 retains durable index intents and migration history:
+// a binary rollback cannot safely reconstruct accepted work requests or their owner claims.
+func rollbackUCIIndexIntentsMigration179(tx *gorm.DB) error {
+	return nil
+}
+
+// rollbackUCIIndexIntentDeliveryMigration180 is forward-only: dropping claim
+// receipts or publication links would make accepted daemon work ambiguous.
+func rollbackUCIIndexIntentDeliveryMigration180(tx *gorm.DB) error {
+	return nil
+}
+
+func rollbackBrowserCodeSearchContinuationsMigration181(tx *gorm.DB) error {
+	if err := tx.Exec(`DROP TABLE IF EXISTS browser_code_search_continuations`).Error; err != nil {
+		return fmt.Errorf("migration 181 rollback: %w", err)
+	}
 	return nil
 }
 

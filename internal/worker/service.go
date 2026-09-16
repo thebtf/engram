@@ -19,10 +19,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/soheilhy/cmux"
 	httpSwagger "github.com/swaggo/http-swagger"
 
+	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/auth"
 	booksdomain "github.com/thebtf/engram/internal/books"
 	"github.com/thebtf/engram/internal/bulkops"
@@ -30,6 +32,7 @@ import (
 
 	gochunking "github.com/thebtf/engram/internal/chunking/golang"
 	mdchunking "github.com/thebtf/engram/internal/chunking/markdown"
+	"github.com/thebtf/engram/internal/codeembedding"
 	cognitivecore "github.com/thebtf/engram/internal/cognitive/core"
 	"github.com/thebtf/engram/internal/cognitive/s1state"
 	"github.com/thebtf/engram/internal/cognitive/s2meta"
@@ -55,8 +58,10 @@ import (
 	"github.com/thebtf/engram/internal/sessions"
 	"github.com/thebtf/engram/internal/stateplane"
 	"github.com/thebtf/engram/internal/telemetry"
+	"github.com/thebtf/engram/internal/uci"
 	"github.com/thebtf/engram/internal/update"
 	"github.com/thebtf/engram/internal/watcher"
+	"github.com/thebtf/engram/internal/worker/ambientcore"
 	"github.com/thebtf/engram/internal/worker/projectevents"
 	"github.com/thebtf/engram/internal/worker/reaper"
 	"github.com/thebtf/engram/internal/worker/sdk"
@@ -113,109 +118,118 @@ const maxRecentQueries = 100
 
 // Service is the main worker service orchestrator.
 type Service struct {
-	startTime                        time.Time
-	ctx                              context.Context
-	initError                        error
-	server                           *http.Server
-	sessionManager                   *session.Manager
-	sseBroadcaster                   *sse.Broadcaster
-	processor                        *sdk.Processor
-	mcpHealth                        *mcp.MCPHealth
-	collectionRegistry               *collections.Registry
-	sessionIdxStore                  *sessions.Store
-	router                           *chi.Mux
-	store                            *gorm.Store
-	retrievalStats                   map[string]*RetrievalStats
-	sessionStore                     *gorm.SessionStore
-	tokenStore                       *gorm.TokenStore
-	cancel                           context.CancelFunc
-	cachedObsCounts                  map[string]cachedCount
-	config                           *config.Config
-	staleQueue                       chan staleVerifyRequest
-	configWatcher                    *watcher.Watcher
-	updater                          *update.Updater
-	similarityTelemetry              *telemetry.SimilarityTelemetry
-	rateLimiter                      *PerClientRateLimiter
-	tokenAuth                        *TokenAuth
-	expensiveOpLimiter               *ExpensiveOperationLimiter
-	logBuffer                        *logbuf.RingBuffer
-	backfillTracker                  *backfillTracker
-	grpcServer                       *googlegrpc.Server
-	grpcInternalServer               sessionStartContextProvider
-	searchQueryLogStore              *gorm.SearchQueryLogStore
-	retrievalStatsLogStore           *gorm.RetrievalStatsLogStore
-	citationLogStore                 *gorm.CitationLogStore
-	injectionTracker                 *injection.Tracker
-	injectionLogStore                *gorm.InjectionLogStore
-	candidateStore                   *gorm.CandidateStore         // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
-	candidateQueueEnabled            bool                         // cached at startup; handlers must not read env per request
-	graphEnabled                     bool                         // cached at startup; graph REST handlers must not read env per request
-	temporalTruthEnabled             bool                         // cached at startup; temporal truth REST handlers must not read env per request
-	candidateReviewStoreSeam         candidateReviewStore         // test seam for REST candidate queue handlers
-	candidateReviewSnapshotStoreSeam candidateReviewSnapshotStore // test seam for candidate pre-action snapshots
-	graphEdgeStoreSeam               graphEdgeStore               // test seam for graph REST handlers
-	graphNodeStoreSeam               graphNodeStore               // test seam for graph REST handlers
-	snapshotStore                    *gorm.SnapshotStore          // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
-	writelintTokenStore              writelint.TokenStore         // Milestone-F TG5: non-nil when ENGRAM_VNEXT_F_ENABLED=true
-	redactionRules                   []redaction.CompiledRule     // Milestone-F TG5: compiled at startup from ENGRAM_REDACTION_RULES_PATH
-	transcriptStore                  *gorm.TranscriptStore        // T003: session transcript persistence (flag-gated via ENGRAM_CRYSTALLIZATION_ENABLED)
+	startTime                           time.Time
+	ctx                                 context.Context
+	initError                           error
+	server                              *http.Server
+	sessionManager                      *session.Manager
+	sseBroadcaster                      *sse.Broadcaster
+	processor                           *sdk.Processor
+	mcpHealth                           *mcp.MCPHealth
+	collectionRegistry                  *collections.Registry
+	sessionIdxStore                     *sessions.Store
+	router                              *chi.Mux
+	store                               *gorm.Store
+	retrievalStats                      map[string]*RetrievalStats
+	sessionStore                        *gorm.SessionStore
+	tokenStore                          *gorm.TokenStore
+	cancel                              context.CancelFunc
+	cachedObsCounts                     map[string]cachedCount
+	config                              *config.Config
+	staleQueue                          chan staleVerifyRequest
+	configWatcher                       *watcher.Watcher
+	updater                             *update.Updater
+	similarityTelemetry                 *telemetry.SimilarityTelemetry
+	rateLimiter                         *PerClientRateLimiter
+	tokenAuth                           *TokenAuth
+	expensiveOpLimiter                  *ExpensiveOperationLimiter
+	logBuffer                           *logbuf.RingBuffer
+	backfillTracker                     *backfillTracker
+	grpcServer                          *googlegrpc.Server
+	grpcInternalServer                  sessionStartContextProvider
+	searchQueryLogStore                 *gorm.SearchQueryLogStore
+	retrievalStatsLogStore              *gorm.RetrievalStatsLogStore
+	citationLogStore                    *gorm.CitationLogStore
+	injectionTracker                    *injection.Tracker
+	injectionLogStore                   *gorm.InjectionLogStore
+	candidateStore                      *gorm.CandidateStore                          // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	candidateQueueEnabled               bool                                          // cached at startup; handlers must not read env per request
+	graphEnabled                        bool                                          // cached at startup; graph REST handlers must not read env per request
+	temporalTruthEnabled                bool                                          // cached at startup; temporal truth REST handlers must not read env per request
+	candidateReviewStoreSeam            candidateReviewStore                          // test seam for REST candidate queue handlers
+	candidateReviewSnapshotStoreSeam    candidateReviewSnapshotStore                  // test seam for candidate pre-action snapshots
+	graphEdgeStoreSeam                  graphEdgeStore                                // test seam for graph REST handlers
+	graphNodeStoreSeam                  graphNodeStore                                // test seam for graph REST handlers
+	snapshotStore                       *gorm.SnapshotStore                           // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	legacyDirectProjectResolver         func(context.Context, string) (string, error) // test seam; production uses strict DB lookup
+	writelintTokenStore                 writelint.TokenStore                          // Milestone-F TG5: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	redactionRules                      []redaction.CompiledRule                      // Milestone-F TG5: compiled at startup from ENGRAM_REDACTION_RULES_PATH
+	interventionReconciler              policyReconciler                              // optional automatic policy compiler/reconciler
+	interventionReconcilerTickerFactory interventionReconcilerTickerFactory           // test seam; nil uses the fixed one-minute ticker
+	transcriptStore                     *gorm.TranscriptStore                         // T003: session transcript persistence (flag-gated via ENGRAM_CRYSTALLIZATION_ENABLED)
 	// transcriptCreatorOverride is a test seam: when non-nil it replaces
 	// transcriptStore in the handleSessionEnd persistence goroutine, letting unit
 	// tests assert the real handler path (redact → Create) without a live DB.
 	// Production code never sets this field.
-	transcriptCreatorOverride   transcriptCreator
-	retrievalHooks              *retrievalHooks
-	authHandlers                *AuthHandlers
-	version                     string
-	recentQueriesBuf            [maxRecentQueries]RecentSearchQuery
-	wg                          sync.WaitGroup
-	initWG                      sync.WaitGroup
-	shutdownOnce                sync.Once
-	shutdownDone                chan struct{}
-	shutdownErr                 error
-	recentQueriesLen            int
-	recentQueriesHead           int
-	statsCacheTTL               time.Duration
-	initMu                      sync.RWMutex
-	retrievalStatsMu            sync.RWMutex
-	recentQueriesMu             sync.RWMutex
-	cachedObsCountsMu           sync.RWMutex
-	staleQueueOnce              sync.Once
-	ready                       atomic.Bool
-	vault                       *crypto.Vault
-	issueStore                  *gorm.IssueStore
-	credentialStore             *gorm.CredentialStore
-	memoryStore                 *gorm.MemoryStore
-	documentStore               versionedDocumentStore
-	booksStore                  booksStore
-	booksPipeline               booksPipelineRunner
-	memoryStoreSeam             memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
-	memoryGetStoreSeam          memoryGetStore  // test-only: when non-nil, overrides memoryStore for exact-ID reads
-	stateStore                  statePlane
-	experienceProvider          experienceHistoryProvider
-	temporalTruthProvider       temporalTruthProvider
-	principalMemoryQueryService principalMemoryQueryService
-	domainOwnerStore            domainOwnerStore
-	domainRegistryService       domainRegistryService
-	behavioralRulesStore        *gorm.BehavioralRulesStore
-	auditStore                  *gorm.AuditStore
-	purgeStore                  *gorm.PurgeStore
-	testAuditRetainer           auditRetainer // test-only override for retention unit tests
-	feedbackUpdater             *feedback.Updater
-	segmentStore                *gorm.SegmentStore
-	embeddingClient             *embedding.Client
-	embeddingStore              *embedding.Store
-	embeddingRecorder           *embedding.BackfillRecorder
-	rerankClient                *reranking.Client
-	promotionStore              *gorm.PromotionStore
-	graphStore                  *graph.Store
-	graphNodeStore              *graph.NodesStore
-	vaultOnce                   sync.Once
-	vaultErr                    error
-	promptCache                 sync.Map // map[int64]promptCacheEntry — last user prompt per session
-	eventBus                    *projectevents.Bus
-	projectReaper               projectReaperLifecycle
-	projectReaperFactory        projectReaperFactory
+	transcriptCreatorOverride      transcriptCreator
+	retrievalHooks                 *retrievalHooks
+	authHandlers                   *AuthHandlers
+	operatorCodeAdapter            *OperatorCodeHTTPAdapter
+	operatorCollectionAdapter      *OperatorCollectionHTTPAdapter
+	queueCandidateSelectionHandler *QueueCandidateSelectionHandler
+	version                        string
+	recentQueriesBuf               [maxRecentQueries]RecentSearchQuery
+	wg                             sync.WaitGroup
+	initWG                         sync.WaitGroup
+	shutdownOnce                   sync.Once
+	shutdownDone                   chan struct{}
+	shutdownErr                    error
+	recentQueriesLen               int
+	recentQueriesHead              int
+	statsCacheTTL                  time.Duration
+	initMu                         sync.RWMutex
+	retrievalStatsMu               sync.RWMutex
+	recentQueriesMu                sync.RWMutex
+	cachedObsCountsMu              sync.RWMutex
+	staleQueueOnce                 sync.Once
+	ready                          atomic.Bool
+	vault                          *crypto.Vault
+	issueStore                     *gorm.IssueStore
+	credentialStore                *gorm.CredentialStore
+	memoryStore                    *gorm.MemoryStore
+	documentStore                  versionedDocumentStore
+	documentSelectionStore         documentSelectionStore
+	documentExportArtifacts        map[string]documentExportArtifact
+	documentExportArtifactsMu      sync.Mutex
+	booksStore                     booksStore
+	booksPipeline                  booksPipelineRunner
+	memoryStoreSeam                memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
+	memoryGetStoreSeam             memoryGetStore  // test-only: when non-nil, overrides memoryStore for exact-ID reads
+	stateStore                     statePlane
+	experienceProvider             experienceHistoryProvider
+	temporalTruthProvider          temporalTruthProvider
+	principalMemoryQueryService    principalMemoryQueryService
+	domainOwnerStore               domainOwnerStore
+	domainRegistryService          domainRegistryService
+	behavioralRulesStore           *gorm.BehavioralRulesStore
+	auditStore                     *gorm.AuditStore
+	purgeStore                     *gorm.PurgeStore
+	testAuditRetainer              auditRetainer // test-only override for retention unit tests
+	feedbackUpdater                *feedback.Updater
+	segmentStore                   *gorm.SegmentStore
+	embeddingClient                *embedding.Client
+	embeddingStore                 *embedding.Store
+	embeddingRecorder              *embedding.BackfillRecorder
+	rerankClient                   *reranking.Client
+	promotionStore                 *gorm.PromotionStore
+	graphStore                     *graph.Store
+	graphNodeStore                 *graph.NodesStore
+	vaultOnce                      sync.Once
+	vaultErr                       error
+	promptCache                    sync.Map // map[int64]promptCacheEntry — last user prompt per session
+	eventBus                       *projectevents.Bus
+	projectReaper                  projectReaperLifecycle
+	projectReaperFactory           projectReaperFactory
 	// lastRequestAt tracks the Unix nanosecond timestamp of the most recent
 	// MCP/REST request handled by this server. Updated atomically in
 	// requestActivityMiddleware on every request.
@@ -282,6 +296,24 @@ type projectReaperLifecycle interface {
 }
 
 type projectReaperFactory func(*gorm.Store) (projectReaperLifecycle, error)
+
+type uciEmbeddingWorkerRunner interface {
+	Run(context.Context, string) error
+}
+
+func (s *Service) startUCIEmbeddingWorker(worker uciEmbeddingWorkerRunner) {
+	if s == nil || worker == nil || s.ctx == nil || s.ctx.Err() != nil {
+		return
+	}
+	rootCtx := s.ctx
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		if err := worker.Run(rootCtx, uuid.NewString()); err != nil && !errors.Is(err, context.Canceled) {
+			log.Warn().Err(err).Msg("UCI embedding worker stopped")
+		}
+	}()
+}
 
 func defaultProjectReaperFactory(store *gorm.Store) (projectReaperLifecycle, error) {
 	return reaper.New(store.DB)
@@ -959,6 +991,19 @@ func (s *Service) initializeAsync() {
 	s.processor = processor
 	s.initMu.Unlock()
 
+	// Redaction rules are compiled exactly once at startup. The ordered slice is
+	// retained for existing vNext consumers and copied once for policy compilation.
+	rulesPath := os.Getenv("ENGRAM_REDACTION_RULES_PATH")
+	compiledRules, rErr := redaction.LoadRulesFromPath(rulesPath)
+	if rErr != nil {
+		log.Warn().Err(rErr).Str("path", rulesPath).Msg("redaction: failed to load rules, layer disabled")
+	} else if len(compiledRules) > 0 {
+		log.Info().Int("rules", len(compiledRules)).Str("path", rulesPath).Msg("redaction: rules loaded")
+	}
+	s.initMu.Lock()
+	s.redactionRules = compiledRules
+	s.initMu.Unlock()
+
 	// Wire crystallization candidate storage only when the candidate flag is enabled.
 	// The dream cycle additionally checks both flags and writer availability before
 	// it reads transcripts or constructs an extractor.
@@ -970,19 +1015,6 @@ func (s *Service) initializeAsync() {
 		snapshotStore := gorm.NewSnapshotStore(store.GetDB())
 		s.initMu.Lock()
 		s.snapshotStore = snapshotStore
-		s.initMu.Unlock()
-
-		// TG5 — redaction layer (ADR-F-004, EC-F9: startup-only, no hot-reload).
-		// Rules are compiled once here; any rule-change requires a process restart.
-		rulesPath := os.Getenv("ENGRAM_REDACTION_RULES_PATH")
-		compiledRules, rErr := redaction.LoadRulesFromPath(rulesPath)
-		if rErr != nil {
-			log.Warn().Err(rErr).Str("path", rulesPath).Msg("redaction: failed to load rules, layer disabled")
-		} else if len(compiledRules) > 0 {
-			log.Info().Int("rules", len(compiledRules)).Str("path", rulesPath).Msg("redaction: rules loaded")
-		}
-		s.initMu.Lock()
-		s.redactionRules = compiledRules
 		s.initMu.Unlock()
 
 		// TG5 — write-lint TokenStore.
@@ -1077,10 +1109,13 @@ func (s *Service) initializeAsync() {
 		ChunkManager:       chunkManager,
 	})
 
+	codeIntelEnabled := os.Getenv("ENGRAM_CODE_INTEL_ENABLED") == "true"
+
 	// Wire versioned document store into MCP server for collaborative document tools.
 	mcpServer.SetVersionedDocumentStore(versionedDocumentStore)
 	s.initMu.Lock()
 	s.documentStore = versionedDocumentStore
+	s.documentSelectionStore = gorm.NewCollectionSelectionStore(store.GetDB())
 	s.booksStore = booksStore
 	s.booksPipeline = booksPipeline
 	s.initMu.Unlock()
@@ -1183,8 +1218,10 @@ func (s *Service) initializeAsync() {
 	migrateEnvToSettingsStore(s.ctx, settingsStore, s.getVault)
 
 	// Initialize embedding client and store (optional — disabled if ENGRAM_EMBEDDING_URL unset).
+	var uciEmbeddingClient *embedding.Client
 	embClient, embErr := embedding.NewClientWithSettings(s.ctx, settingsRes)
 	if embErr != nil {
+		embClient = nil
 		if errors.Is(embErr, embedding.ErrEmbeddingDisabled) {
 			log.Info().Msg("embedding: disabled (ENGRAM_EMBEDDING_URL not set)")
 		} else {
@@ -1198,6 +1235,7 @@ func (s *Service) initializeAsync() {
 		// server still runs (embedding is optional); recall degrades to FTS-only.
 		log.Error().Err(dimErr).Msg("embedding: dimension assert failed — embedding path DISABLED (fix schema or EmbeddingDim)")
 	} else {
+		uciEmbeddingClient = embClient
 		embStore := embedding.NewStore(store.GetDB())
 		embRec := &embedding.BackfillRecorder{}
 		mcpServer.SetEmbeddingStores(embClient, embStore)
@@ -1217,7 +1255,7 @@ func (s *Service) initializeAsync() {
 		// Gated by this else-branch so it is a no-op when ENGRAM_EMBEDDING_URL is unset (flag-dark).
 		go func() {
 			cbStore := gorm.NewCodeChunkStore(store.GetDB())
-			if cbErr := embedding.CodeBackfill(s.ctx, cbStore, embClient, 50, embRec); cbErr != nil {
+			if cbErr := codeembedding.CodeBackfill(s.ctx, cbStore, embClient, 50, embRec); cbErr != nil {
 				log.Warn().Err(cbErr).Msg("code embedding backfill: stopped")
 			}
 		}()
@@ -1226,6 +1264,46 @@ func (s *Service) initializeAsync() {
 		s.embeddingClient = embClient
 		s.embeddingStore = embStore
 		s.embeddingRecorder = embRec
+		s.initMu.Unlock()
+	}
+
+	operatorCollectionAdapter, composeErr := composeOperatorCollectionHTTPAdapter(store.GetDB(), s.candidateQueueActive())
+	if composeErr != nil {
+		s.setInitError(fmt.Errorf("compose operator collection HTTP adapter: %w", composeErr))
+		return
+	}
+	queueCandidateSelectionHandler, composeErr := composeQueueCandidateSelectionHandler(s, store.GetDB())
+	if composeErr != nil {
+		s.setInitError(fmt.Errorf("compose queue candidate selection handler: %w", composeErr))
+		return
+	}
+	s.initMu.Lock()
+	s.operatorCollectionAdapter = operatorCollectionAdapter
+	s.queueCandidateSelectionHandler = queueCandidateSelectionHandler
+	s.initMu.Unlock()
+
+	// Compose UCI after settings resolution and shared embedding initialization,
+	// before MCP or gRPC transports can expose its application.
+	var uciContext *uciContextComposition
+	if codeIntelEnabled {
+		uciContext, err = composeUCIContext(
+			codeIntelEnabled,
+			store.GetDB(),
+			mcpServer,
+			newUCISemanticConfig(s.ctx, settingsRes, embClient, uciEmbeddingClient),
+		)
+		if err != nil {
+			s.setInitError(fmt.Errorf("compose UCI context: %w", err))
+			return
+		}
+		s.startUCIEmbeddingWorker(uciContext.embeddingWorker)
+		operatorCodeAdapter, composeErr := composeOperatorCodeHTTPAdapter(store.GetDB(), uciContext)
+		if composeErr != nil {
+			s.setInitError(fmt.Errorf("compose operator code HTTP adapter: %w", composeErr))
+			return
+		}
+		s.initMu.Lock()
+		s.operatorCodeAdapter = operatorCodeAdapter
 		s.initMu.Unlock()
 	}
 
@@ -1253,12 +1331,11 @@ func (s *Service) initializeAsync() {
 	s.segmentStore = segmentStore
 	s.initMu.Unlock()
 
-	// Wire code intelligence store into MCP server (CR-006).
-	// Gated on ENGRAM_CODE_INTEL_ENABLED=true; flag-off leaves codeChunkStore nil
-	// so tools/list is byte-identical to pre-CR-006 when the flag is off.
-	if os.Getenv("ENGRAM_CODE_INTEL_ENABLED") == "true" {
-		codeChunkStore := gorm.NewCodeChunkStore(store.GetDB())
-		mcpServer.SetCodeChunkStore(codeChunkStore)
+	// Wire the explicitly invoked raw-project compatibility reader. Current UCI
+	// dispatch never consults this store for context selection or retrieval.
+	if codeIntelEnabled {
+		legacyUnscopedCodeChunkStore := gorm.NewCodeChunkStore(store.GetDB())
+		mcpServer.SetLegacyUnscopedCodeChunkStore(legacyUnscopedCodeChunkStore)
 	}
 
 	// Wire gRPC server: create adapter over mcpServer and register with the server.
@@ -1281,8 +1358,19 @@ func (s *Service) initializeAsync() {
 		s.tokenAuth.SetValidator(grpcValidator)
 	}
 	grpcSrv, grpcInternalSrv := grpcserver.New(adapter, grpcValidator)
+	grpcInternalSrv.SetUCICompletionRecorder(adapter)
+	if uciContext != nil {
+		grpcInternalSrv.SetUCITransport(uciContext.transport)
+	}
 	grpcInternalSrv.SetDB(store.DB)
 	grpcInternalSrv.SetBus(s.eventBus)
+	grpcInternalSrv.SetAmbientDependencies(ambientcore.Dependencies{
+		Registry: s.cognitiveRegistry,
+		Meter:    s.cognitiveMeter,
+		Queue:    s.cognitiveQueue,
+		Flags:    s.flagConfig,
+	})
+	grpcInternalSrv.SetSessionStartDeliveryCommitter(s)
 	s.initMu.Lock()
 	s.grpcServer = grpcSrv
 	s.grpcInternalServer = grpcInternalSrv
@@ -1322,6 +1410,13 @@ func (s *Service) initializeAsync() {
 	if processor != nil {
 		s.wg.Add(1)
 		go s.processQueue()
+	}
+
+	// Policy reconciliation is optional: unavailable existing key material,
+	// invalid configured redaction rules, or another dependency leaves it absent
+	// without affecting server readiness.
+	if rErr == nil {
+		s.initializeInterventionReconciler(store)
 	}
 
 	// Critical initialization has completed, including installation of the
@@ -1502,6 +1597,18 @@ type mcpHandlerAdapter struct {
 
 // HandleToolCall implements grpcserver.MCPHandler.
 func (a *mcpHandlerAdapter) HandleToolCall(ctx context.Context, toolName string, argsJSON []byte) ([]byte, bool, error) {
+	requestID := any(float64(1))
+	correlationRequired := auditcontext.UCIRequestCorrelationRequired(ctx)
+	if correlation, found := auditcontext.UCIRequestCorrelationFromContext(ctx); found {
+		if jsonID, valid := correlation.JSONRPCID(); valid {
+			requestID = jsonID
+		} else if correlationRequired {
+			return nil, false, errors.New("UCI request correlation is required")
+		}
+	} else if correlationRequired {
+		return nil, false, errors.New("UCI request correlation is required")
+	}
+
 	params := map[string]any{
 		"name":      toolName,
 		"arguments": json.RawMessage(argsJSON),
@@ -1513,7 +1620,7 @@ func (a *mcpHandlerAdapter) HandleToolCall(ctx context.Context, toolName string,
 
 	req := &mcp.Request{
 		JSONRPC: "2.0",
-		ID:      float64(1),
+		ID:      requestID,
 		Method:  "tools/call",
 		Params:  json.RawMessage(paramsJSON),
 	}
@@ -1552,6 +1659,15 @@ func (a *mcpHandlerAdapter) ToolDefinitions() []grpcserver.ToolDef {
 // ServerInfo implements grpcserver.MCPHandler.
 func (a *mcpHandlerAdapter) ServerInfo() (string, string) {
 	return "engram", a.mcpServer.Version()
+}
+
+// RecordUCICompletion carries only a pre-verified callback into the MCP-owned
+// UCI recorder; the gRPC boundary owns authentication and wire validation.
+func (a *mcpHandlerAdapter) RecordUCICompletion(ctx context.Context, callback uci.VerifiedSupportedHostCallback) error {
+	if a == nil || a.mcpServer == nil {
+		return uci.ErrCompletionEvidenceUnavailable
+	}
+	return a.mcpServer.RecordUCICompletion(ctx, callback)
 }
 
 // setupMiddleware registers global HTTP middleware on the router.
@@ -1643,6 +1759,11 @@ func (s *Service) setupRoutes() {
 
 	// Ready returns 200 only once initializeAsync has completed successfully.
 	s.router.Get("/api/ready", s.handleReady)
+
+	// Retired outcome callbacks remain available before readiness so stale adapters
+	// receive an actionable diagnostic instead of a transient readiness failure.
+	s.router.Post("/api/sessions/{id}/propagate-outcome", s.handleOutcomeCallbackRetirement)
+	s.router.Post("/api/sessions/{id}/outcome", s.handleOutcomeCallbackRetirement)
 
 	// MCP health counters (public — no auth required, lightweight)
 	s.router.Get("/api/mcp/health", s.mcpHealth.HandleHealth)
@@ -1741,6 +1862,28 @@ func (s *Service) setupRoutes() {
 			r.Post("/api/hooks/ambient-candidates", s.handleAmbientCandidates)
 		}
 
+		// Operator Code routes expose only the composed HTTP adapter. The adapter
+		// owns request validation, grant/binding checks, UCI calls, and release.
+		r.Post("/api/code/tabs/handshake", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleHandshake))
+		r.Post("/api/code/tabs/resume", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleResume))
+		r.Put("/api/code/tabs/{tab_binding_id}/lease", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleRenew))
+		r.Delete("/api/code/tabs/{tab_binding_id}", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleClose))
+		r.Put("/api/code/tabs/{tab_binding_id}/context", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandlePin))
+		r.Post("/api/code/status", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleStatus))
+		r.Post("/api/code/search", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleSearch))
+		r.Post("/api/code/graph", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleGraph))
+		r.Post("/api/code/source", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleVersionedRead))
+		r.Post("/api/code/contexts", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleContexts))
+		r.Post("/api/code/index-intents", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleIndexIntentSubmit))
+		r.Get("/api/code/index-intents/{intent_ref}", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleIndexIntentStatus))
+		r.Post("/api/code/index-intents/{intent_ref}/retry", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleIndexIntentRetry))
+
+		// Collection selection is a shared, non-authorizing adapter. Domain
+		// operation owners provide their own action routes and authorization.
+		r.Post("/api/collections/selection", s.operatorCollectionRoute((*OperatorCollectionHTTPAdapter).HandleSnapshot))
+		r.Post("/api/collections/selection/current", s.operatorCollectionRoute((*OperatorCollectionHTTPAdapter).HandleCurrent))
+		r.Post("/api/collections/selection/page", s.operatorCollectionRoute((*OperatorCollectionHTTPAdapter).HandlePage))
+
 		// Event ingest (Level 0 deterministic pipeline)
 		r.Post("/api/events/ingest", s.handleIngestEvent)
 
@@ -1784,6 +1927,10 @@ func (s *Service) setupRoutes() {
 		// Static routes must come BEFORE /{id} to avoid chi matching them as IDs.
 		r.Get("/api/issues/tracked-projects", s.handleTrackedProjects)
 		r.Post("/api/issues/acknowledge", s.handleAcknowledgeIssues)
+		r.Post("/api/issues/selection", s.HandleIssueSelectionSnapshot)
+		r.Post("/api/issues/selection/current", s.HandleIssueSelectionCurrent)
+		r.Post("/api/issues/selection/page", s.HandleIssueSelectionPage)
+		r.Post("/api/issues/operations", s.HandleIssueSelectionOperation)
 		r.Get("/api/issues/{id}", s.handleGetIssue)
 		r.Patch("/api/issues/{id}", s.handleUpdateIssue)
 		r.Delete("/api/issues/{id}", s.handleDeleteIssue)
@@ -1817,7 +1964,9 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/memory-domains", s.handleListMemoryDomains)
 		r.Put("/api/memory-domains/{domain}", s.handleUpsertMemoryDomain)
 		r.Delete("/api/memory-domains/{domain}", s.handleDeleteMemoryDomain)
+		s.registerMemoryCollectionOperationRoutes(r)
 		r.Get("/api/memory/candidates", s.handleListMemoryCandidates)
+		r.Post("/api/memory/candidates/operations", s.queueCandidateSelectionRoute())
 		r.Get("/api/memory/candidates/{id}", s.handleGetMemoryCandidate)
 		r.Post("/api/memory/candidates/{id}/promote", s.handlePromoteMemoryCandidate)
 		r.Post("/api/memory/candidates/{id}/reject", s.handleRejectMemoryCandidate)
@@ -1846,6 +1995,10 @@ func (s *Service) setupRoutes() {
 		// Versioned documents bridge (CR-002 documents lane)
 		r.Get("/api/documents", s.handleListDocuments)
 		r.Post("/api/documents", s.handleCreateDocument)
+		r.Post("/api/documents/selection", s.handleDocumentSelectionSnapshot)
+		r.Post("/api/documents/selection/current", s.handleDocumentSelectionCurrent)
+		r.Post("/api/documents/selection/page", s.handleDocumentSelectionPage)
+		r.Get("/api/documents/exports/{artifactID}", s.handleDownloadDocumentExport)
 		r.Get("/api/documents/read", s.handleReadDocument)
 		r.Get("/api/documents/history", s.handleDocumentHistory)
 		r.Get("/api/documents/comments", s.handleListDocumentComments)
@@ -1883,6 +2036,45 @@ func (s *Service) setupRoutes() {
 	// client-side routes such as /memory and /settings. If an explicit upstream
 	// proxy is configured, serveIndex will delegate there instead.
 	s.router.Get("/*", serveIndex)
+}
+
+func (s *Service) operatorCodeRoute(handler func(*OperatorCodeHTTPAdapter, http.ResponseWriter, *http.Request)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.initMu.RLock()
+		adapter := s.operatorCodeAdapter
+		s.initMu.RUnlock()
+		if adapter == nil {
+			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+			return
+		}
+		handler(adapter, w, r)
+	}
+}
+
+func (s *Service) operatorCollectionRoute(handler func(*OperatorCollectionHTTPAdapter, http.ResponseWriter, *http.Request)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.initMu.RLock()
+		adapter := s.operatorCollectionAdapter
+		s.initMu.RUnlock()
+		if adapter == nil {
+			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+			return
+		}
+		handler(adapter, w, r)
+	}
+}
+
+func (s *Service) queueCandidateSelectionRoute() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.initMu.RLock()
+		handler := s.queueCandidateSelectionHandler
+		s.initMu.RUnlock()
+		if handler == nil {
+			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+			return
+		}
+		handler.Handle(w, r)
+	}
 }
 
 // recordRetrievalStatsExtended accumulates per-project retrieval metrics atomically.

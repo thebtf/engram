@@ -78,20 +78,6 @@ export interface OperatorFetchOptions extends RequestInit {
   source?: string
 }
 
-export interface OperatorMutationOptions<T> {
-  action: string
-  evidence: OperatorEndpointEvidence
-  snapshot?: () => T
-  optimistic?: () => void | Promise<void>
-  run: () => Promise<T>
-  rollback?: (snapshot: T | undefined, error: OperatorSourceError) => void | Promise<void>
-  refresh?: () => void | Promise<void>
-}
-
-export type OperatorMutationResult<T> =
-  | { kind: 'success'; action: string; data: T; evidence: OperatorEndpointEvidence; refreshed: boolean }
-  | { kind: 'rollback'; action: string; error: OperatorSourceError; evidence: OperatorEndpointEvidence; rolledBack: boolean; refresh?: () => void | Promise<void> }
-
 export interface OperatorUnsupportedAction {
   kind: 'mustbuild'
   action: string
@@ -404,38 +390,6 @@ export async function loadOperatorJson<T>(
       source,
       run: () => loadOperatorJson(path, options),
     })
-  }
-}
-
-export async function runOperatorMutation<T>(options: OperatorMutationOptions<T>): Promise<OperatorMutationResult<T>> {
-  const snapshot = options.snapshot?.()
-
-  try {
-    await options.optimistic?.()
-    const data = await options.run()
-    await options.refresh?.()
-    return {
-      kind: 'success',
-      action: options.action,
-      data,
-      evidence: options.evidence,
-      refreshed: Boolean(options.refresh),
-    }
-  } catch (error) {
-    const mapped = toOperatorSourceError(error, {
-      source: options.evidence.source,
-      path: options.evidence.endpoint,
-      method: 'MUTATION',
-    })
-    await options.rollback?.(snapshot, mapped)
-    return {
-      kind: 'rollback',
-      action: options.action,
-      error: mapped,
-      evidence: { ...options.evidence, status: mapped.status, retryable: mapped.retryable },
-      rolledBack: Boolean(options.rollback),
-      refresh: options.refresh,
-    }
   }
 }
 

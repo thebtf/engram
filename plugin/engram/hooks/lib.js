@@ -15,6 +15,7 @@ const fs = require('fs');
 const fsPromises = require('node:fs/promises');
 const os = require('os');
 const path = require('path');
+const projectIdentityV3 = require('./project-identity-v3.js');
 
 function configuredPluginEnv(...keys) {
  // Claude Code exports plugin userConfig values to plugin subprocesses as
@@ -56,10 +57,10 @@ function resolveConfigFilePath() {
 
 /**
  * Read and parse the engram config file.
- * Returns { server_url, api_token, quiet } on success (server_url/api_token
- * trimmed strings, may be empty; quiet is the raw value — boolean or string —
- * or undefined when absent). Returns null on missing or malformed file —
- * callers must treat null as "not configured here". Never throws.
+ * Returns { server_url, api_token, client_instance_id, quiet } on success
+ * (server_url/api_token are trimmed strings; client_instance_id and quiet retain
+ * their raw config values). Returns null on missing config; callers must treat it as
+ * "not configured here". Never throws.
  */
 function readEngramConfigFile(configFilePath) {
  try {
@@ -74,6 +75,7 @@ function readEngramConfigFile(configFilePath) {
   return {
    server_url: typeof parsed.server_url === 'string' ? parsed.server_url.trim() : '',
    api_token: typeof parsed.api_token === 'string' ? parsed.api_token.trim() : '',
+   client_instance_id: typeof parsed.client_instance_id === 'string' ? parsed.client_instance_id : '',
    quiet: parsed.quiet,
   };
  } catch {
@@ -107,6 +109,7 @@ async function readEngramConfigFileAsync(configFilePath, signal) {
   return {
    server_url: typeof parsed.server_url === 'string' ? parsed.server_url.trim() : '',
    api_token: typeof parsed.api_token === 'string' ? parsed.api_token.trim() : '',
+   client_instance_id: typeof parsed.client_instance_id === 'string' ? parsed.client_instance_id : '',
    quiet: parsed.quiet,
   };
  } catch (error) {
@@ -168,19 +171,13 @@ function writeEngramConfigFile(configFilePath, serverURL, apiToken) {
 }
 
 /**
- * Resolve ENGRAM_URL and ENGRAM_TOKEN using the full credential chain:
- *   1. Explicit env vars (ENGRAM_URL / ENGRAM_TOKEN)
- *   2. Claude Code plugin option env (CLAUDE_PLUGIN_OPTION_*)
- *   3. Legacy userConfig aliases (ENGRAM_CLAUDE_USERCONFIG_*)
- *   4. Config file fallback (ENGRAM_CONFIG_FILE / <pluginData>/config.json /
- *      ~/.engram/config.json) — added v6.4.15 for Codex ≥0.139 which stopped
- *      forwarding shell_environment_policy.set values to plugin MCP children
- *      (openai/codex#24401).
+ * Resolve ENGRAM_URL, ENGRAM_TOKEN, and ENGRAM_CLIENT_INSTANCE_ID using the
+ * established environment and config-file precedence.
  *
- * Sets process.env.ENGRAM_URL and process.env.ENGRAM_TOKEN so child processes
- * and subsequent code see the resolved values.
+ * Sets the resolved values in process.env so each hook process uses the same
+ * configuration chain.
  *
- * Returns { serverURL, token } — empty strings when unconfigured.
+ * Returns { serverURL, token, clientInstanceID } — empty strings when absent.
  */
 function getEngramConfig() {
  let serverURL = configuredPluginEnv(
@@ -190,35 +187,30 @@ function getEngramConfig() {
   'CLAUDE_PLUGIN_OPTION_SERVER_URL',
   'ENGRAM_CLAUDE_USERCONFIG_URL'
  );
-
  let token = configuredPluginEnv(
   'ENGRAM_TOKEN',
   'CLAUDE_PLUGIN_OPTION_api_token',
   'CLAUDE_PLUGIN_OPTION_API_TOKEN',
   'ENGRAM_CLAUDE_USERCONFIG_TOKEN'
  );
-
- // Read config file at most once — only when at least one credential is missing.
- if (!serverURL || !token) {
+ let clientInstanceID = configuredPluginEnv(
+  'ENGRAM_CLIENT_INSTANCE_ID',
+  'CLAUDE_PLUGIN_OPTION_client_instance_id',
+  'CLAUDE_PLUGIN_OPTION_CLIENT_INSTANCE_ID',
+  'ENGRAM_CLAUDE_USERCONFIG_CLIENT_INSTANCE_ID'
+ );
+ if (!serverURL || !token || !clientInstanceID) {
   const cf = readEngramConfigFile(resolveConfigFilePath());
   if (cf) {
-   if (!serverURL && cf.server_url) {
-    serverURL = cf.server_url;
-   }
-   if (!token && cf.api_token) {
-    token = cf.api_token;
-   }
+   if (!serverURL && cf.server_url) serverURL = cf.server_url;
+   if (!token && cf.api_token) token = cf.api_token;
+   if (!clientInstanceID && cf.client_instance_id) clientInstanceID = cf.client_instance_id;
   }
  }
-
- if (serverURL) {
-  process.env.ENGRAM_URL = serverURL;
- }
- if (token) {
-  process.env.ENGRAM_TOKEN = token;
- }
-
- return { serverURL, token };
+ if (serverURL) process.env.ENGRAM_URL = serverURL;
+ if (token) process.env.ENGRAM_TOKEN = token;
+ if (clientInstanceID) process.env.ENGRAM_CLIENT_INSTANCE_ID = clientInstanceID;
+ return { serverURL, token, clientInstanceID };
 }
 
 function getServerURL(configuredURL) {
@@ -776,6 +768,55 @@ function projectAnchorPublicationError(...errors) {
  return new Error(present.map((error) => error.message || String(error)).join('; '));
 }
 
+function resolveHookProjectDescriptorV3(cwd, clientInstanceID) {
+ projectIdentityV3.validateClientInstanceIDV3(clientInstanceID);
+ const selectedRoot = path.resolve(cwd || '');
+ let directoryAnchor;
+ try {
+  directoryAnchor = projectIdentityV3.discoverProjectAnchorV3(selectedRoot, 'directory');
+ } catch (error) {
+  if (!error || !/^PROJECT_SCOPE_MISMATCH:/.test(error.message)) throw error;
+ }
+ if (directoryAnchor) {
+  return projectIdentityV3.buildProjectIdentityV3({
+   anchor: directoryAnchor,
+   normalized_git_remotes: [],
+   legacy_identifiers: [],
+   client_instance_id: clientInstanceID,
+  });
+ }
+ let repositoryRoot;
+ try {
+  repositoryRoot = require('node:child_process').execFileSync(
+   'git', ['-C', selectedRoot, 'rev-parse', '--show-toplevel'],
+   { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 3000, windowsHide: true },
+  ).trim();
+ } catch (error) {
+  if (isMissingGitIdentityError(error)) {
+   throw new Error('PROJECT_ONBOARDING_REQUIRED: no V3 project anchor exists at the selected scope');
+  }
+  throw new Error('PROJECT_IDENTITY_UNAVAILABLE: git identity resolution failed', { cause: error });
+ }
+ if (!repositoryRoot) {
+  throw new Error('PROJECT_ONBOARDING_REQUIRED: no V3 project anchor exists at the selected scope');
+ }
+ const anchor = projectIdentityV3.discoverProjectAnchorV3(repositoryRoot, 'repository');
+ if (!anchor) {
+  throw new Error('PROJECT_ONBOARDING_REQUIRED: no V3 project anchor exists at the selected scope');
+ }
+ const git = getGitRemoteID(repositoryRoot);
+ const normalized = git ? projectIdentityV3.normalizeGitRemoteV3(git.gitRemote) : null;
+ if (normalized?.disposition === 'refused') {
+  throw new Error('PROJECT_DESCRIPTOR_INVALID: git remote is refused');
+ }
+ return projectIdentityV3.buildProjectIdentityV3({
+  anchor,
+  normalized_git_remotes: normalized?.disposition === 'normalized' ? [normalized.value] : [],
+  legacy_identifiers: [],
+  client_instance_id: clientInstanceID,
+ });
+}
+
 function resolveProjectIdentityV2(cwd) {
  const resolved = path.resolve(cwd || '');
  const git = getGitRemoteID(resolved);
@@ -845,6 +886,40 @@ async function registerProjectIdentityV2(context, requestFn = request, requestOp
  return context.Project;
 }
 
+const V3_CANONICAL_PROJECT_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function validateProjectDescriptorV3(descriptor) {
+ return projectIdentityV3.validateProjectDescriptorV3(descriptor);
+}
+
+async function registerProjectIdentityV3(context, requestFn = request, requestOptions = {}) {
+ if (!context || !context.ProjectDescriptorV3 || typeof context.ProjectDescriptorV3 !== 'object') {
+  throw new Error('PROJECT_DESCRIPTOR_INVALID: hook context has no v3 descriptor');
+ }
+ const descriptor = validateProjectDescriptorV3(context.ProjectDescriptorV3);
+ const timeoutMs = Number.isFinite(requestOptions.timeoutMs) && requestOptions.timeoutMs > 0
+  ? requestOptions.timeoutMs
+  : 10000;
+ const response = await requestFn('POST', '/api/context/inject', {
+  project_descriptor: descriptor,
+  identity_only: true,
+ }, timeoutMs, requestOptions);
+ if (requestOptions.signal?.aborted) throw abortError();
+ const resolution = response && response.project_resolution_v3;
+ if (!resolution || (resolution.outcome !== 'PROJECT_RESOLVED' && resolution.outcome !== 'PROJECT_REDIRECTED') ||
+  !V3_CANONICAL_PROJECT_KEY.test(resolution.project_key) || resolution.resolved_scope !== descriptor.scope) {
+  throw new Error('PROJECT_IDENTITY_UNAVAILABLE: project identity registration response is malformed');
+ }
+ context.Project = resolution.project_key;
+ return context.Project;
+}
+
+function registerProjectIdentity(context, requestFn = request, requestOptions = {}) {
+ return context?.ProjectDescriptorV3
+  ? registerProjectIdentityV3(context, requestFn, requestOptions)
+  : registerProjectIdentityV2(context, requestFn, requestOptions);
+}
+
 function isProjectIdentityTransportOffline(error) {
  if (!error || typeof error !== 'object') return false;
  const cause = error.cause && typeof error.cause === 'object' ? error.cause : null;
@@ -855,8 +930,20 @@ function isProjectIdentityTransportOffline(error) {
  return ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT'].includes(code);
 }
 
-function buildRequestHeaders(includeJsonBody = false, token) {
- const headers = {};
+const OPAQUE_REQUEST_ID = /^[^\s\p{Cc}/\\@]{1,256}$/u;
+
+function hookRequestID(options) {
+ const requestID = options && options.requestID;
+ return typeof requestID === 'string' && OPAQUE_REQUEST_ID.test(requestID)
+  ? requestID
+  : crypto.randomUUID();
+}
+
+function buildRequestHeaders(includeJsonBody = false, token, requestID) {
+ const headers = {
+  'X-Engram-Project-Identity-Adapter': 'hook',
+  'X-Request-ID': requestID,
+ };
  const resolvedToken = token === undefined ? configuredPluginEnv(
   'ENGRAM_TOKEN',
   'CLAUDE_PLUGIN_OPTION_api_token',
@@ -1045,7 +1132,7 @@ async function request(method, endpoint, body, timeoutMs = 10000, options = {}) 
   }
   if (externalSignal) externalSignal.addEventListener('abort', abort, { once: true });
 
-  const headers = buildRequestHeaders(body !== undefined, options.token);
+  const headers = buildRequestHeaders(body !== undefined, options.token, hookRequestID(options));
   const response = await fetch(url, {
    method,
    headers,
@@ -1116,24 +1203,31 @@ async function RunHook(hookName, handler) {
  const cwd = typeof input.cwd === 'string' ? input.cwd : '';
 
  try {
-  const gitResult = getGitRemoteID(cwd);
-  const projectSelector = ProjectIDWithName(cwd);
   const context = {
    SessionID: typeof input.session_id === 'string' ? input.session_id : '',
    CWD: cwd,
    PermissionMode: typeof input.permission_mode === 'string' ? input.permission_mode : '',
    HookEventName: typeof input.hook_event_name === 'string' ? input.hook_event_name : hookName,
-   Project: projectSelector,
-   ProjectSelector: projectSelector,
-   LegacyProject: LegacyProjectID(cwd),
-   GitRemote: gitResult ? gitResult.gitRemote : '',
-   RelativePath: gitResult ? gitResult.relativePath : '',
-   ProjectIdentityV2: resolveProjectIdentityV2(cwd),
    RawInput: rawInput,
   };
+  if (runtimeEnv.clientInstanceID) {
+   const descriptor = resolveHookProjectDescriptorV3(cwd, runtimeEnv.clientInstanceID);
+   context.Project = descriptor.anchor_project_id;
+   context.ProjectSelector = descriptor.anchor_project_id;
+   context.ProjectDescriptorV3 = descriptor;
+  } else {
+   const gitResult = getGitRemoteID(cwd);
+   const projectSelector = ProjectIDWithName(cwd);
+   context.Project = projectSelector;
+   context.ProjectSelector = projectSelector;
+   context.LegacyProject = LegacyProjectID(cwd);
+   context.GitRemote = gitResult ? gitResult.gitRemote : '';
+   context.RelativePath = gitResult ? gitResult.relativePath : '';
+   context.ProjectIdentityV2 = resolveProjectIdentityV2(cwd);
+  }
   if (hookName !== 'SessionStart' || (runtimeEnv.serverURL && runtimeEnv.token)) {
    try {
-    await registerProjectIdentityV2(context);
+    await registerProjectIdentity(context);
    } catch (error) {
     if (!isProjectIdentityTransportOffline(error)) {
      throw error;
@@ -1414,6 +1508,7 @@ module.exports = {
  getPluginDataDir,
  getSessionStartCachePath,
  readEngramConfigFile,
+ readEngramConfigFileAsync,
  readJSONFile,
  resolveConfigFilePath,
  resolveEngramRuntimeConfig,
@@ -1430,7 +1525,11 @@ module.exports = {
  validateProjectIdentityV2,
  validateProjectSelectorV2,
  resolveProjectIdentityV2,
+ resolveHookProjectDescriptorV3,
+ validateProjectDescriptorV3,
+ registerProjectIdentity,
  registerProjectIdentityV2,
+ registerProjectIdentityV3,
  getGitRemoteIDAsync,
  resolveHookProjectIdentityV2,
  isProjectIdentityTransportOffline,

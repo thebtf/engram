@@ -4,6 +4,7 @@ import { PRINCIPAL_CURRENT_PROJECT, useOperatorMemoryLab, useOperatorPrincipalMe
 import { MEMORY_PAGE_SIZE_STORAGE_KEY, resolvePageSize, usePersistentPageSize } from '../composables/usePersistentPageSize'
 import type { Memory } from '../composables/useMockData'
 import type { OperatorLoadState } from '../composables/useOperatorApi'
+import type { MutationResult } from '../composables/useApi'
 
 const { t, locale } = useI18n()
 const {
@@ -48,6 +49,7 @@ const deletePending = ref(false)
 const suppressPending = ref(false)
 const bulkSuppressPending = ref(false)
 const notice = ref<{ kind: 'success' | 'error'; text: string } | null>(null)
+const mutationResult = ref<MutationResult | null>(null)
 const auditState = ref<MemoryAuditState | null>(null)
 const auditPending = ref(false)
 let auditRequestSeq = 0
@@ -211,15 +213,19 @@ async function deleteOpened() {
   deletePending.value = true
   try {
     const result = await deleteMemory(memory.id)
-    if (result.kind === 'success') {
+    mutationResult.value = result
+    if (result.kind === 'committed_verified') {
       const nextSelected = { ...selected.value }
       delete nextSelected[memory.id]
       selected.value = nextSelected
       openId.value = null
       deleteConfirmId.value = null
-      notice.value = { kind: 'success', text: t('memory.notice.deleted', { id: memory.id }) }
-    } else {
-      notice.value = { kind: 'error', text: t('memory.notice.error', { message: result.error?.message || t('memory.notice.unknownError') }) }
+    } else if (result.kind === 'partial' && result.items.some((item) => String(item.targetId) === memory.id && item.outcome === 'committed')) {
+      const nextSelected = { ...selected.value }
+      delete nextSelected[memory.id]
+      selected.value = nextSelected
+      openId.value = null
+      deleteConfirmId.value = null
     }
   } finally {
     deletePending.value = false
@@ -239,15 +245,21 @@ async function suppressOpened() {
   suppressPending.value = true
   try {
     const result = await suppressMemory(memory.id)
-    if (result.kind === 'success') {
+    mutationResult.value = result
+    if (result.kind === 'committed_verified') {
       const nextSelected = { ...selected.value }
       delete nextSelected[memory.id]
       selected.value = nextSelected
       openId.value = null
       suppressConfirmId.value = null
       notice.value = { kind: 'success', text: t('memory.notice.suppressed', { id: memory.id }) }
-    } else {
-      notice.value = { kind: 'error', text: t('memory.notice.error', { message: result.error?.message || t('memory.notice.unknownError') }) }
+      await refresh()
+    } else if (result.kind === 'partial' && result.items.some((item) => String(item.targetId) === memory.id && item.outcome === 'committed')) {
+      const nextSelected = { ...selected.value }
+      delete nextSelected[memory.id]
+      selected.value = nextSelected
+      openId.value = null
+      suppressConfirmId.value = null
     }
   } finally {
     suppressPending.value = false
@@ -267,12 +279,18 @@ async function handleBulkAction() {
   bulkSuppressPending.value = true
   try {
     const result = await suppressMemories(selectedIds.value)
-    if (result.kind === 'success') {
+    mutationResult.value = result
+    if (result.kind === 'committed_verified') {
       selected.value = {}
       bulkSuppressConfirm.value = false
       notice.value = { kind: 'success', text: t('memory.notice.bulkSuppressed', { count }) }
-    } else {
-      notice.value = { kind: 'error', text: t('memory.notice.error', { message: result.error?.message || t('memory.notice.unknownError') }) }
+      await refresh()
+    } else if (result.kind === 'partial') {
+      const nextSelected = { ...selected.value }
+      for (const item of result.items) {
+        if (item.outcome === 'committed') delete nextSelected[String(item.targetId)]
+      }
+      selected.value = nextSelected
     }
   } finally {
     bulkSuppressPending.value = false
@@ -548,6 +566,7 @@ function formatAuditTime(timestamp?: string) {
       <span>{{ notice.text }}</span>
       <button class="tbtn" @click="notice = null">{{ t('common.hide') }}</button>
     </section>
+    <MutationResultNotice :result="mutationResult" :recheck-label="t('memory.state.retry')" @recheck="refresh" />
 
     <section v-if="pending || error || loadState.kind === 'empty' || loadState.kind === 'gated'" class="statebar" :data-state="loadState.kind">
       <span v-if="pending">{{ t('memory.state.pending') }}</span>

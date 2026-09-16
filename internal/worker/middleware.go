@@ -29,6 +29,11 @@ import (
 // requestIDKey is the context key for request IDs.
 type requestIDKey struct{}
 
+// authenticatedBrowserSessionKey carries a session ID established by successful
+// HTTP authentication. It is never read from a request header or cookie by a
+// guarded handler.
+type authenticatedBrowserSessionKey struct{}
+
 // emptyTokenStore satisfies auth.TokenStoreReader with an always-empty
 // candidate set. Used as the bootstrap reader for the validator until
 // SetValidator() swaps in the DB-backed *gormdb.TokenStore.
@@ -94,8 +99,8 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		if origin := r.Header.Get("Origin"); allowedOrigins[origin] {
 			hdr.Set("Access-Control-Allow-Origin", origin)
 			hdr.Set("Access-Control-Allow-Credentials", "true")
-			hdr.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			hdr.Set("Access-Control-Allow-Headers", "Content-Type, X-Auth-Token, Authorization, X-Request-ID")
+			hdr.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			hdr.Set("Access-Control-Allow-Headers", "Content-Type, X-Auth-Token, Authorization, X-Request-ID, X-Engram-Request-ID, X-Engram-Tab-Binding-ID, X-Engram-Document-Proof, "+comparisonAdapterHeaderV3)
 		}
 
 		// Preflight requests terminate here; no further processing needed.
@@ -422,6 +427,11 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 				return
 			}
 
+			if !hapHTTPRouteAllowed(id, r.Method, r.URL.Path) {
+				http.Error(w, "forbidden: HAP keycard class is not allowed on this HTTP route", http.StatusForbidden)
+				return
+			}
+
 			// Read-only scope gate (FR-6 inheriting v5 behaviour). Applies
 			// to client keycards only — operator key is always admin.
 			if id.Source == authpkg.SourceClient && id.Role == authpkg.RoleReadOnly {
@@ -461,8 +471,9 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 			if authCookie, err := r.Cookie("engram_auth"); err == nil && authCookie.Value != "" {
 				if sess, err := authSessStore.GetSession(authCookie.Value); err == nil {
 					if user, err := uStore.GetUserByID(sess.UserID); err == nil && !user.Disabled {
-						id := authpkg.Session(user.Role)
-						next.ServeHTTP(w, r.WithContext(buildAuthCtx(r.Context(), id)))
+						id := authpkg.SessionForBrowserUser(user.Role, user.ID)
+						ctx := withAuthenticatedBrowserSession(r.Context(), authCookie.Value)
+						next.ServeHTTP(w, r.WithContext(buildAuthCtx(ctx, id)))
 						return
 					}
 				}
@@ -484,8 +495,9 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 					}
 				}
 				if err == nil && user != nil && !user.Disabled {
-					id := authpkg.Session(user.Role)
-					next.ServeHTTP(w, r.WithContext(buildAuthCtx(r.Context(), id)))
+					id := authpkg.SessionForBrowserUser(user.Role, user.ID)
+					ctx := withAuthenticatedBrowserSession(r.Context(), authentikBrowserSessionID(user.ID))
+					next.ServeHTTP(w, r.WithContext(buildAuthCtx(ctx, id)))
 					return
 				}
 			}
@@ -532,6 +544,21 @@ func buildAuthCtx(ctx context.Context, id authpkg.Identity) context.Context {
 	ctx = authpkg.WithIdentity(ctx, id)
 	ctx = context.WithValue(ctx, authRoleKey{}, string(id.Role))
 	return ctx
+}
+
+func withAuthenticatedBrowserSession(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, authenticatedBrowserSessionKey{}, sessionID)
+}
+
+func authenticatedBrowserSessionID(ctx context.Context) (string, bool) {
+	sessionID, ok := ctx.Value(authenticatedBrowserSessionKey{}).(string)
+	return sessionID, ok && operatorCodeText(sessionID)
+}
+
+// authentikBrowserSessionID derives a non-client-controlled session key from
+// the persisted user loaded after trusted-proxy authentication.
+func authentikBrowserSessionID(userID int64) string {
+	return fmt.Sprintf("authentik/%d", userID)
 }
 
 // authenticateSessionCookie validates an HMAC-signed session cookie.

@@ -20,6 +20,7 @@ import (
 	"gorm.io/gorm"
 
 	authpkg "github.com/thebtf/engram/internal/auth"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
 
 // isAuthDisabled returns true when ENGRAM_AUTH_DISABLED enables disabled-auth mode.
@@ -55,10 +56,11 @@ type loginRequest struct {
 
 // tokenCreateRequest is the JSON body for POST /api/auth/tokens.
 type tokenCreateRequest struct {
-	Name          string `json:"name"`
-	Scope         string `json:"scope"`
-	Principal     string `json:"principal"`
-	PrincipalKind string `json:"principal_kind" enums:"human,agent,service"`
+	Name          string     `json:"name"`
+	Scope         string     `json:"scope"`
+	Principal     string     `json:"principal"`
+	PrincipalKind string     `json:"principal_kind" enums:"human,agent,service"`
+	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
 }
 
 // handleAuthLogin godoc
@@ -266,6 +268,7 @@ func (s *Service) handleListTokens(w http.ResponseWriter, r *http.Request) {
 		Scope         string     `json:"scope"`
 		Principal     string     `json:"principal"`
 		PrincipalKind string     `json:"principal_kind"`
+		ExpiresAt     *time.Time `json:"expires_at,omitempty"`
 		CreatedAt     time.Time  `json:"created_at"`
 		LastUsedAt    *time.Time `json:"last_used_at,omitempty"`
 		RequestCount  int64      `json:"request_count"`
@@ -283,6 +286,7 @@ func (s *Service) handleListTokens(w http.ResponseWriter, r *http.Request) {
 			Scope:         t.Scope,
 			Principal:     t.Principal,
 			PrincipalKind: t.PrincipalKind,
+			ExpiresAt:     t.ExpiresAt,
 			CreatedAt:     t.CreatedAt,
 			LastUsedAt:    t.LastUsedAt,
 			RequestCount:  t.RequestCount,
@@ -377,6 +381,15 @@ func (s *Service) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	now := time.Now().UTC()
+	if err := authpkg.ValidateHAPPrincipalForIssuance(principal, authpkg.PrincipalKind(principalKind), req.ExpiresAt, now); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.ExpiresAt != nil && !req.ExpiresAt.After(now) {
+		http.Error(w, "expires_at must be in the future", http.StatusBadRequest)
+		return
+	}
 
 	// Generate raw token: engram_ + 32 hex chars (16 random bytes)
 	randomBytes := make([]byte, 16)
@@ -394,7 +407,15 @@ func (s *Service) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := tokenStore.CreateWithPrincipal(r.Context(), req.Name, string(hash), prefix, scope, principal, principalKind)
+	token, err := tokenStore.CreateWithPrincipal(r.Context(), gormdb.TokenCreatePrincipalInput{
+		Name:          req.Name,
+		TokenHash:     string(hash),
+		TokenPrefix:   prefix,
+		Scope:         scope,
+		Principal:     principal,
+		PrincipalKind: principalKind,
+		ExpiresAt:     req.ExpiresAt,
+	})
 	if err != nil {
 		// Check for unique constraint violation (duplicate name)
 		if isDuplicateKeyError(err) {
@@ -406,7 +427,7 @@ func (s *Service) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, map[string]any{
+	response := map[string]any{
 		"id":             token.ID,
 		"name":           token.Name,
 		"token":          rawToken,
@@ -415,7 +436,11 @@ func (s *Service) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		"scope":          token.Scope,
 		"principal":      token.Principal,
 		"principal_kind": token.PrincipalKind,
-	})
+	}
+	if token.ExpiresAt != nil {
+		response["expires_at"] = token.ExpiresAt
+	}
+	writeJSON(w, response)
 }
 
 // handleRevokeToken godoc
@@ -506,7 +531,7 @@ func (s *Service) handleGetTokenStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, map[string]any{
+	response := map[string]any{
 		"id":             token.ID,
 		"name":           token.Name,
 		"token_prefix":   token.TokenPrefix,
@@ -518,7 +543,11 @@ func (s *Service) handleGetTokenStats(w http.ResponseWriter, r *http.Request) {
 		"last_used_at":   token.LastUsedAt,
 		"revoked":        token.Revoked,
 		"revoked_at":     token.RevokedAt,
-	})
+	}
+	if token.ExpiresAt != nil {
+		response["expires_at"] = token.ExpiresAt
+	}
+	writeJSON(w, response)
 }
 
 func normalizeTokenPrincipal(principal, principalKind string) (string, string, error) {

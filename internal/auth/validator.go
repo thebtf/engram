@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -164,6 +165,11 @@ func (v *Validator) Validate(ctx context.Context, raw string) (Identity, error) 
 			[]byte(raw),
 		)
 		if err == nil {
+			// Expiry is checked only after a bcrypt match so an expired row cannot
+			// be distinguished from another invalid bearer by token probing.
+			if expiresAt := candidates[i].ExpiresAt; expiresAt != nil && !expiresAt.After(time.Now().UTC()) {
+				return Identity{}, ErrInvalidCredentials
+			}
 			// Defense-in-depth: api_tokens.scope is plain text. A row with
 			// scope="admin" (data corruption, malicious INSERT, future
 			// schema drift) MUST NOT promote a worker keycard to admin.
@@ -184,7 +190,10 @@ func (v *Validator) Validate(ctx context.Context, raw string) (Identity, error) 
 						)
 					}
 				}
-				return ClientWithPrincipal(candidates[i].Scope, candidates[i].ID, principal, principalKind), nil
+				if err := ValidateHAPPrincipalForIssuance(principal, principalKind, candidates[i].ExpiresAt, time.Now().UTC()); err != nil {
+					return Identity{}, ErrInvalidCredentials
+				}
+				return ClientWithPrincipalExpiry(candidates[i].Scope, candidates[i].ID, principal, principalKind, candidates[i].ExpiresAt), nil
 			default:
 				return Identity{}, fmt.Errorf(
 					"auth: keycard %s has unexpected scope %q (allowed: %q, %q)",

@@ -25,6 +25,7 @@ import (
 	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/reranking"
+	"github.com/thebtf/engram/internal/uci"
 	"github.com/thebtf/engram/internal/writelint"
 	"github.com/thebtf/engram/pkg/models"
 	gormlib "gorm.io/gorm"
@@ -63,7 +64,12 @@ type Server struct {
 	candidateStore                *gorm.CandidateStore      // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	snapshotStore                 *gorm.SnapshotStore       // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	reviewLoopCandidateStoreSeam  reviewLoopCandidateLister // CR-008 test seam for review metrics/queue reads
-	codeChunkStore                *gorm.CodeChunkStore      // CR-006: non-nil when ENGRAM_CODE_INTEL_ENABLED=true
+	legacyUnscopedCodeChunkStore  *gorm.CodeChunkStore      // explicitly invoked raw-project compatibility reader only
+	codebaseContextMu             sync.Mutex
+	codebaseContextApplication    CodebaseContextApplication
+	codebaseContextHandles        map[string]*codebaseContextClientHandles
+	codebaseContextEpoch          uint64
+	uciExposureRecorder           *uci.ExposureRecorder
 	ruleGovernanceStore           ruleGovernanceCandidateWriter
 	ruleGovernanceReadStore       ruleGovernanceReadStore
 	ruleInjectionTelemetry        ruleInjectionTelemetryReader
@@ -287,6 +293,45 @@ func (s *Server) SetStatsDB(db *gormlib.DB) {
 	s.statsDB = db
 }
 
+// SetCodebaseContextApplication wires the client-scoped UCI context adapter.
+// Replacing the application invalidates every opaque handle from the prior adapter.
+func (s *Server) SetCodebaseContextApplication(application CodebaseContextApplication) {
+	s.codebaseContextMu.Lock()
+	defer s.codebaseContextMu.Unlock()
+
+	s.codebaseContextApplication = application
+	s.codebaseContextHandles = make(map[string]*codebaseContextClientHandles)
+	s.codebaseContextEpoch++
+}
+
+// SetUCIExposureRecorder wires the shared durable exposure boundary for every
+// released code search, graph, and versioned-read response.
+func (s *Server) SetUCIExposureRecorder(recorder *uci.ExposureRecorder) {
+	s.codebaseContextMu.Lock()
+	defer s.codebaseContextMu.Unlock()
+	s.uciExposureRecorder = recorder
+}
+
+// uciExposureRecorderSnapshot returns the current recorder without exposing
+// the mutable server field to request handlers.
+func (s *Server) uciExposureRecorderSnapshot() *uci.ExposureRecorder {
+	s.codebaseContextMu.Lock()
+	defer s.codebaseContextMu.Unlock()
+	return s.uciExposureRecorder
+}
+
+// RecordUCICompletion accepts only an explicit verified supported-host
+// callback. A missing recorder or append failure returns the closed callback
+// error without changing the parent receipt.
+func (s *Server) RecordUCICompletion(ctx context.Context, callback uci.VerifiedSupportedHostCallback) error {
+	recorder := s.uciExposureRecorderSnapshot()
+	if recorder == nil {
+		return uci.ErrCompletionEvidenceUnavailable
+	}
+	_, err := recorder.RecordCompletion(ctx, callback)
+	return err
+}
+
 // HandleRequest dispatches a JSON-RPC request and returns the response.
 // This is the public wrapper for the private handleRequest method,
 // enabling the gRPC adapter to invoke tool calls without duplicating dispatch logic.
@@ -395,7 +440,16 @@ func (s *Server) Run(ctx context.Context) error {
 			}
 
 			var req Request
-			if err := json.Unmarshal([]byte(line), &req); err != nil {
+			decoder := json.NewDecoder(strings.NewReader(line))
+			decoder.UseNumber()
+			if err := decoder.Decode(&req); err != nil {
+				s.sendError(nil, -32700, "Parse error", err)
+				continue
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				if err == nil {
+					err = fmt.Errorf("invalid character after top-level value")
+				}
 				s.sendError(nil, -32700, "Parse error", err)
 				continue
 			}
@@ -1051,20 +1105,20 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		tools = append(tools, bulkOpsTools()...)
 	}
 
-	// Code intelligence tools (CR-006) — advertise only when ENGRAM_CODE_INTEL_ENABLED=true
-	// AND the code chunk store is wired. Flag-off path is byte-identical to pre-CR-006.
-	//
-	// Only codebase_search is advertised as a server-side tool. codebase_status is
-	// deliberately NOT advertised here: it is the daemon-side static tool's name
-	// (internal/handlers/codeintel), and the daemon merges its in-memory run state
-	// with the server's chunk counts by calling THIS server's codebase_status
-	// handler over the engramcore proxy. Advertising it on both the daemon (static)
-	// and the server (proxied) would surface a DUPLICATE codebase_status entry in
-	// the daemon's tools/list (the dispatcher appends proxy tools without dedup).
-	// The handler + callTool case stay registered so the daemon's proxy call still
-	// resolves; only the external advertisement is suppressed.
-	if codeIntelEnabled() && s.codeChunkStore != nil {
+	// Code intelligence search is available through scoped UCI or the explicit
+	// legacy-only rollback reader; a scoped application always takes precedence.
+	// codebase_status remains daemon-owned and is not advertised here.
+	if codeIntelEnabled() && (s.hasCodebaseIntelligenceApplication() || s.hasLegacyUnscopedCodeChunkStore()) {
 		tools = append(tools, codebaseSearchTool())
+	}
+	if codeIntelEnabled() && s.hasCodebaseContextApplication() {
+		tools = append(tools, codebaseContextTool())
+	}
+	if codeIntelEnabled() && s.hasCodebaseReadApplication() {
+		tools = append(tools, codebaseReadTool())
+	}
+	if codeIntelEnabled() && s.hasCodebaseGraphApplication() {
+		tools = append(tools, codebaseGraphTool())
 	}
 
 	// Ambient fallback polling — advertise only when the S3 flag is on and the queue seam is wired.
@@ -1222,7 +1276,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 		}
 	}
 
-	result, err := s.callTool(ctx, params.Name, params.Arguments)
+	result, err := s.callTool(contextWithUCIRequestIdentity(ctx, req.ID, params.Name, params.Arguments), params.Name, params.Arguments)
 	if err != nil {
 		event := log.Error().Err(err).Str("tool", params.Name)
 		if identity, ok := auth.IdentityFrom(ctx); ok {
@@ -1274,6 +1328,9 @@ var readOnlyToolAllowlist = map[string]map[string]struct{}{
 	"rule_governance_snapshots":    nil,
 	"rule_governance_usefulness":   nil,
 	"codebase_search":              nil,
+	"codebase_context":             nil,
+	"codebase_read":                nil,
+	"codebase_graph":               nil,
 	"codebase_status":              nil,
 	"recall": {
 		"search": {},
@@ -1470,6 +1527,12 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleCodebaseSearch(ctx, args)
 	case "codebase_status":
 		return s.handleCodebaseStatus(ctx, args)
+	case "codebase_context":
+		return s.handleCodebaseContext(ctx, args)
+	case "codebase_read":
+		return s.handleCodebaseRead(ctx, args)
+	case "codebase_graph":
+		return s.handleCodebaseGraph(ctx, args)
 	}
 
 	return "", fmt.Errorf("unknown tool: %s", name)

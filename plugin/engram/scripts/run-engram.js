@@ -9,6 +9,20 @@ const os = require("os");
 const { hashFile, objectRoots, resolveForLaunch } = require("./ensure-binary.js");
 
 const STARTUP_DIAGNOSTIC_LOG_MAX_BYTES = 128 * 1024;
+const HAP_01B_REVISION = "omp-hap-01b/1";
+const HAP_01B_FIELDS = Object.freeze([
+ "adapter_sha256",
+ "legacy_direct_enforcement",
+ "project_tokens",
+ "registration_token",
+ "relay_enabled",
+ "relay_revision",
+]);
+const HAP_01B_INVALID = Symbol("hap_01b_invalid");
+const HAP_01B_NORMALIZED = Symbol("hap_01b_normalized");
+const HAP_01B_SHA256 = /^[0-9a-f]{64}$/;
+const HAP_01B_KEYCARD = /^engram_[0-9a-fA-F]{32}$/;
+const HAP_01B_PROJECT_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 async function main() {
  const pluginRoot = resolvePluginRoot();
@@ -18,6 +32,12 @@ async function main() {
  const configFile = readEngramConfigFile(configFilePath);
 
  emitStartupDiagnostic(pluginData, configFilePath, configFile);
+
+ if (isInvalidHap01bConfig(configFile)) {
+  process.stderr.write(`[engram] FATAL: invalid HAP-01B configuration in ${configFilePath}\n`);
+  process.exitCode = 1;
+  return;
+ }
 
  // Visible diagnostic: fail early if the workstation is not configured. A new
  // install should not expose half-working tools with no remote memory backend.
@@ -62,7 +82,7 @@ async function main() {
   return;
  }
  process.env.ENGRAM_TOKEN = token;
- const childEnv = childEnvForEngram(process.env);
+ const childEnv = childEnvForEngram(process.env, configFile?.hap_01b);
 
  if (process.env.ENGRAM_AUTH_ADMIN_TOKEN) {
   process.stderr.write(
@@ -99,9 +119,22 @@ async function resolveAndSpawn(options) {
  return result.status ?? 0;
 }
 
-function childEnvForEngram(env = process.env) {
+function childEnvForEngram(env = process.env, hapConfig) {
  const childEnv = { ...env };
- delete childEnv.ENGRAM_AUTH_ADMIN_TOKEN;
+ for (const key of Object.keys(childEnv)) {
+  const canonical = key.toUpperCase();
+  if (canonical === "ENGRAM_AUTH_ADMIN_TOKEN" || canonical.startsWith("ENGRAM_HAP_01B_")) {
+   delete childEnv[key];
+  }
+ }
+ if (isNormalizedHap01bConfig(hapConfig)) {
+  childEnv.ENGRAM_HAP_01B_RELAY_ENABLED = "true";
+  childEnv.ENGRAM_HAP_01B_RELAY_REVISION = hapConfig.relay_revision;
+  childEnv.ENGRAM_HAP_01B_LEGACY_DIRECT_ENFORCEMENT = String(hapConfig.legacy_direct_enforcement);
+  childEnv.ENGRAM_HAP_01B_ADAPTER_SHA256 = hapConfig.adapter_sha256;
+  childEnv.ENGRAM_HAP_01B_REGISTRATION_TOKEN = hapConfig.registration_token;
+  childEnv.ENGRAM_HAP_01B_PROJECT_TOKENS_JSON = JSON.stringify(hapConfig.project_tokens);
+ }
  return childEnv;
 }
 
@@ -193,9 +226,9 @@ function resolveConfigFilePath(pluginData) {
 
 /**
  * Read and parse the engram config file.
- * Returns { server_url, api_token } on success (values trimmed, may be empty strings).
- * Returns null on missing or malformed file — callers must treat null as "not configured here".
- * Never throws.
+ * Returns normalized base fields, plus a normalized hap_01b block when present and valid.
+ * An invalid present hap_01b block is represented only by an internal marker.
+ * Returns null on missing or malformed root file; never throws.
  */
 function readEngramConfigFile(configFilePath) {
  try {
@@ -204,17 +237,91 @@ function readEngramConfigFile(configFilePath) {
   }
   const raw = fs.readFileSync(configFilePath, "utf8");
   const parsed = JSON.parse(raw);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  if (!isPlainObject(parsed)) {
    return null;
   }
-  return {
+  const config = {
    server_url: typeof parsed.server_url === "string" ? parsed.server_url.trim() : "",
    api_token: typeof parsed.api_token === "string" ? parsed.api_token.trim() : "",
   };
+  if (!Object.hasOwn(parsed, "hap_01b")) {
+   return config;
+  }
+  const hapConfig = parseHap01bConfig(parsed.hap_01b);
+  if (!hapConfig) {
+   Object.defineProperty(config, HAP_01B_INVALID, { value: true });
+   return config;
+  }
+  config.hap_01b = hapConfig;
+  return config;
  } catch {
   // Missing file, permission error, or malformed JSON — skip silently.
   return null;
  }
+}
+
+function parseHap01bConfig(value) {
+ if (!isPlainObject(value) || !hasExactHap01bFields(value)) {
+  return null;
+ }
+ if (
+  value.relay_enabled !== true ||
+  value.relay_revision !== HAP_01B_REVISION ||
+  typeof value.legacy_direct_enforcement !== "boolean" ||
+  typeof value.adapter_sha256 !== "string" ||
+  !HAP_01B_SHA256.test(value.adapter_sha256) ||
+  typeof value.registration_token !== "string" ||
+  !HAP_01B_KEYCARD.test(value.registration_token)
+ ) {
+  return null;
+ }
+ const projectTokens = normalizeProjectTokens(value.project_tokens);
+ if (!projectTokens) {
+  return null;
+ }
+ const normalized = {
+  relay_enabled: true,
+  relay_revision: HAP_01B_REVISION,
+  legacy_direct_enforcement: value.legacy_direct_enforcement,
+  adapter_sha256: value.adapter_sha256,
+  registration_token: value.registration_token,
+  project_tokens: projectTokens,
+ };
+ Object.defineProperty(normalized, HAP_01B_NORMALIZED, { value: true });
+ return Object.freeze(normalized);
+}
+
+function normalizeProjectTokens(value) {
+ if (!isPlainObject(value)) {
+  return null;
+ }
+ const entries = Object.entries(value);
+ if (entries.length === 0 || entries.length > 256) {
+  return null;
+ }
+ for (const [projectKey, token] of entries) {
+  if (!HAP_01B_PROJECT_KEY.test(projectKey) || typeof token !== "string" || !HAP_01B_KEYCARD.test(token)) {
+   return null;
+  }
+ }
+ return Object.freeze(Object.fromEntries(entries.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))));
+}
+
+function hasExactHap01bFields(value) {
+ const keys = Object.keys(value).sort();
+ return keys.length === HAP_01B_FIELDS.length && keys.every((key, index) => key === HAP_01B_FIELDS[index]);
+}
+
+function isPlainObject(value) {
+ return value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
+}
+
+function isInvalidHap01bConfig(configFile) {
+ return Boolean(configFile?.[HAP_01B_INVALID]);
+}
+
+function isNormalizedHap01bConfig(value) {
+ return Boolean(value?.[HAP_01B_NORMALIZED]);
 }
 
 function isConfiguredValue(value) {
@@ -253,7 +360,8 @@ function formatStartupDiagnostic(env = process.env, configFilePath, configFile) 
  ];
  const envParts = keys.map(([key, sensitive]) => describeEnvValue(key, env, sensitive)).join("; ");
  const cfPart = describeConfigFile(configFilePath, configFile);
- return `[engram] startup env: ${envParts}; ${cfPart}`;
+ const hapPart = formatHap01bDiagnostic(configFile);
+ return `[engram] startup env: ${envParts}; ${cfPart}; ${hapPart}`;
 }
 
 function describeConfigFile(configFilePath, configFile) {
@@ -267,6 +375,23 @@ function describeConfigFile(configFilePath, configFile) {
   return `config_file=malformed(${configFilePath})`;
  }
  return `config_file=present(${configFilePath})`;
+}
+
+function formatHap01bDiagnostic(configFile) {
+ if (isInvalidHap01bConfig(configFile)) {
+  return "hap_01b=invalid";
+ }
+ const hapConfig = configFile?.hap_01b;
+ if (!isNormalizedHap01bConfig(hapConfig)) {
+  return "hap_01b=absent";
+ }
+ return "hap_01b=present(" +
+  `relay_enabled=${hapConfig.relay_enabled},` +
+  `relay_revision_len=${hapConfig.relay_revision.length},` +
+  `legacy_direct_enforcement=${hapConfig.legacy_direct_enforcement},` +
+  `adapter_sha256_len=${hapConfig.adapter_sha256.length},` +
+  `registration_token_len=${hapConfig.registration_token.length},` +
+  `project_token_count=${Object.keys(hapConfig.project_tokens).length})`;
 }
 
 function describeEnvValue(key, env = process.env, sensitive = false) {
@@ -348,9 +473,12 @@ module.exports = {
  describeConfigFile,
  describeEnvValue,
  emitStartupDiagnostic,
+ formatHap01bDiagnostic,
  formatStartupDiagnostic,
  inferCodexPluginDataDir,
  isConfiguredValue,
+ isInvalidHap01bConfig,
+ parseHap01bConfig,
  readEngramConfigFile,
  resolveConfigFilePath,
  resolvePluginData,

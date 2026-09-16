@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-test('behavioral rules can be disabled through the live control-plane route', async ({ page }) => {
+test('behavioral rules apply selected-rule disable with an authoritative readback', async ({ page }) => {
   const consoleProblems: string[] = []
   const failedRequests: string[] = []
   const badResponses: string[] = []
@@ -30,9 +30,14 @@ test('behavioral rules can be disabled through the live control-plane route', as
   await expect(status).toBeVisible()
   await expect(toggle).toHaveAttribute('aria-checked', 'true')
 
+  const selectionResponsePromise = page.waitForResponse((response) =>
+    response.request().method() === 'POST'
+    && /\/api\/collections\/selection$/.test(new URL(response.url()).pathname)
+    && response.status() < 400
+  )
   const toggleResponsePromise = page.waitForResponse((response) =>
-    response.request().method() === 'PATCH'
-    && /\/api\/rules\/401\/enabled$/.test(response.url())
+    response.request().method() === 'POST'
+    && /\/api\/rules$/.test(new URL(response.url()).pathname)
     && response.status() < 400
   )
   const ruleRefreshResponsePromise = page.waitForResponse((response) =>
@@ -41,9 +46,14 @@ test('behavioral rules can be disabled through the live control-plane route', as
     && response.status() < 400
   )
   await toggle.click()
-  await toggleResponsePromise
-  const ruleRefreshResponse = await ruleRefreshResponsePromise
-  await ruleRefreshResponse.finished()
+  await selectionResponsePromise
+  const toggleResponse = await toggleResponsePromise
+  expect(await toggleResponse.json()).toMatchObject({
+    operation_state: 'completed',
+    readback: { authoritative: true, kind: 'current', current_state: { id: 401, enabled: false } },
+  })
+  await ruleRefreshResponsePromise
+  await expect(page.getByTestId('mutation-result')).toHaveAttribute('data-kind', 'committed_verified')
   await expect(toggle).toBeEnabled()
   await expect(toggle).toHaveAttribute('aria-checked', 'false')
 

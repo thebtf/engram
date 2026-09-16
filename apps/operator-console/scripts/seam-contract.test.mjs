@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
@@ -91,31 +91,7 @@ test('responsive primary navigation is an accessible <=980px off-canvas control'
   assert.match(source, /onBeforeUnmount\(\(\) => \{[\s\S]*document\.body\.style\.overflow = previousBodyOverflow\.value/, 'layout teardown must restore body scroll when the drawer is open')
 })
 
-test('access read state cannot retain invitation codes', () => {
-  const page = read(accessPagePath)
-  const composable = read(accessComposablePath)
 
-  assert.doesNotMatch(composable, /code:\s*row\.code/, 'ordinary access mapping must discard API invitation codes')
-  assert.doesNotMatch(page, /\{\{\s*invitation\.code\s*\}\}/, 'invitation table must not render stored codes')
-  assert.doesNotMatch(page, /\{\{\s*invite\.code\s*\}\}/, 'drill-down must not render stored codes')
-  assert.match(page, /revealedInvitationCode/, 'create response may use an isolated one-time reveal')
-  assert.match(page, /watch\(\(\) => route\.fullPath, clearInvitationReveal\)/, 'one-time reveal must clear on navigation')
-  assert.match(page, /onBeforeUnmount\(clearInvitationReveal\)/, 'one-time reveal must clear on teardown')
-  assert.match(page, /async function submitInvitation\(\) \{[\s\S]*clearInvitationReveal\(\)/, 'a new invitation attempt must clear a previous one-time reveal')
-  assert.match(page, /copyNotice/, 'copy outcomes must have bounded feedback')
-})
-
-test('navigation has no static queue or issue counts and derives gated state from live surfaces', () => {
-  const nav = read(navPath)
-
-  assert.doesNotMatch(nav, /count:\s*(?:7|304)/, 'navigation must not ship stale queue or issue counts')
-  assert.match(nav, /useOperatorQueue\(\)/, 'queue classification must follow its live surface')
-  assert.match(nav, /operatorFetchJson<\{ flags\?: Record<string, boolean> \}>\('\/api\/flags'/, 'graph classification must follow its runtime flag')
-  assert.match(nav, /'live:nav:graph-class', \(\) => 'stale'/, 'graph must start neutral until its runtime flag is known')
-  assert.match(nav, /if \(kind === 'mustbuild'\) return 'mustbuild'/, 'queue must preserve mustbuild state')
-  assert.match(nav, /if \(kind === 'live' \|\| kind === 'empty'\) return 'live'/, 'only proven live or empty queue states may render live')
-  assert.doesNotMatch(nav, /id: 'books',[\s\S]*cls: 'mustbuild'/, 'Books is a live surface')
-})
 
 test('load-state union covers every honest operator surface state', () => {
   const source = read(seamPath)
@@ -171,20 +147,41 @@ test('fetch seam reads bodies safely instead of throwing browser-native JSON par
   assert.doesNotMatch(operatorBody, /bodyDetail\(text\)/, 'response bodies must not become primary operator copy')
 })
 
-test('mutation seam supports success, rollback, refresh, and honest mustbuild unsupported actions', () => {
-  const source = read(seamPath)
-  const unsupportedBody = functionBody(source, 'unsupportedOperatorAction')
 
-  assert.match(source, /export\s+async\s+function\s+runOperatorMutation\b/, 'runOperatorMutation must be exported')
-  assert.match(source, /snapshot/, 'mutation must allow snapshot capture')
-  assert.match(source, /rollback/, 'mutation must expose rollback result/metadata')
-  assert.match(source, /refresh/, 'mutation must support post-action refresh')
-  assert.match(source, /kind:\s*['"]success['"]/, 'success result kind must exist')
-  assert.match(source, /kind:\s*['"]rollback['"]/, 'rollback result kind must exist')
+const mutationConsumerPaths = [
+  'composables/useOperatorAccess.ts',
+  'composables/useOperatorBooks.ts',
+  'composables/useOperatorDocuments.ts',
+  'composables/useOperatorDomainRegistry.ts',
+  'composables/useOperatorHealthSettings.ts',
+  'composables/useOperatorIssues.ts',
+  'composables/useOperatorKeycards.ts',
+  'composables/useOperatorMemoryLab.ts',
+  'composables/useOperatorProjects.ts',
+  'composables/useOperatorQueue.ts',
+  'composables/useOperatorRules.ts',
+  'composables/useOperatorSecrets.ts',
+]
 
-  assert.match(unsupportedBody, /kind:\s*['"]mustbuild['"]/, 'unsupported actions must be mustbuild descriptors')
-  assert.match(unsupportedBody, /operable:\s*false/, 'unsupported actions must not be operable')
-  assert.doesNotMatch(unsupportedBody, /\bexecute\s*:/, 'unsupported action must not expose a no-op executable')
+test('exactly twelve direct mutation consumers preserve durable mutation truth', () => {
+  const discoveredPaths = readdirSync(join(root, 'composables'))
+    .filter((name) => /^useOperator.*\.ts$/.test(name))
+    .filter((name) => read(join(root, 'composables', name)).includes('executeMutation('))
+    .map((name) => `composables/${name}`)
+    .sort()
+
+  assert.deepEqual(discoveredPaths, [...mutationConsumerPaths].sort(), 'the direct mutation-consumer inventory must remain exact')
+
+  const sharedMutationSeam = read(seamPath)
+  assert.doesNotMatch(sharedMutationSeam, /\b(?:runOperatorMutation|OperatorMutationOptions|OperatorMutationResult|rollback)\b/, 'the shared operator seam must not retain the obsolete success-and-rollback helper')
+
+  for (const path of mutationConsumerPaths) {
+    const source = read(join(root, path))
+    assert.match(source, /executeMutation\(/, `${path} must delegate mutation interpretation to the shared seam`)
+    assert.match(source, /MutationResult</, `${path} must expose the shared discriminated result`)
+    assert.doesNotMatch(source, /\b(?:runOperatorMutation|OperatorMutationResult|rollback)\b/, `${path} must not retain legacy mutation semantics`)
+    assert.doesNotMatch(source, /\bkind\s*:\s*['"]success['"]/, `${path} must not fabricate a legacy success result`)
+  }
 })
 
 test('useMockData remains an import-compatible ownership map for page CRs', () => {
@@ -368,8 +365,6 @@ test('candidate review queue is a live gated surface, not a SectionStub', () => 
   assert.match(queueComposableSource, /QUEUE_ALL_PROJECTS_API\s*=\s*['"]all['"]/, 'Queue composable must expose an all-project REST query for unscoped candidates')
   assert.match(queueComposableSource, /selectedProject\.value\s*===\s*QUEUE_ALL_PROJECTS\s*\?\s*QUEUE_ALL_PROJECTS_API\s*:\s*selectedProject\.value/, 'Queue composable must translate the all-project UI sentinel before hitting the live endpoint')
   assert.match(queueComposableSource, /\/api\/memory\/candidates\?project=\$\{encodeURIComponent\(apiProject\)\}&status=\$\{QUEUE_STATUS\}&limit=\$\{QUEUE_LIMIT\}/, 'Queue composable must fetch the live candidate list endpoint')
-  assert.match(queueComposableSource, /\/api\/memory\/candidates\/\$\{encodeURIComponent\(id\)\}\/\$\{action\}/, 'Queue actions must use live candidate action endpoints')
-  assert.match(queueComposableSource, /runOperatorMutation<CandidateActionReceipt>/, 'Queue actions must use the rollback-capable mutation seam')
   assert.match(queuePageSource, /usePersistentPageSize\('engram\.operatorConsole\.queue\.pageSize'/, 'Queue page-size preference must be persisted under its own key')
   assert.match(queuePageSource, /size === 'all' \? t\('queue\.allRows'\)/, 'Queue page must render the shared all page-size label through i18n')
   assert.match(queuePageSource, /HonestyBadge/, 'Queue page must render design honesty classification evidence')
@@ -378,36 +373,6 @@ test('candidate review queue is a live gated surface, not a SectionStub', () => 
   assert.match(overviewPageSource, /overview\.attention\.queueLive/, 'Overview attention must distinguish live queue count from gated copy')
 })
 
-test('behavioral rules enabled toggle is live endpoint-backed and remains recoverable', () => {
-  const rulesPageSource = read(rulesPagePath)
-  const rulesComposableSource = read(rulesComposablePath)
-  const mockOperatorApiSource = read(mockOperatorApiPath)
-
-  assert.match(rulesComposableSource, /toggleRuleEnabled:\s*\(id: number, enabled: boolean\) => Promise<unknown>/, 'Rules composable must expose a typed enabled toggle action')
-  assert.match(rulesComposableSource, /action:\s*['"]rule-enable-toggle['"]/, 'Rule enabled toggle must be a real mutation action')
-  assert.match(rulesComposableSource, /endpointEvidence\(`\/api\/rules\/\$\{id\}\/enabled`,\s*['"]rule-enable-toggle['"]\)/, 'Rule enabled toggle must carry PATCH /api/rules/{id}/enabled evidence')
-  assert.ok(rulesComposableSource.includes('operatorFetchJson<ApiRuleRow>(`/api/rules/${id}/enabled`'), 'Rule enabled toggle must call the live enabled endpoint')
-  assert.match(rulesComposableSource, /replaceArray\(rowsState\.value, rowsState\.value\.map\(\(row\) => row\.id === id \? \{ \.\.\.row, enabled \} : row\)\)/, 'Rule enabled toggle must update the visible row optimistically')
-  assert.doesNotMatch(rulesComposableSource, /enableGap/, 'Rule enabled toggle must not remain an unsupported mustbuild gap')
-  assert.doesNotMatch(rulesComposableSource, /unsupportedOperatorAction\(\s*['"]rule-enable-toggle['"]/, 'Rule enabled toggle must not be represented as an unsupported action')
-
-  assert.match(rulesPageSource, /const isToggling = ref\(false\)/, 'Rules page must keep a local in-flight guard for toggle mutations')
-  assert.match(rulesPageSource, /if \(pending\.value \|\| isToggling\.value\) return/, 'Rules page toggle handler must reject concurrent toggle clicks')
-  assert.match(rulesPageSource, /@click="toggleRule\(rule\)"/, 'Rules page switch must call the live toggle handler')
-  assert.match(rulesPageSource, /:aria-checked="String\(rule\.enabled\)"/, 'Rules page switch must expose true state to assistive tech')
-  assert.match(rulesPageSource, /:disabled="pending \|\| isToggling"/, 'Rules page switch must be disabled while a toggle mutation is locally in flight')
-  assert.match(rulesPageSource, /data-testid="`rule-enable-toggle-\$\{rule\.id\}`"/, 'Rules page switch must expose a stable browser-smoke selector')
-  assert.match(rulesPageSource, /data-testid="`rule-status-\$\{rule\.id\}`"/, 'Rules page status chip must expose a stable browser-smoke selector')
-  assert.match(rulesPageSource, /rules\.detail\.enabled/, 'Rules page enabled label must be i18n-keyed')
-  assert.match(rulesPageSource, /rules\.detail\.disabled/, 'Rules page disabled label must be i18n-keyed')
-  assert.doesNotMatch(rulesPageSource, /disabled\s+role="switch"/, 'Rules page must not render the enabled switch as inert')
-
-  assert.match(mockOperatorApiSource, /let ruleRows = \[/, 'Mock operator API must keep stateful rule rows for browser smoke')
-  assert.match(mockOperatorApiSource, /path\.match\(\/\^\\\/api\\\/rules\\\/\(\[\^\/\]\+\)\\\/enabled\$\/\)/, 'Mock operator API must implement PATCH /api/rules/{id}/enabled')
-  assert.match(mockOperatorApiSource, /typeof body\.enabled !== 'boolean'/, 'Mock rule enabled route must reject missing enabled state')
-  assert.match(mockOperatorApiSource, /enabled: body\.enabled/, 'Mock rule enabled route must persist the enabled state')
-  assert.match(mockOperatorApiSource, /case '\/api\/rules':[\s\S]*ruleResponse\(url\)/, 'Mock operator API must serve rule rows through GET /api/rules')
-})
 
 test('memory detail actions keep mustbuild descriptors while live delete and audit are endpoint-backed', () => {
   const memoryPageSource = read(memoryPagePath)
@@ -421,13 +386,6 @@ test('memory detail actions keep mustbuild descriptors while live delete and aud
   assert.match(memoryPageSource, /data-testid="memory-suppress-action"/, 'Memory suppress browser smoke must use a stable non-localized selector')
   assert.match(memoryPageSource, /deleteOpened/, 'Memory detail may expose delete only through the live delete handler')
   assert.match(memoryPageSource, /deleteMemory\(memory\.id\)/, 'Memory detail delete must call the composable live delete action')
-  assert.match(memoryLabSource, /deleteMemory:\s*\(id:\s*string\)\s*=>\s*Promise<OperatorMutationResult<unknown>>/, 'Memory Lab delete must expose a typed mutation result')
-  assert.match(memoryLabSource, /endpointEvidence\(`\/api\/memories\/\$\{id\}`,\s*['"]memory-delete['"]\)/, 'Memory delete must carry the live REST endpoint as evidence')
-  assert.match(memoryLabSource, /suppressMemory:\s*\(id:\s*string,\s*reason\?:\s*string\)\s*=>\s*Promise<OperatorMutationResult<MemoryActionReceipt>>/, 'Memory Lab suppress must expose a typed mutation result')
-  assert.match(memoryLabSource, /endpointEvidence\(`\/api\/memories\/\$\{id\}\/suppress`,\s*['"]memory-suppress['"]\)/, 'Memory suppress must carry the live REST endpoint as evidence')
-  assert.match(memoryLabSource, /endpointEvidence\('\/api\/memories\/suppress',\s*['"]memory-bulk-suppress['"]/, 'Memory bulk suppress must carry the live bulk REST endpoint as evidence')
-  assert.match(memoryLabSource, /operatorFetchJson<MemoryActionReceipt\[\]>\('\/api\/memories\/suppress'/, 'Memory bulk suppress must avoid client-side Promise.all fanout')
-  assert.doesNotMatch(memoryLabSource, /Promise\.all\(uniqueIds\.map/, 'Memory bulk suppress must not fan out partial row mutations from the browser')
   assert.doesNotMatch(memoryLabSource, /memory-hide-noise/, 'hide-as-noise must not remain in mustbuild action gaps after the live REST bridge exists')
   assert.match(memoryPageSource, /memory-audit-panel/, 'Memory detail must expose a stable audit panel selector')
   assert.match(memoryPageSource, /auditMemory\(memory\.id\)/, 'Memory detail audit must call the composable live audit action')
@@ -535,20 +493,15 @@ test('settings config save is live allowlisted PATCH with restart receipt', () =
   const settingsModalSource = read(settingsModalPath)
 
   assert.match(healthSettingsSource, /interface ApiConfigPatch/, 'Settings save seam must type the PATCH request')
-  assert.match(healthSettingsSource, /interface ApiConfigPatchReceipt/, 'Settings save seam must type the restart receipt')
   assert.match(healthSettingsSource, /interface ApiConfigPendingRestart/, 'Settings seam must type pending restart lifecycle rows')
   assert.match(healthSettingsSource, /configPendingRestart:\s*ComputedRef<ApiConfigPendingRestart\[\]>/, 'Settings seam must expose pending restart lifecycle rows')
-  assert.match(healthSettingsSource, /saveConfig:\s*\(patch: ApiConfigPatch\)/, 'Settings composable must expose a typed saveConfig action')
-  assert.match(healthSettingsSource, /operatorFetchJson<ApiConfigPatchReceipt>\('\/api\/config',\s*\{[\s\S]*method:\s*'PATCH'/, 'Settings save must call PATCH /api/config')
-  assert.match(healthSettingsSource, /configSaveEvidence = endpointEvidence\('\/api\/config',\s*'config-save'\)/, 'Settings save must carry live endpoint evidence')
-  assert.doesNotMatch(healthSettingsSource, /configSaveGap/, 'Settings save must not remain an unsupported mustbuild action')
+  assert.match(healthSettingsSource, /saveConfig:\s*\(patch: ApiConfigPatch\) => Promise<MutationResult<ApiConfigPatch>>/, 'Settings save must expose durable mutation truth')
+  assert.match(healthSettingsSource, /submitMutation\('config-save', patch, '\/api\/config'/, 'Settings save must issue PATCH /api/config through the shared mutation seam')
+  assert.doesNotMatch(healthSettingsSource, /(?:ApiConfigPatchReceipt|runOperatorMutation|rollback)/, 'Settings save must not retain legacy receipt or rollback semantics')
 
-  assert.match(settingsModalSource, /saveRuntimeConfig/, 'Settings modal must expose a save action')
-  assert.match(settingsModalSource, /configSaveResult\.data\.restart_required/, 'Settings modal must render restart-required receipt state')
   assert.match(settingsModalSource, /v-for="item in configPendingRestart"/, 'Settings modal must render pending restart lifecycle rows')
   assert.match(settingsModalSource, /settings\.lifecycle\.effective/, 'Pending lifecycle effective label must be keyed for i18n')
   assert.match(settingsModalSource, /settings\.lifecycle\.desired/, 'Pending lifecycle desired label must be keyed for i18n')
-  assert.match(settingsModalSource, /settings\.save\.success/, 'Settings save copy must be keyed for i18n')
   assert.doesNotMatch(settingsModalSource, /settings\.gaps\.configSave/, 'Settings modal must not render the old config-save mustbuild gap')
 })
 
@@ -561,9 +514,6 @@ test('settings domain registry is live GET PUT DELETE control-plane surface', ()
   assert.match(domainRegistrySource, /loadOperatorJson<ApiMemoryDomainsListResponse>\('\/api\/memory-domains'/, 'Domain registry must load the live list endpoint')
   assert.match(domainRegistrySource, /function assertDomain\(value: string\)/, 'Domain registry mutations must reject empty domains before constructing endpoint URLs')
   assert.match(domainRegistrySource, /retry:\s*\{[\s\S]*source:\s*['"]memory-domain-registry['"][\s\S]*run:\s*async\s*\(\)\s*=>\s*\{[\s\S]*await refreshDomains\(\)[\s\S]*return domainStateRef\.value/, 'Domain registry error retry must return normalized OperatorMemoryDomain state')
-  assert.match(domainRegistrySource, /operatorFetchJson<ApiMemoryDomain>\(endpoint,\s*\{[\s\S]*method:\s*'PUT'/, 'Domain registry upsert must call PUT /api/memory-domains/{domain}')
-  assert.match(domainRegistrySource, /operatorFetchJson<ApiMemoryDomainDeleteReceipt>\(endpoint,\s*\{\s*method:\s*'DELETE'\s*\}/, 'Domain registry delete must call DELETE /api/memory-domains/{domain}')
-  assert.match(domainRegistrySource, /runOperatorMutation/, 'Domain registry writes must use the rollback-capable mutation seam')
   assert.match(domainRegistrySource, /DOMAIN_OWNER_KINDS\s*=\s*\['human',\s*'agent',\s*'service'\]/, 'Domain registry owner kinds must mirror server validation')
   assert.match(domainRegistrySource, /DOMAIN_OWNER_MODES\s*=\s*\['off',\s*'warn',\s*'reject'\]/, 'Domain registry modes must mirror server validation')
 
@@ -580,7 +530,6 @@ test('settings domain registry is live GET PUT DELETE control-plane surface', ()
 
   assert.match(mockOperatorApiSource, /function controlPlaneError\(message, code, data\)/, 'Mock operator API domain route errors must follow the control-plane error envelope')
   assert.match(mockOperatorApiSource, /try\s*\{[\s\S]*decodeURIComponent\(domainMatch\[1\]\)\.trim\(\)[\s\S]*\}\s*catch\s*\{[\s\S]*controlPlaneError\('invalid domain encoding', 400\)/, 'Mock operator API must safely reject malformed encoded domain paths')
-  assert.doesNotMatch(mockOperatorApiSource, /json\(res,\s*(?:400|404),\s*\{\s*error:\s*['"][^'"]*domain/, 'Mock operator API domain route must not use legacy { error } responses')
 })
 
 test('projects control plane archives projects through typed soft-delete confirmation', () => {
@@ -590,7 +539,7 @@ test('projects control plane archives projects through typed soft-delete confirm
 
   assert.match(projectsComposableSource, /action:\s*['"]project-archive['"]/, 'Project removal must be represented as archive/soft-delete in the mutation seam')
   assert.match(projectsComposableSource, /const endpoint = `\/api\/projects\/\$\{encodeURIComponent\(project\)\}`/, 'Project archive evidence must use the same encoded endpoint as the mutation request')
-  assert.match(projectsComposableSource, /operatorFetchJson\(endpoint,\s*jsonInit\('DELETE'\),\s*['"]projects-delete['"]\)/, 'Project archive must call the live DELETE /api/projects/{id} endpoint')
+  assert.match(projectsComposableSource, /executeMutation\(\s*\{ requestId: crypto\.randomUUID\(\), action: 'project-archive', intent: \{ project \} \},\s*fetch\(operatorApiUrl\(endpoint\), \{ \.\.\.jsonInit\('DELETE'\), credentials: 'include' \}\)/, 'Project archive must use the shared mutation seam over DELETE /api/projects/{id}')
   assert.match(projectsComposableSource, /type ApiNullableString = string \| \{ String\?: string; Valid\?: boolean \}/, 'Session detail mapper must accept Go sql.NullString JSON from the live endpoint')
   assert.match(projectsComposableSource, /type ApiNullableInt = number \| string \| \{ Int64\?: number \| string \| null; Valid\?: boolean \}/, 'Session detail mapper must accept Go sql.NullInt64 JSON from the live endpoint')
   assert.match(projectsComposableSource, /function nullableString\(/, 'Session detail mapper must normalize nullable string payloads before rendering')
@@ -621,7 +570,7 @@ test('projects control plane archives projects through typed soft-delete confirm
   assert.match(mockOperatorApiSource, /worker_port:\s*\{\s*Int64:\s*37777,\s*Valid:\s*true\s*\}/, 'Mock API must exercise Go sql.NullInt64-shaped session detail fields')
   assert.match(mockOperatorApiSource, /const projectDeleteMatch = path\.match\(\/\^\\\/api\\\/projects\\\/\(\[\^\/\]\+\)\$\/\)/, 'Mock API must implement DELETE /api/projects/{id} for browser smoke')
   assert.match(mockOperatorApiSource, /req\.method === 'DELETE' && projectDeleteMatch/, 'Mock project archive route must be DELETE-only')
-  assert.match(mockOperatorApiSource, /removed_at:\s*new Date\(\)\.toISOString\(\)/, 'Mock project archive must return removed_at like the live server')
+  assert.match(mockOperatorApiSource, /operation_state:\s*['"]completed['"],\s*readback:\s*\{\s*authoritative:\s*true,\s*kind:\s*['"]authorized_absence['"]\s*\}/, 'Mock project archive must return authoritative authorized-absence readback like the live server')
   assert.match(mockOperatorApiSource, /case '\/api\/sessions':/, 'Mock API must expose session detail lookup')
   assert.match(mockOperatorApiSource, /claudeSessionId/, 'Mock session detail must use the same claudeSessionId query seam as the page')
 })

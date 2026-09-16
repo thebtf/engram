@@ -10,9 +10,12 @@ const {
   configuredEnvValue,
   describeConfigFile,
   describeEnvValue,
+  formatHap01bDiagnostic,
   formatStartupDiagnostic,
   inferCodexPluginDataDir,
   isConfiguredValue,
+  isInvalidHap01bConfig,
+  parseHap01bConfig,
   readEngramConfigFile,
   resolveConfigFilePath,
   resolvePluginData,
@@ -307,6 +310,156 @@ test("child environment drops the server-only operator token", () => {
   );
 });
 
+test("HAP-01B config is normalized, immutable, and applied only to the child", () => {
+  const raw = validHap01bConfig({
+    project_tokens: {
+      "00000000-0000-0000-0000-000000000002": `engram_${"2".repeat(32)}`,
+      "00000000-0000-0000-0000-000000000001": `engram_${"1".repeat(32)}`,
+    },
+  });
+  const sourceProjectTokens = { ...raw.project_tokens };
+  const normalized = parseHap01bConfig(raw);
+
+  assert.ok(normalized);
+  assert.deepEqual(Object.keys(normalized.project_tokens), [
+    "00000000-0000-0000-0000-000000000001",
+    "00000000-0000-0000-0000-000000000002",
+  ]);
+  assert.ok(Object.isFrozen(normalized));
+  assert.ok(Object.isFrozen(normalized.project_tokens));
+  assert.deepEqual(raw.project_tokens, sourceProjectTokens, "normalization must not mutate caller input");
+
+  const inherited = {
+    ENGRAM_TOKEN: "base-keycard",
+    ENGRAM_URL: "https://engram.example.test/mcp",
+    ENGRAM_AUTH_ADMIN_TOKEN: "operator-secret",
+    ENGRAM_HAP_01B_RELAY_ENABLED: "false",
+    ENGRAM_HAP_01B_RELAY_REVISION: "stale",
+    ENGRAM_HAP_01B_LEGACY_DIRECT_ENFORCEMENT: "true",
+    ENGRAM_HAP_01B_ADAPTER_SHA256: "stale",
+    ENGRAM_HAP_01B_REGISTRATION_TOKEN: "stale",
+    engram_auth_admin_token: "lowercase-operator-secret",
+    Engram_Hap_01B_Relay_Enabled: "mixed-case-stale",
+    ENGRAM_HAP_01B_UNRECOGNIZED: "unknown-stale",
+    ENGRAM_HAP_01B_PROJECT_TOKENS_JSON: "{\"stale\":true}",
+  };
+  const child = childEnvForEngram(inherited, normalized);
+
+  assert.equal(inherited.ENGRAM_HAP_01B_RELAY_ENABLED, "false", "helper must not mutate source env");
+  assert.equal(child.ENGRAM_TOKEN, "base-keycard");
+  assert.equal(child.ENGRAM_URL, "https://engram.example.test/mcp");
+  assert.equal(Object.keys(child).some((key) => key.toUpperCase() === "ENGRAM_AUTH_ADMIN_TOKEN"), false);
+  assert.equal(Object.keys(child).some((key) => key.toUpperCase().startsWith("ENGRAM_HAP_01B_") && !key.startsWith("ENGRAM_HAP_01B_")), false);
+  assert.equal(child.ENGRAM_AUTH_ADMIN_TOKEN, undefined);
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(child).filter(([key]) => key.startsWith("ENGRAM_HAP_01B_"))),
+    {
+      ENGRAM_HAP_01B_RELAY_ENABLED: "true",
+      ENGRAM_HAP_01B_RELAY_REVISION: "omp-hap-01b/1",
+      ENGRAM_HAP_01B_LEGACY_DIRECT_ENFORCEMENT: "false",
+      ENGRAM_HAP_01B_ADAPTER_SHA256: "a".repeat(64),
+      ENGRAM_HAP_01B_REGISTRATION_TOKEN: `engram_${"b".repeat(32)}`,
+      ENGRAM_HAP_01B_PROJECT_TOKENS_JSON: JSON.stringify({
+        "00000000-0000-0000-0000-000000000001": `engram_${"1".repeat(32)}`,
+        "00000000-0000-0000-0000-000000000002": `engram_${"2".repeat(32)}`,
+      }),
+    }
+  );
+});
+
+test("HAP-01B inherited credentials are stripped when config is absent", () => {
+  const child = childEnvForEngram({
+    ENGRAM_TOKEN: "base-keycard",
+    ENGRAM_HAP_01B_RELAY_ENABLED: "true",
+    ENGRAM_HAP_01B_RELAY_REVISION: "omp-hap-01b/1",
+    ENGRAM_HAP_01B_LEGACY_DIRECT_ENFORCEMENT: "true",
+    ENGRAM_HAP_01B_ADAPTER_SHA256: "a".repeat(64),
+    ENGRAM_HAP_01B_REGISTRATION_TOKEN: `engram_${"b".repeat(32)}`,
+    engram_auth_admin_token: "lowercase-operator-secret",
+    Engram_Hap_01B_Relay_Revision: "mixed-case-stale",
+    ENGRAM_HAP_01B_UNRECOGNIZED: "unknown-stale",
+    ENGRAM_HAP_01B_PROJECT_TOKENS_JSON: "{}",
+  });
+
+  assert.deepEqual(child, { ENGRAM_TOKEN: "base-keycard" });
+});
+
+test("HAP-01B parser rejects every malformed nested block", () => {
+  const cases = [
+    ["unknown field", { extra: true }],
+    ["missing field", { relay_enabled: undefined }],
+    ["bad revision", { relay_revision: "omp-hap-01b/2" }],
+    ["bad relay enabled", { relay_enabled: false }],
+    ["bad enforcement type", { legacy_direct_enforcement: "false" }],
+    ["bad SHA", { adapter_sha256: "A".repeat(64) }],
+    ["bad registration token", { registration_token: `engram_${"g".repeat(32)}` }],
+    ["noncanonical project key", { project_tokens: { "00000000-0000-0000-0000-00000000000A": `engram_${"1".repeat(32)}` } }],
+    ["bad project token", { project_tokens: { "00000000-0000-0000-0000-000000000001": "not-a-keycard" } }],
+    ["empty project map", { project_tokens: {} }],
+    ["non-object project map", { project_tokens: [] }],
+    ["oversize project map", { project_tokens: oversizedProjectTokens() }],
+  ];
+
+  for (const [name, overrides] of cases) {
+    assert.equal(parseHap01bConfig(validHap01bConfig(overrides)), null, name);
+  }
+  const missingField = validHap01bConfig();
+  delete missingField.relay_enabled;
+  assert.equal(parseHap01bConfig(missingField), null, "missing field");
+  const uppercaseHex = parseHap01bConfig(validHap01bConfig({
+    registration_token: `engram_${"A".repeat(32)}`,
+    project_tokens: { "00000000-0000-0000-0000-000000000001": `engram_${"B".repeat(32)}` },
+  }));
+  assert.ok(uppercaseHex, "keycard hex acceptance must mirror Go hex.DecodeString");
+});
+
+
+test("HAP-01B config file distinguishes absent, valid, and invalid blocks without diagnostic leaks", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-hap-01b-"));
+  const cfPath = path.join(tmpDir, "config.json");
+  const registrationToken = `engram_${"b".repeat(32)}`;
+  const projectKey = "00000000-0000-0000-0000-000000000001";
+  const projectToken = `engram_${"1".repeat(32)}`;
+  try {
+    fs.writeFileSync(cfPath, JSON.stringify({ server_url: "http://cfg.test", api_token: "base-keycard" }), "utf8");
+    const absent = readEngramConfigFile(cfPath);
+    assert.equal(absent.hap_01b, undefined);
+    assert.equal(isInvalidHap01bConfig(absent), false);
+    assert.equal(formatHap01bDiagnostic(absent), "hap_01b=absent");
+
+    fs.writeFileSync(cfPath, JSON.stringify({
+      server_url: "http://cfg.test",
+      api_token: "base-keycard",
+      hap_01b: validHap01bConfig(),
+    }), "utf8");
+    const valid = readEngramConfigFile(cfPath);
+    assert.equal(valid.server_url, "http://cfg.test");
+    assert.equal(valid.api_token, "base-keycard");
+    assert.ok(valid.hap_01b);
+    assert.equal(isInvalidHap01bConfig(valid), false);
+
+    const diagnostic = formatStartupDiagnostic({}, cfPath, valid);
+    assert.match(diagnostic, /hap_01b=present\(relay_enabled=true,relay_revision_len=13,legacy_direct_enforcement=false,adapter_sha256_len=64,registration_token_len=39,project_token_count=1\)/);
+    assert.doesNotMatch(diagnostic, new RegExp(registrationToken));
+    assert.doesNotMatch(diagnostic, new RegExp(projectToken));
+    assert.doesNotMatch(diagnostic, new RegExp(projectKey));
+
+    fs.writeFileSync(cfPath, JSON.stringify({
+      server_url: "http://cfg.test",
+      api_token: "base-keycard",
+      hap_01b: { relay_enabled: true },
+    }), "utf8");
+    const invalid = readEngramConfigFile(cfPath);
+    assert.equal(invalid.server_url, "http://cfg.test");
+    assert.equal(invalid.api_token, "base-keycard");
+    assert.equal(invalid.hap_01b, undefined);
+    assert.equal(isInvalidHap01bConfig(invalid), true);
+    assert.equal(formatHap01bDiagnostic(invalid), "hap_01b=invalid");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("resolvePluginRoot ignores unresolved placeholder values", () => {
   const previousPluginRoot = process.env.PLUGIN_ROOT;
   const previousClaudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
@@ -560,6 +713,36 @@ function restoreEnv(key, value) {
   process.env[key] = value;
 }
 
+function validHap01bConfig(overrides = {}) {
+  return {
+    relay_enabled: true,
+    relay_revision: "omp-hap-01b/1",
+    legacy_direct_enforcement: false,
+    adapter_sha256: "a".repeat(64),
+    registration_token: `engram_${"b".repeat(32)}`,
+    project_tokens: { "00000000-0000-0000-0000-000000000001": `engram_${"1".repeat(32)}` },
+    ...overrides,
+  };
+}
+
+function oversizedProjectTokens() {
+  return Object.fromEntries(
+    Array.from({ length: 257 }, (_, index) => [
+      `00000000-0000-0000-0000-${index.toString(16).padStart(12, "0")}`,
+      `engram_${(index % 16).toString(16).repeat(32)}`,
+    ])
+  );
+}
+
 function expandMcpArgsForTest(args, pluginRoot) {
   return args.map((arg) => arg.replace("${CLAUDE_PLUGIN_ROOT}", pluginRoot.replaceAll("\\", "/")));
 }
+
+test("HAP-01 source diagnostic keeps launcher credential resolution out of installed proof", () => {
+  const source = fs.readFileSync(path.join(__dirname, "run-engram.js"), "utf8");
+  assert.match(source, /"ENGRAM_TOKEN"/);
+  assert.match(source, /configFile\.api_token/);
+  assert.match(source, /process\.env\.ENGRAM_TOKEN = token/);
+  assert.match(source, /childEnvForEngram\(process\.env, configFile\?\.hap_01b\)/);
+  assert.match(source, /ENGRAM_HAP_01B_REGISTRATION_TOKEN/);
+});

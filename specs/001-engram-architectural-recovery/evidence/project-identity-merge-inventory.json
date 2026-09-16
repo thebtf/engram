@@ -1,0 +1,408 @@
+{
+  "schema_version": "ar0.project-identity-merge-inventory.v1",
+  "scope": "Current-source identity algorithms, known divergences, and AR-3 merge-planning boundaries. No merge group, deployed selector, payload value, secret, database row, or cache entry was read.",
+  "source_truth_boundary": "This is a source-fresh algorithm inventory, not proof that any live selectors are equivalent. AR-1 supplies the redacted read-only baseline; AR-3 applies only operator-approved merge manifests.",
+  "counts": {
+    "confirmed_identity_algorithms": 6,
+    "confirmed_divergences": 5,
+    "evidence_hierarchy_levels": 6,
+    "conflict_classes": 8,
+    "quarantine_boundaries": 5
+  },
+  "confirmed_identity_algorithms": [
+    {
+      "id": "go-legacy-slug",
+      "algorithm": "ResolveProjectSlug derives a compatibility git slug from normalized origin remote plus repository-relative path; it uses a short SHA-256 prefix. The no-remote path derives a short SHA-256 prefix from absolute cwd and may use the legacy anchor file to stabilize the non-git slug.",
+      "disposition": "compatibility-temporary",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/proxy/identity.go:292-380",
+        "internal/proxy/identity.go:382-445"
+      ],
+      "target_release": "AR-3",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for identity-migration"
+    },
+    {
+      "id": "go-v2-descriptor",
+      "algorithm": "ResolveProjectIdentityV2 emits exactly one validated identity source: normalized git remote plus relative path, or a random V2 non-git anchor with explicit shared-state presence. It retains a path-derived legacy selector for compatibility transport.",
+      "disposition": "compatibility-temporary",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/proxy/identity.go:35-172",
+        "internal/db/gorm/project_store.go:362-437"
+      ],
+      "target_release": "AR-3",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for identity-migration"
+    },
+    {
+      "id": "server-v2-registration",
+      "algorithm": "RegisterAndResolve validates before tenant data access; locks selector and binding identities transactionally; resolves a binding or matching git identity; otherwise creates or binds a projects row and appends owned aliases under the V2 rules.",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/project_store.go:108-292",
+        "internal/db/gorm/project_store.go:439-617"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "server-v2-binding-key",
+      "algorithm": "The server derives p2g or p2n binding keys from a SHA-256 digest of versioned identity source material. Private non-git anchors add legacy selector scope to prevent cross-workspace convergence.",
+      "disposition": "compatibility-temporary",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/project_store.go:416-437"
+      ],
+      "target_release": "AR-3",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for identity-migration"
+    },
+    {
+      "id": "claude-hook-v2",
+      "algorithm": "The hook derives a short SHA-256 compatibility slug from origin remote plus relative path, builds and validates a V2 descriptor, and registers it before project-scoped requests. It stores session-start cache entries by a sanitized selector-derived filename.",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "plugin/engram/hooks/lib.js:382-490",
+        "plugin/engram/hooks/lib.js:519-623",
+        "plugin/engram/hooks/session-start.js:403-452"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "openclaw-v2",
+      "algorithm": "The OpenClaw plugin computes a compatibility ID from origin remote plus relative path, builds a V2 descriptor for a workspace, and uses registration caches to coalesce first project-scoped registration requests.",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "plugin/openclaw-engram/src/identity.ts:229-345",
+        "plugin/openclaw-engram/src/client.ts:250-285"
+      ],
+      "target_release": "AR-3"
+    }
+  ],
+  "confirmed_divergences": [
+    {
+      "id": "openclaw-legacy-git-slug-format",
+      "finding": "Go and the Claude hook use a pure short hash for the git compatibility slug, while OpenClaw prefixes its short hash with a repository-name component.",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/proxy/identity.go:296-326",
+        "plugin/engram/hooks/lib.js:397-406",
+        "plugin/openclaw-engram/src/identity.ts:249-259"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "legacy-anchor-support",
+      "finding": "The Go legacy slug resolver reads or creates the legacy anchor file and can use its non-git stored identity; OpenClaw's legacy ID path derives from resolved workspace path and its V2 route uses a separate V2 anchor file.",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/proxy/identity.go:340-380",
+        "plugin/openclaw-engram/src/identity.ts:277-345"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "git-timeout-policy",
+      "finding": "Go bounds its two Git calls with one five-second context; the Claude hook and OpenClaw use three-second command timeouts, with the hook asynchronous variant accepting a configurable timeout.",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/proxy/identity.go:382-438",
+        "plugin/engram/hooks/lib.js:388-410",
+        "plugin/engram/hooks/lib.js:443-477",
+        "plugin/openclaw-engram/src/identity.ts:233-268"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "legacy-cache-fallback-versus-v2-fail-closed",
+      "finding": "The muxcore compatibility slug cache falls back to its host project ID if legacy slug resolution errors, whereas V2 identity resolution returns the failure to the caller rather than minting a fallback descriptor.",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/handlers/engramcore/slugcache.go:48-95"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "session-start-cache-key-split",
+      "finding": "The Claude session-start cache may key by the outer ProjectSelector while its live fetch and emitted records use the registered Project. This is not a canonical identity contract.",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "plugin/engram/hooks/lib.js:900-907",
+        "plugin/engram/hooks/session-start.js:409-452"
+      ],
+      "target_release": "AR-3"
+    }
+  ],
+  "merge_evidence_hierarchy": [
+    {
+      "rank": 1,
+      "evidence_kind": "identical V3 anchor",
+      "authorization": "authorizes merge when validated and unique",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        ".agent/intake/engram-architectural-recovery-2026-08-21-r1/06-PROJECT-IDENTITY-V3.md:109-121"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "rank": 2,
+      "evidence_kind": "explicit operator-approved merge",
+      "authorization": "authorizes the named merge group with recorded decision",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        ".agent/intake/engram-architectural-recovery-2026-08-21-r1/06-PROJECT-IDENTITY-V3.md:109-121"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "rank": 3,
+      "evidence_kind": "identical validated V2 non-git anchor with compatible sharing semantics",
+      "authorization": "authorizes merge only after compatibility validation",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        ".agent/intake/engram-architectural-recovery-2026-08-21-r1/06-PROJECT-IDENTITY-V3.md:111-119",
+        "internal/db/gorm/project_store.go:362-437"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "rank": 4,
+      "evidence_kind": "identical normalized Git remote plus audited repository lineage",
+      "authorization": "authorizes merge only with lineage audit",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        ".agent/intake/engram-architectural-recovery-2026-08-21-r1/06-PROJECT-IDENTITY-V3.md:111-119",
+        "internal/proxy/identity.go:123-172"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "rank": 5,
+      "evidence_kind": "legacy migration maps corroborated by row provenance and filesystem evidence",
+      "authorization": "requires corroboration and a recorded merge manifest",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        ".agent/intake/engram-architectural-recovery-2026-08-21-r1/06-PROJECT-IDENTITY-V3.md:111-119",
+        "internal/db/gorm/migrations.go:2373-2468",
+        "internal/db/gorm/migrations.go:2593-2691"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "rank": 6,
+      "evidence_kind": "name or path similarity",
+      "authorization": "may suggest a candidate but never authorizes a merge",
+      "disposition": "quarantine-pending-proof",
+      "owner": "identity-migration",
+      "evidence": [
+        ".agent/intake/engram-architectural-recovery-2026-08-21-r1/06-PROJECT-IDENTITY-V3.md:111-121"
+      ],
+      "target_release": "AR-3",
+      "closure_rule": "A redacted inventory/fixture resolves the uncertainty into keep, move, delete, or explicitly approved compatibility; no identity, payload, or privacy inference may close this entry.",
+      "closure_verifier": "independent migration/data-integrity verifier for identity-migration"
+    }
+  ],
+  "conflict_classes": [
+    {
+      "id": "equivalent-row",
+      "policy": "Deduplicate by stable content and provenance fingerprint while retaining evidence links.",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "specs/001-engram-architectural-recovery/data-model.md:233-245"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "same-external-id-different-content",
+      "policy": "Preserve distinct revisions or create a conflict; do not silently discard either row.",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "specs/001-engram-architectural-recovery/data-model.md:233-245"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "current-state-conflict",
+      "policy": "Select newest causally valid state and retain the older state as history; timestamp alone is insufficient.",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "specs/001-engram-architectural-recovery/data-model.md:233-245"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "settings-conflict",
+      "policy": "Carry identical or one-sided fields; record an explicit winner for contradiction.",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "specs/001-engram-architectural-recovery/data-model.md:233-245"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "credential-conflict",
+      "policy": "Compare metadata only; require operator action for competing sealed secret material.",
+      "disposition": "quarantine-pending-proof",
+      "owner": "identity-migration",
+      "evidence": [
+        "specs/001-engram-architectural-recovery/data-model.md:233-245",
+        "internal/db/gorm/models.go:203-221"
+      ],
+      "target_release": "AR-3",
+      "closure_rule": "A redacted inventory/fixture resolves the uncertainty into keep, move, delete, or explicitly approved compatibility; no identity, payload, or privacy inference may close this entry.",
+      "closure_verifier": "independent migration/data-integrity verifier for identity-migration"
+    },
+    {
+      "id": "issue-document-collision",
+      "policy": "Namespace or report the collision and preserve native identifiers and provenance.",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "specs/001-engram-architectural-recovery/data-model.md:233-245"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "cross-project-relation",
+      "policy": "Rewrite only after both endpoints have canonical project keys.",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "specs/001-engram-architectural-recovery/data-model.md:233-245",
+        "internal/db/gorm/migrations.go:3593-3615"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "privacy-principal-conflict",
+      "policy": "Choose equal or stricter scope; any widening requires explicit authorization.",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "specs/001-engram-architectural-recovery/data-model.md:233-245"
+      ],
+      "target_release": "AR-3"
+    }
+  ],
+  "unresolved_quarantine_boundaries": [
+    {
+      "id": "live-selector-fragmentation",
+      "boundary": "AR-0 cannot establish which current deployed selectors refer to one logical project.",
+      "disposition": "quarantine-pending-proof",
+      "owner": "identity-migration",
+      "evidence": [
+        "specs/001-engram-architectural-recovery/research.md:25-27",
+        "specs/001-engram-architectural-recovery/research.md:87-113"
+      ],
+      "target_release": "AR-3",
+      "required_proof": "AR-1 redacted read-only selector and row baseline; AR-3 operator-approved merge manifest.",
+      "closure_rule": "A redacted inventory/fixture resolves the uncertainty into keep, move, delete, or explicitly approved compatibility; no identity, payload, or privacy inference may close this entry.",
+      "closure_verifier": "independent migration/data-integrity verifier for identity-migration"
+    },
+    {
+      "id": "unknown-serialized-identifiers",
+      "boundary": "Unconstrained JSON and historical payload bodies may embed selectors not declared by current source.",
+      "disposition": "quarantine-pending-proof",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/snapshot_store.go:18-35",
+        "internal/db/gorm/state_store.go:20-72"
+      ],
+      "target_release": "AR-3",
+      "required_proof": "AR-1 redacted payload-shape inventory; no inference from payload content.",
+      "closure_rule": "A redacted inventory/fixture resolves the uncertainty into keep, move, delete, or explicitly approved compatibility; no identity, payload, or privacy inference may close this entry.",
+      "closure_verifier": "independent migration/data-integrity verifier for identity-migration"
+    },
+    {
+      "id": "historical-reasoning-traces",
+      "boundary": "A historical migration rewrites reasoning_traces.project, but current source does not prove a live table or deployed rows.",
+      "disposition": "quarantine-pending-proof",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/migrations.go:2663-2684",
+        "internal/db/gorm/models.go:162-164"
+      ],
+      "target_release": "AR-3",
+      "required_proof": "AR-1 schema and redacted row-liveness inspection.",
+      "closure_rule": "A redacted inventory/fixture resolves the uncertainty into keep, move, delete, or explicitly approved compatibility; no identity, payload, or privacy inference may close this entry.",
+      "closure_verifier": "independent migration/data-integrity verifier for identity-migration"
+    },
+    {
+      "id": "anchor-copy-and-fork",
+      "boundary": "A copied or forked anchor must not be treated as merge authority without explicit decision evidence.",
+      "disposition": "quarantine-pending-proof",
+      "owner": "identity-migration",
+      "evidence": [
+        "specs/001-engram-architectural-recovery/spec.md:24-34",
+        ".agent/intake/engram-architectural-recovery-2026-08-21-r1/06-PROJECT-IDENTITY-V3.md:175-183"
+      ],
+      "target_release": "AR-3",
+      "required_proof": "Validated V3 anchor lineage or explicit operator-approved merge decision before mutation.",
+      "closure_rule": "A redacted inventory/fixture resolves the uncertainty into keep, move, delete, or explicitly approved compatibility; no identity, payload, or privacy inference may close this entry.",
+      "closure_verifier": "independent migration/data-integrity verifier for identity-migration"
+    },
+    {
+      "id": "credential-secret-material",
+      "boundary": "Competing credential material cannot be compared or emitted as payload evidence.",
+      "disposition": "quarantine-pending-proof",
+      "owner": "identity-migration",
+      "evidence": [
+        "specs/001-engram-architectural-recovery/data-model.md:224-227",
+        "specs/001-engram-architectural-recovery/data-model.md:233-245"
+      ],
+      "target_release": "AR-3",
+      "required_proof": "Operator resolution using metadata-only comparison; sealed values remain unread and absent from receipts.",
+      "closure_rule": "A redacted inventory/fixture resolves the uncertainty into keep, move, delete, or explicitly approved compatibility; no identity, payload, or privacy inference may close this entry.",
+      "closure_verifier": "independent migration/data-integrity verifier for identity-migration"
+    }
+  ],
+  "merge_execution_invariants": {
+    "disposition": "move-and-reshape",
+    "owner": "identity-migration",
+    "evidence": [
+      ".agent/intake/engram-architectural-recovery-2026-08-21-r1/06-PROJECT-IDENTITY-V3.md:136-151",
+      ".agent/intake/engram-architectural-recovery-2026-08-21-r1/10-DELIVERY-PROGRAM.md:62-79"
+    ],
+    "target_release": "AR-3",
+    "requirements": [
+      "Inventory and normalize identifiers before business-row mutation.",
+      "Use an accepted dry-run manifest with per-family counts, conflict dispositions, and redacted fingerprints.",
+      "Backfill unresolved rows into a visible quarantine ledger rather than guessing from names or paths.",
+      "Use transactional or restartable bounded batches with an idempotency key.",
+      "Verify counts, provenance, privacy, null rates, and referential integrity before authoritative cutover.",
+      "Keep redirects, merge audit, backup reference, and rollback read boundary through the observation release."
+    ]
+  },
+  "entry_closure_contract": {
+    "applies_to": [
+      "compatibility-temporary",
+      "quarantine-pending-proof"
+    ],
+    "required_fields": [
+      "owner",
+      "evidence",
+      "target_release",
+      "closure_rule",
+      "closure_verifier"
+    ],
+    "zero_evidence_rule": "A target release, calendar date, empty denominator, or silent absence never closes an entry."
+  }
+}

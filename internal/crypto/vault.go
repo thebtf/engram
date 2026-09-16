@@ -5,12 +5,15 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +27,22 @@ type Vault struct {
 	key         []byte // 32 bytes for AES-256
 	fingerprint string // SHA-256(key)[:16] hex
 	source      string // how the key was loaded: "env", "file", "auto_generated"
+}
+
+const vaultKeyDerivationContext = "engram.crypto.vault-derive/v1\x00"
+
+// VaultKeyUnavailableError reports that an existing vault key was absent when opened.
+// Its wrapped cause permits callers to retain ordinary not-found classification.
+type VaultKeyUnavailableError struct {
+	cause error
+}
+
+func (e *VaultKeyUnavailableError) Error() string {
+	return "vault key unavailable"
+}
+
+func (e *VaultKeyUnavailableError) Unwrap() error {
+	return e.cause
 }
 
 // NewVault creates a Vault by loading or generating the encryption key.
@@ -56,12 +75,7 @@ func NewVault(cfg *config.Config) (*Vault, error) {
 		return &Vault{key: key, fingerprint: computeFingerprint(key), source: "file"}, nil
 
 	default:
-		// Prefer /data/vault.key (Docker persistent volume) over ~/.engram/vault.key.
-		// This prevents key loss when containers are recreated.
-		keyFile := filepath.Join(config.DataDir(), "vault.key")
-		if altDir := "/data"; isDir(altDir) {
-			keyFile = filepath.Join(altDir, "vault.key")
-		}
+		keyFile := defaultVaultKeyFile()
 		if _, statErr := os.Stat(keyFile); statErr == nil {
 			key, err = loadKeyFromFile(keyFile)
 			if err != nil {
@@ -79,7 +93,7 @@ func NewVault(cfg *config.Config) (*Vault, error) {
 			if _, err = io.ReadFull(rand.Reader, key); err != nil {
 				return nil, fmt.Errorf("generate encryption key: %w", err)
 			}
-			if err = os.MkdirAll(filepath.Dir(keyFile), 0700); err != nil {
+			if err = os.MkdirAll(filepath.Dir(keyFile), 0o700); err != nil {
 				return nil, fmt.Errorf("create key directory %q: %w", filepath.Dir(keyFile), err)
 			}
 			if err = saveKeyToFile(keyFile, key); err != nil {
@@ -91,6 +105,60 @@ func NewVault(cfg *config.Config) (*Vault, error) {
 			return &Vault{key: key, fingerprint: computeFingerprint(key), source: "auto_generated"}, nil
 		}
 	}
+}
+
+// OpenExistingVault loads only already-existing vault key material.
+// Unlike NewVault, it never creates a key, directory, or file.
+func OpenExistingVault(cfg *config.Config) (*Vault, error) {
+	return openExistingVault(cfg, defaultVaultKeyFile, loadKeyFromFile)
+}
+
+// openExistingVault admits injectable filesystem operations only to model a
+// key file disappearing between path resolution and the single attempted read.
+func openExistingVault(
+	cfg *config.Config,
+	defaultKeyFile func() string,
+	loadKey func(string) ([]byte, error),
+) (*Vault, error) {
+	var key []byte
+	var err error
+
+	switch {
+	case cfg.EncryptionKey != "":
+		key, err = hex.DecodeString(cfg.EncryptionKey)
+		if err != nil {
+			return nil, fmt.Errorf("decode ENGRAM_ENCRYPTION_KEY: %w", err)
+		}
+		if len(key) != 32 {
+			return nil, fmt.Errorf("ENGRAM_ENCRYPTION_KEY must be 32 bytes (64 hex chars), got %d bytes", len(key))
+		}
+		log.Info().Msg("vault: loaded existing key from ENGRAM_ENCRYPTION_KEY env var")
+		return &Vault{key: key, fingerprint: computeFingerprint(key), source: "env"}, nil
+
+	case cfg.EncryptionKeyFile != "":
+		key, err = loadKey(cfg.EncryptionKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load configured vault key: %w", existingVaultLoadError(err))
+		}
+		log.Info().Str("file", cfg.EncryptionKeyFile).Msg("vault: loaded existing key from file")
+		return &Vault{key: key, fingerprint: computeFingerprint(key), source: "file"}, nil
+
+	default:
+		keyFile := defaultKeyFile()
+		key, err = loadKey(keyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load existing vault key: %w", existingVaultLoadError(err))
+		}
+		log.Info().Str("file", keyFile).Msg("vault: loaded existing auto-generated key")
+		return &Vault{key: key, fingerprint: computeFingerprint(key), source: "auto_generated"}, nil
+	}
+}
+
+func existingVaultLoadError(err error) error {
+	if errors.Is(err, fs.ErrNotExist) {
+		return &VaultKeyUnavailableError{cause: err}
+	}
+	return err
 }
 
 // Encrypt encrypts plaintext using AES-256-GCM.
@@ -150,6 +218,22 @@ func (v *Vault) Fingerprint() string {
 	return v.fingerprint
 }
 
+// DeriveKey returns a domain-separated HMAC-SHA256 key without exposing the master key.
+func (v *Vault) DeriveKey(domain string) [32]byte {
+	mac := hmac.New(sha256.New, v.key)
+	_, _ = mac.Write([]byte(vaultKeyDerivationContext))
+	_, _ = mac.Write([]byte(domain))
+
+	var key [32]byte
+	copy(key[:], mac.Sum(nil))
+	return key
+}
+
+// KeyCommitment returns the full SHA-256 commitment to the private master key.
+func (v *Vault) KeyCommitment() [32]byte {
+	return sha256.Sum256(v.key)
+}
+
 // KeySource returns how the encryption key was loaded: "env", "file", or "auto_generated".
 func (v *Vault) KeySource() string {
 	return v.source
@@ -175,6 +259,16 @@ func VaultExists(cfg *config.Config) bool {
 	keyFile := filepath.Join(config.DataDir(), "vault.key")
 	_, err := os.Stat(keyFile)
 	return err == nil
+}
+
+func defaultVaultKeyFile() string {
+	// Prefer /data/vault.key (Docker persistent volume) over ~/.engram/vault.key.
+	// This prevents key loss when containers are recreated.
+	keyFile := filepath.Join(config.DataDir(), "vault.key")
+	if altDir := "/data"; isDir(altDir) {
+		return filepath.Join(altDir, "vault.key")
+	}
+	return keyFile
 }
 
 // computeFingerprint returns the first 16 hex chars of SHA-256(key).
@@ -213,5 +307,5 @@ func isDir(path string) bool {
 // saveKeyToFile saves the key as hex to path with 0600 permissions.
 func saveKeyToFile(path string, key []byte) error {
 	hexKey := hex.EncodeToString(key)
-	return os.WriteFile(path, []byte(hexKey), 0600)
+	return os.WriteFile(path, []byte(hexKey), 0o600)
 }

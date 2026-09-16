@@ -185,6 +185,9 @@ const searchGuidanceRows = [
 ]
 
 const suppressedMemoryIds = new Set()
+const memoryStates = new Map(memoryRows.map((row) => [String(row.id), { status: row.status, version: 1 }]))
+let memorySelectionVersion = 0
+let memorySelection = { kind: 'none', selection_version: memorySelectionVersion, targets: [] }
 
 let projectIds = ['operator-console', 'project-alpha']
 
@@ -265,6 +268,8 @@ let candidateRows = candidateFixtureRows.map((row) => ({
   evidence_handles: [...row.evidence_handles],
   affected_projects: [...row.affected_projects],
 }))
+let candidateSelectionVersion = 0
+let candidateSelection = { domain: 'queue', kind: 'none', selection_version: candidateSelectionVersion, targets: [] }
 
 let ruleRows = [
   {
@@ -290,6 +295,9 @@ let ruleRows = [
     updated_at: '2026-06-22T11:00:00Z',
   },
 ]
+
+let ruleSelectionVersion = 0
+let ruleSelection = { domain: 'rules', kind: 'none', selection_version: ruleSelectionVersion }
 
 let domainRows = [
   {
@@ -337,6 +345,24 @@ const vaultCredentials = [
     orphaned: true,
   },
 ]
+let issueRows = [
+  {
+    id: 701,
+    title: 'Issue mutations require current readback',
+    body: 'The operator must see the postcondition, not only an accepted receipt.',
+    status: 'open',
+    priority: 'high',
+    type: 'bug',
+    source_project: 'operator-console',
+    target_project: 'engram',
+    source_project_display_name: 'Operator Console',
+    target_project_display_name: 'Engram',
+    labels: ['operator-created'],
+    created_at: '2026-09-10T10:00:00Z',
+    updated_at: '2026-09-10T10:00:00Z',
+  },
+]
+let issueComments = []
 let bookJobs = []
 let documentRows = []
 
@@ -383,11 +409,16 @@ function documentHistoryResponse(url) {
   return { path, project, versions, count: versions.length }
 }
 
+function currentMemory(row) {
+  const state = memoryStates.get(String(row.id)) || { status: row.status, version: 1 }
+  return { ...row, tags: [...row.tags], status: state.status, version: state.version }
+}
+
 function memoryResponseForProject(project) {
   return memoryRows
     .filter((row) => row.project === project)
     .filter((row) => !suppressedMemoryIds.has(String(row.id)))
-    .map((row) => ({ ...row, tags: [...row.tags] }))
+    .map(currentMemory)
 }
 
 function principalMemoryResponse(url) {
@@ -467,6 +498,71 @@ function candidateResponse(project, status, limit) {
     limit,
   }
 }
+function saveMemorySelection(body) {
+  const requested = body?.selection
+  if (!requested || requested.kind !== 'explicit' || !Array.isArray(requested.targets) || !requested.targets.length) return null
+  const targets = requested.targets.map((target) => {
+    const id = String(target?.id || '')
+    const row = memoryRows.find((item) => String(item.id) === id)
+    const state = memoryStates.get(id)
+    if (!row || !state || (target.expected_version !== undefined && target.expected_version !== state.version)) return null
+    return { id, expected_version: state.version }
+  })
+  if (targets.some((target) => target === null)) return null
+  memorySelection = { kind: 'explicit', selection_version: ++memorySelectionVersion, targets }
+  return { selection: { kind: memorySelection.kind, selection_version: memorySelection.selection_version } }
+}
+
+function applyMemorySelectionOperation(body) {
+  if (!body || !['suppress', 'unsuppress', 'archive'].includes(body.action) || body.selection?.kind !== memorySelection.kind || body.selection?.selection_version !== memorySelection.selection_version || memorySelection.kind !== 'explicit') return null
+  const current = []
+  for (const target of memorySelection.targets) {
+    const state = memoryStates.get(target.id)
+    if (!state) return null
+    const status = body.action === 'suppress' ? 'flagged' : body.action === 'archive' ? 'archived' : 'active'
+    const next = { status, version: state.version + 1 }
+    memoryStates.set(target.id, next)
+    if (body.action === 'suppress') suppressedMemoryIds.add(target.id)
+    else suppressedMemoryIds.delete(target.id)
+    current.push({ id: target.id, ...next })
+  }
+  return {
+    request_id: body.request_id,
+    operation_state: 'completed',
+    item_results: current.map((state) => ({ target_id: state.id, outcome: 'committed', observed_version: state.version })),
+    readback: { authoritative: true, kind: 'current', current_state: current },
+  }
+}
+
+function saveCandidateSelection(body) {
+  const requested = body?.selection
+  if (!body || body.domain !== 'queue' || !requested || requested.kind !== 'explicit' || !Array.isArray(requested.targets) || !requested.targets.length) return null
+  const targets = requested.targets.map((target) => {
+    const id = String(target?.id || '')
+    return candidateRows.some((row) => String(row.id) === id && row.status === 'pending') ? { id } : null
+  })
+  if (targets.some((target) => target === null)) return null
+  candidateSelection = { domain: 'queue', kind: 'explicit', selection_version: ++candidateSelectionVersion, targets }
+  return { selection: { ...candidateSelection, targets: candidateSelection.targets.map((target) => ({ ...target })) } }
+}
+
+function applyCandidateSelectionOperation(body) {
+  if (!body || !['promote', 'reject', 'supersede'].includes(body.action) || body.selection?.kind !== candidateSelection.kind || body.selection?.selection_version !== candidateSelection.selection_version || candidateSelection.kind !== 'explicit') return null
+  const status = body.action === 'promote' ? 'promoted' : body.action === 'reject' ? 'rejected' : 'superseded'
+  const targetIDs = new Set(candidateSelection.targets.map((target) => target.id))
+  if ([...targetIDs].some((id) => !candidateRows.some((row) => String(row.id) === id && row.status === 'pending'))) return null
+  candidateRows = candidateRows.map((row) => !targetIDs.has(String(row.id))
+    ? row
+    : { ...row, status, updated_at: new Date().toISOString() })
+  const current = [...targetIDs].map((candidate_id) => ({ candidate_id, candidate_status: status }))
+  return {
+    request_id: body.request_id,
+    operation_state: 'completed',
+    item_results: current.map((state) => ({ target_id: state.candidate_id, outcome: 'committed' })),
+    readback: { authoritative: true, kind: 'current', current_state: current.length === 1 ? current[0] : current },
+  }
+}
+
 
 function cloneRule(row) {
   return {
@@ -495,6 +591,69 @@ function ruleResponse(url) {
     .map(cloneRule)
 
   return rows
+}
+
+function ruleSelectionSnapshot(selection) {
+  return { selection: { ...selection, ...(selection.targets ? { targets: selection.targets.map((target) => ({ ...target })) } : {}) } }
+}
+
+function saveRuleSelection(body) {
+  if (!body || body.domain !== 'rules' || !body.selection || typeof body.selection !== 'object') return null
+  const selection = body.selection
+  if (selection.kind === 'none') {
+    ruleSelection = { domain: 'rules', kind: 'none', selection_version: ++ruleSelectionVersion }
+    return ruleSelectionSnapshot(ruleSelection)
+  }
+  if (selection.kind !== 'explicit' || !Array.isArray(selection.targets) || !selection.targets.length) return null
+
+  const targets = selection.targets.map((target) => {
+    const id = Number(target?.id)
+    const rule = ruleRows.find((row) => row.id === id)
+    if (!Number.isInteger(id) || !rule) return null
+    return { id: String(id), expected_version: Number.isInteger(target.expected_version) ? target.expected_version : rule.version }
+  })
+  if (targets.some((target) => target === null)) return null
+  ruleSelection = { domain: 'rules', kind: 'explicit', selection_version: ++ruleSelectionVersion, targets }
+  return ruleSelectionSnapshot(ruleSelection)
+}
+
+function ruleSelectionPage(body) {
+  if (!body || body.domain !== 'rules' || !body.filter || typeof body.filter.scope !== 'string') return null
+  const scope = body.filter.scope
+  const rows = ruleRows.filter((row) => scope === 'all' || (scope === 'global' ? !row.project : !row.project || row.project === scope))
+  return {
+    filter_fingerprint: `sha256:${createHash('sha256').update(`mock-rules-filter:${scope}`).digest('hex')}`,
+    cursor: `mock-rules-page-${scope}`,
+    next_cursor: '',
+    targets: rows.map((row) => ({ id: String(row.id), expected_version: row.version })),
+    total: rows.length,
+  }
+}
+
+function applyRuleSelectionOperation(body) {
+  if (!body || !['enable', 'disable'].includes(body.action) || body.selection?.selection_version !== ruleSelection.selection_version || ruleSelection.kind !== 'explicit') return null
+  const enabled = body.action === 'enable'
+  const now = new Date().toISOString()
+  const targets = ruleSelection.targets.map((target) => Number(target.id))
+  if (targets.some((id) => !ruleRows.some((row) => row.id === id))) return null
+
+  ruleRows = ruleRows.map((row) => !targets.includes(row.id)
+    ? row
+    : { ...row, enabled, version: row.version + 1, updated_at: now })
+  const updated = ruleRows.filter((row) => targets.includes(row.id))
+  const item_results = updated.map((row) => ({
+    target_id: row.id,
+    outcome: 'committed',
+    observed_version: row.version,
+    readback: { authoritative: true, kind: 'current', current_state: cloneRule(row), current_version: row.version },
+  }))
+  const current_state = updated.length === 1 ? cloneRule(updated[0]) : updated.map(cloneRule)
+  return {
+    request_id: body.request_id,
+    operation_state: 'completed',
+    item_results,
+    readback: { authoritative: true, kind: 'current', current_state, ...(updated.length === 1 ? { current_version: updated[0].version } : {}) },
+  }
 }
 
 function nextRuleId() {
@@ -584,6 +743,14 @@ function readRequestJson(req) {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${host}:${port}`)
   const path = url.pathname.replace(/\/+$/, '') || '/'
+  const origin = req.headers.origin
+  const allowedOrigin = `http://127.0.0.1:${process.env.OPERATOR_CONSOLE_SMOKE_PORT || '37992'}`
+  if (origin === allowedOrigin) {
+    res.setHeader('Access-Control-Allow-Origin', origin)
+    res.setHeader('Access-Control-Allow-Credentials', 'true')
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Engram-Request-ID')
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS')
+  }
 
   if (!path.startsWith('/api')) {
     text(res, 404, 'not found')
@@ -625,6 +792,34 @@ const server = createServer(async (req, res) => {
         restart_required_fields: pendingRestartFields,
         config: responseConfig,
       })
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+
+  if (req.method === 'POST' && path === '/api/memories/selection') {
+    try {
+      const saved = saveMemorySelection(await readRequestJson(req))
+      if (!saved) {
+        json(res, 400, { error: 'invalid memory selection' })
+        return
+      }
+      json(res, 200, saved)
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+
+  if (req.method === 'POST' && path === '/api/memories/operations') {
+    try {
+      const result = applyMemorySelectionOperation(await readRequestJson(req))
+      if (!result) {
+        json(res, 400, { error: 'invalid memory operation' })
+        return
+      }
+      json(res, 200, result)
     } catch (error) {
       json(res, 400, { error: error instanceof Error ? error.message : String(error) })
     }
@@ -695,11 +890,11 @@ const server = createServer(async (req, res) => {
       return
     }
     const row = [...memoryRows, ...deepLinkMemoryRows].find((item) => item.id === id)
-    if (!row || suppressedMemoryIds.has(String(id))) {
+    if (!row) {
       json(res, 404, { error: 'memory not found' })
       return
     }
-    json(res, 200, { ...row, tags: [...row.tags] })
+    json(res, 200, currentMemory(row))
     return
   }
 
@@ -943,7 +1138,10 @@ const server = createServer(async (req, res) => {
     if (req.method === 'DELETE') {
       const index = vaultCredentials.findIndex((item) => item.id === cred.id)
       if (index >= 0) vaultCredentials.splice(index, 1)
-      json(res, 200, { deleted: true, name: cred.name })
+      json(res, 200, {
+        operation_state: 'completed',
+        readback: { authoritative: true, kind: 'authorized_absence' },
+      })
       return
     }
   }
@@ -966,13 +1164,78 @@ const server = createServer(async (req, res) => {
 
     projectIds.splice(index, 1)
     sessionRows = sessionRows.filter((row) => row.project !== project)
-    json(res, 200, { id: project, removed_at: new Date().toISOString() })
+    json(res, 200, {
+      operation_state: 'completed',
+      readback: { authoritative: true, kind: 'authorized_absence' },
+    })
+    return
+  }
+
+  if (req.method === 'POST' && path === '/api/collections/selection/current') {
+    try {
+      const body = await readRequestJson(req)
+      if (body.domain !== 'rules') {
+        json(res, 400, { error: 'rules selection domain is required' })
+        return
+      }
+      json(res, 200, ruleSelectionSnapshot(ruleSelection))
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+
+  if (req.method === 'POST' && path === '/api/collections/selection') {
+    try {
+      const body = await readRequestJson(req)
+      const saved = body.domain === 'queue' ? saveCandidateSelection(body) : saveRuleSelection(body)
+      if (!saved) {
+        json(res, 400, { error: 'invalid collection selection' })
+        return
+      }
+      json(res, 200, saved)
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+
+  if (req.method === 'POST' && path === '/api/memory/candidates/operations') {
+    try {
+      const result = applyCandidateSelectionOperation(await readRequestJson(req))
+      if (!result) {
+        json(res, 400, { error: 'invalid candidate operation' })
+        return
+      }
+      json(res, 200, result)
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+
+  if (req.method === 'POST' && path === '/api/collections/selection/page') {
+    try {
+      const page = ruleSelectionPage(await readRequestJson(req))
+      if (!page) {
+        json(res, 400, { error: 'invalid rules selection page' })
+        return
+      }
+      json(res, 200, page)
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
     return
   }
 
   if (req.method === 'POST' && path === '/api/rules') {
     try {
       const body = await readRequestJson(req)
+      const result = applyRuleSelectionOperation(body)
+      if (result) {
+        json(res, 200, result)
+        return
+      }
       const content = typeof body.content === 'string' ? body.content.trim() : ''
       if (!content) {
         json(res, 400, { error: 'content is required' })
@@ -1000,6 +1263,7 @@ const server = createServer(async (req, res) => {
     }
     return
   }
+
 
   const ruleEnabledMatch = path.match(/^\/api\/rules\/([^/]+)\/enabled$/)
   if (req.method === 'PATCH' && ruleEnabledMatch) {
@@ -1079,6 +1343,116 @@ const server = createServer(async (req, res) => {
       json(res, 400, { error: error instanceof Error ? error.message : String(error) })
     }
     return
+  }
+
+  if (req.method === 'POST' && path === '/api/issues/acknowledge') {
+    try {
+      const body = await readRequestJson(req)
+      const ids = Array.isArray(body.ids) ? [...new Set(body.ids.map(Number))] : []
+      if (!ids.length || ids.some((id) => !Number.isSafeInteger(id)) || ids.some((id) => !issueRows.some((row) => row.id === id))) {
+        json(res, 400, { error: 'invalid issue acknowledgement' })
+        return
+      }
+      const now = new Date().toISOString()
+      issueRows = issueRows.map((row) => ids.includes(row.id) ? { ...row, status: 'acknowledged', updated_at: now } : row)
+      json(res, 200, { acknowledged: ids })
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+
+  if (req.method === 'POST' && path === '/api/issues') {
+    try {
+      const body = await readRequestJson(req)
+      const title = typeof body.title === 'string' ? body.title.trim() : ''
+      const target = typeof body.target_project === 'string' ? body.target_project.trim() : ''
+      if (!title || !target) {
+        json(res, 400, { error: !title ? 'title is required' : 'target_project is required' })
+        return
+      }
+      const now = new Date().toISOString()
+      const row = {
+        id: Math.max(700, ...issueRows.map((issue) => issue.id)) + 1,
+        title,
+        body: typeof body.body === 'string' ? body.body : '',
+        status: 'open',
+        priority: typeof body.priority === 'string' ? body.priority : 'medium',
+        type: typeof body.type === 'string' ? body.type : 'task',
+        source_project: typeof body.source_project === 'string' && body.source_project.trim() ? body.source_project.trim() : 'operator-console',
+        target_project: target,
+        source_project_display_name: '',
+        target_project_display_name: '',
+        labels: Array.isArray(body.labels) ? body.labels.filter((label) => typeof label === 'string') : [],
+        created_at: now,
+        updated_at: now,
+      }
+      issueRows.push(row)
+      json(res, 201, { id: row.id, message: 'issue created' })
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+
+  const issueMatch = path.match(/^\/api\/issues\/(\d+)$/)
+  if (issueMatch) {
+    const id = Number(issueMatch[1])
+    const index = issueRows.findIndex((row) => row.id === id)
+    if (index < 0) {
+      json(res, 404, { error: 'issue not found' })
+      return
+    }
+    if (req.method === 'GET') {
+      const issue = issueRows[index]
+      const comments = issueComments.filter((comment) => comment.issue_id === id).map((comment) => ({ ...comment }))
+      json(res, 200, {
+        issue: { ...issue, labels: [...issue.labels] },
+        comments,
+        comment_count: comments.length,
+        source_project_display_name: issue.source_project_display_name || issue.source_project,
+        target_project_display_name: issue.target_project_display_name || issue.target_project,
+      })
+      return
+    }
+    if (req.method === 'PATCH') {
+      try {
+        const body = await readRequestJson(req)
+        const current = issueRows[index]
+        const updated = {
+          ...current,
+          ...(typeof body.title === 'string' ? { title: body.title } : {}),
+          ...(typeof body.body === 'string' ? { body: body.body } : {}),
+          ...(typeof body.priority === 'string' ? { priority: body.priority } : {}),
+          ...(typeof body.type === 'string' ? { type: body.type } : {}),
+          ...(typeof body.status === 'string' ? { status: body.status } : {}),
+          ...(Array.isArray(body.labels) && body.labels.every((label) => typeof label === 'string') ? { labels: [...body.labels] } : {}),
+          updated_at: new Date().toISOString(),
+        }
+        issueRows = issueRows.map((row, rowIndex) => rowIndex === index ? updated : row)
+        if (typeof body.comment === 'string' && body.comment.trim()) {
+          issueComments.push({
+            id: Math.max(0, ...issueComments.map((comment) => comment.id)) + 1,
+            issue_id: id,
+            author_project: typeof body.source_project === 'string' ? body.source_project : 'dashboard',
+            author_agent: typeof body.source_agent === 'string' ? body.source_agent : 'operator-console',
+            body: body.comment,
+            created_at: updated.updated_at,
+          })
+        }
+        json(res, 200, { message: 'issue updated' })
+      } catch (error) {
+        json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+      }
+      return
+    }
+    if (req.method === 'DELETE') {
+      issueRows = issueRows.filter((row) => row.id !== id)
+      issueComments = issueComments.filter((comment) => comment.issue_id !== id)
+      res.writeHead(204)
+      res.end()
+      return
+    }
   }
 
   if (req.method !== 'GET') {
@@ -1221,8 +1595,19 @@ const server = createServer(async (req, res) => {
         available: false,
       })
       return
+    case '/api/issues/tracked-projects':
+      json(res, 200, { projects: [...new Set(issueRows.flatMap((issue) => [issue.source_project, issue.target_project]))].sort(), count: issueRows.length })
+      return
     case '/api/issues':
-      json(res, 200, { issues: [] })
+      json(res, 200, {
+        issues: issueRows.map((issue) => ({
+          ...issue,
+          labels: [...issue.labels],
+          comment_count: issueComments.filter((comment) => comment.issue_id === issue.id).length,
+        })),
+        total: issueRows.length,
+        project_names: {},
+      })
       return
     case '/api/context/search':
       {

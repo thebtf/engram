@@ -1,6 +1,5 @@
 {
   "_note": "ZH (Simplified Chinese, zh-Hans) — third launch locale. Keys mirror ru.json exactly. A missing key falls back to ru (the contract) via i18n.config fallbackLocale, so a partial translation still renders. Chinese has ONE grammatical number form, so plural keys have a single slot (no pipes); the built-in plural rule handles it.",
-
   "common": {
     "show": "显示",
     "hide": "隐藏",
@@ -14,14 +13,100 @@
     "clearSelection": "清除选择",
     "loadingShort": "…"
   },
-
+  "mutationOutcome": {
+    "request": "请求引用",
+    "action": "操作",
+    "operation": "操作引用",
+    "code": "响应代码",
+    "readback": "权威回读",
+    "version": "回读版本",
+    "manualCheck": "已提交的输入仍被保留。请先检查当前状态，再有意地重新提交。",
+    "readbackKinds": {
+      "current": "当前状态",
+      "authorized_absence": "已获授权的不存在状态",
+      "non_disclosing": "不披露详情的操作状态"
+    },
+    "items": {
+      "committed": "已提交",
+      "denied": "已拒绝",
+      "conflict": "冲突",
+      "validation_error": "输入无效",
+      "failed": "失败",
+      "outcome_unknown": "结果未知"
+    },
+    "outcomes": {
+      "committed_verified": {
+        "title": "已完成并验证",
+        "body": "权威的后置条件回读已确认此操作。"
+      },
+      "committed_verification_pending": {
+        "title": "已提交，等待验证",
+        "body": "服务器已接受或提交该操作，但尚无权威的后置条件。"
+      },
+      "partial": {
+        "title": "部分完成",
+        "body": "仅列出的项目结果是已知的；未解决的选择仍会保留。"
+      },
+      "denied": {
+        "title": "访问被拒绝",
+        "body": "服务器在已知效果之前拒绝了此请求。"
+      },
+      "conflict": {
+        "title": "冲突",
+        "body": "该请求与服务器当前状态冲突。"
+      },
+      "validation_error": {
+        "title": "输入无效",
+        "body": "服务器拒绝了提交的输入。"
+      },
+      "stale": {
+        "title": "状态已过期",
+        "body": "该请求使用的状态已不再是当前状态。"
+      },
+      "unsupported": {
+        "title": "不支持的操作",
+        "body": "此服务器不支持请求的操作。"
+      },
+      "offline": {
+        "title": "离线",
+        "body": "服务器报告该操作无法在离线时运行。"
+      },
+      "timeout": {
+        "title": "已超时",
+        "body": "请求在返回已验证结果之前超时。"
+      },
+      "network": {
+        "title": "网络失败",
+        "body": "网络失败阻止了已验证结果的返回。"
+      },
+      "failed": {
+        "title": "操作失败",
+        "body": "服务器未完成此请求。"
+      },
+      "outcome_unknown": {
+        "title": "结果未知",
+        "body": "浏览器无法确定服务器是否已提交此请求。"
+      }
+    }
+  },
   "honesty": {
     "live": "运行中",
     "dormant": "受 flag 控制",
     "stale": "tombstone",
-    "mustbuild": "需要构建"
+    "mustbuild": "需要构建",
+    "a11y": "{classification}；当前状态：{state}",
+    "states": {
+      "loading": "正在加载",
+      "empty": "没有当前结果",
+      "denied": "访问被拒绝",
+      "error": "请求失败",
+      "stale": "此前的结果",
+      "partial": "仅旧版结果",
+      "unsupported": "不支持的输入",
+      "timeout": "请求超时",
+      "offline": "无法连接服务器"
+    }
   },
-
   "errors": {
     "diagnosis": {
       "unauthorized": "请重新登录后继续。",
@@ -33,11 +118,9 @@
       "invalid-response": "Engram 服务器返回了无法读取的响应。"
     }
   },
-
   "switchRow": {
     "restartRequired": "restart"
   },
-
   "shell": {
     "brandHome": "返回首页 — 概览",
     "collapseNav": "折叠导航",
@@ -68,16 +151,20 @@
     "authLocked": "需要登录",
     "authUnknown": "会话未知",
     "online": "在线",
-    "backend": { "ready": "console reachable · server ready", "degraded": "console reachable · server degraded", "unavailable": "console reachable · server unavailable" },
+    "backend": {
+      "ready": "console reachable · server ready",
+      "degraded": "console reachable · server degraded",
+      "unavailable": "console reachable · server unavailable"
+    },
     "postgres": "PostgreSQL 17 · pgvector",
     "statusDegradation": "降级",
     "statusNoise": "噪声",
-    "records": "{count} 条记录",
-    "recordsLoading": "… 条记录",
-    "reviewQueue": "{count} 项待审核",
+    "activeRecords": "{count} 条活跃记录",
+    "activeRecordsZero": "没有活跃记录",
+    "activeRecordsUnknown": "活跃记录：未知",
+    "reviewQueueUnknown": "待审核队列：未知",
     "uptime": "已运行 {value}"
   },
-
   "profileModal": {
     "aria": "操作员资料",
     "close": "关闭资料",
@@ -95,7 +182,6 @@
     "current": "当前",
     "sessionsMustBuildBody": "完整会话列表和 revoke 操作在 auth sessions endpoint 出现之前保持 mustbuild。"
   },
-
   "nav": {
     "groups": {
       "workspace": "工作区",
@@ -111,7 +197,7 @@
       "queue": "待审核",
       "noise": "噪声与价值",
       "graph": "知识关联",
-      "books": "上下文书籍",
+      "books": "旧版导入",
       "rules": "行为规则",
       "issues": "任务",
       "projects": "项目与会话",
@@ -126,7 +212,6 @@
       "booksPipeline": "处理流水线"
     }
   },
-
   "overview": {
     "pageTitle": "概览",
     "pageSubtitle": "跨记忆、产品和服务的总览。卡片会进入对应分区。",
@@ -190,23 +275,42 @@
       "service": "服务"
     },
     "cards": {
-      "memory": { "sub": "{active} 条活跃 · {noise} 条噪声" },
-      "queue": { "sub": "等待决策的记忆候选" },
-      "noise": { "sub": "噪声注入占比" },
-      "graph": { "sub": "概念图和转移关系" },
-      "books": { "sub": "作者领域和术语导入" },
-      "rules": { "sub": "操作员 always-inject 指令" },
+      "memory": {
+        "sub": "{active} 条活跃 · {noise} 条噪声"
+      },
+      "queue": {
+        "sub": "等待决策的记忆候选"
+      },
+      "noise": {
+        "sub": "噪声注入占比"
+      },
+      "graph": {
+        "sub": "概念图和转移关系"
+      },
+      "books": {
+        "sub": "作者领域和术语导入"
+      },
+      "rules": {
+        "sub": "操作员 always-inject 指令"
+      },
       "issues": {
         "sub": "{open} 打开 · {work} 进行中 · 共 {total}",
         "openBadge": "{n} 打开"
       },
-      "projects": { "sub": "{n} 个活跃会话" },
-      "health": { "sub": "{ok} 个模型 ok · {degraded} 个降级" },
-      "secrets": { "sub": "密钥在 vault 中 · 加密已启用" },
-      "access": { "sub": "用户、登录提供方、角色" }
+      "projects": {
+        "sub": "{n} 个活跃会话"
+      },
+      "health": {
+        "sub": "{ok} 个模型 ok · {degraded} 个降级"
+      },
+      "secrets": {
+        "sub": "密钥在 vault 中 · 加密已启用"
+      },
+      "access": {
+        "sub": "用户、登录提供方、角色"
+      }
     }
   },
-
   "memory": {
     "title": "记忆",
     "subtitle": "Engram 知识工作清单：哪些用于回答，哪些需要验证，哪些作为噪声移除。",
@@ -376,7 +480,6 @@
       "mustBuildNote": "批量操作等待服务器 endpoints；当前选择可以清除"
     }
   },
-
   "queue": {
     "title": "待审核",
     "subtitle": "记忆候选项：提升有用知识，拒绝噪声，或标记为已被新记录替代。",
@@ -410,20 +513,20 @@
     },
     "countInFilter": "{shown} 个候选项 · 已选择 {selected} 个",
     "rowsLabel": "行数",
-  "allRows": "全部",
-  "pageRange": "{from}–{to} / {total}",
-  "pagination": {
-    "first": "转到第一页",
-    "previous": "转到上一页",
-    "current": "当前第 {page} 页",
-    "next": "转到下一页",
-    "last": "转到最后一页"
-  },
-  "aria": {
-    "toggleCandidate": "选择候选项 {id}",
-    "action": "{action}：候选项 {id}"
-  },
-  "table": {
+    "allRows": "全部",
+    "pageRange": "{from}–{to} / {total}",
+    "pagination": {
+      "first": "转到第一页",
+      "previous": "转到上一页",
+      "current": "当前第 {page} 页",
+      "next": "转到下一页",
+      "last": "转到最后一页"
+    },
+    "aria": {
+      "toggleCandidate": "选择候选项 {id}",
+      "action": "{action}：候选项 {id}"
+    },
+    "table": {
       "candidate": "候选项 · 目标 · 项目 · 时间",
       "confidence": "置信度",
       "actions": "决策"
@@ -576,7 +679,16 @@
       "body": "已配置的受信 OIDC 代理数量：{proxies}。邀请为单次使用，会话撤销是软撤销且带审计证据。"
     },
     "state": {
-      "runtime": { "pending": "pending", "live": "live", "empty": "empty", "gated": "gated", "unauthorized": "unauthorized", "forbidden": "forbidden", "error": "error", "stale-snapshot": "stale-snapshot" },
+      "runtime": {
+        "pending": "pending",
+        "live": "live",
+        "empty": "empty",
+        "gated": "gated",
+        "unauthorized": "unauthorized",
+        "forbidden": "forbidden",
+        "error": "error",
+        "stale-snapshot": "stale-snapshot"
+      },
       "pending": "正在加载访问面板…",
       "error": "无法加载访问面板：{message}",
       "stale": "正在显示 {updatedAt} 的最后一次已验证访问快照；刷新失败：{message}",
@@ -617,6 +729,55 @@
         "muted": "Muted"
       }
     },
+    "keycards": {
+      "title": "工作站密钥卡",
+      "subtitle": "通过当前管理员浏览器会话签发、查看和撤销工作站凭据。",
+      "pending": "正在加载工作站密钥卡…",
+      "errorTitle": "无法加载工作站密钥卡",
+      "error": "密钥卡操作不可用：{message}",
+      "form": {
+        "name": "工作站名称",
+        "namePlaceholder": "例如：studio-laptop",
+        "scope": "范围",
+        "principal": "主体",
+        "principalPlaceholder": "例如：operator/alice",
+        "principalKind": "主体类型",
+        "expiresAt": "到期时间",
+        "expiresAtHint": "可选。最终到期时间由服务器验证。",
+        "submit": "签发密钥卡"
+      },
+      "scopes": {
+        "readWrite": "读 / 写",
+        "readOnly": "只读"
+      },
+      "principalKinds": {
+        "human": "人类",
+        "agent": "代理",
+        "service": "服务"
+      },
+      "reveal": {
+        "title": "立即复制此密钥卡",
+        "body": "原始密钥卡只返回一次，绝不会出现在密钥卡列表、URL 或浏览器存储中。",
+        "copyHint": "使用密钥卡旁的复制控件，然后关闭此面板。",
+        "dismiss": "关闭"
+      },
+      "columns": {
+        "name": "工作站",
+        "identity": "身份",
+        "scope": "范围",
+        "expires": "到期时间",
+        "activity": "活动",
+        "status": "状态",
+        "actions": "操作"
+      },
+      "status": {
+        "active": "活跃",
+        "revoked": "已撤销",
+        "expired": "已过期"
+      },
+      "requestCount": "请求：{count} · 错误：{errors}",
+      "empty": "尚未记录工作站密钥卡。"
+    },
     "invitations": {
       "title": "邀请",
       "subtitle": "签发带过期时间的单次使用邀请，并在不删除审计轨迹的前提下撤销它们。",
@@ -647,11 +808,11 @@
       "empty": "暂时没有邀请记录。",
       "reveal": {
         "title": "立即复制此邀请代码",
-      "body": "该代码只显示一次，不会出现在邀请历史中。",
-      "copy": "复制代码",
-      "copySuccess": "代码已复制。",
-      "copyError": "无法复制代码。请在关闭此提示前手动复制。",
-      "dismiss": "关闭"
+        "body": "该代码只显示一次，不会出现在邀请历史中。",
+        "copy": "复制代码",
+        "copySuccess": "代码已复制。",
+        "copyError": "无法复制代码。请在关闭此提示前手动复制。",
+        "dismiss": "关闭"
       }
     },
     "users": {
@@ -754,6 +915,9 @@
       "userEnabled": "已启用 {email}。",
       "sessionRevokedReason": "操作员在访问页撤销了会话",
       "sessionRevoked": "已撤销 {email} 的会话。",
+      "keycardInvalid": "签发密钥卡前请提供工作站名称和主体。",
+      "keycardCreated": "工作站密钥卡已签发。请立即复制；它不会再次显示。",
+      "keycardRevoked": "已撤销工作站密钥卡 {name}。",
       "error": "操作失败：{message}"
     }
   },
@@ -761,8 +925,8 @@
     "title": "知识图谱",
     "subtitle": "在 operator console 中查看图节点与边，创建新关系，并运行实时 traverse/path 读取。",
     "metrics": {
-      "nodes": "项目节点数",
-      "edges": "选中节点的边数",
+      "loadedNodes": "本次请求已加载的节点",
+      "loadedEdges": "本次请求已加载的关联边",
       "selectedDegree": "选中节点度数"
     },
     "brief": {
@@ -773,7 +937,16 @@
       "project": "图谱项目"
     },
     "state": {
-      "runtime": { "pending": "pending", "live": "live", "empty": "empty", "gated": "gated", "unauthorized": "unauthorized", "forbidden": "forbidden", "error": "error", "stale-snapshot": "stale-snapshot" },
+      "runtime": {
+        "pending": "pending",
+        "live": "live",
+        "empty": "empty",
+        "gated": "gated",
+        "unauthorized": "unauthorized",
+        "forbidden": "forbidden",
+        "error": "error",
+        "stale-snapshot": "stale-snapshot"
+      },
       "pending": "正在加载图谱数据…",
       "error": "无法加载图谱数据：{message}",
       "stale": "正在显示 {updatedAt} 的最后一次已验证图谱快照；刷新失败：{message}",
@@ -927,7 +1100,6 @@
       "edge": "{source} — {type} → {target}"
     }
   },
-
   "rules": {
     "title": "行为规则",
     "subtitle": "规则会从上到下注入每个新会话上下文。通过拖拽设置顺序：越靠上越早应用。",
@@ -974,7 +1146,7 @@
       "title": "活跃指令",
       "count": "{count} 条规则",
       "header": "顺序 · 规则 · 范围 · 审计",
-      "shown": "当前过滤中 {shown} / {total}"
+      "loaded": "当前过滤中已加载 {count} 条规则"
     },
     "meta": {
       "priority": "优先级 {priority}",
@@ -989,6 +1161,37 @@
       "title": "没有规则",
       "body": "点击“新规则”添加第一条指令。",
       "scopeBody": "{scope} 范围下还没有规则。"
+    },
+    "selection": {
+      "title": "选择",
+      "kind": {
+        "none": "未选择",
+        "explicit": "已选规则",
+        "page": "当前页",
+        "frozen_filter": "冻结的筛选结果"
+      },
+      "version": "选择 v{version}",
+      "unsaved": "尚未保存到服务器",
+      "loadPage": "加载当前页",
+      "selectPage": "选择当前页",
+      "freeze": "冻结当前筛选",
+      "pageInfo": "当前页有 {count} 条规则；权威总数：{total}",
+      "nextPageBound": "此页之后还有更多结果。",
+      "frozenInfo": "冻结选择包含 {count} 条规则，到期时间为 {expires}。",
+      "reconfirm": "此选择需要重新确认（{reason}）。执行操作前请再次冻结当前筛选。",
+      "loadError": "无法加载当前选择。",
+      "pageError": "无法加载当前选择页。",
+      "saveError": "无法保存选择。",
+      "freezeError": "无法冻结当前筛选。",
+      "operationError": "无法应用所选规则操作。",
+      "enable": "启用已选规则",
+      "disable": "禁用已选规则",
+      "delete": "删除已选规则",
+      "readbacks": "每条规则的权威回读",
+      "header": "选择当前规则页",
+      "row": "选择规则 {id}",
+      "reorderBound": "只有当前页包含完整范围时才能重新排序。",
+      "noChanges": "没有可应用的更改。"
     },
     "detail": {
       "title": "规则 #{id}",
@@ -1008,7 +1211,6 @@
       "disable": "禁用规则"
     }
   },
-
   "issues": {
     "title": "任务",
     "subtitle": "带优先级、类型、状态、路由和评论数的任务日志。",
@@ -1264,7 +1466,6 @@
       "task": "任务"
     }
   },
-
   "secrets": {
     "title": "密钥",
     "subtitle": "密钥与凭据：列表中不显示具体值，需显式操作才能查看。",
@@ -1335,7 +1536,6 @@
     "copySecret": "复制",
     "hideSecret": "隐藏"
   },
-
   "projects": {
     "title": "项目与会话",
     "subtitle": "此服务器上的项目、最近工作会话，以及当前可打开内容的真实边界。",
@@ -1413,7 +1613,6 @@
       "codeIntel": "代码智能摘要目前只能通过工具界面使用。"
     }
   },
-
   "health": {
     "title": "状态",
     "subtitle": "服务器实时快照：readiness、selfcheck、向量、vNext 指标和 update channel。",
@@ -1463,7 +1662,6 @@
       "model": "模型"
     }
   },
-
   "settings": {
     "title": "设置",
     "subtitle": "只读 runtime config，以及需要操作员明确确认的动作。",
@@ -1483,7 +1681,9 @@
         "detailsTitle": "实现详情",
         "detailsBody": "访问控制页面是实际的管理界面；此设置标签页不提供单独的策略编辑器。"
       },
-      "evidence": { "title": "实现详情" },
+      "evidence": {
+        "title": "实现详情"
+      },
       "groups": {
         "basic": "基础",
         "models": "模型",
@@ -1772,7 +1972,6 @@
       "updateAvailable": "available"
     }
   },
-
   "searchPage": {
     "title": "搜索",
     "subtitle": "对 Engram 服务器观察记录进行实时 context search，并显示 recent/analytics 遥测以及旧 collection search 的真实 tombstone。",
@@ -1813,7 +2012,6 @@
       "body": "Legacy search_collection 不作为可用 UI 搜索接入；它是已移除/过期 surface，仅作为 evidence 保留。"
     }
   },
-
   "noisePage": {
     "title": "噪声与有效性",
     "subtitle": "实时 retrieval/search telemetry：展示给 agent 的内容、实际使用的内容，以及 sparse 或未记录的数据。",
@@ -1856,78 +2054,142 @@
       "body": "服务器目前只暴露 snapshot，尚无噪声趋势图所需的 time-series endpoint。"
     }
   },
-
   "booksPage": {
-    "title": "书籍上下文",
-    "subtitle": "上传或粘贴源文本，让 books 流水线通过 markdown 适配器切块，并持续跟踪 job，直到生成的文档出现在 Documents 页面。",
+    "title": "旧版纯文本到分块导入",
+    "subtitle": "仅将纯文本源提交到旧版导入端点。完成的导入会写入 Documents；它不会创建 Book Context catalog、reader、concepts，也不会声明 Book Context 已就绪。",
     "brief": {
-      "title": "Books 保持独立 bounded context",
-      "body": "这个 milestone 会创建 books job，通过 markdown chunker 适配器处理文本，并写入带有 source_book_job_id provenance 元数据的 versioned documents。"
+      "title": "旧版导入：纯文本 → 分块 → Documents",
+      "body": "每个旧版导入 job 都必须由服务器确认后才会显示为完成。该能力将兼容 Markdown 的纯文本处理为带 source_book_job_id provenance 的版本化 Documents；它不是 Book Context。"
+    },
+    "capability": {
+      "badge": "旧版导入",
+      "technical": "技术依据"
+    },
+    "states": {
+      "loading": {
+        "title": "正在检查旧版导入",
+        "body": "控制台正在等待本次导入请求或当前 job 的读取结果；尚未确认完成。",
+        "action": "下一步：请等待服务器响应后再依据结果操作。"
+      },
+      "empty": {
+        "title": "没有活动的旧版导入",
+        "body": "本次控制台会话中尚未提交导入 job。",
+        "action": "下一步：选择文本源或粘贴纯文本以排入旧版导入队列。"
+      },
+      "denied": {
+        "title": "旧版导入访问被拒绝",
+        "body": "服务器未授权此导入请求，因此没有 job 结果可用。",
+        "action": "下一步：使用已授权的操作员会话登录，然后重新提交。"
+      },
+      "error": {
+        "title": "服务器未确认导入",
+        "body": "请求失败且没有可用的当前结果；这不是空导入队列。",
+        "action": "下一步：修正源内容或服务器状态，然后提交新的导入。"
+      },
+      "stale": {
+        "title": "仅有较早的导入结果可用",
+        "body": "显示的 job 曾被确认，但其当前状态无法读取。",
+        "action": "下一步：在依赖此 job 或其 Documents 前刷新状态。"
+      },
+      "partial": {
+        "title": "仅生成了旧版 Documents",
+        "body": "此 job 的纯文本到分块处理已经完成，但 Book Context 仍不可用。",
+        "action": "下一步：打开生成的 Documents；不要把它们当作 Book Context catalog 或 reader。"
+      },
+      "unsupported": {
+        "title": "这里不支持此源格式",
+        "body": "旧版导入器只接受兼容 Markdown 的纯文本；未尝试二进制提取。",
+        "action": "下一步：粘贴已提取文本，或选择 .md、.mdx、.markdown 或 .txt。"
+      },
+      "timeout": {
+        "title": "导入请求超时",
+        "body": "在服务器确认结果前，请求期限已经结束。",
+        "action": "下一步：重试前刷新已有 job，避免假设其结果。"
+      },
+      "offline": {
+        "title": "无法连接服务器",
+        "body": "控制台没有收到此导入请求的服务器确认。",
+        "action": "下一步：恢复连接，然后刷新状态或重新提交。"
+      }
     },
     "metrics": {
-      "status": "当前 job 状态",
+      "status": "当前旧版导入状态",
       "source": "源引用",
-      "prefix": "文档标签"
+      "prefix": "Documents 标签"
     },
     "actions": {
       "refresh": "刷新状态"
     },
     "form": {
-      "title": "启动 books job",
-      "lead": "当前 TG5 intake 接受 text/markdown 内容。请粘贴源文本或加载文本文件；二进制 extractor 不在本 lane 范围内。",
+      "title": "排入旧版导入队列",
+      "lead": "此旧版能力仅接受兼容 Markdown 的文本。请粘贴源内容或加载文本文件；二进制 extractor 不属于此能力。",
       "file": "文本源文件",
-      "fileHint": "这里接受 .md、.mdx、.markdown、.txt。PDF/EPUB 提取在本 milestone 中尚未接通。",
+      "fileHint": "此处接受 .md、.mdx、.markdown、.txt。PDF/EPUB 提取未接入此能力。",
       "sourceRef": "源引用",
       "sourceRefHint": "例如 distributed-systems.md",
       "project": "项目",
       "author": "执行者",
       "content": "源内容",
-      "contentHint": "在这里粘贴书籍或章节文本。如果源内容是 plain text，流水线会自动补一个 heading。",
-      "submit": "加入 ingest 队列",
+      "contentHint": "在这里粘贴书籍或章节文本。如果源内容是纯文本，旧版导入器会自动补一个 heading。",
+      "submit": "排入旧版导入",
       "submitting": "正在入队…",
-      "unsupportedFile": "这个 upload control 目前只接受 text/markdown 源。对于二进制书籍，请粘贴已提取文本。",
+      "unsupportedFile": "此旧版导入仅接受 text/markdown 源。对于二进制书籍，请粘贴已提取文本。",
       "validation": "必须提供 source reference 和 source content。",
       "loadedFile": "已将 {name} 载入源编辑器。"
     },
     "job": {
-      "title": "最新 books job",
+      "title": "当前旧版导入",
       "status": "状态",
       "source": "源引用",
-      "prefix": "文档路径前缀",
+      "prefix": "Documents 路径前缀",
       "createdAt": "创建时间",
       "updatedAt": "更新时间",
       "error": "流水线错误",
-      "openDocuments": "打开生成的文档",
-      "emptyTitle": "还没有 books job",
-      "emptyBody": "请先在上方提交源内容，以创建 books job 并开始轮询其生命周期。",
-      "pendingBody": "Job 已记录，正在等待流水线接手。",
-      "processingBody": "流水线正在切块并写入文档。状态轮询会持续到 terminal state。",
-      "doneBody": "Job 已完成。生成的文档会通过可见的 books/jobs/[job-id]/ 前缀和 source_book_job_id 元数据进行标记。",
-      "failedBody": "Job 在文档完整生成前失败。请查看已保存的错误，并在修正内容或格式后重试。",
+      "openDocuments": "打开生成的 Documents",
+      "emptyTitle": "还没有旧版导入 job",
+      "emptyBody": "请先在上方提交纯文本源，以创建旧版导入 job 并开始轮询其生命周期。",
+      "pendingBody": "旧版导入已记录，正在等待流水线接手。",
+      "processingBody": "旧版流水线正在切分纯文本并写入 Documents。状态轮询会持续到终态。",
+      "doneBody": "旧版导入已完成。生成的 Documents 会通过可见的 books/jobs/[job-id]/ 前缀和 source_book_job_id 元数据进行标记。",
+      "failedBody": "旧版导入在 Documents 完整生成前失败。请查看已保存的错误，并提交已修正的纯文本或格式。",
       "stateLabel": {
         "pending": "待处理",
         "processing": "处理中",
         "done": "完成",
         "failed": "失败",
-        "idle": "空闲"
+        "idle": "没有 job"
       }
     },
     "notice": {
-      "queued": "Books job #{id} 已入队。",
-      "failed": "Books 请求失败：{message}",
-      "loadError": "未知 books 流水线错误"
+      "queued": "旧版导入 job #{id} 已入队。",
+      "failed": "旧版导入请求失败：{message}",
+      "loadError": "未知旧版导入错误"
     }
   },
-
   "sectionStub": {
-    "state": {
-      "live": "该分区已连接，但尚无扩展视图。",
-      "dormant": "该功能被 flag 关闭。",
-      "stale": "该 surface 已作为 tombstone 禁用。",
-      "mustbuild": "该分区仍需要构建。"
+    "limitation": {
+      "loading": "控制台正在等待能力检查；尚不知道结果。",
+      "empty": "该能力未返回当前行或结果。",
+      "denied": "当前操作员会话未获此能力的授权。",
+      "error": "服务器没有为此能力提供可用结果。",
+      "stale": "目前只有此前确认的结果可用。",
+      "partial": "该能力只有已说明的部分可用。",
+      "unsupported": "此服务器不支持该能力或输入。",
+      "timeout": "服务器未在请求期限内确认结果。",
+      "offline": "控制台无法连接到此能力所在的服务器。"
+    },
+    "action": {
+      "loading": "下一步：等待读取完成。",
+      "empty": "下一步：如可用，使用说明的创建或筛选操作。",
+      "denied": "下一步：使用已授权的操作员会话。",
+      "error": "下一步：修正条件后重新读取。",
+      "stale": "下一步：在依赖此前结果前刷新。",
+      "partial": "下一步：只使用可用部分；其余尚未就绪。",
+      "unsupported": "下一步：使用受支持的输入或等待服务器能力。",
+      "timeout": "下一步：重试前刷新，避免假设结果。",
+      "offline": "下一步：恢复连接后重新读取。"
     }
   },
-
   "deferred": {
     "queue": {
       "title": "待审核",

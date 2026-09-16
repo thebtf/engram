@@ -1,17 +1,19 @@
 import type { ComputedRef, Ref } from 'vue'
-import type { OperatorLoadState, OperatorMutationResult } from './useOperatorApi'
+import { executeMutation, type MutationCurrentStateParser, type MutationResult } from './useApi'
 import {
   emptyState,
   endpointEvidence,
   errorState,
   liveState,
   loadOperatorJson,
+  operatorApiUrl,
   operatorFetchJson,
   pendingState,
-  runOperatorMutation,
   toOperatorSourceError,
   unsupportedOperatorAction,
+  type OperatorLoadState,
 } from './useOperatorApi'
+
 
 type ApiNullableString = string | { String?: string; Valid?: boolean } | null
 type ApiNullableInt = number | string | { Int64?: number | string | null; Valid?: boolean } | null
@@ -146,6 +148,20 @@ function startOnce(key: string, run: () => Promise<void>) {
   }
 }
 
+export interface OperatorProjectArchiveReceipt {
+  removedAt: string
+}
+
+export function projectArchiveCurrentStateParser(project: string): MutationCurrentStateParser<OperatorProjectArchiveReceipt> {
+  return (value) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+    const id = Reflect.get(value, 'id')
+    const removedAt = Reflect.get(value, 'removed_at')
+    if (id !== project || typeof removedAt !== 'string' || Number.isNaN(Date.parse(removedAt))) return undefined
+    return { removedAt }
+  }
+}
+
 export function useOperatorProjects(): {
   projectRows: ComputedRef<OperatorProjectRow[]>
   sessions: OperatorSessionRow[]
@@ -159,7 +175,7 @@ export function useOperatorProjects(): {
   refresh: () => Promise<void>
   openProject: (project: string) => Promise<void>
   openSession: (session: OperatorSessionRow) => Promise<void>
-  deleteProject: (project: string) => Promise<OperatorMutationResult<unknown>>
+  deleteProject: (project: string) => Promise<MutationResult<{ project: string }, OperatorProjectArchiveReceipt>>
   sessionDetailGap: ReturnType<typeof unsupportedOperatorAction>
   sessionRouteGap: ReturnType<typeof unsupportedOperatorAction>
   codeIntelGap: ReturnType<typeof unsupportedOperatorAction>
@@ -304,34 +320,11 @@ export function useOperatorProjects(): {
 
   async function deleteProject(project: string) {
     const endpoint = `/api/projects/${encodeURIComponent(project)}`
-    return runOperatorMutation({
-      action: 'project-archive',
-      evidence: endpointEvidence(endpoint, 'projects-delete'),
-      snapshot: () => ({
-        projects: [...projects.value],
-        recentSessions: [...recentSessions.value],
-        sessions: [...sessions.value],
-        selectedProject: selectedProject.value,
-      }),
-      optimistic: () => {
-        replaceArray(projects.value, projects.value.filter((row) => row !== project))
-        replaceArray(recentSessions.value, recentSessions.value.filter((row) => row.project !== project))
-        replaceArray(sessions.value, sessions.value.filter((row) => row.project !== project))
-        if (selectedProject.value === project) {
-          selectedProject.value = projects.value[0] || ''
-          selectedSession.value = null
-        }
-      },
-      run: () => operatorFetchJson(endpoint, jsonInit('DELETE'), 'projects-delete'),
-      rollback: (snapshot) => {
-        if (!snapshot) return
-        replaceArray(projects.value, snapshot.projects)
-        replaceArray(recentSessions.value, snapshot.recentSessions)
-        replaceArray(sessions.value, snapshot.sessions)
-        selectedProject.value = snapshot.selectedProject
-      },
-      refresh,
-    })
+    return executeMutation(
+      { requestId: crypto.randomUUID(), action: 'project-archive', intent: { project } },
+      fetch(operatorApiUrl(endpoint), { ...jsonInit('DELETE'), credentials: 'include' }),
+      projectArchiveCurrentStateParser(project),
+    )
   }
 
   const sessionDetailGap = unsupportedOperatorAction(

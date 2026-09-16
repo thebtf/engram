@@ -6,9 +6,10 @@ import (
 	"unicode/utf8"
 )
 
-// ChunkFile splits content into non-overlapping line-blocks and returns the
-// resulting Chunk slice. filePath must be a forward-slash-normalized,
-// repository-relative path (used verbatim in Chunk.FilePath and ChunkID).
+// ChunkFile splits content into non-overlapping legacy line-block artifacts.
+// They are raw compatibility data, not UCI View-scoped artifacts or UCI query
+// results. filePath must be a forward-slash-normalized, repository-relative
+// path (used verbatim in Chunk.FilePath and ChunkID).
 //
 // Contract:
 //   - All chunks together cover every byte of content exactly once.

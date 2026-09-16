@@ -11,8 +11,32 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/operability"
 	"github.com/thebtf/engram/pkg/models"
 )
+
+type searchAnalyticsResponse struct {
+	*gorm.SearchAnalytics
+	ZeroResultRate             *float64                 `json:"zero_result_rate"`
+	ZeroResultRateResultStatus operability.ResultStatus `json:"zero_result_rate_result_status"`
+}
+
+func newSearchAnalyticsResponse(analytics *gorm.SearchAnalytics) searchAnalyticsResponse {
+	if analytics == nil {
+		analytics = &gorm.SearchAnalytics{}
+	}
+	response := searchAnalyticsResponse{
+		SearchAnalytics:            analytics,
+		ZeroResultRateResultStatus: operability.NotComputable,
+	}
+	if analytics.TotalSearches == 0 {
+		return response
+	}
+	rate := analytics.ZeroResultRate
+	response.ZeroResultRate = &rate
+	response.ZeroResultRateResultStatus = operability.Computed
+	return response
+}
 
 // handleGetObservations godoc
 // @Summary List observations
@@ -411,17 +435,9 @@ func (s *Service) handleGetSearchAnalytics(w http.ResponseWriter, r *http.Reques
 	s.initMu.RUnlock()
 
 	if store == nil {
-		// Return a zero-value response rather than 500 — the store may be initializing.
-		writeJSON(w, map[string]any{
-			"total_searches":   0,
-			"searches_today":   0,
-			"avg_latency_ms":   0,
-			"zero_result_rate": 0,
-			"vector_searches":  0,
-			"filter_searches":  0,
-			"cache_hits":       0,
-			"search_errors":    0,
-		})
+		// The observation source is unavailable while the store initializes. Keep
+		// compatibility counters, but make the rate explicitly not computable.
+		writeJSON(w, newSearchAnalyticsResponse(nil))
 		return
 	}
 
@@ -441,7 +457,7 @@ func (s *Service) handleGetSearchAnalytics(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	writeJSON(w, analytics)
+	writeJSON(w, newSearchAnalyticsResponse(analytics))
 }
 
 // handleVectorHealth godoc

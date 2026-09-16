@@ -1,7 +1,7 @@
 {
   "name": "engram",
   "id": "engram",
-  "version": "3.8.0",
+  "version": "3.9.0",
   "displayName": "Engram Memory",
   "description": "Connects OpenClaw agents to engram persistent memory server for long-term context retention",
   "kind": "memory",
@@ -18,11 +18,17 @@
       "token": {
         "type": "string",
         "description": "Bearer token for engram API authentication",
-        "uiHints": { "sensitive": true }
+        "uiHints": {
+          "sensitive": true
+        }
       },
       "project": {
         "type": "string",
         "description": "Project scope override (defaults to auto-detected from workspace)"
+      },
+      "clientInstanceId": {
+        "type": "string",
+        "description": "Opaque non-secret installation reference for V3 identity"
       },
       "contextLimit": {
         "type": "number",
@@ -51,12 +57,20 @@
       },
       "logLevel": {
         "type": "string",
-        "enum": ["debug", "info", "warn", "error"],
+        "enum": [
+          "debug",
+          "info",
+          "warn",
+          "error"
+        ],
         "description": "Log verbosity level",
         "default": "warn"
       }
     },
-    "required": ["url", "token"]
+    "required": [
+      "url",
+      "token"
+    ]
   },
   "hooks": [
     "session_start",
@@ -83,6 +97,8 @@
     "migrate"
   ],
   "cli": {
-    "commands": ["memory"]
+    "commands": [
+      "memory"
+    ]
   }
 }

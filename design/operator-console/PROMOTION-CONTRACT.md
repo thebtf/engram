@@ -49,6 +49,10 @@ Then run `npm run parity` in `apps/operator-console/`. It verifies the public
 manifest without reading `.od/`; explicit drift is reported, while false sync claims
 fail closed.
 
+`apps/operator-console/PARITY.json` is runtime-owned. Matching its design version and
+snapshot hash to this manifest only acknowledges the checked snapshot; it is not visual
+or runtime parity, and a design-only promotion never edits that ledger.
+
 ## Runtime safety
 
 Routine design promotion never overwrites `apps/operator-console/`. Passing

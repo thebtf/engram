@@ -1,0 +1,420 @@
+{
+  "schema": "engram.uci.acceptance-plan/1",
+  "status": "designed_not_executed",
+  "scenarios": [
+    {
+      "id": "U01",
+      "milestone": "UCI-1",
+      "area": "identity",
+      "arrange": "Два dirty worktree с одинаковыми source/path/HEAD",
+      "action": "Один запрос из обоих клиентов",
+      "expected": "Разные правильные view/body/callee; zero cross-tree rows",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U02",
+      "milestone": "UCI-1",
+      "area": "identity",
+      "arrange": "Две MCP-сессии общего daemon",
+      "action": "Подключить третью с другим cwd",
+      "expected": "Defaults предыдущих сессий не меняются",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U03",
+      "milestone": "UCI-1",
+      "area": "publication",
+      "arrange": "Индекс A и B опубликован",
+      "action": "Изменить/удалить файл A",
+      "expected": "B и его graph неизменны",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U04",
+      "milestone": "UCI-1",
+      "area": "publication",
+      "arrange": "Новый build частично загружен",
+      "action": "Оборвать stream до finalize",
+      "expected": "Current view не изменён; no sweep",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U05",
+      "milestone": "UCI-1",
+      "area": "publication",
+      "arrange": "Publish committed, ACK lost",
+      "action": "Повторить build_id",
+      "expected": "Тот же view без duplicate mutations",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U06",
+      "milestone": "UCI-1",
+      "area": "publication",
+      "arrange": "Lease owner replaced",
+      "action": "Старый epoch вызывает finalize",
+      "expected": "LEASE_STALE, current unchanged",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U07",
+      "milestone": "UCI-1",
+      "area": "recovery",
+      "arrange": "Queue overflow/offline edits",
+      "action": "Восстановить watcher/server",
+      "expected": "Reconcile current bytes; no replay obsolete edits",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U08",
+      "milestone": "UCI-1",
+      "area": "recovery",
+      "arrange": "Index published",
+      "action": "Restart daemon/server",
+      "expected": "Correct context and resume; no unchanged reembedding",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U09",
+      "milestone": "UCI-1",
+      "area": "git",
+      "arrange": "Same checkout switches branch",
+      "action": "Query during/after catch-up",
+      "expected": "Old coherent stale then new view, never mixed",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U10",
+      "milestone": "UCI-1",
+      "area": "git",
+      "arrange": "Detached/unborn HEAD",
+      "action": "Index and query",
+      "expected": "Correct saved files; nullable commit supported",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U11",
+      "milestone": "UCI-1",
+      "area": "git",
+      "arrange": "Worktree moved",
+      "action": "Resolve and query",
+      "expected": "Verified relocation preserves identity; otherwise new incarnation",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U12",
+      "milestone": "UCI-1",
+      "area": "git",
+      "arrange": "Directory removed/recreated same path",
+      "action": "Bind new client",
+      "expected": "New incarnation; old view not current",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U13",
+      "milestone": "UCI-1",
+      "area": "scanner",
+      "arrange": "Nested ignores/negation/tracked ignored file",
+      "action": "Reconcile",
+      "expected": "Git-correct candidates plus protected exclusions",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U14",
+      "milestone": "UCI-1",
+      "area": "scanner",
+      "arrange": "Symlink/reparse escape and inaccessible subtree",
+      "action": "Scan",
+      "expected": "No out-of-root body, no mass deletion",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U15",
+      "milestone": "UCI-1",
+      "area": "scanner",
+      "arrange": "All actual files deleted vs scan failed",
+      "action": "Finalize",
+      "expected": "Complete delete-all valid; failed scan not empty",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U16",
+      "milestone": "UCI-1",
+      "area": "search",
+      "arrange": "Conceptual RU query, English code, no lexical key",
+      "action": "Hybrid search with real provider",
+      "expected": "Relevant current source via vector leg",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U17",
+      "milestone": "UCI-1",
+      "area": "search",
+      "arrange": "Old chunk embedding, new file version",
+      "action": "Query before new embedding",
+      "expected": "No old body under new view; degraded coverage",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U18",
+      "milestone": "UCI-1",
+      "area": "search",
+      "arrange": "Most ANN candidates from invisible views",
+      "action": "Query current view",
+      "expected": "Scoped exact baseline recovery or explicit partial, no false empty",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U19",
+      "milestone": "UCI-1",
+      "area": "graph",
+      "arrange": "Callee export changed; caller bytes same",
+      "action": "Incremental indexing",
+      "expected": "Inbound references re-resolved or explicitly unresolved",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U20",
+      "milestone": "UCI-1",
+      "area": "graph",
+      "arrange": "Two same-name methods, ambiguous call",
+      "action": "Explain/impact",
+      "expected": "No fabricated unique binding; coverage limitation",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U21",
+      "milestone": "UCI-1",
+      "area": "graph",
+      "arrange": "Malformed new syntax",
+      "action": "Query graph and text",
+      "expected": "Fresh coherent partial state; old edges not current",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U22",
+      "milestone": "UCI-1",
+      "area": "security",
+      "arrange": "Private source/checkouts, revoked principal",
+      "action": "Search/path/read/pagination",
+      "expected": "No body/IDs/counts leak; ACL enforced every hop",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U23",
+      "milestone": "UCI-1",
+      "area": "security",
+      "arrange": "Secret-bearing input and hostile labels",
+      "action": "Index/render/provider calls",
+      "expected": "Metadata-only excluded or protected refusal; no execution/secret disclosure",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U24",
+      "milestone": "UCI-1",
+      "area": "performance",
+      "arrange": "Second unchanged worktree, same profiles",
+      "action": "Index",
+      "expected": "Metadata rows allowed, parse/embed cache hits without duplicate work",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U25",
+      "milestone": "UCI-1",
+      "area": "graph",
+      "arrange": "TS aliases/re-exports",
+      "action": "Extract/query",
+      "expected": "Declared TS resolver semantics and explicit unresolved cases",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U26",
+      "milestone": "UCI-2",
+      "area": "context",
+      "arrange": "Code + ADR + SQL/OpenAPI/config",
+      "action": "Search and trace",
+      "expected": "Typed evidence links; doc claim not execution fact",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U27",
+      "milestone": "UCI-2",
+      "area": "context",
+      "arrange": "Old model inference finishes after source change",
+      "action": "Apply job result",
+      "expected": "Old SEMANTIC edge excluded from current view",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U28",
+      "milestone": "UCI-2",
+      "area": "context",
+      "arrange": "Source set with unavailable/inaccessible member",
+      "action": "Cross-source query",
+      "expected": "No implicit fallback to another tree; honest partial/deny",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U29",
+      "milestone": "UCI-1",
+      "area": "graph",
+      "arrange": "Dense/cyclic graph exceeds budgets",
+      "action": "Path/impact",
+      "expected": "Bounded partial with stop_reason; no false no-dependency",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U30",
+      "milestone": "UCI-2",
+      "area": "ui",
+      "arrange": "Native built Code console",
+      "action": "Select worktree, query, expand, read, update",
+      "expected": "View labels/citations/currentness correspond to source",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U31",
+      "milestone": "UCI-2",
+      "area": "history",
+      "arrange": "Pinned view plus 100 successive saves and GC",
+      "action": "Read pin/current",
+      "expected": "Both valid while pin retained; bounded artifacts after release",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U32",
+      "milestone": "UCI-3",
+      "area": "migration",
+      "arrange": "Same string in different legacy schemes",
+      "action": "Resolve aliases",
+      "expected": "Typed mapping, no accidental merge",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U33",
+      "milestone": "UCI-3",
+      "area": "migration",
+      "arrange": "Legacy mixed code chunks",
+      "action": "Migrate",
+      "expected": "Rebuild real sources; no invented checkout/HEAD",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U34",
+      "milestone": "UCI-3",
+      "area": "migration",
+      "arrange": "Notes/issues/rules/docs/state private/global cases",
+      "action": "Old/new reads/writes",
+      "expected": "IDs/versions/allow-deny preserved",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U35",
+      "milestone": "UCI-3",
+      "area": "migration",
+      "arrange": "Immutable HAP/audit/crypto-bound records",
+      "action": "Map new addresses",
+      "expected": "Old cryptographic verification still valid; no rewrite",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U36",
+      "milestone": "UCI-1",
+      "area": "context",
+      "arrange": "Legacy client without cwd and two possible checkout",
+      "action": "Search/mutate",
+      "expected": "CONTEXT_REQUIRED, not arbitrary main/latest",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U37",
+      "milestone": "UCI-1",
+      "area": "scanner",
+      "arrange": "Unicode/case-sensitive Windows path and CRLF",
+      "action": "Index/read",
+      "expected": "Exact byte spans; no case/normalization collision",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U38",
+      "milestone": "UCI-1",
+      "area": "search",
+      "arrange": "Embedding model changed at same dimension",
+      "action": "Query",
+      "expected": "Profile isolation; no mixed vector spaces",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U39",
+      "milestone": "UCI-1",
+      "area": "git",
+      "arrange": "Submodule/nested .agent repository",
+      "action": "Parent index",
+      "expected": "Explicit source boundary; no recursive private scan",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U40",
+      "milestone": "UCI-1",
+      "area": "freshness",
+      "arrange": "Post-save exact path barrier",
+      "action": "Bounded wait then query",
+      "expected": "Satisfy required hashes/seq or typed stale/timeout",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U41",
+      "milestone": "UCI-2",
+      "area": "graph",
+      "arrange": "C# overload/partial; Python relative import",
+      "action": "Extract/query",
+      "expected": "Declared resolver semantics and explicit unresolved cases",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U42",
+      "milestone": "UCI-1",
+      "area": "exposure_completion",
+      "arrange": "Authorized exposure with a verified supported-host partial callback and a separate authorized exposure with no qualifying callback",
+      "action": "Record completion evidence and read both exposure receipts",
+      "expected": "Callback-backed receipt is partial; no-callback receipt remains unknown; neither completion state changes retrieval result_state or coverage",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U43",
+      "milestone": "UCI-1",
+      "area": "evidence",
+      "arrange": "Authorized closed code search and unavailable UCI exposure recorder before the initial append",
+      "action": "Request search, then read scoped codebase_status",
+      "expected": "Query returns status unavailable, EXPOSURE_UNAVAILABLE, exposure null, and no result body/items; no evidence row exists; status reports recorder unavailable with the closed failure code",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U44",
+      "milestone": "UCI-1",
+      "area": "evidence",
+      "arrange": "Existing exposure key for one authorized client/session and a second request reuses that key with a changed request ref, Source/Checkout/View, operation, or closed result metadata",
+      "action": "Submit the second search, graph, or versioned-read request",
+      "expected": "IDEMPOTENCY_MISMATCH is non-disclosing; no new row or stale exposure receipt is returned, no result body/items are returned, and recorder health is unchanged",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U45",
+      "milestone": "UCI-1",
+      "area": "evidence",
+      "arrange": "Completion callback reuses one exposure/verified-host/idempotency key with a different verified callback ref or outcome",
+      "action": "Submit the second verified supported-host callback",
+      "expected": "IDEMPOTENCY_MISMATCH returns only to the callback; no child row or stale completion record is returned, and the parent exposure remains unchanged without manufactured completion",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U46",
+      "milestone": "UCI-1",
+      "area": "evidence",
+      "arrange": "Authorized Source/Checkout/View and a closed unavailable result while the UCI exposure recorder remains healthy",
+      "action": "Return the unavailable search, graph, or versioned-read decision",
+      "expected": "Response keeps status unavailable with its closed source/index error, empty result items, the authorized contextual envelope, and one opaque exposure receipt; this remains distinct from EXPOSURE_UNAVAILABLE or IDEMPOTENCY_MISMATCH, which return exposure null and suppress the contextual envelope",
+      "runtime_result": "not_run"
+    }
+  ]
+}

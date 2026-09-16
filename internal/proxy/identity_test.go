@@ -128,6 +128,7 @@ func TestResolveProjectIdentityV2_NonGitAnchorStrictAndStable(t *testing.T) {
 }
 
 func TestResolveProjectIdentityV2_ConcurrentFirstUseConverges(t *testing.T) {
+	useProjectIdentityGitAbsenceStub(t)
 	dir := t.TempDir()
 	const callers = 24
 	identities := make([]proxy.ProjectIdentityV2, callers)
@@ -153,6 +154,7 @@ func TestResolveProjectIdentityV2_ConcurrentFirstUseConverges(t *testing.T) {
 }
 
 func TestResolveProjectIdentityV2_PreExistingAnchorsAreNeverReplaced(t *testing.T) {
+	useProjectIdentityGitAbsenceStub(t)
 	t.Run("valid", func(t *testing.T) {
 		dir := t.TempDir()
 		anchorPath := filepath.Join(dir, ".engram-project-v2.json")
@@ -280,21 +282,6 @@ func assertNoProjectAnchorTempFiles(t *testing.T, dir string) {
 	}
 }
 
-// findRealRepoRoot returns the absolute path of the current git repository
-// root. It exists solely for TestResolveProjectSlug_WorktreeMatchesMain,
-// which MUST inspect a real engram repo because its purpose is to verify
-// worktree-vs-main-checkout id stability in a real git environment. All
-// other tests in this file use initSyntheticGitRepo for full isolation
-// from the running checkout's git state.
-func findRealRepoRoot(t *testing.T) string {
-	t.Helper()
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		t.Fatalf("failed to determine git repo root: %v", err)
-	}
-	return filepath.Clean(strings.TrimSpace(string(out)))
-}
-
 // initSyntheticGitRepo creates a fresh, isolated git repository inside
 // t.TempDir() with a fixed remote URL. This replaces the previous
 // findRepoRoot helper, which was brittle when the test ran inside a git
@@ -363,6 +350,31 @@ func TestResolveProjectSlug_GitRepo(t *testing.T) {
 	const expectedRemote = "https://example.invalid/test/engram-identity-fixture.git"
 	if gitRemote != expectedRemote {
 		t.Errorf("gitRemote %q, expected %q", gitRemote, expectedRemote)
+	}
+}
+
+func TestResolveProjectIdentityV2_StripsGitRemoteUserinfo(t *testing.T) {
+	repoDir := initSyntheticGitRepo(t)
+	const rawRemote = "https://fixture-user:fixture-credential@example.invalid/acme/identity.git"
+	if _, err := exec.Command("git", "-C", repoDir, "remote", "set-url", "origin", rawRemote).CombinedOutput(); err != nil {
+		t.Fatal("set synthetic origin")
+	}
+
+	identity, err := proxy.ResolveProjectIdentityV2(context.Background(), repoDir)
+	if err != nil {
+		t.Fatal("resolve identity")
+	}
+	const want = "https://example.invalid/acme/identity.git"
+	if identity.GitRemote != want {
+		t.Fatal("git remote was not reduced to credential-free form")
+	}
+	if err := proxy.ValidateProjectIdentityV2(identity); err != nil {
+		t.Fatal("credential-free descriptor rejected")
+	}
+	rawIdentity := identity
+	rawIdentity.GitRemote = rawRemote
+	if err := proxy.ValidateProjectIdentityV2(rawIdentity); err == nil || strings.Contains(err.Error(), "fixture-credential") {
+		t.Fatal("raw-userinfo descriptor was not rejected safely")
 	}
 }
 
@@ -454,54 +466,44 @@ func TestResolveProjectSlug_ConsistentAcrossCalls(t *testing.T) {
 	}
 }
 
-// TestResolveProjectSlug_WorktreeMatchesMain verifies that a worktree of the
-// same repository produces the same id as the main checkout. Skipped when no
-// worktree is present.
+// TestResolveProjectSlug_WorktreeMatchesMain verifies that a linked worktree of
+// the same real Git repository produces the same identity as its main checkout.
 func TestResolveProjectSlug_WorktreeMatchesMain(t *testing.T) {
 	t.Parallel()
 
-	mainRepo := findRealRepoRoot(t)
-
-	out, err := exec.Command("git", "-C", mainRepo, "worktree", "list", "--porcelain").Output()
-	if err != nil {
-		t.Skip("git worktree list failed, skipping")
+	mainRepo := initSyntheticGitRepo(t)
+	if err := os.WriteFile(filepath.Join(mainRepo, "fixture.txt"), []byte("fixture\n"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
 	}
-
-	// Parse worktree paths: lines starting with "worktree ".
-	var worktreePaths []string
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "worktree ") {
-			continue
-		}
-		path := strings.TrimPrefix(line, "worktree ")
-		// Use filepath.Clean for portable cross-platform path comparison.
-		if !strings.EqualFold(filepath.Clean(path), filepath.Clean(mainRepo)) {
-			worktreePaths = append(worktreePaths, path)
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", mainRepo}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 		}
 	}
+	run("add", "fixture.txt")
+	run("commit", "-q", "-m", "identity fixture")
 
-	if len(worktreePaths) == 0 {
-		t.Skip("no additional worktrees found, skipping")
-	}
+	linkedRepo := filepath.Join(t.TempDir(), "linked")
+	run("worktree", "add", "-q", "--detach", linkedRepo, "HEAD")
 
-	mainID, _, _, err := proxy.ResolveProjectSlug(context.Background(), mainRepo)
+	mainID, mainName, mainRemote, err := proxy.ResolveProjectSlug(context.Background(), mainRepo)
 	if err != nil {
 		t.Fatalf("main repo id error: %v", err)
 	}
-
-	// The id is a pure 8-hex hash of (remoteURL + relativePath).
-	// A worktree checked out under a different directory name will have a different
-	// displayName but the SAME id (same remote, same relative path from repo root).
-	for _, wt := range worktreePaths {
-		wtID, _, _, wtErr := proxy.ResolveProjectSlug(context.Background(), wt)
-		if wtErr != nil {
-			t.Errorf("worktree %s id error: %v", wt, wtErr)
-			continue
-		}
-		if wtID != mainID {
-			t.Errorf("worktree %s id %q != main id %q", wt, wtID, mainID)
-		}
+	linkedID, linkedName, linkedRemote, err := proxy.ResolveProjectSlug(context.Background(), linkedRepo)
+	if err != nil {
+		t.Fatalf("linked worktree id error: %v", err)
+	}
+	if linkedID != mainID {
+		t.Fatalf("linked worktree id %q != main id %q", linkedID, mainID)
+	}
+	if linkedRemote != mainRemote {
+		t.Fatalf("linked worktree remote %q != main remote %q", linkedRemote, mainRemote)
+	}
+	if linkedName == mainName {
+		t.Fatalf("fixture names unexpectedly match: %q", mainName)
 	}
 }
 

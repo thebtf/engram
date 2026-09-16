@@ -5,12 +5,21 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 
+	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/proxy"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
+)
+
+const (
+	gitRevParse     = "rev-parse"
+	gitShowTopLevel = "--show-toplevel"
 )
 
 // slugCache caches the compatibility slug and v2 project identity by project
@@ -82,6 +91,16 @@ func (c *slugCache) Resolve(ctx context.Context, p muxcore.ProjectContext) strin
 	return id
 }
 
+// ResolveCompatibilityEvidence derives one non-authoritative legacy selector
+// without retaining it or substituting a project ID when derivation fails.
+func (c *slugCache) ResolveCompatibilityEvidence(p muxcore.ProjectContext) (string, error) {
+	slug, _, _, err := proxy.ResolveProjectSlug(context.Background(), p.Cwd)
+	if err != nil || slug == "" {
+		return "", errors.New("compatibility evidence unavailable")
+	}
+	return slug, nil
+}
+
 // ResolveIdentity returns stable v2 metadata for the given project and cwd.
 // The first successful resolution is reused until OnProjectRemoved calls
 // Forget, avoiding synchronous git subprocesses on every tool request.
@@ -99,6 +118,151 @@ func (c *slugCache) ResolveIdentity(ctx context.Context, p muxcore.ProjectContex
 	}
 	stored, _ := c.identities.LoadOrStore(key, identity)
 	return stored.(*pb.ProjectIdentityV2), nil
+}
+
+// projectIdentityV3InputError carries only a stable public refusal code. It
+// never retains the local anchor, path, remote, or process error.
+type projectIdentityV3InputError struct{ code string }
+
+func (e *projectIdentityV3InputError) Error() string { return e.code }
+
+func v3InputError(code string) error { return &projectIdentityV3InputError{code: code} }
+
+// ResolveIdentityV3 builds fresh V3 descriptor evidence. Unlike V2, it neither
+// reads nor retains a slug/identity cache: server resolution owns scoped state.
+// A nil descriptor with a nil error is a verified authority-free root usable
+// only for unscoped UCI discovery; it never grants scoped V3 authority.
+func (c *slugCache) ResolveIdentityV3(p muxcore.ProjectContext, clientInstanceID string) (*pb.ProjectIdentityV3, error) {
+	c.Forget(p.ID)
+	root, err := repositoryRootV3(p.Cwd)
+	if err != nil {
+		if verifiedAnchorlessDirectoryV3(p.Cwd) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	anchor, err := projectidentity.DiscoverAnchorV3(root, "repository")
+	if err != nil {
+		if verifiedUnbornRepositoryV3(p.Cwd, root) {
+			return nil, nil
+		}
+		return nil, v3InputError("PROJECT_ANCHOR_INVALID")
+	}
+	remotes, err := normalizedGitRemotesV3(root)
+	if err != nil {
+		return nil, err
+	}
+	descriptor, err := projectidentity.BuildDescriptorV3(anchor, remotes, nil, clientInstanceID)
+	if err != nil {
+		return nil, v3InputError("PROJECT_DESCRIPTOR_INVALID")
+	}
+	return &pb.ProjectIdentityV3{
+		Version:              uint32(descriptor.Version),
+		AnchorProjectId:      descriptor.AnchorProjectID,
+		Name:                 descriptor.Name,
+		Scope:                descriptor.Scope,
+		NormalizedGitRemotes: descriptor.NormalizedGitRemotes,
+		LegacyIdentifiers:    []*pb.ProjectLegacyIdentifierV3{},
+		ClientInstanceId:     descriptor.ClientInstanceID,
+	}, nil
+}
+
+func repositoryRootV3(cwd string) (string, error) {
+	output, err := exec.Command("git", "-C", cwd, gitRevParse, gitShowTopLevel).Output()
+	root := strings.TrimSpace(string(output))
+	if err != nil || root == "" {
+		return "", v3InputError("PROJECT_ANCHOR_INVALID")
+	}
+	return root, nil
+}
+
+func verifiedUnbornRepositoryV3(cwd, root string) bool {
+	prefix, err := exec.Command("git", "-C", cwd, gitRevParse, "--show-prefix").Output()
+	if err != nil || strings.TrimSpace(string(prefix)) != "" {
+		return false
+	}
+	if _, err := os.Lstat(filepath.Join(root, ".engram-project")); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	parentRoot, err := exec.Command("git", "-C", filepath.Dir(root), gitRevParse, gitShowTopLevel).Output()
+	if err == nil && filepath.Clean(strings.TrimSpace(string(parentRoot))) != filepath.Clean(root) {
+		return false
+	}
+	objectFormat, err := exec.Command("git", "-C", root, gitRevParse, "--show-object-format").Output()
+	if err != nil || (strings.TrimSpace(string(objectFormat)) != "sha1" && strings.TrimSpace(string(objectFormat)) != "sha256") {
+		return false
+	}
+	head, err := exec.Command("git", "-C", root, gitRevParse, "--verify", "HEAD").Output()
+	if err == nil || strings.TrimSpace(string(head)) != "" {
+		return false
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || (exitErr.ExitCode() != 1 && exitErr.ExitCode() != 128) {
+		return false
+	}
+	refLabel, err := exec.Command("git", "-C", root, "symbolic-ref", "--quiet", "--short", "HEAD").Output()
+	return err == nil && strings.TrimSpace(string(refLabel)) != ""
+}
+
+func verifiedAnchorlessDirectoryV3(cwd string) bool {
+	root := filepath.Clean(strings.TrimSpace(cwd))
+	info, err := os.Stat(root)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	for _, marker := range []string{".git", ".engram-project"} {
+		if _, err := os.Lstat(filepath.Join(root, marker)); err == nil || !errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+	}
+	output, err := exec.Command("git", "-C", root, gitRevParse, gitShowTopLevel).Output()
+	return err != nil && strings.TrimSpace(string(output)) == ""
+}
+
+func normalizedGitRemotesV3(root string) ([]string, error) {
+	output, err := exec.Command("git", "-C", root, "config", "--get-regexp", `^remote\..*\.url$`).Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return []string{}, nil
+		}
+		return nil, v3InputError("PROJECT_DESCRIPTOR_INVALID")
+	}
+
+	remotes := make([]string, 0)
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if line == "" {
+			continue
+		}
+		separator := strings.IndexAny(line, "\t ")
+		if separator <= 0 {
+			return nil, v3InputError("PROJECT_DESCRIPTOR_INVALID")
+		}
+		rawRemote := strings.TrimSpace(line[separator+1:])
+		normalized, disposition, normalizeErr := projectidentity.NormalizeGitRemoteV3(rawRemote)
+		if normalizeErr != nil || disposition == projectidentity.RemoteRefusedV3 {
+			return nil, v3InputError("PROJECT_DESCRIPTOR_INVALID")
+		}
+		if disposition == projectidentity.RemoteNormalizedV3 {
+			remotes = append(remotes, normalized)
+		}
+	}
+	sort.Strings(remotes)
+	return compactStrings(remotes), nil
+}
+
+func compactStrings(values []string) []string {
+	if len(values) < 2 {
+		return values
+	}
+	end := 1
+	for _, value := range values[1:] {
+		if value != values[end-1] {
+			values[end] = value
+			end++
+		}
+	}
+	return values[:end]
 }
 
 // Forget removes every cwd-scoped cache entry for a project ID. Called from

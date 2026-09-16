@@ -3,6 +3,7 @@ package embedding
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -266,5 +267,30 @@ func TestEmbed_NoAuthHeaderWhenKeyEmpty(t *testing.T) {
 	gotAuth := <-authChan
 	if gotAuth != "" {
 		t.Fatalf("Authorization header = %q, want empty", gotAuth)
+	}
+}
+
+func TestEmbedPreservesProviderHTTPStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "quota exhausted", http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		baseURL:        srv.URL,
+		model:          "test-model",
+		retryBaseDelay: 0,
+		httpClient:     srv.Client(),
+	}
+	_, err := client.Embed(context.Background(), []string{"conceptual query"})
+	if err == nil {
+		t.Fatal("Embed() error = nil, want provider quota error")
+	}
+	var status interface{ StatusCode() int }
+	if !errors.As(err, &status) {
+		t.Fatalf("Embed() error %T does not preserve provider status: %v", err, err)
+	}
+	if got := status.StatusCode(); got != http.StatusTooManyRequests {
+		t.Fatalf("provider status = %d, want %d", got, http.StatusTooManyRequests)
 	}
 }

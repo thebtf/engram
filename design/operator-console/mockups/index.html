@@ -1411,6 +1411,7 @@ const NAV = [
     { id:'rules', label:'Правила поведения', dot:'active' },
     { id:'issues', label:'Задачи', dot:'active', count:304 },
     { id:'projects', label:'Проекты и сессии', dot:'active' },
+    { id:'code', label:'Код', dot:'mustbuild' },
   ]},
   { grp:'Хранилище', items:[
     { id:'secrets', label:'Секреты', dot:'active' },
@@ -1737,6 +1738,7 @@ const SEARCH_SCOPES = [
   { id:'secret', label:'Секреты' },
   { id:'document', label:'Документы' },
   { id:'project', label:'Проекты' },
+  { id:'code', label:'Код' },
   { id:'settings', label:'Настройки' },
   { id:'design', label:'Дизайн-система' },
   { id:'action', label:'Действия' },
@@ -1748,6 +1750,7 @@ const SEARCH_KIND_LABELS = {
   secret:'секрет',
   document:'документ',
   project:'проект',
+  code:'код',
   settings:'настройка',
   design:'дизайн',
   action:'действие',
@@ -1840,6 +1843,12 @@ function buildSearchIndex(force){
     meta:s.owner, keywords:[s.name,s.kind,s.note,s.owner],
     route:{ modal:'settings', settingsSub:'clients' },
   }));
+  addSearchItem(items,{
+    key:'code:flow', scope:'code', kind:'code', title:'Код: Source → Checkout → View',
+    detail:'Контракт поиска: ограниченный граф возвращает к Source; экран пока must-build.',
+    meta:'must-build', keywords:['code source checkout view code search bounded graph source коллекция collection'],
+    route:{ current:'code', sub:'source' },
+  });
   [
     ['controls','Контролы','Кнопки, поля, chips, select и действия строк','controls buttons tbtn act chips select'],
     ['lists','Каркас списков','Выделить все, сброс фильтра, пагинация и bulk-selection','list table select all reset filter pagination'],
@@ -1944,7 +1953,7 @@ function openSearchPage(initial=''){
   current='search'; sub=null; openEntity=null; selected.clear(); renderNav(); renderArea();
 }
 function renderSearch(c){
-  c.appendChild(areaHead('Поиск','Ищите записи памяти, задачи, правила, секреты, документы, проекты, настройки и действия по всей консоли.', false, null, null));
+  c.appendChild(areaHead('Поиск','Ищите записи памяти, задачи, правила, секреты, документы, код, проекты, настройки и действия по всей консоли.', false, null, null));
   const body=el('div','area-body'), pane=el('div','pane search-pane');
   body.appendChild(pane); c.appendChild(body);
   const counts=searchScopeCounts();
@@ -1953,7 +1962,7 @@ function renderSearch(c){
   pane.innerHTML=`<div class="search-shell"><div class="search-page">
     <aside class="search-page-rail">
       <h2>Поиск</h2>
-      <p>Единая точка входа: найти запись, задачу, документ, настройку или рабочее действие. Верхнее поле ведёт сюда.</p>
+      <p>Единая точка входа: найти запись, задачу, документ, кодовый Source, настройку или рабочее действие. Верхнее поле ведёт сюда.</p>
       ${scopeButtons}
     </aside>
     <main class="search-page-main">
@@ -2004,6 +2013,7 @@ const NAV_ICONS = {
   rules:'<path d="M3 4 H13 M3 8 H10 M3 12 H8"/><path d="M10.7 11.6 L12 12.9 L14 10.4"/>',
   issues:'<circle cx="8" cy="8" r="5.7"/><circle cx="8" cy="8" r="1.55"/>',
   projects:'<path d="M2 4.6 H6.2 L7.7 6.1 H14 V12.6 H2 Z"/>',
+  code:'<path d="M5.2 4.2 2.4 8l2.8 3.8"/><path d="M10.8 4.2 13.6 8l-2.8 3.8"/><path d="M9.2 2.6 6.8 13.4"/>',
   secrets:'<circle cx="5.2" cy="5.4" r="2.7"/><path d="M7.1 7.3 L13 13.2 M11 11.2 V13.4 M13 13.2 H10.8"/>',
   documents:'<path d="M4 2.2 H10 L13 5.2 V14 H4 Z"/><path d="M9.6 2.4 V5.4 H12.6"/>',
   collections:'<path d="M2.3 4 H13.7 V6.1 H2.3 Z"/><path d="M3.4 6.1 V13 H12.6 V6.1"/><path d="M6.4 9 H9.6"/>',
@@ -2397,7 +2407,7 @@ function wireEntityChips(scope, kind, entity, field, label){
 const AREAS = {
   overview: renderOverview,
   search: renderSearch,
-  memories: renderMemoryLab, queue: renderMemoryLab, noise: renderNoise, graph: renderGraph,
+  memories: renderMemoryLab, queue: renderMemoryLab, noise: renderNoise, graph: renderGraph, code: renderCode,
   rules: renderRules, issues: renderIssues, books: renderBooks, secrets: renderVault, documents: renderVault, collections: renderVault, projects: renderProjects,
   access: renderAccess, designsystem: renderDesignSystem, settings: renderSettings, health: renderHealth, tombstones: renderTombstones,
 };
@@ -2652,6 +2662,29 @@ function mountNoise(c){
     current='memories'; sub=null; selected=new Set(['m_77b0','m_19ac']); renderNav(); renderArea();
     toast('2 записи выбраны для массового скрытия');
   };
+}
+
+/* ---- Code: Source → Checkout → View ---- */
+function renderCode(c){
+  const stage=sub||'source';
+  const stages={
+    source:{ title:'Source', state:'must-build', summary:'Источник не выбран', detail:'Нужен реестр источников с происхождением и устойчивым идентификатором. Пока его нет, экран не подставляет репозиторий или ревизию.' },
+    checkout:{ title:'Checkout', state:'blocked', summary:'Нужен Source', detail:'Checkout разрешается только от явно выбранного Source. Коллекция, глобальный поиск и имя проекта не являются неявной заменой.' },
+    view:{ title:'View', state:'empty', summary:'Нужен Checkout', detail:'Файлы и символы появляются только из разрешённого Checkout. До этого здесь честное пустое состояние, а не фиктивное дерево.' },
+  };
+  const active=stages[stage]||stages.source;
+  c.appendChild(areaHead('Код','Три явных шага: Source → Checkout → View. Поверхность проектирует поток; она не заявляет, что runtime уже подключён.', false, [
+    {id:'source',label:'Source'}, {id:'checkout',label:'Checkout'}, {id:'view',label:'View'},
+  ], stage));
+  const pane=el('div','pane');
+  pane.innerHTML=legend()+`<div class="callout" style="margin-top:14px"><b>Поиск → ограниченный граф → Source</b><div class="ge">Поиск кода ведёт в граф максимум на 2 перехода и 24 узла. Выбор узла возвращает к Source; только затем доступен Checkout и View.</div></div>
+    <div class="grid" style="margin-top:14px"><div class="grid-h">этап · состояние · следующий честный шаг</div>
+      ${Object.entries(stages).map(([id,item])=>`<div class="erow${id===stage?' open':''}" style="cursor:pointer" data-code-stage="${id}"><div class="estate ${item.state==='must-build'?'mustbuild':item.state==='blocked'?'dormant':'stale'}"></div><div class="ebody"><div class="epreview">${item.title} · ${item.summary}</div><div class="emeta"><span class="bdg ${item.state==='must-build'?'mb':item.state==='blocked'?'gate':'off'}">${item.state}</span><span>${item.detail}</span></div></div></div>`).join('')}
+    </div>
+    <div class="surface-card" style="margin-top:14px"><h3 style="margin-top:0">${active.title}</h3><p style="margin-bottom:0;color:var(--fg-2);line-height:1.48">${active.detail}</p></div>
+    <div class="callout danger" style="margin-top:14px"><b>Коллекции не участвуют в этом потоке.</b><div class="ge">«Старые коллекции» — stale read-only listing. Строка-депрекейшн от search_collection означает отключённый поиск, а не нулевой результат, Source или Checkout.</div></div>`;
+  pane.querySelectorAll('[data-code-stage]').forEach(row=>row.onclick=()=>{ sub=row.dataset.codeStage; renderArea(); });
+  c.appendChild(el('div','area-body').appendChild(pane).parentElement);
 }
 
 /* ---- Graph ---- */
@@ -3600,7 +3633,7 @@ function renderVault(c){
   const meta = {
     cred: ['Секреты','Ключи и доступы: значения не показываются в списке, раскрытие только явным действием оператора.'],
     docs: ['Документы','Версионированные документы и операторские материалы без смешивания с секретами.'],
-    coll: ['Старые коллекции','Наследие до v5: видно как отключённая поверхность, чтобы её не принять за рабочий поиск.'],
+    coll: ['Старые коллекции','Наследие до v5: read-only listing, не Source и не Checkout для Code flow.'],
   }[mode];
   c.appendChild(areaHead(meta[0], meta[1], false));
   const pane=el('div','pane'); pane.innerHTML=legend();
@@ -3652,8 +3685,8 @@ function renderVault(c){
       <div class="erow" style="cursor:default"><div class="ebody"><div class="epreview">docs/architecture.md</div><div class="emeta"><span>v4</span><span>markdown</span><span>operator</span></div></div><div class="eside"><button class="act">История версий</button><button class="act">Сохранить новую версию</button></div></div></div>
       <div class="mb-card" style="margin-top:14px">Комментарии и сравнение версий<div class="mid">Backend умеет отдавать комментарии, но в UI ещё нет полноценной поверхности просмотра.</div></div>`;
   } else {
-    pane.innerHTML+=`<div class="callout danger">search_collection — живая заглушка: возвращает строку-депрекейшн, НЕ ошибку (085 убрал chunk-поиск). Рендерим как отключённый поиск, не как «нет результатов».</div>
-      <div class="gate-off" style="border-color:color-mix(in oklab,var(--class-stale),transparent 60%);background:color-mix(in oklab,var(--class-stale),transparent 92%);color:var(--class-stale);margin-top:14px">Поиск по коллекциям отключён (removed v5)<div class="ge">listing работает; search возвращает депрекейшн-строку</div></div>`;
+    pane.innerHTML+=`<div class="callout danger">search_collection — живая заглушка: возвращает строку-депрекейшн, НЕ ошибку (085 убрал chunk-поиск). Рендерим отключённый stale-state, не «нет результатов».</div>
+      <div class="gate-off" style="border-color:color-mix(in oklab,var(--class-stale),transparent 60%);background:color-mix(in oklab,var(--class-stale),transparent 92%);color:var(--class-stale);margin-top:14px">Поиск по коллекциям отключён (removed v5)<div class="ge">listing работает; search возвращает депрекейшн-строку. Коллекция не становится Source, Checkout или fallback для Code.</div></div>`;
   }
   c.appendChild(el('div','area-body').appendChild(pane).parentElement);
 }

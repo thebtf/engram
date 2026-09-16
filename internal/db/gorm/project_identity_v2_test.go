@@ -120,6 +120,27 @@ func TestRegisterAndResolve_RejectsRawVsNormalizedSelectorsAndMetadata(t *testin
 	}
 }
 
+func TestRegisterAndResolve_RejectsGitRemoteUserinfoBeforeDatabaseAccess(t *testing.T) {
+	for _, rawRemote := range []string{
+		"https://fixture-user:fixture-credential@example.invalid/acme/identity.git",
+		"//fixture-user:fixture-credential@example.invalid/%zz",
+	} {
+		_, err := RegisterAndResolve(context.Background(), nil, "selector", gitIdentityV2("selector", rawRemote))
+		var identityErr *ProjectIdentityError
+		if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityInvalid || strings.Contains(err.Error(), "fixture-credential") {
+			t.Fatal("userinfo remote reached the database boundary or leaked")
+		}
+	}
+}
+
+func TestValidateProjectIdentityV2_AcceptsScpAndLocalRemotesWithAt(t *testing.T) {
+	for _, remote := range []string{"fixture-user@example.invalid:repo.git", "./fixture@directory:repo.git"} {
+		if err := ValidateProjectIdentityV2(*gitIdentityV2("selector", remote)); err != nil {
+			t.Fatal("credential-free Git remote was rejected")
+		}
+	}
+}
+
 func TestRegisterAndResolve_StrictOuterSelectorRejectsBeforeDatabaseAccess(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -143,6 +164,29 @@ func TestRegisterAndResolve_StrictOuterSelectorRejectsBeforeDatabaseAccess(t *te
 				t.Fatalf("error=%T %v, want PROJECT_IDENTITY_INVALID before DB access", err, err)
 			}
 		})
+	}
+}
+
+func TestUpsertProject_RejectsGitRemoteUserinfoBeforeWrite(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	for index, remote := range []string{
+		"https://fixture-user:fixture-credential@example.invalid/acme/identity.git",
+		"//fixture-user:fixture-credential@example.invalid/%zz",
+	} {
+		projectID := fmt.Sprintf("project-identity-userinfo-write-fence-%d", index)
+		defer db.Exec(`DELETE FROM projects WHERE id = ?`, projectID)
+
+		err := UpsertProject(context.Background(), db, projectID, "", remote, "", "identity")
+		var identityErr *ProjectIdentityError
+		if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityInvalid || strings.Contains(err.Error(), "fixture-credential") {
+			t.Fatal("userinfo remote reached the durable write boundary or leaked")
+		}
+		var count int64
+		if err := db.Model(&Project{}).Where("id = ?", projectID).Count(&count).Error; err != nil || count != 0 {
+			t.Fatal("userinfo remote wrote a project row")
+		}
 	}
 }
 
@@ -587,6 +631,15 @@ END $$`, functionName, legacyID)
 	}
 	if legacyClaims != 1 {
 		t.Fatalf("legacy row claims=%d, want exactly one: %#v", legacyClaims, results)
+	}
+	for i, identity := range identities {
+		replayed, err := RegisterAndResolve(ctx, db, aliases[i], identity)
+		if err != nil {
+			t.Fatalf("replay %d: %v", i, err)
+		}
+		if replayed.CanonicalProjectID != results[i].CanonicalProjectID {
+			t.Fatalf("replay %d canonical=%q, want %q", i, replayed.CanonicalProjectID, results[i].CanonicalProjectID)
+		}
 	}
 }
 

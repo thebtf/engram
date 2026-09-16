@@ -41,6 +41,17 @@ func (s *Server) CodeIndexNegotiate(ctx context.Context, req *pb.CodeIndexNegoti
 	if req.GetIndexSessionId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "index_session_id must not be empty")
 	}
+	if err := rejectHAPCredentialWithoutProject(ctx); err != nil {
+		return nil, err
+	}
+	if transport, ok := s.currentUCITransport().(legacyCodeIndexNegotiator); ok {
+		response, err := transport.LegacyCodeIndexNegotiate(ctx, req)
+		if err != nil {
+			return nil, uciTransportHandlerError(ctx, err)
+		}
+		return response, nil
+	}
+
 	if s.db == nil {
 		return nil, status.Error(codes.Unavailable, "database not ready")
 	}
@@ -159,6 +170,9 @@ func (s *Server) CodeIndexUpload(stream pb.EngramService_CodeIndexUploadServer) 
 			}
 			projectID = msg.GetProjectId()
 			sessionID = msg.GetIndexSessionId()
+			if err := rejectHAPCredentialWithoutProject(stream.Context()); err != nil {
+				return err
+			}
 		} else if msg.GetProjectId() != projectID || msg.GetIndexSessionId() != sessionID {
 			return status.Error(codes.InvalidArgument, "project_id or index_session_id changed mid-stream")
 		}

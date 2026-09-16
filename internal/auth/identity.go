@@ -3,6 +3,11 @@
 // source of truth for token-based authentication across HTTP and gRPC transports.
 package auth
 
+import (
+	"fmt"
+	"time"
+)
+
 // Source identifies the authentication path that produced an Identity. It is set
 // by the validator (for header/Bearer paths) or by middleware directly (for
 // session-cookie / forward-auth paths).
@@ -71,6 +76,34 @@ func IsValidPrincipalKind(kind PrincipalKind) bool {
 	}
 }
 
+// BrowserSubject is the canonical typed identity of one persisted enabled browser user.
+// It is realm-qualified when a BrowserReadGrant records it beside the exact Source realm.
+type BrowserSubject struct {
+	UserID    int64
+	Principal string
+	Kind      PrincipalKind
+}
+
+// BrowserSubjectForUser deterministically derives the only principal a dashboard
+// user can present to the exact Source-owner grant boundary.
+func BrowserSubjectForUser(userID int64) BrowserSubject {
+	if userID <= 0 {
+		return BrowserSubject{}
+	}
+	return BrowserSubject{
+		UserID:    userID,
+		Principal: fmt.Sprintf("browser-user/%d", userID),
+		Kind:      PrincipalKindHuman,
+	}
+}
+
+// Valid reports whether subject is a canonical human persisted-user reference.
+func (subject BrowserSubject) Valid() bool {
+	return subject.UserID > 0 &&
+		subject.Principal == fmt.Sprintf("browser-user/%d", subject.UserID) &&
+		subject.Kind == PrincipalKindHuman
+}
+
 // Identity is the immutable result of a successful token validation. It is a
 // value type — passed by value, never mutated after construction.
 type Identity struct {
@@ -81,6 +114,11 @@ type Identity struct {
 	// require Source == SourceSession; bearer-based callers (master OR
 	// client) are explicitly rejected.
 	Source Source
+
+	// BrowserSubject is populated only by a successfully authenticated
+	// persisted-user browser session. It is zero for HMAC, keycard, master,
+	// and auth-disabled identities.
+	BrowserSubject BrowserSubject
 
 	// KeycardID is the api_tokens.id (UUID) when Source == SourceClient.
 	// Empty string for SourceMaster and SourceSession.
@@ -93,6 +131,10 @@ type Identity struct {
 	// PrincipalKind classifies Principal when Principal is non-empty. Empty when
 	// no principal is assigned.
 	PrincipalKind PrincipalKind
+
+	// ExpiresAt is copied from api_tokens.expires_at for client keycards. Nil
+	// preserves the legacy non-expiring keycard behavior.
+	ExpiresAt *time.Time
 }
 
 // Admin returns an Identity for a successful master-token match.
@@ -111,18 +153,30 @@ func Client(scope string, keycardID string) Identity {
 // with optional principal metadata. Empty principal keeps the legacy identity
 // shape; non-empty principal with an empty kind defaults to "human".
 func ClientWithPrincipal(scope string, keycardID string, principal string, principalKind PrincipalKind) Identity {
+	return ClientWithPrincipalExpiry(scope, keycardID, principal, principalKind, nil)
+}
+
+// ClientWithPrincipalExpiry returns a client identity with an optional copied
+// expiry. The copy keeps Identity value-like even when its source token model
+// is later reused or mutated by a caller.
+func ClientWithPrincipalExpiry(scope string, keycardID string, principal string, principalKind PrincipalKind, expiresAt *time.Time) Identity {
 	if principal == "" {
 		principalKind = ""
 	} else if principalKind == "" {
 		principalKind = PrincipalKindHuman
 	}
-	return Identity{
+	identity := Identity{
 		Role:          Role(scope),
 		Source:        SourceClient,
 		KeycardID:     keycardID,
 		Principal:     principal,
 		PrincipalKind: principalKind,
 	}
+	if expiresAt != nil {
+		expiry := expiresAt.UTC()
+		identity.ExpiresAt = &expiry
+	}
+	return identity
 }
 
 // Session returns an Identity for a successful session-cookie authentication.
@@ -130,6 +184,23 @@ func ClientWithPrincipal(scope string, keycardID string, principal string, princ
 // for engram_auth cookie).
 func Session(role string) Identity {
 	return Identity{Role: Role(role), Source: SourceSession}
+}
+
+// SessionForBrowserUser returns a session identity carrying the canonical
+// persisted-user subject. Middleware calls it only after loading an enabled User.
+func SessionForBrowserUser(role string, userID int64) Identity {
+	identity := Session(role)
+	identity.BrowserSubject = BrowserSubjectForUser(userID)
+	return identity
+}
+
+// SessionBrowserSubject returns the canonical real-user browser subject only for
+// DB-backed or Authentik session identities populated by middleware.
+func (i Identity) SessionBrowserSubject() (BrowserSubject, bool) {
+	if i.Source != SourceSession || !i.BrowserSubject.Valid() {
+		return BrowserSubject{}, false
+	}
+	return i.BrowserSubject, true
 }
 
 // AuthDisabled returns the synthetic identity used by disabled-auth mode.

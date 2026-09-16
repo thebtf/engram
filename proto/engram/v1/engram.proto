@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-import "google/protobuf/timestamp.proto";
-
 package engram.v1;
+
+import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/thebtf/engram/proto/engram/v1;engramv1";
 
@@ -37,6 +37,10 @@ service EngramService {
   // No ranking or LLM filtering is applied; the server returns SQL-backed entities only.
   rpc GetSessionStartContext(GetSessionStartContextRequest) returns (GetSessionStartContextResponse);
 
+  // GetAmbientCandidates returns bounded same-turn ambient context through the
+  // existing service. It is private to the credential-neutral legacy bridge.
+  rpc GetAmbientCandidates(GetAmbientCandidatesRequest) returns (GetAmbientCandidatesResponse);
+
   // NegotiateVersion validates MAJOR-version compatibility between client and server.
   rpc NegotiateVersion(NegotiateVersionRequest) returns (NegotiateVersionResponse);
 
@@ -55,6 +59,47 @@ service EngramService {
   // index_session_id does not match the negotiated session) and returns a
   // receipt with counts of embedded and deleted rows.
   rpc CodeIndexUpload(stream CodeChunkUpload) returns (CodeIndexUploadReceipt);
+
+  // RegisterProjectIdentityV3 explicitly establishes a V3 anchor binding.
+  // Authentication and registration authority are derived solely by the server.
+  rpc RegisterProjectIdentityV3(RegisterProjectIdentityV3Request) returns (RegisterProjectIdentityV3Response);
+  // Bind establishes a private host-advisor capability binding.
+  rpc Bind(HostAdvisorBindRequest) returns (HostAdvisorBindResponse);
+
+  // Advise is reserved for the host-advisor delivery semantics owned by HAP-03.
+  rpc Advise(HostAdvisorAdviseRequest) returns (HostAdvisorAdviseResponse);
+
+  // Observe is reserved for host-advisor observation semantics owned by HAP-03.
+  rpc Observe(HostAdvisorObserveRequest) returns (HostAdvisorObserveResponse);
+
+  // BindCodeContext resolves a scoped immutable code context for one client session.
+  rpc BindCodeContext(BindCodeContextRequest) returns (BindCodeContextResponse);
+
+  // PollCodeIndexIntents discovers one queued browser intent for a freshly
+  // reauthorized daemon-local target. Polling never acknowledges work.
+  rpc PollCodeIndexIntents(PollCodeIndexIntentsRequest) returns (PollCodeIndexIntentsResponse);
+
+  // UpdateCodeIndexIntent applies replay-keyed ACK/START/RENEW/FAIL operations
+  // over the exact authenticated daemon process claim.
+  rpc UpdateCodeIndexIntent(UpdateCodeIndexIntentRequest) returns (UpdateCodeIndexIntentResponse);
+
+  // BeginCodeIndex starts a fenced, checkout-scoped index build.
+  rpc BeginCodeIndex(BeginCodeIndexRequest) returns (BeginCodeIndexResponse);
+
+  // StageCodeIndex receives ordered parts for one fenced index build.
+  rpc StageCodeIndex(stream StageCodeIndexFrame) returns (StageCodeIndexResponse);
+
+  // FinalizeCodeIndex explicitly publishes a completed staged manifest.
+  rpc FinalizeCodeIndex(FinalizeCodeIndexRequest) returns (FinalizeCodeIndexResponse);
+
+  // QueryCode returns a bounded result payload for one pinned context.
+  rpc QueryCode(QueryCodeRequest) returns (QueryCodeResponse);
+
+  // ExploreCode returns a bounded graph payload for one pinned context.
+  rpc ExploreCode(ExploreCodeRequest) returns (ExploreCodeResponse);
+
+  // RecordUCICompletion records one verified supported-host completion callback.
+  rpc RecordUCICompletion(RecordUCICompletionRequest) returns (RecordUCICompletionResponse);
 }
 
 // ---- SyncProjectState messages ----------------------------------------
@@ -132,9 +177,9 @@ message ProjectEvent {
 
 enum ProjectEventType {
   PROJECT_EVENT_TYPE_UNSPECIFIED = 0;
-  PROJECT_EVENT_TYPE_REMOVED     = 1;
-  PROJECT_EVENT_TYPE_CREATED     = 2; // reserved for v0.2.0
-  PROJECT_EVENT_TYPE_RENAMED     = 3; // reserved for v0.2.0
+  PROJECT_EVENT_TYPE_REMOVED = 1;
+  PROJECT_EVENT_TYPE_CREATED = 2; // reserved for v0.2.0
+  PROJECT_EVENT_TYPE_RENAMED = 3; // reserved for v0.2.0
 }
 
 // ---- Session-start context messages --------------------------------------
@@ -150,6 +195,18 @@ message GetSessionStartContextRequest {
   // issues_limit is the maximum number of active issues to return, ordered by priority then newest first.
   // Zero means the server default.
   int32 issues_limit = 3;
+
+  // project_identity_v3 selects V3 central resolution. When present, project
+  // is legacy compatibility input and MUST NOT be used for scoped access.
+  ProjectIdentityV3 project_identity_v3 = 4;
+
+  // host_session_ref is the opaque host-session reference bound by the relay.
+  // Its presence selects the private bridge compatibility branch.
+  string host_session_ref = 5;
+
+  // relay_revision is the installed private relay revision. The server admits
+  // it only when the dedicated relay gate accepts this exact revision.
+  string relay_revision = 6;
 }
 
 message GetSessionStartContextResponse {
@@ -160,6 +217,9 @@ message GetSessionStartContextResponse {
   SessionStartRuleRouter rule_router = 5;
   SessionStartMetaSummary meta_summary = 6;
 
+  // project_resolution_v3 is populated only for V3 requests. Its project_key
+  // and resolved_scope are absent on a refusal.
+  ProjectResolutionResultV3 project_resolution_v3 = 7;
 }
 
 message SessionStartIssue {
@@ -271,6 +331,9 @@ message CallToolRequest {
   string session_id = 4;
   // Full versioned identity metadata. Additive: old servers ignore it.
   ProjectIdentityV2 project_identity = 5;
+  // Version 3 descriptor. Its presence selects the V3 resolver; project and
+  // project_identity are retained solely for the explicit V2 compatibility branch.
+  ProjectIdentityV3 project_identity_v3 = 6;
 }
 
 // CallToolResponse carries the result of an MCP tool call.
@@ -281,6 +344,8 @@ message CallToolResponse {
   bytes content_json = 2;
   // Server-resolved canonical selector used for this call.
   string canonical_project = 3;
+  // Present only for a V3 request that resolved successfully.
+  ProjectResolutionResultV3 project_resolution_v3 = 4;
 }
 
 // InitializeRequest is the handshake from daemon to server.
@@ -289,6 +354,8 @@ message InitializeRequest {
   string client_version = 2;
   string project = 3;
   ProjectIdentityV2 project_identity = 4;
+  // Version 3 descriptor. Its presence selects the V3 resolver.
+  ProjectIdentityV3 project_identity_v3 = 5;
 }
 
 // InitializeResponse carries server capabilities and tool definitions.
@@ -297,6 +364,10 @@ message InitializeResponse {
   string server_version = 2;
   repeated ToolDefinition tools = 3;
   string canonical_project = 4;
+  // Present only for a V3 request that resolved successfully.
+  ProjectResolutionResultV3 project_resolution_v3 = 5;
+  // Present only for an eligible authenticated workstation keycard.
+  bytes authenticated_subject_proof_sha256 = 6;
 }
 
 // ToolDefinition describes a single MCP tool.
@@ -319,12 +390,12 @@ message PingResponse {
 // chunk_type is a free-form string; the only value produced by CR-002a is
 // "line-block". AST-derived types are added in CR-002b.
 message CodeChunkMeta {
-  string chunk_id      = 1;
-  string file_path     = 2;
-  int32  byte_start    = 3;
-  int32  byte_end      = 4;
-  string language      = 5;
-  string chunk_type    = 6;
+  string chunk_id = 1;
+  string file_path = 2;
+  int32 byte_start = 3;
+  int32 byte_end = 4;
+  string language = 5;
+  string chunk_type = 6;
   string content_sha256 = 7;
 }
 
@@ -332,7 +403,7 @@ message CodeChunkMeta {
 // project. The server diffs this against its stored identity keys and returns
 // the delta (need_chunks / stale_chunks).
 message CodeIndexNegotiateRequest {
-  string project_id       = 1;
+  string project_id = 1;
   string index_session_id = 2;
   repeated CodeChunkMeta manifest = 3;
 }
@@ -344,16 +415,16 @@ message CodeIndexNegotiateRequest {
 //   stale_chunks — chunk_ids present on the server but absent from the
 //                  client manifest (will be swept at CodeIndexUpload EOF).
 message CodeIndexNegotiateResponse {
-  repeated string need_chunks   = 1;
-  repeated string stale_chunks  = 2;
+  repeated string need_chunks = 1;
+  repeated string stale_chunks = 2;
 }
 
 // CodeChunkUpload carries a single chunk payload in the CodeIndexUpload stream.
 message CodeChunkUpload {
-  string        project_id       = 1;
-  string        index_session_id = 2;
-  CodeChunkMeta meta             = 3;
-  bytes         content          = 4;
+  string project_id = 1;
+  string index_session_id = 2;
+  CodeChunkMeta meta = 3;
+  bytes content = 4;
 }
 
 // CodeIndexUploadReceipt is returned when the CodeIndexUpload stream closes.
@@ -362,9 +433,9 @@ message CodeChunkUpload {
 //   deleted  — number of stale rows swept after stream close.
 //   errors   — per-chunk error strings (non-fatal; successful chunks still count).
 message CodeIndexUploadReceipt {
-  int32           embedded = 1;
-  int32           deleted  = 2;
-  repeated string errors   = 3;
+  int32 embedded = 1;
+  int32 deleted = 2;
+  repeated string errors = 3;
 }
 
 // ProjectIdentityV2 carries one complete identity source. Git identities use
@@ -381,4 +452,624 @@ message ProjectIdentityV2 {
   string relative_path = 5;
   string non_git_anchor = 6;
   optional bool anchor_shared = 7;
+}
+
+// ProjectLegacyIdentifierV3 is non-authoritative compatibility evidence.
+message ProjectLegacyIdentifierV3 {
+  string scheme = 1;
+  string value = 2;
+  string provenance = 3;
+}
+
+// ProjectIdentityV3 is the versioned project descriptor submitted by a V3-capable client.
+// It deliberately has no project_key: clients cannot select canonical project authority.
+message ProjectIdentityV3 {
+  uint32 version = 1;
+  string anchor_project_id = 2;
+  string name = 3;
+  string scope = 4;
+  repeated string normalized_git_remotes = 5;
+  repeated ProjectLegacyIdentifierV3 legacy_identifiers = 6;
+  string client_instance_id = 7;
+}
+
+// ProjectResolutionOutcomeV3 is the closed transport representation of V3 outcomes.
+enum ProjectResolutionOutcomeV3 {
+  PROJECT_RESOLUTION_OUTCOME_V3_UNSPECIFIED = 0;
+  PROJECT_RESOLVED = 1;
+  PROJECT_REDIRECTED = 2;
+  PROJECT_ONBOARDING_REQUIRED = 3;
+  PROJECT_ANCHOR_INVALID = 4;
+  PROJECT_SCOPE_MISMATCH = 5;
+  PROJECT_NESTED_REPOSITORY_UNRESOLVED = 6;
+  PROJECT_ANCHOR_DECISION_REQUIRED = 7;
+  PROJECT_IDENTITY_AMBIGUOUS = 8;
+  PROJECT_DESCRIPTOR_UNSUPPORTED = 9;
+  PROJECT_DESCRIPTOR_INVALID = 10;
+  PROJECT_KEY_CLIENT_ASSERTION_FORBIDDEN = 11;
+}
+
+// ProjectResolutionResultV3 carries only public resolution facts. project_key,
+// resolved_scope, and redirect_reference are set only for successful outcomes.
+message ProjectResolutionResultV3 {
+  ProjectResolutionOutcomeV3 outcome = 1;
+  string correlation = 2;
+  optional string project_key = 3;
+  optional string resolved_scope = 4;
+  optional string redirect_reference = 5;
+}
+
+// RegisterProjectIdentityV3Request is deliberately descriptor-only. It carries
+// neither project authority nor registration authorization from the client.
+message RegisterProjectIdentityV3Request {
+  ProjectIdentityV3 project_identity_v3 = 1;
+
+  // relay_revision selects the additive registration branch used only by the
+  // private bridge. An omitted value preserves existing registration behavior.
+  string relay_revision = 2;
+}
+
+// RegisterProjectIdentityV3Response returns the existing typed V3 resolution result.
+message RegisterProjectIdentityV3Response {
+  ProjectResolutionResultV3 project_resolution_v3 = 1;
+}
+
+// GetAmbientCandidatesRequest contains only relay-bound callback facts. It has
+// no raw project selector: the V3 descriptor is resolved by the server.
+message GetAmbientCandidatesRequest {
+  ProjectIdentityV3 project_identity_v3 = 1;
+  string host_session_ref = 2;
+  string query_text = 3;
+  int32 limit = 4;
+  string relay_revision = 5;
+}
+
+// GetAmbientCandidatesResponse returns only bounded, untrusted ambient text.
+message GetAmbientCandidatesResponse {
+  string additional_context = 1;
+}
+
+// HostAdvisorHostFamily identifies the host family that owns callback facts.
+enum HostAdvisorHostFamily {
+  HOST_ADVISOR_HOST_FAMILY_UNSPECIFIED = 0;
+  HOST_ADVISOR_HOST_FAMILY_OMP = 1;
+  HOST_ADVISOR_HOST_FAMILY_CLAUDE_CODE = 2;
+  HOST_ADVISOR_HOST_FAMILY_CODEX = 3;
+}
+
+// HostAdvisorArtifactKind identifies the proven artifact source.
+enum HostAdvisorArtifactKind {
+  HOST_ADVISOR_ARTIFACT_KIND_UNSPECIFIED = 0;
+  HOST_ADVISOR_ARTIFACT_KIND_INSTALLED = 1;
+  HOST_ADVISOR_ARTIFACT_KIND_SOURCE = 2;
+}
+
+// HostAdvisorSemantic identifies a closed host callback semantic.
+enum HostAdvisorSemantic {
+  HOST_ADVISOR_SEMANTIC_UNSPECIFIED = 0;
+  HOST_ADVISOR_SEMANTIC_BEFORE_AGENT_START = 1;
+  HOST_ADVISOR_SEMANTIC_TOOL_RESULT = 2;
+  HOST_ADVISOR_SEMANTIC_TOOL_ACTION = 3;
+  HOST_ADVISOR_SEMANTIC_SESSION_FINALIZATION = 4;
+}
+
+// HostAdvisorAction identifies a closed action capability.
+enum HostAdvisorAction {
+  HOST_ADVISOR_ACTION_UNSPECIFIED = 0;
+  HOST_ADVISOR_ACTION_EMIT_ADVICE = 1;
+  HOST_ADVISOR_ACTION_ADAPTER_ATTESTATION = 2;
+  HOST_ADVISOR_ACTION_ALLOW = 3;
+  HOST_ADVISOR_ACTION_BLOCK = 4;
+  HOST_ADVISOR_ACTION_REWRITE = 5;
+  HOST_ADVISOR_ACTION_EMIT_CONTEXT_REFERENCE = 6;
+}
+
+// HostAdvisorContextInjectionMode identifies a closed host context surface.
+enum HostAdvisorContextInjectionMode {
+  HOST_ADVISOR_CONTEXT_INJECTION_MODE_UNSPECIFIED = 0;
+  HOST_ADVISOR_CONTEXT_INJECTION_MODE_HIDDEN_UNTRUSTED_MESSAGE = 1;
+  HOST_ADVISOR_CONTEXT_INJECTION_MODE_DEVELOPER_CONTEXT = 2;
+  HOST_ADVISOR_CONTEXT_INJECTION_MODE_ADDITIONAL_CONTEXT = 3;
+}
+
+// HostAdvisorCallbackOrdering identifies the observed callback ordering.
+enum HostAdvisorCallbackOrdering {
+  HOST_ADVISOR_CALLBACK_ORDERING_UNSPECIFIED = 0;
+  HOST_ADVISOR_CALLBACK_ORDERING_BEFORE_FIRST_ACTION = 1;
+  HOST_ADVISOR_CALLBACK_ORDERING_AFTER_TOOL_RESULT = 2;
+  HOST_ADVISOR_CALLBACK_ORDERING_OTHER_PROVEN_ORDER = 3;
+}
+
+// HostAdvisorAcknowledgement identifies the strongest host acknowledgement.
+enum HostAdvisorAcknowledgement {
+  HOST_ADVISOR_ACKNOWLEDGEMENT_UNSPECIFIED = 0;
+  HOST_ADVISOR_ACKNOWLEDGEMENT_NONE = 1;
+  HOST_ADVISOR_ACKNOWLEDGEMENT_ADAPTER_ATTESTED = 2;
+  HOST_ADVISOR_ACKNOWLEDGEMENT_HOST_ACKNOWLEDGED = 3;
+  HOST_ADVISOR_ACKNOWLEDGEMENT_CONSUMPTION_OBSERVED = 4;
+}
+
+message HostAdvisorProtocolRange {
+  uint32 min_version = 1;
+  uint32 max_version = 2;
+}
+
+message HostAdvisorHost {
+  HostAdvisorHostFamily family = 1;
+  string host_version = 2;
+  string adapter_id = 3;
+  string adapter_version = 4;
+  string runtime_instance_ref = 5;
+}
+
+message HostAdvisorArtifact {
+  HostAdvisorArtifactKind kind = 1;
+  bytes digest_sha256 = 2;
+}
+
+message HostAdvisorEvidenceRef {
+  HostAdvisorArtifact artifact = 1;
+  string runtime_probe_receipt_id = 2;
+}
+
+message HostAdvisorCorrelation {
+  bool session = 1;
+  bool turn = 2;
+  bool tool_action = 3;
+  bool stable_phase_anchor = 4;
+}
+
+message HostAdvisorCallback {
+  bool awaited = 1;
+  uint32 deadline_ms = 2;
+  HostAdvisorCallbackOrdering ordering = 3;
+}
+
+message HostCapability {
+  HostAdvisorSemantic semantic = 1;
+  repeated HostAdvisorAction allowed_actions = 2;
+  repeated HostAdvisorContextInjectionMode context_injection_modes = 3;
+  HostAdvisorCorrelation correlation = 4;
+  HostAdvisorCallback callback = 5;
+  HostAdvisorAcknowledgement acknowledgement = 6;
+}
+
+message HostHello {
+  HostAdvisorProtocolRange protocol_range = 1;
+  HostAdvisorHost host = 2;
+  repeated HostCapability requested_capabilities = 3;
+  HostAdvisorEvidenceRef evidence_ref = 4;
+}
+
+message AcceptedCapabilitySnapshot {
+  string snapshot_id = 1;
+  bytes contract_sha256 = 2;
+  uint64 revision = 3;
+  string capability_revision = 4;
+  repeated HostCapability capabilities = 5;
+}
+
+message HostBinding {
+  string binding_id = 1;
+  AcceptedCapabilitySnapshot capability_snapshot = 2;
+  google.protobuf.Timestamp expires_at = 3;
+  uint32 callback_deadline_ms = 4;
+  bytes authenticated_subject_proof_sha256 = 5;
+}
+
+message HostAdvisorBindRequest {
+  HostHello hello = 1;
+}
+
+message HostAdvisorBindResponse {
+  HostBinding binding = 1;
+}
+
+// HostAdvisorFactKind identifies a bounded occurrence fact.
+enum HostAdvisorFactKind {
+  HOST_ADVISOR_FACT_KIND_UNSPECIFIED = 0;
+  HOST_ADVISOR_FACT_KIND_KEYWORD = 1;
+  HOST_ADVISOR_FACT_KIND_PATH = 2;
+  HOST_ADVISOR_FACT_KIND_TOOL = 3;
+}
+
+// HostAdvisorCandidateTier identifies the selected knowledge source tier.
+enum HostAdvisorCandidateTier {
+  HOST_ADVISOR_CANDIDATE_TIER_UNSPECIFIED = 0;
+  HOST_ADVISOR_CANDIDATE_TIER_EXACT = 1;
+  HOST_ADVISOR_CANDIDATE_TIER_FTS = 2;
+  HOST_ADVISOR_CANDIDATE_TIER_VECTOR = 3;
+}
+
+// HostAdvisorAbstentionReason identifies a final non-delivery decision.
+enum HostAdvisorAbstentionReason {
+  HOST_ADVISOR_ABSTENTION_REASON_UNSPECIFIED = 0;
+  HOST_ADVISOR_ABSTENTION_REASON_NO_CANDIDATES = 1;
+  HOST_ADVISOR_ABSTENTION_REASON_POLICY_OBSERVING = 2;
+  HOST_ADVISOR_ABSTENTION_REASON_POLICY_SHADOW = 3;
+  HOST_ADVISOR_ABSTENTION_REASON_POLICY_CANARY_BUDGET = 4;
+  HOST_ADVISOR_ABSTENTION_REASON_EVIDENCE_INSUFFICIENT = 5;
+  HOST_ADVISOR_ABSTENTION_REASON_HARM_BOUND = 6;
+  HOST_ADVISOR_ABSTENTION_REASON_POLICY_SUPPRESSED = 7;
+  HOST_ADVISOR_ABSTENTION_REASON_TASK_FIT = 8;
+  HOST_ADVISOR_ABSTENTION_REASON_ACTIONABILITY = 9;
+  HOST_ADVISOR_ABSTENTION_REASON_EVIDENCE_STATE = 10;
+  HOST_ADVISOR_ABSTENTION_REASON_ALREADY_VISIBLE = 11;
+  HOST_ADVISOR_ABSTENTION_REASON_CONTEXT_BUDGET = 12;
+  HOST_ADVISOR_ABSTENTION_REASON_AMBIGUOUS_CONFLICT = 13;
+}
+
+// HostAdvisorUnavailableCode identifies a typed unavailable outcome.
+enum HostAdvisorUnavailableCode {
+  HOST_ADVISOR_UNAVAILABLE_CODE_UNSPECIFIED = 0;
+  HOST_ADVISOR_UNAVAILABLE_CODE_BINDING_UNAVAILABLE = 1;
+  HOST_ADVISOR_UNAVAILABLE_CODE_CAPABILITY_UNAVAILABLE = 2;
+  HOST_ADVISOR_UNAVAILABLE_CODE_FACTS_INVALID = 3;
+  HOST_ADVISOR_UNAVAILABLE_CODE_PREDECESSOR_INVALID = 4;
+  HOST_ADVISOR_UNAVAILABLE_CODE_DEADLINE_EXPIRED = 5;
+  HOST_ADVISOR_UNAVAILABLE_CODE_REPLAY_CONFLICT = 6;
+  HOST_ADVISOR_UNAVAILABLE_CODE_DEPENDENCY_UNAVAILABLE = 7;
+  HOST_ADVISOR_UNAVAILABLE_CODE_RECEIPT_UNAVAILABLE = 8;
+}
+
+// HostAdvisorObservationState identifies the final observation acknowledgement.
+enum HostAdvisorObservationState {
+  HOST_ADVISOR_OBSERVATION_STATE_UNSPECIFIED = 0;
+  HOST_ADVISOR_OBSERVATION_STATE_ACCEPTED = 1;
+  HOST_ADVISOR_OBSERVATION_STATE_DUPLICATE = 2;
+  HOST_ADVISOR_OBSERVATION_STATE_REJECTED = 3;
+  HOST_ADVISOR_OBSERVATION_STATE_UNAVAILABLE = 4;
+}
+
+// HostAdvisorObservationReason identifies the closed observation disposition.
+enum HostAdvisorObservationReason {
+  HOST_ADVISOR_OBSERVATION_REASON_UNSPECIFIED = 0;
+  HOST_ADVISOR_OBSERVATION_REASON_ACCEPTED_ATTESTATION = 1;
+  HOST_ADVISOR_OBSERVATION_REASON_ACCEPTED_SEMANTIC_GAP = 2;
+  HOST_ADVISOR_OBSERVATION_REASON_DUPLICATE = 3;
+  HOST_ADVISOR_OBSERVATION_REASON_INVALID_TARGET = 4;
+  HOST_ADVISOR_OBSERVATION_REASON_RECEIPT_UNAVAILABLE = 5;
+  HOST_ADVISOR_OBSERVATION_REASON_DEPENDENCY_UNAVAILABLE = 6;
+}
+
+// HostAdvisorAttestationKind identifies a closed receipt-bound adapter fact.
+enum HostAdvisorAttestationKind {
+  HOST_ADVISOR_ATTESTATION_KIND_UNSPECIFIED = 0;
+  HOST_ADVISOR_ATTESTATION_KIND_DECISION_RECEIVED = 1;
+  HOST_ADVISOR_ATTESTATION_KIND_UNTRUSTED_REFERENCE_PRESENTED = 2;
+}
+
+// HostAdvisorSemanticGapCode identifies a closed adapter semantic gap.
+enum HostAdvisorSemanticGapCode {
+  HOST_ADVISOR_SEMANTIC_GAP_CODE_UNSPECIFIED = 0;
+  HOST_ADVISOR_SEMANTIC_GAP_CODE_CALLBACK_UNAVAILABLE = 1;
+  HOST_ADVISOR_SEMANTIC_GAP_CODE_CONTEXT_INJECTION_UNAVAILABLE = 2;
+  HOST_ADVISOR_SEMANTIC_GAP_CODE_RECEIPT_CORRELATION_UNAVAILABLE = 3;
+}
+
+message HostAdvisorTypedFact {
+  HostAdvisorFactKind kind = 1;
+  string value = 2;
+}
+
+message HostAdvisorBeforeAgentStartFacts {
+  string task_query = 1;
+  repeated HostAdvisorTypedFact facts = 2;
+}
+
+message HostAdvisorReceiptIdentity {
+  string receipt_id = 1;
+  bytes integrity_sha256 = 2;
+}
+
+message HostAdvisorOccurrence {
+  HostAdvisorSemantic phase = 1;
+  string session_ref = 2;
+  string phase_anchor_ref = 3;
+  HostAdvisorBeforeAgentStartFacts before_agent_start = 4;
+  HostAdvisorReceiptIdentity predecessor = 5;
+}
+
+message HostAdvisorAdviseRequest {
+  string binding_id = 1;
+  // Untrusted, evidence-only project ingress; never the canonical project.
+  ProjectIdentityV3 project_evidence = 2;
+  HostAdvisorOccurrence occurrence = 3;
+}
+
+message HostAdvisorKnowledgeReference {
+  int64 memory_id = 1;
+  uint32 memory_version = 2;
+  HostAdvisorCandidateTier source_tier = 3;
+  bytes text_sha256 = 4;
+  string source_project = 5;
+}
+
+message HostAdvisorPresentation {
+  HostAdvisorContextInjectionMode injection_mode = 1;
+  string bounded_text = 2;
+}
+
+message HostAdvisorPacket {
+  HostAdvisorReceiptIdentity receipt = 1;
+  google.protobuf.Timestamp expires_at = 2;
+  HostAdvisorKnowledgeReference knowledge = 3;
+  HostAdvisorPresentation presentation = 4;
+}
+
+message HostAdvisorEmit {
+  HostAdvisorReceiptIdentity receipt = 1;
+  HostAdvisorPacket packet = 2;
+}
+
+message HostAdvisorAbstain {
+  HostAdvisorReceiptIdentity receipt = 1;
+  HostAdvisorAbstentionReason reason = 2;
+}
+
+message HostAdvisorDeliveryAmbiguous {
+  HostAdvisorReceiptIdentity receipt = 1;
+}
+
+message HostAdvisorUnavailable {
+  string correlation_id = 1;
+  google.protobuf.Timestamp expires_at = 2;
+  HostAdvisorUnavailableCode code = 3;
+}
+
+message HostAdvisorAdviseResponse {
+  oneof decision {
+    HostAdvisorEmit emit = 1;
+    HostAdvisorAbstain abstain = 2;
+    HostAdvisorDeliveryAmbiguous delivery_ambiguous = 3;
+    HostAdvisorUnavailable unavailable = 4;
+  }
+}
+
+message HostAdvisorAdapterAttestation {
+  HostAdvisorAttestationKind kind = 1;
+}
+
+message HostAdvisorAdapterSemanticGap {
+  HostAdvisorSemanticGapCode code = 1;
+}
+
+message HostAdvisorReceiptBoundObservation {
+  HostAdvisorReceiptIdentity decision_receipt = 1;
+  string observation_anchor_ref = 2;
+  oneof evidence {
+    HostAdvisorAdapterAttestation adapter_attested = 3;
+    HostAdvisorAdapterSemanticGap adapter_semantic_gap = 4;
+  }
+}
+
+// A channel-only semantic gap carries no project evidence or receipt identity.
+message HostAdvisorChannelSemanticGap {
+  string observation_anchor_ref = 1;
+  HostAdvisorAdapterSemanticGap adapter_semantic_gap = 2;
+}
+
+message HostAdvisorObserveRequest {
+  string binding_id = 1;
+  oneof target {
+    HostAdvisorReceiptBoundObservation receipt_bound = 2;
+    HostAdvisorChannelSemanticGap channel_gap = 3;
+  }
+}
+
+message HostAdvisorObserveResponse {
+  HostAdvisorObservationState state = 1;
+  string observation_id = 2;
+  HostAdvisorObservationReason reason = 3;
+}
+
+// ContextRef identifies an immutable View-pinned UCI context. space_id is
+// optional because a Source can be authorized without being selected through a Space.
+message ContextRef {
+  optional string space_id = 1;
+  string source_id = 2;
+  string checkout_id = 3;
+  string view_id = 4;
+  int64 generation = 5;
+  string analysis_profile_id = 6;
+}
+
+// CodeIndexScope identifies a checkout-only UCI build target. It deliberately
+// has no view_id or generation: an initial index has no published View yet.
+message CodeIndexScope {
+  string source_id = 1;
+  string checkout_id = 2;
+  string incarnation_id = 3;
+  string analysis_profile_id = 4;
+}
+
+message BindCodeContextRequest {
+  string client_session_id = 1;
+  ContextRef requested_context = 2;
+  string context_handle = 3;
+}
+
+message BindCodeContextResponse {
+  string context_handle = 1;
+  ContextRef context = 2;
+  CodeIndexScope index_scope = 3;
+  string local_root_id = 4;
+  string workstation_id = 5;
+}
+
+message CodeIndexIntentTarget {
+  string client_session_id = 1;
+  string context_handle = 2;
+  CodeIndexScope scope = 3;
+  string local_root_id = 4;
+  string workstation_id = 5;
+}
+
+message CodeIndexIntentClaim {
+  string intent_ref = 1;
+  uint64 owner_epoch = 2;
+  string process_nonce = 3;
+}
+
+message PollCodeIndexIntentsRequest {
+  CodeIndexIntentTarget target = 1;
+  string client_instance_id = 2;
+  string process_nonce = 3;
+}
+
+message CodeIndexIntentOffer {
+  string intent_ref = 1;
+  string kind = 2;
+  ContextRef previous_context = 3;
+  string state = 4;
+  uint64 owner_epoch = 5;
+  google.protobuf.Timestamp lease_expires_at = 6;
+}
+
+message PollCodeIndexIntentsResponse {
+  CodeIndexIntentOffer offer = 1;
+}
+
+message UpdateCodeIndexIntentRequest {
+  CodeIndexIntentTarget target = 1;
+  string client_instance_id = 2;
+  string process_nonce = 3;
+  string intent_ref = 4;
+  string operation = 5;
+  string operation_ref = 6;
+  uint64 owner_epoch = 7;
+}
+
+message UpdateCodeIndexIntentResponse {
+  string intent_ref = 1;
+  string state = 2;
+  uint32 attempt = 3;
+  uint64 owner_epoch = 4;
+  google.protobuf.Timestamp lease_expires_at = 5;
+}
+
+message BeginCodeIndexRequest {
+  CodeIndexScope scope = 1;
+  string owner_instance = 2;
+  string build_key = 3;
+  ContextRef expected_parent = 4;
+  string manifest_mode = 5;
+  string job_kind = 6;
+  CodeIndexIntentClaim intent_claim = 7;
+}
+
+message BeginCodeIndexResponse {
+  CodeIndexScope scope = 1;
+  string build_id = 2;
+  uint64 lease_epoch = 3;
+  google.protobuf.Timestamp lease_expires_at = 4;
+}
+
+message StageCodeIndexFrame {
+  CodeIndexScope scope = 1;
+  string build_id = 2;
+  uint64 lease_epoch = 3;
+  uint64 sequence = 4;
+  string payload_digest = 5;
+  bytes payload = 6;
+  CodeIndexIntentClaim intent_claim = 7;
+}
+
+message StageCodeIndexResponse {
+  string build_id = 1;
+  uint64 accepted_sequence = 2;
+  uint64 accepted_part_count = 3;
+  // Aggregate DigestIndexParts across every canonical frame acknowledged in this
+  // complete client stream. Send unchanged as FinalizeCodeIndexRequest.parts_digest.
+  string part_digest = 4;
+}
+
+message FinalizeCodeIndexRequest {
+  CodeIndexScope scope = 1;
+  string build_id = 2;
+  uint64 lease_epoch = 3;
+  ContextRef expected_parent = 4;
+  uint64 manifest_part_count = 5;
+  string parts_digest = 6;
+  uint64 manifest_entry_count = 7;
+  string manifest_digest = 8;
+  uint64 edge_count = 9;
+  string edges_digest = 10;
+  uint64 observed_filesystem_sequence = 11;
+  google.protobuf.Timestamp scan_started_at = 12;
+  google.protobuf.Timestamp scan_completed_at = 13;
+  string scan_outcome = 14;
+  bool complete_census = 15;
+  bytes coverage_json = 16;
+  optional string head_oid = 17;
+  optional string object_format = 18;
+  optional string ref_label = 19;
+  optional bool dirty = 20;
+  CodeIndexIntentClaim intent_claim = 21;
+}
+
+message FinalizeCodeIndexResponse {
+  ContextRef published_context = 1;
+  string build_id = 2;
+  uint64 lease_epoch = 3;
+  uint64 accepted_filesystem_sequence = 4;
+}
+
+message QueryCodeRequest {
+  ContextRef context = 1;
+  string query = 2;
+  uint32 max_results = 3;
+  uint32 max_bytes = 4;
+  uint32 deadline_ms = 5;
+  string continuation_token = 6;
+}
+
+message QueryCodeResponse {
+  ContextRef context = 1;
+  bytes response_json = 2;
+}
+
+message ExploreCodeRequest {
+  ContextRef context = 1;
+  string operation = 2;
+  string subject = 3;
+  uint32 max_depth = 4;
+  uint32 max_visited_nodes = 5;
+  uint32 max_result_nodes = 6;
+  uint32 max_result_edges = 7;
+  uint32 deadline_ms = 8;
+  string continuation_token = 9;
+}
+
+message ExploreCodeResponse {
+  ContextRef context = 1;
+  bytes response_json = 2;
+}
+
+// UCICompletionOutcome is the closed completion state reported by a verified
+// supported-host callback.
+enum UCICompletionOutcome {
+  UCI_COMPLETION_OUTCOME_UNSPECIFIED = 0;
+  UCI_COMPLETION_OUTCOME_SUCCEEDED = 1;
+  UCI_COMPLETION_OUTCOME_PARTIAL = 2;
+  UCI_COMPLETION_OUTCOME_FAILED = 3;
+  UCI_COMPLETION_OUTCOME_ABANDONED = 4;
+}
+
+// RecordUCICompletionRequest carries only opaque, verified callback facts.
+// canonical_project is checked against the authenticated HAP project-service
+// identity; it is not a caller-selected authorization scope.
+message RecordUCICompletionRequest {
+  string canonical_project = 1;
+  string exposure_ref = 2;
+  string supported_host_ref = 3;
+  string callback_ref = 4;
+  UCICompletionOutcome outcome = 5;
+  string idempotency_key = 6;
+}
+
+// RecordUCICompletionResponse deliberately exposes no parent or completion
+// evidence. accepted confirms only that the callback was durably accepted.
+message RecordUCICompletionResponse {
+  bool accepted = 1;
 }

@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "lib": [
+      "ESNext",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "module": "Preserve",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "ESNext"
+  },
+  "files": [
+    "./tests/composables/t010-nuxt-globals.d.ts",
+    "./composables/useApi.ts",
+    "./composables/useOperatorApi.ts",
+    "./composables/useOperatorAccess.ts",
+    "./composables/useOperatorBooks.ts",
+    "./composables/useOperatorDocuments.ts",
+    "./composables/useOperatorDomainRegistry.ts",
+    "./composables/useOperatorHealthSettings.ts",
+    "./composables/useOperatorIssues.ts",
+    "./composables/useOperatorKeycards.ts",
+    "./composables/useOperatorMemoryLab.ts",
+    "./composables/useOperatorProjects.ts",
+    "./composables/useOperatorQueue.ts",
+    "./composables/useOperatorRules.ts",
+    "./composables/useOperatorSecrets.ts"
+  ]
+}

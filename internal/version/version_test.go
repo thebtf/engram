@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"golang.org/x/mod/semver"
 )
 
 type pluginManifest struct {
@@ -26,6 +28,7 @@ func TestDaemonVersionMatchesPluginManifests(t *testing.T) {
 	want := strings.TrimPrefix(Daemon, "v")
 
 	for _, rel := range []string{
+		filepath.Join("plugin", "engram", "package.json"),
 		filepath.Join("plugin", "engram", ".codex-plugin", "plugin.json"),
 		filepath.Join("plugin", "engram", ".claude-plugin", "plugin.json"),
 		filepath.Join("plugin", "engram", ".omp-plugin", "plugin.json"),
@@ -45,5 +48,56 @@ func TestDaemonVersionMatchesPluginManifests(t *testing.T) {
 		if manifest.Version != want {
 			t.Fatalf("%s version = %q, want %q from Daemon %q", rel, manifest.Version, want, Daemon)
 		}
+	}
+}
+
+func TestDockerSHAImageIdentityDoesNotOverrideDaemonCompatibility(t *testing.T) {
+	if !semver.IsValid(Daemon) || semver.Canonical(Daemon) != Daemon {
+		t.Fatalf("Daemon must remain canonical SemVer, got %q", Daemon)
+	}
+
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	dockerfile, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "..", "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+
+	dockerfileText := strings.ReplaceAll(string(dockerfile), "\r\n", "\n")
+	for _, tc := range []struct {
+		name       string
+		dockerfile string
+	}{
+		{name: "LF", dockerfile: dockerfileText},
+		{name: "CRLF", dockerfile: strings.ReplaceAll(dockerfileText, "\n", "\r\n")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assertDockerfileClientBuildCompatibility(t, tc.dockerfile)
+		})
+	}
+}
+
+func assertDockerfileClientBuildCompatibility(t *testing.T, dockerfile string) {
+	t.Helper()
+	dockerfile = strings.ReplaceAll(dockerfile, "\r\n", "\n")
+	if !strings.Contains(dockerfile, "commit_pattern='^sha-[0-9a-f]{40}$'") {
+		t.Fatal("Dockerfile must continue to accept SHA image identities")
+	}
+
+	_, clientBuild, found := strings.Cut(dockerfile, "# Build client-side binary")
+	if !found {
+		t.Fatal("Dockerfile client build section is absent")
+	}
+	clientBuild, _, found = strings.Cut(clientBuild, "\n\n# --- Server image ---")
+	if !found {
+		t.Fatal("Dockerfile client build section is unterminated")
+	}
+	if !strings.Contains(clientBuild, "-X main.Version=${VERSION}") {
+		t.Fatal("Dockerfile client build must retain image identity injection")
+	}
+	if strings.Contains(clientBuild, "internal/version.Daemon=") {
+		t.Fatal("Dockerfile client build must not override source SemVer daemon compatibility with image identity")
 	}
 }

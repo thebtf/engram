@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isValidClientInstanceIdV3 } from './project-identity-v3.js';
 
 // ---------------------------------------------------------------------------
 // Config schema
@@ -23,6 +24,11 @@ export const PluginConfigSchema = z.object({
    * project regardless of workspace identity.
    */
   project: z.string().optional(),
+
+ /** Optional opaque, non-secret installation reference that enables V3 identity. */
+ clientInstanceId: z.string()
+  .refine(isValidClientInstanceIdV3, { message: 'clientInstanceId must be an opaque non-secret installation reference' })
+  .optional(),
 
   /** Maximum observations to inject per prompt turn. */
   contextLimit: z.number().int().positive().default(10),
@@ -86,6 +92,7 @@ export function getJsonSchema(): Record<string, unknown> {
       url: { type: 'string', description: 'Engram server URL', default: 'http://localhost:37777' },
       token: { type: 'string', description: 'Bearer token for API authentication', uiHints: { sensitive: true } },
       project: { type: 'string', description: 'Project scope override' },
+   clientInstanceId: { type: 'string', description: 'Opaque non-secret installation reference for V3 identity' },
       contextLimit: { type: 'number', description: 'Max observations per prompt', default: 10 },
       sessionContextLimit: { type: 'number', description: 'Max observations at session start', default: 20 },
       tokenBudget: { type: 'number', description: 'Token budget for context injection', default: 2000 },

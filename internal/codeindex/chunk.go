@@ -1,23 +1,24 @@
-// Package codeindex provides a pure-Go, CGo-free line-fallback chunker and
-// manifest builder for the CI-A SocratiCode-replacement track (ADR-001 §3.2 + §6).
+// Package codeindex provides a pure-Go, CGo-free legacy line-fallback chunker
+// and manifest builder for raw code-index compatibility data.
 //
-// Design summary
+// Its Chunk and Manifest values are legacy-only line-block artifacts. They are
+// not UCI View-scoped artifacts, do not carry AuthorizedContext, and must never
+// be reused as UCI query results or UCI QueryResponse contents.
 //
-// Chunking strategy: fixed-size line-blocks (default 70 lines) with a
-// hard byte-cap guard per chunk (default 8 KB) so that minified or
-// unusually long lines never produce oversized embedding payloads.
-// Byte offsets are exact and contiguous: every byte in a non-skipped file
-// belongs to exactly one chunk.
+// # Design summary
+//
+// Chunking strategy: fixed-size line-blocks (default 70 lines) with a hard
+// byte-cap guard per chunk (default 8 KB) so that minified or unusually long
+// lines never produce oversized embedding payloads. Byte offsets are exact and
+// contiguous: every byte in a non-skipped file belongs to exactly one chunk.
 //
 // Minified-file detection: files whose average line length exceeds 200 bytes,
 // whose name contains ".min.", or whose single longest line exceeds 50 KB are
 // classified as minified/generated and skipped entirely.
 //
-// gitignore / .engramignore: parsed without an external dependency using
-// stdlib path.Match. The minimal parser handles globs, directory prefixes,
-// and negation ("!pattern"). A built-in skip-list covers .git, node_modules,
-// vendor, dist, build, .agent and common binary extensions so the most common
-// cases work even without a .gitignore present.
+// gitignore / .engramignore: parsed without an external dependency using stdlib
+// path.Match. A built-in skip-list covers .git, node_modules, vendor, dist,
+// build, .agent and common binary extensions.
 //
 // AST chunking (tree-sitter / CGo) is explicitly deferred to CR-002b and
 // guarded by a build tag. THIS package has zero CGo.
@@ -30,18 +31,17 @@ import (
 	"strings"
 )
 
-// ChunkType classifies how the chunk boundary was chosen.
-// "line-block" is the only value produced by this CR; AST-derived types are
-// added in CR-002b behind a build tag.
+// ChunkType classifies a legacy line-block boundary. It does not identify a UCI
+// artifact or establish any UCI View scope.
 type ChunkType string
 
 const (
-	// ChunkTypeLineBlock indicates a chunk produced by the line-fallback strategy.
+	// ChunkTypeLineBlock indicates a legacy line-fallback compatibility artifact.
 	ChunkTypeLineBlock ChunkType = "line-block"
 )
 
-// Chunk is a contiguous, non-overlapping byte range extracted from a source file.
-// Fields mirror the CodeIndex protocol described in ADR-001 §6.
+// Chunk is a legacy, contiguous byte range extracted from a source file. It
+// must not be presented as a UCI View-scoped result.
 type Chunk struct {
 	// FilePath is the repository-relative path with forward-slash separators.
 	FilePath string
@@ -70,9 +70,9 @@ func (c Chunk) ChunkID() string {
 	return fmt.Sprintf("%x", h[:8]) // 8 bytes → 16 hex chars
 }
 
-// ManifestEntry carries the lightweight metadata sent to CodeIndexNegotiate.
-// Content is intentionally absent so only the delta (differing chunks) needs
-// to be transmitted over the wire.
+// ManifestEntry carries lightweight metadata for legacy CodeIndex negotiation.
+// It is not a UCI artifact and Content is intentionally absent so only the
+// delta (differing chunks) needs to be transmitted over the wire.
 type ManifestEntry struct {
 	FilePath      string    `json:"file_path"`
 	ChunkID       string    `json:"chunk_id"`
@@ -83,8 +83,8 @@ type ManifestEntry struct {
 	ChunkType     ChunkType `json:"chunk_type"`
 }
 
-// Manifest is an ordered list of ManifestEntry values, one per chunk, sorted
-// by (FilePath, ByteStart). The same tree always produces the same Manifest.
+// Manifest is an ordered list of legacy ManifestEntry values, sorted by
+// (FilePath, ByteStart). It does not establish UCI scope or View identity.
 type Manifest []ManifestEntry
 
 // BuildManifestFromChunks constructs a Manifest from a slice of Chunks.

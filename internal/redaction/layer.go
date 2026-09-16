@@ -23,9 +23,14 @@
 package redaction
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
+	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -46,6 +51,33 @@ type Rule struct {
 type CompiledRule struct {
 	rule Rule
 	re   *regexp.Regexp
+}
+
+const compiledRulesFingerprintDomain = "engram.redaction-rules/v1"
+
+// CompiledRulesFingerprint returns the ordered configuration commitment for
+// compiled rules. Rule order is significant because execution order is significant.
+func CompiledRulesFingerprint(rules []CompiledRule) string {
+	digest := sha256.New()
+	_, _ = io.WriteString(digest, compiledRulesFingerprintDomain)
+	var count [4]byte
+	binary.BigEndian.PutUint32(count[:], uint32(len(rules)))
+	_, _ = digest.Write(count[:])
+	for _, rule := range rules {
+		writeCompiledRuleFingerprintText(digest, rule.rule.ID)
+		writeCompiledRuleFingerprintText(digest, rule.rule.Pattern)
+		writeCompiledRuleFingerprintText(digest, rule.rule.Replacement)
+	}
+	var sum [sha256.Size]byte
+	digest.Sum(sum[:0])
+	return hex.EncodeToString(sum[:])
+}
+
+func writeCompiledRuleFingerprintText(digest hash.Hash, value string) {
+	var length [4]byte
+	binary.BigEndian.PutUint32(length[:], uint32(len(value)))
+	_, _ = digest.Write(length[:])
+	_, _ = io.WriteString(digest, value)
 }
 
 // ErrContentFullyRedacted is returned when all content was stripped by rules.

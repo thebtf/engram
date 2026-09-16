@@ -1,0 +1,57 @@
+{
+  "schema_version": "engram.uci-t098-real-provider/v1",
+  "recorded_at": "2026-09-07",
+  "candidate": {
+    "branch": "uci/unified-code-intelligence-r1",
+    "commit": "29db05c2d9206ef0f064d6a2f48853f72f0c602a",
+    "tree": "1cabe9ec7d8151e72e89ba197eafc11266f1c46b"
+  },
+  "test": {
+    "command": "go test ./internal/uci -run '^TestUCISemanticRealProviderConceptualHitMatchesScopedPostgresBaseline$' -count=1 -v",
+    "name": "TestUCISemanticRealProviderConceptualHitMatchesScopedPostgresBaseline",
+    "source": "internal/uci/semantic_test.go",
+    "source_sha256": "0b2b5b794efd1748ae09fd65bc27f535968172db5c99255c7892fa5d960622ea",
+    "duration_seconds": 25.15,
+    "outcome": "pass",
+    "skipped": false
+  },
+  "provider": {
+    "kind": "configured_real_http_embedding_provider",
+    "endpoint": "https://llm.unleashed.nv.md/v1",
+    "provider_ref": "configured-engram-embedder",
+    "model": "text-embedding",
+    "dimension": 1536,
+    "preprocessing_revision": "uci-real-provider-v1",
+    "credential_retained": false
+  },
+  "fixture": {
+    "database": "disposable_postgresql_pgvector",
+    "corpus": "synthetic_semantic_acceptance_fixture",
+    "current_compatible_candidates": 3,
+    "excluded_controls": [
+      "stale_content_digest",
+      "foreign_view",
+      "wrong_provider",
+      "wrong_model",
+      "wrong_preprocessing_revision"
+    ],
+    "manual_marker_vectors": false
+  },
+  "assertions": {
+    "conceptual_query_has_zero_lexical_overlap_with_expected_source": true,
+    "provider_generated_corpus_vectors": true,
+    "provider_generated_query_vector": true,
+    "retrieval_mode": "hybrid",
+    "vector_coverage_positive": true,
+    "exact_scoped_postgresql_baseline_count": 3,
+    "expected_source_rank": 1,
+    "profile_and_view_scope_enforced": true
+  },
+  "scope": {
+    "fr07_real_provider_semantics": "passed_on_synthetic_acceptance_corpus",
+    "ordinary_fresh_index_embedding_worker_lifecycle": "not_claimed",
+    "full_real_corpus_capacity_and_graph": "not_claimed",
+    "production_mutation": false,
+    "release": "not_claimed"
+  }
+}

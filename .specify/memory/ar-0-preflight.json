@@ -1,0 +1,37 @@
+{
+  "schema_version": "ar-0-preflight-v1",
+  "captured_from": "live local checkout before Spec Kit artifact authoring",
+  "branch_before_ar0": "main",
+  "head_before_ar0": "fb18daab8aeabb8ddc041e31c60ddbf42bb6b1a8",
+  "origin_main": "27eb443cae1d1af38e31b0db0d0fd3342e1e3204",
+  "worktrees_before_ar0": [
+    {
+      "path": "D:/Dev/engram",
+      "head": "fb18daab8aeabb8ddc041e31c60ddbf42bb6b1a8",
+      "branch": "main"
+    }
+  ],
+  "working_tree_status_before_ar0": "clean",
+  "inherited_agents": {
+    "working_diff": "empty",
+    "current_sha1": "722fad7ac38183829827ee9279bca1bbe8799416",
+    "head_sha1": "722fad7ac38183829827ee9279bca1bbe8799416",
+    "origin_main_diff": ".specify/memory/ar-0-inherited-AGENTS.diff",
+    "baseline_drift": "The intake expected an uncommitted AGENTS.md line. The same one-line SonarQube release-gate change is already committed at local-only HEAD fb18daab; AR-0 will neither modify nor stage AGENTS.md."
+  },
+  "tooling": {
+    "specify": "0.16.4",
+    "omp": "17.4.0",
+    "specify_present_before_init": false,
+    "omp_commands_present_before_init": false
+  },
+  "spec_kit_initialization": {
+    "command": "specify init --here --force --integration omp --script ps",
+    "post_init_tracked_diff": "empty",
+    "post_init_agents_sha1": "722fad7ac38183829827ee9279bca1bbe8799416",
+    "generated_roots": [
+      ".specify/",
+      ".omp/commands/"
+    ]
+  }
+}

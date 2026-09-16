@@ -1,5 +1,26 @@
 # Accepted design amendments
 
+## 2026-09-10 — Feature011 Code-flow snapshot promoted
+
+Authoring `DESIGN.md` now defines the Operate-mode `Source → Checkout → View` flow,
+including the `search → bounded graph → Source` return path (depth `2`, maximum `24`
+nodes), explicit `must-build`/blocked/empty states, and the boundary that legacy
+collections are stale read-only listings rather than a code source or checkout.
+
+`PROMOTION-MANIFEST.json` records design version `2026.09.10`, deterministic provenance
+`2026-09-10T00:00:00Z`, snapshot SHA-256
+`356563b1674beda461230e50af1d9afc29e28e197fcb64e18db83a592bf35ee9`, and the curated
+13-file allowlist. The manifest proves the source snapshot only. It does not assert
+runtime or visual parity, and this promotion made no `apps/operator-console/` write.
+
+The focused `npm run test:parity` check verified all 13 promoted hashes and preserved
+the acknowledged route drift, then correctly exited nonzero because the runtime-owned
+`apps/operator-console/PARITY.json` still declares `2026.07.14` and the prior snapshot
+hash. T001 deliberately does not change that application ledger. Its owner may update it
+only with the runtime slice's route-specific browser evidence; until then, this is a
+recorded expected drift, not a design or runtime parity claim.
+
+
 ## 2026-07-14 — G1-R3 real version bump promoted
 
 Authoring `DESIGN.md` bumped `design_version` to `2026.07.14` for the candidate-queue

@@ -39,8 +39,34 @@ function gitIdentity() {
   };
 }
 
-function clientConfig(token = 'test-token') {
-  return { url: 'http://engram.test:37777', token, timeoutMs: 1000 };
+function clientConfig(token = 'test-token', extra = {}) {
+  return { url: 'http://engram.test:37777', token, timeoutMs: 1000, ...extra };
+}
+
+function writeV3DirectoryAnchor(workspace) {
+  fs.writeFileSync(path.join(workspace, '.engram-project'), JSON.stringify({
+    version: 3,
+    project_id: '11111111-1111-4111-8111-111111111111',
+    name: 'openclaw-fixture',
+    scope: 'directory',
+  }));
+}
+
+function v3Identity(overrides = {}) {
+  return {
+    projectId: '11111111-1111-4111-8111-111111111111',
+    agentId: 'agent-a',
+    projectIdentityV3: {
+      version: 3,
+      anchor_project_id: '11111111-1111-4111-8111-111111111111',
+      name: 'openclaw-fixture',
+      scope: 'directory',
+      normalized_git_remotes: [],
+      legacy_identifiers: [],
+      client_instance_id: 'openclaw-install-1',
+      ...overrides,
+    },
+  };
 }
 
 test('registration sends full v2 metadata first, substitutes canonical, and deduplicates concurrent and late calls', async (t) => {
@@ -108,6 +134,320 @@ test('before-agent-start repeats the original selector and v2 metadata for conte
   assert.equal(requests[1].project, requests[0].project);
   assert.notEqual(requests[1].project, 'p2n_00112233445566778899aabbccddeeff');
   assert.deepEqual(requests[1].project_identity, requests[0].project_identity);
+});
+
+test('V3 shared registration and context injection send one descriptor with no V2 fallback', async (t) => {
+  const originalFetch = globalThis.fetch;
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-v3-context-'));
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+  writeV3DirectoryAnchor(workspace);
+
+  const requests = [];
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(String(init.body));
+    requests.push({ body, headers: init.headers });
+    if (body.identity_only) {
+      return new Response(JSON.stringify({
+        project_resolution_v3: {
+          outcome: 'PROJECT_RESOLVED',
+          project_key: '22222222-2222-4222-8222-222222222222',
+          resolved_scope: 'directory',
+          correlation: 'openclaw-v3-registration',
+        },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({ observations: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  const client = new EngramRestClient(clientConfig('test-token', { clientInstanceId: 'openclaw-install-1' }));
+  await handleBeforeAgentStart(
+    { initialPrompt: 'hello' },
+    { agentId: 'agent-a', sessionId: 'session-a', workspaceDir: workspace },
+    client,
+    { tokenBudget: 1000, project: 'ignored-v2-selector' },
+  );
+
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0].body, {
+    project_descriptor: {
+      version: 3,
+      anchor_project_id: '11111111-1111-4111-8111-111111111111',
+      name: 'openclaw-fixture',
+      scope: 'directory',
+      normalized_git_remotes: [],
+      legacy_identifiers: [],
+      client_instance_id: 'openclaw-install-1',
+    },
+    identity_only: true,
+  });
+  assert.deepEqual(requests[1].body.project_descriptor, requests[0].body.project_descriptor);
+  for (const { body, headers } of requests) {
+    assert.equal(headers['X-Engram-Project-Identity-Adapter'], 'openclaw');
+    assert.match(headers['X-Request-ID'], /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    assert.equal(Object.hasOwn(body, 'project'), false);
+    assert.equal(Object.hasOwn(body, 'project_identity'), false);
+  }
+});
+
+test('V3 search and timeline send the cached descriptor for selector and canonical keys', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const requests = [];
+  const descriptor = v3Identity().projectIdentityV3;
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(String(init.body));
+    requests.push({ path: new URL(String(url)).pathname, body });
+    if (body.identity_only) {
+      return new Response(JSON.stringify({
+        project_resolution_v3: {
+          outcome: 'PROJECT_RESOLVED',
+          project_key: '22222222-2222-4222-8222-222222222222',
+          resolved_scope: 'directory',
+          correlation: 'openclaw-v3-registration',
+        },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({ observations: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  const client = new EngramRestClient(clientConfig('test-token', { clientInstanceId: 'openclaw-install-1' }));
+  const registration = await client.registerAndResolveProject(v3Identity(), 'anchor-selector');
+  assert.equal(registration.ok, true);
+  if (!registration.ok) return;
+
+  await client.searchContext({ project: 'anchor-selector', query: 'selector lookup', agent_id: 'attacker-agent' });
+  await client.searchContext({ project: registration.canonicalProject, query: 'canonical lookup', agent_id: 'attacker-agent' });
+  await client.getTimeline(registration.canonicalProject, 'query', { query: 'timeline lookup' });
+
+  assert.deepEqual(requests.map(({ path }) => path), [
+    '/api/context/inject',
+    '/api/context/search',
+    '/api/context/search',
+    '/api/context/search',
+  ]);
+  for (const { body } of requests.slice(1)) {
+    assert.deepEqual(body.project_descriptor, descriptor);
+    assert.equal(Object.hasOwn(body, 'project'), false);
+    assert.equal(Object.hasOwn(body, 'agent_id'), false);
+  }
+});
+
+test('V3 stale scoped requests and bulk import fail closed before fetch', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let fetches = 0;
+  globalThis.fetch = async () => {
+    fetches++;
+    return new Response('{}', { status: 200 });
+  };
+
+  const client = new EngramRestClient(clientConfig('test-token', { clientInstanceId: 'openclaw-install-1' }));
+  const search = await client.searchContext({ project: 'stale-canonical-project', query: 'must not fetch' });
+  const timeline = await client.getTimeline('stale-canonical-project', 'query', { query: 'must not fetch' });
+  const imported = await client.bulkImport([{
+    project: 'stale-canonical-project',
+    title: 'must not fetch',
+    content: 'must not fetch',
+    type: 'note',
+  }]);
+
+  assert.equal(search, null);
+  assert.deepEqual(timeline, []);
+  assert.equal(imported, null);
+  assert.equal(fetches, 0);
+});
+
+test('V2 scoped requests preserve raw selector and bulk import transport', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ path: new URL(String(url)).pathname, body: JSON.parse(String(init.body)) });
+    return new Response(JSON.stringify({ observations: [], imported: 1, skipped_duplicates: 0 }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  const client = new EngramRestClient(clientConfig());
+  await client.searchContext({ project: 'legacy-project', query: 'legacy search', agent_id: 'legacy-agent' });
+  await client.getTimeline('legacy-project', 'query', { query: 'legacy timeline' });
+  await client.bulkImport([{
+    project: 'legacy-project',
+    title: 'legacy import',
+    content: 'legacy import',
+    type: 'note',
+  }]);
+
+  assert.deepEqual(requests, [
+    {
+      path: '/api/context/search',
+      body: { project: 'legacy-project', query: 'legacy search', agent_id: 'legacy-agent' },
+    },
+    {
+      path: '/api/context/search',
+      body: { project: 'legacy-project', mode: 'query', query: 'legacy timeline' },
+    },
+    {
+      path: '/api/observations/bulk-import',
+      body: {
+        project: 'legacy-project',
+        observations: [{ type: 'note', title: 'legacy import', narrative: 'legacy import' }],
+      },
+    },
+  ]);
+});
+
+test('V3 registration fails closed on malformed resolution responses', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const malformedResolutions = [
+    {
+      outcome: 'PROJECT_ONBOARDING_REQUIRED',
+      project_key: '22222222-2222-4222-8222-222222222222',
+      resolved_scope: 'directory',
+      correlation: 'openclaw-v3-registration',
+    },
+    {
+      outcome: 'PROJECT_RESOLVED',
+      project_key: 'p2g_00112233445566778899aabbccddeeff',
+      resolved_scope: 'directory',
+      correlation: 'openclaw-v3-registration',
+    },
+    {
+      outcome: 'PROJECT_RESOLVED',
+      project_key: '22222222-2222-4222-8222-222222222222',
+      resolved_scope: 'repository',
+      correlation: 'openclaw-v3-registration',
+    },
+    {
+      outcome: 'PROJECT_RESOLVED',
+      project_key: '22222222-2222-4222-8222-222222222222',
+      resolved_scope: 'directory',
+    },
+    {
+      outcome: 'PROJECT_RESOLVED',
+      project_key: '22222222-2222-4222-8222-222222222222',
+      resolved_scope: 'directory',
+      correlation: 'openclaw/v3-registration',
+    },
+    {
+      outcome: 'PROJECT_REDIRECTED',
+      project_key: '22222222-2222-4222-8222-222222222222',
+      resolved_scope: 'directory',
+      correlation: 'openclaw-v3-registration',
+    },
+    {
+      outcome: 'PROJECT_REDIRECTED',
+      project_key: '22222222-2222-4222-8222-222222222222',
+      resolved_scope: 'directory',
+      correlation: 'openclaw-v3-registration',
+      redirect_reference: 'redirect/reference',
+    },
+    {
+      outcome: 'PROJECT_RESOLVED',
+      project_key: '22222222-2222-4222-8222-222222222222',
+      resolved_scope: 'directory',
+      correlation: 'openclaw-v3-registration',
+      unexpected_authority: 'must-be-rejected',
+    },
+  ];
+  for (const resolution of malformedResolutions) {
+    let requests = 0;
+    globalThis.fetch = async () => {
+      requests++;
+      return new Response(JSON.stringify({ project_resolution_v3: resolution }), { status: 200 });
+    };
+    const result = await new EngramRestClient(clientConfig()).registerAndResolveProject(v3Identity(), 'ignored-v2-selector');
+    assert.deepEqual(result, {
+      ok: false,
+      error: {
+        code: 'PROJECT_IDENTITY_UNAVAILABLE',
+        message: 'project identity registration response is malformed',
+        upgradeAction: 'retry_project_identity_registration',
+        httpStatus: 503,
+      },
+    });
+    assert.equal(requests, 1);
+  }
+});
+
+test('V3 invalid client instance IDs fail before any request', async (t) => {
+  const originalFetch = globalThis.fetch;
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-v3-client-instance-'));
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+  writeV3DirectoryAnchor(workspace);
+
+  for (const clientInstanceId of [
+    '/private/operator/path',
+    'C:\\private\\operator',
+    'credential@private',
+    'install / private',
+    'install\u0007private',
+  ]) {
+    assert.throws(
+      () => parseConfig({ url: 'http://engram.test:37777', token: 'test-token', clientInstanceId }),
+      /opaque non-secret installation reference/,
+      clientInstanceId,
+    );
+    let requests = 0;
+    globalThis.fetch = async () => {
+      requests++;
+      return new Response(JSON.stringify({ canonical_project: 'must-not-run' }), { status: 200 });
+    };
+    const client = new EngramRestClient(clientConfig('test-token', { clientInstanceId }));
+    const result = await resolveAndRegisterProject(client, 'agent-a', workspace);
+
+    assert.deepEqual(result, {
+      ok: false,
+      error: {
+        code: 'PROJECT_DESCRIPTOR_INVALID',
+        message: 'project descriptor is invalid',
+        upgradeAction: 'repair_project_descriptor',
+        httpStatus: 400,
+      },
+    }, clientInstanceId);
+    assert.equal(requests, 0, clientInstanceId);
+    assert.equal(JSON.stringify(result).includes(clientInstanceId), false, clientInstanceId);
+  }
+});
+
+test('V3 registration rejects client asserted keys and malformed descriptors before fetch', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  for (const identity of [
+    v3Identity({ project_key: '22222222-2222-4222-8222-222222222222' }),
+    v3Identity({ normalized_git_remotes: ['not a canonical remote'] }),
+  ]) {
+    let requests = 0;
+    globalThis.fetch = async () => {
+      requests++;
+      return new Response(JSON.stringify({ canonical_project: 'must-not-run' }), { status: 200 });
+    };
+    const result = await new EngramRestClient(clientConfig()).registerAndResolveProject(identity, 'ignored-v2-selector');
+    assert.deepEqual(result, {
+      ok: false,
+      error: {
+        code: 'PROJECT_DESCRIPTOR_INVALID',
+        message: 'project descriptor is invalid',
+        upgradeAction: 'repair_project_descriptor',
+        httpStatus: 400,
+      },
+    });
+    assert.equal(requests, 0);
+  }
 });
 
 test('before-tool-call registration shares the 500ms file-context deadline', async () => {

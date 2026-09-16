@@ -41,6 +41,15 @@ type connKey struct {
 	tokenHash string // first 16 hex chars of sha256(token); empty for empty token
 }
 
+// grpcConnectionAuthority captures the non-credential parts of a pooled
+// connection identity. It is also the exact server/TLS axis for safe
+// host-advisor subject-proof caching.
+type grpcConnectionAuthority struct {
+	addr      string
+	tlsMode   string
+	tlsCAHash string
+}
+
 // hashToken returns a stable short identifier for a credential. The full
 // token is NEVER stored in the pool key — only an opaque hash, so memory
 // dumps cannot recover credentials. Empty token → empty hash (the no-auth
@@ -51,6 +60,24 @@ func hashToken(token string) string {
 	}
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:8]) // 8 bytes = 16 hex chars; collision-safe at this scale
+}
+
+func grpcConnectionAuthorityFor(serverURL string) (grpcConnectionAuthority, error) {
+	grpcAddr, err := parseGRPCAddr(serverURL)
+	if err != nil {
+		return grpcConnectionAuthority{}, err
+	}
+
+	tlsCA := os.Getenv("ENGRAM_TLS_CA")
+	authority := grpcConnectionAuthority{addr: grpcAddr, tlsMode: "plaintext"}
+	switch {
+	case tlsCA != "":
+		authority.tlsMode = "custom-ca"
+		authority.tlsCAHash = hashToken(tlsCA)
+	case strings.HasPrefix(serverURL, "https"):
+		authority.tlsMode = "system-tls"
+	}
+	return authority, nil
 }
 
 // grpcPool is a lightweight pool keyed by (host:port, tls mode). Connections
@@ -66,33 +93,22 @@ type grpcPool struct {
 // getOrDialGRPC returns a pooled gRPC connection for the given server URL
 // and token. The tls mode is derived from ENGRAM_TLS_CA / URL scheme.
 func (p *grpcPool) getOrDialGRPC(serverURL, token string) (*grpc.ClientConn, error) {
-	grpcAddr, err := parseGRPCAddr(serverURL)
+	authority, err := grpcConnectionAuthorityFor(serverURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse server URL: %w", err)
 	}
 
-	tlsCA := os.Getenv("ENGRAM_TLS_CA")
-	tlsMode := "plaintext"
-	tlsCAHash := ""
-	switch {
-	case tlsCA != "":
-		tlsMode = "custom-ca"
-		tlsCAHash = hashToken(tlsCA) // reuse the same short-hash helper
-	case strings.HasPrefix(serverURL, "https"):
-		tlsMode = "system-tls"
-	}
-
 	key := connKey{
-		addr:      grpcAddr,
-		tlsMode:   tlsMode,
-		tlsCAHash: tlsCAHash,
+		addr:      authority.addr,
+		tlsMode:   authority.tlsMode,
+		tlsCAHash: authority.tlsCAHash,
 		tokenHash: hashToken(token),
 	}
 	if existing, ok := p.conns.Load(key); ok {
 		return existing.(*grpc.ClientConn), nil
 	}
 
-	conn, err := dialGRPC(grpcAddr, serverURL, token)
+	conn, err := dialGRPC(authority.addr, serverURL, token)
 	if err != nil {
 		return nil, err
 	}
@@ -111,6 +127,26 @@ func (p *grpcPool) closeAll() {
 	p.conns.Range(func(_, v any) bool {
 		if c, ok := v.(*grpc.ClientConn); ok {
 			_ = c.Close()
+		}
+		return true
+	})
+}
+
+// closeTokenHash removes and closes only connections authenticated with one
+// credential hash. Relay rotation must not disrupt unrelated project or normal
+// daemon connections that share the same address/TLS policy.
+func (p *grpcPool) closeTokenHash(tokenHash string) {
+	if p == nil || tokenHash == "" {
+		return
+	}
+	p.conns.Range(func(keyValue, connectionValue any) bool {
+		key, keyOK := keyValue.(connKey)
+		connection, connectionOK := connectionValue.(*grpc.ClientConn)
+		if !keyOK || !connectionOK || key.tokenHash != tokenHash {
+			return true
+		}
+		if p.conns.CompareAndDelete(key, connection) {
+			_ = connection.Close()
 		}
 		return true
 	})
@@ -179,19 +215,39 @@ func dialGRPC(addr, serverURL, token string) (*grpc.ClientConn, error) {
 	}
 
 	if token != "" {
-		opts = append(opts, grpc.WithUnaryInterceptor(tokenInterceptor(token)))
+		opts = append(opts,
+			grpc.WithUnaryInterceptor(tokenInterceptor(token)),
+			grpc.WithStreamInterceptor(tokenStreamInterceptor(token)),
+		)
 	}
 
 	return grpc.NewClient(addr, opts...)
 }
 
-// tokenInterceptor injects the Bearer token into every outgoing RPC. Ported
-// verbatim.
+// tokenInterceptor injects the Bearer token into every outgoing unary RPC.
 func tokenInterceptor(token string) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
-		return invoker(ctx, method, req, reply, cc, opts...)
+		return invoker(withAuthorization(ctx, token), method, req, reply, cc, opts...)
 	}
+}
+
+// tokenStreamInterceptor injects the Bearer token into every outgoing streaming RPC.
+func tokenStreamInterceptor(token string) grpc.StreamClientInterceptor {
+	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		return streamer(withAuthorization(ctx, token), desc, cc, method, opts...)
+	}
+}
+
+// withAuthorization replaces any caller-supplied authorization metadata while preserving all other outgoing context state.
+func withAuthorization(ctx context.Context, token string) context.Context {
+	values, ok := metadata.FromOutgoingContext(ctx)
+	if ok {
+		values = values.Copy()
+	} else {
+		values = metadata.MD{}
+	}
+	values.Set("authorization", "Bearer "+token)
+	return metadata.NewOutgoingContext(ctx, values)
 }
 
 // safeRemoteURL strips any embedded userinfo before the URL is written to
@@ -199,7 +255,7 @@ func tokenInterceptor(token string) grpc.UnaryClientInterceptor {
 func safeRemoteURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return raw
+		return "[invalid remote URL]"
 	}
 	u.User = nil
 	return u.String()

@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const NODE_CHILD_TIMEOUT_MS = process.platform === 'win32' ? 10000 : 2000;
 
 const lib = require('./lib');
 
@@ -175,7 +176,7 @@ test('git execution failures do not mint a non-git identity anchor', (t) => {
   const env = { ...process.env, PATH: emptyPath, Path: emptyPath };
   const result = spawnSync(process.execPath, ['-e', childScript, require.resolve('./lib'), workspace], {
     encoding: 'utf8',
-    timeout: 2000,
+    timeout: NODE_CHILD_TIMEOUT_MS,
     windowsHide: true,
     env,
   });
@@ -213,7 +214,7 @@ test('hook identity resolution failure returns pass-through without running the 
   const result = spawnSync(process.execPath, ['-e', childScript, require.resolve('./lib')], {
     input: JSON.stringify({ session_id: 'identity-failure', cwd: dir }),
     encoding: 'utf8',
-    timeout: 2000,
+    timeout: NODE_CHILD_TIMEOUT_MS,
     windowsHide: true,
     env: {
       ...process.env,
@@ -260,7 +261,7 @@ test('capture hook registration transport failure still runs local handler', (t)
   const result = spawnSync(process.execPath, ['-e', childScript, require.resolve('./lib')], {
     input: JSON.stringify({ session_id: 'registration-failure', cwd: dir }),
     encoding: 'utf8',
-    timeout: 2000,
+    timeout: NODE_CHILD_TIMEOUT_MS,
     windowsHide: true,
     env: {
       ...process.env,
@@ -305,7 +306,7 @@ test('SessionStart without credentials reaches setup before identity registratio
   ], {
     input: JSON.stringify({ session_id: 'registration-setup', cwd: workspace }),
     encoding: 'utf8',
-    timeout: 2000,
+    timeout: NODE_CHILD_TIMEOUT_MS,
     windowsHide: true,
     env: {
       ...process.env,
@@ -341,7 +342,7 @@ test('non-SessionStart injection hook registration transport failure stays fail 
   const result = spawnSync(process.execPath, ['-e', childScript, require.resolve('./lib')], {
     input: JSON.stringify({ session_id: 'injection-registration-failure', cwd: dir }),
     encoding: 'utf8',
-    timeout: 2000,
+    timeout: NODE_CHILD_TIMEOUT_MS,
     windowsHide: true,
     env: {
       ...process.env,
@@ -376,7 +377,7 @@ test('SessionStart registration transport failure renders cached payload without
   const result = spawnSync(process.execPath, [require.resolve('./session-start')], {
     input: JSON.stringify({ session_id: 'registration-offline-cache', cwd: workspace }),
     encoding: 'utf8',
-    timeout: 3000,
+    timeout: process.platform === 'win32' ? NODE_CHILD_TIMEOUT_MS : 3000,
     windowsHide: true,
     env: {
       ...process.env,
