@@ -399,8 +399,8 @@ func (s *BrowserCodeContextStore) AdvanceContinuation(ctx context.Context, curso
 			return ErrBrowserCodeContinuationDenied
 		}
 		if err := tx.WithContext(ctx).Model(&BrowserCodeSearchContinuation{}).Where(browserCodeContinuationCursorWhere, row.CursorRef).Updates(map[string]any{
-			"consumed_at": now,
-			"updated_at":  now,
+			"consumed_at": gorm.Expr("GREATEST(?, created_at)", now),
+			"updated_at":  gorm.Expr("GREATEST(?, created_at)", now),
 		}).Error; err != nil {
 			return fmt.Errorf("browser code continuation consume: %w", err)
 		}

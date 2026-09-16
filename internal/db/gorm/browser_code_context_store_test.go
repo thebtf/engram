@@ -164,6 +164,7 @@ func TestBrowserCodeContextStore_InitialIntentReauthorizationAndContinuations(t 
 
 	expiredCursor, err := fixture.store.CreateContinuation(ctx, continuation, "expired-page")
 	require.NoError(t, err)
+
 	expiredAt := time.Now().UTC().Add(-time.Minute)
 	require.NoError(t, fixture.db.Model(&BrowserCodeSearchContinuation{}).Where("cursor_ref = ?", expiredCursor).Updates(map[string]any{
 		"created_at": expiredAt.Add(-time.Minute),
@@ -171,6 +172,80 @@ func TestBrowserCodeContextStore_InitialIntentReauthorizationAndContinuations(t 
 	}).Error)
 	_, err = fixture.store.LoadContinuation(ctx, expiredCursor, continuation)
 	require.ErrorIs(t, err, ErrBrowserCodeContinuationDenied, "expired opaque cursors fail closed")
+}
+
+func TestBrowserCodeContextStore_AdvanceContinuationMaintainsTerminalLifecycleConstraint(t *testing.T) {
+	fixture := newBrowserCodeContextFixture(t)
+	ctx := context.Background()
+	binding := fixture.continuationBinding()
+	cursor, err := fixture.store.CreateContinuation(ctx, binding, "terminal-page")
+	require.NoError(t, err)
+
+	createdAt, err := browserTabBindingDatabaseClock(ctx, fixture.db)
+	require.NoError(t, err)
+	createdAt = createdAt.Add(time.Minute)
+	require.NoError(t, fixture.db.Model(&BrowserCodeSearchContinuation{}).Where("cursor_ref = ?", cursor).Updates(map[string]any{
+		"created_at": createdAt,
+		"expires_at": createdAt.Add(fixture.store.continuationDuration()),
+		"updated_at": createdAt,
+	}).Error)
+
+	clockBeforeAdvance, err := browserTabBindingDatabaseClock(ctx, fixture.db)
+	require.NoError(t, err)
+
+	terminal, err := fixture.store.AdvanceContinuation(ctx, cursor, binding, "")
+	require.NoError(t, err, "terminal lifecycle update must not predate created_at=%s; database clock before advance=%s", createdAt.Format(time.RFC3339Nano), clockBeforeAdvance.Format(time.RFC3339Nano))
+	require.Empty(t, terminal)
+
+	var stored BrowserCodeSearchContinuation
+	require.NoError(t, fixture.db.Where("cursor_ref = ?", cursor).First(&stored).Error)
+	require.NotNil(t, stored.ConsumedAt)
+	require.True(t, stored.ExpiresAt.After(stored.CreatedAt))
+	require.False(t, stored.ConsumedAt.Before(stored.CreatedAt))
+	require.False(t, stored.UpdatedAt.Before(stored.CreatedAt))
+	require.True(t, stored.ConsumedAt.Equal(stored.CreatedAt))
+	require.True(t, stored.UpdatedAt.Equal(stored.CreatedAt))
+}
+
+func TestBrowserCodeContextStore_AdvanceContinuationConsumesCursorOnceConcurrently(t *testing.T) {
+	fixture := newBrowserCodeContextFixture(t)
+	ctx := context.Background()
+	binding := fixture.continuationBinding()
+	cursor, err := fixture.store.CreateContinuation(ctx, binding, "concurrent-page")
+	require.NoError(t, err)
+
+	type advanceResult struct {
+		successor string
+		err       error
+	}
+	start := make(chan struct{})
+	results := make(chan advanceResult, 2)
+	for range 2 {
+		go func() {
+			<-start
+			successor, err := fixture.store.AdvanceContinuation(context.Background(), cursor, binding, "concurrent-successor")
+			results <- advanceResult{successor: successor, err: err}
+		}()
+	}
+	close(start)
+
+	var successor string
+	for range 2 {
+		result := <-results
+		if result.err == nil {
+			require.Empty(t, successor)
+			successor = result.successor
+			continue
+		}
+		require.ErrorIs(t, result.err, ErrBrowserCodeContinuationDenied)
+	}
+	require.NotEmpty(t, successor)
+
+	_, err = fixture.store.LoadContinuation(ctx, cursor, binding)
+	require.ErrorIs(t, err, ErrBrowserCodeContinuationDenied)
+	loaded, err := fixture.store.LoadContinuation(ctx, successor, binding)
+	require.NoError(t, err)
+	require.Equal(t, "concurrent-successor", loaded)
 }
 
 func TestBrowserCodeContextStoreExpiredGrantDeniesPinAndReauthorization(t *testing.T) {
