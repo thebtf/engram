@@ -100,7 +100,14 @@ function createFixture() {
   fs.copyFileSync(manifestPath, path.join(archiveRoot, "package.json"));
   fs.copyFileSync(extensionPath, path.join(archiveRoot, "extensions", "engram-memory.mjs"));
   fs.copyFileSync(relayHelperPath, path.join(archiveRoot, "extensions", "legacy-relay.mjs"));
-  fs.writeFileSync(path.join(archiveRoot, "engram-server"), `#!/usr/bin/env bash\nprintf 'INF Starting engram server version=v${version}\\n' >&2\nexit 1\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(archiveRoot, "engram-server"), `#!/usr/bin/env bash
+if [[ -n "\${NO_COLOR:-}" ]]; then
+  printf 'INF Starting engram server version=v${version}\\n' >&2
+else
+  printf 'INF Starting engram server \\033[36mversion=\\033[0mv${version}\\n' >&2
+fi
+exit 1
+`, { mode: 0o755 });
   return { archiveRoot, dist, temporary };
 }
 
@@ -112,7 +119,7 @@ function gate(dist, expectedVersion = version) {
   return command("bash", ["scripts/check-server-plugin-artifacts.sh", "--version", expectedVersion, "--dist", bashPath(dist)]);
 }
 
-test("server-plugin archive gate runs through supported Bash invocation", () => {
+test("server-plugin archive gate propagates NO_COLOR for exact Linux startup version matching", () => {
   const fixture = createFixture();
   try {
     buildExpectedMatrix(fixture);
