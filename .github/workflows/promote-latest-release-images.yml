@@ -75,8 +75,8 @@ jobs:
           if ($commit -notmatch '^[0-9a-f]{40}$') {
             throw "official GitHub Release does not resolve to a commit: $commit"
           }
-          if ($triggeringWorkflowName -eq 'Release' -and $commit -cne $triggeringWorkflowHeadSHA) {
-            throw "latest GitHub Release commit does not match Release workflow_run head: release=$commit event=$triggeringWorkflowHeadSHA"
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_run' -and $commit -cne $triggeringWorkflowHeadSHA) {
+            throw "latest GitHub Release commit does not match triggering workflow_run head: release=$commit event=$triggeringWorkflowHeadSHA"
           }
           [ordered]@{
             triggering_event = $env:GITHUB_EVENT_NAME
