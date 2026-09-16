@@ -110,7 +110,7 @@ for archive in "${archives[@]}"; do
     chmod +x "$server"
     mkdir -p "$work_dir/server-home"
     set +e
-    ENGRAM_AUTH_ADMIN_TOKEN= ENGRAM_AUTH_DISABLED= HOME="$work_dir/server-home" timeout 5s "$server" >"$startup" 2>&1
+    NO_COLOR=1 ENGRAM_AUTH_ADMIN_TOKEN= ENGRAM_AUTH_DISABLED= HOME="$work_dir/server-home" timeout 5s "$server" >"$startup" 2>&1
     server_status=$?
     set -e
     [[ "$server_status" -ne 0 && "$server_status" -ne 124 ]] || { echo "Linux server must exit promptly without authentication: $archive" >&2; cat "$startup" >&2; exit 1; }
