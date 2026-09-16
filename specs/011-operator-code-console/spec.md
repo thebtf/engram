@@ -1,232 +1,171 @@
-# Feature Specification: Operator Code Console
+# Feature Specification: Operator Workspace — D-A
 
-**Feature Branch**: `ui/operator-code-console-r1`
+**Feature Branch**: `feature/operator-workspace-da`
 
 **Created**: 2026-09-10
+**Amended**: 2026-09-17
+**Status**: Clarified D-A amendment; implementation is pending
 
-**Status**: Clarified; correction review required
-
-**Input**: Deliver the separately accepted operator working surface that makes existing Engram capability usable without inventing a second authority: an honest shell, truthful mutations, an authorized read-only Code Explorer, safe collection operations, and later daemon-owned index job control.
+**Input**: Deliver the first independently useful operator workspace over existing Engram authority. The operator must be able to investigate code from the normal homepage without inventing a second authority, a manual graph, or a plaintext-book workflow.
 
 ## Outcome and completion boundary
 
-An operator can see what the console knows, inspect authorized code from one chosen source state, and make supported collection changes without mistaking browser state for server truth. The console shows uncertainty, denial, partial work, and unavailable ownership plainly.
+**D-A — Select a working copy and explain a real code relationship** is the first installable Feature 011 outcome. From the normal homepage, an operator finds Workspace, selects an authorized repository and working copy by human identity, sees the selected indexed snapshot's freshness and coverage, searches, opens source, follows an automatically derived direct or reverse relation, and opens that relation's evidence. The investigation stays in one authorized immutable Source/Checkout/View context and never asks for a UUID, hidden route, SQL, or a manual graph write.
 
-The first installable slice is an honest shell. It removes eager closed-dialog and cross-domain memory loading, uses a bounded summary when one exists, and shows `unknown` instead of a truncated list length presented as a total. It does not complete this feature.
+The former honest-shell/design-fidelity-scaffold result is **not** a D-A completion boundary. Truthful loading, bounded counts, lazy settings work, and state labels remain quality constraints where the D-A surface uses them; they do not substitute for the homepage-to-evidence journey.
 
-Feature completion requires the honest shell, truthful mutation outcomes, the read-only Code Explorer, Rules followed by supported Issues, Memory, Queue, and Documents collection consumers, and durable daemon-owned index job control. The early Code/basic-collection milestone admits Book Context planning only. It neither completes Feature 011 nor admits Book Context implementation. Full Feature 011 completion admits that implementation. Working Agent Memory R1 remains retained until Book Context reaches its own product result.
+D-A also retires the active manual knowledge-graph writer and plaintext book-intake workflows at their executable boundaries while preserving their historical readers, records, and provenance. It does not certify every historical Feature 011 collection action complete. D-A has two completion states: source acceptance may establish the bounded candidate behavior; the release gate remains closed until the supported browser/origin decision and installed normal-homepage DA01–DA04 proof are recorded.
+
+## Terms
+
+- **Repository**, **Working copy**, and **Indexed snapshot** are the operator-facing names for the existing Source, Checkout, and immutable View. Labels are locators and presentation only; the server-resolved typed context remains authority.
+- **Workspace** is the normal operator surface containing context selection, index state, code search or structure, source, relations, and evidence for one selected snapshot.
+- **Evidence** is the actual released source reference attached to a derived relation. An endpoint entity or destination definition is not represented as an exact reference-site proof when that precision is unavailable.
+- **Historical graph** means retained `knowledge_nodes`/`knowledge_edges` readers and their established consumers. It is not the UCI code graph and is not a D-A editing surface.
 
 ## Actors
 
-- **Operator**: Uses the browser console to inspect a chosen code state and perform supported collection work.
-- **Authenticated browser subject**: Has a persistent identity and explicit read grants. A deployment administrator role, a Space label, or a browser tab cannot substitute for a grant.
-- **Source owner**: Grants access to a Source and Checkout and may revoke access before a request or continuation completes.
-- **Daemon owner**: Owns the workstation that performs index work. The browser can request authorized work but cannot claim the daemon ran it.
+- **Operator**: Uses the normal browser console to investigate one permitted code state and understand its readiness.
+- **Authenticated browser subject**: A persistent browser identity with an explicit Source/Checkout read grant. An administrator role, Space label, branch, path, or tab does not substitute for a grant.
+- **Source owner**: May issue or revoke read grants only through exact source-owner authority.
+- **Daemon owner**: Owns the workstation that indexes a working copy. The browser can make an authorized request but cannot claim the daemon ran it.
 
 ## Clarifications
 
 ### Session 2026-09-10
 
-- Q: How does a browser user receive code access? -> A: A persistent authenticated browser subject receives an explicit Source and Checkout read grant. The console never infers authority from an administrator role, Space membership, a path, or a legacy project identifier.
-- Q: What releases an authorized code response? -> A: Every transport uses the same UCI-owned release operation. It reauthorizes immediately before the response, records non-content exposure, and suppresses contextual content if either step cannot complete.
-- Q: What separates the first slice from feature completion? -> A: The honest shell, truthful mutations, Code Explorer, and accepted Rules action matrix form the early Code/basic-collection milestone. It admits Book Context planning only. Feature 011 completes only after the supported Issues, Memory, Queue, and Documents consumers and S4 daemon job control are accepted. That full completion admits Book Context implementation.
+- Q: How does a browser user receive code access? → A: A persistent authenticated browser subject receives an explicit Source and Checkout read grant. The console never infers authority from an administrator role, Space membership, a path, or a legacy project identifier.
+- Q: What releases an authorized code response? → A: Every transport uses the same UCI-owned release operation. It reauthorizes immediately before the response, records non-content exposure, and suppresses contextual content if either step cannot complete.
 
-### Remaining product decisions
+### Session 2026-09-17
 
-No unresolved product decision blocks this specification. Grant storage, response-release helper placement, rendering technology, and exact pagination limits are planning decisions. They must preserve the requirements below and cannot become an administrator bypass, a second code graph, or HTTP MCP.
+- Q: What is D-A's first usable result? → A: The normal homepage-to-workspace investigation of one named working copy through source, direct or reverse derived relation, and evidence, with old manual graph and plaintext-book writers retired.
+- Q: Does D-A decide the supported secure browser origin? → A: No. The secure-origin/authenticated-browser versus deliberately supported single-user HTTP/no-auth deployment decision remains install-bound. D-A source work preserves exact grant and UCI authority and does not invent a bypass.
 
 ## User Scenarios & Testing
 
-### User Story 1 - Open an honest console shell (Priority: P1)
+### User Story 1 — Find a named working copy from Home (Priority: P1)
 
-An operator opens Graph, Books, or Rules and sees a responsive shell whose counts state only what the server actually knows. Closed settings do not load unrelated domain data.
+An operator starts at the normal homepage, finds Workspace, selects an accessible repository and working copy by readable names, and understands whether its selected snapshot is ready to investigate.
 
-**Why this priority**: The current shell creates background requests that are unrelated to the page the operator opened. Removing that work gives every later console workflow a truthful base.
+**Why this priority**: A technically valid Code page is not a working surface if the operator must already know its hidden URL, a binding protocol, or an identifier.
 
-**Independent Test**: Open each page against an authorized candidate backend with closed settings. Confirm that the page works without memory-body requests or settings-owned requests. Open settings and confirm that its normal authorized load begins then.
+**Independent Test**: Starting only at the normal homepage and using visible browser controls, select two linked working copies with distinct human labels. Verify each selected snapshot identifies its revision/time, coverage and readiness state without a UUID, SQL, direct `/code` navigation, or manually supplied context.
 
 **Acceptance Scenarios**:
 
-1. **Given** an operator opens Graph, Books, or Rules, **When** the shell loads, **Then** it does not fetch memory bodies only to render a shell count.
-2. **Given** the server has no authoritative total for a collection, **When** the shell renders a count, **Then** it shows `unknown` rather than zero or a page length as a total.
-3. **Given** settings are closed, **When** the operator navigates between pages, **Then** settings-owned data does not load until the operator opens settings.
+1. **Given** an authenticated subject has an accessible repository and two working copies, **When** the operator opens Home, **Then** a visible Workspace entry leads to dependent repository and working-copy choices with human-readable repository, branch, and device/location labels.
+2. **Given** a working copy has a published snapshot, **When** the operator selects it, **Then** Workspace shows its snapshot revision/time, indexed coverage where known, supported-language scope, and one truthful state: Ready, Updating, Needs indexing, Failed, or Newer snapshot available.
+3. **Given** there are no accessible repositories, no grant, no published snapshot, or an offline owner, **When** the operator reaches Workspace, **Then** the console distinguishes those states and offers only a real supported next action; it does not present a generic binding error, localhost substitution, synthetic administrator, or empty successful result.
 
 ---
 
-### User Story 2 - Trust the result of a collection change (Priority: P1)
+### User Story 2 — Inspect source, relation, and evidence in one snapshot (Priority: P1)
 
-An operator makes a supported collection change and can distinguish a verified change from a partial change, a failed request, and an outcome whose server state is still unknown.
+An operator searches the selected working copy by symbol or ordinary language, opens a source span, follows direct or reverse derived code relations, and opens the selected relation's evidence without losing the selected snapshot.
 
-**Why this priority**: A client-side snapshot cannot undo a server write. The operator needs an honest result before using multi-item operations.
+**Why this priority**: Search or a graph image alone does not answer why code is related or whether the displayed evidence belongs to the source state the operator selected.
 
-**Independent Test**: Exercise a matching field change, a deletion, and a rejected item in the same action. Revoke access after a commit. Repeat with a lost response, a failed readback, and a successful mutation callback that returns a load `error` state. Confirm that fields match the authoritative state and version, deletion reads as authorized absence, lost access discloses no row, pending verification stays marked, and retry targets only unfinished work.
+**Independent Test**: In a corpus with more candidates than one result page, use a direct or reverse relation to open a neighbor that was absent from the first search page. Verify its evidence opens in the same permitted View and that a second tab's different working copy remains unchanged. The conceptual query must use a real provider over more than 50 eligible candidates; lexical or degraded output is recorded `NOT_PROVEN`, not accepted as semantic evidence.
 
 **Acceptance Scenarios**:
 
-1. **Given** one supported item succeeds and one fails, **When** the action returns, **Then** the console reports `partial` with each item result and does not claim a rollback.
-2. **Given** the server may have committed but the browser loses the response, **When** the operator returns to the collection, **Then** the console reports `outcome_unknown` until status or readback determines whether the server committed the item.
-3. **Given** the server confirms a commit but the subsequent readback fails or its successful callback returns a load `error` state, **When** the operation renders, **Then** it reports `committed_verification_pending`, not `committed_verified` or `outcome_unknown`.
-4. **Given** an authoritative readback follows a field change, deletion, or access revocation, **When** the console evaluates the postcondition, **Then** it verifies the matching state and version, authorized absence, or no disclosure with a non-sensitive operation status, respectively.
-5. **Given** a retry is available, **When** the operator retries, **Then** the console retries only items that are not known to have succeeded.
+1. **Given** a Ready or partially supported selected snapshot, **When** the operator searches a symbol or a natural-language intent, **Then** result count, shown page, continuation, semantic/lexical mode, and coverage limitations remain distinct; a page length never becomes the corpus total.
+2. **Given** the operator opens a source result, **When** the operator chooses Directly calls or Called by, **Then** the relation list and any bounded visual use the same snapshot and offer an accessible non-visual equivalent.
+3. **Given** a relation has released evidence, **When** the operator opens Evidence, **Then** the supporting file/span/digest opens through the authorized source-read boundary. If only entity-level evidence exists, the console labels that granularity rather than claiming an exact call-site.
+4. **Given** a newer snapshot appears, a grant is revoked, or a continuation is stale or mismatched, **When** the operator requests data, **Then** the current snapshot is never silently replaced and the response either remains authorized in that snapshot or discloses no source, identifier, count, edge, or evidence outside the grant.
 
 ---
 
-### User Story 3 - Explore one authorized source state (Priority: P1)
+### User Story 3 — Retire obsolete writers without erasing history (Priority: P1)
 
-An authorized browser subject selects a named Source, Checkout, and View, searches it, examines a bounded relationship graph or accessible relation list, and reads the exact source span that supports the result.
+An operator no longer encounters manual graph construction or plaintext book intake as normal work, while historical documents, provenance, historical graph readers, Rules, Issues, and versioned data remain available under their existing authority.
 
-**Why this priority**: Code navigation is useful only when the operator can trust that search, graph, and source text describe the same authorized source state.
+**Why this priority**: Hiding an old form leaves the unsafe workflow executable through its route, tool, flag, or worker. Deleting its data would break historical meaning and named readers.
 
-**Independent Test**: Use two saved worktrees and two browser tabs with different authorized choices. Search, open a relationship, and read a source span in each tab. Confirm that every result stays with the selected View and that one tab does not change the other tab or an MCP client.
-
-**Acceptance Scenarios**:
-
-1. **Given** the browser subject has an explicit grant, **When** the operator selects one Source and Checkout, **Then** the console offers only Views that subject may read.
-2. **Given** the operator searches a pinned View, **When** the operator follows a graph result to its source, **Then** the graph fact and source span identify that same View.
-3. **Given** a newer View becomes available, **When** an operator has an older View open, **Then** the console notifies the operator and does not silently replace the pinned source.
-4. **Given** a grant is revoked, a continuation is mismatched, or a selector is ambiguous, **When** the operator requests data, **Then** the console reveals no source body, identifier, count, or relationship fact outside the grant.
-
----
-
-### User Story 4 - Apply safe Rules-first collection operations (Priority: P1)
-
-An operator selects Rules across pages or across a frozen filter, reviews the intended operation, and receives an item-by-item result that respects current authorization and versions. Rules are the first consumer. Issues, Memory, Queue, and Documents follow with the same selection and result truth but their own supported actions.
-
-**Why this priority**: Rules are the first high-value collection that needs group operations. Their ordering and injection semantics make false success and partial reorder dangerous.
-
-**Bounded action matrix**: Rules allow enable, disable, delete, supported field changes, and atomic scoped reorder. Issues allow acknowledge, status, priority, and labels. Memory allows suppress, unsuppress, and permitted archival without a privacy change. Queue allows candidate promote, reject, and supersede only with a valid target. Documents allow selected permitted versions for export or attach. These matrices adopt the accepted recovery contract at `.agent/intake/engram-webui-recovery-2026-09-09-r1/LOCAL-AUDIT-AND-PLAN.md` §4. They do not add Book Context actions, secret reveal, arbitrary manual graph edits, or Queue review-packet actions.
-
-**Independent Test**: Use more than 200 Rules and more than 100 Issues. Select a page, selected identifiers across pages, and all matching a filter with exclusions. Change a version or grant after preview. Exercise every named consumer only through its action matrix. Confirm that the console distinguishes these selections, that a reorder succeeds entirely or leaves the scope unchanged, and that all existing callers of the shared mutation-result contract use the same result truth.
+**Independent Test**: In a disposable pre-retirement dataset, attempt every approved retired HTTP/MCP writer and enable prior flags after restart; each must remain unavailable. Then read historical document versions and provenance, exercise the retained graph/read consumers, and verify nonterminal old book jobs receive the agreed non-destructive terminal disposition.
 
 **Acceptance Scenarios**:
 
-1. **Given** an operator selects all results for a filter, **When** the selection is created, **Then** the server freezes the authorized target set, reports its count, accepts explicit exclusions, and expires the selection without granting new authority.
-2. **Given** the filter, code context, or permissions change, **When** the operator returns to the collection, **Then** the console clears or requires reconfirmation of a dangerous selection.
-3. **Given** a Rule enable, disable, delete, or supported field change has stale versions or denied rows, **When** the operator applies it, **Then** the result identifies each success, conflict, denial, failure, or unknown outcome.
-4. **Given** an operator reorders Rules inside one scope, **When** a version conflict occurs, **Then** the order remains unchanged rather than being partially renumbered.
-5. **Given** an operator uses Issues, Memory, Queue, or Documents, **When** the operator requests an action outside that collection's action matrix, **Then** the console does not offer it and does not substitute a review-packet, cognitive-memory, Book Context, or secret workflow.
+1. **Given** an old Graph or Books bookmark, **When** the operator opens it after D-A, **Then** it cannot reveal a manual editor or uploader and gives a clear non-mutating transition or retirement state.
+2. **Given** direct legacy HTTP/MCP writer calls or old flags, **When** they are exercised after cutover and restart, **Then** none can create/delete manual graph entities or begin plaintext book processing.
+3. **Given** historical graph rows, book-produced versioned documents, comments, source-book provenance, Rules, or Issues, **When** authorized readers access them, **Then** their existing readable meaning and ACLs remain intact; no historical code relationship is relabeled as automatic code evidence.
 
----
+## Edge cases and failure states
 
-### User Story 5 - Request daemon-owned index work honestly (Priority: P2)
-
-An authorized operator asks the daemon owner to reindex or reconcile a selected code context and sees whether the request is queued, acknowledged, unavailable, failed, or completed with a new readable View.
-
-**Why this priority**: A browser action cannot index a remote working copy. The console must expose owner execution without pretending that a submitted request finished the work.
-
-**Independent Test**: Submit one authorized request while the owner is online and one while it is offline. Confirm that the first records acknowledgement and a new View only after readback, and that the second stays queued or unavailable without a false success.
-
-**Acceptance Scenarios**:
-
-1. **Given** the daemon owner is offline, **When** the operator requests index work, **Then** the console shows `queued` or `unavailable` and offers only an authorized retry path.
-2. **Given** the daemon owner acknowledges the request, **When** the work finishes, **Then** the console identifies the resulting View and its readback state.
-
-### Edge cases and failure states
-
-- A Source label, Checkout label, path, branch, legacy project identifier, or Space is ambiguous. The console asks for an authorized explicit selection and reveals no candidate details that the subject cannot read.
-- A search is partial, its traversal reaches a budget, or a source span is unavailable. The console labels the limitation and never presents it as proof that no dependency exists.
-- A response release or exposure record cannot complete. The console receives no contextual code body or relationship facts.
-- A filter token expires, a version changes, or a grant changes after preview. The console resolves the selection again and reports conflicts or denials per item.
-- A network loss happens after a mutation may have committed. The console keeps the operation identity and requires status or readback before replaying a non-idempotent action.
-- The daemon owner is offline, rejects a request, or produces no new View. The console shows the recorded state and does not expose workstation credentials, paths, or a fake completed result.
-- A view begins loading, has no authorized records, lacks a grant, returns a load failure, reflects an older View or data snapshot, is incomplete, cannot support the requested operation, reaches its deadline, or cannot reach its owner. The console presents exactly `loading`, `empty`, `denied`, `error`, `stale`, `partial`, `unsupported`, `timeout`, or `offline`, respectively. Each state names the available action or limitation and never appears as readiness or an empty result.
-- A collection header supports keyboard selection and an indeterminate selection state. The shell and collection workflows remain usable at 1440, 980, and 390 CSS-pixel widths and at 200% zoom in RU and EN. Existing zh behavior must not regress.
-- The existing Books page identifies plaintext-to-chunks processing as a legacy import capability. It reports actual capability state instead of claiming Book Context readiness.
+- Missing accessible sources, a missing read grant, a working copy without a published snapshot, an offline owner, a provider failure, and a genuine empty search are different states with different safe next actions.
+- Updating retains the last complete selected snapshot with its age. A new publication is offered explicitly and does not replace another tab or an open source span.
+- Unsupported languages, dynamic calls, partial extraction, a bounded traversal, unavailable source evidence, and a semantic-provider fallback are limitations, not proof that no relation or result exists.
+- A source owner may differ from the browser user. Exact owner equality is required for grant administration; an unaccepted enrollment/link is not substituted by an administrator or a fixture grant.
+- Existing pending or processing book jobs do not contain replayable plaintext. In the existing single-container deployment, no old book-writer process may remain live before D-A transitions residual jobs idempotently to `failed` with an interrupted-by-retirement reason; D-A adds no lease or heartbeat subsystem. The transition preserves `source_book_job_id` and partial historical documents, and a rerun remains idempotent.
 
 ## Requirements
 
 ### Functional Requirements
 
-- **FR-001**: The console MUST load an honest shell without fetching collection bodies that the current page and visible shell do not need.
-- **FR-002**: The console MUST render an authoritative bounded count when available and MUST render `unknown` when no authoritative total exists. It MUST NOT present a loaded page size as a server total.
-- **FR-003**: The console MUST defer settings-owned domain requests until settings opens and preserve existing keyboard, focus, and error behavior when it does.
-- **FR-004**: Code browsing MUST require a persistent authenticated browser subject and an explicit read grant for the requested Source and Checkout. Administrator role, Space membership, a browser tab, a path, and a legacy project identifier MUST NOT grant code access.
-- **FR-005**: The console MUST resolve every Code Explorer request to one authorized Source, Checkout, and immutable View before it searches, traverses, reads a span, or continues a result.
-- **FR-006**: Search, graph, and exact-source results shown together MUST identify the same View. Browser tabs and MCP clients MUST retain independent contexts.
-- **FR-007**: Before returning a contextual code response, the shared UCI release operation MUST reauthorize the request and record non-content exposure. If either action fails, the response MUST not contain contextual code or relationship facts.
-- **FR-008**: The console MUST remain a read-only view of code-derived facts. It MUST NOT create or edit AST facts, become a second code graph, bypass UCI through direct storage access, expose daemon credentials, or add HTTP MCP.
-- **FR-009**: The primary Code Explorer workflow MUST show query, graph or relation-list, exact source, provenance, confidence, and limitation states. It MUST keep legacy graph data distinct from code-derived facts.
-- **FR-010**: Collection selection MUST distinguish no selection, explicit typed identifiers, current page, and all results for one frozen server filter with explicit exclusions.
-- **FR-011**: An all-filter selection MUST bind the authorized target set, query fingerprint, count, expiry, and expected versions. Changing filter, context, or permissions MUST clear or require reconfirmation of dangerous selection.
-- **FR-012**: Rules MUST be the first collection operation consumer. The console MUST support only authorized enable, disable, delete, and supported field changes by selection. Rule reorder MUST be atomic within one scope and version-checked.
-- **FR-013**: Each mutation result MUST distinguish `committed_verified`, `committed_verification_pending`, `partial`, `failed`, and `outcome_unknown`, with an item-level result when more than one item was targeted. `committed_verified` requires an authorized postcondition: a field change matches authoritative state and version, a deletion reads as authorized absence, and an access loss discloses no row while retaining only a non-sensitive operation status. `committed_verification_pending` means the server confirmed the commit but readback failed, including when a successful mutation callback returns a load `error` state. `outcome_unknown` means that commitment itself remains uncertain.
-- **FR-014**: The client MUST NOT describe a local snapshot reset as a server rollback. It MUST retain operation identity for uncertain work and retry only targets not known to have succeeded.
-- **FR-015**: After Rules, Feature 011 MUST complete supported Issues, Memory, Queue, and Documents consumers with their bounded action matrices: Issues acknowledge, status, priority, and labels; Memory suppress, unsuppress, and permitted archival without a privacy change; Queue candidate promote, reject, and valid-target supersede; and Documents export or attach of selected permitted versions. Every existing caller of the changed shared mutation-result contract MUST migrate in the same cutover. The feature MUST NOT add bulk secret reveal, arbitrary manual graph edits, Queue review-packet actions, unsupported bulk actions, or cognitive Memory R1 work.
-- **FR-016**: An authorized index request MUST create durable owner-visible work with acknowledgement, retry, terminal state, and resulting View readback. HTTP acceptance alone MUST NOT mean the workstation completed the work.
-- **FR-017**: The browser MUST NOT receive a workstation secret or directly access a remote working-copy path to control indexing.
-- **FR-018**: Feature 011 MUST preserve UCI authority, evidence, and release boundaries. It MUST NOT reopen UCI technical acceptance, core recovery outcomes, or Sonar policy.
-- **FR-019**: The early Code/basic-collection milestone requires the honest shell, truthful mutation mechanism, Code Explorer, and accepted Rules action matrix. It admits Book Context planning only. Full Feature 011 completion additionally requires the supported Issues, Memory, Queue, and Documents consumers and S4 durable daemon job control. Only that full completion admits Book Context implementation. Working Agent Memory R1 remains retained until Book Context reaches its own product result.
-- **FR-020**: Design promotion MUST follow `.od` to `design/operator-console` to `apps/operator-console`. An accepted new flow MUST exist before parity changes. A raw design export MUST NOT overwrite a working runtime loader.
-- **FR-021**: The console MUST present `loading`, `empty`, `denied`, `error`, `stale`, `partial`, `unsupported`, `timeout`, and `offline` as distinct, truthful states. A state MUST name its available action or limitation and MUST NOT claim readiness or collapse into `empty`.
-- **FR-022**: The console MUST support keyboard selection and an indeterminate header selection state. It MUST remain usable at 1440, 980, and 390 CSS-pixel widths and at 200% zoom in RU and EN. It MUST NOT regress zh behavior.
-- **FR-023**: The existing Books page MUST label plaintext-to-chunks processing as legacy import and show its actual capability state. It MUST NOT present that state as Book Context readiness.
-- **FR-024**: S6 diagnostics and review workflows remain separately accepted task-driven work. Queue remains a candidate workflow, not review-packet preview or apply. Lifecycle, ingestion, and observed-completion callbacks remain internal and MUST NOT become operator actions.
+- **FR-001**: Home and primary navigation MUST expose Workspace as the normal entry to D-A. Completion MUST NOT require a direct hidden route, UUID, SQL, manual binding registration, manual node/edge creation, or technical proof entry.
+- **FR-002**: Workspace MUST present repository, working-copy, and indexed-snapshot identities in human language. Source/Checkout/View, grants, and opaque references remain server-resolved authority; labels, paths, remotes, branches, and device/location text MUST NOT authorize access.
+- **FR-003**: Every contextual code request MUST use one authorized Source, Checkout, and immutable View. Search, structure, graph/relation, evidence, and exact-source responses shown together MUST remain View-pinned; tabs and MCP contexts remain independent.
+- **FR-004**: Workspace MUST show selected-snapshot freshness, coverage where available, supported scope, and Ready, Updating, Needs indexing, Failed, or Newer snapshot available distinctly. Requesting indexing is not completion; browser code MUST NOT receive a workstation secret or remote working-copy path.
+- **FR-005**: Workspace MUST provide a bounded selected-View structure and result path before or alongside search, with opaque continuation and no fabricated filesystem tree. Search MUST preserve query/filter/View semantics and MUST NOT infer total coverage from a page size.
+- **FR-006**: Workspace MUST present automatically derived direct and reverse code relations with their type, limitations, snapshot, and released evidence. It MUST permit an authorized neighbor absent from the current search page to open through relation navigation and MUST retain an accessible relation-list equivalent to any visual graph.
+- **FR-007**: Browser read authority MUST require a persistent authenticated BrowserSubject and an explicit Source/Checkout grant. Owner-scoped grant issuance/revocation MUST use exact principal equality and audit; it MUST NOT infer authority from an administrator role, Space, branch, path, tab, or label.
+- **FR-008**: The console MUST remain a read-only presentation of code-derived facts. It MUST NOT create or edit AST facts, reconstruct a second code graph, bypass UCI through direct storage, add HTTP MCP, or expose daemon credentials.
+- **FR-009**: D-A MUST remove manual knowledge-graph create/delete admission from the console, HTTP route registration, MCP tool list/dispatch, feature-flag resurrection paths, and worker startup paths. The consumer map MUST retain or explicitly disposition `internal/retrieval/hybrid.go` Tier2 `GraphStoreInterface.Traverse`, historical graph read surfaces, and the current `/api/context/search` owner (`service.go` registration and `handleSearchByPrompt`). D-A MUST NOT remove `internal/graph` or the separate UCI code graph.
+- **FR-010**: D-A MUST remove plaintext book-job admission, uploader page, runtime pipeline startup, and worker execution path. In the existing single-container deployment, no old book-writer process may be live before it idempotently terminalizes residual nonterminal jobs as `failed` with an interrupted-by-retirement reason; it MUST preserve `source_book_job_id` and partial historical documents, prove rerun idempotence, and MUST NOT add a lease/heartbeat subsystem, replay unavailable plaintext, or invoke compensation that deletes historical rows.
+- **FR-011**: D-A MUST preserve PostgreSQL/pgvector, UCI, Source/Checkout/View ACL and release boundaries, versioned Documents, Rules, Issues, historical graph/book data, and named retained readers. It MUST NOT rewrite applied historical migrations, drop storage, or create a universal graph/library replacement.
+- **FR-012**: Loading, empty, denied, error, stale, partial, unsupported, timeout, and offline states MUST remain distinct wherever D-A exposes them. The journey MUST be keyboard-operable with visible focus and live status text, usable at 1440, 980, and 390 CSS-pixel widths and at 200% zoom, with complete RU/EN task language and no zh regression.
+- **FR-013**: D-A design work MUST update private `.od` authoring first and promote only its curated reviewed snapshot under `design/operator-console/PROMOTION-CONTRACT.md`. The old search → graph → Source shape and scaffold-fidelity instruction MUST NOT constrain the D-A runtime; no raw export may overwrite `apps/operator-console/`.
+- **FR-014**: The supported secure-origin/authenticated-browser versus single-user HTTP/no-auth deployment policy remains an install-bound decision. Neutral source work MUST preserve current authority and truthful recovery states; it MUST NOT fabricate a connect/request-access action, relax origin checks, or create a synthetic administrator. D-A source acceptance MAY record the bounded candidate result, but the release gate remains closed until that decision and installed normal-homepage DA01–DA04 proof are recorded.
 
 ### Key entities
 
-- **Browser subject**: A persistent authenticated user identity that receives grants and owns browser requests.
-- **Read grant**: Explicit permission for one browser subject to read a Source and Checkout. It does not grant access through labels, roles, or context aliases.
-- **Code context**: One authorized Source, Checkout, and immutable View used for a Code Explorer request.
-- **Pinned View**: The immutable source state identified by the open Code Explorer result. A newer View is a separate choice.
-- **Selection**: No items, explicit typed identifiers, one page, or a frozen all-filter target set with exclusions and expiry.
-- **Mutation result**: The durable truth of one requested change, including each target outcome and any required readback.
-- **Index work request**: A durable request that an authorized daemon owner may acknowledge, execute, retry, or report as unavailable.
+- **Workspace context**: The selected authorized Source, Checkout, and immutable View presented as Repository, Working copy, and Indexed snapshot.
+- **Workspace catalog choice**: Server-filtered, non-authorizing human display metadata plus opaque selection reference for an accessible Source/Checkout/View.
+- **Relation evidence reference**: A released View-pinned source descriptor with evidence kind and supported span/digest granularity.
+- **Browser read grant**: Explicit permission for one persistent browser subject to read one Source/Checkout pair; it does not grant index ownership or View publication.
+- **Historical book job**: A retained provenance/status record whose old plaintext admission and execution are retired; it does not become a D-A Book Context entity.
 
 ## Success Criteria
 
 ### Measurable outcomes
 
-- **SC-001**: Against an authorized candidate backend, each fresh Graph, Books, and Rules load makes zero memory-body requests for shell counts. With settings closed, each makes zero settings-owned domain requests.
-- **SC-002**: In a two-worktree, two-tab, concurrent-MCP fixture, 100% of successful Code Explorer search, graph, and source-span results identify the selected View. Zero results cross a browser-tab or MCP context boundary.
-- **SC-003**: In the same fixture, 100% of denied, revoked, ambiguous, expired, or continuation-mismatched Code Explorer requests reveal no unauthorized source body, identifier, count, or relationship fact.
-- **SC-004**: With more than 200 Rules and more than 100 Issues, the console distinguishes page, explicit-ID, and frozen all-filter selection with exclusions. Every Rules, Issues, Memory, Queue, and Documents action is in its stated matrix, and every affected shared mutation-result caller uses the migrated contract. A changed permission or version after preview produces per-item denial or conflict rather than a false full success.
-- **SC-005**: In mixed mutation, lost-response, failed-readback, and access-loss scenarios, a verified field change matches authoritative state and version, a verified deletion returns authorized absence, and access loss reveals no row while retaining only non-sensitive operation status. A callback load `error` after a known commit yields `committed_verification_pending`. Only uncertain commitment yields `outcome_unknown`. Retry submits no known-success item again.
-- **SC-006**: A Rule reorder either updates every Rule in its declared scope or leaves that scope unchanged.
-- **SC-007**: For an online daemon-owner fixture, a completed index request identifies a new readable View. For an offline fixture, the console reports `queued` or `unavailable` and never reports completion without owner acknowledgement and readback. This S4 proof is required for full Feature 011 completion.
-- **SC-008**: Each advertised capability has retained proof from trigger through browser request, registered handler, domain action, and observed effect or readback. Mock-only browser tests are labeled interaction evidence, not connection proof.
-- **SC-009**: The acceptance fixture exercises `loading`, `empty`, `denied`, `error`, `stale`, `partial`, `unsupported`, `timeout`, and `offline`. Each rendering states its available action or limitation and makes no readiness claim.
-- **SC-010**: Keyboard and indeterminate header selection work at 1440, 980, and 390 CSS-pixel widths and at 200% zoom in RU and EN. The same regression fixture shows no zh behavior regression.
-- **SC-011**: The existing Books page calls plaintext-to-chunks a legacy import capability and renders its actual state without claiming Book Context readiness. Queue never renders review-packet preview or apply, and lifecycle, ingestion, and observed-completion callbacks have no operator action.
+- **SC-001**: From the normal homepage, an operator finds Workspace and selects two different accessible working copies by repository, branch, and device/location identity without direct `/code` navigation, UUID entry, SQL, or manual graph setup.
+- **SC-002**: For a selected snapshot, the operator can read freshness/coverage/limitation state, search a corpus with more than one result page, open source, follow one direct and one reverse derived relation, and open released evidence for an off-page neighbor in that same View.
+- **SC-003**: In a two-worktree, two-tab, concurrent-MCP fixture, no result crosses a selected View boundary; an explicit newer snapshot transition is required. Absent, revoked, expired, ambiguous, or mismatched authority reveals no contextual source, identifier, count, relation, or evidence.
+- **SC-004**: The D-A source-acceptance fixture demonstrates a symbol query and one real-provider non-lexical conceptual query over more than 50 eligible candidates. Lexical or degraded output is `NOT_PROVEN` and cannot satisfy this criterion. Supported-language, dynamic-call, partial-coverage, and unavailable-evidence limitations are labeled honestly.
+- **SC-005**: After single-container quiescence, every writer in the approved nonempty manual-graph/book consumer map remains unavailable through visible UI, direct old HTTP/MCP calls, and prior flags after restart. A residual book job becomes `failed` with its retirement reason while preserving `source_book_job_id` and partial historical documents; repeating that transition is idempotent. `internal/retrieval/hybrid.go` Tier2 `Traverse`, historical graph readers, `/api/context/search`, UCI graph, Rules, Issues, and two document versions remain readable under existing ACL.
+- **SC-006**: DA01–DA04 work at 1440, 980, and 390 CSS-pixel widths and actual 200% browser zoom in RU and EN with keyboard-only context selection, source, relation, evidence, retry, and explicit newer-snapshot transition. Existing zh navigation receives a regression check.
+- **SC-007**: D-A source acceptance may be recorded only after SC-001–SC-006 pass on the exact candidate. The release gate remains closed until the supported browser/origin decision is recorded and an installed normal-homepage DA01–DA04 walkthrough proves discovery, source/relation/evidence, retirement/history, and accessibility in that chosen mode.
 
 ## Scope boundaries
 
 ### In scope
 
-- Honest shell loading, bounded or unknown counts, lazy settings-owned data, and distinct truthful presentation states.
-- Truthful mutation and authorized postcondition readback for every existing caller affected by the shared mutation-result contract.
-- Authorized read-only Code Explorer context selection, search, graph or relation-list navigation, and exact source inspection from one View.
-- Rules-first safe collection selection and operations, followed by the supported Issues, Memory, Queue, and Documents action matrices.
-- Authorized durable requests for daemon-owned reindex or reconcile work, their truthful status, and the S4 completion proof.
-- One-way design promotion and honest legacy-import capability state for the existing Books page.
+- Normal Home → Workspace discovery; human-readable repository/working-copy/snapshot selection; selected-context index state; bounded structure/search; source; direct/reverse relation; released evidence; and explicit newer-snapshot transition.
+- Existing UCI/grant/binding/release reuse plus only the narrow display, owner-onboarding, structure, and evidence seams needed to make the D-A journey ordinary-user operable.
+- Executable retirement of manual graph writers and plaintext book intake while preserving data, historical readers, and an honest residual-job lifecycle.
+- Design-source amendment/promotion, task-language localization, accessibility, and D-A-specific ordinary-user and negative retirement proof.
 
 ### Out of scope
 
-- UCI core repair, UCI technical reacceptance, a second code index or graph, direct storage bypass, browser administrator inference, HTTP MCP, or daemon credential delivery.
-- Manual editing of system-derived code facts, deletion of legacy graph data, unsaved-editor indexing, and arbitrary source-path scanning.
-- Book catalog, editions, source reader, extraction, concepts, attachments, or agent book application. Those form the next separate Book Context feature.
-- Further Working Agent Memory R1 implementation, cancellation, or reprioritization.
-- S6 diagnostics and review workflows, public lifecycle, ingestion, or observed-completion controls, production deployment, release publication, secret access, destructive migration, or Book backend work.
+- **D-B**: collection organization, broad typed-data search, provenance inspector across memories/documents, editorial correction authority, selection/bulk semantics, or changed Rules/Issues/Memory/Queue/Document action matrices.
+- **D-C**: quality-decision queue redesign, Book Context catalog/source/reader/application workflow, new book extraction, concept graph, or cognitive-memory platform work.
+- A universal graph, manual relation editing, new ontology, replacement index/database, raw SQL workflow, direct storage access, HTTP MCP, broad IAM, secret delivery, UCI reacceptance, destructive migration, deployment, release, or publication.
 
 ## Ownership boundaries
 
-- **Feature 011 console owner** owns the browser journeys, honest shell, context presentation, selection behavior, result presentation, and state matrix.
-- **Design-source owner** owns the one-way `.od` to `design/operator-console` to `apps/operator-console` promotion. The accepted new flow precedes parity changes and protects working runtime loaders from raw design export.
-- **UCI owner** owns Source, Checkout, View, query, graph, exact-source authority, reauthorization, and exposure release. The console only presents that application outcome.
-- **Auth owner** owns browser-subject identity and explicit Source and Checkout read grants. The console cannot add an implied administrator or Space-based grant.
-- **Collection domain owners** own allowed operations, validation, versions, audit, and readback for Rules, Issues, Memory, Queue, and Documents. Queue remains candidate work. Books remains a legacy import capability until Book Context has a separately accepted owner. A shared selection component does not enlarge any domain's authority.
-- **Daemon owner** owns index execution and actual View publication. The console owns the authorized request and displayed state only. **Book Context owner** owns the next catalog-to-application feature. **Working Agent Memory R1 owner** resumes only after the accepted Book Context result.
+- **Design-source owner** updates private `.od` and performs curated promotion; the existing public snapshot is not silently edited or treated as a D-A parity claim.
+- **Browser onboarding/catalog owner** owns human display metadata and exact owner-scoped grant administration.
+- **UCI read-model owner** owns bounded View-pinned structure and relation-evidence read contracts; **UCI release owner** retains authorization/exposure release.
+- **Console workspace owner** owns Home/NAV/Workspace presentation, keyboard and localization behavior, and removal of obsolete operator forms.
+- **Retirement owner** owns manual graph/book admission cutover and nonterminal book-job disposition; **single integrator** exclusively changes shared registration and migration files.
+- **D-B/D-C owners** receive no task from this D-A plan.
 
-## Assumptions
+## Assumptions and dependencies
 
-- The existing UCI application remains the only authority for code context and code-derived facts.
-- Operators use a supported browser with a persistent authenticated session. A denied or absent grant is a normal failure state.
-- Existing pages, documents, access controls, secrets, localization, and legacy graph records remain unless a separately accepted change says otherwise. Feature 011 changes the existing Books page only enough to show the required honest legacy-import capability state.
-- The installed UCI technical acceptance recorded as `PASS_WITH_EXPLICIT_SONAR_WAIVER` permits this separately accepted feature under Constitution 2.0.0. It does not waive release evidence or Sonar requirements for a later release.
-
-## Dependencies
-
-- Engram Constitution 2.0.0, especially Principles III, VII, XI, XII, and XIII.
-- The UCI technical acceptance boundary and its Source, Checkout, View, authorization, evidence, and release contracts.
-- The Web UI recovery packet at `.agent/intake/engram-webui-recovery-2026-09-09-r1/`.
-- The existing Book Context brief at `.agent/intake/engram-graph-book-audit-2026-09-06-r3/02-BOOK-CONTEXT-BRIEF.md`, which remains the next feature's source and does not add Book implementation scope here.
-- The separate future Book Context feature. Its planning may begin after the Feature 011 early milestone. Its implementation follows full Feature 011 completion, including S4. The retained Working Agent Memory R1 feature follows Book Context.
+- Existing UCI remains the sole authority for Source, Checkout, View, query, relation, source descriptor, and release semantics; PostgreSQL/pgvector remains authoritative storage.
+- Existing versioned Documents, Rules, Issues, historical graph/book records, and UCI code graph are retained surfaces, not reimplemented D-A substitutes.
+- The implementation owner re-reads the exact candidate before touching source because the audit's primary checkout was stale and dirty.
+- The unresolved supported-browser/origin policy is recorded above as an install-bound decision, not a source-work blocker.
+- This amendment depends on Constitution 3.0.0, the 2026-09-17 operator-workspace audit package, and the accepted D2/UX/QA handoffs. It does not adopt their audit as runtime proof.

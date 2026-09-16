@@ -1,5 +1,17 @@
 # Accepted design amendments
 
+## 2026-09-17 — Feature011 D-A operator-workspace contract amendment
+
+The accepted Feature011 D-A contract supersedes the promoted snapshot's `search → bounded graph → Source` discovery order and any instruction that freezes its pages, navigation, copy, or workflow as scaffold fidelity. The D-A source journey is **Home → Workspace → Repository → Working copy → Indexed snapshot → structure/search → source → direct or reverse relation → evidence**. `Source`/`Checkout`/`View` remain secondary authority evidence, not primary operator task labels.
+
+Manual knowledge-graph construction and plaintext book intake are retired workflows, not stale panels to preserve. D-A removes their UI and executable HTTP/MCP/flag/worker admission while retaining approved historical readers, versioned Documents, provenance, and UCI code graph boundaries. A visual relation aid remains bounded (depth `2`, maximum `24` nodes) and always has an accessible relation-list equivalent; it does not replace evidence or reintroduce a manual editor.
+
+The exact private `.od` authoring tree is not present in this candidate and must not be invented or reconstructed in the tracked promotion snapshot. Consequently this amendment does **not** alter `contracts/DESIGN.md`, `PROMOTION-MANIFEST.json`, mockups, or `apps/operator-console/PARITY.json`, and it makes no promotion/parity claim. T001 must update private `.od/DESIGN.md` first, bump its design version, and perform the reviewed curated promotion described by `PROMOTION-CONTRACT.md`. Until then, the 2026.09.10 snapshot is historical design input, not D-A runtime acceptance authority.
+
+`PRODUCT.md` and `specs/011-operator-code-console/spec.md` are the authoritative D-A outcome contract. The following snapshot instructions are superseded for D-A implementation: `contracts/DESIGN.md` §1.1's old discovery order; `contracts/DEVELOPER-PLAYBOOK.md` and `contracts/INTEGRATION-AGENT-PROMPT.md` language that limits the developer to swapping data or forbids page/product changes; and `contracts/HANDOFF-data-integration.md` language that preserves old page/classification behavior. Their retained security, token, and promotion-boundary material still applies unless it conflicts with the D-A contract.
+
+The supported secure-origin/authenticated-browser versus deliberately supported single-user HTTP/no-auth deployment choice remains install-bound. This amendment preserves grants and release authority and does not manufacture an onboarding bypass or installed-success claim.
+
 ## 2026-09-10 — Feature011 Code-flow snapshot promoted
 
 Authoring `DESIGN.md` now defines the Operate-mode `Source → Checkout → View` flow,
