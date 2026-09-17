@@ -159,8 +159,8 @@ func validFixtureDSN(raw string) bool {
 	if host != "127.0.0.1" && host != "localhost" && host != "::1" {
 		return false
 	}
-	lower := strings.ToLower(raw)
-	return strings.Contains(lower, "test") && !strings.Contains(lower, "prod") && !strings.Contains(lower, "staging")
+	database := strings.ToLower(strings.TrimPrefix(parsed.Path, "/"))
+	return database != "" && !strings.Contains(database, "/") && strings.Contains(database, "test") && !strings.Contains(database, "prod") && !strings.Contains(database, "staging")
 }
 
 func execute(ctx context.Context, rawDSN, serverBinary string) (result receipt, retErr error) {
@@ -571,7 +571,9 @@ func observeLiveRetirement(ctx context.Context, server *liveServer, token string
 		observation.ReaderChecks = append(observation.ReaderChecks, check.path)
 	}
 
-	connection, err := grpc.DialContext(ctx, server.address, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
+	dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	connection, err := grpc.DialContext(dialCtx, server.address, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
+	cancel()
 	if err != nil {
 		return observation, fmt.Errorf("connect local MCP gRPC: %w", err)
 	}

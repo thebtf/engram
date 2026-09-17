@@ -581,11 +581,18 @@ func completeFixtureEmbeddings(ctx context.Context, projection *gormdb.UCIProjec
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	go func() { done <- worker.Run(runCtx, "operator-code-live-embedding") }()
-	defer func() { cancel(); <-done }()
+	defer cancel()
+	stopWorker := func() error {
+		cancel()
+		return <-done
+	}
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
 		status, statusErr := projection.LoadIndexStatus(ctx, authorized, &profile)
 		if statusErr == nil && status.Embedding.Coverage == uci.IndexCoverageComplete && status.Embedding.ReadyCandidates == status.Embedding.TotalCandidates && status.Embedding.TotalCandidates > 50 {
+			if err := stopWorker(); err != nil {
+				return fmt.Errorf("run fixture embedding worker: %w", err)
+			}
 			return nil
 		}
 		select {
@@ -596,6 +603,9 @@ func completeFixtureEmbeddings(ctx context.Context, projection *gormdb.UCIProjec
 			return fmt.Errorf("fixture embedding worker stopped before coverage completed")
 		case <-time.After(50 * time.Millisecond):
 		}
+	}
+	if err := stopWorker(); err != nil {
+		return fmt.Errorf("run fixture embedding worker: %w", err)
 	}
 	return fmt.Errorf("fixture embedding coverage did not complete")
 }
