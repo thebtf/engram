@@ -13,32 +13,32 @@ function collectPageFailures(page: Page) {
 
 test.describe.configure({ mode: 'serial' })
 
-test('books ingest remains pending until the server exposes an authoritative status reference', async ({ page }) => {
+test('books bookmark exposes retirement without plaintext admission', async ({ page }) => {
  const failures = collectPageFailures(page)
- const statusRequests: string[] = []
+ const writerRequests: string[] = []
  page.on('request', (request) => {
-  if (request.method() === 'GET' && /\/api\/books\/\d+\/status$/.test(new URL(request.url()).pathname)) {
-   statusRequests.push(request.url())
-  }
+  if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/books') writerRequests.push(request.url())
  })
+
  await page.goto('/books')
+ await expect(page.getByRole('heading', { name: 'Приём текстовых книг упразднён' })).toBeVisible()
+ await expect(page.locator('.retirement-page').locator('input, textarea, input[type="file"]')).toHaveCount(0)
+ await expect(page.getByRole('link', { name: 'Открыть документы' })).toHaveAttribute('href', '/documents')
 
- const textInputs = page.locator('.books-page input[type="text"]')
- await textInputs.nth(0).fill('readback-book.md')
- await textInputs.nth(1).fill('operator-console')
- await textInputs.nth(2).fill('operator-console')
- await page.locator('.books-page textarea').fill('# Readback book\n\nA current book-ingestion fixture.')
+ await page.goto('/settings')
+ await page.getByRole('dialog').getByRole('button', { name: 'English' }).click()
+ await expect(page.locator('html')).toHaveAttribute('lang', 'en')
+ await page.goto('/books')
+ await expect(page.getByRole('heading', { name: 'Plaintext book intake retired' })).toBeVisible()
 
- const createResponse = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/books')
- await page.locator('.books-page button.act.primary').click()
- expect(await (await createResponse).json()).toMatchObject({ status: 'pending', source_ref: 'readback-book.md' })
- const outcome = page.getByTestId('mutation-result')
- await expect(outcome).toHaveAttribute('data-kind', 'committed_verification_pending')
- await expect(page.getByTestId('mutation-retained-input')).toBeVisible()
- await expect(textInputs.nth(0)).toHaveValue('readback-book.md')
- await page.waitForTimeout(100)
- expect(statusRequests).toEqual([])
+ await page.goto('/settings')
+ await page.getByRole('dialog').getByRole('button', { name: '中文' }).click()
+ await expect(page.locator('html')).toHaveAttribute('lang', 'zh-Hans')
+ await page.goto('/books')
+ await expect(page.getByRole('heading', { name: '纯文本书籍导入已停用' })).toBeVisible()
+ expect(writerRequests).toEqual([])
  expect(failures).toEqual([])
+
 })
 
 test('rules create and selection update round-trip through current control-plane routes', async ({ page }) => {
@@ -211,7 +211,7 @@ test('mismatched, bare, and accepted rule responses retain drafts for explicit r
  await remove.click()
  await expect(outcome).toHaveAttribute('data-kind', 'committed_verification_pending')
  await expect(seededRule).toBeVisible()
- await page.waitForTimeout(100)
+ await expect.poll(() => deleteRequests.length).toBe(1)
  expect(deleteRequests).toEqual([
   expect.objectContaining({
    action: 'delete',
@@ -267,7 +267,7 @@ test('partial memory retry keeps only unresolved selections and never replays au
  await expect(page.getByTestId('mutation-item-outcomes')).toContainText('9101')
  await expect(page.getByTestId('memory-row-9101').locator('.echk')).not.toHaveClass(/on/)
  await expect(page.getByTestId('memory-row-9102').locator('.echk')).toHaveClass(/on/)
- await page.waitForTimeout(100)
+ await expect.poll(() => selectionPayloads.length).toBe(1)
  expect(selectionPayloads).toEqual([
   {
    selection: {
@@ -334,7 +334,7 @@ test('a browser transport loss retains the selected mutation for manual reconcil
  await expect(page.getByTestId('mutation-retained-input')).toBeVisible()
  await expect(page.getByTestId('memory-row-9103').locator('.echk')).toHaveClass(/on/)
  await expect(outcome).not.toContainText(/rollback/i)
- await page.waitForTimeout(100)
+ await expect.poll(() => dispatches).toBe(1)
  expect(dispatches).toBe(1)
 })
 

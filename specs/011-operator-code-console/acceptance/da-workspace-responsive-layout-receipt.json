@@ -1,0 +1,60 @@
+{
+  "receiptSchema": "engram.operator-code-console.da-responsive-layout-receipt/v1",
+  "scope": "D-A Workspace responsive-layout evidence only; not DA01–DA04 journey acceptance",
+  "recorded_at_utc": "2026-09-17",
+  "candidate": {
+    "worktree": "D:/Dev/engram/.agent/worktrees/operator-workspace-mobile-fix",
+    "branch": "fix/operator-workspace-mobile-layout",
+    "source_commit_before_receipt": "084c464ba1bedd10840585f08de9a519911e0827",
+    "source_tree_before_receipt": "699e929e4c31d9f54a623bdfbb6f19453becd8c6",
+    "clean_source_tree_before_receipt": true
+  },
+  "sourceFiles": {
+    "apps/operator-console/layouts/default.vue": "sha256:2518453c7f73c5f79aad5e7b81babd1ea9f42c5260d2abe28d13e61c0016d144",
+    "apps/operator-console/playwright.live.config.ts": "sha256:f040a32a14de912fad84cfceca049d16fdce8e67640eaa2d83d4766a2ec5c4dd",
+    "apps/operator-console/tests/live/fixture-bootstrap.ts": "sha256:749da70300d17653395717016c073cfc0b23c2b06bbfe21efdd7dd2dc2763bb2",
+    "apps/operator-console/tests/live/operator-code-mobile-layout.spec.ts": "sha256:2031b66a2973b3c166dc4267dc21604236d317a2cbc238b30e34c16dbc92dbfe",
+    "apps/operator-console/tests/live/operator-code-explorer.spec.ts": "sha256:9cb67b804f296d613ab22cc5e7c29c3197c55418c1dfb88fd170928c6ae3dfe1"
+  },
+  "observedProof": {
+    "kind": "real-authenticated-go-postgresql-chromium-shell",
+    "command": "npx playwright test --config playwright.live.config.ts operator-code-mobile-layout.spec.ts",
+    "result": "PASS — 1 test passed",
+    "trace": {
+      "path": "apps/operator-console/test-results/operator-code-mobile-layou-56a58-le-across-responsive-reflow-chromium/workspace-mobile-layout.json",
+      "sha256": "546053bb9b1b0886ad9ef3a091ac157987924e1ba25589eddf47275c67a2cbe3",
+      "candidateHead": "084c464ba1bedd10840585f08de9a519911e0827",
+      "candidateTree": "699e929e4c31d9f54a623bdfbb6f19453becd8c6",
+      "backendSourceCommit": "084c464ba1bedd10840585f08de9a519911e0827",
+      "backendBinarySha256": "4f6f032d6e26b34a64574af7eea67509563da9c076bb928f9155aec5b2f9b27b",
+      "browser": "chromium 149.0.7827.55",
+      "apiFailures": []
+    },
+    "responsive": {
+      "viewports": [
+        "1440x1024",
+        "980x900",
+        "390x844",
+        "390x844@200%"
+      ],
+      "closedDrawer": "At 980px and 390px: scrollX=0; document scrollWidth equals viewport width; app grid resolves to one viewport-width column; nav right edge is at or left of x=0; nav is aria-hidden and inert; menu is visible at least 44x44px; topbar, content, statusbar, title, and menu all fit the viewport.",
+      "openDrawer": "At 390px: menu opens a visible scrim and a non-inert, aria-visible drawer whose left edge is x=0; Escape restores the closed geometry.",
+      "desktop": "At 1440px: navigation remains visible, the menu is hidden, and topbar/content/statusbar remain within the desktop grid.",
+      "visualReview": "Fresh 390px closed and drawer-open captures show an unclipped header, complete primary content, a visible menu, and a full drawer. Fresh 980px and 1440px captures preserve the expected compact and desktop compositions."
+    },
+    "providerBoundary": "The full semantic-provider explorer journey was not reused for responsive proof: the configured embedding provider was unavailable in this lane (embedded_chunks=0 of 64). This narrow real authenticated Go/PostgreSQL shell fixture does not require embeddings and does not reassert semantic search evidence."
+  },
+  "screenshots": {
+    "apps/operator-console/test-results/operator-code-mobile-layou-56a58-le-across-responsive-reflow-chromium/workspace-1440.png": "sha256:8260bdd1def22b7c4d9ae99b859511aedf4b83e0db846803e9bf7f68f57dc139",
+    "apps/operator-console/test-results/operator-code-mobile-layou-56a58-le-across-responsive-reflow-chromium/workspace-980.png": "sha256:c431d35ad1c2455c83e15dc48e8431e5a318fca0c99ca9b4c4ba1b9b7318786c",
+    "apps/operator-console/test-results/operator-code-mobile-layou-56a58-le-across-responsive-reflow-chromium/workspace-390.png": "sha256:72c058e538cbfe68e5cf8584728645952c86a5f862e35267961182a8a57c8be1",
+    "apps/operator-console/test-results/operator-code-mobile-layou-56a58-le-across-responsive-reflow-chromium/workspace-390-drawer-open.png": "sha256:d9ac400d1fafc9a191b8dee4331e04138df392009174f4096f0c65bf2de91f46",
+    "apps/operator-console/test-results/operator-code-mobile-layou-56a58-le-across-responsive-reflow-chromium/workspace-200pct.png": "sha256:e2804ff704d362aca40fdd89c31e375166d8673638748fbfae35c2e792ee9b61"
+  },
+  "impeccable": {
+    "command": "C:\\Users\\btf\\.impeccable\\bin\\0.1.5\\impeccable.exe detect apps\\operator-console",
+    "result": "The final layout scan had no finding in the changed shell or responsive proof. It reported seven pre-existing selected-row side-tab findings in unrelated component/page files."
+  },
+  "cleanup": "The focused live Playwright result passed and its fixture global teardown completed. No foreign listener or container was stopped.",
+  "verdict": "PASS — the prior scrollWidth-only responsive proof and its clipped 390px screenshot hashes are replaced. The exact candidate proves usable 390px, 200%, 980px, and 1440px Workspace shell geometry, drawer/Escape behavior, fresh visual captures, and no unexpected authenticated API failures."
+}

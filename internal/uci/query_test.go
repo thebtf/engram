@@ -1,7 +1,9 @@
 package uci
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"sort"
@@ -263,6 +265,62 @@ func TestUCIQueryContinuationTraversesBeyondOneStoreWindow(t *testing.T) {
 		if want := index * spec.Limit; call.Spec.Offset != want {
 			t.Fatalf("store call %d offset = %d, want %d", index, call.Spec.Offset, want)
 		}
+	}
+}
+
+func TestUCIQueryStructurePagesWithinOneViewWithoutTotal(t *testing.T) {
+	fixture := newQueryTestFixture()
+	store := &queryTestStore{coverage: IndexCoverageComplete, candidates: []QueryCandidate{
+		queryTestCandidate(queryTestCandidateInput{contextRef: fixture.contextA, artifactID: "70000000-0000-4000-8000-000000000061", digestCharacter: "a", localName: "Alpha", qualifiedSymbol: "fixture.Alpha", relativePath: "pkg/alpha.go", text: "func Alpha() {}", score: 3}),
+		queryTestCandidate(queryTestCandidateInput{contextRef: fixture.contextA, artifactID: "70000000-0000-4000-8000-000000000062", digestCharacter: "b", localName: "Beta", qualifiedSymbol: "fixture.Beta", relativePath: "pkg/beta.go", text: "func Beta() {}", score: 2}),
+		queryTestCandidate(queryTestCandidateInput{contextRef: fixture.contextA, artifactID: "70000000-0000-4000-8000-000000000063", digestCharacter: "c", localName: "Gamma", qualifiedSymbol: "fixture.Gamma", relativePath: "pkg/gamma.go", text: "func Gamma() {}", score: 1}),
+	}}
+	service := NewQueryService(store)
+	spec := QuerySpec{ClientSessionID: "query-client-a", Mode: QueryModeStructure, Filter: QueryFilter{PathPrefix: "./pkg/", Languages: []string{"go"}}, Order: QueryOrderPath, Limit: 2}
+
+	first, err := service.Query(context.Background(), newAuthorizedContext(fixture.contextA), spec)
+	if err != nil {
+		t.Fatalf("first structure page error = %v", err)
+	}
+	if got, want := queryTestStructurePaths(t, first), []string{"pkg/alpha.go", "pkg/beta.go"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("first structure paths = %#v, want %#v", got, want)
+	}
+	for _, item := range queryTestItems(t, first) {
+		if !reflect.DeepEqual(item.MatchSources, []QueryMatchSource{QueryMatchStructure}) {
+			t.Fatalf("first structure item match sources = %#v", item.MatchSources)
+		}
+	}
+	if first.Response.Retrieval == nil || first.Response.Retrieval.Mode != QueryRetrievalStructure || first.Response.Truncated == nil || !*first.Response.Truncated {
+		t.Fatalf("first structure response = %#v, want bounded structure continuation", first.Response)
+	}
+	if first.Response.Continuation == nil || first.Response.Continuation.Value == nil {
+		t.Fatal("first structure page omitted continuation")
+	}
+
+	token := *first.Response.Continuation.Value
+	spec.Continuation = &token
+	second, err := service.Query(context.Background(), newAuthorizedContext(fixture.contextA), spec)
+	if err != nil {
+		t.Fatalf("second structure page error = %v", err)
+	}
+	if got, want := queryTestStructurePaths(t, second), []string{"pkg/gamma.go"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("second structure paths = %#v, want %#v", got, want)
+	}
+	if second.Response.Truncated == nil || *second.Response.Truncated || second.Response.Continuation == nil || second.Response.Continuation.Value != nil {
+		t.Fatalf("second structure pagination = %#v, want final page without continuation", second.Response)
+	}
+	for _, result := range []QueryResult{first, second} {
+		queryTestAssertResponseBoundTo(t, result.Response, fixture.contextA)
+		payload, marshalErr := json.Marshal(result.Response)
+		if marshalErr != nil || bytes.Contains(payload, []byte(`"total"`)) {
+			t.Fatalf("structure response %s exposed a fabricated total: %s (%v)", result.Response.Status, payload, marshalErr)
+		}
+	}
+	if got := store.calls[0].Spec.Filter.PathPrefix; got != "pkg" {
+		t.Fatalf("normalized structure prefix = %q, want pkg", got)
+	}
+	if _, err := service.Query(context.Background(), newAuthorizedContext(fixture.contextB), spec); err == nil {
+		t.Fatal("structure continuation from another View was accepted")
 	}
 }
 
@@ -709,6 +767,8 @@ func queryTestCandidateMatches(candidate QueryCandidate, spec QuerySpec) bool {
 	}
 
 	switch spec.Mode {
+	case QueryModeStructure:
+		return true
 	case QueryModeExactLocalName:
 		return candidate.LocalName == spec.Text
 	case QueryModeExactQualifiedSymbol:
@@ -720,6 +780,16 @@ func queryTestCandidateMatches(candidate QueryCandidate, spec QuerySpec) bool {
 	default:
 		return false
 	}
+}
+
+func queryTestStructurePaths(t *testing.T, result QueryResult) []string {
+	t.Helper()
+	items := queryTestItems(t, result)
+	paths := make([]string, 0, len(items))
+	for _, item := range items {
+		paths = append(paths, item.Path)
+	}
+	return paths
 }
 
 func queryTestFTSMatches(candidate QueryCandidate, text string) bool {

@@ -2,29 +2,6 @@ import { expect, test } from '@playwright/test'
 
 test.use({ locale: 'ru' })
 
-test('runtime-derived navigation stays neutral until delayed flags prove its state', async ({ page }) => {
-  let releaseFlags: (() => void) | undefined
-  const flagsReleased = new Promise<void>((resolve) => { releaseFlags = resolve })
-
-  await page.route('**/api/flags', async (route) => {
-    await flagsReleased
-    await route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({ flags: { ENGRAM_GRAPH_ENABLED: false, ENGRAM_VNEXT_F_ENABLED: false } }),
-    })
-  })
-
-  await page.goto('/')
-  const graphDot = page.getByRole('link', { name: 'Связи знаний' }).locator('.ndot')
-  const queueDot = page.getByRole('link', { name: 'На проверку' }).locator('.ndot')
-
-  await expect(graphDot).toHaveAttribute('data-s', 'off')
-  await expect(queueDot).toHaveAttribute('data-s', 'off')
-
-  releaseFlags?.()
-  await expect(graphDot).toHaveAttribute('data-s', 'gated')
-  await expect(queueDot).toHaveAttribute('data-s', 'gated')
-})
 
 test('mobile topbar keeps primary controls reachable and settings access copy stays localized', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
@@ -44,22 +21,20 @@ test('mobile topbar keeps primary controls reachable and settings access copy st
   await expect(dialog.getByText('Access policy')).toHaveCount(0)
 })
 
-test('primary shell navigation reaches graph, legacy import, and rules', async ({ page }) => {
+test('home exposes Workspace while primary navigation retires Graph and Books', async ({ page }) => {
   await page.goto('/')
 
-  for (const [label, route] of [
-    ['Связи знаний', '/graph'],
-    ['Устаревший импорт', '/books'],
-    ['Правила поведения', '/rules'],
-  ]) {
-    await page.getByRole('link', { name: label, exact: true }).click()
-    await expect(page).toHaveURL(new RegExp(`${route}$`))
-  }
+  await expect(page.getByTestId('overview-workspace-entry')).toBeVisible()
+  await page.getByTestId('overview-workspace-entry').click()
+  await expect(page).toHaveURL(/\/code$/)
+  await expect(page.getByRole('link', { name: 'Связи знаний', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: 'Устаревший импорт', exact: true })).toHaveCount(0)
+
+  await page.getByRole('link', { name: 'Правила поведения', exact: true }).click()
+  await expect(page).toHaveURL(/\/rules$/)
 })
 
 for (const scenario of [
-  { route: '/graph', activeMemoryCount: 7, state: 'bounded', visible: '7' },
-  { route: '/books', activeMemoryCount: 0, state: 'zero', visible: 'нет' },
   { route: '/rules', activeMemoryCount: undefined, state: 'unknown', visible: 'неизвест' },
 ] as const) {
   test(`shell renders ${scenario.state} memory count truth on ${scenario.route}`, async ({ page }) => {
@@ -92,9 +67,9 @@ for (const scenario of [
     await expect(count).toHaveAttribute('data-count-state', scenario.state)
     await expect(count).toContainText(scenario.visible)
     await expect(page.getByTestId('shell-review-queue-count')).toContainText('неизвест')
-    await page.waitForTimeout(100)
+    await expect.poll(() => queueBodyRequests.length).toBe(1)
     expect(memoryBodyRequests).toEqual([])
-    expect(queueBodyRequests).toEqual([])
+    expect(queueBodyRequests).toEqual(['/api/memory/candidates'])
     expect(settingsOwnedRequests).toEqual([])
   })
 }

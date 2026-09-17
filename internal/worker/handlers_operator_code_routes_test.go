@@ -202,6 +202,7 @@ func TestOperatorCodeIndexIntentCompositionUsesDurableCurrentBinding(t *testing.
 	require.NoError(t, err)
 	application, ok := adapter.app.(*operatorCodeIndexIntentComposition)
 	require.True(t, ok)
+	require.IsType(t, &CodeGrantApplication{}, adapter.onboarding)
 
 	ctx := context.Background()
 	currentRef := fixture.current.Context
@@ -282,9 +283,11 @@ func TestOperatorCodeRoutes_ExposeLifecycleAndPrePinContexts(t *testing.T) {
 
 		require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 		require.Contains(t, recorder.Body.String(), `"contexts":[{`)
-		require.Contains(t, recorder.Body.String(), fixture.ref.SourceID)
-		require.Contains(t, recorder.Body.String(), fixture.ref.CheckoutID)
-		require.Contains(t, recorder.Body.String(), fixture.ref.ViewID)
+		require.Contains(t, recorder.Body.String(), `"repository":"Engram"`)
+		require.Contains(t, recorder.Body.String(), `"selection_ref":"`)
+		for _, forbidden := range []string{fixture.ref.SourceID, fixture.ref.CheckoutID, fixture.ref.ViewID} {
+			require.NotContains(t, recorder.Body.String(), forbidden)
+		}
 	})
 }
 
@@ -325,13 +328,12 @@ func TestOperatorCodeRoutes_BindingLifecyclePinsExactCatalogContext(t *testing.T
 	contexts := call(http.MethodPost, "/api/code/contexts", `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current"}`)
 	require.Equal(t, http.StatusOK, contexts.Code, contexts.Body.String())
 	require.Contains(t, contexts.Body.String(), `"contexts":[{`)
-	require.Contains(t, contexts.Body.String(), fixture.ref.SourceID)
-	require.Contains(t, contexts.Body.String(), fixture.ref.CheckoutID)
-	require.Contains(t, contexts.Body.String(), fixture.ref.ViewID)
-	require.NotContains(t, contexts.Body.String(), "grant_ref")
-	require.NotContains(t, contexts.Body.String(), "digest")
+	require.Contains(t, contexts.Body.String(), `"selection_ref":"`)
+	for _, forbidden := range []string{fixture.ref.SourceID, fixture.ref.CheckoutID, fixture.ref.ViewID, "grant_ref", "digest"} {
+		require.NotContains(t, contexts.Body.String(), forbidden)
+	}
 
-	pinned := call(http.MethodPut, "/api/code/tabs/"+operatorCodeHTTPTestBindingID+"/context", `{"document_proof":"proof-current","context_ref":`+operatorCodeHTTPTestContextRefJSON+`}`)
+	pinned := call(http.MethodPut, "/api/code/tabs/"+operatorCodeHTTPTestBindingID+"/context", `{"document_proof":"proof-current","selection_ref":"`+operatorCodeContextSelectionRef(fixture.ref)+`"}`)
 	require.Equal(t, http.StatusNoContent, pinned.Code, pinned.Body.String())
 	require.Empty(t, pinned.Body.String())
 	require.Equal(t, []BrowserBindingContext{browserBindingContext(fixture.ref)}, fixture.binding.pinnedTo)
@@ -353,6 +355,9 @@ func TestOperatorCodeRoutes_BindingLifecyclePinsExactCatalogContext(t *testing.T
 }
 
 func TestOperatorCodeRoutes_CloseDenialsDoNotSelectOrLeak(t *testing.T) {
+	selection := operatorCodeContextSelectionRef(uci.ContextRef{
+		SourceID: operatorCodeHTTPTestSourceID, CheckoutID: operatorCodeHTTPTestCheckoutID, ViewID: operatorCodeHTTPTestViewID, AnalysisProfileID: operatorCodeHTTPTestProfileID, Generation: 7,
+	})
 	for _, testCase := range []struct {
 		name      string
 		path      string
@@ -360,36 +365,14 @@ func TestOperatorCodeRoutes_CloseDenialsDoNotSelectOrLeak(t *testing.T) {
 		body      string
 		configure func(*operatorCodeHTTPTestFixture)
 	}{
-		{
-			name:   "replayed document proof",
-			path:   "/api/code/contexts",
-			method: http.MethodPost,
-			body:   `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-replayed"}`,
-		},
-		{
-			name:   "path binding mismatch",
-			path:   "/api/code/tabs/60000000-0000-4000-8000-000000000042/context",
-			method: http.MethodPut,
-			body:   `{"document_proof":"proof-current","context_ref":` + operatorCodeHTTPTestContextRefJSON + `}`,
-		},
-		{
-			name:   "revoked grant cannot pin",
-			path:   "/api/code/tabs/" + operatorCodeHTTPTestBindingID + "/context",
-			method: http.MethodPut,
-			body:   `{"document_proof":"proof-current","context_ref":` + operatorCodeHTTPTestContextRefJSON + `}`,
-			configure: func(fixture *operatorCodeHTTPTestFixture) {
-				fixture.contexts.pinErr = gormstore.ErrBrowserCodeContextDenied
-			},
-		},
-		{
-			name:   "expired grant cannot pin",
-			path:   "/api/code/tabs/" + operatorCodeHTTPTestBindingID + "/context",
-			method: http.MethodPut,
-			body:   `{"document_proof":"proof-current","context_ref":` + operatorCodeHTTPTestContextRefJSON + `}`,
-			configure: func(fixture *operatorCodeHTTPTestFixture) {
-				fixture.contexts.pinErr = gormstore.ErrBrowserCodeContextDenied
-			},
-		},
+		{name: "replayed document proof", path: "/api/code/contexts", method: http.MethodPost, body: `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-replayed"}`},
+		{name: "path binding mismatch", path: "/api/code/tabs/60000000-0000-4000-8000-000000000042/context", method: http.MethodPut, body: `{"document_proof":"proof-current","selection_ref":"` + selection + `"}`},
+		{name: "revoked grant cannot pin", path: "/api/code/tabs/" + operatorCodeHTTPTestBindingID + "/context", method: http.MethodPut, body: `{"document_proof":"proof-current","selection_ref":"` + selection + `"}`, configure: func(fixture *operatorCodeHTTPTestFixture) {
+			fixture.contexts.pinErr = gormstore.ErrBrowserCodeContextDenied
+		}},
+		{name: "expired grant cannot pin", path: "/api/code/tabs/" + operatorCodeHTTPTestBindingID + "/context", method: http.MethodPut, body: `{"document_proof":"proof-current","selection_ref":"` + selection + `"}`, configure: func(fixture *operatorCodeHTTPTestFixture) {
+			fixture.contexts.pinErr = gormstore.ErrBrowserCodeContextDenied
+		}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
@@ -517,6 +500,105 @@ func TestOperatorCodeServerAuthorizer_FailsClosedBeforeResolverOnUnavailableCont
 		require.ErrorContains(t, err, "checkout scope is unavailable")
 		require.Zero(t, resolver.calls, "a mismatched persisted checkout must never reach UCI authorization")
 	})
+}
+
+func TestOperatorCodeRoutesExposeWorkspaceJourneyBoundary(t *testing.T) {
+	service := newOperatorCodeRouteTestService(nil)
+	routes := make(map[string]map[string]bool)
+	require.NoError(t, chi.Walk(service.router, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		if routes[route] == nil {
+			routes[route] = make(map[string]bool)
+		}
+		routes[route][method] = true
+		return nil
+	}))
+
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/code/tabs/handshake"},
+		{http.MethodPost, "/api/code/tabs/resume"},
+		{http.MethodPost, "/api/code/contexts"},
+		{http.MethodPost, "/api/code/structure"},
+		{http.MethodPost, "/api/code/search"},
+		{http.MethodPost, "/api/code/graph"},
+		{http.MethodPost, "/api/code/source"},
+		{http.MethodGet, "/api/code/grants/choices"},
+		{http.MethodPatch, "/api/code/grants/choices/{choice_ref}"},
+		{http.MethodPost, "/api/code/grants"},
+		{http.MethodPost, "/api/code/grants/{grant_ref}/revoke"},
+	} {
+		require.Truef(t, routes[route.path][route.method], "missing %s %s", route.method, route.path)
+	}
+}
+
+func TestOperatorCodeRoutesDelegateStructureAndOwnerOnboarding(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	structure := operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalStructure)
+	(*structure.Items)[0].MatchSources = []uci.QueryMatchSource{uci.QueryMatchStructure}
+	require.NoError(t, structure.ValidatePreExposure())
+	fixture.app.structure = structure
+	grants := &recordingCodeGrantStore{ownerChoices: []gormstore.BrowserReadGrantOwnerChoice{{
+		ChoiceRef:        fixture.ref.CheckoutID,
+		RepositoryLabel:  "Engram",
+		WorkingCopyLabel: "Studio workstation · release candidate",
+	}}}
+	adapter.onboarding = &CodeGrantApplication{grants: grants}
+	service := newOperatorCodeRouteTestService(adapter)
+
+	call := func(method, path, body string, identity auth.Identity) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		request := operatorCodeHTTPTestRequest(t, body, identity)
+		request.Method = method
+		request.URL.Path = path
+		request.RequestURI = path
+		service.router.ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	structureResult := call(http.MethodPost, "/api/code/structure", `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","path_prefix":"internal","limit":1}`, fixture.identity)
+	require.Equal(t, http.StatusOK, structureResult.Code, structureResult.Body.String())
+	require.Equal(t, 1, fixture.app.structureCalls)
+	require.Equal(t, uci.QueryModeStructure, fixture.app.structureSpecs[0].Mode)
+	require.Equal(t, "internal", fixture.app.structureSpecs[0].Filter.PathPrefix)
+	require.Len(t, fixture.recorder.inputs, 1)
+
+	choices := httptest.NewRecorder()
+	choiceRequest := httptest.NewRequest(http.MethodGet, "/api/code/grants/choices", nil)
+	choiceRequest.Header.Set(operatorCodeRequestIDHeader, "operator-request-choices")
+	choiceRequest.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: "browser-session-41"})
+	choiceRequest = choiceRequest.WithContext(auth.WithIdentity(choiceRequest.Context(), fixture.identity))
+	service.router.ServeHTTP(choices, choiceRequest)
+	require.Equal(t, http.StatusOK, choices.Code, choices.Body.String())
+	choiceRef := operatorCodeOpaqueRef("grant-choice", fixture.ref.CheckoutID)
+	require.Contains(t, choices.Body.String(), `"choice_ref":"`+choiceRef+`"`)
+	require.NotContains(t, choices.Body.String(), fixture.ref.CheckoutID)
+
+	issued := call(http.MethodPost, "/api/code/grants", `{"choice_ref":"`+choiceRef+`"}`, fixture.identity)
+	require.Equal(t, http.StatusOK, issued.Code, issued.Body.String())
+	require.Len(t, grants.ownerIssues, 1)
+	require.Equal(t, fixture.ref.CheckoutID, grants.ownerIssues[0].ChoiceRef)
+	require.Equal(t, int64(41), grants.ownerIssues[0].TargetUserID)
+
+	labeled := call(http.MethodPatch, "/api/code/grants/choices/"+choiceRef, `{"working_copy":"Desk · release candidate"}`, fixture.identity)
+	require.Equal(t, http.StatusOK, labeled.Code, labeled.Body.String())
+	require.Len(t, grants.ownerLabels, 1)
+	require.Len(t, grants.ownerIssues, 1, "labels are display metadata, not grant issuance")
+
+	grantRef := "60000000-0000-4000-8000-000000000099"
+	revoked := call(http.MethodPost, "/api/code/grants/"+grantRef+"/revoke", "", fixture.identity)
+	require.Equal(t, http.StatusOK, revoked.Code, revoked.Body.String())
+	require.Len(t, grants.revokes, 1)
+	require.Equal(t, grantRef, grants.revokes[0].grantRef)
+
+	nonOwner := httptest.NewRecorder()
+	nonOwnerRequest := httptest.NewRequest(http.MethodGet, "/api/code/grants/choices", nil)
+	nonOwnerRequest.Header.Set(operatorCodeRequestIDHeader, "operator-request-non-owner")
+	nonOwnerRequest.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: "browser-session-41"})
+	nonOwnerRequest = nonOwnerRequest.WithContext(auth.WithIdentity(nonOwnerRequest.Context(), auth.Session("admin")))
+	service.router.ServeHTTP(nonOwner, nonOwnerRequest)
+	require.Equal(t, http.StatusForbidden, nonOwner.Code, nonOwner.Body.String())
 }
 
 type operatorCodeRouteTestCalls struct {

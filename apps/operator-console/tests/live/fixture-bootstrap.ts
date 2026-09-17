@@ -556,7 +556,7 @@ class LiveFixture implements FixtureController {
       name: `${this.fixtureId}-repository`,
       scope: 'repository',
     }, null, 2)}\n`)
-    const searchPages = Array.from({ length: 11 }, (_, index) => `
+    const searchPages = Array.from({ length: 60 }, (_, index) => `
 func CodeExplorerFixtureAPage${index + 1}() string {
 	return "CodeExplorerFixtureA"
 }`).join('')

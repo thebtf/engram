@@ -70,6 +70,7 @@ const (
 	ExposureRetrievalLexical     ExposureRetrievalMode = "lexical"
 	ExposureRetrievalHybrid      ExposureRetrievalMode = "hybrid"
 	ExposureRetrievalGraph       ExposureRetrievalMode = "graph"
+	ExposureRetrievalStructure   ExposureRetrievalMode = "structure"
 	ExposureRetrievalUnavailable ExposureRetrievalMode = "unavailable"
 )
 
@@ -87,12 +88,13 @@ const (
 type ExposureEvidenceSource string
 
 const (
-	ExposureEvidenceExact  ExposureEvidenceSource = "exact"
-	ExposureEvidenceFTS    ExposureEvidenceSource = "fts"
-	ExposureEvidenceVector ExposureEvidenceSource = "vector"
-	ExposureEvidenceGraph  ExposureEvidenceSource = "graph"
-	ExposureEvidenceMixed  ExposureEvidenceSource = "mixed"
-	ExposureEvidenceNone   ExposureEvidenceSource = "none"
+	ExposureEvidenceExact     ExposureEvidenceSource = "exact"
+	ExposureEvidenceFTS       ExposureEvidenceSource = "fts"
+	ExposureEvidenceVector    ExposureEvidenceSource = "vector"
+	ExposureEvidenceGraph     ExposureEvidenceSource = "graph"
+	ExposureEvidenceStructure ExposureEvidenceSource = "structure"
+	ExposureEvidenceMixed     ExposureEvidenceSource = "mixed"
+	ExposureEvidenceNone      ExposureEvidenceSource = "none"
 )
 
 // ExposureCertainty is the closed confidence label derived from the released result.
@@ -550,6 +552,8 @@ func classifyExposure(response QueryResponse) (ExposureResultState, ExposureRetr
 		evidence = ExposureEvidenceFTS
 	case QueryRetrievalHybrid:
 		evidence = ExposureEvidenceMixed
+	case QueryRetrievalStructure:
+		evidence = ExposureEvidenceStructure
 	case QueryRetrievalGraph:
 		evidence = ExposureEvidenceGraph
 	case QueryRetrievalUnavailable:
@@ -720,7 +724,7 @@ func (state ExposureResultState) valid() bool {
 
 func (mode ExposureRetrievalMode) valid() bool {
 	switch mode {
-	case ExposureRetrievalExact, ExposureRetrievalLexical, ExposureRetrievalHybrid, ExposureRetrievalGraph, ExposureRetrievalUnavailable:
+	case ExposureRetrievalExact, ExposureRetrievalLexical, ExposureRetrievalHybrid, ExposureRetrievalGraph, ExposureRetrievalStructure, ExposureRetrievalUnavailable:
 		return true
 	default:
 		return false
@@ -738,7 +742,7 @@ func (state ExposureCoverageState) valid() bool {
 
 func (source ExposureEvidenceSource) valid() bool {
 	switch source {
-	case ExposureEvidenceExact, ExposureEvidenceFTS, ExposureEvidenceVector, ExposureEvidenceGraph, ExposureEvidenceMixed, ExposureEvidenceNone:
+	case ExposureEvidenceExact, ExposureEvidenceFTS, ExposureEvidenceVector, ExposureEvidenceGraph, ExposureEvidenceStructure, ExposureEvidenceMixed, ExposureEvidenceNone:
 		return true
 	default:
 		return false

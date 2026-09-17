@@ -21,7 +21,6 @@ import (
 
 func TestHandleGetFlagsReturnsReadOnlyRuntimeSnapshot(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
-	t.Setenv("ENGRAM_GRAPH_ENABLED", "")
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
 	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
 	t.Setenv("ENGRAM_V7_S2_METAMEM", "true")
@@ -48,7 +47,7 @@ func TestHandleGetFlagsReturnsReadOnlyRuntimeSnapshot(t *testing.T) {
 	assert.Contains(t, response.Apply["fields"], "features.enforce_source_project")
 	assert.Contains(t, response.Apply["fields"], "memory.inject_unified")
 	assert.True(t, response.Flags["ENGRAM_VNEXT_ENABLED"])
-	assert.False(t, response.Flags["ENGRAM_GRAPH_ENABLED"])
+	assert.NotContains(t, response.Flags, "ENGRAM_GRAPH_ENABLED")
 	assert.True(t, response.Flags["ENGRAM_CODE_INTEL_ENABLED"])
 	assert.True(t, response.Flags["ENGRAM_V7_PLUG_ENABLED"])
 	assert.False(t, response.Flags["ENGRAM_V7_S1_STATE"])

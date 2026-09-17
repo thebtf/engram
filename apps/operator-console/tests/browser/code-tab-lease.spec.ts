@@ -4,12 +4,14 @@ const TAB_BINDING_ID = '60000000-0000-4000-8000-000000000041'
 const DOCUMENT_PROOF = 'proof-current'
 
 test('Code Explorer renews its live tab lease and leaves no renewal timer after teardown', async ({ page }) => {
+  const handshakePayloads: unknown[] = []
   const leasePayloads: unknown[] = []
 
   await page.clock.install({ time: new Date('2026-09-15T00:00:00Z') })
   await page.route('**/api/code/**', async (route: Route) => {
     const pathname = new URL(route.request().url()).pathname
     if (pathname === '/api/code/tabs/handshake') {
+      handshakePayloads.push(route.request().postDataJSON())
       await route.fulfill({
         json: {
           state: 'TAB_BINDING_READY',
@@ -39,6 +41,8 @@ test('Code Explorer renews its live tab lease and leaves no renewal timer after 
 
   await page.goto('/code')
   await expect(page.getByTestId('code-context-empty')).toBeVisible()
+  expect(handshakePayloads).toHaveLength(1)
+  expect(handshakePayloads[0]).not.toHaveProperty('ambiguous')
 
   await page.clock.fastForward('01:00')
   await expect.poll(() => leasePayloads).toEqual([{ document_proof: DOCUMENT_PROOF }])
@@ -55,10 +59,70 @@ test('Code Explorer renews its live tab lease and leaves no renewal timer after 
     { document_proof: DOCUMENT_PROOF },
   ])
 })
+
+test('Code Explorer resynchronizes a completed selection after catalog refresh while retaining a later partial choice', async ({ page }) => {
+  let contextRequests = 0
+  const initialCatalog = {
+    contexts: [{
+      repository: 'Engram',
+      working_copy: 'stale candidate checkout',
+      indexed_snapshot: { label: 'Stale candidate snapshot', revision: '1a9dad0', published_at: '2026-09-17T00:00:00Z' },
+      selection_ref: 'context-current',
+      index_intent_available: false,
+    }, {
+      repository: 'Engram',
+      working_copy: ' ',
+      indexed_snapshot: { label: 'Malformed snapshot', revision: '1a9dad3', published_at: '2026-09-17T00:03:00Z' },
+      selection_ref: 'context-malformed',
+      index_intent_available: false,
+    }, {
+      repository: 'Other repository',
+      working_copy: 'manual checkout',
+      indexed_snapshot: { label: 'Manual snapshot', revision: '1a9dad1', published_at: '2026-09-17T00:01:00Z' },
+      selection_ref: 'context-manual',
+      index_intent_available: false,
+    }],
+  }
+  const refreshedCatalog = {
+    contexts: [{
+      repository: 'Engram',
+      working_copy: 'refreshed candidate checkout',
+      indexed_snapshot: { label: 'Refreshed candidate snapshot', revision: '1a9dad2', published_at: '2026-09-17T00:02:00Z' },
+      selection_ref: 'context-current',
+      index_intent_available: false,
+    }, initialCatalog.contexts[2]],
+  }
+
+  await page.route('**/api/code/**', async (route: Route) => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/code/tabs/handshake') {
+      await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'resume-current', reload_token: 'reload-current' } })
+      return
+    }
+    if (pathname === '/api/code/contexts') {
+      await route.fulfill({ json: contextRequests++ === 0 ? initialCatalog : refreshedCatalog })
+      return
+    }
+    await route.fulfill({ status: 500 })
+  })
+
+  await page.goto('/code', { waitUntil: 'domcontentloaded' })
+  await page.getByTestId('code-context-repository').selectOption({ label: 'Engram' })
+  await page.getByTestId('code-context-working-copy').selectOption({ label: 'stale candidate checkout' })
+  await page.getByTestId('code-context-snapshot').selectOption({ label: 'Stale candidate snapshot' })
+  await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
+  await expect(page.getByTestId('code-context-working-copy')).toHaveValue('refreshed candidate checkout')
+  await expect(page.getByTestId('code-context-snapshot')).toHaveValue('context-current')
+
+  await page.getByTestId('code-context-repository').selectOption({ label: 'Other repository' })
+  await expect(page.getByTestId('code-context-repository')).toHaveValue('Other repository')
+  await expect(page.getByTestId('code-context-working-copy')).toHaveValue('')
+})
 test('Code Explorer resumes a same-document SPA remount but isolates copied storage', async ({ page }) => {
   const handshakePayloads: unknown[] = []
   const resumePayloads: unknown[] = []
   const leasePayloads: unknown[] = []
+  const pinPayloads: unknown[] = []
   const closePayloads: unknown[] = []
   let bindingClosed = false
   const intent = {
@@ -71,18 +135,28 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
   }
   const catalog = {
     contexts: [{
-      source: { id: 'source-current', label: 'Current source' },
-      checkout: { id: 'checkout-current', label: 'Current checkout' },
-      view: {
-        context_ref: {
-          source_id: 'source-current',
-          checkout_id: 'checkout-current',
-          view_id: 'view-current',
-          analysis_profile_id: 'profile-current',
-          generation: 1,
-        },
-        label: 'Current view',
+      repository: 'Engram',
+      working_copy: 'feature/operator-workspace · operator desk',
+      indexed_snapshot: {
+        label: 'Current snapshot',
+        revision: '1a9dad0',
+        published_at: '2026-09-17T00:00:00Z',
       },
+      selection_ref: 'context-current',
+      index_intent_available: false,
+    }, {
+      repository: 'Engram',
+      working_copy: '',
+      index_intent_available: false,
+    }, {
+      repository: 'Other repository',
+      working_copy: 'D working copy',
+      indexed_snapshot: {
+        label: 'D snapshot',
+        revision: '1a9dad1',
+        published_at: '2026-09-17T00:01:00Z',
+      },
+      selection_ref: 'context-d',
       index_intent_available: false,
     }],
   }
@@ -135,11 +209,12 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
       return
     }
     if (pathname === `/api/code/tabs/${TAB_BINDING_ID}/context`) {
+      pinPayloads.push(route.request().postDataJSON())
       await route.fulfill({ status: 204 })
       return
     }
     if (pathname === '/api/code/status') {
-      await route.fulfill({ json: { total_chunks: 0, embedded_chunks: 0, embedding: { Coverage: 'none' } } })
+      await route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { Coverage: 'complete' }, freshness: { state: 'unknown' } } })
       return
     }
     if (pathname === '/api/code/index-intents' && route.request().method() === 'POST') {
@@ -165,12 +240,18 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
   })
 
   await page.goto('/code', { waitUntil: 'domcontentloaded' })
-  const contextOption = page.getByTestId('code-context-select').locator('option').filter({ hasText: 'Current view' })
-  const contextValue = await contextOption.getAttribute('value')
-  if (contextValue === null) throw new Error('Code catalog did not expose Current view')
-  await page.getByTestId('code-context-select').selectOption(contextValue)
+  await page.getByTestId('code-context-repository').selectOption({ label: 'Engram' })
+  await page.getByTestId('code-context-working-copy').selectOption({ label: 'feature/operator-workspace · operator desk' })
+  await page.getByTestId('code-context-snapshot').selectOption({ label: 'Current snapshot' })
   await page.getByTestId('code-pin-context').click()
-  await expect(page.getByTestId('code-context-pinned')).toContainText('Current view')
+  expect(pinPayloads).toEqual([{ document_proof: DOCUMENT_PROOF, selection_ref: 'context-current' }])
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Current snapshot')
+  await expect(page.locator('.readiness')).toHaveAttribute('data-state', 'unknown')
+  await page.getByTestId('code-context-repository').selectOption({ label: 'Other repository' })
+  await page.getByTestId('code-context-working-copy').selectOption({ label: 'D working copy' })
+  await page.getByTestId('code-context-snapshot').selectOption({ label: 'D snapshot' })
+  await expect(page.getByTestId('code-context-candidate')).toContainText('D snapshot')
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Current snapshot')
   await page.getByTestId('index-intent-reindex').click()
   await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'queued')
 
@@ -186,7 +267,7 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
     reload_token: 'reload-current',
   })
   expect(closePayloads).toEqual([])
-  await expect(page.getByTestId('code-context-pinned')).toContainText('Current view')
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Current snapshot')
   await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'queued')
   expect(handshakePayloads).toHaveLength(1)
 
@@ -206,7 +287,7 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
   await expect(copied.getByTestId('code-bootstrap-evidence')).toContainText('TAB_BINDING_COLLISION')
   await expect(copied.getByTestId('code-context-pinned')).toHaveCount(0)
   await expect(copied.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'idle')
-  await expect(page.getByTestId('code-context-pinned')).toContainText('Current view')
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Current snapshot')
   expect(handshakePayloads).toHaveLength(2)
   expect(handshakePayloads[1]).toMatchObject({
     copied_tab_binding_id: TAB_BINDING_ID,

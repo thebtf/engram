@@ -51,8 +51,9 @@ func TestBrowserCodeContextStore_CatalogDistinguishesPublishedAndInitialTargets(
 	require.Equal(t, fixture.reference(), *published.Context)
 	require.False(t, published.IndexIntentAvailable)
 	require.NotEmpty(t, published.SourceLabel)
-	require.NotEmpty(t, published.CheckoutLabel)
+	require.Empty(t, published.CheckoutLabel, "existing unnamed checkouts must not receive a synthetic UUID label")
 	require.NotEmpty(t, published.ViewLabel)
+	require.NotNil(t, published.SnapshotPublishedAt)
 
 	initial := byCheckout[unpublished.CheckoutID]
 	require.Equal(t, fixture.source.SourceID, initial.SourceID)
@@ -63,6 +64,74 @@ func TestBrowserCodeContextStore_CatalogDistinguishesPublishedAndInitialTargets(
 	require.NoError(t, fixture.db.Where("grant_ref = ?", expiredGrant.GrantRef).First(&expired).Error)
 	require.Equal(t, BrowserReadGrantExpired, expired.State)
 	require.NotContains(t, byCheckout, expiredCheckout.CheckoutID)
+}
+
+func TestBrowserCodeContextCatalogRowUsesSafeOptionalWorkingCopyMetadata(t *testing.T) {
+	row := browserCodeContextCatalogRow{
+		SourceID:      uuid.NewString(),
+		SourceLabel:   "Engram",
+		CheckoutID:    uuid.NewString(),
+		CheckoutKind:  string(UCICheckoutWorkingTree),
+		CheckoutLabel: "",
+	}
+
+	entry, err := row.catalogEntry()
+	require.NoError(t, err)
+	require.Empty(t, entry.CheckoutLabel, "existing unnamed checkouts stay unnamed")
+
+	for _, label := range []string{uuid.NewString(), "file:///private/worktree"} {
+		row.CheckoutLabel = label
+		_, err = row.catalogEntry()
+		require.ErrorIs(t, err, ErrBrowserCodeContextDenied, "locator or UUID metadata must never become working-copy task language")
+	}
+
+	row.CheckoutLabel = "Studio workstation · release candidate"
+	entry, err = row.catalogEntry()
+	require.NoError(t, err)
+	require.Equal(t, row.CheckoutLabel, entry.CheckoutLabel)
+}
+
+func TestBrowserCodeContextStore_CatalogDistinguishesSameBranchWorktreesByOwnerLabels(t *testing.T) {
+	fixture := newBrowserCodeContextFixture(t)
+	ctx := context.Background()
+	principal := browserReadGrantPrincipal(fixture.user.ID)
+	grants := NewBrowserReadGrantStore(fixture.db)
+	secondCheckout, _ := fixture.addUnpublishedCheckout(t)
+	secondView := publishBrowserCodeContextView(t, fixture.db, secondCheckout, fixture.profile)
+	branch := "refs/heads/release"
+	publishedAt := time.Now().UTC()
+	require.NoError(t, fixture.db.Model(&UCIView{}).Where("view_id = ?", fixture.view.ViewID).Updates(map[string]any{
+		"ref_label":    branch,
+		"published_at": publishedAt,
+	}).Error)
+	require.NoError(t, fixture.db.Model(&UCIView{}).Where("view_id = ?", secondView.ViewID).Update("ref_label", branch).Error)
+
+	_, err := grants.SetOwnerChoiceLabel(ctx, fixture.user.ID, principal, fixture.checkout.CheckoutID, "Studio workstation · release")
+	require.NoError(t, err)
+	_, err = grants.SetOwnerChoiceLabel(ctx, fixture.user.ID, principal, secondCheckout.CheckoutID, "Laptop workstation · release")
+	require.NoError(t, err)
+
+	entries, err := fixture.store.ListCatalog(ctx, fixture.user.ID)
+	require.NoError(t, err)
+	byCheckout := make(map[string]BrowserCodeContextCatalogEntry, len(entries))
+	for _, entry := range entries {
+		byCheckout[entry.CheckoutID] = entry
+	}
+	first := byCheckout[fixture.checkout.CheckoutID]
+	second := byCheckout[secondCheckout.CheckoutID]
+	require.Equal(t, branch, first.ViewLabel)
+	require.Equal(t, branch, second.ViewLabel)
+	require.Equal(t, "Studio workstation · release", first.CheckoutLabel)
+	require.Equal(t, "Laptop workstation · release", second.CheckoutLabel)
+	require.NotEqual(t, first.CheckoutLabel, second.CheckoutLabel)
+	require.NotContains(t, first.CheckoutLabel, fixture.checkout.CheckoutID)
+	require.NotContains(t, second.CheckoutLabel, secondCheckout.CheckoutID)
+	require.NotContains(t, first.CheckoutLabel, fixture.checkout.LocatorRef)
+	require.NotContains(t, second.CheckoutLabel, secondCheckout.LocatorRef)
+	require.NotNil(t, first.SnapshotRevision)
+	require.NotNil(t, first.SnapshotPublishedAt)
+	require.NotNil(t, second.SnapshotRevision)
+	require.NotNil(t, second.SnapshotPublishedAt)
 }
 
 func TestBrowserCodeContextStore_PinRequiresExactPublishedContextAndAudits(t *testing.T) {
@@ -282,6 +351,7 @@ func newBrowserCodeContextFixture(t *testing.T) browserCodeContextFixture {
 	t.Helper()
 
 	projection := openUCIProjectionMigrationFixture(t)
+	require.NoError(t, workspaceCatalogMigration182().Migrate(projection.db))
 	token := uuid.NewString()
 	now := time.Now().UTC()
 	user := &User{

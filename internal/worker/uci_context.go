@@ -385,8 +385,9 @@ func composeOperatorCodeHTTPAdapter(db *gormlib.DB, composition *uciContextCompo
 	if db == nil || composition == nil || composition.contextStore == nil || composition.resolver == nil || composition.application == nil || composition.exposureRecorder == nil || composition.indexIntentStore == nil || composition.indexTargets == nil {
 		return nil, errors.New("operator code HTTP composition requires UCI context dependencies")
 	}
+	grants := NewCodeGrantApplication(gormstore.NewBrowserReadGrantStore(db))
 	adapter := NewOperatorCodeHTTPAdapter(
-		NewCodeGrantApplication(gormstore.NewBrowserReadGrantStore(db)),
+		grants,
 		NewBrowserBindingApplication(gormstore.NewBrowserTabBindingStore(db)),
 		newOperatorCodeServerAuthorizer(composition.contextStore, composition.resolver),
 		&operatorCodeIndexIntentComposition{
@@ -394,6 +395,7 @@ func composeOperatorCodeHTTPAdapter(db *gormlib.DB, composition *uciContextCompo
 		},
 		composition.exposureRecorder,
 	)
+	adapter.onboarding = grants
 	adapter.contexts = gormstore.NewBrowserCodeContextStore(db)
 	adapter.indexTargets = composition.indexTargets
 	adapter.graphSources = composition.projectionStore
@@ -518,7 +520,7 @@ func composeUCIContext(
 	graphService := uci.NewGraphService(projectionStore)
 	versionedReadService := uci.NewVersionedReadService(projectionStore)
 	indexStatusService := uci.NewIndexStatusService(projectionStore, semantic.profilePtr)
-	semanticService := uci.NewSemanticService(semantic.profile, semantic.embedder, projectionStore, projectionStore)
+	semanticService := uci.NewSemanticService(semantic.profile, semantic.embedder, projectionStore, projectionStore, projectionStore)
 	exposureRecorder := uci.NewExposureRecorder(gormstore.NewUCIExposureStore(db), nil)
 	application, err := NewUCIApplication(
 		contextApplication,

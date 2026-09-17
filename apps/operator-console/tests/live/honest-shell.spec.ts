@@ -81,9 +81,11 @@ test('S1a live acceptance: clean Graph, Books, and Rules loads keep the shell ho
       expectRussianCountTruth(countState, countLabel)
       await expect(page.getByTestId('shell-review-queue-count')).toContainText('неизвестно')
 
+      if (route === '/graph') {
+        await expect(page.getByRole('heading', { name: 'Knowledge graph editing retired' })).toBeVisible()
+      }
       if (route === '/books') {
-        await expect(page.locator('.books-page .statebar')).toHaveAttribute('data-state', 'empty')
-        await expect(page.locator('.books-page .books-brief')).toContainText('не Book Context')
+        await expect(page.getByRole('heading', { name: 'Plaintext book intake retired' })).toBeVisible()
       }
 
       await page.waitForTimeout(100)

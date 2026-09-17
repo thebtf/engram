@@ -10,7 +10,7 @@
  */
 import type { HonestyClass } from './useHonesty'
 import { computed } from 'vue'
-import { operatorFetchJson } from './useOperatorApi'
+import { useOperatorQueue } from './useOperatorQueue'
 
 export interface NavItem {
  id: string
@@ -31,6 +31,7 @@ export const NAV: NavGroup[] = [
  {
   grpKey: 'workspace', items: [
    { id: 'overview', labelKey: 'overview', to: '/', cls: 'live' },
+   { id: 'code', labelKey: 'code', to: '/code', cls: 'live' },
    { id: 'search', labelKey: 'search', to: '/search', cls: 'live' },
   ]
  },
@@ -39,8 +40,6 @@ export const NAV: NavGroup[] = [
    { id: 'memory', labelKey: 'memory', to: '/memory', cls: 'live' },
    { id: 'queue', labelKey: 'queue', to: '/queue', cls: 'live' },
    { id: 'noise', labelKey: 'noise', to: '/noise', cls: 'live' },
-   { id: 'graph', labelKey: 'graph', to: '/graph', cls: 'live' },
-   { id: 'books', labelKey: 'books', to: '/books', cls: 'live' },
   ]
  },
  {
@@ -68,32 +67,20 @@ export const NAV: NavGroup[] = [
 /** Static structure with i18n KEYS. Use when you resolve labels yourself, or need the raw
  *  shape (routes, honesty class, ids) without a translation context. */
 export function useNav() {
- // Runtime flags are unknown until the request settles. A neutral stale dot is
- // deliberately less misleading than a green live dot for a gated feature.
- const graphClass = useState<Extract<HonestyClass, 'live' | 'dormant' | 'stale'>>('live:nav:graph-class', () => 'stale')
- const queueClass = useState<Extract<HonestyClass, 'live' | 'dormant' | 'stale'>>('live:nav:queue-class', () => 'stale')
- const graphStarted = useState<boolean>('live:nav:graph-started', () => false)
- if (import.meta.client && !graphStarted.value) {
-  graphStarted.value = true
-  void operatorFetchJson<{ flags?: Record<string, boolean> }>('/api/flags', undefined, 'navigation-flags')
-   .then((payload) => {
-    graphClass.value = payload.flags?.ENGRAM_GRAPH_ENABLED === true ? 'live' : 'dormant'
-    queueClass.value = payload.flags?.ENGRAM_VNEXT_F_ENABLED === true ? 'live' : 'dormant'
-   })
-   .catch(() => {
-    graphClass.value = 'stale'
-    queueClass.value = 'stale'
-   })
+ const queue = useOperatorQueue()
+ const classFor = (kind: string): NavItem['cls'] => {
+  if (kind === 'live' || kind === 'empty') return 'live'
+  if (kind === 'gated') return 'dormant'
+  if (kind === 'mustbuild') return 'mustbuild'
+  return 'stale'
  }
  const resolved = computed(() => NAV.map((group) => ({
   ...group,
   items: group.items.map((item) => item.id === 'queue'
-   ? { ...item, cls: queueClass.value, evidence: queueClass.value === 'dormant' ? 'ENGRAM_VNEXT_F_ENABLED' : undefined }
-   : item.id === 'graph'
-    ? { ...item, cls: graphClass.value, evidence: graphClass.value === 'dormant' ? 'ENGRAM_GRAPH_ENABLED' : undefined }
-    : item),
+   ? { ...item, cls: classFor(queue.loadState.value.kind), evidence: queue.loadState.value.kind === 'gated' ? 'ENGRAM_VNEXT_F_ENABLED' : undefined }
+   : item),
  })))
- return { NAV: resolved, flat: computed(() => resolved.value.flatMap(g => g.items)) }
+ return { NAV: resolved, flat: computed(() => resolved.value.flatMap((group) => group.items)) }
 }
 
 

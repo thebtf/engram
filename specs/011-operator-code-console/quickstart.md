@@ -1,68 +1,67 @@
-# Feature 011 Evidence Quickstart
+# Feature 011 D-A Evidence Quickstart
 
-**Purpose**: This is an implementation and acceptance evidence plan, not evidence that Feature011 is implemented, released, or installed. Run every command from the exact Feature011 candidate worktree, not the primary checkout. The current candidate is bound by plan setup to `specs/011-operator-code-console`.
+**Purpose**: This is a later implementation/acceptance guide for the D-A contract, not evidence that D-A is implemented, released, installed, or available at an operator origin. Run every command from the exact D-A candidate worktree, never the dirty primary checkout or a frozen release lane.
 
 ## Preconditions
 
-1. Confirm the candidate worktree, current HEAD, clean/owned planning paths, Feature011 selector, and Constitution 2.0.0 before a runtime slice begins. Preserve unrelated primary-checkout work.
-2. Use an isolated disposable PostgreSQL database and a real authenticated Go server configured only with disposable credentials. Do not set disabled-auth, expose a master token to Playwright, attach production data, or use a browser path/credential to reach a workstation.
-3. For S2, bind the exact R-A installed UCI candidate used by the fixture. It must make a real semantic result available for the selected View; lexical/degraded output is valid only for the corresponding truthful-state scenario, not the primary semantic-path acceptance.
-4. Use two real linked Git worktrees with divergent saved content and a concurrent ordinary MCP client. Do not replace their topology with copied folders or mocked ContextRefs.
-5. Create and revoke explicit browser grants only through the authenticated `CodeGrantApplication` Source-owner routes; seed collection data exceeding 200 Rules and 100 Issues. Fixture setup must not write a grant row directly, use disabled auth, or substitute an administrator role for the exact `ci_checkouts.owner_principal` predicate.
+1. Bind the implementation candidate's root, HEAD, tree, branch, and owned paths. Preserve unrelated primary and sibling worktree state.
+2. Use a disposable PostgreSQL database, real authenticated Go server, built console, real linked worktrees, and a concurrent ordinary MCP client. Do not use production data, disabled auth, direct grant rows, browser filesystem access, credentials, or hand-written ContextRefs.
+3. Create two linked worktrees for one repository with distinct readable branch/device labels and divergent saved source markers. Create an eligible corpus with more than 50 candidates, one direct relation, one reverse relation, one off-page neighbor, and a documented unsupported/dynamic limitation. Provide one real provider for a non-lexical conceptual query; lexical or degraded output is `NOT_PROVEN`.
+4. Prepare historical graph rows, a book-produced versioned document with two versions and `source_book_job_id`, an accepted nonterminal legacy book job, Rules, Issues, and approved allowed/denied readers. Before residual-job transition in the existing single-container deployment, stop every old book-writer process; do not introduce a lease/heartbeat. Include `internal/retrieval/hybrid.go` Tier2 `Traverse`, historical graph reads, `/api/context/search`, `internal/graph`, and UCI graph in the retained-reader baseline.
+5. The operator scenario starts at the normal homepage. Fixture setup may prepare the disposable corpus through approved application seams, but it must not perform navigation, login, source selection, graph writes, or evidence opening on the operator's behalf.
+6. DA01/DA02/DA04 journey proof and DA03 retirement proof may be recorded independently once their own candidate dependencies are green. Composite source acceptance requires both records. The release gate remains closed until the supported browser/origin decision and an installed normal-homepage DA01–DA04 walkthrough are recorded.
 
-## Existing Console Checks
+## Focused implementation checks
 
-The current package manifest verifies these commands. They are useful local checks but do not prove real Go/DB behavior:
+Run only checks affected by the implementation seam. Existing commands are invoked from `apps/operator-console/` in the bound candidate:
 
 ```powershell
-cd D:/Dev/engram/.agent/worktrees/operator-code-console-r1/apps/operator-console
-npm ci
 npm run build
-npm run test:seam
-npm run test:parity
-npm run test:browser
+npm run test:browser -- tests/browser/responsive-navigation.spec.ts tests/browser/surface-integrity.spec.ts tests/browser/truth-accessibility.spec.ts tests/browser/code-tab-lease.spec.ts
+npm run test:browser:live -- tests/live/operator-code-explorer.spec.ts tests/live/operator-code-s2-topology.spec.ts tests/live/index-intent.spec.ts tests/live/document-operations.spec.ts
 ```
 
-`npm run test:browser` uses the mock server configured by `playwright.config.ts`; record it as interaction evidence only. `npm run parity` validates the curated promotion manifest and does not read `.od`.
+Mock Playwright evidence proves only interaction. Confirm the live configuration selects the intended files; a test filename outside its explicit `testMatch` is not evidence. Use focused binding/catalog/UCI/store/retirement tests supplied by T002–T005 and record a database `SKIP` as not run.
 
-## S1a — Honest Shell Evidence
+## DA01 — Homepage discovery and named identity
 
-1. Build the console and direct its normal API target to the real disposable Go server.
-2. Open Graph, Books, and Rules from clean browser state with Settings closed. Retain the browser network trace.
-3. Assert zero memory-body requests made solely for shell labels and zero settings-owned config/domain/model requests while Settings remains closed.
-4. Open Settings and confirm its normal authorized requests begin; test keyboard open, Escape, focus restoration, route redirect behavior, and cleanup.
-5. Hard reload each page. At 1440, 980, and 390 CSS pixels and 200% zoom, verify unknown count is distinguishable from zero in RU/EN and that zh behavior has not regressed.
+1. Open the normal homepage in a fresh supported browser session.
+2. Complete only the visible, chosen supported sign-in/onboarding flow.
+3. Find Workspace through visible Home or navigation controls; do not use direct `/code` navigation.
+4. Select one Repository and Working copy by readable identity, then select or confirm its Indexed snapshot through the offered context.
+5. Repeat in a second tab with the other working copy and a denied subject.
 
-## S1b — Mutation Truth Evidence
+**Pass**: No UUID, direct hidden route, SQL, raw binding action, synthetic admin, or localhost substitution is needed. Empty source, no grant, no snapshot, and offline owner are distinguishable and do not disclose unavailable source details.
 
-For each migrated direct caller, exercise at least its ordinary success/readback path. In focused domain fixtures also exercise: one commit plus one failure, a known commit with callback readback error, response loss after commit, response loss before commitment, and loss of access after commitment. Capture request reference, server effect/readback, rendered union state, and retry payload. A test passes only when known successes are not replayed and a local UI reset is never represented as server rollback.
+## DA02 — Freshness, coverage, search, source, relation, and evidence
 
-## S2 — First Requested Cross-Surface User Result
+1. Inspect the selected snapshot's revision/time, coverage, supported language scope, and Ready/Updating/Needs indexing/Failed/Newer snapshot state.
+2. Search a known symbol and one non-lexical conceptual intent over more than 50 eligible candidates. The conceptual result must come from the configured real provider; record the provider response and returned total/continuation separately from page size. Lexical or degraded output is `NOT_PROVEN` and cannot support source acceptance.
+3. Open a source span, then direct and reverse relations. Open an off-page neighbor and its selected evidence through the source boundary.
+4. Publish a newer View for working copy A through its normal watcher/reconcile owner. Confirm A's old View remains until explicit switch and working copy B remains unchanged.
+5. Revoke a grant after application work but before release; try stale/mismatched continuations and binding evidence.
 
-The S1a shell/harness owner first creates the separate live Playwright configuration, documented `test:browser:live` package script, and shared real Go/PostgreSQL fixture bootstrap. S2 consumes that harness and adds only Code Explorer scenario assertions; it does not create or edit the live config, package script, or bootstrap. The harness targets built Nuxt output and must not start `scripts/mock-operator-api.mjs`.
+**Journey evidence pass (independently recordable)**: Source, relation, evidence, and continuation all remain bound to the selected authorized View; the real-provider non-lexical >50-candidate query succeeds; and limitations are explicit. Denied/revoked/mismatched requests disclose no contextual body, identifier, count, edge, or evidence. Lexical/degraded evidence remains `NOT_PROVEN`.
 
-1. Create real linked worktrees A and B with divergent saved bytes. In A, export a function through a bounded TS/TSX alias/re-export chain and change that target while its importing caller remains textually unchanged; B retains a different function version. Issue explicit A/B browser grants through `CodeGrantApplication` and retain the corresponding audit records.
-2. Start ordinary installed agent session A through the real daemon/server path, browser tabs A/B, and a concurrent MCP client on a distinct client binding. The ordinary agent selects A, waits for complete selected-View embeddings, runs the deliberately non-lexical Russian intent query, follows the bounded declared relation, and exact-reads the cited stored span. Retain agent request → daemon/server → UCI → PostgreSQL/readback evidence.
-3. Handshake each browser document for its server-issued binding, current document proof, and live lease, then select named Source/Checkout/View in tabs A/B. Assert every binding-bound Code request and lease operation carries both binding ID and current document proof. Retain the actual browser engine/version, `window.opener`, opener-normalization readback, `PerformanceNavigationTiming.type`, selected endpoint, and returned transition code with the trigger → HTTP handler → UCI application/release → PostgreSQL/readback trace. Every successful response identifies its same selected View; neither tab affects the other or MCP context.
-4. Exercise actual browser behavior rather than a fixture-selected endpoint. Open a fresh Code tab with an opener and verify its first bootstrap clears copied Code storage, sets `window.opener = null`, records the null readback, and produces a fresh unselected binding with no collision. Select that child’s context, then hard-reload that same child: verify no opener plus `reload` selects resume and retains that child’s own pin. Use the browser’s normal Duplicate/copy action and verify normalized no-opener `navigate` preserves the pair, calls handshake, returns `TAB_BINDING_COLLISION`, gives only the duplicate a fresh unselected binding, and leaves A unchanged. For A and B, use normal browser reload and verify normalized no-opener `reload` preserves each pin after acknowledged close. Delay or omit lifecycle close, observe only `RELOAD_PENDING` with no context output, let the document lease expire, and then resume the same pin through its unconsumed server-owned one-time token; repeat with a crashed/discarded page. An observed opener-normalization failure/persistence or missing/unknown/back-forward/inconsistent navigation tuple must clear to fresh `TAB_BOOTSTRAP_AMBIGUOUS` without a pin or automatic-resume/collision claim. Confirm a used-token replay and old/foreign document proof disclose nothing, document-lease expiry alone retains the pin, and browser-session or binding expiry destroys it and requires explicit authorized re-selection.
-5. Save the changed alias/re-export target in A and drive the normal watcher/reconcile path—do not manually publish a fixture View. Confirm a new A View, re-resolved unchanged caller relation, no stale A target, and unchanged B View/membership/edges/exact source. Browser A’s previously pinned View remains readable until explicit transition; browser B never changes.
-6. Revoke a grant after application work and before release; separately force recorder/release failure, absent/ambiguous selector, expired/mismatched continuation, and all nine presentation states. Each response leaks no contextual body, IDs, counts, relationships, or receipt and the UI remains denied/error/partial/offline rather than empty/ready.
+## DA03 — Retirement and historical preservation
 
-## S3 — Collection Evidence
+1. Start from Home and old Graph/Books bookmarks. Confirm neither exposes a manual graph editor or plaintext uploader.
+2. In a separate negative lane invoke every approved old HTTP/MCP writer, inspect tool listing/dispatch, enable prior flags, and repeat after restart.
+3. In the existing single-container deployment, first prove no old book-writer process remains live. Then transition the quiesced legacy job to `failed` with the retirement reason, preserving `source_book_job_id` and partial documents; rerun the transition to prove idempotence. Do not introduce a lease/heartbeat.
+4. Read historical documents, both versions, comments/provenance, Rules, Issues, `internal/retrieval/hybrid.go` Tier2 `Traverse` behavior, historical graph reads, current `/api/context/search`, `internal/graph`, and UCI code graph through their existing owners.
 
-1. Load cursor pages over more than 200 Rules and more than 100 Issues. Demonstrate explicit IDs, current-page selection, frozen all-filter membership, exclusions, expiry, permission change, and version change after preview.
-2. Exercise Rules enable/disable/delete/edit and scope reorder. Inject a conflict during reorder and verify the full declared scope is unchanged.
-3. After Rules acceptance, run the stated Issues, Memory, Queue, and Documents action matrices through their actual domain handlers. Capture per-item results, postconditions, and safe retry/status behavior.
-4. Verify keyboard/indeterminate selection accessibility, responsive widths/zoom, RU/EN, and zh regression with each truth state distinct.
+**Retirement evidence pass (independently recordable)**: A removed menu entry is not sufficient. Every mapped writer remains unavailable; no old writer was live before residual failure; the failed-with-reason transition is idempotent and preserves provenance/partial documents; and each named reader/data item retains its prior ACL and meaning.
 
-## S4 — Daemon Intent Evidence
+## DA04 — Accessibility, language, and acceptance record
 
-1. In an online owner fixture submit an intent for one selected context. Observe durable submission, daemon ACK, execution, published resulting View, and authorized readback.
-2. In an offline owner fixture observe `queued` or `unavailable`; confirm neither HTTP acceptance nor elapsed time renders completion.
-3. Hard reload or lose the response after intent persistence. Reconcile by intent reference without duplicate execution and without disclosure of paths/secrets.
+1. Repeat DA01–DA02 with keyboard only in RU and EN at 1440, 980, and 390 CSS-pixel widths and actual 200% browser zoom; verify existing zh navigation behavior.
+2. Confirm visible focus, live state announcements, accessible repository/working-copy selectors, non-visual relation list, evidence disclosure, Escape/back behavior, and no page-wide horizontal overflow other than local code scrolling.
+3. Give an independent operator only the normal origin, chosen supported credentials/onboarding, readable workspace names, and task questions. Record actions, dead ends, and hints needed.
 
-## Final Integration Evidence
+**Pass**: The operator can find an implementation, explain a direct/reverse relation and its evidence, and identify why a selected source is incomplete without author guidance or technical identifiers.
 
-- Retain candidate identity, server/browser/MCP fixture configuration without secrets, request/handler/UCI/readback trace, and the exact test outputs.
-- Re-run only tests affected by the changed seam; the root release owner decides broader release/Sonar execution. This planning task performs no production implementation, deployment, publication, or release.
-- Before Book Context planning, evidence must show accepted S2 plus Rules. Before Book implementation, evidence must show full Feature011 including S3 later-domain consumers and S4.
+## Evidence boundaries
+
+- Retain the candidate identity, selected focused outputs, browser/daemon/provider configuration without secrets, retired-writer denominator, and observed-versus-expected journey record in the existing Feature 011 acceptance surface.
+- T008a records only exact-candidate DA01/DA02/DA04 journey evidence, including the real-provider non-lexical >50 query; it is `NOT_PROVEN` if that query is lexical or degraded. T008b records only DA03 retirement evidence. Composite source acceptance is recorded only after both records are green.
+- Do not treat source-built localhost fixtures, synthetic receipt encoders, mock API interaction, or a prior promotion manifest as installed proof. The release gate remains closed until the browser/origin decision and installed normal-homepage DA01–DA04 walkthrough; this contract amendment performs no implementation, deployment, release, publication, or production mutation.

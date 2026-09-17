@@ -126,6 +126,7 @@
     "collapseNav": "折叠导航",
     "expandNav": "展开导航",
     "mobileMenu": "菜单",
+    "closeMenu": "关闭菜单",
     "searchPlaceholder": "在控制台中搜索…",
     "density": "密度",
     "densityComfortable": "宽松",
@@ -206,7 +207,8 @@
       "collections": "旧集合",
       "access": "访问控制",
       "settings": "设置",
-      "health": "状态"
+      "health": "状态",
+      "code": "工作区"
     },
     "evidence": {
       "booksPipeline": "处理流水线"
@@ -308,6 +310,9 @@
       },
       "access": {
         "sub": "用户、登录提供方、角色"
+      },
+      "code": {
+        "sub": "选择仓库、工作副本和索引快照以调查代码。"
       }
     }
   },
@@ -2220,6 +2225,60 @@
       "title": "访问",
       "lead": "用户、登录提供方和角色属于未来 control-plane surface。",
       "next": "GET /api/access/users 尚不存在，因此不会渲染假的用户和角色。"
+    }
+  },
+  "codeExplorer": {
+    "context": {
+      "selectionGroup": "仓库、工作副本和索引快照"
+    }
+  },
+  "workspace": {
+    "title": "工作区",
+    "lead": "在同一个固定快照中找到实现，并了解它为何相关。",
+    "contextTitle": "代码上下文",
+    "contextHelp": "选择可读的定位信息。权限和快照由服务器确认。",
+    "repository": "仓库",
+    "workingCopy": "工作副本",
+    "indexedSnapshot": "索引快照",
+    "readiness": {
+      "ready": {
+        "title": "索引已就绪",
+        "body": "此快照中可使用搜索、源代码和受支持的关系。"
+      },
+      "updating": {
+        "title": "正在更新",
+        "body": "最后一个完整快照保持可见；新快照不会自动替换它。"
+      },
+      "needs-indexing": {
+        "title": "需要索引",
+        "body": "此快照中没有索引记录。"
+      },
+      "failed": {
+        "title": "索引失败",
+        "body": "上次尝试未完成。任何已确认的快照仍然保留。"
+      },
+      "unknown": {
+        "title": "新鲜度未知",
+        "body": "服务器没有说明此快照是否为当前状态。"
+      },
+      "newer-snapshot": {
+        "title": "有更新的快照",
+        "body": "当前答案会保留在固定快照中，直到您明确切换。"
+      }
+    }
+  },
+  "retirement": {
+    "historicalData": "历史数据保持不变。",
+    "documentsLink": "打开文档",
+    "graph": {
+      "title": "知识图谱编辑已停用",
+      "message": "手动知识图谱编辑已停用。历史图谱记录仍可通过现有的使用界面读取。",
+      "actionsUnavailable": "不再提供手动创建和删除图谱的操作。"
+    },
+    "books": {
+      "title": "纯文本书籍导入已停用",
+      "message": "纯文本书籍导入已停用。历史文档及其来源信息仍然可用。",
+      "actionsUnavailable": "不再提供新的纯文本上传和处理。"
     }
   }
 }

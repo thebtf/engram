@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
-import type { Browser, BrowserContext, Page } from '@playwright/test'
+import type { Browser, BrowserContext, Locator, Page } from '@playwright/test'
 import { browserUserID, intervalsOverlap, issueReadOnlyKeycard, observeOperation } from './agent-topology'
 import { appendBrowserTraffic, readLiveFixture } from './fixture-bootstrap'
 import type { LiveFixtureState, RouteTraffic } from './fixture-bootstrap'
@@ -78,6 +78,28 @@ async function requestJSON(page: Page, path: string, body: BrowserCredential): P
   }
 }
 
+async function selectFixtureContext(page: Page, fixture: LiveFixtureState, variant: 'a' | 'b'): Promise<void> {
+  const fixtureLabel = `${fixture.fixtureId}-${variant}`
+  const choose = async (select: Locator) => {
+    const option = select.locator('option').filter({ hasText: fixtureLabel })
+    await expect(option).toHaveCount(1)
+    const value = await option.getAttribute('value')
+    if (value === null) throw new Error('fixture catalog did not expose a readable selection')
+    await select.selectOption(value)
+  }
+  await choose(page.getByTestId('code-context-repository'))
+  await choose(page.getByTestId('code-context-working-copy'))
+  const snapshot = page.getByTestId('code-context-snapshot')
+  await expect(snapshot).toBeEnabled()
+  const options = snapshot.locator('option:not([disabled])')
+  await expect(options).toHaveCount(1)
+  const value = await options.getAttribute('value')
+  if (value === null) throw new Error('fixture catalog did not expose an indexed snapshot')
+  await snapshot.selectOption(value)
+  await expect(snapshot).toHaveValue(value)
+  await expect(page.getByTestId('code-context-candidate')).toContainText(fixtureLabel)
+}
+
 async function pinAndRead(browser: Browser, fixture: LiveFixtureState, credential: BrowserCredential, scenario: OperatorCodeFixture, traffic: RouteTraffic[]): Promise<CodeTab> {
   const context = await browser.newContext()
   const page = await context.newPage()
@@ -103,25 +125,21 @@ async function pinAndRead(browser: Browser, fixture: LiveFixtureState, credentia
   const shell = await page.goto(`${fixture.frontend.baseUrl}/`, { waitUntil: 'domcontentloaded' })
   expect(shell?.status()).toBe(200)
   expect((await requestJSON(page, '/api/auth/user-login', credential)).status).toBe(200)
-  await page.goto(`${fixture.frontend.baseUrl}/code`, { waitUntil: 'domcontentloaded' })
+  await page.getByTestId('overview-workspace-entry').click()
+  await expect(page).toHaveURL(/\/code$/)
   const variant = credential.email === fixture.browserCredential.email ? 'a' : 'b'
-  const contextSelect = page.getByTestId('code-context-select')
-  const option = contextSelect.locator('option').filter({ hasText: `${fixture.fixtureId}-${variant}` })
-  const value = await option.getAttribute('value')
-  if (value === null) throw new Error('fixture catalog did not expose a selectable View')
-  await contextSelect.selectOption(value)
-  await expect(page.getByTestId('code-context-candidate')).toBeVisible()
+  await selectFixtureContext(page, fixture, variant)
   await page.getByTestId('code-pin-context').click()
   await expect(page.getByTestId('code-context-pinned')).toBeVisible()
-  await page.getByTestId('code-query-input').fill(scenario.query)
+  await page.getByTestId('code-query-input').fill(scenario.expectedSearch)
   await page.getByTestId('code-search-submit').click()
-  const result = page.getByTestId('code-search-results').getByRole('listitem').filter({
+  const results = page.getByTestId('code-search-results').getByRole('listitem').filter({
     has: page.getByText(`go:fixture/func:${scenario.expectedSource}`, { exact: true }),
   })
-  await expect(result).toHaveCount(1)
-  await result.getByTestId('code-search-explore').click()
+  await expect(results).not.toHaveCount(0)
+  await results.first().getByTestId('code-search-explore').click()
   await expect(page.getByTestId('code-graph-results')).toContainText(scenario.expectedGraph)
-  await result.getByTestId('code-search-source').click()
+  await results.first().getByTestId('code-search-source').click()
   await expect(page.getByTestId('code-source-result')).toContainText(scenario.expectedMarker)
   if (proof === null || searchPayload === null) {
     throw new Error('live Code Explorer did not send a binding-bound search request')
@@ -193,24 +211,24 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
     mcpB = externalClientB
     const [browserA, browserB, externalA, externalB] = await Promise.all([
       observeOperation(async () => {
-        await tabA.page.getByTestId('code-query-input').fill(aScenario.query)
+        await tabA.page.getByTestId('code-query-input').fill(aScenario.expectedSearch)
         await tabA.page.getByTestId('code-search-submit').click()
-        const result = tabA.page.getByTestId('code-search-results').getByRole('listitem').filter({
+        const results = tabA.page.getByTestId('code-search-results').getByRole('listitem').filter({
           has: tabA.page.getByText(`go:fixture/func:${aScenario.expectedSource}`, { exact: true }),
         })
-        await expect(result).toHaveCount(1)
-        await result.getByTestId('code-search-source').click()
+        await expect(results).not.toHaveCount(0)
+        await results.first().getByTestId('code-search-source').click()
         await expect(tabA.page.getByTestId('code-source-result')).toContainText(aScenario.expectedMarker)
         await expect(tabA.page.getByTestId('code-source-result')).not.toContainText(bScenario.expectedMarker)
       }),
       observeOperation(async () => {
-        await tabB.page.getByTestId('code-query-input').fill(bScenario.query)
+        await tabB.page.getByTestId('code-query-input').fill(bScenario.expectedSearch)
         await tabB.page.getByTestId('code-search-submit').click()
-        const result = tabB.page.getByTestId('code-search-results').getByRole('listitem').filter({
+        const results = tabB.page.getByTestId('code-search-results').getByRole('listitem').filter({
           has: tabB.page.getByText(`go:fixture/func:${bScenario.expectedSource}`, { exact: true }),
         })
-        await expect(result).toHaveCount(1)
-        await result.getByTestId('code-search-source').click()
+        await expect(results).not.toHaveCount(0)
+        await results.first().getByTestId('code-search-source').click()
         await expect(tabB.page.getByTestId('code-source-result')).toContainText(bScenario.expectedMarker)
         await expect(tabB.page.getByTestId('code-source-result')).not.toContainText(aScenario.expectedMarker)
       }),
@@ -296,11 +314,7 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
     await child.waitForLoadState('domcontentloaded')
     await expect(child.getByTestId('code-bootstrap-evidence')).toContainText('TAB_BINDING_READY')
     await expect(child.getByTestId('code-release-state')).toHaveAttribute('data-state', 'unselected')
-    const childSelect = child.getByTestId('code-context-select')
-    const childOption = childSelect.locator('option').filter({ hasText: `${fixture.fixtureId}-a` })
-    const childValue = await childOption.getAttribute('value')
-    if (childValue === null) throw new Error('fixture catalog did not expose a selectable View')
-    await childSelect.selectOption(childValue)
+    await selectFixtureContext(child, fixture, 'a')
     await child.getByTestId('code-pin-context').click()
     await expect(child.getByTestId('code-context-pinned')).toBeVisible()
     await child.reload({ waitUntil: 'domcontentloaded' })

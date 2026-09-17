@@ -154,7 +154,6 @@ type Service struct {
 	injectionLogStore                   *gorm.InjectionLogStore
 	candidateStore                      *gorm.CandidateStore                          // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	candidateQueueEnabled               bool                                          // cached at startup; handlers must not read env per request
-	graphEnabled                        bool                                          // cached at startup; graph REST handlers must not read env per request
 	temporalTruthEnabled                bool                                          // cached at startup; temporal truth REST handlers must not read env per request
 	candidateReviewStoreSeam            candidateReviewStore                          // test seam for REST candidate queue handlers
 	candidateReviewSnapshotStoreSeam    candidateReviewSnapshotStore                  // test seam for candidate pre-action snapshots
@@ -202,7 +201,6 @@ type Service struct {
 	documentExportArtifacts        map[string]documentExportArtifact
 	documentExportArtifactsMu      sync.Mutex
 	booksStore                     booksStore
-	booksPipeline                  booksPipelineRunner
 	memoryStoreSeam                memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
 	memoryGetStoreSeam             memoryGetStore  // test-only: when non-nil, overrides memoryStore for exact-ID reads
 	stateStore                     statePlane
@@ -789,7 +787,6 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		backfillTracker:       newBackfillTracker(),
 		cachedObsCounts:       make(map[string]cachedCount),
 		candidateQueueEnabled: candidateQueueEnabledFromEnv(),
-		graphEnabled:          graphEnabledFromEnv(),
 		temporalTruthEnabled:  temporalTruthEnabledFromEnv(),
 		statsCacheTTL:         time.Minute,
 		mcpHealth:             mcp.NewMCPHealth(),
@@ -1099,7 +1096,9 @@ func (s *Service) initializeAsync() {
 	// Create versioned document store for collaborative document MCP tools (migration 051).
 	versionedDocumentStore := gorm.NewVersionedDocumentStore(store)
 	booksStore := gorm.NewBooksStore(store)
-	booksPipeline := booksdomain.NewPipeline(booksStore, versionedDocumentStore)
+	// Single-container startup has not launched the retired book writer. The
+	// residual transition is idempotent and preserves documents/provenance.
+	s.retireQuiescedBookJobs(s.ctx, booksStore)
 
 	mcpServer := mcp.NewServer(mcp.ServerOptions{
 		Version:            s.version,
@@ -1117,7 +1116,6 @@ func (s *Service) initializeAsync() {
 	s.documentStore = versionedDocumentStore
 	s.documentSelectionStore = gorm.NewCollectionSelectionStore(store.GetDB())
 	s.booksStore = booksStore
-	s.booksPipeline = booksPipeline
 	s.initMu.Unlock()
 
 	mcpServer.SetIssueStore(issueStore)
@@ -1870,10 +1868,15 @@ func (s *Service) setupRoutes() {
 		r.Delete("/api/code/tabs/{tab_binding_id}", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleClose))
 		r.Put("/api/code/tabs/{tab_binding_id}/context", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandlePin))
 		r.Post("/api/code/status", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleStatus))
+		r.Post("/api/code/structure", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleStructure))
 		r.Post("/api/code/search", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleSearch))
 		r.Post("/api/code/graph", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleGraph))
 		r.Post("/api/code/source", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleVersionedRead))
 		r.Post("/api/code/contexts", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleContexts))
+		r.Get("/api/code/grants/choices", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleGrantChoices))
+		r.Patch("/api/code/grants/choices/{choice_ref}", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleGrantLabel))
+		r.Post("/api/code/grants", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleGrantIssue))
+		r.Post("/api/code/grants/{grant_ref}/revoke", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleGrantRevoke))
 		r.Post("/api/code/index-intents", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleIndexIntentSubmit))
 		r.Get("/api/code/index-intents/{intent_ref}", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleIndexIntentStatus))
 		r.Post("/api/code/index-intents/{intent_ref}/retry", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleIndexIntentRetry))
@@ -1984,11 +1987,7 @@ func (s *Service) setupRoutes() {
 
 		// Knowledge graph bridge (CR-002 graph lane)
 		r.Get("/api/graph/nodes", s.handleGetGraphNodes)
-		r.Post("/api/graph/nodes", s.handleCreateGraphNode)
-		r.Delete("/api/graph/nodes/{id}", s.handleDeleteGraphNode)
 		r.Get("/api/graph/edges", s.handleGetGraphEdges)
-		r.Post("/api/graph/edges", s.handleCreateGraphEdge)
-		r.Delete("/api/graph/edges/{id}", s.handleDeleteGraphEdge)
 		r.Get("/api/graph/traverse", s.handleTraverseGraph)
 		r.Get("/api/graph/find-path", s.handleFindGraphPath)
 
@@ -2005,7 +2004,6 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/documents/comment", s.handleAddDocumentComment)
 
 		// Books ingestion bridge (CR-002 books lane)
-		r.Post("/api/books", s.handleCreateBookJob)
 		r.Get("/api/books/{id}/status", s.handleGetBookJobStatus)
 
 		// Access administration bridge (CR-002 access lane)
@@ -2614,6 +2612,12 @@ func getPID() int {
 	return os.Getpid()
 }
 
+func (s *Service) retireQuiescedBookJobs(ctx context.Context, store booksdomain.ResidualJobStore) {
+	if _, err := booksdomain.RetireResidualJobs(ctx, store, true); err != nil {
+		log.Warn().Err(err).Msg("book job retirement deferred; writers remain retired")
+	}
+}
+
 // wireVnextStores injects the promotion, graph, audit, and nodes stores into
 // the MCP server. Extracted from initializeAsync so the wiring path is unit-
 // testable: a test that calls wireVnextStores and then checks mcpServer tool
@@ -2624,7 +2628,7 @@ func getPID() int {
 // sleep cycle goroutine, and *gorm.AuditStore on Service.auditStore for audit logging.
 // nodesStore does NOT need a separate Service field: it is accessed via
 // graphStore (graph.Store.nodes, used by Resolve) and mcpServer (Server.nodesStore,
-// used by add_node / get_edges). No other Service method references it directly.
+// used by retained get_edges filters). No other Service method references it directly.
 func wireVnextStores(mcpServer *mcp.Server, promotionStore *gorm.PromotionStore, graphStore *graph.Store, nodesStore *graph.NodesStore, auditStore *gorm.AuditStore, continuitySlotStores ...*gorm.ContinuitySlotStore) {
 	mcpServer.SetPromotionStore(promotionStore)
 	mcpServer.SetGraphStore(graphStore)

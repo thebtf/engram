@@ -2424,6 +2424,7 @@ func uciLexicalQueryParts(spec ucidomain.QuerySpec, columns uciLexicalColumns) (
 	var conditions []string
 	var predicateArguments []any
 	switch spec.Mode {
+	case ucidomain.QueryModeStructure:
 	case ucidomain.QueryModeExactLocalName:
 		conditions = append(conditions, columns.LocalName+" = ?")
 		predicateArguments = append(predicateArguments, spec.Text)
@@ -2894,11 +2895,18 @@ func validateUCIQueryContext(ref ucidomain.ContextRef) error {
 }
 
 func validateUCIQuerySpec(spec ucidomain.QuerySpec) error {
-	if spec.Limit < 1 || spec.Limit > 50 || spec.Offset < 0 || strings.TrimSpace(spec.Text) == "" || strings.TrimSpace(spec.Text) != spec.Text {
+	if spec.Limit < 1 || spec.Limit > 50 || spec.Offset < 0 || strings.TrimSpace(spec.Text) != spec.Text {
 		return fmt.Errorf("uci projection query: invalid request")
 	}
 	switch spec.Mode {
+	case ucidomain.QueryModeStructure:
+		if spec.Text != "" || spec.Order != ucidomain.QueryOrderPath {
+			return fmt.Errorf("uci projection query: invalid structure request")
+		}
 	case ucidomain.QueryModeExactLocalName, ucidomain.QueryModeExactQualifiedSymbol, ucidomain.QueryModeExactRelativePath, ucidomain.QueryModeFTS:
+		if spec.Text == "" {
+			return fmt.Errorf("uci projection query: invalid request")
+		}
 	default:
 		return fmt.Errorf("uci projection query: unsupported mode %q", spec.Mode)
 	}
