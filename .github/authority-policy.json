@@ -18,12 +18,12 @@
     "type": "User"
   },
   "transition": {
-    "consumed_epoch": "authority-0049",
-    "event_base_sha": "4500bdc34bb17b58c17c41f3a5997b8ae6436bde"
+    "consumed_epoch": "authority-0050",
+    "event_base_sha": "7dff05f71f649d759b2a729248100c807e74bf63"
   },
   "active_epoch": {
-    "id": "authority-0050",
-    "label": "authority-maintenance:authority-0050",
+    "id": "authority-0051",
+    "label": "authority-maintenance:authority-0051",
     "exact_changes": [
       {
         "status": "M",
@@ -32,12 +32,28 @@
       {
         "status": "M",
         "path": ".github/workflows/promote-latest-release-images.yml"
+      },
+      {
+        "status": "A",
+        "path": ".github/workflows/recover-latest-promotion-journal.yml"
+      },
+      {
+        "status": "A",
+        "path": "scripts/production-gates/latest-promotion-journal.ps1"
       }
     ],
     "expected_head_blobs": [
       {
         "path": ".github/workflows/promote-latest-release-images.yml",
-        "git_blob": "8b50751feeaa0f3ebe052a2d76ceed93198069df"
+        "git_blob": "3de38f1f48c8eb9cc63d0a0ce811325cc57e7dfd"
+      },
+      {
+        "path": ".github/workflows/recover-latest-promotion-journal.yml",
+        "git_blob": "d40b35f160f9a490518ce3a22a7104f22b48e426"
+      },
+      {
+        "path": "scripts/production-gates/latest-promotion-journal.ps1",
+        "git_blob": "e31ec223ae1e1ed8ac33f97d0f9230e56387cc52"
       }
     ]
   }

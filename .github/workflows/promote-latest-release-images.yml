@@ -593,25 +593,57 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
           $journalID = ([string]$env:LATEST_PROMOTION_JOURNAL_ID).Trim()
-          $promotionPath = Join-Path $env:RECEIPT_DIR 'promotion.json'
-          if ($journalID -notmatch '^[1-9][0-9]*$' -or (Test-Path -LiteralPath $promotionPath)) { return }
+          if ($journalID -notmatch '^[1-9][0-9]*$') { return }
           $releasePath = Join-Path $env:RECEIPT_DIR 'release.json'
-          if (-not (Test-Path -LiteralPath $releasePath)) { throw 'unstarted latest-promotion journal lacks selected release state' }
+          if (-not (Test-Path -LiteralPath $releasePath)) { throw 'latest-promotion journal terminalizer lacks selected release state' }
           $release = Get-Content -LiteralPath $releasePath -Raw | ConvertFrom-Json
           $runID = ([string]$env:GITHUB_RUN_ID).Trim()
           $runAttempt = ([string]$env:GITHUB_RUN_ATTEMPT).Trim()
-          if ($runID -notmatch '^[1-9][0-9]*$' -or $runAttempt -notmatch '^[1-9][0-9]*$' -or [string]$release.source_commit -notmatch '^[0-9a-f]{40}$') { throw 'unstarted latest-promotion journal lacks a valid identity' }
+          if ($runID -notmatch '^[1-9][0-9]*$' -or $runAttempt -notmatch '^[1-9][0-9]*$' -or [string]$release.source_commit -notmatch '^[0-9a-f]{40}$') { throw 'latest-promotion journal terminalizer lacks a valid identity' }
           $externalID = "latest-promotion:$runID`:$runAttempt"
           $detailsURL = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$runID"
-          $summary = ([ordered]@{
-              phase = 'pre_promotion'
-              outcome = 'failed_before_write'
-              repository = $null
-              previous_identity = $null
-              intended_identity = $null
-              updated_summary = [ordered]@{ count = 0; images = @() }
-              final_summary = [ordered]@{ count = 0; images = @() }
-            } | ConvertTo-Json -Compress -Depth 10)
+          $existingLines = @(gh api -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2026-03-10' "repos/$env:REPOSITORY_NAME/check-runs/$journalID")
+          if ($LASTEXITCODE -ne 0) { throw 'could not read latest-promotion journal check run' }
+          try { $existing = ($existingLines -join "`n") | ConvertFrom-Json } catch { throw 'latest-promotion journal readback returned invalid JSON' }
+          if ([string]$existing.id -cne $journalID -or [string]$existing.name -cne 'latest-promotion-journal' -or [string]$existing.head_sha -cne [string]$release.source_commit -or [string]$existing.external_id -cne $externalID -or [string]$existing.details_url -cne $detailsURL) {
+            throw 'latest-promotion journal readback returned an unexpected check run'
+          }
+          if ([string]$existing.status -ceq 'completed') { return }
+          if ([string]$existing.status -cne 'in_progress') { throw 'latest-promotion journal readback returned an unexpected status' }
+
+          $promotionPath = Join-Path $env:RECEIPT_DIR 'promotion.json'
+          if (Test-Path -LiteralPath $promotionPath) {
+            $promotion = Get-Content -LiteralPath $promotionPath -Raw | ConvertFrom-Json
+            $pending = @($promotion.final_latest_images | Where-Object { [string]$_.state -ceq 'mutation_pending' })
+            if ([string]$promotion.phase -cne 'writing_latest' -or $pending.Count -ne 1) { throw 'durable latest-promotion state lacks one typed mutation_pending identity' }
+            $intended = $pending[0]
+            $repository = [string]$intended.repository
+            $previous = @($promotion.previous_latest_images | Where-Object { [string]$_.repository -ceq $repository })
+            if ($previous.Count -ne 1 -or [string]$intended.reference -cne "$repository`:latest" -or [string]$intended.intended_manifest_digest -notmatch '^sha256:[0-9a-f]{64}$' -or [string]$intended.intended_immutable_reference -cne "$repository@$($intended.intended_manifest_digest)" -or [string]$previous[0].state -cne 'present' -or [string]$previous[0].manifest_digest -notmatch '^sha256:[0-9a-f]{64}$' -or [string]$previous[0].immutable_reference -cne "$repository@$($previous[0].manifest_digest)") {
+              throw 'durable latest-promotion state has an invalid recovery identity'
+            }
+            $updatedSummary = @($promotion.updated_latest_images | ForEach-Object { [ordered]@{ reference = [string]$_.reference; repository = [string]$_.repository; manifest_digest = [string]$_.manifest_digest } })
+            $finalSummary = @($promotion.final_latest_images | ForEach-Object { [ordered]@{ reference = [string]$_.reference; repository = [string]$_.repository; state = [string]$_.state; manifest_digest = if ([string]$_.state -ceq 'mutation_pending') { [string]$_.intended_manifest_digest } else { [string]$_.manifest_digest } } })
+            $summary = ([ordered]@{
+                phase = 'writing_latest'
+                outcome = 'mutation_pending'
+                repository = $repository
+                previous_identity = [ordered]@{ reference = [string]$previous[0].reference; state = [string]$previous[0].state; immutable_reference = [string]$previous[0].immutable_reference; manifest_digest = [string]$previous[0].manifest_digest }
+                intended_identity = [ordered]@{ reference = [string]$intended.reference; state = [string]$intended.state; immutable_reference = [string]$intended.intended_immutable_reference; manifest_digest = [string]$intended.intended_manifest_digest }
+                updated_summary = [ordered]@{ count = $updatedSummary.Count; images = $updatedSummary }
+                final_summary = [ordered]@{ count = $finalSummary.Count; images = $finalSummary }
+              } | ConvertTo-Json -Compress -Depth 10)
+          } else {
+            $summary = ([ordered]@{
+                phase = 'pre_promotion'
+                outcome = 'failed_before_write'
+                repository = $null
+                previous_identity = $null
+                intended_identity = $null
+                updated_summary = [ordered]@{ count = 0; images = @() }
+                final_summary = [ordered]@{ count = 0; images = @() }
+              } | ConvertTo-Json -Compress -Depth 10)
+          }
           $request = [ordered]@{
             status = 'completed'
             conclusion = 'failure'
@@ -620,8 +652,8 @@ jobs:
           $requestPath = Join-Path $env:RECEIPT_DIR 'journal-update-request.json'
           $request | Set-Content -LiteralPath $requestPath -Encoding utf8NoBOM
           $responseLines = @(gh api --method PATCH -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2026-03-10' "repos/$env:REPOSITORY_NAME/check-runs/$journalID" --input $requestPath)
-          if ($LASTEXITCODE -ne 0) { throw 'could not terminalize unstarted latest-promotion journal check run' }
-          try { $response = ($responseLines -join "`n") | ConvertFrom-Json } catch { throw 'unstarted latest-promotion journal terminalization returned invalid JSON' }
+          if ($LASTEXITCODE -ne 0) { throw 'could not terminalize latest-promotion journal check run' }
+          try { $response = ($responseLines -join "`n") | ConvertFrom-Json } catch { throw 'latest-promotion journal terminalization returned invalid JSON' }
           if ([string]$response.id -cne $journalID -or [string]$response.name -cne 'latest-promotion-journal' -or [string]$response.head_sha -cne [string]$release.source_commit -or [string]$response.external_id -cne $externalID -or [string]$response.details_url -cne $detailsURL -or [string]$response.status -cne 'completed' -or [string]$response.conclusion -cne 'failure' -or [string]$response.output.title -cne 'Latest promotion journal' -or [string]$response.output.summary -cne $summary) {
             throw 'unstarted latest-promotion journal terminalization returned an unexpected check run'
           }
