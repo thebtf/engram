@@ -27,6 +27,69 @@ func TestUCIGraphExplainAndNeighborsAreViewPinnedAndEvidenceLabeled(t *testing.T
 	}
 }
 
+func TestUCIStructureAndDirectReverseEvidenceKeepOffPageNeighborsInView(t *testing.T) {
+	fixture := newGraphTestFixture()
+	candidates := []QueryCandidate{fixture.entry, fixture.gateway, fixture.worker}
+	for index := range candidates {
+		candidates[index].Proof.ContentDigest = IndexDigest("sha256:" + strings.Repeat(string(rune('a'+index)), 64))
+		candidates[index].Proof.FactsDigest = IndexDigest("sha256:" + strings.Repeat("f", 64))
+	}
+	structure := NewQueryService(&queryTestStore{coverage: IndexCoverageComplete, candidates: candidates})
+	firstPage, err := structure.Query(context.Background(), newAuthorizedContext(fixture.contextA), QuerySpec{
+		ClientSessionID: "workspace-tab-a",
+		Mode:            QueryModeStructure,
+		Order:           QueryOrderPath,
+		Limit:           1,
+	})
+	if err != nil {
+		t.Fatalf("structure page error = %v", err)
+	}
+	items := queryTestItems(t, firstPage)
+	if len(items) != 1 || items[0].Ref != graphTestRef(fixture.entry) || firstPage.Response.Continuation == nil || firstPage.Response.Continuation.Value == nil {
+		t.Fatalf("first structure page = %#v, want entry and continuation", firstPage.Response)
+	}
+
+	graph := NewGraphService(fixture.store())
+	for _, testCase := range []struct {
+		name      string
+		target    QueryCandidate
+		direction GraphDirection
+		wantFrom  QueryCandidate
+		wantTo    QueryCandidate
+	}{
+		{name: "direct", target: fixture.entry, direction: GraphDirectionOutgoing, wantFrom: fixture.entry, wantTo: fixture.gateway},
+		{name: "reverse", target: fixture.worker, direction: GraphDirectionIncoming, wantFrom: fixture.gateway, wantTo: fixture.worker},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			result, exploreErr := graph.Explore(context.Background(), newAuthorizedContext(fixture.contextA), GraphSpec{
+				ClientSessionID: "workspace-tab-a",
+				Action:          GraphActionNeighbors,
+				Target:          GraphTarget{EntityKey: testCase.target.EntityKey},
+				Filter:          GraphFilter{Direction: testCase.direction, Relations: []IndexRelation{"calls"}, EvidenceKinds: []QueryEvidenceKind{QueryEvidenceResolved}},
+				Budget:          graphTestBudget(),
+			})
+			if exploreErr != nil {
+				t.Fatalf("%s neighbor error = %v", testCase.name, exploreErr)
+			}
+			if len(result.Graph.Edges) != 1 {
+				t.Fatalf("%s graph edges = %#v", testCase.name, result.Graph.Edges)
+			}
+			edge := result.Graph.Edges[0]
+			neighbor := edge.To
+			if testCase.direction == GraphDirectionIncoming {
+				neighbor = edge.From
+			}
+			if edge.From != graphTestRef(testCase.wantFrom) || edge.To != graphTestRef(testCase.wantTo) || neighbor == items[0].Ref {
+				t.Fatalf("%s relation = %#v, want off-page neighbor", testCase.name, edge)
+			}
+			if len(edge.Evidence) != 1 || edge.Evidence[0].Ref != edge.From || edge.Evidence[0].Precision != QueryEvidencePrecisionEntity {
+				t.Fatalf("%s evidence = %#v, want same-View source entity evidence", testCase.name, edge.Evidence)
+			}
+			graphTestAssertGraphBoundTo(t, result, fixture.contextA)
+		})
+	}
+}
+
 type graphTestNeighborCase struct {
 	name   string
 	filter GraphFilter
@@ -940,12 +1003,14 @@ func graphTestRef(candidate QueryCandidate) QueryEntityRef {
 }
 
 func graphTestEdge(from, to QueryCandidate, relation string, evidenceKind QueryEvidenceKind, citation QueryCandidate) QueryGraphEdge {
+	citationRef := graphTestRef(citation)
 	return QueryGraphEdge{
 		From:         graphTestRef(from),
 		To:           graphTestRef(to),
 		Relation:     IndexRelation(relation),
 		EvidenceKind: evidenceKind,
-		EvidenceRefs: []QueryEntityRef{graphTestRef(citation)},
+		EvidenceRefs: []QueryEntityRef{citationRef},
+		Evidence:     []QueryRelationEvidence{{Ref: citationRef, Precision: QueryEvidencePrecisionEntity}},
 	}
 }
 
@@ -1135,6 +1200,14 @@ func graphTestAssertGraphBoundTo(t *testing.T, result GraphResult, want ContextR
 		}
 		for evidenceIndex, evidence := range edge.EvidenceRefs {
 			graphTestAssertRefBoundTo(t, evidence, want, "graph edge evidence", evidenceIndex)
+		}
+		if len(edge.Evidence) != 1 {
+			t.Fatalf("graph edge %d evidence details = %#v, want one", index, edge.Evidence)
+		}
+		detail := edge.Evidence[0]
+		graphTestAssertRefBoundTo(t, detail.Ref, want, "graph relation evidence", index)
+		if detail.Precision != QueryEvidencePrecisionEntity || detail.ReferenceSiteID != nil {
+			t.Fatalf("graph edge %d evidence detail = %#v, want entity precision", index, detail)
 		}
 	}
 	for index, candidate := range result.Candidates {

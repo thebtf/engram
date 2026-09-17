@@ -169,6 +169,26 @@ func (application *UCIApplication) SearchOperatorCodebase(ctx context.Context, a
 	return result.Response, nil
 }
 
+// StructureOperatorCodebase exposes a bounded, path-ordered selected-View
+// listing to the browser adapter. The adapter owns tab proof and opaque cursor
+// storage; this method owns only the pinned UCI query semantics.
+func (application *UCIApplication) StructureOperatorCodebase(ctx context.Context, authorized uci.AuthorizedContext, spec uci.QuerySpec) (uci.QueryResponse, error) {
+	if application == nil || application.queryService == nil {
+		return uci.QueryResponse{}, errors.New("UCI application browser structure service is not configured")
+	}
+	if spec.Mode != uci.QueryModeStructure || spec.Order != uci.QueryOrderPath {
+		return uci.QueryResponse{}, errors.New("UCI application browser structure request is invalid")
+	}
+	result, err := application.queryService.Query(ctx, authorized, spec)
+	if err != nil {
+		return uci.QueryResponse{}, err
+	}
+	if err := result.Response.ValidatePreExposure(); err != nil {
+		return uci.QueryResponse{}, fmt.Errorf("UCI application browser structure response: %w", err)
+	}
+	return result.Response, nil
+}
+
 // ReadCodebase maps a View-grounded citation directly to the exact persisted
 // source-read service. It does not have a working-copy or disk fallback.
 func (application *UCIApplication) ReadCodebase(ctx context.Context, authorized uci.AuthorizedContext, input mcp.CodebaseReadInput) (uci.QueryResponse, error) {
@@ -268,6 +288,27 @@ func (application *UCIApplication) ExploreCodebase(ctx context.Context, authoriz
 	}
 	if err := response.ValidatePreExposure(); err != nil {
 		return uci.QueryResponse{}, fmt.Errorf("UCI application graph response: %w", err)
+	}
+	return response, nil
+}
+
+// ExploreOperatorCodebase exposes a binding-scoped direct or reverse relation
+// request. It preserves the selected View and leaves release ownership to the
+// caller's shared browser boundary.
+func (application *UCIApplication) ExploreOperatorCodebase(ctx context.Context, authorized uci.AuthorizedContext, spec uci.GraphSpec) (uci.QueryResponse, error) {
+	if application == nil || application.graphService == nil {
+		return uci.QueryResponse{}, errors.New("UCI application browser graph service is not configured")
+	}
+	result, err := application.graphService.Explore(ctx, authorized, spec)
+	if err != nil {
+		return uci.QueryResponse{}, err
+	}
+	response, err := uciApplicationGraphResponse(authorized.Ref(), result, spec.Budget)
+	if err != nil {
+		return uci.QueryResponse{}, err
+	}
+	if err := response.ValidatePreExposure(); err != nil {
+		return uci.QueryResponse{}, fmt.Errorf("UCI application browser graph response: %w", err)
 	}
 	return response, nil
 }

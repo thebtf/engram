@@ -596,6 +596,73 @@ func TestUCIApplicationGraphResponseKeepsNonconclusiveOutcomesExplicit(t *testin
 	}
 }
 
+func TestUCIApplicationOperatorPortsKeepStructureAndRelationsInOneView(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	t.Setenv("ENGRAM_EMBEDDING_URL", "")
+	t.Setenv("ENGRAM_EMBEDDING_MODEL", "")
+	store := openWorkerUCIContextCompositionStore(t)
+	server := mcp.NewServer(mcp.ServerOptions{Version: "uci-application-operator-ports"})
+	composition, err := composeUCIContext(true, store.GetDB(), server, workerUCISemanticConfig())
+	require.NoError(t, err)
+	fixture := newWorkerUCIApplicationFixture(t, composition)
+	ref := fixture.historical.Context
+	authorized, err := composition.resolver.Authorize(context.Background(), uci.ResolveContextInput{
+		ClientSessionID: fixture.clientSessionID,
+		AuthRealm:       string(auth.SourceClient),
+		Principal:       fixture.principal,
+		Ref:             &ref,
+	})
+	require.NoError(t, err)
+
+	structureSpec := uci.QuerySpec{
+		ClientSessionID: fixture.clientSessionID,
+		Mode:            uci.QueryModeStructure,
+		Filter:          uci.QueryFilter{PathPrefix: "internal"},
+		Order:           uci.QueryOrderPath,
+		Limit:           1,
+	}
+	structure, err := composition.application.StructureOperatorCodebase(context.Background(), authorized, structureSpec)
+	require.NoError(t, err)
+	require.NoError(t, structure.ValidatePreExposure())
+	require.NotNil(t, structure.Contexts)
+	require.Equal(t, fixture.historical.Context.ViewID, (*structure.Contexts)[0].ViewID)
+	require.NotNil(t, structure.Retrieval)
+	require.Equal(t, uci.QueryRetrievalStructure, structure.Retrieval.Mode)
+	require.NotNil(t, structure.Truncated)
+	require.True(t, *structure.Truncated)
+	require.NotNil(t, structure.Continuation)
+	require.NotNil(t, structure.Continuation.Value)
+
+	for _, testCase := range []struct {
+		name      string
+		target    string
+		direction uci.GraphDirection
+	}{
+		{name: "direct", target: "fixture.Alpha", direction: uci.GraphDirectionOutgoing},
+		{name: "reverse", target: "fixture.Beta", direction: uci.GraphDirectionIncoming},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			response, exploreErr := composition.application.ExploreOperatorCodebase(context.Background(), authorized, uci.GraphSpec{
+				ClientSessionID: fixture.clientSessionID,
+				Action:          uci.GraphActionNeighbors,
+				Target:          uci.GraphTarget{EntityKey: testCase.target},
+				Filter:          uci.GraphFilter{Direction: testCase.direction, Relations: []uci.IndexRelation{"calls"}, EvidenceKinds: []uci.QueryEvidenceKind{uci.QueryEvidenceResolved}},
+				Budget:          uci.GraphBudget{MaxDepth: 1, MaxVisited: 10, MaxNodes: 10, MaxEdges: 10},
+			})
+			require.NoError(t, exploreErr)
+			require.NoError(t, response.ValidatePreExposure())
+			require.NotNil(t, response.Graph)
+			require.Len(t, response.Graph.Edges, 1)
+			edge := response.Graph.Edges[0]
+			require.Equal(t, fixture.historical.Context.ViewID, edge.From.ViewID)
+			require.Equal(t, fixture.historical.Context.ViewID, edge.To.ViewID)
+			require.Len(t, edge.Evidence, 1)
+			require.Equal(t, edge.From, edge.Evidence[0].Ref)
+			require.Equal(t, uci.QueryEvidencePrecisionReferenceSite, edge.Evidence[0].Precision)
+		})
+	}
+}
+
 type workerUCIApplicationFixture struct {
 	source          *gormstore.UCISource
 	checkout        *gormstore.UCICheckout

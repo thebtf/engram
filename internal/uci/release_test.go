@@ -206,6 +206,43 @@ func TestReleaseQueryResponseSuppressesFailedContextualReleases(t *testing.T) {
 	}
 }
 
+func TestReleaseQueryResponseSuppressesRelationEvidenceAfterRevocation(t *testing.T) {
+	contextRef := exposureTestContextRef()
+	source := QueryEntityRef{SourceID: contextRef.SourceID, ViewID: contextRef.ViewID, EntityKey: "fixture.Source"}
+	target := QueryEntityRef{SourceID: contextRef.SourceID, ViewID: contextRef.ViewID, EntityKey: "fixture.Target"}
+	referenceSiteID := "50000000-0000-4000-8000-000000000073"
+	response := exposureTestResponse(QueryStatusOK)
+	response.Graph = &QueryGraph{
+		Nodes: []QueryEntityRef{source, target},
+		Edges: []QueryGraphEdge{{
+			From:         source,
+			To:           target,
+			Relation:     IndexRelation("calls"),
+			EvidenceKind: QueryEvidenceResolved,
+			EvidenceRefs: []QueryEntityRef{source},
+			Evidence:     []QueryRelationEvidence{{Ref: source, Precision: QueryEvidencePrecisionReferenceSite, ReferenceSiteID: &referenceSiteID}},
+		}},
+		StopReason: QueryGraphComplete,
+	}
+	if err := response.ValidatePreExposure(); err != nil {
+		t.Fatalf("pre-release relation evidence is invalid: %v", err)
+	}
+
+	gate := &releaseGateFake{authorized: newAuthorizedContext(contextRef), reauthorizeFailure: ReleaseFailurePermissionDenied}
+	released := ReleaseQueryResponse(context.Background(), releaseTestRequest(ReleaseCategoryCodeGraph, ReleaseCaller{Browser: &BrowserReleaseCaller{
+		Subject:         releaseTestBrowserSubject{Principal: "browser-user/73", valid: true},
+		SessionID:       "browser-session-73",
+		DocumentBinding: "50000000-0000-4000-8000-000000000073",
+	}}, &response), gate)
+	if err := released.Validate(); err != nil {
+		t.Fatalf("revoked evidence response is invalid: %v", err)
+	}
+	if released.Status != QueryStatusForbidden || released.Error == nil || released.Error.Code != QueryErrorPermissionDenied {
+		t.Fatalf("revoked evidence response = %#v", released)
+	}
+	requireReleaseSuppressed(t, released)
+}
+
 func TestReleaseQueryResponsePreservesNonContextualAdmissionRefusals(t *testing.T) {
 	response := QueryResponse{Schema: QueryResponseSchema, Status: QueryStatusContextRequired, Error: &QueryError{Code: QueryErrorContextRequired}}
 	gate := &releaseGateFake{authorized: newAuthorizedContext(exposureTestContextRef())}

@@ -24,6 +24,26 @@ import (
 
 const semanticEmbeddingDimension = 1536
 
+func TestUCISemanticServiceRejectsStructureMode(t *testing.T) {
+	fixture := newSemanticTestFixture()
+	profile := semanticTestProfile("uci-semantic-structure-test")
+	provider := &semanticTestEmbedder{model: profile.Model, vector: semanticTestVector(1)}
+	service := NewSemanticService(profile, provider, newSemanticMemoryStore(), &semanticTestLexicalStore{})
+
+	_, err := service.Query(context.Background(), newAuthorizedContext(fixture.contextA), QuerySpec{
+		ClientSessionID: "structure-client",
+		Mode:            QueryModeStructure,
+		Order:           QueryOrderPath,
+		Limit:           1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "structure mode is unsupported") {
+		t.Fatalf("structure semantic query error = %v", err)
+	}
+	if provider.CallCount() != 0 {
+		t.Fatalf("structure mode invoked semantic provider %d times", provider.CallCount())
+	}
+}
+
 // TestUCIVectorProfileCacheReusesOnlyExactCompatibleInput deliberately uses a
 // deterministic embedder only for cache-key behavior. It is not semantic
 // acceptance evidence; TestUCISemanticRealProviderConceptualHitMatchesScopedPostgresBaseline

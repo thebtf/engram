@@ -174,6 +174,9 @@ func (service *SemanticService) Query(ctx context.Context, authorized Authorized
 	if err := service.validate(ctx, false); err != nil {
 		return QueryResult{}, err
 	}
+	if spec.Mode == QueryModeStructure {
+		return QueryResult{}, fmt.Errorf("uci semantic: structure mode is unsupported")
+	}
 	query, result, err := service.prepareSemanticQuery(ctx, authorized, spec)
 	if err != nil {
 		return QueryResult{}, err

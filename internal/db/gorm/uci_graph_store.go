@@ -2,6 +2,7 @@ package gorm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -141,12 +142,17 @@ func (s *UCIProjectionStore) SelectGraphEdges(ctx context.Context, authorized uc
 		if !ok {
 			continue
 		}
+		detail, ok := uciGraphStoreRelationEvidence(from, row)
+		if !ok {
+			continue
+		}
 		result.Edges = appendUCIGraphStoreEdge(result.Edges, ucidomain.QueryGraphEdge{
 			From:         from,
 			To:           to,
 			Relation:     ucidomain.IndexRelation(row.Relation),
 			EvidenceKind: evidence,
 			EvidenceRefs: []ucidomain.QueryEntityRef{from},
+			Evidence:     []ucidomain.QueryRelationEvidence{detail},
 		})
 	}
 	sortUCIGraphStoreEdges(result.Edges)
@@ -159,12 +165,36 @@ type uciGraphTargetRow struct {
 }
 
 type uciGraphEdgeRow struct {
-	Resolved        bool   `gorm:"column:resolved"`
-	ResolvedEdgeID  string `gorm:"column:resolved_edge_id"`
-	SourceEntityKey string `gorm:"column:source_entity_key"`
-	TargetEntityKey string `gorm:"column:target_entity_key"`
-	Relation        string `gorm:"column:relation"`
-	EvidenceKind    string `gorm:"column:evidence_kind"`
+	Resolved             bool   `gorm:"column:resolved"`
+	ResolvedEdgeID       string `gorm:"column:resolved_edge_id"`
+	SourceEntityKey      string `gorm:"column:source_entity_key"`
+	TargetEntityKey      string `gorm:"column:target_entity_key"`
+	Relation             string `gorm:"column:relation"`
+	EvidenceKind         string `gorm:"column:evidence_kind"`
+	EvidenceJSON         string `gorm:"column:evidence_json"`
+	SourceArtifactStatus string `gorm:"column:source_artifact_status"`
+}
+
+func uciGraphStoreRelationEvidence(ref ucidomain.QueryEntityRef, row uciGraphEdgeRow) (ucidomain.QueryRelationEvidence, bool) {
+	if row.SourceArtifactStatus == string(UCIParseArtifactPartial) {
+		return ucidomain.QueryRelationEvidence{Ref: ref, Precision: ucidomain.QueryEvidencePrecisionPartial}, true
+	}
+	unsupported := ucidomain.QueryRelationEvidence{Ref: ref, Precision: ucidomain.QueryEvidencePrecisionUnsupported}
+	var evidence ucidomain.IndexEdgeEvidence
+	if err := json.Unmarshal([]byte(row.EvidenceJSON), &evidence); err != nil {
+		return unsupported, true
+	}
+	if evidence.ReferenceSiteID != nil {
+		if validateUCIUUID("reference_site_id", *evidence.ReferenceSiteID) != nil {
+			return unsupported, true
+		}
+		referenceSiteID := *evidence.ReferenceSiteID
+		return ucidomain.QueryRelationEvidence{Ref: ref, Precision: ucidomain.QueryEvidencePrecisionReferenceSite, ReferenceSiteID: &referenceSiteID}, true
+	}
+	if row.EvidenceKind == string(UCIResolvedEdgeEvidenceSemantic) {
+		return unsupported, true
+	}
+	return ucidomain.QueryRelationEvidence{Ref: ref, Precision: ucidomain.QueryEvidencePrecisionEntity}, true
 }
 
 func (s *UCIProjectionStore) loadUCIGraphCoverage(ctx context.Context, ref ucidomain.ContextRef) (ucidomain.IndexCoverageState, bool, error) {
@@ -321,7 +351,9 @@ func buildUCIGraphEdgesSQL(ref ucidomain.ContextRef, nodes []string, filter ucid
 				edge.resolved_edge_id,
 				edge.relation,
 				edge.evidence_kind,
+				edge.evidence_json,
 				edge.resolution_state,
+				source_artifact.status AS source_artifact_status,
 				COALESCE(
 					NULLIF(source_definition.qualified_local_name, ''),
 					NULLIF(edge.source_symbol, ''),
@@ -384,8 +416,9 @@ func buildUCIGraphEdgesSQL(ref ucidomain.ContextRef, nodes []string, filter ucid
 				edge.source_entity_key,
 				edge.target_entity_key,
 				edge.relation,
-				edge.evidence_kind
-			FROM scoped_edges AS edge
+				edge.evidence_kind,
+				edge.evidence_json,
+				edge.source_artifact_status
 			JOIN selected_nodes AS node ON ` + resolvedNodeJoin + `
 			WHERE edge.resolution_state = ?
 				AND edge.target_artifact_id IS NOT NULL
@@ -399,14 +432,15 @@ func buildUCIGraphEdgesSQL(ref ucidomain.ContextRef, nodes []string, filter ucid
 				edge.source_entity_key,
 				NULL::text AS target_entity_key,
 				edge.relation,
-				edge.evidence_kind
-			FROM scoped_edges AS edge
+				edge.evidence_kind,
+				edge.evidence_json,
+				edge.source_artifact_status
 			JOIN selected_nodes AS node ON ` + unresolvedNodeJoin + `
 			WHERE ` + unresolvedCondition + `
 				AND (edge.resolution_state <> ? OR edge.evidence_kind = ? OR edge.target_artifact_id IS NULL)
 				AND ` + relationCondition + `
 		)
-		SELECT resolved, resolved_edge_id, source_entity_key, target_entity_key, relation, evidence_kind
+		SELECT resolved, resolved_edge_id, source_entity_key, target_entity_key, relation, evidence_kind, evidence_json, source_artifact_status
 		FROM filtered_edges
 		ORDER BY resolved DESC, source_entity_key ASC, target_entity_key ASC NULLS LAST, relation ASC, evidence_kind ASC, resolved_edge_id ASC
 		LIMIT ?`, arguments
@@ -578,12 +612,67 @@ func uniqueUCIGraphStoreEvidenceKinds(evidence []ucidomain.QueryEvidenceKind) []
 }
 
 func appendUCIGraphStoreEdge(edges []ucidomain.QueryGraphEdge, candidate ucidomain.QueryGraphEdge) []ucidomain.QueryGraphEdge {
-	for _, existing := range edges {
-		if existing.From == candidate.From && existing.To == candidate.To && existing.Relation == candidate.Relation && existing.EvidenceKind == candidate.EvidenceKind {
-			return edges
+	for index := range edges {
+		existing := &edges[index]
+		if existing.From != candidate.From || existing.To != candidate.To || existing.Relation != candidate.Relation || existing.EvidenceKind != candidate.EvidenceKind {
+			continue
 		}
+		existing.EvidenceRefs = uciGraphStoreUniqueRefs(append(existing.EvidenceRefs, candidate.EvidenceRefs...))
+		existing.Evidence = uciGraphStoreUniqueEvidence(append(existing.Evidence, candidate.Evidence...))
+		return edges
 	}
 	return append(edges, candidate)
+}
+
+func uciGraphStoreUniqueRefs(values []ucidomain.QueryEntityRef) []ucidomain.QueryEntityRef {
+	unique := make(map[ucidomain.QueryEntityRef]struct{}, len(values))
+	for _, value := range values {
+		unique[value] = struct{}{}
+	}
+	refs := make([]ucidomain.QueryEntityRef, 0, len(unique))
+	for value := range unique {
+		refs = append(refs, value)
+	}
+	sort.Slice(refs, func(left, right int) bool {
+		if refs[left].EntityKey != refs[right].EntityKey {
+			return refs[left].EntityKey < refs[right].EntityKey
+		}
+		if refs[left].SourceID != refs[right].SourceID {
+			return refs[left].SourceID < refs[right].SourceID
+		}
+		return refs[left].ViewID < refs[right].ViewID
+	})
+	return refs
+}
+
+func uciGraphStoreUniqueEvidence(values []ucidomain.QueryRelationEvidence) []ucidomain.QueryRelationEvidence {
+	if values == nil {
+		return nil
+	}
+	unique := make(map[string]ucidomain.QueryRelationEvidence, len(values))
+	for _, value := range values {
+		referenceSiteID := ""
+		if value.ReferenceSiteID != nil {
+			referenceSiteID = *value.ReferenceSiteID
+		}
+		key := value.Ref.SourceID + "\x00" + value.Ref.ViewID + "\x00" + value.Ref.EntityKey + "\x00" + string(value.Precision) + "\x00" + referenceSiteID
+		unique[key] = value
+	}
+	evidence := make([]ucidomain.QueryRelationEvidence, 0, len(unique))
+	for _, value := range unique {
+		evidence = append(evidence, value)
+	}
+	sort.Slice(evidence, func(left, right int) bool {
+		leftID, rightID := "", ""
+		if evidence[left].ReferenceSiteID != nil {
+			leftID = *evidence[left].ReferenceSiteID
+		}
+		if evidence[right].ReferenceSiteID != nil {
+			rightID = *evidence[right].ReferenceSiteID
+		}
+		return evidence[left].Ref.EntityKey+"\x00"+string(evidence[left].Precision)+"\x00"+leftID < evidence[right].Ref.EntityKey+"\x00"+string(evidence[right].Precision)+"\x00"+rightID
+	})
+	return evidence
 }
 
 func appendUCIGraphStoreUnresolved(sites []ucidomain.GraphUnresolvedSite, candidate ucidomain.GraphUnresolvedSite) []ucidomain.GraphUnresolvedSite {
