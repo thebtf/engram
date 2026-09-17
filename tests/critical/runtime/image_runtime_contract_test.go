@@ -7,6 +7,7 @@ package runtime_test
 import (
 	"archive/tar"
 	"bytes"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -950,14 +951,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	if publishJobsIndex < 0 || publishJobsIndex >= loginIndex {
 		t.Fatal("latest promoter must REST-validate the triggering Docker Publish publish-images job before registry login")
 	}
-	releaseHeadGuard := "if ($triggeringWorkflowName -eq 'Release' -and $commit -cne $triggeringWorkflowHeadSHA)"
-	releaseHeadGuardIndex := strings.Index(latest, releaseHeadGuard)
-	if releaseHeadGuardIndex < 0 || releaseHeadGuardIndex >= loginIndex {
-		t.Fatal("latest promoter must reject only a Release workflow_run whose head differs from the latest release commit before registry login")
-	}
-	if strings.Contains(latest, "if ($commit -cne $triggeringWorkflowHeadSHA)") {
-		t.Fatal("latest promoter must not apply the Release head check to Docker Publish")
-	}
+	testLatestPromotionReleaseRefGuard(t, repo, latest)
 	if strings.Contains(latest, "workflow_dispatch:") || strings.Contains(latest, "github.event_name == 'workflow_dispatch'") {
 		t.Fatal("latest promoter must not retain a manual-dispatch path")
 	}
@@ -1002,6 +996,89 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 			t.Fatalf("latest promoter exposes a forbidden trigger, mutable source, build, or production surface %q", forbidden)
 		}
 	}
+}
+
+func testLatestPromotionReleaseRefGuard(t *testing.T, repo, workflow string) {
+	t.Helper()
+
+	const (
+		legacyBlob     = "f50f452909d496e822beb3e61fa197e1a005d3af"
+		successorBlob  = "7ff104e2f4897341c53c1c7e71fec278fc5210da"
+		legacyGuard    = "if ($triggeringWorkflowName -eq 'Release' -and $commit -cne $triggeringWorkflowHeadSHA)"
+		successorGuard = "if ($env:GITHUB_EVENT_NAME -eq 'workflow_run' -and $commit -cne $triggeringWorkflowHeadSHA)"
+	)
+
+	workflowBlob := gitBlobID(workflow)
+	if gitBlobID(strings.ReplaceAll(workflow, "\n", "\r\n")) == workflowBlob || gitBlobID(workflow+" ") == workflowBlob {
+		t.Fatal("workflow blob identity must change when raw bytes change")
+	}
+	loginIndex := strings.Index(workflow, "Login to GHCR only after immutable provenance inspection")
+	switch workflowBlob {
+	case successorBlob:
+		guardIndex := strings.Index(workflow, successorGuard)
+		if guardIndex < 0 || guardIndex >= loginIndex || strings.Contains(workflow, legacyGuard) {
+			t.Fatal("latest promoter must reject stale references from every workflow_run before registry login")
+		}
+	case legacyBlob:
+		var policy struct {
+			ActiveEpoch struct {
+				ID           string `json:"id"`
+				ExactChanges []struct {
+					Status string `json:"status"`
+					Path   string `json:"path"`
+				} `json:"exact_changes"`
+				ExpectedHeadBlobs []struct {
+					Path    string `json:"path"`
+					GitBlob string `json:"git_blob"`
+				} `json:"expected_head_blobs"`
+			} `json:"active_epoch"`
+		}
+
+		policyPath := filepath.Join(repo, ".github", "authority-policy.json")
+		if err := json.Unmarshal([]byte(readFile(t, policyPath)), &policy); err != nil {
+			t.Fatalf("parse transition authority policy: %v", err)
+		}
+		changeApproved := false
+		for _, change := range policy.ActiveEpoch.ExactChanges {
+			changeApproved = changeApproved || (change.Status == "M" && change.Path == ".github/workflows/promote-latest-release-images.yml")
+		}
+		successorApproved := false
+		for _, expected := range policy.ActiveEpoch.ExpectedHeadBlobs {
+			successorApproved = successorApproved || (expected.Path == ".github/workflows/promote-latest-release-images.yml" && expected.GitBlob == successorBlob)
+		}
+		if policy.ActiveEpoch.ID != "authority-0043" || !changeApproved || !successorApproved {
+			t.Fatal("legacy latest-promotion workflow is not covered by authority-0043's exact successor approval")
+		}
+		legacyGuardIndex := strings.Index(workflow, legacyGuard)
+		if legacyGuardIndex < 0 || legacyGuardIndex >= loginIndex || strings.Count(workflow, legacyGuard) != 1 {
+			t.Fatal("legacy latest-promotion workflow does not contain exactly its approved predecessor guard before registry login")
+		}
+	default:
+		t.Fatalf("latest-promotion workflow blob %s is neither the approved authority-0043 predecessor nor its successor", workflowBlob)
+	}
+
+	for _, trigger := range []struct {
+		name, event, releaseCommit, workflowHead string
+		allowed                                  bool
+	}{
+		{"stale Docker Publish", "workflow_run", "a", "b", false},
+		{"matching Docker Publish", "workflow_run", "a", "a", true},
+		{"stale Release", "workflow_run", "a", "b", false},
+		{"matching Release", "workflow_run", "a", "a", true},
+		{"repository_dispatch recovery", "repository_dispatch", "a", "", true},
+	} {
+		got := trigger.event != "workflow_run" || trigger.releaseCommit == trigger.workflowHead
+		if got != trigger.allowed {
+			t.Errorf("freshness guard accepts %s = %t, want %t", trigger.name, got, trigger.allowed)
+		}
+	}
+}
+
+func gitBlobID(content string) string {
+	hash := sha1.New()
+	_, _ = fmt.Fprintf(hash, "blob %d\x00", len(content))
+	_, _ = hash.Write([]byte(content))
+	return fmt.Sprintf("%x", hash.Sum(nil))
 }
 
 func inlineRunBodies(workflow string) []string {
