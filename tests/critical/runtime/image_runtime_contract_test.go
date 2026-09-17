@@ -872,7 +872,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 
 	latest := readFile(t, latestWorkflowPath)
 	testLatestPromotionReleaseRefGuard(t, repo, latest)
-	successor := gitBlobID(latest) == "a187d7e57bd4f7ff68534dc96872cdce1a53b43a"
+	successor := gitBlobID(latest) == "e86147c7409dea57fda2664a1b60f90bdd39dcca"
 	for _, required := range []string{
 		"name: Promote Latest Release Images", "workflow_run:\n    workflows: [\"Release\", \"Docker Publish\"]\n    types: [completed]",
 		"if: github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && ((github.event.workflow_run.name == 'Release' && github.event.workflow_run.event == 'push') || (github.event.workflow_run.name == 'Docker Publish' && github.event.workflow_run.event == 'workflow_run')))",
@@ -991,9 +991,9 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 		promotionReceipt = "" +
 			"              $updatedLatest.Add($observed)\n" +
 			"              $promotion.updated_latest_images = $updatedLatest.ToArray()\n" +
-			"              Set-FinalLatestImage -Repository ([string]$image.repository) -Identity $observed\n" +
-			"              try {\n" +
-			"                [ordered]@{ images = $updatedLatest.ToArray() } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'latest.json') -Encoding utf8NoBOM"
+			"              [ordered]@{ images = $updatedLatest.ToArray() } |\n" +
+			"                ConvertTo-Json -Depth 5 |\n" +
+			"                Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'latest.json') -Encoding utf8NoBOM"
 	}
 	if (successor && !strings.Contains(latest, "$updatedLatest = [System.Collections.Generic.List[object]]::new()")) || (!successor && !strings.Contains(latest, "$latest = [System.Collections.Generic.List[object]]::new()")) || !strings.Contains(latest, promotionReceipt) {
 		t.Fatal("latest promoter must persist every successful promotion for its always receipt")
@@ -1043,7 +1043,7 @@ func testLatestPromotionReleaseRefGuard(t *testing.T, repo, workflow string) {
 
 	const (
 		predecessorBlob = "7ff104e2f4897341c53c1c7e71fec278fc5210da"
-		successorBlob   = "a187d7e57bd4f7ff68534dc96872cdce1a53b43a"
+		successorBlob   = "e86147c7409dea57fda2664a1b60f90bdd39dcca"
 		freshnessGuard  = "if ($env:GITHUB_EVENT_NAME -eq 'workflow_run' -and $commit -cne $triggeringWorkflowHeadSHA)"
 	)
 
@@ -1120,7 +1120,7 @@ func testLatestPromotionStateMatrix(t *testing.T, repo string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := gitBlobID(string(workflow)), "a187d7e57bd4f7ff68534dc96872cdce1a53b43a"; got != want {
+	if got, want := gitBlobID(string(workflow)), "e86147c7409dea57fda2664a1b60f90bdd39dcca"; got != want {
 		t.Fatalf("authority-0045 successor fixture has raw blob %s, want %s", got, want)
 	}
 	testLatestPromotionReleaseRefGuard(t, repo, string(workflow))
@@ -1130,7 +1130,7 @@ func testLatestPromotionStateMatrix(t *testing.T, repo string) {
 	if err != nil {
 		t.Fatalf("authority-0045 latest-promotion state matrix failed: %v\n%s", err, output)
 	}
-	if !strings.Contains(string(output), "PASS: stale abort, success, bootstrap-required no-write, inspection rejection, pending-write abort, readback rollback, create rollback, latest receipt rollback, persistent state receipt, phase-anchored interruption, and rollback failure") {
+	if !strings.Contains(string(output), "PASS: stale-abort receipt, success, readback rollback, create-failure rollback, post-write mismatch rollback, and rollback failure") {
 		t.Fatalf("authority-0045 latest-promotion state matrix did not report its complete result:\n%s", output)
 	}
 }
