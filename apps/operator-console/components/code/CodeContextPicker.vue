@@ -25,6 +25,7 @@ const emit = defineEmits<{
 const repository = ref('')
 const workingCopy = ref('')
 const snapshotRef = ref('')
+const selectionDirty = ref(false)
 const repositories = computed(() => [...new Set(props.catalog.map((entry) => entry.repository))])
 const workingCopies = computed(() => [...new Set(props.catalog.filter((entry) => entry.repository === repository.value).map((entry) => entry.workingCopy))])
 const snapshotEntries = computed(() => props.catalog.filter((entry) => entry.repository === repository.value && entry.workingCopy === workingCopy.value && entry.view !== null))
@@ -39,6 +40,7 @@ const phaseMessage = computed(() => {
 })
 
 watch([() => props.catalog, () => props.candidate, () => props.pinned], () => {
+  if (selectionDirty.value) return
   const selected = props.candidate ?? props.pinned
   if (selected === null) return
   repository.value = selected.repository
@@ -47,6 +49,7 @@ watch([() => props.catalog, () => props.candidate, () => props.pinned], () => {
 }, { immediate: true })
 
 function chooseRepository(event: Event): void {
+  selectionDirty.value = true
   repository.value = (event.target as HTMLSelectElement).value
   workingCopy.value = ''
   snapshotRef.value = ''
@@ -54,12 +57,14 @@ function chooseRepository(event: Event): void {
 }
 
 function chooseWorkingCopy(event: Event): void {
+  selectionDirty.value = true
   workingCopy.value = (event.target as HTMLSelectElement).value
   snapshotRef.value = ''
   emit('select', null)
 }
 
 function chooseSnapshot(event: Event): void {
+  selectionDirty.value = true
   snapshotRef.value = (event.target as HTMLSelectElement).value
   const selected = snapshotEntries.value.find((entry) => entry.view?.selectionRef === snapshotRef.value)?.view ?? null
   emit('select', selected)

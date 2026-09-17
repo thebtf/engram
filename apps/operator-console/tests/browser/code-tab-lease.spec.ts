@@ -89,6 +89,16 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
       repository: 'Engram',
       working_copy: '',
       index_intent_available: false,
+    }, {
+      repository: 'Other repository',
+      working_copy: 'D working copy',
+      indexed_snapshot: {
+        label: 'D snapshot',
+        revision: '1a9dad1',
+        published_at: '2026-09-17T00:01:00Z',
+      },
+      selection_ref: 'context-d',
+      index_intent_available: false,
     }],
   }
 
@@ -176,6 +186,11 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
   await page.getByTestId('code-context-snapshot').selectOption({ label: 'Current snapshot' })
   await page.getByTestId('code-pin-context').click()
   expect(pinPayloads).toEqual([{ document_proof: DOCUMENT_PROOF, selection_ref: 'context-current' }])
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Current snapshot')
+  await page.getByTestId('code-context-repository').selectOption({ label: 'Other repository' })
+  await page.getByTestId('code-context-working-copy').selectOption({ label: 'D working copy' })
+  await page.getByTestId('code-context-snapshot').selectOption({ label: 'D snapshot' })
+  await expect(page.getByTestId('code-context-candidate')).toContainText('D snapshot')
   await expect(page.getByTestId('code-context-pinned')).toContainText('Current snapshot')
   await page.getByTestId('index-intent-reindex').click()
   await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'queued')
