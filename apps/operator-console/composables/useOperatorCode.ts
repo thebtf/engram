@@ -337,7 +337,8 @@ function parseCatalogSnapshot(value: unknown): CodeSnapshot | null {
 function parseCatalogEntry(value: unknown): CodeCatalogEntry | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
   const repository = text(Reflect.get(value, 'repository'))
-  const workingCopy = text(Reflect.get(value, 'working_copy'))
+  const workingCopyValue = Reflect.get(value, 'working_copy')
+  const workingCopy = typeof workingCopyValue === 'string' ? workingCopyValue.trim() : null
   const snapshotValue = Reflect.get(value, 'indexed_snapshot')
   const selectionRefValue = Reflect.get(value, 'selection_ref')
   const indexIntentAvailable = Reflect.get(value, 'index_intent_available')
@@ -352,7 +353,7 @@ function parseCatalogEntry(value: unknown): CodeCatalogEntry | null {
   }
 
   const snapshot = parseCatalogSnapshot(snapshotValue)
-  if (snapshot === null || selectionRef === null || indexIntentAvailable || indexSelectionRef !== null) return null
+  if (snapshot === null || workingCopy === '' || selectionRef === null || indexIntentAvailable || indexSelectionRef !== null) return null
   return { repository, workingCopy, view: { repository, workingCopy, snapshot, selectionRef }, indexIntentAvailable: false, indexIntentTarget: null }
 }
 

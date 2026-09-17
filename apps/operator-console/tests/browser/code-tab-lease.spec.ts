@@ -85,6 +85,10 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
       },
       selection_ref: 'context-current',
       index_intent_available: false,
+    }, {
+      repository: 'Engram',
+      working_copy: '',
+      index_intent_available: false,
     }],
   }
 
