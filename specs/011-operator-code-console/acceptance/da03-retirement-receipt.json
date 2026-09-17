@@ -109,5 +109,5 @@
     "The disposable fixture proves bounded D-A03 source behavior only; it is not installed or production acceptance.",
     "The fixture has one local candidate server at a time and removes its database schema and temporary root before returning."
   ],
-  "verdict": "PASS — D-A03 source acceptance; composite Feature011 source acceptance still requires the independent T008a receipt."
+  "verdict": "NOT_PROVEN — D-A03 source acceptance is not established because the two legacy-bookmark browser checks failed. The fixture and historical-reader results remain recorded, but the browser-negative result must be rerun successfully with scoped selectors before any PASS verdict; composite Feature011 source acceptance still also requires the independent T008a receipt."
 }

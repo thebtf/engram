@@ -8,7 +8,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ToolVersion = 'g1-design-only-4'
+$ToolVersion = 'g1-design-only-5'
 
 $Allowlist = @(
   @{ Source = 'PRODUCT.md'; Target = 'contracts/PRODUCT.md' },
@@ -32,7 +32,7 @@ $RouteFrames = @(
   [ordered]@{ id='memory'; kind='route'; route='/memory'; mockup='mockups/index.html#memories' },
   [ordered]@{ id='queue'; kind='route'; route='/queue'; mockup='mockups/index.html#queue' },
   [ordered]@{ id='noise'; kind='route'; route='/noise'; mockup='mockups/index.html#noise' },
-  [ordered]@{ id='code'; kind='route'; route='/code'; mockup='mockups/index.html#code' },
+  [ordered]@{ id='code'; kind='route'; route='/code'; mockup='mockups/index.html#content' },
   [ordered]@{ id='rules'; kind='route'; route='/rules'; mockup='mockups/index.html#rules' },
   [ordered]@{ id='issues'; kind='route'; route='/issues'; mockup='mockups/index.html#issues' },
   [ordered]@{ id='projects'; kind='route'; route='/projects'; mockup='mockups/index.html#projects' },

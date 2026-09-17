@@ -72,7 +72,7 @@ test("MCP configs never interpolate user_config in an env block", () => {
   }
 });
 
-test("OMP manifest leaves cwd to the host while the script remains plugin-root-resolved", () => {
+test("OMP manifest resolves its script from the plugin root independently of the host cwd", () => {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const readJson = (...segments) => JSON.parse(fs.readFileSync(path.join(repoRoot, ...segments), "utf8"));
   const claudePlugin = readJson("plugin", "engram", ".claude-plugin", "plugin.json");
@@ -89,10 +89,11 @@ test("OMP manifest leaves cwd to the host while the script remains plugin-root-r
   assert.deepEqual(ompServer, {
     type: "stdio",
     command: "node",
-    args: ["./scripts/run-engram.js"],
+    args: ["${OMP_PLUGIN_ROOT}/scripts/run-engram.js"],
     timeout: 60000,
   });
-  assert.equal(path.resolve(repoRoot, "plugin", "engram", ompServer.args[0]), path.join(repoRoot, "plugin", "engram", "scripts", "run-engram.js"));
+  const ompArgs = expandMcpArgsForTest(ompServer.args, path.resolve(repoRoot, "plugin", "engram"));
+  assert.deepEqual(ompArgs.map(path.normalize), [path.join(repoRoot, "plugin", "engram", "scripts", "run-engram.js")]);
   assert.equal(rootPlugin.version, claudePlugin.version);
   assert.equal(codexPlugin.version, claudePlugin.version);
   assert.equal(claudeMarketplace.version, claudePlugin.version);
@@ -735,7 +736,7 @@ function oversizedProjectTokens() {
 }
 
 function expandMcpArgsForTest(args, pluginRoot) {
-  return args.map((arg) => arg.replace("${CLAUDE_PLUGIN_ROOT}", pluginRoot.replaceAll("\\", "/")));
+  return args.map((arg) => arg.replaceAll("${CLAUDE_PLUGIN_ROOT}", pluginRoot.replaceAll("\\", "/")).replaceAll("${OMP_PLUGIN_ROOT}", pluginRoot.replaceAll("\\", "/")));
 }
 
 test("HAP-01 source diagnostic keeps launcher credential resolution out of installed proof", () => {
