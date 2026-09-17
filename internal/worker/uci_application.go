@@ -101,10 +101,7 @@ func (application *UCIApplication) ResolveLegacyProject(ctx context.Context, _ u
 	})
 }
 
-// SearchCodebase executes structural FTS inside the already-authorized immutable
-// View. A queued embedding job must not delay this structural publication
-// boundary; semantic retrieval becomes eligible only after durable embedding
-// status is complete.
+// SearchCodebase executes the eligible retrieval mode inside the already-authorized immutable View.
 func (application *UCIApplication) SearchCodebase(ctx context.Context, authorized uci.AuthorizedContext, input mcp.CodebaseSearchInput) (uci.QueryResponse, error) {
 	if application == nil || application.queryService == nil {
 		return uci.QueryResponse{}, errors.New("UCI application query service is not configured")
@@ -126,20 +123,7 @@ func (application *UCIApplication) SearchCodebase(ctx context.Context, authorize
 		Order:           uci.QueryOrderRelevance,
 		Limit:           input.Limit,
 	}
-	var result uci.QueryResult
-	if application.semanticService != nil && application.indexStatusService != nil {
-		status, statusErr := application.indexStatusService.Status(ctx, authorized, "")
-		if statusErr != nil {
-			return uci.QueryResponse{}, statusErr
-		}
-		if status.Embedding.Coverage == uci.IndexCoverageComplete {
-			result, err = application.semanticService.Query(ctx, authorized, spec)
-		} else {
-			result, err = application.queryService.Query(ctx, authorized, spec)
-		}
-	} else {
-		result, err = application.queryService.Query(ctx, authorized, spec)
-	}
+	result, err := application.executeSearch(ctx, authorized, spec)
 	if err != nil {
 		return uci.QueryResponse{}, err
 	}
@@ -149,7 +133,20 @@ func (application *UCIApplication) SearchCodebase(ctx context.Context, authorize
 	return result.Response, nil
 }
 
-// SearchOperatorCodebase executes a browser-bound lexical query. Its caller
+func (application *UCIApplication) executeSearch(ctx context.Context, authorized uci.AuthorizedContext, spec uci.QuerySpec) (uci.QueryResult, error) {
+	if application.semanticService != nil && application.indexStatusService != nil {
+		status, err := application.indexStatusService.Status(ctx, authorized, "")
+		if err != nil {
+			return uci.QueryResult{}, err
+		}
+		if status.Embedding.Coverage == uci.IndexCoverageComplete {
+			return application.semanticService.Query(ctx, authorized, spec)
+		}
+	}
+	return application.queryService.Query(ctx, authorized, spec)
+}
+
+// SearchOperatorCodebase executes a browser-bound relevance search. Its caller
 // supplies a tab-scoped client session and any continuation only after the HTTP
 // boundary has resolved its server-owned cursor; no daemon transport changes.
 func (application *UCIApplication) SearchOperatorCodebase(ctx context.Context, authorized uci.AuthorizedContext, spec uci.QuerySpec) (uci.QueryResponse, error) {
@@ -159,7 +156,7 @@ func (application *UCIApplication) SearchOperatorCodebase(ctx context.Context, a
 	if spec.Mode != uci.QueryModeFTS || spec.Order != uci.QueryOrderRelevance {
 		return uci.QueryResponse{}, errors.New("UCI application browser query must be lexical relevance")
 	}
-	result, err := application.queryService.Query(ctx, authorized, spec)
+	result, err := application.executeSearch(ctx, authorized, spec)
 	if err != nil {
 		return uci.QueryResponse{}, err
 	}

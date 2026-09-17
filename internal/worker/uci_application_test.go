@@ -260,7 +260,7 @@ func TestUCIApplicationFTSSearchDoesNotWaitForQueuedEmbedding(t *testing.T) {
 	}
 }
 
-func TestUCIApplicationUsesConfiguredSharedEmbeddingClient(t *testing.T) {
+func TestUCIApplicationOperatorSearchUsesSemanticOnlyWhenCoverageComplete(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
 	const model = "worker-uci-shared-embedding"
 	var providerCalls atomic.Int32
@@ -333,6 +333,22 @@ func TestUCIApplicationUsesConfiguredSharedEmbeddingClient(t *testing.T) {
 		Ref:             &ref,
 	})
 	require.NoError(t, err)
+	incompleteSpec := uci.QuerySpec{
+		ClientSessionID: "operator-code/" + fixture.clientSessionID,
+		Mode:            uci.QueryModeFTS,
+		Text:            "SearchNeedle",
+		Filter:          uci.QueryFilter{PathPrefix: "internal/"},
+		Order:           uci.QueryOrderRelevance,
+		Limit:           1,
+	}
+	incomplete, err := composition.application.SearchOperatorCodebase(context.Background(), authorized, incompleteSpec)
+	require.NoError(t, err)
+	require.NoError(t, incomplete.ValidatePreExposure())
+	require.NotNil(t, incomplete.Retrieval)
+	require.Equal(t, uci.QueryRetrievalLexical, incomplete.Retrieval.Mode)
+	require.NotNil(t, incomplete.Contexts)
+	require.Equal(t, fixture.current.Context.ViewID, (*incomplete.Contexts)[0].ViewID)
+	require.Zero(t, providerCalls.Load(), "incomplete coverage must not invoke semantic retrieval")
 	workerContext, stopWorker := context.WithCancel(context.Background())
 	workerDone := make(chan error, 1)
 	go func() {
@@ -385,9 +401,165 @@ func TestUCIApplicationUsesConfiguredSharedEmbeddingClient(t *testing.T) {
 		require.True(t, strings.HasPrefix(item.Path, "internal/"))
 		require.Contains(t, item.MatchSources, uci.QueryMatchVector)
 	}
+	semanticSpec := incompleteSpec
+	semanticSpec.Text = "NoLexicalMatchToken"
+	operatorSemantic, err := composition.application.SearchOperatorCodebase(context.Background(), authorized, semanticSpec)
+	require.NoError(t, err)
+	require.NoError(t, operatorSemantic.ValidatePreExposure())
+	require.NotNil(t, operatorSemantic.Retrieval)
+	require.Equal(t, uci.QueryRetrievalHybrid, operatorSemantic.Retrieval.Mode)
+	require.NotNil(t, operatorSemantic.Retrieval.VectorCoverage)
+	require.Equal(t, float64(1), *operatorSemantic.Retrieval.VectorCoverage)
+	require.Empty(t, operatorSemantic.Retrieval.DegradationReasons)
+	require.NotNil(t, operatorSemantic.Items)
+	require.Len(t, *operatorSemantic.Items, 1)
+	require.Contains(t, (*operatorSemantic.Items)[0].MatchSources, uci.QueryMatchVector)
+	require.NotNil(t, operatorSemantic.Contexts)
+	require.Equal(t, fixture.current.Context.ViewID, (*operatorSemantic.Contexts)[0].ViewID)
+	require.NotNil(t, operatorSemantic.Continuation.Value)
+
+	continuationSpec := semanticSpec
+	continuationSpec.Continuation = operatorSemantic.Continuation.Value
+	continued, err := composition.application.SearchOperatorCodebase(context.Background(), authorized, continuationSpec)
+	require.NoError(t, err)
+	require.NoError(t, continued.ValidatePreExposure())
+	require.NotNil(t, continued.Retrieval)
+	require.Equal(t, uci.QueryRetrievalHybrid, continued.Retrieval.Mode)
+	require.NotNil(t, continued.Items)
+	require.Len(t, *continued.Items, 1)
+	require.NotEqual(t, (*operatorSemantic.Items)[0].Ref.EntityKey, (*continued.Items)[0].Ref.EntityKey)
+	require.NotNil(t, continued.Contexts)
+	require.Equal(t, fixture.current.Context.ViewID, (*continued.Contexts)[0].ViewID)
+
+	for _, invalidSpec := range []uci.QuerySpec{
+		{Mode: uci.QueryModeStructure, Order: uci.QueryOrderRelevance},
+		{Mode: uci.QueryModeFTS, Order: uci.QueryOrderPath},
+	} {
+		_, invalidErr := composition.application.SearchOperatorCodebase(context.Background(), authorized, invalidSpec)
+		require.ErrorContains(t, invalidErr, "browser query must be lexical relevance")
+	}
+
+	configuredStatus := composition.application.indexStatusService
+	composition.application.indexStatusService = uci.NewIndexStatusService(nil, composition.embeddingProfile)
+	_, statusErr := composition.application.SearchOperatorCodebase(context.Background(), authorized, semanticSpec)
+	require.ErrorContains(t, statusErr, "uci index status: store is not configured")
+	composition.application.indexStatusService = configuredStatus
+
+	configuredSemantic := composition.application.semanticService
+	configuredQuery := composition.application.queryService
+	composition.application.semanticService = uci.NewSemanticService(uci.VectorProfile{}, nil, nil, composition.projectionStore)
+	composition.application.queryService = uci.NewQueryService(nil)
+	_, semanticErr := composition.application.SearchOperatorCodebase(context.Background(), authorized, semanticSpec)
+	require.ErrorContains(t, semanticErr, "uci semantic: provider ref is invalid")
+	composition.application.semanticService = configuredSemantic
+	composition.application.queryService = configuredQuery
+
 	require.Equal(t, int32(3), corpusProviderInputs.Load(), "the runtime producer must embed each current corpus input exactly once")
-	require.Equal(t, int32(1), queryProviderInputs.Load(), "only the post-coverage semantic query may call the provider")
-	require.Equal(t, int32(2), providerCalls.Load(), "the producer batches corpus inputs once and the ready semantic query makes one call")
+	require.Equal(t, int32(3), queryProviderInputs.Load(), "only post-coverage semantic operator and MCP queries may call the provider")
+	require.Equal(t, int32(4), providerCalls.Load(), "the producer batches corpus inputs once and each semantic query calls the provider")
+}
+
+func TestUCIApplicationOperatorSearchSelectsSemanticOnlyForCompleteCoverage(t *testing.T) {
+	_, fixture := newOperatorCodeHTTPTestAdapter(t)
+	authorized, err := fixture.authority.AuthorizeOperatorCode(context.Background(), operatorCodeVerifiedCaller{
+		SessionID: "operator-semantic-selection",
+		Context:   fixture.ref,
+	})
+	require.NoError(t, err)
+
+	profile := uci.VectorProfile{
+		ProviderRef:           "worker-uci-operator-semantic",
+		Model:                 "worker-uci-operator-semantic-model",
+		Dimension:             embedding.EmbeddingDim,
+		PreprocessingRevision: "worker-uci-operator-semantic/v1",
+		IncludeRelativePath:   true,
+	}
+	lexical := &workerUCIApplicationQueryStore{}
+	semanticFallback := &workerUCIApplicationQueryStore{}
+	semanticStore := &workerUCIApplicationSemanticStore{candidates: []uci.SemanticCandidate{
+		workerUCIApplicationSemanticCandidate(fixture.ref, "71000000-0000-4000-8000-000000000001", "semantic-one", "internal/semantic_one.go"),
+		workerUCIApplicationSemanticCandidate(fixture.ref, "71000000-0000-4000-8000-000000000002", "semantic-two", "internal/semantic_two.go"),
+	}}
+	statusStore := &workerUCIApplicationStatusStore{snapshot: workerUCIApplicationStatusSnapshot(fixture.ref, uci.IndexCoveragePartial)}
+	application := &UCIApplication{
+		queryService:       uci.NewQueryService(lexical),
+		semanticService:    uci.NewSemanticService(profile, &workerUCIApplicationEmbedder{model: profile.Model}, semanticStore, semanticFallback),
+		indexStatusService: uci.NewIndexStatusService(statusStore, &profile),
+	}
+	spec := uci.QuerySpec{
+		ClientSessionID: "operator-code/semantic-selection",
+		Mode:            uci.QueryModeFTS,
+		Text:            "non lexical concept",
+		Filter:          uci.QueryFilter{PathPrefix: "internal/"},
+		Order:           uci.QueryOrderRelevance,
+		Limit:           1,
+	}
+	normalizedSpec := spec
+	normalizedSpec.Filter.PathPrefix = "internal"
+
+	incomplete, err := application.SearchOperatorCodebase(context.Background(), authorized, spec)
+	require.NoError(t, err)
+	require.NoError(t, incomplete.ValidatePreExposure())
+	require.Equal(t, uci.QueryRetrievalLexical, incomplete.Retrieval.Mode)
+	require.Equal(t, []uci.QuerySpec{normalizedSpec}, lexical.calls)
+	require.Empty(t, semanticStore.calls)
+
+	statusStore.snapshot = workerUCIApplicationStatusSnapshot(fixture.ref, uci.IndexCoverageComplete)
+	semantic, err := application.SearchOperatorCodebase(context.Background(), authorized, spec)
+	require.NoError(t, err)
+	require.NoError(t, semantic.ValidatePreExposure())
+	require.Equal(t, uci.QueryRetrievalHybrid, semantic.Retrieval.Mode)
+	require.NotNil(t, semantic.Retrieval.VectorCoverage)
+	require.Equal(t, float64(1), *semantic.Retrieval.VectorCoverage)
+	require.Empty(t, semantic.Retrieval.DegradationReasons)
+	require.Len(t, *semantic.Items, 1)
+	require.Equal(t, fixture.ref.ViewID, (*semantic.Contexts)[0].ViewID)
+	require.Len(t, lexical.calls, 1, "complete coverage must not call the FTS service")
+	require.Empty(t, semanticFallback.calls, "complete semantic retrieval must not degrade to FTS")
+	require.Len(t, semanticStore.calls, 1)
+	require.Equal(t, normalizedSpec, semanticStore.calls[0])
+	require.NotNil(t, semantic.Continuation.Value)
+
+	continuationSpec := spec
+	continuationSpec.Continuation = semantic.Continuation.Value
+	continued, err := application.SearchOperatorCodebase(context.Background(), authorized, continuationSpec)
+	require.NoError(t, err)
+	require.NoError(t, continued.ValidatePreExposure())
+	require.Equal(t, uci.QueryRetrievalHybrid, continued.Retrieval.Mode)
+	require.Len(t, *continued.Items, 1)
+	require.NotEqual(t, (*semantic.Items)[0].Ref.EntityKey, (*continued.Items)[0].Ref.EntityKey)
+	require.Len(t, semanticStore.calls, 2)
+	require.Equal(t, continuationSpec.ClientSessionID, semanticStore.calls[1].ClientSessionID)
+	require.Equal(t, continuationSpec.Mode, semanticStore.calls[1].Mode)
+	require.Equal(t, continuationSpec.Text, semanticStore.calls[1].Text)
+	require.Equal(t, normalizedSpec.Filter, semanticStore.calls[1].Filter)
+	require.Equal(t, continuationSpec.Order, semanticStore.calls[1].Order)
+	require.Equal(t, continuationSpec.Limit, semanticStore.calls[1].Limit)
+	require.Equal(t, continuationSpec.Continuation, semanticStore.calls[1].Continuation)
+	require.Equal(t, 1, semanticStore.calls[1].Offset)
+
+	for _, invalid := range []uci.QuerySpec{
+		{Mode: uci.QueryModeStructure, Order: uci.QueryOrderRelevance},
+		{Mode: uci.QueryModeFTS, Order: uci.QueryOrderPath},
+	} {
+		_, invalidErr := application.SearchOperatorCodebase(context.Background(), authorized, invalid)
+		require.ErrorContains(t, invalidErr, "browser query must be lexical relevance")
+	}
+
+	statusFailure := errors.New("status failed")
+	statusStore.err = statusFailure
+	_, err = application.SearchOperatorCodebase(context.Background(), authorized, spec)
+	require.ErrorIs(t, err, statusFailure)
+	require.Len(t, lexical.calls, 1, "status failure must not fall back to FTS")
+	require.Len(t, semanticStore.calls, 2, "status failure must not invoke semantic retrieval")
+	statusStore.err = nil
+
+	semanticFailure := errors.New("semantic failed")
+	semanticStore.err = semanticFailure
+	application.queryService = uci.NewQueryService(nil)
+	_, err = application.SearchOperatorCodebase(context.Background(), authorized, continuationSpec)
+	require.ErrorIs(t, err, semanticFailure)
+	require.Len(t, lexical.calls, 1, "semantic failure must not fall back to FTS")
 }
 
 func newWorkerUCIApplicationEmbeddingProvider(t *testing.T, input workerUCIApplicationEmbeddingProviderInput) *httptest.Server {
@@ -1191,4 +1363,131 @@ func (workerUCIApplicationFailingExposureStore) AppendExposure(context.Context, 
 
 func (workerUCIApplicationFailingExposureStore) AppendCompletion(context.Context, uci.CompletionEvidence) (uci.CompletionEvidence, error) {
 	return uci.CompletionEvidence{}, errors.New("fixture completion append failed")
+}
+
+type workerUCIApplicationQueryStore struct {
+	calls []uci.QuerySpec
+}
+
+func (store *workerUCIApplicationQueryStore) SelectCandidates(_ context.Context, _ uci.AuthorizedContext, spec uci.QuerySpec) (uci.QueryStoreResult, error) {
+	store.calls = append(store.calls, spec)
+	return uci.QueryStoreResult{Coverage: uci.IndexCoverageComplete}, nil
+}
+
+type workerUCIApplicationSemanticStore struct {
+	candidates []uci.SemanticCandidate
+	calls      []uci.QuerySpec
+	err        error
+}
+
+func (*workerUCIApplicationSemanticStore) LookupCandidateEmbedding(context.Context, uci.AuthorizedContext, uci.VectorProfile, uci.QueryCandidate) ([]float32, bool, error) {
+	return nil, false, nil
+}
+
+func (*workerUCIApplicationSemanticStore) StoreCandidateEmbedding(context.Context, uci.AuthorizedContext, uci.VectorProfile, uci.QueryCandidate, []float32) error {
+	return nil
+}
+
+func (store *workerUCIApplicationSemanticStore) SelectHybridCandidates(_ context.Context, _ uci.AuthorizedContext, _ uci.VectorProfile, _ []float32, spec uci.QuerySpec) (uci.SemanticStoreResult, error) {
+	store.calls = append(store.calls, spec)
+	if store.err != nil {
+		return uci.SemanticStoreResult{}, store.err
+	}
+	if spec.Offset >= len(store.candidates) {
+		return uci.SemanticStoreResult{Coverage: uci.IndexCoverageComplete, VectorCoverage: 1}, nil
+	}
+	end := spec.Offset + spec.Limit + 1
+	if end > len(store.candidates) {
+		end = len(store.candidates)
+	}
+	return uci.SemanticStoreResult{
+		Candidates:     store.candidates[spec.Offset:end],
+		Coverage:       uci.IndexCoverageComplete,
+		VectorCoverage: 1,
+	}, nil
+}
+
+type workerUCIApplicationEmbedder struct {
+	model string
+}
+
+func (embedder *workerUCIApplicationEmbedder) Model() string {
+	return embedder.model
+}
+
+func (*workerUCIApplicationEmbedder) Embed(context.Context, []string) ([][]float32, error) {
+	vector := make([]float32, embedding.EmbeddingDim)
+	vector[0] = 1
+	return [][]float32{vector}, nil
+}
+
+type workerUCIApplicationStatusStore struct {
+	snapshot uci.IndexStatusSnapshot
+	err      error
+}
+
+func (store *workerUCIApplicationStatusStore) LoadIndexStatus(context.Context, uci.AuthorizedContext, *uci.VectorProfile) (uci.IndexStatusSnapshot, error) {
+	return store.snapshot.Clone(), store.err
+}
+
+func workerUCIApplicationSemanticCandidate(ref uci.ContextRef, artifactID, name, path string) uci.SemanticCandidate {
+	text := "func " + name + "() {}"
+	return uci.SemanticCandidate{Candidate: uci.QueryCandidate{
+		Context: ref,
+		Proof: uci.IndexArtifactProof{
+			ArtifactID:      artifactID,
+			ContentDigest:   uci.IndexDigest(workerUCIApplicationDigest(text)),
+			FactsDigest:     uci.IndexDigest(workerUCIApplicationDigest("facts:" + text)),
+			DefinitionCount: 1,
+			ChunkCount:      1,
+		},
+		EntityKey:    "symbol:" + name,
+		LocalName:    name,
+		RelativePath: path,
+		Span:         uci.IndexSpan{ByteStart: 0, ByteEnd: int64(len(text)), LineStart: 1, LineEnd: 1},
+		Text:         text,
+		Kind:         uci.QueryItemCode,
+		Language:     "go",
+		Score:        1,
+	}, MatchSources: []uci.QueryMatchSource{uci.QueryMatchVector}}
+}
+
+func workerUCIApplicationStatusSnapshot(ref uci.ContextRef, embeddingCoverage uci.IndexCoverageState) uci.IndexStatusSnapshot {
+	zero := int64(0)
+	profileID := "72000000-0000-4000-8000-000000000001"
+	jobState := uci.IndexStatusJobQueued
+	ready, pending := uint64(1), uint64(1)
+	if embeddingCoverage == uci.IndexCoverageComplete {
+		jobState = uci.IndexStatusJobSucceeded
+		ready, pending = 2, 0
+	}
+	started := time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
+	return uci.IndexStatusSnapshot{
+		Context:             ref,
+		SourceState:         uci.IndexStatusSourceActive,
+		CheckoutState:       uci.IndexStatusCheckoutWatching,
+		ViewState:           uci.IndexStatusViewPublished,
+		CurrentViewRelation: uci.IndexStatusCurrentViewSelected,
+		ObservedFSSeq:       ref.Generation,
+		Coverage:            uci.IndexCoverage{Structural: uci.IndexCoverageComplete, Lexical: uci.IndexCoverageComplete, Vector: embeddingCoverage},
+		PublishedAt:         started.Add(time.Minute),
+		ScanStartedAt:       started,
+		ScanCompletedAt:     started.Add(30 * time.Second),
+		ChunkCount:          2,
+		ReadyEmbeddingCount: ready,
+		Embedding: uci.EmbeddingStatus{
+			EmbeddingProfileID: &profileID,
+			Coverage:           embeddingCoverage,
+			TotalCandidates:    2,
+			ReadyCandidates:    ready,
+			PendingJobs:        pending,
+			JobState:           &jobState,
+		},
+		Freshness: uci.QueryFreshness{
+			State:               uci.QueryFreshnessObservedCurrent,
+			Method:              uci.QueryFreshnessWatchWatermark,
+			PendingChanges:      &zero,
+			EnrichmentWatermark: uci.QueryEnrichmentWatermark{Sequence: ref.Generation, State: uci.QueryEnrichmentCurrent},
+		},
+	}
 }
