@@ -39,6 +39,8 @@ type BrowserCodeContextCatalogEntry struct {
 	CheckoutLabel        string
 	Context              *uci.ContextRef
 	ViewLabel            string
+	SnapshotRevision     *string
+	SnapshotPublishedAt  *time.Time
 	IndexIntentAvailable bool
 }
 
@@ -164,7 +166,7 @@ func (s *BrowserCodeContextStore) ListCatalog(ctx context.Context, subjectUserID
 			source.display_name AS source_label,
 			browser_grant.checkout_id,
 			checkout.kind AS checkout_kind,
-			checkout.kind || ' · ' || checkout.checkout_id::text AS checkout_label,
+			COALESCE(checkout.display_name, '') AS checkout_label,
 			view_row.view_id,
 			view_row.profile_id,
 			view_row.generation,
@@ -173,7 +175,9 @@ func (s *BrowserCodeContextStore) ListCatalog(ctx context.Context, subjectUserID
 				WHEN view_row.ref_label IS NOT NULL THEN view_row.ref_label
 				WHEN view_row.head_oid IS NULL THEN 'unborn'
 				ELSE 'detached'
-			END AS view_label
+			END AS view_label,
+			view_row.head_oid AS snapshot_revision,
+			view_row.published_at AS snapshot_published_at
 		FROM browser_read_grants AS browser_grant
 		JOIN users AS subject ON subject.id = browser_grant.subject_user_id
 		JOIN sources AS source
@@ -421,19 +425,21 @@ func (s *BrowserCodeContextStore) AdvanceContinuation(ctx context.Context, curso
 }
 
 type browserCodeContextCatalogRow struct {
-	SourceID      string  `gorm:"column:source_id"`
-	SourceLabel   string  `gorm:"column:source_label"`
-	CheckoutID    string  `gorm:"column:checkout_id"`
-	CheckoutKind  string  `gorm:"column:checkout_kind"`
-	CheckoutLabel string  `gorm:"column:checkout_label"`
-	ViewID        *string `gorm:"column:view_id"`
-	ProfileID     *string `gorm:"column:profile_id"`
-	Generation    *int64  `gorm:"column:generation"`
-	ViewLabel     *string `gorm:"column:view_label"`
+	SourceID            string     `gorm:"column:source_id"`
+	SourceLabel         string     `gorm:"column:source_label"`
+	CheckoutID          string     `gorm:"column:checkout_id"`
+	CheckoutKind        string     `gorm:"column:checkout_kind"`
+	CheckoutLabel       string     `gorm:"column:checkout_label"`
+	ViewID              *string    `gorm:"column:view_id"`
+	ProfileID           *string    `gorm:"column:profile_id"`
+	Generation          *int64     `gorm:"column:generation"`
+	ViewLabel           *string    `gorm:"column:view_label"`
+	SnapshotRevision    *string    `gorm:"column:snapshot_revision"`
+	SnapshotPublishedAt *time.Time `gorm:"column:snapshot_published_at"`
 }
 
 func (row browserCodeContextCatalogRow) catalogEntry() (BrowserCodeContextCatalogEntry, error) {
-	if validateUCIUUID("source_id", row.SourceID) != nil || validateUCIUUID("checkout_id", row.CheckoutID) != nil || !validUCIContextDisplayLabel(row.SourceLabel) || !isUCICheckoutKind(UCICheckoutKind(row.CheckoutKind)) || !validUCIContextDisplayLabel(row.CheckoutLabel) {
+	if validateUCIUUID("source_id", row.SourceID) != nil || validateUCIUUID("checkout_id", row.CheckoutID) != nil || !validUCIContextDisplayLabel(row.SourceLabel) || !isUCICheckoutKind(UCICheckoutKind(row.CheckoutKind)) || !validBrowserCodeCheckoutDisplayLabel(row.CheckoutLabel) {
 		return BrowserCodeContextCatalogEntry{}, ErrBrowserCodeContextDenied
 	}
 	entry := BrowserCodeContextCatalogEntry{
@@ -443,10 +449,10 @@ func (row browserCodeContextCatalogRow) catalogEntry() (BrowserCodeContextCatalo
 		CheckoutLabel:        row.CheckoutLabel,
 		IndexIntentAvailable: row.ViewID == nil,
 	}
-	if row.ViewID == nil && row.ProfileID == nil && row.Generation == nil && row.ViewLabel == nil {
+	if row.ViewID == nil && row.ProfileID == nil && row.Generation == nil && row.ViewLabel == nil && row.SnapshotRevision == nil && row.SnapshotPublishedAt == nil {
 		return entry, nil
 	}
-	if row.ViewID == nil || row.ProfileID == nil || row.Generation == nil || row.ViewLabel == nil || validateUCIUUID("view_id", *row.ViewID) != nil || validateUCIUUID("profile_id", *row.ProfileID) != nil || *row.Generation < 1 || !validUCIContextDisplayLabel(*row.ViewLabel) {
+	if row.ViewID == nil || row.ProfileID == nil || row.Generation == nil || row.ViewLabel == nil || row.SnapshotPublishedAt == nil || validateUCIUUID("view_id", *row.ViewID) != nil || validateUCIUUID("profile_id", *row.ProfileID) != nil || *row.Generation < 1 || !validUCIContextDisplayLabel(*row.ViewLabel) || (row.SnapshotRevision != nil && !validBrowserCodeText(*row.SnapshotRevision, 128)) || row.SnapshotPublishedAt.IsZero() {
 		return BrowserCodeContextCatalogEntry{}, ErrBrowserCodeContextDenied
 	}
 	entry.Context = &uci.ContextRef{
@@ -457,6 +463,8 @@ func (row browserCodeContextCatalogRow) catalogEntry() (BrowserCodeContextCatalo
 		Generation:        *row.Generation,
 	}
 	entry.ViewLabel = *row.ViewLabel
+	entry.SnapshotRevision = row.SnapshotRevision
+	entry.SnapshotPublishedAt = row.SnapshotPublishedAt
 	return entry, nil
 }
 
@@ -706,6 +714,17 @@ func validBrowserCodeDigest(value string) bool {
 		}
 	}
 	return true
+}
+
+func validBrowserCodeCheckoutDisplayLabel(value string) bool {
+	if value == "" {
+		return true
+	}
+	if !validUCIContextDisplayLabel(value) || strings.ContainsAny(value, `/\\`) {
+		return false
+	}
+	_, err := uuid.Parse(value)
+	return err != nil
 }
 
 func validBrowserCodeText(value string, maximum int) bool {

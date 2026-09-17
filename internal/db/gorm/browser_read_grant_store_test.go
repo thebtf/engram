@@ -175,6 +175,117 @@ func TestBrowserReadGrantStore_RequiresExactSourceOwnerAndAuditsAtomically(t *te
 	require.False(t, canRead)
 }
 
+func TestBrowserReadGrantStore_OwnerChoicesRequireExactOwnerAndKeepLabelsNonAuthorizing(t *testing.T) {
+	fixture := newBrowserReadGrantFixture(t)
+	ctx := context.Background()
+	ownerPrincipal := browserReadGrantPrincipal(fixture.owner.ID)
+
+	choices, err := fixture.store.ListOwnerChoices(ctx, fixture.owner.ID, ownerPrincipal)
+	require.NoError(t, err)
+	var choice BrowserReadGrantOwnerChoice
+	for _, candidate := range choices {
+		if candidate.ChoiceRef == fixture.checkout.CheckoutID {
+			choice = candidate
+			break
+		}
+	}
+	require.Equal(t, fixture.checkout.CheckoutID, choice.ChoiceRef)
+	require.Equal(t, fixture.source.DisplayName, choice.RepositoryLabel)
+	require.Empty(t, choice.WorkingCopyLabel, "existing checkout rows stay unnamed until their owner supplies display metadata")
+	require.NotContains(t, choice.RepositoryLabel, fixture.checkout.LocatorRef)
+	require.NotContains(t, choice.WorkingCopyLabel, fixture.checkout.CheckoutID)
+
+	canRead, err := fixture.store.CanRead(ctx, fixture.target.ID, fixture.source.SourceID, fixture.checkout.CheckoutID)
+	require.NoError(t, err)
+	require.False(t, canRead, "a human label must never create browser code-read authority")
+
+	grant, err := fixture.store.IssueOwnerChoice(ctx, BrowserReadGrantOwnerIssue{
+		IssuerUserID:    fixture.owner.ID,
+		IssuerPrincipal: ownerPrincipal,
+		TargetUserID:    fixture.target.ID,
+		ChoiceRef:       choice.ChoiceRef,
+	})
+	require.NoError(t, err)
+	assertBrowserReadGrantAuditCount(t, fixture.db, "code_grant_issued", 1)
+
+	labeled, err := fixture.store.SetOwnerChoiceLabel(ctx, fixture.owner.ID, ownerPrincipal, choice.ChoiceRef, "Studio workstation · release candidate")
+	require.NoError(t, err)
+	require.Equal(t, "Studio workstation · release candidate", labeled.WorkingCopyLabel)
+	assertBrowserReadGrantAuditCount(t, fixture.db, "code_checkout_labeled", 1)
+
+	require.NoError(t, fixture.db.Model(&User{}).Where("id = ?", fixture.other.ID).Update("role", DashboardRoleAdmin).Error)
+	adminPrincipal := browserReadGrantPrincipal(fixture.other.ID)
+	_, err = fixture.store.IssueOwnerChoice(ctx, BrowserReadGrantOwnerIssue{
+		IssuerUserID:    fixture.other.ID,
+		IssuerPrincipal: adminPrincipal,
+		TargetUserID:    fixture.target.ID,
+		ChoiceRef:       choice.ChoiceRef,
+	})
+	require.ErrorIs(t, err, ErrBrowserReadGrantDenied, "administrator role cannot substitute for exact owner principal")
+	_, err = fixture.store.SetOwnerChoiceLabel(ctx, fixture.other.ID, adminPrincipal, choice.ChoiceRef, "Admin workstation")
+	require.ErrorIs(t, err, ErrBrowserReadGrantDenied)
+
+	_, err = fixture.store.Revoke(ctx, fixture.owner.ID, ownerPrincipal, grant.GrantRef)
+	require.NoError(t, err)
+	assertBrowserReadGrantAuditCount(t, fixture.db, "code_grant_revoked", 1)
+	canRead, err = fixture.store.CanRead(ctx, fixture.target.ID, fixture.source.SourceID, fixture.checkout.CheckoutID)
+	require.NoError(t, err)
+	require.False(t, canRead)
+
+	choices, err = fixture.store.ListOwnerChoices(ctx, fixture.owner.ID, ownerPrincipal)
+	require.NoError(t, err)
+	for _, candidate := range choices {
+		if candidate.ChoiceRef == choice.ChoiceRef {
+			choice = candidate
+			break
+		}
+	}
+	require.Equal(t, "Studio workstation · release candidate", choice.WorkingCopyLabel, "checkout metadata must survive grant revocation")
+
+	reissued, err := fixture.store.IssueOwnerChoice(ctx, BrowserReadGrantOwnerIssue{
+		IssuerUserID:    fixture.owner.ID,
+		IssuerPrincipal: ownerPrincipal,
+		TargetUserID:    fixture.target.ID,
+		ChoiceRef:       choice.ChoiceRef,
+	})
+	require.NoError(t, err)
+	require.Equal(t, grant.GrantRef, reissued.GrantRef, "reissue restores the same exact grant tuple")
+	assertBrowserReadGrantAuditCount(t, fixture.db, "code_grant_issued", 2)
+	choices, err = fixture.store.ListOwnerChoices(ctx, fixture.owner.ID, ownerPrincipal)
+	require.NoError(t, err)
+	for _, candidate := range choices {
+		if candidate.ChoiceRef == choice.ChoiceRef {
+			choice = candidate
+			break
+		}
+	}
+	require.Equal(t, "Studio workstation · release candidate", choice.WorkingCopyLabel, "checkout metadata must be independent of grant lifecycle")
+}
+
+func TestBrowserReadGrantStore_OwnerChoicesReturnDeterministicFirstPage(t *testing.T) {
+	fixture := newBrowserReadGrantFixture(t)
+	ctx := context.Background()
+	contexts := NewUCIContextStore(fixture.db)
+	ownerPrincipal := browserReadGrantPrincipal(fixture.owner.ID)
+	for index := 0; index <= browserReadGrantOwnerChoiceMax; index++ {
+		_, err := contexts.RegisterCheckout(ctx, RegisterCheckoutInput{
+			SourceID:       fixture.source.SourceID,
+			WorkstationID:  fmt.Sprintf("owner-choice-bound-%03d", index),
+			Kind:           UCICheckoutWorkingTree,
+			OwnerPrincipal: ownerPrincipal,
+			LocatorRef:     fmt.Sprintf("owner-choice-bound-locator-%03d", index),
+		})
+		require.NoError(t, err)
+	}
+
+	first, err := fixture.store.ListOwnerChoices(ctx, fixture.owner.ID, ownerPrincipal)
+	require.NoError(t, err)
+	require.Len(t, first, browserReadGrantOwnerChoiceMax)
+	second, err := fixture.store.ListOwnerChoices(ctx, fixture.owner.ID, ownerPrincipal)
+	require.NoError(t, err)
+	require.Equal(t, first, second, "stable ordering must return the same bounded first page")
+}
+
 func TestBrowserReadGrantStore_AuditFailureRollsBackIssue(t *testing.T) {
 	fixture := newBrowserReadGrantFixture(t)
 	ctx := context.Background()
@@ -249,6 +360,7 @@ func TestBrowserReadGrantStore_ExpiresOnRead(t *testing.T) {
 func newBrowserReadGrantFixture(t *testing.T) browserReadGrantFixture {
 	t.Helper()
 	db := openBrowserReadGrantTestDB(t)
+	require.NoError(t, workspaceCatalogMigration182().Migrate(db))
 	token := strings.ReplaceAll(uuid.NewString(), "-", "")
 	now := time.Now().UTC()
 	createUser := func(label string, disabled bool) *User {
