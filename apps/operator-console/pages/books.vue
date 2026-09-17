@@ -2,18 +2,19 @@
 import { useOperatorBooks } from '../composables/useOperatorBooks'
 
 const retirement = useOperatorBooks()
+const { t } = useI18n()
 </script>
 
 <template>
   <main class="retirement-page" :data-state="retirement.state">
     <header>
-      <h1>Plaintext book intake retired</h1>
-      <p>{{ retirement.message }}</p>
+      <h1>{{ t('retirement.books.title') }}</h1>
+      <p>{{ t('retirement.books.message') }}</p>
     </header>
     <section role="status" aria-live="polite">
-      <strong>Historical data is unchanged.</strong>
-      <p>New plaintext uploads and processing are no longer available.</p>
-      <NuxtLink :to="retirement.documentsHref">Open Documents</NuxtLink>
+      <strong>{{ t('retirement.historicalData') }}</strong>
+      <p>{{ t('retirement.books.actionsUnavailable') }}</p>
+      <NuxtLink :to="retirement.documentsHref">{{ t('retirement.documentsLink') }}</NuxtLink>
     </section>
   </main>
 </template>

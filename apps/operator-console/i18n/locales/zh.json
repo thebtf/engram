@@ -126,6 +126,7 @@
     "collapseNav": "折叠导航",
     "expandNav": "展开导航",
     "mobileMenu": "菜单",
+    "closeMenu": "关闭菜单",
     "searchPlaceholder": "在控制台中搜索…",
     "density": "密度",
     "densityComfortable": "宽松",
@@ -2255,6 +2256,20 @@
         "title": "有更新的快照",
         "body": "当前答案会保留在固定快照中，直到您明确切换。"
       }
+    }
+  },
+  "retirement": {
+    "historicalData": "历史数据保持不变。",
+    "documentsLink": "打开文档",
+    "graph": {
+      "title": "知识图谱编辑已停用",
+      "message": "手动知识图谱编辑已停用。历史图谱记录仍可通过现有的使用界面读取。",
+      "actionsUnavailable": "不再提供手动创建和删除图谱的操作。"
+    },
+    "books": {
+      "title": "纯文本书籍导入已停用",
+      "message": "纯文本书籍导入已停用。历史文档及其来源信息仍然可用。",
+      "actionsUnavailable": "不再提供新的纯文本上传和处理。"
     }
   }
 }

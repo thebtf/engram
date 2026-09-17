@@ -319,7 +319,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
       </div>
     </nav>
 
-    <button v-if="mobileNavOpen" class="nav-scrim" :aria-label="t('shell.mobileMenu')" @click="closeMobileNav" />
+    <button v-if="mobileNavOpen" class="nav-scrim" type="button" :aria-label="t('shell.closeMenu')" @click="closeMobileNav" />
 
     <header class="topbar" :inert="compactViewport && mobileNavOpen">
       <button ref="mobileMenuButton" class="tbtn mobile-menu-button" type="button" :aria-label="t('shell.mobileMenu')" :aria-expanded="mobileNavOpen" aria-controls="primary-navigation" @click="toggleMobileNav">☰</button>

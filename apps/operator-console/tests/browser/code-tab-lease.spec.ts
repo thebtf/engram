@@ -59,6 +59,59 @@ test('Code Explorer renews its live tab lease and leaves no renewal timer after 
     { document_proof: DOCUMENT_PROOF },
   ])
 })
+
+test('Code Explorer resynchronizes a completed selection after catalog refresh while retaining a later partial choice', async ({ page }) => {
+  let contextRequests = 0
+  const initialCatalog = {
+    contexts: [{
+      repository: 'Engram',
+      working_copy: 'stale candidate checkout',
+      indexed_snapshot: { label: 'Stale candidate snapshot', revision: '1a9dad0', published_at: '2026-09-17T00:00:00Z' },
+      selection_ref: 'context-current',
+      index_intent_available: false,
+    }, {
+      repository: 'Other repository',
+      working_copy: 'manual checkout',
+      indexed_snapshot: { label: 'Manual snapshot', revision: '1a9dad1', published_at: '2026-09-17T00:01:00Z' },
+      selection_ref: 'context-manual',
+      index_intent_available: false,
+    }],
+  }
+  const refreshedCatalog = {
+    contexts: [{
+      repository: 'Engram',
+      working_copy: 'refreshed candidate checkout',
+      indexed_snapshot: { label: 'Refreshed candidate snapshot', revision: '1a9dad2', published_at: '2026-09-17T00:02:00Z' },
+      selection_ref: 'context-current',
+      index_intent_available: false,
+    }, initialCatalog.contexts[1]],
+  }
+
+  await page.route('**/api/code/**', async (route: Route) => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/code/tabs/handshake') {
+      await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'resume-current', reload_token: 'reload-current' } })
+      return
+    }
+    if (pathname === '/api/code/contexts') {
+      await route.fulfill({ json: contextRequests++ === 0 ? initialCatalog : refreshedCatalog })
+      return
+    }
+    await route.fulfill({ status: 500 })
+  })
+
+  await page.goto('/code', { waitUntil: 'domcontentloaded' })
+  await page.getByTestId('code-context-repository').selectOption({ label: 'Engram' })
+  await page.getByTestId('code-context-working-copy').selectOption({ label: 'stale candidate checkout' })
+  await page.getByTestId('code-context-snapshot').selectOption({ label: 'Stale candidate snapshot' })
+  await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
+  await expect(page.getByTestId('code-context-working-copy')).toHaveValue('refreshed candidate checkout')
+  await expect(page.getByTestId('code-context-snapshot')).toHaveValue('context-current')
+
+  await page.getByTestId('code-context-repository').selectOption({ label: 'Other repository' })
+  await expect(page.getByTestId('code-context-repository')).toHaveValue('Other repository')
+  await expect(page.getByTestId('code-context-working-copy')).toHaveValue('')
+})
 test('Code Explorer resumes a same-document SPA remount but isolates copied storage', async ({ page }) => {
   const handshakePayloads: unknown[] = []
   const resumePayloads: unknown[] = []

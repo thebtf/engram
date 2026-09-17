@@ -64,7 +64,7 @@ function chooseWorkingCopy(event: Event): void {
 }
 
 function chooseSnapshot(event: Event): void {
-  selectionDirty.value = true
+  selectionDirty.value = false
   snapshotRef.value = (event.target as HTMLSelectElement).value
   const selected = snapshotEntries.value.find((entry) => entry.view?.selectionRef === snapshotRef.value)?.view ?? null
   emit('select', selected)

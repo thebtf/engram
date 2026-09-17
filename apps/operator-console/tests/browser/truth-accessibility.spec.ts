@@ -179,9 +179,9 @@ test('Access 404 and 500 render localized diagnosis, technical evidence stays se
 
 test('Graph bookmark reports retirement without a manual editor', async ({ page }) => {
  await page.goto('/graph')
- await expect(page.getByRole('heading', { name: 'Knowledge graph editing retired' })).toBeVisible()
+ await expect(page.getByRole('heading', { name: 'Редактирование графа знаний упразднено' })).toBeVisible()
  await expect(page.locator('.retirement-page').locator('input, select, textarea, button')).toHaveCount(0)
- await expect(page.getByRole('link', { name: 'Open Documents' })).toHaveAttribute('href', '/documents')
+ await expect(page.getByRole('link', { name: 'Открыть документы' })).toHaveAttribute('href', '/documents')
 })
 
 
@@ -320,7 +320,7 @@ test('Settings stays reachable at 200% zoom without hidden focus targets or hori
 
 test('Books bookmark reports retirement without a plaintext uploader', async ({ page }) => {
  await page.goto('/books')
- await expect(page.getByRole('heading', { name: 'Plaintext book intake retired' })).toBeVisible()
- await expect(page.locator('input, textarea, input[type="file"], button')).toHaveCount(0)
- await expect(page.getByRole('link', { name: 'Open Documents' })).toHaveAttribute('href', '/documents')
+ await expect(page.getByRole('heading', { name: 'Приём текстовых книг упразднён' })).toBeVisible()
+ await expect(page.locator('.retirement-page').locator('input, textarea, input[type="file"], button')).toHaveCount(0)
+ await expect(page.getByRole('link', { name: 'Открыть документы' })).toHaveAttribute('href', '/documents')
 })

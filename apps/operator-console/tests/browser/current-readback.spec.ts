@@ -21,11 +21,22 @@ test('books bookmark exposes retirement without plaintext admission', async ({ p
  })
 
  await page.goto('/books')
- await expect(page.getByRole('heading', { name: 'Plaintext book intake retired' })).toBeVisible()
+ await expect(page.getByRole('heading', { name: 'Приём текстовых книг упразднён' })).toBeVisible()
  await expect(page.locator('.retirement-page').locator('input, textarea, input[type="file"]')).toHaveCount(0)
- await expect(page.getByRole('link', { name: 'Open Documents' })).toHaveAttribute('href', '/documents')
- expect(writerRequests).toEqual([])
+ await expect(page.getByRole('link', { name: 'Открыть документы' })).toHaveAttribute('href', '/documents')
  expect(failures).toEqual([])
+
+ await page.goto('/settings')
+ await page.getByRole('dialog').getByRole('button', { name: 'English' }).click()
+ await page.goto('/books')
+ await expect(page.getByRole('heading', { name: 'Plaintext book intake retired' })).toBeVisible()
+
+ await page.goto('/settings')
+ await page.getByRole('dialog').getByRole('button', { name: '中文' }).click()
+ await page.goto('/books')
+ await expect(page.getByRole('heading', { name: '纯文本书籍导入已停用' })).toBeVisible()
+ expect(writerRequests).toEqual([])
+
 })
 
 test('rules create and selection update round-trip through current control-plane routes', async ({ page }) => {

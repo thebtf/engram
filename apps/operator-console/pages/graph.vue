@@ -2,18 +2,19 @@
 import { useOperatorGraph } from '../composables/useOperatorGraph'
 
 const retirement = useOperatorGraph()
+const { t } = useI18n()
 </script>
 
 <template>
   <main class="retirement-page" :data-state="retirement.state">
     <header>
-      <h1>Knowledge graph editing retired</h1>
-      <p>{{ retirement.message }}</p>
+      <h1>{{ t('retirement.graph.title') }}</h1>
+      <p>{{ t('retirement.graph.message') }}</p>
     </header>
     <section role="status" aria-live="polite">
-      <strong>Historical data is unchanged.</strong>
-      <p>Manual graph create and delete actions are no longer available.</p>
-      <NuxtLink :to="retirement.documentsHref">Open Documents</NuxtLink>
+      <strong>{{ t('retirement.historicalData') }}</strong>
+      <p>{{ t('retirement.graph.actionsUnavailable') }}</p>
+      <NuxtLink :to="retirement.documentsHref">{{ t('retirement.documentsLink') }}</NuxtLink>
     </section>
   </main>
 </template>

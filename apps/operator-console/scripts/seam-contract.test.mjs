@@ -32,6 +32,7 @@ const chunkReloadPluginPath = join(root, 'plugins', 'chunk-reload.client.ts')
 const ruLocalePath = join(root, 'i18n', 'locales', 'ru.json')
 const enLocalePath = join(root, 'i18n', 'locales', 'en.json')
 const zhLocalePath = join(root, 'i18n', 'locales', 'zh.json')
+const codeContextPickerPath = join(root, 'components', 'code', 'CodeContextPicker.vue')
 
 function read(path) {
   return readFileSync(path, 'utf8')
@@ -79,16 +80,28 @@ test('responsive primary navigation is an accessible <=980px off-canvas control'
   const source = read(defaultLayoutPath)
 
   assert.match(source, /@media \(max-width:980px\)/, 'off-canvas navigation must activate at the required 980px breakpoint')
-  assert.match(source, /\.topbar \.mobile-menu-button \{ display:inline-flex; \}/, 'the mobile trigger must override the desktop selector')
+  assert.match(source, /\.topbar \.mobile-menu-button \{ display:inline-flex;/, 'the mobile trigger must override the desktop selector')
   assert.match(source, /:aria-expanded="mobileNavOpen"/, 'the trigger must expose its open state')
   assert.match(source, /aria-controls="primary-navigation"/, 'the trigger must identify the controlled navigation')
   assert.match(source, /function closeMobileNav\(/, 'the shared close path must exist')
   assert.match(source, /event\.key === 'Escape'[\s\S]*closeMobileNav\(\)/, 'Escape must close the drawer')
+  assert.match(source, /:aria-label="t\('shell\.closeMenu'\)"/, 'the scrim must announce that it closes the menu')
   assert.match(source, /@click="closeMobileNav"/, 'route and scrim interactions must close the drawer')
   assert.match(source, /mobileMenuButton\.value\?\.focus\(\)/, 'closing must restore trigger focus')
   assert.match(source, /:inert="compactViewport && !mobileNavOpen"/, 'hidden mobile navigation must not remain interactable')
   assert.match(source, /\.topbar-secondary \{ display:none; \}/, 'secondary topbar controls must not clip the mobile menu and search')
   assert.match(source, /onBeforeUnmount\(\(\) => \{[\s\S]*document\.body\.style\.overflow = previousBodyOverflow\.value/, 'layout teardown must restore body scroll when the drawer is open')
+})
+
+test('completed Workspace selections resynchronize after catalog refresh without overwriting partial choices', () => {
+  const source = read(codeContextPickerPath)
+  const repositoryChoice = functionBody(source, 'chooseRepository')
+  const workingCopyChoice = functionBody(source, 'chooseWorkingCopy')
+  const snapshotChoice = functionBody(source, 'chooseSnapshot')
+
+  assert.match(repositoryChoice, /selectionDirty\.value = true/, 'partial repository choices must remain protected from parent synchronization')
+  assert.match(workingCopyChoice, /selectionDirty\.value = true/, 'partial working-copy choices must remain protected from parent synchronization')
+  assert.match(snapshotChoice, /selectionDirty\.value = false/, 'a completed snapshot selection must allow refreshed candidate or pinned context to synchronize the selectors')
 })
 
 

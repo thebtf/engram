@@ -126,6 +126,7 @@
     "collapseNav": "Collapse navigation",
     "expandNav": "Expand navigation",
     "mobileMenu": "Menu",
+    "closeMenu": "Close menu",
     "searchPlaceholder": "Search the console…",
     "density": "Density",
     "densityComfortable": "Comfort",
@@ -2570,6 +2571,20 @@
         "title": "Newer snapshot available",
         "body": "The current answer stays in its pinned snapshot until you explicitly switch."
       }
+    }
+  },
+  "retirement": {
+    "historicalData": "Historical data is unchanged.",
+    "documentsLink": "Open Documents",
+    "graph": {
+      "title": "Knowledge graph editing retired",
+      "message": "Manual knowledge-graph editing has been retired. Historical graph records remain readable through their existing consumers.",
+      "actionsUnavailable": "Manual graph create and delete actions are no longer available."
+    },
+    "books": {
+      "title": "Plaintext book intake retired",
+      "message": "Plaintext book intake has been retired. Historical Documents and provenance remain available.",
+      "actionsUnavailable": "New plaintext uploads and processing are no longer available."
     }
   }
 }
