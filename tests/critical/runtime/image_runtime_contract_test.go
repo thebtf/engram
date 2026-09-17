@@ -983,22 +983,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 			t.Fatalf("latest promoter must validate Docker Publish through latest-release v/sha OCI equality before registry login: %q", required)
 		}
 	}
-	promotionReceipt := "" +
-		"            $latest.Add($observed)\n" +
-		"            [ordered]@{ images = $latest } |\n" +
-		"              ConvertTo-Json -Depth 5 |\n" +
-		"              Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'latest.json') -Encoding utf8NoBOM"
-	if recoverablePromotion {
-		promotionReceipt = "" +
-			"              $updatedLatest.Add($observed)\n" +
-			"              $promotion.updated_latest_images = $updatedLatest.ToArray()\n" +
-			"              [ordered]@{ images = $updatedLatest.ToArray() } |\n" +
-			"                ConvertTo-Json -Depth 5 |\n" +
-			"                Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'latest.json') -Encoding utf8NoBOM"
-	}
-	if (recoverablePromotion && !strings.Contains(latest, "$updatedLatest = [System.Collections.Generic.List[object]]::new()")) || (!recoverablePromotion && !strings.Contains(latest, "$latest = [System.Collections.Generic.List[object]]::new()")) || !strings.Contains(latest, promotionReceipt) {
-		t.Fatal("latest promoter must persist every successful promotion for its always receipt")
-	}
+	testLatestPromotionPersistence(t, latest)
 	if recoverablePromotion {
 		for _, required := range []string{
 			"$previousLatest.Add($previous)", "$rollbackTargets.Add($previous)",
@@ -1036,6 +1021,51 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 		if strings.Contains(latest, forbidden) {
 			t.Fatalf("latest promoter exposes a forbidden trigger, mutable source, build, or production surface %q", forbidden)
 		}
+	}
+}
+
+func testLatestPromotionPersistence(t *testing.T, latest string) {
+	t.Helper()
+
+	workflowBlob := gitBlobID(latest)
+	recoverablePromotion := workflowBlob == "e86147c7409dea57fda2664a1b60f90bdd39dcca" || workflowBlob == "a187d7e57bd4f7ff68534dc96872cdce1a53b43a"
+	persistenceSteps := []string{
+		"$updatedLatest = [System.Collections.Generic.List[object]]::new()",
+		"$updatedLatest.Add($observed)",
+		"$promotion.updated_latest_images = $updatedLatest.ToArray()",
+		"[ordered]@{ images = $updatedLatest.ToArray() }",
+		"ConvertTo-Json -Depth 5",
+		"Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'latest.json') -Encoding utf8NoBOM",
+		"Write-PromotionState",
+	}
+	if !recoverablePromotion {
+		persistenceSteps = []string{
+			"$latest = [System.Collections.Generic.List[object]]::new()",
+			"$latest.Add($observed)",
+			"[ordered]@{ images = $latest }",
+			"ConvertTo-Json -Depth 5",
+			"Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'latest.json') -Encoding utf8NoBOM",
+		}
+	}
+	previousIndex := -1
+	for _, step := range persistenceSteps {
+		index := strings.Index(latest[previousIndex+1:], step)
+		if index < 0 {
+			t.Fatalf("latest promoter must persist every successful promotion in order; missing step=%q", step)
+		}
+		previousIndex += index + 1
+	}
+	if workflowBlob != "a187d7e57bd4f7ff68534dc96872cdce1a53b43a" {
+		return
+	}
+	latestWriteIndex := strings.Index(latest, "Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'latest.json') -Encoding utf8NoBOM")
+	latestTryIndex := strings.LastIndex(latest[:latestWriteIndex], "try {")
+	latestCatchIndex := latestWriteIndex + strings.Index(latest[latestWriteIndex:], "} catch {")
+	receiptFailuresIndex := strings.Index(latest, "$receiptFailures = [System.Collections.Generic.List[object]]::new()")
+	receiptFailureIndex := strings.Index(latest[latestCatchIndex:], "$receiptFailures.Add([ordered]@{ phase = 'writing_latest'") + latestCatchIndex
+	promotionFailureIndex := strings.Index(latest[receiptFailureIndex:], "$promotion.intermediate_receipt_failures = $receiptFailures.ToArray()") + receiptFailureIndex
+	if !(receiptFailuresIndex >= 0 && receiptFailuresIndex < latestTryIndex && latestTryIndex < latestWriteIndex && latestWriteIndex < latestCatchIndex && latestCatchIndex < receiptFailureIndex && receiptFailureIndex < promotionFailureIndex) {
+		t.Fatal("authority-0047 successor must best-effort record an intermediate latest receipt failure after each successful promotion")
 	}
 }
 
@@ -1116,15 +1146,16 @@ func testLatestPromotionReleaseRefGuard(t *testing.T, repo, workflow string) {
 
 func testLatestPromotionStateMatrix(t *testing.T, repo string) {
 	t.Helper()
-	workflowPath := filepath.Join(repo, "tests", "critical", "runtime", "testdata", "authority-0045-promote-latest-release-images.yml")
+	workflowPath := filepath.Join(repo, "tests", "critical", "runtime", "testdata", "authority-0047-promote-latest-release-images.yml")
 	workflow, err := os.ReadFile(workflowPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := gitBlobID(string(workflow)), "e86147c7409dea57fda2664a1b60f90bdd39dcca"; got != want {
-		t.Fatalf("authority-0047 predecessor fixture has raw blob %s, want %s", got, want)
+	if got, want := gitBlobID(string(workflow)), "a187d7e57bd4f7ff68534dc96872cdce1a53b43a"; got != want {
+		t.Fatalf("authority-0047 successor fixture has raw blob %s, want %s", got, want)
 	}
 	testLatestPromotionReleaseRefGuard(t, repo, string(workflow))
+	testLatestPromotionPersistence(t, string(workflow))
 
 	script := filepath.Join(repo, "tests", "critical", "runtime", "test-promote-latest-release-images-contract.ps1")
 	output, err := exec.Command("pwsh", "-NoProfile", "-File", script, "-WorkflowPath", workflowPath).CombinedOutput()
