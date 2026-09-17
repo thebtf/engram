@@ -338,7 +338,15 @@ function Invoke-JournalPatch
         { Write-LocalSnapshot -Snapshot $Snapshot; return $response
         }
 
-        $observed = Get-Journal -JournalId $JournalId
+        try
+        { $observed = Get-Journal -JournalId $JournalId
+        } catch
+        {
+            if ($attempt -eq 2)
+            { throw
+            }
+            $observed = Get-Journal -JournalId $JournalId
+        }
         if ([string]$observed.status -ceq 'completed')
         {
             if (Test-DesiredRunState -Run $observed -Status $status -Conclusion $Conclusion -Output $output)

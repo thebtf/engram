@@ -200,6 +200,7 @@ function Reset-Scenario([switch]$WithSources)
   $global:interruptSeen = 0
   $global:rollbackCommandFailure = $false
   $global:rollbackReadbackFailure = $false
+  $global:interruptAfterRollbackWrite = $false
   $global:rollbackGuardFault = 'none'
   $global:officialReleaseHead = $global:releaseCommit
   $global:releaseVersion = $global:releaseTag
@@ -456,6 +457,11 @@ function global:docker
     { $global:LASTEXITCODE=1; return
     }
     $global:tags[$target] = $global:immutable[$source]
+    if ($rollback -and $global:interruptAfterRollbackWrite)
+    {
+      $global:interruptAfterRollbackWrite = $false
+      throw 'simulated runner loss after rollback registry mutation'
+    }
     return
   }
   throw "unexpected docker invocation: $($Arguments -join ' ')"
@@ -603,6 +609,48 @@ try
   Seed-Journal $snapshot
   Invoke-Gate -Mode Reconcile | Out-Null
   Assert-Terminal -Outcome 'rollback_readback_error' -Conclusion 'failure'
+  Remove-Scenario
+
+  foreach ($failureState in @('rollback_failed','readback_error'))
+  {
+    Reset-Scenario; $global:scenarioCount++
+    $snapshot = New-Snapshot -Phase 'writing_latest' -Outcome 'pending' -States @('updated','captured','captured')
+    $global:tags[$snapshot.targets[0].reference] = $global:immutable[$snapshot.targets[0].intended.immutable_reference]
+    if ($failureState -ceq 'rollback_failed')
+    { $global:rollbackCommandFailure = $true
+    } else
+    { $global:rollbackReadbackFailure = $true
+    }
+    Seed-Journal $snapshot
+    $global:interruptSummary = 'rolling_back/pending'
+    $global:interruptOccurrence = 3
+    Expect-GateFailure { Invoke-Gate -Mode Reconcile -RecoveryHandoff } "recovery-emitted $failureState snapshot must be replayable after interruption"
+    Assert-That ([string](Get-JournalSnapshot).targets[0].state -ceq $failureState) "interruption must preserve the recovery-emitted $failureState snapshot"
+    Invoke-Gate -Mode Reconcile -RecoveryHandoff | Out-Null
+    Assert-Terminal -Outcome 'rolled_back' -Conclusion 'neutral'
+    $expectedWrites = if ($failureState -ceq 'rollback_failed')
+    { 2
+    } else
+    { 1
+    }
+    Assert-That ($global:registryWrites.Count -eq $expectedWrites) "replay from $failureState must perform only the necessary rollback mutation"
+    Remove-Scenario
+  }
+
+  Reset-Scenario; $global:scenarioCount++
+  $snapshot = New-Snapshot -Phase 'writing_latest' -Outcome 'pending' -States @('updated','captured','captured')
+  $global:tags[$snapshot.targets[0].reference] = $global:immutable[$snapshot.targets[0].intended.immutable_reference]
+  Seed-Journal $snapshot
+  $global:interruptAfterRollbackWrite = $true
+  Expect-GateFailure { Invoke-Gate -Mode Reconcile -RecoveryHandoff } 'rollback registry mutation must expose the pre-journal runner-loss window'
+  $interrupted = Get-JournalSnapshot
+  Assert-That ([string]$interrupted.targets[0].state -ceq 'rollback_pending') 'runner loss before the observed-state PATCH must leave rollback_pending durable'
+  Assert-That ([string]$global:tags[$snapshot.targets[0].reference].manifest_digest -ceq [string]$snapshot.targets[0].previous.manifest_digest) 'runner loss must occur after the rollback registry mutation'
+  Invoke-Gate -Mode Reconcile -RecoveryHandoff | Out-Null
+  $coherentReplay = $global:patchHistory[2].text | ConvertFrom-Json
+  Assert-That ([string]$coherentReplay.phase -ceq 'rolling_back' -and [string]$coherentReplay.targets[0].state -ceq 'restored' -and [string]$coherentReplay.rollback.outcome -ceq 'pending') 'replay must persist the observed previous digest before completion'
+  Assert-Terminal -Outcome 'rolled_back' -Conclusion 'neutral'
+  Assert-That ($global:registryWrites.Count -eq 1) 'replay must detect the previous digest and avoid a duplicate rollback mutation'
   Remove-Scenario
 
   Reset-Scenario; $global:scenarioCount++
@@ -772,15 +820,13 @@ try
   $global:patchFaultSummary = 'rolling_back/pending'
   $global:patchFaultSummaryKind = 'ambiguous'
   $global:failReadAfterPatch = $true
-  Expect-GateFailure { Invoke-Gate -Mode Reconcile -RecoveryHandoff } 'failed reread after an applied PATCH must expose a replay boundary'
-  Assert-NoUnsafeMutation
   Invoke-Gate -Mode Reconcile -RecoveryHandoff | Out-Null
   Assert-Terminal -Outcome 'rolled_back' -Conclusion 'neutral'
-  Assert-That ($global:registryWrites.Count -eq 1) 'replay after failed reread must rollback exactly once'
+  Assert-That ($global:registryWrites.Count -eq 1) 'one Reconcile must survive a transient post-PATCH reread failure and rollback exactly once'
   Remove-Scenario
 
-  Assert-That ($global:scenarioCount -eq 47) "expected 47 exhaustive scenarios, got $($global:scenarioCount)"
-  "PASS: successor E journal matrix proves distinct workflow/release heads, terminal metadata closure, every recovery PATCH replay, API guard failures, uncertain writes, and second-pass idempotence; scenarios=$($global:scenarioCount)"
+  Assert-That ($global:scenarioCount -eq 50) "expected 50 bounded recovery scenarios, got $($global:scenarioCount)"
+  "PASS: successor E journal matrix proves distinct workflow/release heads, terminal metadata closure, bounded ambiguous PATCH reread recovery, rollback failure-snapshot replay, rollback write-before-journal replay, API guard failures, uncertain writes, and completed second-pass idempotence; scenarios=$($global:scenarioCount)"
 } finally
 {
   if ($null -ne (Get-Variable temp -Scope Global -ErrorAction SilentlyContinue))
