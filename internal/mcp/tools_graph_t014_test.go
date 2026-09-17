@@ -79,6 +79,25 @@ func TestGraphToolRetainsNodeTypeReaderFilter(t *testing.T) {
 	}
 }
 
+func TestGraphToolNodeTypeFilterRejectsUnavailableFilter(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		vnext string
+	}{
+		{name: "feature disabled", vnext: ""},
+		{name: "node store missing", vnext: "true"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv("ENGRAM_VNEXT_F_ENABLED", testCase.vnext)
+			server := &Server{graphStore: &graph.Store{}}
+			_, err := server.handleGraph(context.Background(), mustMarshal(t, graphArgs{Action: "get_edges", NodeID: 1, NodeType: models.NodeTypeSkill}))
+			if err == nil || err.Error() != "node_type filter unavailable: requires ENGRAM_VNEXT_F_ENABLED=true and a wired nodes store" {
+				t.Fatalf("node_type unavailable error=%v", err)
+			}
+		})
+	}
+}
+
 type fakeNodeTypeLookup struct {
 	nodes map[int64]models.KnowledgeNode
 }

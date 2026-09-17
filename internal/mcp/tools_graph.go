@@ -75,6 +75,10 @@ func (s *Server) graphGetEdges(ctx context.Context, a graphArgs) (string, error)
 		return "", fmt.Errorf("invalid_node_type: %q is not a valid node type", a.NodeType)
 	}
 
+	if a.NodeType != "" && (!vnextFEnabled() || s.nodesStore == nil) {
+		return "", fmt.Errorf("node_type filter unavailable: requires ENGRAM_VNEXT_F_ENABLED=true and a wired nodes store")
+	}
+
 	var edges []graph.Edge
 	var err error
 	if a.MemoryID != 0 {
@@ -93,7 +97,7 @@ func (s *Server) graphGetEdges(ctx context.Context, a graphArgs) (string, error)
 	// the matching set. Cross-table lookup is required because node_type is
 	// stored in knowledge_nodes, not in knowledge_edges.
 	filtered := edges
-	if a.NodeType != "" && vnextFEnabled() {
+	if a.NodeType != "" {
 		filtered = filterEdgesByNodeType(ctx, edges, a.NodeType, s.nodesStore)
 	}
 
@@ -118,9 +122,8 @@ func (s *Server) graphGetEdges(ctx context.Context, a graphArgs) (string, error)
 //
 // Edges with no node endpoints (both NodeSourceID and NodeTargetID nil) are
 // excluded — they are memory-only edges that cannot match a node_type filter.
-// When nodesStore is nil, the filter is a no-op (returns edges unfiltered)
-// with no error: the schema validation upstream already required vnextFEnabled.
-//
+// graphGetEdges rejects requests without a configured node store before calling
+// this helper, so a requested filter never falls back to unfiltered edges.
 // Anti-stub: this replaces the prior return-unfiltered implementation.
 // TestGraphTool_T014_NodeTypeFilterOffline asserts correct filtering behaviour.
 func filterEdgesByNodeType(ctx context.Context, edges []graph.Edge, nodeType string, ns nodesLister) []graph.Edge {

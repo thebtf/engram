@@ -135,8 +135,14 @@ func (application *UCIApplication) SearchCodebase(ctx context.Context, authorize
 }
 
 func (application *UCIApplication) executeSearch(ctx context.Context, authorized uci.AuthorizedContext, spec uci.QuerySpec) (uci.QueryResult, error) {
-	if application.semanticService != nil && spec.Continuation != nil && uci.IsSemanticContinuationToken(*spec.Continuation) {
-		return application.semanticService.Query(ctx, authorized, spec)
+	if spec.Continuation != nil {
+		if uci.IsSemanticContinuationToken(*spec.Continuation) {
+			if application.semanticService == nil {
+				return uci.QueryResult{}, errors.New("UCI application semantic continuation service is not configured")
+			}
+			return application.semanticService.Query(ctx, authorized, spec)
+		}
+		return application.queryService.Query(ctx, authorized, spec)
 	}
 	if application.semanticService != nil && application.indexStatusService != nil {
 		status, err := application.indexStatusService.Status(ctx, authorized, "")

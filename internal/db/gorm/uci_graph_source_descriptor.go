@@ -150,8 +150,8 @@ func (row uciGraphReferenceDescriptorRow) spec(ref ucidomain.ContextRef, referen
 	if row.ReferenceSiteID != referenceSiteID || validateUCIUUID("reference_site_id", row.ReferenceSiteID) != nil {
 		return ucidomain.VersionedReadSpec{}, false
 	}
-	var span ucidomain.IndexSpan
-	if json.Unmarshal([]byte(row.ReferenceSpan), &span) != nil {
+	span, ok := decodeUCIIndexAdmissionSpan(row.ReferenceSpan)
+	if !ok {
 		return ucidomain.VersionedReadSpec{}, false
 	}
 	digest := strings.TrimPrefix(row.ContentDigest, "sha256:")
@@ -164,6 +164,27 @@ func (row uciGraphReferenceDescriptorRow) spec(ref ucidomain.ContextRef, referen
 		ReferenceSiteID: &copy,
 	}
 	return descriptor, descriptor.Validate() == nil
+}
+
+// decodeUCIIndexAdmissionSpan reads the persisted syntax_span representation
+// written by marshalUCIIndexAdmissionSpan. Keep the storage wire shape local:
+// IndexSpan is a domain value, not a persistence DTO.
+func decodeUCIIndexAdmissionSpan(value string) (ucidomain.IndexSpan, bool) {
+	var wire struct {
+		ByteStart int64 `json:"byte_start"`
+		ByteEnd   int64 `json:"byte_end"`
+		LineStart int   `json:"line_start"`
+		LineEnd   int   `json:"line_end"`
+	}
+	if json.Unmarshal([]byte(value), &wire) != nil {
+		return ucidomain.IndexSpan{}, false
+	}
+	return ucidomain.IndexSpan{
+		ByteStart: wire.ByteStart,
+		ByteEnd:   wire.ByteEnd,
+		LineStart: wire.LineStart,
+		LineEnd:   wire.LineEnd,
+	}, true
 }
 
 type uciGraphSourceDescriptorRow struct {

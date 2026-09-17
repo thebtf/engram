@@ -564,6 +564,61 @@ func TestUCIApplicationOperatorSearchSelectsSemanticOnlyForCompleteCoverage(t *t
 	require.Len(t, lexical.calls, 1, "semantic failure must not fall back to FTS")
 }
 
+func TestUCIApplicationOperatorSearchPreservesLexicalContinuation(t *testing.T) {
+	_, fixture := newOperatorCodeHTTPTestAdapter(t)
+	authorized, err := fixture.authority.AuthorizeOperatorCode(context.Background(), operatorCodeVerifiedCaller{
+		SessionID: "operator-lexical-continuation",
+		Context:   fixture.ref,
+	})
+	require.NoError(t, err)
+
+	profile := uci.VectorProfile{
+		ProviderRef:           "worker-uci-lexical-continuation",
+		Model:                 "worker-uci-lexical-continuation-model",
+		Dimension:             embedding.EmbeddingDim,
+		PreprocessingRevision: "worker-uci-lexical-continuation/v1",
+		IncludeRelativePath:   true,
+	}
+	lexical := &workerUCIApplicationQueryStore{candidates: []uci.QueryCandidate{
+		workerUCIApplicationSemanticCandidate(fixture.ref, "73000000-0000-4000-8000-000000000001", "lexicalOne", "internal/lexical_one.go").Candidate,
+		workerUCIApplicationSemanticCandidate(fixture.ref, "73000000-0000-4000-8000-000000000002", "lexicalTwo", "internal/lexical_two.go").Candidate,
+	}}
+	semanticFallback := &workerUCIApplicationQueryStore{}
+	semanticStore := &workerUCIApplicationSemanticStore{}
+	statusStore := &workerUCIApplicationStatusStore{snapshot: workerUCIApplicationStatusSnapshot(fixture.ref, uci.IndexCoveragePartial)}
+	application := &UCIApplication{
+		queryService:       uci.NewQueryService(lexical),
+		semanticService:    uci.NewSemanticService(profile, &workerUCIApplicationEmbedder{model: profile.Model}, semanticStore, semanticFallback, semanticStore),
+		indexStatusService: uci.NewIndexStatusService(statusStore, &profile),
+	}
+	spec := uci.QuerySpec{
+		ClientSessionID: "operator-code/lexical-continuation",
+		Mode:            uci.QueryModeFTS,
+		Text:            "lexical continuation",
+		Filter:          uci.QueryFilter{PathPrefix: "internal/"},
+		Order:           uci.QueryOrderRelevance,
+		Limit:           1,
+	}
+
+	first, err := application.SearchOperatorCodebase(context.Background(), authorized, spec)
+	require.NoError(t, err)
+	require.Equal(t, uci.QueryRetrievalLexical, first.Retrieval.Mode)
+	require.NotNil(t, first.Continuation.Value)
+	require.False(t, uci.IsSemanticContinuationToken(*first.Continuation.Value))
+
+	continuationSpec := spec
+	continuationSpec.Continuation = first.Continuation.Value
+	statusStore.snapshot = workerUCIApplicationStatusSnapshot(fixture.ref, uci.IndexCoverageComplete)
+	continued, err := application.SearchOperatorCodebase(context.Background(), authorized, continuationSpec)
+	require.NoError(t, err)
+	require.Equal(t, uci.QueryRetrievalLexical, continued.Retrieval.Mode)
+	require.Len(t, *continued.Items, 1)
+	require.NotEqual(t, (*first.Items)[0].Ref.EntityKey, (*continued.Items)[0].Ref.EntityKey)
+	require.Len(t, lexical.calls, 2)
+	require.Empty(t, semanticStore.calls)
+	require.Empty(t, semanticFallback.calls)
+}
+
 func newWorkerUCIApplicationEmbeddingProvider(t *testing.T, input workerUCIApplicationEmbeddingProviderInput) *httptest.Server {
 	t.Helper()
 	provider := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -1368,12 +1423,16 @@ func (workerUCIApplicationFailingExposureStore) AppendCompletion(context.Context
 }
 
 type workerUCIApplicationQueryStore struct {
-	calls []uci.QuerySpec
+	candidates []uci.QueryCandidate
+	calls      []uci.QuerySpec
 }
 
 func (store *workerUCIApplicationQueryStore) SelectCandidates(_ context.Context, _ uci.AuthorizedContext, spec uci.QuerySpec) (uci.QueryStoreResult, error) {
 	store.calls = append(store.calls, spec)
-	return uci.QueryStoreResult{Coverage: uci.IndexCoverageComplete}, nil
+	if spec.Offset >= len(store.candidates) {
+		return uci.QueryStoreResult{Coverage: uci.IndexCoverageComplete}, nil
+	}
+	return uci.QueryStoreResult{Candidates: store.candidates[spec.Offset:], Coverage: uci.IndexCoverageComplete}, nil
 }
 
 type workerUCIApplicationSemanticStore struct {

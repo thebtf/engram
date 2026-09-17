@@ -343,13 +343,12 @@ func TestUCIGraphReferenceDescriptorStaysPinnedToEvidenceSite(t *testing.T) {
 		Generation:        1,
 	}
 	referenceSiteID := "50000000-0000-4000-8000-000000000005"
-	span, err := json.Marshal(ucidomain.IndexSpan{ByteStart: 4, ByteEnd: 12, LineStart: 2, LineEnd: 2})
-	require.NoError(t, err)
+	span := `{"byte_start":4,"byte_end":12,"line_start":2,"line_end":2}`
 	row := uciGraphReferenceDescriptorRow{
 		EntityKey:       "fixture.Source",
 		ContentDigest:   "sha256:" + fmt.Sprintf("%064x", 1),
 		ReferenceSiteID: referenceSiteID,
-		ReferenceSpan:   string(span),
+		ReferenceSpan:   span,
 	}
 
 	descriptor, ok := row.spec(ref, referenceSiteID)

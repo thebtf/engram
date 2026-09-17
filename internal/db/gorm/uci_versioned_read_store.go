@@ -2,7 +2,6 @@ package gorm
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	ucidomain "github.com/thebtf/engram/internal/uci"
@@ -102,8 +101,8 @@ func (row uciVersionedReadRow) matchesReferenceSite(referenceSiteID string, span
 	if row.ReferenceSiteID != referenceSiteID {
 		return false
 	}
-	var referenceSpan ucidomain.IndexSpan
-	if json.Unmarshal([]byte(row.ReferenceSpan), &referenceSpan) != nil {
+	referenceSpan, ok := decodeUCIIndexAdmissionSpan(row.ReferenceSpan)
+	if !ok {
 		return false
 	}
 	return referenceSpan.ByteStart == span.ByteStart && referenceSpan.ByteEnd == span.ByteEnd && int64(referenceSpan.LineStart) == span.LineStart && int64(referenceSpan.LineEnd) == span.LineEnd
