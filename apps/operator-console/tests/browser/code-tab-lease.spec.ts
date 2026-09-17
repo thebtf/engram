@@ -4,12 +4,14 @@ const TAB_BINDING_ID = '60000000-0000-4000-8000-000000000041'
 const DOCUMENT_PROOF = 'proof-current'
 
 test('Code Explorer renews its live tab lease and leaves no renewal timer after teardown', async ({ page }) => {
+  const handshakePayloads: unknown[] = []
   const leasePayloads: unknown[] = []
 
   await page.clock.install({ time: new Date('2026-09-15T00:00:00Z') })
   await page.route('**/api/code/**', async (route: Route) => {
     const pathname = new URL(route.request().url()).pathname
     if (pathname === '/api/code/tabs/handshake') {
+      handshakePayloads.push(route.request().postDataJSON())
       await route.fulfill({
         json: {
           state: 'TAB_BINDING_READY',
@@ -39,6 +41,8 @@ test('Code Explorer renews its live tab lease and leaves no renewal timer after 
 
   await page.goto('/code')
   await expect(page.getByTestId('code-context-empty')).toBeVisible()
+  expect(handshakePayloads).toHaveLength(1)
+  expect(handshakePayloads[0]).not.toHaveProperty('ambiguous')
 
   await page.clock.fastForward('01:00')
   await expect.poll(() => leasePayloads).toEqual([{ document_proof: DOCUMENT_PROOF }])

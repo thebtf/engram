@@ -1260,7 +1260,7 @@ export function useOperatorCode() {
         ? await resume(documentNonce, pair, evidence)
         : pair !== null
           ? await handshake(documentNonce, pair, false, evidence)
-          : await handshake(documentNonce, null, true, evidence)
+          : await handshake(documentNonce, null, false, evidence)
     if (!established) return
     await discoverContext()
     if (resumingBinding) {
