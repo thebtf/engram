@@ -30,7 +30,7 @@ async function assertResponsiveShell(page: Page, viewportWidth: number): Promise
 
   expect(shell.scrollX).toBe(0)
   expect(shell.scrollWidth).toBeLessThanOrEqual(viewportWidth)
-  const gridColumns = shell.gridColumns.split(' ').map(Number)
+  const gridColumns = shell.gridColumns.split(' ').map((column) => Number.parseFloat(column))
   expect(gridColumns.reduce((total, column) => total + column, 0)).toBe(viewportWidth)
 
   if (viewportWidth <= 980) {
