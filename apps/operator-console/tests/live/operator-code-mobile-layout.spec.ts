@@ -4,6 +4,9 @@ import type { Page } from '@playwright/test'
 import { readLiveFixture } from './fixture-bootstrap'
 
 async function assertResponsiveShell(page: Page, viewportWidth: number): Promise<Record<string, unknown>> {
+  if (viewportWidth <= 980) {
+    await expect.poll(() => page.locator('#primary-navigation').evaluate((element) => ({ ariaHidden: element.getAttribute('aria-hidden'), inert: element.inert }))).toEqual({ ariaHidden: 'true', inert: true })
+  }
   const shell = await page.evaluate(() => {
     const rect = (selector: string) => {
       const element = document.querySelector<HTMLElement>(selector)
