@@ -53,9 +53,11 @@ function Set-Scenario
     [int]$FailJournalPatchOn = 0,
     [switch]$InvalidJournalCreateResponse,
     [switch]$InvalidJournalPatchResponse,
-    [switch]$InterruptAfterRegistryCreate
+    [switch]$InterruptAfterRegistryCreate,
+    [switch]$FailGHCRLogin
   )
 
+  $script:scenarioCount++
   $script:repositories = @(
     'ghcr.io/thebtf/engram',
     'ghcr.io/thebtf/engram-operator-console',
@@ -97,6 +99,7 @@ function Set-Scenario
   $script:invalidJournalPatchResponse = [bool]$InvalidJournalPatchResponse
   $script:interruptAfterRegistryCreate = [bool]$InterruptAfterRegistryCreate
   $script:processLossJournal = $null
+  $script:failGHCRLogin = [bool]$FailGHCRLogin
 
   $env:RECEIPT_DIR = 'contract-receipt'
   $env:REPOSITORY_NAME = 'thebtf/engram'
@@ -227,6 +230,15 @@ function global:docker
 {
   param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
   $global:LASTEXITCODE = 0
+  if ($Arguments.Count -gt 0 -and $Arguments[0] -eq 'login')
+  {
+    if ($script:failGHCRLogin)
+    {
+      $global:LASTEXITCODE = 1
+      return 'simulated GHCR login failure'
+    }
+    return
+  }
   if ($Arguments.Count -lt 3 -or $Arguments[0] -ne 'buildx' -or $Arguments[1] -ne 'imagetools')
   { throw "unexpected docker invocation: $($Arguments -join ' ')"
   }
@@ -284,7 +296,8 @@ function global:docker
     $targetRepository = $target.Substring(0, $target.LastIndexOf(':'))
     if ($script:interruptAfterRegistryCreate -and $null -eq $script:processLossJournal -and $source -ceq "$targetRepository@$($script:newByRepository[$targetRepository].manifest_digest)")
     {
-      $script:processLossJournal = [string]$script:journalRuns[$env:LATEST_PROMOTION_JOURNAL_ID].output.summary
+      $journal = $script:journalRuns[$env:LATEST_PROMOTION_JOURNAL_ID]
+      $script:processLossJournal = [pscustomobject]@{ status = [string]$journal.status; conclusion = $journal.conclusion; patch_count = $script:journalPatchCount; summary = [string]$journal.output.summary }
       throw 'simulated event-log cut immediately after the first registry mutation'
     }
     return
@@ -348,7 +361,7 @@ function global:gh
       }
       $run = $script:journalRuns[$id]
       $run.status = [string]$body.status
-      $run.conclusion = $body.conclusion
+      $run.conclusion = if ($null -eq $body.PSObject.Properties['conclusion']) { $null } else { $body.conclusion }
       $run.output = $body.output
       $script:eventSequence++
       $event = [pscustomobject]@{ sequence = $script:eventSequence; kind = 'journal_patch'; body = $body }
@@ -527,9 +540,13 @@ Assert-That ($workflowText.Contains('Create durable latest-promotion journal')) 
 
 $prewrite = 'Final revalidate official GitHub Release before registry login'
 $promotion = 'Promote each official release image to latest as a recoverable set'
+$journal = 'Create durable latest-promotion journal'
+$login = 'Login to GHCR only after immutable provenance inspection'
+$terminalizer = 'Complete unstarted latest-promotion journal'
 $firstRepository = 'ghcr.io/thebtf/engram'
 $secondRepository = 'ghcr.io/thebtf/engram-operator-console'
 
+$script:scenarioCount = 0
 Set-Scenario -PostWriteReleaseTag 'v1.2.4' -PostWriteSourceCommit ('4' * 40 -join '')
 $failed = $false
 try
@@ -553,6 +570,41 @@ Assert-PendingJournalPrecedesRegistryMutation
 Assert-ActualJournalPatch
 Assert-JournalTerminal -Outcome 'success' -Conclusion 'success'
 Assert-ReceiptMatchesRegistryOrTypedState -Receipt $successReceipt
+Set-Scenario -FailGHCRLogin
+Invoke-WorkflowStep -Name $journal
+$failed = $false
+try
+{ Invoke-WorkflowStep -Name $login
+} catch
+{ $failed = $true
+}
+Assert-That $failed 'GHCR login failure must stop promotion'
+Assert-That (-not $script:files.ContainsKey('contract-receipt/promotion.json') -and $script:createCalls.Count -eq 0) 'GHCR login failure must precede promotion state and registry mutation'
+Invoke-WorkflowStep -Name $terminalizer
+Assert-That (-not $script:files.ContainsKey('contract-receipt/promotion.json')) 'login-failure terminalizer must not synthesize promotion state'
+Assert-That ($script:journalPatchCount -eq 1) 'login-failure terminalizer must PATCH the exact pre-promotion journal once'
+Assert-JournalTerminal -Outcome 'failed_before_write' -Conclusion 'failure'
+$loginFailureSummary = (Get-ExternalJournal).output.summary | ConvertFrom-Json
+Assert-That ($loginFailureSummary.phase -ceq 'pre_promotion' -and $loginFailureSummary.outcome -ceq 'failed_before_write') 'login-failure journal must use the typed pre-promotion failure outcome'
+Assert-That ($null -eq $loginFailureSummary.repository -and $null -eq $loginFailureSummary.previous_identity -and $null -eq $loginFailureSummary.intended_identity) 'login-failure journal must not invent a promotion identity'
+Assert-That ($loginFailureSummary.updated_summary.count -eq 0 -and $loginFailureSummary.final_summary.count -eq 0) 'login-failure journal must prove that no promotion state exists'
+$loginFailureReceipt = Read-Receipt
+Assert-That ($loginFailureReceipt.outcome -ceq 'failed_before_write') 'login failure receipt must record the no-write terminal outcome'
+
+Set-Scenario -FailGHCRLogin -InvalidJournalPatchResponse
+Invoke-WorkflowStep -Name $journal
+try
+{ Invoke-WorkflowStep -Name $login
+} catch {}
+$failed = $false
+try
+{ Invoke-WorkflowStep -Name $terminalizer
+} catch
+{ $failed = $true
+}
+Assert-That $failed 'invalid terminalizer response must fail exact external-journal validation'
+Assert-That (-not $script:files.ContainsKey('contract-receipt/promotion.json') -and $script:journalPatchCount -eq 1) 'invalid terminalizer response must remain a no-promotion journal-only failure'
+
 Set-Scenario -FailJournalCreate
 $failed = $false
 try
@@ -615,7 +667,11 @@ try
 }
 Assert-That $failed 'event-log cut after the first registry mutation must stop this mock runner'
 Assert-That (-not $script:files.ContainsKey('contract-receipt/latest-promotion-receipt.json')) 'process-loss cut must have no local always-step receipt'
-$processLossSummary = $script:processLossJournal | ConvertFrom-Json
+$processLossJournalRun = $script:processLossJournal
+Assert-That ($processLossJournalRun.status -ceq 'in_progress') 'process loss after registry mutation must leave the external journal in progress'
+Assert-That ($null -eq $processLossJournalRun.conclusion) 'process loss after registry mutation must leave the external journal unconcluded'
+Assert-That ($processLossJournalRun.patch_count -eq 1) 'process loss after registry mutation must retain only its mutation_pending journal PATCH'
+$processLossSummary = $processLossJournalRun.summary | ConvertFrom-Json
 Assert-That ($processLossSummary.outcome -ceq 'mutation_pending' -and $processLossSummary.previous_identity.manifest_digest -ceq $script:oldByRepository[$firstRepository].manifest_digest -and $processLossSummary.intended_identity.manifest_digest -ceq $script:newByRepository[$firstRepository].manifest_digest) 'external-only process-loss journal must retain the uncertain prior and intended identities'
 
 
@@ -749,6 +805,9 @@ $interrupted = Read-PromotionState
 Assert-That $failed 'interruption after durable pending state must stop promotion'
 Assert-That ($script:createCalls.Count -eq 0) 'interruption after durable pending state must happen before registry write'
 Assert-That ($interrupted.final_latest_images[0].state -ceq 'mutation_pending') 'interruption must leave the explicit pending final state'
+$interruptedJournalPatchCount = $script:journalPatchCount
+Invoke-WorkflowStep -Name $terminalizer
+Assert-That ($script:journalPatchCount -eq $interruptedJournalPatchCount) 'terminalizer must not PATCH a durable mutation_pending promotion state'
 $interruptedReceipt = Read-Receipt
 Assert-ReceiptMatchesState -Promotion $interrupted -Receipt $interruptedReceipt
 Assert-ReceiptMatchesRegistryOrTypedState -Receipt $interruptedReceipt
@@ -770,4 +829,5 @@ $rollbackReceipt = Read-Receipt
 Assert-JournalTerminal -Outcome 'rollback_failed' -Conclusion 'failure'
 Assert-ReceiptMatchesState -Promotion $rollbackFailure -Receipt $rollbackReceipt
 Assert-ReceiptMatchesRegistryOrTypedState -Receipt $rollbackReceipt
-'PASS: external journal create/PATCH ordering, process-loss pending state, no-write journal failures, success, rollback, bootstrap-required no-write, inspection rejection, local receipt failures, and rollback failure'
+Assert-That ($script:scenarioCount -gt 0) 'promotion state matrix must execute a nonzero scenario denominator'
+"PASS: external journal create/PATCH ordering, GHCR login terminalization, process-loss pending state, no-write journal failures, success, rollback, bootstrap-required no-write, inspection rejection, local receipt failures, and rollback failure; scenarios=$($script:scenarioCount)"

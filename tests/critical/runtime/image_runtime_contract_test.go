@@ -896,7 +896,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 		"org.opencontainers.image.source", "org.opencontainers.image.version", "org.opencontainers.image.revision", "docker login ghcr.io", "docker buildx imagetools create --prefer-index=false",
 		"$commitReference = \"$repository`:sha-$($release.source_commit)\"", "foreach ($field in 'manifest_digest', 'config_digest')", "release image references disagree",
 		"immutable_reference = \"$repository@$manifestDigest\"", "commit_reference = $commitIdentity.reference", "docker buildx imagetools create --prefer-index=false --tag $target $image.immutable_reference",
-		"$target = \"$($image.repository):latest\"", "'manifest_digest','config_digest','source','version','revision'", "Create durable latest-promotion journal", "latest-promotion-journal", "latest-promotion:$runID`:$runAttempt", "GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$runID", "gh api --method POST", "gh api --method PATCH", "X-GitHub-Api-Version: 2026-03-10", "mutation_pending", "updated_summary", "final_summary", "docker logout ghcr.io", "latest-promotion-receipt.json", "source_commit", "triggering_workflow_name", "triggering_workflow_head_sha", "triggering_workflow_run_id", "triggering_workflow_job_conclusion", "rollout_claimed = $false",
+		"$target = \"$($image.repository):latest\"", "'manifest_digest','config_digest','source','version','revision'", "Create durable latest-promotion journal", "Complete unstarted latest-promotion journal", "latest-promotion-journal", "latest-promotion:$runID`:$runAttempt", "GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$runID", "gh api --method POST", "gh api --method PATCH", "X-GitHub-Api-Version: 2026-03-10", "mutation_pending", "pre_promotion", "updated_summary", "final_summary", "unstarted latest-promotion journal terminalization returned an unexpected check run", "docker logout ghcr.io", "latest-promotion-receipt.json", "source_commit", "triggering_workflow_name", "triggering_workflow_head_sha", "triggering_workflow_run_id", "triggering_workflow_job_conclusion", "rollout_claimed = $false",
 	} {
 		if !strings.Contains(latest, required) {
 			t.Fatalf("latest-only promoter lacks contract %q", required)
@@ -967,8 +967,10 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	loginIndex := strings.Index(latest, "Login to GHCR only after immutable provenance inspection")
 	promotionStep := "Promote each official release image to latest as a recoverable set"
 	promoteIndex := strings.Index(latest, promotionStep)
-	if !(waitIndex >= 0 && waitIndex < prewriteIndex && prewriteIndex < journalIndex && journalIndex < loginIndex && loginIndex < promoteIndex) {
-		t.Fatalf("latest promoter must create its durable journal after prewrite validation and before login/mutation: wait=%d prewrite=%d journal=%d login=%d promote=%d", waitIndex, prewriteIndex, journalIndex, loginIndex, promoteIndex)
+	terminalizerIndex := strings.Index(latest, "Complete unstarted latest-promotion journal")
+	logoutIndex := strings.Index(latest, "Logout and erase the isolated registry credential directory")
+	if !(waitIndex >= 0 && waitIndex < prewriteIndex && prewriteIndex < journalIndex && journalIndex < loginIndex && loginIndex < promoteIndex && promoteIndex < terminalizerIndex && terminalizerIndex < logoutIndex) {
+		t.Fatalf("latest promoter must create the journal before login and terminalize only an unstarted journal before logout: wait=%d prewrite=%d journal=%d login=%d promote=%d terminalizer=%d logout=%d", waitIndex, prewriteIndex, journalIndex, loginIndex, promoteIndex, terminalizerIndex, logoutIndex)
 	}
 	publishJobsIndex := strings.Index(latest, `gh api --paginate --slurp "repos/$env:REPOSITORY_NAME/actions/runs/$triggeringWorkflowRunID/jobs?per_page=100"`)
 	if publishJobsIndex < 0 || publishJobsIndex >= loginIndex {
@@ -1019,6 +1021,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 		}
 	}
 	for _, step := range []string{
+		"Complete unstarted latest-promotion journal",
 		"Logout and erase the isolated registry credential directory",
 		"Write latest-promotion receipt",
 		"Upload latest-promotion receipt",
@@ -1060,8 +1063,8 @@ func testLatestPromotionReleaseRefGuard(t *testing.T, workflow string) {
 	if got := strings.Count(workflow, "gh api --method POST"); got != 1 {
 		t.Fatalf("latest promoter must create exactly one journal check run, got %d POSTs", got)
 	}
-	if got := strings.Count(workflow, "gh api --method PATCH"); got != 1 {
-		t.Fatalf("latest promoter must centralize check-run updates in exactly one PATCH seam, got %d", got)
+	if got := strings.Count(workflow, "gh api --method PATCH"); got != 2 {
+		t.Fatalf("latest promoter must have one promotion and one unstarted-journal terminalization PATCH seam, got %d", got)
 	}
 	for _, required := range []string{
 		"name = 'latest-promotion-journal'", "head_sha = [string]$release.source_commit", "status = 'in_progress'",
@@ -1072,6 +1075,21 @@ func testLatestPromotionReleaseRefGuard(t *testing.T, workflow string) {
 		if !strings.Contains(workflow, required) {
 			t.Fatalf("durable latest-promotion journal lacks %q", required)
 		}
+	}
+	terminalizer := workflowStepSection(t, workflow, "Complete unstarted latest-promotion journal", "Logout and erase the isolated registry credential directory")
+	for _, required := range []string{
+		"GH_TOKEN: ${{ github.token }}", "if ($journalID -notmatch '^[1-9][0-9]*$' -or (Test-Path -LiteralPath $promotionPath)) { return }",
+		"phase = 'pre_promotion'", "outcome = 'failed_before_write'", "status = 'completed'", "conclusion = 'failure'",
+		"response.id -cne $journalID", "response.name -cne 'latest-promotion-journal'", "response.head_sha -cne [string]$release.source_commit",
+		"response.external_id -cne $externalID", "response.details_url -cne $detailsURL", "response.status -cne 'completed'",
+		"response.conclusion -cne 'failure'", "response.output.title -cne 'Latest promotion journal'", "response.output.summary -cne $summary",
+	} {
+		if !strings.Contains(terminalizer, required) {
+			t.Fatalf("unstarted-journal terminalizer lacks strict contract %q", required)
+		}
+	}
+	if got := strings.Count(terminalizer, "gh api --method PATCH"); got != 1 {
+		t.Fatalf("unstarted-journal terminalizer must have exactly one PATCH, got %d", got)
 	}
 
 	for _, trigger := range []struct {
@@ -1105,7 +1123,7 @@ func testLatestPromotionStateMatrix(t *testing.T, repo string) {
 	if err != nil {
 		t.Fatalf("latest-promotion state matrix failed: %v\n%s", err, output)
 	}
-	if !strings.Contains(string(output), "PASS: external journal create/PATCH ordering, process-loss pending state, no-write journal failures, success, rollback, bootstrap-required no-write, inspection rejection, local receipt failures, and rollback failure") {
+	if !strings.Contains(string(output), "PASS: external journal create/PATCH ordering, GHCR login terminalization, process-loss pending state, no-write journal failures, success, rollback, bootstrap-required no-write, inspection rejection, local receipt failures, and rollback failure; scenarios=") {
 		t.Fatalf("durable latest-promotion state matrix did not report its complete result:\n%s", output)
 	}
 }

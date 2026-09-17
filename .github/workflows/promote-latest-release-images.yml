@@ -433,10 +433,10 @@ jobs:
             try {
               $summary = Get-JournalSummary -Phase $Phase -Outcome $Outcome -Repository $Repository -Previous $Previous -Intended $Intended
               $request = [ordered]@{
-                status = if ($null -eq $Conclusion) { 'in_progress' } else { 'completed' }
+                status = if ([string]::IsNullOrEmpty($Conclusion)) { 'in_progress' } else { 'completed' }
                 output = [ordered]@{ title = 'Latest promotion journal'; summary = $summary }
               }
-              if ($null -ne $Conclusion) { $request.conclusion = $Conclusion }
+              if (-not [string]::IsNullOrEmpty($Conclusion)) { $request.conclusion = $Conclusion }
               $requestJSON = $request | ConvertTo-Json -Compress -Depth 10
               $requestPath = Join-Path $env:RECEIPT_DIR 'journal-update-request.json'
               $requestJSON | Set-Content -LiteralPath $requestPath -Encoding utf8NoBOM
@@ -580,6 +580,47 @@ jobs:
             throw "latest promotion failed; final outcome=$($promotion.outcome): $($promotion.failure)"
           }
 
+      - name: Complete unstarted latest-promotion journal
+        if: always()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $journalID = ([string]$env:LATEST_PROMOTION_JOURNAL_ID).Trim()
+          $promotionPath = Join-Path $env:RECEIPT_DIR 'promotion.json'
+          if ($journalID -notmatch '^[1-9][0-9]*$' -or (Test-Path -LiteralPath $promotionPath)) { return }
+          $releasePath = Join-Path $env:RECEIPT_DIR 'release.json'
+          if (-not (Test-Path -LiteralPath $releasePath)) { throw 'unstarted latest-promotion journal lacks selected release state' }
+          $release = Get-Content -LiteralPath $releasePath -Raw | ConvertFrom-Json
+          $runID = ([string]$env:GITHUB_RUN_ID).Trim()
+          $runAttempt = ([string]$env:GITHUB_RUN_ATTEMPT).Trim()
+          if ($runID -notmatch '^[1-9][0-9]*$' -or $runAttempt -notmatch '^[1-9][0-9]*$' -or [string]$release.source_commit -notmatch '^[0-9a-f]{40}$') { throw 'unstarted latest-promotion journal lacks a valid identity' }
+          $externalID = "latest-promotion:$runID`:$runAttempt"
+          $detailsURL = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$runID"
+          $summary = ([ordered]@{
+              phase = 'pre_promotion'
+              outcome = 'failed_before_write'
+              repository = $null
+              previous_identity = $null
+              intended_identity = $null
+              updated_summary = [ordered]@{ count = 0; images = @() }
+              final_summary = [ordered]@{ count = 0; images = @() }
+            } | ConvertTo-Json -Compress -Depth 10)
+          $request = [ordered]@{
+            status = 'completed'
+            conclusion = 'failure'
+            output = [ordered]@{ title = 'Latest promotion journal'; summary = $summary }
+          } | ConvertTo-Json -Compress -Depth 10
+          $requestPath = Join-Path $env:RECEIPT_DIR 'journal-update-request.json'
+          $request | Set-Content -LiteralPath $requestPath -Encoding utf8NoBOM
+          $responseLines = @(gh api --method PATCH -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2026-03-10' "repos/$env:REPOSITORY_NAME/check-runs/$journalID" --input $requestPath)
+          if ($LASTEXITCODE -ne 0) { throw 'could not terminalize unstarted latest-promotion journal check run' }
+          try { $response = ($responseLines -join "`n") | ConvertFrom-Json } catch { throw 'unstarted latest-promotion journal terminalization returned invalid JSON' }
+          if ([string]$response.id -cne $journalID -or [string]$response.name -cne 'latest-promotion-journal' -or [string]$response.head_sha -cne [string]$release.source_commit -or [string]$response.external_id -cne $externalID -or [string]$response.details_url -cne $detailsURL -or [string]$response.status -cne 'completed' -or [string]$response.conclusion -cne 'failure' -or [string]$response.output.title -cne 'Latest promotion journal' -or [string]$response.output.summary -cne $summary) {
+            throw 'unstarted latest-promotion journal terminalization returned an unexpected check run'
+          }
       - name: Logout and erase the isolated registry credential directory
         if: always()
         shell: pwsh
@@ -614,12 +655,15 @@ jobs:
           $release = if (Test-Path -LiteralPath $releasePath) { Get-Content -LiteralPath $releasePath -Raw | ConvertFrom-Json } else { $null }
           $sources = if (Test-Path -LiteralPath $sourcesPath) { Get-Content -LiteralPath $sourcesPath -Raw | ConvertFrom-Json } else { $null }
           $latest = if (Test-Path -LiteralPath $latestPath) { Get-Content -LiteralPath $latestPath -Raw | ConvertFrom-Json } else { $null }
+          $journalID = ([string]$env:LATEST_PROMOTION_JOURNAL_ID).Trim()
           $outcome = if ($null -ne $promotion) {
             [string]$promotion.outcome
           } elseif ($null -ne $prewrite -and $prewrite.status -eq 'mismatch') {
             'no_write_stale_abort'
           } elseif ($null -ne $prewrite -and $prewrite.status -eq 'error') {
             'prewrite_revalidation_error'
+          } elseif ($journalID -match '^[1-9][0-9]*$') {
+            'failed_before_write'
           } else {
             'not_started'
           }
