@@ -32,6 +32,7 @@ const logoutInFlight = ref(false)
 const NAV_ICONS: Record<string, string> = {
   overview: '<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/>',
   search: '<circle cx="6.5" cy="6.5" r="4.3"/><path d="M9.6 9.6 L14 14"/>',
+  code: '<path d="M5.7 4 2.5 8l3.2 4M10.3 4l3.2 4-3.2 4M9 2.5 7 13.5"/>',
   memory: '<path d="M8 2 L14 5 L8 8 L2 5 Z"/><path d="M2 8 L8 11 L14 8"/><path d="M2 11 L8 14 L14 11"/>',
   queue: '<path d="M2.4 8.6 L4.2 3.4 H11.8 L13.6 8.6"/><path d="M2.4 8.6 V13 H13.6 V8.6 H10.5 L9.3 10.4 H6.7 L5.5 8.6 Z"/>',
   noise: '<path d="M3 10.5 V12.5"/><path d="M6.3 7 V12.5"/><path d="M9.6 4 V12.5"/><path d="M12.9 8.5 V12.5"/>',

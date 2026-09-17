@@ -14,6 +14,11 @@ function json(res, status, body) {
   res.end(payload)
 }
 
+function noContent(res) {
+  res.writeHead(204, { 'cache-control': 'no-store' })
+  res.end()
+}
+
 function controlPlaneError(message, code, data) {
   return data === undefined ? { message, code } : { message, code, data }
 }
@@ -105,6 +110,200 @@ const flags = {
     fields: ['features.enforce_source_project', 'memory.inject_unified'],
     reason: 'only allowlisted config-backed fields are writable; env-controlled flags remain read-only',
   },
+}
+
+const codeWorkspaces = [
+  {
+    repository: 'Engram',
+    workingCopy: 'main · workstation',
+    snapshot: { label: 'Current indexed snapshot', revision: '1a9dad0', publishedAt: '2026-09-17T09:00:00Z' },
+    selectionRef: 'mock-workspace-main',
+    context: { sourceId: 'mock-source-main', checkoutId: 'mock-checkout-main', viewId: 'mock-view-main', profileId: 'mock-profile-main', generation: 7 },
+  },
+  {
+    repository: 'Engram',
+    workingCopy: 'feature/operator-workspace · operator desk',
+    snapshot: { label: 'Workspace candidate snapshot', revision: '1a9dad0', publishedAt: '2026-09-17T09:03:00Z' },
+    selectionRef: 'mock-workspace-candidate',
+    context: { sourceId: 'mock-source-candidate', checkoutId: 'mock-checkout-candidate', viewId: 'mock-view-candidate', profileId: 'mock-profile-candidate', generation: 8 },
+  },
+  {
+    repository: 'Engram',
+    workingCopy: 'recovery · offline owner',
+    snapshot: null,
+    selectionRef: null,
+    indexIntentSelectionRef: 'mock-first-index',
+    context: null,
+  },
+]
+
+const codeTabs = new Map()
+let codeTabSequence = 41
+
+function codeCatalogResponse() {
+  return {
+    contexts: codeWorkspaces.map((workspace) => ({
+      repository: workspace.repository,
+      working_copy: workspace.workingCopy,
+      ...(workspace.snapshot === null ? {} : {
+        indexed_snapshot: {
+          label: workspace.snapshot.label,
+          revision: workspace.snapshot.revision,
+          published_at: workspace.snapshot.publishedAt,
+        },
+        selection_ref: workspace.selectionRef,
+      }),
+      index_intent_available: workspace.snapshot === null,
+      ...(workspace.snapshot === null ? { index_intent_selection_ref: workspace.indexIntentSelectionRef } : {}),
+    })),
+  }
+}
+
+function codeResponseContext(workspace) {
+  return {
+    source_id: workspace.context.sourceId,
+    checkout_id: workspace.context.checkoutId,
+    view_id: workspace.context.viewId,
+    profile_id: workspace.context.profileId,
+    generation: workspace.context.generation,
+  }
+}
+
+function codeItem(workspace, entityKey, path, excerpt) {
+  return {
+    ref: { source_id: workspace.context.sourceId, view_id: workspace.context.viewId, entity_key: entityKey },
+    path,
+    span: { byte_start: 0, byte_end: excerpt.length, line_start: 1, line_end: 1 },
+    content_digest: `sha256:${entityKey.toLowerCase().replaceAll('.', '-')}`,
+    kind: 'function',
+    language: 'Go',
+    excerpt,
+    match_sources: ['lexical'],
+    score: 0.91,
+  }
+}
+
+function codeEnvelope(workspace, items, graph = null, navigation = undefined) {
+  return {
+    schema: 'engram.code-query/1',
+    status: 'ok',
+    contexts: [codeResponseContext(workspace)],
+    items,
+    ...(graph === null ? {} : { graph }),
+    ...(navigation === undefined ? {} : { navigation }),
+    warnings: [],
+    retrieval: { mode: 'lexical' },
+    freshness: { state: 'observed_current' },
+    coverage: { supported_languages: ['Go'] },
+    truncated: false,
+  }
+}
+
+function selectedCodeWorkspace(bindingID) {
+  const selectionRef = codeTabs.get(bindingID)?.selectionRef
+  return codeWorkspaces.find((workspace) => workspace.selectionRef === selectionRef) ?? null
+}
+
+async function handleCodeRequest(req, res, path) {
+  const body = req.method === 'GET' ? {} : await readRequestJson(req)
+  if (req.method === 'POST' && path === '/api/code/tabs/handshake') {
+    const tabBindingId = `60000000-0000-4000-8000-${String(codeTabSequence).padStart(12, '0')}`
+    codeTabSequence += 1
+    codeTabs.set(tabBindingId, { documentProof: `mock-proof-${codeTabSequence}`, selectionRef: null })
+    json(res, 200, { state: 'TAB_BINDING_READY', tab_binding_id: tabBindingId, document_proof: `mock-proof-${codeTabSequence}`, resume_nonce: `mock-resume-${codeTabSequence}`, reload_token: `mock-reload-${codeTabSequence}` })
+    return true
+  }
+  if (req.method === 'POST' && path === '/api/code/tabs/resume') {
+    const tab = codeTabs.get(body.tab_binding_id)
+    if (!tab) {
+      json(res, 409, { error: 'binding unavailable' })
+      return true
+    }
+    json(res, 200, { state: 'TAB_BINDING_READY', tab_binding_id: body.tab_binding_id, document_proof: tab.documentProof, resume_nonce: body.resume_nonce, reload_token: `mock-reload-${body.tab_binding_id}` })
+    return true
+  }
+  if (req.method === 'POST' && path === '/api/code/contexts') {
+    json(res, 200, codeCatalogResponse())
+    return true
+  }
+  const pinMatch = path.match(/^\/api\/code\/tabs\/([^/]+)\/context$/)
+  if (req.method === 'PUT' && pinMatch) {
+    const workspace = codeWorkspaces.find((candidate) => candidate.selectionRef === body.selection_ref)
+    const tab = codeTabs.get(pinMatch[1])
+    if (!tab || workspace?.snapshot === null) {
+      json(res, 403, { error: 'selection denied' })
+      return true
+    }
+    tab.selectionRef = workspace.selectionRef
+    noContent(res)
+    return true
+  }
+  const leaseMatch = path.match(/^\/api\/code\/tabs\/([^/]+)\/lease$/)
+  if (req.method === 'PUT' && leaseMatch && codeTabs.has(leaseMatch[1])) {
+    noContent(res)
+    return true
+  }
+  const closeMatch = path.match(/^\/api\/code\/tabs\/([^/]+)$/)
+  if (req.method === 'DELETE' && closeMatch) {
+    codeTabs.delete(closeMatch[1])
+    noContent(res)
+    return true
+  }
+
+  const headerBinding = req.headers['x-engram-tab-binding-id']
+  const tabBindingId = typeof body.tab_binding_id === 'string' ? body.tab_binding_id : typeof headerBinding === 'string' ? headerBinding : ''
+  const workspace = selectedCodeWorkspace(tabBindingId)
+  if (workspace === null) {
+    json(res, 403, { error: 'no selected workspace' })
+    return true
+  }
+  const item = codeItem(workspace, 'workspace.Run', 'internal/workspace/run.go', 'func Run(ctx context.Context) error { return nil }')
+  const neighbor = codeItem(workspace, 'workspace.Validate', 'internal/workspace/validate.go', 'func Validate(ctx context.Context) error { return nil }')
+  if (req.method === 'POST' && path === '/api/code/status') {
+    json(res, 200, { total_chunks: 64, embedded_chunks: 64, embedding: { Coverage: 'complete' }, freshness: { state: 'observed_current' } })
+    return true
+  }
+  if (req.method === 'POST' && (path === '/api/code/structure' || path === '/api/code/search')) {
+    json(res, 200, codeEnvelope(workspace, [item, neighbor]))
+    return true
+  }
+  if (req.method === 'POST' && path === '/api/code/graph') {
+    const graph = {
+      nodes: [item.ref, neighbor.ref],
+      edges: [{ from: item.ref, to: neighbor.ref, relation: 'calls', evidence_kind: 'reference_site', explanation: 'Derived from the selected snapshot.' }],
+      stop_reason: 'complete',
+    }
+    const navigationRef = (source) => ({
+      entity: source.ref,
+      context_ref: {
+        source_id: workspace.context.sourceId,
+        checkout_id: workspace.context.checkoutId,
+        view_id: workspace.context.viewId,
+        analysis_profile_id: workspace.context.profileId,
+        generation: workspace.context.generation,
+      },
+      source_state: 'available',
+      source_read: { entity_key: source.ref.entityKey, span: source.span, content_digest: source.contentDigest },
+    })
+    json(res, 200, codeEnvelope(workspace, [], graph, {
+      nodes: [navigationRef(item), navigationRef(neighbor)],
+      edges: [{ from: navigationRef(item), to: navigationRef(neighbor), relation: 'calls', evidence_kind: 'reference_site' }],
+    }))
+    return true
+  }
+  if (req.method === 'POST' && path === '/api/code/source') {
+    json(res, 200, codeEnvelope(workspace, [body.entity_key === neighbor.ref.entityKey ? neighbor : item]))
+    return true
+  }
+  if (req.method === 'POST' && path === '/api/code/index-intents') {
+    json(res, 202, { intent_ref: 'mock-index-intent', state: 'queued', attempt: 1, retryable: false, created_at: '2026-09-17T09:05:00Z', updated_at: '2026-09-17T09:05:00Z' })
+    return true
+  }
+  if (req.method === 'GET' && path === '/api/code/index-intents/mock-index-intent') {
+    json(res, 200, { intent_ref: 'mock-index-intent', state: 'queued', attempt: 1, retryable: false, created_at: '2026-09-17T09:05:00Z', updated_at: '2026-09-17T09:05:00Z' })
+    return true
+  }
+  return false
 }
 
 const migrations = {
@@ -761,6 +960,15 @@ const server = createServer(async (req, res) => {
     res.writeHead(204)
     res.end()
     return
+  }
+
+  if (path.startsWith('/api/code/')) {
+    try {
+      if (await handleCodeRequest(req, res, path)) return
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+      return
+    }
   }
 
   if (req.method === 'POST' && (path === '/api/restart' || path === '/api/update/restart')) {

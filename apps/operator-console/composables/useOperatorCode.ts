@@ -14,21 +14,26 @@ export interface CodeResponseContext {
   generation: number
 }
 
+export interface CodeSnapshot {
+  label: string
+  revision: string | null
+  publishedAt: string | null
+}
+
 export interface CodeSafeContext {
-  source: string
-  checkout: string
-  view: string
-  context: CodeResponseContext
+  repository: string
+  workingCopy: string
+  snapshot: CodeSnapshot
+  selectionRef: string
 }
 
 export interface IndexIntentTarget {
-  sourceId: string
-  checkoutId: string
+  selectionRef: string
 }
 
 export interface CodeCatalogEntry {
-  source: { id: string; label: string }
-  checkout: { id: string; label: string }
+  repository: string
+  workingCopy: string
   view: CodeSafeContext | null
   indexIntentAvailable: boolean
   indexIntentTarget: IndexIntentTarget | null
@@ -132,6 +137,11 @@ interface CodeSearchRequest {
   pathPrefix: string
   languages: string[]
 }
+interface CodeStructureRequest {
+  pathPrefix: string
+  limit: number
+}
+
 
 interface CodeGraphRequest {
   target: CodeEntityRef
@@ -298,9 +308,6 @@ function entityRefKey(ref: CodeEntityRef): string {
   return `${ref.sourceId}\u0000${ref.viewId}\u0000${ref.entityKey}`
 }
 
-function contextKey(context: CodeResponseContext): string {
-  return `${context.sourceId}\u0000${context.checkoutId}\u0000${context.viewId}\u0000${context.profileId}\u0000${context.generation}`
-}
 
 function parseCatalogContext(value: unknown): CodeResponseContext | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
@@ -316,37 +323,37 @@ function parseCatalogContext(value: unknown): CodeResponseContext | null {
   return { sourceId, checkoutId, viewId, profileId, generation }
 }
 
-function parseCatalogLabel(value: unknown): { id: string; label: string } | null {
+function parseCatalogSnapshot(value: unknown): CodeSnapshot | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
-  const id = text(Reflect.get(value, 'id'))
   const label = text(Reflect.get(value, 'label'))
-  return id === null || label === null ? null : { id, label }
+  const revisionValue = Reflect.get(value, 'revision')
+  const publishedAtValue = Reflect.get(value, 'published_at')
+  const revision = revisionValue === undefined || revisionValue === null ? null : text(revisionValue)
+  const publishedAt = publishedAtValue === undefined || publishedAtValue === null ? null : timestamp(publishedAtValue)
+  if (label === null || (revisionValue !== undefined && revisionValue !== null && revision === null) || (publishedAtValue !== undefined && publishedAtValue !== null && publishedAt === null)) return null
+  return { label, revision, publishedAt }
 }
 
 function parseCatalogEntry(value: unknown): CodeCatalogEntry | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
-  const source = parseCatalogLabel(Reflect.get(value, 'source'))
-  const checkout = parseCatalogLabel(Reflect.get(value, 'checkout'))
+  const repository = text(Reflect.get(value, 'repository'))
+  const workingCopy = text(Reflect.get(value, 'working_copy'))
+  const snapshotValue = Reflect.get(value, 'indexed_snapshot')
+  const selectionRefValue = Reflect.get(value, 'selection_ref')
   const indexIntentAvailable = Reflect.get(value, 'index_intent_available')
-  const profileValue = Reflect.get(value, 'analysis_profile_id')
-  const profileId = profileValue === undefined ? null : text(profileValue)
-  const viewValue = Reflect.get(value, 'view')
-  if (source === null || checkout === null || typeof indexIntentAvailable !== 'boolean') return null
-  if (viewValue === null) {
-    if (indexIntentAvailable !== (profileId !== null)) return null
-    return {
-      source,
-      checkout,
-      view: null,
-      indexIntentAvailable,
-      indexIntentTarget: profileId === null ? null : { sourceId: source.id, checkoutId: checkout.id },
-    }
+  const indexSelectionValue = Reflect.get(value, 'index_intent_selection_ref')
+  const selectionRef = selectionRefValue === undefined || selectionRefValue === null ? null : text(selectionRefValue)
+  const indexSelectionRef = indexSelectionValue === undefined || indexSelectionValue === null ? null : text(indexSelectionValue)
+  if (repository === null || workingCopy === null || typeof indexIntentAvailable !== 'boolean' || (selectionRefValue !== undefined && selectionRefValue !== null && selectionRef === null) || (indexSelectionValue !== undefined && indexSelectionValue !== null && indexSelectionRef === null)) return null
+
+  if (snapshotValue === undefined || snapshotValue === null) {
+    if (selectionRef !== null || indexIntentAvailable !== (indexSelectionRef !== null)) return null
+    return { repository, workingCopy, view: null, indexIntentAvailable, indexIntentTarget: indexSelectionRef === null ? null : { selectionRef: indexSelectionRef } }
   }
-  if (profileValue !== undefined || viewValue === undefined || typeof viewValue !== 'object' || Array.isArray(viewValue)) return null
-  const context = parseCatalogContext(Reflect.get(viewValue, 'context_ref'))
-  const view = text(Reflect.get(viewValue, 'label'))
-  if (context === null || view === null || context.sourceId !== source.id || context.checkoutId !== checkout.id) return null
-  return { source, checkout, view: { source: source.label, checkout: checkout.label, view, context }, indexIntentAvailable, indexIntentTarget: null }
+
+  const snapshot = parseCatalogSnapshot(snapshotValue)
+  if (snapshot === null || selectionRef === null || indexIntentAvailable || indexSelectionRef !== null) return null
+  return { repository, workingCopy, view: { repository, workingCopy, snapshot, selectionRef }, indexIntentAvailable: false, indexIntentTarget: null }
 }
 
 function parseCatalog(value: unknown): CodeCatalogEntry[] | null {
@@ -354,14 +361,13 @@ function parseCatalog(value: unknown): CodeCatalogEntry[] | null {
   const values = Reflect.get(value, 'contexts')
   if (!Array.isArray(values)) return null
   const entries: CodeCatalogEntry[] = []
-  const contexts = new Set<string>()
+  const selections = new Set<string>()
   for (const value of values) {
     const entry = parseCatalogEntry(value)
     if (entry === null) return null
     if (entry.view !== null) {
-      const key = contextKey(entry.view.context)
-      if (contexts.has(key)) return null
-      contexts.add(key)
+      if (selections.has(entry.view.selectionRef)) return null
+      selections.add(entry.view.selectionRef)
     }
     entries.push(entry)
   }
@@ -719,7 +725,7 @@ function loadPersistedPinCandidate(): string | null {
 
 function persistPinnedContext(context: CodeSafeContext): boolean {
   try {
-    sessionStorage.setItem(PINNED_CONTEXT_STORAGE_KEY, contextKey(context.context))
+    sessionStorage.setItem(PINNED_CONTEXT_STORAGE_KEY, context.selectionRef)
     return true
   } catch {
     return false
@@ -756,9 +762,8 @@ function loadIndexIntentResume(): IndexIntentResume | null {
 }
 function parseStoredIndexIntentTarget(value: unknown): IndexIntentTarget | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
-  const sourceId = text(Reflect.get(value, 'sourceId'))
-  const checkoutId = text(Reflect.get(value, 'checkoutId'))
-  return sourceId === null || checkoutId === null ? null : { sourceId, checkoutId }
+  const selectionRef = text(Reflect.get(value, 'selectionRef'))
+  return selectionRef === null ? null : { selectionRef }
 }
 
 
@@ -793,15 +798,19 @@ export function useOperatorCode() {
   const contextCandidate = ref<CodeSafeContext | null>(null)
   const pinnedContext = ref<CodeSafeContext | null>(null)
   const status = ref<CodeStatus | null>(null)
+  const structureEnvelope = ref<CodeEnvelope | null>(null)
   const searchEnvelope = ref<CodeEnvelope | null>(null)
   const graphEnvelope = ref<CodeEnvelope | null>(null)
   const sourceEnvelope = ref<CodeEnvelope | null>(null)
+  const pinnedResponseContext = ref<CodeResponseContext | null>(null)
   const activeSearchRequest = ref<CodeSearchRequest | null>(null)
   const activeGraphRequest = ref<CodeGraphRequest | null>(null)
+  const structureContinuationNotice = ref<'denied' | 'unavailable' | null>(null)
   const searchContinuationNotice = ref<'denied' | 'unavailable' | null>(null)
+  const structureState = ref<CodePresentationState>(presentation('idle', 'Pin an authorized view before opening its bounded structure.'))
   const searchState = ref<CodePresentationState>(presentation('idle', 'Pin an authorized view before searching.'))
-  const graphState = ref<CodePresentationState>(presentation('idle', 'Choose a released search result to explore relationships.'))
-  const sourceState = ref<CodePresentationState>(presentation('idle', 'Choose a released search result to read an exact source span.'))
+  const graphState = ref<CodePresentationState>(presentation('idle', 'Choose a released result to explore relationships.'))
+  const sourceState = ref<CodePresentationState>(presentation('idle', 'Choose a released result to read an exact source span.'))
   const pending = ref(false)
   const indexIntentState = ref<IndexIntentPresentationState>(indexIntentNotice('idle'))
   const indexIntentPending = ref(false)
@@ -903,15 +912,26 @@ export function useOperatorCode() {
 
   function clearContextualResults(): void {
     status.value = null
+    structureEnvelope.value = null
     searchEnvelope.value = null
     graphEnvelope.value = null
     sourceEnvelope.value = null
+    pinnedResponseContext.value = null
     activeSearchRequest.value = null
     activeGraphRequest.value = null
+    structureContinuationNotice.value = null
     searchContinuationNotice.value = null
+    structureState.value = presentation('idle', 'Pin an authorized view before opening its bounded structure.')
     searchState.value = presentation('idle', 'Pin an authorized view before searching.')
-    graphState.value = presentation('idle', 'Choose a released search result to explore relationships.')
-    sourceState.value = presentation('idle', 'Choose a released search result to read an exact source span.')
+    graphState.value = presentation('idle', 'Choose a released result to explore relationships.')
+    sourceState.value = presentation('idle', 'Choose a released result to read an exact source span.')
+  }
+
+  function matchesPinnedResponse(envelope: CodeEnvelope): boolean {
+    if (envelope.context === null) return false
+    if (pinnedResponseContext.value !== null && !sameView(pinnedResponseContext.value, envelope.context)) return false
+    pinnedResponseContext.value = envelope.context
+    return true
   }
 
   function stopIndexIntentPolling(): void {
@@ -1001,7 +1021,7 @@ export function useOperatorCode() {
     if (binding.value === null || target === undefined && pinnedContext.value === null || indexIntentPending.value || pending.value) return
     const existing = indexIntentResume.value
     const requestRef = existing !== null && existing.kind === kind && existing.intentRef === undefined
-      && (existing.target === undefined || target === undefined ? existing.target === target : existing.target.sourceId === target.sourceId && existing.target.checkoutId === target.checkoutId)
+      && (existing.target === undefined || target === undefined ? existing.target === target : existing.target.selectionRef === target.selectionRef)
       ? existing.requestRef
       : requestId()
     if (requestRef === null) {
@@ -1021,7 +1041,7 @@ export function useOperatorCode() {
     const payload = bindingPayload({
       request_ref: requestRef,
       kind,
-      ...(target === undefined ? {} : { target: { source_id: target.sourceId, checkout_id: target.checkoutId } }),
+      ...(target === undefined ? {} : { target: { selection_ref: target.selectionRef } }),
     })
     let result: CodeApiResult
     if (payload === null) {
@@ -1185,9 +1205,9 @@ export function useOperatorCode() {
     }
     contextCatalog.value = catalog
     contextState.value = catalog.length === 0 ? 'empty' : 'ready'
-    const selectedKey = contextCandidate.value === null ? null : contextKey(contextCandidate.value.context)
-    if (selectedKey !== null) contextCandidate.value = catalog.flatMap((entry) => entry.view === null ? [] : [entry.view]).find((entry) => contextKey(entry.context) === selectedKey) ?? null
-    if (pinnedContext.value !== null && !catalog.some((entry) => entry.view !== null && sameView(entry.view.context, pinnedContext.value?.context ?? null))) {
+    const selectedRef = contextCandidate.value?.selectionRef ?? null
+    if (selectedRef !== null) contextCandidate.value = catalog.flatMap((entry) => entry.view === null ? [] : [entry.view]).find((entry) => entry.selectionRef === selectedRef) ?? null
+    if (pinnedContext.value !== null && !catalog.some((entry) => entry.view?.selectionRef === pinnedContext.value?.selectionRef)) {
       pinnedContext.value = null
       clearContextualResults()
       clearIndexIntent()
@@ -1195,14 +1215,14 @@ export function useOperatorCode() {
     }
   }
 
-  function selectContext(context: CodeSafeContext): void {
+  function selectContext(context: CodeSafeContext | null): void {
     contextCandidate.value = context
   }
 
   function restorePersistedPinCandidate(): boolean {
     const stored = loadPersistedPinCandidate()
     if (stored === null) return false
-    const selected = contextCatalog.value.flatMap((entry) => entry.view === null ? [] : [entry.view]).find((entry) => contextKey(entry.context) === stored) ?? null
+    const selected = contextCatalog.value.flatMap((entry) => entry.view === null ? [] : [entry.view]).find((entry) => entry.selectionRef === stored) ?? null
     if (selected === null) return false
     contextCandidate.value = selected
     return true
@@ -1247,10 +1267,12 @@ export function useOperatorCode() {
       restorePersistedPinCandidate()
       const priorPinned = remount?.pinnedContext ?? null
       if (priorPinned !== null) {
-        const pinned = contextCatalog.value.flatMap((entry) => entry.view === null ? [] : [entry.view]).find((entry) => sameView(entry.context, priorPinned.context))
+        const pinned = contextCatalog.value.flatMap((entry) => entry.view === null ? [] : [entry.view]).find((entry) => entry.selectionRef === priorPinned.selectionRef)
         if (pinned !== undefined) {
           contextCandidate.value = pinned
           pinnedContext.value = pinned
+          await refreshStatus()
+          await requestStructure(null)
         }
       }
       await refreshIndexIntent()
@@ -1263,13 +1285,7 @@ export function useOperatorCode() {
     pending.value = true
     const result = await request(`/code/tabs/${encodeURIComponent(binding.value.tabBindingId)}/context`, 'PUT', {
       document_proof: binding.value.documentProof,
-      context_ref: {
-        source_id: selected.context.sourceId,
-        checkout_id: selected.context.checkoutId,
-        view_id: selected.context.viewId,
-        analysis_profile_id: selected.context.profileId,
-        generation: selected.context.generation,
-      },
+      selection_ref: selected.selectionRef,
     })
     pending.value = false
     if (result.kind !== 'success' || result.status !== 204) {
@@ -1281,8 +1297,9 @@ export function useOperatorCode() {
     persistPinnedContext(selected)
     clearContextualResults()
     await refreshStatus()
-  }
+    await requestStructure(null)
 
+  }
   async function refreshStatus(): Promise<boolean> {
     const payload = bindingPayload()
     if (payload === null || pinnedContext.value === null) return false
@@ -1291,6 +1308,34 @@ export function useOperatorCode() {
     pending.value = false
     status.value = result.kind === 'success' ? parseStatus(result.body) : null
     return status.value !== null
+  }
+
+  async function requestStructure(continuation: string | null): Promise<void> {
+    const payload = bindingPayload({ path_prefix: '', limit: 10, ...(continuation === null ? {} : { continuation }) })
+    if (payload === null || pinnedContext.value === null) return
+    pending.value = true
+    structureState.value = presentation('loading', 'Waiting for the server to release the bounded structure.')
+    structureContinuationNotice.value = null
+    const result = await request('/code/structure', 'POST', payload)
+    pending.value = false
+    if (result.kind !== 'success') {
+      if (continuation !== null && result.kind === 'denied') structureContinuationNotice.value = 'denied'
+      if (continuation !== null && result.kind === 'error') structureContinuationNotice.value = 'unavailable'
+      structureState.value = presentation(result.kind, 'No contextual structure was released.')
+      return
+    }
+    const envelope = parseEnvelope(result.body)
+    if (envelope === null || !matchesPinnedResponse(envelope)) {
+      structureState.value = presentation('error', 'The structure response did not prove the selected snapshot, so no result was rendered.')
+      return
+    }
+    structureEnvelope.value = envelope
+    structureState.value = presentationFromEnvelope(envelope)
+  }
+
+  async function continueStructure(): Promise<void> {
+    const continuation = structureEnvelope.value?.continuation ?? null
+    if (continuation !== null) await requestStructure(continuation)
   }
 
   async function requestSearch(searchRequest: CodeSearchRequest, continuation: string | null): Promise<void> {
@@ -1318,8 +1363,8 @@ export function useOperatorCode() {
       return
     }
     const envelope = parseEnvelope(result.body)
-    if (envelope === null || !sameView(pinned.context, envelope.context)) {
-      searchState.value = presentation('error', 'The search response did not prove the pinned View, so no result was rendered.')
+    if (envelope === null || !matchesPinnedResponse(envelope)) {
+      searchState.value = presentation('error', 'The search response did not prove the selected snapshot, so no result was rendered.')
       return
     }
     activeSearchRequest.value = searchRequest
@@ -1352,8 +1397,8 @@ export function useOperatorCode() {
       ...(continuation === null ? {} : { continuation }),
     })
     const pinned = pinnedContext.value
-    const activeSearch = searchEnvelope.value
-    if (payload === null || pinned === null || activeSearch === null || !sameView(pinned.context, activeSearch.context)) return
+    const activeResults = searchEnvelope.value ?? structureEnvelope.value
+    if (payload === null || pinned === null || activeResults?.context === null || !sameView(pinnedResponseContext.value, activeResults.context)) return
     pending.value = true
     graphState.value = presentation('loading', 'Waiting for the server to release graph evidence.')
     const result = await request('/code/graph', 'POST', payload)
@@ -1365,10 +1410,10 @@ export function useOperatorCode() {
       return
     }
     const envelope = parseEnvelope(result.body)
-    if (envelope === null || envelope.navigation === null || !sameView(pinned.context, envelope.context)) {
+    if (envelope === null || envelope.navigation === null || !matchesPinnedResponse(envelope)) {
       graphEnvelope.value = null
       activeGraphRequest.value = null
-      graphState.value = presentation('error', 'The graph response did not prove navigation inside the pinned View, so it was concealed.')
+      graphState.value = presentation('error', 'The relation response did not prove navigation inside the selected snapshot, so it was concealed.')
       return
     }
     activeGraphRequest.value = { target, options }
@@ -1385,9 +1430,8 @@ export function useOperatorCode() {
     const graph = graphEnvelope.value
     if (request === null || graph === null) return
     if (target !== null) {
-      const pinned = pinnedContext.value
       if (
-        pinned === null || target.sourceId !== pinned.context.sourceId || target.viewId !== pinned.context.viewId
+        graph.context === null || target.sourceId !== graph.context.sourceId || target.viewId !== graph.context.viewId
         || graph.navigation === null || !graph.navigation.nodes.some((node) => entityRefKey(node.ref) === entityRefKey(target))
       ) return
       await requestGraph(target, request.options)
@@ -1403,8 +1447,7 @@ export function useOperatorCode() {
       span: { byte_start: descriptor.span.byteStart, byte_end: descriptor.span.byteEnd, line_start: descriptor.span.lineStart, line_end: descriptor.span.lineEnd },
       content_digest: descriptor.contentDigest,
     })
-    const pinned = pinnedContext.value
-    if (payload === null || pinned === null) return
+    if (payload === null || pinnedContext.value === null) return
     pending.value = true
     sourceState.value = presentation('loading', 'Waiting for the server to release the exact source span.')
     const result = await request('/code/source', 'POST', payload)
@@ -1415,9 +1458,9 @@ export function useOperatorCode() {
       return
     }
     const envelope = parseEnvelope(result.body)
-    if (envelope === null || !sameView(pinned.context, envelope.context)) {
+    if (envelope === null || !matchesPinnedResponse(envelope)) {
       sourceEnvelope.value = null
-      sourceState.value = presentation('error', 'The source response did not prove the pinned view, so no body was rendered.')
+      sourceState.value = presentation('error', 'The source response did not prove the selected snapshot, so no body was rendered.')
       return
     }
     sourceEnvelope.value = envelope
@@ -1456,10 +1499,13 @@ export function useOperatorCode() {
     contextCandidate,
     pinnedContext,
     status,
+    structureEnvelope,
     searchEnvelope,
     graphEnvelope,
     sourceEnvelope,
+    structureContinuationNotice,
     searchContinuationNotice,
+    structureState,
     searchState,
     graphState,
     sourceState,
@@ -1475,6 +1521,7 @@ export function useOperatorCode() {
     retryIndexIntent,
     refreshIndexIntent,
     search,
+    continueStructure,
     continueSearch,
     explore,
     readSource,

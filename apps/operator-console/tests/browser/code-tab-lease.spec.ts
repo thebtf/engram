@@ -59,6 +59,7 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
   const handshakePayloads: unknown[] = []
   const resumePayloads: unknown[] = []
   const leasePayloads: unknown[] = []
+  const pinPayloads: unknown[] = []
   const closePayloads: unknown[] = []
   let bindingClosed = false
   const intent = {
@@ -71,18 +72,14 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
   }
   const catalog = {
     contexts: [{
-      source: { id: 'source-current', label: 'Current source' },
-      checkout: { id: 'checkout-current', label: 'Current checkout' },
-      view: {
-        context_ref: {
-          source_id: 'source-current',
-          checkout_id: 'checkout-current',
-          view_id: 'view-current',
-          analysis_profile_id: 'profile-current',
-          generation: 1,
-        },
-        label: 'Current view',
+      repository: 'Engram',
+      working_copy: 'feature/operator-workspace · operator desk',
+      indexed_snapshot: {
+        label: 'Current snapshot',
+        revision: '1a9dad0',
+        published_at: '2026-09-17T00:00:00Z',
       },
+      selection_ref: 'context-current',
       index_intent_available: false,
     }],
   }
@@ -135,6 +132,7 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
       return
     }
     if (pathname === `/api/code/tabs/${TAB_BINDING_ID}/context`) {
+      pinPayloads.push(route.request().postDataJSON())
       await route.fulfill({ status: 204 })
       return
     }
@@ -165,12 +163,12 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
   })
 
   await page.goto('/code', { waitUntil: 'domcontentloaded' })
-  const contextOption = page.getByTestId('code-context-select').locator('option').filter({ hasText: 'Current view' })
-  const contextValue = await contextOption.getAttribute('value')
-  if (contextValue === null) throw new Error('Code catalog did not expose Current view')
-  await page.getByTestId('code-context-select').selectOption(contextValue)
+  await page.getByTestId('code-context-repository').selectOption({ label: 'Engram' })
+  await page.getByTestId('code-context-working-copy').selectOption({ label: 'feature/operator-workspace · operator desk' })
+  await page.getByTestId('code-context-snapshot').selectOption({ label: 'Current snapshot' })
   await page.getByTestId('code-pin-context').click()
-  await expect(page.getByTestId('code-context-pinned')).toContainText('Current view')
+  expect(pinPayloads).toEqual([{ document_proof: DOCUMENT_PROOF, selection_ref: 'context-current' }])
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Current snapshot')
   await page.getByTestId('index-intent-reindex').click()
   await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'queued')
 
@@ -186,7 +184,7 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
     reload_token: 'reload-current',
   })
   expect(closePayloads).toEqual([])
-  await expect(page.getByTestId('code-context-pinned')).toContainText('Current view')
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Current snapshot')
   await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'queued')
   expect(handshakePayloads).toHaveLength(1)
 
@@ -206,7 +204,7 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
   await expect(copied.getByTestId('code-bootstrap-evidence')).toContainText('TAB_BINDING_COLLISION')
   await expect(copied.getByTestId('code-context-pinned')).toHaveCount(0)
   await expect(copied.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'idle')
-  await expect(page.getByTestId('code-context-pinned')).toContainText('Current view')
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Current snapshot')
   expect(handshakePayloads).toHaveLength(2)
   expect(handshakePayloads[1]).toMatchObject({
     copied_tab_binding_id: TAB_BINDING_ID,

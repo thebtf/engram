@@ -11,10 +11,13 @@ const {
   contextCandidate,
   pinnedContext,
   status,
+  structureEnvelope,
   searchEnvelope,
   graphEnvelope,
   sourceEnvelope,
+  structureContinuationNotice,
   searchContinuationNotice,
+  structureState,
   searchState,
   graphState,
   sourceState,
@@ -31,6 +34,7 @@ const {
   refreshIndexIntent,
   search,
   continueSearch,
+  continueStructure,
   explore,
   readSource,
   continueGraph,
@@ -47,8 +51,8 @@ onMounted(() => {
   <main class="code-page">
     <header class="head">
       <div>
-        <h1>{{ t('codeExplorer.title') }}</h1>
-        <p>{{ t('codeExplorer.subtitle') }}</p>
+        <h1>{{ t('workspace.title') }}</h1>
+        <p>{{ t('workspace.lead') }}</p>
       </div>
       <button class="btn" type="button" :disabled="pending || pinnedContext === null" @click="refreshStatus">{{ t('codeExplorer.refresh') }}</button>
     </header>
@@ -81,15 +85,19 @@ onMounted(() => {
     <CodeResults
       :pinned="pinnedContext"
       :status="status"
+      :structure="structureEnvelope"
       :search="searchEnvelope"
       :graph="graphEnvelope"
       :source="sourceEnvelope"
+      :structure-continuation-notice="structureContinuationNotice"
       :search-continuation-notice="searchContinuationNotice"
+      :structure-state="structureState"
       :search-state="searchState"
       :graph-state="graphState"
       :source-state="sourceState"
       :pending="pending"
       @search="search"
+      @continue-structure="continueStructure"
       @continue-search="continueSearch"
       @explore="explore"
       @continue-graph="continueGraph"
@@ -100,7 +108,7 @@ onMounted(() => {
     <details class="release-note" :data-state="resultMode" data-testid="code-release-state">
       <summary>{{ t('codeExplorer.evidence.title') }}</summary>
       <span v-if="pinnedContext === null">{{ t('codeExplorer.evidence.unselected') }}</span>
-      <span v-else>{{ t('codeExplorer.evidence.pinned', { view: pinnedContext.view }) }}</span>
+      <span v-else>{{ t('codeExplorer.evidence.pinned', { snapshot: pinnedContext.snapshot.label }) }}</span>
     </details>
   </main>
 </template>
