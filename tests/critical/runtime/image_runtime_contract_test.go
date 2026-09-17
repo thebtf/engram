@@ -1076,6 +1076,18 @@ func testLatestPromotionReleaseRefGuard(t *testing.T, workflow string) {
 			t.Fatalf("durable latest-promotion journal lacks %q", required)
 		}
 	}
+	for _, required := range []string{
+		"$useIntendedIdentity = $Intended -and",
+		"$identityObject = [pscustomobject]$Identity",
+		"$identityObject.PSObject.Properties['intended_immutable_reference']",
+		"$identityObject.PSObject.Properties['intended_manifest_digest']",
+		"immutable_reference = if ($useIntendedIdentity)",
+		"manifest_digest = if ($useIntendedIdentity)",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("latest-promotion journal identity selection is not property-safe: missing %q", required)
+		}
+	}
 	terminalizer := workflowStepSection(t, workflow, "Complete unstarted latest-promotion journal", "Logout and erase the isolated registry credential directory")
 	for _, required := range []string{
 		"GH_TOKEN: ${{ github.token }}", "if ($journalID -notmatch '^[1-9][0-9]*$' -or (Test-Path -LiteralPath $promotionPath)) { return }",
@@ -1123,8 +1135,8 @@ func testLatestPromotionStateMatrix(t *testing.T, repo string) {
 	if err != nil {
 		t.Fatalf("latest-promotion state matrix failed: %v\n%s", err, output)
 	}
-	if !strings.Contains(string(output), "PASS: external journal create/PATCH ordering, GHCR login terminalization, process-loss pending state, no-write journal failures, success, rollback, bootstrap-required no-write, inspection rejection, local receipt failures, and rollback failure; scenarios=") {
-		t.Fatalf("durable latest-promotion state matrix did not report its complete result:\n%s", output)
+	if !strings.Contains(string(output), "PASS: external journal create/PATCH ordering, rollback PATCH identities (rollback_pending/restored/rollback_failed), GHCR login terminalization, process-loss pending state, no-write journal failures, success, rollback, bootstrap-required no-write, inspection rejection, local receipt failures, and rollback failure; scenarios=19") {
+		t.Fatalf("durable latest-promotion 19-scenario state matrix did not report its complete result:\n%s", output)
 	}
 }
 

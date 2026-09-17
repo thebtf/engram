@@ -400,11 +400,15 @@ jobs:
           function Get-JournalIdentity {
             param($Identity, [switch]$Intended)
             if ($null -eq $Identity) { return $null }
+            $identityObject = [pscustomobject]$Identity
+            $useIntendedIdentity = $Intended -and
+              $null -ne $identityObject.PSObject.Properties['intended_immutable_reference'] -and
+              $null -ne $identityObject.PSObject.Properties['intended_manifest_digest']
             return [ordered]@{
-              reference = [string]$Identity.reference
-              state = [string]$Identity.state
-              immutable_reference = if ($Intended) { [string]$Identity.intended_immutable_reference } else { [string]$Identity.immutable_reference }
-              manifest_digest = if ($Intended) { [string]$Identity.intended_manifest_digest } else { [string]$Identity.manifest_digest }
+              reference = [string]$identityObject.reference
+              state = [string]$identityObject.state
+              immutable_reference = if ($useIntendedIdentity) { [string]$identityObject.intended_immutable_reference } else { [string]$identityObject.immutable_reference }
+              manifest_digest = if ($useIntendedIdentity) { [string]$identityObject.intended_manifest_digest } else { [string]$identityObject.manifest_digest }
             }
           }
           function Get-JournalSummary {

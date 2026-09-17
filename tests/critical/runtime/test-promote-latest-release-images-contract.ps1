@@ -491,6 +491,25 @@ function Assert-ActualJournalPatch
   Assert-That ($summary.updated_summary.count -eq 1 -and $summary.updated_summary.images[0].manifest_digest -ceq $script:newByRepository[$script:repositories[0]].manifest_digest) 'actual journal PATCH must summarize the readback identity'
 }
 
+function Assert-RollbackJournalPatch
+{
+  param([Parameter(Mandatory)][string]$Outcome, [Parameter(Mandatory)][string]$Repository)
+  $patches = @($script:journalEvents | Where-Object {
+      if ($_.kind -cne 'journal_patch')
+      { return $false
+      }
+      $summary = $_.body.output.summary | ConvertFrom-Json
+      return $summary.outcome -ceq $Outcome -and $summary.repository -ceq $Repository
+    })
+  Assert-That ($patches.Count -eq 1) "rollback journal must emit exactly one $Outcome PATCH for $Repository"
+  $summary = $patches[0].body.output.summary | ConvertFrom-Json
+  Assert-That ($summary.phase -ceq 'rolling_back') "rollback journal $Outcome PATCH must use the rolling_back phase"
+  $previous = $script:oldByRepository[$Repository]
+  $expected = ([ordered]@{ reference = "$Repository`:latest"; state = 'present'; immutable_reference = "$Repository@$($previous.manifest_digest)"; manifest_digest = $previous.manifest_digest } | ConvertTo-Json -Compress)
+  Assert-That (($summary.previous_identity | ConvertTo-Json -Compress) -ceq $expected) "rollback journal $Outcome PATCH must carry the exact previous immutable identity"
+  Assert-That (($summary.intended_identity | ConvertTo-Json -Compress) -ceq $expected) "rollback journal $Outcome PATCH must carry the exact intended rollback identity"
+}
+
 function Assert-JournalTerminal
 {
   param([Parameter(Mandatory)][string]$Outcome, [Parameter(Mandatory)][string]$Conclusion)
@@ -742,6 +761,8 @@ $readbackReceipt = Read-Receipt
 Assert-ReceiptMatchesState -Promotion $readbackRollback -Receipt $readbackReceipt
 Assert-JournalTerminal -Outcome 'rolled_back' -Conclusion 'neutral'
 Assert-ReceiptMatchesRegistryOrTypedState -Receipt $readbackReceipt
+Assert-RollbackJournalPatch -Outcome 'rollback_pending' -Repository $firstRepository
+Assert-RollbackJournalPatch -Outcome 'restored' -Repository $firstRepository
 
 Set-Scenario
 $script:failCreateTarget = "$secondRepository`:latest"
@@ -827,7 +848,9 @@ Assert-That ($rollbackFailure.outcome -ceq 'rollback_failed') 'failed existing-t
 Assert-That (@($rollbackFailure.rollback.failures).Count -eq 1) 'failed existing-tag rollback must record its target'
 $rollbackReceipt = Read-Receipt
 Assert-JournalTerminal -Outcome 'rollback_failed' -Conclusion 'failure'
+Assert-RollbackJournalPatch -Outcome 'rollback_pending' -Repository $firstRepository
+Assert-RollbackJournalPatch -Outcome 'rollback_failed' -Repository $firstRepository
 Assert-ReceiptMatchesState -Promotion $rollbackFailure -Receipt $rollbackReceipt
 Assert-ReceiptMatchesRegistryOrTypedState -Receipt $rollbackReceipt
-Assert-That ($script:scenarioCount -gt 0) 'promotion state matrix must execute a nonzero scenario denominator'
-"PASS: external journal create/PATCH ordering, GHCR login terminalization, process-loss pending state, no-write journal failures, success, rollback, bootstrap-required no-write, inspection rejection, local receipt failures, and rollback failure; scenarios=$($script:scenarioCount)"
+Assert-That ($script:scenarioCount -eq 19) "promotion state matrix must execute exactly 19 scenarios, got $($script:scenarioCount)"
+"PASS: external journal create/PATCH ordering, rollback PATCH identities (rollback_pending/restored/rollback_failed), GHCR login terminalization, process-loss pending state, no-write journal failures, success, rollback, bootstrap-required no-write, inspection rejection, local receipt failures, and rollback failure; scenarios=19"
