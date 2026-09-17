@@ -1,0 +1,62 @@
+{
+  "receiptSchema": "engram.operator-code-console.da-journey/v1",
+  "scope": "D-A 01/02/04 operator Workspace journey",
+  "candidate": {
+    "worktree": "D:/Dev/engram/.agent/worktrees/operator-workspace-t008a-journey",
+    "head": "488c56da4c2dbebe628511acf098e5e1cd71a0d8",
+    "tree": "6d0a3385e0a7e3e142d132ac5a0772070f5ddd7a",
+    "provenBeforeThisReceipt": true
+  },
+  "sourceFiles": {
+    "apps/operator-console/tests/live/fixture-bootstrap.ts": "sha256:749da70300d17653395717016c073cfc0b23c2b06bbfe21efdd7dd2dc2763bb2",
+    "apps/operator-console/tests/live/operator-code-explorer.spec.ts": "sha256:2dbdb76aa2458fddc042e565028e2c29083e7e9c8c849d11a8c9a3dc784c16e2",
+    "apps/operator-console/tests/live/operator-code-s2-topology.spec.ts": "sha256:33470cd8f201e49f6e2ecdd3bc310a7c4e3908b546745e7c566ec5375d74e992",
+    "cmd/operator-code-live-fixture/main.go": "sha256:bc308a21bc207befce144aa9239bcbfd02b5e64cfbf353442ffdd06053e9616f",
+    "cmd/operator-code-live-fixture/main_test.go": "sha256:632b2f363da9227f378b4bef6a29038f75b6c62579434648bb8d1fd3a44e2aad"
+  },
+  "observedProof": {
+    "kind": "real-authenticated-go-postgresql-chromium",
+    "trace": {
+      "path": "apps/operator-console/test-results/operator-code-explorer-S2--2f7e4-ion-and-graph-source-limits-chromium/s2-live-code-explorer.json",
+      "sha256": "95783a05c81687f44a0568c66430a0f7adf856cc5ad6d73c1151a0a82de28c6e",
+      "candidateHead": "488c56da4c2dbebe628511acf098e5e1cd71a0d8",
+      "candidateTree": "6d0a3385e0a7e3e142d132ac5a0772070f5ddd7a",
+      "backendSourceCommit": "488c56da4c2dbebe628511acf098e5e1cd71a0d8",
+      "browser": "chromium 149.0.7827.55",
+      "traffic": "all browser /api/code responses were 200 or 204; bootstrap readiness 503s occurred only while the disposable server initialized and became 200 before the browser journey"
+    },
+    "fixtureUnit": "The preserved focused fixture unit passed before this receipt; its contract proves that the conceptual query 'which routine hands work to a peer' has no lexical-token overlap with CodeExplorerFixtureA, while the published fixture has a resolved CodeExplorerFixtureA -> CodeExplorerFixtureB edge and a readable working-copy label.",
+    "semanticProvider": "The trace's initial search assertion required status=ok, retrieval.mode=hybrid, vector_coverage=1, semantic weight > 0, lexical weight > 0, and CodeExplorerFixtureA as the semantic target. The next-result request carried a continuation and preserved the server context. The fixture's provider path completes embeddings only when the provider configuration is supplied; the inherited live trace was produced with that real-provider configuration.",
+    "journey": {
+      "homeToWorkspace": "Homepage Workspace entry opened /code; the default release state was unselected.",
+      "contextAndPrivacy": "Repository, working copy, indexed snapshot, grant/readback, reload invalidation, copied-tab collision, fresh-opener normalization, and alternate A-to-D context were asserted in the live browser journey.",
+      "searchGraphSource": "The pinned snapshot reported more than 50 chunks, complete embedding coverage, hybrid search, an off-page graph neighbor, source span/digest evidence, and repeated graph/source requests in the same context.",
+      "relations": "The direct resolved relation was discovered from the selected source; reverse/off-page neighbor and exact source evidence were exposed from the pinned published snapshot.",
+      "languageKeyboard": "The live journey asserted Russian default, English and Simplified Chinese switching, Escape close behavior, and keyboard-opened mobile navigation in both translated states.",
+      "responsive": "The live journey captured 1440x1024, 980x900, 390x844, and 200% page-scale screenshots while asserting no document horizontal overflow at each CSS viewport and restoring desktop state afterward."
+    }
+  },
+  "screenshots": {
+    "apps/operator-console/test-results/operator-code-explorer-S2--2f7e4-ion-and-graph-source-limits-chromium/da08a-workspace-1440.png": "sha256:408793c740071f0428fdf2efd4ea36c8f10350edf910ce26ad98847363b97f49",
+    "apps/operator-console/test-results/operator-code-explorer-S2--2f7e4-ion-and-graph-source-limits-chromium/da08a-workspace-980.png": "sha256:cf078879e912efb8ab16c935fd6ae11fcd5635f7a47e23d52cf222b9977cc42e",
+    "apps/operator-console/test-results/operator-code-explorer-S2--2f7e4-ion-and-graph-source-limits-chromium/da08a-workspace-390.png": "sha256:fefd096f6e9d8ab8aa48ca1b4f2c446445bd7e2269444cf391f2b9f8e19f642b",
+    "apps/operator-console/test-results/operator-code-explorer-S2--2f7e4-ion-and-graph-source-limits-chromium/da08a-workspace-200pct.png": "sha256:bf126ea3cdd55eb0df06a4c4a76f87fec099ebb32cb14a91f7cae5ef9f93246c"
+  },
+  "impeccable": {
+    "command": "C:\\Users\\btf\\.impeccable\\bin\\0.1.5\\impeccable.exe detect apps\\operator-console",
+    "result": "8 static findings: one existing navigation width transition and seven existing 3px selected-row side stripes. None touches the five preserved D-A fixture/live files, so no out-of-scope UI rewrite was made.",
+    "reviewScreenshot": {
+      "path": ".impeccable/review/da08a-search-before-graph-503.png",
+      "sha256": "53b10e2b19c18a61479fbcd35d45346d086ae715aa4df66f89b3ed19d055a74a"
+    }
+  },
+  "isolationAndCleanup": {
+    "ports": "The live fixture reserves loopback ports with port 0 and Docker publishes PostgreSQL to an ephemeral loopback port; it never stops or reuses a foreign listener.",
+    "cleanup": "Focused live Playwright result is passed and its global teardown completed. A post-run Docker label query found no operator-console-live fixture container."
+  },
+  "commandsObservedThisCloseout": [
+    "C:\\Users\\btf\\.impeccable\\bin\\0.1.5\\impeccable.exe detect apps\\operator-console",
+    "docker ps --filter label=engram.fixture=operator-console-live --format \"{{.ID}} {{.Names}}\""
+  ],
+  "verdict": "PASS — all DA01/DA02/DA04 checks are covered by the hash-bound focused real-provider trace and final responsive/zoom screenshots; no unexpected browser /api/code HTTP status >= 400 occurred."
+}
