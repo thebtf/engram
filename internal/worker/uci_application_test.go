@@ -447,7 +447,7 @@ func TestUCIApplicationOperatorSearchUsesSemanticOnlyWhenCoverageComplete(t *tes
 
 	configuredSemantic := composition.application.semanticService
 	configuredQuery := composition.application.queryService
-	composition.application.semanticService = uci.NewSemanticService(uci.VectorProfile{}, nil, nil, composition.projectionStore)
+	composition.application.semanticService = uci.NewSemanticService(uci.VectorProfile{}, nil, nil, composition.projectionStore, composition.projectionStore)
 	composition.application.queryService = uci.NewQueryService(nil)
 	_, semanticErr := composition.application.SearchOperatorCodebase(context.Background(), authorized, semanticSpec)
 	require.ErrorContains(t, semanticErr, "uci semantic: provider ref is invalid")
@@ -483,7 +483,7 @@ func TestUCIApplicationOperatorSearchSelectsSemanticOnlyForCompleteCoverage(t *t
 	statusStore := &workerUCIApplicationStatusStore{snapshot: workerUCIApplicationStatusSnapshot(fixture.ref, uci.IndexCoveragePartial)}
 	application := &UCIApplication{
 		queryService:       uci.NewQueryService(lexical),
-		semanticService:    uci.NewSemanticService(profile, &workerUCIApplicationEmbedder{model: profile.Model}, semanticStore, semanticFallback),
+		semanticService:    uci.NewSemanticService(profile, &workerUCIApplicationEmbedder{model: profile.Model}, semanticStore, semanticFallback, semanticStore),
 		indexStatusService: uci.NewIndexStatusService(statusStore, &profile),
 	}
 	spec := uci.QuerySpec{
@@ -522,6 +522,7 @@ func TestUCIApplicationOperatorSearchSelectsSemanticOnlyForCompleteCoverage(t *t
 
 	continuationSpec := spec
 	continuationSpec.Continuation = semantic.Continuation.Value
+	statusStore.snapshot = workerUCIApplicationStatusSnapshot(fixture.ref, uci.IndexCoveragePartial)
 	continued, err := application.SearchOperatorCodebase(context.Background(), authorized, continuationSpec)
 	require.NoError(t, err)
 	require.NoError(t, continued.ValidatePreExposure())
@@ -537,6 +538,7 @@ func TestUCIApplicationOperatorSearchSelectsSemanticOnlyForCompleteCoverage(t *t
 	require.Equal(t, continuationSpec.Limit, semanticStore.calls[1].Limit)
 	require.Equal(t, continuationSpec.Continuation, semanticStore.calls[1].Continuation)
 	require.Equal(t, 1, semanticStore.calls[1].Offset)
+	require.Len(t, lexical.calls, 1, "semantic continuation must bypass current incomplete coverage")
 
 	for _, invalid := range []uci.QuerySpec{
 		{Mode: uci.QueryModeStructure, Order: uci.QueryOrderRelevance},
@@ -1375,9 +1377,10 @@ func (store *workerUCIApplicationQueryStore) SelectCandidates(_ context.Context,
 }
 
 type workerUCIApplicationSemanticStore struct {
-	candidates []uci.SemanticCandidate
-	calls      []uci.QuerySpec
-	err        error
+	candidates    []uci.SemanticCandidate
+	calls         []uci.QuerySpec
+	continuations map[string]uci.SemanticContinuation
+	err           error
 }
 
 func (*workerUCIApplicationSemanticStore) LookupCandidateEmbedding(context.Context, uci.AuthorizedContext, uci.VectorProfile, uci.QueryCandidate) ([]float32, bool, error) {
@@ -1405,6 +1408,33 @@ func (store *workerUCIApplicationSemanticStore) SelectHybridCandidates(_ context
 		Coverage:       uci.IndexCoverageComplete,
 		VectorCoverage: 1,
 	}, nil
+}
+
+func (store *workerUCIApplicationSemanticStore) CreateSemanticContinuation(_ context.Context, continuation uci.SemanticContinuation) error {
+	if store.continuations == nil {
+		store.continuations = make(map[string]uci.SemanticContinuation)
+	}
+	store.continuations[continuation.CursorRef] = workerUCIApplicationContinuationClone(continuation)
+	return nil
+}
+
+func (store *workerUCIApplicationSemanticStore) LoadSemanticContinuation(_ context.Context, cursorRef string) (uci.SemanticContinuation, bool, error) {
+	continuation, found := store.continuations[cursorRef]
+	if found && !continuation.ExpiresAt.After(time.Now().UTC()) {
+		delete(store.continuations, cursorRef)
+		found = false
+	}
+	return workerUCIApplicationContinuationClone(continuation), found, nil
+}
+
+func workerUCIApplicationContinuationClone(continuation uci.SemanticContinuation) uci.SemanticContinuation {
+	clone := continuation
+	clone.Vector = append([]float32(nil), continuation.Vector...)
+	if continuation.Context.SpaceID != nil {
+		spaceID := *continuation.Context.SpaceID
+		clone.Context.SpaceID = &spaceID
+	}
+	return clone
 }
 
 type workerUCIApplicationEmbedder struct {

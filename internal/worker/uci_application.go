@@ -122,6 +122,7 @@ func (application *UCIApplication) SearchCodebase(ctx context.Context, authorize
 		Filter:          uci.QueryFilter{PathPrefix: pathPrefix},
 		Order:           uci.QueryOrderRelevance,
 		Limit:           input.Limit,
+		Continuation:    input.Continuation,
 	}
 	result, err := application.executeSearch(ctx, authorized, spec)
 	if err != nil {
@@ -134,6 +135,9 @@ func (application *UCIApplication) SearchCodebase(ctx context.Context, authorize
 }
 
 func (application *UCIApplication) executeSearch(ctx context.Context, authorized uci.AuthorizedContext, spec uci.QuerySpec) (uci.QueryResult, error) {
+	if application.semanticService != nil && spec.Continuation != nil && uci.IsSemanticContinuationToken(*spec.Continuation) {
+		return application.semanticService.Query(ctx, authorized, spec)
+	}
 	if application.semanticService != nil && application.indexStatusService != nil {
 		status, err := application.indexStatusService.Status(ctx, authorized, "")
 		if err != nil {

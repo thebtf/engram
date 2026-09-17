@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -78,16 +80,18 @@ type SemanticService struct {
 	profile             VectorProfile
 	embedder            SemanticEmbedder
 	store               SemanticStore
+	continuations       SemanticContinuationStore
 	lexical             *QueryService
 	queryProviderBudget time.Duration
 }
 
 // NewSemanticService creates one profile-scoped semantic query workflow.
-func NewSemanticService(profile VectorProfile, embedder SemanticEmbedder, store SemanticStore, lexical QueryStore) *SemanticService {
+func NewSemanticService(profile VectorProfile, embedder SemanticEmbedder, store SemanticStore, lexical QueryStore, continuations SemanticContinuationStore) *SemanticService {
 	return &SemanticService{
 		profile:             profile,
 		embedder:            embedder,
 		store:               store,
+		continuations:       continuations,
 		lexical:             NewQueryService(lexical),
 		queryProviderBudget: semanticQueryProviderBudget,
 	}
@@ -202,7 +206,7 @@ func (service *SemanticService) prepareSemanticQuery(ctx context.Context, author
 	if err != nil {
 		return semanticQueryState{}, nil, err
 	}
-	continuation, err := service.semanticContinuation(ref, normalized)
+	continuation, err := service.semanticContinuation(ctx, ref, normalized)
 	if err != nil {
 		return semanticQueryState{}, nil, err
 	}
@@ -224,6 +228,16 @@ func (service *SemanticService) prepareSemanticQuery(ctx context.Context, author
 }
 
 func (service *SemanticService) queryHybrid(ctx context.Context, authorized AuthorizedContext, query semanticQueryState) (QueryResult, error) {
+	if query.continuation.persisted {
+		if semanticNil(service.store) {
+			return QueryResult{}, fmt.Errorf("uci semantic: continuation ranking is unavailable")
+		}
+		semanticResult, err := service.store.SelectHybridCandidates(ctx, authorized, service.profile, query.continuation.vector, semanticQueryStoreSpec(query))
+		if err != nil {
+			return QueryResult{}, err
+		}
+		return service.hybridResult(ctx, authorized, query, semanticHybridRankingDigest(service.profile, query.continuation.vector), query.continuation.vector, query.continuation.expiresAt, semanticResult)
+	}
 	if reason := service.providerUnavailableReason(); reason != "" {
 		return service.fallbackToLexical(ctx, authorized, query, reason, nil)
 	}
@@ -239,22 +253,32 @@ func (service *SemanticService) queryHybrid(ctx context.Context, authorized Auth
 		return service.fallbackToLexical(ctx, authorized, query, semanticProviderDegradation(err), err)
 	}
 	rankingDigest := semanticHybridRankingDigest(service.profile, vector)
-	if query.continuation.present && query.continuation.rankingDigest != rankingDigest {
-		return QueryResult{}, fmt.Errorf("uci semantic: continuation ranking does not match request")
-	}
-	storeSpec := query.spec
-	storeSpec.Offset = query.continuation.offset
+	storeSpec := semanticQueryStoreSpec(query)
 	semanticResult, err := service.store.SelectHybridCandidates(ctx, authorized, service.profile, vector, storeSpec)
 	if err != nil {
-		if query.continuation.present {
-			return QueryResult{}, err
-		}
 		return service.fallbackToLexical(ctx, authorized, query, "vector_store_unavailable", nil)
 	}
-	return service.hybridResult(ctx, authorized, query, rankingDigest, semanticResult)
+	return service.hybridResult(ctx, authorized, query, rankingDigest, vector, time.Now().UTC().Add(semanticContinuationTTL), semanticResult)
 }
 
-func (service *SemanticService) hybridResult(ctx context.Context, authorized AuthorizedContext, query semanticQueryState, rankingDigest string, semanticResult SemanticStoreResult) (QueryResult, error) {
+func semanticQueryStoreSpec(query semanticQueryState) QuerySpec {
+	storeSpec := query.spec
+	storeSpec.Offset = query.continuation.offset
+	return storeSpec
+}
+
+func semanticContinuationMatches(stored SemanticContinuation, ref ContextRef, profile VectorProfile, spec QuerySpec) bool {
+	return semanticContextMatches(stored.Context, ref) &&
+		stored.ClientSessionID == spec.ClientSessionID &&
+		stored.ProfileFingerprint == semanticProfileFingerprint(profile) &&
+		stored.QueryDigest == queryContinuationDigest("text", []string{spec.Text}) &&
+		stored.FilterDigest == queryFilterContinuationDigest(spec.Filter) &&
+		stored.Mode == spec.Mode &&
+		stored.Order == spec.Order &&
+		stored.Limit == spec.Limit
+}
+
+func (service *SemanticService) hybridResult(ctx context.Context, authorized AuthorizedContext, query semanticQueryState, rankingDigest string, vector []float32, expiresAt time.Time, semanticResult SemanticStoreResult) (QueryResult, error) {
 	if semanticResult.Unavailable != nil {
 		if err := semanticUnavailableResult(query.ref, semanticResult); err != nil {
 			return QueryResult{}, err
@@ -275,7 +299,7 @@ func (service *SemanticService) hybridResult(ctx context.Context, authorized Aut
 			return QueryResult{}, fmt.Errorf("uci semantic: store returned an invalid fused candidate")
 		}
 	}
-	return service.availableResult(semanticAvailableResultInput{
+	return service.availableResult(ctx, semanticAvailableResultInput{
 		ref:                query.ref,
 		spec:               query.spec,
 		start:              query.continuation.offset,
@@ -284,6 +308,8 @@ func (service *SemanticService) hybridResult(ctx context.Context, authorized Aut
 		mode:               QueryRetrievalHybrid,
 		rankingDigest:      rankingDigest,
 		vectorCoverage:     &semanticResult.VectorCoverage,
+		continuationVector: vector,
+		continuationExpiry: expiresAt,
 		degradationReasons: []string{},
 	})
 }
@@ -302,12 +328,36 @@ type semanticContinuationState struct {
 	offset        int
 	mode          QueryRetrievalMode
 	rankingDigest string
+	vector        []float32
+	expiresAt     time.Time
+	persisted     bool
 	present       bool
 }
 
-func (service *SemanticService) semanticContinuation(ref ContextRef, spec QuerySpec) (semanticContinuationState, error) {
+func (service *SemanticService) semanticContinuation(ctx context.Context, ref ContextRef, spec QuerySpec) (semanticContinuationState, error) {
 	if spec.Continuation == nil {
 		return semanticContinuationState{}, nil
+	}
+	if cursorRef, ok := semanticContinuationTokenRef(*spec.Continuation); ok {
+		if semanticNil(service.continuations) {
+			return semanticContinuationState{}, fmt.Errorf("uci semantic: continuation store is not configured")
+		}
+		stored, found, err := service.continuations.LoadSemanticContinuation(ctx, cursorRef)
+		if err != nil {
+			return semanticContinuationState{}, fmt.Errorf("uci semantic: load continuation: %w", err)
+		}
+		if !found || stored.Validate() != nil || !stored.ExpiresAt.After(time.Now().UTC()) || !semanticContinuationMatches(stored, ref, service.profile, spec) {
+			return semanticContinuationState{}, fmt.Errorf("uci semantic: continuation binding does not match request")
+		}
+		return semanticContinuationState{
+			offset:        stored.NextOffset,
+			mode:          QueryRetrievalHybrid,
+			rankingDigest: semanticHybridRankingDigest(service.profile, stored.Vector),
+			vector:        append([]float32(nil), stored.Vector...),
+			expiresAt:     stored.ExpiresAt.UTC(),
+			persisted:     true,
+			present:       true,
+		}, nil
 	}
 	payload, err := service.lexical.decodeContinuation(*spec.Continuation)
 	if err != nil {
@@ -316,7 +366,10 @@ func (service *SemanticService) semanticContinuation(ref ContextRef, spec QueryS
 	if !queryContinuationMatchesBase(payload, ref, spec) || payload.RankingDigest == "" {
 		return semanticContinuationState{}, fmt.Errorf("uci semantic: continuation binding does not match request")
 	}
-	if payload.RetrievalMode != QueryRetrievalHybrid && payload.RetrievalMode != QueryRetrievalLexical {
+	if payload.RetrievalMode == QueryRetrievalHybrid {
+		return semanticContinuationState{}, fmt.Errorf("uci semantic: continuation version is unsupported")
+	}
+	if payload.RetrievalMode != QueryRetrievalLexical {
 		return semanticContinuationState{}, fmt.Errorf("uci semantic: continuation retrieval mode is invalid")
 	}
 	return semanticContinuationState{
@@ -386,7 +439,7 @@ func (service *SemanticService) lexicalResult(ctx context.Context, authorized Au
 		})
 	}
 	zero := float64(0)
-	return service.availableResult(semanticAvailableResultInput{
+	return service.availableResult(ctx, semanticAvailableResultInput{
 		ref:                ref,
 		spec:               spec,
 		start:              start,
@@ -408,10 +461,12 @@ type semanticAvailableResultInput struct {
 	mode               QueryRetrievalMode
 	rankingDigest      string
 	vectorCoverage     *float64
+	continuationVector []float32
+	continuationExpiry time.Time
 	degradationReasons []string
 }
 
-func (service *SemanticService) availableResult(input semanticAvailableResultInput) (QueryResult, error) {
+func (service *SemanticService) availableResult(ctx context.Context, input semanticAvailableResultInput) (QueryResult, error) {
 	if input.start > 0 && len(input.candidates) == 0 {
 		return QueryResult{}, fmt.Errorf("uci semantic: continuation position is outside the selected view")
 	}
@@ -432,10 +487,16 @@ func (service *SemanticService) availableResult(input semanticAvailableResultInp
 	truncated := end < len(input.candidates)
 	continuation := QueryContinuation{}
 	if truncated {
-		payload := queryContinuationPayloadFor(input.ref, input.spec, input.start+end)
-		payload.RetrievalMode = input.mode
-		payload.RankingDigest = input.rankingDigest
-		token, err := service.lexical.encodeContinuationPayload(payload)
+		var token string
+		var err error
+		if input.mode == QueryRetrievalHybrid {
+			token, err = service.createSemanticContinuation(ctx, input)
+		} else {
+			payload := queryContinuationPayloadFor(input.ref, input.spec, input.start+end)
+			payload.RetrievalMode = input.mode
+			payload.RankingDigest = input.rankingDigest
+			token, err = service.lexical.encodeContinuationPayload(payload)
+		}
 		if err != nil {
 			return QueryResult{}, err
 		}
@@ -450,6 +511,35 @@ func (service *SemanticService) availableResult(input semanticAvailableResultInp
 		DegradationReasons: degradation,
 	}
 	return QueryResult{Response: response}, nil
+}
+
+func (service *SemanticService) createSemanticContinuation(ctx context.Context, input semanticAvailableResultInput) (string, error) {
+	if semanticNil(service.continuations) {
+		return "", fmt.Errorf("uci semantic: continuation store is not configured")
+	}
+	now := time.Now().UTC()
+	continuation := SemanticContinuation{
+		CursorRef:          uuid.NewString(),
+		Context:            input.ref,
+		ClientSessionID:    input.spec.ClientSessionID,
+		ProfileFingerprint: semanticProfileFingerprint(service.profile),
+		QueryDigest:        queryContinuationDigest("text", []string{input.spec.Text}),
+		FilterDigest:       queryFilterContinuationDigest(input.spec.Filter),
+		Mode:               input.spec.Mode,
+		Order:              input.spec.Order,
+		Limit:              input.spec.Limit,
+		NextOffset:         input.start + min(input.spec.Limit, len(input.candidates)),
+		Vector:             append([]float32(nil), input.continuationVector...),
+		ExpiresAt:          input.continuationExpiry.UTC(),
+		CreatedAt:          now,
+	}
+	if err := continuation.Validate(); err != nil {
+		return "", err
+	}
+	if err := service.continuations.CreateSemanticContinuation(ctx, continuation); err != nil {
+		return "", fmt.Errorf("uci semantic: create continuation: %w", err)
+	}
+	return semanticContinuationToken(continuation.CursorRef), nil
 }
 
 func (service *SemanticService) validate(ctx context.Context, requireStore bool) error {

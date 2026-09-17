@@ -6867,6 +6867,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 		},
 		workspaceCatalogMigration182(),
 		uciStructureExposureMigration183(),
+		uciSemanticContinuationMigration184(),
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
@@ -7254,6 +7255,66 @@ func uciStructureExposureMigration183() *gormigrate.Migration {
 		},
 		Rollback: func(_ *gorm.DB) error {
 			// Append-only structure evidence remains readable after binary rollback.
+			return nil
+		},
+	}
+}
+
+func uciSemanticContinuationMigration184() *gormigrate.Migration {
+	return &gormigrate.Migration{
+		ID: "184_uci_semantic_continuations",
+		Migrate: func(tx *gorm.DB) error {
+			for _, stmt := range []string{
+				`CREATE TABLE IF NOT EXISTS uci_semantic_continuations (
+					cursor_ref UUID PRIMARY KEY,
+					space_id UUID,
+					source_id UUID NOT NULL,
+					checkout_id UUID NOT NULL,
+					view_id UUID NOT NULL,
+					profile_id UUID NOT NULL,
+					generation BIGINT NOT NULL,
+					client_session_id TEXT NOT NULL,
+					profile_fingerprint TEXT NOT NULL,
+					query_digest TEXT NOT NULL,
+					filter_digest TEXT NOT NULL,
+					mode TEXT NOT NULL,
+					query_order TEXT NOT NULL,
+					query_limit INTEGER NOT NULL,
+					next_offset INTEGER NOT NULL,
+					vector vector(1536) NOT NULL,
+					expires_at TIMESTAMPTZ NOT NULL,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+					CONSTRAINT uci_semantic_continuations_generation_chk CHECK (generation > 0),
+					CONSTRAINT uci_semantic_continuations_client_session_chk CHECK (
+						btrim(client_session_id) <> '' AND client_session_id = btrim(client_session_id)
+						AND client_session_id !~ '[[:cntrl:]]' AND octet_length(client_session_id) <= 256
+					),
+					CONSTRAINT uci_semantic_continuations_digest_chk CHECK (
+						profile_fingerprint ~ '^[0-9a-f]{64}$' AND query_digest ~ '^[0-9a-f]{64}$'
+						AND filter_digest ~ '^[0-9a-f]{64}$'
+					),
+					CONSTRAINT uci_semantic_continuations_mode_chk CHECK (
+						mode IN ('exact_local_name', 'exact_qualified_symbol', 'exact_relative_path', 'fts')
+						AND query_order IN ('path', 'relevance')
+					),
+					CONSTRAINT uci_semantic_continuations_pagination_chk CHECK (
+						query_limit BETWEEN 1 AND 50 AND next_offset >= 1
+					),
+					CONSTRAINT uci_semantic_continuations_lifecycle_chk CHECK (expires_at > created_at)
+				)`,
+				`CREATE INDEX IF NOT EXISTS idx_uci_semantic_continuations_expiry
+					ON uci_semantic_continuations (expires_at, cursor_ref)`,
+			} {
+				if err := tx.Exec(stmt).Error; err != nil {
+					return fmt.Errorf("migration 184: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			if err := tx.Exec(`DROP TABLE IF EXISTS uci_semantic_continuations`).Error; err != nil {
+				return fmt.Errorf("migration 184 rollback: %w", err)
+			}
 			return nil
 		},
 	}

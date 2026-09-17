@@ -572,6 +572,27 @@ func TestUCICodeIntelCompatibilityNormalizesAndRejectsPathPrefixBeforeApplicatio
 	require.Error(t, err, "invalid UTF-8 path prefix must not be normalized through JSON replacement")
 }
 
+func TestUCICodeIntelCompatibilityForwardsOpaqueSearchContinuation(t *testing.T) {
+	fixture := newUCICodeIntelCompatibilityFixture(t)
+	handle := fixture.selectContext(t, fixture.clientA, fixture.refA)
+	continuation := "usc1.00000000-0000-4000-8000-000000000001"
+	response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", map[string]any{
+		"context_handle": handle,
+		"query":          uciCodeIntelCompatibilityQuery,
+		"continuation":   continuation,
+	})
+	requireUCICodeIntelQueryResponse(t, response, fixture.refA, uciCodeIntelCompatibilityBodyA, uciCodeIntelCompatibilityBodyB)
+	require.Len(t, fixture.application.searchCalls, 1)
+	require.NotNil(t, fixture.application.searchCalls[0].input.Continuation)
+	require.Equal(t, continuation, *fixture.application.searchCalls[0].input.Continuation)
+
+	schema := codebaseSearchTool().InputSchema["properties"].(map[string]any)
+	property, ok := schema["continuation"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "string", property["type"])
+	require.Equal(t, codebaseSearchMaxContinuation, property["maxLength"])
+}
+
 func TestUCICodeIntelCompatibilityToolSchemasAdvertiseContextHandleWithoutProjectAuthority(t *testing.T) {
 	for _, tool := range []Tool{codebaseSearchTool(), codebaseStatusTool()} {
 		tool := tool

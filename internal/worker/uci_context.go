@@ -520,7 +520,7 @@ func composeUCIContext(
 	graphService := uci.NewGraphService(projectionStore)
 	versionedReadService := uci.NewVersionedReadService(projectionStore)
 	indexStatusService := uci.NewIndexStatusService(projectionStore, semantic.profilePtr)
-	semanticService := uci.NewSemanticService(semantic.profile, semantic.embedder, projectionStore, projectionStore)
+	semanticService := uci.NewSemanticService(semantic.profile, semantic.embedder, projectionStore, projectionStore, projectionStore)
 	exposureRecorder := uci.NewExposureRecorder(gormstore.NewUCIExposureStore(db), nil)
 	application, err := NewUCIApplication(
 		contextApplication,

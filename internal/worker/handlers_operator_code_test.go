@@ -145,7 +145,7 @@ func TestOperatorCodeHTTPAdapter_CatalogKeepsWorktreesExplicitAndNoViewUnselecte
 
 func TestOperatorCodeHTTPAdapter_SearchContinuationStaysServerOwnedAndExactlyBound(t *testing.T) {
 	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
-	internalCursor := "internal-service-cursor"
+	internalCursor := "usc1.00000000-0000-4000-8000-000000000001"
 	firstResponse := operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalLexical)
 	truncated := true
 	firstResponse.Truncated = &truncated

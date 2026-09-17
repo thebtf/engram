@@ -254,6 +254,31 @@ type UCIChunkEmbedding struct {
 
 func (UCIChunkEmbedding) TableName() string { return "ci_chunk_embeddings" }
 
+// UCISemanticContinuation preserves the exact vector and immutable request
+// binding for a short-lived hybrid pagination cursor.
+type UCISemanticContinuation struct {
+	CursorRef          string          `gorm:"column:cursor_ref;type:uuid;primaryKey"`
+	SpaceID            *string         `gorm:"column:space_id;type:uuid"`
+	SourceID           string          `gorm:"column:source_id;type:uuid;not null"`
+	CheckoutID         string          `gorm:"column:checkout_id;type:uuid;not null"`
+	ViewID             string          `gorm:"column:view_id;type:uuid;not null"`
+	ProfileID          string          `gorm:"column:profile_id;type:uuid;not null"`
+	Generation         int64           `gorm:"column:generation;not null"`
+	ClientSessionID    string          `gorm:"column:client_session_id;type:text;not null"`
+	ProfileFingerprint string          `gorm:"column:profile_fingerprint;type:text;not null"`
+	QueryDigest        string          `gorm:"column:query_digest;type:text;not null"`
+	FilterDigest       string          `gorm:"column:filter_digest;type:text;not null"`
+	Mode               string          `gorm:"column:mode;type:text;not null"`
+	QueryOrder         string          `gorm:"column:query_order;type:text;not null"`
+	QueryLimit         int             `gorm:"column:query_limit;not null"`
+	NextOffset         int             `gorm:"column:next_offset;not null"`
+	Vector             pgvector.Vector `gorm:"column:vector;type:vector(1536);not null"`
+	ExpiresAt          time.Time       `gorm:"column:expires_at;type:timestamptz;not null"`
+	CreatedAt          time.Time       `gorm:"column:created_at;type:timestamptz;not null"`
+}
+
+func (UCISemanticContinuation) TableName() string { return "uci_semantic_continuations" }
+
 // UCIJob is persisted workflow state, including a fenced publication build when publication_key is set.
 type UCIJob struct {
 	JobID                 string      `gorm:"column:job_id;type:uuid;primaryKey"`
