@@ -267,6 +267,7 @@ jobs:
             return [ordered]@{
               reference = $Reference
               repository = $repository
+              state = 'present'
               immutable_reference = "$repository@$manifestDigest"
               manifest_digest = $manifestDigest
               config_digest = $configDigest
@@ -282,14 +283,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) {
               $detail = ($inspectOutput | ForEach-Object { $_.ToString() }) -join "`n"
               if ($detail -match '(?i)(\b404\b|manifest unknown|name unknown)') {
-                $repository = $Reference.Substring(0, $Reference.LastIndexOf(':'))
-                return [ordered]@{
-                  reference = $Reference
-                  repository = $repository
-                  state = 'absent'
-                  immutable_reference = $null
-                  manifest_digest = $null
-                }
+                return [ordered]@{ reference = $Reference; repository = $Reference.Substring(0, $Reference.LastIndexOf(':')); state = 'absent'; immutable_reference = $null; manifest_digest = $null }
               }
               throw "could not inspect manifest for ${Reference}: $detail"
             }
@@ -297,88 +291,20 @@ jobs:
             $manifestDigest = [string]$manifest.digest
             if ($manifestDigest -notmatch '^sha256:[0-9a-f]{64}$') { throw "image does not expose an immutable manifest digest: $Reference" }
             $repository = $Reference.Substring(0, $Reference.LastIndexOf(':'))
-            return [ordered]@{
-              reference = $Reference
-              repository = $repository
-              state = 'present'
-              immutable_reference = "$repository@$manifestDigest"
-              manifest_digest = $manifestDigest
-            }
+            return [ordered]@{ reference = $Reference; repository = $repository; state = 'present'; immutable_reference = "$repository@$manifestDigest"; manifest_digest = $manifestDigest }
           }
 
           function Get-FinalTagIdentity {
             param([Parameter(Mandatory)][string]$Reference)
-            try {
-              return Get-TagIdentity -Reference $Reference
-            } catch {
-              $repository = $Reference.Substring(0, $Reference.LastIndexOf(':'))
-              return [ordered]@{
-                reference = $Reference
-                repository = $repository
-                state = 'unknown'
-                immutable_reference = $null
-                manifest_digest = $null
-                failure = $_.Exception.Message
-              }
+            try { return Get-TagIdentity -Reference $Reference } catch {
+              return [ordered]@{ reference = $Reference; repository = $Reference.Substring(0, $Reference.LastIndexOf(':')); state = 'readback_error'; immutable_reference = $null; manifest_digest = $null; failure = $_.Exception.Message }
             }
-          }
-
-          function Remove-CreatedLatestTag {
-            param(
-              [Parameter(Mandatory)]$Expected,
-              [Parameter(Mandatory)][string]$Reference
-            )
-            $current = Get-TagIdentity -Reference $Reference
-            if ($current.state -eq 'absent') {
-              return [ordered]@{ target = $Reference; outcome = 'succeeded'; method = 'already_absent'; failure = $null; final_identity = $current }
-            }
-            if ($current.manifest_digest -cne $Expected.manifest_digest) {
-              return [ordered]@{ target = $Reference; outcome = 'not_safe'; method = $null; failure = "latest tag no longer matches the promoted immutable digest: $Reference"; final_identity = $current }
-            }
-            $prefix = 'ghcr.io/thebtf/'
-            if (-not $current.repository.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
-              return [ordered]@{ target = $Reference; outcome = 'not_supported'; method = $null; failure = "no safe cleanup endpoint is configured for $($current.repository)"; final_identity = $current }
-            }
-            $packageName = $current.repository.Substring($prefix.Length)
-            $versionOutput = @(gh api --paginate --slurp "users/thebtf/packages/container/$packageName/versions?per_page=100")
-            if ($LASTEXITCODE -ne 0) {
-              return [ordered]@{ target = $Reference; outcome = 'failed'; method = 'github_packages_delete'; failure = "could not list container package versions for cleanup: $current.repository"; final_identity = $current }
-            }
-            try {
-              $versions = @($versionOutput | ConvertFrom-Json | ForEach-Object { $_ })
-            } catch {
-              return [ordered]@{ target = $Reference; outcome = 'failed'; method = 'github_packages_delete'; failure = "could not parse container package versions for cleanup: $current.repository"; final_identity = $current }
-            }
-            $latestVersions = @($versions | Where-Object { @($_.metadata.container.tags | Where-Object { [string]$_ -ceq 'latest' }).Count -gt 0 })
-            if ($latestVersions.Count -ne 1) {
-              return [ordered]@{ target = $Reference; outcome = 'not_safe'; method = $null; failure = "could not identify exactly one latest package version for cleanup: $current.repository"; final_identity = $current }
-            }
-            $latestVersion = $latestVersions[0]
-            $latestTags = @($latestVersion.metadata.container.tags | ForEach-Object { [string]$_ })
-            if ($latestTags.Count -ne 1 -or $latestTags[0] -cne 'latest') {
-              return [ordered]@{ target = $Reference; outcome = 'not_supported'; method = $null; failure = "latest shares an immutable package version with other tags and cannot be deleted safely: $current.repository"; final_identity = $current }
-            }
-            gh api --method DELETE "users/thebtf/packages/container/$packageName/versions/$($latestVersion.id)" | Out-Null
-            if ($LASTEXITCODE -ne 0) {
-              return [ordered]@{ target = $Reference; outcome = 'failed'; method = 'github_packages_delete'; failure = "could not delete latest-only package version for cleanup: $current.repository"; final_identity = (Get-FinalTagIdentity -Reference $Reference) }
-            }
-            $final = Get-TagIdentity -Reference $Reference
-            if ($final.state -ne 'absent') {
-              return [ordered]@{ target = $Reference; outcome = 'failed'; method = 'github_packages_delete'; failure = "latest tag remains after cleanup: $Reference"; final_identity = $final }
-            }
-            return [ordered]@{ target = $Reference; outcome = 'succeeded'; method = 'github_packages_delete'; failure = $null; final_identity = $final }
           }
 
           function Assert-ImageIdentity {
-            param(
-              [Parameter(Mandatory)]$Expected,
-              [Parameter(Mandatory)]$Observed,
-              [Parameter(Mandatory)][string]$Description
-            )
+            param([Parameter(Mandatory)]$Expected, [Parameter(Mandatory)]$Observed, [Parameter(Mandatory)][string]$Description)
             foreach ($field in 'manifest_digest','config_digest','source','version','revision') {
-              if ([string]$Observed.$field -cne [string]$Expected.$field) {
-                throw "$Description differs from its expected immutable identity: $field"
-              }
+              if ([string]$Observed.$field -cne [string]$Expected.$field) { throw "$Description differs from its expected immutable identity: $field" }
             }
           }
 
@@ -396,10 +322,9 @@ jobs:
           $rollbackTargets = [System.Collections.Generic.List[object]]::new()
           $restoredLatest = [System.Collections.Generic.List[object]]::new()
           $rollbackFailures = [System.Collections.Generic.List[object]]::new()
-          $rollbackCleanup = [System.Collections.Generic.List[object]]::new()
           $receiptFailures = [System.Collections.Generic.List[object]]::new()
           $previousByRepository = @{}
-          $attemptedByTarget = @{}
+          $finalByRepository = @{}
           $promotion = [ordered]@{
             phase = 'capturing_previous_latest'
             outcome = 'pending'
@@ -409,29 +334,21 @@ jobs:
             updated_latest_images = @()
             final_latest_images = @()
             intermediate_receipt_failures = @()
-            post_write_release_revalidation = [ordered]@{
-              status = 'not_started'
-              expected_release_tag = [string]$release.release_tag
-              expected_source_commit = [string]$release.source_commit
-              observed_release_tag = $null
-              observed_source_commit = $null
-              failure = $null
-            }
-            rollback = [ordered]@{
-              attempted = $false
-              outcome = 'not_needed'
-              targets = @()
-              restored_images = @()
-              cleanup = @()
-              failures = @()
-            }
+            post_write_release_revalidation = [ordered]@{ status = 'not_started'; expected_release_tag = [string]$release.release_tag; expected_source_commit = [string]$release.source_commit; observed_release_tag = $null; observed_source_commit = $null; failure = $null }
+            rollback = [ordered]@{ attempted = $false; outcome = 'not_needed'; targets = @(); restored_images = @(); failures = @() }
+          }
+          function Set-FinalLatestImage {
+            param([Parameter(Mandatory)][string]$Repository, [Parameter(Mandatory)]$Identity)
+            $finalByRepository[$Repository] = $Identity
+            $promotion.final_latest_images = @($source.images | ForEach-Object { $finalByRepository[[string]$_.repository] })
+          }
+          function Set-FinalLatestReadbacks {
+            $promotion.final_latest_images = @($source.images | ForEach-Object { Get-FinalTagIdentity -Reference "$($_.repository):latest" })
           }
           function Write-PromotionState {
             param([switch]$BestEffort)
             try {
-              $promotion |
-                ConvertTo-Json -Depth 10 |
-                Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'promotion.json') -Encoding utf8NoBOM
+              $promotion | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'promotion.json') -Encoding utf8NoBOM
             } catch {
               if (-not $BestEffort) { throw }
               $receiptFailures.Add([ordered]@{ phase = [string]$promotion.phase; failure = $_.Exception.Message })
@@ -446,43 +363,45 @@ jobs:
               $previous = Get-TagIdentity -Reference $target
               $previousLatest.Add($previous)
               $previousByRepository[[string]$image.repository] = $previous
+              Set-FinalLatestImage -Repository ([string]$image.repository) -Identity $previous
             }
             $promotion.previous_latest_images = $previousLatest.ToArray()
-            $promotion.final_latest_images = $previousLatest.ToArray()
             $promotion.phase = 'writing_latest'
             Write-PromotionState
+            $missing = @($previousLatest | Where-Object { $_.state -eq 'absent' })
+            if ($missing.Count -gt 0) {
+              $promotion.phase = 'failed'
+              $promotion.outcome = 'bootstrap_required_no_write'
+              $promotion.failure = "latest tag is absent and requires manual bootstrap without promotion writes: $($missing[0].reference)"
+              Write-PromotionState
+              throw $promotion.failure
+            }
 
             foreach ($image in @($source.images)) {
               $target = "$($image.repository):latest"
               $previous = $previousByRepository[[string]$image.repository]
-              if ($null -eq $previous) { throw "missing captured latest identity for $target" }
+              $attempt = [ordered]@{ reference = $target; repository = [string]$image.repository; state = 'mutation_pending'; intended_immutable_reference = [string]$image.immutable_reference; intended_manifest_digest = [string]$image.manifest_digest }
+              Set-FinalLatestImage -Repository ([string]$image.repository) -Identity $attempt
+              $promotion.attempted_latest_images = @($attemptedLatest.ToArray() + $attempt)
+              Write-PromotionState
               $rollbackTargets.Add($previous)
-              $attempt = [ordered]@{
-                reference = $target
-                repository = [string]$image.repository
-                immutable_reference = [string]$image.immutable_reference
-                manifest_digest = [string]$image.manifest_digest
-              }
               $attemptedLatest.Add($attempt)
-              $attemptedByTarget[$target] = $attempt
               $promotion.rollback.targets = $rollbackTargets.ToArray()
               $promotion.attempted_latest_images = $attemptedLatest.ToArray()
-              Write-PromotionState -BestEffort
               docker buildx imagetools create --prefer-index=false --tag $target $image.immutable_reference
               if ($LASTEXITCODE -ne 0) { throw "could not promote $($image.immutable_reference) to $target" }
               $observed = Get-ImageIdentity -Reference $target
               Assert-ImageIdentity -Expected $image -Observed $observed -Description "latest readback for $target"
               $updatedLatest.Add($observed)
               $promotion.updated_latest_images = $updatedLatest.ToArray()
+              Set-FinalLatestImage -Repository ([string]$image.repository) -Identity $observed
               try {
-                [ordered]@{ images = $updatedLatest.ToArray() } |
-                  ConvertTo-Json -Depth 5 |
-                  Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'latest.json') -Encoding utf8NoBOM
-                Write-PromotionState
+                [ordered]@{ images = $updatedLatest.ToArray() } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'latest.json') -Encoding utf8NoBOM
               } catch {
                 $receiptFailures.Add([ordered]@{ phase = 'writing_latest'; failure = $_.Exception.Message })
                 $promotion.intermediate_receipt_failures = $receiptFailures.ToArray()
               }
+              Write-PromotionState -BestEffort
             }
 
             $promotion.phase = 'post_write_release_revalidation'
@@ -499,24 +418,23 @@ jobs:
                 throw $promotion.post_write_release_revalidation.failure
               }
               $promotion.post_write_release_revalidation.status = 'passed'
-              Write-PromotionState -BestEffort
             } catch {
-              if ($promotion.post_write_release_revalidation.status -eq 'started') {
-                $promotion.post_write_release_revalidation.status = 'error'
-                $promotion.post_write_release_revalidation.failure = $_.Exception.Message
-                Write-PromotionState -BestEffort
-              }
+              if ($promotion.post_write_release_revalidation.status -eq 'started') { $promotion.post_write_release_revalidation.status = 'error'; $promotion.post_write_release_revalidation.failure = $_.Exception.Message }
+              Write-PromotionState -BestEffort
               throw
             }
+            Set-FinalLatestReadbacks
+            $finalizationFailures = @($promotion.final_latest_images | Where-Object { $_.state -eq 'readback_error' -or $_.state -ne 'present' })
+            if ($finalizationFailures.Count -gt 0) { throw "could not finalize latest registry readbacks: $($finalizationFailures[0].reference)" }
             $promotion.phase = 'completed'
             $promotion.outcome = 'success'
-            $promotion.final_latest_images = $updatedLatest.ToArray()
             Write-PromotionState
           } catch {
             $promotion.failure = $_.Exception.Message
             if ($rollbackTargets.Count -eq 0) {
               $promotion.phase = 'failed'
-              $promotion.outcome = 'failed_before_write'
+              if (@($previousLatest | Where-Object { $_.state -eq 'absent' }).Count -eq 0) { $promotion.outcome = 'failed_before_write' }
+              Set-FinalLatestReadbacks
               Write-PromotionState
               throw "latest promotion failed before updating a moving tag: $($promotion.failure)"
             }
@@ -526,47 +444,32 @@ jobs:
             Write-PromotionState -BestEffort
             foreach ($previous in $rollbackTargets) {
               try {
-                if ($previous.state -eq 'absent') {
-                  $attempt = $attemptedByTarget[[string]$previous.reference]
-                  if ($null -eq $attempt) { throw "missing attempted immutable identity for $($previous.reference)" }
-                  $cleanup = Remove-CreatedLatestTag -Expected $attempt -Reference $previous.reference
-                  $rollbackCleanup.Add($cleanup)
-                  if ($cleanup.outcome -cne 'succeeded') { throw "could not restore confirmed-absent latest tag $($previous.reference): $($cleanup.failure)" }
-                  $restoredLatest.Add($cleanup.final_identity)
-                  continue
-                }
                 docker buildx imagetools create --prefer-index=false --tag $previous.reference $previous.immutable_reference
                 if ($LASTEXITCODE -ne 0) { throw "could not restore $($previous.reference)" }
                 $restored = Get-TagIdentity -Reference $previous.reference
-                if ($restored.state -ne 'present' -or $restored.manifest_digest -cne $previous.manifest_digest) {
-                  throw "rollback readback for $($previous.reference) does not restore the captured immutable digest"
-                }
+                if ($restored.state -ne 'present' -or $restored.manifest_digest -cne $previous.manifest_digest) { throw "rollback readback for $($previous.reference) does not restore the captured immutable digest" }
                 $restoredLatest.Add($restored)
               } catch {
                 $rollbackFailures.Add([ordered]@{ target = $previous.reference; failure = $_.Exception.Message })
               }
             }
             $promotion.rollback.restored_images = $restoredLatest.ToArray()
-            $promotion.rollback.cleanup = $rollbackCleanup.ToArray()
             $promotion.rollback.failures = $rollbackFailures.ToArray()
             $promotion.phase = 'failed'
+            Set-FinalLatestReadbacks
+            $readbackErrors = @($promotion.final_latest_images | Where-Object { $_.state -eq 'readback_error' })
             if ($rollbackFailures.Count -gt 0) {
               $promotion.rollback.outcome = 'failed'
-              $hasAbsentTargets = @($rollbackTargets | Where-Object { $_.state -eq 'absent' }).Count -gt 0
-              if ($hasAbsentTargets) {
-                $promotion.outcome = 'rollback_incomplete'
-              } else {
-                $promotion.outcome = 'rollback_failed'
-              }
-              $promotion.final_latest_images = @($rollbackTargets | ForEach-Object { Get-FinalTagIdentity -Reference $_.reference })
-              Write-PromotionState -BestEffort
-              throw "latest promotion failed and rollback failed for $($rollbackFailures.Count) tag(s): $($promotion.failure)"
+              $promotion.outcome = 'rollback_failed'
+            } elseif ($readbackErrors.Count -gt 0) {
+              $promotion.rollback.outcome = 'readback_error'
+              $promotion.outcome = 'rollback_readback_error'
+            } else {
+              $promotion.rollback.outcome = 'succeeded'
+              $promotion.outcome = 'rolled_back'
             }
-            $promotion.rollback.outcome = 'succeeded'
-            $promotion.outcome = 'rolled_back'
-            $promotion.final_latest_images = $restoredLatest.ToArray()
-            Write-PromotionState
-            throw "latest promotion failed; rollback restored $($rollbackTargets.Count) tag(s): $($promotion.failure)"
+            Write-PromotionState -BestEffort
+            throw "latest promotion failed; final outcome=$($promotion.outcome): $($promotion.failure)"
           }
 
       - name: Logout and erase the isolated registry credential directory

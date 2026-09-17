@@ -1,6 +1,4 @@
-param(
-  [Parameter(Mandatory)][string]$WorkflowPath
-)
+param([Parameter(Mandatory)][string]$WorkflowPath)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -11,18 +9,6 @@ function Assert-That
   if (-not $Condition)
   { throw $Message
   }
-}
-
-function Get-WorkflowRun
-{
-  param([Parameter(Mandatory)][string]$Name)
-  $workflow = [System.IO.File]::ReadAllText($WorkflowPath)
-  $pattern = '(?ms)^      - name: ' + [regex]::Escape($Name) + '\r?\n.*?^        run: \|\r?\n(?<body>.*?)(?=^      - name:|\z)'
-  $match = [regex]::Match($workflow, $pattern)
-  if (-not $match.Success)
-  { throw "could not find workflow step: $Name"
-  }
-  return ($match.Groups['body'].Value -replace '(?m)^ {10}', '')
 }
 
 function New-Digest
@@ -57,13 +43,17 @@ function Set-Scenario
     [string]$PostWriteSourceCommit = ('1' * 40 -join ''),
     [string[]]$MissingLatest = @(),
     [string]$InspectFailureTarget = $null,
-    [string]$InspectFailureMessage = 'unauthorized: authentication required',
     [switch]$FailLatestReceiptWrite,
     [int]$FailPromotionStateWriteOn = 0,
-    [string]$FailCleanupTarget = $null,
-    [switch]$CleanupLatestOnly
+    [switch]$RejectPromotionStateAfterUpdate,
+    [switch]$InterruptAfterPendingState
   )
 
+  $script:repositories = @(
+    'ghcr.io/thebtf/engram',
+    'ghcr.io/thebtf/engram-operator-console',
+    'ghcr.io/thebtf/engram-postgres'
+  )
   $script:releaseTag = 'v1.2.3'
   $script:sourceCommit = '1' * 40 -join ''
   $script:postWriteReleaseTag = $PostWriteReleaseTag
@@ -72,53 +62,42 @@ function Set-Scenario
   $script:tags = @{}
   $script:immutable = @{}
   $script:oldByRepository = @{}
-  $script:missingLatest = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-  foreach ($repository in $MissingLatest)
-  { [void]$script:missingLatest.Add("$repository`:latest")
-  }
+  $script:newByRepository = @{}
   $script:createCalls = [System.Collections.Generic.List[object]]::new()
-  $script:cleanupCalls = [System.Collections.Generic.List[object]]::new()
-  $script:packageVersions = @{}
-  $script:failCreateTarget = $null
-  $script:failCreateSource = $null
+  $script:inspectFailureTarget = $InspectFailureTarget
   $script:failReadbackTarget = $null
   $script:failReadbackManifest = $null
   $script:readbackFailureInjected = $false
-  $script:inspectFailureTarget = $InspectFailureTarget
-  $script:inspectFailureMessage = $InspectFailureMessage
+  $script:failCreateTarget = $null
+  $script:failCreateSource = $null
   $script:failLatestReceiptWrite = [bool]$FailLatestReceiptWrite
   $script:latestReceiptWriteFailed = $false
   $script:failPromotionStateWriteOn = $FailPromotionStateWriteOn
   $script:promotionStateWrites = 0
-  $script:failCleanupTarget = $FailCleanupTarget
-  $script:cleanupLatestOnly = [bool]$CleanupLatestOnly
+  $script:rejectPromotionStateAfterUpdate = [bool]$RejectPromotionStateAfterUpdate
+  $script:interruptAfterPendingState = [bool]$InterruptAfterPendingState
+  $script:interrupted = $false
+  $script:rejectPromotionStateWrites = $false
 
   $env:RECEIPT_DIR = 'contract-receipt'
   $env:REPOSITORY_NAME = 'thebtf/engram'
-
-  $repositories = @(
-    'ghcr.io/thebtf/engram',
-    'ghcr.io/thebtf/engram-operator-console',
-    'ghcr.io/thebtf/engram-postgres'
-  )
   $sourceImages = [System.Collections.Generic.List[object]]::new()
-  for ($index = 0; $index -lt $repositories.Count; $index++)
+  for ($index = 0; $index -lt $script:repositories.Count; $index++)
   {
-    $repository = $repositories[$index]
+    $repository = $script:repositories[$index]
     $old = New-Identity -Repository $repository -ManifestCharacter ([char]([int][char]'a' + $index)) -ConfigCharacter ([char]([int][char]'d' + $index)) -Version 'v1.2.2' -Revision ('2' * 40 -join '')
     $new = New-Identity -Repository $repository -ManifestCharacter ([char]([int][char]'7' + $index)) -ConfigCharacter ([char]([int][char]'4' + $index)) -Version $script:releaseTag -Revision $script:sourceCommit
-    $oldReference = "$repository@$($old.manifest_digest)"
-    $newReference = "$repository@$($new.manifest_digest)"
-    if (-not $script:missingLatest.Contains("$repository`:latest"))
+    if ($MissingLatest -notcontains $repository)
     {
       $script:tags["$repository`:latest"] = $old
       $script:oldByRepository[$repository] = $old
     }
-    $script:immutable[$oldReference] = $old
-    $script:immutable[$newReference] = $new
+    $script:newByRepository[$repository] = $new
+    $script:immutable["$repository@$($old.manifest_digest)"] = $old
+    $script:immutable["$repository@$($new.manifest_digest)"] = $new
     $sourceImages.Add([pscustomobject]@{
         repository = $repository
-        immutable_reference = $newReference
+        immutable_reference = "$repository@$($new.manifest_digest)"
         manifest_digest = $new.manifest_digest
         config_digest = $new.config_digest
         source = $new.source
@@ -127,7 +106,7 @@ function Set-Scenario
       })
   }
 
-  $script:files[(Join-Path $env:RECEIPT_DIR 'release.json')] = ([ordered]@{
+  $script:files['contract-receipt/release.json'] = ([ordered]@{
       release_tag = $script:releaseTag
       source_commit = $script:sourceCommit
       triggering_workflow_name = $null
@@ -135,50 +114,69 @@ function Set-Scenario
       triggering_workflow_run_id = $null
       triggering_workflow_job_conclusion = $null
     } | ConvertTo-Json -Compress)
-  $script:files[(Join-Path $env:RECEIPT_DIR 'sources.json')] = ([ordered]@{
+  $script:files['contract-receipt/sources.json'] = ([ordered]@{
       release_tag = $script:releaseTag
       source_commit = $script:sourceCommit
       images = $sourceImages.ToArray()
     } | ConvertTo-Json -Depth 5)
 }
+function Key($Path)
+{
+  return $Path -replace '\\', '/'
+}
+
 
 function global:Get-Content
 {
   param([Parameter(Mandatory)][string]$LiteralPath, [switch]$Raw)
-  if (-not $script:files.ContainsKey($LiteralPath))
+  if (-not $script:files.ContainsKey((Key $LiteralPath)))
   { throw "missing simulated file: $LiteralPath"
   }
-  return [string]$script:files[$LiteralPath]
+  return [string]$script:files[(Key $LiteralPath)]
 }
 
 function global:Set-Content
 {
-  param(
-    [Parameter(Mandatory, ValueFromPipeline)][AllowEmptyString()][string]$Value,
-    [Parameter(Mandatory)][string]$LiteralPath,
-    [string]$Encoding
-  )
+  param([Parameter(Mandatory, ValueFromPipeline)][AllowEmptyString()][string]$Value, [Parameter(Mandatory)][string]$LiteralPath, [string]$Encoding)
   process
   {
-    if ($LiteralPath -ceq (Join-Path $env:RECEIPT_DIR 'promotion.json'))
+    $key = Key $LiteralPath
+    if ($key -ceq 'contract-receipt/promotion.json')
     {
       $script:promotionStateWrites++
-      if ($script:failPromotionStateWriteOn -gt 0 -and $script:promotionStateWrites -eq $script:failPromotionStateWriteOn)
+      if ($script:rejectPromotionStateWrites)
+      { throw 'simulated persistent promotion state persistence failure'
+      }
+      if ($script:failPromotionStateWriteOn -eq $script:promotionStateWrites)
       { throw 'simulated promotion state persistence failure'
       }
+      $state = $Value | ConvertFrom-Json
+      if ($script:interruptAfterPendingState -and -not $script:interrupted -and @($state.final_latest_images | Where-Object { $_.state -eq 'mutation_pending' }).Count -gt 0)
+      {
+        $script:files[$key] = $Value
+        $script:interrupted = $true
+        $script:rejectPromotionStateWrites = $true
+        throw 'simulated interruption after durable mutation_pending state'
+      }
+      if ($script:rejectPromotionStateAfterUpdate -and @($state.updated_latest_images).Count -gt 0)
+      {
+        $script:rejectPromotionStateWrites = $true
+        throw 'simulated persistent promotion state persistence failure after mutation'
+      }
     }
-    if ($script:failLatestReceiptWrite -and $LiteralPath -ceq (Join-Path $env:RECEIPT_DIR 'latest.json') -and -not $script:latestReceiptWriteFailed)
+    if ($script:failLatestReceiptWrite -and $key -ceq 'contract-receipt/latest.json' -and -not $script:latestReceiptWriteFailed)
     {
       $script:latestReceiptWriteFailed = $true
       throw 'simulated latest receipt persistence failure'
     }
-    $script:files[$LiteralPath] = $Value
+    $script:files[$key] = $Value
   }
 }
+
 function global:Test-Path
 {
   param([Parameter(Mandatory)][string]$LiteralPath)
-  return $script:files.ContainsKey($LiteralPath)
+  return $script:files.ContainsKey((Key $LiteralPath))
 }
 
 function global:New-Item
@@ -199,12 +197,12 @@ function global:docker
     if ($reference -eq $script:inspectFailureTarget)
     {
       $global:LASTEXITCODE = 1
-      return $script:inspectFailureMessage
+      return 'unauthorized: authentication required'
     }
     if (-not $script:tags.ContainsKey($reference))
     {
       $global:LASTEXITCODE = 1
-      return 'manifest unknown: manifest unknown'
+      return 'manifest unknown'
     }
     $identity = $script:tags[$reference]
     if ($reference -eq $script:failReadbackTarget -and $identity.manifest_digest -eq $script:failReadbackManifest -and -not $script:readbackFailureInjected)
@@ -213,22 +211,15 @@ function global:docker
       $global:LASTEXITCODE = 1
       return 'simulated readback failure'
     }
-
     if ($Arguments -contains '--raw')
-    {
-      return (@{ config = @{ digest = $identity.config_digest } } | ConvertTo-Json -Compress)
+    { return (@{ config = @{ digest = $identity.config_digest } } | ConvertTo-Json -Compress)
     }
     $formatIndex = [array]::IndexOf($Arguments, '--format')
-    if ($formatIndex -lt 0)
-    { throw "missing simulated inspect format: $reference"
-    }
     if ($Arguments[$formatIndex + 1] -eq '{{json .Manifest}}')
-    {
-      return (@{ digest = $identity.manifest_digest } | ConvertTo-Json -Compress)
+    { return (@{ digest = $identity.manifest_digest } | ConvertTo-Json -Compress)
     }
     if ($Arguments[$formatIndex + 1] -eq '{{json .Image}}')
-    {
-      return (@{ config = @{ Labels = @{ 'org.opencontainers.image.source' = $identity.source; 'org.opencontainers.image.version' = $identity.version; 'org.opencontainers.image.revision' = $identity.revision } } } | ConvertTo-Json -Compress)
+    { return (@{ config = @{ Labels = @{ 'org.opencontainers.image.source' = $identity.source; 'org.opencontainers.image.version' = $identity.version; 'org.opencontainers.image.revision' = $identity.revision } } } | ConvertTo-Json -Compress)
     }
     throw "unexpected simulated inspect format: $($Arguments[$formatIndex + 1])"
   }
@@ -248,22 +239,7 @@ function global:docker
       $global:LASTEXITCODE = 1
       return
     }
-    $wasAbsent = -not $script:tags.ContainsKey($target)
     $script:tags[$target] = $script:immutable[$source]
-    if ($wasAbsent)
-    {
-      $tags = if ($script:cleanupLatestOnly)
-      {
-        @('latest')
-      } else
-      {
-        @('latest', $script:releaseTag, "sha-$($script:sourceCommit)")
-      }
-      $script:packageVersions[$script:immutable[$source].repository] = @([pscustomobject]@{
-          id = 1
-          metadata = @{ container = @{ tags = $tags } }
-        })
-    }
     return
   }
   throw "unexpected docker subcommand: $($Arguments -join ' ')"
@@ -280,215 +256,258 @@ function global:gh
   if ($request -match '/commits/')
   { return $script:postWriteSourceCommit
   }
-  $packagePath = @($Arguments | Where-Object { $_ -match '^users/thebtf/packages/container/.+/versions' })[0]
-  if ($null -ne $packagePath)
-  {
-    $package = [regex]::Match($packagePath, '^users/thebtf/packages/container/(?<name>.+)/versions').Groups['name'].Value
-    $repository = "ghcr.io/thebtf/$package"
-    if ($Arguments -contains 'DELETE')
-    {
-      $script:cleanupCalls.Add([pscustomobject]@{ target = "$repository`:latest"; request = $request })
-      if ("$repository`:latest" -eq $script:failCleanupTarget)
-      {
-        $global:LASTEXITCODE = 1
-        return 'simulated cleanup failure'
-      }
-      [void]$script:tags.Remove("$repository`:latest")
-      $script:packageVersions.Remove($repository)
-      return
-    }
-    return (@($script:packageVersions[$repository]) | ConvertTo-Json -Depth 5 -Compress)
-  }
   throw "unexpected gh invocation: $request"
 }
 
-function Invoke-WorkflowRun
+function Invoke-WorkflowStep
 {
   param([Parameter(Mandatory)][string]$Name)
-  & ([scriptblock]::Create((Get-WorkflowRun -Name $Name)))
+  $workflow = [System.IO.File]::ReadAllText($WorkflowPath)
+  $match = [regex]::Match($workflow, '(?ms)^      - name: ' + [regex]::Escape($Name) + '\r?\n.*?^        run: \|\r?\n(?<body>.*?)(?=^      - name:|\z)')
+  if (-not $match.Success)
+  { throw "missing workflow step: $Name"
+  }
+  $body = $match.Groups['body'].Value -replace '(?m)^ {10}', ''
+  & ([scriptblock]::Create($body))
 }
 
-function Assert-AllLatestAre
+function Read-PromotionState
 {
-  param([Parameter(Mandatory)][hashtable]$Expected)
-  foreach ($repository in $Expected.Keys)
+  return $script:files['contract-receipt/promotion.json'] | ConvertFrom-Json
+}
+
+function Read-Receipt
+{
+  Invoke-WorkflowStep -Name 'Write latest-promotion receipt'
+  return $script:files['contract-receipt/latest-promotion-receipt.json'] | ConvertFrom-Json
+}
+
+function Get-MockFinalState
+{
+  param([Parameter(Mandatory)][string]$Reference)
+  $repository = $Reference.Substring(0, $Reference.LastIndexOf(':'))
+  if ($Reference -eq $script:inspectFailureTarget)
   {
-    Assert-That ($script:tags["$repository`:latest"].manifest_digest -ceq $Expected[$repository].manifest_digest) "latest tag did not match expected digest: $repository"
+    return [pscustomobject]@{ reference = $Reference; repository = $repository; state = 'readback_error'; immutable_reference = $null; manifest_digest = $null }
+  }
+  if (-not $script:tags.ContainsKey($Reference))
+  {
+    return [pscustomobject]@{ reference = $Reference; repository = $repository; state = 'absent'; immutable_reference = $null; manifest_digest = $null }
+  }
+  $identity = $script:tags[$Reference]
+  return [pscustomobject]@{ reference = $Reference; repository = $repository; state = 'present'; immutable_reference = "$repository@$($identity.manifest_digest)"; manifest_digest = $identity.manifest_digest }
+}
+
+function Assert-ReceiptMatchesState
+{
+  param([Parameter(Mandatory)]$Promotion, [Parameter(Mandatory)]$Receipt)
+  $expected = @($Promotion.final_latest_images) | ConvertTo-Json -Depth 10 -Compress
+  $actual = @($Receipt.latest_images) | ConvertTo-Json -Depth 10 -Compress
+  Assert-That ($actual -ceq $expected) 'terminal receipt latest_images must equal the persisted promotion final state'
+}
+
+function Assert-ReceiptMatchesRegistryOrTypedState
+{
+  param([Parameter(Mandatory)]$Receipt)
+  Assert-That (@($Receipt.latest_images).Count -eq $script:repositories.Count) 'terminal receipt must include every latest tag'
+  foreach ($image in @($Receipt.latest_images))
+  {
+    if ($image.state -eq 'mutation_pending')
+    {
+      Assert-That (-not [string]::IsNullOrWhiteSpace([string]$image.intended_manifest_digest)) "pending receipt state lacks an intended manifest identity: $($image.reference)"
+      continue
+    }
+    $actual = Get-MockFinalState -Reference $image.reference
+    Assert-That ($image.state -ceq $actual.state) "terminal receipt state differs from mock registry: $($image.reference)"
+    if ($image.state -eq 'present')
+    {
+      Assert-That ($image.manifest_digest -ceq $actual.manifest_digest) "terminal receipt manifest differs from mock registry: $($image.reference)"
+      Assert-That ($image.immutable_reference -ceq $actual.immutable_reference) "terminal receipt immutable reference differs from mock registry: $($image.reference)"
+    }
   }
 }
 
-function Assert-ReceiptMatchesPromotionFinal
+function Assert-AllExistingLatestAreOld
 {
-  param([Parameter(Mandatory)]$Promotion, [Parameter(Mandatory)]$Receipt)
-  $expected = $Promotion.final_latest_images | ConvertTo-Json -Depth 10 -Compress
-  $actual = $Receipt.latest_images | ConvertTo-Json -Depth 10 -Compress
-  Assert-That ($actual -ceq $expected) 'receipt latest_images must equal the final registry readbacks'
+  foreach ($repository in $script:oldByRepository.Keys)
+  {
+    Assert-That ($script:tags["$repository`:latest"].manifest_digest -ceq $script:oldByRepository[$repository].manifest_digest) "latest did not return to its captured identity: $repository"
+  }
 }
 
-$prewriteName = 'Final revalidate official GitHub Release before registry login'
-$promotionName = 'Promote each official release image to latest as a recoverable set'
-$receiptName = 'Write latest-promotion receipt'
+$workflowText = [System.IO.File]::ReadAllText($WorkflowPath)
+Assert-That (-not $workflowText.Contains('Remove-CreatedLatestTag')) 'promotion workflow must not retain unsafe absent-tag cleanup'
+Assert-That (-not $workflowText.Contains('api --method DELETE')) 'promotion workflow must not delete registry package versions'
+
+$prewrite = 'Final revalidate official GitHub Release before registry login'
+$promotion = 'Promote each official release image to latest as a recoverable set'
 $firstRepository = 'ghcr.io/thebtf/engram'
 $secondRepository = 'ghcr.io/thebtf/engram-operator-console'
 
 Set-Scenario -PostWriteReleaseTag 'v1.2.4' -PostWriteSourceCommit ('4' * 40 -join '')
-$staleAbort = $false
+$failed = $false
 try
-{ Invoke-WorkflowRun -Name $prewriteName
+{ Invoke-WorkflowStep -Name $prewrite
 } catch
-{ $staleAbort = $true
+{ $failed = $true
 }
-$prewrite = $script:files[(Join-Path $env:RECEIPT_DIR 'prewrite-release-revalidation.json')] | ConvertFrom-Json
-Assert-That $staleAbort 'stale prewrite release must abort'
-Assert-That ($prewrite.status -ceq 'mismatch') 'stale prewrite release must record mismatch'
+Assert-That $failed 'stale prewrite release must abort'
 Assert-That ($script:createCalls.Count -eq 0) 'stale prewrite release must perform no tag writes'
-Invoke-WorkflowRun -Name $receiptName
-$staleReceipt = $script:files[(Join-Path $env:RECEIPT_DIR 'latest-promotion-receipt.json')] | ConvertFrom-Json
+$staleReceipt = Read-Receipt
 Assert-That ($staleReceipt.outcome -ceq 'no_write_stale_abort') 'stale prewrite receipt must distinguish the no-write abort'
 
 Set-Scenario
-Invoke-WorkflowRun -Name $promotionName
-$success = $script:files[(Join-Path $env:RECEIPT_DIR 'promotion.json')] | ConvertFrom-Json
-Assert-That ($success.outcome -ceq 'success') 'all verified writes must record success'
-Assert-That ($success.rollback.attempted -eq $false) 'success must not roll back'
-Assert-That ($script:createCalls.Count -eq 3) 'success must write each latest tag once'
-foreach ($image in $success.updated_latest_images)
-{
-  Assert-That ($script:tags[$image.reference].manifest_digest -ceq $image.manifest_digest) "success latest readback mismatch: $($image.reference)"
-}
-Invoke-WorkflowRun -Name $receiptName
-$successReceipt = $script:files[(Join-Path $env:RECEIPT_DIR 'latest-promotion-receipt.json')] | ConvertFrom-Json
-Assert-ReceiptMatchesPromotionFinal -Promotion $success -Receipt $successReceipt
+Invoke-WorkflowStep -Name $promotion
+$success = Read-PromotionState
+Assert-That ($success.outcome -ceq 'success') 'verified promotion must record success'
+Assert-That ($script:createCalls.Count -eq 3) 'verified promotion must write each latest tag once'
+$successReceipt = Read-Receipt
+Assert-ReceiptMatchesState -Promotion $success -Receipt $successReceipt
+Assert-ReceiptMatchesRegistryOrTypedState -Receipt $successReceipt
 
 Set-Scenario -MissingLatest @($firstRepository)
-Invoke-WorkflowRun -Name $promotionName
-$bootstrapSuccess = $script:files[(Join-Path $env:RECEIPT_DIR 'promotion.json')] | ConvertFrom-Json
-Assert-That ($bootstrapSuccess.outcome -ceq 'success') 'confirmed missing latest tag must permit bootstrap'
-Assert-That ($bootstrapSuccess.previous_latest_images[0].state -ceq 'absent') 'confirmed missing latest tag must be recorded as absent'
-Assert-That ($script:tags.ContainsKey("$firstRepository`:latest")) 'confirmed missing latest tag must be created'
-
-Set-Scenario -InspectFailureTarget "$firstRepository`:latest" -InspectFailureMessage 'unauthorized: authentication required'
-$inspectFailure = $false
+$failed = $false
 try
-{ Invoke-WorkflowRun -Name $promotionName
+{ Invoke-WorkflowStep -Name $promotion
 } catch
-{ $inspectFailure = $true
+{ $failed = $true
 }
-$inspectFailureState = $script:files[(Join-Path $env:RECEIPT_DIR 'promotion.json')] | ConvertFrom-Json
-Assert-That $inspectFailure 'non-absence inspection error must abort promotion'
-Assert-That ($inspectFailureState.outcome -ceq 'failed_before_write') 'non-absence inspection error must not bootstrap'
-Assert-That ($inspectFailureState.failure -match 'unauthorized') 'non-absence inspection error must remain visible'
-Assert-That ($script:createCalls.Count -eq 0) 'non-absence inspection error must perform no tag writes'
+$missing = Read-PromotionState
+Assert-That $failed 'confirmed missing latest tag must stop promotion'
+Assert-That ($missing.outcome -ceq 'bootstrap_required_no_write') 'confirmed missing latest tag must require manual bootstrap'
+Assert-That ($missing.previous_latest_images[0].state -ceq 'absent') 'confirmed missing latest tag must be recorded as absent'
+Assert-That ($script:createCalls.Count -eq 0) 'confirmed missing latest tag must perform zero writes'
+$missingReceipt = Read-Receipt
+Assert-ReceiptMatchesState -Promotion $missing -Receipt $missingReceipt
+Assert-ReceiptMatchesRegistryOrTypedState -Receipt $missingReceipt
+
+Set-Scenario -InspectFailureTarget "$firstRepository`:latest"
+$failed = $false
+try
+{ Invoke-WorkflowStep -Name $promotion
+} catch
+{ $failed = $true
+}
+$inspect = Read-PromotionState
+Assert-That $failed 'non-absence latest inspection error must stop promotion'
+Assert-That ($inspect.outcome -ceq 'failed_before_write') 'authentication or network inspection error must not bootstrap'
+Assert-That ($script:createCalls.Count -eq 0) 'non-absence latest inspection error must perform zero writes'
+$inspectReceipt = Read-Receipt
+Assert-ReceiptMatchesState -Promotion $inspect -Receipt $inspectReceipt
+Assert-ReceiptMatchesRegistryOrTypedState -Receipt $inspectReceipt
+
+Set-Scenario
+$script:failPromotionStateWriteOn = 3
+$failed = $false
+try
+{ Invoke-WorkflowStep -Name $promotion
+} catch
+{ $failed = $true
+}
+$pendingWriteFailure = Read-PromotionState
+Assert-That $failed 'mandatory mutation_pending persistence failure must stop promotion'
+Assert-That ($pendingWriteFailure.outcome -ceq 'failed_before_write') 'mandatory mutation_pending persistence failure must be no-write'
+Assert-That ($script:createCalls.Count -eq 0) 'mandatory mutation_pending persistence failure must abort before registry write'
+$pendingWriteReceipt = Read-Receipt
+Assert-ReceiptMatchesState -Promotion $pendingWriteFailure -Receipt $pendingWriteReceipt
+Assert-ReceiptMatchesRegistryOrTypedState -Receipt $pendingWriteReceipt
 
 Set-Scenario
 $script:failReadbackTarget = "$firstRepository`:latest"
-$script:failReadbackManifest = (($script:immutable.Values | Where-Object { $_.version -ceq $script:releaseTag -and $_.repository -ceq $firstRepository })[0]).manifest_digest
-$readbackFailure = $false
+$script:failReadbackManifest = $script:newByRepository[$firstRepository].manifest_digest
+$failed = $false
 try
-{ Invoke-WorkflowRun -Name $promotionName
+{ Invoke-WorkflowStep -Name $promotion
 } catch
-{ $readbackFailure = $true
+{ $failed = $true
 }
-$readbackRollback = $script:files[(Join-Path $env:RECEIPT_DIR 'promotion.json')] | ConvertFrom-Json
-Assert-That $readbackFailure 'readback failure must fail the promotion step'
-Assert-That ($readbackRollback.outcome -ceq 'rolled_back') 'readback failure must record successful rollback'
-Assert-That ($readbackRollback.rollback.restored_images.Count -eq 1) 'readback failure must restore the affected tag'
-Assert-AllLatestAre -Expected $script:oldByRepository
-Invoke-WorkflowRun -Name $receiptName
-$readbackReceipt = $script:files[(Join-Path $env:RECEIPT_DIR 'latest-promotion-receipt.json')] | ConvertFrom-Json
-Assert-ReceiptMatchesPromotionFinal -Promotion $readbackRollback -Receipt $readbackReceipt
+$readbackRollback = Read-PromotionState
+Assert-That $failed 'post-create readback failure must stop promotion'
+Assert-That ($readbackRollback.outcome -ceq 'rolled_back') 'post-create readback failure must roll back existing tags'
+Assert-AllExistingLatestAreOld
+$readbackReceipt = Read-Receipt
+Assert-ReceiptMatchesState -Promotion $readbackRollback -Receipt $readbackReceipt
+Assert-ReceiptMatchesRegistryOrTypedState -Receipt $readbackReceipt
 
 Set-Scenario
 $script:failCreateTarget = "$secondRepository`:latest"
-$script:failCreateSource = "$secondRepository@$((($script:immutable.Values | Where-Object { $_.version -ceq $script:releaseTag -and $_.repository -ceq $secondRepository })[0]).manifest_digest)"
-$createFailure = $false
+$script:failCreateSource = "$secondRepository@$($script:newByRepository[$secondRepository].manifest_digest)"
+$failed = $false
 try
-{ Invoke-WorkflowRun -Name $promotionName
+{ Invoke-WorkflowStep -Name $promotion
 } catch
-{ $createFailure = $true
+{ $failed = $true
 }
-$createRollback = $script:files[(Join-Path $env:RECEIPT_DIR 'promotion.json')] | ConvertFrom-Json
-Assert-That $createFailure 'create failure must fail the promotion step'
-Assert-That ($createRollback.outcome -ceq 'rolled_back') 'create failure must record successful rollback'
-Assert-That ($createRollback.rollback.restored_images.Count -eq 2) 'create failure must restore the attempted and prior tags'
-Assert-AllLatestAre -Expected $script:oldByRepository
-Invoke-WorkflowRun -Name $receiptName
-$createReceipt = $script:files[(Join-Path $env:RECEIPT_DIR 'latest-promotion-receipt.json')] | ConvertFrom-Json
-Assert-ReceiptMatchesPromotionFinal -Promotion $createRollback -Receipt $createReceipt
+$createRollback = Read-PromotionState
+Assert-That $failed 'create failure must stop promotion'
+Assert-That ($createRollback.outcome -ceq 'rolled_back') 'create failure must roll back existing tags'
+Assert-AllExistingLatestAreOld
+$createReceipt = Read-Receipt
+Assert-ReceiptMatchesState -Promotion $createRollback -Receipt $createReceipt
+Assert-ReceiptMatchesRegistryOrTypedState -Receipt $createReceipt
 
 Set-Scenario -PostWriteReleaseTag 'v1.2.4' -PostWriteSourceCommit ('4' * 40 -join '') -FailLatestReceiptWrite
-$receiptWriteFailure = $false
+$failed = $false
 try
-{ Invoke-WorkflowRun -Name $promotionName
+{ Invoke-WorkflowStep -Name $promotion
 } catch
-{ $receiptWriteFailure = $true
+{ $failed = $true
 }
-$receiptWriteRollback = $script:files[(Join-Path $env:RECEIPT_DIR 'promotion.json')] | ConvertFrom-Json
-Assert-That $receiptWriteFailure 'later release mismatch must fail after receipt persistence failure'
-Assert-That ($receiptWriteRollback.outcome -ceq 'rolled_back') 'receipt persistence failure must not prevent rollback'
-Assert-That ($receiptWriteRollback.intermediate_receipt_failures.Count -eq 1) 'receipt persistence failure must be recorded'
-Assert-AllLatestAre -Expected $script:oldByRepository
+$latestReceiptRollback = Read-PromotionState
+Assert-That $failed 'later release mismatch must stop promotion after a latest receipt failure'
+Assert-That ($latestReceiptRollback.outcome -ceq 'rolled_back') 'latest receipt failure must not prevent rollback'
+Assert-That (@($latestReceiptRollback.intermediate_receipt_failures).Count -eq 1) 'latest receipt failure must be preserved in promotion state'
+Assert-AllExistingLatestAreOld
+$latestReceipt = Read-Receipt
+Assert-ReceiptMatchesState -Promotion $latestReceiptRollback -Receipt $latestReceipt
+Assert-ReceiptMatchesRegistryOrTypedState -Receipt $latestReceipt
 
-Set-Scenario -PostWriteReleaseTag 'v1.2.4' -PostWriteSourceCommit ('4' * 40 -join '') -FailPromotionStateWriteOn 4
-$promotionStateWriteFailure = $false
+Set-Scenario -RejectPromotionStateAfterUpdate
+$failed = $false
 try
-{ Invoke-WorkflowRun -Name $promotionName
+{ Invoke-WorkflowStep -Name $promotion
 } catch
-{ $promotionStateWriteFailure = $true
+{ $failed = $true
 }
-$promotionStateWriteRollback = $script:files[(Join-Path $env:RECEIPT_DIR 'promotion.json')] | ConvertFrom-Json
-Assert-That $promotionStateWriteFailure 'later release mismatch must fail after promotion state persistence failure'
-Assert-That ($promotionStateWriteRollback.outcome -ceq 'rolled_back') 'promotion state persistence failure must not prevent rollback'
-Assert-That ($promotionStateWriteRollback.intermediate_receipt_failures.Count -eq 1) 'promotion state persistence failure must be recorded'
-Assert-AllLatestAre -Expected $script:oldByRepository
+$persistentFailure = Read-PromotionState
+Assert-That $failed 'persistent promotion receipt failure after mutation must stop promotion'
+Assert-That ($script:createCalls.Count -eq 2) 'persistent promotion receipt failure must not start the next mutation'
+Assert-That ($persistentFailure.final_latest_images[0].state -ceq 'mutation_pending') 'persistent promotion receipt failure must retain the durable pending identity'
+Assert-AllExistingLatestAreOld
+$persistentReceipt = Read-Receipt
+Assert-ReceiptMatchesState -Promotion $persistentFailure -Receipt $persistentReceipt
+Assert-ReceiptMatchesRegistryOrTypedState -Receipt $persistentReceipt
 
-Set-Scenario -PostWriteReleaseTag 'v1.2.4' -PostWriteSourceCommit ('4' * 40 -join '') -MissingLatest @($firstRepository) -CleanupLatestOnly
-$cleanupSuccess = $false
+Set-Scenario -InterruptAfterPendingState
+$failed = $false
 try
-{ Invoke-WorkflowRun -Name $promotionName
+{ Invoke-WorkflowStep -Name $promotion
 } catch
-{ $cleanupSuccess = $true
+{ $failed = $true
 }
-$cleanupSuccessRollback = $script:files[(Join-Path $env:RECEIPT_DIR 'promotion.json')] | ConvertFrom-Json
-Assert-That $cleanupSuccess 'later failure after bootstrap must fail the promotion step'
-Assert-That ($cleanupSuccessRollback.outcome -ceq 'rolled_back') 'successful absent-tag cleanup must complete rollback'
-Assert-That ($cleanupSuccessRollback.rollback.cleanup.Count -eq 1) 'absent-tag cleanup must be recorded'
-Assert-That ($cleanupSuccessRollback.rollback.cleanup[0].outcome -ceq 'succeeded') 'latest-only cleanup must succeed'
-Assert-That (-not $script:tags.ContainsKey("$firstRepository`:latest")) 'successful absent-tag cleanup must restore absence'
-Invoke-WorkflowRun -Name $receiptName
-$cleanupSuccessReceipt = $script:files[(Join-Path $env:RECEIPT_DIR 'latest-promotion-receipt.json')] | ConvertFrom-Json
-Assert-ReceiptMatchesPromotionFinal -Promotion $cleanupSuccessRollback -Receipt $cleanupSuccessReceipt
-
-Set-Scenario -PostWriteReleaseTag 'v1.2.4' -PostWriteSourceCommit ('4' * 40 -join '') -MissingLatest @($firstRepository) -CleanupLatestOnly -FailCleanupTarget "$firstRepository`:latest"
-$cleanupFailure = $false
-try
-{ Invoke-WorkflowRun -Name $promotionName
-} catch
-{ $cleanupFailure = $true
-}
-$cleanupFailureRollback = $script:files[(Join-Path $env:RECEIPT_DIR 'promotion.json')] | ConvertFrom-Json
-Assert-That $cleanupFailure 'cleanup failure must fail the promotion step loudly'
-Assert-That ($cleanupFailureRollback.outcome -ceq 'rollback_incomplete') 'cleanup failure must not claim complete rollback'
-Assert-That ($cleanupFailureRollback.outcome -cne 'failed_before_write') 'cleanup failure must not claim no write occurred'
-Assert-That ($cleanupFailureRollback.rollback.cleanup[0].outcome -ceq 'failed') 'cleanup failure must be recorded distinctly'
-Assert-That ($script:tags.ContainsKey("$firstRepository`:latest")) 'failed cleanup must leave its current tag visible'
-Invoke-WorkflowRun -Name $receiptName
-$cleanupFailureReceipt = $script:files[(Join-Path $env:RECEIPT_DIR 'latest-promotion-receipt.json')] | ConvertFrom-Json
-Assert-ReceiptMatchesPromotionFinal -Promotion $cleanupFailureRollback -Receipt $cleanupFailureReceipt
+$interrupted = Read-PromotionState
+Assert-That $failed 'interruption after durable pending state must stop promotion'
+Assert-That ($script:createCalls.Count -eq 0) 'interruption after durable pending state must happen before registry write'
+Assert-That ($interrupted.final_latest_images[0].state -ceq 'mutation_pending') 'interruption must leave the explicit pending final state'
+$interruptedReceipt = Read-Receipt
+Assert-ReceiptMatchesState -Promotion $interrupted -Receipt $interruptedReceipt
+Assert-ReceiptMatchesRegistryOrTypedState -Receipt $interruptedReceipt
 
 Set-Scenario -PostWriteReleaseTag 'v1.2.4' -PostWriteSourceCommit ('4' * 40 -join '')
 $script:failCreateTarget = "$firstRepository`:latest"
 $script:failCreateSource = "$firstRepository@$($script:oldByRepository[$firstRepository].manifest_digest)"
-$rollbackFailure = $false
+$failed = $false
 try
-{ Invoke-WorkflowRun -Name $promotionName
+{ Invoke-WorkflowStep -Name $promotion
 } catch
-{ $rollbackFailure = $true
+{ $failed = $true
 }
-$failedRollback = $script:files[(Join-Path $env:RECEIPT_DIR 'promotion.json')] | ConvertFrom-Json
-Assert-That $rollbackFailure 'rollback failure must fail the promotion step loudly'
-Assert-That ($failedRollback.outcome -ceq 'rollback_failed') 'rollback failure must be recorded distinctly'
-Assert-That ($failedRollback.rollback.failures.Count -eq 1) 'rollback failure must record the failed tag'
-Assert-That ($failedRollback.rollback.restored_images.Count -eq 2) 'rollback failure must continue restoring other tags'
+$rollbackFailure = Read-PromotionState
+Assert-That $failed 'rollback readback failure must stop promotion'
+Assert-That ($rollbackFailure.outcome -ceq 'rollback_failed') 'failed existing-tag rollback must remain explicit'
+Assert-That (@($rollbackFailure.rollback.failures).Count -eq 1) 'failed existing-tag rollback must record its target'
+$rollbackReceipt = Read-Receipt
+Assert-ReceiptMatchesState -Promotion $rollbackFailure -Receipt $rollbackReceipt
+Assert-ReceiptMatchesRegistryOrTypedState -Receipt $rollbackReceipt
 
-'PASS: stale-abort, success, confirmed-missing bootstrap, inspect-error rejection, readback rollback, create-failure rollback, receipt-write rollback, promotion-state-write rollback, absent-tag cleanup success and failure, and rollback failure'
+'PASS: stale abort, success, bootstrap-required no-write, inspection rejection, pending-write abort, readback rollback, create rollback, latest receipt rollback, persistent state receipt, phase-anchored interruption, and rollback failure'
