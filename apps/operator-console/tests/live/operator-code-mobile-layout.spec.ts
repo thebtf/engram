@@ -63,12 +63,6 @@ test('live Workspace shell remains usable across responsive reflow', async ({ br
   const layouts: Array<Record<string, unknown>> = []
   const context = await browser.newContext()
   const page = await context.newPage()
-  page.on('response', (response) => {
-    const url = new URL(response.url())
-    if (url.origin === fixture.frontend.baseUrl && url.pathname.startsWith('/api/') && response.status() >= 400) {
-      apiFailures.push({ path: url.pathname, status: response.status() })
-    }
-  })
 
   try {
     await page.setViewportSize({ width: 1440, height: 1024 })
@@ -82,6 +76,12 @@ test('live Workspace shell remains usable across responsive reflow', async ({ br
       return response.status
     }, fixture.browserCredential)
     expect(loginStatus).toBe(200)
+    page.on('response', (response) => {
+      const url = new URL(response.url())
+      if (url.origin === fixture.frontend.baseUrl && url.pathname.startsWith('/api/') && response.status() >= 400) {
+        apiFailures.push({ path: url.pathname, status: response.status() })
+      }
+    })
     await page.getByTestId('overview-workspace-entry').click()
     await expect(page).toHaveURL(/\/code$/)
     await expect(page.getByTestId('code-release-state')).toHaveAttribute('data-state', 'unselected')
