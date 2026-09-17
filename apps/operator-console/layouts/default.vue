@@ -446,7 +446,6 @@ function onDocumentKeydown(event: KeyboardEvent) {
   overflow:hidden;
   background:var(--surface);
   border-right:1px solid var(--border);
-  transition:width var(--motion-base) var(--ease-standard);
 }
 .nav-scrim { display:none; }
 .app.nav-collapsed > .nav { width:var(--nav-rail-w); }
@@ -559,10 +558,10 @@ function onDocumentKeydown(event: KeyboardEvent) {
   .app,
   .app.nav-collapsed { grid-template-columns:1fr; grid-template-areas:"topbar" "content" "statusbar"; }
   .topbar { gap:8px; padding:0 10px; }
-  .topbar .mobile-menu-button { display:inline-flex; }
+  .topbar .mobile-menu-button { display:inline-flex; width:44px; height:44px; justify-content:center; padding:0; }
   .topbar-secondary { display:none; }
   .gsearch { min-width:0; width:min(360px,48vw); }
-  .app > .nav { position:fixed; top:0; bottom:0; left:0; width:min(320px, calc(100vw - 48px)); transform:translateX(-100%); transition:transform var(--motion-base) var(--ease-standard); z-index:60; }
+  .app > .nav { position:fixed; top:0; bottom:0; left:0; width:min(320px, calc(100vw - 48px)); transform:translateX(-100%); transition:none; z-index:60; }
   .app > .nav.open { transform:none; }
   .nav-scrim { display:block; position:fixed; inset:0; z-index:50; border:0; background:color-mix(in srgb, #000, transparent 52%); cursor:pointer; }
   .navcollapse,

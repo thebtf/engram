@@ -115,6 +115,75 @@ async function selectFixtureContext(page: Page, fixture: LiveFixtureState, varia
   if (value === null) throw new Error('fixture catalog did not expose an indexed snapshot')
   await snapshot.selectOption(value)
 }
+async function assertResponsiveShell(page: Page, viewportWidth: number): Promise<Record<string, unknown>> {
+  const shell = await page.evaluate(() => {
+    const rect = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector)
+      if (!element) throw new Error(`missing ${selector}`)
+      const bounds = element.getBoundingClientRect()
+      const style = getComputedStyle(element)
+      return { left: bounds.left, right: bounds.right, width: bounds.width, height: bounds.height, display: style.display }
+    }
+    const nav = document.querySelector<HTMLElement>('#primary-navigation')
+    if (!nav) throw new Error('missing primary navigation')
+    return {
+      compact: matchMedia('(max-width: 980px)').matches,
+      scrollX,
+      scrollWidth: document.documentElement.scrollWidth,
+      gridColumns: getComputedStyle(document.querySelector<HTMLElement>('.app')!).gridTemplateColumns,
+      nav: { ...rect('#primary-navigation'), ariaHidden: nav.getAttribute('aria-hidden'), inert: nav.inert },
+      topbar: rect('.topbar'),
+      content: rect('.content'),
+      statusbar: rect('.statusbar'),
+      menu: rect('.mobile-menu-button'),
+      title: rect('.code-page h1'),
+    }
+  })
+
+  expect(shell.scrollX).toBe(0)
+  expect(shell.scrollWidth).toBeLessThanOrEqual(viewportWidth)
+  const gridColumns = shell.gridColumns.split(' ').map(Number)
+  expect(gridColumns.reduce((total, column) => total + column, 0)).toBe(viewportWidth)
+
+  if (viewportWidth <= 980) {
+    expect(shell.compact).toBe(true)
+    expect(shell.nav.right).toBeLessThanOrEqual(0)
+    expect(shell.nav.ariaHidden).toBe('true')
+    expect(shell.nav.inert).toBe(true)
+    expect(shell.menu.display).not.toBe('none')
+    expect(shell.menu.width).toBeGreaterThanOrEqual(44)
+    expect(shell.menu.height).toBeGreaterThanOrEqual(44)
+    for (const region of [shell.topbar, shell.content, shell.statusbar, shell.title, shell.menu]) {
+      expect(region.left).toBeGreaterThanOrEqual(0)
+      expect(region.right).toBeLessThanOrEqual(viewportWidth)
+    }
+  } else {
+    expect(shell.compact).toBe(false)
+    expect(shell.menu.display).toBe('none')
+    expect(shell.nav.left).toBe(0)
+    expect(shell.nav.right).toBe(shell.topbar.left)
+    for (const region of [shell.topbar, shell.content, shell.statusbar]) {
+      expect(region.right).toBeLessThanOrEqual(viewportWidth)
+    }
+  }
+  return shell
+}
+
+async function assertOpenMobileDrawer(page: Page): Promise<void> {
+  await page.locator('.mobile-menu-button').click()
+  const nav = page.locator('#primary-navigation')
+  await expect(nav).toHaveClass(/open/)
+  await expect(page.locator('.nav-scrim')).toBeVisible()
+  const state = await nav.evaluate((element) => {
+    const bounds = element.getBoundingClientRect()
+    return { left: bounds.left, right: bounds.right, ariaHidden: element.getAttribute('aria-hidden'), inert: element.inert }
+  })
+  expect(state.left).toBe(0)
+  expect(state.right).toBeGreaterThan(0)
+  expect(state.ariaHidden).toBe('false')
+  expect(state.inert).toBe(false)
+}
+
 
 test('S2 live acceptance: explicit catalog preserves View-bound pagination and graph-source limits', async ({ browser }, testInfo) => {
   const fixture = await readLiveFixture()
@@ -129,6 +198,7 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
   const context = await browser.newContext()
   const page = await context.newPage()
   const transitions: Array<{ label: string; opener: boolean; navigationType: string; transition: string | null }> = []
+  const responsiveLayouts: Array<Record<string, unknown>> = []
 
   page.on('request', (request) => {
     const url = new URL(request.url())
@@ -269,13 +339,20 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
     await expect(sourceMeta).toContainText(descriptorDigest)
     for (const [name, width, height] of [['1440', 1440, 1024], ['980', 980, 900], ['390', 390, 844]] as const) {
       await page.setViewportSize({ width, height })
-      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1)
+      responsiveLayouts.push({ viewport: `${width}x${height}`, shell: await assertResponsiveShell(page, width) })
+      if (width === 390) {
+        await assertOpenMobileDrawer(page)
+        await page.screenshot({ path: testInfo.outputPath('da08a-workspace-390-drawer-open.png'), fullPage: true })
+        await page.keyboard.press('Escape')
+        responsiveLayouts.push({ viewport: '390x844-after-escape', shell: await assertResponsiveShell(page, width) })
+      }
       await page.screenshot({ path: testInfo.outputPath(`da08a-workspace-${name}.png`), fullPage: true })
     }
     const cdp = await page.context().newCDPSession(page)
     try {
       await cdp.send('Emulation.setPageScaleFactor', { pageScaleFactor: 2 })
       expect(await page.evaluate(() => window.visualViewport?.scale)).toBe(2)
+      responsiveLayouts.push({ viewport: '390x844@200%', shell: await assertResponsiveShell(page, 390) })
       await page.screenshot({ path: testInfo.outputPath('da08a-workspace-200pct.png'), fullPage: true })
     } finally {
       await cdp.send('Emulation.setPageScaleFactor', { pageScaleFactor: 1 })
@@ -380,6 +457,7 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
       backend: { sourceCommit: state.backend.sourceCommit, binarySha256: state.backend.binarySha256 },
       browser: { engine: browser.browserType().name(), version: browser.version() },
       transitions,
+      responsiveLayouts,
       traffic: state.traffic,
       liveFixtureProvisioned: true,
     }, null, 2)

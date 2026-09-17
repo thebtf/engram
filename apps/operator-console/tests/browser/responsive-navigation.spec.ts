@@ -7,6 +7,17 @@ test.describe('mock interaction-only: responsive navigation and localization', (
     await page.goto('/')
     await expect(page.locator('#primary-navigation')).toBeVisible()
     await expect(page.locator('.mobile-menu-button')).toBeHidden()
+    await page.setViewportSize({ width: 390, height: 844 })
+    await expectClosedMobileShell(page, 390)
+
+    const mobileTrigger = page.locator('.mobile-menu-button')
+    await mobileTrigger.click()
+    const mobileNav = page.locator('#primary-navigation')
+    await expect(mobileNav).toHaveClass(/open/)
+    await expect(page.locator('.nav-scrim')).toBeVisible()
+    expect(await mobileNav.evaluate((element) => element.getBoundingClientRect().left)).toBe(0)
+    await page.keyboard.press('Escape')
+    await expectClosedMobileShell(page, 390)
 
     await page.setViewportSize({ width: 980, height: 900 })
     await page.goto('/')
@@ -76,6 +87,47 @@ test.describe('mock interaction-only: responsive navigation and localization', (
     await expect(graph).toBeFocused()
   })
 })
+
+async function expectClosedMobileShell(page: Page, viewportWidth: number): Promise<void> {
+  const shell = await page.evaluate(() => {
+    const rect = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector)
+      if (!element) throw new Error(`missing ${selector}`)
+      const bounds = element.getBoundingClientRect()
+      const style = getComputedStyle(element)
+      return { left: bounds.left, right: bounds.right, width: bounds.width, height: bounds.height, display: style.display }
+    }
+    const nav = document.querySelector<HTMLElement>('#primary-navigation')
+    if (!nav) throw new Error('missing primary navigation')
+    return {
+      compact: matchMedia('(max-width: 980px)').matches,
+      scrollX,
+      scrollWidth: document.documentElement.scrollWidth,
+      gridWidth: parseFloat(getComputedStyle(document.querySelector<HTMLElement>('.app')!).gridTemplateColumns),
+      nav: { ...rect('#primary-navigation'), ariaHidden: nav.getAttribute('aria-hidden'), inert: nav.inert },
+      topbar: rect('.topbar'),
+      content: rect('.content'),
+      statusbar: rect('.statusbar'),
+      menu: rect('.mobile-menu-button'),
+      title: rect('.content h1'),
+    }
+  })
+
+  expect(shell.compact).toBe(true)
+  expect(shell.scrollX).toBe(0)
+  expect(shell.scrollWidth).toBeLessThanOrEqual(viewportWidth)
+  expect(shell.gridWidth).toBe(viewportWidth)
+  expect(shell.nav.right).toBeLessThanOrEqual(0)
+  expect(shell.nav.ariaHidden).toBe('true')
+  expect(shell.nav.inert).toBe(true)
+  expect(shell.menu.display).not.toBe('none')
+  expect(shell.menu.width).toBeGreaterThanOrEqual(44)
+  expect(shell.menu.height).toBeGreaterThanOrEqual(44)
+  for (const region of [shell.topbar, shell.content, shell.statusbar, shell.title, shell.menu]) {
+    expect(region.left).toBeGreaterThanOrEqual(0)
+    expect(region.right).toBeLessThanOrEqual(viewportWidth)
+  }
+}
 
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
