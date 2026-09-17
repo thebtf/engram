@@ -662,7 +662,7 @@ function Assert-TerminalSnapshotInvariant
     $states = (@($targets | ForEach-Object { [string]$_.state }) -join ',') + ','
     if ($Key -ceq 'failed/contradiction')
     {
-        if ([string]::IsNullOrWhiteSpace([string]$Snapshot.failure) -or $states -cne 'unknown,unknown,unknown,')
+        if ([string]::IsNullOrWhiteSpace([string]$Snapshot.failure) -or $states -cne 'unknown,unknown,unknown,' -or $null -eq $Snapshot.PSObject.Properties['contradicted_snapshot'])
         { throw 'contradiction snapshot is contradictory'
         }
         Assert-UntouchedRevalidation -Snapshot $Snapshot
@@ -791,9 +791,10 @@ function Set-TerminalJournal
 
 function New-ContradictionSnapshot
 {
-    param([Parameter(Mandatory)][string]$Failure)
+    param([Parameter(Mandatory)][string]$Failure, [string]$ContradictedText)
     $snapshot = New-Snapshot -Phase 'failed' -Outcome 'contradiction'
     $snapshot.failure = $Failure
+    $snapshot.contradicted_snapshot = $ContradictedText
     $snapshot.rollback.outcome = 'not_attempted'
     return $snapshot
 }
@@ -804,7 +805,7 @@ function Complete-Contradiction
     if ([string]$Run.status -ceq 'completed')
     { throw "completed latest-promotion journal is contradictory: $Failure"
     }
-    $snapshot = New-ContradictionSnapshot -Failure $Failure
+    $snapshot = New-ContradictionSnapshot -Failure $Failure -ContradictedText ([string]$Run.output.text)
     Set-TerminalJournal -JournalId ([string]$Run.id) -Snapshot $snapshot -Conclusion 'failure'
     return $snapshot
 }
