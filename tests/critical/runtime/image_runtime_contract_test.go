@@ -1090,18 +1090,23 @@ func testLatestPromotionReleaseRefGuard(t *testing.T, workflow string) {
 	}
 	terminalizer := workflowStepSection(t, workflow, "Complete unstarted latest-promotion journal", "Logout and erase the isolated registry credential directory")
 	for _, required := range []string{
-		"GH_TOKEN: ${{ github.token }}", "if ($journalID -notmatch '^[1-9][0-9]*$' -or (Test-Path -LiteralPath $promotionPath)) { return }",
+		"GH_TOKEN: ${{ github.token }}", "if ($journalID -notmatch '^[1-9][0-9]*$') { return }",
+		`gh api -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2026-03-10' "repos/$env:REPOSITORY_NAME/check-runs/$journalID"`,
+		"existing.id -cne $journalID", "existing.name -cne 'latest-promotion-journal'", "existing.head_sha -cne [string]$release.source_commit",
+		"existing.external_id -cne $externalID", "existing.details_url -cne $detailsURL", "if ([string]$existing.status -ceq 'completed') { return }", "existing.status -cne 'in_progress'",
+		"if (Test-Path -LiteralPath $promotionPath)", "durable latest-promotion state lacks one typed mutation_pending identity", "durable latest-promotion state has an invalid recovery identity",
+		"phase = 'writing_latest'", "outcome = 'mutation_pending'", "previous_identity = [ordered]@{", "intended_identity = [ordered]@{",
 		"phase = 'pre_promotion'", "outcome = 'failed_before_write'", "status = 'completed'", "conclusion = 'failure'",
 		"response.id -cne $journalID", "response.name -cne 'latest-promotion-journal'", "response.head_sha -cne [string]$release.source_commit",
 		"response.external_id -cne $externalID", "response.details_url -cne $detailsURL", "response.status -cne 'completed'",
 		"response.conclusion -cne 'failure'", "response.output.title -cne 'Latest promotion journal'", "response.output.summary -cne $summary",
 	} {
 		if !strings.Contains(terminalizer, required) {
-			t.Fatalf("unstarted-journal terminalizer lacks strict contract %q", required)
+			t.Fatalf("latest-promotion terminalizer lacks strict recovery contract %q", required)
 		}
 	}
 	if got := strings.Count(terminalizer, "gh api --method PATCH"); got != 1 {
-		t.Fatalf("unstarted-journal terminalizer must have exactly one PATCH, got %d", got)
+		t.Fatalf("latest-promotion terminalizer must have exactly one PATCH seam, got %d", got)
 	}
 
 	for _, trigger := range []struct {

@@ -58,6 +58,7 @@ function Set-Scenario
   )
 
   $script:scenarioCount++
+  $script:runningTerminalizer = $false
   $script:repositories = @(
     'ghcr.io/thebtf/engram',
     'ghcr.io/thebtf/engram-operator-console',
@@ -312,6 +313,14 @@ function global:gh
   $request = $Arguments -join ' '
   if ($request -match 'repos/thebtf/engram/check-runs\b')
   {
+    if ($request -match 'repos/thebtf/engram/check-runs/([1-9][0-9]*)$' -and $request -notmatch '--method')
+    {
+      $id = $Matches[1]
+      if (-not $script:journalRuns.ContainsKey($id))
+      { throw "unknown simulated journal: $id"
+      }
+      return ($script:journalRuns[$id] | ConvertTo-Json -Compress -Depth 10)
+    }
     $inputIndex = [array]::IndexOf($Arguments, '--input')
     if ($inputIndex -lt 0 -or $inputIndex -eq ($Arguments.Count - 1))
     { throw "journal request lacks a simulated input body: $request"
@@ -352,6 +361,11 @@ function global:gh
       $id = $Matches[1]
       if (-not $script:journalRuns.ContainsKey($id))
       { throw "unknown simulated journal: $id"
+      }
+      if ($script:interruptAfterPendingState -and $script:interrupted -and -not $script:runningTerminalizer)
+      {
+        $global:LASTEXITCODE = 1
+        return 'simulated runner loss before journal patch'
       }
       $script:journalPatchCount++
       if ($script:failJournalPatchOn -eq $script:journalPatchCount)
@@ -395,7 +409,13 @@ function Invoke-WorkflowStep
   { throw "missing workflow step: $Name"
   }
   $body = $match.Groups['body'].Value -replace '(?m)^ {10}', ''
-  & ([scriptblock]::Create($body))
+  $wasRunningTerminalizer = $script:runningTerminalizer
+  $script:runningTerminalizer = $Name -ceq 'Complete unstarted latest-promotion journal'
+  try
+  { & ([scriptblock]::Create($body))
+  } finally
+  { $script:runningTerminalizer = $wasRunningTerminalizer
+  }
 }
 
 function Read-PromotionState
@@ -826,9 +846,14 @@ $interrupted = Read-PromotionState
 Assert-That $failed 'interruption after durable pending state must stop promotion'
 Assert-That ($script:createCalls.Count -eq 0) 'interruption after durable pending state must happen before registry write'
 Assert-That ($interrupted.final_latest_images[0].state -ceq 'mutation_pending') 'interruption must leave the explicit pending final state'
-$interruptedJournalPatchCount = $script:journalPatchCount
+Assert-That ($script:journalPatchCount -eq 0) 'interruption before the promotion PATCH must leave the external journal unpatched'
 Invoke-WorkflowStep -Name $terminalizer
-Assert-That ($script:journalPatchCount -eq $interruptedJournalPatchCount) 'terminalizer must not PATCH a durable mutation_pending promotion state'
+Assert-That ($script:journalPatchCount -eq 1) 'terminalizer must PATCH a durable mutation_pending promotion state exactly once'
+Assert-JournalTerminal -Outcome 'mutation_pending' -Conclusion 'failure'
+$interruptedSummary = (Get-ExternalJournal).output.summary
+Assert-That ($interruptedSummary -ceq (New-ExpectedPendingJournalSummary)) 'terminalized mutation_pending journal must preserve the exact previous and intended recovery identities'
+Invoke-WorkflowStep -Name $terminalizer
+Assert-That ($script:journalPatchCount -eq 1) 'terminalizer must not overwrite an already completed mutation_pending journal'
 $interruptedReceipt = Read-Receipt
 Assert-ReceiptMatchesState -Promotion $interrupted -Receipt $interruptedReceipt
 Assert-ReceiptMatchesRegistryOrTypedState -Receipt $interruptedReceipt
