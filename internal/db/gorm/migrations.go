@@ -6865,6 +6865,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			},
 			Rollback: rollbackBrowserCodeSearchContinuationsMigration181,
 		},
+		workspaceCatalogMigration182(),
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
