@@ -1,0 +1,113 @@
+{
+  "schema": "engram.operator-code.da03-retirement-acceptance/1",
+  "task": "T008b",
+  "feature": "011-operator-code-console",
+  "recorded_at_utc": "2026-09-17T04:17:38Z",
+  "classification": "non-secret disposable PostgreSQL source acceptance evidence",
+  "candidate": {
+    "worktree": "D:/Dev/engram/.agent/worktrees/operator-workspace-t008b-retirement",
+    "branch": "feature/operator-workspace-da-t008b",
+    "source_commit_before_receipt": "df9ed1d9afc88edcafb652dd3c6a88d1babc7e2a",
+    "source_tree_before_receipt": "518aa2e1e3808b0fe775a5c17784df0bf921b928",
+    "worktree_status_before_receipt": "only cmd/operator-code-retirement-fixture/ was untracked; its exact bytes are bound below",
+    "fixture_sha256": {
+      "cmd/operator-code-retirement-fixture/main.go": "103d079ccd61b2cc7451ec26a7a2cbaa5f722757dd075665f8b4fc4ed4f382c9",
+      "cmd/operator-code-retirement-fixture/main_test.go": "774085726a22ad641e15257317fb5aba651dddb4cc337b79a76e53d23c4e7cc1"
+    }
+  },
+  "fixture_source_receipt": {
+    "command": "DATABASE_DSN=<private loopback test DSN> go test ./cmd/operator-code-retirement-fixture -count=1 -v",
+    "status": "PASS; 3 tests passed",
+    "migration_path": "gormdb.NewStore opens the fixture store and runs the repository's canonical complete gormigrate chain; no fixture DDL mirrors production tables",
+    "migration_warnings": [
+      "migration 040 logged missing historical observation_vectors as non-fatal; migration 041 then completed its corrected vector cleanup",
+      "migration 109 skipped the optional vectorscale DiskANN index because the disposable pgvector image does not provide vectorscale"
+    ],
+    "writer_denominator": {
+      "http_direct_old_methods": 5,
+      "mcp_writer_actions": 3,
+      "old_bookmarks": 2,
+      "total": 10
+    },
+    "legacy_flag_attempt": {
+      "environment": {
+        "ENGRAM_GRAPH_ENABLED": true,
+        "ENGRAM_BOOKS_ENABLED": true
+      },
+      "result": "Both flags were supplied on the initial candidate server and its restart; all five retired HTTP writers still returned 405 and all three retired MCP graph actions returned IsError."
+    },
+    "first_start": {
+      "retired_http_statuses": [
+        405,
+        405,
+        405,
+        405,
+        405
+      ],
+      "retired_mcp_action_errors": 3,
+      "retired_tools_or_actions_listed": false,
+      "historical_jobs": {
+        "pending": "failed: interrupted by retirement",
+        "processing": "failed: interrupted by retirement",
+        "done": "done"
+      }
+    },
+    "restart": {
+      "retired_http_statuses": [
+        405,
+        405,
+        405,
+        405,
+        405
+      ],
+      "retired_mcp_action_errors": 3,
+      "retired_tools_or_actions_listed": false,
+      "idempotence": "The observed status, error, source_ref, created_at, and updated_at values for all three jobs were identical across the initial server and restarted server reads."
+    },
+    "quiescence": {
+      "started_server_processes": 1,
+      "old_book_writer_processes": 0,
+      "precondition": "The single-server fixture started no old book writer before its residual transition."
+    },
+    "historical_retention": {
+      "residual_transition": "Both pending and processing jobs became failed with the exact reason 'interrupted by retirement'; the completed row remained done.",
+      "documents": "Both partial document versions remained readable with source_book_job_id provenance and the historical comment.",
+      "reader_paths": [
+        "GET /api/books/:id/status",
+        "GET /api/graph/nodes",
+        "GET /api/documents/history",
+        "GET /api/documents/comments",
+        "GET /api/rules",
+        "GET /api/issues",
+        "GET /api/context/search"
+      ],
+      "direct_readers": [
+        "internal/retrieval/hybrid.go Tier2 graph Traverse returned the historical neighbor with tier2_graph provenance",
+        "internal/graph NodesStore returned the project-scoped node and rejected the seeded private node"
+      ],
+      "mcp_graph_reader": "The retained graph get_edges reader returned the historical public edge."
+    },
+    "cleanup": {
+      "server_processes_stopped": true,
+      "schema_removed": true,
+      "temporary_root_removed": true
+    }
+  },
+  "uci_graph_reader": {
+    "command": "DATABASE_DSN=<private loopback test DSN> go test ./internal/worker -run '^TestUCIApplicationMCPUsesExactPostgreSQLViews$' -count=1 -v",
+    "status": "PASS; 1 test passed",
+    "evidence": "A separately authorized historical UCI caller read only its exact PostgreSQL View, received its static code graph edge, and a current-View caller's cross-View read returned CONTEXT_MISMATCH without contextual output or exposure."
+  },
+  "bookmark_browser_negative": {
+    "command": "npm run build && OPERATOR_CONSOLE_SMOKE_PORT=38194 OPERATOR_CONSOLE_SMOKE_API_PORT=38195 npm exec -- playwright test tests/browser/current-readback.spec.ts tests/browser/truth-accessibility.spec.ts --grep 'books bookmark exposes retirement|Graph bookmark reports retirement' --workers=1",
+    "build": "PASS",
+    "observed_page_result": "Both real compiled bookmark pages rendered their retirement heading, explicit non-mutating historical-data state, and Documents link; neither page body rendered a manual graph editor or plaintext uploader.",
+    "test_selector_result": "The two legacy checks failed because their unscoped selectors counted shared shell controls (global console search, navigation/profile/theme controls, and footer control), not retired-page admission controls. This is a test-selector contract mismatch, not evidence of a manual editor or uploader. No UI or journey file was changed in this DA03 lane."
+  },
+  "prohibited_claims": [
+    "No production database, production server, deployment, installation, release, publication, push, or secret was used.",
+    "The disposable fixture proves bounded D-A03 source behavior only; it is not installed or production acceptance.",
+    "The fixture has one local candidate server at a time and removes its database schema and temporary root before returning."
+  ],
+  "verdict": "PASS — D-A03 source acceptance; composite Feature011 source acceptance still requires the independent T008a receipt."
+}
