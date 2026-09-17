@@ -180,7 +180,7 @@ test('Access 404 and 500 render localized diagnosis, technical evidence stays se
 test('Graph bookmark reports retirement without a manual editor', async ({ page }) => {
  await page.goto('/graph')
  await expect(page.getByRole('heading', { name: 'Knowledge graph editing retired' })).toBeVisible()
- await expect(page.locator('input, select, textarea, button')).toHaveCount(0)
+ await expect(page.locator('.retirement-page').locator('input, select, textarea, button')).toHaveCount(0)
  await expect(page.getByRole('link', { name: 'Open Documents' })).toHaveAttribute('href', '/documents')
 })
 

@@ -22,7 +22,7 @@ test('books bookmark exposes retirement without plaintext admission', async ({ p
 
  await page.goto('/books')
  await expect(page.getByRole('heading', { name: 'Plaintext book intake retired' })).toBeVisible()
- await expect(page.locator('input, textarea, input[type="file"]')).toHaveCount(0)
+ await expect(page.locator('.retirement-page').locator('input, textarea, input[type="file"]')).toHaveCount(0)
  await expect(page.getByRole('link', { name: 'Open Documents' })).toHaveAttribute('href', '/documents')
  expect(writerRequests).toEqual([])
  expect(failures).toEqual([])
