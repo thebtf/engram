@@ -13,31 +13,18 @@ function collectPageFailures(page: Page) {
 
 test.describe.configure({ mode: 'serial' })
 
-test('books ingest remains pending until the server exposes an authoritative status reference', async ({ page }) => {
+test('books bookmark exposes retirement without plaintext admission', async ({ page }) => {
  const failures = collectPageFailures(page)
- const statusRequests: string[] = []
+ const writerRequests: string[] = []
  page.on('request', (request) => {
-  if (request.method() === 'GET' && /\/api\/books\/\d+\/status$/.test(new URL(request.url()).pathname)) {
-   statusRequests.push(request.url())
-  }
+  if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/books') writerRequests.push(request.url())
  })
+
  await page.goto('/books')
-
- const textInputs = page.locator('.books-page input[type="text"]')
- await textInputs.nth(0).fill('readback-book.md')
- await textInputs.nth(1).fill('operator-console')
- await textInputs.nth(2).fill('operator-console')
- await page.locator('.books-page textarea').fill('# Readback book\n\nA current book-ingestion fixture.')
-
- const createResponse = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/books')
- await page.locator('.books-page button.act.primary').click()
- expect(await (await createResponse).json()).toMatchObject({ status: 'pending', source_ref: 'readback-book.md' })
- const outcome = page.getByTestId('mutation-result')
- await expect(outcome).toHaveAttribute('data-kind', 'committed_verification_pending')
- await expect(page.getByTestId('mutation-retained-input')).toBeVisible()
- await expect(textInputs.nth(0)).toHaveValue('readback-book.md')
- await page.waitForTimeout(100)
- expect(statusRequests).toEqual([])
+ await expect(page.getByRole('heading', { name: 'Plaintext book intake retired' })).toBeVisible()
+ await expect(page.locator('input, textarea, input[type="file"]')).toHaveCount(0)
+ await expect(page.getByRole('link', { name: 'Open Documents' })).toHaveAttribute('href', '/documents')
+ expect(writerRequests).toEqual([])
  expect(failures).toEqual([])
 })
 

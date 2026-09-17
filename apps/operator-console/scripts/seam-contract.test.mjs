@@ -150,7 +150,6 @@ test('fetch seam reads bodies safely instead of throwing browser-native JSON par
 
 const mutationConsumerPaths = [
   'composables/useOperatorAccess.ts',
-  'composables/useOperatorBooks.ts',
   'composables/useOperatorDocuments.ts',
   'composables/useOperatorDomainRegistry.ts',
   'composables/useOperatorHealthSettings.ts',
@@ -163,7 +162,7 @@ const mutationConsumerPaths = [
   'composables/useOperatorSecrets.ts',
 ]
 
-test('exactly twelve direct mutation consumers preserve durable mutation truth', () => {
+test('exactly eleven direct mutation consumers preserve durable mutation truth', () => {
   const discoveredPaths = readdirSync(join(root, 'composables'))
     .filter((name) => /^useOperator.*\.ts$/.test(name))
     .filter((name) => read(join(root, 'composables', name)).includes('executeMutation('))
@@ -577,8 +576,6 @@ test('projects control plane archives projects through typed soft-delete confirm
 
 test('transport failures are typed diagnosis categories localized at the presentation boundary', () => {
   const seamSource = read(seamPath)
-  const graphComposableSource = read(join(root, 'composables', 'useOperatorGraph.ts'))
-  const graphPageSource = read(join(root, 'pages', 'graph.vue'))
   const accessPageSource = read(accessPagePath)
   const localeSources = [read(enLocalePath), read(ruLocalePath), read(zhLocalePath)]
   const diagnosisBody = functionBody(seamSource, 'operatorErrorDiagnosis')
@@ -594,9 +591,6 @@ test('transport failures are typed diagnosis categories localized at the present
     assert.doesNotMatch(diagnosisBody, new RegExp(prose), `transport seam must not return English prose: ${prose}`)
   }
 
-  assert.match(graphComposableSource, /category: operatorErrorDiagnosis\(response\.status\)|const category = operatorErrorDiagnosis\(response\.status\)/, 'graph transport must classify HTTP failures with the shared diagnosis')
-  assert.match(graphPageSource, /operatorDiagnosisKey/, 'Graph page must localize primary error copy through the diagnosis key')
-  assert.doesNotMatch(graphPageSource, /return nodesState\.value\.error\.message/, 'Graph page must not render raw transport messages as primary copy')
   assert.match(accessPageSource, /operatorDiagnosisKey/, 'Access page must localize primary error copy through the diagnosis key')
   assert.doesNotMatch(accessPageSource, /error\.value\?\.message \|\| null/, 'Access page must not render raw transport messages as primary copy')
 
@@ -608,33 +602,6 @@ test('transport failures are typed diagnosis categories localized at the present
   }
 })
 
-test('graph capability classification is dormant when gated and never unconditionally live', () => {
-  const graphPageSource = read(join(root, 'pages', 'graph.vue'))
-
-  assert.doesNotMatch(graphPageSource, /graphCapability = computed\(\(\) => ['"]live['"]\)/, 'graph capability must not be a hardcoded live constant')
-  assert.match(graphPageSource, /graphPresentation\.value === ['"]gated['"] \? ['"]dormant['"] : ['"]live['"]/, 'gated capability must classify as dormant')
-})
-
-test('graph async ownership invalidates stale requests and notices', () => {
-  const graphComposableSource = read(join(root, 'composables', 'useOperatorGraph.ts'))
-  const graphPageSource = read(join(root, 'pages', 'graph.vue'))
-  const selectedNodeWatch = graphPageSource.slice(graphPageSource.indexOf('watch(selectedNodeID'), graphPageSource.indexOf('function selectProject'))
-
-  for (const generation of ['refreshGeneration', 'edgesGeneration', 'traverseGeneration', 'pathGeneration', 'mutationGeneration']) {
-    assert.match(graphComposableSource, new RegExp(`const ${generation} = ref\\(0\\)`), `${generation} must be scoped to this graph composable instance`)
-  }
-  assert.match(graphComposableSource, /onScopeDispose\(\(\) => \{[\s\S]*scopeActive = false/, 'composable disposal must invalidate pending graph work')
-  assert.match(graphComposableSource, /selectedNodeID\.value !== nodeID/, 'edge responses must retain selected-node ownership')
-  assert.match(graphComposableSource, /if \(!owns\(traverseGeneration, run\)\) return/, 'traverse responses must retain request ownership')
-  assert.match(graphComposableSource, /function invalidateMutations\(\)/, 'newer page actions must invalidate pending mutations')
-  assert.match(graphPageSource, /function dismissNotice\(\)[\s\S]*invalidateMutations\(\)/, 'dismissal must retain notice ownership')
-  assert.match(graphPageSource, /function selectProject\(project: string\)[\s\S]*?invalidateMutations\(\)[\s\S]*?selectedProject\.value = project/, 'only an explicit user project change may invalidate an in-flight mutation')
-  assert.match(graphPageSource, /function selectNode\(nodeID: string\)[\s\S]*?invalidateMutations\(\)[\s\S]*?selectedNodeID\.value = nodeID/, 'only an explicit user node selection may invalidate an in-flight mutation')
-  assert.doesNotMatch(selectedNodeWatch, /invalidateMutations\(\)/, 'mutation-owned node selection must not invalidate its own completion')
-  assert.match(graphComposableSource, /if \(!owns\(mutationGeneration, run\)\) return \{ ok: true, stale: true \}/, 'mutations must report invalidated completions as stale')
-  assert.match(graphPageSource, /if \(result\.stale\) return/, 'mutation notices must ignore composable-owned stale results')
-  assert.doesNotMatch(graphPageSource, /actionGeneration/, 'page-local generations must not compete with composable mutation ownership')
-})
 
 test('Nuxt UI color-mode auto-registration stays disabled', () => {
   const source = read(nuxtConfigPath)
