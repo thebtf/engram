@@ -27,11 +27,13 @@ test('books bookmark exposes retirement without plaintext admission', async ({ p
 
  await page.goto('/settings')
  await page.getByRole('dialog').getByRole('button', { name: 'English' }).click()
+ await expect(page.locator('html')).toHaveAttribute('lang', 'en')
  await page.goto('/books')
  await expect(page.getByRole('heading', { name: 'Plaintext book intake retired' })).toBeVisible()
 
  await page.goto('/settings')
  await page.getByRole('dialog').getByRole('button', { name: '中文' }).click()
+ await expect(page.locator('html')).toHaveAttribute('lang', 'zh-Hans')
  await page.goto('/books')
  await expect(page.getByRole('heading', { name: '纯文本书籍导入已停用' })).toBeVisible()
  expect(writerRequests).toEqual([])

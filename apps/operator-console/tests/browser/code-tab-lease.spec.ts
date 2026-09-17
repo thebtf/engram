@@ -90,7 +90,7 @@ test('Code Explorer resynchronizes a completed selection after catalog refresh w
       indexed_snapshot: { label: 'Refreshed candidate snapshot', revision: '1a9dad2', published_at: '2026-09-17T00:02:00Z' },
       selection_ref: 'context-current',
       index_intent_available: false,
-    }, initialCatalog.contexts[1]],
+    }, initialCatalog.contexts[2]],
   }
 
   await page.route('**/api/code/**', async (route: Route) => {

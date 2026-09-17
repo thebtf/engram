@@ -97,6 +97,7 @@ async function selectFixtureContext(page: Page, fixture: LiveFixtureState, varia
   if (value === null) throw new Error('fixture catalog did not expose an indexed snapshot')
   await snapshot.selectOption(value)
   await expect(snapshot).toHaveValue(value)
+  await expect(page.getByTestId('code-context-candidate')).toContainText(fixtureLabel)
 }
 
 async function pinAndRead(browser: Browser, fixture: LiveFixtureState, credential: BrowserCredential, scenario: OperatorCodeFixture, traffic: RouteTraffic[]): Promise<CodeTab> {
@@ -128,10 +129,9 @@ async function pinAndRead(browser: Browser, fixture: LiveFixtureState, credentia
   await expect(page).toHaveURL(/\/code$/)
   const variant = credential.email === fixture.browserCredential.email ? 'a' : 'b'
   await selectFixtureContext(page, fixture, variant)
-  await expect(page.getByTestId('code-context-candidate')).toBeVisible()
   await page.getByTestId('code-pin-context').click()
   await expect(page.getByTestId('code-context-pinned')).toBeVisible()
-  await page.getByTestId('code-query-input').fill(scenario.query)
+  await page.getByTestId('code-query-input').fill(scenario.expectedSearch)
   await page.getByTestId('code-search-submit').click()
   const results = page.getByTestId('code-search-results').getByRole('listitem').filter({
     has: page.getByText(`go:fixture/func:${scenario.expectedSource}`, { exact: true }),
@@ -211,7 +211,7 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
     mcpB = externalClientB
     const [browserA, browserB, externalA, externalB] = await Promise.all([
       observeOperation(async () => {
-        await tabA.page.getByTestId('code-query-input').fill(aScenario.query)
+        await tabA.page.getByTestId('code-query-input').fill(aScenario.expectedSearch)
         await tabA.page.getByTestId('code-search-submit').click()
         const results = tabA.page.getByTestId('code-search-results').getByRole('listitem').filter({
           has: tabA.page.getByText(`go:fixture/func:${aScenario.expectedSource}`, { exact: true }),
@@ -222,7 +222,7 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
         await expect(tabA.page.getByTestId('code-source-result')).not.toContainText(bScenario.expectedMarker)
       }),
       observeOperation(async () => {
-        await tabB.page.getByTestId('code-query-input').fill(bScenario.query)
+        await tabB.page.getByTestId('code-query-input').fill(bScenario.expectedSearch)
         await tabB.page.getByTestId('code-search-submit').click()
         const results = tabB.page.getByTestId('code-search-results').getByRole('listitem').filter({
           has: tabB.page.getByText(`go:fixture/func:${bScenario.expectedSource}`, { exact: true }),

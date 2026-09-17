@@ -92,6 +92,10 @@ test.describe('mock interaction-only: responsive navigation and localization', (
 })
 
 async function expectClosedMobileShell(page: Page, viewportWidth: number): Promise<void> {
+  await expect.poll(() => page.locator('#primary-navigation').evaluate((element) => ({
+    ariaHidden: element.getAttribute('aria-hidden'),
+    inert: element.inert,
+  }))).toEqual({ ariaHidden: 'true', inert: true })
   const shell = await page.evaluate(() => {
     const rect = (selector: string) => {
       const element = document.querySelector<HTMLElement>(selector)
