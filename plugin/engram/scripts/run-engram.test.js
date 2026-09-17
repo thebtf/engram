@@ -72,7 +72,7 @@ test("MCP configs never interpolate user_config in an env block", () => {
   }
 });
 
-test("release-facing plugin and marketplace versions stay aligned", () => {
+test("OMP manifest leaves cwd to the host while the script remains plugin-root-resolved", () => {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const readJson = (...segments) => JSON.parse(fs.readFileSync(path.join(repoRoot, ...segments), "utf8"));
   const claudePlugin = readJson("plugin", "engram", ".claude-plugin", "plugin.json");
@@ -85,11 +85,11 @@ test("release-facing plugin and marketplace versions stay aligned", () => {
   assert.match(claudePlugin.version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/);
   assert.equal(ompPlugin.version, claudePlugin.version);
   const ompServer = ompPlugin.mcpServers.engram;
+  assert.equal(Object.hasOwn(ompServer, "cwd"), false);
   assert.deepEqual(ompServer, {
     type: "stdio",
     command: "node",
     args: ["./scripts/run-engram.js"],
-    cwd: ".",
     timeout: 60000,
   });
   assert.equal(path.resolve(repoRoot, "plugin", "engram", ompServer.args[0]), path.join(repoRoot, "plugin", "engram", "scripts", "run-engram.js"));

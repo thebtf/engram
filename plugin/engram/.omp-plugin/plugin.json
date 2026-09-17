@@ -15,7 +15,6 @@
       "args": [
         "./scripts/run-engram.js"
       ],
-      "cwd": ".",
       "timeout": 60000
     }
   }
