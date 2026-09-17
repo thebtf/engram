@@ -53,9 +53,9 @@ The list below is generated. Do not edit it by hand; run `go run ./tools/gen-dat
 <!-- BEGIN GENERATED TABLES -->
 Generated from `internal/db/gorm/migrations.go`.
 
-Migration count: **152**.
+Migration count: **154**.
 
-Live table count: **68**.
+Live table count: **69**.
 
 | Table | Creating migration |
 | --- | --- |
@@ -127,4 +127,5 @@ Live table count: **68**.
 | `uci_index_intents` | `179_uci_index_intents` |
 | `uci_index_intent_receipts` | `180_uci_index_intent_delivery` |
 | `browser_code_search_continuations` | `181_browser_code_search_continuations` |
+| `uci_semantic_continuations` | `184_uci_semantic_continuations` |
 <!-- END GENERATED TABLES -->
