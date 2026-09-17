@@ -626,6 +626,19 @@ func TestUCIApplicationOperatorPortsKeepStructureAndRelationsInOneView(t *testin
 	structure, err := composition.application.StructureOperatorCodebase(context.Background(), authorized, structureSpec)
 	require.NoError(t, err)
 	require.NoError(t, structure.ValidatePreExposure())
+	require.True(t, operatorCodeStructureResponseValid(structure, authorized))
+	exposure, err := composition.exposureRecorder.Record(context.Background(), authorized, uci.ExposureInput{
+		AuthRealm:            string(auth.SourceClient),
+		ClientKeycard:        fixture.workstationID,
+		ClientSession:        fixture.clientSessionID,
+		RequestID:            "worker-uci-structure",
+		RequestBindingDigest: workerUCIApplicationDigest("worker-uci-structure"),
+		Operation:            uci.ExposureOperationCodeSearch,
+		Response:             structure,
+		RecordedAt:           time.Now().UTC(),
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, exposure.ExposureRef)
 	require.NotNil(t, structure.Contexts)
 	require.Equal(t, fixture.historical.Context.ViewID, (*structure.Contexts)[0].ViewID)
 	require.NotNil(t, structure.Retrieval)

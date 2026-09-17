@@ -344,6 +344,7 @@ const (
 	UCIRetrievalLexical     UCIRetrievalMode = "lexical"
 	UCIRetrievalHybrid      UCIRetrievalMode = "hybrid"
 	UCIRetrievalGraph       UCIRetrievalMode = "graph"
+	UCIRetrievalStructure   UCIRetrievalMode = "structure"
 	UCIRetrievalUnavailable UCIRetrievalMode = "unavailable"
 )
 
@@ -360,12 +361,13 @@ const (
 type UCIEvidenceSource string
 
 const (
-	UCIEvidenceExact  UCIEvidenceSource = "exact"
-	UCIEvidenceFTS    UCIEvidenceSource = "fts"
-	UCIEvidenceVector UCIEvidenceSource = "vector"
-	UCIEvidenceGraph  UCIEvidenceSource = "graph"
-	UCIEvidenceMixed  UCIEvidenceSource = "mixed"
-	UCIEvidenceNone   UCIEvidenceSource = "none"
+	UCIEvidenceExact     UCIEvidenceSource = "exact"
+	UCIEvidenceFTS       UCIEvidenceSource = "fts"
+	UCIEvidenceVector    UCIEvidenceSource = "vector"
+	UCIEvidenceGraph     UCIEvidenceSource = "graph"
+	UCIEvidenceStructure UCIEvidenceSource = "structure"
+	UCIEvidenceMixed     UCIEvidenceSource = "mixed"
+	UCIEvidenceNone      UCIEvidenceSource = "none"
 )
 
 // UCICertainty is the closed confidence label for UCI evidence.
@@ -488,7 +490,7 @@ func isUCIExposureResultState(value UCIExposureResultState) bool {
 
 func isUCIRetrievalMode(value UCIRetrievalMode) bool {
 	switch value {
-	case UCIRetrievalExact, UCIRetrievalLexical, UCIRetrievalHybrid, UCIRetrievalGraph, UCIRetrievalUnavailable:
+	case UCIRetrievalExact, UCIRetrievalLexical, UCIRetrievalHybrid, UCIRetrievalGraph, UCIRetrievalStructure, UCIRetrievalUnavailable:
 		return true
 	default:
 		return false
@@ -506,7 +508,7 @@ func isUCICoverageState(value UCICoverageState) bool {
 
 func isUCIEvidenceSource(value UCIEvidenceSource) bool {
 	switch value {
-	case UCIEvidenceExact, UCIEvidenceFTS, UCIEvidenceVector, UCIEvidenceGraph, UCIEvidenceMixed, UCIEvidenceNone:
+	case UCIEvidenceExact, UCIEvidenceFTS, UCIEvidenceVector, UCIEvidenceGraph, UCIEvidenceStructure, UCIEvidenceMixed, UCIEvidenceNone:
 		return true
 	default:
 		return false

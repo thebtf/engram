@@ -6866,6 +6866,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			Rollback: rollbackBrowserCodeSearchContinuationsMigration181,
 		},
 		workspaceCatalogMigration182(),
+		uciStructureExposureMigration183(),
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
@@ -7229,6 +7230,31 @@ func continuitySlotMigration161() *gormigrate.Migration {
 				}
 				return nil
 			})
+		},
+	}
+}
+
+func uciStructureExposureMigration183() *gormigrate.Migration {
+	return &gormigrate.Migration{
+		ID: "183_uci_structure_exposure",
+		Migrate: func(tx *gorm.DB) error {
+			for _, stmt := range []string{
+				`ALTER TABLE uci_exposures DROP CONSTRAINT IF EXISTS uci_exposures_retrieval_mode_chk`,
+				`ALTER TABLE uci_exposures ADD CONSTRAINT uci_exposures_retrieval_mode_chk
+					CHECK (retrieval_mode IN ('exact', 'lexical', 'hybrid', 'graph', 'structure', 'unavailable'))`,
+				`ALTER TABLE uci_exposures DROP CONSTRAINT IF EXISTS uci_exposures_evidence_source_chk`,
+				`ALTER TABLE uci_exposures ADD CONSTRAINT uci_exposures_evidence_source_chk
+					CHECK (evidence_source IN ('exact', 'fts', 'vector', 'graph', 'structure', 'mixed', 'none'))`,
+			} {
+				if err := tx.Exec(stmt).Error; err != nil {
+					return fmt.Errorf("migration 183: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(_ *gorm.DB) error {
+			// Append-only structure evidence remains readable after binary rollback.
+			return nil
 		},
 	}
 }
