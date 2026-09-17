@@ -1,62 +1,60 @@
 {
-  "receiptSchema": "engram.operator-code-console.da-journey/v1",
-  "scope": "D-A 01/02/04 operator Workspace journey",
+  "receiptSchema": "engram.operator-code-console.da-journey/v2",
+  "scope": "D-A Workspace responsive repair evidence",
+  "recorded_at_utc": "2026-09-17",
   "candidate": {
-    "worktree": "D:/Dev/engram/.agent/worktrees/operator-workspace-t008a-journey",
-    "head": "488c56da4c2dbebe628511acf098e5e1cd71a0d8",
-    "tree": "6d0a3385e0a7e3e142d132ac5a0772070f5ddd7a",
-    "provenBeforeThisReceipt": true
+    "worktree": "D:/Dev/engram/.agent/worktrees/operator-workspace-mobile-fix",
+    "branch": "fix/operator-workspace-mobile-layout",
+    "source_commit_before_receipt": "084c464ba1bedd10840585f08de9a519911e0827",
+    "source_tree_before_receipt": "699e929e4c31d9f54a623bdfbb6f19453becd8c6",
+    "clean_source_tree_before_receipt": true
   },
   "sourceFiles": {
+    "apps/operator-console/layouts/default.vue": "sha256:2518453c7f73c5f79aad5e7b81babd1ea9f42c5260d2abe28d13e61c0016d144",
+    "apps/operator-console/playwright.live.config.ts": "sha256:f040a32a14de912fad84cfceca049d16fdce8e67640eaa2d83d4766a2ec5c4dd",
     "apps/operator-console/tests/live/fixture-bootstrap.ts": "sha256:749da70300d17653395717016c073cfc0b23c2b06bbfe21efdd7dd2dc2763bb2",
-    "apps/operator-console/tests/live/operator-code-explorer.spec.ts": "sha256:2dbdb76aa2458fddc042e565028e2c29083e7e9c8c849d11a8c9a3dc784c16e2",
-    "apps/operator-console/tests/live/operator-code-s2-topology.spec.ts": "sha256:33470cd8f201e49f6e2ecdd3bc310a7c4e3908b546745e7c566ec5375d74e992",
-    "cmd/operator-code-live-fixture/main.go": "sha256:bc308a21bc207befce144aa9239bcbfd02b5e64cfbf353442ffdd06053e9616f",
-    "cmd/operator-code-live-fixture/main_test.go": "sha256:632b2f363da9227f378b4bef6a29038f75b6c62579434648bb8d1fd3a44e2aad"
+    "apps/operator-console/tests/live/operator-code-mobile-layout.spec.ts": "sha256:2031b66a2973b3c166dc4267dc21604236d317a2cbc238b30e34c16dbc92dbfe",
+    "apps/operator-console/tests/live/operator-code-explorer.spec.ts": "sha256:9cb67b804f296d613ab22cc5e7c29c3197c55418c1dfb88fd170928c6ae3dfe1"
   },
   "observedProof": {
-    "kind": "real-authenticated-go-postgresql-chromium",
+    "kind": "real-authenticated-go-postgresql-chromium-shell",
+    "command": "npx playwright test --config playwright.live.config.ts operator-code-mobile-layout.spec.ts",
+    "result": "PASS — 1 test passed",
     "trace": {
-      "path": "apps/operator-console/test-results/operator-code-explorer-S2--2f7e4-ion-and-graph-source-limits-chromium/s2-live-code-explorer.json",
-      "sha256": "95783a05c81687f44a0568c66430a0f7adf856cc5ad6d73c1151a0a82de28c6e",
-      "candidateHead": "488c56da4c2dbebe628511acf098e5e1cd71a0d8",
-      "candidateTree": "6d0a3385e0a7e3e142d132ac5a0772070f5ddd7a",
-      "backendSourceCommit": "488c56da4c2dbebe628511acf098e5e1cd71a0d8",
+      "path": "apps/operator-console/test-results/operator-code-mobile-layou-56a58-le-across-responsive-reflow-chromium/workspace-mobile-layout.json",
+      "sha256": "546053bb9b1b0886ad9ef3a091ac157987924e1ba25589eddf47275c67a2cbe3",
+      "candidateHead": "084c464ba1bedd10840585f08de9a519911e0827",
+      "candidateTree": "699e929e4c31d9f54a623bdfbb6f19453becd8c6",
+      "backendSourceCommit": "084c464ba1bedd10840585f08de9a519911e0827",
+      "backendBinarySha256": "4f6f032d6e26b34a64574af7eea67509563da9c076bb928f9155aec5b2f9b27b",
       "browser": "chromium 149.0.7827.55",
-      "traffic": "all browser /api/code responses were 200 or 204; bootstrap readiness 503s occurred only while the disposable server initialized and became 200 before the browser journey"
+      "apiFailures": []
     },
-    "fixtureUnit": "The preserved focused fixture unit passed before this receipt; its contract proves that the conceptual query 'which routine hands work to a peer' has no lexical-token overlap with CodeExplorerFixtureA, while the published fixture has a resolved CodeExplorerFixtureA -> CodeExplorerFixtureB edge and a readable working-copy label.",
-    "semanticProvider": "The trace's initial search assertion required status=ok, retrieval.mode=hybrid, vector_coverage=1, semantic weight > 0, lexical weight > 0, and CodeExplorerFixtureA as the semantic target. The next-result request carried a continuation and preserved the server context. The fixture's provider path completes embeddings only when the provider configuration is supplied; the inherited live trace was produced with that real-provider configuration.",
-    "journey": {
-      "homeToWorkspace": "Homepage Workspace entry opened /code; the default release state was unselected.",
-      "contextAndPrivacy": "Repository, working copy, indexed snapshot, grant/readback, reload invalidation, copied-tab collision, fresh-opener normalization, and alternate A-to-D context were asserted in the live browser journey.",
-      "searchGraphSource": "The pinned snapshot reported more than 50 chunks, complete embedding coverage, hybrid search, an off-page graph neighbor, source span/digest evidence, and repeated graph/source requests in the same context.",
-      "relations": "The direct resolved relation was discovered from the selected source; reverse/off-page neighbor and exact source evidence were exposed from the pinned published snapshot.",
-      "languageKeyboard": "The live journey asserted Russian default, English and Simplified Chinese switching, Escape close behavior, and keyboard-opened mobile navigation in both translated states.",
-      "responsive": "The live journey captured 1440x1024, 980x900, 390x844, and 200% page-scale screenshots while asserting no document horizontal overflow at each CSS viewport and restoring desktop state afterward."
-    }
+    "responsive": {
+      "viewports": [
+        "1440x1024",
+        "980x900",
+        "390x844",
+        "390x844@200%"
+      ],
+      "closedDrawer": "At 980px and 390px: scrollX=0; document scrollWidth equals viewport width; app grid resolves to one viewport-width column; nav right edge is at or left of x=0; nav is aria-hidden and inert; menu is visible at least 44x44px; topbar, content, statusbar, title, and menu all fit the viewport.",
+      "openDrawer": "At 390px: menu opens a visible scrim and a non-inert, aria-visible drawer whose left edge is x=0; Escape restores the closed geometry.",
+      "desktop": "At 1440px: navigation remains visible, the menu is hidden, and topbar/content/statusbar remain within the desktop grid.",
+      "visualReview": "Fresh 390px closed and drawer-open captures show an unclipped header, complete primary content, a visible menu, and a full drawer. Fresh 980px and 1440px captures preserve the expected compact and desktop compositions."
+    },
+    "providerBoundary": "The full semantic-provider explorer journey was not reused for responsive proof: the configured embedding provider was unavailable in this lane (embedded_chunks=0 of 64). This narrow real authenticated Go/PostgreSQL shell fixture does not require embeddings and does not reassert semantic search evidence."
   },
   "screenshots": {
-    "apps/operator-console/test-results/operator-code-explorer-S2--2f7e4-ion-and-graph-source-limits-chromium/da08a-workspace-1440.png": "sha256:408793c740071f0428fdf2efd4ea36c8f10350edf910ce26ad98847363b97f49",
-    "apps/operator-console/test-results/operator-code-explorer-S2--2f7e4-ion-and-graph-source-limits-chromium/da08a-workspace-980.png": "sha256:cf078879e912efb8ab16c935fd6ae11fcd5635f7a47e23d52cf222b9977cc42e",
-    "apps/operator-console/test-results/operator-code-explorer-S2--2f7e4-ion-and-graph-source-limits-chromium/da08a-workspace-390.png": "sha256:fefd096f6e9d8ab8aa48ca1b4f2c446445bd7e2269444cf391f2b9f8e19f642b",
-    "apps/operator-console/test-results/operator-code-explorer-S2--2f7e4-ion-and-graph-source-limits-chromium/da08a-workspace-200pct.png": "sha256:bf126ea3cdd55eb0df06a4c4a76f87fec099ebb32cb14a91f7cae5ef9f93246c"
+    "apps/operator-console/test-results/operator-code-mobile-layou-56a58-le-across-responsive-reflow-chromium/workspace-1440.png": "sha256:8260bdd1def22b7c4d9ae99b859511aedf4b83e0db846803e9bf7f68f57dc139",
+    "apps/operator-console/test-results/operator-code-mobile-layou-56a58-le-across-responsive-reflow-chromium/workspace-980.png": "sha256:c431d35ad1c2455c83e15dc48e8431e5a318fca0c99ca9b4c4ba1b9b7318786c",
+    "apps/operator-console/test-results/operator-code-mobile-layou-56a58-le-across-responsive-reflow-chromium/workspace-390.png": "sha256:72c058e538cbfe68e5cf8584728645952c86a5f862e35267961182a8a57c8be1",
+    "apps/operator-console/test-results/operator-code-mobile-layou-56a58-le-across-responsive-reflow-chromium/workspace-390-drawer-open.png": "sha256:d9ac400d1fafc9a191b8dee4331e04138df392009174f4096f0c65bf2de91f46",
+    "apps/operator-console/test-results/operator-code-mobile-layou-56a58-le-across-responsive-reflow-chromium/workspace-200pct.png": "sha256:e2804ff704d362aca40fdd89c31e375166d8673638748fbfae35c2e792ee9b61"
   },
   "impeccable": {
     "command": "C:\\Users\\btf\\.impeccable\\bin\\0.1.5\\impeccable.exe detect apps\\operator-console",
-    "result": "8 static findings: one existing navigation width transition and seven existing 3px selected-row side stripes. None touches the five preserved D-A fixture/live files, so no out-of-scope UI rewrite was made.",
-    "reviewScreenshot": {
-      "path": ".impeccable/review/da08a-search-before-graph-503.png",
-      "sha256": "53b10e2b19c18a61479fbcd35d45346d086ae715aa4df66f89b3ed19d055a74a"
-    }
+    "result": "The final layout scan had no finding in the changed shell or responsive proof. It reported seven pre-existing selected-row side-tab findings in unrelated component/page files."
   },
-  "isolationAndCleanup": {
-    "ports": "The live fixture reserves loopback ports with port 0 and Docker publishes PostgreSQL to an ephemeral loopback port; it never stops or reuses a foreign listener.",
-    "cleanup": "Focused live Playwright result is passed and its global teardown completed. A post-run Docker label query found no operator-console-live fixture container."
-  },
-  "commandsObservedThisCloseout": [
-    "C:\\Users\\btf\\.impeccable\\bin\\0.1.5\\impeccable.exe detect apps\\operator-console",
-    "docker ps --filter label=engram.fixture=operator-console-live --format \"{{.ID}} {{.Names}}\""
-  ],
-  "verdict": "PASS — all DA01/DA02/DA04 checks are covered by the hash-bound focused real-provider trace and final responsive/zoom screenshots; no unexpected browser /api/code HTTP status >= 400 occurred."
+  "cleanup": "The focused live Playwright result passed and its fixture global teardown completed. No foreign listener or container was stopped.",
+  "verdict": "PASS — the prior scrollWidth-only responsive proof and its clipped 390px screenshot hashes are replaced. The exact candidate proves usable 390px, 200%, 980px, and 1440px Workspace shell geometry, drawer/Escape behavior, fresh visual captures, and no unexpected authenticated API failures."
 }
