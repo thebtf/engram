@@ -20,22 +20,6 @@ type nodesStoreAPI interface {
 	Get(ctx context.Context, id int64, includePrivate bool) (*models.KnowledgeNode, error)
 }
 
-// RetiredGraphWriterAction is the typed T006b handoff for removing writer
-// actions from the shared MCP tool list and dispatch while retaining readers.
-type RetiredGraphWriterAction string
-
-const (
-	RetiredGraphWriterActionAddEdge    RetiredGraphWriterAction = "add_edge"
-	RetiredGraphWriterActionRemoveEdge RetiredGraphWriterAction = "remove_edge"
-	RetiredGraphWriterActionAddNode    RetiredGraphWriterAction = "add_node"
-)
-
-var RetiredGraphWriterActions = [...]RetiredGraphWriterAction{
-	RetiredGraphWriterActionAddEdge,
-	RetiredGraphWriterActionRemoveEdge,
-	RetiredGraphWriterActionAddNode,
-}
-
 type graphArgs struct {
 	Action    string   `json:"action"`
 	SourceID  int64    `json:"source_id"`
@@ -61,8 +45,6 @@ func (s *Server) handleGraph(ctx context.Context, args json.RawMessage) (string,
 	}
 
 	switch a.Action {
-	case string(RetiredGraphWriterActionAddEdge), string(RetiredGraphWriterActionRemoveEdge), string(RetiredGraphWriterActionAddNode):
-		return "", fmt.Errorf("graph writer action %q has been retired", a.Action)
 	case "get_edges":
 		return s.graphGetEdges(ctx, a)
 	case "traverse":

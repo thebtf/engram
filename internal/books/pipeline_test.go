@@ -22,12 +22,6 @@ func (s *residualJobStore) RetireNonterminal(_ context.Context, reason string) (
 	return 2, nil
 }
 
-func TestPlaintextBookPipelineIsRetired(t *testing.T) {
-	pipeline := booksdomain.NewPipeline(nil, nil)
-	err := pipeline.Process(context.Background(), booksdomain.ProcessRequest{JobID: 1, SourceRef: "legacy.md", Content: "plaintext"})
-	require.ErrorIs(t, err, booksdomain.ErrPlaintextBookIntakeRetired)
-}
-
 func TestRetireResidualJobsRequiresQuiescence(t *testing.T) {
 	store := &residualJobStore{}
 	_, err := booksdomain.RetireResidualJobs(context.Background(), store, false)

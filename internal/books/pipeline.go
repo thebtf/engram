@@ -19,10 +19,7 @@ const (
 	RetirementFailureReason = "interrupted by retirement"
 )
 
-var (
-	ErrPlaintextBookIntakeRetired = errors.New("plaintext book intake retired")
-	ErrBookWriterNotQuiesced      = errors.New("book writer must be quiesced before retirement")
-)
+var ErrBookWriterNotQuiesced = errors.New("book writer must be quiesced before retirement")
 
 // Job is the historical books_jobs aggregate.
 type Job struct {
@@ -43,27 +40,6 @@ type Store interface {
 // transition after the existing single-container book writer is quiesced.
 type ResidualJobStore interface {
 	RetireNonterminal(ctx context.Context, reason string) (int64, error)
-}
-
-// ProcessRequest remains only until T006b removes the shared startup field.
-type ProcessRequest struct {
-	JobID     int64
-	SourceRef string
-	Content   string
-	Project   string
-	Author    string
-}
-
-// Pipeline is an inert compatibility shell until T006b removes its shared
-// startup declaration. It never admits or processes plaintext.
-type Pipeline struct{}
-
-func NewPipeline(_ Store, _ any) *Pipeline {
-	return &Pipeline{}
-}
-
-func (p *Pipeline) Process(_ context.Context, _ ProcessRequest) error {
-	return ErrPlaintextBookIntakeRetired
 }
 
 // RetireResidualJobs marks only nonterminal rows failed after the caller has

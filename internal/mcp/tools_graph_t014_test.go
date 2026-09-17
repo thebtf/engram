@@ -4,29 +4,63 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"testing"
 
 	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/pkg/models"
 )
 
-func TestGraphToolRetiresWriterActionsDespiteLegacyFlags(t *testing.T) {
+func TestGraphToolWriterActionsAreAbsentDespiteLegacyFlag(t *testing.T) {
 	t.Setenv("ENGRAM_GRAPH_ENABLED", "true")
-	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
 	server := &Server{graphStore: &graph.Store{}}
 
-	for _, action := range RetiredGraphWriterActions {
-		t.Run(string(action), func(t *testing.T) {
-			_, err := server.handleGraph(context.Background(), mustMarshal(t, graphArgs{Action: string(action)}))
-			if err == nil || err.Error() != fmt.Sprintf("graph writer action %q has been retired", action) {
+	for _, action := range []string{"add_edge", "remove_edge", "add_node"} {
+		t.Run(action, func(t *testing.T) {
+			_, err := server.handleGraph(context.Background(), mustMarshal(t, graphArgs{Action: action}))
+			if err == nil || err.Error() != fmt.Sprintf("unknown graph action: %s", action) {
 				t.Fatalf("writer action %q error=%v", action, err)
 			}
 		})
 	}
+}
 
-	if got := os.Getenv("ENGRAM_GRAPH_ENABLED"); got != "true" {
-		t.Fatalf("legacy graph flag changed during test: %q", got)
+func TestGraphToolSchemaContainsOnlyReaderActionsAndFields(t *testing.T) {
+	t.Setenv("ENGRAM_GRAPH_ENABLED", "true")
+	server := NewServer(ServerOptions{Version: "test"})
+	server.SetGraphStore(&graph.Store{})
+	tools := server.ListTools()
+
+	var graphTool *Tool
+	for i := range tools {
+		if tools[i].Name == "graph" {
+			graphTool = &tools[i]
+			break
+		}
+	}
+	if graphTool == nil {
+		t.Fatal("graph tool absent")
+	}
+	properties, ok := graphTool.InputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("graph properties=%T", graphTool.InputSchema["properties"])
+	}
+	action, ok := properties["action"].(map[string]any)
+	if !ok {
+		t.Fatalf("graph action=%T", properties["action"])
+	}
+	actions, ok := action["enum"].([]string)
+	if !ok || len(actions) != 4 {
+		t.Fatalf("graph action enum=%#v", action["enum"])
+	}
+	for _, name := range actions {
+		if !map[string]bool{"get_edges": true, "traverse": true, "find_path": true, "synonyms": true}[name] {
+			t.Fatalf("writer action remains advertised: %q", name)
+		}
+	}
+	for _, field := range []string{"edge_id", "weight", "reasoning", "source_type", "target_type", "node_source_id", "node_target_id", "external_ref", "project", "privacy_scope"} {
+		if _, exists := properties[field]; exists {
+			t.Fatalf("writer-only graph field remains advertised: %q", field)
+		}
 	}
 }
 

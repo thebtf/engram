@@ -3979,8 +3979,8 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 		// Anti-stub: removing these columns causes TestMigration127_EdgeDiscriminatorsAndNodeFKs
 		// column-existence assertions to fail.
 		//
-		// Flag gate: column additions are unconditional in migration; MCP surface is gated
-		// by vnextFEnabled() + ENGRAM_GRAPH_ENABLED at runtime.
+		// The migration preserves historical graph records; retained MCP readers
+		// are wired from the graph store without a graph-enable feature flag.
 		{
 			ID: "127_edge_discriminators",
 			Migrate: func(tx *gorm.DB) error {

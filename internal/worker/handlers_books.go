@@ -11,25 +11,8 @@ import (
 	gormlib "gorm.io/gorm"
 )
 
-const retiredBookIntakeMessage = "plaintext book intake has been retired; historical Documents remain available"
-
-// RetiredBookWriterAdmission is the typed T006b handoff for removing the
-// shared plaintext admission route while retaining historical status reads.
-type RetiredBookWriterAdmission struct {
-	Method string
-	Path   string
-}
-
-var RetiredBookWriterAdmissions = [...]RetiredBookWriterAdmission{
-	{Method: http.MethodPost, Path: "/api/books"},
-}
-
 type booksStore interface {
 	GetStatus(ctx context.Context, id int64) (*booksdomain.Job, error)
-}
-
-type booksPipelineRunner interface {
-	Process(ctx context.Context, req booksdomain.ProcessRequest) error
 }
 
 type bookErrorResponse struct {
@@ -85,11 +68,6 @@ func bookJobResponseFromDomain(job *booksdomain.Job) bookJobResponse {
 
 func parseBookIDParam(r *http.Request) (int64, error) {
 	return parseGraphIDParam(r, "id")
-}
-
-// handleCreateBookJob remains a denial until T006b removes its shared route.
-func (s *Service) handleCreateBookJob(w http.ResponseWriter, r *http.Request) {
-	writeBookError(w, http.StatusGone, retiredBookIntakeMessage)
 }
 
 func (s *Service) handleGetBookJobStatus(w http.ResponseWriter, r *http.Request) {

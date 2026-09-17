@@ -78,25 +78,17 @@ func (f *fakeGraphNodeStore) ListByType(_ context.Context, nodeType, project str
 	return result, nil
 }
 
-func newGraphTestService(edges *fakeGraphEdgeStore, nodes *fakeGraphNodeStore, graphEnabled bool) *Service {
-	return &Service{
-		graphEnabled:       graphEnabled,
-		graphEdgeStoreSeam: edges,
-		graphNodeStoreSeam: nodes,
-	}
+func newGraphTestService(edges *fakeGraphEdgeStore, nodes *fakeGraphNodeStore) *Service {
+	return &Service{graphEdgeStoreSeam: edges, graphNodeStoreSeam: nodes}
 }
 
 func graphRouter(s *Service) *chi.Mux {
-	router := chi.NewRouter()
-	router.Post("/api/graph/nodes", s.handleCreateGraphNode)
-	router.Delete("/api/graph/nodes/{id}", s.handleDeleteGraphNode)
-	router.Post("/api/graph/edges", s.handleCreateGraphEdge)
-	router.Delete("/api/graph/edges/{id}", s.handleDeleteGraphEdge)
-	router.Get("/api/graph/edges", s.handleGetGraphEdges)
-	return router
+	s.router = chi.NewRouter()
+	s.setupRoutes()
+	return s.router
 }
 
-func TestHandlersGraphRetiresWritersAndPreservesReadersAfterRestart(t *testing.T) {
+func TestHandlersGraphPreservesReadersAfterWriterRetirement(t *testing.T) {
 	visibleID, hiddenID := int64(1), int64(2)
 	nodes := &fakeGraphNodeStore{nodes: map[int64]models.KnowledgeNode{
 		visibleID: {ID: visibleID, NodeType: "skill", ExternalRef: "visible", Project: "engram", PrivacyScope: "project"},
@@ -106,15 +98,25 @@ func TestHandlersGraphRetiresWritersAndPreservesReadersAfterRestart(t *testing.T
 		{ID: 11, SourceType: "node", TargetType: "node", NodeSourceID: &visibleID, NodeTargetID: &visibleID, EdgeType: graph.EdgeUses},
 		{ID: 12, SourceType: "node", TargetType: "node", NodeSourceID: &visibleID, NodeTargetID: &hiddenID, EdgeType: graph.EdgeUses},
 	}}
-
-	for _, graphEnabled := range []bool{true, false} {
-		t.Run(fmt.Sprintf("legacy_flag_%t", graphEnabled), func(t *testing.T) {
-			router := graphRouter(newGraphTestService(edges, nodes, graphEnabled))
-			for _, admission := range RetiredGraphWriterAdmissions {
+	for _, legacyFlag := range []string{"", "false", "true"} {
+		t.Run("legacy_flag_"+legacyFlag, func(t *testing.T) {
+			t.Setenv("ENGRAM_GRAPH_ENABLED", legacyFlag)
+			service := newGraphTestService(edges, nodes)
+			service.ready.Store(true)
+			router := graphRouter(service)
+			for _, admission := range []struct {
+				method string
+				path   string
+				status int
+			}{
+				{method: http.MethodPost, path: "/api/graph/nodes", status: http.StatusMethodNotAllowed},
+				{method: http.MethodPost, path: "/api/graph/edges", status: http.StatusMethodNotAllowed},
+				{method: http.MethodDelete, path: "/api/graph/nodes/1", status: http.StatusMethodNotAllowed},
+				{method: http.MethodDelete, path: "/api/graph/edges/1", status: http.StatusMethodNotAllowed},
+			} {
 				writer := httptest.NewRecorder()
-				router.ServeHTTP(writer, httptest.NewRequest(admission.Method, admission.Path, nil))
-				require.Equal(t, http.StatusGone, writer.Code, writer.Body.String())
-				assert.Contains(t, writer.Body.String(), retiredGraphWriterCode)
+				router.ServeHTTP(writer, httptest.NewRequest(admission.method, admission.path, nil))
+				require.Equalf(t, admission.status, writer.Code, "%s %s body=%s", admission.method, admission.path, writer.Body.String())
 			}
 
 			reader := httptest.NewRecorder()
@@ -126,7 +128,6 @@ func TestHandlersGraphRetiresWritersAndPreservesReadersAfterRestart(t *testing.T
 			assert.Equal(t, int64(11), payload.Edges[0].ID)
 		})
 	}
-
 	assert.Len(t, edges.edges, 2)
 	assert.Len(t, nodes.nodes, 2)
 }
@@ -136,7 +137,7 @@ func TestHandlersGraphListsHistoricalNodesWithoutLegacyFlag(t *testing.T) {
 		1: {ID: 1, NodeType: "skill", ExternalRef: "visible", Project: "engram", PrivacyScope: "project"},
 		2: {ID: 2, NodeType: "skill", ExternalRef: "private", Project: "engram", PrivacyScope: "private"},
 	}}
-	service := newGraphTestService(&fakeGraphEdgeStore{}, nodes, false)
+	service := newGraphTestService(&fakeGraphEdgeStore{}, nodes)
 	writer := httptest.NewRecorder()
 	service.handleGetGraphNodes(writer, httptest.NewRequest(http.MethodGet, "/api/graph/nodes?project=engram&node_type=skill", nil))
 	require.Equal(t, http.StatusOK, writer.Code, writer.Body.String())
@@ -147,7 +148,7 @@ func TestHandlersGraphListsHistoricalNodesWithoutLegacyFlag(t *testing.T) {
 }
 
 func TestHandlersGraphRetainedPathReaderRejectsUnboundedDepth(t *testing.T) {
-	service := newGraphTestService(&fakeGraphEdgeStore{}, &fakeGraphNodeStore{}, false)
+	service := newGraphTestService(&fakeGraphEdgeStore{}, &fakeGraphNodeStore{})
 	writer := httptest.NewRecorder()
 	service.handleFindGraphPath(writer, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/graph/path?source_id=1&target_id=2&max_depth=%d", graph.MaxTraverseDepth+1), nil))
 	require.Equal(t, http.StatusBadRequest, writer.Code, writer.Body.String())

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 
@@ -16,28 +15,9 @@ import (
 )
 
 const (
-	LegacyGraphFeatureFlag = "ENGRAM_GRAPH_ENABLED"
-	graphFeatureFlag       = LegacyGraphFeatureFlag
-	defaultGraphListLimit  = 80
-	maxGraphListLimit      = 200
-
-	retiredGraphWriterCode    = "graph_writer_retired"
-	retiredGraphWriterMessage = "manual graph writing has been retired; historical graph reads remain available"
+	defaultGraphListLimit = 80
+	maxGraphListLimit     = 200
 )
-
-// RetiredGraphWriterAdmission is the typed T006b handoff for removing the
-// remaining shared route registrations without removing retained graph reads.
-type RetiredGraphWriterAdmission struct {
-	Method string
-	Path   string
-}
-
-var RetiredGraphWriterAdmissions = [...]RetiredGraphWriterAdmission{
-	{Method: http.MethodPost, Path: "/api/graph/nodes"},
-	{Method: http.MethodPost, Path: "/api/graph/edges"},
-	{Method: http.MethodDelete, Path: "/api/graph/nodes/{id}"},
-	{Method: http.MethodDelete, Path: "/api/graph/edges/{id}"},
-}
 
 type graphEdgeStore interface {
 	ListByMemory(ctx context.Context, memoryID int64, dir graph.Direction, edgeType string) ([]graph.Edge, error)
@@ -93,10 +73,6 @@ type graphPathResponse struct {
 	TargetID int64                   `json:"target_id"`
 	Found    bool                    `json:"found"`
 	Hops     int                     `json:"hops"`
-}
-
-func graphEnabledFromEnv() bool {
-	return os.Getenv(graphFeatureFlag) == "true"
 }
 
 func (s *Service) currentGraphEdgeStore() graphEdgeStore {
@@ -260,27 +236,6 @@ func (s *Service) handleGetGraphNodes(w http.ResponseWriter, r *http.Request) {
 		nodes = nodes[:limit]
 	}
 	writeJSON(w, graphNodesResponse{Nodes: nodes, Project: project, NodeType: nodeType, Count: len(nodes), Limit: limit})
-}
-
-func writeRetiredGraphWriter(w http.ResponseWriter) {
-	writeGraphError(w, http.StatusGone, retiredGraphWriterCode, retiredGraphWriterMessage)
-}
-
-// These denials remain only until T006b removes their shared route registrations.
-func (s *Service) handleCreateGraphNode(w http.ResponseWriter, r *http.Request) {
-	writeRetiredGraphWriter(w)
-}
-
-func (s *Service) handleCreateGraphEdge(w http.ResponseWriter, r *http.Request) {
-	writeRetiredGraphWriter(w)
-}
-
-func (s *Service) handleDeleteGraphEdge(w http.ResponseWriter, r *http.Request) {
-	writeRetiredGraphWriter(w)
-}
-
-func (s *Service) handleDeleteGraphNode(w http.ResponseWriter, r *http.Request) {
-	writeRetiredGraphWriter(w)
 }
 
 func filterVisibleGraphEdges(ctx context.Context, nodeStore graphNodeStore, edges []graph.Edge) ([]graph.Edge, error) {
