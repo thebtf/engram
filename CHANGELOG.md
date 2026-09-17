@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.50.0] - 2026-09-17
+
+### Added
+
+- **Operator Workspace (Feature 011 D-A).** From Home, an authenticated operator can choose a Repository, Working copy, and Indexed snapshot, then search or browse source, follow direct or reverse derived relations, and open released evidence in one immutable UCI View.
+- **Browser grants and UCI release checks.** Workspace browser reads require an explicit Source-and-Checkout grant, a current tab binding, and UCI reauthorization and exposure recording before contextual content returns.
+
+### Changed
+
+- Retired manual knowledge-graph writers and plaintext Book intake at their UI, HTTP, MCP, and startup admissions. Historical readers, records, documents, and provenance remain available.
+
+### Fixed
+
+- Corrected Workspace responsive and accessibility behavior, including narrow layouts, 200% zoom, visible focus, keyboard navigation, and accessible relation and evidence controls.
+- Kept Workspace semantic-search continuations and structure and relation evidence bound to the selected UCI View and UCI release authority.
+- Made the OMP extension inherit the host working directory when it resolves the project identity.
+- Added an interruption-safe journal to latest-image promotion that records its exact state when promotion fails.
+
 ## [6.49.3] - 2026-09-16
 
 ### Fixed
@@ -2032,7 +2050,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.49.3...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.0...HEAD
+[6.50.0]: https://github.com/thebtf/engram/compare/v6.49.3...v6.50.0
 [6.49.3]: https://github.com/thebtf/engram/compare/v6.49.2...v6.49.3
 [6.49.2]: https://github.com/thebtf/engram/compare/v6.49.1...v6.49.2
 [6.49.1]: https://github.com/thebtf/engram/compare/v6.49.0...v6.49.1

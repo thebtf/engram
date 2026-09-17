@@ -24,6 +24,7 @@ Since then, the v6 line rebuilt governance on top of that stable core: per-works
 
 | Version | Highlight |
 |---------|-----------|
+| **v6.50.0** | **Operator Workspace (Feature 011 D-A).** Start from Home, select an authorized working copy and indexed snapshot, then trace direct or reverse derived relations to released source evidence. |
 | **v6.38.0** | **V7 Meta-memory Discovery (ENG-V7-S2)** — content-free `know_about` MCP tool, S2 `CandidateProposer`, and session-start `meta_summary` behind v7 flags. |
 | **v6.37.0** | **V7 State Subsystem (ENG-V7-S1)** — v7 `StateWriter` adapter and bounded native state resume hardening. |
 | **v6.32.0** | **Usefulness / Noise Review Loop (CR-008, MPL-3)** — packet-centric bounded review queue with explicit empty/gated/error/sparse states, separate preview/apply, atomic snapshot+audit-backed suppress/preserve, honest metrics. |
@@ -190,6 +191,18 @@ state, and whether the end-to-end operator workflow is accepted. **A page file
 existing does not mean the workflow behind it is accepted** — read the ledger's
 `journey_status` field, not just route presence, before relying on a page.
 
+### Workspace
+
+From **Home**, open **Workspace** and choose a readable **Repository**, **Working copy**, then **Indexed snapshot**. These labels describe the existing UCI Source, Checkout, and immutable View. They do not grant code access.
+
+The authenticated `/api/code` Workspace route keeps one investigation in the selected snapshot. Browse or search source, follow a direct or reverse derived relation, then open its released evidence.
+
+Only a source owner may issue or revoke an explicit Source-and-Checkout browser read grant for an authenticated browser subject. Each contextual request also needs its current tab binding and selected View. The UCI release authority reauthorizes the request and records non-content exposure before it returns contextual content. A role, name, path, old project label, or MCP keycard does not grant browser code access.
+
+Manual knowledge-graph writers and plaintext Book intake are retired. Historical graph and Book readers, records, documents, and provenance remain available. Historical graph records are not UCI code-graph facts.
+
+Workspace is separate from the legacy, flag-gated MCP `codebase_*` tools. Those tools require `ENGRAM_CODE_INTEL_ENABLED=true` and an opaque agent context. They do not create browser grants or tab bindings, and cannot open the authenticated Workspace.
+
 Known corrections from that ledger:
 
 - **`/health` (embedded server form only):** the Go server registers its
@@ -210,15 +223,9 @@ Known corrections from that ledger:
   land on `/settings` directly, immediately redirects to `/`. There is no
   separate settings screen; refreshing or deep-linking to `/settings` reopens
   the modal over the overview rather than showing a stable settings page.
-- **Graph, candidate queue, code intelligence:** these routes/tools exist in
-  source and load at direct request, but their data operations are rejected
-  until `ENGRAM_GRAPH_ENABLED`, `ENGRAM_VNEXT_F_ENABLED`, or
-  `ENGRAM_CODE_INTEL_ENABLED` are set. Flag presence is not the same as an
-  accepted end-to-end workflow; the ledger records both separately.
+- **Graph, candidate queue, legacy MCP tools:** these existing routes and tools load at direct request, but their data operations are rejected until `ENGRAM_GRAPH_ENABLED`, `ENGRAM_VNEXT_F_ENABLED`, or `ENGRAM_CODE_INTEL_ENABLED` is set. They are separate from the authenticated Workspace route. Flag presence is not the same as an accepted end-to-end workflow; the ledger records both separately.
 
-Use the console for operational overview, search, memory, rules, issues,
-documents, credentials, and access administration; treat health, graph, queue,
-and settings per the corrections above.
+Use Workspace for browser investigation of authorized code. Use the console for operational overview, search, memory, rules, issues, documents, credentials, and access administration. Treat health, candidate queue, and settings per the corrections above.
 
 ## Configuration and deployment notes
 
