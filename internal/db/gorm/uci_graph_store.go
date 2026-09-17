@@ -419,6 +419,7 @@ func buildUCIGraphEdgesSQL(ref ucidomain.ContextRef, nodes []string, filter ucid
 				edge.evidence_kind,
 				edge.evidence_json,
 				edge.source_artifact_status
+			FROM scoped_edges AS edge
 			JOIN selected_nodes AS node ON ` + resolvedNodeJoin + `
 			WHERE edge.resolution_state = ?
 				AND edge.target_artifact_id IS NOT NULL
@@ -435,6 +436,7 @@ func buildUCIGraphEdgesSQL(ref ucidomain.ContextRef, nodes []string, filter ucid
 				edge.evidence_kind,
 				edge.evidence_json,
 				edge.source_artifact_status
+			FROM scoped_edges AS edge
 			JOIN selected_nodes AS node ON ` + unresolvedNodeJoin + `
 			WHERE ` + unresolvedCondition + `
 				AND (edge.resolution_state <> ? OR edge.evidence_kind = ? OR edge.target_artifact_id IS NULL)

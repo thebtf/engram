@@ -605,6 +605,8 @@ func TestUCIApplicationOperatorPortsKeepStructureAndRelationsInOneView(t *testin
 	composition, err := composeUCIContext(true, store.GetDB(), server, workerUCISemanticConfig())
 	require.NoError(t, err)
 	fixture := newWorkerUCIApplicationFixture(t, composition)
+	adapter, err := composeOperatorCodeHTTPAdapter(store.GetDB(), composition)
+	require.NoError(t, err)
 	ref := fixture.historical.Context
 	authorized, err := composition.resolver.Authorize(context.Background(), uci.ResolveContextInput{
 		ClientSessionID: fixture.clientSessionID,
@@ -642,14 +644,16 @@ func TestUCIApplicationOperatorPortsKeepStructureAndRelationsInOneView(t *testin
 		{name: "reverse", target: "fixture.Beta", direction: uci.GraphDirectionIncoming},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			response, exploreErr := composition.application.ExploreOperatorCodebase(context.Background(), authorized, uci.GraphSpec{
+			input := uci.GraphSpec{
 				ClientSessionID: fixture.clientSessionID,
 				Action:          uci.GraphActionNeighbors,
 				Target:          uci.GraphTarget{EntityKey: testCase.target},
 				Filter:          uci.GraphFilter{Direction: testCase.direction, Relations: []uci.IndexRelation{"calls"}, EvidenceKinds: []uci.QueryEvidenceKind{uci.QueryEvidenceResolved}},
 				Budget:          uci.GraphBudget{MaxDepth: 1, MaxVisited: 10, MaxNodes: 10, MaxEdges: 10},
-			})
+			}
+			response, exploreErr := composition.application.ExploreOperatorCodebase(context.Background(), authorized, input)
 			require.NoError(t, exploreErr)
+			require.True(t, operatorCodeGraphResponseValid(response, authorized, input))
 			require.NoError(t, response.ValidatePreExposure())
 			require.NotNil(t, response.Graph)
 			require.Len(t, response.Graph.Edges, 1)
@@ -659,6 +663,13 @@ func TestUCIApplicationOperatorPortsKeepStructureAndRelationsInOneView(t *testin
 			require.Len(t, edge.Evidence, 1)
 			require.Equal(t, edge.From, edge.Evidence[0].Ref)
 			require.Equal(t, uci.QueryEvidencePrecisionReferenceSite, edge.Evidence[0].Precision)
+			navigation := adapter.graphNavigation(context.Background(), authorized, response.Graph)
+			require.Len(t, navigation.Nodes, 2)
+			for _, node := range navigation.Nodes {
+				require.Equal(t, "available", node.SourceState)
+				require.NotNil(t, node.SourceRead)
+				require.Equal(t, node.Entity.EntityKey, node.SourceRead.EntityKey)
+			}
 		})
 	}
 }
