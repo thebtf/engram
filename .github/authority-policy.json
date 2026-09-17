@@ -18,12 +18,12 @@
     "type": "User"
   },
   "transition": {
-    "consumed_epoch": "authority-0046",
-    "event_base_sha": "f835250eefeb385879a36d1bc76f715c5a56ab05"
+    "consumed_epoch": "authority-0047",
+    "event_base_sha": "1a7870d03f20337ae7c00956087280c80617d247"
   },
   "active_epoch": {
-    "id": "authority-0047",
-    "label": "authority-maintenance:authority-0047",
+    "id": "authority-0048",
+    "label": "authority-maintenance:authority-0048",
     "exact_changes": [
       {
         "status": "M",
@@ -37,7 +37,7 @@
     "expected_head_blobs": [
       {
         "path": ".github/workflows/promote-latest-release-images.yml",
-        "git_blob": "a187d7e57bd4f7ff68534dc96872cdce1a53b43a"
+        "git_blob": "343fcf05adac5868e1da789a94572662ee96c895"
       }
     ]
   }
