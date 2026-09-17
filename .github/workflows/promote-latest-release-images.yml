@@ -243,7 +243,8 @@ jobs:
             -RepositoryName $env:REPOSITORY_NAME `
             -RunId $env:GITHUB_RUN_ID `
             -RunAttempt $env:GITHUB_RUN_ATTEMPT `
-            -HeadSha ([string]$release.source_commit) `
+            -HeadSha $env:GITHUB_SHA `
+            -ReleaseCommit ([string]$release.source_commit) `
             -ReleaseTag ([string]$release.release_tag) `
             -ReceiptDir $env:RECEIPT_DIR | Select-Object -Last 1).Trim()
           if ($journalID -notmatch '^[1-9][0-9]*$') { throw 'shared production gate did not return a valid journal ID' }
@@ -271,7 +272,8 @@ jobs:
             -RepositoryName $env:REPOSITORY_NAME `
             -RunId $env:GITHUB_RUN_ID `
             -RunAttempt $env:GITHUB_RUN_ATTEMPT `
-            -HeadSha ([string]$release.source_commit) `
+            -HeadSha $env:GITHUB_SHA `
+            -ReleaseCommit ([string]$release.source_commit) `
             -ReleaseTag ([string]$release.release_tag) `
             -ReceiptDir $env:RECEIPT_DIR
 
@@ -290,7 +292,8 @@ jobs:
             -RepositoryName $env:REPOSITORY_NAME `
             -RunId $env:GITHUB_RUN_ID `
             -RunAttempt $env:GITHUB_RUN_ATTEMPT `
-            -HeadSha ([string]$release.source_commit) `
+            -HeadSha $env:GITHUB_SHA `
+            -ReleaseCommit ([string]$release.source_commit) `
             -ReleaseTag ([string]$release.release_tag) `
             -ReceiptDir $env:RECEIPT_DIR `
             -AllowMissingJournal

@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory)][string]$RunId,
     [Parameter(Mandatory)][string]$RunAttempt,
     [Parameter(Mandatory)][string]$HeadSha,
+    [string]$ReleaseCommit = '',
     [string]$ReleaseTag = '',
     [string]$ReceiptDir = '',
     [switch]$AllowMissingJournal
@@ -26,6 +27,9 @@ function Assert-RunIdentity
     if ($RunId -notmatch '^[1-9][0-9]*$' -or $RunAttempt -notmatch '^[1-9][0-9]*$' -or $HeadSha -notmatch '^[0-9a-f]{40}$')
     {
         throw 'latest-promotion journal lacks a valid run ID, attempt, or head SHA'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ReleaseCommit) -and $ReleaseCommit -notmatch '^[0-9a-f]{40}$')
+    { throw 'latest-promotion journal release commit is invalid'
     }
     if ($RepositoryName -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')
     { throw 'latest-promotion journal lacks a valid repository name'
@@ -67,16 +71,16 @@ function Find-Journal
     $encodedName = [uri]::EscapeDataString($script:JournalName)
     $response = Invoke-GhJson -Arguments @('api','--paginate','--slurp','-H','Accept: application/vnd.github+json','-H',"X-GitHub-Api-Version: $script:ApiVersion","repos/$RepositoryName/commits/$HeadSha/check-runs?check_name=$encodedName&filter=all&per_page=100") -Failure 'could not discover latest-promotion journal check run'
     $runs = if ($response -is [array])
-    { @($response | ForEach-Object { $_.check_runs }) 
+    { @($response | ForEach-Object { $_.check_runs })
     } else
-    { @($response.check_runs) 
+    { @($response.check_runs)
     }
     $matches = @($runs | Where-Object { Test-RunIdentity -Run $_ })
     if ($matches.Count -gt 1)
-    { throw "latest-promotion journal discovery found duplicates: $($matches.Count)" 
+    { throw "latest-promotion journal discovery found duplicates: $($matches.Count)"
     }
     if ($matches.Count -eq 0)
-    { return $null 
+    { return $null
     }
     return $matches[0]
 }
@@ -132,11 +136,17 @@ function New-Snapshot
     return [ordered]@{
         schema_version = 1
         run = [ordered]@{ id = $RunId; attempt = $RunAttempt; head_sha = $HeadSha; external_id = Get-ExternalId; details_url = Get-DetailsUrl }
-        release = [ordered]@{ tag = if ([string]::IsNullOrWhiteSpace($ReleaseTag))
+        release = [ordered]@{
+            tag = if ([string]::IsNullOrWhiteSpace($ReleaseTag))
             { $null
             } else
             { $ReleaseTag
-            }; source_commit = $HeadSha
+            }
+            source_commit = if ([string]::IsNullOrWhiteSpace($ReleaseCommit))
+            { $null
+            } else
+            { $ReleaseCommit
+            }
         }
         phase = $Phase
         outcome = $Outcome
@@ -163,7 +173,7 @@ function Assert-DigestIdentity
     if ($state -ceq 'readback_error')
     {
         if ($null -ne $Identity.immutable_reference -or $null -ne $Identity.manifest_digest)
-        { throw "$Description readback error identity is contradictory" 
+        { throw "$Description readback error identity is contradictory"
         }
         return
     }
@@ -193,8 +203,19 @@ function Assert-Snapshot
     {
         throw 'latest-promotion snapshot run identity is contradictory'
     }
-    if ([string]$Snapshot.release.source_commit -cne $HeadSha)
+    $terminalKey = "$([string]$Snapshot.phase)/$([string]$Snapshot.outcome)"
+    $snapshotReleaseCommit = [string]$Snapshot.release.source_commit
+    if ($terminalKey -cne 'failed/contradiction' -and $snapshotReleaseCommit -notmatch '^[0-9a-f]{40}$')
+    { throw 'latest-promotion snapshot release commit is invalid'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ReleaseCommit) -and $snapshotReleaseCommit -cne $ReleaseCommit)
     { throw 'latest-promotion snapshot release identity is contradictory'
+    }
+    if ($terminalKey -cne 'failed/contradiction' -and [string]$Snapshot.release.tag -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')
+    { throw 'latest-promotion snapshot release tag is invalid'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ReleaseTag) -and [string]$Snapshot.release.tag -cne $ReleaseTag)
+    { throw 'latest-promotion snapshot release tag is contradictory'
     }
     $targets = @($Snapshot.targets)
     if ($targets.Count -ne $script:Repositories.Count)
@@ -406,19 +427,19 @@ function Get-TagIdentity
     {
         $detail = ($output | ForEach-Object { $_.ToString() }) -join "`n"
         if (-not $ReadbackError -and $detail -match '(?i)(\b404\b|manifest unknown|name unknown)')
-        { return New-Identity -State 'absent' 
+        { return New-Identity -State 'absent'
         }
         if ($ReadbackError)
-        { return [ordered]@{ state = 'readback_error'; immutable_reference = $null; manifest_digest = $null; failure = $detail } 
+        { return [ordered]@{ state = 'readback_error'; immutable_reference = $null; manifest_digest = $null; failure = $detail }
         }
         throw "could not inspect manifest for ${Reference}: $detail"
     }
     try
-    { $manifest = $output | ConvertFrom-Json 
+    { $manifest = $output | ConvertFrom-Json
     } catch
     {
         if ($ReadbackError)
-        { return [ordered]@{ state = 'readback_error'; immutable_reference = $null; manifest_digest = $null; failure = 'invalid manifest JSON' } 
+        { return [ordered]@{ state = 'readback_error'; immutable_reference = $null; manifest_digest = $null; failure = 'invalid manifest JSON' }
         }
         throw
     }
@@ -426,7 +447,7 @@ function Get-TagIdentity
     if ($digest -notmatch '^sha256:[0-9a-f]{64}$')
     {
         if ($ReadbackError)
-        { return [ordered]@{ state = 'readback_error'; immutable_reference = $null; manifest_digest = $null; failure = 'invalid manifest digest' } 
+        { return [ordered]@{ state = 'readback_error'; immutable_reference = $null; manifest_digest = $null; failure = 'invalid manifest digest' }
         }
         throw "image does not expose an immutable manifest digest: $Reference"
     }
@@ -449,34 +470,106 @@ function Assert-TargetStateCoherence
     switch -CaseSensitive ([string]$Target.state)
     {
         'unknown'
-        { if ([string]$Target.previous.state -cne 'unknown' -or [string]$Target.observed.state -cne 'unknown') { throw "unknown target state is contradictory: $($Target.reference)" }
+        { if ([string]$Target.previous.state -cne 'unknown' -or [string]$Target.observed.state -cne 'unknown')
+            { throw "unknown target state is contradictory: $($Target.reference)"
+            }
         }
         'captured'
-        { if ([string]$Target.previous.state -notin @('present','absent') -or -not (Test-SameIdentity -Left $Target.observed -Right $Target.previous)) { throw "captured target state is contradictory: $($Target.reference)" }
+        { if ([string]$Target.previous.state -notin @('present','absent') -or -not (Test-SameIdentity -Left $Target.observed -Right $Target.previous))
+            { throw "captured target state is contradictory: $($Target.reference)"
+            }
         }
         'mutation_pending'
-        { if ([string]$Target.previous.state -cne 'present' -or -not (Test-SameIdentity -Left $Target.observed -Right $Target.previous)) { throw "mutation-pending target state is contradictory: $($Target.reference)" }
+        { if ([string]$Target.previous.state -cne 'present' -or -not (Test-SameIdentity -Left $Target.observed -Right $Target.previous))
+            { throw "mutation-pending target state is contradictory: $($Target.reference)"
+            }
         }
         'updated'
-        { if ([string]$Target.previous.state -cne 'present' -or -not (Test-SameIdentity -Left $Target.observed -Right $Target.intended)) { throw "updated target state is contradictory: $($Target.reference)" }
+        { if ([string]$Target.previous.state -cne 'present' -or -not (Test-SameIdentity -Left $Target.observed -Right $Target.intended))
+            { throw "updated target state is contradictory: $($Target.reference)"
+            }
         }
         'rollback_pending'
-        { if ([string]$Target.previous.state -cne 'present' -or -not (Test-SameIdentity -Left $Target.observed -Right $Target.intended)) { throw "rollback-pending target state is contradictory: $($Target.reference)" }
+        { if ([string]$Target.previous.state -cne 'present' -or -not (Test-SameIdentity -Left $Target.observed -Right $Target.intended))
+            { throw "rollback-pending target state is contradictory: $($Target.reference)"
+            }
         }
         'restored'
-        { if ([string]$Target.previous.state -cne 'present' -or -not (Test-SameIdentity -Left $Target.observed -Right $Target.previous)) { throw "restored target state is contradictory: $($Target.reference)" }
+        { if ([string]$Target.previous.state -cne 'present' -or -not (Test-SameIdentity -Left $Target.observed -Right $Target.previous))
+            { throw "restored target state is contradictory: $($Target.reference)"
+            }
         }
         'rollback_failed'
-        { if ([string]$Target.previous.state -cne 'present' -or [string]$Target.observed.state -cne 'present') { throw "rollback-failed target state is contradictory: $($Target.reference)" }
+        { if ([string]$Target.previous.state -cne 'present' -or [string]$Target.observed.state -cne 'present')
+            { throw "rollback-failed target state is contradictory: $($Target.reference)"
+            }
         }
         'readback_error'
-        { if ([string]$Target.observed.state -cne 'readback_error') { throw "readback-error target state is contradictory: $($Target.reference)" }
+        { if ([string]$Target.observed.state -cne 'readback_error')
+            { throw "readback-error target state is contradictory: $($Target.reference)"
+            }
         }
         'unexpected'
-        { if ([string]$Target.observed.state -cne 'present' -or (Test-SameIdentity -Left $Target.observed -Right $Target.previous) -or (Test-SameIdentity -Left $Target.observed -Right $Target.intended)) { throw "unexpected target state is contradictory: $($Target.reference)" }
+        { if ([string]$Target.observed.state -cne 'present' -or (Test-SameIdentity -Left $Target.observed -Right $Target.previous) -or (Test-SameIdentity -Left $Target.observed -Right $Target.intended))
+            { throw "unexpected target state is contradictory: $($Target.reference)"
+            }
         }
         default
         { throw "unsupported target state: $([string]$Target.state)"
+        }
+    }
+}
+
+function Assert-NoTargetFailures
+{
+    param([Parameter(Mandatory)][object[]]$Targets)
+    if (@($Targets | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.failure) }).Count -ne 0)
+    { throw 'snapshot has unexpected target failure metadata'
+    }
+}
+
+function Assert-UntouchedRevalidation
+{
+    param([Parameter(Mandatory)]$Snapshot)
+    if ([string]$Snapshot.revalidation.status -cne 'not_started' -or $null -ne $Snapshot.revalidation.observed_release_tag -or $null -ne $Snapshot.revalidation.observed_source_commit -or $null -ne $Snapshot.revalidation.failure)
+    { throw 'snapshot has contradictory untouched revalidation metadata'
+    }
+}
+
+function Assert-PassedRevalidation
+{
+    param([Parameter(Mandatory)]$Snapshot)
+    if ([string]$Snapshot.revalidation.status -cne 'passed' -or [string]$Snapshot.revalidation.observed_release_tag -cne [string]$Snapshot.release.tag -or [string]$Snapshot.revalidation.observed_source_commit -cne [string]$Snapshot.release.source_commit -or $null -ne $Snapshot.revalidation.failure)
+    { throw 'snapshot has contradictory passed revalidation metadata'
+    }
+}
+
+function Assert-RollbackMetadata
+{
+    param([Parameter(Mandatory)]$Snapshot, [Parameter(Mandatory)][bool]$Attempted, [Parameter(Mandatory)][string]$Outcome, [string[]]$FailureStates = @())
+    $failures = @($Snapshot.rollback.failures)
+    $failureStateList = @($FailureStates)
+    if ([bool]$Snapshot.rollback.attempted -ne $Attempted -or [string]$Snapshot.rollback.outcome -cne $Outcome)
+    { throw 'snapshot has contradictory rollback metadata'
+    }
+    if ($failureStateList.Count -eq 0)
+    { $failedTargets = @()
+    } elseif ($failureStateList -ccontains '*')
+    { $failedTargets = @($Snapshot.targets | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.failure) })
+    } else
+    { $failedTargets = @($Snapshot.targets | Where-Object { $failureStateList -ccontains [string]$_.state })
+    }
+    if ($failures.Count -ne $failedTargets.Count)
+    { throw 'snapshot rollback failure count is contradictory'
+    }
+    foreach ($failure in $failures)
+    {
+        if ([string]::IsNullOrWhiteSpace([string]$failure.target) -or [string]::IsNullOrWhiteSpace([string]$failure.failure))
+        { throw 'snapshot rollback failure entry is incomplete'
+        }
+        $matches = @($failedTargets | Where-Object { [string]$_.reference -ceq [string]$failure.target -and [string]$_.failure -ceq [string]$failure.failure })
+        if ($matches.Count -ne 1)
+        { throw 'snapshot rollback failure entry does not match a failed target'
         }
     }
 }
@@ -485,24 +578,68 @@ function Assert-InterstitialSnapshotInvariant
 {
     param([Parameter(Mandatory)]$Snapshot, [Parameter(Mandatory)][string]$Key)
     $targets = @($Snapshot.targets)
-    foreach ($target in $targets) { Assert-TargetStateCoherence -Target $target }
+    foreach ($target in $targets)
+    { Assert-TargetStateCoherence -Target $target
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$Snapshot.failure))
+    { throw 'interstitial snapshot has terminal failure metadata'
+    }
     $states = (@($targets | ForEach-Object { [string]$_.state }) -join ',') + ','
     switch -CaseSensitive ($Key)
     {
         'pre_promotion/pending'
-        { if ($states -cne 'unknown,unknown,unknown,') { throw 'pre-promotion snapshot is contradictory' }
+        {
+            if ($states -cne 'unknown,unknown,unknown,')
+            { throw 'pre-promotion snapshot is contradictory'
+            }
+            Assert-UntouchedRevalidation -Snapshot $Snapshot
+            Assert-RollbackMetadata -Snapshot $Snapshot -Attempted $false -Outcome 'not_needed'
+            Assert-NoTargetFailures -Targets $targets
         }
         'capturing_previous_latest/pending'
-        { if ($states -notmatch '^(captured,)*(unknown,)*$') { throw 'capturing snapshot is contradictory' }
+        {
+            if ($states -notmatch '^(captured,)*(unknown,)*$')
+            { throw 'capturing snapshot is contradictory'
+            }
+            Assert-UntouchedRevalidation -Snapshot $Snapshot
+            Assert-RollbackMetadata -Snapshot $Snapshot -Attempted $false -Outcome 'not_needed'
+            Assert-NoTargetFailures -Targets $targets
         }
         'writing_latest/pending'
-        { if ($states -notmatch '^(updated,)*(mutation_pending,)?(captured,)*$') { throw 'writing-latest snapshot is contradictory' }
+        {
+            if ($states -notmatch '^(updated,)*(mutation_pending,)?(captured,)*$')
+            { throw 'writing-latest snapshot is contradictory'
+            }
+            Assert-UntouchedRevalidation -Snapshot $Snapshot
+            Assert-RollbackMetadata -Snapshot $Snapshot -Attempted $false -Outcome 'not_needed'
+            Assert-NoTargetFailures -Targets $targets
         }
         'post_write_release_revalidation/pending'
-        { if ($states -cne 'updated,updated,updated,' -or [string]$Snapshot.revalidation.status -notin @('started','mismatch','error')) { throw 'post-write revalidation snapshot is contradictory' }
+        {
+            if ($states -cne 'updated,updated,updated,' -or [string]$Snapshot.revalidation.status -notin @('started','mismatch','error'))
+            { throw 'post-write revalidation snapshot is contradictory'
+            }
+            if ([string]$Snapshot.revalidation.status -ceq 'started' -and $null -ne $Snapshot.revalidation.failure)
+            { throw 'started revalidation has failure metadata'
+            }
+            if ([string]$Snapshot.revalidation.status -in @('mismatch','error') -and [string]::IsNullOrWhiteSpace([string]$Snapshot.revalidation.failure))
+            { throw 'failed revalidation lacks failure metadata'
+            }
+            Assert-RollbackMetadata -Snapshot $Snapshot -Attempted $false -Outcome 'not_needed'
+            Assert-NoTargetFailures -Targets $targets
         }
         'rolling_back/pending'
-        { if ($states -notmatch '^((restored|rollback_failed|readback_error|rollback_pending|updated),){3}$') { throw 'rolling-back snapshot is contradictory' }
+        {
+            if ($states -notmatch '^((restored|rollback_failed|readback_error|rollback_pending|updated),){3}$')
+            { throw 'rolling-back snapshot is contradictory'
+            }
+            Assert-PassedRevalidation -Snapshot $Snapshot
+            Assert-RollbackMetadata -Snapshot $Snapshot -Attempted $true -Outcome 'pending' -FailureStates @('rollback_failed','readback_error')
+            foreach ($target in $targets | Where-Object { [string]$_.state -notin @('rollback_failed','readback_error') })
+            { if (-not [string]::IsNullOrWhiteSpace([string]$target.failure))
+                { throw 'rolling-back snapshot has failure on a non-failed target'
+                }
+            }
         }
         default
         { throw "unsupported interstitial snapshot: $Key"
@@ -514,27 +651,105 @@ function Assert-TerminalSnapshotInvariant
 {
     param([Parameter(Mandatory)]$Snapshot, [Parameter(Mandatory)][string]$Key)
     $targets = @($Snapshot.targets)
-    foreach ($target in $targets) { Assert-TargetStateCoherence -Target $target }
     $states = (@($targets | ForEach-Object { [string]$_.state }) -join ',') + ','
+    if ($Key -ceq 'failed/contradiction')
+    {
+        if ([string]::IsNullOrWhiteSpace([string]$Snapshot.failure) -or $states -cne 'unknown,unknown,unknown,')
+        { throw 'contradiction snapshot is contradictory'
+        }
+        Assert-UntouchedRevalidation -Snapshot $Snapshot
+        Assert-RollbackMetadata -Snapshot $Snapshot -Attempted $false -Outcome 'not_attempted'
+        Assert-NoTargetFailures -Targets $targets
+        return
+    }
+    foreach ($target in $targets)
+    { Assert-TargetStateCoherence -Target $target
+    }
     switch -CaseSensitive ($Key)
     {
         'completed/success'
-        { if ([string]$Snapshot.revalidation.status -cne 'passed' -or $states -cne 'updated,updated,updated,') { throw 'completed success snapshot is contradictory' }
+        {
+            if ($null -ne $Snapshot.failure -or $states -cne 'updated,updated,updated,')
+            { throw 'completed success snapshot is contradictory'
+            }
+            Assert-PassedRevalidation -Snapshot $Snapshot
+            Assert-RollbackMetadata -Snapshot $Snapshot -Attempted $false -Outcome 'not_needed'
+            Assert-NoTargetFailures -Targets $targets
         }
         'failed/bootstrap_required_no_write'
-        { if ($states -cne 'captured,captured,captured,' -or @($targets | Where-Object { [string]$_.previous.state -ceq 'absent' }).Count -eq 0 -or [bool]$Snapshot.rollback.attempted) { throw 'bootstrap-required snapshot is contradictory' }
+        {
+            if ([string]::IsNullOrWhiteSpace([string]$Snapshot.failure) -or $states -cne 'captured,captured,captured,' -or @($targets | Where-Object { [string]$_.previous.state -ceq 'absent' }).Count -eq 0)
+            { throw 'bootstrap-required snapshot is contradictory'
+            }
+            Assert-UntouchedRevalidation -Snapshot $Snapshot
+            Assert-RollbackMetadata -Snapshot $Snapshot -Attempted $false -Outcome 'not_needed'
+            Assert-NoTargetFailures -Targets $targets
         }
         'failed/failed_before_write'
-        { if ($states -cne 'unknown,unknown,unknown,' -or [bool]$Snapshot.rollback.attempted) { throw 'failed-before-write snapshot is contradictory' }
+        {
+            if ([string]::IsNullOrWhiteSpace([string]$Snapshot.failure) -or $states -cne 'unknown,unknown,unknown,')
+            { throw 'failed-before-write snapshot is contradictory'
+            }
+            Assert-UntouchedRevalidation -Snapshot $Snapshot
+            Assert-RollbackMetadata -Snapshot $Snapshot -Attempted $false -Outcome 'not_needed'
+            Assert-NoTargetFailures -Targets $targets
         }
         'failed/rolled_back'
-        { if ([string]$Snapshot.rollback.outcome -cne 'succeeded' -or $states -cne 'restored,restored,restored,') { throw 'rolled-back snapshot is contradictory' }
+        {
+            if ([string]::IsNullOrWhiteSpace([string]$Snapshot.failure) -or $states -cne 'restored,restored,restored,')
+            { throw 'rolled-back snapshot is contradictory'
+            }
+            Assert-PassedRevalidation -Snapshot $Snapshot
+            Assert-RollbackMetadata -Snapshot $Snapshot -Attempted $true -Outcome 'succeeded'
+            Assert-NoTargetFailures -Targets $targets
         }
         'failed/rollback_failed'
-        { if ([string]$Snapshot.rollback.outcome -cne 'failed' -or $states -notmatch '^((restored|rollback_failed|readback_error),){3}$' -or @($targets | Where-Object { [string]$_.state -ceq 'rollback_failed' }).Count -eq 0) { throw 'rollback-failed snapshot is contradictory' }
+        {
+            if ([string]::IsNullOrWhiteSpace([string]$Snapshot.failure) -or $states -notmatch '^((restored|rollback_failed|readback_error),){3}$' -or @($targets | Where-Object { [string]$_.state -ceq 'rollback_failed' }).Count -eq 0)
+            { throw 'rollback-failed snapshot is contradictory'
+            }
+            Assert-PassedRevalidation -Snapshot $Snapshot
+            Assert-RollbackMetadata -Snapshot $Snapshot -Attempted $true -Outcome 'failed' -FailureStates @('rollback_failed','readback_error')
         }
         'failed/rollback_readback_error'
-        { if ([string]$Snapshot.rollback.outcome -cne 'readback_error' -or $states -notmatch '^((restored|readback_error),){3}$' -or @($targets | Where-Object { [string]$_.state -ceq 'readback_error' }).Count -eq 0) { throw 'rollback-readback-error snapshot is contradictory' }
+        {
+            if ([string]::IsNullOrWhiteSpace([string]$Snapshot.failure) -or $states -notmatch '^((restored|readback_error),){3}$' -or @($targets | Where-Object { [string]$_.state -ceq 'readback_error' }).Count -eq 0)
+            { throw 'rollback-readback-error snapshot is contradictory'
+            }
+            Assert-PassedRevalidation -Snapshot $Snapshot
+            Assert-RollbackMetadata -Snapshot $Snapshot -Attempted $true -Outcome 'readback_error' -FailureStates @('readback_error')
+        }
+        'failed/action_required'
+        {
+            if ([string]::IsNullOrWhiteSpace([string]$Snapshot.failure) -or [string]$Snapshot.revalidation.status -notin @('passed','mismatch','error'))
+            { throw 'action-required snapshot is contradictory'
+            }
+            if ([string]$Snapshot.revalidation.status -ceq 'passed')
+            { Assert-PassedRevalidation -Snapshot $Snapshot
+            } else
+            {
+                if ([string]::IsNullOrWhiteSpace([string]$Snapshot.revalidation.failure))
+                { throw 'action-required revalidation lacks failure metadata'
+                }
+                if ([string]$Snapshot.revalidation.status -ceq 'mismatch' -and [string]$Snapshot.revalidation.observed_release_tag -ceq [string]$Snapshot.release.tag -and [string]$Snapshot.revalidation.observed_source_commit -ceq [string]$Snapshot.release.source_commit)
+                { throw 'action-required mismatch did not observe a changed release identity'
+                }
+            }
+            if ([bool]$Snapshot.rollback.attempted)
+            { Assert-RollbackMetadata -Snapshot $Snapshot -Attempted $true -Outcome 'action_required' -FailureStates @('*')
+            } else
+            {
+                Assert-RollbackMetadata -Snapshot $Snapshot -Attempted $false -Outcome 'not_attempted'
+                Assert-NoTargetFailures -Targets $targets
+                $producerState = $states -match '^(captured,)*(unknown,)*$' -or $states -match '^(restored,)*(unknown,)+$' -or ($states -match '^(updated,)*(mutation_pending,)?(captured,)*$' -and $states -cne 'updated,updated,updated,')
+                $classificationFailure = @($targets | Where-Object { [string]$_.state -in @('unexpected','readback_error') }).Count -gt 0
+                if ([string]$Snapshot.revalidation.status -ceq 'passed' -and -not $producerState -and -not $classificationFailure)
+                { throw "action-required no-rollback target states are contradictory: states=$states"
+                }
+            }
+        }
+        default
+        { throw "unsupported terminal snapshot: $Key"
         }
     }
 }
@@ -546,11 +761,18 @@ function Get-OfficialRelease
     { throw 'could not read the latest GitHub Release tag'
     }
     $tag = ([string]($tagLines -join "`n")).Trim()
+    if ($tag -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')
+    { throw 'latest GitHub Release tag is invalid'
+    }
     $commitLines = @(gh api "repos/$RepositoryName/commits/$tag" --jq .sha)
     if ($LASTEXITCODE -ne 0)
     { throw 'could not resolve the latest GitHub Release commit'
     }
-    return [ordered]@{ tag = $tag; source_commit = ([string]($commitLines -join "`n")).Trim() }
+    $commit = ([string]($commitLines -join "`n")).Trim()
+    if ($commit -notmatch '^[0-9a-f]{40}$')
+    { throw 'latest GitHub Release commit is invalid'
+    }
+    return [ordered]@{ tag = $tag; source_commit = $commit }
 }
 
 function Set-TerminalJournal
@@ -586,33 +808,67 @@ function Get-TerminalConclusion
     switch -CaseSensitive ($key)
     {
         'completed/success'
-        { Assert-TerminalSnapshotInvariant -Snapshot $Snapshot -Key $key; return 'success' 
+        { Assert-TerminalSnapshotInvariant -Snapshot $Snapshot -Key $key; return 'success'
         }
         'failed/bootstrap_required_no_write'
-        { Assert-TerminalSnapshotInvariant -Snapshot $Snapshot -Key $key; return 'neutral' 
+        { Assert-TerminalSnapshotInvariant -Snapshot $Snapshot -Key $key; return 'neutral'
         }
         'failed/rolled_back'
-        { Assert-TerminalSnapshotInvariant -Snapshot $Snapshot -Key $key; return 'neutral' 
+        { Assert-TerminalSnapshotInvariant -Snapshot $Snapshot -Key $key; return 'neutral'
         }
         'failed/failed_before_write'
-        { Assert-TerminalSnapshotInvariant -Snapshot $Snapshot -Key $key; return 'failure' 
+        { Assert-TerminalSnapshotInvariant -Snapshot $Snapshot -Key $key; return 'failure'
         }
         'failed/rollback_failed'
-        { Assert-TerminalSnapshotInvariant -Snapshot $Snapshot -Key $key; return 'failure' 
+        { Assert-TerminalSnapshotInvariant -Snapshot $Snapshot -Key $key; return 'failure'
         }
         'failed/rollback_readback_error'
-        { Assert-TerminalSnapshotInvariant -Snapshot $Snapshot -Key $key; return 'failure' 
+        { Assert-TerminalSnapshotInvariant -Snapshot $Snapshot -Key $key; return 'failure'
         }
         'failed/contradiction'
-        { if ([string]::IsNullOrWhiteSpace([string]$Snapshot.failure)) { throw 'contradiction snapshot lacks failure detail' }; return 'failure'
+        { Assert-TerminalSnapshotInvariant -Snapshot $Snapshot -Key $key; return 'failure'
         }
         'failed/action_required'
-        { if ([string]::IsNullOrWhiteSpace([string]$Snapshot.failure)) { throw 'action-required snapshot lacks failure detail' }; foreach ($target in @($Snapshot.targets)) { Assert-TargetStateCoherence -Target $target }; return 'failure'
+        { Assert-TerminalSnapshotInvariant -Snapshot $Snapshot -Key $key; return 'failure'
         }
         default
-        { return $null 
+        { return $null
         }
     }
+}
+
+function Complete-ActionRequired
+{
+    param([Parameter(Mandatory)]$Run, [Parameter(Mandatory)]$Snapshot, [Parameter(Mandatory)][string]$Failure, [Parameter(Mandatory)][bool]$RollbackAttempted)
+    $Snapshot.phase = 'failed'
+    $Snapshot.outcome = 'action_required'
+    $Snapshot.failure = $Failure
+    if ($RollbackAttempted)
+    {
+        $failedTargets = @($Snapshot.targets | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.failure) })
+        if ($failedTargets.Count -eq 0)
+        {
+            $target = @($Snapshot.targets | Where-Object { [string]$_.state -cne 'restored' } | Select-Object -First 1)
+            if ($target.Count -eq 0)
+            { $target = @($Snapshot.targets | Select-Object -First 1)
+            }
+            $target[0].failure = $Failure
+            $failedTargets = @($target[0])
+        }
+        $Snapshot.rollback.attempted = $true
+        $Snapshot.rollback.outcome = 'action_required'
+        $Snapshot.rollback.failures = @($failedTargets | ForEach-Object { [ordered]@{ target = [string]$_.reference; failure = [string]$_.failure } })
+    } else
+    {
+        foreach ($target in @($Snapshot.targets))
+        { $target.failure = $null
+        }
+        $Snapshot.rollback.attempted = $false
+        $Snapshot.rollback.outcome = 'not_attempted'
+        $Snapshot.rollback.failures = @()
+    }
+    Set-TerminalJournal -JournalId ([string]$Run.id) -Snapshot $Snapshot -Conclusion 'failure'
+    return Get-Journal -JournalId ([string]$Run.id)
 }
 
 function Invoke-Reconcile
@@ -632,10 +888,10 @@ function Invoke-Reconcile
             $completedSnapshot = Read-Snapshot -Run $run
             $completedConclusion = Get-TerminalConclusion -Snapshot $completedSnapshot
             if ($null -eq $completedConclusion -or -not (Test-DesiredRunState -Run $run -Status 'completed' -Conclusion $completedConclusion -Output (New-CheckOutput -Snapshot $completedSnapshot)))
-            { throw 'completed result does not match its canonical terminal snapshot' 
+            { throw 'completed result does not match its canonical terminal snapshot'
             }
         } catch
-        { throw "completed latest-promotion journal is contradictory: $($_.Exception.Message)" 
+        { throw "completed latest-promotion journal is contradictory: $($_.Exception.Message)"
         }
         return $run
     }
@@ -648,7 +904,7 @@ function Invoke-Reconcile
         $snapshot = Read-Snapshot -Run $run
         $terminalConclusion = Get-TerminalConclusion -Snapshot $snapshot
     } catch
-    { return Complete-Contradiction -Run $run -Failure $_.Exception.Message 
+    { return Complete-Contradiction -Run $run -Failure $_.Exception.Message
     }
     if ($null -ne $terminalConclusion)
     {
@@ -656,13 +912,7 @@ function Invoke-Reconcile
         return Get-Journal -JournalId ([string]$run.id)
     }
 
-    $validInterstitial = @(
-        'pre_promotion/pending',
-        'capturing_previous_latest/pending',
-        'writing_latest/pending',
-        'post_write_release_revalidation/pending',
-        'rolling_back/pending'
-    )
+    $validInterstitial = @('pre_promotion/pending','capturing_previous_latest/pending','writing_latest/pending','post_write_release_revalidation/pending','rolling_back/pending')
     $key = "$([string]$snapshot.phase)/$([string]$snapshot.outcome)"
     if ($validInterstitial -cnotcontains $key)
     { return Complete-Contradiction -Run $run -Failure "unsupported phase/outcome: $key"
@@ -679,26 +929,36 @@ function Invoke-Reconcile
         return Get-Journal -JournalId ([string]$run.id)
     }
 
-    $release = Get-OfficialRelease
+    $rollbackAlreadyAttempted = [bool]$snapshot.rollback.attempted
+    try
+    { $release = Get-OfficialRelease
+    } catch
+    {
+        $snapshot.revalidation.status = 'error'
+        $snapshot.revalidation.failure = $_.Exception.Message
+        return Complete-ActionRequired -Run $run -Snapshot $snapshot -Failure $snapshot.revalidation.failure -RollbackAttempted $rollbackAlreadyAttempted
+    }
     $snapshot.revalidation.observed_release_tag = [string]$release.tag
     $snapshot.revalidation.observed_source_commit = [string]$release.source_commit
-    if ([string]$release.source_commit -cne $HeadSha -or (-not [string]::IsNullOrWhiteSpace([string]$snapshot.release.tag) -and [string]$release.tag -cne [string]$snapshot.release.tag))
+    if ([string]$release.source_commit -cne [string]$snapshot.release.source_commit -or [string]$release.tag -cne [string]$snapshot.release.tag)
     {
         $snapshot.revalidation.status = 'mismatch'
         $snapshot.revalidation.failure = 'official release identity changed; registry mutation is forbidden'
-        $snapshot.phase = 'failed'; $snapshot.outcome = 'action_required'; $snapshot.failure = $snapshot.revalidation.failure
-        Set-TerminalJournal -JournalId ([string]$run.id) -Snapshot $snapshot -Conclusion 'failure'
-        return Get-Journal -JournalId ([string]$run.id)
+        return Complete-ActionRequired -Run $run -Snapshot $snapshot -Failure $snapshot.revalidation.failure -RollbackAttempted $rollbackAlreadyAttempted
     }
     $snapshot.revalidation.status = 'passed'
+    $snapshot.revalidation.failure = $null
 
     foreach ($target in @($snapshot.targets))
     {
+        $target.failure = $null
         if ([string]$target.previous.state -cne 'present' -or [string]$target.intended.state -cne 'present')
         {
-            $snapshot.phase = 'failed'; $snapshot.outcome = 'action_required'; $snapshot.failure = "target lacks recoverable previous/intended identity: $($target.reference)"
-            Set-TerminalJournal -JournalId ([string]$run.id) -Snapshot $snapshot -Conclusion 'failure'
-            return Get-Journal -JournalId ([string]$run.id)
+            $failure = "target lacks recoverable previous/intended identity: $($target.reference)"
+            if ($rollbackAlreadyAttempted)
+            { $target.failure = $failure
+            }
+            return Complete-ActionRequired -Run $run -Snapshot $snapshot -Failure $failure -RollbackAttempted $rollbackAlreadyAttempted
         }
         $target.observed = Get-TagIdentity -Reference ([string]$target.reference) -ReadbackError
         if ([string]$target.observed.state -ceq 'readback_error')
@@ -710,24 +970,33 @@ function Invoke-Reconcile
         } else
         { $target.state = 'unexpected'
         }
-        Invoke-JournalPatch -JournalId ([string]$run.id) -Snapshot $snapshot | Out-Null
     }
 
     $readbackErrors = @($snapshot.targets | Where-Object { [string]$_.state -ceq 'readback_error' })
     $unexpected = @($snapshot.targets | Where-Object { [string]$_.state -ceq 'unexpected' })
     if ($readbackErrors.Count -gt 0 -or $unexpected.Count -gt 0)
     {
-        $snapshot.phase = 'failed'; $snapshot.outcome = 'action_required'
-        $snapshot.failure = if ($unexpected.Count -gt 0)
-        { "unexpected current tag identity: $($unexpected[0].reference)"
+        $failedTarget = if ($unexpected.Count -gt 0)
+        { $unexpected[0]
         } else
-        { "could not read current tag identity: $($readbackErrors[0].reference)"
+        { $readbackErrors[0]
         }
-        Set-TerminalJournal -JournalId ([string]$run.id) -Snapshot $snapshot -Conclusion 'failure'
-        return Get-Journal -JournalId ([string]$run.id)
+        $failure = if ($unexpected.Count -gt 0)
+        { "unexpected current tag identity: $($failedTarget.reference)"
+        } else
+        { "could not read current tag identity: $($failedTarget.reference)"
+        }
+        if ($rollbackAlreadyAttempted)
+        { $failedTarget.failure = $failure
+        }
+        return Complete-ActionRequired -Run $run -Snapshot $snapshot -Failure $failure -RollbackAttempted $rollbackAlreadyAttempted
     }
 
-    $snapshot.phase = 'rolling_back'; $snapshot.outcome = 'pending'; $snapshot.rollback.attempted = $true; $snapshot.rollback.outcome = 'pending'
+    foreach ($target in @($snapshot.targets))
+    { $target.failure = $null
+    }
+    $snapshot.phase = 'rolling_back'; $snapshot.outcome = 'pending'; $snapshot.failure = $null
+    $snapshot.rollback.attempted = $true; $snapshot.rollback.outcome = 'pending'; $snapshot.rollback.failures = @()
     Invoke-JournalPatch -JournalId ([string]$run.id) -Snapshot $snapshot | Out-Null
     $commandFailures = [System.Collections.Generic.List[object]]::new()
     $rollbackReadbackErrors = [System.Collections.Generic.List[object]]::new()
@@ -736,25 +1005,31 @@ function Invoke-Reconcile
     {
         $target.state = 'rollback_pending'
         Invoke-JournalPatch -JournalId ([string]$run.id) -Snapshot $snapshot | Out-Null
-        $currentRelease = Get-OfficialRelease
-        $snapshot.revalidation.observed_release_tag = [string]$currentRelease.tag
-        $snapshot.revalidation.observed_source_commit = [string]$currentRelease.source_commit
-        if ([string]$currentRelease.source_commit -cne $HeadSha -or (-not [string]::IsNullOrWhiteSpace([string]$snapshot.release.tag) -and [string]$currentRelease.tag -cne [string]$snapshot.release.tag))
+        try
+        { $currentRelease = Get-OfficialRelease
+        } catch
         {
-            $snapshot.revalidation.status = 'mismatch'
-            $target.state = 'updated'; $target.failure = 'official release identity changed immediately before rollback'
+            $snapshot.revalidation.status = 'error'; $snapshot.revalidation.failure = $_.Exception.Message
+            $target.state = 'updated'; $target.failure = $snapshot.revalidation.failure
             $safetyFailures.Add([ordered]@{ target = [string]$target.reference; failure = [string]$target.failure })
-            Invoke-JournalPatch -JournalId ([string]$run.id) -Snapshot $snapshot | Out-Null
             break
         }
-        $snapshot.revalidation.status = 'passed'
+        $snapshot.revalidation.observed_release_tag = [string]$currentRelease.tag
+        $snapshot.revalidation.observed_source_commit = [string]$currentRelease.source_commit
+        if ([string]$currentRelease.source_commit -cne [string]$snapshot.release.source_commit -or [string]$currentRelease.tag -cne [string]$snapshot.release.tag)
+        {
+            $snapshot.revalidation.status = 'mismatch'; $snapshot.revalidation.failure = 'official release identity changed immediately before rollback'
+            $target.state = 'updated'; $target.failure = $snapshot.revalidation.failure
+            $safetyFailures.Add([ordered]@{ target = [string]$target.reference; failure = [string]$target.failure })
+            break
+        }
+        $snapshot.revalidation.status = 'passed'; $snapshot.revalidation.failure = $null
         $currentIdentity = Get-TagIdentity -Reference ([string]$target.reference) -ReadbackError
         $target.observed = $currentIdentity
         if ([string]$currentIdentity.state -ceq 'readback_error')
         {
             $target.state = 'readback_error'; $target.failure = 'could not verify current tag identity immediately before rollback'
             $safetyFailures.Add([ordered]@{ target = [string]$target.reference; failure = [string]$target.failure })
-            Invoke-JournalPatch -JournalId ([string]$run.id) -Snapshot $snapshot | Out-Null
             break
         }
         if (Test-SameIdentity -Left $currentIdentity -Right $target.previous)
@@ -767,7 +1042,6 @@ function Invoke-Reconcile
         {
             $target.state = 'unexpected'; $target.failure = 'current tag no longer matches the intended identity immediately before rollback'
             $safetyFailures.Add([ordered]@{ target = [string]$target.reference; failure = [string]$target.failure })
-            Invoke-JournalPatch -JournalId ([string]$run.id) -Snapshot $snapshot | Out-Null
             break
         }
         docker buildx imagetools create --prefer-index=false --tag ([string]$target.reference) ([string]$target.previous.immutable_reference)
@@ -775,6 +1049,7 @@ function Invoke-Reconcile
         {
             $target.state = 'rollback_failed'; $target.failure = 'rollback command failed'
             $commandFailures.Add([ordered]@{ target = [string]$target.reference; failure = [string]$target.failure })
+            $snapshot.rollback.failures = @($commandFailures.ToArray() + $rollbackReadbackErrors.ToArray())
             Invoke-JournalPatch -JournalId ([string]$run.id) -Snapshot $snapshot | Out-Null
             continue
         }
@@ -790,6 +1065,7 @@ function Invoke-Reconcile
         } else
         { $target.state = 'restored'; $target.failure = $null
         }
+        $snapshot.rollback.failures = @($commandFailures.ToArray() + $rollbackReadbackErrors.ToArray())
         Invoke-JournalPatch -JournalId ([string]$run.id) -Snapshot $snapshot | Out-Null
     }
 
@@ -859,7 +1135,7 @@ function Invoke-Promote
         $observedRelease = Get-OfficialRelease
         $snapshot.revalidation.observed_release_tag = [string]$observedRelease.tag
         $snapshot.revalidation.observed_source_commit = [string]$observedRelease.source_commit
-        if ([string]$observedRelease.tag -cne [string]$snapshot.release.tag -or [string]$observedRelease.source_commit -cne $HeadSha)
+        if ([string]$observedRelease.tag -cne [string]$snapshot.release.tag -or [string]$observedRelease.source_commit -cne [string]$snapshot.release.source_commit)
         {
             $snapshot.revalidation.status = 'mismatch'; $snapshot.revalidation.failure = 'official release identity changed after latest writes'
             Invoke-JournalPatch -JournalId $journalId -Snapshot $snapshot | Out-Null
@@ -886,6 +1162,9 @@ function Invoke-Promote
 }
 
 Assert-RunIdentity
+if ($Mode -ceq 'EnsureJournal' -and ([string]::IsNullOrWhiteSpace($ReleaseCommit) -or [string]::IsNullOrWhiteSpace($ReleaseTag)))
+{ throw 'journal creation requires the official release tag and source commit'
+}
 switch ($Mode)
 {
     'Discover'

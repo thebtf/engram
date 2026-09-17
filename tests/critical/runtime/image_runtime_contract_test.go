@@ -1032,8 +1032,8 @@ func testLatestPromotionStateMatrix(t *testing.T, repo string) {
 	if err != nil {
 		t.Fatalf("latest-promotion state matrix failed: %v\n%s", err, output)
 	}
-	if !strings.Contains(string(output), "PASS: successor E journal fault matrix proves C1-C8, all terminal/interstitial states, runner-loss recovery, just-in-time safe rollback, contradictions, stale/unexpected guards, ambiguous writes, and idempotence; scenarios=26") {
-		t.Fatalf("successor E 26-scenario state matrix did not report its complete result:\n%s", output)
+	if !strings.Contains(string(output), "PASS: successor E journal matrix proves distinct workflow/release heads, terminal metadata closure, every recovery PATCH replay, API guard failures, uncertain writes, and second-pass idempotence; scenarios=47") {
+		t.Fatalf("successor E 47-scenario state matrix did not report its complete result:\n%s", output)
 	}
 }
 
