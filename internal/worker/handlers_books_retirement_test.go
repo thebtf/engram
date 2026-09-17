@@ -36,11 +36,29 @@ func (store *quiescedResidualBookStore) RetireNonterminal(_ context.Context, rea
 	return 2, nil
 }
 
+type failingResidualBookStore struct {
+	calls int
+}
+
+func (store *failingResidualBookStore) RetireNonterminal(context.Context, string) (int64, error) {
+	store.calls++
+	return 0, fmt.Errorf("transient books store failure")
+}
+
 func TestRetireQuiescedBookJobsUsesNonDestructiveTransition(t *testing.T) {
+	service := &Service{}
 	store := &quiescedResidualBookStore{}
-	require.NoError(t, retireQuiescedBookJobs(context.Background(), store))
+	service.retireQuiescedBookJobs(context.Background(), store)
 	require.Equal(t, 1, store.calls)
 	require.Equal(t, booksdomain.RetirementFailureReason, store.reason)
+}
+
+func TestRetireQuiescedBookJobsDoesNotSetInitErrorOnTransientFailure(t *testing.T) {
+	service := &Service{}
+	store := &failingResidualBookStore{}
+	service.retireQuiescedBookJobs(context.Background(), store)
+	require.Equal(t, 1, store.calls)
+	require.NoError(t, service.GetInitError())
 }
 
 func TestServiceRoutesRetireBookWriterAndPreserveHistoricalStatus(t *testing.T) {

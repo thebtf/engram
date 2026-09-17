@@ -1098,10 +1098,7 @@ func (s *Service) initializeAsync() {
 	booksStore := gorm.NewBooksStore(store)
 	// Single-container startup has not launched the retired book writer. The
 	// residual transition is idempotent and preserves documents/provenance.
-	if err := retireQuiescedBookJobs(s.ctx, booksStore); err != nil {
-		s.setInitError(fmt.Errorf("retire residual book jobs: %w", err))
-		return
-	}
+	s.retireQuiescedBookJobs(s.ctx, booksStore)
 
 	mcpServer := mcp.NewServer(mcp.ServerOptions{
 		Version:            s.version,
@@ -2615,9 +2612,10 @@ func getPID() int {
 	return os.Getpid()
 }
 
-func retireQuiescedBookJobs(ctx context.Context, store booksdomain.ResidualJobStore) error {
-	_, err := booksdomain.RetireResidualJobs(ctx, store, true)
-	return err
+func (s *Service) retireQuiescedBookJobs(ctx context.Context, store booksdomain.ResidualJobStore) {
+	if _, err := booksdomain.RetireResidualJobs(ctx, store, true); err != nil {
+		log.Warn().Err(err).Msg("book job retirement deferred; writers remain retired")
+	}
 }
 
 // wireVnextStores injects the promotion, graph, audit, and nodes stores into

@@ -863,11 +863,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleContexts(w http.ResponseWriter, r 
 
 // HandleGrantChoices lists only the current exact owner's labeled checkout choices.
 func (adapter *OperatorCodeHTTPAdapter) HandleGrantChoices(w http.ResponseWriter, r *http.Request) {
-	if r == nil || r.URL == nil || r.Method != http.MethodGet || r.URL.RawQuery != "" || !operatorCodeEmptyBody(r) || len(r.Header.Values(operatorCodeRequestIDHeader)) != 1 {
-		operatorCodeWriteBodyless(w, http.StatusBadRequest)
-		return
-	}
-	identity, ok := adapter.decodeIdentity(w, r, "operator-code-grant-choices")
+	identity, r, ok := adapter.decodeEmptyEnvelope(w, r, "operator-code-grant-choices", http.MethodGet)
 	if !ok {
 		return
 	}
@@ -940,11 +936,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGrantLabel(w http.ResponseWriter, 
 
 // HandleGrantRevoke revokes one opaque grant only after the owner port rechecks it.
 func (adapter *OperatorCodeHTTPAdapter) HandleGrantRevoke(w http.ResponseWriter, r *http.Request) {
-	if r == nil || r.URL == nil || r.Method != http.MethodPost || r.URL.RawQuery != "" || !operatorCodeEmptyBody(r) || len(r.Header.Values(operatorCodeRequestIDHeader)) != 1 {
-		operatorCodeWriteBodyless(w, http.StatusBadRequest)
-		return
-	}
-	identity, ok := adapter.decodeIdentity(w, r, "operator-code-grant-revoke")
+	identity, r, ok := adapter.decodeEmptyEnvelope(w, r, "operator-code-grant-revoke", http.MethodPost)
 	if !ok {
 		return
 	}
@@ -1562,6 +1554,19 @@ func (adapter *OperatorCodeHTTPAdapter) decodeIdentity(w http.ResponseWriter, r 
 		return operatorCodeRequestIdentity{}, false
 	}
 	return operatorCodeRequestIdentity{requestID: requestID, identity: identity, sessionID: sessionID}, true
+}
+
+func (adapter *OperatorCodeHTTPAdapter) decodeEmptyEnvelope(w http.ResponseWriter, r *http.Request, endpoint, method string) (operatorCodeRequestIdentity, *http.Request, bool) {
+	if r == nil || r.URL == nil || r.Method != method || r.URL.RawQuery != "" || !operatorCodeEmptyBody(r) || len(r.Header.Values(operatorCodeRequestIDHeader)) != 1 {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return operatorCodeRequestIdentity{}, nil, false
+	}
+	identity, ok := adapter.decodeIdentity(w, r, endpoint)
+	if !ok {
+		return operatorCodeRequestIdentity{}, nil, false
+	}
+	identity.digest = operatorCodeRequestDigest(endpoint, nil)
+	return identity, r.WithContext(auditcontext.WithSourceSession(r.Context(), identity.sessionID)), true
 }
 
 func (adapter *OperatorCodeHTTPAdapter) decodeIndexIntentJSON(w http.ResponseWriter, r *http.Request, endpoint string, target any) (operatorCodeRequestIdentity, bool) {

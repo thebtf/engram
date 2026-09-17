@@ -958,6 +958,80 @@ func TestOperatorCodeHTTPAdapter_IndexIntentDigestIsCanonical(t *testing.T) {
 	require.NotEqual(t, first, operatorCodeIndexIntentDigest("operator-code-index-intent-submit", proof, "", "request-2", uci.IndexIntentReindex))
 }
 
+func TestOperatorCodeHTTPAdapter_GrantEmptyEnvelopeIsCanonical(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	for _, testCase := range []struct {
+		endpoint string
+		method   string
+	}{
+		{endpoint: "operator-code-grant-choices", method: http.MethodGet},
+		{endpoint: "operator-code-grant-revoke", method: http.MethodPost},
+	} {
+		t.Run(testCase.endpoint, func(t *testing.T) {
+			request := operatorCodeHTTPTestRequest(t, "", fixture.identity)
+			request.Method = testCase.method
+			request.URL.Path = "/api/code/grants"
+			recorder := httptest.NewRecorder()
+			identity, guarded, ok := adapter.decodeEmptyEnvelope(recorder, request, testCase.endpoint, testCase.method)
+			require.True(t, ok, recorder.Body.String())
+			require.Equal(t, operatorCodeRequestDigest(testCase.endpoint, nil), identity.digest)
+			require.Equal(t, "browser-session-41", auditcontext.SourceSession(guarded.Context()))
+
+			invalid := operatorCodeHTTPTestRequest(t, `{}`, fixture.identity)
+			invalid.Method = testCase.method
+			invalid.URL.Path = "/api/code/grants"
+			rejected := httptest.NewRecorder()
+			_, _, ok = adapter.decodeEmptyEnvelope(rejected, invalid, testCase.endpoint, testCase.method)
+			require.False(t, ok)
+			require.Equal(t, http.StatusBadRequest, rejected.Code)
+		})
+	}
+}
+
+func TestOperatorCodeHTTPAdapter_GrantHandlersCarryAuditBreadcrumb(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	onboarding := &operatorCodeGrantBreadcrumbApplication{}
+	adapter.onboarding = onboarding
+
+	choices := operatorCodeHTTPTestRequest(t, "", fixture.identity)
+	choices.Method = http.MethodGet
+	choicesRecorder := httptest.NewRecorder()
+	adapter.HandleGrantChoices(choicesRecorder, choices)
+	require.Equal(t, http.StatusOK, choicesRecorder.Code, choicesRecorder.Body.String())
+
+	revoke := operatorCodeHTTPTestRequest(t, "", fixture.identity)
+	grantRef := uuid.NewString()
+	routeContext := chi.NewRouteContext()
+	routeContext.URLParams.Add("grant_ref", grantRef)
+	revoke = revoke.WithContext(context.WithValue(revoke.Context(), chi.RouteCtxKey, routeContext))
+	revokeRecorder := httptest.NewRecorder()
+	adapter.HandleGrantRevoke(revokeRecorder, revoke)
+	require.Equal(t, http.StatusOK, revokeRecorder.Code, revokeRecorder.Body.String())
+	require.Equal(t, []string{"browser-session-41", "browser-session-41"}, onboarding.sessions)
+}
+
+type operatorCodeGrantBreadcrumbApplication struct {
+	sessions []string
+}
+
+func (application *operatorCodeGrantBreadcrumbApplication) ListOwnerChoices(ctx context.Context, _ auth.Identity) ([]gormdb.BrowserReadGrantOwnerChoice, error) {
+	application.sessions = append(application.sessions, auditcontext.SourceSession(ctx))
+	return nil, nil
+}
+
+func (*operatorCodeGrantBreadcrumbApplication) IssueOnboarding(context.Context, auth.Identity, IssueOnboardingCodeGrantInput) (gormdb.BrowserReadGrant, error) {
+	return gormdb.BrowserReadGrant{}, nil
+}
+
+func (*operatorCodeGrantBreadcrumbApplication) SetWorkingCopyLabel(context.Context, auth.Identity, string, string) (gormdb.BrowserReadGrantOwnerChoice, error) {
+	return gormdb.BrowserReadGrantOwnerChoice{}, nil
+}
+
+func (application *operatorCodeGrantBreadcrumbApplication) Revoke(ctx context.Context, _ auth.Identity, _ string) (gormdb.BrowserReadGrant, error) {
+	application.sessions = append(application.sessions, auditcontext.SourceSession(ctx))
+	return gormdb.BrowserReadGrant{}, nil
+}
+
 func TestOperatorCodeHTTPAdapter_CatalogAndPinFailuresStayPrivate(t *testing.T) {
 	pathRequest := func(body string, identity auth.Identity) *http.Request {
 		request := operatorCodeHTTPTestRequest(t, body, identity)
