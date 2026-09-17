@@ -4,7 +4,7 @@
 
 **Created**: 2026-09-10
 **Amended**: 2026-09-17
-**Status**: Clarified D-A amendment; implementation is pending
+**Status**: Implemented and source-accepted; installed exact-head D-A release proof is pending
 
 **Input**: Deliver the first independently useful operator workspace over existing Engram authority. The operator must be able to investigate code from the normal homepage without inventing a second authority, a manual graph, or a plaintext-book workflow.
 
@@ -14,7 +14,9 @@
 
 The former honest-shell/design-fidelity-scaffold result is **not** a D-A completion boundary. Truthful loading, bounded counts, lazy settings work, and state labels remain quality constraints where the D-A surface uses them; they do not substitute for the homepage-to-evidence journey.
 
-D-A also retires the active manual knowledge-graph writer and plaintext book-intake workflows at their executable boundaries while preserving their historical readers, records, and provenance. It does not certify every historical Feature 011 collection action complete. D-A has two completion states: source acceptance may establish the bounded candidate behavior; the release gate remains closed until the supported browser/origin decision and installed normal-homepage DA01–DA04 proof are recorded.
+D-A also retires the active manual knowledge-graph writer and plaintext book-intake workflows at their executable boundaries while preserving their historical readers, records, and provenance. It does not certify every historical Feature 011 collection action complete. D-A has two completion states: the exact source candidate is source-accepted; the release gate remains closed until the supported browser/origin decision and installed normal-homepage DA01–DA04 proof are recorded.
+
+The [responsive-layout receipt](acceptance/da-workspace-responsive-layout-receipt.json) proves only Workspace shell layout and drawer behavior at its recorded viewports. Its configured embedding provider was unavailable (`embedded_chunks=0 of 64`), so it does not reassert semantic-provider explorer evidence or satisfy installed DA01–DA04 journey acceptance.
 
 ## Terms
 

@@ -28,10 +28,9 @@ overwrite this runtime. `npm run parity` validates the curated snapshot ledger o
 not prove product acceptance, navigation discoverability, UCI authority, a real provider,
 or installed behavior.
 
-The checked-in 2026.09.10 snapshot is historical for D-A until the design-source owner
-updates private `.od/DESIGN.md` and promotes the reviewed D-A flow. See
-`design/operator-console/AMENDMENTS.md` for the authoritative supersession record; do not
-hand-edit a promoted snapshot or manifest to simulate a promotion.
+The reviewed 2026.09.17 snapshot is already promoted. `PROMOTION-MANIFEST.json` and `PARITY.json` agree on its design version and snapshot hash; that agreement records the checked design input, not runtime or visual parity. Every active parity row remains `drifted`, and the Code route's Chrome acceptance is pending.
+
+The [responsive-layout receipt](../../specs/011-operator-code-console/acceptance/da-workspace-responsive-layout-receipt.json) proves Workspace shell layout and drawer behavior only. It does not reassert semantic-provider explorer evidence (`embedded_chunks=0 of 64`) or substitute for the installed exact-head normal-homepage DA01–DA04 release proof, which remains pending.
 
 ## Runtime invariants
 

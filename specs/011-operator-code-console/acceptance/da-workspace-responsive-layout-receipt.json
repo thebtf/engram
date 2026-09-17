@@ -1,6 +1,6 @@
 {
-  "receiptSchema": "engram.operator-code-console.da-journey/v2",
-  "scope": "D-A Workspace responsive repair evidence",
+  "receiptSchema": "engram.operator-code-console.da-responsive-layout-receipt/v1",
+  "scope": "D-A Workspace responsive-layout evidence only; not DA01–DA04 journey acceptance",
   "recorded_at_utc": "2026-09-17",
   "candidate": {
     "worktree": "D:/Dev/engram/.agent/worktrees/operator-workspace-mobile-fix",
