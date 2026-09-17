@@ -42,7 +42,8 @@ const readiness = computed(() => {
     case 'observed_current': return 'ready'
     case 'catching_up': return 'updating'
     case 'historical': return 'newer-snapshot'
-    default: return 'failed'
+    case 'failed': return 'failed'
+    default: return 'unknown'
   }
 })
 

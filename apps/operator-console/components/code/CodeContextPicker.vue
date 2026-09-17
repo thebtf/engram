@@ -83,7 +83,7 @@ function chooseSnapshot(event: Event): void {
 
     <p class="message" aria-live="polite" data-testid="code-context-message">{{ phaseMessage }}</p>
 
-    <div v-if="catalog.length > 0" class="selectors" aria-label="Workspace selection">
+    <div v-if="catalog.length > 0" class="selectors" role="group" :aria-label="t('codeExplorer.context.selectionGroup')">
       <label class="selector">
         <span>{{ t('workspace.repository') }}</span>
         <select :value="repository" :disabled="pending" data-testid="code-context-repository" @change="chooseRepository">

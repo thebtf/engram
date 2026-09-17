@@ -91,9 +91,12 @@ async function selectFixtureContext(page: Page, fixture: LiveFixtureState, varia
   await choose(page.getByTestId('code-context-working-copy'))
   const snapshot = page.getByTestId('code-context-snapshot')
   await expect(snapshot).toBeEnabled()
-  const value = await snapshot.locator('option:not([disabled])').getAttribute('value')
+  const options = snapshot.locator('option:not([disabled])')
+  await expect(options).toHaveCount(1)
+  const value = await options.getAttribute('value')
   if (value === null) throw new Error('fixture catalog did not expose an indexed snapshot')
   await snapshot.selectOption(value)
+  await expect(snapshot).toHaveValue(value)
 }
 
 async function pinAndRead(browser: Browser, fixture: LiveFixtureState, credential: BrowserCredential, scenario: OperatorCodeFixture, traffic: RouteTraffic[]): Promise<CodeTab> {

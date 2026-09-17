@@ -230,7 +230,7 @@ async function handleCodeRequest(req, res, path) {
   if (req.method === 'PUT' && pinMatch) {
     const workspace = codeWorkspaces.find((candidate) => candidate.selectionRef === body.selection_ref)
     const tab = codeTabs.get(pinMatch[1])
-    if (!tab || workspace?.snapshot === null) {
+    if (!tab || workspace === undefined || workspace.snapshot === null) {
       json(res, 403, { error: 'selection denied' })
       return true
     }
@@ -283,7 +283,7 @@ async function handleCodeRequest(req, res, path) {
         generation: workspace.context.generation,
       },
       source_state: 'available',
-      source_read: { entity_key: source.ref.entityKey, span: source.span, content_digest: source.contentDigest },
+      source_read: { entity_key: source.ref.entity_key, span: source.span, content_digest: source.content_digest },
     })
     json(res, 200, codeEnvelope(workspace, [], graph, {
       nodes: [navigationRef(item), navigationRef(neighbor)],
@@ -292,7 +292,7 @@ async function handleCodeRequest(req, res, path) {
     return true
   }
   if (req.method === 'POST' && path === '/api/code/source') {
-    json(res, 200, codeEnvelope(workspace, [body.entity_key === neighbor.ref.entityKey ? neighbor : item]))
+    json(res, 200, codeEnvelope(workspace, [body.entity_key === neighbor.ref.entity_key ? neighbor : item]))
     return true
   }
   if (req.method === 'POST' && path === '/api/code/index-intents') {

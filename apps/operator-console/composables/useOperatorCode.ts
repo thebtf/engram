@@ -365,14 +365,14 @@ function parseCatalog(value: unknown): CodeCatalogEntry[] | null {
   const selections = new Set<string>()
   for (const value of values) {
     const entry = parseCatalogEntry(value)
-    if (entry === null) return null
+    if (entry === null) continue
     if (entry.view !== null) {
       if (selections.has(entry.view.selectionRef)) return null
       selections.add(entry.view.selectionRef)
     }
     entries.push(entry)
   }
-  return entries
+  return entries.length > 0 || values.length === 0 ? entries : null
 }
 
 function parseGraph(value: unknown): CodeGraph | null {

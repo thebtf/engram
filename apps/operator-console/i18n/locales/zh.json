@@ -2227,6 +2227,11 @@
       "next": "GET /api/access/users 尚不存在，因此不会渲染假的用户和角色。"
     }
   },
+  "codeExplorer": {
+    "context": {
+      "selectionGroup": "仓库、工作副本和索引快照"
+    }
+  },
   "workspace": {
     "title": "工作区",
     "lead": "在同一个固定快照中找到实现，并了解它为何相关。",
@@ -2251,6 +2256,10 @@
       "failed": {
         "title": "索引失败",
         "body": "上次尝试未完成。任何已确认的快照仍然保留。"
+      },
+      "unknown": {
+        "title": "新鲜度未知",
+        "body": "服务器没有说明此快照是否为当前状态。"
       },
       "newer-snapshot": {
         "title": "有更新的快照",

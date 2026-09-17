@@ -70,6 +70,12 @@ test('Code Explorer resynchronizes a completed selection after catalog refresh w
       selection_ref: 'context-current',
       index_intent_available: false,
     }, {
+      repository: 'Engram',
+      working_copy: ' ',
+      indexed_snapshot: { label: 'Malformed snapshot', revision: '1a9dad3', published_at: '2026-09-17T00:03:00Z' },
+      selection_ref: 'context-malformed',
+      index_intent_available: false,
+    }, {
       repository: 'Other repository',
       working_copy: 'manual checkout',
       indexed_snapshot: { label: 'Manual snapshot', revision: '1a9dad1', published_at: '2026-09-17T00:01:00Z' },
@@ -208,7 +214,7 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
       return
     }
     if (pathname === '/api/code/status') {
-      await route.fulfill({ json: { total_chunks: 0, embedded_chunks: 0, embedding: { Coverage: 'none' } } })
+      await route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { Coverage: 'complete' }, freshness: { state: 'unknown' } } })
       return
     }
     if (pathname === '/api/code/index-intents' && route.request().method() === 'POST') {
@@ -240,6 +246,7 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
   await page.getByTestId('code-pin-context').click()
   expect(pinPayloads).toEqual([{ document_proof: DOCUMENT_PROOF, selection_ref: 'context-current' }])
   await expect(page.getByTestId('code-context-pinned')).toContainText('Current snapshot')
+  await expect(page.locator('.readiness')).toHaveAttribute('data-state', 'unknown')
   await page.getByTestId('code-context-repository').selectOption({ label: 'Other repository' })
   await page.getByTestId('code-context-working-copy').selectOption({ label: 'D working copy' })
   await page.getByTestId('code-context-snapshot').selectOption({ label: 'D snapshot' })

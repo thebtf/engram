@@ -24,7 +24,6 @@ test('books bookmark exposes retirement without plaintext admission', async ({ p
  await expect(page.getByRole('heading', { name: 'Приём текстовых книг упразднён' })).toBeVisible()
  await expect(page.locator('.retirement-page').locator('input, textarea, input[type="file"]')).toHaveCount(0)
  await expect(page.getByRole('link', { name: 'Открыть документы' })).toHaveAttribute('href', '/documents')
- expect(failures).toEqual([])
 
  await page.goto('/settings')
  await page.getByRole('dialog').getByRole('button', { name: 'English' }).click()
@@ -36,6 +35,7 @@ test('books bookmark exposes retirement without plaintext admission', async ({ p
  await page.goto('/books')
  await expect(page.getByRole('heading', { name: '纯文本书籍导入已停用' })).toBeVisible()
  expect(writerRequests).toEqual([])
+ expect(failures).toEqual([])
 
 })
 
@@ -209,7 +209,7 @@ test('mismatched, bare, and accepted rule responses retain drafts for explicit r
  await remove.click()
  await expect(outcome).toHaveAttribute('data-kind', 'committed_verification_pending')
  await expect(seededRule).toBeVisible()
- await page.waitForTimeout(100)
+ await expect.poll(() => deleteRequests.length).toBe(1)
  expect(deleteRequests).toEqual([
   expect.objectContaining({
    action: 'delete',
@@ -265,7 +265,7 @@ test('partial memory retry keeps only unresolved selections and never replays au
  await expect(page.getByTestId('mutation-item-outcomes')).toContainText('9101')
  await expect(page.getByTestId('memory-row-9101').locator('.echk')).not.toHaveClass(/on/)
  await expect(page.getByTestId('memory-row-9102').locator('.echk')).toHaveClass(/on/)
- await page.waitForTimeout(100)
+ await expect.poll(() => selectionPayloads.length).toBe(1)
  expect(selectionPayloads).toEqual([
   {
    selection: {
@@ -332,7 +332,7 @@ test('a browser transport loss retains the selected mutation for manual reconcil
  await expect(page.getByTestId('mutation-retained-input')).toBeVisible()
  await expect(page.getByTestId('memory-row-9103').locator('.echk')).toHaveClass(/on/)
  await expect(outcome).not.toContainText(/rollback/i)
- await page.waitForTimeout(100)
+ await expect.poll(() => dispatches).toBe(1)
  expect(dispatches).toBe(1)
 })
 

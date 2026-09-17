@@ -67,7 +67,7 @@ for (const scenario of [
     await expect(count).toHaveAttribute('data-count-state', scenario.state)
     await expect(count).toContainText(scenario.visible)
     await expect(page.getByTestId('shell-review-queue-count')).toContainText('неизвест')
-    await page.waitForTimeout(100)
+    await expect.poll(() => queueBodyRequests.length).toBe(1)
     expect(memoryBodyRequests).toEqual([])
     expect(queueBodyRequests).toEqual(['/api/memory/candidates'])
     expect(settingsOwnedRequests).toEqual([])
