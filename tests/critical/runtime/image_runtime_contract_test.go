@@ -86,6 +86,9 @@ func TestAuthority0051PromotionRecoveryBridgeContract(t *testing.T) {
 		recovery: readOptionalText(t, filepath.Join(repo, ".github", "workflows", "recover-latest-promotion-journal.yml")),
 		gate:     readOptionalText(t, filepath.Join(repo, "scripts", "production-gates", "latest-promotion-journal.ps1")),
 	}
+	exactD := promotionRecoveryAuthorityState{
+		workflow: readFile(t, filepath.Join(repo, "tests", "critical", "runtime", "testdata", "authority-0050-promote-latest-release-images-final-terminalizer.yml")),
+	}
 	successorF := promotionRecoveryAuthorityState{
 		workflow: readFile(t, filepath.Join(repo, "tests", "critical", "runtime", "testdata", "authority-0051-promote-latest-release-images.yml")),
 		recovery: new(readFile(t, filepath.Join(repo, "tests", "critical", "runtime", "testdata", "authority-0051-recover-latest-promotion-journal.yml"))),
@@ -141,13 +144,13 @@ func TestAuthority0051PromotionRecoveryBridgeContract(t *testing.T) {
 	}{
 		{name: "historical authority-0048 workflow", policy: policy, state: promotionRecoveryAuthorityState{workflow: historicalJournal}},
 		{name: "historical authority-0049 workflow", policy: policy, state: promotionRecoveryAuthorityState{workflow: historicalTerminalizer}},
-		{name: "historical authority-0050 policy with D", policy: strings.Replace(policy, `"id": "authority-0051"`, `"id": "authority-0050"`, 1), state: current},
+		{name: "historical authority-0050 policy with D", policy: strings.Replace(policy, `"id": "authority-0051"`, `"id": "authority-0050"`, 1), state: exactD},
 		{name: "partial E workflow only", policy: policy, state: promotionRecoveryAuthorityState{workflow: successorE.workflow}},
 		{name: "partial E workflow and recovery", policy: policy, state: partialRecovery},
 		{name: "partial E workflow and gate", policy: policy, state: partialGate},
-		{name: "D workflow with E support files", policy: policy, state: promotionRecoveryAuthorityState{workflow: current.workflow, recovery: successorE.recovery, gate: successorE.gate}},
+		{name: "D workflow with E support files", policy: policy, state: promotionRecoveryAuthorityState{workflow: exactD.workflow, recovery: successorE.recovery, gate: successorE.gate}},
 		{name: "authority-0051 F gate", policy: policy, state: successorF},
-		{name: "authority-0052 D state", policy: policy0052, state: current},
+		{name: "authority-0052 D state", policy: policy0052, state: exactD},
 		{name: "authority-0052 F state", policy: policy0052, state: successorF},
 		{name: "authority-0053 E state", policy: policy0053, state: successorE},
 		{name: "authority-0052 wrong consumed epoch", policy: strings.Replace(policy0052, "authority-0051", "authority-0050", 1), state: successorE},
@@ -158,7 +161,7 @@ func TestAuthority0051PromotionRecoveryBridgeContract(t *testing.T) {
 		{name: "authority-0052 invalid F blob", policy: strings.Replace(policy0052, "b2e3728ceab3920b4282136ce988d402143a0c8b", strings.Repeat("0", 40), 1), state: successorE},
 		{name: "authority-0053 nonempty expected blobs", policy: strings.Replace(policy0053, `"expected_head_blobs":[]`, `"expected_head_blobs":[{"path":"scripts/production-gates/latest-promotion-journal.ps1","git_blob":"b2e3728ceab3920b4282136ce988d402143a0c8b"}]`, 1), state: successorF},
 		{name: "arbitrary policy bytes", policy: policy + "\n", state: current},
-		{name: "arbitrary D workflow bytes", policy: policy, state: promotionRecoveryAuthorityState{workflow: current.workflow + "\n"}},
+		{name: "arbitrary D workflow bytes", policy: policy, state: promotionRecoveryAuthorityState{workflow: exactD.workflow + "\n"}},
 		{name: "arbitrary E workflow bytes", policy: policy, state: promotionRecoveryAuthorityState{workflow: successorE.workflow + "\n", recovery: successorE.recovery, gate: successorE.gate}},
 		{name: "arbitrary E recovery bytes", policy: policy, state: promotionRecoveryAuthorityState{workflow: successorE.workflow, recovery: new(*successorE.recovery + "\n"), gate: successorE.gate}},
 		{name: "arbitrary E gate bytes", policy: policy, state: promotionRecoveryAuthorityState{workflow: successorE.workflow, recovery: successorE.recovery, gate: new(*successorE.gate + "\n")}},
