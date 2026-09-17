@@ -86,23 +86,37 @@ func TestAuthority0051PromotionRecoveryBridgeContract(t *testing.T) {
 		recovery: readOptionalText(t, filepath.Join(repo, ".github", "workflows", "recover-latest-promotion-journal.yml")),
 		gate:     readOptionalText(t, filepath.Join(repo, "scripts", "production-gates", "latest-promotion-journal.ps1")),
 	}
-	successor := promotionRecoveryAuthorityState{
+	successorF := promotionRecoveryAuthorityState{
 		workflow: readFile(t, filepath.Join(repo, "tests", "critical", "runtime", "testdata", "authority-0051-promote-latest-release-images.yml")),
 		recovery: new(readFile(t, filepath.Join(repo, "tests", "critical", "runtime", "testdata", "authority-0051-recover-latest-promotion-journal.yml"))),
 		gate:     new(readFile(t, filepath.Join(repo, "tests", "critical", "runtime", "testdata", "authority-0051-latest-promotion-journal.ps1"))),
 	}
+	successorE := successorF
+	predecessorGate := strings.Replace(*successorF.gate, " -or $null -eq $Snapshot.PSObject.Properties['contradicted_snapshot']", "", 1)
+	predecessorGate = strings.Replace(predecessorGate, ", [string]$ContradictedText", "", 1)
+	predecessorGate = strings.Replace(predecessorGate, "    $snapshot.contradicted_snapshot = $ContradictedText\n", "", 1)
+	predecessorGate = strings.Replace(predecessorGate, " -Failure $Failure -ContradictedText ([string]$Run.output.text)", " -Failure $Failure", 1)
+	if got := gitBlobID(predecessorGate); got != "e31ec223ae1e1ed8ac33f97d0f9230e56387cc52" {
+		t.Fatalf("recovered exact E gate blob %s, want e31ec223ae1e1ed8ac33f97d0f9230e56387cc52", got)
+	}
+	successorE.gate = &predecessorGate
+	policy0052 := fmt.Sprintf(`{"transition":{"consumed_epoch":"authority-0051","event_base_sha":"%s"},"active_epoch":{"id":"authority-0052","label":"authority-maintenance:authority-0052","exact_changes":[{"status":"M","path":".github/authority-policy.json"},{"status":"M","path":"scripts/production-gates/latest-promotion-journal.ps1"}],"expected_head_blobs":[{"path":"scripts/production-gates/latest-promotion-journal.ps1","git_blob":"b2e3728ceab3920b4282136ce988d402143a0c8b"}]}}`, strings.Repeat("e", 40))
+	policy0053 := fmt.Sprintf(`{"transition":{"consumed_epoch":"authority-0052","event_base_sha":"%s"},"active_epoch":{"id":"authority-0053","label":"authority-maintenance:authority-0053","exact_changes":[{"status":"M","path":".github/authority-policy.json"}],"expected_head_blobs":[]}}`, strings.Repeat("f", 40))
 
 	for _, approved := range []struct {
 		name      string
+		policy    string
 		state     promotionRecoveryAuthorityState
 		successor bool
 	}{
-		{name: "current D", state: current},
-		{name: "exact fixture E", state: successor, successor: true},
+		{name: "current D", policy: policy, state: current},
+		{name: "exact fixture E", policy: policy, state: successorE, successor: true},
+		{name: "authority-0052 exact E", policy: policy0052, state: successorE, successor: true},
+		{name: "authority-0053 exact F", policy: policy0053, state: successorF, successor: true},
 	} {
 		approved := approved
 		t.Run(approved.name, func(t *testing.T) {
-			testAuthority0051PromotionRecoveryBridge(t, policy, approved.state)
+			testAuthority0051PromotionRecoveryBridge(t, approved.policy, approved.state)
 			if approved.successor {
 				testSuccessorEPromotionReleaseRefGuard(t, approved.state.workflow)
 				return
@@ -118,8 +132,8 @@ func TestAuthority0051PromotionRecoveryBridgeContract(t *testing.T) {
 
 	historicalJournal := readFile(t, filepath.Join(repo, "tests", "critical", "runtime", "testdata", "authority-0048-promote-latest-release-images-journal.yml"))
 	historicalTerminalizer := readFile(t, filepath.Join(repo, "tests", "critical", "runtime", "testdata", "authority-0049-promote-latest-release-images-terminalizer.yml"))
-	partialRecovery := promotionRecoveryAuthorityState{workflow: successor.workflow, recovery: successor.recovery}
-	partialGate := promotionRecoveryAuthorityState{workflow: successor.workflow, gate: successor.gate}
+	partialRecovery := promotionRecoveryAuthorityState{workflow: successorE.workflow, recovery: successorE.recovery}
+	partialGate := promotionRecoveryAuthorityState{workflow: successorE.workflow, gate: successorE.gate}
 	for _, rejected := range []struct {
 		name   string
 		policy string
@@ -128,19 +142,30 @@ func TestAuthority0051PromotionRecoveryBridgeContract(t *testing.T) {
 		{name: "historical authority-0048 workflow", policy: policy, state: promotionRecoveryAuthorityState{workflow: historicalJournal}},
 		{name: "historical authority-0049 workflow", policy: policy, state: promotionRecoveryAuthorityState{workflow: historicalTerminalizer}},
 		{name: "historical authority-0050 policy with D", policy: strings.Replace(policy, `"id": "authority-0051"`, `"id": "authority-0050"`, 1), state: current},
-		{name: "partial E workflow only", policy: policy, state: promotionRecoveryAuthorityState{workflow: successor.workflow}},
+		{name: "partial E workflow only", policy: policy, state: promotionRecoveryAuthorityState{workflow: successorE.workflow}},
 		{name: "partial E workflow and recovery", policy: policy, state: partialRecovery},
 		{name: "partial E workflow and gate", policy: policy, state: partialGate},
-		{name: "D workflow with E support files", policy: policy, state: promotionRecoveryAuthorityState{workflow: current.workflow, recovery: successor.recovery, gate: successor.gate}},
+		{name: "D workflow with E support files", policy: policy, state: promotionRecoveryAuthorityState{workflow: current.workflow, recovery: successorE.recovery, gate: successorE.gate}},
+		{name: "authority-0051 F gate", policy: policy, state: successorF},
+		{name: "authority-0052 D state", policy: policy0052, state: current},
+		{name: "authority-0052 F state", policy: policy0052, state: successorF},
+		{name: "authority-0053 E state", policy: policy0053, state: successorE},
+		{name: "authority-0052 wrong consumed epoch", policy: strings.Replace(policy0052, "authority-0051", "authority-0050", 1), state: successorE},
+		{name: "authority-0053 wrong consumed epoch", policy: strings.Replace(policy0053, "authority-0052", "authority-0051", 1), state: successorF},
+		{name: "authority-0052 wrong ordered policy path", policy: strings.Replace(policy0052, `"path":".github/authority-policy.json"`, `"path":"scripts/production-gates/latest-promotion-journal.ps1"`, 1), state: successorE},
+		{name: "authority-0052 invalid event base", policy: strings.Replace(policy0052, strings.Repeat("e", 40), "not-a-sha", 1), state: successorE},
+		{name: "authority-0052 invalid label", policy: strings.Replace(policy0052, "authority-maintenance:authority-0052", "authority-maintenance:authority-0053", 1), state: successorE},
+		{name: "authority-0052 invalid F blob", policy: strings.Replace(policy0052, "b2e3728ceab3920b4282136ce988d402143a0c8b", strings.Repeat("0", 40), 1), state: successorE},
+		{name: "authority-0053 nonempty expected blobs", policy: strings.Replace(policy0053, `"expected_head_blobs":[]`, `"expected_head_blobs":[{"path":"scripts/production-gates/latest-promotion-journal.ps1","git_blob":"b2e3728ceab3920b4282136ce988d402143a0c8b"}]`, 1), state: successorF},
 		{name: "arbitrary policy bytes", policy: policy + "\n", state: current},
 		{name: "arbitrary D workflow bytes", policy: policy, state: promotionRecoveryAuthorityState{workflow: current.workflow + "\n"}},
-		{name: "arbitrary E workflow bytes", policy: policy, state: promotionRecoveryAuthorityState{workflow: successor.workflow + "\n", recovery: successor.recovery, gate: successor.gate}},
-		{name: "arbitrary E recovery bytes", policy: policy, state: promotionRecoveryAuthorityState{workflow: successor.workflow, recovery: new(*successor.recovery + "\n"), gate: successor.gate}},
-		{name: "arbitrary E gate bytes", policy: policy, state: promotionRecoveryAuthorityState{workflow: successor.workflow, recovery: successor.recovery, gate: new(*successor.gate + "\n")}},
+		{name: "arbitrary E workflow bytes", policy: policy, state: promotionRecoveryAuthorityState{workflow: successorE.workflow + "\n", recovery: successorE.recovery, gate: successorE.gate}},
+		{name: "arbitrary E recovery bytes", policy: policy, state: promotionRecoveryAuthorityState{workflow: successorE.workflow, recovery: new(*successorE.recovery + "\n"), gate: successorE.gate}},
+		{name: "arbitrary E gate bytes", policy: policy, state: promotionRecoveryAuthorityState{workflow: successorE.workflow, recovery: successorE.recovery, gate: new(*successorE.gate + "\n")}},
 	} {
 		t.Run("reject "+rejected.name, func(t *testing.T) {
 			if err := authority0051PromotionRecoveryBridgeError(rejected.policy, rejected.state); err == nil {
-				t.Fatal("accepted an authority state outside the closed authority-0051 D/E bridge")
+				t.Fatal("accepted an authority state outside the closed authority-0051 D/E/F bridge")
 			}
 		})
 	}
@@ -1165,6 +1190,7 @@ func testLatestPromotionReleaseRefGuard(t *testing.T, repo, workflow string) str
 		journalBlob           = "343fcf05adac5868e1da789a94572662ee96c895"
 		terminalizerBlob      = "78a17bfcce5bd8c4031b0c0b85170116f887994c"
 		finalTerminalizerBlob = "8b50751feeaa0f3ebe052a2d76ceed93198069df"
+		successorBlob         = "3de38f1f48c8eb9cc63d0a0ce811325cc57e7dfd"
 		freshnessGuard        = "if ($env:GITHUB_EVENT_NAME -eq 'workflow_run' -and $commit -cne $triggeringWorkflowHeadSHA)"
 	)
 
@@ -1178,6 +1204,8 @@ func testLatestPromotionReleaseRefGuard(t *testing.T, repo, workflow string) str
 		// Historical predecessor behavior is exercised separately from current authority.
 	case journalBlob, terminalizerBlob, finalTerminalizerBlob:
 		testAuthority0048JournalWorkflow(t, workflow)
+	case successorBlob:
+		testSuccessorEPromotionReleaseRefGuard(t, workflow)
 	default:
 		t.Fatalf("latest-promotion workflow blob %s is outside the authority-pinned transition", workflowBlob)
 	}
@@ -1238,16 +1266,13 @@ func testAuthority0051PromotionRecoveryBridge(t *testing.T, policyJSON string, s
 
 func authority0051PromotionRecoveryBridgeError(policyJSON string, state promotionRecoveryAuthorityState) error {
 	const (
-		policyBlob            = "39923e6e21368bbb4a1d8b66fd48206a87506753"
+		policy0051Blob        = "39923e6e21368bbb4a1d8b66fd48206a87506753"
 		currentWorkflowBlob   = "8b50751feeaa0f3ebe052a2d76ceed93198069df"
 		successorWorkflowBlob = "3de38f1f48c8eb9cc63d0a0ce811325cc57e7dfd"
 		successorRecoveryBlob = "d40b35f160f9a490518ce3a22a7104f22b48e426"
-		successorGateBlob     = "e31ec223ae1e1ed8ac33f97d0f9230e56387cc52"
+		successorEGateBlob    = "e31ec223ae1e1ed8ac33f97d0f9230e56387cc52"
+		successorFGateBlob    = "b2e3728ceab3920b4282136ce988d402143a0c8b"
 	)
-
-	if got := gitBlobID(policyJSON); got != policyBlob {
-		return fmt.Errorf("authority policy blob %s is outside the closed authority-0051 bridge", got)
-	}
 
 	var policy struct {
 		Transition struct {
@@ -1270,43 +1295,82 @@ func authority0051PromotionRecoveryBridgeError(policyJSON string, state promotio
 	if err := json.Unmarshal([]byte(policyJSON), &policy); err != nil {
 		return fmt.Errorf("parse authority policy: %w", err)
 	}
-	wantChanges := []struct{ status, path string }{
-		{"M", ".github/authority-policy.json"},
-		{"M", ".github/workflows/promote-latest-release-images.yml"},
-		{"A", ".github/workflows/recover-latest-promotion-journal.yml"},
-		{"A", "scripts/production-gates/latest-promotion-journal.ps1"},
+
+	var (
+		policyName             = policy.ActiveEpoch.ID
+		consumedEpoch          string
+		exactEventBase         string
+		label                  string
+		wantChanges            []struct{ status, path string }
+		wantBlobs              []struct{ path, blob string }
+		allowD, allowE, allowF bool
+	)
+	switch policyName {
+	case "authority-0051":
+		if got := gitBlobID(policyJSON); got != policy0051Blob {
+			return fmt.Errorf("authority policy blob %s is outside the closed authority-0051 bridge", got)
+		}
+		consumedEpoch = "authority-0050"
+		exactEventBase = "7dff05f71f649d759b2a729248100c807e74bf63"
+		label = "authority-maintenance:authority-0051"
+		wantChanges = []struct{ status, path string }{
+			{"M", ".github/authority-policy.json"},
+			{"M", ".github/workflows/promote-latest-release-images.yml"},
+			{"A", ".github/workflows/recover-latest-promotion-journal.yml"},
+			{"A", "scripts/production-gates/latest-promotion-journal.ps1"},
+		}
+		wantBlobs = []struct{ path, blob string }{
+			{".github/workflows/promote-latest-release-images.yml", successorWorkflowBlob},
+			{".github/workflows/recover-latest-promotion-journal.yml", successorRecoveryBlob},
+			{"scripts/production-gates/latest-promotion-journal.ps1", successorEGateBlob},
+		}
+		allowD, allowE = true, true
+	case "authority-0052":
+		consumedEpoch = "authority-0051"
+		label = "authority-maintenance:authority-0052"
+		wantChanges = []struct{ status, path string }{
+			{"M", ".github/authority-policy.json"},
+			{"M", "scripts/production-gates/latest-promotion-journal.ps1"},
+		}
+		wantBlobs = []struct{ path, blob string }{{"scripts/production-gates/latest-promotion-journal.ps1", successorFGateBlob}}
+		allowE = true
+	case "authority-0053":
+		consumedEpoch = "authority-0052"
+		label = "authority-maintenance:authority-0053"
+		wantChanges = []struct{ status, path string }{{"M", ".github/authority-policy.json"}}
+		allowF = true
+	default:
+		return fmt.Errorf("authority policy has unsupported active epoch %q", policyName)
 	}
-	wantBlobs := []struct{ path, blob string }{
-		{".github/workflows/promote-latest-release-images.yml", successorWorkflowBlob},
-		{".github/workflows/recover-latest-promotion-journal.yml", successorRecoveryBlob},
-		{"scripts/production-gates/latest-promotion-journal.ps1", successorGateBlob},
-	}
-	if policy.Transition.ConsumedEpoch != "authority-0050" || policy.Transition.EventBaseSHA != "7dff05f71f649d759b2a729248100c807e74bf63" || policy.ActiveEpoch.ID != "authority-0051" || policy.ActiveEpoch.Label != "authority-maintenance:authority-0051" || len(policy.ActiveEpoch.ExactChanges) != len(wantChanges) || len(policy.ActiveEpoch.ExpectedHeadBlobs) != len(wantBlobs) {
-		return fmt.Errorf("authority policy blob %s does not describe its pinned transition", policyBlob)
+	if policy.Transition.ConsumedEpoch != consumedEpoch || !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(policy.Transition.EventBaseSHA) || (exactEventBase != "" && policy.Transition.EventBaseSHA != exactEventBase) || policy.ActiveEpoch.Label != label || len(policy.ActiveEpoch.ExactChanges) != len(wantChanges) || len(policy.ActiveEpoch.ExpectedHeadBlobs) != len(wantBlobs) {
+		return fmt.Errorf("authority policy %s does not describe its pinned transition", policyName)
 	}
 	for index, want := range wantChanges {
 		got := policy.ActiveEpoch.ExactChanges[index]
 		if got.Status != want.status || got.Path != want.path {
-			return fmt.Errorf("authority policy blob %s change %d = %s %s, want %s %s", policyBlob, index, got.Status, got.Path, want.status, want.path)
+			return fmt.Errorf("authority policy %s change %d = %s %s, want %s %s", policyName, index, got.Status, got.Path, want.status, want.path)
 		}
 	}
 	for index, want := range wantBlobs {
 		got := policy.ActiveEpoch.ExpectedHeadBlobs[index]
 		if got.Path != want.path || got.GitBlob != want.blob {
-			return fmt.Errorf("authority policy blob %s expected head %d = %s %s, want %s %s", policyBlob, index, got.Path, got.GitBlob, want.path, want.blob)
+			return fmt.Errorf("authority policy %s expected head %d = %s %s, want %s %s", policyName, index, got.Path, got.GitBlob, want.path, want.blob)
 		}
 	}
 
 	workflowBlob := gitBlobID(state.workflow)
 	recoveryBlob := authorityStateBlob(state.recovery)
 	gateBlob := authorityStateBlob(state.gate)
-	if workflowBlob == currentWorkflowBlob && state.recovery == nil && state.gate == nil {
+	if allowD && workflowBlob == currentWorkflowBlob && state.recovery == nil && state.gate == nil {
 		return nil
 	}
-	if workflowBlob == successorWorkflowBlob && recoveryBlob == successorRecoveryBlob && gateBlob == successorGateBlob {
+	if allowE && workflowBlob == successorWorkflowBlob && recoveryBlob == successorRecoveryBlob && gateBlob == successorEGateBlob {
 		return nil
 	}
-	return fmt.Errorf("authority policy blob %s requires exact D (%s, absent, absent) or E (%s, %s, %s), got (%s, %s, %s)", policyBlob, currentWorkflowBlob, successorWorkflowBlob, successorRecoveryBlob, successorGateBlob, workflowBlob, recoveryBlob, gateBlob)
+	if allowF && workflowBlob == successorWorkflowBlob && recoveryBlob == successorRecoveryBlob && gateBlob == successorFGateBlob {
+		return nil
+	}
+	return fmt.Errorf("authority policy %s requires its exact D/E/F tuple, got (%s, %s, %s)", policyName, workflowBlob, recoveryBlob, gateBlob)
 }
 
 func testSuccessorEPromotionReleaseRefGuard(t *testing.T, workflow string) {
@@ -1341,8 +1405,8 @@ func testSuccessorEPromotionMatrix(t *testing.T, repo string) {
 	for _, fixture := range []struct{ path, blob string }{
 		{workflowPath, "3de38f1f48c8eb9cc63d0a0ce811325cc57e7dfd"},
 		{recoveryPath, "d40b35f160f9a490518ce3a22a7104f22b48e426"},
-		{gatePath, "e31ec223ae1e1ed8ac33f97d0f9230e56387cc52"},
-		{scriptPath, "695a3502517f6e26cc92aaeaf501a3fd4b1a29e0"},
+		{gatePath, "b2e3728ceab3920b4282136ce988d402143a0c8b"},
+		{scriptPath, "0436a042677051f2a3393bd4dc9f40535d4fbaeb"},
 	} {
 		if got := gitBlobID(readFile(t, fixture.path)); got != fixture.blob {
 			t.Fatalf("%s has raw blob %s, want %s", fixture.path, got, fixture.blob)
