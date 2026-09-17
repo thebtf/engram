@@ -76,6 +76,19 @@ func TestDockerReleaseRefFreshnessGuard(t *testing.T) {
 }
 
 // @critical
+// @category: contract
+// @features: [release-safety]
+func TestAuthority0048JournalTransitionContract(t *testing.T) {
+	repo := repositoryRoot(t)
+	t.Run("authority-0047 predecessor recovery matrix", func(t *testing.T) {
+		testAuthority0047RecoveryMatrix(t, repo)
+	})
+	t.Run("authority-0048 durable journal matrix", func(t *testing.T) {
+		testAuthority0048JournalMatrix(t, repo)
+	})
+}
+
+// @critical
 // @category: behavioral
 // @features: [image-remediation, operator-console]
 // @dev_stand: required
@@ -208,9 +221,6 @@ func TestServerImageContract(t *testing.T) {
 	repo := repositoryRoot(t)
 	t.Run("release ref freshness guard", func(t *testing.T) {
 		verifyDockerReleaseRefFreshnessGuard(t, repo)
-	})
-	t.Run("authority-0047 latest-promotion state matrix", func(t *testing.T) {
-		testLatestPromotionStateMatrix(t, repo)
 	})
 	requireFileContains(t, filepath.Join(repo, "Dockerfile"),
 		"gcr.io/distroless/base-debian13@sha256:0ebad3510af52aefe45045cc01b07564570be4feecf8d9f93d3a05d1b5f2f93b",
@@ -380,6 +390,9 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 		workflow := string(content)
 		if regexp.MustCompile(`(?m)^  packages:\s*write\s*$`).MatchString(workflow) {
 			t.Fatalf("%s grants packages:write at workflow scope", workflowPath)
+		}
+		if regexp.MustCompile(`(?m)^  checks:\s*write\s*$`).MatchString(workflow) {
+			t.Fatalf("%s grants checks:write at workflow scope", workflowPath)
 		}
 		for _, body := range inlineRunBodies(workflow) {
 			for _, forbidden := range []string{
@@ -744,6 +757,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	allowedScript := filepath.Clean(filepath.Join(repo, "scripts", "production-gates", "build-and-scan-images.ps1"))
 	allowedWriters := map[string]bool{releaseWorkflowPath: true, latestWorkflowPath: true}
 	writePattern := regexp.MustCompile(`(?i)packages:\s*write|docker/login-action|docker\s+(?:login|push|buildx[^\n]*--push)|\bdocker\s+push\b|\b(?:oras\s+(?:login|copy|push)|skopeo\s+(?:login|copy)|crane\s+(?:auth\s+login|copy|push))\b|(?:GHCR_TOKEN|CR_PAT)\s*:\s*(?:\$\{\{|\$env:|[^"'\s])|PERSONAL_ACCESS_TOKEN`)
+	checkWriterPattern := regexp.MustCompile(`(?i)checks:\s*write|/check-runs(?:/|\b)`)
 
 	for _, root := range []string{filepath.Join(repo, ".github", "workflows"), filepath.Join(repo, "scripts")} {
 		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -763,6 +777,9 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 			}
 			if writePattern.Match(content) && !allowedWriters[filepath.Clean(path)] && filepath.Clean(path) != allowedScript {
 				t.Errorf("executable surface %s contains an undeclared registry write credential or command", path)
+			}
+			if checkWriterPattern.Match(content) && filepath.Clean(path) != latestWorkflowPath {
+				t.Errorf("executable surface %s contains an undeclared check-run writer", path)
 			}
 			return nil
 		})
@@ -871,9 +888,8 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	}
 
 	latest := readFile(t, latestWorkflowPath)
-	testLatestPromotionReleaseRefGuard(t, repo, latest)
-	workflowBlob := gitBlobID(latest)
-	recoverablePromotion := workflowBlob == "e86147c7409dea57fda2664a1b60f90bdd39dcca" || workflowBlob == "a187d7e57bd4f7ff68534dc96872cdce1a53b43a"
+	workflowBlob := testLatestPromotionReleaseRefGuard(t, repo, latest)
+	recoverablePromotion := workflowBlob == "a187d7e57bd4f7ff68534dc96872cdce1a53b43a" || workflowBlob == "343fcf05adac5868e1da789a94572662ee96c895"
 	for _, required := range []string{
 		"name: Promote Latest Release Images", "workflow_run:\n    workflows: [\"Release\", \"Docker Publish\"]\n    types: [completed]",
 		"if: github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && ((github.event.workflow_run.name == 'Release' && github.event.workflow_run.event == 'push') || (github.event.workflow_run.name == 'Docker Publish' && github.event.workflow_run.event == 'workflow_run')))",
@@ -1028,7 +1044,7 @@ func testLatestPromotionPersistence(t *testing.T, latest string) {
 	t.Helper()
 
 	workflowBlob := gitBlobID(latest)
-	recoverablePromotion := workflowBlob == "e86147c7409dea57fda2664a1b60f90bdd39dcca" || workflowBlob == "a187d7e57bd4f7ff68534dc96872cdce1a53b43a"
+	recoverablePromotion := workflowBlob == "a187d7e57bd4f7ff68534dc96872cdce1a53b43a" || workflowBlob == "343fcf05adac5868e1da789a94572662ee96c895"
 	persistenceSteps := []string{
 		"$updatedLatest = [System.Collections.Generic.List[object]]::new()",
 		"$updatedLatest.Add($observed)",
@@ -1065,16 +1081,16 @@ func testLatestPromotionPersistence(t *testing.T, latest string) {
 	receiptFailureIndex := strings.Index(latest[latestCatchIndex:], "$receiptFailures.Add([ordered]@{ phase = 'writing_latest'") + latestCatchIndex
 	promotionFailureIndex := strings.Index(latest[receiptFailureIndex:], "$promotion.intermediate_receipt_failures = $receiptFailures.ToArray()") + receiptFailureIndex
 	if !(receiptFailuresIndex >= 0 && receiptFailuresIndex < latestTryIndex && latestTryIndex < latestWriteIndex && latestWriteIndex < latestCatchIndex && latestCatchIndex < receiptFailureIndex && receiptFailureIndex < promotionFailureIndex) {
-		t.Fatal("authority-0047 successor must best-effort record an intermediate latest receipt failure after each successful promotion")
+		t.Fatal("authority-0047 predecessor must best-effort record an intermediate latest receipt failure after each successful promotion")
 	}
 }
 
-func testLatestPromotionReleaseRefGuard(t *testing.T, repo, workflow string) {
+func testLatestPromotionReleaseRefGuard(t *testing.T, repo, workflow string) string {
 	t.Helper()
 
 	const (
-		predecessorBlob = "e86147c7409dea57fda2664a1b60f90bdd39dcca"
-		successorBlob   = "a187d7e57bd4f7ff68534dc96872cdce1a53b43a"
+		predecessorBlob = "a187d7e57bd4f7ff68534dc96872cdce1a53b43a"
+		successorBlob   = "343fcf05adac5868e1da789a94572662ee96c895"
 		freshnessGuard  = "if ($env:GITHUB_EVENT_NAME -eq 'workflow_run' -and $commit -cne $triggeringWorkflowHeadSHA)"
 	)
 
@@ -1084,47 +1100,16 @@ func testLatestPromotionReleaseRefGuard(t *testing.T, repo, workflow string) {
 	}
 	loginIndex := strings.Index(workflow, "Login to GHCR only after immutable provenance inspection")
 	switch workflowBlob {
-	case successorBlob:
-		guardIndex := strings.Index(workflow, freshnessGuard)
-		if guardIndex < 0 || guardIndex >= loginIndex || strings.Count(workflow, freshnessGuard) != 1 {
-			t.Fatal("authority-0047 successor must reject stale workflow_run references exactly once before registry login")
-		}
 	case predecessorBlob:
-		var policy struct {
-			ActiveEpoch struct {
-				ID           string `json:"id"`
-				ExactChanges []struct {
-					Status string `json:"status"`
-					Path   string `json:"path"`
-				} `json:"exact_changes"`
-				ExpectedHeadBlobs []struct {
-					Path    string `json:"path"`
-					GitBlob string `json:"git_blob"`
-				} `json:"expected_head_blobs"`
-			} `json:"active_epoch"`
-		}
-
-		policyPath := filepath.Join(repo, ".github", "authority-policy.json")
-		if err := json.Unmarshal([]byte(readFile(t, policyPath)), &policy); err != nil {
-			t.Fatalf("parse transition authority policy: %v", err)
-		}
-		changeApproved := false
-		for _, change := range policy.ActiveEpoch.ExactChanges {
-			changeApproved = changeApproved || (change.Status == "M" && change.Path == ".github/workflows/promote-latest-release-images.yml")
-		}
-		successorApproved := false
-		for _, expected := range policy.ActiveEpoch.ExpectedHeadBlobs {
-			successorApproved = successorApproved || (expected.Path == ".github/workflows/promote-latest-release-images.yml" && expected.GitBlob == successorBlob)
-		}
-		if policy.ActiveEpoch.ID != "authority-0047" || !changeApproved || !successorApproved {
-			t.Fatal("current latest-promotion workflow is not covered by authority-0047's exact successor approval")
-		}
-		guardIndex := strings.Index(workflow, freshnessGuard)
-		if guardIndex < 0 || guardIndex >= loginIndex || strings.Count(workflow, freshnessGuard) != 1 {
-			t.Fatal("authority-0047 predecessor must reject stale workflow_run references exactly once before registry login")
-		}
+		testAuthority0048SuccessorApproval(t, repo)
+	case successorBlob:
+		testAuthority0048JournalWorkflow(t, workflow)
 	default:
-		t.Fatalf("latest-promotion workflow blob %s is neither authority-0047's approved predecessor nor successor", workflowBlob)
+		t.Fatalf("latest-promotion workflow blob %s is outside the authority-0048 predecessor/successor transition", workflowBlob)
+	}
+	guardIndex := strings.Index(workflow, freshnessGuard)
+	if guardIndex < 0 || guardIndex >= loginIndex || strings.Count(workflow, freshnessGuard) != 1 {
+		t.Fatal("latest promoter must reject stale workflow_run references exactly once before registry login")
 	}
 
 	for _, trigger := range []struct {
@@ -1142,9 +1127,91 @@ func testLatestPromotionReleaseRefGuard(t *testing.T, repo, workflow string) {
 			t.Errorf("freshness guard accepts %s = %t, want %t", trigger.name, got, trigger.allowed)
 		}
 	}
+	return workflowBlob
 }
 
-func testLatestPromotionStateMatrix(t *testing.T, repo string) {
+func testAuthority0048SuccessorApproval(t *testing.T, repo string) {
+	t.Helper()
+	const successorBlob = "343fcf05adac5868e1da789a94572662ee96c895"
+
+	var policy struct {
+		Transition struct {
+			ConsumedEpoch string `json:"consumed_epoch"`
+		} `json:"transition"`
+		ActiveEpoch struct {
+			ID           string `json:"id"`
+			ExactChanges []struct {
+				Status string `json:"status"`
+				Path   string `json:"path"`
+			} `json:"exact_changes"`
+			ExpectedHeadBlobs []struct {
+				Path    string `json:"path"`
+				GitBlob string `json:"git_blob"`
+			} `json:"expected_head_blobs"`
+		} `json:"active_epoch"`
+	}
+	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(repo, ".github", "authority-policy.json"))), &policy); err != nil {
+		t.Fatalf("parse authority-0048 transition policy: %v", err)
+	}
+	wantChanges := []struct{ status, path string }{
+		{"M", ".github/authority-policy.json"},
+		{"M", ".github/workflows/promote-latest-release-images.yml"},
+	}
+	if policy.Transition.ConsumedEpoch != "authority-0047" || policy.ActiveEpoch.ID != "authority-0048" || len(policy.ActiveEpoch.ExactChanges) != len(wantChanges) || len(policy.ActiveEpoch.ExpectedHeadBlobs) != 1 {
+		t.Fatal("authority-0048 policy must define only the approved authority-0047 to durable-journal transition")
+	}
+	for index, want := range wantChanges {
+		got := policy.ActiveEpoch.ExactChanges[index]
+		if got.Status != want.status || got.Path != want.path {
+			t.Fatalf("authority-0048 policy change %d = %s %s, want %s %s", index, got.Status, got.Path, want.status, want.path)
+		}
+	}
+	approved := policy.ActiveEpoch.ExpectedHeadBlobs[0]
+	if approved.Path != ".github/workflows/promote-latest-release-images.yml" || approved.GitBlob != successorBlob {
+		t.Fatalf("authority-0048 policy approves %s=%s, want the exact durable-journal successor", approved.Path, approved.GitBlob)
+	}
+}
+
+func testAuthority0048JournalWorkflow(t *testing.T, workflow string) {
+	t.Helper()
+	const successorBlob = "343fcf05adac5868e1da789a94572662ee96c895"
+	if got := gitBlobID(workflow); got != successorBlob {
+		t.Fatalf("authority-0048 durable-journal workflow has raw blob %s, want %s", got, successorBlob)
+	}
+	if got := strings.Count(workflow, "checks: write"); got != 1 || !strings.Contains(workflow, "      checks: write\n      packages: write") {
+		t.Fatalf("durable journal requires its sole checks:write grant beside the package writer, got %d", got)
+	}
+	prewriteIndex := strings.Index(workflow, "Final revalidate official GitHub Release before registry login")
+	journalIndex := strings.Index(workflow, "Create durable latest-promotion journal")
+	loginIndex := strings.Index(workflow, "Login to GHCR only after immutable provenance inspection")
+	promoteIndex := strings.Index(workflow, "Promote each official release image to latest as a recoverable set")
+	pendingIndex := strings.Index(workflow, "Update-PromotionJournal -Phase 'writing_latest' -Outcome 'mutation_pending'")
+	mutationIndex := strings.Index(workflow, "docker buildx imagetools create --prefer-index=false --tag $target $image.immutable_reference")
+	updatedIndex := strings.Index(workflow, "Update-PromotionJournal -Phase 'writing_latest' -Outcome 'updated'")
+	if !(prewriteIndex >= 0 && prewriteIndex < journalIndex && journalIndex < loginIndex && loginIndex < promoteIndex && promoteIndex < pendingIndex && pendingIndex < mutationIndex && mutationIndex < updatedIndex) {
+		t.Fatalf("durable journal must persist pre-mutation and post-readback states in order: prewrite=%d journal=%d login=%d promote=%d pending=%d mutation=%d updated=%d", prewriteIndex, journalIndex, loginIndex, promoteIndex, pendingIndex, mutationIndex, updatedIndex)
+	}
+	if got := strings.Count(workflow, "gh api --method POST"); got != 1 {
+		t.Fatalf("durable journal must create exactly one check run, got %d POSTs", got)
+	}
+	if got := strings.Count(workflow, "gh api --method PATCH"); got != 1 {
+		t.Fatalf("durable journal must centralize check-run updates in exactly one PATCH seam, got %d", got)
+	}
+	for _, required := range []string{
+		"name = 'latest-promotion-journal'", "head_sha = [string]$release.source_commit", "status = 'in_progress'",
+		"external_id = $externalID", "details_url = $detailsURL", "LATEST_PROMOTION_JOURNAL_ID=$journalID",
+		"function Get-JournalSummary", "function Assert-JournalResponse", "function Update-PromotionJournal",
+		"[string]$Response.id -cne $journalID", "[string]$Response.output.summary -cne $ExpectedSummary",
+		"previous_identity", "intended_identity", "updated_summary", "final_summary",
+		"rollback_pending", "rollback_failed", "bootstrap_required_no_write", "-BestEffort",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("durable latest-promotion journal lacks %q", required)
+		}
+	}
+}
+
+func testAuthority0047RecoveryMatrix(t *testing.T, repo string) {
 	t.Helper()
 	workflowPath := filepath.Join(repo, "tests", "critical", "runtime", "testdata", "authority-0047-promote-latest-release-images.yml")
 	workflow, err := os.ReadFile(workflowPath)
@@ -1152,7 +1219,7 @@ func testLatestPromotionStateMatrix(t *testing.T, repo string) {
 		t.Fatal(err)
 	}
 	if got, want := gitBlobID(string(workflow)), "a187d7e57bd4f7ff68534dc96872cdce1a53b43a"; got != want {
-		t.Fatalf("authority-0047 successor fixture has raw blob %s, want %s", got, want)
+		t.Fatalf("authority-0047 predecessor fixture has raw blob %s, want %s", got, want)
 	}
 	testLatestPromotionReleaseRefGuard(t, repo, string(workflow))
 	testLatestPromotionPersistence(t, string(workflow))
@@ -1160,10 +1227,29 @@ func testLatestPromotionStateMatrix(t *testing.T, repo string) {
 	script := filepath.Join(repo, "tests", "critical", "runtime", "test-promote-latest-release-images-contract.ps1")
 	output, err := exec.Command("pwsh", "-NoProfile", "-File", script, "-WorkflowPath", workflowPath).CombinedOutput()
 	if err != nil {
-		t.Fatalf("authority-0047 latest-promotion state matrix failed: %v\n%s", err, output)
+		t.Fatalf("authority-0047 predecessor recovery matrix failed: %v\n%s", err, output)
 	}
 	if !strings.Contains(string(output), "PASS: stale-abort receipt, success, readback rollback, create-failure rollback, post-write mismatch rollback, and rollback failure") {
-		t.Fatalf("authority-0047 latest-promotion state matrix did not report its complete result:\n%s", output)
+		t.Fatalf("authority-0047 predecessor recovery matrix did not report its complete result:\n%s", output)
+	}
+}
+
+func testAuthority0048JournalMatrix(t *testing.T, repo string) {
+	t.Helper()
+	workflowPath := filepath.Join(repo, "tests", "critical", "runtime", "testdata", "authority-0048-promote-latest-release-images-journal.yml")
+	workflow, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testAuthority0048JournalWorkflow(t, string(workflow))
+
+	script := filepath.Join(repo, "tests", "critical", "runtime", "test-authority-0048-promote-latest-release-images-journal-contract.ps1")
+	output, err := exec.Command("pwsh", "-NoProfile", "-File", script, "-WorkflowPath", workflowPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("authority-0048 durable-journal matrix failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "PASS: external journal create/PATCH ordering, process-loss pending state, no-write journal failures, success, rollback, bootstrap-required no-write, inspection rejection, local receipt failures, and rollback failure") {
+		t.Fatalf("authority-0048 durable-journal matrix did not report its complete result:\n%s", output)
 	}
 }
 
