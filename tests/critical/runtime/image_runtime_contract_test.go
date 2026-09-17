@@ -209,7 +209,7 @@ func TestServerImageContract(t *testing.T) {
 	t.Run("release ref freshness guard", func(t *testing.T) {
 		verifyDockerReleaseRefFreshnessGuard(t, repo)
 	})
-	t.Run("authority-0045 latest-promotion state matrix", func(t *testing.T) {
+	t.Run("authority-0047 latest-promotion state matrix", func(t *testing.T) {
 		testLatestPromotionStateMatrix(t, repo)
 	})
 	requireFileContains(t, filepath.Join(repo, "Dockerfile"),
@@ -872,7 +872,8 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 
 	latest := readFile(t, latestWorkflowPath)
 	testLatestPromotionReleaseRefGuard(t, repo, latest)
-	successor := gitBlobID(latest) == "e86147c7409dea57fda2664a1b60f90bdd39dcca"
+	workflowBlob := gitBlobID(latest)
+	recoverablePromotion := workflowBlob == "e86147c7409dea57fda2664a1b60f90bdd39dcca" || workflowBlob == "a187d7e57bd4f7ff68534dc96872cdce1a53b43a"
 	for _, required := range []string{
 		"name: Promote Latest Release Images", "workflow_run:\n    workflows: [\"Release\", \"Docker Publish\"]\n    types: [completed]",
 		"if: github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && ((github.event.workflow_run.name == 'Release' && github.event.workflow_run.event == 'push') || (github.event.workflow_run.name == 'Docker Publish' && github.event.workflow_run.event == 'workflow_run')))",
@@ -941,7 +942,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 		t.Fatalf("latest promoter must have exactly one registry login, got %d", got)
 	}
 	wantCreatePaths := 1
-	if successor {
+	if recoverablePromotion {
 		wantCreatePaths = 2
 	}
 	if got := len(regexp.MustCompile(`(?m)^\s*docker buildx imagetools create\b`).FindAllString(latest, -1)); got != wantCreatePaths {
@@ -953,17 +954,17 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	waitIndex := strings.Index(latest, "Wait for all public immutable release images before login")
 	loginIndex := strings.Index(latest, "Login to GHCR only after immutable provenance inspection")
 	promotionStep := "Promote each official release image to latest and read it back"
-	if successor {
+	if recoverablePromotion {
 		promotionStep = "Promote each official release image to latest as a recoverable set"
 	}
 	promoteIndex := strings.Index(latest, promotionStep)
-	if successor {
+	if recoverablePromotion {
 		prewriteIndex := strings.Index(latest, "Final revalidate official GitHub Release before registry login")
 		if !(waitIndex >= 0 && waitIndex < prewriteIndex && prewriteIndex < loginIndex && loginIndex < promoteIndex) {
-			t.Fatalf("authority-0045 successor must revalidate after immutable inspection and before login: wait=%d prewrite=%d login=%d promote=%d", waitIndex, prewriteIndex, loginIndex, promoteIndex)
+			t.Fatalf("authority-0047 transition workflow must revalidate after immutable inspection and before login: wait=%d prewrite=%d login=%d promote=%d", waitIndex, prewriteIndex, loginIndex, promoteIndex)
 		}
 	} else if !(waitIndex >= 0 && waitIndex < loginIndex && loginIndex < promoteIndex) {
-		t.Fatalf("authority-0045 predecessor must retain its immutable-inspection ordering: wait=%d login=%d promote=%d", waitIndex, loginIndex, promoteIndex)
+		t.Fatalf("authority-0047 predecessor must retain its immutable-inspection ordering: wait=%d login=%d promote=%d", waitIndex, loginIndex, promoteIndex)
 	}
 	publishJobsIndex := strings.Index(latest, `gh api --paginate --slurp "repos/$env:REPOSITORY_NAME/actions/runs/$triggeringWorkflowRunID/jobs?per_page=100"`)
 	if publishJobsIndex < 0 || publishJobsIndex >= loginIndex {
@@ -987,7 +988,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 		"            [ordered]@{ images = $latest } |\n" +
 		"              ConvertTo-Json -Depth 5 |\n" +
 		"              Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'latest.json') -Encoding utf8NoBOM"
-	if successor {
+	if recoverablePromotion {
 		promotionReceipt = "" +
 			"              $updatedLatest.Add($observed)\n" +
 			"              $promotion.updated_latest_images = $updatedLatest.ToArray()\n" +
@@ -995,10 +996,10 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 			"                ConvertTo-Json -Depth 5 |\n" +
 			"                Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'latest.json') -Encoding utf8NoBOM"
 	}
-	if (successor && !strings.Contains(latest, "$updatedLatest = [System.Collections.Generic.List[object]]::new()")) || (!successor && !strings.Contains(latest, "$latest = [System.Collections.Generic.List[object]]::new()")) || !strings.Contains(latest, promotionReceipt) {
+	if (recoverablePromotion && !strings.Contains(latest, "$updatedLatest = [System.Collections.Generic.List[object]]::new()")) || (!recoverablePromotion && !strings.Contains(latest, "$latest = [System.Collections.Generic.List[object]]::new()")) || !strings.Contains(latest, promotionReceipt) {
 		t.Fatal("latest promoter must persist every successful promotion for its always receipt")
 	}
-	if successor {
+	if recoverablePromotion {
 		for _, required := range []string{
 			"$previousLatest.Add($previous)", "$rollbackTargets.Add($previous)",
 			"docker buildx imagetools create --prefer-index=false --tag $previous.reference $previous.immutable_reference",
@@ -1009,7 +1010,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 			"rollback = if ($null -eq $promotion) { $null } else { $promotion.rollback }",
 		} {
 			if !strings.Contains(latest, required) {
-				t.Fatalf("authority-0045 successor lacks recoverable-promotion contract %q", required)
+				t.Fatalf("authority-0047 transition workflow lacks recoverable-promotion contract %q", required)
 			}
 		}
 	}
@@ -1042,8 +1043,8 @@ func testLatestPromotionReleaseRefGuard(t *testing.T, repo, workflow string) {
 	t.Helper()
 
 	const (
-		predecessorBlob = "7ff104e2f4897341c53c1c7e71fec278fc5210da"
-		successorBlob   = "e86147c7409dea57fda2664a1b60f90bdd39dcca"
+		predecessorBlob = "e86147c7409dea57fda2664a1b60f90bdd39dcca"
+		successorBlob   = "a187d7e57bd4f7ff68534dc96872cdce1a53b43a"
 		freshnessGuard  = "if ($env:GITHUB_EVENT_NAME -eq 'workflow_run' -and $commit -cne $triggeringWorkflowHeadSHA)"
 	)
 
@@ -1056,7 +1057,7 @@ func testLatestPromotionReleaseRefGuard(t *testing.T, repo, workflow string) {
 	case successorBlob:
 		guardIndex := strings.Index(workflow, freshnessGuard)
 		if guardIndex < 0 || guardIndex >= loginIndex || strings.Count(workflow, freshnessGuard) != 1 {
-			t.Fatal("authority-0045 successor must reject stale workflow_run references exactly once before registry login")
+			t.Fatal("authority-0047 successor must reject stale workflow_run references exactly once before registry login")
 		}
 	case predecessorBlob:
 		var policy struct {
@@ -1085,15 +1086,15 @@ func testLatestPromotionReleaseRefGuard(t *testing.T, repo, workflow string) {
 		for _, expected := range policy.ActiveEpoch.ExpectedHeadBlobs {
 			successorApproved = successorApproved || (expected.Path == ".github/workflows/promote-latest-release-images.yml" && expected.GitBlob == successorBlob)
 		}
-		if policy.ActiveEpoch.ID != "authority-0045" || !changeApproved || !successorApproved {
-			t.Fatal("current latest-promotion workflow is not covered by authority-0045's exact successor approval")
+		if policy.ActiveEpoch.ID != "authority-0047" || !changeApproved || !successorApproved {
+			t.Fatal("current latest-promotion workflow is not covered by authority-0047's exact successor approval")
 		}
 		guardIndex := strings.Index(workflow, freshnessGuard)
 		if guardIndex < 0 || guardIndex >= loginIndex || strings.Count(workflow, freshnessGuard) != 1 {
-			t.Fatal("authority-0045 predecessor must reject stale workflow_run references exactly once before registry login")
+			t.Fatal("authority-0047 predecessor must reject stale workflow_run references exactly once before registry login")
 		}
 	default:
-		t.Fatalf("latest-promotion workflow blob %s is neither authority-0045's approved predecessor nor successor", workflowBlob)
+		t.Fatalf("latest-promotion workflow blob %s is neither authority-0047's approved predecessor nor successor", workflowBlob)
 	}
 
 	for _, trigger := range []struct {
@@ -1121,17 +1122,17 @@ func testLatestPromotionStateMatrix(t *testing.T, repo string) {
 		t.Fatal(err)
 	}
 	if got, want := gitBlobID(string(workflow)), "e86147c7409dea57fda2664a1b60f90bdd39dcca"; got != want {
-		t.Fatalf("authority-0045 successor fixture has raw blob %s, want %s", got, want)
+		t.Fatalf("authority-0047 predecessor fixture has raw blob %s, want %s", got, want)
 	}
 	testLatestPromotionReleaseRefGuard(t, repo, string(workflow))
 
 	script := filepath.Join(repo, "tests", "critical", "runtime", "test-promote-latest-release-images-contract.ps1")
 	output, err := exec.Command("pwsh", "-NoProfile", "-File", script, "-WorkflowPath", workflowPath).CombinedOutput()
 	if err != nil {
-		t.Fatalf("authority-0045 latest-promotion state matrix failed: %v\n%s", err, output)
+		t.Fatalf("authority-0047 latest-promotion state matrix failed: %v\n%s", err, output)
 	}
 	if !strings.Contains(string(output), "PASS: stale-abort receipt, success, readback rollback, create-failure rollback, post-write mismatch rollback, and rollback failure") {
-		t.Fatalf("authority-0045 latest-promotion state matrix did not report its complete result:\n%s", output)
+		t.Fatalf("authority-0047 latest-promotion state matrix did not report its complete result:\n%s", output)
 	}
 }
 
