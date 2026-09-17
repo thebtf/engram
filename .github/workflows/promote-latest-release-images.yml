@@ -178,6 +178,52 @@ jobs:
             ConvertTo-Json -Depth 5 |
             Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'sources.json') -Encoding utf8NoBOM
 
+      - name: Final revalidate official GitHub Release before registry login
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $release = Get-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'release.json') -Raw | ConvertFrom-Json
+          $prewrite = [ordered]@{
+            status = 'started'
+            expected_release_tag = [string]$release.release_tag
+            expected_source_commit = [string]$release.source_commit
+            observed_release_tag = $null
+            observed_source_commit = $null
+            failure = $null
+          }
+          function Write-PrewriteRevalidation {
+            $prewrite |
+              ConvertTo-Json -Depth 4 |
+              Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'prewrite-release-revalidation.json') -Encoding utf8NoBOM
+          }
+          Write-PrewriteRevalidation
+          try {
+            $tag = ([string](gh api "repos/$env:REPOSITORY_NAME/releases/latest" --jq .tag_name)).Trim()
+            if ($LASTEXITCODE -ne 0) { throw 'could not re-read the latest GitHub Release tag before registry login' }
+            $commit = ([string](gh api "repos/$env:REPOSITORY_NAME/commits/$tag" --jq .sha)).Trim()
+            if ($LASTEXITCODE -ne 0) { throw "could not resolve the latest GitHub Release commit before registry login: $tag" }
+            $prewrite.observed_release_tag = $tag
+            $prewrite.observed_source_commit = $commit
+            if ($tag -cne $release.release_tag -or $commit -cne $release.source_commit) {
+              $prewrite.status = 'mismatch'
+              $prewrite.failure = "latest GitHub Release changed before registry login: expected=$($release.release_tag)@$($release.source_commit) observed=$tag@$commit"
+              Write-PrewriteRevalidation
+              throw $prewrite.failure
+            }
+            $prewrite.status = 'passed'
+            Write-PrewriteRevalidation
+          } catch {
+            if ($prewrite.status -eq 'started') {
+              $prewrite.status = 'error'
+              $prewrite.failure = $_.Exception.Message
+              Write-PrewriteRevalidation
+            }
+            throw
+          }
+
       - name: Login to GHCR only after immutable provenance inspection
         shell: pwsh
         env:
@@ -187,11 +233,14 @@ jobs:
           $env:GITHUB_TOKEN | docker login ghcr.io --username $env:GITHUB_ACTOR --password-stdin
           if ($LASTEXITCODE -ne 0) { throw 'GHCR login failed' }
 
-      - name: Promote each official release image to latest and read it back
+      - name: Promote each official release image to latest as a recoverable set
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
+          $release = Get-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'release.json') -Raw | ConvertFrom-Json
           $source = Get-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'sources.json') -Raw | ConvertFrom-Json
 
           function Get-Label {
@@ -204,33 +253,195 @@ jobs:
           function Get-ImageIdentity {
             param([Parameter(Mandatory)][string]$Reference)
             $manifest = docker buildx imagetools inspect $Reference --format '{{json .Manifest}}' | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "could not inspect manifest for $Reference" }
             $raw = docker buildx imagetools inspect $Reference --raw | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "could not inspect raw manifest for $Reference" }
             $image = docker buildx imagetools inspect $Reference --format '{{json .Image}}' | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "could not inspect image configuration for $Reference" }
+            $repository = $Reference.Substring(0, $Reference.LastIndexOf(':'))
+            $manifestDigest = [string]$manifest.digest
+            $configDigest = [string]$raw.config.digest
+            if ($manifestDigest -notmatch '^sha256:[0-9a-f]{64}$' -or $configDigest -notmatch '^sha256:[0-9a-f]{64}$') {
+              throw "image does not expose immutable manifest/config identities: $Reference"
+            }
             return [ordered]@{
               reference = $Reference
-              manifest_digest = [string]$manifest.digest
-              config_digest = [string]$raw.config.digest
+              repository = $repository
+              immutable_reference = "$repository@$manifestDigest"
+              manifest_digest = $manifestDigest
+              config_digest = $configDigest
               source = Get-Label -Labels $image.config.Labels -Name 'org.opencontainers.image.source'
               version = Get-Label -Labels $image.config.Labels -Name 'org.opencontainers.image.version'
               revision = Get-Label -Labels $image.config.Labels -Name 'org.opencontainers.image.revision'
             }
           }
 
-          $latest = [System.Collections.Generic.List[object]]::new()
-          foreach ($image in @($source.images)) {
-            $target = "$($image.repository):latest"
-            docker buildx imagetools create --prefer-index=false --tag $target $image.immutable_reference
-            if ($LASTEXITCODE -ne 0) { throw "could not promote $($image.immutable_reference) to $target" }
-            $observed = Get-ImageIdentity -Reference $target
+          function Get-TagIdentity {
+            param([Parameter(Mandatory)][string]$Reference)
+            $manifest = docker buildx imagetools inspect $Reference --format '{{json .Manifest}}' | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "could not inspect manifest for $Reference" }
+            $manifestDigest = [string]$manifest.digest
+            if ($manifestDigest -notmatch '^sha256:[0-9a-f]{64}$') { throw "image does not expose an immutable manifest digest: $Reference" }
+            $repository = $Reference.Substring(0, $Reference.LastIndexOf(':'))
+            return [ordered]@{
+              reference = $Reference
+              repository = $repository
+              immutable_reference = "$repository@$manifestDigest"
+              manifest_digest = $manifestDigest
+            }
+          }
+
+          function Assert-ImageIdentity {
+            param(
+              [Parameter(Mandatory)]$Expected,
+              [Parameter(Mandatory)]$Observed,
+              [Parameter(Mandatory)][string]$Description
+            )
             foreach ($field in 'manifest_digest','config_digest','source','version','revision') {
-              if ([string]$observed.$field -cne [string]$image.$field) {
-                throw "latest readback differs from the official release for ${target}: $field"
+              if ([string]$Observed.$field -cne [string]$Expected.$field) {
+                throw "$Description differs from its expected immutable identity: $field"
               }
             }
-            $latest.Add($observed)
-            [ordered]@{ images = $latest } |
-              ConvertTo-Json -Depth 5 |
-              Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'latest.json') -Encoding utf8NoBOM
+          }
+
+          function Get-OfficialRelease {
+            $tag = ([string](gh api "repos/$env:REPOSITORY_NAME/releases/latest" --jq .tag_name)).Trim()
+            if ($LASTEXITCODE -ne 0) { throw 'could not re-read the latest GitHub Release tag after latest writes' }
+            $commit = ([string](gh api "repos/$env:REPOSITORY_NAME/commits/$tag" --jq .sha)).Trim()
+            if ($LASTEXITCODE -ne 0) { throw "could not resolve the latest GitHub Release commit after latest writes: $tag" }
+            return [ordered]@{ release_tag = $tag; source_commit = $commit }
+          }
+
+          $previousLatest = [System.Collections.Generic.List[object]]::new()
+          $updatedLatest = [System.Collections.Generic.List[object]]::new()
+          $rollbackTargets = [System.Collections.Generic.List[object]]::new()
+          $restoredLatest = [System.Collections.Generic.List[object]]::new()
+          $rollbackFailures = [System.Collections.Generic.List[object]]::new()
+          $previousByRepository = @{}
+          $promotion = [ordered]@{
+            phase = 'capturing_previous_latest'
+            outcome = 'pending'
+            failure = $null
+            previous_latest_images = @()
+            updated_latest_images = @()
+            post_write_release_revalidation = [ordered]@{
+              status = 'not_started'
+              expected_release_tag = [string]$release.release_tag
+              expected_source_commit = [string]$release.source_commit
+              observed_release_tag = $null
+              observed_source_commit = $null
+              failure = $null
+            }
+            rollback = [ordered]@{
+              attempted = $false
+              outcome = 'not_needed'
+              targets = @()
+              restored_images = @()
+              failures = @()
+            }
+          }
+          function Write-PromotionState {
+            $promotion |
+              ConvertTo-Json -Depth 8 |
+              Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'promotion.json') -Encoding utf8NoBOM
+          }
+          Write-PromotionState
+
+          try {
+            foreach ($image in @($source.images)) {
+              $target = "$($image.repository):latest"
+              $previous = Get-TagIdentity -Reference $target
+
+              $previousLatest.Add($previous)
+              $previousByRepository[[string]$image.repository] = $previous
+            }
+            $promotion.previous_latest_images = $previousLatest.ToArray()
+            $promotion.phase = 'writing_latest'
+            Write-PromotionState
+
+            foreach ($image in @($source.images)) {
+              $target = "$($image.repository):latest"
+              $previous = $previousByRepository[[string]$image.repository]
+              if ($null -eq $previous) { throw "missing captured latest identity for $target" }
+              $rollbackTargets.Add($previous)
+              $promotion.rollback.targets = $rollbackTargets.ToArray()
+              Write-PromotionState
+              docker buildx imagetools create --prefer-index=false --tag $target $image.immutable_reference
+              if ($LASTEXITCODE -ne 0) { throw "could not promote $($image.immutable_reference) to $target" }
+              $observed = Get-ImageIdentity -Reference $target
+              Assert-ImageIdentity -Expected $image -Observed $observed -Description "latest readback for $target"
+              $updatedLatest.Add($observed)
+              $promotion.updated_latest_images = $updatedLatest.ToArray()
+              [ordered]@{ images = $updatedLatest.ToArray() } |
+                ConvertTo-Json -Depth 5 |
+                Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'latest.json') -Encoding utf8NoBOM
+              Write-PromotionState
+            }
+
+            $promotion.phase = 'post_write_release_revalidation'
+            $promotion.post_write_release_revalidation.status = 'started'
+            Write-PromotionState
+            try {
+              $observedRelease = Get-OfficialRelease
+              $promotion.post_write_release_revalidation.observed_release_tag = $observedRelease.release_tag
+              $promotion.post_write_release_revalidation.observed_source_commit = $observedRelease.source_commit
+              if ($observedRelease.release_tag -cne $release.release_tag -or $observedRelease.source_commit -cne $release.source_commit) {
+                $promotion.post_write_release_revalidation.status = 'mismatch'
+                $promotion.post_write_release_revalidation.failure = "latest GitHub Release changed during latest promotion: expected=$($release.release_tag)@$($release.source_commit) observed=$($observedRelease.release_tag)@$($observedRelease.source_commit)"
+                Write-PromotionState
+                throw $promotion.post_write_release_revalidation.failure
+              }
+              $promotion.post_write_release_revalidation.status = 'passed'
+              Write-PromotionState
+            } catch {
+              if ($promotion.post_write_release_revalidation.status -eq 'started') {
+                $promotion.post_write_release_revalidation.status = 'error'
+                $promotion.post_write_release_revalidation.failure = $_.Exception.Message
+                Write-PromotionState
+              }
+              throw
+            }
+            $promotion.phase = 'completed'
+            $promotion.outcome = 'success'
+            Write-PromotionState
+          } catch {
+            $promotion.failure = $_.Exception.Message
+            if ($rollbackTargets.Count -eq 0) {
+              $promotion.phase = 'failed'
+              $promotion.outcome = 'failed_before_write'
+              Write-PromotionState
+              throw "latest promotion failed before updating a moving tag: $($promotion.failure)"
+            }
+
+            $promotion.phase = 'rolling_back'
+            $promotion.rollback.attempted = $true
+            Write-PromotionState
+            foreach ($previous in $rollbackTargets) {
+              try {
+                docker buildx imagetools create --prefer-index=false --tag $previous.reference $previous.immutable_reference
+                if ($LASTEXITCODE -ne 0) { throw "could not restore $($previous.reference)" }
+                $restored = Get-TagIdentity -Reference $previous.reference
+                if ($restored.manifest_digest -cne $previous.manifest_digest) {
+                  throw "rollback readback for $($previous.reference) does not restore the captured immutable digest"
+                }
+                $restoredLatest.Add($restored)
+              } catch {
+                $rollbackFailures.Add([ordered]@{ target = $previous.reference; failure = $_.Exception.Message })
+              }
+            }
+            $promotion.rollback.restored_images = $restoredLatest.ToArray()
+            $promotion.rollback.failures = $rollbackFailures.ToArray()
+            $promotion.phase = 'failed'
+            if ($rollbackFailures.Count -gt 0) {
+              $promotion.rollback.outcome = 'failed'
+              $promotion.outcome = 'rollback_failed'
+              Write-PromotionState
+              throw "latest promotion failed and rollback failed for $($rollbackFailures.Count) tag(s): $($promotion.failure)"
+            }
+            $promotion.rollback.outcome = 'succeeded'
+            $promotion.outcome = 'rolled_back'
+            Write-PromotionState
+            throw "latest promotion failed; rollback restored $($rollbackTargets.Count) tag(s): $($promotion.failure)"
           }
 
       - name: Logout and erase the isolated registry credential directory
@@ -257,24 +468,43 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Path $env:RECEIPT_DIR -Force | Out-Null
+          $prewritePath = Join-Path $env:RECEIPT_DIR 'prewrite-release-revalidation.json'
+          $promotionPath = Join-Path $env:RECEIPT_DIR 'promotion.json'
           $releasePath = Join-Path $env:RECEIPT_DIR 'release.json'
           $sourcesPath = Join-Path $env:RECEIPT_DIR 'sources.json'
           $latestPath = Join-Path $env:RECEIPT_DIR 'latest.json'
+          $prewrite = if (Test-Path -LiteralPath $prewritePath) { Get-Content -LiteralPath $prewritePath -Raw | ConvertFrom-Json } else { $null }
+          $promotion = if (Test-Path -LiteralPath $promotionPath) { Get-Content -LiteralPath $promotionPath -Raw | ConvertFrom-Json } else { $null }
           $release = if (Test-Path -LiteralPath $releasePath) { Get-Content -LiteralPath $releasePath -Raw | ConvertFrom-Json } else { $null }
           $sources = if (Test-Path -LiteralPath $sourcesPath) { Get-Content -LiteralPath $sourcesPath -Raw | ConvertFrom-Json } else { $null }
           $latest = if (Test-Path -LiteralPath $latestPath) { Get-Content -LiteralPath $latestPath -Raw | ConvertFrom-Json } else { $null }
+          $outcome = if ($null -ne $promotion) {
+            [string]$promotion.outcome
+          } elseif ($null -ne $prewrite -and $prewrite.status -eq 'mismatch') {
+            'no_write_stale_abort'
+          } elseif ($null -ne $prewrite -and $prewrite.status -eq 'error') {
+            'prewrite_revalidation_error'
+          } else {
+            'not_started'
+          }
           [ordered]@{
-            schema_version = 1
+            schema_version = 2
+            outcome = $outcome
             release_tag = if ($null -eq $release) { $null } else { $release.release_tag }
             source_commit = if ($null -eq $release) { $null } else { $release.source_commit }
             triggering_workflow_name = if ($null -eq $release) { $null } else { $release.triggering_workflow_name }
             triggering_workflow_head_sha = if ($null -eq $release) { $null } else { $release.triggering_workflow_head_sha }
             triggering_workflow_run_id = if ($null -eq $release) { $null } else { $release.triggering_workflow_run_id }
             triggering_workflow_job_conclusion = if ($null -eq $release) { $null } else { $release.triggering_workflow_job_conclusion }
+            final_prewrite_release_revalidation = $prewrite
             source_images = if ($null -eq $sources) { @() } else { @($sources.images) }
+            previous_latest_images = if ($null -eq $promotion) { @() } else { @($promotion.previous_latest_images) }
             latest_images = if ($null -eq $latest) { @() } else { @($latest.images) }
+            updated_latest_images = if ($null -eq $promotion) { @() } else { @($promotion.updated_latest_images) }
+            post_write_release_revalidation = if ($null -eq $promotion) { $null } else { $promotion.post_write_release_revalidation }
+            rollback = if ($null -eq $promotion) { $null } else { $promotion.rollback }
             rollout_claimed = $false
-          } | ConvertTo-Json -Depth 6 |
+          } | ConvertTo-Json -Depth 10 |
             Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'latest-promotion-receipt.json') -Encoding utf8NoBOM
 
       - name: Upload latest-promotion receipt
