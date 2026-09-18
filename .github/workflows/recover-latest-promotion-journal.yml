@@ -1,0 +1,131 @@
+name: Recover Latest Promotion Journal
+on:
+  workflow_run:
+    workflows: ["Promote Latest Release Images"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      original_run_id:
+        description: Original Promote Latest Release Images run ID
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: engram-latest-release-images
+  cancel-in-progress: false
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      checks: write
+      packages: write
+    env:
+      REPOSITORY_NAME: ${{ github.repository }}
+    steps:
+      - name: Check out trusted default-branch recovery code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Validate original promotion run identity
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_RUN_ID: ${{ inputs.original_run_id }}
+          EVENT_RUN_ID: ${{ github.event.workflow_run.id }}
+          EVENT_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          EVENT_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          EVENT_PATH: ${{ github.event.workflow_run.path }}
+          EVENT_NAME: ${{ github.event.workflow_run.name }}
+          EVENT_STATUS: ${{ github.event.workflow_run.status }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_run') {
+            $run = [pscustomobject]@{
+              id = $env:EVENT_RUN_ID
+              run_attempt = $env:EVENT_RUN_ATTEMPT
+              head_sha = $env:EVENT_HEAD_SHA
+              path = $env:EVENT_PATH
+              name = $env:EVENT_NAME
+              status = $env:EVENT_STATUS
+              repository = [pscustomobject]@{ full_name = $env:REPOSITORY_NAME }
+            }
+          } elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+            $requested = ([string]$env:DISPATCH_RUN_ID).Trim()
+            if ($requested -notmatch '^[1-9][0-9]*$') { throw 'workflow_dispatch requires a valid original promotion run ID' }
+            $run = gh api -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2026-03-10' "repos/$env:REPOSITORY_NAME/actions/runs/$requested" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw 'could not read the original promotion workflow run' }
+          } else {
+            throw "unsupported recovery event: $env:GITHUB_EVENT_NAME"
+          }
+          if ([string]$run.id -notmatch '^[1-9][0-9]*$' -or [string]$run.run_attempt -notmatch '^[1-9][0-9]*$' -or [string]$run.head_sha -notmatch '^[0-9a-f]{40}$') {
+            throw 'original promotion workflow run lacks a valid ID, attempt, or head SHA'
+          }
+          if ([string]$run.name -cne 'Promote Latest Release Images' -or [string]$run.path -cne '.github/workflows/promote-latest-release-images.yml' -or [string]$run.status -cne 'completed' -or [string]$run.repository.full_name -cne $env:REPOSITORY_NAME) {
+            throw 'original run is not the completed owned promotion workflow'
+          }
+          "ORIGINAL_RUN_ID=$($run.id)" | Add-Content -LiteralPath $env:GITHUB_ENV
+          "ORIGINAL_RUN_ATTEMPT=$($run.run_attempt)" | Add-Content -LiteralPath $env:GITHUB_ENV
+          "ORIGINAL_HEAD_SHA=$($run.head_sha)" | Add-Content -LiteralPath $env:GITHUB_ENV
+
+      - name: Discover owned promotion journal
+        id: journal
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $journalID = (& ./scripts/production-gates/latest-promotion-journal.ps1 `
+            -Mode Discover `
+            -RepositoryName $env:REPOSITORY_NAME `
+            -RunId $env:ORIGINAL_RUN_ID `
+            -RunAttempt $env:ORIGINAL_RUN_ATTEMPT `
+            -HeadSha $env:ORIGINAL_HEAD_SHA `
+            -AllowMissingJournal | Select-Object -Last 1)
+          $journalID = ([string]$journalID).Trim()
+          if (-not [string]::IsNullOrEmpty($journalID) -and $journalID -notmatch '^[1-9][0-9]*$') { throw 'journal discovery returned an invalid ID' }
+          "journal_id=$journalID" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
+
+      - name: Login to GHCR for owned rollback only
+        if: steps.journal.outputs.journal_id != ''
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dockerConfig = Join-Path $env:RUNNER_TEMP "engram-latest-recovery-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $env:DOCKER_CONFIG = $dockerConfig
+          "DOCKER_CONFIG=$dockerConfig" | Add-Content -LiteralPath $env:GITHUB_ENV
+          $env:GITHUB_TOKEN | docker login ghcr.io --username $env:GITHUB_ACTOR --password-stdin
+          if ($LASTEXITCODE -ne 0) { throw 'GHCR recovery login failed' }
+
+      - name: Independently reconcile promotion journal
+        if: always() && steps.journal.outputs.journal_id != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & ./scripts/production-gates/latest-promotion-journal.ps1 `
+            -Mode Reconcile `
+            -RepositoryName $env:REPOSITORY_NAME `
+            -RunId $env:ORIGINAL_RUN_ID `
+            -RunAttempt $env:ORIGINAL_RUN_ATTEMPT `
+            -HeadSha $env:ORIGINAL_HEAD_SHA
+
+      - name: Logout and erase recovery credentials
+        if: always() && steps.journal.outputs.journal_id != ''
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $hadCredentialDirectory = Test-Path -LiteralPath $env:DOCKER_CONFIG
+          docker logout ghcr.io
+          $logoutExit = $LASTEXITCODE
+          if ($hadCredentialDirectory) { Remove-Item -Force -Recurse -LiteralPath $env:DOCKER_CONFIG }
+          if (Test-Path -LiteralPath $env:DOCKER_CONFIG) { throw 'Docker recovery credential directory still exists after erasure' }
+          if ($logoutExit -ne 0 -and $hadCredentialDirectory) { throw 'GHCR recovery logout failed' }
