@@ -853,9 +853,12 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	t.Helper()
 	releaseWorkflowPath := filepath.Clean(filepath.Join(repo, ".github", "workflows", "docker-publish.yml"))
 	latestWorkflowPath := filepath.Clean(filepath.Join(repo, ".github", "workflows", "promote-latest-release-images.yml"))
+	recoveryWorkflowPath := filepath.Clean(filepath.Join(repo, ".github", "workflows", "recover-latest-promotion-journal.yml"))
+	latestScriptPath := filepath.Clean(filepath.Join(repo, "scripts", "production-gates", "latest-promotion-journal.ps1"))
 	allowedScript := filepath.Clean(filepath.Join(repo, "scripts", "production-gates", "build-and-scan-images.ps1"))
-	allowedWriters := map[string]bool{releaseWorkflowPath: true, latestWorkflowPath: true}
-	writePattern := regexp.MustCompile(`(?i)packages:\s*write|docker/login-action|docker\s+(?:login|push|buildx[^\n]*--push)|\bdocker\s+push\b|\b(?:oras\s+(?:login|copy|push)|skopeo\s+(?:login|copy)|crane\s+(?:auth\s+login|copy|push))\b|(?:GHCR_TOKEN|CR_PAT)\s*:\s*(?:\$\{\{|\$env:|[^"'\s])|PERSONAL_ACCESS_TOKEN`)
+	allowedWriters := map[string]bool{releaseWorkflowPath: true, latestWorkflowPath: true, recoveryWorkflowPath: true, latestScriptPath: true}
+	allowedCheckWriters := map[string]bool{latestWorkflowPath: true, recoveryWorkflowPath: true, latestScriptPath: true}
+	writePattern := regexp.MustCompile(`(?i)packages:\s*write|docker/login-action|docker\s+(?:login|push|buildx[^\n]*(?:--push|imagetools\s+create))|\bdocker\s+push\b|\b(?:oras\s+(?:login|copy|push)|skopeo\s+(?:login|copy)|crane\s+(?:auth\s+login|copy|push))\b|(?:GHCR_TOKEN|CR_PAT)\s*:\s*(?:\$\{\{|\$env:|[^"'\s])|PERSONAL_ACCESS_TOKEN`)
 	checkWriterPattern := regexp.MustCompile(`(?i)checks:\s*write|/check-runs(?:/|\b)`)
 
 	for _, root := range []string{filepath.Join(repo, ".github", "workflows"), filepath.Join(repo, "scripts")} {
@@ -877,7 +880,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 			if writePattern.Match(content) && !allowedWriters[filepath.Clean(path)] && filepath.Clean(path) != allowedScript {
 				t.Errorf("executable surface %s contains an undeclared registry write credential or command", path)
 			}
-			if checkWriterPattern.Match(content) && filepath.Clean(path) != latestWorkflowPath {
+			if checkWriterPattern.Match(content) && !allowedCheckWriters[filepath.Clean(path)] {
 				t.Errorf("executable surface %s contains an undeclared check-run writer", path)
 			}
 			return nil
@@ -989,6 +992,11 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	latest := readFile(t, latestWorkflowPath)
 	workflowBlob := testLatestPromotionReleaseRefGuard(t, repo, latest)
 	recoverablePromotion := workflowBlob == "a187d7e57bd4f7ff68534dc96872cdce1a53b43a" || workflowBlob == "343fcf05adac5868e1da789a94572662ee96c895" || workflowBlob == "78a17bfcce5bd8c4031b0c0b85170116f887994c" || workflowBlob == "8b50751feeaa0f3ebe052a2d76ceed93198069df"
+	scriptedPromotion := workflowBlob == "3de38f1f48c8eb9cc63d0a0ce811325cc57e7dfd"
+	latestScript := ""
+	if scriptedPromotion {
+		latestScript = readFile(t, latestScriptPath)
+	}
 	for _, required := range []string{
 		"name: Promote Latest Release Images", "workflow_run:\n    workflows: [\"Release\", \"Docker Publish\"]\n    types: [completed]",
 		"if: github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && ((github.event.workflow_run.name == 'Release' && github.event.workflow_run.event == 'push') || (github.event.workflow_run.name == 'Docker Publish' && github.event.workflow_run.event == 'workflow_run')))",
@@ -997,10 +1005,10 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 		"TRIGGERING_WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}", `gh api --paginate --slurp "repos/$env:REPOSITORY_NAME/actions/runs/$triggeringWorkflowRunID/jobs?per_page=100"`, "Where-Object { $_.name -ceq 'publish-images' }", "if ($publishJobs.Count -ne 1)", "status -cne 'completed'", "conclusion -cne 'success'",
 		"$maxAttempts = 6", "for ($attempt = 1; $attempt -le $maxAttempts; $attempt++)", "Start-Sleep -Seconds $retrySeconds",
 		"ghcr.io/thebtf/engram", "ghcr.io/thebtf/engram-operator-console", "ghcr.io/thebtf/engram-postgres",
-		"org.opencontainers.image.source", "org.opencontainers.image.version", "org.opencontainers.image.revision", "docker login ghcr.io", "docker buildx imagetools create --prefer-index=false",
+		"org.opencontainers.image.source", "org.opencontainers.image.version", "org.opencontainers.image.revision", "docker login ghcr.io",
 		"$commitReference = \"$repository`:sha-$($release.source_commit)\"", "foreach ($field in 'manifest_digest', 'config_digest')", "release image references disagree",
-		"immutable_reference = \"$repository@$manifestDigest\"", "commit_reference = $commitIdentity.reference", "docker buildx imagetools create --prefer-index=false --tag $target $image.immutable_reference",
-		"$target = \"$($image.repository):latest\"", "'manifest_digest','config_digest','source','version','revision'", "docker logout ghcr.io", "latest-promotion-receipt.json", "source_commit", "triggering_workflow_name", "triggering_workflow_head_sha", "triggering_workflow_run_id", "triggering_workflow_job_conclusion", "rollout_claimed = $false",
+		"immutable_reference = \"$repository@$manifestDigest\"", "commit_reference = $commitIdentity.reference",
+		"docker logout ghcr.io", "latest-promotion-receipt.json", "source_commit", "triggering_workflow_name", "triggering_workflow_head_sha", "triggering_workflow_run_id", "triggering_workflow_job_conclusion", "rollout_claimed = $false",
 	} {
 		if !strings.Contains(latest, required) {
 			t.Fatalf("latest-only promoter lacks contract %q", required)
@@ -1056,24 +1064,38 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	if got := strings.Count(latest, "docker login ghcr.io"); got != 1 {
 		t.Fatalf("latest promoter must have exactly one registry login, got %d", got)
 	}
-	wantCreatePaths := 1
-	if recoverablePromotion {
-		wantCreatePaths = 2
-	}
-	if got := len(regexp.MustCompile(`(?m)^\s*docker buildx imagetools create\b`).FindAllString(latest, -1)); got != wantCreatePaths {
-		t.Fatalf("latest promoter must have %d registry-native promotion path(s), got %d", wantCreatePaths, got)
-	}
-	if got := strings.Count(latest, "docker buildx imagetools create --prefer-index=false --tag $target $image.immutable_reference"); got != 1 {
-		t.Fatalf("latest promoter must use exactly one canonical registry-native promotion seam, got %d", got)
+	if scriptedPromotion {
+		if got := len(regexp.MustCompile(`(?m)^\s*docker buildx imagetools create\b`).FindAllString(latestScript, -1)); got != 2 {
+			t.Fatalf("latest-promotion journal script must have exactly two registry-native promotion/rollback paths, got %d", got)
+		}
+		for seam, want := range map[string]int{
+			"docker buildx imagetools create --prefer-index=false --tag ([string]$target.reference) ([string]$target.intended.immutable_reference)": 1,
+			"docker buildx imagetools create --prefer-index=false --tag ([string]$target.reference) ([string]$target.previous.immutable_reference)": 1,
+		} {
+			if got := strings.Count(latestScript, seam); got != want {
+				t.Fatalf("latest-promotion journal script must contain exactly %d %q seam, got %d", want, seam, got)
+			}
+		}
+	} else {
+		wantCreatePaths := 1
+		if recoverablePromotion {
+			wantCreatePaths = 2
+		}
+		if got := len(regexp.MustCompile(`(?m)^\s*docker buildx imagetools create\b`).FindAllString(latest, -1)); got != wantCreatePaths {
+			t.Fatalf("latest promoter must have %d registry-native promotion path(s), got %d", wantCreatePaths, got)
+		}
+		if got := strings.Count(latest, "docker buildx imagetools create --prefer-index=false --tag $target $image.immutable_reference"); got != 1 {
+			t.Fatalf("latest promoter must use exactly one canonical registry-native promotion seam, got %d", got)
+		}
 	}
 	waitIndex := strings.Index(latest, "Wait for all public immutable release images before login")
 	loginIndex := strings.Index(latest, "Login to GHCR only after immutable provenance inspection")
 	promotionStep := "Promote each official release image to latest and read it back"
-	if recoverablePromotion {
+	if recoverablePromotion || scriptedPromotion {
 		promotionStep = "Promote each official release image to latest as a recoverable set"
 	}
 	promoteIndex := strings.Index(latest, promotionStep)
-	if recoverablePromotion {
+	if recoverablePromotion || scriptedPromotion {
 		prewriteIndex := strings.Index(latest, "Final revalidate official GitHub Release before registry login")
 		if !(waitIndex >= 0 && waitIndex < prewriteIndex && prewriteIndex < loginIndex && loginIndex < promoteIndex) {
 			t.Fatalf("authority-0047 transition workflow must revalidate after immutable inspection and before login: wait=%d prewrite=%d login=%d promote=%d", waitIndex, prewriteIndex, loginIndex, promoteIndex)
@@ -1098,19 +1120,36 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 			t.Fatalf("latest promoter must validate Docker Publish through latest-release v/sha OCI equality before registry login: %q", required)
 		}
 	}
-	testLatestPromotionPersistence(t, latest)
-	if recoverablePromotion {
+	if scriptedPromotion {
 		for _, required := range []string{
-			"$previousLatest.Add($previous)", "$rollbackTargets.Add($previous)",
-			"docker buildx imagetools create --prefer-index=false --tag $previous.reference $previous.immutable_reference",
-			"post_write_release_revalidation", "outcome = 'rollback_failed'",
-			"final_prewrite_release_revalidation = $prewrite",
-			"previous_latest_images = if ($null -eq $promotion) { @() } else { @($promotion.previous_latest_images) }",
-			"updated_latest_images = if ($null -eq $promotion) { @() } else { @($promotion.updated_latest_images) }",
-			"rollback = if ($null -eq $promotion) { $null } else { $promotion.rollback }",
+			"reference = \"$Repository`:latest\"", "$target.state = 'mutation_pending'", "Invoke-JournalPatch -JournalId $journalId -Snapshot $snapshot | Out-Null",
+			"$target.observed = Get-TagIdentity -Reference ([string]$target.reference)", "[string]$target.observed.manifest_digest -cne [string]$target.intended.manifest_digest", "$target.state = 'updated'",
+			"$snapshot.phase = 'post_write_release_revalidation'", "$snapshot.outcome = 'rollback_failed'",
 		} {
+			if !strings.Contains(latestScript, required) {
+				t.Fatalf("latest-promotion journal script lacks recoverable-promotion contract %q", required)
+			}
+		}
+		for _, required := range []string{"Check out trusted production-gate implementation", "actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8", "ref: ${{ github.event.repository.default_branch }}", "persist-credentials: false", "latest-promotion-journal.ps1", "-Mode EnsureJournal", "-Mode Promote", "-Mode Reconcile", "final_prewrite_release_revalidation = $prewrite", "previous_latest_images =", "updated_latest_images =", "rollback ="} {
 			if !strings.Contains(latest, required) {
-				t.Fatalf("authority-0047 transition workflow lacks recoverable-promotion contract %q", required)
+				t.Fatalf("latest promoter lacks workflow-to-journal contract %q", required)
+			}
+		}
+	} else {
+		testLatestPromotionPersistence(t, latest)
+		if recoverablePromotion {
+			for _, required := range []string{
+				"$previousLatest.Add($previous)", "$rollbackTargets.Add($previous)",
+				"docker buildx imagetools create --prefer-index=false --tag $previous.reference $previous.immutable_reference",
+				"post_write_release_revalidation", "outcome = 'rollback_failed'",
+				"final_prewrite_release_revalidation = $prewrite",
+				"previous_latest_images = if ($null -eq $promotion) { @() } else { @($promotion.previous_latest_images) }",
+				"updated_latest_images = if ($null -eq $promotion) { @() } else { @($promotion.updated_latest_images) }",
+				"rollback = if ($null -eq $promotion) { $null } else { $promotion.rollback }",
+			} {
+				if !strings.Contains(latest, required) {
+					t.Fatalf("authority-0047 transition workflow lacks recoverable-promotion contract %q", required)
+				}
 			}
 		}
 	}
@@ -1130,9 +1169,13 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 		!strings.Contains(latest, "} elseif ($env:GITHUB_EVENT_NAME -cne 'repository_dispatch') {") {
 		t.Fatal("latest promoter must bind and require the triggering workflow head")
 	}
-	for _, forbidden := range []string{
-		"release:\n", "github.event.release", "actions/checkout@", "docker/login-action@", "docker build ", "docker buildx build", "docker buildx bake", "docker push", "docker manifest create", "docker manifest push", "oras login", "oras copy", "oras push", "skopeo login", "skopeo copy", "crane auth login", "crane copy", "crane push", "GHCR_TOKEN", "CR_PAT", ":main", "ssh", "production",
-	} {
+	forbidden := []string{
+		"release:\n", "github.event.release", "docker/login-action@", "docker build ", "docker buildx build", "docker buildx bake", "docker push", "docker manifest create", "docker manifest push", "oras login", "oras copy", "oras push", "skopeo login", "skopeo copy", "crane auth login", "crane copy", "crane push", "GHCR_TOKEN", "CR_PAT", ":main", "ssh",
+	}
+	if !scriptedPromotion {
+		forbidden = append(forbidden, "actions/checkout@", "production")
+	}
+	for _, forbidden := range forbidden {
 		if strings.Contains(latest, forbidden) {
 			t.Fatalf("latest promoter exposes a forbidden trigger, mutable source, build, or production surface %q", forbidden)
 		}
