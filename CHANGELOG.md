@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.50.0] - 2026-09-18
+
+### Fixed
+
+- Made latest-image promotion interruption-safe with durable journal recovery and reconciliation against the official release and source identity.
+
 ## [6.49.3] - 2026-09-16
 
 ### Fixed
@@ -2032,7 +2038,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.49.3...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.0...HEAD
+[6.50.0]: https://github.com/thebtf/engram/compare/v6.49.3...v6.50.0
 [6.49.3]: https://github.com/thebtf/engram/compare/v6.49.2...v6.49.3
 [6.49.2]: https://github.com/thebtf/engram/compare/v6.49.1...v6.49.2
 [6.49.1]: https://github.com/thebtf/engram/compare/v6.49.0...v6.49.1
