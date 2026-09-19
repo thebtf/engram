@@ -2,20 +2,22 @@ name: Docker
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
   schedule:
-    # Daily UTC verification of current main plus the last published image set.
+    # Daily UTC rescan of the last published image set.
     - cron: "17 3 * * *"
+
+concurrency:
+  group: docker-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
   verify-images:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     permissions:
       contents: read
