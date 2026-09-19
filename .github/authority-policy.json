@@ -18,12 +18,12 @@
     "type": "User"
   },
   "transition": {
-    "consumed_epoch": "authority-0052",
-    "event_base_sha": "8212e782274dbf9fe23f20ce5cf598740b8e647b"
+    "consumed_epoch": "authority-0053",
+    "event_base_sha": "8481f5674ab6ef1535c81a7809564726b781d5ca"
   },
   "active_epoch": {
-    "id": "authority-0053",
-    "label": "authority-maintenance:authority-0053",
+    "id": "authority-0054",
+    "label": "authority-maintenance:authority-0054",
     "exact_changes": [
       {
         "status": "M",
@@ -31,13 +31,37 @@
       },
       {
         "status": "M",
-        "path": "scripts/production-gates/latest-promotion-journal.ps1"
+        "path": ".github/workflows/docker.yaml"
+      },
+      {
+        "status": "M",
+        "path": ".github/workflows/promote-latest-release-images.yml"
+      },
+      {
+        "status": "M",
+        "path": ".github/workflows/sync-marketplace.yml"
+      },
+      {
+        "status": "M",
+        "path": ".github/workflows/test.yml"
       }
     ],
     "expected_head_blobs": [
       {
-        "path": "scripts/production-gates/latest-promotion-journal.ps1",
-        "git_blob": "b2e3728ceab3920b4282136ce988d402143a0c8b"
+        "path": ".github/workflows/docker.yaml",
+        "git_blob": "ecbc28b601b50c3bf8b5e9c4e65491d35c4eef6d"
+      },
+      {
+        "path": ".github/workflows/promote-latest-release-images.yml",
+        "git_blob": "45d1439a9ea336ec6be0d7c969365d677ef18d71"
+      },
+      {
+        "path": ".github/workflows/sync-marketplace.yml",
+        "git_blob": "7615cbbf7cb01d487aac2004b4fe42a4617b70a1"
+      },
+      {
+        "path": ".github/workflows/test.yml",
+        "git_blob": "664a32193a7316f0d275215bd3b17033dfff7036"
       }
     ]
   }
