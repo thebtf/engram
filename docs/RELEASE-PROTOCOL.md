@@ -31,7 +31,7 @@
 | Docker image acceptance | `final-image-set.json` retained from the release workflow | manifest is missing, not `status: PASS`, does not cover `server`, `operator-console`, and `postgres`, or lacks exact IDs, zero HIGH/CRITICAL findings in the three canonical-image SARIF files, runtime proof, or cleanup PASS |
 | Released-image rescan | post-publication `ScanPublished` evidence: one summary JSON plus per-image SARIF/log for `server`, `operator-console`, and `postgres` | after publication, first run is not started within 24h, later evidence is older than 36h by `started_at`/`completed_at`, evidence is missing, HIGH/CRITICAL findings exist, or scanner/database/tag-resolution errors prevent complete evidence; blocks rollout/continued deployment, not initial digest publication |
 | Diff hygiene | `git diff --check` | whitespace/conflict marker errors |
-| SonarQube Quality Gate | Operator runs `node tools/quality/run-sonarqube.mjs` from the clean, frozen exact candidate; retain `.agent/e/sonarqube/<HEAD>.json`; no GitHub Actions workflow performs this gate | exact candidate coverage is incomplete, scanner/CE/QG is non-OK, or requested status publication fails |
+| SonarQube Quality Gate | Root agent runs `node tools/quality/run-sonarqube.mjs` locally from the clean, frozen exact candidate; retain `.agent/e/sonarqube/<HEAD>.json`; no GitHub Actions workflow performs this gate | exact candidate coverage is incomplete, scanner/CE/QG is non-OK, or requested status publication fails |
 
 ## CI Compute Boundaries
 
@@ -43,7 +43,7 @@ GitHub-hosted CI is reserved for the smallest lane that can prove the current st
 | Ordinary PR / `main` CI | One cancelable Ubuntu validation lane plus cheap authority checks; no Docker image build | A candidate must not receive duplicate push and PR execution. Superseded non-manual runs are cancelled. |
 | Frozen-candidate validation | Clean-DB coverage and Ubuntu/Windows/macOS validation | Explicit manual dispatch after bytes are frozen; run once per frozen candidate. Rerun unchanged bytes only after proven infrastructure recovery. |
 | Image and publication gates | Docker image acceptance for `v*` tags or explicit manual frozen-candidate acceptance; required release/publish gates | These are release-boundary work, never ordinary CI. Release/publication jobs are never cancelled mid-publication. |
-| SonarQube gate | Operator runs `node tools/quality/run-sonarqube.mjs` from the clean, frozen exact candidate and retains `.agent/e/sonarqube/<HEAD>.json`; no GitHub Actions workflow performs this gate | Mandatory before publication: Quality Gate must be `OK`. A Sonar outage holds release; repair or prove recovery before one same-candidate rerun, not repeated attempts. |
+| SonarQube gate | Root agent runs `node tools/quality/run-sonarqube.mjs` locally from the clean, frozen exact candidate and retains `.agent/e/sonarqube/<HEAD>.json`; no GitHub Actions workflow performs this gate | Mandatory before publication: Quality Gate must be `OK`. A Sonar outage holds release; repair or prove recovery before one same-candidate rerun, not repeated attempts. |
 | Post-publication monitoring | Scheduled published-image rescan only | Daily schedule does not build or accept images; retain the freshness/remediation evidence required below. |
 
 The candidate selection must prevent duplicate push-and-PR work for identical bytes. Changed bytes define one new candidate and one new heavy validation; unchanged bytes do not justify another heavy gate without the recovery evidence above.
@@ -146,7 +146,7 @@ a separate reviewed security change, not an operator-side escape hatch.
 
 ## SonarQube Gate Recovery
 
-Run `node tools/quality/run-sonarqube.mjs` as an operator-driven command from the clean, frozen exact candidate; no GitHub Actions workflow performs this gate. The runner must preserve the exact-head Quality Gate `OK` requirement; successful runs retain the exact-head receipt at `.agent/e/sonarqube/<HEAD>.json`.
+Run `node tools/quality/run-sonarqube.mjs` as an agent-owned local command from the clean, frozen exact candidate; no GitHub Actions workflow performs this gate. The runner must preserve the exact-head Quality Gate `OK` requirement; successful runs retain the exact-head receipt at `.agent/e/sonarqube/<HEAD>.json`. Human action is required only when the agent lacks the infrastructure, credential, or irreversible-effect authority needed for the next step.
 
 Recovery flags are usable only when the active runner's `node tools/quality/run-sonarqube.mjs --help` advertises every flag and mode-specific behavior invoked. If help errors, has no usable output, or does not advertise a requested flag, that recovery mode is unavailable.
 
