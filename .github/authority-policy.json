@@ -18,51 +18,18 @@
     "type": "User"
   },
   "transition": {
-    "consumed_epoch": "authority-0053",
-    "event_base_sha": "8481f5674ab6ef1535c81a7809564726b781d5ca"
+    "consumed_epoch": "authority-0054",
+    "event_base_sha": "f7cd6b34c5bd7b2c542d75d38c8c1c01dd420254"
   },
   "active_epoch": {
-    "id": "authority-0054",
-    "label": "authority-maintenance:authority-0054",
+    "id": "authority-0055",
+    "label": "authority-maintenance:authority-0055",
     "exact_changes": [
       {
         "status": "M",
         "path": ".github/authority-policy.json"
-      },
-      {
-        "status": "M",
-        "path": ".github/workflows/docker.yaml"
-      },
-      {
-        "status": "M",
-        "path": ".github/workflows/promote-latest-release-images.yml"
-      },
-      {
-        "status": "M",
-        "path": ".github/workflows/sync-marketplace.yml"
-      },
-      {
-        "status": "M",
-        "path": ".github/workflows/test.yml"
       }
     ],
-    "expected_head_blobs": [
-      {
-        "path": ".github/workflows/docker.yaml",
-        "git_blob": "ecbc28b601b50c3bf8b5e9c4e65491d35c4eef6d"
-      },
-      {
-        "path": ".github/workflows/promote-latest-release-images.yml",
-        "git_blob": "45d1439a9ea336ec6be0d7c969365d677ef18d71"
-      },
-      {
-        "path": ".github/workflows/sync-marketplace.yml",
-        "git_blob": "7615cbbf7cb01d487aac2004b4fe42a4617b70a1"
-      },
-      {
-        "path": ".github/workflows/test.yml",
-        "git_blob": "664a32193a7316f0d275215bd3b17033dfff7036"
-      }
-    ]
+    "expected_head_blobs": []
   }
 }
