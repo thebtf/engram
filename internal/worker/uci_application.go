@@ -207,6 +207,7 @@ func (application *UCIApplication) ReadCodebase(ctx context.Context, authorized 
 		Entity:            input.Ref,
 		Span:              input.Span,
 		ContentDigest:     input.ContentDigest,
+		ReferenceSiteID:   input.ReferenceSiteID,
 		MaxBytes:          input.MaxBytes,
 		VerifyWorkingCopy: input.VerifyWorkingCopy,
 	})

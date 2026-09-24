@@ -912,6 +912,30 @@ func TestUCIApplicationOperatorPortsKeepStructureAndRelationsInOneView(t *testin
 				require.NotNil(t, node.SourceRead)
 				require.Equal(t, node.Entity.EntityKey, node.SourceRead.EntityKey)
 			}
+			require.Len(t, navigation.Edges, 1)
+			require.Len(t, navigation.Edges[0].Evidence, 1)
+			reference := navigation.Edges[0].Evidence[0]
+			require.Equal(t, "available", reference.SourceState)
+			require.NotNil(t, reference.SourceRead)
+			require.Equal(t, edge.From.EntityKey, reference.SourceRead.EntityKey)
+			descriptor, available, err := composition.projectionStore.DescribeGraphEvidence(context.Background(), authorized, edge.Evidence[0])
+			require.NoError(t, err)
+			require.True(t, available)
+			require.Equal(t, descriptor.Span, reference.SourceRead.Span)
+			require.Equal(t, descriptor.ContentDigest, reference.SourceRead.ContentDigest)
+			read, err := composition.projectionStore.ReadExact(context.Background(), authorized, descriptor)
+			require.NoError(t, err)
+			require.NotNil(t, read.Hit)
+			require.Equal(t, "Beta", read.Hit.Text)
+			responseRead, err := composition.application.ReadCodebase(context.Background(), authorized, mcp.CodebaseReadInput{
+				Ref: descriptor.Entity, Span: descriptor.Span, ContentDigest: descriptor.ContentDigest,
+				ReferenceSiteID: descriptor.ReferenceSiteID, MaxBytes: int(descriptor.Span.ByteEnd - descriptor.Span.ByteStart),
+			})
+			require.NoError(t, err)
+			require.Equal(t, uci.QueryStatusOK, responseRead.Status)
+			require.NotNil(t, responseRead.Items)
+			require.Len(t, *responseRead.Items, 1)
+			require.Equal(t, "Beta", (*responseRead.Items)[0].Excerpt)
 		})
 	}
 }
@@ -1193,13 +1217,16 @@ func workerUCIApplicationAddArtifact(t *testing.T, projection *gormstore.UCIProj
 
 	var reference *gormstore.UCIReferenceSite
 	if input.rawTarget != "" {
+		referenceStart := strings.Index(string(body), input.rawTarget+"(")
+		require.GreaterOrEqual(t, referenceStart, 0)
+		referenceSpan := fmt.Sprintf(`{"byte_start":%d,"byte_end":%d,"line_start":2,"line_end":2}`, referenceStart, referenceStart+len(input.rawTarget))
 		reference, err = projection.UpsertReferenceSite(context.Background(), gormstore.UpsertUCIReferenceSiteInput{
 			ArtifactID:     artifact.ArtifactID,
 			SiteKey:        "reference-" + input.label,
 			OwnerSymbolKey: &definition.LocalSymbolKey,
 			RawTarget:      input.rawTarget,
 			Relation:       "calls",
-			SyntaxSpan:     `{"byte_start":0,"byte_end":1,"line_start":1,"line_end":1}`,
+			SyntaxSpan:     referenceSpan,
 			ResolverHints:  `{}`,
 		})
 		require.NoError(t, err)
@@ -1228,6 +1255,13 @@ func workerUCIApplicationReplacement(t *testing.T, sourcePath string, source wor
 	targetSymbol := target.definition.LocalSymbolKey
 	require.NotNil(t, source.reference)
 	referenceID := source.reference.ReferenceSiteID
+	var referenceSpan struct {
+		ByteStart int64 `json:"byte_start"`
+		ByteEnd   int64 `json:"byte_end"`
+		LineStart int   `json:"line_start"`
+		LineEnd   int   `json:"line_end"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(source.reference.SyntaxSpan), &referenceSpan))
 	return uci.IndexEdgeReplacement{
 		SourcePath: sourcePath,
 		Edges: []uci.IndexEdge{{
@@ -1245,7 +1279,7 @@ func workerUCIApplicationReplacement(t *testing.T, sourcePath string, source wor
 			ResolverRevision: "worker-uci-application-resolver",
 			Evidence: uci.IndexEdgeEvidence{
 				ReferenceSiteID: &referenceID,
-				Span:            uci.IndexSpan{ByteStart: 0, ByteEnd: 1, LineStart: 1, LineEnd: 1},
+				Span:            uci.IndexSpan{ByteStart: referenceSpan.ByteStart, ByteEnd: referenceSpan.ByteEnd, LineStart: referenceSpan.LineStart, LineEnd: referenceSpan.LineEnd},
 				RuleKey:         "worker-uci-application-call",
 				Explanation:     "worker UCI application resolved call",
 			},

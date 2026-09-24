@@ -115,6 +115,7 @@ type operatorCodeContextStore interface {
 
 type operatorCodeGraphSourceReader interface {
 	DescribeGraphSource(context.Context, uci.AuthorizedContext, uci.QueryEntityRef) (uci.VersionedReadSpec, bool, error)
+	DescribeGraphEvidence(context.Context, uci.AuthorizedContext, uci.QueryRelationEvidence) (uci.VersionedReadSpec, bool, error)
 }
 
 // operatorCodeIndexTargetResolver exposes only a currently polling
@@ -819,6 +820,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleVersionedRead(w http.ResponseWrite
 		},
 		Span:              request.Span,
 		ContentDigest:     uci.QueryContentDigest(request.ContentDigest),
+		ReferenceSiteID:   request.ReferenceSiteID,
 		VerifyWorkingCopy: request.VerifyWorkingCopy,
 		MaxBytes:          request.maxBytes(),
 	}
@@ -1499,12 +1501,16 @@ type operatorCodeVersionedReadRequest struct {
 	EntityKey         string        `json:"entity_key"`
 	Span              uci.QuerySpan `json:"span"`
 	ContentDigest     string        `json:"content_digest"`
+	ReferenceSiteID   *string       `json:"reference_site_id,omitempty"`
 	VerifyWorkingCopy bool          `json:"verify_working_copy"`
 	MaxBytes          *int          `json:"max_bytes"`
 }
 
 func (request operatorCodeVersionedReadRequest) valid() bool {
 	if !operatorCodeText(request.EntityKey) || !operatorCodeDigest(request.ContentDigest) || request.Span.Validate() != nil {
+		return false
+	}
+	if request.ReferenceSiteID != nil && uuid.Validate(*request.ReferenceSiteID) != nil {
 		return false
 	}
 	maxBytes := request.maxBytes()
@@ -2033,7 +2039,19 @@ func (adapter *OperatorCodeHTTPAdapter) graphNavigation(ctx context.Context, aut
 		if !foundFrom || !foundTo {
 			continue
 		}
-		navigation.Edges = append(navigation.Edges, operatorCodeGraphEdgeNavigation{From: from, To: to, Relation: edge.Relation, EvidenceKind: edge.EvidenceKind})
+		entry := operatorCodeGraphEdgeNavigation{From: from, To: to, Relation: edge.Relation, EvidenceKind: edge.EvidenceKind, Evidence: []operatorCodeGraphEvidenceNavigation{}}
+		for _, evidence := range edge.Evidence {
+			item := operatorCodeGraphEvidenceNavigation{Ref: evidence.Ref, Precision: evidence.Precision, SourceState: "unavailable"}
+			if evidence.Precision == uci.QueryEvidencePrecisionReferenceSite && adapter != nil && adapter.graphSources != nil {
+				descriptor, available, err := adapter.graphSources.DescribeGraphEvidence(ctx, authorized, evidence)
+				if err == nil && available && descriptor.Entity == evidence.Ref && descriptor.ReferenceSiteID != nil && evidence.ReferenceSiteID != nil && *descriptor.ReferenceSiteID == *evidence.ReferenceSiteID && descriptor.Validate() == nil && descriptor.Span.ByteEnd-descriptor.Span.ByteStart <= operatorCodeReadMax {
+					item.SourceState = "available"
+					item.SourceRead = &operatorCodeSourceReadDescriptor{EntityKey: descriptor.Entity.EntityKey, Span: descriptor.Span, ContentDigest: descriptor.ContentDigest, ReferenceSiteID: descriptor.ReferenceSiteID}
+				}
+			}
+			entry.Evidence = append(entry.Evidence, item)
+		}
+		navigation.Edges = append(navigation.Edges, entry)
 	}
 	return navigation
 }
@@ -2418,9 +2436,10 @@ func operatorCodeGrantDTO(grant gormdb.BrowserReadGrant) operatorCodeGrantRespon
 }
 
 type operatorCodeSourceReadDescriptor struct {
-	EntityKey     string                 `json:"entity_key"`
-	Span          uci.QuerySpan          `json:"span"`
-	ContentDigest uci.QueryContentDigest `json:"content_digest"`
+	EntityKey       string                 `json:"entity_key"`
+	Span            uci.QuerySpan          `json:"span"`
+	ContentDigest   uci.QueryContentDigest `json:"content_digest"`
+	ReferenceSiteID *string                `json:"reference_site_id,omitempty"`
 }
 
 type operatorCodeGraphNavigationRef struct {
@@ -2430,13 +2449,20 @@ type operatorCodeGraphNavigationRef struct {
 	SourceRead  *operatorCodeSourceReadDescriptor `json:"source_read,omitempty"`
 }
 
-type operatorCodeGraphEdgeNavigation struct {
-	From         operatorCodeGraphNavigationRef `json:"from"`
-	To           operatorCodeGraphNavigationRef `json:"to"`
-	Relation     uci.IndexRelation              `json:"relation"`
-	EvidenceKind uci.QueryEvidenceKind          `json:"evidence_kind"`
+type operatorCodeGraphEvidenceNavigation struct {
+	Ref         uci.QueryEntityRef                `json:"ref"`
+	Precision   uci.QueryEvidencePrecision        `json:"precision"`
+	SourceState string                            `json:"source_state"`
+	SourceRead  *operatorCodeSourceReadDescriptor `json:"source_read,omitempty"`
 }
 
+type operatorCodeGraphEdgeNavigation struct {
+	From         operatorCodeGraphNavigationRef        `json:"from"`
+	To           operatorCodeGraphNavigationRef        `json:"to"`
+	Relation     uci.IndexRelation                     `json:"relation"`
+	EvidenceKind uci.QueryEvidenceKind                 `json:"evidence_kind"`
+	Evidence     []operatorCodeGraphEvidenceNavigation `json:"evidence"`
+}
 type operatorCodeGraphNavigation struct {
 	Nodes []operatorCodeGraphNavigationRef  `json:"nodes"`
 	Edges []operatorCodeGraphEdgeNavigation `json:"edges"`

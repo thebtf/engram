@@ -2463,6 +2463,8 @@
       "selection": "Selected graph evidence",
       "inspectSource": "Inspect exact source",
       "noPublishedSource": "This graph-only node has no released source descriptor. No source request was made.",
+      "inspectReferenceSite": "Read released reference site",
+      "noReferenceSite": "No exact reference-site source is released for this relation (partial, ambiguous, unsupported, or unavailable).",
       "traversal": "Traversal: {stop}",
       "canvasLabel": "Bounded code graph with {count} nodes",
       "edgeLabel": "{from} {relation} {to}",

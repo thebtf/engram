@@ -297,6 +297,57 @@ func TestUCIGraphStoreReadsDirectAndReverseEvidenceInExactView(t *testing.T) {
 	require.False(t, available, "a mismatched View must not release relation evidence")
 }
 
+func TestUCIGraphStoreReadsTwoReleasedRelationSitesWithoutCrossViewFallback(t *testing.T) {
+	fixture := openUCIPublicationFixture(t)
+	ctx := context.Background()
+	first := uciGraphStoreArtifact(t, fixture, "two-site-first", "func First() { Target() }\n", "First", "graph.First", "calls")
+	second := uciGraphStoreArtifact(t, fixture, "two-site-second", "func Second() { Target() }\n", "Second", "graph.Second", "calls")
+	target := uciGraphStoreArtifact(t, fixture, "two-site-target", "func Target() {}\n", "Target", "graph.Target", "calls")
+	published := uciGraphStorePublish(t, fixture, uciGraphStorePublishInput{
+		key: "two-reference-sites", checkout: fixture.checkout,
+		artifacts: []uciPublicationArtifact{first, second, target},
+		memberships: []ucidomain.IndexMembership{
+			uciPublicationPresentMembership("first.go", first), uciPublicationPresentMembership("second.go", second), uciPublicationPresentMembership("target.go", target),
+		},
+		replacements: []ucidomain.IndexEdgeReplacement{
+			{SourcePath: "first.go", Edges: []ucidomain.IndexEdge{uciGraphStoreResolvedEdge(first, "first.go", target, "target.go", "calls", "resolved")}},
+			{SourcePath: "second.go", Edges: []ucidomain.IndexEdge{uciGraphStoreResolvedEdge(second, "second.go", target, "target.go", "calls", "resolved")}},
+			{SourcePath: "target.go"},
+		},
+		coverage: uciGraphStoreCoverage(ucidomain.IndexCoverageComplete),
+	})
+	authorized := uciGraphStoreAuthorize(t, fixture, published.Context)
+	selected, err := fixture.projection.SelectGraphEdges(ctx, authorized, ucidomain.GraphEdgeQuery{
+		Nodes:  []ucidomain.QueryEntityRef{uciGraphStoreRef(published.Context, target.Definition.QualifiedLocalName)},
+		Filter: ucidomain.GraphFilter{Direction: ucidomain.GraphDirectionIncoming},
+	})
+	require.NoError(t, err)
+	require.Len(t, selected.Edges, 2)
+	seen := make(map[string]bool)
+	for _, edge := range selected.Edges {
+		require.Len(t, edge.Evidence, 1)
+		evidence := edge.Evidence[0]
+		require.Equal(t, ucidomain.QueryEvidencePrecisionReferenceSite, evidence.Precision)
+		descriptor, available, err := fixture.projection.DescribeGraphEvidence(ctx, authorized, evidence)
+		require.NoError(t, err)
+		require.True(t, available)
+		require.Equal(t, edge.From, descriptor.Entity)
+		require.Equal(t, evidence.ReferenceSiteID, descriptor.ReferenceSiteID)
+		read, err := fixture.projection.ReadExact(ctx, authorized, descriptor)
+		require.NoError(t, err)
+		require.NotNil(t, read.Hit)
+		require.Equal(t, descriptor.Span, read.Hit.Span)
+		require.Equal(t, descriptor.ContentDigest, read.Hit.ContentDigest)
+		seen[*evidence.ReferenceSiteID] = true
+	}
+	require.Len(t, seen, 2)
+	foreign := selected.Edges[0].Evidence[0]
+	foreign.Ref.ViewID = uuid.NewString()
+	_, available, err := fixture.projection.DescribeGraphEvidence(ctx, authorized, foreign)
+	require.NoError(t, err)
+	require.False(t, available)
+}
+
 func TestUCIGraphStoreLabelsPartialAndUnsupportedEvidencePrecisely(t *testing.T) {
 	ref := ucidomain.QueryEntityRef{SourceID: "10000000-0000-4000-8000-000000000001", ViewID: "30000000-0000-4000-8000-000000000003", EntityKey: "fixture.Source"}
 	referenceID := "50000000-0000-4000-8000-000000000005"

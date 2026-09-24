@@ -67,6 +67,7 @@ export interface CodeSourceDescriptor {
   entityKey: string
   span: CodeSpan
   contentDigest: string
+  referenceSiteId?: string
 }
 
 export interface CodeItem {
@@ -81,12 +82,20 @@ export interface CodeItem {
   score: number | null
 }
 
+export interface CodeGraphEvidence {
+  ref: CodeEntityRef
+  precision: string
+  referenceSiteId: string | null
+  source: CodeSourceDescriptor | null
+}
+
 export interface CodeGraphEdge {
   from: CodeEntityRef
   to: CodeEntityRef
   relation: string
   evidenceKind: string
   explanation: string | null
+  evidence: CodeGraphEvidence[]
 }
 
 export interface CodeGraph {
@@ -102,6 +111,7 @@ export interface CodeGraphNavigationNode {
 
 export interface CodeGraphNavigation {
   nodes: CodeGraphNavigationNode[]
+  edges: { from: CodeEntityRef; to: CodeEntityRef; relation: string; evidenceKind: string; evidence: CodeGraphEvidence[] }[]
 }
 
 export interface CodeEnvelope {
@@ -405,12 +415,24 @@ function parseGraph(value: unknown): CodeGraph | null {
     const evidenceKind = text(Reflect.get(rawEdge, 'evidence_kind'))
     const explanationValue = Reflect.get(rawEdge, 'explanation')
     const explanation = explanationValue === undefined || explanationValue === null ? null : text(explanationValue)
+    const evidenceValues = Reflect.get(rawEdge, 'evidence')
     if (
       from === null || to === null || relation === null || evidenceKind === null
       || !nodeKeys.has(entityRefKey(from)) || !nodeKeys.has(entityRefKey(to))
       || (explanationValue !== undefined && explanationValue !== null && explanation === null)
+      || (evidenceValues !== undefined && !Array.isArray(evidenceValues))
     ) return null
-    edges.push({ from, to, relation, evidenceKind, explanation })
+    const evidence: CodeGraphEvidence[] = []
+    for (const value of evidenceValues ?? []) {
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+      const ref = parseEntityRef(Reflect.get(value, 'ref'))
+      const precision = text(Reflect.get(value, 'precision'))
+      const siteValue = Reflect.get(value, 'reference_site_id')
+      const referenceSiteId = siteValue === undefined || siteValue === null ? null : text(siteValue)
+      if (ref === null || precision === null || !nodeKeys.has(entityRefKey(ref)) || (siteValue !== undefined && siteValue !== null && referenceSiteId === null)) return null
+      evidence.push({ ref, precision, referenceSiteId, source: null })
+    }
+    edges.push({ from, to, relation, evidenceKind, explanation, evidence })
   }
   const stopReason = text(Reflect.get(value, 'stop_reason'))
   return stopReason === null ? null : { nodes, edges, stopReason }
@@ -421,7 +443,9 @@ function parseSourceDescriptor(value: unknown): CodeSourceDescriptor | null {
   const entityKey = text(Reflect.get(value, 'entity_key'))
   const span = parseSpan(Reflect.get(value, 'span'))
   const contentDigest = text(Reflect.get(value, 'content_digest'))
-  return entityKey === null || span === null || contentDigest === null ? null : { entityKey, span, contentDigest }
+  const referenceSiteIdValue = Reflect.get(value, 'reference_site_id')
+  const referenceSiteId = referenceSiteIdValue === undefined ? undefined : text(referenceSiteIdValue)
+  return entityKey === null || span === null || contentDigest === null || (referenceSiteIdValue !== undefined && referenceSiteId === null) ? null : { entityKey, span, contentDigest, ...(referenceSiteId === undefined ? {} : { referenceSiteId }) }
 }
 
 function parseGraphNavigation(value: unknown, context: CodeResponseContext, graph: CodeGraph): CodeGraphNavigation | null {
@@ -440,7 +464,7 @@ function parseGraphNavigation(value: unknown, context: CodeResponseContext, grap
     const sourceValue = Reflect.get(value, 'source_read')
     const source = sourceValue === undefined || sourceValue === null ? null : parseSourceDescriptor(sourceValue)
     if (
-      ref === null || nodeContext === null || !sameView(context, nodeContext) || !graphNodes.has(entityRefKey(ref))
+      ref === null || nodeContext === null || !sameView(context, nodeContext) || ref.sourceId !== context.sourceId || ref.viewId !== context.viewId || !graphNodes.has(entityRefKey(ref))
       || navigationNodes.has(entityRefKey(ref)) || (sourceState !== 'available' && sourceState !== 'unavailable')
       || (sourceState === 'available' && (source === null || source.entityKey !== ref.entityKey))
       || (sourceState === 'unavailable' && source !== null)
@@ -449,15 +473,34 @@ function parseGraphNavigation(value: unknown, context: CodeResponseContext, grap
     nodes.push({ ref, source })
   }
   if (navigationNodes.size !== graphNodes.size) return null
-  for (const value of edgeValues) {
+  const edges: CodeGraphNavigation['edges'] = []
+  if (edgeValues.length !== graph.edges.length) return null
+  for (const [index, value] of edgeValues.entries()) {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
     const fromValue = Reflect.get(value, 'from')
     const toValue = Reflect.get(value, 'to')
     const from = fromValue !== null && typeof fromValue === 'object' && !Array.isArray(fromValue) ? parseEntityRef(Reflect.get(fromValue, 'entity')) : null
     const to = toValue !== null && typeof toValue === 'object' && !Array.isArray(toValue) ? parseEntityRef(Reflect.get(toValue, 'entity')) : null
-    if (from === null || to === null || !navigationNodes.has(entityRefKey(from)) || !navigationNodes.has(entityRefKey(to)) || text(Reflect.get(value, 'relation')) === null || text(Reflect.get(value, 'evidence_kind')) === null) return null
+    const released = graph.edges[index]
+    if (from === null || to === null || entityRefKey(from) !== entityRefKey(released.from) || entityRefKey(to) !== entityRefKey(released.to) || text(Reflect.get(value, 'relation')) !== released.relation || text(Reflect.get(value, 'evidence_kind')) !== released.evidenceKind) return null
+    const evidenceValues = Reflect.get(value, 'evidence')
+    if (evidenceValues === undefined && released.evidence.length === 0) { edges.push({ from, to, relation: released.relation, evidenceKind: released.evidenceKind, evidence: [] }); continue }
+    if (!Array.isArray(evidenceValues) || evidenceValues.length !== released.evidence.length) return null
+    const evidence: CodeGraphEvidence[] = []
+    for (const [evidenceIndex, raw] of evidenceValues.entries()) {
+      if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+      const ref = parseEntityRef(Reflect.get(raw, 'ref'))
+      const precision = text(Reflect.get(raw, 'precision'))
+      const sourceState = text(Reflect.get(raw, 'source_state'))
+      const sourceValue = Reflect.get(raw, 'source_read')
+      const source = sourceValue === undefined || sourceValue === null ? null : parseSourceDescriptor(sourceValue)
+      const original = released.evidence[evidenceIndex]
+      if (ref === null || ref.sourceId !== context.sourceId || ref.viewId !== context.viewId || entityRefKey(ref) !== entityRefKey(original.ref) || precision !== original.precision || (sourceState !== 'available' && sourceState !== 'unavailable') || (sourceState === 'available' && (precision !== 'reference_site' || original.referenceSiteId === null || source === null || source.entityKey !== ref.entityKey || source.referenceSiteId !== original.referenceSiteId)) || (sourceState === 'unavailable' && source !== null)) return null
+      evidence.push({ ...original, source })
+    }
+    edges.push({ from, to, relation: released.relation, evidenceKind: released.evidenceKind, evidence })
   }
-  return { nodes }
+  return { nodes, edges }
 }
 
 function parseEnvelope(value: unknown): CodeEnvelope | null {
@@ -1465,6 +1508,7 @@ export function useOperatorCode() {
       entity_key: descriptor.entityKey,
       span: { byte_start: descriptor.span.byteStart, byte_end: descriptor.span.byteEnd, line_start: descriptor.span.lineStart, line_end: descriptor.span.lineEnd },
       content_digest: descriptor.contentDigest,
+      ...(descriptor.referenceSiteId === undefined ? {} : { reference_site_id: descriptor.referenceSiteId }),
     })
     if (payload === null || pinnedContext.value === null) return
     pending.value = true

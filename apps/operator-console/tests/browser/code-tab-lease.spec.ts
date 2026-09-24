@@ -373,12 +373,17 @@ test('Workspace explains an insecure origin without creating a browser binding',
 
 test('Home opens a no-View working copy, then follows its released index to search, relation and source', async ({ page }) => {
   const submitted: unknown[] = []
+  const sourceRequests: unknown[] = []
   let published = false
   const context = { source_id: 'source-1', checkout_id: 'checkout-1', view_id: 'view-1', profile_id: 'profile-1', generation: 1 }
   const ref = { source_id: 'source-1', view_id: 'view-1', entity_key: 'implementation' }
   const related = { source_id: 'source-1', view_id: 'view-1', entity_key: 'dependency' }
   const span = { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }
   const item = { ref, path: 'src/implementation.ts', span, content_digest: 'digest-1', kind: 'function', language: 'typescript', excerpt: 'function go()', match_sources: ['lexical'], score: 1 }
+  const referenceSpan = { byte_start: 9, byte_end: 13, line_start: 1, line_end: 1 }
+  const reference = { ref, precision: 'reference_site', reference_site_id: '50000000-0000-4000-8000-000000000005' }
+  const callerNode = { entity: ref, context_ref: { ...context, analysis_profile_id: context.profile_id }, source_state: 'available', source_read: { entity_key: ref.entity_key, span, content_digest: item.content_digest } }
+  const relatedNode = { entity: related, context_ref: { ...context, analysis_profile_id: context.profile_id }, source_state: 'unavailable' }
   const envelope = { schema: 'engram.code-query/1', status: 'ok', contexts: [context], items: [item], warnings: [], retrieval: { mode: 'lexical' }, freshness: { state: 'observed_current' }, coverage: {}, truncated: false }
   const intent = { intent_ref: 'intent-first', state: 'queued', attempt: 1, retryable: false, created_at: '2026-09-15T00:00:00Z', updated_at: '2026-09-15T00:00:00Z' }
   await page.route('**/api/code/**', async (route) => {
@@ -403,10 +408,20 @@ test('Home opens a no-View working copy, then follows its released index to sear
       await route.fulfill({ status: 204 })
     } else if (pathname === '/api/code/status') {
       await route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { Coverage: 'complete' }, freshness: { state: 'observed_current' } } })
-    } else if (pathname === '/api/code/structure' || pathname === '/api/code/search' || pathname === '/api/code/source') {
+    } else if (pathname === '/api/code/structure' || pathname === '/api/code/search') {
       await route.fulfill({ json: envelope })
+    } else if (pathname === '/api/code/source') {
+      const body = route.request().postDataJSON()
+      sourceRequests.push(body)
+      if (body.entity_key === ref.entity_key && body.content_digest === item.content_digest && body.reference_site_id === reference.reference_site_id && JSON.stringify(body.span) === JSON.stringify(referenceSpan)) {
+        await route.fulfill({ json: { ...envelope, items: [{ ...item, span: referenceSpan, excerpt: 'go()' }] } })
+      } else if (body.entity_key === ref.entity_key && body.content_digest === item.content_digest && JSON.stringify(body.span) === JSON.stringify(span)) {
+        await route.fulfill({ json: envelope })
+      } else {
+        await route.fulfill({ status: 403 })
+      }
     } else if (pathname === '/api/code/graph') {
-      await route.fulfill({ json: { ...envelope, graph: { nodes: [ref, related], edges: [{ from: ref, to: related, relation: 'calls', evidence_kind: 'syntax' }], stop_reason: 'complete' }, navigation: { nodes: [{ entity: ref, context_ref: { ...context, analysis_profile_id: context.profile_id }, source_state: 'available', source_read: { entity_key: ref.entity_key, span, content_digest: item.content_digest } }, { entity: related, context_ref: { ...context, analysis_profile_id: context.profile_id }, source_state: 'unavailable' }], edges: [{ from: { entity: ref }, to: { entity: related }, relation: 'calls', evidence_kind: 'syntax' }] } } })
+      await route.fulfill({ json: { ...envelope, graph: { nodes: [ref, related], edges: [{ from: ref, to: related, relation: 'calls', evidence_kind: 'RESOLVED', evidence: [reference] }, { from: related, to: ref, relation: 'may_call', evidence_kind: 'HEURISTIC', evidence: [{ ref: related, precision: 'unsupported' }] }], stop_reason: 'complete' }, navigation: { nodes: [callerNode, relatedNode], edges: [{ from: callerNode, to: relatedNode, relation: 'calls', evidence_kind: 'RESOLVED', evidence: [{ ref, precision: 'reference_site', source_state: 'available', source_read: { entity_key: ref.entity_key, span: referenceSpan, content_digest: item.content_digest, reference_site_id: reference.reference_site_id } }] }, { from: relatedNode, to: callerNode, relation: 'may_call', evidence_kind: 'HEURISTIC', evidence: [{ ref: related, precision: 'unsupported', source_state: 'unavailable' }] }] } } })
     } else {
       await route.fulfill({ status: 500 })
     }
@@ -429,6 +444,16 @@ test('Home opens a no-View working copy, then follows its released index to sear
   await expect(page.getByTestId('code-search-results')).toContainText('src/implementation.ts')
   await page.getByTestId('code-search-explore').click()
   await expect(page.getByTestId('code-graph-results')).toBeVisible()
+  await page.getByRole('button', { name: /Relation list|Список связей/ }).click()
+  await page.getByTestId('code-graph-results').getByRole('button').first().click()
+  await expect(page.getByTestId('code-graph-evidence')).toContainText('reference_site')
+  await page.getByTestId('code-graph-reference-source').click()
+  expect(sourceRequests[0]).toMatchObject({ entity_key: ref.entity_key, span: referenceSpan, content_digest: item.content_digest, reference_site_id: reference.reference_site_id })
+  await expect(page.getByTestId('code-source-result')).toHaveText('go()')
+  await page.getByTestId('code-graph-results').getByRole('button').nth(1).click()
+  await expect(page.getByTestId('code-graph-evidence')).toContainText('unsupported')
+  await expect(page.getByTestId('code-graph-reference-source')).toHaveCount(0)
+  expect(sourceRequests).toHaveLength(1)
   await page.getByTestId('code-search-source').click()
   await expect(page.getByTestId('code-source-result')).toContainText('function go()')
 })

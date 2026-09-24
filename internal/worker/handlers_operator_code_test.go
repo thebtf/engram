@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -235,6 +236,51 @@ func TestOperatorCodeHTTPAdapter_GraphNavigationPublishesOnlyStoredSourceDescrip
 	require.Contains(t, recorder.Body.String(), `"relation":"calls"`)
 	require.NotContains(t, recorder.Body.String(), `"excerpt"`)
 	require.Equal(t, []uci.QueryEntityRef{available, unavailable}, graphSources.calls)
+}
+
+func TestOperatorCodeHTTPAdapter_GraphNavigationReleasesExactRelationSiteOnly(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	caller := uci.QueryEntityRef{SourceID: fixture.ref.SourceID, ViewID: fixture.ref.ViewID, EntityKey: "Fixture.Caller"}
+	first := uci.QueryEntityRef{SourceID: fixture.ref.SourceID, ViewID: fixture.ref.ViewID, EntityKey: "Fixture.First"}
+	second := uci.QueryEntityRef{SourceID: fixture.ref.SourceID, ViewID: fixture.ref.ViewID, EntityKey: "Fixture.Second"}
+	site := uuid.NewString()
+	response := operatorCodeHTTPTestGraphResponse(t, fixture.ref)
+	response.Graph.Nodes = []uci.QueryEntityRef{caller, first, second}
+	response.Graph.Edges = []uci.QueryGraphEdge{
+		{From: caller, To: first, Relation: "calls", EvidenceKind: uci.QueryEvidenceResolved, EvidenceRefs: []uci.QueryEntityRef{caller}, Evidence: []uci.QueryRelationEvidence{{Ref: caller, Precision: uci.QueryEvidencePrecisionReferenceSite, ReferenceSiteID: &site}}},
+		{From: caller, To: second, Relation: "may_call", EvidenceKind: uci.QueryEvidenceHeuristic, EvidenceRefs: []uci.QueryEntityRef{caller}, Evidence: []uci.QueryRelationEvidence{{Ref: caller, Precision: uci.QueryEvidencePrecisionUnsupported}}},
+	}
+	require.NoError(t, response.ValidatePreExposure())
+	fixture.app.graph = response
+	descriptor := uci.VersionedReadSpec{Entity: caller, Span: uci.QuerySpan{ByteStart: 18, ByteEnd: 25, LineStart: 2, LineEnd: 2}, ContentDigest: uci.QueryContentDigest(strings.Repeat("a", 64)), MaxBytes: 7, ReferenceSiteID: &site}
+	adapter.graphSources = &operatorCodeHTTPTestGraphSources{evidenceDescriptors: map[string]uci.VersionedReadSpec{site: descriptor}}
+	recorder := httptest.NewRecorder()
+	adapter.HandleGraph(recorder, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","action":"neighbors","target":{"entity_key":"Fixture.Caller"}}`, fixture.identity))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var body struct {
+		Navigation operatorCodeGraphNavigation `json:"navigation"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	require.Len(t, body.Navigation.Edges, 2)
+	require.Equal(t, &operatorCodeSourceReadDescriptor{EntityKey: caller.EntityKey, Span: descriptor.Span, ContentDigest: descriptor.ContentDigest, ReferenceSiteID: &site}, body.Navigation.Edges[0].Evidence[0].SourceRead)
+	require.Equal(t, "available", body.Navigation.Edges[0].Evidence[0].SourceState)
+	require.Nil(t, body.Navigation.Edges[1].Evidence[0].SourceRead)
+	require.Equal(t, "unavailable", body.Navigation.Edges[1].Evidence[0].SourceState)
+	require.Equal(t, []uci.QueryRelationEvidence{response.Graph.Edges[0].Evidence[0]}, adapter.graphSources.(*operatorCodeHTTPTestGraphSources).evidenceCalls)
+}
+
+func TestOperatorCodeHTTPAdapter_ReferenceSiteSourceReadUsesExactPinnedKey(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	fixture.app.read = operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalExact)
+	site := uuid.NewString()
+	request := `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","entity_key":"Fixture.Symbol","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"` + strings.Repeat("a", 64) + `","reference_site_id":"` + site + `"}`
+	recorder := httptest.NewRecorder()
+	adapter.HandleVersionedRead(recorder, operatorCodeHTTPTestRequest(t, request, fixture.identity))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Len(t, fixture.app.readInputs, 1)
+	require.Equal(t, site, *fixture.app.readInputs[0].ReferenceSiteID)
+	require.Equal(t, fixture.ref.SourceID, fixture.app.readInputs[0].Ref.SourceID)
+	require.Equal(t, fixture.ref.ViewID, fixture.app.readInputs[0].Ref.ViewID)
 }
 
 func TestOperatorCodeGraphRequestInputBuildsNormalizedSemantics(t *testing.T) {
@@ -1448,13 +1494,24 @@ func (store *operatorCodeHTTPTestContextStore) AdvanceContinuation(_ context.Con
 }
 
 type operatorCodeHTTPTestGraphSources struct {
-	descriptors map[uci.QueryEntityRef]uci.VersionedReadSpec
-	calls       []uci.QueryEntityRef
+	descriptors         map[uci.QueryEntityRef]uci.VersionedReadSpec
+	calls               []uci.QueryEntityRef
+	evidenceDescriptors map[string]uci.VersionedReadSpec
+	evidenceCalls       []uci.QueryRelationEvidence
 }
 
 func (sources *operatorCodeHTTPTestGraphSources) DescribeGraphSource(_ context.Context, _ uci.AuthorizedContext, entity uci.QueryEntityRef) (uci.VersionedReadSpec, bool, error) {
 	sources.calls = append(sources.calls, entity)
 	descriptor, available := sources.descriptors[entity]
+	return descriptor, available, nil
+}
+
+func (sources *operatorCodeHTTPTestGraphSources) DescribeGraphEvidence(_ context.Context, authorized uci.AuthorizedContext, evidence uci.QueryRelationEvidence) (uci.VersionedReadSpec, bool, error) {
+	sources.evidenceCalls = append(sources.evidenceCalls, evidence)
+	if evidence.ReferenceSiteID == nil || evidence.Ref.SourceID != authorized.Ref().SourceID || evidence.Ref.ViewID != authorized.Ref().ViewID {
+		return uci.VersionedReadSpec{}, false, nil
+	}
+	descriptor, available := sources.evidenceDescriptors[*evidence.ReferenceSiteID]
 	return descriptor, available, nil
 }
 
@@ -1593,6 +1650,7 @@ type operatorCodeHTTPTestApplication struct {
 	structureCalls       int
 	graphCalls           int
 	readCalls            int
+	readInputs           []mcp.CodebaseReadInput
 	indexIntents         map[string]uci.IndexIntent
 	indexSubmitErr       error
 	indexGetErr          error
@@ -1632,8 +1690,9 @@ func (app *operatorCodeHTTPTestApplication) ExploreOperatorCodebase(ctx context.
 	return app.graph, nil
 }
 
-func (app *operatorCodeHTTPTestApplication) ReadCodebase(ctx context.Context, _ uci.AuthorizedContext, _ mcp.CodebaseReadInput) (uci.QueryResponse, error) {
+func (app *operatorCodeHTTPTestApplication) ReadCodebase(ctx context.Context, _ uci.AuthorizedContext, input mcp.CodebaseReadInput) (uci.QueryResponse, error) {
 	app.readCalls++
+	app.readInputs = append(app.readInputs, input)
 	app.sourceSessions = append(app.sourceSessions, auditcontext.SourceSession(ctx))
 	return app.read, nil
 }
