@@ -139,6 +139,7 @@ const codeWorkspaces = [
 
 const codeTabs = new Map()
 let codeTabSequence = 41
+let codeIndexIntentBindingId = null
 
 function codeCatalogResponse() {
   return {
@@ -201,7 +202,7 @@ function codeEnvelope(workspace, items, graph = null, navigation = undefined) {
 
 function selectedCodeWorkspace(bindingID) {
   const selectionRef = codeTabs.get(bindingID)?.selectionRef
-  return codeWorkspaces.find((workspace) => workspace.selectionRef === selectionRef) ?? null
+  return selectionRef ? codeWorkspaces.find((workspace) => workspace.selectionRef === selectionRef) ?? null : null
 }
 
 async function handleCodeRequest(req, res, path) {
@@ -250,6 +251,32 @@ async function handleCodeRequest(req, res, path) {
     return true
   }
 
+  if (req.method === 'POST' && path === '/api/code/index-intents') {
+    const targetRef = body.target?.selection_ref
+    if (body.target !== undefined && (typeof targetRef !== 'string' || !targetRef.trim()) || typeof body.request_ref !== 'string' || !body.request_ref.trim() || !['reindex', 'reconcile'].includes(body.kind)) {
+      json(res, 400, { error: 'invalid index intent' })
+      return true
+    }
+    const tab = codeTabs.get(body.tab_binding_id)
+    const target = codeWorkspaces.find((candidate) => candidate.indexIntentSelectionRef === targetRef && candidate.snapshot === null)
+    if (!tab || tab.documentProof !== body.document_proof || (targetRef === undefined ? !selectedCodeWorkspace(body.tab_binding_id) : !target)) {
+      json(res, 403, { error: 'index intent denied' })
+      return true
+    }
+    codeIndexIntentBindingId = body.tab_binding_id
+    json(res, 202, { intent_ref: 'mock-index-intent', state: 'queued', attempt: 1, retryable: false, created_at: '2026-09-17T09:05:00Z', updated_at: '2026-09-17T09:05:00Z' })
+    return true
+  }
+  if (req.method === 'GET' && path.startsWith('/api/code/index-intents/')) {
+    const tab = codeTabs.get(req.headers['x-engram-tab-binding-id'])
+    if (path !== '/api/code/index-intents/mock-index-intent' || codeIndexIntentBindingId !== req.headers['x-engram-tab-binding-id'] || !tab || tab.documentProof !== req.headers['x-engram-document-proof']) {
+      json(res, 403, { error: 'index intent denied' })
+      return true
+    }
+    json(res, 200, { intent_ref: 'mock-index-intent', state: 'unavailable', attempt: 1, retryable: true, created_at: '2026-09-17T09:05:00Z', updated_at: '2026-09-17T09:05:00Z' })
+    return true
+  }
+
   const headerBinding = req.headers['x-engram-tab-binding-id']
   const tabBindingId = typeof body.tab_binding_id === 'string' ? body.tab_binding_id : typeof headerBinding === 'string' ? headerBinding : ''
   const workspace = selectedCodeWorkspace(tabBindingId)
@@ -293,14 +320,6 @@ async function handleCodeRequest(req, res, path) {
   }
   if (req.method === 'POST' && path === '/api/code/source') {
     json(res, 200, codeEnvelope(workspace, [body.entity_key === neighbor.ref.entity_key ? neighbor : item]))
-    return true
-  }
-  if (req.method === 'POST' && path === '/api/code/index-intents') {
-    json(res, 202, { intent_ref: 'mock-index-intent', state: 'queued', attempt: 1, retryable: false, created_at: '2026-09-17T09:05:00Z', updated_at: '2026-09-17T09:05:00Z' })
-    return true
-  }
-  if (req.method === 'GET' && path === '/api/code/index-intents/mock-index-intent') {
-    json(res, 200, { intent_ref: 'mock-index-intent', state: 'queued', attempt: 1, retryable: false, created_at: '2026-09-17T09:05:00Z', updated_at: '2026-09-17T09:05:00Z' })
     return true
   }
   return false

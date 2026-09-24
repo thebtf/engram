@@ -376,6 +376,34 @@ test('Home opens a no-View working copy, then follows its released index to sear
   await expect(page.getByTestId('code-source-result')).toContainText('function go()')
 })
 
+test('Offline no-View first indexing reaches the mock intent while unknown targets stay denied', async ({ page, request }) => {
+  await page.goto('/code')
+  await page.getByTestId('code-context-repository').selectOption({ label: 'Engram' })
+  await page.getByTestId('code-context-working-copy').selectOption({ label: 'recovery · offline owner' })
+  await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+
+  const submit = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/code/index-intents' && response.request().method() === 'POST')
+  await page.getByTestId('code-request-first-index').click()
+  const submission = await submit
+  expect(submission.status()).toBe(202)
+  const { tab_binding_id, document_proof } = submission.request().postDataJSON()
+  await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'queued')
+  const status = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/code/index-intents/mock-index-intent' && response.request().method() === 'GET')
+  await page.getByTestId('index-intent-check-status').click()
+  expect((await status).status()).toBe(200)
+  await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'unavailable')
+
+  const target = { tab_binding_id, document_proof, request_ref: 'unknown-ref', kind: 'reindex', target: { selection_ref: 'not-advertised' } }
+  expect((await request.post('/api/code/index-intents', { data: target })).status()).toBe(403)
+  expect((await request.post('/api/code/index-intents', { data: { ...target, target: { selection_ref: '' } } })).status()).toBe(400)
+  expect((await request.post('/api/code/index-intents', { data: { ...target, target: { selection_ref: 'mock-first-index' }, document_proof: 'wrong-proof' } })).status()).toBe(403)
+  expect((await request.get('/api/code/index-intents/unknown-intent', { headers: { 'X-Engram-Tab-Binding-ID': tab_binding_id, 'X-Engram-Document-Proof': document_proof } })).status()).toBe(403)
+  const secondTab = await (await request.post('/api/code/tabs/handshake', { data: {} })).json()
+  expect((await request.get('/api/code/index-intents/mock-index-intent', { headers: { 'X-Engram-Tab-Binding-ID': secondTab.tab_binding_id, 'X-Engram-Document-Proof': secondTab.document_proof } })).status()).toBe(403)
+  const unrelated = await request.post('/api/code/search', { data: { tab_binding_id, document_proof } })
+  expect(unrelated.status(), await unrelated.text()).toBe(403)
+})
+
 test('An unnamed working copy remains selectable without confusing it with the prompt', async ({ page }) => {
   await page.route('**/api/code/**', async (route) => {
     const pathname = new URL(route.request().url()).pathname
