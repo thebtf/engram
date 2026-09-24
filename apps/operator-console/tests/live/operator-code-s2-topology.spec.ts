@@ -184,6 +184,10 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
     const tabB = await pinAndRead(browser, fixture, fixture.browserCredentialB, bScenario, traffic)
     a = tabA
     b = tabB
+    const ownerReader = a.page.getByTestId('code-grant-chooser').getByRole('combobox').nth(1)
+    await expect(ownerReader.getByRole('option', { name: fixture.browserCredential.email, exact: true })).toHaveCount(1)
+    await ownerReader.selectOption({ label: fixture.browserCredential.email })
+    await expect(ownerReader.locator('option:checked')).toHaveText(fixture.browserCredential.email)
     await expect(a.page.getByTestId('code-source-result')).toContainText(aScenario.expectedMarker)
     await expect(a.page.getByTestId('code-source-result')).not.toContainText(bScenario.expectedMarker)
     await expect(b.page.getByTestId('code-source-result')).toContainText(bScenario.expectedMarker)
