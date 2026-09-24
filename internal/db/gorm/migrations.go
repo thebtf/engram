@@ -7327,8 +7327,8 @@ func localGitRegistrationRetryMigration185() *gormigrate.Migration {
 		Migrate: func(tx *gorm.DB) error {
 			return tx.Exec(`ALTER TABLE ci_checkouts ADD COLUMN IF NOT EXISTS registration_profile_id UUID REFERENCES ci_profiles(profile_id)`).Error
 		},
-		Rollback: func(tx *gorm.DB) error {
-			return tx.Exec(`ALTER TABLE ci_checkouts DROP COLUMN IF EXISTS registration_profile_id`).Error
-		},
+		// A binary rollback may ignore this additive column, but dropping it would
+		// erase the only durable profile ID needed to recover a lost response.
+		Rollback: func(_ *gorm.DB) error { return nil },
 	}
 }

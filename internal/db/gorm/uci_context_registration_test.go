@@ -52,6 +52,11 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	replayed, err := store.RegisterLocalGit(ctx, owner)
 	require.NoError(t, err, "lost first response must recover the original registration")
 	require.Equal(t, first, replayed)
+	require.NoError(t, localGitRegistrationRetryMigration185().Rollback(db))
+	require.NoError(t, localGitRegistrationRetryMigration185().Migrate(db))
+	replayed, err = store.RegisterLocalGit(ctx, owner)
+	require.NoError(t, err, "binary rollback and re-upgrade must retain the checkout's registration profile")
+	require.Equal(t, first, replayed)
 	byID := owner
 	byID.SourceID, byID.SourceLabel = first.SourceID, ""
 	replayed, err = store.RegisterLocalGit(ctx, byID)
