@@ -37,6 +37,9 @@ const candidates = computed(() => props.search ?? props.structure)
 const copyNotice = ref<'copied' | 'unavailable' | null>(null)
 const readiness = computed(() => {
   if (props.status === null) return null
+  if (props.status.embeddingJobState === 'failed_terminal' || props.status.freshnessState === 'failed') return 'failed'
+  if (props.status.embeddingJobState === 'queued' || props.status.embeddingJobState === 'running' || props.status.embeddingJobState === 'retry_scheduled') return 'updating'
+  if (props.status.totalChunks === 0 && props.status.embeddingJobState !== null) return 'unknown'
   if (props.status.totalChunks === 0) return 'needs-indexing'
   switch (props.status.freshnessState) {
     case 'observed_current': return 'ready'

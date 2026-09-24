@@ -121,6 +121,8 @@ export interface CodeStatus {
   embeddedChunks: number
   coverage: string
   freshnessState: string | null
+  embeddingJobState: string | null
+  embeddingErrorCode: string | null
 }
 
 export interface CodePresentationState {
@@ -556,7 +558,13 @@ function parseStatus(value: unknown): CodeStatus | null {
   const embeddedChunks = finiteNumber(Reflect.get(value, 'embedded_chunks'))
   const embedding = Reflect.get(value, 'embedding')
   const coverage = embedding !== null && typeof embedding === 'object' && !Array.isArray(embedding)
-    ? text(Reflect.get(embedding, 'Coverage'))
+    ? text(Reflect.get(embedding, 'coverage')) ?? text(Reflect.get(embedding, 'Coverage'))
+    : null
+  const embeddingJobState = embedding !== null && typeof embedding === 'object' && !Array.isArray(embedding)
+    ? text(Reflect.get(embedding, 'job_state')) ?? text(Reflect.get(embedding, 'JobState'))
+    : null
+  const embeddingErrorCode = embedding !== null && typeof embedding === 'object' && !Array.isArray(embedding)
+    ? text(Reflect.get(embedding, 'error_code')) ?? text(Reflect.get(embedding, 'ErrorCode'))
     : null
   const freshness = Reflect.get(value, 'freshness')
   const freshnessState = freshness !== null && typeof freshness === 'object' && !Array.isArray(freshness)
@@ -567,7 +575,7 @@ function parseStatus(value: unknown): CodeStatus | null {
     || !Number.isInteger(totalChunks) || !Number.isInteger(embeddedChunks)
     || totalChunks < 0 || embeddedChunks < 0 || embeddedChunks > totalChunks
   ) return null
-  return { totalChunks, embeddedChunks, coverage, freshnessState }
+  return { totalChunks, embeddedChunks, coverage, freshnessState, embeddingJobState, embeddingErrorCode }
 }
 
 function timestamp(value: unknown): string | null {

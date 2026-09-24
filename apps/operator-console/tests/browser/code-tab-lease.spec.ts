@@ -60,6 +60,52 @@ test('Code Explorer renews its live tab lease and leaves no renewal timer after 
   ])
 })
 
+test('Code Explorer distinguishes failed embedding from never-indexed and pending work', async ({ page }) => {
+  let embedding: Record<string, unknown> = { coverage: 'partial', job_state: 'failed_terminal', error_code: 'provider_contract', pending_jobs: 0 }
+  let freshnessState = 'unknown'
+  await page.route('**/api/code/**', async (route: Route) => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/code/tabs/handshake') {
+      await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'resume-current', reload_token: 'reload-current' } })
+    } else if (pathname === '/api/code/contexts') {
+      await route.fulfill({ json: { contexts: [{ source_ref: 'source-engram', checkout_ref: 'checkout-current', repository: 'Engram', working_copy: 'Current checkout', indexed_snapshot: { label: 'Current snapshot', revision: '1a9dad0', published_at: '2026-09-17T00:00:00Z' }, selection_ref: 'context-current', index_intent_available: false }] } })
+    } else if (pathname === `/api/code/tabs/${TAB_BINDING_ID}/context`) {
+      await route.fulfill({ status: 204 })
+    } else if (pathname === '/api/code/status') {
+      await route.fulfill({ json: { total_chunks: 0, embedded_chunks: 0, embedding, freshness: { state: freshnessState } } })
+    } else {
+      await route.fulfill({ status: 500 })
+    }
+  })
+
+  await page.goto('/code')
+  await page.getByTestId('code-context-repository').selectOption({ label: 'Engram' })
+  await page.getByTestId('code-context-working-copy').selectOption({ label: 'Current checkout' })
+  await page.getByTestId('code-context-snapshot').selectOption({ label: 'Current snapshot' })
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.locator('.readiness')).toHaveAttribute('data-state', 'failed')
+  await expect(page.locator('.readiness')).toContainText(/индекс/i)
+  await expect(page.locator('.readiness')).not.toContainText('provider_contract')
+  await expect(page.locator('.empty-index button')).toBeVisible()
+
+  embedding = { coverage: 'none', job_state: null, error_code: null, pending_jobs: 0 }
+  await page.getByRole('button', { name: 'Обновить статус' }).click()
+  await expect(page.locator('.readiness')).toHaveAttribute('data-state', 'needs-indexing')
+
+  embedding = { coverage: 'partial', job_state: 'retry_scheduled', error_code: 'provider_unavailable', pending_jobs: 1 }
+  freshnessState = 'observed_current'
+  await page.getByRole('button', { name: 'Обновить статус' }).click()
+  await expect(page.locator('.readiness')).toHaveAttribute('data-state', 'updating')
+
+  embedding = { Coverage: 'partial', JobState: 'failed_terminal', ErrorCode: 'provider_contract' }
+  await page.getByRole('button', { name: 'Обновить статус' }).click()
+  await expect(page.locator('.readiness')).toHaveAttribute('data-state', 'failed')
+
+  embedding = { coverage: 'partial', job_state: 'future_state', error_code: null }
+  await page.getByRole('button', { name: 'Обновить статус' }).click()
+  await expect(page.locator('.readiness')).toHaveAttribute('data-state', 'unknown')
+})
+
 test('Code Explorer resynchronizes a completed selection after catalog refresh while retaining a later partial choice', async ({ page }) => {
   let contextRequests = 0
   const initialCatalog = {
