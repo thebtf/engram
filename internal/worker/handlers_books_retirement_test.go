@@ -48,17 +48,23 @@ func (store *failingResidualBookStore) RetireNonterminal(context.Context, string
 func TestRetireQuiescedBookJobsUsesNonDestructiveTransition(t *testing.T) {
 	service := &Service{}
 	store := &quiescedResidualBookStore{}
-	service.retireQuiescedBookJobs(context.Background(), store)
+	require.True(t, service.retireQuiescedBookJobs(context.Background(), store))
 	require.Equal(t, 1, store.calls)
 	require.Equal(t, booksdomain.RetirementFailureReason, store.reason)
 }
 
-func TestRetireQuiescedBookJobsDoesNotSetInitErrorOnTransientFailure(t *testing.T) {
+func TestRetireQuiescedBookJobsFailurePreventsReadiness(t *testing.T) {
 	service := &Service{}
 	store := &failingResidualBookStore{}
-	service.retireQuiescedBookJobs(context.Background(), store)
+	require.False(t, service.retireQuiescedBookJobs(context.Background(), store))
 	require.Equal(t, 1, store.calls)
-	require.NoError(t, service.GetInitError())
+	require.ErrorContains(t, service.GetInitError(), "transient books store failure")
+	require.False(t, service.ready.Load())
+
+	ready := httptest.NewRecorder()
+	service.handleReady(ready, httptest.NewRequest(http.MethodGet, "/api/ready", nil))
+	require.Equal(t, http.StatusInternalServerError, ready.Code)
+	assert.Contains(t, ready.Body.String(), "transient books store failure")
 }
 
 func TestServiceRoutesRetireBookWriterAndPreserveHistoricalStatus(t *testing.T) {
