@@ -17,7 +17,7 @@ const error = ref(false)
 const available = ref(false)
 
 async function call(path: string, method: 'GET' | 'POST', body?: object): Promise<Response> {
-  if (typeof crypto.randomUUID !== 'function') throw new Error('Secure browser required')
+  if (!window.isSecureContext || typeof crypto.randomUUID !== 'function') throw new Error('Secure browser required')
   return fetch(operatorApiUrl(path), {
     method,
     credentials: 'include',
