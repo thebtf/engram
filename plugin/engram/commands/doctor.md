@@ -30,7 +30,7 @@ a. Check if `engram` MCP server appears in `/mcp` listing (it may be under `plug
 b. If the server shows as failed, report the error shown in `/mcp`.
 
 c. Common issues:
-   - `${ENGRAM_URL}` not expanded → env var not set or not forwarded. Claude Code users should run `/engram:setup`; Codex users should set `ENGRAM_URL` and `ENGRAM_TOKEN` under `~/.codex/config.toml` `[shell_environment_policy.set]`.
+   - `${ENGRAM_URL}` not expanded → env var not set or not forwarded. Claude Code users should run `/engram:setup`. Codex ≥ 0.139 users should configure `~/.engram/config.json` (or `ENGRAM_CONFIG_FILE`); `config.toml` `[shell_environment_policy.set]` is not forwarded to plugin MCP children.
    - Connection refused → server not running or wrong address.
    - 401/403 → wrong worker keycard in `ENGRAM_TOKEN` or revoked token.
    - DNS resolution failed → hostname not reachable from this machine.
