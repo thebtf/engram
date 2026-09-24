@@ -22,6 +22,8 @@ export interface CodeSnapshot {
 
 export interface CodeSafeContext {
   repository: string
+  sourceRef: string
+  checkoutRef: string
   workingCopy: string
   snapshot: CodeSnapshot
   selectionRef: string
@@ -32,6 +34,8 @@ export interface IndexIntentTarget {
 }
 
 export interface CodeCatalogEntry {
+  sourceRef: string
+  checkoutRef: string
   repository: string
   workingCopy: string
   view: CodeSafeContext | null
@@ -336,6 +340,8 @@ function parseCatalogSnapshot(value: unknown): CodeSnapshot | null {
 
 function parseCatalogEntry(value: unknown): CodeCatalogEntry | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const sourceRef = text(Reflect.get(value, 'source_ref'))
+  const checkoutRef = text(Reflect.get(value, 'checkout_ref'))
   const repository = text(Reflect.get(value, 'repository'))
   const workingCopyValue = Reflect.get(value, 'working_copy')
   const workingCopy = typeof workingCopyValue === 'string' ? workingCopyValue.trim() : null
@@ -345,16 +351,16 @@ function parseCatalogEntry(value: unknown): CodeCatalogEntry | null {
   const indexSelectionValue = Reflect.get(value, 'index_intent_selection_ref')
   const selectionRef = selectionRefValue === undefined || selectionRefValue === null ? null : text(selectionRefValue)
   const indexSelectionRef = indexSelectionValue === undefined || indexSelectionValue === null ? null : text(indexSelectionValue)
-  if (repository === null || workingCopy === null || typeof indexIntentAvailable !== 'boolean' || (selectionRefValue !== undefined && selectionRefValue !== null && selectionRef === null) || (indexSelectionValue !== undefined && indexSelectionValue !== null && indexSelectionRef === null)) return null
+  if (sourceRef === null || checkoutRef === null || repository === null || workingCopy === null || typeof indexIntentAvailable !== 'boolean' || (selectionRefValue !== undefined && selectionRefValue !== null && selectionRef === null) || (indexSelectionValue !== undefined && indexSelectionValue !== null && indexSelectionRef === null)) return null
 
   if (snapshotValue === undefined || snapshotValue === null) {
     if (selectionRef !== null || indexIntentAvailable !== (indexSelectionRef !== null)) return null
-    return { repository, workingCopy, view: null, indexIntentAvailable, indexIntentTarget: indexSelectionRef === null ? null : { selectionRef: indexSelectionRef } }
+    return { sourceRef, checkoutRef, repository, workingCopy, view: null, indexIntentAvailable, indexIntentTarget: indexSelectionRef === null ? null : { selectionRef: indexSelectionRef } }
   }
 
   const snapshot = parseCatalogSnapshot(snapshotValue)
   if (snapshot === null || selectionRef === null || indexIntentAvailable || indexSelectionRef !== null) return null
-  return { repository, workingCopy, view: { repository, workingCopy, snapshot, selectionRef }, indexIntentAvailable: false, indexIntentTarget: null }
+  return { sourceRef, checkoutRef, repository, workingCopy, view: { sourceRef, checkoutRef, repository, workingCopy, snapshot, selectionRef }, indexIntentAvailable: false, indexIntentTarget: null }
 }
 
 function parseCatalog(value: unknown): CodeCatalogEntry[] | null {

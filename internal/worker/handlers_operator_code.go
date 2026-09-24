@@ -2313,11 +2313,19 @@ type operatorCodeCatalogView struct {
 type operatorCodeCatalogEntry struct {
 	Repository              string                   `json:"repository"`
 	WorkingCopy             string                   `json:"working_copy"`
+	SourceRef               string                   `json:"source_ref"`
+	CheckoutRef             string                   `json:"checkout_ref"`
 	IndexedSnapshot         *operatorCodeCatalogView `json:"indexed_snapshot,omitempty"`
 	SelectionRef            string                   `json:"selection_ref,omitempty"`
 	IndexIntentAvailable    bool                     `json:"index_intent_available"`
 	IndexIntentSelectionRef string                   `json:"index_intent_selection_ref,omitempty"`
 }
+// These presentation-only keys are stable across snapshots without exposing raw IDs.
+func operatorCodeCatalogRef(kind string, ids ...string) string {
+	value := sha256.Sum256([]byte(kind + "\x00" + strings.Join(ids, "\x00")))
+	return hex.EncodeToString(value[:])
+}
+
 
 type operatorCodeContextsResponse struct {
 	Contexts []operatorCodeCatalogEntry `json:"contexts"`
@@ -2326,7 +2334,7 @@ type operatorCodeContextsResponse struct {
 func operatorCodeCatalogEntries(entries []gormdb.BrowserCodeContextCatalogEntry, targets operatorCodeIndexTargetResolver) []operatorCodeCatalogEntry {
 	result := make([]operatorCodeCatalogEntry, 0, len(entries))
 	for _, entry := range entries {
-		item := operatorCodeCatalogEntry{Repository: entry.SourceLabel, WorkingCopy: entry.CheckoutLabel}
+		item := operatorCodeCatalogEntry{Repository: entry.SourceLabel, WorkingCopy: entry.CheckoutLabel, SourceRef: operatorCodeCatalogRef("source", entry.SourceID), CheckoutRef: operatorCodeCatalogRef("checkout", entry.SourceID, entry.CheckoutID)}
 		if entry.Context != nil {
 			item.SelectionRef = operatorCodeContextSelectionRef(*entry.Context)
 			item.IndexedSnapshot = &operatorCodeCatalogView{Label: entry.ViewLabel, Revision: entry.SnapshotRevision, PublishedAt: entry.SnapshotPublishedAt}

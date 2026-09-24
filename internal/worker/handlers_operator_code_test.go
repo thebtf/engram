@@ -127,18 +127,34 @@ func TestOperatorCodeHTTPAdapter_CatalogKeepsWorktreesExplicitAndNoViewUnselecte
 	second.CheckoutID = "30000000-0000-4000-8000-000000000002"
 	second.ViewID = "40000000-0000-4000-8000-000000000002"
 	noViewCheckout := "30000000-0000-4000-8000-000000000003"
+	otherSource := second.Clone()
+	otherSource.SourceID = "20000000-0000-4000-8000-000000000002"
+	otherSource.CheckoutID = "30000000-0000-4000-8000-000000000004"
+	otherSource.ViewID = "40000000-0000-4000-8000-000000000004"
 	fixture.contexts.entries = append(fixture.contexts.entries,
-		gormdb.BrowserCodeContextCatalogEntry{SourceID: second.SourceID, SourceLabel: "Engram", CheckoutID: second.CheckoutID, CheckoutLabel: "Laptop · feature API", Context: &second, ViewLabel: "feature/api"},
-		gormdb.BrowserCodeContextCatalogEntry{SourceID: fixture.ref.SourceID, SourceLabel: "Engram", CheckoutID: noViewCheckout, CheckoutLabel: "CI worker · awaiting first index", IndexIntentAvailable: true},
+		gormdb.BrowserCodeContextCatalogEntry{SourceID: second.SourceID, SourceLabel: "Engram", CheckoutID: second.CheckoutID, CheckoutLabel: "Studio workstation · release candidate", Context: &second, ViewLabel: "feature/api"},
+		gormdb.BrowserCodeContextCatalogEntry{SourceID: fixture.ref.SourceID, SourceLabel: "Engram", CheckoutID: noViewCheckout, CheckoutLabel: "Studio workstation · release candidate", IndexIntentAvailable: true},
+		gormdb.BrowserCodeContextCatalogEntry{SourceID: otherSource.SourceID, SourceLabel: "Engram", CheckoutID: otherSource.CheckoutID, CheckoutLabel: "Studio workstation · release candidate", Context: &otherSource, ViewLabel: "feature/api"},
 	)
 	recorder := httptest.NewRecorder()
 	adapter.HandleContexts(recorder, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current"}`, fixture.identity))
 
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	require.Contains(t, recorder.Body.String(), `"working_copy":"Laptop · feature API"`)
+	require.Contains(t, recorder.Body.String(), `"working_copy":"Studio workstation · release candidate"`)
 	require.Contains(t, recorder.Body.String(), `"indexed_snapshot":{"label":"feature/api"}`)
 	require.Contains(t, recorder.Body.String(), `"index_intent_available":true,"index_intent_selection_ref":"`)
-	for _, forbidden := range []string{second.CheckoutID, second.ViewID, noViewCheckout, operatorCodeHTTPTestProfileID, "grant_ref"} {
+	var catalog operatorCodeContextsResponse
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &catalog))
+	require.Len(t, catalog.Contexts, 4)
+	require.Equal(t, catalog.Contexts[0].SourceRef, catalog.Contexts[1].SourceRef)
+	require.NotEqual(t, catalog.Contexts[0].SourceRef, catalog.Contexts[3].SourceRef)
+	for i := 0; i < len(catalog.Contexts); i++ {
+		require.NotEmpty(t, catalog.Contexts[i].CheckoutRef)
+		for j := i + 1; j < len(catalog.Contexts); j++ {
+			require.NotEqual(t, catalog.Contexts[i].CheckoutRef, catalog.Contexts[j].CheckoutRef)
+		}
+	}
+	for _, forbidden := range []string{second.CheckoutID, second.ViewID, noViewCheckout, otherSource.SourceID, otherSource.CheckoutID, otherSource.ViewID, operatorCodeHTTPTestProfileID, "grant_ref"} {
 		require.NotContains(t, recorder.Body.String(), forbidden)
 	}
 }

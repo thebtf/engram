@@ -115,6 +115,7 @@ const flags = {
 const codeWorkspaces = [
   {
     repository: 'Engram',
+    sourceRef: 'mock-source-ref', checkoutRef: 'mock-checkout-main-ref',
     workingCopy: 'main · workstation',
     snapshot: { label: 'Current indexed snapshot', revision: '1a9dad0', publishedAt: '2026-09-17T09:00:00Z' },
     selectionRef: 'mock-workspace-main',
@@ -124,6 +125,7 @@ const codeWorkspaces = [
     repository: 'Engram',
     workingCopy: 'feature/operator-workspace · operator desk',
     snapshot: { label: 'Workspace candidate snapshot', revision: '1a9dad0', publishedAt: '2026-09-17T09:03:00Z' },
+    sourceRef: 'mock-source-ref', checkoutRef: 'mock-checkout-candidate-ref',
     selectionRef: 'mock-workspace-candidate',
     context: { sourceId: 'mock-source-candidate', checkoutId: 'mock-checkout-candidate', viewId: 'mock-view-candidate', profileId: 'mock-profile-candidate', generation: 8 },
   },
@@ -132,6 +134,7 @@ const codeWorkspaces = [
     workingCopy: 'recovery · offline owner',
     snapshot: null,
     selectionRef: null,
+    sourceRef: 'mock-source-ref', checkoutRef: 'mock-checkout-recovery-ref',
     indexIntentSelectionRef: 'mock-first-index',
     context: null,
   },
@@ -144,6 +147,8 @@ let codeIndexIntentBindingId = null
 function codeCatalogResponse() {
   return {
     contexts: codeWorkspaces.map((workspace) => ({
+      source_ref: workspace.sourceRef,
+      checkout_ref: workspace.checkoutRef,
       repository: workspace.repository,
       working_copy: workspace.workingCopy,
       ...(workspace.snapshot === null ? {} : {
