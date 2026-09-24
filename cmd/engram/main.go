@@ -1012,8 +1012,7 @@ func main() {
 	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h" || os.Args[1] == "--version" || os.Args[1] == "-v") {
 		fmt.Printf("engram %s — stdio MCP daemon for Claude Code\n", daemonVersion)
 		fmt.Println()
-		fmt.Println("This binary is invoked automatically by the engram plugin.")
-		fmt.Println("It is not intended to be run directly.")
+		fmt.Println("Run directly as a stdio MCP process or through the engram plugin.")
 		fmt.Println()
 		fmt.Println("Environment:")
 		fmt.Printf("  %-28s  Server URL (e.g. http://host:37777)\n", config.EnvServerURL)
@@ -1025,6 +1024,19 @@ func main() {
 	// any heavy initialisation. Loud failure beats silent loom_*-only
 	// graceful degradation that masked PR #203's regression for days.
 	startupGate()
+
+	// Both the stdio shim and its daemon child must inherit the same installation ID.
+	clientInstanceID, err := directClientInstanceID()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[engram] FATAL: client identity initialization failed: %v\n", err)
+		os.Exit(1)
+	}
+	if os.Getenv(config.EnvClientInstanceID) == "" {
+		if err := os.Setenv(config.EnvClientInstanceID, clientInstanceID); err != nil {
+			fmt.Fprintf(os.Stderr, "[engram] FATAL: client identity initialization failed: %v\n", err)
+			os.Exit(1)
+		}
+	}
 
 	daemonCtx, daemonCancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer daemonCancel()

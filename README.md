@@ -147,6 +147,11 @@ environment:
   ENGRAM_TOKEN: <per-workstation-keycard>
 ```
 
+Direct launches create a stable, non-secret `client-instance-id` in
+`ENGRAM_DATA_DIR` (default `~/.engram`) on first use. Keep this installation
+state across restarts; the plugin launcher uses the same atomic identity format.
+An explicit `ENGRAM_CLIENT_INSTANCE_ID` overrides the generated ID.
+
 For a source checkout, build the binaries with:
 
 ```bash
