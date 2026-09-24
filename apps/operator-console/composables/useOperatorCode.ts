@@ -1,7 +1,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { operatorApiUrl } from './useOperatorApi'
 
-export type CodeBootstrapPhase = 'idle' | 'binding' | 'ready' | 'collision' | 'ambiguous' | 'reload-pending' | 'denied' | 'error'
+export type CodeBootstrapPhase = 'idle' | 'binding' | 'ready' | 'collision' | 'ambiguous' | 'reload-pending' | 'denied' | 'secure-origin-required' | 'error'
 export type CodePresentationKind = 'idle' | 'loading' | 'ready' | 'empty' | 'partial' | 'stale' | 'denied' | 'unsupported' | 'timeout' | 'offline' | 'error'
 
 export type CodeCatalogState = 'idle' | 'loading' | 'ready' | 'empty' | 'denied' | 'unavailable' | 'offline'
@@ -1234,6 +1234,10 @@ export function useOperatorCode() {
     bootstrapPhase.value = 'binding'
     const remount = spaRemount
     spaRemount = null
+    if (!window.isSecureContext) {
+      bootstrapPhase.value = 'secure-origin-required'
+      return
+    }
     const documentNonce = requestId()
     if (documentNonce === null) {
       bootstrapPhase.value = 'error'

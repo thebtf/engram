@@ -2262,6 +2262,7 @@
       "choose": "Choose a Source / Checkout / View",
       "chooseRepository": "Choose a repository",
       "chooseWorkingCopy": "Choose a working copy",
+      "unnamedWorkingCopy": "Unnamed working copy",
       "chooseSnapshot": "Choose an indexed snapshot",
       "revision": "Revision",
       "publishedAt": "Published",
@@ -2299,6 +2300,7 @@
         "ambiguous": "Ambiguous bootstrap",
         "reload-pending": "Reload pending",
         "denied": "Binding denied",
+        "secure-origin-required": "HTTPS required",
         "error": "Binding error"
       },
       "messages": {
@@ -2309,7 +2311,8 @@
         "ambiguous": "Bootstrap was ambiguous; the new binding starts unselected.",
         "reload-pending": "The prior document lease is still live. Retry after it closes or expires.",
         "denied": "The server denied this browser binding.",
-        "error": "The server could not establish a safe browser binding."
+        "error": "The server could not establish a safe browser binding. If this is already HTTPS, check whether your browser supports crypto.randomUUID.",
+        "secure-origin-required": "This HTTP address cannot establish a safe browser binding. Open the console at a configured HTTPS address for this server and sign in as yourself. Indexing and reading require server-issued Source/Checkout grants; unsafe flags and hand-entered IDs cannot substitute."
       }
     },
     "results": {

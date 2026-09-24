@@ -24,12 +24,13 @@ const emit = defineEmits<{
 
 const repository = ref('')
 const workingCopy = ref('')
+const workingCopyChosen = ref(false)
 const snapshotRef = ref('')
 const selectionDirty = ref(false)
 const repositories = computed(() => [...new Set(props.catalog.map((entry) => entry.repository))])
 const workingCopies = computed(() => [...new Set(props.catalog.filter((entry) => entry.repository === repository.value).map((entry) => entry.workingCopy))])
-const snapshotEntries = computed(() => props.catalog.filter((entry) => entry.repository === repository.value && entry.workingCopy === workingCopy.value && entry.view !== null))
-const noViewEntry = computed(() => props.catalog.find((entry) => entry.repository === repository.value && entry.workingCopy === workingCopy.value && entry.view === null) ?? null)
+const snapshotEntries = computed(() => workingCopyChosen.value ? props.catalog.filter((entry) => entry.repository === repository.value && entry.workingCopy === workingCopy.value && entry.view !== null) : [])
+const noViewEntry = computed(() => workingCopyChosen.value ? props.catalog.find((entry) => entry.repository === repository.value && entry.workingCopy === workingCopy.value && entry.view === null) ?? null : null)
 const samePinned = computed(() => props.candidate?.selectionRef === props.pinned?.selectionRef)
 const phaseLabel = computed(() => t(`codeExplorer.context.phases.${props.phase}`))
 const phaseMessage = computed(() => {
@@ -42,24 +43,35 @@ const phaseMessage = computed(() => {
 watch([() => props.catalog, () => props.candidate, () => props.pinned], () => {
   if (selectionDirty.value) return
   const selected = props.candidate ?? props.pinned
-  if (selected === null) return
-  repository.value = selected.repository
-  workingCopy.value = selected.workingCopy
-  snapshotRef.value = selected.selectionRef
+  if (selected !== null) {
+    repository.value = selected.repository
+    workingCopy.value = selected.workingCopy
+    workingCopyChosen.value = true
+    snapshotRef.value = selected.selectionRef
+    return
+  }
+  if (repository.value !== '' || workingCopyChosen.value || repositories.value.length !== 1) return
+  repository.value = repositories.value[0] ?? ''
+  if (workingCopies.value.length === 1) {
+    workingCopy.value = workingCopies.value[0] ?? ''
+    workingCopyChosen.value = true
+  }
 }, { immediate: true })
 
 function chooseRepository(event: Event): void {
   selectionDirty.value = true
   repository.value = (event.target as HTMLSelectElement).value
   workingCopy.value = ''
+  workingCopyChosen.value = false
   snapshotRef.value = ''
   emit('select', null)
 }
 
 function chooseWorkingCopy(event: Event): void {
   selectionDirty.value = true
-  workingCopy.value = (event.target as HTMLSelectElement).value
-  snapshotRef.value = ''
+  const index = Number((event.target as HTMLSelectElement).value) - 1
+  workingCopy.value = workingCopies.value[index] ?? ''
+  workingCopyChosen.value = index >= 0 && index < workingCopies.value.length
   emit('select', null)
 }
 
@@ -93,14 +105,14 @@ function chooseSnapshot(event: Event): void {
       </label>
       <label class="selector">
         <span>{{ t('workspace.workingCopy') }}</span>
-        <select :value="workingCopy" :disabled="pending || repository === ''" data-testid="code-context-working-copy" @change="chooseWorkingCopy">
+        <select :value="workingCopyChosen ? String(workingCopies.indexOf(workingCopy) + 1) : ''" :disabled="pending || repository === ''" data-testid="code-context-working-copy" @change="chooseWorkingCopy">
           <option value="" disabled>{{ t('codeExplorer.context.chooseWorkingCopy') }}</option>
-          <option v-for="name in workingCopies" :key="name" :value="name">{{ name }}</option>
+          <option v-for="(name, index) in workingCopies" :key="index" :value="String(index + 1)">{{ name || t('codeExplorer.context.unnamedWorkingCopy') }}</option>
         </select>
       </label>
       <label class="selector">
         <span>{{ t('workspace.indexedSnapshot') }}</span>
-        <select :value="snapshotRef" :disabled="pending || workingCopy === '' || snapshotEntries.length === 0" data-testid="code-context-snapshot" @change="chooseSnapshot">
+        <select :value="snapshotRef" :disabled="pending || !workingCopyChosen || snapshotEntries.length === 0" data-testid="code-context-snapshot" @change="chooseSnapshot">
           <option value="" disabled>{{ t('codeExplorer.context.chooseSnapshot') }}</option>
           <option v-for="entry in snapshotEntries" :key="entry.view?.selectionRef" :value="entry.view?.selectionRef">{{ entry.view?.snapshot.label }}</option>
         </select>

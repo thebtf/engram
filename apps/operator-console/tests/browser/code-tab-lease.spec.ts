@@ -111,7 +111,7 @@ test('Code Explorer resynchronizes a completed selection after catalog refresh w
   await page.getByTestId('code-context-working-copy').selectOption({ label: 'stale candidate checkout' })
   await page.getByTestId('code-context-snapshot').selectOption({ label: 'Stale candidate snapshot' })
   await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
-  await expect(page.getByTestId('code-context-working-copy')).toHaveValue('refreshed candidate checkout')
+  await expect(page.getByTestId('code-context-working-copy').locator('option:checked')).toHaveText('refreshed candidate checkout')
   await expect(page.getByTestId('code-context-snapshot')).toHaveValue('context-current')
 
   await page.getByTestId('code-context-repository').selectOption({ label: 'Other repository' })
@@ -297,4 +297,106 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
   await page.clock.fastForward('01:00')
   await expect.poll(() => leasePayloads).toEqual([{ document_proof: 'proof-resumed' }])
   await copied.close()
+})
+
+test('Workspace explains an insecure origin without creating a browser binding', async ({ page }) => {
+  const requests: string[] = []
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'isSecureContext', { value: false })
+  })
+  await page.route('**/api/code/**', async (route) => {
+    requests.push(route.request().url())
+    await route.fulfill({ status: 500 })
+  })
+  await page.goto('/code')
+  await expect(page.getByTestId('code-context-message')).toContainText('HTTPS')
+  await expect(page.getByTestId('code-context-empty')).toBeVisible()
+  expect(requests).toEqual([])
+})
+
+test('Home opens a no-View working copy, then follows its released index to search, relation and source', async ({ page }) => {
+  const submitted: unknown[] = []
+  let published = false
+  const context = { source_id: 'source-1', checkout_id: 'checkout-1', view_id: 'view-1', profile_id: 'profile-1', generation: 1 }
+  const ref = { source_id: 'source-1', view_id: 'view-1', entity_key: 'implementation' }
+  const related = { source_id: 'source-1', view_id: 'view-1', entity_key: 'dependency' }
+  const span = { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }
+  const item = { ref, path: 'src/implementation.ts', span, content_digest: 'digest-1', kind: 'function', language: 'typescript', excerpt: 'function go()', match_sources: ['lexical'], score: 1 }
+  const envelope = { schema: 'engram.code-query/1', status: 'ok', contexts: [context], items: [item], warnings: [], retrieval: { mode: 'lexical' }, freshness: { state: 'observed_current' }, coverage: {}, truncated: false }
+  const intent = { intent_ref: 'intent-first', state: 'queued', attempt: 1, retryable: false, created_at: '2026-09-15T00:00:00Z', updated_at: '2026-09-15T00:00:00Z' }
+  await page.route('**/api/code/**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/code/tabs/handshake') {
+      await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'resume-current', reload_token: 'reload-current' } })
+    } else if (pathname === '/api/code/contexts') {
+      await route.fulfill({
+        json: {
+          contexts: [published
+            ? { repository: 'Engram', working_copy: 'feature/workspace', indexed_snapshot: { label: 'Published implementation' }, selection_ref: 'server-issued-view', index_intent_available: false }
+            : { repository: 'Engram', working_copy: 'feature/workspace', index_intent_available: true, index_intent_selection_ref: 'server-issued-target' }]
+        }
+      })
+    } else if (pathname === '/api/code/index-intents') {
+      submitted.push(route.request().postDataJSON())
+      await route.fulfill({ status: 202, json: intent })
+    } else if (pathname === '/api/code/index-intents/intent-first') {
+      published = true
+      await route.fulfill({ json: { ...intent, state: 'completed', result: { view_ref: 'view-1', generation: 1 } } })
+    } else if (pathname === `/api/code/tabs/${TAB_BINDING_ID}/context`) {
+      await route.fulfill({ status: 204 })
+    } else if (pathname === '/api/code/status') {
+      await route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { Coverage: 'complete' }, freshness: { state: 'observed_current' } } })
+    } else if (pathname === '/api/code/structure' || pathname === '/api/code/search' || pathname === '/api/code/source') {
+      await route.fulfill({ json: envelope })
+    } else if (pathname === '/api/code/graph') {
+      await route.fulfill({ json: { ...envelope, graph: { nodes: [ref, related], edges: [{ from: ref, to: related, relation: 'calls', evidence_kind: 'syntax' }], stop_reason: 'complete' }, navigation: { nodes: [{ entity: ref, context_ref: { ...context, analysis_profile_id: context.profile_id }, source_state: 'available', source_read: { entity_key: ref.entity_key, span, content_digest: item.content_digest } }, { entity: related, context_ref: { ...context, analysis_profile_id: context.profile_id }, source_state: 'unavailable' }], edges: [{ from: { entity: ref }, to: { entity: related }, relation: 'calls', evidence_kind: 'syntax' }] } } })
+    } else {
+      await route.fulfill({ status: 500 })
+    }
+  })
+  await page.goto('/')
+  await page.getByTestId('overview-workspace-entry').click()
+  await expect(page.getByTestId('code-context-working-copy').locator('option:checked')).toHaveText('feature/workspace')
+  await expect(page.getByTestId('code-context-index-affordance')).toBeVisible()
+  await page.getByTestId('code-request-first-index').click()
+  await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'queued')
+  expect(submitted).toHaveLength(1)
+  expect(submitted[0]).toMatchObject({ kind: 'reindex', target: { selection_ref: 'server-issued-target' } })
+  await page.getByTestId('index-intent-check-status').click()
+  await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'completed')
+  await page.getByTestId('code-context-snapshot').selectOption({ label: 'Published implementation' })
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.getByTestId('code-status')).toContainText('1 / 1')
+  await page.getByTestId('code-query-input').fill('implementation')
+  await page.getByTestId('code-search-submit').click()
+  await expect(page.getByTestId('code-search-results')).toContainText('src/implementation.ts')
+  await page.getByTestId('code-search-explore').click()
+  await expect(page.getByTestId('code-graph-results')).toBeVisible()
+  await page.getByTestId('code-search-source').click()
+  await expect(page.getByTestId('code-source-result')).toContainText('function go()')
+})
+
+test('An unnamed working copy remains selectable without confusing it with the prompt', async ({ page }) => {
+  await page.route('**/api/code/**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/code/tabs/handshake') {
+      await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'resume-current', reload_token: 'reload-current' } })
+    } else if (pathname === '/api/code/contexts') {
+      await route.fulfill({
+        json: {
+          contexts: [
+            { repository: 'Engram', working_copy: '', index_intent_available: true, index_intent_selection_ref: 'opaque-unnamed' },
+            { repository: 'Engram', working_copy: 'other checkout', index_intent_available: false },
+          ]
+        }
+      })
+    } else {
+      await route.fulfill({ status: 500 })
+    }
+  })
+  await page.goto('/code')
+  await expect(page.getByTestId('code-context-index-affordance')).toHaveCount(0)
+  await page.getByTestId('code-context-working-copy').selectOption({ label: 'Рабочая копия без имени' })
+  await expect(page.getByTestId('code-context-index-affordance')).toBeVisible()
+  await expect(page.getByTestId('code-request-first-index')).toBeEnabled()
 })

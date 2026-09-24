@@ -2229,7 +2229,14 @@
   },
   "codeExplorer": {
     "context": {
-      "selectionGroup": "仓库、工作副本和索引快照"
+      "selectionGroup": "仓库、工作副本和索引快照",
+      "unnamedWorkingCopy": "未命名工作副本",
+      "phases": {
+        "secure-origin-required": "需要 HTTPS"
+      },
+      "messages": {
+        "secure-origin-required": "当前 HTTP 地址无法建立安全的浏览器绑定。请通过服务器配置的 HTTPS 地址打开控制台并以本人身份登录；索引和读取需要服务器授予的 Source/Checkout 权限。"
+      }
     }
   },
   "workspace": {

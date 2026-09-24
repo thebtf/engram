@@ -2262,6 +2262,7 @@
       "choose": "Выберите Source / Checkout / View",
       "chooseRepository": "Выберите репозиторий",
       "chooseWorkingCopy": "Выберите рабочую копию",
+      "unnamedWorkingCopy": "Рабочая копия без имени",
       "chooseSnapshot": "Выберите снимок индекса",
       "revision": "Ревизия",
       "publishedAt": "Опубликован",
@@ -2299,6 +2300,7 @@
         "ambiguous": "Неоднозначный запуск",
         "reload-pending": "Ожидается reload",
         "denied": "Binding отклонён",
+        "secure-origin-required": "Нужен HTTPS",
         "error": "Ошибка binding"
       },
       "messages": {
@@ -2309,7 +2311,8 @@
         "ambiguous": "Запуск неоднозначен; новый binding начинается без выбора.",
         "reload-pending": "Предыдущая lease документа ещё активна. Повторите после закрытия или истечения.",
         "denied": "Сервер отклонил этот binding браузера.",
-        "error": "Сервер не смог безопасно создать binding браузера."
+        "error": "Сервер не смог безопасно создать binding браузера. Если адрес уже защищён HTTPS, проверьте поддержку crypto.randomUUID в браузере.",
+        "secure-origin-required": "Этот HTTP-адрес не поддерживает безопасный browser binding. Откройте консоль через настроенный HTTPS-адрес того же сервера и войдите своей учётной записью. Индексация и чтение требуют выданных сервером прав Source/Checkout; небезопасные флаги и ручные идентификаторы не помогут."
       }
     },
     "results": {
