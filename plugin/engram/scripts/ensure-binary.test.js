@@ -8,8 +8,8 @@ const { Readable } = require("node:stream");
 const test = require("node:test");
 
 const {
-  BootstrapError, downloadObject, hashFile, importLegacy, loadPolicy, objectPath, objectRoots, parsePolicy,
-  publishStage, requestStream, resolveForLaunch, verifyObject,
+  BootstrapError, downloadObject, hashFile, importLegacy, loadPolicy, loadParserTarget, installParser,
+  objectPath, objectRoots, parsePolicy, publishStage, requestStream, resolveForLaunch, verifyObject,
 } = require("./ensure-binary.js");
 
 function digest(bytes) { return crypto.createHash("sha256").update(bytes).digest("hex"); }
@@ -146,8 +146,28 @@ test("offline resolution uses a verified desired object and rejects bytes change
   const policy = selected();
   const object = objectPath(roots, policy.target.desired);
   fs.writeFileSync(object, fixture().bytes);
-  const resolved = await resolveForLaunch({ pluginRoot: root, pluginData: root, policy, request: () => { throw new Error("network must not run"); } });
+  const resolved = await resolveForLaunch({ pluginRoot: root, pluginData: root, policy, parserTarget: null, request: () => { throw new Error("network must not run"); } });
   assert.equal(resolved.path, object);
   fs.writeFileSync(object, "poisoned");
   assert.equal(hashFile(resolved.path, resolved.target, roots.objects), false, "wrapper final rehash detects post-resolution mutation");
+});
+test("parser policy is tied to the active plugin version and verified sibling bytes", async () => {
+  const pluginRoot = path.resolve(__dirname, "..");
+  const current = loadPolicy(pluginRoot);
+  const parser = loadParserTarget(pluginRoot, current.package_version, "win32-x64");
+  assert.equal(parser.asset, "uci-parser-windows-amd64.exe");
+  assert.throws(() => loadParserTarget(pluginRoot, "6.50.1", "win32-x64"), /does not match/);
+  const root = tempRoot();
+  const roots = objectRoots(root);
+  const client = objectPath(roots, selected().target.desired);
+  fs.writeFileSync(client, fixture().bytes);
+  const bytes = Buffer.from("verified parser bytes");
+  const target = { version: "6.47.0", asset: parser.asset, size: bytes.length, sha256: digest(bytes) };
+  fs.writeFileSync(objectPath(roots, target), bytes);
+  const installed = await installParser(roots, client, target, { request: () => { throw new Error("network must not run"); } });
+  assert.equal(installed, path.join(path.dirname(client), "parser", `parser${path.extname(client)}`));
+  assert.equal(hashFile(installed, target, roots.objects), true);
+  fs.unlinkSync(installed);
+  fs.writeFileSync(installed, "poisoned");
+  await assert.rejects(installParser(roots, client, target, {}), /verification/);
 });

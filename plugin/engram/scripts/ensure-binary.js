@@ -59,6 +59,35 @@ function loadPolicy(pluginRoot, options = {}) {
   return parsePolicy(text, packageVersion, options.platformKey || platformKey(options.platform, options.arch));
 }
 
+function loadParserTarget(pluginRoot, packageVersion, key) {
+  let policy;
+  try { policy = JSON.parse(fs.readFileSync(path.join(pluginRoot, "parser-targets.json"), "utf8")); }
+  catch (error) { fail(`could not read parser policy: ${error.message}`); }
+  if (policy.schema_version !== 1 || policy.package_version !== packageVersion ||
+    Object.keys(policy).sort().join() !== "package_version,schema_version,targets" ||
+    !policy.targets || Object.keys(policy.targets).sort().join() !== "darwin-arm64,linux-x64,win32-x64") {
+    fail("parser policy does not match installed client package");
+  }
+  const target = policy.targets[key];
+  if (target === null && key !== "win32-x64") return null;
+  if (!target || Object.keys(target).sort().join() !== "asset,sha256,size,version" ||
+    target.version !== packageVersion || target.asset !== "uci-parser-windows-amd64.exe" ||
+    !Number.isSafeInteger(target.size) || target.size < 1 || target.size > MAX_OBJECT_BYTES ||
+    !/^[a-f0-9]{64}$/.test(target.sha256)) fail("parser target is invalid");
+  return Object.freeze(target);
+}
+
+async function installParser(roots, clientPath, target, options) {
+  const object = await acquire(roots, target, options);
+  if (!hashFile(object, target, roots.objects)) fail("parser object failed final verification");
+  const directory = assertSafeDirectory(path.join(path.dirname(clientPath), "parser"));
+  const parserPath = path.join(directory, `parser${path.extname(clientPath)}`);
+  try { fs.linkSync(object, parserPath); }
+  catch (error) { if (error.code !== "EEXIST") throw error; }
+  if (!hashFile(parserPath, target, roots.objects)) fail("installed parser sibling failed verification");
+  return parserPath;
+}
+
 function isInside(root, candidate) {
   const relative = path.relative(root, candidate);
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
@@ -278,9 +307,12 @@ async function resolveForLaunch(options = {}) {
   for (const target of candidates) {
     try {
       const object = await acquire(roots, target, options);
-      // Result authority exists only after this final, independent verification.
       if (!hashFile(object, target, roots.objects)) fail("final object verification failed");
-      return Object.freeze({ path: object, target });
+      const parserTarget = options.parserTarget === undefined
+        ? loadParserTarget(pluginRoot, policy.package_version, policy.platform)
+        : options.parserTarget;
+      const parserPath = parserTarget ? await installParser(roots, object, parserTarget, options) : "";
+      return Object.freeze({ path: object, target, parserPath, parserTarget });
     } catch (error) { lastError = error; }
   }
   throw new BootstrapError(`no authorized client object is available: ${lastError ? lastError.message : "none"}`);
@@ -307,5 +339,5 @@ module.exports = {
   BootstrapError, MAX_OBJECT_BYTES, MAX_REDIRECTS, TARGET_ASSETS,
   hashFile, importLegacy, loadPolicy, objectPath, objectRoots, parsePolicy,
   platformKey, prefetch, publishStage, requestStream, resolveForLaunch, verifyObject,
-  downloadObject,
+  downloadObject, loadParserTarget, installParser,
 };

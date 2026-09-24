@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const policy = require("../plugin/engram/bootstrap-targets.json");
+const parser = require("../plugin/engram/parser-targets.json").targets["win32-x64"];
 const { verifyReleaseAssets } = require("./verify-bootstrap-release-assets.js");
 const releaseTag = `v${policy.package_version}`;
 
@@ -66,4 +67,13 @@ test("rejects missing, duplicate, non-uploaded, or mismatched launcher assets", 
     mutation(release.assets[0]);
     assert.throws(() => verifyReleaseAssets(policy, [release], releaseTag), /asset mismatch/);
   }
+});
+
+test("parser release asset must be present and match its pinned digest", () => {
+  const release = draft();
+  assert.throws(() => verifyReleaseAssets(policy, [release], releaseTag, parser), /exactly one uploaded/);
+  release.assets.push({ name: parser.asset, state: "uploaded", size: parser.size, digest: `sha256:${parser.sha256}` });
+  assert.equal(verifyReleaseAssets(policy, [release], releaseTag, parser), 47);
+  release.assets.at(-1).digest = `sha256:${"0".repeat(64)}`;
+  assert.throws(() => verifyReleaseAssets(policy, [release], releaseTag, parser), /asset mismatch/);
 });

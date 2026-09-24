@@ -706,6 +706,25 @@ test("final rehash failure prevents spawn of resolved bytes", async () => {
   assert.equal(spawned, false);
 });
 
+test("verified parser identity reaches daemon without inherited parser overrides", async () => {
+  const digest = `sha256:${"a".repeat(64)}`;
+  const calls = [];
+  const status = await resolveAndSpawn({
+    pluginRoot: "root", pluginData: "data", args: ["serve"],
+    env: { SYSTEMROOT: "C:\\Windows", SECRET: "not-for-parser", ENGRAM_UCI_PARSER_EXECUTABLE: "foreign" },
+    resolve: async () => ({ path: "client", target: { sha256: "b".repeat(64) }, parserPath: "parser", parserTarget: { sha256: "c".repeat(64) } }),
+    roots: () => ({ objects: "objects" }), hash: () => true,
+    spawnSync: (file, args, options) => {
+      calls.push({ file, args, options });
+      return file === "parser" ? { status: 0, stdout: `${digest}\n` } : { status: 0 };
+    },
+  });
+  assert.equal(status, 0);
+  assert.deepEqual(calls[0].options.env, { SYSTEMROOT: "C:\\Windows" });
+  assert.equal(calls[1].options.env.ENGRAM_UCI_PARSER_BUNDLE_DIGEST, digest);
+  assert.equal(calls[1].options.env.ENGRAM_UCI_PARSER_EXECUTABLE, "parser");
+});
+
 function restoreEnv(key, value) {
   if (value === undefined) {
     delete process.env[key];

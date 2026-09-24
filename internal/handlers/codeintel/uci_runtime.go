@@ -477,7 +477,7 @@ func uciRuntimeInstalledParserExecutable(configuredPath string) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("uci runtime: canonicalize running daemon executable: %w", err)
 	}
-	expectedPath := filepath.Join(filepath.Dir(filepath.Dir(daemonPath)), "parser", "parser"+filepath.Ext(daemonPath))
+	expectedPath := filepath.Join(filepath.Dir(daemonPath), "parser", "parser"+filepath.Ext(daemonPath))
 	expectedPath, err = uciRuntimeCanonicalPath(expectedPath)
 	if err != nil {
 		return "", fmt.Errorf("uci runtime: resolve installed parser sibling: %w", err)

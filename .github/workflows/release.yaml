@@ -56,6 +56,9 @@ jobs:
       - name: Verify committed launcher policy
         run: scripts/prepare-bootstrap-policy.sh --version "${GITHUB_REF_NAME#v}" --check
 
+      - name: Verify committed parser policy
+        run: scripts/prepare-parser-targets.sh --version "${GITHUB_REF_NAME#v}" --check
+
       # GoReleaser OSS has no split/continue gate. Upload into a private draft,
       # verify the exact bytes locally and through GitHub readback, then publish.
       - name: Build sign and upload draft release
@@ -66,11 +69,14 @@ jobs:
       - name: Gate raw clients against committed policy
         run: scripts/check-bootstrap-policy-artifacts.sh --policy plugin/engram/bootstrap-targets.json --dist dist
 
+      - name: Gate parser raw asset and package archives
+        run: scripts/check-parser-artifacts.sh dist
+
       - name: Gate server-plugin archives against tagged OMP payload
         run: scripts/check-server-plugin-artifacts.sh --version "${GITHUB_REF_NAME#v}" --dist dist
 
       - name: Read draft launcher assets back
-        run: scripts/readback-bootstrap-policy-assets.sh --policy plugin/engram/bootstrap-targets.json --tag "${GITHUB_REF_NAME}"
+        run: scripts/readback-bootstrap-policy-assets.sh --policy plugin/engram/bootstrap-targets.json --tag "${GITHUB_REF_NAME}" --parser-policy plugin/engram/parser-targets.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -88,7 +94,7 @@ jobs:
             -H 'Accept: application/vnd.github+json' \
             -H 'X-GitHub-Api-Version: 2026-03-10' \
             "https://api.github.com/repos/thebtf/engram/releases?per_page=100" > "$release"
-          release_id="$(node scripts/verify-bootstrap-release-assets.js plugin/engram/bootstrap-targets.json "$release" "$GITHUB_REF_NAME")"
+          release_id="$(node scripts/verify-bootstrap-release-assets.js plugin/engram/bootstrap-targets.json "$release" "$GITHUB_REF_NAME" plugin/engram/parser-targets.json)"
           curl --fail --silent --show-error --location \
             -X PATCH \
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
