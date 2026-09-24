@@ -32,7 +32,6 @@ const emit = defineEmits<{
 
 const query = ref('')
 const sourceItem = computed(() => props.source?.items[0] ?? null)
-const indexEmpty = computed(() => props.status !== null && props.status.totalChunks === 0)
 const candidates = computed(() => props.search ?? props.structure)
 const copyNotice = ref<'copied' | 'unavailable' | null>(null)
 const readiness = computed(() => {
@@ -49,6 +48,7 @@ const readiness = computed(() => {
     default: return 'unknown'
   }
 })
+const indexEmpty = computed(() => props.status !== null && props.status.totalChunks === 0 && readiness.value !== 'failed')
 
 function submitSearch(): void {
   if (query.value.trim() !== '') emit('search', query.value)

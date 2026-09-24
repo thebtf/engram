@@ -86,20 +86,24 @@ test('Code Explorer distinguishes failed embedding from never-indexed and pendin
   await expect(page.locator('.readiness')).toHaveAttribute('data-state', 'failed')
   await expect(page.locator('.readiness')).toContainText(/индекс/i)
   await expect(page.locator('.readiness')).not.toContainText('provider_contract')
-  await expect(page.locator('.empty-index button')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Исследование выбранного снимка' })).toBeVisible()
+  await expect(page.locator('.empty-index')).toHaveCount(0)
 
   embedding = { coverage: 'none', job_state: null, error_code: null, pending_jobs: 0 }
   await page.getByRole('button', { name: 'Обновить статус' }).click()
   await expect(page.locator('.readiness')).toHaveAttribute('data-state', 'needs-indexing')
+  await expect(page.locator('.empty-index').getByRole('button', { name: 'Запросить переиндексацию' })).toBeVisible()
 
   embedding = { coverage: 'partial', job_state: 'retry_scheduled', error_code: 'provider_unavailable', pending_jobs: 1 }
   freshnessState = 'observed_current'
   await page.getByRole('button', { name: 'Обновить статус' }).click()
   await expect(page.locator('.readiness')).toHaveAttribute('data-state', 'updating')
+  await expect(page.locator('.empty-index').getByRole('button', { name: 'Запросить переиндексацию' })).toBeVisible()
 
   embedding = { Coverage: 'partial', JobState: 'failed_terminal', ErrorCode: 'provider_contract' }
   await page.getByRole('button', { name: 'Обновить статус' }).click()
   await expect(page.locator('.readiness')).toHaveAttribute('data-state', 'failed')
+  await expect(page.locator('.empty-index')).toHaveCount(0)
 
   embedding = { coverage: 'partial', job_state: 'future_state', error_code: null }
   await page.getByRole('button', { name: 'Обновить статус' }).click()
