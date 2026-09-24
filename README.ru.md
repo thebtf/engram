@@ -287,7 +287,7 @@ make install  # устанавливает плагин + запускает dae
 3. перезапустите Claude Code и daemon
 4. проверьте plugin update detection, session-start cache fallback и текущую версию сервера
 
-**Docker-образ:** Используйте актуальный `ghcr.io/thebtf/engram:latest`. Миграции БД запускаются автоматически при старте.
+**Docker-образ:** Для обновления опубликованного стека используйте три неизменяемых digest-идентификатора из манифеста релиза и проверку публикации по [руководству по развёртыванию](docs/DEPLOYMENT.md#immutable-image-selection), а не `ghcr.io/thebtf/engram:latest`. Для локальной сборки остаётся [вариант Docker Compose](#docker-compose). Миграции БД запускаются автоматически при старте.
 <!-- redoc:end:upgrading -->
 
 ---
