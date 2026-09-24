@@ -213,7 +213,7 @@ func (s *BrowserReadGrantStore) ListTargetChoices(ctx context.Context, issuerUse
 		return []BrowserReadGrantTargetChoice{}, nil
 	}
 	var targets []BrowserReadGrantTargetChoice
-	if err := s.db.WithContext(ctx).Table("users").Select("id, email").Where("disabled = FALSE AND id <> ?", issuerUserID).Order("email ASC, id ASC").Find(&targets).Error; err != nil {
+	if err := s.db.WithContext(ctx).Table("users").Select("id, email").Where("disabled = FALSE").Order("email ASC, id ASC").Find(&targets).Error; err != nil {
 		return nil, fmt.Errorf("browser read grant target choices: %w", err)
 	}
 	return targets, nil
@@ -550,7 +550,7 @@ func validateBrowserReadGrantIssue(ctx context.Context, in BrowserReadGrantIssue
 	if err := validateBrowserReadGrantRequest(ctx, in.IssuerUserID, in.IssuerPrincipal, in.SourceID); err != nil {
 		return err
 	}
-	if in.TargetUserID <= 0 || in.TargetUserID == in.IssuerUserID || validateUCIUUID("source_id", in.SourceID) != nil || validateUCIUUID("checkout_id", in.CheckoutID) != nil {
+	if in.TargetUserID <= 0 || validateUCIUUID("source_id", in.SourceID) != nil || validateUCIUUID("checkout_id", in.CheckoutID) != nil {
 		return ErrBrowserReadGrantDenied
 	}
 	if in.ExpiresAt != nil && !in.ExpiresAt.After(time.Now().UTC()) {
@@ -563,7 +563,7 @@ func validateBrowserReadGrantOwnerIssue(ctx context.Context, in BrowserReadGrant
 	if err := validateBrowserReadGrantIssuer(ctx, in.IssuerUserID, in.IssuerPrincipal); err != nil {
 		return err
 	}
-	if in.TargetUserID <= 0 || in.TargetUserID == in.IssuerUserID || !validBrowserReadGrantOwnerChoiceRef(in.ChoiceRef) || (in.ExpiresAt != nil && !in.ExpiresAt.After(time.Now().UTC())) {
+	if in.TargetUserID <= 0 || !validBrowserReadGrantOwnerChoiceRef(in.ChoiceRef) || (in.ExpiresAt != nil && !in.ExpiresAt.After(time.Now().UTC())) {
 		return ErrBrowserReadGrantDenied
 	}
 	return nil

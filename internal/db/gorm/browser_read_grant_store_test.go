@@ -68,6 +68,44 @@ func TestBrowserReadGrantStore_ExactTupleAndEnabledSubject(t *testing.T) {
 	require.False(t, allowed, "a disabled persisted user loses grant reads")
 }
 
+func TestBrowserReadGrantStore_OwnerCanGrantSelfAndReaderWithoutForeignAccess(t *testing.T) {
+	fixture := newBrowserReadGrantFixture(t)
+	ctx := context.Background()
+	ownerPrincipal := browserReadGrantPrincipal(fixture.owner.ID)
+
+	self, err := fixture.store.IssueOwnerChoice(ctx, BrowserReadGrantOwnerIssue{
+		IssuerUserID: fixture.owner.ID, IssuerPrincipal: ownerPrincipal,
+		TargetUserID: fixture.owner.ID, ChoiceRef: fixture.checkout.CheckoutID,
+	})
+	require.NoError(t, err)
+	require.Equal(t, fixture.owner.ID, self.SubjectUserID)
+	allowed, err := fixture.store.CanRead(ctx, fixture.owner.ID, fixture.source.SourceID, fixture.checkout.CheckoutID)
+	require.NoError(t, err)
+	require.True(t, allowed)
+	allowed, err = fixture.store.CanRead(ctx, fixture.owner.ID, fixture.source.SourceID, fixture.otherCheckout.CheckoutID)
+	require.NoError(t, err)
+	require.False(t, allowed)
+
+	reader, err := fixture.store.Issue(ctx, BrowserReadGrantIssue{
+		IssuerUserID: fixture.owner.ID, IssuerPrincipal: ownerPrincipal, TargetUserID: fixture.target.ID,
+		SourceID: fixture.source.SourceID, CheckoutID: fixture.checkout.CheckoutID,
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, self.GrantRef, reader.GrantRef)
+	allowed, err = fixture.store.CanRead(ctx, fixture.target.ID, fixture.source.SourceID, fixture.checkout.CheckoutID)
+	require.NoError(t, err)
+	require.True(t, allowed)
+	allowed, err = fixture.store.CanRead(ctx, fixture.other.ID, fixture.source.SourceID, fixture.checkout.CheckoutID)
+	require.NoError(t, err)
+	require.False(t, allowed)
+	_, err = fixture.store.IssueOwnerChoice(ctx, BrowserReadGrantOwnerIssue{
+		IssuerUserID: fixture.other.ID, IssuerPrincipal: browserReadGrantPrincipal(fixture.other.ID),
+		TargetUserID: fixture.other.ID, ChoiceRef: fixture.checkout.CheckoutID,
+	})
+	require.ErrorIs(t, err, ErrBrowserReadGrantDenied)
+	assertBrowserReadGrantAuditCount(t, fixture.db, "code_grant_issued", 2)
+}
+
 func TestBrowserReadGrantStore_CurrentSelectsOnlyOneLiveGrant(t *testing.T) {
 	fixture := newBrowserReadGrantFixture(t)
 	ctx := context.Background()
@@ -269,9 +307,8 @@ func TestBrowserReadGrantStore_TargetChooserAndCrossUserGrant(t *testing.T) {
 	targets, err := fixture.store.ListTargetChoices(ctx, fixture.owner.ID, ownerPrincipal)
 	require.NoError(t, err)
 	require.Contains(t, targets, BrowserReadGrantTargetChoice{UserID: fixture.target.ID, Label: fixture.target.Email})
-	for _, target := range targets {
-		require.NotEqual(t, fixture.owner.ID, target.UserID)
-	}
+	require.Contains(t, targets, BrowserReadGrantTargetChoice{UserID: fixture.owner.ID, Label: fixture.owner.Email})
+	require.Equal(t, 1, countBrowserReadGrantTargetChoices(targets, fixture.owner.ID), "the owner appears exactly once as a selectable reader")
 
 	// The foreign user owns no checkout and receives no target labels.
 	foreignTargets, err := fixture.store.ListTargetChoices(ctx, fixture.other.ID, browserReadGrantPrincipal(fixture.other.ID))
@@ -299,14 +336,15 @@ func TestBrowserReadGrantStore_TargetChooserAndCrossUserGrant(t *testing.T) {
 	assertBrowserReadGrantAuditCount(t, fixture.db, "code_grant_issued", 1)
 
 	issue.TargetUserID = fixture.owner.ID
-	_, err = fixture.store.IssueOwnerChoice(ctx, issue)
-	require.ErrorIs(t, err, ErrBrowserReadGrantDenied)
+	selfGrant, err := fixture.store.IssueOwnerChoice(ctx, issue)
+	require.NoError(t, err)
+	require.Equal(t, fixture.owner.ID, selfGrant.SubjectUserID)
 	issue.TargetUserID = fixture.target.ID
 	issue.IssuerUserID = fixture.other.ID
 	issue.IssuerPrincipal = browserReadGrantPrincipal(fixture.other.ID)
 	_, err = fixture.store.IssueOwnerChoice(ctx, issue)
 	require.ErrorIs(t, err, ErrBrowserReadGrantDenied)
-	assertBrowserReadGrantAuditCount(t, fixture.db, "code_grant_issued", 1)
+	assertBrowserReadGrantAuditCount(t, fixture.db, "code_grant_issued", 2)
 
 	_, err = fixture.store.Revoke(ctx, fixture.owner.ID, ownerPrincipal, grant.GrantRef)
 	require.NoError(t, err)
@@ -319,7 +357,17 @@ func TestBrowserReadGrantStore_TargetChooserAndCrossUserGrant(t *testing.T) {
 	require.NotContains(t, targets, BrowserReadGrantTargetChoice{UserID: fixture.target.ID, Label: fixture.target.Email})
 	_, err = fixture.store.IssueOwnerChoice(ctx, BrowserReadGrantOwnerIssue{IssuerUserID: fixture.owner.ID, IssuerPrincipal: ownerPrincipal, TargetUserID: fixture.target.ID, ChoiceRef: fixture.checkout.CheckoutID})
 	require.ErrorIs(t, err, ErrBrowserReadGrantDenied)
-	assertBrowserReadGrantAuditCount(t, fixture.db, "code_grant_issued", 1)
+	assertBrowserReadGrantAuditCount(t, fixture.db, "code_grant_issued", 2)
+}
+
+func countBrowserReadGrantTargetChoices(targets []BrowserReadGrantTargetChoice, userID int64) int {
+	count := 0
+	for _, target := range targets {
+		if target.UserID == userID {
+			count++
+		}
+	}
+	return count
 }
 
 func TestBrowserReadGrantStore_OwnerChoicesReturnDeterministicFirstPage(t *testing.T) {
