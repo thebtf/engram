@@ -1108,7 +1108,7 @@ func (s *Service) initializeAsync() {
 		ChunkManager:       chunkManager,
 	})
 
-	codeIntelEnabled := os.Getenv("ENGRAM_CODE_INTEL_ENABLED") == "true"
+	codeIntelEnabled := config.CodeIntelEnabled()
 
 	// Wire versioned document store into MCP server for collaborative document tools.
 	mcpServer.SetVersionedDocumentStore(versionedDocumentStore)

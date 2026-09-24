@@ -2,7 +2,6 @@ package mcp_test
 
 import (
 	"encoding/json"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -35,7 +34,7 @@ func buildCodeIntelToolNames(srv *mcp.Server) map[string]bool {
 // ENGRAM_CODE_INTEL_ENABLED is not "true", no codebase_* tools appear in
 // tools/list — the flag-off surface is byte-identical to pre-CR-006.
 func TestCodeIntelFlag_Off_ToolsAbsentFromList(t *testing.T) {
-	os.Unsetenv("ENGRAM_CODE_INTEL_ENABLED")
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "false")
 
 	srv := mcp.NewServer(mcp.ServerOptions{Version: "test"})
 	// Do NOT call SetLegacyUnscopedCodeChunkStore — flag is off.
@@ -89,7 +88,7 @@ func TestCodeIntelFlag_On_StoreNil_ToolsAbsentFromList(t *testing.T) {
 // TestCodebaseSearch_FlagOff_ReturnsError verifies that codebase_search returns
 // an error when the flag is off, even if called directly via callTool.
 func TestCodebaseSearch_FlagOff_ReturnsError(t *testing.T) {
-	os.Unsetenv("ENGRAM_CODE_INTEL_ENABLED")
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "false")
 
 	srv := mcp.NewServer(mcp.ServerOptions{Version: "test"})
 

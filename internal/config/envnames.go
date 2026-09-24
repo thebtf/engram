@@ -1,5 +1,13 @@
 package config
 
+import "os"
+
+// CodeIntelEnabled defaults the installed code tools on while retaining an
+// explicit emergency stop for deployments that cannot run UCI.
+func CodeIntelEnabled() bool {
+	return os.Getenv("ENGRAM_CODE_INTEL_ENABLED") != "false"
+}
+
 // Canonical env-var names. Single source of truth (Plan ADR-002): every reader
 // across the codebase imports the constant rather than hard-coding the literal.
 // Renames are caught at compile time. Two distinct names enforce the

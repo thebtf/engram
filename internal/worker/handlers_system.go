@@ -367,7 +367,7 @@ func buildRuntimeFlagsResponse(cfg *config.Config, flagCfg cognitivecore.FlagCon
 		envRuntimeFlag("ENGRAM_TEMPORAL_TRUTH_ENABLED", "vnext", "Enables the bounded CR-011 temporal truth read surface."),
 		envRuntimeFlag("ENGRAM_ADAPTIVE_ENABLED", "vnext", "Enables adaptive memory segmentation and adaptive brief retrieval."),
 		envRuntimeFlag("ENGRAM_CRYSTALLIZATION_ENABLED", "vnext", "Enables the LLM-backed crystallization dream cycle."),
-		envRuntimeFlag("ENGRAM_CODE_INTEL_ENABLED", "code-intel", "Enables codebase_index, codebase_status, and codebase_search tools."),
+		resolvedRuntimeFlag("ENGRAM_CODE_INTEL_ENABLED", "code-intel", config.CodeIntelEnabled(), true, "Codebase tools are enabled by default; explicit false stops them."),
 	}
 	items = append(items, v7RuntimeFlags(flagCfg)...)
 	items = append(items,

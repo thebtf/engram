@@ -38,7 +38,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -46,6 +45,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/thebtf/engram/internal/auditcontext"
+	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/handlers/engramcore"
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/uci"
@@ -403,7 +403,7 @@ func (m *Module) Tools() []module.ToolDef {
 
 // HandleTool dispatches to the appropriate handler. Synchronous, bounded <1s.
 func (m *Module) HandleTool(ctx context.Context, p muxcore.ProjectContext, name string, args json.RawMessage) (json.RawMessage, error) {
-	if os.Getenv("ENGRAM_CODE_INTEL_ENABLED") != "true" {
+	if !config.CodeIntelEnabled() {
 		return nil, fmt.Errorf("tool %q requires ENGRAM_CODE_INTEL_ENABLED=true", name)
 	}
 	switch name {

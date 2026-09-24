@@ -21,10 +21,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"time"
 	"unicode/utf8"
 
+	"github.com/thebtf/engram/internal/config"
 	gorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/retrieval"
 	"github.com/thebtf/engram/internal/uci"
@@ -35,7 +35,7 @@ import (
 // "true" matches the convention used by vnextFEnabled and other flag checks in
 // this package.
 func codeIntelEnabled() bool {
-	return os.Getenv("ENGRAM_CODE_INTEL_ENABLED") == "true"
+	return config.CodeIntelEnabled()
 }
 
 const (
