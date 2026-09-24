@@ -3,11 +3,11 @@ const path = require("node:path");
 const { loadParserTarget } = require("../plugin/engram/scripts/ensure-binary.js");
 const { parsePolicy, validatePolicy } = require("../plugin/engram/scripts/bootstrap-policy.js");
 
-function verifyReleaseAssets(rawPolicy, releases, tag, parserTarget) {
+function verifyReleaseAssets(rawPolicy, releases, tag) {
   if (typeof tag !== "string" || !tag.startsWith("v")) throw new Error("malformed bootstrap policy or release tag mismatch");
   let policy;
   try { policy = typeof rawPolicy === "string" ? parsePolicy(rawPolicy, tag.slice(1)) : validatePolicy(rawPolicy, tag.slice(1)); } catch { throw new Error("malformed bootstrap policy or release tag mismatch"); }
-  const expected = [...Object.values(policy.targets).map(({ desired }) => desired), ...(parserTarget ? [parserTarget] : [])];
+  const expected = [...Object.values(policy.targets).map(({ desired }) => desired), loadParserTarget(path.join(__dirname, "../plugin/engram"), policy.package_version, "win32-x64")];
   const matches = Array.isArray(releases) ? releases.filter((release) => release && release.tag_name === tag) : [];
   if (matches.length !== 1 || !Number.isSafeInteger(matches[0].id) || matches[0].draft !== true || !Array.isArray(matches[0].assets)) {
     throw new Error("expected exactly one private draft release");
@@ -24,14 +24,13 @@ function verifyReleaseAssets(rawPolicy, releases, tag, parserTarget) {
 }
 
 function main(argv = process.argv.slice(2)) {
-  const [policyPath, releasesPath, tag, parserPolicyPath] = argv;
-  if (!policyPath || !releasesPath || !tag) {
-    throw new Error("usage: verify-bootstrap-release-assets.js POLICY RELEASES TAG [PARSER_POLICY]");
+  const [policyPath, releasesPath, tag] = argv;
+  if (!policyPath || !releasesPath || !tag || argv.length !== 3) {
+    throw new Error("usage: verify-bootstrap-release-assets.js POLICY RELEASES TAG");
   }
   const policy = fs.readFileSync(policyPath, "utf8");
   const releases = JSON.parse(fs.readFileSync(releasesPath, "utf8"));
-  const parser = parserPolicyPath ? loadParserTarget(path.dirname(parserPolicyPath), tag.slice(1), "win32-x64") : null;
-  process.stdout.write(String(verifyReleaseAssets(policy, releases, tag, parser)));
+  process.stdout.write(String(verifyReleaseAssets(policy, releases, tag)));
 }
 
 if (require.main === module) {

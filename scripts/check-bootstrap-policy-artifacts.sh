@@ -57,4 +57,5 @@ archive_policy_entry() {
 mapfile -t archives < <(find "$dist" -type f \( -name '*.tar.gz' -o -name '*.zip' \))
 ((${#archives[@]})) || { echo 'no release archives found for policy verification' >&2; exit 1; }
 for archive in "${archives[@]}"; do archive_policy_entry "$archive"; done
+bash "$(dirname "$0")/check-parser-artifacts.sh" "$dist" "$version"
 bash "$(dirname "$0")/check-server-plugin-artifacts.sh" --version "$version" --dist "$dist"

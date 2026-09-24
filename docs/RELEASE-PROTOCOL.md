@@ -32,6 +32,7 @@
 | Released-image rescan | post-publication `ScanPublished` evidence: one summary JSON plus per-image SARIF/log for `server`, `operator-console`, and `postgres` | after publication, first run is not started within 24h, later evidence is older than 36h by `started_at`/`completed_at`, evidence is missing, HIGH/CRITICAL findings exist, or scanner/database/tag-resolution errors prevent complete evidence; blocks rollout/continued deployment, not initial digest publication |
 | Diff hygiene | `git diff --check` | whitespace/conflict marker errors |
 | SonarQube Quality Gate | Root agent runs `node tools/quality/run-sonarqube.mjs` locally from the clean, frozen exact candidate; retain `.agent/e/sonarqube/<HEAD>.json`; no GitHub Actions workflow performs this gate | exact candidate coverage is incomplete, scanner/CE/QG is non-OK, or requested status publication fails |
+| Parser release artifacts | Existing release steps invoke `prepare-bootstrap-policy.sh --check`, `check-bootstrap-policy-artifacts.sh`, `readback-bootstrap-policy-assets.sh`, and `verify-bootstrap-release-assets.js`; these also enforce the generated parser policy, raw parser asset, every package archive, and the draft's uploaded parser digest before publication | parser policy differs from source, raw/archive bytes differ, or remote draft lacks the pinned parser asset |
 
 ## CI Compute Boundaries
 

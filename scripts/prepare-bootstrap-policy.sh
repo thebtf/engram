@@ -53,6 +53,7 @@ NODE
 
 if "$check"; then
   cmp "$candidate" "$output" || { echo "committed policy differs; run $0 --version $version" >&2; exit 1; }
+  bash "$(dirname "$0")/prepare-parser-targets.sh" --version "$version" --output "${ENGRAM_PARSER_POLICY:-plugin/engram/parser-targets.json}" --check
 else
   mkdir -p "$(dirname "$output")"
   cp "$candidate" "$output"

@@ -15,7 +15,7 @@ function draft() {
       state: "uploaded",
       size: desired.size,
       digest: `sha256:${desired.sha256}`,
-    })),
+    })).concat({ name: parser.asset, state: "uploaded", size: parser.size, digest: `sha256:${parser.sha256}` }),
   };
 }
 
@@ -51,7 +51,7 @@ test("rejects published, missing, or duplicate release records", () => {
 
 test("rejects missing, duplicate, non-uploaded, or mismatched launcher assets", () => {
   const missing = draft();
-  missing.assets.pop();
+  missing.assets.shift();
   assert.throws(() => verifyReleaseAssets(policy, [missing], releaseTag), /exactly one uploaded/);
 
   const duplicate = draft();
@@ -69,11 +69,12 @@ test("rejects missing, duplicate, non-uploaded, or mismatched launcher assets", 
   }
 });
 
-test("parser release asset must be present and match its pinned digest", () => {
+test("parser release asset must be present and match its pinned digest without an optional argument", () => {
   const release = draft();
-  assert.throws(() => verifyReleaseAssets(policy, [release], releaseTag, parser), /exactly one uploaded/);
+  release.assets.pop();
+  assert.throws(() => verifyReleaseAssets(policy, [release], releaseTag), /exactly one uploaded/);
   release.assets.push({ name: parser.asset, state: "uploaded", size: parser.size, digest: `sha256:${parser.sha256}` });
-  assert.equal(verifyReleaseAssets(policy, [release], releaseTag, parser), 47);
+  assert.equal(verifyReleaseAssets(policy, [release], releaseTag), 47);
   release.assets.at(-1).digest = `sha256:${"0".repeat(64)}`;
-  assert.throws(() => verifyReleaseAssets(policy, [release], releaseTag, parser), /asset mismatch/);
+  assert.throws(() => verifyReleaseAssets(policy, [release], releaseTag), /asset mismatch/);
 });

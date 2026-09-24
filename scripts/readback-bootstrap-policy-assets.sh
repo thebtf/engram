@@ -2,12 +2,10 @@
 # Check GitHub's uploaded release assets (including a private draft) against package policy.
 set -euo pipefail
 policy="plugin/engram/bootstrap-targets.json"
-parser_policy=""
 tag=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --policy) policy="${2:?}"; shift 2 ;;
-    --parser-policy) parser_policy="${2:?}"; shift 2 ;;
     --tag) tag="${2:?}"; shift 2 ;;
     *) echo "usage: $0 --tag vX.Y.Z [--policy PATH]" >&2; exit 2 ;;
   esac
@@ -25,7 +23,7 @@ for ((attempt = 1; attempt <= max_attempts; attempt++)); do
     -H "Authorization: Bearer ${GITHUB_TOKEN}" \
     -H 'Accept: application/vnd.github+json' \
     "https://api.github.com/repos/thebtf/engram/releases?per_page=100" 2>&1 > "$release")"; then
-    if node_error="$(node "$(dirname "${BASH_SOURCE[0]}")/verify-bootstrap-release-assets.js" "$policy" "$release" "$tag" "$parser_policy" 2>&1 >/dev/null)"; then
+    if node_error="$(node "$(dirname "${BASH_SOURCE[0]}")/verify-bootstrap-release-assets.js" "$policy" "$release" "$tag" 2>&1 >/dev/null)"; then
       exit 0
     fi
     last_error="$node_error"

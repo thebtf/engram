@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 dist="${1:-dist}"
-parser_policy="plugin/engram/parser-targets.json"
-node - "$dist" <<'NODE'
+parser_policy="${ENGRAM_PARSER_POLICY:-plugin/engram/parser-targets.json}"
+version="${2:?parser package version is required}"
+node - "$dist" "$parser_policy" "$version" <<'NODE'
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const dist = process.argv[2];
-const policy = require('./plugin/engram/scripts/ensure-binary.js').loadParserTarget('plugin/engram', require('./plugin/engram/bootstrap-targets.json').package_version, 'win32-x64');
+const [dist, parserPolicy, version] = process.argv.slice(2);
+const policy = require('./plugin/engram/scripts/ensure-binary.js').loadParserTarget(path.dirname(parserPolicy), version, 'win32-x64');
 const found = [];
 const walk = dir => { for (const entry of fs.readdirSync(dir, { withFileTypes: true })) { const file = path.join(dir, entry.name); entry.isDirectory() ? walk(file) : (entry.name === policy.asset && found.push(file)); } };
 walk(dist);
