@@ -684,7 +684,7 @@ test("rehashes the resolved object before one spawn and reports spawn failure wi
       pluginRoot: "root",
       pluginData: "data",
       args: ["serve"],
-      env: {},
+      env: { ENGRAM_CLIENT_INSTANCE_ID: "fixture-client" },
       resolve: async () => { events.push("resolve"); return { path: "trusted-object", target }; },
       roots: () => ({ objects: "objects" }),
       hash: (candidate, actual, root) => { events.push(`hash:${candidate}:${actual.sha256}:${root}`); return true; },
@@ -706,12 +706,56 @@ test("final rehash failure prevents spawn of resolved bytes", async () => {
   assert.equal(spawned, false);
 });
 
+test("Go-only launch retains an installation-scoped identity and does not claim a parser", async () => {
+  const pluginData = fs.mkdtempSync(path.join(os.tmpdir(), "engram-go-only-start-"));
+  try {
+    const environments = [];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      assert.equal(await resolveAndSpawn({
+        pluginRoot: "root", pluginData, args: [],
+        env: { ENGRAM_UCI_PARSER_EXECUTABLE: "foreign", ENGRAM_UCI_PARSER_BUNDLE_DIGEST: "foreign" },
+        resolve: async () => ({ path: "client", target: { sha256: "b".repeat(64) }, parserTarget: null }),
+        roots: () => ({ objects: "objects" }), hash: () => true,
+        spawnSync: (_, __, options) => { environments.push(options.env); return { status: 0 }; },
+      }), 0);
+    }
+    assert.match(environments[0].ENGRAM_CLIENT_INSTANCE_ID, /^engram-[0-9a-f]{32}$/);
+    assert.equal(environments[1].ENGRAM_CLIENT_INSTANCE_ID, environments[0].ENGRAM_CLIENT_INSTANCE_ID);
+    assert.equal(environments[0].ENGRAM_UCI_PARSER_EXECUTABLE, undefined);
+    assert.equal(environments[0].ENGRAM_UCI_PARSER_BUNDLE_DIGEST, undefined);
+  } finally {
+    fs.rmSync(pluginData, { recursive: true, force: true });
+  }
+});
+
+test("hooks and daemon use the same persisted identity without manual configuration", () => {
+  const pluginData = fs.mkdtempSync(path.join(os.tmpdir(), "engram-hook-install-"));
+  const keys = ["PLUGIN_DATA", "ENGRAM_URL", "ENGRAM_TOKEN", "ENGRAM_CLIENT_INSTANCE_ID", "ENGRAM_CONFIG_FILE"];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    process.env.PLUGIN_DATA = pluginData;
+    process.env.ENGRAM_URL = "http://127.0.0.1:1";
+    process.env.ENGRAM_TOKEN = "engram_test";
+    delete process.env.ENGRAM_CLIENT_INSTANCE_ID;
+    process.env.ENGRAM_CONFIG_FILE = path.join(pluginData, "missing-config.json");
+    const fromHook = require("../hooks/lib.js").getEngramConfig().clientInstanceID;
+    assert.match(fromHook, /^engram-[0-9a-f]{32}$/);
+    assert.equal(fs.readFileSync(path.join(pluginData, "client-instance-id"), "utf8"), `${fromHook}\n`);
+    assert.equal(require("./client-instance.js").installationClientInstanceID(pluginData), fromHook);
+    fs.writeFileSync(path.join(pluginData, "client-instance-id"), "bad\n");
+    assert.throws(() => require("./client-instance.js").installationClientInstanceID(pluginData), /identity is invalid/);
+  } finally {
+    for (const key of keys) restoreEnv(key, previous[key]);
+    fs.rmSync(pluginData, { recursive: true, force: true });
+  }
+});
+
 test("verified parser identity reaches daemon without inherited parser overrides", async () => {
   const digest = `sha256:${"a".repeat(64)}`;
   const calls = [];
   const status = await resolveAndSpawn({
     pluginRoot: "root", pluginData: "data", args: ["serve"],
-    env: { SYSTEMROOT: "C:\\Windows", SECRET: "not-for-parser", ENGRAM_UCI_PARSER_EXECUTABLE: "foreign" },
+    env: { SYSTEMROOT: "C:\\Windows", SECRET: "not-for-parser", ENGRAM_CLIENT_INSTANCE_ID: "fixture-client", ENGRAM_UCI_PARSER_EXECUTABLE: "foreign" },
     resolve: async () => ({ path: "client", target: { sha256: "b".repeat(64) }, parserPath: "parser", parserTarget: { sha256: "c".repeat(64) } }),
     roots: () => ({ objects: "objects" }), hash: () => true,
     spawnSync: (file, args, options) => {

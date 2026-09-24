@@ -337,7 +337,7 @@ if (require.main === module) main().catch((error) => process.stderr.write(`[engr
 
 module.exports = {
   BootstrapError, MAX_OBJECT_BYTES, MAX_REDIRECTS, TARGET_ASSETS,
-  hashFile, importLegacy, loadPolicy, objectPath, objectRoots, parsePolicy,
+  assertSafeDirectory, hashFile, importLegacy, loadPolicy, objectPath, objectRoots, parsePolicy,
   platformKey, prefetch, publishStage, requestStream, resolveForLaunch, verifyObject,
   downloadObject, loadParserTarget, installParser,
 };

@@ -16,6 +16,8 @@ const fsPromises = require('node:fs/promises');
 const os = require('os');
 const path = require('path');
 const projectIdentityV3 = require('./project-identity-v3.js');
+const { installationClientInstanceID } = require('../scripts/client-instance.js');
+const { resolvePluginData } = require('../scripts/run-engram.js');
 
 function configuredPluginEnv(...keys) {
  // Claude Code exports plugin userConfig values to plugin subprocesses as
@@ -206,6 +208,10 @@ function getEngramConfig() {
    if (!token && cf.api_token) token = cf.api_token;
    if (!clientInstanceID && cf.client_instance_id) clientInstanceID = cf.client_instance_id;
   }
+ }
+ if (!clientInstanceID && serverURL && token) {
+  const pluginData = resolvePluginData(path.resolve(__dirname, '..'));
+  clientInstanceID = installationClientInstanceID(pluginData);
  }
  if (serverURL) process.env.ENGRAM_URL = serverURL;
  if (token) process.env.ENGRAM_TOKEN = token;

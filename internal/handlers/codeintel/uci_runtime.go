@@ -71,7 +71,7 @@ type UCIRuntimeConfig struct {
 // module registration time. It intentionally has no repository, project, CWD,
 // or client-request fallback.
 func RuntimeConfigFromEnvironment() UCIRuntimeConfig {
-	return UCIRuntimeConfig{
+	configuration := UCIRuntimeConfig{
 		ClientInstanceID:   os.Getenv(config.EnvClientInstanceID),
 		ParserBundleDigest: uci.IndexDigest(os.Getenv(EnvUCIParserBundleDigest)),
 		ParserExecutable:   os.Getenv(EnvUCIParserExecutable),
@@ -80,6 +80,11 @@ func RuntimeConfigFromEnvironment() UCIRuntimeConfig {
 			ParserKey:  uciRuntimeGoParserKey,
 		},
 	}
+	if configuration.ParserBundleDigest == "" && configuration.ParserExecutable == "" {
+		profile, _ := uci.GoIndexAdmissionArtifactProfile(configuration.GoProfile)
+		configuration.ParserBundleDigest = profile.ExtractionProfileDigest
+	}
+	return configuration
 }
 
 type uciRuntime struct {
