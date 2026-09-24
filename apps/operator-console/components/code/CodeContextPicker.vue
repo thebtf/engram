@@ -138,7 +138,7 @@ function chooseSnapshot(event: Event): void {
 
     <dl v-if="candidate !== null" class="context-values" data-testid="code-context-candidate">
       <div><dt>{{ t('workspace.repository') }}</dt><dd>{{ candidate.repository }}</dd></div>
-      <div><dt>{{ t('workspace.workingCopy') }}</dt><dd>{{ candidate.workingCopy }}</dd></div>
+      <div><dt>{{ t('workspace.workingCopy') }}</dt><dd>{{ candidate.workingCopy || t('codeExplorer.context.unnamedWorkingCopy') }}</dd></div>
       <div><dt>{{ t('workspace.indexedSnapshot') }}</dt><dd>{{ candidate.snapshot.label }}</dd></div>
       <div v-if="candidate.snapshot.revision !== null"><dt>{{ t('codeExplorer.context.revision') }}</dt><dd>{{ candidate.snapshot.revision }}</dd></div>
       <div v-if="candidate.snapshot.publishedAt !== null"><dt>{{ t('codeExplorer.context.publishedAt') }}</dt><dd>{{ candidate.snapshot.publishedAt }}</dd></div>
@@ -153,7 +153,7 @@ function chooseSnapshot(event: Event): void {
     </div>
 
     <p v-if="pinned !== null" class="pinned" data-testid="code-context-pinned">
-      {{ t('codeExplorer.context.pinnedReadout', { repository: pinned.repository, workingCopy: pinned.workingCopy, snapshot: pinned.snapshot.label }) }}
+      {{ t('codeExplorer.context.pinnedReadout', { repository: pinned.repository, workingCopy: pinned.workingCopy || t('codeExplorer.context.unnamedWorkingCopy'), snapshot: pinned.snapshot.label }) }}
     </p>
 
     <details class="bootstrap-evidence" data-testid="code-bootstrap-evidence">

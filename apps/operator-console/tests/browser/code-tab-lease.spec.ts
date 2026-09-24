@@ -71,7 +71,7 @@ test('Code Explorer resynchronizes a completed selection after catalog refresh w
       index_intent_available: false,
     }, {
       repository: 'Engram',
-      working_copy: ' ',
+      working_copy: null,
       indexed_snapshot: { label: 'Malformed snapshot', revision: '1a9dad3', published_at: '2026-09-17T00:03:00Z' },
       selection_ref: 'context-malformed',
       index_intent_available: false,
@@ -399,4 +399,58 @@ test('An unnamed working copy remains selectable without confusing it with the p
   await page.getByTestId('code-context-working-copy').selectOption({ label: 'Рабочая копия без имени' })
   await expect(page.getByTestId('code-context-index-affordance')).toBeVisible()
   await expect(page.getByTestId('code-request-first-index')).toBeEnabled()
+})
+
+test('Home selects a published unnamed checkout and reads its authorized source', async ({ page }) => {
+  const pinned: unknown[] = []
+  const sourceRequests: unknown[] = []
+  const context = { source_id: 'source-1', checkout_id: 'checkout-1', view_id: 'view-1', profile_id: 'profile-1', generation: 1 }
+  const item = { ref: { source_id: 'source-1', view_id: 'view-1', entity_key: 'implementation' }, path: 'src/implementation.ts', span: { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }, content_digest: 'digest-1', kind: 'function', language: 'typescript', excerpt: 'function go()', match_sources: ['lexical'], score: 1 }
+  const envelope = { schema: 'engram.code-query/1', status: 'ok', contexts: [context], items: [item], warnings: [], retrieval: { mode: 'lexical' }, freshness: { state: 'observed_current' }, coverage: {}, truncated: false }
+  await page.route('**/api/code/**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/code/tabs/handshake') {
+      await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'resume-current', reload_token: 'reload-current' } })
+    } else if (pathname === '/api/code/contexts') {
+      await route.fulfill({
+        json: {
+          contexts: [
+            { repository: 'Engram', working_copy: '', indexed_snapshot: { label: 'Published implementation' }, selection_ref: 'server-issued-view', index_intent_available: false },
+            { repository: 'Engram', working_copy: 'other checkout', index_intent_available: false },
+          ]
+        }
+      })
+    } else if (pathname === `/api/code/tabs/${TAB_BINDING_ID}/context`) {
+      pinned.push(route.request().postDataJSON())
+      await route.fulfill({ status: 204 })
+    } else if (pathname === '/api/code/status') {
+      await route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { Coverage: 'complete' }, freshness: { state: 'unknown' } } })
+    } else if (pathname === '/api/code/structure' || pathname === '/api/code/search') {
+      await route.fulfill({ json: envelope })
+    } else if (pathname === '/api/code/source') {
+      sourceRequests.push(route.request().postDataJSON())
+      await route.fulfill({ json: envelope })
+    } else {
+      await route.fulfill({ status: 500 })
+    }
+  })
+
+  await page.goto('/')
+  await page.getByTestId('overview-workspace-entry').click()
+  await expect(page.getByTestId('code-context-working-copy').getByRole('option', { name: 'Рабочая копия без имени' })).toHaveCount(1)
+  await expect(page.getByTestId('code-context-index-affordance')).toHaveCount(0)
+  await page.getByTestId('code-context-working-copy').selectOption({ label: 'Рабочая копия без имени' })
+  await page.getByTestId('code-context-snapshot').selectOption({ label: 'Published implementation' })
+  await expect(page.getByTestId('code-context-candidate')).toContainText('Рабочая копия без имени')
+  await expect(page.getByTestId('code-context-candidate')).not.toContainText('src/implementation.ts')
+  await page.getByTestId('code-pin-context').click()
+  expect(pinned).toEqual([{ document_proof: DOCUMENT_PROOF, selection_ref: 'server-issued-view' }])
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Рабочая копия без имени')
+  await expect(page.locator('.readiness')).toHaveAttribute('data-state', 'unknown')
+  await page.getByTestId('code-query-input').fill('implementation')
+  await page.getByTestId('code-search-submit').click()
+  await expect(page.getByTestId('code-search-results')).toContainText('src/implementation.ts')
+  await page.getByTestId('code-search-source').click()
+  await expect(page.getByTestId('code-source-result')).toContainText('function go()')
+  expect(sourceRequests).toEqual([expect.objectContaining({ entity_key: 'implementation', content_digest: 'digest-1' })])
 })

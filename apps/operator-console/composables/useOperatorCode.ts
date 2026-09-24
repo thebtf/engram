@@ -353,7 +353,7 @@ function parseCatalogEntry(value: unknown): CodeCatalogEntry | null {
   }
 
   const snapshot = parseCatalogSnapshot(snapshotValue)
-  if (snapshot === null || workingCopy === '' || selectionRef === null || indexIntentAvailable || indexSelectionRef !== null) return null
+  if (snapshot === null || selectionRef === null || indexIntentAvailable || indexSelectionRef !== null) return null
   return { repository, workingCopy, view: { repository, workingCopy, snapshot, selectionRef }, indexIntentAvailable: false, indexIntentTarget: null }
 }
 

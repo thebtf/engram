@@ -36,6 +36,8 @@ The [responsive-layout receipt](../../specs/011-operator-code-console/acceptance
 
 - Source/Checkout/View and explicit grants remain server authority. Human repository,
   branch, device, and snapshot labels are presentation only.
+- A registered checkout without a display name appears as a localized unnamed working copy,
+  including when its View is published; the label is never a path or an access grant.
 - A browser must never read local worktree paths, credentials, raw grant references, or
   a manually supplied context identifier.
 - The default D-A path is keyboard-operable, has visible focus and state announcements,
