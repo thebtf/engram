@@ -482,6 +482,19 @@ func composeUCIContext(
 	if err != nil {
 		return nil, fmt.Errorf("create UCI MCP context application: %w", err)
 	}
+	contextApplication.SetLocalGitRegistration(func(ctx context.Context, caller uci.ResolveContextInput, sourceID, label, locator string) (uci.RegisteredCheckoutSelector, error) {
+		registered, err := contextStore.RegisterLocalGit(ctx, gormstore.RegisterLocalGitInput{
+			AuthRealm: caller.AuthRealm, Principal: caller.Principal, WorkstationID: caller.WorkstationID,
+			SourceID: sourceID, SourceLabel: label, Locator: locator,
+		})
+		if err != nil {
+			return uci.RegisteredCheckoutSelector{}, err
+		}
+		return uci.RegisteredCheckoutSelector{
+			Scope:     uci.IndexScope{SourceID: registered.SourceID, CheckoutID: registered.CheckoutID, IncarnationID: registered.IncarnationID},
+			ProfileID: registered.ProfileID,
+		}, nil
+	})
 
 	projectionStore := gormstore.NewUCIProjectionStore(db)
 	indexIntentStore := gormstore.NewUCIIndexIntentStore(db)

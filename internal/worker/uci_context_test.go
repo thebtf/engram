@@ -135,6 +135,55 @@ func TestComposeUCIContextSharesMCPCheckoutHandleWithPrivateGRPC(t *testing.T) {
 	require.Equal(t, workstationID, bound.GetWorkstationId())
 }
 
+func TestComposeUCIContextFirstUseRegistrationBindsPrivateNoViewScope(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	store := openWorkerUCIContextCompositionStore(t)
+	server := mcp.NewServer(mcp.ServerOptions{Version: "uci-first-use-registration"})
+	composition, err := composeUCIContext(true, store.GetDB(), server, workerUCISemanticConfig())
+	require.NoError(t, err)
+	identity := auth.ClientWithPrincipal("read-write", uuid.NewString(), "browser-user/41", auth.PrincipalKindHuman)
+	const session = "first-use-client"
+	client := auth.WithIdentity(mcp.ContextWithSession(context.Background(), session), identity)
+	params, err := json.Marshal(map[string]any{"name": "codebase_context", "arguments": map[string]any{
+		"action": "register", "source_label": "engram", "locator": "file:///private/worktree-a",
+	}})
+	require.NoError(t, err)
+	response := server.HandleRequest(client, &mcp.Request{JSONRPC: "2.0", ID: float64(1), Method: "tools/call", Params: params})
+	require.NotNil(t, response)
+	require.Nil(t, response.Error)
+	result, ok := response.Result.(map[string]any)
+	require.True(t, ok)
+	content, ok := result["content"].([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, content, 1)
+	text, ok := content[0]["text"].(string)
+	require.True(t, ok)
+	var target struct {
+		ContextHandle string          `json:"context_handle"`
+		SourceID      string          `json:"source_id"`
+		CheckoutID    string          `json:"checkout_id"`
+		IncarnationID string          `json:"incarnation_id"`
+		ProfileID     string          `json:"analysis_profile_id"`
+		Context       *uci.ContextRef `json:"context"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(text), &target))
+	require.Nil(t, target.Context)
+	require.NotEmpty(t, target.ContextHandle)
+	require.NotContains(t, text, "/private/")
+	_, grpcInternal := grpcserver.New(nil, nil)
+	grpcInternal.SetUCITransport(composition.transport)
+	grpcContext := auth.WithIdentity(context.Background(), identity)
+	grpcContext = metadata.NewIncomingContext(grpcContext, metadata.Pairs(auditcontext.SourceSessionMetadataKey, session))
+	bound, err := grpcInternal.BindCodeContext(grpcContext, &pb.BindCodeContextRequest{ClientSessionId: session, ContextHandle: target.ContextHandle})
+	require.NoError(t, err)
+	require.Nil(t, bound.GetContext())
+	require.Equal(t, target.SourceID, bound.GetIndexScope().GetSourceId())
+	require.Equal(t, target.CheckoutID, bound.GetIndexScope().GetCheckoutId())
+	require.Equal(t, target.IncarnationID, bound.GetIndexScope().GetIncarnationId())
+	require.Equal(t, target.ProfileID, bound.GetIndexScope().GetAnalysisProfileId())
+	require.Equal(t, "file:///private/worktree-a", bound.GetLocalRootId())
+}
+
 func TestUCISemanticProfileUsesOpaqueCacheIdentity(t *testing.T) {
 	require.Equal(t, "uci-semantic-preprocess/chunk-v2", uciSemanticPreprocessingRevision)
 	ctx := context.Background()
