@@ -24,18 +24,23 @@ test('books bookmark exposes retirement without plaintext admission', async ({ p
  await expect(page.getByRole('heading', { name: 'Приём текстовых книг упразднён' })).toBeVisible()
  await expect(page.locator('.retirement-page').locator('input, textarea, input[type="file"]')).toHaveCount(0)
  await expect(page.getByRole('link', { name: 'Открыть документы' })).toHaveAttribute('href', '/documents')
+ await page.waitForLoadState('networkidle')
 
  await page.goto('/settings')
  await page.getByRole('dialog').getByRole('button', { name: 'English' }).click()
  await expect(page.locator('html')).toHaveAttribute('lang', 'en')
+ await page.waitForLoadState('networkidle')
  await page.goto('/books')
  await expect(page.getByRole('heading', { name: 'Plaintext book intake retired' })).toBeVisible()
+ await page.waitForLoadState('networkidle')
 
  await page.goto('/settings')
  await page.getByRole('dialog').getByRole('button', { name: '中文' }).click()
  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-Hans')
+ await page.waitForLoadState('networkidle')
  await page.goto('/books')
  await expect(page.getByRole('heading', { name: '纯文本书籍导入已停用' })).toBeVisible()
+ await page.waitForLoadState('networkidle')
  expect(writerRequests).toEqual([])
  expect(failures).toEqual([])
 
