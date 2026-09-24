@@ -1035,6 +1035,10 @@ func (application *operatorCodeGrantBreadcrumbApplication) ListOwnerChoices(ctx 
 	return nil, nil
 }
 
+func (*operatorCodeGrantBreadcrumbApplication) ListTargetChoices(context.Context, auth.Identity) ([]gormdb.BrowserReadGrantTargetChoice, error) {
+	return nil, nil
+}
+
 func (*operatorCodeGrantBreadcrumbApplication) IssueOnboarding(context.Context, auth.Identity, IssueOnboardingCodeGrantInput) (gormdb.BrowserReadGrant, error) {
 	return gormdb.BrowserReadGrant{}, nil
 }

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Workspace owners can choose another enabled browser account and issue or revoke an audited, exact Source-and-Checkout read grant; the recipient is resolved from persisted users and never supplied as a raw principal.
+
 ## [6.50.0] - 2026-09-17
 
 ### Added

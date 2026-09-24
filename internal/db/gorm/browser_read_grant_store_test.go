@@ -262,6 +262,66 @@ func TestBrowserReadGrantStore_OwnerChoicesRequireExactOwnerAndKeepLabelsNonAuth
 	require.Equal(t, "Studio workstation · release candidate", choice.WorkingCopyLabel, "checkout metadata must be independent of grant lifecycle")
 }
 
+func TestBrowserReadGrantStore_TargetChooserAndCrossUserGrant(t *testing.T) {
+	fixture := newBrowserReadGrantFixture(t)
+	ctx := context.Background()
+	ownerPrincipal := browserReadGrantPrincipal(fixture.owner.ID)
+	targets, err := fixture.store.ListTargetChoices(ctx, fixture.owner.ID, ownerPrincipal)
+	require.NoError(t, err)
+	require.Contains(t, targets, BrowserReadGrantTargetChoice{UserID: fixture.target.ID, Label: fixture.target.Email})
+	for _, target := range targets {
+		require.NotEqual(t, fixture.owner.ID, target.UserID)
+	}
+
+	// The foreign user owns no checkout and receives no target labels.
+	foreignTargets, err := fixture.store.ListTargetChoices(ctx, fixture.other.ID, browserReadGrantPrincipal(fixture.other.ID))
+	require.NoError(t, err)
+	require.Empty(t, foreignTargets)
+
+	issue := BrowserReadGrantOwnerIssue{IssuerUserID: fixture.owner.ID, IssuerPrincipal: ownerPrincipal, TargetUserID: fixture.target.ID, ChoiceRef: fixture.checkout.CheckoutID}
+	grant, err := fixture.store.IssueOwnerChoice(ctx, issue)
+	require.NoError(t, err)
+	require.Equal(t, fixture.target.ID, grant.SubjectUserID)
+	require.NotEqual(t, fixture.owner.ID, grant.SubjectUserID)
+	require.Equal(t, fixture.source.AuthRealm, grant.AuthRealm)
+	canRead, err := fixture.store.CanRead(ctx, fixture.target.ID, fixture.source.SourceID, fixture.checkout.CheckoutID)
+	require.NoError(t, err)
+	require.True(t, canRead)
+	assertBrowserReadGrantAuditCount(t, fixture.db, "code_grant_issued", 1)
+	// A grant in one Source realm never confers access to an otherwise owned checkout in another realm.
+	realm := "browser-grant-foreign-realm-" + uuid.NewString()
+	require.NoError(t, fixture.db.Model(&UCISource{}).Where("source_id = ?", fixture.foreignSource.SourceID).Update("auth_realm", realm).Error)
+	_, err = fixture.store.Issue(ctx, BrowserReadGrantIssue{IssuerUserID: fixture.owner.ID, IssuerPrincipal: ownerPrincipal, TargetUserID: fixture.target.ID, SourceID: fixture.source.SourceID, CheckoutID: fixture.foreignCheckout.CheckoutID})
+	require.ErrorIs(t, err, ErrBrowserReadGrantDenied)
+	canRead, err = fixture.store.CanRead(ctx, fixture.target.ID, fixture.foreignSource.SourceID, fixture.foreignCheckout.CheckoutID)
+	require.NoError(t, err)
+	require.False(t, canRead)
+	assertBrowserReadGrantAuditCount(t, fixture.db, "code_grant_issued", 1)
+
+	issue.TargetUserID = fixture.owner.ID
+	_, err = fixture.store.IssueOwnerChoice(ctx, issue)
+	require.ErrorIs(t, err, ErrBrowserReadGrantDenied)
+	issue.TargetUserID = fixture.target.ID
+	issue.IssuerUserID = fixture.other.ID
+	issue.IssuerPrincipal = browserReadGrantPrincipal(fixture.other.ID)
+	_, err = fixture.store.IssueOwnerChoice(ctx, issue)
+	require.ErrorIs(t, err, ErrBrowserReadGrantDenied)
+	assertBrowserReadGrantAuditCount(t, fixture.db, "code_grant_issued", 1)
+
+	_, err = fixture.store.Revoke(ctx, fixture.owner.ID, ownerPrincipal, grant.GrantRef)
+	require.NoError(t, err)
+	canRead, err = fixture.store.CanRead(ctx, fixture.target.ID, fixture.source.SourceID, fixture.checkout.CheckoutID)
+	require.NoError(t, err)
+	require.False(t, canRead)
+	require.NoError(t, fixture.db.Model(&User{}).Where("id = ?", fixture.target.ID).Update("disabled", true).Error)
+	targets, err = fixture.store.ListTargetChoices(ctx, fixture.owner.ID, ownerPrincipal)
+	require.NoError(t, err)
+	require.NotContains(t, targets, BrowserReadGrantTargetChoice{UserID: fixture.target.ID, Label: fixture.target.Email})
+	_, err = fixture.store.IssueOwnerChoice(ctx, BrowserReadGrantOwnerIssue{IssuerUserID: fixture.owner.ID, IssuerPrincipal: ownerPrincipal, TargetUserID: fixture.target.ID, ChoiceRef: fixture.checkout.CheckoutID})
+	require.ErrorIs(t, err, ErrBrowserReadGrantDenied)
+	assertBrowserReadGrantAuditCount(t, fixture.db, "code_grant_issued", 1)
+}
+
 func TestBrowserReadGrantStore_OwnerChoicesReturnDeterministicFirstPage(t *testing.T) {
 	fixture := newBrowserReadGrantFixture(t)
 	ctx := context.Background()

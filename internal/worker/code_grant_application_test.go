@@ -14,6 +14,7 @@ type recordingCodeGrantStore struct {
 	issues           []gormdb.BrowserReadGrantIssue
 	ownerIssues      []gormdb.BrowserReadGrantOwnerIssue
 	ownerChoices     []gormdb.BrowserReadGrantOwnerChoice
+	targetChoices    []gormdb.BrowserReadGrantTargetChoice
 	ownerChoiceCalls []struct {
 		issuerUserID    int64
 		issuerPrincipal string
@@ -56,6 +57,10 @@ func (store *recordingCodeGrantStore) ListOwnerChoices(_ context.Context, issuer
 		issuerPrincipal string
 	}{issuerUserID: issuerUserID, issuerPrincipal: issuerPrincipal})
 	return append([]gormdb.BrowserReadGrantOwnerChoice(nil), store.ownerChoices...), nil
+}
+
+func (store *recordingCodeGrantStore) ListTargetChoices(_ context.Context, _ int64, _ string) ([]gormdb.BrowserReadGrantTargetChoice, error) {
+	return store.targetChoices, nil
 }
 
 func (store *recordingCodeGrantStore) SetOwnerChoiceLabel(_ context.Context, issuerUserID int64, issuerPrincipal, choiceRef, label string) (gormdb.BrowserReadGrantOwnerChoice, error) {

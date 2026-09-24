@@ -543,7 +543,7 @@ func TestOperatorCodeRoutesDelegateStructureAndOwnerOnboarding(t *testing.T) {
 		ChoiceRef:        fixture.ref.CheckoutID,
 		RepositoryLabel:  "Engram",
 		WorkingCopyLabel: "Studio workstation · release candidate",
-	}}}
+	}}, targetChoices: []gormstore.BrowserReadGrantTargetChoice{{UserID: 99, Label: "reader@example.test"}}}
 	adapter.onboarding = &CodeGrantApplication{grants: grants}
 	service := newOperatorCodeRouteTestService(adapter)
 
@@ -574,12 +574,15 @@ func TestOperatorCodeRoutesDelegateStructureAndOwnerOnboarding(t *testing.T) {
 	choiceRef := operatorCodeOpaqueRef("grant-choice", fixture.ref.CheckoutID)
 	require.Contains(t, choices.Body.String(), `"choice_ref":"`+choiceRef+`"`)
 	require.NotContains(t, choices.Body.String(), fixture.ref.CheckoutID)
+	targetRef := operatorCodeOpaqueRef("grant-target", "99")
+	require.Contains(t, choices.Body.String(), `"target_ref":"`+targetRef+`"`)
+	require.NotContains(t, choices.Body.String(), `"subject_user_id"`)
 
-	issued := call(http.MethodPost, "/api/code/grants", `{"choice_ref":"`+choiceRef+`"}`, fixture.identity)
+	issued := call(http.MethodPost, "/api/code/grants", `{"choice_ref":"`+choiceRef+`","target_ref":"`+targetRef+`"}`, fixture.identity)
 	require.Equal(t, http.StatusOK, issued.Code, issued.Body.String())
 	require.Len(t, grants.ownerIssues, 1)
 	require.Equal(t, fixture.ref.CheckoutID, grants.ownerIssues[0].ChoiceRef)
-	require.Equal(t, int64(41), grants.ownerIssues[0].TargetUserID)
+	require.Equal(t, int64(99), grants.ownerIssues[0].TargetUserID)
 
 	labeled := call(http.MethodPatch, "/api/code/grants/choices/"+choiceRef, `{"working_copy":"Desk · release candidate"}`, fixture.identity)
 	require.Equal(t, http.StatusOK, labeled.Code, labeled.Body.String())

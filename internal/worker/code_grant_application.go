@@ -16,6 +16,7 @@ type codeGrantStore interface {
 	Issue(context.Context, gormdb.BrowserReadGrantIssue) (gormdb.BrowserReadGrant, error)
 	IssueOwnerChoice(context.Context, gormdb.BrowserReadGrantOwnerIssue) (gormdb.BrowserReadGrant, error)
 	ListOwnerChoices(context.Context, int64, string) ([]gormdb.BrowserReadGrantOwnerChoice, error)
+	ListTargetChoices(context.Context, int64, string) ([]gormdb.BrowserReadGrantTargetChoice, error)
 	SetOwnerChoiceLabel(context.Context, int64, string, string, string) (gormdb.BrowserReadGrantOwnerChoice, error)
 	Revoke(context.Context, int64, string, string) (gormdb.BrowserReadGrant, error)
 	CanRead(context.Context, int64, string, string) (bool, error)
@@ -81,6 +82,18 @@ func (a *CodeGrantApplication) ListOwnerChoices(ctx context.Context, issuer auth
 		return nil, err
 	}
 	return a.grants.ListOwnerChoices(ctx, issuerSubject.UserID, issuerSubject.Principal)
+}
+
+// ListTargetChoices returns enabled persisted recipients only for an exact owner.
+func (a *CodeGrantApplication) ListTargetChoices(ctx context.Context, issuer auth.Identity) ([]gormdb.BrowserReadGrantTargetChoice, error) {
+	issuerSubject, ok := issuer.SessionBrowserSubject()
+	if !ok {
+		return nil, errCodeGrantCallerDenied
+	}
+	if err := a.requireStore(); err != nil {
+		return nil, err
+	}
+	return a.grants.ListTargetChoices(ctx, issuerSubject.UserID, issuerSubject.Principal)
 }
 
 // IssueOnboarding creates a grant through one server-issued owner catalog

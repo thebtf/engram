@@ -66,6 +66,7 @@ type operatorCodeGrantReader interface {
 // display labels. The adapter never derives a principal or tuple from browser input.
 type operatorCodeGrantOnboardingApplication interface {
 	ListOwnerChoices(context.Context, auth.Identity) ([]gormdb.BrowserReadGrantOwnerChoice, error)
+	ListTargetChoices(context.Context, auth.Identity) ([]gormdb.BrowserReadGrantTargetChoice, error)
 	IssueOnboarding(context.Context, auth.Identity, IssueOnboardingCodeGrantInput) (gormdb.BrowserReadGrant, error)
 	SetWorkingCopyLabel(context.Context, auth.Identity, string, string) (gormdb.BrowserReadGrantOwnerChoice, error)
 	Revoke(context.Context, auth.Identity, string) (gormdb.BrowserReadGrant, error)
@@ -876,10 +877,15 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGrantChoices(w http.ResponseWriter
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
 	}
-	writeJSON(w, operatorCodeOwnerChoicesResponse{Choices: operatorCodeOwnerChoiceDTOs(choices)})
+	targets, err := adapter.onboarding.ListTargetChoices(r.Context(), identity.identity)
+	if err != nil {
+		operatorCodeWriteBodyless(w, http.StatusForbidden)
+		return
+	}
+	writeJSON(w, operatorCodeOwnerChoicesResponse{Choices: operatorCodeOwnerChoiceDTOs(choices), Targets: operatorCodeTargetChoiceDTOs(targets)})
 }
 
-// HandleGrantIssue issues the current persistent browser subject one selected grant.
+// HandleGrantIssue issues an exact owner's selected checkout to a selected enabled reader.
 func (adapter *OperatorCodeHTTPAdapter) HandleGrantIssue(w http.ResponseWriter, r *http.Request) {
 	var request operatorCodeGrantIssueRequest
 	identity, ok := adapter.decode(w, r, "operator-code-grant-issue", &request)
@@ -889,8 +895,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGrantIssue(w http.ResponseWriter, 
 		}
 		return
 	}
-	subject, found := identity.identity.SessionBrowserSubject()
-	if !found || adapter.onboarding == nil {
+	if _, found := identity.identity.SessionBrowserSubject(); !found || adapter.onboarding == nil {
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
 	}
@@ -899,7 +904,12 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGrantIssue(w http.ResponseWriter, 
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
 		return
 	}
-	grant, err := adapter.onboarding.IssueOnboarding(r.Context(), identity.identity, IssueOnboardingCodeGrantInput{Target: subject, ChoiceRef: choiceRef, ExpiresAt: request.ExpiresAt})
+	targetID, ok := operatorCodeTargetChoiceID(request.TargetRef)
+	if !ok {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return
+	}
+	grant, err := adapter.onboarding.IssueOnboarding(r.Context(), identity.identity, IssueOnboardingCodeGrantInput{Target: auth.BrowserSubjectForUser(targetID), ChoiceRef: choiceRef, ExpiresAt: request.ExpiresAt})
 	if err != nil {
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
@@ -1008,12 +1018,14 @@ type operatorCodePathProofRequest struct {
 
 type operatorCodeGrantIssueRequest struct {
 	ChoiceRef string     `json:"choice_ref"`
+	TargetRef string     `json:"target_ref"`
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 func (request operatorCodeGrantIssueRequest) valid() bool {
-	_, ok := operatorCodeOwnerChoiceRef(request.ChoiceRef)
-	return ok
+	_, checkoutOK := operatorCodeOwnerChoiceRef(request.ChoiceRef)
+	_, targetOK := operatorCodeTargetChoiceID(request.TargetRef)
+	return checkoutOK && targetOK
 }
 
 type operatorCodeGrantLabelRequest struct {
@@ -1051,6 +1063,15 @@ func operatorCodeOwnerChoiceRef(value string) (string, bool) {
 		return "", false
 	}
 	return fields[0], true
+}
+
+func operatorCodeTargetChoiceID(value string) (int64, bool) {
+	fields, ok := operatorCodeOpaqueFields(value, "grant-target", 1)
+	if !ok {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(fields[0], 10, 64)
+	return id, err == nil && id > 0
 }
 
 func operatorCodeOpaqueRef(kind string, values ...string) string {
@@ -2320,12 +2341,12 @@ type operatorCodeCatalogEntry struct {
 	IndexIntentAvailable    bool                     `json:"index_intent_available"`
 	IndexIntentSelectionRef string                   `json:"index_intent_selection_ref,omitempty"`
 }
+
 // These presentation-only keys are stable across snapshots without exposing raw IDs.
 func operatorCodeCatalogRef(kind string, ids ...string) string {
 	value := sha256.Sum256([]byte(kind + "\x00" + strings.Join(ids, "\x00")))
 	return hex.EncodeToString(value[:])
 }
-
 
 type operatorCodeContextsResponse struct {
 	Contexts []operatorCodeCatalogEntry `json:"contexts"`
@@ -2356,8 +2377,22 @@ type operatorCodeOwnerChoice struct {
 	WorkingCopy string `json:"working_copy"`
 }
 
+type operatorCodeTargetChoice struct {
+	TargetRef string `json:"target_ref"`
+	Label     string `json:"label"`
+}
+
 type operatorCodeOwnerChoicesResponse struct {
-	Choices []operatorCodeOwnerChoice `json:"choices"`
+	Choices []operatorCodeOwnerChoice  `json:"choices"`
+	Targets []operatorCodeTargetChoice `json:"targets"`
+}
+
+func operatorCodeTargetChoiceDTOs(targets []gormdb.BrowserReadGrantTargetChoice) []operatorCodeTargetChoice {
+	result := make([]operatorCodeTargetChoice, len(targets))
+	for index, target := range targets {
+		result[index] = operatorCodeTargetChoice{TargetRef: operatorCodeOpaqueRef("grant-target", strconv.FormatInt(target.UserID, 10)), Label: target.Label}
+	}
+	return result
 }
 
 func operatorCodeOwnerChoiceDTO(choice gormdb.BrowserReadGrantOwnerChoice) operatorCodeOwnerChoice {

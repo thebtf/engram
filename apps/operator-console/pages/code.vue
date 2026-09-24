@@ -57,6 +57,8 @@ onMounted(() => {
       <button class="btn" type="button" :disabled="pending || pinnedContext === null" @click="refreshStatus">{{ t('codeExplorer.refresh') }}</button>
     </header>
 
+    <CodeGrantChooser />
+
     <CodeContextPicker
       :phase="bootstrapPhase"
       :state="contextState"
