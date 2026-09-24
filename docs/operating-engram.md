@@ -183,18 +183,12 @@ This is the operator path for the current UCI `codebase_*` tools and the browser
 
 1. In an authorized admin browser session, open `<server-origin>/access` and issue a **workstation keycard**. Keep `ENGRAM_AUTH_ADMIN_TOKEN` on the server host. Configure the local client with its own keycard using the supported plugin setup. The universal plugin config is `~/.engram/config.json` (`server_url` and `api_token`); some hosts use `ENGRAM_CONFIG_FILE` or launcher overrides. Inspect the active launcher and preserve existing settings instead of replacing the file. `ENGRAM_URL` is the bare server origin for env-based setups, not an HTTP `/mcp` endpoint. Never paste real credentials into diagnostics or this document.
 2. Confirm that the **actual local daemon** receives `ENGRAM_CODE_INTEL_ENABLED=true`; a server-side flag does not register local tools. For parser-required JS, TS, and TSX indexing, the daemon needs an installed absolute `ENGRAM_UCI_PARSER_EXECUTABLE` paired with `ENGRAM_UCI_PARSER_BUNDLE_DIGEST`. Read the compatible bundle digest from the parser's own installed output or release metadata, not the executable's file SHA-256. The installer must supply and validate the binary and configuration. The checked plugin-bin installation had no parser; this is a delivery gap, not a request for the user to guess an executable path. Inspect the daemon's own startup configuration without exposing values of secrets; a new shell's environment does not prove what the running daemon inherited. Reconnect or restart only that daemon through the supported plugin procedure.
-3. Have the source owner use the application's authorized repository and checkout onboarding, analysis profile, and browser read-grant flow. Register two distinct working copies of one Git source if testing isolation. Never bootstrap by inserting database rows, inventing UUIDs, or treating a repository path or project label as authority. If ordinary onboarding or grants are unavailable in the installed release, stop the code acceptance here and route that installation defect to the product owner.
+3. Have the source owner register the repository, working copy, and analysis profile through a public, authorized onboarding API when the installed release provides one; browser read grants remain a separate owner-authorized flow. The current `codebase_context` `list` returns only published authorized Views, not a checkout without a View. Until the public registration path is shipped and verified, first indexing and F1 acceptance are blocked. Never insert database rows, invent UUIDs, or treat a repository path or project label as authority. If onboarding or grants are unavailable in the installed release, route that defect to the product owner.
 4. Start a fresh ordinary agent session and inspect its MCP `tools/list`. Expect `codebase_context`, `codebase_index`, `codebase_status`, `codebase_search`, `codebase_graph`, and `codebase_read` with the schemas actually advertised by that host. `codebase_*` are current UCI tools; only the internal raw-project rollback reader is legacy. A `project` argument on public query tools is compatibility evidence and never selects a View.
 
 ### Index and inspect an authorized View
 
-Use the host's MCP tool-call interface for the following JSON **arguments**, not a shell or a REST endpoint. Values in angle brackets come from tool responses for the same client; never make up identifiers. `codebase_context` can list published authorized Views and registered checkouts without a View. Choose the returned checkout handle for first indexing, then select the published View after indexing. A handle is client-scoped; a second client resolves its own context.
-
-```json
-{"action":"list"}
-```
-
-Call `codebase_context` with `{"action":"select","context_handle":"<returned handle>"}`. Then call `codebase_index` on that registered checkout:
+First indexing is **blocked until the public source and checkout registration API is released**. In the current source, `codebase_context` with `{"action":"list"}` lists authorized published Views only; it cannot give a new, unindexed checkout a handle. Do not substitute a repository path, a made-up UUID, or a fake handle. Once onboarding is shipped, document its exact public action and select the returned registered checkout through the supported client interface before using the examples below. The following `codebase_index` argument is valid only for a genuinely selected checkout handle from the same client:
 
 ```json
 {"context_handle":"<selected checkout handle>"}
@@ -235,8 +229,29 @@ Use an authorized disposable repository or agreed test corpus. Set expected answ
 3. **F3: semantic search.** Index more than 50 eligible candidates. Run exact-symbol, non-lexical conceptual (including a Russian-language query where applicable), and negative searches. Inspect the actual vector or hybrid mode, profile, source span, total and continuation; do not infer success from a nonempty first page or from lexical fallback.
 4. **F4: graph and evidence.** Follow a direct and a reverse relation to an off-page neighbor, then read its stored source span and evidence type. Continue from that neighbor. Report partial, ambiguous, or unsupported relations rather than claiming the graph is complete. Do not create nodes or edges manually.
 5. **F5: recovery and authorization.** In a controlled, owned environment only, stop the test daemon, submit an authorized index intent, observe queued or unavailable state, restore its owner, and verify one correct execution. Interrupt the test embedding provider and confirm a useful status with the last good View intact. Revoke a test subject's read grant and confirm that graph, source, and search no longer disclose content. Do not stop shared processes or revoke production grants for this test.
-6. **F6: retired writers.** Check that Home and old bookmarks cannot open the manual graph editor or plaintext Book intake. Old HTTP and MCP writers must remain unavailable even when old flags are enabled. Historical documents, versions, audit, and allowed readers must still work. Do not mistake a missing menu item for writer retirement.
+6. **F6: retired writers.** Check the [exact retired-writer matrix](#f6-retired-writer-matrix) against the installed version before and after restart with the old flags enabled. A missing menu item does not prove writer retirement; historical records and authorized readers must remain available.
 7. **F7: instructions.** Ask a second operator to repeat this path from only the supported origin, approved credentials, readable repository names, and this guide. Record all hints required, dead ends, F1–F6 outcomes, limits, and exact component identities. Fix missing instructions or onboarding before claiming PASS.
+
+### F6 retired-writer matrix
+
+The source-candidate denominator is **5 HTTP methods + 3 MCP actions + 2 old bookmarks = 10 negative checks per start**. Compare the matrix with the actual installed server, daemon, and console before testing; source-only fixture evidence does not certify an installed release.
+
+| Former writer or bookmark | Expected refusal |
+| --- | --- |
+| `POST /api/graph/nodes` | HTTP 405; no node created. |
+| `POST /api/graph/edges` | HTTP 405; no edge created. |
+| `DELETE /api/graph/nodes/{id}` | HTTP 405; no node deleted. |
+| `DELETE /api/graph/edges/{id}` | HTTP 405; no edge deleted. |
+| `POST /api/books` | HTTP 405; no Book job admitted. |
+| MCP `graph` action `add_edge` | Absent from the advertised `graph.action` enum; call returns `IsError`, `unknown graph action: add_edge`. |
+| MCP `graph` action `remove_edge` | Absent from the action enum; call returns `IsError`, `unknown graph action: remove_edge`. |
+| MCP `graph` action `add_node` | Absent from the action enum; call returns `IsError`, `unknown graph action: add_node`. |
+| Old `/graph` bookmark | No manual graph editor. |
+| Old `/books` bookmark | No plaintext Book uploader. |
+
+Repeat all 10 checks with `ENGRAM_GRAPH_ENABLED=true` and `ENGRAM_BOOKS_ENABLED=true` after restart. Record the component identities and each refusal. Retained reads include `GET /api/graph/nodes`, `/api/graph/edges`, `/api/graph/traverse`, `/api/graph/find-path`, `GET /api/books/{id}/status`, authorized `/api/documents`, `/api/documents/history`, `/api/documents/comments`, `/api/rules`, `/api/issues`, `/api/context/search`, MCP `graph` actions `get_edges`, `traverse`, `find_path`, `synonyms`, Tier2 `Traverse` in `internal/retrieval/hybrid.go`, and the separate UCI `codebase_graph`. Verify their existing ACLs, not just availability. Before transitioning residual Book jobs to `failed: interrupted by retirement`, ensure no old Book writer is live; preserve document versions, `source_book_job_id`, and partial documents. The source matrix follows `internal/worker/service.go`, `internal/mcp/tools_graph.go`, `internal/worker/handlers_graph_test.go`, `internal/worker/handlers_books_retirement_test.go`, `internal/mcp/tools_graph_t014_test.go`, and the [DA03 source receipt](../specs/011-operator-code-console/acceptance/da03-retirement-receipt.json). It is not installed acceptance evidence.
+
+The linked DA03 source receipt records **NOT_PROVEN** for full source acceptance because its bookmark browser test selectors failed. Repeat the two bookmark checks with scoped selectors on the exact installed UI; do not convert its HTTP/MCP fixture results into a release PASS.
 
 The first installed UCI parser artifact is Windows amd64 only (`win32-x64`); the Linux amd64 and macOS arm64 parser targets are explicitly unsupported in this release, even though launcher clients exist for those platforms. Do not claim JS, TS, or TSX facts or graph coverage there from a source build or a null parser target. On Windows, supported first scope is Go plus JS, TS, and TSX only after the parser bundle is installed and its digest verified, and supported structured text. Full C#, Python, Vue SFC, communities, and the old manual graph or Book workflows are not promised. `tools/uci-parser/manifest.json` still records Windows and Linux amd64 as `not_claimed` and `not_reverified` for the v2 facts contract, and macOS targets as blocked. Update the manifest only after corresponding artifact build and smoke evidence; the parser's release policy alone is not that proof.
 

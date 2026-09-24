@@ -151,24 +151,35 @@ graph TB
 <!-- redoc:start:quick-start -->
 ## Быстрый старт
 
+Для сборки локального Compose-стека нужны Docker с Compose, пароль PostgreSQL и отдельный операторский токен. Три имени образов и версия сборки обязательны даже при сборке из исходников:
+
 ```bash
 git clone https://github.com/thebtf/engram.git
 cd engram
-
-# Настройка
-cp .env.example .env   # отредактируйте под свои параметры
-
-# Запуск
-docker compose up -d
+cp .env.example .env
+commit=$(git rev-parse HEAD)
+cat >> .env <<EOF
+ENGRAM_SERVER_IMAGE=engram-local-server
+ENGRAM_OPERATOR_IMAGE=engram-local-operator-console
+ENGRAM_POSTGRES_IMAGE=engram-local-postgres
+ENGRAM_BUILD_VERSION=sha-$commit
+EOF
+# Перед запуском задайте в .env POSTGRES_PASSWORD и ENGRAM_AUTH_ADMIN_TOKEN.
+docker compose up -d --build
+docker compose ps
 ```
 
-Это запускает PostgreSQL 17 + pgvector и сервер Engram по адресу `http://your-server:37777`.
+Стек запускает PostgreSQL 17 с pgvector, сервер на `WORKER_PORT` (по умолчанию `37777`) и отдельную консоль на `OPERATOR_CONSOLE_PORT` (по умолчанию `3000`). Для развёртывания только из опубликованных образов используйте три digest-идентификатора и проверку публикации из [руководства по развёртыванию](docs/DEPLOYMENT.md), а не этот исходный build.
 
-Проверка:
+Проверьте ответ HTTP-процесса и готовность сервиса отдельно:
 
 ```bash
-curl http://your-server:37777/health
+curl -fsS http://localhost:37777/health
+curl -fsS http://localhost:37777/api/ready
+docker compose logs --tail=100 server
 ```
+
+Если изменили `WORKER_PORT`, используйте новый порт. Эти проверки не подтверждают работу плагина или готовность кодового индекса.
 
 Затем установите плагин в Claude Code:
 
@@ -209,22 +220,13 @@ ENGRAM_TOKEN=engram_your_workstation_keycard
 /plugin install engram
 ```
 
-Перезапустите Claude Code. Всё настроено.
+Перезапустите Claude Code и проверьте подключение MCP в новой сессии. Установка плагина не подтверждает готовность сервера, keycard, парсера и Workspace; порядок проверки описан в [операторском руководстве](docs/operating-engram.md).
 
 ### Docker Compose
 
-```bash
-git clone https://github.com/thebtf/engram.git && cd engram
-cp .env.example .env   # отредактируйте DATABASE_DSN, токены, конфигурацию embeddings
-docker compose up -d
-```
+Для локальной сборки используйте команды из [быстрого старта](#быстрый-старт). `docker compose up -d` без обязательных `ENGRAM_SERVER_IMAGE`, `ENGRAM_OPERATOR_IMAGE`, `ENGRAM_POSTGRES_IMAGE` и `ENGRAM_BUILD_VERSION` не запускает стек. Задайте `POSTGRES_PASSWORD` и `ENGRAM_AUTH_ADMIN_TOKEN` до запуска.
 
-**Уже есть PostgreSQL?** Запустите только контейнер сервера:
-
-```bash
-DATABASE_DSN="postgres://user:pass@your-pg:5432/engram?sslmode=disable" \
-  docker compose up -d server
-```
+Для опубликованных образов укажите три digest-идентификатора из манифеста релиза и запустите [проверку и pull-only развёртывание](docs/DEPLOYMENT.md#immutable-image-selection). Если PostgreSQL уже развёрнут отдельно, задайте `DATABASE_DSN` для сервера и проверьте соответствие собственной конфигурации вместо слепого запуска только `server`: Compose-файл содержит зависимость от сервиса `postgres`.
 
 ### Binary Installation (v4+)
 
