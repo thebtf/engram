@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Operator Workspace (Feature 011 D-A).** From Home, an authenticated operator can choose a Repository, Working copy, and Indexed snapshot, then search or browse source, follow direct or reverse derived relations, and open released evidence in one immutable UCI View.
 - **Browser grants and UCI release checks.** Workspace browser reads require an explicit Source-and-Checkout grant, a current tab binding, and UCI reauthorization and exposure recording before contextual content returns.
+- **Windows UCI parser delivery.** The plugin installs an integrity-pinned Windows amd64 Tree-sitter parser beside its daemon and verifies its bundle identity before launch. Linux and macOS parser artifacts are not included in this release.
 
 ### Changed
 
