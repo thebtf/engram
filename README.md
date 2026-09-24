@@ -24,7 +24,7 @@ Since then, the v6 line rebuilt governance on top of that stable core: per-works
 
 | Version | Highlight |
 |---------|-----------|
-| **v6.50.0** | **Operator Workspace (Feature 011 D-A).** Start from Home, select an authorized working copy and indexed snapshot, then trace direct or reverse derived relations to released source evidence. |
+| **v6.50.0 candidate** | **Operator Workspace (Feature 011 D-A).** The candidate source adds Home → Workspace and authorized working-copy investigation. Check the [installed-operator guide](docs/operating-engram.md) before claiming this UI is installed or accepted. |
 | **v6.38.0** | **V7 Meta-memory Discovery (ENG-V7-S2)** — content-free `know_about` MCP tool, S2 `CandidateProposer`, and session-start `meta_summary` behind v7 flags. |
 | **v6.37.0** | **V7 State Subsystem (ENG-V7-S1)** — v7 `StateWriter` adapter and bounded native state resume hardening. |
 | **v6.32.0** | **Usefulness / Noise Review Loop (CR-008, MPL-3)** — packet-centric bounded review queue with explicit empty/gated/error/sparse states, separate preview/apply, atomic snapshot+audit-backed suppress/preserve, honest metrics. |
@@ -201,7 +201,7 @@ Only a source owner may issue or revoke an explicit Source-and-Checkout browser 
 
 Manual knowledge-graph writers and plaintext Book intake are retired. Historical graph and Book readers, records, documents, and provenance remain available. Historical graph records are not UCI code-graph facts.
 
-Workspace is separate from the legacy, flag-gated MCP `codebase_*` tools. Those tools require `ENGRAM_CODE_INTEL_ENABLED=true` and an opaque agent context. They do not create browser grants or tab bindings, and cannot open the authenticated Workspace.
+The `codebase_*` MCP tools are the current UCI agent path, separate from browser Workspace. They require the daemon's `ENGRAM_CODE_INTEL_ENABLED=true` and an authorized opaque context; the internal raw-project rollback reader alone is legacy. MCP handles do not create browser grants or tab bindings. Follow the [operator setup and F1–F7 verification guide](docs/operating-engram.md) before treating Workspace as installed and accepted.
 
 Known corrections from that ledger:
 

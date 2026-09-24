@@ -168,3 +168,88 @@ resolve:
 
 The audit log records `action='rollback_attempted_with_conflict'` for all refused
 rollback attempts.
+
+## Bring up and verify Code Workspace
+
+This is the operator path for the current UCI `codebase_*` tools and the browser Workspace. It is not the [Feature 011 fixture quickstart](../specs/011-operator-code-console/quickstart.md), which prepares a disposable acceptance environment. Do not count a source-built fixture or an HTTP selfcheck as an installed Workspace acceptance.
+
+### Identify the installation before changing it
+
+1. Record the server origin, server version and image digest or source commit, browser bundle identity, installed plugin and daemon path and version, parser executable path and digest, parser bundle digest, supported browser origin and identity realm, and embedding model, dimensions, and preprocessing profile. Get these from the installed image, plugin inventory, and diagnostics; do not infer the active daemon from a shell `engram` on `PATH`. Do not record credential values, database DSNs, or private source bodies.
+2. From an authorized workstation, fetch `<server-origin>/api/version`, `/api/selfcheck`, `/api/flags`, and `/api/auth/me` without credentials in the URL. Check PostgreSQL readiness separately. The private intake `check-engram.ps1` can collect these four GET observations for the original deployment but is **not shipped as a public setup command**. A successful service probe does not show that the daemon has code tools or an indexed View.
+3. Confirm the installed release actually contains the new Workspace and UCI implementation. A candidate branch or version label is not installation evidence. On the installation inspected on 24 September 2026, server and plugin daemon reported v6.49.3, the new Workspace was not installed, and `/code` failed to initialize on its HTTP LAN origin. These observations describe that installation at that date, not the state of every deployment or a completed rollout.
+
+### Connect the ordinary client and register a source
+
+1. In an authorized admin browser session, open `<server-origin>/access` and issue a **workstation keycard**. Keep `ENGRAM_AUTH_ADMIN_TOKEN` on the server host. Configure the local client with its own keycard using the supported plugin setup. The universal plugin config is `~/.engram/config.json` (`server_url` and `api_token`); some hosts use `ENGRAM_CONFIG_FILE` or launcher overrides. Inspect the active launcher and preserve existing settings instead of replacing the file. `ENGRAM_URL` is the bare server origin for env-based setups, not an HTTP `/mcp` endpoint. Never paste real credentials into diagnostics or this document.
+2. Confirm that the **actual local daemon** receives `ENGRAM_CODE_INTEL_ENABLED=true`; a server-side flag does not register local tools. For parser-required JS, TS, and TSX indexing, the daemon needs an installed absolute `ENGRAM_UCI_PARSER_EXECUTABLE` paired with `ENGRAM_UCI_PARSER_BUNDLE_DIGEST`. Read the compatible bundle digest from the parser's own installed output or release metadata, not the executable's file SHA-256. The installer must supply and validate the binary and configuration. The checked plugin-bin installation had no parser; this is a delivery gap, not a request for the user to guess an executable path. Inspect the daemon's own startup configuration without exposing values of secrets; a new shell's environment does not prove what the running daemon inherited. Reconnect or restart only that daemon through the supported plugin procedure.
+3. Have the source owner use the application's authorized repository and checkout onboarding, analysis profile, and browser read-grant flow. Register two distinct working copies of one Git source if testing isolation. Never bootstrap by inserting database rows, inventing UUIDs, or treating a repository path or project label as authority. If ordinary onboarding or grants are unavailable in the installed release, stop the code acceptance here and route that installation defect to the product owner.
+4. Start a fresh ordinary agent session and inspect its MCP `tools/list`. Expect `codebase_context`, `codebase_index`, `codebase_status`, `codebase_search`, `codebase_graph`, and `codebase_read` with the schemas actually advertised by that host. `codebase_*` are current UCI tools; only the internal raw-project rollback reader is legacy. A `project` argument on public query tools is compatibility evidence and never selects a View.
+
+### Index and inspect an authorized View
+
+Use the host's MCP tool-call interface for the following JSON **arguments**, not a shell or a REST endpoint. Values in angle brackets come from tool responses for the same client; never make up identifiers. `codebase_context` can list published authorized Views and registered checkouts without a View. Choose the returned checkout handle for first indexing, then select the published View after indexing. A handle is client-scoped; a second client resolves its own context.
+
+```json
+{"action":"list"}
+```
+
+Call `codebase_context` with `{"action":"select","context_handle":"<returned handle>"}`. Then call `codebase_index` on that registered checkout:
+
+```json
+{"context_handle":"<selected checkout handle>"}
+```
+
+Index admission returns `run_id`, not a completed View. On the **daemon-side** `codebase_status`, pass that handle and the returned run ID to wait for a bounded read-your-save barrier:
+
+```json
+{"context_handle":"<selected checkout handle>","after_barrier":{"token":"<returned run_id>","wait_ms":5000}}
+```
+
+The server-side `codebase_status` allows an omitted handle only for an existing client binding; the daemon-side schema requires it. Follow the discovered schema. Check the run's terminal state, source and checkout identity, published View, expected and indexed files, omissions and languages, and embedding readiness for that View. `ENGRAM_EMBEDDING_URL` and `ENGRAM_EMBEDDING_MODEL`, with `ENGRAM_EMBEDDING_API_KEY` if needed, configure the shared provider; a reachable endpoint or memory vectors do not prove code embeddings are ready. Use the released View's analysis profile, dimension, and preprocessing information. Preserve the last good View on failure; do not erase the index to refresh it.
+
+On the published View, call `codebase_search` with a conceptual query that does **not** contain the known function name, then follow a returned reference. For example, replace the query with one chosen for your corpus:
+
+```json
+{"context_handle":"<published View handle>","query":"How does this repository choose a working copy for code search?","limit":10}
+```
+
+Check actual vector or hybrid retrieval mode and the correct source citation. Lexical fallback is a degraded result, not proof of semantic search. For `codebase_graph`, copy `source_id`, `view_id`, and `entity_key` from that citation:
+
+```json
+{"action":"neighbors","context_handle":"<published View handle>","target":{"source_id":"<returned source_id>","view_id":"<returned view_id>","entity_key":"<returned entity_key>"},"direction":"both"}
+```
+
+Follow a direct and a reverse relation, including one neighbor not on the search page. For `codebase_read`, copy the exact `ref`, `span` (byte and line start and end), and bare 64-hex-character `content_digest` from a returned citation, along with the same View handle. Its schema requires all three objects or values. Do not read today's file from disk as a substitute for the stored View span. Evidence labeled ambiguous or heuristic does not prove a resolved call; a missing dynamic edge does not prove no dependency exists.
+
+### Open and accept Workspace
+
+From the supported browser origin, sign in as the authorized subject, then use **Home → Workspace → Repository → Working copy → Indexed snapshot**. Select the same released View used above. Confirm search, off-page graph neighbor, and source evidence without typing a binding, UUID, or direct hidden URL. Browser read grants belong to the authenticated subject and source or checkout owner; the workstation keycard cannot grant browser access. HTTPS or a secure browser origin does not grant read authority by itself. Do not use insecure-browser flags or a synthetic admin as a substitute for an origin and identity decision. On the inspected HTTP LAN installation, `crypto.randomUUID` was unavailable before the handshake; recheck the actual chosen supported origin after rollout.
+
+### Verify F1–F7 on the installed components
+
+Use an authorized disposable repository or agreed test corpus. Set expected answers before querying, and record the installed component identities above with observations; keep secrets and private source out of the record. An independent operator should follow these steps without private chat guidance.
+
+1. **F1: first use.** In a new client, discover the six code tools, get an authorized handle without SQL or manual UUIDs, and enter Workspace from Home under a supported browser identity. A missing tool, context, grant, or entry is a failed path, not a passed service check.
+2. **F2: two working copies.** Give A and B different saved, uncommitted versions of one mechanism. Search and read each from its own context. Change, rename, then remove a disposable file in A. After watcher publication, verify A changes while B and the browser's previously selected View remain unchanged until switched. Reconnect a client and resolve its context again. Record measured publication and embedding latency; the watcher debounce is not an end-to-end latency promise.
+3. **F3: semantic search.** Index more than 50 eligible candidates. Run exact-symbol, non-lexical conceptual (including a Russian-language query where applicable), and negative searches. Inspect the actual vector or hybrid mode, profile, source span, total and continuation; do not infer success from a nonempty first page or from lexical fallback.
+4. **F4: graph and evidence.** Follow a direct and a reverse relation to an off-page neighbor, then read its stored source span and evidence type. Continue from that neighbor. Report partial, ambiguous, or unsupported relations rather than claiming the graph is complete. Do not create nodes or edges manually.
+5. **F5: recovery and authorization.** In a controlled, owned environment only, stop the test daemon, submit an authorized index intent, observe queued or unavailable state, restore its owner, and verify one correct execution. Interrupt the test embedding provider and confirm a useful status with the last good View intact. Revoke a test subject's read grant and confirm that graph, source, and search no longer disclose content. Do not stop shared processes or revoke production grants for this test.
+6. **F6: retired writers.** Check that Home and old bookmarks cannot open the manual graph editor or plaintext Book intake. Old HTTP and MCP writers must remain unavailable even when old flags are enabled. Historical documents, versions, audit, and allowed readers must still work. Do not mistake a missing menu item for writer retirement.
+7. **F7: instructions.** Ask a second operator to repeat this path from only the supported origin, approved credentials, readable repository names, and this guide. Record all hints required, dead ends, F1–F6 outcomes, limits, and exact component identities. Fix missing instructions or onboarding before claiming PASS.
+
+Supported first scope is Go plus JS, TS, and TSX only where the compatible parser is actually installed, and supported structured text. Full C#, Python, Vue SFC, communities, and the old manual graph or Book workflows are not promised. `tools/uci-parser/manifest.json` still records Windows and Linux amd64 as `not_claimed` and `not_reverified` for the v2 facts contract, and macOS targets as blocked. Do not turn a source build or an older parser test into an installed-platform claim; update the manifest only after corresponding artifact build and smoke evidence.
+
+### Diagnose by symptom
+
+| Symptom | Check first |
+| --- | --- |
+| No Workspace entry | Inspect the installed browser bundle and candidate commit, not only the server version. |
+| Binding fails before a request | Inspect browser origin, crypto capability, selected identity, and UI startup. HTTPS does not replace read grants. |
+| API healthy but no code tools | Inspect the actual daemon path, plugin version, inherited `ENGRAM_CODE_INTEL_ENABLED`, and fresh `tools/list`. |
+| No JS, TS, or TSX facts | Inspect the installed parser executable, bundle digest, and extraction diagnostics. Do not use a source path as a binary. |
+| Search is lexical only | Inspect the chosen View's code-embedding jobs, model profile, and provider. |
+| Saved changes do not appear | Inspect the owning checkout watcher, ignore rules, index job, and View publication; keep older Views intact. |
+| A result contains another working copy's code | Stop relying on the result and investigate authorization and context isolation before retrying. |
+
+Observe API and PostgreSQL readiness, daemon liveness, selected checkout and View, file coverage, embedding progress, job state, retrieval mode, and evidence limitations. `codebase_status` and the selected Workspace view are the relevant sources; memory aggregates are not code-index health. Apply updates through the supported installer or deployment path, preserve the prior components for rollback, reconnect the selected daemon, and repeat F1–F7 on the actual installed artifacts before claiming a release complete.
