@@ -17,8 +17,11 @@ type registrationContextApplication struct {
 
 func (app *registrationContextApplication) RegisterLocalGit(_ context.Context, input uci.ResolveContextInput, sourceID, label, locator string) (uci.RegisteredCheckoutSelector, error) {
 	app.calls = append(app.calls, input)
+	if sourceID == "not-a-uuid" {
+		return uci.RegisteredCheckoutSelector{}, uci.NewContextError(uci.ContextMismatch, nil)
+	}
 	if label == "" && sourceID != uciCodebaseContextTestSource || locator != "file:///private/checkout-a" {
-		return uci.RegisteredCheckoutSelector{}, codebaseContextClosedError(uci.PermissionDenied)
+		return uci.RegisteredCheckoutSelector{}, uci.NewContextError(uci.PermissionDenied, nil)
 	}
 	binding := uci.IndexBinding{
 		Scope:     uci.IndexScope{SourceID: uciCodebaseContextTestSource, CheckoutID: uciCodebaseContextTestCheckoutA, IncarnationID: uciCodebaseContextTestIncarnationA},
@@ -47,6 +50,26 @@ func TestRegisterCodebaseContextIssuesNoViewTargetOnlyForAuthenticatedOwner(t *t
 	require.Len(t, application.calls, 1)
 	require.Equal(t, "browser-user/41", application.calls[0].Principal)
 	require.Equal(t, "keycard-41", application.calls[0].WorkstationID)
+	retry := decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, owner, map[string]any{"action": "register", "source_label": "engram", "locator": "file:///private/checkout-a"}))
+	require.Equal(t, payload["checkout_id"], retry["checkout_id"])
+	require.Equal(t, payload["context_handle"], retry["context_handle"])
+	selected := decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, owner, map[string]any{"action": "select", "context_handle": retry["context_handle"]}))
+	require.Equal(t, retry["checkout_id"], selected["checkout_id"])
+	require.Nil(t, selected["context"])
+	reconnected := auth.WithIdentity(ContextWithSession(context.Background(), "reconnected-owner-session"), auth.ClientWithPrincipal("read-write", "keycard-41", "browser-user/41", auth.PrincipalKindHuman))
+	recovered := decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, reconnected, map[string]any{"action": "register", "source_label": "engram", "locator": "file:///private/checkout-a"}))
+	require.Equal(t, payload["checkout_id"], recovered["checkout_id"])
+	require.NotEmpty(t, recovered["context_handle"])
+	reconnectedSelection := decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, reconnected, map[string]any{"action": "select", "context_handle": recovered["context_handle"]}))
+	require.Equal(t, payload["checkout_id"], reconnectedSelection["checkout_id"])
+	require.Nil(t, reconnectedSelection["context"])
+	recoveredBytes, err := json.Marshal(recovered)
+	require.NoError(t, err)
+	require.NotContains(t, string(recoveredBytes), "/private/")
+	malformed := callUCICodebaseContext(t, fixture.server, owner, map[string]any{"action": "register", "source_id": "not-a-uuid", "locator": "file:///private/checkout-a"})
+	require.Equal(t, "CONTEXT_MISMATCH", malformed.Error.Data)
+	forbidden := callUCICodebaseContext(t, fixture.server, owner, map[string]any{"action": "register", "source_id": uciCodebaseContextTestSource, "locator": "file:///private/checkout-a", "checkout_id": uciCodebaseContextTestCheckoutA})
+	require.Equal(t, "CONTEXT_MISMATCH", forbidden.Error.Data)
 
 	foreign := auth.WithIdentity(ContextWithSession(context.Background(), "foreign-session"), auth.ClientWithPrincipal("read-write", "keycard-99", "browser-user/99", auth.PrincipalKindAgent))
 	denied := callUCICodebaseContext(t, fixture.server, foreign, map[string]any{"action": "register", "source_id": uciCodebaseContextTestSource, "locator": "file:///private/checkout-a"})
@@ -54,5 +77,5 @@ func TestRegisterCodebaseContextIssuesNoViewTargetOnlyForAuthenticatedOwner(t *t
 	readOnly := auth.WithIdentity(ContextWithSession(context.Background(), "readonly-session"), auth.ClientWithPrincipal("read-only", "keycard-ro", "browser-user/41", auth.PrincipalKindHuman))
 	readOnlyDenied := callUCICodebaseContext(t, fixture.server, readOnly, map[string]any{"action": "register", "source_id": uciCodebaseContextTestSource, "locator": "file:///private/checkout-a"})
 	require.NotNil(t, readOnlyDenied.Error)
-	require.Len(t, application.calls, 1)
+	require.Len(t, application.calls, 4)
 }

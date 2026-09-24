@@ -49,6 +49,25 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	owner := RegisterLocalGitInput{AuthRealm: "client", Principal: ownerPrincipal, WorkstationID: "keycard-41", SourceLabel: "engram", Locator: locator(a)}
 	first, err := store.RegisterLocalGit(ctx, owner)
 	require.NoError(t, err)
+	replayed, err := store.RegisterLocalGit(ctx, owner)
+	require.NoError(t, err, "lost first response must recover the original registration")
+	require.Equal(t, first, replayed)
+	byID := owner
+	byID.SourceID, byID.SourceLabel = first.SourceID, ""
+	replayed, err = store.RegisterLocalGit(ctx, byID)
+	require.NoError(t, err)
+	require.Equal(t, first, replayed)
+	for _, invalid := range []RegisterLocalGitInput{
+		{AuthRealm: owner.AuthRealm, Principal: owner.Principal, WorkstationID: owner.WorkstationID, SourceLabel: owner.SourceLabel, Locator: "https://private/checkout"},
+		{AuthRealm: owner.AuthRealm, Principal: owner.Principal, WorkstationID: owner.WorkstationID, SourceLabel: " invalid ", Locator: owner.Locator},
+		{AuthRealm: owner.AuthRealm, Principal: owner.Principal, WorkstationID: owner.WorkstationID, SourceID: "not-a-uuid", Locator: owner.Locator},
+		{AuthRealm: owner.AuthRealm, Principal: owner.Principal, WorkstationID: owner.WorkstationID, SourceID: first.SourceID, SourceLabel: owner.SourceLabel, Locator: owner.Locator},
+	} {
+		_, err = store.RegisterLocalGit(ctx, invalid)
+		var contextErr *uci.ContextError
+		require.ErrorAs(t, err, &contextErr)
+		require.Equal(t, uci.ContextMismatch, contextErr.Code())
+	}
 	require.NotEqual(t, first.SourceID, first.CheckoutID)
 	owner.SourceID, owner.SourceLabel, owner.Locator = first.SourceID, "", locator(b)
 	second, err := store.RegisterLocalGit(ctx, owner)
@@ -77,6 +96,10 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	wrongRealm.AuthRealm = "session"
 	_, err = store.RegisterLocalGit(ctx, wrongRealm)
 	require.ErrorIs(t, err, errUCIContextAuthorizationDenied)
+	require.NoError(t, db.Model(&UCISource{}).Where("source_id = ?", first.SourceID).Update("state", UCISourceOffline).Error)
+	_, err = store.RegisterLocalGit(ctx, byID)
+	require.ErrorIs(t, err, errUCIContextAuthorizationDenied)
+	require.NoError(t, db.Model(&UCISource{}).Where("source_id = ?", first.SourceID).Update("state", UCISourceActive).Error)
 	var count int64
 	require.NoError(t, db.Model(&UCICheckout{}).Where("source_id = ?", first.SourceID).Count(&count).Error)
 	require.EqualValues(t, 2, count)

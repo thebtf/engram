@@ -6868,6 +6868,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 		workspaceCatalogMigration182(),
 		uciStructureExposureMigration183(),
 		uciSemanticContinuationMigration184(),
+		localGitRegistrationRetryMigration185(),
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
@@ -7316,6 +7317,18 @@ func uciSemanticContinuationMigration184() *gormigrate.Migration {
 				return fmt.Errorf("migration 184 rollback: %w", err)
 			}
 			return nil
+		},
+	}
+}
+
+func localGitRegistrationRetryMigration185() *gormigrate.Migration {
+	return &gormigrate.Migration{
+		ID: "185_local_git_registration_retry",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`ALTER TABLE ci_checkouts ADD COLUMN IF NOT EXISTS registration_profile_id UUID REFERENCES ci_profiles(profile_id)`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`ALTER TABLE ci_checkouts DROP COLUMN IF EXISTS registration_profile_id`).Error
 		},
 	}
 }

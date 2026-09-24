@@ -20,7 +20,7 @@ import (
 // The server supplies realm, principal, workstation, and every new identifier.
 type RegisterLocalGitInput struct {
 	AuthRealm, Principal, WorkstationID string
-	SourceID, SourceLabel, Locator string
+	SourceID, SourceLabel, Locator      string
 }
 
 type RegisteredLocalGit struct {
@@ -33,16 +33,40 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 	if err := s.requireDB("register local git"); err != nil {
 		return RegisteredLocalGit{}, err
 	}
-	if ctx == nil || ctx.Err() != nil || validateUCIContextOwner(in.AuthRealm, in.Principal) != nil || validateUCIRequiredText("workstation_id", in.WorkstationID) != nil ||
-		!validUCILocalGitLocator(in.Locator) || (in.SourceID == "" && validateUCIRequiredText("source_label", in.SourceLabel) != nil) ||
-		(in.SourceID != "" && (validateUCIUUID("source_id", in.SourceID) != nil || in.SourceLabel != "")) {
+	if ctx == nil {
+		return RegisteredLocalGit{}, uci.NewContextError(uci.ContextMismatch, nil)
+	}
+	if err := ctx.Err(); err != nil {
+		return RegisteredLocalGit{}, err
+	}
+	if validateUCIContextOwner(in.AuthRealm, in.Principal) != nil || validateUCIRequiredText("workstation_id", in.WorkstationID) != nil {
 		return RegisteredLocalGit{}, errUCIContextAuthorizationDenied
+	}
+	if !validUCILocalGitLocator(in.Locator) || (in.SourceID == "" && validateUCIRequiredText("source_label", in.SourceLabel) != nil) ||
+		(in.SourceID != "" && (validateUCIUUID("source_id", in.SourceID) != nil || in.SourceLabel != "")) {
+		return RegisteredLocalGit{}, uci.NewContextError(uci.ContextMismatch, nil)
 	}
 	var out RegisteredLocalGit
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := time.Now().UTC()
 		sourceID := in.SourceID
 		if sourceID == "" {
+			if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended(concat_ws('|', ?::text, ?::text, ?::text, ?::text), 0))`, in.AuthRealm, in.Principal, in.WorkstationID, in.Locator).Error; err != nil {
+				return fmt.Errorf("register local git lock: %w", err)
+			}
+			var matches []UCICheckout
+			if err := tx.Table("ci_checkouts AS checkout").Select("checkout.*").
+				Joins("JOIN sources AS source ON source.source_id = checkout.source_id").
+				Where("source.auth_realm = ? AND source.kind = ? AND source.state = ? AND source.display_name = ? AND checkout.owner_principal = ? AND checkout.workstation_id = ? AND checkout.locator_ref = ? AND checkout.kind = ? AND checkout.state IN ? AND checkout.registration_profile_id IS NOT NULL", in.AuthRealm, UCISourceGit, UCISourceActive, in.SourceLabel, in.Principal, in.WorkstationID, in.Locator, UCICheckoutWorkingTree, []UCICheckoutState{UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp}).Limit(2).Find(&matches).Error; err != nil {
+				return fmt.Errorf("register local git replay lookup: %w", err)
+			}
+			if len(matches) > 1 {
+				return errUCIContextAuthorizationDenied
+			}
+			if len(matches) == 1 {
+				out = RegisteredLocalGit{matches[0].SourceID, matches[0].CheckoutID, matches[0].IncarnationID, *matches[0].RegistrationProfileID}
+				return nil
+			}
 			sourceID = uuid.NewString()
 			source := UCISource{SourceID: sourceID, AuthRealm: in.AuthRealm, Kind: UCISourceGit, DisplayName: in.SourceLabel, State: UCISourceActive, CreatedAt: now, UpdatedAt: now}
 			if err := tx.Create(&source).Error; err != nil {
@@ -64,10 +88,11 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 		var existing UCICheckout
 		result := tx.Where("source_id = ? AND workstation_id = ? AND locator_ref = ? AND state IN ?", sourceID, in.WorkstationID, in.Locator, []UCICheckoutState{UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp}).First(&existing)
 		if result.Error == nil {
-			if existing.OwnerPrincipal != in.Principal {
+			if existing.OwnerPrincipal != in.Principal || existing.Kind != UCICheckoutWorkingTree || existing.RegistrationProfileID == nil {
 				return errUCIContextAuthorizationDenied
 			}
-			return errors.New("working tree is already registered; select its existing checkout")
+			out = RegisteredLocalGit{sourceID, existing.CheckoutID, existing.IncarnationID, *existing.RegistrationProfileID}
+			return nil
 		}
 		if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("register local git lookup: %w", result.Error)
@@ -84,7 +109,7 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 		checkout := UCICheckout{
 			CheckoutID: uuid.NewString(), SourceID: sourceID, WorkstationID: in.WorkstationID,
 			IncarnationID: uuid.NewString(), Kind: UCICheckoutWorkingTree, OwnerPrincipal: in.Principal,
-			LocatorRef: in.Locator, State: UCICheckoutRegistered, CreatedAt: now, UpdatedAt: now,
+			LocatorRef: in.Locator, RegistrationProfileID: &profile.ProfileID, State: UCICheckoutRegistered, CreatedAt: now, UpdatedAt: now,
 		}
 		if err := tx.Create(&checkout).Error; err != nil {
 			return fmt.Errorf("register local git checkout: %w", err)

@@ -331,11 +331,11 @@ func (s *Server) handleCodebaseContext(ctx context.Context, raw json.RawMessage)
 
 func (s *Server) registerCodebaseContext(ctx context.Context, input uci.ResolveContextInput, args codebaseContextArgs) (string, error) {
 	identity, found := auth.IdentityFrom(ctx)
-	if !found || identity.Source != auth.SourceClient || identity.Role != auth.RoleReadWrite || identity.PrincipalKind != auth.PrincipalKindHuman || args.Locator == nil ||
-		args.Checkout != nil || args.ContextHandle != nil || args.SpaceID != nil || args.CheckoutID != nil || args.ViewID != nil || args.AnalysisProfileID != nil || args.Generation != nil {
+	if !found || identity.Source != auth.SourceClient || identity.Role != auth.RoleReadWrite || identity.PrincipalKind != auth.PrincipalKindHuman {
 		return "", codebaseContextClosedError(uci.PermissionDenied)
 	}
-	if args.SourceID == nil && args.SourceLabel == nil || args.SourceID != nil && args.SourceLabel != nil {
+	if args.Locator == nil || args.Checkout != nil || args.ContextHandle != nil || args.SpaceID != nil || args.CheckoutID != nil || args.ViewID != nil || args.AnalysisProfileID != nil || args.Generation != nil ||
+		(args.SourceID == nil) == (args.SourceLabel == nil) {
 		return "", codebaseContextClosedError(uci.ContextMismatch)
 	}
 	application, _, ok := s.codebaseContextApplicationSnapshot()
@@ -354,7 +354,7 @@ func (s *Server) registerCodebaseContext(ctx context.Context, input uci.ResolveC
 	}
 	checkout, err := registration.RegisterLocalGit(ctx, input, sourceID, label, *args.Locator)
 	if err != nil {
-		return "", codebaseContextClosedError(uci.PermissionDenied)
+		return "", codebaseContextApplicationError(err)
 	}
 	return s.selectCodebaseContextSelection(ctx, input, codebaseContextSelection{checkout: &checkout})
 }
