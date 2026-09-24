@@ -21,9 +21,11 @@ import (
 type RegisterLocalGitInput struct {
 	AuthRealm, Principal, WorkstationID string
 	SourceID, SourceLabel, Locator      string
-	// ParserBundle explicitly requests the server's built-in Tree-sitter profile
-	// (true) or native Go profile (false). Omitted preserves an existing profile.
+	// ParserBundle is an explicit request; omitted replays retain their profile.
 	ParserBundle *bool
+	// DefaultParserBundle comes from the authenticated daemon capability, never
+	// the MCP arguments. It applies only when creating a new checkout.
+	DefaultParserBundle bool
 }
 
 type RegisteredLocalGit struct {
@@ -50,7 +52,7 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 		return RegisteredLocalGit{}, uci.NewContextError(uci.ContextMismatch, nil)
 	}
 	profileDigest := localGitGoProfileDigest()
-	if in.ParserBundle != nil && *in.ParserBundle {
+	if (in.ParserBundle != nil && *in.ParserBundle) || (in.ParserBundle == nil && in.DefaultParserBundle) {
 		profileDigest = uci.TreeSitterBundleDigest()
 	}
 	var out RegisteredLocalGit

@@ -111,6 +111,33 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	replayedParser, err := store.RegisterLocalGit(ctx, legacyReplay)
 	require.NoError(t, err)
 	require.Equal(t, parserCheckout, replayedParser)
+	defaultParser := parserRequest
+	defaultParser.ParserBundle = nil
+	defaultParser.DefaultParserBundle = true
+	defaultParser.Locator = locator(filepath.Join(root, "automatic-parser"))
+	automatic, err := store.RegisterLocalGit(ctx, defaultParser)
+	require.NoError(t, err)
+	var automaticProfile UCIAnalysisProfile
+	require.NoError(t, db.Where("profile_id = ?", automatic.ProfileID).First(&automaticProfile).Error)
+	require.Equal(t, string(uci.TreeSitterBundleDigest()), automaticProfile.ParserBundleDigest)
+	defaultParser.DefaultParserBundle = false
+	replayedAutomatic, err := store.RegisterLocalGit(ctx, defaultParser)
+	require.NoError(t, err)
+	require.Equal(t, automatic, replayedAutomatic)
+	explicitGo := false
+	defaultParser.ParserBundle = &explicitGo
+	_, err = store.RegisterLocalGit(ctx, defaultParser)
+	require.ErrorAs(t, err, &profileMismatch)
+	require.Equal(t, uci.ContextMismatch, profileMismatch.Code())
+	defaultParser.ParserBundle = nil
+	defaultParser.Locator = locator(filepath.Join(root, "existing-go"))
+	defaultParser.DefaultParserBundle = false
+	previousGo, err := store.RegisterLocalGit(ctx, defaultParser)
+	require.NoError(t, err)
+	defaultParser.DefaultParserBundle = true
+	replayedGo, err := store.RegisterLocalGit(ctx, defaultParser)
+	require.NoError(t, err)
+	require.Equal(t, previousGo, replayedGo)
 	parserBundle = false
 	_, err = store.RegisterLocalGit(ctx, parserRequest)
 	require.ErrorAs(t, err, &profileMismatch)
@@ -142,7 +169,7 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	require.NoError(t, db.Model(&UCISource{}).Where("source_id = ?", first.SourceID).Update("state", UCISourceActive).Error)
 	var count int64
 	require.NoError(t, db.Model(&UCICheckout{}).Where("source_id = ?", first.SourceID).Count(&count).Error)
-	require.EqualValues(t, 3, count)
+	require.EqualValues(t, 5, count)
 	grants := NewBrowserReadGrantStore(db)
 	grant, err := grants.Issue(ctx, BrowserReadGrantIssue{IssuerUserID: user.ID, IssuerPrincipal: ownerPrincipal, TargetUserID: user.ID, SourceID: first.SourceID, CheckoutID: first.CheckoutID})
 	require.NoError(t, err)

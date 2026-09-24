@@ -14,6 +14,7 @@ import (
 	"github.com/thebtf/engram/internal/grpcserver"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/uci"
+	"google.golang.org/grpc/metadata"
 	gormlib "gorm.io/gorm"
 )
 
@@ -457,6 +458,21 @@ func composeQueueCandidateSelectionHandler(service *Service, db *gormlib.DB) (*Q
 	return NewQueueCandidateSelectionHandler(service, gormstore.NewCollectionSelectionStore(db), operatorCollectionScopeAuthority{}), nil
 }
 
+func verifiedUCIParserBundle(ctx context.Context) (bool, error) {
+	incoming, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return false, nil
+	}
+	values := incoming.Get("x-engram-verified-parser-bundle")
+	if len(values) == 0 {
+		return false, nil
+	}
+	if len(values) != 1 || values[0] != string(uci.TreeSitterBundleDigest()) {
+		return false, uci.NewContextError(uci.ContextMismatch, nil)
+	}
+	return true, nil
+}
+
 // composeUCIContext creates and installs the narrow UCI context capability.
 // The disabled path returns before it allocates or installs any UCI dependency.
 func composeUCIContext(
@@ -483,9 +499,17 @@ func composeUCIContext(
 		return nil, fmt.Errorf("create UCI MCP context application: %w", err)
 	}
 	contextApplication.SetLocalGitRegistration(func(ctx context.Context, caller uci.ResolveContextInput, sourceID, label, locator string, parserBundle *bool) (uci.RegisteredCheckoutSelector, error) {
+		available, err := verifiedUCIParserBundle(ctx)
+		if err != nil {
+			return uci.RegisteredCheckoutSelector{}, err
+		}
+		if parserBundle != nil && *parserBundle && !available {
+			return uci.RegisteredCheckoutSelector{}, uci.NewContextError(uci.ContextMismatch, nil)
+		}
 		registered, err := contextStore.RegisterLocalGit(ctx, gormstore.RegisterLocalGitInput{
 			AuthRealm: caller.AuthRealm, Principal: caller.Principal, WorkstationID: caller.WorkstationID,
 			SourceID: sourceID, SourceLabel: label, Locator: locator, ParserBundle: parserBundle,
+			DefaultParserBundle: available,
 		})
 		if err != nil {
 			return uci.RegisteredCheckoutSelector{}, err

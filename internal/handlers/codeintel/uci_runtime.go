@@ -321,6 +321,17 @@ func newUCIRuntime(core *engramcore.Module, configuration UCIRuntimeConfig) (*uc
 	if err != nil {
 		return nil, err
 	}
+	if treeSitterParser != nil {
+		if configuration.ParserBundleDigest != uci.TreeSitterBundleDigest() {
+			return nil, errors.New("uci runtime: installed parser bundle does not match the server-pinned profile")
+		}
+		if _, err := treeSitterParser.Parse(context.Background(), uci.TreeSitterParseRequest{
+			Language: uci.TreeSitterLanguageJavaScript, ProfileKey: "uci-parser-startup-proof/v1", Source: []byte("export function parserProof() {}"),
+		}); err != nil {
+			return nil, fmt.Errorf("uci runtime: installed parser proof failed: %w", err)
+		}
+		core.ConfigureRegistrationParser()
+	}
 	return &uciRuntime{
 		core:                     core,
 		config:                   configuration,

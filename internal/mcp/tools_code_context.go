@@ -269,7 +269,7 @@ func codebaseContextTool() Tool {
 				},
 				"source_label":  map[string]any{"type": "string", "description": "Label for a new Git source"},
 				"locator":       map[string]any{"type": "string", "description": "Private canonical file URI for the local Git worktree"},
-				"parser_bundle": map[string]any{"type": "boolean", "description": "Select the server's built-in Tree-sitter bundle profile for an installed, verified parser; omitted selects native Go-only profile"},
+				"parser_bundle": map[string]any{"type": "boolean", "description": "Explicit parser profile request; omitted selects verified installed Tree-sitter on first registration, native Go otherwise, and preserves existing profiles on replay"},
 				"checkout_id": map[string]any{
 					"type":        "string",
 					"description": "ContextRef checkout UUID for action=select",

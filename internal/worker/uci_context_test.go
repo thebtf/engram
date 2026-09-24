@@ -182,6 +182,39 @@ func TestComposeUCIContextFirstUseRegistrationBindsPrivateNoViewScope(t *testing
 	require.Equal(t, target.IncarnationID, bound.GetIndexScope().GetIncarnationId())
 	require.Equal(t, target.ProfileID, bound.GetIndexScope().GetAnalysisProfileId())
 	require.Equal(t, "file:///private/worktree-a", bound.GetLocalRootId())
+	var nativeProfile gormstore.UCIAnalysisProfile
+	require.NoError(t, store.GetDB().Where("profile_id = ?", target.ProfileID).First(&nativeProfile).Error)
+	native, err := uci.GoIndexAdmissionArtifactProfile(uci.GoExtractionProfile{ProfileKey: "go-structure-v1", ParserKey: "go-parser-v1"})
+	require.NoError(t, err)
+	require.Equal(t, string(native.ExtractionProfileDigest), nativeProfile.ParserBundleDigest)
+	parserParams, err := json.Marshal(map[string]any{"name": "codebase_context", "arguments": map[string]any{
+		"action": "register", "source_label": "engram", "locator": "file:///private/worktree-parser",
+	}})
+	require.NoError(t, err)
+	parserClient := metadata.NewIncomingContext(client, metadata.Pairs("x-engram-verified-parser-bundle", string(uci.TreeSitterBundleDigest())))
+	parserResponse := server.HandleRequest(parserClient, &mcp.Request{JSONRPC: "2.0", ID: float64(2), Method: "tools/call", Params: parserParams})
+	require.Nil(t, parserResponse.Error)
+	parserResult := parserResponse.Result.(map[string]any)["content"].([]map[string]any)[0]["text"].(string)
+	var parserTarget struct {
+		ProfileID string `json:"analysis_profile_id"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(parserResult), &parserTarget))
+	var parserProfile gormstore.UCIAnalysisProfile
+	require.NoError(t, store.GetDB().Where("profile_id = ?", parserTarget.ProfileID).First(&parserProfile).Error)
+	require.Equal(t, string(uci.TreeSitterBundleDigest()), parserProfile.ParserBundleDigest)
+	replay := server.HandleRequest(client, &mcp.Request{JSONRPC: "2.0", ID: float64(3), Method: "tools/call", Params: parserParams})
+	require.Nil(t, replay.Error)
+	maliciousParams, err := json.Marshal(map[string]any{"name": "codebase_context", "arguments": map[string]any{
+		"action": "register", "source_label": "engram", "locator": "file:///private/worktree-spoof", "parser_bundle": true,
+	}})
+	require.NoError(t, err)
+	spoof := server.HandleRequest(client, &mcp.Request{JSONRPC: "2.0", ID: float64(4), Method: "tools/call", Params: maliciousParams})
+	wrongParser := metadata.NewIncomingContext(client, metadata.Pairs("x-engram-verified-parser-bundle", "sha256:"+strings.Repeat("a", 64)))
+	mismatch := server.HandleRequest(wrongParser, &mcp.Request{JSONRPC: "2.0", ID: float64(5), Method: "tools/call", Params: parserParams})
+	require.NotNil(t, mismatch.Error)
+	require.Equal(t, "CONTEXT_MISMATCH", mismatch.Error.Data)
+	require.NotNil(t, spoof.Error)
+	require.Equal(t, "CONTEXT_MISMATCH", spoof.Error.Data)
 }
 
 func TestUCISemanticProfileUsesOpaqueCacheIdentity(t *testing.T) {
