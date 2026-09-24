@@ -2,12 +2,17 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"testing"
 
 	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/pkg/models"
+
+	"gorm.io/driver/postgres"
+	gormlib "gorm.io/gorm"
+	_ "modernc.org/sqlite"
 )
 
 func TestGraphToolWriterActionsAreAbsentDespiteLegacyFlag(t *testing.T) {
@@ -79,19 +84,51 @@ func TestGraphToolRetainsNodeTypeReaderFilter(t *testing.T) {
 	}
 }
 
-func TestGraphToolNodeTypeFilterRejectsUnavailableFilter(t *testing.T) {
-	for _, testCase := range []struct {
-		name  string
-		vnext string
-	}{
-		{name: "feature disabled", vnext: ""},
-		{name: "node store missing", vnext: "true"},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Setenv("ENGRAM_VNEXT_F_ENABLED", testCase.vnext)
+func TestGraphToolNodeTypeFilterWithFlagOffAndWiredStore(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "false")
+	sqlDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	sqlDB.SetMaxOpenConns(1)
+	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gormlib.Config{DisableAutomaticPing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`CREATE TABLE knowledge_edges (id INTEGER PRIMARY KEY, source_id INTEGER, target_id INTEGER, node_source_id INTEGER, node_target_id INTEGER, source_type TEXT, target_type TEXT, edge_type TEXT, weight REAL, reasoning TEXT, source_session_id TEXT, valid_from DATETIME, valid_until DATETIME, created_at DATETIME, superseded_at DATETIME)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`INSERT INTO knowledge_edges (id, node_source_id, target_id, source_type, target_type, edge_type, weight, created_at) VALUES (1, 10, 99, 'node', 'memory', 'related_to', 1, CURRENT_TIMESTAMP), (2, 20, 99, 'node', 'memory', 'related_to', 1, CURRENT_TIMESTAMP)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{graphStore: graph.NewStore(db, nil), nodesStore: fakeNodeTypeLookup{nodes: map[int64]models.KnowledgeNode{
+		10: {ID: 10, NodeType: models.NodeTypeSkill},
+		20: {ID: 20, NodeType: models.NodeTypeAgent},
+	}}}
+	result, err := server.handleGraph(context.Background(), mustMarshal(t, graphArgs{Action: "get_edges", MemoryID: 99, NodeType: models.NodeTypeSkill}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		Count int          `json:"count"`
+		Edges []graph.Edge `json:"edges"`
+	}
+	if err := json.Unmarshal([]byte(result), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Count != 1 || len(response.Edges) != 1 || response.Edges[0].ID != 1 {
+		t.Fatalf("node_type filtered edges: %s", result)
+	}
+}
+
+func TestGraphToolNodeTypeFilterRejectsMissingStore(t *testing.T) {
+	for _, flag := range []string{"false", "true"} {
+		t.Run(flag, func(t *testing.T) {
+			t.Setenv("ENGRAM_VNEXT_F_ENABLED", flag)
 			server := &Server{graphStore: &graph.Store{}}
 			_, err := server.handleGraph(context.Background(), mustMarshal(t, graphArgs{Action: "get_edges", NodeID: 1, NodeType: models.NodeTypeSkill}))
-			if err == nil || err.Error() != "node_type filter unavailable: requires ENGRAM_VNEXT_F_ENABLED=true and a wired nodes store" {
+			if err == nil || err.Error() != "node_type filter unavailable: nodes store not configured" {
 				t.Fatalf("node_type unavailable error=%v", err)
 			}
 		})

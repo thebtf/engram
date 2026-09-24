@@ -75,8 +75,8 @@ func (s *Server) graphGetEdges(ctx context.Context, a graphArgs) (string, error)
 		return "", fmt.Errorf("invalid_node_type: %q is not a valid node type", a.NodeType)
 	}
 
-	if a.NodeType != "" && (!vnextFEnabled() || s.nodesStore == nil) {
-		return "", fmt.Errorf("node_type filter unavailable: requires ENGRAM_VNEXT_F_ENABLED=true and a wired nodes store")
+	if a.NodeType != "" && s.nodesStore == nil {
+		return "", fmt.Errorf("node_type filter unavailable: nodes store not configured")
 	}
 
 	var edges []graph.Edge
