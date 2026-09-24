@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const { spawnSync } = require("node:child_process");
 
 const {
   appendStartupDiagnosticLog,
@@ -24,6 +25,21 @@ const {
   spawnFailureMessage,
   trimStartupDiagnosticLog,
 } = require("./run-engram.js");
+
+test("missing keycard points to the real access console", () => {
+  const result = spawnSync(process.execPath, [path.join(__dirname, "run-engram.js")], {
+    encoding: "utf8",
+    env: {
+      PATH: process.env.PATH,
+      SystemRoot: process.env.SystemRoot,
+      ENGRAM_URL: "http://127.0.0.1:65535",
+      ENGRAM_CONFIG_FILE: path.join(os.tmpdir(), "engram-nonexistent-profile-config.json"),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /127\.0\.0\.1:65535\/access/);
+  assert.doesNotMatch(result.stderr, /\/tokens/);
+});
 
 test("Codex MCP config launches wrapper via plugin-root-relative path", () => {
   // Codex does NOT interpolate ${CLAUDE_PLUGIN_ROOT} in plugin .mcp.json args —

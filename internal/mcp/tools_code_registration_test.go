@@ -12,11 +12,13 @@ import (
 
 type registrationContextApplication struct {
 	*uciCodebaseContextApplicationFake
-	calls []uci.ResolveContextInput
+	calls         []uci.ResolveContextInput
+	parserBundles []*bool
 }
 
-func (app *registrationContextApplication) RegisterLocalGit(_ context.Context, input uci.ResolveContextInput, sourceID, label, locator string) (uci.RegisteredCheckoutSelector, error) {
+func (app *registrationContextApplication) RegisterLocalGit(_ context.Context, input uci.ResolveContextInput, sourceID, label, locator string, parserBundle *bool) (uci.RegisteredCheckoutSelector, error) {
 	app.calls = append(app.calls, input)
+	app.parserBundles = append(app.parserBundles, parserBundle)
 	if sourceID == "not-a-uuid" {
 		return uci.RegisteredCheckoutSelector{}, uci.NewContextError(uci.ContextMismatch, nil)
 	}
@@ -50,6 +52,7 @@ func TestRegisterCodebaseContextIssuesNoViewTargetOnlyForAuthenticatedOwner(t *t
 	require.Len(t, application.calls, 1)
 	require.Equal(t, "browser-user/41", application.calls[0].Principal)
 	require.Equal(t, "keycard-41", application.calls[0].WorkstationID)
+	require.Equal(t, []*bool{nil}, application.parserBundles)
 	retry := decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, owner, map[string]any{"action": "register", "source_label": "engram", "locator": "file:///private/checkout-a"}))
 	require.Equal(t, payload["checkout_id"], retry["checkout_id"])
 	require.Equal(t, payload["context_handle"], retry["context_handle"])
@@ -67,6 +70,12 @@ func TestRegisterCodebaseContextIssuesNoViewTargetOnlyForAuthenticatedOwner(t *t
 	require.NoError(t, err)
 	require.NotContains(t, string(recoveredBytes), "/private/")
 	malformed := callUCICodebaseContext(t, fixture.server, owner, map[string]any{"action": "register", "source_id": "not-a-uuid", "locator": "file:///private/checkout-a"})
+	parserSelection := decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, owner, map[string]any{"action": "register", "source_label": "engram", "locator": "file:///private/checkout-a", "parser_bundle": true}))
+	require.Equal(t, payload["checkout_id"], parserSelection["checkout_id"])
+	require.NotNil(t, application.parserBundles[len(application.parserBundles)-1])
+	require.True(t, *application.parserBundles[len(application.parserBundles)-1])
+	unknownDigest := callUCICodebaseContext(t, fixture.server, owner, map[string]any{"action": "register", "source_label": "engram", "locator": "file:///private/checkout-a", "parser_bundle_digest": "sha256:arbitrary"})
+	require.Equal(t, "CONTEXT_MISMATCH", unknownDigest.Error.Data)
 	require.Equal(t, "CONTEXT_MISMATCH", malformed.Error.Data)
 	forbidden := callUCICodebaseContext(t, fixture.server, owner, map[string]any{"action": "register", "source_id": uciCodebaseContextTestSource, "locator": "file:///private/checkout-a", "checkout_id": uciCodebaseContextTestCheckoutA})
 	require.Equal(t, "CONTEXT_MISMATCH", forbidden.Error.Data)
@@ -77,5 +86,5 @@ func TestRegisterCodebaseContextIssuesNoViewTargetOnlyForAuthenticatedOwner(t *t
 	readOnly := auth.WithIdentity(ContextWithSession(context.Background(), "readonly-session"), auth.ClientWithPrincipal("read-only", "keycard-ro", "browser-user/41", auth.PrincipalKindHuman))
 	readOnlyDenied := callUCICodebaseContext(t, fixture.server, readOnly, map[string]any{"action": "register", "source_id": uciCodebaseContextTestSource, "locator": "file:///private/checkout-a"})
 	require.NotNil(t, readOnlyDenied.Error)
-	require.Len(t, application.calls, 4)
+	require.Len(t, application.calls, 5)
 }

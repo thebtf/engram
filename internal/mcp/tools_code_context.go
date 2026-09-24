@@ -34,11 +34,11 @@ type CodebaseContextApplication interface {
 }
 
 // LocalGitRegistration is installed only by the production composition.
-type LocalGitRegistration func(context.Context, uci.ResolveContextInput, string, string, string) (uci.RegisteredCheckoutSelector, error)
+type LocalGitRegistration func(context.Context, uci.ResolveContextInput, string, string, string, *bool) (uci.RegisteredCheckoutSelector, error)
 
 // codebaseContextRegistrationApplication registers client-owned Git worktrees.
 type codebaseContextRegistrationApplication interface {
-	RegisterLocalGit(context.Context, uci.ResolveContextInput, string, string, string) (uci.RegisteredCheckoutSelector, error)
+	RegisterLocalGit(context.Context, uci.ResolveContextInput, string, string, string, *bool) (uci.RegisteredCheckoutSelector, error)
 }
 
 // codebaseContextIndexApplication authorizes registered checkout selectors for
@@ -74,11 +74,11 @@ func (application *UCIContextApplication) SetLocalGitRegistration(register Local
 	application.registerLocalGit = register
 }
 
-func (application *UCIContextApplication) RegisterLocalGit(ctx context.Context, caller uci.ResolveContextInput, sourceID, label, locator string) (uci.RegisteredCheckoutSelector, error) {
+func (application *UCIContextApplication) RegisterLocalGit(ctx context.Context, caller uci.ResolveContextInput, sourceID, label, locator string, parserBundle *bool) (uci.RegisteredCheckoutSelector, error) {
 	if application == nil || application.registerLocalGit == nil {
 		return uci.RegisteredCheckoutSelector{}, errors.New("local git registration unavailable")
 	}
-	return application.registerLocalGit(ctx, caller, sourceID, label, locator)
+	return application.registerLocalGit(ctx, caller, sourceID, label, locator, parserBundle)
 }
 
 func (application *UCIContextApplication) Resolve(ctx context.Context, input uci.ResolveContextInput) (uci.AuthorizedContext, error) {
@@ -169,6 +169,7 @@ type codebaseContextArgs struct {
 	Generation        *int64                       `json:"generation"`
 	SourceLabel       *string                      `json:"source_label"`
 	Locator           *string                      `json:"locator"`
+	ParserBundle      *bool                        `json:"parser_bundle"`
 	Checkout          *codebaseContextCheckoutArgs `json:"checkout"`
 }
 
@@ -266,8 +267,9 @@ func codebaseContextTool() Tool {
 					"type":        "string",
 					"description": "ContextRef source UUID for action=select",
 				},
-				"source_label": map[string]any{"type": "string", "description": "Label for a new Git source"},
-				"locator":      map[string]any{"type": "string", "description": "Private canonical file URI for the local Git worktree"},
+				"source_label":  map[string]any{"type": "string", "description": "Label for a new Git source"},
+				"locator":       map[string]any{"type": "string", "description": "Private canonical file URI for the local Git worktree"},
+				"parser_bundle": map[string]any{"type": "boolean", "description": "Select the server's built-in Tree-sitter bundle profile for an installed, verified parser; omitted selects native Go-only profile"},
 				"checkout_id": map[string]any{
 					"type":        "string",
 					"description": "ContextRef checkout UUID for action=select",
@@ -352,7 +354,7 @@ func (s *Server) registerCodebaseContext(ctx context.Context, input uci.ResolveC
 	} else {
 		label = *args.SourceLabel
 	}
-	checkout, err := registration.RegisterLocalGit(ctx, input, sourceID, label, *args.Locator)
+	checkout, err := registration.RegisterLocalGit(ctx, input, sourceID, label, *args.Locator, args.ParserBundle)
 	if err != nil {
 		return "", codebaseContextApplicationError(err)
 	}
@@ -415,6 +417,9 @@ func (s *Server) listCodebaseContexts(ctx context.Context, input uci.ResolveCont
 }
 
 func (s *Server) selectCodebaseContext(ctx context.Context, input uci.ResolveContextInput, args codebaseContextArgs) (string, error) {
+	if args.ParserBundle != nil {
+		return "", codebaseContextClosedError(uci.ContextMismatch)
+	}
 	selection, err := args.selection()
 	if err != nil {
 		return "", codebaseContextClosedError(uci.ContextMismatch)
@@ -624,7 +629,7 @@ func decodeCodebaseContextArgs(raw json.RawMessage) (codebaseContextArgs, error)
 }
 
 func (args codebaseContextArgs) hasSelector() bool {
-	return args.ContextHandle != nil || args.SpaceID != nil || args.SourceID != nil || args.CheckoutID != nil || args.ViewID != nil || args.AnalysisProfileID != nil || args.Generation != nil || args.Checkout != nil
+	return args.ContextHandle != nil || args.SpaceID != nil || args.SourceID != nil || args.CheckoutID != nil || args.ViewID != nil || args.AnalysisProfileID != nil || args.Generation != nil || args.Checkout != nil || args.ParserBundle != nil
 }
 
 func (args codebaseContextArgs) selection() (codebaseContextSelection, error) {

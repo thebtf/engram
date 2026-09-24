@@ -31,7 +31,7 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	git("-C", a, "add", "shared.go")
 	git("-C", a, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-qm", "initial")
 	git("-C", a, "worktree", "add", "-qb", "other", b)
-	require.NoError(t, os.WriteFile(filepath.Join(a, "dirty-a.go"), []byte("package a\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(a, "dirty-a.go"), []byte("package a\nfunc FirstUse() {}\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(b, "dirty-b.go"), []byte("package b\n"), 0o600))
 
 	db, store := openUCIContextMigrationStore(t)
@@ -49,6 +49,26 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	owner := RegisterLocalGitInput{AuthRealm: "client", Principal: ownerPrincipal, WorkstationID: "keycard-41", SourceLabel: "engram", Locator: locator(a)}
 	first, err := store.RegisterLocalGit(ctx, owner)
 	require.NoError(t, err)
+	var goProfile UCIAnalysisProfile
+	require.NoError(t, db.Where("profile_id = ?", first.ProfileID).First(&goProfile).Error)
+	require.Equal(t, string(localGitGoProfileDigest()), goProfile.ParserBundleDigest)
+	goSource, err := os.ReadFile(filepath.Join(a, "dirty-a.go"))
+	require.NoError(t, err)
+	nativeProfile := uci.GoExtractionProfile{ProfileKey: "go-structure-v1", ParserKey: "go-parser-v1"}
+	admissionProfile, err := uci.GoIndexAdmissionArtifactProfile(nativeProfile)
+	require.NoError(t, err)
+	require.Equal(t, goProfile.ParserBundleDigest, string(admissionProfile.ExtractionProfileDigest))
+	artifact, err := uci.NewIndexAdmissionArtifactFromGo(first.SourceID, admissionProfile, goSource, uci.ExtractGo(goSource, nativeProfile))
+	require.NoError(t, err)
+	require.NotEmpty(t, artifact.Definitions)
+	require.Equal(t, goProfile.ParserBundleDigest, string(artifact.Profile.ExtractionProfileDigest))
+	parserRequest := owner
+	parserBundle := true
+	parserRequest.ParserBundle = &parserBundle
+	_, err = store.RegisterLocalGit(ctx, parserRequest)
+	var profileMismatch *uci.ContextError
+	require.ErrorAs(t, err, &profileMismatch)
+	require.Equal(t, uci.ContextMismatch, profileMismatch.Code())
 	replayed, err := store.RegisterLocalGit(ctx, owner)
 	require.NoError(t, err, "lost first response must recover the original registration")
 	require.Equal(t, first, replayed)
@@ -80,6 +100,21 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	require.Equal(t, first.SourceID, second.SourceID)
 	require.NotEqual(t, first.CheckoutID, second.CheckoutID)
 	require.NotEqual(t, first.IncarnationID, second.IncarnationID)
+	parserRequest.SourceID, parserRequest.SourceLabel, parserRequest.Locator = first.SourceID, "", locator(filepath.Join(root, "parser"))
+	parserCheckout, err := store.RegisterLocalGit(ctx, parserRequest)
+	require.NoError(t, err)
+	var parserProfile UCIAnalysisProfile
+	require.NoError(t, db.Where("profile_id = ?", parserCheckout.ProfileID).First(&parserProfile).Error)
+	require.Equal(t, string(uci.TreeSitterBundleDigest()), parserProfile.ParserBundleDigest)
+	legacyReplay := parserRequest
+	legacyReplay.ParserBundle = nil
+	replayedParser, err := store.RegisterLocalGit(ctx, legacyReplay)
+	require.NoError(t, err)
+	require.Equal(t, parserCheckout, replayedParser)
+	parserBundle = false
+	_, err = store.RegisterLocalGit(ctx, parserRequest)
+	require.ErrorAs(t, err, &profileMismatch)
+	require.Equal(t, uci.ContextMismatch, profileMismatch.Code())
 
 	for _, registered := range []RegisteredLocalGit{first, second} {
 		selector, err := uci.CheckoutIndexBindingSelector(uci.RegisteredCheckoutSelector{
@@ -107,7 +142,7 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	require.NoError(t, db.Model(&UCISource{}).Where("source_id = ?", first.SourceID).Update("state", UCISourceActive).Error)
 	var count int64
 	require.NoError(t, db.Model(&UCICheckout{}).Where("source_id = ?", first.SourceID).Count(&count).Error)
-	require.EqualValues(t, 2, count)
+	require.EqualValues(t, 3, count)
 	grants := NewBrowserReadGrantStore(db)
 	grant, err := grants.Issue(ctx, BrowserReadGrantIssue{IssuerUserID: user.ID, IssuerPrincipal: ownerPrincipal, TargetUserID: user.ID, SourceID: first.SourceID, CheckoutID: first.CheckoutID})
 	require.NoError(t, err)

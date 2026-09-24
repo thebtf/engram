@@ -21,6 +21,9 @@ import (
 type RegisterLocalGitInput struct {
 	AuthRealm, Principal, WorkstationID string
 	SourceID, SourceLabel, Locator      string
+	// ParserBundle explicitly requests the server's built-in Tree-sitter profile
+	// (true) or native Go profile (false). Omitted preserves an existing profile.
+	ParserBundle *bool
 }
 
 type RegisteredLocalGit struct {
@@ -46,6 +49,10 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 		(in.SourceID != "" && (validateUCIUUID("source_id", in.SourceID) != nil || in.SourceLabel != "")) {
 		return RegisteredLocalGit{}, uci.NewContextError(uci.ContextMismatch, nil)
 	}
+	profileDigest := localGitGoProfileDigest()
+	if in.ParserBundle != nil && *in.ParserBundle {
+		profileDigest = uci.TreeSitterBundleDigest()
+	}
 	var out RegisteredLocalGit
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := time.Now().UTC()
@@ -64,6 +71,11 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 				return errUCIContextAuthorizationDenied
 			}
 			if len(matches) == 1 {
+				if in.ParserBundle != nil {
+					if err := localGitRegistrationProfileMatches(tx, *matches[0].RegistrationProfileID, profileDigest); err != nil {
+						return err
+					}
+				}
 				out = RegisteredLocalGit{matches[0].SourceID, matches[0].CheckoutID, matches[0].IncarnationID, *matches[0].RegistrationProfileID}
 				return nil
 			}
@@ -91,6 +103,11 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 			if existing.OwnerPrincipal != in.Principal || existing.Kind != UCICheckoutWorkingTree || existing.RegistrationProfileID == nil {
 				return errUCIContextAuthorizationDenied
 			}
+			if in.ParserBundle != nil {
+				if err := localGitRegistrationProfileMatches(tx, *existing.RegistrationProfileID, profileDigest); err != nil {
+					return err
+				}
+			}
 			out = RegisteredLocalGit{sourceID, existing.CheckoutID, existing.IncarnationID, *existing.RegistrationProfileID}
 			return nil
 		}
@@ -98,7 +115,7 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 			return fmt.Errorf("register local git lookup: %w", result.Error)
 		}
 		profile := UCIAnalysisProfile{
-			ProfileID: uuid.NewString(), ParserBundleDigest: string(uci.TreeSitterBundleDigest()),
+			ProfileID: uuid.NewString(), ParserBundleDigest: string(profileDigest),
 			ResolverRevision: "uci-resolver-v1", ChunkerRevision: "uci-chunker-v1",
 			IgnorePolicyDigest: localGitRegistrationDigest("uci-git-ignore-v1"), BuildContextJSON: `{}`,
 			SecretPolicyRevision: "uci-secret-policy-v1", CreatedAt: now,
@@ -121,6 +138,22 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 		return RegisteredLocalGit{}, err
 	}
 	return out, nil
+}
+
+func localGitGoProfileDigest() uci.IndexDigest {
+	profile, _ := uci.GoIndexAdmissionArtifactProfile(uci.GoExtractionProfile{ProfileKey: "go-structure-v1", ParserKey: "go-parser-v1"})
+	return profile.ExtractionProfileDigest
+}
+
+func localGitRegistrationProfileMatches(tx *gorm.DB, profileID string, digest uci.IndexDigest) error {
+	var profile UCIAnalysisProfile
+	if err := tx.Where("profile_id = ?", profileID).First(&profile).Error; err != nil {
+		return fmt.Errorf("register local git profile lookup: %w", err)
+	}
+	if profile.ParserBundleDigest != string(digest) {
+		return uci.NewContextError(uci.ContextMismatch, nil)
+	}
+	return nil
 }
 
 func localGitRegistrationDigest(value string) string {

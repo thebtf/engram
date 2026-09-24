@@ -74,7 +74,7 @@ async function main() {
   (configFile && isConfiguredValue(configFile.api_token) ? configFile.api_token : "");
  if (!token) {
   process.stderr.write(
-   `[engram] FATAL: ENGRAM_TOKEN is empty. Open ${serverURL.replace(/\/+$/, "")}/tokens, ` +
+   `[engram] FATAL: ENGRAM_TOKEN is empty. Open ${serverURL.replace(/\/+$/, "")}/access, ` +
    "generate a workstation keycard, then configure ENGRAM_TOKEN.\n" +
    "Universal (all harnesses): add \"api_token\":\"engram_...\" to the config file.\n" +
    `Config file checked: ${configFilePath}\n`

@@ -482,10 +482,10 @@ func composeUCIContext(
 	if err != nil {
 		return nil, fmt.Errorf("create UCI MCP context application: %w", err)
 	}
-	contextApplication.SetLocalGitRegistration(func(ctx context.Context, caller uci.ResolveContextInput, sourceID, label, locator string) (uci.RegisteredCheckoutSelector, error) {
+	contextApplication.SetLocalGitRegistration(func(ctx context.Context, caller uci.ResolveContextInput, sourceID, label, locator string, parserBundle *bool) (uci.RegisteredCheckoutSelector, error) {
 		registered, err := contextStore.RegisterLocalGit(ctx, gormstore.RegisterLocalGitInput{
 			AuthRealm: caller.AuthRealm, Principal: caller.Principal, WorkstationID: caller.WorkstationID,
-			SourceID: sourceID, SourceLabel: label, Locator: locator,
+			SourceID: sourceID, SourceLabel: label, Locator: locator, ParserBundle: parserBundle,
 		})
 		if err != nil {
 			return uci.RegisteredCheckoutSelector{}, err
