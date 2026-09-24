@@ -1,11 +1,7 @@
 name: Sync Plugin Marketplace
 
 on:
-  # Release is the reliable post-publication authority. release:published stays
-  # redundant for manually published releases, never as the only trigger.
-  workflow_run:
-    workflows: ["Release"]
-    types: [completed]
+  # A published GitHub Release is the authoritative post-publication event.
   release:
     types: [published]
   workflow_dispatch:
@@ -22,20 +18,18 @@ concurrency:
   cancel-in-progress: false
 jobs:
   sync:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout published Release provenance
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          # A completed Release workflow supplies its exact tag head; no ambient ref.
-          ref: ${{ github.event.inputs.ref || github.event.workflow_run.head_sha || github.event.release.tag_name }}
+          # The release or explicitly supplied tag is the exact published provenance; no ambient ref.
+          ref: ${{ github.event.inputs.ref || github.event.release.tag_name }}
           persist-credentials: false
 
       - name: Verify published Release provenance
         env:
-          TAG: ${{ github.event.release.tag_name || github.event.workflow_run.head_branch || github.event.inputs.ref }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          TAG: ${{ github.event.release.tag_name || github.event.inputs.ref }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -48,7 +42,6 @@ jobs:
           git fetch --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG"
           TAG_SHA="$(git rev-parse "refs/tags/$TAG^{commit}")"
           test "$(git rev-parse HEAD)" = "$TAG_SHA"
-          if [ -n "$HEAD_SHA" ]; then test "$HEAD_SHA" = "$TAG_SHA"; fi
           release="$(curl --fail --silent --show-error \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github+json" \

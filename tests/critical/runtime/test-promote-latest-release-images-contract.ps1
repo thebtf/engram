@@ -654,16 +654,20 @@ try
   Remove-Scenario
 
   Reset-Scenario; $global:scenarioCount++
-  $global:runs['41'] = New-CheckRun -Text '{malformed'
+  $raw = '{malformed'
+  $global:runs['41'] = New-CheckRun -Text $raw
   Invoke-Gate -Mode Reconcile | Out-Null
   Assert-Terminal -Outcome 'contradiction' -Conclusion 'failure'; Assert-NoUnsafeMutation
+  Assert-That ([string](Get-JournalSnapshot).contradicted_snapshot -ceq $raw) 'contradiction must preserve malformed raw snapshot text'
   Remove-Scenario
 
   Reset-Scenario; $global:scenarioCount++
   $snapshot = New-Snapshot -Phase 'writing_latest' -Outcome 'pending'; $snapshot.run.attempt = '99'
-  Seed-Journal $snapshot
+  $raw = Snapshot-Json $snapshot
+  $global:runs['41'] = New-CheckRun -Text $raw
   Invoke-Gate -Mode Reconcile | Out-Null
   Assert-Terminal -Outcome 'contradiction' -Conclusion 'failure'; Assert-NoUnsafeMutation
+  Assert-That ([string](Get-JournalSnapshot).contradicted_snapshot -ceq $raw) 'contradiction must preserve invariant-violating raw snapshot text'
   Remove-Scenario
 
   Reset-Scenario; $global:scenarioCount++

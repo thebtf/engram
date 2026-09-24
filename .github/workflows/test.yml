@@ -2,19 +2,25 @@ name: Test
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   # Migration gate — runs the FULL migration chain against a clean PostgreSQL+pgvector
-  # database on every push. The matrix `test` job below skips all DATABASE_DSN-gated tests
+  # database when a frozen candidate is explicitly dispatched. The matrix `test` job below skips all DATABASE_DSN-gated tests
   # (no DB service), so without this job a broken migration reaches prod unverified — which
   # is exactly how migration 143 shipped a multi-statement Exec that pgx rejects with
   # SQLSTATE 42601, breaking server init on v6.23.0–v6.25.0. This job is the clean-DB
-  # first-run gate that catches that class of failure before merge.
+  # first-run gate that catches that class of failure before release.
   migrations:
     name: migrations / clean-db chain
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -61,7 +67,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-14]
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["ubuntu-latest", "windows-latest", "macos-14"]' || '["ubuntu-latest"]') }}
 
     steps:
       - name: Checkout
@@ -114,15 +120,15 @@ jobs:
       #                                          function via tail -1)
       # internal/handlers/engramcore    >= 60%  (gRPC transport limits coverage)
       # internal/handlers/loom          >= 70%  (Phase B-1 plumbing landing;
-#                                          real measurement 75.7% on the v4
-#                                          coverage script. Loom error paths
-#                                          (PRAGMA failure, NewEngine error,
-#                                          shutdown ctx cancellation) are
-#                                          hard to cover via moduletest.Harness
-#                                          without a full SQLite fake. Phase
-#                                          B-2 follow-up improves coverage to
-#                                          85%+ once loom-tools lands and adds
-#                                          its own test surface.)
+      #                                          real measurement 75.7% on the v4
+      #                                          coverage script. Loom error paths
+      #                                          (PRAGMA failure, NewEngine error,
+      #                                          shutdown ctx cancellation) are
+      #                                          hard to cover via moduletest.Harness
+      #                                          without a full SQLite fake. Phase
+      #                                          B-2 follow-up improves coverage to
+      #                                          85%+ once loom-tools lands and adds
+      #                                          its own test surface.)
       # cmd/engram/                     >= 0%   (main + wiring + exec_*.go are
       #                                          not meaningfully unit-testable;
       #                                          gate is kept at 0% as

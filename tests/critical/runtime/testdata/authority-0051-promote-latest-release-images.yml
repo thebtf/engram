@@ -3,7 +3,7 @@ on:
   repository_dispatch:
     types: [promote-latest-release-images]
   workflow_run:
-    workflows: ["Docker Publish"]
+    workflows: ["Release", "Docker Publish"]
     types: [completed]
 permissions:
   contents: read
@@ -13,7 +13,7 @@ concurrency:
 jobs:
   promote-latest:
     runs-on: ubuntu-latest
-    if: github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.name == 'Docker Publish' && github.event.workflow_run.event == 'push')
+    if: github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && ((github.event.workflow_run.name == 'Release' && github.event.workflow_run.event == 'push') || (github.event.workflow_run.name == 'Docker Publish' && github.event.workflow_run.event == 'workflow_run')))
     permissions:
       contents: read
       actions: read
