@@ -172,6 +172,47 @@ test('Code Explorer resynchronizes a completed selection after catalog refresh w
   await expect(page.getByTestId('code-context-repository')).toHaveValue('source-other')
   await expect(page.getByTestId('code-context-working-copy')).toHaveValue('')
 })
+test('Code Explorer retains only the same uniquely identified pinned snapshot across rotated catalog references', async ({ page }) => {
+  let catalogReads = 0
+  let changedSnapshot = false
+  let pins = 0
+  const context = (ref: string) => ({
+    source_ref: `source-${ref}`, checkout_ref: `checkout-${ref}`,
+    repository: 'Engram', working_copy: 'operator desk',
+    selection_ref: `selection-${ref}`, index_intent_available: false,
+    indexed_snapshot: { label: 'Current snapshot', revision: changedSnapshot ? 'new-revision' : '1a9dad0', published_at: '2026-09-17T00:00:00Z' },
+  })
+  await page.route('**/api/code/**', async (route: Route) => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/code/tabs/handshake') {
+      await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'resume-current', reload_token: 'reload-current' } })
+    } else if (pathname === '/api/code/contexts') {
+      await route.fulfill({ json: { contexts: [context(catalogReads++ === 0 ? 'first' : 'fresh')] } })
+    } else if (pathname === `/api/code/tabs/${TAB_BINDING_ID}/context`) {
+      pins++
+      await route.fulfill({ status: 204 })
+    } else if (pathname === '/api/code/status') {
+      await route.fulfill({ json: { total_chunks: 0, embedded_chunks: 0, embedding: { coverage: 'none', job_state: null, error_code: null } } })
+    } else if (pathname === '/api/code/structure') {
+      await route.fulfill({ status: 403 })
+    } else {
+      await route.fulfill({ status: 500 })
+    }
+  })
+  await page.goto('/code')
+  await page.getByTestId('code-context-snapshot').selectOption('selection-first')
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.getByTestId('code-context-pinned')).toBeVisible()
+  await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
+  await expect(page.getByTestId('code-context-pinned')).toBeVisible()
+  await expect(page.getByTestId('code-context-snapshot')).toHaveValue('selection-fresh')
+  expect(pins).toBe(1)
+  changedSnapshot = true
+  await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
+  await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+  expect(pins).toBe(1)
+})
+
 test('Code Explorer resumes a same-document SPA remount but isolates copied storage', async ({ page }) => {
   const handshakePayloads: unknown[] = []
   const resumePayloads: unknown[] = []
