@@ -494,8 +494,7 @@ func TestBrowserReadGrantStore_OwnerInventoryPagesOnlyEffectiveGrants(t *testing
 	require.NotContains(t, []string{rows[0].GrantRef, page[0].GrantRef}, foreign.GrantRef)
 	foreignOwnerRows, err := fixture.store.ListOwnerActive(ctx, fixture.other.ID, browserReadGrantPrincipal(fixture.other.ID), "", 2)
 	require.NoError(t, err)
-	require.Len(t, foreignOwnerRows, 1)
-	require.Equal(t, foreign.GrantRef, foreignOwnerRows[0].GrantRef)
+	require.Empty(t, foreignOwnerRows, "ownership transfer must not inherit an earlier issuer's grant or labels")
 	require.NoError(t, fixture.db.Model(fixture.otherCheckout).Update("state", UCICheckoutOffline).Error)
 	rows, err = fixture.store.ListOwnerActive(ctx, fixture.owner.ID, principal, "", 10)
 	require.NoError(t, err)
@@ -533,6 +532,60 @@ func TestBrowserReadGrantStore_OwnerInventoryPagesOnlyEffectiveGrants(t *testing
 	require.NoError(t, fixture.db.Model(fixture.owner).Update("disabled", true).Error)
 	_, err = fixture.store.ListOwnerActive(ctx, fixture.owner.ID, principal, "", 10)
 	require.ErrorIs(t, err, ErrBrowserReadGrantDenied)
+}
+
+func TestBrowserReadGrantStore_OwnerTransferAndDisabledIssuerInvalidateReads(t *testing.T) {
+	fixture := newBrowserReadGrantFixture(t)
+	ctx := context.Background()
+	ownerPrincipal := browserReadGrantPrincipal(fixture.owner.ID)
+	newOwnerPrincipal := browserReadGrantPrincipal(fixture.other.ID)
+	issue := func(user *User, principal string) BrowserReadGrant {
+		grant, err := fixture.store.IssueOwnerChoice(ctx, BrowserReadGrantOwnerIssue{
+			IssuerUserID: user.ID, IssuerPrincipal: principal, TargetUserID: fixture.target.ID, ChoiceRef: fixture.checkout.CheckoutID,
+		})
+		require.NoError(t, err)
+		return grant
+	}
+	checkRead := func(want bool) {
+		t.Helper()
+		active, ok, err := fixture.store.Active(ctx, fixture.target.ID, fixture.source.SourceID, fixture.checkout.CheckoutID)
+		require.NoError(t, err)
+		require.Equal(t, want, ok)
+		if want {
+			require.Equal(t, BrowserReadGrantActive, active.State)
+		}
+		canRead, err := fixture.store.CanRead(ctx, fixture.target.ID, fixture.source.SourceID, fixture.checkout.CheckoutID)
+		require.NoError(t, err)
+		require.Equal(t, want, canRead)
+		_, selected, err := fixture.store.Current(ctx, fixture.target.ID)
+		require.NoError(t, err)
+		require.Equal(t, want, selected)
+	}
+	grant := issue(fixture.owner, ownerPrincipal)
+	checkRead(true)
+	require.NoError(t, fixture.db.Model(fixture.checkout).Update("owner_principal", newOwnerPrincipal).Error)
+	checkRead(false)
+	rows, err := fixture.store.ListOwnerActive(ctx, fixture.other.ID, newOwnerPrincipal, "", 10)
+	require.NoError(t, err)
+	require.Empty(t, rows, "new owner cannot view previous owner's reader or checkout labels")
+	rows, err = fixture.store.ListOwnerActive(ctx, fixture.owner.ID, ownerPrincipal, "", 10)
+	require.NoError(t, err)
+	require.Empty(t, rows)
+	reissued := issue(fixture.other, newOwnerPrincipal)
+	require.Equal(t, grant.GrantRef, reissued.GrantRef, "new owner may explicitly reissue the same exact tuple")
+	require.Equal(t, newOwnerPrincipal, reissued.IssuerPrincipal)
+	checkRead(true)
+	rows, err = fixture.store.ListOwnerActive(ctx, fixture.other.ID, newOwnerPrincipal, "", 10)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, reissued.GrantRef, rows[0].GrantRef)
+	require.NoError(t, fixture.db.Model(fixture.other).Update("disabled", true).Error)
+	checkRead(false)
+	_, err = fixture.store.ListOwnerActive(ctx, fixture.other.ID, newOwnerPrincipal, "", 10)
+	require.ErrorIs(t, err, ErrBrowserReadGrantDenied)
+	require.NoError(t, fixture.db.Model(fixture.other).Update("disabled", false).Error)
+	checkRead(true)
+	assertBrowserReadGrantAuditCount(t, fixture.db, "code_grant_issued", 2)
 }
 
 func newBrowserReadGrantFixture(t *testing.T) browserReadGrantFixture {

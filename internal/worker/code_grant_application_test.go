@@ -16,6 +16,7 @@ type recordingCodeGrantStore struct {
 	ownerChoices   []gormdb.BrowserReadGrantOwnerChoice
 	targetChoices  []gormdb.BrowserReadGrantTargetChoice
 	inventory      []gormdb.BrowserReadGrantOwnerEntry
+	inventoryErr   error
 	inventoryCalls []struct {
 		issuerUserID           int64
 		issuerPrincipal, after string
@@ -71,6 +72,9 @@ func (store *recordingCodeGrantStore) ListOwnerActive(_ context.Context, issuerU
 		issuerPrincipal, after string
 		limit                  int
 	}{issuerUserID, principal, after, limit})
+	if store.inventoryErr != nil {
+		return nil, store.inventoryErr
+	}
 	rows := make([]gormdb.BrowserReadGrantOwnerEntry, 0, limit)
 	for _, row := range store.inventory {
 		if row.GrantRef > after && len(rows) < limit {

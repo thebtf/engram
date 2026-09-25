@@ -94,8 +94,8 @@ type BrowserReadGrantOwnerEntry struct {
 
 const browserReadGrantInventoryPageMax = 50
 
-// ListOwnerActive lists effective grants for checkouts still owned by the exact
-// persisted principal. after is an internal keyset position, never an authority.
+// ListOwnerActive lists effective grants issued by the exact current checkout
+// owner while that issuer remains enabled. after is a keyset position, never authority.
 func (s *BrowserReadGrantStore) ListOwnerActive(ctx context.Context, issuerUserID int64, issuerPrincipal, after string, limit int) ([]BrowserReadGrantOwnerEntry, error) {
 	if err := validateBrowserReadGrantIssuer(ctx, issuerUserID, issuerPrincipal); err != nil {
 		return nil, err
@@ -119,12 +119,14 @@ func (s *BrowserReadGrantStore) ListOwnerActive(ctx context.Context, issuerUserI
 		JOIN sources AS source ON source.source_id = browser_grant.source_id AND source.auth_realm = browser_grant.auth_realm
 		JOIN ci_checkouts AS checkout ON checkout.checkout_id = browser_grant.checkout_id AND checkout.source_id = browser_grant.source_id
 		JOIN users AS reader ON reader.id = browser_grant.subject_user_id
-		WHERE checkout.owner_principal = ? AND source.state = ?
-			AND checkout.state IN (?, ?, ?) AND reader.disabled = FALSE
+		JOIN users AS issuer ON issuer.id = ? AND issuer.disabled = FALSE
+		WHERE checkout.owner_principal = ? AND browser_grant.issuer_principal = checkout.owner_principal
+			AND browser_grant.issuer_principal = ('browser-user/' || issuer.id::text)
+			AND source.state = ? AND checkout.state IN (?, ?, ?) AND reader.disabled = FALSE
 			AND browser_grant.state = ? AND (browser_grant.expires_at IS NULL OR browser_grant.expires_at > ?)
 			AND browser_grant.grant_ref > ?::uuid
 		ORDER BY browser_grant.grant_ref ASC LIMIT ?
-	`, issuerPrincipal, UCISourceActive, UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp, BrowserReadGrantActive, time.Now().UTC(), uuidOrZero(after), limit).Scan(&rows).Error
+	`, issuerUserID, issuerPrincipal, UCISourceActive, UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp, BrowserReadGrantActive, time.Now().UTC(), uuidOrZero(after), limit).Scan(&rows).Error
 	if err != nil {
 		return nil, fmt.Errorf("browser read grant owner inventory: %w", err)
 	}
@@ -431,8 +433,8 @@ func (s *BrowserReadGrantStore) Revoke(ctx context.Context, issuerUserID int64, 
 	return result, nil
 }
 
-// Current returns the subject's one active, unexpired grant. It intentionally
-// treats zero and multiple grants as the same unselected result.
+// Current returns the subject's one active, unexpired grant from its enabled
+// current checkout owner. Zero and multiple grants are equally unselected.
 func (s *BrowserReadGrantStore) Current(ctx context.Context, subjectUserID int64) (BrowserReadGrant, bool, error) {
 	if ctx == nil {
 		return BrowserReadGrant{}, false, fmt.Errorf("browser read grant current: context is required")
@@ -457,7 +459,8 @@ func (s *BrowserReadGrantStore) Current(ctx context.Context, subjectUserID int64
 		Joins("JOIN sources AS source ON source.source_id = browser_grant.source_id AND source.auth_realm = browser_grant.auth_realm").
 		Joins("JOIN ci_checkouts AS checkout ON checkout.checkout_id = browser_grant.checkout_id AND checkout.source_id = browser_grant.source_id").
 		Joins("JOIN users AS subject ON subject.id = browser_grant.subject_user_id").
-		Where("browser_grant.subject_user_id = ? AND browser_grant.state = ? AND (browser_grant.expires_at IS NULL OR browser_grant.expires_at > ?) AND subject.disabled = FALSE", subjectUserID, BrowserReadGrantActive, now).
+		Joins("JOIN users AS issuer ON browser_grant.issuer_principal = ('browser-user/' || issuer.id::text) AND issuer.disabled = FALSE").
+		Where("browser_grant.subject_user_id = ? AND browser_grant.state = ? AND (browser_grant.expires_at IS NULL OR browser_grant.expires_at > ?) AND subject.disabled = FALSE AND checkout.owner_principal = browser_grant.issuer_principal", subjectUserID, BrowserReadGrantActive, now).
 		Limit(2).
 		Find(&grants).Error
 	if err != nil {
@@ -469,9 +472,8 @@ func (s *BrowserReadGrantStore) Current(ctx context.Context, subjectUserID int64
 	return grants[0], true, nil
 }
 
-// Active returns one exact active grant, including its issuance epoch. Unlike
-// Current, it remains well-defined when the subject holds grants for several
-// checkouts and is therefore the only grant lookup suitable for a pinned tab.
+// Active returns one exact effective grant and its issuance epoch, rejecting
+// transferred ownership or disabled issuers before a pinned tab can read.
 func (s *BrowserReadGrantStore) Active(ctx context.Context, subjectUserID int64, sourceID, checkoutID string) (BrowserReadGrant, bool, error) {
 	if ctx == nil {
 		return BrowserReadGrant{}, false, fmt.Errorf("browser read grant active: context is required")
@@ -493,8 +495,9 @@ func (s *BrowserReadGrantStore) Active(ctx context.Context, subjectUserID int64,
 		Joins("JOIN sources AS source ON source.source_id = browser_grant.source_id AND source.auth_realm = browser_grant.auth_realm").
 		Joins("JOIN ci_checkouts AS checkout ON checkout.checkout_id = browser_grant.checkout_id AND checkout.source_id = browser_grant.source_id").
 		Joins("JOIN users AS subject ON subject.id = browser_grant.subject_user_id").
+		Joins("JOIN users AS issuer ON browser_grant.issuer_principal = ('browser-user/' || issuer.id::text) AND issuer.disabled = FALSE").
 		Where("browser_grant.subject_user_id = ? AND browser_grant.source_id = ? AND browser_grant.checkout_id = ?", subjectUserID, sourceID, checkoutID).
-		Where("browser_grant.state = ? AND (browser_grant.expires_at IS NULL OR browser_grant.expires_at > ?) AND subject.disabled = FALSE", BrowserReadGrantActive, now).
+		Where("browser_grant.state = ? AND (browser_grant.expires_at IS NULL OR browser_grant.expires_at > ?) AND subject.disabled = FALSE AND checkout.owner_principal = browser_grant.issuer_principal", BrowserReadGrantActive, now).
 		First(&grant)
 	if result.Error == nil {
 		return grant, true, nil

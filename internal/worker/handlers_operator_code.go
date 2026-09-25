@@ -956,7 +956,11 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGrantInventory(w http.ResponseWrit
 	}
 	rows, err := adapter.onboarding.ListOwnerActive(auditcontext.WithSourceSession(r.Context(), identity.sessionID), identity.identity, after, operatorCodeGrantInventoryPageSize+1)
 	if err != nil {
-		operatorCodeWriteBodyless(w, http.StatusForbidden)
+		if errors.Is(err, errCodeGrantCallerDenied) || errors.Is(err, gormdb.ErrBrowserReadGrantDenied) {
+			operatorCodeWriteBodyless(w, http.StatusForbidden)
+		} else {
+			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		}
 		return
 	}
 	response := operatorCodeGrantInventoryResponse{Grants: make([]operatorCodeGrantInventoryEntry, 0, len(rows))}

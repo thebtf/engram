@@ -676,6 +676,20 @@ func TestOperatorCodeRoutes_OwnerGrantInventorySurvivesReload(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, expired.Code)
 	require.Empty(t, expired.Body.String())
 	adapter.now = func() time.Time { return time.Now().UTC() }
+	for _, testCase := range []struct {
+		err  error
+		want int
+	}{
+		{gormstore.ErrBrowserReadGrantDenied, http.StatusForbidden},
+		{errCodeGrantCallerDenied, http.StatusForbidden},
+		{errors.New("storage query failed"), http.StatusServiceUnavailable},
+	} {
+		grants.inventoryErr = testCase.err
+		failed := call("/api/code/grants", "browser-session-41", fixture.identity)
+		require.Equal(t, testCase.want, failed.Code)
+		require.Empty(t, failed.Body.String(), "inventory denial and storage fault must not reveal private labels")
+	}
+	grants.inventoryErr = nil
 
 	ref := grants.inventory[0].GrantRef
 	revoke := httptest.NewRequest(http.MethodPost, "/api/code/grants/"+ref+"/revoke", nil)
