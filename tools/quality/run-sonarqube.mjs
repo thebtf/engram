@@ -859,7 +859,6 @@ export function profileDescriptor(profile) {
   const args = ["test", "-json", `-p=${profilePackageConcurrency(profile)}`, "-count=1", profile.target];
   if (profile.unitPhase !== "race") args.push("-covermode=atomic");
   if (profile.databasePrefix) args.push("-parallel=1");
-  if (profile.name === "uci") args.push("-timeout=20m");
   if (profile.race) args.push("-race");
   if (profile.coverpkg) args.push(`-coverpkg=${profile.coverpkg}`);
   if (profile.run) args.push(`-run=${profile.run}`);
