@@ -4,7 +4,7 @@
       "type": "stdio",
       "command": "node",
       "args": [
-        "${PI_CODING_AGENT_DIR}/../plugins/node_modules/engram/scripts/run-engram.js"
+        "${OMP_PLUGIN_ROOT}/scripts/run-engram.js"
       ],
       "env_vars": [
         "ENGRAM_URL",
