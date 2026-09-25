@@ -31,7 +31,7 @@
 | Docker image acceptance | `final-image-set.json` retained from the release workflow | manifest is missing, not `status: PASS`, does not cover `server`, `operator-console`, and `postgres`, or lacks exact IDs, zero HIGH/CRITICAL findings in the three canonical-image SARIF files, runtime proof, or cleanup PASS |
 | Released-image rescan | post-publication `ScanPublished` evidence: one summary JSON plus per-image SARIF/log for `server`, `operator-console`, and `postgres` | after publication, first run is not started within 24h, later evidence is older than 36h by `started_at`/`completed_at`, evidence is missing, HIGH/CRITICAL findings exist, or scanner/database/tag-resolution errors prevent complete evidence; blocks rollout/continued deployment, not initial digest publication |
 | Diff hygiene | `git diff --check` | whitespace/conflict marker errors |
-| SonarQube Quality Gate | Root agent runs `node tools/quality/run-sonarqube.mjs` locally from the clean, frozen exact candidate; retain `.agent/e/sonarqube/<HEAD>.json`; no GitHub Actions workflow performs this gate | exact candidate coverage is incomplete, scanner/CE/QG is non-OK, or requested status publication fails; only the one-time v6.49.4 exception below can replace this row's `OK` requirement |
+| SonarQube Quality Gate | Root agent runs `node tools/quality/run-sonarqube.mjs` locally from the clean, frozen exact candidate; retain `.agent/e/sonarqube/<HEAD>.json`; no GitHub Actions workflow performs this gate | exact candidate coverage is incomplete, scanner/CE/QG is non-OK, or requested status publication fails; only for the one-time v6.49.4 PR #531 exception below, Sonar unavailability permits incomplete exact-candidate coverage and `UNAVAILABLE / NOT_PROVEN` instead of fresh analysis and `OK`, without resolving observed findings or waiving any other gate |
 
 ## CI Compute Boundaries
 
@@ -57,7 +57,7 @@ For PR #531's `v6.49.4` OMP plugin hotfix only, the operator directed release wo
 - Retain applicable existing evidence for full `go test ./...`, `go vet ./...`, `govulncheck ./...`, and `go build ./cmd/engram ./cmd/engram-server`; Node hook/plugin behavior; GoReleaser raw asset and plugin policy verification. Revalidate evidence against the final candidate using the existing exact-input rules; do not relabel an earlier PASS.
 - Require PR approval, zero unresolved required threads, required CI and authority checks plus frozen-candidate validation, and accepted `server`, `operator-console`, and `postgres` images under the existing `final-image-set.json` contract. Record a rollback/canary plan and dispose explicitly of whether tagging may replace the running Engram server through Watchtower before any irreversible effect.
 
-This one-time operator authorization replaces only the Sonar `OK` prerequisite for that bounded candidate; all other release, security, image, review, migration and rollout gates remain mandatory. It is not transferable to PR #508, another tag, a changed product scope, or any later release. For every other release, exact-head Sonar Quality Gate `OK` remains mandatory.
+This one-time operator authorization replaces only the Sonar fresh exact-candidate analysis/coverage and `OK` prerequisites when Sonar is unavailable for that bounded candidate; record `UNAVAILABLE / NOT_PROVEN` and leave observed findings unresolved. All other release, security, image, review, migration and rollout gates remain mandatory. It is not transferable to PR #508, another tag, a changed product scope, or any later release. For every other release, fresh exact-head Sonar analysis and Quality Gate `OK` remain mandatory.
 
 ## Release Convergence
 
@@ -165,6 +165,6 @@ An advertised recovery mode is never a bypass: it must retain fresh exact-candid
 
 ## Terminal Verdict
 
-- `PROJECT_RELEASE_PROTOCOL_PASS`: all mandatory rows have evidence, with only the explicit v6.49.4 Sonar exception above eligible to replace exact-head `OK`; report Sonar as UNAVAILABLE / NOT_PROVEN, never PASS.
+- `PROJECT_RELEASE_PROTOCOL_PASS`: all mandatory rows have evidence, with only the explicit v6.49.4 PR #531 Sonar exception above permitting incomplete exact-candidate analysis/coverage and `UNAVAILABLE / NOT_PROVEN` instead of fresh analysis and `OK` when Sonar is unavailable; observed findings remain unresolved, and every other gate remains mandatory. Never report Sonar as PASS.
 - `PROJECT_RELEASE_PROTOCOL_BLOCKED`: at least one mandatory row is missing, stale, failed, or cannot be verified.
 - `PROJECT_RELEASE_PROTOCOL_DRY_RUN`: intended actions are fully described and no mutation was performed.
