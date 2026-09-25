@@ -56,5 +56,6 @@ if "$check"; then
   bash "$(dirname "$0")/prepare-parser-targets.sh" --version "$version" --output "${ENGRAM_PARSER_POLICY:-plugin/engram/parser-targets.json}" --check
 else
   mkdir -p "$(dirname "$output")"
+  bash "$(dirname "$0")/prepare-parser-targets.sh" --version "$version" --output "${ENGRAM_PARSER_POLICY:-plugin/engram/parser-targets.json}"
   cp "$candidate" "$output"
 fi

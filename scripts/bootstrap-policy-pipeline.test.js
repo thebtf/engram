@@ -1802,13 +1802,16 @@ test("generator check mode and combined artifact gate accept only the shared tar
     fs.writeFileSync(fakeGo, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then echo 'go version go1.26.6 linux/amd64'; exit 0; fi\nfor arg in \"$@\"; do [[ $arg == ./tools/uci-parser ]] && parser=1; done\nwhile [[ $# -gt 0 ]]; do\n  if [[ $1 == -ldflags ]]; then [[ $2 == *-buildid=* ]] || exit 1; shift 2; continue; fi\n  if [[ $1 == -o ]]; then shift; if [[ ${parser:-0} == 1 ]]; then printf 'parser-windows-amd64' > \"$1\"; else printf '%s-%s' \"$GOOS\" \"$GOARCH\" > \"$1\"; fi; exit 0; fi\n  shift\ndone\nexit 1\n", { mode: 0o755 });
     const fakeGoArgument = shellQuote(bashPath(fakeGo));
     const policyArgument = shellQuote(bashPath(policyPath));
-    run("bash", ["-c", `ENGRAM_BOOTSTRAP_GO=${fakeGoArgument} scripts/prepare-bootstrap-policy.sh --version ${currentVersion} --output ${policyArgument}`]);
     const parserEnvironment = `ENGRAM_BOOTSTRAP_GO=${fakeGoArgument} ENGRAM_PARSER_POLICY=${shellQuote(bashPath(parserPolicyPath))}`;
-    run("bash", ["-c", `${parserEnvironment} scripts/prepare-parser-targets.sh --version ${currentVersion} --output ${shellQuote(bashPath(parserPolicyPath))}`]);
+    run("bash", ["-c", `${parserEnvironment} scripts/prepare-bootstrap-policy.sh --version ${currentVersion} --output ${policyArgument}`]);
+    const generatedParserPolicy = JSON.parse(fs.readFileSync(parserPolicyPath, "utf8"));
+    assert.equal(generatedParserPolicy.package_version, currentVersion);
+    assert.equal(generatedParserPolicy.targets["win32-x64"].version, currentVersion);
     run("bash", ["-c", `${parserEnvironment} scripts/prepare-bootstrap-policy.sh --version ${currentVersion} --output ${policyArgument} --check`]);
     fs.appendFileSync(parserPolicyPath, "drift");
     const parserPolicyRejected = spawnSync("bash", ["-c", `${parserEnvironment} scripts/prepare-bootstrap-policy.sh --version ${currentVersion} --output ${policyArgument} --check`], { cwd: root, encoding: "utf8" });
     assert.notEqual(parserPolicyRejected.status, 0);
+    assert.equal(fs.readFileSync(parserPolicyPath, "utf8").endsWith("drift"), true, "check mode must not rewrite the parser policy");
     fs.writeFileSync(parserPolicyPath, fs.readFileSync(parserPolicyPath, "utf8").slice(0, -5));
     const policy = parsePolicy(fs.readFileSync(policyPath, "utf8"), currentVersion);
     fs.mkdirSync(dist, { recursive: true });
