@@ -128,7 +128,7 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 	})
 	run := func() {
 		command := exec.CommandContext(ctx, binary)
-		command.Dir = filepath.Join(state, "home")
+		command.Dir = root
 		command.Env = env
 		stdin, err := command.StdinPipe()
 		if err != nil {
