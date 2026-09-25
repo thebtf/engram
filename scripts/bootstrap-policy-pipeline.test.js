@@ -1775,6 +1775,46 @@ function buildServerArchive(archiveRoot, archivePath) {
   }
 }
 
+test("parser policy generator accepts package SemVer and rejects mismatched or unsafe versions", () => {
+  const temp = temporaryDirectory();
+  const generator = "../scripts/prepare-parser-targets.sh";
+  const policy = path.join(temp, "parser-targets.json");
+  const go = path.join(temp, "go");
+  const manifests = [".claude-plugin", ".codex-plugin", ".omp-plugin"];
+  const invoke = (version, check = false) => spawnSync("bash", ["-c", `ENGRAM_BOOTSTRAP_GO=./go ${generator} --version ${shellQuote(version)} --output parser-targets.json ${check ? "--check" : ""}`], {
+    cwd: temp, encoding: "utf8",
+  });
+  const setManifestVersion = (version) => {
+    for (const name of manifests) fs.writeFileSync(path.join(temp, "plugin", "engram", name, "plugin.json"), JSON.stringify({ version }));
+  };
+  try {
+    for (const name of manifests) fs.mkdirSync(path.join(temp, "plugin", "engram", name), { recursive: true });
+    fs.writeFileSync(go, "#!/usr/bin/env bash\nfor arg in \"$@\"; do if [[ $arg == -o ]]; then output=1; continue; fi; if [[ ${output:-0} == 1 ]]; then printf 'parser-fixture' > \"$arg\"; exit 0; fi; done\nexit 1\n", { mode: 0o755 });
+    for (const version of ["6.50.0", "6.50.0-rc.1", "6.50.0+build.5", "6.50.0-rc.1+build.5"]) {
+      setManifestVersion(version);
+      assert.equal(invoke(version).status, 0, `generation rejected ${version}`);
+      const generated = JSON.parse(fs.readFileSync(policy, "utf8"));
+      assert.equal(generated.package_version, version);
+      assert.equal(generated.targets["win32-x64"].version, version);
+      assert.equal(invoke(version, true).status, 0, `check rejected ${version}`);
+    }
+    const before = fs.readFileSync(policy, "utf8");
+    for (const version of ["6.50.0/../../payload", "v6.50.0", "6.50.0-", "6.50.0-01", "6.50.0+", "06.50.0"]) {
+      setManifestVersion(version);
+      assert.notEqual(invoke(version).status, 0, `unsafe version accepted: ${version}`);
+    }
+    setManifestVersion("6.50.0");
+    assert.notEqual(invoke("6.50.0-rc.1").status, 0, "mismatched manifest accepted");
+    assert.equal(fs.readFileSync(policy, "utf8"), before, "invalid input rewrote policy");
+    fs.appendFileSync(policy, "drift");
+    assert.notEqual(invoke("6.50.0", true).status, 0, "drift passed check mode");
+    assert.ok(fs.readFileSync(policy, "utf8").endsWith("drift"), "check mode rewrote policy");
+  } finally {
+    const cleanup = spawnSync("bash", ["-c", `rm -rf -- ${shellQuote(bashPath(temp))}`], { cwd: root, encoding: "utf8" });
+    assert.equal(cleanup.status, 0, cleanup.stderr);
+  }
+});
+
 test("GoReleaser client and server empty build IDs match the bootstrap policy generator", () => {
   const generator = fs.readFileSync(path.join(root, "scripts", "prepare-bootstrap-policy.sh"), "utf8");
   const generatorBuildIDs = [...generator.matchAll(/-ldflags "([^"]+)"/g)].flatMap(([, ldflags]) => ldflags.split(/\s+/).filter((flag) => flag.startsWith("-buildid=")));

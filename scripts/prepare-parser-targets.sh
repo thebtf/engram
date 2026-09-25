@@ -11,7 +11,11 @@ while [[ $# -gt 0 ]]; do
     *) echo 'usage: prepare-parser-targets.sh --version X.Y.Z [--output PATH] [--check]' >&2; exit 2 ;;
   esac
 done
-[[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo 'invalid parser package version' >&2; exit 2; }
+[[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-([0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*|0|[1-9][0-9]*)(\.([0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*|0|[1-9][0-9]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || { echo 'invalid parser package version' >&2; exit 2; }
+for manifest in plugin/engram/.claude-plugin/plugin.json plugin/engram/.codex-plugin/plugin.json plugin/engram/.omp-plugin/plugin.json; do
+  manifest_version="$(node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1], "utf8")).version; if (typeof value !== "string") process.exit(1); process.stdout.write(value)' "$manifest")"
+  [[ "$manifest_version" == "$version" ]] || { echo "package manifest version differs from parser version: $manifest" >&2; exit 1; }
+done
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC="${ENGRAM_PARSER_CC:-x86_64-w64-mingw32-gcc}" \
