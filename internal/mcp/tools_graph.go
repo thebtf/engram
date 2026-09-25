@@ -160,23 +160,11 @@ func (s *Server) filterVisibleGraphEdges(ctx context.Context, edges []graph.Edge
 	return visible
 }
 
-func (s *Server) filterVisibleGraphResults(ctx context.Context, results []graph.TraversalResult) []graph.TraversalResult {
-	visible := make([]graph.TraversalResult, 0, len(results))
-	access := map[int64]bool{}
-	canRead := func(id int64) bool {
-		allowed, seen := access[id]
-		if !seen {
-			allowed = s.graphMemoryVisible(ctx, id)
-			access[id] = allowed
-		}
-		return allowed
-	}
-	for _, result := range results {
-		if canRead(result.SourceID) && canRead(result.TargetID) {
-			visible = append(visible, result)
-		}
-	}
-	return visible
+func (s *Server) graphTraversalEdgeVisible(ctx context.Context, edge *graph.Edge) bool {
+	return (edge.SourceID == nil || s.graphMemoryVisible(ctx, *edge.SourceID)) &&
+		(edge.TargetID == nil || s.graphMemoryVisible(ctx, *edge.TargetID)) &&
+		(edge.NodeSourceID == nil || s.graphNodeVisible(ctx, *edge.NodeSourceID)) &&
+		(edge.NodeTargetID == nil || s.graphNodeVisible(ctx, *edge.NodeTargetID))
 }
 
 // filterEdgesByNodeType returns only edges whose node endpoint (node_source_id
@@ -268,11 +256,12 @@ func (s *Server) graphTraverse(ctx context.Context, a graphArgs) (string, error)
 	if !s.graphMemoryVisible(ctx, a.MemoryID) {
 		return marshalJSON(map[string]any{"memory_id": a.MemoryID, "depth": depth, "count": 0, "results": []graph.TraversalResult{}})
 	}
-	results, err := s.graphStore.Traverse(ctx, a.MemoryID, depth, a.EdgeTypes)
+	results, err := s.graphStore.TraverseVisible(ctx, a.MemoryID, depth, a.EdgeTypes, func(edge *graph.Edge) bool {
+		return s.graphTraversalEdgeVisible(ctx, edge)
+	})
 	if err != nil {
 		return "", err
 	}
-	results = s.filterVisibleGraphResults(ctx, results)
 	return marshalJSON(map[string]any{
 		"memory_id": a.MemoryID,
 		"depth":     depth,
@@ -292,12 +281,11 @@ func (s *Server) graphFindPath(ctx context.Context, a graphArgs) (string, error)
 	if maxDepth <= 0 {
 		maxDepth = graph.MaxTraverseDepth
 	}
-	path, err := s.graphStore.FindPath(ctx, a.SourceID, a.TargetID, maxDepth)
+	path, err := s.graphStore.FindPathVisible(ctx, a.SourceID, a.TargetID, maxDepth, func(edge *graph.Edge) bool {
+		return s.graphTraversalEdgeVisible(ctx, edge)
+	})
 	if err != nil {
 		return "", err
-	}
-	if len(s.filterVisibleGraphResults(ctx, path)) != len(path) {
-		path = nil
 	}
 	found := path != nil
 	return marshalJSON(map[string]any{

@@ -20,8 +20,8 @@ const (
 type graphEdgeStore interface {
 	ListByMemory(ctx context.Context, memoryID int64, dir graph.Direction, edgeType string) ([]graph.Edge, error)
 	ListByNode(ctx context.Context, nodeID int64, dir graph.Direction, edgeType string) ([]graph.Edge, error)
-	Traverse(ctx context.Context, startID int64, maxDepth int, edgeTypes []string) ([]graph.TraversalResult, error)
-	FindPath(ctx context.Context, sourceID, targetID int64, maxDepth int) ([]graph.TraversalResult, error)
+	TraverseVisible(ctx context.Context, startID int64, maxDepth int, edgeTypes []string, visible func(*graph.Edge) bool) ([]graph.TraversalResult, error)
+	FindPathVisible(ctx context.Context, sourceID, targetID int64, maxDepth int, visible func(*graph.Edge) bool) ([]graph.TraversalResult, error)
 }
 
 type graphNodeStore interface {
@@ -284,23 +284,11 @@ func (s *Service) filterVisibleGraphEdges(ctx context.Context, edges []graph.Edg
 	return visible
 }
 
-func (s *Service) filterVisibleGraphResults(ctx context.Context, results []graph.TraversalResult) []graph.TraversalResult {
-	visible := make([]graph.TraversalResult, 0, len(results))
-	access := map[int64]bool{}
-	canRead := func(id int64) bool {
-		allowed, seen := access[id]
-		if !seen {
-			allowed = s.graphMemoryVisible(ctx, id)
-			access[id] = allowed
-		}
-		return allowed
-	}
-	for _, result := range results {
-		if canRead(result.SourceID) && canRead(result.TargetID) {
-			visible = append(visible, result)
-		}
-	}
-	return visible
+func (s *Service) graphTraversalEdgeVisible(ctx context.Context, edge *graph.Edge) bool {
+	return (edge.SourceID == nil || s.graphMemoryVisible(ctx, *edge.SourceID)) &&
+		(edge.TargetID == nil || s.graphMemoryVisible(ctx, *edge.TargetID)) &&
+		(edge.NodeSourceID == nil || s.graphNodeVisible(ctx, *edge.NodeSourceID)) &&
+		(edge.NodeTargetID == nil || s.graphNodeVisible(ctx, *edge.NodeTargetID))
 }
 
 func (s *Service) handleGetGraphEdges(w http.ResponseWriter, r *http.Request) {
@@ -387,12 +375,13 @@ func (s *Service) handleTraverseGraph(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, graphTraverseResponse{Results: []graph.TraversalResult{}, MemoryID: memoryID, Depth: depth})
 		return
 	}
-	results, err := store.Traverse(r.Context(), memoryID, depth, parseGraphEdgeTypes(r.URL.Query().Get("edge_types")))
+	results, err := store.TraverseVisible(r.Context(), memoryID, depth, parseGraphEdgeTypes(r.URL.Query().Get("edge_types")), func(edge *graph.Edge) bool {
+		return s.graphTraversalEdgeVisible(r.Context(), edge)
+	})
 	if err != nil {
 		writeGraphError(w, http.StatusInternalServerError, "graph_read_failed", err.Error())
 		return
 	}
-	results = s.filterVisibleGraphResults(r.Context(), results)
 	writeJSON(w, graphTraverseResponse{Results: results, MemoryID: memoryID, Depth: depth, Count: len(results)})
 }
 
@@ -425,13 +414,12 @@ func (s *Service) handleFindGraphPath(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, graphPathResponse{Path: []graph.TraversalResult{}, SourceID: sourceID, TargetID: targetID})
 		return
 	}
-	path, err := store.FindPath(r.Context(), sourceID, targetID, maxDepth)
+	path, err := store.FindPathVisible(r.Context(), sourceID, targetID, maxDepth, func(edge *graph.Edge) bool {
+		return s.graphTraversalEdgeVisible(r.Context(), edge)
+	})
 	if err != nil {
 		writeGraphError(w, http.StatusInternalServerError, "graph_read_failed", err.Error())
 		return
-	}
-	if len(s.filterVisibleGraphResults(r.Context(), path)) != len(path) {
-		path = nil
 	}
 	writeJSON(w, graphPathResponse{Path: path, SourceID: sourceID, TargetID: targetID, Found: path != nil, Hops: len(path)})
 }

@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Workspace owners can choose another enabled browser account and issue or revoke an audited, exact Source-and-Checkout read grant; the recipient is resolved from persisted users and never supplied as a raw principal.
 
+### Fixed
+
+- Graph traversal and path readers prune private intermediaries before expansion while retaining public memory-to-node edges with typed node endpoints.
+
 ## [6.50.0] - 2026-09-17
 
 ### Added

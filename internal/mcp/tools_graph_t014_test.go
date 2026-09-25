@@ -193,6 +193,77 @@ func TestGraphToolGetEdgesHidesPrivateAndInaccessibleEndpoints(t *testing.T) {
 	}
 }
 
+func TestGraphToolTraversalPrunesPrivateIntermediariesAndKeepsPublicNodes(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	sqlDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	sqlDB.SetMaxOpenConns(1)
+	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gormlib.Config{DisableAutomaticPing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`CREATE TABLE memories (id INTEGER PRIMARY KEY, project TEXT, content TEXT, privacy_scope TEXT, source_workstation_id TEXT, deleted_at DATETIME)`,
+		`INSERT INTO memories (id, project, content, privacy_scope, source_workstation_id) VALUES (1, 'graph', 'start', 'project', ''), (2, 'graph', 'hidden', 'private', 'other'), (3, 'graph', 'target', 'project', ''), (4, 'graph', 'via', 'project', ''), (5, 'graph', 'via two', 'project', ''), (6, 'graph', 'descendant', 'project', ''), (7, 'graph', 'descendant two', 'project', '')`,
+		`CREATE TABLE knowledge_edges (id INTEGER PRIMARY KEY, source_id INTEGER, target_id INTEGER, node_source_id INTEGER, node_target_id INTEGER, source_type TEXT, target_type TEXT, edge_type TEXT, weight REAL, reasoning TEXT, source_session_id TEXT, valid_from DATETIME, valid_until DATETIME, created_at DATETIME, superseded_at DATETIME)`,
+		`INSERT INTO knowledge_edges (id, source_id, target_id, node_target_id, source_type, target_type, edge_type, weight, created_at) VALUES
+		(1, 1, 2, NULL, 'memory', 'memory', 'uses', 1, CURRENT_TIMESTAMP),
+		(2, 2, 3, NULL, 'memory', 'memory', 'uses', 1, CURRENT_TIMESTAMP),
+		(3, 1, 4, NULL, 'memory', 'memory', 'uses', 1, CURRENT_TIMESTAMP),
+		(4, 4, 5, NULL, 'memory', 'memory', 'uses', 1, CURRENT_TIMESTAMP),
+		(5, 5, 3, NULL, 'memory', 'memory', 'uses', 1, CURRENT_TIMESTAMP),
+		(6, 2, 6, NULL, 'memory', 'memory', 'uses', 1, CURRENT_TIMESTAMP),
+		(7, 6, 7, NULL, 'memory', 'memory', 'uses', 1, CURRENT_TIMESTAMP),
+		(8, 1, NULL, 10, 'memory', 'node', 'uses', 1, CURRENT_TIMESTAMP),
+		(9, 1, NULL, 20, 'memory', 'node', 'uses', 1, CURRENT_TIMESTAMP)`,
+	} {
+		if err := db.Exec(statement).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := &Server{graphStore: graph.NewStore(db, nil), memoryStore: gormdb.NewMemoryStore(&gormdb.Store{DB: db}), nodesStore: fakeNodeTypeLookup{nodes: map[int64]models.KnowledgeNode{
+		10: {ID: 10, PrivacyScope: "project"}, 20: {ID: 20, PrivacyScope: "private"},
+	}}}
+	for _, tc := range []struct {
+		args graphArgs
+		want []int64
+	}{
+		{graphArgs{Action: "traverse", MemoryID: 1, Depth: 3}, []int64{3, 4, 5, 8}},
+		{graphArgs{Action: "find_path", SourceID: 1, TargetID: 3, MaxDepth: 3}, []int64{3, 4, 5}},
+		{graphArgs{Action: "find_path", SourceID: 1, TargetID: 7, MaxDepth: 3}, nil},
+	} {
+		result, err := server.handleGraph(context.Background(), mustMarshal(t, tc.args))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response struct {
+			Results []graph.TraversalResult `json:"results"`
+			Path    []graph.TraversalResult `json:"path"`
+		}
+		if err := json.Unmarshal([]byte(result), &response); err != nil {
+			t.Fatal(err)
+		}
+		steps := response.Results
+		if tc.args.Action == "find_path" {
+			steps = response.Path
+		}
+		var ids []int64
+		for _, step := range steps {
+			ids = append(ids, step.EdgeID)
+			if step.EdgeID == 8 && (step.NodeTargetID == nil || *step.NodeTargetID != 10) {
+				t.Fatalf("public node endpoint missing: %s", result)
+			}
+		}
+		slices.Sort(ids)
+		if !slices.Equal(ids, tc.want) {
+			t.Fatalf("%s: edges %v, want %v; response=%s", tc.args.Action, ids, tc.want, result)
+		}
+	}
+}
+
 func TestGraphToolNodeTypeFilterRejectsMissingStore(t *testing.T) {
 	for _, flag := range []string{"false", "true"} {
 		t.Run(flag, func(t *testing.T) {

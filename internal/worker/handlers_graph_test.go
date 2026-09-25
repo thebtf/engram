@@ -2,22 +2,28 @@ package worker
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/pkg/models"
+	"gorm.io/driver/postgres"
 	gormlib "gorm.io/gorm"
+	_ "modernc.org/sqlite"
 )
 
 type fakeGraphEdgeStore struct {
 	edges []graph.Edge
+	store *graph.Store
 }
 
 func (f *fakeGraphEdgeStore) ListByMemory(_ context.Context, memoryID int64, dir graph.Direction, _ string) ([]graph.Edge, error) {
@@ -48,11 +54,17 @@ func (f *fakeGraphEdgeStore) list(id int64, dir graph.Direction, node bool) []gr
 	return result
 }
 
-func (f *fakeGraphEdgeStore) Traverse(context.Context, int64, int, []string) ([]graph.TraversalResult, error) {
+func (f *fakeGraphEdgeStore) TraverseVisible(ctx context.Context, startID int64, depth int, types []string, visible func(*graph.Edge) bool) ([]graph.TraversalResult, error) {
+	if f.store != nil {
+		return f.store.TraverseVisible(ctx, startID, depth, types, visible)
+	}
 	return nil, nil
 }
 
-func (f *fakeGraphEdgeStore) FindPath(context.Context, int64, int64, int) ([]graph.TraversalResult, error) {
+func (f *fakeGraphEdgeStore) FindPathVisible(ctx context.Context, sourceID, targetID int64, depth int, visible func(*graph.Edge) bool) ([]graph.TraversalResult, error) {
+	if f.store != nil {
+		return f.store.FindPathVisible(ctx, sourceID, targetID, depth, visible)
+	}
 	return nil, nil
 }
 
@@ -153,4 +165,70 @@ func TestHandlersGraphRetainedPathReaderRejectsUnboundedDepth(t *testing.T) {
 	service.handleFindGraphPath(writer, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/graph/path?source_id=1&target_id=2&max_depth=%d", graph.MaxTraverseDepth+1), nil))
 	require.Equal(t, http.StatusBadRequest, writer.Code, writer.Body.String())
 	assert.Contains(t, writer.Body.String(), fmt.Sprintf("max depth is %d", graph.MaxTraverseDepth))
+}
+
+func TestHandlersGraphTraversalPrunesPrivateIntermediariesAndKeepsPublicNodes(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	sqlDB, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	sqlDB.SetMaxOpenConns(1)
+	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gormlib.Config{DisableAutomaticPing: true})
+	require.NoError(t, err)
+	for _, statement := range []string{
+		`CREATE TABLE memories (id INTEGER PRIMARY KEY, project TEXT, content TEXT, privacy_scope TEXT, source_workstation_id TEXT, deleted_at DATETIME)`,
+		`INSERT INTO memories (id, project, content, privacy_scope, source_workstation_id) VALUES (1, 'graph', 'start', 'project', ''), (2, 'graph', 'hidden', 'private', 'other'), (3, 'graph', 'target', 'project', ''), (4, 'graph', 'via', 'project', ''), (5, 'graph', 'via two', 'project', ''), (6, 'graph', 'descendant', 'project', ''), (7, 'graph', 'descendant two', 'project', '')`,
+		`CREATE TABLE knowledge_edges (id INTEGER PRIMARY KEY, source_id INTEGER, target_id INTEGER, node_source_id INTEGER, node_target_id INTEGER, source_type TEXT, target_type TEXT, edge_type TEXT, weight REAL, reasoning TEXT, source_session_id TEXT, valid_from DATETIME, valid_until DATETIME, created_at DATETIME, superseded_at DATETIME)`,
+		`INSERT INTO knowledge_edges (id, source_id, target_id, node_target_id, source_type, target_type, edge_type, weight, created_at) VALUES
+		(1, 1, 2, NULL, 'memory', 'memory', 'uses', 1, CURRENT_TIMESTAMP),
+		(2, 2, 3, NULL, 'memory', 'memory', 'uses', 1, CURRENT_TIMESTAMP),
+		(3, 1, 4, NULL, 'memory', 'memory', 'uses', 1, CURRENT_TIMESTAMP),
+		(4, 4, 5, NULL, 'memory', 'memory', 'uses', 1, CURRENT_TIMESTAMP),
+		(5, 5, 3, NULL, 'memory', 'memory', 'uses', 1, CURRENT_TIMESTAMP),
+		(6, 2, 6, NULL, 'memory', 'memory', 'uses', 1, CURRENT_TIMESTAMP),
+		(7, 6, 7, NULL, 'memory', 'memory', 'uses', 1, CURRENT_TIMESTAMP),
+		(8, 1, NULL, 10, 'memory', 'node', 'uses', 1, CURRENT_TIMESTAMP),
+		(9, 1, NULL, 20, 'memory', 'node', 'uses', 1, CURRENT_TIMESTAMP)`,
+	} {
+		require.NoError(t, db.Exec(statement).Error)
+	}
+	service := newGraphTestService(&fakeGraphEdgeStore{store: graph.NewStore(db, nil)}, &fakeGraphNodeStore{nodes: map[int64]models.KnowledgeNode{
+		10: {ID: 10, PrivacyScope: "project"}, 20: {ID: 20, PrivacyScope: "private"},
+	}})
+	service.memoryStore = gormdb.NewMemoryStore(&gormdb.Store{DB: db})
+	for _, tc := range []struct {
+		path string
+		want []int64
+	}{
+		{"/api/graph/traverse?memory_id=1&depth=3", []int64{3, 4, 5, 8}},
+		{"/api/graph/path?source_id=1&target_id=3&max_depth=3", []int64{3, 4, 5}},
+		{"/api/graph/path?source_id=1&target_id=7&max_depth=3", nil},
+	} {
+		writer := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		if strings.HasPrefix(tc.path, "/api/graph/traverse") {
+			service.handleTraverseGraph(writer, request)
+		} else {
+			service.handleFindGraphPath(writer, request)
+		}
+		require.Equal(t, http.StatusOK, writer.Code, writer.Body.String())
+		var response struct {
+			Results []graph.TraversalResult `json:"results"`
+			Path    []graph.TraversalResult `json:"path"`
+		}
+		require.NoError(t, json.Unmarshal(writer.Body.Bytes(), &response))
+		steps := response.Results
+		if response.Path != nil {
+			steps = response.Path
+		}
+		var ids []int64
+		for _, step := range steps {
+			ids = append(ids, step.EdgeID)
+			if step.EdgeID == 8 {
+				require.NotNil(t, step.NodeTargetID)
+				require.Equal(t, int64(10), *step.NodeTargetID)
+			}
+		}
+		assert.ElementsMatch(t, tc.want, ids, writer.Body.String())
+	}
 }
