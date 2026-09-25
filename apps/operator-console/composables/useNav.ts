@@ -8,9 +8,9 @@
  * The consumer resolves them with t(). This keeps the nav structure (ids, routes, honesty)
  * language-independent — translating the menu means editing the dictionary, not this file.
  */
-import type { HonestyClass } from './useHonesty'
 import { computed } from 'vue'
-import { useOperatorQueue } from './useOperatorQueue'
+import { endpointEvidence, operatorFetchJson, pendingState, type OperatorLoadState } from './useOperatorApi'
+import type { OperatorCandidate } from './useOperatorQueue'
 
 export interface NavItem {
  id: string
@@ -67,7 +67,16 @@ export const NAV: NavGroup[] = [
 /** Static structure with i18n KEYS. Use when you resolve labels yourself, or need the raw
  *  shape (routes, honesty class, ids) without a translation context. */
 export function useNav() {
- const queue = useOperatorQueue()
+ const queueState = useState<OperatorLoadState<OperatorCandidate[]>>('live:candidate-queue:state', () =>
+  pendingState(endpointEvidence('/api/memory/candidates?project={project}&status=pending&limit=100', 'candidate-queue', { flag: 'ENGRAM_VNEXT_F_ENABLED' })))
+ const flag = useState<boolean | null>('live:nav:queue-flag', () => null)
+ const flagStarted = useState<boolean>('live:nav:queue-flag-started', () => false)
+ if (import.meta.client && !flagStarted.value) {
+  flagStarted.value = true
+  void operatorFetchJson<{ flags?: Record<string, boolean> }>('/api/flags', undefined, 'nav-queue-flags')
+   .then((result) => { flag.value = result.flags?.ENGRAM_VNEXT_F_ENABLED ?? null })
+   .catch(() => { flag.value = null })
+ }
  const classFor = (kind: string): NavItem['cls'] => {
   if (kind === 'live' || kind === 'empty') return 'live'
   if (kind === 'gated') return 'dormant'
@@ -76,9 +85,13 @@ export function useNav() {
  }
  const resolved = computed(() => NAV.map((group) => ({
   ...group,
-  items: group.items.map((item) => item.id === 'queue'
-   ? { ...item, cls: classFor(queue.loadState.value.kind), evidence: queue.loadState.value.kind === 'gated' ? 'ENGRAM_VNEXT_F_ENABLED' : undefined }
-   : item),
+  items: group.items.map((item) => {
+   if (item.id !== 'queue') return item
+   const kind = queueState.value.kind === 'pending'
+    ? flag.value === true ? 'live' : flag.value === false ? 'gated' : 'pending'
+    : queueState.value.kind
+   return { ...item, cls: classFor(kind), evidence: kind === 'gated' ? 'ENGRAM_VNEXT_F_ENABLED' : undefined }
+  }),
  })))
  return { NAV: resolved, flat: computed(() => resolved.value.flatMap((group) => group.items)) }
 }

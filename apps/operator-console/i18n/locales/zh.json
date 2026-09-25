@@ -2228,20 +2228,335 @@
     }
   },
   "codeExplorer": {
+    "title": "代码浏览器",
+    "subtitle": "查看经服务器授权的不可变源代码视图。代码、图谱事实和源代码片段分别开放。",
+    "refresh": "刷新状态",
+    "evidence": {
+      "title": "技术证据",
+      "unselected": "明确固定服务器视图之前，不显示上下文响应。",
+      "pinned": "每个状态、搜索、图谱和源代码响应都必须与固定视图 {view} 一致。",
+      "binding": "绑定证据",
+      "navigation": "导航",
+      "openerBefore": "打开者（之前）",
+      "openerReadback": "打开者回读",
+      "transition": "转换",
+      "present": "存在",
+      "none": "无",
+      "notNeeded": "不需要",
+      "normalized": "已规范化为空值",
+      "failed": "规范化失败"
+    },
     "context": {
+      "title": "已授权的源代码视图",
+      "lead": "固定视图前，请选择服务器提供的源、工作副本和视图。标签不授予访问权限。",
+      "source": "代码源",
+      "checkout": "工作副本",
+      "view": "视图",
+      "catalog": "已授权的选项",
       "selectionGroup": "仓库、工作副本和索引快照",
+      "choose": "选择代码源 / 工作副本 / 视图",
+      "chooseRepository": "选择仓库",
+      "chooseWorkingCopy": "选择工作副本",
       "unnamedWorkingCopy": "未命名工作副本",
+      "chooseSnapshot": "选择索引快照",
+      "revision": "修订版本",
+      "publishedAt": "发布时间",
+      "selectPrompt": "选择服务器授权的视图。确认前，此文档不会固定视图。",
+      "selectedPrompt": "检查选中的视图，然后明确为此文档固定它。",
+      "refresh": "刷新已授权的选项",
+      "retryReload": "重试重新加载绑定",
+      "pin": "固定选中的视图",
+      "switch": "切换到选中的视图",
+      "pinned": "已由服务器固定",
+      "emptyTitle": "没有可选择的视图。",
+      "emptyBody": "绑定被撤销、过期或不明确时，不显示上下文标签或代码事实。",
+      "pinnedMessage": "此服务器固定仅对当前文档绑定有效。",
+      "pinnedReadout": "已选择的快照：{repository} / {workingCopy} / {snapshot}。",
+      "noViewIndexAvailable": "恰有一个新鲜的在线守护进程目标提供此授权工作副本。它尚无已发布的视图，索引操作不会自动选择视图。",
+      "noViewUnavailable": "此授权工作副本尚无已发布的视图，也没有唯一的新鲜守护进程目标可接收索引请求。",
+      "requestIndex": "索引工作副本",
+      "requestIndexFor": "索引 {source} / {checkout}",
+      "noViewOnlyTitle": "没有已发布的视图。",
+      "noViewOnlyBody": "以下授权工作副本没有可固定的上下文引用。只有唯一的新鲜在线守护进程目标提供该副本时，才会显示索引操作。",
+      "catalogStates": {
+        "idle": "等待请求已授权的选项。",
+        "loading": "正在加载服务器授权的选项。",
+        "ready": "已授权的选项可用。",
+        "empty": "此文档没有可用的授权代码源、工作副本或视图。",
+        "denied": "服务器拒绝访问目录。现有上下文内容未改变。",
+        "unavailable": "服务器未提供可读取的目录。尚未选择上下文。",
+        "offline": "浏览器无法连接服务器以获取授权选项。"
+      },
       "phases": {
-        "secure-origin-required": "需要 HTTPS"
+        "idle": "等待中",
+        "binding": "正在绑定文档",
+        "ready": "已就绪",
+        "collision": "复制的标签页",
+        "ambiguous": "启动状态不明确",
+        "reload-pending": "等待重新加载",
+        "denied": "绑定被拒绝",
+        "secure-origin-required": "需要 HTTPS",
+        "error": "绑定出错"
       },
       "messages": {
-        "secure-origin-required": "当前 HTTP 地址无法建立安全的浏览器绑定。请通过服务器配置的 HTTPS 地址打开控制台并以本人身份登录；索引和读取需要服务器授予的 Source/Checkout 权限。"
+        "idle": "等待建立浏览器绑定。",
+        "binding": "正在建立服务器签发的浏览器绑定。",
+        "ready": "已授权的选项可供明确选择。",
+        "collision": "复制的标签页获得了新的未选择绑定。",
+        "ambiguous": "启动状态不明确；新绑定从未选择状态开始。",
+        "reload-pending": "先前的文档租约仍有效。请等待关闭或到期后重试。",
+        "denied": "服务器拒绝此浏览器绑定。",
+        "error": "服务器无法建立安全的浏览器绑定。如果已使用 HTTPS，请检查浏览器是否支持 crypto.randomUUID。",
+        "secure-origin-required": "当前 HTTP 地址无法建立安全的浏览器绑定。请通过服务器配置的 HTTPS 地址打开控制台并以本人身份登录；索引和读取需要服务器授予的 Source/Checkout 权限。不安全的标志或手动输入的 ID 均不能代替授权。"
+      }
+    },
+    "results": {
+      "title": "调查选中的快照",
+      "unpinned": "此标签页确认快照之前，结构、搜索、关系和源代码均不可用。",
+      "pinned": "以下每项结果均针对 {snapshot} 单独开放。"
+    },
+    "status": {
+      "coverage": "覆盖范围",
+      "indexed": "已索引",
+      "freshness": "新鲜度",
+      "unknown": "未知"
+    },
+    "emptyIndex": {
+      "title": "此视图没有索引记录",
+      "body": "请求由守护进程执行索引。提交请求不等于完成，也不会切换固定的视图。",
+      "action": "请求重新索引"
+    },
+    "unselected": {
+      "title": "不显示上下文结果。",
+      "body": "固定服务器授权的视图以开始代码探索。"
+    },
+    "search": {
+      "title": "搜索",
+      "label": "搜索此不可变视图",
+      "placeholder": "描述一个代码概念",
+      "action": "搜索",
+      "explore": "探索图谱",
+      "source": "读取源代码",
+      "noMatches": "已开放的响应中没有可显示的匹配项。",
+      "evidence": "检索：{mode} · 新鲜度：{freshness} · 置信度：{score}"
+    },
+    "structure": {
+      "title": "结构",
+      "empty": "此快照未开放结构条目。",
+      "continue": "加载更多结构"
+    },
+    "states": {
+      "idle": {
+        "label": "等待中",
+        "structure": "确认快照后才能查看结构。",
+        "search": "服务器固定视图后才能搜索。",
+        "graph": "选择已开放的结果以遍历代码关系。",
+        "source": "选择已开放的结果以查看其精确保存的源代码片段。"
+      },
+      "loading": {
+        "label": "正在加载",
+        "structure": "等待服务器开放有界结构。",
+        "search": "等待服务器开放搜索结果。",
+        "graph": "等待服务器开放有界图谱证据。",
+        "source": "等待服务器开放精确的源代码片段。"
+      },
+      "ready": {
+        "label": "可用",
+        "structure": "已开放的结构描述选中的快照。",
+        "search": "已开放的搜索结果描述固定的视图。",
+        "graph": "已开放的图谱证据仍限制在固定的视图内。",
+        "source": "已开放的源代码内容是固定视图中精确保存的片段。"
+      },
+      "empty": {
+        "label": "无结果",
+        "structure": "选中的快照在本页没有已开放的条目。",
+        "search": "已授权的查询完成，但没有匹配项。",
+        "graph": "没有返回已授权的图谱关系。",
+        "source": "此已开放的结果没有可用的源代码片段。"
+      },
+      "partial": {
+        "label": "部分结果",
+        "structure": "仅可查看已开放的部分结构页面。",
+        "search": "仅可查看已开放的部分搜索结果。",
+        "graph": "遍历达到规定的边界；这不证明不存在更多关系。",
+        "source": "仅可查看此源代码结果中已开放的部分。"
+      },
+      "stale": {
+        "label": "已过期",
+        "structure": "此结构页面带有过期的快照证据。",
+        "search": "此已开放的结果带有过期视图的证据。",
+        "graph": "此图谱结果带有过期视图的证据。",
+        "source": "依赖此先前源代码结果之前，请先刷新。"
+      },
+      "denied": {
+        "label": "访问被拒绝",
+        "structure": "访问权限已变化或被撤销；不显示结构。",
+        "search": "访问权限已变化或被撤销；不显示上下文结果。",
+        "graph": "访问权限已变化或被撤销；不显示图谱事实。",
+        "source": "访问权限已变化或被撤销；不显示源代码正文。"
+      },
+      "unsupported": {
+        "label": "不可用",
+        "structure": "当前快照不支持结构查询。",
+        "search": "服务器要求使用受支持的当前上下文。",
+        "graph": "当前上下文不支持此图谱请求。",
+        "source": "当前上下文不支持此精确源代码读取。"
+      },
+      "timeout": {
+        "label": "已超时",
+        "structure": "服务器未能在期限前开放结构。",
+        "search": "服务器未能在期限前开放搜索结果。",
+        "graph": "有界图谱请求超过期限。",
+        "source": "源代码读取超过期限。"
+      },
+      "offline": {
+        "label": "离线",
+        "structure": "浏览器无法连接服务器以读取结构。",
+        "search": "浏览器无法连接服务器以执行搜索。",
+        "graph": "浏览器无法连接服务器以执行遍历。",
+        "source": "浏览器无法连接服务器以读取源代码。"
+      },
+      "error": {
+        "label": "不可用",
+        "structure": "服务器未返回可读取的结构。",
+        "search": "源代码提供方或开放路径未返回可读取的结果。",
+        "graph": "源代码提供方或开放路径未返回可读取的图谱证据。",
+        "source": "源代码提供方或开放路径未返回可读取的源代码片段。"
+      }
+    },
+    "continuation": {
+      "next": "加载下一页搜索结果",
+      "structure": {
+        "denied": "下一个结构游标不可用，因此未应用新页面。",
+        "unavailable": "无法开放下一页结构。"
+      },
+      "search": {
+        "denied": "下一页游标不可用。它可能已过期、已使用，或与原查询、筛选条件或固定视图不匹配；未应用新页面。",
+        "unavailable": "无法推进下一页游标。服务器未开放新页面。"
+      }
+    },
+    "source": {
+      "title": "精确源代码",
+      "exactPublished": "来自已发布视图的精确保存片段",
+      "copyPath": "复制路径",
+      "copyDigest": "复制摘要",
+      "copyContent": "复制源代码",
+      "copy": {
+        "copied": "已复制到剪贴板。",
+        "unavailable": "此浏览器无法访问剪贴板。"
+      }
+    },
+    "graph": {
+      "title": "图谱证据",
+      "direction": "方向",
+      "relations": "关系类型",
+      "target": "遍历起点",
+      "chooseTarget": "选择已开放的结果",
+      "visual": "图谱",
+      "list": "关系列表",
+      "continue": "加载下一批有界关系",
+      "selection": "选中的图谱证据",
+      "inspectSource": "查看精确源代码",
+      "noPublishedSource": "此图谱节点没有已开放的源代码描述符。未发起源代码请求。",
+      "inspectReferenceSite": "读取已开放的引用位置",
+      "noReferenceSite": "此关系没有已开放的精确引用位置源代码（可能是部分、不明确、不支持或不可用）。",
+      "traversal": "遍历：{stop}",
+      "canvasLabel": "包含 {count} 个节点的有界代码图谱",
+      "edgeLabel": "{from} {relation} {to}",
+      "nodeLabel": "选择图谱节点 {node}",
+      "directions": {
+        "both": "双向",
+        "outgoing": "出向",
+        "incoming": "入向"
+      }
+    },
+    "intent": {
+      "title": "索引请求",
+      "lead": "为固定的视图或符合条件的未索引工作副本请求守护进程工作。接受请求不会选择视图。",
+      "reindex": "请求重新索引",
+      "reconcile": "请求协调",
+      "retry": "重试不可用的请求",
+      "refresh": "检查当前状态",
+      "unpinned": "固定服务器授权的视图，或使用可用的索引工作副本操作，再请求守护进程工作。",
+      "attempt": "守护进程尝试 {attempt}",
+      "states": {
+        "idle": {
+          "label": "等待中",
+          "title": "没有索引请求",
+          "message": "固定源代码视图，或使用可用的索引工作副本操作，再请求守护进程工作。"
+        },
+        "loading": {
+          "label": "正在提交",
+          "title": "正在提交请求",
+          "message": "等待接受请求；接受不等于完成。"
+        },
+        "submitted": {
+          "label": "已提交",
+          "title": "请求已提交",
+          "message": "服务器记录了此请求。尚未确认完成。"
+        },
+        "queued": {
+          "label": "已排队",
+          "title": "已排队等待守护进程",
+          "message": "请求符合守护进程工作条件；当前选择保持不变。"
+        },
+        "acknowledged": {
+          "label": "已确认",
+          "title": "守护进程已确认",
+          "message": "守护进程接受了请求。新视图尚不可用。"
+        },
+        "running": {
+          "label": "正在运行",
+          "title": "正在索引",
+          "message": "守护进程正在工作；当前选择保持不变。"
+        },
+        "completed": {
+          "label": "已完成",
+          "title": "新视图可用",
+          "message": "目录已刷新。新的服务器开放视图可能已可用，但控制台不会自动选择或固定它。"
+        },
+        "unavailable": {
+          "label": "不可用",
+          "title": "守护进程不可用",
+          "message": "守护进程目前无法接收此请求。可用时请重试同一请求。"
+        },
+        "failed": {
+          "label": "失败",
+          "title": "索引失败",
+          "message": "守护进程报告最终失败；当前选择保持不变。"
+        },
+        "error": {
+          "label": "尚未确定",
+          "title": "当前状态未知",
+          "message": "服务器未确认当前请求状态。不假定请求已完成。"
+        },
+        "denied": {
+          "label": "访问被拒绝",
+          "title": "请求被拒绝",
+          "message": "服务器拒绝此请求；当前选择保持不变。"
+        },
+        "offline": {
+          "label": "离线",
+          "title": "离线",
+          "message": "恢复连接后再检查此请求。"
+        }
       }
     }
   },
   "workspace": {
     "title": "工作区",
     "lead": "在同一个固定快照中找到实现，并了解它为何相关。",
+    "grantTitle": "共享代码访问权限",
+    "grantHelp": "作为工作副本的所有者，您可以允许其他账户读取此副本，也可以在此撤销已授予的权限。",
+    "grantCheckout": "要共享的工作副本",
+    "grantReader": "读取者",
+    "grantUnnamed": "未命名工作副本",
+    "grantNoReaders": "没有其他可读取此工作副本的已启用账户。",
+    "grantIssue": "允许读取",
+    "grantIssued": "已授权读取者访问此工作副本。",
+    "grantRevoke": "撤销访问权限",
+    "grantError": "更改访问权限失败。请检查权限并重试。",
+    "grantRetry": "重试",
     "contextTitle": "代码上下文",
     "contextHelp": "选择可读的定位信息。权限和快照由服务器确认。",
     "repository": "仓库",
