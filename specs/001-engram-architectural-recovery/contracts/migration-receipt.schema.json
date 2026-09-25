@@ -948,6 +948,58 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "required": [
+          "migration",
+          "result"
+        ],
+        "properties": {
+          "migration": {
+            "required": [
+              "operation_kind"
+            ],
+            "properties": {
+              "operation_kind": {
+                "const": "historical_adoption"
+              }
+            }
+          },
+          "result": {
+            "const": "completed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "backup_export": {
+            "properties": {
+              "redaction_class": {
+                "const": "sealed_export"
+              }
+            }
+          },
+          "verification": {
+            "properties": {
+              "compatibility_readback": {
+                "properties": {
+                  "status": {
+                    "const": "passed"
+                  }
+                }
+              }
+            }
+          },
+          "rollback": {
+            "properties": {
+              "status": {
+                "const": "rehearsed"
+              }
+            }
+          }
+        }
+      }
     }
   ],
   "$defs": {
