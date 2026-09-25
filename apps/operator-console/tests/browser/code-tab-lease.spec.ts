@@ -218,6 +218,58 @@ test('Code Explorer retains only the same uniquely identified pinned snapshot ac
   expect(pins).toBe(1)
 })
 
+test('Failed and malformed catalog refresh revoke candidate pin authority until successful rebind', async ({ page }) => {
+  let catalogMode: 'ready' | 'failed' | 'malformed' | 'rotated' = 'ready'
+  const pins: unknown[] = []
+  const context = (selection_ref: string) => ({
+    source_ref: 'source', checkout_ref: 'checkout', repository: 'Engram', working_copy: 'desk',
+    indexed_snapshot: { label: 'Snapshot', revision: 'revision', published_at: '2026-09-17T00:00:00Z' },
+    view_ref: 'view', selection_ref, index_intent_available: false,
+  })
+  await page.route('**/api/code/**', async (route: Route) => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/code/tabs/handshake') {
+      await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'resume', reload_token: 'reload' } })
+    } else if (pathname === '/api/code/contexts') {
+      await route.fulfill(catalogMode === 'failed' ? { status: 503 } : { json: catalogMode === 'malformed' ? { contexts: 'bad' } : { contexts: [context(catalogMode === 'rotated' ? 'fresh' : 'old')] } })
+    } else if (pathname === `/api/code/tabs/${TAB_BINDING_ID}/context`) {
+      pins.push(route.request().postDataJSON())
+      await route.fulfill({ status: 204 })
+    } else if (pathname === '/api/code/status') {
+      await route.fulfill({ json: { total_chunks: 0, embedded_chunks: 0, embedding: { coverage: 'none', job_state: null, error_code: null } } })
+    } else if (pathname === '/api/code/structure') {
+      await route.fulfill({ status: 403 })
+    } else {
+      await route.fulfill({ status: 500 })
+    }
+  })
+  await page.goto('/code')
+  await page.getByTestId('code-context-snapshot').selectOption('old')
+  catalogMode = 'failed'
+  await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
+  await expect(page.getByTestId('code-pin-context')).toBeDisabled()
+  await expect(page.getByTestId('code-context-candidate')).toHaveCount(0)
+  await expect(page.getByTestId('code-context-snapshot')).toHaveCount(0)
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))).toBeNull()
+  catalogMode = 'ready'
+  await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
+  await page.getByTestId('code-context-snapshot').selectOption('old')
+  catalogMode = 'malformed'
+  await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
+  await expect(page.getByTestId('code-pin-context')).toBeDisabled()
+  catalogMode = 'rotated'
+  await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
+  await page.getByTestId('code-context-snapshot').selectOption('fresh')
+  await page.getByTestId('code-pin-context').click()
+  expect(pins).toEqual([{ document_proof: DOCUMENT_PROOF, selection_ref: 'fresh' }])
+  await expect(page.getByTestId('code-context-pinned')).toBeVisible()
+  catalogMode = 'failed'
+  await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
+  await expect(page.getByTestId('code-context-pinned')).toBeVisible()
+  await expect(page.getByTestId('code-pin-context')).toBeDisabled()
+  expect(pins).toHaveLength(1)
+})
+
 test('Reload restores only a unique View candidate, not a server pin, and uses the fresh pin authority', async ({ page }) => {
   let rotated = false
   let duplicate = false

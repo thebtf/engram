@@ -75,7 +75,7 @@ test('Grant inventory reports denied, empty and failed page without exposing inc
   state = 'bad-page'
   await page.reload()
   await chooser.locator('summary').click()
-  await expect(chooser.getByRole('alert')).toContainText('Не удалось изменить доступ')
+  await expect(chooser.getByRole('alert')).toContainText('Не удалось загрузить')
   await expect(chooser.getByRole('listitem')).toHaveCount(0)
 })
 
@@ -101,4 +101,78 @@ test('Expired grants are not offered for revocation and labels are rendered as t
   await expect(chooser).not.toContainText('Past reader')
   await expect(chooser).toContainText('<img src=x onerror=alert(1)>')
   await expect(chooser.locator('img')).toHaveCount(0)
+})
+
+test('Successful issue and revoke survive failed inventory refresh without stale revoke authority', async ({ page }) => {
+  let inventoryFails = false
+  let issued = false
+  let revoked = false
+  const mutations: string[] = []
+  await page.route('**/api/code/**', async (route: Route) => {
+    const { pathname } = new URL(route.request().url())
+    const method = route.request().method()
+    if (pathname === '/api/code/grants/choices') {
+      await route.fulfill({ json: { choices: [{ choice_ref: 'choice', repository: 'Engram', working_copy: 'desk' }], targets: [{ target_ref: 'reader', label: 'Reader' }] } })
+    } else if (pathname === '/api/code/grants' && method === 'GET') {
+      await route.fulfill(inventoryFails ? { status: 503 } : { json: { grants: revoked ? [] : issued ? [grant('new', 'Reader')] : [grant('old', 'Reader')] } })
+    } else if (pathname === '/api/code/grants' && method === 'POST') {
+      mutations.push('issue')
+      issued = true
+      inventoryFails = true
+      await route.fulfill({ json: { grant_ref: 'new' } })
+    } else if (pathname === '/api/code/grants/new/revoke' && method === 'POST') {
+      mutations.push('revoke')
+      revoked = true
+      inventoryFails = true
+      await route.fulfill({ status: 204 })
+    } else {
+      await route.fulfill({ status: 500 })
+    }
+  })
+  await page.goto('/code')
+  const chooser = page.getByTestId('code-grant-chooser')
+  await chooser.locator('summary').click()
+  await expect(chooser.getByRole('listitem')).toHaveCount(1)
+  await chooser.getByRole('button', { name: 'Разрешить чтение' }).click()
+  await expect(chooser.getByRole('status').filter({ hasText: 'Читателю открыт доступ' })).toBeVisible()
+  await expect(chooser.getByRole('alert')).toContainText('Не удалось загрузить')
+  await expect(chooser).not.toContainText('Не удалось изменить доступ')
+  await expect(chooser.getByRole('button', { name: /Отозвать доступ Reader/ })).toHaveCount(0)
+  inventoryFails = false
+  await chooser.getByRole('button', { name: 'Повторить' }).click()
+  await expect(chooser.getByRole('button', { name: /Отозвать доступ Reader/ })).toBeEnabled()
+  await chooser.getByRole('button', { name: /Отозвать доступ Reader/ }).click()
+  await expect(chooser.getByRole('status').filter({ hasText: 'Доступ отозван' })).toBeVisible()
+  await expect(chooser.getByRole('alert')).toContainText('Не удалось загрузить')
+  await expect(chooser).not.toContainText('Не удалось изменить доступ')
+  await expect(chooser.getByRole('button', { name: /Отозвать доступ Reader/ })).toHaveCount(0)
+  inventoryFails = false
+  await chooser.getByRole('button', { name: 'Повторить' }).click()
+  await expect(chooser.getByRole('status').filter({ hasText: 'Нет действующих разрешений' })).toBeVisible()
+  expect(mutations).toEqual(['issue', 'revoke'])
+})
+
+test('Valid nonactive grant is ignored, malformed and foreign states reject the whole inventory', async ({ page }) => {
+  let entries: object[] = [{ ...grant('past', 'Past reader'), state: 'revoked' }, { ...grant('expired', 'Expired reader'), state: 'expired' }, grant('current', 'Current reader')]
+  await page.route('**/api/code/**', async (route: Route) => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/code/grants/choices') await route.fulfill({ json: { choices: [], targets: [] } })
+    else if (pathname === '/api/code/grants') await route.fulfill({ json: { grants: entries } })
+    else await route.fulfill({ status: 500 })
+  })
+  await page.goto('/code')
+  const chooser = page.getByTestId('code-grant-chooser')
+  await chooser.locator('summary').click()
+  await expect(chooser.getByRole('listitem')).toHaveCount(1)
+  await expect(chooser).not.toContainText('Past reader')
+  entries = [grant('current', 'Current reader'), { ...grant('foreign', 'Foreign reader'), state: 'unknown' }]
+  await page.reload()
+  await chooser.locator('summary').click()
+  await expect(chooser.getByRole('listitem')).toHaveCount(0)
+  await expect(chooser.getByRole('alert')).toContainText('Не удалось загрузить')
+  entries = [grant('current', 'Current reader'), { ...grant('past', 'Past reader'), state: 'revoked', reader: null }]
+  await page.reload()
+  await chooser.locator('summary').click()
+  await expect(chooser.getByRole('listitem')).toHaveCount(0)
+  await expect(chooser.getByRole('alert')).toContainText('Не удалось загрузить')
 })

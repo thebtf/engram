@@ -1255,23 +1255,27 @@ export function useOperatorCode() {
 
   async function discoverContext(): Promise<void> {
     const payload = bindingPayload()
-    if (payload === null) return
+    const selected = contextCandidate.value
+    contextCandidate.value = null
+    contextCatalog.value = []
+    if (payload === null) { clearPersistedPinCandidate(); return }
     contextState.value = 'loading'
     pending.value = true
     const result = await request('/code/contexts', 'POST', payload)
     pending.value = false
     if (result.kind !== 'success') {
+      clearPersistedPinCandidate()
       contextState.value = result.kind === 'denied' ? 'denied' : result.kind === 'offline' ? 'offline' : 'unavailable'
       return
     }
     const catalog = parseCatalog(result.body)
     if (catalog === null) {
+      clearPersistedPinCandidate()
       contextState.value = 'unavailable'
       return
     }
     contextCatalog.value = catalog
     contextState.value = catalog.length === 0 ? 'empty' : 'ready'
-    const selected = contextCandidate.value
     if (selected !== null) {
       contextCandidate.value = refreshedContext(catalog, selected)
       if (contextCandidate.value === null) clearPersistedPinCandidate()
@@ -1362,7 +1366,7 @@ export function useOperatorCode() {
 
   async function pinContext(): Promise<void> {
     const selected = contextCandidate.value
-    if (binding.value === null || selected === null || pending.value) return
+    if (binding.value === null || contextState.value !== 'ready' || selected === null || pending.value) return
     pending.value = true
     const result = await request(`/code/tabs/${encodeURIComponent(binding.value.tabBindingId)}/context`, 'PUT', {
       document_proof: binding.value.documentProof,

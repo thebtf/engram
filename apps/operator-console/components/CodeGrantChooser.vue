@@ -4,7 +4,7 @@ import { operatorApiUrl } from '../composables/useOperatorApi'
 
 interface CheckoutChoice { choice_ref: string; repository: string; working_copy: string }
 interface TargetChoice { target_ref: string; label: string }
-interface Grant { grant_ref: string; state: 'active'; expires_at: string | null; repository: string; working_copy: string; reader: string }
+interface Grant { grant_ref: string; state: 'active' | 'revoked' | 'expired'; expires_at: string | null; repository: string; working_copy: string; reader: string }
 
 const { t } = useI18n()
 const choices = ref<CheckoutChoice[]>([])
@@ -14,6 +14,8 @@ const target = ref('')
 const grants = ref<Grant[]>([])
 const busy = ref(false)
 const error = ref(false)
+const inventoryError = ref(false)
+const mutation = ref<'issued' | 'revoked' | null>(null)
 const available = ref(false)
 const denied = ref(false)
 const loaded = ref(false)
@@ -37,13 +39,14 @@ function parsePage(value: unknown): { grants: Grant[]; next_ref?: string } {
   for (const entry of entries) {
     if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('Invalid grant')
     const { grant_ref, state, expires_at, repository, working_copy, reader } = entry
-    if (typeof grant_ref !== 'string' || !grant_ref || state !== 'active' || typeof repository !== 'string' || typeof working_copy !== 'string' || typeof reader !== 'string' || typeof expires_at !== 'string' && expires_at !== null || expires_at !== null && !Number.isFinite(Date.parse(expires_at))) throw new Error('Invalid grant')
-    if (expires_at === null || Date.parse(expires_at) > Date.now()) parsed.push({ grant_ref, state, expires_at, repository, working_copy, reader })
+    if (typeof grant_ref !== 'string' || !grant_ref || !['active', 'revoked', 'expired'].includes(state) || typeof repository !== 'string' || typeof working_copy !== 'string' || typeof reader !== 'string' || typeof expires_at !== 'string' && expires_at !== null || expires_at !== null && !Number.isFinite(Date.parse(expires_at))) throw new Error('Invalid grant')
+    if (state === 'active' && (expires_at === null || Date.parse(expires_at) > Date.now())) parsed.push({ grant_ref, state, expires_at, repository, working_copy, reader })
   }
   return { grants: parsed, ...(next === undefined ? {} : { next_ref: next }) }
 }
 
 async function loadGrants() {
+  grants.value = []
   const collected: Grant[] = []
   const seen = new Set<string>()
   const cursors = new Set<string>()
@@ -70,6 +73,7 @@ async function loadGrants() {
 async function refresh() {
   busy.value = true
   error.value = false
+  inventoryError.value = false
   denied.value = false
   try {
     const response = await call('/code/grants/choices', 'GET')
@@ -77,7 +81,7 @@ async function refresh() {
       available.value = false
       choices.value = []
       targets.value = []
-      if (response.status !== 401 && response.status !== 403) error.value = true
+      if (response.status !== 401 && response.status !== 403) inventoryError.value = true
     } else {
       const catalog = await response.json() as { choices: CheckoutChoice[]; targets: TargetChoice[] }
       choices.value = catalog.choices
@@ -87,17 +91,20 @@ async function refresh() {
       if (!targets.value.some(choice => choice.target_ref === target.value)) target.value = targets.value[0]?.target_ref ?? ''
     }
     await loadGrants()
-  } catch { error.value = true; grants.value = [] } finally { loaded.value = true; busy.value = false }
+  } catch { inventoryError.value = true; grants.value = [] } finally { loaded.value = true; busy.value = false }
 }
 
 async function issue() {
   if (!checkout.value || !target.value || busy.value || denied.value) return
   busy.value = true
+  mutation.value = null
   error.value = false
+  inventoryError.value = false
   try {
     const response = await call('/code/grants', 'POST', { choice_ref: checkout.value, target_ref: target.value })
     if (!response.ok) throw new Error('Grant denied')
-    await loadGrants()
+    mutation.value = 'issued'
+    try { await loadGrants() } catch { inventoryError.value = true; grants.value = [] }
   } catch { error.value = true } finally { busy.value = false }
 }
 
@@ -105,10 +112,13 @@ async function revoke(grantRef: string) {
   if (busy.value || !grants.value.some(grant => grant.grant_ref === grantRef)) return
   busy.value = true
   error.value = false
+  mutation.value = null
+  inventoryError.value = false
   try {
     const response = await call(`/code/grants/${encodeURIComponent(grantRef)}/revoke`, 'POST')
     if (!response.ok) throw new Error('Revocation denied')
-    await loadGrants()
+    mutation.value = 'revoked'
+    try { await loadGrants() } catch { inventoryError.value = true; grants.value = [] }
   } catch { error.value = true } finally { busy.value = false }
 }
 
@@ -135,7 +145,7 @@ onMounted(() => { void refresh() })
     </form>
     <p v-if="busy" role="status">{{ t('workspace.grantLoading') }}</p>
     <p v-else-if="denied" role="alert">{{ t('workspace.grantDenied') }}</p>
-    <p v-else-if="loaded && !error && grants.length === 0" role="status">{{ t('workspace.grantEmpty') }}</p>
+    <p v-else-if="loaded && !inventoryError && grants.length === 0" role="status">{{ t('workspace.grantEmpty') }}</p>
     <div v-if="grants.length > 0" class="inventory">
       <h3>{{ t('workspace.grantActive') }}</h3>
       <ul>
@@ -146,7 +156,9 @@ onMounted(() => { void refresh() })
         </li>
       </ul>
     </div>
-    <p v-if="error" role="alert">{{ t('workspace.grantError') }} <button type="button" :disabled="busy" @click="refresh">{{ t('workspace.grantRetry') }}</button></p>
+    <p v-if="mutation !== null" role="status">{{ t(mutation === 'issued' ? 'workspace.grantIssued' : 'workspace.grantRevoked') }}</p>
+    <p v-if="inventoryError" role="alert">{{ t('workspace.grantInventoryUnavailable') }} <button type="button" :disabled="busy" @click="refresh">{{ t('workspace.grantRetry') }}</button></p>
+    <p v-if="error" role="alert">{{ t('workspace.grantError') }}</p>
   </details>
 </template>
 

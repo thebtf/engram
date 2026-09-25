@@ -43,6 +43,10 @@ The [responsive-layout receipt](../../specs/011-operator-code-console/acceptance
   uses the catalog's fresh `selection_ref` and requires a server success response. The owner grant
   list comes from paged `GET /api/code/grants` after reload; opaque `grant_ref` is used only for
   the displayed grant's revoke action, never as operator input or durable browser state.
+- Failed catalog refresh removes candidate pin authority until a fresh successful catalog
+  rebind; an already server-confirmed pin may remain visible in the same binding. After
+  a successful grant issue or revoke, failed inventory refresh preserves the mutation
+  confirmation but hides stale revoke actions until the inventory is verified again.
 - The default D-A path is keyboard-operable, has visible focus and state announcements,
   supports RU/EN task language, and leaves zh navigation intact.
 - A relation is evidence-led. It does not become a manual graph editor, and historical
