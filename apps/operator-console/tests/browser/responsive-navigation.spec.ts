@@ -2,6 +2,37 @@ import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
 
 test.describe('mock interaction-only: responsive navigation and localization', () => {
+  test('queue nav stays active while flags are unknown or unavailable, but shows an explicit off gate', async ({ page }) => {
+    const candidateRequests: string[] = []
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname === '/api/memory/candidates') candidateRequests.push(request.url())
+    })
+    let failFlags: (() => void) | undefined
+    await page.route('**/api/flags', async (route) => {
+      await new Promise<void>((resolve) => { failFlags = resolve })
+      await route.abort()
+    })
+
+    await page.goto('/')
+    const queue = page.locator('#primary-navigation a[href="/queue"]')
+    await expect(queue).toBeVisible()
+    await expect(queue).not.toHaveClass(/tomb/)
+    await expect(queue.locator('.ndot')).toHaveAttribute('data-s', 'active')
+    await expect.poll(() => Boolean(failFlags)).toBe(true)
+    const failedFlags = page.waitForEvent('requestfailed', (request) => new URL(request.url()).pathname === '/api/flags')
+    failFlags!()
+    await failedFlags
+    await expect(queue).not.toHaveClass(/tomb/)
+    await expect(queue.locator('.ndot')).toHaveAttribute('data-s', 'active')
+
+    await page.unroute('**/api/flags')
+    await page.route('**/api/flags', (route) => route.fulfill({ json: { flags: { ENGRAM_VNEXT_F_ENABLED: false } } }))
+    await page.reload()
+    await expect(queue.locator('.ndot')).toHaveAttribute('data-s', 'gated')
+    await expect(queue.locator('.flag')).toHaveText('ENGRAM_VNEXT_F_ENABLED')
+    expect(candidateRequests).toEqual([])
+  })
+
   test('mobile and tablet navigation stays reachable and settings groups stay selectable', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1024 })
     await page.goto('/')
