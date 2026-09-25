@@ -136,7 +136,7 @@ func (application *UCIApplication) SearchCodebase(ctx context.Context, authorize
 
 func (application *UCIApplication) executeSearch(ctx context.Context, authorized uci.AuthorizedContext, spec uci.QuerySpec) (uci.QueryResult, error) {
 	if spec.Continuation != nil {
-		if uci.IsSemanticContinuationToken(*spec.Continuation) {
+		if uci.IsSemanticContinuationToken(*spec.Continuation) || application.semanticService.OwnsLexicalContinuation(*spec.Continuation) {
 			if application.semanticService == nil {
 				return uci.QueryResult{}, errors.New("UCI application semantic continuation service is not configured")
 			}

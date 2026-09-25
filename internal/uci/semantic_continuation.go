@@ -65,6 +65,16 @@ func IsSemanticContinuationToken(token string) bool {
 	return ok
 }
 
+// OwnsLexicalContinuation reports whether a signed lexical cursor was issued by
+// this semantic service. Query still validates its request and ranking bindings.
+func (service *SemanticService) OwnsLexicalContinuation(token string) bool {
+	if service == nil || service.lexical == nil {
+		return false
+	}
+	payload, err := service.lexical.decodeContinuation(token)
+	return err == nil && payload.RetrievalMode == QueryRetrievalLexical
+}
+
 func semanticContinuationToken(cursorRef string) string {
 	return semanticContinuationTokenVersion + "." + cursorRef
 }

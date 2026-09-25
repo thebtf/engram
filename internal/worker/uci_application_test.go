@@ -619,6 +619,92 @@ func TestUCIApplicationOperatorSearchPreservesLexicalContinuation(t *testing.T) 
 	require.Empty(t, semanticFallback.calls)
 }
 
+func TestUCIApplicationOperatorSearchContinuesDegradedLexicalRanking(t *testing.T) {
+	for _, testCase := range []struct {
+		name           string
+		provider       bool
+		vectorCoverage float64
+		reason         string
+	}{
+		{name: "provider unavailable", reason: "vector_provider_unavailable"},
+		{name: "incomplete vector coverage", provider: true, vectorCoverage: 0.5, reason: "vector_coverage_incomplete"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, fixture := newOperatorCodeHTTPTestAdapter(t)
+			authorized, err := fixture.authority.AuthorizeOperatorCode(context.Background(), operatorCodeVerifiedCaller{
+				SessionID: "operator-degraded-search", Context: fixture.ref,
+			})
+			require.NoError(t, err)
+			profile := uci.VectorProfile{
+				ProviderRef: "worker-uci-degraded-search", Model: "worker-uci-degraded-search-model",
+				Dimension: embedding.EmbeddingDim, PreprocessingRevision: "worker-uci-degraded-search/v1",
+				IncludeRelativePath: true,
+			}
+			lexical := &workerUCIApplicationQueryStore{}
+			fallback := &workerUCIApplicationQueryStore{candidates: []uci.QueryCandidate{
+				workerUCIApplicationSemanticCandidate(fixture.ref, "74000000-0000-4000-8000-000000000001", "first", "internal/first.go").Candidate,
+				workerUCIApplicationSemanticCandidate(fixture.ref, "74000000-0000-4000-8000-000000000002", "second", "internal/second.go").Candidate,
+				workerUCIApplicationSemanticCandidate(fixture.ref, "74000000-0000-4000-8000-000000000003", "third", "internal/third.go").Candidate,
+			}}
+			semanticStore := &workerUCIApplicationSemanticStore{
+				candidates:     []uci.SemanticCandidate{workerUCIApplicationSemanticCandidate(fixture.ref, "75000000-0000-4000-8000-000000000001", "semantic", "internal/semantic.go")},
+				vectorCoverage: testCase.vectorCoverage,
+			}
+			var provider uci.SemanticEmbedder
+			if testCase.provider {
+				provider = &workerUCIApplicationEmbedder{model: profile.Model}
+			}
+			statusStore := &workerUCIApplicationStatusStore{snapshot: workerUCIApplicationStatusSnapshot(fixture.ref, uci.IndexCoverageComplete)}
+			application := &UCIApplication{
+				queryService:       uci.NewQueryService(lexical),
+				semanticService:    uci.NewSemanticService(profile, provider, semanticStore, fallback, semanticStore),
+				indexStatusService: uci.NewIndexStatusService(statusStore, &profile),
+			}
+			spec := uci.QuerySpec{
+				ClientSessionID: "operator-code/degraded", Mode: uci.QueryModeFTS,
+				Text: "search", Filter: uci.QueryFilter{PathPrefix: "internal/"}, Order: uci.QueryOrderRelevance, Limit: 1,
+			}
+			first, err := application.SearchOperatorCodebase(context.Background(), authorized, spec)
+			require.NoError(t, err)
+			require.Equal(t, []string{testCase.reason}, first.Retrieval.DegradationReasons)
+			require.Equal(t, uci.QueryRetrievalLexical, first.Retrieval.Mode)
+			require.Equal(t, "symbol:first", (*first.Items)[0].Ref.EntityKey)
+			require.NotNil(t, first.Continuation.Value)
+			require.False(t, uci.IsSemanticContinuationToken(*first.Continuation.Value))
+			statusStore.snapshot = workerUCIApplicationStatusSnapshot(fixture.ref, uci.IndexCoveragePartial)
+			for _, invalid := range []uci.QuerySpec{
+				{ClientSessionID: "other-client", Mode: spec.Mode, Text: spec.Text, Filter: spec.Filter, Order: spec.Order, Limit: spec.Limit, Continuation: first.Continuation.Value},
+				{ClientSessionID: spec.ClientSessionID, Mode: spec.Mode, Text: "different search", Filter: spec.Filter, Order: spec.Order, Limit: spec.Limit, Continuation: first.Continuation.Value},
+			} {
+				_, err := application.SearchOperatorCodebase(context.Background(), authorized, invalid)
+				require.Error(t, err, "cursor must remain bound to the original request")
+			}
+			tampered := *first.Continuation.Value + "x"
+			invalid := spec
+			invalid.Continuation = &tampered
+			_, err = application.SearchOperatorCodebase(context.Background(), authorized, invalid)
+			require.Error(t, err, "tampered cursor must fail integrity validation")
+			secondSpec := spec
+			secondSpec.Continuation = first.Continuation.Value
+			second, err := application.SearchOperatorCodebase(context.Background(), authorized, secondSpec)
+			require.NoError(t, err)
+			require.NoError(t, second.ValidatePreExposure())
+			require.Equal(t, uci.QueryRetrievalLexical, second.Retrieval.Mode)
+			require.Equal(t, "symbol:second", (*second.Items)[0].Ref.EntityKey)
+			require.NotNil(t, second.Continuation.Value)
+			thirdSpec := spec
+			thirdSpec.Continuation = second.Continuation.Value
+			third, err := application.SearchOperatorCodebase(context.Background(), authorized, thirdSpec)
+			require.NoError(t, err)
+			require.Equal(t, "symbol:third", (*third.Items)[0].Ref.EntityKey)
+			require.Nil(t, third.Continuation.Value)
+			require.Empty(t, lexical.calls, "degraded pages must retain semantic-service lexical ranking")
+			require.Len(t, fallback.calls, 3)
+			require.Equal(t, []int{0, 1, 2}, []int{fallback.calls[0].Offset, fallback.calls[1].Offset, fallback.calls[2].Offset})
+		})
+	}
+}
+
 func newWorkerUCIApplicationEmbeddingProvider(t *testing.T, input workerUCIApplicationEmbeddingProviderInput) *httptest.Server {
 	t.Helper()
 	provider := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -1470,10 +1556,11 @@ func (store *workerUCIApplicationQueryStore) SelectCandidates(_ context.Context,
 }
 
 type workerUCIApplicationSemanticStore struct {
-	candidates    []uci.SemanticCandidate
-	calls         []uci.QuerySpec
-	continuations map[string]uci.SemanticContinuation
-	err           error
+	candidates     []uci.SemanticCandidate
+	calls          []uci.QuerySpec
+	continuations  map[string]uci.SemanticContinuation
+	vectorCoverage float64
+	err            error
 }
 
 func (*workerUCIApplicationSemanticStore) LookupCandidateEmbedding(context.Context, uci.AuthorizedContext, uci.VectorProfile, uci.QueryCandidate) ([]float32, bool, error) {
@@ -1496,10 +1583,14 @@ func (store *workerUCIApplicationSemanticStore) SelectHybridCandidates(_ context
 	if end > len(store.candidates) {
 		end = len(store.candidates)
 	}
+	coverage := store.vectorCoverage
+	if coverage == 0 {
+		coverage = 1
+	}
 	return uci.SemanticStoreResult{
 		Candidates:     store.candidates[spec.Offset:end],
 		Coverage:       uci.IndexCoverageComplete,
-		VectorCoverage: 1,
+		VectorCoverage: coverage,
 	}, nil
 }
 
