@@ -40,7 +40,7 @@ const phaseMessage = computed(() => {
   return props.pinned === null ? t('codeExplorer.context.selectedPrompt') : t('codeExplorer.context.pinnedMessage')
 })
 
-watch([() => props.catalog, () => props.candidate, () => props.pinned], () => {
+watch([() => props.catalog, () => props.candidate, () => props.pinned], ([catalog, candidate], [previousCatalog]) => {
   if (selectionDirty.value) return
   const selected = props.candidate ?? props.pinned
   if (selected !== null) {
@@ -50,7 +50,7 @@ watch([() => props.catalog, () => props.candidate, () => props.pinned], () => {
     snapshotRef.value = selected.selectionRef
     return
   }
-  if (repository.value !== '' || workingCopyChosen.value || repositories.value.length !== 1) return
+  if (candidate === null && previousCatalog !== undefined && catalog !== previousCatalog || snapshotRef.value !== '' && !snapshotEntries.value.some((entry) => entry.view?.selectionRef === snapshotRef.value)) snapshotRef.value = ''
   repository.value = repositories.value[0]?.sourceRef ?? ''
   if (workingCopies.value.length === 1) {
     workingCopy.value = workingCopies.value[0]?.checkoutRef ?? ''

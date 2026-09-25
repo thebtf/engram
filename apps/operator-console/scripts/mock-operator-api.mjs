@@ -157,6 +157,7 @@ function codeCatalogResponse() {
           revision: workspace.snapshot.revision,
           published_at: workspace.snapshot.publishedAt,
         },
+        view_ref: `view-${workspace.context.viewId}-${workspace.context.profileId}-${workspace.context.generation}`,
         selection_ref: workspace.selectionRef,
       }),
       index_intent_available: workspace.snapshot === null,

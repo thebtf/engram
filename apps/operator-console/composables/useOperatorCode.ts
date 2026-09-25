@@ -26,6 +26,7 @@ export interface CodeSafeContext {
   checkoutRef: string
   workingCopy: string
   snapshot: CodeSnapshot
+  viewRef: string
   selectionRef: string
 }
 
@@ -228,7 +229,7 @@ type CodeApiResult =
   | { kind: 'error'; status: number }
 
 const RESUME_STORAGE_KEY = 'engram.operator-code.resume.v1'
-const PINNED_CONTEXT_STORAGE_KEY = 'engram.operator-code.pinned-context.v1'
+const PINNED_CONTEXT_STORAGE_KEY = 'engram.operator-code.view-candidate.v2'
 const REQUEST_TIMEOUT_MS = 30_000
 const INDEX_INTENT_STORAGE_KEY = 'engram.operator-code.index-intent.v1'
 const INDEX_INTENT_POLL_DELAY_MS = 1_000
@@ -359,20 +360,22 @@ function parseCatalogEntry(value: unknown): CodeCatalogEntry | null {
   const workingCopy = typeof workingCopyValue === 'string' ? workingCopyValue.trim() : null
   const snapshotValue = Reflect.get(value, 'indexed_snapshot')
   const selectionRefValue = Reflect.get(value, 'selection_ref')
+  const viewRefValue = Reflect.get(value, 'view_ref')
   const indexIntentAvailable = Reflect.get(value, 'index_intent_available')
   const indexSelectionValue = Reflect.get(value, 'index_intent_selection_ref')
   const selectionRef = selectionRefValue === undefined || selectionRefValue === null ? null : text(selectionRefValue)
+  const viewRef = viewRefValue === undefined || viewRefValue === null ? null : text(viewRefValue)
   const indexSelectionRef = indexSelectionValue === undefined || indexSelectionValue === null ? null : text(indexSelectionValue)
   if (sourceRef === null || checkoutRef === null || repository === null || workingCopy === null || typeof indexIntentAvailable !== 'boolean' || (selectionRefValue !== undefined && selectionRefValue !== null && selectionRef === null) || (indexSelectionValue !== undefined && indexSelectionValue !== null && indexSelectionRef === null)) return null
 
   if (snapshotValue === undefined || snapshotValue === null) {
-    if (selectionRef !== null || indexIntentAvailable !== (indexSelectionRef !== null)) return null
+    if (viewRef !== null || selectionRef !== null || indexIntentAvailable !== (indexSelectionRef !== null)) return null
     return { sourceRef, checkoutRef, repository, workingCopy, view: null, indexIntentAvailable, indexIntentTarget: indexSelectionRef === null ? null : { selectionRef: indexSelectionRef } }
   }
 
   const snapshot = parseCatalogSnapshot(snapshotValue)
-  if (snapshot === null || selectionRef === null || indexIntentAvailable || indexSelectionRef !== null) return null
-  return { sourceRef, checkoutRef, repository, workingCopy, view: { sourceRef, checkoutRef, repository, workingCopy, snapshot, selectionRef }, indexIntentAvailable: false, indexIntentTarget: null }
+  if (snapshot === null || viewRef === null || selectionRef === null || indexIntentAvailable || indexSelectionRef !== null) return null
+  return { sourceRef, checkoutRef, repository, workingCopy, view: { sourceRef, checkoutRef, repository, workingCopy, snapshot, viewRef, selectionRef }, indexIntentAvailable: false, indexIntentTarget: null }
 }
 
 function parseCatalog(value: unknown): CodeCatalogEntry[] | null {
@@ -783,7 +786,7 @@ function loadPersistedPinCandidate(): string | null {
 
 function persistPinnedContext(context: CodeSafeContext): boolean {
   try {
-    sessionStorage.setItem(PINNED_CONTEXT_STORAGE_KEY, context.selectionRef)
+    sessionStorage.setItem(PINNED_CONTEXT_STORAGE_KEY, context.viewRef)
     return true
   } catch {
     return false
@@ -1245,15 +1248,8 @@ export function useOperatorCode() {
     return applyTransition(transition, evidence)
   }
 
-  function refreshedContext(catalog: CodeCatalogEntry[], previous: CodeSafeContext, pinned = false): CodeSafeContext | null {
-    const views = catalog.flatMap((entry) => entry.view === null ? [] : [entry.view])
-    const exact = views.find((view) => view.selectionRef === previous.selectionRef)
-    if (exact !== undefined && (!pinned || exact.snapshot.revision === previous.snapshot.revision && exact.snapshot.publishedAt === previous.snapshot.publishedAt)) return exact
-    const matches = views.filter((view) =>
-      previous.snapshot.revision !== null && previous.snapshot.publishedAt !== null
-      && view.repository === previous.repository && view.workingCopy === previous.workingCopy
-      && view.snapshot.label === previous.snapshot.label && view.snapshot.revision === previous.snapshot.revision
-      && view.snapshot.publishedAt === previous.snapshot.publishedAt)
+  function refreshedContext(catalog: CodeCatalogEntry[], previous: CodeSafeContext): CodeSafeContext | null {
+    const matches = catalog.flatMap((entry) => entry.view === null ? [] : [entry.view]).filter((view) => view.viewRef === previous.viewRef)
     return matches.length === 1 ? matches[0] ?? null : null
   }
 
@@ -1276,10 +1272,13 @@ export function useOperatorCode() {
     contextCatalog.value = catalog
     contextState.value = catalog.length === 0 ? 'empty' : 'ready'
     const selected = contextCandidate.value
-    if (selected !== null) contextCandidate.value = refreshedContext(catalog, selected)
+    if (selected !== null) {
+      contextCandidate.value = refreshedContext(catalog, selected)
+      if (contextCandidate.value === null) clearPersistedPinCandidate()
+    }
     const pinned = pinnedContext.value
     if (pinned !== null) {
-      const refreshed = refreshedContext(catalog, pinned, true)
+      const refreshed = refreshedContext(catalog, pinned)
       if (refreshed !== null) {
         pinnedContext.value = refreshed
         persistPinnedContext(refreshed)
@@ -1299,8 +1298,9 @@ export function useOperatorCode() {
   function restorePersistedPinCandidate(): boolean {
     const stored = loadPersistedPinCandidate()
     if (stored === null) return false
-    const selected = contextCatalog.value.flatMap((entry) => entry.view === null ? [] : [entry.view]).find((entry) => entry.selectionRef === stored) ?? null
-    if (selected === null) return false
+    const matches = contextCatalog.value.flatMap((entry) => entry.view === null ? [] : [entry.view]).filter((entry) => entry.viewRef === stored)
+    if (matches.length !== 1) { clearPersistedPinCandidate(); return false }
+    const selected = matches[0]!
     contextCandidate.value = selected
     return true
   }
@@ -1348,7 +1348,7 @@ export function useOperatorCode() {
       restorePersistedPinCandidate()
       const priorPinned = remount?.pinnedContext ?? null
       if (priorPinned !== null) {
-        const pinned = refreshedContext(contextCatalog.value, priorPinned, true)
+        const pinned = refreshedContext(contextCatalog.value, priorPinned)
         if (pinned !== null) {
           contextCandidate.value = pinned
           pinnedContext.value = pinned
