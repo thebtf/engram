@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"encoding/json"
 	"net"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -35,7 +37,28 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 	pb.RegisterEngramServiceServer(fixture, &directDiscoveryFixture{})
 	go func() { _ = fixture.Serve(listener) }()
 	defer fixture.Stop()
-	state, err := os.MkdirTemp("", "ed-")
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		gitDir, err := os.Stat(filepath.Join(root, ".git"))
+		if err == nil && gitDir.IsDir() {
+			if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
+				break
+			}
+		}
+		parent := filepath.Dir(root)
+		if parent == root {
+			t.Fatal("primary repository root not found")
+		}
+		root = parent
+	}
+	scratch := filepath.Join(root, ".agent", "tmp")
+	if err := os.MkdirAll(scratch, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	state, err := os.MkdirTemp(scratch, "ed-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,6 +67,18 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 			t.Error(err)
 		}
 	})
+	if runtime.GOOS == "linux" {
+		probe, err := net.Listen("unix", filepath.Join(state, "probe.sock"))
+		if errors.Is(err, syscall.EOPNOTSUPP) || errors.Is(err, syscall.ENOTSUP) {
+			t.Skipf("AF_UNIX unsupported on test scratch filesystem %s: %v", scratch, err)
+		}
+		if err != nil {
+			t.Fatalf("probe AF_UNIX on test scratch filesystem: %v", err)
+		}
+		if err := probe.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, part := range []string{"home", "appdata", "localappdata", "temp"} {
 		if err := os.Mkdir(filepath.Join(state, part), 0o700); err != nil {
 			t.Fatal(err)
@@ -84,6 +119,10 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 			return
 		}
 		if err := uciStopInstalledAcceptanceDaemon(controlRoot, pid); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := uciWaitInstalledAcceptanceProcessExit(pid, 5*time.Second); err != nil {
 			t.Error(err)
 		}
 	})
