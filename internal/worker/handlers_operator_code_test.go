@@ -162,6 +162,43 @@ func TestOperatorCodeHTTPAdapter_CatalogKeepsWorktreesExplicitAndNoViewUnselecte
 	}
 }
 
+func TestOperatorCodeHTTPAdapter_ViewRefStableOnlyForExactSubjectAndView(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	identity := operatorCodeHTTPTestChoiceIdentity(fixture)
+	entries := fixture.contexts.entries
+	first, ok := adapter.operatorCodeCatalogEntries(identity, entries, nil)
+	require.True(t, ok)
+	require.NotEmpty(t, first[0].ViewRef)
+	require.NotEqual(t, first[0].ViewRef, first[0].SelectionRef)
+
+	entries[0].SourceLabel = "renamed repository"
+	entries[0].CheckoutLabel = "renamed checkout"
+	entries[0].ViewLabel = "renamed view"
+	second, ok := adapter.operatorCodeCatalogEntries(identity, entries, nil)
+	require.True(t, ok)
+	require.Equal(t, first[0].ViewRef, second[0].ViewRef)
+	require.NotEqual(t, first[0].SelectionRef, second[0].SelectionRef)
+
+	changed := *entries[0].Context
+	changed.Generation++
+	entries[0].Context = &changed
+	third, ok := adapter.operatorCodeCatalogEntries(identity, entries, nil)
+	require.True(t, ok)
+	require.NotEqual(t, first[0].ViewRef, third[0].ViewRef)
+	changed.Generation--
+	changed.ViewID = uuid.NewString()
+	entries[0].Context = &changed
+	fourth, ok := adapter.operatorCodeCatalogEntries(identity, entries, nil)
+	require.True(t, ok)
+	require.NotEqual(t, first[0].ViewRef, fourth[0].ViewRef)
+
+	entries[0].Context = &fixture.ref
+	identity.identity.BrowserSubject = auth.BrowserSubjectForUser(identity.identity.BrowserSubject.UserID + 1)
+	fifth, ok := adapter.operatorCodeCatalogEntries(identity, entries, nil)
+	require.True(t, ok)
+	require.NotEqual(t, first[0].ViewRef, fifth[0].ViewRef)
+}
+
 func TestOperatorCodeHTTPAdapter_SearchContinuationStaysServerOwnedAndExactlyBound(t *testing.T) {
 	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
 	internalCursor := "usc1.00000000-0000-4000-8000-000000000001"

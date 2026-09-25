@@ -2425,6 +2425,7 @@ type operatorCodeCatalogEntry struct {
 	SourceRef               string                   `json:"source_ref"`
 	CheckoutRef             string                   `json:"checkout_ref"`
 	IndexedSnapshot         *operatorCodeCatalogView `json:"indexed_snapshot,omitempty"`
+	ViewRef                 string                   `json:"view_ref,omitempty"`
 	SelectionRef            string                   `json:"selection_ref,omitempty"`
 	IndexIntentAvailable    bool                     `json:"index_intent_available"`
 	IndexIntentSelectionRef string                   `json:"index_intent_selection_ref,omitempty"`
@@ -2445,6 +2446,7 @@ func (adapter *OperatorCodeHTTPAdapter) operatorCodeCatalogEntries(identity oper
 	for _, entry := range entries {
 		item := operatorCodeCatalogEntry{Repository: entry.SourceLabel, WorkingCopy: entry.CheckoutLabel, SourceRef: operatorCodeCatalogRef("source", entry.SourceID), CheckoutRef: operatorCodeCatalogRef("checkout", entry.SourceID, entry.CheckoutID)}
 		if entry.Context != nil {
+			item.ViewRef = operatorCodeCatalogRef("view", strconv.FormatInt(identity.identity.BrowserSubject.UserID, 10), entry.Context.SourceID, entry.Context.CheckoutID, entry.Context.ViewID, entry.Context.AnalysisProfileID, strconv.FormatInt(entry.Context.Generation, 10))
 			item.SelectionRef = adapter.operatorCodeContextSelectionRef(identity, *entry.Context)
 			if item.SelectionRef == "" {
 				return nil, false
