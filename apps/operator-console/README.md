@@ -38,8 +38,11 @@ The [responsive-layout receipt](../../specs/011-operator-code-console/acceptance
   branch, device, and snapshot labels are presentation only.
 - A registered checkout without a display name appears as a localized unnamed working copy,
   including when its View is published; the label is never a path or an access grant.
-- A browser must never read local worktree paths, credentials, raw grant references, or
-  a manually supplied context identifier.
+- A browser never reads local worktree paths or credentials and never asks for a manually supplied
+  context identifier. It stores only the non-authorizing `view_ref` for a candidate; each pin
+  uses the catalog's fresh `selection_ref` and requires a server success response. The owner grant
+  list comes from paged `GET /api/code/grants` after reload; opaque `grant_ref` is used only for
+  the displayed grant's revoke action, never as operator input or durable browser state.
 - The default D-A path is keyboard-operable, has visible focus and state announcements,
   supports RU/EN task language, and leaves zh navigation intact.
 - A relation is evidence-led. It does not become a manual graph editor, and historical

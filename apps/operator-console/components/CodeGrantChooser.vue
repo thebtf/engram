@@ -4,17 +4,19 @@ import { operatorApiUrl } from '../composables/useOperatorApi'
 
 interface CheckoutChoice { choice_ref: string; repository: string; working_copy: string }
 interface TargetChoice { target_ref: string; label: string }
-interface Grant { grant_ref: string; state: string }
+interface Grant { grant_ref: string; state: 'active'; expires_at: string | null; repository: string; working_copy: string; reader: string }
 
 const { t } = useI18n()
 const choices = ref<CheckoutChoice[]>([])
 const targets = ref<TargetChoice[]>([])
 const checkout = ref('')
 const target = ref('')
-const issued = ref<Grant | null>(null)
+const grants = ref<Grant[]>([])
 const busy = ref(false)
 const error = ref(false)
 const available = ref(false)
+const denied = ref(false)
+const loaded = ref(false)
 
 async function call(path: string, method: 'GET' | 'POST', body?: object): Promise<Response> {
   if (!window.isSecureContext || typeof crypto.randomUUID !== 'function') throw new Error('Secure browser required')
@@ -26,41 +28,87 @@ async function call(path: string, method: 'GET' | 'POST', body?: object): Promis
   })
 }
 
+function parsePage(value: unknown): { grants: Grant[]; next_ref?: string } {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid inventory')
+  const entries = Reflect.get(value, 'grants')
+  const next = Reflect.get(value, 'next_ref')
+  if (!Array.isArray(entries) || (next !== undefined && (typeof next !== 'string' || !next))) throw new Error('Invalid inventory')
+  const parsed: Grant[] = []
+  for (const entry of entries) {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('Invalid grant')
+    const { grant_ref, state, expires_at, repository, working_copy, reader } = entry
+    if (typeof grant_ref !== 'string' || !grant_ref || state !== 'active' || typeof repository !== 'string' || typeof working_copy !== 'string' || typeof reader !== 'string' || typeof expires_at !== 'string' && expires_at !== null || expires_at !== null && !Number.isFinite(Date.parse(expires_at))) throw new Error('Invalid grant')
+    if (expires_at === null || Date.parse(expires_at) > Date.now()) parsed.push({ grant_ref, state, expires_at, repository, working_copy, reader })
+  }
+  return { grants: parsed, ...(next === undefined ? {} : { next_ref: next }) }
+}
+
+async function loadGrants() {
+  const collected: Grant[] = []
+  const seen = new Set<string>()
+  const cursors = new Set<string>()
+  let next: string | undefined
+  do {
+    const response = await call(`/code/grants${next === undefined ? '' : `?next_ref=${encodeURIComponent(next)}`}`, 'GET')
+    if (response.status === 401 || response.status === 403) { denied.value = true; grants.value = []; return }
+    if (!response.ok) throw new Error('Inventory unavailable')
+    const page = parsePage(await response.json())
+    for (const grant of page.grants) {
+      if (seen.has(grant.grant_ref)) throw new Error('Duplicate grant')
+      seen.add(grant.grant_ref)
+      collected.push(grant)
+    }
+    next = page.next_ref
+    if (next !== undefined) {
+      if (cursors.has(next)) throw new Error('Repeated cursor')
+      cursors.add(next)
+    }
+  } while (next !== undefined)
+  grants.value = collected
+}
+
 async function refresh() {
   busy.value = true
   error.value = false
+  denied.value = false
   try {
     const response = await call('/code/grants/choices', 'GET')
-    if (response.status === 403) { available.value = false; choices.value = []; targets.value = []; return }
-    if (!response.ok) throw new Error('Choices unavailable')
-    const catalog = await response.json() as { choices: CheckoutChoice[]; targets: TargetChoice[] }
-    choices.value = catalog.choices
-    targets.value = catalog.targets
-    available.value = choices.value.length > 0
-    if (!choices.value.some(choice => choice.choice_ref === checkout.value)) checkout.value = choices.value[0]?.choice_ref ?? ''
-    if (!targets.value.some(choice => choice.target_ref === target.value)) target.value = targets.value[0]?.target_ref ?? ''
-  } catch { error.value = true } finally { busy.value = false }
+    if (!response.ok) {
+      available.value = false
+      choices.value = []
+      targets.value = []
+      if (response.status !== 401 && response.status !== 403) error.value = true
+    } else {
+      const catalog = await response.json() as { choices: CheckoutChoice[]; targets: TargetChoice[] }
+      choices.value = catalog.choices
+      targets.value = catalog.targets
+      available.value = choices.value.length > 0
+      if (!choices.value.some(choice => choice.choice_ref === checkout.value)) checkout.value = choices.value[0]?.choice_ref ?? ''
+      if (!targets.value.some(choice => choice.target_ref === target.value)) target.value = targets.value[0]?.target_ref ?? ''
+    }
+    await loadGrants()
+  } catch { error.value = true; grants.value = [] } finally { loaded.value = true; busy.value = false }
 }
 
 async function issue() {
-  if (!checkout.value || !target.value || busy.value || issued.value) return
+  if (!checkout.value || !target.value || busy.value || denied.value) return
   busy.value = true
   error.value = false
   try {
     const response = await call('/code/grants', 'POST', { choice_ref: checkout.value, target_ref: target.value })
     if (!response.ok) throw new Error('Grant denied')
-    issued.value = await response.json() as Grant
+    await loadGrants()
   } catch { error.value = true } finally { busy.value = false }
 }
 
-async function revoke() {
-  if (!issued.value || busy.value) return
+async function revoke(grantRef: string) {
+  if (busy.value || !grants.value.some(grant => grant.grant_ref === grantRef)) return
   busy.value = true
   error.value = false
   try {
-    const response = await call(`/code/grants/${encodeURIComponent(issued.value.grant_ref)}/revoke`, 'POST')
+    const response = await call(`/code/grants/${encodeURIComponent(grantRef)}/revoke`, 'POST')
     if (!response.ok) throw new Error('Revocation denied')
-    issued.value = null
+    await loadGrants()
   } catch { error.value = true } finally { busy.value = false }
 }
 
@@ -68,10 +116,10 @@ onMounted(() => { void refresh() })
 </script>
 
 <template>
-  <details v-if="available || error" class="grant-chooser" data-testid="code-grant-chooser">
+  <details class="grant-chooser" data-testid="code-grant-chooser">
     <summary>{{ t('workspace.grantTitle') }}</summary>
     <p>{{ t('workspace.grantHelp') }}</p>
-    <form v-if="available" @submit.prevent="issue">
+    <form v-if="available && !denied" @submit.prevent="issue">
       <label>{{ t('workspace.grantCheckout') }}
         <select v-model="checkout" :disabled="busy">
           <option v-for="choice in choices" :key="choice.choice_ref" :value="choice.choice_ref">{{ choice.repository }} · {{ choice.working_copy || t('workspace.grantUnnamed') }}</option>
@@ -83,9 +131,21 @@ onMounted(() => { void refresh() })
         </select>
       </label>
       <p v-if="targets.length === 0" role="status">{{ t('workspace.grantNoReaders') }}</p>
-      <button type="submit" :disabled="busy || !!issued || !checkout || !target">{{ t('workspace.grantIssue') }}</button>
+      <button type="submit" :disabled="busy || !checkout || !target">{{ t('workspace.grantIssue') }}</button>
     </form>
-    <p v-if="issued" role="status">{{ t('workspace.grantIssued') }} <button type="button" :disabled="busy" @click="revoke">{{ t('workspace.grantRevoke') }}</button></p>
+    <p v-if="busy" role="status">{{ t('workspace.grantLoading') }}</p>
+    <p v-else-if="denied" role="alert">{{ t('workspace.grantDenied') }}</p>
+    <p v-else-if="loaded && !error && grants.length === 0" role="status">{{ t('workspace.grantEmpty') }}</p>
+    <div v-if="grants.length > 0" class="inventory">
+      <h3>{{ t('workspace.grantActive') }}</h3>
+      <ul>
+        <li v-for="grant in grants" :key="grant.grant_ref">
+          <span class="grant-label">{{ grant.repository }} · {{ grant.working_copy || t('workspace.grantUnnamed') }} — {{ grant.reader }}</span>
+          <span class="grant-expiry">{{ grant.expires_at === null ? t('workspace.grantNoExpiry') : t('workspace.grantExpires', { date: new Date(grant.expires_at).toLocaleString() }) }}</span>
+          <button type="button" :disabled="busy" :aria-label="t('workspace.grantRevokeFor', { reader: grant.reader, workingCopy: grant.working_copy || t('workspace.grantUnnamed') })" @click="revoke(grant.grant_ref)">{{ t('workspace.grantRevoke') }}</button>
+        </li>
+      </ul>
+    </div>
     <p v-if="error" role="alert">{{ t('workspace.grantError') }} <button type="button" :disabled="busy" @click="refresh">{{ t('workspace.grantRetry') }}</button></p>
   </details>
 </template>
@@ -98,4 +158,10 @@ onMounted(() => { void refresh() })
 .grant-chooser select, .grant-chooser button { min-height:44px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface); color:var(--fg); padding:8px; font:inherit; }
 .grant-chooser button { cursor:pointer; font-weight:700; }
 .grant-chooser button:disabled { cursor:not-allowed; opacity:.55; }
+.inventory h3 { font-size:var(--text-sm); }
+.inventory ul { list-style:none; padding:0; margin:0; display:grid; gap:8px; }
+.inventory li { display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px; border-top:1px solid var(--border); padding:12px 0; min-width:0; }
+.grant-label { overflow-wrap:anywhere; flex:1 1 220px; }
+.grant-expiry { color:var(--fg-2); flex:1 1 180px; }
+.grant-chooser :is(button, select, summary):focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 </style>
