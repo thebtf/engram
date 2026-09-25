@@ -11,10 +11,16 @@ import (
 )
 
 type recordingCodeGrantStore struct {
-	issues           []gormdb.BrowserReadGrantIssue
-	ownerIssues      []gormdb.BrowserReadGrantOwnerIssue
-	ownerChoices     []gormdb.BrowserReadGrantOwnerChoice
-	targetChoices    []gormdb.BrowserReadGrantTargetChoice
+	issues         []gormdb.BrowserReadGrantIssue
+	ownerIssues    []gormdb.BrowserReadGrantOwnerIssue
+	ownerChoices   []gormdb.BrowserReadGrantOwnerChoice
+	targetChoices  []gormdb.BrowserReadGrantTargetChoice
+	inventory      []gormdb.BrowserReadGrantOwnerEntry
+	inventoryCalls []struct {
+		issuerUserID           int64
+		issuerPrincipal, after string
+		limit                  int
+	}
 	ownerChoiceCalls []struct {
 		issuerUserID    int64
 		issuerPrincipal string
@@ -57,6 +63,21 @@ func (store *recordingCodeGrantStore) ListOwnerChoices(_ context.Context, issuer
 		issuerPrincipal string
 	}{issuerUserID: issuerUserID, issuerPrincipal: issuerPrincipal})
 	return append([]gormdb.BrowserReadGrantOwnerChoice(nil), store.ownerChoices...), nil
+}
+
+func (store *recordingCodeGrantStore) ListOwnerActive(_ context.Context, issuerUserID int64, principal, after string, limit int) ([]gormdb.BrowserReadGrantOwnerEntry, error) {
+	store.inventoryCalls = append(store.inventoryCalls, struct {
+		issuerUserID           int64
+		issuerPrincipal, after string
+		limit                  int
+	}{issuerUserID, principal, after, limit})
+	rows := make([]gormdb.BrowserReadGrantOwnerEntry, 0, limit)
+	for _, row := range store.inventory {
+		if row.GrantRef > after && len(rows) < limit {
+			rows = append(rows, row)
+		}
+	}
+	return rows, nil
 }
 
 func (store *recordingCodeGrantStore) ListTargetChoices(_ context.Context, _ int64, _ string) ([]gormdb.BrowserReadGrantTargetChoice, error) {

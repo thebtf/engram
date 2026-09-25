@@ -13,6 +13,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,18 +31,19 @@ import (
 )
 
 const (
-	operatorCodeRequestMaxBytes = 32 << 10
-	operatorCodeChoiceLifetime  = 15 * time.Minute
-	operatorCodeSearchDefault   = 10
-	operatorCodeSearchMax       = 50
-	operatorCodeSearchMaxText   = 16 << 10
-	operatorCodeReadDefault     = 8_192
-	operatorCodeReadMax         = 8_192
-	operatorCodeGraphMaxDepth   = 8
-	operatorCodeGraphMaxVisited = 5_000
-	operatorCodeGraphMaxNodes   = 200
-	operatorCodeGraphMaxEdges   = 400
-	operatorCodeGraphMaxWaitMS  = int64(30_000)
+	operatorCodeRequestMaxBytes        = 32 << 10
+	operatorCodeChoiceLifetime         = 15 * time.Minute
+	operatorCodeGrantInventoryPageSize = 20
+	operatorCodeSearchDefault          = 10
+	operatorCodeSearchMax              = 50
+	operatorCodeSearchMaxText          = 16 << 10
+	operatorCodeReadDefault            = 8_192
+	operatorCodeReadMax                = 8_192
+	operatorCodeGraphMaxDepth          = 8
+	operatorCodeGraphMaxVisited        = 5_000
+	operatorCodeGraphMaxNodes          = 200
+	operatorCodeGraphMaxEdges          = 400
+	operatorCodeGraphMaxWaitMS         = int64(30_000)
 )
 
 // OperatorCodeHTTPAdapter is the browser-only HTTP boundary for the UCI code
@@ -72,6 +74,7 @@ type operatorCodeGrantReader interface {
 // display labels. The adapter never derives a principal or tuple from browser input.
 type operatorCodeGrantOnboardingApplication interface {
 	ListOwnerChoices(context.Context, auth.Identity) ([]gormdb.BrowserReadGrantOwnerChoice, error)
+	ListOwnerActive(context.Context, auth.Identity, string, int) ([]gormdb.BrowserReadGrantOwnerEntry, error)
 	ListTargetChoices(context.Context, auth.Identity) ([]gormdb.BrowserReadGrantTargetChoice, error)
 	IssueOnboarding(context.Context, auth.Identity, IssueOnboardingCodeGrantInput) (gormdb.BrowserReadGrant, error)
 	SetWorkingCopyLabel(context.Context, auth.Identity, string, string) (gormdb.BrowserReadGrantOwnerChoice, error)
@@ -921,6 +924,54 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGrantChoices(w http.ResponseWriter
 		return
 	}
 	writeJSON(w, operatorCodeOwnerChoicesResponse{Choices: ownerChoices, Targets: targetChoices})
+}
+
+// HandleGrantInventory exposes only effective grants of the authenticated checkout owner.
+func (adapter *OperatorCodeHTTPAdapter) HandleGrantInventory(w http.ResponseWriter, r *http.Request) {
+	if r == nil || r.URL == nil || r.Method != http.MethodGet || !operatorCodeEmptyBody(r) || len(r.Header.Values(operatorCodeRequestIDHeader)) != 1 {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return
+	}
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil || len(query) > 1 || (len(query) == 1 && (len(query["next_ref"]) != 1 || !operatorCodeChooserToken(query.Get("next_ref")))) {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return
+	}
+	identity, ok := adapter.decodeIdentity(w, r, "operator-code-grant-inventory")
+	if !ok {
+		return
+	}
+	if adapter.onboarding == nil {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return
+	}
+	var after string
+	if len(query) != 0 {
+		fields, valid := adapter.operatorCodeOpaqueFields(identity, query.Get("next_ref"), "grant-page", 1)
+		if !valid || !operatorCodeUUID(fields[0]) {
+			operatorCodeWriteBodyless(w, http.StatusBadRequest)
+			return
+		}
+		after = fields[0]
+	}
+	rows, err := adapter.onboarding.ListOwnerActive(auditcontext.WithSourceSession(r.Context(), identity.sessionID), identity.identity, after, operatorCodeGrantInventoryPageSize+1)
+	if err != nil {
+		operatorCodeWriteBodyless(w, http.StatusForbidden)
+		return
+	}
+	response := operatorCodeGrantInventoryResponse{Grants: make([]operatorCodeGrantInventoryEntry, 0, len(rows))}
+	if len(rows) > operatorCodeGrantInventoryPageSize {
+		rows = rows[:operatorCodeGrantInventoryPageSize]
+		response.NextRef = adapter.operatorCodeOpaqueRef(identity, "grant-page", rows[len(rows)-1].GrantRef)
+		if response.NextRef == "" {
+			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+			return
+		}
+	}
+	for _, row := range rows {
+		response.Grants = append(response.Grants, operatorCodeGrantInventoryEntry{GrantRef: row.GrantRef, State: gormdb.BrowserReadGrantActive, ExpiresAt: row.ExpiresAt, Repository: row.Repository, WorkingCopy: row.WorkingCopy, Reader: row.Reader})
+	}
+	writeJSON(w, response)
 }
 
 // HandleGrantIssue issues an exact owner's selected checkout to a selected enabled reader.
@@ -2509,6 +2560,20 @@ func (adapter *OperatorCodeHTTPAdapter) operatorCodeOwnerChoiceDTOs(identity ope
 		result = append(result, item)
 	}
 	return result
+}
+
+type operatorCodeGrantInventoryEntry struct {
+	GrantRef    string                       `json:"grant_ref"`
+	State       gormdb.BrowserReadGrantState `json:"state"`
+	ExpiresAt   *time.Time                   `json:"expires_at"`
+	Repository  string                       `json:"repository"`
+	WorkingCopy string                       `json:"working_copy"`
+	Reader      string                       `json:"reader"`
+}
+
+type operatorCodeGrantInventoryResponse struct {
+	Grants  []operatorCodeGrantInventoryEntry `json:"grants"`
+	NextRef string                            `json:"next_ref,omitempty"`
 }
 
 type operatorCodeGrantResponse struct {

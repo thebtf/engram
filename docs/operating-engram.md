@@ -238,6 +238,10 @@ Chooser references are AES-GCM sealed for the authenticated browser session with
 
 Catalog entries carry stable, presentation-only `source_ref` and `checkout_ref` keys for the Repository and Working copy selectors. Display labels may repeat or be empty; they never identify a choice or authorize an action. Only that entry's `index_intent_selection_ref` requests its first index, and only its published `selection_ref` pins a View for search, graph, and source. These grouping keys do not grant access or replace the tab-bound server authorization.
 
+Each currently allowed published View entry also carries `view_ref`, a stable subject-bound presentation key derived from its exact Source, Checkout, View, Profile, and generation. It survives label and chooser-token rotation, but it never authorizes pinning: the browser must use a freshly issued `selection_ref` and current tab document proof. A no-View checkout has no `view_ref`.
+
+The persisted checkout owner can list effective active, unexpired grants through `GET /api/code/grants` without a client-supplied owner or project identifier. The response is `{ "grants": [{ "grant_ref": "...", "state": "active", "expires_at": null, "repository": "...", "working_copy": "...", "reader": "..." }], "next_ref": "..." }`; `next_ref` is omitted on the last page. Fetch subsequent pages with `?next_ref=<returned-token>`. Each page has at most 20 grants, and the continuation is sealed to the authenticated subject and browser session for 15 minutes. After reload, request a fresh inventory and revoke using the listed `grant_ref` via `POST /api/code/grants/{grant_ref}/revoke`; the server rechecks current persisted ownership and audits the transition. Grants for other owners, disabled readers, unavailable checkouts, revoked grants, and expired grants are excluded.
+
 ### Verify F1–F7 on the installed components
 
 Use an authorized disposable repository or agreed test corpus. Set expected answers before querying, and record the installed component identities above with observations; keep secrets and private source out of the record. An independent operator should follow these steps without private chat guidance.

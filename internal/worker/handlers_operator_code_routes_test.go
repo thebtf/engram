@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -537,6 +538,7 @@ func TestOperatorCodeRoutesExposeWorkspaceJourneyBoundary(t *testing.T) {
 		{http.MethodPost, "/api/code/graph"},
 		{http.MethodPost, "/api/code/source"},
 		{http.MethodGet, "/api/code/grants/choices"},
+		{http.MethodGet, "/api/code/grants"},
 		{http.MethodPatch, "/api/code/grants/choices/{choice_ref}"},
 		{http.MethodPost, "/api/code/grants"},
 		{http.MethodPost, "/api/code/grants/{grant_ref}/revoke"},
@@ -616,6 +618,81 @@ func TestOperatorCodeRoutesDelegateStructureAndOwnerOnboarding(t *testing.T) {
 	nonOwnerRequest = nonOwnerRequest.WithContext(auth.WithIdentity(nonOwnerRequest.Context(), auth.Session("admin")))
 	service.router.ServeHTTP(nonOwner, nonOwnerRequest)
 	require.Equal(t, http.StatusForbidden, nonOwner.Code, nonOwner.Body.String())
+}
+
+func TestOperatorCodeRoutes_OwnerGrantInventorySurvivesReload(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	grants := &recordingCodeGrantStore{}
+	for i := 1; i <= operatorCodeGrantInventoryPageSize+1; i++ {
+		grants.inventory = append(grants.inventory, gormstore.BrowserReadGrantOwnerEntry{
+			GrantRef: "60000000-0000-4000-8000-" + fmt.Sprintf("%012d", i), Repository: "Engram", WorkingCopy: "Worktree", Reader: "reader@example.test",
+		})
+	}
+	adapter.onboarding = &CodeGrantApplication{grants: grants}
+	service := newOperatorCodeRouteTestService(adapter)
+	call := func(path, session string, identity auth.Identity) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set(operatorCodeRequestIDHeader, "inventory-request")
+		request.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: session})
+		request = request.WithContext(auth.WithIdentity(request.Context(), identity))
+		service.router.ServeHTTP(recorder, request)
+		return recorder
+	}
+	first := call("/api/code/grants", "browser-session-41", fixture.identity)
+	require.Equal(t, http.StatusOK, first.Code, first.Body.String())
+	var result operatorCodeGrantInventoryResponse
+	require.NoError(t, json.Unmarshal(first.Body.Bytes(), &result))
+	require.Len(t, result.Grants, operatorCodeGrantInventoryPageSize)
+	require.NotEmpty(t, result.NextRef)
+	require.Contains(t, first.Body.String(), `"expires_at":null`)
+	require.NotContains(t, first.Body.String(), `"subject_user_id"`)
+	require.NotContains(t, first.Body.String(), `"source_id"`)
+	require.Equal(t, int64(fixture.identity.BrowserSubject.UserID), grants.inventoryCalls[0].issuerUserID)
+
+	next := call("/api/code/grants?next_ref="+result.NextRef, "browser-session-41", fixture.identity)
+	require.Equal(t, http.StatusOK, next.Code, next.Body.String())
+	result = operatorCodeGrantInventoryResponse{}
+	require.NoError(t, json.Unmarshal(next.Body.Bytes(), &result))
+	require.Len(t, result.Grants, 1)
+	require.Empty(t, result.NextRef)
+	require.Equal(t, grants.inventory[operatorCodeGrantInventoryPageSize].GrantRef, result.Grants[0].GrantRef)
+
+	otherIdentity := fixture.identity
+	otherIdentity.BrowserSubject = auth.BrowserSubjectForUser(fixture.identity.BrowserSubject.UserID + 1)
+	for _, denied := range []*httptest.ResponseRecorder{
+		call("/api/code/grants?next_ref="+grants.inventory[0].GrantRef, "browser-session-41", fixture.identity),
+		call("/api/code/grants?next_ref="+firstNextRef(t, first), "different-session", fixture.identity),
+		call("/api/code/grants?next_ref="+firstNextRef(t, first), "browser-session-41", auth.Session("admin")),
+		call("/api/code/grants?next_ref="+firstNextRef(t, first), "browser-session-41", otherIdentity),
+		call("/api/code/grants?next_ref="+firstNextRef(t, first)+"&next_ref=other", "browser-session-41", fixture.identity),
+		call("/api/code/grants?owner=foreign", "browser-session-41", fixture.identity),
+	} {
+		require.NotEqual(t, http.StatusOK, denied.Code)
+		require.Empty(t, denied.Body.String())
+	}
+	adapter.now = func() time.Time { return time.Now().UTC().Add(operatorCodeChoiceLifetime + time.Minute) }
+	expired := call("/api/code/grants?next_ref="+firstNextRef(t, first), "browser-session-41", fixture.identity)
+	require.Equal(t, http.StatusBadRequest, expired.Code)
+	require.Empty(t, expired.Body.String())
+	adapter.now = func() time.Time { return time.Now().UTC() }
+
+	ref := grants.inventory[0].GrantRef
+	revoke := httptest.NewRequest(http.MethodPost, "/api/code/grants/"+ref+"/revoke", nil)
+	revoke.Header.Set(operatorCodeRequestIDHeader, "reloaded-revoke")
+	revoke.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: "different-session"})
+	revoke = revoke.WithContext(auth.WithIdentity(revoke.Context(), fixture.identity))
+	revoked := httptest.NewRecorder()
+	service.router.ServeHTTP(revoked, revoke)
+	require.Equal(t, http.StatusOK, revoked.Code, revoked.Body.String())
+	require.Equal(t, ref, grants.revokes[0].grantRef)
+}
+
+func firstNextRef(t *testing.T, response *httptest.ResponseRecorder) string {
+	t.Helper()
+	var result operatorCodeGrantInventoryResponse
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &result))
+	return result.NextRef
 }
 
 type operatorCodeRouteTestCalls struct {

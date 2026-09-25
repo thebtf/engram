@@ -1884,6 +1884,7 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/code/graph", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleGraph))
 		r.Post("/api/code/source", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleVersionedRead))
 		r.Post("/api/code/contexts", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleContexts))
+		r.Get("/api/code/grants", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleGrantInventory))
 		r.Get("/api/code/grants/choices", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleGrantChoices))
 		r.Patch("/api/code/grants/choices/{choice_ref}", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleGrantLabel))
 		r.Post("/api/code/grants", s.operatorCodeRoute((*OperatorCodeHTTPAdapter).HandleGrantIssue))

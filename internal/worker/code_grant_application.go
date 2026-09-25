@@ -16,6 +16,7 @@ type codeGrantStore interface {
 	Issue(context.Context, gormdb.BrowserReadGrantIssue) (gormdb.BrowserReadGrant, error)
 	IssueOwnerChoice(context.Context, gormdb.BrowserReadGrantOwnerIssue) (gormdb.BrowserReadGrant, error)
 	ListOwnerChoices(context.Context, int64, string) ([]gormdb.BrowserReadGrantOwnerChoice, error)
+	ListOwnerActive(context.Context, int64, string, string, int) ([]gormdb.BrowserReadGrantOwnerEntry, error)
 	ListTargetChoices(context.Context, int64, string) ([]gormdb.BrowserReadGrantTargetChoice, error)
 	SetOwnerChoiceLabel(context.Context, int64, string, string, string) (gormdb.BrowserReadGrantOwnerChoice, error)
 	Revoke(context.Context, int64, string, string) (gormdb.BrowserReadGrant, error)
@@ -82,6 +83,18 @@ func (a *CodeGrantApplication) ListOwnerChoices(ctx context.Context, issuer auth
 		return nil, err
 	}
 	return a.grants.ListOwnerChoices(ctx, issuerSubject.UserID, issuerSubject.Principal)
+}
+
+// ListOwnerActive resolves inventory only for the persisted owner of effective grants.
+func (a *CodeGrantApplication) ListOwnerActive(ctx context.Context, issuer auth.Identity, after string, limit int) ([]gormdb.BrowserReadGrantOwnerEntry, error) {
+	subject, ok := issuer.SessionBrowserSubject()
+	if !ok {
+		return nil, errCodeGrantCallerDenied
+	}
+	if err := a.requireStore(); err != nil {
+		return nil, err
+	}
+	return a.grants.ListOwnerActive(ctx, subject.UserID, subject.Principal, after, limit)
 }
 
 // ListTargetChoices returns enabled persisted recipients only for an exact owner.

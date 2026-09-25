@@ -96,6 +96,7 @@ func TestOperatorCodeHTTPAdapter_ReleasesFiveBoundEndpoints(t *testing.T) {
 				require.Contains(t, body, `"repository":"Engram"`)
 				require.Contains(t, body, `"working_copy":"Studio workstation · release candidate"`)
 				require.Contains(t, body, `"selection_ref":"`)
+				require.Contains(t, body, `"view_ref":"`)
 				for _, forbidden := range []string{operatorCodeHTTPTestSourceID, operatorCodeHTTPTestCheckoutID, operatorCodeHTTPTestViewID, "proof-current", "grant_ref", "nonce", "digest"} {
 					require.NotContains(t, body, forbidden)
 				}
@@ -149,6 +150,9 @@ func TestOperatorCodeHTTPAdapter_CatalogKeepsWorktreesExplicitAndNoViewUnselecte
 	var catalog operatorCodeContextsResponse
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &catalog))
 	require.Len(t, catalog.Contexts, 4)
+	require.Empty(t, catalog.Contexts[2].ViewRef)
+	require.NotEmpty(t, catalog.Contexts[0].ViewRef)
+	require.NotEqual(t, catalog.Contexts[0].ViewRef, catalog.Contexts[1].ViewRef)
 	require.Equal(t, catalog.Contexts[0].SourceRef, catalog.Contexts[1].SourceRef)
 	require.NotEqual(t, catalog.Contexts[0].SourceRef, catalog.Contexts[3].SourceRef)
 	for i := 0; i < len(catalog.Contexts); i++ {
@@ -179,6 +183,21 @@ func TestOperatorCodeHTTPAdapter_ViewRefStableOnlyForExactSubjectAndView(t *test
 	require.Equal(t, first[0].ViewRef, second[0].ViewRef)
 	require.NotEqual(t, first[0].SelectionRef, second[0].SelectionRef)
 
+	reloaded := identity
+	reloaded.sessionID = "another-browser-session"
+	afterReload, ok := adapter.operatorCodeCatalogEntries(reloaded, entries, nil)
+	require.True(t, ok)
+	require.Equal(t, first[0].ViewRef, afterReload[0].ViewRef)
+	require.NotEqual(t, first[0].SelectionRef, afterReload[0].SelectionRef)
+	request := operatorCodeHTTPTestRequest(t, `{"document_proof":"proof-current","selection_ref":"`+first[0].ViewRef+`"}`, fixture.identity)
+	path := chi.NewRouteContext()
+	path.URLParams.Add("tab_binding_id", operatorCodeHTTPTestBindingID)
+	request = request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, path))
+	rejected := httptest.NewRecorder()
+	adapter.HandlePin(rejected, request)
+	require.Equal(t, http.StatusBadRequest, rejected.Code)
+	require.Empty(t, fixture.binding.pinnedTo)
+
 	changed := *entries[0].Context
 	changed.Generation++
 	entries[0].Context = &changed
@@ -191,6 +210,13 @@ func TestOperatorCodeHTTPAdapter_ViewRefStableOnlyForExactSubjectAndView(t *test
 	fourth, ok := adapter.operatorCodeCatalogEntries(identity, entries, nil)
 	require.True(t, ok)
 	require.NotEqual(t, first[0].ViewRef, fourth[0].ViewRef)
+
+	changed.ViewID = fixture.ref.ViewID
+	changed.AnalysisProfileID = uuid.NewString()
+	entries[0].Context = &changed
+	profile, ok := adapter.operatorCodeCatalogEntries(identity, entries, nil)
+	require.True(t, ok)
+	require.NotEqual(t, first[0].ViewRef, profile[0].ViewRef)
 
 	entries[0].Context = &fixture.ref
 	identity.identity.BrowserSubject = auth.BrowserSubjectForUser(identity.identity.BrowserSubject.UserID + 1)
@@ -1116,6 +1142,11 @@ type operatorCodeGrantBreadcrumbApplication struct {
 }
 
 func (application *operatorCodeGrantBreadcrumbApplication) ListOwnerChoices(ctx context.Context, _ auth.Identity) ([]gormdb.BrowserReadGrantOwnerChoice, error) {
+	application.sessions = append(application.sessions, auditcontext.SourceSession(ctx))
+	return nil, nil
+}
+
+func (application *operatorCodeGrantBreadcrumbApplication) ListOwnerActive(ctx context.Context, _ auth.Identity, _ string, _ int) ([]gormdb.BrowserReadGrantOwnerEntry, error) {
 	application.sessions = append(application.sessions, auditcontext.SourceSession(ctx))
 	return nil, nil
 }

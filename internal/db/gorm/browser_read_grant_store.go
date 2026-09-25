@@ -83,6 +83,66 @@ type BrowserReadGrantOwnerIssue struct {
 	ExpiresAt       *time.Time
 }
 
+// BrowserReadGrantOwnerEntry is an effective grant with presentation-only labels.
+type BrowserReadGrantOwnerEntry struct {
+	GrantRef    string     `gorm:"column:grant_ref"`
+	ExpiresAt   *time.Time `gorm:"column:expires_at"`
+	Repository  string     `gorm:"column:repository"`
+	WorkingCopy string     `gorm:"column:working_copy"`
+	Reader      string     `gorm:"column:reader"`
+}
+
+const browserReadGrantInventoryPageMax = 50
+
+// ListOwnerActive lists effective grants for checkouts still owned by the exact
+// persisted principal. after is an internal keyset position, never an authority.
+func (s *BrowserReadGrantStore) ListOwnerActive(ctx context.Context, issuerUserID int64, issuerPrincipal, after string, limit int) ([]BrowserReadGrantOwnerEntry, error) {
+	if err := validateBrowserReadGrantIssuer(ctx, issuerUserID, issuerPrincipal); err != nil {
+		return nil, err
+	}
+	if limit < 1 || limit > browserReadGrantInventoryPageMax || (after != "" && validateUCIUUID("grant_ref", after) != nil) {
+		return nil, ErrBrowserReadGrantDenied
+	}
+	if err := s.requireDB("list owner grants"); err != nil {
+		return nil, err
+	}
+	if err := loadEnabledBrowserGrantUser(ctx, s.db, issuerUserID); err != nil {
+		return nil, err
+	}
+	rows := make([]BrowserReadGrantOwnerEntry, 0)
+	err := s.db.WithContext(ctx).Raw(`
+		SELECT browser_grant.grant_ref, browser_grant.expires_at,
+			source.display_name AS repository,
+			COALESCE(checkout.display_name, '') AS working_copy,
+			reader.email AS reader
+		FROM browser_read_grants AS browser_grant
+		JOIN sources AS source ON source.source_id = browser_grant.source_id AND source.auth_realm = browser_grant.auth_realm
+		JOIN ci_checkouts AS checkout ON checkout.checkout_id = browser_grant.checkout_id AND checkout.source_id = browser_grant.source_id
+		JOIN users AS reader ON reader.id = browser_grant.subject_user_id
+		WHERE checkout.owner_principal = ? AND source.state = ?
+			AND checkout.state IN (?, ?, ?) AND reader.disabled = FALSE
+			AND browser_grant.state = ? AND (browser_grant.expires_at IS NULL OR browser_grant.expires_at > ?)
+			AND browser_grant.grant_ref > ?::uuid
+		ORDER BY browser_grant.grant_ref ASC LIMIT ?
+	`, issuerPrincipal, UCISourceActive, UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp, BrowserReadGrantActive, time.Now().UTC(), uuidOrZero(after), limit).Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("browser read grant owner inventory: %w", err)
+	}
+	for _, row := range rows {
+		if validateUCIUUID("grant_ref", row.GrantRef) != nil || !validUCIContextDisplayLabel(row.Repository) || !validBrowserCodeCheckoutDisplayLabel(row.WorkingCopy) || !validUCIContextDisplayLabel(row.Reader) {
+			return nil, ErrBrowserReadGrantDenied
+		}
+	}
+	return rows, nil
+}
+
+func uuidOrZero(value string) string {
+	if value == "" {
+		return "00000000-0000-0000-0000-000000000000"
+	}
+	return value
+}
+
 // BrowserReadGrantStore is the only persistence owner for browser code-read grants.
 type BrowserReadGrantStore struct {
 	db *gorm.DB
