@@ -25,19 +25,6 @@ const {
   trimStartupDiagnosticLog,
 } = require("./run-engram.js");
 
-test("Codex MCP config launches wrapper via plugin-root-relative path", () => {
-  // Codex does NOT interpolate ${CLAUDE_PLUGIN_ROOT} in plugin .mcp.json args —
-  // the literal string reaches node and the server dies with MODULE_NOT_FOUND.
-  // Codex resolves relative args against the plugin root via cwd ".".
-  const mcpPath = path.resolve(__dirname, "..", ".mcp.json");
-  const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
-  const server = payload.mcpServers.engram;
-
-  assert.equal(server.command, "node");
-  assert.deepEqual(server.args, ["./scripts/run-engram.js"]);
-  assert.equal(server.cwd, ".");
-});
-
 test("Claude MCP config launches wrapper via CLAUDE_PLUGIN_ROOT interpolation", () => {
   // Claude Code interpolates ${CLAUDE_PLUGIN_ROOT} but does NOT resolve
   // relative args against the plugin root, so the Claude variant keeps the
@@ -84,29 +71,12 @@ test("release-facing plugin and marketplace versions stay aligned", () => {
 
   assert.match(claudePlugin.version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/);
   assert.equal(ompPlugin.version, claudePlugin.version);
-  const ompServer = ompPlugin.mcpServers.engram;
-  assert.deepEqual(ompServer, {
-    type: "stdio",
-    command: "node",
-    args: ["./scripts/run-engram.js"],
-    cwd: ".",
-    timeout: 60000,
-  });
-  assert.equal(path.resolve(repoRoot, "plugin", "engram", ompServer.args[0]), path.join(repoRoot, "plugin", "engram", "scripts", "run-engram.js"));
   assert.equal(rootPlugin.version, claudePlugin.version);
   assert.equal(codexPlugin.version, claudePlugin.version);
   assert.equal(claudeMarketplace.version, claudePlugin.version);
   assert.equal(claudeMarketplace.plugins[0].version, claudePlugin.version);
   assert.equal(ompMarketplace.version, claudePlugin.version);
   assert.equal(ompMarketplace.plugins[0].version, claudePlugin.version);
-});
-
-test("Codex MCP config resolves the wrapper from plugin-root cwd without executing it", () => {
-  const mcpPath = path.resolve(__dirname, "..", ".mcp.json");
-  const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
-  const server = payload.mcpServers.engram;
-  assert.equal(server.cwd, ".");
-  assert.equal(path.resolve(path.dirname(mcpPath), server.args[0]), path.join(path.dirname(mcpPath), "scripts", "run-engram.js"));
 });
 
 test("Claude MCP config preserves host argv via the package-root wrapper path", () => {

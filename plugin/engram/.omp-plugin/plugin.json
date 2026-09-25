@@ -13,9 +13,8 @@
       "type": "stdio",
       "command": "node",
       "args": [
-        "./scripts/run-engram.js"
+        "${OMP_PLUGIN_ROOT}/scripts/run-engram.js"
       ],
-      "cwd": ".",
       "timeout": 60000
     }
   }

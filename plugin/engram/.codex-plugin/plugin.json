@@ -15,7 +15,7 @@
     "postgresql"
   ],
   "skills": "./skills/",
-  "mcpServers": "./.mcp.json",
+  "mcpServers": "./codex.mcp.json",
   "interface": {
     "displayName": "Engram",
     "shortDescription": "Persistent shared memory for Codex workspaces",
