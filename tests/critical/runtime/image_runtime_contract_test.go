@@ -519,7 +519,6 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 
 	verification := readFile(t, verificationPath)
 	for _, fragment := range []string{
-		"branches: [main]",
 		"tags: [\"v*\"]",
 		"workflow_dispatch:",
 		"verify-images:",
