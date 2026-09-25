@@ -1008,6 +1008,20 @@ func restartMuxcoreDaemonBound(ctx context.Context, expected muxcoreDaemonStatus
 	return nil
 }
 
+func configureMuxcoreInstallation() error {
+	clientInstanceID, err := directClientInstanceID()
+	if err != nil {
+		return err
+	}
+	if os.Getenv(config.EnvClientInstanceID) == "" {
+		if err := os.Setenv(config.EnvClientInstanceID, clientInstanceID); err != nil {
+			return err
+		}
+	}
+	muxcoreNamespace = muxcoreInstallationNamespace(clientInstanceID)
+	return nil
+}
+
 func main() {
 	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h" || os.Args[1] == "--version" || os.Args[1] == "-v") {
 		fmt.Printf("engram %s — stdio MCP daemon for Claude Code\n", daemonVersion)
@@ -1025,17 +1039,10 @@ func main() {
 	// graceful degradation that masked PR #203's regression for days.
 	startupGate()
 
-	// Both the stdio shim and its daemon child must inherit the same installation ID.
-	clientInstanceID, err := directClientInstanceID()
-	if err != nil {
+	// Both the stdio shim and its daemon child must select the same installation namespace.
+	if err := configureMuxcoreInstallation(); err != nil {
 		fmt.Fprintf(os.Stderr, "[engram] FATAL: client identity initialization failed: %v\n", err)
 		os.Exit(1)
-	}
-	if os.Getenv(config.EnvClientInstanceID) == "" {
-		if err := os.Setenv(config.EnvClientInstanceID, clientInstanceID); err != nil {
-			fmt.Fprintf(os.Stderr, "[engram] FATAL: client identity initialization failed: %v\n", err)
-			os.Exit(1)
-		}
 	}
 
 	daemonCtx, daemonCancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -3,12 +3,55 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/module/dispatcher"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
+
+func TestMuxcoreInstallationNamespaceIsolatesTwoClientProcesses(t *testing.T) {
+	root := t.TempDir()
+	for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(key, root)
+	}
+	paths := make(map[string]string)
+	for _, id := range []string{"operator-install-alpha", "operator-install-beta", "operator-install-alpha"} {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestMuxcoreInstallationNamespaceProcess$")
+		cmd.Env = append(os.Environ(), "ENGRAM_NAMESPACE_TEST_HELPER=1", "ENGRAM_CLIENT_INSTANCE_ID="+id, "ENGRAM_DATA_DIR="+filepath.Join(root, id))
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("installation %q: %v: %s", id, err, output)
+		}
+		path, _, _ := strings.Cut(string(output), "\n")
+		if prior := paths[id]; prior != "" && prior != path {
+			t.Fatalf("same installation changed daemon control path: %q != %q", prior, path)
+		}
+		paths[id] = path
+	}
+	if paths["operator-install-alpha"] == paths["operator-install-beta"] {
+		t.Fatalf("distinct installations share daemon control path: %q", paths["operator-install-alpha"])
+	}
+}
+
+func TestMuxcoreInstallationNamespaceProcess(t *testing.T) {
+	if os.Getenv("ENGRAM_NAMESPACE_TEST_HELPER") == "" {
+		return
+	}
+	if err := configureMuxcoreInstallation(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg := muxcoreShimConfig(); cfg.Namespace != muxcoreDaemonConfig(nil).Namespace {
+		t.Fatal("shim and daemon selected different namespaces")
+	}
+	if _, err := os.Stdout.WriteString(muxcoreDaemonMarkerPath() + "\n"); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestMuxcoreDaemonConfigAuthorizesFreshTransportTags(t *testing.T) {
 	tags := []string{"transport-tag-one", "transport-tag-two"}
