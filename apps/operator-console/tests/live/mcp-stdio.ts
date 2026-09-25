@@ -77,6 +77,7 @@ export class MCPStdioClient {
   private readonly rootLabel: 'A' | 'B' | 'C'
   private readonly stateRoot: string
   private readonly tools: string[] = []
+  private stderrSample = ''
   private closed = false
   private daemon: MuxDaemonIdentity | undefined
   private nextID = 0
@@ -86,10 +87,13 @@ export class MCPStdioClient {
   private constructor(child: ChildProcess, stateRoot: string, rootLabel: 'A' | 'B' | 'C', controlPath: string, expectedExecutable: string) {
     this.child = child
     this.controlPath = controlPath
-    this.daemonIdentity = readMuxDaemonIdentity(controlPath, expectedExecutable)
+    this.daemonIdentity = readMuxDaemonIdentity(controlPath, expectedExecutable, () => this.failureDiagnostics())
     this.stateRoot = stateRoot
     this.rootLabel = rootLabel
     child.on('error', () => this.rejectPending())
+    child.stderr?.on('data', (chunk: Buffer) => {
+      if (this.stderrSample.length < 8192) this.stderrSample += chunk.toString('utf8').slice(0, 8192 - this.stderrSample.length)
+    })
     child.on('exit', () => this.rejectPending())
     const stdout = child.stdout
     if (stdout === null) throw new Error('external MCP client did not expose stdout')
@@ -135,7 +139,6 @@ export class MCPStdioClient {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     })
-    child.stderr?.resume()
     if (child.pid === undefined || child.pid <= 0 || child.stdin === null || child.stdout === null) {
       child.stdin?.end()
       await waitForExit(child, 2_000)
@@ -269,6 +272,18 @@ export class MCPStdioClient {
       this.processTreeStopped = daemonStopped && childStopped && this.stateRootRemoved
     }
     if (failures.length > 0) throw new AggregateError(failures, 'external MCP client cleanup failed')
+  }
+
+  private failureDiagnostics(): string {
+    const stderr = this.stderrSample.toLowerCase()
+    const classes = [
+      'muxcore daemon version reconciliation failed', 'muxcore shim setup failed',
+      'muxcore shim terminated', 'lifecycle start failed', 'legacy relay start failed',
+      'muxcore engine terminated before product control publication',
+      'permission denied', 'access is denied', 'address already in use',
+      'no such file or directory', 'panic:',
+    ].filter((phrase) => stderr.includes(phrase))
+    return `root=${this.rootLabel}; shimExit=${this.child.exitCode ?? 'running'}; signal=${this.child.signalCode ?? 'none'}; stderrClass=${classes.join('|') || 'unclassified'}; stderrSha256=${createHash('sha256').update(this.stderrSample).digest('hex')}`
   }
 
   private acceptFrame(line: string): void {
@@ -417,7 +432,7 @@ function muxControlEndpoint(controlPath: string): string {
   return `\\\\.\\pipe\\mcp-mux-${digest}`
 }
 
-async function readMuxDaemonIdentity(controlPath: string, expectedExecutable: string): Promise<MuxDaemonIdentity> {
+async function readMuxDaemonIdentity(controlPath: string, expectedExecutable: string, diagnostics: () => string): Promise<MuxDaemonIdentity> {
   const deadline = Date.now() + DAEMON_READY_TIMEOUT_MS
   let lastError = 'daemon control did not respond'
   while (Date.now() < deadline) {
@@ -442,11 +457,11 @@ async function readMuxDaemonIdentity(controlPath: string, expectedExecutable: st
         pid: status.pid,
       }
     } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error)
+      lastError = error instanceof MuxControlUnavailableError ? 'control-unavailable' : error !== null && typeof error === 'object' && Reflect.get(error, 'code') === 'ENOENT' ? 'marker-missing' : error instanceof Error && error.message.startsWith('daemon marker does not match') ? 'identity-mismatch' : error instanceof Error && error.message.startsWith('external MCP daemon control') ? 'control-invalid' : 'unknown'
       await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 50))
     }
   }
-  throw new Error(`external MCP daemon did not publish verified control metadata: ${lastError}`)
+  throw new Error(`external MCP daemon did not publish verified control metadata: ${lastError}; ${diagnostics()}`)
 }
 
 async function readMuxDaemonStatus(controlPath: string): Promise<MuxDaemonStatus> {

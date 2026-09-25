@@ -392,7 +392,7 @@ class LiveFixture implements FixtureController {
   }
 
   private async buildMCPParser(): Promise<string> {
-    const parserDir = join(this.fixtureRoot, 'mcp-install', 'parser')
+    const parserDir = join(this.fixtureRoot, 'mcp-install', 'client', 'parser')
     await mkdir(parserDir, { recursive: true, mode: 0o700 })
     const binary = join(parserDir, process.platform === 'win32' ? 'parser.exe' : 'parser')
     await execute('go', ['build', '-o', binary, './tools/uci-parser'], repositoryRoot)
