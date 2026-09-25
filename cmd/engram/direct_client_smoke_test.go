@@ -54,36 +54,42 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 	pb.RegisterEngramServiceServer(fixture, discovery)
 	go func() { _ = fixture.Serve(listener) }()
 	defer fixture.Stop()
-	root, err := os.Getwd()
+	root := uciInstalledAcceptanceCandidateSourceRoot(t)
+	git := exec.Command("git", "rev-parse", "--show-toplevel", "--git-common-dir")
+	git.Dir = root
+	output, err := git.Output()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("resolve direct fixture Git checkout: %v", err)
 	}
-	for {
-		gitDir, err := os.Stat(filepath.Join(root, ".git"))
-		if err == nil && gitDir.IsDir() {
-			if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
-				break
-			}
-		}
-		parent := filepath.Dir(root)
-		if parent == root {
-			t.Fatal("primary repository root not found")
-		}
-		root = parent
+	paths := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(paths) != 2 || filepath.Clean(paths[0]) != root {
+		t.Fatalf("direct fixture source is not the current Git checkout: %q", output)
+	}
+	commonDir := strings.TrimSpace(paths[1])
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(root, commonDir)
+	}
+	commonDir = filepath.Clean(commonDir)
+	if filepath.Base(commonDir) != ".git" {
+		t.Fatalf("direct fixture scratch needs primary checkout Git directory: %s", commonDir)
+	}
+	if info, err := os.Stat(commonDir); err != nil || !info.IsDir() {
+		t.Fatalf("direct fixture primary Git directory unavailable: %s: %v", commonDir, err)
 	}
 	var project struct {
-		ID    string `json:"project_id"`
-		Name  string `json:"name"`
-		Scope string `json:"scope"`
+		Version int    `json:"version"`
+		ID      string `json:"project_id"`
+		Name    string `json:"name"`
+		Scope   string `json:"scope"`
 	}
 	marker, err := os.ReadFile(filepath.Join(root, ".engram-project"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(marker, &project); err != nil {
-		t.Fatal(err)
+	if err := json.Unmarshal(marker, &project); err != nil || project.Version != 3 || project.ID == "" || project.Scope != "repository" {
+		t.Fatalf("direct fixture requires V3 repository anchor in current checkout: %v", err)
 	}
-	scratch := filepath.Join(root, ".agent", "tmp")
+	scratch := filepath.Join(filepath.Dir(commonDir), ".agent", "tmp")
 	if err := os.MkdirAll(scratch, 0o700); err != nil {
 		t.Fatal(err)
 	}
