@@ -721,9 +721,9 @@ test('identical source and checkout labels retain separate first-index and publi
     { source_ref: 'source-B', checkout_ref: 'checkout-B', repository: 'Engram', working_copy: '', index_intent_available: true, index_intent_selection_ref: 'index-B' },
   ]
   const published = [
-    { source_ref: 'source-A', checkout_ref: 'checkout-A', repository: 'Engram', working_copy: '', indexed_snapshot: { label: 'Release' }, selection_ref: 'view-A', index_intent_available: false },
-    { source_ref: 'source-A', checkout_ref: 'checkout-C', repository: 'Engram', working_copy: '', indexed_snapshot: { label: 'Release' }, selection_ref: 'view-C', index_intent_available: false },
-    { source_ref: 'source-B', checkout_ref: 'checkout-B', repository: 'Engram', working_copy: '', indexed_snapshot: { label: 'Release' }, selection_ref: 'view-B', index_intent_available: false },
+    { source_ref: 'source-A', checkout_ref: 'checkout-A', repository: 'Engram', working_copy: '', indexed_snapshot: { label: 'Release' }, view_ref: 'stable-view-A', selection_ref: 'view-A', index_intent_available: false },
+    { source_ref: 'source-A', checkout_ref: 'checkout-C', repository: 'Engram', working_copy: '', indexed_snapshot: { label: 'Release' }, view_ref: 'stable-view-C', selection_ref: 'view-C', index_intent_available: false },
+    { source_ref: 'source-B', checkout_ref: 'checkout-B', repository: 'Engram', working_copy: '', indexed_snapshot: { label: 'Release' }, view_ref: 'stable-view-B', selection_ref: 'view-B', index_intent_available: false },
   ]
   await page.route('**/api/code/**', async (route) => {
     const pathname = new URL(route.request().url()).pathname
