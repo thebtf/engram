@@ -31,7 +31,7 @@
 | Docker image acceptance | `final-image-set.json` retained from the release workflow | manifest is missing, not `status: PASS`, does not cover `server`, `operator-console`, and `postgres`, or lacks exact IDs, zero HIGH/CRITICAL findings in the three canonical-image SARIF files, runtime proof, or cleanup PASS |
 | Released-image rescan | post-publication `ScanPublished` evidence: one summary JSON plus per-image SARIF/log for `server`, `operator-console`, and `postgres` | after publication, first run is not started within 24h, later evidence is older than 36h by `started_at`/`completed_at`, evidence is missing, HIGH/CRITICAL findings exist, or scanner/database/tag-resolution errors prevent complete evidence; blocks rollout/continued deployment, not initial digest publication |
 | Diff hygiene | `git diff --check` | whitespace/conflict marker errors |
-| SonarQube Quality Gate | Root agent runs `node tools/quality/run-sonarqube.mjs` locally from the clean, frozen exact candidate; retain `.agent/e/sonarqube/<HEAD>.json`; no GitHub Actions workflow performs this gate | exact candidate coverage is incomplete, scanner/CE/QG is non-OK, or requested status publication fails |
+| SonarQube Quality Gate | Root agent runs `node tools/quality/run-sonarqube.mjs` locally from the clean, frozen exact candidate; retain `.agent/e/sonarqube/<HEAD>.json`; no GitHub Actions workflow performs this gate | exact candidate coverage is incomplete, scanner/CE/QG is non-OK, or requested status publication fails; only the one-time v6.49.4 exception below can replace this row's `OK` requirement |
 
 ## CI Compute Boundaries
 
@@ -43,12 +43,21 @@ GitHub-hosted CI is reserved for the smallest lane that can prove the current st
 | Ordinary PR / `main` CI | One cancelable Ubuntu validation lane plus cheap authority checks; no Docker image build | A candidate must not receive duplicate push and PR execution. Superseded non-manual runs are cancelled. |
 | Frozen-candidate validation | Clean-DB coverage and Ubuntu/Windows/macOS validation | Explicit manual dispatch after bytes are frozen; run once per frozen candidate. Rerun unchanged bytes only after proven infrastructure recovery. |
 | Image and publication gates | Docker image acceptance for `v*` tags or explicit manual frozen-candidate acceptance; required release/publish gates | These are release-boundary work, never ordinary CI. Release/publication jobs are never cancelled mid-publication. |
-| SonarQube gate | Root agent runs `node tools/quality/run-sonarqube.mjs` locally from the clean, frozen exact candidate and retains `.agent/e/sonarqube/<HEAD>.json`; no GitHub Actions workflow performs this gate | Mandatory before publication: Quality Gate must be `OK`. A Sonar outage holds release; repair or prove recovery before one same-candidate rerun, not repeated attempts. |
+| SonarQube gate | Root agent runs `node tools/quality/run-sonarqube.mjs` locally from the clean, frozen exact candidate and retains `.agent/e/sonarqube/<HEAD>.json`; no GitHub Actions workflow performs this gate | Mandatory before publication: Quality Gate must be `OK` except under the one-time v6.49.4 exception below. A Sonar outage otherwise holds release; repair or prove recovery before one same-candidate rerun, not repeated attempts. |
 | Post-publication monitoring | Scheduled published-image rescan only | Daily schedule does not build or accept images; retain the freshness/remediation evidence required below. |
 
 The candidate selection must prevent duplicate push-and-PR work for identical bytes. Changed bytes define one new candidate and one new heavy validation; unchanged bytes do not justify another heavy gate without the recovery evidence above.
 If branch protection is enabled later, ordinary required checks may include only checks emitted on ordinary PRs; never require dispatch-only `test / windows-latest`, `test / macos-14`, or `migrations / clean-db chain`.
 
+### Operator-approved v6.49.4 Sonar exception (2026-09-25)
+
+For PR #531's `v6.49.4` OMP plugin hotfix only, the operator directed release work to proceed without Sonar after the service was unavailable twice. Sonar status is **UNAVAILABLE / NOT_PROVEN**, not `OK`, not zero findings, and not a silent gate pass. Retain both incomplete campaign diagnostics; any exact-root Sonar findings already observed remain unresolved and cannot be relabeled, suppressed or treated as accepted by this exception. The operator accepts the residual code-quality risk of missing exact-candidate Sonar coverage, conditional on all of the following before tag or publication:
+
+- Record the exact frozen candidate SHA (and accepted base) and review its complete changed-files diff: only OMP plugin cwd/packaging/version work and necessary release metadata/this exception are in scope. No new server runtime behavior or migrations; a wider candidate needs a new operator decision, not this exception.
+- Retain applicable existing evidence for full `go test ./...`, `go vet ./...`, `govulncheck ./...`, and `go build ./cmd/engram ./cmd/engram-server`; Node hook/plugin behavior; GoReleaser raw asset and plugin policy verification. Revalidate evidence against the final candidate using the existing exact-input rules; do not relabel an earlier PASS.
+- Require PR approval, zero unresolved required threads, required CI and authority checks plus frozen-candidate validation, and accepted `server`, `operator-console`, and `postgres` images under the existing `final-image-set.json` contract. Record a rollback/canary plan and dispose explicitly of whether tagging may replace the running Engram server through Watchtower before any irreversible effect.
+
+This one-time operator authorization replaces only the Sonar `OK` prerequisite for that bounded candidate; all other release, security, image, review, migration and rollout gates remain mandatory. It is not transferable to PR #508, another tag, a changed product scope, or any later release. For every other release, exact-head Sonar Quality Gate `OK` remains mandatory.
 
 ## Release Convergence
 
@@ -146,7 +155,7 @@ a separate reviewed security change, not an operator-side escape hatch.
 
 ## SonarQube Gate Recovery
 
-Run `node tools/quality/run-sonarqube.mjs` as an agent-owned local command from the clean, frozen exact candidate; no GitHub Actions workflow performs this gate. The runner must preserve the exact-head Quality Gate `OK` requirement; successful runs retain the exact-head receipt at `.agent/e/sonarqube/<HEAD>.json`. Human action is required only when the agent lacks the infrastructure, credential, or irreversible-effect authority needed for the next step.
+Outside the one-time v6.49.4 exception above, run `node tools/quality/run-sonarqube.mjs` as an agent-owned local command from the clean, frozen exact candidate; no GitHub Actions workflow performs this gate. The runner must preserve the exact-head Quality Gate `OK` requirement; successful runs retain the exact-head receipt at `.agent/e/sonarqube/<HEAD>.json`. Human action is required only when the agent lacks the infrastructure, credential, or irreversible-effect authority needed for the next step.
 
 Recovery flags are usable only when the active runner's `node tools/quality/run-sonarqube.mjs --help` advertises every flag and mode-specific behavior invoked. If help errors, has no usable output, or does not advertise a requested flag, that recovery mode is unavailable.
 
@@ -156,6 +165,6 @@ An advertised recovery mode is never a bypass: it must retain fresh exact-candid
 
 ## Terminal Verdict
 
-- `PROJECT_RELEASE_PROTOCOL_PASS`: all mandatory rows have evidence.
+- `PROJECT_RELEASE_PROTOCOL_PASS`: all mandatory rows have evidence, with only the explicit v6.49.4 Sonar exception above eligible to replace exact-head `OK`; report Sonar as UNAVAILABLE / NOT_PROVEN, never PASS.
 - `PROJECT_RELEASE_PROTOCOL_BLOCKED`: at least one mandatory row is missing, stale, failed, or cannot be verified.
 - `PROJECT_RELEASE_PROTOCOL_DRY_RUN`: intended actions are fully described and no mutation was performed.
