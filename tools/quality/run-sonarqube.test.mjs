@@ -433,6 +433,14 @@ test("unitized base replaces the monolithic Go descriptor", () => {
   assert.notEqual(fingerprintProfile(base, candidate(), { sha256: "environment" }), fingerprintProfile({ ...base, packageConcurrency: 2 }, candidate(), { sha256: "environment" }));
 });
 
+test("dedicated UCI coverage bounds Go at twenty minutes without changing other profiles", () => {
+  const uci = coverageProfiles.find((profile) => profile.name === "uci");
+  assert.deepEqual(profileDescriptor(uci).effective_argv, ["test", "-json", "-p=1", "-count=1", "./internal/db/gorm", "-covermode=atomic", "-parallel=1", "-timeout=20m", "-run=^TestUCI"]);
+  for (const profile of coverageProfiles.filter((item) => item.name !== "uci")) {
+    assert.equal(profileDescriptor(profile).effective_argv.some((arg) => arg.startsWith("-timeout=")), false, profile.name);
+  }
+});
+
 test("profile budget expiry is retained as timed_out with an explicit budget reason", () => {
   const deadline = new Deadline({ overallTimeout: 1000, coverageTimeout: 60, profileTimeout: 30, scannerTimeout: 60, qualityGateTimeout: 60 });
   let expiry;
