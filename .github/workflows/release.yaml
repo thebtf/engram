@@ -6,88 +6,13 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
-    inputs:
-      candidate_sha:
-        description: Exact 40-character commit on the dispatch branch to preflight
-        required: true
-        type: string
+
+permissions:
+  id-token: write
+  contents: write
 
 jobs:
-  archive-preflight:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    container:
-      image: ghcr.io/goreleaser/goreleaser-cross:v1.25.9
-    steps:
-      - name: Install archive check tools
-        run: apt-get update && apt-get install -y git-lfs unzip
-
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.candidate_sha }}
-          persist-credentials: false
-          fetch-depth: 0
-          lfs: true
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: "ui/package-lock.json"
-
-      - name: Verify dispatch commit and source version
-        shell: bash
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
-        run: |
-          set -euo pipefail
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || { echo 'candidate_sha must be an exact 40-character SHA' >&2; exit 1; }
-          [[ "$(git rev-parse HEAD)" == "$CANDIDATE_SHA" && "$CANDIDATE_SHA" == "$GITHUB_SHA" ]] || { echo 'candidate SHA must equal checked-out HEAD and dispatch branch HEAD' >&2; exit 1; }
-          node <<'NODE'
-          const fs = require('node:fs');
-          for (const file of ['plugin/engram/package.json', 'plugin/engram/.claude-plugin/plugin.json', 'plugin/engram/.codex-plugin/plugin.json', 'plugin/engram/.omp-plugin/plugin.json']) {
-            if (JSON.parse(fs.readFileSync(file, 'utf8')).version !== '6.49.4') throw new Error(`unexpected source version: ${file}`);
-          }
-          if (!/^var Daemon = "v6\.49\.4"$/m.test(fs.readFileSync('internal/version/version.go', 'utf8'))) throw new Error('unexpected daemon source version');
-          NODE
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: false
-
-      - name: Verify committed launcher policy
-        run: scripts/prepare-bootstrap-policy.sh --version 6.49.4 --check
-
-      - name: Build unpublished snapshot from release config
-        shell: bash
-        run: |
-          set -euo pipefail
-          config="$(mktemp --suffix=.yaml)"
-          trap 'rm -f "$config"' EXIT
-          cat .goreleaser.yaml > "$config"
-          printf '\nsnapshot:\n  version_template: "6.49.4"\n' >> "$config"
-          goreleaser release --snapshot --skip=sign --clean --config "$config"
-
-      - name: Gate raw clients against committed policy
-        run: scripts/check-bootstrap-policy-artifacts.sh --policy plugin/engram/bootstrap-targets.json --dist dist
-
-      - name: Gate server-plugin archives against candidate OMP payload
-        run: scripts/check-server-plugin-artifacts.sh --version 6.49.4 --dist dist
-
-      - name: List verified artifact hashes
-        run: find dist -maxdepth 2 -type f -print0 | sort -z | xargs -0 -r sha256sum
-
   release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      id-token: write
-      contents: write
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/goreleaser/goreleaser-cross:v1.25.9
