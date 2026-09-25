@@ -241,7 +241,7 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		select {
 		case request := <-discovery.requests:
 			identity := request.GetProjectIdentityV3()
-			if request.GetProject() != "" || request.GetProjectIdentity() != nil || identity.GetVersion() != 3 || identity.GetAnchorProjectId() != project.ID || identity.GetName() != project.Name || identity.GetScope() != project.Scope || identity.GetClientInstanceId() != string(id) {
+			if request.GetProject() != "" || request.GetProjectIdentity() != nil || identity.GetVersion() != 3 || identity.GetAnchorProjectId() != project.ID || identity.GetName() != project.Name || identity.GetScope() != project.Scope || identity.GetClientInstanceId() != strings.TrimSuffix(string(id), "\n") {
 				t.Fatalf("direct Initialize did not derive V3 identity from repository and installation: %s", request)
 			}
 		default:
