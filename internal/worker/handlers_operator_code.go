@@ -3,6 +3,9 @@ package worker
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -20,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/crypto"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/uci"
@@ -27,6 +31,7 @@ import (
 
 const (
 	operatorCodeRequestMaxBytes = 32 << 10
+	operatorCodeChoiceLifetime  = 15 * time.Minute
 	operatorCodeSearchDefault   = 10
 	operatorCodeSearchMax       = 50
 	operatorCodeSearchMaxText   = 16 << 10
@@ -54,6 +59,7 @@ type OperatorCodeHTTPAdapter struct {
 	graphSources operatorCodeGraphSourceReader
 	recorder     operatorCodeExposureRecorder
 	now          func() time.Time
+	choiceCipher cipher.AEAD
 }
 
 // operatorCodeGrantReader retains the already-typed T012 grant checks. The
@@ -179,6 +185,19 @@ func NewOperatorCodeHTTPAdapter(
 	}
 }
 
+func (adapter *OperatorCodeHTTPAdapter) configureChoiceCipher(vault *crypto.Vault) error {
+	if adapter == nil || vault == nil {
+		return errors.New("operator code chooser requires a vault key")
+	}
+	key := vault.DeriveKey("engram.operator-code/chooser-ref/v1")
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return err
+	}
+	adapter.choiceCipher, err = cipher.NewGCM(block)
+	return err
+}
+
 // HandleHandshake creates a new document binding. It returns only material for
 // that document; a binding begins unpinned and unselected.
 func (adapter *OperatorCodeHTTPAdapter) HandleHandshake(w http.ResponseWriter, r *http.Request) {
@@ -286,7 +305,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandlePin(w http.ResponseWriter, r *http
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
 	}
-	ref, ok := operatorCodeContextSelection(request.SelectionRef)
+	ref, ok := adapter.operatorCodeContextSelection(identity, request.SelectionRef)
 	if !ok {
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
 		return
@@ -379,9 +398,14 @@ func (adapter *OperatorCodeHTTPAdapter) handleNoViewIndexIntentSubmit(w http.Res
 		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 		return
 	}
+	selection, ok := adapter.operatorCodeIndexSelectionRefValue(identity, request.Target.SelectionRef)
+	if !ok {
+		operatorCodeWriteBodyless(w, http.StatusConflict)
+		return
+	}
 	existing, lookupErr := application.NoViewIndexIntentByRequestRef(r.Context(), request.RequestRef)
 	if lookupErr == nil {
-		adapter.replayNoViewIndexIntentSubmit(w, r, identity, request, application, existing)
+		adapter.replayNoViewIndexIntentSubmit(w, r, identity, request, application, existing, selection)
 		return
 	}
 	if !errors.Is(lookupErr, uci.ErrIndexIntentNotFound) {
@@ -391,9 +415,8 @@ func (adapter *OperatorCodeHTTPAdapter) handleNoViewIndexIntentSubmit(w http.Res
 	adapter.submitNoViewIndexIntent(w, r, identity, request, application)
 }
 
-func (adapter *OperatorCodeHTTPAdapter) replayNoViewIndexIntentSubmit(w http.ResponseWriter, r *http.Request, identity operatorCodeRequestIdentity, request operatorCodeIndexIntentSubmitRequest, application operatorCodeNoViewIndexIntentApplication, existing uci.IndexIntent) {
-	selection, ok := request.Target.selection()
-	if !ok || existing.Kind != request.Kind || existing.Scope.SourceID != selection.SourceID || existing.Scope.CheckoutID != selection.CheckoutID {
+func (adapter *OperatorCodeHTTPAdapter) replayNoViewIndexIntentSubmit(w http.ResponseWriter, r *http.Request, identity operatorCodeRequestIdentity, request operatorCodeIndexIntentSubmitRequest, application operatorCodeNoViewIndexIntentApplication, existing uci.IndexIntent, selection operatorCodeIndexSelection) {
+	if existing.Kind != request.Kind || existing.Scope.SourceID != selection.SourceID || existing.Scope.CheckoutID != selection.CheckoutID {
 		operatorCodeWriteBodyless(w, http.StatusConflict)
 		return
 	}
@@ -486,7 +509,8 @@ func (adapter *OperatorCodeHTTPAdapter) writeNoViewIndexIntentStatus(w http.Resp
 	if err != nil {
 		return false
 	}
-	target, failure := adapter.authorizeNoViewIndexIntent(r.Context(), identity, proof, operatorCodeIndexIntentTargetRequest{SelectionRef: operatorCodeIndexSelectionRef(scope.SourceID, scope.CheckoutID, profileID)}, profileID, false)
+	ref := adapter.operatorCodeIndexSelectionRef(identity, scope.SourceID, scope.CheckoutID, profileID)
+	target, failure := adapter.authorizeNoViewIndexIntent(r.Context(), identity, proof, operatorCodeIndexIntentTargetRequest{SelectionRef: ref}, profileID, false)
 	if failure != uci.ReleaseFailureNone {
 		operatorCodeWriteFailure(w, failure)
 		return true
@@ -570,7 +594,8 @@ func (adapter *OperatorCodeHTTPAdapter) HandleIndexIntentRetry(w http.ResponseWr
 	if application, available := adapter.app.(operatorCodeNoViewIndexIntentApplication); available {
 		scope, profileID, err := application.NoViewIndexIntentTarget(r.Context(), intentRef)
 		if err == nil {
-			target, failure := adapter.authorizeNoViewIndexIntent(r.Context(), identity, request.Proof(), operatorCodeIndexIntentTargetRequest{SelectionRef: operatorCodeIndexSelectionRef(scope.SourceID, scope.CheckoutID, profileID)}, profileID, false)
+			ref := adapter.operatorCodeIndexSelectionRef(identity, scope.SourceID, scope.CheckoutID, profileID)
+			target, failure := adapter.authorizeNoViewIndexIntent(r.Context(), identity, request.Proof(), operatorCodeIndexIntentTargetRequest{SelectionRef: ref}, profileID, false)
 			if failure != uci.ReleaseFailureNone {
 				operatorCodeWriteFailure(w, failure)
 				return
@@ -861,7 +886,12 @@ func (adapter *OperatorCodeHTTPAdapter) HandleContexts(w http.ResponseWriter, r 
 		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 		return
 	}
-	writeJSON(w, operatorCodeContextsResponse{Contexts: operatorCodeCatalogEntries(entries, adapter.indexTargets)})
+	catalog, ok := adapter.operatorCodeCatalogEntries(identity, entries, adapter.indexTargets)
+	if !ok {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, operatorCodeContextsResponse{Contexts: catalog})
 }
 
 // HandleGrantChoices lists only the current exact owner's labeled checkout choices.
@@ -884,7 +914,13 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGrantChoices(w http.ResponseWriter
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
 	}
-	writeJSON(w, operatorCodeOwnerChoicesResponse{Choices: operatorCodeOwnerChoiceDTOs(choices), Targets: operatorCodeTargetChoiceDTOs(targets)})
+	ownerChoices := adapter.operatorCodeOwnerChoiceDTOs(identity, choices)
+	targetChoices := adapter.operatorCodeTargetChoiceDTOs(identity, targets)
+	if len(ownerChoices) != len(choices) || len(targetChoices) != len(targets) {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, operatorCodeOwnerChoicesResponse{Choices: ownerChoices, Targets: targetChoices})
 }
 
 // HandleGrantIssue issues an exact owner's selected checkout to a selected enabled reader.
@@ -901,12 +937,12 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGrantIssue(w http.ResponseWriter, 
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
 	}
-	choiceRef, ok := operatorCodeOwnerChoiceRef(request.ChoiceRef)
+	choiceRef, ok := adapter.operatorCodeOwnerChoiceRef(identity, request.ChoiceRef)
 	if !ok {
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
 		return
 	}
-	targetID, ok := operatorCodeTargetChoiceID(request.TargetRef)
+	targetID, ok := adapter.operatorCodeTargetChoiceID(identity, request.TargetRef)
 	if !ok {
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
 		return
@@ -933,7 +969,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGrantLabel(w http.ResponseWriter, 
 		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 		return
 	}
-	choiceRef, ok := operatorCodeOwnerChoiceRef(chi.URLParam(r, "choice_ref"))
+	choiceRef, ok := adapter.operatorCodeOwnerChoiceRef(identity, chi.URLParam(r, "choice_ref"))
 	if !ok {
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
 		return
@@ -943,7 +979,12 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGrantLabel(w http.ResponseWriter, 
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
 	}
-	writeJSON(w, operatorCodeOwnerChoiceDTO(choice))
+	dto := adapter.operatorCodeOwnerChoiceDTO(identity, choice)
+	if dto.ChoiceRef == "" {
+		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, dto)
 }
 
 // HandleGrantRevoke revokes one opaque grant only after the owner port rechecks it.
@@ -983,12 +1024,7 @@ type operatorCodeIndexIntentTargetRequest struct {
 }
 
 func (target operatorCodeIndexIntentTargetRequest) valid() bool {
-	_, ok := target.selection()
-	return ok
-}
-
-func (target operatorCodeIndexIntentTargetRequest) selection() (operatorCodeIndexSelection, bool) {
-	return operatorCodeIndexSelectionRefValue(target.SelectionRef)
+	return operatorCodeChooserToken(target.SelectionRef)
 }
 
 type operatorCodeIndexIntentSubmitRequest struct {
@@ -1025,9 +1061,7 @@ type operatorCodeGrantIssueRequest struct {
 }
 
 func (request operatorCodeGrantIssueRequest) valid() bool {
-	_, checkoutOK := operatorCodeOwnerChoiceRef(request.ChoiceRef)
-	_, targetOK := operatorCodeTargetChoiceID(request.TargetRef)
-	return checkoutOK && targetOK
+	return operatorCodeChooserToken(request.ChoiceRef) && operatorCodeChooserToken(request.TargetRef)
 }
 
 type operatorCodeGrantLabelRequest struct {
@@ -1043,12 +1077,16 @@ type operatorCodePinRequest struct {
 	SelectionRef string `json:"selection_ref"`
 }
 
-func operatorCodeContextSelectionRef(ref uci.ContextRef) string {
-	return operatorCodeOpaqueRef("context", ref.SourceID, ref.CheckoutID, ref.ViewID, ref.AnalysisProfileID, strconv.FormatInt(ref.Generation, 10))
+func operatorCodeChooserToken(value string) bool {
+	return value != "" && len(value) <= 2048
 }
 
-func operatorCodeContextSelection(value string) (uci.ContextRef, bool) {
-	fields, ok := operatorCodeOpaqueFields(value, "context", 5)
+func (adapter *OperatorCodeHTTPAdapter) operatorCodeContextSelectionRef(identity operatorCodeRequestIdentity, ref uci.ContextRef) string {
+	return adapter.operatorCodeOpaqueRef(identity, "context", ref.SourceID, ref.CheckoutID, ref.ViewID, ref.AnalysisProfileID, strconv.FormatInt(ref.Generation, 10))
+}
+
+func (adapter *OperatorCodeHTTPAdapter) operatorCodeContextSelection(identity operatorCodeRequestIdentity, value string) (uci.ContextRef, bool) {
+	fields, ok := adapter.operatorCodeOpaqueFields(identity, value, "context", 5)
 	if !ok {
 		return uci.ContextRef{}, false
 	}
@@ -1059,16 +1097,16 @@ func operatorCodeContextSelection(value string) (uci.ContextRef, bool) {
 	return uci.ContextRef{SourceID: fields[0], CheckoutID: fields[1], ViewID: fields[2], AnalysisProfileID: fields[3], Generation: generation}, true
 }
 
-func operatorCodeOwnerChoiceRef(value string) (string, bool) {
-	fields, ok := operatorCodeOpaqueFields(value, "grant-choice", 1)
+func (adapter *OperatorCodeHTTPAdapter) operatorCodeOwnerChoiceRef(identity operatorCodeRequestIdentity, value string) (string, bool) {
+	fields, ok := adapter.operatorCodeOpaqueFields(identity, value, "grant-choice", 1)
 	if !ok || !operatorCodeUUID(fields[0]) {
 		return "", false
 	}
 	return fields[0], true
 }
 
-func operatorCodeTargetChoiceID(value string) (int64, bool) {
-	fields, ok := operatorCodeOpaqueFields(value, "grant-target", 1)
+func (adapter *OperatorCodeHTTPAdapter) operatorCodeTargetChoiceID(identity operatorCodeRequestIdentity, value string) (int64, bool) {
+	fields, ok := adapter.operatorCodeOpaqueFields(identity, value, "grant-target", 1)
 	if !ok {
 		return 0, false
 	}
@@ -1076,23 +1114,54 @@ func operatorCodeTargetChoiceID(value string) (int64, bool) {
 	return id, err == nil && id > 0
 }
 
-func operatorCodeOpaqueRef(kind string, values ...string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(kind + "\x00" + strings.Join(values, "\x00")))
+// Chooser references are sealed with a Vault-derived domain key shared across
+// restarts and replicas that share the same Vault key. Rotation invalidates
+// outstanding references; browsers must refresh the chooser after rotation.
+func (adapter *OperatorCodeHTTPAdapter) operatorCodeOpaqueRef(identity operatorCodeRequestIdentity, kind string, values ...string) string {
+	if adapter == nil || adapter.choiceCipher == nil || adapter.now == nil || !operatorCodeText(kind) {
+		return ""
+	}
+	if _, ok := identity.identity.SessionBrowserSubject(); !ok || !operatorCodeText(identity.sessionID) {
+		return ""
+	}
+	nonce := make([]byte, adapter.choiceCipher.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return ""
+	}
+	plaintext := []byte(kind + "\x00" + strconv.FormatInt(adapter.now().Add(operatorCodeChoiceLifetime).Unix(), 10) + "\x00" + strings.Join(values, "\x00"))
+	sealed := adapter.choiceCipher.Seal(nonce, nonce, plaintext, operatorCodeChoiceIdentity(identity))
+	return base64.RawURLEncoding.EncodeToString(sealed)
 }
 
-func operatorCodeOpaqueFields(value, kind string, count int) ([]string, bool) {
-	if !operatorCodeText(value) || !operatorCodeText(kind) || count < 1 {
+func operatorCodeChoiceIdentity(identity operatorCodeRequestIdentity) []byte {
+	subject, _ := identity.identity.SessionBrowserSubject()
+	return []byte(strconv.FormatInt(subject.UserID, 10) + "\x00" + identity.sessionID)
+}
+
+func (adapter *OperatorCodeHTTPAdapter) operatorCodeOpaqueFields(identity operatorCodeRequestIdentity, value, kind string, count int) ([]string, bool) {
+	if adapter == nil || adapter.choiceCipher == nil || adapter.now == nil || !operatorCodeChooserToken(value) || !operatorCodeText(kind) || count < 1 {
+		return nil, false
+	}
+	if _, ok := identity.identity.SessionBrowserSubject(); !ok || !operatorCodeText(identity.sessionID) {
 		return nil, false
 	}
 	decoded, err := base64.RawURLEncoding.DecodeString(value)
-	if err != nil || !utf8.Valid(decoded) {
+	if err != nil || len(decoded) < adapter.choiceCipher.NonceSize()+adapter.choiceCipher.Overhead() {
 		return nil, false
 	}
-	fields := strings.Split(string(decoded), "\x00")
-	if len(fields) != count+1 || fields[0] != kind {
+	plaintext, err := adapter.choiceCipher.Open(nil, decoded[:adapter.choiceCipher.NonceSize()], decoded[adapter.choiceCipher.NonceSize():], operatorCodeChoiceIdentity(identity))
+	if err != nil || !utf8.Valid(plaintext) {
 		return nil, false
 	}
-	return fields[1:], true
+	fields := strings.Split(string(plaintext), "\x00")
+	if len(fields) != count+2 || fields[0] != kind {
+		return nil, false
+	}
+	expires, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil || !adapter.now().Before(time.Unix(expires, 0)) {
+		return nil, false
+	}
+	return fields[2:], true
 }
 
 type operatorCodeIndexSelection struct {
@@ -1101,12 +1170,12 @@ type operatorCodeIndexSelection struct {
 	ProfileID  string
 }
 
-func operatorCodeIndexSelectionRef(sourceID, checkoutID, profileID string) string {
-	return operatorCodeOpaqueRef("index-selection", sourceID, checkoutID, profileID)
+func (adapter *OperatorCodeHTTPAdapter) operatorCodeIndexSelectionRef(identity operatorCodeRequestIdentity, sourceID, checkoutID, profileID string) string {
+	return adapter.operatorCodeOpaqueRef(identity, "index-selection", sourceID, checkoutID, profileID)
 }
 
-func operatorCodeIndexSelectionRefValue(value string) (operatorCodeIndexSelection, bool) {
-	fields, ok := operatorCodeOpaqueFields(value, "index-selection", 3)
+func (adapter *OperatorCodeHTTPAdapter) operatorCodeIndexSelectionRefValue(identity operatorCodeRequestIdentity, value string) (operatorCodeIndexSelection, bool) {
+	fields, ok := adapter.operatorCodeOpaqueFields(identity, value, "index-selection", 3)
 	if !ok || !operatorCodeUUID(fields[0]) || !operatorCodeUUID(fields[1]) || !operatorCodeUUID(fields[2]) {
 		return operatorCodeIndexSelection{}, false
 	}
@@ -1805,7 +1874,7 @@ func (adapter *OperatorCodeHTTPAdapter) authorizeNoViewIndexIntent(ctx context.C
 	if adapter == nil || adapter.contexts == nil {
 		return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailureExposureUnavailable
 	}
-	selection, ok := requested.selection()
+	selection, ok := adapter.operatorCodeIndexSelectionRefValue(identity, requested.SelectionRef)
 	if !ok {
 		return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailureContextMismatch
 	}
@@ -1887,7 +1956,8 @@ func (adapter *OperatorCodeHTTPAdapter) authorizeNoViewIndexIntentResult(ctx con
 	if adapter == nil || adapter.authority == nil || !operatorCodeNoViewIndexIntentMatches(intent, target) || intent.ResultView == nil {
 		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailureContextMismatch
 	}
-	if _, failure := adapter.authorizeNoViewIndexIntent(ctx, identity, proof, operatorCodeIndexIntentTargetRequest{SelectionRef: operatorCodeIndexSelectionRef(target.scope.SourceID, target.scope.CheckoutID, target.profileID)}, target.profileID, false); failure != uci.ReleaseFailureNone {
+	ref := adapter.operatorCodeIndexSelectionRef(identity, target.scope.SourceID, target.scope.CheckoutID, target.profileID)
+	if _, failure := adapter.authorizeNoViewIndexIntent(ctx, identity, proof, operatorCodeIndexIntentTargetRequest{SelectionRef: ref}, target.profileID, false); failure != uci.ReleaseFailureNone {
 		return operatorCodeAuthorizedRequest{}, failure
 	}
 	caller := target.caller
@@ -2370,23 +2440,29 @@ type operatorCodeContextsResponse struct {
 	Contexts []operatorCodeCatalogEntry `json:"contexts"`
 }
 
-func operatorCodeCatalogEntries(entries []gormdb.BrowserCodeContextCatalogEntry, targets operatorCodeIndexTargetResolver) []operatorCodeCatalogEntry {
+func (adapter *OperatorCodeHTTPAdapter) operatorCodeCatalogEntries(identity operatorCodeRequestIdentity, entries []gormdb.BrowserCodeContextCatalogEntry, targets operatorCodeIndexTargetResolver) ([]operatorCodeCatalogEntry, bool) {
 	result := make([]operatorCodeCatalogEntry, 0, len(entries))
 	for _, entry := range entries {
 		item := operatorCodeCatalogEntry{Repository: entry.SourceLabel, WorkingCopy: entry.CheckoutLabel, SourceRef: operatorCodeCatalogRef("source", entry.SourceID), CheckoutRef: operatorCodeCatalogRef("checkout", entry.SourceID, entry.CheckoutID)}
 		if entry.Context != nil {
-			item.SelectionRef = operatorCodeContextSelectionRef(*entry.Context)
+			item.SelectionRef = adapter.operatorCodeContextSelectionRef(identity, *entry.Context)
+			if item.SelectionRef == "" {
+				return nil, false
+			}
 			item.IndexedSnapshot = &operatorCodeCatalogView{Label: entry.ViewLabel, Revision: entry.SnapshotRevision, PublishedAt: entry.SnapshotPublishedAt}
 		} else if entry.IndexIntentAvailable && targets != nil {
 			binding, found := targets.Resolve(entry.SourceID, entry.CheckoutID)
 			if found && binding.Context == nil && operatorCodeUUID(binding.ProfileID) {
+				item.IndexIntentSelectionRef = adapter.operatorCodeIndexSelectionRef(identity, entry.SourceID, entry.CheckoutID, binding.ProfileID)
+				if item.IndexIntentSelectionRef == "" {
+					return nil, false
+				}
 				item.IndexIntentAvailable = true
-				item.IndexIntentSelectionRef = operatorCodeIndexSelectionRef(entry.SourceID, entry.CheckoutID, binding.ProfileID)
 			}
 		}
 		result = append(result, item)
 	}
-	return result
+	return result, true
 }
 
 type operatorCodeOwnerChoice struct {
@@ -2405,22 +2481,30 @@ type operatorCodeOwnerChoicesResponse struct {
 	Targets []operatorCodeTargetChoice `json:"targets"`
 }
 
-func operatorCodeTargetChoiceDTOs(targets []gormdb.BrowserReadGrantTargetChoice) []operatorCodeTargetChoice {
-	result := make([]operatorCodeTargetChoice, len(targets))
-	for index, target := range targets {
-		result[index] = operatorCodeTargetChoice{TargetRef: operatorCodeOpaqueRef("grant-target", strconv.FormatInt(target.UserID, 10)), Label: target.Label}
+func (adapter *OperatorCodeHTTPAdapter) operatorCodeTargetChoiceDTOs(identity operatorCodeRequestIdentity, targets []gormdb.BrowserReadGrantTargetChoice) []operatorCodeTargetChoice {
+	result := make([]operatorCodeTargetChoice, 0, len(targets))
+	for _, target := range targets {
+		ref := adapter.operatorCodeOpaqueRef(identity, "grant-target", strconv.FormatInt(target.UserID, 10))
+		if ref == "" {
+			return result
+		}
+		result = append(result, operatorCodeTargetChoice{TargetRef: ref, Label: target.Label})
 	}
 	return result
 }
 
-func operatorCodeOwnerChoiceDTO(choice gormdb.BrowserReadGrantOwnerChoice) operatorCodeOwnerChoice {
-	return operatorCodeOwnerChoice{ChoiceRef: operatorCodeOpaqueRef("grant-choice", choice.ChoiceRef), Repository: choice.RepositoryLabel, WorkingCopy: choice.WorkingCopyLabel}
+func (adapter *OperatorCodeHTTPAdapter) operatorCodeOwnerChoiceDTO(identity operatorCodeRequestIdentity, choice gormdb.BrowserReadGrantOwnerChoice) operatorCodeOwnerChoice {
+	return operatorCodeOwnerChoice{ChoiceRef: adapter.operatorCodeOpaqueRef(identity, "grant-choice", choice.ChoiceRef), Repository: choice.RepositoryLabel, WorkingCopy: choice.WorkingCopyLabel}
 }
 
-func operatorCodeOwnerChoiceDTOs(choices []gormdb.BrowserReadGrantOwnerChoice) []operatorCodeOwnerChoice {
-	result := make([]operatorCodeOwnerChoice, len(choices))
-	for index, choice := range choices {
-		result[index] = operatorCodeOwnerChoiceDTO(choice)
+func (adapter *OperatorCodeHTTPAdapter) operatorCodeOwnerChoiceDTOs(identity operatorCodeRequestIdentity, choices []gormdb.BrowserReadGrantOwnerChoice) []operatorCodeOwnerChoice {
+	result := make([]operatorCodeOwnerChoice, 0, len(choices))
+	for _, choice := range choices {
+		item := adapter.operatorCodeOwnerChoiceDTO(identity, choice)
+		if item.ChoiceRef == "" {
+			return result
+		}
+		result = append(result, item)
 	}
 	return result
 }

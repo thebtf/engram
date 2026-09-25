@@ -1297,7 +1297,16 @@ func (s *Service) initializeAsync() {
 			return
 		}
 		s.startUCIEmbeddingWorker(uciContext.embeddingWorker)
-		operatorCodeAdapter, composeErr := composeOperatorCodeHTTPAdapter(store.GetDB(), uciContext)
+		vault, vaultErr := s.getVault()
+		if vaultErr != nil {
+			s.setInitError(fmt.Errorf("operator code chooser vault key unavailable: %w", vaultErr))
+			return
+		}
+		if vault == nil {
+			s.setInitError(errors.New("operator code chooser vault key unavailable"))
+			return
+		}
+		operatorCodeAdapter, composeErr := composeOperatorCodeHTTPAdapter(store.GetDB(), uciContext, vault)
 		if composeErr != nil {
 			s.setInitError(fmt.Errorf("compose operator code HTTP adapter: %w", composeErr))
 			return

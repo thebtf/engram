@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/crypto"
 	gormstore "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/grpcserver"
@@ -382,9 +383,12 @@ func (authorizer *operatorCodeServerAuthorizer) AuthorizeOperatorCode(ctx contex
 	})
 }
 
-func composeOperatorCodeHTTPAdapter(db *gormlib.DB, composition *uciContextComposition) (*OperatorCodeHTTPAdapter, error) {
+func composeOperatorCodeHTTPAdapter(db *gormlib.DB, composition *uciContextComposition, vault *crypto.Vault) (*OperatorCodeHTTPAdapter, error) {
 	if db == nil || composition == nil || composition.contextStore == nil || composition.resolver == nil || composition.application == nil || composition.exposureRecorder == nil || composition.indexIntentStore == nil || composition.indexTargets == nil {
 		return nil, errors.New("operator code HTTP composition requires UCI context dependencies")
+	}
+	if vault == nil {
+		return nil, errors.New("operator code HTTP composition requires a vault key for chooser references")
 	}
 	grants := NewCodeGrantApplication(gormstore.NewBrowserReadGrantStore(db))
 	adapter := NewOperatorCodeHTTPAdapter(
@@ -396,6 +400,9 @@ func composeOperatorCodeHTTPAdapter(db *gormlib.DB, composition *uciContextCompo
 		},
 		composition.exposureRecorder,
 	)
+	if err := adapter.configureChoiceCipher(vault); err != nil {
+		return nil, fmt.Errorf("configure operator code chooser: %w", err)
+	}
 	adapter.onboarding = grants
 	adapter.contexts = gormstore.NewBrowserCodeContextStore(db)
 	adapter.indexTargets = composition.indexTargets

@@ -920,7 +920,7 @@ func TestUCIApplicationOperatorPortsKeepStructureAndRelationsInOneView(t *testin
 	composition, err := composeUCIContext(true, store.GetDB(), server, workerUCISemanticConfig())
 	require.NoError(t, err)
 	fixture := newWorkerUCIApplicationFixture(t, composition)
-	adapter, err := composeOperatorCodeHTTPAdapter(store.GetDB(), composition)
+	adapter, err := composeOperatorCodeHTTPAdapter(store.GetDB(), composition, newTestVault(t))
 	require.NoError(t, err)
 	ref := fixture.historical.Context
 	authorized, err := composition.resolver.Authorize(context.Background(), uci.ResolveContextInput{

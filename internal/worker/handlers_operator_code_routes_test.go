@@ -2,9 +2,11 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,6 +79,7 @@ func TestOperatorCodeRoutesDelegateFiveEndpoints(t *testing.T) {
 			adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
 			app := &operatorCodeRouteTestApplication{operatorCodeHTTPTestApplication: fixture.app}
 			adapter = NewOperatorCodeHTTPAdapter(fixture.grants, fixture.binding, fixture.authority, app, fixture.recorder)
+			require.NoError(t, adapter.configureChoiceCipher(newTestVault(t)))
 			adapter.contexts = fixture.contexts
 			testCase.configure(app, fixture.ref)
 
@@ -102,6 +105,7 @@ func TestOperatorCodeRoutesDelegateIndexIntentEndpoints(t *testing.T) {
 		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
 		app := &operatorCodeRouteTestApplication{operatorCodeHTTPTestApplication: fixture.app}
 		adapter = NewOperatorCodeHTTPAdapter(fixture.grants, fixture.binding, fixture.authority, app, fixture.recorder)
+		require.NoError(t, adapter.configureChoiceCipher(newTestVault(t)))
 		service := newOperatorCodeRouteTestService(adapter)
 		recorder := httptest.NewRecorder()
 		request := operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"route-submit","kind":"reindex"}`, fixture.identity)
@@ -119,6 +123,7 @@ func TestOperatorCodeRoutesDelegateIndexIntentEndpoints(t *testing.T) {
 		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
 		app := &operatorCodeRouteTestApplication{operatorCodeHTTPTestApplication: fixture.app}
 		adapter = NewOperatorCodeHTTPAdapter(fixture.grants, fixture.binding, fixture.authority, app, fixture.recorder)
+		require.NoError(t, adapter.configureChoiceCipher(newTestVault(t)))
 		intent := operatorCodeHTTPTestIndexIntent(fixture.ref, "route-status", uci.IndexIntentReindex, uci.IndexIntentCompleted)
 		app.indexIntents = map[string]uci.IndexIntent{intent.ID: intent}
 		service := newOperatorCodeRouteTestService(adapter)
@@ -138,6 +143,7 @@ func TestOperatorCodeRoutesDelegateIndexIntentEndpoints(t *testing.T) {
 		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
 		app := &operatorCodeRouteTestApplication{operatorCodeHTTPTestApplication: fixture.app}
 		adapter = NewOperatorCodeHTTPAdapter(fixture.grants, fixture.binding, fixture.authority, app, fixture.recorder)
+		require.NoError(t, adapter.configureChoiceCipher(newTestVault(t)))
 		intent := operatorCodeHTTPTestIndexIntent(fixture.ref, "route-retry", uci.IndexIntentReindex, uci.IndexIntentUnavailable)
 		app.indexIntents = map[string]uci.IndexIntent{intent.ID: intent}
 		service := newOperatorCodeRouteTestService(adapter)
@@ -174,6 +180,7 @@ func TestOperatorCodeIndexIntentRouteRejectsBrowserExecutionSelectors(t *testing
 	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
 	app := &operatorCodeRouteTestApplication{operatorCodeHTTPTestApplication: fixture.app}
 	adapter = NewOperatorCodeHTTPAdapter(fixture.grants, fixture.binding, fixture.authority, app, fixture.recorder)
+	require.NoError(t, adapter.configureChoiceCipher(newTestVault(t)))
 	service := newOperatorCodeRouteTestService(adapter)
 	recorder := httptest.NewRecorder()
 	request := operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"rejected-browser-selector","kind":"reindex","path":"internal/private.go","credential":"secret","daemon":"local","publish":true}`, fixture.identity)
@@ -195,10 +202,13 @@ func TestOperatorCodeIndexIntentCompositionUsesDurableCurrentBinding(t *testing.
 
 	missingContextStore := *composition
 	missingContextStore.contextStore = nil
-	_, err = composeOperatorCodeHTTPAdapter(store.GetDB(), &missingContextStore)
+	_, err = composeOperatorCodeHTTPAdapter(store.GetDB(), &missingContextStore, newTestVault(t))
 	require.Error(t, err)
 
-	adapter, err := composeOperatorCodeHTTPAdapter(store.GetDB(), composition)
+	_, err = composeOperatorCodeHTTPAdapter(store.GetDB(), composition, nil)
+	require.ErrorContains(t, err, "requires a vault key for chooser references")
+
+	adapter, err := composeOperatorCodeHTTPAdapter(store.GetDB(), composition, newTestVault(t))
 	require.NoError(t, err)
 	application, ok := adapter.app.(*operatorCodeIndexIntentComposition)
 	require.True(t, ok)
@@ -333,7 +343,10 @@ func TestOperatorCodeRoutes_BindingLifecyclePinsExactCatalogContext(t *testing.T
 		require.NotContains(t, contexts.Body.String(), forbidden)
 	}
 
-	pinned := call(http.MethodPut, "/api/code/tabs/"+operatorCodeHTTPTestBindingID+"/context", `{"document_proof":"proof-current","selection_ref":"`+operatorCodeContextSelectionRef(fixture.ref)+`"}`)
+	var catalog operatorCodeContextsResponse
+	require.NoError(t, json.Unmarshal(contexts.Body.Bytes(), &catalog))
+	require.Len(t, catalog.Contexts, 1)
+	pinned := call(http.MethodPut, "/api/code/tabs/"+operatorCodeHTTPTestBindingID+"/context", `{"document_proof":"proof-current","selection_ref":"`+catalog.Contexts[0].SelectionRef+`"}`)
 	require.Equal(t, http.StatusNoContent, pinned.Code, pinned.Body.String())
 	require.Empty(t, pinned.Body.String())
 	require.Equal(t, []BrowserBindingContext{browserBindingContext(fixture.ref)}, fixture.binding.pinnedTo)
@@ -355,9 +368,6 @@ func TestOperatorCodeRoutes_BindingLifecyclePinsExactCatalogContext(t *testing.T
 }
 
 func TestOperatorCodeRoutes_CloseDenialsDoNotSelectOrLeak(t *testing.T) {
-	selection := operatorCodeContextSelectionRef(uci.ContextRef{
-		SourceID: operatorCodeHTTPTestSourceID, CheckoutID: operatorCodeHTTPTestCheckoutID, ViewID: operatorCodeHTTPTestViewID, AnalysisProfileID: operatorCodeHTTPTestProfileID, Generation: 7,
-	})
 	for _, testCase := range []struct {
 		name      string
 		path      string
@@ -366,11 +376,11 @@ func TestOperatorCodeRoutes_CloseDenialsDoNotSelectOrLeak(t *testing.T) {
 		configure func(*operatorCodeHTTPTestFixture)
 	}{
 		{name: "replayed document proof", path: "/api/code/contexts", method: http.MethodPost, body: `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-replayed"}`},
-		{name: "path binding mismatch", path: "/api/code/tabs/60000000-0000-4000-8000-000000000042/context", method: http.MethodPut, body: `{"document_proof":"proof-current","selection_ref":"` + selection + `"}`},
-		{name: "revoked grant cannot pin", path: "/api/code/tabs/" + operatorCodeHTTPTestBindingID + "/context", method: http.MethodPut, body: `{"document_proof":"proof-current","selection_ref":"` + selection + `"}`, configure: func(fixture *operatorCodeHTTPTestFixture) {
+		{name: "path binding mismatch", path: "/api/code/tabs/60000000-0000-4000-8000-000000000042/context", method: http.MethodPut, body: `{"document_proof":"proof-current","selection_ref":"$CHOICE$"}`},
+		{name: "revoked grant cannot pin", path: "/api/code/tabs/" + operatorCodeHTTPTestBindingID + "/context", method: http.MethodPut, body: `{"document_proof":"proof-current","selection_ref":"$CHOICE$"}`, configure: func(fixture *operatorCodeHTTPTestFixture) {
 			fixture.contexts.pinErr = gormstore.ErrBrowserCodeContextDenied
 		}},
-		{name: "expired grant cannot pin", path: "/api/code/tabs/" + operatorCodeHTTPTestBindingID + "/context", method: http.MethodPut, body: `{"document_proof":"proof-current","selection_ref":"` + selection + `"}`, configure: func(fixture *operatorCodeHTTPTestFixture) {
+		{name: "expired grant cannot pin", path: "/api/code/tabs/" + operatorCodeHTTPTestBindingID + "/context", method: http.MethodPut, body: `{"document_proof":"proof-current","selection_ref":"$CHOICE$"}`, configure: func(fixture *operatorCodeHTTPTestFixture) {
 			fixture.contexts.pinErr = gormstore.ErrBrowserCodeContextDenied
 		}},
 	} {
@@ -382,7 +392,8 @@ func TestOperatorCodeRoutes_CloseDenialsDoNotSelectOrLeak(t *testing.T) {
 			}
 			service := newOperatorCodeRouteTestService(adapter)
 			recorder := httptest.NewRecorder()
-			request := operatorCodeHTTPTestRequest(t, testCase.body, fixture.identity)
+			selection := adapter.operatorCodeContextSelectionRef(operatorCodeHTTPTestChoiceIdentity(fixture), fixture.ref)
+			request := operatorCodeHTTPTestRequest(t, strings.ReplaceAll(testCase.body, "$CHOICE$", selection), fixture.identity)
 			request.Method = testCase.method
 			request.URL.Path = testCase.path
 			request.RequestURI = testCase.path
@@ -425,6 +436,7 @@ func TestOperatorCodeRoutesRejectForbiddenSelectorsBeforeDelegation(t *testing.T
 	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
 	app := &operatorCodeRouteTestApplication{operatorCodeHTTPTestApplication: fixture.app}
 	adapter = NewOperatorCodeHTTPAdapter(fixture.grants, fixture.binding, fixture.authority, app, fixture.recorder)
+	require.NoError(t, adapter.configureChoiceCipher(newTestVault(t)))
 	app.search = operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalLexical)
 	service := newOperatorCodeRouteTestService(adapter)
 
@@ -571,11 +583,13 @@ func TestOperatorCodeRoutesDelegateStructureAndOwnerOnboarding(t *testing.T) {
 	choiceRequest = choiceRequest.WithContext(auth.WithIdentity(choiceRequest.Context(), fixture.identity))
 	service.router.ServeHTTP(choices, choiceRequest)
 	require.Equal(t, http.StatusOK, choices.Code, choices.Body.String())
-	choiceRef := operatorCodeOpaqueRef("grant-choice", fixture.ref.CheckoutID)
-	require.Contains(t, choices.Body.String(), `"choice_ref":"`+choiceRef+`"`)
+	var chooser operatorCodeOwnerChoicesResponse
+	require.NoError(t, json.Unmarshal(choices.Body.Bytes(), &chooser))
+	require.Len(t, chooser.Choices, 1)
+	require.Len(t, chooser.Targets, 1)
+	choiceRef := chooser.Choices[0].ChoiceRef
+	targetRef := chooser.Targets[0].TargetRef
 	require.NotContains(t, choices.Body.String(), fixture.ref.CheckoutID)
-	targetRef := operatorCodeOpaqueRef("grant-target", "99")
-	require.Contains(t, choices.Body.String(), `"target_ref":"`+targetRef+`"`)
 	require.NotContains(t, choices.Body.String(), `"subject_user_id"`)
 
 	issued := call(http.MethodPost, "/api/code/grants", `{"choice_ref":"`+choiceRef+`","target_ref":"`+targetRef+`"}`, fixture.identity)

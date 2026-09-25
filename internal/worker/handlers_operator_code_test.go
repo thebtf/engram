@@ -3,10 +3,12 @@ package worker
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -722,7 +724,7 @@ func TestOperatorCodeHTTPAdapter_NoViewIndexIntentReauthorizesWithoutPin(t *test
 	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
 	fixture.binding.pinned = nil
 	fixture.contexts.entries[0].Context = nil
-	target := `{"selection_ref":"` + operatorCodeIndexSelectionRef(operatorCodeHTTPTestSourceID, operatorCodeHTTPTestCheckoutID, operatorCodeHTTPTestProfileID) + `"}`
+	target := `{"selection_ref":"` + adapter.operatorCodeIndexSelectionRef(operatorCodeHTTPTestChoiceIdentity(fixture), operatorCodeHTTPTestSourceID, operatorCodeHTTPTestCheckoutID, operatorCodeHTTPTestProfileID) + `"}`
 	body := `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","request_ref":"first-index","kind":"reindex","target":` + target + `}`
 
 	first := httptest.NewRecorder()
@@ -793,7 +795,7 @@ func TestOperatorCodeHTTPAdapter_NoViewIndexIntentReauthorizesWithoutPin(t *test
 	fixture.contexts.reauthTargetErr = nil
 
 	foreign := httptest.NewRecorder()
-	adapter.HandleIndexIntentSubmit(foreign, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"foreign","kind":"reindex","target":{"selection_ref":"`+operatorCodeIndexSelectionRef(uuid.NewString(), operatorCodeHTTPTestCheckoutID, operatorCodeHTTPTestProfileID)+`"}}`, fixture.identity))
+	adapter.HandleIndexIntentSubmit(foreign, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"foreign","kind":"reindex","target":{"selection_ref":"`+adapter.operatorCodeIndexSelectionRef(operatorCodeHTTPTestChoiceIdentity(fixture), uuid.NewString(), operatorCodeHTTPTestCheckoutID, operatorCodeHTTPTestProfileID)+`"}}`, fixture.identity))
 	require.Equal(t, http.StatusForbidden, foreign.Code, foreign.Body.String())
 
 	fixture.contexts.initialTargetErr = gormdb.ErrBrowserCodeContextDenied
@@ -1123,7 +1125,7 @@ func TestOperatorCodeHTTPAdapter_CatalogAndPinFailuresStayPrivate(t *testing.T) 
 		foreign.ViewID = uuid.NewString()
 		recorder := httptest.NewRecorder()
 
-		adapter.HandlePin(recorder, pathRequest(`{"document_proof":"proof-current","selection_ref":"`+operatorCodeContextSelectionRef(foreign)+`"}`, fixture.identity))
+		adapter.HandlePin(recorder, pathRequest(`{"document_proof":"proof-current","selection_ref":"`+adapter.operatorCodeContextSelectionRef(operatorCodeHTTPTestChoiceIdentity(fixture), foreign)+`"}`, fixture.identity))
 
 		require.Equal(t, http.StatusForbidden, recorder.Code)
 		require.Empty(t, recorder.Body.String())
@@ -1135,7 +1137,7 @@ func TestOperatorCodeHTTPAdapter_CatalogAndPinFailuresStayPrivate(t *testing.T) 
 		fixture.contexts.pinErr = errors.New("pin store unavailable")
 		recorder := httptest.NewRecorder()
 
-		adapter.HandlePin(recorder, pathRequest(`{"document_proof":"proof-current","selection_ref":"`+operatorCodeContextSelectionRef(fixture.ref)+`"}`, fixture.identity))
+		adapter.HandlePin(recorder, pathRequest(`{"document_proof":"proof-current","selection_ref":"`+adapter.operatorCodeContextSelectionRef(operatorCodeHTTPTestChoiceIdentity(fixture), fixture.ref)+`"}`, fixture.identity))
 
 		require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 		require.Empty(t, recorder.Body.String())
@@ -1207,7 +1209,7 @@ func TestOperatorCodeHTTPAdapter_NoViewIntentBindingMismatchIsBodyless(t *testin
 	fixture.contexts.entries[0].Context = nil
 	fixture.app.indexSubmitErr = uci.ErrIndexIntentBindingMismatch
 	recorder := httptest.NewRecorder()
-	target := `{"selection_ref":"` + operatorCodeIndexSelectionRef(operatorCodeHTTPTestSourceID, operatorCodeHTTPTestCheckoutID, operatorCodeHTTPTestProfileID) + `"}`
+	target := `{"selection_ref":"` + adapter.operatorCodeIndexSelectionRef(operatorCodeHTTPTestChoiceIdentity(fixture), operatorCodeHTTPTestSourceID, operatorCodeHTTPTestCheckoutID, operatorCodeHTTPTestProfileID) + `"}`
 
 	adapter.HandleIndexIntentSubmit(recorder, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"first-index-mismatch","kind":"reindex","target":`+target+`}`, fixture.identity))
 
@@ -1253,6 +1255,87 @@ type operatorCodeHTTPTestFixture struct {
 	app       *operatorCodeHTTPTestApplication
 	contexts  *operatorCodeHTTPTestContextStore
 	recorder  *operatorCodeHTTPTestRecorder
+}
+
+func TestOperatorCodeHTTPAdapter_ChooserRefsAreIssuedPrivateBoundAndExpiring(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	identity := operatorCodeHTTPTestChoiceIdentity(fixture)
+	instant := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	adapter.now = func() time.Time { return instant }
+	ref := adapter.operatorCodeContextSelectionRef(identity, fixture.ref)
+	decoded, err := base64.RawURLEncoding.DecodeString(ref)
+	require.NoError(t, err)
+	for _, id := range []string{fixture.ref.SourceID, fixture.ref.CheckoutID, fixture.ref.ViewID, fixture.ref.AnalysisProfileID} {
+		require.NotContains(t, string(decoded), id, "decoding the transport must not disclose identifiers")
+	}
+	got, ok := adapter.operatorCodeContextSelection(identity, ref)
+	require.True(t, ok)
+	require.Equal(t, fixture.ref, got)
+
+	restarted := NewOperatorCodeHTTPAdapter(fixture.grants, fixture.binding, fixture.authority, fixture.app, fixture.recorder)
+	require.NoError(t, restarted.configureChoiceCipher(newTestVault(t)))
+	restarted.now = adapter.now
+	got, ok = restarted.operatorCodeContextSelection(identity, ref)
+	require.True(t, ok, "a reference survives restart with the same vault key")
+	require.Equal(t, fixture.ref, got)
+	forged := base64.RawURLEncoding.EncodeToString([]byte("context\x00" + fixture.ref.SourceID + "\x00" + fixture.ref.CheckoutID + "\x00" + fixture.ref.ViewID + "\x00" + fixture.ref.AnalysisProfileID + "\x00" + strconv.FormatInt(fixture.ref.Generation, 10)))
+	_, ok = adapter.operatorCodeContextSelection(identity, forged)
+	require.False(t, ok, "a syntactically correct unissued reference is not a chooser choice")
+	tampered := []byte(ref)
+	if tampered[0] == 'A' {
+		tampered[0] = 'B'
+	} else {
+		tampered[0] = 'A'
+	}
+	_, ok = adapter.operatorCodeContextSelection(identity, string(tampered))
+	require.False(t, ok, "a modified server reference must not be accepted")
+	_, ok = adapter.operatorCodeContextSelection(operatorCodeRequestIdentity{identity: fixture.identity, sessionID: "another-session"}, ref)
+	require.False(t, ok)
+	_, ok = adapter.operatorCodeContextSelection(operatorCodeRequestIdentity{identity: auth.SessionForBrowserUser("viewer", 42), sessionID: identity.sessionID}, ref)
+	require.False(t, ok)
+	adapter.now = func() time.Time { return instant.Add(operatorCodeChoiceLifetime) }
+	_, ok = adapter.operatorCodeContextSelection(identity, ref)
+	require.False(t, ok, "a stale chooser must be refreshed")
+}
+
+func TestOperatorCodeHTTPAdapter_GrantChooserRefsRoundTripWithoutExposingIDs(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	identity := operatorCodeHTTPTestChoiceIdentity(fixture)
+	owner := adapter.operatorCodeOpaqueRef(identity, "grant-choice", fixture.ref.CheckoutID)
+	target := adapter.operatorCodeOpaqueRef(identity, "grant-target", "99")
+	index := adapter.operatorCodeIndexSelectionRef(identity, fixture.ref.SourceID, fixture.ref.CheckoutID, fixture.ref.AnalysisProfileID)
+	for _, choice := range []string{owner, target, index} {
+		decoded, err := base64.RawURLEncoding.DecodeString(choice)
+		require.NoError(t, err)
+		require.NotContains(t, string(decoded), fixture.ref.CheckoutID)
+		require.NotContains(t, string(decoded), fixture.ref.SourceID)
+	}
+	ownerID, ok := adapter.operatorCodeOwnerChoiceRef(identity, owner)
+	require.True(t, ok)
+	require.Equal(t, fixture.ref.CheckoutID, ownerID)
+	targetID, ok := adapter.operatorCodeTargetChoiceID(identity, target)
+	require.True(t, ok)
+	require.Equal(t, int64(99), targetID)
+	selection, ok := adapter.operatorCodeIndexSelectionRefValue(identity, index)
+	require.True(t, ok)
+	require.Equal(t, operatorCodeIndexSelection{SourceID: fixture.ref.SourceID, CheckoutID: fixture.ref.CheckoutID, ProfileID: fixture.ref.AnalysisProfileID}, selection)
+	_, ok = adapter.operatorCodeOwnerChoiceRef(identity, target)
+	require.False(t, ok, "a target reference cannot be used as an owner choice")
+}
+
+func TestOperatorCodeHTTPAdapter_RejectsUnissuedIndexChoiceBeforeLookup(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	forged := base64.RawURLEncoding.EncodeToString([]byte("index-selection\x00" + fixture.ref.SourceID + "\x00" + fixture.ref.CheckoutID + "\x00" + fixture.ref.AnalysisProfileID))
+	request := `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","request_ref":"forged-first-index","kind":"reindex","target":{"selection_ref":"` + forged + `"}}`
+	recorder := httptest.NewRecorder()
+	adapter.HandleIndexIntentSubmit(recorder, operatorCodeHTTPTestRequest(t, request, fixture.identity))
+	require.Equal(t, http.StatusConflict, recorder.Code)
+	require.Zero(t, fixture.app.indexLookupCalls)
+	require.Zero(t, fixture.app.indexSubmitCalls)
+}
+
+func operatorCodeHTTPTestChoiceIdentity(fixture *operatorCodeHTTPTestFixture) operatorCodeRequestIdentity {
+	return operatorCodeRequestIdentity{identity: fixture.identity, sessionID: "browser-session-41"}
 }
 
 func newOperatorCodeHTTPTestAdapter(t *testing.T) (*OperatorCodeHTTPAdapter, *operatorCodeHTTPTestFixture) {
@@ -1301,6 +1384,7 @@ func newOperatorCodeHTTPTestAdapter(t *testing.T) (*OperatorCodeHTTPAdapter, *op
 	fixture.authority = newOperatorCodeHTTPTestAuthority(t, ref)
 	fixture.contexts.binding = fixture.binding
 	adapter := NewOperatorCodeHTTPAdapter(fixture.grants, fixture.binding, fixture.authority, fixture.app, fixture.recorder)
+	require.NoError(t, adapter.configureChoiceCipher(newTestVault(t)))
 	adapter.contexts = fixture.contexts
 	adapter.indexTargets = operatorCodeHTTPTestIndexTargets{}
 	return adapter, fixture
@@ -1655,6 +1739,7 @@ type operatorCodeHTTPTestApplication struct {
 	indexSubmitErr       error
 	indexGetErr          error
 	indexRetryErr        error
+	indexLookupCalls     int
 	indexSubmitCalls     int
 	indexGetCalls        int
 	indexRetryCalls      int
@@ -1781,6 +1866,7 @@ func (app *operatorCodeHTTPTestApplication) SubmitNoViewIndexIntent(ctx context.
 }
 
 func (app *operatorCodeHTTPTestApplication) NoViewIndexIntentByRequestRef(_ context.Context, requestRef string) (uci.IndexIntent, error) {
+	app.indexLookupCalls++
 	intent, found := app.indexIntents[requestRef]
 	if !found {
 		return uci.IndexIntent{}, uci.ErrIndexIntentNotFound
