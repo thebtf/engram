@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -11,7 +10,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/pkg/models"
-	gormlib "gorm.io/gorm"
 )
 
 const (
@@ -238,31 +236,71 @@ func (s *Service) handleGetGraphNodes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, graphNodesResponse{Nodes: nodes, Project: project, NodeType: nodeType, Count: len(nodes), Limit: limit})
 }
 
-func filterVisibleGraphEdges(ctx context.Context, nodeStore graphNodeStore, edges []graph.Edge) ([]graph.Edge, error) {
-	if len(edges) == 0 {
-		return edges, nil
+func (s *Service) graphMemoryVisible(ctx context.Context, id int64) bool {
+	if s.memoryStore == nil || id == 0 {
+		return false
 	}
+	mem, err := s.memoryStore.Get(ctx, id)
+	return err == nil && memoryVisibleREST(ctx, mem)
+}
+
+func (s *Service) graphNodeVisible(ctx context.Context, id int64) bool {
+	store := s.currentGraphNodeStore()
+	if store == nil || id == 0 {
+		return false
+	}
+	_, err := store.Get(ctx, id, false)
+	return err == nil
+}
+
+func (s *Service) filterVisibleGraphEdges(ctx context.Context, edges []graph.Edge) []graph.Edge {
 	visible := make([]graph.Edge, 0, len(edges))
-	for _, edge := range edges {
-		if edge.NodeSourceID != nil {
-			if _, err := nodeStore.Get(ctx, *edge.NodeSourceID, false); err != nil {
-				if errors.Is(err, gormlib.ErrRecordNotFound) {
-					continue
-				}
-				return nil, err
-			}
+	memoryAccess, nodeAccess := map[int64]bool{}, map[int64]bool{}
+	memVisible := func(id int64) bool {
+		allowed, seen := memoryAccess[id]
+		if !seen {
+			allowed = s.graphMemoryVisible(ctx, id)
+			memoryAccess[id] = allowed
 		}
-		if edge.NodeTargetID != nil {
-			if _, err := nodeStore.Get(ctx, *edge.NodeTargetID, false); err != nil {
-				if errors.Is(err, gormlib.ErrRecordNotFound) {
-					continue
-				}
-				return nil, err
-			}
+		return allowed
+	}
+	nodeVisible := func(id int64) bool {
+		allowed, seen := nodeAccess[id]
+		if !seen {
+			allowed = s.graphNodeVisible(ctx, id)
+			nodeAccess[id] = allowed
+		}
+		return allowed
+	}
+	for _, edge := range edges {
+		if (edge.SourceID != nil && !memVisible(*edge.SourceID)) ||
+			(edge.TargetID != nil && !memVisible(*edge.TargetID)) ||
+			(edge.NodeSourceID != nil && !nodeVisible(*edge.NodeSourceID)) ||
+			(edge.NodeTargetID != nil && !nodeVisible(*edge.NodeTargetID)) {
+			continue
 		}
 		visible = append(visible, edge)
 	}
-	return visible, nil
+	return visible
+}
+
+func (s *Service) filterVisibleGraphResults(ctx context.Context, results []graph.TraversalResult) []graph.TraversalResult {
+	visible := make([]graph.TraversalResult, 0, len(results))
+	access := map[int64]bool{}
+	canRead := func(id int64) bool {
+		allowed, seen := access[id]
+		if !seen {
+			allowed = s.graphMemoryVisible(ctx, id)
+			access[id] = allowed
+		}
+		return allowed
+	}
+	for _, result := range results {
+		if canRead(result.SourceID) && canRead(result.TargetID) {
+			visible = append(visible, result)
+		}
+	}
+	return visible
 }
 
 func (s *Service) handleGetGraphEdges(w http.ResponseWriter, r *http.Request) {
@@ -295,6 +333,16 @@ func (s *Service) handleGetGraphEdges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	edgeType := strings.TrimSpace(r.URL.Query().Get("edge_type"))
+	if (memoryID != 0 && !s.graphMemoryVisible(r.Context(), memoryID)) || (nodeID != 0 && !s.graphNodeVisible(r.Context(), nodeID)) {
+		resp := graphEdgesResponse{Edges: []graph.Edge{}, Direction: string(direction), EdgeType: edgeType}
+		if memoryID != 0 {
+			resp.MemoryID = &memoryID
+		} else {
+			resp.NodeID = &nodeID
+		}
+		writeJSON(w, resp)
+		return
+	}
 	var edges []graph.Edge
 	if memoryID != 0 {
 		edges, err = store.ListByMemory(r.Context(), memoryID, direction, edgeType)
@@ -305,16 +353,7 @@ func (s *Service) handleGetGraphEdges(w http.ResponseWriter, r *http.Request) {
 		writeGraphError(w, http.StatusInternalServerError, "graph_read_failed", err.Error())
 		return
 	}
-	nodeStore := s.currentGraphNodeStore()
-	if nodeStore == nil {
-		writeGraphError(w, http.StatusServiceUnavailable, "graph_store_unavailable", "graph node store not available")
-		return
-	}
-	edges, err = filterVisibleGraphEdges(r.Context(), nodeStore, edges)
-	if err != nil {
-		writeGraphError(w, http.StatusInternalServerError, "graph_read_failed", err.Error())
-		return
-	}
+	edges = s.filterVisibleGraphEdges(r.Context(), edges)
 	resp := graphEdgesResponse{Edges: edges, Direction: string(direction), EdgeType: edgeType, Count: len(edges)}
 	if memoryID != 0 {
 		resp.MemoryID = &memoryID
@@ -344,11 +383,16 @@ func (s *Service) handleTraverseGraph(w http.ResponseWriter, r *http.Request) {
 		writeGraphError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("max depth is %d", graph.MaxTraverseDepth))
 		return
 	}
+	if !s.graphMemoryVisible(r.Context(), memoryID) {
+		writeJSON(w, graphTraverseResponse{Results: []graph.TraversalResult{}, MemoryID: memoryID, Depth: depth})
+		return
+	}
 	results, err := store.Traverse(r.Context(), memoryID, depth, parseGraphEdgeTypes(r.URL.Query().Get("edge_types")))
 	if err != nil {
 		writeGraphError(w, http.StatusInternalServerError, "graph_read_failed", err.Error())
 		return
 	}
+	results = s.filterVisibleGraphResults(r.Context(), results)
 	writeJSON(w, graphTraverseResponse{Results: results, MemoryID: memoryID, Depth: depth, Count: len(results)})
 }
 
@@ -377,10 +421,17 @@ func (s *Service) handleFindGraphPath(w http.ResponseWriter, r *http.Request) {
 		writeGraphError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("max depth is %d", graph.MaxTraverseDepth))
 		return
 	}
+	if !s.graphMemoryVisible(r.Context(), sourceID) || !s.graphMemoryVisible(r.Context(), targetID) {
+		writeJSON(w, graphPathResponse{Path: []graph.TraversalResult{}, SourceID: sourceID, TargetID: targetID})
+		return
+	}
 	path, err := store.FindPath(r.Context(), sourceID, targetID, maxDepth)
 	if err != nil {
 		writeGraphError(w, http.StatusInternalServerError, "graph_read_failed", err.Error())
 		return
+	}
+	if len(s.filterVisibleGraphResults(r.Context(), path)) != len(path) {
+		path = nil
 	}
 	writeJSON(w, graphPathResponse{Path: path, SourceID: sourceID, TargetID: targetID, Found: path != nil, Hops: len(path)})
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/thebtf/engram/internal/graph"
+	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -78,6 +79,12 @@ func (s *Server) graphGetEdges(ctx context.Context, a graphArgs) (string, error)
 	if a.NodeType != "" && s.nodesStore == nil {
 		return "", fmt.Errorf("node_type filter unavailable: nodes store not configured")
 	}
+	if a.MemoryID != 0 && !s.graphMemoryVisible(ctx, a.MemoryID) {
+		return marshalJSON(map[string]any{"memory_id": a.MemoryID, "node_id": a.NodeID, "direction": a.Direction, "node_type": a.NodeType, "count": 0, "edges": []graph.Edge{}})
+	}
+	if a.NodeID != 0 && !s.graphNodeVisible(ctx, a.NodeID) {
+		return marshalJSON(map[string]any{"memory_id": a.MemoryID, "node_id": a.NodeID, "direction": a.Direction, "node_type": a.NodeType, "count": 0, "edges": []graph.Edge{}})
+	}
 
 	var edges []graph.Edge
 	var err error
@@ -91,14 +98,9 @@ func (s *Server) graphGetEdges(ctx context.Context, a graphArgs) (string, error)
 		return "", err
 	}
 
-	// T014: apply node_type filter post-query if specified.
-	// Batch-fetch node IDs from knowledge_nodes filtered by node_type; include
-	// only edges whose node endpoint (node_source_id or node_target_id) is in
-	// the matching set. Cross-table lookup is required because node_type is
-	// stored in knowledge_nodes, not in knowledge_edges.
-	filtered := edges
+	filtered := s.filterVisibleGraphEdges(ctx, edges)
 	if a.NodeType != "" {
-		filtered = filterEdgesByNodeType(ctx, edges, a.NodeType, s.nodesStore)
+		filtered = filterEdgesByNodeType(ctx, filtered, a.NodeType, s.nodesStore)
 	}
 
 	return marshalJSON(map[string]any{
@@ -109,6 +111,72 @@ func (s *Server) graphGetEdges(ctx context.Context, a graphArgs) (string, error)
 		"count":     len(filtered),
 		"edges":     filtered,
 	})
+}
+
+func (s *Server) graphMemoryVisible(ctx context.Context, id int64) bool {
+	if s.memoryStore == nil || id == 0 {
+		return false
+	}
+	mem, err := s.memoryStore.Get(ctx, id)
+	return err == nil && scope.ResolveMemory(writeLintVisibilityCaller(ctx, ""), mem, writeLintVisibilityOptions())
+}
+
+func (s *Server) graphNodeVisible(ctx context.Context, id int64) bool {
+	if s.nodesStore == nil || id == 0 {
+		return false
+	}
+	_, err := s.nodesStore.Get(ctx, id, false)
+	return err == nil
+}
+
+func (s *Server) filterVisibleGraphEdges(ctx context.Context, edges []graph.Edge) []graph.Edge {
+	visible := make([]graph.Edge, 0, len(edges))
+	memoryAccess, nodeAccess := map[int64]bool{}, map[int64]bool{}
+	memVisible := func(id int64) bool {
+		allowed, seen := memoryAccess[id]
+		if !seen {
+			allowed = s.graphMemoryVisible(ctx, id)
+			memoryAccess[id] = allowed
+		}
+		return allowed
+	}
+	nodeVisible := func(id int64) bool {
+		allowed, seen := nodeAccess[id]
+		if !seen {
+			allowed = s.graphNodeVisible(ctx, id)
+			nodeAccess[id] = allowed
+		}
+		return allowed
+	}
+	for _, edge := range edges {
+		if (edge.SourceID != nil && !memVisible(*edge.SourceID)) ||
+			(edge.TargetID != nil && !memVisible(*edge.TargetID)) ||
+			(edge.NodeSourceID != nil && !nodeVisible(*edge.NodeSourceID)) ||
+			(edge.NodeTargetID != nil && !nodeVisible(*edge.NodeTargetID)) {
+			continue
+		}
+		visible = append(visible, edge)
+	}
+	return visible
+}
+
+func (s *Server) filterVisibleGraphResults(ctx context.Context, results []graph.TraversalResult) []graph.TraversalResult {
+	visible := make([]graph.TraversalResult, 0, len(results))
+	access := map[int64]bool{}
+	canRead := func(id int64) bool {
+		allowed, seen := access[id]
+		if !seen {
+			allowed = s.graphMemoryVisible(ctx, id)
+			access[id] = allowed
+		}
+		return allowed
+	}
+	for _, result := range results {
+		if canRead(result.SourceID) && canRead(result.TargetID) {
+			visible = append(visible, result)
+		}
+	}
+	return visible
 }
 
 // filterEdgesByNodeType returns only edges whose node endpoint (node_source_id
@@ -197,10 +265,14 @@ func (s *Server) graphTraverse(ctx context.Context, a graphArgs) (string, error)
 	if depth > graph.MaxTraverseDepth {
 		return "", fmt.Errorf("max depth is %d", graph.MaxTraverseDepth)
 	}
+	if !s.graphMemoryVisible(ctx, a.MemoryID) {
+		return marshalJSON(map[string]any{"memory_id": a.MemoryID, "depth": depth, "count": 0, "results": []graph.TraversalResult{}})
+	}
 	results, err := s.graphStore.Traverse(ctx, a.MemoryID, depth, a.EdgeTypes)
 	if err != nil {
 		return "", err
 	}
+	results = s.filterVisibleGraphResults(ctx, results)
 	return marshalJSON(map[string]any{
 		"memory_id": a.MemoryID,
 		"depth":     depth,
@@ -213,6 +285,9 @@ func (s *Server) graphFindPath(ctx context.Context, a graphArgs) (string, error)
 	if a.SourceID == 0 || a.TargetID == 0 {
 		return "", fmt.Errorf("source_id and target_id required")
 	}
+	if !s.graphMemoryVisible(ctx, a.SourceID) || !s.graphMemoryVisible(ctx, a.TargetID) {
+		return marshalJSON(map[string]any{"source_id": a.SourceID, "target_id": a.TargetID, "found": false, "hops": 0, "path": []graph.TraversalResult{}})
+	}
 	maxDepth := a.MaxDepth
 	if maxDepth <= 0 {
 		maxDepth = graph.MaxTraverseDepth
@@ -220,6 +295,9 @@ func (s *Server) graphFindPath(ctx context.Context, a graphArgs) (string, error)
 	path, err := s.graphStore.FindPath(ctx, a.SourceID, a.TargetID, maxDepth)
 	if err != nil {
 		return "", err
+	}
+	if len(s.filterVisibleGraphResults(ctx, path)) != len(path) {
+		path = nil
 	}
 	found := path != nil
 	return marshalJSON(map[string]any{
@@ -235,10 +313,14 @@ func (s *Server) graphSynonyms(ctx context.Context, a graphArgs) (string, error)
 	if a.MemoryID == 0 {
 		return "", fmt.Errorf("memory_id required")
 	}
+	if !s.graphMemoryVisible(ctx, a.MemoryID) {
+		return marshalJSON(map[string]any{"memory_id": a.MemoryID, "count": 0, "synonyms": []graph.Edge{}})
+	}
 	edges, err := s.graphStore.FindSynonyms(ctx, a.MemoryID)
 	if err != nil {
 		return "", err
 	}
+	edges = s.filterVisibleGraphEdges(ctx, edges)
 	return marshalJSON(map[string]any{
 		"memory_id": a.MemoryID,
 		"count":     len(edges),
