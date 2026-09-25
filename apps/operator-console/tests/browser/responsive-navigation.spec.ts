@@ -3,10 +3,6 @@ import type { Page } from '@playwright/test'
 
 test.describe('mock interaction-only: responsive navigation and localization', () => {
   test('queue nav stays active while flags are unknown or unavailable, but shows an explicit off gate', async ({ page }) => {
-    const candidateRequests: string[] = []
-    page.on('request', (request) => {
-      if (new URL(request.url()).pathname === '/api/memory/candidates') candidateRequests.push(request.url())
-    })
     let failFlags: (() => void) | undefined
     await page.route('**/api/flags', async (route) => {
       await new Promise<void>((resolve) => { failFlags = resolve })
@@ -30,7 +26,24 @@ test.describe('mock interaction-only: responsive navigation and localization', (
     await page.reload()
     await expect(queue.locator('.ndot')).toHaveAttribute('data-s', 'gated')
     await expect(queue.locator('.flag')).toHaveText('ENGRAM_VNEXT_F_ENABLED')
+  })
+
+  test('only queue and Overview fetch candidate content, not Search navigation', async ({ page }) => {
+    const candidateRequests: string[] = []
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname === '/api/memory/candidates') candidateRequests.push(request.url())
+    })
+
+    await page.goto('/search')
+    await expect(page.locator('#primary-navigation a[href="/queue"]')).toBeVisible()
     expect(candidateRequests).toEqual([])
+
+    await page.goto('/queue')
+    await expect.poll(() => candidateRequests.length).toBeGreaterThan(0)
+    candidateRequests.length = 0
+
+    await page.goto('/')
+    await expect.poll(() => candidateRequests.length).toBeGreaterThan(0)
   })
 
   test('mobile and tablet navigation stays reachable and settings groups stay selectable', async ({ page }) => {

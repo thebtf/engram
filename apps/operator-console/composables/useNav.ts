@@ -87,7 +87,7 @@ export function useNav() {
   ...group,
   items: group.items.map((item) => {
    if (item.id !== 'queue') return item
-   const kind = queueState.value.kind === 'pending'
+   const kind = queueState.value.kind === 'pending' || queueState.value.kind === 'error'
     ? flag.value === false ? 'gated' : 'live'
     : queueState.value.kind
    return { ...item, cls: classFor(kind), evidence: kind === 'gated' ? 'ENGRAM_VNEXT_F_ENABLED' : undefined }
