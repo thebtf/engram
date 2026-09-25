@@ -206,7 +206,7 @@ Only a source owner may issue or revoke an explicit Source-and-Checkout browser 
 
 Manual knowledge-graph writers and plaintext Book intake are retired. Historical graph and Book readers, records, documents, and provenance remain available. Historical graph records are not UCI code-graph facts.
 
-The `codebase_*` MCP tools are the current UCI agent path, separate from browser Workspace. They require the daemon's `ENGRAM_CODE_INTEL_ENABLED=true` and an authorized opaque context; the internal raw-project rollback reader alone is legacy. MCP handles do not create browser grants or tab bindings. Follow the [operator setup and F1–F7 verification guide](docs/operating-engram.md) before treating Workspace as installed and accepted.
+The `codebase_*` MCP tools are the current UCI agent path, separate from browser Workspace. Current source enables code intelligence by default unless `ENGRAM_CODE_INTEL_ENABLED` is exactly `false`; check the actual daemon and its advertised tools on older installations. An authorized opaque context is still required. The internal raw-project rollback reader alone is legacy. MCP handles do not create browser grants or tab bindings. Follow the [operator setup and F1–F7 verification guide](docs/operating-engram.md) before treating Workspace as installed and accepted.
 
 Known corrections from that ledger:
 
@@ -228,7 +228,7 @@ Known corrections from that ledger:
   land on `/settings` directly, immediately redirects to `/`. There is no
   separate settings screen; refreshing or deep-linking to `/settings` reopens
   the modal over the overview rather than showing a stable settings page.
-- **Graph, candidate queue, legacy MCP tools:** these existing routes and tools load at direct request, but their data operations are rejected until `ENGRAM_GRAPH_ENABLED`, `ENGRAM_VNEXT_F_ENABLED`, or `ENGRAM_CODE_INTEL_ENABLED` is set. They are separate from the authenticated Workspace route. Flag presence is not the same as an accepted end-to-end workflow; the ledger records both separately.
+- **Graph, candidate queue, legacy MCP tools:** these existing routes and tools load at direct request, but their data operations depend on the relevant `ENGRAM_GRAPH_ENABLED`, `ENGRAM_VNEXT_F_ENABLED`, or code-intelligence setting. Unlike the other two flags, current source enables code intelligence by default unless `ENGRAM_CODE_INTEL_ENABLED` is exactly `false`. They are separate from the authenticated Workspace route. Flag presence is not the same as an accepted end-to-end workflow; the ledger records both separately.
 
 Use Workspace for browser investigation of authorized code. Use the console for operational overview, search, memory, rules, issues, documents, credentials, and access administration. Treat health, candidate queue, and settings per the corrections above.
 
@@ -243,8 +243,7 @@ Compose stack. Important defaults and boundaries:
   available through full-text search rather than a vector tier.
 - `ENGRAM_RERANK_URL` is an optional source-wired recall path, not a default or
   advertised core capability. See the source classification in the ledger.
-- `ENGRAM_GRAPH_ENABLED`, `ENGRAM_VNEXT_F_ENABLED`, and
-  `ENGRAM_CODE_INTEL_ENABLED` enable distinct non-default surfaces.
+- `ENGRAM_GRAPH_ENABLED` and `ENGRAM_VNEXT_F_ENABLED` enable distinct non-default surfaces. Current source enables code intelligence by default; `ENGRAM_CODE_INTEL_ENABLED=false` is its explicit stop.
 - `ENGRAM_AUTH_DISABLED=true` is a local smoke/debug choice, not a production
   security setting.
 
