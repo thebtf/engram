@@ -21,7 +21,7 @@ type Derivation struct {
 }
 
 func DeriveFromMigrationsFile(path string) (Derivation, error) {
-	schema, err := migrationmeta.ParseFile(path)
+	schema, err := migrationmeta.ParseRegisteredFile(path)
 	if err != nil {
 		return Derivation{}, err
 	}
@@ -40,7 +40,7 @@ func DeriveFromSchema(schema *migrationmeta.Schema) Derivation {
 	var b strings.Builder
 	b.WriteString(BeginGeneratedTables)
 	b.WriteString("\n")
-	b.WriteString("Generated from `internal/db/gorm/migrations.go`.\n\n")
+	b.WriteString("Generated from registered migrations in `internal/db/gorm/`.\n\n")
 	fmt.Fprintf(&b, "Migration count: **%d**.\n\n", len(schema.Migrations))
 	fmt.Fprintf(&b, "Live table count: **%d**.\n\n", len(tables))
 	b.WriteString("| Table | Creating migration |\n")

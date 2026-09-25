@@ -7,7 +7,8 @@ gormigrate. Tables are created via raw `CREATE TABLE` DDL or `AutoMigrate`,
 followed by explicit DDL for pgvector columns, FTS indexes, and constraints.
 
 The authoritative live-table list and exact migration/table counts are
-**generated** from `internal/db/gorm/migrations.go` into the generated-tables
+**generated** from the migrations registered by `internal/db/gorm/migrations.go`,
+including constructors in other `internal/db/gorm/` files, into the generated-tables
 block at the bottom of this file. Regenerate after any schema migration with:
 
 ```
@@ -15,7 +16,7 @@ go run ./tools/gen-data-model
 ```
 
 The `datamodel_drift_test.go` guardrail fails if the committed block falls out of
-sync with the migration list, so the counts never silently rot.
+sync with registered migrations, so the counts never silently rot.
 
 > **Note (v5 demolition in progress):** several `observation_*` tables and other
 > pre-vNext tables still appear as live in the generated block but are slated for
@@ -51,11 +52,11 @@ irreversible by design — rollback requires manual SQL or a backup restore.
 The list below is generated. Do not edit it by hand; run `go run ./tools/gen-data-model`.
 
 <!-- BEGIN GENERATED TABLES -->
-Generated from `internal/db/gorm/migrations.go`.
+Generated from registered migrations in `internal/db/gorm/`.
 
-Migration count: **155**.
+Migration count: **174**.
 
-Live table count: **69**.
+Live table count: **84**.
 
 | Table | Creating migration |
 | --- | --- |
@@ -92,11 +93,26 @@ Live table count: **69**.
 | `code_chunks` | `139_code_chunks` |
 | `code_index_sessions` | `140_code_index_sessions` |
 | `model_settings` | `143_model_settings` |
+| `rule_candidates` | `144_rule_governance_core` |
+| `rule_families` | `144_rule_governance_core` |
+| `rule_governance_snapshots` | `144_rule_governance_core` |
+| `rule_transition_log` | `144_rule_governance_core` |
+| `rule_versions` | `144_rule_governance_core` |
+| `rule_arbiter_evaluations` | `145_rule_arbiter_background` |
+| `rule_arbiter_runs` | `145_rule_arbiter_background` |
 | `rule_injection_events` | `146_rule_injection_events` |
+| `memory_domain_owners` | `150_memory_domain_owners` |
 | `agent_project_state` | `152_agent_state_plane` |
 | `agent_session_state` | `152_agent_state_plane` |
+| `books_jobs` | `155_books_jobs` |
+| `temporal_truth_records` | `157_temporal_truth_records` |
 | `attention_events` | `158_attention_events` |
 | `project_continuity_slots` | `161_project_continuity_slots` |
+| `project_identifiers` | `162_project_identity_v3` |
+| `project_merge_audit_sources` | `162_project_identity_v3` |
+| `project_merge_audits` | `162_project_identity_v3` |
+| `project_resolution_attempts` | `163_project_identity_v3_resolution_attempts` |
+| `project_identity_comparisons` | `165_project_identity_v3_comparisons` |
 | `task_memory_intervention_receipts` | `168_task_memory_intervention_receipts` |
 | `intervention_evidence_policies` | `169_intervention_evidence_policies` |
 | `ci_checkouts` | `171_uci_context_registry` |
