@@ -1,7 +1,7 @@
 # Legacy Project Identity Compatibility Matrix
 
 **Status**: Target compatibility and retirement contract.  
-**Authority**: `constitution.md`, `spec.md` FR-001 through FR-007 and FR-025 through FR-026, `data-model.md`, `project-identity-v3.md`, and `project-merge-manifest.schema.json`.
+**Authority**: `constitution.md`, `spec.md` FR-001 through FR-007 and FR-025 through FR-026, `data-model.md`, `project-identity-v3.md`, `project-merge-manifest.schema.json`, and `migration-receipt.schema.json`.
 
 ## 1. Compatibility boundary
 
@@ -45,6 +45,9 @@ A compatibility window MUST be declared in a versioned retirement record before 
 
 The window starts only when the declared release is installed with its migration receipt and bridge instrumentation. It ends only when every sunset criterion below passes. A calendar date, repository tag, absence of new writes, or a zero metric denominator alone MUST NOT end the window.
 
+For an approved single-row historical adoption, the compatibility record MUST name the last V2 read boundary and each supported client version, selector, read and mutation route, and serialized field. Preflight does not mint a UUID or modify the old row. Until every affected role is reconciled and both paths switch under the same write fence, V3 refuses and V2 reads remain at the declared compatible boundary; divergent TEXT-only writes are refused. After cutover, a supported V2 selector resolves the adopted row's server-issued UUID before reading or writing canonical stores. A required historical TEXT projection is read-only and versioned; unsupported versions or unclassified fields refuse. An adoption receipt records the old-row evidence reference, plan, approvals, backup, per-role comparisons, quarantine, and rollback boundary without fabricating a source UUID or merge manifest.
+
+
 ## 4. Client behavior during transition
 
 1. A V3-capable client MUST send the intake-defined descriptor fields (`version`, `anchor_project_id`, `name`, `scope`, `normalized_git_remotes`, `legacy_identifiers`, and `client_instance_id`) for every scoped operation and MUST treat a server-returned canonical key as opaque resolved scope.
@@ -61,7 +64,7 @@ Every legacy family may be retired only when all applicable conditions are true:
 
 1. **Inventory closure**: Every project-bearing table column, relationship role, serialized field, cache key, import/export field, job payload, route, hook, tool, and client adapter has a terminal inventory disposition. Unknown or unsafe rows have a visible quarantine item with owner and required decision.
 2. **V3 replacement**: Every supported producer and consumer has a tested V3 descriptor or canonical-key boundary. Cross-language descriptor vectors prove equivalent resolution behavior for each supported adapter.
-3. **Migration integrity**: For every accepted merge group, dry-run, approved apply, repeat-run idempotency, count comparison, provenance/privacy verification, and rollback rehearsal have receipts. Each collision is deterministically resolved or quarantined.
+3. **Migration integrity**: For every accepted merge group, dry-run, approved apply, repeat-run idempotency, count comparison, provenance/privacy verification, and rollback rehearsal have receipts. For every accepted single-row adoption, its own approval, exact-role reconciliation, semantic comparison, quarantine, idempotency, and rollback rehearsal have an adoption receipt. Each collision is deterministically resolved or quarantined.
 4. **Observed compatibility**: The declared observation window has a nonzero measured denominator for each still-supported legacy family, and its declared upgrade or retirement threshold is satisfied. No unresolved ambiguity, copied-anchor hold, or translation failure may be hidden in an aggregate metric.
 5. **No live bridge dependency**: Source/configuration/package/route/tool/hook/client scans and installed behavior show no remaining supported producer or consumer that requires the legacy translation path. Retained historical data remains readable through a declared compatible boundary or explicit quarantine ledger.
 6. **Rollback readiness**: Backup/export, migration receipt, last compatible read boundary, and restore or forward-compensation procedure are proven for the exact contraction candidate.
@@ -72,7 +75,7 @@ After the sunset gate, a formerly supported legacy selector MUST receive `PROJEC
 
 ## 6. Rollback and re-entry
 
-Compatibility contraction is reversible only to the last compatible read boundary recorded in the applicable merge manifest. A rollback MUST restore or forward-compensate through that manifest's backup/export and receipt references, preserve merge audit and quarantine evidence, and maintain privacy non-widening. It MUST NOT restore a second canonical authority or use raw historical identifiers to allocate a new project.
+Compatibility contraction is reversible only to the last compatible read boundary recorded in the applicable approved merge manifest or single-row adoption receipt. A rollback MUST use that operation's verified backup/export and receipt, preserve later canonical UUID writes through restoration or forward compensation, retain immutable audit/quarantine and privacy/grant evidence, and never revive TEXT as a second tenant authority. It MUST NOT allocate a new project from raw historical identifiers.
 
 Reopening a retired legacy bridge requires a new versioned compatibility record, fresh inventory, a documented risk and owner, a bounded observation plan, and an approved rollback boundary. It is not an automatic consequence of a client error or migration failure.
 

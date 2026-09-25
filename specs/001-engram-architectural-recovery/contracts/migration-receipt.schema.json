@@ -76,7 +76,8 @@
             "identity_convergence",
             "knowledge_migration",
             "retrieval_migration",
-            "contraction"
+            "contraction",
+            "historical_adoption"
           ]
         }
       }
@@ -178,13 +179,16 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "source_project_keys",
         "target_project_keys",
         "object_families"
       ],
       "properties": {
         "source_project_keys": {
           "$ref": "#/$defs/idArray"
+        },
+        "historical_row_reference": {
+          "description": "Opaque redacted evidence reference for the previously UUID-less projects.id row, never the raw TEXT ID or a fabricated source UUID.",
+          "$ref": "#/$defs/nonEmptyId"
         },
         "target_project_keys": {
           "$ref": "#/$defs/idArray"
@@ -196,6 +200,60 @@
           "items": {
             "$ref": "#/$defs/nonEmptyId"
           }
+        }
+      }
+    },
+    "adoption": {
+      "description": "Single-row historical adoption evidence; references contain no raw identifiers, secrets, or private payloads.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "anchor_project_id",
+        "plan_reference",
+        "plan_fingerprint",
+        "owner_approval_reference",
+        "administrator_approval_reference",
+        "inventory_reference",
+        "role_count_comparisons",
+        "grants_non_widening",
+        "grants_verification_reference",
+        "post_cutover_write_compensation_reference"
+      ],
+      "properties": {
+        "anchor_project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "plan_reference": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "plan_fingerprint": {
+          "$ref": "#/$defs/redactedFingerprint"
+        },
+        "owner_approval_reference": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "administrator_approval_reference": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "inventory_reference": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "role_count_comparisons": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/adoptionRoleCount"
+          }
+        },
+        "grants_non_widening": {
+          "const": true
+        },
+        "grants_verification_reference": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "post_cutover_write_compensation_reference": {
+          "$ref": "#/$defs/nonEmptyId"
         }
       }
     },
@@ -808,6 +866,88 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "migration": {
+            "properties": {
+              "operation_kind": {
+                "const": "historical_adoption"
+              }
+            },
+            "required": [
+              "operation_kind"
+            ]
+          }
+        },
+        "required": [
+          "migration"
+        ]
+      },
+      "then": {
+        "required": [
+          "adoption"
+        ],
+        "properties": {
+          "scope": {
+            "required": [
+              "historical_row_reference"
+            ],
+            "not": {
+              "required": [
+                "source_project_keys"
+              ]
+            },
+            "properties": {
+              "target_project_keys": {
+                "maxItems": 1,
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "privacy_preservation": {
+            "properties": {
+              "privacy_scope_widened": {
+                "const": false
+              }
+            }
+          },
+          "quarantine": {
+            "properties": {
+              "items": {
+                "items": {
+                  "required": [
+                    "owner_reference"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "not": {
+          "required": [
+            "adoption"
+          ]
+        },
+        "properties": {
+          "scope": {
+            "required": [
+              "source_project_keys"
+            ],
+            "not": {
+              "required": [
+                "historical_row_reference"
+              ]
+            }
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -829,6 +969,52 @@
       "uniqueItems": true,
       "items": {
         "$ref": "#/$defs/nonEmptyId"
+      }
+    },
+    "adoptionRoleCount": {
+      "description": "For every inventoried family and distinct role, before_count equals migrated_count plus quarantined_count plus native_global_count; after_count equals migrated_count. Semantic and quarantine decisions require referenced evidence.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "object_family",
+        "project_role",
+        "before_count",
+        "migrated_count",
+        "quarantined_count",
+        "native_global_count",
+        "after_count",
+        "semantic_evidence_reference"
+      ],
+      "properties": {
+        "object_family": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "project_role": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "before_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "migrated_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "quarantined_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "native_global_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "after_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "semantic_evidence_reference": {
+          "$ref": "#/$defs/nonEmptyId"
+        }
       }
     },
     "countComparison": {
@@ -923,6 +1109,9 @@
           "$ref": "#/$defs/nonEmptyId"
         },
         "reason_code": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "owner_reference": {
           "$ref": "#/$defs/nonEmptyId"
         },
         "privacy_class": {
