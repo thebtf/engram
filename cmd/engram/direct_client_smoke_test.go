@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,8 +27,6 @@ func (*directDiscoveryFixture) Initialize(context.Context, *pb.InitializeRequest
 }
 
 func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
-	defer cancel()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +35,15 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 	pb.RegisterEngramServiceServer(fixture, &directDiscoveryFixture{})
 	go func() { _ = fixture.Serve(listener) }()
 	defer fixture.Stop()
-	state := t.TempDir()
+	state, err := os.MkdirTemp("", "ed-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(state); err != nil {
+			t.Error(err)
+		}
+	})
 	for _, part := range []string{"home", "appdata", "localappdata", "temp"} {
 		if err := os.Mkdir(filepath.Join(state, part), 0o700); err != nil {
 			t.Fatal(err)
@@ -46,10 +53,12 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		binary += ".exe"
 	}
-	build := exec.CommandContext(ctx, "go", "build", "-o", binary, ".")
+	build := exec.Command("go", "build", "-o", binary, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build direct binary: %v: %s", err, out)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
+	defer cancel()
 	env := make([]string, 0)
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
@@ -95,7 +104,11 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		if err := command.Start(); err != nil {
 			t.Fatal(err)
 		}
-		defer func() { _ = stdin.Close(); _ = command.Wait() }()
+		var waited sync.Once
+		finish := func() {
+			waited.Do(func() { _ = stdin.Close(); _ = command.Wait() })
+		}
+		defer finish()
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 64*1024), 16<<20)
 		encoder := json.NewEncoder(stdin)
@@ -122,6 +135,7 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 					Error  json.RawMessage `json:"error"`
 				}
 				if len(raw) == 0 || json.Unmarshal(raw, &frame) != nil || len(frame.Error) != 0 || len(frame.Result) == 0 {
+					finish()
 					t.Fatalf("%s failed: response %s stderr %s", method, raw, stderr.String())
 				}
 				if method == "tools/list" {
@@ -144,6 +158,7 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 					}
 				}
 			case <-ctx.Done():
+				finish()
 				t.Fatalf("%s timed out: %v stderr %s", method, ctx.Err(), stderr.String())
 			}
 		}
