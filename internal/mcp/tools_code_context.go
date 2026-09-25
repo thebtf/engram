@@ -882,6 +882,9 @@ func validCodebaseContextMetadata(metadata map[string]string) bool {
 func codebaseContextApplicationError(err error) error {
 	var contextErr *uci.ContextError
 	if errors.As(err, &contextErr) {
+		if contextErr.Code() == uci.RegistrationProfileUnbound {
+			return errors.New("REGISTRATION_PROFILE_UNBOUND: original analysis profile cannot be recovered; register with a new source label for a distinct identity")
+		}
 		switch contextErr.Code() {
 		case uci.ContextRequired, uci.ContextMismatch, uci.PermissionDenied:
 			return codebaseContextClosedError(contextErr.Code())

@@ -66,13 +66,16 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 			var matches []UCICheckout
 			if err := tx.Table("ci_checkouts AS checkout").Select("checkout.*").
 				Joins("JOIN sources AS source ON source.source_id = checkout.source_id").
-				Where("source.auth_realm = ? AND source.kind = ? AND source.state = ? AND source.display_name = ? AND checkout.owner_principal = ? AND checkout.workstation_id = ? AND checkout.locator_ref = ? AND checkout.kind = ? AND checkout.state IN ? AND checkout.registration_profile_id IS NOT NULL", in.AuthRealm, UCISourceGit, UCISourceActive, in.SourceLabel, in.Principal, in.WorkstationID, in.Locator, UCICheckoutWorkingTree, []UCICheckoutState{UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp}).Limit(2).Find(&matches).Error; err != nil {
+				Where("source.auth_realm = ? AND source.kind = ? AND source.state = ? AND source.display_name = ? AND checkout.owner_principal = ? AND checkout.workstation_id = ? AND checkout.locator_ref = ? AND checkout.kind = ? AND checkout.state IN ?", in.AuthRealm, UCISourceGit, UCISourceActive, in.SourceLabel, in.Principal, in.WorkstationID, in.Locator, UCICheckoutWorkingTree, []UCICheckoutState{UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp}).Limit(2).Find(&matches).Error; err != nil {
 				return fmt.Errorf("register local git replay lookup: %w", err)
 			}
 			if len(matches) > 1 {
 				return errUCIContextAuthorizationDenied
 			}
 			if len(matches) == 1 {
+				if matches[0].RegistrationProfileID == nil {
+					return uci.NewContextError(uci.RegistrationProfileUnbound, nil)
+				}
 				if in.ParserBundle != nil {
 					if err := localGitRegistrationProfileMatches(tx, *matches[0].RegistrationProfileID, profileDigest); err != nil {
 						return err
@@ -102,8 +105,11 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 		var existing UCICheckout
 		result := tx.Where("source_id = ? AND workstation_id = ? AND locator_ref = ? AND state IN ?", sourceID, in.WorkstationID, in.Locator, []UCICheckoutState{UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp}).First(&existing)
 		if result.Error == nil {
-			if existing.OwnerPrincipal != in.Principal || existing.Kind != UCICheckoutWorkingTree || existing.RegistrationProfileID == nil {
+			if existing.OwnerPrincipal != in.Principal || existing.Kind != UCICheckoutWorkingTree {
 				return errUCIContextAuthorizationDenied
+			}
+			if existing.RegistrationProfileID == nil {
+				return uci.NewContextError(uci.RegistrationProfileUnbound, nil)
 			}
 			if in.ParserBundle != nil {
 				if err := localGitRegistrationProfileMatches(tx, *existing.RegistrationProfileID, profileDigest); err != nil {

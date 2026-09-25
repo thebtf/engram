@@ -19,6 +19,9 @@ type registrationContextApplication struct {
 func (app *registrationContextApplication) RegisterLocalGit(_ context.Context, input uci.ResolveContextInput, sourceID, label, locator string, parserBundle *bool) (uci.RegisteredCheckoutSelector, error) {
 	app.calls = append(app.calls, input)
 	app.parserBundles = append(app.parserBundles, parserBundle)
+	if label == "legacy" {
+		return uci.RegisteredCheckoutSelector{}, uci.NewContextError(uci.RegistrationProfileUnbound, nil)
+	}
 	if sourceID == "not-a-uuid" {
 		return uci.RegisteredCheckoutSelector{}, uci.NewContextError(uci.ContextMismatch, nil)
 	}
@@ -69,6 +72,10 @@ func TestRegisterCodebaseContextIssuesNoViewTargetOnlyForAuthenticatedOwner(t *t
 	recoveredBytes, err := json.Marshal(recovered)
 	require.NoError(t, err)
 	require.NotContains(t, string(recoveredBytes), "/private/")
+	legacy := callUCICodebaseContext(t, fixture.server, owner, map[string]any{"action": "register", "source_label": "legacy", "locator": "file:///private/checkout-a"})
+	require.NotNil(t, legacy.Error)
+	require.Equal(t, "REGISTRATION_PROFILE_UNBOUND: original analysis profile cannot be recovered; register with a new source label for a distinct identity", legacy.Error.Data)
+	require.NotContains(t, legacy.Error.Data, "/private/")
 	malformed := callUCICodebaseContext(t, fixture.server, owner, map[string]any{"action": "register", "source_id": "not-a-uuid", "locator": "file:///private/checkout-a"})
 	parserSelection := decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, owner, map[string]any{"action": "register", "source_label": "engram", "locator": "file:///private/checkout-a", "parser_bundle": true}))
 	require.Equal(t, payload["checkout_id"], parserSelection["checkout_id"])
@@ -86,5 +93,5 @@ func TestRegisterCodebaseContextIssuesNoViewTargetOnlyForAuthenticatedOwner(t *t
 	readOnly := auth.WithIdentity(ContextWithSession(context.Background(), "readonly-session"), auth.ClientWithPrincipal("read-only", "keycard-ro", "browser-user/41", auth.PrincipalKindHuman))
 	readOnlyDenied := callUCICodebaseContext(t, fixture.server, readOnly, map[string]any{"action": "register", "source_id": uciCodebaseContextTestSource, "locator": "file:///private/checkout-a"})
 	require.NotNil(t, readOnlyDenied.Error)
-	require.Len(t, application.calls, 5)
+	require.Len(t, application.calls, 6)
 }

@@ -15,6 +15,67 @@ import (
 	"github.com/thebtf/engram/internal/uci"
 )
 
+func TestRegisterLocalGitUnboundLegacyCheckoutRefusesRecovery(t *testing.T) {
+	for _, withWrongView := range []bool{false, true} {
+		name := "zero_views"
+		if withWrongView {
+			name = "one_unrelated_profile_view"
+		}
+		t.Run(name, func(t *testing.T) {
+			db, store := openUCIContextMigrationStore(t)
+			ctx := context.Background()
+			owner := RegisterLocalGitInput{AuthRealm: "client", Principal: "browser-user/41", WorkstationID: "keycard-41", SourceLabel: "legacy", Locator: "file:///legacy/worktree"}
+			original, err := store.RegisterLocalGit(ctx, owner)
+			require.NoError(t, err)
+			if withWrongView {
+				checkout, err := store.GetCheckout(ctx, original.CheckoutID)
+				require.NoError(t, err)
+				wrongProfile, err := store.CreateProfile(ctx, newUCIContextMigrationProfileInput(uuid.NewString()))
+				require.NoError(t, err)
+				require.NotEqual(t, original.ProfileID, wrongProfile.ProfileID)
+				_, err = store.CreateView(ctx, newUCIContextMigrationViewInput(checkout, wrongProfile, 1, uuid.NewString()))
+				require.NoError(t, err)
+			}
+			require.NoError(t, db.Model(&UCICheckout{}).Where("checkout_id = ?", original.CheckoutID).Update("registration_profile_id", nil).Error)
+			byID := owner
+			byID.SourceID, byID.SourceLabel = original.SourceID, ""
+			for _, retry := range []RegisterLocalGitInput{owner, byID} {
+				_, err := store.RegisterLocalGit(ctx, retry)
+				var contextErr *uci.ContextError
+				require.ErrorAs(t, err, &contextErr)
+				require.Equal(t, uci.RegistrationProfileUnbound, contextErr.Code())
+			}
+			var sourceCount, checkoutCount, profileCount, viewCount int64
+			require.NoError(t, db.Model(&UCISource{}).Count(&sourceCount).Error)
+			require.NoError(t, db.Model(&UCICheckout{}).Count(&checkoutCount).Error)
+			require.NoError(t, db.Model(&UCIAnalysisProfile{}).Count(&profileCount).Error)
+			require.NoError(t, db.Model(&UCIView{}).Count(&viewCount).Error)
+			require.EqualValues(t, 1, sourceCount)
+			require.EqualValues(t, 1, checkoutCount)
+			require.EqualValues(t, 1+viewCount, profileCount)
+			if withWrongView {
+				require.EqualValues(t, 1, viewCount)
+			} else {
+				require.Zero(t, viewCount)
+			}
+			var unchanged UCICheckout
+			require.NoError(t, db.Where("checkout_id = ?", original.CheckoutID).First(&unchanged).Error)
+			require.Nil(t, unchanged.RegistrationProfileID)
+			require.Equal(t, original.IncarnationID, unchanged.IncarnationID)
+			fresh := owner
+			fresh.SourceLabel = "new-registration"
+			newIdentity, err := store.RegisterLocalGit(ctx, fresh)
+			require.NoError(t, err)
+			require.NotEqual(t, original.SourceID, newIdentity.SourceID)
+			require.NotEqual(t, original.CheckoutID, newIdentity.CheckoutID)
+			require.NotEqual(t, original.ProfileID, newIdentity.ProfileID)
+			replayed, err := store.RegisterLocalGit(ctx, fresh)
+			require.NoError(t, err)
+			require.Equal(t, newIdentity, replayed)
+		})
+	}
+}
+
 func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	root := t.TempDir()
 	git := func(args ...string) {
