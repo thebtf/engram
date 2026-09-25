@@ -3,8 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
-	"errors"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -22,10 +22,26 @@ import (
 
 type directDiscoveryFixture struct {
 	pb.UnimplementedEngramServiceServer
+	requests chan *pb.InitializeRequest
 }
 
-func (*directDiscoveryFixture) Initialize(context.Context, *pb.InitializeRequest) (*pb.InitializeResponse, error) {
-	return &pb.InitializeResponse{Tools: []*pb.ToolDefinition{{Name: "codebase_context", Description: "select authorized checkout"}}}, nil
+func (f *directDiscoveryFixture) Initialize(_ context.Context, request *pb.InitializeRequest) (*pb.InitializeResponse, error) {
+	identity := request.GetProjectIdentityV3()
+	if identity == nil {
+		return nil, errors.New("direct discovery requires a V3 repository descriptor")
+	}
+	f.requests <- request
+	projectKey, scope := identity.GetAnchorProjectId(), identity.GetScope()
+	return &pb.InitializeResponse{
+		Tools:            []*pb.ToolDefinition{{Name: "codebase_context", Description: "select authorized checkout"}},
+		CanonicalProject: projectKey,
+		ProjectResolutionV3: &pb.ProjectResolutionResultV3{
+			Outcome:       pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED,
+			Correlation:   "direct-stdio-fixture",
+			ProjectKey:    &projectKey,
+			ResolvedScope: &scope,
+		},
+	}, nil
 }
 
 func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
@@ -34,7 +50,8 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture := grpc.NewServer()
-	pb.RegisterEngramServiceServer(fixture, &directDiscoveryFixture{})
+	discovery := &directDiscoveryFixture{requests: make(chan *pb.InitializeRequest, 2)}
+	pb.RegisterEngramServiceServer(fixture, discovery)
 	go func() { _ = fixture.Serve(listener) }()
 	defer fixture.Stop()
 	root, err := os.Getwd()
@@ -53,6 +70,18 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 			t.Fatal("primary repository root not found")
 		}
 		root = parent
+	}
+	var project struct {
+		ID    string `json:"project_id"`
+		Name  string `json:"name"`
+		Scope string `json:"scope"`
+	}
+	marker, err := os.ReadFile(filepath.Join(root, ".engram-project"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(marker, &project); err != nil {
+		t.Fatal(err)
 	}
 	scratch := filepath.Join(root, ".agent", "tmp")
 	if err := os.MkdirAll(scratch, 0o700); err != nil {
@@ -208,6 +237,15 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		id, err := os.ReadFile(filepath.Join(state, "installation", "client-instance-id"))
 		if err != nil || !strings.HasPrefix(string(id), "engram-") {
 			t.Fatalf("direct installation identity absent: %v", err)
+		}
+		select {
+		case request := <-discovery.requests:
+			identity := request.GetProjectIdentityV3()
+			if request.GetProject() != "" || request.GetProjectIdentity() != nil || identity.GetVersion() != 3 || identity.GetAnchorProjectId() != project.ID || identity.GetName() != project.Name || identity.GetScope() != project.Scope || identity.GetClientInstanceId() != string(id) {
+				t.Fatalf("direct Initialize did not derive V3 identity from repository and installation: %s", request)
+			}
+		default:
+			t.Fatal("direct client did not send V3 Initialize to fixture")
 		}
 		if first != "" && string(id) != first {
 			t.Fatalf("direct client restart changed identity")
