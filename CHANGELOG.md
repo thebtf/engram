@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.49.4] - 2026-09-25
+
+### Fixed
+
+- Fixed OMP Engram MCP startup from an ordinary project directory for the marketplace plugin: its configuration resolves the plugin wrapper path while retaining project cwd; Codex uses a separate package-relative MCP configuration (#531).
+
 ## [6.49.3] - 2026-09-16
 
 ### Fixed

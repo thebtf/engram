@@ -31,7 +31,7 @@
 | Docker image acceptance | `final-image-set.json` retained from the release workflow | manifest is missing, not `status: PASS`, does not cover `server`, `operator-console`, and `postgres`, or lacks exact IDs, zero HIGH/CRITICAL findings in the three canonical-image SARIF files, runtime proof, or cleanup PASS |
 | Released-image rescan | post-publication `ScanPublished` evidence: one summary JSON plus per-image SARIF/log for `server`, `operator-console`, and `postgres` | after publication, first run is not started within 24h, later evidence is older than 36h by `started_at`/`completed_at`, evidence is missing, HIGH/CRITICAL findings exist, or scanner/database/tag-resolution errors prevent complete evidence; blocks rollout/continued deployment, not initial digest publication |
 | Diff hygiene | `git diff --check` | whitespace/conflict marker errors |
-| SonarQube Quality Gate | Root agent runs `node tools/quality/run-sonarqube.mjs` locally from the clean, frozen exact candidate; retain `.agent/e/sonarqube/<HEAD>.json`; no GitHub Actions workflow performs this gate | exact candidate coverage is incomplete, scanner/CE/QG is non-OK, or requested status publication fails |
+| SonarQube Quality Gate | Root agent runs `node tools/quality/run-sonarqube.mjs` locally from the clean, frozen exact candidate; retain `.agent/e/sonarqube/<HEAD>.json`; no GitHub Actions workflow performs this gate | exact candidate coverage is incomplete, scanner/CE/QG is non-OK, or requested status publication fails; only for the one-time v6.49.4 PR #531 exception below, Sonar unavailability permits incomplete exact-candidate coverage and `UNAVAILABLE / NOT_PROVEN` instead of fresh analysis and `OK`, without resolving observed findings or waiving any other gate |
 
 ## CI Compute Boundaries
 
@@ -43,12 +43,21 @@ GitHub-hosted CI is reserved for the smallest lane that can prove the current st
 | Ordinary PR / `main` CI | One cancelable Ubuntu validation lane plus cheap authority checks; no Docker image build | A candidate must not receive duplicate push and PR execution. Superseded non-manual runs are cancelled. |
 | Frozen-candidate validation | Clean-DB coverage and Ubuntu/Windows/macOS validation | Explicit manual dispatch after bytes are frozen; run once per frozen candidate. Rerun unchanged bytes only after proven infrastructure recovery. |
 | Image and publication gates | Docker image acceptance for `v*` tags or explicit manual frozen-candidate acceptance; required release/publish gates | These are release-boundary work, never ordinary CI. Release/publication jobs are never cancelled mid-publication. |
-| SonarQube gate | Root agent runs `node tools/quality/run-sonarqube.mjs` locally from the clean, frozen exact candidate and retains `.agent/e/sonarqube/<HEAD>.json`; no GitHub Actions workflow performs this gate | Mandatory before publication: Quality Gate must be `OK`. A Sonar outage holds release; repair or prove recovery before one same-candidate rerun, not repeated attempts. |
+| SonarQube gate | Root agent runs `node tools/quality/run-sonarqube.mjs` locally from the clean, frozen exact candidate and retains `.agent/e/sonarqube/<HEAD>.json`; no GitHub Actions workflow performs this gate | Mandatory before publication: Quality Gate must be `OK` except under the one-time v6.49.4 exception below. A Sonar outage otherwise holds release; repair or prove recovery before one same-candidate rerun, not repeated attempts. |
 | Post-publication monitoring | Scheduled published-image rescan only | Daily schedule does not build or accept images; retain the freshness/remediation evidence required below. |
 
 The candidate selection must prevent duplicate push-and-PR work for identical bytes. Changed bytes define one new candidate and one new heavy validation; unchanged bytes do not justify another heavy gate without the recovery evidence above.
 If branch protection is enabled later, ordinary required checks may include only checks emitted on ordinary PRs; never require dispatch-only `test / windows-latest`, `test / macos-14`, or `migrations / clean-db chain`.
 
+### Operator-approved v6.49.4 Sonar exception (2026-09-25)
+
+For PR #531's `v6.49.4` OMP plugin hotfix only, run exact-candidate Sonar if its runner is available. If it cannot run, do not wait for recovery or clear/retry an occupied runner lock merely to obtain Sonar coverage; record the actual lock/unavailability diagnostics. Sonar status is **UNAVAILABLE / NOT_PROVEN**, not `OK`, not zero findings, and not a silent gate pass. Retain the incomplete campaign diagnostics; any exact-root Sonar findings already observed remain unresolved and cannot be relabeled, suppressed or treated as accepted by this exception. The operator accepts the residual code-quality risk of missing exact-candidate Sonar coverage, conditional on all of the following before tag or publication:
+
+- Record the exact frozen candidate SHA (and accepted base) and review its complete changed-files diff: only OMP plugin cwd/packaging/version work, including `plugin/engram/codex.mcp.json` solely as the necessary Codex archive-packaging artifact already in this candidate (not new Codex runtime/host support or a broader package or Sonar waiver), necessary release metadata/this exception, and the test-only correction in `tests/critical/runtime/image_runtime_contract_test.go` aligning stale workflow-source expectations with current default-branch Docker/promotion behavior are in scope. No other Docker/runtime/workflow changes, new server runtime behavior or migrations; a wider candidate needs a new operator decision, not this exception.
+- Retain applicable existing evidence for full `go test ./...`, `go vet ./...`, `govulncheck ./...`, and `go build ./cmd/engram ./cmd/engram-server`; Node hook/plugin behavior; GoReleaser raw asset and plugin policy verification. Revalidate evidence against the final candidate using the existing exact-input rules; do not relabel an earlier PASS.
+- Require PR approval, zero unresolved required threads, required CI and authority checks plus frozen-candidate validation, and accepted `server`, `operator-console`, and `postgres` images under the existing `final-image-set.json` contract. Record a rollback/canary plan and dispose explicitly of whether tagging may replace the running Engram server through Watchtower before any irreversible effect.
+
+This one-time operator authorization replaces only the Sonar fresh exact-candidate analysis/coverage and `OK` prerequisites when its runner is unavailable for that bounded candidate; record `UNAVAILABLE / NOT_PROVEN` with actual diagnostics and leave observed findings unresolved. All other release, security, image, review, migration and rollout gates remain mandatory. It is not transferable to PR #508, another tag, a changed product scope, or any later release. For every other release, fresh exact-head Sonar analysis and Quality Gate `OK` remain mandatory.
 
 ## Release Convergence
 
@@ -146,7 +155,7 @@ a separate reviewed security change, not an operator-side escape hatch.
 
 ## SonarQube Gate Recovery
 
-Run `node tools/quality/run-sonarqube.mjs` as an agent-owned local command from the clean, frozen exact candidate; no GitHub Actions workflow performs this gate. The runner must preserve the exact-head Quality Gate `OK` requirement; successful runs retain the exact-head receipt at `.agent/e/sonarqube/<HEAD>.json`. Human action is required only when the agent lacks the infrastructure, credential, or irreversible-effect authority needed for the next step.
+Outside the one-time v6.49.4 exception above, run `node tools/quality/run-sonarqube.mjs` as an agent-owned local command from the clean, frozen exact candidate; no GitHub Actions workflow performs this gate. The runner must preserve the exact-head Quality Gate `OK` requirement; successful runs retain the exact-head receipt at `.agent/e/sonarqube/<HEAD>.json`. Human action is required only when the agent lacks the infrastructure, credential, or irreversible-effect authority needed for the next step.
 
 Recovery flags are usable only when the active runner's `node tools/quality/run-sonarqube.mjs --help` advertises every flag and mode-specific behavior invoked. If help errors, has no usable output, or does not advertise a requested flag, that recovery mode is unavailable.
 
@@ -156,6 +165,6 @@ An advertised recovery mode is never a bypass: it must retain fresh exact-candid
 
 ## Terminal Verdict
 
-- `PROJECT_RELEASE_PROTOCOL_PASS`: all mandatory rows have evidence.
+- `PROJECT_RELEASE_PROTOCOL_PASS`: all mandatory rows have evidence, with only the explicit v6.49.4 PR #531 Sonar exception above permitting incomplete exact-candidate analysis/coverage and `UNAVAILABLE / NOT_PROVEN` instead of fresh analysis and `OK` when Sonar is unavailable; observed findings remain unresolved, and every other gate remains mandatory. Never report Sonar as PASS.
 - `PROJECT_RELEASE_PROTOCOL_BLOCKED`: at least one mandatory row is missing, stale, failed, or cannot be verified.
 - `PROJECT_RELEASE_PROTOCOL_DRY_RUN`: intended actions are fully described and no mutation was performed.

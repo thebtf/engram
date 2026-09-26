@@ -1,6 +1,6 @@
 {
   "name": "engram",
-  "version": "6.49.3",
+  "version": "6.49.4",
   "description": "Persistent shared memory for Codex. Requires ENGRAM_URL and ENGRAM_TOKEN from a dashboard-issued worker keycard; the server operator key must stay on the server host.",
   "author": {
     "name": "thebtf"
@@ -15,7 +15,7 @@
     "postgresql"
   ],
   "skills": "./skills/",
-  "mcpServers": "./.mcp.json",
+  "mcpServers": "./codex.mcp.json",
   "interface": {
     "displayName": "Engram",
     "shortDescription": "Persistent shared memory for Codex workspaces",
