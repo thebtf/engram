@@ -37,15 +37,17 @@ test('home exposes Workspace while primary navigation retires Graph and Books', 
 for (const scenario of [
   { route: '/rules', activeMemoryCount: undefined, state: 'unknown', visible: 'неизвест' },
 ] as const) {
-  test(`shell renders ${scenario.state} memory count truth on ${scenario.route}`, async ({ page }) => {
+  test(`shell renders ${scenario.state} memory count truth on ${scenario.route} without global candidate reads`, async ({ page }) => {
     const memoryBodyRequests: string[] = []
     const queueBodyRequests: string[] = []
+    const flagRequests: string[] = []
     const settingsOwnedRequests: string[] = []
 
     page.on('request', (request) => {
       const path = new URL(request.url()).pathname
       if (path === '/api/memories') memoryBodyRequests.push(path)
       if (path === '/api/memory/candidates') queueBodyRequests.push(path)
+      if (path === '/api/flags') flagRequests.push(path)
       if (['/api/config', '/api/vector/metrics', '/api/update/status', '/api/update/check', '/api/model-health'].includes(path)) {
         settingsOwnedRequests.push(path)
       }
@@ -67,9 +69,10 @@ for (const scenario of [
     await expect(count).toHaveAttribute('data-count-state', scenario.state)
     await expect(count).toContainText(scenario.visible)
     await expect(page.getByTestId('shell-review-queue-count')).toContainText('неизвест')
-    await expect.poll(() => queueBodyRequests.length).toBe(1)
+    await expect(page.locator('#primary-navigation a[href="/queue"]')).toBeVisible()
+    await expect.poll(() => flagRequests.length).toBeGreaterThan(0)
     expect(memoryBodyRequests).toEqual([])
-    expect(queueBodyRequests).toEqual(['/api/memory/candidates'])
+    expect(queueBodyRequests).toEqual([])
     expect(settingsOwnedRequests).toEqual([])
   })
 }
