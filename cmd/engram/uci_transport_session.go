@@ -25,7 +25,7 @@ var muxcoreNamespace = muxcoreNamespaceBase
 
 func muxcoreInstallationNamespace(clientInstanceID string) string {
 	digest := sha256.Sum256([]byte(clientInstanceID))
-	return muxcoreNamespaceBase + "-" + hex.EncodeToString(digest[:16])
+	return muxcoreNamespaceBase + "-" + hex.EncodeToString(digest[:15])
 }
 
 func muxcoreBaseConfig() engine.Config {

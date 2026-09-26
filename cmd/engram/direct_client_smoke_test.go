@@ -17,6 +17,7 @@ import (
 	"time"
 
 	pb "github.com/thebtf/engram/proto/engram/v1"
+	muxserverid "github.com/thebtf/mcp-mux/muxcore/serverid"
 	"google.golang.org/grpc"
 )
 
@@ -97,24 +98,37 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The installation namespace isolates this fixture's sockets in the short
+	// primary scratch root; nesting another temp directory overflows AF_UNIX.
+	tempRoot := scratch
 	t.Cleanup(func() {
 		if err := os.RemoveAll(state); err != nil {
 			t.Error(err)
 		}
 	})
 	if runtime.GOOS == "linux" {
-		probe, err := net.Listen("unix", filepath.Join(state, "probe.sock"))
+		// Probe the daemon socket and the longer per-owner control socket.
+		controlPath := muxserverid.DaemonControlPath(tempRoot, muxcoreInstallationNamespace(strings.Repeat("0", 32)))
+		probe, err := net.Listen("unix", controlPath)
 		if errors.Is(err, syscall.EOPNOTSUPP) || errors.Is(err, syscall.ENOTSUP) {
 			t.Skipf("AF_UNIX unsupported on test scratch filesystem %s: %v", scratch, err)
 		}
 		if err != nil {
-			t.Fatalf("probe AF_UNIX on test scratch filesystem: %v", err)
+			t.Fatalf("probe daemon control socket at %s: %v", controlPath, err)
 		}
 		if err := probe.Close(); err != nil {
 			t.Fatal(err)
 		}
+		ownerPath := muxserverid.ControlPath(tempRoot, muxcoreInstallationNamespace(strings.Repeat("0", 32)), strings.Repeat("0", 16))
+		owner, err := net.Listen("unix", ownerPath)
+		if err != nil {
+			t.Fatalf("probe owner control socket at %s: %v", ownerPath, err)
+		}
+		if err := owner.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
-	for _, part := range []string{"home", "appdata", "localappdata", "temp"} {
+	for _, part := range []string{"home", "appdata", "localappdata"} {
 		if err := os.Mkdir(filepath.Join(state, part), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -139,21 +153,21 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		env = append(env, entry)
 	}
 	localCache := filepath.Join(state, "localappdata")
-	env = append(env, "ENGRAM_URL=http://"+listener.Addr().String(), "ENGRAM_TOKEN=fixture-keycard", "ENGRAM_CODE_INTEL_ENABLED=true", "ENGRAM_DATA_DIR="+filepath.Join(state, "installation"), "USERPROFILE="+filepath.Join(state, "home"), "HOME="+filepath.Join(state, "home"), "APPDATA="+filepath.Join(state, "appdata"), "LOCALAPPDATA="+localCache, "XDG_CACHE_HOME="+localCache, "TEMP="+filepath.Join(state, "temp"), "TMP="+filepath.Join(state, "temp"), "TMPDIR="+filepath.Join(state, "temp"))
+	env = append(env, "ENGRAM_URL=http://"+listener.Addr().String(), "ENGRAM_TOKEN=fixture-keycard", "ENGRAM_CODE_INTEL_ENABLED=true", "ENGRAM_DATA_DIR="+filepath.Join(state, "installation"), "USERPROFILE="+filepath.Join(state, "home"), "HOME="+filepath.Join(state, "home"), "APPDATA="+filepath.Join(state, "appdata"), "LOCALAPPDATA="+localCache, "XDG_CACHE_HOME="+localCache, "TEMP="+tempRoot, "TMP="+tempRoot, "TMPDIR="+tempRoot)
 	t.Cleanup(func() {
-		cleanupCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
-		defer stop()
-		controlRoot, err := uciInstalledAcceptancePhysicalPath(filepath.Join(state, "temp"))
+		identity, err := os.ReadFile(filepath.Join(state, "installation", "client-instance-id"))
 		if err != nil {
 			t.Error(err)
 			return
 		}
-		pid, err := uciWaitForInstalledAcceptanceDaemonPID(cleanupCtx, controlRoot, binary)
-		if err != nil {
-			t.Error(err)
+		controlPath := muxserverid.DaemonControlPath(tempRoot, muxcoreInstallationNamespace(strings.TrimSpace(string(identity))))
+		markerPath := controlPath + ".marker.json"
+		pid, found, err := uciInstalledAcceptanceDaemonPID(controlPath, markerPath, binary)
+		if err != nil || !found {
+			t.Errorf("wait for direct fixture daemon election: pid=%d found=%v error=%v", pid, found, err)
 			return
 		}
-		if err := uciStopInstalledAcceptanceDaemon(controlRoot, pid); err != nil {
+		if err := uciStopInstalledAcceptanceDaemon(tempRoot, pid); err != nil {
 			t.Error(err)
 			return
 		}
