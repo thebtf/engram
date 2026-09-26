@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -47,10 +48,12 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 	if validateUCIContextOwner(in.AuthRealm, in.Principal) != nil || validateUCIRequiredText("workstation_id", in.WorkstationID) != nil {
 		return RegisteredLocalGit{}, errUCIContextAuthorizationDenied
 	}
-	if !validUCILocalGitLocator(in.Locator) || (in.SourceID == "" && validateUCIRequiredText("source_label", in.SourceLabel) != nil) ||
+	locator, valid := canonicalUCILocalGitLocator(in.Locator)
+	if !valid || (in.SourceID == "" && validateUCIRequiredText("source_label", in.SourceLabel) != nil) ||
 		(in.SourceID != "" && (validateUCIUUID("source_id", in.SourceID) != nil || in.SourceLabel != "")) {
 		return RegisteredLocalGit{}, uci.NewContextError(uci.ContextMismatch, nil)
 	}
+	in.Locator = locator
 	profileDigest := localGitGoProfileDigest()
 	if (in.ParserBundle != nil && *in.ParserBundle) || (in.ParserBundle == nil && in.DefaultParserBundle) {
 		profileDigest = uci.TreeSitterBundleDigest()
@@ -169,10 +172,18 @@ func localGitRegistrationDigest(value string) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-func validUCILocalGitLocator(locator string) bool {
+func canonicalUCILocalGitLocator(locator string) (string, bool) {
 	if len(locator) < 9 || len(locator) > 4096 || strings.TrimSpace(locator) != locator || strings.ContainsAny(locator, "\r\n\x00") {
-		return false
+		return "", false
 	}
 	parsed, err := url.Parse(locator)
-	return err == nil && parsed.Scheme == "file" && parsed.Host == "" && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == "" && strings.HasPrefix(parsed.Path, "/") && parsed.Path != "/" && parsed.String() == locator
+	if err != nil || parsed.Scheme != "file" || parsed.Opaque != "" || parsed.Host != "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || !strings.HasPrefix(parsed.Path, "/") || strings.HasPrefix(parsed.Path, "//") || strings.Contains(parsed.Path, "\\") || parsed.Path == "/" || parsed.String() != locator {
+		return "", false
+	}
+	for _, component := range strings.Split(parsed.Path, "/") {
+		if component == ".." {
+			return "", false
+		}
+	}
+	return (&url.URL{Scheme: "file", Path: path.Clean(parsed.Path)}).String(), true
 }

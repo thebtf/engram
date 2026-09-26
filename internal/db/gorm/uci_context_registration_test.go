@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,25 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/uci"
 )
+
+func TestCanonicalUCILocalGitLocatorPreservesWorktreeBoundaries(t *testing.T) {
+	canonical, valid := canonicalUCILocalGitLocator("file:///worktrees/./%61")
+	require.True(t, valid)
+	require.Equal(t, "file:///worktrees/a", canonical)
+	other, valid := canonicalUCILocalGitLocator("file:///worktrees/b")
+	require.True(t, valid)
+	require.NotEqual(t, canonical, other)
+	for _, locator := range []string{
+		"file:///worktrees/link/../a",
+		"file:///worktrees/link/%2e%2e/a",
+		"file:////remote/share",
+		"file:///worktrees/a%5Cb",
+		"file://remote/worktrees/a",
+	} {
+		_, valid := canonicalUCILocalGitLocator(locator)
+		require.False(t, valid, locator)
+	}
+}
 
 func TestRegisterLocalGitUnboundLegacyCheckoutRefusesRecovery(t *testing.T) {
 	for _, withWrongView := range []bool{false, true} {
@@ -110,6 +130,18 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	owner := RegisterLocalGitInput{AuthRealm: "client", Principal: ownerPrincipal, WorkstationID: "keycard-41", SourceLabel: "engram", Locator: locator(a)}
 	first, err := store.RegisterLocalGit(ctx, owner)
 	require.NoError(t, err)
+	alias := owner
+	alias.Locator = strings.TrimSuffix(owner.Locator, "/a") + "/./%61"
+	if alias.Locator == owner.Locator {
+		t.Fatal("test locator must differ")
+	}
+	aliasReplay, err := store.RegisterLocalGit(ctx, alias)
+	require.NoError(t, err)
+	require.Equal(t, first, aliasReplay, "equivalent URI must not register another source")
+	alias.SourceID, alias.SourceLabel = first.SourceID, ""
+	aliasReplay, err = store.RegisterLocalGit(ctx, alias)
+	require.NoError(t, err)
+	require.Equal(t, first, aliasReplay, "equivalent URI under source ID must not register another checkout")
 	var goProfile UCIAnalysisProfile
 	require.NoError(t, db.Where("profile_id = ?", first.ProfileID).First(&goProfile).Error)
 	require.Equal(t, string(localGitGoProfileDigest()), goProfile.ParserBundleDigest)
