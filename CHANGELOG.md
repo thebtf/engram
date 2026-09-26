@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [6.50.0] - 2026-09-26
 
 ### Added
 
@@ -2067,7 +2067,7 @@ Initial release with full feature set.
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
 [Unreleased]: https://github.com/thebtf/engram/compare/v6.50.0...HEAD
-[6.50.0]: https://github.com/thebtf/engram/compare/v6.49.3...v6.50.0
+[6.50.0]: https://github.com/thebtf/engram/compare/v6.49.4...v6.50.0
 [6.49.3]: https://github.com/thebtf/engram/compare/v6.49.2...v6.49.3
 [6.49.2]: https://github.com/thebtf/engram/compare/v6.49.1...v6.49.2
 [6.49.1]: https://github.com/thebtf/engram/compare/v6.49.0...v6.49.1
@@ -2100,7 +2100,6 @@ Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mn
 [6.18.0]: https://github.com/thebtf/engram/compare/v6.14.0...v6.18.0
 [6.14.0]: https://github.com/thebtf/engram/compare/v6.13.1...v6.14.0
 [6.13.1]: https://github.com/thebtf/engram/compare/v6.13.0...v6.13.1
-[6.5.0]: https://github.com/thebtf/engram/compare/v6.4.15...v6.5.0
 [6.4.15]: https://github.com/thebtf/engram/compare/v6.4.14...v6.4.15
 [6.4.14]: https://github.com/thebtf/engram/compare/v6.4.13...v6.4.14
 [6.4.13]: https://github.com/thebtf/engram/compare/v6.4.12...v6.4.13
