@@ -624,10 +624,12 @@ func TestUCIApplicationOperatorSearchContinuesDegradedLexicalRanking(t *testing.
 	for _, testCase := range []struct {
 		name           string
 		provider       bool
+		providerErr    error
 		vectorCoverage float64
 		reason         string
 	}{
 		{name: "provider unavailable", reason: "vector_provider_unavailable"},
+		{name: "provider failure", provider: true, providerErr: errors.New("embedding failed"), reason: "vector_provider_unavailable"},
 		{name: "incomplete vector coverage", provider: true, vectorCoverage: 0.5, reason: "vector_coverage_incomplete"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -653,7 +655,7 @@ func TestUCIApplicationOperatorSearchContinuesDegradedLexicalRanking(t *testing.
 			}
 			var provider uci.SemanticEmbedder
 			if testCase.provider {
-				provider = &workerUCIApplicationEmbedder{model: profile.Model}
+				provider = &workerUCIApplicationEmbedder{model: profile.Model, err: testCase.providerErr}
 			}
 			statusStore := &workerUCIApplicationStatusStore{snapshot: workerUCIApplicationStatusSnapshot(fixture.ref, uci.IndexCoverageComplete)}
 			application := &UCIApplication{
@@ -1624,13 +1626,17 @@ func workerUCIApplicationContinuationClone(continuation uci.SemanticContinuation
 
 type workerUCIApplicationEmbedder struct {
 	model string
+	err   error
 }
 
 func (embedder *workerUCIApplicationEmbedder) Model() string {
 	return embedder.model
 }
 
-func (*workerUCIApplicationEmbedder) Embed(context.Context, []string) ([][]float32, error) {
+func (embedder *workerUCIApplicationEmbedder) Embed(context.Context, []string) ([][]float32, error) {
+	if embedder.err != nil {
+		return nil, embedder.err
+	}
 	vector := make([]float32, embedding.EmbeddingDim)
 	vector[0] = 1
 	return [][]float32{vector}, nil
