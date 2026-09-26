@@ -567,3 +567,70 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
     await Promise.all([a?.context.close(), b?.context.close()])
   }
 })
+
+test('S2 live grants: issue reload and revoke deny reader Code reads', async ({ browser }, testInfo) => {
+  const fixture = await readLiveFixture()
+  const scenario = operatorCodeFixture(fixture, 'operatorCode')
+  const owner = await pinAndRead(browser, fixture, fixture.browserCredential, scenario, [])
+  const readerContext = await browser.newContext()
+  const reader = await readerContext.newPage()
+  const readBodies: Record<string, Record<string, unknown>> = {}
+  reader.on('request', (request) => {
+    const path = new URL(request.url()).pathname
+    if (!['/api/code/search', '/api/code/graph', '/api/code/source'].includes(path) || request.postData() === null) return
+    const body: unknown = JSON.parse(request.postData()!)
+    if (body !== null && typeof body === 'object' && !Array.isArray(body)) readBodies[path] = { ...body }
+  })
+  try {
+    expect(fixture.mock.prohibited).toBe(true)
+    await reader.goto(`${fixture.frontend.baseUrl}/code`, { waitUntil: 'domcontentloaded' })
+    expect((await requestJSON(reader, '/api/auth/user-login', fixture.browserCredentialB)).status).toBe(200)
+    const chooser = owner.page.getByTestId('code-grant-chooser')
+    await chooser.locator('summary').click()
+    const checkout = chooser.getByRole('combobox').first()
+    const ownerCopy = checkout.locator('option').filter({ hasText: `${fixture.fixtureId}-a` })
+    await expect(ownerCopy).toHaveCount(1)
+    await checkout.selectOption((await ownerCopy.getAttribute('value'))!)
+    await chooser.getByRole('combobox').nth(1).selectOption({ label: fixture.browserCredentialB.email })
+    const issueResponse = owner.page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/code/grants')
+    await chooser.getByRole('button', { name: 'Разрешить чтение' }).click()
+    expect((await issueResponse).status()).toBe(200)
+    await owner.page.reload({ waitUntil: 'domcontentloaded' })
+    const inventory = owner.page.getByTestId('code-grant-chooser')
+    await inventory.locator('summary').click()
+    const granted = inventory.getByRole('listitem').filter({ hasText: fixture.browserCredentialB.email }).filter({ hasText: `${fixture.fixtureId}-a` })
+    await expect(granted).toHaveCount(1)
+    await reader.reload({ waitUntil: 'domcontentloaded' })
+    await selectFixtureContext(reader, fixture, 'a')
+    await reader.getByTestId('code-pin-context').click()
+    await reader.getByTestId('code-query-input').fill(scenario.expectedSearch)
+    const searchResponse = reader.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/code/search')
+    await reader.getByTestId('code-search-submit').click()
+    expect((await searchResponse).status()).toBe(200)
+    const result = await findSearchResult(reader, scenario.expectedSource)
+    const graphResponse = reader.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/code/graph')
+    await result.getByTestId('code-search-explore').click()
+    expect((await graphResponse).status()).toBe(200)
+    await expect(reader.getByTestId('code-graph-results')).toContainText(scenario.expectedGraph)
+    const sourceResponse = reader.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/code/source')
+    await result.getByTestId('code-search-source').click()
+    expect((await sourceResponse).status()).toBe(200)
+    await expect(reader.getByTestId('code-source-result')).toContainText(scenario.expectedMarker)
+    const revokeResponse = owner.page.waitForResponse((response) => response.request().method() === 'POST' && /\/api\/code\/grants\/[^/]+\/revoke$/.test(new URL(response.url()).pathname))
+    await granted.getByRole('button').click()
+    expect((await revokeResponse).status()).toBe(200)
+    await expect(granted).toHaveCount(0)
+    for (const path of ['/api/code/search', '/api/code/graph', '/api/code/source']) {
+      const body = readBodies[path]
+      expect(body, `${path} was not issued by the reader UI`).toBeDefined()
+      const denial = await reader.evaluate(async ({ requestPath, payload }) => {
+        const response = await fetch(requestPath, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', 'X-Engram-Request-ID': crypto.randomUUID() }, body: JSON.stringify(payload) })
+        return { status: response.status, text: await response.text() }
+      }, { requestPath: path, payload: body })
+      expect(denial, path).toEqual({ status: 403, text: '' })
+    }
+    await testInfo.attach('s2-persisted-grant-revocation', { contentType: 'application/json', body: JSON.stringify({ candidate: fixture.candidate, checkout: fixture.worktrees.a, issue: 200, ownerReload: true, allowed: ['search', 'graph', 'source'], revoke: 200, denied: ['search', 'graph', 'source'] }) })
+  } finally {
+    await Promise.all([owner.context.close(), readerContext.close()])
+  }
+})
