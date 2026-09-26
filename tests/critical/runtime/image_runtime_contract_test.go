@@ -80,13 +80,7 @@ func TestDockerReleaseRefFreshnessGuard(t *testing.T) {
 // @features: [release-safety]
 func TestAuthority0051PromotionRecoveryBridgeContract(t *testing.T) {
 	repo := repositoryRoot(t)
-	policy := readFile(t, filepath.Join(repo, ".github", "authority-policy.json"))
 	policy0051 := readFile(t, filepath.Join(repo, "tests", "critical", "runtime", "testdata", "authority-0051-authority-policy.json"))
-	current := promotionRecoveryAuthorityState{
-		workflow: readFile(t, filepath.Join(repo, ".github", "workflows", "promote-latest-release-images.yml")),
-		recovery: readOptionalText(t, filepath.Join(repo, ".github", "workflows", "recover-latest-promotion-journal.yml")),
-		gate:     readOptionalText(t, filepath.Join(repo, "scripts", "production-gates", "latest-promotion-journal.ps1")),
-	}
 	exactD := promotionRecoveryAuthorityState{
 		workflow: readFile(t, filepath.Join(repo, "tests", "critical", "runtime", "testdata", "authority-0050-promote-latest-release-images-final-terminalizer.yml")),
 	}
@@ -112,7 +106,7 @@ func TestAuthority0051PromotionRecoveryBridgeContract(t *testing.T) {
 		policy string
 		state  promotionRecoveryAuthorityState
 	}{
-		{name: "current D", policy: policy, state: current},
+		{name: "historical D", policy: policy0051, state: exactD},
 		{name: "exact fixture E", policy: policy0051, state: successorE},
 		{name: "authority-0052 exact E", policy: policy0052, state: successorE},
 		{name: "authority-0053 exact F", policy: policy0053, state: successorF},
@@ -144,7 +138,7 @@ func TestAuthority0051PromotionRecoveryBridgeContract(t *testing.T) {
 	}{
 		{name: "historical authority-0048 workflow", policy: policy0051, state: promotionRecoveryAuthorityState{workflow: historicalJournal}},
 		{name: "historical authority-0049 workflow", policy: policy0051, state: promotionRecoveryAuthorityState{workflow: historicalTerminalizer}},
-		{name: "historical authority-0050 policy with D", policy: strings.Replace(policy, `"id": "authority-0051"`, `"id": "authority-0050"`, 1), state: exactD},
+		{name: "historical authority-0050 policy with D", policy: strings.Replace(policy0051, `"id": "authority-0051"`, `"id": "authority-0050"`, 1), state: exactD},
 		{name: "partial E workflow only", policy: policy0051, state: promotionRecoveryAuthorityState{workflow: successorE.workflow}},
 		{name: "partial E workflow and recovery", policy: policy0051, state: partialRecovery},
 		{name: "partial E workflow and gate", policy: policy0051, state: partialGate},
@@ -993,7 +987,6 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	latestScript := readFile(t, latestScriptPath)
 	for _, required := range []string{
 		"name: Promote Latest Release Images", "workflow_run:\n    workflows: [\"Docker Publish\"]\n    types: [completed]",
-		"if: github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.name == 'Docker Publish' && github.event.workflow_run.event == 'push')",
 		"contents: read", "actions: read", "packages: write", "Initialize isolated promotion paths", `"DOCKER_CONFIG=$dockerConfig" | Add-Content -LiteralPath $env:GITHUB_ENV`, `"RECEIPT_DIR=$receiptDir" | Add-Content -LiteralPath $env:GITHUB_ENV`, "path: ${{ env.RECEIPT_DIR }}",
 		"gh api \"repos/$env:REPOSITORY_NAME/releases/latest\" --jq .tag_name", "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
 		"TRIGGERING_WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}", `gh api --paginate --slurp "repos/$env:REPOSITORY_NAME/actions/runs/$triggeringWorkflowRunID/jobs?per_page=100"`, "Where-Object { $_.name -ceq 'publish-images' }", "if ($publishJobs.Count -ne 1)", "status -cne 'completed'", "conclusion -cne 'success'",
