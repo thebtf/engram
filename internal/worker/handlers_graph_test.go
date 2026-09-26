@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/pkg/models"
@@ -26,11 +27,17 @@ type fakeGraphEdgeStore struct {
 	store *graph.Store
 }
 
-func (f *fakeGraphEdgeStore) ListByMemory(_ context.Context, memoryID int64, dir graph.Direction, _ string) ([]graph.Edge, error) {
+func (f *fakeGraphEdgeStore) ListByMemory(ctx context.Context, memoryID int64, dir graph.Direction, edgeType string) ([]graph.Edge, error) {
+	if f.store != nil {
+		return f.store.ListByMemory(ctx, memoryID, dir, edgeType)
+	}
 	return f.list(memoryID, dir, false), nil
 }
 
-func (f *fakeGraphEdgeStore) ListByNode(_ context.Context, nodeID int64, dir graph.Direction, _ string) ([]graph.Edge, error) {
+func (f *fakeGraphEdgeStore) ListByNode(ctx context.Context, nodeID int64, dir graph.Direction, edgeType string) ([]graph.Edge, error) {
+	if f.store != nil {
+		return f.store.ListByNode(ctx, nodeID, dir, edgeType)
+	}
 	return f.list(nodeID, dir, true), nil
 }
 
@@ -230,5 +237,73 @@ func TestHandlersGraphTraversalPrunesPrivateIntermediariesAndKeepsPublicNodes(t 
 			}
 		}
 		assert.ElementsMatch(t, tc.want, ids, writer.Body.String())
+	}
+}
+
+func TestHandlersGraphFlagOffDoesNotExposePrivateEdgesOrPaths(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "false")
+	sqlDB, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	sqlDB.SetMaxOpenConns(1)
+	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gormlib.Config{DisableAutomaticPing: true})
+	require.NoError(t, err)
+	for _, statement := range []string{
+		`CREATE TABLE memories (id INTEGER PRIMARY KEY, project TEXT, content TEXT, privacy_scope TEXT, source_workstation_id TEXT, deleted_at DATETIME)`,
+		`INSERT INTO memories (id, project, content, privacy_scope, source_workstation_id) VALUES (1, 'graph', 'public start', 'project', ''), (2, 'graph', 'foreign secret', 'private', 'other-keycard'), (3, 'graph', 'public target', 'project', ''), (4, 'graph', 'own secret', 'private', 'own-keycard')`,
+		`CREATE TABLE knowledge_edges (id INTEGER PRIMARY KEY, source_id INTEGER, target_id INTEGER, node_source_id INTEGER, node_target_id INTEGER, source_type TEXT, target_type TEXT, edge_type TEXT, weight REAL, reasoning TEXT, source_session_id TEXT, valid_from DATETIME, valid_until DATETIME, created_at DATETIME, superseded_at DATETIME)`,
+		`INSERT INTO knowledge_edges (id, source_id, target_id, source_type, target_type, edge_type, weight, reasoning, created_at) VALUES
+		(10, 1, 2, 'memory', 'memory', 'uses', 1, 'foreign-secret-reason', CURRENT_TIMESTAMP),
+		(11, 2, 3, 'memory', 'memory', 'uses', 1, 'foreign-path-reason', CURRENT_TIMESTAMP),
+		(12, 1, 3, 'memory', 'memory', 'uses', 1, 'public-reason', CURRENT_TIMESTAMP),
+		(13, 1, 4, 'memory', 'memory', 'uses', 1, 'own-private-reason', CURRENT_TIMESTAMP)`,
+	} {
+		require.NoError(t, db.Exec(statement).Error)
+	}
+	store := graph.NewStore(db, nil)
+	service := newGraphTestService(&fakeGraphEdgeStore{store: store}, &fakeGraphNodeStore{})
+	service.memoryStore = gormdb.NewMemoryStore(&gormdb.Store{DB: db})
+	service.ready.Store(true)
+	router := graphRouter(service)
+
+	for _, tc := range []struct {
+		name     string
+		path     string
+		keycard  string
+		wantEdge string
+	}{
+		{"edges public filtered", "/api/graph/edges?memory_id=1&direction=outgoing&edge_type=uses", "other-caller", `"id":12`},
+		{"edges foreign anchor", "/api/graph/edges?memory_id=2", "other-caller", ""},
+		{"edges own anchor", "/api/graph/edges?memory_id=4", "own-keycard", `"id":13`},
+		{"traverse public filtered", "/api/graph/traverse?memory_id=1&depth=2&edge_types=uses", "other-caller", `"edge_id":12`},
+		{"traverse foreign anchor", "/api/graph/traverse?memory_id=2&depth=2", "other-caller", ""},
+		{"path public", "/api/graph/find-path?source_id=1&target_id=3&max_depth=2", "other-caller", `"edge_id":12`},
+		{"path foreign endpoint", "/api/graph/find-path?source_id=1&target_id=2&max_depth=2", "other-caller", ""},
+		{"path own private", "/api/graph/find-path?source_id=1&target_id=4&max_depth=2", "own-keycard", `"edge_id":13`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			request = request.WithContext(auth.WithIdentity(request.Context(), auth.Client("read-only", tc.keycard)))
+			writer := httptest.NewRecorder()
+			router.ServeHTTP(writer, request)
+			require.Equal(t, http.StatusOK, writer.Code, writer.Body.String())
+			body := writer.Body.String()
+			assert.NotContains(t, body, `"id":10`)
+			assert.NotContains(t, body, `"edge_id":10`)
+			assert.NotContains(t, body, `"edge_id":11`)
+			if !strings.Contains(tc.path, "memory_id=2") && !strings.Contains(tc.path, "target_id=2") {
+				assert.NotContains(t, body, `"target_id":2`)
+			}
+			assert.NotContains(t, body, "foreign-secret-reason")
+			assert.NotContains(t, body, "foreign-path-reason")
+			if tc.keycard != "own-keycard" {
+				assert.NotContains(t, body, "own-private-reason")
+			}
+			if tc.wantEdge != "" {
+				assert.Contains(t, body, tc.wantEdge)
+			} else {
+				assert.NotContains(t, body, `"id":13`)
+			}
+		})
 	}
 }

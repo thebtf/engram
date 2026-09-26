@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added an interruption-safe journal to latest-image promotion that records its exact state when promotion fails.
 - Kept the direct-binary MCP fixture's Unix sockets in private primary scratch via short relative paths, preserving installed daemon namespaces while probing both daemon and owner sockets on Linux and macOS.
 - Raised the OMP marketplace MCP connection budget from one to twelve minutes and the verified cold-cache client stream deadline from two to six minutes. The observed first 4 MiB taking 32.71 seconds would take roughly 225 seconds for the 28.8 MB Windows asset at the same rate; six minutes allows bounded variance without promising throughput. Twelve minutes reserves six minutes for streaming, as much as three minutes for six 30-second request/redirect inactivity windows, two minutes for fenced daemon reconciliation, and one minute of overhead. Inactivity checks are not aggregate request deadlines: a progressing pre-body phase can still exhaust the host budget, and forced host termination can leave a staging file. HTTPS host restrictions, exact Content-Length/size and SHA-256, and create-only publication remain unchanged. Codex and Claude startup settings are unchanged.
+- Require, validate, and install the version-matched parser policy from direct release archives on fresh installs and upgrades; retain compatibility with older releases.
+- Apply private-memory visibility checks to REST graph edge and path traversal even when the optional VNext feature flag is off.
 
 ## [6.49.4] - 2026-09-25
 

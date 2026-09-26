@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/thebtf/engram/internal/graph"
+	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -240,8 +241,8 @@ func (s *Service) graphMemoryVisible(ctx context.Context, id int64) bool {
 	if s.memoryStore == nil || id == 0 {
 		return false
 	}
-	mem, err := s.memoryStore.Get(ctx, id)
-	return err == nil && memoryVisibleREST(ctx, mem)
+	mem, err := s.memoryStore.GetForSnapshot(ctx, id)
+	return err == nil && scope.ResolveMemory(memoryVisibilityCaller(ctx, ""), mem, scope.MemoryVisibilityOptions{ApplyPrivacyScope: true})
 }
 
 func (s *Service) graphNodeVisible(ctx context.Context, id int64) bool {
