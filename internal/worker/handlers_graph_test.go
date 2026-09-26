@@ -97,6 +97,14 @@ func (f *fakeGraphNodeStore) ListByType(_ context.Context, nodeType, project str
 	return result, nil
 }
 
+func (f *fakeGraphNodeStore) ListByTypeLimited(ctx context.Context, nodeType, project string, includePrivate bool, limit int) ([]models.KnowledgeNode, error) {
+	nodes, err := f.ListByType(ctx, nodeType, project, includePrivate)
+	if len(nodes) > limit {
+		nodes = nodes[:limit]
+	}
+	return nodes, err
+}
+
 func newGraphTestService(edges *fakeGraphEdgeStore, nodes *fakeGraphNodeStore) *Service {
 	return &Service{graphEdgeStoreSeam: edges, graphNodeStoreSeam: nodes}
 }
@@ -164,6 +172,33 @@ func TestHandlersGraphListsHistoricalNodesWithoutLegacyFlag(t *testing.T) {
 	require.NoError(t, json.Unmarshal(writer.Body.Bytes(), &payload))
 	require.Len(t, payload.Nodes, 1)
 	assert.Equal(t, int64(1), payload.Nodes[0].ID)
+}
+
+func TestHandlersGraphNodesUsesBoundedStore(t *testing.T) {
+	sqlDB, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	sqlDB.SetMaxOpenConns(1)
+	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gormlib.Config{DisableAutomaticPing: true})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`CREATE TABLE knowledge_nodes (id INTEGER PRIMARY KEY, created_at DATETIME, updated_at DATETIME, deleted_at DATETIME, node_type TEXT, external_ref TEXT, project TEXT, privacy_scope TEXT, metadata BLOB)`).Error)
+	for id := 1; id <= 4; id++ {
+		privacy := "project"
+		if id == 3 {
+			privacy = "private"
+		}
+		require.NoError(t, db.Exec(`INSERT INTO knowledge_nodes (id, created_at, updated_at, node_type, external_ref, project, privacy_scope, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, id, fmt.Sprintf("2026-01-01 00:00:0%d", id), "2026-01-01 00:00:00", models.NodeTypeSkill, fmt.Sprintf("node-%d", id), "engram", privacy, []byte("{}")).Error)
+	}
+	service := &Service{graphNodeStore: graph.NewNodesStore(db)}
+	writer := httptest.NewRecorder()
+	service.handleGetGraphNodes(writer, httptest.NewRequest(http.MethodGet, "/api/graph/nodes?project=engram&node_type=skill&limit=2", nil))
+	require.Equal(t, http.StatusOK, writer.Code, writer.Body.String())
+	var response graphNodesResponse
+	require.NoError(t, json.Unmarshal(writer.Body.Bytes(), &response))
+	require.Equal(t, 2, response.Limit)
+	require.Equal(t, 2, response.Count)
+	require.Len(t, response.Nodes, 2)
+	require.Equal(t, []int64{4, 2}, []int64{response.Nodes[0].ID, response.Nodes[1].ID})
 }
 
 func TestHandlersGraphRetainedPathReaderRejectsUnboundedDepth(t *testing.T) {

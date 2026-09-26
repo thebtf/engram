@@ -2,11 +2,18 @@ package graph
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/pkg/models"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	_ "modernc.org/sqlite"
 )
 
 // TestNodesStore_T012_UnitShape verifies the NodesStore API surface matches
@@ -252,4 +259,63 @@ func TestNodesStore_SoftDelete_MethodShape(t *testing.T) {
 		}
 	}()
 	_ = ns.SoftDelete(ctx, 1) // reaches nil-db → panic expected
+}
+
+func TestNodesStore_ListByTypeLimitedBoundsVisibleRowsWithoutChangingLegacy(t *testing.T) {
+	sqlDB, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	sqlDB.SetMaxOpenConns(1)
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{DisableAutomaticPing: true})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`CREATE TABLE knowledge_nodes (id INTEGER PRIMARY KEY, created_at DATETIME, updated_at DATETIME, deleted_at DATETIME, node_type TEXT, external_ref TEXT, project TEXT, privacy_scope TEXT, metadata BLOB)`).Error)
+	now := time.Now().UTC().Truncate(time.Second)
+	for id := 1; id <= 8; id++ {
+		project, nodeType, privacy := "target", models.NodeTypeSkill, "project"
+		switch id {
+		case 4:
+			privacy = "private"
+		case 5:
+			project = "other"
+		case 6:
+			nodeType = models.NodeTypeFile
+		}
+		deleted := any(nil)
+		if id == 7 {
+			deleted = now
+		}
+		require.NoError(t, db.Exec(`INSERT INTO knowledge_nodes (id, created_at, updated_at, deleted_at, node_type, external_ref, project, privacy_scope, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, now.Add(time.Duration(id)*time.Minute), now, deleted, nodeType, fmt.Sprintf("node-%d", id), project, privacy, []byte("{}")).Error)
+	}
+	var statements []string
+	var boundLimits []any
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register("capture_node_list_sql", func(tx *gorm.DB) {
+		statements = append(statements, tx.Statement.SQL.String())
+		if strings.Contains(strings.ToUpper(tx.Statement.SQL.String()), "LIMIT") {
+			boundLimits = append(boundLimits, tx.Statement.Vars[len(tx.Statement.Vars)-1])
+		}
+	}))
+	store := NewNodesStore(db)
+	for _, badLimit := range []int{0, -1} {
+		_, err := store.ListByTypeLimited(context.Background(), models.NodeTypeSkill, "target", false, badLimit)
+		require.Error(t, err)
+	}
+	require.Empty(t, statements)
+	limited, err := store.ListByTypeLimited(context.Background(), models.NodeTypeSkill, "target", false, 2)
+	require.NoError(t, err)
+	require.Len(t, limited, 2)
+	require.Equal(t, []int64{8, 3}, []int64{limited[0].ID, limited[1].ID})
+	require.Len(t, statements, 1)
+	require.Contains(t, strings.ToUpper(statements[0]), "LIMIT")
+	require.Equal(t, []any{2}, boundLimits)
+
+	legacy, err := store.ListByType(context.Background(), models.NodeTypeSkill, "target", false)
+	require.NoError(t, err)
+	require.Equal(t, []int64{8, 3, 2, 1}, []int64{legacy[0].ID, legacy[1].ID, legacy[2].ID, legacy[3].ID})
+	require.Len(t, statements, 2)
+	require.NotContains(t, strings.ToUpper(statements[1]), "LIMIT")
+
+	private, err := store.ListByType(context.Background(), models.NodeTypeSkill, "target", true)
+	require.NoError(t, err)
+	require.Len(t, private, 5)
+	require.Equal(t, int64(4), private[1].ID)
 }

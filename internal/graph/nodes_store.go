@@ -182,6 +182,18 @@ func (s *NodesStore) Get(ctx context.Context, id int64, includePrivate bool) (*m
 // The project parameter is required; an empty project returns no rows and an
 // error to prevent accidental cross-project leaks.
 func (s *NodesStore) ListByType(ctx context.Context, nodeType, project string, includePrivate bool) ([]models.KnowledgeNode, error) {
+	return s.listByType(ctx, nodeType, project, includePrivate, 0)
+}
+
+// ListByTypeLimited returns at most limit active visible nodes without loading the rest.
+func (s *NodesStore) ListByTypeLimited(ctx context.Context, nodeType, project string, includePrivate bool, limit int) ([]models.KnowledgeNode, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("limit must be positive")
+	}
+	return s.listByType(ctx, nodeType, project, includePrivate, limit)
+}
+
+func (s *NodesStore) listByType(ctx context.Context, nodeType, project string, includePrivate bool, limit int) ([]models.KnowledgeNode, error) {
 	if project == "" {
 		return nil, fmt.Errorf("project is required for ListByType")
 	}
@@ -200,6 +212,9 @@ func (s *NodesStore) ListByType(ctx context.Context, nodeType, project string, i
 
 	if !includePrivate {
 		q = q.Where("privacy_scope != ?", scope.ScopePrivate)
+	}
+	if limit > 0 {
+		q = q.Limit(limit)
 	}
 
 	var rows []nodeRow

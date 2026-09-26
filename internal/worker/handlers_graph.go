@@ -30,7 +30,7 @@ type graphNodeStore interface {
 }
 
 type graphNodeLister interface {
-	ListByType(ctx context.Context, nodeType, project string, includePrivate bool) ([]models.KnowledgeNode, error)
+	ListByTypeLimited(ctx context.Context, nodeType, project string, includePrivate bool, limit int) ([]models.KnowledgeNode, error)
 }
 
 type graphErrorResponse struct {
@@ -226,13 +226,10 @@ func (s *Service) handleGetGraphNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nodes, err := store.ListByType(r.Context(), nodeType, project, false)
+	nodes, err := store.ListByTypeLimited(r.Context(), nodeType, project, false, limit)
 	if err != nil {
 		writeGraphError(w, http.StatusInternalServerError, "graph_read_failed", err.Error())
 		return
-	}
-	if len(nodes) > limit {
-		nodes = nodes[:limit]
 	}
 	writeJSON(w, graphNodesResponse{Nodes: nodes, Project: project, NodeType: nodeType, Count: len(nodes), Limit: limit})
 }

@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Page enabled reader choices without silently omitting later accounts, and reject stale or ambiguous browser navigation before reusing a Code Explorer tab binding or selected View.
+- Bound REST graph node listing in the database before materialization while preserving the unbounded legacy MCP node-list contract.
 - Carry the authenticated browser session through grant choices, recipient pages, issuance, and labeling, and persist it in grant lifecycle audit entries without exposing it in chooser responses.
 - Graph source descriptors for file-only nodes now resolve to their exact published bytes; symbolic nodes and existing lexical chunk identities remain readable.
 - Large indexed source chunks now display a bounded first 8 KiB from the released snapshot, with a visible notice that the remaining source is not displayed.
