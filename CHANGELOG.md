@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Browser grants and UCI release checks.** Workspace browser reads require an explicit Source-and-Checkout grant, a current tab binding, and UCI reauthorization and exposure recording before contextual content returns.
 - **Windows UCI parser delivery.** The plugin installs an integrity-pinned Windows amd64 Tree-sitter parser beside its daemon and verifies its bundle identity before launch. Linux and macOS parser artifacts are not included in this release.
 
+- **Operator Workspace release PR [#508](https://github.com/thebtf/engram/pull/508).**
+
 ### Changed
 
 - **OpenClaw plugin 3.9.1.** Advanced release metadata for the V3 project-identity client contract and retired outcome callback handling.
