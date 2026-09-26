@@ -125,20 +125,21 @@ type UCIAnalysisProfile struct {
 func (UCIAnalysisProfile) TableName() string { return "ci_profiles" }
 
 type UCICheckout struct {
-	CheckoutID     string           `gorm:"column:checkout_id;type:uuid;primaryKey"`
-	SourceID       string           `gorm:"column:source_id;type:uuid;not null"`
-	WorkstationID  string           `gorm:"column:workstation_id;type:text;not null"`
-	IncarnationID  string           `gorm:"column:incarnation_id;type:uuid;not null"`
-	Kind           UCICheckoutKind  `gorm:"column:kind;type:text;not null"`
-	OwnerPrincipal string           `gorm:"column:owner_principal;type:text;not null"`
-	LocatorRef     string           `gorm:"column:locator_ref;type:text;not null"`
-	CurrentViewID  *string          `gorm:"column:current_view_id;type:uuid"`
-	State          UCICheckoutState `gorm:"column:state;type:text;not null"`
-	LeaseEpoch     int64            `gorm:"column:lease_epoch;not null"`
-	OwnerInstance  *string          `gorm:"column:owner_instance;type:text"`
-	LeaseExpiresAt *time.Time       `gorm:"column:lease_expires_at;type:timestamptz"`
-	CreatedAt      time.Time        `gorm:"column:created_at;type:timestamptz;not null"`
-	UpdatedAt      time.Time        `gorm:"column:updated_at;type:timestamptz;not null"`
+	CheckoutID            string           `gorm:"column:checkout_id;type:uuid;primaryKey"`
+	SourceID              string           `gorm:"column:source_id;type:uuid;not null"`
+	WorkstationID         string           `gorm:"column:workstation_id;type:text;not null"`
+	IncarnationID         string           `gorm:"column:incarnation_id;type:uuid;not null"`
+	Kind                  UCICheckoutKind  `gorm:"column:kind;type:text;not null"`
+	OwnerPrincipal        string           `gorm:"column:owner_principal;type:text;not null"`
+	LocatorRef            string           `gorm:"column:locator_ref;type:text;not null"`
+	RegistrationProfileID *string          `gorm:"column:registration_profile_id;type:uuid"`
+	CurrentViewID         *string          `gorm:"column:current_view_id;type:uuid"`
+	State                 UCICheckoutState `gorm:"column:state;type:text;not null"`
+	LeaseEpoch            int64            `gorm:"column:lease_epoch;not null"`
+	OwnerInstance         *string          `gorm:"column:owner_instance;type:text"`
+	LeaseExpiresAt        *time.Time       `gorm:"column:lease_expires_at;type:timestamptz"`
+	CreatedAt             time.Time        `gorm:"column:created_at;type:timestamptz;not null"`
+	UpdatedAt             time.Time        `gorm:"column:updated_at;type:timestamptz;not null"`
 }
 
 func (UCICheckout) TableName() string { return "ci_checkouts" }

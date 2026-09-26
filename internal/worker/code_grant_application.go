@@ -14,6 +14,11 @@ var errCodeGrantCallerDenied = errors.New("code grant caller denied")
 
 type codeGrantStore interface {
 	Issue(context.Context, gormdb.BrowserReadGrantIssue) (gormdb.BrowserReadGrant, error)
+	IssueOwnerChoice(context.Context, gormdb.BrowserReadGrantOwnerIssue) (gormdb.BrowserReadGrant, error)
+	ListOwnerChoices(context.Context, int64, string) ([]gormdb.BrowserReadGrantOwnerChoice, error)
+	ListOwnerActive(context.Context, int64, string, string, int) ([]gormdb.BrowserReadGrantOwnerEntry, error)
+	ListTargetChoices(context.Context, int64, string) ([]gormdb.BrowserReadGrantTargetChoice, error)
+	SetOwnerChoiceLabel(context.Context, int64, string, string, string) (gormdb.BrowserReadGrantOwnerChoice, error)
 	Revoke(context.Context, int64, string, string) (gormdb.BrowserReadGrant, error)
 	CanRead(context.Context, int64, string, string) (bool, error)
 	Active(context.Context, int64, string, string) (gormdb.BrowserReadGrant, bool, error)
@@ -39,6 +44,14 @@ type IssueCodeGrantInput struct {
 	ExpiresAt  *time.Time
 }
 
+// IssueOnboardingCodeGrantInput carries only a server-issued owner choice and
+// an enabled browser subject. It deliberately has no Source or Checkout ID.
+type IssueOnboardingCodeGrantInput struct {
+	Target    auth.BrowserSubject
+	ChoiceRef string
+	ExpiresAt *time.Time
+}
+
 // Issue creates or restores one exact browser grant when the real browser issuer is
 // the persisted source owner. The store verifies the target user and commits its audit.
 func (a *CodeGrantApplication) Issue(ctx context.Context, issuer auth.Identity, in IssueCodeGrantInput) (gormdb.BrowserReadGrant, error) {
@@ -57,6 +70,76 @@ func (a *CodeGrantApplication) Issue(ctx context.Context, issuer auth.Identity, 
 		CheckoutID:      in.CheckoutID,
 		ExpiresAt:       in.ExpiresAt,
 	})
+}
+
+// ListOwnerChoices returns the exact owner's server-issued onboarding choices.
+// An administrator role is not a substitute for the stored source owner.
+func (a *CodeGrantApplication) ListOwnerChoices(ctx context.Context, issuer auth.Identity) ([]gormdb.BrowserReadGrantOwnerChoice, error) {
+	issuerSubject, ok := issuer.SessionBrowserSubject()
+	if !ok {
+		return nil, errCodeGrantCallerDenied
+	}
+	if err := a.requireStore(); err != nil {
+		return nil, err
+	}
+	return a.grants.ListOwnerChoices(ctx, issuerSubject.UserID, issuerSubject.Principal)
+}
+
+// ListOwnerActive resolves inventory only for the persisted owner of effective grants.
+func (a *CodeGrantApplication) ListOwnerActive(ctx context.Context, issuer auth.Identity, after string, limit int) ([]gormdb.BrowserReadGrantOwnerEntry, error) {
+	subject, ok := issuer.SessionBrowserSubject()
+	if !ok {
+		return nil, errCodeGrantCallerDenied
+	}
+	if err := a.requireStore(); err != nil {
+		return nil, err
+	}
+	return a.grants.ListOwnerActive(ctx, subject.UserID, subject.Principal, after, limit)
+}
+
+// ListTargetChoices returns enabled persisted recipients only for an exact owner.
+func (a *CodeGrantApplication) ListTargetChoices(ctx context.Context, issuer auth.Identity) ([]gormdb.BrowserReadGrantTargetChoice, error) {
+	issuerSubject, ok := issuer.SessionBrowserSubject()
+	if !ok {
+		return nil, errCodeGrantCallerDenied
+	}
+	if err := a.requireStore(); err != nil {
+		return nil, err
+	}
+	return a.grants.ListTargetChoices(ctx, issuerSubject.UserID, issuerSubject.Principal)
+}
+
+// IssueOnboarding creates a grant through one server-issued owner catalog
+// choice. The store re-resolves that choice and writes the grant audit in the
+// same transaction.
+func (a *CodeGrantApplication) IssueOnboarding(ctx context.Context, issuer auth.Identity, in IssueOnboardingCodeGrantInput) (gormdb.BrowserReadGrant, error) {
+	issuerSubject, ok := issuer.SessionBrowserSubject()
+	if !ok || !in.Target.Valid() {
+		return gormdb.BrowserReadGrant{}, errCodeGrantCallerDenied
+	}
+	if err := a.requireStore(); err != nil {
+		return gormdb.BrowserReadGrant{}, err
+	}
+	return a.grants.IssueOwnerChoice(ctx, gormdb.BrowserReadGrantOwnerIssue{
+		IssuerUserID:    issuerSubject.UserID,
+		IssuerPrincipal: issuerSubject.Principal,
+		TargetUserID:    in.Target.UserID,
+		ChoiceRef:       in.ChoiceRef,
+		ExpiresAt:       in.ExpiresAt,
+	})
+}
+
+// SetWorkingCopyLabel adds non-authorizing, validated display metadata to an
+// owner choice. It does not issue a grant or alter a Source/Checkout identity.
+func (a *CodeGrantApplication) SetWorkingCopyLabel(ctx context.Context, issuer auth.Identity, choiceRef, label string) (gormdb.BrowserReadGrantOwnerChoice, error) {
+	issuerSubject, ok := issuer.SessionBrowserSubject()
+	if !ok {
+		return gormdb.BrowserReadGrantOwnerChoice{}, errCodeGrantCallerDenied
+	}
+	if err := a.requireStore(); err != nil {
+		return gormdb.BrowserReadGrantOwnerChoice{}, err
+	}
+	return a.grants.SetOwnerChoiceLabel(ctx, issuerSubject.UserID, issuerSubject.Principal, choiceRef, label)
 }
 
 // Revoke revokes a grant only after the store rechecks the real browser issuer against

@@ -37,7 +37,6 @@ func buildMCPToolNames(srv *mcp.Server) []string {
 // from its body will break this test.
 func TestWireVnextStores_LifecycleAdvertisedAfterWiring(t *testing.T) {
 	t.Setenv("ENGRAM_LIFECYCLE_ENABLED", "true")
-	t.Setenv("ENGRAM_GRAPH_ENABLED", "false")
 
 	srv := mcp.NewServer(mcp.ServerOptions{Version: "wiring-test"})
 	// The lifecycle gate checks both memoryStore and promotionStore.
@@ -59,9 +58,8 @@ func TestWireVnextStores_LifecycleAdvertisedAfterWiring(t *testing.T) {
 }
 
 // TestWireVnextStores_GraphAdvertisedAfterWiring verifies that wireVnextStores
-// causes the graph tool to appear when ENGRAM_GRAPH_ENABLED=true.
+// advertises historical graph readers when the graph store is wired.
 func TestWireVnextStores_GraphAdvertisedAfterWiring(t *testing.T) {
-	t.Setenv("ENGRAM_GRAPH_ENABLED", "true")
 	t.Setenv("ENGRAM_LIFECYCLE_ENABLED", "false")
 
 	srv := mcp.NewServer(mcp.ServerOptions{Version: "wiring-test"})
@@ -77,11 +75,10 @@ func TestWireVnextStores_GraphAdvertisedAfterWiring(t *testing.T) {
 		"graph must be advertised after wireVnextStores wires graphStore")
 }
 
-// TestWireVnextStores_NoLeakWhenFlagsOff verifies that wire does not spuriously
-// advertise tools when both feature flags are off.
-func TestWireVnextStores_NoLeakWhenFlagsOff(t *testing.T) {
+// TestWireVnextStores_HistoricalGraphReadersSurviveLifecycleFlagOff verifies
+// that graph readers do not inherit lifecycle's unrelated startup flag.
+func TestWireVnextStores_HistoricalGraphReadersSurviveLifecycleFlagOff(t *testing.T) {
 	t.Setenv("ENGRAM_LIFECYCLE_ENABLED", "false")
-	t.Setenv("ENGRAM_GRAPH_ENABLED", "false")
 
 	srv := mcp.NewServer(mcp.ServerOptions{Version: "wiring-test"})
 	srv.SetMemoryStore(&gormdb.MemoryStore{})
@@ -91,6 +88,6 @@ func TestWireVnextStores_NoLeakWhenFlagsOff(t *testing.T) {
 	names := buildMCPToolNames(srv)
 	assert.NotContains(t, names, "lifecycle",
 		"lifecycle must not appear when ENGRAM_LIFECYCLE_ENABLED=false")
-	assert.NotContains(t, names, "graph",
-		"graph must not appear when ENGRAM_GRAPH_ENABLED=false")
+	assert.Contains(t, names, "graph",
+		"historical graph readers must remain advertised when their store is wired")
 }

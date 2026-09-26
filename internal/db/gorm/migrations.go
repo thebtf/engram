@@ -3979,8 +3979,8 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 		// Anti-stub: removing these columns causes TestMigration127_EdgeDiscriminatorsAndNodeFKs
 		// column-existence assertions to fail.
 		//
-		// Flag gate: column additions are unconditional in migration; MCP surface is gated
-		// by vnextFEnabled() + ENGRAM_GRAPH_ENABLED at runtime.
+		// The migration preserves historical graph records; retained MCP readers
+		// are wired from the graph store without a graph-enable feature flag.
 		{
 			ID: "127_edge_discriminators",
 			Migrate: func(tx *gorm.DB) error {
@@ -6865,6 +6865,10 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			},
 			Rollback: rollbackBrowserCodeSearchContinuationsMigration181,
 		},
+		workspaceCatalogMigration182(),
+		uciStructureExposureMigration183(),
+		uciSemanticContinuationMigration184(),
+		localGitRegistrationRetryMigration185(),
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
@@ -7229,5 +7233,102 @@ func continuitySlotMigration161() *gormigrate.Migration {
 				return nil
 			})
 		},
+	}
+}
+
+func uciStructureExposureMigration183() *gormigrate.Migration {
+	return &gormigrate.Migration{
+		ID: "183_uci_structure_exposure",
+		Migrate: func(tx *gorm.DB) error {
+			for _, stmt := range []string{
+				`ALTER TABLE uci_exposures DROP CONSTRAINT IF EXISTS uci_exposures_retrieval_mode_chk`,
+				`ALTER TABLE uci_exposures ADD CONSTRAINT uci_exposures_retrieval_mode_chk
+					CHECK (retrieval_mode IN ('exact', 'lexical', 'hybrid', 'graph', 'structure', 'unavailable'))`,
+				`ALTER TABLE uci_exposures DROP CONSTRAINT IF EXISTS uci_exposures_evidence_source_chk`,
+				`ALTER TABLE uci_exposures ADD CONSTRAINT uci_exposures_evidence_source_chk
+					CHECK (evidence_source IN ('exact', 'fts', 'vector', 'graph', 'structure', 'mixed', 'none'))`,
+			} {
+				if err := tx.Exec(stmt).Error; err != nil {
+					return fmt.Errorf("migration 183: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(_ *gorm.DB) error {
+			// Append-only structure evidence remains readable after binary rollback.
+			return nil
+		},
+	}
+}
+
+func uciSemanticContinuationMigration184() *gormigrate.Migration {
+	return &gormigrate.Migration{
+		ID: "184_uci_semantic_continuations",
+		Migrate: func(tx *gorm.DB) error {
+			for _, stmt := range []string{
+				`CREATE TABLE IF NOT EXISTS uci_semantic_continuations (
+					cursor_ref UUID PRIMARY KEY,
+					space_id UUID,
+					source_id UUID NOT NULL,
+					checkout_id UUID NOT NULL,
+					view_id UUID NOT NULL,
+					profile_id UUID NOT NULL,
+					generation BIGINT NOT NULL,
+					client_session_id TEXT NOT NULL,
+					profile_fingerprint TEXT NOT NULL,
+					query_digest TEXT NOT NULL,
+					filter_digest TEXT NOT NULL,
+					mode TEXT NOT NULL,
+					query_order TEXT NOT NULL,
+					query_limit INTEGER NOT NULL,
+					next_offset INTEGER NOT NULL,
+					vector vector(1536) NOT NULL,
+					expires_at TIMESTAMPTZ NOT NULL,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+					CONSTRAINT uci_semantic_continuations_generation_chk CHECK (generation > 0),
+					CONSTRAINT uci_semantic_continuations_client_session_chk CHECK (
+						btrim(client_session_id) <> '' AND client_session_id = btrim(client_session_id)
+						AND client_session_id !~ '[[:cntrl:]]' AND octet_length(client_session_id) <= 256
+					),
+					CONSTRAINT uci_semantic_continuations_digest_chk CHECK (
+						profile_fingerprint ~ '^[0-9a-f]{64}$' AND query_digest ~ '^[0-9a-f]{64}$'
+						AND filter_digest ~ '^[0-9a-f]{64}$'
+					),
+					CONSTRAINT uci_semantic_continuations_mode_chk CHECK (
+						mode IN ('exact_local_name', 'exact_qualified_symbol', 'exact_relative_path', 'fts')
+						AND query_order IN ('path', 'relevance')
+					),
+					CONSTRAINT uci_semantic_continuations_pagination_chk CHECK (
+						query_limit BETWEEN 1 AND 50 AND next_offset >= 1
+					),
+					CONSTRAINT uci_semantic_continuations_lifecycle_chk CHECK (expires_at > created_at)
+				)`,
+				`CREATE INDEX IF NOT EXISTS idx_uci_semantic_continuations_expiry
+					ON uci_semantic_continuations (expires_at, cursor_ref)`,
+			} {
+				if err := tx.Exec(stmt).Error; err != nil {
+					return fmt.Errorf("migration 184: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			if err := tx.Exec(`DROP TABLE IF EXISTS uci_semantic_continuations`).Error; err != nil {
+				return fmt.Errorf("migration 184 rollback: %w", err)
+			}
+			return nil
+		},
+	}
+}
+
+func localGitRegistrationRetryMigration185() *gormigrate.Migration {
+	return &gormigrate.Migration{
+		ID: "185_local_git_registration_retry",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`ALTER TABLE ci_checkouts ADD COLUMN IF NOT EXISTS registration_profile_id UUID REFERENCES ci_profiles(profile_id)`).Error
+		},
+		// A binary rollback may ignore this additive column, but dropping it would
+		// erase the only durable profile ID needed to recover a lost response.
+		Rollback: func(_ *gorm.DB) error { return nil },
 	}
 }

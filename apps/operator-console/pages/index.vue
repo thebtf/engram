@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useOperatorOverview } from '../composables/useOperatorOverview'
-import { useNav } from '../composables/useNav'
 
 const { t } = useI18n()
 
@@ -33,8 +32,6 @@ const {
   modelDegraded,
   accessGap,
 } = useOperatorOverview()
-const { flat: navigation } = useNav()
-const graphNavigation = computed(() => navigation.value.find((item) => item.id === 'graph'))
 
 function displayCount(value: number, pending = false) {
   return pending ? t('common.loadingShort') : String(value)
@@ -150,22 +147,6 @@ const memoryCards = computed(() => [
     sub: t('overview.cards.noise.sub'),
     meta: [{ cls: 'gate', text: t('overview.badges.aboveNorm') }],
   },
-  {
-    to: '/graph',
-    icon: 'graph',
-    name: t('nav.items.graph'),
-    big: '—',
-    sub: t('overview.cards.graph.sub'),
-    meta: [{ cls: graphNavigation.value?.cls === 'dormant' ? 'gate' : graphNavigation.value?.cls === 'stale' ? 'status' : 'live', text: graphNavigation.value?.cls === 'dormant' ? t('overview.badges.vnext') : t('overview.badges.liveEndpoint') }],
-  },
-  {
-    to: '/books',
-    icon: 'books',
-    name: t('nav.items.books'),
-    big: null,
-    sub: t('overview.cards.books.sub'),
-    meta: [{ cls: 'live', text: t('overview.badges.liveEndpoint') }],
-  },
 ])
 
 const workCards = computed(() => [
@@ -227,8 +208,7 @@ function iconPath(icon: string) {
     memory: '<path d="M3 4.5c0-1.1 2.2-2 5-2s5 .9 5 2-2.2 2-5 2-5-.9-5-2Z"/><path d="M3 4.5v7c0 1.1 2.2 2 5 2s5-.9 5-2v-7"/><path d="M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>',
     queue: '<path d="M3 4h10M3 8h10M3 12h6"/>',
     noise: '<circle cx="8" cy="8" r="6"/><path d="M8 5v3l2 2"/>',
-    graph: '<circle cx="4" cy="4" r="2"/><circle cx="12" cy="6" r="2"/><circle cx="7" cy="12" r="2"/><path d="M5.5 5.2 10.5 5 M5.4 5.6 6.4 10.2 M8.6 11 10.8 7.6"/>',
-    books: '<path d="M3 2h8a2 2 0 0 1 2 2v10H5a2 2 0 0 1-2-2Z"/><path d="M5 2v12"/>',
+    code: '<path d="M5.7 4 2.5 8l3.2 4M10.3 4l3.2 4-3.2 4M9 2.5 7 13.5"/>',
     rules: '<path d="M3 3h10v10H3z"/><path d="M5.5 6.5h5M5.5 9.5h3"/>',
     issues: '<circle cx="8" cy="8" r="6"/><path d="M8 5v4M8 11h.01"/>',
     projects: '<path d="M2 4h5l1.5 2H14v6H2z"/>',
@@ -257,6 +237,15 @@ function iconPath(icon: string) {
         <span class="bdg gate">{{ t('shell.statusNoise') }} {{ info.noise }}</span>
       </div>
     </section>
+
+    <NuxtLink to="/code" class="workspace-entry" data-testid="overview-workspace-entry">
+      <svg class="workspace-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" v-html="iconPath('code')" />
+      <span>
+        <strong>{{ t('nav.items.code') }}</strong>
+        <span>{{ t('overview.cards.code.sub') }}</span>
+      </span>
+      <span aria-hidden="true">→</span>
+    </NuxtLink>
 
     <section class="ov-attention">
       <h3>
@@ -382,6 +371,8 @@ function iconPath(icon: string) {
 .page-head h1 { margin:0 0 4px; font-size:var(--text-xl); font-weight:800; letter-spacing:var(--tracking-display); }
 .page-head p { margin:0; color:var(--muted); font-size:var(--text-sm); }
 .ov-hero { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; padding:18px 20px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); }
+.workspace-entry { display:grid; grid-template-columns:24px minmax(0,1fr) auto; align-items:center; gap:12px; border:1px solid var(--accent); border-radius:var(--r-md); background:var(--surface); padding:15px 18px; color:var(--fg); text-decoration:none; }
+.workspace-entry:hover { background:var(--surface-warm); }.workspace-entry:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }.workspace-icon { width:20px; height:20px; color:var(--accent); }.workspace-entry span:nth-child(2) { display:grid; gap:3px; }.workspace-entry strong { font-size:var(--text-sm); }.workspace-entry span:nth-child(2) span, .workspace-entry > span:last-child { color:var(--muted); font-size:var(--text-sm); }
 .ov-hi h2 { margin:0 0 3px; font-size:var(--text-2xl); font-weight:800; letter-spacing:var(--tracking-display); }
 .ov-hi p { margin:0; color:var(--muted); font-size:var(--text-sm); }
 .ov-id { display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
@@ -444,6 +435,7 @@ function iconPath(icon: string) {
 }
 @media (max-width:760px) {
   .ov-hero { flex-direction:column; }
+  .workspace-entry { grid-template-columns:20px minmax(0,1fr); }.workspace-entry > span:last-child { display:none; }
   .ov-grid { grid-template-columns:1fr; }
   .ov-att-row { grid-template-columns:8px 1fr; }
   .oa-go { grid-column:2; }

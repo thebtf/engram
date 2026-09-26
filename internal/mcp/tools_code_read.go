@@ -36,6 +36,7 @@ type CodebaseReadInput struct {
 	Ref               uci.QueryEntityRef
 	Span              uci.QuerySpan
 	ContentDigest     uci.QueryContentDigest
+	ReferenceSiteID   *string
 	VerifyWorkingCopy bool
 	MaxBytes          int
 }

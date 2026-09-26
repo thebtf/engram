@@ -7,6 +7,7 @@ export default defineNuxtConfig({
   modules: ['@nuxt/ui', '@nuxtjs/color-mode', '@nuxtjs/i18n'],
   css: ['~/assets/tokens.css', '~/assets/base.css'],
   ui: {
+    fonts: false,
     // We manage theme classes through @nuxtjs/color-mode below instead of
     // letting Nuxt UI auto-register its color-mode integration.
     colorMode: false,
@@ -46,9 +47,9 @@ export default defineNuxtConfig({
       generatedLocaleFilePathFormat: 'relative',
     },
     locales: [
-      { code: 'ru', name: 'Русский',  language: 'ru-RU',      file: 'ru.json' },
-      { code: 'en', name: 'English',  language: 'en-US',      file: 'en.json' },
-      { code: 'zh', name: '中文',      language: 'zh-Hans-CN', file: 'zh.json' },
+      { code: 'ru', name: 'Русский', language: 'ru-RU', file: 'ru.json' },
+      { code: 'en', name: 'English', language: 'en-US', file: 'en.json' },
+      { code: 'zh', name: '中文', language: 'zh-Hans-CN', file: 'zh.json' },
     ],
     detectBrowserLanguage: {
       useCookie: true,

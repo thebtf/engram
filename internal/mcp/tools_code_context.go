@@ -33,6 +33,14 @@ type CodebaseContextApplication interface {
 	Project(context.Context, uci.ContextRef) (map[string]string, error)
 }
 
+// LocalGitRegistration is installed only by the production composition.
+type LocalGitRegistration func(context.Context, uci.ResolveContextInput, string, string, string, *bool) (uci.RegisteredCheckoutSelector, error)
+
+// codebaseContextRegistrationApplication registers client-owned Git worktrees.
+type codebaseContextRegistrationApplication interface {
+	RegisterLocalGit(context.Context, uci.ResolveContextInput, string, string, string, *bool) (uci.RegisteredCheckoutSelector, error)
+}
+
 // codebaseContextIndexApplication authorizes registered checkout selectors for
 // selection and explicit checkout-handle use. It stays separate from the
 // published-View capability so no-View bootstrap selection never grants query,
@@ -49,8 +57,9 @@ type codebaseContextIndexApplication interface {
 // capability; those remain unavailable until their recorder-owned applications
 // are composed separately.
 type UCIContextApplication struct {
-	resolver  *uci.ContextResolver
-	directory uci.ContextDirectory
+	resolver         *uci.ContextResolver
+	directory        uci.ContextDirectory
+	registerLocalGit LocalGitRegistration
 }
 
 // NewUCIContextApplication creates the production MCP context application.
@@ -59,6 +68,17 @@ func NewUCIContextApplication(resolver *uci.ContextResolver, directory uci.Conte
 		return nil, errors.New("UCI context application is not configured")
 	}
 	return &UCIContextApplication{resolver: resolver, directory: directory}, nil
+}
+
+func (application *UCIContextApplication) SetLocalGitRegistration(register LocalGitRegistration) {
+	application.registerLocalGit = register
+}
+
+func (application *UCIContextApplication) RegisterLocalGit(ctx context.Context, caller uci.ResolveContextInput, sourceID, label, locator string, parserBundle *bool) (uci.RegisteredCheckoutSelector, error) {
+	if application == nil || application.registerLocalGit == nil {
+		return uci.RegisteredCheckoutSelector{}, errors.New("local git registration unavailable")
+	}
+	return application.registerLocalGit(ctx, caller, sourceID, label, locator, parserBundle)
 }
 
 func (application *UCIContextApplication) Resolve(ctx context.Context, input uci.ResolveContextInput) (uci.AuthorizedContext, error) {
@@ -147,6 +167,9 @@ type codebaseContextArgs struct {
 	ViewID            *string                      `json:"view_id"`
 	AnalysisProfileID *string                      `json:"analysis_profile_id"`
 	Generation        *int64                       `json:"generation"`
+	SourceLabel       *string                      `json:"source_label"`
+	Locator           *string                      `json:"locator"`
+	ParserBundle      *bool                        `json:"parser_bundle"`
 	Checkout          *codebaseContextCheckoutArgs `json:"checkout"`
 }
 
@@ -229,7 +252,7 @@ func codebaseContextTool() Tool {
 			"properties": map[string]any{
 				"action": map[string]any{
 					"type":        "string",
-					"enum":        []string{"resolve", "list", "select"},
+					"enum":        []string{"resolve", "list", "select", "register"},
 					"description": "resolve reuses the caller binding; list returns authorized contexts; select chooses a typed reference, registered checkout, or opaque handle",
 				},
 				"context_handle": map[string]any{
@@ -244,6 +267,9 @@ func codebaseContextTool() Tool {
 					"type":        "string",
 					"description": "ContextRef source UUID for action=select",
 				},
+				"source_label":  map[string]any{"type": "string", "description": "Label for a new Git source"},
+				"locator":       map[string]any{"type": "string", "description": "Private canonical file URI for the local Git worktree"},
+				"parser_bundle": map[string]any{"type": "boolean", "description": "Explicit parser profile request; omitted selects verified installed Tree-sitter on first registration, native Go otherwise, and preserves existing profiles on replay"},
 				"checkout_id": map[string]any{
 					"type":        "string",
 					"description": "ContextRef checkout UUID for action=select",
@@ -298,9 +324,41 @@ func (s *Server) handleCodebaseContext(ctx context.Context, raw json.RawMessage)
 		return s.listCodebaseContexts(ctx, input, args)
 	case "select":
 		return s.selectCodebaseContext(ctx, input, args)
+	case "register":
+		return s.registerCodebaseContext(ctx, input, args)
 	default:
 		return "", codebaseContextClosedError(uci.ContextMismatch)
 	}
+}
+
+func (s *Server) registerCodebaseContext(ctx context.Context, input uci.ResolveContextInput, args codebaseContextArgs) (string, error) {
+	identity, found := auth.IdentityFrom(ctx)
+	if !found || identity.Source != auth.SourceClient || identity.Role != auth.RoleReadWrite || identity.PrincipalKind != auth.PrincipalKindHuman {
+		return "", codebaseContextClosedError(uci.PermissionDenied)
+	}
+	if args.Locator == nil || args.Checkout != nil || args.ContextHandle != nil || args.SpaceID != nil || args.CheckoutID != nil || args.ViewID != nil || args.AnalysisProfileID != nil || args.Generation != nil ||
+		(args.SourceID == nil) == (args.SourceLabel == nil) {
+		return "", codebaseContextClosedError(uci.ContextMismatch)
+	}
+	application, _, ok := s.codebaseContextApplicationSnapshot()
+	if !ok {
+		return "", codebaseContextClosedError(uci.ContextRequired)
+	}
+	registration, ok := application.(codebaseContextRegistrationApplication)
+	if !ok {
+		return "", codebaseContextClosedError(uci.ContextRequired)
+	}
+	var sourceID, label string
+	if args.SourceID != nil {
+		sourceID = *args.SourceID
+	} else {
+		label = *args.SourceLabel
+	}
+	checkout, err := registration.RegisterLocalGit(ctx, input, sourceID, label, *args.Locator, args.ParserBundle)
+	if err != nil {
+		return "", codebaseContextApplicationError(err)
+	}
+	return s.selectCodebaseContextSelection(ctx, input, codebaseContextSelection{checkout: &checkout})
 }
 
 func (s *Server) resolveCodebaseContext(ctx context.Context, input uci.ResolveContextInput, args codebaseContextArgs) (string, error) {
@@ -359,6 +417,9 @@ func (s *Server) listCodebaseContexts(ctx context.Context, input uci.ResolveCont
 }
 
 func (s *Server) selectCodebaseContext(ctx context.Context, input uci.ResolveContextInput, args codebaseContextArgs) (string, error) {
+	if args.ParserBundle != nil {
+		return "", codebaseContextClosedError(uci.ContextMismatch)
+	}
 	selection, err := args.selection()
 	if err != nil {
 		return "", codebaseContextClosedError(uci.ContextMismatch)
@@ -560,7 +621,7 @@ func decodeCodebaseContextArgs(raw json.RawMessage) (codebaseContextArgs, error)
 		return codebaseContextArgs{}, errors.New("action is required")
 	}
 	switch *args.Action {
-	case "resolve", "list", "select":
+	case "resolve", "list", "select", "register":
 		return args, nil
 	default:
 		return codebaseContextArgs{}, errors.New("invalid action")
@@ -568,7 +629,7 @@ func decodeCodebaseContextArgs(raw json.RawMessage) (codebaseContextArgs, error)
 }
 
 func (args codebaseContextArgs) hasSelector() bool {
-	return args.ContextHandle != nil || args.SpaceID != nil || args.SourceID != nil || args.CheckoutID != nil || args.ViewID != nil || args.AnalysisProfileID != nil || args.Generation != nil || args.Checkout != nil
+	return args.ContextHandle != nil || args.SpaceID != nil || args.SourceID != nil || args.CheckoutID != nil || args.ViewID != nil || args.AnalysisProfileID != nil || args.Generation != nil || args.Checkout != nil || args.ParserBundle != nil
 }
 
 func (args codebaseContextArgs) selection() (codebaseContextSelection, error) {
@@ -821,6 +882,9 @@ func validCodebaseContextMetadata(metadata map[string]string) bool {
 func codebaseContextApplicationError(err error) error {
 	var contextErr *uci.ContextError
 	if errors.As(err, &contextErr) {
+		if contextErr.Code() == uci.RegistrationProfileUnbound {
+			return errors.New("REGISTRATION_PROFILE_UNBOUND: original analysis profile cannot be recovered; register with a new source label for a distinct identity")
+		}
 		switch contextErr.Code() {
 		case uci.ContextRequired, uci.ContextMismatch, uci.PermissionDenied:
 			return codebaseContextClosedError(contextErr.Code())

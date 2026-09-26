@@ -1766,7 +1766,7 @@ function writeZip(archiveRoot, archivePath, entries) {
 }
 
 function buildServerArchive(archiveRoot, archivePath) {
-  const entries = ["engram-server", "package.json", "extensions/engram-memory.mjs", "extensions/legacy-relay.mjs", "bootstrap-targets.json"];
+  const entries = ["engram-server", "package.json", "extensions/engram-memory.mjs", "extensions/legacy-relay.mjs", "bootstrap-targets.json", "parser-targets.json"];
   if (archivePath.endsWith(".tar.gz")) {
     const archived = spawnSync("tar", ["-czf", archivePath, "-C", archiveRoot, ...entries], { encoding: "utf8" });
     assert.equal(archived.status, 0, archived.stderr);
@@ -1774,6 +1774,46 @@ function buildServerArchive(archiveRoot, archivePath) {
     writeZip(archiveRoot, archivePath, entries);
   }
 }
+
+test("parser policy generator accepts package SemVer and rejects mismatched or unsafe versions", () => {
+  const temp = temporaryDirectory();
+  const generator = "../scripts/prepare-parser-targets.sh";
+  const policy = path.join(temp, "parser-targets.json");
+  const go = path.join(temp, "go");
+  const manifests = [".claude-plugin", ".codex-plugin", ".omp-plugin"];
+  const invoke = (version, check = false) => spawnSync("bash", ["-c", `ENGRAM_BOOTSTRAP_GO=./go ${generator} --version ${shellQuote(version)} --output parser-targets.json ${check ? "--check" : ""}`], {
+    cwd: temp, encoding: "utf8",
+  });
+  const setManifestVersion = (version) => {
+    for (const name of manifests) fs.writeFileSync(path.join(temp, "plugin", "engram", name, "plugin.json"), JSON.stringify({ version }));
+  };
+  try {
+    for (const name of manifests) fs.mkdirSync(path.join(temp, "plugin", "engram", name), { recursive: true });
+    fs.writeFileSync(go, "#!/usr/bin/env bash\nfor arg in \"$@\"; do if [[ $arg == -o ]]; then output=1; continue; fi; if [[ ${output:-0} == 1 ]]; then printf 'parser-fixture' > \"$arg\"; exit 0; fi; done\nexit 1\n", { mode: 0o755 });
+    for (const version of ["6.50.0", "6.50.0-rc.1", "6.50.0+build.5", "6.50.0-rc.1+build.5"]) {
+      setManifestVersion(version);
+      assert.equal(invoke(version).status, 0, `generation rejected ${version}`);
+      const generated = JSON.parse(fs.readFileSync(policy, "utf8"));
+      assert.equal(generated.package_version, version);
+      assert.equal(generated.targets["win32-x64"].version, version);
+      assert.equal(invoke(version, true).status, 0, `check rejected ${version}`);
+    }
+    const before = fs.readFileSync(policy, "utf8");
+    for (const version of ["6.50.0/../../payload", "v6.50.0", "6.50.0-", "6.50.0-01", "6.50.0+", "06.50.0"]) {
+      setManifestVersion(version);
+      assert.notEqual(invoke(version).status, 0, `unsafe version accepted: ${version}`);
+    }
+    setManifestVersion("6.50.0");
+    assert.notEqual(invoke("6.50.0-rc.1").status, 0, "mismatched manifest accepted");
+    assert.equal(fs.readFileSync(policy, "utf8"), before, "invalid input rewrote policy");
+    fs.appendFileSync(policy, "drift");
+    assert.notEqual(invoke("6.50.0", true).status, 0, "drift passed check mode");
+    assert.ok(fs.readFileSync(policy, "utf8").endsWith("drift"), "check mode rewrote policy");
+  } finally {
+    const cleanup = spawnSync("bash", ["-c", `rm -rf -- ${shellQuote(bashPath(temp))}`], { cwd: root, encoding: "utf8" });
+    assert.equal(cleanup.status, 0, cleanup.stderr);
+  }
+});
 
 test("GoReleaser client and server empty build IDs match the bootstrap policy generator", () => {
   const generator = fs.readFileSync(path.join(root, "scripts", "prepare-bootstrap-policy.sh"), "utf8");
@@ -1795,20 +1835,31 @@ test("generator check mode and combined artifact gate accept only the shared tar
     const fakeBin = path.join(temp, "bin");
     const fakeGo = path.join(fakeBin, "go");
     const policyPath = path.join(temp, "bootstrap-targets.json");
+    const parserPolicyPath = path.join(temp, "parser-targets.json");
     const dist = path.join(temp, "dist");
     const currentVersion = parsePolicy(fs.readFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), "utf8")).package_version;
     fs.mkdirSync(fakeBin, { recursive: true });
-    fs.writeFileSync(fakeGo, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then echo 'go version go1.26.6 linux/amd64'; exit 0; fi\nwhile [[ $# -gt 0 ]]; do\n  if [[ $1 == -ldflags ]]; then [[ $2 == *' -buildid= '* ]] || exit 1; shift 2; continue; fi\n  if [[ $1 == -o ]]; then shift; printf '%s-%s' \"$GOOS\" \"$GOARCH\" > \"$1\"; exit 0; fi\n  shift\ndone\nexit 1\n", { mode: 0o755 });
+    fs.writeFileSync(fakeGo, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then echo 'go version go1.26.6 linux/amd64'; exit 0; fi\nfor arg in \"$@\"; do [[ $arg == ./tools/uci-parser ]] && parser=1; done\nwhile [[ $# -gt 0 ]]; do\n  if [[ $1 == -ldflags ]]; then [[ $2 == *-buildid=* ]] || exit 1; shift 2; continue; fi\n  if [[ $1 == -o ]]; then shift; if [[ ${parser:-0} == 1 ]]; then printf 'parser-windows-amd64' > \"$1\"; else printf '%s-%s' \"$GOOS\" \"$GOARCH\" > \"$1\"; fi; exit 0; fi\n  shift\ndone\nexit 1\n", { mode: 0o755 });
     const fakeGoArgument = shellQuote(bashPath(fakeGo));
     const policyArgument = shellQuote(bashPath(policyPath));
-    run("bash", ["-c", `ENGRAM_BOOTSTRAP_GO=${fakeGoArgument} scripts/prepare-bootstrap-policy.sh --version ${currentVersion} --output ${policyArgument}`]);
-    run("bash", ["-c", `ENGRAM_BOOTSTRAP_GO=${fakeGoArgument} scripts/prepare-bootstrap-policy.sh --version ${currentVersion} --output ${policyArgument} --check`]);
+    const parserEnvironment = `ENGRAM_BOOTSTRAP_GO=${fakeGoArgument} ENGRAM_PARSER_POLICY=${shellQuote(bashPath(parserPolicyPath))}`;
+    run("bash", ["-c", `${parserEnvironment} scripts/prepare-bootstrap-policy.sh --version ${currentVersion} --output ${policyArgument}`]);
+    const generatedParserPolicy = JSON.parse(fs.readFileSync(parserPolicyPath, "utf8"));
+    assert.equal(generatedParserPolicy.package_version, currentVersion);
+    assert.equal(generatedParserPolicy.targets["win32-x64"].version, currentVersion);
+    run("bash", ["-c", `${parserEnvironment} scripts/prepare-bootstrap-policy.sh --version ${currentVersion} --output ${policyArgument} --check`]);
+    fs.appendFileSync(parserPolicyPath, "drift");
+    const parserPolicyRejected = spawnSync("bash", ["-c", `${parserEnvironment} scripts/prepare-bootstrap-policy.sh --version ${currentVersion} --output ${policyArgument} --check`], { cwd: root, encoding: "utf8" });
+    assert.notEqual(parserPolicyRejected.status, 0);
+    assert.equal(fs.readFileSync(parserPolicyPath, "utf8").endsWith("drift"), true, "check mode must not rewrite the parser policy");
+    fs.writeFileSync(parserPolicyPath, fs.readFileSync(parserPolicyPath, "utf8").slice(0, -5));
     const policy = parsePolicy(fs.readFileSync(policyPath, "utf8"), currentVersion);
     fs.mkdirSync(dist, { recursive: true });
     for (const { desired } of Object.values(policy.targets)) {
       const bytes = desired.asset.includes("windows") ? "windows-amd64" : desired.asset.includes("linux") ? "linux-amd64" : "darwin-arm64";
       fs.writeFileSync(path.join(dist, desired.asset), bytes);
     }
+    fs.writeFileSync(path.join(dist, "uci-parser-windows-amd64.exe"), "parser-windows-amd64");
     const archiveRoot = path.join(temp, "archive");
     fs.mkdirSync(path.join(archiveRoot, "extensions"), { recursive: true });
     fs.writeFileSync(path.join(archiveRoot, "engram-server"), `#!/usr/bin/env bash\nprintf 'INF Starting engram server version=v${currentVersion}\\n' >&2\nexit 1\n`, { mode: 0o755 });
@@ -1816,14 +1867,28 @@ test("generator check mode and combined artifact gate accept only the shared tar
     fs.copyFileSync(path.join(root, "plugin", "engram", "extensions", "engram-memory.mjs"), path.join(archiveRoot, "extensions", "engram-memory.mjs"));
     fs.copyFileSync(path.join(root, "plugin", "engram", "extensions", "legacy-relay.mjs"), path.join(archiveRoot, "extensions", "legacy-relay.mjs"));
     fs.copyFileSync(policyPath, path.join(archiveRoot, "bootstrap-targets.json"));
+    fs.copyFileSync(parserPolicyPath, path.join(archiveRoot, "parser-targets.json"));
     const archives = [
       `engram_${currentVersion}_linux_amd64.tar.gz`,
       `engram_${currentVersion}_darwin_arm64.tar.gz`,
       `engram_${currentVersion}_windows_amd64.zip`,
     ];
     for (const archive of archives) buildServerArchive(archiveRoot, path.join(dist, archive));
-    const gate = ["scripts/check-bootstrap-policy-artifacts.sh", "--policy", bashPath(policyPath), "--dist", bashPath(dist)];
+    const gate = ["-c", `${parserEnvironment} bash scripts/check-bootstrap-policy-artifacts.sh --policy ${policyArgument} --dist ${shellQuote(bashPath(dist))}`];
     run("bash", gate);
+    const rawParserPath = path.join(dist, "uci-parser-windows-amd64.exe");
+    fs.appendFileSync(rawParserPath, "drift");
+    const parserRejected = spawnSync("bash", gate, { cwd: root, encoding: "utf8" });
+    assert.notEqual(parserRejected.status, 0);
+    assert.match(parserRejected.stderr, /parser release asset differs from policy/);
+    fs.writeFileSync(rawParserPath, "parser-windows-amd64");
+    fs.writeFileSync(path.join(archiveRoot, "parser-targets.json"), "{}");
+    buildServerArchive(archiveRoot, path.join(dist, archives[0]));
+    const archiveParserRejected = spawnSync("bash", gate, { cwd: root, encoding: "utf8" });
+    assert.notEqual(archiveParserRejected.status, 0);
+    assert.match(archiveParserRejected.stderr, /parser policy missing or changed/);
+    fs.copyFileSync(parserPolicyPath, path.join(archiveRoot, "parser-targets.json"));
+    buildServerArchive(archiveRoot, path.join(dist, archives[0]));
 
     const rawClientPath = path.join(dist, policy.targets["linux-x64"].desired.asset);
     const rawClient = fs.readFileSync(rawClientPath);
@@ -2231,6 +2296,7 @@ exec "$node_path" "$@"
     const policy = parsePolicy(policyJSON);
     const policyVersion = policy.package_version;
     const tagName = `v${policyVersion}`;
+    const parserTarget = require("../plugin/engram/parser-targets.json").targets["win32-x64"];
     fs.writeFileSync(first, "[]");
     fs.writeFileSync(second, JSON.stringify([{
       id: 368199776,
@@ -2241,7 +2307,7 @@ exec "$node_path" "$@"
         state: "uploaded",
         size: desired.size,
         digest: `sha256:${desired.sha256}`,
-      })),
+      })).concat({ name: parserTarget.asset, state: "uploaded", size: parserTarget.size, digest: `sha256:${parserTarget.sha256}` }),
     }]));
     fs.writeFileSync(path.join(fakeBin, "curl"), "#!/usr/bin/env bash\ncount=0\n[[ -f $FAKE_CURL_COUNT ]] && count=$(cat \"$FAKE_CURL_COUNT\")\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$FAKE_CURL_COUNT\"\nprintf '%s\\n' \"$*\" >> \"$FAKE_CURL_INVOCATIONS\"\nif [[ ${FAKE_CURL_ALWAYS_FAIL:-} == 1 ]] || { (( count == 1 )) && [[ ${FAKE_CURL_FAIL_FIRST:-} == 1 ]]; }; then echo \"transient release list failure $count\" >&2; exit 1; fi\nif (( count == 1 )); then cat \"$FAKE_RELEASE_FIRST\"; else cat \"$FAKE_RELEASE_SECOND\"; fi\n", { mode: 0o755 });
     fs.writeFileSync(path.join(fakeBin, "sleep"), "#!/usr/bin/env bash\nprintf '%s\\n' \"$1\" >> \"$FAKE_SLEEP_LOG\"\n", { mode: 0o755 });
@@ -2261,6 +2327,16 @@ exec "$node_path" "$@"
     assert.equal(fs.readFileSync(count, "utf8"), "2");
     assert.equal(fs.readFileSync(sleeps, "utf8"), "10\n");
     assertCurlInvocations();
+    fs.rmSync(count);
+    fs.rmSync(sleeps);
+    fs.rmSync(invocations);
+    const missingParser = JSON.parse(fs.readFileSync(second, "utf8"));
+    missingParser[0].assets.pop();
+    fs.writeFileSync(second, JSON.stringify(missingParser));
+    const parserRejected = spawnSync("bash", ["-c", `${environment} bash scripts/readback-bootstrap-policy-assets.sh --tag ${tagName}`], { cwd: root, encoding: "utf8", env: process.env });
+    assert.notEqual(parserRejected.status, 0);
+    assert.match(parserRejected.stderr, /expected exactly one uploaded uci-parser-windows-amd64.exe/);
+    assert.equal(fs.readFileSync(count, "utf8"), "5");
     fs.rmSync(count);
     fs.rmSync(sleeps);
     fs.rmSync(invocations);

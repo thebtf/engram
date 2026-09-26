@@ -52,9 +52,11 @@ Engram v6 разделяет две credential tiers, каждая жёстко 
 | Tier | Name | Lives in | Purpose | Issuance |
 |---|---|---|---|---|
 | **1 — Operator key** | `ENGRAM_AUTH_ADMIN_TOKEN` | Только server-host environment (Docker, compose) | Admin-grade доступ для migrations, server-internal RPC и dashboard bootstrap | Оператор задаёт на сервере |
-| **2 — Worker keycard** | `ENGRAM_TOKEN` | Workstation `~/.claude/settings.json` env | Daemon ↔ server gRPC и обычные MCP tool calls | Выпускается через `/tokens` после admin login |
+| **2 — Worker keycard** | `ENGRAM_TOKEN` | Окружение рабочей станции или универсальная конфигурация плагина | Daemon ↔ server gRPC и обычные MCP tool calls | Выпускается через `/access` в авторизованной admin-сессии браузера |
 
 Operator key никогда не должен попадать на рабочую станцию. Worker keycard никогда не должен жить на серверном хосте.
+
+Кодовый Workspace: [включение, диагностика и проверка F1–F7](docs/operating-engram.md). Текущие MCP `codebase_*` работают через UCI и не являются устаревшими; они отдельно от браузерных grants. [Quickstart Feature 011](specs/011-operator-code-console/quickstart.md) готовит disposable acceptance-fixture и не заменяет инструкцию эксплуатации. Русский README в остальных разделах остаётся несинхронизированным с английским.
 <!-- redoc:end:whats-new -->
 
 ---
@@ -149,24 +151,35 @@ graph TB
 <!-- redoc:start:quick-start -->
 ## Быстрый старт
 
+Для сборки локального Compose-стека нужны Docker с Compose, пароль PostgreSQL и отдельный операторский токен. Три имени образов и версия сборки обязательны даже при сборке из исходников:
+
 ```bash
 git clone https://github.com/thebtf/engram.git
 cd engram
-
-# Настройка
-cp .env.example .env   # отредактируйте под свои параметры
-
-# Запуск
-docker compose up -d
+cp .env.example .env
+commit=$(git rev-parse HEAD)
+cat >> .env <<EOF
+ENGRAM_SERVER_IMAGE=engram-local-server
+ENGRAM_OPERATOR_IMAGE=engram-local-operator-console
+ENGRAM_POSTGRES_IMAGE=engram-local-postgres
+ENGRAM_BUILD_VERSION=sha-$commit
+EOF
+# Перед запуском задайте в .env POSTGRES_PASSWORD и ENGRAM_AUTH_ADMIN_TOKEN.
+docker compose up -d --build
+docker compose ps
 ```
 
-Это запускает PostgreSQL 17 + pgvector и сервер Engram по адресу `http://your-server:37777`.
+Стек запускает PostgreSQL 17 с pgvector, сервер на `WORKER_PORT` (по умолчанию `37777`) и отдельную консоль на `OPERATOR_CONSOLE_PORT` (по умолчанию `3000`). Для развёртывания только из опубликованных образов используйте три digest-идентификатора и проверку публикации из [руководства по развёртыванию](docs/DEPLOYMENT.md), а не этот исходный build.
 
-Проверка:
+Проверьте ответ HTTP-процесса и готовность сервиса отдельно:
 
 ```bash
-curl http://your-server:37777/health
+curl -fsS http://localhost:37777/health
+curl -fsS http://localhost:37777/api/ready
+docker compose logs --tail=100 server
 ```
+
+Если изменили `WORKER_PORT`, используйте новый порт. Эти проверки не подтверждают работу плагина или готовность кодового индекса.
 
 Затем установите плагин в Claude Code:
 
@@ -184,7 +197,7 @@ ENGRAM_URL=http://your-server:37777
 ENGRAM_TOKEN=engram_your_workstation_keycard
 ```
 
-Сгенерируйте worker keycard на `http://your-server:37777/tokens`, затем перезапустите Claude Code. Память активна.
+В авторизованной admin-сессии выпустите worker keycard в разделе `http://your-server:37777/access`. Настройте его через штатный `/engram:setup` или конфигурацию своего клиента и перезапустите именно этот клиент. Для кодового Workspace нужны дополнительные шаги из [операторского руководства](docs/operating-engram.md); наличие памяти не означает готовность индекса.
 <!-- redoc:end:quick-start -->
 
 ---
@@ -207,22 +220,13 @@ ENGRAM_TOKEN=engram_your_workstation_keycard
 /plugin install engram
 ```
 
-Перезапустите Claude Code. Всё настроено.
+Перезапустите Claude Code и проверьте подключение MCP в новой сессии. Установка плагина не подтверждает готовность сервера, keycard, парсера и Workspace; порядок проверки описан в [операторском руководстве](docs/operating-engram.md).
 
 ### Docker Compose
 
-```bash
-git clone https://github.com/thebtf/engram.git && cd engram
-cp .env.example .env   # отредактируйте DATABASE_DSN, токены, конфигурацию embeddings
-docker compose up -d
-```
+Для локальной сборки используйте команды из [быстрого старта](#быстрый-старт). `docker compose up -d` без обязательных `ENGRAM_SERVER_IMAGE`, `ENGRAM_OPERATOR_IMAGE`, `ENGRAM_POSTGRES_IMAGE` и `ENGRAM_BUILD_VERSION` не запускает стек. Задайте `POSTGRES_PASSWORD` и `ENGRAM_AUTH_ADMIN_TOKEN` до запуска.
 
-**Уже есть PostgreSQL?** Запустите только контейнер сервера:
-
-```bash
-DATABASE_DSN="postgres://user:pass@your-pg:5432/engram?sslmode=disable" \
-  docker compose up -d server
-```
+Для опубликованных образов укажите три digest-идентификатора из манифеста релиза и запустите [проверку и pull-only развёртывание](docs/DEPLOYMENT.md#immutable-image-selection). Если PostgreSQL уже развёрнут отдельно, задайте `DATABASE_DSN` для сервера и проверьте соответствие собственной конфигурации вместо слепого запуска только `server`: Compose-файл содержит зависимость от сервиса `postgres`.
 
 ### Binary Installation (v4+)
 
@@ -251,33 +255,7 @@ export ENGRAM_TOKEN=engram_your_workstation_keycard
 
 ### Ручная настройка MCP
 
-Если вы не используете плагин, настройте MCP напрямую в `~/.claude/settings.json`:
-
-#### Streamable HTTP (рекомендуется)
-
-```json
-{
-  "mcpServers": {
-    "engram": {
-      "type": "url",
-      "url": "http://your-server:37777/mcp",
-      "headers": {
-        "Authorization": "Bearer ${ENGRAM_TOKEN}"
-      }
-    }
-  }
-}
-```
-
-Claude Code подставляет `${VAR}` из переменных окружения при запуске.
-
-**Команда CLI:**
-
-```bash
-claude mcp add-json engram '{"type":"stdio","command":"engram","env":{"ENGRAM_URL":"http://your-server:37777","ENGRAM_TOKEN":"${ENGRAM_TOKEN}"}}' -s user
-```
-
-`ENGRAM_URL` можно задавать как origin сервера (`http://host:37777`) или как MCP path (`http://host:37777/mcp`); hooks всё равно нормализуют origin для REST вызовов. `ENGRAM_TOKEN` всегда должен быть workstation keycard, а не operator key.
+Если плагин не используется, настройте локальный `engram` как stdio-процесс в конфигурации своего agent host. Передайте `ENGRAM_URL` как origin сервера (`http://host:37777`), а `ENGRAM_TOKEN` как workstation keycard. Не добавляйте `/mcp` или `/sse`: текущий daemon общается с сервером по gRPC. Не записывайте operator key на рабочую станцию. Порядок проверки кодовых инструментов описан в [операторском руководстве](docs/operating-engram.md).
 
 ### Сборка из исходников
 
@@ -305,11 +283,11 @@ make install  # устанавливает плагин + запускает dae
 
 Шаги обновления:
 1. обновите plugin и daemon до нужного `v6.x` релиза
-2. откройте `<server-url>/tokens`, выпустите workstation keycard и настройте `ENGRAM_TOKEN`
+2. откройте `<server-url>/access` в авторизованной admin-сессии, выпустите workstation keycard и настройте `ENGRAM_TOKEN`
 3. перезапустите Claude Code и daemon
 4. проверьте plugin update detection, session-start cache fallback и текущую версию сервера
 
-**Docker-образ:** Используйте актуальный `ghcr.io/thebtf/engram:latest`. Миграции БД запускаются автоматически при старте.
+**Docker-образ:** Для обновления опубликованного стека используйте три неизменяемых digest-идентификатора из манифеста релиза и проверку публикации по [руководству по развёртыванию](docs/DEPLOYMENT.md#immutable-image-selection), а не `ghcr.io/thebtf/engram:latest`. Для локальной сборки остаётся [вариант Docker Compose](#docker-compose). Миграции БД запускаются автоматически при старте.
 <!-- redoc:end:upgrading -->
 
 ---

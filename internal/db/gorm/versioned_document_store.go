@@ -185,21 +185,6 @@ func (s *VersionedDocumentStore) List(ctx context.Context, project, docType, pat
 	return docs, nil
 }
 
-// DeleteBySourceBookJobID removes versioned documents whose metadata points at the given books job.
-func (s *VersionedDocumentStore) DeleteBySourceBookJobID(ctx context.Context, jobID int64) (int64, error) {
-	if jobID <= 0 {
-		return 0, fmt.Errorf("versioned_document_store: delete by source_book_job_id: invalid job id %d", jobID)
-	}
-	filter := fmt.Sprintf(`{"source_book_job_id":%d}`, jobID)
-	result := s.db.WithContext(ctx).
-		Where("metadata::jsonb @> ?::jsonb", filter).
-		Delete(&VersionedDocument{})
-	if result.Error != nil {
-		return 0, fmt.Errorf("versioned_document_store: delete by source_book_job_id: %w", result.Error)
-	}
-	return result.RowsAffected, nil
-}
-
 // versionedDocBuildListFilters returns the extra WHERE clause string and positional args
 // for the List raw query. The project arg is always first and already in the query template.
 func versionedDocBuildListFilters(project, docType, pathPrefix string) (string, []interface{}) {

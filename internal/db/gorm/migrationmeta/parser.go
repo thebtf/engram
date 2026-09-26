@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -62,7 +63,7 @@ type ColumnDefinition struct {
 }
 
 var (
-	migrationIDPattern  = regexp.MustCompile(`^(\d+)_`)
+	migrationIDPattern = regexp.MustCompile(`^(\d+)_`)
 	// sqlCommentPattern strips line (--...) and block (/* ... */) SQL comments so
 	// a commented-out CREATE/DROP TABLE is not parsed as live DDL (PR #271 review,
 	// gemini). Applied to the raw SQL before table extraction.
@@ -78,6 +79,91 @@ func ParseFile(path string) (*Schema, error) {
 		return nil, err
 	}
 	return ParseSource(path, src)
+}
+
+// ParseRegisteredFile follows the migration slice passed to gormigrate.New,
+// including constructors declared in other files of the same package.
+func ParseRegisteredFile(path string) (*Schema, error) {
+	path = filepath.Clean(path)
+	fset := token.NewFileSet()
+	files, err := parser.ParseDir(fset, filepath.Dir(path), func(info os.FileInfo) bool {
+		return strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		return nil, err
+	}
+	pkg, ok := files["gorm"]
+	if !ok {
+		return nil, fmt.Errorf("no gorm package in %s", filepath.Dir(path))
+	}
+	constructors := make(map[string]*ast.FuncDecl)
+	for _, file := range pkg.Files {
+		for _, decl := range file.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil {
+				constructors[fn.Name.Name] = fn
+			}
+		}
+	}
+	file, ok := pkg.Files[path]
+	if !ok {
+		return nil, fmt.Errorf("migration registration file %s not found", path)
+	}
+	var registrations *ast.CompositeLit
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok || len(call.Args) != 3 {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != "New" {
+			return true
+		}
+		pkgName, ok := selector.X.(*ast.Ident)
+		if !ok || pkgName.Name != "gormigrate" {
+			return true
+		}
+		if lit, ok := call.Args[2].(*ast.CompositeLit); ok {
+			registrations = lit
+		}
+		return registrations == nil
+	})
+	if registrations == nil {
+		return nil, fmt.Errorf("gormigrate registration not found in %s", path)
+	}
+	s := &Schema{Tables: make(map[string]TableInfo)}
+	for _, entry := range registrations.Elts {
+		var lit *ast.CompositeLit
+		switch e := entry.(type) {
+		case *ast.CompositeLit:
+			lit = e
+		case *ast.CallExpr:
+			name, ok := e.Fun.(*ast.Ident)
+			if !ok || len(e.Args) != 0 || constructors[name.Name] == nil {
+				return nil, fmt.Errorf("unresolved migration constructor at %s", fset.Position(e.Pos()))
+			}
+			ast.Inspect(constructors[name.Name].Body, func(node ast.Node) bool {
+				if candidate, ok := node.(*ast.CompositeLit); ok {
+					if _, _, valid := migrationLiteral(fset, candidate); valid {
+						lit = candidate
+						return false
+					}
+				}
+				return lit == nil
+			})
+		default:
+			return nil, fmt.Errorf("unsupported migration registration at %s", fset.Position(entry.Pos()))
+		}
+		if lit == nil {
+			return nil, fmt.Errorf("migration literal missing at %s", fset.Position(entry.Pos()))
+		}
+		migration, body, valid := migrationLiteral(fset, lit)
+		if !valid {
+			return nil, fmt.Errorf("invalid migration literal at %s", fset.Position(lit.Pos()))
+		}
+		s.Migrations = append(s.Migrations, migration)
+		s.processMigrateBody(fset, migration, body)
+	}
+	return s, nil
 }
 
 func ParseSource(filename string, src []byte) (*Schema, error) {

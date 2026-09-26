@@ -25,6 +25,7 @@ type VersionedReadSpec struct {
 	Span              QuerySpan
 	ContentDigest     QueryContentDigest
 	MaxBytes          int
+	ReferenceSiteID   *string
 	VerifyWorkingCopy bool
 }
 
@@ -45,6 +46,9 @@ func (spec VersionedReadSpec) Validate() error {
 	}
 	if spec.Span.ByteEnd-spec.Span.ByteStart > int64(spec.MaxBytes) {
 		return fmt.Errorf("uci versioned read: exact span exceeds max bytes")
+	}
+	if spec.ReferenceSiteID != nil && !canonicalContextUUID(*spec.ReferenceSiteID) {
+		return fmt.Errorf("uci versioned read: reference site is invalid")
 	}
 	return nil
 }

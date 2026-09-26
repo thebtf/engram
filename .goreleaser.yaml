@@ -72,6 +72,23 @@ builds:
       - goos: windows
         goarch: arm64
 
+  - id: uci-parser-windows
+    main: ./tools/uci-parser
+    binary: uci-parser-{{ .Os }}-{{ .Arch }}
+    env:
+      - CGO_ENABLED=1
+      - CC=x86_64-w64-mingw32-gcc
+    flags:
+      - -trimpath
+      - -buildvcs=false
+    ldflags:
+      - -s -w
+      - -buildid=
+    goos:
+      - windows
+    goarch:
+      - amd64
+
 archives:
   # Archive names and layout are the direct-installer contract.
   - id: server-plugin
@@ -95,6 +112,9 @@ archives:
         dst: .omp-plugin
         strip_parent: true
       - src: plugin/engram/bootstrap-targets.json
+        dst: .
+        strip_parent: true
+      - src: plugin/engram/parser-targets.json
         dst: .
         strip_parent: true
       - src: plugin/engram/package.json
@@ -141,6 +161,13 @@ archives:
   - id: client-raw
     ids:
       - engram-client
+    formats:
+      - binary
+    name_template: "{{ .Binary }}"
+
+  - id: parser-raw
+    ids:
+      - uci-parser-windows
     formats:
       - binary
     name_template: "{{ .Binary }}"

@@ -11,7 +11,27 @@ import (
 )
 
 type recordingCodeGrantStore struct {
-	issues  []gormdb.BrowserReadGrantIssue
+	issues         []gormdb.BrowserReadGrantIssue
+	ownerIssues    []gormdb.BrowserReadGrantOwnerIssue
+	ownerChoices   []gormdb.BrowserReadGrantOwnerChoice
+	targetChoices  []gormdb.BrowserReadGrantTargetChoice
+	inventory      []gormdb.BrowserReadGrantOwnerEntry
+	inventoryErr   error
+	inventoryCalls []struct {
+		issuerUserID           int64
+		issuerPrincipal, after string
+		limit                  int
+	}
+	ownerChoiceCalls []struct {
+		issuerUserID    int64
+		issuerPrincipal string
+	}
+	ownerLabels []struct {
+		issuerUserID    int64
+		issuerPrincipal string
+		choiceRef       string
+		label           string
+	}
 	revokes []struct {
 		issuerUserID    int64
 		issuerPrincipal string
@@ -31,6 +51,51 @@ type recordingCodeGrantStore struct {
 func (store *recordingCodeGrantStore) Issue(_ context.Context, in gormdb.BrowserReadGrantIssue) (gormdb.BrowserReadGrant, error) {
 	store.issues = append(store.issues, in)
 	return gormdb.BrowserReadGrant{GrantRef: uuid.NewString()}, nil
+}
+
+func (store *recordingCodeGrantStore) IssueOwnerChoice(_ context.Context, in gormdb.BrowserReadGrantOwnerIssue) (gormdb.BrowserReadGrant, error) {
+	store.ownerIssues = append(store.ownerIssues, in)
+	return gormdb.BrowserReadGrant{GrantRef: uuid.NewString()}, nil
+}
+
+func (store *recordingCodeGrantStore) ListOwnerChoices(_ context.Context, issuerUserID int64, issuerPrincipal string) ([]gormdb.BrowserReadGrantOwnerChoice, error) {
+	store.ownerChoiceCalls = append(store.ownerChoiceCalls, struct {
+		issuerUserID    int64
+		issuerPrincipal string
+	}{issuerUserID: issuerUserID, issuerPrincipal: issuerPrincipal})
+	return append([]gormdb.BrowserReadGrantOwnerChoice(nil), store.ownerChoices...), nil
+}
+
+func (store *recordingCodeGrantStore) ListOwnerActive(_ context.Context, issuerUserID int64, principal, after string, limit int) ([]gormdb.BrowserReadGrantOwnerEntry, error) {
+	store.inventoryCalls = append(store.inventoryCalls, struct {
+		issuerUserID           int64
+		issuerPrincipal, after string
+		limit                  int
+	}{issuerUserID, principal, after, limit})
+	if store.inventoryErr != nil {
+		return nil, store.inventoryErr
+	}
+	rows := make([]gormdb.BrowserReadGrantOwnerEntry, 0, limit)
+	for _, row := range store.inventory {
+		if row.GrantRef > after && len(rows) < limit {
+			rows = append(rows, row)
+		}
+	}
+	return rows, nil
+}
+
+func (store *recordingCodeGrantStore) ListTargetChoices(_ context.Context, _ int64, _ string) ([]gormdb.BrowserReadGrantTargetChoice, error) {
+	return store.targetChoices, nil
+}
+
+func (store *recordingCodeGrantStore) SetOwnerChoiceLabel(_ context.Context, issuerUserID int64, issuerPrincipal, choiceRef, label string) (gormdb.BrowserReadGrantOwnerChoice, error) {
+	store.ownerLabels = append(store.ownerLabels, struct {
+		issuerUserID    int64
+		issuerPrincipal string
+		choiceRef       string
+		label           string
+	}{issuerUserID: issuerUserID, issuerPrincipal: issuerPrincipal, choiceRef: choiceRef, label: label})
+	return gormdb.BrowserReadGrantOwnerChoice{ChoiceRef: choiceRef, RepositoryLabel: "Engram", WorkingCopyLabel: label}, nil
 }
 
 func (store *recordingCodeGrantStore) Revoke(_ context.Context, issuerUserID int64, issuerPrincipal, grantRef string) (gormdb.BrowserReadGrant, error) {
@@ -66,7 +131,12 @@ func (store *recordingCodeGrantStore) Current(_ context.Context, subjectUserID i
 }
 
 func TestCodeGrantApplication_CarriesOnlyCanonicalBrowserSubject(t *testing.T) {
-	store := &recordingCodeGrantStore{canRead: true}
+	choiceRef := uuid.NewString()
+	store := &recordingCodeGrantStore{canRead: true, ownerChoices: []gormdb.BrowserReadGrantOwnerChoice{{
+		ChoiceRef:        choiceRef,
+		RepositoryLabel:  "Engram",
+		WorkingCopyLabel: "Studio workstation · release candidate",
+	}}}
 	app := &CodeGrantApplication{grants: store}
 	issuer := auth.SessionForBrowserUser("operator", 41)
 	target := auth.BrowserSubjectForUser(99)
@@ -86,6 +156,27 @@ func TestCodeGrantApplication_CarriesOnlyCanonicalBrowserSubject(t *testing.T) {
 		SourceID:        sourceID,
 		CheckoutID:      checkoutID,
 	}}, store.issues)
+
+	choices, err := app.ListOwnerChoices(context.Background(), issuer)
+	require.NoError(t, err)
+	require.Equal(t, store.ownerChoices, choices)
+	_, err = app.IssueOnboarding(context.Background(), issuer, IssueOnboardingCodeGrantInput{Target: target, ChoiceRef: choiceRef})
+	require.NoError(t, err)
+	require.Equal(t, []gormdb.BrowserReadGrantOwnerIssue{{
+		IssuerUserID:    41,
+		IssuerPrincipal: "browser-user/41",
+		TargetUserID:    99,
+		ChoiceRef:       choiceRef,
+	}}, store.ownerIssues)
+	renamed, err := app.SetWorkingCopyLabel(context.Background(), issuer, choiceRef, "Laptop workstation · release candidate")
+	require.NoError(t, err)
+	require.Equal(t, "Laptop workstation · release candidate", renamed.WorkingCopyLabel)
+	require.Equal(t, []struct {
+		issuerUserID    int64
+		issuerPrincipal string
+		choiceRef       string
+		label           string
+	}{{issuerUserID: 41, issuerPrincipal: "browser-user/41", choiceRef: choiceRef, label: "Laptop workstation · release candidate"}}, store.ownerLabels)
 
 	canRead, err := app.CanRead(context.Background(), issuer, sourceID, checkoutID)
 	require.NoError(t, err)
@@ -139,12 +230,24 @@ func TestCodeGrantApplication_DeniesRoleAndNonPersistedIdentityFallbacks(t *test
 			_, err = app.Revoke(context.Background(), caller, "grant-ref")
 			require.ErrorIs(t, err, errCodeGrantCallerDenied)
 
+			_, err = app.ListOwnerChoices(context.Background(), caller)
+			require.ErrorIs(t, err, errCodeGrantCallerDenied)
+
+			_, err = app.IssueOnboarding(context.Background(), caller, IssueOnboardingCodeGrantInput{Target: target, ChoiceRef: checkoutID})
+			require.ErrorIs(t, err, errCodeGrantCallerDenied)
+
+			_, err = app.SetWorkingCopyLabel(context.Background(), caller, checkoutID, "Studio workstation")
+			require.ErrorIs(t, err, errCodeGrantCallerDenied)
+
 			canRead, readErr := app.CanRead(context.Background(), caller, sourceID, checkoutID)
 			require.NoError(t, readErr)
 			require.False(t, canRead)
 		})
 	}
 	require.Empty(t, store.issues)
+	require.Empty(t, store.ownerIssues)
+	require.Empty(t, store.ownerChoiceCalls)
+	require.Empty(t, store.ownerLabels)
 	require.Empty(t, store.canReadCalls)
 	require.Empty(t, store.revokes)
 }

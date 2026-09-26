@@ -3,12 +3,11 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/thebtf/engram/internal/graph"
+	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
-	gormlib "gorm.io/gorm"
 )
 
 // nodesLister is the minimal NodesStore interface needed by filterEdgesByNodeType.
@@ -16,49 +15,24 @@ type nodesLister interface {
 	ListByType(ctx context.Context, nodeType, project string, includePrivate bool) ([]models.KnowledgeNode, error)
 }
 
-// nodesStoreAPI is the interface satisfied by *graph.NodesStore that covers
-// all uses of Server.nodesStore within the mcp package. Defined as an interface
-// so tests can inject a fake without requiring a real database.
+// nodesStoreAPI is the retained reader contract used by graph filtering.
 type nodesStoreAPI interface {
-	Create(ctx context.Context, node *models.KnowledgeNode) (*models.KnowledgeNode, error)
 	ListByType(ctx context.Context, nodeType, project string, includePrivate bool) ([]models.KnowledgeNode, error)
 	Get(ctx context.Context, id int64, includePrivate bool) (*models.KnowledgeNode, error)
 }
 
-// graphArgs is the unified argument struct for all graph tool actions.
-// Fields added for Milestone F TG2 (T014):
-//   - SourceType / TargetType: discriminator for add_edge (default 'memory')
-//   - NodeID / NodeType: used by add_node and get_edges node_type filter
-//
-// Backward compat (v6.2.x): callers omitting SourceType/TargetType get the
-// 'memory' default, preserving all prior add_edge behaviour unchanged.
 type graphArgs struct {
 	Action    string   `json:"action"`
 	SourceID  int64    `json:"source_id"`
 	TargetID  int64    `json:"target_id"`
 	MemoryID  int64    `json:"memory_id"`
-	EdgeID    int64    `json:"edge_id"`
 	EdgeType  string   `json:"edge_type"`
-	Weight    float64  `json:"weight"`
-	Reasoning string   `json:"reasoning"`
 	Direction string   `json:"direction"`
 	Depth     int      `json:"depth"`
 	EdgeTypes []string `json:"edge_types"`
 	MaxDepth  int      `json:"max_depth"`
-
-	// T014: discriminator params for add_edge (Milestone F TG2).
-	// Default 'memory' is applied in graphAddEdge when empty.
-	SourceType string `json:"source_type,omitempty"`
-	TargetType string `json:"target_type,omitempty"`
-
-	// T014: node fields for add_node action and get_edges node_type filter.
-	NodeID       int64  `json:"node_id,omitempty"`
-	NodeType     string `json:"node_type,omitempty"`
-	ExternalRef  string `json:"external_ref,omitempty"`
-	Project      string `json:"project,omitempty"`
-	PrivacyScope string `json:"privacy_scope,omitempty"`
-	NodeSourceID int64  `json:"node_source_id,omitempty"` // FK for source endpoint when source_type='node'
-	NodeTargetID int64  `json:"node_target_id,omitempty"` // FK for target endpoint when target_type='node'
+	NodeID    int64    `json:"node_id,omitempty"`
+	NodeType  string   `json:"node_type,omitempty"`
 }
 
 func (s *Server) handleGraph(ctx context.Context, args json.RawMessage) (string, error) {
@@ -72,10 +46,6 @@ func (s *Server) handleGraph(ctx context.Context, args json.RawMessage) (string,
 	}
 
 	switch a.Action {
-	case "add_edge":
-		return s.graphAddEdge(ctx, a)
-	case "remove_edge":
-		return s.graphRemoveEdge(ctx, a)
 	case "get_edges":
 		return s.graphGetEdges(ctx, a)
 	case "traverse":
@@ -84,249 +54,9 @@ func (s *Server) handleGraph(ctx context.Context, args json.RawMessage) (string,
 		return s.graphFindPath(ctx, a)
 	case "synonyms":
 		return s.graphSynonyms(ctx, a)
-	case "add_node":
-		// T014: add_node is a Milestone F TG2 action gated by vnextFEnabled().
-		// When flag is OFF, return a clear error rather than routing to the handler
-		// so existing callers never accidentally create nodes in flag-OFF deploys.
-		if !vnextFEnabled() {
-			return "", fmt.Errorf("add_node requires ENGRAM_VNEXT_F_ENABLED=true")
-		}
-		return s.graphAddNode(ctx, a)
 	default:
 		return "", fmt.Errorf("unknown graph action: %s", a.Action)
 	}
-}
-
-func (s *Server) graphAddEdge(ctx context.Context, a graphArgs) (string, error) {
-	// Resolve discriminators — default to 'memory' for v6.2.x backward compat.
-	srcType := a.SourceType
-	if srcType == "" {
-		srcType = "memory"
-	}
-	tgtType := a.TargetType
-	if tgtType == "" {
-		tgtType = "memory"
-	}
-
-	// T014: validate discriminator values.
-	if srcType != "memory" && srcType != "node" {
-		return "", fmt.Errorf("invalid_node_type: source_type must be 'memory' or 'node', got %q", srcType)
-	}
-	if tgtType != "memory" && tgtType != "node" {
-		return "", fmt.Errorf("invalid_node_type: target_type must be 'memory' or 'node', got %q", tgtType)
-	}
-
-	// T014: gate node-type endpoints behind vnextFEnabled — add_edge with
-	// source_type='node' or target_type='node' creates Path C edges (migration 127
-	// schema) and must be rejected on flag-OFF deployments just as add_node is.
-	if (srcType == "node" || tgtType == "node") && !vnextFEnabled() {
-		return "", fmt.Errorf("node-type edge endpoints require ENGRAM_VNEXT_F_ENABLED=true")
-	}
-
-	// Validate source endpoint.
-	if srcType == "memory" {
-		if a.SourceID == 0 {
-			return "", fmt.Errorf("source_id required when source_type='memory'")
-		}
-	} else {
-		if a.NodeSourceID == 0 {
-			return "", fmt.Errorf("node_source_id required when source_type='node'")
-		}
-	}
-
-	// Validate target endpoint.
-	if tgtType == "memory" {
-		if a.TargetID == 0 {
-			return "", fmt.Errorf("target_id required when target_type='memory'")
-		}
-	} else {
-		if a.NodeTargetID == 0 {
-			return "", fmt.Errorf("node_target_id required when target_type='node'")
-		}
-	}
-
-	if a.EdgeType == "" {
-		return "", fmt.Errorf("edge_type required")
-	}
-	if !graph.ValidEdgeType(a.EdgeType) {
-		return "", fmt.Errorf("invalid edge_type: %s", a.EdgeType)
-	}
-	if a.Weight == 0 {
-		a.Weight = 1.0
-	}
-
-	// Build nullable FK pointers — only set when the endpoint is memory-typed.
-	var sourceID *int64
-	var targetID *int64
-	if srcType == "memory" {
-		id := a.SourceID
-		sourceID = &id
-	}
-	if tgtType == "memory" {
-		id := a.TargetID
-		targetID = &id
-	}
-	var nodeSourceID *int64
-	var nodeTargetID *int64
-	if srcType == "node" {
-		id := a.NodeSourceID
-		nodeSourceID = &id
-	}
-	if tgtType == "node" {
-		id := a.NodeTargetID
-		nodeTargetID = &id
-	}
-
-	edge := &graph.Edge{
-		SourceID:     sourceID,
-		TargetID:     targetID,
-		EdgeType:     a.EdgeType,
-		Weight:       a.Weight,
-		Reasoning:    a.Reasoning,
-		SourceType:   srcType,
-		TargetType:   tgtType,
-		NodeSourceID: nodeSourceID,
-		NodeTargetID: nodeTargetID,
-	}
-
-	created, err := graphCreateEdgeWithGuards(ctx, s.graphStore, s.nodesStore, s.memoryStore, edge)
-	if err != nil {
-		return "", err
-	}
-	// Dereference nullable source_id/target_id for the JSON response.
-	// nil means node-typed endpoint (no memory ID) — emit 0 as sentinel.
-	var srcIDVal, tgtIDVal int64
-	if created.SourceID != nil {
-		srcIDVal = *created.SourceID
-	}
-	if created.TargetID != nil {
-		tgtIDVal = *created.TargetID
-	}
-	return marshalJSON(map[string]any{
-		"edge_id":     created.ID,
-		"source_id":   srcIDVal,
-		"target_id":   tgtIDVal,
-		"source_type": created.SourceType,
-		"target_type": created.TargetType,
-		"edge_type":   created.EdgeType,
-		"message":     "edge created",
-	})
-}
-
-func (s *Server) mcpGraphEndpointExists(ctx context.Context, endpointType string, memoryID, nodeID int64) (bool, error) {
-	if endpointType == "node" {
-		if s.nodesStore == nil {
-			return false, fmt.Errorf("graph nodes store not available")
-		}
-		_, err := s.nodesStore.Get(ctx, nodeID, true)
-		if err != nil {
-			if errors.Is(err, gormlib.ErrRecordNotFound) {
-				return false, nil
-			}
-			return false, err
-		}
-		return true, nil
-	}
-	if s.memoryStore == nil {
-		return false, fmt.Errorf("memory store not available")
-	}
-	_, err := s.memoryStore.Get(ctx, memoryID)
-	if err != nil {
-		if errors.Is(err, gormlib.ErrRecordNotFound) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
-
-func (s *Server) mcpGraphEdgeAlreadyExists(ctx context.Context, candidate graph.Edge) (bool, error) {
-	var (
-		existing []graph.Edge
-		err      error
-	)
-	if candidate.SourceType == "node" {
-		existing, err = s.graphStore.ListByNode(ctx, *candidate.NodeSourceID, graph.Outgoing, candidate.EdgeType)
-	} else {
-		existing, err = s.graphStore.ListByMemory(ctx, *candidate.SourceID, graph.Outgoing, candidate.EdgeType)
-	}
-	if err != nil {
-		return false, err
-	}
-	for _, edge := range existing {
-		if edge.EdgeType == candidate.EdgeType && edge.SourceType == candidate.SourceType && edge.TargetType == candidate.TargetType {
-			sourceMatch := (edge.SourceID == nil && candidate.SourceID == nil) || (edge.SourceID != nil && candidate.SourceID != nil && *edge.SourceID == *candidate.SourceID)
-			targetMatch := (edge.TargetID == nil && candidate.TargetID == nil) || (edge.TargetID != nil && candidate.TargetID != nil && *edge.TargetID == *candidate.TargetID)
-			nodeSourceMatch := (edge.NodeSourceID == nil && candidate.NodeSourceID == nil) || (edge.NodeSourceID != nil && candidate.NodeSourceID != nil && *edge.NodeSourceID == *candidate.NodeSourceID)
-			nodeTargetMatch := (edge.NodeTargetID == nil && candidate.NodeTargetID == nil) || (edge.NodeTargetID != nil && candidate.NodeTargetID != nil && *edge.NodeTargetID == *candidate.NodeTargetID)
-			if sourceMatch && targetMatch && nodeSourceMatch && nodeTargetMatch {
-				return true, nil
-			}
-		}
-	}
-	return false, nil
-}
-
-// graphAddNode implements the add_node action (T014).
-// Gated by vnextFEnabled() in the dispatch switch — this function is only
-// called when the flag is ON.
-//
-// Anti-stub: removing NodeType validation causes
-// TestGraphTool_T014_InvalidNodeTypeRejects to fail.
-func (s *Server) graphAddNode(ctx context.Context, a graphArgs) (string, error) {
-	if s.nodesStore == nil {
-		return "", fmt.Errorf("nodes store not available")
-	}
-	if a.NodeType == "" {
-		return "", fmt.Errorf("node_type required")
-	}
-	if !models.ValidNodeType(a.NodeType) {
-		return "", fmt.Errorf("invalid_node_type: %q is not a valid node type", a.NodeType)
-	}
-	if a.ExternalRef == "" {
-		return "", fmt.Errorf("external_ref required")
-	}
-	if a.Project == "" {
-		return "", fmt.Errorf("project required")
-	}
-	ps := a.PrivacyScope
-	if ps == "" {
-		ps = "project"
-	}
-	node := &models.KnowledgeNode{
-		NodeType:     a.NodeType,
-		ExternalRef:  a.ExternalRef,
-		Project:      a.Project,
-		PrivacyScope: ps,
-	}
-	unlock := graph.LockWrites()
-	defer unlock()
-	created, err := s.nodesStore.Create(ctx, node)
-	if err != nil {
-		return "", fmt.Errorf("create node: %w", err)
-	}
-	return marshalJSON(map[string]any{
-		"node_id":      created.ID,
-		"node_type":    created.NodeType,
-		"external_ref": created.ExternalRef,
-		"project":      created.Project,
-		"message":      "node created",
-	})
-}
-
-func (s *Server) graphRemoveEdge(ctx context.Context, a graphArgs) (string, error) {
-	if a.EdgeID == 0 {
-		return "", fmt.Errorf("edge_id required")
-	}
-	unlock := graph.LockWrites()
-	defer unlock()
-	if err := s.graphStore.SoftDelete(ctx, a.EdgeID); err != nil {
-		return "", err
-	}
-	return marshalJSON(map[string]any{
-		"edge_id": a.EdgeID,
-		"message": "edge removed",
-	})
 }
 
 func (s *Server) graphGetEdges(ctx context.Context, a graphArgs) (string, error) {
@@ -346,6 +76,16 @@ func (s *Server) graphGetEdges(ctx context.Context, a graphArgs) (string, error)
 		return "", fmt.Errorf("invalid_node_type: %q is not a valid node type", a.NodeType)
 	}
 
+	if a.NodeType != "" && s.nodesStore == nil {
+		return "", fmt.Errorf("node_type filter unavailable: nodes store not configured")
+	}
+	if a.MemoryID != 0 && !s.graphMemoryVisible(ctx, a.MemoryID) {
+		return marshalJSON(map[string]any{"memory_id": a.MemoryID, "node_id": a.NodeID, "direction": a.Direction, "node_type": a.NodeType, "count": 0, "edges": []graph.Edge{}})
+	}
+	if a.NodeID != 0 && !s.graphNodeVisible(ctx, a.NodeID) {
+		return marshalJSON(map[string]any{"memory_id": a.MemoryID, "node_id": a.NodeID, "direction": a.Direction, "node_type": a.NodeType, "count": 0, "edges": []graph.Edge{}})
+	}
+
 	var edges []graph.Edge
 	var err error
 	if a.MemoryID != 0 {
@@ -358,14 +98,9 @@ func (s *Server) graphGetEdges(ctx context.Context, a graphArgs) (string, error)
 		return "", err
 	}
 
-	// T014: apply node_type filter post-query if specified.
-	// Batch-fetch node IDs from knowledge_nodes filtered by node_type; include
-	// only edges whose node endpoint (node_source_id or node_target_id) is in
-	// the matching set. Cross-table lookup is required because node_type is
-	// stored in knowledge_nodes, not in knowledge_edges.
-	filtered := edges
-	if a.NodeType != "" && vnextFEnabled() {
-		filtered = filterEdgesByNodeType(ctx, edges, a.NodeType, s.nodesStore)
+	filtered := s.filterVisibleGraphEdges(ctx, edges)
+	if a.NodeType != "" {
+		filtered = filterEdgesByNodeType(ctx, filtered, a.NodeType, s.nodesStore)
 	}
 
 	return marshalJSON(map[string]any{
@@ -376,6 +111,60 @@ func (s *Server) graphGetEdges(ctx context.Context, a graphArgs) (string, error)
 		"count":     len(filtered),
 		"edges":     filtered,
 	})
+}
+
+func (s *Server) graphMemoryVisible(ctx context.Context, id int64) bool {
+	if s.memoryStore == nil || id == 0 {
+		return false
+	}
+	mem, err := s.memoryStore.Get(ctx, id)
+	return err == nil && scope.ResolveMemory(writeLintVisibilityCaller(ctx, ""), mem, writeLintVisibilityOptions())
+}
+
+func (s *Server) graphNodeVisible(ctx context.Context, id int64) bool {
+	if s.nodesStore == nil || id == 0 {
+		return false
+	}
+	_, err := s.nodesStore.Get(ctx, id, false)
+	return err == nil
+}
+
+func (s *Server) filterVisibleGraphEdges(ctx context.Context, edges []graph.Edge) []graph.Edge {
+	visible := make([]graph.Edge, 0, len(edges))
+	memoryAccess, nodeAccess := map[int64]bool{}, map[int64]bool{}
+	memVisible := func(id int64) bool {
+		allowed, seen := memoryAccess[id]
+		if !seen {
+			allowed = s.graphMemoryVisible(ctx, id)
+			memoryAccess[id] = allowed
+		}
+		return allowed
+	}
+	nodeVisible := func(id int64) bool {
+		allowed, seen := nodeAccess[id]
+		if !seen {
+			allowed = s.graphNodeVisible(ctx, id)
+			nodeAccess[id] = allowed
+		}
+		return allowed
+	}
+	for _, edge := range edges {
+		if (edge.SourceID != nil && !memVisible(*edge.SourceID)) ||
+			(edge.TargetID != nil && !memVisible(*edge.TargetID)) ||
+			(edge.NodeSourceID != nil && !nodeVisible(*edge.NodeSourceID)) ||
+			(edge.NodeTargetID != nil && !nodeVisible(*edge.NodeTargetID)) {
+			continue
+		}
+		visible = append(visible, edge)
+	}
+	return visible
+}
+
+func (s *Server) graphTraversalEdgeVisible(ctx context.Context, edge *graph.Edge) bool {
+	return (edge.SourceID == nil || s.graphMemoryVisible(ctx, *edge.SourceID)) &&
+		(edge.TargetID == nil || s.graphMemoryVisible(ctx, *edge.TargetID)) &&
+		(edge.NodeSourceID == nil || s.graphNodeVisible(ctx, *edge.NodeSourceID)) &&
+		(edge.NodeTargetID == nil || s.graphNodeVisible(ctx, *edge.NodeTargetID))
 }
 
 // filterEdgesByNodeType returns only edges whose node endpoint (node_source_id
@@ -389,9 +178,8 @@ func (s *Server) graphGetEdges(ctx context.Context, a graphArgs) (string, error)
 //
 // Edges with no node endpoints (both NodeSourceID and NodeTargetID nil) are
 // excluded — they are memory-only edges that cannot match a node_type filter.
-// When nodesStore is nil, the filter is a no-op (returns edges unfiltered)
-// with no error: the schema validation upstream already required vnextFEnabled.
-//
+// graphGetEdges rejects requests without a configured node store before calling
+// this helper, so a requested filter never falls back to unfiltered edges.
 // Anti-stub: this replaces the prior return-unfiltered implementation.
 // TestGraphTool_T014_NodeTypeFilterOffline asserts correct filtering behaviour.
 func filterEdgesByNodeType(ctx context.Context, edges []graph.Edge, nodeType string, ns nodesLister) []graph.Edge {
@@ -465,7 +253,12 @@ func (s *Server) graphTraverse(ctx context.Context, a graphArgs) (string, error)
 	if depth > graph.MaxTraverseDepth {
 		return "", fmt.Errorf("max depth is %d", graph.MaxTraverseDepth)
 	}
-	results, err := s.graphStore.Traverse(ctx, a.MemoryID, depth, a.EdgeTypes)
+	if !s.graphMemoryVisible(ctx, a.MemoryID) {
+		return marshalJSON(map[string]any{"memory_id": a.MemoryID, "depth": depth, "count": 0, "results": []graph.TraversalResult{}})
+	}
+	results, err := s.graphStore.TraverseVisible(ctx, a.MemoryID, depth, a.EdgeTypes, func(edge *graph.Edge) bool {
+		return s.graphTraversalEdgeVisible(ctx, edge)
+	})
 	if err != nil {
 		return "", err
 	}
@@ -481,11 +274,16 @@ func (s *Server) graphFindPath(ctx context.Context, a graphArgs) (string, error)
 	if a.SourceID == 0 || a.TargetID == 0 {
 		return "", fmt.Errorf("source_id and target_id required")
 	}
+	if !s.graphMemoryVisible(ctx, a.SourceID) || !s.graphMemoryVisible(ctx, a.TargetID) {
+		return marshalJSON(map[string]any{"source_id": a.SourceID, "target_id": a.TargetID, "found": false, "hops": 0, "path": []graph.TraversalResult{}})
+	}
 	maxDepth := a.MaxDepth
 	if maxDepth <= 0 {
 		maxDepth = graph.MaxTraverseDepth
 	}
-	path, err := s.graphStore.FindPath(ctx, a.SourceID, a.TargetID, maxDepth)
+	path, err := s.graphStore.FindPathVisible(ctx, a.SourceID, a.TargetID, maxDepth, func(edge *graph.Edge) bool {
+		return s.graphTraversalEdgeVisible(ctx, edge)
+	})
 	if err != nil {
 		return "", err
 	}
@@ -503,10 +301,14 @@ func (s *Server) graphSynonyms(ctx context.Context, a graphArgs) (string, error)
 	if a.MemoryID == 0 {
 		return "", fmt.Errorf("memory_id required")
 	}
+	if !s.graphMemoryVisible(ctx, a.MemoryID) {
+		return marshalJSON(map[string]any{"memory_id": a.MemoryID, "count": 0, "synonyms": []graph.Edge{}})
+	}
 	edges, err := s.graphStore.FindSynonyms(ctx, a.MemoryID)
 	if err != nil {
 		return "", err
 	}
+	edges = s.filterVisibleGraphEdges(ctx, edges)
 	return marshalJSON(map[string]any{
 		"memory_id": a.MemoryID,
 		"count":     len(edges),

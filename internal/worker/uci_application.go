@@ -101,10 +101,7 @@ func (application *UCIApplication) ResolveLegacyProject(ctx context.Context, _ u
 	})
 }
 
-// SearchCodebase executes structural FTS inside the already-authorized immutable
-// View. A queued embedding job must not delay this structural publication
-// boundary; semantic retrieval becomes eligible only after durable embedding
-// status is complete.
+// SearchCodebase executes the eligible retrieval mode inside the already-authorized immutable View.
 func (application *UCIApplication) SearchCodebase(ctx context.Context, authorized uci.AuthorizedContext, input mcp.CodebaseSearchInput) (uci.QueryResponse, error) {
 	if application == nil || application.queryService == nil {
 		return uci.QueryResponse{}, errors.New("UCI application query service is not configured")
@@ -125,21 +122,9 @@ func (application *UCIApplication) SearchCodebase(ctx context.Context, authorize
 		Filter:          uci.QueryFilter{PathPrefix: pathPrefix},
 		Order:           uci.QueryOrderRelevance,
 		Limit:           input.Limit,
+		Continuation:    input.Continuation,
 	}
-	var result uci.QueryResult
-	if application.semanticService != nil && application.indexStatusService != nil {
-		status, statusErr := application.indexStatusService.Status(ctx, authorized, "")
-		if statusErr != nil {
-			return uci.QueryResponse{}, statusErr
-		}
-		if status.Embedding.Coverage == uci.IndexCoverageComplete {
-			result, err = application.semanticService.Query(ctx, authorized, spec)
-		} else {
-			result, err = application.queryService.Query(ctx, authorized, spec)
-		}
-	} else {
-		result, err = application.queryService.Query(ctx, authorized, spec)
-	}
+	result, err := application.executeSearch(ctx, authorized, spec)
 	if err != nil {
 		return uci.QueryResponse{}, err
 	}
@@ -149,7 +134,29 @@ func (application *UCIApplication) SearchCodebase(ctx context.Context, authorize
 	return result.Response, nil
 }
 
-// SearchOperatorCodebase executes a browser-bound lexical query. Its caller
+func (application *UCIApplication) executeSearch(ctx context.Context, authorized uci.AuthorizedContext, spec uci.QuerySpec) (uci.QueryResult, error) {
+	if spec.Continuation != nil {
+		if uci.IsSemanticContinuationToken(*spec.Continuation) || application.semanticService != nil && application.semanticService.OwnsLexicalContinuation(*spec.Continuation) {
+			if application.semanticService == nil {
+				return uci.QueryResult{}, errors.New("UCI application semantic continuation service is not configured")
+			}
+			return application.semanticService.Query(ctx, authorized, spec)
+		}
+		return application.queryService.Query(ctx, authorized, spec)
+	}
+	if application.semanticService != nil && application.indexStatusService != nil {
+		status, err := application.indexStatusService.Status(ctx, authorized, "")
+		if err != nil {
+			return uci.QueryResult{}, err
+		}
+		if status.Embedding.Coverage == uci.IndexCoverageComplete {
+			return application.semanticService.Query(ctx, authorized, spec)
+		}
+	}
+	return application.queryService.Query(ctx, authorized, spec)
+}
+
+// SearchOperatorCodebase executes a browser-bound relevance search. Its caller
 // supplies a tab-scoped client session and any continuation only after the HTTP
 // boundary has resolved its server-owned cursor; no daemon transport changes.
 func (application *UCIApplication) SearchOperatorCodebase(ctx context.Context, authorized uci.AuthorizedContext, spec uci.QuerySpec) (uci.QueryResponse, error) {
@@ -159,12 +166,32 @@ func (application *UCIApplication) SearchOperatorCodebase(ctx context.Context, a
 	if spec.Mode != uci.QueryModeFTS || spec.Order != uci.QueryOrderRelevance {
 		return uci.QueryResponse{}, errors.New("UCI application browser query must be lexical relevance")
 	}
-	result, err := application.queryService.Query(ctx, authorized, spec)
+	result, err := application.executeSearch(ctx, authorized, spec)
 	if err != nil {
 		return uci.QueryResponse{}, err
 	}
 	if err := result.Response.ValidatePreExposure(); err != nil {
 		return uci.QueryResponse{}, fmt.Errorf("UCI application browser search response: %w", err)
+	}
+	return result.Response, nil
+}
+
+// StructureOperatorCodebase exposes a bounded, path-ordered selected-View
+// listing to the browser adapter. The adapter owns tab proof and opaque cursor
+// storage; this method owns only the pinned UCI query semantics.
+func (application *UCIApplication) StructureOperatorCodebase(ctx context.Context, authorized uci.AuthorizedContext, spec uci.QuerySpec) (uci.QueryResponse, error) {
+	if application == nil || application.queryService == nil {
+		return uci.QueryResponse{}, errors.New("UCI application browser structure service is not configured")
+	}
+	if spec.Mode != uci.QueryModeStructure || spec.Order != uci.QueryOrderPath {
+		return uci.QueryResponse{}, errors.New("UCI application browser structure request is invalid")
+	}
+	result, err := application.queryService.Query(ctx, authorized, spec)
+	if err != nil {
+		return uci.QueryResponse{}, err
+	}
+	if err := result.Response.ValidatePreExposure(); err != nil {
+		return uci.QueryResponse{}, fmt.Errorf("UCI application browser structure response: %w", err)
 	}
 	return result.Response, nil
 }
@@ -180,6 +207,7 @@ func (application *UCIApplication) ReadCodebase(ctx context.Context, authorized 
 		Entity:            input.Ref,
 		Span:              input.Span,
 		ContentDigest:     input.ContentDigest,
+		ReferenceSiteID:   input.ReferenceSiteID,
 		MaxBytes:          input.MaxBytes,
 		VerifyWorkingCopy: input.VerifyWorkingCopy,
 	})
@@ -268,6 +296,27 @@ func (application *UCIApplication) ExploreCodebase(ctx context.Context, authoriz
 	}
 	if err := response.ValidatePreExposure(); err != nil {
 		return uci.QueryResponse{}, fmt.Errorf("UCI application graph response: %w", err)
+	}
+	return response, nil
+}
+
+// ExploreOperatorCodebase exposes a binding-scoped direct or reverse relation
+// request. It preserves the selected View and leaves release ownership to the
+// caller's shared browser boundary.
+func (application *UCIApplication) ExploreOperatorCodebase(ctx context.Context, authorized uci.AuthorizedContext, spec uci.GraphSpec) (uci.QueryResponse, error) {
+	if application == nil || application.graphService == nil {
+		return uci.QueryResponse{}, errors.New("UCI application browser graph service is not configured")
+	}
+	result, err := application.graphService.Explore(ctx, authorized, spec)
+	if err != nil {
+		return uci.QueryResponse{}, err
+	}
+	response, err := uciApplicationGraphResponse(authorized.Ref(), result, spec.Budget)
+	if err != nil {
+		return uci.QueryResponse{}, err
+	}
+	if err := response.ValidatePreExposure(); err != nil {
+		return uci.QueryResponse{}, fmt.Errorf("UCI application browser graph response: %w", err)
 	}
 	return response, nil
 }

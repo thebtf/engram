@@ -12,6 +12,7 @@ import (
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/proxy"
+	"github.com/thebtf/engram/internal/uci"
 	"github.com/thebtf/engram/internal/version"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
@@ -238,6 +239,9 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 	if err != nil {
 		return nil, err
 	}
+	if name == "codebase_context" && m.registrationParserAvailable {
+		callCtx = metadata.AppendToOutgoingContext(callCtx, "x-engram-verified-parser-bundle", string(uci.TreeSitterBundleDigest()))
+	}
 	response, err := pb.NewEngramServiceClient(conn).CallTool(callCtx, request)
 	if err != nil {
 		if !uciTool && v3Enabled {
@@ -258,6 +262,12 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 		return nil, &module.ProxyIsError{RawContent: block}
 	}
 	return block, nil
+}
+
+// ConfigureRegistrationParser marks a verified installed parser sibling available
+// for first-use registration; selection remains server-owned.
+func (m *Module) ConfigureRegistrationParser() {
+	m.registrationParserAvailable = true
 }
 
 func (m *Module) proxyToolSession(ctx context.Context, project muxcore.ProjectContext, name string) (string, bool, error) {

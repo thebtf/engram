@@ -176,6 +176,7 @@ const (
 	QueryRetrievalLexical     QueryRetrievalMode = "lexical"
 	QueryRetrievalHybrid      QueryRetrievalMode = "hybrid"
 	QueryRetrievalGraph       QueryRetrievalMode = "graph"
+	QueryRetrievalStructure   QueryRetrievalMode = "structure"
 	QueryRetrievalUnavailable QueryRetrievalMode = "unavailable"
 )
 
@@ -263,10 +264,11 @@ const (
 type QueryMatchSource string
 
 const (
-	QueryMatchExact  QueryMatchSource = "exact"
-	QueryMatchFTS    QueryMatchSource = "fts"
-	QueryMatchVector QueryMatchSource = "vector"
-	QueryMatchGraph  QueryMatchSource = "graph"
+	QueryMatchExact     QueryMatchSource = "exact"
+	QueryMatchFTS       QueryMatchSource = "fts"
+	QueryMatchVector    QueryMatchSource = "vector"
+	QueryMatchGraph     QueryMatchSource = "graph"
+	QueryMatchStructure QueryMatchSource = "structure"
 )
 
 // QueryItem is one bounded, context-scoped query hit.
@@ -291,13 +293,33 @@ type QueryGraph struct {
 
 // QueryGraphEdge records a typed graph relation with scoped evidence references.
 type QueryGraphEdge struct {
-	From         QueryEntityRef    `json:"from"`
-	To           QueryEntityRef    `json:"to"`
-	Relation     IndexRelation     `json:"relation"`
-	EvidenceKind QueryEvidenceKind `json:"evidence_kind"`
-	EvidenceRefs []QueryEntityRef  `json:"evidence_refs"`
-	Explanation  *string           `json:"explanation,omitempty"`
+	From         QueryEntityRef          `json:"from"`
+	To           QueryEntityRef          `json:"to"`
+	Relation     IndexRelation           `json:"relation"`
+	EvidenceKind QueryEvidenceKind       `json:"evidence_kind"`
+	EvidenceRefs []QueryEntityRef        `json:"evidence_refs"`
+	Evidence     []QueryRelationEvidence `json:"evidence,omitempty"`
+	Explanation  *string                 `json:"explanation,omitempty"`
 }
+
+// QueryRelationEvidence preserves the released relation evidence separately
+// from the destination entity. ReferenceSiteID is an opaque persisted key used
+// only to resolve an exact stored source span in the same View.
+type QueryRelationEvidence struct {
+	Ref             QueryEntityRef         `json:"ref"`
+	Precision       QueryEvidencePrecision `json:"precision"`
+	ReferenceSiteID *string                `json:"reference_site_id,omitempty"`
+}
+
+// QueryEvidencePrecision labels what source precision the evidence actually supports.
+type QueryEvidencePrecision string
+
+const (
+	QueryEvidencePrecisionReferenceSite QueryEvidencePrecision = "reference_site"
+	QueryEvidencePrecisionEntity        QueryEvidencePrecision = "entity"
+	QueryEvidencePrecisionPartial       QueryEvidencePrecision = "partial"
+	QueryEvidencePrecisionUnsupported   QueryEvidencePrecision = "unsupported"
+)
 
 // QueryEvidenceKind is the closed graph-evidence vocabulary exposed to callers.
 type QueryEvidenceKind string
@@ -973,6 +995,7 @@ func (edge QueryGraphEdge) Validate(contexts queryContextSet, nodes map[QueryEnt
 	if len(edge.EvidenceRefs) == 0 {
 		return fmt.Errorf("uci query response: graph edge requires evidence references")
 	}
+	evidenceRefs := make(map[QueryEntityRef]struct{}, len(edge.EvidenceRefs))
 	for _, evidenceRef := range edge.EvidenceRefs {
 		if err := evidenceRef.Validate(); err != nil {
 			return err
@@ -980,11 +1003,61 @@ func (edge QueryGraphEdge) Validate(contexts queryContextSet, nodes map[QueryEnt
 		if !contexts.contains(evidenceRef) {
 			return fmt.Errorf("uci query response: graph evidence reference is outside selected contexts")
 		}
+		evidenceRefs[evidenceRef] = struct{}{}
+	}
+	if edge.Evidence != nil {
+		if len(edge.Evidence) == 0 {
+			return fmt.Errorf("uci query response: graph evidence details cannot be empty")
+		}
+		seen := make(map[string]struct{}, len(edge.Evidence))
+		for _, evidence := range edge.Evidence {
+			if err := evidence.Validate(contexts); err != nil {
+				return err
+			}
+			if _, found := evidenceRefs[evidence.Ref]; !found {
+				return fmt.Errorf("uci query response: graph evidence detail is not a released evidence reference")
+			}
+			key := evidence.key()
+			if _, duplicate := seen[key]; duplicate {
+				return fmt.Errorf("uci query response: duplicate graph evidence detail")
+			}
+			seen[key] = struct{}{}
+		}
 	}
 	if edge.Explanation != nil && !queryBoundedText(*edge.Explanation, 0, queryMaxExplanation) {
 		return fmt.Errorf("uci query response: graph explanation exceeds limit")
 	}
 	return nil
+}
+
+func (evidence QueryRelationEvidence) Validate(contexts queryContextSet) error {
+	if err := evidence.Ref.Validate(); err != nil {
+		return err
+	}
+	if !contexts.contains(evidence.Ref) {
+		return fmt.Errorf("uci query response: relation evidence is outside selected contexts")
+	}
+	if !evidence.Precision.valid() {
+		return fmt.Errorf("uci query response: invalid evidence precision %q", evidence.Precision)
+	}
+	if evidence.Precision == QueryEvidencePrecisionReferenceSite {
+		if evidence.ReferenceSiteID == nil || !canonicalContextUUID(*evidence.ReferenceSiteID) {
+			return fmt.Errorf("uci query response: exact relation evidence requires an opaque reference site")
+		}
+		return nil
+	}
+	if evidence.ReferenceSiteID != nil {
+		return fmt.Errorf("uci query response: non-exact relation evidence cannot carry a reference site")
+	}
+	return nil
+}
+
+func (evidence QueryRelationEvidence) key() string {
+	referenceSiteID := ""
+	if evidence.ReferenceSiteID != nil {
+		referenceSiteID = *evidence.ReferenceSiteID
+	}
+	return evidence.Ref.SourceID + "\x00" + evidence.Ref.ViewID + "\x00" + evidence.Ref.EntityKey + "\x00" + string(evidence.Precision) + "\x00" + referenceSiteID
 }
 
 // MarshalJSON emits the null continuation represented by a non-nil wrapper.
@@ -1066,7 +1139,7 @@ func (state QueryBarrierState) valid() bool {
 
 func (mode QueryRetrievalMode) valid() bool {
 	switch mode {
-	case QueryRetrievalExact, QueryRetrievalLexical, QueryRetrievalHybrid, QueryRetrievalGraph, QueryRetrievalUnavailable:
+	case QueryRetrievalExact, QueryRetrievalLexical, QueryRetrievalHybrid, QueryRetrievalGraph, QueryRetrievalStructure, QueryRetrievalUnavailable:
 		return true
 	default:
 		return false
@@ -1115,7 +1188,7 @@ func (kind QueryItemKind) valid() bool {
 
 func (source QueryMatchSource) valid() bool {
 	switch source {
-	case QueryMatchExact, QueryMatchFTS, QueryMatchVector, QueryMatchGraph:
+	case QueryMatchExact, QueryMatchFTS, QueryMatchVector, QueryMatchGraph, QueryMatchStructure:
 		return true
 	default:
 		return false
@@ -1125,6 +1198,15 @@ func (source QueryMatchSource) valid() bool {
 func (kind QueryEvidenceKind) valid() bool {
 	switch kind {
 	case QueryEvidenceExtracted, QueryEvidenceResolved, QueryEvidenceHeuristic, QueryEvidenceSemantic:
+		return true
+	default:
+		return false
+	}
+}
+
+func (precision QueryEvidencePrecision) valid() bool {
+	switch precision {
+	case QueryEvidencePrecisionReferenceSite, QueryEvidencePrecisionEntity, QueryEvidencePrecisionPartial, QueryEvidencePrecisionUnsupported:
 		return true
 	default:
 		return false
@@ -1624,6 +1706,7 @@ func (edge *QueryGraphEdge) UnmarshalJSON(data []byte) error {
 		Relation     json.RawMessage `json:"relation"`
 		EvidenceKind json.RawMessage `json:"evidence_kind"`
 		EvidenceRefs json.RawMessage `json:"evidence_refs"`
+		Evidence     json.RawMessage `json:"evidence"`
 		Explanation  json.RawMessage `json:"explanation"`
 	}
 	if err := queryDecodeObject(data, &wire); err != nil {
@@ -1649,10 +1732,42 @@ func (edge *QueryGraphEdge) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
+	evidence, err := queryDecodeOptional[[]QueryRelationEvidence](wire.Evidence, "evidence")
+	if err != nil {
+		return err
+	}
 	explanation, err := queryDecodeOptional[string](wire.Explanation, "explanation")
 	if err != nil {
 		return err
 	}
 	*edge = QueryGraphEdge{From: from, To: to, Relation: relation, EvidenceKind: evidenceKind, EvidenceRefs: evidenceRefs, Explanation: explanation}
+	if evidence != nil {
+		edge.Evidence = *evidence
+	}
+	return nil
+}
+
+func (evidence *QueryRelationEvidence) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Ref             json.RawMessage `json:"ref"`
+		Precision       json.RawMessage `json:"precision"`
+		ReferenceSiteID json.RawMessage `json:"reference_site_id"`
+	}
+	if err := queryDecodeObject(data, &wire); err != nil {
+		return fmt.Errorf("uci relation evidence: %w", err)
+	}
+	ref, err := queryDecodeRequired[QueryEntityRef](wire.Ref, "ref")
+	if err != nil {
+		return err
+	}
+	precision, err := queryDecodeRequired[QueryEvidencePrecision](wire.Precision, "precision")
+	if err != nil {
+		return err
+	}
+	referenceSiteID, err := queryDecodeOptional[string](wire.ReferenceSiteID, "reference_site_id")
+	if err != nil {
+		return err
+	}
+	*evidence = QueryRelationEvidence{Ref: ref, Precision: precision, ReferenceSiteID: referenceSiteID}
 	return nil
 }

@@ -126,6 +126,7 @@
     "collapseNav": "Collapse navigation",
     "expandNav": "Expand navigation",
     "mobileMenu": "Menu",
+    "closeMenu": "Close menu",
     "searchPlaceholder": "Search the console…",
     "density": "Density",
     "densityComfortable": "Comfort",
@@ -206,7 +207,8 @@
       "collections": "Legacy collections",
       "access": "Access",
       "settings": "Settings",
-      "health": "Health"
+      "health": "Health",
+      "code": "Workspace"
     },
     "evidence": {
       "booksPipeline": "processing pipeline"
@@ -308,6 +310,9 @@
       },
       "access": {
         "sub": "users, login providers, roles"
+      },
+      "code": {
+        "sub": "Choose a repository, working copy, and indexed snapshot to investigate code."
       }
     }
   },
@@ -2253,7 +2258,14 @@
       "checkout": "Checkout",
       "view": "View",
       "catalog": "Authorized choices",
+      "selectionGroup": "Repository, working copy, and indexed snapshot",
       "choose": "Choose a Source / Checkout / View",
+      "chooseRepository": "Choose a repository",
+      "chooseWorkingCopy": "Choose a working copy",
+      "unnamedWorkingCopy": "Unnamed working copy",
+      "chooseSnapshot": "Choose an indexed snapshot",
+      "revision": "Revision",
+      "publishedAt": "Published",
       "selectPrompt": "Choose a server-authorized View. This document stays unpinned until you confirm it.",
       "selectedPrompt": "Review the selected View, then pin it explicitly for this document.",
       "refresh": "Refresh authorized choices",
@@ -2264,7 +2276,7 @@
       "emptyTitle": "No selectable view is available.",
       "emptyBody": "A revoked, expired, or ambiguous binding reveals no context labels or code facts.",
       "pinnedMessage": "This server pin is active only for the current document binding.",
-      "pinnedReadout": "Server pin confirmed for {source} / {checkout} / {view}.",
+      "pinnedReadout": "Selected snapshot: {repository} / {workingCopy} / {snapshot}.",
       "noViewIndexAvailable": "Exactly one fresh live daemon target advertises this authorized Checkout. It has no published View, and indexing will not select one.",
       "noViewUnavailable": "This authorized Checkout has no published View, and no single fresh daemon target can accept its indexing request.",
       "requestIndex": "Index checkout",
@@ -2288,6 +2300,7 @@
         "ambiguous": "Ambiguous bootstrap",
         "reload-pending": "Reload pending",
         "denied": "Binding denied",
+        "secure-origin-required": "HTTPS required",
         "error": "Binding error"
       },
       "messages": {
@@ -2298,13 +2311,14 @@
         "ambiguous": "Bootstrap was ambiguous; the new binding starts unselected.",
         "reload-pending": "The prior document lease is still live. Retry after it closes or expires.",
         "denied": "The server denied this browser binding.",
-        "error": "The server could not establish a safe browser binding."
+        "error": "The server could not establish a safe browser binding. If this is already HTTPS, check whether your browser supports crypto.randomUUID.",
+        "secure-origin-required": "This HTTP address cannot establish a safe browser binding. Open the console at a configured HTTPS address for this server and sign in as yourself. Indexing and reading require server-issued Source/Checkout grants; unsafe flags and hand-entered IDs cannot substitute."
       }
     },
     "results": {
-      "title": "Explore the pinned view",
-      "unpinned": "Search, graph, and source remain unavailable until the server confirms a pin.",
-      "pinned": "Every result below is released separately for View {view}."
+      "title": "Investigate the selected snapshot",
+      "unpinned": "Structure, search, relations, and source stay unavailable until this tab confirms a snapshot.",
+      "pinned": "Every result below is separately released for {snapshot}."
     },
     "status": {
       "coverage": "Coverage",
@@ -2331,69 +2345,85 @@
       "noMatches": "The released response has no displayable matches.",
       "evidence": "Retrieval: {mode} · freshness: {freshness} · confidence: {score}"
     },
+    "structure": {
+      "title": "Structure",
+      "empty": "No structure entries were released for this snapshot.",
+      "continue": "Load more structure"
+    },
     "states": {
       "idle": {
         "label": "Waiting",
+        "structure": "Structure is ready after a snapshot is confirmed.",
         "search": "Search is ready after a server pin.",
         "graph": "Choose a released result to traverse code relations.",
         "source": "Choose a released result to inspect its exact persisted source span."
       },
       "loading": {
         "label": "Loading",
+        "structure": "Waiting for the server to release bounded structure.",
         "search": "Waiting for the server to release search results.",
         "graph": "Waiting for the server to release bounded graph evidence.",
         "source": "Waiting for the server to release the exact source span."
       },
       "ready": {
         "label": "Available",
+        "structure": "Released structure describes the selected snapshot.",
         "search": "Released search results describe the pinned View.",
         "graph": "Released graph evidence remains bounded to the pinned View.",
         "source": "Released source content is an exact persisted span from the pinned View."
       },
       "empty": {
         "label": "Empty",
+        "structure": "The selected snapshot has no released entries on this page.",
         "search": "The authorized query completed without matches.",
         "graph": "No authorized graph relations were returned.",
         "source": "No source span is available for this released result."
       },
       "partial": {
         "label": "Partial",
+        "structure": "Only the released partial structure page is available.",
         "search": "Only the released partial search result is available.",
         "graph": "Traversal reached a declared bound; this is not proof of no further relation.",
         "source": "Only the released portion of this source result is available."
       },
       "stale": {
         "label": "Stale",
+        "structure": "This structure page carries stale snapshot evidence.",
         "search": "This released result carries stale-View evidence.",
         "graph": "This graph result carries stale-View evidence.",
         "source": "Refresh before relying on this earlier source result."
       },
       "denied": {
         "label": "Access denied",
+        "structure": "Access changed or was revoked; no structure is shown.",
         "search": "Access changed or was revoked; no contextual result is shown.",
         "graph": "Access changed or was revoked; no graph fact is shown.",
         "source": "Access changed or was revoked; no source body is shown."
       },
       "unsupported": {
         "label": "Unavailable",
+        "structure": "Structure is not supported for the current snapshot.",
         "search": "The server requires a supported current context.",
         "graph": "This graph request is not supported for the current context.",
         "source": "This exact source read is not supported for the current context."
       },
       "timeout": {
         "label": "Timed out",
+        "structure": "The server did not release structure before the deadline.",
         "search": "The server did not release search results before the deadline.",
         "graph": "The bounded graph request exceeded its deadline.",
         "source": "The source read exceeded its deadline."
       },
       "offline": {
         "label": "Offline",
+        "structure": "The browser cannot reach the server for structure.",
         "search": "The browser cannot reach the server for this search.",
         "graph": "The browser cannot reach the server for this traversal.",
         "source": "The browser cannot reach the server for this source read."
       },
       "error": {
         "label": "Unavailable",
+        "structure": "The server did not return readable structure.",
         "search": "The source provider or release path did not return a readable result.",
         "graph": "The source provider or release path did not return readable graph evidence.",
         "source": "The source provider or release path did not return a readable source span."
@@ -2401,6 +2431,10 @@
     },
     "continuation": {
       "next": "Load next search page",
+      "structure": {
+        "denied": "The next structure cursor was not usable, so no page was applied.",
+        "unavailable": "The next structure page could not be released."
+      },
       "search": {
         "denied": "The next-page cursor was not usable. It may have expired, been consumed, or not matched the original query, filter, or pinned View; no page was applied.",
         "unavailable": "The next-page cursor could not be advanced. The server released no new page."
@@ -2429,6 +2463,8 @@
       "selection": "Selected graph evidence",
       "inspectSource": "Inspect exact source",
       "noPublishedSource": "This graph-only node has no released source descriptor. No source request was made.",
+      "inspectReferenceSite": "Read released reference site",
+      "noReferenceSite": "No exact reference-site source is released for this relation (partial, ambiguous, unsupported, or unavailable).",
       "traversal": "Traversal: {stop}",
       "canvasLabel": "Bounded code graph with {count} nodes",
       "edgeLabel": "{from} {relation} {to}",
@@ -2510,6 +2546,75 @@
           "message": "Restore connectivity before checking this request again."
         }
       }
+    }
+  },
+  "workspace": {
+    "title": "Workspace",
+    "lead": "Find the implementation and why it is related in one pinned snapshot.",
+    "grantTitle": "Share code access",
+    "grantHelp": "As the working-copy owner, grant reading access and review or revoke active grants here, including after a reload.",
+    "grantCheckout": "Working copy to share",
+    "grantReader": "Reader",
+    "grantUnnamed": "Unnamed working copy",
+    "grantNoReaders": "No other enabled accounts are available to read this working copy.",
+    "grantIssue": "Allow reading",
+    "grantLoading": "Loading active grants…",
+    "grantDenied": "Grant inventory is not available to this account. Sign in as the working-copy owner and retry.",
+    "grantEmpty": "No active grants for working copies you own.",
+    "grantActive": "Active grants",
+    "grantNoExpiry": "No expiry",
+    "grantExpires": "Expires {date}",
+    "grantRevokeFor": "Revoke {reader} access to {workingCopy}",
+    "grantRevoke": "Revoke access",
+    "grantError": "Access change failed. Check your permissions and try again.",
+    "grantIssued": "Reader authorized for this working copy.",
+    "grantRevoked": "Access revoked.",
+    "grantInventoryUnavailable": "Unable to load the current grant inventory. Revoke actions are unavailable until refresh succeeds.",
+    "grantRetry": "Retry",
+    "contextTitle": "Code context",
+    "contextHelp": "Choose readable locators. The server confirms authority and the snapshot.",
+    "repository": "Repository",
+    "workingCopy": "Working copy",
+    "indexedSnapshot": "Indexed snapshot",
+    "readiness": {
+      "ready": {
+        "title": "Index ready",
+        "body": "Search, source, and supported relations are available in this snapshot."
+      },
+      "updating": {
+        "title": "Updating",
+        "body": "The last complete snapshot remains visible; a new one will not replace it automatically."
+      },
+      "needs-indexing": {
+        "title": "Needs indexing",
+        "body": "No indexed records are available in this snapshot."
+      },
+      "failed": {
+        "title": "Index failed",
+        "body": "The last attempt did not finish. Any previously confirmed snapshot remains available."
+      },
+      "unknown": {
+        "title": "Freshness unknown",
+        "body": "The server did not report whether this snapshot is current."
+      },
+      "newer-snapshot": {
+        "title": "Newer snapshot available",
+        "body": "The current answer stays in its pinned snapshot until you explicitly switch."
+      }
+    }
+  },
+  "retirement": {
+    "historicalData": "Historical data is unchanged.",
+    "documentsLink": "Open Documents",
+    "graph": {
+      "title": "Knowledge graph editing retired",
+      "message": "Manual knowledge-graph editing has been retired. Historical graph records remain readable through their existing consumers.",
+      "actionsUnavailable": "Manual graph create and delete actions are no longer available."
+    },
+    "books": {
+      "title": "Plaintext book intake retired",
+      "message": "Plaintext book intake has been retired. Historical Documents and provenance remain available.",
+      "actionsUnavailable": "New plaintext uploads and processing are no longer available."
     }
   }
 }

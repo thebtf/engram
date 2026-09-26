@@ -71,7 +71,7 @@ type UCIRuntimeConfig struct {
 // module registration time. It intentionally has no repository, project, CWD,
 // or client-request fallback.
 func RuntimeConfigFromEnvironment() UCIRuntimeConfig {
-	return UCIRuntimeConfig{
+	configuration := UCIRuntimeConfig{
 		ClientInstanceID:   os.Getenv(config.EnvClientInstanceID),
 		ParserBundleDigest: uci.IndexDigest(os.Getenv(EnvUCIParserBundleDigest)),
 		ParserExecutable:   os.Getenv(EnvUCIParserExecutable),
@@ -80,6 +80,11 @@ func RuntimeConfigFromEnvironment() UCIRuntimeConfig {
 			ParserKey:  uciRuntimeGoParserKey,
 		},
 	}
+	if configuration.ParserBundleDigest == "" && configuration.ParserExecutable == "" {
+		profile, _ := uci.GoIndexAdmissionArtifactProfile(configuration.GoProfile)
+		configuration.ParserBundleDigest = profile.ExtractionProfileDigest
+	}
+	return configuration
 }
 
 type uciRuntime struct {
@@ -316,6 +321,17 @@ func newUCIRuntime(core *engramcore.Module, configuration UCIRuntimeConfig) (*uc
 	if err != nil {
 		return nil, err
 	}
+	if treeSitterParser != nil {
+		if configuration.ParserBundleDigest != uci.TreeSitterBundleDigest() {
+			return nil, errors.New("uci runtime: installed parser bundle does not match the server-pinned profile")
+		}
+		if _, err := treeSitterParser.Parse(context.Background(), uci.TreeSitterParseRequest{
+			Language: uci.TreeSitterLanguageJavaScript, ProfileKey: "uci-parser-startup-proof/v1", Source: []byte("export function parserProof() {}"),
+		}); err != nil {
+			return nil, fmt.Errorf("uci runtime: installed parser proof failed: %w", err)
+		}
+		core.ConfigureRegistrationParser()
+	}
 	return &uciRuntime{
 		core:                     core,
 		config:                   configuration,
@@ -477,7 +493,7 @@ func uciRuntimeInstalledParserExecutable(configuredPath string) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("uci runtime: canonicalize running daemon executable: %w", err)
 	}
-	expectedPath := filepath.Join(filepath.Dir(filepath.Dir(daemonPath)), "parser", "parser"+filepath.Ext(daemonPath))
+	expectedPath := filepath.Join(filepath.Dir(daemonPath), "parser", "parser"+filepath.Ext(daemonPath))
 	expectedPath, err = uciRuntimeCanonicalPath(expectedPath)
 	if err != nil {
 		return "", fmt.Errorf("uci runtime: resolve installed parser sibling: %w", err)

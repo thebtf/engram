@@ -2,6 +2,7 @@ package gorm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -116,8 +117,10 @@ func TestUCIGraphStorePinsTargetsAndEdgesToExactTemporalView(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, ucidomain.IndexCoveragePartial, outgoing.Coverage)
-		require.Equal(t, []ucidomain.QueryGraphEdge{uciGraphStoreExpectedEdge(primaryV2.Context, callerV2.Definition.QualifiedLocalName, targetV2.Definition.QualifiedLocalName, "calls", ucidomain.QueryEvidenceResolved)}, outgoing.Edges)
+		require.Len(t, outgoing.Edges, 1)
+		uciGraphStoreRequireEdge(t, outgoing.Edges, primaryV2.Context, callerV2.Definition.QualifiedLocalName, targetV2.Definition.QualifiedLocalName, "calls", ucidomain.QueryEvidenceResolved)
 		require.Equal(t, []ucidomain.GraphUnresolvedSite{uciGraphStoreExpectedUnresolved(primaryV2.Context, callerV2.Definition.QualifiedLocalName, "calls")}, outgoing.Unresolved)
+		uciGraphStoreRequireReferenceSiteEvidence(t, outgoing.Edges[0], caller)
 
 		incoming, err := fixture.projection.SelectGraphEdges(ctx, currentAuthorized, ucidomain.GraphEdgeQuery{
 			Nodes: []ucidomain.QueryEntityRef{caller},
@@ -128,8 +131,10 @@ func TestUCIGraphStorePinsTargetsAndEdgesToExactTemporalView(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
-		require.Equal(t, []ucidomain.QueryGraphEdge{uciGraphStoreExpectedEdge(primaryV2.Context, entryV1.Definition.QualifiedLocalName, callerV2.Definition.QualifiedLocalName, "imports", ucidomain.QueryEvidenceExtracted)}, incoming.Edges)
+		require.Len(t, incoming.Edges, 1)
+		uciGraphStoreRequireEdge(t, incoming.Edges, primaryV2.Context, entryV1.Definition.QualifiedLocalName, callerV2.Definition.QualifiedLocalName, "imports", ucidomain.QueryEvidenceExtracted)
 		require.Empty(t, incoming.Unresolved, "unresolved links have no invented incoming target")
+		uciGraphStoreRequireReferenceSiteEvidence(t, incoming.Edges[0], uciGraphStoreRef(primaryV2.Context, entryV1.Definition.QualifiedLocalName))
 
 		wrongEvidence, err := fixture.projection.SelectGraphEdges(ctx, currentAuthorized, ucidomain.GraphEdgeQuery{
 			Nodes: []ucidomain.QueryEntityRef{caller},
@@ -160,7 +165,8 @@ func TestUCIGraphStorePinsTargetsAndEdgesToExactTemporalView(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, ucidomain.IndexCoverageComplete, historical.Coverage)
-		require.Equal(t, []ucidomain.QueryGraphEdge{uciGraphStoreExpectedEdge(primaryV1.Context, callerV1.Definition.QualifiedLocalName, targetV1.Definition.QualifiedLocalName, "calls", ucidomain.QueryEvidenceResolved)}, historical.Edges)
+		require.Len(t, historical.Edges, 1)
+		uciGraphStoreRequireEdge(t, historical.Edges, primaryV1.Context, callerV1.Definition.QualifiedLocalName, targetV1.Definition.QualifiedLocalName, "calls", ucidomain.QueryEvidenceResolved)
 
 		sibling, err := fixture.projection.SelectGraphEdges(ctx, siblingAuthorized, ucidomain.GraphEdgeQuery{
 			Nodes:  []ucidomain.QueryEntityRef{uciGraphStoreRef(siblingV1.Context, callerSibling.Definition.QualifiedLocalName)},
@@ -168,7 +174,8 @@ func TestUCIGraphStorePinsTargetsAndEdgesToExactTemporalView(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, ucidomain.IndexCoverageComplete, sibling.Coverage)
-		require.Equal(t, []ucidomain.QueryGraphEdge{uciGraphStoreExpectedEdge(siblingV1.Context, callerSibling.Definition.QualifiedLocalName, targetSibling.Definition.QualifiedLocalName, "calls", ucidomain.QueryEvidenceResolved)}, sibling.Edges)
+		require.Len(t, sibling.Edges, 1)
+		uciGraphStoreRequireEdge(t, sibling.Edges, siblingV1.Context, callerSibling.Definition.QualifiedLocalName, targetSibling.Definition.QualifiedLocalName, "calls", ucidomain.QueryEvidenceResolved)
 		require.NotEqual(t, targetV2.Definition.QualifiedLocalName, targetV1.Definition.QualifiedLocalName)
 		require.NotEqual(t, targetV2.Definition.QualifiedLocalName, targetSibling.Definition.QualifiedLocalName)
 	})
@@ -215,9 +222,195 @@ func TestUCIGraphStorePinsTargetsAndEdgesToExactTemporalView(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
-		require.Equal(t, []ucidomain.QueryGraphEdge{uciGraphStoreExpectedEdge(primaryV2.Context, callerV2.Definition.QualifiedLocalName, targetV2.Definition.QualifiedLocalName, "calls", ucidomain.QueryEvidenceResolved)}, selected.Edges)
+		require.Len(t, selected.Edges, 1)
+		uciGraphStoreRequireEdge(t, selected.Edges, primaryV2.Context, callerV2.Definition.QualifiedLocalName, targetV2.Definition.QualifiedLocalName, "calls", ucidomain.QueryEvidenceResolved)
 		require.Equal(t, []ucidomain.GraphUnresolvedSite{uciGraphStoreExpectedUnresolved(primaryV2.Context, callerV2.Definition.QualifiedLocalName, "calls")}, selected.Unresolved)
 	})
+}
+
+func TestUCIGraphStoreReadsDirectAndReverseEvidenceInExactView(t *testing.T) {
+	fixture := openUCIPublicationFixture(t)
+	ctx := context.Background()
+
+	caller := uciGraphStoreArtifact(t, fixture, "graph-evidence-caller", "func Caller() { Target() }\n", "Caller", "graph.Caller", "calls")
+	target := uciGraphStoreArtifact(t, fixture, "graph-evidence-target", "func Target() {}\n", "Target", "graph.Target", "calls")
+	published := uciGraphStorePublish(t, fixture, uciGraphStorePublishInput{
+		key: "graph-evidence", checkout: fixture.checkout,
+		artifacts: []uciPublicationArtifact{caller, target},
+		memberships: []ucidomain.IndexMembership{
+			uciPublicationPresentMembership("caller.go", caller),
+			uciPublicationPresentMembership("target.go", target),
+		},
+		replacements: []ucidomain.IndexEdgeReplacement{
+			{SourcePath: "caller.go", Edges: []ucidomain.IndexEdge{uciGraphStoreResolvedEdge(caller, "caller.go", target, "target.go", "calls", "resolved")}},
+			{SourcePath: "target.go"},
+		},
+		coverage: uciGraphStoreCoverage(ucidomain.IndexCoverageComplete),
+	})
+	authorized := uciGraphStoreAuthorize(t, fixture, published.Context)
+	callerRef := uciGraphStoreRef(published.Context, caller.Definition.QualifiedLocalName)
+	targetRef := uciGraphStoreRef(published.Context, target.Definition.QualifiedLocalName)
+
+	for _, testCase := range []struct {
+		name      string
+		node      ucidomain.QueryEntityRef
+		direction ucidomain.GraphDirection
+	}{
+		{name: "direct", node: callerRef, direction: ucidomain.GraphDirectionOutgoing},
+		{name: "reverse", node: targetRef, direction: ucidomain.GraphDirectionIncoming},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			selected, err := fixture.projection.SelectGraphEdges(ctx, authorized, ucidomain.GraphEdgeQuery{
+				Nodes:  []ucidomain.QueryEntityRef{testCase.node},
+				Filter: ucidomain.GraphFilter{Direction: testCase.direction, Relations: []ucidomain.IndexRelation{"calls"}, EvidenceKinds: []ucidomain.QueryEvidenceKind{ucidomain.QueryEvidenceResolved}},
+			})
+			require.NoError(t, err)
+			require.Len(t, selected.Edges, 1)
+			edge := selected.Edges[0]
+			require.Equal(t, callerRef, edge.From)
+			require.Equal(t, targetRef, edge.To)
+			require.Len(t, edge.Evidence, 1)
+			evidence := edge.Evidence[0]
+			require.Equal(t, callerRef, evidence.Ref)
+			require.Equal(t, ucidomain.QueryEvidencePrecisionReferenceSite, evidence.Precision)
+
+			descriptor, available, err := fixture.projection.DescribeGraphEvidence(ctx, authorized, evidence)
+			require.NoError(t, err)
+			require.True(t, available)
+			require.Equal(t, callerRef, descriptor.Entity)
+			require.Equal(t, evidence.ReferenceSiteID, descriptor.ReferenceSiteID)
+
+			read, err := fixture.projection.ReadExact(ctx, authorized, descriptor)
+			require.NoError(t, err)
+			require.NotNil(t, read.Hit)
+			require.Equal(t, descriptor.Entity, read.Hit.Entity)
+			require.Equal(t, descriptor.Span, read.Hit.Span)
+			require.NotEmpty(t, read.Hit.Text)
+		})
+	}
+
+	foreignReferenceSiteID := caller.Reference.ReferenceSiteID
+	foreign := ucidomain.QueryRelationEvidence{Ref: callerRef, Precision: ucidomain.QueryEvidencePrecisionReferenceSite, ReferenceSiteID: &foreignReferenceSiteID}
+	foreign.Ref.ViewID = uuid.NewString()
+	_, available, err := fixture.projection.DescribeGraphEvidence(ctx, authorized, foreign)
+	require.NoError(t, err)
+	require.False(t, available, "a mismatched View must not release relation evidence")
+}
+
+func TestUCIGraphStoreReadsTwoReleasedRelationSitesWithoutCrossViewFallback(t *testing.T) {
+	fixture := openUCIPublicationFixture(t)
+	ctx := context.Background()
+	first := uciGraphStoreArtifact(t, fixture, "two-site-first", "func First() { Target() }\n", "First", "graph.First", "calls")
+	second := uciGraphStoreArtifact(t, fixture, "two-site-second", "func Second() { Target() }\n", "Second", "graph.Second", "calls")
+	target := uciGraphStoreArtifact(t, fixture, "two-site-target", "func Target() {}\n", "Target", "graph.Target", "calls")
+	published := uciGraphStorePublish(t, fixture, uciGraphStorePublishInput{
+		key: "two-reference-sites", checkout: fixture.checkout,
+		artifacts: []uciPublicationArtifact{first, second, target},
+		memberships: []ucidomain.IndexMembership{
+			uciPublicationPresentMembership("first.go", first), uciPublicationPresentMembership("second.go", second), uciPublicationPresentMembership("target.go", target),
+		},
+		replacements: []ucidomain.IndexEdgeReplacement{
+			{SourcePath: "first.go", Edges: []ucidomain.IndexEdge{uciGraphStoreResolvedEdge(first, "first.go", target, "target.go", "calls", "resolved")}},
+			{SourcePath: "second.go", Edges: []ucidomain.IndexEdge{uciGraphStoreResolvedEdge(second, "second.go", target, "target.go", "calls", "resolved")}},
+			{SourcePath: "target.go"},
+		},
+		coverage: uciGraphStoreCoverage(ucidomain.IndexCoverageComplete),
+	})
+	authorized := uciGraphStoreAuthorize(t, fixture, published.Context)
+	selected, err := fixture.projection.SelectGraphEdges(ctx, authorized, ucidomain.GraphEdgeQuery{
+		Nodes:  []ucidomain.QueryEntityRef{uciGraphStoreRef(published.Context, target.Definition.QualifiedLocalName)},
+		Filter: ucidomain.GraphFilter{Direction: ucidomain.GraphDirectionIncoming},
+	})
+	require.NoError(t, err)
+	require.Len(t, selected.Edges, 2)
+	seen := make(map[string]bool)
+	for _, edge := range selected.Edges {
+		require.Len(t, edge.Evidence, 1)
+		evidence := edge.Evidence[0]
+		require.Equal(t, ucidomain.QueryEvidencePrecisionReferenceSite, evidence.Precision)
+		descriptor, available, err := fixture.projection.DescribeGraphEvidence(ctx, authorized, evidence)
+		require.NoError(t, err)
+		require.True(t, available)
+		require.Equal(t, edge.From, descriptor.Entity)
+		require.Equal(t, evidence.ReferenceSiteID, descriptor.ReferenceSiteID)
+		read, err := fixture.projection.ReadExact(ctx, authorized, descriptor)
+		require.NoError(t, err)
+		require.NotNil(t, read.Hit)
+		require.Equal(t, descriptor.Span, read.Hit.Span)
+		require.Equal(t, descriptor.ContentDigest, read.Hit.ContentDigest)
+		seen[*evidence.ReferenceSiteID] = true
+	}
+	require.Len(t, seen, 2)
+	foreign := selected.Edges[0].Evidence[0]
+	foreign.Ref.ViewID = uuid.NewString()
+	_, available, err := fixture.projection.DescribeGraphEvidence(ctx, authorized, foreign)
+	require.NoError(t, err)
+	require.False(t, available)
+}
+
+func TestUCIGraphStoreLabelsPartialAndUnsupportedEvidencePrecisely(t *testing.T) {
+	ref := ucidomain.QueryEntityRef{SourceID: "10000000-0000-4000-8000-000000000001", ViewID: "30000000-0000-4000-8000-000000000003", EntityKey: "fixture.Source"}
+	referenceID := "50000000-0000-4000-8000-000000000005"
+
+	encoded, err := json.Marshal(ucidomain.IndexEdgeEvidence{ReferenceSiteID: &referenceID})
+	require.NoError(t, err)
+	var wire map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(encoded, &wire))
+	require.Equal(t, json.RawMessage(`"`+referenceID+`"`), wire["ReferenceSiteID"])
+	require.NotContains(t, wire, "reference_site_id")
+
+	for _, testCase := range []struct {
+		name string
+		row  uciGraphEdgeRow
+		want ucidomain.QueryEvidencePrecision
+	}{
+		{name: "precise site", row: uciGraphEdgeRow{EvidenceJSON: `{"ReferenceSiteID":"` + referenceID + `"}`, SourceArtifactStatus: string(UCIParseArtifactComplete)}, want: ucidomain.QueryEvidencePrecisionReferenceSite},
+		{name: "partial artifact", row: uciGraphEdgeRow{EvidenceJSON: `{"ReferenceSiteID":"` + referenceID + `"}`, SourceArtifactStatus: string(UCIParseArtifactPartial)}, want: ucidomain.QueryEvidencePrecisionPartial},
+		{name: "semantic source unsupported", row: uciGraphEdgeRow{EvidenceJSON: `{}`, EvidenceKind: string(UCIResolvedEdgeEvidenceSemantic), SourceArtifactStatus: string(UCIParseArtifactComplete)}, want: ucidomain.QueryEvidencePrecisionUnsupported},
+		{name: "entity source", row: uciGraphEdgeRow{EvidenceJSON: `{}`, SourceArtifactStatus: string(UCIParseArtifactComplete)}, want: ucidomain.QueryEvidencePrecisionEntity},
+		{name: "malformed evidence remains unsupported", row: uciGraphEdgeRow{EvidenceJSON: `{`, SourceArtifactStatus: string(UCIParseArtifactComplete)}, want: ucidomain.QueryEvidencePrecisionUnsupported},
+		{name: "invalid reference site remains unsupported", row: uciGraphEdgeRow{EvidenceJSON: `{"ReferenceSiteID":"not-a-uuid"}`, SourceArtifactStatus: string(UCIParseArtifactComplete)}, want: ucidomain.QueryEvidencePrecisionUnsupported},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			detail, ok := uciGraphStoreRelationEvidence(ref, testCase.row)
+			require.True(t, ok)
+			require.Equal(t, ref, detail.Ref)
+			require.Equal(t, testCase.want, detail.Precision)
+			if testCase.want == ucidomain.QueryEvidencePrecisionReferenceSite {
+				require.Equal(t, &referenceID, detail.ReferenceSiteID)
+			} else {
+				require.Nil(t, detail.ReferenceSiteID)
+			}
+		})
+	}
+}
+
+func TestUCIGraphReferenceDescriptorStaysPinnedToEvidenceSite(t *testing.T) {
+	ref := ucidomain.ContextRef{
+		SourceID:          "10000000-0000-4000-8000-000000000001",
+		CheckoutID:        "20000000-0000-4000-8000-000000000002",
+		ViewID:            "30000000-0000-4000-8000-000000000003",
+		AnalysisProfileID: "40000000-0000-4000-8000-000000000004",
+		Generation:        1,
+	}
+	referenceSiteID := "50000000-0000-4000-8000-000000000005"
+	span := `{"byte_start":4,"byte_end":12,"line_start":2,"line_end":2}`
+	row := uciGraphReferenceDescriptorRow{
+		EntityKey:       "fixture.Source",
+		ContentDigest:   "sha256:" + fmt.Sprintf("%064x", 1),
+		ReferenceSiteID: referenceSiteID,
+		ReferenceSpan:   span,
+	}
+
+	descriptor, ok := row.spec(ref, referenceSiteID)
+	require.True(t, ok)
+	require.Equal(t, ucidomain.QueryEntityRef{SourceID: ref.SourceID, ViewID: ref.ViewID, EntityKey: "fixture.Source"}, descriptor.Entity)
+	require.Equal(t, ucidomain.QuerySpan{ByteStart: 4, ByteEnd: 12, LineStart: 2, LineEnd: 2}, descriptor.Span)
+	require.Equal(t, &referenceSiteID, descriptor.ReferenceSiteID)
+	require.Equal(t, 8, descriptor.MaxBytes)
+
+	_, ok = row.spec(ref, "50000000-0000-4000-8000-000000000006")
+	require.False(t, ok, "a selected relation cannot substitute another reference site")
 }
 
 func uciGraphStoreArtifact(t *testing.T, fixture *uciPublicationFixture, label, source, name, qualifiedName, referenceRelation string) uciPublicationArtifact {
@@ -360,6 +553,12 @@ func uciGraphStoreRequireEdge(t *testing.T, edges []ucidomain.QueryGraphEdge, re
 		}
 	}
 	t.Fatalf("missing graph edge %#v in %#v", want, edges)
+}
+
+func uciGraphStoreRequireReferenceSiteEvidence(t *testing.T, edge ucidomain.QueryGraphEdge, wantRef ucidomain.QueryEntityRef) {
+	t.Helper()
+	require.Equal(t, []ucidomain.QueryRelationEvidence{{Ref: wantRef, Precision: ucidomain.QueryEvidencePrecisionReferenceSite, ReferenceSiteID: edge.Evidence[0].ReferenceSiteID}}, edge.Evidence)
+	require.NotNil(t, edge.Evidence[0].ReferenceSiteID)
 }
 
 type uciGraphStoreNoiseInput struct {

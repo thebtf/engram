@@ -45,11 +45,12 @@ const moduleName = "engramcore"
 // dynamic tool inventory: it is the only way an unbound V3 descriptor can
 // establish a binding. All ordinary proxy operations remain resolve-only.
 type Module struct {
-	pool               *grpcPool
-	cache              *slugCache
-	advisorProofs      *advisorProofCache
-	v3ClientInstanceID string
-	deps               module.ModuleDeps
+	pool                        *grpcPool
+	cache                       *slugCache
+	advisorProofs               *advisorProofCache
+	v3ClientInstanceID          string
+	registrationParserAvailable bool
+	deps                        module.ModuleDeps
 
 	preparedIndexMu            sync.RWMutex
 	preparedIndex              PreparedIndexCollaborator

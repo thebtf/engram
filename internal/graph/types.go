@@ -37,11 +37,13 @@ func ValidEdgeType(t string) bool {
 
 // TraversalResult is a single edge returned from a graph traversal.
 type TraversalResult struct {
-	EdgeID    int64   `json:"edge_id"`
-	SourceID  int64   `json:"source_id"`
-	TargetID  int64   `json:"target_id"`
-	EdgeType  string  `json:"edge_type"`
-	Weight    float64 `json:"weight"`
-	Reasoning string  `json:"reasoning,omitempty"`
-	Depth     int     `json:"depth"`
+	EdgeID       int64   `json:"edge_id"`
+	SourceID     int64   `json:"source_id"`
+	TargetID     int64   `json:"target_id"`
+	NodeSourceID *int64  `json:"node_source_id,omitempty"`
+	NodeTargetID *int64  `json:"node_target_id,omitempty"`
+	EdgeType     string  `json:"edge_type"`
+	Weight       float64 `json:"weight"`
+	Reasoning    string  `json:"reasoning,omitempty"`
+	Depth        int     `json:"depth"`
 }

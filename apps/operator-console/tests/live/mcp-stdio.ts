@@ -6,6 +6,7 @@ import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
+import { pathToFileURL } from 'node:url'
 import { fixtureEnvironment } from './fixture-bootstrap'
 
 const REQUEST_TIMEOUT_MS = 60_000
@@ -77,6 +78,7 @@ export class MCPStdioClient {
   private readonly rootLabel: 'A' | 'B' | 'C'
   private readonly stateRoot: string
   private readonly tools: string[] = []
+  private stderrSample = ''
   private closed = false
   private daemon: MuxDaemonIdentity | undefined
   private nextID = 0
@@ -86,10 +88,13 @@ export class MCPStdioClient {
   private constructor(child: ChildProcess, stateRoot: string, rootLabel: 'A' | 'B' | 'C', controlPath: string, expectedExecutable: string) {
     this.child = child
     this.controlPath = controlPath
-    this.daemonIdentity = readMuxDaemonIdentity(controlPath, expectedExecutable)
+    this.daemonIdentity = readMuxDaemonIdentity(controlPath, expectedExecutable, () => this.failureDiagnostics())
     this.stateRoot = stateRoot
     this.rootLabel = rootLabel
     child.on('error', () => this.rejectPending())
+    child.stderr?.on('data', (chunk: Buffer) => {
+      if (this.stderrSample.length < 8192) this.stderrSample += chunk.toString('utf8').slice(0, 8192 - this.stderrSample.length)
+    })
     child.on('exit', () => this.rejectPending())
     const stdout = child.stdout
     if (stdout === null) throw new Error('external MCP client did not expose stdout')
@@ -100,6 +105,7 @@ export class MCPStdioClient {
   static async start(options: MCPStdioClientOptions): Promise<MCPStdioClient> {
     const rootLabel = clientRootLabel(options.clientRoot)
     const stateRoot = await mkdtemp(join(tmpdir(), `operator-console-live-mcp-${rootLabel.toLowerCase()}-`))
+    const clientInstanceID = randomUUID()
     const dataRoot = join(stateRoot, 'data')
     const home = join(stateRoot, 'home')
     await Promise.all([
@@ -116,7 +122,7 @@ export class MCPStdioClient {
       cwd: options.clientRoot,
       env: fixtureEnvironment({
         APPDATA: join(home, 'AppData', 'Roaming'),
-        ENGRAM_CLIENT_INSTANCE_ID: randomUUID(),
+        ENGRAM_CLIENT_INSTANCE_ID: clientInstanceID,
         ...(options.codeIndex === undefined ? {} : {
           ENGRAM_CODE_INTEL_ENABLED: 'true',
           ENGRAM_UCI_PARSER_BUNDLE_DIGEST: options.codeIndex.parserBundleDigest,
@@ -135,13 +141,12 @@ export class MCPStdioClient {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     })
-    child.stderr?.resume()
     if (child.pid === undefined || child.pid <= 0 || child.stdin === null || child.stdout === null) {
       child.stdin?.end()
       await waitForExit(child, 2_000)
       throw new Error('external MCP client did not start with standard I/O')
     }
-    return new MCPStdioClient(child, stateRoot, rootLabel, muxDaemonControlPath(dataRoot), options.executable)
+    return new MCPStdioClient(child, stateRoot, rootLabel, muxDaemonControlPath(dataRoot, clientInstanceID), options.executable)
   }
 
   async initializeAndList(): Promise<void> {
@@ -214,6 +219,54 @@ export class MCPStdioClient {
     }
   }
 
+  async preparePublishedIndexTarget(target: MCPNoViewTarget): Promise<void> {
+    const selected = record(await this.callTool('codebase_context', {
+      action: 'select',
+      checkout: {
+        analysis_profile_id: target.analysisProfileId,
+        checkout_id: target.checkoutId,
+        incarnation_id: target.incarnationId,
+        source_id: target.sourceId,
+      },
+    }, 'proxy'))
+    const contextHandle = Reflect.get(selected, 'context_handle')
+    if (typeof contextHandle !== 'string' || contextHandle === '' || Reflect.get(selected, 'source_id') !== target.sourceId || Reflect.get(selected, 'checkout_id') !== target.checkoutId || Reflect.get(selected, 'binding_kind') !== 'checkout' || Reflect.get(selected, 'context') === null) {
+      throw new Error('external MCP client did not resolve the published checkout after restart')
+    }
+    const status = record(await this.callTool('codebase_status', { context_handle: contextHandle }, 'direct'))
+    if (Reflect.get(status, 'current_context') === null || Reflect.get(status, 'server_counts_available') !== true) {
+      throw new Error('external MCP client did not prepare the published checkout after restart')
+    }
+  }
+  async registerDirtyCheckout(source: { label?: string; id?: string; root: string }): Promise<Record<string, unknown>> {
+    const result = record(await this.callTool('codebase_context', {
+      action: 'register', locator: pathToFileURL(source.root).href,
+      ...(source.id === undefined ? { source_label: source.label } : { source_id: source.id }),
+    }, 'proxy'))
+    if (Reflect.get(result, 'binding_kind') !== 'checkout' || Reflect.get(result, 'context') !== null || typeof Reflect.get(result, 'context_handle') !== 'string') throw new Error('ordinary registration did not return an unindexed checkout')
+    return result
+  }
+
+  async indexDirtyCheckout(contextHandle: string): Promise<string> {
+    const result = record(await this.callTool('codebase_index', { context_handle: contextHandle }, 'direct'))
+    const runID = Reflect.get(result, 'run_id')
+    if (Reflect.get(result, 'status') !== 'started' || typeof runID !== 'string' || !runID) throw new Error('ordinary dirty index did not start')
+    return runID
+  }
+
+  async dirtyIndexStatus(contextHandle: string, barrier?: string): Promise<Record<string, unknown>> {
+    return record(await this.callTool('codebase_status', { context_handle: contextHandle, ...(barrier === undefined ? {} : { after_barrier: { token: barrier, wait_ms: 60_000 } }) }, 'direct'))
+  }
+
+  async selectDirtyCheckout(target: MCPNoViewTarget): Promise<Record<string, unknown>> {
+    return record(await this.callTool('codebase_context', { action: 'select', checkout: { source_id: target.sourceId, checkout_id: target.checkoutId, incarnation_id: target.incarnationId, analysis_profile_id: target.analysisProfileId } }, 'proxy'))
+  }
+
+  async dirtySearch(query: string): Promise<Record<string, unknown>> {
+    return record(await this.callTool('codebase_search', { query, limit: 50 }, 'direct'))
+  }
+
+
   transcript(): MCPStdioTranscript {
     const pid = this.child.pid
     if (pid === undefined || pid <= 0) throw new Error('external MCP client lost its process identity')
@@ -269,6 +322,18 @@ export class MCPStdioClient {
       this.processTreeStopped = daemonStopped && childStopped && this.stateRootRemoved
     }
     if (failures.length > 0) throw new AggregateError(failures, 'external MCP client cleanup failed')
+  }
+
+  private failureDiagnostics(): string {
+    const stderr = this.stderrSample.toLowerCase()
+    const classes = [
+      'muxcore daemon version reconciliation failed', 'muxcore shim setup failed',
+      'muxcore shim terminated', 'lifecycle start failed', 'legacy relay start failed',
+      'muxcore engine terminated before product control publication',
+      'permission denied', 'access is denied', 'address already in use',
+      'no such file or directory', 'panic:',
+    ].filter((phrase) => stderr.includes(phrase))
+    return `root=${this.rootLabel}; shimExit=${this.child.exitCode ?? 'running'}; signal=${this.child.signalCode ?? 'none'}; stderrClass=${classes.join('|') || 'unclassified'}; stderrSha256=${createHash('sha256').update(this.stderrSample).digest('hex')}`
   }
 
   private acceptFrame(line: string): void {
@@ -401,14 +466,15 @@ function safeRPCError(method: string, value: unknown): Error {
 
 function clientRootLabel(root: string): 'A' | 'B' | 'C' {
   const normalized = root.replaceAll('\\', '/').replace(/\/+$/, '')
-  if (normalized.endsWith('/a')) return 'A'
-  if (normalized.endsWith('/b')) return 'B'
+  if (normalized.endsWith('/a') || normalized.endsWith('/dirty-a')) return 'A'
+  if (normalized.endsWith('/b') || normalized.endsWith('/dirty-b')) return 'B'
   if (normalized.endsWith('/c')) return 'C'
   throw new Error('external MCP client root is not a fixture linked worktree')
 }
 
-function muxDaemonControlPath(dataRoot: string): string {
-  return join(dataRoot, 'engram-muxd.ctl.sock')
+function muxDaemonControlPath(dataRoot: string, clientInstanceID: string): string {
+  const namespace = `engram-${createHash('sha256').update(clientInstanceID).digest('hex').slice(0, 32)}`
+  return join(dataRoot, `${namespace}-muxd.ctl.sock`)
 }
 
 function muxControlEndpoint(controlPath: string): string {
@@ -417,7 +483,7 @@ function muxControlEndpoint(controlPath: string): string {
   return `\\\\.\\pipe\\mcp-mux-${digest}`
 }
 
-async function readMuxDaemonIdentity(controlPath: string, expectedExecutable: string): Promise<MuxDaemonIdentity> {
+async function readMuxDaemonIdentity(controlPath: string, expectedExecutable: string, diagnostics: () => string): Promise<MuxDaemonIdentity> {
   const deadline = Date.now() + DAEMON_READY_TIMEOUT_MS
   let lastError = 'daemon control did not respond'
   while (Date.now() < deadline) {
@@ -442,11 +508,11 @@ async function readMuxDaemonIdentity(controlPath: string, expectedExecutable: st
         pid: status.pid,
       }
     } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error)
+      lastError = error instanceof MuxControlUnavailableError ? 'control-unavailable' : error !== null && typeof error === 'object' && Reflect.get(error, 'code') === 'ENOENT' ? 'marker-missing' : error instanceof Error && error.message.startsWith('daemon marker does not match') ? 'identity-mismatch' : error instanceof Error && error.message.startsWith('external MCP daemon control') ? 'control-invalid' : 'unknown'
       await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 50))
     }
   }
-  throw new Error(`external MCP daemon did not publish verified control metadata: ${lastError}`)
+  throw new Error(`external MCP daemon did not publish verified control metadata: ${lastError}; ${diagnostics()}`)
 }
 
 async function readMuxDaemonStatus(controlPath: string): Promise<MuxDaemonStatus> {

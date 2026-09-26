@@ -1,45 +1,40 @@
-# Specification Quality Checklist: Operator Code Console
+# Specification Quality Checklist: Operator Workspace — D-A
 
-**Purpose**: Validate requirements completeness, clarity, scope, and readiness before technical planning.
+**Purpose**: Review whether the D-A amendment is complete, unambiguous, bounded, and ready for implementation planning. This is a requirements-quality artifact, not implementation evidence.
 
-**Created**: 2026-09-10
+**Amended**: 2026-09-17
+**Feature**: [spec.md](../spec.md)
 
-**Feature**: `../spec.md`
+**Marker semantics**: This amendment replaced the previous honest-shell/legacy-import acceptance. Mark an item `[x]` only after an independent reviewer confirms the D-A artifact, not because implementation exists.
 
-**Note**: This reviewer-owned checklist evaluates requirements quality. A checked item does not claim that implementation is complete.
+## Outcome and scope
 
-## Content quality
+- [ ] CHK001 Does the outcome require normal Home → Workspace → source → direct/reverse relation → evidence completion rather than a hidden Code route, scaffold fidelity, or shell traffic alone?
+- [ ] CHK002 Does the specification define Repository, Working copy, and Indexed snapshot as human-facing labels while preserving Source/Checkout/View as server authority?
+- [ ] CHK003 Are D-B collection/correction and D-C queue/Book Context explicitly excluded without becoming hidden prerequisites or task phases?
+- [ ] CHK004 Is the secure-origin/authenticated-browser versus single-user HTTP/no-auth choice recorded as install-bound without weakening grants, origins, or source-level work?
 
-- [x] CHK001 The specification names an operator outcome rather than a screen, route, or component.
-- [x] CHK002 The early Code/basic-collection milestone is distinct from full Feature 011 completion. Full completion requires truthful mutations, Code Explorer, Rules followed by Issues, Memory, Queue, and Documents consumers, and S4 daemon job control.
-- [x] CHK003 Each user story has an independently executable scenario and a user-observable value.
-- [x] CHK004 The specification names distinct `loading`, `empty`, `denied`, `error`, `stale`, `partial`, `unsupported`, `timeout`, and `offline` states, including mutation callback load errors.
-- [x] CHK005 The specification leaves renderer, grant persistence, and helper placement to planning instead of prescribing an implementation.
+## Authority and evidence
 
-## Requirement completeness
+- [ ] CHK005 Do grants require a persistent BrowserSubject, exact owner-principal equality, enabled target subject, audit, and no administrator/label/path/tab inference?
+- [ ] CHK006 Do catalog, structure, search, relation, source, continuation, and evidence remain one authorized immutable View with independent browser/MCP contexts?
+- [ ] CHK007 Does the evidence contract preserve edge evidence references and label entity-level rather than exact reference-site evidence honestly?
+- [ ] CHK008 Do selected-snapshot freshness, coverage, semantic/degraded mode, page/total/continuation, partial/unsupported, and genuine empty states remain distinguishable?
 
-- [x] CHK006 FR-001 through FR-003 define truthful shell loading and closed-settings behavior.
-- [x] CHK007 FR-004 through FR-009 define persistent browser identity, explicit Source and Checkout read grants, same-View navigation, shared response release, and read-only code facts.
-- [x] CHK008 FR-010 through FR-015 define distinct selection states, frozen all-filter membership, Rules-first and named later consumer action matrices, migrated shared-result callers, per-item outcomes, operation-specific readback, and retry behavior.
-- [x] CHK009 FR-016 and FR-017 distinguish durable daemon-owned work from browser submission and prohibit workstation-secret or remote-path exposure.
-- [x] CHK010 FR-018 through FR-024 preserve UCI and recovery boundaries; define early, full, Book, and Memory ordering; require one-way design promotion; define the state and accessibility matrix; preserve honest legacy Books; and defer S6 controls.
-- [x] CHK011 The clarification record resolves browser grants, transport-independent UCI release, and early-milestone, full-completion, and Book-admission order without an administrator bypass or HTTP MCP.
-- [x] CHK012 No unresolved product question blocks planning. The remaining grant-storage, release-helper, rendering, and pagination choices are explicitly planning decisions with fixed behavioral constraints.
+## Retirement and preservation
 
-## Success and evidence
+- [ ] CHK009 Does the plan remove manual graph writes from UI, HTTP, MCP list/dispatch, flags, and worker admission while keeping UCI graph and approved historical readers distinct?
+- [ ] CHK010 Does the plan remove plaintext book admission/page/startup, quiesce writers, and terminalize residual nonterminal jobs without replaying plaintext or deleting historical documents/provenance?
+- [ ] CHK011 Does the contract preserve PostgreSQL/pgvector, UCI, versioned Documents, Rules, Issues, historical graph/book data, applied migrations, and explicit retained readers?
 
-- [x] CHK013 SC-001 through SC-011 use observable shell traffic, isolation, authorization, collection, mutation, reorder, daemon, state-matrix, accessibility, and trigger-to-readback criteria.
-- [x] CHK014 The success criteria distinguish mock interaction proof from browser, backend, and readback connection proof.
-- [x] CHK015 The specification distinguishes `committed_verified`, `committed_verification_pending`, `partial`, `failed`, and `outcome_unknown`; it requires authorized operation-specific postconditions instead of generic visible rows.
+## Delivery quality
 
-## Scope and ownership
-
-- [x] CHK016 In-scope work includes the honest shell, mutation truth, read-only Code Explorer, Rules followed by named collection consumers, durable daemon work, one-way design promotion, and honest legacy Books state.
-- [x] CHK017 Out-of-scope work excludes Book Context implementation, Memory R1 reprioritization, S6 diagnostics/review controls, a second graph, direct storage bypass, browser administrator inference, HTTP MCP, secrets, deployment, and release publication.
-- [x] CHK018 Ownership boundaries assign console, design promotion, UCI authority, authentication grants, collection business rules, daemon execution, Book Context, and Memory R1 to distinct owners.
+- [ ] CHK012 Are keyboard-only control, visible focus, live state announcement, 1440/980/390 widths, 200% zoom, RU/EN, and zh regression measurable for the D-A journey?
+- [ ] CHK013 Do success criteria require more than one result page, an off-page neighbor, direct and reverse relations, evidence, two worktrees/tabs, grant/newer-View isolation, and old-writer non-resurrection?
+- [ ] CHK014 Do plan/tasks assign one owner per writable boundary and a single integration owner for shared registration/migration files?
+- [ ] CHK015 Does design promotion require actual private `.od` source and curated promotion rather than hand-editing a stale public snapshot or claiming parity?
 
 ## Review notes
 
-- Result: **PASS — independently approved planning input.** The checked items record the completed requirements-quality review for the current specification. The Feature 011 plan is independently approved; task execution remains constrained by its exclusive ownership, evidence, and scope boundaries. This checklist does not authorize work outside Feature 011, change UCI acceptance, or claim a release.
-- This checklist evaluates the specification only. It does not authorize implementation, change UCI acceptance, or claim a release.
-- The local SpecKit feature selector names `specs/011-operator-code-console` through the installed `create-new-feature.ps1` convention.
+- Previous approval applied to the superseded Feature 011 scope and does not approve this amendment.
+- The author completed the Spec Kit clarify/plan/tasks consistency pass for this atomic contract slice. An independent reviewer should mark this checklist after reviewing the committed candidate.

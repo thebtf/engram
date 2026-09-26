@@ -1,190 +1,124 @@
-# Implementation Plan: Operator Code Console
+# Implementation Plan: Operator Workspace — D-A
 
-**Branch**: `ui/operator-code-console-r1` | **Spec**: [spec.md](spec.md)
-**Input**: Approved Feature011 specification and Constitution 2.0.0; UCI Feature010 current seams; Web UI recovery packet; r11 roadmap; pinned SocratiCode and Graphify mechanism handoffs.
+**Spec**: [spec.md](spec.md)
+**Input**: D-A amendment, Constitution 3.0.0, the 2026-09-17 operator-workspace audit, and accepted D2/UX/QA handoffs.
 
 ## Summary
 
-Deliver the separately accepted browser presentation for existing Engram authority without a second graph, storage bypass, or HTTP-MCP transport. The first requested user result is not the shell: an ordinary installed agent session **and** a browser independently choose authorized worktrees, run a real semantic query, traverse a bounded code graph, and exact-read a cited span from the same pinned View. The browser is R-B and uses the exact R-A tuple named by the live fixture.
+D-A delivers one ordinary operator result: from Home, choose a readable Repository and Working copy, understand the selected Indexed snapshot, search or browse it, open source, follow a direct/reverse derived relation, and inspect its evidence. It simultaneously removes the executable manual graph and plaintext-book writers while retaining their historical readers and records.
 
-S1a is an independently installable enabling slice: it removes eager shell body loads and closed-settings traffic while showing unknown rather than inventing a total. S1b removes false rollback/verified-success claims from all twelve direct mutation consumers. S2 is the read-only Code Explorer. S3 supplies Rules-first selection/pagination/operations, then bounded Issues, Memory, Queue, and Documents consumers. S4 makes browser index demand durable and daemon-owned. Book Context planning requires **accepted S2 and accepted Rules**; Book implementation requires full Feature011, including S3b and S4.
+This is a D2 amendment to Feature 011, not a replacement UCI system or a plan for D-B/D-C. The prior honest-shell/scaffold definition is superseded as the first acceptance boundary. Truthful state presentation remains a supporting quality requirement; it is not a substitute for the journey.
 
-## Planning Calibration
+## Planning calibration and decision
 
-**Rung**: D2. This package corrects Feature011 planning, not UCI core, IAM, Book Context, or r11 as a whole. Browser grant issuance, common release, tab isolation, migration registry, and live fixture ownership are each explicit because a wrong boundary affects multiple consumers.
+**Rung**: D2. This artifact lives across implementation owners and changes the browser/UCI/retirement handoff. A wrong decision can expose source, strand a historical job, or preserve a retired writer. It is bounded to one independently installable D-A outcome, not the future data-library or Book Context program.
 
-## Technical Context
+**Decision**: Reuse existing UCI catalog, pinned-context, search, graph, source descriptor, index-intent, common release, and the existing `BrowserBindingApplication`/`BrowserTabBindingStore` lifecycle. Add only the presentation/read seams needed for ordinary-user selection, bounded structure, relation evidence, and owner-scoped onboarding. Retire old writers at admission and startup boundaries; preserve data and named readers. Do not add a universal graph, a second index, a second database, a replacement binding subsystem, or a renamed legacy importer.
 
-- **Runtime**: Go server/UCI and TypeScript/Vue/Nuxt browser console. PostgreSQL/pgvector remains the authority; no new deployable service.
-- **Code authority**: UCI Source/Checkout/immutable View and exact stored source read remain sole authority. `internal/worker` is a typed presentation/composition adapter, never direct `ci_*` SQL or an MCP proxy.
-- **Browser identity**: a persistent real BrowserSubject, exact Source+Checkout grant, server-issued `tab_binding_id`, and current per-document proof. Browser `sessionStorage` retains only a resume pair; the server-owned one-time reload token is not an authorization or tab-classification artifact. Console Code makes fresh opener handling one-time by clearing copied storage, setting `window.opener = null`, and verifying it before its fresh handshake; only the resulting normalized no-opener navigation classifier routes fresh/copy/reload behavior. Binding/proof identify a document within an authenticated subject, while the grant and UCI ContextRef remain separate read authority.
-- **Release**: common UCI release maps `mcp_keycard` and `browser_subject` callers separately. It reauthorizes immediately before contextual response serialization and records non-content exposure for status/query/graph/read/released intent result.
-- **Testing**: focused Go vectors plus disposable PostgreSQL, real authenticated Go server, built Nuxt, installed ordinary agent/daemon, live Playwright A/B worktrees, and concurrent MCP. Existing mock Playwright remains interaction-only.
-- **Bounds**: reuse UCI query/graph/read budgets; reject invalid oversized values; no client page length is a total. Exact source remains bounded persisted View bytes, not a disk fallback.
+**Alternatives rejected**:
 
-## Constitution Check
+1. Add only a `/code` link and hide Graph/Books — fails readable identity, ordinary onboarding, evidence, and executable retirement.
+2. Build a new workspace backend, graph/library model, or browser-binding lifecycle — duplicates working authority and expands D-A into D-B/D-C.
+3. Delete graph/book storage — breaks historical readers, versioned Documents, provenance, and retrieval behavior.
+4. Retain a flag-controlled editor/importer — permits resurrection of expressly retired workflows.
 
-| Gate | Plan disposition |
-|---|---|
-| Typed, pinned, authorized context | Every code request uses exact Source/Checkout/View. Labels, paths, Space, branch, tab, and legacy project do not authorize it. |
-| One authority and truthful release | HTTP calls existing UCI application and common release; no second graph/index, raw SQL UI, or HTTP MCP. |
-| Durable work | S4 persists intent, tracks idempotency/ACK/retry/terminal state, and requires resulting View readback. |
-| Separate feature and release scope | Constitution permits this surface after UCI technical acceptance. This correction makes no release, deployment, publication, or UCI reacceptance claim. |
-| Migration meaning and privacy | Additive schema follows one allocator. No source body/query/absolute locator/credential is stored in grant, binding, operation, or exposure metadata. |
+## Technical context and guardrails
 
-## Current Source Grounding
+- **Authority**: PostgreSQL/pgvector remains authoritative storage; UCI retains Source, Checkout, immutable View, query, relation, source-descriptor, reauthorization, and exposure ownership. `internal/worker` is an adapter, never a `ci_*` query path or HTTP-MCP proxy.
+- **Existing browser binding**: `internal/worker/browser_binding_application.go` already owns handshake, resume, guard, renew, close, pin, session destruction, document proof, and lease transitions over `internal/db/gorm/browser_tab_binding_store.go`. D-A maps this existing port to one owner and tests/wires it; it does not recreate the subsystem.
+- **Identity**: Repository, Working copy, and Indexed snapshot labels are presentation only. Every contextual request remains bound to server-resolved Source/Checkout/View, a current BrowserSubject/grant, and existing binding/document proof.
+- **Data preservation**: Versioned Documents, Rules, Issues, historical `knowledge_nodes`/`knowledge_edges`, book-job provenance, UCI graph, and applied migrations remain. No DROP, replay of unavailable book plaintext, automatic graph reclassification, or destructive cleanup belongs to D-A.
+- **Truthful presentation**: Ready, Updating, Needs indexing, Failed, Newer snapshot available, no accessible source, denied, partial/unsupported, and genuine empty result remain distinct. Index intent acknowledgement is not completion.
+- **Deployment decision**: Supported secure-origin/authenticated-browser versus explicitly supported single-user HTTP/no-auth remains unresolved. Source-level work stays neutral and preserves authority; installed acceptance and a real onboarding/recovery action wait for the recorded decision.
 
-| Observed seam | Planning consequence |
-|---|---|
-| `internal/worker/uci_application.go:19-21,41-44,104-149,152-172` returns pre-exposure View responses; semantic query becomes eligible only at complete selected-View embedding coverage; read has no disk fallback. | S2 uses the composed UCI application and cannot label lexical/degraded output semantic. |
-| `internal/mcp/tools_code_intel.go:780-892` reauthorizes exact context and records exposure before response serialization. `internal/uci/exposure.go:109-121,409-468,552-572,679-685` currently models keycard/session and only search/graph/read. | UCI release owner extracts a transport-independent typed caller port; browser identity and `code_status`/`code_index_result` are explicit extensions, not fake keycards or mislabeled search. |
-| `internal/db/gorm/uci_context_store.go:30-32,77-146,177-223` lists/authorizes only recorded checkout owner. | `CodeGrantApplication` adds an exact grant authority and issuer check against `ci_checkouts.owner_principal`; it does not reinterpret role/label/Space. |
-| `internal/worker/middleware.go:464-494` creates `auth.Session(user.Role)` for real DB/authentik browser sessions, while `internal/auth/identity.go:146-171` has no session principal. `internal/db/gorm/audit_store.go:40-53` provides transactional audit append. | Auth/grant owner carries persisted user identity to BrowserSubject and commits issuance/revocation with audit; disabled/HMAC/master/keycard paths remain excluded. |
-| `internal/uci/context_resolver.go:14-16,39-52` makes selection client-scoped convenience; browser storage may be copied by an opener. | Browser Binding Application owns binding persistence, one deterministic document-lease/resume transition, collision rotation, and binding-proof validation. Browser proof identifies a document but cannot authorize a code read. |
-| `internal/worker/service.go:880-928,1657-1807` composes stores and owns `setupRoutes`; `internal/db/gorm/migrations.go:15-23` owns ordered gormigrate registry. | Composition owner exclusively registers routes; migration-registry owner allocates one ordered migration entry after owner inputs. Handler/auth owners never edit either shared file. |
-| `apps/operator-console/layouts/default.vue`, `SettingsModal.vue`, and `playwright.config.ts` contain eager shell/settings paths and mock browser harness. | S1a owns shell/locales plus base live harness/config/package script. S2 contributes scenario tests through that harness only. |
-| `apps/operator-console/composables/useOperatorApi.ts:410-440` calls refresh/rollback together; exact direct consumers are the twelve `useOperator*.ts` paths enumerated in `collection-operations.md`. | S1b changes shared union once, then domains migrate their own consumers in a single atomic integration cutover. |
+## Frozen interfaces for implementation owners
 
-## Architecture Decisions
-
-1. **HTTP presentation reuses UCI, not MCP.** `internal/worker` validates DTOs and calls one UCI application. Common release reauthorizes, validates, records required exposure, and then serializes. Existing MCP framing/vectors remain compatible.
-2. **Source owner grants exactly.** `CodeGrantApplication` exposes `POST /api/code/grants` and `POST /api/code/grants/{grant_ref}/revoke`. It allows the issuer only when its real BrowserSubject principal equals the existing tuple’s `owner_principal`; grant and audit commit together. No admin role, Space, path, or label substitutes for that predicate.
-3. **Server-issued binding preserves reload without trusting lifecycle close.** Browser Binding Application gives each document a binding ID plus current proof, carries both on every binding-bound request/lease operation, and owns the one-time server resume token. Console Code makes a fresh opener one-time by clearing copied storage and normalizing/readbacking `window.opener = null`: only normalized no-opener `navigate` copied pairs handshake to collision and normalized no-opener `reload` resumes; every failure/persistent opener/other signal clears to fresh unselected state. Navigation metadata, opener, and the cookie are not proof or authority. A valid reload retains its pin after close or bounded lease expiry, while document-lease expiry retains the binding/pin and only binding/session expiry destroys them. Every use still reauthorizes independently.
-4. **Release categories are explicit.** Context discovery/binding/grant administration and non-contextual intent admission use ordinary authorization only. Status, search, graph, source, continuation underlying results, and resulting intent View metadata use common release/exposure. Denials and release failure disclose no contextual fields.
-5. **Mutation truth is one client vocabulary, not rollback fiction.** `OperatorMutationResult` names observed commitment/readback truth. Shared owner changes only the seam; each domain owner owns its specified composable/readback adapter.
-6. **Selection is shared, action authority is not.** Tokens freeze one authorized target set. Rules, Issues, Memory, Queue, and Documents retain their own action matrix/postcondition; there is no universal bulk engine or secret reveal.
-7. **Daemon intent is durable but not execution.** Only daemon owner may ACK/claim/execute/publish. HTTP acceptance is never completion; released resulting View is the readback boundary.
-8. **Mechanism adaptation is fixed for this slice and bounded for broader R-C.** The pinned matrix governs S2’s supported fixture/limitations. Broader parity, new language/relation, and comparator claims need separate source-oracle evidence; neither blocks a limited current-slice S2.
-
-## r11 Roadmap Alignment and Residual Basis
-
-| Result | Feature011 contribution | Required evidence | Finite residual boundary |
+| Boundary | D-A contract | Owner | Compatibility and proof |
 |---|---|---|---|
-| R-A ordinary agent core | Consumes the installed UCI candidate; provides normal agent side of S2. | Exact server/daemon/parser/profile/console tuple; ordinary agent non-lexical RU semantic query after complete embedding coverage; relation and exact View read. | Watcher p95 discrepancy classification, provider/profile readiness, and exact installed tuple remain in `research.md` R-10. |
-| R-B real GUI vertical | S1a/S1b enable honest interaction; S2 is Code Explorer; S3/S4 complete Feature011. | Live Go/PostgreSQL/browser A/B plus MCP: grants, binding collision/reload, same-View semantic search/graph/read, normal watcher A update, B isolation, revocation/release failure. | Preview is controlled/non-production. It is not release or a Sonar substitute. |
-| R-C mechanism and target profile | Presents only declared coverage/limitations; no generic parity. | Fixed current-slice Go and bounded TS/TSX alias/re-export fixture. Expansion requires source oracle, lexical baseline, aligned profile, and independent judge. | Engram is conditionally supported only for frozen fixture; nvmd-ai and NovaScript are deferred until their own evidence packets. |
+| Existing browser binding | `BrowserBindingApplication` plus `BrowserTabBindingStore` owns handshake/resume/guard/renew/close/pin and stores only opaque proof/resume material and optional pinned ContextRef. | Browser Binding owner | Preserve its existing transition table and fail-closed proof/lease semantics. Supplies the typed port to the integrator; does not write HTTP handler/route registration. |
+| Workspace catalog | A server-filtered catalog presents Repository, Working copy, and Indexed snapshot display metadata plus opaque selection references. Existing unnamed checkouts are not fabricated as human labels; owner naming is part of onboarding. | Browser onboarding/catalog | Labels do not authorize; duplicate branch names remain distinguishable without exposing locators. |
+| Grant onboarding | A persistent browser subject can use an owner-scoped chooser to issue/revoke the exact existing Source/Checkout grant. The browser never enters raw IDs or becomes owner via an admin role. | Browser onboarding/catalog | Exact owner-principal equality, enabled target subject, and transactional audit remain mandatory. |
+| View-pinned structure | A bounded structure read accepts current tab proof, normalized relative prefix, opaque continuation, and bounded limit; it returns display paths/entity references, coverage/limitations, and next cursor only for the selected View. | UCI read-model | No empty fake search, disk fallback, global totals inferred from a page, or locator disclosure. |
+| Relation evidence | Graph/relation DTOs retain released edge evidence references. Opening evidence invokes the existing authorized source-descriptor/read boundary in the same View and labels evidence granularity honestly. | UCI read-model and release | A neighbor may open even when absent from the search page; source entity evidence is not renamed exact reference-site evidence. |
+| Shared handler and routes | `OperatorCodeHTTPAdapter`, `service.go`, `uci_context.go`, `mcp/server.go`, and `migrations.go` are one serialized integration table. | Single integrator | Producer owners hand off ports/declarations; no producer writes this route/handler table. |
+| Workspace UI | Home and NAV lead to one context bar and investigation flow. It uses Repository / Working copy / Indexed snapshot as task labels; IDs stay secondary disclosed evidence. | Console workspace | Keyboard/200% zoom/RU-EN and independent tabs are part of the delivered contract. |
+| Retired admissions | Manual graph create/delete and plaintext book intake have no UI, HTTP, MCP, flag, worker-startup, or tool-list/dispatch re-entry. | Retirement owner | Historical readers/data are retained; UCI code graph is out of the removal set. |
 
-`research.md` R-10 is the authoritative finite residual ledger: watcher variance, consumer tuple, provider readiness, Sonar administrator debt, target-project dispositions, optional comparator, and preview versus release boundary. No row creates a calendar forecast or authorizes an external effect.
+## D-A migration and retirement order
 
-## Dependency Graph
+1. Build and approve the consumer map for each retired workflow: UI → route/tool → application → writer/job → storage → named readers/exports. Preserve live readers; do not infer deletion from a package name.
+2. In the existing single-container deployment, stop new old-version intake and ensure no old book-writer process remains live before touching residual jobs. This is a quiescence precondition, not a new lease or heartbeat subsystem; a `pending`/`processing` row cannot be safely replayed because plaintext is not durable in the row.
+3. After quiescence, idempotently mark residual nonterminal book jobs `failed` with an interrupted-by-retirement reason; preserve rows, partial historical documents, and `source_book_job_id`; never call the old compensation deletion path. The fixture reruns the transition and proves unchanged preserved records.
+4. T006b, executed only after T006a, removes manual graph mutation registration/dispatch and book admission/startup after receiving the retirement declaration. Retain `internal/retrieval/hybrid.go` Tier2 `Traverse`, historical graph reads, `/api/context/search`, `internal/graph`, and UCI graph where the approved consumer map requires them.
+5. Prove an old route/tool/flag cannot resurrect writing after restart, then prove historical document/version/provenance and named retained readers. Physical contraction is a separately authorized future change.
+
+## Ordered implementation slices and dependency graph
 
 ```mermaid
 flowchart LR
-  DESIGN[Accepted .od to design promotion] --> S1A[S1a honest shell and base live harness]
-  S1A --> S1B[S1b shared mutation truth]
-  S1B --> SEL[Shared selection and pagination]
-  SEL --> S3ROUTE[T023 shared selection composition]
-  S3ROUTE --> RULES[T026 S3a Rules-first acceptance]
-  RULES --> T027[T027 Issues]
-  RULES --> T028[T028 Memory]
-  RULES --> T029[T029 Queue]
-  RULES --> T030[T030 Documents]
-  S3ROUTE --> T031[T031 later-domain composition]
-  T027 --> T031
-  T028 --> T031
-  T029 --> T031
-  T030 --> T031
-  T031 --> T032[T032 later-domain integration proof]
-  T032 --> OTHER[S3b Issues Memory Queue Documents]
-
-  PLAN[Accepted Feature011 planning] --> T012[T012 Browser subject and grants]
-  T012 --> T013[T013 grant migration registration]
-  T012 --> T014[T014 browser binding implementation]
-  T013 --> T015[T015 binding migration registration]
-  T014 --> T015
-  T012 --> T016[T016 typed UCI release]
-  T014 --> T016
-  T016 --> T017[T017 HTTP adapter]
-  T017 --> T018[T018 service composition]
-  T018 --> T019[T019 Code Explorer]
-
-  RA[Exact R-A installed tuple and declared fixture] --> T002[T002 current-slice fixture]
-  MECH[Current-slice pinned mechanism matrix] --> T002
-  T002 --> T019
-  T002 --> T020[T020 S2 cross-surface proof]
-  T019 --> T020
-  T020 --> S2[S2 Code Explorer accepted]
-  S2 --> S4[S4 daemon index intent]
-
-  S2 --> BOOKPLAN[Book Context planning admitted]
-  RULES --> BOOKPLAN
-  OTHER --> FULL[Full Feature011]
-  S4 --> FULL
-  FULL --> BOOKIMPL[Book Context implementation admitted]
-
-  RC[Broader R-C comparison or language expansion] --> RCCLAIM[R-C quality/support claim only]
+  C[D-A contract amendment] --> D[DA01 design-source promotion]
+  C --> B[DA02 existing binding port]
+  C --> X[DA03 retention and retirement declarations]
+  C --> O[DA04 onboarding catalog]
+  C --> R[DA05 UCI structure and evidence]
+  B --> J[DA06a journey integration]
+  O --> J
+  R --> J
+  J --> K[DA06b retirement integration]
+  X --> K
+  D --> U[DA07 Workspace UI]
+  J --> U
+  J --> JA[DA08a journey source proof]
+  U --> JA
+  K --> RB[DA08b retirement source proof]
+  JA --> A[composite D-A source acceptance]
+  RB --> A
 ```
 
-The current-slice matrix, not broader R-C comparison, gates S2. The graph distinguishes implementation gates—the typed caller/binding contracts consumed by T016—from integration gates that serialize the migration registry or join completed producers. S1a/T008 and T015 are not UCI release implementation gates. The graph expresses the Book conjunction: Rules alone never admits planning, and S2 plus Rules never admits Book implementation. S2/S3 work may run in parallel only after ownership reservation below.
-
-## Exclusive Ownership and Handoffs
-
-| Writer zone | Sole writer | Exact files/surfaces | Handoff |
+| Slice | Contribution and owned surfaces | Dependencies | Acceptance evidence |
 |---|---|---|---|
-| Auth/grants | Auth/grant owner | `internal/auth/identity.go`, authenticated browser middleware/session carrier, `CodeGrantApplication`, grant store/audit tests | Supplies canonical BrowserSubject, exact Source-owner issuance/revoke, and `CanRead(source, checkout)`; never daemon authorization. |
-| Browser Binding Application | Browser Binding Application owner | tab-binding persistence and migration declaration; document lease/resume/collision state machine; binding guard; focused Go state-machine/persistence tests | Receives canonical BrowserSubject/session carriage from Auth/grants; hands a transition/guard port to HTTP, a store/wiring declaration to composition, and the documented headers/results to the Code UI. It cannot issue grants, serialize routes, invoke UCI, own the UI opener-normalization/bootstrap classifier, or edit shared harness config. |
-| Migration registry | Migration-registry owner | `internal/db/gorm/migrations.go` only | Receives additive migration requests from grants, bindings, selection, and intents; allocates one next ID/order and owns registry edit. No other owner picks a number or edits the registry. |
-| Service composition and route registration | UCI composition owner | `internal/worker/service.go`, `internal/worker/uci_context.go`, injection/wiring, `setupRoutes` | Reviews handler registration contract and adds the one call in `setupRoutes`; HTTP owner supplies handler package and route-registration function but never edits `service.go`. |
-| UCI response release | UCI release owner | `internal/uci` release caller/mapper, `internal/mcp/tools_code_intel.go`, exposure vectors | Preserves MCP behavior and exposes typed browser/MCP release with explicit metadata operations. |
-| HTTP DTO/handlers | Operator-code HTTP owner | `internal/worker/handlers_operator_code.go`, handler DTO/unit tests | Calls composed UCI/release only; hands one reviewed registration function to composition owner; owns no query/graph/source policy. |
-| S1a shell and base live harness | Console shell/harness owner | `layouts/default.vue`, settings components, relevant locales, `apps/operator-console/package.json`, `playwright.live.config.ts`, shared live fixture/bootstrap | Supplies built-console/live-route trace harness before S1a acceptance. Code owner adds S2 scenario assertions without changing harness config/script. |
-| S2 typed Code UI | Console Code owner | `useOperatorCode.ts`, Code page/components, one-time opener normalization/readback plus bootstrap classifier (`window.opener` and `PerformanceNavigationTiming.type`), tab resume storage/current document proof, code-specific live browser scenario tests | Records supported browser engine/version and opener/navigation/readback signals, consumes the Browser Binding Application transition/guard contract and HTTP DTOs only, and falls back failed/ambiguous state to fresh unselected binding. Cannot edit binding persistence, MCP binding, grant store, UCI graph, or shared harness config/script. |
-| Shared mutation result | Console mutation owner | `useOperatorApi.ts`, union and seam tests | Freezes one union then hands each listed consumer to its domain owner; integration owner accepts all twelve in one S1b cutover. |
-| S1b consumer migration | Named domain owners | `useOperatorAccess.ts`, `useOperatorBooks.ts`, `useOperatorDocuments.ts`, `useOperatorDomainRegistry.ts`, `useOperatorHealthSettings.ts`, `useOperatorIssues.ts`, `useOperatorKeycards.ts`, `useOperatorMemoryLab.ts`, `useOperatorProjects.ts`, `useOperatorQueue.ts`, `useOperatorRules.ts`, `useOperatorSecrets.ts` | Each migrates only its result adapter/readback; no owner changes the shared union. Exact inventory is repeated in `collection-operations.md`. |
-| Selection/pagination | Collection shared owner | `useOperatorSelection.ts`, cursor/page-size/accessibility tests | Produces typed selection only; does not authorize actions. |
-| Rules, then later domains | Rules owner; then named domain owner | Rules handler/store/transaction; then Issues/Memory/Queue/Documents handlers/composables/tests | Rules first; later domains consume shared seam one at a time with their own action/postcondition. |
-| Daemon intent | UCI daemon owner | intent persistence, ACK/claim/status/private daemon integration | Provides safe state/result to HTTP release; never browser path or credential. |
-| Design source | Design-source owner | `.od` and curated `design/operator-console` promotion | Promotes accepted flow before app parity evidence; no raw export overwrite. |
+| **DA01 — design source** | Update private `.od` D-A source, promote the reviewed allowlist into `design/operator-console/`, and keep runtime parity evidence separate. | This amendment | Promoted snapshot shows selection-first Workspace and retired writers; no raw export writes runtime files. |
+| **DA02 — existing binding port** | Verify/extend only the existing `BrowserBindingApplication` and `BrowserTabBindingStore` contract/tests; supply its port/declaration without a replacement subsystem. | This amendment | Handshake/resume/proof/lease/pin transitions stay fail-closed and an unselected copy/reload cannot inherit authority. |
+| **DA03 — retention and retirement declarations** | Map and retain `internal/retrieval/hybrid.go` Tier2 `GraphStoreInterface.Traverse`, historical graph reads, and current `/api/context/search` ownership; retire manual graph/plaintext-book admissions; supply declarations to integration. | This amendment and approved consumer maps | Existing single-container quiescence, failed-with-reason residual job, preserved `source_book_job_id`/partial documents, rerun idempotence, and retained readers. |
+| **DA04 — onboarding/catalog** | Owner-scoped grant chooser and non-authorizing display metadata through existing browser-grant/catalog boundaries. | This amendment | Owner issues/revokes, non-owner/admin-only attempts fail, and readable labels distinguish two working copies without locators. |
+| **DA05 — read model/evidence** | Bounded View-pinned structure and evidence-preserving relation/source navigation. | This amendment | Same-View page/continuation, off-page neighbor, exact released evidence, and non-disclosure on denial. |
+| **DA06a — journey integration** | Apply binding/catalog/read-model declarations to the shared handler, routes, composition, and migration table. | DA02, DA04, DA05 | One integrated journey candidate proves no direct storage/MCP/path escape. |
+| **DA06b — retirement integration** | After DA06a, apply retirement declarations to the same shared files and registry. | DA03, DA06a | Old writer re-entry remains absent while named readers survive. |
+| **DA07 — Workspace UI** | Home/NAV entry; context bar; selected-context status/search/structure/source/relation/evidence; remove old navigation. | DA01, DA06a | Blind normal-homepage walkthrough, accessible relation list, narrowed layout, RU/EN. |
+| **DA08a — journey source proof** | Record independently the normal Home/Workspace/source/relation/evidence journey, including real-provider non-lexical >50 proof. | DA06a, DA07 | Journey proof records without waiting for retirement wiring. |
+| **DA08b — retirement source proof** | Record independently the quiescence, residual-job, old-writer-negative, and retained-reader proof. | DA06b | Retirement proof records without waiting for UI journey evidence. |
+| **Composite D-A source acceptance** | Combine DA08a and DA08b only when both are green; keep release closed until the origin decision and installed DA01–DA04 proof. | DA08a, DA08b | Bounded source acceptance followed by separately authorized installed result. |
 
-## Ordered Slices and Evidence
+## Exclusive writer zones and dispatch boundary
 
-| Slice | Prerequisites and contribution | Acceptance proof | Rollback boundary |
-|---|---|---|---|
-| S1a | Accepted design flow; shell/lazy settings/base live harness. | Built console against real Go API proves no shell-only memory-body or closed-settings traffic, unknown ≠ zero, hard reload/focus/keyboard, responsive/zoom/i18n. | UI/harness-only revert; no grant/UCI/data mutation. |
-| S1b | Shared union plus all twelve domain consumer handoffs. | Mixed commit/failure, known commit/readback failure, response loss before/after commit, access loss, and callback load-error prove no false rollback/replay. | One client-contract cutover; pending server effects persist for safe readback. |
-| S2 | Current-slice mechanism gate, R-A exact tuple, grant/owner/audit, Browser Binding Application, typed release, HTTP adapter, design flow. | Ordinary agent and A/B browser/MCP execute declared semantic query → relation → exact View read; actual one-time opener normalization plus navigation signals drive fresh opener, child-open → select → child-reload pin retention, browser duplicate collision, normal/late/crash reload, ambiguous fallback, proof/token replay, and document versus binding/session expiry through the single binding table; normal watcher changes A alias target/caller unchanged to new A View while B stays unchanged; denial/revocation/recorder failure disclose nothing. | Disable/revert additive HTTP/UI/grant/binding seam; retain MCP/UCI Views and audit. |
-| S3a | S1b selection/cursor contract. | >200 Rules: explicit/page/frozen filter/exclusions; permission/version change; authorized postconditions; scope reorder is all-or-none. | Rules adapter/handler boundary; transactional reorder has no partial state. |
-| S3b | S3a shared seam; four disjoint domain lanes begin after Rules-first acceptance and join only for route integration. | >100 Issues and each action matrix prove pagination, selection, partial/readback/status/retry-only-unfinished and forbidden action refusal. | Per-domain revert without weakening shared truth.
-| S4 | S2 context/release/binding and intent contract. | Online daemon records ACK/execution/released readable new View; offline remains queued/unavailable; released index result preserves authorization. | Stop new admission; retain durable intent/recovery and no browser filesystem action. |
-
-## Integration Order and Cutover
-
-1. Design source promotes accepted flow.
-2. S1a shell/harness owner makes real route-trace harness available; S1a acceptance does not wait for S2/R-C expansion.
-3. Mutation owner freezes union; named owners migrate the exact twelve consumers; integration lands one S1b cutover.
-4. Auth/grant, Browser Binding Application, release, and HTTP owners deliver their narrow contracts. The binding owner supplies its guard/transition port to HTTP and persistence declaration to composition; migration-registry owner lands ordered additive schema only after their declarations, and composition owner alone wires stores and routes.
-5. Code owner lands S2 through the live harness; integrator records the exact ordinary-agent/browser/MCP tuple and S2 fixture.
-6. Selection then Rules land; S2 + accepted Rules admits Book planning only. Later independent domain lanes and S4 complete Feature011; only then is Book implementation admissible.
-
-## Contract-to-Surface Map
-
-| Requirement group | Contract | Primary surfaces | Acceptance |
-|---|---|---|---|
-| FR-001–003, 020–023 | This plan S1a and design promotion | shell/settings/locales/base live harness | Traffic trace, reload, responsive/a11y/i18n. |
-| FR-004–009 | `browser-context-and-grants.md`, `operator-code-http.md` | identity/grants/audit, UCI release, composition/handlers, Code UI | Owner issue/revoke, tab collision/reload, A/B/MCP isolation, release mapping, View/source coherence. |
-| FR-010–015, 021–022 | `collection-operations.md` | shared mutation/selection, Rules then domains | Exact twelve consumer cutover, >200 Rules/>100 Issues, atomic reorder, per-item/readback/unknown. |
-| FR-016–017 | `index-intents.md` | UCI durable intent/daemon, HTTP status, Code UI | ACK/new released View and offline queued/unavailable. |
-| r11 current/broader mechanism | `mechanism-adaptation.md`, `research.md` R-10 | UCI R-A fixture, R-C evaluation, UI capability state | Pinned matrix/current S2 fixture; separate expansion evidence. |
-
-## Migration and Explicit Omissions
-
-Grant, tab-binding, selection-token, and intent persistence are additive. Each owning domain submits its migration declaration to the migration-registry owner, who rereads `migrations.go`, allocates the one next ordered migration, and commits registry change. Existing owner-only UCI authorization remains default-deny until valid grant support exists. MCP calls the extracted release helper with existing vectors before HTTP maps browser callers. Legacy collection routes remain only until named caller migration; no alias retains false-rollback semantics.
-
-This work excludes UCI core repair/reacceptance, Sonar execution, release/deploy/publication, secrets, raw SQL UI, HTTP MCP, new graph DB/service/process, upstream embedding/port, benchmark transfer, Book/M1 implementation, generic IAM, browser implied authority, arbitrary code-fact edits, bulk secret reveal, Queue review-packet action, automatic View switching, and browser access to workstation path/credential.
-
-## Remaining Risks
-
-All remaining risks are finite and owned in `research.md` R-10. The only planning-time risks are the stated external/evidence boundaries: watcher measurement classification, tuple/provider proof, Sonar administrator re-entry, deferred target profiles, and optional comparator availability. None changes approved product scope or blocks the documented current-slice plan without its named closure condition.
-
-## Review Finding Closure Matrix
-
-| Finding | Line-level correction locations | Closure |
+| Writer zone | Sole owner | Shared-file restriction |
 |---|---|---|
-| 1 — supplied mechanism evidence | `contracts/mechanism-adaptation.md:3-31`; `research.md:73-79`; `plan.md:57,65,79-81,121` | Pinned commits, licenses, URLs, `OBSERVED`/`INFERRED` labels, all six required mechanisms, native seams, proof cases, and explicit rejected last-writer/main-checkout/benchmark transfer are fixed current-slice evidence. |
-| 2 — executable grant lifecycle | `contracts/browser-context-and-grants.md:3-34`; `data-model.md:16-17,35-46,78-83`; `research.md:5-13`; `quickstart.md:11,44` | `CodeGrantApplication` issue/revoke HTTP seam requires exact existing Source-owner principal and same-transaction audit; fixture uses it and cannot seed/bypass authority. |
-| 3 — browser/MCP release and metadata | `contracts/operator-code-http.md:5-57`; `contracts/index-intents.md:9-17`; `data-model.md:20-21`; `research.md:15-23`; `plan.md:40,53` | Typed caller mapping forbids fake browser keycards and classifies discovery, selection, status, query, graph, read, continuation, intent admission, and released intent result. |
-| 4 — copied tab storage isolation | `contracts/browser-context-and-grants.md:36-74`; `data-model.md:9,18,35-48,81,85`; `research.md:25-33`; `quickstart.md:42,46-50`; `plan.md:20,43,52,102-108,122` | One deterministic binding table requires binding ID plus current document proof on binding-bound requests/leases. Fresh opener handling is one-time—clear copied storage, normalize/readback `window.opener = null`—then actual normalized opener/navigation signals route supported duplicate/copy and reload; cookie is not tab evidence and failed/ambiguous signals fail closed to fresh. Server-owned one-time resume retains normal and child reload pins after close/lease expiry; replay/expiry fail closed. Document lease expiry retains binding/pin; only session/binding expiry destroys them. |
-| 5 — exclusive ownership and exact callers | `plan.md:97-114,126-133,147`; `contracts/browser-context-and-grants.md:36-57`; `research.md:25-33,59-65`; `quickstart.md:42-50` | Browser Binding Application exclusively owns binding persistence/state machine/focused tests and hands off to Auth, HTTP, composition, and UI. Migration registry and route registration remain exclusive; S1a creates the live config/script/bootstrap and S2 consumes it for scenario assertions only; shared mutation/domain and twelve-consumer handoffs remain unchanged. |
-| 6 — Book conjunction and R-C gates | `plan.md:8-10,57,69-95,121,133`; `contracts/mechanism-adaptation.md:25-31`; `research.md:75-79`; `quickstart.md:68` | Graph requires S2 **and** Rules for Book planning; full Feature011 for implementation. Current-slice matrix gates S2 while broader R-C gates only expansion claims. |
-| 7 — ordinary agent and normal watcher evidence | `quickstart.md:40-49`; `plan.md:8,63-64,121,132`; `contracts/mechanism-adaptation.md:20-23` | S2 runs ordinary installed agent plus browser/MCP, waits for semantic readiness, performs TS alias/re-export A change via normal watcher/reconcile, preserves B, and retains pinned old A View until explicit transition. |
-| 8 — finite r11 residual ledger | `research.md:81-90`; `plan.md:59-67,151-153`; `contracts/mechanism-adaptation.md:27-31` | Watcher classification, exact consumer tuple, provider readiness, Sonar administrator debt, Engram/nvmd-ai/NovaScript disposition, comparator availability, and preview/release boundary have owners and closure conditions without dates. |
+| Private design and curated promotion | Design-source owner | The current public snapshot/manifest is not hand-edited; promotion is the only snapshot writer. |
+| Existing binding application/store | Browser Binding owner | `browser_binding_application.go`, `browser_tab_binding_store.go`, and focused binding tests; hands its port to integration and does not edit handler/routes. |
+| Grant/catalog DTOs and browser onboarding | Browser onboarding/catalog owner | Does not edit `handlers_operator_code.go`, UCI query/graph/source policy, or shared registration. |
+| UCI structure/evidence contracts | UCI read-model owner; release owner for release mappings | Does not edit browser UI, handler/routes, or migration registry. |
+| Manual graph/book retirement | Retirement owner | Maps and preserves `internal/retrieval/hybrid.go` Tier2 `Traverse`, historical graph reads, `/api/context/search`, `internal/graph`, and UCI graph; supplies declarations but does not edit shared files. |
+| Shared handler, registration, and migration | Single integrator | Sole writer for `handlers_operator_code.go`, `service.go`, `uci_context.go`, `mcp/server.go`, and `migrations.go`; executes T006a journey wiring, then T006b retirement wiring serially after producer handoff. |
+| Home/NAV/Workspace UI/locales | Console workspace owner | Consumes the integrated DTOs; does not alter binding persistence, source authority, or retirement worker ownership. |
+
+DA01–DA05 may proceed in parallel only inside these writer zones. The same integrator executes DA06a journey wiring before DA06b retirement wiring; DA07 consumes DA06a. DA08a records journey proof after DA06a/DA07, DA08b records retirement proof after DA06b, and composite source acceptance requires both. Green child work does not prove D-A.
+
+## Requirements-to-surface map
+
+| Requirement group | Primary surfaces | Slice | Proof |
+|---|---|---|---|
+| FR-001–004, FR-007, FR-012 | Home/NAV, existing binding, catalog/grants, status/index intent, Workspace UI | DA02, DA04, DA06a, DA07, DA08a | Homepage discovery, readable identity, binding/grant/tab isolation, distinct readiness/permission states. |
+| FR-005–008 | UCI query/structure/graph/source descriptors, release, journey adapter, Workspace relation/source UI | DA05, DA06a, DA07, DA08a | Same-View source/relation/evidence, off-page neighbor, real-provider proof, no disclosure. |
+| FR-009–011 | Graph/book UI, HTTP/MCP admissions, worker startup, book status/storage, named retained readers | DA03, DA06b, DA08b | Single-container quiescence, idempotent failed-with-reason job, no old writer, and preserved Tier2/search/UCI readers. |
+| FR-013 | `.od` source, curated promotion, Workspace components/locales | DA01, DA07, DA08a | Design promotion and keyboard/narrow/RU-EN journey proof. |
+| FR-014 | Deployment/origin decision plus installed normal-homepage environment | Composite DA08a + DA08b | Source acceptance after both independent proofs; release stays closed pending decision and installed DA01–DA04 proof. |
+
+## Explicit omissions and open decision
+
+D-B collection organization/correction and D-C quality queue/Book Context are not tasks, prerequisites, or hidden acceptance for D-A. Existing Rules, Issues, Documents, and historical graph/book readers remain preserved surfaces; their new product capabilities need separately accepted scope.
+
+The only open D-A product decision is the supported browser/origin policy. DA08a and DA08b may record their independent exact-candidate proofs as soon as their dependencies are green; composite source acceptance is recorded only after both. The release gate remains closed until the decision and installed normal-homepage DA01–DA04 proof are recorded. This does not authorize a weaker ACL or block neutral source/read/retirement work.
+
+## Validation plan
+
+Implementation owners retain focused evidence only: existing binding-port tests; owner-grant/catalog tests; bounded UCI structure/evidence tests; single-container quiescence plus idempotent failed-with-reason residual-job proof; and retained-reader regressions. DA08a independently requires one real-provider non-lexical conceptual query over more than 50 candidates; lexical/degraded output is `NOT_PROVEN`. DA08b independently records the retirement/history lane. Composite source acceptance requires both, and release remains closed until the origin decision and installed DA01–DA04 proof. Mock interaction cannot prove discovery, provider behavior, watcher publication, owner execution, or installed acceptance. Broader suites, release, deployment, and Sonar remain outside this contract-amendment task.

@@ -24,6 +24,7 @@ import (
 	"github.com/thebtf/engram/internal/module/dispatcher"
 	"github.com/thebtf/engram/internal/module/lifecycle"
 	"github.com/thebtf/engram/internal/module/registry"
+	"github.com/thebtf/engram/internal/uci"
 	"github.com/thebtf/engram/internal/version"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
@@ -790,6 +791,21 @@ func TestProxyHandleToolUsesTransportTagForUCITools(t *testing.T) {
 	srv.mu.Unlock()
 	if requestAfterMissingTag != request {
 		t.Fatal("UCI proxy dispatched a request without a transport tag")
+	}
+	mod.ConfigureRegistrationParser()
+	registerArgs := json.RawMessage(`{"action":"register","source_label":"engram","locator":"file:///private/worktree"}`)
+	if _, err := mod.ProxyHandleTool(ctx, project, "codebase_context", registerArgs); err != nil {
+		t.Fatal(err)
+	}
+	srv.mu.Lock()
+	registered := srv.callReq
+	parserMetadata := srv.callMetadata.Copy()
+	srv.mu.Unlock()
+	if string(registered.GetArgumentsJson()) != string(registerArgs) {
+		t.Fatalf("registration arguments mutated: %s", registered.GetArgumentsJson())
+	}
+	if got := parserMetadata.Get("x-engram-verified-parser-bundle"); len(got) != 1 || got[0] != string(uci.TreeSitterBundleDigest()) {
+		t.Fatalf("verified parser metadata = %v", got)
 	}
 }
 

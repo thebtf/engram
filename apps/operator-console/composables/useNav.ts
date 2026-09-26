@@ -8,9 +8,9 @@
  * The consumer resolves them with t(). This keeps the nav structure (ids, routes, honesty)
  * language-independent — translating the menu means editing the dictionary, not this file.
  */
-import type { HonestyClass } from './useHonesty'
 import { computed } from 'vue'
-import { operatorFetchJson } from './useOperatorApi'
+import { endpointEvidence, operatorFetchJson, pendingState, type OperatorLoadState } from './useOperatorApi'
+import type { OperatorCandidate } from './useOperatorQueue'
 
 export interface NavItem {
  id: string
@@ -31,6 +31,7 @@ export const NAV: NavGroup[] = [
  {
   grpKey: 'workspace', items: [
    { id: 'overview', labelKey: 'overview', to: '/', cls: 'live' },
+   { id: 'code', labelKey: 'code', to: '/code', cls: 'live' },
    { id: 'search', labelKey: 'search', to: '/search', cls: 'live' },
   ]
  },
@@ -39,8 +40,6 @@ export const NAV: NavGroup[] = [
    { id: 'memory', labelKey: 'memory', to: '/memory', cls: 'live' },
    { id: 'queue', labelKey: 'queue', to: '/queue', cls: 'live' },
    { id: 'noise', labelKey: 'noise', to: '/noise', cls: 'live' },
-   { id: 'graph', labelKey: 'graph', to: '/graph', cls: 'live' },
-   { id: 'books', labelKey: 'books', to: '/books', cls: 'live' },
   ]
  },
  {
@@ -68,32 +67,33 @@ export const NAV: NavGroup[] = [
 /** Static structure with i18n KEYS. Use when you resolve labels yourself, or need the raw
  *  shape (routes, honesty class, ids) without a translation context. */
 export function useNav() {
- // Runtime flags are unknown until the request settles. A neutral stale dot is
- // deliberately less misleading than a green live dot for a gated feature.
- const graphClass = useState<Extract<HonestyClass, 'live' | 'dormant' | 'stale'>>('live:nav:graph-class', () => 'stale')
- const queueClass = useState<Extract<HonestyClass, 'live' | 'dormant' | 'stale'>>('live:nav:queue-class', () => 'stale')
- const graphStarted = useState<boolean>('live:nav:graph-started', () => false)
- if (import.meta.client && !graphStarted.value) {
-  graphStarted.value = true
-  void operatorFetchJson<{ flags?: Record<string, boolean> }>('/api/flags', undefined, 'navigation-flags')
-   .then((payload) => {
-    graphClass.value = payload.flags?.ENGRAM_GRAPH_ENABLED === true ? 'live' : 'dormant'
-    queueClass.value = payload.flags?.ENGRAM_VNEXT_F_ENABLED === true ? 'live' : 'dormant'
-   })
-   .catch(() => {
-    graphClass.value = 'stale'
-    queueClass.value = 'stale'
-   })
+ const queueState = useState<OperatorLoadState<OperatorCandidate[]>>('live:candidate-queue:state', () =>
+  pendingState(endpointEvidence('/api/memory/candidates?project={project}&status=pending&limit=100', 'candidate-queue', { flag: 'ENGRAM_VNEXT_F_ENABLED' })))
+ const flag = useState<boolean | null>('live:nav:queue-flag', () => null)
+ const flagStarted = useState<boolean>('live:nav:queue-flag-started', () => false)
+ if (import.meta.client && !flagStarted.value) {
+  flagStarted.value = true
+  void operatorFetchJson<{ flags?: Record<string, boolean> }>('/api/flags', undefined, 'nav-queue-flags')
+   .then((result) => { flag.value = result.flags?.ENGRAM_VNEXT_F_ENABLED ?? null })
+   .catch(() => { flag.value = null })
+ }
+ const classFor = (kind: string): NavItem['cls'] => {
+  if (kind === 'live' || kind === 'empty') return 'live'
+  if (kind === 'gated') return 'dormant'
+  if (kind === 'mustbuild') return 'mustbuild'
+  return 'stale'
  }
  const resolved = computed(() => NAV.map((group) => ({
   ...group,
-  items: group.items.map((item) => item.id === 'queue'
-   ? { ...item, cls: queueClass.value, evidence: queueClass.value === 'dormant' ? 'ENGRAM_VNEXT_F_ENABLED' : undefined }
-   : item.id === 'graph'
-    ? { ...item, cls: graphClass.value, evidence: graphClass.value === 'dormant' ? 'ENGRAM_GRAPH_ENABLED' : undefined }
-    : item),
+  items: group.items.map((item) => {
+   if (item.id !== 'queue') return item
+   const kind = queueState.value.kind === 'pending' || queueState.value.kind === 'error'
+    ? flag.value === false ? 'gated' : 'live'
+    : queueState.value.kind
+   return { ...item, cls: classFor(kind), evidence: kind === 'gated' ? 'ENGRAM_VNEXT_F_ENABLED' : undefined }
+  }),
  })))
- return { NAV: resolved, flat: computed(() => resolved.value.flatMap(g => g.items)) }
+ return { NAV: resolved, flat: computed(() => resolved.value.flatMap((group) => group.items)) }
 }
 
 

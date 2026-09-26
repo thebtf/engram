@@ -247,12 +247,9 @@ const (
 	Both     Direction = "both"
 )
 
-// ListByMemory returns active edges for a memory in the given direction.
-// Only memory-typed endpoints are matched: after migration 127, node-backed
-// edges have NULL source_id / target_id for the node endpoint. Without the
-// source_type / target_type filter a mixed edge (memory→node) would be
-// returned with a nil target, which Traverse/FindPath would dereference as 0
-// and explore a phantom memory ID 0. The discriminator filter prevents that.
+// ListByMemory returns active edges touching a memory-typed endpoint.
+// Mixed memory/node edges are included, but node endpoints carry NULL memory
+// IDs and must never be expanded as memory ID zero by traversal callers.
 func (s *Store) ListByMemory(ctx context.Context, memoryID int64, dir Direction, edgeType string) ([]Edge, error) {
 	q := s.db.WithContext(ctx).Where("superseded_at IS NULL")
 	switch dir {

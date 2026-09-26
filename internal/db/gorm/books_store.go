@@ -27,7 +27,10 @@ type BooksStore struct {
 	db *gormlib.DB
 }
 
-var _ booksdomain.Store = (*BooksStore)(nil)
+var (
+	_ booksdomain.Store            = (*BooksStore)(nil)
+	_ booksdomain.ResidualJobStore = (*BooksStore)(nil)
+)
 
 // NewBooksStore wraps the shared Store DB handle without opening a new pool.
 func NewBooksStore(store *Store) *BooksStore {
@@ -35,27 +38,6 @@ func NewBooksStore(store *Store) *BooksStore {
 		return &BooksStore{}
 	}
 	return &BooksStore{db: store.GetDB()}
-}
-
-// Create inserts a new books job in pending state.
-func (s *BooksStore) Create(ctx context.Context, sourceRef string) (*booksdomain.Job, error) {
-	if s == nil || s.db == nil {
-		return nil, fmt.Errorf("books_store: create: db not configured")
-	}
-
-	sourceRef = strings.TrimSpace(sourceRef)
-	if sourceRef == "" {
-		return nil, fmt.Errorf("books_store: create: source_ref required")
-	}
-
-	record := booksJobRecord{
-		Status:    string(booksdomain.StatusPending),
-		SourceRef: sourceRef,
-	}
-	if err := s.db.WithContext(ctx).Create(&record).Error; err != nil {
-		return nil, fmt.Errorf("books_store: create: %w", err)
-	}
-	return booksJobFromRecord(record), nil
 }
 
 // GetStatus reads one books job by id.
@@ -74,48 +56,28 @@ func (s *BooksStore) GetStatus(ctx context.Context, id int64) (*booksdomain.Job,
 	return booksJobFromRecord(record), nil
 }
 
-// UpdateStatus moves a books job between pending/processing/done/failed.
-func (s *BooksStore) UpdateStatus(ctx context.Context, id int64, status booksdomain.Status, errorMessage string) (*booksdomain.Job, error) {
+// RetireNonterminal preserves historical rows while marking only unfinished
+// legacy work failed. Repeating it leaves terminal rows unchanged.
+func (s *BooksStore) RetireNonterminal(ctx context.Context, reason string) (int64, error) {
 	if s == nil || s.db == nil {
-		return nil, fmt.Errorf("books_store: update status: db not configured")
+		return 0, fmt.Errorf("books_store: retire nonterminal: db not configured")
 	}
-	if id <= 0 {
-		return nil, fmt.Errorf("books_store: update status: invalid id %d", id)
+	reason = strings.TrimSpace(reason)
+	if reason != booksdomain.RetirementFailureReason {
+		return 0, fmt.Errorf("books_store: retire nonterminal: unexpected reason %q", reason)
 	}
-	if !isValidBookStatus(status) {
-		return nil, fmt.Errorf("books_store: update status: invalid status %q", status)
-	}
-
-	updates := map[string]any{
-		"status":     string(status),
-		"updated_at": time.Now().UTC(),
-	}
-	if status == booksdomain.StatusFailed {
-		updates["error"] = strings.TrimSpace(errorMessage)
-	} else {
-		updates["error"] = ""
-	}
-
 	result := s.db.WithContext(ctx).
 		Model(&booksJobRecord{}).
-		Where("id = ?", id).
-		Updates(updates)
+		Where("status IN ?", []string{string(booksdomain.StatusPending), string(booksdomain.StatusProcessing)}).
+		Updates(map[string]any{
+			"status":     string(booksdomain.StatusFailed),
+			"error":      reason,
+			"updated_at": time.Now().UTC(),
+		})
 	if result.Error != nil {
-		return nil, fmt.Errorf("books_store: update status: %w", result.Error)
+		return 0, fmt.Errorf("books_store: retire nonterminal: %w", result.Error)
 	}
-	if result.RowsAffected == 0 {
-		return nil, fmt.Errorf("books_store: update status: %w", gormlib.ErrRecordNotFound)
-	}
-	return s.GetStatus(ctx, id)
-}
-
-func isValidBookStatus(status booksdomain.Status) bool {
-	switch status {
-	case booksdomain.StatusPending, booksdomain.StatusProcessing, booksdomain.StatusDone, booksdomain.StatusFailed:
-		return true
-	default:
-		return false
-	}
+	return result.RowsAffected, nil
 }
 
 func booksJobFromRecord(record booksJobRecord) *booksdomain.Job {

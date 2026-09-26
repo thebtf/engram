@@ -21,6 +21,8 @@ const (
 	BrowserReadGrantExpired BrowserReadGrantState = "expired"
 )
 
+const browserReadGrantOwnerChoiceMax = 128
+
 var (
 	// ErrBrowserReadGrantDenied intentionally does not distinguish absent, foreign,
 	// disabled, or expired grant state.
@@ -56,6 +58,93 @@ type BrowserReadGrantIssue struct {
 	ExpiresAt       *time.Time
 }
 
+// BrowserReadGrantOwnerChoice is a server-issued, opaque checkout choice for
+// owner onboarding. Labels are presentation only; ChoiceRef is resolved again
+// with the exact owner predicate before every mutation.
+type BrowserReadGrantOwnerChoice struct {
+	ChoiceRef        string `gorm:"column:choice_ref"`
+	RepositoryLabel  string `gorm:"column:repository_label"`
+	WorkingCopyLabel string `gorm:"column:working_copy_label"`
+}
+
+// BrowserReadGrantTargetChoice is a persisted enabled human offered to an exact owner.
+type BrowserReadGrantTargetChoice struct {
+	UserID int64  `gorm:"column:id"`
+	Label  string `gorm:"column:email"`
+}
+
+// BrowserReadGrantOwnerIssue creates a grant from one owner-catalog choice
+// without accepting a browser-supplied Source or Checkout identifier.
+type BrowserReadGrantOwnerIssue struct {
+	IssuerUserID    int64
+	IssuerPrincipal string
+	TargetUserID    int64
+	ChoiceRef       string
+	ExpiresAt       *time.Time
+}
+
+// BrowserReadGrantOwnerEntry is an effective grant with presentation-only labels.
+type BrowserReadGrantOwnerEntry struct {
+	GrantRef    string     `gorm:"column:grant_ref"`
+	ExpiresAt   *time.Time `gorm:"column:expires_at"`
+	Repository  string     `gorm:"column:repository"`
+	WorkingCopy string     `gorm:"column:working_copy"`
+	Reader      string     `gorm:"column:reader"`
+}
+
+const browserReadGrantInventoryPageMax = 50
+
+// ListOwnerActive lists effective grants issued by the exact current checkout
+// owner while that issuer remains enabled. after is a keyset position, never authority.
+func (s *BrowserReadGrantStore) ListOwnerActive(ctx context.Context, issuerUserID int64, issuerPrincipal, after string, limit int) ([]BrowserReadGrantOwnerEntry, error) {
+	if err := validateBrowserReadGrantIssuer(ctx, issuerUserID, issuerPrincipal); err != nil {
+		return nil, err
+	}
+	if limit < 1 || limit > browserReadGrantInventoryPageMax || (after != "" && validateUCIUUID("grant_ref", after) != nil) {
+		return nil, ErrBrowserReadGrantDenied
+	}
+	if err := s.requireDB("list owner grants"); err != nil {
+		return nil, err
+	}
+	if err := loadEnabledBrowserGrantUser(ctx, s.db, issuerUserID); err != nil {
+		return nil, err
+	}
+	rows := make([]BrowserReadGrantOwnerEntry, 0)
+	err := s.db.WithContext(ctx).Raw(`
+		SELECT browser_grant.grant_ref, browser_grant.expires_at,
+			source.display_name AS repository,
+			COALESCE(checkout.display_name, '') AS working_copy,
+			reader.email AS reader
+		FROM browser_read_grants AS browser_grant
+		JOIN sources AS source ON source.source_id = browser_grant.source_id AND source.auth_realm = browser_grant.auth_realm
+		JOIN ci_checkouts AS checkout ON checkout.checkout_id = browser_grant.checkout_id AND checkout.source_id = browser_grant.source_id
+		JOIN users AS reader ON reader.id = browser_grant.subject_user_id
+		JOIN users AS issuer ON issuer.id = ? AND issuer.disabled = FALSE
+		WHERE checkout.owner_principal = ? AND browser_grant.issuer_principal = checkout.owner_principal
+			AND browser_grant.issuer_principal = ('browser-user/' || issuer.id::text)
+			AND source.state = ? AND checkout.state IN (?, ?, ?) AND reader.disabled = FALSE
+			AND browser_grant.state = ? AND (browser_grant.expires_at IS NULL OR browser_grant.expires_at > ?)
+			AND browser_grant.grant_ref > ?::uuid
+		ORDER BY browser_grant.grant_ref ASC LIMIT ?
+	`, issuerUserID, issuerPrincipal, UCISourceActive, UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp, BrowserReadGrantActive, time.Now().UTC(), uuidOrZero(after), limit).Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("browser read grant owner inventory: %w", err)
+	}
+	for _, row := range rows {
+		if validateUCIUUID("grant_ref", row.GrantRef) != nil || !validUCIContextDisplayLabel(row.Repository) || !validBrowserCodeCheckoutDisplayLabel(row.WorkingCopy) || !validUCIContextDisplayLabel(row.Reader) {
+			return nil, ErrBrowserReadGrantDenied
+		}
+	}
+	return rows, nil
+}
+
+func uuidOrZero(value string) string {
+	if value == "" {
+		return "00000000-0000-0000-0000-000000000000"
+	}
+	return value
+}
+
 // BrowserReadGrantStore is the only persistence owner for browser code-read grants.
 type BrowserReadGrantStore struct {
 	db *gorm.DB
@@ -76,13 +165,11 @@ func (s *BrowserReadGrantStore) Issue(ctx context.Context, in BrowserReadGrantIs
 		return BrowserReadGrant{}, err
 	}
 
-	now := time.Now().UTC()
 	var result BrowserReadGrant
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := loadEnabledBrowserGrantUser(ctx, tx, in.IssuerUserID); err != nil {
 			return err
 		}
-
 		tuple, err := loadBrowserReadGrantTuple(ctx, tx, in.SourceID, in.CheckoutID)
 		if err != nil {
 			return err
@@ -90,61 +177,206 @@ func (s *BrowserReadGrantStore) Issue(ctx context.Context, in BrowserReadGrantIs
 		if tuple.OwnerPrincipal != in.IssuerPrincipal {
 			return ErrBrowserReadGrantDenied
 		}
-		if err := loadEnabledBrowserGrantUser(ctx, tx, in.TargetUserID); err != nil {
-			return err
-		}
-
-		var grant BrowserReadGrant
-		err = tx.WithContext(ctx).
-			Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("auth_realm = ? AND subject_user_id = ? AND source_id = ? AND checkout_id = ?", tuple.AuthRealm, in.TargetUserID, in.SourceID, in.CheckoutID).
-			First(&grant).Error
-		switch {
-		case errors.Is(err, gorm.ErrRecordNotFound):
-			grant = BrowserReadGrant{
-				GrantRef:        uuid.NewString(),
-				AuthRealm:       tuple.AuthRealm,
-				SubjectUserID:   in.TargetUserID,
-				SourceID:        in.SourceID,
-				CheckoutID:      in.CheckoutID,
-				State:           BrowserReadGrantActive,
-				IssuerPrincipal: in.IssuerPrincipal,
-				ExpiresAt:       copyBrowserReadGrantExpiry(in.ExpiresAt),
-				IssuedAt:        now,
-				CreatedAt:       now,
-				UpdatedAt:       now,
-			}
-			if err := tx.WithContext(ctx).Create(&grant).Error; err != nil {
-				return fmt.Errorf("browser read grant issue create: %w", err)
-			}
-		case err != nil:
-			return fmt.Errorf("browser read grant issue lookup: %w", err)
-		default:
-			grant.State = BrowserReadGrantActive
-			grant.IssuerPrincipal = in.IssuerPrincipal
-			grant.ExpiresAt = copyBrowserReadGrantExpiry(in.ExpiresAt)
-			grant.IssuedAt = now
-			grant.RevokedAt = nil
-			grant.UpdatedAt = now
-			if err := tx.WithContext(ctx).Save(&grant).Error; err != nil {
-				return fmt.Errorf("browser read grant issue restore: %w", err)
-			}
-		}
-
-		if err := NewAuditStore(tx).LogTx(ctx, tx, AuditLogEntry{
-			Action: "code_grant_issued",
-			Actor:  in.IssuerPrincipal,
-			Reason: browserReadGrantAuditReason(grant),
-		}); err != nil {
-			return fmt.Errorf("browser read grant issue audit: %w", err)
-		}
-		result = grant
-		return nil
+		result, err = issueBrowserReadGrant(ctx, tx, tuple, in, time.Now().UTC())
+		return err
 	})
 	if err != nil {
 		return BrowserReadGrant{}, err
 	}
 	return result, nil
+}
+
+// IssueOwnerChoice creates or restores a grant from an owner catalog choice.
+// The choice is re-resolved and locked with the exact persisted owner before
+// the grant and audit write commit together.
+func (s *BrowserReadGrantStore) IssueOwnerChoice(ctx context.Context, in BrowserReadGrantOwnerIssue) (BrowserReadGrant, error) {
+	if err := validateBrowserReadGrantOwnerIssue(ctx, in); err != nil {
+		return BrowserReadGrant{}, err
+	}
+	if err := s.requireDB("issue owner choice"); err != nil {
+		return BrowserReadGrant{}, err
+	}
+
+	var result BrowserReadGrant
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := loadEnabledBrowserGrantUser(ctx, tx, in.IssuerUserID); err != nil {
+			return err
+		}
+		choice, err := loadBrowserReadGrantOwnerChoice(ctx, tx, in.IssuerPrincipal, in.ChoiceRef, true)
+		if err != nil {
+			return err
+		}
+		result, err = issueBrowserReadGrant(ctx, tx, browserReadGrantTuple{AuthRealm: choice.AuthRealm, OwnerPrincipal: in.IssuerPrincipal}, BrowserReadGrantIssue{
+			IssuerUserID:    in.IssuerUserID,
+			IssuerPrincipal: in.IssuerPrincipal,
+			TargetUserID:    in.TargetUserID,
+			SourceID:        choice.SourceID,
+			CheckoutID:      choice.ChoiceRef,
+			ExpiresAt:       in.ExpiresAt,
+		}, time.Now().UTC())
+		return err
+	})
+	if err != nil {
+		return BrowserReadGrant{}, err
+	}
+	return result, nil
+}
+
+// ListOwnerChoices lists only active source/checkouts whose persisted owner is
+// the exact canonical browser issuer. Returned ChoiceRef values are opaque to
+// the onboarding transport and never authorize by themselves.
+func (s *BrowserReadGrantStore) ListOwnerChoices(ctx context.Context, issuerUserID int64, issuerPrincipal string) ([]BrowserReadGrantOwnerChoice, error) {
+	if err := validateBrowserReadGrantIssuer(ctx, issuerUserID, issuerPrincipal); err != nil {
+		return nil, err
+	}
+	if err := s.requireDB("list owner choices"); err != nil {
+		return nil, err
+	}
+	if err := loadEnabledBrowserGrantUser(ctx, s.db, issuerUserID); err != nil {
+		return nil, err
+	}
+
+	rows := make([]BrowserReadGrantOwnerChoice, 0)
+	result := s.db.WithContext(ctx).Raw(`
+		SELECT
+			checkout.checkout_id AS choice_ref,
+			source.display_name AS repository_label,
+			COALESCE(checkout.display_name, '') AS working_copy_label
+		FROM ci_checkouts AS checkout
+		JOIN sources AS source ON source.source_id = checkout.source_id
+		WHERE checkout.owner_principal = ?
+			AND source.state = ?
+			AND checkout.state IN (?, ?, ?)
+		ORDER BY source.display_name ASC, checkout.created_at ASC, checkout.checkout_id ASC
+		LIMIT ?
+	`, issuerPrincipal, UCISourceActive, UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp, browserReadGrantOwnerChoiceMax+1).Scan(&rows)
+	if result.Error != nil {
+		return nil, fmt.Errorf("browser read grant owner choices: %w", result.Error)
+	}
+	if len(rows) > browserReadGrantOwnerChoiceMax {
+		rows = rows[:browserReadGrantOwnerChoiceMax]
+	}
+	for _, row := range rows {
+		if !validBrowserReadGrantOwnerChoice(row) {
+			return nil, ErrBrowserReadGrantDenied
+		}
+	}
+	return rows, nil
+}
+
+// ListTargetChoices offers enabled human accounts only to an owner with a grantable checkout.
+// Users are global dashboard identities; the selected checkout supplies the grant realm.
+func (s *BrowserReadGrantStore) ListTargetChoices(ctx context.Context, issuerUserID int64, issuerPrincipal string) ([]BrowserReadGrantTargetChoice, error) {
+	choices, err := s.ListOwnerChoices(ctx, issuerUserID, issuerPrincipal)
+	if err != nil {
+		return nil, err
+	}
+	if len(choices) == 0 {
+		return []BrowserReadGrantTargetChoice{}, nil
+	}
+	var targets []BrowserReadGrantTargetChoice
+	if err := s.db.WithContext(ctx).Table("users").Select("id, email").Where("disabled = FALSE").Order("email ASC, id ASC").Find(&targets).Error; err != nil {
+		return nil, fmt.Errorf("browser read grant target choices: %w", err)
+	}
+	return targets, nil
+}
+
+// SetOwnerChoiceLabel records validated, non-authorizing working-copy metadata
+// only after the exact persisted source-owner predicate succeeds. Audit failure
+// leaves the prior metadata unchanged.
+func (s *BrowserReadGrantStore) SetOwnerChoiceLabel(ctx context.Context, issuerUserID int64, issuerPrincipal, choiceRef, label string) (BrowserReadGrantOwnerChoice, error) {
+	if err := validateBrowserReadGrantIssuer(ctx, issuerUserID, issuerPrincipal); err != nil || !validBrowserReadGrantOwnerChoiceRef(choiceRef) || label == "" || !validBrowserCodeCheckoutDisplayLabel(label) {
+		return BrowserReadGrantOwnerChoice{}, ErrBrowserReadGrantDenied
+	}
+	if err := s.requireDB("set owner choice label"); err != nil {
+		return BrowserReadGrantOwnerChoice{}, err
+	}
+
+	var result BrowserReadGrantOwnerChoice
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := loadEnabledBrowserGrantUser(ctx, tx, issuerUserID); err != nil {
+			return err
+		}
+		choice, err := loadBrowserReadGrantOwnerChoice(ctx, tx, issuerPrincipal, choiceRef, true)
+		if err != nil {
+			return err
+		}
+		updated := tx.WithContext(ctx).Model(&UCICheckout{}).Where("checkout_id = ? AND source_id = ? AND owner_principal = ?", choice.ChoiceRef, choice.SourceID, issuerPrincipal).Updates(map[string]any{
+			"display_name": label,
+			"updated_at":   time.Now().UTC(),
+		})
+		if updated.Error != nil {
+			return fmt.Errorf("browser read grant owner label: %w", updated.Error)
+		}
+		if updated.RowsAffected != 1 {
+			return ErrBrowserReadGrantDenied
+		}
+		result = BrowserReadGrantOwnerChoice{ChoiceRef: choice.ChoiceRef, RepositoryLabel: choice.RepositoryLabel, WorkingCopyLabel: label}
+		if err := NewAuditStore(tx).LogTx(ctx, tx, AuditLogEntry{
+			Action: "code_checkout_labeled",
+			Actor:  issuerPrincipal,
+			Reason: "checkout_ref=" + choice.ChoiceRef,
+		}); err != nil {
+			return fmt.Errorf("browser read grant owner label audit: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return BrowserReadGrantOwnerChoice{}, err
+	}
+	return result, nil
+}
+
+func issueBrowserReadGrant(ctx context.Context, tx *gorm.DB, tuple browserReadGrantTuple, in BrowserReadGrantIssue, now time.Time) (BrowserReadGrant, error) {
+	if err := loadEnabledBrowserGrantUser(ctx, tx, in.TargetUserID); err != nil {
+		return BrowserReadGrant{}, err
+	}
+
+	var grant BrowserReadGrant
+	err := tx.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("auth_realm = ? AND subject_user_id = ? AND source_id = ? AND checkout_id = ?", tuple.AuthRealm, in.TargetUserID, in.SourceID, in.CheckoutID).
+		First(&grant).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		grant = BrowserReadGrant{
+			GrantRef:        uuid.NewString(),
+			AuthRealm:       tuple.AuthRealm,
+			SubjectUserID:   in.TargetUserID,
+			SourceID:        in.SourceID,
+			CheckoutID:      in.CheckoutID,
+			State:           BrowserReadGrantActive,
+			IssuerPrincipal: in.IssuerPrincipal,
+			ExpiresAt:       copyBrowserReadGrantExpiry(in.ExpiresAt),
+			IssuedAt:        now,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}
+		if err := tx.WithContext(ctx).Create(&grant).Error; err != nil {
+			return BrowserReadGrant{}, fmt.Errorf("browser read grant issue create: %w", err)
+		}
+	case err != nil:
+		return BrowserReadGrant{}, fmt.Errorf("browser read grant issue lookup: %w", err)
+	default:
+		grant.State = BrowserReadGrantActive
+		grant.IssuerPrincipal = in.IssuerPrincipal
+		grant.ExpiresAt = copyBrowserReadGrantExpiry(in.ExpiresAt)
+		grant.IssuedAt = now
+		grant.RevokedAt = nil
+		grant.UpdatedAt = now
+		if err := tx.WithContext(ctx).Save(&grant).Error; err != nil {
+			return BrowserReadGrant{}, fmt.Errorf("browser read grant issue restore: %w", err)
+		}
+	}
+
+	if err := NewAuditStore(tx).LogTx(ctx, tx, AuditLogEntry{
+		Action: "code_grant_issued",
+		Actor:  in.IssuerPrincipal,
+		Reason: browserReadGrantAuditReason(grant),
+	}); err != nil {
+		return BrowserReadGrant{}, fmt.Errorf("browser read grant issue audit: %w", err)
+	}
+	return grant, nil
 }
 
 // Revoke transitions one grant after rechecking that the requester remains the exact source owner.
@@ -201,8 +433,8 @@ func (s *BrowserReadGrantStore) Revoke(ctx context.Context, issuerUserID int64, 
 	return result, nil
 }
 
-// Current returns the subject's one active, unexpired grant. It intentionally
-// treats zero and multiple grants as the same unselected result.
+// Current returns the subject's one active, unexpired grant from its enabled
+// current checkout owner. Zero and multiple grants are equally unselected.
 func (s *BrowserReadGrantStore) Current(ctx context.Context, subjectUserID int64) (BrowserReadGrant, bool, error) {
 	if ctx == nil {
 		return BrowserReadGrant{}, false, fmt.Errorf("browser read grant current: context is required")
@@ -227,7 +459,8 @@ func (s *BrowserReadGrantStore) Current(ctx context.Context, subjectUserID int64
 		Joins("JOIN sources AS source ON source.source_id = browser_grant.source_id AND source.auth_realm = browser_grant.auth_realm").
 		Joins("JOIN ci_checkouts AS checkout ON checkout.checkout_id = browser_grant.checkout_id AND checkout.source_id = browser_grant.source_id").
 		Joins("JOIN users AS subject ON subject.id = browser_grant.subject_user_id").
-		Where("browser_grant.subject_user_id = ? AND browser_grant.state = ? AND (browser_grant.expires_at IS NULL OR browser_grant.expires_at > ?) AND subject.disabled = FALSE", subjectUserID, BrowserReadGrantActive, now).
+		Joins("JOIN users AS issuer ON browser_grant.issuer_principal = ('browser-user/' || issuer.id::text) AND issuer.disabled = FALSE").
+		Where("browser_grant.subject_user_id = ? AND browser_grant.state = ? AND (browser_grant.expires_at IS NULL OR browser_grant.expires_at > ?) AND subject.disabled = FALSE AND checkout.owner_principal = browser_grant.issuer_principal", subjectUserID, BrowserReadGrantActive, now).
 		Limit(2).
 		Find(&grants).Error
 	if err != nil {
@@ -239,9 +472,8 @@ func (s *BrowserReadGrantStore) Current(ctx context.Context, subjectUserID int64
 	return grants[0], true, nil
 }
 
-// Active returns one exact active grant, including its issuance epoch. Unlike
-// Current, it remains well-defined when the subject holds grants for several
-// checkouts and is therefore the only grant lookup suitable for a pinned tab.
+// Active returns one exact effective grant and its issuance epoch, rejecting
+// transferred ownership or disabled issuers before a pinned tab can read.
 func (s *BrowserReadGrantStore) Active(ctx context.Context, subjectUserID int64, sourceID, checkoutID string) (BrowserReadGrant, bool, error) {
 	if ctx == nil {
 		return BrowserReadGrant{}, false, fmt.Errorf("browser read grant active: context is required")
@@ -263,8 +495,9 @@ func (s *BrowserReadGrantStore) Active(ctx context.Context, subjectUserID int64,
 		Joins("JOIN sources AS source ON source.source_id = browser_grant.source_id AND source.auth_realm = browser_grant.auth_realm").
 		Joins("JOIN ci_checkouts AS checkout ON checkout.checkout_id = browser_grant.checkout_id AND checkout.source_id = browser_grant.source_id").
 		Joins("JOIN users AS subject ON subject.id = browser_grant.subject_user_id").
+		Joins("JOIN users AS issuer ON browser_grant.issuer_principal = ('browser-user/' || issuer.id::text) AND issuer.disabled = FALSE").
 		Where("browser_grant.subject_user_id = ? AND browser_grant.source_id = ? AND browser_grant.checkout_id = ?", subjectUserID, sourceID, checkoutID).
-		Where("browser_grant.state = ? AND (browser_grant.expires_at IS NULL OR browser_grant.expires_at > ?) AND subject.disabled = FALSE", BrowserReadGrantActive, now).
+		Where("browser_grant.state = ? AND (browser_grant.expires_at IS NULL OR browser_grant.expires_at > ?) AND subject.disabled = FALSE AND checkout.owner_principal = browser_grant.issuer_principal", BrowserReadGrantActive, now).
 		First(&grant)
 	if result.Error == nil {
 		return grant, true, nil
@@ -298,6 +531,47 @@ func (s *BrowserReadGrantStore) expireDue(ctx context.Context, subjectUserID int
 type browserReadGrantTuple struct {
 	AuthRealm      string `gorm:"column:auth_realm"`
 	OwnerPrincipal string `gorm:"column:owner_principal"`
+}
+
+type browserReadGrantOwnerChoiceRow struct {
+	ChoiceRef        string `gorm:"column:choice_ref"`
+	SourceID         string `gorm:"column:source_id"`
+	AuthRealm        string `gorm:"column:auth_realm"`
+	RepositoryLabel  string `gorm:"column:repository_label"`
+	WorkingCopyLabel string `gorm:"column:working_copy_label"`
+}
+
+func loadBrowserReadGrantOwnerChoice(ctx context.Context, tx *gorm.DB, issuerPrincipal, choiceRef string, lock bool) (browserReadGrantOwnerChoiceRow, error) {
+	query := `
+		SELECT
+			checkout.checkout_id AS choice_ref,
+			source.source_id,
+			source.auth_realm,
+			source.display_name AS repository_label,
+			COALESCE(checkout.display_name, '') AS working_copy_label
+		FROM ci_checkouts AS checkout
+		JOIN sources AS source ON source.source_id = checkout.source_id
+		WHERE checkout.checkout_id = ?
+			AND checkout.owner_principal = ?
+			AND source.state = ?
+			AND checkout.state IN (?, ?, ?)`
+	if lock {
+		query += " FOR UPDATE OF checkout"
+	}
+
+	var row browserReadGrantOwnerChoiceRow
+	result := tx.WithContext(ctx).Raw(query, choiceRef, issuerPrincipal, UCISourceActive, UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp).Scan(&row)
+	if result.Error != nil {
+		return browserReadGrantOwnerChoiceRow{}, fmt.Errorf("browser read grant owner choice: %w", result.Error)
+	}
+	if result.RowsAffected != 1 || validateUCIUUID("source_id", row.SourceID) != nil || !isBrowserReadGrantText(row.AuthRealm) || !validBrowserReadGrantOwnerChoice(BrowserReadGrantOwnerChoice{
+		ChoiceRef:        row.ChoiceRef,
+		RepositoryLabel:  row.RepositoryLabel,
+		WorkingCopyLabel: row.WorkingCopyLabel,
+	}) {
+		return browserReadGrantOwnerChoiceRow{}, ErrBrowserReadGrantDenied
+	}
+	return row, nil
 }
 
 func loadBrowserReadGrantTuple(ctx context.Context, tx *gorm.DB, sourceID, checkoutID string) (browserReadGrantTuple, error) {
@@ -348,17 +622,45 @@ func validateBrowserReadGrantIssue(ctx context.Context, in BrowserReadGrantIssue
 	return nil
 }
 
-func validateBrowserReadGrantRequest(ctx context.Context, issuerUserID int64, issuerPrincipal, opaqueRef string) error {
+func validateBrowserReadGrantOwnerIssue(ctx context.Context, in BrowserReadGrantOwnerIssue) error {
+	if err := validateBrowserReadGrantIssuer(ctx, in.IssuerUserID, in.IssuerPrincipal); err != nil {
+		return err
+	}
+	if in.TargetUserID <= 0 || !validBrowserReadGrantOwnerChoiceRef(in.ChoiceRef) || (in.ExpiresAt != nil && !in.ExpiresAt.After(time.Now().UTC())) {
+		return ErrBrowserReadGrantDenied
+	}
+	return nil
+}
+
+func validateBrowserReadGrantIssuer(ctx context.Context, issuerUserID int64, issuerPrincipal string) error {
 	if ctx == nil {
 		return fmt.Errorf("browser read grant: context is required")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if issuerUserID <= 0 || !isBrowserReadGrantText(issuerPrincipal) || !isBrowserReadGrantText(opaqueRef) {
+	if issuerUserID <= 0 || !isBrowserReadGrantText(issuerPrincipal) {
 		return ErrBrowserReadGrantDenied
 	}
 	return nil
+}
+
+func validateBrowserReadGrantRequest(ctx context.Context, issuerUserID int64, issuerPrincipal, opaqueRef string) error {
+	if err := validateBrowserReadGrantIssuer(ctx, issuerUserID, issuerPrincipal); err != nil {
+		return err
+	}
+	if !isBrowserReadGrantText(opaqueRef) {
+		return ErrBrowserReadGrantDenied
+	}
+	return nil
+}
+
+func validBrowserReadGrantOwnerChoice(choice BrowserReadGrantOwnerChoice) bool {
+	return validBrowserReadGrantOwnerChoiceRef(choice.ChoiceRef) && validUCIContextDisplayLabel(choice.RepositoryLabel) && validBrowserCodeCheckoutDisplayLabel(choice.WorkingCopyLabel)
+}
+
+func validBrowserReadGrantOwnerChoiceRef(value string) bool {
+	return validateUCIUUID("checkout_id", value) == nil
 }
 
 func isBrowserReadGrantText(value string) bool {

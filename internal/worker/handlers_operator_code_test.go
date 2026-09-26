@@ -3,10 +3,13 @@ package worker
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,13 +93,13 @@ func TestOperatorCodeHTTPAdapter_ReleasesFiveBoundEndpoints(t *testing.T) {
 			assertResponse: func(t *testing.T, body string) {
 				t.Helper()
 				require.Contains(t, body, `"contexts":[{`)
-				require.Contains(t, body, `"source":{"id":"`+operatorCodeHTTPTestSourceID+`","label":"engram source"}`)
-				require.Contains(t, body, `"checkout":{"id":"`+operatorCodeHTTPTestCheckoutID+`","label":"working_tree · `+operatorCodeHTTPTestCheckoutID+`"}`)
-				require.Contains(t, body, `"view":{"context_ref":`)
-				require.NotContains(t, body, "proof-current")
-				require.NotContains(t, body, "grant_ref")
-				require.NotContains(t, body, "nonce")
-				require.NotContains(t, body, "digest")
+				require.Contains(t, body, `"repository":"Engram"`)
+				require.Contains(t, body, `"working_copy":"Studio workstation · release candidate"`)
+				require.Contains(t, body, `"selection_ref":"`)
+				require.Contains(t, body, `"view_ref":"`)
+				for _, forbidden := range []string{operatorCodeHTTPTestSourceID, operatorCodeHTTPTestCheckoutID, operatorCodeHTTPTestViewID, "proof-current", "grant_ref", "nonce", "digest"} {
+					require.NotContains(t, body, forbidden)
+				}
 			},
 		},
 	} {
@@ -127,36 +130,104 @@ func TestOperatorCodeHTTPAdapter_CatalogKeepsWorktreesExplicitAndNoViewUnselecte
 	second := fixture.ref.Clone()
 	second.CheckoutID = "30000000-0000-4000-8000-000000000002"
 	second.ViewID = "40000000-0000-4000-8000-000000000002"
+	noViewCheckout := "30000000-0000-4000-8000-000000000003"
+	otherSource := second.Clone()
+	otherSource.SourceID = "20000000-0000-4000-8000-000000000002"
+	otherSource.CheckoutID = "30000000-0000-4000-8000-000000000004"
+	otherSource.ViewID = "40000000-0000-4000-8000-000000000004"
 	fixture.contexts.entries = append(fixture.contexts.entries,
-		gormdb.BrowserCodeContextCatalogEntry{
-			SourceID:      second.SourceID,
-			SourceLabel:   "engram source",
-			CheckoutID:    second.CheckoutID,
-			CheckoutLabel: "working_tree · " + second.CheckoutID,
-			Context:       &second,
-			ViewLabel:     "feature/api",
-		},
-		gormdb.BrowserCodeContextCatalogEntry{
-			SourceID:             fixture.ref.SourceID,
-			SourceLabel:          "engram source",
-			CheckoutID:           "30000000-0000-4000-8000-000000000003",
-			CheckoutLabel:        "working_tree · 30000000-0000-4000-8000-000000000003",
-			IndexIntentAvailable: true,
-		},
+		gormdb.BrowserCodeContextCatalogEntry{SourceID: second.SourceID, SourceLabel: "Engram", CheckoutID: second.CheckoutID, CheckoutLabel: "Studio workstation · release candidate", Context: &second, ViewLabel: "feature/api"},
+		gormdb.BrowserCodeContextCatalogEntry{SourceID: fixture.ref.SourceID, SourceLabel: "Engram", CheckoutID: noViewCheckout, CheckoutLabel: "Studio workstation · release candidate", IndexIntentAvailable: true},
+		gormdb.BrowserCodeContextCatalogEntry{SourceID: otherSource.SourceID, SourceLabel: "Engram", CheckoutID: otherSource.CheckoutID, CheckoutLabel: "Studio workstation · release candidate", Context: &otherSource, ViewLabel: "feature/api"},
 	)
 	recorder := httptest.NewRecorder()
 	adapter.HandleContexts(recorder, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current"}`, fixture.identity))
 
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	require.Contains(t, recorder.Body.String(), second.CheckoutID)
-	require.Contains(t, recorder.Body.String(), second.ViewID)
-	require.Contains(t, recorder.Body.String(), `"view":null,"index_intent_available":true,"analysis_profile_id":"`+operatorCodeHTTPTestProfileID+`"`)
-	require.NotContains(t, recorder.Body.String(), "grant_ref")
+	require.Contains(t, recorder.Body.String(), `"working_copy":"Studio workstation · release candidate"`)
+	require.Contains(t, recorder.Body.String(), `"indexed_snapshot":{"label":"feature/api"}`)
+	require.Contains(t, recorder.Body.String(), `"index_intent_available":true,"index_intent_selection_ref":"`)
+	var catalog operatorCodeContextsResponse
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &catalog))
+	require.Len(t, catalog.Contexts, 4)
+	require.Empty(t, catalog.Contexts[2].ViewRef)
+	require.NotEmpty(t, catalog.Contexts[0].ViewRef)
+	require.NotEqual(t, catalog.Contexts[0].ViewRef, catalog.Contexts[1].ViewRef)
+	require.Equal(t, catalog.Contexts[0].SourceRef, catalog.Contexts[1].SourceRef)
+	require.NotEqual(t, catalog.Contexts[0].SourceRef, catalog.Contexts[3].SourceRef)
+	for i := 0; i < len(catalog.Contexts); i++ {
+		require.NotEmpty(t, catalog.Contexts[i].CheckoutRef)
+		for j := i + 1; j < len(catalog.Contexts); j++ {
+			require.NotEqual(t, catalog.Contexts[i].CheckoutRef, catalog.Contexts[j].CheckoutRef)
+		}
+	}
+	for _, forbidden := range []string{second.CheckoutID, second.ViewID, noViewCheckout, otherSource.SourceID, otherSource.CheckoutID, otherSource.ViewID, operatorCodeHTTPTestProfileID, "grant_ref"} {
+		require.NotContains(t, recorder.Body.String(), forbidden)
+	}
+}
+
+func TestOperatorCodeHTTPAdapter_ViewRefStableOnlyForExactSubjectAndView(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	identity := operatorCodeHTTPTestChoiceIdentity(fixture)
+	entries := fixture.contexts.entries
+	first, ok := adapter.operatorCodeCatalogEntries(identity, entries, nil)
+	require.True(t, ok)
+	require.NotEmpty(t, first[0].ViewRef)
+	require.NotEqual(t, first[0].ViewRef, first[0].SelectionRef)
+
+	entries[0].SourceLabel = "renamed repository"
+	entries[0].CheckoutLabel = "renamed checkout"
+	entries[0].ViewLabel = "renamed view"
+	second, ok := adapter.operatorCodeCatalogEntries(identity, entries, nil)
+	require.True(t, ok)
+	require.Equal(t, first[0].ViewRef, second[0].ViewRef)
+	require.NotEqual(t, first[0].SelectionRef, second[0].SelectionRef)
+
+	reloaded := identity
+	reloaded.sessionID = "another-browser-session"
+	afterReload, ok := adapter.operatorCodeCatalogEntries(reloaded, entries, nil)
+	require.True(t, ok)
+	require.Equal(t, first[0].ViewRef, afterReload[0].ViewRef)
+	require.NotEqual(t, first[0].SelectionRef, afterReload[0].SelectionRef)
+	request := operatorCodeHTTPTestRequest(t, `{"document_proof":"proof-current","selection_ref":"`+first[0].ViewRef+`"}`, fixture.identity)
+	path := chi.NewRouteContext()
+	path.URLParams.Add("tab_binding_id", operatorCodeHTTPTestBindingID)
+	request = request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, path))
+	rejected := httptest.NewRecorder()
+	adapter.HandlePin(rejected, request)
+	require.Equal(t, http.StatusBadRequest, rejected.Code)
+	require.Empty(t, fixture.binding.pinnedTo)
+
+	changed := *entries[0].Context
+	changed.Generation++
+	entries[0].Context = &changed
+	third, ok := adapter.operatorCodeCatalogEntries(identity, entries, nil)
+	require.True(t, ok)
+	require.NotEqual(t, first[0].ViewRef, third[0].ViewRef)
+	changed.Generation--
+	changed.ViewID = uuid.NewString()
+	entries[0].Context = &changed
+	fourth, ok := adapter.operatorCodeCatalogEntries(identity, entries, nil)
+	require.True(t, ok)
+	require.NotEqual(t, first[0].ViewRef, fourth[0].ViewRef)
+
+	changed.ViewID = fixture.ref.ViewID
+	changed.AnalysisProfileID = uuid.NewString()
+	entries[0].Context = &changed
+	profile, ok := adapter.operatorCodeCatalogEntries(identity, entries, nil)
+	require.True(t, ok)
+	require.NotEqual(t, first[0].ViewRef, profile[0].ViewRef)
+
+	entries[0].Context = &fixture.ref
+	identity.identity.BrowserSubject = auth.BrowserSubjectForUser(identity.identity.BrowserSubject.UserID + 1)
+	fifth, ok := adapter.operatorCodeCatalogEntries(identity, entries, nil)
+	require.True(t, ok)
+	require.NotEqual(t, first[0].ViewRef, fifth[0].ViewRef)
 }
 
 func TestOperatorCodeHTTPAdapter_SearchContinuationStaysServerOwnedAndExactlyBound(t *testing.T) {
 	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
-	internalCursor := "internal-service-cursor"
+	internalCursor := "usc1.00000000-0000-4000-8000-000000000001"
 	firstResponse := operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalLexical)
 	truncated := true
 	firstResponse.Truncated = &truncated
@@ -232,6 +303,51 @@ func TestOperatorCodeHTTPAdapter_GraphNavigationPublishesOnlyStoredSourceDescrip
 	require.Equal(t, []uci.QueryEntityRef{available, unavailable}, graphSources.calls)
 }
 
+func TestOperatorCodeHTTPAdapter_GraphNavigationReleasesExactRelationSiteOnly(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	caller := uci.QueryEntityRef{SourceID: fixture.ref.SourceID, ViewID: fixture.ref.ViewID, EntityKey: "Fixture.Caller"}
+	first := uci.QueryEntityRef{SourceID: fixture.ref.SourceID, ViewID: fixture.ref.ViewID, EntityKey: "Fixture.First"}
+	second := uci.QueryEntityRef{SourceID: fixture.ref.SourceID, ViewID: fixture.ref.ViewID, EntityKey: "Fixture.Second"}
+	site := uuid.NewString()
+	response := operatorCodeHTTPTestGraphResponse(t, fixture.ref)
+	response.Graph.Nodes = []uci.QueryEntityRef{caller, first, second}
+	response.Graph.Edges = []uci.QueryGraphEdge{
+		{From: caller, To: first, Relation: "calls", EvidenceKind: uci.QueryEvidenceResolved, EvidenceRefs: []uci.QueryEntityRef{caller}, Evidence: []uci.QueryRelationEvidence{{Ref: caller, Precision: uci.QueryEvidencePrecisionReferenceSite, ReferenceSiteID: &site}}},
+		{From: caller, To: second, Relation: "may_call", EvidenceKind: uci.QueryEvidenceHeuristic, EvidenceRefs: []uci.QueryEntityRef{caller}, Evidence: []uci.QueryRelationEvidence{{Ref: caller, Precision: uci.QueryEvidencePrecisionUnsupported}}},
+	}
+	require.NoError(t, response.ValidatePreExposure())
+	fixture.app.graph = response
+	descriptor := uci.VersionedReadSpec{Entity: caller, Span: uci.QuerySpan{ByteStart: 18, ByteEnd: 25, LineStart: 2, LineEnd: 2}, ContentDigest: uci.QueryContentDigest(strings.Repeat("a", 64)), MaxBytes: 7, ReferenceSiteID: &site}
+	adapter.graphSources = &operatorCodeHTTPTestGraphSources{evidenceDescriptors: map[string]uci.VersionedReadSpec{site: descriptor}}
+	recorder := httptest.NewRecorder()
+	adapter.HandleGraph(recorder, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","action":"neighbors","target":{"entity_key":"Fixture.Caller"}}`, fixture.identity))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var body struct {
+		Navigation operatorCodeGraphNavigation `json:"navigation"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	require.Len(t, body.Navigation.Edges, 2)
+	require.Equal(t, &operatorCodeSourceReadDescriptor{EntityKey: caller.EntityKey, Span: descriptor.Span, ContentDigest: descriptor.ContentDigest, ReferenceSiteID: &site}, body.Navigation.Edges[0].Evidence[0].SourceRead)
+	require.Equal(t, "available", body.Navigation.Edges[0].Evidence[0].SourceState)
+	require.Nil(t, body.Navigation.Edges[1].Evidence[0].SourceRead)
+	require.Equal(t, "unavailable", body.Navigation.Edges[1].Evidence[0].SourceState)
+	require.Equal(t, []uci.QueryRelationEvidence{response.Graph.Edges[0].Evidence[0]}, adapter.graphSources.(*operatorCodeHTTPTestGraphSources).evidenceCalls)
+}
+
+func TestOperatorCodeHTTPAdapter_ReferenceSiteSourceReadUsesExactPinnedKey(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	fixture.app.read = operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalExact)
+	site := uuid.NewString()
+	request := `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","entity_key":"Fixture.Symbol","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"` + strings.Repeat("a", 64) + `","reference_site_id":"` + site + `"}`
+	recorder := httptest.NewRecorder()
+	adapter.HandleVersionedRead(recorder, operatorCodeHTTPTestRequest(t, request, fixture.identity))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Len(t, fixture.app.readInputs, 1)
+	require.Equal(t, site, *fixture.app.readInputs[0].ReferenceSiteID)
+	require.Equal(t, fixture.ref.SourceID, fixture.app.readInputs[0].Ref.SourceID)
+	require.Equal(t, fixture.ref.ViewID, fixture.app.readInputs[0].Ref.ViewID)
+}
+
 func TestOperatorCodeGraphRequestInputBuildsNormalizedSemantics(t *testing.T) {
 	now := time.Date(2026, time.September, 14, 12, 0, 0, 0, time.UTC)
 	text := func(value string) *string { return &value }
@@ -240,12 +356,12 @@ func TestOperatorCodeGraphRequestInputBuildsNormalizedSemantics(t *testing.T) {
 	for _, testCase := range []struct {
 		name    string
 		request operatorCodeGraphRequest
-		assert  func(mcp.CodebaseGraphInput, int64)
+		assert  func(uci.GraphSpec, int64)
 	}{
 		{
 			name:    "defaults",
 			request: operatorCodeGraphRequest{Action: " Neighbors ", Target: &operatorCodeGraphTargetRequest{EntityKey: text(" Fixture.Symbol ")}},
-			assert: func(input mcp.CodebaseGraphInput, deadlineMS int64) {
+			assert: func(input uci.GraphSpec, deadlineMS int64) {
 				require.Equal(t, uci.GraphActionNeighbors, input.Action)
 				require.Equal(t, uci.GraphTarget{EntityKey: "Fixture.Symbol"}, input.Target)
 				require.Nil(t, input.Destination)
@@ -271,7 +387,7 @@ func TestOperatorCodeGraphRequestInputBuildsNormalizedSemantics(t *testing.T) {
 				DeadlineMS:    milliseconds(operatorCodeGraphMaxWaitMS),
 				Continuation:  text("cursor-1"),
 			},
-			assert: func(input mcp.CodebaseGraphInput, deadlineMS int64) {
+			assert: func(input uci.GraphSpec, deadlineMS int64) {
 				require.Equal(t, uci.GraphActionPath, input.Action)
 				require.Equal(t, uci.GraphTarget{Name: "Source.Name"}, input.Target)
 				require.Equal(t, &uci.GraphTarget{EntityKey: "Destination.Key"}, input.Destination)
@@ -671,7 +787,7 @@ func TestOperatorCodeHTTPAdapter_NoViewIndexIntentReauthorizesWithoutPin(t *test
 	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
 	fixture.binding.pinned = nil
 	fixture.contexts.entries[0].Context = nil
-	target := `{"source_id":"` + operatorCodeHTTPTestSourceID + `","checkout_id":"` + operatorCodeHTTPTestCheckoutID + `"}`
+	target := `{"selection_ref":"` + adapter.operatorCodeIndexSelectionRef(operatorCodeHTTPTestChoiceIdentity(fixture), operatorCodeHTTPTestSourceID, operatorCodeHTTPTestCheckoutID, operatorCodeHTTPTestProfileID) + `"}`
 	body := `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","request_ref":"first-index","kind":"reindex","target":` + target + `}`
 
 	first := httptest.NewRecorder()
@@ -742,7 +858,7 @@ func TestOperatorCodeHTTPAdapter_NoViewIndexIntentReauthorizesWithoutPin(t *test
 	fixture.contexts.reauthTargetErr = nil
 
 	foreign := httptest.NewRecorder()
-	adapter.HandleIndexIntentSubmit(foreign, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"foreign","kind":"reindex","target":{"source_id":"`+uuid.NewString()+`","checkout_id":"`+operatorCodeHTTPTestCheckoutID+`"}}`, fixture.identity))
+	adapter.HandleIndexIntentSubmit(foreign, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"foreign","kind":"reindex","target":{"selection_ref":"`+adapter.operatorCodeIndexSelectionRef(operatorCodeHTTPTestChoiceIdentity(fixture), uuid.NewString(), operatorCodeHTTPTestCheckoutID, operatorCodeHTTPTestProfileID)+`"}}`, fixture.identity))
 	require.Equal(t, http.StatusForbidden, foreign.Code, foreign.Body.String())
 
 	fixture.contexts.initialTargetErr = gormdb.ErrBrowserCodeContextDenied
@@ -969,6 +1085,89 @@ func TestOperatorCodeHTTPAdapter_IndexIntentDigestIsCanonical(t *testing.T) {
 	require.NotEqual(t, first, operatorCodeIndexIntentDigest("operator-code-index-intent-submit", proof, "", "request-2", uci.IndexIntentReindex))
 }
 
+func TestOperatorCodeHTTPAdapter_GrantEmptyEnvelopeIsCanonical(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	for _, testCase := range []struct {
+		endpoint string
+		method   string
+	}{
+		{endpoint: "operator-code-grant-choices", method: http.MethodGet},
+		{endpoint: "operator-code-grant-revoke", method: http.MethodPost},
+	} {
+		t.Run(testCase.endpoint, func(t *testing.T) {
+			request := operatorCodeHTTPTestRequest(t, "", fixture.identity)
+			request.Method = testCase.method
+			request.URL.Path = "/api/code/grants"
+			recorder := httptest.NewRecorder()
+			identity, guarded, ok := adapter.decodeEmptyEnvelope(recorder, request, testCase.endpoint, testCase.method)
+			require.True(t, ok, recorder.Body.String())
+			require.Equal(t, operatorCodeRequestDigest(testCase.endpoint, nil), identity.digest)
+			require.Equal(t, "browser-session-41", auditcontext.SourceSession(guarded.Context()))
+
+			invalid := operatorCodeHTTPTestRequest(t, `{}`, fixture.identity)
+			invalid.Method = testCase.method
+			invalid.URL.Path = "/api/code/grants"
+			rejected := httptest.NewRecorder()
+			_, _, ok = adapter.decodeEmptyEnvelope(rejected, invalid, testCase.endpoint, testCase.method)
+			require.False(t, ok)
+			require.Equal(t, http.StatusBadRequest, rejected.Code)
+		})
+	}
+}
+
+func TestOperatorCodeHTTPAdapter_GrantHandlersCarryAuditBreadcrumb(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	onboarding := &operatorCodeGrantBreadcrumbApplication{}
+	adapter.onboarding = onboarding
+
+	choices := operatorCodeHTTPTestRequest(t, "", fixture.identity)
+	choices.Method = http.MethodGet
+	choicesRecorder := httptest.NewRecorder()
+	adapter.HandleGrantChoices(choicesRecorder, choices)
+	require.Equal(t, http.StatusOK, choicesRecorder.Code, choicesRecorder.Body.String())
+
+	revoke := operatorCodeHTTPTestRequest(t, "", fixture.identity)
+	grantRef := uuid.NewString()
+	routeContext := chi.NewRouteContext()
+	routeContext.URLParams.Add("grant_ref", grantRef)
+	revoke = revoke.WithContext(context.WithValue(revoke.Context(), chi.RouteCtxKey, routeContext))
+	revokeRecorder := httptest.NewRecorder()
+	adapter.HandleGrantRevoke(revokeRecorder, revoke)
+	require.Equal(t, http.StatusOK, revokeRecorder.Code, revokeRecorder.Body.String())
+	require.Equal(t, []string{"browser-session-41", "browser-session-41"}, onboarding.sessions)
+}
+
+type operatorCodeGrantBreadcrumbApplication struct {
+	sessions []string
+}
+
+func (application *operatorCodeGrantBreadcrumbApplication) ListOwnerChoices(ctx context.Context, _ auth.Identity) ([]gormdb.BrowserReadGrantOwnerChoice, error) {
+	application.sessions = append(application.sessions, auditcontext.SourceSession(ctx))
+	return nil, nil
+}
+
+func (application *operatorCodeGrantBreadcrumbApplication) ListOwnerActive(ctx context.Context, _ auth.Identity, _ string, _ int) ([]gormdb.BrowserReadGrantOwnerEntry, error) {
+	application.sessions = append(application.sessions, auditcontext.SourceSession(ctx))
+	return nil, nil
+}
+
+func (*operatorCodeGrantBreadcrumbApplication) ListTargetChoices(context.Context, auth.Identity) ([]gormdb.BrowserReadGrantTargetChoice, error) {
+	return nil, nil
+}
+
+func (*operatorCodeGrantBreadcrumbApplication) IssueOnboarding(context.Context, auth.Identity, IssueOnboardingCodeGrantInput) (gormdb.BrowserReadGrant, error) {
+	return gormdb.BrowserReadGrant{}, nil
+}
+
+func (*operatorCodeGrantBreadcrumbApplication) SetWorkingCopyLabel(context.Context, auth.Identity, string, string) (gormdb.BrowserReadGrantOwnerChoice, error) {
+	return gormdb.BrowserReadGrantOwnerChoice{}, nil
+}
+
+func (application *operatorCodeGrantBreadcrumbApplication) Revoke(ctx context.Context, _ auth.Identity, _ string) (gormdb.BrowserReadGrant, error) {
+	application.sessions = append(application.sessions, auditcontext.SourceSession(ctx))
+	return gormdb.BrowserReadGrant{}, nil
+}
+
 func TestOperatorCodeHTTPAdapter_CatalogAndPinFailuresStayPrivate(t *testing.T) {
 	pathRequest := func(body string, identity auth.Identity) *http.Request {
 		request := operatorCodeHTTPTestRequest(t, body, identity)
@@ -994,7 +1193,7 @@ func TestOperatorCodeHTTPAdapter_CatalogAndPinFailuresStayPrivate(t *testing.T) 
 		foreign.ViewID = uuid.NewString()
 		recorder := httptest.NewRecorder()
 
-		adapter.HandlePin(recorder, pathRequest(`{"document_proof":"proof-current","context_ref":{"source_id":"`+foreign.SourceID+`","checkout_id":"`+foreign.CheckoutID+`","view_id":"`+foreign.ViewID+`","analysis_profile_id":"`+foreign.AnalysisProfileID+`","generation":7}}`, fixture.identity))
+		adapter.HandlePin(recorder, pathRequest(`{"document_proof":"proof-current","selection_ref":"`+adapter.operatorCodeContextSelectionRef(operatorCodeHTTPTestChoiceIdentity(fixture), foreign)+`"}`, fixture.identity))
 
 		require.Equal(t, http.StatusForbidden, recorder.Code)
 		require.Empty(t, recorder.Body.String())
@@ -1006,7 +1205,7 @@ func TestOperatorCodeHTTPAdapter_CatalogAndPinFailuresStayPrivate(t *testing.T) 
 		fixture.contexts.pinErr = errors.New("pin store unavailable")
 		recorder := httptest.NewRecorder()
 
-		adapter.HandlePin(recorder, pathRequest(`{"document_proof":"proof-current","context_ref":`+operatorCodeHTTPTestContextRefJSON+`}`, fixture.identity))
+		adapter.HandlePin(recorder, pathRequest(`{"document_proof":"proof-current","selection_ref":"`+adapter.operatorCodeContextSelectionRef(operatorCodeHTTPTestChoiceIdentity(fixture), fixture.ref)+`"}`, fixture.identity))
 
 		require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 		require.Empty(t, recorder.Body.String())
@@ -1078,7 +1277,7 @@ func TestOperatorCodeHTTPAdapter_NoViewIntentBindingMismatchIsBodyless(t *testin
 	fixture.contexts.entries[0].Context = nil
 	fixture.app.indexSubmitErr = uci.ErrIndexIntentBindingMismatch
 	recorder := httptest.NewRecorder()
-	target := `{"source_id":"` + operatorCodeHTTPTestSourceID + `","checkout_id":"` + operatorCodeHTTPTestCheckoutID + `"}`
+	target := `{"selection_ref":"` + adapter.operatorCodeIndexSelectionRef(operatorCodeHTTPTestChoiceIdentity(fixture), operatorCodeHTTPTestSourceID, operatorCodeHTTPTestCheckoutID, operatorCodeHTTPTestProfileID) + `"}`
 
 	adapter.HandleIndexIntentSubmit(recorder, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","request_ref":"first-index-mismatch","kind":"reindex","target":`+target+`}`, fixture.identity))
 
@@ -1126,6 +1325,87 @@ type operatorCodeHTTPTestFixture struct {
 	recorder  *operatorCodeHTTPTestRecorder
 }
 
+func TestOperatorCodeHTTPAdapter_ChooserRefsAreIssuedPrivateBoundAndExpiring(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	identity := operatorCodeHTTPTestChoiceIdentity(fixture)
+	instant := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	adapter.now = func() time.Time { return instant }
+	ref := adapter.operatorCodeContextSelectionRef(identity, fixture.ref)
+	decoded, err := base64.RawURLEncoding.DecodeString(ref)
+	require.NoError(t, err)
+	for _, id := range []string{fixture.ref.SourceID, fixture.ref.CheckoutID, fixture.ref.ViewID, fixture.ref.AnalysisProfileID} {
+		require.NotContains(t, string(decoded), id, "decoding the transport must not disclose identifiers")
+	}
+	got, ok := adapter.operatorCodeContextSelection(identity, ref)
+	require.True(t, ok)
+	require.Equal(t, fixture.ref, got)
+
+	restarted := NewOperatorCodeHTTPAdapter(fixture.grants, fixture.binding, fixture.authority, fixture.app, fixture.recorder)
+	require.NoError(t, restarted.configureChoiceCipher(newTestVault(t)))
+	restarted.now = adapter.now
+	got, ok = restarted.operatorCodeContextSelection(identity, ref)
+	require.True(t, ok, "a reference survives restart with the same vault key")
+	require.Equal(t, fixture.ref, got)
+	forged := base64.RawURLEncoding.EncodeToString([]byte("context\x00" + fixture.ref.SourceID + "\x00" + fixture.ref.CheckoutID + "\x00" + fixture.ref.ViewID + "\x00" + fixture.ref.AnalysisProfileID + "\x00" + strconv.FormatInt(fixture.ref.Generation, 10)))
+	_, ok = adapter.operatorCodeContextSelection(identity, forged)
+	require.False(t, ok, "a syntactically correct unissued reference is not a chooser choice")
+	tampered := []byte(ref)
+	if tampered[0] == 'A' {
+		tampered[0] = 'B'
+	} else {
+		tampered[0] = 'A'
+	}
+	_, ok = adapter.operatorCodeContextSelection(identity, string(tampered))
+	require.False(t, ok, "a modified server reference must not be accepted")
+	_, ok = adapter.operatorCodeContextSelection(operatorCodeRequestIdentity{identity: fixture.identity, sessionID: "another-session"}, ref)
+	require.False(t, ok)
+	_, ok = adapter.operatorCodeContextSelection(operatorCodeRequestIdentity{identity: auth.SessionForBrowserUser("viewer", 42), sessionID: identity.sessionID}, ref)
+	require.False(t, ok)
+	adapter.now = func() time.Time { return instant.Add(operatorCodeChoiceLifetime) }
+	_, ok = adapter.operatorCodeContextSelection(identity, ref)
+	require.False(t, ok, "a stale chooser must be refreshed")
+}
+
+func TestOperatorCodeHTTPAdapter_GrantChooserRefsRoundTripWithoutExposingIDs(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	identity := operatorCodeHTTPTestChoiceIdentity(fixture)
+	owner := adapter.operatorCodeOpaqueRef(identity, "grant-choice", fixture.ref.CheckoutID)
+	target := adapter.operatorCodeOpaqueRef(identity, "grant-target", "99")
+	index := adapter.operatorCodeIndexSelectionRef(identity, fixture.ref.SourceID, fixture.ref.CheckoutID, fixture.ref.AnalysisProfileID)
+	for _, choice := range []string{owner, target, index} {
+		decoded, err := base64.RawURLEncoding.DecodeString(choice)
+		require.NoError(t, err)
+		require.NotContains(t, string(decoded), fixture.ref.CheckoutID)
+		require.NotContains(t, string(decoded), fixture.ref.SourceID)
+	}
+	ownerID, ok := adapter.operatorCodeOwnerChoiceRef(identity, owner)
+	require.True(t, ok)
+	require.Equal(t, fixture.ref.CheckoutID, ownerID)
+	targetID, ok := adapter.operatorCodeTargetChoiceID(identity, target)
+	require.True(t, ok)
+	require.Equal(t, int64(99), targetID)
+	selection, ok := adapter.operatorCodeIndexSelectionRefValue(identity, index)
+	require.True(t, ok)
+	require.Equal(t, operatorCodeIndexSelection{SourceID: fixture.ref.SourceID, CheckoutID: fixture.ref.CheckoutID, ProfileID: fixture.ref.AnalysisProfileID}, selection)
+	_, ok = adapter.operatorCodeOwnerChoiceRef(identity, target)
+	require.False(t, ok, "a target reference cannot be used as an owner choice")
+}
+
+func TestOperatorCodeHTTPAdapter_RejectsUnissuedIndexChoiceBeforeLookup(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	forged := base64.RawURLEncoding.EncodeToString([]byte("index-selection\x00" + fixture.ref.SourceID + "\x00" + fixture.ref.CheckoutID + "\x00" + fixture.ref.AnalysisProfileID))
+	request := `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","request_ref":"forged-first-index","kind":"reindex","target":{"selection_ref":"` + forged + `"}}`
+	recorder := httptest.NewRecorder()
+	adapter.HandleIndexIntentSubmit(recorder, operatorCodeHTTPTestRequest(t, request, fixture.identity))
+	require.Equal(t, http.StatusConflict, recorder.Code)
+	require.Zero(t, fixture.app.indexLookupCalls)
+	require.Zero(t, fixture.app.indexSubmitCalls)
+}
+
+func operatorCodeHTTPTestChoiceIdentity(fixture *operatorCodeHTTPTestFixture) operatorCodeRequestIdentity {
+	return operatorCodeRequestIdentity{identity: fixture.identity, sessionID: "browser-session-41"}
+}
+
 func newOperatorCodeHTTPTestAdapter(t *testing.T) (*OperatorCodeHTTPAdapter, *operatorCodeHTTPTestFixture) {
 	t.Helper()
 	ref := uci.ContextRef{
@@ -1161,9 +1441,9 @@ func newOperatorCodeHTTPTestAdapter(t *testing.T) (*OperatorCodeHTTPAdapter, *op
 		app: &operatorCodeHTTPTestApplication{},
 		contexts: &operatorCodeHTTPTestContextStore{entries: []gormdb.BrowserCodeContextCatalogEntry{{
 			SourceID:      ref.SourceID,
-			SourceLabel:   "engram source",
+			SourceLabel:   "Engram",
 			CheckoutID:    ref.CheckoutID,
-			CheckoutLabel: "working_tree · " + ref.CheckoutID,
+			CheckoutLabel: "Studio workstation · release candidate",
 			Context:       &ref,
 			ViewLabel:     "release candidate",
 		}}},
@@ -1172,6 +1452,7 @@ func newOperatorCodeHTTPTestAdapter(t *testing.T) (*OperatorCodeHTTPAdapter, *op
 	fixture.authority = newOperatorCodeHTTPTestAuthority(t, ref)
 	fixture.contexts.binding = fixture.binding
 	adapter := NewOperatorCodeHTTPAdapter(fixture.grants, fixture.binding, fixture.authority, fixture.app, fixture.recorder)
+	require.NoError(t, adapter.configureChoiceCipher(newTestVault(t)))
 	adapter.contexts = fixture.contexts
 	adapter.indexTargets = operatorCodeHTTPTestIndexTargets{}
 	return adapter, fixture
@@ -1365,13 +1646,24 @@ func (store *operatorCodeHTTPTestContextStore) AdvanceContinuation(_ context.Con
 }
 
 type operatorCodeHTTPTestGraphSources struct {
-	descriptors map[uci.QueryEntityRef]uci.VersionedReadSpec
-	calls       []uci.QueryEntityRef
+	descriptors         map[uci.QueryEntityRef]uci.VersionedReadSpec
+	calls               []uci.QueryEntityRef
+	evidenceDescriptors map[string]uci.VersionedReadSpec
+	evidenceCalls       []uci.QueryRelationEvidence
 }
 
 func (sources *operatorCodeHTTPTestGraphSources) DescribeGraphSource(_ context.Context, _ uci.AuthorizedContext, entity uci.QueryEntityRef) (uci.VersionedReadSpec, bool, error) {
 	sources.calls = append(sources.calls, entity)
 	descriptor, available := sources.descriptors[entity]
+	return descriptor, available, nil
+}
+
+func (sources *operatorCodeHTTPTestGraphSources) DescribeGraphEvidence(_ context.Context, authorized uci.AuthorizedContext, evidence uci.QueryRelationEvidence) (uci.VersionedReadSpec, bool, error) {
+	sources.evidenceCalls = append(sources.evidenceCalls, evidence)
+	if evidence.ReferenceSiteID == nil || evidence.Ref.SourceID != authorized.Ref().SourceID || evidence.Ref.ViewID != authorized.Ref().ViewID {
+		return uci.VersionedReadSpec{}, false, nil
+	}
+	descriptor, available := sources.evidenceDescriptors[*evidence.ReferenceSiteID]
 	return descriptor, available, nil
 }
 
@@ -1500,17 +1792,22 @@ type operatorCodeHTTPTestApplication struct {
 	search               uci.QueryResponse
 	searchResponses      []uci.QueryResponse
 	searchSpecs          []uci.QuerySpec
+	structure            uci.QueryResponse
+	structureSpecs       []uci.QuerySpec
 	graph                uci.QueryResponse
 	read                 uci.QueryResponse
 	status               mcp.CodebaseStatusSnapshot
 	sourceSessions       []string
 	searchCalls          int
+	structureCalls       int
 	graphCalls           int
 	readCalls            int
+	readInputs           []mcp.CodebaseReadInput
 	indexIntents         map[string]uci.IndexIntent
 	indexSubmitErr       error
 	indexGetErr          error
 	indexRetryErr        error
+	indexLookupCalls     int
 	indexSubmitCalls     int
 	indexGetCalls        int
 	indexRetryCalls      int
@@ -1533,14 +1830,22 @@ func (app *operatorCodeHTTPTestApplication) SearchOperatorCodebase(ctx context.C
 	return app.search, nil
 }
 
-func (app *operatorCodeHTTPTestApplication) ExploreCodebase(ctx context.Context, _ uci.AuthorizedContext, _ mcp.CodebaseGraphInput) (uci.QueryResponse, error) {
+func (app *operatorCodeHTTPTestApplication) StructureOperatorCodebase(ctx context.Context, _ uci.AuthorizedContext, spec uci.QuerySpec) (uci.QueryResponse, error) {
+	app.structureCalls++
+	app.structureSpecs = append(app.structureSpecs, spec)
+	app.sourceSessions = append(app.sourceSessions, auditcontext.SourceSession(ctx))
+	return app.structure, nil
+}
+
+func (app *operatorCodeHTTPTestApplication) ExploreOperatorCodebase(ctx context.Context, _ uci.AuthorizedContext, _ uci.GraphSpec) (uci.QueryResponse, error) {
 	app.graphCalls++
 	app.sourceSessions = append(app.sourceSessions, auditcontext.SourceSession(ctx))
 	return app.graph, nil
 }
 
-func (app *operatorCodeHTTPTestApplication) ReadCodebase(ctx context.Context, _ uci.AuthorizedContext, _ mcp.CodebaseReadInput) (uci.QueryResponse, error) {
+func (app *operatorCodeHTTPTestApplication) ReadCodebase(ctx context.Context, _ uci.AuthorizedContext, input mcp.CodebaseReadInput) (uci.QueryResponse, error) {
 	app.readCalls++
+	app.readInputs = append(app.readInputs, input)
 	app.sourceSessions = append(app.sourceSessions, auditcontext.SourceSession(ctx))
 	return app.read, nil
 }
@@ -1629,6 +1934,7 @@ func (app *operatorCodeHTTPTestApplication) SubmitNoViewIndexIntent(ctx context.
 }
 
 func (app *operatorCodeHTTPTestApplication) NoViewIndexIntentByRequestRef(_ context.Context, requestRef string) (uci.IndexIntent, error) {
+	app.indexLookupCalls++
 	intent, found := app.indexIntents[requestRef]
 	if !found {
 		return uci.IndexIntent{}, uci.ErrIndexIntentNotFound
@@ -1711,8 +2017,12 @@ func (app operatorCodeHTTPTestApplicationWithoutIndexIntent) SearchOperatorCodeb
 	return app.base.SearchOperatorCodebase(ctx, authorized, spec)
 }
 
-func (app operatorCodeHTTPTestApplicationWithoutIndexIntent) ExploreCodebase(ctx context.Context, authorized uci.AuthorizedContext, input mcp.CodebaseGraphInput) (uci.QueryResponse, error) {
-	return app.base.ExploreCodebase(ctx, authorized, input)
+func (app operatorCodeHTTPTestApplicationWithoutIndexIntent) StructureOperatorCodebase(ctx context.Context, authorized uci.AuthorizedContext, spec uci.QuerySpec) (uci.QueryResponse, error) {
+	return app.base.StructureOperatorCodebase(ctx, authorized, spec)
+}
+
+func (app operatorCodeHTTPTestApplicationWithoutIndexIntent) ExploreOperatorCodebase(ctx context.Context, authorized uci.AuthorizedContext, input uci.GraphSpec) (uci.QueryResponse, error) {
+	return app.base.ExploreOperatorCodebase(ctx, authorized, input)
 }
 
 func (app operatorCodeHTTPTestApplicationWithoutIndexIntent) ReadCodebase(ctx context.Context, authorized uci.AuthorizedContext, input mcp.CodebaseReadInput) (uci.QueryResponse, error) {

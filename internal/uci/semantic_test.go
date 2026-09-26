@@ -24,6 +24,26 @@ import (
 
 const semanticEmbeddingDimension = 1536
 
+func TestUCISemanticServiceRejectsStructureMode(t *testing.T) {
+	fixture := newSemanticTestFixture()
+	profile := semanticTestProfile("uci-semantic-structure-test")
+	provider := &semanticTestEmbedder{model: profile.Model, vector: semanticTestVector(1)}
+	service := NewSemanticService(profile, provider, newSemanticMemoryStore(), &semanticTestLexicalStore{}, newSemanticContinuationMemoryStore())
+
+	_, err := service.Query(context.Background(), newAuthorizedContext(fixture.contextA), QuerySpec{
+		ClientSessionID: "structure-client",
+		Mode:            QueryModeStructure,
+		Order:           QueryOrderPath,
+		Limit:           1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "structure mode is unsupported") {
+		t.Fatalf("structure semantic query error = %v", err)
+	}
+	if provider.CallCount() != 0 {
+		t.Fatalf("structure mode invoked semantic provider %d times", provider.CallCount())
+	}
+}
+
 // TestUCIVectorProfileCacheReusesOnlyExactCompatibleInput deliberately uses a
 // deterministic embedder only for cache-key behavior. It is not semantic
 // acceptance evidence; TestUCISemanticRealProviderConceptualHitMatchesScopedPostgresBaseline
@@ -36,7 +56,7 @@ func TestUCIVectorProfileCacheReusesOnlyExactCompatibleInput(t *testing.T) {
 		model:  profile.Model,
 		vector: semanticTestVector(1),
 	}
-	service := NewSemanticService(profile, provider, store, &semanticTestLexicalStore{})
+	service := NewSemanticService(profile, provider, store, &semanticTestLexicalStore{}, newSemanticContinuationMemoryStore())
 	ctx := context.Background()
 	authorized := newAuthorizedContext(fixture.contextA)
 
@@ -113,7 +133,7 @@ func TestUCIVectorProfileCacheReusesOnlyExactCompatibleInput(t *testing.T) {
 				model:  tc.profile.Model,
 				vector: semanticTestVector(float32(len(tc.name) + 2)),
 			}
-			candidateService := NewSemanticService(tc.profile, candidateProvider, store, &semanticTestLexicalStore{})
+			candidateService := NewSemanticService(tc.profile, candidateProvider, store, &semanticTestLexicalStore{}, newSemanticContinuationMemoryStore())
 			if err := candidateService.EnsureCandidateEmbedding(ctx, newAuthorizedContext(tc.context), candidate); err != nil {
 				t.Fatalf("EnsureCandidateEmbedding() error = %v", err)
 			}
@@ -225,7 +245,7 @@ func semanticRequireProviderFailureFallback(t *testing.T, fixture semanticTestFi
 	t.Helper()
 	lexical := &semanticTestLexicalStore{candidates: []QueryCandidate{fixture.lexical}}
 	store := newSemanticMemoryStore()
-	service := NewSemanticService(profile, provider, store, lexical)
+	service := NewSemanticService(profile, provider, store, lexical, newSemanticContinuationMemoryStore())
 	result, err := service.Query(context.Background(), newAuthorizedContext(fixture.contextA), semanticTestQuerySpec("fallback-token"))
 	if err != nil {
 		t.Fatalf("Query() error = %v, want lexical-only degraded response", err)
@@ -259,7 +279,7 @@ func TestUCISemanticQueryProviderTimeoutLeavesParentAliveForLexicalFallback(t *t
 	fixture := newSemanticTestFixture()
 	profile := semanticTestProfile("uci-semantic-test-model")
 	lexical := &semanticTestLexicalStore{candidates: []QueryCandidate{fixture.lexical}}
-	service := NewSemanticService(profile, &semanticBlockingEmbedder{model: profile.Model}, newSemanticMemoryStore(), lexical)
+	service := NewSemanticService(profile, &semanticBlockingEmbedder{model: profile.Model}, newSemanticMemoryStore(), lexical, newSemanticContinuationMemoryStore())
 	service.queryProviderBudget = 25 * time.Millisecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -297,7 +317,7 @@ func TestUCISemanticQueryMapsCompleteScopedHybridPage(t *testing.T) {
 		Coverage:       IndexCoverageComplete,
 		VectorCoverage: 1,
 	}
-	service := NewSemanticService(profile, &semanticTestEmbedder{model: profile.Model, vector: semanticTestVector(1)}, store, &semanticTestLexicalStore{})
+	service := NewSemanticService(profile, &semanticTestEmbedder{model: profile.Model, vector: semanticTestVector(1)}, store, &semanticTestLexicalStore{}, newSemanticContinuationMemoryStore())
 
 	result, err := service.Query(context.Background(), newAuthorizedContext(fixture.contextA), semanticTestQuerySpec("fallback-token"))
 	if err != nil {
@@ -356,7 +376,7 @@ func TestUCISemanticQueryTraversesOneStoreFusedOrdering(t *testing.T) {
 	service := NewSemanticService(semanticTestProfile("uci-semantic-test-model"), &semanticTestEmbedder{
 		model:  "uci-semantic-test-model",
 		vector: semanticTestVector(1),
-	}, store, store)
+	}, store, store, newSemanticContinuationMemoryStore())
 	spec := semanticTestQuerySpec("fusion")
 	spec.Limit = 2
 
@@ -394,26 +414,181 @@ func TestUCISemanticQueryTraversesOneStoreFusedOrdering(t *testing.T) {
 	}
 }
 
-func TestUCISemanticQueryContinuationRejectsChangedRankingVector(t *testing.T) {
+func TestUCISemanticQueryContinuationRejectsBindingMismatches(t *testing.T) {
 	fixture := newSemanticTestFixture()
+	profile := semanticTestProfile("uci-semantic-binding-model")
 	store := &semanticPagingStore{fused: []SemanticCandidate{
 		semanticTestFusedCandidate(fixture.current),
 		semanticTestFusedCandidate(fixture.distractorA),
 	}}
-	provider := &semanticTestEmbedder{model: "uci-semantic-test-model", vector: semanticTestVector(1)}
-	service := NewSemanticService(semanticTestProfile(provider.model), provider, store, store)
-	spec := semanticTestQuerySpec("ranking-binding")
+	continuations := newSemanticContinuationMemoryStore()
+	service := NewSemanticService(profile, &semanticTestEmbedder{model: profile.Model, vector: semanticTestVector(1)}, store, store, continuations)
+	spec := semanticTestQuerySpec("binding-query")
 	spec.Limit = 1
-	first, err := service.Query(context.Background(), newAuthorizedContext(fixture.contextA), spec)
+	authorized := newAuthorizedContext(fixture.contextA)
+	first, err := service.Query(context.Background(), authorized, spec)
 	if err != nil {
 		t.Fatalf("first Query() error = %v", err)
 	}
-	token := semanticTestContinuation(t, first)
-	provider.vector = semanticTestVector(2)
-	spec.Continuation = &token
-	if _, err := service.Query(context.Background(), newAuthorizedContext(fixture.contextA), spec); err == nil || !strings.Contains(err.Error(), "continuation ranking") {
-		t.Fatalf("changed-vector continuation error = %v, want ranking binding rejection", err)
+	cursor := semanticTestContinuation(t, first)
+
+	for _, testCase := range []struct {
+		name          string
+		mutate        func(*QuerySpec)
+		context       *ContextRef
+		mutateProfile func(VectorProfile) VectorProfile
+	}{
+		{name: "query", mutate: func(request *QuerySpec) { request.Text = "different-query" }},
+		{name: "filter", mutate: func(request *QuerySpec) { request.Filter.PathPrefix = "other" }},
+		{name: "mode", mutate: func(request *QuerySpec) { request.Mode = QueryModeExactLocalName }},
+		{name: "order", mutate: func(request *QuerySpec) { request.Order = QueryOrderPath }},
+		{name: "limit", mutate: func(request *QuerySpec) { request.Limit = 2 }},
+		{name: "client session", mutate: func(request *QuerySpec) { request.ClientSessionID = "semantic-client-b" }},
+		{name: "context", context: &fixture.contextB},
+		{name: "profile", mutateProfile: func(current VectorProfile) VectorProfile {
+			current.PreprocessingRevision += "-other"
+			return current
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := spec
+			request.Continuation = &cursor
+			if testCase.mutate != nil {
+				testCase.mutate(&request)
+			}
+			resumeProfile := profile
+			if testCase.mutateProfile != nil {
+				resumeProfile = testCase.mutateProfile(resumeProfile)
+			}
+			resumeAuthorized := authorized
+			if testCase.context != nil {
+				resumeAuthorized = newAuthorizedContext(*testCase.context)
+			}
+			resumed := NewSemanticService(resumeProfile, &semanticTestEmbedder{model: resumeProfile.Model, vector: semanticTestVector(99)}, store, store, continuations)
+			if _, err := resumed.Query(context.Background(), resumeAuthorized, request); err == nil || !strings.Contains(err.Error(), "continuation binding") {
+				t.Fatalf("mismatched continuation error = %v, want binding rejection", err)
+			}
+		})
 	}
+}
+
+func TestUCISemanticQueryResumesPersistedRankingAfterServiceRestart(t *testing.T) {
+	fixture := newSemanticTestFixture()
+	profile := semanticTestProfile("uci-semantic-restart-model")
+	store := &semanticPagingStore{fused: []SemanticCandidate{
+		semanticTestFusedCandidate(semanticTestPaginationCandidate(fixture.contextA, "first", "a/first.go", 3)),
+		semanticTestFusedCandidate(semanticTestPaginationCandidate(fixture.contextA, "second", "b/second.go", 2)),
+		semanticTestFusedCandidate(semanticTestPaginationCandidate(fixture.contextA, "third", "c/third.go", 1)),
+	}}
+	continuations := newSemanticContinuationMemoryStore()
+	firstProvider := &semanticTestEmbedder{model: profile.Model, vector: semanticTestVector(1)}
+	firstService := NewSemanticService(profile, firstProvider, store, store, continuations)
+	spec := semanticTestQuerySpec("restart-stable-query")
+	spec.Limit = 1
+
+	first, err := firstService.Query(context.Background(), newAuthorizedContext(fixture.contextA), spec)
+	if err != nil {
+		t.Fatalf("first Query() error = %v", err)
+	}
+	if got := semanticResponseItems(t, first)[0].Ref.EntityKey; got != "symbol:first" {
+		t.Fatalf("first page key = %q, want symbol:first", got)
+	}
+	firstCursor := semanticTestContinuation(t, first)
+	if len(firstCursor) > 2048 || !strings.HasPrefix(firstCursor, "usc1.") || strings.Contains(firstCursor, spec.Text) {
+		t.Fatalf("first continuation = %q, want bounded opaque semantic cursor", firstCursor)
+	}
+	if calls := firstProvider.CallCount(); calls != 1 {
+		t.Fatalf("first provider calls = %d, want 1", calls)
+	}
+
+	driftingProvider := &semanticTestEmbedder{model: profile.Model, vector: semanticTestVector(99)}
+	resumedService := NewSemanticService(profile, driftingProvider, store, store, continuations)
+	spec.Continuation = &firstCursor
+	second, err := resumedService.Query(context.Background(), newAuthorizedContext(fixture.contextA), spec)
+	if err != nil {
+		t.Fatalf("second Query() error = %v", err)
+	}
+	if got := semanticResponseItems(t, second)[0].Ref.EntityKey; got != "symbol:second" {
+		t.Fatalf("second page key = %q, want symbol:second", got)
+	}
+	if calls := driftingProvider.CallCount(); calls != 0 {
+		t.Fatalf("continuation provider calls = %d, want 0", calls)
+	}
+	secondCursor := semanticTestContinuation(t, second)
+	if secondCursor == firstCursor {
+		t.Fatal("successor cursor must be a fresh opaque reference")
+	}
+
+	thirdProvider := &semanticTestEmbedder{model: profile.Model, vector: semanticTestVector(100)}
+	thirdService := NewSemanticService(profile, thirdProvider, store, store, continuations)
+	spec.Continuation = &secondCursor
+	third, err := thirdService.Query(context.Background(), newAuthorizedContext(fixture.contextA), spec)
+	if err != nil {
+		t.Fatalf("third Query() error = %v", err)
+	}
+	if got := semanticResponseItems(t, third)[0].Ref.EntityKey; got != "symbol:third" {
+		t.Fatalf("third page key = %q, want symbol:third", got)
+	}
+	if calls := thirdProvider.CallCount(); calls != 0 {
+		t.Fatalf("successor provider calls = %d, want 0", calls)
+	}
+}
+
+func TestUCISemanticQueryContinuationFailsClosedForMissingExpiredCorruptAndInvalidTokens(t *testing.T) {
+	fixture := newSemanticTestFixture()
+	profile := semanticTestProfile("uci-semantic-fail-closed-model")
+	store := &semanticPagingStore{fused: []SemanticCandidate{
+		semanticTestFusedCandidate(fixture.current),
+		semanticTestFusedCandidate(fixture.distractorA),
+	}}
+	continuations := newSemanticContinuationMemoryStore()
+	issue := func(t *testing.T) (QuerySpec, string) {
+		t.Helper()
+		spec := semanticTestQuerySpec("fail-closed-query")
+		spec.Limit = 1
+		service := NewSemanticService(profile, &semanticTestEmbedder{model: profile.Model, vector: semanticTestVector(1)}, store, store, continuations)
+		result, err := service.Query(context.Background(), newAuthorizedContext(fixture.contextA), spec)
+		if err != nil {
+			t.Fatalf("issue continuation error = %v", err)
+		}
+		return spec, semanticTestContinuation(t, result)
+	}
+	resume := func(t *testing.T, spec QuerySpec, cursor string) {
+		t.Helper()
+		spec.Continuation = &cursor
+		service := NewSemanticService(profile, &semanticTestEmbedder{model: profile.Model, vector: semanticTestVector(99)}, store, store, continuations)
+		if _, err := service.Query(context.Background(), newAuthorizedContext(fixture.contextA), spec); err == nil {
+			t.Fatal("continuation error = nil, want fail-closed rejection")
+		}
+	}
+
+	t.Run("missing", func(t *testing.T) {
+		spec, _ := issue(t)
+		resume(t, spec, "usc1.00000000-0000-4000-8000-000000000001")
+	})
+	t.Run("expired", func(t *testing.T) {
+		spec, cursor := issue(t)
+		cursorRef := strings.TrimPrefix(cursor, "usc1.")
+		stored := continuations.records[cursorRef]
+		stored.ExpiresAt = time.Now().UTC().Add(-time.Second)
+		continuations.records[cursorRef] = stored
+		resume(t, spec, cursor)
+	})
+	t.Run("corrupt vector", func(t *testing.T) {
+		spec, cursor := issue(t)
+		cursorRef := strings.TrimPrefix(cursor, "usc1.")
+		stored := continuations.records[cursorRef]
+		stored.Vector = []float32{1}
+		continuations.records[cursorRef] = stored
+		resume(t, spec, cursor)
+	})
+	t.Run("invalid shape", func(t *testing.T) {
+		if IsSemanticContinuationToken("usc1.not-a-uuid") {
+			t.Fatal("invalid semantic token shape was accepted")
+		}
+		spec, _ := issue(t)
+		resume(t, spec, "usc1.not-a-uuid")
+	})
 }
 
 func TestUCISemanticQueryFallsBackWhenVectorCoverageIsIncomplete(t *testing.T) {
@@ -425,7 +600,7 @@ func TestUCISemanticQueryFallsBackWhenVectorCoverageIsIncomplete(t *testing.T) {
 		Coverage:       IndexCoveragePartial,
 		VectorCoverage: 0.5,
 	}
-	service := NewSemanticService(profile, &semanticTestEmbedder{model: profile.Model, vector: semanticTestVector(1)}, store, lexical)
+	service := NewSemanticService(profile, &semanticTestEmbedder{model: profile.Model, vector: semanticTestVector(1)}, store, lexical, newSemanticContinuationMemoryStore())
 
 	result, err := service.Query(context.Background(), newAuthorizedContext(fixture.contextA), semanticTestQuerySpec("fallback-token"))
 	if err != nil {
@@ -546,7 +721,7 @@ func semanticEmbedRealProviderSeeds(t *testing.T, ctx context.Context, real sema
 func semanticRequireRealProviderQuery(t *testing.T, ctx context.Context, real semanticRealProviderFixture, fixture semanticTestFixture) (QueryResult, semanticPostgresSelectCall, QuerySpec) {
 	t.Helper()
 	spec := semanticTestQuerySpec(semanticConceptualQuery)
-	service := NewSemanticService(real.profile, real.provider, real.store, &semanticTestLexicalStore{})
+	service := NewSemanticService(real.profile, real.provider, real.store, &semanticTestLexicalStore{}, newSemanticContinuationMemoryStore())
 	result, err := service.Query(ctx, newAuthorizedContext(fixture.contextA), spec)
 	if err != nil {
 		t.Fatalf("Query() with real provider error = %v", err)
@@ -828,6 +1003,51 @@ func semanticMemoryKey(ref ContextRef, profile VectorProfile, digest IndexDigest
 		IncludeRelativePath:   profile.IncludeRelativePath,
 		EmbeddingInputDigest:  digest,
 	}
+}
+
+type semanticContinuationMemoryStore struct {
+	mu      sync.Mutex
+	records map[string]SemanticContinuation
+}
+
+var _ SemanticContinuationStore = (*semanticContinuationMemoryStore)(nil)
+
+func newSemanticContinuationMemoryStore() *semanticContinuationMemoryStore {
+	return &semanticContinuationMemoryStore{records: make(map[string]SemanticContinuation)}
+}
+
+func (store *semanticContinuationMemoryStore) CreateSemanticContinuation(_ context.Context, continuation SemanticContinuation) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.cleanupLocked(time.Now().UTC())
+	store.records[continuation.CursorRef] = semanticContinuationClone(continuation)
+	return nil
+}
+
+func (store *semanticContinuationMemoryStore) LoadSemanticContinuation(_ context.Context, cursorRef string) (SemanticContinuation, bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.cleanupLocked(time.Now().UTC())
+	continuation, found := store.records[cursorRef]
+	return semanticContinuationClone(continuation), found, nil
+}
+
+func (store *semanticContinuationMemoryStore) cleanupLocked(now time.Time) {
+	for cursorRef, continuation := range store.records {
+		if !continuation.ExpiresAt.After(now) {
+			delete(store.records, cursorRef)
+		}
+	}
+}
+
+func semanticContinuationClone(continuation SemanticContinuation) SemanticContinuation {
+	clone := continuation
+	clone.Vector = append([]float32(nil), continuation.Vector...)
+	if continuation.Context.SpaceID != nil {
+		spaceID := *continuation.Context.SpaceID
+		clone.Context.SpaceID = &spaceID
+	}
+	return clone
 }
 
 type semanticPostgresStore struct {

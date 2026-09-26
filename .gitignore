@@ -68,6 +68,9 @@ tmp/
 temp/
 .od/**
 
+# Default plugin runtime data when no external plugin data directory is configured
+plugin/engram/.data/
+
 # Test artifacts
 __debug_bin*
 .test/

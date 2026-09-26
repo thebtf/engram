@@ -789,9 +789,6 @@ func TestReadOnlyToolAllowed_DispatchAndActionInventory(t *testing.T) {
 		{"lifecycle", `{"action":"set_confidence"}`},
 		{"lifecycle", `{"action":"set_defeasibility"}`},
 		{"lifecycle", `{"action":"future"}`},
-		{"graph", `{"action":"add_edge"}`},
-		{"graph", `{"action":"remove_edge"}`},
-		{"graph", `{"action":"add_node"}`},
 		{"graph", `{"action":"future"}`},
 		{"store_rule", `{}`},
 		{"ingest", `{"action":"ingest"}`},
@@ -842,7 +839,6 @@ func TestCallTool_ReadOnlyClientDeniesRepresentativeMutationsAndSecretReads(t *t
 		{"vault", `{"action":"get","name":"credential"}`},
 		{"vault", `{"action":"list"}`},
 		{"settings", `{"action":"list"}`},
-		{"graph", `{"action":"add_edge"}`},
 		{"get_ambient_hints", `{"session_id":"session"}`},
 		{"future_tool", `{}`},
 	} {
