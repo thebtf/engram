@@ -9,7 +9,7 @@ const path = require("node:path");
 
 const REPO = "thebtf/engram";
 const MAX_REDIRECTS = 5;
-const DOWNLOAD_DEADLINE_MS = 120_000;
+const DOWNLOAD_DEADLINE_MS = 360_000;
 const RELEASE_HOSTS = new Set([
   "github.com",
   "objects.githubusercontent.com",

@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Corrected Workspace responsive and accessibility behavior, including narrow layouts, 200% zoom, visible focus, keyboard navigation, and accessible relation and evidence controls.
 - Kept Workspace semantic-search continuations and structure and relation evidence bound to the selected UCI View and UCI release authority.
 - Added an interruption-safe journal to latest-image promotion that records its exact state when promotion fails.
+- Raised the OMP marketplace MCP connection budget from one to twelve minutes and the verified cold-cache client stream deadline from two to six minutes. The observed first 4 MiB taking 32.71 seconds would take roughly 225 seconds for the 28.8 MB Windows asset at the same rate; six minutes allows bounded variance without promising throughput. Twelve minutes reserves six minutes for streaming, as much as three minutes for six 30-second request/redirect inactivity windows, two minutes for fenced daemon reconciliation, and one minute of overhead. Inactivity checks are not aggregate request deadlines: a progressing pre-body phase can still exhaust the host budget, and forced host termination can leave a staging file. HTTPS host restrictions, exact Content-Length/size and SHA-256, and create-only publication remain unchanged. Codex and Claude startup settings are unchanged.
 
 ## [6.49.4] - 2026-09-25
 

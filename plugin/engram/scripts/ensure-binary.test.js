@@ -138,8 +138,51 @@ test("bounded acquisition rejects contradictory, truncated, and one-byte oversiz
   await assert.rejects(downloadObject(roots, target, { request: makeRequest(fixture().bytes, target.size + 1) }), BootstrapError);
   await assert.rejects(downloadObject(roots, target, { request: makeRequest(fixture().bytes.subarray(0, -1)) }), BootstrapError);
   await assert.rejects(downloadObject(roots, target, { request: makeRequest(Buffer.concat([fixture().bytes, Buffer.from("x")])) }), BootstrapError);
+  const tampered = Buffer.from(fixture().bytes);
+  tampered[0] ^= 1;
+  await assert.rejects(downloadObject(roots, target, { request: makeRequest(tampered) }), /digest differs/);
   assert.deepEqual(fs.readdirSync(roots.staging), []);
 });
+test("cold-cache stream outlives the old limit but not the bounded bootstrap deadline", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { bytes } = fixture();
+  const target = selected().target.desired;
+  let response;
+  const request = (_url, _options, callback) => {
+    const req = new EventEmitter();
+    req.end = () => {
+      response = Object.assign(new Readable({ read() { } }), {
+        statusCode: 200, headers: { "content-length": String(target.size) },
+      });
+      callback(response);
+      response.push(bytes.subarray(0, 4));
+    };
+    return req;
+  };
+
+  const roots = objectRoots(tempRoot());
+  const pending = downloadObject(roots, target, { request });
+  void pending.catch(() => { });
+  await new Promise((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(60_000);
+  response.push(bytes.subarray(4, 8));
+  t.mock.timers.tick(61_000);
+  assert.equal(response.destroyed, false, "a progressing stream must survive past two minutes");
+  response.push(bytes.subarray(8));
+  response.push(null);
+  const published = await pending;
+  assert.equal(hashFile(published, target, roots.objects), true);
+  assert.deepEqual(fs.readdirSync(roots.staging), []);
+
+  const stalledRoots = objectRoots(tempRoot());
+  const stalled = downloadObject(stalledRoots, target, { request });
+  await new Promise((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(360_000);
+  await assert.rejects(stalled, /deadline exceeded/);
+  assert.equal(fs.existsSync(objectPath(stalledRoots, target)), false);
+  assert.deepEqual(fs.readdirSync(stalledRoots.staging), []);
+});
+
 test("offline resolution uses a verified desired object and rejects bytes changed after final verification", async () => {
   const root = tempRoot();
   const roots = objectRoots(root);

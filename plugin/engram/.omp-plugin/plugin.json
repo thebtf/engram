@@ -15,7 +15,7 @@
       "args": [
         "${OMP_PLUGIN_ROOT}/scripts/run-engram.js"
       ],
-      "timeout": 60000
+      "timeout": 720000
     }
   }
 }

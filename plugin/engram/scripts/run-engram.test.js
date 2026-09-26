@@ -93,7 +93,7 @@ test("OMP manifest resolves its script from the plugin root independently of the
     type: "stdio",
     command: "node",
     args: ["${OMP_PLUGIN_ROOT}/scripts/run-engram.js"],
-    timeout: 60000,
+    timeout: 720000,
   });
   const ompArgs = expandMcpArgsForTest(ompServer.args, path.resolve(repoRoot, "plugin", "engram"));
   assert.deepEqual(ompArgs.map(path.normalize), [path.join(repoRoot, "plugin", "engram", "scripts", "run-engram.js")]);
