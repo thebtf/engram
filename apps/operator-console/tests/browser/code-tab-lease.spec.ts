@@ -8,6 +8,12 @@ test('Code Explorer renews its live tab lease and leaves no renewal timer after 
   const leasePayloads: unknown[] = []
 
   await page.clock.install({ time: new Date('2026-09-15T00:00:00Z') })
+  await page.addInitScript(() => {
+    const original = performance.getEntriesByType.bind(performance)
+    performance.getEntriesByType = (entryType) => entryType === 'navigation'
+      ? [Object.create(PerformanceNavigationTiming.prototype, { type: { value: 'navigate' } })]
+      : original(entryType)
+  })
   await page.route('**/api/code/**', async (route: Route) => {
     const pathname = new URL(route.request().url()).pathname
     if (pathname === '/api/code/tabs/handshake') {
@@ -59,6 +65,43 @@ test('Code Explorer renews its live tab lease and leaves no renewal timer after 
     { document_proof: DOCUMENT_PROOF },
   ])
 })
+
+for (const navigationType of ['back_forward', 'unknown'] as const) {
+  test(`Code Explorer treats ${navigationType} navigation as a fresh ambiguous binding`, async ({ page }) => {
+    const handshakePayloads: Record<string, unknown>[] = []
+    let resumes = 0
+    await page.addInitScript((type) => {
+      const original = performance.getEntriesByType.bind(performance)
+      performance.getEntriesByType = (entryType) => entryType === 'navigation'
+        ? type === 'unknown' ? [] : [Object.create(PerformanceNavigationTiming.prototype, { type: { value: type } })]
+        : original(entryType)
+    }, navigationType)
+    await page.route('**/api/code/**', async (route: Route) => {
+      const pathname = new URL(route.request().url()).pathname
+      if (pathname === '/api/code/tabs/resume') {
+        resumes++
+        await route.fulfill({ status: 500 })
+      } else if (pathname === '/api/code/tabs/handshake') {
+        const body = route.request().postDataJSON()
+        handshakePayloads.push(body)
+        await route.fulfill({ json: { state: body.ambiguous ? 'TAB_BOOTSTRAP_AMBIGUOUS' : 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'new-resume', reload_token: 'new-reload' } })
+      } else if (pathname === '/api/code/contexts') {
+        await route.fulfill({ json: { contexts: [] } })
+      } else {
+        await route.fulfill({ status: 500 })
+      }
+    })
+    await page.goto('/settings')
+    await page.evaluate(() => sessionStorage.setItem('engram.operator-code.resume.v1', JSON.stringify({ tabBindingId: 'prior-binding', resumeNonce: 'prior-resume', reloadToken: 'prior-reload' })))
+    await page.goto('/code')
+    await expect(page.locator('.phase')).toHaveAttribute('data-state', 'ambiguous')
+    await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+    expect(handshakePayloads).toHaveLength(1)
+    expect(handshakePayloads[0]).toHaveProperty('ambiguous', true)
+    expect(handshakePayloads[0]).not.toHaveProperty('copied_tab_binding_id')
+    expect(resumes).toBe(0)
+  })
+}
 
 test('Code Explorer distinguishes failed embedding from never-indexed and pending work', async ({ page }) => {
   let embedding: Record<string, unknown> = { coverage: 'partial', job_state: 'failed_terminal', error_code: 'provider_contract', pending_jobs: 0 }
@@ -366,6 +409,12 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
   }
 
   await page.clock.install({ time: new Date('2026-09-15T00:00:00Z') })
+  await page.context().addInitScript(() => {
+    const original = performance.getEntriesByType.bind(performance)
+    performance.getEntriesByType = (entryType) => entryType === 'navigation'
+      ? [Object.create(PerformanceNavigationTiming.prototype, { type: { value: 'navigate' } })]
+      : original(entryType)
+  })
 
   await page.context().route('**/api/code/**', async (route: Route) => {
     const pathname = new URL(route.request().url()).pathname

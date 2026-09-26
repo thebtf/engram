@@ -1336,10 +1336,12 @@ export function useOperatorCode() {
       openerAfter = window.opener === null
     }
     const evidence: CodeBootstrapEvidence = { navigationType: navType, openerBefore, openerAfter, transition: 'initializing' }
-    const pair = openerBefore ? null : loadResumePair()
+    const unsupportedNavigation = navType !== 'navigate' && navType !== 'reload' || openerBefore && navType !== 'navigate'
+    const pair = openerBefore || unsupportedNavigation ? null : loadResumePair()
     const resumingBinding = !openerBefore && pair !== null && (navType === 'reload' || remount !== null)
     if (!resumingBinding) clearIndexIntent()
-    const established = openerBefore && openerAfter !== true
+    if (unsupportedNavigation) clearResumePair()
+    const established = unsupportedNavigation || openerBefore && openerAfter !== true
       ? await handshake(documentNonce, null, true, evidence)
       : resumingBinding
         ? await resume(documentNonce, pair, evidence)
