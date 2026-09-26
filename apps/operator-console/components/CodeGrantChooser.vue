@@ -40,7 +40,7 @@ function parsePage(value: unknown): { grants: Grant[]; next_ref?: string } {
     if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('Invalid grant')
     const { grant_ref, state, expires_at, repository, working_copy, reader } = entry
     if (typeof grant_ref !== 'string' || !grant_ref || !['active', 'revoked', 'expired'].includes(state) || typeof repository !== 'string' || typeof working_copy !== 'string' || typeof reader !== 'string' || typeof expires_at !== 'string' && expires_at !== null || expires_at !== null && !Number.isFinite(Date.parse(expires_at))) throw new Error('Invalid grant')
-    if (state === 'active' && (expires_at === null || Date.parse(expires_at) > Date.now())) parsed.push({ grant_ref, state, expires_at, repository, working_copy, reader })
+    if (state === 'active') parsed.push({ grant_ref, state, expires_at, repository, working_copy, reader })
   }
   return { grants: parsed, ...(next === undefined ? {} : { next_ref: next }) }
 }

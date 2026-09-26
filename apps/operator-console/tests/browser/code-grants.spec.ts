@@ -27,6 +27,7 @@ test('Owner reload sees every paged active grant and revokes a reader without an
       await route.fulfill({ status: 500 })
     }
   })
+  await page.clock.setSystemTime(new Date('2030-01-01T00:00:00Z'))
   await page.goto('/code')
   await page.getByTestId('code-grant-chooser').locator('summary').click()
   await expect(page.getByTestId('code-grant-chooser').getByRole('listitem')).toHaveCount(2)
@@ -79,13 +80,13 @@ test('Grant inventory reports denied, empty and failed page without exposing inc
   await expect(chooser.getByRole('listitem')).toHaveCount(0)
 })
 
-test('Expired grants are not offered for revocation and labels are rendered as text', async ({ page }) => {
+test('Server-expired grants are not offered for revocation and labels are rendered as text', async ({ page }) => {
   await page.route('**/api/code/**', async (route: Route) => {
     const pathname = new URL(route.request().url()).pathname
     if (pathname === '/api/code/grants/choices') {
       await route.fulfill({ json: { choices: [], targets: [] } })
     } else if (pathname === '/api/code/grants') {
-      await route.fulfill({ json: { grants: [grant('expired', 'Past reader', '2020-01-01T00:00:00Z'), grant('current', '<img src=x onerror=alert(1)>')] } })
+      await route.fulfill({ json: { grants: [{ ...grant('expired', 'Past reader', '2020-01-01T00:00:00Z'), state: 'expired' }, grant('current', '<img src=x onerror=alert(1)>')] } })
     } else if (pathname === '/api/code/tabs/handshake') {
       await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: '60000000-0000-4000-8000-000000000041', document_proof: 'proof', resume_nonce: 'resume', reload_token: 'reload' } })
     } else if (pathname === '/api/code/contexts') {
