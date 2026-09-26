@@ -21,7 +21,7 @@ Repository-only procedure or CI corrections reach `main` through normal review a
 
 | Gate | Command / evidence | Blocks release when |
 | --- | --- | --- |
-| PR review | actual GitHub branch rules and PR review state: required approvals, evidenced disposition of findings, zero unresolved required threads, and merge | a configured required approval is missing, a causal blocking finding is open, or a required thread remains unresolved; an optional bot delay or wrapper timeout does not override landed GitHub state or permit unilateral resolution |
+| PR review | PR approval required by this protocol, actual GitHub branch rules and review state, evidenced disposition of findings, zero unresolved required threads, and merge | project-required approval is missing, a causal blocking finding is open, or a required thread remains unresolved; an optional bot delay or wrapper timeout does not override landed GitHub state or permit unilateral resolution |
 | CI | `gh pr checks <PR>` and the configured required checks on the reviewed head | any check required by the actual branch rules fails or is missing |
 | Go tests | `go test ./...` | non-zero exit |
 | Go vet | `go vet ./...` | non-zero exit |
@@ -50,7 +50,7 @@ GitHub-hosted CI is reserved for the smallest lane that can prove the current st
 | Post-publication monitoring | Scheduled published-image rescan only | Daily schedule does not build or accept images; retain the freshness/remediation evidence required below. |
 
 Prevent duplicate push-and-PR work for identical bytes. A changed SHA defines a new candidate identity, not a universal invalidation of prior results. Before expensive validation, compare each gate's test inputs, tool/environment inputs, analysis identity and release artifact bytes under its validated evidence contract; record which checks remain valid and run the affected ones. Never relabel a prior receipt, assume cross-worktree equivalence, or reuse proof for changed inputs. Exact-head Sonar analysis remains required outside the recorded exception. A changed image/tag input cannot inherit an earlier `final-image-set.json`; the accepted three-image set, security scans, runtime and migration proofs stay mandatory where applicable. If the existing tool cannot establish compatibility, run its affected gate or repair that evidence contract separately, rather than declaring an unverified PASS or dispatching every gate. Do not start another heavy run for identical inputs without evidence of recovery or a new relevant risk.
-For ordinary PRs, configure required checks only from checks that ordinary PRs emit; dispatch-only `test / windows-latest`, `test / macos-14`, and `migrations / clean-db chain` cannot be required ordinary-PR statuses. Read the actual branch rules and PR status instead of assuming that approval, a bot comment or a dispatch-only status is mandatory.
+For ordinary PRs, configure required checks only from checks that ordinary PRs emit; dispatch-only `test / windows-latest`, `test / macos-14`, and `migrations / clean-db chain` cannot be required ordinary-PR statuses. Read the actual branch rules and PR status instead of assuming a bot comment or dispatch-only status is mandatory; preserve the protocol's PR approval requirement.
 
 ### Operator-approved v6.49.4 Sonar exception (2026-09-25)
 
@@ -70,7 +70,7 @@ Classify findings before adding work. **Fix now** covers a failed mandatory gate
 
 Keep the existing thresholds, security scans, supported-platform obligations, migration/rollback requirements and branch protection. A finding excluded from the numeric gate may still block for substantive risk. Conversely, optional polish is not automatically a new release requirement. An unresolved credible high-impact finding remains blocking while investigated. No blanket scanner suppression, false-positive designation, arbitrary pass-count, or policy loosening.
 
-Finish implementation review, accepted blocking repairs, ordinary host/user-path smoke, version metadata and generated release inputs before the expensive final gate. Review corrections against the delta and affected invariants; do not start a fresh whole-product review merely because a reviewer/model changed or release prose changed. Reopening unchanged accepted code needs new evidence or an affected dependency. All configured required reviews remain required.
+Finish implementation review, accepted blocking repairs, ordinary host/user-path smoke, version metadata and generated release inputs before the expensive final gate. Review corrections against the delta and affected invariants; do not start a fresh whole-product review merely because a reviewer/model changed or release prose changed. Reopening unchanged accepted code needs new evidence or an affected dependency. Required PR approval and any configured required reviews remain required.
 
 Freeze the candidate and use its own runner. No parallel cherry-pick, rebase, or candidate-file mutation while it is under validation. If a new blocker is accepted, preserve completed artifacts and decide which new-candidate gates need revalidation by the input rules above. Do not prematurely start a gate while already-known same-candidate repairs are still in flight.
 
