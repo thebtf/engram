@@ -47,6 +47,9 @@ func TestValidFixtureDSNRejectsNonDisposableTargets(t *testing.T) {
 	for _, raw := range []string{
 		"postgres://fixture:fixture@db.example/engram_test?sslmode=disable",
 		"postgres://fixture:fixture@localhost/engram_production?sslmode=disable",
+		"postgres://user:pass@localhost/engram",
+		"postgres://user:pass_test@localhost/engram?sslmode=disable",
+		"postgres://user:pass@localhost/engram?application_name=fixture_test",
 		"postgres://fixture:fixture@localhost/engram_staging?sslmode=disable",
 		"not-a-dsn",
 	} {
