@@ -2,14 +2,79 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 )
 
+// Keep installation fixtures under the physical primary checkout: macOS
+// t.TempDir can live beneath /var, a symlink to /private/var.
+func clientIdentityTempDir(t *testing.T) string {
+	t.Helper()
+	output, err := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	common := strings.TrimSpace(string(output))
+	if filepath.Base(common) != ".git" {
+		t.Fatalf("unexpected Git common directory %q", common)
+	}
+	primary, err := filepath.EvalSymlinks(filepath.Dir(common))
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := filepath.Join(primary, ".agent")
+	info, err := os.Lstat(agent)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("unsafe primary coordination directory %q: %v", agent, err)
+	}
+	scratch := filepath.Join(agent, "tmp")
+	if err := os.Mkdir(scratch, 0o700); err != nil && !os.IsExist(err) {
+		t.Fatal(err)
+	}
+	info, err = os.Lstat(scratch)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("unsafe primary scratch directory %q: %v", scratch, err)
+	}
+	dir, err := os.MkdirTemp(scratch, "client-identity-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Error(err)
+		}
+	})
+	return dir
+}
+
+func TestDirectClientIdentityCanonicalizesTempAliasBeforeInstall(t *testing.T) {
+	root := clientIdentityTempDir(t)
+	alias := filepath.Join(root, "temp-alias")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Skipf("symlinks unavailable on this host: %v", err)
+	}
+	t.Setenv("ENGRAM_CLIENT_INSTANCE_ID", "")
+	t.Setenv("ENGRAM_DATA_DIR", filepath.Join(alias, "installation"))
+	if _, err := directClientInstanceID(); err == nil {
+		t.Fatal("followed symlink in installation path")
+	}
+	physical, err := filepath.EvalSymlinks(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ENGRAM_DATA_DIR", filepath.Join(physical, "installation"))
+	id, err := directClientInstanceID()
+	if err != nil || !regexp.MustCompile(`^engram-[0-9a-f]{32}$`).MatchString(id) {
+		t.Fatalf("physical installation identity = %q, error = %v", id, err)
+	}
+}
+
 func TestDirectClientIdentityPersistsAcrossConcurrentStarts(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "installation")
+	dir := filepath.Join(clientIdentityTempDir(t), "installation")
 	t.Setenv("ENGRAM_DATA_DIR", dir)
 	t.Setenv("ENGRAM_CLIENT_INSTANCE_ID", "")
 	const count = 12
@@ -52,7 +117,7 @@ func TestDirectClientIdentityPersistsAcrossConcurrentStarts(t *testing.T) {
 }
 
 func TestDirectClientIdentityExplicitAndInvalidInputs(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "installation")
+	dir := filepath.Join(clientIdentityTempDir(t), "installation")
 	t.Setenv("ENGRAM_DATA_DIR", dir)
 	t.Setenv("ENGRAM_CLIENT_INSTANCE_ID", "operator-install-alpha")
 	id, err := directClientInstanceID()
