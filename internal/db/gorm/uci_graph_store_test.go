@@ -228,6 +228,58 @@ func TestUCIGraphStorePinsTargetsAndEdgesToExactTemporalView(t *testing.T) {
 	})
 }
 
+func TestUCIGraphStoreFileOnlyNodeSourceReadUsesExactGraphIdentity(t *testing.T) {
+	fixture := openUCIPublicationFixture(t)
+	ctx := context.Background()
+	fileOnly := fixture.insertArtifact(t, fixture.source.SourceID, "graph-file-only", "func FileOnly() {}\n", UCIParseArtifactComplete)
+	updated := fixture.db.Model(&UCIChunk{}).Where("chunk_id = ?", fileOnly.Chunk.ChunkID).Update("symbol_key", nil)
+	require.NoError(t, updated.Error)
+	require.Equal(t, int64(1), updated.RowsAffected)
+	fileOnly.Proof = fixture.describeArtifact(t, fixture.source.SourceID, fileOnly)
+	symbol := fixture.admitArtifact(t, fixture.source.SourceID, "graph-symbol", "func Symbol() {}\n", UCIParseArtifactComplete)
+	published := uciGraphStorePublish(t, fixture, uciGraphStorePublishInput{
+		key: "file-only-source", checkout: fixture.checkout,
+		artifacts: []uciPublicationArtifact{fileOnly, symbol},
+		memberships: []ucidomain.IndexMembership{
+			uciPublicationPresentMembership("file-only.go", fileOnly),
+			uciPublicationPresentMembership("symbol.go", symbol),
+		},
+		replacements: []ucidomain.IndexEdgeReplacement{{SourcePath: "file-only.go"}, {SourcePath: "symbol.go"}},
+		coverage:     uciGraphStoreCoverage(ucidomain.IndexCoverageComplete),
+	})
+	authorized := uciGraphStoreAuthorize(t, fixture, published.Context)
+	for _, testCase := range []struct {
+		name, key string
+		body      []byte
+	}{
+		{name: "file-only", key: "file-only.go", body: fileOnly.Body},
+		{name: "symbol", key: symbol.Definition.QualifiedLocalName, body: symbol.Body},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ref := uciGraphStoreRef(published.Context, testCase.key)
+			resolved, err := fixture.projection.ResolveGraphTargets(ctx, authorized, ucidomain.GraphTarget{EntityKey: testCase.key})
+			require.NoError(t, err)
+			require.Equal(t, []ucidomain.QueryEntityRef{ref}, resolved.Candidates)
+			descriptor, available, err := fixture.projection.DescribeGraphSource(ctx, authorized, ref)
+			require.NoError(t, err)
+			require.True(t, available)
+			require.Equal(t, ref, descriptor.Entity)
+			require.NoError(t, descriptor.Validate())
+			read, err := fixture.projection.ReadExact(ctx, authorized, descriptor)
+			require.NoError(t, err)
+			require.NotNil(t, read.Hit)
+			require.Equal(t, ref, read.Hit.Entity)
+			require.Equal(t, string(testCase.body), read.Hit.Text)
+		})
+	}
+	legacySpec := uciVersionedReadSpecForPathAndSpan(t, fixture, authorized, "file-only.go", 0, int64(len(fileOnly.Body)))
+	require.Equal(t, "file-only.go:0", legacySpec.Entity.EntityKey, "lexical file chunk identities remain readable")
+	legacyRead, err := fixture.projection.ReadExact(ctx, authorized, legacySpec)
+	require.NoError(t, err)
+	require.NotNil(t, legacyRead.Hit)
+	require.Equal(t, string(fileOnly.Body), legacyRead.Hit.Text)
+}
+
 func TestUCIGraphStoreReadsDirectAndReverseEvidenceInExactView(t *testing.T) {
 	fixture := openUCIPublicationFixture(t)
 	ctx := context.Background()

@@ -234,7 +234,7 @@ func browserCodeGraphSourceDescriptorSQL() string {
 				AND view_row.state IN (?, ?)
 		)
 		SELECT
-			COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(chunk.symbol_key, ''), membership.path_key || ':' || chunk.ordinal::text) AS entity_key,
+			COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(chunk.symbol_key, ''), membership.path_key) AS entity_key,
 			chunk.byte_start,
 			chunk.byte_end,
 			array_length(regexp_split_to_array(

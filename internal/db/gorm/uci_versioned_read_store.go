@@ -129,6 +129,7 @@ func buildUCIVersionedReadSQL(ref ucidomain.ContextRef, spec ucidomain.Versioned
 		spec.Entity.SourceID,
 		UCIViewPublished,
 		UCIViewSuperseded,
+		spec.Entity.EntityKey,
 		UCIBlobStored,
 		UCIFilePresent,
 		UCIParseArtifactComplete,
@@ -137,6 +138,7 @@ func buildUCIVersionedReadSQL(ref ucidomain.ContextRef, spec ucidomain.Versioned
 		spec.Span.ByteEnd,
 		spec.Span.ByteStart,
 		spec.Span.ByteEnd,
+		spec.Entity.EntityKey,
 		spec.Entity.EntityKey,
 		spec.Span.ByteEnd - spec.Span.ByteStart,
 		spec.Span.LineStart,
@@ -166,7 +168,7 @@ func buildUCIVersionedReadSQL(ref ucidomain.ContextRef, spec ucidomain.Versioned
 				blob.blob_id,
 				blob.source_id,
 				membership.display_path AS relative_path,
-				COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(chunk.symbol_key, ''), membership.path_key || ':' || chunk.ordinal::text) AS entity_key,
+				COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(chunk.symbol_key, ''), CASE WHEN membership.path_key = ? THEN membership.path_key ELSE membership.path_key || ':' || chunk.ordinal::text END) AS entity_key,
 				chunk.byte_start,
 				chunk.byte_end,
 				blob.content_digest,
@@ -201,7 +203,8 @@ func buildUCIVersionedReadSQL(ref ucidomain.ContextRef, spec ucidomain.Versioned
 				AND blob.byte_length >= ?
 				AND chunk.byte_start = ?
 				AND chunk.byte_end = ?
-				AND COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(chunk.symbol_key, ''), membership.path_key || ':' || chunk.ordinal::text) = ?
+				AND (COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(chunk.symbol_key, ''), membership.path_key || ':' || chunk.ordinal::text) = ?
+					OR (NULLIF(chunk.symbol_key, '') IS NULL AND membership.path_key = ?))
 		),
 		bounded_bytes AS (
 			SELECT
