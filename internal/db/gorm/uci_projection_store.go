@@ -2350,6 +2350,7 @@ func buildUCIHybridCandidatesSQL(ref ucidomain.ContextRef, profile ucidomain.Vec
 		JOIN ci_chunks AS chunk
 			ON chunk.source_id = page.source_id
 			AND chunk.artifact_id = page.artifact_id
+			AND chunk.chunk_id = page.chunk_id
 		ORDER BY ` + strings.ReplaceAll(pageOrder, "fused.", "page.") + `
 `, arguments, nil
 }

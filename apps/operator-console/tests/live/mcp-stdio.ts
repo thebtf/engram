@@ -104,6 +104,7 @@ export class MCPStdioClient {
   static async start(options: MCPStdioClientOptions): Promise<MCPStdioClient> {
     const rootLabel = clientRootLabel(options.clientRoot)
     const stateRoot = await mkdtemp(join(tmpdir(), `operator-console-live-mcp-${rootLabel.toLowerCase()}-`))
+    const clientInstanceID = randomUUID()
     const dataRoot = join(stateRoot, 'data')
     const home = join(stateRoot, 'home')
     await Promise.all([
@@ -120,7 +121,7 @@ export class MCPStdioClient {
       cwd: options.clientRoot,
       env: fixtureEnvironment({
         APPDATA: join(home, 'AppData', 'Roaming'),
-        ENGRAM_CLIENT_INSTANCE_ID: randomUUID(),
+        ENGRAM_CLIENT_INSTANCE_ID: clientInstanceID,
         ...(options.codeIndex === undefined ? {} : {
           ENGRAM_CODE_INTEL_ENABLED: 'true',
           ENGRAM_UCI_PARSER_BUNDLE_DIGEST: options.codeIndex.parserBundleDigest,
@@ -144,7 +145,7 @@ export class MCPStdioClient {
       await waitForExit(child, 2_000)
       throw new Error('external MCP client did not start with standard I/O')
     }
-    return new MCPStdioClient(child, stateRoot, rootLabel, muxDaemonControlPath(dataRoot), options.executable)
+    return new MCPStdioClient(child, stateRoot, rootLabel, muxDaemonControlPath(dataRoot, clientInstanceID), options.executable)
   }
 
   async initializeAndList(): Promise<void> {
@@ -422,8 +423,9 @@ function clientRootLabel(root: string): 'A' | 'B' | 'C' {
   throw new Error('external MCP client root is not a fixture linked worktree')
 }
 
-function muxDaemonControlPath(dataRoot: string): string {
-  return join(dataRoot, 'engram-muxd.ctl.sock')
+function muxDaemonControlPath(dataRoot: string, clientInstanceID: string): string {
+  const namespace = `engram-${createHash('sha256').update(clientInstanceID).digest('hex').slice(0, 32)}`
+  return join(dataRoot, `${namespace}-muxd.ctl.sock`)
 }
 
 function muxControlEndpoint(controlPath: string): string {

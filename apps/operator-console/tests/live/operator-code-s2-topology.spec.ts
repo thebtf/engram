@@ -100,6 +100,21 @@ async function selectFixtureContext(page: Page, fixture: LiveFixtureState, varia
   await expect(page.getByTestId('code-context-candidate')).toContainText(fixtureLabel)
 }
 
+async function findSearchResult(page: Page, symbol: string): Promise<Locator> {
+  const result = page.getByTestId('code-search-results').getByRole('listitem').filter({
+    has: page.getByText(`go:fixture/func:${symbol}`, { exact: true }),
+  })
+  for (let offset = 0; offset < 8 && await result.count() === 0; offset += 1) {
+    const next = page.getByTestId('code-search-next')
+    await expect(next).toBeVisible()
+    const response = page.waitForResponse((candidate) => candidate.request().method() === 'POST' && new URL(candidate.url()).pathname === '/api/code/search')
+    await next.click()
+    expect((await response).status()).toBe(200)
+  }
+  await expect(result).toHaveCount(1)
+  return result.first()
+}
+
 async function pinAndRead(browser: Browser, fixture: LiveFixtureState, credential: BrowserCredential, scenario: OperatorCodeFixture, traffic: RouteTraffic[]): Promise<CodeTab> {
   const context = await browser.newContext()
   const page = await context.newPage()
@@ -132,14 +147,13 @@ async function pinAndRead(browser: Browser, fixture: LiveFixtureState, credentia
   await page.getByTestId('code-pin-context').click()
   await expect(page.getByTestId('code-context-pinned')).toBeVisible()
   await page.getByTestId('code-query-input').fill(scenario.expectedSearch)
+  const searchResponse = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/code/search')
   await page.getByTestId('code-search-submit').click()
-  const results = page.getByTestId('code-search-results').getByRole('listitem').filter({
-    has: page.getByText(`go:fixture/func:${scenario.expectedSource}`, { exact: true }),
-  })
-  await expect(results).not.toHaveCount(0)
-  await results.first().getByTestId('code-search-explore').click()
+  expect((await searchResponse).status()).toBe(200)
+  const result = await findSearchResult(page, scenario.expectedSource)
+  await result.getByTestId('code-search-explore').click()
   await expect(page.getByTestId('code-graph-results')).toContainText(scenario.expectedGraph)
-  await results.first().getByTestId('code-search-source').click()
+  await result.getByTestId('code-search-source').click()
   await expect(page.getByTestId('code-source-result')).toContainText(scenario.expectedMarker)
   if (proof === null || searchPayload === null) {
     throw new Error('live Code Explorer did not send a binding-bound search request')
@@ -217,23 +231,21 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
     const [browserA, browserB, externalA, externalB] = await Promise.all([
       observeOperation(async () => {
         await tabA.page.getByTestId('code-query-input').fill(aScenario.expectedSearch)
+        const searchResponse = tabA.page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/code/search')
         await tabA.page.getByTestId('code-search-submit').click()
-        const results = tabA.page.getByTestId('code-search-results').getByRole('listitem').filter({
-          has: tabA.page.getByText(`go:fixture/func:${aScenario.expectedSource}`, { exact: true }),
-        })
-        await expect(results).not.toHaveCount(0)
-        await results.first().getByTestId('code-search-source').click()
+        expect((await searchResponse).status()).toBe(200)
+        const result = await findSearchResult(tabA.page, aScenario.expectedSource)
+        await result.getByTestId('code-search-source').click()
         await expect(tabA.page.getByTestId('code-source-result')).toContainText(aScenario.expectedMarker)
         await expect(tabA.page.getByTestId('code-source-result')).not.toContainText(bScenario.expectedMarker)
       }),
       observeOperation(async () => {
         await tabB.page.getByTestId('code-query-input').fill(bScenario.expectedSearch)
+        const searchResponse = tabB.page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/code/search')
         await tabB.page.getByTestId('code-search-submit').click()
-        const results = tabB.page.getByTestId('code-search-results').getByRole('listitem').filter({
-          has: tabB.page.getByText(`go:fixture/func:${bScenario.expectedSource}`, { exact: true }),
-        })
-        await expect(results).not.toHaveCount(0)
-        await results.first().getByTestId('code-search-source').click()
+        expect((await searchResponse).status()).toBe(200)
+        const result = await findSearchResult(tabB.page, bScenario.expectedSource)
+        await result.getByTestId('code-search-source').click()
         await expect(tabB.page.getByTestId('code-source-result')).toContainText(bScenario.expectedMarker)
         await expect(tabB.page.getByTestId('code-source-result')).not.toContainText(aScenario.expectedMarker)
       }),

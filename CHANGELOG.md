@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Kept each hybrid-search result's excerpt attached to its ranked chunk instead of joining every chunk in the same artifact; the live Workspace fixture now follows real result continuations and verifies its namespaced daemon controls.
 - Deny Workspace catalog choices and transactional pins when the grant issuer is disabled or no longer owns the checkout, matching browser read authorization.
 - Graph traversal and path readers prune private intermediaries before expansion while retaining public memory-to-node edges with typed node endpoints.
 - Corrected Workspace responsive and accessibility behavior, including narrow layouts, 200% zoom, visible focus, keyboard navigation, and accessible relation and evidence controls.

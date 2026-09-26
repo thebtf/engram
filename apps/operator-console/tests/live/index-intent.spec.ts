@@ -279,9 +279,17 @@ test('S4 live first-index uses the real C-worktree daemon pump', async ({ browse
     await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
     await page.getByTestId('code-pin-context').click()
     await expect(page.getByTestId('code-context-pinned')).toBeVisible()
+    await expect.poll(async () => {
+      await page.locator('main.code-page > header button').click()
+      const summary = await page.getByTestId('code-status').textContent()
+      const counts = summary?.match(/(\d+)\s*\/\s*(\d+)/)
+      return counts !== null && counts !== undefined && Number(counts[2]) > 50 && counts[1] === counts[2]
+    }, { timeout: 90_000 }).toBe(true)
 
     await page.getByTestId('code-query-input').fill(fixture.operatorCodeFirstIndex.query)
+    const searchResponse = page.waitForResponse((candidate) => candidate.request().method() === 'POST' && new URL(candidate.url()).pathname === '/api/code/search')
     await page.getByTestId('code-search-submit').click()
+    expect((await searchResponse).status()).toBe(200)
     const result = page.getByTestId('code-search-results').getByRole('listitem').filter({
       has: page.getByText(`go:fixture/func:${fixture.operatorCodeFirstIndex.expectedSource}`, { exact: true }),
     })
