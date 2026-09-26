@@ -17,6 +17,7 @@ import (
 	"time"
 
 	pb "github.com/thebtf/engram/proto/engram/v1"
+	muxcontrol "github.com/thebtf/mcp-mux/muxcore/control"
 	muxserverid "github.com/thebtf/mcp-mux/muxcore/serverid"
 	"google.golang.org/grpc"
 )
@@ -98,34 +99,56 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The installation namespace isolates this fixture's sockets in the short
-	// primary scratch root; nesting another temp directory overflows AF_UNIX.
-	tempRoot := scratch
+	// The client and its daemon inherit the candidate checkout cwd. A relative
+	// temp path keeps both sockets short while resolving to private primary scratch.
+	physicalTempRoot := filepath.Join(state, "temp")
+	if err := os.Mkdir(physicalTempRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	unixTempRoot, err := filepath.Rel(root, physicalTempRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tempRoot := unixTempRoot
+	if runtime.GOOS == "windows" {
+		// GetTempPath2 resolves Windows TEMP independently of the child cwd.
+		tempRoot = physicalTempRoot
+	}
 	t.Cleanup(func() {
 		if err := os.RemoveAll(state); err != nil {
 			t.Error(err)
 		}
 	})
-	if runtime.GOOS == "linux" {
-		// Probe the daemon socket and the longer per-owner control socket.
-		controlPath := muxserverid.DaemonControlPath(tempRoot, muxcoreInstallationNamespace(strings.Repeat("0", 32)))
-		probe, err := net.Listen("unix", controlPath)
-		if errors.Is(err, syscall.EOPNOTSUPP) || errors.Is(err, syscall.ENOTSUP) {
-			t.Skipf("AF_UNIX unsupported on test scratch filesystem %s: %v", scratch, err)
+	probeRoot, err := filepath.Rel(filepath.Join(root, "cmd", "engram"), physicalTempRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	namespace := muxcoreInstallationNamespace(strings.Repeat("0", 32))
+	for _, socketRoot := range []string{unixTempRoot, probeRoot} {
+		for _, socket := range []string{
+			muxserverid.DaemonControlPath(socketRoot, namespace),
+			muxserverid.ControlPath(socketRoot, namespace, strings.Repeat("0", 16)),
+		} {
+			if len([]byte(socket)) > 103 {
+				t.Fatalf("direct fixture Unix socket exceeds Darwin AF_UNIX pathname bound: %q (%d bytes)", socket, len([]byte(socket)))
+			}
 		}
-		if err != nil {
-			t.Fatalf("probe daemon control socket at %s: %v", controlPath, err)
-		}
-		if err := probe.Close(); err != nil {
-			t.Fatal(err)
-		}
-		ownerPath := muxserverid.ControlPath(tempRoot, muxcoreInstallationNamespace(strings.Repeat("0", 32)), strings.Repeat("0", 16))
-		owner, err := net.Listen("unix", ownerPath)
-		if err != nil {
-			t.Fatalf("probe owner control socket at %s: %v", ownerPath, err)
-		}
-		if err := owner.Close(); err != nil {
-			t.Fatal(err)
+	}
+	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+		for _, socket := range []string{
+			muxserverid.DaemonControlPath(probeRoot, namespace),
+			muxserverid.ControlPath(probeRoot, namespace, strings.Repeat("0", 16)),
+		} {
+			probe, err := net.Listen("unix", socket)
+			if errors.Is(err, syscall.EOPNOTSUPP) || errors.Is(err, syscall.ENOTSUP) {
+				t.Skipf("AF_UNIX unsupported on test scratch filesystem %s: %v", scratch, err)
+			}
+			if err != nil {
+				t.Fatalf("probe muxcore socket at %s: %v", socket, err)
+			}
+			if err := probe.Close(); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	for _, part := range []string{"home", "appdata", "localappdata"} {
@@ -154,21 +177,39 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 	}
 	localCache := filepath.Join(state, "localappdata")
 	env = append(env, "ENGRAM_URL=http://"+listener.Addr().String(), "ENGRAM_TOKEN=fixture-keycard", "ENGRAM_CODE_INTEL_ENABLED=true", "ENGRAM_DATA_DIR="+filepath.Join(state, "installation"), "USERPROFILE="+filepath.Join(state, "home"), "HOME="+filepath.Join(state, "home"), "APPDATA="+filepath.Join(state, "appdata"), "LOCALAPPDATA="+localCache, "XDG_CACHE_HOME="+localCache, "TEMP="+tempRoot, "TMP="+tempRoot, "TMPDIR="+tempRoot)
+	commandDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlRoot, err := filepath.Rel(commandDir, physicalTempRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		controlRoot = physicalTempRoot
+	}
 	t.Cleanup(func() {
 		identity, err := os.ReadFile(filepath.Join(state, "installation", "client-instance-id"))
 		if err != nil {
 			t.Error(err)
 			return
 		}
-		controlPath := muxserverid.DaemonControlPath(tempRoot, muxcoreInstallationNamespace(strings.TrimSpace(string(identity))))
+		controlPath := muxserverid.DaemonControlPath(controlRoot, muxcoreInstallationNamespace(strings.TrimSpace(string(identity))))
 		markerPath := controlPath + ".marker.json"
 		pid, found, err := uciInstalledAcceptanceDaemonPID(controlPath, markerPath, binary)
 		if err != nil || !found {
-			t.Errorf("wait for direct fixture daemon election: pid=%d found=%v error=%v", pid, found, err)
+			t.Errorf("direct fixture daemon election: pid=%d found=%v error=%v", pid, found, err)
 			return
 		}
-		if err := uciStopInstalledAcceptanceDaemon(tempRoot, pid); err != nil {
-			t.Error(err)
+		status, ok := readMuxcoreDaemonStatusIdentity(controlPath)
+		marker, markerErr := readMuxcoreDaemonVersionMarker(markerPath)
+		if !ok || markerErr != nil || status.PID != pid || marker.PID != pid || status.DaemonGeneration != marker.DaemonGeneration || status.ShuttingDown {
+			t.Errorf("direct fixture daemon ownership changed before shutdown: pid=%d status=%+v marker=%+v error=%v", pid, status, marker, markerErr)
+			return
+		}
+		response, err := muxcontrol.SendWithTimeout(controlPath, muxcontrol.Request{Cmd: "shutdown", DrainTimeoutMs: 2_000}, 5*time.Second)
+		if err != nil || response == nil || !response.OK {
+			t.Errorf("stop owned direct fixture daemon: response=%+v error=%v", response, err)
 			return
 		}
 		if err := uciWaitInstalledAcceptanceProcessExit(pid, 5*time.Second); err != nil {
