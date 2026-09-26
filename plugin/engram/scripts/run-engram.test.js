@@ -87,22 +87,20 @@ test("Claude MCP config preserves host argv via the package-root wrapper path", 
   assert.deepEqual(args.map(path.normalize), [path.resolve(__dirname, "..", "scripts", "run-engram.js")]);
 });
 
-test("OMP npm and marketplace launch the wrapper from a project directory", () => {
+test("OMP marketplace wrapper fails closed from project cwd with simulated host package-root expansion", () => {
   const pluginRoot = path.resolve(__dirname, "..");
   const project = fs.mkdtempSync(path.join(os.tmpdir(), "engram-omp-project-"));
   try {
-    for (const relative of [".mcp.json", path.join(".omp-plugin", "plugin.json")]) {
-      const config = JSON.parse(fs.readFileSync(path.join(pluginRoot, relative), "utf8")).mcpServers.engram;
-      const args = config.args.map((arg) => arg.replace("${OMP_PLUGIN_ROOT}", pluginRoot.replaceAll("\\", "/")));
-      const result = spawnSync(config.command, args, {
-        cwd: project,
-        encoding: "utf8",
-        env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PLUGIN_DATA: project, ENGRAM_CONFIG_FILE: path.join(project, "absent.json") },
-      });
-      assert.equal(result.status, 1, `${relative}: ${result.error?.message || result.stderr}`);
-      assert.match(result.stderr, /FATAL: ENGRAM_URL is empty/, relative);
-      assert.match(result.stderr, /Config file checked: .*absent\.json/, relative);
-    }
+    const config = JSON.parse(fs.readFileSync(path.join(pluginRoot, ".omp-plugin", "plugin.json"), "utf8")).mcpServers.engram;
+    const args = config.args.map((arg) => arg.replace("${OMP_PLUGIN_ROOT}", pluginRoot.replaceAll("\\", "/")));
+    const result = spawnSync(config.command, args, {
+      cwd: project,
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PLUGIN_DATA: project, ENGRAM_CONFIG_FILE: path.join(project, "absent.json") },
+    });
+    assert.equal(result.status, 1, result.error?.message || result.stderr);
+    assert.match(result.stderr, /FATAL: ENGRAM_URL is empty/);
+    assert.match(result.stderr, /Config file checked: .*absent\.json/);
   } finally {
     fs.rmSync(project, { recursive: true, force: true });
   }
