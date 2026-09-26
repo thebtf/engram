@@ -117,8 +117,9 @@ func (s *Server) graphMemoryVisible(ctx context.Context, id int64) bool {
 	if s.memoryStore == nil || id == 0 {
 		return false
 	}
-	mem, err := s.memoryStore.Get(ctx, id)
-	return err == nil && scope.ResolveMemory(writeLintVisibilityCaller(ctx, ""), mem, writeLintVisibilityOptions())
+	// Get omits legacy privacy metadata when F is off; authorization needs the stored fields.
+	mem, err := s.memoryStore.GetForSnapshot(ctx, id)
+	return err == nil && scope.ResolveMemory(writeLintVisibilityCaller(ctx, ""), mem, scope.MemoryVisibilityOptions{ApplyPrivacyScope: true})
 }
 
 func (s *Server) graphNodeVisible(ctx context.Context, id int64) bool {

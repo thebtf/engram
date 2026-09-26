@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/pkg/models"
@@ -16,6 +18,62 @@ import (
 	gormlib "gorm.io/gorm"
 	_ "modernc.org/sqlite"
 )
+
+func TestGraphToolFlagOffPreservesPrivateEndpointAuthority(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "false")
+	sqlDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	sqlDB.SetMaxOpenConns(1)
+	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gormlib.Config{DisableAutomaticPing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`CREATE TABLE memories (id INTEGER PRIMARY KEY, project TEXT, content TEXT, privacy_scope TEXT, source_workstation_id TEXT, deleted_at DATETIME)`,
+		`INSERT INTO memories (id, project, content, privacy_scope, source_workstation_id) VALUES (99, 'graph', 'public', 'project', ''), (100, 'graph', 'private', 'private', 'other')`,
+		`CREATE TABLE knowledge_edges (id INTEGER PRIMARY KEY, source_id INTEGER, target_id INTEGER, node_source_id INTEGER, node_target_id INTEGER, source_type TEXT, target_type TEXT, edge_type TEXT, weight REAL, reasoning TEXT, source_session_id TEXT, valid_from DATETIME, valid_until DATETIME, created_at DATETIME, superseded_at DATETIME)`,
+		`INSERT INTO knowledge_edges (id, source_id, target_id, node_target_id, source_type, target_type, edge_type, weight, reasoning, created_at) VALUES
+			(1, 99, 100, NULL, 'memory', 'memory', 'synonym_of', 1, 'secret edge reasoning', CURRENT_TIMESTAMP),
+			(2, 99, 99, NULL, 'memory', 'memory', 'synonym_of', 1, 'public edge reasoning', CURRENT_TIMESTAMP),
+			(3, 99, NULL, 20, 'memory', 'node', 'related_to', 1, 'private node reasoning', CURRENT_TIMESTAMP)`,
+	} {
+		if err := db.Exec(statement).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := &Server{graphStore: graph.NewStore(db, nil), memoryStore: gormdb.NewMemoryStore(&gormdb.Store{DB: db}), nodesStore: fakeNodeTypeLookup{nodes: map[int64]models.KnowledgeNode{
+		20: {ID: 20, PrivacyScope: "private"},
+	}}}
+	for _, tc := range []struct {
+		args graphArgs
+		want string
+	}{
+		{graphArgs{Action: "get_edges", MemoryID: 99}, `"count":1`},
+		{graphArgs{Action: "get_edges", MemoryID: 100}, `"count":0`},
+		{graphArgs{Action: "get_edges", NodeID: 20}, `"count":0`},
+		{graphArgs{Action: "traverse", MemoryID: 99}, `"count":1`},
+		{graphArgs{Action: "traverse", MemoryID: 100}, `"count":0`},
+		{graphArgs{Action: "find_path", SourceID: 99, TargetID: 100}, `"found":false`},
+		{graphArgs{Action: "synonyms", MemoryID: 99}, `"count":1`},
+		{graphArgs{Action: "synonyms", MemoryID: 100}, `"count":0`},
+	} {
+		result, err := server.handleGraph(context.Background(), mustMarshal(t, tc.args))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(result, tc.want) || strings.Contains(result, `"secret edge reasoning"`) || strings.Contains(result, `"private node reasoning"`) || strings.Contains(result, `"id":1,`) || strings.Contains(result, `"id":3,`) {
+			t.Fatalf("unauthorized graph %s: %s", tc.args.Action, result)
+		}
+	}
+	owner := auth.WithIdentity(context.Background(), auth.Client("read-only", "other"))
+	result, err := server.handleGraph(owner, mustMarshal(t, graphArgs{Action: "get_edges", MemoryID: 100}))
+	if err != nil || !strings.Contains(result, `"secret edge reasoning"`) {
+		t.Fatalf("authorized private graph result=%s err=%v", result, err)
+	}
+}
 
 func TestGraphToolWriterActionsAreAbsentDespiteLegacyFlag(t *testing.T) {
 	t.Setenv("ENGRAM_GRAPH_ENABLED", "true")
