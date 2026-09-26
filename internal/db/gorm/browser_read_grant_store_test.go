@@ -304,14 +304,14 @@ func TestBrowserReadGrantStore_TargetChooserAndCrossUserGrant(t *testing.T) {
 	fixture := newBrowserReadGrantFixture(t)
 	ctx := context.Background()
 	ownerPrincipal := browserReadGrantPrincipal(fixture.owner.ID)
-	targets, err := fixture.store.ListTargetChoices(ctx, fixture.owner.ID, ownerPrincipal)
+	targets, err := fixture.store.ListTargetChoices(ctx, fixture.owner.ID, ownerPrincipal, 0, 21)
 	require.NoError(t, err)
 	require.Contains(t, targets, BrowserReadGrantTargetChoice{UserID: fixture.target.ID, Label: fixture.target.Email})
 	require.Contains(t, targets, BrowserReadGrantTargetChoice{UserID: fixture.owner.ID, Label: fixture.owner.Email})
 	require.Equal(t, 1, countBrowserReadGrantTargetChoices(targets, fixture.owner.ID), "the owner appears exactly once as a selectable reader")
 
 	// The foreign user owns no checkout and receives no target labels.
-	foreignTargets, err := fixture.store.ListTargetChoices(ctx, fixture.other.ID, browserReadGrantPrincipal(fixture.other.ID))
+	foreignTargets, err := fixture.store.ListTargetChoices(ctx, fixture.other.ID, browserReadGrantPrincipal(fixture.other.ID), 0, 21)
 	require.NoError(t, err)
 	require.Empty(t, foreignTargets)
 
@@ -352,7 +352,7 @@ func TestBrowserReadGrantStore_TargetChooserAndCrossUserGrant(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, canRead)
 	require.NoError(t, fixture.db.Model(&User{}).Where("id = ?", fixture.target.ID).Update("disabled", true).Error)
-	targets, err = fixture.store.ListTargetChoices(ctx, fixture.owner.ID, ownerPrincipal)
+	targets, err = fixture.store.ListTargetChoices(ctx, fixture.owner.ID, ownerPrincipal, 0, 21)
 	require.NoError(t, err)
 	require.NotContains(t, targets, BrowserReadGrantTargetChoice{UserID: fixture.target.ID, Label: fixture.target.Email})
 	_, err = fixture.store.IssueOwnerChoice(ctx, BrowserReadGrantOwnerIssue{IssuerUserID: fixture.owner.ID, IssuerPrincipal: ownerPrincipal, TargetUserID: fixture.target.ID, ChoiceRef: fixture.checkout.CheckoutID})
@@ -586,6 +586,42 @@ func TestBrowserReadGrantStore_OwnerTransferAndDisabledIssuerInvalidateReads(t *
 	require.NoError(t, fixture.db.Model(fixture.other).Update("disabled", false).Error)
 	checkRead(true)
 	assertBrowserReadGrantAuditCount(t, fixture.db, "code_grant_issued", 2)
+}
+
+func TestBrowserReadGrantStore_TargetChoicesPageAllEnabledUsers(t *testing.T) {
+	fixture := newBrowserReadGrantFixture(t)
+	ctx := context.Background()
+	principal := browserReadGrantPrincipal(fixture.owner.ID)
+	for i := range 23 {
+		recipient := &User{Email: fmt.Sprintf("reader-%02d-%s", i, uuid.NewString()), PasswordHash: "fixture-password-hash", Role: DashboardRoleOperator, CreatedAt: time.Now().UTC()}
+		require.NoError(t, fixture.db.Create(recipient).Error)
+	}
+	require.NoError(t, fixture.db.Model(fixture.target).Update("disabled", true).Error)
+	seen := make(map[int64]bool)
+	var after int64
+	for {
+		page, err := fixture.store.ListTargetChoices(ctx, fixture.owner.ID, principal, after, 20)
+		require.NoError(t, err)
+		require.LessOrEqual(t, len(page), 20)
+		if len(page) == 0 {
+			break
+		}
+		for _, recipient := range page {
+			require.Greater(t, recipient.UserID, after)
+			require.False(t, seen[recipient.UserID])
+			seen[recipient.UserID] = true
+		}
+		after = page[len(page)-1].UserID
+	}
+	require.Len(t, seen, 25)
+	require.False(t, seen[fixture.target.ID])
+	_, err := fixture.store.ListTargetChoices(ctx, fixture.owner.ID, principal, 0, 51)
+	require.ErrorIs(t, err, ErrBrowserReadGrantDenied)
+	_, err = fixture.store.ListTargetChoices(ctx, fixture.owner.ID, principal, -1, 20)
+	require.ErrorIs(t, err, ErrBrowserReadGrantDenied)
+	foreignPage, err := fixture.store.ListTargetChoices(ctx, fixture.other.ID, browserReadGrantPrincipal(fixture.other.ID), 0, 20)
+	require.NoError(t, err)
+	require.Empty(t, foreignPage)
 }
 
 func newBrowserReadGrantFixture(t *testing.T) browserReadGrantFixture {

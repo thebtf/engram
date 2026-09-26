@@ -49,6 +49,38 @@ test('Owner reload sees every paged active grant and revokes a reader without an
   await expect(chooser.locator('summary')).toBeFocused()
 })
 
+test('Owner can choose a reader beyond the first bounded target page', async ({ page }) => {
+  const issued: string[] = []
+  await page.route('**/api/code/**', async (route: Route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname === '/api/code/grants/choices') {
+      const offset = url.searchParams.has('target_next_ref') ? 20 : 0
+      await route.fulfill({
+        json: {
+          choices: [{ choice_ref: 'checkout', repository: 'Engram', working_copy: 'desk' }],
+          targets: Array.from({ length: offset ? 3 : 20 }, (_, index) => ({ target_ref: `reader-${offset + index}`, label: `Reader ${offset + index}` })),
+          ...(offset ? {} : { target_next_ref: 'opaque-next' }),
+        }
+      })
+    } else if (url.pathname === '/api/code/grants' && route.request().method() === 'GET') {
+      await route.fulfill({ json: { grants: [] } })
+    } else if (url.pathname === '/api/code/grants' && route.request().method() === 'POST') {
+      issued.push(route.request().postDataJSON().target_ref)
+      await route.fulfill({ json: { grant_ref: 'new' } })
+    } else {
+      await route.fulfill({ status: 500 })
+    }
+  })
+  await page.goto('/code')
+  const chooser = page.getByTestId('code-grant-chooser')
+  await chooser.locator('summary').click()
+  await expect(chooser.getByRole('combobox').nth(1).getByRole('option')).toHaveCount(23)
+  await chooser.getByRole('combobox').nth(1).selectOption('reader-22')
+  await chooser.getByRole('button', { name: 'Разрешить чтение' }).click()
+  await expect(chooser.getByRole('status').filter({ hasText: 'Читателю открыт доступ' })).toBeVisible()
+  expect(issued).toEqual(['reader-22'])
+})
+
 test('Grant inventory reports denied, empty and failed page without exposing incomplete inventory', async ({ page }) => {
   let state: 'denied' | 'empty' | 'bad-page' = 'denied'
   await page.route('**/api/code/**', async (route: Route) => {

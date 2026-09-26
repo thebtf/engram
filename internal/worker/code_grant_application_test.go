@@ -84,8 +84,14 @@ func (store *recordingCodeGrantStore) ListOwnerActive(_ context.Context, issuerU
 	return rows, nil
 }
 
-func (store *recordingCodeGrantStore) ListTargetChoices(_ context.Context, _ int64, _ string) ([]gormdb.BrowserReadGrantTargetChoice, error) {
-	return store.targetChoices, nil
+func (store *recordingCodeGrantStore) ListTargetChoices(_ context.Context, _ int64, _ string, after int64, limit int) ([]gormdb.BrowserReadGrantTargetChoice, error) {
+	var page []gormdb.BrowserReadGrantTargetChoice
+	for _, target := range store.targetChoices {
+		if target.UserID > after && len(page) < limit {
+			page = append(page, target)
+		}
+	}
+	return page, nil
 }
 
 func (store *recordingCodeGrantStore) SetOwnerChoiceLabel(_ context.Context, issuerUserID int64, issuerPrincipal, choiceRef, label string) (gormdb.BrowserReadGrantOwnerChoice, error) {

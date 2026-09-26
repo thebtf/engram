@@ -75,7 +75,7 @@ type operatorCodeGrantReader interface {
 type operatorCodeGrantOnboardingApplication interface {
 	ListOwnerChoices(context.Context, auth.Identity) ([]gormdb.BrowserReadGrantOwnerChoice, error)
 	ListOwnerActive(context.Context, auth.Identity, string, int) ([]gormdb.BrowserReadGrantOwnerEntry, error)
-	ListTargetChoices(context.Context, auth.Identity) ([]gormdb.BrowserReadGrantTargetChoice, error)
+	ListTargetChoices(context.Context, auth.Identity, int64, int) ([]gormdb.BrowserReadGrantTargetChoice, error)
 	IssueOnboarding(context.Context, auth.Identity, IssueOnboardingCodeGrantInput) (gormdb.BrowserReadGrant, error)
 	SetWorkingCopyLabel(context.Context, auth.Identity, string, string) (gormdb.BrowserReadGrantOwnerChoice, error)
 	Revoke(context.Context, auth.Identity, string) (gormdb.BrowserReadGrant, error)
@@ -898,9 +898,19 @@ func (adapter *OperatorCodeHTTPAdapter) HandleContexts(w http.ResponseWriter, r 
 	writeJSON(w, operatorCodeContextsResponse{Contexts: catalog})
 }
 
-// HandleGrantChoices lists only the current exact owner's labeled checkout choices.
+// HandleGrantChoices lists only the current exact owner's labeled checkout choices
+// and one bounded page of enabled reader choices.
 func (adapter *OperatorCodeHTTPAdapter) HandleGrantChoices(w http.ResponseWriter, r *http.Request) {
-	identity, r, ok := adapter.decodeEmptyEnvelope(w, r, "operator-code-grant-choices", http.MethodGet)
+	if r == nil || r.URL == nil || r.Method != http.MethodGet || !operatorCodeEmptyBody(r) || len(r.Header.Values(operatorCodeRequestIDHeader)) != 1 {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return
+	}
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil || len(query) > 1 || (len(query) == 1 && (len(query["target_next_ref"]) != 1 || !operatorCodeChooserToken(query.Get("target_next_ref")))) {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return
+	}
+	identity, ok := adapter.decodeIdentity(w, r, "operator-code-grant-choices")
 	if !ok {
 		return
 	}
@@ -908,23 +918,45 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGrantChoices(w http.ResponseWriter
 		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 		return
 	}
+	var after int64
+	if len(query) != 0 {
+		fields, valid := adapter.operatorCodeOpaqueFields(identity, query.Get("target_next_ref"), "grant-target-page", 1)
+		if !valid {
+			operatorCodeWriteBodyless(w, http.StatusBadRequest)
+			return
+		}
+		after, err = strconv.ParseInt(fields[0], 10, 64)
+		if err != nil || after <= 0 {
+			operatorCodeWriteBodyless(w, http.StatusBadRequest)
+			return
+		}
+	}
 	choices, err := adapter.onboarding.ListOwnerChoices(r.Context(), identity.identity)
 	if err != nil {
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
 	}
-	targets, err := adapter.onboarding.ListTargetChoices(r.Context(), identity.identity)
+	targets, err := adapter.onboarding.ListTargetChoices(r.Context(), identity.identity, after, operatorCodeGrantInventoryPageSize+1)
 	if err != nil {
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
 	}
-	ownerChoices := adapter.operatorCodeOwnerChoiceDTOs(identity, choices)
-	targetChoices := adapter.operatorCodeTargetChoiceDTOs(identity, targets)
-	if len(ownerChoices) != len(choices) || len(targetChoices) != len(targets) {
+	response := operatorCodeOwnerChoicesResponse{}
+	if len(targets) > operatorCodeGrantInventoryPageSize {
+		targets = targets[:operatorCodeGrantInventoryPageSize]
+		response.TargetNextRef = adapter.operatorCodeOpaqueRef(identity, "grant-target-page", strconv.FormatInt(targets[len(targets)-1].UserID, 10))
+		if response.TargetNextRef == "" {
+			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+			return
+		}
+	}
+	response.Choices = adapter.operatorCodeOwnerChoiceDTOs(identity, choices)
+	response.Targets = adapter.operatorCodeTargetChoiceDTOs(identity, targets)
+	if len(response.Choices) != len(choices) || len(response.Targets) != len(targets) {
 		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 		return
 	}
-	writeJSON(w, operatorCodeOwnerChoicesResponse{Choices: ownerChoices, Targets: targetChoices})
+	writeJSON(w, response)
 }
 
 // HandleGrantInventory exposes only effective grants of the authenticated checkout owner.
@@ -2548,8 +2580,9 @@ type operatorCodeTargetChoice struct {
 }
 
 type operatorCodeOwnerChoicesResponse struct {
-	Choices []operatorCodeOwnerChoice  `json:"choices"`
-	Targets []operatorCodeTargetChoice `json:"targets"`
+	Choices       []operatorCodeOwnerChoice  `json:"choices"`
+	Targets       []operatorCodeTargetChoice `json:"targets"`
+	TargetNextRef string                     `json:"target_next_ref,omitempty"`
 }
 
 func (adapter *OperatorCodeHTTPAdapter) operatorCodeTargetChoiceDTOs(identity operatorCodeRequestIdentity, targets []gormdb.BrowserReadGrantTargetChoice) []operatorCodeTargetChoice {

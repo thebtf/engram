@@ -17,7 +17,7 @@ type codeGrantStore interface {
 	IssueOwnerChoice(context.Context, gormdb.BrowserReadGrantOwnerIssue) (gormdb.BrowserReadGrant, error)
 	ListOwnerChoices(context.Context, int64, string) ([]gormdb.BrowserReadGrantOwnerChoice, error)
 	ListOwnerActive(context.Context, int64, string, string, int) ([]gormdb.BrowserReadGrantOwnerEntry, error)
-	ListTargetChoices(context.Context, int64, string) ([]gormdb.BrowserReadGrantTargetChoice, error)
+	ListTargetChoices(context.Context, int64, string, int64, int) ([]gormdb.BrowserReadGrantTargetChoice, error)
 	SetOwnerChoiceLabel(context.Context, int64, string, string, string) (gormdb.BrowserReadGrantOwnerChoice, error)
 	Revoke(context.Context, int64, string, string) (gormdb.BrowserReadGrant, error)
 	CanRead(context.Context, int64, string, string) (bool, error)
@@ -97,8 +97,8 @@ func (a *CodeGrantApplication) ListOwnerActive(ctx context.Context, issuer auth.
 	return a.grants.ListOwnerActive(ctx, subject.UserID, subject.Principal, after, limit)
 }
 
-// ListTargetChoices returns enabled persisted recipients only for an exact owner.
-func (a *CodeGrantApplication) ListTargetChoices(ctx context.Context, issuer auth.Identity) ([]gormdb.BrowserReadGrantTargetChoice, error) {
+// ListTargetChoices returns one page of enabled persisted recipients only for an exact owner.
+func (a *CodeGrantApplication) ListTargetChoices(ctx context.Context, issuer auth.Identity, after int64, limit int) ([]gormdb.BrowserReadGrantTargetChoice, error) {
 	issuerSubject, ok := issuer.SessionBrowserSubject()
 	if !ok {
 		return nil, errCodeGrantCallerDenied
@@ -106,7 +106,7 @@ func (a *CodeGrantApplication) ListTargetChoices(ctx context.Context, issuer aut
 	if err := a.requireStore(); err != nil {
 		return nil, err
 	}
-	return a.grants.ListTargetChoices(ctx, issuerSubject.UserID, issuerSubject.Principal)
+	return a.grants.ListTargetChoices(ctx, issuerSubject.UserID, issuerSubject.Principal, after, limit)
 }
 
 // IssueOnboarding creates a grant through one server-issued owner catalog

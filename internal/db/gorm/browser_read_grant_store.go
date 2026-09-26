@@ -264,9 +264,13 @@ func (s *BrowserReadGrantStore) ListOwnerChoices(ctx context.Context, issuerUser
 	return rows, nil
 }
 
-// ListTargetChoices offers enabled human accounts only to an owner with a grantable checkout.
+// ListTargetChoices offers one bounded page of enabled human accounts only to
+// an owner with a grantable checkout. after is a keyset position, never authority.
 // Users are global dashboard identities; the selected checkout supplies the grant realm.
-func (s *BrowserReadGrantStore) ListTargetChoices(ctx context.Context, issuerUserID int64, issuerPrincipal string) ([]BrowserReadGrantTargetChoice, error) {
+func (s *BrowserReadGrantStore) ListTargetChoices(ctx context.Context, issuerUserID int64, issuerPrincipal string, after int64, limit int) ([]BrowserReadGrantTargetChoice, error) {
+	if after < 0 || limit < 1 || limit > browserReadGrantInventoryPageMax {
+		return nil, ErrBrowserReadGrantDenied
+	}
 	choices, err := s.ListOwnerChoices(ctx, issuerUserID, issuerPrincipal)
 	if err != nil {
 		return nil, err
@@ -275,7 +279,7 @@ func (s *BrowserReadGrantStore) ListTargetChoices(ctx context.Context, issuerUse
 		return []BrowserReadGrantTargetChoice{}, nil
 	}
 	var targets []BrowserReadGrantTargetChoice
-	if err := s.db.WithContext(ctx).Table("users").Select("id, email").Where("disabled = FALSE").Order("email ASC, id ASC").Find(&targets).Error; err != nil {
+	if err := s.db.WithContext(ctx).Table("users").Select("id, email").Where("disabled = FALSE AND id > ?", after).Order("id ASC").Limit(limit).Find(&targets).Error; err != nil {
 		return nil, fmt.Errorf("browser read grant target choices: %w", err)
 	}
 	return targets, nil

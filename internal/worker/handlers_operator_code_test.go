@@ -1151,7 +1151,7 @@ func (application *operatorCodeGrantBreadcrumbApplication) ListOwnerActive(ctx c
 	return nil, nil
 }
 
-func (*operatorCodeGrantBreadcrumbApplication) ListTargetChoices(context.Context, auth.Identity) ([]gormdb.BrowserReadGrantTargetChoice, error) {
+func (*operatorCodeGrantBreadcrumbApplication) ListTargetChoices(context.Context, auth.Identity, int64, int) ([]gormdb.BrowserReadGrantTargetChoice, error) {
 	return nil, nil
 }
 

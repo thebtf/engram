@@ -76,22 +76,44 @@ async function refresh() {
   inventoryError.value = false
   denied.value = false
   try {
-    const response = await call('/code/grants/choices', 'GET')
-    if (!response.ok) {
-      available.value = false
-      choices.value = []
-      targets.value = []
-      if (response.status !== 401 && response.status !== 403) inventoryError.value = true
-    } else {
-      const catalog = await response.json() as { choices: CheckoutChoice[]; targets: TargetChoice[] }
-      choices.value = catalog.choices
-      targets.value = catalog.targets
+    const collected: TargetChoice[] = []
+    const cursors = new Set<string>()
+    const seen = new Set<string>()
+    let next: string | undefined
+    let ownerChoices: CheckoutChoice[] = []
+    do {
+      const response = await call(`/code/grants/choices${next === undefined ? '' : `?target_next_ref=${encodeURIComponent(next)}`}`, 'GET')
+      if (!response.ok) {
+        available.value = false
+        choices.value = []
+        targets.value = []
+        if (response.status === 401 || response.status === 403) denied.value = true
+        else inventoryError.value = true
+        break
+      }
+      const catalog = await response.json() as { choices: CheckoutChoice[]; targets: TargetChoice[]; target_next_ref?: string }
+      if (!Array.isArray(catalog.choices) || !Array.isArray(catalog.targets) || (catalog.target_next_ref !== undefined && (typeof catalog.target_next_ref !== 'string' || !catalog.target_next_ref))) throw new Error('Invalid grant choices')
+      if (next === undefined) ownerChoices = catalog.choices
+      for (const reader of catalog.targets) {
+        if (typeof reader.target_ref !== 'string' || !reader.target_ref || typeof reader.label !== 'string' || seen.has(reader.target_ref)) throw new Error('Invalid reader choice')
+        seen.add(reader.target_ref)
+        collected.push(reader)
+      }
+      next = catalog.target_next_ref
+      if (next !== undefined) {
+        if (cursors.has(next) || catalog.targets.length === 0) throw new Error('Repeated reader cursor')
+        cursors.add(next)
+      }
+    } while (next !== undefined)
+    if (!inventoryError.value) {
+      choices.value = ownerChoices
+      targets.value = collected
       available.value = choices.value.length > 0
       if (!choices.value.some(choice => choice.choice_ref === checkout.value)) checkout.value = choices.value[0]?.choice_ref ?? ''
       if (!targets.value.some(choice => choice.target_ref === target.value)) target.value = targets.value[0]?.target_ref ?? ''
     }
     await loadGrants()
-  } catch { inventoryError.value = true; grants.value = [] } finally { loaded.value = true; busy.value = false }
+  } catch { inventoryError.value = true; available.value = false; choices.value = []; targets.value = []; grants.value = [] } finally { loaded.value = true; busy.value = false }
 }
 
 async function issue() {

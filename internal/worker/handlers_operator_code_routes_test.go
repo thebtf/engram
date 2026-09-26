@@ -620,6 +620,48 @@ func TestOperatorCodeRoutesDelegateStructureAndOwnerOnboarding(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, nonOwner.Code, nonOwner.Body.String())
 }
 
+func TestOperatorCodeRoutes_GrantRecipientChoicesPageWithoutTruncation(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	grants := &recordingCodeGrantStore{ownerChoices: []gormstore.BrowserReadGrantOwnerChoice{{ChoiceRef: fixture.ref.CheckoutID, RepositoryLabel: "Engram"}}}
+	for i := range operatorCodeGrantInventoryPageSize + 3 {
+		grants.targetChoices = append(grants.targetChoices, gormstore.BrowserReadGrantTargetChoice{UserID: int64(i + 1), Label: fmt.Sprintf("reader-%02d@example.test", i)})
+	}
+	adapter.onboarding = &CodeGrantApplication{grants: grants}
+	service := newOperatorCodeRouteTestService(adapter)
+	call := func(path, session string, identity auth.Identity) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set(operatorCodeRequestIDHeader, "target-request")
+		request.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: session})
+		service.router.ServeHTTP(response, request.WithContext(auth.WithIdentity(request.Context(), identity)))
+		return response
+	}
+	first := call("/api/code/grants/choices", "browser-session-41", fixture.identity)
+	require.Equal(t, http.StatusOK, first.Code, first.Body.String())
+	var page operatorCodeOwnerChoicesResponse
+	require.NoError(t, json.Unmarshal(first.Body.Bytes(), &page))
+	require.Len(t, page.Targets, operatorCodeGrantInventoryPageSize)
+	require.NotEmpty(t, page.TargetNextRef)
+	require.Len(t, page.Choices, 1)
+	require.NotContains(t, first.Body.String(), `"user_id"`)
+	second := call("/api/code/grants/choices?target_next_ref="+page.TargetNextRef, "browser-session-41", fixture.identity)
+	require.Equal(t, http.StatusOK, second.Code, second.Body.String())
+	var remaining operatorCodeOwnerChoicesResponse
+	require.NoError(t, json.Unmarshal(second.Body.Bytes(), &remaining))
+	require.Len(t, remaining.Targets, 3)
+	require.Empty(t, remaining.TargetNextRef)
+	require.Equal(t, grants.targetChoices[20].Label, remaining.Targets[0].Label)
+	for _, denied := range []*httptest.ResponseRecorder{
+		call("/api/code/grants/choices?target_next_ref=21", "browser-session-41", fixture.identity),
+		call("/api/code/grants/choices?target_next_ref="+page.TargetNextRef, "different-session", fixture.identity),
+		call("/api/code/grants/choices?target_next_ref="+page.TargetNextRef, "browser-session-41", auth.Session("admin")),
+		call("/api/code/grants/choices?target_next_ref="+page.TargetNextRef+"&target_next_ref=duplicate", "browser-session-41", fixture.identity),
+	} {
+		require.NotEqual(t, http.StatusOK, denied.Code)
+		require.Empty(t, denied.Body.String())
+	}
+}
+
 func TestOperatorCodeRoutes_OwnerGrantInventorySurvivesReload(t *testing.T) {
 	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
 	grants := &recordingCodeGrantStore{}
