@@ -605,6 +605,7 @@ func TestUCIApplicationOperatorSearchPreservesLexicalContinuation(t *testing.T) 
 	require.Equal(t, uci.QueryRetrievalLexical, first.Retrieval.Mode)
 	require.NotNil(t, first.Continuation.Value)
 	require.False(t, uci.IsSemanticContinuationToken(*first.Continuation.Value))
+	application.semanticService = nil
 
 	continuationSpec := spec
 	continuationSpec.Continuation = first.Continuation.Value
