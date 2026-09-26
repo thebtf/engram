@@ -692,7 +692,6 @@ test('dispatcher fails open when a child hook exits nonzero', () => {
 
 test('release archives include scripts required by hooks and MCP wrapper', () => {
   const goreleaser = readRepoFile('.goreleaser.yaml');
-  const codexMcp = JSON.parse(readRepoFile('plugin', 'engram', '.mcp.json'));
   const claudeMcp = JSON.parse(readRepoFile('plugin', 'engram', 'claude', '.mcp.json'));
   const dispatcher = fs.readFileSync(path.join(hooksDir, 'dispatcher.cjs'), 'utf8');
 
@@ -701,7 +700,6 @@ test('release archives include scripts required by hooks and MCP wrapper', () =>
   assert.match(goreleaser, /dst:\s+scripts/);
   assert.match(goreleaser, /src:\s+plugin\/engram\/bootstrap-targets\.json/);
   assert.match(goreleaser, /id:\s+client-raw[\s\S]*?ids:[\s\S]*?engram-client[\s\S]*?formats:[\s\S]*?binary/);
-  assert.deepEqual(codexMcp.mcpServers.engram.args, ['./scripts/run-engram.js']);
   assert.deepEqual(claudeMcp.mcpServers.engram.args, ['${CLAUDE_PLUGIN_ROOT}/scripts/run-engram.js']);
   assert.match(dispatcher, /\.\.\/scripts\/ensure-binary\.js/);
 });

@@ -143,6 +143,9 @@ archives:
         strip_parent: true
       - src: plugin/engram/skills/*/*.md
         dst: skills
+      - src: plugin/engram/codex.mcp.json
+        dst: .
+        strip_parent: true
       - src: plugin/engram/.mcp.json
         dst: .
         strip_parent: true

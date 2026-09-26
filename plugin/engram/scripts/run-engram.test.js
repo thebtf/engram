@@ -1,9 +1,9 @@
 const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { spawnSync } = require("node:child_process");
 
 const {
   appendStartupDiagnosticLog,
@@ -39,19 +39,6 @@ test("missing keycard points to the real access console", () => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /127\.0\.0\.1:65535\/access/);
   assert.doesNotMatch(result.stderr, /\/tokens/);
-});
-
-test("Codex MCP config launches wrapper via plugin-root-relative path", () => {
-  // Codex does NOT interpolate ${CLAUDE_PLUGIN_ROOT} in plugin .mcp.json args —
-  // the literal string reaches node and the server dies with MODULE_NOT_FOUND.
-  // Codex resolves relative args against the plugin root via cwd ".".
-  const mcpPath = path.resolve(__dirname, "..", ".mcp.json");
-  const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
-  const server = payload.mcpServers.engram;
-
-  assert.equal(server.command, "node");
-  assert.deepEqual(server.args, ["./scripts/run-engram.js"]);
-  assert.equal(server.cwd, ".");
 });
 
 test("Claude MCP config launches wrapper via CLAUDE_PLUGIN_ROOT interpolation", () => {
@@ -118,19 +105,49 @@ test("OMP manifest resolves its script from the plugin root independently of the
   assert.equal(ompMarketplace.plugins[0].version, claudePlugin.version);
 });
 
-test("Codex MCP config resolves the wrapper from plugin-root cwd without executing it", () => {
-  const mcpPath = path.resolve(__dirname, "..", ".mcp.json");
-  const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
-  const server = payload.mcpServers.engram;
-  assert.equal(server.cwd, ".");
-  assert.equal(path.resolve(path.dirname(mcpPath), server.args[0]), path.join(path.dirname(mcpPath), "scripts", "run-engram.js"));
-});
-
 test("Claude MCP config preserves host argv via the package-root wrapper path", () => {
   const mcpPath = path.resolve(__dirname, "..", "claude", ".mcp.json");
   const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
   const args = expandMcpArgsForTest(payload.mcpServers.engram.args, path.resolve(__dirname, ".."));
   assert.deepEqual(args.map(path.normalize), [path.resolve(__dirname, "..", "scripts", "run-engram.js")]);
+});
+
+test("OMP marketplace wrapper fails closed from project cwd with simulated host package-root expansion", () => {
+  const pluginRoot = path.resolve(__dirname, "..");
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), "engram-omp-project-"));
+  try {
+    const config = JSON.parse(fs.readFileSync(path.join(pluginRoot, ".omp-plugin", "plugin.json"), "utf8")).mcpServers.engram;
+    const args = config.args.map((arg) => arg.replace("${OMP_PLUGIN_ROOT}", pluginRoot.replaceAll("\\", "/")));
+    const result = spawnSync(config.command, args, {
+      cwd: project,
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PLUGIN_DATA: project, ENGRAM_CONFIG_FILE: path.join(project, "absent.json") },
+    });
+    assert.equal(result.status, 1, result.error?.message || result.stderr);
+    assert.match(result.stderr, /FATAL: ENGRAM_URL is empty/);
+    assert.match(result.stderr, /Config file checked: .*absent\.json/);
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("Codex manifest invokes its package wrapper from the plugin directory", () => {
+  const pluginRoot = path.resolve(__dirname, "..");
+  const server = JSON.parse(fs.readFileSync(path.join(pluginRoot, ".codex-plugin", "plugin.json"), "utf8"));
+  const config = JSON.parse(fs.readFileSync(path.join(pluginRoot, server.mcpServers), "utf8")).mcpServers.engram;
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-codex-launch-"));
+  try {
+    const result = spawnSync(config.command, config.args, {
+      cwd: path.resolve(pluginRoot, config.cwd),
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PLUGIN_DATA: dataDir, ENGRAM_CONFIG_FILE: path.join(dataDir, "absent.json") },
+    });
+    assert.equal(result.status, 1, result.error?.message || result.stderr);
+    assert.match(result.stderr, /FATAL: ENGRAM_URL is empty/);
+    assert.match(result.stderr, /Config file checked: .*absent\.json/);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
 });
 
 test("infers Codex plugin data dir from installed cache root", () => {

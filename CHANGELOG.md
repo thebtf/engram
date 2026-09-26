@@ -10,16 +10,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Workspace owners can choose another enabled browser account and issue or revoke an audited, exact Source-and-Checkout read grant; the recipient is resolved from persisted users and never supplied as a raw principal.
-
-### Fixed
-
-- Deny Workspace catalog choices and transactional pins when the grant issuer is disabled or no longer owns the checkout, matching browser read authorization.
-- Graph traversal and path readers prune private intermediaries before expansion while retaining public memory-to-node edges with typed node endpoints.
-
-## [6.50.0] - 2026-09-17
-
-### Added
-
 - **Operator Workspace (Feature 011 D-A).** From Home, an authenticated operator can choose a Repository, Working copy, and Indexed snapshot, then search or browse source, follow direct or reverse derived relations, and open released evidence in one immutable UCI View.
 - **Browser grants and UCI release checks.** Workspace browser reads require an explicit Source-and-Checkout grant, a current tab binding, and UCI reauthorization and exposure recording before contextual content returns.
 - **Windows UCI parser delivery.** The plugin installs an integrity-pinned Windows amd64 Tree-sitter parser beside its daemon and verifies its bundle identity before launch. Linux and macOS parser artifacts are not included in this release.
@@ -30,10 +20,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Deny Workspace catalog choices and transactional pins when the grant issuer is disabled or no longer owns the checkout, matching browser read authorization.
+- Graph traversal and path readers prune private intermediaries before expansion while retaining public memory-to-node edges with typed node endpoints.
 - Corrected Workspace responsive and accessibility behavior, including narrow layouts, 200% zoom, visible focus, keyboard navigation, and accessible relation and evidence controls.
 - Kept Workspace semantic-search continuations and structure and relation evidence bound to the selected UCI View and UCI release authority.
-- Made the OMP extension inherit the host working directory when it resolves the project identity.
 - Added an interruption-safe journal to latest-image promotion that records its exact state when promotion fails.
+
+## [6.49.4] - 2026-09-25
+
+### Fixed
+
+- Fixed OMP Engram MCP startup from an ordinary project directory for the marketplace plugin: its configuration resolves the plugin wrapper path while retaining project cwd; Codex uses a separate package-relative MCP configuration (#531).
 
 ## [6.49.3] - 2026-09-16
 
