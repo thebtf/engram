@@ -1,8 +1,10 @@
 package gorm
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"unicode/utf8"
 
 	ucidomain "github.com/thebtf/engram/internal/uci"
 )
@@ -69,15 +71,20 @@ type uciVersionedReadRow struct {
 	ChunkKind        string `gorm:"column:chunk_kind"`
 	Language         string `gorm:"column:language"`
 	SourceByteLength int64  `gorm:"column:source_byte_length"`
-	Text             string `gorm:"column:text"`
+	Text             []byte `gorm:"column:text"`
+	Prefix           []byte `gorm:"column:prefix"`
 	ReferenceSiteID  string `gorm:"column:reference_site_id"`
 	ReferenceSpan    string `gorm:"column:reference_span"`
 }
 
 func (row uciVersionedReadRow) hit(spec ucidomain.VersionedReadSpec) (ucidomain.VersionedReadHit, bool) {
+	if spec.IndexedSpan != nil {
+		row.LineStart += int64(bytes.Count(row.Prefix, []byte{'\n'}))
+	}
+	row.LineEnd = row.LineStart + int64(bytes.Count(row.Text, []byte{'\n'}))
 	if row.EntityKey != spec.Entity.EntityKey ||
 		row.ByteStart != spec.Span.ByteStart || row.ByteEnd != spec.Span.ByteEnd ||
-		row.LineStart != spec.Span.LineStart || row.LineEnd != spec.Span.LineEnd ||
+		(spec.IndexedSpan == nil && (row.LineStart != spec.Span.LineStart || row.LineEnd != spec.Span.LineEnd)) ||
 		row.ContentDigest != "sha256:"+string(spec.ContentDigest) ||
 		row.SourceByteLength != spec.Span.ByteEnd-spec.Span.ByteStart {
 		return ucidomain.VersionedReadHit{}, false
@@ -85,15 +92,25 @@ func (row uciVersionedReadRow) hit(spec ucidomain.VersionedReadSpec) (ucidomain.
 	if spec.ReferenceSiteID != nil && !row.matchesReferenceSite(*spec.ReferenceSiteID, spec.Span) {
 		return ucidomain.VersionedReadHit{}, false
 	}
+	if spec.IndexedSpan != nil {
+		for !utf8.Valid(row.Text) && len(row.Text) > 0 {
+			row.Text = row.Text[:len(row.Text)-1]
+		}
+		if len(row.Text) == 0 || len(row.Text) < int(row.SourceByteLength)-3 {
+			return ucidomain.VersionedReadHit{}, false
+		}
+		row.ByteEnd = row.ByteStart + int64(len(row.Text))
+		row.SourceByteLength = int64(len(row.Text))
+	}
 	return ucidomain.VersionedReadHit{
 		Entity:           spec.Entity,
 		Path:             row.RelativePath,
-		Span:             spec.Span,
+		Span:             ucidomain.QuerySpan{ByteStart: row.ByteStart, ByteEnd: row.ByteEnd, LineStart: row.LineStart, LineEnd: row.LineEnd},
 		ContentDigest:    spec.ContentDigest,
 		Kind:             uciQueryItemKind(row.ChunkKind),
 		Language:         row.Language,
 		SourceByteLength: row.SourceByteLength,
-		Text:             row.Text,
+		Text:             string(row.Text),
 	}, true
 }
 
@@ -116,6 +133,10 @@ func uciVersionedReadUnavailableResult(code ucidomain.QueryErrorCode) ucidomain.
 }
 
 func buildUCIVersionedReadSQL(ref ucidomain.ContextRef, spec ucidomain.VersionedReadSpec) (string, []any) {
+	indexed := spec.Span
+	if spec.IndexedSpan != nil {
+		indexed = *spec.IndexedSpan
+	}
 	if spec.ReferenceSiteID != nil {
 		return buildUCIVersionedReferenceReadSQL(ref, spec)
 	}
@@ -135,14 +156,19 @@ func buildUCIVersionedReadSQL(ref ucidomain.ContextRef, spec ucidomain.Versioned
 		UCIParseArtifactComplete,
 		UCIParseArtifactPartial,
 		"sha256:" + string(spec.ContentDigest),
-		spec.Span.ByteEnd,
+		indexed.ByteEnd,
+		indexed.ByteStart,
+		indexed.ByteEnd,
+		spec.Entity.EntityKey,
+		spec.Entity.EntityKey,
 		spec.Span.ByteStart,
-		spec.Span.ByteEnd,
-		spec.Entity.EntityKey,
-		spec.Entity.EntityKey,
+		spec.Span.ByteStart,
 		spec.Span.ByteEnd - spec.Span.ByteStart,
-		spec.Span.LineStart,
-		spec.Span.LineEnd,
+		spec.Span.ByteStart,
+		spec.Span.ByteEnd - spec.Span.ByteStart,
+		spec.Span.ByteStart,
+		indexed.LineStart,
+		indexed.LineEnd,
 	}
 	return `
 		WITH selected_view AS (
@@ -210,13 +236,14 @@ func buildUCIVersionedReadSQL(ref ucidomain.ContextRef, spec ucidomain.Versioned
 			SELECT
 				candidate.entity_key,
 				candidate.relative_path,
-				candidate.byte_start,
-				candidate.byte_end,
+			?::bigint AS byte_start,
+			?::bigint + ?::bigint AS byte_end,
 				candidate.content_digest,
 				candidate.chunk_kind,
 				candidate.language,
 				blob.encoding,
-				substring(blob.safe_content FROM (candidate.byte_start + 1)::integer FOR ?::integer) AS content,
+			substring(blob.safe_content FROM (? + 1)::integer FOR ?::integer) AS content,
+			substring(blob.safe_content FROM (candidate.byte_start + 1)::integer FOR (? - candidate.byte_start)::integer) AS prefix,
 				array_length(regexp_split_to_array(
 					convert_from(substring(blob.safe_content FROM 1 FOR candidate.byte_start::integer), replace(upper(blob.encoding), '-', '')),
 					E'\n'
@@ -241,7 +268,8 @@ func buildUCIVersionedReadSQL(ref ucidomain.ContextRef, spec ucidomain.Versioned
 			chunk_kind,
 			language,
 			octet_length(content) AS source_byte_length,
-			convert_from(content, replace(upper(encoding), '-', '')) AS text
+			content AS text,
+			prefix
 		FROM bounded_bytes
 		WHERE line_start = ?
 			AND line_end = ?

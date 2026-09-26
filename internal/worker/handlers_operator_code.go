@@ -847,6 +847,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleVersionedRead(w http.ResponseWrite
 			EntityKey: request.EntityKey,
 		},
 		Span:              request.Span,
+		IndexedSpan:       request.IndexedSpan,
 		ContentDigest:     uci.QueryContentDigest(request.ContentDigest),
 		ReferenceSiteID:   request.ReferenceSiteID,
 		VerifyWorkingCopy: request.VerifyWorkingCopy,
@@ -1622,12 +1623,13 @@ func operatorCodeUniqueEvidenceKinds(values []uci.QueryEvidenceKind) []uci.Query
 
 type operatorCodeVersionedReadRequest struct {
 	operatorCodeProofRequest
-	EntityKey         string        `json:"entity_key"`
-	Span              uci.QuerySpan `json:"span"`
-	ContentDigest     string        `json:"content_digest"`
-	ReferenceSiteID   *string       `json:"reference_site_id,omitempty"`
-	VerifyWorkingCopy bool          `json:"verify_working_copy"`
-	MaxBytes          *int          `json:"max_bytes"`
+	EntityKey         string         `json:"entity_key"`
+	Span              uci.QuerySpan  `json:"span"`
+	IndexedSpan       *uci.QuerySpan `json:"indexed_span,omitempty"`
+	ContentDigest     string         `json:"content_digest"`
+	ReferenceSiteID   *string        `json:"reference_site_id,omitempty"`
+	VerifyWorkingCopy bool           `json:"verify_working_copy"`
+	MaxBytes          *int           `json:"max_bytes"`
 }
 
 func (request operatorCodeVersionedReadRequest) valid() bool {
@@ -1638,7 +1640,13 @@ func (request operatorCodeVersionedReadRequest) valid() bool {
 		return false
 	}
 	maxBytes := request.maxBytes()
-	return maxBytes >= 1 && maxBytes <= operatorCodeReadMax && request.Span.ByteEnd-request.Span.ByteStart <= int64(maxBytes)
+	if maxBytes < 1 || maxBytes > operatorCodeReadMax || request.Span.ByteEnd-request.Span.ByteStart > int64(maxBytes) {
+		return false
+	}
+	if request.IndexedSpan != nil {
+		return request.IndexedSpan.Validate() == nil && request.ReferenceSiteID == nil && request.Span.ByteStart >= request.IndexedSpan.ByteStart && request.Span.ByteEnd <= request.IndexedSpan.ByteEnd && request.Span.LineStart == request.IndexedSpan.LineStart && request.Span.LineEnd == request.IndexedSpan.LineEnd
+	}
+	return true
 }
 
 func (request operatorCodeVersionedReadRequest) maxBytes() int {
@@ -2333,7 +2341,13 @@ func operatorCodeReadResponseValid(response uci.QueryResponse, authorized uci.Au
 			return false
 		}
 		item := (*response.Items)[0]
-		return item.Ref == input.Ref && item.Span == input.Span && item.ContentDigest == input.ContentDigest && len(item.Excerpt) == int(input.Span.ByteEnd-input.Span.ByteStart) && len(item.Excerpt) <= input.MaxBytes
+		if item.Ref != input.Ref || item.ContentDigest != input.ContentDigest || len(item.Excerpt) != int(item.Span.ByteEnd-item.Span.ByteStart) || len(item.Excerpt) > input.MaxBytes {
+			return false
+		}
+		if input.IndexedSpan == nil {
+			return item.Span == input.Span
+		}
+		return item.Span.ByteStart == input.Span.ByteStart && item.Span.ByteEnd > item.Span.ByteStart && item.Span.ByteEnd <= input.Span.ByteEnd && item.Span.LineStart >= input.IndexedSpan.LineStart && item.Span.LineEnd <= input.IndexedSpan.LineEnd
 	case uci.QueryStatusEmpty:
 		return response.Retrieval != nil && response.Retrieval.Mode == uci.QueryRetrievalExact
 	case uci.QueryStatusUnavailable:

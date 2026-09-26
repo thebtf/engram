@@ -1527,9 +1527,12 @@ export function useOperatorCode() {
   }
 
   async function readSource(descriptor: CodeSourceDescriptor): Promise<void> {
+    const oversized = descriptor.referenceSiteId === undefined && descriptor.span.byteEnd - descriptor.span.byteStart > 8192
+    const indexedSpan = { byte_start: descriptor.span.byteStart, byte_end: descriptor.span.byteEnd, line_start: descriptor.span.lineStart, line_end: descriptor.span.lineEnd }
     const payload = bindingPayload({
       entity_key: descriptor.entityKey,
-      span: { byte_start: descriptor.span.byteStart, byte_end: descriptor.span.byteEnd, line_start: descriptor.span.lineStart, line_end: descriptor.span.lineEnd },
+      span: oversized ? { ...indexedSpan, byte_end: indexedSpan.byte_start + 8192 } : indexedSpan,
+      ...(oversized ? { indexed_span: indexedSpan } : {}),
       content_digest: descriptor.contentDigest,
       ...(descriptor.referenceSiteId === undefined ? {} : { reference_site_id: descriptor.referenceSiteId }),
     })

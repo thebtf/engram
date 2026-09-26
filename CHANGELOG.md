@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Graph source descriptors for file-only nodes now resolve to their exact published bytes; symbolic nodes and existing lexical chunk identities remain readable.
+- Large indexed source chunks now display a bounded first 8 KiB from the released snapshot, with a visible notice that the remaining source is not displayed.
 - Preserve lexical search pagination when the optional semantic service is absent, instead of failing while checking continuation ownership.
 - Kept each hybrid-search result's excerpt attached to its ranked chunk instead of joining every chunk in the same artifact; the live Workspace fixture now follows real result continuations and verifies its namespaced daemon controls.
 - Proved persisted Workspace owner grants in the real browser fixture: issue through the chooser, reload inventory, allow reader search/graph/source, then revoke and deny those reads.

@@ -59,6 +59,60 @@ func TestUCIVersionedReadStoreReadsBoundedHistoricalBytesAndIsolatesCurrentView(
 	require.Equal(t, ucidomain.IndexCoverageComplete, foreignResult.Coverage)
 }
 
+func TestUCIVersionedReadStoreReadsBoundedSubspanOfLargeIndexedChunk(t *testing.T) {
+	fixture := openUCIPublicationFixture(t)
+	lead := "func Large() {"
+	body := lead + strings.Repeat("x", 8191-len(lead)) + "€\n" + strings.Repeat("z", 65536-8195)
+	artifact := fixture.insertArtifact(t, fixture.source.SourceID, "large-indexed-source", body, UCIParseArtifactComplete)
+	start, end, _ := uciVersionedReadAddBoundedChunk(t, fixture, &artifact, body)
+	artifact.Proof = uciVersionedReadDescribeArtifact(t, fixture, artifact)
+	published := uciVersionedReadPublish(t, fixture, uciVersionedReadPublishInput{key: "large-indexed-source", path: "large/source.go", checkout: fixture.checkout, kind: ucidomain.IndexJobInitial, artifact: artifact})
+	authorized := uciSemanticAuthorize(t, fixture, published.Context)
+	spec := uciVersionedReadSpecForPathAndSpan(t, fixture, authorized, "large/source.go", start, end)
+	indexed := spec.Span
+	spec.IndexedSpan = &indexed
+	spec.Span.ByteEnd = start + 8192
+	spec.MaxBytes = 8192
+	response, err := ucidomain.NewVersionedReadService(fixture.projection).Read(context.Background(), authorized, spec)
+	require.NoError(t, err)
+	require.NoError(t, response.ValidatePreExposure())
+	require.Len(t, *response.Items, 1)
+	item := (*response.Items)[0]
+	require.Equal(t, body[:8191], item.Excerpt)
+	require.Equal(t, start+8191, item.Span.ByteEnd)
+	require.Contains(t, []string(*response.Warnings), "source_partial_indexed_chunk")
+	interior := spec
+	interior.Span.ByteStart = start + 8195
+	interior.Span.ByteEnd = interior.Span.ByteStart + 8192
+	continued, err := fixture.projection.ReadExact(context.Background(), authorized, interior)
+	require.NoError(t, err)
+	require.NotNil(t, continued.Hit)
+	require.Equal(t, strings.Repeat("z", 8192), continued.Hit.Text)
+	require.Equal(t, ucidomain.QuerySpan{ByteStart: interior.Span.ByteStart, ByteEnd: interior.Span.ByteEnd, LineStart: indexed.LineStart + 1, LineEnd: indexed.LineStart + 1}, continued.Hit.Span)
+
+	outside := spec
+	outside.Span.ByteStart = end - 4
+	outside.Span.ByteEnd = end + 4
+	require.Error(t, outside.Validate())
+	_, err = fixture.projection.ReadExact(context.Background(), authorized, outside)
+	require.Error(t, err)
+
+	for _, mutation := range []func(*ucidomain.VersionedReadSpec){
+		func(value *ucidomain.VersionedReadSpec) { value.IndexedSpan.ByteEnd-- },
+		func(value *ucidomain.VersionedReadSpec) {
+			value.ContentDigest = ucidomain.QueryContentDigest(strings.Repeat("0", 64))
+		},
+	} {
+		invalid := spec
+		bound := indexed
+		invalid.IndexedSpan = &bound
+		mutation(&invalid)
+		result, readErr := fixture.projection.ReadExact(context.Background(), authorized, invalid)
+		require.NoError(t, readErr)
+		require.Nil(t, result.Hit, "a mismatched indexed span or digest cannot disclose bytes")
+	}
+}
+
 func TestUCIVersionedReadStoreReturnsEmptyForStaleAndCrossScopedEvidence(t *testing.T) {
 	fixture := openUCIPublicationFixture(t)
 	artifact := fixture.admitArtifact(t, fixture.source.SourceID, "versioned-read-refusal", `func VersionedReadRefusal() string { return "stored-only" }
@@ -228,9 +282,11 @@ func uciVersionedReadSpecForPathAndSpan(t *testing.T, fixture *uciPublicationFix
 				LineEnd:   int64(candidate.Span.LineEnd),
 			},
 			ContentDigest: ucidomain.QueryContentDigest(digest),
-			MaxBytes:      int(candidate.Span.ByteEnd - candidate.Span.ByteStart),
+			MaxBytes:      min(int(candidate.Span.ByteEnd-candidate.Span.ByteStart), ucidomain.VersionedReadMaxBytes),
 		}
-		require.NoError(t, spec.Validate())
+		if candidate.Span.ByteEnd-candidate.Span.ByteStart <= ucidomain.VersionedReadMaxBytes {
+			require.NoError(t, spec.Validate())
+		}
 		return spec
 	}
 	t.Fatalf("no candidate at %d:%d for %q", start, end, path)

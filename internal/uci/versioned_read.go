@@ -17,12 +17,12 @@ const (
 	VersionedReadWorkingCopyNotVerifiedWarning = "working_copy_not_verified_server_side"
 )
 
-// VersionedReadSpec names one already-discovered, immutable source slice. Its
-// entity, span, and digest must all agree with the already-authorized View; it
-// intentionally contains no locator, path hint, or current-disk capability.
+// VersionedReadSpec names one already-discovered immutable indexed chunk. When
+// IndexedSpan is set, Span selects a bounded byte subspan of that chunk.
 type VersionedReadSpec struct {
 	Entity            QueryEntityRef
 	Span              QuerySpan
+	IndexedSpan       *QuerySpan
 	ContentDigest     QueryContentDigest
 	MaxBytes          int
 	ReferenceSiteID   *string
@@ -46,6 +46,14 @@ func (spec VersionedReadSpec) Validate() error {
 	}
 	if spec.Span.ByteEnd-spec.Span.ByteStart > int64(spec.MaxBytes) {
 		return fmt.Errorf("uci versioned read: exact span exceeds max bytes")
+	}
+	if spec.IndexedSpan != nil {
+		if err := spec.IndexedSpan.Validate(); err != nil {
+			return fmt.Errorf("uci versioned read: invalid indexed span: %w", err)
+		}
+		if spec.ReferenceSiteID != nil || spec.Span.ByteStart < spec.IndexedSpan.ByteStart || spec.Span.ByteEnd > spec.IndexedSpan.ByteEnd || spec.Span.LineStart != spec.IndexedSpan.LineStart || spec.Span.LineEnd != spec.IndexedSpan.LineEnd {
+			return fmt.Errorf("uci versioned read: subspan must belong to the indexed chunk")
+		}
 	}
 	if spec.ReferenceSiteID != nil && !canonicalContextUUID(*spec.ReferenceSiteID) {
 		return fmt.Errorf("uci versioned read: reference site is invalid")
@@ -157,7 +165,7 @@ func validateVersionedReadStoreResult(ref ContextRef, spec VersionedReadSpec, re
 	}
 
 	hit := result.Hit
-	if hit.Entity != spec.Entity || hit.Span != spec.Span || hit.ContentDigest != spec.ContentDigest {
+	if hit.Entity != spec.Entity || (spec.IndexedSpan == nil && hit.Span != spec.Span) || hit.ContentDigest != spec.ContentDigest {
 		return fmt.Errorf("uci versioned read: store returned a mismatched hit")
 	}
 	if hit.Entity.SourceID != ref.SourceID || hit.Entity.ViewID != ref.ViewID {
@@ -166,8 +174,8 @@ func validateVersionedReadStoreResult(ref ContextRef, spec VersionedReadSpec, re
 	if !queryBoundedText(hit.Path, 1, queryMaxPath) || !hit.Kind.valid() || !queryBoundedText(hit.Language, 1, queryMaxLanguage) {
 		return fmt.Errorf("uci versioned read: store returned invalid hit metadata")
 	}
-	if hit.SourceByteLength != spec.Span.ByteEnd-spec.Span.ByteStart {
-		return fmt.Errorf("uci versioned read: store returned text with a mismatched source byte length")
+	if hit.Span.Validate() != nil || hit.SourceByteLength != int64(len(hit.Text)) || hit.SourceByteLength != hit.Span.ByteEnd-hit.Span.ByteStart || hit.SourceByteLength > int64(spec.MaxBytes) || (spec.IndexedSpan != nil && (hit.Span.ByteStart != spec.Span.ByteStart || hit.Span.ByteEnd > spec.Span.ByteEnd || hit.Span.ByteEnd <= hit.Span.ByteStart || hit.Span.LineStart < spec.IndexedSpan.LineStart || hit.Span.LineEnd > spec.IndexedSpan.LineEnd)) {
+		return fmt.Errorf("uci versioned read: store returned text outside the requested indexed subspan")
 	}
 	if !utf8.ValidString(hit.Text) {
 		return fmt.Errorf("uci versioned read: store returned invalid text")
@@ -222,8 +230,12 @@ func versionedReadAvailableResponse(ref ContextRef, spec VersionedReadSpec, resu
 }
 
 func versionedReadWarnings(spec VersionedReadSpec) QueryWarnings {
-	if !spec.VerifyWorkingCopy {
-		return QueryWarnings{}
+	warnings := QueryWarnings{}
+	if spec.VerifyWorkingCopy {
+		warnings = append(warnings, VersionedReadWorkingCopyNotVerifiedWarning)
 	}
-	return QueryWarnings{VersionedReadWorkingCopyNotVerifiedWarning}
+	if spec.IndexedSpan != nil && (spec.Span.ByteStart > spec.IndexedSpan.ByteStart || spec.Span.ByteEnd < spec.IndexedSpan.ByteEnd) {
+		warnings = append(warnings, "source_partial_indexed_chunk")
+	}
+	return warnings
 }

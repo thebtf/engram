@@ -525,7 +525,7 @@ test('Home opens a no-View working copy, then follows its released index to sear
   const context = { source_id: 'source-1', checkout_id: 'checkout-1', view_id: 'view-1', profile_id: 'profile-1', generation: 1 }
   const ref = { source_id: 'source-1', view_id: 'view-1', entity_key: 'implementation' }
   const related = { source_id: 'source-1', view_id: 'view-1', entity_key: 'dependency' }
-  const span = { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }
+  const span = { byte_start: 0, byte_end: 65536, line_start: 1, line_end: 1 }
   const item = { ref, path: 'src/implementation.ts', span, content_digest: 'digest-1', kind: 'function', language: 'typescript', excerpt: 'function go()', match_sources: ['lexical'], score: 1 }
   const referenceSpan = { byte_start: 9, byte_end: 13, line_start: 1, line_end: 1 }
   const reference = { ref, precision: 'reference_site', reference_site_id: '50000000-0000-4000-8000-000000000005' }
@@ -562,8 +562,8 @@ test('Home opens a no-View working copy, then follows its released index to sear
       sourceRequests.push(body)
       if (body.entity_key === ref.entity_key && body.content_digest === item.content_digest && body.reference_site_id === reference.reference_site_id && JSON.stringify(body.span) === JSON.stringify(referenceSpan)) {
         await route.fulfill({ json: { ...envelope, items: [{ ...item, span: referenceSpan, excerpt: 'go()' }] } })
-      } else if (body.entity_key === ref.entity_key && body.content_digest === item.content_digest && JSON.stringify(body.span) === JSON.stringify(span)) {
-        await route.fulfill({ json: envelope })
+      } else if (body.entity_key === ref.entity_key && body.content_digest === item.content_digest && JSON.stringify(body.indexed_span) === JSON.stringify(span) && JSON.stringify(body.span) === JSON.stringify({ ...span, byte_end: 8192 })) {
+        await route.fulfill({ json: { ...envelope, items: [{ ...item, span: { ...span, byte_end: 8192 }, excerpt: 'x'.repeat(8192) }], warnings: ['source_partial_indexed_chunk'] } })
       } else {
         await route.fulfill({ status: 403 })
       }
@@ -602,7 +602,9 @@ test('Home opens a no-View working copy, then follows its released index to sear
   await expect(page.getByTestId('code-graph-reference-source')).toHaveCount(0)
   expect(sourceRequests).toHaveLength(1)
   await page.getByTestId('code-search-source').click()
-  await expect(page.getByTestId('code-source-result')).toContainText('function go()')
+  expect(sourceRequests[1]).toMatchObject({ indexed_span: span, span: { ...span, byte_end: 8192 } })
+  await expect(page.getByTestId('code-source-result')).toHaveText('x'.repeat(8192))
+  await expect(page.getByTestId('code-source-partial')).toBeVisible()
 })
 
 test('Offline no-View first indexing reaches the mock intent while unknown targets stay denied', async ({ page, request }) => {

@@ -2438,6 +2438,7 @@
     "source": {
       "title": "精确源代码",
       "exactPublished": "来自已发布视图的精确保存片段",
+      "partialIndexed": "仅显示此索引片段开头最多 8 KiB；其余源代码未显示。",
       "copyPath": "复制路径",
       "copyDigest": "复制摘要",
       "copyContent": "复制源代码",

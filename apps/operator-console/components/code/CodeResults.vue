@@ -168,6 +168,7 @@ async function copy(value: string): Promise<void> {
         <template v-if="sourceItem !== null">
           <p class="source-meta"><code>{{ sourceItem.path }}:{{ sourceItem.span.lineStart }}–{{ sourceItem.span.lineEnd }} · {{ sourceItem.span.byteStart }}–{{ sourceItem.span.byteEnd }} · {{ sourceItem.contentDigest }}</code></p>
           <p class="source-meta">{{ sourceItem.language }} · {{ t('codeExplorer.source.exactPublished') }}</p>
+          <p v-if="source?.warnings.includes('source_partial_indexed_chunk')" class="source-meta" role="status" data-testid="code-source-partial">{{ t('codeExplorer.source.partialIndexed') }}</p>
           <div class="item-actions">
             <button class="btn" type="button" :disabled="pending" @click="copy(sourceItem.path)">{{ t('codeExplorer.source.copyPath') }}</button>
             <button class="btn" type="button" :disabled="pending" @click="copy(sourceItem.contentDigest)">{{ t('codeExplorer.source.copyDigest') }}</button>

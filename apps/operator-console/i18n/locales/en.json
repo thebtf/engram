@@ -2443,6 +2443,7 @@
     "source": {
       "title": "Exact source",
       "exactPublished": "exact persisted span from the published View",
+      "partialIndexed": "Showing up to the first 8 KiB of this indexed chunk; the remaining source is not displayed.",
       "copyPath": "Copy path",
       "copyDigest": "Copy digest",
       "copyContent": "Copy source",
