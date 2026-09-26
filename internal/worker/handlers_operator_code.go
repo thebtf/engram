@@ -931,12 +931,13 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGrantChoices(w http.ResponseWriter
 			return
 		}
 	}
-	choices, err := adapter.onboarding.ListOwnerChoices(r.Context(), identity.identity)
+	ctx := auditcontext.WithSourceSession(r.Context(), identity.sessionID)
+	choices, err := adapter.onboarding.ListOwnerChoices(ctx, identity.identity)
 	if err != nil {
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
 	}
-	targets, err := adapter.onboarding.ListTargetChoices(r.Context(), identity.identity, after, operatorCodeGrantInventoryPageSize+1)
+	targets, err := adapter.onboarding.ListTargetChoices(ctx, identity.identity, after, operatorCodeGrantInventoryPageSize+1)
 	if err != nil {
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
@@ -1035,7 +1036,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGrantIssue(w http.ResponseWriter, 
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
 		return
 	}
-	grant, err := adapter.onboarding.IssueOnboarding(r.Context(), identity.identity, IssueOnboardingCodeGrantInput{Target: auth.BrowserSubjectForUser(targetID), ChoiceRef: choiceRef, ExpiresAt: request.ExpiresAt})
+	grant, err := adapter.onboarding.IssueOnboarding(auditcontext.WithSourceSession(r.Context(), identity.sessionID), identity.identity, IssueOnboardingCodeGrantInput{Target: auth.BrowserSubjectForUser(targetID), ChoiceRef: choiceRef, ExpiresAt: request.ExpiresAt})
 	if err != nil {
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
@@ -1062,7 +1063,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGrantLabel(w http.ResponseWriter, 
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
 		return
 	}
-	choice, err := adapter.onboarding.SetWorkingCopyLabel(r.Context(), identity.identity, choiceRef, request.WorkingCopy)
+	choice, err := adapter.onboarding.SetWorkingCopyLabel(auditcontext.WithSourceSession(r.Context(), identity.sessionID), identity.identity, choiceRef, request.WorkingCopy)
 	if err != nil {
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return

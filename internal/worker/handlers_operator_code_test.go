@@ -1125,6 +1125,19 @@ func TestOperatorCodeHTTPAdapter_GrantHandlersCarryAuditBreadcrumb(t *testing.T)
 	choicesRecorder := httptest.NewRecorder()
 	adapter.HandleGrantChoices(choicesRecorder, choices)
 	require.Equal(t, http.StatusOK, choicesRecorder.Code, choicesRecorder.Body.String())
+	var firstPage operatorCodeOwnerChoicesResponse
+	require.NoError(t, json.Unmarshal(choicesRecorder.Body.Bytes(), &firstPage))
+	require.NotEmpty(t, firstPage.TargetNextRef)
+	pageTwo := operatorCodeHTTPTestRequest(t, "", fixture.identity)
+	pageTwo.Method = http.MethodGet
+	pageTwo.URL.RawQuery = "target_next_ref=" + firstPage.TargetNextRef
+	pageTwoRecorder := httptest.NewRecorder()
+	adapter.HandleGrantChoices(pageTwoRecorder, pageTwo)
+	require.Equal(t, http.StatusOK, pageTwoRecorder.Code, pageTwoRecorder.Body.String())
+	var secondPage operatorCodeOwnerChoicesResponse
+	require.NoError(t, json.Unmarshal(pageTwoRecorder.Body.Bytes(), &secondPage))
+	require.Len(t, secondPage.Targets, 1)
+	require.Empty(t, secondPage.TargetNextRef)
 
 	revoke := operatorCodeHTTPTestRequest(t, "", fixture.identity)
 	grantRef := uuid.NewString()
@@ -1134,7 +1147,7 @@ func TestOperatorCodeHTTPAdapter_GrantHandlersCarryAuditBreadcrumb(t *testing.T)
 	revokeRecorder := httptest.NewRecorder()
 	adapter.HandleGrantRevoke(revokeRecorder, revoke)
 	require.Equal(t, http.StatusOK, revokeRecorder.Code, revokeRecorder.Body.String())
-	require.Equal(t, []string{"browser-session-41", "browser-session-41"}, onboarding.sessions)
+	require.Equal(t, []string{"browser-session-41", "browser-session-41", "browser-session-41", "browser-session-41", "browser-session-41"}, onboarding.sessions)
 }
 
 type operatorCodeGrantBreadcrumbApplication struct {
@@ -1151,8 +1164,16 @@ func (application *operatorCodeGrantBreadcrumbApplication) ListOwnerActive(ctx c
 	return nil, nil
 }
 
-func (*operatorCodeGrantBreadcrumbApplication) ListTargetChoices(context.Context, auth.Identity, int64, int) ([]gormdb.BrowserReadGrantTargetChoice, error) {
-	return nil, nil
+func (application *operatorCodeGrantBreadcrumbApplication) ListTargetChoices(ctx context.Context, _ auth.Identity, after int64, _ int) ([]gormdb.BrowserReadGrantTargetChoice, error) {
+	application.sessions = append(application.sessions, auditcontext.SourceSession(ctx))
+	if after != 0 {
+		return []gormdb.BrowserReadGrantTargetChoice{{UserID: after + 1, Label: "last reader"}}, nil
+	}
+	choices := make([]gormdb.BrowserReadGrantTargetChoice, operatorCodeGrantInventoryPageSize+1)
+	for i := range choices {
+		choices[i] = gormdb.BrowserReadGrantTargetChoice{UserID: int64(i + 1), Label: "reader"}
+	}
+	return choices, nil
 }
 
 func (*operatorCodeGrantBreadcrumbApplication) IssueOnboarding(context.Context, auth.Identity, IssueOnboardingCodeGrantInput) (gormdb.BrowserReadGrant, error) {

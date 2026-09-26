@@ -599,10 +599,12 @@ func TestOperatorCodeRoutesDelegateStructureAndOwnerOnboarding(t *testing.T) {
 	require.Len(t, grants.ownerIssues, 1)
 	require.Equal(t, fixture.ref.CheckoutID, grants.ownerIssues[0].ChoiceRef)
 	require.Equal(t, int64(99), grants.ownerIssues[0].TargetUserID)
+	require.Equal(t, []string{"browser-session-41"}, grants.ownerIssueSessions)
 
 	labeled := call(http.MethodPatch, "/api/code/grants/choices/"+choiceRef, `{"working_copy":"Desk · release candidate"}`, fixture.identity)
 	require.Equal(t, http.StatusOK, labeled.Code, labeled.Body.String())
 	require.Len(t, grants.ownerLabels, 1)
+	require.Equal(t, []string{"browser-session-41"}, grants.ownerLabelSessions)
 	require.Len(t, grants.ownerIssues, 1, "labels are display metadata, not grant issuance")
 
 	grantRef := "60000000-0000-4000-8000-000000000099"

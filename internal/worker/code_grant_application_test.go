@@ -6,18 +6,21 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
 
 type recordingCodeGrantStore struct {
-	issues         []gormdb.BrowserReadGrantIssue
-	ownerIssues    []gormdb.BrowserReadGrantOwnerIssue
-	ownerChoices   []gormdb.BrowserReadGrantOwnerChoice
-	targetChoices  []gormdb.BrowserReadGrantTargetChoice
-	inventory      []gormdb.BrowserReadGrantOwnerEntry
-	inventoryErr   error
-	inventoryCalls []struct {
+	issues             []gormdb.BrowserReadGrantIssue
+	ownerIssues        []gormdb.BrowserReadGrantOwnerIssue
+	ownerChoices       []gormdb.BrowserReadGrantOwnerChoice
+	ownerIssueSessions []string
+	ownerLabelSessions []string
+	targetChoices      []gormdb.BrowserReadGrantTargetChoice
+	inventory          []gormdb.BrowserReadGrantOwnerEntry
+	inventoryErr       error
+	inventoryCalls     []struct {
 		issuerUserID           int64
 		issuerPrincipal, after string
 		limit                  int
@@ -53,7 +56,8 @@ func (store *recordingCodeGrantStore) Issue(_ context.Context, in gormdb.Browser
 	return gormdb.BrowserReadGrant{GrantRef: uuid.NewString()}, nil
 }
 
-func (store *recordingCodeGrantStore) IssueOwnerChoice(_ context.Context, in gormdb.BrowserReadGrantOwnerIssue) (gormdb.BrowserReadGrant, error) {
+func (store *recordingCodeGrantStore) IssueOwnerChoice(ctx context.Context, in gormdb.BrowserReadGrantOwnerIssue) (gormdb.BrowserReadGrant, error) {
+	store.ownerIssueSessions = append(store.ownerIssueSessions, auditcontext.SourceSession(ctx))
 	store.ownerIssues = append(store.ownerIssues, in)
 	return gormdb.BrowserReadGrant{GrantRef: uuid.NewString()}, nil
 }
@@ -94,7 +98,8 @@ func (store *recordingCodeGrantStore) ListTargetChoices(_ context.Context, _ int
 	return page, nil
 }
 
-func (store *recordingCodeGrantStore) SetOwnerChoiceLabel(_ context.Context, issuerUserID int64, issuerPrincipal, choiceRef, label string) (gormdb.BrowserReadGrantOwnerChoice, error) {
+func (store *recordingCodeGrantStore) SetOwnerChoiceLabel(ctx context.Context, issuerUserID int64, issuerPrincipal, choiceRef, label string) (gormdb.BrowserReadGrantOwnerChoice, error) {
+	store.ownerLabelSessions = append(store.ownerLabelSessions, auditcontext.SourceSession(ctx))
 	store.ownerLabels = append(store.ownerLabels, struct {
 		issuerUserID    int64
 		issuerPrincipal string

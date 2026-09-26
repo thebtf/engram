@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/thebtf/engram/internal/auditcontext"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -317,9 +318,10 @@ func (s *BrowserReadGrantStore) SetOwnerChoiceLabel(ctx context.Context, issuerU
 		}
 		result = BrowserReadGrantOwnerChoice{ChoiceRef: choice.ChoiceRef, RepositoryLabel: choice.RepositoryLabel, WorkingCopyLabel: label}
 		if err := NewAuditStore(tx).LogTx(ctx, tx, AuditLogEntry{
-			Action: "code_checkout_labeled",
-			Actor:  issuerPrincipal,
-			Reason: "checkout_ref=" + choice.ChoiceRef,
+			Action:          "code_checkout_labeled",
+			Actor:           issuerPrincipal,
+			SourceSessionID: auditcontext.SourceSession(ctx),
+			Reason:          "checkout_ref=" + choice.ChoiceRef,
 		}); err != nil {
 			return fmt.Errorf("browser read grant owner label audit: %w", err)
 		}
@@ -374,9 +376,10 @@ func issueBrowserReadGrant(ctx context.Context, tx *gorm.DB, tuple browserReadGr
 	}
 
 	if err := NewAuditStore(tx).LogTx(ctx, tx, AuditLogEntry{
-		Action: "code_grant_issued",
-		Actor:  in.IssuerPrincipal,
-		Reason: browserReadGrantAuditReason(grant),
+		Action:          "code_grant_issued",
+		Actor:           in.IssuerPrincipal,
+		SourceSessionID: auditcontext.SourceSession(ctx),
+		Reason:          browserReadGrantAuditReason(grant),
 	}); err != nil {
 		return BrowserReadGrant{}, fmt.Errorf("browser read grant issue audit: %w", err)
 	}
@@ -421,9 +424,10 @@ func (s *BrowserReadGrantStore) Revoke(ctx context.Context, issuerUserID int64, 
 				return fmt.Errorf("browser read grant revoke update: %w", err)
 			}
 			if err := NewAuditStore(tx).LogTx(ctx, tx, AuditLogEntry{
-				Action: "code_grant_revoked",
-				Actor:  issuerPrincipal,
-				Reason: browserReadGrantAuditReason(grant),
+				Action:          "code_grant_revoked",
+				Actor:           issuerPrincipal,
+				SourceSessionID: auditcontext.SourceSession(ctx),
+				Reason:          browserReadGrantAuditReason(grant),
 			}); err != nil {
 				return fmt.Errorf("browser read grant revoke audit: %w", err)
 			}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/auditcontext"
 	"gorm.io/driver/postgres"
 	gormlib "gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -215,7 +216,7 @@ func TestBrowserReadGrantStore_RequiresExactSourceOwnerAndAuditsAtomically(t *te
 
 func TestBrowserReadGrantStore_OwnerChoicesRequireExactOwnerAndKeepLabelsNonAuthorizing(t *testing.T) {
 	fixture := newBrowserReadGrantFixture(t)
-	ctx := context.Background()
+	ctx := auditcontext.WithSourceSession(context.Background(), "browser-session-41")
 	ownerPrincipal := browserReadGrantPrincipal(fixture.owner.ID)
 
 	choices, err := fixture.store.ListOwnerChoices(ctx, fixture.owner.ID, ownerPrincipal)
@@ -266,6 +267,9 @@ func TestBrowserReadGrantStore_OwnerChoicesRequireExactOwnerAndKeepLabelsNonAuth
 	_, err = fixture.store.Revoke(ctx, fixture.owner.ID, ownerPrincipal, grant.GrantRef)
 	require.NoError(t, err)
 	assertBrowserReadGrantAuditCount(t, fixture.db, "code_grant_revoked", 1)
+	var sessionAudits int64
+	require.NoError(t, fixture.db.Model(&AuditLogEntry{}).Where("action IN ? AND source_session_id = ?", []string{"code_grant_issued", "code_checkout_labeled", "code_grant_revoked"}, "browser-session-41").Count(&sessionAudits).Error)
+	require.Equal(t, int64(3), sessionAudits)
 	canRead, err = fixture.store.CanRead(ctx, fixture.target.ID, fixture.source.SourceID, fixture.checkout.CheckoutID)
 	require.NoError(t, err)
 	require.False(t, canRead)
