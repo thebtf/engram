@@ -80,6 +80,16 @@ relay_helper_required() {
     (( major > 6 || (major == 6 && minor >= 49) ))
 }
 
+# Parser policy first shipped with v6.50.0; older archives remain installable.
+parser_policy_required() {
+    local version="${1#v}"
+    if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.([0]|[1-9][0-9]*)\.([0]|[1-9][0-9]*)(-(0|[1-9A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9A-Za-z-][0-9A-Za-z-]*))*)?$ ]]; then
+        return 0
+    fi
+    local major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[2]}"
+    (( major > 6 || (major == 6 && minor >= 50) ))
+}
+
 # ---------------------------------------------------------------------------
 # Platform detection
 # ---------------------------------------------------------------------------
@@ -186,6 +196,10 @@ download_release() {
         || error "Release archive is missing required registry transaction helper"
     [[ -f "$tmp_dir/bootstrap-targets.json" ]] \
         || error "Release archive is missing required bootstrap-targets.json"
+    if parser_policy_required "$version"; then
+        [[ -f "$tmp_dir/parser-targets.json" ]] \
+            || error "Release archive is missing required parser-targets.json"
+    fi
     [[ -f "$tmp_dir/package.json" ]] \
         || error "Release archive is missing required OMP package.json"
     [[ -f "$tmp_dir/extensions/engram-memory.mjs" ]] \
@@ -198,10 +212,10 @@ download_release() {
     fi
     # This validator is part of the trusted installer, not the release archive.
     # A release payload must never be allowed to validate its own policy.
-    node - "$tmp_dir/bootstrap-targets.json" "${version#v}" <<'NODE' \
-        || error "Release archive has an invalid bootstrap policy"
+    node - "$tmp_dir/bootstrap-targets.json" "${version#v}" "$tmp_dir/parser-targets.json" <<'NODE' \
+        || error "Release archive has an invalid bootstrap policy or parser policy"
 const fs = require('node:fs');
-const [file, version] = process.argv.slice(2);
+const [file, version, parserFile] = process.argv.slice(2);
 const assets = { 'win32-x64': 'engram-windows-amd64.exe', 'linux-x64': 'engram-linux-amd64', 'darwin-arm64': 'engram-darwin-arm64' };
 const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9A-Za-z-][0-9A-Za-z-]*))*)?$/;
 const sha256 = /^[0-9a-f]{64}$/;
@@ -273,6 +287,18 @@ for (const [key, asset] of Object.entries(assets)) {
   exact(target.desired, ['version', 'asset', 'size', 'sha256']);
   if (target.desired.version !== version || target.desired.asset !== asset || !Number.isSafeInteger(target.desired.size) || target.desired.size <= 0 || target.desired.size > 128 * 1024 * 1024 || !sha256.test(target.desired.sha256) || policy.revoked_sha256.includes(target.desired.sha256)) throw new Error(`invalid target ${key}`);
 }
+if (major > 6 || (major === 6 && minor >= 50)) {
+  const parserText = fs.readFileSync(parserFile, 'utf8');
+  assertNoDuplicateProperties(parserText);
+  const parser = JSON.parse(parserText);
+  exact(parser, ['schema_version', 'package_version', 'targets']);
+  if (parser.schema_version !== 1 || parser.package_version !== version) throw new Error('parser schema or version mismatch');
+  exact(parser.targets, Object.keys(assets));
+  if (parser.targets['linux-x64'] !== null || parser.targets['darwin-arm64'] !== null) throw new Error('unsupported parser targets');
+  const target = parser.targets['win32-x64'];
+  exact(target, ['version', 'asset', 'size', 'sha256']);
+  if (target.version !== version || target.asset !== 'uci-parser-windows-amd64.exe' || !Number.isSafeInteger(target.size) || target.size < 1 || target.size > 128 * 1024 * 1024 || !sha256.test(target.sha256)) throw new Error('invalid parser target');
+}
 NODE
 
     info "Installing to ${INSTALL_DIR}..."
@@ -297,6 +323,10 @@ NODE
         || error "Failed to copy JS scripts from $tmp_dir/scripts/"
     cp "$tmp_dir/bootstrap-targets.json" "$INSTALL_DIR/" \
         || error "Failed to copy bootstrap policy from release archive"
+    if parser_policy_required "$version"; then
+        cp "$tmp_dir/parser-targets.json" "$INSTALL_DIR/" \
+            || error "Failed to copy parser policy from release archive"
+    fi
     cp "$tmp_dir/package.json" "$INSTALL_DIR/" \
         || error "Failed to copy OMP package manifest from release archive"
     cp "$tmp_dir/extensions/engram-memory.mjs" "$INSTALL_DIR/extensions/" \

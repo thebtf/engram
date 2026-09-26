@@ -47,8 +47,10 @@ function directInstallerFixture(temp, version = currentPolicyVersion, includeRel
       "darwin-arm64": target(version, "engram-darwin-arm64", bytes),
     })));
   }
+  if (version === currentPolicyVersion) fs.copyFileSync(path.join(root, "plugin", "engram", "parser-targets.json"), path.join(archiveRoot, "parser-targets.json"));
   const archive = path.join(temp, `release.${extension}`);
   const entries = ["hooks/hook.js", "hooks/hooks.json", "scripts/bootstrap-policy.js", "scripts/register-plugin.js", "package.json", "extensions/engram-memory.mjs", ".claude-plugin/plugin.json", "bootstrap-targets.json"];
+  if (version === currentPolicyVersion) entries.push("parser-targets.json");
   if (includeRelay) entries.push("extensions/legacy-relay.mjs");
   if (extension === "zip") writeZip(archiveRoot, archive, entries);
   else {
@@ -2032,6 +2034,92 @@ test("direct installer registers all Claude registries without jq", () => {
     assert.equal(marketplaces.other, true);
     assert.deepEqual(marketplaces.engram.source, { source: "directory", path: bashPath(installRoot) });
     assert.equal(marketplaces.engram.installLocation, bashPath(installRoot));
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+test("direct installer installs parser policy on fresh install and upgrade and rejects missing or corrupt policy", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    const destination = path.join(home, ".claude", "plugins", "marketplaces", "engram", "parser-targets.json");
+    const expected = fs.readFileSync(path.join(root, "plugin", "engram", "parser-targets.json"));
+    for (const [name, parser] of [["fresh", expected], ["upgrade", expected], ["missing", null], ["corrupt", Buffer.from(expected.toString("utf8").replace(/"sha256": "[a-f0-9]{64}"/, '"sha256": "bad"'))]]) {
+      const fixture = directInstallerFixture(path.join(temp, name));
+      if (parser === null || name === "corrupt") {
+        const archiveRoot = path.join(temp, name, "archive");
+        if (parser === null) fs.rmSync(path.join(archiveRoot, "parser-targets.json"));
+        else fs.writeFileSync(path.join(archiveRoot, "parser-targets.json"), parser);
+        const archived = spawnSync("tar", ["-czf", fixture.archive, "-C", archiveRoot, "."], { encoding: "utf8" });
+        assert.equal(archived.status, 0, archived.stderr);
+      }
+      if (name === "upgrade") fs.writeFileSync(destination, "stale policy");
+      const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fixture.fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(fixture.archive))} ENGRAM_URL=http://localhost:37777/mcp ENGRAM_API_TOKEN=`;
+      const result = spawnSync("bash", ["-c", `printf '\n\n' | ${environment} bash scripts/install.sh ${currentTaggedPolicyVersion}`], { cwd: root, encoding: "utf8", env: process.env });
+      assert.ifError(result.error);
+      if (parser === null || name === "corrupt") {
+        assert.notEqual(result.status, 0, name);
+        assert.match(`${result.stdout}\n${result.stderr}`, /parser-targets\.json|invalid bootstrap policy or parser policy/);
+        assert.equal(fs.existsSync(destination), true, "earlier valid install remains intact");
+      } else {
+        assert.equal(result.status, 0, result.stderr || result.stdout);
+        assert.deepEqual(fs.readFileSync(destination), expected);
+        assert.deepEqual(fs.readFileSync(path.join(home, ".claude", "plugins", "cache", "engram", "engram", currentTaggedPolicyVersion, "parser-targets.json")), expected);
+      }
+    }
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+test("shell installer copies parser policy from macOS and Git Bash archives", () => {
+  const temp = temporaryDirectory();
+  try {
+    const expected = fs.readFileSync(path.join(root, "plugin", "engram", "parser-targets.json"));
+    for (const [name, system, arch, extension] of [["mac", "Darwin", "arm64", "tar.gz"], ["git-bash", "MINGW64_NT", "x86_64", "zip"]]) {
+      const fixture = directInstallerFixture(path.join(temp, name), currentPolicyVersion, true, extension);
+      fs.writeFileSync(path.join(fixture.fakeBin, "uname"), `#!/usr/bin/env bash\n[[ $1 == -s ]] && echo ${system} || echo ${arch}\n`, { mode: 0o755 });
+      const home = path.join(temp, `home-${name}`);
+      const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fixture.fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(fixture.archive))} ENGRAM_URL=http://localhost:37777/mcp ENGRAM_API_TOKEN=`;
+      const result = spawnSync("bash", ["-c", `printf '\n\n' | ${environment} bash scripts/install.sh ${currentTaggedPolicyVersion}`], { cwd: root, encoding: "utf8", env: process.env });
+      assert.ifError(result.error);
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.deepEqual(fs.readFileSync(path.join(home, ".claude", "plugins", "marketplaces", "engram", "parser-targets.json")), expected);
+    }
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+windowsTest("PowerShell installer installs parser policy on fresh install and upgrade and rejects missing or corrupt policy", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    const destination = path.join(home, ".claude", "plugins", "marketplaces", "engram", "parser-targets.json");
+    const expected = fs.readFileSync(path.join(root, "plugin", "engram", "parser-targets.json"));
+    for (const name of ["fresh", "upgrade", "missing", "corrupt"]) {
+      const fixture = directInstallerFixture(path.join(temp, name), currentPolicyVersion, true, "zip");
+      if (name === "missing" || name === "corrupt") {
+        const archiveRoot = path.join(temp, name, "archive");
+        if (name === "missing") fs.rmSync(path.join(archiveRoot, "parser-targets.json"));
+        else fs.writeFileSync(path.join(archiveRoot, "parser-targets.json"), expected.toString("utf8").replace(/"sha256": "[a-f0-9]{64}"/, '"sha256": "bad"'));
+        const entries = ["hooks/hook.js", "hooks/hooks.json", "scripts/bootstrap-policy.js", "scripts/register-plugin.js", "package.json", "extensions/engram-memory.mjs", "extensions/legacy-relay.mjs", ".claude-plugin/plugin.json", "bootstrap-targets.json"];
+        if (name === "corrupt") entries.push("parser-targets.json");
+        writeZip(archiveRoot, fixture.archive, entries);
+      }
+      if (name === "upgrade") fs.writeFileSync(destination, "stale policy");
+      const ps = `$env:USERPROFILE = '${powerShellQuote(home)}'
+$env:TEMP = '${powerShellQuote(temp)}'
+$source = Get-Content -LiteralPath '${powerShellQuote(path.join(root, "scripts", "install.ps1"))}' -Raw
+$source = $source.Substring($source.IndexOf('$ErrorActionPreference = "Stop"'))
+$source = [regex]::Split($source, '# ---------------------------------------------------------------------------\\r?\\n# Entry point')[0]
+Invoke-Expression $source
+function Invoke-WebRequest { param($Uri, $OutFile, [switch] $UseBasicParsing) Copy-Item -LiteralPath '${powerShellQuote(fixture.archive)}' -Destination $OutFile -Force }
+Install-Release -Ver '${currentTaggedPolicyVersion}' -NodeExecutable '${powerShellQuote(process.execPath)}'
+`;
+      const result = spawnSync(nativePwsh(), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", ps], { cwd: root, encoding: "utf8", env: process.env });
+      assert.ifError(result.error);
+      if (name === "missing" || name === "corrupt") {
+        assert.notEqual(result.status, 0, name);
+        assert.match(registryError(result), /parser-targets\.json|invalid bootstrap policy or parser policy/);
+        assert.deepEqual(fs.readFileSync(destination), expected);
+      } else {
+        assert.equal(result.status, 0, registryError(result));
+        assert.deepEqual(fs.readFileSync(destination), expected);
+      }
+    }
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 test("register-only registers an installed plugin without installation side effects", () => {
