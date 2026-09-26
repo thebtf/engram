@@ -18,18 +18,35 @@
     "type": "User"
   },
   "transition": {
-    "consumed_epoch": "authority-0054",
-    "event_base_sha": "f7cd6b34c5bd7b2c542d75d38c8c1c01dd420254"
+    "consumed_epoch": "authority-0055",
+    "event_base_sha": "eccf3bc34a2e4599e4973b6e9dbd586c203d00b6"
   },
   "active_epoch": {
-    "id": "authority-0055",
-    "label": "authority-maintenance:authority-0055",
+    "id": "authority-0056",
+    "label": "authority-maintenance:authority-0056",
     "exact_changes": [
       {
         "status": "M",
         "path": ".github/authority-policy.json"
+      },
+      {
+        "status": "M",
+        "path": ".github/workflows/promote-latest-release-images.yml"
+      },
+      {
+        "status": "M",
+        "path": ".github/workflows/test.yml"
       }
     ],
-    "expected_head_blobs": []
+    "expected_head_blobs": [
+      {
+        "path": ".github/workflows/promote-latest-release-images.yml",
+        "git_blob": "c524c7321e710fe0c4ebf5c18d1621f24764dad0"
+      },
+      {
+        "path": ".github/workflows/test.yml",
+        "git_blob": "6e307cd25180415e8e2b484cdf8ab02cdcd5c275"
+      }
+    ]
   }
 }
