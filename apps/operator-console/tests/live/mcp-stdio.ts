@@ -218,6 +218,26 @@ export class MCPStdioClient {
     }
   }
 
+  async preparePublishedIndexTarget(target: MCPNoViewTarget): Promise<void> {
+    const selected = record(await this.callTool('codebase_context', {
+      action: 'select',
+      checkout: {
+        analysis_profile_id: target.analysisProfileId,
+        checkout_id: target.checkoutId,
+        incarnation_id: target.incarnationId,
+        source_id: target.sourceId,
+      },
+    }, 'proxy'))
+    const contextHandle = Reflect.get(selected, 'context_handle')
+    if (typeof contextHandle !== 'string' || contextHandle === '' || Reflect.get(selected, 'source_id') !== target.sourceId || Reflect.get(selected, 'checkout_id') !== target.checkoutId || Reflect.get(selected, 'binding_kind') !== 'checkout' || Reflect.get(selected, 'context') === null) {
+      throw new Error('external MCP client did not resolve the published checkout after restart')
+    }
+    const status = record(await this.callTool('codebase_status', { context_handle: contextHandle }, 'direct'))
+    if (Reflect.get(status, 'current_context') === null || Reflect.get(status, 'server_counts_available') !== true) {
+      throw new Error('external MCP client did not prepare the published checkout after restart')
+    }
+  }
+
   transcript(): MCPStdioTranscript {
     const pid = this.child.pid
     if (pid === undefined || pid <= 0) throw new Error('external MCP client lost its process identity')

@@ -96,6 +96,8 @@ test('S4 live first-index uses the real C-worktree daemon pump', async ({ browse
   let registrationClient: MCPStdioClient | undefined
   let offlineClient: MCPStdioClient | undefined
   let liveClient: MCPStdioClient | undefined
+  let recoveryClient: MCPStdioClient | undefined
+  let recovery: { queuedState: string; intentRef: string; replayState: string; priorDaemonPID: number; successorDaemonPID: number; resultViewRef: string; attempt: number } | undefined
   let primaryFailure: unknown
 
   page.on('request', (request) => {
@@ -274,7 +276,12 @@ test('S4 live first-index uses the real C-worktree daemon pump', async ({ browse
 
     await page.getByTestId('code-context-repository').selectOption(published.sourceRef)
     await page.getByTestId('code-context-working-copy').selectOption(published.checkoutRef)
-    await page.getByTestId('code-context-snapshot').selectOption(published.selectionRef)
+    const snapshot = page.getByTestId('code-context-snapshot')
+    const visibleOptions = snapshot.locator('option:not([disabled])')
+    await expect(visibleOptions).toHaveCount(1)
+    const freshSelection = await visibleOptions.getAttribute('value')
+    if (freshSelection === null) throw new Error('published checkout has no visible snapshot choice')
+    await snapshot.selectOption(freshSelection)
     await expect(page.getByTestId('code-context-candidate')).toBeVisible()
     await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
     await page.getByTestId('code-pin-context').click()
@@ -296,12 +303,68 @@ test('S4 live first-index uses the real C-worktree daemon pump', async ({ browse
     await expect(result).toHaveCount(1)
     await result.getByTestId('code-search-source').click()
     await expect(page.getByTestId('code-source-result')).toContainText(fixture.operatorCodeFirstIndex.expectedMarker)
+
+    const priorDaemonPID = liveClient.transcript().daemonPID
+    await liveClient.close()
+    const queuedResponse = page.waitForResponse((candidate) => candidate.request().method() === 'POST' && new URL(candidate.url()).pathname === '/api/code/index-intents')
+    await page.getByTestId('index-intent-reindex').click()
+    const accepted = await queuedResponse
+    expect(accepted.status()).toBe(202)
+    const acceptedBody: unknown = await accepted.json()
+    const queuedState = acceptedBody !== null && typeof acceptedBody === 'object' ? Reflect.get(acceptedBody, 'state') : null
+    const queuedRef = parseIntentRef(acceptedBody)
+    expect(['queued', 'unavailable']).toContain(queuedState)
+    expect(queuedRef).not.toBeNull()
+    if (queuedRef === null) throw new Error('offline accepted intent omitted its durable reference')
+    const originalRequest = accepted.request().postData()
+    if (originalRequest === null) throw new Error('offline intent omitted its browser binding')
+    recoveryClient = await MCPStdioClient.start({
+      clientRoot: fixture.mcp.firstIndex.clientRoot,
+      codeIndex: { parserBundleDigest: fixture.mcp.firstIndex.parserBundleDigest, parserExecutable: fixture.mcp.firstIndex.parserExecutable },
+      executable: fixture.mcp.clientBinary,
+      serverURL: fixture.backend.baseUrl,
+      token: keycard,
+    })
+    await recoveryClient.initializeAndList()
+    await recoveryClient.preparePublishedIndexTarget(fixture.operatorCodeFirstIndex)
+    const successorDaemonPID = recoveryClient.transcript().daemonPID
+    expect(successorDaemonPID).not.toBe(priorDaemonPID)
+    if (queuedState === 'unavailable') await page.getByTestId('index-intent-retry').click()
+    await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'completed', { timeout: 90_000 })
+    const durableStatus = async () => page.evaluate(async ({ ref, requestBody }) => {
+      const proof = JSON.parse(requestBody) as { tab_binding_id: string; document_proof: string }
+      const response = await fetch(`/api/code/index-intents/${encodeURIComponent(ref)}`, {
+        headers: {
+          'X-Engram-Tab-Binding-ID': proof.tab_binding_id,
+          'X-Engram-Document-Proof': proof.document_proof,
+          'X-Engram-Request-ID': crypto.randomUUID(),
+        }
+      })
+      const body = await response.json() as { state: string; attempt: number; result?: { view_ref: string } }
+      return { httpStatus: response.status, state: body.state, attempt: body.attempt, viewRef: body.result?.view_ref ?? '' }
+    }, { ref: queuedRef, requestBody: originalRequest })
+    const beforeReplay = await durableStatus()
+    expect(beforeReplay.httpStatus).toBe(200)
+    expect(beforeReplay.state).toBe('completed')
+    expect(beforeReplay.viewRef).not.toBe('')
+    expect(beforeReplay.attempt).toBe(1)
+    const replay = await page.evaluate(async (body) => {
+      const response = await fetch('/api/code/index-intents', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Engram-Request-ID': crypto.randomUUID() }, body })
+      return { status: response.status, body: await response.json() }
+    }, originalRequest)
+    expect(replay.status).toBe(202)
+    expect(parseIntentRef(replay.body)).toBe(queuedRef)
+    const replayState = replay.body !== null && typeof replay.body === 'object' ? Reflect.get(replay.body, 'state') : null
+    expect(replayState).toBe('submitted')
+    const afterReplay = await durableStatus()
+    expect(afterReplay).toEqual(beforeReplay)
+    recovery = { queuedState, intentRef: queuedRef, replayState, priorDaemonPID, successorDaemonPID, resultViewRef: afterReplay.viewRef, attempt: afterReplay.attempt }
   } catch (error) {
     primaryFailure = error
     throw error
   } finally {
-    const cleanup = await Promise.allSettled([registrationClient?.close(), offlineClient?.close(), liveClient?.close()])
-    for (const client of [registrationClient, offlineClient, liveClient]) {
+    const cleanup = await Promise.allSettled([registrationClient?.close(), offlineClient?.close(), liveClient?.close(), recoveryClient?.close()])
+    for (const client of [registrationClient, offlineClient, liveClient, recoveryClient]) {
       if (client === undefined) continue
       const transcript = client.transcript()
       if (!transcripts.some((candidate) => candidate.externalPID === transcript.externalPID)) transcripts.push(transcript)
@@ -326,6 +389,7 @@ test('S4 live first-index uses the real C-worktree daemon pump', async ({ browse
       browser: { engine: browser.browserType().name(), version: browser.version() },
       browserHTTP: 'real registered Go routes; no page-level API mock or SQL lifecycle fabrication',
       indexIntent: { intentRef, resultViewId, firstIndexSubmitted, catalogRefreshes, noAutoPin: true, advertisementChecks },
+      recovery,
       mcp: transcripts,
       offline: { stoppedOwnedDaemon: true, noCompletionBeforeLiveDaemon: true },
       traffic: state.traffic,
