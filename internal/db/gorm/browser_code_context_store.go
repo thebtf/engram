@@ -180,6 +180,7 @@ func (s *BrowserCodeContextStore) ListCatalog(ctx context.Context, subjectUserID
 			view_row.published_at AS snapshot_published_at
 		FROM browser_read_grants AS browser_grant
 		JOIN users AS subject ON subject.id = browser_grant.subject_user_id
+		JOIN users AS issuer ON browser_grant.issuer_principal = ('browser-user/' || issuer.id::text) AND issuer.disabled = FALSE
 		JOIN sources AS source
 			ON source.source_id = browser_grant.source_id
 			AND source.auth_realm = browser_grant.auth_realm
@@ -195,6 +196,7 @@ func (s *BrowserCodeContextStore) ListCatalog(ctx context.Context, subjectUserID
 			AND browser_grant.state = ?
 			AND (browser_grant.expires_at IS NULL OR browser_grant.expires_at > ?)
 			AND subject.disabled = FALSE
+			AND checkout.owner_principal = browser_grant.issuer_principal
 			AND source.state = ?
 			AND checkout.state IN (?, ?, ?)
 		ORDER BY browser_grant.source_id ASC, browser_grant.checkout_id ASC, view_row.generation DESC NULLS LAST, view_row.view_id ASC
@@ -473,11 +475,12 @@ func loadBrowserCodeActiveGrant(ctx context.Context, tx *gorm.DB, subjectUserID 
 	result := tx.WithContext(ctx).Table("browser_read_grants AS browser_grant").
 		Select("browser_grant.*").
 		Joins("JOIN users AS subject ON subject.id = browser_grant.subject_user_id").
+		Joins("JOIN users AS issuer ON browser_grant.issuer_principal = ('browser-user/' || issuer.id::text) AND issuer.disabled = FALSE").
 		Joins("JOIN sources AS source ON source.source_id = browser_grant.source_id AND source.auth_realm = browser_grant.auth_realm").
 		Joins("JOIN ci_checkouts AS checkout ON checkout.checkout_id = browser_grant.checkout_id AND checkout.source_id = browser_grant.source_id").
 		Clauses(clause.Locking{Strength: "UPDATE", Table: clause.Table{Name: "browser_grant"}}).
 		Where("browser_grant.subject_user_id = ? AND browser_grant.source_id = ? AND browser_grant.checkout_id = ?", subjectUserID, sourceID, checkoutID).
-		Where("browser_grant.state = ? AND (browser_grant.expires_at IS NULL OR browser_grant.expires_at > ?) AND subject.disabled = FALSE", BrowserReadGrantActive, now).
+		Where("browser_grant.state = ? AND (browser_grant.expires_at IS NULL OR browser_grant.expires_at > ?) AND subject.disabled = FALSE AND checkout.owner_principal = browser_grant.issuer_principal", BrowserReadGrantActive, now).
 		Where("source.state = ? AND checkout.state IN (?, ?, ?)", UCISourceActive, UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp).
 		First(&grant)
 	if result.Error == nil {

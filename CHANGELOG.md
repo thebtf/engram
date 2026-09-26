@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Deny Workspace catalog choices and transactional pins when the grant issuer is disabled or no longer owns the checkout, matching browser read authorization.
 - Graph traversal and path readers prune private intermediaries before expansion while retaining public memory-to-node edges with typed node endpoints.
 
 ## [6.50.0] - 2026-09-17

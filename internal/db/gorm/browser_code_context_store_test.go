@@ -347,6 +347,46 @@ func TestBrowserCodeContextStoreExpiredGrantDeniesPinAndReauthorization(t *testi
 	require.Equal(t, BrowserReadGrantExpired, expired.State)
 }
 
+func TestBrowserCodeContextStore_OwnerTransferAndDisabledIssuerDenyCatalogAndPin(t *testing.T) {
+	fixture := newBrowserCodeContextFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	reader := &User{Email: fmt.Sprintf("reader-%s@example.test", uuid.NewString()), PasswordHash: "fixture", Role: DashboardRoleOperator, CreatedAt: now}
+	newOwner := &User{Email: fmt.Sprintf("owner-%s@example.test", uuid.NewString()), PasswordHash: "fixture", Role: DashboardRoleOperator, CreatedAt: now}
+	require.NoError(t, fixture.db.Create(reader).Error)
+	require.NoError(t, fixture.db.Create(newOwner).Error)
+	_, err := NewBrowserReadGrantStore(fixture.db).Issue(ctx, BrowserReadGrantIssue{
+		IssuerUserID: fixture.user.ID, IssuerPrincipal: browserReadGrantPrincipal(fixture.user.ID),
+		TargetUserID: reader.ID, SourceID: fixture.source.SourceID, CheckoutID: fixture.checkout.CheckoutID,
+	})
+	require.NoError(t, err)
+	fixture.caller.SubjectUserID = reader.ID
+	fixture.caller.SessionID = "reader-session-" + uuid.NewString()
+	fixture.binding, err = NewBrowserTabBindingStore(fixture.db).Create(ctx, browserTabBindingTestCreate(fixture.caller, fixture.materials))
+	require.NoError(t, err)
+
+	entries, err := fixture.store.ListCatalog(ctx, reader.ID)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "legitimate reader sees the owner's published View")
+	require.Equal(t, fixture.reference(), *entries[0].Context)
+
+	checkDenied := func() {
+		t.Helper()
+		pinErr := fixture.store.Pin(ctx, fixture.pin(fixture.reference()))
+		entries, err := fixture.store.ListCatalog(ctx, reader.ID)
+		require.NoError(t, err)
+		require.ErrorIs(t, pinErr, ErrBrowserCodeContextDenied)
+		require.Empty(t, entries)
+		fixture.requireUnpinned(t)
+		assertBrowserCodeContextAuditCount(t, fixture.db, "code_context_pinned", 0)
+	}
+	require.NoError(t, fixture.db.Model(fixture.checkout).Update("owner_principal", browserReadGrantPrincipal(newOwner.ID)).Error)
+	checkDenied()
+	require.NoError(t, fixture.db.Model(fixture.checkout).Update("owner_principal", browserReadGrantPrincipal(fixture.user.ID)).Error)
+	require.NoError(t, fixture.db.Model(fixture.user).Update("disabled", true).Error)
+	checkDenied()
+}
+
 func newBrowserCodeContextFixture(t *testing.T) browserCodeContextFixture {
 	t.Helper()
 
