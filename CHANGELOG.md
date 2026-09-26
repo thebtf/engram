@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **OpenClaw plugin 3.9.1.** Advanced release metadata for the V3 project-identity client contract and retired outcome callback handling.
 - Retired manual knowledge-graph writers and plaintext Book intake at their UI, HTTP, MCP, and startup admissions. Historical readers, records, documents, and provenance remain available.
 
 ### Fixed
