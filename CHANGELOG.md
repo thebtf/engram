@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Kept each hybrid-search result's excerpt attached to its ranked chunk instead of joining every chunk in the same artifact; the live Workspace fixture now follows real result continuations and verifies its namespaced daemon controls.
 - Proved persisted Workspace owner grants in the real browser fixture: issue through the chooser, reload inventory, allow reader search/graph/source, then revoke and deny those reads.
+- Regenerated the v6.50.0 bootstrap client target hashes from the integrated source; the Windows parser target remains bound to its verified raw binary.
 - Extended the live first-index journey to cover accepted queued reindex while its owned daemon is stopped, fresh daemon re-selection, one completed attempt, and idempotent browser replay without duplicate publication.
 - Deny Workspace catalog choices and transactional pins when the grant issuer is disabled or no longer owns the checkout, matching browser read authorization.
 - Graph traversal and path readers prune private intermediaries before expansion while retaining public memory-to-node edges with typed node endpoints.
