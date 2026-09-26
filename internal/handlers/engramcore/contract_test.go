@@ -278,11 +278,14 @@ func buildContractDispatcherWithClientInstanceID(t *testing.T, grpcAddr, clientI
 	// Pass http:// prefix so getOrDialGRPC uses plaintext.
 	p.Env["ENGRAM_URL"] = "http://" + grpcAddr
 
-	// Pre-populate the pool to use plaintext credentials matching our mock.
-	// We dial directly so tests are not subject to OS-level ephemeral port
-	// exhaustion from repeated lazy-dial calls.
-	conn, err := grpc.NewClient(
+	// Pre-populate the pool with a connected plaintext transport matching our
+	// mock; grpc.NewClient alone defers its handshake until the assertion RPC.
+	readyCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := grpc.DialContext(
+		readyCtx,
 		grpcAddr,
+		grpc.WithBlock(),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithConnectParams(grpc.ConnectParams{
 			Backoff: backoff.Config{
@@ -295,7 +298,7 @@ func buildContractDispatcherWithClientInstanceID(t *testing.T, grpcAddr, clientI
 		}),
 	)
 	if err != nil {
-		t.Fatalf("grpc.NewClient: %v", err)
+		t.Fatalf("connect to mock gRPC server: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 
