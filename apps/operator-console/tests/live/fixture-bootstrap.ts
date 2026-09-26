@@ -88,6 +88,10 @@ export interface LiveFixtureState {
     b: FixtureWorktree
     c: FixtureWorktree
   }
+  dirty: {
+    a: { root: string; marker: string }
+    b: { root: string; marker: string }
+  }
   mcp: {
     clientBinary: string
     clientBinarySha256: string
@@ -193,6 +197,7 @@ class LiveFixture implements FixtureController {
 
     try {
       const worktrees = await this.createWorktrees()
+      const dirty = await this.createDirtyWorktrees(worktrees.a.root)
       const postgres = await this.startPostgres()
       const binary = await this.buildServer(candidate.commit)
       const clientBinary = await this.buildMCPClient()
@@ -275,6 +280,7 @@ class LiveFixture implements FixtureController {
           b: worktrees.b.identity,
           c: worktrees.c.identity,
         },
+        dirty,
         mcp: {
           clientBinary,
           clientBinarySha256: createHash('sha256').update(await readFile(clientBinary)).digest('hex'),
@@ -317,7 +323,16 @@ class LiveFixture implements FixtureController {
         failures.push(error)
       }
     }
-    let worktreesRemoved = true
+    let dirtyRemoved = true
+    if (this.fixtureRoot) {
+      try {
+        await this.restoreDirtyWorktrees()
+      } catch (error) {
+        dirtyRemoved = false
+        failures.push(error)
+      }
+    }
+    let worktreesRemoved = dirtyRemoved
     if (this.fixtureRoot) {
       try {
         await this.removeWorktrees()
@@ -543,6 +558,33 @@ class LiveFixture implements FixtureController {
     }
   }
 
+  private async createDirtyWorktrees(base: string): Promise<LiveFixtureState['dirty']> {
+    const dirty = { a: { root: join(this.fixtureRoot, 'worktrees', 'dirty-a'), marker: `${this.fixtureId}-dirty-a` }, b: { root: join(this.fixtureRoot, 'worktrees', 'dirty-b'), marker: `${this.fixtureId}-dirty-b` } }
+    for (const copy of [dirty.a, dirty.b]) {
+      await execute('git', ['worktree', 'add', '--detach', copy.root, 'HEAD'], base)
+      const source = await readFile(join(copy.root, 'fixture.go'), 'utf8')
+      await writeFile(join(copy.root, 'fixture.go'), source.replace('operator-code-fixture-a', copy.marker))
+      await writeFile(join(copy.root, 'workspace-dirty.go'), `package fixture\nfunc WorkspaceDirty${copy === dirty.a ? 'Alpha' : 'Beta'}() string { return "${copy.marker}-initial" }\n`)
+    }
+    return dirty
+  }
+
+  private async restoreDirtyWorktrees(): Promise<void> {
+    if (!this.fixtureRoot) return
+    const base = join(this.fixtureRoot, 'worktrees', 'a')
+    for (const name of ['dirty-a', 'dirty-b']) {
+      const root = join(this.fixtureRoot, 'worktrees', name)
+      try { await lstat(join(root, '.git')) } catch { continue }
+      await writeFile(join(root, 'fixture.go'), await readFile(join(base, 'fixture.go')))
+      await execute('git', ['add', '--', 'fixture.go'], root)
+      const staged = await execute('git', ['diff', '--cached', '--name-only'], root)
+      if (staged.stdout.trim() !== '') throw new Error('owned fixture restoration differs from its original commit')
+      await rm(join(root, 'workspace-dirty.go'), { force: true })
+      await rm(join(root, 'workspace-renamed.go'), { force: true })
+      await execute('git', ['worktree', 'remove', root], base)
+    }
+  }
+
   private async writeWorktreeSources(root: string, variant: 'a-before' | 'b', marker: 'a' | 'b' | 'c'): Promise<void> {
     const sourceRoot = join(repositoryRoot, 'tests', 'fixtures', 'operator-code-current-slice', 'worktrees', variant, 'src')
     const destination = join(root, 'src')
@@ -734,7 +776,14 @@ export function fixtureEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.Pr
       delete environment[name]
     }
   }
-  return { ...environment, ...overrides }
+  return {
+    ...environment,
+    ...(process.env.OPENAI_BASE_URL ? { ENGRAM_EMBEDDING_URL: process.env.OPENAI_BASE_URL } : {}),
+    ...(process.env.EMBEDDING_MODEL ? { ENGRAM_EMBEDDING_MODEL: process.env.EMBEDDING_MODEL } : {}),
+    ...(process.env.OPENAI_API_KEY ? { ENGRAM_EMBEDDING_API_KEY: process.env.OPENAI_API_KEY } : {}),
+    ENGRAM_EMBEDDING_DIMENSIONS: '1536',
+    ...overrides,
+  }
 }
 
 async function reservePort(): Promise<number> {

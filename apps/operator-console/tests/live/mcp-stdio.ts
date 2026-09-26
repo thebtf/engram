@@ -6,6 +6,7 @@ import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
+import { pathToFileURL } from 'node:url'
 import { fixtureEnvironment } from './fixture-bootstrap'
 
 const REQUEST_TIMEOUT_MS = 60_000
@@ -237,6 +238,34 @@ export class MCPStdioClient {
       throw new Error('external MCP client did not prepare the published checkout after restart')
     }
   }
+  async registerDirtyCheckout(source: { label?: string; id?: string; root: string }): Promise<Record<string, unknown>> {
+    const result = record(await this.callTool('codebase_context', {
+      action: 'register', locator: pathToFileURL(source.root).href,
+      ...(source.id === undefined ? { source_label: source.label } : { source_id: source.id }),
+    }, 'proxy'))
+    if (Reflect.get(result, 'binding_kind') !== 'checkout' || Reflect.get(result, 'context') !== null || typeof Reflect.get(result, 'context_handle') !== 'string') throw new Error('ordinary registration did not return an unindexed checkout')
+    return result
+  }
+
+  async indexDirtyCheckout(contextHandle: string): Promise<string> {
+    const result = record(await this.callTool('codebase_index', { context_handle: contextHandle }, 'direct'))
+    const runID = Reflect.get(result, 'run_id')
+    if (Reflect.get(result, 'status') !== 'started' || typeof runID !== 'string' || !runID) throw new Error('ordinary dirty index did not start')
+    return runID
+  }
+
+  async dirtyIndexStatus(contextHandle: string, barrier?: string): Promise<Record<string, unknown>> {
+    return record(await this.callTool('codebase_status', { context_handle: contextHandle, ...(barrier === undefined ? {} : { after_barrier: { token: barrier, wait_ms: 60_000 } }) }, 'direct'))
+  }
+
+  async selectDirtyCheckout(target: MCPNoViewTarget): Promise<Record<string, unknown>> {
+    return record(await this.callTool('codebase_context', { action: 'select', checkout: { source_id: target.sourceId, checkout_id: target.checkoutId, incarnation_id: target.incarnationId, analysis_profile_id: target.analysisProfileId } }, 'proxy'))
+  }
+
+  async dirtySearch(query: string): Promise<Record<string, unknown>> {
+    return record(await this.callTool('codebase_search', { query, limit: 50 }, 'direct'))
+  }
+
 
   transcript(): MCPStdioTranscript {
     const pid = this.child.pid
@@ -437,8 +466,8 @@ function safeRPCError(method: string, value: unknown): Error {
 
 function clientRootLabel(root: string): 'A' | 'B' | 'C' {
   const normalized = root.replaceAll('\\', '/').replace(/\/+$/, '')
-  if (normalized.endsWith('/a')) return 'A'
-  if (normalized.endsWith('/b')) return 'B'
+  if (normalized.endsWith('/a') || normalized.endsWith('/dirty-a')) return 'A'
+  if (normalized.endsWith('/b') || normalized.endsWith('/dirty-b')) return 'B'
   if (normalized.endsWith('/c')) return 'C'
   throw new Error('external MCP client root is not a fixture linked worktree')
 }
