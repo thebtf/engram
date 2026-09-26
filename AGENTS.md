@@ -1,83 +1,43 @@
-# AGENTS.md
+# Engram — agent instructions
 
-## PRODUCT AND STARTUP
+## Goal and scope
 
-Engram's accepted scope includes code intelligence and knowledge workflows for supported coding agents. PostgreSQL is authoritative; the local stdio MCP daemon talks to the server over gRPC. Do not restore server-side HTTP MCP or embed upstream products as a shortcut.
+These instructions apply inside Engram; a parent workspace janitor role is not this project's task. For an explicit session takeover, read operator-supplied continuity or locate the primary checkout with `git worktree list --porcelain` and read its `.agent/continuity/RESTART.md` and latest saved handoff when present. Machine-local continuity is not required for ordinary repository work. Read the current task, continuation and accepted feature contract in the actual worktree. Follow the host instruction hierarchy and governing `.specify/memory/constitution.md`; load only relevant skills. Reconcile stale state with code rather than replaying historical intake or restarting accepted work.
 
-Read this file, the current run/checkpoint, and the active feature contract; for releases, read `docs/RELEASE-PROTOCOL.md`. Reconcile the actual checkout, dirty work, installed version, assignments and next user-visible outcome. Do not load every historical intake or repeat completed Spec Kit stages after compaction.
+Deliver one useful installable slice. Restore any broken shipped Engram plugin/memory path before feature expansion. Then deliver code search, automatic graph, independent worktrees, operator Workspace and operating documentation. Book Context and new cognitive-memory development follow; this does not defer regressions in existing memory or OpenClaw-plugin compatibility. Updating the OpenClaw host is outside this task. New capabilities and contract changes use the applicable Spec Kit pipeline. A repair within an accepted contract needs focused implementation and verification, not a fresh product specification.
 
-Follow the host's actual instruction hierarchy. Within project artifacts, `.specify/memory/constitution.md` governs, then accepted feature decisions/contracts. Explicit operator amendments use that governance. A delegated task cannot remove required functionality or waive safety/release gates. Ask about missing product decisions, not implementation details an engineer can resolve.
+## Ownership and decisions
 
-## ROOT SOLO
+Root Solo decides, delegates, accepts results and advances delivery. Subagents author architecture, code, technical documents/tests, integrate changes and execute checks, including local Sonar. Root may read status and maintain continuation; it does not become the implementer or test operator. No peer PM/Developer hierarchy.
 
-One Root Solo session decides, delegates, controls drift and accepts independently checked results. Native Task-subagents author architecture, technical contracts, code, tests, scripts, conflict resolutions, builds, diagnostics and reviews. Root does not do technical patches through shell/eval or become a second implementer. Do not recreate the historical peer PM/Developer model.
+Assign coherent outcomes, not individual edits. The implementer owns diagnosis, implementation and focused repairs within scope without a new Root assignment for each failing test. Use independent review/QA of the result. Shared files have one writer and one integrator owns the candidate. Parallelize independent tasks, not competing heavy runs on shared resources.
 
-Use actual operator-managed assignments; subagents never self-promote or rewrite role/control-plane state. One authorized integrator owns the candidate; one authorized release owner coordinates publication. Check existing tags and remote state for consistency, never force-move a published tag. This file grants no extra production or credential access.
+Inspect available facts before asking. Ask for missing product decisions or authority, not resolvable engineering details. A blocked deployment lane does not block implementation or isolated validation. Consume ready results and continue safe independent work; use a nonblocking decision request when supported. Do not enter a blocking `ask` while Root has decision-independent work to accept or dispatch. If none remains, report the exact dependency and wait. Never invent consent.
 
-Delegate coherent outcomes with context, write boundaries and acceptance. Run ready independent tasks before waiting; shared files have one writer. Choose available models by task difficulty/risk. Avoid duplicate assignments and competing heavy runs on shared resources. An author is not their sole verifier.
+## Review and evidence
 
-## DEFINE THE FINISH
+Review changed behavior and affected invariants. Keep related repairs in one assignment; recheck unresolved blockers and impacted behavior, not the whole product after every fix or reviewer/model change.
 
-Before implementation, select one independently useful installable slice, non-goals, acceptance and migration/rollback boundary in the existing feature/run. Do not regroup small tasks into one long-lived mega-release. New features use Spec Kit; corrections revalidate the affected contract/delta, not the whole history.
+Fix mandatory gate failures, accepted-behavior violations and credible security/data-integrity defects. Resolve findings in existing review state through the authorized maintainer. Optional suggestions may share one reasoned, tracked follow-up; each does not require a new report, task or user approval. Do not unilaterally close required threads or waive approvals. Additional review needs a concrete unresolved question; no pass-count overrides a real blocker.
 
-For an authorized delivery goal, done means implemented, accepted, released, installed and exercised through the ordinary consumer. A unit PASS, fixture UI, commit, accepted feature or tag is not delivery. Research-only tasks may end with their requested artifact; do not invent deployment authority.
+Run focused tests during implementation and existing mandatory integration/release checks at their boundary. Report selection, failures and required skips honestly. Test doubles prove their layer, not installed behavior. Product acceptance uses the ordinary browser/client journey and promised corpus/language scope; flags, routes, receipts and version strings are insufficient.
 
-Preserve the promised outcome when fixing defects. A page bound must not disable semantic search on a normal corpus; a fake daemon or manually seeded fixture cannot prove ordinary indexing. Check authorization, actual downloads, first startup, UI navigation and worktree isolation during implementation, not for the first time after declaring readiness.
+Keep evidence in existing task/review/run records. Add an ADR, manifest or checklist only for a governing requirement or concrete consumer. Reuse only validated, provenance-preserving results. Repeated identical failure requires a different diagnosis, not another full run. Debug report classification from saved events and small tests; do not weaken assertions or inflate timeouts to get green.
 
-## REVIEW TO A DECISION
+## Release and waiting
 
-Review changed behavior and affected dependencies for correctness and maintainability, not perfection. Explain a meaningful decision once at its natural location; trivial fixes do not each need a new ADR/report.
+`docs/RELEASE-PROTOCOL.md` is the single operational source for commands, CI compute limits, release authority and rollback. Mandatory gates remain, including exact-candidate Sonar `OK`, security, supported-platform and migration requirements, except for explicitly recorded operator-approved exceptions with their existing narrow scope. The recorded v6.49.4 PR #531 Sonar exception is `NOT_PROVEN`, never a PASS and never transferable to Workspace. Routine already-authorized actions need no renewed approval.
 
-Give every reported finding one evidenced disposition in existing review/task state: **fix now**, **not applicable**, or **maintainer-accepted follow-up**. Blocking means a failed mandatory gate, violated accepted behavior/compatibility, or credible security/data-integrity risk. A severity label alone is not the reasoning; credible unresolved high-impact risks remain blocking during investigation.
+Finish known repairs, ordinary host/user-path smoke and release inputs before freezing. Use that checkout's tools; never mutate a candidate under validation. One QA owner runs each durable gate job and its recovery; Root consumes terminal evidence and directs delivery, not duplicate jobs or rapid polling of unchanged logs. A short Task wait must not cancel a longer job.
 
-Do not defer real blockers to ship. Nonblocking optional findings do not automatically require release code. Required approvals/thread resolution still apply; disputes and scanner findings cannot be suppressed or unilaterally marked resolved. Never lower thresholds or hide failures to pass.
+After interruption inspect saved state and use supported recovery. Do not launch a duplicate or full default campaign merely because a wait or `--help` failed. A new candidate requires an evidence-impact decision under existing compatibility rules, not a renamed historical PASS. Changed SHA alone does not require rerunning unaffected suites; changed test inputs, tool environments, analyzer identity or release artifact bytes require their applicable proof.
 
-Finish required review before expensive final validation. Recheck fixes and affected invariants; reopen unchanged accepted areas only for new evidence or affected dependencies. A new reviewer/model or changelog edit alone does not justify another whole-product audit. No fixed review-count permits unsafe release; every additional round needs a concrete unresolved question.
+When mandatory gates pass and actions are authorized, proceed to release and ordinary-consumer verification, not optional polish. Source-ready, published, catalog-available, installed and consumer-proven are distinct states. Publication does not wait for an operator-owned reinstall; installation and consumer proof remain open until observed. Research-only and explicitly source-only tasks retain their smaller requested outcome.
 
-## VALIDATION WITHOUT RESET LOOPS
+## Invariants and continuation
 
-Finish known blocker repairs, version metadata and generated inputs before freezing a candidate. Use its own runner and one QA owner. Do not mutate/rebase the candidate during its gate or launch final validation while same-candidate repairs are outstanding. A new blocker requires an explicit candidate/evidence-impact decision.
+Preserve Go/PostgreSQL/pgvector, the stdio-daemon/gRPC boundary, typed Source/Checkout/pinned View, authorization, privacy/history, bounded resources and independent dirty worktrees. Do not embed upstream products or hide required capabilities behind incomplete flags. Configuration and emergency stops follow the constitution.
 
-Reuse evidence only within validated input/environment/provenance contracts. Never relabel an old PASS. Docs-only changes do not justify a new product investigation, but cannot bypass the current tool's exact-input rules. SonarQube is a mandatory agent-executed local gate: the root agent runs `node tools/quality/run-sonarqube.mjs` from the clean, frozen exact candidate, retains `.agent/e/sonarqube/<HEAD>.json`, and requires `OK`, except for the single operator-approved v6.49.4 exception dated 2026-09-25 in `docs/RELEASE-PROTOCOL.md`; no GitHub Actions workflow performs this gate. All enforced checks and security rules remain.
+Verify current paths and consumers; do not infer readiness or obsolescence from names. Retire rejected workflows in UI and executable entry points while preserving required data/readers and rollback. One complete change-level consumer map and its tests can cover related removals; no per-symbol paperwork is required. Never reset/clean/stage/overwrite unrelated work, alter another session's authority, expose secrets or force-move published tags.
 
-Long checks have an owned durable job, actual command/path, selected tests, prerequisites, budget and observable result. A short Task wait must not kill a progressing gate. Follow the same job; do not start a replacement or clear a lock without checking ownership. A bad progress counter alone is not cause to cancel useful work.
-
-Classify product, test, evidence-parser, environment and gate failures separately. Reproduce the smallest relevant case; replay saved events to debug classification. A repeated unchanged failure without new information requires a different diagnosis, not another identical full run. Do not fix flakiness by unsupported retries, assertion weakening or timeout inflation.
-
-When the same cause invalidates two candidate attempts, Root makes a short recovery decision in the existing run: causal repair, valid-baseline restoration, operator-approved scope change or a specific external decision. This is an escalation trigger, not a waiver or a new QC project. Independent safe work continues.
-
-## CI COMPUTE POLICY
-
-GitHub-hosted compute is a scarce release resource. The 2026-09-19 incident exhausted the included 2,000 minutes and attributed $93.07 gross to Engram after 902 September runs, with no product result; macOS runners cost about 10.33x Linux. Do not spend remote CI merely to probe an unavailable external service or to rerun unchanged bytes.
-
-- **Local proof:** run the focused local proof first. It precedes, rather than substitutes for, remote release gates.
-- **Ordinary development:** each PR or `main` candidate gets one cancelable Ubuntu validation lane and cheap authority checks; it does not build Docker images. Configure events so the same candidate does not receive duplicate push and PR runs, and cancel superseded non-manual runs. If branch protection is enabled later, require only checks emitted on ordinary PRs—never dispatch-only `test / windows-latest`, `test / macos-14`, or `migrations / clean-db chain`.
-- **Frozen candidate:** an explicit manual frozen-candidate validation runs clean-DB coverage and the Ubuntu/Windows/macOS matrix once for those immutable bytes. Do not begin another heavy run unless candidate bytes changed or proven infrastructure recovery makes one retry necessary.
-- **Release boundary:** Docker image acceptance runs only for a `v*` tag or explicit manual frozen-candidate acceptance. The root agent runs SonarQube outside GitHub Actions with `node tools/quality/run-sonarqube.mjs` from the clean, frozen exact candidate before publication, retains `.agent/e/sonarqube/<HEAD>.json`, and requires `OK`, except for the single operator-approved v6.49.4 exception dated 2026-09-25 in `docs/RELEASE-PROTOCOL.md`. Human action is required only at an unavailable infrastructure, credential, or irreversible-effect authority boundary. Publication/release jobs are never cancelled mid-flight. A Sonar outage otherwise holds the release—repair or prove service recovery before one same-candidate rerun, rather than creating a no-op/amended commit or repeatedly consuming remote runs.
-- **Post-publication:** the daily Docker schedule performs only the published-image rescan. It does not rebuild or accept images; the existing freshness and remediation rules still govern rollout.
-
-Read `docs/RELEASE-PROTOCOL.md` before a frozen-candidate, tag, publication, Sonar, or published-image action.
-
-## DELIVERY AND CONTINUATION
-
-Once required gates pass and effects are authorized, proceed to release, rollout and ordinary-consumer verification; do not wait for another user "continue" or discretionary audit. A real external block needs one concrete decision request with impact/rollback, not repeated approval of an already authorized action.
-
-Current recovery order: usable code search/graph/worktrees and Code Explorer, then Book Context, then cognitive memory unless the operator changes it. Preserve queued work; no old-PR cleanup or new capabilities inside release closeout. Do not dismantle an assembled candidate merely to obey a new small-batch slogan.
-
-Keep one continuation pointer: candidate, installed state, causal blockers/owners and next action. Report actual user availability separately from checks. Forecast from evidence/dependencies with uncertainty, not invented dates or blanket bans on estimates. Root owns delivery progress, not just subagent activity.
-
-Replace conflicting policy at its source; do not accumulate per-incident instructions, new ledgers, schedulers or report schemas. Land adopted rules in main through existing review so later sessions inherit them. Never silently update a running frozen checkout.
-
-## ARCHITECTURE AND NAVIGATION
-
-Verify call paths and consumers; distinguish deployed, implemented-but-unshipped, dormant, obsolete and absent. Historical v5 removal rejects obsolete implementations, not accepted outcomes (constitution XIV). Names, flags, docs and green mocks alone prove neither current architecture nor deployment.
-
-Code queries/traversal/source reads use authorized Source/Checkout/pinned View. Labels, paths, legacy project aliases and equal vector dimensions are not authority or compatibility. Preserve privacy, migrations, bounded resources and independent worktrees. PostgreSQL projections are rebuildable, not a second write authority.
-
-SocratiCode/Graphify are references for researched native mechanism adaptation, not embedded products or proof of parity. Reuse accepted research; state actual language/corpus coverage. Test doubles are allowed for isolated tests, never as proof of a real provider, daemon or installed user path.
-
-Entry points: `cmd/engram-server/`, `cmd/engram/`. Current code intelligence: `internal/handlers/codeintel/`, `internal/mcp/tools_code_intel.go`, `internal/db/gorm/code_chunk_store.go`. UCI-native paths are present only when they exist in the current checkout; never direct current sessions to absent paths such as `internal/uci/` or `internal/db/gorm/uci_*`. Console: `apps/operator-console/`; HTTP/storage: `internal/worker/`, `internal/db/gorm/`; integrations: `plugin/`.
-
-Use current `go.mod`, CI and lockfiles for toolchain versions. Base commands: `make build`, `go test ./...`; release commands/environments: `docs/RELEASE-PROTOCOL.md`. QA verifies real flags and selected tests; unexpected SKIP or zero selection is not PASS. Load only relevant available skills.
-
-Never reset, clean, stage or overwrite unrelated user work, including inherited main-checkout `AGENTS.md` changes. Check actual owners and shared `.agent`/`.specify` paths before writing. Leave details of safe implementation to the responsible subagent.
+During a requested session save, finish or hand off owned jobs without starting a new wave; record active writers and uncommitted work. Keep one continuation: candidate, installed state, owners, causal blockers and next delivery action. Update at meaningful transitions, not each poll. Report what the operator can use and what remains; estimate only from evidence with uncertainty. Replace contradictory policy at its source through normal adoption, without new incident ledgers or modifying a running frozen checkout.
