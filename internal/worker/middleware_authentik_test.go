@@ -38,18 +38,19 @@ func TestAuthMeSourceUsesEstablishedBrowserContext(t *testing.T) {
 	require.Equal(t, "session", svc.authMeSource(httptest.NewRequest(http.MethodGet, "/api/auth/me", nil), authpkg.Session("admin")))
 }
 
-func TestAuthMeTrustedIngressOutranksLocalCookieForSignout(t *testing.T) {
+func TestAuthMeSeparatesLocalSourceFromTrustedIngress(t *testing.T) {
 	guard, err := NewTokenAuth("test-token")
 	require.NoError(t, err)
 	guard.SetAuthentikConfig(true, false, []string{"192.0.2.1"})
 	svc := &Service{tokenAuth: guard}
 	id := authpkg.SessionForBrowserUser("operator", 23)
 	for _, tc := range []struct {
-		name, peer, email, want string
+		name, peer, email string
+		active            bool
 	}{
-		{name: "trusted ingress with local cookie", peer: "192.0.2.1:443", email: "sso@example.test", want: "authentik"},
-		{name: "untrusted header with local cookie", peer: "198.51.100.2:443", email: "sso@example.test", want: "local"},
-		{name: "trusted peer without identity header", peer: "192.0.2.1:443", want: "local"},
+		{name: "trusted ingress with local cookie and different SSO email", peer: "192.0.2.1:443", email: "other-user@example.test", active: true},
+		{name: "untrusted header with local cookie", peer: "198.51.100.2:443", email: "sso@example.test"},
+		{name: "trusted peer without identity header", peer: "192.0.2.1:443"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
@@ -57,20 +58,20 @@ func TestAuthMeTrustedIngressOutranksLocalCookieForSignout(t *testing.T) {
 			req.Header.Set("X-Authentik-Email", tc.email)
 			req = req.WithContext(withAuthenticatedBrowserSession(buildAuthCtx(req.Context(), id), "opaque-local-cookie"))
 			captureOriginalPeer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-				require.Equal(t, tc.want, svc.authMeSource(r, id))
+				require.Equal(t, "local", svc.authMeSource(r, id))
+				require.Equal(t, tc.active, svc.trustedAuthentikIngress(r))
 			})).ServeHTTP(httptest.NewRecorder(), req)
-			if tc.want == "authentik" {
-				captureOriginalPeer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-					require.Equal(t, "authentik", svc.authMeSource(r, authpkg.Session("admin")))
-				})).ServeHTTP(httptest.NewRecorder(), req)
-			}
 		})
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
 	req.RemoteAddr = "192.0.2.1:443"
 	req.Header.Set("X-Authentik-Email", "sso@example.test")
 	req = req.WithContext(withAuthenticatedBrowserSession(buildAuthCtx(req.Context(), id), "opaque-local-cookie"))
-	require.Equal(t, "local", svc.authMeSource(req, id), "transport peer must be captured before RealIP")
+	require.False(t, svc.trustedAuthentikIngress(req), "transport peer must be captured before RealIP")
+	guard.SetAuthentikConfig(false, false, []string{"192.0.2.1"})
+	captureOriginalPeer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		require.False(t, svc.trustedAuthentikIngress(r), "disabled Authentik cannot establish SSO")
+	})).ServeHTTP(httptest.NewRecorder(), req)
 }
 
 func TestAuthMeTrustedIngressWithSignedCookie(t *testing.T) {
@@ -93,8 +94,25 @@ func TestAuthMeTrustedIngressWithSignedCookie(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	require.Equal(t, "admin", body["role"], "middleware must keep signed-cookie precedence")
-	require.Equal(t, "authentik", body["auth_source"], "local logout cannot end a trusted IdP session")
-	require.Equal(t, "authentik", body["source"])
+	require.Equal(t, "session", body["auth_source"], "signed cookie remains the selected credential")
+	require.Equal(t, true, body["sso_active"])
+	require.Equal(t, "session+authentik", body["source"])
+	logoutReq := httptest.NewRequest(http.MethodPost, "/api/auth/logout", bytes.NewReader([]byte(`{}`)))
+	logoutReq.Header.Set("Origin", "http://example.com")
+	logoutReq.Header.Set("Sec-Fetch-Site", "same-origin")
+	logoutReq.Header.Set("X-Authentik-Email", "sso@example.test")
+	logoutReq.RemoteAddr = "192.0.2.1:443"
+	logoutReq.AddCookie(login.Result().Cookies()[0])
+	logout := httptest.NewRecorder()
+	captureOriginalPeer(svc.requireLogoutOrigin(http.HandlerFunc(svc.handleAuthLogout))).ServeHTTP(logout, logoutReq)
+	require.Equal(t, http.StatusOK, logout.Code, logout.Body.String())
+	var cleared bool
+	for _, cookie := range logout.Result().Cookies() {
+		if cookie.Name == sessionCookieName && cookie.MaxAge < 0 {
+			cleared = true
+		}
+	}
+	require.True(t, cleared, "signed browser cookie must be expired")
 }
 
 func TestAuthMeExposesResolvedMasterSource(t *testing.T) {
@@ -217,6 +235,10 @@ func TestAuthMeUsesProtectedRouteIdentity(t *testing.T) {
 	user, err := env.users.CreateUser(email, "hash", gormdb.DashboardRoleOperator)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = env.store.DB.Delete(user).Error })
+	otherEmail := fmt.Sprintf("zz-auth-me-other-%d@example.com", time.Now().UnixNano())
+	otherUser, err := env.users.CreateUser(otherEmail, "hash", gormdb.DashboardRoleAdmin)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = env.store.DB.Delete(otherUser).Error })
 	session, err := env.sessions.CreateSession(user.ID, time.Hour, "test-agent", "127.0.0.1")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = env.store.DB.Where("id = ?", session.ID).Delete(&gormdb.AuthSession{}).Error })
@@ -244,12 +266,14 @@ func TestAuthMeUsesProtectedRouteIdentity(t *testing.T) {
 		cookie     bool
 		wantStatus int
 		authSource string
+		ssoActive  bool
 	}{
-		{name: "trusted Authentik without cookie", remoteAddr: "192.0.2.1:443", email: email, wantStatus: http.StatusOK, authSource: "authentik"},
+		{name: "trusted Authentik without cookie", remoteAddr: "192.0.2.1:443", email: email, wantStatus: http.StatusOK, authSource: "authentik", ssoActive: true},
 		{name: "untrusted spoofed header", remoteAddr: "198.51.100.2:443", email: email, wantStatus: http.StatusUnauthorized},
 		{name: "anonymous", wantStatus: http.StatusUnauthorized},
 		{name: "local session cookie", cookie: true, wantStatus: http.StatusOK, authSource: "local"},
-		{name: "trusted ingress alongside local cookie", remoteAddr: "192.0.2.1:443", email: email, cookie: true, wantStatus: http.StatusOK, authSource: "authentik"},
+		{name: "trusted ingress alongside local cookie", remoteAddr: "192.0.2.1:443", email: email, cookie: true, wantStatus: http.StatusOK, authSource: "local", ssoActive: true},
+		{name: "different IdP user alongside local cookie", remoteAddr: "192.0.2.1:443", email: otherEmail, cookie: true, wantStatus: http.StatusOK, authSource: "local", ssoActive: true},
 		{name: "spoofed ingress alongside local cookie", remoteAddr: "198.51.100.2:443", email: email, cookie: true, wantStatus: http.StatusOK, authSource: "local"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -273,12 +297,48 @@ func TestAuthMeUsesProtectedRouteIdentity(t *testing.T) {
 				require.Equal(t, gormdb.DashboardRoleOperator, body["role"])
 				require.Equal(t, map[string]any{"id": float64(user.ID), "email": email, "role": gormdb.DashboardRoleOperator}, body["user"])
 				require.Equal(t, tc.authSource, body["auth_source"])
-				require.Equal(t, tc.authSource, body["source"])
+				require.Equal(t, tc.ssoActive, body["sso_active"])
+				if tc.ssoActive && tc.cookie {
+					require.Equal(t, "local+authentik", body["source"])
+				} else {
+					require.Equal(t, tc.authSource, body["source"])
+				}
 			} else {
 				require.Equal(t, false, body["authenticated"])
 			}
 		})
 	}
+
+	t.Run("mixed local signout revokes cookie session but IdP remains", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", bytes.NewReader([]byte(`{}`)))
+		req.Header.Set("Origin", "http://example.com")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		req.Header.Set("X-Authentik-Email", email)
+		req.RemoteAddr = "192.0.2.1:443"
+		req.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: session.ID})
+		rec := httptest.NewRecorder()
+		captureOriginalPeer(svc.requireLogoutOrigin(http.HandlerFunc(svc.handleAuthLogout))).ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		_, err := env.sessions.GetSession(session.ID)
+		require.Error(t, err)
+		var cleared bool
+		for _, cookie := range rec.Result().Cookies() {
+			if cookie.Name == authSessionCookieName && cookie.MaxAge < 0 {
+				cleared = true
+			}
+		}
+		require.True(t, cleared, "local cookie must be expired")
+		after := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+		after.RemoteAddr = "192.0.2.1:443"
+		after.Header.Set("X-Authentik-Email", email)
+		readback := httptest.NewRecorder()
+		handler.ServeHTTP(readback, after)
+		require.Equal(t, http.StatusOK, readback.Code, readback.Body.String())
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(readback.Body.Bytes(), &body))
+		require.Equal(t, "authentik", body["auth_source"])
+		require.Equal(t, true, body["sso_active"])
+	})
 
 	t.Run("master bearer", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)

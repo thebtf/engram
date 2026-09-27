@@ -155,6 +155,8 @@
     "profileMenuSettings": "Настройки консоли",
     "profileMenuLogout": "Выйти из консоли",
     "profileMenuLogoutSSO": "Чтобы завершить эту сессию, выйдите через поставщика удостоверений.",
+    "profileMenuLogoutLocal": "Завершить локальную сессию",
+    "profileMenuLogoutMixedHint": "Завершение локальной сессии не завершит вход через поставщика удостоверений.",
     "profileMenuLogoutPending": "Завершаем текущую сессию…",
     "profileMenuLogoutAuthDisabled": "Auth отключена: текущую сессию нельзя завершить из UI",
     "profileMenuLogoutLocked": "Нет активной сессии для выхода",

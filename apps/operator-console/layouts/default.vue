@@ -86,10 +86,12 @@ onMounted(() => {
   window.addEventListener('pointerdown', onDocumentPointerDown)
   window.addEventListener('keydown', onDocumentKeydown)
 })
+const mixedSso = computed(() => info.value.source.endsWith('+authentik'))
 const canLogout = computed(() => info.value.authenticated && !info.value.authDisabled && info.value.source !== 'authentik')
 const logoutTitle = computed(() => {
   if (logoutInFlight.value) return t('shell.profileMenuLogoutPending')
   if (info.value.source === 'authentik') return t('shell.profileMenuLogoutSSO')
+  if (mixedSso.value) return t('shell.profileMenuLogoutLocal')
   if (canLogout.value) return t('shell.profileMenuLogout')
   if (info.value.authDisabled) return t('shell.profileMenuLogoutAuthDisabled')
   if (info.value.authPosture === 'locked') return t('shell.profileMenuLogoutLocked')
@@ -229,7 +231,8 @@ async function logoutIdentity() {
   closeIdentityMenu()
   try {
     await operatorFetchJson('/api/auth/logout', { method: 'POST' }, 'shell-auth-logout')
-    window.location.replace('/login')
+    if (mixedSso.value) window.location.reload()
+    else window.location.replace('/login')
   } catch {
     logoutError.value = true
   } finally {
@@ -386,13 +389,13 @@ function onDocumentKeydown(event: KeyboardEvent) {
               role="menuitem"
               :disabled="!canLogout || logoutInFlight"
               :title="logoutTitle"
-              :aria-describedby="info.source === 'authentik' ? 'sso-signout-guidance' : undefined"
+              :aria-describedby="info.source === 'authentik' || mixedSso ? 'sso-signout-guidance' : undefined"
               @click="logoutIdentity"
             >
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 11.5v1.4a1 1 0 0 1-1 1H3.4a1 1 0 0 1-1-1V3.1a1 1 0 0 1 1-1H9a1 1 0 0 1 1 1v1.4"/><path d="M7 8h7M11.6 5.4 14.2 8l-2.6 2.6"/></svg>
-              <span>{{ t('shell.profileMenuLogout') }}</span>
+              <span>{{ t(mixedSso ? 'shell.profileMenuLogoutLocal' : 'shell.profileMenuLogout') }}</span>
             </button>
-            <p v-if="info.source === 'authentik'" id="sso-signout-guidance" class="idm-guidance">{{ t('shell.profileMenuLogoutSSO') }}</p>
+            <p v-if="info.source === 'authentik' || mixedSso" id="sso-signout-guidance" class="idm-guidance">{{ t(mixedSso ? 'shell.profileMenuLogoutMixedHint' : 'shell.profileMenuLogoutSSO') }}</p>
           </div>
         </div>
       </div>

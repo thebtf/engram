@@ -271,6 +271,8 @@ func (s *Service) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 			"role":          "admin",
 			"auth_disabled": true,
 			"source":        "auth-disabled",
+			"auth_source":   "auth-disabled",
+			"sso_active":    false,
 			"synthetic":     true,
 		})
 		return
@@ -284,8 +286,14 @@ func (s *Service) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 			"auth_disabled": false,
 		}
 		if id, ok := authpkg.IdentityFrom(r.Context()); ok {
-			response["auth_source"] = s.authMeSource(r, id)
-			response["source"] = response["auth_source"]
+			credentialSource := s.authMeSource(r, id)
+			ssoActive := credentialSource == "authentik" || s.trustedAuthentikIngress(r)
+			response["auth_source"] = credentialSource
+			response["sso_active"] = ssoActive
+			response["source"] = credentialSource
+			if ssoActive && credentialSource != "authentik" && id.Source == authpkg.SourceSession {
+				response["source"] = credentialSource + "+authentik"
+			}
 			if subject, ok := id.SessionBrowserSubject(); ok {
 				if s.authHandlers == nil || s.authHandlers.users == nil {
 					http.Error(w, "auth store unavailable", http.StatusInternalServerError)
@@ -311,17 +319,9 @@ func (s *Service) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// authMeSource reports an active trusted IdP session even if middleware used a
-// local cookie first; local logout cannot terminate that upstream session.
+// authMeSource identifies the credential selected by middleware, independent
+// of other upstream sessions that may remain active after local logout.
 func (s *Service) authMeSource(r *http.Request, id authpkg.Identity) string {
-	if s.tokenAuth != nil {
-		s.tokenAuth.mu.RLock()
-		trustedIngress := s.tokenAuth.authentikEnabled && r.Header.Get("X-Authentik-Email") != "" && isTrustedProxy(r, s.tokenAuth.authentikTrustedProxies)
-		s.tokenAuth.mu.RUnlock()
-		if trustedIngress {
-			return "authentik"
-		}
-	}
 	if subject, ok := id.SessionBrowserSubject(); ok {
 		if sessionID, ok := authenticatedBrowserSessionID(r.Context()); ok && sessionID == authentikBrowserSessionID(subject.UserID) {
 			return "authentik"
@@ -329,6 +329,16 @@ func (s *Service) authMeSource(r *http.Request, id authpkg.Identity) string {
 		return "local"
 	}
 	return string(id.Source)
+}
+
+func (s *Service) trustedAuthentikIngress(r *http.Request) bool {
+	if s.tokenAuth == nil || r.Header.Get("X-Authentik-Email") == "" {
+		return false
+	}
+	s.tokenAuth.mu.RLock()
+	trusted := s.tokenAuth.authentikEnabled && isTrustedProxy(r, s.tokenAuth.authentikTrustedProxies)
+	s.tokenAuth.mu.RUnlock()
+	return trusted
 }
 
 // handleListTokens godoc
