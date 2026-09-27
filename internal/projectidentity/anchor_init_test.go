@@ -7,6 +7,39 @@ import (
 	"testing"
 )
 
+func TestInitRepositoryAnchorV3CreateReplayAndPreserveMalformed(t *testing.T) {
+	root := t.TempDir()
+	runGit(t, root, "init")
+	path := filepath.Join(root, anchorFilenameV3)
+	first, created, tracked, err := InitRepositoryAnchorV3(root, "first")
+	if err != nil || !created || tracked {
+		t.Fatalf("create = (%+v, %t, %t, %v)", first, created, tracked, err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, created, tracked, err := InitRepositoryAnchorV3(root, "second")
+	if err != nil || created || tracked || second != first {
+		t.Fatalf("replay = (%+v, %t, %t, %v), first = %+v", second, created, tracked, err, first)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("replay changed anchor: %v", err)
+	}
+	malformed := []byte(`{"version":3`)
+	if err := os.WriteFile(path, malformed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := InitRepositoryAnchorV3(root, "third"); err == nil || !strings.Contains(err.Error(), "refusing to overwrite") {
+		t.Fatalf("malformed anchor refusal = %v", err)
+	}
+	after, err = os.ReadFile(path)
+	if err != nil || string(after) != string(malformed) {
+		t.Fatalf("malformed anchor changed: %v", err)
+	}
+}
+
 func TestInitRepositoryAnchorV3RefusesConflictingFilesystemAndGitState(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

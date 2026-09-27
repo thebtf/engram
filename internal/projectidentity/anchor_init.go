@@ -2,7 +2,9 @@ package projectidentity
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -51,9 +53,30 @@ func InitRepositoryAnchorV3(root, name string) (anchor AnchorV3, created, tracke
 	if err != nil {
 		return AnchorV3{}, false, false, fmt.Errorf("create %s exclusively: %w", path, err)
 	}
-	if _, err := file.Write(append(raw, '\n')); err != nil {
+	createdInfo, statErr := file.Stat()
+	if statErr != nil {
 		file.Close()
-		return AnchorV3{}, false, false, fmt.Errorf("write %s: %w", path, err)
+		return AnchorV3{}, false, false, fmt.Errorf("inspect created %s: %w", path, statErr)
+	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		file.Close()
+		if currentInfo, statErr := os.Lstat(path); statErr == nil && os.SameFile(createdInfo, currentInfo) {
+			if removeErr := os.Remove(path); removeErr != nil {
+				err = errors.Join(err, fmt.Errorf("remove incomplete %s: %w", path, removeErr))
+			}
+		}
+	}()
+	content := append(raw, '\n')
+	if n, writeErr := file.Write(content); writeErr != nil {
+		return AnchorV3{}, false, false, fmt.Errorf("write %s: %w", path, writeErr)
+	} else if n != len(content) {
+		return AnchorV3{}, false, false, fmt.Errorf("write %s: %w", path, io.ErrShortWrite)
+	}
+	if err := file.Sync(); err != nil {
+		return AnchorV3{}, false, false, fmt.Errorf("sync %s: %w", path, err)
 	}
 	if err := file.Close(); err != nil {
 		return AnchorV3{}, false, false, fmt.Errorf("close %s: %w", path, err)
