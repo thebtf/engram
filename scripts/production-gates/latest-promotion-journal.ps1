@@ -60,10 +60,12 @@ function Invoke-GhJson
 function Test-RunIdentity
 {
     param([Parameter(Mandatory)]$Run)
-    return [string]$Run.name -ceq $script:JournalName -and
+    return [string]$Run.id -match '^[1-9][0-9]*$' -and
+    [string]$Run.name -ceq $script:JournalName -and
     [string]$Run.head_sha -ceq $HeadSha -and
     [string]$Run.external_id -ceq (Get-ExternalId) -and
-    [string]$Run.details_url -ceq (Get-DetailsUrl)
+    ([string]$Run.details_url -ceq (Get-DetailsUrl) -or
+    [string]$Run.details_url -ceq "$env:GITHUB_SERVER_URL/$RepositoryName/runs/$([string]$Run.id)")
 }
 
 function Find-Journal
