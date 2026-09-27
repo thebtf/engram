@@ -282,6 +282,43 @@ exit 0
         param($Repo,$BaseSha,$Sentinel)
         Write-Utf8NoBom (Join-Path $Repo 'README.md') "stale base event`n"
     } -EventAction synchronize -BaseShaOverride ('0' * 40) -ExpectedVerdict FAIL -ExpectedError 'fetched default-branch base differs'))
+    $trackedRouteBase = {
+        param($Repo)
+        Write-Utf8NoBom (Join-Path $Repo 'apps/operator-console/server/routes/api/[...path].ts') "base route`n"
+        & $policyOnlyBase $Repo
+    }
+    $results.Add((Invoke-Scenario -Name 'existing-nuxt-catch-all-is-ordinary' -PrNumber 110 -BasePolicyFactory $trackedRouteBase -HeadMutation {
+        param($Repo,$BaseSha,$Sentinel)
+        Write-Utf8NoBom (Join-Path $Repo 'apps/operator-console/server/routes/api/[...path].ts') $candidatePayload
+    } -EventAction synchronize -ExpectedVerdict PASS -UseSentinel))
+
+    $results.Add((Invoke-Scenario -Name 'new-nuxt-catch-all-is-denied' -PrNumber 111 -BasePolicyFactory $policyOnlyBase -HeadMutation {
+        param($Repo,$BaseSha,$Sentinel)
+        Write-Utf8NoBom (Join-Path $Repo 'apps/operator-console/server/routes/api/[...path].ts') $candidatePayload
+    } -EventAction synchronize -ExpectedVerdict FAIL -ExpectedError 'pre-existing regular base blob' -UseSentinel))
+
+    $results.Add((Invoke-Scenario -Name 'hostile-bracket-spelling-is-denied' -PrNumber 112 -BasePolicyFactory $policyOnlyBase -HeadMutation {
+        param($Repo,$BaseSha,$Sentinel)
+        Write-Utf8NoBom (Join-Path $Repo 'apps/operator-console/server/routes/api/[..].ts') $candidatePayload
+    } -EventAction synchronize -ExpectedVerdict FAIL -ExpectedError 'unsupported characters' -UseSentinel))
+
+    $results.Add((Invoke-Scenario -Name 'protected-catch-all-is-denied' -PrNumber 113 -BasePolicyFactory {
+        param($Repo)
+        Write-Utf8NoBom (Join-Path $Repo 'scripts/production-gates/[...path].ts') "base route`n"
+        & $policyOnlyBase $Repo
+    } -HeadMutation {
+        param($Repo,$BaseSha,$Sentinel)
+        Write-Utf8NoBom (Join-Path $Repo 'scripts/production-gates/[...path].ts') $candidatePayload
+    } -EventAction synchronize -ExpectedVerdict FAIL -ExpectedError 'unsupported characters' -UseSentinel))
+
+    $results.Add((Invoke-Scenario -Name 'bracketed-parent-is-denied' -PrNumber 114 -BasePolicyFactory {
+        param($Repo)
+        Write-Utf8NoBom (Join-Path $Repo 'apps/[...path].ts/[...path].ts') "base route`n"
+        & $policyOnlyBase $Repo
+    } -HeadMutation {
+        param($Repo,$BaseSha,$Sentinel)
+        Write-Utf8NoBom (Join-Path $Repo 'apps/[...path].ts/[...path].ts') $candidatePayload
+    } -EventAction synchronize -ExpectedVerdict FAIL -ExpectedError 'unsupported characters' -UseSentinel))
 }
 finally {
     $tempPrefix = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\','/') + [System.IO.Path]::DirectorySeparatorChar
