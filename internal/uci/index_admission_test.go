@@ -808,6 +808,7 @@ func indexAdmissionRequireTreeSitterIdentity(t *testing.T, source []byte, profil
 	if artifact.ArtifactID == otherSource.ArtifactID {
 		t.Fatalf("different Sources reused Tree-sitter ArtifactID %q", artifact.ArtifactID)
 	}
+	profile.expectedBundleDigest = ""
 	if artifact.ContentDigest != indexAdmissionDigestBytes(source) || artifact.FactsDigest == "" || artifact.Profile != profile {
 		t.Fatalf("Tree-sitter admission artifact lost source/profile digest evidence: %#v", artifact)
 	}
@@ -1754,6 +1755,19 @@ func TestIndexAdmissionCanonicalizationRejectsCollidingReferenceSites(t *testing
 
 	if _, err := EncodeIndexAdmissionFrame(frame); err == nil {
 		t.Fatal("EncodeIndexAdmissionFrame() accepted colliding source reference sites")
+	}
+}
+
+func TestIndexAdmissionTreeSitterRejectsDifferentLocalBundle(t *testing.T) {
+	source := []byte("import \"./side-effect.js\";\nimport { shared as localShared } from \"./shared.js\";\nexport { shared as publicShared } from \"./shared.js\";\nconst localOnly = localShared;\nexport { localOnly as publicLocal };\nexport function run() {\n\treturn localShared();\n}\n")
+	profile, err := TreeSitterIndexAdmissionArtifactProfile(TreeSitterLanguageJavaScript, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	extracted := indexAdmissionTestTreeSitterArtifact(t, source)
+	extracted.BundleDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if _, err := NewIndexAdmissionArtifactFromTreeSitter(indexAdmissionTestSourceA, profile, source, extracted); err == nil {
+		t.Fatal("accepted a different installed parser binary")
 	}
 }
 

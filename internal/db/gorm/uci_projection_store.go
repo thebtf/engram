@@ -3404,7 +3404,7 @@ func (publisher *uciPublisher) createUCIPublicationBegin(ctx context.Context, tx
 	if err != nil {
 		return ucidomain.IndexBeginResult{}, err
 	}
-	if !matchesUCIPublicationParent(input.ExpectedParent, current, input.Scope, input.ProfileID) {
+	if !matchesUCIPublicationParent(input.ExpectedParent, current, input.Scope, input.ProfileID, uciPublicationLegacyProfileTransition(tx, checkout, current, input.ProfileID)) {
 		return ucidomain.IndexBeginResult{}, errUCIPublicationRejected
 	}
 	now, err := uciDatabaseClock(ctx, tx)
@@ -3546,8 +3546,7 @@ func validUCIPublicationParent(parent *ucidomain.ContextRef, scope ucidomain.Ind
 		validateUCIUUID("parent_checkout_id", parent.CheckoutID) == nil &&
 		validateUCIUUID("parent_view_id", parent.ViewID) == nil &&
 		validateUCIUUID("parent_profile_id", parent.AnalysisProfileID) == nil &&
-		parent.Generation > 0 && parent.SourceID == scope.SourceID && parent.CheckoutID == scope.CheckoutID &&
-		(profileID == "" || parent.AnalysisProfileID == profileID)
+		parent.Generation > 0 && parent.SourceID == scope.SourceID && parent.CheckoutID == scope.CheckoutID
 }
 
 func validUCIPublicationText(value string) bool {
@@ -3591,15 +3590,34 @@ func loadUCICurrentViewForCheckout(ctx context.Context, tx *gorm.DB, checkout *U
 	return &view, nil
 }
 
-func matchesUCIPublicationParent(parent *ucidomain.ContextRef, current *UCIView, scope ucidomain.IndexScope, profileID string) bool {
+func matchesUCIPublicationParent(parent *ucidomain.ContextRef, current *UCIView, scope ucidomain.IndexScope, profileID string, legacyTransition bool) bool {
 	if parent == nil {
 		return current == nil
 	}
-	if current == nil || !validUCIPublicationParent(parent, scope, profileID) {
+	if current == nil || !validUCIPublicationParent(parent, scope, profileID) || (parent.AnalysisProfileID != profileID && !legacyTransition) {
 		return false
 	}
 	return current.ViewID == parent.ViewID && current.SourceID == parent.SourceID && current.CheckoutID == parent.CheckoutID &&
 		current.ProfileID == parent.AnalysisProfileID && current.Generation == parent.Generation && current.IncarnationID == scope.IncarnationID
+}
+
+func uciPublicationLegacyProfileTransition(tx *gorm.DB, checkout *UCICheckout, current *UCIView, profileID string) bool {
+	if current == nil || current.ProfileID == profileID || checkout.RegistrationProfileID == nil || *checkout.RegistrationProfileID != profileID || current.CheckoutID != checkout.CheckoutID {
+		return false
+	}
+	var profiles []UCIAnalysisProfile
+	if err := tx.Where("profile_id IN ?", []string{current.ProfileID, profileID}).Find(&profiles).Error; err != nil || len(profiles) != 2 {
+		return false
+	}
+	var oldDigest, newDigest string
+	for _, profile := range profiles {
+		if profile.ProfileID == current.ProfileID {
+			oldDigest = profile.ParserBundleDigest
+		} else {
+			newDigest = profile.ParserBundleDigest
+		}
+	}
+	return newDigest == string(ucidomain.TreeSitterSemanticContractDigest()) && oldDigest != "" && oldDigest != newDigest && oldDigest != string(localGitGoProfileDigest())
 }
 
 func uciPublicationParentID(parent *ucidomain.ContextRef) *string {
@@ -4226,7 +4244,7 @@ func (finalization *uciPublicationFinalization) validateActive(ctx context.Conte
 	if err != nil {
 		return err
 	}
-	if !matchesUCIPublicationParent(finalization.state.input.ExpectedParent, current, finalization.state.input.Build.Scope, *finalization.job.ProfileID) {
+	if !matchesUCIPublicationParent(finalization.state.input.ExpectedParent, current, finalization.state.input.Build.Scope, *finalization.job.ProfileID, uciPublicationLegacyProfileTransition(tx, finalization.checkout, current, *finalization.job.ProfileID)) {
 		return errUCIPublicationRejected
 	}
 	if !activeUCIPublicationLease(*finalization.job, finalization.checkout, finalization.state.caller, finalization.state.input.Build, finalization.now) {
@@ -4432,7 +4450,7 @@ func uciPublicationEmbeddingCandidateCount(candidate *uciPublicationCandidate) (
 // publication rather than converting uncertainty into a successful reuse.
 func canReuseUCIPublishedView(ctx context.Context, tx *gorm.DB, job UCIJob, current UCIView, input ucidomain.IndexFinalizeInput, candidate *uciPublicationCandidate) bool {
 	if candidate == nil || job.ProfileID == nil || current.ProfileID != *job.ProfileID ||
-		!matchesUCIPublicationParent(input.ExpectedParent, &current, input.Build.Scope, *job.ProfileID) ||
+		!matchesUCIPublicationParent(input.ExpectedParent, &current, input.Build.Scope, *job.ProfileID, false) ||
 		!sameUCIPublicationProjection(candidate.CurrentMemberships, candidate.Memberships, candidate.CurrentEdges, candidate.EdgeReplacements) {
 		return false
 	}

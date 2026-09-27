@@ -79,12 +79,11 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 				if matches[0].RegistrationProfileID == nil {
 					return uci.NewContextError(uci.RegistrationProfileUnbound, nil)
 				}
-				if in.ParserBundle != nil {
-					if err := localGitRegistrationProfileMatches(tx, *matches[0].RegistrationProfileID, profileDigest); err != nil {
-						return err
-					}
+				profileID, err := localGitRegistrationProfileForReplay(tx, &matches[0], profileDigest, in.ParserBundle != nil || in.DefaultParserBundle, in.ParserBundle != nil)
+				if err != nil {
+					return err
 				}
-				out = RegisteredLocalGit{matches[0].SourceID, matches[0].CheckoutID, matches[0].IncarnationID, *matches[0].RegistrationProfileID}
+				out = RegisteredLocalGit{matches[0].SourceID, matches[0].CheckoutID, matches[0].IncarnationID, profileID}
 				return nil
 			}
 			sourceID = uuid.NewString()
@@ -114,12 +113,11 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 			if existing.RegistrationProfileID == nil {
 				return uci.NewContextError(uci.RegistrationProfileUnbound, nil)
 			}
-			if in.ParserBundle != nil {
-				if err := localGitRegistrationProfileMatches(tx, *existing.RegistrationProfileID, profileDigest); err != nil {
-					return err
-				}
+			profileID, err := localGitRegistrationProfileForReplay(tx, &existing, profileDigest, in.ParserBundle != nil || in.DefaultParserBundle, in.ParserBundle != nil)
+			if err != nil {
+				return err
 			}
-			out = RegisteredLocalGit{sourceID, existing.CheckoutID, existing.IncarnationID, *existing.RegistrationProfileID}
+			out = RegisteredLocalGit{sourceID, existing.CheckoutID, existing.IncarnationID, profileID}
 			return nil
 		}
 		if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -156,15 +154,42 @@ func localGitGoProfileDigest() uci.IndexDigest {
 	return profile.ExtractionProfileDigest
 }
 
-func localGitRegistrationProfileMatches(tx *gorm.DB, profileID string, digest uci.IndexDigest) error {
+func localGitRegistrationProfileForReplay(tx *gorm.DB, checkout *UCICheckout, digest uci.IndexDigest, compare, explicit bool) (string, error) {
+	if !compare {
+		return *checkout.RegistrationProfileID, nil
+	}
+	var locked UCICheckout
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("checkout_id = ?", checkout.CheckoutID).First(&locked).Error; err != nil {
+		return "", fmt.Errorf("register local git checkout lock: %w", err)
+	}
+	if locked.RegistrationProfileID == nil {
+		return "", uci.NewContextError(uci.RegistrationProfileUnbound, nil)
+	}
 	var profile UCIAnalysisProfile
-	if err := tx.Where("profile_id = ?", profileID).First(&profile).Error; err != nil {
-		return fmt.Errorf("register local git profile lookup: %w", err)
+	if err := tx.Where("profile_id = ?", *locked.RegistrationProfileID).First(&profile).Error; err != nil {
+		return "", fmt.Errorf("register local git profile lookup: %w", err)
 	}
-	if profile.ParserBundleDigest != string(digest) {
-		return uci.NewContextError(uci.ContextMismatch, nil)
+	if profile.ParserBundleDigest == string(digest) {
+		return profile.ProfileID, nil
 	}
-	return nil
+	if !explicit && profile.ParserBundleDigest == string(localGitGoProfileDigest()) {
+		return profile.ProfileID, nil
+	}
+	if digest != uci.TreeSitterSemanticContractDigest() || profile.ParserBundleDigest == string(localGitGoProfileDigest()) {
+		return "", uci.NewContextError(uci.ContextMismatch, nil)
+	}
+	// Keep the prior profile and its pinned Views immutable; only this checkout
+	// selects a new semantic profile for its next complete publication.
+	profile.ProfileID = uuid.NewString()
+	profile.ParserBundleDigest = string(digest)
+	profile.CreatedAt = time.Now().UTC()
+	if err := tx.Create(&profile).Error; err != nil {
+		return "", fmt.Errorf("register local git semantic profile: %w", err)
+	}
+	if err := tx.Model(&locked).Update("registration_profile_id", profile.ProfileID).Error; err != nil {
+		return "", fmt.Errorf("register local git select semantic profile: %w", err)
+	}
+	return profile.ProfileID, nil
 }
 
 func localGitRegistrationDigest(value string) string {

@@ -60,8 +60,9 @@ func (scanner *preparedIndexScanner) Scan(_ context.Context, evidence uci.Author
 }
 
 type preparedIndexClient struct {
-	binding   uci.IndexBinding
-	published uci.ContextRef
+	binding       uci.IndexBinding
+	profileDigest uci.IndexDigest
+	published     uci.ContextRef
 
 	beginRequests    []*pb.BeginCodeIndexRequest
 	stagePayloadSets [][][]byte
@@ -117,7 +118,7 @@ func (client *preparedIndexClient) Stage(_ context.Context, frames []*pb.StageCo
 	if err := uci.ValidateIndexAdmissionFramesForBinding(decodedFrames, client.binding); err != nil {
 		return nil, err
 	}
-	if err := preparedValidateArtifactProfiles(decodedFrames); err != nil {
+	if err := preparedValidateArtifactProfiles(decodedFrames, client.profileDigest); err != nil {
 		return nil, err
 	}
 	acks, err := preparedStageAcks(decodedFrames)
@@ -171,7 +172,7 @@ func (client *preparedIndexClient) decodeStageFrame(frame *pb.StageCodeIndexFram
 	return uci.DecodeIndexAdmissionFrame(frame.GetPayload())
 }
 
-func preparedValidateArtifactProfiles(frames []uci.IndexAdmissionFrame) error {
+func preparedValidateArtifactProfiles(frames []uci.IndexAdmissionFrame, expected uci.IndexDigest) error {
 	for _, frame := range frames {
 		for _, artifact := range frame.Artifacts {
 			switch artifact.Profile.Language {
@@ -184,7 +185,7 @@ func preparedValidateArtifactProfiles(frames []uci.IndexAdmissionFrame) error {
 				uci.IndexAdmissionLanguageYAML,
 				uci.IndexAdmissionLanguageSQL,
 				uci.IndexAdmissionLanguageOpenAPI:
-				if artifact.Profile.ExtractionProfileDigest != uci.TreeSitterSemanticContractDigest() {
+				if artifact.Profile.ExtractionProfileDigest != expected {
 					return errors.New("artifact profile does not match semantic parser contract")
 				}
 			}
@@ -327,7 +328,7 @@ func TestUCIPreparedIndexPublishesGoFramesAndReplaysExactInputs(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, frame.Artifacts, 1)
 	require.Equal(t, uci.IndexAdmissionLanguageGo, frame.Artifacts[0].Profile.Language)
-	require.Equal(t, uci.TreeSitterSemanticContractDigest(), frame.Artifacts[0].Profile.ExtractionProfileDigest)
+	require.Equal(t, preparedNativeGoProfileDigest(), frame.Artifacts[0].Profile.ExtractionProfileDigest)
 	expectedArtifactID, err := uci.DeriveIndexAdmissionArtifactID(preparedSourceID, frame.Artifacts[0].ContentDigest, frame.Artifacts[0].Profile)
 	require.NoError(t, err)
 	require.Equal(t, expectedArtifactID, frame.Artifacts[0].ArtifactID)
@@ -549,16 +550,13 @@ func TestUCIPreparedIndexRequiresSelectedParserBundleDigest(t *testing.T) {
 		Body:  []byte("package sample\nfunc Main() {}\n"),
 	}}
 	_, err = wrongBundle.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
-	require.Error(t, err)
+	require.NoError(t, err, "parser-less Go index must not depend on an unselected bundle")
 	require.Equal(t, 1, fixture.scanner.calls)
 	require.Len(t, fixture.client.beginRequests, 1)
 	require.Equal(t, 1, fixture.client.stageCalls)
-	require.Zero(t, fixture.client.finalizeCalls)
-	state, found, snapshotErr := fixture.registry.Snapshot(context.Background(), preparedCheckoutID)
-	require.NoError(t, snapshotErr)
-	require.True(t, found)
-	require.Zero(t, state.LastReconciledSequence)
-	require.NotEmpty(t, state.DirtyPaths)
+	require.Equal(t, 1, fixture.client.finalizeCalls)
+	frames := preparedFrames(t, fixture.client.stagePayloadSets[0])
+	require.Equal(t, preparedNativeGoProfileDigest(), preparedArtifactForPath(t, frames, "main.go").Profile.ExtractionProfileDigest)
 }
 
 func TestUCIPreparedIndexLeavesLocalStateDirtyWithoutDurableAcknowledgement(t *testing.T) {
@@ -974,11 +972,15 @@ func newPreparedIndexFixtureWithTreeSitter(t *testing.T, parser codeintel.UCIPre
 		},
 	})
 	require.NoError(t, err)
+	profileDigest := preparedNativeGoProfileDigest()
+	if parser != nil {
+		profileDigest = uci.TreeSitterSemanticContractDigest()
+	}
 	return preparedIndexFixture{
 		collaborator: collaborator,
 		registry:     registry,
 		scanner:      scanner,
-		client:       &preparedIndexClient{binding: binding, published: published},
+		client:       &preparedIndexClient{binding: binding, published: published, profileDigest: profileDigest},
 		target: engramcore.ResolvedIndexTarget{
 			ClientSessionID: "session:prepared-index",
 			ContextHandle:   "handle:prepared-index",
@@ -1579,7 +1581,7 @@ func TestUCIPreparedIndexPublishesMixedCaseCapabilityCorpus(t *testing.T) {
 		preparedRequireMembership(t, frame, source.path, uci.IndexAdmissionMembershipPresent, true)
 		artifact := preparedArtifactForPath(t, frames, source.path)
 		require.Equal(t, source.language, artifact.Profile.Language)
-		preparedRequireExactAdmissionArtifact(t, artifact, source.buildExpected(t, preparedStructuredProfileKey(source.capability), source.body))
+		preparedRequireExactAdmissionArtifact(t, artifact, preparedWithSemanticDigest(t, source.buildExpected(t, preparedStructuredProfileKey(source.capability), source.body)))
 		preparedRequireSourceGroundedStructuredFacts(t, artifact)
 	}
 	require.NotEmpty(t, preparedArtifactForPath(t, frames, "README.MD").References)
@@ -1699,12 +1701,17 @@ func preparedStructuredProfileKey(capability string) string {
 	return "uci-prepared-structured/v1:" + preparedProfileID + ":" + capability + ":v1"
 }
 
+func preparedNativeGoProfileDigest() uci.IndexDigest {
+	profile, _ := uci.GoIndexAdmissionArtifactProfile(uci.GoExtractionProfile{ProfileKey: "go-structure-v1", ParserKey: "go-parser-v1"})
+	return profile.ExtractionProfileDigest
+}
+
 func preparedMarkdownAdmissionArtifact(t *testing.T, profileKey string, source []byte) uci.IndexAdmissionArtifact {
 	t.Helper()
 	profile := uci.DefaultMarkdownExtractionProfile(profileKey)
 	admissionProfile, err := uci.MarkdownIndexAdmissionArtifactProfile(profile)
 	require.NoError(t, err)
-	admissionProfile.ExtractionProfileDigest = uci.IndexDigest(preparedParserBundleDigest)
+	admissionProfile.ExtractionProfileDigest = preparedNativeGoProfileDigest()
 	artifact, err := uci.NewIndexAdmissionArtifactFromMarkdown(preparedSourceID, admissionProfile, profile, source, uci.ExtractMarkdown(source, profile))
 	require.NoError(t, err)
 	return artifact
@@ -1719,7 +1726,7 @@ func preparedJSONYAMLAdmissionArtifact(t *testing.T, profileKey string, source [
 	profile := uci.DefaultJSONYAMLExtractionProfile(profileKey, format)
 	admissionProfile, err := uci.JSONYAMLIndexAdmissionArtifactProfile(profile)
 	require.NoError(t, err)
-	admissionProfile.ExtractionProfileDigest = uci.IndexDigest(preparedParserBundleDigest)
+	admissionProfile.ExtractionProfileDigest = preparedNativeGoProfileDigest()
 	artifact, err := uci.NewIndexAdmissionArtifactFromJSONYAML(preparedSourceID, admissionProfile, profile, source, uci.ExtractJSONYAML(source, profile))
 	require.NoError(t, err)
 	return artifact
@@ -1730,7 +1737,7 @@ func preparedSQLAdmissionArtifact(t *testing.T, profileKey string, source []byte
 	profile := uci.DefaultSQLExtractionProfile(profileKey)
 	admissionProfile, err := uci.SQLIndexAdmissionArtifactProfile(profile)
 	require.NoError(t, err)
-	admissionProfile.ExtractionProfileDigest = uci.IndexDigest(preparedParserBundleDigest)
+	admissionProfile.ExtractionProfileDigest = preparedNativeGoProfileDigest()
 	artifact, err := uci.NewIndexAdmissionArtifactFromSQL(preparedSourceID, admissionProfile, profile, source, uci.ExtractSQL(source, profile))
 	require.NoError(t, err)
 	return artifact
@@ -1745,8 +1752,19 @@ func preparedOpenAPIAdmissionArtifact(t *testing.T, profileKey string, source []
 	profile := uci.DefaultOpenAPIExtractionProfile(profileKey, format)
 	admissionProfile, err := uci.OpenAPIIndexAdmissionArtifactProfile(profile)
 	require.NoError(t, err)
-	admissionProfile.ExtractionProfileDigest = uci.IndexDigest(preparedParserBundleDigest)
+	admissionProfile.ExtractionProfileDigest = preparedNativeGoProfileDigest()
 	artifact, err := uci.NewIndexAdmissionArtifactFromOpenAPI(preparedSourceID, admissionProfile, profile, source, uci.ExtractOpenAPI(source, profile))
+	require.NoError(t, err)
+	return artifact
+}
+
+func preparedWithSemanticDigest(t *testing.T, artifact uci.IndexAdmissionArtifact) uci.IndexAdmissionArtifact {
+	t.Helper()
+	artifact.Profile.ExtractionProfileDigest = uci.TreeSitterSemanticContractDigest()
+	var err error
+	artifact.ArtifactID, err = uci.DeriveIndexAdmissionArtifactID(preparedSourceID, artifact.ContentDigest, artifact.Profile)
+	require.NoError(t, err)
+	artifact.FactsDigest, err = uci.DigestIndexAdmissionArtifactFacts(artifact)
 	require.NoError(t, err)
 	return artifact
 }

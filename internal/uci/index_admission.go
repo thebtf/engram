@@ -105,6 +105,8 @@ type IndexAdmissionArtifactProfile struct {
 	ParserRevision          string                 `json:"parser_revision"`
 	GrammarDigest           IndexDigest            `json:"grammar_digest"`
 	ExtractionProfileDigest IndexDigest            `json:"extraction_profile_digest"`
+	// Only used while constructing an artifact; never part of wire or durable identity.
+	expectedBundleDigest IndexDigest
 }
 
 // IndexAdmissionFrame is a bounded private domain payload for one or more
@@ -883,6 +885,7 @@ func TreeSitterIndexAdmissionArtifactProfile(language TreeSitterLanguage, bundle
 		ParserRevision:          TreeSitterWorkerProtocolVersion,
 		GrammarDigest:           semanticDigest,
 		ExtractionProfileDigest: semanticDigest,
+		expectedBundleDigest:    bundleDigest,
 	}
 	if err := indexAdmissionValidateArtifactProfile(result); err != nil {
 		return IndexAdmissionArtifactProfile{}, err
@@ -1100,6 +1103,7 @@ func indexAdmissionTreeSitterBuildInput(sourceID string, profile IndexAdmissionA
 	if err := indexAdmissionValidateTreeSitterProfile(profile, extracted); err != nil {
 		return indexAdmissionArtifactBuildInput{}, err
 	}
+	profile.expectedBundleDigest = ""
 	contentDigest, err := indexAdmissionTreeSitterProof(source, extracted)
 	if err != nil {
 		return indexAdmissionArtifactBuildInput{}, err
@@ -1133,7 +1137,7 @@ func indexAdmissionValidateTreeSitterProfile(profile IndexAdmissionArtifactProfi
 	if err := indexAdmissionValidateArtifactProfile(profile); err != nil {
 		return err
 	}
-	if profile.Language != expectedLanguage || profile.ParserRevision != TreeSitterWorkerProtocolVersion || profile.GrammarDigest != TreeSitterSemanticContractDigest() || profile.ExtractionProfileDigest != TreeSitterSemanticContractDigest() || !isIndexDigest(extracted.BundleDigest) {
+	if profile.Language != expectedLanguage || profile.ParserRevision != TreeSitterWorkerProtocolVersion || profile.GrammarDigest != TreeSitterSemanticContractDigest() || profile.ExtractionProfileDigest != TreeSitterSemanticContractDigest() || !isIndexDigest(profile.expectedBundleDigest) || profile.expectedBundleDigest != extracted.BundleDigest {
 		return fmt.Errorf("uci index admission: Tree-sitter artifact profile does not match parser evidence")
 	}
 	return nil
