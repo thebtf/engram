@@ -1025,7 +1025,7 @@ func indexAdmissionGoChunks(source []byte, definitions []IndexAdmissionDefinitio
 	for _, definition := range definitions {
 		var limited bool
 		var err error
-		chunks, limited, err = indexAdmissionAppendGoDefinitionChunks(chunks, source, lineStarts, definition)
+		chunks, limited, err = indexAdmissionAppendDefinitionChunks(chunks, source, lineStarts, definition)
 		if err != nil {
 			return nil, false, err
 		}
@@ -1048,7 +1048,7 @@ func indexAdmissionGoChunks(source []byte, definitions []IndexAdmissionDefinitio
 	return chunks, false, nil
 }
 
-func indexAdmissionAppendGoDefinitionChunks(chunks []IndexAdmissionChunk, source []byte, lineStarts []int, definition IndexAdmissionDefinition) ([]IndexAdmissionChunk, bool, error) {
+func indexAdmissionAppendDefinitionChunks(chunks []IndexAdmissionChunk, source []byte, lineStarts []int, definition IndexAdmissionDefinition) ([]IndexAdmissionChunk, bool, error) {
 	for chunkStart := int(definition.Span.ByteStart); chunkStart < int(definition.Span.ByteEnd); {
 		if len(chunks) == indexAdmissionMaxChunksPerArtifact {
 			return chunks, true, nil
@@ -1165,8 +1165,18 @@ func indexAdmissionBuildTreeSitterArtifact(input indexAdmissionArtifactBuildInpu
 		return IndexAdmissionArtifact{}, err
 	}
 	artifact.References = references
-	artifact.Chunks = indexAdmissionTreeSitterChunks(extracted.Chunks)
 	artifact.Diagnostics = indexAdmissionTreeSitterDiagnostics(extracted.Diagnostics)
+	chunks, limited, err := indexAdmissionTreeSitterChunks(input.source, artifact.Definitions, extracted.Chunks)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	artifact.Chunks = chunks
+	if limited {
+		artifact.Status = IndexAdmissionArtifactPartial
+		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
+			Code: "CHUNK_LIMIT", Message: "symbol and source chunks exceeded the admission limit",
+		})
+	}
 	artifact.Diagnostics, err = indexAdmissionAddPartialDiagnostic(artifact.Diagnostics, input.status, "TREE_SITTER_PARTIAL_COVERAGE", "Tree-sitter parser coverage is partial")
 	if err != nil {
 		return IndexAdmissionArtifact{}, err
@@ -1221,18 +1231,26 @@ func indexAdmissionTreeSitterOwner(localKey string) *string {
 	return indexAdmissionStringPointer(localKey)
 }
 
-func indexAdmissionTreeSitterChunks(chunks []TreeSitterChunk) []IndexAdmissionChunk {
-	converted := make([]IndexAdmissionChunk, 0, len(chunks))
-	for index, chunk := range chunks {
+func indexAdmissionTreeSitterChunks(source []byte, definitions []IndexAdmissionDefinition, chunks []TreeSitterChunk) ([]IndexAdmissionChunk, bool, error) {
+	converted := make([]IndexAdmissionChunk, 0, len(chunks)+len(definitions))
+	for _, chunk := range chunks {
+		if len(converted) == indexAdmissionMaxChunksPerArtifact {
+			return converted, true, nil
+		}
 		converted = append(converted, IndexAdmissionChunk{
-			Ordinal:       index,
-			Kind:          "source",
-			Span:          chunk.Span,
-			ContentDigest: chunk.ContentDigest,
-			Text:          chunk.Text,
+			Ordinal: len(converted), Kind: "source", Span: chunk.Span, ContentDigest: chunk.ContentDigest, Text: chunk.Text,
 		})
 	}
-	return converted
+	lineStarts := indexAdmissionLineStarts(source)
+	for _, definition := range definitions {
+		var limited bool
+		var err error
+		converted, limited, err = indexAdmissionAppendDefinitionChunks(converted, source, lineStarts, definition)
+		if err != nil || limited {
+			return converted, limited, err
+		}
+	}
+	return converted, false, nil
 }
 
 func indexAdmissionTreeSitterDiagnostics(diagnostics []TreeSitterDiagnostic) []IndexAdmissionDiagnostic {

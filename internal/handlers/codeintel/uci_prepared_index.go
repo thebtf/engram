@@ -1,6 +1,7 @@
 package codeintel
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -995,13 +996,119 @@ func uciPreparedAddTreeSitterLocalEdges(file *uciPreparedAdmissionFile, aliases,
 			continue
 		}
 		target, found := uciPreparedTreeSitterLocalTarget(local, aliases, namespaces, definitions)
+		direct := false
+		if !found {
+			target, found = uciPreparedTreeSitterDirectLocalCallTarget(file, reference, local, definitions[file.path][local])
+			direct = found
+		}
 		if !found {
 			unresolved++
 			continue
 		}
-		file.edges = append(file.edges, uciPreparedTreeSitterEdge(file.path, *file.artifact, reference, target))
+		edge := uciPreparedTreeSitterEdge(file.path, *file.artifact, reference, target)
+		if direct {
+			edge.ResolverRevision = "uci-prepared-tree-sitter-local-call/v1"
+			edge.Evidence.RuleKey = "tree-sitter-direct-local-call/v1"
+			edge.Evidence.Explanation = "unique same-file exported function called directly from an unshadowed exported function"
+		}
+		file.edges = append(file.edges, edge)
 	}
 	return unresolved
+}
+
+func uciPreparedTreeSitterDirectLocalCallTarget(file *uciPreparedAdmissionFile, reference uci.IndexAdmissionReference, local string, matches []uciPreparedTreeSitterTarget) (uciPreparedTreeSitterTarget, bool) {
+	if reference.Kind != "call" || reference.Relation != uci.IndexRelation("calls") || reference.OwnerSymbolKey == nil || len(matches) != 1 ||
+		matches[0].symbolKey != "function:"+local || strings.ContainsAny(local, ".@/#") {
+		return uciPreparedTreeSitterTarget{}, false
+	}
+	body := file.artifact.Body
+	start, end := int(reference.Span.ByteStart), int(reference.Span.ByteEnd)
+	if start < 0 || end > len(body) || end < start+len(local)+1 || !bytes.HasPrefix(body[start:end], []byte(local+"(")) {
+		return uciPreparedTreeSitterTarget{}, false
+	}
+	var caller, callee *uci.IndexAdmissionDefinition
+	for index := range file.artifact.Definitions {
+		definition := &file.artifact.Definitions[index]
+		if definition.LocalSymbolKey == *reference.OwnerSymbolKey {
+			caller = definition
+		}
+		if definition.LocalSymbolKey == matches[0].symbolKey {
+			callee = definition
+		}
+	}
+	if callee == nil || callee.Kind != "function" || callee.Span.ByteStart < 0 || callee.Span.ByteEnd > int64(len(body)) ||
+		callee.Span.ByteStart >= callee.Span.ByteEnd || !bytes.HasPrefix(body[callee.Span.ByteStart:callee.Span.ByteEnd], []byte("export function "+local+"(")) ||
+		uciPreparedTreeSitterNamedFunctionCount(body, local) != 1 {
+		return uciPreparedTreeSitterTarget{}, false
+	}
+	if caller == nil || caller.Kind != "function" || caller.Span.ByteStart < 0 || caller.Span.ByteEnd > int64(len(body)) ||
+		caller.Span.ByteStart >= reference.Span.ByteStart || caller.Span.ByteEnd < reference.Span.ByteEnd {
+		return uciPreparedTreeSitterTarget{}, false
+	}
+	declaration := body[caller.Span.ByteStart:caller.Span.ByteEnd]
+	name := strings.TrimPrefix(caller.LocalSymbolKey, "function:")
+	header := []byte("export function " + name + "(")
+	if !bytes.HasPrefix(declaration, header) {
+		return uciPreparedTreeSitterTarget{}, false
+	}
+	parameters := declaration[len(header):]
+	close := bytes.IndexByte(parameters, ')')
+	if close < 0 || bytes.IndexByte(parameters[:close], '(') >= 0 || uciPreparedTreeSitterHasIdentifier(parameters[:close], local) {
+		return uciPreparedTreeSitterTarget{}, false
+	}
+	prefix := body[caller.Span.ByteStart:reference.Span.ByteStart]
+	if len(prefix) < len(header)+close+1 {
+		return uciPreparedTreeSitterTarget{}, false
+	}
+	for _, construct := range [][]byte{[]byte("=>"), []byte("function"), []byte("catch"), []byte("with ("), []byte("eval(")} {
+		if bytes.Contains(prefix[len(header)+close+1:], construct) {
+			return uciPreparedTreeSitterTarget{}, false
+		}
+	}
+	return matches[0], true
+}
+
+func uciPreparedTreeSitterNamedFunctionCount(body []byte, name string) int {
+	count := 0
+	for offset := 0; offset < len(body); {
+		found := bytes.Index(body[offset:], []byte("function"))
+		if found < 0 {
+			break
+		}
+		offset += found
+		if offset == 0 || !uciPreparedTreeSitterIdentifierByte(body[offset-1]) {
+			rest := bytes.TrimLeft(body[offset+len("function"):], " \t\r\n")
+			if bytes.HasPrefix(rest, []byte(name)) {
+				tail := rest[len(name):]
+				if len(tail) > 0 && !uciPreparedTreeSitterIdentifierByte(tail[0]) && bytes.HasPrefix(bytes.TrimLeft(tail, " \t\r\n"), []byte{'('}) {
+					count++
+				}
+			}
+		}
+		offset += len("function")
+	}
+	return count
+}
+
+func uciPreparedTreeSitterHasIdentifier(source []byte, name string) bool {
+	for index := 0; index < len(source); {
+		found := bytes.Index(source[index:], []byte(name))
+		if found < 0 {
+			return false
+		}
+		index += found
+		before := index == 0 || !uciPreparedTreeSitterIdentifierByte(source[index-1])
+		end := index + len(name)
+		if before && (end == len(source) || !uciPreparedTreeSitterIdentifierByte(source[end])) {
+			return true
+		}
+		index = end
+	}
+	return false
+}
+
+func uciPreparedTreeSitterIdentifierByte(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || value == '_' || value == '$' || value >= 128
 }
 
 func uciPreparedTreeSitterLocalTarget(local string, aliases, namespaces map[string]uciPreparedTreeSitterTarget, definitions map[string]map[string][]uciPreparedTreeSitterTarget) (uciPreparedTreeSitterTarget, bool) {

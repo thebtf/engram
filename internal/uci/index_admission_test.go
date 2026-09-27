@@ -812,7 +812,7 @@ func indexAdmissionRequireTreeSitterIdentity(t *testing.T, source []byte, profil
 	if artifact.ContentDigest != indexAdmissionDigestBytes(source) || artifact.FactsDigest == "" || artifact.Profile != profile {
 		t.Fatalf("Tree-sitter admission artifact lost source/profile digest evidence: %#v", artifact)
 	}
-	if artifact.Status != IndexAdmissionArtifactComplete || len(artifact.Definitions) != 1 || len(artifact.Chunks) != 1 {
+	if artifact.Status != IndexAdmissionArtifactComplete || len(artifact.Definitions) != 1 {
 		t.Fatalf("Tree-sitter admission artifact facts = %#v", artifact)
 	}
 	if artifact.Chunks[0].Text != string(source) || artifact.Chunks[0].ContentDigest != indexAdmissionDigestBytes(source) {
@@ -821,6 +821,17 @@ func indexAdmissionRequireTreeSitterIdentity(t *testing.T, source []byte, profil
 	definition := artifact.Definitions[0]
 	if definition.LocalSymbolKey != "function:run" || definition.SymbolKey != "javascript:function:run" || definition.Span != indexAdmissionTestTreeSitterSpan(t, source, "export function run() {\n\treturn localShared();\n}", 0) {
 		t.Fatalf("Tree-sitter definition = %#v", definition)
+	}
+	var named *IndexAdmissionChunk
+	for index := range artifact.Chunks {
+		chunk := &artifact.Chunks[index]
+		if chunk.SymbolKey != nil && *chunk.SymbolKey == definition.LocalSymbolKey {
+			named = chunk
+			break
+		}
+	}
+	if named == nil || named.Kind != "definition" || !strings.Contains(named.Text, "function run()") || named.Span != definition.Span {
+		t.Fatalf("Tree-sitter definition has no source-grounded name-addressable chunk: %#v", artifact.Chunks)
 	}
 }
 

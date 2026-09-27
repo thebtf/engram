@@ -1,6 +1,8 @@
 package codeintel
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -108,4 +110,100 @@ func TestUCIPreparedIndexLeavesAmbiguousTreeSitterImportsUnresolved(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), unresolved)
 	require.Empty(t, files[1].edges, "an ambiguous symbol must not be emitted as a resolved module-level edge")
+}
+
+func TestUCIPreparedIndexResolvesSameFileExportedCalls(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name, path string
+		language   uci.IndexAdmissionLanguage
+		body       string
+		target     string
+		caller     string
+	}{
+		{"javascript", "comet.js", uci.IndexAdmissionLanguageJavaScript, "export function calibrateInfraredPrism(pulseCount) { return pulseCount; }\nexport function guideCometOptics(pulseCount) { return calibrateInfraredPrism(pulseCount); }", "calibrateInfraredPrism", "guideCometOptics"},
+		{"typescript", "tidal.ts", uci.IndexAdmissionLanguageTypeScript, "export function preserveFreshwaterDuringSalineSurge(gate: string): string { return gate; }\nexport function controlEstuaryGate(gate: string): string { return preserveFreshwaterDuringSalineSurge(gate); }", "preserveFreshwaterDuringSalineSurge", "controlEstuaryGate"},
+		{"tsx", "trail.tsx", uci.IndexAdmissionLanguageTSX, "export function labelAvalancheEscapeCorridor(trail: string): string { return trail; }\nexport function showMountainTrailGuide(trail: string) { const warning = labelAvalancheEscapeCorridor(trail); return <strong>{warning}</strong>; }", "labelAvalancheEscapeCorridor", "showMountainTrailGuide"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			artifactID := "11111111-1111-4111-8111-111111111111"
+			owner := "function:" + test.caller
+			callStart := strings.LastIndex(test.body, test.target+"(")
+			callerStart := strings.Index(test.body, "export function "+test.caller)
+			callEnd := callStart + len(test.target) + 1
+			call := "call:" + test.target + "@" + strconv.Itoa(callStart) + ":" + strconv.Itoa(callEnd)
+			files := []uciPreparedAdmissionFile{{
+				path:       test.path,
+				membership: uci.IndexAdmissionMembership{PathKey: test.path, State: uci.IndexAdmissionMembershipPresent, ArtifactID: &artifactID},
+				artifact: &uci.IndexAdmissionArtifact{
+					ArtifactID: artifactID, Body: []byte(test.body), Profile: uci.IndexAdmissionArtifactProfile{Language: test.language},
+					Definitions: []uci.IndexAdmissionDefinition{
+						{LocalSymbolKey: "function:" + test.target, Kind: "function", SymbolKey: string(test.language) + ":function:" + test.target, Span: uci.IndexSpan{ByteStart: 0, ByteEnd: int64(callerStart - 1)}},
+						{LocalSymbolKey: owner, Kind: "function", SymbolKey: string(test.language) + ":" + owner, Span: uci.IndexSpan{ByteStart: int64(callerStart), ByteEnd: int64(len(test.body))}},
+					},
+					References: []uci.IndexAdmissionReference{{SiteKey: call, Kind: "call", SymbolKey: string(test.language) + ":" + call, OwnerSymbolKey: &owner, RawTarget: test.target, Relation: uci.IndexRelation("calls"), Span: uci.IndexSpan{ByteStart: int64(callStart), ByteEnd: int64(callEnd)}}},
+				},
+			}}
+			unresolved, err := uciPreparedAddResolvedTreeSitterEdges(files)
+			require.NoError(t, err)
+			require.Zero(t, unresolved)
+			require.Len(t, files[0].edges, 1)
+			edge := files[0].edges[0]
+			require.Equal(t, uci.IndexRelation("calls"), edge.Relation)
+			require.Equal(t, uci.IndexResolutionState("resolved"), edge.ResolutionState)
+			require.Equal(t, "uci-prepared-tree-sitter-local-call/v1", edge.ResolverRevision)
+			require.Equal(t, "tree-sitter-direct-local-call/v1", edge.Evidence.RuleKey)
+			require.Equal(t, &owner, edge.SourceSymbolKey)
+			require.Equal(t, test.path, edge.Target.PathKey)
+			require.Equal(t, artifactID, edge.Target.ArtifactID)
+			require.Equal(t, "function:"+test.target, *edge.Target.SymbolKey)
+		})
+	}
+}
+
+func TestUCIPreparedIndexDoesNotGuessShadowedOrDynamicLocalCalls(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name, source, kind, site, raw string
+		ambiguous                     bool
+	}{
+		{"parameter shadow", "export function helper(x) { return x; }\nexport function caller(helper) { return helper(1); }", "call", "call:helper", "helper", false},
+		{"arrow parameter shadow", "export function helper(x) { return x; }\nexport function caller(x) { return ((helper) => helper(1))(x); }", "call", "call:helper", "helper", false},
+		{"nested function shadow", "export function helper(x) { return x; }\nexport function caller(x) { function helper(y) { return y; } return helper(x); }", "call", "call:helper", "helper", false},
+		{"optional dynamic call", "export function helper(x) { return x; }\nexport function caller(x) { return helper?.(x); }", "call", "call:helper?.", "helper?.", false},
+		{"ambiguous declaration", "export function helper(x) { return x; }\nconst helper = 1;\nexport function caller(x) { return helper(x); }", "call", "call:helper", "helper", true},
+		{"duplicate exported function", "export function helper(x) { return x; }\nexport function helper (y) { return y; }\nexport function caller(x) { return helper(x); }", "call", "call:helper", "helper", false},
+		{"dynamic member", "export function helper(x) { return x; }\nexport function caller(x) { return x.helper(1); }", "call", "call:x.helper", "x.helper", false},
+		{"non call", "export function helper(x) { return x; }\nexport function caller(x) { return helper(x); }", "reference", "reference:helper", "helper", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			artifactID := "11111111-1111-4111-8111-111111111111"
+			owner := "function:caller"
+			callerStart := strings.Index(test.source, "export function caller")
+			callStart := strings.LastIndex(test.source, test.raw+"(")
+			callEnd := callStart + len(test.raw) + 1
+			definitions := []uci.IndexAdmissionDefinition{
+				{LocalSymbolKey: "function:helper", Kind: "function", SymbolKey: "javascript:function:helper", Span: uci.IndexSpan{ByteStart: 0, ByteEnd: int64(strings.Index(test.source, "\n"))}},
+				{LocalSymbolKey: owner, Kind: "function", SymbolKey: "javascript:" + owner, Span: uci.IndexSpan{ByteStart: int64(callerStart), ByteEnd: int64(len(test.source))}},
+			}
+			if test.ambiguous {
+				definitions = append(definitions, uci.IndexAdmissionDefinition{LocalSymbolKey: "const:helper", Kind: "const", SymbolKey: "javascript:const:helper"})
+			}
+			files := []uciPreparedAdmissionFile{{
+				path: "caller.js", membership: uci.IndexAdmissionMembership{PathKey: "caller.js", State: uci.IndexAdmissionMembershipPresent, ArtifactID: &artifactID},
+				artifact: &uci.IndexAdmissionArtifact{
+					ArtifactID: artifactID, Body: []byte(test.source), Profile: uci.IndexAdmissionArtifactProfile{Language: uci.IndexAdmissionLanguageJavaScript}, Definitions: definitions,
+					References: []uci.IndexAdmissionReference{{Kind: test.kind, SiteKey: test.site + "@" + strconv.Itoa(callStart) + ":" + strconv.Itoa(callEnd), OwnerSymbolKey: &owner, RawTarget: test.raw, Relation: uci.IndexRelation("calls"), Span: uci.IndexSpan{ByteStart: int64(callStart), ByteEnd: int64(callEnd)}}},
+				},
+			}}
+			unresolved, err := uciPreparedAddResolvedTreeSitterEdges(files)
+			require.NoError(t, err)
+			if test.kind == "call" {
+				require.Equal(t, uint64(1), unresolved)
+			}
+			require.Empty(t, files[0].edges)
+		})
+	}
 }
