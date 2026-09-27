@@ -100,6 +100,31 @@ test('handleSessionStart caches live static payload and renders issues, rules, a
   }
 });
 
+test('tokenless URL retrieves live static memories instead of showing setup', async (t) => {
+  const originalConfig = lib.getEngramConfig;
+  const originalPost = lib.requestPost;
+  const originalCachePath = lib.getSessionStartCachePath;
+  const requests = [];
+  lib.getEngramConfig = () => ({ serverURL: 'http://127.0.0.1:37777', token: '' });
+  lib.getSessionStartCachePath = () => '';
+  lib.requestPost = async (endpoint, body) => {
+    requests.push({ endpoint, body });
+    if (endpoint === '/api/context/session-start') {
+      return buildCachedSessionStartPayload({ memories: [{ content: 'historical memory delivered' }] });
+    }
+    return {};
+  };
+  t.after(() => {
+    lib.getEngramConfig = originalConfig;
+    lib.requestPost = originalPost;
+    lib.getSessionStartCachePath = originalCachePath;
+  });
+  const output = await handleSessionStart({ Project: 'canonical-project', SessionID: '' }, {});
+  assert.match(output, /<engram-static-memories>/);
+  assert.match(output, /historical memory delivered/);
+  assert.equal(requests.find(({ endpoint }) => endpoint === '/api/context/session-start').body.project, 'canonical-project');
+});
+
 test('handleSessionStart quotes untrusted rule and memory text before injection', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-session-start-injection-'));
   const originalRequestPost = lib.requestPost;

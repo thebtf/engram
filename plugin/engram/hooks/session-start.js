@@ -405,8 +405,8 @@ function buildCachedSessionStartPayload(overrides = {}) {
 
 async function handleSessionStart(ctx, input) {
   const runtimeEnv = lib.getEngramConfig();
-  if (!runtimeEnv.serverURL || !runtimeEnv.token) {
-    return '<engram-setup>\nEngram plugin is installed but not configured.\nSet ENGRAM_URL and ENGRAM_TOKEN to connect to your Engram server.\nClaude Code: run /engram:setup or edit ~/.claude/settings.json env.\nCodex / universal: create ~/.engram/config.json with {"server_url":"http://...","api_token":"engram_..."}.\nNever put ENGRAM_AUTH_ADMIN_TOKEN on a workstation.\n</engram-setup>';
+  if (!runtimeEnv.serverURL) {
+    return '<engram-setup>\nEngram plugin is installed but not configured.\nSet ENGRAM_URL to connect to your Engram server; auth-enabled servers also require ENGRAM_TOKEN.\nClaude Code: run /engram:setup or edit ~/.claude/settings.json env.\nCodex / universal: create ~/.engram/config.json with {"server_url":"http://...","api_token":"engram_..."} when using a keycard.\nNever put ENGRAM_AUTH_ADMIN_TOKEN on a workstation.\n</engram-setup>';
   }
 
   const project = typeof ctx.Project === 'string' ? ctx.Project : '';
