@@ -18,18 +18,35 @@
     "type": "User"
   },
   "transition": {
-    "consumed_epoch": "authority-0058",
-    "event_base_sha": "a76d14d1199a6f13f4fa915cdb8f54e1cb638f18"
+    "consumed_epoch": "authority-0059",
+    "event_base_sha": "f83ddf4318400a4ee65cf0a8e8b8e92c855e0948"
   },
   "active_epoch": {
-    "id": "authority-0059",
-    "label": "authority-maintenance:authority-0059",
+    "id": "authority-0060",
+    "label": "authority-maintenance:authority-0060",
     "exact_changes": [
       {
         "status": "M",
         "path": ".github/authority-policy.json"
+      },
+      {
+        "status": "M",
+        "path": "scripts/production-gates/assert-pr-authority-data-only.ps1"
+      },
+      {
+        "status": "M",
+        "path": "scripts/production-gates/test-pr-authority-data-only.ps1"
       }
     ],
-    "expected_head_blobs": []
+    "expected_head_blobs": [
+      {
+        "path": "scripts/production-gates/assert-pr-authority-data-only.ps1",
+        "git_blob": "4bf1d30104962a45033f8a6fd86ce747d590056d"
+      },
+      {
+        "path": "scripts/production-gates/test-pr-authority-data-only.ps1",
+        "git_blob": "56f9fc0baf75fb1da7d4b2f53369bec54ee5ab80"
+      }
+    ]
   }
 }
