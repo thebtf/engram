@@ -98,6 +98,8 @@ ENGRAM_POSTGRES_IMAGE=engram-local-postgres
 ENGRAM_BUILD_VERSION=sha-$commit
 EOF
 # Also set POSTGRES_PASSWORD and ENGRAM_AUTH_ADMIN_TOKEN in .env before production use.
+# Set OPERATOR_CONSOLE_PUBLIC_ORIGIN to the exact browser-facing origin and
+# OPERATOR_CONSOLE_TRUSTED_PROXY_IP to the console's actual server-visible peer IP.
 docker compose up -d --build
 docker compose ps
 ```
