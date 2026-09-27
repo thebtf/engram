@@ -421,6 +421,7 @@ class LiveFixture implements FixtureController {
       DATABASE_MAX_CONNS: '4',
       ENGRAM_AUTH_ADMIN_TOKEN: this.adminToken,
       ENGRAM_AUTH_DISABLED: 'false',
+      ENGRAM_AUTH_TRUSTED_PROXY: '127.0.0.1',
       ENGRAM_CODE_INTEL_ENABLED: 'true',
       ENGRAM_VNEXT_F_ENABLED: 'true',
       ENGRAM_WORKER_HOST: '127.0.0.1',
@@ -658,6 +659,7 @@ ${searchPages}`)
       PORT: String(port),
       HOST: '127.0.0.1',
       NUXT_OPERATOR_API_TARGET: apiUrl,
+      NUXT_OPERATOR_PUBLIC_ORIGIN: `http://127.0.0.1:${port}`,
       NUXT_PUBLIC_API_DISPLAY_HOST: `127.0.0.1:${port} `,
     })
     return `http://127.0.0.1:${port}`

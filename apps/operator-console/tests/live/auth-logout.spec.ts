@@ -31,6 +31,30 @@ test('local operator signs out of Workspace and returns to the localized login',
     await page.goto(`${base}/code`)
     await expect(page).toHaveURL(`${base}/code`)
 
+    const forged = await page.request.post(`${base}/api/auth/logout`, {
+      headers: {
+        Host: 'forged.example.test',
+        Origin: 'http://forged.example.test',
+        'X-Forwarded-Host': 'forged.example.test',
+        'X-Forwarded-Proto': 'http',
+        'Sec-Fetch-Site': 'same-origin',
+      },
+    })
+    expect(forged.status()).toBe(403)
+    expect((await page.request.get(`${base}/api/auth/me`)).status()).toBe(200)
+
+    const wrongPort = await page.request.post(`${base}/api/auth/logout`, {
+      headers: { Origin: fixture.backend.baseUrl, 'Sec-Fetch-Site': 'same-origin' },
+    })
+    expect(wrongPort.status()).toBe(403)
+    expect((await page.request.get(`${base}/api/auth/me`)).status()).toBe(200)
+
+    const crossSite = await page.request.post(`${base}/api/auth/logout`, {
+      headers: { Origin: 'http://malicious.test', 'Sec-Fetch-Site': 'cross-site' },
+    })
+    expect(crossSite.status()).toBe(403)
+    expect((await page.request.get(`${base}/api/auth/me`)).status()).toBe(200)
+
     await page.getByRole('button', { name: 'Меню профиля' }).click()
     const logout = page.waitForResponse((response) => response.url().endsWith('/api/auth/logout') && response.request().method() === 'POST')
     await page.getByRole('menuitem', { name: 'Выйти из консоли' }).click()

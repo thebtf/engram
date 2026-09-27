@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Restore logout through a separate operator-console proxy by forwarding its configured public origin only from a trusted transport peer; overwrite client-supplied forwarding headers and reject forged public hosts without weakening the backend origin guard.
+
 ## [6.50.1] - 2026-09-27
 
 ### Fixed

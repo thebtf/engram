@@ -166,6 +166,18 @@ must be restricted by organization policy.
   `HOME=/var/lib/engram`, semantic health probe on `/api/ready`.
 - Operator console: UID/GID 65532, read-only root filesystem,
   `NUXT_OPERATOR_API_TARGET=http://server:37777`, semantic proxied readiness.
+  For a separate console origin, set `OPERATOR_CONSOLE_PUBLIC_ORIGIN` to its exact
+  browser origin (scheme, host, port; no path), and set
+  `OPERATOR_CONSOLE_TRUSTED_PROXY_IP` to the console container's actual TCP
+  peer IP as seen by the server. Pin that IP in the deployment network; never
+  trust a forwarded-IP header or a whole shared bridge subnet. The standalone
+  `operator-web` compose instead requires `OPERATOR_WEB_PUBLIC_ORIGIN` and the
+  separately hosted server must set `ENGRAM_AUTH_TRUSTED_PROXY` to that
+  console's actual peer IP. Without both settings, cross-origin browser logout
+  stays denied. Nitro replaces incoming `X-Forwarded-Host` and
+  `X-Forwarded-Proto` with this configured origin; a mismatched request Host is
+  rejected before proxying except for the unauthenticated `/api/ready` probe
+  from inside the console container.
 - Every service drops all capabilities and enables `no-new-privileges`;
   bounded tmpfs mounts cover runtime-only writable paths.
 

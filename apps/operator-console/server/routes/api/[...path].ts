@@ -14,12 +14,22 @@ export default defineEventHandler((event) => {
   const path = getRouterParam(event, 'path') || ''
   const target = new URL(upstream)
   const requestUrl = getRequestURL(event)
+  const publicOrigin = String(config.operatorPublicOrigin || '').trim()
+  const ingress = new URL(publicOrigin || upstream)
   const cleanBase = target.pathname.replace(/\/+$/, '')
   const cleanPath = String(path).replace(/^\/+/, '')
+  if (publicOrigin && cleanPath !== 'ready' && (ingress.origin !== publicOrigin || requestUrl.host.toLowerCase() !== ingress.host.toLowerCase())) {
+    throw createError({ statusCode: 403, statusMessage: 'Unrecognized operator console origin' })
+  }
   const apiBase = /\/api$/i.test(cleanBase) ? cleanBase : `${cleanBase}/api`
 
   target.pathname = cleanPath ? `${apiBase}/${cleanPath}` : apiBase || '/api'
   target.search = requestUrl.search
 
-  return proxyRequest(event, target.toString())
+  return proxyRequest(event, target.toString(), {
+    headers: {
+      'x-forwarded-host': ingress.host,
+      'x-forwarded-proto': ingress.protocol.slice(0, -1),
+    },
+  })
 })
