@@ -1737,14 +1737,14 @@ func (s *Service) setupRoutes() {
 
 	// Auth routes (public — login/logout do not require auth)
 	s.router.Post("/api/auth/login", s.handleAuthLogin)
-	s.router.Post("/api/auth/logout", s.handleAuthLogout)
+	s.router.With(s.requireLogoutOrigin).Post("/api/auth/logout", s.handleAuthLogout)
 
 	// Email/password auth routes (no token auth required).
 	// Handlers delegate to s.authHandlers which is initialised async.
 	s.router.Get("/api/auth/setup-needed", s.handleUserSetupNeeded)
 	s.router.Post("/api/auth/setup", s.handleUserSetup)
 	s.router.Post("/api/auth/user-login", s.handleUserLogin)
-	s.router.Post("/api/auth/user-logout", s.handleUserLogout)
+	s.router.With(s.requireLogoutOrigin).Post("/api/auth/user-logout", s.handleUserLogout)
 
 	// Registration (public, requires valid invitation code)
 	s.router.Post("/api/auth/register", s.handleUserRegister)

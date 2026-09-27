@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Keep the public sign-in shell usable while `/api/auth/me` shares protected routes' bearer, cookie, and trusted Authentik authentication; untrusted proxy headers remain denied.
 - Revoke database-backed browser sessions on the shared logout endpoint, clear both session cookies, and leave private Workspace pages for the localized sign-in screen only after revocation succeeds; failed revocation remains visible and does not claim sign-out.
+- Reject cross-origin and unverifiable browser logout requests on both session endpoints before revocation; trusted-proxy origin checks retain same-origin HTTP/HTTPS and explicit JSON client logouts.
 - Bind Authentik forward-auth headers to the original TCP peer before forwarded-IP processing; forged proxy IP headers can no longer impersonate browser users.
 - Carry the post-v6.50.0 promotion-journal authority preapproval ([#538](https://github.com/thebtf/engram/pull/538)) and check-run URL correction ([#539](https://github.com/thebtf/engram/pull/539)).
 

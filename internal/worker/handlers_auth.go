@@ -10,7 +10,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -20,6 +22,7 @@ import (
 	"gorm.io/gorm"
 
 	authpkg "github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/config"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
 
@@ -123,6 +126,91 @@ func (s *Service) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		"authenticated": true,
 		"role":          "admin",
 	})
+}
+
+// requireLogoutOrigin blocks browser CSRF before either logout handler reads or revokes a session.
+func (s *Service) requireLogoutOrigin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		site := r.Header.Values("Sec-Fetch-Site")
+		if len(site) > 1 || (len(site) == 1 && site[0] != "same-origin") {
+			writeAuthJSONError(w, http.StatusForbidden, "cross-origin logout denied")
+			return
+		}
+		origins := r.Header.Values("Origin")
+		if len(origins) > 1 {
+			writeAuthJSONError(w, http.StatusForbidden, "cross-origin logout denied")
+			return
+		}
+		if len(origins) == 1 {
+			scheme, host := "http", r.Host
+			if r.TLS != nil {
+				scheme = "https"
+			}
+			if s.tokenAuth != nil {
+				s.tokenAuth.mu.RLock()
+				trusted := isTrustedProxy(r, s.tokenAuth.authentikTrustedProxies)
+				s.tokenAuth.mu.RUnlock()
+				cfg := config.Get()
+				if !trusted && cfg.AuthTrustedProxy != "" {
+					trusted = isTrustedProxy(r, []string{cfg.AuthTrustedProxy})
+				}
+				if trusted {
+					if values := r.Header.Values("X-Forwarded-Proto"); len(values) == 1 && (values[0] == "http" || values[0] == "https") {
+						scheme = values[0]
+					} else if len(values) != 0 {
+						writeAuthJSONError(w, http.StatusForbidden, "cross-origin logout denied")
+						return
+					}
+					if values := r.Header.Values("X-Forwarded-Host"); len(values) == 1 && !strings.Contains(values[0], ",") {
+						host = values[0]
+					} else if len(values) != 0 {
+						writeAuthJSONError(w, http.StatusForbidden, "cross-origin logout denied")
+						return
+					}
+				}
+			}
+			if !sameLogoutOrigin(origins[0], scheme, host) {
+				writeAuthJSONError(w, http.StatusForbidden, "cross-origin logout denied")
+				return
+			}
+		} else if len(site) == 0 {
+			// A browser can send a bodyless or simple form POST without Origin.
+			// Only non-browser JSON requests without Fetch Metadata retain legacy logout.
+			mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			if err != nil || mediaType != "application/json" {
+				writeAuthJSONError(w, http.StatusForbidden, "cross-origin logout denied")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func sameLogoutOrigin(origin, scheme, host string) bool {
+	actual, err := url.Parse(origin)
+	if err != nil || actual.User != nil || actual.Path != "" || actual.RawQuery != "" || actual.Fragment != "" || actual.Opaque != "" {
+		return false
+	}
+	expected, err := url.Parse(scheme + "://" + host)
+	if err != nil || expected.User != nil || expected.Path != "" || expected.RawQuery != "" || expected.Fragment != "" || expected.Hostname() == "" || actual.Scheme != scheme || !strings.EqualFold(actual.Hostname(), expected.Hostname()) {
+		return false
+	}
+	actualPort, expectedPort := actual.Port(), expected.Port()
+	if actualPort == "" {
+		if scheme == "https" {
+			actualPort = "443"
+		} else {
+			actualPort = "80"
+		}
+	}
+	if expectedPort == "" {
+		if scheme == "https" {
+			expectedPort = "443"
+		} else {
+			expectedPort = "80"
+		}
+	}
+	return actualPort == expectedPort
 }
 
 // handleAuthLogout godoc
