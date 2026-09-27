@@ -55,8 +55,10 @@ inspect the actual console peer address and verify it is the address the server
 sees before pinning it in the dotenv:
 
 ```bash
+docker ps --filter 'label=com.docker.compose.project=<project-name>' \
+  --filter 'label=com.docker.compose.service=operator-console' --format '{{.ID}}'
 docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
-  "$(docker compose -f deploy/docker-compose.runtime.yml ps -q operator-console)"
+  '<console-container-id-from-above>'
 ```
 
 Do not use an arbitrary address from a different bridge or a changing container
