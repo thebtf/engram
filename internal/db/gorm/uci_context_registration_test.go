@@ -96,6 +96,69 @@ func TestRegisterLocalGitUnboundLegacyCheckoutRefusesRecovery(t *testing.T) {
 	}
 }
 
+func TestRegisterLocalGitParserProfileAdmitsCrossHostSemanticArtifact(t *testing.T) {
+	db, store := openUCIContextMigrationStore(t)
+	ctx := context.Background()
+	parser := true
+	registered, err := store.RegisterLocalGit(ctx, RegisterLocalGitInput{
+		AuthRealm: "client", Principal: "browser-user/41", WorkstationID: "keycard-41",
+		SourceLabel: "cross-host-parser", Locator: "file:///worktrees/cross-host-parser", ParserBundle: &parser,
+	})
+	require.NoError(t, err)
+	var stored UCIAnalysisProfile
+	require.NoError(t, db.Where("profile_id = ?", registered.ProfileID).First(&stored).Error)
+	require.Equal(t, string(uci.TreeSitterSemanticContractDigest()), stored.ParserBundleDigest)
+
+	goProfile := uci.GoExtractionProfile{ProfileKey: "go-structure-v1", ParserKey: "go-parser-v1"}
+	profile, err := uci.GoIndexAdmissionArtifactProfile(goProfile)
+	require.NoError(t, err)
+	profile.ExtractionProfileDigest = uci.TreeSitterSemanticContractDigest()
+	body := []byte("package crosshost\n\nfunc First() {}\n")
+	artifact, err := uci.NewIndexAdmissionArtifactFromGo(registered.SourceID, profile, body, uci.ExtractGo(body, goProfile))
+	require.NoError(t, err)
+	frame := uci.IndexAdmissionFrame{
+		Version:   uci.IndexAdmissionFrameVersion,
+		Profile:   uci.IndexAdmissionProfile{ID: registered.ProfileID},
+		Artifacts: []uci.IndexAdmissionArtifact{artifact},
+		Memberships: []uci.IndexAdmissionMembership{{
+			PathKey: "first.go", DisplayPath: "first.go", Mode: "100644",
+			State: uci.IndexAdmissionMembershipPresent, ArtifactID: &artifact.ArtifactID,
+		}},
+	}
+	projection := NewUCIProjectionStore(db)
+	_, err = projection.AdmitIndexFrames(ctx, registered.SourceID, registered.ProfileID, []uci.IndexAdmissionFrame{frame})
+	require.NoError(t, err)
+	parserFrame := uciIndexAdmissionTypeScriptFixtureFrame(t, &uciPublicationFixture{
+		source: &UCISource{SourceID: registered.SourceID}, profile: &stored,
+	})
+	parserFrame.Artifacts[0].Profile.GrammarDigest = uci.TreeSitterBundleDigest()
+	badGrammarID, err := uci.DeriveIndexAdmissionArtifactID(registered.SourceID, parserFrame.Artifacts[0].ContentDigest, parserFrame.Artifacts[0].Profile)
+	require.NoError(t, err)
+	parserFrame.Artifacts[0].FactsDigest, err = uci.DigestIndexAdmissionArtifactFacts(parserFrame.Artifacts[0])
+	require.NoError(t, err)
+	parserFrame.Artifacts[0].ArtifactID = badGrammarID
+	parserFrame.Memberships[0].ArtifactID = &badGrammarID
+	_, err = projection.AdmitIndexFrames(ctx, registered.SourceID, registered.ProfileID, []uci.IndexAdmissionFrame{parserFrame})
+	require.ErrorContains(t, err, "artifact grammar does not match authorized parser contract")
+	validParserFrame := uciIndexAdmissionTypeScriptFixtureFrame(t, &uciPublicationFixture{
+		source: &UCISource{SourceID: registered.SourceID}, profile: &stored,
+	})
+	_, err = projection.AdmitIndexFrames(ctx, registered.SourceID, registered.ProfileID, []uci.IndexAdmissionFrame{validParserFrame})
+	require.NoError(t, err)
+	wrongProfile := profile
+	wrongProfile.ExtractionProfileDigest = uci.TreeSitterBundleDigest()
+	wrongArtifact, err := uci.NewIndexAdmissionArtifactFromGo(registered.SourceID, wrongProfile, body, uci.ExtractGo(body, goProfile))
+	require.NoError(t, err)
+	wrong := frame
+	wrong.Artifacts = []uci.IndexAdmissionArtifact{wrongArtifact}
+	wrong.Memberships = []uci.IndexAdmissionMembership{{
+		PathKey: "first.go", DisplayPath: "first.go", Mode: "100644",
+		State: uci.IndexAdmissionMembershipPresent, ArtifactID: &wrongArtifact.ArtifactID,
+	}}
+	_, err = projection.AdmitIndexFrames(ctx, registered.SourceID, registered.ProfileID, []uci.IndexAdmissionFrame{wrong})
+	require.ErrorContains(t, err, "artifact profile does not match authorized profile")
+}
+
 func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	root := t.TempDir()
 	git := func(args ...string) {
@@ -198,7 +261,7 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	require.NoError(t, err)
 	var parserProfile UCIAnalysisProfile
 	require.NoError(t, db.Where("profile_id = ?", parserCheckout.ProfileID).First(&parserProfile).Error)
-	require.Equal(t, string(uci.TreeSitterBundleDigest()), parserProfile.ParserBundleDigest)
+	require.Equal(t, string(uci.TreeSitterSemanticContractDigest()), parserProfile.ParserBundleDigest)
 	legacyReplay := parserRequest
 	legacyReplay.ParserBundle = nil
 	replayedParser, err := store.RegisterLocalGit(ctx, legacyReplay)
@@ -212,7 +275,7 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	require.NoError(t, err)
 	var automaticProfile UCIAnalysisProfile
 	require.NoError(t, db.Where("profile_id = ?", automatic.ProfileID).First(&automaticProfile).Error)
-	require.Equal(t, string(uci.TreeSitterBundleDigest()), automaticProfile.ParserBundleDigest)
+	require.Equal(t, string(uci.TreeSitterSemanticContractDigest()), automaticProfile.ParserBundleDigest)
 	defaultParser.DefaultParserBundle = false
 	replayedAutomatic, err := store.RegisterLocalGit(ctx, defaultParser)
 	require.NoError(t, err)

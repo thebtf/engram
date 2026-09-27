@@ -85,7 +85,7 @@ func TestUCIRealCorpusPreparedCapacity(t *testing.T) {
 			return err
 		}
 		if err := tx.Create(&engramgorm.UCIAnalysisProfile{
-			ProfileID: binding.ProfileID, ParserBundleDigest: string(uci.TreeSitterBundleDigest()),
+			ProfileID: binding.ProfileID, ParserBundleDigest: string(uci.TreeSitterSemanticContractDigest()),
 			ResolverRevision: "real-corpus-probe", ChunkerRevision: "real-corpus-probe",
 			IgnorePolicyDigest: fmt.Sprintf("sha256:%064d", 0), BuildContextJSON: `{}`,
 			SecretPolicyRevision: "real-corpus-probe", CreatedAt: now,

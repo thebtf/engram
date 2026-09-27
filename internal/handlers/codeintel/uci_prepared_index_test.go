@@ -184,8 +184,8 @@ func preparedValidateArtifactProfiles(frames []uci.IndexAdmissionFrame) error {
 				uci.IndexAdmissionLanguageYAML,
 				uci.IndexAdmissionLanguageSQL,
 				uci.IndexAdmissionLanguageOpenAPI:
-				if artifact.Profile.ExtractionProfileDigest != uci.IndexDigest(preparedParserBundleDigest) {
-					return errors.New("artifact profile does not match selected parser bundle")
+				if artifact.Profile.ExtractionProfileDigest != uci.TreeSitterSemanticContractDigest() {
+					return errors.New("artifact profile does not match semantic parser contract")
 				}
 			}
 		}
@@ -327,7 +327,7 @@ func TestUCIPreparedIndexPublishesGoFramesAndReplaysExactInputs(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, frame.Artifacts, 1)
 	require.Equal(t, uci.IndexAdmissionLanguageGo, frame.Artifacts[0].Profile.Language)
-	require.Equal(t, uci.IndexDigest(preparedParserBundleDigest), frame.Artifacts[0].Profile.ExtractionProfileDigest)
+	require.Equal(t, uci.TreeSitterSemanticContractDigest(), frame.Artifacts[0].Profile.ExtractionProfileDigest)
 	expectedArtifactID, err := uci.DeriveIndexAdmissionArtifactID(preparedSourceID, frame.Artifacts[0].ContentDigest, frame.Artifacts[0].Profile)
 	require.NoError(t, err)
 	require.Equal(t, expectedArtifactID, frame.Artifacts[0].ArtifactID)
@@ -1347,8 +1347,8 @@ func TestUCIPreparedIndexPublishesTreeSitterFactsWithPinnedProfile(t *testing.T)
 	preparedRequireMembership(t, frames[preparedFrameIndex(t, frames, "legacy.jsx")], "legacy.jsx", uci.IndexAdmissionMembershipUnsupported, false)
 	for _, want := range expected {
 		artifact := preparedArtifactForPath(t, frames, want.path)
-		require.Equal(t, uci.IndexDigest(preparedParserBundleDigest), artifact.Profile.GrammarDigest)
-		require.Equal(t, uci.IndexDigest(preparedParserBundleDigest), artifact.Profile.ExtractionProfileDigest)
+		require.Equal(t, uci.TreeSitterSemanticContractDigest(), artifact.Profile.GrammarDigest)
+		require.Equal(t, uci.TreeSitterSemanticContractDigest(), artifact.Profile.ExtractionProfileDigest)
 		expectedID, err := uci.DeriveIndexAdmissionArtifactID(preparedSourceID, artifact.ContentDigest, artifact.Profile)
 		require.NoError(t, err)
 		require.Equal(t, expectedID, artifact.ArtifactID)

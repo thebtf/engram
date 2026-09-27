@@ -750,6 +750,14 @@ func (s *UCIProjectionStore) validateUCIIndexAdmissionProfile(ctx context.Contex
 		if string(artifact.Profile.ExtractionProfileDigest) != profile.ParserBundleDigest {
 			return fmt.Errorf("uci index admission: artifact profile does not match authorized profile")
 		}
+		if profile.ParserBundleDigest == string(ucidomain.TreeSitterSemanticContractDigest()) {
+			switch artifact.Profile.Language {
+			case ucidomain.IndexAdmissionLanguageJavaScript, ucidomain.IndexAdmissionLanguageTypeScript, ucidomain.IndexAdmissionLanguageTSX:
+				if artifact.Profile.GrammarDigest != ucidomain.TreeSitterSemanticContractDigest() || artifact.Profile.ParserRevision != ucidomain.TreeSitterWorkerProtocolVersion {
+					return fmt.Errorf("uci index admission: artifact grammar does not match authorized parser contract")
+				}
+			}
+		}
 	}
 	return nil
 }

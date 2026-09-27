@@ -52,16 +52,18 @@ const (
 // TreeSitterSemanticContractDigest identifies the grammar and protocol contract
 // shared by client and server, independent of either host's parser executable.
 func TreeSitterSemanticContractDigest() IndexDigest {
-	return treeSitterDigest([]string{
-		"uci-tree-sitter-registration/v1",
-		TreeSitterBundleSchemaRevision,
-		TreeSitterWorkerProtocolVersion,
-		TreeSitterFactsExtractionContractRevision,
-		"github.com/tree-sitter/go-tree-sitter@v0.25.0",
-		"github.com/tree-sitter/tree-sitter-javascript@v0.25.0",
-		"github.com/tree-sitter/tree-sitter-typescript@v0.23.2",
-	})
+	return treeSitterSemanticContractDigest
 }
+
+var treeSitterSemanticContractDigest = treeSitterDigest([]string{
+	"uci-tree-sitter-registration/v1",
+	TreeSitterBundleSchemaRevision,
+	TreeSitterWorkerProtocolVersion,
+	TreeSitterFactsExtractionContractRevision,
+	"github.com/tree-sitter/go-tree-sitter@v0.25.0",
+	"github.com/tree-sitter/tree-sitter-javascript@v0.25.0",
+	"github.com/tree-sitter/tree-sitter-typescript@v0.23.2",
+})
 
 // TreeSitterBundleDigest returns the exact parser bundle identity shared by
 // the parent worker, installed harness, and parser executable for this build.

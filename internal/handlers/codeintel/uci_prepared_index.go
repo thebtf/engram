@@ -367,7 +367,7 @@ func (collaborator *UCIPreparedIndexCollaborator) prepareAdmissionPlan(ctx conte
 	if err != nil {
 		return uciPreparedAdmissionPlan{}, fmt.Errorf("uci prepared index: configure Go admission profile: %w", err)
 	}
-	goProfile.ExtractionProfileDigest = collaborator.parserBundleDigest
+	goProfile.ExtractionProfileDigest = uci.TreeSitterSemanticContractDigest()
 
 	files := append([]uci.ScannerFile(nil), scan.Files...)
 	sort.Slice(files, func(left, right int) bool {
@@ -526,7 +526,7 @@ func uciPreparedPrepareMarkdownAdmissionFile(collaborator *UCIPreparedIndexColla
 	if err != nil {
 		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: configure Markdown admission profile: %w", err)
 	}
-	admissionProfile.ExtractionProfileDigest = collaborator.parserBundleDigest
+	admissionProfile.ExtractionProfileDigest = uci.TreeSitterSemanticContractDigest()
 	artifact, err := uci.NewIndexAdmissionArtifactFromMarkdown(input.sourceID, admissionProfile, profile, input.file.Body, uci.ExtractMarkdown(input.file.Body, profile))
 	if err != nil {
 		if uci.IsIndexCapacityError(err) {
@@ -543,7 +543,7 @@ func uciPreparedPrepareJSONYAMLAdmissionFile(collaborator *UCIPreparedIndexColla
 	if err != nil {
 		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: configure %s admission profile: %w", input.capability.key, err)
 	}
-	admissionProfile.ExtractionProfileDigest = collaborator.parserBundleDigest
+	admissionProfile.ExtractionProfileDigest = uci.TreeSitterSemanticContractDigest()
 	artifact, err := uci.NewIndexAdmissionArtifactFromJSONYAML(input.sourceID, admissionProfile, profile, input.file.Body, uci.ExtractJSONYAML(input.file.Body, profile))
 	if err != nil {
 		if uci.IsIndexCapacityError(err) {
@@ -560,7 +560,7 @@ func uciPreparedPrepareSQLAdmissionFile(collaborator *UCIPreparedIndexCollaborat
 	if err != nil {
 		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: configure SQL admission profile: %w", err)
 	}
-	admissionProfile.ExtractionProfileDigest = collaborator.parserBundleDigest
+	admissionProfile.ExtractionProfileDigest = uci.TreeSitterSemanticContractDigest()
 	artifact, err := uci.NewIndexAdmissionArtifactFromSQL(input.sourceID, admissionProfile, profile, input.file.Body, uci.ExtractSQL(input.file.Body, profile))
 	if err != nil {
 		if uci.IsIndexCapacityError(err) {
@@ -577,7 +577,7 @@ func uciPreparedPrepareOpenAPIAdmissionFile(collaborator *UCIPreparedIndexCollab
 	if err != nil {
 		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: configure OpenAPI admission profile: %w", err)
 	}
-	admissionProfile.ExtractionProfileDigest = collaborator.parserBundleDigest
+	admissionProfile.ExtractionProfileDigest = uci.TreeSitterSemanticContractDigest()
 	extracted := uci.ExtractOpenAPI(input.file.Body, profile)
 	// A path-selected OpenAPI document with unavailable semantic coverage must
 	// not be recast as generic JSON/YAML or published as partial facts.

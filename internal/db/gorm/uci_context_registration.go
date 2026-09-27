@@ -56,7 +56,7 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 	in.Locator = locator
 	profileDigest := localGitGoProfileDigest()
 	if (in.ParserBundle != nil && *in.ParserBundle) || (in.ParserBundle == nil && in.DefaultParserBundle) {
-		profileDigest = uci.TreeSitterBundleDigest()
+		profileDigest = uci.TreeSitterSemanticContractDigest()
 	}
 	var out RegisteredLocalGit
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

@@ -866,9 +866,9 @@ func GoIndexAdmissionArtifactProfile(profile GoExtractionProfile) (IndexAdmissio
 	return result, nil
 }
 
-// TreeSitterIndexAdmissionArtifactProfile derives the fixed admission profile
-// for one installed Tree-sitter parser bundle. The bundle is both the grammar
-// and selected extraction contract, so every admitted worker result binds it.
+// TreeSitterIndexAdmissionArtifactProfile identifies the shared semantic
+// grammar contract. The caller's platform-specific bundle digest is verified
+// separately against the installed parser result before publication.
 func TreeSitterIndexAdmissionArtifactProfile(language TreeSitterLanguage, bundleDigest IndexDigest) (IndexAdmissionArtifactProfile, error) {
 	admissionLanguage, err := indexAdmissionTreeSitterLanguage(language)
 	if err != nil {
@@ -877,11 +877,12 @@ func TreeSitterIndexAdmissionArtifactProfile(language TreeSitterLanguage, bundle
 	if !isIndexDigest(bundleDigest) {
 		return IndexAdmissionArtifactProfile{}, fmt.Errorf("uci index admission: invalid Tree-sitter bundle digest")
 	}
+	semanticDigest := TreeSitterSemanticContractDigest()
 	result := IndexAdmissionArtifactProfile{
 		Language:                admissionLanguage,
 		ParserRevision:          TreeSitterWorkerProtocolVersion,
-		GrammarDigest:           bundleDigest,
-		ExtractionProfileDigest: bundleDigest,
+		GrammarDigest:           semanticDigest,
+		ExtractionProfileDigest: semanticDigest,
 	}
 	if err := indexAdmissionValidateArtifactProfile(result); err != nil {
 		return IndexAdmissionArtifactProfile{}, err
@@ -1132,7 +1133,7 @@ func indexAdmissionValidateTreeSitterProfile(profile IndexAdmissionArtifactProfi
 	if err := indexAdmissionValidateArtifactProfile(profile); err != nil {
 		return err
 	}
-	if profile.Language != expectedLanguage || profile.ParserRevision != TreeSitterWorkerProtocolVersion || profile.GrammarDigest != extracted.BundleDigest || profile.ExtractionProfileDigest != extracted.BundleDigest {
+	if profile.Language != expectedLanguage || profile.ParserRevision != TreeSitterWorkerProtocolVersion || profile.GrammarDigest != TreeSitterSemanticContractDigest() || profile.ExtractionProfileDigest != TreeSitterSemanticContractDigest() || !isIndexDigest(extracted.BundleDigest) {
 		return fmt.Errorf("uci index admission: Tree-sitter artifact profile does not match parser evidence")
 	}
 	return nil

@@ -713,6 +713,14 @@ func uciIndexAdmissionTypeScriptFixtureFrame(t *testing.T, fixture *uciPublicati
 	}
 	artifact, err := ucidomain.NewIndexAdmissionArtifactFromTreeSitter(fixture.source.SourceID, profile, body, extracted)
 	require.NoError(t, err)
+	if bundleDigest != ucidomain.TreeSitterSemanticContractDigest() {
+		artifact.Profile.GrammarDigest = bundleDigest
+		artifact.Profile.ExtractionProfileDigest = bundleDigest
+		artifact.ArtifactID, err = ucidomain.DeriveIndexAdmissionArtifactID(fixture.source.SourceID, artifact.ContentDigest, artifact.Profile)
+		require.NoError(t, err)
+		artifact.FactsDigest, err = ucidomain.DigestIndexAdmissionArtifactFacts(artifact)
+		require.NoError(t, err)
+	}
 	artifactID := artifact.ArtifactID
 	return ucidomain.IndexAdmissionFrame{
 		Version:   ucidomain.IndexAdmissionFrameVersion,
