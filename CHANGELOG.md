@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.50.1] - 2026-09-27
+
+### Fixed
+
+- Let an auth-disabled Engram server choose the active code repository, checkout, and indexed UCI View without requiring browser grants, while retaining grant-bound access on auth-enabled servers.
+- Bootstrap Code Explorer on a LAN browser origin without a login session, and keep search, graph traversal, and source reads bound to the same selected View; verified semantic and graph source in separate working copies.
+- Let the plugin connect without a keycard when the server disables authentication, leaving token decisions to the server and retaining keycards for auth-enabled servers.
+- Align the cross-platform UCI parser semantic profile and initialize a tracked project anchor offline; update the no-auth Workspace setup and usage guidance.
+
 ## [6.50.0] - 2026-09-26
 
 ### Added
@@ -2074,7 +2083,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.0...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.1...HEAD
+[6.50.1]: https://github.com/thebtf/engram/compare/v6.50.0...v6.50.1
 [6.50.0]: https://github.com/thebtf/engram/compare/v6.49.4...v6.50.0
 [6.49.3]: https://github.com/thebtf/engram/compare/v6.49.2...v6.49.3
 [6.49.2]: https://github.com/thebtf/engram/compare/v6.49.1...v6.49.2

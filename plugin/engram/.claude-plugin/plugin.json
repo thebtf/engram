@@ -1,7 +1,7 @@
 {
   "name": "engram",
-  "version": "6.50.0",
-  "description": "Persistent memory for Claude Code. v6 BREAKING: per-workstation API tokens replace the shared admin token. Issue a keycard via the dashboard /tokens page after upgrade and paste it via /engram:setup. The operator key (ENGRAM_AUTH_ADMIN_TOKEN) lives ONLY on the server host and MUST NOT be pasted into a workstation.",
+  "version": "6.50.1",
+  "description": "Persistent memory for Claude Code. Connect to a configured Engram server with its URL; a worker keycard is needed when server authentication is enabled. Never place the server operator key (ENGRAM_AUTH_ADMIN_TOKEN) on a workstation.",
   "author": {
     "name": "thebtf"
   },
@@ -17,10 +17,10 @@
       "sensitive": false
     },
     "api_token": {
-      "title": "API Token (worker keycard)",
-      "description": "Per-workstation API token issued via the engram dashboard /tokens page. NOT the operator/admin token (which lives only on the server host). Generate one via the UI, copy it once, paste it here. Revoke from the same page if the workstation is compromised. After rotation, re-run /engram:setup. (v6 breaking: previous versions accepted the operator token here — that is no longer valid.)",
+      "title": "API Token (when server authentication is enabled)",
+      "description": "Worker keycard issued from the Engram dashboard /access page for an auth-enabled server. Leave unset for an auth-disabled server; never use the server operator key on a workstation.",
       "type": "string",
-      "required": true,
+      "required": false,
       "sensitive": true
     },
     "engram_quiet": {
