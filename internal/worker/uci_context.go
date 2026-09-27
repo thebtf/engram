@@ -363,7 +363,7 @@ func newOperatorCodeServerAuthorizer(contexts operatorCodeServerContextStore, re
 }
 
 func (authorizer *operatorCodeServerAuthorizer) AuthorizeOperatorCode(ctx context.Context, caller operatorCodeVerifiedCaller) (uci.AuthorizedContext, error) {
-	if authorizer == nil || authorizer.contexts == nil || authorizer.resolver == nil || !caller.Subject.Valid() || caller.BindingID == "" || caller.Context.SpaceID != nil {
+	if authorizer == nil || authorizer.contexts == nil || authorizer.resolver == nil || (!caller.NoAuth && !caller.Subject.Valid()) || caller.BindingID == "" || caller.Context.SpaceID != nil {
 		return uci.AuthorizedContext{}, errors.New("operator code context authorizer is not configured")
 	}
 	source, err := authorizer.contexts.GetSource(ctx, caller.Context.SourceID)
@@ -373,6 +373,9 @@ func (authorizer *operatorCodeServerAuthorizer) AuthorizeOperatorCode(ctx contex
 	checkout, err := authorizer.contexts.GetCheckout(ctx, caller.Context.CheckoutID)
 	if err != nil || checkout == nil || checkout.CheckoutID != caller.Context.CheckoutID || checkout.SourceID != caller.Context.SourceID {
 		return uci.AuthorizedContext{}, errors.New("operator code checkout scope is unavailable")
+	}
+	if caller.NoAuth && (source.AuthRealm != uci.NoAuthCodeRealm || checkout.OwnerPrincipal != uci.NoAuthCodePrincipal) {
+		return uci.AuthorizedContext{}, errors.New("local code scope is unavailable")
 	}
 	ref := caller.Context
 	return authorizer.resolver.Authorize(ctx, uci.ResolveContextInput{

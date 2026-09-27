@@ -409,6 +409,9 @@ func contextAwareCallerFrom(ctx context.Context) (contextAwareCaller, error) {
 	if !ok {
 		return contextAwareCaller{}, contextAwareClosedError(uci.ContextMismatch)
 	}
+	if identity.Source == auth.SourceAuthDisabled {
+		return contextAwareCaller{clientSessionID: clientSessionID, authRealm: uci.NoAuthCodeRealm, principal: uci.NoAuthCodePrincipal, workstationID: uci.NoAuthCodeWorkstation}, nil
+	}
 	principal, _, owned := identity.MemoryOwner()
 	workstationID := identity.WorkstationID()
 	if !owned || principal != identity.Principal || !validUCIIdentifier(principal, maxUCITransportIdentifierBytes) || !validUCIIdentifier(workstationID, maxUCITransportIdentifierBytes) {

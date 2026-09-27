@@ -50,7 +50,7 @@ func (s *Server) authorizeRegistrationIdentity(ctx context.Context, req *pb.Regi
 		return nil
 	}
 	if identity.Source == auth.SourceAuthDisabled {
-		return status.Error(codes.PermissionDenied, "project identity registration unavailable when authentication is disabled")
+		return nil
 	}
 	if identity.Source != auth.SourceMaster || identity.Role != auth.RoleAdmin {
 		return status.Error(codes.PermissionDenied, "project identity registration requires master admin identity")

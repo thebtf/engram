@@ -333,7 +333,7 @@ func (s *Server) handleCodebaseContext(ctx context.Context, raw json.RawMessage)
 
 func (s *Server) registerCodebaseContext(ctx context.Context, input uci.ResolveContextInput, args codebaseContextArgs) (string, error) {
 	identity, found := auth.IdentityFrom(ctx)
-	if !found || identity.Source != auth.SourceClient || identity.Role != auth.RoleReadWrite || identity.PrincipalKind != auth.PrincipalKindHuman {
+	if !found || !(identity.Source == auth.SourceAuthDisabled || (identity.Source == auth.SourceClient && identity.Role == auth.RoleReadWrite && identity.PrincipalKind == auth.PrincipalKindHuman)) {
 		return "", codebaseContextClosedError(uci.PermissionDenied)
 	}
 	if args.Locator == nil || args.Checkout != nil || args.ContextHandle != nil || args.SpaceID != nil || args.CheckoutID != nil || args.ViewID != nil || args.AnalysisProfileID != nil || args.Generation != nil ||
@@ -680,6 +680,9 @@ func codebaseContextCallerInput(ctx context.Context) (uci.ResolveContextInput, e
 	}
 	sessionID := sessionFromContext(ctx)
 	identity, ok := auth.IdentityFrom(ctx)
+	if ok && identity.Source == auth.SourceAuthDisabled && codebaseContextIdentityText(sessionID) {
+		return uci.ResolveContextInput{ClientSessionID: sessionID, AuthRealm: uci.NoAuthCodeRealm, Principal: uci.NoAuthCodePrincipal, WorkstationID: uci.NoAuthCodeWorkstation}, nil
+	}
 	authRealm := string(identity.Source)
 	if !ok || !codebaseContextIdentityText(sessionID) || !codebaseContextIdentityText(authRealm) || !codebaseContextIdentityText(identity.Principal) || !codebaseContextIdentityText(identity.WorkstationID()) {
 		return uci.ResolveContextInput{}, errors.New("invalid caller")
@@ -827,16 +830,20 @@ func codebaseExposureInput(ctx context.Context, operation uci.ExposureOperation,
 		return uci.ExposureInput{}, err
 	}
 	identity, ok := auth.IdentityFrom(ctx)
-	if !ok || !codebaseContextIdentityText(identity.WorkstationID()) {
+	if !ok || (identity.Source != auth.SourceAuthDisabled && !codebaseContextIdentityText(identity.WorkstationID())) {
 		return uci.ExposureInput{}, errors.New("invalid exposure caller")
 	}
 	request, ok := uciRequestIdentityFromContext(ctx)
 	if !ok {
 		return uci.ExposureInput{}, errors.New("missing request identity")
 	}
+	keycard := identity.WorkstationID()
+	if identity.Source == auth.SourceAuthDisabled {
+		keycard = uci.NoAuthCodeWorkstation
+	}
 	return uci.ExposureInput{
 		AuthRealm:            caller.AuthRealm,
-		ClientKeycard:        identity.WorkstationID(),
+		ClientKeycard:        keycard,
 		ClientSession:        caller.ClientSessionID,
 		RequestID:            request.requestID,
 		RequestBindingDigest: request.bindingDigest,

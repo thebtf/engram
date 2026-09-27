@@ -1553,6 +1553,14 @@ func (store *operatorCodeHTTPTestContextStore) ListCatalog(_ context.Context, _ 
 	return append([]gormdb.BrowserCodeContextCatalogEntry(nil), store.entries...), nil
 }
 
+func (store *operatorCodeHTTPTestContextStore) ListNoAuthCatalog(context.Context) ([]gormdb.BrowserCodeContextCatalogEntry, error) {
+	return append([]gormdb.BrowserCodeContextCatalogEntry(nil), store.entries...), store.listErr
+}
+
+func (store *operatorCodeHTTPTestContextStore) AuthorizeNoAuthIndexIntent(context.Context, string, string, string, bool) (gormdb.BrowserCodeIndexIntentBinding, error) {
+	return store.noViewBinding, store.initialTargetErr
+}
+
 func (store *operatorCodeHTTPTestContextStore) Pin(_ context.Context, pin gormdb.BrowserCodeContextPin) error {
 	if store.pinErr != nil {
 		return store.pinErr

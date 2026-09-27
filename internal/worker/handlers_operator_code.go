@@ -51,17 +51,18 @@ const (
 // this adapter only after the normal authentication middleware has installed a
 // real browser-session identity.
 type OperatorCodeHTTPAdapter struct {
-	grants       operatorCodeGrantReader
-	onboarding   operatorCodeGrantOnboardingApplication
-	bindings     operatorCodeBindingApplication
-	authority    operatorCodeContextAuthorizer
-	app          operatorCodeApplication
-	contexts     operatorCodeContextStore
-	indexTargets operatorCodeIndexTargetResolver
-	graphSources operatorCodeGraphSourceReader
-	recorder     operatorCodeExposureRecorder
-	now          func() time.Time
-	choiceCipher cipher.AEAD
+	grants         operatorCodeGrantReader
+	onboarding     operatorCodeGrantOnboardingApplication
+	bindings       operatorCodeBindingApplication
+	noAuthBindings *noAuthCodeBindings
+	authority      operatorCodeContextAuthorizer
+	app            operatorCodeApplication
+	contexts       operatorCodeContextStore
+	indexTargets   operatorCodeIndexTargetResolver
+	graphSources   operatorCodeGraphSourceReader
+	recorder       operatorCodeExposureRecorder
+	now            func() time.Time
+	choiceCipher   cipher.AEAD
 }
 
 // operatorCodeGrantReader retains the already-typed T012 grant checks. The
@@ -114,6 +115,8 @@ type operatorCodeApplication interface {
 // rechecked atomically: catalog choices, exact pins, and opaque search cursors.
 type operatorCodeContextStore interface {
 	ListCatalog(context.Context, int64) ([]gormdb.BrowserCodeContextCatalogEntry, error)
+	ListNoAuthCatalog(context.Context) ([]gormdb.BrowserCodeContextCatalogEntry, error)
+	AuthorizeNoAuthIndexIntent(context.Context, string, string, string, bool) (gormdb.BrowserCodeIndexIntentBinding, error)
 	Pin(context.Context, gormdb.BrowserCodeContextPin) error
 	AuthorizeInitialIndexIntent(context.Context, gormdb.BrowserCodeIndexIntentTarget) (gormdb.BrowserCodeIndexIntentBinding, error)
 	ReauthorizeIndexIntent(context.Context, gormdb.BrowserCodeIndexIntentTarget) (gormdb.BrowserCodeIndexIntentBinding, error)
@@ -166,6 +169,7 @@ type operatorCodeVerifiedCaller struct {
 	SessionID string
 	BindingID string
 	Context   uci.ContextRef
+	NoAuth    bool
 }
 
 // NewOperatorCodeHTTPAdapter creates the route-independent HTTP adapter. A
@@ -179,12 +183,8 @@ func NewOperatorCodeHTTPAdapter(
 	recorder operatorCodeExposureRecorder,
 ) *OperatorCodeHTTPAdapter {
 	return &OperatorCodeHTTPAdapter{
-		grants:    grants,
-		bindings:  bindings,
-		authority: authority,
-		app:       app,
-		recorder:  recorder,
-		now:       func() time.Time { return time.Now().UTC() },
+		grants: grants, bindings: bindings, noAuthBindings: newNoAuthCodeBindings(), authority: authority,
+		app: app, recorder: recorder, now: func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -217,7 +217,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleHandshake(w http.ResponseWriter, r
 		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 		return
 	}
-	transition, err := adapter.bindings.Handshake(r.Context(), identity.identity, identity.sessionID, request.input())
+	transition, err := adapter.bindingFor(identity.identity).Handshake(r.Context(), identity.identity, identity.sessionID, request.input())
 	if err != nil {
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
@@ -241,7 +241,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleResume(w http.ResponseWriter, r *h
 		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 		return
 	}
-	transition, err := adapter.bindings.Resume(r.Context(), identity.identity, identity.sessionID, request.input())
+	transition, err := adapter.bindingFor(identity.identity).Resume(r.Context(), identity.identity, identity.sessionID, request.input())
 	if err != nil {
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
@@ -265,7 +265,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleRenew(w http.ResponseWriter, r *ht
 		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 		return
 	}
-	if err := adapter.bindings.Renew(r.Context(), identity.identity, identity.sessionID, proof); err != nil {
+	if err := adapter.bindingFor(identity.identity).Renew(r.Context(), identity.identity, identity.sessionID, proof); err != nil {
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
 	}
@@ -288,7 +288,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleClose(w http.ResponseWriter, r *ht
 		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 		return
 	}
-	if err := adapter.bindings.Close(r.Context(), identity.identity, identity.sessionID, proof); err != nil {
+	if err := adapter.bindingFor(identity.identity).Close(r.Context(), identity.identity, identity.sessionID, proof); err != nil {
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
 	}
@@ -311,6 +311,22 @@ func (adapter *OperatorCodeHTTPAdapter) HandlePin(w http.ResponseWriter, r *http
 	ref, ok := adapter.operatorCodeContextSelection(identity, request.SelectionRef)
 	if !ok {
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return
+	}
+	if identity.identity.Source == auth.SourceAuthDisabled {
+		if adapter.noAuthBindings == nil || adapter.contexts == nil {
+			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+			return
+		}
+		if err := adapter.authorizeNoAuthRef(r.Context(), identity, proof, ref); err != nil {
+			operatorCodeWriteBodyless(w, http.StatusForbidden)
+			return
+		}
+		if err := adapter.noAuthBindings.Pin(r.Context(), identity.identity, proof, ref); err != nil {
+			operatorCodeWriteBodyless(w, http.StatusForbidden)
+			return
+		}
+		operatorCodeWriteBodyless(w, http.StatusNoContent)
 		return
 	}
 	subject, ok := identity.identity.SessionBrowserSubject()
@@ -763,6 +779,13 @@ func (adapter *OperatorCodeHTTPAdapter) operatorCodeSearchContinuation(ctx conte
 	if continuation == nil {
 		return nil, nil
 	}
+	if binding.AuthRealm == uci.NoAuthCodeRealm {
+		value, err := adapter.noAuthBindings.cursor(*continuation, binding)
+		if err != nil {
+			return nil, err
+		}
+		return &value, nil
+	}
 	value, err := adapter.contexts.LoadContinuation(ctx, *continuation, binding)
 	if err != nil {
 		return nil, err
@@ -774,6 +797,13 @@ func (adapter *OperatorCodeHTTPAdapter) operatorCodeSearchNextContinuation(ctx c
 	nextServiceCursor := ""
 	if response.Continuation != nil && response.Continuation.Value != nil {
 		nextServiceCursor = *response.Continuation.Value
+	}
+	if binding.AuthRealm == uci.NoAuthCodeRealm {
+		previous := ""
+		if continuation != nil {
+			previous = *continuation
+		}
+		return adapter.noAuthBindings.advanceCursor(previous, binding, nextServiceCursor)
 	}
 	if continuation == nil {
 		return adapter.contexts.CreateContinuation(ctx, binding, nextServiceCursor)
@@ -869,6 +899,28 @@ func (adapter *OperatorCodeHTTPAdapter) HandleContexts(w http.ResponseWriter, r 
 	var request operatorCodeProofRequest
 	identity, ok := adapter.decode(w, r, "operator-code-contexts", &request)
 	if !ok {
+		return
+	}
+	if identity.identity.Source == auth.SourceAuthDisabled {
+		if adapter.contexts == nil || adapter.noAuthBindings == nil {
+			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+			return
+		}
+		if _, err := adapter.noAuthBindings.Guard(r.Context(), identity.identity, identity.sessionID, request.Proof()); err != nil {
+			operatorCodeWriteBodyless(w, http.StatusForbidden)
+			return
+		}
+		entries, err := adapter.contexts.ListNoAuthCatalog(r.Context())
+		if err != nil {
+			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+			return
+		}
+		catalog, ok := adapter.operatorCodeCatalogEntries(identity, entries, adapter.indexTargets)
+		if !ok {
+			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, operatorCodeContextsResponse{Contexts: catalog})
 		return
 	}
 	subject, ok := identity.identity.SessionBrowserSubject()
@@ -1210,8 +1262,10 @@ func (adapter *OperatorCodeHTTPAdapter) operatorCodeOpaqueRef(identity operatorC
 	if adapter == nil || adapter.choiceCipher == nil || adapter.now == nil || !operatorCodeText(kind) {
 		return ""
 	}
-	if _, ok := identity.identity.SessionBrowserSubject(); !ok || !operatorCodeText(identity.sessionID) {
-		return ""
+	if identity.identity.Source != auth.SourceAuthDisabled {
+		if _, ok := identity.identity.SessionBrowserSubject(); !ok || !operatorCodeText(identity.sessionID) {
+			return ""
+		}
 	}
 	nonce := make([]byte, adapter.choiceCipher.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
@@ -1223,6 +1277,9 @@ func (adapter *OperatorCodeHTTPAdapter) operatorCodeOpaqueRef(identity operatorC
 }
 
 func operatorCodeChoiceIdentity(identity operatorCodeRequestIdentity) []byte {
+	if identity.identity.Source == auth.SourceAuthDisabled {
+		return []byte(uci.NoAuthCodeRealm + "\x00" + identity.sessionID)
+	}
 	subject, _ := identity.identity.SessionBrowserSubject()
 	return []byte(strconv.FormatInt(subject.UserID, 10) + "\x00" + identity.sessionID)
 }
@@ -1231,8 +1288,10 @@ func (adapter *OperatorCodeHTTPAdapter) operatorCodeOpaqueFields(identity operat
 	if adapter == nil || adapter.choiceCipher == nil || adapter.now == nil || !operatorCodeChooserToken(value) || !operatorCodeText(kind) || count < 1 {
 		return nil, false
 	}
-	if _, ok := identity.identity.SessionBrowserSubject(); !ok || !operatorCodeText(identity.sessionID) {
-		return nil, false
+	if identity.identity.Source != auth.SourceAuthDisabled {
+		if _, ok := identity.identity.SessionBrowserSubject(); !ok || !operatorCodeText(identity.sessionID) {
+			return nil, false
+		}
 	}
 	decoded, err := base64.RawURLEncoding.DecodeString(value)
 	if err != nil || len(decoded) < adapter.choiceCipher.NonceSize()+adapter.choiceCipher.Overhead() {
@@ -1396,7 +1455,7 @@ func operatorCodeSearchText(value string) bool {
 func operatorCodeStructureContinuationBinding(caller operatorCodeAuthorizedRequest, request operatorCodeStructureRequest, filter uci.QueryFilter) gormdb.BrowserCodeContinuationBinding {
 	return gormdb.BrowserCodeContinuationBinding{
 		SubjectUserID: caller.caller.Subject.UserID,
-		AuthRealm:     caller.grant.AuthRealm,
+		AuthRealm:     caller.authRealm,
 		GrantRef:      caller.grant.GrantRef,
 		GrantIssuedAt: caller.grant.IssuedAt,
 		TabBindingID:  caller.caller.BindingID,
@@ -1410,7 +1469,7 @@ func operatorCodeStructureContinuationBinding(caller operatorCodeAuthorizedReque
 func operatorCodeSearchContinuationBinding(caller operatorCodeAuthorizedRequest, request operatorCodeSearchRequest, filter uci.QueryFilter) gormdb.BrowserCodeContinuationBinding {
 	return gormdb.BrowserCodeContinuationBinding{
 		SubjectUserID: caller.caller.Subject.UserID,
-		AuthRealm:     caller.grant.AuthRealm,
+		AuthRealm:     caller.authRealm,
 		GrantRef:      caller.grant.GrantRef,
 		GrantIssuedAt: caller.grant.IssuedAt,
 		TabBindingID:  caller.caller.BindingID,
@@ -1735,6 +1794,14 @@ func (adapter *OperatorCodeHTTPAdapter) decodeIdentity(w http.ResponseWriter, r 
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return operatorCodeRequestIdentity{}, false
 	}
+	if identity.Source == auth.SourceAuthDisabled {
+		requestID := r.Header.Get(operatorCodeRequestIDHeader)
+		if !operatorCodeText(requestID) {
+			operatorCodeWriteBodyless(w, http.StatusBadRequest)
+			return operatorCodeRequestIdentity{}, false
+		}
+		return operatorCodeRequestIdentity{requestID: requestID, identity: identity, sessionID: "local-code-document"}, true
+	}
 	sessionID, found := operatorCodeSessionID(r)
 	if !found {
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
@@ -1873,6 +1940,13 @@ func operatorCodeReadJSON(r *http.Request, target any) ([]byte, error) {
 	return raw, nil
 }
 
+func (adapter *OperatorCodeHTTPAdapter) bindingFor(identity auth.Identity) operatorCodeBindingApplication {
+	if identity.Source == auth.SourceAuthDisabled {
+		return adapter.noAuthBindings
+	}
+	return adapter.bindings
+}
+
 func operatorCodeSessionID(r *http.Request) (string, bool) {
 	if r == nil {
 		return "", false
@@ -1912,6 +1986,9 @@ func operatorCodeDigest(value string) bool {
 }
 
 func (adapter *OperatorCodeHTTPAdapter) authorize(ctx context.Context, identity operatorCodeRequestIdentity, proof BrowserBindingProof) (operatorCodeAuthorizedRequest, uci.ReleaseFailureCode) {
+	if identity.identity.Source == auth.SourceAuthDisabled {
+		return adapter.authorizeNoAuth(ctx, identity, proof)
+	}
 	if adapter == nil || adapter.grants == nil || adapter.bindings == nil || adapter.authority == nil {
 		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailureExposureUnavailable
 	}
@@ -1957,6 +2034,41 @@ func (adapter *OperatorCodeHTTPAdapter) authorize(ctx context.Context, identity 
 	}, uci.ReleaseFailureNone
 }
 
+func (adapter *OperatorCodeHTTPAdapter) authorizeNoAuthRef(ctx context.Context, identity operatorCodeRequestIdentity, proof BrowserBindingProof, ref uci.ContextRef) error {
+	if adapter == nil || adapter.authority == nil || adapter.noAuthBindings == nil {
+		return ErrBrowserBindingDenied
+	}
+	guarded, err := adapter.noAuthBindings.Guard(ctx, identity.identity, identity.sessionID, proof)
+	if err != nil || guarded.TabBindingID != proof.TabBindingID {
+		return ErrBrowserBindingDenied
+	}
+	_, err = adapter.authority.AuthorizeOperatorCode(ctx, operatorCodeVerifiedCaller{SessionID: identity.sessionID, BindingID: proof.TabBindingID, Context: ref, NoAuth: true})
+	return err
+}
+
+func (adapter *OperatorCodeHTTPAdapter) authorizeNoAuth(ctx context.Context, identity operatorCodeRequestIdentity, proof BrowserBindingProof) (operatorCodeAuthorizedRequest, uci.ReleaseFailureCode) {
+	if adapter == nil || adapter.authority == nil || adapter.noAuthBindings == nil {
+		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailureExposureUnavailable
+	}
+	guarded, err := adapter.noAuthBindings.Guard(ctx, identity.identity, identity.sessionID, proof)
+	if err != nil || guarded.Pinned == nil {
+		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailurePermissionDenied
+	}
+	ref, ok := operatorCodeContextRef(*guarded.Pinned)
+	if !ok {
+		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailureContextMismatch
+	}
+	caller := operatorCodeVerifiedCaller{SessionID: identity.sessionID, BindingID: proof.TabBindingID, Context: ref, NoAuth: true}
+	authorized, err := adapter.authority.AuthorizeOperatorCode(ctx, caller)
+	if err != nil {
+		return operatorCodeAuthorizedRequest{}, operatorCodeContextFailure(err)
+	}
+	if !operatorCodeRefsEqual(authorized.Ref(), ref) {
+		return operatorCodeAuthorizedRequest{}, uci.ReleaseFailureContextMismatch
+	}
+	return operatorCodeAuthorizedRequest{operatorCodeRequestIdentity: identity, caller: caller, proof: proof, authorized: authorized, authRealm: uci.NoAuthCodeRealm}, uci.ReleaseFailureNone
+}
+
 type operatorCodeNoViewIndexIntentRequest struct {
 	operatorCodeRequestIdentity
 	caller    operatorCodeVerifiedCaller
@@ -1977,6 +2089,19 @@ func (adapter *OperatorCodeHTTPAdapter) authorizeNoViewIndexIntent(ctx context.C
 	advertised, profileID, failure := adapter.noViewIndexIntentProfile(selection, profileID, initial)
 	if failure != uci.ReleaseFailureNone {
 		return operatorCodeNoViewIndexIntentRequest{}, failure
+	}
+	if identity.identity.Source == auth.SourceAuthDisabled {
+		if adapter.noAuthBindings == nil {
+			return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailureExposureUnavailable
+		}
+		if _, err := adapter.noAuthBindings.Guard(ctx, identity.identity, identity.sessionID, proof); err != nil {
+			return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailurePermissionDenied
+		}
+		binding, err := adapter.contexts.AuthorizeNoAuthIndexIntent(ctx, selection.SourceID, selection.CheckoutID, profileID, initial)
+		if err != nil || binding.Scope.SourceID != selection.SourceID || binding.Scope.CheckoutID != selection.CheckoutID || binding.ProfileID != profileID || binding.AuthRealm != uci.NoAuthCodeRealm || (initial && binding.Scope != advertised.Scope) {
+			return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailurePermissionDenied
+		}
+		return operatorCodeNoViewIndexIntentRequest{operatorCodeRequestIdentity: identity, caller: operatorCodeVerifiedCaller{SessionID: identity.sessionID, BindingID: proof.TabBindingID, NoAuth: true}, proof: proof, scope: binding.Scope, profileID: binding.ProfileID, authRealm: binding.AuthRealm}, uci.ReleaseFailureNone
 	}
 	subject, ok := identity.identity.SessionBrowserSubject()
 	if !ok {
@@ -2253,6 +2378,14 @@ func (adapter *OperatorCodeHTTPAdapter) releaseRequest(
 	response *uci.QueryResponse,
 	matches func(uci.QueryResponse, uci.AuthorizedContext) bool,
 ) uci.ReleaseRequest {
+	if identity.identity.Source == auth.SourceAuthDisabled {
+		return uci.ReleaseRequest{
+			AuthRealm: caller.authRealm,
+			Caller:    uci.ReleaseCaller{MCP: &uci.MCPReleaseCaller{Keycard: uci.NoAuthCodeWorkstation, SessionID: "operator-code/" + caller.caller.BindingID}},
+			RequestID: identity.requestID, RequestBindingDigest: identity.digest,
+			Category: category, Response: response, ResponseMatches: matches, RecordedAt: adapter.currentTime(),
+		}
+	}
 	return uci.ReleaseRequest{
 		AuthRealm:            caller.authRealm,
 		Caller:               uci.ReleaseCaller{Browser: &uci.BrowserReleaseCaller{Subject: caller.caller.Subject, SessionID: identity.sessionID, DocumentBinding: caller.caller.BindingID}},

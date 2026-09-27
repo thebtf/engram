@@ -444,6 +444,21 @@ func TestRegisterProjectIdentityV3MasterRegistersOnce(t *testing.T) {
 	}
 }
 
+func TestRegisterProjectIdentityV3NoAuthFirstUse(t *testing.T) {
+	store := &grpcRegistrationStoreV3{binding: projectidentity.AnchorBindingV3{State: projectidentity.AnchorBindingMissingV3}}
+	client, stop := newRegistrationV3Client(t, nil, grpcRegistrationResolverV3(t, store))
+	defer stop()
+	for range 2 {
+		response, err := client.RegisterProjectIdentityV3(context.Background(), &pb.RegisterProjectIdentityV3Request{ProjectIdentityV3: grpcV3Identity()})
+		if err != nil || response.GetProjectResolutionV3().GetOutcome() != pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED {
+			t.Fatalf("noauth registration response=%#v error=%v", response, err)
+		}
+	}
+	if store.registrationCalls != 2 || store.creates != 1 {
+		t.Fatalf("registration state=%#v", store)
+	}
+}
+
 func TestRegisterProjectIdentityV3RejectsUnauthorizedAdmissions(t *testing.T) {
 	readOnlyToken := "engram_aaaa111100000000000000000000beef"
 	readOnlyValidator := auth.NewValidator("master-secret", &stubReader{rows: map[string][]gormdb.APIToken{
@@ -457,7 +472,6 @@ func TestRegisterProjectIdentityV3RejectsUnauthorizedAdmissions(t *testing.T) {
 	}{
 		{name: "missing bearer", validator: auth.NewValidator("master-secret", &stubReader{}), code: codes.Unauthenticated},
 		{name: "invalid bearer", validator: auth.NewValidator("master-secret", &stubReader{}), token: "wrong-secret", code: codes.Unauthenticated},
-		{name: "auth disabled", validator: nil, code: codes.PermissionDenied},
 		{name: "read-only client", validator: readOnlyValidator, token: readOnlyToken, code: codes.PermissionDenied},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -465,7 +479,8 @@ func TestRegisterProjectIdentityV3RejectsUnauthorizedAdmissions(t *testing.T) {
 			client, stop := newRegistrationV3Client(t, test.validator, grpcRegistrationResolverV3(t, store))
 			defer stop()
 
-			response, err := client.RegisterProjectIdentityV3(bearerOutgoingContext(test.token), &pb.RegisterProjectIdentityV3Request{ProjectIdentityV3: grpcV3Identity()})
+			forged := metadata.AppendToOutgoingContext(bearerOutgoingContext(test.token), "x-engram-auth-disabled", "true")
+			response, err := client.RegisterProjectIdentityV3(forged, &pb.RegisterProjectIdentityV3Request{ProjectIdentityV3: grpcV3Identity()})
 			if response != nil || status.Code(err) != test.code {
 				t.Fatalf("response=%#v status=%v error=%v", response, status.Code(err), err)
 			}

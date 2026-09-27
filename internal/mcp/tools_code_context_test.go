@@ -277,6 +277,18 @@ func TestUCICodebaseContextSelectsRegisteredCheckoutWithoutView(t *testing.T) {
 	require.Equal(t, bootstrap.ProfileID, checkout.ProfileID)
 }
 
+func TestNoAuthCodeContextCallerUsesOnlyTechnicalScope(t *testing.T) {
+	ctx := auth.WithIdentity(ContextWithSession(context.Background(), "noauth-code-session"), auth.AuthDisabled())
+	input, err := codebaseContextCallerInput(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uci.NoAuthCodeRealm, input.AuthRealm)
+	require.Equal(t, uci.NoAuthCodePrincipal, input.Principal)
+	require.Equal(t, uci.NoAuthCodeWorkstation, input.WorkstationID)
+	require.Equal(t, "noauth-code-session", input.ClientSessionID)
+	_, err = codebaseContextCallerInput(auth.WithIdentity(ContextWithSession(context.Background(), "unauthorized"), auth.Admin()))
+	require.Error(t, err)
+}
+
 func uciCodebaseContextClient(sessionID, keycardID, principal string) context.Context {
 	return auth.WithIdentity(
 		ContextWithSession(context.Background(), sessionID),

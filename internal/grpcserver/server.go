@@ -607,6 +607,7 @@ func (verifier grpcV3AuthorizationVerifier) VerifyAuthorizationV3(ctx context.Co
 		return projectidentity.AuthorizationVerificationV3{Authorized: true}, nil
 	case projectidentity.RegisterAnchorIntentV3:
 		if (identity.Source == auth.SourceMaster && identity.Role == auth.RoleAdmin) ||
+			(identity.Source == auth.SourceAuthDisabled && identity.Role == auth.RoleAdmin && !isHAPRelayRegistration(ctx)) ||
 			(isHAPRelayRegistration(ctx) && identity.CanHAPRegisterProjectIdentity()) {
 			return projectidentity.AuthorizationVerificationV3{Authorized: true}, nil
 		}
