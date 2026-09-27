@@ -199,7 +199,7 @@ test("parser policy is tied to the active plugin version and verified sibling by
   const current = loadPolicy(pluginRoot);
   const parser = loadParserTarget(pluginRoot, current.package_version, "win32-x64");
   assert.equal(parser.asset, "uci-parser-windows-amd64.exe");
-  assert.throws(() => loadParserTarget(pluginRoot, "6.50.1", "win32-x64"), /does not match/);
+  assert.throws(() => loadParserTarget(pluginRoot, "0.0.0", "win32-x64"), /does not match/);
   const root = tempRoot();
   const roots = objectRoots(root);
   const client = objectPath(roots, selected().target.desired);
