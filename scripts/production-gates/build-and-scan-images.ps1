@@ -2210,13 +2210,20 @@ try {
             $caught = $_
         }
     }
-    $cleanupInventory.status = if ($cleanupPassed) { 'PASS' } else { 'FAIL' }
-    $cleanupInventory.observed_at = (Get-Date).ToUniversalTime().ToString('o')
-    $cleanupInventory | ConvertTo-Json -Depth 8 |
-        Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $artifactPath 'cleanup/cleanup.json')
-
-    foreach ($name in $environmentNames) {
-        [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
+    try {
+        $cleanupInventory.status = if ($cleanupPassed) { 'PASS' } else { 'FAIL' }
+        $cleanupInventory.observed_at = (Get-Date).ToUniversalTime().ToString('o')
+        $cleanupInventory | ConvertTo-Json -Depth 8 |
+            Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $artifactPath 'cleanup/cleanup.json')
+    } catch {
+        $cleanupPassed = $false
+        $cleanupInventory.status = 'FAIL'
+        $cleanupInventory.receipt_error = $_.Exception.Message
+        if ($null -eq $caught) { $caught = $_ }
+    } finally {
+        foreach ($name in $environmentNames) {
+            [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
+        }
     }
 
     if (-not [string]::IsNullOrWhiteSpace($TrustedOutputRoot)) {

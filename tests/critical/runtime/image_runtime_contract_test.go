@@ -118,6 +118,36 @@ func TestImageGateComposeFixtureEnvironment(t *testing.T) {
 
 // @critical
 // @category: contract
+// @features: [image-remediation, operator-console]
+func TestImageGateCleanupReceiptFailureRestoresEnvironment(t *testing.T) {
+	repo := repositoryRoot(t)
+	script := readFile(t, filepath.Join(repo, "scripts", "production-gates", "build-and-scan-images.ps1"))
+	start := strings.Index(script, "    try {\n        $cleanupInventory.status =")
+	if start < 0 {
+		t.Fatal("image gate cleanup receipt block is missing")
+	}
+	end := strings.Index(script[start:], "    $manifest = [ordered]@{")
+	if end < 0 {
+		t.Fatal("image gate cleanup receipt block is missing")
+	}
+	missingReceiptParent := strings.ReplaceAll(t.TempDir(), "'", "''")
+	probe := "$ErrorActionPreference='Stop'; $cleanupInventory=[ordered]@{containers=@();volumes=@();networks=@()}; " +
+		"$cleanupPassed=$true; $caught=$null; $artifactPath='" + missingReceiptParent + "'; " +
+		"$TrustedOutputRoot=''; $environmentNames=@('OPERATOR_CONSOLE_TRUSTED_PROXY_IP','OPERATOR_CONSOLE_PUBLIC_ORIGIN'); " +
+		"$savedEnvironment=@{OPERATOR_CONSOLE_TRUSTED_PROXY_IP='previous-proxy';OPERATOR_CONSOLE_PUBLIC_ORIGIN='https://previous.example.invalid'}; " +
+		"$env:OPERATOR_CONSOLE_TRUSTED_PROXY_IP='127.0.0.1'; $env:OPERATOR_CONSOLE_PUBLIC_ORIGIN='http://127.0.0.1'; " +
+		"try { " + script[start:start+end] + " } catch {} " +
+		"if ($env:OPERATOR_CONSOLE_TRUSTED_PROXY_IP -cne 'previous-proxy' -or $env:OPERATOR_CONSOLE_PUBLIC_ORIGIN -cne 'https://previous.example.invalid') { throw 'fixture environment leaked after cleanup receipt failure' }; " +
+		"if ($cleanupPassed -or $null -eq $caught) { throw 'cleanup receipt failure did not mark acceptance as failed' }"
+	cmd := exec.Command("pwsh", "-NoProfile", "-Command", probe)
+	cmd.Dir = repo
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("unwritable cleanup receipt must fail closed and restore both fixture variables: %v\n%s", err, output)
+	}
+}
+
+// @critical
+// @category: contract
 // @features: [image-remediation, release-safety]
 func TestDockerReleaseRefFreshnessGuard(t *testing.T) {
 	verifyDockerReleaseRefFreshnessGuard(t, repositoryRoot(t))
