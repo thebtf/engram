@@ -28,7 +28,7 @@ services:
     image: ${FIXTURE_CONSOLE_IMAGE:?}
     environment:
       NUXT_OPERATOR_API_TARGET: http://server:37777
-      NUXT_OPERATOR_PUBLIC_ORIGIN: http://127.0.0.1:${FIXTURE_CONSOLE_PORT:?}
+      NUXT_OPERATOR_PUBLIC_ORIGIN: ${FIXTURE_PUBLIC_ORIGIN:?}
     ports:
       - "127.0.0.1:${FIXTURE_CONSOLE_PORT}:3000"
     depends_on:

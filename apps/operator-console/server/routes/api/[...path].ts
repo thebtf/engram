@@ -15,11 +15,21 @@ export default defineEventHandler((event) => {
   const target = new URL(upstream)
   const requestUrl = getRequestURL(event)
   const publicOrigin = String(config.operatorPublicOrigin || '').trim()
-  const ingress = new URL(publicOrigin || upstream)
+  let ingress = target
   const cleanBase = target.pathname.replace(/\/+$/, '')
   const cleanPath = String(path).replace(/^\/+/, '')
-  if (publicOrigin && cleanPath !== 'ready' && (ingress.origin !== publicOrigin || requestUrl.host.toLowerCase() !== ingress.host.toLowerCase())) {
-    throw createError({ statusCode: 403, statusMessage: 'Unrecognized operator console origin' })
+  if (publicOrigin && cleanPath !== 'ready') {
+    try {
+      ingress = new URL(publicOrigin)
+    } catch {
+      throw createError({ statusCode: 500, statusMessage: 'Invalid NUXT_OPERATOR_PUBLIC_ORIGIN' })
+    }
+    if (!['http:', 'https:'].includes(ingress.protocol) || ingress.origin !== publicOrigin) {
+      throw createError({ statusCode: 500, statusMessage: 'Invalid NUXT_OPERATOR_PUBLIC_ORIGIN' })
+    }
+    if (requestUrl.host.toLowerCase() !== ingress.host.toLowerCase()) {
+      throw createError({ statusCode: 403, statusMessage: 'Unrecognized operator console origin' })
+    }
   }
   const apiBase = /\/api$/i.test(cleanBase) ? cleanBase : `${cleanBase}/api`
 
@@ -30,6 +40,9 @@ export default defineEventHandler((event) => {
     headers: {
       'x-forwarded-host': ingress.host,
       'x-forwarded-proto': ingress.protocol.slice(0, -1),
+      'x-forwarded-for': event.node.req.socket.remoteAddress || '',
+      'x-real-ip': event.node.req.socket.remoteAddress || '',
+      'true-client-ip': event.node.req.socket.remoteAddress || '',
     },
   })
 })

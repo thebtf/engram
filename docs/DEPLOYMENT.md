@@ -174,8 +174,10 @@ must be restricted by organization policy.
   `operator-web` compose instead requires `OPERATOR_WEB_PUBLIC_ORIGIN` and the
   separately hosted server must set `ENGRAM_AUTH_TRUSTED_PROXY` to that
   console's actual peer IP. Without both settings, cross-origin browser logout
-  stays denied. Nitro replaces incoming `X-Forwarded-Host` and
-  `X-Forwarded-Proto` with this configured origin; a mismatched request Host is
+  stays denied. Nitro requires a canonical HTTP(S) public origin for non-health
+  API requests and replaces incoming `X-Forwarded-Host` and `X-Forwarded-Proto`
+  with that origin. It also replaces `X-Forwarded-For`, `X-Real-IP`, and
+  `True-Client-IP` with the observed TCP peer. A mismatched request Host is
   rejected before proxying except for the unauthenticated `/api/ready` probe
   from inside the console container.
 - Every service drops all capabilities and enables `no-new-privileges`;
