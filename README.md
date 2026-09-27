@@ -24,7 +24,8 @@ Since then, the v6 line rebuilt governance on top of that stable core: per-works
 
 | Version | Highlight |
 |---------|-----------|
-| **v6.50.0 candidate** | **Operator Workspace (Feature 011 D-A).** The candidate source adds Home → Workspace and authorized working-copy investigation. Check the [installed-operator guide](docs/operating-engram.md) before claiming this UI is installed or accepted. |
+| **[v6.50.1 patch candidate](https://github.com/thebtf/engram/compare/v6.50.0...v6.50.1)** | Restore the public sign-in page and align `/api/auth/me` with protected browser authentication; trust Authentik identity only from the original TCP peer. This is source preparation, not evidence that an auth-enabled deployment is installed. |
+| **v6.50.0** | **Operator Workspace (Feature 011 D-A).** Home → Workspace supports authorized working-copy investigation. Check the [installed-operator guide](docs/operating-engram.md) before claiming this UI is installed or accepted. |
 | **v6.38.0** | **V7 Meta-memory Discovery (ENG-V7-S2)** — content-free `know_about` MCP tool, S2 `CandidateProposer`, and session-start `meta_summary` behind v7 flags. |
 | **v6.37.0** | **V7 State Subsystem (ENG-V7-S1)** — v7 `StateWriter` adapter and bounded native state resume hardening. |
 | **v6.32.0** | **Usefulness / Noise Review Loop (CR-008, MPL-3)** — packet-centric bounded review queue with explicit empty/gated/error/sparse states, separate preview/apply, atomic snapshot+audit-backed suppress/preserve, honest metrics. |
