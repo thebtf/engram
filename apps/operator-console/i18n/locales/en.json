@@ -2311,7 +2311,7 @@
         "ambiguous": "Bootstrap was ambiguous; the new binding starts unselected.",
         "reload-pending": "The prior document lease is still live. Retry after it closes or expires.",
         "denied": "The server denied this browser binding.",
-        "error": "The server could not establish a safe browser binding. If this is already HTTPS, check whether your browser supports crypto.randomUUID.",
+        "error": "The server could not establish a browser binding. Check the connection and browser cryptography support.",
         "secure-origin-required": "This HTTP address cannot establish a safe browser binding. Open the console at a configured HTTPS address for this server and sign in as yourself. Indexing and reading require server-issued Source/Checkout grants; unsafe flags and hand-entered IDs cannot substitute."
       }
     },

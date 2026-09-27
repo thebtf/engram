@@ -737,7 +737,13 @@ function navigationType(): string {
 }
 
 function requestId(): string | null {
-  return typeof globalThis.crypto?.randomUUID === 'function' ? globalThis.crypto.randomUUID() : null
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID()
+  if (typeof globalThis.crypto?.getRandomValues !== 'function') return null
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16))
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
 function loadResumePair(): CodeResumePair | null {
@@ -852,6 +858,7 @@ function clearIndexIntentResume(): void {
 
 export function useOperatorCode() {
   const bootstrapPhase = ref<CodeBootstrapPhase>('idle')
+  const authDisabled = ref(false)
   const bootstrapEvidence = ref<CodeBootstrapEvidence>({ navigationType: 'unknown', openerBefore: false, openerAfter: null, transition: 'idle' })
   const binding = ref<CodeBinding | null>(null)
   const contextCatalog = ref<CodeCatalogEntry[]>([])
@@ -1314,7 +1321,17 @@ export function useOperatorCode() {
     bootstrapPhase.value = 'binding'
     const remount = spaRemount
     spaRemount = null
-    if (!window.isSecureContext) {
+    authDisabled.value = false
+    try {
+      const response = await fetch(operatorApiUrl('/auth/me'), { credentials: 'include', cache: 'no-store' })
+      if (response.ok) {
+        const identity: unknown = await response.json()
+        authDisabled.value = identity !== null && typeof identity === 'object' && !Array.isArray(identity) && Reflect.get(identity, 'auth_disabled') === true
+      }
+    } catch {
+      // Unavailable identity cannot enable HTTP bootstrap.
+    }
+    if (!window.isSecureContext && !authDisabled.value) {
       bootstrapPhase.value = 'secure-origin-required'
       return
     }
@@ -1583,6 +1600,7 @@ export function useOperatorCode() {
   })
 
   return {
+    authDisabled,
     bootstrapPhase,
     bootstrapEvidence,
     contextCatalog,

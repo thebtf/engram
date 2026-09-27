@@ -4,6 +4,7 @@ import { useOperatorCode } from '../composables/useOperatorCode'
 
 const { t } = useI18n()
 const {
+  authDisabled,
   bootstrapPhase,
   bootstrapEvidence,
   contextCatalog,
@@ -57,7 +58,7 @@ onMounted(() => {
       <button class="btn" type="button" :disabled="pending || pinnedContext === null" @click="refreshStatus">{{ t('codeExplorer.refresh') }}</button>
     </header>
 
-    <CodeGrantChooser />
+    <CodeGrantChooser v-if="!authDisabled && bootstrapPhase !== 'binding'" />
 
     <CodeContextPicker
       :phase="bootstrapPhase"

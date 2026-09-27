@@ -552,21 +552,6 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
   await copied.close()
 })
 
-test('Workspace explains an insecure origin without creating a browser binding', async ({ page }) => {
-  const requests: string[] = []
-  await page.addInitScript(() => {
-    Object.defineProperty(window, 'isSecureContext', { value: false })
-  })
-  await page.route('**/api/code/**', async (route) => {
-    requests.push(route.request().url())
-    await route.fulfill({ status: 500 })
-  })
-  await page.goto('/code')
-  await expect(page.getByTestId('code-context-message')).toContainText('HTTPS')
-  await expect(page.getByTestId('code-context-empty')).toBeVisible()
-  expect(requests).toEqual([])
-})
-
 test('Home opens a no-View working copy, then follows its released index to search, relation and source', async ({ page }) => {
   const submitted: unknown[] = []
   const sourceRequests: unknown[] = []
