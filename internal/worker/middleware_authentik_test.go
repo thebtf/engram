@@ -10,10 +10,109 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/uci"
 )
+
+func TestServiceRouterPreservesRealIPAndRateLimit(t *testing.T) {
+	t.Setenv("ENGRAM_AUTH_DISABLED", "false")
+	guard, err := NewTokenAuth("test-token")
+	require.NoError(t, err)
+	svc := &Service{router: chi.NewRouter(), tokenAuth: guard, rateLimiter: NewPerClientRateLimiter(0, 1)}
+	svc.setupMiddleware()
+	svc.router.Get("/peer", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(r.RemoteAddr))
+	})
+
+	request := func(forwardedIP string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/peer", nil)
+		req.RemoteAddr = "198.51.100.2:443"
+		req.Header.Set("X-Real-IP", forwardedIP)
+		req.Header.Set("X-Auth-Token", "test-token")
+		rec := httptest.NewRecorder()
+		svc.router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	first := request("203.0.113.1")
+	require.Equal(t, http.StatusOK, first.Code)
+	require.Equal(t, "203.0.113.1", first.Body.String())
+	limited := request("203.0.113.1")
+	require.Equal(t, http.StatusTooManyRequests, limited.Code)
+	require.Equal(t, "DENY", limited.Header().Get("X-Frame-Options"))
+	otherClient := request("203.0.113.2")
+	require.Equal(t, http.StatusOK, otherClient.Code)
+	require.Equal(t, "203.0.113.2", otherClient.Body.String())
+}
+
+func TestServiceRouterAuthentikTrustsOnlyOriginalPeer(t *testing.T) {
+	t.Setenv("ENGRAM_AUTH_DISABLED", "false")
+	env := openAuthLifecycleEnv(t)
+	email := fmt.Sprintf("zz-authentik-peer-%d@example.com", time.Now().UnixNano())
+	user, err := env.users.CreateUser(email, "hash", gormdb.DashboardRoleOperator)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = env.store.DB.Delete(user).Error })
+	session, err := env.sessions.CreateSession(user.ID, time.Hour, "test-agent", "127.0.0.1")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = env.store.DB.Where("id = ?", session.ID).Delete(&gormdb.AuthSession{}).Error })
+
+	guard, err := NewTokenAuth("test-token")
+	require.NoError(t, err)
+	guard.SetAuthStores(env.users, env.sessions)
+	guard.SetAuthentikConfig(true, false, []string{"192.0.2.1"})
+	svc := &Service{router: chi.NewRouter(), tokenAuth: guard, authHandlers: env.handlers}
+	svc.setupMiddleware()
+	svc.ready.Store(true)
+	svc.setupRoutes()
+
+	for _, headers := range []map[string]string{
+		{"True-Client-IP": "192.0.2.1"},
+		{"X-Real-IP": "192.0.2.1"},
+		{"X-Forwarded-For": "192.0.2.1"},
+		{"True-Client-IP": "192.0.2.1", "X-Real-IP": "192.0.2.1", "X-Forwarded-For": "192.0.2.1"},
+	} {
+		for _, path := range []string{"/api/auth/me", "/api/code/grants/choices"} {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.RemoteAddr = "198.51.100.2:443"
+			req.Header.Set("X-Authentik-Email", email)
+			for key, value := range headers {
+				req.Header.Set(key, value)
+			}
+			rec := httptest.NewRecorder()
+			svc.router.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusUnauthorized, rec.Code, "%s, headers: %v, body: %s", path, headers, rec.Body.String())
+			require.Equal(t, "DENY", rec.Header().Get("X-Frame-Options"))
+		}
+	}
+
+	for _, tc := range []struct {
+		name       string
+		remoteAddr string
+		cookie     bool
+	}{
+		{name: "trusted proxy", remoteAddr: "192.0.2.1:443"},
+		{name: "local password cookie", remoteAddr: "198.51.100.2:443", cookie: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+			req.RemoteAddr = tc.remoteAddr
+			req.Header.Set("X-Authentik-Email", email)
+			req.Header.Set("True-Client-IP", "203.0.113.9")
+			if tc.cookie {
+				req.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: session.ID})
+			}
+			rec := httptest.NewRecorder()
+			svc.router.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+			require.Equal(t, true, body["authenticated"])
+			require.Equal(t, map[string]any{"id": float64(user.ID), "email": email, "role": gormdb.DashboardRoleOperator}, body["user"])
+		})
+	}
+}
 
 func TestAuthMeUsesProtectedRouteIdentity(t *testing.T) {
 	t.Setenv("ENGRAM_AUTH_DISABLED", "false")
@@ -31,7 +130,16 @@ func TestAuthMeUsesProtectedRouteIdentity(t *testing.T) {
 	guard.SetAuthStores(env.users, env.sessions)
 	guard.SetAuthentikConfig(true, false, []string{"192.0.2.1"})
 	svc := &Service{tokenAuth: guard, authHandlers: env.handlers}
-	handler := guard.Middleware(http.HandlerFunc(svc.handleAuthMe))
+	handler := captureOriginalPeer(guard.Middleware(http.HandlerFunc(svc.handleAuthMe)))
+
+	t.Run("direct middleware without captured peer fails closed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+		req.RemoteAddr = "192.0.2.1:443"
+		req.Header.Set("X-Authentik-Email", email)
+		rec := httptest.NewRecorder()
+		guard.Middleware(http.HandlerFunc(svc.handleAuthMe)).ServeHTTP(rec, req)
+		require.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
+	})
 
 	for _, tc := range []struct {
 		name       string
@@ -128,10 +236,10 @@ func TestTokenAuth_AuthentikProvisioningRequiresInitialAdminSetup(t *testing.T) 
 	tokenAuth.SetAuthentikConfig(true, true, []string{"192.0.2.1"})
 
 	var role string
-	handler := tokenAuth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := captureOriginalPeer(tokenAuth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		role = getAuthRole(r)
 		w.WriteHeader(http.StatusNoContent)
-	}))
+	})))
 	request := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, "/api/memory", nil)
 		req.RemoteAddr = "192.0.2.1:443"
@@ -182,7 +290,7 @@ func TestTokenAuth_AuthentikCodeExplorerUsesTrustedBrowserSession(t *testing.T) 
 	require.NoError(t, err)
 	tokenAuth.SetAuthStores(gormdb.NewUserStore(store.DB), gormdb.NewAuthSessionStore(store.DB))
 	tokenAuth.SetAuthentikConfig(true, false, []string{"192.0.2.1"})
-	handler := tokenAuth.Middleware(http.HandlerFunc(adapter.HandleSearch))
+	handler := captureOriginalPeer(tokenAuth.Middleware(http.HandlerFunc(adapter.HandleSearch)))
 	body := `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","query":"Fixture"}`
 
 	trusted := httptest.NewRequest(http.MethodPost, "/api/code/search", bytes.NewBufferString(body))

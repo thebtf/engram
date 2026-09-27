@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
@@ -33,6 +34,15 @@ type requestIDKey struct{}
 // HTTP authentication. It is never read from a request header or cookie by a
 // guarded handler.
 type authenticatedBrowserSessionKey struct{}
+
+// originalPeerKey holds the transport peer before RealIP rewrites RemoteAddr.
+type originalPeerKey struct{}
+
+func captureOriginalPeer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), originalPeerKey{}, r.RemoteAddr)))
+	})
+}
 
 // emptyTokenStore satisfies auth.TokenStoreReader with an always-empty
 // candidate set. Used as the bootstrap reader for the validator until
@@ -327,13 +337,17 @@ func (ta *TokenAuth) SetAuthentikConfig(enabled, autoProvision bool, trustedProx
 	ta.authentikTrustedProxies = trustedProxies
 }
 
-// isTrustedProxy checks whether the request originated from a trusted proxy IP.
-// Returns false if no trusted proxies are configured (deny-by-default).
+// isTrustedProxy checks only the transport peer captured before RealIP.
+// Missing or malformed peer information never authorizes forward-auth headers.
 func isTrustedProxy(r *http.Request, trustedProxies []string) bool {
-	if len(trustedProxies) == 0 {
-		return false // No trusted proxies = don't trust any
+	peer, ok := r.Context().Value(originalPeerKey{}).(string)
+	if !ok || len(trustedProxies) == 0 {
+		return false
 	}
-	remoteIP := strings.Split(r.RemoteAddr, ":")[0]
+	remoteIP, _, err := net.SplitHostPort(peer)
+	if err != nil || net.ParseIP(remoteIP) == nil {
+		return false
+	}
 	for _, trusted := range trustedProxies {
 		if remoteIP == trusted {
 			return true

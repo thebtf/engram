@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Keep the public sign-in shell usable while `/api/auth/me` shares protected routes' bearer, cookie, and trusted Authentik authentication; untrusted proxy headers remain denied.
+- Bind Authentik forward-auth headers to the original TCP peer before forwarded-IP processing; forged proxy IP headers can no longer impersonate browser users.
 
 ## [6.50.0] - 2026-09-26
 

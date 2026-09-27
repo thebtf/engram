@@ -1686,13 +1686,14 @@ func (a *mcpHandlerAdapter) RecordUCICompletion(ctx context.Context, callback uc
 //  2. requestActivity — record last-request timestamp for the sleep-cycle idle gate
 //  3. debugRequestLogger — structured log line per request
 //  4. Recoverer     — catch panics from all downstream handlers
-//  5. RealIP        — unwrap X-Forwarded-For before rate-limit keying
-//  6. SecurityHeaders — X-Frame-Options, HSTS, CSP
-//  7. MaxBodySize   — 10 MB cap prevents DoS via oversized payloads
-//  8. RequireJSONContentType — enforce Content-Type on mutating requests
-//  9. Compress(5)   — gzip responses; level 5 balances latency vs ratio
-//  10. Rate limiter  — per-client token bucket (after RealIP for accurate keying)
-//  11. TokenAuth     — bearer-token or session-cookie validation
+//  5. Original peer — preserve the TCP peer for trusted-proxy authentication
+//  6. RealIP        — unwrap forwarded IP for presentation and rate-limit keying
+//  7. SecurityHeaders — X-Frame-Options, HSTS, CSP
+//  8. MaxBodySize   — 10 MB cap prevents DoS via oversized payloads
+//  9. RequireJSONContentType — enforce Content-Type on mutating requests
+//  10. Compress(5)   — gzip responses; level 5 balances latency vs ratio
+//  11. Rate limiter  — per-client token bucket (after RealIP for accurate keying)
+//  12. TokenAuth     — bearer-token or session-cookie validation
 //
 // Timeout middleware is not applied globally because SSE connections need
 // an unbounded write lifetime. Routes that require timeouts apply them individually.
@@ -1701,6 +1702,7 @@ func (s *Service) setupMiddleware() {
 	s.router.Use(s.requestActivityMiddleware)
 	s.router.Use(debugRequestLogger)
 	s.router.Use(middleware.Recoverer)
+	s.router.Use(captureOriginalPeer)
 	s.router.Use(middleware.RealIP)
 	s.router.Use(SecurityHeaders)
 	s.router.Use(MaxBodySize(10 * 1024 * 1024))
