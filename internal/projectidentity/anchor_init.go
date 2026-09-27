@@ -53,22 +53,28 @@ func InitRepositoryAnchorV3(root, name string) (anchor AnchorV3, created, tracke
 	if err != nil {
 		return AnchorV3{}, false, false, fmt.Errorf("create %s exclusively: %w", path, err)
 	}
-	createdInfo, statErr := file.Stat()
-	if statErr != nil {
-		file.Close()
-		return AnchorV3{}, false, false, fmt.Errorf("inspect created %s: %w", path, statErr)
-	}
+	var createdInfo os.FileInfo
 	defer func() {
 		if err == nil {
 			return
 		}
+		if createdInfo == nil {
+			createdInfo, _ = file.Stat()
+		}
 		file.Close()
+		if createdInfo == nil {
+			return
+		}
 		if currentInfo, statErr := os.Lstat(path); statErr == nil && os.SameFile(createdInfo, currentInfo) {
 			if removeErr := os.Remove(path); removeErr != nil {
 				err = errors.Join(err, fmt.Errorf("remove incomplete %s: %w", path, removeErr))
 			}
 		}
 	}()
+	createdInfo, statErr = file.Stat()
+	if statErr != nil {
+		return AnchorV3{}, false, false, fmt.Errorf("inspect created %s: %w", path, statErr)
+	}
 	content := append(raw, '\n')
 	if n, writeErr := file.Write(content); writeErr != nil {
 		return AnchorV3{}, false, false, fmt.Errorf("write %s: %w", path, writeErr)
