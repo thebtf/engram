@@ -244,6 +244,7 @@ func NewTokenAuth(token string) (*TokenAuth, error) {
 		statsCh:   make(chan string, 256),
 		ExemptPaths: map[string]bool{
 			"/":                      true, // SPA index.html (dashboard handles auth client-side)
+			"/login":                 true, // Public Nuxt sign-in screen; protected pages and APIs still require auth.
 			"/health":                true,
 			"/api/health":            true,
 			"/api/ready":             true,
@@ -378,8 +379,12 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Also exempt static assets, branding assets, and docs.
-		if strings.HasPrefix(r.URL.Path, "/assets/") ||
+		// These files are shared by the public sign-in shell and authenticated pages.
+		// Public asset bytes contain no session data; route handlers still constrain methods.
+		if strings.HasPrefix(r.URL.Path, "/_nuxt/") ||
+			strings.HasPrefix(r.URL.Path, "/_fonts/") ||
+			strings.HasPrefix(r.URL.Path, "/i18n/") ||
+			strings.HasPrefix(r.URL.Path, "/assets/") ||
 			strings.HasPrefix(r.URL.Path, "/branding/") ||
 			r.URL.Path == "/favicon.svg" ||
 			strings.HasPrefix(r.URL.Path, "/api/docs") {

@@ -11,7 +11,58 @@ import (
 	"testing/fstest"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/stretchr/testify/require"
 )
+
+func TestAuthEnabledPublicLoginShellAndAssetsKeepProtectedRoutesClosed(t *testing.T) {
+	t.Setenv("ENGRAM_AUTH_DISABLED", "false")
+	restoreStaticFS := replaceStaticFSForTest(t, fstest.MapFS{
+		"index.html":            &fstest.MapFile{Data: []byte(`<!doctype html><script type="module" src="/_nuxt/entry.js"></script><link rel="stylesheet" href="/_nuxt/entry.css">`)},
+		"_nuxt/entry.js":        &fstest.MapFile{Data: []byte("export default 'login'")},
+		"_nuxt/entry.css":       &fstest.MapFile{Data: []byte("body { color: black }")},
+		"_fonts/entry.woff2":    &fstest.MapFile{Data: []byte("font")},
+		"i18n/en.json":          &fstest.MapFile{Data: []byte(`{"login":"Sign in"}`)},
+		"assets/login-icon.svg": &fstest.MapFile{Data: []byte("<svg/>")},
+	})
+	defer restoreStaticFS()
+	guard, err := NewTokenAuth("test-admin-key")
+	require.NoError(t, err)
+	svc := &Service{router: chi.NewRouter(), tokenAuth: guard}
+	svc.setupMiddleware()
+	svc.setupRoutes()
+
+	for _, tc := range []struct {
+		path, body string
+	}{
+		{"/", "_nuxt/entry.js"},
+		{"/login", "_nuxt/entry.js"},
+		{"/_nuxt/entry.js", "export default 'login'"},
+		{"/_nuxt/entry.css", "body { color: black }"},
+		{"/_fonts/entry.woff2", "font"},
+		{"/i18n/en.json", "Sign in"},
+		{"/assets/login-icon.svg", "<svg/>"},
+	} {
+		rec := httptest.NewRecorder()
+		svc.router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
+		require.Equal(t, http.StatusOK, rec.Code, tc.path+": "+rec.Body.String())
+		require.Contains(t, rec.Body.String(), tc.body, tc.path)
+	}
+	login := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/user-login", strings.NewReader(`{"email":"user@example.test","password":"invalid"}`))
+	request.Header.Set("Content-Type", "application/json")
+	svc.router.ServeHTTP(login, request)
+	require.NotEqual(t, http.StatusUnauthorized, login.Code, "public login request must reach its handler")
+
+	for _, path := range []string{"/code", "/memory", "/admin", "/api/code/grants/choices", "/api/memories", "/api/admin/users", "/api/flags", "/api/auth/user-logout", "/api/login"} {
+		rec := httptest.NewRecorder()
+		svc.router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		require.Equal(t, http.StatusUnauthorized, rec.Code, path+": "+rec.Body.String())
+		require.NotContains(t, rec.Body.String(), "_nuxt/entry.js", path)
+	}
+	rec := httptest.NewRecorder()
+	svc.router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/_nuxt/../api/flags", nil))
+	require.NotEqual(t, http.StatusOK, rec.Code, "asset traversal cannot serve API or shell")
+}
 
 func TestHealthNegotiatesBrowserShellWithoutChangingJSONProbes(t *testing.T) {
 	restoreStaticFS := replaceStaticFSForTest(t, fstest.MapFS{
