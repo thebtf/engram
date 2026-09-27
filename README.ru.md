@@ -33,7 +33,7 @@ Engram решает эту проблему, оставляя только те 
 
 | Версия | Основное изменение |
 |--------|-------------------|
-| **Кандидат v6.50.0** | **Operator Workspace (Feature 011 D-A)** — путь Home → Workspace для настроенного однопользовательского HTTP LAN с отключённой авторизацией. Проверки исходников не подтверждают установку; см. [руководство оператора](docs/operating-engram.md). |
+| **Кандидат v6.50.1** | **Operator Workspace (Feature 011 D-A)** — путь Home → Workspace для настроенного однопользовательского HTTP LAN с отключённой авторизацией. Проверки исходников не подтверждают установку; см. [руководство оператора](docs/operating-engram.md). |
 | **v6.38.0** | **V7 Meta-memory Discovery (ENG-V7-S2)** — content-free MCP-инструмент `know_about`, S2 `CandidateProposer` и session-start `meta_summary` за v7-флагами. |
 | **v6.37.0** | **V7 State Subsystem (ENG-V7-S1)** — v7-адаптер `StateWriter` и усиленная проверка bounded native state resume. |
 | **v6.32.0** | **Usefulness / Noise Review Loop (CR-008, MPL-3)** — packet-centric bounded review queue с явными empty/gated/error/sparse состояниями, раздельные preview/apply, атомарный snapshot+audit-backed suppress/preserve, честные метрики. |

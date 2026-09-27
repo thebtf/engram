@@ -20,7 +20,7 @@ Since then, the v6 line rebuilt governance on top of that stable core: per-works
 
 | Version | Highlight |
 |---------|-----------|
-| **v6.50.0 candidate** | **Operator Workspace (Feature 011 D-A).** Current candidate source supports Home → Workspace on the configured single-user no-auth HTTP LAN origin. Follow the [operator guide](docs/operating-engram.md); source checks are not installed acceptance. |
+| **v6.50.1 candidate** | **Operator Workspace (Feature 011 D-A).** Current candidate source supports Home → Workspace on the configured single-user no-auth HTTP LAN origin. Follow the [operator guide](docs/operating-engram.md); source checks are not installed acceptance. |
 | **v6.38.0** | **V7 Meta-memory Discovery (ENG-V7-S2)** — content-free `know_about` MCP tool, S2 `CandidateProposer`, and session-start `meta_summary` behind v7 flags. |
 | **v6.37.0** | **V7 State Subsystem (ENG-V7-S1)** — v7 `StateWriter` adapter and bounded native state resume hardening. |
 | **v6.32.0** | **Usefulness / Noise Review Loop (CR-008, MPL-3)** — packet-centric bounded review queue with explicit empty/gated/error/sparse states, separate preview/apply, atomic snapshot+audit-backed suppress/preserve, honest metrics. |
