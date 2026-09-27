@@ -21,6 +21,22 @@ test('local operator signs out of Workspace and returns to the localized login',
     expect(fixture.browserCredential.email).toBeTruthy()
     expect(fixture.browserCredential.password).toBeTruthy()
 
+    const identityHeaders = {
+      'X-Authentik-Email': fixture.browserCredential.email,
+      'x-aUtHeNtIk-NaMe': 'Forged Admin',
+      'X-Authentik-Groups': 'admins',
+      'X-Forwarded-For': '198.51.100.2',
+      'X-Real-IP': '198.51.100.2',
+      'True-Client-IP': '198.51.100.2',
+    }
+    expect((await page.request.get(`${fixture.backend.baseUrl}/api/auth/me`, { headers: identityHeaders })).status()).toBe(401)
+    expect((await page.request.get(`${base}/api/auth/me`, { headers: identityHeaders })).status()).toBe(401)
+    expect((await page.request.get(`${base}/api/code/grants/choices`, { headers: identityHeaders })).status()).toBe(401)
+    const unregisteredEmail = `forged-${Date.now()}@fixture.invalid`
+    expect((await page.request.get(`${base}/api/auth/me`, {
+      headers: { ...identityHeaders, 'X-Authentik-Email': unregisteredEmail },
+    })).status()).toBe(401)
+
     await page.goto(`${base}/login`)
     await expect(page.getByRole('heading', { name: 'Вход в консоль' })).toBeVisible()
     await page.getByLabel('Электронная почта').fill(fixture.browserCredential.email)

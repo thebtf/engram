@@ -36,6 +36,11 @@ export default defineEventHandler((event) => {
   target.pathname = cleanPath ? `${apiBase}/${cleanPath}` : apiBase || '/api'
   target.search = requestUrl.search
 
+  // h3 merges proxyRequest's headers with incoming headers; undefined does not remove an incoming value.
+  for (const name of Object.keys(event.node.req.headers)) {
+    if (name.toLowerCase().startsWith('x-authentik-')) delete event.node.req.headers[name]
+  }
+
   return proxyRequest(event, target.toString(), {
     headers: {
       'x-forwarded-host': ingress.host,

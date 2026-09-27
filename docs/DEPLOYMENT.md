@@ -180,6 +180,14 @@ must be restricted by organization policy.
   `True-Client-IP` with the observed TCP peer. A mismatched request Host is
   rejected before proxying except for the unauthenticated `/api/ready` probe
   from inside the console container.
+  Both the operator console and `operator-web` strip every client-provided
+  `X-Authentik-*` header before forwarding to the backend, even when that
+  frontend is a trusted transport peer. A standalone deployment requiring
+  Authentik identity needs a separately authenticated and verified ingress
+  contract that supplies the identity to the backend; neither frontend
+  provides one. Use local browser login unless such an ingress is established.
+  Cookies, `Origin`, and the console's canonical forwarding headers above
+  remain available for local login/logout.
 - Every service drops all capabilities and enables `no-new-privileges`;
   bounded tmpfs mounts cover runtime-only writable paths.
 
