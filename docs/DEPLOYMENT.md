@@ -43,7 +43,25 @@ ENGRAM_OPERATOR_IMAGE=ghcr.io/thebtf/engram-operator-console@sha256:<operator-ma
 ENGRAM_POSTGRES_IMAGE=ghcr.io/thebtf/engram-postgres@sha256:<postgres-manifest-digest>
 POSTGRES_PASSWORD=<unique-secret>
 ENGRAM_AUTH_ADMIN_TOKEN=<separate-operator-secret>
+OPERATOR_CONSOLE_PUBLIC_ORIGIN=https://<external-console-host>
+OPERATOR_CONSOLE_TRUSTED_PROXY_IP=<reserved-console-container-peer-IP>
 ```
+
+Use the full browser-facing origin, including a non-default port if present,
+not the backend address or `localhost`. Reserve the console's container IP in
+the deployment network before the first start; an unset value stops Compose
+configuration before any service starts. For an existing Compose deployment,
+inspect the actual console peer address and verify it is the address the server
+sees before pinning it in the dotenv:
+
+```bash
+docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+  "$(docker compose -f deploy/docker-compose.runtime.yml ps -q operator-console)"
+```
+
+Do not use an arbitrary address from a different bridge or a changing container
+IP; the trust setting must continue to match the console's server-visible peer
+after recreation.
 
 The same release is also discoverable through exactly two tags per image:
 
