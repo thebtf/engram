@@ -2,7 +2,7 @@
   "name": "engram-operator-console",
   "private": true,
   "type": "module",
-  "//": "Design-fidelity Nuxt scaffold. Owned by the design track (renders the .od contract with mock data + seams). The developer tunes deps/build and replaces mock composables with live useFetch. See README.md → Ownership.",
+  "//": "Nuxt operator-console runtime. Feature 011 D-A changes product journeys and pages when required by the authoritative root PRODUCT.md and Feature 011 contract; design promotion remains one-way and parity evidence remains separate from product acceptance. See README.md → Ownership.",
   "scripts": {
     "dev": "nuxt dev",
     "build": "node scripts/copy-static-i18n.mjs && nuxt build && node scripts/copy-static-i18n.mjs",

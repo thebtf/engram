@@ -7,63 +7,46 @@ import { MCPStdioClient } from './mcp-stdio'
 import type { MCPStdioTranscript } from './mcp-stdio'
 
 type CatalogEntry = {
-  source: { id: string; label: string }
-  checkout: { id: string; label: string }
-  view: null
+  sourceRef: string
+  checkoutRef: string
+  repository: string
+  workingCopy: string
   indexIntentAvailable: boolean
-  analysisProfileId: string | null
-} | null
+  indexSelectionRef: string | null
+}
 
 type PublishedCatalogEntry = {
-  sourceId: string
-  checkoutId: string
-  viewId: string
-  profileId: string
-} | null
+  sourceRef: string
+  checkoutRef: string
+  selectionRef: string
+}
 
-function catalogEntry(value: unknown): CatalogEntry {
+function catalogEntry(value: unknown): CatalogEntry | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
-  const source = Reflect.get(value, 'source')
-  const checkout = Reflect.get(value, 'checkout')
-  const view = Reflect.get(value, 'view')
+  const sourceRef = Reflect.get(value, 'source_ref')
+  const checkoutRef = Reflect.get(value, 'checkout_ref')
+  const repository = Reflect.get(value, 'repository')
+  const workingCopy = Reflect.get(value, 'working_copy')
+  const snapshot = Reflect.get(value, 'indexed_snapshot')
   const indexIntentAvailable = Reflect.get(value, 'index_intent_available')
-  const profileValue = Reflect.get(value, 'analysis_profile_id')
-  if (
-    source === null || typeof source !== 'object' || Array.isArray(source)
-    || checkout === null || typeof checkout !== 'object' || Array.isArray(checkout)
-    || view !== null || typeof indexIntentAvailable !== 'boolean'
-  ) return null
-  const sourceID = Reflect.get(source, 'id')
-  const sourceLabel = Reflect.get(source, 'label')
-  const checkoutID = Reflect.get(checkout, 'id')
-  const checkoutLabel = Reflect.get(checkout, 'label')
-  const analysisProfileId = profileValue === undefined ? null : typeof profileValue === 'string' && profileValue !== '' ? profileValue : null
-  if (profileValue !== undefined && analysisProfileId === null || indexIntentAvailable !== (analysisProfileId !== null)) return null
-  return typeof sourceID === 'string' && sourceID !== '' && typeof sourceLabel === 'string' && sourceLabel !== '' && typeof checkoutID === 'string' && checkoutID !== '' && typeof checkoutLabel === 'string' && checkoutLabel !== ''
-    ? { source: { id: sourceID, label: sourceLabel }, checkout: { id: checkoutID, label: checkoutLabel }, view, indexIntentAvailable, analysisProfileId }
-    : null
+  const indexSelectionValue = Reflect.get(value, 'index_intent_selection_ref')
+  const indexSelectionRef = indexSelectionValue === undefined || indexSelectionValue === null ? null : indexSelectionValue
+  if (typeof sourceRef !== 'string' || sourceRef === '' || typeof checkoutRef !== 'string' || checkoutRef === '' || typeof repository !== 'string' || repository === '' || typeof workingCopy !== 'string' || snapshot !== undefined && snapshot !== null || typeof indexIntentAvailable !== 'boolean' || indexIntentAvailable !== (typeof indexSelectionRef === 'string' && indexSelectionRef !== '')) return null
+  return { sourceRef, checkoutRef, repository, workingCopy, indexIntentAvailable, indexSelectionRef }
 }
 
-function publishedCatalogEntry(value: unknown): PublishedCatalogEntry {
+function publishedCatalogEntry(value: unknown): PublishedCatalogEntry | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
-  const source = Reflect.get(value, 'source')
-  const checkout = Reflect.get(value, 'checkout')
-  const view = Reflect.get(value, 'view')
-  if (source === null || typeof source !== 'object' || Array.isArray(source) || checkout === null || typeof checkout !== 'object' || Array.isArray(checkout) || view === null || typeof view !== 'object' || Array.isArray(view)) return null
-  const context = Reflect.get(view, 'context_ref')
-  if (context === null || typeof context !== 'object' || Array.isArray(context)) return null
-  const sourceId = Reflect.get(source, 'id')
-  const checkoutId = Reflect.get(checkout, 'id')
-  const viewSourceId = Reflect.get(context, 'source_id')
-  const viewCheckoutId = Reflect.get(context, 'checkout_id')
-  const viewId = Reflect.get(context, 'view_id')
-  const profileId = Reflect.get(context, 'analysis_profile_id')
-  return typeof sourceId === 'string' && sourceId !== '' && typeof checkoutId === 'string' && checkoutId !== '' && viewSourceId === sourceId && viewCheckoutId === checkoutId && typeof viewId === 'string' && viewId !== '' && typeof profileId === 'string' && profileId !== ''
-    ? { sourceId, checkoutId, viewId, profileId }
+  const sourceRef = Reflect.get(value, 'source_ref')
+  const checkoutRef = Reflect.get(value, 'checkout_ref')
+  const selectionRef = Reflect.get(value, 'selection_ref')
+  const snapshot = Reflect.get(value, 'indexed_snapshot')
+  return typeof sourceRef === 'string' && sourceRef !== '' && typeof checkoutRef === 'string' && checkoutRef !== '' && typeof selectionRef === 'string' && selectionRef !== '' && snapshot !== null && typeof snapshot === 'object' && !Array.isArray(snapshot)
+    ? { sourceRef, checkoutRef, selectionRef }
     : null
 }
 
-function parseFirstIndexTarget(value: string | null): { sourceId: string; checkoutId: string } | null {
+function parseFirstIndexTarget(value: string | null): string | null {
   if (value === null || value === '') return null
   let request: unknown
   try {
@@ -73,13 +56,9 @@ function parseFirstIndexTarget(value: string | null): { sourceId: string; checko
   }
   if (request === null || typeof request !== 'object' || Array.isArray(request)) return null
   const target = Reflect.get(request, 'target')
-  if (target === null || typeof target !== 'object' || Array.isArray(target)) return null
-  const keys = Object.keys(target).sort()
-  const sourceId = Reflect.get(target, 'source_id')
-  const checkoutId = Reflect.get(target, 'checkout_id')
-  return keys.join(',') === 'checkout_id,source_id' && typeof sourceId === 'string' && sourceId !== '' && typeof checkoutId === 'string' && checkoutId !== ''
-    ? { sourceId, checkoutId }
-    : null
+  if (target === null || typeof target !== 'object' || Array.isArray(target) || Object.keys(target).join(',') !== 'selection_ref') return null
+  const selectionRef = Reflect.get(target, 'selection_ref')
+  return typeof selectionRef === 'string' && selectionRef !== '' ? selectionRef : null
 }
 
 function parseIntentRef(value: unknown): string | null {
@@ -109,7 +88,7 @@ test('S4 live first-index uses the real C-worktree daemon pump', async ({ browse
   const statusHeaderChecks: boolean[] = []
   const statusCodes: number[] = []
   const transcripts: MCPStdioTranscript[] = []
-  const advertisementChecks: Array<{ available: boolean; profileId: string | null }> = []
+  const advertisementChecks: Array<{ available: boolean; selectionRef: string | null }> = []
   let catalogRefreshes = 0
   let firstIndexSubmitted = false
   let intentRef: string | null = null
@@ -117,6 +96,9 @@ test('S4 live first-index uses the real C-worktree daemon pump', async ({ browse
   let registrationClient: MCPStdioClient | undefined
   let offlineClient: MCPStdioClient | undefined
   let liveClient: MCPStdioClient | undefined
+  let recoveryClient: MCPStdioClient | undefined
+  let recovery: { queuedState: string; intentRef: string; replayState: string; priorDaemonPID: number; successorDaemonPID: number; resultViewRef: string; attempt: number } | undefined
+  let primaryFailure: unknown
 
   page.on('request', (request) => {
     const url = new URL(request.url())
@@ -192,11 +174,16 @@ test('S4 live first-index uses the real C-worktree daemon pump', async ({ browse
     expect(offlineCatalog.status()).toBe(200)
     const offlineBody: unknown = await offlineCatalog.json()
     const offlineEntries = offlineBody !== null && typeof offlineBody === 'object' && !Array.isArray(offlineBody) ? Reflect.get(offlineBody, 'contexts') : null
-    const offlineNoView = Array.isArray(offlineEntries)
-      ? offlineEntries.map(catalogEntry).find((entry) => entry !== null && entry.source.id === fixture.operatorCodeFirstIndex.sourceId && entry.checkout.id === fixture.operatorCodeFirstIndex.checkoutId) ?? null
-      : null
-    expect(offlineNoView).not.toBeNull()
-    expect(offlineNoView?.indexIntentAvailable).toBe(false)
+    const offlineNoViews = Array.isArray(offlineEntries)
+      ? offlineEntries.map(catalogEntry).filter((entry) => entry !== null)
+      : []
+    expect(offlineNoViews).toHaveLength(1)
+    const offlineNoView = offlineNoViews[0]
+    if (offlineNoView === null || offlineNoView === undefined) throw new Error('first-index fixture did not expose the sole no-view checkout')
+    expect(offlineNoView.indexIntentAvailable).toBe(false)
+    expect(offlineNoView.indexSelectionRef).toBeNull()
+    await page.getByTestId('code-context-repository').selectOption(offlineNoView.sourceRef)
+    await page.getByTestId('code-context-working-copy').selectOption(offlineNoView.checkoutRef)
     await expect(page.getByTestId('code-request-first-index')).toHaveCount(0)
     await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'idle')
     expect(traffic).toHaveLength(0)
@@ -219,7 +206,7 @@ test('S4 live first-index uses the real C-worktree daemon pump', async ({ browse
     expect(live.externalPID).toBeGreaterThan(0)
     expect(live.tools).toEqual(expect.arrayContaining(['codebase_context', 'codebase_index', 'codebase_status']))
 
-    let noView: CatalogEntry = null
+    let noView: CatalogEntry | null = null
     let liveCatalogStatus = 0
     const advertisementDeadline = Date.now() + 15_000
     do {
@@ -233,17 +220,19 @@ test('S4 live first-index uses the real C-worktree daemon pump', async ({ browse
       const liveBody: unknown = await liveCatalog.json()
       const liveEntries = liveBody !== null && typeof liveBody === 'object' && !Array.isArray(liveBody) ? Reflect.get(liveBody, 'contexts') : null
       noView = Array.isArray(liveEntries)
-        ? liveEntries.map(catalogEntry).find((entry) => entry !== null && entry.source.id === fixture.operatorCodeFirstIndex.sourceId && entry.checkout.id === fixture.operatorCodeFirstIndex.checkoutId) ?? null
+        ? liveEntries.map(catalogEntry).find((entry) => entry !== null && entry.sourceRef === offlineNoView?.sourceRef && entry.checkoutRef === offlineNoView?.checkoutRef) ?? null
         : null
-      advertisementChecks.push({ available: noView?.indexIntentAvailable ?? false, profileId: noView?.analysisProfileId ?? null })
+      advertisementChecks.push({ available: noView?.indexIntentAvailable ?? false, selectionRef: noView?.indexSelectionRef ?? null })
       if (liveCatalogStatus === 200 && noView?.indexIntentAvailable === true) break
       await page.waitForTimeout(250)
     } while (Date.now() < advertisementDeadline)
     expect(liveCatalogStatus).toBe(200)
-    expect(noView).not.toBeNull()
-    expect(noView?.indexIntentAvailable).toBe(true)
-    expect(noView?.analysisProfileId).toBe(fixture.operatorCodeFirstIndex.analysisProfileId)
+    if (noView === null) throw new Error('live first-index catalog did not expose the registered checkout')
+    expect(noView.indexIntentAvailable).toBe(true)
+    expect(noView.indexSelectionRef).not.toBeNull()
 
+    await page.getByTestId('code-context-repository').selectOption(offlineNoView.sourceRef)
+    await page.getByTestId('code-context-working-copy').selectOption(offlineNoView.checkoutRef)
     const firstIndexAction = page.getByTestId('code-request-first-index')
     await expect(firstIndexAction).toHaveCount(1)
     const submitResponse = page.waitForResponse((response) => {
@@ -253,7 +242,7 @@ test('S4 live first-index uses the real C-worktree daemon pump', async ({ browse
     await firstIndexAction.click()
     const response = await submitResponse
     expect(response.status()).toBe(202)
-    expect(parseFirstIndexTarget(response.request().postData())).toEqual({ sourceId: fixture.operatorCodeFirstIndex.sourceId, checkoutId: fixture.operatorCodeFirstIndex.checkoutId })
+    expect(parseFirstIndexTarget(response.request().postData())).toBe(noView?.indexSelectionRef)
     expect(response.request().postData()).not.toContain('analysis_profile_id')
     intentRef = parseIntentRef(await response.json())
     expect(intentRef).not.toBeNull()
@@ -277,48 +266,120 @@ test('S4 live first-index uses the real C-worktree daemon pump', async ({ browse
     const refreshedBody: unknown = await refreshedCatalog.json()
     const refreshedEntries = refreshedBody !== null && typeof refreshedBody === 'object' && !Array.isArray(refreshedBody) ? Reflect.get(refreshedBody, 'contexts') : null
     const published = Array.isArray(refreshedEntries)
-      ? refreshedEntries.map(publishedCatalogEntry).find((entry) => entry !== null && entry.sourceId === fixture.operatorCodeFirstIndex.sourceId && entry.checkoutId === fixture.operatorCodeFirstIndex.checkoutId) ?? null
+      ? refreshedEntries.map(publishedCatalogEntry).find((entry) => entry !== null && entry.sourceRef === noView?.sourceRef && entry.checkoutRef === noView?.checkoutRef) ?? null
       : null
-    expect(published).not.toBeNull()
-    expect(published?.profileId).toBe(fixture.operatorCodeFirstIndex.analysisProfileId)
-    resultViewId = published?.viewId ?? null
+    if (published === null) throw new Error('completed first-index catalog did not expose a View for the registered checkout')
+    resultViewId = published.selectionRef
     expect(resultViewId).not.toBeNull()
     await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
     expect(catalogRefreshes).toBeGreaterThanOrEqual(3)
 
-    const select = page.getByTestId('code-context-select')
-    const option = select.locator('option').filter({ hasText: `${fixture.fixtureId}-c` })
-    const value = await option.getAttribute('value')
-    if (value === null) throw new Error('first-index fixture did not expose its completed View for manual selection')
-    await select.selectOption(value)
+    await page.getByTestId('code-context-repository').selectOption(published.sourceRef)
+    await page.getByTestId('code-context-working-copy').selectOption(published.checkoutRef)
+    const snapshot = page.getByTestId('code-context-snapshot')
+    const visibleOptions = snapshot.locator('option:not([disabled])')
+    await expect(visibleOptions).toHaveCount(1)
+    const freshSelection = await visibleOptions.getAttribute('value')
+    if (freshSelection === null) throw new Error('published checkout has no visible snapshot choice')
+    await snapshot.selectOption(freshSelection)
     await expect(page.getByTestId('code-context-candidate')).toBeVisible()
     await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
     await page.getByTestId('code-pin-context').click()
     await expect(page.getByTestId('code-context-pinned')).toBeVisible()
+    await expect.poll(async () => {
+      await page.locator('main.code-page > header button').click()
+      const summary = await page.getByTestId('code-status').textContent()
+      const counts = summary?.match(/(\d+)\s*\/\s*(\d+)/)
+      return counts !== null && counts !== undefined && Number(counts[2]) > 50 && counts[1] === counts[2]
+    }, { timeout: 90_000 }).toBe(true)
 
     await page.getByTestId('code-query-input').fill(fixture.operatorCodeFirstIndex.query)
+    const searchResponse = page.waitForResponse((candidate) => candidate.request().method() === 'POST' && new URL(candidate.url()).pathname === '/api/code/search')
     await page.getByTestId('code-search-submit').click()
+    expect((await searchResponse).status()).toBe(200)
     const result = page.getByTestId('code-search-results').getByRole('listitem').filter({
       has: page.getByText(`go:fixture/func:${fixture.operatorCodeFirstIndex.expectedSource}`, { exact: true }),
     })
     await expect(result).toHaveCount(1)
     await result.getByTestId('code-search-source').click()
     await expect(page.getByTestId('code-source-result')).toContainText(fixture.operatorCodeFirstIndex.expectedMarker)
+
+    const priorDaemonPID = liveClient.transcript().daemonPID
+    await liveClient.close()
+    const queuedResponse = page.waitForResponse((candidate) => candidate.request().method() === 'POST' && new URL(candidate.url()).pathname === '/api/code/index-intents')
+    await page.getByTestId('index-intent-reindex').click()
+    const accepted = await queuedResponse
+    expect(accepted.status()).toBe(202)
+    const acceptedBody: unknown = await accepted.json()
+    const queuedState = acceptedBody !== null && typeof acceptedBody === 'object' ? Reflect.get(acceptedBody, 'state') : null
+    const queuedRef = parseIntentRef(acceptedBody)
+    expect(['queued', 'unavailable']).toContain(queuedState)
+    expect(queuedRef).not.toBeNull()
+    if (queuedRef === null) throw new Error('offline accepted intent omitted its durable reference')
+    const originalRequest = accepted.request().postData()
+    if (originalRequest === null) throw new Error('offline intent omitted its browser binding')
+    recoveryClient = await MCPStdioClient.start({
+      clientRoot: fixture.mcp.firstIndex.clientRoot,
+      codeIndex: { parserBundleDigest: fixture.mcp.firstIndex.parserBundleDigest, parserExecutable: fixture.mcp.firstIndex.parserExecutable },
+      executable: fixture.mcp.clientBinary,
+      serverURL: fixture.backend.baseUrl,
+      token: keycard,
+    })
+    await recoveryClient.initializeAndList()
+    await recoveryClient.preparePublishedIndexTarget(fixture.operatorCodeFirstIndex)
+    const successorDaemonPID = recoveryClient.transcript().daemonPID
+    expect(successorDaemonPID).not.toBe(priorDaemonPID)
+    if (queuedState === 'unavailable') await page.getByTestId('index-intent-retry').click()
+    await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'completed', { timeout: 90_000 })
+    const durableStatus = async () => page.evaluate(async ({ ref, requestBody }) => {
+      const proof = JSON.parse(requestBody) as { tab_binding_id: string; document_proof: string }
+      const response = await fetch(`/api/code/index-intents/${encodeURIComponent(ref)}`, {
+        headers: {
+          'X-Engram-Tab-Binding-ID': proof.tab_binding_id,
+          'X-Engram-Document-Proof': proof.document_proof,
+          'X-Engram-Request-ID': crypto.randomUUID(),
+        }
+      })
+      const body = await response.json() as { state: string; attempt: number; result?: { view_ref: string } }
+      return { httpStatus: response.status, state: body.state, attempt: body.attempt, viewRef: body.result?.view_ref ?? '' }
+    }, { ref: queuedRef, requestBody: originalRequest })
+    const beforeReplay = await durableStatus()
+    expect(beforeReplay.httpStatus).toBe(200)
+    expect(beforeReplay.state).toBe('completed')
+    expect(beforeReplay.viewRef).not.toBe('')
+    expect(beforeReplay.attempt).toBe(1)
+    const replay = await page.evaluate(async (body) => {
+      const response = await fetch('/api/code/index-intents', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Engram-Request-ID': crypto.randomUUID() }, body })
+      return { status: response.status, body: await response.json() }
+    }, originalRequest)
+    expect(replay.status).toBe(202)
+    expect(parseIntentRef(replay.body)).toBe(queuedRef)
+    const replayState = replay.body !== null && typeof replay.body === 'object' ? Reflect.get(replay.body, 'state') : null
+    expect(replayState).toBe('submitted')
+    const afterReplay = await durableStatus()
+    expect(afterReplay).toEqual(beforeReplay)
+    recovery = { queuedState, intentRef: queuedRef, replayState, priorDaemonPID, successorDaemonPID, resultViewRef: afterReplay.viewRef, attempt: afterReplay.attempt }
+  } catch (error) {
+    primaryFailure = error
+    throw error
   } finally {
-    await Promise.all([registrationClient?.close(), offlineClient?.close(), liveClient?.close()])
-    for (const client of [registrationClient, offlineClient, liveClient]) {
+    const cleanup = await Promise.allSettled([registrationClient?.close(), offlineClient?.close(), liveClient?.close(), recoveryClient?.close()])
+    for (const client of [registrationClient, offlineClient, liveClient, recoveryClient]) {
       if (client === undefined) continue
       const transcript = client.transcript()
       if (!transcripts.some((candidate) => candidate.externalPID === transcript.externalPID)) transcripts.push(transcript)
     }
-    for (const transcript of transcripts) {
-      expect(transcript.daemonExecutable).toBe(fixture.mcp.clientBinary)
-      expect(transcript.daemonExecutableSha256).toBe(fixture.mcp.clientBinarySha256)
-      expect(transcript.daemonGeneration).not.toBe('')
-      expect(transcript.processTreeStopped).toBe(true)
-      expect(transcript.daemonPID).toBeGreaterThan(0)
-      expect(transcript.externalPID).toBeGreaterThan(0)
-      expect(transcript.stateRootRemoved).toBe(true)
+    if (primaryFailure === undefined) {
+      for (const result of cleanup) if (result.status === 'rejected') throw result.reason
+      for (const transcript of transcripts) {
+        expect(transcript.daemonExecutable).toBe(fixture.mcp.clientBinary)
+        expect(transcript.daemonExecutableSha256).toBe(fixture.mcp.clientBinarySha256)
+        expect(transcript.daemonGeneration).not.toBe('')
+        expect(transcript.processTreeStopped).toBe(true)
+        expect(transcript.daemonPID).toBeGreaterThan(0)
+        expect(transcript.externalPID).toBeGreaterThan(0)
+        expect(transcript.stateRootRemoved).toBe(true)
+      }
     }
     const state = await appendBrowserTraffic(traffic)
     const evidence = JSON.stringify({
@@ -328,6 +389,7 @@ test('S4 live first-index uses the real C-worktree daemon pump', async ({ browse
       browser: { engine: browser.browserType().name(), version: browser.version() },
       browserHTTP: 'real registered Go routes; no page-level API mock or SQL lifecycle fabrication',
       indexIntent: { intentRef, resultViewId, firstIndexSubmitted, catalogRefreshes, noAutoPin: true, advertisementChecks },
+      recovery,
       mcp: transcripts,
       offline: { stoppedOwnedDaemon: true, noCompletionBeforeLiveDaemon: true },
       traffic: state.traffic,

@@ -1790,6 +1790,10 @@ func uciInstalledAcceptanceEnvironment(request uciInstalledAcceptanceRequest, au
 	return serverEnvironment, clientEnvironment, nil
 }
 
+func uciInstalledAcceptanceDaemonControlPaths(controlRoot string) ([]string, error) {
+	return filepath.Glob(muxserverid.DaemonControlPath(controlRoot, "engram-*") + ".marker.json")
+}
+
 func uciStopInstalledAcceptanceDaemon(controlRoot string, verifiedPID int) error {
 	if verifiedPID <= 0 {
 		return nil
@@ -1798,20 +1802,28 @@ func uciStopInstalledAcceptanceDaemon(controlRoot string, verifiedPID int) error
 	if err != nil {
 		return fmt.Errorf("resolve installed acceptance daemon control root: %w", err)
 	}
-	controlPath := muxserverid.DaemonControlPath(physicalRoot, muxcoreNamespace)
-	status, found := readMuxcoreDaemonStatusIdentity(controlPath)
-	if !found || status.PID <= 0 || status.ShuttingDown {
-		return nil
-	}
-	if status.PID != verifiedPID {
-		return errors.New("installed acceptance daemon control does not match the verified daemon PID")
-	}
-	response, err := muxcontrol.SendWithTimeout(controlPath, muxcontrol.Request{Cmd: "shutdown", DrainTimeoutMs: 2_000}, 5*time.Second)
+	markerPaths, err := uciInstalledAcceptanceDaemonControlPaths(physicalRoot)
 	if err != nil {
-		return fmt.Errorf("stop installed acceptance daemon: %w", err)
+		return err
 	}
-	if response == nil || !response.OK {
-		return errors.New("stop installed acceptance daemon was rejected")
+	for _, markerPath := range markerPaths {
+		controlPath := strings.TrimSuffix(markerPath, ".marker.json")
+		status, found := readMuxcoreDaemonStatusIdentity(controlPath)
+		if !found || status.PID != verifiedPID || status.ShuttingDown {
+			continue
+		}
+		marker, err := readMuxcoreDaemonVersionMarker(markerPath)
+		if err != nil || marker.PID != status.PID || marker.DaemonGeneration != status.DaemonGeneration {
+			return errors.New("installed acceptance daemon marker does not match the verified daemon")
+		}
+		response, err := muxcontrol.SendWithTimeout(controlPath, muxcontrol.Request{Cmd: "shutdown", DrainTimeoutMs: 2_000}, 5*time.Second)
+		if err != nil {
+			return fmt.Errorf("stop installed acceptance daemon: %w", err)
+		}
+		if response == nil || !response.OK {
+			return errors.New("stop installed acceptance daemon was rejected")
+		}
+		return nil
 	}
 	return nil
 }
@@ -1868,17 +1880,22 @@ func uciWaitForInstalledAcceptanceDaemonPID(ctx context.Context, controlRoot, in
 	if err != nil {
 		return 0, fmt.Errorf("resolve installed acceptance daemon executable: %w", err)
 	}
-	controlPath := muxserverid.DaemonControlPath(controlRoot, muxcoreNamespace)
-	markerPath := controlPath + ".marker.json"
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		pid, found, err := uciInstalledAcceptanceDaemonPID(controlPath, markerPath, installedExecutable)
+		markerPaths, err := uciInstalledAcceptanceDaemonControlPaths(controlRoot)
 		if err != nil {
 			return 0, err
 		}
-		if found {
-			return pid, nil
+		for _, markerPath := range markerPaths {
+			controlPath := strings.TrimSuffix(markerPath, ".marker.json")
+			pid, found, err := uciInstalledAcceptanceDaemonPID(controlPath, markerPath, installedExecutable)
+			if err != nil {
+				return 0, err
+			}
+			if found {
+				return pid, nil
+			}
 		}
 		select {
 		case <-ctx.Done():

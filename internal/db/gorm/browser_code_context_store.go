@@ -39,6 +39,8 @@ type BrowserCodeContextCatalogEntry struct {
 	CheckoutLabel        string
 	Context              *uci.ContextRef
 	ViewLabel            string
+	SnapshotRevision     *string
+	SnapshotPublishedAt  *time.Time
 	IndexIntentAvailable bool
 }
 
@@ -164,7 +166,7 @@ func (s *BrowserCodeContextStore) ListCatalog(ctx context.Context, subjectUserID
 			source.display_name AS source_label,
 			browser_grant.checkout_id,
 			checkout.kind AS checkout_kind,
-			checkout.kind || ' · ' || checkout.checkout_id::text AS checkout_label,
+			COALESCE(checkout.display_name, '') AS checkout_label,
 			view_row.view_id,
 			view_row.profile_id,
 			view_row.generation,
@@ -173,9 +175,12 @@ func (s *BrowserCodeContextStore) ListCatalog(ctx context.Context, subjectUserID
 				WHEN view_row.ref_label IS NOT NULL THEN view_row.ref_label
 				WHEN view_row.head_oid IS NULL THEN 'unborn'
 				ELSE 'detached'
-			END AS view_label
+			END AS view_label,
+			view_row.head_oid AS snapshot_revision,
+			view_row.published_at AS snapshot_published_at
 		FROM browser_read_grants AS browser_grant
 		JOIN users AS subject ON subject.id = browser_grant.subject_user_id
+		JOIN users AS issuer ON browser_grant.issuer_principal = ('browser-user/' || issuer.id::text) AND issuer.disabled = FALSE
 		JOIN sources AS source
 			ON source.source_id = browser_grant.source_id
 			AND source.auth_realm = browser_grant.auth_realm
@@ -191,6 +196,7 @@ func (s *BrowserCodeContextStore) ListCatalog(ctx context.Context, subjectUserID
 			AND browser_grant.state = ?
 			AND (browser_grant.expires_at IS NULL OR browser_grant.expires_at > ?)
 			AND subject.disabled = FALSE
+			AND checkout.owner_principal = browser_grant.issuer_principal
 			AND source.state = ?
 			AND checkout.state IN (?, ?, ?)
 		ORDER BY browser_grant.source_id ASC, browser_grant.checkout_id ASC, view_row.generation DESC NULLS LAST, view_row.view_id ASC
@@ -421,19 +427,21 @@ func (s *BrowserCodeContextStore) AdvanceContinuation(ctx context.Context, curso
 }
 
 type browserCodeContextCatalogRow struct {
-	SourceID      string  `gorm:"column:source_id"`
-	SourceLabel   string  `gorm:"column:source_label"`
-	CheckoutID    string  `gorm:"column:checkout_id"`
-	CheckoutKind  string  `gorm:"column:checkout_kind"`
-	CheckoutLabel string  `gorm:"column:checkout_label"`
-	ViewID        *string `gorm:"column:view_id"`
-	ProfileID     *string `gorm:"column:profile_id"`
-	Generation    *int64  `gorm:"column:generation"`
-	ViewLabel     *string `gorm:"column:view_label"`
+	SourceID            string     `gorm:"column:source_id"`
+	SourceLabel         string     `gorm:"column:source_label"`
+	CheckoutID          string     `gorm:"column:checkout_id"`
+	CheckoutKind        string     `gorm:"column:checkout_kind"`
+	CheckoutLabel       string     `gorm:"column:checkout_label"`
+	ViewID              *string    `gorm:"column:view_id"`
+	ProfileID           *string    `gorm:"column:profile_id"`
+	Generation          *int64     `gorm:"column:generation"`
+	ViewLabel           *string    `gorm:"column:view_label"`
+	SnapshotRevision    *string    `gorm:"column:snapshot_revision"`
+	SnapshotPublishedAt *time.Time `gorm:"column:snapshot_published_at"`
 }
 
 func (row browserCodeContextCatalogRow) catalogEntry() (BrowserCodeContextCatalogEntry, error) {
-	if validateUCIUUID("source_id", row.SourceID) != nil || validateUCIUUID("checkout_id", row.CheckoutID) != nil || !validUCIContextDisplayLabel(row.SourceLabel) || !isUCICheckoutKind(UCICheckoutKind(row.CheckoutKind)) || !validUCIContextDisplayLabel(row.CheckoutLabel) {
+	if validateUCIUUID("source_id", row.SourceID) != nil || validateUCIUUID("checkout_id", row.CheckoutID) != nil || !validUCIContextDisplayLabel(row.SourceLabel) || !isUCICheckoutKind(UCICheckoutKind(row.CheckoutKind)) || !validBrowserCodeCheckoutDisplayLabel(row.CheckoutLabel) {
 		return BrowserCodeContextCatalogEntry{}, ErrBrowserCodeContextDenied
 	}
 	entry := BrowserCodeContextCatalogEntry{
@@ -443,10 +451,10 @@ func (row browserCodeContextCatalogRow) catalogEntry() (BrowserCodeContextCatalo
 		CheckoutLabel:        row.CheckoutLabel,
 		IndexIntentAvailable: row.ViewID == nil,
 	}
-	if row.ViewID == nil && row.ProfileID == nil && row.Generation == nil && row.ViewLabel == nil {
+	if row.ViewID == nil && row.ProfileID == nil && row.Generation == nil && row.ViewLabel == nil && row.SnapshotRevision == nil && row.SnapshotPublishedAt == nil {
 		return entry, nil
 	}
-	if row.ViewID == nil || row.ProfileID == nil || row.Generation == nil || row.ViewLabel == nil || validateUCIUUID("view_id", *row.ViewID) != nil || validateUCIUUID("profile_id", *row.ProfileID) != nil || *row.Generation < 1 || !validUCIContextDisplayLabel(*row.ViewLabel) {
+	if row.ViewID == nil || row.ProfileID == nil || row.Generation == nil || row.ViewLabel == nil || row.SnapshotPublishedAt == nil || validateUCIUUID("view_id", *row.ViewID) != nil || validateUCIUUID("profile_id", *row.ProfileID) != nil || *row.Generation < 1 || !validUCIContextDisplayLabel(*row.ViewLabel) || (row.SnapshotRevision != nil && !validBrowserCodeText(*row.SnapshotRevision, 128)) || row.SnapshotPublishedAt.IsZero() {
 		return BrowserCodeContextCatalogEntry{}, ErrBrowserCodeContextDenied
 	}
 	entry.Context = &uci.ContextRef{
@@ -457,6 +465,8 @@ func (row browserCodeContextCatalogRow) catalogEntry() (BrowserCodeContextCatalo
 		Generation:        *row.Generation,
 	}
 	entry.ViewLabel = *row.ViewLabel
+	entry.SnapshotRevision = row.SnapshotRevision
+	entry.SnapshotPublishedAt = row.SnapshotPublishedAt
 	return entry, nil
 }
 
@@ -465,11 +475,12 @@ func loadBrowserCodeActiveGrant(ctx context.Context, tx *gorm.DB, subjectUserID 
 	result := tx.WithContext(ctx).Table("browser_read_grants AS browser_grant").
 		Select("browser_grant.*").
 		Joins("JOIN users AS subject ON subject.id = browser_grant.subject_user_id").
+		Joins("JOIN users AS issuer ON browser_grant.issuer_principal = ('browser-user/' || issuer.id::text) AND issuer.disabled = FALSE").
 		Joins("JOIN sources AS source ON source.source_id = browser_grant.source_id AND source.auth_realm = browser_grant.auth_realm").
 		Joins("JOIN ci_checkouts AS checkout ON checkout.checkout_id = browser_grant.checkout_id AND checkout.source_id = browser_grant.source_id").
 		Clauses(clause.Locking{Strength: "UPDATE", Table: clause.Table{Name: "browser_grant"}}).
 		Where("browser_grant.subject_user_id = ? AND browser_grant.source_id = ? AND browser_grant.checkout_id = ?", subjectUserID, sourceID, checkoutID).
-		Where("browser_grant.state = ? AND (browser_grant.expires_at IS NULL OR browser_grant.expires_at > ?) AND subject.disabled = FALSE", BrowserReadGrantActive, now).
+		Where("browser_grant.state = ? AND (browser_grant.expires_at IS NULL OR browser_grant.expires_at > ?) AND subject.disabled = FALSE AND checkout.owner_principal = browser_grant.issuer_principal", BrowserReadGrantActive, now).
 		Where("source.state = ? AND checkout.state IN (?, ?, ?)", UCISourceActive, UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp).
 		First(&grant)
 	if result.Error == nil {
@@ -706,6 +717,17 @@ func validBrowserCodeDigest(value string) bool {
 		}
 	}
 	return true
+}
+
+func validBrowserCodeCheckoutDisplayLabel(value string) bool {
+	if value == "" {
+		return true
+	}
+	if !validUCIContextDisplayLabel(value) || strings.ContainsAny(value, `/\\`) {
+		return false
+	}
+	_, err := uuid.Parse(value)
+	return err != nil
 }
 
 func validBrowserCodeText(value string, maximum int) bool {

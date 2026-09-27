@@ -1,8 +1,10 @@
 package gorm
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"unicode/utf8"
 
 	ucidomain "github.com/thebtf/engram/internal/uci"
 )
@@ -69,27 +71,58 @@ type uciVersionedReadRow struct {
 	ChunkKind        string `gorm:"column:chunk_kind"`
 	Language         string `gorm:"column:language"`
 	SourceByteLength int64  `gorm:"column:source_byte_length"`
-	Text             string `gorm:"column:text"`
+	Text             []byte `gorm:"column:text"`
+	Prefix           []byte `gorm:"column:prefix"`
+	ReferenceSiteID  string `gorm:"column:reference_site_id"`
+	ReferenceSpan    string `gorm:"column:reference_span"`
 }
 
 func (row uciVersionedReadRow) hit(spec ucidomain.VersionedReadSpec) (ucidomain.VersionedReadHit, bool) {
+	if spec.IndexedSpan != nil {
+		row.LineStart += int64(bytes.Count(row.Prefix, []byte{'\n'}))
+	}
+	row.LineEnd = row.LineStart + int64(bytes.Count(row.Text, []byte{'\n'}))
 	if row.EntityKey != spec.Entity.EntityKey ||
 		row.ByteStart != spec.Span.ByteStart || row.ByteEnd != spec.Span.ByteEnd ||
-		row.LineStart != spec.Span.LineStart || row.LineEnd != spec.Span.LineEnd ||
+		(spec.IndexedSpan == nil && (row.LineStart != spec.Span.LineStart || row.LineEnd != spec.Span.LineEnd)) ||
 		row.ContentDigest != "sha256:"+string(spec.ContentDigest) ||
 		row.SourceByteLength != spec.Span.ByteEnd-spec.Span.ByteStart {
 		return ucidomain.VersionedReadHit{}, false
 	}
+	if spec.ReferenceSiteID != nil && !row.matchesReferenceSite(*spec.ReferenceSiteID, spec.Span) {
+		return ucidomain.VersionedReadHit{}, false
+	}
+	if spec.IndexedSpan != nil {
+		for !utf8.Valid(row.Text) && len(row.Text) > 0 {
+			row.Text = row.Text[:len(row.Text)-1]
+		}
+		if len(row.Text) == 0 || len(row.Text) < int(row.SourceByteLength)-3 {
+			return ucidomain.VersionedReadHit{}, false
+		}
+		row.ByteEnd = row.ByteStart + int64(len(row.Text))
+		row.SourceByteLength = int64(len(row.Text))
+	}
 	return ucidomain.VersionedReadHit{
 		Entity:           spec.Entity,
 		Path:             row.RelativePath,
-		Span:             spec.Span,
+		Span:             ucidomain.QuerySpan{ByteStart: row.ByteStart, ByteEnd: row.ByteEnd, LineStart: row.LineStart, LineEnd: row.LineEnd},
 		ContentDigest:    spec.ContentDigest,
 		Kind:             uciQueryItemKind(row.ChunkKind),
 		Language:         row.Language,
 		SourceByteLength: row.SourceByteLength,
-		Text:             row.Text,
+		Text:             string(row.Text),
 	}, true
+}
+
+func (row uciVersionedReadRow) matchesReferenceSite(referenceSiteID string, span ucidomain.QuerySpan) bool {
+	if row.ReferenceSiteID != referenceSiteID {
+		return false
+	}
+	referenceSpan, ok := decodeUCIIndexAdmissionSpan(row.ReferenceSpan)
+	if !ok {
+		return false
+	}
+	return referenceSpan.ByteStart == span.ByteStart && referenceSpan.ByteEnd == span.ByteEnd && int64(referenceSpan.LineStart) == span.LineStart && int64(referenceSpan.LineEnd) == span.LineEnd
 }
 
 func uciVersionedReadUnavailableResult(code ucidomain.QueryErrorCode) ucidomain.VersionedReadStoreResult {
@@ -100,6 +133,13 @@ func uciVersionedReadUnavailableResult(code ucidomain.QueryErrorCode) ucidomain.
 }
 
 func buildUCIVersionedReadSQL(ref ucidomain.ContextRef, spec ucidomain.VersionedReadSpec) (string, []any) {
+	indexed := spec.Span
+	if spec.IndexedSpan != nil {
+		indexed = *spec.IndexedSpan
+	}
+	if spec.ReferenceSiteID != nil {
+		return buildUCIVersionedReferenceReadSQL(ref, spec)
+	}
 	arguments := []any{
 		ref.ViewID,
 		ref.SourceID,
@@ -110,18 +150,25 @@ func buildUCIVersionedReadSQL(ref ucidomain.ContextRef, spec ucidomain.Versioned
 		spec.Entity.SourceID,
 		UCIViewPublished,
 		UCIViewSuperseded,
+		spec.Entity.EntityKey,
 		UCIBlobStored,
 		UCIFilePresent,
 		UCIParseArtifactComplete,
 		UCIParseArtifactPartial,
 		"sha256:" + string(spec.ContentDigest),
-		spec.Span.ByteEnd,
-		spec.Span.ByteStart,
-		spec.Span.ByteEnd,
+		indexed.ByteEnd,
+		indexed.ByteStart,
+		indexed.ByteEnd,
 		spec.Entity.EntityKey,
+		spec.Entity.EntityKey,
+		spec.Span.ByteStart,
+		spec.Span.ByteStart,
 		spec.Span.ByteEnd - spec.Span.ByteStart,
-		spec.Span.LineStart,
-		spec.Span.LineEnd,
+		spec.Span.ByteStart,
+		spec.Span.ByteEnd - spec.Span.ByteStart,
+		spec.Span.ByteStart,
+		indexed.LineStart,
+		indexed.LineEnd,
 	}
 	return `
 		WITH selected_view AS (
@@ -147,7 +194,7 @@ func buildUCIVersionedReadSQL(ref ucidomain.ContextRef, spec ucidomain.Versioned
 				blob.blob_id,
 				blob.source_id,
 				membership.display_path AS relative_path,
-				COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(chunk.symbol_key, ''), membership.path_key || ':' || chunk.ordinal::text) AS entity_key,
+				COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(chunk.symbol_key, ''), CASE WHEN membership.path_key = ? THEN membership.path_key ELSE membership.path_key || ':' || chunk.ordinal::text END) AS entity_key,
 				chunk.byte_start,
 				chunk.byte_end,
 				blob.content_digest,
@@ -182,19 +229,21 @@ func buildUCIVersionedReadSQL(ref ucidomain.ContextRef, spec ucidomain.Versioned
 				AND blob.byte_length >= ?
 				AND chunk.byte_start = ?
 				AND chunk.byte_end = ?
-				AND COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(chunk.symbol_key, ''), membership.path_key || ':' || chunk.ordinal::text) = ?
+				AND (COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(chunk.symbol_key, ''), membership.path_key || ':' || chunk.ordinal::text) = ?
+					OR (NULLIF(chunk.symbol_key, '') IS NULL AND membership.path_key = ?))
 		),
 		bounded_bytes AS (
 			SELECT
 				candidate.entity_key,
 				candidate.relative_path,
-				candidate.byte_start,
-				candidate.byte_end,
+			?::bigint AS byte_start,
+			?::bigint + ?::bigint AS byte_end,
 				candidate.content_digest,
 				candidate.chunk_kind,
 				candidate.language,
 				blob.encoding,
-				substring(blob.safe_content FROM (candidate.byte_start + 1)::integer FOR ?::integer) AS content,
+			substring(blob.safe_content FROM (? + 1)::integer FOR ?::integer) AS content,
+			substring(blob.safe_content FROM (candidate.byte_start + 1)::integer FOR (? - candidate.byte_start)::integer) AS prefix,
 				array_length(regexp_split_to_array(
 					convert_from(substring(blob.safe_content FROM 1 FOR candidate.byte_start::integer), replace(upper(blob.encoding), '-', '')),
 					E'\n'
@@ -219,9 +268,129 @@ func buildUCIVersionedReadSQL(ref ucidomain.ContextRef, spec ucidomain.Versioned
 			chunk_kind,
 			language,
 			octet_length(content) AS source_byte_length,
-			convert_from(content, replace(upper(encoding), '-', '')) AS text
+			content AS text,
+			prefix
 		FROM bounded_bytes
 		WHERE line_start = ?
 			AND line_end = ?
+		LIMIT 1`, arguments
+}
+
+func buildUCIVersionedReferenceReadSQL(ref ucidomain.ContextRef, spec ucidomain.VersionedReadSpec) (string, []any) {
+	arguments := []any{
+		ref.ViewID,
+		ref.SourceID,
+		ref.CheckoutID,
+		ref.AnalysisProfileID,
+		ref.Generation,
+		spec.Entity.ViewID,
+		spec.Entity.SourceID,
+		UCIViewPublished,
+		UCIViewSuperseded,
+		*spec.ReferenceSiteID,
+		UCIBlobStored,
+		UCIFilePresent,
+		UCIParseArtifactComplete,
+		UCIParseArtifactPartial,
+		"sha256:" + string(spec.ContentDigest),
+		spec.Span.ByteEnd,
+		spec.Entity.EntityKey,
+		spec.Span.ByteStart,
+		spec.Span.ByteEnd - spec.Span.ByteStart,
+		spec.Span.ByteStart,
+		spec.Span.ByteEnd,
+		spec.Span.LineStart,
+		spec.Span.LineEnd,
+	}
+	return `
+		WITH selected_view AS (
+			SELECT
+				view_row.view_id,
+				view_row.source_id,
+				view_row.checkout_id,
+				view_row.generation,
+				profile.parser_bundle_digest
+			FROM ci_views AS view_row
+			JOIN ci_profiles AS profile ON profile.profile_id = view_row.profile_id
+			WHERE view_row.view_id = ?
+				AND view_row.source_id = ?
+				AND view_row.checkout_id = ?
+				AND view_row.profile_id = ?
+				AND view_row.generation = ?
+				AND view_row.view_id = ?
+				AND view_row.source_id = ?
+				AND view_row.state IN (?, ?)
+		),
+		candidate AS (
+			SELECT
+				blob.blob_id,
+				blob.source_id,
+				membership.display_path AS relative_path,
+				COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(reference.owner_symbol_key, ''), membership.path_key) AS entity_key,
+				blob.content_digest,
+				'code'::text AS chunk_kind,
+				artifact.language,
+				reference.reference_site_id,
+				reference.syntax_span AS reference_span
+			FROM selected_view AS view_row
+			JOIN ci_memberships AS membership
+				ON membership.source_id = view_row.source_id
+				AND membership.checkout_id = view_row.checkout_id
+				AND membership.valid_from_generation <= view_row.generation
+				AND (membership.valid_to_generation IS NULL OR membership.valid_to_generation > view_row.generation)
+			JOIN ci_parse_artifacts AS artifact
+				ON artifact.source_id = membership.source_id
+				AND artifact.artifact_id = membership.artifact_id
+				AND artifact.extraction_profile_digest = view_row.parser_bundle_digest
+			JOIN ci_blobs AS blob
+				ON blob.source_id = artifact.source_id
+				AND blob.blob_id = artifact.blob_id
+			JOIN ci_reference_sites AS reference
+				ON reference.artifact_id = artifact.artifact_id
+				AND reference.reference_site_id = ?
+			LEFT JOIN ci_definitions AS definition
+				ON definition.artifact_id = artifact.artifact_id
+				AND definition.local_symbol_key = reference.owner_symbol_key
+			WHERE blob.storage_state = ?
+				AND blob.safe_content IS NOT NULL
+				AND membership.file_state = ?
+				AND artifact.status IN (?, ?)
+				AND artifact.sealed_at IS NOT NULL
+				AND artifact.facts_digest IS NOT NULL
+				AND blob.content_digest = ?
+				AND blob.byte_length >= ?
+				AND COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(reference.owner_symbol_key, ''), membership.path_key) = ?
+		),
+		bounded_bytes AS (
+			SELECT
+				candidate.entity_key,
+				candidate.relative_path,
+				candidate.content_digest,
+				candidate.chunk_kind,
+				candidate.language,
+				candidate.reference_site_id,
+				candidate.reference_span,
+				blob.encoding,
+				substring(blob.safe_content FROM (? + 1)::integer FOR ?::integer) AS content
+			FROM candidate
+			JOIN ci_blobs AS blob
+				ON blob.blob_id = candidate.blob_id
+				AND blob.source_id = candidate.source_id
+		)
+		SELECT
+			entity_key,
+			relative_path,
+			?::bigint AS byte_start,
+			?::bigint AS byte_end,
+			?::bigint AS line_start,
+			?::bigint AS line_end,
+			content_digest,
+			chunk_kind,
+			language,
+			octet_length(content) AS source_byte_length,
+			convert_from(content, replace(upper(encoding), '-', '')) AS text,
+			reference_site_id,
+			reference_span
+		FROM bounded_bytes
 		LIMIT 1`, arguments
 }

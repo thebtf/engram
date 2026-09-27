@@ -7,9 +7,17 @@ import (
 
 const MaxTraverseDepth = 3
 
-// Traverse performs a BFS traversal from startID up to the given depth.
-// Uses a visited set to prevent cycles. Returns all edges encountered.
+// TraverseVisible performs a bounded BFS, checking edges before exploring their endpoints.
+func (s *Store) TraverseVisible(ctx context.Context, startID int64, maxDepth int, edgeTypes []string, visible func(*Edge) bool) ([]TraversalResult, error) {
+	return s.traverse(ctx, startID, maxDepth, edgeTypes, visible)
+}
+
+// Traverse performs an unfiltered bounded BFS for internal callers.
 func (s *Store) Traverse(ctx context.Context, startID int64, maxDepth int, edgeTypes []string) ([]TraversalResult, error) {
+	return s.traverse(ctx, startID, maxDepth, edgeTypes, nil)
+}
+
+func (s *Store) traverse(ctx context.Context, startID int64, maxDepth int, edgeTypes []string, visible func(*Edge) bool) ([]TraversalResult, error) {
 	if maxDepth <= 0 || maxDepth > MaxTraverseDepth {
 		maxDepth = MaxTraverseDepth
 	}
@@ -37,10 +45,10 @@ func (s *Store) Traverse(ctx context.Context, startID int64, maxDepth int, edgeT
 				if len(edgeTypes) > 0 && !containsStr(edgeTypes, e.EdgeType) {
 					continue
 				}
-				// SourceID/TargetID are nullable (*int64); dereference safely for
-				// memory-typed traverse (node-typed edges are excluded by ListByMemory
-				// which filters by source_id/target_id, so nil values are not expected
-				// on this code path — guard defensively).
+				if visible != nil && !visible(&e) {
+					continue
+				}
+				// Node endpoints have no memory ID; preserve their typed ID in the result.
 				var srcID, tgtID int64
 				if e.SourceID != nil {
 					srcID = *e.SourceID
@@ -53,15 +61,12 @@ func (s *Store) Traverse(ctx context.Context, startID int64, maxDepth int, edgeT
 					neighborID = srcID
 				}
 				results = append(results, TraversalResult{
-					EdgeID:    e.ID,
-					SourceID:  srcID,
-					TargetID:  tgtID,
-					EdgeType:  e.EdgeType,
-					Weight:    e.Weight,
-					Reasoning: e.Reasoning,
-					Depth:     depth,
+					EdgeID: e.ID, SourceID: srcID, TargetID: tgtID,
+					NodeSourceID: e.NodeSourceID, NodeTargetID: e.NodeTargetID,
+					EdgeType: e.EdgeType, Weight: e.Weight, Reasoning: e.Reasoning, Depth: depth,
 				})
-				if !visited[neighborID] {
+				// A node endpoint has no memory ID to expand.
+				if e.SourceID != nil && e.TargetID != nil && !visited[neighborID] {
 					visited[neighborID] = true
 					nextFrontier = append(nextFrontier, neighborID)
 				}
@@ -72,8 +77,17 @@ func (s *Store) Traverse(ctx context.Context, startID int64, maxDepth int, edgeT
 	return results, nil
 }
 
-// FindPath returns the shortest path between source and target using BFS.
+// FindPathVisible finds the shortest memory path without crossing inaccessible edges.
+func (s *Store) FindPathVisible(ctx context.Context, sourceID, targetID int64, maxDepth int, visible func(*Edge) bool) ([]TraversalResult, error) {
+	return s.findPath(ctx, sourceID, targetID, maxDepth, visible)
+}
+
+// FindPath finds an unfiltered shortest memory path for internal callers.
 func (s *Store) FindPath(ctx context.Context, sourceID, targetID int64, maxDepth int) ([]TraversalResult, error) {
+	return s.findPath(ctx, sourceID, targetID, maxDepth, nil)
+}
+
+func (s *Store) findPath(ctx context.Context, sourceID, targetID int64, maxDepth int, visible func(*Edge) bool) ([]TraversalResult, error) {
 	if maxDepth <= 0 || maxDepth > MaxTraverseDepth {
 		maxDepth = MaxTraverseDepth
 	}
@@ -100,13 +114,10 @@ func (s *Store) FindPath(ctx context.Context, sourceID, targetID int64, maxDepth
 				return nil, fmt.Errorf("find path depth %d: %w", depth, err)
 			}
 			for _, e := range edges {
-				var srcID, tgtID int64
-				if e.SourceID != nil {
-					srcID = *e.SourceID
+				if e.SourceID == nil || e.TargetID == nil || (visible != nil && !visible(&e)) {
+					continue
 				}
-				if e.TargetID != nil {
-					tgtID = *e.TargetID
-				}
+				srcID, tgtID := *e.SourceID, *e.TargetID
 				neighborID := tgtID
 				if neighborID == node.id {
 					neighborID = srcID

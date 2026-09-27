@@ -29,13 +29,15 @@ type CodebaseReadCompatibilityApplication interface {
 	ResolveLegacyProject(context.Context, uci.AuthorizedContext, string) (uci.AliasTarget, error)
 }
 
-// CodebaseReadInput is the fully validated source selector forwarded to UCI.
-// MaxBytes bounds one exact stored span; callers cannot request truncation or
-// replacement with current working-copy bytes.
+// CodebaseReadInput is the source selector forwarded to UCI. IndexedSpan is
+// optional for browser reads of a bounded part of an exact indexed chunk;
+// MCP callers continue to request exact spans. No working-copy bytes are read.
 type CodebaseReadInput struct {
 	Ref               uci.QueryEntityRef
 	Span              uci.QuerySpan
+	IndexedSpan       *uci.QuerySpan
 	ContentDigest     uci.QueryContentDigest
+	ReferenceSiteID   *string
 	VerifyWorkingCopy bool
 	MaxBytes          int
 }

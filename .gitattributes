@@ -6,5 +6,7 @@ design/operator-console/mockups/index.html whitespace=-trailing-space
 design/operator-console/PROMOTION-MANIFEST.json text eol=lf
 deploy/*.sh text eol=lf
 scripts/*.sh text eol=lf
+scripts/production-gates/latest-promotion-journal.ps1 text eol=lf
+tests/critical/runtime/test-promote-latest-release-images-contract.ps1 text eol=lf
 plugin/engram/bootstrap-targets.json text eol=lf
 tests/fixtures/operator-code-current-slice/** text eol=lf

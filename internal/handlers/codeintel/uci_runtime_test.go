@@ -258,6 +258,23 @@ func TestUCIRuntimePrepareInvalidatesFastPathForAnotherWorktree(t *testing.T) {
 	}
 }
 
+func TestRuntimeConfigGoOnlyUsesNativeExtractionProfileIdentity(t *testing.T) {
+	t.Setenv(config.EnvClientInstanceID, "uci-runtime-client")
+	t.Setenv(EnvUCIParserBundleDigest, "")
+	t.Setenv(EnvUCIParserExecutable, "")
+	configuration := RuntimeConfigFromEnvironment()
+	profile, err := uci.GoIndexAdmissionArtifactProfile(configuration.GoProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuration.ParserBundleDigest != profile.ExtractionProfileDigest {
+		t.Fatalf("Go-only bundle identity = %q, want %q", configuration.ParserBundleDigest, profile.ExtractionProfileDigest)
+	}
+	if _, err := newUCIRuntime(engramcore.NewModuleWithClientInstanceID(configuration.ClientInstanceID), configuration); err != nil {
+		t.Fatalf("ordinary Go-only runtime refused: %v", err)
+	}
+}
+
 func TestRuntimeConfigSnapshotsDaemonInputsAndRejectsInvalidBoundaries(t *testing.T) {
 	t.Setenv(config.EnvClientInstanceID, "uci-runtime-client")
 	t.Setenv(EnvUCIParserBundleDigest, "sha256:"+strings.Repeat("f", 64))

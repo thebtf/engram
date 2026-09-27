@@ -341,6 +341,19 @@ func graphScopedEdge(edge QueryGraphEdge, contextRef ContextRef) (QueryGraphEdge
 	}
 	clean.EvidenceRefs = graphUniqueRefs(clean.EvidenceRefs)
 	graphOrderRefs(clean.EvidenceRefs)
+	if edge.Evidence != nil {
+		contexts := queryContextSet{queryContextKey{SourceID: contextRef.SourceID, ViewID: contextRef.ViewID}: {}}
+		for _, evidence := range edge.Evidence {
+			if err := evidence.Validate(contexts); err != nil {
+				return QueryGraphEdge{}, false, err
+			}
+			if !graphContainsRef(clean.EvidenceRefs, evidence.Ref) {
+				return QueryGraphEdge{}, false, fmt.Errorf("uci graph: evidence detail is not a current-view evidence reference")
+			}
+			clean.Evidence = append(clean.Evidence, evidence)
+		}
+		clean.Evidence = graphUniqueRelationEvidence(clean.Evidence)
+	}
 	return clean, true, nil
 }
 
@@ -459,6 +472,33 @@ func graphOrderRefs(refs []QueryEntityRef) {
 	})
 }
 
+func graphContainsRef(refs []QueryEntityRef, want QueryEntityRef) bool {
+	for _, ref := range refs {
+		if graphRefsEqual(ref, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func graphUniqueRelationEvidence(values []QueryRelationEvidence) []QueryRelationEvidence {
+	if values == nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	unique := make([]QueryRelationEvidence, 0, len(values))
+	for _, value := range values {
+		key := value.key()
+		if _, found := seen[key]; found {
+			continue
+		}
+		seen[key] = struct{}{}
+		unique = append(unique, value)
+	}
+	sort.Slice(unique, func(left, right int) bool { return unique[left].key() < unique[right].key() })
+	return unique
+}
+
 func graphEdgeKey(edge QueryGraphEdge) string {
 	return graphRefKey(edge.From) + "\x00" + graphRefKey(edge.To) + "\x00" + string(edge.Relation) + "\x00" + string(edge.EvidenceKind)
 }
@@ -470,6 +510,7 @@ func graphMergeEdge(edges *[]QueryGraphEdge, candidate QueryGraphEdge) bool {
 			continue
 		}
 		(*edges)[index].EvidenceRefs = graphUniqueRefs(append((*edges)[index].EvidenceRefs, candidate.EvidenceRefs...))
+		(*edges)[index].Evidence = graphUniqueRelationEvidence(append((*edges)[index].Evidence, candidate.Evidence...))
 		return false
 	}
 	*edges = append(*edges, candidate)
@@ -479,6 +520,7 @@ func graphMergeEdge(edges *[]QueryGraphEdge, candidate QueryGraphEdge) bool {
 func graphOrderEdges(edges []QueryGraphEdge) {
 	for index := range edges {
 		edges[index].EvidenceRefs = graphUniqueRefs(edges[index].EvidenceRefs)
+		edges[index].Evidence = graphUniqueRelationEvidence(edges[index].Evidence)
 	}
 	sort.Slice(edges, func(left, right int) bool {
 		if edges[left].From.EntityKey != edges[right].From.EntityKey {

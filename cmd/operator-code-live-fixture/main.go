@@ -20,6 +20,7 @@ import (
 
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/uci"
 	"github.com/thebtf/engram/internal/worker"
 	"github.com/thebtf/engram/pkg/models"
@@ -31,7 +32,7 @@ import (
 const (
 	fixtureAuthRealm         = "browser"
 	fixtureClientAuthRealm   = string(auth.SourceClient)
-	fixtureQuery             = "CodeExplorerFixtureA"
+	fixtureQuery             = "which routine hands work to a peer"
 	fixtureExpectedGraph     = "CodeExplorerFixtureB"
 	fixtureExpectedSource    = "CodeExplorerFixtureA"
 	fixtureSourcePath        = "fixture.go"
@@ -266,7 +267,11 @@ func provisionPublished(ctx context.Context, store *gormdb.Store, input fixtureP
 
 	projection := gormdb.NewUCIProjectionStore(store.DB)
 	authorizer := gormdb.NewUCIContextAuthorizer(contexts)
-	publisher, err := projection.Publisher(authorizer, uci.IndexPublicationConfig{Limits: uci.DefaultIndexPublicationLimits()})
+	embeddingProfile, embedder, err := fixtureEmbeddingProfile()
+	if err != nil {
+		return fixtureOutput{}, err
+	}
+	publisher, err := projection.Publisher(authorizer, uci.IndexPublicationConfig{Limits: uci.DefaultIndexPublicationLimits(), EmbeddingProfile: embeddingProfile})
 	if err != nil {
 		return fixtureOutput{}, fmt.Errorf("create fixture index publisher: %w", err)
 	}
@@ -315,6 +320,9 @@ func provisionPublished(ctx context.Context, store *gormdb.Store, input fixtureP
 
 	grants := worker.NewCodeGrantApplication(gormdb.NewBrowserReadGrantStore(store.DB))
 	issuer := auth.SessionForBrowserUser(user.Role, user.ID)
+	if _, err := grants.SetWorkingCopyLabel(ctx, issuer, checkout.CheckoutID, "Fixture workstation · "+project); err != nil {
+		return fixtureOutput{}, fmt.Errorf("label fixture working copy: %w", err)
+	}
 	grant, err := grants.Issue(ctx, issuer, worker.IssueCodeGrantInput{Target: subject, SourceID: source.SourceID, CheckoutID: checkout.CheckoutID})
 	if err != nil {
 		return fixtureOutput{}, fmt.Errorf("issue fixture grant: %w", err)
@@ -323,7 +331,12 @@ func provisionPublished(ctx context.Context, store *gormdb.Store, input fixtureP
 	if err != nil || !found || current.GrantRef != grant.GrantRef || current.SourceID != source.SourceID || current.CheckoutID != checkout.CheckoutID {
 		return fixtureOutput{}, fmt.Errorf("read back fixture grant")
 	}
-	return fixtureOutput{Query: fixtureQuery, ExpectedSearch: fixtureQuery, ExpectedGraph: fixtureExpectedGraph, ExpectedSource: fixtureExpectedSource, ExpectedMarker: marker}, nil
+	if embeddingProfile != nil {
+		if err := completeFixtureEmbeddings(ctx, projection, contexts, authorizer, published.Context, source.AuthRealm, subject.Principal, *embeddingProfile, embedder); err != nil {
+			return fixtureOutput{}, err
+		}
+	}
+	return fixtureOutput{Query: fixtureQuery, ExpectedSearch: fixtureExpectedSource, ExpectedGraph: fixtureExpectedGraph, ExpectedSource: fixtureExpectedSource, ExpectedMarker: marker}, nil
 }
 
 func provisionNoView(ctx context.Context, store *gormdb.Store, user *gormdb.User, subject auth.BrowserSubject, in invocation, marker string) (fixtureOutput, error) {
@@ -399,7 +412,7 @@ func provisionNoView(ctx context.Context, store *gormdb.Store, user *gormdb.User
 		return fixtureOutput{}, fmt.Errorf("write no-view fixture keycard")
 	}
 	return fixtureOutput{
-		Query: fixtureQuery, ExpectedSearch: fixtureQuery, ExpectedGraph: fixtureExpectedGraph, ExpectedSource: fixtureExpectedSource, ExpectedMarker: marker,
+		Query: fixtureQuery, ExpectedSearch: fixtureExpectedSource, ExpectedGraph: fixtureExpectedGraph, ExpectedSource: fixtureExpectedSource, ExpectedMarker: marker,
 		NoView: &noViewFixtureOutput{
 			SourceID: source.SourceID, CheckoutID: checkout.CheckoutID, IncarnationID: checkout.IncarnationID, AnalysisProfileID: profile.ProfileID,
 			ParserBundleDigest: parserBundleDigest,
@@ -535,6 +548,66 @@ func fixtureFrame(sourceID, profileID string, admissionProfile uci.IndexAdmissio
 			}},
 		}},
 	}, nil
+}
+
+func fixtureEmbeddingProfile() (*uci.VectorProfile, *embedding.Client, error) {
+	endpoint := os.Getenv("ENGRAM_EMBEDDING_URL")
+	if endpoint == "" {
+		return nil, nil, nil
+	}
+	client, err := embedding.NewClient()
+	if err != nil {
+		return nil, nil, fmt.Errorf("configure fixture embedding provider: %w", err)
+	}
+	return &uci.VectorProfile{
+		ProviderRef:           fixtureDigest(endpoint),
+		Model:                 client.Model(),
+		Dimension:             embedding.EmbeddingDim,
+		PreprocessingRevision: "uci-semantic-preprocess/chunk-v2",
+		IncludeRelativePath:   true,
+	}, client, nil
+}
+
+func completeFixtureEmbeddings(ctx context.Context, projection *gormdb.UCIProjectionStore, contexts *gormdb.UCIContextStore, authorizer *gormdb.UCIContextAuthorizer, ref uci.ContextRef, realm, principal string, profile uci.VectorProfile, embedder uci.SemanticEmbedder) error {
+	resolver := uci.NewContextResolver(contexts, authorizer, contexts)
+	authorized, err := resolver.Authorize(ctx, uci.ResolveContextInput{ClientSessionID: "operator-code-live-embedding", AuthRealm: realm, Principal: principal, Ref: &ref})
+	if err != nil {
+		return fmt.Errorf("authorize fixture embedding: %w", err)
+	}
+	worker, err := uci.NewEmbeddingWorker(profile, embedder, projection, resolver, uci.DefaultEmbeddingWorkerLimits())
+	if err != nil {
+		return fmt.Errorf("create fixture embedding worker: %w", err)
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(runCtx, "operator-code-live-embedding") }()
+	defer cancel()
+	stopWorker := func() error {
+		cancel()
+		return <-done
+	}
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		status, statusErr := projection.LoadIndexStatus(ctx, authorized, &profile)
+		if statusErr == nil && status.Embedding.Coverage == uci.IndexCoverageComplete && status.Embedding.ReadyCandidates == status.Embedding.TotalCandidates && status.Embedding.TotalCandidates > 50 {
+			if err := stopWorker(); err != nil {
+				return fmt.Errorf("run fixture embedding worker: %w", err)
+			}
+			return nil
+		}
+		select {
+		case err := <-done:
+			if err != nil {
+				return fmt.Errorf("run fixture embedding worker: %w", err)
+			}
+			return fmt.Errorf("fixture embedding worker stopped before coverage completed")
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if err := stopWorker(); err != nil {
+		return fmt.Errorf("run fixture embedding worker: %w", err)
+	}
+	return fmt.Errorf("fixture embedding coverage did not complete")
 }
 
 func fixtureManifest(ack uci.IndexPartAck, part uci.IndexPart) uci.IndexManifestCompletion {

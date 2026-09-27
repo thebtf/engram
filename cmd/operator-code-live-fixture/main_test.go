@@ -16,6 +16,7 @@ import (
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/uci"
+	"github.com/thebtf/engram/internal/worker"
 	"github.com/thebtf/engram/pkg/models"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm/logger"
@@ -161,8 +162,16 @@ func TestFixtureFrameCarriesSearchableAAndResolvedGraphB(t *testing.T) {
 	if edge.Target == nil || edge.Target.PathKey != fixtureSourcePath || edge.Target.SymbolKey == nil || *edge.Target.SymbolKey != "func:"+fixtureExpectedGraph || edge.ResolutionState != uci.IndexResolutionState("resolved") {
 		t.Fatalf("fixture graph edge = %#v", edge)
 	}
-	if fixtureQuery != "CodeExplorerFixtureA" || fixtureExpectedSource != "CodeExplorerFixtureA" || fixtureExpectedGraph != "CodeExplorerFixtureB" {
+	if fixtureQuery != "which routine hands work to a peer" || fixtureExpectedSource != "CodeExplorerFixtureA" || fixtureExpectedGraph != "CodeExplorerFixtureB" {
 		t.Fatalf("fixture scenario = query %q, source %q, graph %q", fixtureQuery, fixtureExpectedSource, fixtureExpectedGraph)
+	}
+	for _, term := range strings.Fields(fixtureQuery) {
+		if len(term) < 4 {
+			continue
+		}
+		if strings.Contains(strings.ToLower(string(fixtureSource)), term) {
+			t.Fatalf("fixture conceptual query token %q appears in its known target source", term)
+		}
 	}
 }
 
@@ -293,7 +302,7 @@ func (fixture *postgresFixtureEnvironment) run(t *testing.T, mode string, args [
 func (fixture *postgresFixtureEnvironment) assertPublishedDurableState(t *testing.T, receipt fixtureRunReceipt) {
 	t.Helper()
 	published := receipt.output
-	if published.NoView != nil || published.Query != fixtureQuery || published.ExpectedSearch != fixtureQuery || published.ExpectedGraph != fixtureExpectedGraph || published.ExpectedSource != fixtureExpectedSource || published.ExpectedMarker != "operator-code-fixture" {
+	if published.NoView != nil || published.Query != fixtureQuery || published.ExpectedSearch != fixtureExpectedSource || published.ExpectedGraph != fixtureExpectedGraph || published.ExpectedSource != fixtureExpectedSource || published.ExpectedMarker != "operator-code-fixture" {
 		t.Fatalf("published fixture receipt = %#v", published)
 	}
 	assertFixtureOutputRedacted(t, receipt.stdout, receipt.stderr, fixture.scopedDSN, fixture.password)
@@ -311,6 +320,21 @@ func (fixture *postgresFixtureEnvironment) assertPublishedDurableState(t *testin
 	var checkout gormdb.UCICheckout
 	if err := store.DB.Where("source_id = ?", source.SourceID).First(&checkout).Error; err != nil {
 		t.Fatalf("load published fixture checkout: %v", err)
+	}
+	choices, err := worker.NewCodeGrantApplication(gormdb.NewBrowserReadGrantStore(store.DB)).ListOwnerChoices(context.Background(), auth.SessionForBrowserUser(user.Role, user.ID))
+	if err != nil {
+		t.Fatalf("list fixture owner choices: %v", err)
+	}
+	wantWorkingCopy := "Fixture workstation · " + fixture.publishedProject
+	foundWorkingCopy := false
+	for _, choice := range choices {
+		if choice.ChoiceRef == checkout.CheckoutID && choice.WorkingCopyLabel == wantWorkingCopy {
+			foundWorkingCopy = true
+			break
+		}
+	}
+	if !foundWorkingCopy {
+		t.Fatalf("fixture working-copy label %q was not returned through the application seam", wantWorkingCopy)
 	}
 	contexts := gormdb.NewUCIContextStore(store.DB)
 	view, err := contexts.GetCurrentView(context.Background(), checkout.CheckoutID)
@@ -342,7 +366,7 @@ func (fixture *postgresFixtureEnvironment) assertPublishedIndexState(t *testing.
 func (fixture *postgresFixtureEnvironment) assertNoViewDurableState(t *testing.T, receipt fixtureRunReceipt) {
 	t.Helper()
 	noView := receipt.output
-	if noView.NoView == nil || noView.Query != fixtureQuery || noView.ExpectedSearch != fixtureQuery || noView.ExpectedGraph != fixtureExpectedGraph || noView.ExpectedSource != fixtureExpectedSource || noView.ExpectedMarker != "operator-code-fixture" || noView.NoView.ParserBundleDigest != string(uci.TreeSitterBundleDigest()) {
+	if noView.NoView == nil || noView.Query != fixtureQuery || noView.ExpectedSearch != fixtureExpectedSource || noView.ExpectedGraph != fixtureExpectedGraph || noView.ExpectedSource != fixtureExpectedSource || noView.ExpectedMarker != "operator-code-fixture" || noView.NoView.ParserBundleDigest != string(uci.TreeSitterBundleDigest()) {
 		t.Fatalf("no-view fixture receipt = %#v", noView)
 	}
 	keycard := fixture.noViewKeycard(t)

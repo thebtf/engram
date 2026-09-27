@@ -32,6 +32,7 @@ const logoutInFlight = ref(false)
 const NAV_ICONS: Record<string, string> = {
   overview: '<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/>',
   search: '<circle cx="6.5" cy="6.5" r="4.3"/><path d="M9.6 9.6 L14 14"/>',
+  code: '<path d="M5.7 4 2.5 8l3.2 4M10.3 4l3.2 4-3.2 4M9 2.5 7 13.5"/>',
   memory: '<path d="M8 2 L14 5 L8 8 L2 5 Z"/><path d="M2 8 L8 11 L14 8"/><path d="M2 11 L8 14 L14 11"/>',
   queue: '<path d="M2.4 8.6 L4.2 3.4 H11.8 L13.6 8.6"/><path d="M2.4 8.6 V13 H13.6 V8.6 H10.5 L9.3 10.4 H6.7 L5.5 8.6 Z"/>',
   noise: '<path d="M3 10.5 V12.5"/><path d="M6.3 7 V12.5"/><path d="M9.6 4 V12.5"/><path d="M12.9 8.5 V12.5"/>',
@@ -318,7 +319,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
       </div>
     </nav>
 
-    <button v-if="mobileNavOpen" class="nav-scrim" :aria-label="t('shell.mobileMenu')" @click="closeMobileNav" />
+    <button v-if="mobileNavOpen" class="nav-scrim" type="button" :aria-label="t('shell.closeMenu')" @click="closeMobileNav" />
 
     <header class="topbar" :inert="compactViewport && mobileNavOpen">
       <button ref="mobileMenuButton" class="tbtn mobile-menu-button" type="button" :aria-label="t('shell.mobileMenu')" :aria-expanded="mobileNavOpen" aria-controls="primary-navigation" @click="toggleMobileNav">☰</button>
@@ -445,7 +446,6 @@ function onDocumentKeydown(event: KeyboardEvent) {
   overflow:hidden;
   background:var(--surface);
   border-right:1px solid var(--border);
-  transition:width var(--motion-base) var(--ease-standard);
 }
 .nav-scrim { display:none; }
 .app.nav-collapsed > .nav { width:var(--nav-rail-w); }
@@ -558,10 +558,10 @@ function onDocumentKeydown(event: KeyboardEvent) {
   .app,
   .app.nav-collapsed { grid-template-columns:1fr; grid-template-areas:"topbar" "content" "statusbar"; }
   .topbar { gap:8px; padding:0 10px; }
-  .topbar .mobile-menu-button { display:inline-flex; }
+  .topbar .mobile-menu-button { display:inline-flex; width:44px; height:44px; justify-content:center; padding:0; }
   .topbar-secondary { display:none; }
   .gsearch { min-width:0; width:min(360px,48vw); }
-  .app > .nav { position:fixed; top:0; bottom:0; left:0; width:min(320px, calc(100vw - 48px)); transform:translateX(-100%); transition:transform var(--motion-base) var(--ease-standard); z-index:60; }
+  .app > .nav { position:fixed; top:0; bottom:0; left:0; width:min(320px, calc(100vw - 48px)); transform:translateX(-100%); transition:none; z-index:60; }
   .app > .nav.open { transform:none; }
   .nav-scrim { display:block; position:fixed; inset:0; z-index:50; border:0; background:color-mix(in srgb, #000, transparent 52%); cursor:pointer; }
   .navcollapse,

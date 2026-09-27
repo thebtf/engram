@@ -6,13 +6,10 @@ description: Configure Engram for Claude Code, Oh My Pi, or Codex
 
 Configure the connection to your Engram server.
 
-> **v6 BREAKING CHANGE.** The plugin no longer accepts the operator key
-> (`ENGRAM_AUTH_ADMIN_TOKEN`) on workstations. Each workstation now uses a
-> per-workstation **API token (worker keycard)** issued via the dashboard
-> `/tokens` page. The operator key lives ONLY on the server host.
->
-> If you are upgrading from v5.x: you MUST issue a fresh keycard via the
-> dashboard before this session can authenticate. See step 2 below.
+> **v6 BREAKING CHANGE.** Do not put the server-host operator key
+> (`ENGRAM_AUTH_ADMIN_TOKEN`) on a workstation. Each workstation needs a
+> browser-admin-issued client keycard from `{SERVER_URL}/access`.
+> Upgrading from v5.x requires a new keycard before the client can authenticate.
 
 ## OMP and Codex setup
 
@@ -31,22 +28,21 @@ Create `~/.engram/config.json` (or a path of your choice pointed to by
 ```json
 {
   "server_url": "http://your-server:37777",
-  "api_token": "engram_<32hex-keycard-from-dashboard>"
+  "api_token": "engram_<32hex-keycard-from-access>"
 }
 ```
 
-On POSIX systems the file should be readable only by your user account:
+On POSIX systems, restrict the file to your user account with
+`chmod 600 ~/.engram/config.json` and keep its parent directory private. On Windows,
+check the file's NTFS ACLs rather than assuming inherited permissions are
+private. Never commit, paste into chat, or log the keycard.
 
-```sh
-chmod 600 ~/.engram/config.json
-```
-
-On Windows the file lives in your user profile; NTFS ACLs inherited from the
-parent directory already restrict access to your account.
-
-The engram plugin reads this file as the final fallback, so it works in OMP,
-Codex, Claude Code, and any other harness that does not forward environment
-variables to plugin children.
+The wrapper uses a non-empty `ENGRAM_URL` / `ENGRAM_TOKEN` (or forwarded plugin
+options) before config values. For config files, `ENGRAM_CONFIG_FILE` selects
+an explicit path; otherwise an existing plugin-data `config.json` takes
+precedence over `~/.engram/config.json`. Check which file the launcher reports
+if an older value keeps winning. The home config is the fallback for hosts
+that do not forward environment variables to plugin children.
 
 ### Updating OMP
 
@@ -61,7 +57,7 @@ For Codex versions that still forward `shell_environment_policy.set`:
 ```toml
 [shell_environment_policy.set]
 ENGRAM_URL = "http://your-server:37777"
-ENGRAM_TOKEN = "engram_<32hex-keycard-from-dashboard>"
+ENGRAM_TOKEN = "engram_<32hex-keycard-from-access>"
 ```
 
 This path was never a documented contract for plugin MCP servers and stopped
@@ -100,49 +96,53 @@ If the user is unsure, suggest checking their Docker host's IP and port 37777.
 
 Store the answer as `SERVER_URL`.
 
-### 2. Issue a worker keycard via the dashboard
+### 2. Issue a client keycard through Access
 
-Tell the user:
+Ask the user to do this in their own browser; do not request the keycard in
+chat or call the issuance API on their behalf:
 
-> 1. Open `{SERVER_URL}/tokens` in your browser.
-> 2. Log in (admin email + password).
-> 3. Click "Generate token", give it a memorable name (e.g. your workstation
->    hostname), choose scope `read-write`, and click Create.
-> 4. **Copy the token shown ONCE.** It will not be shown again.
-> 5. Paste it back here.
+> 1. Open `{SERVER_URL}/access` and log in with a **real browser admin
+>    session**. A server running `ENGRAM_AUTH_DISABLED=true` exposes a
+>    synthetic admin identity, which cannot issue keycards; ask the server
+>    operator to enable real authentication and provision an admin first.
+> 2. In **Keycards**, enter a workstation name, choose `read-write` for a
+>    client that stores memories (`read-only` only for a read-only client),
+>    and enter the intended principal and principal kind (`human`, `agent`,
+>    or `service`). Use the **same principal and kind** as the owner of
+>    private memories the client must read; a different keycard cannot read
+>    another principal's private memories merely by having `read-write` scope.
+>    Set an expiry if required, then issue the keycard.
+> 3. Copy the one-time `engram_` keycard directly into your local client
+>    configuration in step 3. Do not send it to the assistant or store it
+>    in the repository. Dismiss the one-time display after saving it.
 
-Store the answer as `API_TOKEN`. The format is `engram_<32-hex-chars>`.
-
-If the user pastes a value that does NOT begin with `engram_`, refuse and
-explain that this looks like the operator key — that is forbidden on
-workstations as of v6. Ask them to issue a fresh keycard via the dashboard.
+If Access says forbidden or issuance is disabled, stop and resolve the admin
+session/authentication setup with the server operator. A bearer operator key
+or existing client keycard is not a substitute for a browser admin session.
 
 ### 3. Update local agent config
 
-For Claude Code, read `~/.claude/settings.json`, then add `ENGRAM_URL` and
-`ENGRAM_TOKEN` to the `env` section. Use the Edit tool.
+Have the user edit their local config privately; examples below contain only
+placeholders. Do not read back or echo a populated credential file.
 
-**Example result (env section only):**
+For Claude Code, put `ENGRAM_URL` and `ENGRAM_TOKEN` in the `env` section of
+`~/.claude/settings.json`:
 
 ```json
 {
   "env": {
     "ENGRAM_URL": "http://192.168.1.100:37777",
-    "ENGRAM_TOKEN": "engram_<32hex-keycard-from-dashboard>"
+    "ENGRAM_TOKEN": "engram_<32hex-keycard-from-access>"
   }
 }
 ```
 
-If the user has a stale `ENGRAM_AUTH_ADMIN_TOKEN` entry from v5 days,
-**remove it** — it is no longer read on the workstation side, and leaving
-it there triggers a v6 warning at daemon startup.
+Replace the placeholder locally with the one-time keycard. Remove stale
+`ENGRAM_AUTH_ADMIN_TOKEN` and `ENGRAM_API_TOKEN` entries from the workstation
+config; neither is the workstation credential.
 
-If the user has a stale `ENGRAM_API_TOKEN` entry, remove it too (v5-era
-name, no longer read).
-
-For OMP and Codex, create `~/.engram/config.json` as shown in "OMP and Codex
-setup" above. The config file also works as a universal fallback for any harness
-that does not forward environment variables to plugin children.
+For OMP and Codex, put the server URL and keycard in the config file shown in
+"OMP and Codex setup" above (or select it with `ENGRAM_CONFIG_FILE`).
 
 ### 4. Restart the agent host
 
@@ -165,13 +165,14 @@ Tool: check_system_health()
 
 ### Common issues
 
-- **Token format**: Must be `engram_<hex>`. Anything else (especially the
-  Docker-host operator token) is rejected at validation time.
-- **Token not found / revoked**: Open the dashboard `/tokens` page, generate
-  a fresh keycard, repeat step 3.
-- **Token mismatch**: Per-workstation. Each workstation needs its own
-  keycard; reusing one keycard across machines works but defeats the
-  per-machine revocation benefit.
+- **Token format**: The client keycard is `engram_` followed by 32 hex
+  characters. Never use the server-host operator key on a workstation.
+- **Token not found / revoked**: A real browser admin can issue a replacement
+  in `/access`; repeat step 3 without sharing the keycard in chat.
+- **Private memory denied**: Check the keycard's principal **and kind** match
+  the private memory owner; `read-write` scope alone does not grant access.
+- **Token mismatch**: Issue a separate keycard for each workstation so it
+  can be revoked independently.
 - **Daemon refuses to start**: Check stderr in the CC plugin status panel —
   v6 fail-fast prints the missing-env line directly.
 - **Firewall**: Port 37777 must be reachable from this machine to the server.

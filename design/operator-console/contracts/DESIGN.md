@@ -4,9 +4,9 @@ description: >-
   Single-operator admin surface for persistent shared-memory infrastructure.
   Dark-first product UI with committed density, single accent, honesty contract
   over polish.
-design_version: "2026.09.10"   # contract stamp — bump on any token/component/screen change.
-                               # 2026.09.10: Feature011 adds the Code flow: Source → Checkout → View,
-                               # a bounded graph return path, and explicit legacy-collection semantics.
+design_version: "2026.09.17"   # contract stamp — bump on any token/component/screen change.
+                               # 2026.09.17: Feature011 makes Workspace selection-first:
+                               # Repository → Working copy → Indexed snapshot → investigation/evidence.
                                # Promotion copies this private authoring snapshot one way into the curated
                                # design contract; it neither claims runtime parity nor writes application code.
 colors:
@@ -130,34 +130,69 @@ components:
 - Запрещены стеклянные панели, градиенты, неон, градиентный текст и side-stripe карточки
 - Без анимации входа страниц — продукт загружается в задачу, а не в хореографию
 
-## 1.1 Feature011 — Code flow
+## 1.1 Feature011 — Workspace investigation
 
-**Mode:** Operate. `Code` is a compact, evidence-led flow, not a source browser that
-pretends a checkout already exists. Its three named stages are always visible and ordered:
+**Mode:** Operate. `Workspace` is the normal Home and navigation destination for a
+selected implementation. Its context bar makes one server-resolved, per-tab chain visible
+in task language: **Repository → Working copy → Indexed snapshot**. The internal
+`Source` / `Checkout` / `View` names and opaque IDs are disclosed evidence only; labels,
+branches, device/location text, and snapshot facts never grant access or reveal a locator.
 
-1. **Source** — the registered repository identity and its provenance. Until a source
-   registry is available, show `must-build` and the missing capability; do not invent a
-   repository, revision, or selectable control.
-2. **Checkout** — the resolved working copy for that Source. Without a Source, it is
-   blocked with the dependency stated plainly; it is never silently inferred from a
-   collection or a search result.
-3. **View** — files and symbols from that Checkout. Without a Checkout, it is an empty
-   state that explains the preceding prerequisite rather than a fabricated file tree.
+1. **Repository / Репозиторий** — choose an accessible repository by human name and
+   provider/remote label. If none is accessible, say that no accessible repository is
+   configured; do not substitute an administrator, localhost, or a technical binding form.
+2. **Working copy / Рабочая копия** — choose a dependent readable branch and
+   device/location label. A repository with no authorized working copy remains distinct from
+   a missing repository or a denied source.
+3. **Indexed snapshot / Снимок индекса** — show revision, timestamp, indexed coverage
+   where known, and supported-language scope. Its state is exactly **Index ready / Индекс
+   готов**, **Updating / Обновляется**, **Needs indexing / Требуется индексирование**,
+   **Index failed / Ошибка индекса**, or **Newer snapshot available / Доступен более новый
+   снимок**. Updating preserves the last complete snapshot with its age; a newer snapshot
+   requires an explicit switch and never silently replaces an open source span or another tab.
 
-The discovery path is **search → bounded graph → Source**. A code-search result may open
-a graph only with explicit bounds (maximum depth `2`, maximum `24` nodes); selecting a node
-returns to its Source, where the operator can choose its Checkout before viewing code. The
-graph is a navigation aid, never a claim that an unrestricted traversal or runtime search ran.
+The investigation order is **Home → Workspace → Repository → Working copy → Indexed
+snapshot → bounded structure or search → source → direct or reverse relation → evidence**.
+Search is scoped visibly to the selected working copy and snapshot. Show a result page,
+server-reported total or lower bound, and cursor/continuation separately; page length never
+stands in for corpus size. Preserve semantic versus lexical/degraded mode and coverage
+limitations as facts, rather than treating an unsupported language, dynamic call, or empty
+page as proof of no relation.
 
-**Collection semantics:** `Старые коллекции` is a stale, read-only pre-v5 listing. It is
-not a Source, Checkout, corpus, or fallback search scope. If `search_collection` returns its
-deprecated string response, render the disabled/stale explanation — never an empty successful
-search and never a control that can start a Code flow.
+Opening a result keeps its source pane, **Directly calls / Прямые вызовы** or **Called by /
+Вызывается из** relation list, and **Evidence / Доказательство** in the same Indexed
+snapshot. A released neighbor may open even when absent from the current result page.
+Evidence names its supported file/span/digest granularity honestly; entity-level evidence is
+never called an exact reference site. A compact visual aid is optional, bounded to depth `2`
+and `24` nodes, and always has the same keyboard-operable relation-list equivalent. It is an
+automatic relation view, never a manual graph editor.
 
-**Promotion boundary:** `.od` is private authoring. Promotion creates a curated,
-hash-bound snapshot in `design/operator-console/` from an explicit allowlist. It is one-way;
-the manifest proves the snapshot bytes only. It does not synchronize in either direction,
-assert application parity, or overwrite `apps/operator-console/`.
+Use skeletons while a selector, readiness fact, result, or source pane is loading, and retain
+the last confirmed snapshot/source during refresh as stale with its timestamp. Distinguish no
+accessible repositories, no authorized working copy, no published snapshot, offline owner,
+denied/revoked access, provider/server failure, a stale continuation, an unsupported relation,
+and a genuine empty result. Each state states the missing capability and only a real supported
+recovery; the unresolved installed browser/origin policy never licenses an invented
+connect/request-access action.
+
+Repository and working-copy selection uses semantic listboxes or comboboxes with visible
+focus, keyboard selection, Escape/return behavior, and live status announcements for context,
+index state, result count, stale state, and a newer snapshot. Source, relations, evidence,
+retry, and the explicit snapshot switch remain reachable at 1440, 980, and 390 CSS pixels and
+at 200% zoom; narrow layouts become one ordered task column without losing context. Complete
+English and Russian task copy is required; technical identifiers stay unchanged only inside
+disclosed evidence.
+
+Manual knowledge-graph construction and plaintext book intake are retired workflows: they have
+no normal Workspace entry, manual node/edge form, uploader, or substitute editor. Historical
+Documents, Rules, Issues, provenance, historical graph readers, and UCI code-graph boundaries
+remain distinct preserved readers; no historical relation is relabeled as automatic code
+evidence.
+
+**Promotion boundary:** `.od` is private authoring. Promotion creates a curated, hash-bound
+snapshot in `design/operator-console/` from an explicit allowlist. It is one-way; the manifest
+proves snapshot bytes only. It does not synchronize in either direction, assert application
+parity, or overwrite `apps/operator-console/`.
 
 ## 2. Colors
 

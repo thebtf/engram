@@ -2,11 +2,15 @@ package gorm
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	ucidomain "github.com/thebtf/engram/internal/uci"
 )
@@ -175,6 +179,178 @@ func TestUCIProjectionStoreSemanticMethodsKeepVectorsScopedAndCovered(t *testing
 	require.Equal(t, complete, repeated)
 }
 
+func TestUCIProjectionStoreSemanticContinuationsRoundTripCleanupAndMigrationRollback(t *testing.T) {
+	fixture := openUCIPublicationFixture(t)
+	ctx := context.Background()
+	continuation := uciSemanticContinuationFixture(fixture)
+
+	require.NoError(t, fixture.projection.CreateSemanticContinuation(ctx, continuation))
+	loaded, found, err := fixture.projection.LoadSemanticContinuation(ctx, continuation.CursorRef)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, continuation.CursorRef, loaded.CursorRef)
+	require.Equal(t, continuation.Context, loaded.Context)
+	require.Equal(t, continuation.ClientSessionID, loaded.ClientSessionID)
+	require.Equal(t, continuation.ProfileFingerprint, loaded.ProfileFingerprint)
+	require.Equal(t, continuation.QueryDigest, loaded.QueryDigest)
+	require.Equal(t, continuation.FilterDigest, loaded.FilterDigest)
+	require.Equal(t, continuation.Mode, loaded.Mode)
+	require.Equal(t, continuation.Order, loaded.Order)
+	require.Equal(t, continuation.Limit, loaded.Limit)
+	require.Equal(t, continuation.NextOffset, loaded.NextOffset)
+	require.Equal(t, continuation.Vector, loaded.Vector)
+	require.True(t, continuation.ExpiresAt.Equal(loaded.ExpiresAt))
+	require.True(t, continuation.CreatedAt.Equal(loaded.CreatedAt))
+
+	missing, found, err := fixture.projection.LoadSemanticContinuation(ctx, uuid.NewString())
+	require.NoError(t, err)
+	require.False(t, found)
+	require.Equal(t, ucidomain.SemanticContinuation{}, missing)
+
+	expiredAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
+	require.NoError(t, fixture.db.Model(&UCISemanticContinuation{}).Where("cursor_ref = ?", continuation.CursorRef).Updates(map[string]any{"created_at": expiredAt.Add(-time.Second), "expires_at": expiredAt}).Error)
+	_, found, err = fixture.projection.LoadSemanticContinuation(ctx, continuation.CursorRef)
+	require.NoError(t, err)
+	require.False(t, found, "expired rows must fail closed")
+	var expiredRows int64
+	require.NoError(t, fixture.db.Model(&UCISemanticContinuation{}).Where("cursor_ref = ?", continuation.CursorRef).Count(&expiredRows).Error)
+	require.Zero(t, expiredRows, "load traffic must clean expired continuation rows")
+
+	require.True(t, fixture.db.Migrator().HasTable(&UCISemanticContinuation{}))
+	require.True(t, fixture.db.Migrator().HasTable(&UCIView{}), "rollback may not touch pre-existing UCI projection state")
+	require.NoError(t, uciSemanticContinuationMigration184().Rollback(fixture.db))
+	require.False(t, fixture.db.Migrator().HasTable(&UCISemanticContinuation{}), "rollback must drop only the new continuation state")
+	require.True(t, fixture.db.Migrator().HasTable(&UCIView{}), "rollback must retain pre-existing UCI projection state")
+	require.NoError(t, uciSemanticContinuationMigration184().Migrate(fixture.db))
+	require.True(t, fixture.db.Migrator().HasTable(&UCISemanticContinuation{}))
+	require.NoError(t, fixture.projection.CreateSemanticContinuation(ctx, continuation), "reapplied migration must restore persistence")
+	_, found, err = fixture.projection.LoadSemanticContinuation(ctx, continuation.CursorRef)
+	require.NoError(t, err)
+	require.True(t, found)
+}
+
+func uciSemanticContinuationFixture(fixture *uciPublicationFixture) ucidomain.SemanticContinuation {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	profile := ucidomain.VectorProfile{
+		ProviderRef:           "continuation-provider-" + fixture.token,
+		Model:                 "continuation-model-" + fixture.token,
+		Dimension:             1536,
+		PreprocessingRevision: "continuation-preprocessing-" + fixture.token,
+		IncludeRelativePath:   true,
+	}
+	return ucidomain.SemanticContinuation{
+		CursorRef: uuid.NewString(),
+		Context: ucidomain.ContextRef{
+			SourceID: fixture.source.SourceID, CheckoutID: fixture.checkout.CheckoutID,
+			ViewID: uuid.NewString(), AnalysisProfileID: fixture.profile.ProfileID, Generation: 1,
+		},
+		ClientSessionID:    "semantic-continuation-" + fixture.token,
+		ProfileFingerprint: uciSemanticContinuationDigest("semantic-profile", profile.ProviderRef, profile.Model, fmt.Sprintf("%d", profile.Dimension), profile.PreprocessingRevision, fmt.Sprintf("%t", profile.IncludeRelativePath)),
+		QueryDigest:        uciSemanticContinuationDigest("text", "continuation-query"),
+		FilterDigest:       uciSemanticContinuationDigest("filter", "", "go"),
+		Mode:               ucidomain.QueryModeFTS,
+		Order:              ucidomain.QueryOrderRelevance,
+		Limit:              1,
+		NextOffset:         1,
+		Vector:             uciSemanticVector(1, 0),
+		CreatedAt:          now,
+		ExpiresAt:          now.Add(10 * time.Minute),
+	}
+}
+
+func uciSemanticContinuationDigest(kind string, values ...string) string {
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("uci-query-continuation/"))
+	_, _ = hash.Write([]byte(kind))
+	for _, value := range values {
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(value))
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func TestUCIProjectionStoreSemanticContinuationSurvivesServiceRestart(t *testing.T) {
+	fixture := openUCIPublicationFixture(t)
+	ctx := context.Background()
+	profile := ucidomain.VectorProfile{
+		ProviderRef:           "restart-provider-" + fixture.token,
+		Model:                 "restart-model-" + fixture.token,
+		Dimension:             1536,
+		PreprocessingRevision: "restart-preprocessing-" + fixture.token,
+		IncludeRelativePath:   true,
+	}
+	artifacts := make([]uciPublicationArtifact, 0, 3)
+	memberships := make([]ucidomain.IndexMembership, 0, 3)
+	paths := []string{"a/first.go", "b/second.go", "c/third.go"}
+	for index, path := range paths {
+		artifact := fixture.admitArtifact(t, fixture.source.SourceID, fmt.Sprintf("restart-%d", index), fmt.Sprintf("// semantic restart %d\nfunc Restart%d() {}\n", index, index), UCIParseArtifactComplete)
+		artifacts = append(artifacts, artifact)
+		memberships = append(memberships, uciPublicationPresentMembership(path, artifact))
+	}
+	published := uciSemanticPublish(t, fixture, uciSemanticPublishInput{
+		key: "semantic-restart", checkout: fixture.checkout, jobKind: ucidomain.IndexJobInitial,
+		artifacts: artifacts, memberships: memberships,
+	})
+	authorized := uciSemanticAuthorize(t, fixture, published.Context)
+	for index, artifact := range artifacts {
+		candidate := uciSemanticCandidateAtPath(t, fixture.projection, authorized, paths[index], artifact.Artifact.ArtifactID)
+		require.NoError(t, fixture.projection.StoreCandidateEmbedding(ctx, authorized, profile, candidate, uciSemanticVector(1, float32(index))))
+	}
+	spec := ucidomain.QuerySpec{
+		ClientSessionID: "semantic-restart-" + fixture.token,
+		Mode:            ucidomain.QueryModeFTS,
+		Text:            "semantic",
+		Order:           ucidomain.QueryOrderRelevance,
+		Limit:           1,
+	}
+	expected := make([]string, 0, len(paths))
+	for offset := range paths {
+		pageSpec := spec
+		pageSpec.Offset = offset
+		page, err := fixture.projection.SelectHybridCandidates(ctx, authorized, profile, uciSemanticVector(1, 0), pageSpec)
+		require.NoError(t, err)
+		require.NotEmpty(t, page.Candidates)
+		expected = append(expected, page.Candidates[0].Candidate.EntityKey)
+	}
+
+	firstProvider := &uciProjectionCountingEmbedder{model: profile.Model, vector: uciSemanticVector(1, 0)}
+	firstService := ucidomain.NewSemanticService(profile, firstProvider, fixture.projection, fixture.projection, fixture.projection)
+	first, err := firstService.Query(ctx, authorized, spec)
+	require.NoError(t, err)
+	require.Equal(t, 1, firstProvider.calls)
+	firstCursor := uciProjectionSemanticContinuation(t, first)
+	require.LessOrEqual(t, len(firstCursor), 2048)
+	require.NotContains(t, firstCursor, spec.Text)
+
+	driftingProvider := &uciProjectionCountingEmbedder{model: profile.Model, vector: uciSemanticVector(0, 99)}
+	secondService := ucidomain.NewSemanticService(profile, driftingProvider, fixture.projection, fixture.projection, fixture.projection)
+	spec.Continuation = &firstCursor
+	second, err := secondService.Query(ctx, authorized, spec)
+	require.NoError(t, err)
+	require.Zero(t, driftingProvider.calls, "restart continuation must use the persisted query vector")
+	secondCursor := uciProjectionSemanticContinuation(t, second)
+
+	thirdProvider := &uciProjectionCountingEmbedder{model: profile.Model, vector: uciSemanticVector(0, 100)}
+	thirdService := ucidomain.NewSemanticService(profile, thirdProvider, fixture.projection, fixture.projection, fixture.projection)
+	spec.Continuation = &secondCursor
+	third, err := thirdService.Query(ctx, authorized, spec)
+	require.NoError(t, err)
+	require.Zero(t, thirdProvider.calls, "successor continuation must retain the original vector")
+
+	seen := []string{(*first.Response.Items)[0].Ref.EntityKey, (*second.Response.Items)[0].Ref.EntityKey, (*third.Response.Items)[0].Ref.EntityKey}
+	require.Equal(t, expected, seen, "PostgreSQL continuation pages must retain the original fused order without skips or duplicates")
+	var persisted int64
+	require.NoError(t, fixture.db.Model(&UCISemanticContinuation{}).Count(&persisted).Error)
+	require.Equal(t, int64(2), persisted, "each truncated hybrid page persists one opaque successor")
+}
+
+func uciProjectionSemanticContinuation(t *testing.T, result ucidomain.QueryResult) string {
+	t.Helper()
+	require.NotNil(t, result.Response.Continuation)
+	require.NotNil(t, result.Response.Continuation.Value)
+	return *result.Response.Continuation.Value
+}
+
 func TestUCIProjectionStoreHybridRanksBoundedPoolBeforePaging(t *testing.T) {
 	fixture := openUCIPublicationFixture(t)
 	ctx := context.Background()
@@ -221,7 +397,7 @@ func TestUCIProjectionStoreHybridRanksBoundedPoolBeforePaging(t *testing.T) {
 	oracle := uciHybridBoundedPoolOracle(seeds)
 	require.Less(t, len(oracle), candidateCount, "the bounded retrieval pool must not claim exhaustive corpus ranking")
 	require.Equal(t, "pkg/0050.go", oracle[0].path, "rank 51 in both lanes must win inside the bounded fusion pool")
-	service := ucidomain.NewSemanticService(profile, uciProjectionSemanticEmbedder{model: profile.Model, vector: uciSemanticVector(1, 0)}, fixture.projection, fixture.projection)
+	service := ucidomain.NewSemanticService(profile, uciProjectionSemanticEmbedder{model: profile.Model, vector: uciSemanticVector(1, 0)}, fixture.projection, fixture.projection, fixture.projection)
 	spec := ucidomain.QuerySpec{
 		ClientSessionID: "hybrid-oracle-" + fixture.token,
 		Mode:            ucidomain.QueryModeFTS,
@@ -230,7 +406,6 @@ func TestUCIProjectionStoreHybridRanksBoundedPoolBeforePaging(t *testing.T) {
 		Limit:           17,
 	}
 	seen := make([]string, 0, candidateCount)
-	page := 0
 	for {
 		result, err := service.Query(ctx, authorized, spec)
 		require.NoError(t, err)
@@ -246,10 +421,6 @@ func TestUCIProjectionStoreHybridRanksBoundedPoolBeforePaging(t *testing.T) {
 		}
 		token := *result.Response.Continuation.Value
 		spec.Continuation = &token
-		if page == 0 {
-			spec.Limit = 50
-		}
-		page++
 	}
 	want := make([]string, len(oracle))
 	for index, seed := range oracle {
@@ -329,6 +500,28 @@ func (embedder uciProjectionSemanticEmbedder) Embed(ctx context.Context, texts [
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	vectors := make([][]float32, len(texts))
+	for index := range texts {
+		vectors[index] = append([]float32(nil), embedder.vector...)
+	}
+	return vectors, nil
+}
+
+type uciProjectionCountingEmbedder struct {
+	model  string
+	vector []float32
+	calls  int
+}
+
+func (embedder *uciProjectionCountingEmbedder) Model() string {
+	return embedder.model
+}
+
+func (embedder *uciProjectionCountingEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	embedder.calls++
 	vectors := make([][]float32, len(texts))
 	for index := range texts {
 		vectors[index] = append([]float32(nil), embedder.vector...)

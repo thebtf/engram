@@ -26,6 +26,21 @@ const {
   trimStartupDiagnosticLog,
 } = require("./run-engram.js");
 
+test("missing keycard points to the real access console", () => {
+  const result = spawnSync(process.execPath, [path.join(__dirname, "run-engram.js")], {
+    encoding: "utf8",
+    env: {
+      PATH: process.env.PATH,
+      SystemRoot: process.env.SystemRoot,
+      ENGRAM_URL: "http://127.0.0.1:65535",
+      ENGRAM_CONFIG_FILE: path.join(os.tmpdir(), "engram-nonexistent-profile-config.json"),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /127\.0\.0\.1:65535\/access/);
+  assert.doesNotMatch(result.stderr, /\/tokens/);
+});
+
 test("Claude MCP config launches wrapper via CLAUDE_PLUGIN_ROOT interpolation", () => {
   // Claude Code interpolates ${CLAUDE_PLUGIN_ROOT} but does NOT resolve
   // relative args against the plugin root, so the Claude variant keeps the
@@ -60,7 +75,7 @@ test("MCP configs never interpolate user_config in an env block", () => {
   }
 });
 
-test("release-facing plugin and marketplace versions stay aligned", () => {
+test("OMP manifest resolves its script from the plugin root independently of the host cwd", () => {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const readJson = (...segments) => JSON.parse(fs.readFileSync(path.join(repoRoot, ...segments), "utf8"));
   const claudePlugin = readJson("plugin", "engram", ".claude-plugin", "plugin.json");
@@ -72,6 +87,16 @@ test("release-facing plugin and marketplace versions stay aligned", () => {
 
   assert.match(claudePlugin.version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/);
   assert.equal(ompPlugin.version, claudePlugin.version);
+  const ompServer = ompPlugin.mcpServers.engram;
+  assert.equal(Object.hasOwn(ompServer, "cwd"), false);
+  assert.deepEqual(ompServer, {
+    type: "stdio",
+    command: "node",
+    args: ["${OMP_PLUGIN_ROOT}/scripts/run-engram.js"],
+    timeout: 720000,
+  });
+  const ompArgs = expandMcpArgsForTest(ompServer.args, path.resolve(repoRoot, "plugin", "engram"));
+  assert.deepEqual(ompArgs.map(path.normalize), [path.join(repoRoot, "plugin", "engram", "scripts", "run-engram.js")]);
   assert.equal(rootPlugin.version, claudePlugin.version);
   assert.equal(codexPlugin.version, claudePlugin.version);
   assert.equal(claudeMarketplace.version, claudePlugin.version);
@@ -692,7 +717,7 @@ test("rehashes the resolved object before one spawn and reports spawn failure wi
       pluginRoot: "root",
       pluginData: "data",
       args: ["serve"],
-      env: {},
+      env: { ENGRAM_CLIENT_INSTANCE_ID: "fixture-client" },
       resolve: async () => { events.push("resolve"); return { path: "trusted-object", target }; },
       roots: () => ({ objects: "objects" }),
       hash: (candidate, actual, root) => { events.push(`hash:${candidate}:${actual.sha256}:${root}`); return true; },
@@ -712,6 +737,69 @@ test("final rehash failure prevents spawn of resolved bytes", async () => {
     spawnSync: () => { spawned = true; return { status: 0 }; },
   }), /final integrity verification/);
   assert.equal(spawned, false);
+});
+
+test("Go-only launch retains an installation-scoped identity and does not claim a parser", async () => {
+  const pluginData = fs.mkdtempSync(path.join(os.tmpdir(), "engram-go-only-start-"));
+  try {
+    const environments = [];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      assert.equal(await resolveAndSpawn({
+        pluginRoot: "root", pluginData, args: [],
+        env: { ENGRAM_UCI_PARSER_EXECUTABLE: "foreign", ENGRAM_UCI_PARSER_BUNDLE_DIGEST: "foreign" },
+        resolve: async () => ({ path: "client", target: { sha256: "b".repeat(64) }, parserTarget: null }),
+        roots: () => ({ objects: "objects" }), hash: () => true,
+        spawnSync: (_, __, options) => { environments.push(options.env); return { status: 0 }; },
+      }), 0);
+    }
+    assert.match(environments[0].ENGRAM_CLIENT_INSTANCE_ID, /^engram-[0-9a-f]{32}$/);
+    assert.equal(environments[1].ENGRAM_CLIENT_INSTANCE_ID, environments[0].ENGRAM_CLIENT_INSTANCE_ID);
+    assert.equal(environments[0].ENGRAM_UCI_PARSER_EXECUTABLE, undefined);
+    assert.equal(environments[0].ENGRAM_UCI_PARSER_BUNDLE_DIGEST, undefined);
+  } finally {
+    fs.rmSync(pluginData, { recursive: true, force: true });
+  }
+});
+
+test("hooks and daemon use the same persisted identity without manual configuration", () => {
+  const pluginData = fs.mkdtempSync(path.join(os.tmpdir(), "engram-hook-install-"));
+  const keys = ["PLUGIN_DATA", "ENGRAM_URL", "ENGRAM_TOKEN", "ENGRAM_CLIENT_INSTANCE_ID", "ENGRAM_CONFIG_FILE"];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    process.env.PLUGIN_DATA = pluginData;
+    process.env.ENGRAM_URL = "http://127.0.0.1:1";
+    process.env.ENGRAM_TOKEN = "engram_test";
+    delete process.env.ENGRAM_CLIENT_INSTANCE_ID;
+    process.env.ENGRAM_CONFIG_FILE = path.join(pluginData, "missing-config.json");
+    const fromHook = require("../hooks/lib.js").getEngramConfig().clientInstanceID;
+    assert.match(fromHook, /^engram-[0-9a-f]{32}$/);
+    assert.equal(fs.readFileSync(path.join(pluginData, "client-instance-id"), "utf8"), `${fromHook}\n`);
+    assert.equal(require("./client-instance.js").installationClientInstanceID(pluginData), fromHook);
+    fs.writeFileSync(path.join(pluginData, "client-instance-id"), "bad\n");
+    assert.throws(() => require("./client-instance.js").installationClientInstanceID(pluginData), /identity is invalid/);
+  } finally {
+    for (const key of keys) restoreEnv(key, previous[key]);
+    fs.rmSync(pluginData, { recursive: true, force: true });
+  }
+});
+
+test("verified parser identity reaches daemon without inherited parser overrides", async () => {
+  const digest = `sha256:${"a".repeat(64)}`;
+  const calls = [];
+  const status = await resolveAndSpawn({
+    pluginRoot: "root", pluginData: "data", args: ["serve"],
+    env: { SYSTEMROOT: "C:\\Windows", SECRET: "not-for-parser", ENGRAM_CLIENT_INSTANCE_ID: "fixture-client", ENGRAM_UCI_PARSER_EXECUTABLE: "foreign" },
+    resolve: async () => ({ path: "client", target: { sha256: "b".repeat(64) }, parserPath: "parser", parserTarget: { sha256: "c".repeat(64) } }),
+    roots: () => ({ objects: "objects" }), hash: () => true,
+    spawnSync: (file, args, options) => {
+      calls.push({ file, args, options });
+      return file === "parser" ? { status: 0, stdout: `${digest}\n` } : { status: 0 };
+    },
+  });
+  assert.equal(status, 0);
+  assert.deepEqual(calls[0].options.env, { SYSTEMROOT: "C:\\Windows" });
+  assert.equal(calls[1].options.env.ENGRAM_UCI_PARSER_BUNDLE_DIGEST, digest);
+  assert.equal(calls[1].options.env.ENGRAM_UCI_PARSER_EXECUTABLE, "parser");
 });
 
 function restoreEnv(key, value) {
@@ -744,7 +832,7 @@ function oversizedProjectTokens() {
 }
 
 function expandMcpArgsForTest(args, pluginRoot) {
-  return args.map((arg) => arg.replace("${CLAUDE_PLUGIN_ROOT}", pluginRoot.replaceAll("\\", "/")));
+  return args.map((arg) => arg.replaceAll("${CLAUDE_PLUGIN_ROOT}", pluginRoot.replaceAll("\\", "/")).replaceAll("${OMP_PLUGIN_ROOT}", pluginRoot.replaceAll("\\", "/")));
 }
 
 test("HAP-01 source diagnostic keeps launcher credential resolution out of installed proof", () => {

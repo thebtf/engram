@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "design_version": "2026.09.10",
-  "promoted_at_utc": "2026-09-10T00:00:00Z",
-  "content_sha256": "356563b1674beda461230e50af1d9afc29e28e197fcb64e18db83a592bf35ee9",
+  "design_version": "2026.09.17",
+  "promoted_at_utc": "2026-09-17T00:00:00Z",
+  "content_sha256": "ac98a46de24efbbe6b8a16865e35b8f48dc5493f78838e81c02ce39f746dabee",
   "source_classification": "private-authoring-snapshot",
   "promotion_tool": {
     "path": "scripts/promote-od-operator-console.ps1",
-    "version": "g1-design-only-3"
+    "version": "g1-design-only-4"
   },
   "files": [
     {
@@ -16,7 +16,7 @@
     },
     {
       "path": "contracts/DESIGN.md",
-      "sha256": "6a679a7b08def3d62bdc2e41addb1e45ff1f97281440ea5554b632a54da62ecc",
+      "sha256": "30120b174b0a0148c4dfac4f1be60175435a8a553be23c4d734bc8de62366186",
       "source_classification": "private-authoring-snapshot"
     },
     {
@@ -107,22 +107,10 @@
       "mockup": "mockups/index.html#noise"
     },
     {
-      "id": "graph",
-      "kind": "route",
-      "route": "/graph",
-      "mockup": "mockups/index.html#graph"
-    },
-    {
       "id": "code",
       "kind": "route",
       "route": "/code",
       "mockup": "mockups/index.html#code"
-    },
-    {
-      "id": "books",
-      "kind": "route",
-      "route": "/books",
-      "mockup": "mockups/index.html#books"
     },
     {
       "id": "rules",

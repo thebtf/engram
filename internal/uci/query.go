@@ -37,6 +37,7 @@ const (
 	QueryModeExactQualifiedSymbol QueryMode = "exact_qualified_symbol"
 	QueryModeExactRelativePath    QueryMode = "exact_relative_path"
 	QueryModeFTS                  QueryMode = "fts"
+	QueryModeStructure            QueryMode = "structure"
 )
 
 // QueryOrder selects the deterministic candidate ordering.
@@ -289,7 +290,11 @@ func validateNormalizedQuerySpec(spec QuerySpec) error {
 	if !spec.Mode.valid() {
 		return fmt.Errorf("uci query: mode is invalid")
 	}
-	if !validQueryIdentity(spec.Text, queryMaxText) {
+	if spec.Mode == QueryModeStructure {
+		if spec.Text != "" || spec.Order != QueryOrderPath {
+			return fmt.Errorf("uci query: structure request is invalid")
+		}
+	} else if !validQueryIdentity(spec.Text, queryMaxText) {
 		return fmt.Errorf("uci query: text is invalid")
 	}
 	if !spec.Order.valid() {
@@ -401,7 +406,7 @@ func validQueryCoverage(coverage IndexCoverageState) bool {
 
 func (mode QueryMode) valid() bool {
 	switch mode {
-	case QueryModeExactLocalName, QueryModeExactQualifiedSymbol, QueryModeExactRelativePath, QueryModeFTS:
+	case QueryModeExactLocalName, QueryModeExactQualifiedSymbol, QueryModeExactRelativePath, QueryModeFTS, QueryModeStructure:
 		return true
 	default:
 		return false
@@ -458,8 +463,11 @@ func queryItemFromCandidate(candidate QueryCandidate, spec QuerySpec) (QueryItem
 		score = &value
 	}
 	matchSource := QueryMatchExact
-	if spec.Mode == QueryModeFTS {
+	switch spec.Mode {
+	case QueryModeFTS:
 		matchSource = QueryMatchFTS
+	case QueryModeStructure:
+		matchSource = QueryMatchStructure
 	}
 	contentDigest, _ := queryBareContentDigest(candidate.Proof.ContentDigest)
 	return QueryItem{
@@ -586,10 +594,14 @@ func queryPinnedFreshness(generation int64) *QueryFreshness {
 }
 
 func queryRetrievalMode(mode QueryMode) QueryRetrievalMode {
-	if mode == QueryModeFTS {
+	switch mode {
+	case QueryModeFTS:
 		return QueryRetrievalLexical
+	case QueryModeStructure:
+		return QueryRetrievalStructure
+	default:
+		return QueryRetrievalExact
 	}
-	return QueryRetrievalExact
 }
 
 func containsQueryWarning(warnings QueryWarnings, want string) bool {

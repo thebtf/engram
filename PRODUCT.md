@@ -21,16 +21,22 @@ system from a plausible-looking but incomplete one quickly.
 ## Product Purpose
 
 Engram preserves useful state across agent sessions and workstations: memories,
-behavioral rules, issues, documents, credentials, and operational state. The
-operator console makes that system understandable and controllable without
-requiring database access, raw endpoint knowledge, or manual reconstruction of
-derived structures.
+behavioral rules, issues, documents, credentials, operational state, and authorized
+code intelligence. The operator console makes that system understandable and
+controllable without database access, raw endpoint knowledge, or manual
+reconstruction of derived structures.
 
-Success means that the operator can answer three questions from the product
-itself: what Engram currently knows, why it believes or exposes that state, and
-what safe action will improve or recover it. A control is not complete until its
-result is confirmed by the server and can be read back after the persistence
-boundary implied by the action.
+For the D-A operator workspace, the product must answer: **where is the selected
+implementation, how current and complete is that indexed state, and why is it related
+to this other code?** The normal path begins at Home, uses readable repository and
+working-copy identity, and leads to source and released relation evidence. Internal
+Source/Checkout/View identifiers remain inspectable evidence, not task input.
+
+Success means the operator can answer what Engram currently knows, why it believes or
+exposes that state, and what safe action will improve or recover it. A control is not
+complete until its result is confirmed by the server and can be read back after the
+persistence boundary implied by the action. An honest shell, endpoint coverage, or
+design-fidelity scaffold alone is not a completed operator workflow.
 
 ## Brand Personality
 

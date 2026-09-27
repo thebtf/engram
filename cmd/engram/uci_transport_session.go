@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 
 	"github.com/thebtf/engram/internal/auditcontext"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
@@ -14,10 +16,17 @@ import (
 const (
 	muxcoreDaemonFlag                    = "--muxcore-daemon"
 	muxcoreEmbeddedVersion               = "v0.29.1"
-	muxcoreNamespace                     = "engram"
+	muxcoreNamespaceBase                 = "engram"
 	uciTransportSessionBytes             = 32
 	uciTransportSessionUnavailableReason = "uci_transport_session_unavailable"
 )
+
+var muxcoreNamespace = muxcoreNamespaceBase
+
+func muxcoreInstallationNamespace(clientInstanceID string) string {
+	digest := sha256.Sum256([]byte(clientInstanceID))
+	return muxcoreNamespaceBase + "-" + hex.EncodeToString(digest[:16])
+}
 
 func muxcoreBaseConfig() engine.Config {
 	return engine.Config{

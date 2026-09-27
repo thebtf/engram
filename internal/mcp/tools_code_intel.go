@@ -21,10 +21,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"time"
 	"unicode/utf8"
 
+	"github.com/thebtf/engram/internal/config"
 	gorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/retrieval"
 	"github.com/thebtf/engram/internal/uci"
@@ -35,12 +35,13 @@ import (
 // "true" matches the convention used by vnextFEnabled and other flag checks in
 // this package.
 func codeIntelEnabled() bool {
-	return os.Getenv("ENGRAM_CODE_INTEL_ENABLED") == "true"
+	return config.CodeIntelEnabled()
 }
 
 const (
 	codebaseSearchDefaultLimit                = 10
 	codebaseSearchMaxLimit                    = 50
+	codebaseSearchMaxContinuation             = 2_048
 	codebaseAfterBarrierMaxTokenLength        = 2_048
 	codebaseAfterBarrierMaxWaitMS       int64 = 60_000
 	codebaseStatusStabilizationAttempts       = 2
@@ -61,11 +62,11 @@ type CodebaseFreshnessApplication interface {
 }
 
 type CodebaseSearchInput struct {
-	Query      string
-	PathPrefix string
-	Limit      int
+	Query        string
+	PathPrefix   string
+	Limit        int
+	Continuation *string
 }
-
 type CodebaseEvidenceRecorderHealth struct {
 	State           string `json:"state"`
 	LastFailureCode string `json:"last_failure_code"`
@@ -112,6 +113,12 @@ func codebaseSearchTool() Tool {
 					"default":     codebaseSearchDefaultLimit,
 					"minimum":     1,
 					"maximum":     codebaseSearchMaxLimit,
+				},
+				"continuation": map[string]any{
+					"type":        "string",
+					"minLength":   1,
+					"maxLength":   codebaseSearchMaxContinuation,
+					"description": "Opaque application-issued continuation token",
 				},
 				"context_handle": map[string]any{
 					"type":        "string",
@@ -356,11 +363,13 @@ type codebaseSearchArgs struct {
 	Query            *string                   `json:"query"`
 	PathPrefix       *string                   `json:"path_prefix"`
 	Limit            *int                      `json:"limit"`
+	Continuation     *string                   `json:"continuation"`
 	Project          *string                   `json:"project"`
 	AfterBarrier     *codebaseAfterBarrierArgs `json:"after_barrier"`
 	hasContextHandle bool
 	hasAfterBarrier  bool
 	hasPathPrefix    bool
+	hasContinuation  bool
 }
 
 type codebaseStatusArgs struct {
@@ -412,6 +421,10 @@ func decodeCodebaseSearchArgs(raw json.RawMessage) (codebaseSearchArgs, error) {
 	_, args.hasContextHandle = fields["context_handle"]
 	_, args.hasAfterBarrier = fields["after_barrier"]
 	_, args.hasPathPrefix = fields["path_prefix"]
+	_, args.hasContinuation = fields["continuation"]
+	if args.hasContinuation && (args.Continuation == nil || !validCodebaseSearchContinuation(*args.Continuation)) {
+		return codebaseSearchArgs{}, errors.New("invalid continuation")
+	}
 	if args.Query == nil || *args.Query == "" {
 		return codebaseSearchArgs{}, errors.New("query is required")
 	}
@@ -469,6 +482,10 @@ func validateCodebaseAfterBarrier(afterBarrier *codebaseAfterBarrierArgs, presen
 
 func validCodebaseAfterBarrierToken(token string) bool {
 	return len(token) <= codebaseAfterBarrierMaxTokenLength && codebaseContextIdentityText(token)
+}
+
+func validCodebaseSearchContinuation(value string) bool {
+	return len(value) <= codebaseSearchMaxContinuation && utf8.ValidString(value) && codebaseContextIdentityText(value)
 }
 
 func decodeLegacyUnscopedCodebaseSearchArgs(raw json.RawMessage) (legacyUnscopedCodebaseSearchInput, error) {
@@ -540,6 +557,10 @@ func (args codebaseSearchArgs) searchInput() CodebaseSearchInput {
 	}
 	if args.Limit != nil {
 		input.Limit = *args.Limit
+	}
+	if args.Continuation != nil {
+		value := *args.Continuation
+		input.Continuation = &value
 	}
 	return input
 }

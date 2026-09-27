@@ -59,6 +59,17 @@ function Test-RelayHelperRequired {
     return [int]$Matches[1] -gt 6 -or ([int]$Matches[1] -eq 6 -and [int]$Matches[2] -ge 49)
 }
 
+# Parser policy first shipped with v6.50.0; older archives remain installable.
+function Test-ParserPolicyRequired {
+    param([string]$Ver)
+
+    $VersionClean = $Ver -replace "^v", ""
+    if ($VersionClean -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9A-Za-z-][0-9A-Za-z-]*))*)?$') {
+        return $true
+    }
+    return [int]$Matches[1] -gt 6 -or ([int]$Matches[1] -eq 6 -and [int]$Matches[2] -ge 50)
+}
+
 # ---------------------------------------------------------------------------
 # Fetch latest release tag
 # ---------------------------------------------------------------------------
@@ -121,6 +132,11 @@ function Install-Release {
         if (-not (Test-Path -LiteralPath $PolicyPath -PathType Leaf)) {
             Write-Err "Release archive is missing required bootstrap-targets.json"
         }
+        $ParserPolicyPath = Join-Path $TempDir "parser-targets.json"
+        $HasParserPolicy = Test-ParserPolicyRequired $Ver
+        if ($HasParserPolicy -and -not (Test-Path -LiteralPath $ParserPolicyPath -PathType Leaf)) {
+            Write-Err "Release archive is missing required parser-targets.json"
+        }
         $ManifestPath = Join-Path $TempDir "package.json"
         if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
             Write-Err "Release archive is missing required OMP package.json"
@@ -142,7 +158,7 @@ function Install-Release {
         # A release payload must never be allowed to validate its own policy.
         $ValidatorScript = @'
 const fs = require('node:fs');
-const [file, version] = process.argv.slice(2);
+const [file, version, parserFile] = process.argv.slice(2);
 const assets = { 'win32-x64': 'engram-windows-amd64.exe', 'linux-x64': 'engram-linux-amd64', 'darwin-arm64': 'engram-darwin-arm64' };
 const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9A-Za-z-][0-9A-Za-z-]*))*)?$/;
 const sha256 = /^[0-9a-f]{64}$/;
@@ -214,12 +230,24 @@ for (const [key, asset] of Object.entries(assets)) {
   exact(target.desired, ['version', 'asset', 'size', 'sha256']);
   if (target.desired.version !== version || target.desired.asset !== asset || !Number.isSafeInteger(target.desired.size) || target.desired.size <= 0 || target.desired.size > 128 * 1024 * 1024 || !sha256.test(target.desired.sha256) || policy.revoked_sha256.includes(target.desired.sha256)) throw new Error(`invalid target ${key}`);
 }
+if (major > 6 || (major === 6 && minor >= 50)) {
+  const parserText = fs.readFileSync(parserFile, 'utf8');
+  assertNoDuplicateProperties(parserText);
+  const parser = JSON.parse(parserText);
+  exact(parser, ['schema_version', 'package_version', 'targets']);
+  if (parser.schema_version !== 1 || parser.package_version !== version) throw new Error('parser schema or version mismatch');
+  exact(parser.targets, Object.keys(assets));
+  if (parser.targets['linux-x64'] !== null || parser.targets['darwin-arm64'] !== null) throw new Error('unsupported parser targets');
+  const target = parser.targets['win32-x64'];
+  exact(target, ['version', 'asset', 'size', 'sha256']);
+  if (target.version !== version || target.asset !== 'uci-parser-windows-amd64.exe' || !Number.isSafeInteger(target.size) || target.size < 1 || target.size > 128 * 1024 * 1024 || !sha256.test(target.sha256)) throw new Error('invalid parser target');
+}
 '@
-        $ValidatorOutput = @($ValidatorScript | & $NodeExecutable - $PolicyPath $VersionClean 2>&1)
+        $ValidatorOutput = @($ValidatorScript | & $NodeExecutable - $PolicyPath $VersionClean $ParserPolicyPath 2>&1)
         $ValidatorExitCode = $LASTEXITCODE
         $ValidatorOutput | ForEach-Object { Write-Host $_ }
         if ($ValidatorExitCode -ne 0) {
-            Write-Err "Release archive has an invalid bootstrap policy: schema or target matrix mismatch"
+            Write-Err "Release archive has an invalid bootstrap policy or parser policy: schema or target matrix mismatch"
         }
 
         Write-Info "Installing to $InstallDir..."
@@ -241,6 +269,9 @@ for (const [key, asset] of Object.entries(assets)) {
 
         Copy-Item "$TempDir\scripts\*.js" "$InstallDir\scripts\" -Force -ErrorAction Stop
         Copy-Item $PolicyPath "$InstallDir\bootstrap-targets.json" -Force -ErrorAction Stop
+        if ($HasParserPolicy) {
+            Copy-Item $ParserPolicyPath "$InstallDir\parser-targets.json" -Force -ErrorAction Stop
+        }
         Copy-Item $ManifestPath "$InstallDir\package.json" -Force -ErrorAction Stop
         Copy-Item $ExtensionPath "$InstallDir\extensions\engram-memory.mjs" -Force -ErrorAction Stop
         if ($HasRelayHelper) {

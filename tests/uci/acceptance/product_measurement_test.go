@@ -263,7 +263,7 @@ func (fixture *uciProductMeasurementFixture) recompose(t *testing.T) {
 		contextApplication,
 		uci.NewAliasResolver(fixture.contextStore.LookupLegacyAliasRecords),
 		uci.NewQueryService(fixture.projection),
-		uci.NewSemanticService(fixture.vectorProfile, embedder, fixture.projection, fixture.projection),
+		uci.NewSemanticService(fixture.vectorProfile, embedder, fixture.projection, fixture.projection, fixture.projection),
 		uci.NewGraphService(fixture.projection),
 		uci.NewVersionedReadService(fixture.projection),
 		uci.NewIndexStatusService(fixture.projection, &fixture.vectorProfile),

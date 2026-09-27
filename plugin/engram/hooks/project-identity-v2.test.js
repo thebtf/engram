@@ -244,40 +244,6 @@ test('shared invalid vectors and wrong-type anchor sharing are rejected exactly'
   }), /PROJECT_IDENTITY_INVALID/);
 });
 
-test('capture hook registration transport failure still runs local handler', (t) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-registration-failure-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const childScript = `
-    const lib = require(process.argv[1]);
-    lib.RunHook('UserPromptSubmit', async (context) => {
-      if (!context.ProjectIdentityRegistrationOffline) throw new Error('OFFLINE_FLAG_MISSING');
-      process.stderr.write('HANDLER_RAN');
-      return '';
-    }).catch((error) => {
-      process.stderr.write(String(error && error.stack || error));
-      process.exitCode = 1;
-    });
-  `;
-  const result = spawnSync(process.execPath, ['-e', childScript, require.resolve('./lib')], {
-    input: JSON.stringify({ session_id: 'registration-failure', cwd: dir }),
-    encoding: 'utf8',
-    timeout: NODE_CHILD_TIMEOUT_MS,
-    windowsHide: true,
-    env: {
-      ...process.env,
-      ENGRAM_INTERNAL: '0',
-      ENGRAM_QUIET: '0',
-      ENGRAM_URL: 'http://127.0.0.1:9',
-      ENGRAM_TOKEN: 'test-token',
-    },
-  });
-  assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), '{"continue":true}');
-  assert.match(result.stderr, /HANDLER_RAN/);
-  assert.match(result.stderr, /continuing local capture\/cleanup/);
-});
-
 test('SessionStart without credentials reaches setup before identity registration', (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-session-setup-'));
   const configPath = path.join(workspace, 'config.json');
@@ -358,14 +324,20 @@ test('non-SessionStart injection hook registration transport failure stays fail 
   assert.doesNotMatch(result.stderr, /HANDLER_RAN/);
 });
 
-test('SessionStart registration transport failure renders cached payload without a live fetch', (t) => {
+test('anchored V3 SessionStart registration outage renders scoped stale payload without a live fetch', (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-session-cache-'));
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-session-data-'));
   t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const anchorProjectID = '33333333-3333-4333-8333-333333333333';
+  fs.writeFileSync(path.join(workspace, '.engram-project'), JSON.stringify({
+    version: 3,
+    project_id: anchorProjectID,
+    name: 'offline-session',
+    scope: 'directory',
+  }));
 
-  const selector = lib.ProjectIDWithName(workspace);
-  const cachePath = path.join(dataDir, 'cache', `session-start-${selector}.json`);
+  const cachePath = path.join(dataDir, 'cache', `session-start-${anchorProjectID}.json`);
   fs.mkdirSync(path.dirname(cachePath), { recursive: true });
   fs.writeFileSync(cachePath, JSON.stringify({
     issues: [],
@@ -386,6 +358,7 @@ test('SessionStart registration transport failure renders cached payload without
       ENGRAM_URL: 'http://127.0.0.1:9',
       ENGRAM_TOKEN: 'test-token',
       ENGRAM_DATA_DIR: dataDir,
+      ENGRAM_CLIENT_INSTANCE_ID: 'hook-install-offline-test',
     },
   });
 

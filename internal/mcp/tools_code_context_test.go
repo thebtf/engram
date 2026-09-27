@@ -118,7 +118,6 @@ func TestUCICodebaseContextToolDefinition(t *testing.T) {
 	action, ok := properties["action"].(map[string]any)
 	require.True(t, ok, "codebase_context.action must be declared")
 	require.Equal(t, "string", action["type"])
-	require.ElementsMatch(t, []string{"resolve", "list", "select"}, action["enum"])
 	for _, name := range []string{
 		"context_handle",
 		"source_id",

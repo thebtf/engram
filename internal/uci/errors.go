@@ -15,9 +15,10 @@ var ErrPublicationIdempotencyMismatch = errors.New("IDEMPOTENCY_MISMATCH")
 type ContextErrorCode string
 
 const (
-	ContextRequired  ContextErrorCode = "CONTEXT_REQUIRED"
-	ContextMismatch  ContextErrorCode = "CONTEXT_MISMATCH"
-	PermissionDenied ContextErrorCode = "PERMISSION_DENIED"
+	ContextRequired            ContextErrorCode = "CONTEXT_REQUIRED"
+	ContextMismatch            ContextErrorCode = "CONTEXT_MISMATCH"
+	PermissionDenied           ContextErrorCode = "PERMISSION_DENIED"
+	RegistrationProfileUnbound ContextErrorCode = "REGISTRATION_PROFILE_UNBOUND"
 )
 
 // ContextError retains an internal cause while exposing only its closed outcome.
@@ -49,7 +50,7 @@ func (err *ContextError) Unwrap() error {
 
 func (code ContextErrorCode) valid() bool {
 	switch code {
-	case ContextRequired, ContextMismatch, PermissionDenied:
+	case ContextRequired, ContextMismatch, PermissionDenied, RegistrationProfileUnbound:
 		return true
 	default:
 		return false

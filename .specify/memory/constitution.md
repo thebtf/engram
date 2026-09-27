@@ -1,13 +1,14 @@
 <!--
 Sync Impact Report
+- Current amendment: 4.0.0 -> 5.0.0 (MAJOR release-gate availability relaxation), effective 2026-09-26 by operator directive. Attempt Sonar when available; record `SKIPPED_UNAVAILABLE / NOT_PROVEN` with a concrete diagnostic for unavailable service/tool/runtime, continue other gates and delivery without Sonar repair unless separately requested. Actual analyzed findings and all other gates retain their requirements. The 2026-09-25 v6.49.4 receipt below remains historical evidence, not the current availability limit.
 - Adopted version change: 3.0.0 -> 4.0.0 (MAJOR relaxation of one governing release gate), effective 2026-09-25. The existing candidate was already 3.0.0; 1.0.0 -> 2.0.0 would downgrade it.
 - Prior amendment: 2.0.0 -> 3.0.0 effective 2026-09-15, approved in OMP session 01a08c71-d2b8-7638-a45f-ef4b606fd786; its finding-disposition rule and XI/XIII scope clarification remain in force.
-- Operator decision: proceed without Sonar for the v6.49.4 PR #531 OMP plugin hotfix only. Sonar is NOT_PROVEN; prior findings remain unresolved, not accepted or cleared. The exception does not apply to PR #508, another version, or wider scope.
+- Historical 2026-09-25 operator decision: proceed without Sonar for the v6.49.4 PR #531 OMP plugin hotfix only. Sonar was NOT_PROVEN; prior findings remained unresolved, not accepted or cleared. That decision did not apply to PR #508, another version, or wider scope; the current availability rule is the separate amendment above.
 - Unchanged: all core principles and other release, security, review, image, migration, and rollout gates under docs/RELEASE-PROTOCOL.md.
 - Revalidated active recovery scope: specs/001-engram-architectural-recovery/spec.md (unchanged outcome); plan.md, tasks.md (AR-7 T085/T086), quickstart.md, IMPLEMENTATION-HANDOFF.md, IMPLEMENTATION-SESSION-PROMPT.txt, checklists/operability.md, and analysis/fr-sc-task-traceability.md (AR-7 exact-head Sonar obligations retained; PR #531 is not AR-7 closure).
 - Revalidated other feature scope: specs/010-unified-code-intelligence/spec.md, plan.md, quickstart.md, tasks.md (UCI-1 release gate retained); specs/009-working-agent-memory-r1/spec.md and plan.md (future M6 gate retained); specs/011-operator-code-console/checklists/implementation-readiness.md (non-release Sonar boundary retained). None supplies a PR #531 release task or needs an edit.
 - Synchronized consumers: AGENTS.md already names the one-time exception; docs/RELEASE-PROTOCOL.md defines its bounded prerequisites and corrects the incomplete-campaign history. No executable gate changed.
-- Revalidation status: scoped constitutional exception recorded; actual release evidence and all remaining prerequisites are still pending.
+- Historical 2026-09-25 revalidation status: scoped constitutional exception recorded; actual release evidence and all remaining prerequisites were pending.
 -->
 
 # Engram Constitution
@@ -133,18 +134,18 @@ contracts.
   terminal failure, and degraded-provider semantics.
 - Any new projection requires a named authority, consumer, rebuild procedure, health contract,
   and no write authority.
-- Before a release tag or publication, the exact candidate MUST pass a fresh SonarQube analysis
-  and its Quality Gate MUST be `OK` under the enforced policy, except for the operator-authorized
-  one-time v6.49.4 PR #531 OMP plugin hotfix exception in `docs/RELEASE-PROTOCOL.md`.
-  Under that exception Sonar is `NOT_PROVEN`, and previously reported findings remain unresolved;
-  the exception MUST NOT be reused for PR #508, another version, or a wider candidate scope.
-  Every reported finding MUST otherwise have an evidenced disposition under the release protocol.
+- Before a release tag or publication, the exact candidate MUST receive a fresh SonarQube analysis
+  and Quality Gate `OK` when the service, tool and runtime are available. If unavailable, record
+  `SKIPPED_UNAVAILABLE / NOT_PROVEN` with a concrete diagnostic and continue other checks and
+  delivery; Sonar repair is not required unless separately requested. Unavailability MUST NOT
+  be reported as a PASS, zero findings, or an exemption for actual analyzed code/security findings.
+  Every reported finding MUST have an evidenced disposition under the release protocol.
   Findings that violate required checks or the accepted safety, integrity, compatibility, or
   user-behavior contract MUST be fixed before release. Nonblocking findings may be deferred only
-  by the authorized maintainer; deferral does not bypass a failing Quality Gate outside the
-  named exception, required approval, or unresolved mandatory review. Policy thresholds, analysis
-  scope, and scanner/security exceptions MUST NOT be changed merely to make a candidate pass.
-  All other pre-release and rollout gates in the release protocol remain mandatory for PR #531.
+  by the authorized maintainer; deferral does not bypass an available failing Quality Gate,
+  required approval, or unresolved mandatory review. Policy thresholds, analysis scope, and
+  scanner/security exceptions MUST NOT be changed merely to make a candidate pass.
+  All other pre-release and rollout gates in the release protocol remain mandatory.
 - A destructive contraction occurs only after backup or export, migration receipts, zero-drift
   observation, compatibility sunset, and rollback boundary evidence exist.
 
@@ -161,4 +162,4 @@ or removes a governing principle; a MINOR version adds or materially expands one
 clarifies without changing meaning. Every release and implementation review MUST check conformance
 to this constitution, preserve evidence of any exception, and reject scope expansion by workaround.
 
-**Version**: 4.0.0 (effective 2026-09-25) | **Ratified**: 2026-08-21 | **Last Amended**: 2026-09-25
+**Version**: 5.0.0 (effective 2026-09-26) | **Ratified**: 2026-08-21 | **Last Amended**: 2026-09-26

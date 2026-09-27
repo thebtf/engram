@@ -7,6 +7,7 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const { hashFile, objectRoots, resolveForLaunch } = require("./ensure-binary.js");
+const { installationClientInstanceID } = require("./client-instance.js");
 
 const STARTUP_DIAGNOSTIC_LOG_MAX_BYTES = 128 * 1024;
 const HAP_01B_REVISION = "omp-hap-01b/1";
@@ -73,7 +74,7 @@ async function main() {
   (configFile && isConfiguredValue(configFile.api_token) ? configFile.api_token : "");
  if (!token) {
   process.stderr.write(
-   `[engram] FATAL: ENGRAM_TOKEN is empty. Open ${serverURL.replace(/\/+$/, "")}/tokens, ` +
+   `[engram] FATAL: ENGRAM_TOKEN is empty. Open ${serverURL.replace(/\/+$/, "")}/access, ` +
    "generate a workstation keycard, then configure ENGRAM_TOKEN.\n" +
    "Universal (all harnesses): add \"api_token\":\"engram_...\" to the config file.\n" +
    `Config file checked: ${configFilePath}\n`
@@ -81,6 +82,12 @@ async function main() {
   process.exitCode = 1;
   return;
  }
+ process.env.ENGRAM_CLIENT_INSTANCE_ID = configuredEnvValue(
+  "ENGRAM_CLIENT_INSTANCE_ID",
+  "CLAUDE_PLUGIN_OPTION_client_instance_id",
+  "CLAUDE_PLUGIN_OPTION_CLIENT_INSTANCE_ID",
+  "ENGRAM_CLAUDE_USERCONFIG_CLIENT_INSTANCE_ID"
+ ) || configFile?.client_instance_id || "";
  process.env.ENGRAM_TOKEN = token;
  const childEnv = childEnvForEngram(process.env, configFile?.hap_01b);
 
@@ -110,9 +117,29 @@ async function resolveAndSpawn(options) {
  if (!hash(resolved.path, resolved.target, roots(options.pluginData).objects)) {
   throw new Error("resolved client failed final integrity verification");
  }
+ const env = { ...options.env };
+ env.ENGRAM_CLIENT_INSTANCE_ID = env.ENGRAM_CLIENT_INSTANCE_ID || installationClientInstanceID(options.pluginData);
+ delete env.ENGRAM_UCI_PARSER_EXECUTABLE;
+ delete env.ENGRAM_UCI_PARSER_BUNDLE_DIGEST;
+ if (resolved.parserTarget) {
+  if (!hash(resolved.parserPath, resolved.parserTarget, roots(options.pluginData).objects)) {
+   throw new Error("resolved parser failed final integrity verification");
+  }
+  const parserEnv = Object.fromEntries(["SYSTEMROOT", "WINDIR", "COMSPEC"]
+   .filter((name) => env[name]).map((name) => [name, env[name]]));
+  const probe = (options.spawnSync || spawnSync)(resolved.parserPath, ["--bundle-digest"], {
+   encoding: "utf8", env: parserEnv, timeout: 10000, maxBuffer: 256,
+  });
+  const failure = spawnFailureMessage(probe, "parser identity probe");
+  if (failure || !/^sha256:[0-9a-f]{64}\r?\n$/.test(probe.stdout || "")) {
+   throw new Error(failure || "installed parser returned an invalid bundle identity");
+  }
+  env.ENGRAM_UCI_PARSER_EXECUTABLE = resolved.parserPath;
+  env.ENGRAM_UCI_PARSER_BUNDLE_DIGEST = probe.stdout.trim();
+ }
  const result = (options.spawnSync || spawnSync)(resolved.path, options.args || [], {
   stdio: "inherit",
-  env: options.env,
+  env,
  });
  const failure = spawnFailureMessage(result, "engram exec");
  if (failure) throw new Error(failure.trim());
@@ -242,6 +269,7 @@ function readEngramConfigFile(configFilePath) {
   }
   const config = {
    server_url: typeof parsed.server_url === "string" ? parsed.server_url.trim() : "",
+   client_instance_id: typeof parsed.client_instance_id === "string" ? parsed.client_instance_id : "",
    api_token: typeof parsed.api_token === "string" ? parsed.api_token.trim() : "",
   };
   if (!Object.hasOwn(parsed, "hap_01b")) {

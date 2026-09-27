@@ -37,6 +37,14 @@ const (
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--bundle-digest" {
+		_, _ = fmt.Fprintln(os.Stdout, bundleDigest())
+		return
+	}
+	if len(os.Args) != 1 {
+		_, _ = fmt.Fprintln(os.Stderr, "uci parser worker: unsupported arguments")
+		os.Exit(1)
+	}
 	if err := run(os.Stdin, os.Stdout); err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "uci parser worker:", err)
 		os.Exit(1)

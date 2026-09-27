@@ -37,6 +37,45 @@ func TestUCIQueryResponseContractExamplesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestUCIQueryResponseRoundTripsViewPinnedRelationEvidence(t *testing.T) {
+	contextRef := exposureTestContextRef()
+	source := QueryEntityRef{SourceID: contextRef.SourceID, ViewID: contextRef.ViewID, EntityKey: "fixture.Source"}
+	target := QueryEntityRef{SourceID: contextRef.SourceID, ViewID: contextRef.ViewID, EntityKey: "fixture.Target"}
+	referenceSiteID := "50000000-0000-4000-8000-000000000099"
+	response := exposureTestResponse(QueryStatusOK)
+	response.Graph = &QueryGraph{
+		Nodes: []QueryEntityRef{source, target},
+		Edges: []QueryGraphEdge{{
+			From:         source,
+			To:           target,
+			Relation:     IndexRelation("calls"),
+			EvidenceKind: QueryEvidenceResolved,
+			EvidenceRefs: []QueryEntityRef{source},
+			Evidence:     []QueryRelationEvidence{{Ref: source, Precision: QueryEvidencePrecisionReferenceSite, ReferenceSiteID: &referenceSiteID}},
+		}},
+		StopReason: QueryGraphComplete,
+	}
+	payload, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshal relation evidence response: %v", err)
+	}
+	var decoded QueryResponse
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal relation evidence response: %v", err)
+	}
+	if err := decoded.ValidatePreExposure(); err != nil {
+		t.Fatalf("round-tripped relation evidence response: %v", err)
+	}
+	if !reflect.DeepEqual(decoded.Graph.Edges[0].Evidence, response.Graph.Edges[0].Evidence) {
+		t.Fatalf("relation evidence = %#v, want %#v", decoded.Graph.Edges[0].Evidence, response.Graph.Edges[0].Evidence)
+	}
+
+	decoded.Graph.Edges[0].Evidence[0].Ref.ViewID = "60000000-0000-4000-8000-000000000099"
+	if err := decoded.ValidatePreExposure(); err == nil {
+		t.Fatal("cross-View relation evidence was accepted")
+	}
+}
+
 func TestUCIQueryResponseContractKeepsResultCoverageAndCompletionDistinct(t *testing.T) {
 	fixtures := uciQueryResponseFixturesByName(t)
 

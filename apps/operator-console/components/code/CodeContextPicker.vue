@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { CodeBootstrapEvidence, CodeBootstrapPhase, CodeCatalogEntry, CodeCatalogState, CodeSafeContext, IndexIntentTarget } from '~/composables/useOperatorCode'
 
 const { t } = useI18n()
@@ -16,47 +16,70 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   refresh: []
-  select: [context: CodeSafeContext]
+  select: [context: CodeSafeContext | null]
   pin: []
   retry: []
   requestIndex: [target: IndexIntentTarget]
 }>()
 
-const selectable = computed(() => props.catalog.flatMap((entry) => entry.view === null ? [] : [entry.view]))
-const noViewEntries = computed(() => props.catalog.filter((entry) => entry.view === null))
-const selectedKey = computed(() => props.candidate === null ? '' : [
-  props.candidate.context.sourceId,
-  props.candidate.context.checkoutId,
-  props.candidate.context.viewId,
-  props.candidate.context.profileId,
-  props.candidate.context.generation,
-].join('\u0000'))
-const samePinned = computed(() => props.candidate !== null && props.pinned !== null
-  && props.candidate.context.sourceId === props.pinned.context.sourceId
-  && props.candidate.context.checkoutId === props.pinned.context.checkoutId
-  && props.candidate.context.viewId === props.pinned.context.viewId
-  && props.candidate.context.profileId === props.pinned.context.profileId
-  && props.candidate.context.generation === props.pinned.context.generation)
+const repository = ref('')
+const workingCopy = ref('')
+const workingCopyChosen = ref(false)
+const snapshotRef = ref('')
+const selectionDirty = ref(false)
+const repositories = computed(() => [...new Map(props.catalog.map((entry) => [entry.sourceRef, entry])).values()])
+const workingCopies = computed(() => [...new Map(props.catalog.filter((entry) => entry.sourceRef === repository.value).map((entry) => [entry.checkoutRef, entry])).values()])
+const snapshotEntries = computed(() => workingCopyChosen.value ? props.catalog.filter((entry) => entry.sourceRef === repository.value && entry.checkoutRef === workingCopy.value && entry.view !== null) : [])
+const noViewEntry = computed(() => workingCopyChosen.value ? props.catalog.find((entry) => entry.sourceRef === repository.value && entry.checkoutRef === workingCopy.value && entry.view === null) ?? null : null)
+const samePinned = computed(() => props.candidate?.selectionRef === props.pinned?.selectionRef)
 const phaseLabel = computed(() => t(`codeExplorer.context.phases.${props.phase}`))
 const phaseMessage = computed(() => {
   if (props.phase !== 'ready') return t(`codeExplorer.context.messages.${props.phase}`)
   if (props.state !== 'ready') return t(`codeExplorer.context.catalogStates.${props.state}`)
-  if (props.candidate === null) return noViewEntries.value.length > 0 && selectable.value.length === 0
-    ? t('codeExplorer.context.noViewOnlyBody')
-    : t('codeExplorer.context.selectPrompt')
+  if (props.candidate === null) return noViewEntry.value === null ? t('codeExplorer.context.selectPrompt') : t('codeExplorer.context.noViewOnlyBody')
   return props.pinned === null ? t('codeExplorer.context.selectedPrompt') : t('codeExplorer.context.pinnedMessage')
 })
 
-function chooseContext(event: Event): void {
-  const key = (event.target as HTMLSelectElement).value
-  const context = selectable.value.find((candidate) => [
-    candidate.context.sourceId,
-    candidate.context.checkoutId,
-    candidate.context.viewId,
-    candidate.context.profileId,
-    candidate.context.generation,
-  ].join('\u0000') === key)
-  if (context !== undefined) emit('select', context)
+watch([() => props.catalog, () => props.candidate, () => props.pinned], ([catalog, candidate], [previousCatalog]) => {
+  if (selectionDirty.value) return
+  const selected = props.candidate ?? props.pinned
+  if (selected !== null) {
+    repository.value = selected.sourceRef
+    workingCopy.value = selected.checkoutRef
+    workingCopyChosen.value = true
+    snapshotRef.value = selected.selectionRef
+    return
+  }
+  if (candidate === null && previousCatalog !== undefined && catalog !== previousCatalog || snapshotRef.value !== '' && !snapshotEntries.value.some((entry) => entry.view?.selectionRef === snapshotRef.value)) snapshotRef.value = ''
+  repository.value = repositories.value[0]?.sourceRef ?? ''
+  if (workingCopies.value.length === 1) {
+    workingCopy.value = workingCopies.value[0]?.checkoutRef ?? ''
+    workingCopyChosen.value = true
+  }
+}, { immediate: true })
+
+function chooseRepository(event: Event): void {
+  selectionDirty.value = true
+  repository.value = (event.target as HTMLSelectElement).value
+  workingCopy.value = ''
+  workingCopyChosen.value = false
+  snapshotRef.value = ''
+  emit('select', null)
+}
+
+function chooseWorkingCopy(event: Event): void {
+  selectionDirty.value = true
+  workingCopy.value = (event.target as HTMLSelectElement).value
+  workingCopyChosen.value = workingCopies.value.some((entry) => entry.checkoutRef === workingCopy.value)
+  snapshotRef.value = ''
+  emit('select', null)
+}
+
+function chooseSnapshot(event: Event): void {
+  selectionDirty.value = false
+  snapshotRef.value = (event.target as HTMLSelectElement).value
+  const selected = snapshotEntries.value.find((entry) => entry.view?.selectionRef === snapshotRef.value)?.view ?? null
+  emit('select', selected)
 }
 </script>
 
@@ -64,49 +87,62 @@ function chooseContext(event: Event): void {
   <section class="context-picker" aria-labelledby="code-context-heading">
     <div class="section-head">
       <div>
-        <h2 id="code-context-heading">{{ t('codeExplorer.context.title') }}</h2>
-        <p>{{ t('codeExplorer.context.lead') }}</p>
+        <h2 id="code-context-heading">{{ t('workspace.contextTitle') }}</h2>
+        <p>{{ t('workspace.contextHelp') }}</p>
       </div>
       <span class="phase" :data-state="phase">{{ phaseLabel }}</span>
     </div>
 
     <p class="message" aria-live="polite" data-testid="code-context-message">{{ phaseMessage }}</p>
 
-    <label v-if="selectable.length > 0" class="selector">
-      <span>{{ t('codeExplorer.context.catalog') }}</span>
-      <select :value="selectedKey" :disabled="pending" data-testid="code-context-select" @change="chooseContext">
-        <option value="" disabled>{{ t('codeExplorer.context.choose') }}</option>
-        <option v-for="context in selectable" :key="context.context.viewId" :value="[context.context.sourceId, context.context.checkoutId, context.context.viewId, context.context.profileId, context.context.generation].join('\u0000')">
-          {{ context.source }} · {{ context.checkout }} · {{ context.view }}
-        </option>
-      </select>
-    </label>
+    <div v-if="catalog.length > 0" class="selectors" role="group" :aria-label="t('codeExplorer.context.selectionGroup')">
+      <label class="selector">
+        <span>{{ t('workspace.repository') }}</span>
+        <select :value="repository" :disabled="pending" data-testid="code-context-repository" @change="chooseRepository">
+          <option value="" disabled>{{ t('codeExplorer.context.chooseRepository') }}</option>
+          <option v-for="entry in repositories" :key="entry.sourceRef" :value="entry.sourceRef">{{ entry.repository }}</option>
+        </select>
+      </label>
+      <label class="selector">
+        <span>{{ t('workspace.workingCopy') }}</span>
+        <select :value="workingCopyChosen ? workingCopy : ''" :disabled="pending || repository === ''" data-testid="code-context-working-copy" @change="chooseWorkingCopy">
+          <option value="" disabled>{{ t('codeExplorer.context.chooseWorkingCopy') }}</option>
+          <option v-for="entry in workingCopies" :key="entry.checkoutRef" :value="entry.checkoutRef">{{ entry.workingCopy || t('codeExplorer.context.unnamedWorkingCopy') }}</option>
+        </select>
+      </label>
+      <label class="selector">
+        <span>{{ t('workspace.indexedSnapshot') }}</span>
+        <select :value="snapshotRef" :disabled="pending || !workingCopyChosen || snapshotEntries.length === 0" data-testid="code-context-snapshot" @change="chooseSnapshot">
+          <option value="" disabled>{{ t('codeExplorer.context.chooseSnapshot') }}</option>
+          <option v-for="entry in snapshotEntries" :key="entry.view?.selectionRef" :value="entry.view?.selectionRef">{{ entry.view?.snapshot.label }}</option>
+        </select>
+      </label>
+    </div>
     <div v-else class="empty" data-testid="code-context-empty">
-      <strong>{{ t(noViewEntries.length > 0 ? 'codeExplorer.context.noViewOnlyTitle' : 'codeExplorer.context.emptyTitle') }}</strong>
-      <p>{{ t(noViewEntries.length > 0 ? 'codeExplorer.context.noViewOnlyBody' : 'codeExplorer.context.emptyBody') }}</p>
+      <strong>{{ t('codeExplorer.context.emptyTitle') }}</strong>
+      <p>{{ t('codeExplorer.context.emptyBody') }}</p>
+    </div>
+
+    <div v-if="noViewEntry !== null" class="no-view" data-testid="code-context-index-affordance">
+      <strong>{{ t('codeExplorer.context.noViewOnlyTitle') }}</strong>
+      <p>{{ noViewEntry.indexIntentTarget === null ? t('codeExplorer.context.noViewUnavailable') : t('codeExplorer.context.noViewIndexAvailable') }}</p>
+      <button
+        v-if="noViewEntry.indexIntentTarget !== null"
+        class="btn"
+        type="button"
+        :disabled="pending"
+        data-testid="code-request-first-index"
+        @click="emit('requestIndex', noViewEntry.indexIntentTarget)"
+      >{{ t('codeExplorer.context.requestIndex') }}</button>
     </div>
 
     <dl v-if="candidate !== null" class="context-values" data-testid="code-context-candidate">
-      <div><dt>{{ t('codeExplorer.context.source') }}</dt><dd>{{ candidate.source }}</dd></div>
-      <div><dt>{{ t('codeExplorer.context.checkout') }}</dt><dd>{{ candidate.checkout }}</dd></div>
-      <div><dt>{{ t('codeExplorer.context.view') }}</dt><dd>{{ candidate.view }}</dd></div>
+      <div><dt>{{ t('workspace.repository') }}</dt><dd>{{ candidate.repository }}</dd></div>
+      <div><dt>{{ t('workspace.workingCopy') }}</dt><dd>{{ candidate.workingCopy || t('codeExplorer.context.unnamedWorkingCopy') }}</dd></div>
+      <div><dt>{{ t('workspace.indexedSnapshot') }}</dt><dd>{{ candidate.snapshot.label }}</dd></div>
+      <div v-if="candidate.snapshot.revision !== null"><dt>{{ t('codeExplorer.context.revision') }}</dt><dd>{{ candidate.snapshot.revision }}</dd></div>
+      <div v-if="candidate.snapshot.publishedAt !== null"><dt>{{ t('codeExplorer.context.publishedAt') }}</dt><dd>{{ candidate.snapshot.publishedAt }}</dd></div>
     </dl>
-
-    <ul v-if="noViewEntries.length > 0" class="no-view-list">
-      <li v-for="entry in noViewEntries" :key="`${entry.source.id}:${entry.checkout.id}`" data-testid="code-context-index-affordance">
-        <strong>{{ entry.source.label }} · {{ entry.checkout.label }}</strong>
-        <p>{{ entry.indexIntentTarget === null ? t('codeExplorer.context.noViewUnavailable') : t('codeExplorer.context.noViewIndexAvailable') }}</p>
-        <button
-          v-if="entry.indexIntentTarget !== null"
-          class="btn"
-          type="button"
-          :disabled="pending"
-          :aria-label="t('codeExplorer.context.requestIndexFor', { source: entry.source.label, checkout: entry.checkout.label })"
-          data-testid="code-request-first-index"
-          @click="emit('requestIndex', entry.indexIntentTarget)"
-        >{{ t('codeExplorer.context.requestIndex') }}</button>
-      </li>
-    </ul>
 
     <div class="actions">
       <button class="btn" type="button" :disabled="pending" @click="emit('refresh')">{{ t('codeExplorer.context.refresh') }}</button>
@@ -117,7 +153,7 @@ function chooseContext(event: Event): void {
     </div>
 
     <p v-if="pinned !== null" class="pinned" data-testid="code-context-pinned">
-      {{ t('codeExplorer.context.pinnedReadout', pinned) }}
+      {{ t('codeExplorer.context.pinnedReadout', { repository: pinned.repository, workingCopy: pinned.workingCopy || t('codeExplorer.context.unnamedWorkingCopy'), snapshot: pinned.snapshot.label }) }}
     </p>
 
     <details class="bootstrap-evidence" data-testid="code-bootstrap-evidence">
@@ -133,5 +169,30 @@ function chooseContext(event: Event): void {
 </template>
 
 <style scoped>
-.context-picker { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:16px; display:grid; gap:14px; }.section-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }h2 { margin:0; color:var(--fg); font-size:var(--text-sm); font-weight:800; }.section-head p, .message, .empty p, .pinned, .no-view-list p { margin:4px 0 0; color:var(--muted); font-size:var(--text-sm); }.phase { border:1px solid var(--border); border-radius:var(--radius-pill); padding:4px 8px; color:var(--fg-2); font-size:var(--text-xs); white-space:nowrap; }.phase[data-state='collision'], .phase[data-state='ambiguous'], .phase[data-state='reload-pending'] { border-color:color-mix(in oklab,var(--warn),transparent 35%); color:var(--warn); }.selector { display:grid; gap:5px; }.selector > span, dt { color:var(--muted); font-size:var(--text-xs); font-weight:700; letter-spacing:.04em; text-transform:uppercase; }.selector select { min-height:38px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--bg); color:var(--fg); padding:8px; font:inherit; }.selector select:focus-visible, .btn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }.context-values, .bootstrap-evidence dl { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin:0; }.context-values div, .bootstrap-evidence div { min-width:0; }dd { margin:4px 0 0; color:var(--fg); font-family:var(--font-mono); font-size:var(--text-xs); overflow-wrap:anywhere; }.no-view-list { display:grid; gap:8px; margin:0; padding:0; list-style:none; }.no-view-list li { border:1px solid var(--border-soft); border-radius:var(--r-sm); padding:10px; }.no-view-list strong { color:var(--fg-2); font-family:var(--font-mono); font-size:var(--text-xs); overflow-wrap:anywhere; }.actions { display:flex; flex-wrap:wrap; gap:8px; }.btn { min-height:36px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface); color:var(--fg); padding:8px 12px; font:inherit; font-size:var(--text-sm); font-weight:700; cursor:pointer; }.btn.primary { border-color:var(--accent); background:var(--accent); color:var(--accent-on); }.btn:disabled { cursor:not-allowed; opacity:.55; }.pinned { border-top:1px solid var(--border-soft); padding-top:10px; }.bootstrap-evidence { border-top:1px solid var(--border-soft); padding-top:10px; }.bootstrap-evidence summary { color:var(--fg-2); cursor:pointer; font-size:var(--text-sm); font-weight:700; }@media (pointer:coarse) { .btn, .selector select { min-height:44px; } }@media (max-width:720px) { .section-head, .context-values, .bootstrap-evidence dl { display:grid; grid-template-columns:1fr; }.phase { justify-self:start; white-space:normal; } }
+.context-picker { display:grid; gap:14px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:16px; }
+.section-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+h2 { margin:0; color:var(--fg); font-size:var(--text-sm); font-weight:800; }
+.section-head p, .message, .empty p, .no-view p, .pinned { margin:4px 0 0; color:var(--muted); font-size:var(--text-sm); }
+.phase { border:1px solid var(--border); border-radius:var(--radius-pill); padding:4px 8px; color:var(--fg-2); font-size:var(--text-xs); white-space:nowrap; }
+.phase[data-state='collision'], .phase[data-state='ambiguous'], .phase[data-state='reload-pending'] { border-color:color-mix(in oklab,var(--warn),transparent 35%); color:var(--warn); }
+.selectors { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.selector { display:grid; gap:5px; min-width:0; }
+.selector > span, dt { color:var(--muted); font-size:var(--text-xs); font-weight:700; letter-spacing:.04em; text-transform:uppercase; }
+.selector select { min-height:40px; min-width:0; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--bg); color:var(--fg); padding:8px; font:inherit; }
+.selector select:focus-visible, .btn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.context-values { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin:0; }
+.context-values div { min-width:0; }
+dd { margin:4px 0 0; color:var(--fg); font-family:var(--font-mono); font-size:var(--text-xs); overflow-wrap:anywhere; }
+.empty, .no-view { display:grid; gap:8px; border:1px solid var(--border-soft); border-radius:var(--r-sm); padding:12px; }
+.no-view strong, .empty strong { color:var(--fg-2); font-size:var(--text-sm); }
+.actions { display:flex; flex-wrap:wrap; gap:8px; }
+.btn { min-height:36px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface); color:var(--fg); padding:8px 12px; font:inherit; font-size:var(--text-sm); font-weight:700; cursor:pointer; }
+.btn.primary { border-color:var(--accent); background:var(--accent); color:var(--accent-on); }
+.btn:disabled { cursor:not-allowed; opacity:.55; }
+.bootstrap-evidence { border-top:1px solid var(--border-soft); padding-top:10px; }
+.bootstrap-evidence summary { color:var(--fg-2); cursor:pointer; font-size:var(--text-sm); font-weight:700; }
+.bootstrap-evidence dl { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin:10px 0 0; }
+.bootstrap-evidence div { min-width:0; }
+@media (pointer:coarse) { .btn, .selector select { min-height:44px; } }
+@media (max-width:720px) { .section-head, .selectors, .context-values, .bootstrap-evidence dl { grid-template-columns:1fr; display:grid; }.phase { justify-self:start; white-space:normal; } }
 </style>

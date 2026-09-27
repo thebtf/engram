@@ -12,7 +12,10 @@ import (
 	"github.com/thebtf/engram/internal/db/gorm/migrationmeta"
 )
 
-const interventionEvidencePoliciesMemoryIDWhitelistReason = "immutable policy history must survive hard PurgeProject; no memory FK or cascade"
+const (
+	interventionEvidencePoliciesMemoryIDWhitelistReason = "immutable policy history must survive hard PurgeProject; no memory FK or cascade"
+	uciSemanticContinuationBindingIDWhitelistReason     = "immutable short-lived continuation binding; current space/source/view binding and expiry enforce validity"
+)
 
 // Explicit FK-less whitelist. The source of truth being tested is the
 // migrations.go ledger: current live CREATE TABLE statements plus later
@@ -59,6 +62,8 @@ var schemaIntegrityEntityIDWhitelist = map[string]string{
 	// Policy evidence is append-only source history. A hard memory FK or cascade
 	// would erase this evidence when PurgeProject deletes the source memory.
 	"intervention_evidence_policies.memory_id": interventionEvidencePoliciesMemoryIDWhitelistReason,
+	"uci_semantic_continuations.source_id":     uciSemanticContinuationBindingIDWhitelistReason,
+	"uci_semantic_continuations.space_id":      uciSemanticContinuationBindingIDWhitelistReason,
 }
 
 func TestSchemaIntegrity_EntityIDColumnsRequireForeignKeysOrWhitelist(t *testing.T) {
@@ -120,6 +125,15 @@ func TestSchemaIntegrity_InterventionEvidencePoliciesMemoryIDWhitelist(t *testin
 	reason, found := schemaIntegrityEntityIDWhitelist["intervention_evidence_policies.memory_id"]
 	require.True(t, found, "immutable intervention policy source pointer must be explicitly FK-less")
 	require.Equal(t, interventionEvidencePoliciesMemoryIDWhitelistReason, reason)
+}
+
+func TestSchemaIntegrity_UCISemanticContinuationBindingIDWhitelist(t *testing.T) {
+	for _, column := range []string{"source_id", "space_id"} {
+		key := "uci_semantic_continuations." + column
+		reason, found := schemaIntegrityEntityIDWhitelist[key]
+		require.True(t, found, "%s must be explicitly FK-less", key)
+		require.Equal(t, uciSemanticContinuationBindingIDWhitelistReason, reason)
+	}
 }
 
 func domainEntityNames(schema *migrationmeta.Schema) map[string]bool {

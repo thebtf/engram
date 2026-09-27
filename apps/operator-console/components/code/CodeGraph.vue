@@ -34,6 +34,7 @@ const nodes = computed(() => graph.value?.nodes.map((ref, index) => {
 }) ?? [])
 const selectedTarget = computed(() => nodes.value.find((node) => node.ref.entityKey === selectedNode.value)?.ref ?? null)
 const selectedSource = computed(() => selectedTarget.value === null ? null : props.graph?.navigation?.nodes.find((node) => node.ref.entityKey === selectedTarget.value?.entityKey)?.source ?? null)
+const selectedEvidence = computed(() => selectedEdge.value === null ? [] : props.graph?.navigation?.edges[edges.value.indexOf(selectedEdge.value)]?.evidence ?? [])
 
 function point(ref: CodeEntityRef): { x: number; y: number } | null {
   return nodes.value.find((node) => node.ref.entityKey === ref.entityKey) ?? null
@@ -174,6 +175,13 @@ watch(() => props.graph, () => {
     <section v-if="selectedNode !== null" class="selection" :aria-label="t('codeExplorer.graph.selection')">
       <strong>{{ selectedNode }}</strong>
       <p v-if="selectedEdge !== null">{{ selectedEdge.relation }} · {{ selectedEdge.evidenceKind }}</p>
+      <div v-if="selectedEdge !== null" data-testid="code-graph-evidence">
+        <p v-for="(evidence, index) in selectedEvidence" :key="`${evidence.ref.entityKey}:${index}`">
+          {{ evidence.precision }} · {{ evidence.ref.entityKey }} · {{ evidence.source === null ? t('codeExplorer.graph.noReferenceSite') : `${evidence.source.span.byteStart}–${evidence.source.span.byteEnd} · ${evidence.source.contentDigest}` }}
+          <button v-if="evidence.source !== null" class="btn" type="button" :disabled="pending" data-testid="code-graph-reference-source" @click="emit('source', evidence.source)">{{ t('codeExplorer.graph.inspectReferenceSite') }}</button>
+        </p>
+        <p v-if="selectedEvidence.length === 0">{{ t('codeExplorer.graph.noReferenceSite') }}</p>
+      </div>
       <button v-if="selectedSource !== null" class="btn" type="button" :disabled="pending" data-testid="code-graph-source" @click="emit('source', selectedSource)">{{ t('codeExplorer.graph.inspectSource') }}</button>
       <p v-else data-testid="code-graph-no-source">{{ t('codeExplorer.graph.noPublishedSource') }}</p>
     </section>

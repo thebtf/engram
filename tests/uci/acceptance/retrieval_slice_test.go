@@ -306,7 +306,7 @@ func newUCIRetrievalSliceFixture(t *testing.T) *uciRetrievalSliceFixture {
 		IncludeRelativePath:   true,
 	}
 	queryService := uci.NewQueryService(projection)
-	semanticService := uci.NewSemanticService(vectorProfile, embedder, projection, projection)
+	semanticService := uci.NewSemanticService(vectorProfile, embedder, projection, projection, projection)
 
 	clientSessionID := "uci-retrieval-slice-session-" + token
 	identity := auth.ClientWithPrincipal("read-write", workstationID, principal, auth.PrincipalKindAgent)

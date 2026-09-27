@@ -5,7 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [6.50.0] - 2026-09-26
+
+### Added
+
+- Workspace owners can choose another enabled browser account and issue or revoke an audited, exact Source-and-Checkout read grant; the recipient is resolved from persisted users and never supplied as a raw principal.
+- **Operator Workspace (Feature 011 D-A).** From Home, an authenticated operator can choose a Repository, Working copy, and Indexed snapshot, then search or browse source, follow direct or reverse derived relations, and open released evidence in one immutable UCI View.
+- **Browser grants and UCI release checks.** Workspace browser reads require an explicit Source-and-Checkout grant, a current tab binding, and UCI reauthorization and exposure recording before contextual content returns.
+- **Windows UCI parser delivery.** The plugin installs an integrity-pinned Windows amd64 Tree-sitter parser beside its daemon and verifies its bundle identity before launch. Linux and macOS parser artifacts are not included in this release.
+
+- **Operator Workspace release PR [#508](https://github.com/thebtf/engram/pull/508).**
+
+### Changed
+
+- **OpenClaw plugin 3.9.1.** Advanced release metadata for the V3 project-identity client contract and retired outcome callback handling.
+- Retired manual knowledge-graph writers and plaintext Book intake at their UI, HTTP, MCP, and startup admissions. Historical readers, records, documents, and provenance remain available.
+
+### Fixed
+
+- Page enabled reader choices without silently omitting later accounts, and reject stale or ambiguous browser navigation before reusing a Code Explorer tab binding or selected View.
+- Bound REST graph node listing in the database before materialization while preserving the unbounded legacy MCP node-list contract.
+- Carry the authenticated browser session through grant choices, recipient pages, issuance, and labeling, and persist it in grant lifecycle audit entries without exposing it in chooser responses.
+- Graph source descriptors for file-only nodes now resolve to their exact published bytes; symbolic nodes and existing lexical chunk identities remain readable.
+- Large indexed source chunks now display a bounded first 8 KiB from the released snapshot, with a visible notice that the remaining source is not displayed.
+- Preserve lexical search pagination when the optional semantic service is absent, instead of failing while checking continuation ownership.
+- Kept each hybrid-search result's excerpt attached to its ranked chunk instead of joining every chunk in the same artifact; the live Workspace fixture now follows real result continuations and verifies its namespaced daemon controls.
+- Proved persisted Workspace owner grants in the real browser fixture: issue through the chooser, reload inventory, allow reader search/graph/source, then revoke and deny those reads.
+- Regenerated v6.50.0 bootstrap client hashes from integrated source and pinned the Windows parser to the release cross-toolchain bytes, rather than the non-equivalent host-compiler output.
+- Extended the live first-index journey to cover accepted queued reindex while its owned daemon is stopped, fresh daemon re-selection, one completed attempt, and idempotent browser replay without duplicate publication.
+- Deny Workspace catalog choices and transactional pins when the grant issuer is disabled or no longer owns the checkout, matching browser read authorization.
+- Graph traversal and path readers prune private intermediaries before expansion while retaining public memory-to-node edges with typed node endpoints.
+- Corrected Workspace responsive and accessibility behavior, including narrow layouts, 200% zoom, visible focus, keyboard navigation, and accessible relation and evidence controls.
+- Kept Workspace semantic-search continuations and structure and relation evidence bound to the selected UCI View and UCI release authority.
+- Added an interruption-safe journal to latest-image promotion that records its exact state when promotion fails.
+- Kept the direct-binary MCP fixture's Unix sockets in private primary scratch via short relative paths, preserving installed daemon namespaces while probing both daemon and owner sockets on Linux and macOS.
+- Raised the OMP marketplace MCP connection budget from one to twelve minutes and the verified cold-cache client stream deadline from two to six minutes. The observed first 4 MiB taking 32.71 seconds would take roughly 225 seconds for the 28.8 MB Windows asset at the same rate; six minutes allows bounded variance without promising throughput. Twelve minutes reserves six minutes for streaming, as much as three minutes for six 30-second request/redirect inactivity windows, two minutes for fenced daemon reconciliation, and one minute of overhead. Inactivity checks are not aggregate request deadlines: a progressing pre-body phase can still exhaust the host budget, and forced host termination can leave a staging file. HTTPS host restrictions, exact Content-Length/size and SHA-256, and create-only publication remain unchanged. Codex and Claude startup settings are unchanged.
+- Require, validate, and install the version-matched parser policy from direct release archives on fresh installs and upgrades; retain compatibility with older releases.
+- Apply private-memory visibility checks to REST graph edge and path traversal even when the optional VNext feature flag is off.
 
 ## [6.49.4] - 2026-09-25
 
@@ -2038,7 +2074,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.49.3...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.0...HEAD
+[6.50.0]: https://github.com/thebtf/engram/compare/v6.49.4...v6.50.0
 [6.49.3]: https://github.com/thebtf/engram/compare/v6.49.2...v6.49.3
 [6.49.2]: https://github.com/thebtf/engram/compare/v6.49.1...v6.49.2
 [6.49.1]: https://github.com/thebtf/engram/compare/v6.49.0...v6.49.1
@@ -2071,7 +2108,6 @@ Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mn
 [6.18.0]: https://github.com/thebtf/engram/compare/v6.14.0...v6.18.0
 [6.14.0]: https://github.com/thebtf/engram/compare/v6.13.1...v6.14.0
 [6.13.1]: https://github.com/thebtf/engram/compare/v6.13.0...v6.13.1
-[6.5.0]: https://github.com/thebtf/engram/compare/v6.4.15...v6.5.0
 [6.4.15]: https://github.com/thebtf/engram/compare/v6.4.14...v6.4.15
 [6.4.14]: https://github.com/thebtf/engram/compare/v6.4.13...v6.4.14
 [6.4.13]: https://github.com/thebtf/engram/compare/v6.4.12...v6.4.13

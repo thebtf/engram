@@ -723,7 +723,7 @@ func uciSLOConfigureCurrentSemanticProfile(fixture *uciRetrievalSliceFixture) er
 		return fmt.Errorf("local embedding model = %q, want %q", embedder.Model(), profile.Model)
 	}
 	fixture.vectorProfile = profile
-	fixture.semanticService = uci.NewSemanticService(profile, embedder, fixture.projection, fixture.projection)
+	fixture.semanticService = uci.NewSemanticService(profile, embedder, fixture.projection, fixture.projection, fixture.projection)
 	application, err := uciSLOApplicationWithStatusProfile(fixture, &profile)
 	if err != nil {
 		return err

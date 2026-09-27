@@ -1,6 +1,6 @@
 import { writeFile } from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
-import type { Page } from '@playwright/test'
+import type { Locator, Page } from '@playwright/test'
 import { appendBrowserTraffic, readLiveFixture } from './fixture-bootstrap'
 import type { LiveFixtureState, RouteTraffic } from './fixture-bootstrap'
 
@@ -48,6 +48,31 @@ function scenarioEntityKeys(value: unknown, expectedA: string, expectedB: string
   return items.map((item) => requiredText(record(record(item, 'Search item').ref, 'Search item ref').entity_key, 'Search item entity key'))
     .filter((entityKey) => entityKey === expectedA || entityKey === expectedB)
 }
+function assertSemanticTarget(value: unknown, expectedEntityKey: string): void {
+  const response = record(value, 'Semantic search response')
+  expect(response.status).toBe('ok')
+  const retrieval = record(response.retrieval, 'Semantic search retrieval')
+  expect(retrieval.mode).toBe('hybrid')
+  expect(retrieval.vector_coverage).toBe(1)
+  expect(retrieval.degradation_reasons).toEqual([])
+  const coverage = record(response.coverage, 'Semantic search coverage')
+  expect(coverage.structural).toBe('complete')
+  const items = response.items
+  if (!Array.isArray(items)) throw new Error('Semantic search response did not contain items')
+  const targets = items.filter((item) => {
+    const ref = record(record(item, 'Semantic search item').ref, 'Semantic search item ref')
+    return ref.entity_key === expectedEntityKey
+  })
+  expect(targets.length).toBeGreaterThan(0)
+  for (const target of targets) {
+    const item = record(target, 'Semantic search target')
+    expect(item.path).toBe('fixture.go')
+    expect(item.kind).toBe('code')
+    expect(item.match_sources).toContain('vector')
+    expect(item.match_sources).not.toContain('fts')
+  }
+}
+
 
 function graphSourceDescriptor(value: unknown, entityKey: string): Record<string, unknown> {
   const navigation = record(record(value, 'Graph response').navigation, 'Graph navigation')
@@ -74,13 +99,94 @@ function requiredInteger(value: unknown, label: string): number {
 
 
 async function selectFixtureContext(page: Page, fixture: LiveFixtureState, variant: 'a' | 'd'): Promise<void> {
-  const select = page.getByTestId('code-context-select')
-  const option = select.locator('option').filter({ hasText: `${fixture.fixtureId}-${variant}` })
-  await expect(option).toHaveCount(1)
-  const value = await option.getAttribute('value')
-  if (value === null) throw new Error('fixture catalog did not expose a selectable View')
-  await select.selectOption(value)
+  const fixtureLabel = `${fixture.fixtureId}-${variant}`
+  const choose = async (select: Locator) => {
+    const option = select.locator('option').filter({ hasText: fixtureLabel })
+    await expect(option).toHaveCount(1)
+    const value = await option.getAttribute('value')
+    if (value === null) throw new Error('fixture catalog did not expose a readable selection')
+    await select.selectOption(value)
+  }
+  await choose(page.getByTestId('code-context-repository'))
+  await choose(page.getByTestId('code-context-working-copy'))
+  const snapshot = page.getByTestId('code-context-snapshot')
+  await expect(snapshot).toBeEnabled()
+  const value = await snapshot.locator('option:not([disabled])').getAttribute('value')
+  if (value === null) throw new Error('fixture catalog did not expose an indexed snapshot')
+  await snapshot.selectOption(value)
 }
+async function assertResponsiveShell(page: Page, viewportWidth: number): Promise<Record<string, unknown>> {
+  if (viewportWidth <= 980) {
+    await expect.poll(() => page.locator('#primary-navigation').evaluate((element) => ({ ariaHidden: element.getAttribute('aria-hidden'), inert: element.inert }))).toEqual({ ariaHidden: 'true', inert: true })
+  }
+  const shell = await page.evaluate(() => {
+    const rect = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector)
+      if (!element) throw new Error(`missing ${selector}`)
+      const bounds = element.getBoundingClientRect()
+      const style = getComputedStyle(element)
+      return { left: bounds.left, right: bounds.right, width: bounds.width, height: bounds.height, display: style.display }
+    }
+    const nav = document.querySelector<HTMLElement>('#primary-navigation')
+    if (!nav) throw new Error('missing primary navigation')
+    return {
+      compact: matchMedia('(max-width: 980px)').matches,
+      scrollX,
+      scrollWidth: document.documentElement.scrollWidth,
+      gridColumns: getComputedStyle(document.querySelector<HTMLElement>('.app')!).gridTemplateColumns,
+      nav: { ...rect('#primary-navigation'), ariaHidden: nav.getAttribute('aria-hidden'), inert: nav.inert },
+      topbar: rect('.topbar'),
+      content: rect('.content'),
+      statusbar: rect('.statusbar'),
+      menu: rect('.mobile-menu-button'),
+      title: rect('.code-page h1'),
+    }
+  })
+
+  expect(shell.scrollX).toBe(0)
+  expect(shell.scrollWidth).toBeLessThanOrEqual(viewportWidth)
+  const gridColumns = shell.gridColumns.split(' ').map((column) => Number.parseFloat(column))
+  expect(gridColumns.reduce((total, column) => total + column, 0)).toBe(viewportWidth)
+
+  if (viewportWidth <= 980) {
+    expect(shell.compact).toBe(true)
+    expect(shell.nav.right).toBeLessThanOrEqual(0)
+    expect(shell.nav.ariaHidden).toBe('true')
+    expect(shell.nav.inert).toBe(true)
+    expect(shell.menu.display).not.toBe('none')
+    expect(shell.menu.width).toBeGreaterThanOrEqual(44)
+    expect(shell.menu.height).toBeGreaterThanOrEqual(44)
+    for (const region of [shell.topbar, shell.content, shell.statusbar, shell.title, shell.menu]) {
+      expect(region.left).toBeGreaterThanOrEqual(0)
+      expect(region.right).toBeLessThanOrEqual(viewportWidth)
+    }
+  } else {
+    expect(shell.compact).toBe(false)
+    expect(shell.menu.display).toBe('none')
+    expect(shell.nav.left).toBe(0)
+    expect(shell.nav.right).toBe(shell.topbar.left)
+    for (const region of [shell.topbar, shell.content, shell.statusbar]) {
+      expect(region.right).toBeLessThanOrEqual(viewportWidth)
+    }
+  }
+  return shell
+}
+
+async function assertOpenMobileDrawer(page: Page): Promise<void> {
+  await page.locator('.mobile-menu-button').click()
+  const nav = page.locator('#primary-navigation')
+  await expect(nav).toHaveClass(/open/)
+  await expect(page.locator('.nav-scrim')).toBeVisible()
+  const state = await nav.evaluate((element) => {
+    const bounds = element.getBoundingClientRect()
+    return { left: bounds.left, right: bounds.right, ariaHidden: element.getAttribute('aria-hidden'), inert: element.inert }
+  })
+  expect(state.left).toBe(0)
+  expect(state.right).toBeGreaterThan(0)
+  expect(state.ariaHidden).toBe('false')
+  expect(state.inert).toBe(false)
+}
+
 
 test('S2 live acceptance: explicit catalog preserves View-bound pagination and graph-source limits', async ({ browser }, testInfo) => {
   const fixture = await readLiveFixture()
@@ -95,6 +201,7 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
   const context = await browser.newContext()
   const page = await context.newPage()
   const transitions: Array<{ label: string; opener: boolean; navigationType: string; transition: string | null }> = []
+  const responsiveLayouts: Array<Record<string, unknown>> = []
 
   page.on('request', (request) => {
     const url = new URL(request.url())
@@ -123,19 +230,26 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
     const login = await requestJSON(page, '/api/auth/user-login', fixture.browserCredential)
     expect(login.status).toBe(200)
 
-    await page.goto(`${fixture.frontend.baseUrl}/code`, { waitUntil: 'domcontentloaded' })
+    await page.getByTestId('overview-workspace-entry').click()
+    await expect(page).toHaveURL(/\/code$/)
     await expect(page.getByTestId('code-release-state')).toHaveAttribute('data-state', 'unselected')
     await expect(page.getByTestId('code-results-unselected')).toBeVisible()
     await recordTransition(page, transitions, 'fresh')
 
     await selectFixtureContext(page, fixture, 'a')
     await expect(page.getByTestId('code-context-candidate')).toBeVisible()
+    const statusResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/code/status' && response.request().method() === 'POST')
     await page.getByTestId('code-pin-context').focus()
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('code-context-pinned')).toBeVisible()
+    const status = record(await (await statusResponse).json(), 'Code status response')
+    const embedding = record(status.embedding, 'Code status embedding')
+    expect(status.total_chunks).toBeGreaterThan(50)
+    expect(status.embedded_chunks).toBe(status.total_chunks)
+    expect(embedding.Coverage).toBe('complete')
     await expect(page.getByTestId('code-status')).toBeVisible()
     await expect(page.getByTestId('code-graph-heading')).toBeVisible()
-    await expect(page.getByTestId('code-status')).toContainText('unavailable')
+    await expect(page.getByTestId('code-status')).toContainText('complete')
 
     const pinnedA = await page.getByTestId('code-context-pinned').textContent()
     const initialSearchResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/code/search' && response.request().method() === 'POST')
@@ -145,7 +259,8 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
     const initialSearchContext = oneContext(initialSearch)
     const searchEntityKey = `go:fixture/func:${scenario.expectedSource}`
     const graphEntityKey = `go:fixture/func:${scenario.expectedGraph}`
-    expect(scenarioEntityKeys(initialSearch, searchEntityKey, graphEntityKey)).toEqual([searchEntityKey])
+    expect(scenarioEntityKeys(initialSearch, searchEntityKey, graphEntityKey)).toContain(searchEntityKey)
+    assertSemanticTarget(initialSearch, searchEntityKey)
     await expect(page.getByTestId('code-search-results')).toContainText(scenario.expectedSearch)
     await expect(page.getByTestId('code-search-next')).toBeVisible()
     const continuedSearchResponse = page.waitForResponse((response) => {
@@ -173,17 +288,17 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
     expect(searchRequests[2]).toMatchObject({ query: scenario.query, limit: 10, path_prefix: '', languages: [] })
     expect(searchRequests[2]).not.toHaveProperty('continuation')
     expect(oneContext(resetSearch)).toEqual(initialSearchContext)
-    expect(scenarioEntityKeys(resetSearch, searchEntityKey, graphEntityKey)).toEqual([searchEntityKey])
-    const functionResult = page.getByTestId('code-search-results').getByRole('listitem').filter({
+    expect(scenarioEntityKeys(resetSearch, searchEntityKey, graphEntityKey)).toContain(searchEntityKey)
+    const functionResults = page.getByTestId('code-search-results').getByRole('listitem').filter({
       has: page.getByText(searchEntityKey, { exact: true }),
     })
     const offPageResult = page.getByTestId('code-search-results').getByRole('listitem').filter({
       has: page.getByText(graphEntityKey, { exact: true }),
     })
-    await expect(functionResult).toHaveCount(1)
+    await expect(functionResults).not.toHaveCount(0)
     await expect(offPageResult).toHaveCount(0)
     const firstGraphResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/code/graph' && response.request().method() === 'POST')
-    await functionResult.getByTestId('code-search-explore').click()
+    await functionResults.first().getByTestId('code-search-explore').click()
     const firstGraph = await (await firstGraphResponse).json()
     const revealedDescriptor = graphSourceDescriptor(firstGraph, graphEntityKey)
     expect(oneContext(firstGraph)).toEqual(initialSearchContext)
@@ -225,6 +340,28 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
     await expect(sourceMeta).toContainText(`${lineStart}–${lineEnd}`)
     await expect(sourceMeta).toContainText(`${byteStart}–${byteEnd}`)
     await expect(sourceMeta).toContainText(descriptorDigest)
+    for (const [name, width, height] of [['1440', 1440, 1024], ['980', 980, 900], ['390', 390, 844]] as const) {
+      await page.setViewportSize({ width, height })
+      responsiveLayouts.push({ viewport: `${width}x${height}`, shell: await assertResponsiveShell(page, width) })
+      if (width === 390) {
+        await assertOpenMobileDrawer(page)
+        await page.screenshot({ path: testInfo.outputPath('da08a-workspace-390-drawer-open.png'), fullPage: true })
+        await page.keyboard.press('Escape')
+        responsiveLayouts.push({ viewport: '390x844-after-escape', shell: await assertResponsiveShell(page, width) })
+      }
+      await page.screenshot({ path: testInfo.outputPath(`da08a-workspace-${name}.png`), fullPage: true })
+    }
+    const cdp = await page.context().newCDPSession(page)
+    try {
+      await cdp.send('Emulation.setPageScaleFactor', { pageScaleFactor: 2 })
+      expect(await page.evaluate(() => window.visualViewport?.scale)).toBe(2)
+      responsiveLayouts.push({ viewport: '390x844@200%', shell: await assertResponsiveShell(page, 390) })
+      await page.screenshot({ path: testInfo.outputPath('da08a-workspace-200pct.png'), fullPage: true })
+    } finally {
+      await cdp.send('Emulation.setPageScaleFactor', { pageScaleFactor: 1 })
+      await cdp.detach()
+      await page.setViewportSize({ width: 1440, height: 1024 })
+    }
 
     await selectFixtureContext(page, fixture, 'd')
     await expect(page.getByTestId('code-context-candidate')).toContainText(`${fixture.fixtureId}-d`)
@@ -243,11 +380,11 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
     await expect(page.getByTestId('code-context-pinned')).toContainText(`${fixture.fixtureId}-d`)
     await page.getByTestId('code-query-input').fill(alternate.query)
     await page.keyboard.press('Enter')
-    const alternateResult = page.getByTestId('code-search-results').getByRole('listitem').filter({
+    const alternateResults = page.getByTestId('code-search-results').getByRole('listitem').filter({
       has: page.getByText(`go:fixture/func:${alternate.expectedSource}`, { exact: true }),
     })
-    await expect(alternateResult).toHaveCount(1)
-    await alternateResult.getByTestId('code-search-source').click()
+    await expect(alternateResults).not.toHaveCount(0)
+    await alternateResults.first().getByTestId('code-search-source').click()
     await expect(page.getByTestId('code-source-result')).toContainText(alternate.expectedMarker)
 
 
@@ -276,6 +413,33 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
     await recordTransition(child, transitions, 'fresh-opener')
     await child.close()
     await copied.close()
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.goto(`${fixture.frontend.baseUrl}/settings`, { waitUntil: 'domcontentloaded' })
+    const settings = page.getByRole('dialog')
+    await expect(settings).toBeVisible()
+    await expect(page.locator('html')).toHaveAttribute('lang', 'ru')
+    await settings.getByRole('button', { name: 'English' }).click()
+    await expect(page.locator('html')).toHaveAttribute('lang', 'en')
+    await page.keyboard.press('Escape')
+    await expect(settings).toBeHidden()
+    const englishMenu = page.getByRole('button', { name: 'Menu', exact: true })
+    await englishMenu.focus()
+    await expect(englishMenu).toBeFocused()
+    await page.keyboard.press('Enter')
+    await expect(page.getByRole('link', { name: 'Workspace', exact: true })).toBeVisible()
+    await page.keyboard.press('Escape')
+    await page.goto(`${fixture.frontend.baseUrl}/settings`, { waitUntil: 'domcontentloaded' })
+    await expect(settings).toBeVisible()
+    await settings.getByRole('button', { name: '中文' }).click()
+    await expect(page.locator('html')).toHaveAttribute('lang', 'zh-Hans')
+    await page.keyboard.press('Escape')
+    const chineseMenu = page.getByRole('button', { name: '菜单', exact: true })
+    await chineseMenu.focus()
+    await expect(chineseMenu).toBeFocused()
+    await page.keyboard.press('Enter')
+    await expect(page.getByRole('link', { name: '工作区', exact: true })).toBeVisible()
+    await page.keyboard.press('Escape')
+    await page.setViewportSize({ width: 1440, height: 1024 })
 
     expect(requestPaths).toEqual(expect.arrayContaining([
       'POST /api/code/tabs/handshake',
@@ -296,6 +460,7 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
       backend: { sourceCommit: state.backend.sourceCommit, binarySha256: state.backend.binarySha256 },
       browser: { engine: browser.browserType().name(), version: browser.version() },
       transitions,
+      responsiveLayouts,
       traffic: state.traffic,
       liveFixtureProvisioned: true,
     }, null, 2)

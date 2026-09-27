@@ -1,5 +1,13 @@
 package config
 
+import "os"
+
+// CodeIntelEnabled defaults the installed code tools on while retaining an
+// explicit emergency stop for deployments that cannot run UCI.
+func CodeIntelEnabled() bool {
+	return os.Getenv("ENGRAM_CODE_INTEL_ENABLED") != "false"
+}
+
 // Canonical env-var names. Single source of truth (Plan ADR-002): every reader
 // across the codebase imports the constant rather than hard-coding the literal.
 // Renames are caught at compile time. Two distinct names enforce the
@@ -41,9 +49,9 @@ const (
 	// Empty value at daemon startup with a configured server URL is fatal (FR-4).
 	EnvWorkstationToken = "ENGRAM_TOKEN"
 
-	// EnvClientInstanceID is the explicit opaque non-secret installation
-	// reference that enables daemon V3 project descriptors. An empty value keeps
-	// the daemon on its explicit V2 compatibility branch.
+	// EnvClientInstanceID is the opaque non-secret installation reference for
+	// daemon V3 project descriptors. Direct and plugin launches persist and supply
+	// an installation-stable ID when no explicit value is configured.
 	EnvClientInstanceID = "ENGRAM_CLIENT_INSTANCE_ID"
 
 	// EnvClaudeSessionID is the Claude Code session identifier injected by the

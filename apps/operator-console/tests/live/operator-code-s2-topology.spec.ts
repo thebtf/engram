@@ -1,6 +1,8 @@
-import { readFile, writeFile } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
+import { readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
-import type { Browser, BrowserContext, Page } from '@playwright/test'
+import type { Browser, BrowserContext, Locator, Page } from '@playwright/test'
 import { browserUserID, intervalsOverlap, issueReadOnlyKeycard, observeOperation } from './agent-topology'
 import { appendBrowserTraffic, readLiveFixture } from './fixture-bootstrap'
 import type { LiveFixtureState, RouteTraffic } from './fixture-bootstrap'
@@ -78,19 +80,63 @@ async function requestJSON(page: Page, path: string, body: BrowserCredential): P
   }
 }
 
+async function selectFixtureContext(page: Page, fixture: LiveFixtureState, variant: 'a' | 'b'): Promise<void> {
+  const fixtureLabel = `${fixture.fixtureId}-${variant}`
+  const choose = async (select: Locator) => {
+    const option = select.locator('option').filter({ hasText: fixtureLabel })
+    await expect(option).toHaveCount(1)
+    const value = await option.getAttribute('value')
+    if (value === null) throw new Error('fixture catalog did not expose a readable selection')
+    await select.selectOption(value)
+  }
+  await choose(page.getByTestId('code-context-repository'))
+  await choose(page.getByTestId('code-context-working-copy'))
+  const snapshot = page.getByTestId('code-context-snapshot')
+  await expect(snapshot).toBeEnabled()
+  const options = snapshot.locator('option:not([disabled])')
+  await expect(options).toHaveCount(1)
+  const value = await options.getAttribute('value')
+  if (value === null) throw new Error('fixture catalog did not expose an indexed snapshot')
+  await snapshot.selectOption(value)
+  await expect(snapshot).toHaveValue(value)
+  await expect(page.getByTestId('code-context-candidate')).toContainText(fixtureLabel)
+}
+
+async function findSearchResult(page: Page, symbol: string): Promise<Locator> {
+  const result = page.getByTestId('code-search-results').getByRole('listitem').filter({
+    has: page.getByText(`go:fixture/func:${symbol}`, { exact: true }),
+  })
+  for (let offset = 0; offset < 8 && await result.count() === 0; offset += 1) {
+    const next = page.getByTestId('code-search-next')
+    await expect(next).toBeVisible()
+    const response = page.waitForResponse((candidate) => candidate.request().method() === 'POST' && new URL(candidate.url()).pathname === '/api/code/search')
+    await next.click()
+    expect((await response).status()).toBe(200)
+  }
+  await expect(result).toHaveCount(1)
+  return result.first()
+}
+
 async function pinAndRead(browser: Browser, fixture: LiveFixtureState, credential: BrowserCredential, scenario: OperatorCodeFixture, traffic: RouteTraffic[]): Promise<CodeTab> {
   const context = await browser.newContext()
   const page = await context.newPage()
   let proof: CodeProof | null = null
   let searchPayload: Record<string, unknown> | null = null
+  let tab: CodeTab | null = null
   page.on('request', (request) => {
     const url = new URL(request.url())
     if (url.origin !== fixture.frontend.baseUrl || !url.pathname.startsWith('/api/code/')) return
     const candidate = proofFromRequestPayload(request.postData())
-    if (candidate !== null) proof = candidate
+    if (candidate !== null) {
+      proof = candidate
+      if (tab !== null) tab.proof = candidate
+    }
     if (url.pathname === '/api/code/search' && request.postData() !== null) {
       const body: unknown = JSON.parse(request.postData() || '')
-      if (body !== null && typeof body === 'object' && !Array.isArray(body)) searchPayload = { ...body }
+      if (body !== null && typeof body === 'object' && !Array.isArray(body)) {
+        searchPayload = { ...body }
+        if (tab !== null) tab.searchPayload = searchPayload
+      }
     }
   })
   page.on('response', (response) => {
@@ -103,22 +149,17 @@ async function pinAndRead(browser: Browser, fixture: LiveFixtureState, credentia
   const shell = await page.goto(`${fixture.frontend.baseUrl}/`, { waitUntil: 'domcontentloaded' })
   expect(shell?.status()).toBe(200)
   expect((await requestJSON(page, '/api/auth/user-login', credential)).status).toBe(200)
-  await page.goto(`${fixture.frontend.baseUrl}/code`, { waitUntil: 'domcontentloaded' })
+  await page.getByTestId('overview-workspace-entry').click()
+  await expect(page).toHaveURL(/\/code$/)
   const variant = credential.email === fixture.browserCredential.email ? 'a' : 'b'
-  const contextSelect = page.getByTestId('code-context-select')
-  const option = contextSelect.locator('option').filter({ hasText: `${fixture.fixtureId}-${variant}` })
-  const value = await option.getAttribute('value')
-  if (value === null) throw new Error('fixture catalog did not expose a selectable View')
-  await contextSelect.selectOption(value)
-  await expect(page.getByTestId('code-context-candidate')).toBeVisible()
+  await selectFixtureContext(page, fixture, variant)
   await page.getByTestId('code-pin-context').click()
   await expect(page.getByTestId('code-context-pinned')).toBeVisible()
-  await page.getByTestId('code-query-input').fill(scenario.query)
+  await page.getByTestId('code-query-input').fill(scenario.expectedSearch)
+  const searchResponse = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/code/search')
   await page.getByTestId('code-search-submit').click()
-  const result = page.getByTestId('code-search-results').getByRole('listitem').filter({
-    has: page.getByText(`go:fixture/func:${scenario.expectedSource}`, { exact: true }),
-  })
-  await expect(result).toHaveCount(1)
+  expect((await searchResponse).status()).toBe(200)
+  const result = await findSearchResult(page, scenario.expectedSource)
   await result.getByTestId('code-search-explore').click()
   await expect(page.getByTestId('code-graph-results')).toContainText(scenario.expectedGraph)
   await result.getByTestId('code-search-source').click()
@@ -126,10 +167,12 @@ async function pinAndRead(browser: Browser, fixture: LiveFixtureState, credentia
   if (proof === null || searchPayload === null) {
     throw new Error('live Code Explorer did not send a binding-bound search request')
   }
-  return { context, page, proof, searchPayload }
+  tab = { context, page, proof, searchPayload }
+  return tab
 }
 
 test('S2 live topology: linked A/B browser contexts retain pins and close without cross-disclosure', async ({ browser }, testInfo) => {
+  test.setTimeout(300_000)
   const fixture = await readLiveFixture()
   const aScenario = operatorCodeFixture(fixture, 'operatorCode')
   const bScenario = operatorCodeFixture(fixture, 'operatorCodeB')
@@ -143,6 +186,9 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
   let registrationClient: MCPStdioClient | undefined
   let mcpA: MCPStdioClient | undefined
   let mcpB: MCPStdioClient | undefined
+  let dirtyA: MCPStdioClient | undefined
+  let dirtyB: MCPStdioClient | undefined
+  let reconnected: MCPStdioClient | undefined
 
   try {
     expect(fixture.mock.prohibited).toBe(true)
@@ -166,6 +212,11 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
     const tabB = await pinAndRead(browser, fixture, fixture.browserCredentialB, bScenario, traffic)
     a = tabA
     b = tabB
+    await a.page.getByTestId('code-grant-chooser').locator('summary').click()
+    const ownerReader = a.page.getByTestId('code-grant-chooser').getByRole('combobox').nth(1)
+    await expect(ownerReader.getByRole('option', { name: fixture.browserCredential.email, exact: true })).toHaveCount(1)
+    await ownerReader.selectOption({ label: fixture.browserCredential.email })
+    await expect(ownerReader.locator('option:checked')).toHaveText(fixture.browserCredential.email)
     await expect(a.page.getByTestId('code-source-result')).toContainText(aScenario.expectedMarker)
     await expect(a.page.getByTestId('code-source-result')).not.toContainText(bScenario.expectedMarker)
     await expect(b.page.getByTestId('code-source-result')).toContainText(bScenario.expectedMarker)
@@ -193,23 +244,21 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
     mcpB = externalClientB
     const [browserA, browserB, externalA, externalB] = await Promise.all([
       observeOperation(async () => {
-        await tabA.page.getByTestId('code-query-input').fill(aScenario.query)
+        await tabA.page.getByTestId('code-query-input').fill(aScenario.expectedSearch)
+        const searchResponse = tabA.page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/code/search')
         await tabA.page.getByTestId('code-search-submit').click()
-        const result = tabA.page.getByTestId('code-search-results').getByRole('listitem').filter({
-          has: tabA.page.getByText(`go:fixture/func:${aScenario.expectedSource}`, { exact: true }),
-        })
-        await expect(result).toHaveCount(1)
+        expect((await searchResponse).status()).toBe(200)
+        const result = await findSearchResult(tabA.page, aScenario.expectedSource)
         await result.getByTestId('code-search-source').click()
         await expect(tabA.page.getByTestId('code-source-result')).toContainText(aScenario.expectedMarker)
         await expect(tabA.page.getByTestId('code-source-result')).not.toContainText(bScenario.expectedMarker)
       }),
       observeOperation(async () => {
-        await tabB.page.getByTestId('code-query-input').fill(bScenario.query)
+        await tabB.page.getByTestId('code-query-input').fill(bScenario.expectedSearch)
+        const searchResponse = tabB.page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/code/search')
         await tabB.page.getByTestId('code-search-submit').click()
-        const result = tabB.page.getByTestId('code-search-results').getByRole('listitem').filter({
-          has: tabB.page.getByText(`go:fixture/func:${bScenario.expectedSource}`, { exact: true }),
-        })
-        await expect(result).toHaveCount(1)
+        expect((await searchResponse).status()).toBe(200)
+        const result = await findSearchResult(tabB.page, bScenario.expectedSource)
         await result.getByTestId('code-search-source').click()
         await expect(tabB.page.getByTestId('code-source-result')).toContainText(bScenario.expectedMarker)
         await expect(tabB.page.getByTestId('code-source-result')).not.toContainText(aScenario.expectedMarker)
@@ -256,6 +305,154 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
       usedStdio: true,
     }
 
+    const ownerID = await browserUserID(a.page)
+    const ownerKeycard = await a.page.evaluate(async (principal) => {
+      const response = await fetch('/api/auth/tokens', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: crypto.randomUUID(), principal: `browser-user/${principal}`, principal_kind: 'human', scope: 'read-write' }) })
+      const body = await response.json() as { token: string }
+      return { status: response.status, token: body.token }
+    }, ownerID)
+    expect(ownerKeycard.status).toBe(200)
+    expect(ownerKeycard.token).not.toBe('')
+    const dirtyConfig = { parserBundleDigest: fixture.mcp.firstIndex.parserBundleDigest, parserExecutable: fixture.mcp.firstIndex.parserExecutable }
+    dirtyA = await MCPStdioClient.start({ clientRoot: fixture.dirty.a.root, codeIndex: dirtyConfig, executable: fixture.mcp.clientBinary, serverURL: fixture.backend.baseUrl, token: ownerKeycard.token })
+    dirtyB = await MCPStdioClient.start({ clientRoot: fixture.dirty.b.root, codeIndex: dirtyConfig, executable: fixture.mcp.clientBinary, serverURL: fixture.backend.baseUrl, token: ownerKeycard.token })
+    const aHEAD = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: fixture.dirty.a.root, encoding: 'utf8' }).trim()
+    const bHEAD = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: fixture.dirty.b.root, encoding: 'utf8' }).trim()
+    expect(aHEAD).toBe(bHEAD)
+    expect(execFileSync('git', ['status', '--porcelain'], { cwd: fixture.dirty.a.root, encoding: 'utf8' })).toContain('workspace-dirty.go')
+    expect(execFileSync('git', ['status', '--porcelain'], { cwd: fixture.dirty.b.root, encoding: 'utf8' })).toContain('workspace-dirty.go')
+    await Promise.all([dirtyA.initializeAndList(), dirtyB.initializeAndList()])
+    const source = await dirtyA.registerDirtyCheckout({ root: fixture.dirty.a.root, label: `${fixture.fixtureId}-dirty-source` })
+    const registeredA = { sourceId: String(source.source_id), checkoutId: String(source.checkout_id), incarnationId: String(source.incarnation_id), analysisProfileId: String(source.analysis_profile_id) }
+    const registeredBResponse = await dirtyB.registerDirtyCheckout({ root: fixture.dirty.b.root, id: registeredA.sourceId })
+    const registeredB = { sourceId: String(registeredBResponse.source_id), checkoutId: String(registeredBResponse.checkout_id), incarnationId: String(registeredBResponse.incarnation_id), analysisProfileId: String(registeredBResponse.analysis_profile_id) }
+    expect(registeredB.sourceId).toBe(registeredA.sourceId)
+    expect(registeredB.checkoutId).not.toBe(registeredA.checkoutId)
+    const [headA, headB] = await Promise.all([readFile(join(fixture.dirty.a.root, '.git'), 'utf8'), readFile(join(fixture.dirty.b.root, '.git'), 'utf8')])
+    expect(headA).not.toBe(headB)
+    const viewID = (status: Record<string, unknown>): string => {
+      const context = status.context
+      return context !== null && typeof context === 'object' && typeof Reflect.get(context, 'view_id') === 'string' ? Reflect.get(context, 'view_id') as string : ''
+    }
+    const indexAt = async (client: MCPStdioClient, handle: string): Promise<{ view: string; indexMs: number; embeddingMs: number; status: Record<string, unknown> }> => {
+      const start = Date.now()
+      const run = await client.indexDirtyCheckout(handle)
+      const indexed = await client.dirtyIndexStatus(handle, run)
+      expect(indexed.server_counts_available).toBe(true)
+      const view = viewID(indexed)
+      expect(view).not.toBe('')
+      const indexMs = Date.now() - start
+      await expect.poll(async () => {
+        const current = await client.dirtyIndexStatus(handle)
+        return current.total_chunks === current.embedded_chunks && typeof current.total_chunks === 'number' && current.total_chunks > 0
+      }, { timeout: 90_000, intervals: [500, 1000, 2000] }).toBe(true)
+      return { view, indexMs, embeddingMs: Date.now() - start - indexMs, status: indexed }
+    }
+    const initialA = await indexAt(dirtyA, String(source.context_handle))
+    const initialB = await indexAt(dirtyB, String(registeredBResponse.context_handle))
+    expect(initialA.view).not.toBe(initialB.view)
+    const initialQueryA = await dirtyA.dirtySearch('WorkspaceDirtyAlpha')
+    const initialQueryB = await dirtyB.dirtySearch('WorkspaceDirtyBeta')
+    expect(JSON.stringify(initialQueryA)).toContain(`${fixture.dirty.a.marker}-initial`)
+    expect(JSON.stringify(initialQueryA)).not.toContain(fixture.dirty.b.marker)
+    expect(JSON.stringify(initialQueryB)).toContain(`${fixture.dirty.b.marker}-initial`)
+    expect(JSON.stringify(initialQueryB)).not.toContain(fixture.dirty.a.marker)
+
+    const choices = await a.page.evaluate(async () => { const response = await fetch('/api/code/grants/choices', { headers: { 'X-Engram-Request-ID': crypto.randomUUID() } }); return { status: response.status, text: await response.text() } })
+    expect(choices.status).toBe(200)
+    const choiceBody = JSON.parse(choices.text) as { choices: Array<{ choice_ref: string; repository: string }>; targets: Array<{ target_ref: string; label: string }> }
+    const owned = choiceBody.choices.filter((item) => item.repository === `${fixture.fixtureId}-dirty-source`)
+    expect(owned).toHaveLength(2)
+    for (const choice of owned) for (const email of [fixture.browserCredential.email, fixture.browserCredentialB.email]) {
+      const target = choiceBody.targets.find((entry) => entry.label === email)
+      expect(target).toBeDefined()
+      const result = await a.page.evaluate(async ({ choiceRef, targetRef }) => { const response = await fetch('/api/code/grants', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Engram-Request-ID': crypto.randomUUID() }, body: JSON.stringify({ choice_ref: choiceRef, target_ref: targetRef }) }); return response.status }, { choiceRef: choice.choice_ref, targetRef: target!.target_ref })
+      expect(result).toBe(200)
+    }
+    const pinDirty = async (page: Page, wanted: string): Promise<void> => {
+      await expect(page.getByTestId('code-context-repository').locator('option').filter({ hasText: `${fixture.fixtureId}-dirty-source` })).toHaveCount(1)
+      await page.getByTestId('code-context-repository').selectOption({ label: `${fixture.fixtureId}-dirty-source` })
+      const copies = page.getByTestId('code-context-working-copy').locator('option:not([disabled])')
+      await expect(copies).toHaveCount(2)
+      for (let index = 0; index < 2; index += 1) {
+        const value = await copies.nth(index).getAttribute('value')
+        if (value === null) throw new Error('registered checkout has no selection')
+        await page.getByTestId('code-context-working-copy').selectOption(value)
+        const snapshot = page.getByTestId('code-context-snapshot').locator('option:not([disabled])')
+        await expect(snapshot).toHaveCount(1)
+        const ref = await snapshot.getAttribute('value')
+        if (ref === null) throw new Error('registered checkout has no published View')
+        await page.getByTestId('code-context-snapshot').selectOption(ref)
+        await page.getByTestId('code-pin-context').click()
+        await page.getByTestId('code-query-input').fill(wanted)
+        const response = page.waitForResponse((entry) => new URL(entry.url()).pathname === '/api/code/search' && entry.request().method() === 'POST')
+        await page.getByTestId('code-search-submit').click()
+        expect((await response).status()).toBe(200)
+        const results = page.getByTestId('code-search-results')
+        if (await results.getByText(`go:fixture/func:${wanted}`, { exact: true }).count() > 0) {
+          await findSearchResult(page, wanted)
+          return
+        }
+      }
+      throw new Error(`saved checkout ${wanted} not found in either published View`)
+    }
+    await Promise.all([a.page.reload({ waitUntil: 'domcontentloaded' }), b.page.reload({ waitUntil: 'domcontentloaded' })])
+    await pinDirty(a.page, 'WorkspaceDirtyAlpha')
+    const dirtyACheckoutOption = await a.page.getByTestId('code-context-working-copy').inputValue()
+    expect(dirtyACheckoutOption).not.toBe('')
+    const originalSnapshotOption = await a.page.getByTestId('code-context-snapshot').inputValue()
+    expect(originalSnapshotOption).not.toBe('')
+    await pinDirty(b.page, 'WorkspaceDirtyBeta')
+    const oldA = await findSearchResult(a.page, 'WorkspaceDirtyAlpha')
+    await oldA.getByTestId('code-search-source').click()
+    await expect(a.page.getByTestId('code-source-result')).toContainText(`${fixture.dirty.a.marker}-initial`)
+
+    const transitions: Array<{ action: string; view: string; publicationMs: number; embeddingMs: number }> = []
+    let previousView = initialA.view
+    const savedA = join(fixture.dirty.a.root, 'workspace-dirty.go')
+    const renamedA = join(fixture.dirty.a.root, 'workspace-renamed.go')
+    for (const [action, change] of [
+      ['save', async () => writeFile(savedA, `package fixture\nfunc WorkspaceDirtyAlpha() string { return "${fixture.dirty.a.marker}-saved" }\n`)],
+      ['rename', async () => rename(savedA, renamedA)],
+      ['delete', async () => rm(renamedA)],
+    ] as const) {
+      const start = Date.now()
+      await change()
+      let nextView = ''
+      await expect.poll(async () => { const status = await dirtyA!.dirtyIndexStatus(String(source.context_handle)); nextView = viewID(status); return nextView !== '' && nextView !== previousView }, { timeout: 90_000, intervals: [500, 1000, 2000] }).toBe(true)
+      const publicationMs = Date.now() - start
+      await expect.poll(async () => { const status = await dirtyA!.dirtyIndexStatus(String(source.context_handle)); return typeof status.total_chunks === 'number' && status.total_chunks > 0 && status.total_chunks === status.embedded_chunks }, { timeout: 90_000, intervals: [500, 1000, 2000] }).toBe(true)
+      transitions.push({ action, view: nextView, publicationMs, embeddingMs: Date.now() - start - publicationMs })
+      previousView = nextView
+      const unchanged = await dirtyB.dirtyIndexStatus(String(registeredBResponse.context_handle))
+      expect(viewID(unchanged)).toBe(initialB.view)
+      expect(JSON.stringify(await dirtyB.dirtySearch('WorkspaceDirtyBeta'))).toContain(`${fixture.dirty.b.marker}-initial`)
+      await oldA.getByTestId('code-search-source').click()
+      await expect(a.page.getByTestId('code-source-result')).toContainText(`${fixture.dirty.a.marker}-initial`)
+    }
+    await a.page.locator('.context-picker .actions button').first().click()
+    await a.page.getByTestId('code-context-repository').selectOption({ label: `${fixture.fixtureId}-dirty-source` })
+    await a.page.getByTestId('code-context-working-copy').selectOption(dirtyACheckoutOption)
+    const snapshot = a.page.getByTestId('code-context-snapshot').locator('option:not([disabled])')
+    await expect(snapshot.first()).not.toHaveAttribute('value', originalSnapshotOption)
+    await a.page.getByTestId('code-context-snapshot').selectOption((await snapshot.first().getAttribute('value'))!)
+    await a.page.getByTestId('code-pin-context').click()
+    await a.page.getByTestId('code-query-input').fill('WorkspaceDirtyAlpha')
+    const deletedSearch = a.page.waitForResponse((entry) => new URL(entry.url()).pathname === '/api/code/search' && entry.request().method() === 'POST')
+    await a.page.getByTestId('code-search-submit').click()
+    expect((await deletedSearch).status()).toBe(200)
+    await expect(a.page.getByTestId('code-search-results').getByText('go:fixture/func:WorkspaceDirtyAlpha', { exact: true })).toHaveCount(0)
+    await dirtyA.close()
+    reconnected = await MCPStdioClient.start({ clientRoot: fixture.dirty.a.root, codeIndex: dirtyConfig, executable: fixture.mcp.clientBinary, serverURL: fixture.backend.baseUrl, token: ownerKeycard.token })
+    await reconnected.initializeAndList()
+    const rebound = await reconnected.selectDirtyCheckout(registeredA)
+    expect(rebound.context).not.toBeNull()
+    expect(rebound.checkout_id).toBe(registeredA.checkoutId)
+    const reconnectView = viewID(await reconnected.dirtyIndexStatus(String(rebound.context_handle)))
+    expect(reconnectView).not.toBe(initialA.view)
+    expect(JSON.stringify(await reconnected.dirtySearch('WorkspaceDirtyAlpha'))).not.toContain(`${fixture.dirty.a.marker}-initial`)
+    lifecycle.dirty = { source: registeredA.sourceId, a: registeredA.checkoutId, b: registeredB.checkoutId, initial: [initialA, initialB], transitions, oldPinRetained: true, switched: true, reconnectView }
+
     const pending = await a.page.evaluate(async () => {
       const raw = sessionStorage.getItem('engram.operator-code.resume.v1')
       if (raw === null) return null
@@ -296,11 +493,7 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
     await child.waitForLoadState('domcontentloaded')
     await expect(child.getByTestId('code-bootstrap-evidence')).toContainText('TAB_BINDING_READY')
     await expect(child.getByTestId('code-release-state')).toHaveAttribute('data-state', 'unselected')
-    const childSelect = child.getByTestId('code-context-select')
-    const childOption = childSelect.locator('option').filter({ hasText: `${fixture.fixtureId}-a` })
-    const childValue = await childOption.getAttribute('value')
-    if (childValue === null) throw new Error('fixture catalog did not expose a selectable View')
-    await childSelect.selectOption(childValue)
+    await selectFixtureContext(child, fixture, 'a')
     await child.getByTestId('code-pin-context').click()
     await expect(child.getByTestId('code-context-pinned')).toBeVisible()
     await child.reload({ waitUntil: 'domcontentloaded' })
@@ -346,8 +539,8 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
     lifecycle.acknowledgedClose = ['A', 'B']
     lifecycle.replayedProof = 'denied_without_body'
   } finally {
-    await Promise.all([registrationClient?.close(), mcpA?.close(), mcpB?.close()])
-    const externalMCP = [registrationClient, mcpA, mcpB].flatMap((client) => client === undefined ? [] : [client.transcript()])
+    await Promise.all([registrationClient?.close(), mcpA?.close(), mcpB?.close(), dirtyA?.close(), dirtyB?.close(), reconnected?.close()])
+    const externalMCP = [registrationClient, mcpA, mcpB, dirtyA, dirtyB, reconnected].flatMap((client) => client === undefined ? [] : [client.transcript()])
     for (const transcript of externalMCP) {
       expect(transcript.daemonExecutable).toBe(fixture.mcp.clientBinary)
       expect(transcript.daemonExecutableSha256).toBe(fixture.mcp.clientBinarySha256)
@@ -372,5 +565,72 @@ test('S2 live topology: linked A/B browser contexts retain pins and close withou
       body: new TextEncoder().encode(evidence),
     })
     await Promise.all([a?.context.close(), b?.context.close()])
+  }
+})
+
+test('S2 live grants: issue reload and revoke deny reader Code reads', async ({ browser }, testInfo) => {
+  const fixture = await readLiveFixture()
+  const scenario = operatorCodeFixture(fixture, 'operatorCode')
+  const owner = await pinAndRead(browser, fixture, fixture.browserCredential, scenario, [])
+  const readerContext = await browser.newContext()
+  const reader = await readerContext.newPage()
+  const readBodies: Record<string, Record<string, unknown>> = {}
+  reader.on('request', (request) => {
+    const path = new URL(request.url()).pathname
+    if (!['/api/code/search', '/api/code/graph', '/api/code/source'].includes(path) || request.postData() === null) return
+    const body: unknown = JSON.parse(request.postData()!)
+    if (body !== null && typeof body === 'object' && !Array.isArray(body)) readBodies[path] = { ...body }
+  })
+  try {
+    expect(fixture.mock.prohibited).toBe(true)
+    await reader.goto(`${fixture.frontend.baseUrl}/code`, { waitUntil: 'domcontentloaded' })
+    expect((await requestJSON(reader, '/api/auth/user-login', fixture.browserCredentialB)).status).toBe(200)
+    const chooser = owner.page.getByTestId('code-grant-chooser')
+    await chooser.locator('summary').click()
+    const checkout = chooser.getByRole('combobox').first()
+    const ownerCopy = checkout.locator('option').filter({ hasText: `${fixture.fixtureId}-a` })
+    await expect(ownerCopy).toHaveCount(1)
+    await checkout.selectOption((await ownerCopy.getAttribute('value'))!)
+    await chooser.getByRole('combobox').nth(1).selectOption({ label: fixture.browserCredentialB.email })
+    const issueResponse = owner.page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/code/grants')
+    await chooser.getByRole('button', { name: 'Разрешить чтение' }).click()
+    expect((await issueResponse).status()).toBe(200)
+    await owner.page.reload({ waitUntil: 'domcontentloaded' })
+    const inventory = owner.page.getByTestId('code-grant-chooser')
+    await inventory.locator('summary').click()
+    const granted = inventory.getByRole('listitem').filter({ hasText: fixture.browserCredentialB.email }).filter({ hasText: `${fixture.fixtureId}-a` })
+    await expect(granted).toHaveCount(1)
+    await reader.reload({ waitUntil: 'domcontentloaded' })
+    await selectFixtureContext(reader, fixture, 'a')
+    await reader.getByTestId('code-pin-context').click()
+    await reader.getByTestId('code-query-input').fill(scenario.expectedSearch)
+    const searchResponse = reader.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/code/search')
+    await reader.getByTestId('code-search-submit').click()
+    expect((await searchResponse).status()).toBe(200)
+    const result = await findSearchResult(reader, scenario.expectedSource)
+    const graphResponse = reader.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/code/graph')
+    await result.getByTestId('code-search-explore').click()
+    expect((await graphResponse).status()).toBe(200)
+    await expect(reader.getByTestId('code-graph-results')).toContainText(scenario.expectedGraph)
+    const sourceResponse = reader.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/code/source')
+    await result.getByTestId('code-search-source').click()
+    expect((await sourceResponse).status()).toBe(200)
+    await expect(reader.getByTestId('code-source-result')).toContainText(scenario.expectedMarker)
+    const revokeResponse = owner.page.waitForResponse((response) => response.request().method() === 'POST' && /\/api\/code\/grants\/[^/]+\/revoke$/.test(new URL(response.url()).pathname))
+    await granted.getByRole('button').click()
+    expect((await revokeResponse).status()).toBe(200)
+    await expect(granted).toHaveCount(0)
+    for (const path of ['/api/code/search', '/api/code/graph', '/api/code/source']) {
+      const body = readBodies[path]
+      expect(body, `${path} was not issued by the reader UI`).toBeDefined()
+      const denial = await reader.evaluate(async ({ requestPath, payload }) => {
+        const response = await fetch(requestPath, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', 'X-Engram-Request-ID': crypto.randomUUID() }, body: JSON.stringify(payload) })
+        return { status: response.status, text: await response.text() }
+      }, { requestPath: path, payload: body })
+      expect(denial, path).toEqual({ status: 403, text: '' })
+    }
+    await testInfo.attach('s2-persisted-grant-revocation', { contentType: 'application/json', body: JSON.stringify({ candidate: fixture.candidate, checkout: fixture.worktrees.a, issue: 200, ownerReload: true, allowed: ['search', 'graph', 'source'], revoke: 200, denied: ['search', 'graph', 'source'] }) })
+  } finally {
+    await Promise.all([owner.context.close(), readerContext.close()])
   }
 })

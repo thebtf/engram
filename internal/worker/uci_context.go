@@ -9,11 +9,13 @@ import (
 	"os"
 
 	"github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/crypto"
 	gormstore "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/grpcserver"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/uci"
+	"google.golang.org/grpc/metadata"
 	gormlib "gorm.io/gorm"
 )
 
@@ -381,12 +383,16 @@ func (authorizer *operatorCodeServerAuthorizer) AuthorizeOperatorCode(ctx contex
 	})
 }
 
-func composeOperatorCodeHTTPAdapter(db *gormlib.DB, composition *uciContextComposition) (*OperatorCodeHTTPAdapter, error) {
+func composeOperatorCodeHTTPAdapter(db *gormlib.DB, composition *uciContextComposition, vault *crypto.Vault) (*OperatorCodeHTTPAdapter, error) {
 	if db == nil || composition == nil || composition.contextStore == nil || composition.resolver == nil || composition.application == nil || composition.exposureRecorder == nil || composition.indexIntentStore == nil || composition.indexTargets == nil {
 		return nil, errors.New("operator code HTTP composition requires UCI context dependencies")
 	}
+	if vault == nil {
+		return nil, errors.New("operator code HTTP composition requires a vault key for chooser references")
+	}
+	grants := NewCodeGrantApplication(gormstore.NewBrowserReadGrantStore(db))
 	adapter := NewOperatorCodeHTTPAdapter(
-		NewCodeGrantApplication(gormstore.NewBrowserReadGrantStore(db)),
+		grants,
 		NewBrowserBindingApplication(gormstore.NewBrowserTabBindingStore(db)),
 		newOperatorCodeServerAuthorizer(composition.contextStore, composition.resolver),
 		&operatorCodeIndexIntentComposition{
@@ -394,6 +400,10 @@ func composeOperatorCodeHTTPAdapter(db *gormlib.DB, composition *uciContextCompo
 		},
 		composition.exposureRecorder,
 	)
+	if err := adapter.configureChoiceCipher(vault); err != nil {
+		return nil, fmt.Errorf("configure operator code chooser: %w", err)
+	}
+	adapter.onboarding = grants
 	adapter.contexts = gormstore.NewBrowserCodeContextStore(db)
 	adapter.indexTargets = composition.indexTargets
 	adapter.graphSources = composition.projectionStore
@@ -455,6 +465,21 @@ func composeQueueCandidateSelectionHandler(service *Service, db *gormlib.DB) (*Q
 	return NewQueueCandidateSelectionHandler(service, gormstore.NewCollectionSelectionStore(db), operatorCollectionScopeAuthority{}), nil
 }
 
+func verifiedUCIParserBundle(ctx context.Context) (bool, error) {
+	incoming, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return false, nil
+	}
+	values := incoming.Get("x-engram-verified-parser-bundle")
+	if len(values) == 0 {
+		return false, nil
+	}
+	if len(values) != 1 || values[0] != string(uci.TreeSitterBundleDigest()) {
+		return false, uci.NewContextError(uci.ContextMismatch, nil)
+	}
+	return true, nil
+}
+
 // composeUCIContext creates and installs the narrow UCI context capability.
 // The disabled path returns before it allocates or installs any UCI dependency.
 func composeUCIContext(
@@ -480,6 +505,27 @@ func composeUCIContext(
 	if err != nil {
 		return nil, fmt.Errorf("create UCI MCP context application: %w", err)
 	}
+	contextApplication.SetLocalGitRegistration(func(ctx context.Context, caller uci.ResolveContextInput, sourceID, label, locator string, parserBundle *bool) (uci.RegisteredCheckoutSelector, error) {
+		available, err := verifiedUCIParserBundle(ctx)
+		if err != nil {
+			return uci.RegisteredCheckoutSelector{}, err
+		}
+		if parserBundle != nil && *parserBundle && !available {
+			return uci.RegisteredCheckoutSelector{}, uci.NewContextError(uci.ContextMismatch, nil)
+		}
+		registered, err := contextStore.RegisterLocalGit(ctx, gormstore.RegisterLocalGitInput{
+			AuthRealm: caller.AuthRealm, Principal: caller.Principal, WorkstationID: caller.WorkstationID,
+			SourceID: sourceID, SourceLabel: label, Locator: locator, ParserBundle: parserBundle,
+			DefaultParserBundle: available,
+		})
+		if err != nil {
+			return uci.RegisteredCheckoutSelector{}, err
+		}
+		return uci.RegisteredCheckoutSelector{
+			Scope:     uci.IndexScope{SourceID: registered.SourceID, CheckoutID: registered.CheckoutID, IncarnationID: registered.IncarnationID},
+			ProfileID: registered.ProfileID,
+		}, nil
+	})
 
 	projectionStore := gormstore.NewUCIProjectionStore(db)
 	indexIntentStore := gormstore.NewUCIIndexIntentStore(db)
@@ -518,7 +564,7 @@ func composeUCIContext(
 	graphService := uci.NewGraphService(projectionStore)
 	versionedReadService := uci.NewVersionedReadService(projectionStore)
 	indexStatusService := uci.NewIndexStatusService(projectionStore, semantic.profilePtr)
-	semanticService := uci.NewSemanticService(semantic.profile, semantic.embedder, projectionStore, projectionStore)
+	semanticService := uci.NewSemanticService(semantic.profile, semantic.embedder, projectionStore, projectionStore, projectionStore)
 	exposureRecorder := uci.NewExposureRecorder(gormstore.NewUCIExposureStore(db), nil)
 	application, err := NewUCIApplication(
 		contextApplication,

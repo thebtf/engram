@@ -41,6 +41,17 @@ func TestConfigSuite(t *testing.T) {
 	suite.Run(t, new(ConfigSuite))
 }
 
+func TestCodeIntelEnabledDefaultsOnWithExplicitStop(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "")
+	if !CodeIntelEnabled() {
+		t.Fatal("unconfigured installations must expose code intelligence")
+	}
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "false")
+	if CodeIntelEnabled() {
+		t.Fatal("explicit emergency stop must disable code intelligence")
+	}
+}
+
 // TestDefault verifies default configuration values.
 func (s *ConfigSuite) TestDefault() {
 	cfg := Default()
@@ -334,14 +345,14 @@ func (s *ConfigSuite) TestLoad_TableDriven() {
 			os.Setenv("HOME", tempDir)
 			os.Setenv("USERPROFILE", tempDir)
 
-			err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+			err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
 			s.Require().NoError(err)
 
 			if tt.settingsJSON != "" {
 				writeErr := os.WriteFile(
 					filepath.Join(tempDir, ".engram", "settings.json"),
 					[]byte(tt.settingsJSON),
-					0600,
+					0o600,
 				)
 				s.Require().NoError(writeErr)
 			}
@@ -365,7 +376,7 @@ func (s *ConfigSuite) TestLoad_JSONContextSettings() {
 	os.Setenv("HOME", tempDir)
 	os.Setenv("USERPROFILE", tempDir)
 
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
 	s.Require().NoError(err)
 
 	settingsJSON := `{
@@ -379,7 +390,7 @@ func (s *ConfigSuite) TestLoad_JSONContextSettings() {
 		"ENGRAM_HUB_THRESHOLD": 10,
 		"ENGRAM_ENFORCE_SOURCE_PROJECT": false
 	}`
-	err = os.WriteFile(filepath.Join(tempDir, ".engram", "settings.json"), []byte(settingsJSON), 0600)
+	err = os.WriteFile(filepath.Join(tempDir, ".engram", "settings.json"), []byte(settingsJSON), 0o600)
 	s.Require().NoError(err)
 
 	cfg, err := Load()
@@ -402,10 +413,10 @@ func (s *ConfigSuite) TestSaveSettings_MergesOperatorUpdates() {
 
 	s.T().Setenv("HOME", tempDir)
 	s.T().Setenv("USERPROFILE", tempDir)
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
 	s.Require().NoError(err)
 
-	err = os.WriteFile(filepath.Join(tempDir, ".engram", "settings.json"), []byte(`{"ENGRAM_MODEL":"haiku"}`), 0600)
+	err = os.WriteFile(filepath.Join(tempDir, ".engram", "settings.json"), []byte(`{"ENGRAM_MODEL":"haiku"}`), 0o600)
 	s.Require().NoError(err)
 
 	err = SaveSettings(map[string]any{
@@ -428,7 +439,7 @@ func (s *ConfigSuite) TestSaveSettings_SerializesConcurrentUpdates() {
 
 	os.Setenv("HOME", tempDir)
 	os.Setenv("USERPROFILE", tempDir)
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
 	s.Require().NoError(err)
 
 	var wg sync.WaitGroup
@@ -470,7 +481,7 @@ func (s *ConfigSuite) TestReload_DetectsOperatorSettingsChanges() {
 
 	s.T().Setenv("HOME", tempDir)
 	s.T().Setenv("USERPROFILE", tempDir)
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
 	s.Require().NoError(err)
 
 	_, _, err = Reload()
@@ -502,12 +513,12 @@ func (s *ConfigSuite) TestLoad_DBPathFromJSON() {
 
 	os.Setenv("HOME", tempDir)
 	os.Setenv("USERPROFILE", tempDir)
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
 	s.Require().NoError(err)
 
 	customPath := "/custom/db/path.db"
 	settingsJSON := `{"ENGRAM_DB_PATH": "` + customPath + `"}`
-	err = os.WriteFile(filepath.Join(tempDir, ".engram", "settings.json"), []byte(settingsJSON), 0600)
+	err = os.WriteFile(filepath.Join(tempDir, ".engram", "settings.json"), []byte(settingsJSON), 0o600)
 	s.Require().NoError(err)
 
 	cfg, err := Load()
@@ -524,7 +535,7 @@ func (s *ConfigSuite) TestLoad_EnvOverrides() {
 
 	os.Setenv("HOME", tempDir)
 	os.Setenv("USERPROFILE", tempDir)
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
 	s.Require().NoError(err)
 
 	// Env vars override JSON settings
@@ -556,7 +567,7 @@ func (s *ConfigSuite) TestLoad_EnvOverrides_Limits() {
 
 	os.Setenv("HOME", tempDir)
 	os.Setenv("USERPROFILE", tempDir)
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
 	s.Require().NoError(err)
 
 	s.T().Setenv("ENGRAM_ALWAYS_INJECT_LIMIT", "30")
@@ -578,7 +589,7 @@ func (s *ConfigSuite) TestLoad_Telemetry() {
 
 	os.Setenv("HOME", tempDir)
 	os.Setenv("USERPROFILE", tempDir)
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
 	s.Require().NoError(err)
 
 	s.T().Setenv("ENGRAM_TELEMETRY_ENABLED", "false")
@@ -601,7 +612,7 @@ func (s *ConfigSuite) TestLoad_EncryptionKeys() {
 
 	os.Setenv("HOME", tempDir)
 	os.Setenv("USERPROFILE", tempDir)
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
 	s.Require().NoError(err)
 
 	// Primary key name takes precedence
@@ -627,7 +638,7 @@ func (s *ConfigSuite) TestLoad_EncryptionKeyFile() {
 
 	os.Setenv("HOME", tempDir)
 	os.Setenv("USERPROFILE", tempDir)
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
 	s.Require().NoError(err)
 
 	s.T().Setenv("ENGRAM_ENCRYPTION_KEY_FILE", "/vault/key.hex")
@@ -644,7 +655,7 @@ func (s *ConfigSuite) TestLoad_AuthentikSSO() {
 
 	os.Setenv("HOME", tempDir)
 	os.Setenv("USERPROFILE", tempDir)
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
 	s.Require().NoError(err)
 
 	s.T().Setenv("ENGRAM_AUTHENTIK_ENABLED", "true")
@@ -666,7 +677,7 @@ func (s *ConfigSuite) TestLoad_AuthSkipLocal() {
 
 	os.Setenv("HOME", tempDir)
 	os.Setenv("USERPROFILE", tempDir)
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
 	s.Require().NoError(err)
 
 	s.T().Setenv("ENGRAM_AUTH_SKIP_LOCAL", "true")
@@ -686,7 +697,7 @@ func (s *ConfigSuite) TestLoad_EnforceSourceProjectEnvOverride() {
 
 	os.Setenv("HOME", tempDir)
 	os.Setenv("USERPROFILE", tempDir)
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
 	s.Require().NoError(err)
 
 	s.T().Setenv("ENGRAM_ENFORCE_SOURCE_PROJECT", "false")
@@ -703,7 +714,7 @@ func (s *ConfigSuite) TestLoad_LogBufferSize() {
 
 	os.Setenv("HOME", tempDir)
 	os.Setenv("USERPROFILE", tempDir)
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
 	s.Require().NoError(err)
 
 	s.T().Setenv("ENGRAM_LOG_BUFFER_SIZE", "50000")
@@ -720,7 +731,7 @@ func (s *ConfigSuite) TestLoad_CollectionConfig() {
 
 	os.Setenv("HOME", tempDir)
 	os.Setenv("USERPROFILE", tempDir)
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
 	s.Require().NoError(err)
 
 	s.T().Setenv("COLLECTION_CONFIG", "/my/collections.yml")
@@ -737,7 +748,7 @@ func (s *ConfigSuite) TestReload() {
 
 	os.Setenv("HOME", tempDir)
 	os.Setenv("USERPROFILE", tempDir)
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
 	s.Require().NoError(err)
 
 	// Initial load
@@ -760,12 +771,12 @@ func (s *ConfigSuite) TestReload_DetectsChanges() {
 
 	os.Setenv("HOME", tempDir)
 	os.Setenv("USERPROFILE", tempDir)
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
 	s.Require().NoError(err)
 
 	// Write initial settings
 	err = os.WriteFile(filepath.Join(tempDir, ".engram", "settings.json"),
-		[]byte(`{"ENGRAM_MODEL": "haiku"}`), 0600)
+		[]byte(`{"ENGRAM_MODEL": "haiku"}`), 0o600)
 	s.Require().NoError(err)
 
 	_, _, err = Reload()
@@ -773,7 +784,7 @@ func (s *ConfigSuite) TestReload_DetectsChanges() {
 
 	// Update settings to a different model
 	err = os.WriteFile(filepath.Join(tempDir, ".engram", "settings.json"),
-		[]byte(`{"ENGRAM_MODEL": "sonnet"}`), 0600)
+		[]byte(`{"ENGRAM_MODEL": "sonnet"}`), 0o600)
 	s.Require().NoError(err)
 
 	cfg, changed, err := Reload()
@@ -795,7 +806,7 @@ func TestGet(t *testing.T) {
 	os.Setenv("HOME", tempDir)
 	os.Setenv("USERPROFILE", tempDir)
 
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
 	require.NoError(t, err)
 
 	cfg := Get()
@@ -989,7 +1000,7 @@ func TestLoad_ContextSettings(t *testing.T) {
 	defer os.Setenv("HOME", origHome)
 	defer os.Setenv("USERPROFILE", origUserProfile)
 
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
 	require.NoError(t, err)
 
 	settingsJSON := `{
@@ -1001,7 +1012,7 @@ func TestLoad_ContextSettings(t *testing.T) {
 	err = os.WriteFile(
 		filepath.Join(tempDir, ".engram", "settings.json"),
 		[]byte(settingsJSON),
-		0600,
+		0o600,
 	)
 	require.NoError(t, err)
 
