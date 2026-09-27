@@ -337,6 +337,7 @@ func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.Cal
 		}
 		canonicalProject = string(resolution.CanonicalProjectKey())
 		resolutionV3 = projectIdentityV3Proto(resolution)
+		ctx = mcp.ContextWithCodeClientInstance(ctx, identity.GetClientInstanceId())
 	} else if req.GetProject() != "" || req.GetProjectIdentity() != nil {
 		var err error
 		canonicalProject, err = s.resolveProjectIdentity(ctx, req.GetProject(), req.GetProjectIdentity())
@@ -358,6 +359,15 @@ func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.Cal
 	}
 	if requiresCorrelation {
 		ctx = auditcontext.WithUCIRequestCorrelationRequired(ctx)
+	}
+	if strings.HasPrefix(req.ToolName, "codebase_") {
+		if identity, found := auth.IdentityFrom(ctx); found && identity.Source == auth.SourceAuthDisabled {
+			instance, _, valid := noAuthUCIClientInstanceFrom(ctx)
+			if !valid || (req.GetProjectIdentityV3() != nil && req.GetProjectIdentityV3().GetClientInstanceId() != instance) {
+				return nil, status.Error(codes.FailedPrecondition, "noauth code client installation is required")
+			}
+			ctx = mcp.ContextWithCodeClientInstance(ctx, instance)
+		}
 	}
 
 	argumentsJSON, err := canonicalizeProjectArgument(req.ToolName, req.ArgumentsJson, canonicalProject, req.GetProjectIdentityV3() == nil)

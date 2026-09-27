@@ -244,22 +244,23 @@ func (s *BrowserCodeContextStore) ListNoAuthCatalog(ctx context.Context) ([]Brow
 			view_row.head_oid AS snapshot_revision, view_row.published_at AS snapshot_published_at
 		FROM sources AS source
 		JOIN ci_checkouts AS checkout ON checkout.source_id = source.source_id
-		LEFT JOIN ci_views AS view_row ON view_row.checkout_id = checkout.checkout_id
-			AND view_row.source_id = checkout.source_id
-			AND view_row.incarnation_id = checkout.incarnation_id
-			AND view_row.state IN (?, ?)
+		LEFT JOIN LATERAL (
+			SELECT view_id, profile_id, generation, ref_label, head_oid, published_at
+			FROM ci_views WHERE checkout_id = checkout.checkout_id
+				AND source_id = checkout.source_id AND incarnation_id = checkout.incarnation_id
+				AND state IN (?, ?)
+			ORDER BY (view_id = checkout.current_view_id) DESC NULLS LAST, generation DESC, view_id
+			LIMIT 1
+		) AS view_row ON TRUE
 		WHERE source.auth_realm = ? AND checkout.owner_principal = ?
 			AND source.state = ? AND checkout.state IN (?, ?, ?)
 		ORDER BY source.source_id, checkout.checkout_id, view_row.generation DESC NULLS LAST, view_row.view_id
 		LIMIT ?
 	`, UCIViewPublished, UCIViewSuperseded, uci.NoAuthCodeRealm, uci.NoAuthCodePrincipal,
 		UCISourceActive, UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp,
-		browserCodeCatalogMaxEntries+1).Scan(&rows).Error
+		browserCodeCatalogMaxEntries).Scan(&rows).Error
 	if err != nil {
 		return nil, fmt.Errorf("local code context catalog: %w", err)
-	}
-	if len(rows) > browserCodeCatalogMaxEntries {
-		return nil, fmt.Errorf("local code context catalog exceeds %d entries", browserCodeCatalogMaxEntries)
 	}
 	entries := make([]BrowserCodeContextCatalogEntry, 0, len(rows))
 	for _, row := range rows {

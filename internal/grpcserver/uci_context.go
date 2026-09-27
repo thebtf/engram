@@ -397,6 +397,19 @@ func (transport *contextAwareUCITransport) LegacyCodeIndexNegotiate(ctx context.
 	return response, nil
 }
 
+func noAuthUCIClientInstanceFrom(ctx context.Context) (string, string, bool) {
+	incoming, found := metadata.FromIncomingContext(ctx)
+	if !found {
+		return "", "", false
+	}
+	values := incoming.Get(uci.NoAuthCodeClientInstanceMetadataKey)
+	if len(values) != 1 {
+		return "", "", false
+	}
+	workstation, valid := uci.NoAuthCodeWorkstationForInstance(values[0])
+	return values[0], workstation, valid
+}
+
 func contextAwareCallerFrom(ctx context.Context) (contextAwareCaller, error) {
 	if err := uciTransportContextError(ctx); err != nil {
 		return contextAwareCaller{}, err
@@ -410,7 +423,11 @@ func contextAwareCallerFrom(ctx context.Context) (contextAwareCaller, error) {
 		return contextAwareCaller{}, contextAwareClosedError(uci.ContextMismatch)
 	}
 	if identity.Source == auth.SourceAuthDisabled {
-		return contextAwareCaller{clientSessionID: clientSessionID, authRealm: uci.NoAuthCodeRealm, principal: uci.NoAuthCodePrincipal, workstationID: uci.NoAuthCodeWorkstation}, nil
+		_, workstation, valid := noAuthUCIClientInstanceFrom(ctx)
+		if !valid {
+			return contextAwareCaller{}, contextAwareClosedError(uci.ContextMismatch)
+		}
+		return contextAwareCaller{clientSessionID: clientSessionID, authRealm: uci.NoAuthCodeRealm, principal: uci.NoAuthCodePrincipal, workstationID: workstation}, nil
 	}
 	principal, _, owned := identity.MemoryOwner()
 	workstationID := identity.WorkstationID()

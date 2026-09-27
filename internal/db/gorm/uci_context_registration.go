@@ -140,6 +140,16 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 		if err := tx.Create(&checkout).Error; err != nil {
 			return fmt.Errorf("register local git checkout: %w", err)
 		}
+		if in.AuthRealm == uci.NoAuthCodeRealm {
+			name := path.Base(in.Locator)
+			fingerprint := sha256.Sum256([]byte(in.WorkstationID))
+			label := fmt.Sprintf("Worktree · %s · Device %x", name, fingerprint[:4])
+			if validBrowserCodeCheckoutDisplayLabel(label) {
+				if err := tx.Model(&UCICheckout{}).Where("checkout_id = ?", checkout.CheckoutID).Update("display_name", label).Error; err != nil {
+					return fmt.Errorf("register local git checkout label: %w", err)
+				}
+			}
+		}
 		out = RegisteredLocalGit{sourceID, checkout.CheckoutID, checkout.IncarnationID, profile.ProfileID}
 		return nil
 	})

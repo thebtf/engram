@@ -281,7 +281,8 @@ func (m *Module) proxyToolSession(ctx context.Context, project muxcore.ProjectCo
 
 func (m *Module) proxyToolCallContext(ctx context.Context, project muxcore.ProjectContext, request *pb.CallToolRequest, uciTool bool) (context.Context, *pb.ProjectIdentityV3, bool, error) {
 	if uciTool {
-		return uciClientOutgoingContext(ctx), nil, false, nil
+		callCtx, err := uciClientOutgoingContext(ctx, m.v3ClientInstanceID)
+		return callCtx, nil, false, err
 	}
 	v3Identity, v3Enabled, err := m.v3Identity(project)
 	if err != nil {

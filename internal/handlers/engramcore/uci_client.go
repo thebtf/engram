@@ -225,11 +225,12 @@ type uciClientRPC interface {
 var _ uciClientRPC = (pb.EngramServiceClient)(nil)
 
 type uciClient struct {
-	rpc uciClientRPC
+	rpc              uciClientRPC
+	clientInstanceID string
 }
 
-func newUCIClient(rpc uciClientRPC) *uciClient {
-	return &uciClient{rpc: rpc}
+func newUCIClient(rpc uciClientRPC, clientInstanceID string) *uciClient {
+	return &uciClient{rpc: rpc, clientInstanceID: clientInstanceID}
 }
 
 var _ UCIIndexClient = (*uciClient)(nil)
@@ -275,7 +276,7 @@ func (a *UCIIndexAdapter) ResolveIndexTarget(ctx context.Context, project muxcor
 		return ResolvedIndexTarget{}, uciIndexSourceUnavailable(uciClientServerUnavailableMessage)
 	}
 
-	bound, err := newUCIClient(pb.NewEngramServiceClient(conn)).Bind(ctx,
+	bound, err := newUCIClient(pb.NewEngramServiceClient(conn), m.v3ClientInstanceID).Bind(ctx,
 		&pb.BindCodeContextRequest{ClientSessionId: clientSessionID, ContextHandle: contextHandle},
 	)
 	if err != nil {
@@ -314,7 +315,7 @@ func (a *UCIIndexAdapter) RebindIndexTarget(ctx context.Context, target Resolved
 	if err != nil {
 		return ResolvedIndexTarget{}, err
 	}
-	bound, err := newUCIClient(pb.NewEngramServiceClient(conn)).Bind(ctx, &pb.BindCodeContextRequest{
+	bound, err := newUCIClient(pb.NewEngramServiceClient(conn), a.module.v3ClientInstanceID).Bind(ctx, &pb.BindCodeContextRequest{
 		ClientSessionId: target.ClientSessionID,
 		ContextHandle:   target.ContextHandle,
 	})
@@ -344,7 +345,11 @@ func (a *UCIIndexAdapter) PollIndexIntent(ctx context.Context, target ResolvedIn
 	if err != nil {
 		return nil, err
 	}
-	response, err := pb.NewEngramServiceClient(conn).PollCodeIndexIntents(uciClientOutgoingContext(ctx), &pb.PollCodeIndexIntentsRequest{
+	callCtx, err := uciClientOutgoingContext(ctx, a.module.v3ClientInstanceID)
+	if err != nil {
+		return nil, err
+	}
+	response, err := pb.NewEngramServiceClient(conn).PollCodeIndexIntents(callCtx, &pb.PollCodeIndexIntentsRequest{
 		Target: uciClientIntentTarget(target), ClientInstanceId: clientInstanceID, ProcessNonce: processNonce,
 	})
 	if err != nil {
@@ -409,7 +414,11 @@ func (a *UCIIndexAdapter) UpdateIndexIntent(ctx context.Context, target Resolved
 	if err != nil {
 		return uci.IndexIntentUpdateResult{}, err
 	}
-	response, err := pb.NewEngramServiceClient(conn).UpdateCodeIndexIntent(uciClientOutgoingContext(ctx), &pb.UpdateCodeIndexIntentRequest{
+	callCtx, err := uciClientOutgoingContext(ctx, a.module.v3ClientInstanceID)
+	if err != nil {
+		return uci.IndexIntentUpdateResult{}, err
+	}
+	response, err := pb.NewEngramServiceClient(conn).UpdateCodeIndexIntent(callCtx, &pb.UpdateCodeIndexIntentRequest{
 		Target: uciClientIntentTarget(target), ClientInstanceId: clientInstanceID, ProcessNonce: processNonce,
 		IntentRef: intentID, Operation: string(update.Operation), OperationRef: update.OperationRef, OwnerEpoch: uint64(update.ClaimEpoch),
 	})
@@ -480,11 +489,15 @@ func (a *UCIIndexAdapter) IndexCodebase(ctx context.Context, target ResolvedInde
 	if err != nil {
 		return nil, err
 	}
+	callCtx, err := uciClientOutgoingContext(ctx, a.module.v3ClientInstanceID)
+	if err != nil {
+		return nil, err
+	}
 	result, err := collaborator.IndexPreparedCodebase(
-		ctx,
+		callCtx,
 		target.Clone(),
 		rootHint,
-		newUCIClient(pb.NewEngramServiceClient(conn)),
+		newUCIClient(pb.NewEngramServiceClient(conn), a.module.v3ClientInstanceID),
 	)
 	if err != nil {
 		return nil, err
@@ -513,7 +526,10 @@ func (a *UCIIndexAdapter) ProxyHandleTool(ctx context.Context, target ResolvedIn
 	if err != nil {
 		return nil, err
 	}
-	ctx = uciClientOutgoingContext(ctx)
+	ctx, err = uciClientOutgoingContext(ctx, a.module.v3ClientInstanceID)
+	if err != nil {
+		return nil, err
+	}
 	response, err := pb.NewEngramServiceClient(conn).CallTool(ctx, &pb.CallToolRequest{
 		ToolName:      name,
 		ArgumentsJson: args,
@@ -621,7 +637,10 @@ func (client *uciClient) Bind(ctx context.Context, request *pb.BindCodeContextRe
 	if err := uciClientContextError(operation, ctx); err != nil {
 		return nil, err
 	}
-	ctx = uciClientOutgoingContext(ctx)
+	ctx, err := uciClientOutgoingContext(ctx, client.clientInstanceID)
+	if err != nil {
+		return nil, err
+	}
 	if err := client.available(operation); err != nil {
 		return nil, err
 	}
@@ -654,7 +673,10 @@ func (client *uciClient) Begin(ctx context.Context, request *pb.BeginCodeIndexRe
 	if err := uciClientContextError(operation, ctx); err != nil {
 		return nil, err
 	}
-	ctx = uciClientOutgoingContext(ctx)
+	ctx, err := uciClientOutgoingContext(ctx, client.clientInstanceID)
+	if err != nil {
+		return nil, err
+	}
 	if err := client.available(operation); err != nil {
 		return nil, err
 	}
@@ -690,7 +712,10 @@ func (client *uciClient) Stage(ctx context.Context, frames []*pb.StageCodeIndexF
 	if err := uciClientContextError(operation, ctx); err != nil {
 		return nil, err
 	}
-	ctx = uciClientOutgoingContext(ctx)
+	ctx, err := uciClientOutgoingContext(ctx, client.clientInstanceID)
+	if err != nil {
+		return nil, err
+	}
 	if err := client.available(operation); err != nil {
 		return nil, err
 	}
@@ -748,7 +773,10 @@ func (client *uciClient) Finalize(ctx context.Context, request *pb.FinalizeCodeI
 	if err := uciClientContextError(operation, ctx); err != nil {
 		return nil, err
 	}
-	ctx = uciClientOutgoingContext(ctx)
+	ctx, err := uciClientOutgoingContext(ctx, client.clientInstanceID)
+	if err != nil {
+		return nil, err
+	}
 	if err := client.available(operation); err != nil {
 		return nil, err
 	}
@@ -781,7 +809,10 @@ func (client *uciClient) Query(ctx context.Context, request *pb.QueryCodeRequest
 	if err := uciClientContextError(operation, ctx); err != nil {
 		return nil, err
 	}
-	ctx = uciClientOutgoingContext(ctx)
+	ctx, err := uciClientOutgoingContext(ctx, client.clientInstanceID)
+	if err != nil {
+		return nil, err
+	}
 	if err := client.available(operation); err != nil {
 		return nil, err
 	}
@@ -814,7 +845,10 @@ func (client *uciClient) Explore(ctx context.Context, request *pb.ExploreCodeReq
 	if err := uciClientContextError(operation, ctx); err != nil {
 		return nil, err
 	}
-	ctx = uciClientOutgoingContext(ctx)
+	ctx, err := uciClientOutgoingContext(ctx, client.clientInstanceID)
+	if err != nil {
+		return nil, err
+	}
 	if err := client.available(operation); err != nil {
 		return nil, err
 	}
@@ -857,7 +891,10 @@ func requireUCITransportSession(ctx context.Context) (string, error) {
 	return sessionID, nil
 }
 
-func uciClientOutgoingContext(ctx context.Context) context.Context {
+func uciClientOutgoingContext(ctx context.Context, clientInstanceID string) (context.Context, error) {
+	if _, valid := uci.NoAuthCodeWorkstationForInstance(clientInstanceID); !valid {
+		return nil, &module.ModuleError{Code: "PROJECT_ANCHOR_INVALID", Message: projectIdentityResolutionRefusedMessage}
+	}
 	outgoing, _ := metadata.FromOutgoingContext(ctx)
 	outgoing = outgoing.Copy()
 	if outgoing == nil {
@@ -873,7 +910,8 @@ func uciClientOutgoingContext(ctx context.Context) context.Context {
 			outgoing.Set(auditcontext.UCIRequestCorrelationMetadataKey, value)
 		}
 	}
-	return metadata.NewOutgoingContext(ctx, outgoing)
+	outgoing.Set(uci.NoAuthCodeClientInstanceMetadataKey, clientInstanceID)
+	return metadata.NewOutgoingContext(ctx, outgoing), nil
 }
 
 func uciClientContextError(operation string, ctx context.Context) error {

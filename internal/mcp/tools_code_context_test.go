@@ -278,14 +278,27 @@ func TestUCICodebaseContextSelectsRegisteredCheckoutWithoutView(t *testing.T) {
 }
 
 func TestNoAuthCodeContextCallerUsesOnlyTechnicalScope(t *testing.T) {
-	ctx := auth.WithIdentity(ContextWithSession(context.Background(), "noauth-code-session"), auth.AuthDisabled())
+	ctx := auth.WithIdentity(ContextWithCodeClientInstance(ContextWithSession(context.Background(), "noauth-code-session"), "install-a"), auth.AuthDisabled())
 	input, err := codebaseContextCallerInput(ctx)
 	require.NoError(t, err)
 	require.Equal(t, uci.NoAuthCodeRealm, input.AuthRealm)
 	require.Equal(t, uci.NoAuthCodePrincipal, input.Principal)
-	require.Equal(t, uci.NoAuthCodeWorkstation, input.WorkstationID)
+	require.NotEqual(t, uci.NoAuthCodeWorkstation, input.WorkstationID)
 	require.Equal(t, "noauth-code-session", input.ClientSessionID)
-	_, err = codebaseContextCallerInput(auth.WithIdentity(ContextWithSession(context.Background(), "unauthorized"), auth.Admin()))
+	other, err := codebaseContextCallerInput(auth.WithIdentity(ContextWithCodeClientInstance(ContextWithSession(context.Background(), "other-session"), "install-b"), auth.AuthDisabled()))
+	require.NoError(t, err)
+	require.NotEqual(t, input.WorkstationID, other.WorkstationID)
+	restarted, err := codebaseContextCallerInput(auth.WithIdentity(ContextWithCodeClientInstance(ContextWithSession(context.Background(), "restarted-session"), "install-a"), auth.AuthDisabled()))
+	require.NoError(t, err)
+	require.Equal(t, input.WorkstationID, restarted.WorkstationID)
+	_, err = codebaseContextCallerInput(auth.WithIdentity(ContextWithSession(context.Background(), "missing-install"), auth.AuthDisabled()))
+	require.Error(t, err)
+	authenticated, err := codebaseContextCallerInput(auth.WithIdentity(ContextWithCodeClientInstance(ContextWithSession(context.Background(), "authenticated"), "install-a"), auth.ClientWithPrincipal("read-write", "keycard-a", "browser-user/41", auth.PrincipalKindHuman)))
+	require.NoError(t, err)
+	require.NotEqual(t, uci.NoAuthCodeRealm, authenticated.AuthRealm)
+	require.NotEqual(t, uci.NoAuthCodePrincipal, authenticated.Principal)
+	require.NotEqual(t, input.WorkstationID, authenticated.WorkstationID)
+	_, err = codebaseContextCallerInput(auth.WithIdentity(ContextWithCodeClientInstance(ContextWithSession(context.Background(), "forged"), "install-a"), auth.Admin()))
 	require.Error(t, err)
 }
 

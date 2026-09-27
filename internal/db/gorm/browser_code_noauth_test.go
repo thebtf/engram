@@ -3,6 +3,7 @@ package gorm
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -69,6 +70,41 @@ func TestNoAuthCodeCatalogAndIndexScopeStaySeparateFromHumanAndMemory(t *testing
 	require.Equal(t, entries, again)
 }
 
+func TestNoAuthCodeCatalogKeepsCurrentAfterManySupersededViews(t *testing.T) {
+	fixture := openUCIProjectionMigrationFixture(t)
+	require.NoError(t, workspaceCatalogMigration182().Migrate(fixture.db))
+	ctx := context.Background()
+	contexts := NewUCIContextStore(fixture.db)
+	source, err := contexts.CreateSource(ctx, CreateSourceInput{AuthRealm: uci.NoAuthCodeRealm, Kind: UCISourceGit, DisplayName: "local repository"})
+	require.NoError(t, err)
+	checkout, err := contexts.RegisterCheckout(ctx, RegisterCheckoutInput{SourceID: source.SourceID, WorkstationID: "install-a", Kind: UCICheckoutWorkingTree, OwnerPrincipal: uci.NoAuthCodePrincipal, LocatorRef: "file:///local/repository"})
+	require.NoError(t, err)
+	var previous *UCIView
+	var pinned *UCIView
+	for generation := 1; generation <= 130; generation++ {
+		view := newUCIProjectionView(t, contexts, checkout, fixture.profile, int64(generation), "retained-view-"+uuid.NewString())
+		require.NoError(t, fixture.db.Model(&UCIView{}).Where("view_id = ?", view.ViewID).Updates(map[string]any{"state": UCIViewPublished, "published_at": time.Now().UTC()}).Error)
+		if generation == 1 {
+			pinned = view
+		}
+		require.NoError(t, fixture.db.Model(&UCICheckout{}).Where("checkout_id = ?", checkout.CheckoutID).Update("current_view_id", view.ViewID).Error)
+		if previous != nil {
+			require.NoError(t, fixture.db.Model(&UCIView{}).Where("view_id = ?", previous.ViewID).Update("state", UCIViewSuperseded).Error)
+		}
+		previous = view
+		if generation == 130 {
+			entries, err := NewBrowserCodeContextStore(fixture.db).ListNoAuthCatalog(ctx)
+			require.NoError(t, err)
+			require.Len(t, entries, 1)
+			require.Equal(t, view.ViewID, entries[0].Context.ViewID)
+			old := uci.ContextRef{SourceID: source.SourceID, CheckoutID: checkout.CheckoutID, ViewID: pinned.ViewID, AnalysisProfileID: fixture.profile.ProfileID, Generation: pinned.Generation}
+			loaded, err := contexts.LoadContext(ctx, old)
+			require.NoError(t, err)
+			require.Equal(t, old, loaded.Ref)
+		}
+	}
+}
+
 func TestNoAuthCodeRegistrationReplaysAfterStoreRestartWithoutClaimingHistoricalScope(t *testing.T) {
 	fixture := openUCIProjectionMigrationFixture(t)
 	ctx := context.Background()
@@ -88,4 +124,33 @@ func TestNoAuthCodeRegistrationReplaysAfterStoreRestartWithoutClaimingHistorical
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, first.CheckoutID, entries[0].CheckoutID)
+	require.Contains(t, entries[0].CheckoutLabel, "Worktree · repository · Device ")
+	require.NotContains(t, entries[0].CheckoutLabel, "file://")
+}
+
+func TestNoAuthCodeSameLocatorDifferentInstallationsKeepDistinctCheckouts(t *testing.T) {
+	db, store := openUCIContextMigrationStore(t)
+	ctx := context.Background()
+	firstInput := RegisterLocalGitInput{AuthRealm: uci.NoAuthCodeRealm, Principal: uci.NoAuthCodePrincipal, WorkstationID: "noauth-install-a", SourceLabel: "local checkout", Locator: "file:///same/absolute/worktree"}
+	first, err := store.RegisterLocalGit(ctx, firstInput)
+	require.NoError(t, err)
+	secondInput := firstInput
+	secondInput.WorkstationID = "noauth-install-b"
+	second, err := store.RegisterLocalGit(ctx, secondInput)
+	require.NoError(t, err)
+	require.NotEqual(t, first.CheckoutID, second.CheckoutID)
+	require.NotEqual(t, first.IncarnationID, second.IncarnationID)
+	require.NotEqual(t, first.SourceID, second.SourceID)
+	replayed, err := NewUCIContextStore(db).RegisterLocalGit(ctx, firstInput)
+	require.NoError(t, err)
+	require.Equal(t, first, replayed)
+	require.NoError(t, workspaceCatalogMigration182().Migrate(db))
+	entries, err := NewBrowserCodeContextStore(db).ListNoAuthCatalog(ctx)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	require.Contains(t, entries[0].CheckoutLabel, "Worktree · worktree · Device ")
+	require.Contains(t, entries[1].CheckoutLabel, "Worktree · worktree · Device ")
+	require.NotEqual(t, entries[0].CheckoutLabel, entries[1].CheckoutLabel)
+	require.NotContains(t, entries[0].CheckoutLabel, "file://")
+	require.NotContains(t, entries[1].CheckoutLabel, "file://")
 }

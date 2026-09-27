@@ -681,7 +681,11 @@ func codebaseContextCallerInput(ctx context.Context) (uci.ResolveContextInput, e
 	sessionID := sessionFromContext(ctx)
 	identity, ok := auth.IdentityFrom(ctx)
 	if ok && identity.Source == auth.SourceAuthDisabled && codebaseContextIdentityText(sessionID) {
-		return uci.ResolveContextInput{ClientSessionID: sessionID, AuthRealm: uci.NoAuthCodeRealm, Principal: uci.NoAuthCodePrincipal, WorkstationID: uci.NoAuthCodeWorkstation}, nil
+		workstation, valid := uci.NoAuthCodeWorkstationForInstance(codeClientInstanceFromContext(ctx))
+		if !valid {
+			return uci.ResolveContextInput{}, errors.New("noauth code client instance required")
+		}
+		return uci.ResolveContextInput{ClientSessionID: sessionID, AuthRealm: uci.NoAuthCodeRealm, Principal: uci.NoAuthCodePrincipal, WorkstationID: workstation}, nil
 	}
 	authRealm := string(identity.Source)
 	if !ok || !codebaseContextIdentityText(sessionID) || !codebaseContextIdentityText(authRealm) || !codebaseContextIdentityText(identity.Principal) || !codebaseContextIdentityText(identity.WorkstationID()) {
@@ -839,7 +843,7 @@ func codebaseExposureInput(ctx context.Context, operation uci.ExposureOperation,
 	}
 	keycard := identity.WorkstationID()
 	if identity.Source == auth.SourceAuthDisabled {
-		keycard = uci.NoAuthCodeWorkstation
+		keycard = caller.WorkstationID
 	}
 	return uci.ExposureInput{
 		AuthRealm:            caller.AuthRealm,

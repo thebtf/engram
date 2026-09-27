@@ -761,6 +761,7 @@ func TestProxyHandleToolUsesTransportTagForUCITools(t *testing.T) {
 	srv := &mockEngramServer{callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
 	grpcAddr := startMockGRPC(t, srv)
 	_, mod, project := buildContractDispatcher(t, grpcAddr)
+	mod.v3ClientInstanceID = "fixture-daemon-install"
 	project.Env[config.EnvClaudeSessionID] = "host-session-must-not-be-used"
 	project.Cwd = "untrusted-cwd-must-not-be-inspected"
 	mod.cache.Forget(project.ID)
@@ -783,6 +784,9 @@ func TestProxyHandleToolUsesTransportTagForUCITools(t *testing.T) {
 	}
 	if got := metadata.Get(auditcontext.SourceSessionMetadataKey); len(got) != 1 || got[0] != "transport-tag-a" {
 		t.Fatalf("UCI CallTool source metadata = %v, want transport tag", got)
+	}
+	if got := metadata.Get(uci.NoAuthCodeClientInstanceMetadataKey); len(got) != 1 || got[0] != "fixture-daemon-install" {
+		t.Fatalf("UCI CallTool client instance metadata = %v", got)
 	}
 	if got := metadata.Get("x-engram-verified-parser-bundle"); len(got) != 0 {
 		t.Fatalf("unverified client sent parser proof: %v", got)
@@ -810,6 +814,9 @@ func TestProxyHandleToolUsesTransportTagForUCITools(t *testing.T) {
 	if string(registered.GetArgumentsJson()) != string(registerArgs) {
 		t.Fatalf("registration arguments mutated: %s", registered.GetArgumentsJson())
 	}
+	if got := parserMetadata.Get(uci.NoAuthCodeClientInstanceMetadataKey); len(got) != 1 || got[0] != "fixture-daemon-install" {
+		t.Fatalf("registration client instance metadata = %v", got)
+	}
 	if got := parserMetadata.Get("x-engram-verified-parser-bundle"); len(got) != 1 || got[0] != string(uci.TreeSitterSemanticContractDigest()) {
 		t.Fatalf("verified parser metadata = %v", got)
 	}
@@ -836,6 +843,41 @@ func TestProxyHandleToolSkipsProjectV3ForUCITools(t *testing.T) {
 	}
 	if request.GetProject() != "" || request.GetProjectIdentity() != nil || request.GetProjectIdentityV3() != nil || registerRequest != nil {
 		t.Fatalf("UCI V3 call reached project identity resolution: request=%#v registration=%#v", request, registerRequest)
+	}
+}
+
+func TestProxyHandleToolAnchorsEveryUCIToolAndRejectsSpoofedMetadata(t *testing.T) {
+	srv := &mockEngramServer{callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
+	grpcAddr := startMockGRPC(t, srv)
+	_, mod, project := buildV3ContractDispatcher(t, grpcAddr)
+	ctx := auditcontext.WithUCITransportSession(context.Background(), "transport-tag-v3")
+	ctx = metadata.AppendToOutgoingContext(ctx, uci.NoAuthCodeClientInstanceMetadataKey, "spoofed", uci.NoAuthCodeClientInstanceMetadataKey, "duplicate")
+	for _, name := range []string{"codebase_context", "codebase_index", "codebase_status", "codebase_search", "codebase_read", "codebase_graph"} {
+		_, err := mod.ProxyHandleTool(ctx, project, name, json.RawMessage(`{"client_instance_id":"argument-must-not-win"}`))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		srv.mu.Lock()
+		request, callMetadata := srv.callReq, srv.callMetadata.Copy()
+		srv.mu.Unlock()
+		if got := callMetadata.Get(uci.NoAuthCodeClientInstanceMetadataKey); len(got) != 1 || got[0] != mod.v3ClientInstanceID {
+			t.Fatalf("%s metadata = %v, want one anchored ID", name, got)
+		}
+		if request.GetProjectIdentityV3() != nil || request.GetProject() != "" || request.GetProjectIdentity() != nil {
+			t.Fatalf("%s carried legacy authority: %#v", name, request)
+		}
+	}
+	mod.v3ClientInstanceID = "invalid\r\ninstance"
+	srv.mu.Lock()
+	previousRequest := srv.callReq
+	srv.mu.Unlock()
+	if _, err := mod.ProxyHandleTool(ctx, project, "codebase_read", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("invalid anchor reached UCI server")
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if srv.callReq != previousRequest {
+		t.Fatal("invalid anchor dispatched UCI CallTool")
 	}
 }
 
