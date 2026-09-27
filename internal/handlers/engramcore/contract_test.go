@@ -784,6 +784,9 @@ func TestProxyHandleToolUsesTransportTagForUCITools(t *testing.T) {
 	if got := metadata.Get(auditcontext.SourceSessionMetadataKey); len(got) != 1 || got[0] != "transport-tag-a" {
 		t.Fatalf("UCI CallTool source metadata = %v, want transport tag", got)
 	}
+	if got := metadata.Get("x-engram-verified-parser-bundle"); len(got) != 0 {
+		t.Fatalf("unverified client sent parser proof: %v", got)
+	}
 
 	_, err = mod.ProxyHandleTool(context.Background(), project, "codebase_context", json.RawMessage(`{}`))
 	if err == nil {
@@ -807,7 +810,7 @@ func TestProxyHandleToolUsesTransportTagForUCITools(t *testing.T) {
 	if string(registered.GetArgumentsJson()) != string(registerArgs) {
 		t.Fatalf("registration arguments mutated: %s", registered.GetArgumentsJson())
 	}
-	if got := parserMetadata.Get("x-engram-verified-parser-bundle"); len(got) != 1 || got[0] != string(uci.TreeSitterBundleDigest()) {
+	if got := parserMetadata.Get("x-engram-verified-parser-bundle"); len(got) != 1 || got[0] != string(uci.TreeSitterSemanticContractDigest()) {
 		t.Fatalf("verified parser metadata = %v", got)
 	}
 }

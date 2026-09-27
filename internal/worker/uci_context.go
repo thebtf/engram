@@ -474,7 +474,7 @@ func verifiedUCIParserBundle(ctx context.Context) (bool, error) {
 	if len(values) == 0 {
 		return false, nil
 	}
-	if len(values) != 1 || values[0] != string(uci.TreeSitterBundleDigest()) {
+	if len(values) != 1 || values[0] != string(uci.TreeSitterSemanticContractDigest()) {
 		return false, uci.NewContextError(uci.ContextMismatch, nil)
 	}
 	return true, nil

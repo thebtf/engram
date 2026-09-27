@@ -20,6 +20,25 @@ import (
 	"time"
 )
 
+func TestTreeSitterSemanticContractDigestVersionedAndHostIndependent(t *testing.T) {
+	semantic := TreeSitterSemanticContractDigest()
+	if semantic == TreeSitterBundleDigest() {
+		t.Fatal("registration proof must not identify the platform-specific parser executable")
+	}
+	wrongRevision := treeSitterDigest([]string{
+		"uci-tree-sitter-registration/v2",
+		TreeSitterBundleSchemaRevision,
+		TreeSitterWorkerProtocolVersion,
+		TreeSitterFactsExtractionContractRevision,
+		"github.com/tree-sitter/go-tree-sitter@v0.25.0",
+		"github.com/tree-sitter/tree-sitter-javascript@v0.25.0",
+		"github.com/tree-sitter/tree-sitter-typescript@v0.23.2",
+	})
+	if semantic == wrongRevision {
+		t.Fatal("different registration contract revisions must not share a digest")
+	}
+}
+
 const (
 	uciTreeSitterWireVersion = TreeSitterWorkerProtocolVersion
 	uciTreeSitterHelperTest  = "^TestUCITreeSitterWorkerProcessHelper$"

@@ -240,7 +240,7 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 		return nil, err
 	}
 	if name == "codebase_context" && m.registrationParserAvailable {
-		callCtx = metadata.AppendToOutgoingContext(callCtx, "x-engram-verified-parser-bundle", string(uci.TreeSitterBundleDigest()))
+		callCtx = metadata.AppendToOutgoingContext(callCtx, "x-engram-verified-parser-bundle", string(uci.TreeSitterSemanticContractDigest()))
 	}
 	response, err := pb.NewEngramServiceClient(conn).CallTool(callCtx, request)
 	if err != nil {

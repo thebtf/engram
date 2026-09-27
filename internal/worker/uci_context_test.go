@@ -191,7 +191,7 @@ func TestComposeUCIContextFirstUseRegistrationBindsPrivateNoViewScope(t *testing
 		"action": "register", "source_label": "engram", "locator": "file:///private/worktree-parser",
 	}})
 	require.NoError(t, err)
-	parserClient := metadata.NewIncomingContext(client, metadata.Pairs("x-engram-verified-parser-bundle", string(uci.TreeSitterBundleDigest())))
+	parserClient := metadata.NewIncomingContext(client, metadata.Pairs("x-engram-verified-parser-bundle", string(uci.TreeSitterSemanticContractDigest())))
 	parserResponse := server.HandleRequest(parserClient, &mcp.Request{JSONRPC: "2.0", ID: float64(2), Method: "tools/call", Params: parserParams})
 	require.Nil(t, parserResponse.Error)
 	parserResult := parserResponse.Result.(map[string]any)["content"].([]map[string]any)[0]["text"].(string)
@@ -215,6 +215,26 @@ func TestComposeUCIContextFirstUseRegistrationBindsPrivateNoViewScope(t *testing
 	require.Equal(t, "CONTEXT_MISMATCH", mismatch.Error.Data)
 	require.NotNil(t, spoof.Error)
 	require.Equal(t, "CONTEXT_MISMATCH", spoof.Error.Data)
+}
+
+func TestVerifiedUCIParserBundleAcceptsSemanticProofNotHostBinary(t *testing.T) {
+	client := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-engram-verified-parser-bundle", string(uci.TreeSitterSemanticContractDigest())))
+	available, err := verifiedUCIParserBundle(client)
+	require.NoError(t, err)
+	require.True(t, available)
+
+	platformBinary := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-engram-verified-parser-bundle", string(uci.TreeSitterBundleDigest())))
+	available, err = verifiedUCIParserBundle(platformBinary)
+	require.False(t, available)
+	var mismatch *uci.ContextError
+	require.ErrorAs(t, err, &mismatch)
+	require.Equal(t, uci.ContextMismatch, mismatch.Code())
+
+	wrongRevision := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-engram-verified-parser-bundle", "sha256:"+strings.Repeat("a", 64)))
+	available, err = verifiedUCIParserBundle(wrongRevision)
+	require.False(t, available)
+	require.ErrorAs(t, err, &mismatch)
+	require.Equal(t, uci.ContextMismatch, mismatch.Code())
 }
 
 func TestUCISemanticProfileUsesOpaqueCacheIdentity(t *testing.T) {
