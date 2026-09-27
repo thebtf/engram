@@ -1888,6 +1888,7 @@ $environmentNames = @(
     'ENGRAM_SERVER_IMAGE', 'ENGRAM_OPERATOR_IMAGE', 'ENGRAM_POSTGRES_IMAGE', 'ENGRAM_BUILD_VERSION',
     'ENGRAM_TEST_RESOURCE_PREFIX', 'POSTGRES_PASSWORD', 'ENGRAM_AUTH_DISABLED',
     'WORKER_BIND', 'WORKER_PORT', 'OPERATOR_CONSOLE_BIND', 'OPERATOR_CONSOLE_PORT',
+    'OPERATOR_CONSOLE_TRUSTED_PROXY_IP', 'OPERATOR_CONSOLE_PUBLIC_ORIGIN',
     'DATABASE_DSN', 'ENGRAM_AUTH_ADMIN_TOKEN', 'ENGRAM_VAULT_KEY',
     'ENGRAM_EMBEDDING_URL', 'ENGRAM_EMBEDDING_MODEL', 'ENGRAM_EMBEDDING_API_KEY',
     'ENGRAM_VNEXT_ENABLED', 'ENGRAM_LIFECYCLE_ENABLED', 'ENGRAM_VNEXT_F_ENABLED',
@@ -1905,6 +1906,8 @@ $env:WORKER_BIND = '127.0.0.1'
 $env:WORKER_PORT = '0'
 $env:OPERATOR_CONSOLE_BIND = '127.0.0.1'
 $env:OPERATOR_CONSOLE_PORT = '0'
+$env:OPERATOR_CONSOLE_TRUSTED_PROXY_IP = '127.0.0.1'
+$env:OPERATOR_CONSOLE_PUBLIC_ORIGIN = 'http://127.0.0.1'
 
 Push-Location $repoRoot
 try {
@@ -2207,13 +2210,20 @@ try {
             $caught = $_
         }
     }
-    $cleanupInventory.status = if ($cleanupPassed) { 'PASS' } else { 'FAIL' }
-    $cleanupInventory.observed_at = (Get-Date).ToUniversalTime().ToString('o')
-    $cleanupInventory | ConvertTo-Json -Depth 8 |
-        Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $artifactPath 'cleanup/cleanup.json')
-
-    foreach ($name in $environmentNames) {
-        [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
+    try {
+        $cleanupInventory.status = if ($cleanupPassed) { 'PASS' } else { 'FAIL' }
+        $cleanupInventory.observed_at = (Get-Date).ToUniversalTime().ToString('o')
+        $cleanupInventory | ConvertTo-Json -Depth 8 |
+            Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $artifactPath 'cleanup/cleanup.json')
+    } catch {
+        $cleanupPassed = $false
+        $cleanupInventory.status = 'FAIL'
+        $cleanupInventory.receipt_error = $_.Exception.Message
+        if ($null -eq $caught) { $caught = $_ }
+    } finally {
+        foreach ($name in $environmentNames) {
+            [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
+        }
     }
 
     if (-not [string]::IsNullOrWhiteSpace($TrustedOutputRoot)) {
