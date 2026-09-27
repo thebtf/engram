@@ -37,19 +37,14 @@ const copyNotice = ref<'copied' | 'unavailable' | null>(null)
 const readiness = computed(() => {
   if (props.status === null) return null
   if (props.status.embeddingJobState === 'failed_terminal' || props.status.freshnessState === 'failed') return 'failed'
-  if (props.status.embeddingJobState === 'queued' || props.status.embeddingJobState === 'running' || props.status.embeddingJobState === 'retry_scheduled') return 'updating'
+  if (props.status.embeddingJobState === 'queued' || props.status.embeddingJobState === 'running' || props.status.embeddingJobState === 'retry_scheduled' || props.status.freshnessState === 'catching_up') return 'updating'
   if (props.status.totalChunks === 0 && props.status.embeddingJobState !== null) return 'unknown'
   if (props.status.totalChunks === 0) return 'needs-indexing'
-  switch (props.status.freshnessState) {
-    case 'observed_current': return 'ready'
-    case 'catching_up': return 'updating'
-    case 'historical': return 'newer-snapshot'
-    case 'failed': return 'failed'
-    default: return 'unknown'
-  }
+  if (props.status.freshnessState === 'historical') return 'newer-snapshot'
+  if (props.status.coverage !== 'complete' || props.status.embeddedChunks < props.status.totalChunks) return 'degraded'
+  return props.status.freshnessState === 'observed_current' ? 'ready' : 'unknown'
 })
 const indexEmpty = computed(() => props.status !== null && props.status.totalChunks === 0 && readiness.value !== 'failed')
-
 function submitSearch(): void {
   if (query.value.trim() !== '') emit('search', query.value)
 }
@@ -77,9 +72,11 @@ async function copy(value: string): Promise<void> {
         <p v-else>{{ t('codeExplorer.results.pinned', { snapshot: pinned.snapshot.label }) }}</p>
       </div>
       <dl v-if="status !== null && pinned !== null" class="status" data-testid="code-status">
-        <div><dt>{{ t('codeExplorer.status.coverage') }}</dt><dd>{{ status.coverage }}</dd></div>
+        <div><dt>{{ t('codeExplorer.status.coverage') }}</dt><dd>{{ t(`workspace.coverage.${status.coverage}`) }}</dd></div>
         <div><dt>{{ t('codeExplorer.status.indexed') }}</dt><dd>{{ status.embeddedChunks }} / {{ status.totalChunks }}</dd></div>
-        <div><dt>{{ t('codeExplorer.status.freshness') }}</dt><dd>{{ status.freshnessState ?? t('codeExplorer.status.unknown') }}</dd></div>
+        <div><dt>{{ t('codeExplorer.status.freshness') }}</dt><dd>{{ t(`workspace.freshness.${status.freshnessState ?? 'unknown'}`) }}</dd></div>
+        <div><dt>{{ t('workspace.embeddingState') }}</dt><dd>{{ status.embeddingJobState === null ? t('codeExplorer.status.unknown') : t(`workspace.embeddingJobs.${status.embeddingJobState}`) }}</dd></div>
+        <div v-if="status.embeddingErrorCode !== null"><dt>{{ t('workspace.embeddingError') }}</dt><dd>{{ status.embeddingErrorCode }}</dd></div>
       </dl>
     </header>
 
@@ -87,6 +84,7 @@ async function copy(value: string): Promise<void> {
       <strong>{{ t(`workspace.readiness.${readiness}.title`) }}</strong>
       <p>{{ t(`workspace.readiness.${readiness}.body`) }}</p>
     </aside>
+    <p v-if="status?.embeddingErrorCode !== null && status?.embeddingErrorCode !== undefined" class="diagnosis" role="status">{{ t('workspace.embeddingRecovery', { reason: status.embeddingErrorCode }) }}</p>
 
     <aside v-if="indexEmpty" class="empty-index" role="status">
       <div><strong>{{ t('codeExplorer.emptyIndex.title') }}</strong><p>{{ t('codeExplorer.emptyIndex.body') }}</p></div>
@@ -194,7 +192,8 @@ dd { margin:4px 0 0; color:var(--fg); font-family:var(--font-mono); font-size:va
 .readiness, .empty-index, .unselected { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; border:1px solid var(--border-soft); border-radius:var(--r-sm); background:var(--surface-warm); padding:12px; }
 .readiness strong, .empty-index strong, .unselected strong { color:var(--fg); font-size:var(--text-sm); }
 .readiness[data-state='updating'], .readiness[data-state='newer-snapshot'] { border-color:color-mix(in oklab,var(--warn),transparent 35%); }
-.readiness[data-state='failed'] { border-color:color-mix(in oklab,var(--danger),transparent 35%); }
+.readiness[data-state='failed'], .readiness[data-state='degraded'] { border-color:color-mix(in oklab,var(--danger),transparent 35%); }
+.diagnosis { margin:0; color:var(--danger); font-size:var(--text-sm); }
 .search-form { display:grid; gap:5px; }
 .search-form > label { color:var(--muted); font-size:var(--text-xs); font-weight:700; letter-spacing:.04em; text-transform:uppercase; }
 .search-form > div { display:flex; gap:8px; }

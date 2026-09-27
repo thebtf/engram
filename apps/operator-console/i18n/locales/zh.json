@@ -2259,12 +2259,14 @@
       "chooseWorkingCopy": "选择工作副本",
       "unnamedWorkingCopy": "未命名工作副本",
       "chooseSnapshot": "选择索引快照",
+      "indexedCopies": "已索引工作副本：{count}",
+      "indexedSnapshots": "索引快照：{count}",
       "revision": "修订版本",
       "publishedAt": "发布时间",
       "selectPrompt": "选择服务器授权的视图。确认前，此文档不会固定视图。",
       "selectedPrompt": "检查选中的视图，然后明确为此文档固定它。",
       "refresh": "刷新已授权的选项",
-      "retryReload": "重试重新加载绑定",
+      "retryReload": "重试标签页绑定",
       "pin": "固定选中的视图",
       "switch": "切换到选中的视图",
       "pinned": "已由服务器固定",
@@ -2572,6 +2574,30 @@
     "repository": "仓库",
     "workingCopy": "工作副本",
     "indexedSnapshot": "索引快照",
+    "embeddingState": "代码向量索引",
+    "embeddingError": "原因",
+    "embeddingRecovery": "向量索引错误：{reason}。检查提供方和模型，再请求重新索引或核对，并刷新状态。固定快照不会改变。",
+    "coverage": {
+      "complete": "完整",
+      "partial": "部分",
+      "unavailable": "不可用"
+    },
+    "freshness": {
+      "observed_current": "最新",
+      "catching_up": "正在更新",
+      "historical": "旧快照",
+      "failed": "更新失败",
+      "unknown": "未知"
+    },
+    "embeddingJobs": {
+      "queued": "排队中",
+      "running": "运行中",
+      "retry_scheduled": "计划重试",
+      "succeeded": "已完成",
+      "failed_terminal": "失败",
+      "cancelled": "已取消",
+      "obsolete": "已替换"
+    },
     "readiness": {
       "ready": {
         "title": "索引已就绪",
@@ -2596,6 +2622,10 @@
       "newer-snapshot": {
         "title": "有更新的快照",
         "body": "当前答案会保留在固定快照中，直到您明确切换。"
+      },
+      "degraded": {
+        "title": "语义搜索尚未就绪",
+        "body": "代码向量索引不完整或不可用。源代码和词法搜索可能仍可用，但不能证明语义检索。检查下方的向量索引状态，然后刷新状态。"
       }
     }
   },

@@ -31,6 +31,10 @@ const repositories = computed(() => [...new Map(props.catalog.map((entry) => [en
 const workingCopies = computed(() => [...new Map(props.catalog.filter((entry) => entry.sourceRef === repository.value).map((entry) => [entry.checkoutRef, entry])).values()])
 const snapshotEntries = computed(() => workingCopyChosen.value ? props.catalog.filter((entry) => entry.sourceRef === repository.value && entry.checkoutRef === workingCopy.value && entry.view !== null) : [])
 const noViewEntry = computed(() => workingCopyChosen.value ? props.catalog.find((entry) => entry.sourceRef === repository.value && entry.checkoutRef === workingCopy.value && entry.view === null) ?? null : null)
+const duplicateRepositories = computed(() => new Set(repositories.value.filter((entry) => repositories.value.filter((other) => other.repository === entry.repository).length > 1).map((entry) => entry.repository)))
+const duplicateWorkingCopies = computed(() => new Set(workingCopies.value.filter((entry) => workingCopies.value.filter((other) => other.workingCopy === entry.workingCopy).length > 1).map((entry) => entry.workingCopy)))
+function indexedCopies(sourceRef: string): number { return new Set(props.catalog.filter((entry) => entry.sourceRef === sourceRef && entry.view !== null).map((entry) => entry.checkoutRef)).size }
+function indexedSnapshots(checkoutRef: string): number { return props.catalog.filter((entry) => entry.checkoutRef === checkoutRef && entry.view !== null).length }
 const samePinned = computed(() => props.candidate?.selectionRef === props.pinned?.selectionRef)
 const phaseLabel = computed(() => t(`codeExplorer.context.phases.${props.phase}`))
 const phaseMessage = computed(() => {
@@ -51,7 +55,7 @@ watch([() => props.catalog, () => props.candidate, () => props.pinned], ([catalo
     return
   }
   if (candidate === null && previousCatalog !== undefined && catalog !== previousCatalog || snapshotRef.value !== '' && !snapshotEntries.value.some((entry) => entry.view?.selectionRef === snapshotRef.value)) snapshotRef.value = ''
-  repository.value = repositories.value[0]?.sourceRef ?? ''
+  repository.value = repositories.value.find((entry) => indexedCopies(entry.sourceRef) > 0)?.sourceRef ?? repositories.value[0]?.sourceRef ?? ''
   if (workingCopies.value.length === 1) {
     workingCopy.value = workingCopies.value[0]?.checkoutRef ?? ''
     workingCopyChosen.value = true
@@ -100,14 +104,14 @@ function chooseSnapshot(event: Event): void {
         <span>{{ t('workspace.repository') }}</span>
         <select :value="repository" :disabled="pending" data-testid="code-context-repository" @change="chooseRepository">
           <option value="" disabled>{{ t('codeExplorer.context.chooseRepository') }}</option>
-          <option v-for="entry in repositories" :key="entry.sourceRef" :value="entry.sourceRef">{{ entry.repository }}</option>
+          <option v-for="entry in repositories" :key="entry.sourceRef" :value="entry.sourceRef">{{ entry.repository }}{{ duplicateRepositories.has(entry.repository) ? ` · ${t('codeExplorer.context.indexedCopies', { count: indexedCopies(entry.sourceRef) })}` : '' }}</option>
         </select>
       </label>
       <label class="selector">
         <span>{{ t('workspace.workingCopy') }}</span>
         <select :value="workingCopyChosen ? workingCopy : ''" :disabled="pending || repository === ''" data-testid="code-context-working-copy" @change="chooseWorkingCopy">
           <option value="" disabled>{{ t('codeExplorer.context.chooseWorkingCopy') }}</option>
-          <option v-for="entry in workingCopies" :key="entry.checkoutRef" :value="entry.checkoutRef">{{ entry.workingCopy || t('codeExplorer.context.unnamedWorkingCopy') }}</option>
+          <option v-for="entry in workingCopies" :key="entry.checkoutRef" :value="entry.checkoutRef">{{ entry.workingCopy || t('codeExplorer.context.unnamedWorkingCopy') }}{{ duplicateWorkingCopies.has(entry.workingCopy) ? ` · ${t('codeExplorer.context.indexedSnapshots', { count: indexedSnapshots(entry.checkoutRef) })}` : '' }}</option>
         </select>
       </label>
       <label class="selector">

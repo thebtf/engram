@@ -2264,12 +2264,14 @@
       "chooseWorkingCopy": "Choose a working copy",
       "unnamedWorkingCopy": "Unnamed working copy",
       "chooseSnapshot": "Choose an indexed snapshot",
+      "indexedCopies": "{count} indexed working copies",
+      "indexedSnapshots": "{count} indexed snapshots",
       "revision": "Revision",
       "publishedAt": "Published",
       "selectPrompt": "Choose a server-authorized View. This document stays unpinned until you confirm it.",
       "selectedPrompt": "Review the selected View, then pin it explicitly for this document.",
       "refresh": "Refresh authorized choices",
-      "retryReload": "Retry reload binding",
+      "retryReload": "Retry tab binding",
       "pin": "Pin selected View",
       "switch": "Switch to selected View",
       "pinned": "Pinned by server",
@@ -2577,6 +2579,30 @@
     "repository": "Repository",
     "workingCopy": "Working copy",
     "indexedSnapshot": "Indexed snapshot",
+    "embeddingState": "Code embeddings",
+    "embeddingError": "Reason",
+    "embeddingRecovery": "Embedding error: {reason}. Check the provider and model, then request indexing or reconciliation and refresh status. The pinned snapshot is unchanged.",
+    "coverage": {
+      "complete": "Complete",
+      "partial": "Partial",
+      "unavailable": "Unavailable"
+    },
+    "freshness": {
+      "observed_current": "Current",
+      "catching_up": "Updating",
+      "historical": "Older snapshot",
+      "failed": "Update failed",
+      "unknown": "Unknown"
+    },
+    "embeddingJobs": {
+      "queued": "Queued",
+      "running": "Running",
+      "retry_scheduled": "Retry scheduled",
+      "succeeded": "Completed",
+      "failed_terminal": "Failed",
+      "cancelled": "Cancelled",
+      "obsolete": "Superseded"
+    },
     "readiness": {
       "ready": {
         "title": "Index ready",
@@ -2601,6 +2627,10 @@
       "newer-snapshot": {
         "title": "Newer snapshot available",
         "body": "The current answer stays in its pinned snapshot until you explicitly switch."
+      },
+      "degraded": {
+        "title": "Semantic search not ready",
+        "body": "Code embeddings are incomplete or unavailable. Source and lexical search may still work; a result is not proof of semantic retrieval. Check the embedding state below and refresh status."
       }
     }
   },
