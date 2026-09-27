@@ -1033,6 +1033,13 @@ func main() {
 		fmt.Printf("  %-28s  Workstation keycard (issued via dashboard /tokens)\n", config.EnvWorkstationToken)
 		os.Exit(0)
 	}
+	if len(os.Args) > 1 && os.Args[1] == "project" {
+		if err := runProjectCommand(os.Args[2:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "[engram]", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	// FR-4 / ADR-005: fail-fast on missing workstation credential BEFORE
 	// any heavy initialisation. Loud failure beats silent loom_*-only
