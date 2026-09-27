@@ -47,7 +47,7 @@ test('Code Explorer renews its live tab lease and leaves no renewal timer after 
 
   await page.goto('/code')
   await expect(page.getByTestId('code-context-empty')).toBeVisible()
-  expect(handshakePayloads).toHaveLength(1)
+  await expect.poll(() => handshakePayloads).toHaveLength(1)
   expect(handshakePayloads[0]).not.toHaveProperty('ambiguous')
 
   await page.clock.fastForward('01:00')
