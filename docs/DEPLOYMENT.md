@@ -44,26 +44,35 @@ ENGRAM_POSTGRES_IMAGE=ghcr.io/thebtf/engram-postgres@sha256:<postgres-manifest-d
 POSTGRES_PASSWORD=<unique-secret>
 ENGRAM_AUTH_ADMIN_TOKEN=<separate-operator-secret>
 OPERATOR_CONSOLE_PUBLIC_ORIGIN=https://<external-console-host>
-OPERATOR_CONSOLE_TRUSTED_PROXY_IP=<reserved-console-container-peer-IP>
+OPERATOR_CONSOLE_NETWORK_SUBNET=<free-private-IPv4-CIDR-for-this-host>
+OPERATOR_CONSOLE_NETWORK_IP_RANGE=<contained-dynamic-CIDR-excluding-console-IP>
+OPERATOR_CONSOLE_TRUSTED_PROXY_IP=<reserved-usable-IPv4-outside-dynamic-pool>
 ```
 
 Use the full browser-facing origin, including a non-default port if present,
-not the backend address or `localhost`. Reserve the console's container IP in
-the deployment network before the first start; an unset value stops Compose
-configuration before any service starts. For an existing Compose deployment,
-inspect the actual console peer address and verify it is the address the server
-sees before pinning it in the dotenv:
+not the backend address or `localhost` unless the browser actually uses it.
+Before starting either Compose file, inspect existing Docker networks and host,
+LAN, and VPN routes; select a private `OPERATOR_CONSOLE_NETWORK_SUBNET` that
+overlaps none of them. Choose `OPERATOR_CONSOLE_NETWORK_IP_RANGE` strictly inside
+that subnet for dynamically assigned peers, excluding the reserved
+`OPERATOR_CONSOLE_TRUSTED_PROXY_IP`. The trusted address must be a usable IPv4
+inside the subnet, outside the dynamic pool and distinct from the gateway,
+network, and broadcast addresses. For example, only if free on this host,
+`10.240.250.0/24`, `10.240.250.128/25`, and `10.240.250.10` respectively.
+Neither Compose file supplies a universal subnet default.
 
-```bash
-docker ps --filter 'label=com.docker.compose.project=<project-name>' \
-  --filter 'label=com.docker.compose.service=operator-console' --format '{{.ID}}'
-docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
-  '<console-container-id-from-above>'
-```
-
-Do not use an arbitrary address from a different bridge or a changing container
-IP; the trust setting must continue to match the console's server-visible peer
-after recreation.
+The console receives that exact static address on a project-scoped `operator`
+bridge shared only with `server`; the server receives the same value in
+`ENGRAM_AUTH_TRUSTED_PROXY`. PostgreSQL and server retain their ordinary
+automatic `default` network for the database connection. Do not substitute a
+Docker hostname, CIDR, forwarded-IP header, or an ephemeral IP after recreation:
+backend logout trust compares the original transport peer to one exact IPv4.
+Compose rejects missing or empty inputs before startup; it does not validate
+that the chosen ranges are nonoverlapping, private, or free on the host.
+Recheck routing and address availability before `up`, especially when changing
+an existing project's network: a mismatching existing network is not migrated
+in place. Preserve that network and resolve the conflict without deleting a
+user-owned network or data volume.
 
 The same release is also discoverable through exactly two tags per image:
 
@@ -186,10 +195,11 @@ must be restricted by organization policy.
   `HOME=/var/lib/engram`, semantic health probe on `/api/ready`.
 - Operator console: UID/GID 65532, read-only root filesystem,
   `NUXT_OPERATOR_API_TARGET=http://server:37777`, semantic proxied readiness.
-  For a separate console origin, set `OPERATOR_CONSOLE_PUBLIC_ORIGIN` to its exact
-  browser origin (scheme, host, port; no path), and set
-  `OPERATOR_CONSOLE_TRUSTED_PROXY_IP` to the console container's actual TCP
-  peer IP as seen by the server. Pin that IP in the deployment network; never
+  The browser origin must match `OPERATOR_CONSOLE_PUBLIC_ORIGIN` exactly
+  (scheme, host, port; no path). Both shipped Compose files assign
+  `OPERATOR_CONSOLE_TRUSTED_PROXY_IP` to the console on the dedicated operator
+  bridge and pass that identical IPv4 to the server's trusted-peer setting;
+  the dynamic pool excludes it, including during container recreation. Never
   trust a forwarded-IP header or a whole shared bridge subnet. The standalone
   `operator-web` compose instead requires `OPERATOR_WEB_PUBLIC_ORIGIN` and the
   separately hosted server must set `ENGRAM_AUTH_TRUSTED_PROXY` to that
