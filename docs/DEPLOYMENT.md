@@ -201,15 +201,16 @@ must be restricted by organization policy.
   bridge and pass that identical IPv4 to the server's trusted-peer setting;
   the dynamic pool excludes it, including during container recreation. Never
   trust a forwarded-IP header or a whole shared bridge subnet. The standalone
-  `operator-web` compose instead requires `OPERATOR_WEB_PUBLIC_ORIGIN` and the
-  separately hosted server must set `ENGRAM_AUTH_TRUSTED_PROXY` to that
-  console's actual peer IP. Without both settings, cross-origin browser logout
-  stays denied. Nitro requires a canonical HTTP(S) public origin for non-health
-  API requests and replaces incoming `X-Forwarded-Host` and `X-Forwarded-Proto`
-  with that origin. It also replaces `X-Forwarded-For`, `X-Real-IP`, and
-  `True-Client-IP` with the observed TCP peer. A mismatched request Host is
-  rejected before proxying except for the unauthenticated `/api/ready` probe
-  from inside the console container.
+  `operator-web` compose requires `OPERATOR_WEB_PUBLIC_ORIGIN` and
+  `OPERATOR_WEB_API_TARGET`, which must identify an external backend reachable
+  from inside the container. The separately hosted server must set
+  `ENGRAM_AUTH_TRUSTED_PROXY` to that console's actual peer IP. Without both
+  settings, cross-origin browser logout stays denied. Nitro requires a
+  canonical HTTP(S) public origin for non-health API requests and replaces
+  incoming `X-Forwarded-Host` and `X-Forwarded-Proto` with that origin. It also
+  replaces `X-Forwarded-For`, `X-Real-IP`, and `True-Client-IP` with the observed
+  TCP peer. A mismatched request Host is rejected before proxying except for the
+  unauthenticated `/api/ready` probe from inside the console container.
   Both the operator console and `operator-web` strip every client-provided
   `X-Authentik-*` header before forwarding to the backend, even when that
   frontend is a trusted transport peer. A standalone deployment requiring
