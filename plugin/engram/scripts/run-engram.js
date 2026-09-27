@@ -54,7 +54,7 @@ async function main() {
  if (!serverURL) {
   process.stderr.write(
    "[engram] FATAL: ENGRAM_URL is empty. Configure Engram before first use.\n" +
-   "Universal (all harnesses): create ~/.engram/config.json with {\"server_url\":\"http://...\",\"api_token\":\"engram_...\"}\n" +
+   "Universal (all harnesses): create ~/.engram/config.json with {\"server_url\":\"http://...\"} (add api_token when server auth is enabled).\n" +
    "  or set ENGRAM_CONFIG_FILE to a custom path.\n" +
    "Claude Code: run /engram:setup or set ENGRAM_URL in ~/.claude/settings.json env.\n" +
    `Config file checked: ${configFilePath}\n`
@@ -72,16 +72,6 @@ async function main() {
    "ENGRAM_CLAUDE_USERCONFIG_TOKEN"
   ) ||
   (configFile && isConfiguredValue(configFile.api_token) ? configFile.api_token : "");
- if (!token) {
-  process.stderr.write(
-   `[engram] FATAL: ENGRAM_TOKEN is empty. Open ${serverURL.replace(/\/+$/, "")}/access, ` +
-   "generate a workstation keycard, then configure ENGRAM_TOKEN.\n" +
-   "Universal (all harnesses): add \"api_token\":\"engram_...\" to the config file.\n" +
-   `Config file checked: ${configFilePath}\n`
-  );
-  process.exitCode = 1;
-  return;
- }
  process.env.ENGRAM_CLIENT_INSTANCE_ID = configuredEnvValue(
   "ENGRAM_CLIENT_INSTANCE_ID",
   "CLAUDE_PLUGIN_OPTION_client_instance_id",
@@ -95,7 +85,7 @@ async function main() {
   process.stderr.write(
    "[engram] WARN: ENGRAM_AUTH_ADMIN_TOKEN is set on this workstation. v6 forbids " +
    "this — the operator key belongs ONLY on the server host. Remove it from " +
-   "your local agent config and use ENGRAM_TOKEN with a dashboard-issued keycard.\n"
+   "your local agent config; when server auth is enabled use ENGRAM_TOKEN with a dashboard-issued keycard.\n"
   );
  }
 

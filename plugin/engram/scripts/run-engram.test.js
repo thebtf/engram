@@ -26,19 +26,48 @@ const {
   trimStartupDiagnosticLog,
 } = require("./run-engram.js");
 
-test("missing keycard points to the real access console", () => {
-  const result = spawnSync(process.execPath, [path.join(__dirname, "run-engram.js")], {
-    encoding: "utf8",
-    env: {
-      PATH: process.env.PATH,
-      SystemRoot: process.env.SystemRoot,
-      ENGRAM_URL: "http://127.0.0.1:65535",
-      ENGRAM_CONFIG_FILE: path.join(os.tmpdir(), "engram-nonexistent-profile-config.json"),
-    },
-  });
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /127\.0\.0\.1:65535\/access/);
-  assert.doesNotMatch(result.stderr, /\/tokens/);
+
+test("installed-style launcher forwards tokenless and configured credentials to the trusted client", () => {
+  const pluginData = fs.mkdtempSync(path.join(os.tmpdir(), "engram-tokenless-launch-"));
+  const explicitConfig = path.join(pluginData, "explicit.json");
+  fs.writeFileSync(path.join(pluginData, "config.json"), JSON.stringify({ server_url: "http://127.0.0.1:37777", api_token: "engram_plugin_fixture_secret" }));
+  fs.writeFileSync(explicitConfig, JSON.stringify({ server_url: "http://127.0.0.1:37777", api_token: "engram_file_fixture_secret" }));
+  try {
+    const wrapper = path.join(__dirname, "run-engram.js");
+    const binaryResolver = path.join(__dirname, "ensure-binary.js");
+    const fixture = `
+      const child = require("node:child_process");
+      child.spawnSync = (command, args, options) => {
+        const token = options.env.ENGRAM_TOKEN;
+        process.stdout.write(JSON.stringify({ url: options.env.ENGRAM_URL,
+          tokenSource: token === "engram_env_fixture_secret" ? "env" : token === "engram_file_fixture_secret" ? "file" : token === "engram_plugin_fixture_secret" ? "plugin" : token === "" ? "absent" : "unexpected" }));
+        return { status: 0 };
+      };
+      require.cache[${JSON.stringify(binaryResolver)}] = { exports: {
+        resolveForLaunch: async () => ({ path: "trusted-object", target: {} }),
+        hashFile: () => true,
+        objectRoots: () => ({ objects: "objects" }),
+        assertSafeDirectory: (directory) => directory,
+      } };
+      require(${JSON.stringify(wrapper)}).main();
+    `;
+    for (const [name, env, expected] of [
+      ["absent", { ENGRAM_CONFIG_FILE: path.join(pluginData, "absent.json") }, "absent"],
+      ["plugin data", {}, "plugin"],
+      ["explicit file", { ENGRAM_CONFIG_FILE: explicitConfig }, "file"],
+      ["environment", { ENGRAM_CONFIG_FILE: explicitConfig, ENGRAM_TOKEN: "engram_env_fixture_secret" }, "env"],
+    ]) {
+      const result = spawnSync(process.execPath, ["-e", fixture], {
+        encoding: "utf8",
+        env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PLUGIN_DATA: pluginData, ENGRAM_URL: "http://127.0.0.1:37777", ENGRAM_CLIENT_INSTANCE_ID: "fixture-client", ...env },
+      });
+      assert.equal(result.status, 0, `${name}: ${result.stderr}`);
+      assert.deepEqual(JSON.parse(result.stdout), { url: "http://127.0.0.1:37777", tokenSource: expected }, name);
+      assert.doesNotMatch(result.stderr, /FATAL|engram_(env|file|plugin)_fixture_secret/, name);
+    }
+  } finally {
+    fs.rmSync(pluginData, { recursive: true, force: true });
+  }
 });
 
 test("Claude MCP config launches wrapper via CLAUDE_PLUGIN_ROOT interpolation", () => {

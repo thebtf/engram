@@ -46,7 +46,7 @@ const (
 	// EnvWorkstationToken is the per-workstation client api token (keycard),
 	// issued through the authenticated POST /api/auth/tokens admin endpoint.
 	// The daemon and the serverevents bridge read it; nothing else does.
-	// Empty value at daemon startup with a configured server URL is fatal (FR-4).
+	// Optional for tokenless transport; the server requires it when auth is enabled.
 	EnvWorkstationToken = "ENGRAM_TOKEN"
 
 	// EnvClientInstanceID is the opaque non-secret installation reference for
