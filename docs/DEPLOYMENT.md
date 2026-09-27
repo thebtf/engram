@@ -42,8 +42,12 @@ ENGRAM_SERVER_IMAGE=ghcr.io/thebtf/engram@sha256:<server-manifest-digest>
 ENGRAM_OPERATOR_IMAGE=ghcr.io/thebtf/engram-operator-console@sha256:<operator-manifest-digest>
 ENGRAM_POSTGRES_IMAGE=ghcr.io/thebtf/engram-postgres@sha256:<postgres-manifest-digest>
 POSTGRES_PASSWORD=<unique-secret>
-ENGRAM_AUTH_ADMIN_TOKEN=<separate-operator-secret>
+ENGRAM_AUTH_DISABLED=true
 ```
+
+The current single-user Workspace journey uses the configured HTTP LAN origin with `ENGRAM_AUTH_DISABLED=true` on a trusted network. Neither a browser login, Source/Checkout read grant, HTTPS, reverse proxy, nor `ENGRAM_AUTH_ADMIN_TOKEN` is a prerequisite for that mode. The Compose files pass through `ENGRAM_AUTH_DISABLED` (default `false`) and accept an empty admin token; verify the running mode at `/api/auth/me` rather than assuming the dotenv was loaded. Auth-enabled deployments retain their operator token, workstation keycards, browser identities, and grant checks. This guide does not remove or certify that separate path.
+
+After deployment, follow the [operator Workspace guide](operating-engram.md) to check the installed plugin, offline project anchor, Source A/B indexing and code embeddings, same-View query/graph/read, and browser freshness. Image digest and HTTP readiness checks below do not prove installed Workspace acceptance.
 
 The same release is also discoverable through exactly two tags per image:
 

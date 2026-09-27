@@ -14,7 +14,7 @@
 
 The former honest-shell/design-fidelity-scaffold result is **not** a D-A completion boundary. Truthful loading, bounded counts, lazy settings work, and state labels remain quality constraints where the D-A surface uses them; they do not substitute for the homepage-to-evidence journey.
 
-D-A also retires the active manual knowledge-graph writer and plaintext book-intake workflows at their executable boundaries while preserving their historical readers, records, and provenance. It does not certify every historical Feature 011 collection action complete. D-A has two completion states: the exact source candidate is source-accepted; the release gate remains closed until the supported browser/origin decision and installed normal-homepage DA01–DA04 proof are recorded.
+D-A also retires active manual knowledge-graph writing and plaintext book intake while preserving historical readers, records, and provenance. Source acceptance does not prove installation: the release gate stays closed until the configured single-user no-auth HTTP LAN Home → Workspace journey is replayed on the actual installed server, console, and plugin.
 
 The [responsive-layout receipt](acceptance/da-workspace-responsive-layout-receipt.json) proves only Workspace shell layout and drawer behavior at its recorded viewports. Its configured embedding provider was unavailable (`embedded_chunks=0 of 64`), so it does not reassert semantic-provider explorer evidence or satisfy installed DA01–DA04 journey acceptance.
 
@@ -28,21 +28,21 @@ The [responsive-layout receipt](acceptance/da-workspace-responsive-layout-receip
 ## Actors
 
 - **Operator**: Uses the normal browser console to investigate one permitted code state and understand its readiness.
-- **Authenticated browser subject**: A persistent browser identity with an explicit Source/Checkout read grant. An administrator role, Space label, branch, path, or tab does not substitute for a grant.
-- **Source owner**: May issue or revoke read grants only through exact source-owner authority.
+- **No-auth browser visitor**: In the explicitly configured single-user `ENGRAM_AUTH_DISABLED=true` realm, selects server-authorized Source/Checkout/View context on the HTTP LAN origin without browser sign-in or a read grant.
+- **Authenticated browser subject and source owner**: In the separate auth-enabled realm, retains persisted identity and explicit Source/Checkout grants. Grant issuance and revocation still require exact owner authority; this is deferred from no-auth installed acceptance, not removed.
 - **Daemon owner**: Owns the workstation that indexes a working copy. The browser can make an authorized request but cannot claim the daemon ran it.
 
 ## Clarifications
 
 ### Session 2026-09-10
 
-- Q: How does a browser user receive code access? → A: A persistent authenticated browser subject receives an explicit Source and Checkout read grant. The console never infers authority from an administrator role, Space membership, a path, or a legacy project identifier.
+- Q: How does the current no-auth browser visitor receive code access? → A: With `ENGRAM_AUTH_DISABLED=true`, the server selects and reauthorizes a no-auth Source/Checkout/View. No login or browser grant is required. Labels and paths do not authorize access. Auth-enabled browser access continues to require a persisted subject and explicit Source/Checkout grant.
 - Q: What releases an authorized code response? → A: Every transport uses the same UCI-owned release operation. It reauthorizes immediately before the response, records non-content exposure, and suppresses contextual content if either step cannot complete.
 
 ### Session 2026-09-17
 
 - Q: What is D-A's first usable result? → A: The normal homepage-to-workspace investigation of one named working copy through source, direct or reverse derived relation, and evidence, with old manual graph and plaintext-book writers retired.
-- Q: Does D-A decide the supported secure browser origin? → A: No. The secure-origin/authenticated-browser versus deliberately supported single-user HTTP/no-auth deployment decision remains install-bound. D-A source work preserves exact grant and UCI authority and does not invent a bypass.
+- Q: Which browser origin is supported for installed D-A acceptance? → A: The configured single-user HTTP LAN origin with auth disabled. HTTPS, proxy, sign-in, and grant issuance are not prerequisites for this path; auth-enabled behavior remains a separate deferred path.
 
 ## User Scenarios & Testing
 
@@ -56,9 +56,9 @@ An operator starts at the normal homepage, finds Workspace, selects an accessibl
 
 **Acceptance Scenarios**:
 
-1. **Given** an authenticated subject has an accessible repository and two working copies, **When** the operator opens Home, **Then** a visible Workspace entry leads to dependent repository and working-copy choices with human-readable repository, branch, and device/location labels.
+1. **Given** a configured no-auth source and two working copies, **When** the operator opens Home on the configured HTTP LAN origin, **Then** Workspace offers repository and working-copy choices without login or grants.
 2. **Given** a working copy has a published snapshot, **When** the operator selects it, **Then** Workspace shows its snapshot revision/time, indexed coverage where known, supported-language scope, and one truthful state: Ready, Updating, Needs indexing, Failed, or Newer snapshot available.
-3. **Given** there are no accessible repositories, no grant, no published snapshot, or an offline owner, **When** the operator reaches Workspace, **Then** the console distinguishes those states and offers only a real supported next action; it does not present a generic binding error, localhost substitution, synthetic administrator, or empty successful result.
+3. **Given** there are no registered repositories, no published snapshot, or an offline owner, **When** the operator reaches Workspace, **Then** it distinguishes those states without presenting a generic binding error, localhost substitution, or empty successful result. An auth-enabled realm continues to distinguish missing grants.
 
 ---
 
@@ -75,7 +75,7 @@ An operator searches the selected working copy by symbol or ordinary language, o
 1. **Given** a Ready or partially supported selected snapshot, **When** the operator searches a symbol or a natural-language intent, **Then** result count, shown page, continuation, semantic/lexical mode, and coverage limitations remain distinct; a page length never becomes the corpus total.
 2. **Given** the operator opens a source result, **When** the operator chooses Directly calls or Called by, **Then** the relation list and any bounded visual use the same snapshot and offer an accessible non-visual equivalent.
 3. **Given** a relation has released evidence, **When** the operator opens Evidence, **Then** the supporting file/span/digest opens through the authorized source-read boundary. If only entity-level evidence exists, the console labels that granularity rather than claiming an exact call-site.
-4. **Given** a newer snapshot appears, a grant is revoked, or a continuation is stale or mismatched, **When** the operator requests data, **Then** the current snapshot is never silently replaced and the response either remains authorized in that snapshot or discloses no source, identifier, count, edge, or evidence outside the grant.
+4. **Given** a newer snapshot or stale or mismatched continuation, **When** the operator requests data, **Then** the current View is never silently replaced and the response remains authorized for that View or discloses no unrelated code. Revoked grants remain a separate auth-enabled negative case.
 
 ---
 
@@ -95,10 +95,10 @@ An operator no longer encounters manual graph construction or plaintext book int
 
 ## Edge cases and failure states
 
-- Missing accessible sources, a missing read grant, a working copy without a published snapshot, an offline owner, a provider failure, and a genuine empty search are different states with different safe next actions.
+- Missing registered sources, a working copy without a published snapshot, an offline owner, a provider failure, and a genuine empty search are distinct states. Missing read grants remain an auth-enabled state, not a no-auth prerequisite.
 - Updating retains the last complete selected snapshot with its age. A new publication is offered explicitly and does not replace another tab or an open source span.
 - Unsupported languages, dynamic calls, partial extraction, a bounded traversal, unavailable source evidence, and a semantic-provider fallback are limitations, not proof that no relation or result exists.
-- A source owner may differ from the browser user. Exact owner equality is required for grant administration; an unaccepted enrollment/link is not substituted by an administrator or a fixture grant.
+- In an auth-enabled realm, source owner and browser user can differ; grant administration requires exact owner equality. No-auth first use does not create or infer an authenticated principal.
 - Existing pending or processing book jobs do not contain replayable plaintext. In the existing single-container deployment, no old book-writer process may remain live before D-A transitions residual jobs idempotently to `failed` with an interrupted-by-retirement reason; D-A adds no lease or heartbeat subsystem. The transition preserves `source_book_job_id` and partial historical documents, and a rerun remains idempotent.
 
 ## Requirements
@@ -111,21 +111,21 @@ An operator no longer encounters manual graph construction or plaintext book int
 - **FR-004**: Workspace MUST show selected-snapshot freshness, coverage where available, supported scope, and Ready, Updating, Needs indexing, Failed, or Newer snapshot available distinctly. Requesting indexing is not completion; browser code MUST NOT receive a workstation secret or remote working-copy path.
 - **FR-005**: Workspace MUST provide a bounded selected-View structure and result path before or alongside search, with opaque continuation and no fabricated filesystem tree. Search MUST preserve query/filter/View semantics and MUST NOT infer total coverage from a page size.
 - **FR-006**: Workspace MUST present automatically derived direct and reverse code relations with their type, limitations, snapshot, and released evidence. It MUST permit an authorized neighbor absent from the current search page to open through relation navigation and MUST retain an accessible relation-list equivalent to any visual graph.
-- **FR-007**: Browser read authority MUST require a persistent authenticated BrowserSubject and an explicit Source/Checkout grant. Owner-scoped grant issuance/revocation MUST use exact principal equality and audit; it MUST NOT infer authority from an administrator role, Space, branch, path, tab, or label.
+- **FR-007**: For the configured `ENGRAM_AUTH_DISABLED=true` single-user HTTP LAN realm, browser reads MUST use server-resolved no-auth Source/Checkout/View and the existing release checks without browser login or Source/Checkout grant issuance. The auth-enabled realm MUST retain its persistent BrowserSubject, explicit Source/Checkout grant, exact owner checks, and audit; neither mode MAY infer authority from a label, path, or administrator role.
 - **FR-008**: The console MUST remain a read-only presentation of code-derived facts. It MUST NOT create or edit AST facts, reconstruct a second code graph, bypass UCI through direct storage, add HTTP MCP, or expose daemon credentials.
 - **FR-009**: D-A MUST remove manual knowledge-graph create/delete admission from the console, HTTP route registration, MCP tool list/dispatch, feature-flag resurrection paths, and worker startup paths. The consumer map MUST retain or explicitly disposition `internal/retrieval/hybrid.go` Tier2 `GraphStoreInterface.Traverse`, historical graph read surfaces, and the current `/api/context/search` owner (`service.go` registration and `handleSearchByPrompt`). D-A MUST NOT remove `internal/graph` or the separate UCI code graph.
 - **FR-010**: D-A MUST remove plaintext book-job admission, uploader page, runtime pipeline startup, and worker execution path. In the existing single-container deployment, no old book-writer process may be live before it idempotently terminalizes residual nonterminal jobs as `failed` with an interrupted-by-retirement reason; it MUST preserve `source_book_job_id` and partial historical documents, prove rerun idempotence, and MUST NOT add a lease/heartbeat subsystem, replay unavailable plaintext, or invoke compensation that deletes historical rows.
 - **FR-011**: D-A MUST preserve PostgreSQL/pgvector, UCI, Source/Checkout/View ACL and release boundaries, versioned Documents, Rules, Issues, historical graph/book data, and named retained readers. It MUST NOT rewrite applied historical migrations, drop storage, or create a universal graph/library replacement.
 - **FR-012**: Loading, empty, denied, error, stale, partial, unsupported, timeout, and offline states MUST remain distinct wherever D-A exposes them. The journey MUST be keyboard-operable with visible focus and live status text, usable at 1440, 980, and 390 CSS-pixel widths and at 200% zoom, with complete RU/EN task language and no zh regression.
 - **FR-013**: D-A design work MUST update private `.od` authoring first and promote only its curated reviewed snapshot under `design/operator-console/PROMOTION-CONTRACT.md`. The old search → graph → Source shape and scaffold-fidelity instruction MUST NOT constrain the D-A runtime; no raw export may overwrite `apps/operator-console/`.
-- **FR-014**: The supported secure-origin/authenticated-browser versus single-user HTTP/no-auth deployment policy remains an install-bound decision. Neutral source work MUST preserve current authority and truthful recovery states; it MUST NOT fabricate a connect/request-access action, relax origin checks, or create a synthetic administrator. D-A source acceptance MAY record the bounded candidate result, but the release gate remains closed until that decision and installed normal-homepage DA01–DA04 proof are recorded.
+- **FR-014**: Installed D-A acceptance MUST use the configured single-user no-auth HTTP LAN origin without requiring HTTPS, proxy, browser sign-in, or grants. Auth-enabled browser behavior remains deferred, not removed. Source acceptance alone MUST NOT claim installed normal-homepage DA01–DA04 proof.
 
 ### Key entities
 
 - **Workspace context**: The selected authorized Source, Checkout, and immutable View presented as Repository, Working copy, and Indexed snapshot.
 - **Workspace catalog choice**: Server-filtered, non-authorizing human display metadata plus opaque selection reference for an accessible Source/Checkout/View.
 - **Relation evidence reference**: A released View-pinned source descriptor with evidence kind and supported span/digest granularity.
-- **Browser read grant**: Explicit permission for one persistent browser subject to read one Source/Checkout pair; it does not grant index ownership or View publication.
+- **Browser read grant**: In the separate auth-enabled realm, explicit permission for a persistent browser subject to read one Source/Checkout pair; not a prerequisite in the selected no-auth realm.
 - **Historical book job**: A retained provenance/status record whose old plaintext admission and execution are retired; it does not become a D-A Book Context entity.
 
 ## Success Criteria
@@ -138,14 +138,14 @@ An operator no longer encounters manual graph construction or plaintext book int
 - **SC-004**: The D-A source-acceptance fixture demonstrates a symbol query and one real-provider non-lexical conceptual query over more than 50 eligible candidates. Lexical or degraded output is `NOT_PROVEN` and cannot satisfy this criterion. Supported-language, dynamic-call, partial-coverage, and unavailable-evidence limitations are labeled honestly.
 - **SC-005**: After single-container quiescence, every writer in the approved nonempty manual-graph/book consumer map remains unavailable through visible UI, direct old HTTP/MCP calls, and prior flags after restart. A residual book job becomes `failed` with its retirement reason while preserving `source_book_job_id` and partial historical documents; repeating that transition is idempotent. `internal/retrieval/hybrid.go` Tier2 `Traverse`, historical graph readers, `/api/context/search`, UCI graph, Rules, Issues, and two document versions remain readable under existing ACL.
 - **SC-006**: DA01–DA04 work at 1440, 980, and 390 CSS-pixel widths and actual 200% browser zoom in RU and EN with keyboard-only context selection, source, relation, evidence, retry, and explicit newer-snapshot transition. Existing zh navigation receives a regression check.
-- **SC-007**: D-A source acceptance may be recorded only after SC-001–SC-006 pass on the exact candidate. The release gate remains closed until the supported browser/origin decision is recorded and an installed normal-homepage DA01–DA04 walkthrough proves discovery, source/relation/evidence, retirement/history, and accessibility in that chosen mode.
+- **SC-007**: D-A source acceptance may be recorded only after SC-001–SC-006 pass on the exact candidate. The release gate remains closed until an installed normal-homepage DA01–DA04 walkthrough proves discovery, source/relation/evidence, retirement/history, and accessibility on the configured no-auth HTTP LAN origin.
 
 ## Scope boundaries
 
 ### In scope
 
 - Normal Home → Workspace discovery; human-readable repository/working-copy/snapshot selection; selected-context index state; bounded structure/search; source; direct/reverse relation; released evidence; and explicit newer-snapshot transition.
-- Existing UCI/grant/binding/release reuse plus only the narrow display, owner-onboarding, structure, and evidence seams needed to make the D-A journey ordinary-user operable.
+- Existing UCI/binding/release reuse plus the narrow display, no-auth selection, structure, and evidence seams needed for the D-A journey. Auth-enabled grant onboarding is retained as a separate deferred path.
 - Executable retirement of manual graph writers and plaintext book intake while preserving data, historical readers, and an honest residual-job lifecycle.
 - Design-source amendment/promotion, task-language localization, accessibility, and D-A-specific ordinary-user and negative retirement proof.
 
@@ -169,5 +169,5 @@ An operator no longer encounters manual graph construction or plaintext book int
 - Existing UCI remains the sole authority for Source, Checkout, View, query, relation, source descriptor, and release semantics; PostgreSQL/pgvector remains authoritative storage.
 - Existing versioned Documents, Rules, Issues, historical graph/book records, and UCI code graph are retained surfaces, not reimplemented D-A substitutes.
 - The implementation owner re-reads the exact candidate before touching source because the audit's primary checkout was stale and dirty.
-- The unresolved supported-browser/origin policy is recorded above as an install-bound decision, not a source-work blocker.
+- The selected installed browser path is single-user no-auth HTTP LAN; auth-enabled browser policy remains separate and deferred. This source contract alone does not certify installation.
 - This amendment depends on Constitution 3.0.0, the 2026-09-17 operator-workspace audit package, and the accepted D2/UX/QA handoffs. It does not adopt their audit as runtime proof.
