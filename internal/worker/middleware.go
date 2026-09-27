@@ -251,7 +251,6 @@ func NewTokenAuth(token string) (*TokenAuth, error) {
 			"/api/version":           true,
 			"/api/auth/login":        true,
 			"/api/auth/logout":       true,
-			"/api/auth/me":           true, // Must be accessible to check auth status (returns 401 if not authed)
 			"/api/auth/setup-needed": true,
 			"/api/auth/setup":        true,
 			"/api/auth/user-login":   true,
@@ -374,6 +373,8 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 		}
 
 		// Skip auth if not configured or path is exempt.
+		// /api/auth/me uses this same identity path, but still returns the
+		// handler's public JSON 401 when no credential authenticates.
 		if !enabled || exempt {
 			next.ServeHTTP(w, r)
 			return
@@ -506,6 +507,11 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 					return
 				}
 			}
+		}
+
+		if r.URL.Path == "/api/auth/me" {
+			next.ServeHTTP(w, r)
+			return
 		}
 
 		// 5. No valid auth.
