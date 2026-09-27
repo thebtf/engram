@@ -263,7 +263,7 @@ function Read-PolicyBlob {
 }
 
 function Get-DiffEntries {
-    param([Parameter(Mandatory)][string]$WorkingTree, [Parameter(Mandatory)][string]$Base, [Parameter(Mandatory)][string]$Head)
+    param([Parameter(Mandatory)][string]$WorkingTree, [Parameter(Mandatory)][string]$Base, [Parameter(Mandatory)][string]$Head, [Parameter(Mandatory)]$Policy)
     $result = Invoke-Git $WorkingTree @('-c','core.quotepath=false','diff','--name-status','--no-renames',"$Base..$Head",'--')
     $entries = [System.Collections.Generic.List[object]]::new()
     foreach ($line in $result.output) {
@@ -272,7 +272,14 @@ function Get-DiffEntries {
         if ($parts.Count -ne 2 -or $parts[0] -notmatch '^[AMDT]$') { throw "unsupported or malformed PR diff line '$line'" }
         $status = [string]$parts[0]
         $path = [string]$parts[1]
-        Assert-CanonicalPath $path 'PR diff'
+        if ($path -cmatch '(^|/)\[\.\.\.path\]\.ts$' -and -not (Test-ProtectedPath $Policy $path)) {
+            Assert-CanonicalPath ($path.Substring(0, $path.Length - '[...path].ts'.Length) + 'path.ts') 'PR diff'
+            $baseEntry = Invoke-Git $WorkingTree @('-c','core.quotepath=false','ls-tree','--full-tree',$Base,'--',":(literal)$path")
+            if ($baseEntry.output.Count -ne 1 -or [string]$baseEntry.output[0] -notmatch '^(100644|100755) blob [0-9a-f]{40}	(?<path>.+)$' -or [string]$Matches.path -cne $path) {
+                throw "changed Nuxt catch-all path '$path' is not one pre-existing regular base blob"
+            }
+        }
+        else { Assert-CanonicalPath $path 'PR diff' }
         $mode = $null
         $object = $null
         if ($status -cne 'D') {
@@ -339,7 +346,7 @@ try {
     $headTree = Get-GitLine $repo @('rev-parse',"$HeadSha`^{tree}")
     if ($mergeTree -cne $headTree) { throw "merge-tree '$mergeTree' differs from exact PR head tree '$headTree'" }
 
-    [object[]]$diffEntries = @(Get-DiffEntries $repo $BaseSha $HeadSha)
+    [object[]]$diffEntries = @(Get-DiffEntries $repo $BaseSha $HeadSha $baseFacts.policy)
     [object[]]$protected = @($diffEntries | Where-Object { Test-ProtectedPath $baseFacts.policy ([string]$_.path) })
     $maintenance = $EventAction -ceq 'labeled' -and $EventLabel -ceq [string]$baseFacts.policy.active_epoch.label
     $nextEpoch = $null
