@@ -92,4 +92,59 @@ func TestAuthEnabledLoginReachesProtectedHomeWithLocalAdmin(t *testing.T) {
 		require.Equal(t, http.StatusOK, response.StatusCode, path)
 		_ = response.Body.Close()
 	}
+	var authCookie *http.Cookie
+	for _, cookie := range cookies {
+		if cookie.Name == authSessionCookieName {
+			authCookie = cookie
+		}
+	}
+	require.NotNil(t, authCookie)
+	legacyLogin, err := client.Post(server.URL+"/api/auth/login", "application/json", strings.NewReader(`{"token":"disposable-master-key"}`))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, legacyLogin.StatusCode)
+	legacyCookies := legacyLogin.Cookies()
+	_ = legacyLogin.Body.Close()
+	require.Len(t, legacyCookies, 1)
+	require.Equal(t, sessionCookieName, legacyCookies[0].Name)
+
+	logoutRequest, err := http.NewRequest(http.MethodPost, server.URL+"/api/auth/logout", nil)
+	require.NoError(t, err)
+	logoutRequest.AddCookie(authCookie)
+	logoutRequest.AddCookie(legacyCookies[0])
+	svc.authHandlers.sessions = nil
+	failedLogout, err := client.Do(logoutRequest)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusServiceUnavailable, failedLogout.StatusCode)
+	require.Empty(t, failedLogout.Cookies(), "failed revocation must not claim logout or clear cookies")
+	_ = failedLogout.Body.Close()
+	svc.authHandlers.sessions = sessions
+	_, err = sessions.GetSession(authCookie.Value)
+	require.NoError(t, err)
+
+	logoutRequest, err = http.NewRequest(http.MethodPost, server.URL+"/api/auth/logout", nil)
+	require.NoError(t, err)
+	logoutRequest.AddCookie(authCookie)
+	logoutRequest.AddCookie(legacyCookies[0])
+	logout, err := client.Do(logoutRequest)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, logout.StatusCode)
+	cleared := make(map[string]*http.Cookie)
+	for _, cookie := range logout.Cookies() {
+		cleared[cookie.Name] = cookie
+	}
+	_ = logout.Body.Close()
+	meRequest, err := http.NewRequest(http.MethodGet, server.URL+"/api/auth/me", nil)
+	require.NoError(t, err)
+	meRequest.AddCookie(authCookie)
+	me, err := client.Do(meRequest)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusUnauthorized, me.StatusCode)
+	_ = me.Body.Close()
+	for _, name := range []string{sessionCookieName, authSessionCookieName} {
+		require.Contains(t, cleared, name)
+		require.Less(t, cleared[name].MaxAge, 0)
+		require.Equal(t, "/", cleared[name].Path)
+	}
+	_, err = sessions.GetSession(authCookie.Value)
+	require.ErrorIs(t, err, gormdb.ErrAuthSessionRevoked)
 }

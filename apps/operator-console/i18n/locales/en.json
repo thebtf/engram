@@ -158,6 +158,7 @@
     "profileMenuLogoutAuthDisabled": "Auth is disabled: the current session cannot be ended from the UI",
     "profileMenuLogoutLocked": "There is no active session to sign out from",
     "profileMenuLogoutUnavailable": "Session state is unknown, sign-out is unavailable",
+    "profileMenuLogoutFailed": "Sign-out failed. Your session may still be active; try again.",
     "authDisabled": "auth disabled",
     "authAuthenticated": "session active",
     "authLocked": "login required",

@@ -158,6 +158,7 @@
     "profileMenuLogoutAuthDisabled": "Auth отключена: текущую сессию нельзя завершить из UI",
     "profileMenuLogoutLocked": "Нет активной сессии для выхода",
     "profileMenuLogoutUnavailable": "Состояние сессии неизвестно, выход недоступен",
+    "profileMenuLogoutFailed": "Не удалось выйти. Сессия может оставаться активной; повторите попытку.",
     "authDisabled": "auth отключена",
     "authAuthenticated": "сессия активна",
     "authLocked": "требуется вход",

@@ -127,12 +127,31 @@ func (s *Service) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 
 // handleAuthLogout godoc
 // @Summary Logout
-// @Description Clears the session cookie.
+// @Description Revokes the DB-backed session (when present) and clears both browser session cookies.
 // @Tags Auth
 // @Produce json
 // @Success 200 {object} map[string]interface{}
 // @Router /api/auth/logout [post]
 func (s *Service) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
+	if cookie, err := r.Cookie(authSessionCookieName); err == nil && strings.TrimSpace(cookie.Value) != "" {
+		s.initMu.RLock()
+		h := s.authHandlers
+		s.initMu.RUnlock()
+		if h == nil {
+			writeAuthJSONError(w, http.StatusServiceUnavailable, "auth store unavailable")
+			return
+		}
+		if !h.revokeBrowserSession(w, r) {
+			return
+		}
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     authSessionCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+	})
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",

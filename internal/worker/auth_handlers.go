@@ -283,7 +283,6 @@ func (h *AuthHandlers) requireAccessSessionAdmin(w http.ResponseWriter, r *http.
 		return nil, nil, false
 	}
 	return sess, user, true
-
 }
 
 func decodeOptionalJSON(r *http.Request, dst any) error {
@@ -581,12 +580,28 @@ func (h *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"user": toSafeUser(user)})
 }
 
+// revokeBrowserSession rejects failed revocation rather than claiming a successful logout.
+func (h *AuthHandlers) revokeBrowserSession(w http.ResponseWriter, r *http.Request) bool {
+	cookie, err := r.Cookie(authSessionCookieName)
+	if err != nil || strings.TrimSpace(cookie.Value) == "" {
+		return true
+	}
+	if h.sessions == nil {
+		writeAuthJSONError(w, http.StatusServiceUnavailable, "auth store unavailable")
+		return false
+	}
+	if err := h.sessions.DeleteSession(cookie.Value); err != nil && !errors.Is(err, gormlib.ErrRecordNotFound) {
+		log.Error().Err(err).Msg("auth: failed to revoke browser session")
+		writeAuthJSONError(w, http.StatusInternalServerError, "logout failed")
+		return false
+	}
+	return true
+}
+
 // handleLogout invalidates the DB session and clears the engram_auth cookie.
 func (h *AuthHandlers) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if h.sessions != nil {
-		if cookie, err := r.Cookie(authSessionCookieName); err == nil && strings.TrimSpace(cookie.Value) != "" {
-			_ = h.sessions.DeleteSession(cookie.Value)
-		}
+	if !h.revokeBrowserSession(w, r) {
+		return
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     authSessionCookieName,

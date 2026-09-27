@@ -158,6 +158,7 @@
     "profileMenuLogoutAuthDisabled": "认证已关闭：当前会话不能从 UI 结束",
     "profileMenuLogoutLocked": "没有可退出的活动会话",
     "profileMenuLogoutUnavailable": "会话状态未知，无法退出",
+    "profileMenuLogoutFailed": "退出失败。会话可能仍处于活动状态，请重试。",
     "authDisabled": "认证已关闭",
     "authAuthenticated": "会话已激活",
     "authLocked": "需要登录",

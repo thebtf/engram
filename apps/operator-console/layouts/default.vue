@@ -28,6 +28,7 @@ const identityMenuOpen = ref(false)
 const identityMenuRef = ref<HTMLElement | null>(null)
 const profileModalOpen = ref(false)
 const logoutInFlight = ref(false)
+const logoutError = ref(false)
 
 const NAV_ICONS: Record<string, string> = {
   overview: '<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/>',
@@ -223,10 +224,13 @@ function openIdentityProfile() {
 async function logoutIdentity() {
   if (!canLogout.value || logoutInFlight.value) return
   logoutInFlight.value = true
+  logoutError.value = false
   closeIdentityMenu()
   try {
     await operatorFetchJson('/api/auth/logout', { method: 'POST' }, 'shell-auth-logout')
-    await shell.refresh()
+    window.location.replace('/login')
+  } catch {
+    logoutError.value = true
   } finally {
     logoutInFlight.value = false
   }
@@ -355,6 +359,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
           </span>
           <span class="icaret">⌄</span>
         </button>
+        <p v-if="logoutError" class="logout-error" role="alert">{{ t('shell.profileMenuLogoutFailed') }}</p>
         <div v-if="identityMenuOpen" class="idmenu" role="menu">
           <div class="idm-head">
             <span class="iav">{{ info.identityInitials }}</span>
@@ -516,6 +521,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
 .tbtn.lang { font-family:var(--font-mono); letter-spacing:.04em; }
 .topbar .mobile-menu-button { display:none; }
 .identity-wrap { position:relative; display:inline-flex; }
+.logout-error { position:absolute; right:0; top:38px; z-index:91; width:min(320px, 80vw); margin:0; padding:var(--space-3); border:1px solid var(--danger); border-radius:var(--r-sm); color:var(--danger); background:var(--surface); font-size:var(--text-sm); }
 .identity { display:inline-flex; align-items:center; gap:8px; height:32px; padding:3px 10px 3px 3px; border-radius:var(--radius-pill); background:var(--surface-warm); border:1px solid var(--border); color:var(--fg); font:inherit; font-weight:600; font-size:var(--text-xs); text-align:left; max-width:230px; cursor:pointer; }
 .identity:hover,
 .identity[aria-expanded="true"] { border-color:var(--accent); }
