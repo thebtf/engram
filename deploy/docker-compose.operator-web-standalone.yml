@@ -7,11 +7,9 @@ services:
       NITRO_HOST: "0.0.0.0"
       NITRO_PORT: "3000"
       NUXT_PUBLIC_API_BASE: "/api"
-      # Standalone rollout path for a host that already runs engram-server on :37777.
-      # Override this if operator-web should talk to a different hostname, container,
-      # or reverse-proxy upstream.
-      NUXT_OPERATOR_API_TARGET: "${OPERATOR_WEB_API_TARGET:-http://host.docker.internal:37777}"
-      NUXT_OPERATOR_PUBLIC_ORIGIN: "${OPERATOR_WEB_PUBLIC_ORIGIN:?set OPERATOR_WEB_PUBLIC_ORIGIN to the exact public console origin}"
+      # Required: the externally reachable backend and the exact browser origin.
+      NUXT_ENGRAM_API_TARGET: "${OPERATOR_WEB_API_TARGET:?set OPERATOR_WEB_API_TARGET to the backend HTTP(S) URL}"
+      NUXT_ENGRAM_PUBLIC_ORIGIN: "${OPERATOR_WEB_PUBLIC_ORIGIN:?set OPERATOR_WEB_PUBLIC_ORIGIN to the exact public console origin}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
