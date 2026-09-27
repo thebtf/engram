@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore logout through a separate operator-console proxy by forwarding its configured public origin only from a trusted transport peer; overwrite client-supplied forwarding headers and reject forged public hosts without weakening the backend origin guard.
 - Strip client-supplied `X-Authentik-*` identity headers at both Nitro proxy boundaries before requests reach a backend that trusts the frontend transport peer; preserve local session cookies and public-origin forwarding.
 - Fail runtime Compose configuration before startup when the external operator-console origin or its trusted server-visible container peer IP is unset or empty.
+- Supply isolated loopback-only operator origin and proxy inputs during the image gate's Compose readiness fixture, restoring inherited environment afterward without claiming a browser login proof.
 
 ## [6.50.1] - 2026-09-27
 

@@ -70,6 +70,54 @@ type stackFixture struct {
 
 // @critical
 // @category: contract
+// @features: [image-remediation, operator-console]
+func TestImageGateComposeFixtureEnvironment(t *testing.T) {
+	repo := repositoryRoot(t)
+	script := readFile(t, filepath.Join(repo, "scripts", "production-gates", "build-and-scan-images.ps1"))
+	start := strings.Index(script, "$environmentNames = @(")
+	if start < 0 {
+		t.Fatal("image runtime fixture environment block is missing")
+	}
+	end := strings.Index(script[start:], "Push-Location $repoRoot")
+	if end < 0 {
+		t.Fatal("image runtime fixture environment block is missing")
+	}
+	fixture := script[start : start+end]
+	baseEnv := append(os.Environ(),
+		"ENGRAM_SERVER_IMAGE=fixture-server:local",
+		"ENGRAM_OPERATOR_IMAGE=fixture-operator:local",
+		"ENGRAM_POSTGRES_IMAGE=fixture-postgres:local",
+		"ENGRAM_BUILD_VERSION=sha-"+strings.Repeat("a", 40),
+		"POSTGRES_PASSWORD=fixture-only",
+		"OPERATOR_CONSOLE_TRUSTED_PROXY_IP=",
+		"OPERATOR_CONSOLE_PUBLIC_ORIGIN=",
+	)
+	compose := func(env []string) ([]byte, error) {
+		cmd := exec.Command("docker", "compose", "-f", "docker-compose.yml", "config", "--quiet")
+		cmd.Dir = repo
+		cmd.Env = env
+		return cmd.CombinedOutput()
+	}
+	for _, name := range []string{"OPERATOR_CONSOLE_TRUSTED_PROXY_IP", "OPERATOR_CONSOLE_PUBLIC_ORIGIN"} {
+		output, err := compose(append(append([]string{}, baseEnv...),
+			"OPERATOR_CONSOLE_TRUSTED_PROXY_IP=127.0.0.1",
+			"OPERATOR_CONSOLE_PUBLIC_ORIGIN=http://127.0.0.1",
+			name+"=",
+		))
+		if err == nil || !strings.Contains(string(output), name) {
+			t.Fatalf("compose accepted missing %s or rejected for another reason: %v\n%s", name, err, output)
+		}
+	}
+	cmd := exec.Command("pwsh", "-NoProfile", "-Command", fixture+"\n$env:ENGRAM_SERVER_IMAGE='fixture-server:local'; $env:ENGRAM_OPERATOR_IMAGE='fixture-operator:local'; $env:ENGRAM_POSTGRES_IMAGE='fixture-postgres:local'; $env:ENGRAM_BUILD_VERSION='sha-"+strings.Repeat("a", 40)+"'; & docker compose -f docker-compose.yml config --quiet; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }")
+	cmd.Dir = repo
+	cmd.Env = baseEnv
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("image gate's isolated fixture cannot configure root Compose: %v\n%s", err, output)
+	}
+}
+
+// @critical
+// @category: contract
 // @features: [image-remediation, release-safety]
 func TestDockerReleaseRefFreshnessGuard(t *testing.T) {
 	verifyDockerReleaseRefFreshnessGuard(t, repositoryRoot(t))
