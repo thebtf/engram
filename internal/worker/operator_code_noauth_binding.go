@@ -102,10 +102,13 @@ func (b *noAuthCodeBindings) Renew(ctx context.Context, identity auth.Identity, 
 		return err
 	}
 	b.mu.Lock()
-	tab := b.tabs[proof.TabBindingID]
+	defer b.mu.Unlock()
+	tab, ok := b.tabs[proof.TabBindingID]
+	if !ok || time.Now().After(tab.lease) || time.Now().After(tab.expires) || subtle.ConstantTimeCompare([]byte(tab.proof), []byte(proof.DocumentProof)) != 1 {
+		return ErrBrowserBindingDenied
+	}
 	tab.lease = time.Now().Add(defaultBrowserBindingLeaseTTL)
 	b.tabs[proof.TabBindingID] = tab
-	b.mu.Unlock()
 	return nil
 }
 
@@ -114,8 +117,14 @@ func (b *noAuthCodeBindings) Close(ctx context.Context, identity auth.Identity, 
 		return err
 	}
 	b.mu.Lock()
-	delete(b.tabs, proof.TabBindingID)
-	b.mu.Unlock()
+	defer b.mu.Unlock()
+	tab, ok := b.tabs[proof.TabBindingID]
+	if !ok || time.Now().After(tab.lease) || subtle.ConstantTimeCompare([]byte(tab.proof), []byte(proof.DocumentProof)) != 1 {
+		return ErrBrowserBindingDenied
+	}
+	tab.proof = ""
+	tab.lease = time.Time{}
+	b.tabs[proof.TabBindingID] = tab
 	return nil
 }
 

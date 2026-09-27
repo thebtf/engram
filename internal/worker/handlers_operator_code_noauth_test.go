@@ -96,3 +96,68 @@ func TestNoAuthOperatorCodeFirstUseAndAuthEnabledCannotForge(t *testing.T) {
 	forged := invoke(proof, auth.SessionForBrowserUser("viewer", 42), adapter.HandleStatus)
 	require.NotEqual(t, http.StatusOK, forged.Code)
 }
+
+func TestNoAuthOperatorCodePagehideCloseReloadResumesPinnedTab(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	adapter.authority = noAuthHTTPAuthority{fixture.ref}
+	noauth := auth.AuthDisabled()
+	call := func(body string, id auth.Identity, handler func(http.ResponseWriter, *http.Request)) *httptest.ResponseRecorder {
+		request := operatorCodeHTTPTestRequest(t, body, id)
+		request.Header.Set("X-Engram-Auth-Disabled", "true")
+		response := httptest.NewRecorder()
+		handler(response, request)
+		return response
+	}
+	first := call(`{"document_nonce":"first-document"}`, noauth, adapter.HandleHandshake)
+	require.Equal(t, http.StatusOK, first.Code, first.Body.String())
+	var original operatorCodeTransitionResponse
+	require.NoError(t, json.Unmarshal(first.Body.Bytes(), &original))
+	firstProof := `{"tab_binding_id":"` + original.TabBindingID + `","document_proof":"` + original.DocumentProof + `"}`
+	catalog := call(firstProof, noauth, adapter.HandleContexts)
+	require.Equal(t, http.StatusOK, catalog.Code, catalog.Body.String())
+	var contexts operatorCodeContextsResponse
+	require.NoError(t, json.Unmarshal(catalog.Body.Bytes(), &contexts))
+	require.Len(t, contexts.Contexts, 1)
+	pathCall := func(id string, body string, identity auth.Identity, handler func(http.ResponseWriter, *http.Request)) *httptest.ResponseRecorder {
+		request := operatorCodeHTTPTestRequest(t, body, identity)
+		request.Header.Set("X-Engram-Auth-Disabled", "true")
+		route := chi.NewRouteContext()
+		route.URLParams.Add("tab_binding_id", id)
+		request = request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, route))
+		response := httptest.NewRecorder()
+		handler(response, request)
+		return response
+	}
+	pin := pathCall(original.TabBindingID, `{"document_proof":"`+original.DocumentProof+`","selection_ref":"`+contexts.Contexts[0].SelectionRef+`"}`, noauth, adapter.HandlePin)
+	require.Equal(t, http.StatusNoContent, pin.Code, pin.Body.String())
+	resumeBody := `{"tab_binding_id":"` + original.TabBindingID + `","resume_nonce":"` + original.ResumeNonce + `","reload_token":"` + original.ReloadToken + `","document_nonce":"second-document"}`
+	pending := call(resumeBody, noauth, adapter.HandleResume)
+	require.Equal(t, http.StatusOK, pending.Code, pending.Body.String())
+	require.JSONEq(t, `{"state":"RELOAD_PENDING"}`, pending.Body.String())
+	closeResponse := pathCall(original.TabBindingID, `{"document_proof":"`+original.DocumentProof+`"}`, noauth, adapter.HandleClose)
+	require.Equal(t, http.StatusNoContent, closeResponse.Code, closeResponse.Body.String())
+	require.Equal(t, http.StatusForbidden, call(firstProof, noauth, adapter.HandleStatus).Code)
+	require.Equal(t, http.StatusForbidden, pathCall(original.TabBindingID, `{"document_proof":"`+original.DocumentProof+`"}`, noauth, adapter.HandleRenew).Code, "closed document cannot renew")
+	resumed := call(resumeBody, noauth, adapter.HandleResume)
+	require.Equal(t, http.StatusOK, resumed.Code, resumed.Body.String())
+	var second operatorCodeTransitionResponse
+	require.NoError(t, json.Unmarshal(resumed.Body.Bytes(), &second))
+	require.Equal(t, BrowserBindingReady, second.State)
+	require.Equal(t, original.TabBindingID, second.TabBindingID)
+	require.Equal(t, original.ResumeNonce, second.ResumeNonce)
+	require.NotEqual(t, original.DocumentProof, second.DocumentProof)
+	require.NotEqual(t, original.ReloadToken, second.ReloadToken)
+	secondProof := `{"tab_binding_id":"` + second.TabBindingID + `","document_proof":"` + second.DocumentProof + `"}`
+	fixture.app.status = mcp.CodebaseStatusSnapshot{TotalChunks: 1, Embedding: uci.EmbeddingStatus{Coverage: uci.IndexCoverageUnavailable}}
+	require.Equal(t, http.StatusOK, call(secondProof, noauth, adapter.HandleStatus).Code, "pinned selection survives pagehide and reload")
+	require.Equal(t, http.StatusForbidden, call(resumeBody, noauth, adapter.HandleResume).Code, "consumed reload token cannot replay")
+	other := call(`{"document_nonce":"other-tab","copied_tab_binding_id":"`+original.TabBindingID+`","copied_resume_nonce":"`+original.ResumeNonce+`"}`, noauth, adapter.HandleHandshake)
+	require.Equal(t, http.StatusOK, other.Code, other.Body.String())
+	var separate operatorCodeTransitionResponse
+	require.NoError(t, json.Unmarshal(other.Body.Bytes(), &separate))
+	require.NotEqual(t, original.TabBindingID, separate.TabBindingID, "copied tab gets no prior binding")
+	foreignPair := `{"tab_binding_id":"` + separate.TabBindingID + `","resume_nonce":"` + original.ResumeNonce + `","reload_token":"` + second.ReloadToken + `","document_nonce":"foreign-document"}`
+	require.Equal(t, http.StatusForbidden, call(foreignPair, noauth, adapter.HandleResume).Code, "another tab cannot borrow resume material")
+	require.Equal(t, http.StatusOK, call(secondProof, noauth, adapter.HandleStatus).Code, "foreign replay cannot revoke current tab")
+	require.Equal(t, http.StatusForbidden, call(secondProof, auth.SessionForBrowserUser("viewer", 42), adapter.HandleStatus).Code, "auth-enabled identity cannot forge noauth via header")
+}
