@@ -154,6 +154,7 @@
     "profileMenuProfile": "个人资料和设置",
     "profileMenuSettings": "控制台设置",
     "profileMenuLogout": "退出控制台",
+    "profileMenuLogoutSSO": "请通过身份提供方退出，以结束此会话。",
     "profileMenuLogoutPending": "正在退出当前会话…",
     "profileMenuLogoutAuthDisabled": "认证已关闭：当前会话不能从 UI 结束",
     "profileMenuLogoutLocked": "没有可退出的活动会话",

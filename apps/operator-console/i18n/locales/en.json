@@ -154,6 +154,7 @@
     "profileMenuProfile": "Profile and settings",
     "profileMenuSettings": "Console settings",
     "profileMenuLogout": "Sign out of console",
+    "profileMenuLogoutSSO": "Sign out through your identity provider to end this session.",
     "profileMenuLogoutPending": "Signing out of the current session…",
     "profileMenuLogoutAuthDisabled": "Auth is disabled: the current session cannot be ended from the UI",
     "profileMenuLogoutLocked": "There is no active session to sign out from",
