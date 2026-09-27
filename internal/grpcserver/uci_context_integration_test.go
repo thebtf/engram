@@ -20,6 +20,7 @@ import (
 
 	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/uci"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 )
@@ -89,6 +90,52 @@ func TestUCIContextIntegrationLegacySelectorUsesBoundCheckout(t *testing.T) {
 	require.Len(t, fixture.publication.legacyCalls, 1)
 	require.Equal(t, fixture.refA, fixture.publication.legacyCalls[0].ref)
 	require.Empty(t, fixture.query.calls)
+}
+
+func TestUCIContextIntegrationNoAuthInstanceReachesSharedHandlePort(t *testing.T) {
+	fixture := newUCIContextIntegrationFixture(t)
+	const session = "noauth-index-session"
+	const instance = "install-a"
+	workstation, valid := uci.NoAuthCodeWorkstationForInstance(instance)
+	require.True(t, valid)
+	binding := fixture.bindingA.Clone()
+	binding.WorkstationID = workstation
+	fixture.runtime.bindings[uciContextIntegrationKey(fixture.refA)] = binding
+	fixture.catalog.records[uciContextIntegrationKey(fixture.refA)] = uci.ContextRecord{Ref: fixture.refA, AuthRealm: uci.NoAuthCodeRealm}
+	port, err := mcp.NewUCIContextHandlePort(mcp.NewServer(mcp.ServerOptions{Version: "noauth-port-test"}), fixture.runtime, fixture.authorizer)
+	require.NoError(t, err)
+	fixture.server.SetUCITransport(NewContextAwareUCITransport(
+		uci.NewContextResolver(fixture.catalog, fixture.authorizer, fixture.runtime),
+		uci.NewAliasResolver(fixture.aliases.Lookup), fixture.runtime, port,
+	))
+	ctxFor := func(identity auth.Identity, instances ...string) context.Context {
+		incoming := metadata.Pairs(auditcontext.SourceSessionMetadataKey, session)
+		if len(instances) != 0 {
+			incoming.Set(uci.NoAuthCodeClientInstanceMetadataKey, instances...)
+		}
+		return auth.WithIdentity(metadata.NewIncomingContext(context.Background(), incoming), identity)
+	}
+	ctx := ctxFor(auth.AuthDisabled(), instance)
+	bound, err := fixture.server.BindCodeContext(ctx, &pb.BindCodeContextRequest{
+		ClientSessionId: session, RequestedContext: uciContextIntegrationProtoRef(fixture.refA),
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, bound.GetContextHandle())
+	got, err := fixture.server.BindCodeContext(ctx, &pb.BindCodeContextRequest{ClientSessionId: session, ContextHandle: bound.GetContextHandle()})
+	require.NoError(t, err)
+	requireUCIContextIntegrationBinding(t, binding, got)
+
+	for _, instances := range [][]string{nil, {"install-a", "install-b"}, {"file:///forged"}} {
+		_, err := fixture.server.BindCodeContext(ctxFor(auth.AuthDisabled(), instances...), &pb.BindCodeContextRequest{ClientSessionId: session, ContextHandle: bound.GetContextHandle()})
+		requireUCIContextIntegrationClosedStatus(t, err, codes.FailedPrecondition, uci.ContextMismatch)
+	}
+	forged := ctxFor(auth.ClientWithPrincipal("read-write", "auth-workstation", "agent/forged", auth.PrincipalKindAgent), instance)
+	caller, err := contextAwareCallerFrom(forged)
+	require.NoError(t, err)
+	require.Equal(t, string(auth.SourceClient), caller.authRealm)
+	require.Empty(t, caller.clientInstanceID)
+	_, err = fixture.server.BindCodeContext(forged, &pb.BindCodeContextRequest{ClientSessionId: session, ContextHandle: bound.GetContextHandle()})
+	requireUCIContextIntegrationClosedStatus(t, err, codes.PermissionDenied, uci.PermissionDenied)
 }
 
 func TestUCIContextIntegrationUnboundBindReusesAuthorizedDefault(t *testing.T) {

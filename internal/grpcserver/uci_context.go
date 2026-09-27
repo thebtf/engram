@@ -70,10 +70,11 @@ var (
 )
 
 type contextAwareCaller struct {
-	clientSessionID string
-	authRealm       string
-	principal       string
-	workstationID   string
+	clientSessionID  string
+	clientInstanceID string
+	authRealm        string
+	principal        string
+	workstationID    string
 }
 
 func (transport *contextAwareUCITransport) BindCodeContext(ctx context.Context, request *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {
@@ -423,11 +424,11 @@ func contextAwareCallerFrom(ctx context.Context) (contextAwareCaller, error) {
 		return contextAwareCaller{}, contextAwareClosedError(uci.ContextMismatch)
 	}
 	if identity.Source == auth.SourceAuthDisabled {
-		_, workstation, valid := noAuthUCIClientInstanceFrom(ctx)
+		instance, workstation, valid := noAuthUCIClientInstanceFrom(ctx)
 		if !valid {
 			return contextAwareCaller{}, contextAwareClosedError(uci.ContextMismatch)
 		}
-		return contextAwareCaller{clientSessionID: clientSessionID, authRealm: uci.NoAuthCodeRealm, principal: uci.NoAuthCodePrincipal, workstationID: workstation}, nil
+		return contextAwareCaller{clientSessionID: clientSessionID, clientInstanceID: instance, authRealm: uci.NoAuthCodeRealm, principal: uci.NoAuthCodePrincipal, workstationID: workstation}, nil
 	}
 	principal, _, owned := identity.MemoryOwner()
 	workstationID := identity.WorkstationID()
@@ -472,7 +473,11 @@ func contextAwareSourceSession(ctx context.Context) (string, bool) {
 
 func contextAwarePortContext(ctx context.Context, caller contextAwareCaller) context.Context {
 	ctx = auditcontext.WithSourceSession(ctx, caller.clientSessionID)
-	return mcp.ContextWithSession(ctx, caller.clientSessionID)
+	ctx = mcp.ContextWithSession(ctx, caller.clientSessionID)
+	if caller.clientInstanceID != "" {
+		ctx = mcp.ContextWithCodeClientInstance(ctx, caller.clientInstanceID)
+	}
+	return ctx
 }
 
 func (transport *contextAwareUCITransport) resolveBound(ctx context.Context, caller contextAwareCaller) (uci.AuthorizedContext, error) {
