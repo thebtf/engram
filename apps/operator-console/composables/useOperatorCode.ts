@@ -1318,9 +1318,12 @@ export function useOperatorCode() {
         persistPinnedContext(refreshed)
       } else {
         // The catalog lists the current View; status reauthorizes this tab's exact historical pin.
+        const checkedBinding = binding.value
         const check = await request('/code/status', 'POST', payload)
-        if (unmounted) return
-        if (check.kind === 'success' && parseStatus(check.body) !== null) {
+        if (unmounted || checkedBinding?.tabBindingId !== payload.tab_binding_id || binding.value !== checkedBinding || pinnedContext.value !== pinned) return
+        const checkedStatus = check.kind === 'success' ? parseStatus(check.body) : null
+        if (checkedStatus !== null) {
+          status.value = checkedStatus
           if (selected?.viewRef === pinned.viewRef) {
             contextCandidate.value = catalog.find((entry) => entry.sourceRef === pinned.sourceRef && entry.checkoutRef === pinned.checkoutRef && entry.view !== null)?.view ?? null
           }

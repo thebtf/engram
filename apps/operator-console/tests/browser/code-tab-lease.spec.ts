@@ -232,7 +232,7 @@ test('watcher publication keeps a server-authorized older pin and results while 
     if (path === '/api/code/tabs/handshake') await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'resume', reload_token: 'reload' } })
     else if (path === '/api/code/contexts') await route.fulfill({ json: { contexts: published ? [newer] : [old] } })
     else if (path.endsWith('/context')) { pins.push(route.request().postDataJSON().selection_ref); await route.fulfill({ status: 204 }) }
-    else if (path === '/api/code/status') await route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { coverage: 'complete' } } })
+    else if (path === '/api/code/status') await route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { coverage: 'complete' }, freshness: { state: published ? 'historical' : 'observed_current', newer_available: published } } })
     else if (path === '/api/code/structure' || path === '/api/code/search') await route.fulfill({ json: envelope })
     else await route.fulfill({ status: 500 })
   })
@@ -242,11 +242,14 @@ test('watcher publication keeps a server-authorized older pin and results while 
   await page.getByTestId('code-query-input').fill('old result')
   await page.getByTestId('code-search-submit').click()
   await expect(page.getByTestId('code-search-results')).toContainText('src/old-view.ts')
+  await expect(page.getByTestId('code-status')).toContainText('Актуален')
   published = true
   await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
   await expect(page.getByTestId('code-context-pinned')).toContainText('Original View')
   await expect(page.getByTestId('code-search-results')).toContainText('src/old-view.ts')
   await expect(page.getByTestId('code-context-snapshot').getByRole('option', { name: 'New View' })).toHaveCount(1)
+  await expect(page.getByTestId('code-status')).toContainText('Старый снимок')
+  await expect(page.locator('.readiness')).toHaveAttribute('data-state', 'newer-snapshot')
   expect(pins).toEqual(['old-choice'])
   await page.getByTestId('code-context-snapshot').selectOption('new-choice')
   await page.getByTestId('code-pin-context').click()
@@ -254,47 +257,51 @@ test('watcher publication keeps a server-authorized older pin and results while 
   expect(pins).toEqual(['old-choice', 'new-choice'])
 })
 
-test('Code Explorer retains rotated references but drops a historical pin when server reauthorization denies it', async ({ page }) => {
-  let catalogReads = 0
-  let changedSnapshot = false
-  let pins = 0
-  const context = (ref: string) => ({
-    source_ref: `source-${ref}`, checkout_ref: `checkout-${ref}`,
-    repository: 'Engram', working_copy: 'operator desk',
-    view_ref: changedSnapshot ? 'view-new-generation' : 'view-stable',
-    selection_ref: `selection-${ref}`, index_intent_available: false,
-    indexed_snapshot: { label: 'Current snapshot', revision: changedSnapshot ? 'new-revision' : '1a9dad0', published_at: '2026-09-17T00:00:00Z' },
+for (const rejectedStatus of ['denied', 'invalid'] as const) {
+  test(`Code Explorer retains rotated references but drops a historical pin when server reauthorization is ${rejectedStatus}`, async ({ page }) => {
+    let catalogReads = 0
+    let changedSnapshot = false
+    let pins = 0
+    const context = (ref: string) => ({
+      source_ref: `source-${ref}`, checkout_ref: `checkout-${ref}`,
+      repository: 'Engram', working_copy: 'operator desk',
+      view_ref: changedSnapshot ? 'view-new-generation' : 'view-stable',
+      selection_ref: `selection-${ref}`, index_intent_available: false,
+      indexed_snapshot: { label: 'Current snapshot', revision: changedSnapshot ? 'new-revision' : '1a9dad0', published_at: '2026-09-17T00:00:00Z' },
+    })
+    await page.route('**/api/code/**', async (route: Route) => {
+      const pathname = new URL(route.request().url()).pathname
+      if (pathname === '/api/code/tabs/handshake') {
+        await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'resume-current', reload_token: 'reload-current' } })
+      } else if (pathname === '/api/code/contexts') {
+        await route.fulfill({ json: { contexts: [context(catalogReads++ === 0 ? 'first' : 'fresh')] } })
+      } else if (pathname === `/api/code/tabs/${TAB_BINDING_ID}/context`) {
+        pins++
+        await route.fulfill({ status: 204 })
+      } else if (pathname === '/api/code/status') {
+        if (changedSnapshot && rejectedStatus === 'denied') await route.fulfill({ status: 403 })
+        else if (changedSnapshot) await route.fulfill({ json: { total_chunks: 'invalid', embedded_chunks: 0, embedding: { coverage: 'none' } } })
+        else await route.fulfill({ json: { total_chunks: 0, embedded_chunks: 0, embedding: { coverage: 'none', job_state: null, error_code: null } } })
+      } else if (pathname === '/api/code/structure') {
+        await route.fulfill({ status: 403 })
+      } else {
+        await route.fulfill({ status: 500 })
+      }
+    })
+    await page.goto('/code')
+    await page.getByTestId('code-context-snapshot').selectOption('selection-first')
+    await page.getByTestId('code-pin-context').click()
+    await expect(page.getByTestId('code-context-pinned')).toBeVisible()
+    await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
+    await expect(page.getByTestId('code-context-pinned')).toBeVisible()
+    await expect(page.getByTestId('code-context-snapshot')).toHaveValue('selection-fresh')
+    expect(pins).toBe(1)
+    changedSnapshot = true
+    await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
+    await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+    expect(pins).toBe(1)
   })
-  await page.route('**/api/code/**', async (route: Route) => {
-    const pathname = new URL(route.request().url()).pathname
-    if (pathname === '/api/code/tabs/handshake') {
-      await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'resume-current', reload_token: 'reload-current' } })
-    } else if (pathname === '/api/code/contexts') {
-      await route.fulfill({ json: { contexts: [context(catalogReads++ === 0 ? 'first' : 'fresh')] } })
-    } else if (pathname === `/api/code/tabs/${TAB_BINDING_ID}/context`) {
-      pins++
-      await route.fulfill({ status: 204 })
-    } else if (pathname === '/api/code/status') {
-      await route.fulfill(changedSnapshot ? { status: 403 } : { json: { total_chunks: 0, embedded_chunks: 0, embedding: { coverage: 'none', job_state: null, error_code: null } } })
-    } else if (pathname === '/api/code/structure') {
-      await route.fulfill({ status: 403 })
-    } else {
-      await route.fulfill({ status: 500 })
-    }
-  })
-  await page.goto('/code')
-  await page.getByTestId('code-context-snapshot').selectOption('selection-first')
-  await page.getByTestId('code-pin-context').click()
-  await expect(page.getByTestId('code-context-pinned')).toBeVisible()
-  await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
-  await expect(page.getByTestId('code-context-pinned')).toBeVisible()
-  await expect(page.getByTestId('code-context-snapshot')).toHaveValue('selection-fresh')
-  expect(pins).toBe(1)
-  changedSnapshot = true
-  await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
-  await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
-  expect(pins).toBe(1)
-})
+}
 
 test('Failed and malformed catalog refresh revoke candidate pin authority until successful rebind', async ({ page }) => {
   let catalogMode: 'ready' | 'failed' | 'malformed' | 'rotated' = 'ready'
