@@ -396,6 +396,7 @@ func TestUCIPreparedIndexBuiltParserHandlesCallTriviaAndAssertionWrite(t *testin
 		{"generator assignment", "export function* helper(n) { yield n; }\nexport function* caller(n) { helper = n; yield helper(n); }", uci.TreeSitterLanguageJavaScript, false, true},
 		{"typescript assertion write", "export function helper(n: number) { return n; }\nexport function caller(n: any) { (helper as any) = n; return helper(n); }", uci.TreeSitterLanguageTypeScript, false, true},
 		{"typescript angle assertion write", "export function helper(n: number) { return n; }\nexport function caller(n: any) { (<any>helper) = n; return helper(n); }", uci.TreeSitterLanguageTypeScript, false, true},
+		{"typescript satisfies write", "export function helper(n: number) { return n; }\nexport function caller(n: any) { (helper satisfies any) = n; return helper(n); }", uci.TreeSitterLanguageTypeScript, false, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			body := []byte(test.source)

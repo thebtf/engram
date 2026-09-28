@@ -699,7 +699,7 @@ func (collector *parserCollector) bindingNodes(node *tree_sitter.Node) []*tree_s
 			return collector.bindingNodes(node.NamedChild(0))
 		}
 		return nil
-	case "as_expression":
+	case "as_expression", "satisfies_expression":
 		if node.NamedChildCount() == 2 {
 			return collector.bindingNodes(node.NamedChild(0))
 		}
