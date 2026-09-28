@@ -904,6 +904,7 @@ export function useOperatorCode() {
   let leaseRenewalGeneration = 0
   let authProbeAbort: AbortController | null = null
   let unmounted = false
+  let remountPin: CodeSafeContext | null = null
 
   function bindingPayload(extra: Record<string, unknown> = {}): Record<string, unknown> | null {
     if (binding.value === null) return null
@@ -1237,6 +1238,7 @@ export function useOperatorCode() {
     }
     if (ambiguous) body.ambiguous = true
     const result = await request('/code/tabs/handshake', 'POST', body)
+    if (unmounted) return false
     if (result.kind !== 'success') {
       bootstrapPhase.value = result.kind === 'denied' ? 'denied' : 'error'
       return false
@@ -1256,6 +1258,7 @@ export function useOperatorCode() {
       reload_token: pair.reloadToken,
       document_nonce: documentNonce,
     })
+    if (unmounted) return false
     if (result.kind !== 'success') {
       clearResumePair()
       if (result.status === 403 && authDisabled.value) {
@@ -1288,6 +1291,7 @@ export function useOperatorCode() {
     contextState.value = 'loading'
     pending.value = true
     const result = await request('/code/contexts', 'POST', payload)
+    if (unmounted) return
     pending.value = false
     if (result.kind !== 'success') {
       clearPersistedPinCandidate()
@@ -1315,6 +1319,7 @@ export function useOperatorCode() {
       } else {
         // The catalog lists the current View; status reauthorizes this tab's exact historical pin.
         const check = await request('/code/status', 'POST', payload)
+        if (unmounted) return
         if (check.kind === 'success' && parseStatus(check.body) !== null) {
           if (selected?.viewRef === pinned.viewRef) {
             contextCandidate.value = catalog.find((entry) => entry.sourceRef === pinned.sourceRef && entry.checkoutRef === pinned.checkoutRef && entry.view !== null)?.view ?? null
@@ -1386,6 +1391,7 @@ export function useOperatorCode() {
     }
     const remount = spaRemount
     spaRemount = null
+    remountPin = remount?.pinnedContext ?? null
     const documentNonce = requestId()
     if (documentNonce === null) {
       bootstrapPhase.value = 'error'
@@ -1416,8 +1422,9 @@ export function useOperatorCode() {
         : pair !== null
           ? await handshake(documentNonce, pair, false, evidence)
           : await handshake(documentNonce, null, false, evidence)
-    if (!established) return
+    if (unmounted || !established) return
     await discoverContext()
+    if (unmounted) return
     if (resumingBinding) {
       restorePersistedPinCandidate()
       if (established !== 'rebound') {
@@ -1649,7 +1656,7 @@ export function useOperatorCode() {
     unmounted = true
     authProbeAbort?.abort()
     stopLeaseRenewal()
-    if (!pageHiding) spaRemount = { pinnedContext: pinnedContext.value ?? spaRemount?.pinnedContext ?? null }
+    if (!pageHiding) spaRemount = { pinnedContext: pinnedContext.value ?? spaRemount?.pinnedContext ?? remountPin }
     stopIndexIntentPolling()
     window.removeEventListener('pagehide', closeOnPageHide)
   })

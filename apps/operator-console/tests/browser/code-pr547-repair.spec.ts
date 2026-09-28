@@ -172,3 +172,87 @@ test('offline freshness has a distinct readiness label, not unknown freshness', 
   await expect(page.locator('.readiness')).not.toContainText('Свежесть неизвестна')
   await expect(page.locator('.readiness')).not.toContainText('workspace.readiness.offline')
 })
+
+for (const boundary of ['resume', 'handshake', 'catalog'] as const) {
+  test(`obsolete late ${boundary} response cannot mutate the tab or lose its historical candidate`, async ({ page }) => {
+    let held: typeof boundary | null = null
+    const releases: Array<() => void> = []
+    const requests: string[] = []
+    const otherSnapshot = { ...entry, view_ref: 'other-view', selection_ref: 'other-selection', indexed_snapshot: { label: 'Other snapshot' } }
+    await page.clock.install({ time: new Date('2026-09-15T00:00:00Z') })
+    await page.addInitScript(() => {
+      const original = performance.getEntriesByType.bind(performance)
+      performance.getEntriesByType = (entryType) => entryType === 'navigation'
+        ? [Object.create(PerformanceNavigationTiming.prototype, { type: { value: 'reload' } })]
+        : original(entryType)
+    })
+    await page.route('**/api/auth/me', route => route.fulfill({ json: { auth_disabled: true } }))
+    await page.route('**/api/code/**', async route => {
+      const path = new URL(route.request().url()).pathname
+      requests.push(path)
+      const stage = path === '/api/code/tabs/resume' ? 'resume' : path === '/api/code/tabs/handshake' ? 'handshake' : path === '/api/code/contexts' ? 'catalog' : null
+      if (stage !== null && stage === held) await new Promise<void>(resolve => { releases.push(resolve) })
+      if (stage === 'resume' || stage === 'handshake') await route.fulfill({ json: binding }).catch(() => { })
+      else if (stage === 'catalog') await route.fulfill({ json: { contexts: [otherSnapshot, entry] } }).catch(() => { })
+      else if (path.endsWith('/context')) await route.fulfill({ status: 204 })
+      else if (path === '/api/code/status') await route.fulfill({ json: { total_chunks: 0, embedded_chunks: 0, embedding: { coverage: 'none', job_state: null, error_code: null } } })
+      else await route.fulfill({ status: 403 })
+    })
+
+    await page.goto('/code')
+    await page.getByTestId('code-context-snapshot').selectOption('selection')
+    await page.getByTestId('code-pin-context').click()
+    await expect(page.getByTestId('code-context-pinned')).toBeVisible()
+    const candidate = await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))
+    await page.locator('a[href="/memory"]').first().click()
+    await expect(page).toHaveURL(/\/memory$/)
+    if (boundary === 'handshake') await page.evaluate(() => sessionStorage.removeItem('engram.operator-code.resume.v1'))
+    held = boundary
+    await page.locator('a[href="/code"]').first().click()
+    await expect(page).toHaveURL(/\/code$/)
+    await expect.poll(() => releases.length).toBe(1)
+    await page.locator('a[href="/memory"]').first().click()
+    await expect(page).toHaveURL(/\/memory$/)
+
+    await page.evaluate(() => {
+      const writes: string[] = []
+      Object.assign(window, { codeBootstrapWrites: writes })
+      const set = Storage.prototype.setItem
+      const remove = Storage.prototype.removeItem
+      Storage.prototype.setItem = function(key, value) {
+        if (this === sessionStorage && key.startsWith('engram.operator-code.')) writes.push(`set:${key}`)
+        set.call(this, key, value)
+      }
+      Storage.prototype.removeItem = function(key) {
+        if (this === sessionStorage && key.startsWith('engram.operator-code.')) writes.push(`remove:${key}`)
+        remove.call(this, key)
+      }
+    })
+    const response = page.waitForResponse(response => new URL(response.url()).pathname === `/api/code/${boundary === 'catalog' ? 'contexts' : `tabs/${boundary}`}`)
+    releases[0]!()
+    await response
+    await page.clock.fastForward('02:30')
+    const state = await page.evaluate(() => ({
+      writes: Reflect.get(window, 'codeBootstrapWrites'),
+      candidate: sessionStorage.getItem('engram.operator-code.view-candidate.v2'),
+      pair: sessionStorage.getItem('engram.operator-code.resume.v1'),
+    }))
+    expect(state.writes).toEqual([])
+    expect(state.candidate).toBe(candidate)
+    expect(state.pair === null).toBe(boundary === 'handshake')
+    expect(requests.filter(path => path.endsWith('/lease'))).toEqual([])
+
+    held = null
+    await page.locator('a[href="/code"]').first().click()
+    await expect(page.getByTestId('code-context-snapshot').getByRole('option', { name: 'Pinned snapshot' })).toHaveCount(1)
+    if (boundary === 'handshake') {
+      await page.getByTestId('code-context-snapshot').selectOption('selection')
+      await page.getByTestId('code-pin-context').click()
+      await expect(page.getByTestId('code-context-pinned')).toContainText('Pinned snapshot')
+      expect(requests.filter(path => path === '/api/code/tabs/handshake')).toHaveLength(3)
+    } else {
+      await expect(page.getByTestId('code-context-pinned')).toContainText('Pinned snapshot')
+      expect(requests.filter(path => path === '/api/code/tabs/resume')).toHaveLength(2)
+    }
+  })
+}
