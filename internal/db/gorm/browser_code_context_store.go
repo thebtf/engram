@@ -258,9 +258,12 @@ func (s *BrowserCodeContextStore) ListNoAuthCatalog(ctx context.Context) ([]Brow
 		LIMIT ?
 	`, UCIViewPublished, UCIViewSuperseded, uci.NoAuthCodeRealm, uci.NoAuthCodePrincipal,
 		UCISourceActive, UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp,
-		browserCodeCatalogMaxEntries).Scan(&rows).Error
+		browserCodeCatalogMaxEntries+1).Scan(&rows).Error
 	if err != nil {
 		return nil, fmt.Errorf("local code context catalog: %w", err)
+	}
+	if len(rows) > browserCodeCatalogMaxEntries {
+		return nil, fmt.Errorf("local code context catalog exceeds %d entries", browserCodeCatalogMaxEntries)
 	}
 	entries := make([]BrowserCodeContextCatalogEntry, 0, len(rows))
 	for _, row := range rows {

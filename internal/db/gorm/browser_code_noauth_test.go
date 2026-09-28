@@ -105,6 +105,32 @@ func TestNoAuthCodeCatalogKeepsCurrentAfterManySupersededViews(t *testing.T) {
 	}
 }
 
+func TestNoAuthCodeCatalogRejectsMoreThan128CurrentCheckouts(t *testing.T) {
+	fixture := openUCIProjectionMigrationFixture(t)
+	require.NoError(t, workspaceCatalogMigration182().Migrate(fixture.db))
+	ctx := context.Background()
+	contexts := NewUCIContextStore(fixture.db)
+	source, err := contexts.CreateSource(ctx, CreateSourceInput{AuthRealm: uci.NoAuthCodeRealm, Kind: UCISourceGit, DisplayName: "local repository"})
+	require.NoError(t, err)
+	code := NewBrowserCodeContextStore(fixture.db)
+	for i := range browserCodeCatalogMaxEntries + 1 {
+		_, err := contexts.RegisterCheckout(ctx, RegisterCheckoutInput{
+			SourceID: source.SourceID, WorkstationID: "install-" + uuid.NewString(),
+			Kind: UCICheckoutWorkingTree, OwnerPrincipal: uci.NoAuthCodePrincipal,
+			LocatorRef: "file:///noauth/" + uuid.NewString(),
+		})
+		require.NoError(t, err)
+		if i == browserCodeCatalogMaxEntries-1 {
+			entries, err := code.ListNoAuthCatalog(ctx)
+			require.NoError(t, err)
+			require.Len(t, entries, browserCodeCatalogMaxEntries)
+		}
+	}
+	entries, err := code.ListNoAuthCatalog(ctx)
+	require.ErrorContains(t, err, "local code context catalog exceeds 128 entries")
+	require.Nil(t, entries, "a partial catalog must never appear complete")
+}
+
 func TestNoAuthCodeRegistrationReplaysAfterStoreRestartWithoutClaimingHistoricalScope(t *testing.T) {
 	fixture := openUCIProjectionMigrationFixture(t)
 	ctx := context.Background()
