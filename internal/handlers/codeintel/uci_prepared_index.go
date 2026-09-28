@@ -1007,7 +1007,27 @@ func uciPreparedAddTreeSitterLocalEdges(file *uciPreparedAdmissionFile, aliases,
 		target, found := uciPreparedTreeSitterLocalTarget(local, aliases, namespaces, definitions)
 		direct := false
 		if !found {
-			target, found = uciPreparedTreeSitterDirectLocalCallTarget(file, reference, local, definitions[file.path][local], writes)
+			if _, written := writes[local]; written && reference.Kind == "call" && reference.Relation == uci.IndexRelation("calls") &&
+				reference.OwnerSymbolKey != nil && !strings.ContainsAny(local, ".@/#") && file.artifact.Status == uci.IndexAdmissionArtifactComplete {
+				file.edges = append(file.edges, uci.IndexAdmissionEdge{
+					EdgeKey:          uciPreparedTreeSitterEdgeKey(file.path, reference.SiteKey, "", "", reference.Relation),
+					SourceArtifactID: file.artifact.ArtifactID,
+					SourceSymbolKey:  reference.OwnerSymbolKey,
+					Relation:         reference.Relation,
+					EvidenceKind:     uci.IndexEvidenceKind("unresolved"),
+					ResolutionState:  uci.IndexResolutionState("unresolved"),
+					ResolverRevision: "uci-prepared-tree-sitter-local-call/v1",
+					Evidence: uci.IndexAdmissionEdgeEvidence{
+						ReferenceSiteKey: reference.SiteKey,
+						Span:             reference.Span,
+						RuleKey:          "tree-sitter-rebound-local-call/v1",
+						Explanation:      "local binding is written in source; call target is unresolved",
+					},
+				})
+				unresolved++
+				continue
+			}
+			target, found = uciPreparedTreeSitterDirectLocalCallTarget(file, reference, local, definitions[file.path][local])
 			direct = found
 		}
 		if !found {
@@ -1025,12 +1045,9 @@ func uciPreparedAddTreeSitterLocalEdges(file *uciPreparedAdmissionFile, aliases,
 	return unresolved
 }
 
-func uciPreparedTreeSitterDirectLocalCallTarget(file *uciPreparedAdmissionFile, reference uci.IndexAdmissionReference, local string, matches []uciPreparedTreeSitterTarget, writes map[string]struct{}) (uciPreparedTreeSitterTarget, bool) {
+func uciPreparedTreeSitterDirectLocalCallTarget(file *uciPreparedAdmissionFile, reference uci.IndexAdmissionReference, local string, matches []uciPreparedTreeSitterTarget) (uciPreparedTreeSitterTarget, bool) {
 	if reference.Kind != "call" || reference.Relation != uci.IndexRelation("calls") || reference.OwnerSymbolKey == nil || len(matches) != 1 ||
 		matches[0].symbolKey != "function:"+local || strings.ContainsAny(local, ".@/#") || file.artifact.Status != uci.IndexAdmissionArtifactComplete {
-		return uciPreparedTreeSitterTarget{}, false
-	}
-	if _, written := writes[local]; written {
 		return uciPreparedTreeSitterTarget{}, false
 	}
 	body := file.artifact.Body

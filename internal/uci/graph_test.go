@@ -334,6 +334,29 @@ func TestUCIGraphReportsAmbiguityUnresolvedSitesAndChangedCalleeInvalidation(t *
 		graphTestAssertUnresolved(t, result.Unresolved, fixture.worker, "may_call", fixture.worker)
 	})
 
+	t.Run("named caller with unresolved call reports coverage gap", func(t *testing.T) {
+		store := fixture.store()
+		store.edges = graphTestWithoutEdge(store.edges, fixture.worker, fixture.callee)
+		store.unresolved = []GraphUnresolvedSite{graphTestUnresolved(fixture.worker, "calls", fixture.worker)}
+		result, err := NewGraphService(store).Explore(context.Background(), newAuthorizedContext(fixture.contextA), GraphSpec{
+			ClientSessionID: "graph-client-a",
+			Action:          GraphActionNeighbors,
+			Target:          GraphTarget{Name: "Worker"},
+			Filter: GraphFilter{
+				Direction: GraphDirectionOutgoing,
+				Relations: []IndexRelation{IndexRelation("calls")},
+			},
+			Budget: graphTestBudget(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Outcome != GraphOutcomeUnknownOrTruncated || result.Graph.StopReason != QueryGraphCoverageGap || len(result.Graph.Edges) != 0 {
+			t.Fatalf("unresolved named call reported absence or a resolved link: %+v", result)
+		}
+		graphTestAssertUnresolved(t, result.Unresolved, fixture.worker, "calls", fixture.worker)
+	})
+
 	t.Run("changed callee invalidates old target instead of retaining stale calls", func(t *testing.T) {
 		store := fixture.store()
 		store.edges = graphTestWithoutEdge(store.edges, fixture.worker, fixture.callee)

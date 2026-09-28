@@ -261,7 +261,14 @@ func TestUCIPreparedIndexLeavesReassignedSameFileCallsUnresolved(t *testing.T) {
 				require.Len(t, files[0].edges, 1)
 			} else {
 				require.Equal(t, uint64(1), unresolved)
-				require.Empty(t, files[0].edges)
+				require.Len(t, files[0].edges, 1)
+				edge := files[0].edges[0]
+				require.Nil(t, edge.Target)
+				require.Equal(t, uci.IndexRelation("calls"), edge.Relation)
+				require.Equal(t, uci.IndexEvidenceKind("unresolved"), edge.EvidenceKind)
+				require.Equal(t, uci.IndexResolutionState("unresolved"), edge.ResolutionState)
+				require.Equal(t, references[0].SiteKey, edge.Evidence.ReferenceSiteKey)
+				require.Equal(t, &owner, edge.SourceSymbolKey)
 			}
 		})
 	}
@@ -291,6 +298,9 @@ func TestUCIPreparedIndexBuiltParserDoesNotResolveReboundLocalCalls(t *testing.T
 		{"rebound javascript", "export function calibrateInfraredPrism(pulseCount) { return pulseCount; }\nexport function guideCometOptics(pulseCount) { calibrateInfraredPrism = pulseCount; return calibrateInfraredPrism(pulseCount); }", uci.TreeSitterLanguageJavaScript, false},
 		{"rebound typescript", "export function calibrateInfraredPrism(pulseCount: number) { return pulseCount; }\nexport function guideCometOptics(pulseCount: any) { calibrateInfraredPrism += pulseCount; return calibrateInfraredPrism(pulseCount); }", uci.TreeSitterLanguageTypeScript, false},
 		{"rebound tsx", "export function calibrateInfraredPrism(pulseCount: number) { return pulseCount; }\nexport function guideCometOptics(pulseCount: any) { ({calibrateInfraredPrism} = pulseCount); return <span>{calibrateInfraredPrism(pulseCount)}</span>; }", uci.TreeSitterLanguageTSX, false},
+		{"rebound local javascript", "export function calibrateInfraredPrism(n) { return n; }\nexport function guideCometOptics(n) { let helper = calibrateInfraredPrism; helper = n; return helper(n); }", uci.TreeSitterLanguageJavaScript, false},
+		{"rebound local typescript", "export function calibrateInfraredPrism(n: number) { return n; }\nexport function guideCometOptics(n: any) { let helper = calibrateInfraredPrism; helper! = n; return helper(n); }", uci.TreeSitterLanguageTypeScript, false},
+		{"rebound local tsx", "export function calibrateInfraredPrism(n: number) { return n; }\nexport function guideCometOptics(n: any) { let helper = calibrateInfraredPrism; ({helper} = n); return helper(n); }", uci.TreeSitterLanguageTSX, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			body := []byte(test.source)
@@ -302,7 +312,7 @@ func TestUCIPreparedIndexBuiltParserDoesNotResolveReboundLocalCalls(t *testing.T
 			artifact, err := uci.NewIndexAdmissionArtifactFromTreeSitter("11111111-1111-4111-8111-111111111111", profile, body, parsed)
 			require.NoError(t, err)
 			id := artifact.ArtifactID
-			files := []uciPreparedAdmissionFile{{path: "comet.js", membership: uci.IndexAdmissionMembership{PathKey: "comet.js", State: uci.IndexAdmissionMembershipPresent, ArtifactID: &id}, artifact: &artifact}}
+			files := []uciPreparedAdmissionFile{{path: "comet.js", membership: uci.IndexAdmissionMembership{PathKey: "comet.js", DisplayPath: "comet.js", Mode: "100644", State: uci.IndexAdmissionMembershipPresent, ArtifactID: &id}, artifact: &artifact}}
 			unresolved, err := uciPreparedAddResolvedTreeSitterEdges(files)
 			require.NoError(t, err)
 			if test.resolved {
@@ -312,8 +322,22 @@ func TestUCIPreparedIndexBuiltParserDoesNotResolveReboundLocalCalls(t *testing.T
 				require.Equal(t, "function:calibrateInfraredPrism", *files[0].edges[0].Target.SymbolKey)
 			} else {
 				require.Equal(t, uint64(1), unresolved)
-				require.Empty(t, files[0].edges)
+				require.Len(t, files[0].edges, 1)
+				require.Nil(t, files[0].edges[0].Target)
+				require.Equal(t, uci.IndexEvidenceKind("unresolved"), files[0].edges[0].EvidenceKind)
+				require.Equal(t, uci.IndexResolutionState("unresolved"), files[0].edges[0].ResolutionState)
+				require.Equal(t, uci.IndexRelation("calls"), files[0].edges[0].Relation)
 			}
+			frames, _, err := uciPreparedPackFrames("44444444-4444-4444-8444-444444444444", files)
+			require.NoError(t, err)
+			require.NoError(t, uci.ValidateIndexAdmissionFrames(frames))
+			require.Len(t, frames, 1)
+			part, err := frames[0].PublicationPart()
+			require.NoError(t, err)
+			require.Len(t, part.EdgeReplacements, 1)
+			require.Len(t, part.EdgeReplacements[0].Edges, 1)
+			require.Equal(t, files[0].edges[0].ResolutionState, part.EdgeReplacements[0].Edges[0].ResolutionState)
+			require.NotNil(t, part.EdgeReplacements[0].Edges[0].Evidence.ReferenceSiteID)
 		})
 	}
 }
