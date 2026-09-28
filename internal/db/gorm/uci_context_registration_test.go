@@ -35,6 +35,98 @@ func TestCanonicalUCILocalGitLocatorPreservesWorktreeBoundaries(t *testing.T) {
 	}
 }
 
+func TestRegisterLocalGitLabelsDistinguishRealmsWorktreesAndDevices(t *testing.T) {
+	for _, realm := range []string{uci.NoAuthCodeRealm, "client"} {
+		t.Run(realm, func(t *testing.T) {
+			db, store := openUCIContextMigrationStore(t)
+			ctx := context.Background()
+			principal := uci.NoAuthCodePrincipal
+			var ownerID int64
+			if realm == "client" {
+				owner := &User{Email: "chooser-" + uuid.NewString() + "@example.test", PasswordHash: "fixture-hash", Role: DashboardRoleOperator, CreatedAt: time.Now().UTC()}
+				require.NoError(t, db.Create(owner).Error)
+				ownerID, principal = owner.ID, fmt.Sprintf("browser-user/%d", owner.ID)
+			}
+			input := RegisterLocalGitInput{AuthRealm: realm, Principal: principal, WorkstationID: "device-one", SourceLabel: "repository", Locator: "file:///private/one/repo"}
+			first, err := store.RegisterLocalGit(ctx, input)
+			require.NoError(t, err)
+			input.Locator = "file:///private/two/repo"
+			second, err := store.RegisterLocalGit(ctx, input)
+			require.NoError(t, err)
+			input.Locator = "file:///private/one/repo"
+			input.WorkstationID = "device-two"
+			third, err := store.RegisterLocalGit(ctx, input)
+			require.NoError(t, err)
+			labels := make(map[string]string)
+			for _, registered := range []RegisteredLocalGit{first, second, third} {
+				var label string
+				require.NoError(t, db.Raw("SELECT COALESCE(display_name, '') FROM ci_checkouts WHERE checkout_id = ?", registered.CheckoutID).Scan(&label).Error)
+				require.NotEmpty(t, label)
+				labels[registered.CheckoutID] = label
+				require.True(t, validBrowserCodeCheckoutDisplayLabel(label))
+				require.NotContains(t, label, "/private/")
+				require.NotContains(t, label, principal)
+			}
+			require.Contains(t, labels[first.CheckoutID], "one › repo · Device ")
+			require.Contains(t, labels[second.CheckoutID], "two › repo · Device ")
+			require.NotEqual(t, labels[first.CheckoutID], labels[second.CheckoutID])
+			require.NotEqual(t, labels[first.CheckoutID], labels[third.CheckoutID])
+			if realm == uci.NoAuthCodeRealm {
+				entries, err := NewBrowserCodeContextStore(db).ListNoAuthCatalog(ctx)
+				require.NoError(t, err)
+				require.Len(t, entries, 3)
+				for _, entry := range entries {
+					require.Equal(t, labels[entry.CheckoutID], entry.CheckoutLabel)
+				}
+			} else {
+				grants := NewBrowserReadGrantStore(db)
+				choices, err := grants.ListOwnerChoices(ctx, ownerID, principal)
+				require.NoError(t, err)
+				require.Len(t, choices, 3)
+				for _, choice := range choices {
+					require.Equal(t, labels[choice.ChoiceRef], choice.WorkingCopyLabel)
+				}
+				_, err = grants.SetOwnerChoiceLabel(ctx, ownerID, principal, first.CheckoutID, "My studio worktree")
+				require.NoError(t, err)
+			}
+			input.WorkstationID = "device-one"
+			replayed, err := store.RegisterLocalGit(ctx, input)
+			require.NoError(t, err)
+			require.Equal(t, first, replayed)
+			input.SourceID, input.SourceLabel = first.SourceID, ""
+			replayedByID, err := store.RegisterLocalGit(ctx, input)
+			require.NoError(t, err)
+			require.Equal(t, first, replayedByID)
+			var after string
+			require.NoError(t, db.Raw("SELECT COALESCE(display_name, '') FROM ci_checkouts WHERE checkout_id = ?", first.CheckoutID).Scan(&after).Error)
+			if realm == "client" {
+				require.Equal(t, "My studio worktree", after)
+			} else {
+				require.Equal(t, labels[first.CheckoutID], after)
+			}
+		})
+	}
+}
+
+func TestRegisterLocalGitLabelBoundsUnsafeCanonicalComponents(t *testing.T) {
+	db, store := openUCIContextMigrationStore(t)
+	input := RegisterLocalGitInput{
+		AuthRealm: uci.NoAuthCodeRealm, Principal: uci.NoAuthCodePrincipal,
+		WorkstationID: "device-one", SourceLabel: "repository",
+		Locator: (&url.URL{Scheme: "file", Path: "/private/" + strings.Repeat("漫", 100) + "/repo\n\u202esecret"}).String(),
+	}
+	registered, err := store.RegisterLocalGit(context.Background(), input)
+	require.NoError(t, err)
+	var label string
+	require.NoError(t, db.Raw("SELECT COALESCE(display_name, '') FROM ci_checkouts WHERE checkout_id = ?", registered.CheckoutID).Scan(&label).Error)
+	require.True(t, validBrowserCodeCheckoutDisplayLabel(label))
+	require.LessOrEqual(t, len(label), 256)
+	require.Contains(t, label, "repo--secret")
+	require.NotContains(t, label, "\n")
+	require.NotContains(t, label, "\u202e")
+	require.NotContains(t, label, "/private/")
+}
+
 func TestRegisterLocalGitUnboundLegacyCheckoutRefusesRecovery(t *testing.T) {
 	for _, withWrongView := range []bool{false, true} {
 		name := "zero_views"

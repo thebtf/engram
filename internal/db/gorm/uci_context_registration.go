@@ -10,6 +10,8 @@ import (
 	"path"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/uci"
@@ -140,15 +142,12 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 		if err := tx.Create(&checkout).Error; err != nil {
 			return fmt.Errorf("register local git checkout: %w", err)
 		}
-		if in.AuthRealm == uci.NoAuthCodeRealm {
-			name := path.Base(in.Locator)
-			fingerprint := sha256.Sum256([]byte(in.WorkstationID))
-			label := fmt.Sprintf("Worktree · %s · Device %x", name, fingerprint[:4])
-			if validBrowserCodeCheckoutDisplayLabel(label) {
-				if err := tx.Model(&UCICheckout{}).Where("checkout_id = ?", checkout.CheckoutID).Update("display_name", label).Error; err != nil {
-					return fmt.Errorf("register local git checkout label: %w", err)
-				}
-			}
+		label := localGitCheckoutDisplayLabel(in.Locator, in.WorkstationID)
+		if !validBrowserCodeCheckoutDisplayLabel(label) {
+			return uci.NewContextError(uci.ContextMismatch, nil)
+		}
+		if err := tx.Model(&UCICheckout{}).Where("checkout_id = ?", checkout.CheckoutID).Update("display_name", label).Error; err != nil {
+			return fmt.Errorf("register local git checkout label: %w", err)
 		}
 		out = RegisteredLocalGit{sourceID, checkout.CheckoutID, checkout.IncarnationID, profile.ProfileID}
 		return nil
@@ -157,6 +156,27 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 		return RegisteredLocalGit{}, err
 	}
 	return out, nil
+}
+
+func localGitCheckoutDisplayLabel(locator, workstationID string) string {
+	parsed, _ := url.Parse(locator) // Locator was canonicalized and validated before registration.
+	component := func(value string) string {
+		var label strings.Builder
+		for _, character := range value {
+			if !unicode.IsLetter(character) && !unicode.IsNumber(character) && !strings.ContainsRune(" ._-+()", character) {
+				character = '-'
+			}
+			if label.Len()+utf8.RuneLen(character) > 64 {
+				break
+			}
+			label.WriteRune(character)
+		}
+		return strings.TrimSpace(label.String())
+	}
+	parent := component(path.Base(path.Dir(parsed.Path)))
+	name := component(path.Base(parsed.Path))
+	fingerprint := sha256.Sum256([]byte(workstationID))
+	return fmt.Sprintf("Worktree · %s › %s · Device %x", parent, name, fingerprint[:4])
 }
 
 func localGitGoProfileDigest() uci.IndexDigest {

@@ -124,7 +124,7 @@ func TestNoAuthCodeRegistrationReplaysAfterStoreRestartWithoutClaimingHistorical
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, first.CheckoutID, entries[0].CheckoutID)
-	require.Contains(t, entries[0].CheckoutLabel, "Worktree · repository · Device ")
+	require.Contains(t, entries[0].CheckoutLabel, "Worktree · local › repository · Device ")
 	require.NotContains(t, entries[0].CheckoutLabel, "file://")
 }
 
@@ -148,8 +148,8 @@ func TestNoAuthCodeSameLocatorDifferentInstallationsKeepDistinctCheckouts(t *tes
 	entries, err := NewBrowserCodeContextStore(db).ListNoAuthCatalog(ctx)
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
-	require.Contains(t, entries[0].CheckoutLabel, "Worktree · worktree · Device ")
-	require.Contains(t, entries[1].CheckoutLabel, "Worktree · worktree · Device ")
+	require.Contains(t, entries[0].CheckoutLabel, "Worktree · absolute › worktree · Device ")
+	require.Contains(t, entries[1].CheckoutLabel, "Worktree · absolute › worktree · Device ")
 	require.NotEqual(t, entries[0].CheckoutLabel, entries[1].CheckoutLabel)
 	require.NotContains(t, entries[0].CheckoutLabel, "file://")
 	require.NotContains(t, entries[1].CheckoutLabel, "file://")
