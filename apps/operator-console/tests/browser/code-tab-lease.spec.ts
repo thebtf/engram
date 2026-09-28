@@ -219,7 +219,42 @@ test('Code Explorer resynchronizes a completed selection after catalog refresh w
   await expect(page.getByTestId('code-context-repository')).toHaveValue('source-other')
   await expect(page.getByTestId('code-context-working-copy')).toHaveValue('')
 })
-test('Code Explorer retains only the same uniquely identified pinned snapshot across rotated catalog references', async ({ page }) => {
+test('watcher publication keeps a server-authorized older pin and results while offering the new View', async ({ page }) => {
+  let published = false
+  const pins: string[] = []
+  const old = { source_ref: 'source', checkout_ref: 'checkout', repository: 'Engram', working_copy: 'Desk', indexed_snapshot: { label: 'Original View' }, view_ref: 'old-view', selection_ref: 'old-choice', index_intent_available: false }
+  const newer = { ...old, indexed_snapshot: { label: 'New View' }, view_ref: 'new-view', selection_ref: 'new-choice' }
+  const context = { source_id: 'source-1', checkout_id: 'checkout-1', view_id: 'view-1', profile_id: 'profile-1', generation: 1 }
+  const item = { ref: { source_id: 'source-1', view_id: 'view-1', entity_key: 'old-result' }, path: 'src/old-view.ts', span: { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }, content_digest: 'digest', kind: 'function', language: 'typescript', excerpt: 'old result', match_sources: ['lexical'], score: 1 }
+  const envelope = { schema: 'engram.code-query/1', status: 'ok', contexts: [context], items: [item], warnings: [], retrieval: { mode: 'lexical' }, freshness: { state: 'observed_current' }, coverage: {}, truncated: false }
+  await page.route('**/api/code/**', async route => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/code/tabs/handshake') await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'resume', reload_token: 'reload' } })
+    else if (path === '/api/code/contexts') await route.fulfill({ json: { contexts: published ? [newer] : [old] } })
+    else if (path.endsWith('/context')) { pins.push(route.request().postDataJSON().selection_ref); await route.fulfill({ status: 204 }) }
+    else if (path === '/api/code/status') await route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { coverage: 'complete' } } })
+    else if (path === '/api/code/structure' || path === '/api/code/search') await route.fulfill({ json: envelope })
+    else await route.fulfill({ status: 500 })
+  })
+  await page.goto('/code')
+  await page.getByTestId('code-context-snapshot').selectOption('old-choice')
+  await page.getByTestId('code-pin-context').click()
+  await page.getByTestId('code-query-input').fill('old result')
+  await page.getByTestId('code-search-submit').click()
+  await expect(page.getByTestId('code-search-results')).toContainText('src/old-view.ts')
+  published = true
+  await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Original View')
+  await expect(page.getByTestId('code-search-results')).toContainText('src/old-view.ts')
+  await expect(page.getByTestId('code-context-snapshot').getByRole('option', { name: 'New View' })).toHaveCount(1)
+  expect(pins).toEqual(['old-choice'])
+  await page.getByTestId('code-context-snapshot').selectOption('new-choice')
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.getByTestId('code-context-pinned')).toContainText('New View')
+  expect(pins).toEqual(['old-choice', 'new-choice'])
+})
+
+test('Code Explorer retains rotated references but drops a historical pin when server reauthorization denies it', async ({ page }) => {
   let catalogReads = 0
   let changedSnapshot = false
   let pins = 0
@@ -240,7 +275,7 @@ test('Code Explorer retains only the same uniquely identified pinned snapshot ac
       pins++
       await route.fulfill({ status: 204 })
     } else if (pathname === '/api/code/status') {
-      await route.fulfill({ json: { total_chunks: 0, embedded_chunks: 0, embedding: { coverage: 'none', job_state: null, error_code: null } } })
+      await route.fulfill(changedSnapshot ? { status: 403 } : { json: { total_chunks: 0, embedded_chunks: 0, embedding: { coverage: 'none', job_state: null, error_code: null } } })
     } else if (pathname === '/api/code/structure') {
       await route.fulfill({ status: 403 })
     } else {

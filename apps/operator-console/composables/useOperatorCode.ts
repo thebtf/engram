@@ -1313,10 +1313,18 @@ export function useOperatorCode() {
         pinnedContext.value = refreshed
         persistPinnedContext(refreshed)
       } else {
-        pinnedContext.value = null
-        clearContextualResults()
-        clearIndexIntent()
-        clearPersistedPinCandidate()
+        // The catalog lists the current View; status reauthorizes this tab's exact historical pin.
+        const check = await request('/code/status', 'POST', payload)
+        if (check.kind === 'success' && parseStatus(check.body) !== null) {
+          if (selected?.viewRef === pinned.viewRef) {
+            contextCandidate.value = catalog.find((entry) => entry.sourceRef === pinned.sourceRef && entry.checkoutRef === pinned.checkoutRef && entry.view !== null)?.view ?? null
+          }
+        } else {
+          pinnedContext.value = null
+          clearContextualResults()
+          clearIndexIntent()
+          clearPersistedPinCandidate()
+        }
       }
     }
   }
