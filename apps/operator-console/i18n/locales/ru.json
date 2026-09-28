@@ -2591,6 +2591,7 @@
       "observed_current": "Актуален",
       "catching_up": "Обновляется",
       "historical": "Старый снимок",
+      "offline": "Офлайн",
       "failed": "Ошибка обновления",
       "unknown": "Неизвестно"
     },

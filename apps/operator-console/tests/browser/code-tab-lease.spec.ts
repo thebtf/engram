@@ -820,3 +820,57 @@ test('identical source and checkout labels retain separate first-index and publi
   }
   expect(pins).toEqual(['view-A', 'view-C', 'view-B'])
 })
+
+test('equal-count names expose minimal unique non-authorizing refs and offline freshness', async ({ page }) => {
+  const firstSource = 'source-prefix-111a-private'
+  const secondSource = 'source-prefix-111b-private'
+  const firstCopy = 'checkout-prefix-222a-private'
+  const secondCopy = 'checkout-prefix-222b-private'
+  const contexts = [
+    { source_ref: firstSource, checkout_ref: firstCopy, repository: 'Engram', working_copy: 'Desk', indexed_snapshot: { label: 'A' }, view_ref: 'view-a', selection_ref: 'selection-a' },
+    { source_ref: firstSource, checkout_ref: secondCopy, repository: 'Engram', working_copy: 'Desk', indexed_snapshot: { label: 'B' }, view_ref: 'view-b', selection_ref: 'selection-b' },
+    { source_ref: secondSource, checkout_ref: 'checkout-other', repository: 'Engram', working_copy: 'Desk', indexed_snapshot: { label: 'C' }, view_ref: 'view-c', selection_ref: 'selection-c' },
+    { source_ref: secondSource, checkout_ref: 'checkout-other-two', repository: 'Engram', working_copy: 'Desk', indexed_snapshot: { label: 'C2' }, view_ref: 'view-c2', selection_ref: 'selection-c2' },
+    { source_ref: 'source-unique', checkout_ref: 'checkout-unique', repository: 'Other', working_copy: 'Unique', indexed_snapshot: { label: 'D' }, view_ref: 'view-d', selection_ref: 'selection-d' },
+    { source_ref: 'source-twins-whole-a', checkout_ref: 'checkout-twin-a', repository: 'Twins', working_copy: 'Twin A', indexed_snapshot: { label: 'E' }, view_ref: 'view-e', selection_ref: 'selection-e' },
+    { source_ref: 'source-twins-whole-b', checkout_ref: 'checkout-twin-b', repository: 'Twins', working_copy: 'Twin B', indexed_snapshot: { label: 'F' }, view_ref: 'view-f', selection_ref: 'selection-f' },
+  ].map(entry => ({ ...entry, index_intent_available: false }))
+  await page.route('**/api/code/**', async route => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/code/tabs/handshake') await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'resume-current', reload_token: 'reload-current' } })
+    else if (pathname === '/api/code/contexts') await route.fulfill({ json: { contexts } })
+    else if (pathname === `/api/code/tabs/${TAB_BINDING_ID}/context`) await route.fulfill({ status: 204 })
+    else if (pathname === '/api/code/status') await route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { Coverage: 'complete' }, freshness: { state: 'offline' } } })
+    else await route.fulfill({ status: 500 })
+  })
+
+  await page.goto('/code')
+  const repositories = page.getByTestId('code-context-repository').locator('option:not([disabled])')
+  await expect(repositories).toHaveCount(5)
+  await expect(repositories.nth(0)).toContainText('· source-prefix-111a')
+  await expect(repositories.nth(1)).toContainText('· source-prefix-111b')
+  await expect(page.getByTestId('code-context-repository').getByRole('option', { name: /source-prefix-111a$/ })).toHaveCount(1)
+  await expect(page.getByTestId('code-context-repository').getByRole('option', { name: /source-prefix-111b$/ })).toHaveCount(1)
+  await expect(repositories.nth(0)).not.toContainText('private')
+  await expect(repositories.nth(2)).toHaveText('Other')
+  await expect(repositories.nth(3)).toContainText('· a')
+  await expect(repositories.nth(4)).toContainText('· b')
+  await expect(repositories.nth(3)).not.toContainText('source-twins-whole-a')
+  await expect(repositories.nth(4)).not.toContainText('source-twins-whole-b')
+  await page.getByTestId('code-context-repository').selectOption(firstSource)
+  const copies = page.getByTestId('code-context-working-copy').locator('option:not([disabled])')
+  await expect(copies).toHaveCount(2)
+  await expect(copies.nth(0)).toContainText('· checkout-prefix-222a')
+  await expect(copies.nth(1)).toContainText('· checkout-prefix-222b')
+  await expect(page.getByTestId('code-context-working-copy').getByRole('option', { name: /checkout-prefix-222a$/ })).toHaveCount(1)
+  await expect(page.getByTestId('code-context-working-copy').getByRole('option', { name: /checkout-prefix-222b$/ })).toHaveCount(1)
+  await expect(copies.nth(0)).not.toContainText('private')
+  await page.getByTestId('code-context-working-copy').selectOption(firstCopy)
+  await page.getByTestId('code-context-snapshot').selectOption('selection-a')
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.getByTestId('code-status').locator('div').nth(2).locator('dd')).toHaveText('Офлайн')
+  await page.locator('.lang').click()
+  await expect(page.getByTestId('code-status').locator('div').nth(2).locator('dd')).toHaveText('Offline')
+  await page.locator('.lang').click()
+  await expect(page.getByTestId('code-status').locator('div').nth(2).locator('dd')).toHaveText('离线')
+})

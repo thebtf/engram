@@ -2586,6 +2586,7 @@
       "observed_current": "最新",
       "catching_up": "正在更新",
       "historical": "旧快照",
+      "offline": "离线",
       "failed": "更新失败",
       "unknown": "未知"
     },

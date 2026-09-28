@@ -2591,6 +2591,7 @@
       "observed_current": "Current",
       "catching_up": "Updating",
       "historical": "Older snapshot",
+      "offline": "Offline",
       "failed": "Update failed",
       "unknown": "Unknown"
     },

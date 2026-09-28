@@ -35,6 +35,27 @@ const duplicateRepositories = computed(() => new Set(repositories.value.filter((
 const duplicateWorkingCopies = computed(() => new Set(workingCopies.value.filter((entry) => workingCopies.value.filter((other) => other.workingCopy === entry.workingCopy).length > 1).map((entry) => entry.workingCopy)))
 function indexedCopies(sourceRef: string): number { return new Set(props.catalog.filter((entry) => entry.sourceRef === sourceRef && entry.view !== null).map((entry) => entry.checkoutRef)).size }
 function indexedSnapshots(checkoutRef: string): number { return props.catalog.filter((entry) => entry.checkoutRef === checkoutRef && entry.view !== null).length }
+function uniquePrefix(ref: string, peers: string[]): string {
+  let length = 1
+  while (length < ref.length && peers.some((other) => other !== ref && other.startsWith(ref.slice(0, length)))) length++
+  if (length < ref.length) return ref.slice(0, length)
+  length = 1
+  while (length < ref.length && peers.some((other) => other !== ref && other.endsWith(ref.slice(-length)))) length++
+  return length < ref.length ? ref.slice(-length) : String(peers.indexOf(ref) + 1)
+}
+function repositoryLabel(entry: CodeCatalogEntry): string {
+  if (!duplicateRepositories.value.has(entry.repository)) return entry.repository
+  const count = indexedCopies(entry.sourceRef)
+  const peers = repositories.value.filter((other) => other.repository === entry.repository && indexedCopies(other.sourceRef) === count)
+  return `${entry.repository} · ${t('codeExplorer.context.indexedCopies', { count })}${peers.length > 1 ? ` · ${uniquePrefix(entry.sourceRef, peers.map((other) => other.sourceRef))}` : ''}`
+}
+function workingCopyLabel(entry: CodeCatalogEntry): string {
+  const label = entry.workingCopy || t('codeExplorer.context.unnamedWorkingCopy')
+  if (!duplicateWorkingCopies.value.has(entry.workingCopy)) return label
+  const count = indexedSnapshots(entry.checkoutRef)
+  const peers = workingCopies.value.filter((other) => other.workingCopy === entry.workingCopy && indexedSnapshots(other.checkoutRef) === count)
+  return `${label} · ${t('codeExplorer.context.indexedSnapshots', { count })}${peers.length > 1 ? ` · ${uniquePrefix(entry.checkoutRef, peers.map((other) => other.checkoutRef))}` : ''}`
+}
 const samePinned = computed(() => props.candidate?.selectionRef === props.pinned?.selectionRef)
 const phaseLabel = computed(() => t(`codeExplorer.context.phases.${props.phase}`))
 const phaseMessage = computed(() => {
@@ -104,14 +125,14 @@ function chooseSnapshot(event: Event): void {
         <span>{{ t('workspace.repository') }}</span>
         <select :value="repository" :disabled="pending" data-testid="code-context-repository" @change="chooseRepository">
           <option value="" disabled>{{ t('codeExplorer.context.chooseRepository') }}</option>
-          <option v-for="entry in repositories" :key="entry.sourceRef" :value="entry.sourceRef">{{ entry.repository }}{{ duplicateRepositories.has(entry.repository) ? ` · ${t('codeExplorer.context.indexedCopies', { count: indexedCopies(entry.sourceRef) })}` : '' }}</option>
+          <option v-for="entry in repositories" :key="entry.sourceRef" :value="entry.sourceRef">{{ repositoryLabel(entry) }}</option>
         </select>
       </label>
       <label class="selector">
         <span>{{ t('workspace.workingCopy') }}</span>
         <select :value="workingCopyChosen ? workingCopy : ''" :disabled="pending || repository === ''" data-testid="code-context-working-copy" @change="chooseWorkingCopy">
           <option value="" disabled>{{ t('codeExplorer.context.chooseWorkingCopy') }}</option>
-          <option v-for="entry in workingCopies" :key="entry.checkoutRef" :value="entry.checkoutRef">{{ entry.workingCopy || t('codeExplorer.context.unnamedWorkingCopy') }}{{ duplicateWorkingCopies.has(entry.workingCopy) ? ` · ${t('codeExplorer.context.indexedSnapshots', { count: indexedSnapshots(entry.checkoutRef) })}` : '' }}</option>
+          <option v-for="entry in workingCopies" :key="entry.checkoutRef" :value="entry.checkoutRef">{{ workingCopyLabel(entry) }}</option>
         </select>
       </label>
       <label class="selector">
