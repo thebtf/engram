@@ -681,7 +681,7 @@ func (collector *parserCollector) bindingNodes(node *tree_sitter.Node) []*tree_s
 		return []*tree_sitter.Node{node}
 	case "assignment_pattern", "object_assignment_pattern":
 		return collector.bindingNodes(node.ChildByFieldName("left"))
-	case "parenthesized_expression":
+	case "parenthesized_expression", "non_null_expression":
 		if node.NamedChildCount() == 1 {
 			return collector.bindingNodes(node.NamedChild(0))
 		}

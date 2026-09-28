@@ -672,7 +672,7 @@ func TestUCITreeSitterWorkerFramesBuiltParserFacts(t *testing.T) {
 		writes   []string
 	}{
 		{"javascript assignments", TreeSitterLanguageJavaScript, "export function helper(x) { return x; }\nexport function caller(x) { helper = x; helper += x; ++helper; ({helper} = x); [helper] = x; return helper(1); }", []string{"helper", "helper", "helper", "helper", "helper"}},
-		{"typescript assignments", TreeSitterLanguageTypeScript, "export function helper(x: number) { return x; }\nexport function caller(x: any) { helper = x; helper &&= x; return helper(1); }", []string{"helper", "helper"}},
+		{"typescript assignments", TreeSitterLanguageTypeScript, "export function helper(x: number) { return x; }\nexport function caller(x: any) { helper = x; helper &&= x; helper! = x; return helper(1); }", []string{"helper", "helper", "helper"}},
 		{"tsx assignments", TreeSitterLanguageTSX, "export function helper(x: number) { return x; }\nexport function caller(x: any) { helper = x; return <span>{helper(1)}</span>; }", []string{"helper"}},
 		{"comments and members", TreeSitterLanguageJavaScript, "export function helper(x) { return x; }\nexport function caller(x) { /* helper = x */ x.helper = 1; return helper(1); }", nil},
 	} {
