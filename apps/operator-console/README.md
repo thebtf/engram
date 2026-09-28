@@ -66,3 +66,6 @@ npm run test:browser:live
 
 Run only the focused commands selected by the active Feature 011 task from the exact bound
 candidate. Mock browser and parity checks are scoped evidence, not complete D-A acceptance.
+The mock Rules selection follows the real browser-session boundary: browser tests set a
+unique `mock-rule-session` cookie before loading Rules so parallel contexts cannot replace
+one another's selected operation. The mock cookie is test-only and grants no authority.
