@@ -2624,6 +2624,10 @@
         "title": "Index failed",
         "body": "The last attempt did not finish. Any previously confirmed snapshot remains available."
       },
+      "offline": {
+        "title": "Snapshot offline",
+        "body": "The Source or Checkout is offline. The pinned snapshot remains available, but its freshness cannot be confirmed until the connection is restored."
+      },
       "unknown": {
         "title": "Freshness unknown",
         "body": "The server did not report whether this snapshot is current."

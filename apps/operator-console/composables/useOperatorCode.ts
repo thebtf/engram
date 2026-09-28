@@ -871,6 +871,7 @@ function clearIndexIntentResume(): void {
 export function useOperatorCode() {
   const bootstrapPhase = ref<CodeBootstrapPhase>('idle')
   const authDisabled = ref(false)
+  const canAdministerGrants = ref(false)
   const bootstrapEvidence = ref<CodeBootstrapEvidence>({ navigationType: 'unknown', openerBefore: false, openerAfter: null, transition: 'idle' })
   const binding = ref<CodeBinding | null>(null)
   const contextCatalog = ref<CodeCatalogEntry[]>([])
@@ -1338,18 +1339,30 @@ export function useOperatorCode() {
     if (pending.value) return
     bootstrapPhase.value = 'binding'
     authDisabled.value = false
+    canAdministerGrants.value = false
     pending.value = true
     const controller = new AbortController()
     authProbeAbort = controller
     const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
     try {
       const response = await fetch(operatorApiUrl('/auth/me'), { credentials: 'include', cache: 'no-store', signal: controller.signal })
-      if (!response.ok) {
+      if (!response.ok && response.status !== 401) {
         bootstrapPhase.value = 'identity-unavailable'
         return
       }
       const identity: unknown = await response.json()
-      authDisabled.value = identity !== null && typeof identity === 'object' && !Array.isArray(identity) && Reflect.get(identity, 'auth_disabled') === true
+      const authDisabledMode = identity !== null && typeof identity === 'object' && !Array.isArray(identity) ? Reflect.get(identity, 'auth_disabled') : null
+      const authenticated = identity !== null && typeof identity === 'object' && !Array.isArray(identity) ? Reflect.get(identity, 'authenticated') : null
+      if (response.status === 401) {
+        bootstrapPhase.value = authDisabledMode === false && authenticated === false ? 'denied' : 'identity-unavailable'
+        return
+      }
+      if (authDisabledMode !== true && (authDisabledMode !== false || authenticated !== true)) {
+        bootstrapPhase.value = 'identity-unavailable'
+        return
+      }
+      authDisabled.value = authDisabledMode
+      canAdministerGrants.value = authDisabledMode === false && window.isSecureContext
     } catch {
       bootstrapPhase.value = 'identity-unavailable'
       return
@@ -1635,6 +1648,7 @@ export function useOperatorCode() {
 
   return {
     authDisabled,
+    canAdministerGrants,
     bootstrapPhase,
     bootstrapEvidence,
     contextCatalog,

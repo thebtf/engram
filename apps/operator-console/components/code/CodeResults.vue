@@ -41,6 +41,7 @@ const readiness = computed(() => {
   if (props.status.totalChunks === 0 && props.status.embeddingJobState !== null) return 'unknown'
   if (props.status.totalChunks === 0) return 'needs-indexing'
   if (props.status.freshnessState === 'historical') return 'newer-snapshot'
+  if (props.status.freshnessState === 'offline') return 'offline'
   if (props.status.coverage !== 'complete' || props.status.embeddedChunks < props.status.totalChunks) return 'degraded'
   return props.status.freshnessState === 'observed_current' ? 'ready' : 'unknown'
 })

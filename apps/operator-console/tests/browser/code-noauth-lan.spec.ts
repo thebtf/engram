@@ -4,7 +4,7 @@ const bindingId = '60000000-0000-4000-8000-000000000041'
 const source = { source_ref: 'source-opaque', checkout_ref: 'checkout-opaque', repository: 'Engram', working_copy: 'Desk A', indexed_snapshot: { label: 'Snapshot A', revision: 'abc123', published_at: '2026-09-27T00:00:00Z' }, view_ref: 'view-opaque', selection_ref: 'selection-opaque', index_intent_available: false }
 const otherSource = { ...source, source_ref: 'source-b', checkout_ref: 'checkout-b', repository: 'Other', working_copy: 'Desk B', indexed_snapshot: { ...source.indexed_snapshot, label: 'Snapshot B' }, view_ref: 'view-b', selection_ref: 'selection-b' }
 
-for (const identity of [{ auth_disabled: true }, { auth_disabled: false }, {}, { authenticated: true }] as const) {
+for (const identity of [{ auth_disabled: true }, { authenticated: true, auth_disabled: false }, { auth_disabled: false }, {}, { authenticated: true }] as const) {
   test(`HTTP LAN workspace honors server identity ${JSON.stringify(identity)}`, async ({ page, baseURL }) => {
     if (!baseURL || /^http:\/\/(?:localhost|127\.|\[::1\])/.test(baseURL)) test.skip(true, 'Requires OPERATOR_CONSOLE_SMOKE_HOST with a real nonloopback interface')
     const requests: string[] = []
@@ -47,8 +47,9 @@ for (const identity of [{ auth_disabled: true }, { auth_disabled: false }, {}, {
       expect(new Set(ids).size).toBe(ids.length)
       expect(ids.every(id => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))).toBe(true)
     } else {
-      await expect(page.locator('.phase')).toHaveAttribute('data-state', 'secure-origin-required')
+      await expect(page.locator('.phase')).toHaveAttribute('data-state', 'auth_disabled' in identity && identity.auth_disabled === false && 'authenticated' in identity && identity.authenticated === true ? 'secure-origin-required' : 'identity-unavailable')
       await expect(page.getByTestId('code-context-working-copy')).toHaveCount(0)
+      await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
       expect(requests).not.toContain('/api/code/tabs/handshake')
       expect(requests).not.toContain('/api/code/contexts')
     }
@@ -87,7 +88,7 @@ test('HTTP LAN cannot rebound a saved noauth tab after server enables authentica
   if (!baseURL || /^http:\/\/(?:localhost|127\.|\[::1\])/.test(baseURL)) test.skip(true, 'Requires OPERATOR_CONSOLE_SMOKE_HOST with a real nonloopback interface')
   let authDisabled = true
   const requests: string[] = []
-  await page.route('**/api/auth/me', async route => route.fulfill({ json: { auth_disabled: authDisabled } }))
+  await page.route('**/api/auth/me', async route => route.fulfill({ json: { authenticated: true, auth_disabled: authDisabled } }))
   await page.route('**/api/code/**', async route => {
     const pathname = new URL(route.request().url()).pathname
     requests.push(pathname)

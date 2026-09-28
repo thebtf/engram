@@ -29,6 +29,49 @@ test('an unresponsive authentication-mode probe expires and allows a safe retry'
   expect(attempts).toBeGreaterThanOrEqual(2)
 })
 
+test('a documented auth-enabled 401 enters denied mode without mounting grants or binding', async ({ page }) => {
+  const codeRequests: string[] = []
+  await page.route('**/api/auth/me', route => route.fulfill({ status: 401, json: { authenticated: false, auth_disabled: false } }))
+  await page.route('**/api/code/**', route => { codeRequests.push(new URL(route.request().url()).pathname); return route.fulfill({ status: 403 }) })
+  await page.goto('/code')
+  await expect(page.locator('.phase')).toHaveAttribute('data-state', 'denied')
+  await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
+  expect(codeRequests).toEqual([])
+})
+
+test('unknown and no-auth mode never mount grant administration', async ({ page }) => {
+  const codeRequests: string[] = []
+  let releaseProbe: () => void = () => { }
+  await page.route('**/api/auth/me', async route => {
+    await new Promise<void>(resolve => { releaseProbe = resolve })
+    await route.fulfill({ json: { authenticated: true, auth_disabled: true } })
+  })
+  await page.route('**/api/code/**', route => {
+    codeRequests.push(new URL(route.request().url()).pathname)
+    if (route.request().url().endsWith('/tabs/handshake')) return route.fulfill({ json: binding })
+    if (route.request().url().endsWith('/contexts')) return route.fulfill({ json: { contexts: [] } })
+    return route.fulfill({ status: 403 })
+  })
+  await page.goto('/code', { waitUntil: 'domcontentloaded' })
+  await expect(page.locator('.phase')).toHaveAttribute('data-state', 'binding')
+  await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
+  expect(codeRequests).toEqual([])
+  releaseProbe()
+  await expect(page.locator('.phase')).toHaveAttribute('data-state', 'ready')
+  await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
+  expect(codeRequests).toEqual(['/api/code/tabs/handshake', '/api/code/contexts'])
+})
+
+test('malformed auth-enabled 401 remains a retryable probe failure without grants', async ({ page }) => {
+  const codeRequests: string[] = []
+  await page.route('**/api/auth/me', route => route.fulfill({ status: 401, json: { authenticated: true, auth_disabled: false } }))
+  await page.route('**/api/code/**', route => { codeRequests.push(route.request().url()); return route.fulfill({ status: 403 }) })
+  await page.goto('/code')
+  await expect(page.locator('.phase')).toHaveAttribute('data-state', 'identity-unavailable')
+  await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
+  expect(codeRequests).toEqual([])
+})
+
 test('an obsolete initialization cannot consume the pinned SPA remount', async ({ page }) => {
   let holdProbes = false
   const releases: Array<() => void> = []
@@ -109,4 +152,23 @@ test('offline freshness renders its translated status instead of an i18n key', a
   await page.getByTestId('code-pin-context').click()
   await expect(page.getByTestId('code-status')).toContainText('Офлайн')
   await expect(page.getByTestId('code-status')).not.toContainText('workspace.freshness.offline')
+})
+
+test('offline freshness has a distinct readiness label, not unknown freshness', async ({ page }) => {
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { authenticated: true, auth_disabled: true } }))
+  await page.route('**/api/code/**', route => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/code/tabs/handshake') return route.fulfill({ json: binding })
+    if (path === '/api/code/contexts') return route.fulfill({ json: { contexts: [entry] } })
+    if (path.endsWith('/context')) return route.fulfill({ status: 204 })
+    if (path === '/api/code/status') return route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { coverage: 'complete', job_state: 'succeeded', error_code: null }, freshness: { state: 'offline' } } })
+    return route.fulfill({ status: 403 })
+  })
+  await page.goto('/code')
+  await page.getByTestId('code-context-snapshot').selectOption('selection')
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.locator('.readiness')).toHaveAttribute('data-state', 'offline')
+  await expect(page.locator('.readiness')).toContainText(/офлайн/i)
+  await expect(page.locator('.readiness')).not.toContainText('Свежесть неизвестна')
+  await expect(page.locator('.readiness')).not.toContainText('workspace.readiness.offline')
 })
