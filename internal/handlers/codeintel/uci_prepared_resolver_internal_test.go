@@ -138,6 +138,11 @@ func TestUCIPreparedIndexResolvesSameFileExportedCalls(t *testing.T) {
 			callerStart := strings.Index(test.body, "export function "+test.caller)
 			callEnd := callStart + len(test.target)
 			call := "call:" + test.target + "@" + strconv.Itoa(callStart) + ":" + strconv.Itoa(callEnd)
+			references := []uci.IndexAdmissionReference{{SiteKey: call, Kind: "call", SymbolKey: string(test.language) + ":" + call, OwnerSymbolKey: &owner, RawTarget: test.target, Relation: uci.IndexRelation("calls"), Span: uci.IndexSpan{ByteStart: int64(callStart), ByteEnd: int64(callEnd)}}}
+			for _, name := range []string{test.target, test.caller} {
+				start := strings.Index(test.body, "function "+name) + len("function ")
+				references = append(references, uci.IndexAdmissionReference{SiteKey: "export:" + name + ":" + name + "@" + strconv.Itoa(start) + ":" + strconv.Itoa(start+len(name)), Kind: "export_alias", RawTarget: name, Relation: uci.IndexRelation("exports"), Span: uci.IndexSpan{ByteStart: int64(start), ByteEnd: int64(start + len(name))}})
+			}
 			files := []uciPreparedAdmissionFile{{
 				path:       test.path,
 				membership: uci.IndexAdmissionMembership{PathKey: test.path, State: uci.IndexAdmissionMembershipPresent, ArtifactID: &artifactID},
@@ -147,7 +152,7 @@ func TestUCIPreparedIndexResolvesSameFileExportedCalls(t *testing.T) {
 						{LocalSymbolKey: "function:" + test.target, Kind: "function", SymbolKey: string(test.language) + ":function:" + test.target, Span: uci.IndexSpan{ByteStart: 0, ByteEnd: int64(callerStart - 1)}},
 						{LocalSymbolKey: owner, Kind: "function", SymbolKey: string(test.language) + ":" + owner, Span: uci.IndexSpan{ByteStart: int64(callerStart), ByteEnd: int64(len(test.body))}},
 					},
-					References: []uci.IndexAdmissionReference{{SiteKey: call, Kind: "call", SymbolKey: string(test.language) + ":" + call, OwnerSymbolKey: &owner, RawTarget: test.target, Relation: uci.IndexRelation("calls"), Span: uci.IndexSpan{ByteStart: int64(callStart), ByteEnd: int64(callEnd)}}},
+					References: references,
 				},
 			}}
 			unresolved, err := uciPreparedAddResolvedTreeSitterEdges(files)
@@ -239,6 +244,10 @@ func TestUCIPreparedIndexLeavesReassignedSameFileCallsUnresolved(t *testing.T) {
 			callStart := strings.LastIndex(test.source, "helper(")
 			callEnd := callStart + len("helper")
 			references := []uci.IndexAdmissionReference{{Kind: "call", SiteKey: "call:helper@" + strconv.Itoa(callStart) + ":" + strconv.Itoa(callEnd), OwnerSymbolKey: &owner, Relation: uci.IndexRelation("calls"), Span: uci.IndexSpan{ByteStart: int64(callStart), ByteEnd: int64(callEnd)}}}
+			for _, name := range []string{"helper", "caller"} {
+				start := strings.Index(test.source, "function "+name) + len("function ")
+				references = append(references, uci.IndexAdmissionReference{Kind: "export_alias", SiteKey: "export:" + name + ":" + name + "@" + strconv.Itoa(start) + ":" + strconv.Itoa(start+len(name)), RawTarget: name, Relation: uci.IndexRelation("exports"), Span: uci.IndexSpan{ByteStart: int64(start), ByteEnd: int64(start + len(name))}})
+			}
 			if test.write != "" {
 				writeStart := strings.Index(test.source, test.write) + strings.Index(test.write, "helper")
 				references = append(references, uci.IndexAdmissionReference{Kind: "binding_write", SiteKey: "binding_write:helper@" + strconv.Itoa(writeStart) + ":" + strconv.Itoa(writeStart+len("helper")), RawTarget: "helper", Relation: uci.IndexRelation("references"), Span: uci.IndexSpan{ByteStart: int64(writeStart), ByteEnd: int64(writeStart + len("helper"))}})
@@ -361,6 +370,84 @@ func TestUCIPreparedIndexBuiltParserDoesNotResolveReboundLocalCalls(t *testing.T
 			require.Len(t, part.EdgeReplacements[0].Edges, 1)
 			require.Equal(t, files[0].edges[0].ResolutionState, part.EdgeReplacements[0].Edges[0].ResolutionState)
 			require.NotNil(t, part.EdgeReplacements[0].Edges[0].Evidence.ReferenceSiteID)
+		})
+	}
+}
+
+func TestUCIPreparedIndexBuiltParserResolvesExportListCallsInPackedGraph(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), "uci-parser")
+	if runtime.GOOS == "windows" {
+		executable += ".exe"
+	}
+	command := exec.Command("go", "build", "-o", executable, "./tools/uci-parser")
+	command.Dir = filepath.Clean(filepath.Join("..", "..", ".."))
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build isolated parser child: %v: %s", err, output)
+	}
+	parser, err := uci.NewTreeSitterWorker(uci.TreeSitterWorkerConfig{
+		ExecutablePath: executable, ExpectedBundleDigest: uci.TreeSitterBundleDigest(),
+		MaxInputBytes: 1 << 20, MaxOutputBytes: 1 << 20, Timeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+	for _, test := range []struct {
+		name, path, source string
+		language           uci.TreeSitterLanguage
+		resolved           bool
+	}{
+		{"javascript", "calls.js", "function helper() { return 1; }\nfunction caller() { return helper(); }\nexport { helper, caller };", uci.TreeSitterLanguageJavaScript, true},
+		{"typescript", "calls.ts", "function helper(n: number) { return n; }\nfunction caller() { return helper(1); }\nexport { helper as exposedHelper, caller as exposedCaller };", uci.TreeSitterLanguageTypeScript, true},
+		{"tsx", "calls.tsx", "function helper() { return 1; }\nfunction caller() { return <span>{helper()}</span>; }\nexport { helper, caller };", uci.TreeSitterLanguageTSX, true},
+		{"exports before definitions", "calls.js", "export { helper, caller };\nfunction helper() { return 1; }\nfunction caller() { return helper(); }", uci.TreeSitterLanguageJavaScript, true},
+		{"direct and list exports", "calls.js", "export function helper() { return 1; }\nfunction caller() { return helper(); }\nexport { caller };", uci.TreeSitterLanguageJavaScript, true},
+		{"default-only target", "calls.js", "export default function helper() { return 1; }\nfunction caller() { return helper(); }\nexport { caller };", uci.TreeSitterLanguageJavaScript, false},
+		{"non-exported callee", "calls.js", "function helper() { return 1; }\nfunction caller() { return helper(); }\nexport { caller };", uci.TreeSitterLanguageJavaScript, false},
+		{"non-exported caller", "calls.js", "function helper() { return 1; }\nfunction caller() { return helper(); }\nexport { helper };", uci.TreeSitterLanguageJavaScript, false},
+		{"type-only export", "calls.ts", "function helper() { return 1; }\nfunction caller() { return helper(); }\nexport type { helper, caller };", uci.TreeSitterLanguageTypeScript, false},
+		{"type-only specifier", "calls.ts", "function helper() { return 1; }\nfunction caller() { return helper(); }\nexport { type helper, caller };", uci.TreeSitterLanguageTypeScript, false},
+		{"ambiguous binding", "calls.js", "function helper() { return 1; }\nconst helper = 2;\nfunction caller() { return helper(); }\nexport { helper, caller };", uci.TreeSitterLanguageJavaScript, false},
+		{"reassigned callee", "calls.js", "function helper() { return 1; }\nfunction caller(n) { helper = n; return helper(); }\nexport { helper, caller };", uci.TreeSitterLanguageJavaScript, false},
+		{"dynamic eval", "calls.js", "function helper() { return 1; }\nfunction caller() { eval('helper = null'); return helper(); }\nexport { helper, caller };", uci.TreeSitterLanguageJavaScript, false},
+		{"nested caller", "calls.js", "function helper() { return 1; }\nfunction caller() { function nested() { return helper(); } return nested(); }\nexport { helper, caller };", uci.TreeSitterLanguageJavaScript, false},
+		{"nested target", "calls.js", "function outer() { function helper() { return 1; } }\nfunction caller() { return helper(); }\nexport { helper, caller };", uci.TreeSitterLanguageJavaScript, false},
+		{"generator", "calls.js", "function* helper() { yield 1; }\nfunction* caller() { yield helper(); }\nexport { helper, caller };", uci.TreeSitterLanguageJavaScript, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body := []byte(test.source)
+			parsed, err := parser.Parse(context.Background(), uci.TreeSitterParseRequest{Language: test.language, ProfileKey: "export-list-graph/v1", Source: body})
+			require.NoError(t, err)
+			if test.name != "ambiguous binding" {
+				require.Equal(t, uci.IndexCoverageComplete, parsed.Coverage, "%+v", parsed.Diagnostics)
+			}
+			profile, err := uci.TreeSitterIndexAdmissionArtifactProfile(test.language, uci.TreeSitterBundleDigest())
+			require.NoError(t, err)
+			artifact, err := uci.NewIndexAdmissionArtifactFromTreeSitter("11111111-1111-4111-8111-111111111111", profile, body, parsed)
+			require.NoError(t, err)
+			id := artifact.ArtifactID
+			files := []uciPreparedAdmissionFile{{path: test.path, membership: uci.IndexAdmissionMembership{PathKey: test.path, DisplayPath: test.path, Mode: "100644", State: uci.IndexAdmissionMembershipPresent, ArtifactID: &id}, artifact: &artifact}}
+			_, err = uciPreparedAddResolvedTreeSitterEdges(files)
+			require.NoError(t, err)
+			frames, _, err := uciPreparedPackFrames("44444444-4444-4444-8444-444444444444", files)
+			require.NoError(t, err)
+			require.NoError(t, uci.ValidateIndexAdmissionFrames(frames))
+			var resolvedCalls int
+			for _, frame := range frames {
+				part, err := frame.PublicationPart()
+				require.NoError(t, err)
+				for _, replacement := range part.EdgeReplacements {
+					for _, edge := range replacement.Edges {
+						if edge.Relation == uci.IndexRelation("calls") && edge.ResolutionState == uci.IndexResolutionState("resolved") {
+							resolvedCalls++
+							require.Equal(t, "function:caller", *edge.SourceSymbolKey)
+							require.Equal(t, "function:helper", *edge.Target.SymbolKey)
+						}
+					}
+				}
+			}
+			if test.resolved {
+				require.Equal(t, 1, resolvedCalls)
+			} else {
+				require.Zero(t, resolvedCalls)
+			}
 		})
 	}
 }
@@ -628,8 +715,13 @@ func TestUCIPreparedIndexBuiltParserRejectsNestedSameKeyCalls(t *testing.T) {
 	require.Contains(t, parsed.Diagnostics, uci.TreeSitterDiagnostic{Code: "DUPLICATE_DEFINITION", Message: "multiple declarations share a parser symbol key"})
 	require.Len(t, parsed.Definitions, 1)
 	require.Equal(t, "function:helper", parsed.Definitions[0].LocalKey)
-	require.Len(t, parsed.References, 1)
-	require.Equal(t, "function:helper", parsed.References[0].OwnerLocalKey)
+	var callCount int
+	for _, reference := range parsed.References {
+		if reference.Kind == "call" && reference.OwnerLocalKey == "function:helper" {
+			callCount++
+		}
+	}
+	require.Equal(t, 1, callCount)
 	profile, err := uci.TreeSitterIndexAdmissionArtifactProfile(uci.TreeSitterLanguageJavaScript, uci.TreeSitterBundleDigest())
 	require.NoError(t, err)
 	artifact, err := uci.NewIndexAdmissionArtifactFromTreeSitter("11111111-1111-4111-8111-111111111111", profile, body, parsed)

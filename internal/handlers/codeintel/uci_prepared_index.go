@@ -1167,22 +1167,28 @@ func uciPreparedTreeSitterDirectLocalCallTarget(file *uciPreparedAdmissionFile, 
 		}
 	}
 	if callee == nil || callee.Kind != "function" || callee.Span.ByteStart < 0 || callee.Span.ByteEnd > int64(len(body)) ||
-		callee.Span.ByteStart >= callee.Span.ByteEnd {
+		callee.Span.ByteStart >= callee.Span.ByteEnd || !uciPreparedTreeSitterTopLevelFunction(file.artifact, callee) {
 		return uciPreparedTreeSitterTarget{}, false
 	}
-	if !bytes.HasPrefix(body[callee.Span.ByteStart:callee.Span.ByteEnd], []byte("export ")) {
+	calleeExported, calleeDirect := uciPreparedTreeSitterFunctionExport(file.artifact, callee)
+	if !calleeExported {
+		return uciPreparedTreeSitterTarget{}, false
+	}
+	if _, ok := uciPreparedTreeSitterFunctionOpen(body[callee.Span.ByteStart:callee.Span.ByteEnd], local, calleeDirect); !ok {
 		return uciPreparedTreeSitterTarget{}, false
 	}
 	if caller == nil || caller.Kind != "function" || caller.Span.ByteStart < 0 || caller.Span.ByteEnd > int64(len(body)) ||
-		caller.Span.ByteStart >= reference.Span.ByteStart || caller.Span.ByteEnd < reference.Span.ByteEnd {
+		caller.Span.ByteStart >= reference.Span.ByteStart || caller.Span.ByteEnd < reference.Span.ByteEnd ||
+		!uciPreparedTreeSitterTopLevelFunction(file.artifact, caller) {
+		return uciPreparedTreeSitterTarget{}, false
+	}
+	callerExported, callerDirect := uciPreparedTreeSitterFunctionExport(file.artifact, caller)
+	if !callerExported {
 		return uciPreparedTreeSitterTarget{}, false
 	}
 	declaration := body[caller.Span.ByteStart:caller.Span.ByteEnd]
-	if !bytes.HasPrefix(declaration, []byte("export ")) {
-		return uciPreparedTreeSitterTarget{}, false
-	}
-	open := bytes.IndexByte(declaration, '(')
-	if open < 0 || bytes.ContainsAny(declaration[:open], "</") {
+	open, ok := uciPreparedTreeSitterFunctionOpen(declaration, strings.TrimPrefix(caller.LocalSymbolKey, "function:"), callerDirect)
+	if !ok || bytes.ContainsAny(declaration[:open], "</") {
 		return uciPreparedTreeSitterTarget{}, false
 	}
 	parameters := declaration[open+1:]
@@ -1205,6 +1211,29 @@ func uciPreparedTreeSitterDirectLocalCallTarget(file *uciPreparedAdmissionFile, 
 		}
 	}
 	return matches[0], true
+}
+
+func uciPreparedTreeSitterTopLevelFunction(artifact *uci.IndexAdmissionArtifact, definition *uci.IndexAdmissionDefinition) bool {
+	for _, other := range artifact.Definitions {
+		if other.Kind == "function" && other.LocalSymbolKey != definition.LocalSymbolKey &&
+			other.Span.ByteStart < definition.Span.ByteStart && other.Span.ByteEnd >= definition.Span.ByteEnd {
+			return false
+		}
+	}
+	return true
+}
+
+func uciPreparedTreeSitterFunctionExport(artifact *uci.IndexAdmissionArtifact, definition *uci.IndexAdmissionDefinition) (bool, bool) {
+	name := strings.TrimPrefix(definition.LocalSymbolKey, "function:")
+	for _, reference := range artifact.References {
+		imported, exportedName, ok := uciPreparedTreeSitterExportAlias(reference)
+		if ok && imported == name && (reference.RawTarget == name || reference.RawTarget == name+" as "+exportedName) && reference.Relation == uci.IndexRelation("exports") &&
+			(reference.Span.ByteStart >= definition.Span.ByteStart && reference.Span.ByteEnd <= definition.Span.ByteEnd ||
+				reference.Span.ByteEnd <= definition.Span.ByteStart || reference.Span.ByteStart >= definition.Span.ByteEnd) {
+			return true, reference.Span.ByteStart >= definition.Span.ByteStart && reference.Span.ByteEnd <= definition.Span.ByteEnd
+		}
+	}
+	return false, false
 }
 
 func uciPreparedTreeSitterFunctionOpen(declaration []byte, name string, exported bool) (int, bool) {
@@ -1283,6 +1312,17 @@ func uciPreparedAddTreeSitterExportEdges(file *uciPreparedAdmissionFile, definit
 	for _, reference := range file.artifact.References {
 		imported, _, ok := uciPreparedTreeSitterExportAlias(reference)
 		if !ok {
+			continue
+		}
+		var direct bool
+		for _, definition := range file.artifact.Definitions {
+			if definition.LocalSymbolKey == "function:"+imported && definition.Kind == "function" &&
+				reference.Span.ByteStart >= definition.Span.ByteStart && reference.Span.ByteEnd <= definition.Span.ByteEnd {
+				direct = true
+				break
+			}
+		}
+		if direct {
 			continue
 		}
 		matches := definitions[file.path][imported]

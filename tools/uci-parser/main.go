@@ -288,6 +288,7 @@ type parserScope struct {
 	namespace      []string
 	importSource   string
 	reexportSource string
+	typeOnlyExport bool
 }
 
 type parserCollector struct {
@@ -350,6 +351,7 @@ func (collector *parserCollector) walk(cursor *tree_sitter.TreeCursor, scope par
 	if node.Kind() == "export_statement" {
 		next.reexportSource = moduleSource(node.ChildByFieldName("source"), collector.source)
 		next.importSource = ""
+		next.typeOnlyExport = parserTypeOnlyExport(node)
 	}
 	if definition, found := collector.definition(node, scope, node); found {
 		next = advanceScope(next, definition)
@@ -363,6 +365,15 @@ func (collector *parserCollector) walk(cursor *tree_sitter.TreeCursor, scope par
 		}
 		cursor.GotoParent()
 	}
+}
+
+func parserTypeOnlyExport(node *tree_sitter.Node) bool {
+	for index := uint(0); index < node.ChildCount(); index++ {
+		if node.Child(index).Kind() == "type" {
+			return true
+		}
+	}
+	return false
 }
 
 func (collector *parserCollector) collectExportDefinition(exportNode *tree_sitter.Node, scope parserScope) {
@@ -385,6 +396,14 @@ func (collector *parserCollector) collectExportDefinition(exportNode *tree_sitte
 	}
 	if definition, found := collector.definition(declaration, scope, exportNode); found {
 		collector.addDefinition(definition)
+		if previous, exists := collector.definitionKeys[definition.SymbolKey]; definition.Kind == "function" && scope.ownerLocalKey == "" && len(scope.namespace) == 0 && exists && previous == definition.Span {
+			for index := uint(0); index < exportNode.ChildCount(); index++ {
+				if exportNode.Child(index).Kind() == "default" {
+					return
+				}
+			}
+			collector.addReference("export_alias", "export:"+definition.Name+":"+definition.Name, "", definition.Name, uci.TreeSitterResolutionSyntaxOnly, declaration.ChildByFieldName("name"))
+		}
 	}
 }
 
@@ -498,6 +517,9 @@ func (collector *parserCollector) collectReference(node *tree_sitter.Node, scope
 			collector.addReference("reexport", "reexport:"+source, "", source, uci.TreeSitterResolutionPartial, node)
 		}
 	case "export_specifier", "namespace_export":
+		if scope.typeOnlyExport || parserTypeOnlyExport(node) {
+			return
+		}
 		imported, local := aliasNames(nodeText(node, collector.source))
 		if imported == "" || local == "" {
 			return
