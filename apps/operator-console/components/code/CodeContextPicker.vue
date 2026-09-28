@@ -171,7 +171,7 @@ function chooseSnapshot(event: Event): void {
 
     <div class="actions">
       <button class="btn" type="button" :disabled="pending" @click="emit('refresh')">{{ t('codeExplorer.context.refresh') }}</button>
-      <button v-if="phase === 'reload-pending'" class="btn" type="button" :disabled="pending" data-testid="code-retry-reload" @click="emit('retry')">{{ t('codeExplorer.context.retryReload') }}</button>
+      <button v-if="phase === 'reload-pending' || phase === 'identity-unavailable'" class="btn" type="button" :disabled="pending" :data-testid="phase === 'identity-unavailable' ? 'code-retry-identity' : 'code-retry-reload'" @click="emit('retry')">{{ phase === 'identity-unavailable' ? t('codeExplorer.context.retryIdentity') : t('codeExplorer.context.retryReload') }}</button>
       <button class="btn primary" type="button" :disabled="pending || candidate === null || samePinned" data-testid="code-pin-context" @click="emit('pin')">
         {{ samePinned ? t('codeExplorer.context.pinned') : pinned === null ? t('codeExplorer.context.pin') : t('codeExplorer.context.switch') }}
       </button>
@@ -199,7 +199,7 @@ function chooseSnapshot(event: Event): void {
 h2 { margin:0; color:var(--fg); font-size:var(--text-sm); font-weight:800; }
 .section-head p, .message, .empty p, .no-view p, .pinned { margin:4px 0 0; color:var(--muted); font-size:var(--text-sm); }
 .phase { border:1px solid var(--border); border-radius:var(--radius-pill); padding:4px 8px; color:var(--fg-2); font-size:var(--text-xs); white-space:nowrap; }
-.phase[data-state='collision'], .phase[data-state='ambiguous'], .phase[data-state='reload-pending'] { border-color:color-mix(in oklab,var(--warn),transparent 35%); color:var(--warn); }
+.phase[data-state='collision'], .phase[data-state='ambiguous'], .phase[data-state='reload-pending'], .phase[data-state='identity-unavailable'] { border-color:color-mix(in oklab,var(--warn),transparent 35%); color:var(--warn); }
 .selectors { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
 .selector { display:grid; gap:5px; min-width:0; }
 .selector > span, dt { color:var(--muted); font-size:var(--text-xs); font-weight:700; letter-spacing:.04em; text-transform:uppercase; }

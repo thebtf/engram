@@ -54,3 +54,58 @@ for (const identity of [{ auth_disabled: true }, { auth_disabled: false }, {}, {
     }
   })
 }
+
+test('HTTP LAN waits for a confirmed noauth identity after transient 503', async ({ page, baseURL }) => {
+  if (!baseURL || /^http:\/\/(?:localhost|127\.|\[::1\])/.test(baseURL)) test.skip(true, 'Requires OPERATOR_CONSOLE_SMOKE_HOST with a real nonloopback interface')
+  let recovered = false
+  let identities = 0
+  const requests: string[] = []
+  await page.route('**/api/auth/me', async route => {
+    identities++
+    await route.fulfill(recovered ? { json: { auth_disabled: true } } : { status: 503 })
+  })
+  await page.route('**/api/code/**', async route => {
+    const pathname = new URL(route.request().url()).pathname
+    requests.push(pathname)
+    if (pathname === '/api/code/tabs/handshake') await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: bindingId, document_proof: 'proof', resume_nonce: 'resume', reload_token: 'reload' } })
+    else if (pathname === '/api/code/contexts') await route.fulfill({ json: { contexts: [source] } })
+    else await route.fulfill({ status: 500 })
+  })
+  await page.goto('/code?auth_disabled=true')
+  expect(await page.evaluate(() => window.isSecureContext)).toBe(false)
+  await expect(page.locator('.phase')).toHaveAttribute('data-state', 'identity-unavailable')
+  await expect(page.getByTestId('code-retry-identity')).toBeVisible()
+  expect(requests).toEqual([])
+  recovered = true
+  await page.getByTestId('code-retry-identity').click()
+  await expect(page.getByTestId('code-context-snapshot').getByRole('option', { name: 'Snapshot A' })).toHaveCount(1)
+  expect(identities).toBeGreaterThanOrEqual(2)
+  expect(requests).toEqual(['/api/code/tabs/handshake', '/api/code/contexts'])
+})
+
+test('HTTP LAN cannot rebound a saved noauth tab after server enables authentication', async ({ page, baseURL }) => {
+  if (!baseURL || /^http:\/\/(?:localhost|127\.|\[::1\])/.test(baseURL)) test.skip(true, 'Requires OPERATOR_CONSOLE_SMOKE_HOST with a real nonloopback interface')
+  let authDisabled = true
+  const requests: string[] = []
+  await page.route('**/api/auth/me', async route => route.fulfill({ json: { auth_disabled: authDisabled } }))
+  await page.route('**/api/code/**', async route => {
+    const pathname = new URL(route.request().url()).pathname
+    requests.push(pathname)
+    if (pathname === '/api/code/tabs/handshake') await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: bindingId, document_proof: 'proof', resume_nonce: 'resume', reload_token: 'reload' } })
+    else if (pathname === '/api/code/contexts') await route.fulfill({ json: { contexts: [source] } })
+    else if (pathname === `/api/code/tabs/${bindingId}/context`) await route.fulfill({ status: 204 })
+    else if (pathname === '/api/code/status') await route.fulfill({ json: { total_chunks: 0, embedded_chunks: 0, embedding: { coverage: 'none', job_state: null, error_code: null } } })
+    else if (pathname === '/api/code/structure') await route.fulfill({ status: 403 })
+    else await route.fulfill({ status: 204 })
+  })
+  await page.goto('/code')
+  await page.getByTestId('code-context-snapshot').selectOption('selection-opaque')
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.getByTestId('code-context-pinned')).toBeVisible()
+  authDisabled = false
+  await page.reload()
+  await expect(page.locator('.phase')).toHaveAttribute('data-state', 'secure-origin-required')
+  await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+  expect(requests.filter(path => path === '/api/code/tabs/resume')).toHaveLength(0)
+  expect(requests.filter(path => path === '/api/code/tabs/handshake')).toHaveLength(1)
+})

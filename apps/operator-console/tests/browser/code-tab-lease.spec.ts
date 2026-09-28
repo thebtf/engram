@@ -343,7 +343,7 @@ test('Reload restores only a unique View candidate, not a server pin, and uses t
   await page.getByTestId('code-context-snapshot').selectOption('old-a')
   await page.getByTestId('code-pin-context').click()
   await expect(page.getByTestId('code-context-pinned')).toBeVisible()
-  expect(await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))).toBe('view-a')
+  expect(JSON.parse((await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))) ?? 'null')).toEqual({ sourceRef: 'source', checkoutRef: 'checkout', viewRef: 'view-a' })
   rotated = true
   await page.reload()
   await expect(page.getByTestId('code-context-candidate')).toBeVisible()
@@ -357,6 +357,48 @@ test('Reload restores only a unique View candidate, not a server pin, and uses t
   await expect(page.getByTestId('code-context-candidate')).toHaveCount(0)
   await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
   expect(await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))).toBeNull()
+})
+
+for (const rotatedSource of [false, true]) test(`Lost noauth binding requires explicit re-pin with ${rotatedSource ? 'rotated' : 'unchanged'} Source/Checkout/View`, async ({ page }) => {
+  let restarted = false
+  const requests: string[] = []
+  const pins: unknown[] = []
+  const current = { source_ref: 'source-old', checkout_ref: 'checkout-old', repository: 'Engram', working_copy: 'Old desk', indexed_snapshot: { label: 'Old snapshot' }, view_ref: 'view-old', selection_ref: 'selection-old', index_intent_available: false }
+  const fresh = { ...current, ...(rotatedSource ? { source_ref: 'source-fresh', checkout_ref: 'checkout-fresh' } : {}), working_copy: 'Fresh desk', selection_ref: 'selection-fresh', indexed_snapshot: { label: 'Fresh snapshot' } }
+  await page.route('**/api/auth/me', async route => route.fulfill({ json: { auth_disabled: true } }))
+  await page.route('**/api/code/**', async (route: Route) => {
+    const pathname = new URL(route.request().url()).pathname
+    requests.push(pathname)
+    if (pathname === '/api/code/tabs/resume') await route.fulfill({ status: 403 })
+    else if (pathname === '/api/code/tabs/handshake') {
+      const body = route.request().postDataJSON()
+      if (restarted) expect(body).not.toHaveProperty('copied_tab_binding_id')
+      await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: restarted ? 'fresh-binding' : TAB_BINDING_ID, document_proof: restarted ? 'fresh-proof' : DOCUMENT_PROOF, resume_nonce: 'resume', reload_token: 'reload' } })
+    } else if (pathname === '/api/code/contexts') await route.fulfill({ json: { contexts: restarted ? [fresh] : [current] } })
+    else if (pathname.endsWith('/context')) { pins.push(route.request().postDataJSON()); await route.fulfill({ status: 204 }) }
+    else if (pathname === '/api/code/status') await route.fulfill({ json: { total_chunks: 0, embedded_chunks: 0, embedding: { coverage: 'none', job_state: null, error_code: null } } })
+    else if (pathname === '/api/code/structure') await route.fulfill({ status: 403 })
+    else await route.fulfill({ status: 204 })
+  })
+
+  await page.goto('/code')
+  await page.getByTestId('code-context-snapshot').selectOption('selection-old')
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Old desk')
+  restarted = true
+  await page.reload()
+  await expect(page.locator('.phase')).toHaveAttribute('data-state', 'ready')
+  await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+  await expect(page.getByTestId('code-context-candidate')).toHaveCount(rotatedSource ? 0 : 1)
+  await expect(page.getByTestId('code-context-working-copy').getByRole('option', { name: 'Fresh desk' })).toHaveCount(1)
+  if (rotatedSource) await expect.poll(() => page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))).toBeNull()
+  expect(requests.filter(path => path === '/api/code/tabs/resume')).toHaveLength(1)
+  expect(requests.filter(path => path === '/api/code/tabs/handshake')).toHaveLength(2)
+  expect(pins).toEqual([{ document_proof: DOCUMENT_PROOF, selection_ref: 'selection-old' }])
+  if (rotatedSource) await page.getByTestId('code-context-snapshot').selectOption('selection-fresh')
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Fresh desk')
+  expect(pins).toEqual([{ document_proof: DOCUMENT_PROOF, selection_ref: 'selection-old' }, { document_proof: 'fresh-proof', selection_ref: 'selection-fresh' }])
 })
 
 

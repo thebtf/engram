@@ -2267,6 +2267,7 @@
       "selectedPrompt": "检查选中的视图，然后明确为此文档固定它。",
       "refresh": "刷新已授权的选项",
       "retryReload": "重试标签页绑定",
+      "retryIdentity": "重试服务器身份检查",
       "pin": "固定选中的视图",
       "switch": "切换到选中的视图",
       "pinned": "已由服务器固定",
@@ -2298,6 +2299,7 @@
         "reload-pending": "等待重新加载",
         "denied": "绑定被拒绝",
         "secure-origin-required": "需要 HTTPS",
+        "identity-unavailable": "服务器不可用",
         "error": "绑定出错"
       },
       "messages": {
@@ -2309,7 +2311,8 @@
         "reload-pending": "先前的文档租约仍有效。请等待关闭或到期后重试。",
         "denied": "服务器拒绝此浏览器绑定。",
         "error": "服务器无法建立浏览器绑定。请检查连接和浏览器加密功能。",
-        "secure-origin-required": "当前 HTTP 地址无法建立安全的浏览器绑定。请通过服务器配置的 HTTPS 地址打开控制台并以本人身份登录；索引和读取需要服务器授予的 Source/Checkout 权限。不安全的标志或手动输入的 ID 均不能代替授权。"
+        "secure-origin-required": "当前 HTTP 地址无法建立安全的浏览器绑定。请通过服务器配置的 HTTPS 地址打开控制台并以本人身份登录；索引和读取需要服务器授予的 Source/Checkout 权限。不安全的标志或手动输入的 ID 均不能代替授权。",
+        "identity-unavailable": "服务器未确认身份验证模式。请检查连接并重试；尚未请求工作区绑定。"
       }
     },
     "results": {
