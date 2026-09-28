@@ -499,6 +499,15 @@ func (collector *parserCollector) collectReference(node *tree_sitter.Node, scope
 			return
 		}
 		collector.addReference("export_alias", "export:"+imported+":"+local, "", imported, uci.TreeSitterResolutionSyntaxOnly, node)
+	case "assignment_expression", "augmented_assignment_expression", "update_expression":
+		field := "left"
+		if node.Kind() == "update_expression" {
+			field = "argument"
+		}
+		for _, binding := range collector.bindingNodes(node.ChildByFieldName(field)) {
+			name := nodeText(binding, collector.source)
+			collector.addReference("binding_write", "binding_write:"+name, scope.ownerLocalKey, name, uci.TreeSitterResolutionSyntaxOnly, binding)
+		}
 	case "call_expression", "new_expression":
 		callee := node.ChildByFieldName("function")
 		if callee == nil && node.NamedChildCount() > 0 {
@@ -672,6 +681,11 @@ func (collector *parserCollector) bindingNodes(node *tree_sitter.Node) []*tree_s
 		return []*tree_sitter.Node{node}
 	case "assignment_pattern", "object_assignment_pattern":
 		return collector.bindingNodes(node.ChildByFieldName("left"))
+	case "parenthesized_expression":
+		if node.NamedChildCount() == 1 {
+			return collector.bindingNodes(node.NamedChild(0))
+		}
+		return nil
 	case "pair_pattern":
 		return collector.bindingNodes(node.ChildByFieldName("value"))
 	case "array_pattern", "object_pattern", "rest_pattern":

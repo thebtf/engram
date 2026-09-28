@@ -3114,7 +3114,7 @@ func indexAdmissionTreeSitterReferenceRelation(kind string) (IndexRelation, erro
 		return IndexRelation("exports"), nil
 	case "call":
 		return IndexRelation("calls"), nil
-	case "jsx_reference", "reference":
+	case "jsx_reference", "reference", "binding_write":
 		return IndexRelation("references"), nil
 	default:
 		return "", fmt.Errorf("uci index admission: unsupported Tree-sitter reference kind %q", kind)

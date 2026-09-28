@@ -28,7 +28,7 @@ import (
 const (
 	// TreeSitterWorkerProtocolVersion is the single framed child-process protocol.
 	TreeSitterWorkerProtocolVersion           = "uci-tree-sitter/v2"
-	TreeSitterFactsExtractionContractRevision = "uci-tree-sitter-facts/v2"
+	TreeSitterFactsExtractionContractRevision = "uci-tree-sitter-facts/v3"
 	TreeSitterBundleSchemaRevision            = "uci-tree-sitter-bundle/v2"
 	treeSitterWorkerMaxIdentifierBytes        = 4 << 10
 	treeSitterWorkerHardMaxInputBytes         = 4 << 20
@@ -754,7 +754,10 @@ func treeSitterReferenceValid(source []byte, lineStarts []int, reference TreeSit
 		treeSitterReferenceKindValid(reference.Kind) && treeSitterBoundedText(reference.SymbolKey, treeSitterWorkerMaxIdentifierBytes) &&
 		treeSitterBoundedText(reference.LocalKey, treeSitterWorkerMaxIdentifierBytes) && treeSitterBoundedText(reference.OwnerLocalKey, treeSitterWorkerMaxIdentifierBytes) &&
 		treeSitterBoundedText(reference.RawTarget, treeSitterWorkerMaxIdentifierBytes) && treeSitterReferenceResolutionValid(reference.Resolution) &&
-		treeSitterSpanValid(source, lineStarts, reference.Span, false) && treeSitterReferenceSiteIdentityValid(reference)
+		treeSitterSpanValid(source, lineStarts, reference.Span, false) && treeSitterReferenceSiteIdentityValid(reference) &&
+		(reference.Kind != "binding_write" || reference.Resolution == TreeSitterResolutionSyntaxOnly &&
+			reference.LocalKey == TreeSitterReferenceSiteKey("binding_write:"+reference.RawTarget, reference.Span) &&
+			bytes.Equal(source[reference.Span.ByteStart:reference.Span.ByteEnd], []byte(reference.RawTarget)))
 }
 
 func treeSitterValidateDiagnostics(source []byte, lineStarts []int, diagnostics []TreeSitterDiagnostic) error {
@@ -856,7 +859,7 @@ func treeSitterDefinitionNameSourceValid(source []byte, definition TreeSitterDef
 
 func treeSitterReferenceKindValid(kind string) bool {
 	switch kind {
-	case "import", "import_alias", "reexport", "reexport_alias", "export_alias", "call", "reference", "jsx_reference":
+	case "import", "import_alias", "reexport", "reexport_alias", "export_alias", "call", "reference", "jsx_reference", "binding_write":
 		return true
 	default:
 		return false

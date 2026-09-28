@@ -1,9 +1,14 @@
 package codeintel
 
 import (
+	"context"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/uci"
@@ -137,7 +142,7 @@ func TestUCIPreparedIndexResolvesSameFileExportedCalls(t *testing.T) {
 				path:       test.path,
 				membership: uci.IndexAdmissionMembership{PathKey: test.path, State: uci.IndexAdmissionMembershipPresent, ArtifactID: &artifactID},
 				artifact: &uci.IndexAdmissionArtifact{
-					ArtifactID: artifactID, Body: []byte(test.body), Profile: uci.IndexAdmissionArtifactProfile{Language: test.language},
+					ArtifactID: artifactID, Body: []byte(test.body), Status: uci.IndexAdmissionArtifactComplete, Profile: uci.IndexAdmissionArtifactProfile{Language: test.language},
 					Definitions: []uci.IndexAdmissionDefinition{
 						{LocalSymbolKey: "function:" + test.target, Kind: "function", SymbolKey: string(test.language) + ":function:" + test.target, Span: uci.IndexSpan{ByteStart: 0, ByteEnd: int64(callerStart - 1)}},
 						{LocalSymbolKey: owner, Kind: "function", SymbolKey: string(test.language) + ":" + owner, Span: uci.IndexSpan{ByteStart: int64(callerStart), ByteEnd: int64(len(test.body))}},
@@ -158,6 +163,12 @@ func TestUCIPreparedIndexResolvesSameFileExportedCalls(t *testing.T) {
 			require.Equal(t, test.path, edge.Target.PathKey)
 			require.Equal(t, artifactID, edge.Target.ArtifactID)
 			require.Equal(t, "function:"+test.target, *edge.Target.SymbolKey)
+			files[0].edges = nil
+			files[0].artifact.Status = uci.IndexAdmissionArtifactPartial
+			unresolved, err = uciPreparedAddResolvedTreeSitterEdges(files)
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), unresolved)
+			require.Empty(t, files[0].edges)
 		})
 	}
 }
@@ -194,7 +205,7 @@ func TestUCIPreparedIndexDoesNotGuessShadowedOrDynamicLocalCalls(t *testing.T) {
 			files := []uciPreparedAdmissionFile{{
 				path: "caller.js", membership: uci.IndexAdmissionMembership{PathKey: "caller.js", State: uci.IndexAdmissionMembershipPresent, ArtifactID: &artifactID},
 				artifact: &uci.IndexAdmissionArtifact{
-					ArtifactID: artifactID, Body: []byte(test.source), Profile: uci.IndexAdmissionArtifactProfile{Language: uci.IndexAdmissionLanguageJavaScript}, Definitions: definitions,
+					ArtifactID: artifactID, Body: []byte(test.source), Status: uci.IndexAdmissionArtifactComplete, Profile: uci.IndexAdmissionArtifactProfile{Language: uci.IndexAdmissionLanguageJavaScript}, Definitions: definitions,
 					References: []uci.IndexAdmissionReference{{Kind: test.kind, SiteKey: test.site + "@" + strconv.Itoa(callStart) + ":" + strconv.Itoa(callEnd), OwnerSymbolKey: &owner, RawTarget: test.raw, Relation: uci.IndexRelation("calls"), Span: uci.IndexSpan{ByteStart: int64(callStart), ByteEnd: int64(callEnd)}}},
 				},
 			}}
@@ -204,6 +215,105 @@ func TestUCIPreparedIndexDoesNotGuessShadowedOrDynamicLocalCalls(t *testing.T) {
 				require.Equal(t, uint64(1), unresolved)
 			}
 			require.Empty(t, files[0].edges)
+		})
+	}
+}
+
+func TestUCIPreparedIndexLeavesReassignedSameFileCallsUnresolved(t *testing.T) {
+	for _, test := range []struct {
+		name, path, source, write string
+		language                  uci.IndexAdmissionLanguage
+		resolved                  bool
+	}{
+		{"javascript", "calls.js", "export function helper(x) { return x; }\nexport function caller(x) { helper = x; return helper(1); }", "helper = x", uci.IndexAdmissionLanguageJavaScript, false},
+		{"typescript", "calls.ts", "export function helper(x: number): number { return x; }\nexport function caller(x: any) { helper = x; return helper(1); }", "helper = x", uci.IndexAdmissionLanguageTypeScript, false},
+		{"tsx", "calls.tsx", "export function helper(x: number): number { return x; }\nexport function caller(x: any) { helper = x; return <span>{helper(1)}</span>; }", "helper = x", uci.IndexAdmissionLanguageTSX, false},
+		{"compound write", "calls.js", "export function helper(x) { return x; }\nexport function caller(x) { helper += x; return helper(1); }", "helper += x", uci.IndexAdmissionLanguageJavaScript, false},
+		{"destructuring write", "calls.js", "export function helper(x) { return x; }\nexport function caller(x) { ({helper} = x); return helper(1); }", "{helper} = x", uci.IndexAdmissionLanguageJavaScript, false},
+		{"comment is not write", "calls.js", "export function helper(x) { return x; }\nexport function caller(x) { /* helper = x */ return helper(1); }", "", uci.IndexAdmissionLanguageJavaScript, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			artifactID := "11111111-1111-4111-8111-111111111111"
+			owner := "function:caller"
+			callerStart := strings.Index(test.source, "export function caller")
+			callStart := strings.LastIndex(test.source, "helper(")
+			callEnd := callStart + len("helper(")
+			references := []uci.IndexAdmissionReference{{Kind: "call", SiteKey: "call:helper@" + strconv.Itoa(callStart) + ":" + strconv.Itoa(callEnd), OwnerSymbolKey: &owner, Relation: uci.IndexRelation("calls"), Span: uci.IndexSpan{ByteStart: int64(callStart), ByteEnd: int64(callEnd)}}}
+			if test.write != "" {
+				writeStart := strings.Index(test.source, test.write) + strings.Index(test.write, "helper")
+				references = append(references, uci.IndexAdmissionReference{Kind: "binding_write", SiteKey: "binding_write:helper@" + strconv.Itoa(writeStart) + ":" + strconv.Itoa(writeStart+len("helper")), RawTarget: "helper", Relation: uci.IndexRelation("references"), Span: uci.IndexSpan{ByteStart: int64(writeStart), ByteEnd: int64(writeStart + len("helper"))}})
+			}
+			files := []uciPreparedAdmissionFile{{
+				path: test.path, membership: uci.IndexAdmissionMembership{PathKey: test.path, State: uci.IndexAdmissionMembershipPresent, ArtifactID: &artifactID},
+				artifact: &uci.IndexAdmissionArtifact{
+					ArtifactID: artifactID, Body: []byte(test.source), Status: uci.IndexAdmissionArtifactComplete, Profile: uci.IndexAdmissionArtifactProfile{Language: test.language},
+					Definitions: []uci.IndexAdmissionDefinition{
+						{LocalSymbolKey: "function:helper", Kind: "function", Span: uci.IndexSpan{ByteStart: 0, ByteEnd: int64(callerStart - 1)}},
+						{LocalSymbolKey: owner, Kind: "function", Span: uci.IndexSpan{ByteStart: int64(callerStart), ByteEnd: int64(len(test.source))}},
+					},
+					References: references,
+				},
+			}}
+			unresolved, err := uciPreparedAddResolvedTreeSitterEdges(files)
+			require.NoError(t, err)
+			if test.resolved {
+				require.Zero(t, unresolved)
+				require.Len(t, files[0].edges, 1)
+			} else {
+				require.Equal(t, uint64(1), unresolved)
+				require.Empty(t, files[0].edges)
+			}
+		})
+	}
+}
+
+func TestUCIPreparedIndexBuiltParserDoesNotResolveReboundLocalCalls(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), "uci-parser")
+	if runtime.GOOS == "windows" {
+		executable += ".exe"
+	}
+	command := exec.Command("go", "build", "-o", executable, "./tools/uci-parser")
+	command.Dir = filepath.Clean(filepath.Join("..", "..", ".."))
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build isolated parser child: %v: %s", err, output)
+	}
+	parser, err := uci.NewTreeSitterWorker(uci.TreeSitterWorkerConfig{
+		ExecutablePath: executable, ExpectedBundleDigest: uci.TreeSitterBundleDigest(),
+		MaxInputBytes: 1 << 20, MaxOutputBytes: 1 << 20, Timeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+	for _, test := range []struct {
+		name, source string
+		language     uci.TreeSitterLanguage
+		resolved     bool
+	}{
+		{"simple javascript", "export function calibrateInfraredPrism(pulseCount) { return pulseCount; }\nexport function guideCometOptics(pulseCount) { return calibrateInfraredPrism(pulseCount); }", uci.TreeSitterLanguageJavaScript, true},
+		{"rebound javascript", "export function calibrateInfraredPrism(pulseCount) { return pulseCount; }\nexport function guideCometOptics(pulseCount) { calibrateInfraredPrism = pulseCount; return calibrateInfraredPrism(pulseCount); }", uci.TreeSitterLanguageJavaScript, false},
+		{"rebound typescript", "export function calibrateInfraredPrism(pulseCount: number) { return pulseCount; }\nexport function guideCometOptics(pulseCount: any) { calibrateInfraredPrism += pulseCount; return calibrateInfraredPrism(pulseCount); }", uci.TreeSitterLanguageTypeScript, false},
+		{"rebound tsx", "export function calibrateInfraredPrism(pulseCount: number) { return pulseCount; }\nexport function guideCometOptics(pulseCount: any) { ({calibrateInfraredPrism} = pulseCount); return <span>{calibrateInfraredPrism(pulseCount)}</span>; }", uci.TreeSitterLanguageTSX, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body := []byte(test.source)
+			parsed, err := parser.Parse(context.Background(), uci.TreeSitterParseRequest{Language: test.language, ProfileKey: "binding-write-integration/v3", Source: body})
+			require.NoError(t, err)
+			require.Equal(t, uci.IndexCoverageComplete, parsed.Coverage, "%+v", parsed.Diagnostics)
+			profile, err := uci.TreeSitterIndexAdmissionArtifactProfile(test.language, uci.TreeSitterBundleDigest())
+			require.NoError(t, err)
+			artifact, err := uci.NewIndexAdmissionArtifactFromTreeSitter("11111111-1111-4111-8111-111111111111", profile, body, parsed)
+			require.NoError(t, err)
+			id := artifact.ArtifactID
+			files := []uciPreparedAdmissionFile{{path: "comet.js", membership: uci.IndexAdmissionMembership{PathKey: "comet.js", State: uci.IndexAdmissionMembershipPresent, ArtifactID: &id}, artifact: &artifact}}
+			unresolved, err := uciPreparedAddResolvedTreeSitterEdges(files)
+			require.NoError(t, err)
+			if test.resolved {
+				require.Zero(t, unresolved)
+				require.Len(t, files[0].edges, 1)
+				require.Equal(t, uci.IndexResolutionState("resolved"), files[0].edges[0].ResolutionState)
+				require.Equal(t, "function:calibrateInfraredPrism", *files[0].edges[0].Target.SymbolKey)
+			} else {
+				require.Equal(t, uint64(1), unresolved)
+				require.Empty(t, files[0].edges)
+			}
 		})
 	}
 }

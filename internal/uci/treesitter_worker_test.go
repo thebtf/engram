@@ -381,6 +381,34 @@ func TestUCITreeSitterWorkerHasBoundedProcessAPI(t *testing.T) {
 	}
 }
 
+func TestTreeSitterRejectsMalformedBindingWriteFacts(t *testing.T) {
+	source := []byte("helper = x")
+	starts := goLineStarts(source)
+	span, valid := goSpanFromOffsets(starts, len(source), 0, len("helper"))
+	if !valid {
+		t.Fatal("invalid test span")
+	}
+	reference := TreeSitterReferenceSite{
+		Kind: "binding_write", LocalKey: TreeSitterReferenceSiteKey("binding_write:helper", span),
+		SymbolKey: TreeSitterReferenceSiteKey("javascript:binding_write:helper", span),
+		RawTarget: "helper", Resolution: TreeSitterResolutionSyntaxOnly, Span: span,
+	}
+	if err := treeSitterValidateReferences(source, starts, []TreeSitterReferenceSite{reference}); err != nil {
+		t.Fatalf("valid binding write rejected: %v", err)
+	}
+	wrongTarget := reference
+	wrongTarget.RawTarget = "other"
+	wrongKey := reference
+	wrongKey.LocalKey = TreeSitterReferenceSiteKey("reference:helper", span)
+	wrongResolution := reference
+	wrongResolution.Resolution = TreeSitterResolutionPartial
+	for _, invalid := range []TreeSitterReferenceSite{wrongTarget, wrongKey, wrongResolution} {
+		if err := treeSitterValidateReferences(source, starts, []TreeSitterReferenceSite{invalid}); err == nil {
+			t.Fatalf("malformed write fact accepted: %#v", invalid)
+		}
+	}
+}
+
 func TestTreeSitterWireRequestDigestMatchesPreparedJSONLine(t *testing.T) {
 	request := TreeSitterParseRequest{
 		Language:   TreeSitterLanguageJavaScript,
@@ -634,6 +662,34 @@ func TestUCITreeSitterWorkerFramesBuiltParserFacts(t *testing.T) {
 				t.Fatalf("built parser Parse(%q): %v", testCase.request.Language, err)
 			}
 			uciRequireBuiltTreeSitterFacts(t, artifact, testCase.definitionNames, testCase.referenceKinds, testCase.defaultImportTarget, testCase.commonJSImportTarget, testCase.selfClosingComponent)
+		})
+	}
+
+	for _, testCase := range []struct {
+		name     string
+		language TreeSitterLanguage
+		source   string
+		writes   []string
+	}{
+		{"javascript assignments", TreeSitterLanguageJavaScript, "export function helper(x) { return x; }\nexport function caller(x) { helper = x; helper += x; ++helper; ({helper} = x); [helper] = x; return helper(1); }", []string{"helper", "helper", "helper", "helper", "helper"}},
+		{"typescript assignments", TreeSitterLanguageTypeScript, "export function helper(x: number) { return x; }\nexport function caller(x: any) { helper = x; helper &&= x; return helper(1); }", []string{"helper", "helper"}},
+		{"tsx assignments", TreeSitterLanguageTSX, "export function helper(x: number) { return x; }\nexport function caller(x: any) { helper = x; return <span>{helper(1)}</span>; }", []string{"helper"}},
+		{"comments and members", TreeSitterLanguageJavaScript, "export function helper(x) { return x; }\nexport function caller(x) { /* helper = x */ x.helper = 1; return helper(1); }", nil},
+	} {
+		t.Run("binding writes "+testCase.name, func(t *testing.T) {
+			artifact, err := worker.Parse(context.Background(), TreeSitterParseRequest{Language: testCase.language, ProfileKey: "binding-write-v3", Source: []byte(testCase.source)})
+			if err != nil || artifact.Coverage != IndexCoverageComplete {
+				t.Fatalf("built parser binding writes: err=%v coverage=%q diagnostics=%#v", err, artifact.Coverage, artifact.Diagnostics)
+			}
+			var writes []string
+			for _, reference := range artifact.References {
+				if reference.Kind == "binding_write" {
+					writes = append(writes, reference.RawTarget)
+				}
+			}
+			if !reflect.DeepEqual(writes, testCase.writes) {
+				t.Fatalf("binding writes = %q, want %q", writes, testCase.writes)
+			}
 		})
 	}
 

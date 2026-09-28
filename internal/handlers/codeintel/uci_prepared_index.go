@@ -989,6 +989,15 @@ func uciPreparedRememberTreeSitterLocal(aliases, namespaces map[string]uciPrepar
 }
 
 func uciPreparedAddTreeSitterLocalEdges(file *uciPreparedAdmissionFile, aliases, namespaces map[string]uciPreparedTreeSitterTarget, definitions map[string]map[string][]uciPreparedTreeSitterTarget) uint64 {
+	var writes map[string]struct{}
+	for _, reference := range file.artifact.References {
+		if reference.Kind == "binding_write" {
+			if writes == nil {
+				writes = make(map[string]struct{})
+			}
+			writes[reference.RawTarget] = struct{}{}
+		}
+	}
 	var unresolved uint64
 	for _, reference := range file.artifact.References {
 		local, ok := uciPreparedTreeSitterLocalReference(reference)
@@ -998,7 +1007,7 @@ func uciPreparedAddTreeSitterLocalEdges(file *uciPreparedAdmissionFile, aliases,
 		target, found := uciPreparedTreeSitterLocalTarget(local, aliases, namespaces, definitions)
 		direct := false
 		if !found {
-			target, found = uciPreparedTreeSitterDirectLocalCallTarget(file, reference, local, definitions[file.path][local])
+			target, found = uciPreparedTreeSitterDirectLocalCallTarget(file, reference, local, definitions[file.path][local], writes)
 			direct = found
 		}
 		if !found {
@@ -1016,9 +1025,12 @@ func uciPreparedAddTreeSitterLocalEdges(file *uciPreparedAdmissionFile, aliases,
 	return unresolved
 }
 
-func uciPreparedTreeSitterDirectLocalCallTarget(file *uciPreparedAdmissionFile, reference uci.IndexAdmissionReference, local string, matches []uciPreparedTreeSitterTarget) (uciPreparedTreeSitterTarget, bool) {
+func uciPreparedTreeSitterDirectLocalCallTarget(file *uciPreparedAdmissionFile, reference uci.IndexAdmissionReference, local string, matches []uciPreparedTreeSitterTarget, writes map[string]struct{}) (uciPreparedTreeSitterTarget, bool) {
 	if reference.Kind != "call" || reference.Relation != uci.IndexRelation("calls") || reference.OwnerSymbolKey == nil || len(matches) != 1 ||
-		matches[0].symbolKey != "function:"+local || strings.ContainsAny(local, ".@/#") {
+		matches[0].symbolKey != "function:"+local || strings.ContainsAny(local, ".@/#") || file.artifact.Status != uci.IndexAdmissionArtifactComplete {
+		return uciPreparedTreeSitterTarget{}, false
+	}
+	if _, written := writes[local]; written {
 		return uciPreparedTreeSitterTarget{}, false
 	}
 	body := file.artifact.Body
