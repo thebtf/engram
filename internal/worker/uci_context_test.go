@@ -201,7 +201,7 @@ func TestComposeUCIContextFirstUseRegistrationBindsPrivateNoViewScope(t *testing
 	require.NoError(t, json.Unmarshal([]byte(parserResult), &parserTarget))
 	var parserProfile gormstore.UCIAnalysisProfile
 	require.NoError(t, store.GetDB().Where("profile_id = ?", parserTarget.ProfileID).First(&parserProfile).Error)
-	require.Equal(t, string(uci.TreeSitterBundleDigest()), parserProfile.ParserBundleDigest)
+	require.Equal(t, string(uci.TreeSitterSemanticContractDigest()), parserProfile.ParserBundleDigest)
 	replay := server.HandleRequest(client, &mcp.Request{JSONRPC: "2.0", ID: float64(3), Method: "tools/call", Params: parserParams})
 	require.Nil(t, replay.Error)
 	maliciousParams, err := json.Marshal(map[string]any{"name": "codebase_context", "arguments": map[string]any{
