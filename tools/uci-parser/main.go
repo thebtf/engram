@@ -214,7 +214,7 @@ func extract(request uci.TreeSitterWorkerWireRequest) uci.TreeSitterWorkerWireRe
 	collector := newCollector(request.Language, request.Source)
 	cursor := tree.Walk()
 	defer cursor.Close()
-	collector.walk(cursor, parserScope{})
+	collector.walk(cursor, parserScope{}, false)
 	response.Definitions = collector.definitions
 	response.References = collector.references
 	response.Chunks, collector.chunksTruncated = sourceChunks(request.Source, collector.lineStarts, response.Definitions)
@@ -319,7 +319,7 @@ func newCollector(language uci.TreeSitterLanguage, source []byte) *parserCollect
 	}
 }
 
-func (collector *parserCollector) walk(cursor *tree_sitter.TreeCursor, scope parserScope) {
+func (collector *parserCollector) walk(cursor *tree_sitter.TreeCursor, scope parserScope, exported bool) {
 	node := cursor.Node()
 	if node == nil {
 		return
@@ -333,10 +333,12 @@ func (collector *parserCollector) walk(cursor *tree_sitter.TreeCursor, scope par
 	if node.Kind() == "export_statement" {
 		collector.collectExportDefinition(node, scope)
 	}
-	if isVariableDeclaration(node.Kind()) {
-		collector.collectVariableDefinitions(node, scope, node)
-	} else if definition, found := collector.definition(node, scope, node); found {
-		collector.addDefinition(definition)
+	if !exported {
+		if isVariableDeclaration(node.Kind()) {
+			collector.collectVariableDefinitions(node, scope, node)
+		} else if definition, found := collector.definition(node, scope, node); found {
+			collector.addDefinition(definition)
+		}
 	}
 	collector.collectReference(node, scope)
 
@@ -354,7 +356,7 @@ func (collector *parserCollector) walk(cursor *tree_sitter.TreeCursor, scope par
 	}
 	if cursor.GotoFirstChild() {
 		for {
-			collector.walk(cursor, next)
+			collector.walk(cursor, next, node.Kind() == "export_statement")
 			if !cursor.GotoNextSibling() {
 				break
 			}
@@ -457,7 +459,7 @@ func (collector *parserCollector) addDefinition(definition uci.TreeSitterDefinit
 		return
 	}
 	if previous, exists := collector.definitionKeys[definition.SymbolKey]; exists {
-		if definition.Span.ByteStart >= previous.ByteEnd || previous.ByteStart >= definition.Span.ByteEnd {
+		if definition.Span != previous {
 			collector.definitionCollision = true
 		}
 		return

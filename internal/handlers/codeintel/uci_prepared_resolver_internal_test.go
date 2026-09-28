@@ -591,3 +591,48 @@ func TestUCIPreparedIndexBuiltParserIgnoresDeclarationTextInTrivia(t *testing.T)
 		})
 	}
 }
+
+func TestUCIPreparedIndexBuiltParserRejectsNestedSameKeyCalls(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), "uci-parser")
+	if runtime.GOOS == "windows" {
+		executable += ".exe"
+	}
+	command := exec.Command("go", "build", "-o", executable, "./tools/uci-parser")
+	command.Dir = filepath.Clean(filepath.Join("..", "..", ".."))
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build isolated parser child: %v: %s", err, output)
+	}
+	parser, err := uci.NewTreeSitterWorker(uci.TreeSitterWorkerConfig{
+		ExecutablePath: executable, ExpectedBundleDigest: uci.TreeSitterBundleDigest(),
+		MaxInputBytes: 1 << 20, MaxOutputBytes: 1 << 20, Timeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+	body := []byte("export function helper(){helper();function helper(){}}")
+	parsed, err := parser.Parse(context.Background(), uci.TreeSitterParseRequest{Language: uci.TreeSitterLanguageJavaScript, ProfileKey: "nested-same-key/v1", Source: body})
+	require.NoError(t, err)
+	require.Equal(t, uci.IndexCoveragePartial, parsed.Coverage, "%+v", parsed.Diagnostics)
+	require.Contains(t, parsed.Diagnostics, uci.TreeSitterDiagnostic{Code: "DUPLICATE_DEFINITION", Message: "multiple declarations share a parser symbol key"})
+	require.Len(t, parsed.Definitions, 1)
+	require.Equal(t, "function:helper", parsed.Definitions[0].LocalKey)
+	require.Len(t, parsed.References, 1)
+	require.Equal(t, "function:helper", parsed.References[0].OwnerLocalKey)
+	profile, err := uci.TreeSitterIndexAdmissionArtifactProfile(uci.TreeSitterLanguageJavaScript, uci.TreeSitterBundleDigest())
+	require.NoError(t, err)
+	artifact, err := uci.NewIndexAdmissionArtifactFromTreeSitter("11111111-1111-4111-8111-111111111111", profile, body, parsed)
+	require.NoError(t, err)
+	require.Equal(t, uci.IndexAdmissionArtifactPartial, artifact.Status)
+	id := artifact.ArtifactID
+	files := []uciPreparedAdmissionFile{{path: "calls.js", membership: uci.IndexAdmissionMembership{PathKey: "calls.js", DisplayPath: "calls.js", Mode: "100644", State: uci.IndexAdmissionMembershipPresent, ArtifactID: &id}, artifact: &artifact}}
+	unresolved, err := uciPreparedAddResolvedTreeSitterEdges(files)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), unresolved)
+	require.Empty(t, files[0].edges, "ambiguous nested declaration cannot publish a resolved self-edge")
+	frames, _, err := uciPreparedPackFrames("44444444-4444-4444-8444-444444444444", files)
+	require.NoError(t, err)
+	require.NoError(t, uci.ValidateIndexAdmissionFrames(frames))
+	require.Len(t, frames, 1)
+	part, err := frames[0].PublicationPart()
+	require.NoError(t, err)
+	require.Len(t, part.EdgeReplacements, 1)
+	require.Empty(t, part.EdgeReplacements[0].Edges)
+}
