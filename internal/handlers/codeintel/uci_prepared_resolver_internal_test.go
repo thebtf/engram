@@ -308,6 +308,10 @@ func TestUCIPreparedIndexBuiltParserDoesNotResolveReboundLocalCalls(t *testing.T
 		{"rebound local javascript", "export function calibrateInfraredPrism(n) { return n; }\nexport function guideCometOptics(n) { let helper = calibrateInfraredPrism; helper = n; return helper(n); }", uci.TreeSitterLanguageJavaScript, false},
 		{"rebound local typescript", "export function calibrateInfraredPrism(n: number) { return n; }\nexport function guideCometOptics(n: any) { let helper = calibrateInfraredPrism; helper! = n; return helper(n); }", uci.TreeSitterLanguageTypeScript, false},
 		{"rebound local tsx", "export function calibrateInfraredPrism(n: number) { return n; }\nexport function guideCometOptics(n: any) { let helper = calibrateInfraredPrism; ({helper} = n); return helper(n); }", uci.TreeSitterLanguageTSX, false},
+		{"shadowed sibling write", "export function calibrateInfraredPrism(n) { return n; }\nexport function guideCometOptics(n) { return calibrateInfraredPrism(n); }\nfunction mutate(n) { let calibrateInfraredPrism; calibrateInfraredPrism = n; }", uci.TreeSitterLanguageJavaScript, true},
+		{"later caller write can affect subsequent invocation", "export function calibrateInfraredPrism(n) { return n; }\nexport function guideCometOptics(n) { const result = calibrateInfraredPrism(n); calibrateInfraredPrism = n; return result; }", uci.TreeSitterLanguageJavaScript, false},
+		{"unshadowed sibling write", "export function calibrateInfraredPrism(n) { return n; }\nexport function guideCometOptics(n) { return calibrateInfraredPrism(n); }\nfunction mutate(n) { calibrateInfraredPrism = n; }", uci.TreeSitterLanguageJavaScript, false},
+		{"nested block declaration cannot shadow sibling write", "export function calibrateInfraredPrism(n) { return n; }\nexport function guideCometOptics(n) { return calibrateInfraredPrism(n); }\nfunction mutate(n) { if (n) { let calibrateInfraredPrism; } calibrateInfraredPrism = n; }", uci.TreeSitterLanguageJavaScript, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			body := []byte(test.source)

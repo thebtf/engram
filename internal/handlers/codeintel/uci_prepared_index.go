@@ -989,13 +989,13 @@ func uciPreparedRememberTreeSitterLocal(aliases, namespaces map[string]uciPrepar
 }
 
 func uciPreparedAddTreeSitterLocalEdges(file *uciPreparedAdmissionFile, aliases, namespaces map[string]uciPreparedTreeSitterTarget, definitions map[string]map[string][]uciPreparedTreeSitterTarget) uint64 {
-	var writes map[string]struct{}
+	var writes map[string][]uci.IndexAdmissionReference
 	for _, reference := range file.artifact.References {
 		if reference.Kind == "binding_write" {
 			if writes == nil {
-				writes = make(map[string]struct{})
+				writes = make(map[string][]uci.IndexAdmissionReference)
 			}
-			writes[reference.RawTarget] = struct{}{}
+			writes[reference.RawTarget] = append(writes[reference.RawTarget], reference)
 		}
 	}
 	var unresolved uint64
@@ -1007,8 +1007,9 @@ func uciPreparedAddTreeSitterLocalEdges(file *uciPreparedAdmissionFile, aliases,
 		target, found := uciPreparedTreeSitterLocalTarget(local, aliases, namespaces, definitions)
 		direct := false
 		if !found {
-			if _, written := writes[local]; written && reference.Kind == "call" && reference.Relation == uci.IndexRelation("calls") &&
-				reference.OwnerSymbolKey != nil && !strings.ContainsAny(local, ".@/#") && file.artifact.Status == uci.IndexAdmissionArtifactComplete {
+			if reference.Kind == "call" && reference.Relation == uci.IndexRelation("calls") &&
+				reference.OwnerSymbolKey != nil && !strings.ContainsAny(local, ".@/#") && file.artifact.Status == uci.IndexAdmissionArtifactComplete &&
+				uciPreparedTreeSitterWriteAffectsCall(file.artifact, reference, writes[local]) {
 				file.edges = append(file.edges, uci.IndexAdmissionEdge{
 					EdgeKey:          uciPreparedTreeSitterEdgeKey(file.path, reference.SiteKey, "", "", reference.Relation),
 					SourceArtifactID: file.artifact.ArtifactID,
@@ -1027,8 +1028,10 @@ func uciPreparedAddTreeSitterLocalEdges(file *uciPreparedAdmissionFile, aliases,
 				unresolved++
 				continue
 			}
-			target, found = uciPreparedTreeSitterDirectLocalCallTarget(file, reference, local, definitions[file.path][local])
-			direct = found
+			if reference.Kind == "call" {
+				target, found = uciPreparedTreeSitterDirectLocalCallTarget(file, reference, local, uciPreparedTreeSitterVisibleLocalTargets(file.artifact, reference, definitions[file.path][local]))
+				direct = found
+			}
 		}
 		if !found {
 			unresolved++
@@ -1043,6 +1046,67 @@ func uciPreparedAddTreeSitterLocalEdges(file *uciPreparedAdmissionFile, aliases,
 		file.edges = append(file.edges, edge)
 	}
 	return unresolved
+}
+
+func uciPreparedTreeSitterWriteAffectsCall(artifact *uci.IndexAdmissionArtifact, call uci.IndexAdmissionReference, writes []uci.IndexAdmissionReference) bool {
+	for _, write := range writes {
+		if write.OwnerSymbolKey != nil && *write.OwnerSymbolKey == *call.OwnerSymbolKey ||
+			!uciPreparedTreeSitterWriteShadowsLocal(artifact, write) {
+			return true
+		}
+	}
+	return false
+}
+
+func uciPreparedTreeSitterWriteShadowsLocal(artifact *uci.IndexAdmissionArtifact, write uci.IndexAdmissionReference) bool {
+	if write.OwnerSymbolKey == nil || write.Span.ByteStart <= 0 || write.Span.ByteStart > int64(len(artifact.Body)) {
+		return false
+	}
+	for _, owner := range artifact.Definitions {
+		if owner.LocalSymbolKey != *write.OwnerSymbolKey || owner.Kind != "function" ||
+			owner.Span.ByteStart < 0 || owner.Span.ByteStart >= write.Span.ByteStart || owner.Span.ByteEnd < write.Span.ByteEnd {
+			continue
+		}
+		prefix := artifact.Body[owner.Span.ByteStart:write.Span.ByteStart]
+		if bytes.Count(prefix, []byte{'{'}) != 1 || bytes.Count(prefix, []byte{'}'}) != 0 {
+			return false
+		}
+		for _, declaration := range artifact.Definitions {
+			if (declaration.Kind == "let" || declaration.Kind == "const" || declaration.Kind == "var") &&
+				strings.HasSuffix(declaration.LocalSymbolKey, ":"+write.RawTarget) &&
+				declaration.Span.ByteStart > owner.Span.ByteStart && declaration.Span.ByteEnd <= write.Span.ByteStart {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func uciPreparedTreeSitterVisibleLocalTargets(artifact *uci.IndexAdmissionArtifact, call uci.IndexAdmissionReference, matches []uciPreparedTreeSitterTarget) []uciPreparedTreeSitterTarget {
+	if len(matches) < 2 {
+		return matches
+	}
+	visible := make([]uciPreparedTreeSitterTarget, 0, len(matches))
+	for _, target := range matches {
+		shadowed := false
+		for _, declaration := range artifact.Definitions {
+			if declaration.LocalSymbolKey != target.symbolKey || (declaration.Kind != "let" && declaration.Kind != "const" && declaration.Kind != "var") {
+				continue
+			}
+			for _, owner := range artifact.Definitions {
+				if owner.Kind == "function" && owner.Span.ByteStart < declaration.Span.ByteStart && owner.Span.ByteEnd >= declaration.Span.ByteEnd &&
+					(call.Span.ByteStart < owner.Span.ByteStart || call.Span.ByteEnd > owner.Span.ByteEnd) {
+					shadowed = true
+					break
+				}
+			}
+			break
+		}
+		if !shadowed {
+			visible = append(visible, target)
+		}
+	}
+	return visible
 }
 
 func uciPreparedTreeSitterDirectLocalCallTarget(file *uciPreparedAdmissionFile, reference uci.IndexAdmissionReference, local string, matches []uciPreparedTreeSitterTarget) (uciPreparedTreeSitterTarget, bool) {
