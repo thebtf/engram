@@ -1079,17 +1079,19 @@ func uciPreparedTreeSitterWriteShadowsLocal(artifact *uci.IndexAdmissionArtifact
 		if close < 0 || bytes.IndexByte(parameters[:close], '(') >= 0 || bytes.IndexByte(parameters[close+1:], '{') < 0 {
 			return false
 		}
-		for parameters := parameters[:close]; len(parameters) > 0; {
-			parameter, rest, found := bytes.Cut(parameters, []byte{','})
-			parameter = bytes.TrimSpace(parameter)
-			if bytes.HasPrefix(parameter, []byte(write.RawTarget)) &&
-				(len(parameter) == len(write.RawTarget) || bytes.IndexByte([]byte(" \t\r\n?:="), parameter[len(write.RawTarget)]) >= 0) {
-				return true
+		if bytes.IndexAny(parameters[:close], "{}[]=") < 0 {
+			for parameters := parameters[:close]; len(parameters) > 0; {
+				parameter, rest, found := bytes.Cut(parameters, []byte{','})
+				parameter = bytes.TrimSpace(parameter)
+				if bytes.HasPrefix(parameter, []byte(write.RawTarget)) &&
+					(len(parameter) == len(write.RawTarget) || bytes.IndexByte([]byte(" \t\r\n?:="), parameter[len(write.RawTarget)]) >= 0) {
+					return true
+				}
+				if !found {
+					break
+				}
+				parameters = rest
 			}
-			if !found {
-				break
-			}
-			parameters = rest
 		}
 		for _, declaration := range artifact.Definitions {
 			if (declaration.Kind != "let" && declaration.Kind != "const" && declaration.Kind != "var") ||

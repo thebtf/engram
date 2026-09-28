@@ -313,6 +313,7 @@ func TestUCIPreparedIndexBuiltParserDoesNotResolveReboundLocalCalls(t *testing.T
 		{"unshadowed sibling write", "export function calibrateInfraredPrism(n) { return n; }\nexport function guideCometOptics(n) { return calibrateInfraredPrism(n); }\nfunction mutate(n) { calibrateInfraredPrism = n; }", uci.TreeSitterLanguageJavaScript, false},
 		{"nested block declaration cannot shadow sibling write", "export function calibrateInfraredPrism(n) { return n; }\nexport function guideCometOptics(n) { return calibrateInfraredPrism(n); }\nfunction mutate(n) { if (n) { let calibrateInfraredPrism; } calibrateInfraredPrism = n; }", uci.TreeSitterLanguageJavaScript, false},
 		{"nested block local shadow", "export function helper() {}; export function caller(){return helper()}; function mutate(x){ if(x){let helper; helper=x;} }", uci.TreeSitterLanguageJavaScript, true},
+		{"default object property is not a parameter shadow", "export function helper() {}; export function caller(){return helper()}; function mutate(x = {a:0, helper:1}){helper=x;}", uci.TreeSitterLanguageJavaScript, false},
 		{"parameter shadow in sibling", "export function calibrateInfraredPrism(n) { return n; }\nexport function guideCometOptics(n) { return calibrateInfraredPrism(n); }\nfunction mutate(calibrateInfraredPrism) { calibrateInfraredPrism = null; }", uci.TreeSitterLanguageJavaScript, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
