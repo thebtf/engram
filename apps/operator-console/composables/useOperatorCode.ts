@@ -782,11 +782,16 @@ function clearResumePair(): void {
     // Storage failure removes only reload convenience; it never creates an authorization fallback.
   }
 }
-function loadPersistedPinCandidate(): Pick<CodeSafeContext, 'sourceRef' | 'checkoutRef' | 'viewRef'> | null {
+function loadPersistedPinCandidate(): Pick<CodeSafeContext, 'sourceRef' | 'checkoutRef' | 'viewRef'> | string | null {
   try {
     const raw = sessionStorage.getItem(PINNED_CONTEXT_STORAGE_KEY)
     if (raw === null) return null
-    const parsed: unknown = JSON.parse(raw)
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return text(raw)
+    }
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
     const sourceRef = text(Reflect.get(parsed, 'sourceRef'))
     const checkoutRef = text(Reflect.get(parsed, 'checkoutRef'))
@@ -896,6 +901,8 @@ export function useOperatorCode() {
   let leaseRenewalTimer: number | null = null
   let leaseRenewalAbort: AbortController | null = null
   let leaseRenewalGeneration = 0
+  let authProbeAbort: AbortController | null = null
+  let unmounted = false
 
   function bindingPayload(extra: Record<string, unknown> = {}): Record<string, unknown> | null {
     if (binding.value === null) return null
@@ -1321,7 +1328,7 @@ export function useOperatorCode() {
     const stored = loadPersistedPinCandidate()
     if (stored === null) { clearPersistedPinCandidate(); return false }
     const matches = contextCatalog.value.flatMap((entry) => entry.view === null ? [] : [entry.view]).filter((entry) =>
-      entry.sourceRef === stored.sourceRef && entry.checkoutRef === stored.checkoutRef && entry.viewRef === stored.viewRef)
+      typeof stored === 'string' ? entry.viewRef === stored : entry.sourceRef === stored.sourceRef && entry.checkoutRef === stored.checkoutRef && entry.viewRef === stored.viewRef)
     if (matches.length !== 1) { clearPersistedPinCandidate(); return false }
     contextCandidate.value = matches[0]!
     return true
@@ -1332,8 +1339,11 @@ export function useOperatorCode() {
     bootstrapPhase.value = 'binding'
     authDisabled.value = false
     pending.value = true
+    const controller = new AbortController()
+    authProbeAbort = controller
+    const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
     try {
-      const response = await fetch(operatorApiUrl('/auth/me'), { credentials: 'include', cache: 'no-store' })
+      const response = await fetch(operatorApiUrl('/auth/me'), { credentials: 'include', cache: 'no-store', signal: controller.signal })
       if (!response.ok) {
         bootstrapPhase.value = 'identity-unavailable'
         return
@@ -1344,8 +1354,11 @@ export function useOperatorCode() {
       bootstrapPhase.value = 'identity-unavailable'
       return
     } finally {
+      window.clearTimeout(timeout)
+      authProbeAbort = null
       pending.value = false
     }
+    if (unmounted) return
     if (!window.isSecureContext && !authDisabled.value) {
       bootstrapPhase.value = 'secure-origin-required'
       return
@@ -1612,8 +1625,10 @@ export function useOperatorCode() {
   })
 
   onBeforeUnmount(() => {
+    unmounted = true
+    authProbeAbort?.abort()
     stopLeaseRenewal()
-    if (!pageHiding) spaRemount = { pinnedContext: pinnedContext.value }
+    if (!pageHiding) spaRemount = { pinnedContext: pinnedContext.value ?? spaRemount?.pinnedContext ?? null }
     stopIndexIntentPolling()
     window.removeEventListener('pagehide', closeOnPageHide)
   })
