@@ -10,7 +10,7 @@ fi
 node_version=22.19.0
 node_sha256=c0649af18e6a24f6fe5535a3e86b341dd49a8e71117c8b68bde973ef834f16f2
 workdir="$(mktemp -d)"
-trap 'rm -rf "$workdir"' EXIT
+trap 'rm -r -- "$workdir"' EXIT
 archive="${ENGRAM_RELEASE_NODE_ARCHIVE:-$workdir/node.tar.xz}"
 if [[ -z "${ENGRAM_RELEASE_NODE_ARCHIVE:-}" ]]; then
   curl --fail --silent --show-error --location \
@@ -35,6 +35,4 @@ fi
   npm run build
   npm run generate
 )
-rm -rf internal/worker/static
-mkdir -p internal/worker/static
-cp -a apps/operator-console/.output/public/. internal/worker/static/
+bash scripts/stage-release-operator-console.sh
