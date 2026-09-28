@@ -312,6 +312,8 @@ func TestUCIPreparedIndexBuiltParserDoesNotResolveReboundLocalCalls(t *testing.T
 		{"later caller write can affect subsequent invocation", "export function calibrateInfraredPrism(n) { return n; }\nexport function guideCometOptics(n) { const result = calibrateInfraredPrism(n); calibrateInfraredPrism = n; return result; }", uci.TreeSitterLanguageJavaScript, false},
 		{"unshadowed sibling write", "export function calibrateInfraredPrism(n) { return n; }\nexport function guideCometOptics(n) { return calibrateInfraredPrism(n); }\nfunction mutate(n) { calibrateInfraredPrism = n; }", uci.TreeSitterLanguageJavaScript, false},
 		{"nested block declaration cannot shadow sibling write", "export function calibrateInfraredPrism(n) { return n; }\nexport function guideCometOptics(n) { return calibrateInfraredPrism(n); }\nfunction mutate(n) { if (n) { let calibrateInfraredPrism; } calibrateInfraredPrism = n; }", uci.TreeSitterLanguageJavaScript, false},
+		{"nested block local shadow", "export function helper() {}; export function caller(){return helper()}; function mutate(x){ if(x){let helper; helper=x;} }", uci.TreeSitterLanguageJavaScript, true},
+		{"parameter shadow in sibling", "export function calibrateInfraredPrism(n) { return n; }\nexport function guideCometOptics(n) { return calibrateInfraredPrism(n); }\nfunction mutate(calibrateInfraredPrism) { calibrateInfraredPrism = null; }", uci.TreeSitterLanguageJavaScript, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			body := []byte(test.source)
@@ -330,7 +332,11 @@ func TestUCIPreparedIndexBuiltParserDoesNotResolveReboundLocalCalls(t *testing.T
 				require.Zero(t, unresolved)
 				require.Len(t, files[0].edges, 1)
 				require.Equal(t, uci.IndexResolutionState("resolved"), files[0].edges[0].ResolutionState)
-				require.Equal(t, "function:calibrateInfraredPrism", *files[0].edges[0].Target.SymbolKey)
+				target := "calibrateInfraredPrism"
+				if strings.Contains(test.source, "export function helper()") {
+					target = "helper"
+				}
+				require.Equal(t, "function:"+target, *files[0].edges[0].Target.SymbolKey)
 			} else {
 				require.Equal(t, uint64(1), unresolved)
 				require.Len(t, files[0].edges, 1)

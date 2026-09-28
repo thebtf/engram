@@ -1059,7 +1059,7 @@ func uciPreparedTreeSitterWriteAffectsCall(artifact *uci.IndexAdmissionArtifact,
 }
 
 func uciPreparedTreeSitterWriteShadowsLocal(artifact *uci.IndexAdmissionArtifact, write uci.IndexAdmissionReference) bool {
-	if write.OwnerSymbolKey == nil || write.Span.ByteStart <= 0 || write.Span.ByteStart > int64(len(artifact.Body)) {
+	if write.OwnerSymbolKey == nil || write.Span.ByteStart <= 0 || write.Span.ByteEnd > int64(len(artifact.Body)) {
 		return false
 	}
 	for _, owner := range artifact.Definitions {
@@ -1068,13 +1068,47 @@ func uciPreparedTreeSitterWriteShadowsLocal(artifact *uci.IndexAdmissionArtifact
 			continue
 		}
 		prefix := artifact.Body[owner.Span.ByteStart:write.Span.ByteStart]
-		if bytes.Count(prefix, []byte{'{'}) != 1 || bytes.Count(prefix, []byte{'}'}) != 0 {
+		name := strings.TrimPrefix(owner.LocalSymbolKey, "function:")
+		exported := bytes.HasPrefix(bytes.TrimLeft(prefix, " \t\r\n"), []byte("export "))
+		open, ok := uciPreparedTreeSitterFunctionOpen(prefix, name, exported)
+		if !ok {
 			return false
 		}
+		parameters := prefix[open+1:]
+		close := bytes.IndexByte(parameters, ')')
+		if close < 0 || bytes.IndexByte(parameters[:close], '(') >= 0 || bytes.IndexByte(parameters[close+1:], '{') < 0 {
+			return false
+		}
+		for parameters := parameters[:close]; len(parameters) > 0; {
+			parameter, rest, found := bytes.Cut(parameters, []byte{','})
+			parameter = bytes.TrimSpace(parameter)
+			if bytes.HasPrefix(parameter, []byte(write.RawTarget)) &&
+				(len(parameter) == len(write.RawTarget) || bytes.IndexByte([]byte(" \t\r\n?:="), parameter[len(write.RawTarget)]) >= 0) {
+				return true
+			}
+			if !found {
+				break
+			}
+			parameters = rest
+		}
 		for _, declaration := range artifact.Definitions {
-			if (declaration.Kind == "let" || declaration.Kind == "const" || declaration.Kind == "var") &&
-				strings.HasSuffix(declaration.LocalSymbolKey, ":"+write.RawTarget) &&
-				declaration.Span.ByteStart > owner.Span.ByteStart && declaration.Span.ByteEnd <= write.Span.ByteStart {
+			if (declaration.Kind != "let" && declaration.Kind != "const" && declaration.Kind != "var") ||
+				!strings.HasSuffix(declaration.LocalSymbolKey, ":"+write.RawTarget) ||
+				declaration.Span.ByteStart <= owner.Span.ByteStart || declaration.Span.ByteEnd > write.Span.ByteStart {
+				continue
+			}
+			if declaration.Kind != "var" && bytes.IndexByte(artifact.Body[declaration.Span.ByteEnd:write.Span.ByteStart], '}') >= 0 {
+				continue
+			}
+			insideNestedFunction := false
+			for _, nested := range artifact.Definitions {
+				if nested.Kind == "function" && nested.Span.ByteStart > owner.Span.ByteStart &&
+					nested.Span.ByteStart < declaration.Span.ByteStart && nested.Span.ByteEnd >= declaration.Span.ByteEnd {
+					insideNestedFunction = true
+					break
+				}
+			}
+			if !insideNestedFunction {
 				return true
 			}
 		}
@@ -1133,7 +1167,7 @@ func uciPreparedTreeSitterDirectLocalCallTarget(file *uciPreparedAdmissionFile, 
 		callee.Span.ByteStart >= callee.Span.ByteEnd || uciPreparedTreeSitterNamedFunctionCount(body, local) != 1 {
 		return uciPreparedTreeSitterTarget{}, false
 	}
-	if _, ok := uciPreparedTreeSitterFunctionOpen(body[callee.Span.ByteStart:callee.Span.ByteEnd], local); !ok {
+	if _, ok := uciPreparedTreeSitterFunctionOpen(body[callee.Span.ByteStart:callee.Span.ByteEnd], local, true); !ok {
 		return uciPreparedTreeSitterTarget{}, false
 	}
 	if caller == nil || caller.Kind != "function" || caller.Span.ByteStart < 0 || caller.Span.ByteEnd > int64(len(body)) ||
@@ -1142,7 +1176,7 @@ func uciPreparedTreeSitterDirectLocalCallTarget(file *uciPreparedAdmissionFile, 
 	}
 	declaration := body[caller.Span.ByteStart:caller.Span.ByteEnd]
 	name := strings.TrimPrefix(caller.LocalSymbolKey, "function:")
-	open, ok := uciPreparedTreeSitterFunctionOpen(declaration, name)
+	open, ok := uciPreparedTreeSitterFunctionOpen(declaration, name, true)
 	if !ok {
 		return uciPreparedTreeSitterTarget{}, false
 	}
@@ -1163,9 +1197,12 @@ func uciPreparedTreeSitterDirectLocalCallTarget(file *uciPreparedAdmissionFile, 
 	return matches[0], true
 }
 
-func uciPreparedTreeSitterFunctionOpen(declaration []byte, name string) (int, bool) {
+func uciPreparedTreeSitterFunctionOpen(declaration []byte, name string, exported bool) (int, bool) {
 	rest := declaration
 	for _, token := range []string{"export", "function", name} {
+		if token == "export" && !exported {
+			continue
+		}
 		rest = bytes.TrimLeft(rest, " \t\r\n")
 		if token == "function" && bytes.HasPrefix(rest, []byte("async")) && len(rest) > len("async") && !uciPreparedTreeSitterIdentifierByte(rest[len("async")]) {
 			rest = bytes.TrimLeft(rest[len("async"):], " \t\r\n")
