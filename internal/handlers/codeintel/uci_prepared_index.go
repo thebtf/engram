@@ -1152,7 +1152,8 @@ func uciPreparedTreeSitterDirectLocalCallTarget(file *uciPreparedAdmissionFile, 
 	}
 	body := file.artifact.Body
 	start, end := int(reference.Span.ByteStart), int(reference.Span.ByteEnd)
-	if start < 0 || end > len(body) || end < start+len(local)+1 || !bytes.HasPrefix(body[start:end], []byte(local+"(")) {
+	if start < 0 || end > len(body) || end-start != len(local) || !bytes.Equal(body[start:end], []byte(local)) ||
+		!strings.HasPrefix(reference.SiteKey, "call:"+local+"@") {
 		return uciPreparedTreeSitterTarget{}, false
 	}
 	var caller, callee *uci.IndexAdmissionDefinition

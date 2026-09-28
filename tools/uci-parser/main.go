@@ -520,7 +520,11 @@ func (collector *parserCollector) collectReference(node *tree_sitter.Node, scope
 				resolution = uci.TreeSitterResolutionPartial
 				collector.markDynamicImport(node)
 			}
-			collector.addReference("call", "call:"+raw, scope.ownerLocalKey, raw, resolution, node)
+			if node.Kind() == "call_expression" && callee.Kind() == "identifier" {
+				collector.addReference("call", "call:"+raw, scope.ownerLocalKey, raw, resolution, callee)
+			} else {
+				collector.addReference("call", "call:"+raw, scope.ownerLocalKey, raw, resolution, node)
+			}
 		}
 	case "member_expression", "optional_member_expression":
 		raw := nodeText(node, collector.source)
@@ -683,6 +687,11 @@ func (collector *parserCollector) bindingNodes(node *tree_sitter.Node) []*tree_s
 		return collector.bindingNodes(node.ChildByFieldName("left"))
 	case "parenthesized_expression", "non_null_expression":
 		if node.NamedChildCount() == 1 {
+			return collector.bindingNodes(node.NamedChild(0))
+		}
+		return nil
+	case "as_expression":
+		if node.NamedChildCount() == 2 {
 			return collector.bindingNodes(node.NamedChild(0))
 		}
 		return nil
