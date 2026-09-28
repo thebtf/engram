@@ -125,6 +125,44 @@ test('tokenless URL retrieves live static memories instead of showing setup', as
   assert.equal(requests.find(({ endpoint }) => endpoint === '/api/context/session-start').body.project, 'canonical-project');
 });
 
+test('tokenless session start fetches memory over HTTP without an Authorization header', async (t) => {
+  const http = require('node:http');
+  const requests = [];
+  const server = http.createServer((request, response) => {
+    requests.push({ path: request.url, authorization: request.headers.authorization });
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify(request.url === '/api/context/session-start'
+      ? buildCachedSessionStartPayload({ memories: [{ content: 'tokenless HTTP memory' }] })
+      : {}));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-tokenless-http-'));
+  const overrides = {
+    ENGRAM_URL: `http://127.0.0.1:${server.address().port}`,
+    ENGRAM_TOKEN: '',
+    CLAUDE_PLUGIN_OPTION_api_token: '',
+    CLAUDE_PLUGIN_OPTION_API_TOKEN: '',
+    ENGRAM_CLAUDE_USERCONFIG_TOKEN: '',
+    ENGRAM_CONFIG_FILE: path.join(dataDir, 'absent.json'),
+    ENGRAM_DATA_DIR: dataDir,
+  };
+  const previous = Object.fromEntries(Object.keys(overrides).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, overrides);
+  t.after(async () => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const output = await handleSessionStart({ Project: 'canonical-project', SessionID: '' }, {});
+  assert.match(output, /tokenless HTTP memory/);
+  assert.ok(requests.some((request) => request.path === '/api/context/session-start'));
+  assert.ok(requests.every((request) => request.authorization === undefined));
+});
+
 test('handleSessionStart quotes untrusted rule and memory text before injection', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-session-start-injection-'));
   const originalRequestPost = lib.requestPost;

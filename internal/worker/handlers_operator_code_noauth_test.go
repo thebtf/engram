@@ -161,3 +161,52 @@ func TestNoAuthOperatorCodePagehideCloseReloadResumesPinnedTab(t *testing.T) {
 	require.Equal(t, http.StatusOK, call(secondProof, noauth, adapter.HandleStatus).Code, "foreign replay cannot revoke current tab")
 	require.Equal(t, http.StatusForbidden, call(secondProof, auth.SessionForBrowserUser("viewer", 42), adapter.HandleStatus).Code, "auth-enabled identity cannot forge noauth via header")
 }
+
+func TestNoAuthOperatorCodeRestartRequiresFreshHandshakeAndSelection(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	adapter.authority = noAuthHTTPAuthority{fixture.ref}
+	noauth := auth.AuthDisabled()
+	call := func(body string, handler func(http.ResponseWriter, *http.Request)) *httptest.ResponseRecorder {
+		request := operatorCodeHTTPTestRequest(t, body, noauth)
+		request.Header.Set("X-Engram-Auth-Disabled", "true")
+		response := httptest.NewRecorder()
+		handler(response, request)
+		return response
+	}
+	handshake := func(nonce string) operatorCodeTransitionResponse {
+		response := call(`{"document_nonce":"`+nonce+`"}`, adapter.HandleHandshake)
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		var transition operatorCodeTransitionResponse
+		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &transition))
+		return transition
+	}
+	first := handshake("before-restart")
+	oldProof := `{"tab_binding_id":"` + first.TabBindingID + `","document_proof":"` + first.DocumentProof + `"}`
+	require.Equal(t, http.StatusOK, call(oldProof, adapter.HandleContexts).Code)
+
+	adapter.noAuthBindings = newNoAuthCodeBindings() // Simulate server restart; catalog remains durable.
+	resume := `{"tab_binding_id":"` + first.TabBindingID + `","resume_nonce":"` + first.ResumeNonce + `","reload_token":"` + first.ReloadToken + `","document_nonce":"after-restart"}`
+	require.Equal(t, http.StatusForbidden, call(resume, adapter.HandleResume).Code)
+	require.Equal(t, http.StatusForbidden, call(oldProof, adapter.HandleContexts).Code)
+
+	second := handshake("after-restart")
+	require.NotEqual(t, first.TabBindingID, second.TabBindingID)
+	newProof := `{"tab_binding_id":"` + second.TabBindingID + `","document_proof":"` + second.DocumentProof + `"}`
+	catalog := call(newProof, adapter.HandleContexts)
+	require.Equal(t, http.StatusOK, catalog.Code, catalog.Body.String())
+	var contexts operatorCodeContextsResponse
+	require.NoError(t, json.Unmarshal(catalog.Body.Bytes(), &contexts))
+	require.Len(t, contexts.Contexts, 1)
+	require.NotEmpty(t, contexts.Contexts[0].SelectionRef)
+	fixture.app.status = mcp.CodebaseStatusSnapshot{TotalChunks: 1, Embedding: uci.EmbeddingStatus{Coverage: uci.IndexCoverageUnavailable}}
+	require.Equal(t, http.StatusForbidden, call(newProof, adapter.HandleStatus).Code, "new document has no inherited pin")
+	pinRequest := operatorCodeHTTPTestRequest(t, `{"document_proof":"`+second.DocumentProof+`","selection_ref":"`+contexts.Contexts[0].SelectionRef+`"}`, noauth)
+	pinRequest.Header.Set("X-Engram-Auth-Disabled", "true")
+	route := chi.NewRouteContext()
+	route.URLParams.Add("tab_binding_id", second.TabBindingID)
+	pinRequest = pinRequest.WithContext(context.WithValue(pinRequest.Context(), chi.RouteCtxKey, route))
+	pin := httptest.NewRecorder()
+	adapter.HandlePin(pin, pinRequest)
+	require.Equal(t, http.StatusNoContent, pin.Code, pin.Body.String())
+	require.Equal(t, http.StatusOK, call(newProof, adapter.HandleStatus).Code, "fresh catalog selection restores access")
+}
