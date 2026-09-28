@@ -892,8 +892,10 @@ func requireUCITransportSession(ctx context.Context) (string, error) {
 }
 
 func uciClientOutgoingContext(ctx context.Context, clientInstanceID string) (context.Context, error) {
-	if _, valid := uci.NoAuthCodeWorkstationForInstance(clientInstanceID); !valid {
-		return nil, &module.ModuleError{Code: "PROJECT_ANCHOR_INVALID", Message: projectIdentityResolutionRefusedMessage}
+	if clientInstanceID != "" {
+		if _, valid := uci.NoAuthCodeWorkstationForInstance(clientInstanceID); !valid {
+			return nil, &module.ModuleError{Code: "PROJECT_ANCHOR_INVALID", Message: projectIdentityResolutionRefusedMessage}
+		}
 	}
 	outgoing, _ := metadata.FromOutgoingContext(ctx)
 	outgoing = outgoing.Copy()
@@ -910,7 +912,10 @@ func uciClientOutgoingContext(ctx context.Context, clientInstanceID string) (con
 			outgoing.Set(auditcontext.UCIRequestCorrelationMetadataKey, value)
 		}
 	}
-	outgoing.Set(uci.NoAuthCodeClientInstanceMetadataKey, clientInstanceID)
+	delete(outgoing, uci.NoAuthCodeClientInstanceMetadataKey)
+	if clientInstanceID != "" {
+		outgoing.Set(uci.NoAuthCodeClientInstanceMetadataKey, clientInstanceID)
+	}
 	return metadata.NewOutgoingContext(ctx, outgoing), nil
 }
 

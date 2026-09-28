@@ -189,8 +189,39 @@ func TestUCIClientEmitsAnchoredMetadataOnDirectRPCs(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestUCIClientRejectsMissingOrInvalidInstallationAnchor(t *testing.T) {
-	for _, instance := range []string{"", "invalid\r\nheader", " leading", "a/b", "a:b"} {
+func TestUCILegacyModuleReachesAuthenticatedRPCWithoutInstallationAnchor(t *testing.T) {
+	server := &uciIndexAdapterGRPCServer{
+		bind: func(ctx context.Context, request *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {
+			incoming, ok := metadata.FromIncomingContext(ctx)
+			require.True(t, ok)
+			require.Equal(t, []string{"Bearer fixture-token"}, incoming.Get("authorization"))
+			require.Empty(t, incoming.Get(uci.NoAuthCodeClientInstanceMetadataKey))
+			return uciClientTestBindResponse(request), nil
+		},
+		call: func(ctx context.Context, _ *pb.CallToolRequest) (*pb.CallToolResponse, error) {
+			incoming, ok := metadata.FromIncomingContext(ctx)
+			require.True(t, ok)
+			require.Equal(t, []string{"Bearer fixture-token"}, incoming.Get("authorization"))
+			require.Empty(t, incoming.Get(uci.NoAuthCodeClientInstanceMetadataKey))
+			return &pb.CallToolResponse{ContentJson: []byte(`{"type":"text","text":"ok"}`)}, nil
+		},
+	}
+	serverURL := startUCIIndexAdapterGRPC(t, server)
+	mod := NewModule()
+	t.Cleanup(mod.pool.closeAll)
+	adapter := NewUCIIndexAdapter(mod)
+	ctx := auditcontext.WithUCITransportSession(context.Background(), "legacy-session")
+	ctx = metadata.AppendToOutgoingContext(ctx, uci.NoAuthCodeClientInstanceMetadataKey, "spoofed")
+	target, err := adapter.ResolveIndexTarget(ctx, uciClientTestProject(serverURL), "legacy-context-handle")
+	require.NoError(t, err)
+	_, err = adapter.ProxyHandleTool(ctx, target, "codebase_status", json.RawMessage(`{}`))
+	require.NoError(t, err)
+	require.Len(t, server.bindRequestsSnapshot(), 1)
+	require.Len(t, server.callRequestsSnapshot(), 1)
+}
+
+func TestUCIClientRejectsMalformedInstallationAnchor(t *testing.T) {
+	for _, instance := range []string{"invalid\r\nheader", " leading", "a/b", "a:b"} {
 		rpc := &uciClientRPCFake{}
 		_, err := newUCIClient(rpc, instance).Bind(context.Background(), &pb.BindCodeContextRequest{ClientSessionId: "client-a"})
 		require.Error(t, err, "instance %q", instance)
