@@ -180,9 +180,26 @@ func TestNoAuthOperatorCodeRestartRequiresFreshHandshakeAndSelection(t *testing.
 		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &transition))
 		return transition
 	}
+	pinSelection := func(transition operatorCodeTransitionResponse, selectionRef string) {
+		request := operatorCodeHTTPTestRequest(t, `{"document_proof":"`+transition.DocumentProof+`","selection_ref":"`+selectionRef+`"}`, noauth)
+		request.Header.Set("X-Engram-Auth-Disabled", "true")
+		route := chi.NewRouteContext()
+		route.URLParams.Add("tab_binding_id", transition.TabBindingID)
+		request = request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, route))
+		response := httptest.NewRecorder()
+		adapter.HandlePin(response, request)
+		require.Equal(t, http.StatusNoContent, response.Code, response.Body.String())
+	}
 	first := handshake("before-restart")
 	oldProof := `{"tab_binding_id":"` + first.TabBindingID + `","document_proof":"` + first.DocumentProof + `"}`
-	require.Equal(t, http.StatusOK, call(oldProof, adapter.HandleContexts).Code)
+	firstCatalog := call(oldProof, adapter.HandleContexts)
+	require.Equal(t, http.StatusOK, firstCatalog.Code, firstCatalog.Body.String())
+	var firstContexts operatorCodeContextsResponse
+	require.NoError(t, json.Unmarshal(firstCatalog.Body.Bytes(), &firstContexts))
+	require.Len(t, firstContexts.Contexts, 1)
+	pinSelection(first, firstContexts.Contexts[0].SelectionRef)
+	fixture.app.status = mcp.CodebaseStatusSnapshot{TotalChunks: 1, Embedding: uci.EmbeddingStatus{Coverage: uci.IndexCoverageUnavailable}}
+	require.Equal(t, http.StatusOK, call(oldProof, adapter.HandleStatus).Code, "selection is pinned before restart")
 
 	adapter.noAuthBindings = newNoAuthCodeBindings() // Simulate server restart; catalog remains durable.
 	resume := `{"tab_binding_id":"` + first.TabBindingID + `","resume_nonce":"` + first.ResumeNonce + `","reload_token":"` + first.ReloadToken + `","document_nonce":"after-restart"}`
@@ -198,15 +215,7 @@ func TestNoAuthOperatorCodeRestartRequiresFreshHandshakeAndSelection(t *testing.
 	require.NoError(t, json.Unmarshal(catalog.Body.Bytes(), &contexts))
 	require.Len(t, contexts.Contexts, 1)
 	require.NotEmpty(t, contexts.Contexts[0].SelectionRef)
-	fixture.app.status = mcp.CodebaseStatusSnapshot{TotalChunks: 1, Embedding: uci.EmbeddingStatus{Coverage: uci.IndexCoverageUnavailable}}
 	require.Equal(t, http.StatusForbidden, call(newProof, adapter.HandleStatus).Code, "new document has no inherited pin")
-	pinRequest := operatorCodeHTTPTestRequest(t, `{"document_proof":"`+second.DocumentProof+`","selection_ref":"`+contexts.Contexts[0].SelectionRef+`"}`, noauth)
-	pinRequest.Header.Set("X-Engram-Auth-Disabled", "true")
-	route := chi.NewRouteContext()
-	route.URLParams.Add("tab_binding_id", second.TabBindingID)
-	pinRequest = pinRequest.WithContext(context.WithValue(pinRequest.Context(), chi.RouteCtxKey, route))
-	pin := httptest.NewRecorder()
-	adapter.HandlePin(pin, pinRequest)
-	require.Equal(t, http.StatusNoContent, pin.Code, pin.Body.String())
+	pinSelection(second, contexts.Contexts[0].SelectionRef)
 	require.Equal(t, http.StatusOK, call(newProof, adapter.HandleStatus).Code, "fresh catalog selection restores access")
 }
