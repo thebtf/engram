@@ -2,14 +2,15 @@
 description: Configure Engram for Claude Code, Oh My Pi, or Codex
 ---
 
-# Engram Setup (v6 — two-tier token model)
+# Engram Setup (v6 — server-selected authentication)
 
-Configure the connection to your Engram server.
-
-> **v6 BREAKING CHANGE.** Do not put the server-host operator key
-> (`ENGRAM_AUTH_ADMIN_TOKEN`) on a workstation. Each workstation needs a
-> browser-admin-issued client keycard from `{SERVER_URL}/access`.
-> Upgrading from v5.x requires a new keycard before the client can authenticate.
+Configure the connection to your Engram server. Check the server's effective
+`auth_disabled` value at `{SERVER_URL}/api/auth/me` before choosing credentials;
+do not infer it from workstation settings. When `auth_disabled=true`, configure
+the URL without a token. When authentication is enabled, each workstation needs
+a browser-admin-issued client keycard from `{SERVER_URL}/access`. Never put the
+server-host operator key (`ENGRAM_AUTH_ADMIN_TOKEN`) on a workstation. Do not
+change server authentication as part of client setup.
 
 ## OMP and Codex setup
 
@@ -23,19 +24,19 @@ Configure the connection to your Engram server.
 ### Supported path: engram config file
 
 Create `~/.engram/config.json` (or a path of your choice pointed to by
-`ENGRAM_CONFIG_FILE`):
+`ENGRAM_CONFIG_FILE`). For a server reporting `auth_disabled=true`:
 
 ```json
 {
-  "server_url": "http://your-server:37777",
-  "api_token": "engram_<32hex-keycard-from-access>"
+  "server_url": "http://your-server:37777"
 }
 ```
 
-On POSIX systems, restrict the file to your user account with
-`chmod 600 ~/.engram/config.json` and keep its parent directory private. On Windows,
-check the file's NTFS ACLs rather than assuming inherited permissions are
-private. Never commit, paste into chat, or log the keycard.
+For an auth-enabled server, add `"api_token"` with the client keycard issued
+in step 2. Restrict files containing keycards to your user account: on POSIX,
+`chmod 600 ~/.engram/config.json` and keep its parent directory private; on
+Windows, check NTFS ACLs rather than assuming inherited permissions are private.
+Never commit, paste into chat, or log a keycard.
 
 The wrapper uses a non-empty `ENGRAM_URL` / `ENGRAM_TOKEN` (or forwarded plugin
 options) before config values. For config files, `ENGRAM_CONFIG_FILE` selects
@@ -57,29 +58,30 @@ For Codex versions that still forward `shell_environment_policy.set`:
 ```toml
 [shell_environment_policy.set]
 ENGRAM_URL = "http://your-server:37777"
-ENGRAM_TOKEN = "engram_<32hex-keycard-from-access>"
 ```
 
+For an auth-enabled server, also set `ENGRAM_TOKEN` to its client keycard.
 This path was never a documented contract for plugin MCP servers and stopped
 working with Codex 0.139. Prefer the config file for new setups.
 
 Then restart Codex or open a new Codex thread so MCP startup sees the new
-environment. If Codex offers plugin authentication during install, provide the
-same server URL and worker keycard there.
+environment. If Codex offers plugin authentication during install, provide
+the server URL and, only for an auth-enabled server, its worker keycard.
 
 ## Claude Code setup
 
-Claude Code supports two paths for plugin credentials:
+Claude Code supports two paths for plugin configuration:
 
 1. **`/config` UI** → stored in `~/.claude/.credentials.json`
    `pluginSecrets["engram@engram"]`. Prone to silent wipes from CC's shared
    credential-store race (anthropics/claude-code#45551 + engram issue #83).
    After `/login`, a concurrent MCP OAuth write, or a CC update, `api_token`
-   can disappear and the plugin loses auth without warning.
+   can disappear and an auth-enabled plugin loses auth without warning.
 
-2. **`settings.json` `env` section** (recommended) → `ENGRAM_URL` +
-   `ENGRAM_TOKEN` in `~/.claude/settings.json`. Survives all of the above
-   because it's a separate file touched only by your edits.
+2. **`settings.json` `env` section** (recommended) → `ENGRAM_URL` and, only
+   for auth-enabled servers, `ENGRAM_TOKEN` in `~/.claude/settings.json`.
+   Survives all of the above because it's a separate file touched only by
+   your edits.
 
 The Claude plugin accepts either path; this guide uses path 2.
 
@@ -96,15 +98,17 @@ If the user is unsure, suggest checking their Docker host's IP and port 37777.
 
 Store the answer as `SERVER_URL`.
 
-### 2. Issue a client keycard through Access
+### 2. Issue a client keycard only when server authentication is enabled
 
-Ask the user to do this in their own browser; do not request the keycard in
-chat or call the issuance API on their behalf:
+If `{SERVER_URL}/api/auth/me` reports `auth_disabled=true`, skip this step;
+the server does not require a workstation keycard or browser login. Do not
+enable server authentication just to configure the plugin.
+
+For an auth-enabled server, ask the user to do this in their own browser; do
+not request the keycard in chat or call the issuance API on their behalf:
 
 > 1. Open `{SERVER_URL}/access` and log in with a **real browser admin
->    session**. A server running `ENGRAM_AUTH_DISABLED=true` exposes a
->    synthetic admin identity, which cannot issue keycards; ask the server
->    operator to enable real authentication and provision an admin first.
+>    session**.
 > 2. In **Keycards**, enter a workstation name, choose `read-write` for a
 >    client that stores memories (`read-only` only for a read-only client),
 >    and enter the intended principal and principal kind (`human`, `agent`,
@@ -116,41 +120,43 @@ chat or call the issuance API on their behalf:
 >    configuration in step 3. Do not send it to the assistant or store it
 >    in the repository. Dismiss the one-time display after saving it.
 
-If Access says forbidden or issuance is disabled, stop and resolve the admin
-session/authentication setup with the server operator. A bearer operator key
-or existing client keycard is not a substitute for a browser admin session.
+If Access says forbidden or issuance is disabled on an auth-enabled server,
+stop and resolve the admin session/authentication setup with the server
+operator. A bearer operator key or existing client keycard is not a substitute
+for a browser admin session.
 
 ### 3. Update local agent config
 
-Have the user edit their local config privately; examples below contain only
-placeholders. Do not read back or echo a populated credential file.
+Have the user edit their local config privately; examples below contain no
+credentials. Do not read back or echo a populated credential file.
 
-For Claude Code, put `ENGRAM_URL` and `ENGRAM_TOKEN` in the `env` section of
+For Claude Code, put `ENGRAM_URL` in the `env` section of
 `~/.claude/settings.json`:
 
 ```json
 {
   "env": {
-    "ENGRAM_URL": "http://192.168.1.100:37777",
-    "ENGRAM_TOKEN": "engram_<32hex-keycard-from-access>"
+    "ENGRAM_URL": "http://192.168.1.100:37777"
   }
 }
 ```
 
-Replace the placeholder locally with the one-time keycard. Remove stale
-`ENGRAM_AUTH_ADMIN_TOKEN` and `ENGRAM_API_TOKEN` entries from the workstation
-config; neither is the workstation credential.
+For an auth-enabled server, add `ENGRAM_TOKEN` with the one-time worker
+keycard privately. Remove stale `ENGRAM_AUTH_ADMIN_TOKEN` and
+`ENGRAM_API_TOKEN` entries from the workstation config; neither is the
+workstation credential. For a noauth server, leave `ENGRAM_TOKEN` unset and
+remove stale token values from the selected config source.
 
-For OMP and Codex, put the server URL and keycard in the config file shown in
-"OMP and Codex setup" above (or select it with `ENGRAM_CONFIG_FILE`).
+For OMP and Codex, put the server URL in the config file shown in
+"OMP and Codex setup" above (or select it with `ENGRAM_CONFIG_FILE`), adding
+`api_token` only for an auth-enabled server.
 
 ### 4. Restart the agent host
 
 > Settings are only read when the agent host starts. Please **close and reopen
 > Claude Code or OMP, or start a new Codex thread** for the changes to take
-> effect. The plugin wrapper exits non-zero when `ENGRAM_URL` or
-> `ENGRAM_TOKEN` is missing, so you'll see a clear error rather than silent
-> partial-tool degradation.
+> effect. The plugin wrapper exits non-zero when the server URL is missing;
+> a server with authentication enabled also requires a valid worker keycard.
 
 ### 5. Verify connection
 
@@ -165,16 +171,18 @@ Tool: check_system_health()
 
 ### Common issues
 
-- **Token format**: The client keycard is `engram_` followed by 32 hex
-  characters. Never use the server-host operator key on a workstation.
-- **Token not found / revoked**: A real browser admin can issue a replacement
-  in `/access`; repeat step 3 without sharing the keycard in chat.
+- **Token format (auth-enabled only)**: The client keycard is `engram_`
+  followed by 32 hex characters. Never use the server-host operator key on a
+  workstation.
+- **Token not found / revoked (auth-enabled only)**: A real browser admin can
+  issue a replacement in `/access`; repeat step 3 without sharing the keycard
+  in chat.
 - **Private memory denied**: Check the keycard's principal **and kind** match
   the private memory owner; `read-write` scope alone does not grant access.
-- **Token mismatch**: Issue a separate keycard for each workstation so it
-  can be revoked independently.
-- **Daemon refuses to start**: Check stderr in the CC plugin status panel —
-  v6 fail-fast prints the missing-env line directly.
+- **Token mismatch (auth-enabled only)**: Issue a separate keycard for each
+  workstation so it can be revoked independently.
+- **Daemon refuses to start**: Check stderr in the CC plugin status panel;
+  the wrapper prints a missing-URL diagnostic when no server URL is configured.
 - **Firewall**: Port 37777 must be reachable from this machine to the server.
 - **Docker networking**: If the server runs in Docker, use the host
   machine's IP (not `localhost` unless same machine).
@@ -199,22 +207,23 @@ or a version bump), best-effort, and non-fatal; it makes no context injection.
 If you want zero MCP activity too, disable the engram plugin rather than using
 quiet mode.
 
-Set it the same way you set credentials for your harness:
+Set it the same way you set the server URL for your harness:
 
 - **Claude Code** — env var `ENGRAM_QUIET=1` (alias `ENGRAM_QUIET_HOOKS=1`) in
-  `~/.claude/settings.json` `env`, next to `ENGRAM_URL`/`ENGRAM_TOKEN`. The
-  plugin-config option `engram_quiet` also works (`CLAUDE_PLUGIN_OPTION_*`).
+  `~/.claude/settings.json` `env`, next to `ENGRAM_URL`. The plugin-config
+  option `engram_quiet` also works (`CLAUDE_PLUGIN_OPTION_*`).
 - **Codex ≥0.139** — env vars are NOT forwarded to plugin hook children
   (openai/codex#24401), so the env var will NOT work. Add `"quiet": true` to
-  `~/.engram/config.json` instead, alongside `server_url`/`api_token`:
+  `~/.engram/config.json` instead, alongside `server_url`:
 
   ```json
   {
     "server_url": "http://your-server:37777",
-    "api_token": "engram_<keycard>",
     "quiet": true
   }
   ```
+
+  For an auth-enabled server, also include `api_token` in that config file.
 
 Truthy values: `true` (boolean) or the strings `1`/`true`/`yes`/`on`
 (case-insensitive); unset or anything else leaves hooks fully active. Reversible
