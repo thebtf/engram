@@ -911,18 +911,19 @@ func uciClientOutgoingContext(ctx context.Context, clientInstanceID string) (con
 		}
 	}
 	delete(outgoing, uci.NoAuthCodeClientInstanceMetadataKey)
-	if clientInstanceID != "" {
+	// gRPC metadata values are ASCII-only; authenticated UCI does not use this hint.
+	if clientInstanceID != "" && len(clientInstanceID) == utf8.RuneCountInString(clientInstanceID) {
 		outgoing.Set(uci.NoAuthCodeClientInstanceMetadataKey, clientInstanceID)
 	}
 	return metadata.NewOutgoingContext(ctx, outgoing), nil
 }
 
 func validUCIClientInstanceMetadata(value string) bool {
-	if !validUCIClientIdentifier(value, maxUCIClientIdentifierBytes) || strings.ContainsAny(value, "/\\@") {
+	if value == "" || !utf8.ValidString(value) || utf8.RuneCountInString(value) > 256 || strings.ContainsAny(value, "/\\@") {
 		return false
 	}
 	for _, character := range value {
-		if unicode.IsSpace(character) {
+		if unicode.IsSpace(character) || unicode.IsControl(character) {
 			return false
 		}
 	}

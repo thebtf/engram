@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -140,18 +141,19 @@ func TestUCIClientPropagatesSourceSessionMetadata(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestUCIClientEmitsAnchoredMetadataOnDirectRPCs(t *testing.T) {
-	const instance = "1:installation"
+func TestUCIClientAcceptsUnicodeV3InstanceOnDirectRPCs(t *testing.T) {
+	instance := strings.Repeat("界", 86)
 	_, err := projectidentity.BuildDescriptorV3(projectidentity.AnchorV3{
 		Version: 3, ProjectID: uciClientTestSpaceID, Name: "fixture", Scope: "repository",
 	}, nil, nil, instance)
 	require.NoError(t, err, "the V3 validator accepts this installation ID")
+	require.Greater(t, len(instance), 256)
 	_, noAuthValid := uci.NoAuthCodeWorkstationForInstance(instance)
 	require.False(t, noAuthValid, "no-auth server derivation remains stricter")
 	check := func(ctx context.Context) {
 		outgoing, ok := metadata.FromOutgoingContext(ctx)
 		require.True(t, ok)
-		require.Equal(t, []string{instance}, outgoing.Get(uci.NoAuthCodeClientInstanceMetadataKey))
+		require.Empty(t, outgoing.Get(uci.NoAuthCodeClientInstanceMetadataKey))
 	}
 	ctx := metadata.AppendToOutgoingContext(context.Background(), uci.NoAuthCodeClientInstanceMetadataKey, "spoofed", uci.NoAuthCodeClientInstanceMetadataKey, "duplicate")
 	rpc := &uciClientRPCFake{
@@ -228,11 +230,27 @@ func TestUCILegacyModuleReachesAuthenticatedRPCWithoutInstallationAnchor(t *test
 }
 
 func TestUCIClientRejectsMalformedInstallationAnchor(t *testing.T) {
-	for _, instance := range []string{"invalid\r\nheader", " leading", "a/b", "a:b"} {
+	for _, instance := range []string{"invalid\r\nheader", " leading", "a/b", "a:b", string([]byte{0xff}), strings.Repeat("界", 257)} {
 		rpc := &uciClientRPCFake{}
-		_, err := newUCIClient(rpc, instance).Bind(context.Background(), &pb.BindCodeContextRequest{ClientSessionId: "client-a"})
+		client := newUCIClient(rpc, instance)
+		_, err := client.Bind(context.Background(), &pb.BindCodeContextRequest{ClientSessionId: "client-a"})
+		require.Error(t, err, "instance %q", instance)
+		_, err = client.Begin(context.Background(), uciClientTestBeginRequest(uciClientTestScopeA(), "daemon-a", "build-key-a"))
+		require.Error(t, err, "instance %q", instance)
+		_, err = client.Stage(context.Background(), []*pb.StageCodeIndexFrame{uciClientTestStageFrame(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, 0)})
+		require.Error(t, err, "instance %q", instance)
+		_, err = client.Finalize(context.Background(), uciClientTestFinalizeRequest(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, uciClientTestContextA(), uciClientTestAggregatePartsDigest))
+		require.Error(t, err, "instance %q", instance)
+		_, err = client.Query(context.Background(), uciClientTestQueryRequest(uciClientTestContextA()))
+		require.Error(t, err, "instance %q", instance)
+		_, err = client.Explore(context.Background(), uciClientTestExploreRequest(uciClientTestContextA()))
 		require.Error(t, err, "instance %q", instance)
 		require.Empty(t, rpc.bindRequests)
+		require.Empty(t, rpc.beginRequests)
+		require.Zero(t, rpc.stageOpenCalls)
+		require.Empty(t, rpc.finalizeRequests)
+		require.Empty(t, rpc.queryRequests)
+		require.Empty(t, rpc.exploreRequests)
 	}
 }
 
@@ -748,9 +766,10 @@ func TestUCIIndexAdapterForwardsV3InstallationAcrossAuthenticatedBindAndProxy(t 
 		transportTag  = "transport-tag-a"
 		contextHandle = "transport-context-handle"
 	)
+	instance := strings.Repeat("界", 86)
 	server := &uciIndexAdapterGRPCServer{}
 	serverURL := startUCIIndexAdapterGRPC(t, server)
-	mod := NewModuleWithClientInstanceID("1:installation")
+	mod := NewModuleWithClientInstanceID(instance)
 	t.Cleanup(mod.pool.closeAll)
 	adapter := NewUCIIndexAdapter(mod)
 	ctx := auditcontext.WithUCITransportSession(context.Background(), transportTag)
@@ -769,8 +788,8 @@ func TestUCIIndexAdapterForwardsV3InstallationAcrossAuthenticatedBindAndProxy(t 
 	bindMetadata, callMetadata := server.metadataSnapshot()
 	require.Equal(t, []string{transportTag}, bindMetadata.Get(auditcontext.SourceSessionMetadataKey))
 	require.Equal(t, []string{transportTag}, callMetadata.Get(auditcontext.SourceSessionMetadataKey))
-	require.Equal(t, []string{"1:installation"}, bindMetadata.Get(uci.NoAuthCodeClientInstanceMetadataKey))
-	require.Equal(t, []string{"1:installation"}, callMetadata.Get(uci.NoAuthCodeClientInstanceMetadataKey))
+	require.Empty(t, bindMetadata.Get(uci.NoAuthCodeClientInstanceMetadataKey))
+	require.Empty(t, callMetadata.Get(uci.NoAuthCodeClientInstanceMetadataKey))
 	require.Equal(t, []string{"Bearer fixture-token"}, bindMetadata.Get("authorization"))
 	require.Equal(t, []string{"Bearer fixture-token"}, callMetadata.Get("authorization"))
 }
