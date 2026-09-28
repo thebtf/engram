@@ -385,7 +385,12 @@ func TestUCIPreparedIndexBuiltParserHandlesCallTriviaAndAssertionWrite(t *testin
 		{"javascript comment", "export function helper(n) { return n; }\nexport function caller(n) { return helper /* trivia */ (n); }", uci.TreeSitterLanguageJavaScript, true, false},
 		{"typescript whitespace", "export function helper(n: number) { return n; }\nexport function caller(n: number) { return helper (n); }", uci.TreeSitterLanguageTypeScript, true, false},
 		{"typescript comment", "export function helper(n: number) { return n; }\nexport function caller(n: number) { return helper /* trivia */ (n); }", uci.TreeSitterLanguageTypeScript, true, false},
+		{"generator javascript", "export function* helper(n) { yield n; }\nexport function* caller(n) { yield helper(n); }", uci.TreeSitterLanguageJavaScript, true, false},
+		{"generator typescript", "export function* helper(n: number) { yield n; }\nexport function* caller(n: number) { yield helper(n); }", uci.TreeSitterLanguageTypeScript, true, false},
+		{"generator tsx", "export function* helper(n: number) { yield n; }\nexport function* caller(n: number) { yield helper(n); }", uci.TreeSitterLanguageTSX, true, false},
+		{"generator assignment", "export function* helper(n) { yield n; }\nexport function* caller(n) { helper = n; yield helper(n); }", uci.TreeSitterLanguageJavaScript, false, true},
 		{"typescript assertion write", "export function helper(n: number) { return n; }\nexport function caller(n: any) { (helper as any) = n; return helper(n); }", uci.TreeSitterLanguageTypeScript, false, true},
+		{"typescript angle assertion write", "export function helper(n: number) { return n; }\nexport function caller(n: any) { (<any>helper) = n; return helper(n); }", uci.TreeSitterLanguageTypeScript, false, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			body := []byte(test.source)
@@ -530,15 +535,18 @@ func TestUCIPreparedIndexBuiltParserIgnoresDeclarationTextInTrivia(t *testing.T)
 		name, source string
 		ambiguous    bool
 		duplicate    bool
+		language     uci.TreeSitterLanguage
 	}{
-		{"comment", "export function helper(n) { return n; }\n// function helper(\nexport function caller(n) { return helper(n); }", false, false},
-		{"string", "export function helper(n) { return n; }\nconst note = 'function helper(';\nexport function caller(n) { return helper(n); }", false, false},
-		{"multiple bindings", "export function helper(n) { return n; }\nconst helper = 1;\nexport function caller(n) { return helper(n); }", true, false},
-		{"duplicate declaration", "export function helper(n) { return n; }\nexport function helper(n) { return n + 1; }\nexport function caller(n) { return helper(n); }", true, true},
+		{"comment", "export function helper(n) { return n; }\n// function helper(\nexport function caller(n) { return helper(n); }", false, false, uci.TreeSitterLanguageJavaScript},
+		{"string", "export function helper(n) { return n; }\nconst note = 'function helper(';\nexport function caller(n) { return helper(n); }", false, false, uci.TreeSitterLanguageJavaScript},
+		{"comment before shadowing parameter", "export function helper(n) { return n; }\nexport function caller /* (x) */(helper) { return helper(1); }", true, false, uci.TreeSitterLanguageJavaScript},
+		{"generic parameter shadows helper", "export function helper(n: number) { return n; }\nexport function caller<T extends { method(x: number): void }>(helper: T) { return helper(1); }", true, false, uci.TreeSitterLanguageTypeScript},
+		{"multiple bindings", "export function helper(n) { return n; }\nconst helper = 1;\nexport function caller(n) { return helper(n); }", true, false, uci.TreeSitterLanguageJavaScript},
+		{"duplicate declaration", "export function helper(n) { return n; }\nexport function helper(n) { return n + 1; }\nexport function caller(n) { return helper(n); }", true, true, uci.TreeSitterLanguageJavaScript},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			body := []byte(test.source)
-			parsed, err := parser.Parse(context.Background(), uci.TreeSitterParseRequest{Language: uci.TreeSitterLanguageJavaScript, ProfileKey: "local-call-declaration-trivia/v1", Source: body})
+			parsed, err := parser.Parse(context.Background(), uci.TreeSitterParseRequest{Language: test.language, ProfileKey: "local-call-declaration-trivia/v1", Source: body})
 			require.NoError(t, err)
 			if test.duplicate {
 				require.Equal(t, uci.IndexCoveragePartial, parsed.Coverage)
@@ -546,7 +554,7 @@ func TestUCIPreparedIndexBuiltParserIgnoresDeclarationTextInTrivia(t *testing.T)
 			} else {
 				require.Equal(t, uci.IndexCoverageComplete, parsed.Coverage, "%+v", parsed.Diagnostics)
 			}
-			profile, err := uci.TreeSitterIndexAdmissionArtifactProfile(uci.TreeSitterLanguageJavaScript, uci.TreeSitterBundleDigest())
+			profile, err := uci.TreeSitterIndexAdmissionArtifactProfile(test.language, uci.TreeSitterBundleDigest())
 			require.NoError(t, err)
 			artifact, err := uci.NewIndexAdmissionArtifactFromTreeSitter("11111111-1111-4111-8111-111111111111", profile, body, parsed)
 			require.NoError(t, err)

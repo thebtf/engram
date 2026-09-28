@@ -704,6 +704,11 @@ func (collector *parserCollector) bindingNodes(node *tree_sitter.Node) []*tree_s
 			return collector.bindingNodes(node.NamedChild(0))
 		}
 		return nil
+	case "type_assertion":
+		if node.NamedChildCount() == 2 && node.NamedChild(0).Kind() == "type_arguments" {
+			return collector.bindingNodes(node.NamedChild(1))
+		}
+		return nil
 	case "pair_pattern":
 		return collector.bindingNodes(node.ChildByFieldName("value"))
 	case "array_pattern", "object_pattern", "rest_pattern":

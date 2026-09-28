@@ -1170,7 +1170,7 @@ func uciPreparedTreeSitterDirectLocalCallTarget(file *uciPreparedAdmissionFile, 
 		callee.Span.ByteStart >= callee.Span.ByteEnd {
 		return uciPreparedTreeSitterTarget{}, false
 	}
-	if _, ok := uciPreparedTreeSitterFunctionOpen(body[callee.Span.ByteStart:callee.Span.ByteEnd], local, true); !ok {
+	if !bytes.HasPrefix(body[callee.Span.ByteStart:callee.Span.ByteEnd], []byte("export ")) {
 		return uciPreparedTreeSitterTarget{}, false
 	}
 	if caller == nil || caller.Kind != "function" || caller.Span.ByteStart < 0 || caller.Span.ByteEnd > int64(len(body)) ||
@@ -1178,9 +1178,11 @@ func uciPreparedTreeSitterDirectLocalCallTarget(file *uciPreparedAdmissionFile, 
 		return uciPreparedTreeSitterTarget{}, false
 	}
 	declaration := body[caller.Span.ByteStart:caller.Span.ByteEnd]
-	name := strings.TrimPrefix(caller.LocalSymbolKey, "function:")
-	open, ok := uciPreparedTreeSitterFunctionOpen(declaration, name, true)
-	if !ok {
+	if !bytes.HasPrefix(declaration, []byte("export ")) {
+		return uciPreparedTreeSitterTarget{}, false
+	}
+	open := bytes.IndexByte(declaration, '(')
+	if open < 0 || bytes.ContainsAny(declaration[:open], "</") {
 		return uciPreparedTreeSitterTarget{}, false
 	}
 	parameters := declaration[open+1:]
