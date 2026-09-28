@@ -1,5 +1,13 @@
 import { expect, test } from '@playwright/test'
 
+test.beforeEach(async ({ page }, testInfo) => {
+  await page.context().addCookies([{
+    name: 'mock-vault-session',
+    value: crypto.randomUUID(),
+    url: testInfo.project.use.baseURL!,
+  }])
+})
+
 test('secrets reveal uses project scope when credential names collide', async ({ page }) => {
   const revealProjects: Array<string | null> = []
   const failedRequests: string[] = []
@@ -37,6 +45,31 @@ test('secrets reveal uses project scope when credential names collide', async ({
   expect(failedRequests).toEqual([])
   expect(badResponses).toEqual([])
   expect(pageErrors).toEqual([])
+})
+
+test('a second browser session deleting the same project credential cannot hide this session’s reveal', async ({ page, browser }) => {
+  await page.goto('/secrets')
+  const betaRow = page.getByTestId('secret-row-2')
+  await expect(betaRow).toBeVisible()
+
+  const otherSession = await browser.newContext({ baseURL: test.info().project.use.baseURL })
+  try {
+    await otherSession.addCookies([{
+      name: 'mock-vault-session',
+      value: crypto.randomUUID(),
+      url: test.info().project.use.baseURL!,
+    }])
+    const deleted = await otherSession.request.delete('/api/vault/credentials/shared-token?project=beta')
+    expect(deleted.status()).toBe(200)
+    expect((await otherSession.request.get('/api/vault/credentials/shared-token?project=beta')).status()).toBe(404)
+
+    const revealed = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/vault/credentials/shared-token')
+    await page.getByTestId('secret-reveal-2').click()
+    expect((await revealed).status()).toBe(200)
+    await expect(betaRow.getByText('beta-secret-value')).toBeVisible()
+  } finally {
+    await otherSession.close()
+  }
 })
 
 test('secrets delete confirmation is scoped to the selected credential', async ({ page }) => {

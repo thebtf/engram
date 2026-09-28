@@ -549,7 +549,7 @@ let domainRows = [
   },
 ]
 
-const vaultCredentials = [
+const initialVaultCredentials = [
   {
     id: 1,
     name: 'shared-token',
@@ -576,6 +576,15 @@ const vaultCredentials = [
     orphaned: true,
   },
 ]
+const vaultSessions = new Map()
+
+function vaultCredentialsFor(req) {
+  const session = /(?:^|;\s*)mock-vault-session=([^;]+)/.exec(req.headers.cookie || '')?.[1] || 'default'
+  if (!vaultSessions.has(session)) {
+    vaultSessions.set(session, initialVaultCredentials.map((credential) => ({ ...credential })))
+  }
+  return vaultSessions.get(session)
+}
 let issueRows = [
   {
     id: 701,
@@ -1357,6 +1366,7 @@ const server = createServer(async (req, res) => {
   }
 
   if (req.method === 'DELETE' && path === '/api/vault/orphaned-credentials') {
+    const vaultCredentials = vaultCredentialsFor(req)
     const deleted = vaultCredentials.filter((credential) => credential.orphaned).length
     for (let index = vaultCredentials.length - 1; index >= 0; index -= 1) {
       if (vaultCredentials[index].orphaned) vaultCredentials.splice(index, 1)
@@ -1367,6 +1377,7 @@ const server = createServer(async (req, res) => {
 
   const vaultCredentialMatch = path.match(/^\/api\/vault\/credentials\/([^/]+)$/)
   if (vaultCredentialMatch) {
+    const vaultCredentials = vaultCredentialsFor(req)
     const name = decodeURIComponent(vaultCredentialMatch[1])
     const project = url.searchParams.get('project') || ''
     const cred = vaultCredentials.find((item) => item.name === name && (item.project || '') === project)
@@ -1941,10 +1952,10 @@ const server = createServer(async (req, res) => {
       }
       return
     case '/api/vault/credentials':
-      json(res, 200, vaultCredentials.map(({ value: _value, orphaned: _orphaned, ...item }) => item))
+      json(res, 200, vaultCredentialsFor(req).map(({ value: _value, orphaned: _orphaned, ...item }) => item))
       return
     case '/api/vault/status':
-      json(res, 200, { key_configured: true, fingerprint: 'abcddcba11223344', key_source: 'mock', credential_count: vaultCredentials.length })
+      json(res, 200, { key_configured: true, fingerprint: 'abcddcba11223344', key_source: 'mock', credential_count: vaultCredentialsFor(req).length })
       return
     case '/api/sessions/list':
       {

@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bootstrap Code Explorer on a LAN browser origin without a login session, and keep search, graph traversal, and source reads bound to the same selected View; verified semantic and graph source in separate working copies.
 - Let the plugin connect without a keycard when the server disables authentication, leaving token decisions to the server and retaining keycards for auth-enabled servers.
 - Align the cross-platform UCI parser semantic profile and initialize a tracked project anchor offline; update the no-auth Workspace setup and usage guidance.
+- Isolate mock vault credentials between parallel browser sessions so one Secrets delete cannot invalidate another session's reveal of a same-named project credential.
 
 ## [6.50.0] - 2026-09-26
 
