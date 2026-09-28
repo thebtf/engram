@@ -6,12 +6,14 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/uci"
 )
@@ -272,4 +274,57 @@ func TestNoAuthOperatorCodeCapacityRecoversFromInactiveTabs(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, call(expiredResume, adapter.HandleResume).Code, "evicted expired lease cannot resume")
 	require.Equal(t, http.StatusOK, call(activeProof, adapter.HandleContexts).Code, "recovery preserves active proof")
 	require.Equal(t, http.StatusForbidden, call(`{"document_nonce":"still-full"}`, adapter.HandleHandshake).Code, "all remaining tabs are live")
+}
+
+func TestNoAuthOperatorCodeCursorCapacityEvictsOldestAbandonedCursor(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	adapter.authority = noAuthHTTPAuthority{fixture.ref}
+	identity := auth.AuthDisabled()
+	ctx := context.Background()
+	abandoned, err := adapter.noAuthBindings.Handshake(ctx, identity, "", BrowserBindingHandshakeInput{DocumentNonce: "abandoned-tab"})
+	require.NoError(t, err)
+	active, err := adapter.noAuthBindings.Handshake(ctx, identity, "", BrowserBindingHandshakeInput{DocumentNonce: "active-tab"})
+	require.NoError(t, err)
+	activeProof := BrowserBindingProof{TabBindingID: active.TabBindingID, DocumentProof: active.DocumentProof}
+	require.NoError(t, adapter.noAuthBindings.Pin(ctx, identity, activeProof, fixture.ref))
+
+	oldBinding := gormdb.BrowserCodeContinuationBinding{AuthRealm: uci.NoAuthCodeRealm, TabBindingID: abandoned.TabBindingID}
+	now := time.Now()
+	for index := range 2048 {
+		deadline := now.Add(8 * time.Minute)
+		if index == 0 {
+			deadline = now.Add(time.Minute)
+		}
+		adapter.noAuthBindings.cursors["abandoned-"+strconv.Itoa(index)] = noAuthCodeCursor{binding: oldBinding, service: "service-cursor", expires: deadline}
+	}
+	adapter.noAuthBindings.cursors["abandoned-2047"] = noAuthCodeCursor{binding: oldBinding, service: "live-cursor", expires: now.Add(9 * time.Minute)}
+	serviceCursor := "usc1.00000000-0000-4000-8000-000000000001"
+	response := operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalLexical)
+	truncated := true
+	response.Truncated = &truncated
+	response.Continuation = &uci.QueryContinuation{Value: &serviceCursor}
+	fixture.app.search = response
+
+	request := operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+active.TabBindingID+`","document_proof":"`+active.DocumentProof+`","query":"Fixture","limit":1}`, identity)
+	request.Header.Set("X-Engram-Auth-Disabled", "true")
+	search := httptest.NewRecorder()
+	adapter.HandleSearch(search, request)
+	require.Equal(t, 1, fixture.app.searchCalls, "request reached cursor admission after tab authorization")
+	require.Equal(t, http.StatusOK, search.Code, search.Body.String())
+	require.Len(t, adapter.noAuthBindings.cursors, 2048)
+	_, err = adapter.noAuthBindings.cursor("abandoned-0", oldBinding)
+	require.ErrorIs(t, err, gormdb.ErrBrowserCodeContinuationDenied, "the oldest abandoned continuation is no longer usable")
+	value, err := adapter.noAuthBindings.cursor("abandoned-2047", oldBinding)
+	require.NoError(t, err)
+	require.Equal(t, "live-cursor", value, "recent continuation survives unrelated tab's search")
+	_, err = adapter.noAuthBindings.cursor("abandoned-2047", gormdb.BrowserCodeContinuationBinding{AuthRealm: uci.NoAuthCodeRealm, TabBindingID: active.TabBindingID})
+	require.ErrorIs(t, err, gormdb.ErrBrowserCodeContinuationDenied, "other tab cannot redeem an existing cursor")
+	require.NotContains(t, search.Body.String(), serviceCursor)
+	_, err = adapter.noAuthBindings.Guard(ctx, identity, "", activeProof)
+	require.NoError(t, err, "unrelated tab proof remains valid")
+	tab := adapter.noAuthBindings.tabs[active.TabBindingID]
+	tab.expires = now.Add(-time.Second)
+	adapter.noAuthBindings.tabs[active.TabBindingID] = tab
+	_, err = adapter.noAuthBindings.Guard(ctx, identity, "", activeProof)
+	require.ErrorIs(t, err, ErrBrowserBindingDenied, "expired tab proof cannot be extended by cursor eviction")
 }

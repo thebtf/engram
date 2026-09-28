@@ -180,15 +180,22 @@ func (b *noAuthCodeBindings) advanceCursor(previous string, binding gormdb.Brows
 	if service == "" {
 		return "", nil
 	}
+	now := time.Now()
+	oldest := ""
+	var oldestExpiry time.Time
 	for key, cursor := range b.cursors {
-		if time.Now().After(cursor.expires) {
+		if !now.Before(cursor.expires) {
 			delete(b.cursors, key)
+			continue
+		}
+		if oldest == "" || cursor.expires.Before(oldestExpiry) {
+			oldest, oldestExpiry = key, cursor.expires
 		}
 	}
 	if len(b.cursors) >= 2048 {
-		return "", gormdb.ErrBrowserCodeContinuationDenied
+		delete(b.cursors, oldest)
 	}
 	ref := uuid.NewString()
-	b.cursors[ref] = noAuthCodeCursor{binding: binding, service: service, expires: time.Now().Add(10 * time.Minute)}
+	b.cursors[ref] = noAuthCodeCursor{binding: binding, service: service, expires: now.Add(10 * time.Minute)}
 	return ref, nil
 }
