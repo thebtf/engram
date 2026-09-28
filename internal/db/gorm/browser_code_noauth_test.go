@@ -2,6 +2,8 @@ package gorm
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -129,6 +131,104 @@ func TestNoAuthCodeCatalogRejectsMoreThan128CurrentCheckouts(t *testing.T) {
 	entries, err := code.ListNoAuthCatalog(ctx)
 	require.ErrorContains(t, err, "local code context catalog exceeds 128 entries")
 	require.Nil(t, entries, "a partial catalog must never appear complete")
+}
+
+func TestNoAuthCodeRegisterLocalGitRefuses129thWithoutHidingCatalog(t *testing.T) {
+	db, store := openUCIContextMigrationStore(t)
+	ctx := context.Background()
+	input := RegisterLocalGitInput{AuthRealm: uci.NoAuthCodeRealm, Principal: uci.NoAuthCodePrincipal, WorkstationID: "device", SourceLabel: "local-0", Locator: "file:///worktrees/0"}
+	first, err := store.RegisterLocalGit(ctx, input)
+	require.NoError(t, err)
+	for i := 1; i < browserCodeCatalogMaxEntries; i++ {
+		input.SourceID, input.SourceLabel = "", fmt.Sprintf("local-%d", i)
+		if i%2 == 0 {
+			input.SourceID, input.SourceLabel = first.SourceID, ""
+		}
+		input.Locator = fmt.Sprintf("file:///worktrees/%d", i)
+		_, err := store.RegisterLocalGit(ctx, input)
+		require.NoError(t, err, "checkout %d", i)
+	}
+	code := NewBrowserCodeContextStore(db)
+	entries, err := code.ListNoAuthCatalog(ctx)
+	require.NoError(t, err)
+	require.Len(t, entries, browserCodeCatalogMaxEntries)
+	input.SourceID, input.SourceLabel, input.Locator = "", "new-source-at-capacity", "file:///worktrees/excess"
+	_, err = store.RegisterLocalGit(ctx, input)
+	require.ErrorIs(t, err, uci.ErrNoAuthCodeCatalogFull)
+	input.SourceID, input.SourceLabel = first.SourceID, ""
+	_, err = store.RegisterLocalGit(ctx, input)
+	require.ErrorIs(t, err, uci.ErrNoAuthCodeCatalogFull)
+	input.SourceID, input.SourceLabel, input.Locator = "", "local-0", "file:///worktrees/0"
+	replayed, err := store.RegisterLocalGit(ctx, input)
+	require.NoError(t, err)
+	require.Equal(t, first, replayed)
+	input.SourceID, input.SourceLabel = first.SourceID, ""
+	replayed, err = store.RegisterLocalGit(ctx, input)
+	require.NoError(t, err)
+	require.Equal(t, first, replayed)
+	entries, err = code.ListNoAuthCatalog(ctx)
+	require.NoError(t, err)
+	require.Len(t, entries, browserCodeCatalogMaxEntries)
+	var count int64
+	require.NoError(t, db.Model(&UCISource{}).Where("display_name = ?", "new-source-at-capacity").Count(&count).Error)
+	require.Zero(t, count, "refused new source must be rolled back")
+	input.AuthRealm, input.Principal, input.SourceID, input.SourceLabel, input.Locator = "client", "browser-user/41", "", "authenticated", "file:///worktrees/authenticated"
+	_, err = store.RegisterLocalGit(ctx, input)
+	require.NoError(t, err, "authenticated registration is independent")
+	entries, err = code.ListNoAuthCatalog(ctx)
+	require.NoError(t, err)
+	require.Len(t, entries, browserCodeCatalogMaxEntries)
+	require.NoError(t, db.Model(&UCICheckout{}).Where("checkout_id = ?", first.CheckoutID).Update("state", UCICheckoutOffline).Error)
+	input.AuthRealm, input.Principal, input.SourceID, input.SourceLabel, input.Locator = uci.NoAuthCodeRealm, uci.NoAuthCodePrincipal, "", "new-source-at-capacity", "file:///worktrees/excess"
+	replacement, err := store.RegisterLocalGit(ctx, input)
+	require.NoError(t, err, "offline checkouts no longer consume catalog capacity")
+	entries, err = code.ListNoAuthCatalog(ctx)
+	require.NoError(t, err)
+	require.Len(t, entries, browserCodeCatalogMaxEntries)
+	require.NotEqual(t, first.SourceID, replacement.SourceID)
+}
+
+func TestNoAuthCodeRegisterLocalGitSerializesDistinctBoundaryRegistrations(t *testing.T) {
+	db, store := openUCIContextMigrationStore(t)
+	ctx := context.Background()
+	input := RegisterLocalGitInput{AuthRealm: uci.NoAuthCodeRealm, Principal: uci.NoAuthCodePrincipal, WorkstationID: "device", SourceLabel: "seed", Locator: "file:///worktrees/seed"}
+	first, err := store.RegisterLocalGit(ctx, input)
+	require.NoError(t, err)
+	for i := 1; i < browserCodeCatalogMaxEntries-1; i++ {
+		input.SourceID, input.SourceLabel, input.Locator = first.SourceID, "", fmt.Sprintf("file:///worktrees/%d", i)
+		_, err := store.RegisterLocalGit(ctx, input)
+		require.NoError(t, err)
+	}
+	inputs := []RegisterLocalGitInput{
+		{AuthRealm: uci.NoAuthCodeRealm, Principal: uci.NoAuthCodePrincipal, WorkstationID: "other-device", SourceID: first.SourceID, Locator: "file:///worktrees/concurrent-existing-source"},
+		{AuthRealm: uci.NoAuthCodeRealm, Principal: uci.NoAuthCodePrincipal, WorkstationID: "third-device", SourceLabel: "concurrent-new-source", Locator: "file:///worktrees/concurrent-new-source"},
+	}
+	start := make(chan struct{})
+	results := make(chan error, len(inputs))
+	for _, registration := range inputs {
+		go func() {
+			<-start
+			_, err := NewUCIContextStore(db).RegisterLocalGit(ctx, registration)
+			results <- err
+		}()
+	}
+	close(start)
+	var accepted, refused int
+	for range inputs {
+		switch err := <-results; {
+		case err == nil:
+			accepted++
+		case errors.Is(err, uci.ErrNoAuthCodeCatalogFull):
+			refused++
+		default:
+			t.Fatalf("unexpected registration error: %v", err)
+		}
+	}
+	require.Equal(t, 1, accepted)
+	require.Equal(t, 1, refused)
+	entries, err := NewBrowserCodeContextStore(db).ListNoAuthCatalog(ctx)
+	require.NoError(t, err)
+	require.Len(t, entries, browserCodeCatalogMaxEntries)
 }
 
 func TestNoAuthCodeRegistrationReplaysAfterStoreRestartWithoutClaimingHistoricalScope(t *testing.T) {

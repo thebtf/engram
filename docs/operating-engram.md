@@ -284,6 +284,7 @@ The Windows amd64 (`win32-x64`) parser has been built and smoke-tested as a sour
 | --- | --- |
 | Workspace cannot open on HTTP LAN | Check the configured browser origin, installed console bundle, `/api/auth/me` auth mode, and browser errors. Do not substitute localhost, HTTPS, login, or a proxy. |
 | No working copy appears | Check that the installed new client registered and indexed the correct Source and Checkout in the no-auth realm; inspect catalog and index state before assuming a browser grant is missing. |
+| `LOCAL_CODE_CATALOG_FULL` while registering a no-auth checkout | The shared Workspace catalog supports 128 active checkouts. Existing checkout registration replays still work; take a no-longer-needed checkout offline before registering another. Do not hide catalog entries or use another Source label to bypass the limit. |
 | API healthy but no code tools | Compare the server's `/api/flags` with the actual daemon path, plugin version, inherited `ENGRAM_CODE_INTEL_ENABLED`, and fresh `tools/list`. Current source is on unless exactly `false`; an older installed daemon may differ. |
 | No JS, TS, or TSX facts | Inspect the installed parser executable, bundle digest, and extraction diagnostics. Do not use a source path as a binary. |
 | Search is lexical only | Inspect the chosen View's code-embedding jobs, model profile, and provider. |

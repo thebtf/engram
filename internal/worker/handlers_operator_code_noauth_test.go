@@ -67,6 +67,9 @@ func TestNoAuthOperatorCodeFirstUseAndAuthEnabledCannotForge(t *testing.T) {
 	var contexts operatorCodeContextsResponse
 	require.NoError(t, json.Unmarshal(catalog.Body.Bytes(), &contexts))
 	require.Len(t, contexts.Contexts, 1)
+	fixture.contexts.listErr = errors.New("catalog exceeds 128 active checkouts")
+	require.Equal(t, http.StatusServiceUnavailable, invoke(proof, noauth, adapter.HandleContexts).Code)
+	fixture.contexts.listErr = nil
 	require.NotEmpty(t, contexts.Contexts[0].SelectionRef)
 	pinRequest := operatorCodeHTTPTestRequest(t, `{"document_proof":"`+transition.DocumentProof+`","selection_ref":"`+contexts.Contexts[0].SelectionRef+`"}`, noauth)
 	route := chi.NewRouteContext()

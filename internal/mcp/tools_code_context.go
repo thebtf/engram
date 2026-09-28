@@ -891,6 +891,9 @@ func validCodebaseContextMetadata(metadata map[string]string) bool {
 }
 
 func codebaseContextApplicationError(err error) error {
+	if errors.Is(err, uci.ErrNoAuthCodeCatalogFull) {
+		return uci.ErrNoAuthCodeCatalogFull
+	}
 	var contextErr *uci.ContextError
 	if errors.As(err, &contextErr) {
 		if contextErr.Code() == uci.RegistrationProfileUnbound {

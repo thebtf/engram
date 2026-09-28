@@ -11,6 +11,9 @@ var ErrPublicationBuildIncomplete = errors.New("BUILD_INCOMPLETE")
 // ErrPublicationIdempotencyMismatch is the closed publication outcome for a changed replay binding.
 var ErrPublicationIdempotencyMismatch = errors.New("IDEMPOTENCY_MISMATCH")
 
+// ErrNoAuthCodeCatalogFull refuses registration before the shared catalog becomes unreadable.
+var ErrNoAuthCodeCatalogFull = errors.New("LOCAL_CODE_CATALOG_FULL: maximum 128 active checkouts")
+
 // ContextErrorCode is one of the closed context-resolution outcomes.
 type ContextErrorCode string
 

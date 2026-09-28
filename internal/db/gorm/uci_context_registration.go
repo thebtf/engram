@@ -62,6 +62,12 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 	}
 	var out RegisteredLocalGit
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if in.AuthRealm == uci.NoAuthCodeRealm {
+			// One realm-wide lock serializes capacity checks across distinct Source and Checkout identities.
+			if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended('uci-noauth-code-catalog-capacity', 0))`).Error; err != nil {
+				return fmt.Errorf("register local git catalog lock: %w", err)
+			}
+		}
 		now := time.Now().UTC()
 		sourceID := in.SourceID
 		if sourceID == "" {
@@ -124,6 +130,25 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 		}
 		if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("register local git lookup: %w", result.Error)
+		}
+		if in.AuthRealm == uci.NoAuthCodeRealm && in.Principal == uci.NoAuthCodePrincipal {
+			var active int64
+			if err := tx.Raw(`
+				SELECT COUNT(*) FROM (
+					SELECT 1 FROM sources AS source
+					JOIN ci_checkouts AS checkout ON checkout.source_id = source.source_id
+					WHERE source.auth_realm = ? AND checkout.owner_principal = ?
+						AND source.state = ? AND checkout.state IN (?, ?, ?)
+					LIMIT ?
+				) AS active
+			`, uci.NoAuthCodeRealm, uci.NoAuthCodePrincipal, UCISourceActive,
+				UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp,
+				browserCodeCatalogMaxEntries).Scan(&active).Error; err != nil {
+				return fmt.Errorf("register local git catalog capacity: %w", err)
+			}
+			if active >= browserCodeCatalogMaxEntries {
+				return uci.ErrNoAuthCodeCatalogFull
+			}
 		}
 		profile := UCIAnalysisProfile{
 			ProfileID: uuid.NewString(), ParserBundleDigest: string(profileDigest),
