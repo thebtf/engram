@@ -1224,6 +1224,12 @@ func uciPreparedTreeSitterFunctionOpen(declaration []byte, name string, exported
 		if len(rest) == 0 || uciPreparedTreeSitterIdentifierByte(rest[0]) {
 			return 0, false
 		}
+		if token == "function" {
+			rest = bytes.TrimLeft(rest, " \t\r\n")
+			if len(rest) > 0 && rest[0] == '*' {
+				rest = rest[1:]
+			}
+		}
 	}
 	rest = bytes.TrimLeft(rest, " \t\r\n")
 	if len(rest) == 0 || rest[0] != '(' {
