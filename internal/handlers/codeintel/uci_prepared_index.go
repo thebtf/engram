@@ -1191,8 +1191,13 @@ func uciPreparedTreeSitterDirectLocalCallTarget(file *uciPreparedAdmissionFile, 
 	if len(prefix) < open+close+2 {
 		return uciPreparedTreeSitterTarget{}, false
 	}
-	for _, construct := range [][]byte{[]byte("=>"), []byte("function"), []byte("catch"), []byte("with ("), []byte("eval(")} {
+	for _, construct := range [][]byte{[]byte("=>"), []byte("function"), []byte("catch"), []byte("with (")} {
 		if bytes.Contains(prefix[open+close+2:], construct) {
+			return uciPreparedTreeSitterTarget{}, false
+		}
+	}
+	for _, candidate := range file.artifact.References {
+		if candidate.Kind == "call" && candidate.Relation == uci.IndexRelation("calls") && strings.HasPrefix(candidate.SiteKey, "call:eval@") {
 			return uciPreparedTreeSitterTarget{}, false
 		}
 	}

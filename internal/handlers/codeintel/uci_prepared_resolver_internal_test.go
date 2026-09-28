@@ -359,3 +359,66 @@ func TestUCIPreparedIndexBuiltParserDoesNotResolveReboundLocalCalls(t *testing.T
 		})
 	}
 }
+
+func TestUCIPreparedIndexBuiltParserDoesNotResolveDirectEvalCalls(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), "uci-parser")
+	if runtime.GOOS == "windows" {
+		executable += ".exe"
+	}
+	command := exec.Command("go", "build", "-o", executable, "./tools/uci-parser")
+	command.Dir = filepath.Clean(filepath.Join("..", "..", ".."))
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build isolated parser child: %v: %s", err, output)
+	}
+	parser, err := uci.NewTreeSitterWorker(uci.TreeSitterWorkerConfig{
+		ExecutablePath: executable, ExpectedBundleDigest: uci.TreeSitterBundleDigest(),
+		MaxInputBytes: 1 << 20, MaxOutputBytes: 1 << 20, Timeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+	for _, test := range []struct {
+		name, source string
+		language     uci.TreeSitterLanguage
+		unsafe       bool
+	}{
+		{"commented javascript eval", "export function helper(n) { return n; }\nexport function caller(n) { eval /* comment */ (\"helper = n\"); return helper(n); }", uci.TreeSitterLanguageJavaScript, true},
+		{"spaced typescript eval", "export function helper(n: number) { return n; }\nexport function caller(n: any) { eval  (\"helper = n\"); return helper(n); }", uci.TreeSitterLanguageTypeScript, true},
+		{"commented typescript eval", "export function helper(n: number) { return n; }\nexport function caller(n: any) { eval /* comment */ (\"helper = n\"); return helper(n); }", uci.TreeSitterLanguageTypeScript, true},
+		{"string is not eval", "export function helper(n) { return n; }\nexport function caller(n) { const note = 'eval('; return helper(n); }", uci.TreeSitterLanguageJavaScript, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body := []byte(test.source)
+			parsed, err := parser.Parse(context.Background(), uci.TreeSitterParseRequest{Language: test.language, ProfileKey: "direct-eval-integration/v1", Source: body})
+			require.NoError(t, err)
+			require.Equal(t, uci.IndexCoverageComplete, parsed.Coverage, "%+v", parsed.Diagnostics)
+			profile, err := uci.TreeSitterIndexAdmissionArtifactProfile(test.language, uci.TreeSitterBundleDigest())
+			require.NoError(t, err)
+			artifact, err := uci.NewIndexAdmissionArtifactFromTreeSitter("11111111-1111-4111-8111-111111111111", profile, body, parsed)
+			require.NoError(t, err)
+			id := artifact.ArtifactID
+			files := []uciPreparedAdmissionFile{{path: "calls.js", membership: uci.IndexAdmissionMembership{PathKey: "calls.js", DisplayPath: "calls.js", Mode: "100644", State: uci.IndexAdmissionMembershipPresent, ArtifactID: &id}, artifact: &artifact}}
+			unresolved, err := uciPreparedAddResolvedTreeSitterEdges(files)
+			require.NoError(t, err)
+			if test.unsafe {
+				var parsedEval bool
+				for _, reference := range artifact.References {
+					if strings.HasPrefix(reference.SiteKey, "call:eval@") {
+						parsedEval = true
+					}
+					require.NotEqual(t, "binding_write", reference.Kind)
+				}
+				require.True(t, parsedEval, "parser must recognize the direct eval callee")
+			}
+			if test.unsafe {
+				require.NotZero(t, unresolved)
+				for _, edge := range files[0].edges {
+					require.NotEqual(t, uci.IndexResolutionState("resolved"), edge.ResolutionState, "direct eval must not produce a resolved edge to helper")
+				}
+			} else {
+				require.Zero(t, unresolved)
+				require.Len(t, files[0].edges, 1)
+				require.Equal(t, uci.IndexResolutionState("resolved"), files[0].edges[0].ResolutionState)
+				require.Equal(t, "function:helper", *files[0].edges[0].Target.SymbolKey)
+			}
+		})
+	}
+}
