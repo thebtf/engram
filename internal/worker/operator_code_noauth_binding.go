@@ -54,8 +54,10 @@ func (b *noAuthCodeBindings) Handshake(_ context.Context, identity auth.Identity
 	}
 	id := uuid.NewString()
 	b.mu.Lock()
+	now := time.Now()
+	atCapacity := len(b.tabs) >= 1024
 	for key, tab := range b.tabs {
-		if time.Now().After(tab.expires) {
+		if now.After(tab.expires) || (atCapacity && now.After(tab.lease)) {
 			delete(b.tabs, key)
 		}
 	}
@@ -63,7 +65,6 @@ func (b *noAuthCodeBindings) Handshake(_ context.Context, identity auth.Identity
 		b.mu.Unlock()
 		return BrowserBindingTransition{}, ErrBrowserBindingDenied
 	}
-	now := time.Now()
 	b.tabs[id] = noAuthCodeTab{proof: proof, resume: resume, reload: reload, lease: now.Add(defaultBrowserBindingLeaseTTL), expires: now.Add(defaultBrowserBindingTTL)}
 	b.mu.Unlock()
 	return BrowserBindingTransition{State: BrowserBindingReady, TabBindingID: id, DocumentProof: proof, ResumeNonce: resume, ReloadToken: reload}, nil

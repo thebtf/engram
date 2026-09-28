@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
@@ -218,4 +219,57 @@ func TestNoAuthOperatorCodeRestartRequiresFreshHandshakeAndSelection(t *testing.
 	require.Equal(t, http.StatusForbidden, call(newProof, adapter.HandleStatus).Code, "new document has no inherited pin")
 	pinSelection(second, contexts.Contexts[0].SelectionRef)
 	require.Equal(t, http.StatusOK, call(newProof, adapter.HandleStatus).Code, "fresh catalog selection restores access")
+}
+
+func TestNoAuthOperatorCodeCapacityRecoversFromInactiveTabs(t *testing.T) {
+	adapter, _ := newOperatorCodeHTTPTestAdapter(t)
+	identity := auth.AuthDisabled()
+	call := func(body string, handler func(http.ResponseWriter, *http.Request)) *httptest.ResponseRecorder {
+		request := operatorCodeHTTPTestRequest(t, body, identity)
+		request.Header.Set("X-Engram-Auth-Disabled", "true")
+		response := httptest.NewRecorder()
+		handler(response, request)
+		return response
+	}
+	handshake := func(nonce string) operatorCodeTransitionResponse {
+		response := call(`{"document_nonce":"`+nonce+`"}`, adapter.HandleHandshake)
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		var transition operatorCodeTransitionResponse
+		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &transition))
+		return transition
+	}
+	active := handshake("active-tab")
+	closed := handshake("closed-tab")
+	expired := handshake("expired-lease-tab")
+	for len(adapter.noAuthBindings.tabs) < 1024 {
+		_, err := adapter.noAuthBindings.Handshake(context.Background(), identity, "", BrowserBindingHandshakeInput{DocumentNonce: "additional-tab"})
+		require.NoError(t, err)
+	}
+	require.Equal(t, http.StatusForbidden, call(`{"document_nonce":"full-capacity"}`, adapter.HandleHandshake).Code, "live tabs cannot be evicted")
+	require.Len(t, adapter.noAuthBindings.tabs, 1024)
+	activeProof := `{"tab_binding_id":"` + active.TabBindingID + `","document_proof":"` + active.DocumentProof + `"}`
+	require.Equal(t, http.StatusOK, call(activeProof, adapter.HandleContexts).Code, "capacity rejection preserves active proof")
+
+	closeRequest := operatorCodeHTTPTestRequest(t, `{"document_proof":"`+closed.DocumentProof+`"}`, identity)
+	closeRequest.Header.Set("X-Engram-Auth-Disabled", "true")
+	route := chi.NewRouteContext()
+	route.URLParams.Add("tab_binding_id", closed.TabBindingID)
+	closeRequest = closeRequest.WithContext(context.WithValue(closeRequest.Context(), chi.RouteCtxKey, route))
+	closeResponse := httptest.NewRecorder()
+	adapter.HandleClose(closeResponse, closeRequest)
+	require.Equal(t, http.StatusNoContent, closeResponse.Code)
+	handshake("after-close")
+	require.Len(t, adapter.noAuthBindings.tabs, 1024)
+	closedResume := `{"tab_binding_id":"` + closed.TabBindingID + `","resume_nonce":"` + closed.ResumeNonce + `","reload_token":"` + closed.ReloadToken + `","document_nonce":"reload-closed"}`
+	require.Equal(t, http.StatusForbidden, call(closedResume, adapter.HandleResume).Code, "evicted binding cannot resume")
+
+	tab := adapter.noAuthBindings.tabs[expired.TabBindingID]
+	tab.lease = time.Now().Add(-time.Second)
+	adapter.noAuthBindings.tabs[expired.TabBindingID] = tab
+	handshake("after-lease-expiry")
+	require.Len(t, adapter.noAuthBindings.tabs, 1024)
+	expiredResume := `{"tab_binding_id":"` + expired.TabBindingID + `","resume_nonce":"` + expired.ResumeNonce + `","reload_token":"` + expired.ReloadToken + `","document_nonce":"reload-expired"}`
+	require.Equal(t, http.StatusForbidden, call(expiredResume, adapter.HandleResume).Code, "evicted expired lease cannot resume")
+	require.Equal(t, http.StatusOK, call(activeProof, adapter.HandleContexts).Code, "recovery preserves active proof")
+	require.Equal(t, http.StatusForbidden, call(`{"document_nonce":"still-full"}`, adapter.HandleHandshake).Code, "all remaining tabs are live")
 }
