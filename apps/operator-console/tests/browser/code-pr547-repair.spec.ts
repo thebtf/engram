@@ -137,6 +137,48 @@ test('a prior raw viewRef restores only a unique authorized candidate, never a s
   await expect.poll(() => page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))).toBeNull()
 })
 
+test('unbound refresh cannot erase a historical View candidate before identity retry', async ({ page }) => {
+  let identityUnavailable = false
+  const requests: string[] = []
+  const pins: unknown[] = []
+  await page.route('**/api/auth/me', route => route.fulfill(identityUnavailable ? { status: 503 } : { json: { auth_disabled: true } }))
+  await page.route('**/api/code/**', async route => {
+    const path = new URL(route.request().url()).pathname
+    requests.push(path)
+    if (path === '/api/code/tabs/handshake' || path === '/api/code/tabs/resume') await route.fulfill({ json: binding })
+    else if (path === '/api/code/contexts') await route.fulfill({ json: { contexts: [entry] } })
+    else if (path.endsWith('/context')) { pins.push(route.request().postDataJSON()); await route.fulfill({ status: 204 }) }
+    else if (path === '/api/code/status') await route.fulfill({ json: { total_chunks: 0, embedded_chunks: 0, embedding: { coverage: 'none', job_state: null, error_code: null } } })
+    else await route.fulfill({ status: 403 })
+  })
+  await page.goto('/code')
+  await page.getByTestId('code-context-snapshot').selectOption('selection')
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Pinned snapshot')
+  const stored = await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))
+  expect(stored).not.toBeNull()
+  identityUnavailable = true
+  await page.reload()
+  await expect(page.locator('.phase')).toHaveAttribute('data-state', 'identity-unavailable')
+  await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+  const refresh = page.getByRole('button', { name: 'Обновить разрешённые варианты' })
+  await expect(refresh).toBeDisabled()
+  await refresh.dispatchEvent('click')
+  expect(requests.filter(path => path === '/api/code/contexts')).toHaveLength(1)
+  await expect(page.getByTestId('code-retry-identity')).toBeEnabled()
+  expect(await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))).toBe(stored)
+  identityUnavailable = false
+  await page.getByTestId('code-retry-identity').click()
+  await expect(page.getByTestId('code-context-snapshot')).toHaveValue('selection')
+  await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+  expect(pins).toHaveLength(1)
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Pinned snapshot')
+  expect(pins).toHaveLength(2)
+  expect(requests.filter(path => path === '/api/code/tabs/resume')).toHaveLength(1)
+  expect(requests.filter(path => path === '/api/code/status')).toHaveLength(2)
+})
+
 test('offline freshness renders its translated status instead of an i18n key', async ({ page }) => {
   await page.route('**/api/auth/me', async route => route.fulfill({ json: { auth_disabled: true } }))
   await page.route('**/api/code/**', async route => {

@@ -170,7 +170,7 @@ function chooseSnapshot(event: Event): void {
     </dl>
 
     <div class="actions">
-      <button class="btn" type="button" :disabled="pending" @click="emit('refresh')">{{ t('codeExplorer.context.refresh') }}</button>
+      <button class="btn" type="button" :disabled="pending || phase !== 'ready' && phase !== 'collision'" @click="emit('refresh')">{{ t('codeExplorer.context.refresh') }}</button>
       <button v-if="phase === 'reload-pending' || phase === 'identity-unavailable'" class="btn" type="button" :disabled="pending" :data-testid="phase === 'identity-unavailable' ? 'code-retry-identity' : 'code-retry-reload'" @click="emit('retry')">{{ phase === 'identity-unavailable' ? t('codeExplorer.context.retryIdentity') : t('codeExplorer.context.retryReload') }}</button>
       <button class="btn primary" type="button" :disabled="pending || candidate === null || samePinned" data-testid="code-pin-context" @click="emit('pin')">
         {{ samePinned ? t('codeExplorer.context.pinned') : pinned === null ? t('codeExplorer.context.pin') : t('codeExplorer.context.switch') }}

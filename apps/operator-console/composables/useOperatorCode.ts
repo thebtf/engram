@@ -1284,10 +1284,10 @@ export function useOperatorCode() {
 
   async function discoverContext(): Promise<void> {
     const payload = bindingPayload()
+    if (payload === null) return
     const selected = contextCandidate.value
     contextCandidate.value = null
     contextCatalog.value = []
-    if (payload === null) { clearPersistedPinCandidate(); return }
     contextState.value = 'loading'
     pending.value = true
     const result = await request('/code/contexts', 'POST', payload)
