@@ -1167,7 +1167,7 @@ func uciPreparedTreeSitterDirectLocalCallTarget(file *uciPreparedAdmissionFile, 
 		}
 	}
 	if callee == nil || callee.Kind != "function" || callee.Span.ByteStart < 0 || callee.Span.ByteEnd > int64(len(body)) ||
-		callee.Span.ByteStart >= callee.Span.ByteEnd || uciPreparedTreeSitterNamedFunctionCount(body, local) != 1 {
+		callee.Span.ByteStart >= callee.Span.ByteEnd {
 		return uciPreparedTreeSitterTarget{}, false
 	}
 	if _, ok := uciPreparedTreeSitterFunctionOpen(body[callee.Span.ByteStart:callee.Span.ByteEnd], local, true); !ok {
@@ -1228,28 +1228,6 @@ func uciPreparedTreeSitterFunctionOpen(declaration []byte, name string, exported
 		return 0, false
 	}
 	return len(declaration) - len(rest), true
-}
-
-func uciPreparedTreeSitterNamedFunctionCount(body []byte, name string) int {
-	count := 0
-	for offset := 0; offset < len(body); {
-		found := bytes.Index(body[offset:], []byte("function"))
-		if found < 0 {
-			break
-		}
-		offset += found
-		if offset == 0 || !uciPreparedTreeSitterIdentifierByte(body[offset-1]) {
-			rest := bytes.TrimLeft(body[offset+len("function"):], " \t\r\n")
-			if bytes.HasPrefix(rest, []byte(name)) {
-				tail := rest[len(name):]
-				if len(tail) > 0 && !uciPreparedTreeSitterIdentifierByte(tail[0]) && bytes.HasPrefix(bytes.TrimLeft(tail, " \t\r\n"), []byte{'('}) {
-					count++
-				}
-			}
-		}
-		offset += len("function")
-	}
-	return count
 }
 
 func uciPreparedTreeSitterHasIdentifier(source []byte, name string) bool {

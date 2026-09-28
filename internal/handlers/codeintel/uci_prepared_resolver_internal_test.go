@@ -185,7 +185,6 @@ func TestUCIPreparedIndexDoesNotGuessShadowedOrDynamicLocalCalls(t *testing.T) {
 		{"optional dynamic call", "export function helper(x) { return x; }\nexport function caller(x) { return helper?.(x); }", "call", "call:helper?.", "helper?.", false},
 		{"unknown direct call", "export function helper(x) { return x; }\nexport function caller(x) { return missing(x); }", "call", "call:missing", "missing", false},
 		{"ambiguous declaration", "export function helper(x) { return x; }\nconst helper = 1;\nexport function caller(x) { return helper(x); }", "call", "call:helper", "helper", true},
-		{"duplicate exported function", "export function helper(x) { return x; }\nexport function helper (y) { return y; }\nexport function caller(x) { return helper(x); }", "call", "call:helper", "helper", false},
 		{"dynamic member", "export function helper(x) { return x; }\nexport function caller(x) { return x.helper(1); }", "call", "call:x.helper", "x.helper", false},
 		{"non call", "export function helper(x) { return x; }\nexport function caller(x) { return helper(x); }", "reference", "reference:helper", "helper", false},
 	} {
@@ -508,6 +507,87 @@ func TestUCIPreparedIndexBuiltParserDoesNotResolveDirectEvalCalls(t *testing.T) 
 				require.Equal(t, uci.IndexResolutionState("resolved"), files[0].edges[0].ResolutionState)
 				require.Equal(t, "function:helper", *files[0].edges[0].Target.SymbolKey)
 			}
+		})
+	}
+}
+
+func TestUCIPreparedIndexBuiltParserIgnoresDeclarationTextInTrivia(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), "uci-parser")
+	if runtime.GOOS == "windows" {
+		executable += ".exe"
+	}
+	command := exec.Command("go", "build", "-o", executable, "./tools/uci-parser")
+	command.Dir = filepath.Clean(filepath.Join("..", "..", ".."))
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build isolated parser child: %v: %s", err, output)
+	}
+	parser, err := uci.NewTreeSitterWorker(uci.TreeSitterWorkerConfig{
+		ExecutablePath: executable, ExpectedBundleDigest: uci.TreeSitterBundleDigest(),
+		MaxInputBytes: 1 << 20, MaxOutputBytes: 1 << 20, Timeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+	for _, test := range []struct {
+		name, source string
+		ambiguous    bool
+		duplicate    bool
+	}{
+		{"comment", "export function helper(n) { return n; }\n// function helper(\nexport function caller(n) { return helper(n); }", false, false},
+		{"string", "export function helper(n) { return n; }\nconst note = 'function helper(';\nexport function caller(n) { return helper(n); }", false, false},
+		{"multiple bindings", "export function helper(n) { return n; }\nconst helper = 1;\nexport function caller(n) { return helper(n); }", true, false},
+		{"duplicate declaration", "export function helper(n) { return n; }\nexport function helper(n) { return n + 1; }\nexport function caller(n) { return helper(n); }", true, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body := []byte(test.source)
+			parsed, err := parser.Parse(context.Background(), uci.TreeSitterParseRequest{Language: uci.TreeSitterLanguageJavaScript, ProfileKey: "local-call-declaration-trivia/v1", Source: body})
+			require.NoError(t, err)
+			if test.duplicate {
+				require.Equal(t, uci.IndexCoveragePartial, parsed.Coverage)
+				require.NotEmpty(t, parsed.Diagnostics)
+			} else {
+				require.Equal(t, uci.IndexCoverageComplete, parsed.Coverage, "%+v", parsed.Diagnostics)
+			}
+			profile, err := uci.TreeSitterIndexAdmissionArtifactProfile(uci.TreeSitterLanguageJavaScript, uci.TreeSitterBundleDigest())
+			require.NoError(t, err)
+			artifact, err := uci.NewIndexAdmissionArtifactFromTreeSitter("11111111-1111-4111-8111-111111111111", profile, body, parsed)
+			require.NoError(t, err)
+			var declarations, calls int
+			for _, definition := range artifact.Definitions {
+				if definition.Kind == "function" && definition.LocalSymbolKey == "function:helper" {
+					declarations++
+				}
+			}
+			for _, reference := range artifact.References {
+				if reference.Kind == "call" && strings.HasPrefix(reference.SiteKey, "call:helper@") {
+					calls++
+					require.Equal(t, "function:caller", *reference.OwnerSymbolKey)
+				}
+			}
+			require.Equal(t, 1, declarations)
+			require.Equal(t, 1, calls)
+			id := artifact.ArtifactID
+			files := []uciPreparedAdmissionFile{{path: "calls.js", membership: uci.IndexAdmissionMembership{PathKey: "calls.js", DisplayPath: "calls.js", Mode: "100644", State: uci.IndexAdmissionMembershipPresent, ArtifactID: &id}, artifact: &artifact}}
+			unresolved, err := uciPreparedAddResolvedTreeSitterEdges(files)
+			require.NoError(t, err)
+			if test.ambiguous {
+				require.Equal(t, uint64(1), unresolved)
+				require.Empty(t, files[0].edges)
+				return
+			}
+			require.Zero(t, unresolved)
+			require.Len(t, files[0].edges, 1)
+			frames, _, err := uciPreparedPackFrames("44444444-4444-4444-8444-444444444444", files)
+			require.NoError(t, err)
+			require.NoError(t, uci.ValidateIndexAdmissionFrames(frames))
+			require.Len(t, frames, 1)
+			part, err := frames[0].PublicationPart()
+			require.NoError(t, err)
+			require.Len(t, part.EdgeReplacements, 1)
+			require.Len(t, part.EdgeReplacements[0].Edges, 1)
+			edge := part.EdgeReplacements[0].Edges[0]
+			require.Equal(t, uci.IndexResolutionState("resolved"), edge.ResolutionState)
+			require.Equal(t, "function:caller", *edge.SourceSymbolKey)
+			require.NotNil(t, edge.Target)
+			require.Equal(t, "function:helper", *edge.Target.SymbolKey)
 		})
 	}
 }

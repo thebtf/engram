@@ -218,6 +218,9 @@ func extract(request uci.TreeSitterWorkerWireRequest) uci.TreeSitterWorkerWireRe
 	response.Definitions = collector.definitions
 	response.References = collector.references
 	response.Chunks, collector.chunksTruncated = sourceChunks(request.Source, collector.lineStarts, response.Definitions)
+	if collector.definitionCollision {
+		addDiagnostic(&response, "DUPLICATE_DEFINITION", uci.IndexSpan{}, "multiple declarations share a parser symbol key")
+	}
 	if collector.definitionsTruncated {
 		addDiagnostic(&response, "DEFINITION_LIMIT", uci.IndexSpan{}, "syntax definitions exceeded the bounded extraction limit")
 	}
@@ -235,7 +238,7 @@ func extract(request uci.TreeSitterWorkerWireRequest) uci.TreeSitterWorkerWireRe
 		addDiagnostic(&response, "PARSE_ERROR", collector.errorSpan, "source could not be parsed completely as "+string(request.Language))
 	} else if collector.dynamicImport {
 		response.Coverage = uci.IndexCoveragePartial
-	} else if collector.definitionsTruncated || collector.referencesTruncated || collector.chunksTruncated {
+	} else if collector.definitionsTruncated || collector.referencesTruncated || collector.chunksTruncated || collector.definitionCollision {
 		response.Coverage = uci.IndexCoveragePartial
 		addDiagnostic(&response, "PARTIAL_FACTS", uci.IndexSpan{}, "some source facts could not be represented within extraction bounds")
 	} else {
@@ -293,11 +296,12 @@ type parserCollector struct {
 	lineStarts           []int
 	definitions          []uci.TreeSitterDefinition
 	references           []uci.TreeSitterReferenceSite
-	definitionKeys       map[string]struct{}
+	definitionKeys       map[string]uci.IndexSpan
 	referenceKeys        map[string]struct{}
 	dynamicImport        bool
 	dynamicImportSpan    uci.IndexSpan
 	definitionsTruncated bool
+	definitionCollision  bool
 	referencesTruncated  bool
 	chunksTruncated      bool
 	errorSpan            uci.IndexSpan
@@ -310,7 +314,7 @@ func newCollector(language uci.TreeSitterLanguage, source []byte) *parserCollect
 		lineStarts:     lineStarts(source),
 		definitions:    []uci.TreeSitterDefinition{},
 		references:     []uci.TreeSitterReferenceSite{},
-		definitionKeys: make(map[string]struct{}),
+		definitionKeys: make(map[string]uci.IndexSpan),
 		referenceKeys:  make(map[string]struct{}),
 	}
 }
@@ -452,14 +456,17 @@ func (collector *parserCollector) addDefinition(definition uci.TreeSitterDefinit
 	if definition.Name == "" || definition.SymbolKey == "" {
 		return
 	}
-	if _, exists := collector.definitionKeys[definition.SymbolKey]; exists {
+	if previous, exists := collector.definitionKeys[definition.SymbolKey]; exists {
+		if definition.Span.ByteStart >= previous.ByteEnd || previous.ByteStart >= definition.Span.ByteEnd {
+			collector.definitionCollision = true
+		}
 		return
 	}
 	if len(collector.definitions) >= parserMaxDefinitions {
 		collector.definitionsTruncated = true
 		return
 	}
-	collector.definitionKeys[definition.SymbolKey] = struct{}{}
+	collector.definitionKeys[definition.SymbolKey] = definition.Span
 	collector.definitions = append(collector.definitions, definition)
 }
 
