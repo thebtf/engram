@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -101,6 +102,70 @@ func TestNoAuthOperatorCodeFirstUseAndAuthEnabledCannotForge(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, denied.Code)
 	forged := invoke(proof, auth.SessionForBrowserUser("viewer", 42), adapter.HandleStatus)
 	require.NotEqual(t, http.StatusOK, forged.Code)
+}
+
+func TestNoAuthHTTPRealOfflineCatalogCannotPin(t *testing.T) {
+	store := openWorkerUCIContextCompositionStore(t)
+	ctx := context.Background()
+	contexts := gormdb.NewUCIContextStore(store.DB)
+	registered, err := contexts.RegisterLocalGit(ctx, gormdb.RegisterLocalGitInput{
+		AuthRealm: uci.NoAuthCodeRealm, Principal: uci.NoAuthCodePrincipal,
+		WorkstationID: "offline-device", SourceLabel: "offline repository", Locator: "file:///private/offline-copy",
+	})
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	view, err := contexts.CreateView(ctx, gormdb.CreateViewInput{
+		SourceID: registered.SourceID, CheckoutID: registered.CheckoutID,
+		IncarnationID: registered.IncarnationID, ProfileID: registered.ProfileID,
+		Generation: 1, ScanStart: now, ScanEnd: now.Add(time.Second),
+		ManifestDigest: fmt.Sprintf("sha256:%064x", 1), CoverageJSON: `{}`,
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.DB.Model(&gormdb.UCIView{}).Where("view_id = ?", view.ViewID).Updates(map[string]any{"state": gormdb.UCIViewPublished, "published_at": now}).Error)
+	require.NoError(t, store.DB.Model(&gormdb.UCICheckout{}).Where("checkout_id = ?", registered.CheckoutID).Update("current_view_id", view.ViewID).Error)
+	adapter, _ := newOperatorCodeHTTPTestAdapter(t)
+	adapter.contexts = gormdb.NewBrowserCodeContextStore(store.DB)
+	adapter.authority = newOperatorCodeServerAuthorizer(contexts, uci.NewContextResolver(contexts, gormdb.NewUCIContextAuthorizer(contexts), contexts))
+	identity := auth.AuthDisabled()
+	call := func(body string, handler func(http.ResponseWriter, *http.Request)) *httptest.ResponseRecorder {
+		request := operatorCodeHTTPTestRequest(t, body, identity)
+		request.Header.Set("X-Engram-Auth-Disabled", "true")
+		response := httptest.NewRecorder()
+		handler(response, request)
+		return response
+	}
+	handshake := call(`{"document_nonce":"offline-catalog"}`, adapter.HandleHandshake)
+	require.Equal(t, http.StatusOK, handshake.Code, handshake.Body.String())
+	var binding operatorCodeTransitionResponse
+	require.NoError(t, json.Unmarshal(handshake.Body.Bytes(), &binding))
+	proof := `{"tab_binding_id":"` + binding.TabBindingID + `","document_proof":"` + binding.DocumentProof + `"}`
+	previous := call(proof, adapter.HandleContexts)
+	require.Equal(t, http.StatusOK, previous.Code, previous.Body.String())
+	var selectable operatorCodeContextsResponse
+	require.NoError(t, json.Unmarshal(previous.Body.Bytes(), &selectable))
+	require.Len(t, selectable.Contexts, 1)
+	require.NotEmpty(t, selectable.Contexts[0].SelectionRef)
+	require.NoError(t, store.DB.Model(&gormdb.UCICheckout{}).Where("checkout_id = ?", registered.CheckoutID).Update("state", gormdb.UCICheckoutOffline).Error)
+	response := call(proof, adapter.HandleContexts)
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	var catalog operatorCodeContextsResponse
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &catalog))
+	require.Len(t, catalog.Contexts, 1)
+	require.Equal(t, "offline repository", catalog.Contexts[0].Repository)
+	require.Contains(t, catalog.Contexts[0].WorkingCopy, "Offline")
+	require.Empty(t, catalog.Contexts[0].SelectionRef)
+	require.Empty(t, catalog.Contexts[0].IndexIntentSelectionRef)
+	require.False(t, catalog.Contexts[0].IndexIntentAvailable)
+	require.NotContains(t, response.Body.String(), "file://")
+
+	request := operatorCodeHTTPTestRequest(t, `{"document_proof":"`+binding.DocumentProof+`","selection_ref":"`+selectable.Contexts[0].SelectionRef+`"}`, identity)
+	request.Header.Set("X-Engram-Auth-Disabled", "true")
+	route := chi.NewRouteContext()
+	route.URLParams.Add("tab_binding_id", binding.TabBindingID)
+	request = request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, route))
+	pin := httptest.NewRecorder()
+	adapter.HandlePin(pin, request)
+	require.Equal(t, http.StatusForbidden, pin.Code)
 }
 
 func TestNoAuthOperatorCodePagehideCloseReloadResumesPinnedTab(t *testing.T) {

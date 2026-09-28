@@ -72,6 +72,33 @@ func TestNoAuthCodeCatalogAndIndexScopeStaySeparateFromHumanAndMemory(t *testing
 	require.Equal(t, entries, again)
 }
 
+func TestNoAuthCodeCatalogShowsOfflineMetadataWithoutSelection(t *testing.T) {
+	fixture := openUCIProjectionMigrationFixture(t)
+	ctx := context.Background()
+	contexts := NewUCIContextStore(fixture.db)
+	source, err := contexts.CreateSource(ctx, CreateSourceInput{AuthRealm: uci.NoAuthCodeRealm, Kind: UCISourceGit, DisplayName: "offline repository"})
+	require.NoError(t, err)
+	checkout, err := contexts.RegisterCheckout(ctx, RegisterCheckoutInput{SourceID: source.SourceID, WorkstationID: "offline-device", Kind: UCICheckoutWorkingTree, OwnerPrincipal: uci.NoAuthCodePrincipal, LocatorRef: "file:///private/offline-copy"})
+	require.NoError(t, err)
+	view := publishBrowserCodeContextView(t, fixture.db, checkout, fixture.profile)
+	require.NoError(t, fixture.db.Model(&UCICheckout{}).Where("checkout_id = ?", checkout.CheckoutID).Update("state", UCICheckoutOffline).Error)
+
+	entries, err := NewBrowserCodeContextStore(fixture.db).ListNoAuthCatalog(ctx)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, source.SourceID, entries[0].SourceID)
+	require.Equal(t, source.DisplayName, entries[0].SourceLabel)
+	require.Equal(t, checkout.CheckoutID, entries[0].CheckoutID)
+	require.Contains(t, entries[0].CheckoutLabel, "Offline")
+	require.NotContains(t, entries[0].CheckoutLabel, "file://")
+	require.Nil(t, entries[0].Context, "offline metadata cannot supply a pin choice even with a published View")
+	require.False(t, entries[0].IndexIntentAvailable)
+	_, err = NewBrowserCodeContextStore(fixture.db).AuthorizeNoAuthIndexIntent(ctx, source.SourceID, checkout.CheckoutID, fixture.profile.ProfileID, false)
+	require.ErrorIs(t, err, ErrBrowserCodeContextDenied)
+	ref := uci.ContextRef{SourceID: source.SourceID, CheckoutID: checkout.CheckoutID, ViewID: view.ViewID, AnalysisProfileID: fixture.profile.ProfileID, Generation: view.Generation}
+	require.ErrorIs(t, browserCodePublishedContextExists(ctx, fixture.db, ref, uci.NoAuthCodeRealm), ErrBrowserCodeContextDenied)
+}
+
 func TestNoAuthCodeCatalogKeepsCurrentAfterManySupersededViews(t *testing.T) {
 	fixture := openUCIProjectionMigrationFixture(t)
 	require.NoError(t, workspaceCatalogMigration182().Migrate(fixture.db))
@@ -131,6 +158,15 @@ func TestNoAuthCodeCatalogRejectsMoreThan128CurrentCheckouts(t *testing.T) {
 	entries, err := code.ListNoAuthCatalog(ctx)
 	require.ErrorContains(t, err, "local code context catalog exceeds 128 entries")
 	require.Nil(t, entries, "a partial catalog must never appear complete")
+	require.NoError(t, fixture.db.Model(&UCICheckout{}).Where("source_id = ?", source.SourceID).Update("state", UCICheckoutOffline).Error)
+	entries, err = code.ListNoAuthCatalog(ctx)
+	require.NoError(t, err, "129 historical offline rows cannot hide the catalog")
+	require.Len(t, entries, browserCodeCatalogMaxEntries)
+	for _, entry := range entries {
+		require.Nil(t, entry.Context)
+		require.False(t, entry.IndexIntentAvailable)
+		require.Contains(t, entry.CheckoutLabel, "Offline")
+	}
 }
 
 func TestNoAuthCodeRegisterLocalGitRefuses129thWithoutHidingCatalog(t *testing.T) {
@@ -179,12 +215,17 @@ func TestNoAuthCodeRegisterLocalGitRefuses129thWithoutHidingCatalog(t *testing.T
 	require.NoError(t, err)
 	require.Len(t, entries, browserCodeCatalogMaxEntries)
 	require.NoError(t, db.Model(&UCICheckout{}).Where("checkout_id = ?", first.CheckoutID).Update("state", UCICheckoutOffline).Error)
+	entries, err = code.ListNoAuthCatalog(ctx)
+	require.NoError(t, err)
+	require.Len(t, entries, browserCodeCatalogMaxEntries)
+	require.Equal(t, first.CheckoutID, entries[len(entries)-1].CheckoutID)
+	require.Nil(t, entries[len(entries)-1].Context)
 	input.AuthRealm, input.Principal, input.SourceID, input.SourceLabel, input.Locator = uci.NoAuthCodeRealm, uci.NoAuthCodePrincipal, "", "new-source-at-capacity", "file:///worktrees/excess"
 	replacement, err := store.RegisterLocalGit(ctx, input)
 	require.NoError(t, err, "offline checkouts no longer consume catalog capacity")
 	entries, err = code.ListNoAuthCatalog(ctx)
 	require.NoError(t, err)
-	require.Len(t, entries, browserCodeCatalogMaxEntries)
+	require.Len(t, entries, browserCodeCatalogMaxEntries+1, "128 active choices and one offline row have separate bounds")
 	require.NotEqual(t, first.SourceID, replacement.SourceID)
 }
 

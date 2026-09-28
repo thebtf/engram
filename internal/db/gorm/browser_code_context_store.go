@@ -29,10 +29,10 @@ var (
 	ErrBrowserCodeContinuationDenied = errors.New("browser code continuation denied")
 )
 
-// BrowserCodeContextCatalogEntry is one grant-authorized Source → Checkout →
-// published View choice. A nil Context is intentionally the only shape for a
-// registered checkout without a published View; it exposes an index-intent
-// affordance without inventing a ContextRef.
+// BrowserCodeContextCatalogEntry is a Source → Checkout catalog row. A Context
+// permits an authorized published View choice; nil Context is either a live
+// checkout awaiting its first View (IndexIntentAvailable) or offline metadata
+// without pin or index-intent authority.
 type BrowserCodeContextCatalogEntry struct {
 	SourceID             string
 	SourceLabel          string
@@ -223,8 +223,8 @@ func (s *BrowserCodeContextStore) ListCatalog(ctx context.Context, subjectUserID
 	return entries, nil
 }
 
-// ListNoAuthCatalog enumerates only the isolated technical code realm, never
-// historical auth-disabled memory scope or authenticated browser grants.
+// ListNoAuthCatalog returns active choices plus a bounded, non-authorizing
+// recent offline working-copy inventory in the isolated technical code realm.
 func (s *BrowserCodeContextStore) ListNoAuthCatalog(ctx context.Context) ([]BrowserCodeContextCatalogEntry, error) {
 	if err := s.requireDB("list local code catalog"); err != nil {
 		return nil, err
@@ -235,8 +235,7 @@ func (s *BrowserCodeContextStore) ListNoAuthCatalog(ctx context.Context) ([]Brow
 	var rows []browserCodeContextCatalogRow
 	err := s.db.WithContext(ctx).Raw(`
 		SELECT source.source_id, source.display_name AS source_label,
-			checkout.checkout_id, checkout.kind AS checkout_kind,
-			COALESCE(checkout.display_name, '') AS checkout_label,
+			checkout.checkout_id, checkout.kind AS checkout_kind, checkout.state AS checkout_state,
 			view_row.view_id, view_row.profile_id, view_row.generation,
 			CASE WHEN view_row.view_id IS NULL THEN NULL
 				WHEN view_row.ref_label IS NOT NULL THEN view_row.ref_label
@@ -265,6 +264,26 @@ func (s *BrowserCodeContextStore) ListNoAuthCatalog(ctx context.Context) ([]Brow
 	if len(rows) > browserCodeCatalogMaxEntries {
 		return nil, fmt.Errorf("local code context catalog exceeds %d entries", browserCodeCatalogMaxEntries)
 	}
+	// Offline copies do not consume the 128 active-choice admission bound. Keep
+	// their inventory bounded separately so historical offline rows cannot turn
+	// a healthy active catalog into a service-wide 503.
+	var offline []browserCodeContextCatalogRow
+	err = s.db.WithContext(ctx).Raw(`
+		SELECT source.source_id, source.display_name AS source_label,
+			checkout.checkout_id, checkout.kind AS checkout_kind, checkout.state AS checkout_state,
+			COALESCE(checkout.display_name, '') AS checkout_label
+		FROM sources AS source
+		JOIN ci_checkouts AS checkout ON checkout.source_id = source.source_id
+		WHERE source.auth_realm = ? AND checkout.owner_principal = ?
+			AND source.state = ? AND checkout.state = ?
+		ORDER BY checkout.updated_at DESC, checkout.checkout_id
+		LIMIT ?
+	`, uci.NoAuthCodeRealm, uci.NoAuthCodePrincipal, UCISourceActive, UCICheckoutOffline,
+		browserCodeCatalogMaxEntries).Scan(&offline).Error
+	if err != nil {
+		return nil, fmt.Errorf("local code context offline catalog: %w", err)
+	}
+	rows = append(rows, offline...)
 	entries := make([]BrowserCodeContextCatalogEntry, 0, len(rows))
 	for _, row := range rows {
 		entry, err := row.catalogEntry()
@@ -274,6 +293,10 @@ func (s *BrowserCodeContextStore) ListNoAuthCatalog(ctx context.Context) ([]Brow
 		if entry.CheckoutLabel == "" {
 			fingerprint := sha256.Sum256([]byte(entry.CheckoutID))
 			entry.CheckoutLabel = fmt.Sprintf("Working copy · %x", fingerprint[:4])
+		}
+		if row.CheckoutState == UCICheckoutOffline {
+			entry.CheckoutLabel += " · Offline"
+			entry.IndexIntentAvailable = false
 		}
 		entries = append(entries, entry)
 	}
@@ -517,17 +540,18 @@ func (s *BrowserCodeContextStore) AdvanceContinuation(ctx context.Context, curso
 }
 
 type browserCodeContextCatalogRow struct {
-	SourceID            string     `gorm:"column:source_id"`
-	SourceLabel         string     `gorm:"column:source_label"`
-	CheckoutID          string     `gorm:"column:checkout_id"`
-	CheckoutKind        string     `gorm:"column:checkout_kind"`
-	CheckoutLabel       string     `gorm:"column:checkout_label"`
-	ViewID              *string    `gorm:"column:view_id"`
-	ProfileID           *string    `gorm:"column:profile_id"`
-	Generation          *int64     `gorm:"column:generation"`
-	ViewLabel           *string    `gorm:"column:view_label"`
-	SnapshotRevision    *string    `gorm:"column:snapshot_revision"`
-	SnapshotPublishedAt *time.Time `gorm:"column:snapshot_published_at"`
+	SourceID            string           `gorm:"column:source_id"`
+	SourceLabel         string           `gorm:"column:source_label"`
+	CheckoutID          string           `gorm:"column:checkout_id"`
+	CheckoutKind        string           `gorm:"column:checkout_kind"`
+	CheckoutLabel       string           `gorm:"column:checkout_label"`
+	CheckoutState       UCICheckoutState `gorm:"column:checkout_state"`
+	ViewID              *string          `gorm:"column:view_id"`
+	ProfileID           *string          `gorm:"column:profile_id"`
+	Generation          *int64           `gorm:"column:generation"`
+	ViewLabel           *string          `gorm:"column:view_label"`
+	SnapshotRevision    *string          `gorm:"column:snapshot_revision"`
+	SnapshotPublishedAt *time.Time       `gorm:"column:snapshot_published_at"`
 }
 
 func (row browserCodeContextCatalogRow) catalogEntry() (BrowserCodeContextCatalogEntry, error) {
