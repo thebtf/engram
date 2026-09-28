@@ -499,7 +499,7 @@ func (collector *parserCollector) collectReference(node *tree_sitter.Node, scope
 			return
 		}
 		collector.addReference("export_alias", "export:"+imported+":"+local, "", imported, uci.TreeSitterResolutionSyntaxOnly, node)
-	case "assignment_expression", "augmented_assignment_expression", "update_expression":
+	case "assignment_expression", "augmented_assignment_expression", "update_expression", "for_in_statement":
 		field := "left"
 		if node.Kind() == "update_expression" {
 			field = "argument"
