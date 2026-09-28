@@ -892,10 +892,8 @@ func requireUCITransportSession(ctx context.Context) (string, error) {
 }
 
 func uciClientOutgoingContext(ctx context.Context, clientInstanceID string) (context.Context, error) {
-	if clientInstanceID != "" {
-		if _, valid := uci.NoAuthCodeWorkstationForInstance(clientInstanceID); !valid {
-			return nil, &module.ModuleError{Code: "PROJECT_ANCHOR_INVALID", Message: projectIdentityResolutionRefusedMessage}
-		}
+	if clientInstanceID != "" && !validUCIClientInstanceMetadata(clientInstanceID) {
+		return nil, &module.ModuleError{Code: "PROJECT_ANCHOR_INVALID", Message: projectIdentityResolutionRefusedMessage}
 	}
 	outgoing, _ := metadata.FromOutgoingContext(ctx)
 	outgoing = outgoing.Copy()
@@ -917,6 +915,29 @@ func uciClientOutgoingContext(ctx context.Context, clientInstanceID string) (con
 		outgoing.Set(uci.NoAuthCodeClientInstanceMetadataKey, clientInstanceID)
 	}
 	return metadata.NewOutgoingContext(ctx, outgoing), nil
+}
+
+func validUCIClientInstanceMetadata(value string) bool {
+	if !validUCIClientIdentifier(value, maxUCIClientIdentifierBytes) || strings.ContainsAny(value, "/\\@") {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsSpace(character) {
+			return false
+		}
+	}
+	if (value[0] >= 'a' && value[0] <= 'z') || (value[0] >= 'A' && value[0] <= 'Z') {
+		for index := 1; index < len(value); index++ {
+			character := value[index]
+			if character == ':' {
+				return false
+			}
+			if !((character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || character == '+' || character == '.' || character == '-') {
+				break
+			}
+		}
+	}
+	return true
 }
 
 func uciClientContextError(operation string, ctx context.Context) error {

@@ -13,6 +13,7 @@ import (
 	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/module"
+	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/uci"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
@@ -140,7 +141,13 @@ func TestUCIClientPropagatesSourceSessionMetadata(t *testing.T) {
 }
 
 func TestUCIClientEmitsAnchoredMetadataOnDirectRPCs(t *testing.T) {
-	const instance = "fixture-daemon-install"
+	const instance = "1:installation"
+	_, err := projectidentity.BuildDescriptorV3(projectidentity.AnchorV3{
+		Version: 3, ProjectID: uciClientTestSpaceID, Name: "fixture", Scope: "repository",
+	}, nil, nil, instance)
+	require.NoError(t, err, "the V3 validator accepts this installation ID")
+	_, noAuthValid := uci.NoAuthCodeWorkstationForInstance(instance)
+	require.False(t, noAuthValid, "no-auth server derivation remains stricter")
 	check := func(ctx context.Context) {
 		outgoing, ok := metadata.FromOutgoingContext(ctx)
 		require.True(t, ok)
@@ -174,7 +181,7 @@ func TestUCIClientEmitsAnchoredMetadataOnDirectRPCs(t *testing.T) {
 		},
 	}
 	client := newUCIClient(rpc, instance)
-	_, err := client.Bind(ctx, &pb.BindCodeContextRequest{ClientSessionId: "client-a", RequestedContext: uciClientTestContextA()})
+	_, err = client.Bind(ctx, &pb.BindCodeContextRequest{ClientSessionId: "client-a", RequestedContext: uciClientTestContextA()})
 	require.NoError(t, err)
 	scope := uciClientTestScopeA()
 	_, err = client.Begin(ctx, uciClientTestBeginRequest(scope, "daemon-a", "build-key-a"))
@@ -736,14 +743,14 @@ func TestUCIIndexAdapterResolvesNoViewAndProxiesWithoutCollaborator(t *testing.T
 	require.Len(t, server.callRequestsSnapshot(), 1)
 }
 
-func TestUCIIndexAdapterForwardsTransportTagAcrossBindAndProxy(t *testing.T) {
+func TestUCIIndexAdapterForwardsV3InstallationAcrossAuthenticatedBindAndProxy(t *testing.T) {
 	const (
 		transportTag  = "transport-tag-a"
 		contextHandle = "transport-context-handle"
 	)
 	server := &uciIndexAdapterGRPCServer{}
 	serverURL := startUCIIndexAdapterGRPC(t, server)
-	mod := NewModuleWithClientInstanceID("fixture-daemon-install")
+	mod := NewModuleWithClientInstanceID("1:installation")
 	t.Cleanup(mod.pool.closeAll)
 	adapter := NewUCIIndexAdapter(mod)
 	ctx := auditcontext.WithUCITransportSession(context.Background(), transportTag)
@@ -762,8 +769,10 @@ func TestUCIIndexAdapterForwardsTransportTagAcrossBindAndProxy(t *testing.T) {
 	bindMetadata, callMetadata := server.metadataSnapshot()
 	require.Equal(t, []string{transportTag}, bindMetadata.Get(auditcontext.SourceSessionMetadataKey))
 	require.Equal(t, []string{transportTag}, callMetadata.Get(auditcontext.SourceSessionMetadataKey))
-	require.Equal(t, []string{"fixture-daemon-install"}, bindMetadata.Get(uci.NoAuthCodeClientInstanceMetadataKey))
-	require.Equal(t, []string{"fixture-daemon-install"}, callMetadata.Get(uci.NoAuthCodeClientInstanceMetadataKey))
+	require.Equal(t, []string{"1:installation"}, bindMetadata.Get(uci.NoAuthCodeClientInstanceMetadataKey))
+	require.Equal(t, []string{"1:installation"}, callMetadata.Get(uci.NoAuthCodeClientInstanceMetadataKey))
+	require.Equal(t, []string{"Bearer fixture-token"}, bindMetadata.Get("authorization"))
+	require.Equal(t, []string{"Bearer fixture-token"}, callMetadata.Get("authorization"))
 }
 
 func TestUCIIndexAdapterRejectsMissingTransportTagBeforeBind(t *testing.T) {
