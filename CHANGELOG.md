@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Renew the two-minute daemon-target observation on successful published-View polling as well as first-index polling; expiry and restart still require a fresh target for bootstrap and index actions.
 - Preserve authorized published Workspace choices, historical pins, and immutable View reads while their daemon is offline. Daemon liveness gates bootstrap and index actions, not durable Source-and-Checkout registration or published-View authorization; genuine ownership and grant failures still deny access.
 - Align the cross-platform UCI parser semantic profile and initialize a tracked project anchor offline; update the no-auth Workspace setup and usage guidance.
+- Require the official release cross-toolchain when generating Windows parser policy and refuse noncanonical Go or MinGW producers, rather than authorizing non-equivalent native Windows output.
 - Isolate mock vault credentials between parallel browser sessions so one Secrets delete cannot invalidate another session's reveal of a same-named project credential.
 
 ## [6.50.0] - 2026-09-26
