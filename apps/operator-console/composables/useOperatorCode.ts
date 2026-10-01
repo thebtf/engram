@@ -1,4 +1,4 @@
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, unref } from 'vue'
 import { operatorApiUrl } from './useOperatorApi'
 
 export type CodeBootstrapPhase = 'idle' | 'binding' | 'ready' | 'collision' | 'ambiguous' | 'reload-pending' | 'denied' | 'secure-origin-required' | 'identity-unavailable' | 'error'
@@ -449,7 +449,7 @@ function parseSourceDescriptor(value: unknown): CodeSourceDescriptor | null {
   const contentDigest = text(Reflect.get(value, 'content_digest'))
   const referenceSiteIdValue = Reflect.get(value, 'reference_site_id')
   const referenceSiteId = referenceSiteIdValue === undefined ? undefined : text(referenceSiteIdValue)
-  return entityKey === null || span === null || contentDigest === null || (referenceSiteIdValue !== undefined && referenceSiteId === null) ? null : { entityKey, span, contentDigest, ...(referenceSiteId === undefined ? {} : { referenceSiteId }) }
+  return entityKey === null || span === null || contentDigest === null || referenceSiteId === null ? null : { entityKey, span, contentDigest, ...(referenceSiteId === undefined ? {} : { referenceSiteId }) }
 }
 
 function parseGraphNavigation(value: unknown, context: CodeResponseContext, graph: CodeGraph): CodeGraphNavigation | null {
@@ -1441,7 +1441,7 @@ export function useOperatorCode() {
           ? await handshake(documentNonce, pair, false, evidence)
           : await handshake(documentNonce, null, false, evidence)
     if (unmounted || !established) return
-    if (established !== 'resumed' || bootstrapPhase.value !== 'ready' || binding.value?.tabBindingId !== remountState?.tabBindingId) remountState = null
+    if (established !== 'resumed' || unref(bootstrapPhase) !== 'ready' || binding.value?.tabBindingId !== remountState?.tabBindingId) remountState = null
     await discoverContext()
     if (unmounted) return
     if (resumingBinding) {
@@ -1601,7 +1601,7 @@ export function useOperatorCode() {
     })
     const pinned = pinnedContext.value
     const activeResults = searchEnvelope.value ?? structureEnvelope.value
-    if (payload === null || pinned === null || activeResults?.context === null || !sameView(pinnedResponseContext.value, activeResults.context)) return
+    if (payload === null || pinned === null || activeResults === null || activeResults.context === null || !sameView(pinnedResponseContext.value, activeResults.context)) return
     const ownsRequest = contextualRequestOwner()
     pending.value = true
     graphState.value = presentation('loading', 'Waiting for the server to release graph evidence.')
