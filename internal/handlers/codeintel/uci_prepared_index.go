@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -989,6 +990,7 @@ func uciPreparedRememberTreeSitterLocal(aliases, namespaces map[string]uciPrepar
 }
 
 func uciPreparedAddTreeSitterLocalEdges(file *uciPreparedAdmissionFile, aliases, namespaces map[string]uciPreparedTreeSitterTarget, definitions map[string]map[string][]uciPreparedTreeSitterTarget) uint64 {
+	lexical := uciPreparedTreeSitterLexicalFacts(file.artifact)
 	var writes map[string][]uci.IndexAdmissionReference
 	for _, reference := range file.artifact.References {
 		if reference.Kind == "binding_write" {
@@ -1009,7 +1011,7 @@ func uciPreparedAddTreeSitterLocalEdges(file *uciPreparedAdmissionFile, aliases,
 		if !found {
 			if reference.Kind == "call" && reference.Relation == uci.IndexRelation("calls") &&
 				reference.OwnerSymbolKey != nil && !strings.ContainsAny(local, ".@/#") && file.artifact.Status == uci.IndexAdmissionArtifactComplete &&
-				uciPreparedTreeSitterWriteAffectsCall(file.artifact, reference, writes[local]) {
+				lexical.writeAffectsCall(local, reference, writes[local]) {
 				file.edges = append(file.edges, uci.IndexAdmissionEdge{
 					EdgeKey:          uciPreparedTreeSitterEdgeKey(file.path, reference.SiteKey, "", "", reference.Relation),
 					SourceArtifactID: file.artifact.ArtifactID,
@@ -1029,7 +1031,7 @@ func uciPreparedAddTreeSitterLocalEdges(file *uciPreparedAdmissionFile, aliases,
 				continue
 			}
 			if reference.Kind == "call" {
-				target, found = uciPreparedTreeSitterDirectLocalCallTarget(file, reference, local, uciPreparedTreeSitterVisibleLocalTargets(file.artifact, reference, definitions[file.path][local]))
+				target, found = uciPreparedTreeSitterDirectLocalCallTarget(file, reference, local, definitions[file.path][local], lexical)
 				direct = found
 			}
 		}
@@ -1048,106 +1050,131 @@ func uciPreparedAddTreeSitterLocalEdges(file *uciPreparedAdmissionFile, aliases,
 	return unresolved
 }
 
-func uciPreparedTreeSitterWriteAffectsCall(artifact *uci.IndexAdmissionArtifact, call uci.IndexAdmissionReference, writes []uci.IndexAdmissionReference) bool {
-	for _, write := range writes {
-		if write.OwnerSymbolKey != nil && *write.OwnerSymbolKey == *call.OwnerSymbolKey ||
-			!uciPreparedTreeSitterWriteShadowsLocal(artifact, write) {
+type uciPreparedTreeSitterLexicalFact struct {
+	kind, name string
+	scope      uci.IndexSpan
+	site       uci.IndexSpan
+	owner      *string
+}
+
+type uciPreparedTreeSitterLexicalIndex struct {
+	bindings map[string][]uciPreparedTreeSitterLexicalFact
+	scopes   []uciPreparedTreeSitterLexicalFact
+}
+
+func uciPreparedTreeSitterLexicalFacts(artifact *uci.IndexAdmissionArtifact) uciPreparedTreeSitterLexicalIndex {
+	var facts uciPreparedTreeSitterLexicalIndex
+	for _, reference := range artifact.References {
+		if reference.Kind != "reference" {
+			continue
+		}
+		key, ok := uciPreparedTreeSitterSemanticKey(reference.SiteKey)
+		if !ok {
+			continue
+		}
+		var fact uciPreparedTreeSitterLexicalFact
+		if payload, binding := strings.CutPrefix(key, "lexical_binding:"); binding {
+			key = payload
+			fact.kind = "binding"
+		} else if payload, scope := strings.CutPrefix(key, "lexical_scope:"); scope {
+			fact.kind, key, ok = strings.Cut(payload, ":")
+			if !ok || fact.kind != "function" && fact.kind != "with" {
+				continue
+			}
+		} else {
+			continue
+		}
+		startText, rest, ok := strings.Cut(key, ":")
+		if !ok {
+			continue
+		}
+		endText := rest
+		if fact.kind == "binding" {
+			endText, fact.name, ok = strings.Cut(rest, ":")
+			if !ok || fact.name != reference.RawTarget {
+				continue
+			}
+		}
+		start, startErr := strconv.ParseInt(startText, 10, 64)
+		end, endErr := strconv.ParseInt(endText, 10, 64)
+		if startErr != nil || endErr != nil || start < 0 || end > int64(len(artifact.Body)) || start >= end ||
+			start > reference.Span.ByteStart || end < reference.Span.ByteEnd {
+			continue
+		}
+		fact.scope = uci.IndexSpan{ByteStart: start, ByteEnd: end}
+		fact.site, fact.owner = reference.Span, reference.OwnerSymbolKey
+		if fact.kind == "binding" {
+			if facts.bindings == nil {
+				facts.bindings = make(map[string][]uciPreparedTreeSitterLexicalFact)
+			}
+			facts.bindings[fact.name] = append(facts.bindings[fact.name], fact)
+		} else {
+			facts.scopes = append(facts.scopes, fact)
+		}
+	}
+	return facts
+}
+
+func (facts uciPreparedTreeSitterLexicalIndex) bindingAt(name string, site uci.IndexSpan) (uci.IndexSpan, bool) {
+	var binding uci.IndexSpan
+	found := false
+	for _, fact := range facts.bindings[name] {
+		if fact.scope.ByteStart <= site.ByteStart && fact.scope.ByteEnd >= site.ByteEnd &&
+			(!found || fact.scope.ByteEnd-fact.scope.ByteStart < binding.ByteEnd-binding.ByteStart) {
+			binding, found = fact.scope, true
+		}
+	}
+	return binding, found
+}
+
+func (facts uciPreparedTreeSitterLexicalIndex) moduleDefinition(artifact *uci.IndexAdmissionArtifact, definition uci.IndexAdmissionDefinition) bool {
+	name, ok := uciPreparedTreeSitterDefinitionName(definition.LocalSymbolKey)
+	if !ok {
+		return false
+	}
+	for _, fact := range facts.bindings[name] {
+		if fact.scope.ByteStart == 0 && fact.scope.ByteEnd == int64(len(artifact.Body)) &&
+			definition.Span.ByteStart <= fact.site.ByteStart && definition.Span.ByteEnd >= fact.site.ByteEnd {
 			return true
 		}
 	}
 	return false
 }
 
-func uciPreparedTreeSitterWriteShadowsLocal(artifact *uci.IndexAdmissionArtifact, write uci.IndexAdmissionReference) bool {
-	if write.OwnerSymbolKey == nil || write.Span.ByteStart <= 0 || write.Span.ByteEnd > int64(len(artifact.Body)) {
-		return false
-	}
-	for _, owner := range artifact.Definitions {
-		if owner.LocalSymbolKey != *write.OwnerSymbolKey || owner.Kind != "function" ||
-			owner.Span.ByteStart < 0 || owner.Span.ByteStart >= write.Span.ByteStart || owner.Span.ByteEnd < write.Span.ByteEnd {
+func (facts uciPreparedTreeSitterLexicalIndex) functionAt(site uci.IndexSpan) *uciPreparedTreeSitterLexicalFact {
+	var owner *uciPreparedTreeSitterLexicalFact
+	for index := range facts.scopes {
+		fact := &facts.scopes[index]
+		if fact.scope.ByteStart > site.ByteStart || fact.scope.ByteEnd < site.ByteEnd {
 			continue
 		}
-		prefix := artifact.Body[owner.Span.ByteStart:write.Span.ByteStart]
-		name := strings.TrimPrefix(owner.LocalSymbolKey, "function:")
-		exported := bytes.HasPrefix(bytes.TrimLeft(prefix, " \t\r\n"), []byte("export "))
-		open, ok := uciPreparedTreeSitterFunctionOpen(prefix, name, exported)
-		if !ok {
-			return false
+		if fact.kind == "with" {
+			return nil
 		}
-		parameters := prefix[open+1:]
-		close := bytes.IndexByte(parameters, ')')
-		if close < 0 || bytes.IndexByte(parameters[:close], '(') >= 0 || bytes.IndexByte(parameters[close+1:], '{') < 0 {
-			return false
+		if owner == nil || fact.scope.ByteEnd-fact.scope.ByteStart < owner.scope.ByteEnd-owner.scope.ByteStart {
+			owner = fact
 		}
-		if bytes.IndexAny(parameters[:close], "{}[]=") < 0 {
-			for parameters := parameters[:close]; len(parameters) > 0; {
-				parameter, rest, found := bytes.Cut(parameters, []byte{','})
-				parameter = bytes.TrimSpace(parameter)
-				if bytes.HasPrefix(parameter, []byte(write.RawTarget)) &&
-					(len(parameter) == len(write.RawTarget) || bytes.IndexByte([]byte(" \t\r\n?:="), parameter[len(write.RawTarget)]) >= 0) {
-					return true
-				}
-				if !found {
-					break
-				}
-				parameters = rest
-			}
-		}
-		for _, declaration := range artifact.Definitions {
-			if (declaration.Kind != "let" && declaration.Kind != "const" && declaration.Kind != "var") ||
-				!strings.HasSuffix(declaration.LocalSymbolKey, ":"+write.RawTarget) ||
-				declaration.Span.ByteStart <= owner.Span.ByteStart || declaration.Span.ByteEnd > write.Span.ByteStart {
-				continue
-			}
-			if declaration.Kind != "var" && bytes.IndexByte(artifact.Body[declaration.Span.ByteEnd:write.Span.ByteStart], '}') >= 0 {
-				continue
-			}
-			insideNestedFunction := false
-			for _, nested := range artifact.Definitions {
-				if nested.Kind == "function" && nested.Span.ByteStart > owner.Span.ByteStart &&
-					nested.Span.ByteStart < declaration.Span.ByteStart && nested.Span.ByteEnd >= declaration.Span.ByteEnd {
-					insideNestedFunction = true
-					break
-				}
-			}
-			if !insideNestedFunction {
-				return true
-			}
+	}
+	return owner
+}
+
+func (facts uciPreparedTreeSitterLexicalIndex) writeAffectsCall(name string, call uci.IndexAdmissionReference, writes []uci.IndexAdmissionReference) bool {
+	if len(writes) == 0 {
+		return false
+	}
+	callBinding, callKnown := facts.bindingAt(name, call.Span)
+	for _, write := range writes {
+		writeBinding, writeKnown := facts.bindingAt(name, write.Span)
+		if !callKnown || !writeKnown || callBinding == writeBinding {
+			return true
 		}
 	}
 	return false
 }
 
-func uciPreparedTreeSitterVisibleLocalTargets(artifact *uci.IndexAdmissionArtifact, call uci.IndexAdmissionReference, matches []uciPreparedTreeSitterTarget) []uciPreparedTreeSitterTarget {
-	if len(matches) < 2 {
-		return matches
-	}
-	visible := make([]uciPreparedTreeSitterTarget, 0, len(matches))
-	for _, target := range matches {
-		shadowed := false
-		for _, declaration := range artifact.Definitions {
-			if declaration.LocalSymbolKey != target.symbolKey || (declaration.Kind != "let" && declaration.Kind != "const" && declaration.Kind != "var") {
-				continue
-			}
-			for _, owner := range artifact.Definitions {
-				if owner.Kind == "function" && owner.Span.ByteStart < declaration.Span.ByteStart && owner.Span.ByteEnd >= declaration.Span.ByteEnd &&
-					(call.Span.ByteStart < owner.Span.ByteStart || call.Span.ByteEnd > owner.Span.ByteEnd) {
-					shadowed = true
-					break
-				}
-			}
-			break
-		}
-		if !shadowed {
-			visible = append(visible, target)
-		}
-	}
-	return visible
-}
-
-func uciPreparedTreeSitterDirectLocalCallTarget(file *uciPreparedAdmissionFile, reference uci.IndexAdmissionReference, local string, matches []uciPreparedTreeSitterTarget) (uciPreparedTreeSitterTarget, bool) {
-	if reference.Kind != "call" || reference.Relation != uci.IndexRelation("calls") || reference.OwnerSymbolKey == nil || len(matches) != 1 ||
-		matches[0].symbolKey != "function:"+local || strings.ContainsAny(local, ".@/#") || file.artifact.Status != uci.IndexAdmissionArtifactComplete {
+func uciPreparedTreeSitterDirectLocalCallTarget(file *uciPreparedAdmissionFile, reference uci.IndexAdmissionReference, local string, matches []uciPreparedTreeSitterTarget, lexical uciPreparedTreeSitterLexicalIndex) (uciPreparedTreeSitterTarget, bool) {
+	if reference.Kind != "call" || reference.Relation != uci.IndexRelation("calls") || reference.OwnerSymbolKey == nil ||
+		strings.ContainsAny(local, ".@/#") || file.artifact.Status != uci.IndexAdmissionArtifactComplete {
 		return uciPreparedTreeSitterTarget{}, false
 	}
 	body := file.artifact.Body
@@ -1156,136 +1183,58 @@ func uciPreparedTreeSitterDirectLocalCallTarget(file *uciPreparedAdmissionFile, 
 		!strings.HasPrefix(reference.SiteKey, "call:"+local+"@") {
 		return uciPreparedTreeSitterTarget{}, false
 	}
+	binding, known := lexical.bindingAt(local, reference.Span)
+	owner := lexical.functionAt(reference.Span)
+	if !known || binding.ByteStart != 0 || binding.ByteEnd != int64(len(body)) || owner == nil || owner.owner == nil || *owner.owner != *reference.OwnerSymbolKey {
+		return uciPreparedTreeSitterTarget{}, false
+	}
+	var target uciPreparedTreeSitterTarget
 	var caller, callee *uci.IndexAdmissionDefinition
+	var visible int
 	for index := range file.artifact.Definitions {
 		definition := &file.artifact.Definitions[index]
+		if !lexical.moduleDefinition(file.artifact, *definition) {
+			continue
+		}
 		if definition.LocalSymbolKey == *reference.OwnerSymbolKey {
 			caller = definition
 		}
-		if definition.LocalSymbolKey == matches[0].symbolKey {
-			callee = definition
+		for _, match := range matches {
+			if definition.LocalSymbolKey == match.symbolKey {
+				visible++
+				callee, target = definition, match
+			}
 		}
 	}
-	if callee == nil || callee.Kind != "function" || callee.Span.ByteStart < 0 || callee.Span.ByteEnd > int64(len(body)) ||
-		callee.Span.ByteStart >= callee.Span.ByteEnd || !uciPreparedTreeSitterTopLevelFunction(file.artifact, callee) {
+	if visible != 1 || target.symbolKey != "function:"+local || callee == nil || callee.Kind != "function" || caller == nil || caller.Kind != "function" ||
+		caller.Span.ByteStart > owner.scope.ByteStart || caller.Span.ByteEnd < owner.scope.ByteEnd {
 		return uciPreparedTreeSitterTarget{}, false
 	}
-	calleeExported, calleeDirect := uciPreparedTreeSitterFunctionExport(file.artifact, callee)
-	if !calleeExported {
+	if !uciPreparedTreeSitterFunctionExport(file.artifact, callee) || !uciPreparedTreeSitterFunctionExport(file.artifact, caller) {
 		return uciPreparedTreeSitterTarget{}, false
-	}
-	if _, ok := uciPreparedTreeSitterFunctionOpen(body[callee.Span.ByteStart:callee.Span.ByteEnd], local, calleeDirect); !ok {
-		return uciPreparedTreeSitterTarget{}, false
-	}
-	if caller == nil || caller.Kind != "function" || caller.Span.ByteStart < 0 || caller.Span.ByteEnd > int64(len(body)) ||
-		caller.Span.ByteStart >= reference.Span.ByteStart || caller.Span.ByteEnd < reference.Span.ByteEnd ||
-		!uciPreparedTreeSitterTopLevelFunction(file.artifact, caller) {
-		return uciPreparedTreeSitterTarget{}, false
-	}
-	callerExported, callerDirect := uciPreparedTreeSitterFunctionExport(file.artifact, caller)
-	if !callerExported {
-		return uciPreparedTreeSitterTarget{}, false
-	}
-	declaration := body[caller.Span.ByteStart:caller.Span.ByteEnd]
-	open, ok := uciPreparedTreeSitterFunctionOpen(declaration, strings.TrimPrefix(caller.LocalSymbolKey, "function:"), callerDirect)
-	if !ok || bytes.ContainsAny(declaration[:open], "</") {
-		return uciPreparedTreeSitterTarget{}, false
-	}
-	parameters := declaration[open+1:]
-	close := bytes.IndexByte(parameters, ')')
-	if close < 0 || bytes.IndexByte(parameters[:close], '(') >= 0 || uciPreparedTreeSitterHasIdentifier(parameters[:close], local) {
-		return uciPreparedTreeSitterTarget{}, false
-	}
-	prefix := body[caller.Span.ByteStart:reference.Span.ByteStart]
-	if len(prefix) < open+close+2 {
-		return uciPreparedTreeSitterTarget{}, false
-	}
-	for _, construct := range [][]byte{[]byte("=>"), []byte("function"), []byte("catch"), []byte("with (")} {
-		if bytes.Contains(prefix[open+close+2:], construct) {
-			return uciPreparedTreeSitterTarget{}, false
-		}
 	}
 	for _, candidate := range file.artifact.References {
-		if candidate.Kind == "call" && candidate.Relation == uci.IndexRelation("calls") && strings.HasPrefix(candidate.SiteKey, "call:eval@") {
-			return uciPreparedTreeSitterTarget{}, false
+		if candidate.Kind == "call" && candidate.Relation == uci.IndexRelation("calls") && strings.HasPrefix(candidate.SiteKey, "call:eval@") && candidate.RawTarget == "eval" {
+			evalBinding, evalKnown := lexical.bindingAt(local, candidate.Span)
+			if !evalKnown || evalBinding == binding {
+				return uciPreparedTreeSitterTarget{}, false
+			}
 		}
 	}
-	return matches[0], true
+	return target, true
 }
 
-func uciPreparedTreeSitterTopLevelFunction(artifact *uci.IndexAdmissionArtifact, definition *uci.IndexAdmissionDefinition) bool {
-	for _, other := range artifact.Definitions {
-		if other.Kind == "function" && other.LocalSymbolKey != definition.LocalSymbolKey &&
-			other.Span.ByteStart < definition.Span.ByteStart && other.Span.ByteEnd >= definition.Span.ByteEnd {
-			return false
-		}
-	}
-	return true
-}
-
-func uciPreparedTreeSitterFunctionExport(artifact *uci.IndexAdmissionArtifact, definition *uci.IndexAdmissionDefinition) (bool, bool) {
+func uciPreparedTreeSitterFunctionExport(artifact *uci.IndexAdmissionArtifact, definition *uci.IndexAdmissionDefinition) bool {
 	name := strings.TrimPrefix(definition.LocalSymbolKey, "function:")
 	for _, reference := range artifact.References {
 		imported, exportedName, ok := uciPreparedTreeSitterExportAlias(reference)
 		if ok && imported == name && (reference.RawTarget == name || reference.RawTarget == name+" as "+exportedName) && reference.Relation == uci.IndexRelation("exports") &&
 			(reference.Span.ByteStart >= definition.Span.ByteStart && reference.Span.ByteEnd <= definition.Span.ByteEnd ||
 				reference.Span.ByteEnd <= definition.Span.ByteStart || reference.Span.ByteStart >= definition.Span.ByteEnd) {
-			return true, reference.Span.ByteStart >= definition.Span.ByteStart && reference.Span.ByteEnd <= definition.Span.ByteEnd
-		}
-	}
-	return false, false
-}
-
-func uciPreparedTreeSitterFunctionOpen(declaration []byte, name string, exported bool) (int, bool) {
-	rest := declaration
-	for _, token := range []string{"export", "function", name} {
-		if token == "export" && !exported {
-			continue
-		}
-		rest = bytes.TrimLeft(rest, " \t\r\n")
-		if token == "function" && bytes.HasPrefix(rest, []byte("async")) && len(rest) > len("async") && !uciPreparedTreeSitterIdentifierByte(rest[len("async")]) {
-			rest = bytes.TrimLeft(rest[len("async"):], " \t\r\n")
-		}
-		if !bytes.HasPrefix(rest, []byte(token)) {
-			return 0, false
-		}
-		rest = rest[len(token):]
-		if len(rest) == 0 || uciPreparedTreeSitterIdentifierByte(rest[0]) {
-			return 0, false
-		}
-		if token == "function" {
-			rest = bytes.TrimLeft(rest, " \t\r\n")
-			if len(rest) > 0 && rest[0] == '*' {
-				rest = rest[1:]
-			}
-		}
-	}
-	rest = bytes.TrimLeft(rest, " \t\r\n")
-	if len(rest) == 0 || rest[0] != '(' {
-		return 0, false
-	}
-	return len(declaration) - len(rest), true
-}
-
-func uciPreparedTreeSitterHasIdentifier(source []byte, name string) bool {
-	for index := 0; index < len(source); {
-		found := bytes.Index(source[index:], []byte(name))
-		if found < 0 {
-			return false
-		}
-		index += found
-		before := index == 0 || !uciPreparedTreeSitterIdentifierByte(source[index-1])
-		end := index + len(name)
-		if before && (end == len(source) || !uciPreparedTreeSitterIdentifierByte(source[end])) {
 			return true
 		}
-		index = end
 	}
 	return false
-}
-
-func uciPreparedTreeSitterIdentifierByte(value byte) bool {
-	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || value == '_' || value == '$' || value >= 128
 }
 
 func uciPreparedTreeSitterLocalTarget(local string, aliases, namespaces map[string]uciPreparedTreeSitterTarget, definitions map[string]map[string][]uciPreparedTreeSitterTarget) (uciPreparedTreeSitterTarget, bool) {

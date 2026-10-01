@@ -341,6 +341,7 @@ func (collector *parserCollector) walk(cursor *tree_sitter.TreeCursor, scope par
 			collector.addDefinition(definition)
 		}
 	}
+	collector.collectLexicalFacts(node, scope)
 	collector.collectReference(node, scope)
 
 	next := scope
@@ -408,7 +409,7 @@ func (collector *parserCollector) collectExportDefinition(exportNode *tree_sitte
 }
 
 func (collector *parserCollector) collectVariableDefinitions(node *tree_sitter.Node, scope parserScope, spanNode *tree_sitter.Node) {
-	kind := variableKind(node, collector.source)
+	kind := variableKind(node)
 	if kind == "" {
 		return
 	}
@@ -491,6 +492,107 @@ func (collector *parserCollector) addDefinition(definition uci.TreeSitterDefinit
 	collector.definitions = append(collector.definitions, definition)
 }
 
+// Lexical facts use the existing syntax-reference envelope. Their scope offsets
+// identify a binding independently of the function that happens to use it.
+func (collector *parserCollector) collectLexicalFacts(node *tree_sitter.Node, scope parserScope) {
+	if parserFunctionNode(node.Kind()) {
+		owner := ""
+		if definition, found := collector.definition(node, scope, node); found {
+			owner = definition.LocalKey
+		}
+		collector.addLexicalScope("function", node, owner)
+		collector.addLexicalBindings(node.ChildByFieldName("parameters"), node)
+		collector.addLexicalBindings(node.ChildByFieldName("parameter"), node)
+		if node.Kind() == "function_expression" || node.Kind() == "generator_function" {
+			collector.addLexicalBindings(node.ChildByFieldName("name"), node)
+		}
+	}
+	switch node.Kind() {
+	case "with_statement":
+		collector.addLexicalScope("with", node, scope.ownerLocalKey)
+	case "variable_declarator":
+		declaration := node.Parent()
+		if declaration != nil && isVariableDeclaration(declaration.Kind()) {
+			collector.addLexicalBindings(node.ChildByFieldName("name"), parserBindingScope(declaration.Parent(), variableKind(declaration) == "var"))
+		}
+	case "function_declaration", "generator_function_declaration", "class_declaration", "abstract_class_declaration", "enum_declaration":
+		collector.addLexicalBindings(node.ChildByFieldName("name"), parserBindingScope(node.Parent(), false))
+	case "class":
+		collector.addLexicalBindings(node.ChildByFieldName("name"), node)
+	case "catch_clause":
+		collector.addLexicalBindings(node.ChildByFieldName("parameter"), node)
+	case "for_in_statement":
+		if kind := node.ChildByFieldName("kind"); kind != nil {
+			collector.addLexicalBindings(node.ChildByFieldName("left"), parserBindingScope(node, kind.Kind() == "var"))
+		}
+	case "import_clause":
+		for index := uint(0); index < node.NamedChildCount(); index++ {
+			if binding := node.NamedChild(index); binding.Kind() == "identifier" {
+				collector.addLexicalBindings(binding, parserBindingScope(node.Parent(), true))
+			}
+		}
+	case "import_specifier":
+		binding := node.ChildByFieldName("alias")
+		if binding == nil {
+			binding = node.ChildByFieldName("name")
+		}
+		collector.addLexicalBindings(binding, parserBindingScope(node.Parent(), true))
+	case "namespace_import", "import_require_clause":
+		for index := uint(0); index < node.NamedChildCount(); index++ {
+			if binding := node.NamedChild(index); binding.Kind() == "identifier" {
+				collector.addLexicalBindings(binding, parserBindingScope(node.Parent(), true))
+			}
+		}
+	}
+}
+
+func (collector *parserCollector) addLexicalBindings(pattern, scope *tree_sitter.Node) {
+	if scope == nil {
+		return
+	}
+	for _, binding := range collector.bindingNodes(pattern) {
+		name := nodeText(binding, collector.source)
+		key := "lexical_binding:" + strconv.FormatUint(uint64(scope.StartByte()), 10) + ":" + strconv.FormatUint(uint64(scope.EndByte()), 10) + ":" + name
+		collector.addReference("reference", key, "", name, uci.TreeSitterResolutionSyntaxOnly, binding)
+	}
+}
+
+func (collector *parserCollector) addLexicalScope(kind string, node *tree_sitter.Node, owner string) {
+	anchor := node.ChildByFieldName("name")
+	if anchor == nil {
+		anchor = node
+		for anchor.ChildCount() > 0 {
+			anchor = anchor.Child(0)
+		}
+	}
+	key := "lexical_scope:" + kind + ":" + strconv.FormatUint(uint64(node.StartByte()), 10) + ":" + strconv.FormatUint(uint64(node.EndByte()), 10)
+	collector.addReference("reference", key, owner, nodeText(anchor, collector.source), uci.TreeSitterResolutionSyntaxOnly, anchor)
+}
+
+func parserFunctionNode(kind string) bool {
+	switch kind {
+	case "function_declaration", "generator_function_declaration", "function_expression", "generator_function", "arrow_function", "method_definition":
+		return true
+	default:
+		return false
+	}
+}
+
+func parserBindingScope(node *tree_sitter.Node, functionScoped bool) *tree_sitter.Node {
+	for current := node; current != nil; current = current.Parent() {
+		if current.Kind() == "program" || parserFunctionNode(current.Kind()) {
+			return current
+		}
+		if !functionScoped {
+			switch current.Kind() {
+			case "statement_block", "switch_body", "for_statement", "for_in_statement", "catch_clause", "class_static_block":
+				return current
+			}
+		}
+	}
+	return nil
+}
+
 func (collector *parserCollector) collectReference(node *tree_sitter.Node, scope parserScope) {
 	switch node.Kind() {
 	case "import_statement":
@@ -531,6 +633,9 @@ func (collector *parserCollector) collectReference(node *tree_sitter.Node, scope
 		}
 		collector.addReference("export_alias", "export:"+imported+":"+local, "", imported, uci.TreeSitterResolutionSyntaxOnly, node)
 	case "assignment_expression", "augmented_assignment_expression", "update_expression", "for_in_statement":
+		if node.Kind() == "for_in_statement" && node.ChildByFieldName("kind") != nil {
+			return
+		}
 		field := "left"
 		if node.Kind() == "update_expression" {
 			field = "argument"
@@ -541,8 +646,8 @@ func (collector *parserCollector) collectReference(node *tree_sitter.Node, scope
 		}
 	case "call_expression", "new_expression":
 		callee := node.ChildByFieldName("function")
-		if callee == nil && node.NamedChildCount() > 0 {
-			callee = node.NamedChild(0)
+		if node.Kind() == "new_expression" {
+			callee = node.ChildByFieldName("constructor")
 		}
 		raw := nodeText(callee, collector.source)
 		if raw != "" {
@@ -551,7 +656,7 @@ func (collector *parserCollector) collectReference(node *tree_sitter.Node, scope
 				resolution = uci.TreeSitterResolutionPartial
 				collector.markDynamicImport(node)
 			}
-			if node.Kind() == "call_expression" && callee.Kind() == "identifier" {
+			if callee.Kind() == "identifier" && node.ChildByFieldName("optional_chain") == nil {
 				collector.addReference("call", "call:"+raw, scope.ownerLocalKey, raw, resolution, callee)
 			} else {
 				collector.addReference("call", "call:"+raw, scope.ownerLocalKey, raw, resolution, node)
@@ -687,24 +792,19 @@ func definitionKind(kind string) string {
 }
 
 func isVariableDeclaration(kind string) bool {
-	return kind == "lexical_declaration" || kind == "variable_declaration"
+	return kind == "lexical_declaration" || kind == "variable_declaration" || kind == "using_declaration"
 }
 
-func variableKind(node *tree_sitter.Node, source []byte) string {
-	if node == nil {
-		return ""
+func variableKind(node *tree_sitter.Node) string {
+	if node != nil {
+		for index := uint(0); index < node.ChildCount(); index++ {
+			switch kind := node.Child(index).Kind(); kind {
+			case "const", "let", "var", "using":
+				return kind
+			}
+		}
 	}
-	text := strings.TrimSpace(nodeText(node, source))
-	if text == "" {
-		return ""
-	}
-	keyword := strings.Fields(text)[0]
-	switch keyword {
-	case "const", "let", "var":
-		return keyword
-	default:
-		return ""
-	}
+	return ""
 }
 
 func (collector *parserCollector) bindingNodes(node *tree_sitter.Node) []*tree_sitter.Node {
@@ -716,24 +816,29 @@ func (collector *parserCollector) bindingNodes(node *tree_sitter.Node) []*tree_s
 		return []*tree_sitter.Node{node}
 	case "assignment_pattern", "object_assignment_pattern":
 		return collector.bindingNodes(node.ChildByFieldName("left"))
-	case "parenthesized_expression", "non_null_expression":
-		if node.NamedChildCount() == 1 {
-			return collector.bindingNodes(node.NamedChild(0))
-		}
-		return nil
-	case "as_expression", "satisfies_expression":
-		if node.NamedChildCount() == 2 {
-			return collector.bindingNodes(node.NamedChild(0))
+	case "parenthesized_expression", "non_null_expression", "as_expression", "satisfies_expression":
+		for index := uint(0); index < node.NamedChildCount(); index++ {
+			if child := node.NamedChild(index); child.Kind() != "comment" {
+				return collector.bindingNodes(child)
+			}
 		}
 		return nil
 	case "type_assertion":
-		if node.NamedChildCount() == 2 && node.NamedChild(0).Kind() == "type_arguments" {
-			return collector.bindingNodes(node.NamedChild(1))
+		for index := uint(0); index < node.NamedChildCount(); index++ {
+			if child := node.NamedChild(index); child.Kind() != "comment" && child.Kind() != "type_arguments" {
+				return collector.bindingNodes(child)
+			}
 		}
 		return nil
+	case "required_parameter", "optional_parameter":
+		binding := node.ChildByFieldName("pattern")
+		if binding == nil {
+			binding = node.ChildByFieldName("name")
+		}
+		return collector.bindingNodes(binding)
 	case "pair_pattern":
 		return collector.bindingNodes(node.ChildByFieldName("value"))
-	case "array_pattern", "object_pattern", "rest_pattern":
+	case "array_pattern", "object_pattern", "rest_pattern", "formal_parameters":
 		bindings := make([]*tree_sitter.Node, 0, node.NamedChildCount())
 		for index := uint(0); index < node.NamedChildCount(); index++ {
 			bindings = append(bindings, collector.bindingNodes(node.NamedChild(index))...)

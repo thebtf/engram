@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refuse a 129th active no-auth working copy during registration, including concurrent registrations under different repositories, so the shared Workspace catalog remains complete for all browsers; replaying registered checkouts and authenticated registrations remain available.
 - Bootstrap Code Explorer on a LAN browser origin without a login session, and keep search, graph traversal, and source reads bound to the same selected View; verified semantic and graph source in separate working copies.
 - Let the plugin connect without a keycard when the server disables authentication, leaving token decisions to the server and retaining keycards for auth-enabled servers.
+- Derive same-file call, constructor, shadowing, reassignment and direct-eval edges from parsed lexical facts; ignore non-binding comment/string text and preserve binding-scope isolation.
 - Align the cross-platform UCI parser semantic profile and initialize a tracked project anchor offline; update the no-auth Workspace setup and usage guidance.
 - Isolate mock vault credentials between parallel browser sessions so one Secrets delete cannot invalidate another session's reveal of a same-named project credential.
 
