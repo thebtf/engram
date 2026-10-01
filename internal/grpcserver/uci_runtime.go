@@ -51,10 +51,10 @@ func NewIndexIntentTargetRegistry() *IndexIntentTargetRegistry {
 	}
 }
 
-// Observe accepts only a complete no-View binding which has already passed the
-// private daemon transport's authenticated target authorization.
+// Observe accepts only a complete binding which has already passed the private
+// daemon transport's authenticated target authorization.
 func (registry *IndexIntentTargetRegistry) Observe(binding uci.IndexBinding) {
-	if registry == nil || binding.Validate() != nil || binding.Context != nil {
+	if registry == nil || binding.Validate() != nil {
 		return
 	}
 	registry.mu.Lock()
@@ -76,7 +76,7 @@ func (registry *IndexIntentTargetRegistry) Resolve(sourceID, checkoutID string) 
 	registry.prune(now)
 	var resolved uci.IndexBinding
 	for key, advertised := range registry.targets {
-		if key.scope.SourceID != sourceID || key.scope.CheckoutID != checkoutID {
+		if key.scope.SourceID != sourceID || key.scope.CheckoutID != checkoutID || advertised.binding.Context != nil {
 			continue
 		}
 		if resolved.Scope != (uci.IndexScope{}) {
@@ -88,6 +88,23 @@ func (registry *IndexIntentTargetRegistry) Resolve(sourceID, checkoutID string) 
 		return uci.IndexBinding{}, false
 	}
 	return resolved, true
+}
+
+// IsLive reports recent authenticated polling, not context or index authority.
+// Published targets use the same existing advertisement expiry as bootstrap targets.
+func (registry *IndexIntentTargetRegistry) IsLive(sourceID, checkoutID string) bool {
+	if registry == nil {
+		return false
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	registry.prune(registry.currentTime())
+	for key := range registry.targets {
+		if key.scope.SourceID == sourceID && key.scope.CheckoutID == checkoutID {
+			return true
+		}
+	}
+	return false
 }
 
 func (registry *IndexIntentTargetRegistry) currentTime() time.Time {
@@ -161,9 +178,6 @@ func (runtime *contextAwareUCIRuntime) PollCodeIndexIntents(ctx context.Context,
 	if err := runtime.require(ctx); err != nil {
 		return nil, err
 	}
-	if runtime.targets != nil {
-		runtime.targets.Observe(binding)
-	}
 	if request == nil || request.GetTarget() == nil {
 		return nil, errUCIContextRuntimeInvalid
 	}
@@ -171,6 +185,9 @@ func (runtime *contextAwareUCIRuntime) PollCodeIndexIntents(ctx context.Context,
 	intent, err := runtime.intents.PollIndexIntent(ctx, binding, owner)
 	if err != nil {
 		return nil, err
+	}
+	if runtime.targets != nil {
+		runtime.targets.Observe(binding)
 	}
 	response := &pb.PollCodeIndexIntentsResponse{}
 	if intent == nil {

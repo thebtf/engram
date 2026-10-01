@@ -20,6 +20,7 @@ import (
 
 const (
 	codebaseContextMaxHandlesPerClient = 32
+	codebaseContextMaxClients          = 1024
 	codebaseContextListLimit           = 64
 )
 
@@ -207,6 +208,7 @@ type codebaseContextClientHandles struct {
 	bySelector map[codebaseContextSelectorKey]string
 	byScope    map[codebaseContextScopeKey]uint32
 	order      []string
+	lastUsed   uint64
 }
 
 type codebaseContextRefPayload struct {
@@ -958,6 +960,7 @@ func (s *Server) codebaseContextSelectorForHandle(clientSessionID, handle string
 	if !found {
 		return nil, 0, uci.IndexBindingSelector{}, false
 	}
+	s.codebaseContextTouchClient(client)
 	return s.codebaseContextApplication, s.codebaseContextEpoch, entry.selector.Clone(), true
 }
 
@@ -971,8 +974,21 @@ func (s *Server) codebaseContextHandleForSelector(clientSessionID string, select
 	}
 
 	s.codebaseContextMu.Lock()
-	if s.codebaseContextEpoch != epoch {
+	application := s.codebaseContextApplication
+	evictedSession := ""
+	forgotten := false
+	defer func() {
 		s.codebaseContextMu.Unlock()
+		if indexApplication, ok := application.(codebaseContextIndexApplication); ok {
+			if evictedSession != "" {
+				indexApplication.ForgetClient(evictedSession)
+			}
+			if forgotten {
+				indexApplication.ForgetClient(clientSessionID)
+			}
+		}
+	}()
+	if s.codebaseContextEpoch != epoch {
 		return "", false
 	}
 	if s.codebaseContextHandles == nil {
@@ -980,6 +996,16 @@ func (s *Server) codebaseContextHandleForSelector(clientSessionID string, select
 	}
 	client := s.codebaseContextHandles[clientSessionID]
 	if client == nil {
+		if len(s.codebaseContextHandles) >= codebaseContextMaxClients {
+			// ponytail: scan at most 1024 owners on admission; use a queue only if this becomes hot.
+			var oldestUse uint64
+			for session, handles := range s.codebaseContextHandles {
+				if evictedSession == "" || handles.lastUsed < oldestUse {
+					evictedSession, oldestUse = session, handles.lastUsed
+				}
+			}
+			delete(s.codebaseContextHandles, evictedSession)
+		}
 		client = &codebaseContextClientHandles{
 			byHandle:   make(map[string]codebaseContextHandleEntry),
 			bySelector: make(map[codebaseContextSelectorKey]string),
@@ -987,15 +1013,14 @@ func (s *Server) codebaseContextHandleForSelector(clientSessionID string, select
 		}
 		s.codebaseContextHandles[clientSessionID] = client
 	}
+	s.codebaseContextTouchClient(client)
 	if handle, found := client.bySelector[key]; found {
 		if binding != nil {
 			s.codebaseContextSetEntryScope(client, handle, *binding)
 		}
-		s.codebaseContextMu.Unlock()
 		return handle, true
 	}
 
-	forgotten := false
 	if len(client.order) >= codebaseContextMaxHandlesPerClient {
 		oldest := client.order[0]
 		client.order = client.order[1:]
@@ -1004,7 +1029,6 @@ func (s *Server) codebaseContextHandleForSelector(clientSessionID string, select
 	}
 	handle, err := newCodebaseContextHandle(client.byHandle)
 	if err != nil {
-		s.codebaseContextMu.Unlock()
 		return "", false
 	}
 	entry := codebaseContextHandleEntry{key: key, selector: selector.Clone()}
@@ -1014,17 +1038,13 @@ func (s *Server) codebaseContextHandleForSelector(clientSessionID string, select
 	if binding != nil {
 		s.codebaseContextSetEntryScope(client, handle, *binding)
 	}
-	application := s.codebaseContextApplication
-	s.codebaseContextMu.Unlock()
-
-	// A bounded registry eviction invalidates the same client's resolver default
-	// rather than allowing an evicted selection to remain an ambient authority.
-	if forgotten {
-		if indexApplication, ok := application.(codebaseContextIndexApplication); ok {
-			indexApplication.ForgetClient(clientSessionID)
-		}
-	}
 	return handle, true
+}
+
+// codebaseContextTouchClient is called only while the registry mutex is held.
+func (s *Server) codebaseContextTouchClient(client *codebaseContextClientHandles) {
+	s.codebaseContextUseCounter++
+	client.lastUsed = s.codebaseContextUseCounter
 }
 
 func (s *Server) codebaseContextSetEntryScope(client *codebaseContextClientHandles, handle string, binding uci.IndexBinding) {
@@ -1075,6 +1095,7 @@ func (s *Server) codebaseContextHandleSelector(clientSessionID, handle string) (
 	if !found {
 		return 0, uci.IndexBindingSelector{}, false
 	}
+	s.codebaseContextTouchClient(client)
 	return s.codebaseContextEpoch, entry.selector.Clone(), true
 }
 
@@ -1110,6 +1131,7 @@ func (s *Server) codebaseContextHandleStillCurrent(clientSessionID, handle strin
 	if binding != nil {
 		s.codebaseContextSetEntryScope(client, handle, *binding)
 	}
+	s.codebaseContextTouchClient(client)
 	return true
 }
 
@@ -1126,7 +1148,11 @@ func (s *Server) codebaseContextScopeAdmitted(clientSessionID string, scope code
 		return false
 	}
 	client := s.codebaseContextHandles[clientSessionID]
-	return client != nil && client.byScope[scope] > 0
+	if client == nil || client.byScope[scope] == 0 {
+		return false
+	}
+	s.codebaseContextTouchClient(client)
+	return true
 }
 
 func codebaseContextSelectorKeyFor(selector uci.IndexBindingSelector) (codebaseContextSelectorKey, bool) {

@@ -130,10 +130,11 @@ type operatorCodeGraphSourceReader interface {
 	DescribeGraphEvidence(context.Context, uci.AuthorizedContext, uci.QueryRelationEvidence) (uci.VersionedReadSpec, bool, error)
 }
 
-// operatorCodeIndexTargetResolver exposes only a currently polling
-// daemon-owned no-View target. Browser input cannot choose its profile.
+// operatorCodeIndexTargetResolver exposes current daemon polling and the unique
+// no-View target. Neither observation replaces durable context authorization.
 type operatorCodeIndexTargetResolver interface {
 	Resolve(string, string) (uci.IndexBinding, bool)
+	IsLive(string, string) bool
 }
 
 // operatorCodeIndexIntentApplication is an optional durable-index capability.
@@ -2069,6 +2070,10 @@ func (adapter *OperatorCodeHTTPAdapter) authorizeNoAuth(ctx context.Context, ide
 	return operatorCodeAuthorizedRequest{operatorCodeRequestIdentity: identity, caller: caller, proof: proof, authorized: authorized, authRealm: uci.NoAuthCodeRealm}, uci.ReleaseFailureNone
 }
 
+func (adapter *OperatorCodeHTTPAdapter) noAuthCodeOwnerLive(sourceID, checkoutID string) bool {
+	return adapter != nil && adapter.indexTargets != nil && adapter.indexTargets.IsLive(sourceID, checkoutID)
+}
+
 type operatorCodeNoViewIndexIntentRequest struct {
 	operatorCodeRequestIdentity
 	caller    operatorCodeVerifiedCaller
@@ -2095,6 +2100,9 @@ func (adapter *OperatorCodeHTTPAdapter) authorizeNoViewIndexIntent(ctx context.C
 			return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailureExposureUnavailable
 		}
 		if _, err := adapter.noAuthBindings.Guard(ctx, identity.identity, identity.sessionID, proof); err != nil {
+			return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailurePermissionDenied
+		}
+		if !adapter.noAuthCodeOwnerLive(selection.SourceID, selection.CheckoutID) {
 			return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailurePermissionDenied
 		}
 		binding, err := adapter.contexts.AuthorizeNoAuthIndexIntent(ctx, selection.SourceID, selection.CheckoutID, profileID, initial)
@@ -2680,6 +2688,15 @@ func (adapter *OperatorCodeHTTPAdapter) operatorCodeCatalogEntries(identity oper
 	result := make([]operatorCodeCatalogEntry, 0, len(entries))
 	for _, entry := range entries {
 		item := operatorCodeCatalogEntry{Repository: entry.SourceLabel, WorkingCopy: entry.CheckoutLabel, SourceRef: operatorCodeCatalogRef("source", entry.SourceID), CheckoutRef: operatorCodeCatalogRef("checkout", entry.SourceID, entry.CheckoutID)}
+		if identity.identity.Source == auth.SourceAuthDisabled && (targets == nil || !targets.IsLive(entry.SourceID, entry.CheckoutID)) {
+			if entry.Context != nil || entry.IndexIntentAvailable {
+				item.WorkingCopy += " · Offline"
+			}
+			if entry.Context == nil {
+				result = append(result, item)
+				continue
+			}
+		}
 		if entry.Context != nil {
 			item.ViewRef = operatorCodeCatalogRef("view", strconv.FormatInt(identity.identity.BrowserSubject.UserID, 10), entry.Context.SourceID, entry.Context.CheckoutID, entry.Context.ViewID, entry.Context.AnalysisProfileID, strconv.FormatInt(entry.Context.Generation, 10))
 			item.SelectionRef = adapter.operatorCodeContextSelectionRef(identity, *entry.Context)

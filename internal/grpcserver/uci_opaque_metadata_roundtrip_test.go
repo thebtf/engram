@@ -3,6 +3,7 @@ package grpcserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -93,6 +94,39 @@ func TestUCIContextIntegrationNoAuthOpaqueMetadataRoundTrip(t *testing.T) {
 			}, fixture.query.calls)
 		})
 	}
+}
+
+func TestUCIContextIntegrationNoAuthFreshSessionsEvictOldHandle(t *testing.T) {
+	fixture := newUCIContextIntegrationFixture(t)
+	const instance = "reconnecting-install"
+	workstation, valid := uci.NoAuthCodeWorkstationForInstance(instance)
+	require.True(t, valid)
+	binding := fixture.bindingA.Clone()
+	binding.WorkstationID = workstation
+	fixture.runtime.bindings[uciContextIntegrationKey(fixture.refA)] = binding
+	fixture.catalog.records[uciContextIntegrationKey(fixture.refA)] = uci.ContextRecord{Ref: fixture.refA, AuthRealm: uci.NoAuthCodeRealm}
+	port, err := mcp.NewUCIContextHandlePort(mcp.NewServer(mcp.ServerOptions{Version: "reconnect-test"}), fixture.runtime, fixture.authorizer)
+	require.NoError(t, err)
+	fixture.server.SetUCITransport(NewContextAwareUCITransport(uci.NewContextResolver(fixture.catalog, fixture.authorizer, fixture.runtime), uci.NewAliasResolver(fixture.aliases.Lookup), fixture.runtime, port))
+	client := startUCIOpaqueMetadataGRPC(t, fixture.server)
+	caller := func(session string) context.Context {
+		return metadata.NewOutgoingContext(context.Background(), metadata.Pairs(auditcontext.SourceSessionMetadataKey, session, uci.NoAuthCodeClientInstanceMetadataKey, instance))
+	}
+	var first, last *pb.BindCodeContextResponse
+	for index := range 1100 {
+		session := fmt.Sprintf("fresh-session-%d", index)
+		bound, err := client.BindCodeContext(caller(session), &pb.BindCodeContextRequest{ClientSessionId: session, RequestedContext: uciContextIntegrationProtoRef(fixture.refA)})
+		require.NoError(t, err)
+		if index == 0 {
+			first = bound
+		}
+		last = bound
+	}
+	_, err = client.BindCodeContext(caller("fresh-session-0"), &pb.BindCodeContextRequest{ClientSessionId: "fresh-session-0", ContextHandle: first.GetContextHandle()})
+	requireUCIContextIntegrationClosedStatus(t, err, codes.FailedPrecondition, uci.ContextMismatch)
+	rebound, err := client.BindCodeContext(caller("fresh-session-1099"), &pb.BindCodeContextRequest{ClientSessionId: "fresh-session-1099", ContextHandle: last.GetContextHandle()})
+	require.NoError(t, err)
+	requireUCIContextIntegrationBinding(t, binding, rebound)
 }
 
 func TestUCIContextIntegrationNoAuthMalformedMetadataRoundTrip(t *testing.T) {

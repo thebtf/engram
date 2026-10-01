@@ -29,10 +29,10 @@ var (
 	ErrBrowserCodeContinuationDenied = errors.New("browser code continuation denied")
 )
 
-// BrowserCodeContextCatalogEntry is a Source → Checkout catalog row. A Context
-// permits an authorized published View choice; nil Context is either a live
-// checkout awaiting its first View (IndexIntentAvailable) or offline metadata
-// without pin or index-intent authority.
+// BrowserCodeContextCatalogEntry is a durable Source → Checkout catalog row.
+// A Context permits a published View choice only after transport authorization;
+// nil Context is a registered checkout awaiting its first View or non-authorizing
+// offline metadata. Registration alone does not prove a live daemon owner.
 type BrowserCodeContextCatalogEntry struct {
 	SourceID             string
 	SourceLabel          string
@@ -223,8 +223,8 @@ func (s *BrowserCodeContextStore) ListCatalog(ctx context.Context, subjectUserID
 	return entries, nil
 }
 
-// ListNoAuthCatalog returns active choices plus a bounded, non-authorizing
-// recent offline working-copy inventory in the isolated technical code realm.
+// ListNoAuthCatalog returns durable registrations plus a bounded, non-authorizing
+// offline inventory. The transport additionally derives owner liveness from polling.
 func (s *BrowserCodeContextStore) ListNoAuthCatalog(ctx context.Context) ([]BrowserCodeContextCatalogEntry, error) {
 	if err := s.requireDB("list local code catalog"); err != nil {
 		return nil, err

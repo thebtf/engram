@@ -1493,10 +1493,19 @@ func (operatorCodeHTTPTestIndexTargets) Resolve(sourceID, checkoutID string) (uc
 	}, true
 }
 
+func (targets operatorCodeHTTPTestIndexTargets) IsLive(sourceID, checkoutID string) bool {
+	_, found := targets.Resolve(sourceID, checkoutID)
+	return found
+}
+
 type operatorCodeHTTPTestExpiredIndexTargets struct{}
 
 func (operatorCodeHTTPTestExpiredIndexTargets) Resolve(string, string) (uci.IndexBinding, bool) {
 	return uci.IndexBinding{}, false
+}
+
+func (operatorCodeHTTPTestExpiredIndexTargets) IsLive(string, string) bool {
+	return false
 }
 
 type operatorCodeHTTPTestGrants struct {

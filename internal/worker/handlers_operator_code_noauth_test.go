@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/grpcserver"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/uci"
 )
@@ -79,6 +80,12 @@ func TestNoAuthOperatorCodeFirstUseAndAuthEnabledCannotForge(t *testing.T) {
 	pin := httptest.NewRecorder()
 	adapter.HandlePin(pin, pinRequest)
 	require.Equal(t, http.StatusNoContent, pin.Code, pin.Body.String())
+	adapter.indexTargets = operatorCodeHTTPTestExpiredIndexTargets{}
+	fixture.app.structure = operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalStructure)
+	(*fixture.app.structure.Items)[0].MatchSources = []uci.QueryMatchSource{uci.QueryMatchStructure}
+	structure := invoke(`{"tab_binding_id":"`+transition.TabBindingID+`","document_proof":"`+transition.DocumentProof+`","path_prefix":"internal","limit":1}`, noauth, adapter.HandleStructure)
+	require.Equal(t, http.StatusOK, structure.Code, structure.Body.String())
+	require.Contains(t, structure.Body.String(), `"excerpt":"package demo"`)
 	fixture.app.status = mcp.CodebaseStatusSnapshot{TotalChunks: 1, Embedding: uci.EmbeddingStatus{Coverage: uci.IndexCoverageUnavailable}}
 	status := invoke(proof, noauth, adapter.HandleStatus)
 	require.Equal(t, http.StatusOK, status.Code, status.Body.String())
@@ -104,7 +111,7 @@ func TestNoAuthOperatorCodeFirstUseAndAuthEnabledCannotForge(t *testing.T) {
 	require.NotEqual(t, http.StatusOK, forged.Code)
 }
 
-func TestNoAuthHTTPRealOfflineCatalogCannotPin(t *testing.T) {
+func TestNoAuthHTTPRealCatalogDerivesOfflineOwnerWithoutStateWriter(t *testing.T) {
 	store := openWorkerUCIContextCompositionStore(t)
 	ctx := context.Background()
 	contexts := gormdb.NewUCIContextStore(store.DB)
@@ -123,9 +130,17 @@ func TestNoAuthHTTPRealOfflineCatalogCannotPin(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.DB.Model(&gormdb.UCIView{}).Where("view_id = ?", view.ViewID).Updates(map[string]any{"state": gormdb.UCIViewPublished, "published_at": now}).Error)
 	require.NoError(t, store.DB.Model(&gormdb.UCICheckout{}).Where("checkout_id = ?", registered.CheckoutID).Update("current_view_id", view.ViewID).Error)
-	adapter, _ := newOperatorCodeHTTPTestAdapter(t)
+	selector, err := uci.CheckoutIndexBindingSelector(uci.RegisteredCheckoutSelector{Scope: uci.IndexScope{SourceID: registered.SourceID, CheckoutID: registered.CheckoutID, IncarnationID: registered.IncarnationID}, ProfileID: registered.ProfileID})
+	require.NoError(t, err)
+	live, err := contexts.LoadIndexBinding(ctx, selector)
+	require.NoError(t, err)
+	targets := grpcserver.NewIndexIntentTargetRegistry()
+	targets.Observe(live)
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
 	adapter.contexts = gormdb.NewBrowserCodeContextStore(store.DB)
 	adapter.authority = newOperatorCodeServerAuthorizer(contexts, uci.NewContextResolver(contexts, gormdb.NewUCIContextAuthorizer(contexts), contexts))
+	adapter.indexTargets = targets
+	fixture.app.status = mcp.CodebaseStatusSnapshot{TotalChunks: 1, Embedding: uci.EmbeddingStatus{Coverage: uci.IndexCoverageUnavailable}}
 	identity := auth.AuthDisabled()
 	call := func(body string, handler func(http.ResponseWriter, *http.Request)) *httptest.ResponseRecorder {
 		request := operatorCodeHTTPTestRequest(t, body, identity)
@@ -145,7 +160,22 @@ func TestNoAuthHTTPRealOfflineCatalogCannotPin(t *testing.T) {
 	require.NoError(t, json.Unmarshal(previous.Body.Bytes(), &selectable))
 	require.Len(t, selectable.Contexts, 1)
 	require.NotEmpty(t, selectable.Contexts[0].SelectionRef)
-	require.NoError(t, store.DB.Model(&gormdb.UCICheckout{}).Where("checkout_id = ?", registered.CheckoutID).Update("state", gormdb.UCICheckoutOffline).Error)
+	pinChoice := func(selection string) *httptest.ResponseRecorder {
+		request := operatorCodeHTTPTestRequest(t, `{"document_proof":"`+binding.DocumentProof+`","selection_ref":"`+selection+`"}`, identity)
+		request.Header.Set("X-Engram-Auth-Disabled", "true")
+		route := chi.NewRouteContext()
+		route.URLParams.Add("tab_binding_id", binding.TabBindingID)
+		request = request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, route))
+		pin := httptest.NewRecorder()
+		adapter.HandlePin(pin, request)
+		return pin
+	}
+	require.Equal(t, http.StatusNoContent, pinChoice(selectable.Contexts[0].SelectionRef).Code)
+	adapter.indexTargets = operatorCodeHTTPTestExpiredIndexTargets{}
+	var retained gormdb.UCICheckout
+	require.NoError(t, store.DB.Where("checkout_id = ?", registered.CheckoutID).First(&retained).Error)
+	require.Equal(t, gormdb.UCICheckoutRegistered, retained.State, "offline liveness must not retire durable registration")
+	require.Equal(t, view.ViewID, *retained.CurrentViewID, "owner loss must preserve the immutable published View")
 	response := call(proof, adapter.HandleContexts)
 	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
 	var catalog operatorCodeContextsResponse
@@ -153,19 +183,66 @@ func TestNoAuthHTTPRealOfflineCatalogCannotPin(t *testing.T) {
 	require.Len(t, catalog.Contexts, 1)
 	require.Equal(t, "offline repository", catalog.Contexts[0].Repository)
 	require.Contains(t, catalog.Contexts[0].WorkingCopy, "Offline")
-	require.Empty(t, catalog.Contexts[0].SelectionRef)
+	t.Run("offline published choice remains selectable", func(t *testing.T) {
+		require.NotEmpty(t, catalog.Contexts[0].SelectionRef)
+		require.Equal(t, selectable.Contexts[0].ViewRef, catalog.Contexts[0].ViewRef)
+		require.Equal(t, selectable.Contexts[0].IndexedSnapshot, catalog.Contexts[0].IndexedSnapshot)
+	})
 	require.Empty(t, catalog.Contexts[0].IndexIntentSelectionRef)
 	require.False(t, catalog.Contexts[0].IndexIntentAvailable)
 	require.NotContains(t, response.Body.String(), "file://")
 
-	request := operatorCodeHTTPTestRequest(t, `{"document_proof":"`+binding.DocumentProof+`","selection_ref":"`+selectable.Contexts[0].SelectionRef+`"}`, identity)
-	request.Header.Set("X-Engram-Auth-Disabled", "true")
-	route := chi.NewRouteContext()
-	route.URLParams.Add("tab_binding_id", binding.TabBindingID)
-	request = request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, route))
-	pin := httptest.NewRecorder()
-	adapter.HandlePin(pin, request)
-	require.Equal(t, http.StatusForbidden, pin.Code)
+	t.Run("prior published chooser can still pin", func(t *testing.T) {
+		require.Equal(t, http.StatusNoContent, pinChoice(selectable.Contexts[0].SelectionRef).Code)
+	})
+	t.Run("selected immutable View status and release remain authorized", func(t *testing.T) {
+		status := call(proof, adapter.HandleStatus)
+		require.Equal(t, http.StatusOK, status.Code, status.Body.String())
+	})
+	t.Run("fresh observer receives offline published choice", func(t *testing.T) {
+		handshake := call(`{"document_nonce":"fresh-offline-observer"}`, adapter.HandleHandshake)
+		require.Equal(t, http.StatusOK, handshake.Code, handshake.Body.String())
+		var observer operatorCodeTransitionResponse
+		require.NoError(t, json.Unmarshal(handshake.Body.Bytes(), &observer))
+		response := call(`{"tab_binding_id":"`+observer.TabBindingID+`","document_proof":"`+observer.DocumentProof+`"}`, adapter.HandleContexts)
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		var offered operatorCodeContextsResponse
+		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &offered))
+		require.Len(t, offered.Contexts, 1)
+		require.Contains(t, offered.Contexts[0].WorkingCopy, "Offline")
+		require.NotEmpty(t, offered.Contexts[0].SelectionRef)
+		require.Equal(t, selectable.Contexts[0].ViewRef, offered.Contexts[0].ViewRef)
+	})
+	adapter.indexTargets = targets
+	recovered := call(proof, adapter.HandleContexts)
+	require.Equal(t, http.StatusOK, recovered.Code)
+	var again operatorCodeContextsResponse
+	require.NoError(t, json.Unmarshal(recovered.Body.Bytes(), &again))
+	require.Len(t, again.Contexts, 1)
+	require.NotContains(t, again.Contexts[0].WorkingCopy, "Offline")
+	require.Equal(t, http.StatusNoContent, pinChoice(again.Contexts[0].SelectionRef).Code, "authenticated polling recovers the same durable checkout")
+	require.NoError(t, store.DB.Model(&gormdb.UCICheckout{}).Where("checkout_id = ?", registered.CheckoutID).Update("owner_principal", "different-owner").Error)
+	denied := pinChoice(again.Contexts[0].SelectionRef)
+	require.Equal(t, http.StatusForbidden, denied.Code, "offline is not denied, but changed durable owner authority denies a new pin")
+	require.Empty(t, denied.Body.String())
+}
+
+func TestNoAuthOfflineOwnerCannotReauthorizeBootstrapSelection(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	identity := auth.AuthDisabled()
+	transition, err := adapter.noAuthBindings.Handshake(context.Background(), identity, "", BrowserBindingHandshakeInput{DocumentNonce: "bootstrap-owner"})
+	require.NoError(t, err)
+	proof := BrowserBindingProof{TabBindingID: transition.TabBindingID, DocumentProof: transition.DocumentProof}
+	caller := operatorCodeRequestIdentity{identity: identity}
+	fixture.contexts.noViewBinding = gormdb.BrowserCodeIndexIntentBinding{Scope: uci.IndexScope{SourceID: fixture.ref.SourceID, CheckoutID: fixture.ref.CheckoutID, IncarnationID: operatorCodeHTTPTestIncarnationID}, ProfileID: fixture.ref.AnalysisProfileID, AuthRealm: uci.NoAuthCodeRealm}
+	requested := operatorCodeIndexIntentTargetRequest{SelectionRef: adapter.operatorCodeIndexSelectionRef(caller, fixture.ref.SourceID, fixture.ref.CheckoutID, fixture.ref.AnalysisProfileID)}
+	_, failure := adapter.authorizeNoViewIndexIntent(context.Background(), caller, proof, requested, "", true)
+	require.Equal(t, uci.ReleaseFailureNone, failure)
+	adapter.indexTargets = operatorCodeHTTPTestExpiredIndexTargets{}
+	_, failure = adapter.authorizeNoViewIndexIntent(context.Background(), caller, proof, requested, "", true)
+	require.Equal(t, uci.ReleaseFailurePermissionDenied, failure, "expired owner cannot bootstrap")
+	_, failure = adapter.authorizeNoViewIndexIntent(context.Background(), caller, proof, requested, fixture.ref.AnalysisProfileID, false)
+	require.Equal(t, uci.ReleaseFailurePermissionDenied, failure, "status/retry/replay must not authorize a stale owner merely because the target remains registered")
 }
 
 func TestNoAuthOperatorCodePagehideCloseReloadResumesPinnedTab(t *testing.T) {
