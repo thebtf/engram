@@ -913,6 +913,14 @@ export function useOperatorCode() {
     return { tab_binding_id: binding.value.tabBindingId, document_proof: binding.value.documentProof, ...extra }
   }
 
+  function contextualRequestOwner(): () => boolean {
+    const generation = contextualGeneration
+    const current = binding.value
+    const pinned = pinnedContext.value ?? remountState?.pinnedContext ?? null
+    return () => !unmounted && generation === contextualGeneration && binding.value === current
+      && (pinnedContext.value ?? remountState?.pinnedContext ?? null) === pinned
+  }
+
   function stopLeaseRenewal(): void {
     leaseRenewalGeneration += 1
     if (leaseRenewalTimer !== null) window.clearTimeout(leaseRenewalTimer)
@@ -1298,10 +1306,9 @@ export function useOperatorCode() {
   }
 
   async function discoverContext(): Promise<void> {
-    const current = binding.value
+    const ownsRequest = contextualRequestOwner()
     const payload = bindingPayload()
     if (payload === null || pending.value) return
-    const requestGeneration = contextualGeneration
     const selected = contextCandidate.value
     const pinned = pinnedContext.value ?? remountState?.pinnedContext ?? null
     const restoring = pinnedContext.value === null && pinned !== null
@@ -1310,7 +1317,7 @@ export function useOperatorCode() {
     contextState.value = 'loading'
     pending.value = true
     const result = await request('/code/contexts', 'POST', payload)
-    if (unmounted || requestGeneration !== contextualGeneration || binding.value !== current) return
+    if (!ownsRequest()) return
     pending.value = false
     if (result.kind !== 'success') {
       if (result.kind === 'denied' || result.status === 409) clearPinnedContext()
@@ -1337,7 +1344,7 @@ export function useOperatorCode() {
         persistPinnedContext(refreshed)
       } else {
         // The current-only catalog cannot authorize or revoke this tab's historical pin.
-        if (await refreshStatus() && (restoring || selected?.viewRef === pinned.viewRef)) {
+        if (await refreshStatus() && ownsRequest() && (restoring || selected?.viewRef === pinned.viewRef)) {
           contextCandidate.value = refreshedContext(catalog, pinned)
             ?? catalog.find((entry) => entry.sourceRef === pinned.sourceRef && entry.checkoutRef === pinned.checkoutRef && entry.view !== null)?.view ?? null
         }
@@ -1446,11 +1453,13 @@ export function useOperatorCode() {
   async function pinContext(): Promise<void> {
     const selected = contextCandidate.value
     if (binding.value === null || contextState.value !== 'ready' || selected === null || pending.value) return
+    const ownsRequest = contextualRequestOwner()
     pending.value = true
     const result = await request(`/code/tabs/${encodeURIComponent(binding.value.tabBindingId)}/context`, 'PUT', {
       document_proof: binding.value.documentProof,
       selection_ref: selected.selectionRef,
     })
+    if (!ownsRequest()) return
     pending.value = false
     if (result.kind !== 'success' || result.status !== 204) {
       contextState.value = result.kind === 'denied' ? 'denied' : result.kind === 'offline' ? 'offline' : 'unavailable'
@@ -1461,7 +1470,9 @@ export function useOperatorCode() {
     pinnedContext.value = selected
     persistPinnedContext(selected)
     clearContextualResults()
+    const ownsPin = contextualRequestOwner()
     await refreshStatus()
+    if (!ownsPin()) return
     await requestStructure(null)
 
   }
@@ -1472,10 +1483,10 @@ export function useOperatorCode() {
     const restoring = pinnedContext.value === null
     if (payload === null || pinned === null || pending.value
       || restoring && current?.tabBindingId !== remountState?.tabBindingId) return false
-    const requestGeneration = contextualGeneration
+    const ownsRequest = contextualRequestOwner()
     pending.value = true
     const result = await request('/code/status', 'POST', payload)
-    if (unmounted || requestGeneration !== contextualGeneration || binding.value !== current || (pinnedContext.value ?? remountState?.pinnedContext) !== pinned) return false
+    if (!ownsRequest()) return false
     pending.value = false
     const checkedStatus = result.kind === 'success' ? parseStatus(result.body) : null
     if (checkedStatus === null) {
@@ -1489,8 +1500,11 @@ export function useOperatorCode() {
       pinnedContext.value = pinned
       remountState = null
       persistPinnedContext(pinned)
+      const ownsRestore = contextualRequestOwner()
       await requestStructure(null)
+      if (!ownsRestore()) return false
       await refreshIndexIntent()
+      if (!ownsRestore()) return false
     }
     return true
   }
@@ -1498,10 +1512,12 @@ export function useOperatorCode() {
   async function requestStructure(continuation: string | null): Promise<void> {
     const payload = bindingPayload({ path_prefix: '', limit: 10, ...(continuation === null ? {} : { continuation }) })
     if (payload === null || pinnedContext.value === null) return
+    const ownsRequest = contextualRequestOwner()
     pending.value = true
     structureState.value = presentation('loading', 'Waiting for the server to release the bounded structure.')
     structureContinuationNotice.value = null
     const result = await request('/code/structure', 'POST', payload)
+    if (!ownsRequest()) return
     pending.value = false
     if (result.kind !== 'success') {
       if (continuation !== null && result.kind === 'denied') structureContinuationNotice.value = 'denied'
@@ -1533,6 +1549,7 @@ export function useOperatorCode() {
       ...(continuation === null ? {} : { continuation }),
     })
     if (payload === null || pinned === null) return
+    const ownsRequest = contextualRequestOwner()
     pending.value = true
     searchState.value = presentation('loading', 'Waiting for the server to release the search result.')
     searchEnvelope.value = null
@@ -1540,6 +1557,7 @@ export function useOperatorCode() {
     sourceEnvelope.value = null
     searchContinuationNotice.value = null
     const result = await request('/code/search', 'POST', payload)
+    if (!ownsRequest()) return
     pending.value = false
     if (result.kind !== 'success') {
       if (continuation !== null && result.kind === 'denied') searchContinuationNotice.value = 'denied'
@@ -1584,9 +1602,11 @@ export function useOperatorCode() {
     const pinned = pinnedContext.value
     const activeResults = searchEnvelope.value ?? structureEnvelope.value
     if (payload === null || pinned === null || activeResults?.context === null || !sameView(pinnedResponseContext.value, activeResults.context)) return
+    const ownsRequest = contextualRequestOwner()
     pending.value = true
     graphState.value = presentation('loading', 'Waiting for the server to release graph evidence.')
     const result = await request('/code/graph', 'POST', payload)
+    if (!ownsRequest()) return
     pending.value = false
     if (result.kind !== 'success') {
       graphEnvelope.value = null
@@ -1637,9 +1657,11 @@ export function useOperatorCode() {
       ...(descriptor.referenceSiteId === undefined ? {} : { reference_site_id: descriptor.referenceSiteId }),
     })
     if (payload === null || pinnedContext.value === null) return
+    const ownsRequest = contextualRequestOwner()
     pending.value = true
     sourceState.value = presentation('loading', 'Waiting for the server to release the exact source span.')
     const result = await request('/code/source', 'POST', payload)
+    if (!ownsRequest()) return
     pending.value = false
     if (result.kind !== 'success') {
       sourceEnvelope.value = null

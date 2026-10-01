@@ -546,3 +546,233 @@ for (const { boundary, leaseStatus } of [
     expect(handshakes).toBe(2)
   })
 }
+
+for (const boundary of ['structure', 'search', 'graph', 'source'] as const) {
+  for (const scenario of [
+    { leaseStatus: 503, outcome: 'released' },
+    { leaseStatus: 403, outcome: 'released' },
+    { leaseStatus: 503, outcome: 'denied' },
+    ...(boundary === 'source' ? [{ leaseStatus: 503, outcome: 'offline' }] : []),
+    ...(boundary === 'search' ? [{ leaseStatus: 503, outcome: 'malformed' }] : []),
+  ]) {
+    test(`delayed ${boundary} ${scenario.outcome} after lease ${scenario.leaseStatus} cannot commit into a replacement request`, async ({ page }) => {
+      let handshakes = 0
+      let holdOld = false
+      let oldHeld = false
+      let holdCurrent = false
+      let currentHeld = false
+      let releaseOld: () => void = () => { }
+      let releaseCurrent: () => void = () => { }
+      const pins: string[] = []
+      const searches: string[] = []
+      const recovered = { ...entry, selection_ref: 'recovered-selection', indexed_snapshot: { label: 'Recovered snapshot' }, view_ref: boundary === 'structure' ? 'new-view' : entry.view_ref }
+      const released = (marker: string, current: boolean) => {
+        const context = { source_id: 'source-1', checkout_id: 'checkout-1', view_id: current && boundary === 'structure' ? 'view-2' : 'view-1', profile_id: 'profile-1', generation: current && boundary === 'structure' ? 2 : 1 }
+        const ref = { source_id: context.source_id, view_id: context.view_id, entity_key: marker }
+        const related = { ...ref, entity_key: `${marker}-callee` }
+        const span = { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }
+        const source = { entity_key: ref.entity_key, span, content_digest: `${marker}-digest` }
+        const node = { entity: ref, context_ref: { ...context, analysis_profile_id: context.profile_id }, source_state: 'available', source_read: source }
+        const callee = { entity: related, context_ref: node.context_ref, source_state: 'unavailable' }
+        return {
+          schema: 'engram.code-query/1', status: 'partial', contexts: [context],
+          items: [{ ref, path: `src/${marker}.ts`, span, content_digest: source.content_digest, kind: 'function', language: 'typescript', excerpt: `${marker}()`, match_sources: ['lexical'], score: 1 }],
+          warnings: [`${marker}-warning`], retrieval: { mode: `${marker}-mode` }, freshness: { state: 'observed_current' }, coverage: {}, truncated: true, continuation: `${marker}-next`,
+          graph: { nodes: [ref, related], edges: [{ from: ref, to: related, relation: 'calls', evidence_kind: 'RESOLVED', evidence: [] }], stop_reason: 'budget' },
+          navigation: { nodes: [node, callee], edges: [{ from: node, to: callee, relation: 'calls', evidence_kind: 'RESOLVED', evidence: [] }] },
+        }
+      }
+      await page.clock.install({ time: new Date('2026-09-15T00:00:00Z') })
+      await page.route('**/api/auth/me', route => route.fulfill({ json: { auth_disabled: true } }))
+      await page.route('**/api/code/**', async route => {
+        const path = new URL(route.request().url()).pathname
+        const body = route.request().postDataJSON()
+        if (path === '/api/code/tabs/handshake') {
+          handshakes++
+          await route.fulfill({ json: { ...binding, document_proof: handshakes === 1 ? 'proof' : 'recovered-proof' } })
+        } else if (path.endsWith('/lease')) await route.fulfill({ status: scenario.leaseStatus })
+        else if (path === '/api/code/contexts') await route.fulfill({ json: { contexts: [body.document_proof === 'proof' ? entry : recovered] } })
+        else if (path.endsWith('/context')) {
+          pins.push(body.selection_ref)
+          await route.fulfill({ status: 204 })
+        } else if (path === '/api/code/status') await route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { coverage: 'complete' }, freshness: { state: 'observed_current' } } })
+        else if (['/api/code/structure', '/api/code/search', '/api/code/graph', '/api/code/source'].includes(path)) {
+          if (path === '/api/code/search') searches.push(body.query)
+          const obsolete = holdOld && body.document_proof === 'proof' && path === `/api/code/${boundary}`
+          if (obsolete) await new Promise<void>(resolve => { oldHeld = true; releaseOld = resolve })
+          else if (holdCurrent && body.document_proof === 'recovered-proof' && path === `/api/code/${boundary}`) {
+            await new Promise<void>(resolve => { currentHeld = true; releaseCurrent = resolve })
+          }
+          if (obsolete && scenario.outcome === 'denied') await route.fulfill({ status: 403 })
+          else if (obsolete && scenario.outcome === 'offline') await route.abort('internetdisconnected')
+          else if (obsolete && scenario.outcome === 'malformed') await route.fulfill({ json: { schema: 'engram.code-query/1', status: 'ok' } })
+          else await route.fulfill({ json: released(obsolete ? 'obsolete' : body.document_proof === 'proof' ? 'initial' : 'current', body.document_proof !== 'proof') })
+        } else await route.fulfill({ status: 403 })
+      })
+      await page.goto('/code')
+      await page.getByTestId('code-context-snapshot').selectOption('selection')
+      await page.getByTestId('code-pin-context').click()
+      await expect(page.getByTestId('code-structure-results')).toContainText('src/initial.ts')
+      if (boundary !== 'structure') {
+        await page.getByTestId('code-query-input').fill('initial query')
+        await page.getByTestId('code-search-submit').click()
+        await expect(page.getByTestId('code-search-results')).toContainText('src/initial.ts')
+      }
+      if (boundary === 'graph') {
+        await page.getByTestId('code-search-explore').click()
+        await expect(page.getByTestId('code-graph-results')).toContainText('initial-callee')
+      }
+      await page.clock.fastForward('00:50')
+      holdOld = true
+      await page.getByTestId(boundary === 'structure' ? 'code-structure-next' : boundary === 'search' ? 'code-search-next' : boundary === 'graph' ? 'code-graph-continue' : 'code-search-source').click()
+      await expect.poll(() => oldHeld).toBe(true)
+      await page.clock.fastForward('00:11')
+      await expect(page.locator('.phase')).toHaveAttribute('data-state', scenario.leaseStatus === 403 ? 'denied' : 'error')
+      await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+      await expect(page.getByTestId('code-query-input')).toHaveCount(0)
+      await expect(page.getByTestId('index-intent-reindex')).toHaveCount(0)
+      await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
+      const refresh = page.getByRole('button', { name: 'Обновить разрешённые варианты' })
+      await expect(refresh).toBeDisabled()
+      await expect(page.getByRole('button', { name: 'Обновить статус', exact: true })).toBeDisabled()
+      const oldFinished = scenario.outcome === 'offline'
+        ? page.waitForEvent('requestfailed', request => new URL(request.url()).pathname === `/api/code/${boundary}` && request.postDataJSON().document_proof === 'proof')
+        : page.waitForResponse(response => new URL(response.url()).pathname === `/api/code/${boundary}` && response.request().postDataJSON().document_proof === 'proof')
+      if (scenario.leaseStatus === 403) {
+        const boundaryState = () => page.locator('.code-page').evaluate((element, name) => {
+          const state = Reflect.get(Reflect.get(element, '__vueParentComponent'), 'setupState')
+          return {
+            envelope: Reflect.get(state, `${name}Envelope`),
+            presentation: Reflect.get(state, `${name}State`),
+            continuationNotice: name === 'structure' || name === 'search' ? Reflect.get(state, `${name}ContinuationNotice`) : null,
+          }
+        }, boundary)
+        const invalidatedState = await boundaryState()
+        await expect(page.getByTestId('code-retry-lease')).toHaveCount(0)
+        releaseOld()
+        await oldFinished
+        await page.clock.runFor(50)
+        expect(await boundaryState()).toEqual(invalidatedState)
+        await expect(page.locator('.phase')).toHaveAttribute('data-state', 'denied')
+        await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+        await expect(page.locator('.readiness')).toHaveCount(0)
+        await expect(page.getByTestId('code-source-result')).toHaveCount(0)
+        await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
+        expect(await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))).toBeNull()
+        expect(pins).toEqual(['selection'])
+        expect(handshakes).toBe(1)
+        return
+      }
+      await page.getByTestId('code-retry-lease').click()
+      await expect(page.getByTestId('code-context-snapshot').getByRole('option', { name: 'Recovered snapshot' })).toHaveCount(1)
+      await page.getByTestId('code-context-snapshot').selectOption('recovered-selection')
+      holdCurrent = boundary === 'structure'
+      await page.getByTestId('code-pin-context').click()
+      await expect(page.getByTestId('code-context-pinned')).toContainText('Recovered snapshot')
+      if (boundary !== 'structure') {
+        await expect(page.getByTestId('code-structure-results')).toContainText('src/current.ts')
+        await page.getByTestId('code-query-input').fill('current query')
+        holdCurrent = boundary === 'search'
+        await page.getByTestId('code-search-submit').click()
+        if (boundary !== 'search') {
+          await expect(page.getByTestId('code-search-results')).toContainText('src/current.ts')
+          holdCurrent = true
+          await page.getByTestId(boundary === 'graph' ? 'code-search-explore' : 'code-search-source').click()
+        }
+      }
+      await expect.poll(() => currentHeld).toBe(true)
+      const storedPin = await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))
+      releaseOld()
+      await oldFinished
+      await page.clock.runFor(50)
+      await expect(refresh).toBeDisabled()
+      await expect(page.getByTestId('code-query-input')).toBeDisabled()
+      const state = boundary === 'graph'
+        ? page.getByTestId('code-graph-heading').locator('..').locator('..').locator('span[data-state]')
+        : page.locator(`.${boundary === 'source' ? 'source' : `${boundary}-panel`} .panel-head span`)
+      await expect(state).toHaveAttribute('data-state', 'loading')
+      await expect(page.getByText('obsolete-warning', { exact: true })).toHaveCount(0)
+      await expect(page.getByTestId('code-source-result')).toHaveCount(0)
+      await expect(page.getByTestId('code-status')).toContainText('1 / 1')
+      await expect(page.getByTestId('code-context-pinned')).toContainText('Recovered snapshot')
+      expect(await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))).toBe(storedPin)
+      holdCurrent = false
+      releaseCurrent()
+      await expect(state).toHaveAttribute('data-state', 'partial')
+      await expect(refresh).toBeEnabled()
+      await expect(page.getByTestId(boundary === 'source' ? 'code-source-result' : `code-${boundary}-results`)).toContainText(boundary === 'source' ? 'current()' : boundary === 'graph' ? 'current-callee' : 'src/current.ts')
+      await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
+      if (boundary === 'search') {
+        await expect(page.locator('.result-evidence')).toContainText('current-mode')
+        await page.getByTestId('code-search-next').click()
+        await expect(page.getByTestId('code-search-results')).toContainText('src/current.ts')
+        expect(searches.slice(-2)).toEqual(['current query', 'current query'])
+      }
+      expect(pins).toEqual(['selection', 'recovered-selection'])
+    })
+  }
+}
+
+for (const leaseStatus of [503, 403]) {
+  test(`delayed pin after lease ${leaseStatus} cannot restore authority or start follow-up reads`, async ({ page }) => {
+    let handshakes = 0
+    let oldHeld = false
+    let currentHeld = false
+    let releaseOld: () => void = () => { }
+    let releaseCurrent: () => void = () => { }
+    const statusProofs: string[] = []
+    const next = { ...entry, view_ref: 'next-view', selection_ref: 'next-selection', indexed_snapshot: { label: 'Next snapshot' } }
+    await page.clock.install({ time: new Date('2026-09-15T00:00:00Z') })
+    await page.route('**/api/auth/me', route => route.fulfill({ json: { auth_disabled: true } }))
+    await page.route('**/api/code/**', async route => {
+      const path = new URL(route.request().url()).pathname
+      const body = route.request().postDataJSON()
+      if (path === '/api/code/tabs/handshake') {
+        handshakes++
+        await route.fulfill({ json: { ...binding, document_proof: handshakes === 1 ? 'proof' : 'next-proof' } })
+      } else if (path.endsWith('/lease')) await route.fulfill({ status: leaseStatus })
+      else if (path === '/api/code/contexts') await route.fulfill({ json: { contexts: [body.document_proof === 'proof' ? entry : next] } })
+      else if (path.endsWith('/context')) {
+        if (body.document_proof === 'proof') await new Promise<void>(resolve => { oldHeld = true; releaseOld = resolve })
+        await route.fulfill({ status: 204 })
+      } else if (path === '/api/code/status') {
+        statusProofs.push(body.document_proof)
+        await new Promise<void>(resolve => { currentHeld = true; releaseCurrent = resolve })
+        await route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { coverage: 'complete' } } })
+      } else await route.fulfill({ status: 403 })
+    })
+    await page.goto('/code')
+    await page.getByTestId('code-context-snapshot').selectOption('selection')
+    await page.clock.fastForward('00:50')
+    await page.getByTestId('code-pin-context').click()
+    await expect.poll(() => oldHeld).toBe(true)
+    await page.clock.fastForward('00:11')
+    await expect(page.locator('.phase')).toHaveAttribute('data-state', leaseStatus === 403 ? 'denied' : 'error')
+    const oldFinished = page.waitForResponse(response => response.url().endsWith('/context') && response.request().postDataJSON().document_proof === 'proof')
+    if (leaseStatus === 503) {
+      await page.getByTestId('code-retry-lease').click()
+      await page.getByTestId('code-context-snapshot').selectOption('next-selection')
+      await page.getByTestId('code-pin-context').click()
+      await expect.poll(() => currentHeld).toBe(true)
+      await expect(page.getByTestId('code-context-pinned')).toContainText('Next snapshot')
+    }
+    releaseOld()
+    await oldFinished
+    await page.clock.runFor(50)
+    await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
+    if (leaseStatus === 403) {
+      await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+      await expect(page.getByTestId('code-query-input')).toHaveCount(0)
+      expect(await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))).toBeNull()
+      expect(statusProofs).toEqual([])
+    } else {
+      await expect(page.getByTestId('code-context-pinned')).toContainText('Next snapshot')
+      await expect(page.getByTestId('code-query-input')).toBeDisabled()
+      expect(await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))).toContain('next-view')
+      expect(statusProofs).toEqual(['next-proof'])
+      releaseCurrent()
+      await expect(page.getByTestId('code-status')).toContainText('1 / 1')
+      await expect(page.getByTestId('code-query-input')).toBeEnabled()
+    }
+  })
+}
