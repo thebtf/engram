@@ -14,7 +14,6 @@ import (
 	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/module"
-	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/uci"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
@@ -138,63 +137,6 @@ func TestUCIClientPropagatesSourceSessionMetadata(t *testing.T) {
 		ClientSessionId:  "client-a",
 		RequestedContext: uciClientTestContextA(),
 	})
-	require.NoError(t, err)
-}
-
-func TestUCIClientAcceptsUnicodeV3InstanceOnDirectRPCs(t *testing.T) {
-	instance := strings.Repeat("界", 86)
-	_, err := projectidentity.BuildDescriptorV3(projectidentity.AnchorV3{
-		Version: 3, ProjectID: uciClientTestSpaceID, Name: "fixture", Scope: "repository",
-	}, nil, nil, instance)
-	require.NoError(t, err, "the V3 validator accepts this installation ID")
-	require.Greater(t, len(instance), 256)
-	_, noAuthValid := uci.NoAuthCodeWorkstationForInstance(instance)
-	require.False(t, noAuthValid, "no-auth server derivation remains stricter")
-	check := func(ctx context.Context) {
-		outgoing, ok := metadata.FromOutgoingContext(ctx)
-		require.True(t, ok)
-		require.Empty(t, outgoing.Get(uci.NoAuthCodeClientInstanceMetadataKey))
-	}
-	ctx := metadata.AppendToOutgoingContext(context.Background(), uci.NoAuthCodeClientInstanceMetadataKey, "spoofed", uci.NoAuthCodeClientInstanceMetadataKey, "duplicate")
-	rpc := &uciClientRPCFake{
-		bind: func(ctx context.Context, request *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {
-			check(ctx)
-			return uciClientTestBindResponse(request), nil
-		},
-		begin: func(ctx context.Context, request *pb.BeginCodeIndexRequest) (*pb.BeginCodeIndexResponse, error) {
-			check(ctx)
-			return &pb.BeginCodeIndexResponse{Scope: request.GetScope(), BuildId: uciClientTestServerBuildID, LeaseEpoch: uciClientTestLeaseEpoch, LeaseExpiresAt: timestamppb.New(time.Now().Add(time.Hour))}, nil
-		},
-		stageOpen: func(ctx context.Context) (grpc.ClientStreamingClient[pb.StageCodeIndexFrame, pb.StageCodeIndexResponse], error) {
-			check(ctx)
-			return &uciClientStageStream{}, nil
-		},
-		finalize: func(ctx context.Context, request *pb.FinalizeCodeIndexRequest) (*pb.FinalizeCodeIndexResponse, error) {
-			check(ctx)
-			return &pb.FinalizeCodeIndexResponse{PublishedContext: request.GetExpectedParent(), BuildId: request.GetBuildId(), LeaseEpoch: request.GetLeaseEpoch(), AcceptedFilesystemSequence: request.GetObservedFilesystemSequence()}, nil
-		},
-		query: func(ctx context.Context, request *pb.QueryCodeRequest) (*pb.QueryCodeResponse, error) {
-			check(ctx)
-			return &pb.QueryCodeResponse{Context: request.GetContext(), ResponseJson: []byte(`{"status":"ok"}`)}, nil
-		},
-		explore: func(ctx context.Context, request *pb.ExploreCodeRequest) (*pb.ExploreCodeResponse, error) {
-			check(ctx)
-			return &pb.ExploreCodeResponse{Context: request.GetContext(), ResponseJson: []byte(`{"status":"ok"}`)}, nil
-		},
-	}
-	client := newUCIClient(rpc, instance)
-	_, err = client.Bind(ctx, &pb.BindCodeContextRequest{ClientSessionId: "client-a", RequestedContext: uciClientTestContextA()})
-	require.NoError(t, err)
-	scope := uciClientTestScopeA()
-	_, err = client.Begin(ctx, uciClientTestBeginRequest(scope, "daemon-a", "build-key-a"))
-	require.NoError(t, err)
-	_, err = client.Stage(ctx, []*pb.StageCodeIndexFrame{uciClientTestStageFrame(scope, uciClientTestServerBuildID, uciClientTestLeaseEpoch, 0)})
-	require.NoError(t, err)
-	_, err = client.Finalize(ctx, uciClientTestFinalizeRequest(scope, uciClientTestServerBuildID, uciClientTestLeaseEpoch, uciClientTestContextA(), uciClientTestAggregatePartsDigest))
-	require.NoError(t, err)
-	_, err = client.Query(ctx, uciClientTestQueryRequest(uciClientTestContextA()))
-	require.NoError(t, err)
-	_, err = client.Explore(ctx, uciClientTestExploreRequest(uciClientTestContextA()))
 	require.NoError(t, err)
 }
 
@@ -788,8 +730,6 @@ func TestUCIIndexAdapterForwardsV3InstallationAcrossAuthenticatedBindAndProxy(t 
 	bindMetadata, callMetadata := server.metadataSnapshot()
 	require.Equal(t, []string{transportTag}, bindMetadata.Get(auditcontext.SourceSessionMetadataKey))
 	require.Equal(t, []string{transportTag}, callMetadata.Get(auditcontext.SourceSessionMetadataKey))
-	require.Empty(t, bindMetadata.Get(uci.NoAuthCodeClientInstanceMetadataKey))
-	require.Empty(t, callMetadata.Get(uci.NoAuthCodeClientInstanceMetadataKey))
 	require.Equal(t, []string{"Bearer fixture-token"}, bindMetadata.Get("authorization"))
 	require.Equal(t, []string{"Bearer fixture-token"}, callMetadata.Get("authorization"))
 }
@@ -923,34 +863,80 @@ func TestUCIClientMapsStageTransportFailurePhase(t *testing.T) {
 	})
 }
 
-func TestUCIIndexAdapterAnchorsIntentRPCs(t *testing.T) {
-	const instance = "fixture-daemon-install"
-	check := func(ctx context.Context) {
-		incoming, ok := metadata.FromIncomingContext(ctx)
-		require.True(t, ok)
-		require.Equal(t, []string{instance}, incoming.Get(uci.NoAuthCodeClientInstanceMetadataKey))
+func TestUCIIndexAdapterOpaqueInstallationRoundTrip(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		instance string
+		valid    bool
+	}{
+		{name: "ASCII", instance: "fixture-daemon-install", valid: true},
+		{name: "Unicode", instance: "界", valid: true},
+		{name: "ASCII byte limit", instance: strings.Repeat("a", 256), valid: true},
+		{name: "Unicode byte limit", instance: strings.Repeat("界", 85) + "a", valid: true},
+		{name: "Unicode beyond byte limit", instance: strings.Repeat("界", 86)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			workstation, valid := uci.NoAuthCodeWorkstationForInstance(test.instance)
+			require.Equal(t, test.valid, valid)
+			authorize := func(ctx context.Context) error {
+				incoming, _ := metadata.FromIncomingContext(ctx)
+				values := incoming.Get(uci.NoAuthCodeClientInstanceMetadataKey)
+				if len(values) != 1 || values[0] != test.instance || len(incoming.Get("x-engram-uci-client-instance-id")) != 0 {
+					return status.Error(codes.FailedPrecondition, string(uci.ContextMismatch))
+				}
+				got, valid := uci.NoAuthCodeWorkstationForInstance(values[0])
+				if !valid || got != workstation {
+					return status.Error(codes.FailedPrecondition, string(uci.ContextMismatch))
+				}
+				return nil
+			}
+			server := &uciIndexAdapterGRPCServer{
+				bind: func(ctx context.Context, request *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {
+					if err := authorize(ctx); err != nil {
+						return nil, err
+					}
+					response := uciClientTestBindResponse(request)
+					response.WorkstationId = workstation
+					return response, nil
+				},
+				call: func(ctx context.Context, _ *pb.CallToolRequest) (*pb.CallToolResponse, error) {
+					return &pb.CallToolResponse{ContentJson: []byte(`{"type":"text","text":"ok"}`)}, authorize(ctx)
+				},
+				poll: func(ctx context.Context, _ *pb.PollCodeIndexIntentsRequest) (*pb.PollCodeIndexIntentsResponse, error) {
+					return &pb.PollCodeIndexIntentsResponse{}, authorize(ctx)
+				},
+				update: func(ctx context.Context, request *pb.UpdateCodeIndexIntentRequest) (*pb.UpdateCodeIndexIntentResponse, error) {
+					return &pb.UpdateCodeIndexIntentResponse{IntentRef: request.GetIntentRef(), State: string(uci.IndexIntentAcknowledged), Attempt: 1}, authorize(ctx)
+				},
+			}
+			serverURL := startUCIIndexAdapterGRPC(t, server)
+			mod := NewModuleWithClientInstanceID(test.instance)
+			t.Cleanup(mod.pool.closeAll)
+			adapter := NewUCIIndexAdapter(mod)
+			ctx := auditcontext.WithUCITransportSession(context.Background(), "client-a")
+			ctx = metadata.AppendToOutgoingContext(ctx,
+				uci.NoAuthCodeClientInstanceMetadataKey, "spoofed", uci.NoAuthCodeClientInstanceMetadataKey, "duplicate",
+				"x-engram-uci-client-instance-id", "legacy-spoofed",
+			)
+			target, err := adapter.ResolveIndexTarget(ctx, uciClientTestProject(serverURL), "context-handle")
+			if !test.valid {
+				require.Error(t, err)
+				require.Empty(t, server.callRequestsSnapshot())
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, workstation, target.Binding.WorkstationID)
+			rebound, err := adapter.RebindIndexTarget(ctx, target)
+			require.NoError(t, err)
+			require.Equal(t, workstation, rebound.Binding.WorkstationID)
+			_, err = adapter.ProxyHandleTool(ctx, target, "codebase_status", json.RawMessage(`{}`))
+			require.NoError(t, err)
+			_, err = adapter.PollIndexIntent(ctx, target, "owner-instance", "process-nonce")
+			require.NoError(t, err)
+			_, err = adapter.UpdateIndexIntent(ctx, target, "owner-instance", "process-nonce", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", uci.IndexIntentUpdate{OperationRef: "op-a", Operation: uci.IndexIntentAcknowledge})
+			require.NoError(t, err)
+		})
 	}
-	server := &uciIndexAdapterGRPCServer{
-		poll: func(ctx context.Context, _ *pb.PollCodeIndexIntentsRequest) (*pb.PollCodeIndexIntentsResponse, error) {
-			check(ctx)
-			return &pb.PollCodeIndexIntentsResponse{}, nil
-		},
-		update: func(ctx context.Context, request *pb.UpdateCodeIndexIntentRequest) (*pb.UpdateCodeIndexIntentResponse, error) {
-			check(ctx)
-			return &pb.UpdateCodeIndexIntentResponse{IntentRef: request.GetIntentRef(), State: string(uci.IndexIntentAcknowledged), Attempt: 1}, nil
-		},
-	}
-	serverURL := startUCIIndexAdapterGRPC(t, server)
-	mod := NewModuleWithClientInstanceID(instance)
-	t.Cleanup(mod.pool.closeAll)
-	adapter := NewUCIIndexAdapter(mod)
-	ctx := auditcontext.WithUCITransportSession(context.Background(), "client-a")
-	target, err := adapter.ResolveIndexTarget(ctx, uciClientTestProject(serverURL), "context-handle")
-	require.NoError(t, err)
-	_, err = adapter.PollIndexIntent(ctx, target, "owner-instance", "process-nonce")
-	require.NoError(t, err)
-	_, err = adapter.UpdateIndexIntent(ctx, target, "owner-instance", "process-nonce", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", uci.IndexIntentUpdate{OperationRef: "op-a", Operation: uci.IndexIntentAcknowledge})
-	require.NoError(t, err)
 }
 
 type uciIndexAdapterGRPCServer struct {

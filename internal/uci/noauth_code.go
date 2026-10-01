@@ -14,7 +14,7 @@ const (
 	NoAuthCodeRealm                     = "local-code-v3"
 	NoAuthCodePrincipal                 = "service/local-code-v3"
 	NoAuthCodeWorkstation               = "local-code-v3"
-	NoAuthCodeClientInstanceMetadataKey = "x-engram-uci-client-instance-id"
+	NoAuthCodeClientInstanceMetadataKey = "x-engram-uci-client-instance-id-bin"
 )
 
 func NoAuthCodeWorkstationForInstance(instance string) (string, bool) {

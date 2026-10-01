@@ -400,7 +400,7 @@ func (transport *contextAwareUCITransport) LegacyCodeIndexNegotiate(ctx context.
 
 func noAuthUCIClientInstanceFrom(ctx context.Context) (string, string, bool) {
 	incoming, found := metadata.FromIncomingContext(ctx)
-	if !found {
+	if !found || len(incoming.Get("x-engram-uci-client-instance-id")) != 0 {
 		return "", "", false
 	}
 	values := incoming.Get(uci.NoAuthCodeClientInstanceMetadataKey)

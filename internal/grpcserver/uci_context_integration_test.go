@@ -748,7 +748,21 @@ func (runtime *uciContextIntegrationRuntime) LoadIndexBinding(_ context.Context,
 	}
 	ref, pinned := selector.Context()
 	if !pinned {
-		return uci.IndexBinding{}, errors.New("no-View binding is handle-owned")
+		checkout, selected := selector.Checkout()
+		var match uci.IndexBinding
+		found := false
+		for _, binding := range runtime.bindings {
+			if selected && binding.Scope == checkout.Scope && binding.ProfileID == checkout.ProfileID {
+				if found {
+					return uci.IndexBinding{}, errors.New("ambiguous UCI index binding")
+				}
+				match, found = binding, true
+			}
+		}
+		if !found {
+			return uci.IndexBinding{}, errors.New("unknown UCI index binding")
+		}
+		return match.Clone(), nil
 	}
 	binding, found := runtime.bindings[uciContextIntegrationKey(ref)]
 	if !found {

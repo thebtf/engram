@@ -910,9 +910,10 @@ func uciClientOutgoingContext(ctx context.Context, clientInstanceID string) (con
 			outgoing.Set(auditcontext.UCIRequestCorrelationMetadataKey, value)
 		}
 	}
+	delete(outgoing, "x-engram-uci-client-instance-id")
 	delete(outgoing, uci.NoAuthCodeClientInstanceMetadataKey)
-	// gRPC metadata values are ASCII-only; authenticated UCI does not use this hint.
-	if clientInstanceID != "" && len(clientInstanceID) == utf8.RuneCountInString(clientInstanceID) {
+	// Binary metadata preserves opaque UTF-8 IDs; gRPC handles the wire encoding.
+	if clientInstanceID != "" {
 		outgoing.Set(uci.NoAuthCodeClientInstanceMetadataKey, clientInstanceID)
 	}
 	return metadata.NewOutgoingContext(ctx, outgoing), nil
