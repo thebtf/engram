@@ -167,7 +167,7 @@ type PreparedIndexConfiguration struct {
 
 func (configuration PreparedIndexConfiguration) valid() bool {
 	return validUCIClientIdentifier(configuration.WorkstationID, maxUCIClientIdentifierBytes) &&
-		validUCIClientIdentifier(configuration.ClientInstanceID, maxUCIClientIdentifierBytes) &&
+		validUCIClientInstanceMetadata(configuration.ClientInstanceID) &&
 		validUCIClientSHA256Digest(configuration.ParserBundleDigest)
 }
 
@@ -338,7 +338,7 @@ func (a *UCIIndexAdapter) PollIndexIntent(ctx context.Context, target ResolvedIn
 	if err := uciClientContextError("PollIndexIntent", ctx); err != nil {
 		return nil, err
 	}
-	if !validResolvedIndexTarget(target) || !validUCIClientIdentifier(clientInstanceID, maxUCIClientIdentifierBytes) || !validUCIClientIdentifier(processNonce, maxUCIClientIdentifierBytes) {
+	if !validResolvedIndexTarget(target) || !validUCIClientInstanceMetadata(clientInstanceID) || !validUCIClientIdentifier(processNonce, maxUCIClientIdentifierBytes) {
 		return nil, errUCIClientInvalidRequest
 	}
 	conn, err := a.connectionForResolvedIndexTarget(target)
@@ -407,7 +407,7 @@ func (a *UCIIndexAdapter) UpdateIndexIntent(ctx context.Context, target Resolved
 	if err := uciClientContextError("UpdateIndexIntent", ctx); err != nil {
 		return uci.IndexIntentUpdateResult{}, err
 	}
-	if !validResolvedIndexTarget(target) || !validUCIClientIdentifier(clientInstanceID, maxUCIClientIdentifierBytes) || !validUCIClientIdentifier(processNonce, maxUCIClientIdentifierBytes) || update.Validate() != nil {
+	if !validResolvedIndexTarget(target) || !validUCIClientInstanceMetadata(clientInstanceID) || !validUCIClientIdentifier(processNonce, maxUCIClientIdentifierBytes) || update.Validate() != nil {
 		return uci.IndexIntentUpdateResult{}, errUCIClientInvalidRequest
 	}
 	conn, err := a.connectionForResolvedIndexTarget(target)

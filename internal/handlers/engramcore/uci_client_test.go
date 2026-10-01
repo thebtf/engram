@@ -873,12 +873,29 @@ func TestUCIIndexAdapterOpaqueInstallationRoundTrip(t *testing.T) {
 	}{
 		{name: "ASCII", instance: "fixture-daemon-install", valid: true},
 		{name: "Unicode", instance: "界", valid: true},
+		{name: "numeric-prefix opaque colon", instance: "1:install", valid: true},
+		{name: "non-scheme opaque colon", instance: "_opaque:install", valid: true},
+		{name: "Unicode-prefix opaque colon", instance: "界:install", valid: true},
 		{name: "ASCII rune limit", instance: strings.Repeat("a", 256), valid: true},
 		{name: "Unicode beyond former byte limit", instance: strings.Repeat("界", 86), valid: true},
 		{name: "Unicode rune limit", instance: strings.Repeat("界", 256), valid: true},
 		{name: "four-byte Unicode rune limit", instance: strings.Repeat("😀", 256), valid: true},
 		{name: "ASCII beyond rune limit", instance: strings.Repeat("a", 257)},
 		{name: "Unicode beyond rune limit", instance: strings.Repeat("界", 257)},
+		{name: "URL", instance: "https://example.test/install"},
+		{name: "file URL", instance: "file:///private/install"},
+		{name: "scheme", instance: "http:private"},
+		{name: "compound scheme", instance: "git+ssh:private"},
+		{name: "letter-prefix opaque-looking scheme", instance: "opaque1:install"},
+		{name: "drive path", instance: "C:private"},
+		{name: "slash path", instance: "private/install"},
+		{name: "backslash path", instance: `private\install`},
+		{name: "at sign", instance: "install@host"},
+		{name: "space", instance: "private install"},
+		{name: "Unicode space", instance: "private\u00a0install"},
+		{name: "control", instance: "install\x00"},
+		{name: "invalid UTF-8", instance: "install\xff"},
+		{name: "empty", instance: ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			workstation, valid := uci.NoAuthCodeWorkstationForInstance(test.instance)
@@ -911,10 +928,16 @@ func TestUCIIndexAdapterOpaqueInstallationRoundTrip(t *testing.T) {
 				call: func(ctx context.Context, _ *pb.CallToolRequest) (*pb.CallToolResponse, error) {
 					return &pb.CallToolResponse{ContentJson: []byte(`{"type":"text","text":"ok"}`)}, authorize(ctx)
 				},
-				poll: func(ctx context.Context, _ *pb.PollCodeIndexIntentsRequest) (*pb.PollCodeIndexIntentsResponse, error) {
+				poll: func(ctx context.Context, request *pb.PollCodeIndexIntentsRequest) (*pb.PollCodeIndexIntentsResponse, error) {
+					if request.GetClientInstanceId() != test.instance {
+						return nil, status.Error(codes.FailedPrecondition, string(uci.ContextMismatch))
+					}
 					return &pb.PollCodeIndexIntentsResponse{}, authorize(ctx)
 				},
 				update: func(ctx context.Context, request *pb.UpdateCodeIndexIntentRequest) (*pb.UpdateCodeIndexIntentResponse, error) {
+					if request.GetClientInstanceId() != test.instance {
+						return nil, status.Error(codes.FailedPrecondition, string(uci.ContextMismatch))
+					}
 					return &pb.UpdateCodeIndexIntentResponse{IntentRef: request.GetIntentRef(), State: string(uci.IndexIntentAcknowledged), Attempt: 1}, authorize(ctx)
 				},
 			}
@@ -934,16 +957,63 @@ func TestUCIIndexAdapterOpaqueInstallationRoundTrip(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+			configurationErr := mod.ConfigurePreparedIndexCollaborator(PreparedIndexConfiguration{
+				WorkstationID: workstation, ClientInstanceID: test.instance, ParserBundleDigest: uciClientTestFrameDigest,
+			}, &uciIndexCollaboratorFake{})
 			require.Equal(t, workstation, target.Binding.WorkstationID)
 			rebound, err := adapter.RebindIndexTarget(ctx, target)
 			require.NoError(t, err)
 			require.Equal(t, workstation, rebound.Binding.WorkstationID)
 			_, err = adapter.ProxyHandleTool(ctx, target, "codebase_status", json.RawMessage(`{}`))
 			require.NoError(t, err)
-			_, err = adapter.PollIndexIntent(ctx, target, "owner-instance", "process-nonce")
-			require.NoError(t, err)
-			_, err = adapter.UpdateIndexIntent(ctx, target, "owner-instance", "process-nonce", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", uci.IndexIntentUpdate{OperationRef: "op-a", Operation: uci.IndexIntentAcknowledge})
-			require.NoError(t, err)
+			t.Run("poll with production owner", func(t *testing.T) {
+				_, err := adapter.PollIndexIntent(ctx, target, test.instance, "process-nonce")
+				require.NoError(t, err)
+			})
+			t.Run("update with production owner", func(t *testing.T) {
+				result, err := adapter.UpdateIndexIntent(ctx, target, test.instance, "process-nonce", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", uci.IndexIntentUpdate{OperationRef: "op-a", Operation: uci.IndexIntentAcknowledge})
+				require.NoError(t, err)
+				require.Equal(t, uci.IndexIntentAcknowledged, result.State)
+			})
+			require.NoError(t, configurationErr)
+		})
+	}
+}
+
+func TestUCIIndexAdapterRejectsInvalidIndexIntentOwners(t *testing.T) {
+	server := &uciIndexAdapterGRPCServer{
+		poll: func(context.Context, *pb.PollCodeIndexIntentsRequest) (*pb.PollCodeIndexIntentsResponse, error) {
+			return nil, status.Error(codes.Internal, "invalid owner reached transport")
+		},
+		update: func(context.Context, *pb.UpdateCodeIndexIntentRequest) (*pb.UpdateCodeIndexIntentResponse, error) {
+			return nil, status.Error(codes.Internal, "invalid owner reached transport")
+		},
+	}
+	serverURL := startUCIIndexAdapterGRPC(t, server)
+	mod := NewModuleWithClientInstanceID("fixture-daemon-install")
+	t.Cleanup(mod.pool.closeAll)
+	adapter := NewUCIIndexAdapter(mod)
+	ctx := auditcontext.WithUCITransportSession(context.Background(), "client-a")
+	target, err := adapter.ResolveIndexTarget(ctx, uciClientTestProject(serverURL), "context-handle")
+	require.NoError(t, err)
+	for _, test := range []struct {
+		name  string
+		owner string
+	}{
+		{name: "URL", owner: "https://example.test/install"},
+		{name: "scheme", owner: "opaque1:install"},
+		{name: "path", owner: "private/install"},
+		{name: "space", owner: "private install"},
+		{name: "control", owner: "install\x00"},
+		{name: "invalid UTF-8", owner: "install\xff"},
+		{name: "beyond rune limit", owner: strings.Repeat("界", 257)},
+		{name: "empty", owner: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := adapter.PollIndexIntent(ctx, target, test.owner, "process-nonce")
+			require.ErrorIs(t, err, errUCIClientInvalidRequest)
+			_, err = adapter.UpdateIndexIntent(ctx, target, test.owner, "process-nonce", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", uci.IndexIntentUpdate{OperationRef: "op-a", Operation: uci.IndexIntentAcknowledge})
+			require.ErrorIs(t, err, errUCIClientInvalidRequest)
 		})
 	}
 }

@@ -28,6 +28,9 @@ func TestUCIContextIntegrationNoAuthOpaqueMetadataRoundTrip(t *testing.T) {
 	}{
 		{name: "ASCII", instance: "install-a"},
 		{name: "Unicode", instance: "界"},
+		{name: "numeric-prefix opaque colon", instance: "1:install"},
+		{name: "non-scheme opaque colon", instance: "_opaque:install"},
+		{name: "Unicode-prefix opaque colon", instance: "界:install"},
 		{name: "ASCII rune limit", instance: strings.Repeat("a", 256)},
 		{name: "Unicode beyond former byte limit", instance: strings.Repeat("界", 86)},
 		{name: "Unicode rune limit", instance: strings.Repeat("界", 256)},
