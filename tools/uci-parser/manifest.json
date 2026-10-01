@@ -2,7 +2,7 @@
   "schema_version": 4,
   "component": "uci-parser",
   "parser_protocol_revision": "uci-tree-sitter/v2",
-  "facts_extraction_contract_revision": "uci-tree-sitter-facts/v6",
+  "facts_extraction_contract_revision": "uci-tree-sitter-facts/v7",
   "bundle_schema_revision": "uci-tree-sitter-bundle/v2",
   "toolchain": {
     "module_go_version": "1.26.6",
@@ -103,12 +103,12 @@
     "static_inputs": [
       "uci-tree-sitter-bundle/v2",
       "uci-tree-sitter/v2",
-      "uci-tree-sitter-facts/v6",
+      "uci-tree-sitter-facts/v7",
       "github.com/tree-sitter/go-tree-sitter@v0.25.0",
       "github.com/tree-sitter/tree-sitter-javascript@v0.25.0",
       "github.com/tree-sitter/tree-sitter-typescript@v0.23.2"
     ],
-    "static_input_digest": "sha256:8fb1e2f84c47ff83bba4fe9765008ed6df98aa6150b9208b9f100250f738967a",
+    "static_input_digest": "sha256:36af372c269af53f6ffd5238c9b0677ace18ef58fa20f64000eb2784eb9df82b",
     "runtime_input_recipe": [
       "go=runtime.Version()",
       "target=runtime.GOOS/runtime.GOARCH",
@@ -130,7 +130,7 @@
         "observed_protocol_revision": "",
         "observed_bundle_digest": "",
         "observed_coverage": "",
-        "blocker_detail": "The prior source probe covered uci-tree-sitter/v1 and does not cover facts extraction contract uci-tree-sitter-facts/v6."
+        "blocker_detail": "The prior source probe covered uci-tree-sitter/v1 and does not cover facts extraction contract uci-tree-sitter-facts/v7."
       }
     },
     {
@@ -147,7 +147,7 @@
         "observed_protocol_revision": "",
         "observed_bundle_digest": "",
         "observed_coverage": "",
-        "blocker_detail": "The prior source probe covered uci-tree-sitter/v1 and does not cover facts extraction contract uci-tree-sitter-facts/v6."
+        "blocker_detail": "The prior source probe covered uci-tree-sitter/v1 and does not cover facts extraction contract uci-tree-sitter-facts/v7."
       }
     },
     {

@@ -408,12 +408,14 @@ func (collector *parserCollector) collectExportDefinition(exportNode *tree_sitte
 	if definition, found := collector.definition(declaration, scope, exportNode); found {
 		collector.addDefinition(definition)
 		if previous, exists := collector.definitionKeys[definition.SymbolKey]; definition.Kind == "function" && scope.ownerLocalKey == "" && len(scope.namespace) == 0 && exists && previous == definition.Span {
+			exportedName := definition.Name
 			for index := uint(0); index < exportNode.ChildCount(); index++ {
 				if exportNode.Child(index).Kind() == "default" {
-					return
+					exportedName = "default"
+					break
 				}
 			}
-			collector.addReference("export_alias", "export:"+definition.Name+":"+definition.Name, "", definition.Name, uci.TreeSitterResolutionSyntaxOnly, declaration.ChildByFieldName("name"))
+			collector.addReference("export_alias", "export:"+definition.Name+":"+exportedName, "", definition.Name, uci.TreeSitterResolutionSyntaxOnly, declaration.ChildByFieldName("name"))
 		}
 	}
 }

@@ -238,7 +238,19 @@ func TestUCIPreparedIndexBuiltParserResolvesExportListCallsInPackedGraph(t *test
 		{"tsx", "calls.tsx", "function helper() { return 1; }\nfunction caller() { return <span>{helper()}</span>; }\nexport { helper, caller };", uci.TreeSitterLanguageTSX, true},
 		{"exports before definitions", "calls.js", "export { helper, caller };\nfunction helper() { return 1; }\nfunction caller() { return helper(); }", uci.TreeSitterLanguageJavaScript, true},
 		{"direct and list exports", "calls.js", "export function helper() { return 1; }\nfunction caller() { return helper(); }\nexport { caller };", uci.TreeSitterLanguageJavaScript, true},
-		{"default-only target", "calls.js", "export default function helper() { return 1; }\nfunction caller() { return helper(); }\nexport { caller };", uci.TreeSitterLanguageJavaScript, false},
+		{"default-only target", "calls.js", "export default function helper() { return 1; }\nfunction caller() { return helper(); }\nexport { caller };", uci.TreeSitterLanguageJavaScript, true},
+		{"named default javascript", "calls.js", "export default function helper(){}; export function caller(){helper()}", uci.TreeSitterLanguageJavaScript, true},
+		{"named default typescript", "calls.ts", "export default function helper(){}; export function caller(){helper()}", uci.TreeSitterLanguageTypeScript, true},
+		{"named default tsx", "calls.tsx", "export default function helper(){}; export function caller(){return <span>{helper()}</span>;}", uci.TreeSitterLanguageTSX, true},
+		{"default caller javascript", "calls.js", "export function helper(){}; export default function caller(){helper()}", uci.TreeSitterLanguageJavaScript, true},
+		{"default caller typescript", "calls.ts", "export function helper(){}; export default function caller(){helper()}", uci.TreeSitterLanguageTypeScript, true},
+		{"default caller tsx", "calls.tsx", "export function helper(){}; export default function caller(){return <span>{helper()}</span>;}", uci.TreeSitterLanguageTSX, true},
+		{"anonymous default target", "calls.js", "export default function(){}; export function caller(){helper()}", uci.TreeSitterLanguageJavaScript, false},
+		{"default function expression", "calls.js", "export default (function helper(){}); export function caller(){helper()}", uci.TreeSitterLanguageJavaScript, false},
+		{"default member call", "calls.ts", "export default function helper(){}; export function caller(n: any){n.helper()}", uci.TreeSitterLanguageTypeScript, false},
+		{"default ambiguous binding", "calls.js", "export default function helper(){}; const helper = 2; export function caller(){helper()}", uci.TreeSitterLanguageJavaScript, false},
+		{"default rebound callee", "calls.tsx", "export default function helper(){}; export function caller(n: any){helper=n; return <span>{helper()}</span>;}", uci.TreeSitterLanguageTSX, false},
+		{"default shadowed callee", "calls.ts", "export default function helper(){}; export function caller(helper: () => void){helper()}", uci.TreeSitterLanguageTypeScript, false},
 		{"non-exported callee", "calls.js", "function helper() { return 1; }\nfunction caller() { return helper(); }\nexport { caller };", uci.TreeSitterLanguageJavaScript, false},
 		{"non-exported caller", "calls.js", "function helper() { return 1; }\nfunction caller() { return helper(); }\nexport { helper };", uci.TreeSitterLanguageJavaScript, false},
 		{"type-only export", "calls.ts", "function helper() { return 1; }\nfunction caller() { return helper(); }\nexport type { helper, caller };", uci.TreeSitterLanguageTypeScript, false},
@@ -275,7 +287,7 @@ func TestUCIPreparedIndexBuiltParserResolvesExportListCallsInPackedGraph(t *test
 			body := []byte(test.source)
 			parsed, err := parser.Parse(context.Background(), uci.TreeSitterParseRequest{Language: test.language, ProfileKey: "export-list-graph/v1", Source: body})
 			require.NoError(t, err)
-			if test.name != "ambiguous binding" {
+			if !strings.Contains(test.name, "ambiguous binding") {
 				require.Equal(t, uci.IndexCoverageComplete, parsed.Coverage, "%+v", parsed.Diagnostics)
 			}
 			profile, err := uci.TreeSitterIndexAdmissionArtifactProfile(test.language, uci.TreeSitterBundleDigest())

@@ -622,6 +622,43 @@ func TestUCITreeSitterWorkerFramesBuiltParserFacts(t *testing.T) {
 		})
 	}
 
+	for _, language := range []TreeSitterLanguage{TreeSitterLanguageJavaScript, TreeSitterLanguageTypeScript, TreeSitterLanguageTSX} {
+		for _, test := range []struct {
+			name, source string
+			exported     bool
+		}{
+			{"named default", "export default function helper(){}; export function caller(){helper()}", true},
+			{"anonymous default", "export default function(){}; export function caller(){helper()}", false},
+			{"default expression", "export default (function helper(){}); export function caller(){helper()}", false},
+		} {
+			t.Run("default export "+string(language)+"/"+test.name, func(t *testing.T) {
+				source := []byte(test.source)
+				artifact, err := worker.Parse(context.Background(), TreeSitterParseRequest{Language: language, ProfileKey: "default-export/v7", Source: source})
+				if err != nil || artifact.Coverage != IndexCoverageComplete {
+					t.Fatalf("built parser default export: err=%v coverage=%q diagnostics=%#v", err, artifact.Coverage, artifact.Diagnostics)
+				}
+				var exports int
+				for _, reference := range artifact.References {
+					if reference.Kind != "export_alias" || reference.RawTarget != "helper" {
+						continue
+					}
+					exports++
+					if !strings.HasPrefix(reference.LocalKey, "export:helper:default@") || reference.OwnerLocalKey != "" ||
+						reference.Resolution != TreeSitterResolutionSyntaxOnly || string(source[reference.Span.ByteStart:reference.Span.ByteEnd]) != "helper" {
+						t.Fatalf("named default must export the local binding as default with its name span: %#v", reference)
+					}
+				}
+				wantExports := 0
+				if test.exported {
+					wantExports = 1
+				}
+				if exports != wantExports {
+					t.Fatalf("helper default exports = %d, want %d", exports, wantExports)
+				}
+			})
+		}
+	}
+
 	for _, testCase := range []struct {
 		name     string
 		language TreeSitterLanguage
