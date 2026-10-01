@@ -257,7 +257,7 @@ test('watcher publication keeps a server-authorized older pin and results while 
   expect(pins).toEqual(['old-choice', 'new-choice'])
 })
 
-for (const rejectedStatus of ['denied', 'invalid'] as const) {
+for (const rejectedStatus of ['denied', 'mismatch'] as const) {
   test(`Code Explorer retains rotated references but drops a historical pin when server reauthorization is ${rejectedStatus}`, async ({ page }) => {
     let catalogReads = 0
     let changedSnapshot = false
@@ -280,7 +280,7 @@ for (const rejectedStatus of ['denied', 'invalid'] as const) {
         await route.fulfill({ status: 204 })
       } else if (pathname === '/api/code/status') {
         if (changedSnapshot && rejectedStatus === 'denied') await route.fulfill({ status: 403 })
-        else if (changedSnapshot) await route.fulfill({ json: { total_chunks: 'invalid', embedded_chunks: 0, embedding: { coverage: 'none' } } })
+        else if (changedSnapshot) await route.fulfill({ status: 409 })
         else await route.fulfill({ json: { total_chunks: 0, embedded_chunks: 0, embedding: { coverage: 'none', job_state: null, error_code: null } } })
       } else if (pathname === '/api/code/structure') {
         await route.fulfill({ status: 403 })
@@ -299,6 +299,7 @@ for (const rejectedStatus of ['denied', 'invalid'] as const) {
     changedSnapshot = true
     await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
     await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+    expect(await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))).toBeNull()
     expect(pins).toBe(1)
   })
 }

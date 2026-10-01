@@ -237,6 +237,7 @@ const INDEX_INTENT_MAX_POLLS = 30
 const TAB_LEASE_TTL_MS = 2 * 60_000
 const TAB_LEASE_RENEWAL_DELAY_MS = TAB_LEASE_TTL_MS / 2
 interface SpaRemount {
+  tabBindingId: string | null
   pinnedContext: CodeSafeContext | null
 }
 
@@ -904,10 +905,10 @@ export function useOperatorCode() {
   let leaseRenewalGeneration = 0
   let authProbeAbort: AbortController | null = null
   let unmounted = false
-  let remountPin: CodeSafeContext | null = null
+  let remountState: SpaRemount | null = null
 
   function bindingPayload(extra: Record<string, unknown> = {}): Record<string, unknown> | null {
-    if (binding.value === null) return null
+    if (unmounted || binding.value === null || bootstrapPhase.value !== 'ready' && bootstrapPhase.value !== 'collision') return null
     return { tab_binding_id: binding.value.tabBindingId, document_proof: binding.value.documentProof, ...extra }
   }
 
@@ -1011,6 +1012,14 @@ export function useOperatorCode() {
     sourceState.value = presentation('idle', 'Choose a released result to read an exact source span.')
   }
 
+  function clearPinnedContext(): void {
+    pinnedContext.value = null
+    remountState = null
+    clearContextualResults()
+    clearIndexIntent()
+    clearPersistedPinCandidate()
+  }
+
   function matchesPinnedResponse(envelope: CodeEnvelope): boolean {
     if (envelope.context === null) return false
     if (pinnedResponseContext.value !== null && !sameView(pinnedResponseContext.value, envelope.context)) return false
@@ -1079,7 +1088,8 @@ export function useOperatorCode() {
     const requestGeneration = pollGeneration ?? indexIntentPollGeneration
     const current = binding.value
     const resume = indexIntentResume.value
-    if (current === null || resume?.intentRef === undefined || indexIntentPending.value) return
+    if (bindingPayload() === null || current === null || resume?.intentRef === undefined || indexIntentPending.value
+      || pinnedContext.value === null && remountState?.pinnedContext != null) return
     indexIntentPending.value = true
     const result = await request(`/code/index-intents/${encodeURIComponent(resume.intentRef)}`, 'GET', undefined, {
       'X-Engram-Tab-Binding-ID': current.tabBindingId,
@@ -1200,6 +1210,7 @@ export function useOperatorCode() {
     const renewedDocument = previousBinding?.documentProof !== transition.binding?.documentProof
     if (renewedDocument) stopLeaseRenewal()
     if (replaced) {
+      remountState = null
       clearIndexIntent()
       clearPersistedPinCandidate()
     }
@@ -1261,6 +1272,7 @@ export function useOperatorCode() {
     if (unmounted) return false
     if (result.kind !== 'success') {
       clearResumePair()
+      if (result.kind === 'denied' || result.status === 409) remountState = null
       if (result.status === 403 && authDisabled.value) {
         clearIndexIntent()
         return await handshake(documentNonce, null, false, evidence) ? 'rebound' : false
@@ -1283,24 +1295,28 @@ export function useOperatorCode() {
   }
 
   async function discoverContext(): Promise<void> {
+    const current = binding.value
     const payload = bindingPayload()
-    if (payload === null) return
+    if (payload === null || pending.value) return
     const selected = contextCandidate.value
+    const pinned = pinnedContext.value ?? remountState?.pinnedContext ?? null
+    const restoring = pinnedContext.value === null && pinned !== null
     contextCandidate.value = null
     contextCatalog.value = []
     contextState.value = 'loading'
     pending.value = true
     const result = await request('/code/contexts', 'POST', payload)
-    if (unmounted) return
+    if (unmounted || binding.value !== current) return
     pending.value = false
     if (result.kind !== 'success') {
-      clearPersistedPinCandidate()
+      if (result.kind === 'denied' || result.status === 409) clearPinnedContext()
+      else if (pinned === null) clearPersistedPinCandidate()
       contextState.value = result.kind === 'denied' ? 'denied' : result.kind === 'offline' ? 'offline' : 'unavailable'
       return
     }
     const catalog = parseCatalog(result.body)
     if (catalog === null) {
-      clearPersistedPinCandidate()
+      if (pinned === null) clearPersistedPinCandidate()
       contextState.value = 'unavailable'
       return
     }
@@ -1308,30 +1324,18 @@ export function useOperatorCode() {
     contextState.value = catalog.length === 0 ? 'empty' : 'ready'
     if (selected !== null) {
       contextCandidate.value = refreshedContext(catalog, selected)
-      if (contextCandidate.value === null) clearPersistedPinCandidate()
+      if (contextCandidate.value === null && pinned === null) clearPersistedPinCandidate()
     }
-    const pinned = pinnedContext.value
     if (pinned !== null) {
-      const refreshed = refreshedContext(catalog, pinned)
+      const refreshed = restoring ? null : refreshedContext(catalog, pinned)
       if (refreshed !== null) {
         pinnedContext.value = refreshed
         persistPinnedContext(refreshed)
       } else {
-        // The catalog lists the current View; status reauthorizes this tab's exact historical pin.
-        const checkedBinding = binding.value
-        const check = await request('/code/status', 'POST', payload)
-        if (unmounted || checkedBinding?.tabBindingId !== payload.tab_binding_id || binding.value !== checkedBinding || pinnedContext.value !== pinned) return
-        const checkedStatus = check.kind === 'success' ? parseStatus(check.body) : null
-        if (checkedStatus !== null) {
-          status.value = checkedStatus
-          if (selected?.viewRef === pinned.viewRef) {
-            contextCandidate.value = catalog.find((entry) => entry.sourceRef === pinned.sourceRef && entry.checkoutRef === pinned.checkoutRef && entry.view !== null)?.view ?? null
-          }
-        } else {
-          pinnedContext.value = null
-          clearContextualResults()
-          clearIndexIntent()
-          clearPersistedPinCandidate()
+        // The current-only catalog cannot authorize or revoke this tab's historical pin.
+        if (await refreshStatus() && (restoring || selected?.viewRef === pinned.viewRef)) {
+          contextCandidate.value = refreshedContext(catalog, pinned)
+            ?? catalog.find((entry) => entry.sourceRef === pinned.sourceRef && entry.checkoutRef === pinned.checkoutRef && entry.view !== null)?.view ?? null
         }
       }
     }
@@ -1392,9 +1396,9 @@ export function useOperatorCode() {
       bootstrapPhase.value = 'secure-origin-required'
       return
     }
-    const remount = spaRemount
+    const remount = spaRemount ?? remountState
     spaRemount = null
-    remountPin = remount?.pinnedContext ?? null
+    remountState = remount
     const documentNonce = requestId()
     if (documentNonce === null) {
       bootstrapPhase.value = 'error'
@@ -1426,23 +1430,12 @@ export function useOperatorCode() {
           ? await handshake(documentNonce, pair, false, evidence)
           : await handshake(documentNonce, null, false, evidence)
     if (unmounted || !established) return
+    if (established !== 'resumed' || bootstrapPhase.value !== 'ready' || binding.value?.tabBindingId !== remountState?.tabBindingId) remountState = null
     await discoverContext()
     if (unmounted) return
     if (resumingBinding) {
-      restorePersistedPinCandidate()
-      if (established !== 'rebound') {
-        const priorPinned = remount?.pinnedContext ?? null
-        if (priorPinned !== null) {
-          const pinned = refreshedContext(contextCatalog.value, priorPinned)
-          if (pinned !== null) {
-            contextCandidate.value = pinned
-            pinnedContext.value = pinned
-            await refreshStatus()
-            await requestStructure(null)
-          }
-        }
-        await refreshIndexIntent()
-      }
+      if (remount?.pinnedContext == null || established === 'rebound') restorePersistedPinCandidate()
+      if (established !== 'rebound' && remount?.pinnedContext == null) await refreshIndexIntent()
     }
   }
 
@@ -1460,6 +1453,7 @@ export function useOperatorCode() {
       return
     }
     clearIndexIntent()
+    remountState = null
     pinnedContext.value = selected
     persistPinnedContext(selected)
     clearContextualResults()
@@ -1468,13 +1462,32 @@ export function useOperatorCode() {
 
   }
   async function refreshStatus(): Promise<boolean> {
+    const current = binding.value
     const payload = bindingPayload()
-    if (payload === null || pinnedContext.value === null) return false
+    const pinned = pinnedContext.value ?? remountState?.pinnedContext ?? null
+    const restoring = pinnedContext.value === null
+    if (payload === null || pinned === null || pending.value
+      || restoring && current?.tabBindingId !== remountState?.tabBindingId) return false
     pending.value = true
     const result = await request('/code/status', 'POST', payload)
+    if (unmounted || binding.value !== current || (pinnedContext.value ?? remountState?.pinnedContext) !== pinned) return false
     pending.value = false
-    status.value = result.kind === 'success' ? parseStatus(result.body) : null
-    return status.value !== null
+    const checkedStatus = result.kind === 'success' ? parseStatus(result.body) : null
+    if (checkedStatus === null) {
+      if (result.kind === 'denied' || result.status === 409) clearPinnedContext()
+      contextState.value = result.kind === 'denied' ? 'denied' : result.kind === 'offline' ? 'offline' : 'unavailable'
+      return false
+    }
+    status.value = checkedStatus
+    if (contextCatalog.value.length > 0) contextState.value = 'ready'
+    if (restoring) {
+      pinnedContext.value = pinned
+      remountState = null
+      persistPinnedContext(pinned)
+      await requestStructure(null)
+      await refreshIndexIntent()
+    }
+    return true
   }
 
   async function requestStructure(continuation: string | null): Promise<void> {
@@ -1659,7 +1672,13 @@ export function useOperatorCode() {
     unmounted = true
     authProbeAbort?.abort()
     stopLeaseRenewal()
-    if (!pageHiding) spaRemount = { pinnedContext: pinnedContext.value ?? spaRemount?.pinnedContext ?? remountPin }
+    if (!pageHiding) {
+      const retained = spaRemount ?? remountState
+      spaRemount = {
+        tabBindingId: binding.value?.tabBindingId ?? retained?.tabBindingId ?? null,
+        pinnedContext: pinnedContext.value ?? retained?.pinnedContext ?? null,
+      }
+    }
     stopIndexIntentPolling()
     window.removeEventListener('pagehide', closeOnPageHide)
   })
