@@ -2290,6 +2290,7 @@ try {
             node_builder = 'node:22-bookworm-slim@sha256:53ada149d435c38b14476cb57e4a7da73c15595aba79bd6971b547ceb6d018bf'
         }
         pinned_packages = [ordered]@{
+            libssl3t64 = '3.5.7-1~deb13u3'
             bash = '5.3-r12'
             busybox = '1.38.0-r2'
             gosu = '1.19-r13'
