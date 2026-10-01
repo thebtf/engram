@@ -45,6 +45,33 @@ POSTGRES_PASSWORD=<unique-secret>
 ENGRAM_AUTH_DISABLED=true
 ```
 
+Both Compose files use a project-scoped operator bridge with these optional
+defaults:
+
+```dotenv
+OPERATOR_CONSOLE_NETWORK_SUBNET=10.240.250.0/24
+OPERATOR_CONSOLE_NETWORK_IP_RANGE=10.240.250.128/25
+OPERATOR_CONSOLE_TRUSTED_PROXY_IP=10.240.250.10
+```
+
+The console joins only this bridge and uses the reserved console IPv4 address,
+outside the dynamic pool. The server joins both the operator and default
+networks and receives that same address as `ENGRAM_AUTH_TRUSTED_PROXY`.
+PostgreSQL remains on the default network for server database connectivity.
+
+Before starting either stack, inspect existing Docker networks and host, LAN,
+and VPN routes. If the default subnet overlaps an existing network or route,
+override all three values together in the deployment dotenv. Choose a free
+private subnet, a dynamic pool contained within it, and a usable reserved console
+IPv4 address inside the subnet but outside the pool. Do not use the network,
+broadcast, or gateway address for the console. Fixed defaults do not guarantee
+that addresses are available on your host.
+
+The Docker-network overlap guard runs only in the canonical image acceptance
+gate. Neither ordinary Compose startup nor the deployment wrapper automatically
+performs that guard; Compose configuration validation alone does not prove
+collision-free routing.
+
 The current single-user Workspace journey uses the configured HTTP LAN origin with `ENGRAM_AUTH_DISABLED=true` on a trusted network. Neither a browser login, Source/Checkout read grant, HTTPS, reverse proxy, nor `ENGRAM_AUTH_ADMIN_TOKEN` is a prerequisite for that mode. The Compose files pass through `ENGRAM_AUTH_DISABLED` (default `false`) and accept an empty admin token; verify the running mode at `/api/auth/me` rather than assuming the dotenv was loaded. Auth-enabled deployments retain their operator token, workstation keycards, browser identities, and grant checks. This guide does not remove or certify that separate path.
 
 After deployment, follow the [operator Workspace guide](operating-engram.md) to check the installed plugin, offline project anchor, Source A/B indexing and code embeddings, same-View query/graph/read, and browser freshness. Image digest and HTTP readiness checks below do not prove installed Workspace acceptance.
