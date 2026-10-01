@@ -39,6 +39,7 @@ services:
       ENGRAM_WORKER_PORT: "37777"
       ENGRAM_AUTH_ADMIN_TOKEN: "${ENGRAM_AUTH_ADMIN_TOKEN:-}"
       ENGRAM_AUTH_DISABLED: "${ENGRAM_AUTH_DISABLED:-false}"
+      ENGRAM_AUTH_TRUSTED_PROXY: "${OPERATOR_CONSOLE_TRUSTED_PROXY_IP:?set OPERATOR_CONSOLE_TRUSTED_PROXY_IP to the reserved operator-console IPv4}"
       ENGRAM_VAULT_KEY: "${ENGRAM_VAULT_KEY:-}"
       ENGRAM_EMBEDDING_URL: "${ENGRAM_EMBEDDING_URL:-}"
       ENGRAM_EMBEDDING_MODEL: "${ENGRAM_EMBEDDING_MODEL:-text-embedding}"
@@ -54,6 +55,9 @@ services:
       ENGRAM_CRYSTALLIZATION_ENABLED: "${ENGRAM_CRYSTALLIZATION_ENABLED:-false}"
     volumes:
       - engramdata:/var/lib/engram
+    networks:
+      default:
+      operator:
     depends_on:
       postgres:
         condition: service_healthy
@@ -72,8 +76,12 @@ services:
       - "${OPERATOR_CONSOLE_BIND:-0.0.0.0}:${OPERATOR_CONSOLE_PORT:-3000}:3000"
     environment:
       NUXT_OPERATOR_API_TARGET: "http://server:37777"
+      NUXT_OPERATOR_PUBLIC_ORIGIN: "${OPERATOR_CONSOLE_PUBLIC_ORIGIN:?set OPERATOR_CONSOLE_PUBLIC_ORIGIN to the exact external console origin}"
       NUXT_PUBLIC_API_BASE: "/api"
       NUXT_PUBLIC_API_DISPLAY_HOST: "${OPERATOR_CONSOLE_API_DISPLAY_HOST:-}"
+    networks:
+      operator:
+        ipv4_address: "${OPERATOR_CONSOLE_TRUSTED_PROXY_IP:?set OPERATOR_CONSOLE_TRUSTED_PROXY_IP to the reserved operator-console IPv4}"
     depends_on:
       server:
         condition: service_healthy
@@ -82,3 +90,11 @@ services:
 volumes:
   pgdata:
   engramdata:
+
+networks:
+  operator:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: "${OPERATOR_CONSOLE_NETWORK_SUBNET:?set OPERATOR_CONSOLE_NETWORK_SUBNET to a nonoverlapping operator IPv4 subnet}"
+          ip_range: "${OPERATOR_CONSOLE_NETWORK_IP_RANGE:?set OPERATOR_CONSOLE_NETWORK_IP_RANGE to a pool excluding the reserved console IPv4}"

@@ -1,5 +1,16 @@
 {
   "_note": "EN is the first translation target. Keys mirror ru.json exactly. A missing key here falls back to the RU string (i18n.config fallbackLocale), so a partial translation still renders a coherent console. This file is the worked example of 'translate a screen' — the developer extends it screen by screen as pages are keyed.",
+  "login": {
+    "title": "Sign in",
+    "description": "Use your operator account to open the workspace.",
+    "email": "Email",
+    "password": "Password",
+    "submit": "Sign in",
+    "submitting": "Signing in…",
+    "invalid": "Email or password not recognized. Try again.",
+    "unavailable": "Could not sign in. Check the server connection and try again.",
+    "language": "Language"
+  },
   "common": {
     "show": "Show",
     "hide": "Hide",
@@ -143,10 +154,14 @@
     "profileMenuProfile": "Profile and settings",
     "profileMenuSettings": "Console settings",
     "profileMenuLogout": "Sign out of console",
+    "profileMenuLogoutSSO": "Sign out through your identity provider to end this session.",
+    "profileMenuLogoutLocal": "End local session",
+    "profileMenuLogoutMixedHint": "Ending this local session will not sign you out of your identity provider.",
     "profileMenuLogoutPending": "Signing out of the current session…",
     "profileMenuLogoutAuthDisabled": "Auth is disabled: the current session cannot be ended from the UI",
     "profileMenuLogoutLocked": "There is no active session to sign out from",
     "profileMenuLogoutUnavailable": "Session state is unknown, sign-out is unavailable",
+    "profileMenuLogoutFailed": "Sign-out failed. Your session may still be active; try again.",
     "authDisabled": "auth disabled",
     "authAuthenticated": "session active",
     "authLocked": "login required",

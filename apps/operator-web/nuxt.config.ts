@@ -19,6 +19,7 @@ export default defineNuxtConfig({
   },
   runtimeConfig: {
     engramApiTarget: 'http://127.0.0.1:37777',
+    engramPublicOrigin: '',
     public: {
       apiBase: '/api',
     },

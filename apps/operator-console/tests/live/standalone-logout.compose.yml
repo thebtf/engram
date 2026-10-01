@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: engram
+      POSTGRES_PASSWORD: ${FIXTURE_DB_PASSWORD:?}
+      POSTGRES_DB: engram
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U engram -d engram"]
+      interval: 1s
+      retries: 60
+  server:
+    image: ${FIXTURE_SERVER_IMAGE:?}
+    environment:
+      DATABASE_DSN: postgres://engram:${FIXTURE_DB_PASSWORD}@postgres:5432/engram?sslmode=disable
+      ENGRAM_AUTH_ADMIN_TOKEN: ${FIXTURE_ADMIN_TOKEN:?}
+      ENGRAM_AUTH_TRUSTED_PROXY: "10.240.251.10"
+      ENGRAM_AUTHENTIK_ENABLED: "true"
+      ENGRAM_AUTHENTIK_AUTO_PROVISION: "true"
+      ENGRAM_AUTH_DISABLED: "false"
+      ENGRAM_WORKER_HOST: 0.0.0.0
+    ports:
+      - "127.0.0.1:${FIXTURE_BACKEND_PORT:?}:37777"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      default: {}
+  console:
+    image: ${FIXTURE_CONSOLE_IMAGE:?}
+    environment:
+      NUXT_OPERATOR_API_TARGET: http://server:37777
+      NUXT_OPERATOR_PUBLIC_ORIGIN: ${FIXTURE_PUBLIC_ORIGIN:?}
+    ports:
+      - "127.0.0.1:${FIXTURE_CONSOLE_PORT}:3000"
+    depends_on:
+      - server
+    networks:
+      default:
+        ipv4_address: 10.240.251.10
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 10.240.251.0/24

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
@@ -33,6 +34,15 @@ type requestIDKey struct{}
 // HTTP authentication. It is never read from a request header or cookie by a
 // guarded handler.
 type authenticatedBrowserSessionKey struct{}
+
+// originalPeerKey holds the transport peer before RealIP rewrites RemoteAddr.
+type originalPeerKey struct{}
+
+func captureOriginalPeer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), originalPeerKey{}, r.RemoteAddr)))
+	})
+}
 
 // emptyTokenStore satisfies auth.TokenStoreReader with an always-empty
 // candidate set. Used as the bootstrap reader for the validator until
@@ -244,13 +254,13 @@ func NewTokenAuth(token string) (*TokenAuth, error) {
 		statsCh:   make(chan string, 256),
 		ExemptPaths: map[string]bool{
 			"/":                      true, // SPA index.html (dashboard handles auth client-side)
+			"/login":                 true, // Public Nuxt sign-in screen; protected pages and APIs still require auth.
 			"/health":                true,
 			"/api/health":            true,
 			"/api/ready":             true,
 			"/api/version":           true,
 			"/api/auth/login":        true,
 			"/api/auth/logout":       true,
-			"/api/auth/me":           true, // Must be accessible to check auth status (returns 401 if not authed)
 			"/api/auth/setup-needed": true,
 			"/api/auth/setup":        true,
 			"/api/auth/user-login":   true,
@@ -327,13 +337,17 @@ func (ta *TokenAuth) SetAuthentikConfig(enabled, autoProvision bool, trustedProx
 	ta.authentikTrustedProxies = trustedProxies
 }
 
-// isTrustedProxy checks whether the request originated from a trusted proxy IP.
-// Returns false if no trusted proxies are configured (deny-by-default).
+// isTrustedProxy checks only the transport peer captured before RealIP.
+// Missing or malformed peer information never authorizes forward-auth headers.
 func isTrustedProxy(r *http.Request, trustedProxies []string) bool {
-	if len(trustedProxies) == 0 {
-		return false // No trusted proxies = don't trust any
+	peer, ok := r.Context().Value(originalPeerKey{}).(string)
+	if !ok || len(trustedProxies) == 0 {
+		return false
 	}
-	remoteIP := strings.Split(r.RemoteAddr, ":")[0]
+	remoteIP, _, err := net.SplitHostPort(peer)
+	if err != nil || net.ParseIP(remoteIP) == nil {
+		return false
+	}
 	for _, trusted := range trustedProxies {
 		if remoteIP == trusted {
 			return true
@@ -373,13 +387,19 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 		}
 
 		// Skip auth if not configured or path is exempt.
+		// /api/auth/me uses this same identity path, but still returns the
+		// handler's public JSON 401 when no credential authenticates.
 		if !enabled || exempt {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		// Also exempt static assets, branding assets, and docs.
-		if strings.HasPrefix(r.URL.Path, "/assets/") ||
+		// These files are shared by the public sign-in shell and authenticated pages.
+		// Public asset bytes contain no session data; route handlers still constrain methods.
+		if strings.HasPrefix(r.URL.Path, "/_nuxt/") ||
+			strings.HasPrefix(r.URL.Path, "/_fonts/") ||
+			strings.HasPrefix(r.URL.Path, "/i18n/") ||
+			strings.HasPrefix(r.URL.Path, "/assets/") ||
 			strings.HasPrefix(r.URL.Path, "/branding/") ||
 			r.URL.Path == "/favicon.svg" ||
 			strings.HasPrefix(r.URL.Path, "/api/docs") {
@@ -501,6 +521,11 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 					return
 				}
 			}
+		}
+
+		if r.URL.Path == "/api/auth/me" {
+			next.ServeHTTP(w, r)
+			return
 		}
 
 		// 5. No valid auth.

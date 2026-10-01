@@ -24,7 +24,8 @@ Since then, the v6 line rebuilt governance on top of that stable core: per-works
 
 | Version | Highlight |
 |---------|-----------|
-| **v6.50.0 candidate** | **Operator Workspace (Feature 011 D-A).** The candidate source adds Home → Workspace and authorized working-copy investigation. Check the [installed-operator guide](docs/operating-engram.md) before claiming this UI is installed or accepted. |
+| **[v6.50.1 patch candidate](https://github.com/thebtf/engram/compare/v6.50.0...v6.50.1)** | Restore the public sign-in page and align `/api/auth/me` with protected browser authentication; trust Authentik identity only from the original TCP peer. This is source preparation, not evidence that an auth-enabled deployment is installed. |
+| **v6.50.0** | **Operator Workspace (Feature 011 D-A).** Home → Workspace supports authorized working-copy investigation. Check the [installed-operator guide](docs/operating-engram.md) before claiming this UI is installed or accepted. |
 | **v6.38.0** | **V7 Meta-memory Discovery (ENG-V7-S2)** — content-free `know_about` MCP tool, S2 `CandidateProposer`, and session-start `meta_summary` behind v7 flags. |
 | **v6.37.0** | **V7 State Subsystem (ENG-V7-S1)** — v7 `StateWriter` adapter and bounded native state resume hardening. |
 | **v6.32.0** | **Usefulness / Noise Review Loop (CR-008, MPL-3)** — packet-centric bounded review queue with explicit empty/gated/error/sparse states, separate preview/apply, atomic snapshot+audit-backed suppress/preserve, honest metrics. |
@@ -97,6 +98,9 @@ ENGRAM_POSTGRES_IMAGE=engram-local-postgres
 ENGRAM_BUILD_VERSION=sha-$commit
 EOF
 # Also set POSTGRES_PASSWORD and ENGRAM_AUTH_ADMIN_TOKEN in .env before production use.
+# Set OPERATOR_CONSOLE_PUBLIC_ORIGIN to the exact browser-facing origin; choose
+# a free OPERATOR_CONSOLE_NETWORK_SUBNET, contained OPERATOR_CONSOLE_NETWORK_IP_RANGE,
+# and OPERATOR_CONSOLE_TRUSTED_PROXY_IP outside that range (see docs/DEPLOYMENT.md).
 docker compose up -d --build
 docker compose ps
 ```

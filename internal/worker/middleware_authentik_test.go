@@ -2,6 +2,7 @@ package worker
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -9,10 +10,367 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
+	authpkg "github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/uci"
 )
+
+func TestAuthMeSourceUsesEstablishedBrowserContext(t *testing.T) {
+	const userID = int64(23)
+	id := authpkg.SessionForBrowserUser("operator", userID)
+	svc := &Service{}
+	for _, tc := range []struct {
+		name, sessionID, header, want string
+	}{
+		{name: "trusted Authentik identity", sessionID: authentikBrowserSessionID(userID), want: "authentik"},
+		{name: "local password session", sessionID: "opaque-local-cookie", want: "local"},
+		{name: "forged header cannot change local identity", sessionID: "opaque-local-cookie", header: "forged@example.test", want: "local"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+			req.Header.Set("X-Authentik-Email", tc.header)
+			req = req.WithContext(withAuthenticatedBrowserSession(buildAuthCtx(req.Context(), id), tc.sessionID))
+			require.Equal(t, tc.want, svc.authMeSource(req, id))
+		})
+	}
+	require.Equal(t, "session", svc.authMeSource(httptest.NewRequest(http.MethodGet, "/api/auth/me", nil), authpkg.Session("admin")))
+}
+
+func TestAuthMeSeparatesLocalSourceFromTrustedIngress(t *testing.T) {
+	guard, err := NewTokenAuth("test-token")
+	require.NoError(t, err)
+	guard.SetAuthentikConfig(true, false, []string{"192.0.2.1"})
+	svc := &Service{tokenAuth: guard}
+	id := authpkg.SessionForBrowserUser("operator", 23)
+	for _, tc := range []struct {
+		name, peer, email string
+		active            bool
+	}{
+		{name: "trusted ingress with local cookie and different SSO email", peer: "192.0.2.1:443", email: "other-user@example.test", active: true},
+		{name: "untrusted header with local cookie", peer: "198.51.100.2:443", email: "sso@example.test"},
+		{name: "trusted peer without identity header", peer: "192.0.2.1:443"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+			req.RemoteAddr = tc.peer
+			req.Header.Set("X-Authentik-Email", tc.email)
+			req = req.WithContext(withAuthenticatedBrowserSession(buildAuthCtx(req.Context(), id), "opaque-local-cookie"))
+			captureOriginalPeer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				require.Equal(t, "local", svc.authMeSource(r, id))
+				require.Equal(t, tc.active, svc.trustedAuthentikIngress(r))
+			})).ServeHTTP(httptest.NewRecorder(), req)
+		})
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	req.RemoteAddr = "192.0.2.1:443"
+	req.Header.Set("X-Authentik-Email", "sso@example.test")
+	req = req.WithContext(withAuthenticatedBrowserSession(buildAuthCtx(req.Context(), id), "opaque-local-cookie"))
+	require.False(t, svc.trustedAuthentikIngress(req), "transport peer must be captured before RealIP")
+	guard.SetAuthentikConfig(false, false, []string{"192.0.2.1"})
+	captureOriginalPeer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		require.False(t, svc.trustedAuthentikIngress(r), "disabled Authentik cannot establish SSO")
+	})).ServeHTTP(httptest.NewRecorder(), req)
+}
+
+func TestAuthMeTrustedIngressWithSignedCookie(t *testing.T) {
+	t.Setenv("ENGRAM_AUTH_DISABLED", "false")
+	guard, err := NewTokenAuth("test-token")
+	require.NoError(t, err)
+	guard.SetAuthentikConfig(true, false, []string{"192.0.2.1"})
+	svc := &Service{tokenAuth: guard}
+	login := httptest.NewRecorder()
+	svc.handleAuthLogin(login, httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewBufferString(`{"token":"test-token"}`)))
+	require.Equal(t, http.StatusOK, login.Code, login.Body.String())
+	require.NotEmpty(t, login.Result().Cookies())
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	req.RemoteAddr = "192.0.2.1:443"
+	req.Header.Set("X-Authentik-Email", "sso@example.test")
+	req.AddCookie(login.Result().Cookies()[0])
+	rec := httptest.NewRecorder()
+	captureOriginalPeer(guard.Middleware(http.HandlerFunc(svc.handleAuthMe))).ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, "admin", body["role"], "middleware must keep signed-cookie precedence")
+	require.Equal(t, "session", body["auth_source"], "signed cookie remains the selected credential")
+	require.Equal(t, true, body["sso_active"])
+	require.Equal(t, "session+authentik", body["source"])
+	logoutReq := httptest.NewRequest(http.MethodPost, "/api/auth/logout", bytes.NewReader([]byte(`{}`)))
+	logoutReq.Header.Set("Origin", "http://example.com")
+	logoutReq.Header.Set("Sec-Fetch-Site", "same-origin")
+	logoutReq.Header.Set("X-Authentik-Email", "sso@example.test")
+	logoutReq.RemoteAddr = "192.0.2.1:443"
+	logoutReq.AddCookie(login.Result().Cookies()[0])
+	logout := httptest.NewRecorder()
+	captureOriginalPeer(svc.requireLogoutOrigin(http.HandlerFunc(svc.handleAuthLogout))).ServeHTTP(logout, logoutReq)
+	require.Equal(t, http.StatusOK, logout.Code, logout.Body.String())
+	var cleared bool
+	for _, cookie := range logout.Result().Cookies() {
+		if cookie.Name == sessionCookieName && cookie.MaxAge < 0 {
+			cleared = true
+		}
+	}
+	require.True(t, cleared, "signed browser cookie must be expired")
+}
+
+func TestAuthMeExposesResolvedMasterSource(t *testing.T) {
+	t.Setenv("ENGRAM_AUTH_DISABLED", "false")
+	svc := &Service{}
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	req.Header.Set("X-Authentik-Email", "forged@example.test")
+	req = req.WithContext(buildAuthCtx(req.Context(), authpkg.Admin()))
+	rec := httptest.NewRecorder()
+	svc.handleAuthMe(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, "master", body["auth_source"])
+	require.Equal(t, "master", body["source"])
+}
+
+func TestServiceRouterPreservesRealIPAndRateLimit(t *testing.T) {
+	t.Setenv("ENGRAM_AUTH_DISABLED", "false")
+	guard, err := NewTokenAuth("test-token")
+	require.NoError(t, err)
+	svc := &Service{router: chi.NewRouter(), tokenAuth: guard, rateLimiter: NewPerClientRateLimiter(0, 1)}
+	svc.setupMiddleware()
+	svc.router.Get("/peer", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(r.RemoteAddr))
+	})
+
+	request := func(forwardedIP string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/peer", nil)
+		req.RemoteAddr = "198.51.100.2:443"
+		req.Header.Set("X-Real-IP", forwardedIP)
+		req.Header.Set("X-Auth-Token", "test-token")
+		rec := httptest.NewRecorder()
+		svc.router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	first := request("203.0.113.1")
+	require.Equal(t, http.StatusOK, first.Code)
+	require.Equal(t, "203.0.113.1", first.Body.String())
+	limited := request("203.0.113.1")
+	require.Equal(t, http.StatusTooManyRequests, limited.Code)
+	require.Equal(t, "DENY", limited.Header().Get("X-Frame-Options"))
+	otherClient := request("203.0.113.2")
+	require.Equal(t, http.StatusOK, otherClient.Code)
+	require.Equal(t, "203.0.113.2", otherClient.Body.String())
+}
+
+func TestServiceRouterAuthentikTrustsOnlyOriginalPeer(t *testing.T) {
+	t.Setenv("ENGRAM_AUTH_DISABLED", "false")
+	env := openAuthLifecycleEnv(t)
+	email := fmt.Sprintf("zz-authentik-peer-%d@example.com", time.Now().UnixNano())
+	user, err := env.users.CreateUser(email, "hash", gormdb.DashboardRoleOperator)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = env.store.DB.Delete(user).Error })
+	session, err := env.sessions.CreateSession(user.ID, time.Hour, "test-agent", "127.0.0.1")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = env.store.DB.Where("id = ?", session.ID).Delete(&gormdb.AuthSession{}).Error })
+
+	guard, err := NewTokenAuth("test-token")
+	require.NoError(t, err)
+	guard.SetAuthStores(env.users, env.sessions)
+	guard.SetAuthentikConfig(true, false, []string{"192.0.2.1"})
+	svc := &Service{router: chi.NewRouter(), tokenAuth: guard, authHandlers: env.handlers}
+	svc.setupMiddleware()
+	svc.ready.Store(true)
+	svc.setupRoutes()
+
+	for _, headers := range []map[string]string{
+		{"True-Client-IP": "192.0.2.1"},
+		{"X-Real-IP": "192.0.2.1"},
+		{"X-Forwarded-For": "192.0.2.1"},
+		{"True-Client-IP": "192.0.2.1", "X-Real-IP": "192.0.2.1", "X-Forwarded-For": "192.0.2.1"},
+	} {
+		for _, path := range []string{"/api/auth/me", "/api/code/grants/choices"} {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.RemoteAddr = "198.51.100.2:443"
+			req.Header.Set("X-Authentik-Email", email)
+			for key, value := range headers {
+				req.Header.Set(key, value)
+			}
+			rec := httptest.NewRecorder()
+			svc.router.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusUnauthorized, rec.Code, "%s, headers: %v, body: %s", path, headers, rec.Body.String())
+			require.Equal(t, "DENY", rec.Header().Get("X-Frame-Options"))
+		}
+	}
+
+	for _, tc := range []struct {
+		name       string
+		remoteAddr string
+		cookie     bool
+	}{
+		{name: "trusted proxy", remoteAddr: "192.0.2.1:443"},
+		{name: "local password cookie", remoteAddr: "198.51.100.2:443", cookie: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+			req.RemoteAddr = tc.remoteAddr
+			req.Header.Set("X-Authentik-Email", email)
+			req.Header.Set("True-Client-IP", "203.0.113.9")
+			if tc.cookie {
+				req.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: session.ID})
+			}
+			rec := httptest.NewRecorder()
+			svc.router.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+			require.Equal(t, true, body["authenticated"])
+			require.Equal(t, map[string]any{"id": float64(user.ID), "email": email, "role": gormdb.DashboardRoleOperator}, body["user"])
+		})
+	}
+}
+
+func TestAuthMeUsesProtectedRouteIdentity(t *testing.T) {
+	t.Setenv("ENGRAM_AUTH_DISABLED", "false")
+	env := openAuthLifecycleEnv(t)
+	email := fmt.Sprintf("zz-auth-me-%d@example.com", time.Now().UnixNano())
+	user, err := env.users.CreateUser(email, "hash", gormdb.DashboardRoleOperator)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = env.store.DB.Delete(user).Error })
+	otherEmail := fmt.Sprintf("zz-auth-me-other-%d@example.com", time.Now().UnixNano())
+	otherUser, err := env.users.CreateUser(otherEmail, "hash", gormdb.DashboardRoleAdmin)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = env.store.DB.Delete(otherUser).Error })
+	session, err := env.sessions.CreateSession(user.ID, time.Hour, "test-agent", "127.0.0.1")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = env.store.DB.Where("id = ?", session.ID).Delete(&gormdb.AuthSession{}).Error })
+
+	guard, err := NewTokenAuth("test-token")
+	require.NoError(t, err)
+	guard.SetAuthStores(env.users, env.sessions)
+	guard.SetAuthentikConfig(true, false, []string{"192.0.2.1"})
+	svc := &Service{tokenAuth: guard, authHandlers: env.handlers}
+	handler := captureOriginalPeer(guard.Middleware(http.HandlerFunc(svc.handleAuthMe)))
+
+	t.Run("direct middleware without captured peer fails closed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+		req.RemoteAddr = "192.0.2.1:443"
+		req.Header.Set("X-Authentik-Email", email)
+		rec := httptest.NewRecorder()
+		guard.Middleware(http.HandlerFunc(svc.handleAuthMe)).ServeHTTP(rec, req)
+		require.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
+	})
+
+	for _, tc := range []struct {
+		name       string
+		remoteAddr string
+		email      string
+		cookie     bool
+		wantStatus int
+		authSource string
+		ssoActive  bool
+	}{
+		{name: "trusted Authentik without cookie", remoteAddr: "192.0.2.1:443", email: email, wantStatus: http.StatusOK, authSource: "authentik", ssoActive: true},
+		{name: "untrusted spoofed header", remoteAddr: "198.51.100.2:443", email: email, wantStatus: http.StatusUnauthorized},
+		{name: "anonymous", wantStatus: http.StatusUnauthorized},
+		{name: "local session cookie", cookie: true, wantStatus: http.StatusOK, authSource: "local"},
+		{name: "trusted ingress alongside local cookie", remoteAddr: "192.0.2.1:443", email: email, cookie: true, wantStatus: http.StatusOK, authSource: "local", ssoActive: true},
+		{name: "different IdP user alongside local cookie", remoteAddr: "192.0.2.1:443", email: otherEmail, cookie: true, wantStatus: http.StatusOK, authSource: "local", ssoActive: true},
+		{name: "spoofed ingress alongside local cookie", remoteAddr: "198.51.100.2:443", email: email, cookie: true, wantStatus: http.StatusOK, authSource: "local"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+			if tc.remoteAddr != "" {
+				req.RemoteAddr = tc.remoteAddr
+			}
+			if tc.email != "" {
+				req.Header.Set("X-Authentik-Email", tc.email)
+			}
+			if tc.cookie {
+				req.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: session.ID})
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			require.Equal(t, tc.wantStatus, rec.Code, rec.Body.String())
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+			if tc.wantStatus == http.StatusOK {
+				require.Equal(t, true, body["authenticated"])
+				require.Equal(t, gormdb.DashboardRoleOperator, body["role"])
+				require.Equal(t, map[string]any{"id": float64(user.ID), "email": email, "role": gormdb.DashboardRoleOperator}, body["user"])
+				require.Equal(t, tc.authSource, body["auth_source"])
+				require.Equal(t, tc.ssoActive, body["sso_active"])
+				if tc.ssoActive && tc.cookie {
+					require.Equal(t, "local+authentik", body["source"])
+				} else {
+					require.Equal(t, tc.authSource, body["source"])
+				}
+			} else {
+				require.Equal(t, false, body["authenticated"])
+			}
+		})
+	}
+
+	t.Run("mixed local signout revokes cookie session but IdP remains", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", bytes.NewReader([]byte(`{}`)))
+		req.Header.Set("Origin", "http://example.com")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		req.Header.Set("X-Authentik-Email", email)
+		req.RemoteAddr = "192.0.2.1:443"
+		req.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: session.ID})
+		rec := httptest.NewRecorder()
+		captureOriginalPeer(svc.requireLogoutOrigin(http.HandlerFunc(svc.handleAuthLogout))).ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		_, err := env.sessions.GetSession(session.ID)
+		require.Error(t, err)
+		var cleared bool
+		for _, cookie := range rec.Result().Cookies() {
+			if cookie.Name == authSessionCookieName && cookie.MaxAge < 0 {
+				cleared = true
+			}
+		}
+		require.True(t, cleared, "local cookie must be expired")
+		after := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+		after.RemoteAddr = "192.0.2.1:443"
+		after.Header.Set("X-Authentik-Email", email)
+		readback := httptest.NewRecorder()
+		handler.ServeHTTP(readback, after)
+		require.Equal(t, http.StatusOK, readback.Code, readback.Body.String())
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(readback.Body.Bytes(), &body))
+		require.Equal(t, "authentik", body["auth_source"])
+		require.Equal(t, true, body["sso_active"])
+	})
+
+	t.Run("master bearer", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+		req.Header.Set("Authorization", "Bearer test-token")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		require.Equal(t, true, body["authenticated"])
+		require.Equal(t, "admin", body["role"])
+		require.NotContains(t, body, "user")
+		require.Equal(t, "master", body["auth_source"])
+		require.Equal(t, "master", body["source"])
+	})
+
+	t.Run("auth disabled synthetic admin", func(t *testing.T) {
+		t.Setenv("ENGRAM_AUTH_DISABLED", "true")
+		disabledGuard, err := NewTokenAuth("")
+		require.NoError(t, err)
+		disabledSvc := &Service{tokenAuth: disabledGuard}
+		rec := httptest.NewRecorder()
+		disabledGuard.Middleware(http.HandlerFunc(disabledSvc.handleAuthMe)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/auth/me", nil))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		require.Equal(t, true, body["authenticated"])
+		require.Equal(t, true, body["auth_disabled"])
+		require.Equal(t, true, body["synthetic"])
+		require.Equal(t, "admin", body["role"])
+	})
+}
 
 func TestTokenAuth_AuthentikProvisioningRequiresInitialAdminSetup(t *testing.T) {
 	dsn := os.Getenv("DATABASE_DSN")
@@ -41,10 +399,10 @@ func TestTokenAuth_AuthentikProvisioningRequiresInitialAdminSetup(t *testing.T) 
 	tokenAuth.SetAuthentikConfig(true, true, []string{"192.0.2.1"})
 
 	var role string
-	handler := tokenAuth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := captureOriginalPeer(tokenAuth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		role = getAuthRole(r)
 		w.WriteHeader(http.StatusNoContent)
-	}))
+	})))
 	request := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, "/api/memory", nil)
 		req.RemoteAddr = "192.0.2.1:443"
@@ -95,7 +453,7 @@ func TestTokenAuth_AuthentikCodeExplorerUsesTrustedBrowserSession(t *testing.T) 
 	require.NoError(t, err)
 	tokenAuth.SetAuthStores(gormdb.NewUserStore(store.DB), gormdb.NewAuthSessionStore(store.DB))
 	tokenAuth.SetAuthentikConfig(true, false, []string{"192.0.2.1"})
-	handler := tokenAuth.Middleware(http.HandlerFunc(adapter.HandleSearch))
+	handler := captureOriginalPeer(tokenAuth.Middleware(http.HandlerFunc(adapter.HandleSearch)))
 	body := `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","query":"Fixture"}`
 
 	trusted := httptest.NewRequest(http.MethodPost, "/api/code/search", bytes.NewBufferString(body))

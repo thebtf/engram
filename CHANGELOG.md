@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Restore logout through a separate operator-console proxy by forwarding its configured public origin only from a trusted transport peer; overwrite client-supplied forwarding headers and reject forged public hosts without weakening the backend origin guard.
+- Strip client-supplied `X-Authentik-*` identity headers at both Nitro proxy boundaries before requests reach a backend that trusts the frontend transport peer; preserve local session cookies and public-origin forwarding.
+- Fail runtime Compose configuration before startup when the external operator-console origin or its trusted server-visible container peer IP is unset or empty.
+- Supply isolated loopback-only operator origin and proxy inputs during the image gate's Compose readiness fixture, restoring inherited environment afterward without claiming a browser login proof.
+
+## [6.50.1] - 2026-09-27
+
+### Fixed
+
+- Keep the public sign-in shell usable while `/api/auth/me` shares protected routes' bearer, cookie, and trusted Authentik authentication; untrusted proxy headers remain denied.
+- Revoke database-backed browser sessions on the shared logout endpoint, clear both session cookies, and leave private Workspace pages for the localized sign-in screen only after revocation succeeds; failed revocation remains visible and does not claim sign-out.
+- Reject cross-origin and unverifiable browser logout requests on both session endpoints before revocation; trusted-proxy origin checks retain same-origin HTTP/HTTPS and explicit JSON client logouts.
+- Bind Authentik forward-auth headers to the original TCP peer before forwarded-IP processing; forged proxy IP headers can no longer impersonate browser users.
+- Carry the post-v6.50.0 promotion-journal authority preapproval ([#538](https://github.com/thebtf/engram/pull/538)) and check-run URL correction ([#539](https://github.com/thebtf/engram/pull/539)).
+
 ## [6.50.0] - 2026-09-26
 
 ### Added
@@ -2074,7 +2093,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.0...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.1...HEAD
+[6.50.1]: https://github.com/thebtf/engram/compare/v6.50.0...v6.50.1
 [6.50.0]: https://github.com/thebtf/engram/compare/v6.49.4...v6.50.0
 [6.49.3]: https://github.com/thebtf/engram/compare/v6.49.2...v6.49.3
 [6.49.2]: https://github.com/thebtf/engram/compare/v6.49.1...v6.49.2

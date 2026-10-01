@@ -1,5 +1,16 @@
 {
   "_note": "RU is the contract language — these strings mirror the .od/index.html mockup verbatim. This file is the localization seam (the i18n analogue of useMockData.ts): every visible string has a key here, components read it via t(). When the mockup changes a string, change it here and mark the section drifted in PARITY.json. Key convention: [area].[element], areas mirror nav section ids.",
+  "login": {
+    "title": "Вход в консоль",
+    "description": "Войдите с учётной записью оператора, чтобы открыть рабочее пространство.",
+    "email": "Электронная почта",
+    "password": "Пароль",
+    "submit": "Войти",
+    "submitting": "Входим…",
+    "invalid": "Неверная почта или пароль. Попробуйте ещё раз.",
+    "unavailable": "Не удалось войти. Проверьте соединение с сервером и повторите попытку.",
+    "language": "Язык"
+  },
   "common": {
     "show": "Показать",
     "hide": "Скрыть",
@@ -143,10 +154,14 @@
     "profileMenuProfile": "Профиль и настройки",
     "profileMenuSettings": "Настройки консоли",
     "profileMenuLogout": "Выйти из консоли",
+    "profileMenuLogoutSSO": "Чтобы завершить эту сессию, выйдите через поставщика удостоверений.",
+    "profileMenuLogoutLocal": "Завершить локальную сессию",
+    "profileMenuLogoutMixedHint": "Завершение локальной сессии не завершит вход через поставщика удостоверений.",
     "profileMenuLogoutPending": "Завершаем текущую сессию…",
     "profileMenuLogoutAuthDisabled": "Auth отключена: текущую сессию нельзя завершить из UI",
     "profileMenuLogoutLocked": "Нет активной сессии для выхода",
     "profileMenuLogoutUnavailable": "Состояние сессии неизвестно, выход недоступен",
+    "profileMenuLogoutFailed": "Не удалось выйти. Сессия может оставаться активной; повторите попытку.",
     "authDisabled": "auth отключена",
     "authAuthenticated": "сессия активна",
     "authLocked": "требуется вход",

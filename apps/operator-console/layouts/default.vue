@@ -28,6 +28,7 @@ const identityMenuOpen = ref(false)
 const identityMenuRef = ref<HTMLElement | null>(null)
 const profileModalOpen = ref(false)
 const logoutInFlight = ref(false)
+const logoutError = ref(false)
 
 const NAV_ICONS: Record<string, string> = {
   overview: '<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/>',
@@ -85,9 +86,12 @@ onMounted(() => {
   window.addEventListener('pointerdown', onDocumentPointerDown)
   window.addEventListener('keydown', onDocumentKeydown)
 })
-const canLogout = computed(() => info.value.authenticated && !info.value.authDisabled)
+const mixedSso = computed(() => info.value.source.endsWith('+authentik'))
+const canLogout = computed(() => info.value.authenticated && !info.value.authDisabled && info.value.source !== 'authentik')
 const logoutTitle = computed(() => {
   if (logoutInFlight.value) return t('shell.profileMenuLogoutPending')
+  if (info.value.source === 'authentik') return t('shell.profileMenuLogoutSSO')
+  if (mixedSso.value) return t('shell.profileMenuLogoutLocal')
   if (canLogout.value) return t('shell.profileMenuLogout')
   if (info.value.authDisabled) return t('shell.profileMenuLogoutAuthDisabled')
   if (info.value.authPosture === 'locked') return t('shell.profileMenuLogoutLocked')
@@ -223,10 +227,14 @@ function openIdentityProfile() {
 async function logoutIdentity() {
   if (!canLogout.value || logoutInFlight.value) return
   logoutInFlight.value = true
+  logoutError.value = false
   closeIdentityMenu()
   try {
     await operatorFetchJson('/api/auth/logout', { method: 'POST' }, 'shell-auth-logout')
-    await shell.refresh()
+    if (mixedSso.value) window.location.reload()
+    else window.location.replace('/login')
+  } catch {
+    logoutError.value = true
   } finally {
     logoutInFlight.value = false
   }
@@ -355,6 +363,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
           </span>
           <span class="icaret">⌄</span>
         </button>
+        <p v-if="logoutError" class="logout-error" role="alert">{{ t('shell.profileMenuLogoutFailed') }}</p>
         <div v-if="identityMenuOpen" class="idmenu" role="menu">
           <div class="idm-head">
             <span class="iav">{{ info.identityInitials }}</span>
@@ -380,11 +389,13 @@ function onDocumentKeydown(event: KeyboardEvent) {
               role="menuitem"
               :disabled="!canLogout || logoutInFlight"
               :title="logoutTitle"
+              :aria-describedby="info.source === 'authentik' || mixedSso ? 'sso-signout-guidance' : undefined"
               @click="logoutIdentity"
             >
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 11.5v1.4a1 1 0 0 1-1 1H3.4a1 1 0 0 1-1-1V3.1a1 1 0 0 1 1-1H9a1 1 0 0 1 1 1v1.4"/><path d="M7 8h7M11.6 5.4 14.2 8l-2.6 2.6"/></svg>
-              <span>{{ t('shell.profileMenuLogout') }}</span>
+              <span>{{ t(mixedSso ? 'shell.profileMenuLogoutLocal' : 'shell.profileMenuLogout') }}</span>
             </button>
+            <p v-if="info.source === 'authentik' || mixedSso" id="sso-signout-guidance" class="idm-guidance">{{ t(mixedSso ? 'shell.profileMenuLogoutMixedHint' : 'shell.profileMenuLogoutSSO') }}</p>
           </div>
         </div>
       </div>
@@ -516,6 +527,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
 .tbtn.lang { font-family:var(--font-mono); letter-spacing:.04em; }
 .topbar .mobile-menu-button { display:none; }
 .identity-wrap { position:relative; display:inline-flex; }
+.logout-error { position:absolute; right:0; top:38px; z-index:91; width:min(320px, 80vw); margin:0; padding:var(--space-3); border:1px solid var(--danger); border-radius:var(--r-sm); color:var(--danger); background:var(--surface); font-size:var(--text-sm); }
 .identity { display:inline-flex; align-items:center; gap:8px; height:32px; padding:3px 10px 3px 3px; border-radius:var(--radius-pill); background:var(--surface-warm); border:1px solid var(--border); color:var(--fg); font:inherit; font-weight:600; font-size:var(--text-xs); text-align:left; max-width:230px; cursor:pointer; }
 .identity:hover,
 .identity[aria-expanded="true"] { border-color:var(--accent); }
@@ -539,6 +551,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
 .idm-item.danger:hover:not(:disabled) { background:color-mix(in oklab,var(--danger),transparent 90%); }
 .idm-item svg { width:15px; height:15px; flex:none; }
 .idm-sep { height:1px; background:var(--border); margin:5px 0; }
+.idm-guidance { margin:var(--space-2) var(--space-3) var(--space-3); color:var(--fg-2); font-size:var(--text-xs); line-height:1.5; }
 .content { min-width:0; overflow-y:auto; padding:22px 24px 90px; }
 .statusbar { display:flex; align-items:center; gap:var(--space-4); padding:0 var(--space-4); background:var(--surface); border-top:1px solid var(--border); font-size:11px; color:var(--muted); font-family:var(--font-mono); min-width:0; overflow:hidden; }
 .statusbar .si { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; color:var(--muted); text-decoration:none; }

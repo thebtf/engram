@@ -1,5 +1,16 @@
 {
   "_note": "ZH (Simplified Chinese, zh-Hans) — third launch locale. Keys mirror ru.json exactly. A missing key falls back to ru (the contract) via i18n.config fallbackLocale, so a partial translation still renders. Chinese has ONE grammatical number form, so plural keys have a single slot (no pipes); the built-in plural rule handles it.",
+  "login": {
+    "title": "登录控制台",
+    "description": "使用操作员账号访问工作区。",
+    "email": "电子邮箱",
+    "password": "密码",
+    "submit": "登录",
+    "submitting": "正在登录…",
+    "invalid": "邮箱或密码不正确，请重试。",
+    "unavailable": "无法登录。请检查服务器连接后重试。",
+    "language": "语言"
+  },
   "common": {
     "show": "显示",
     "hide": "隐藏",
@@ -143,10 +154,14 @@
     "profileMenuProfile": "个人资料和设置",
     "profileMenuSettings": "控制台设置",
     "profileMenuLogout": "退出控制台",
+    "profileMenuLogoutSSO": "请通过身份提供方退出，以结束此会话。",
+    "profileMenuLogoutLocal": "结束本地会话",
+    "profileMenuLogoutMixedHint": "结束本地会话不会让您退出身份提供方。",
     "profileMenuLogoutPending": "正在退出当前会话…",
     "profileMenuLogoutAuthDisabled": "认证已关闭：当前会话不能从 UI 结束",
     "profileMenuLogoutLocked": "没有可退出的活动会话",
     "profileMenuLogoutUnavailable": "会话状态未知，无法退出",
+    "profileMenuLogoutFailed": "退出失败。会话可能仍处于活动状态，请重试。",
     "authDisabled": "认证已关闭",
     "authAuthenticated": "会话已激活",
     "authLocked": "需要登录",

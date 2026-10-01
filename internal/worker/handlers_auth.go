@@ -10,7 +10,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -20,6 +22,7 @@ import (
 	"gorm.io/gorm"
 
 	authpkg "github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/config"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
 
@@ -125,14 +128,118 @@ func (s *Service) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// requireLogoutOrigin blocks browser CSRF before either logout handler reads or revokes a session.
+func (s *Service) requireLogoutOrigin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		site := r.Header.Values("Sec-Fetch-Site")
+		if len(site) > 1 || (len(site) == 1 && site[0] != "same-origin") {
+			writeAuthJSONError(w, http.StatusForbidden, "cross-origin logout denied")
+			return
+		}
+		origins := r.Header.Values("Origin")
+		if len(origins) > 1 {
+			writeAuthJSONError(w, http.StatusForbidden, "cross-origin logout denied")
+			return
+		}
+		if len(origins) == 1 {
+			scheme, host := "http", r.Host
+			if r.TLS != nil {
+				scheme = "https"
+			}
+			if s.tokenAuth != nil {
+				s.tokenAuth.mu.RLock()
+				trusted := isTrustedProxy(r, s.tokenAuth.authentikTrustedProxies)
+				s.tokenAuth.mu.RUnlock()
+				cfg := config.Get()
+				if !trusted && cfg.AuthTrustedProxy != "" {
+					trusted = isTrustedProxy(r, []string{cfg.AuthTrustedProxy})
+				}
+				if trusted {
+					if values := r.Header.Values("X-Forwarded-Proto"); len(values) == 1 && (values[0] == "http" || values[0] == "https") {
+						scheme = values[0]
+					} else if len(values) != 0 {
+						writeAuthJSONError(w, http.StatusForbidden, "cross-origin logout denied")
+						return
+					}
+					if values := r.Header.Values("X-Forwarded-Host"); len(values) == 1 && !strings.Contains(values[0], ",") {
+						host = values[0]
+					} else if len(values) != 0 {
+						writeAuthJSONError(w, http.StatusForbidden, "cross-origin logout denied")
+						return
+					}
+				}
+			}
+			if !sameLogoutOrigin(origins[0], scheme, host) {
+				writeAuthJSONError(w, http.StatusForbidden, "cross-origin logout denied")
+				return
+			}
+		} else if len(site) == 0 {
+			// A browser can send a bodyless or simple form POST without Origin.
+			// Only non-browser JSON requests without Fetch Metadata retain legacy logout.
+			mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			if err != nil || mediaType != "application/json" {
+				writeAuthJSONError(w, http.StatusForbidden, "cross-origin logout denied")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func sameLogoutOrigin(origin, scheme, host string) bool {
+	actual, err := url.Parse(origin)
+	if err != nil || actual.User != nil || actual.Path != "" || actual.RawQuery != "" || actual.Fragment != "" || actual.Opaque != "" {
+		return false
+	}
+	expected, err := url.Parse(scheme + "://" + host)
+	if err != nil || expected.User != nil || expected.Path != "" || expected.RawQuery != "" || expected.Fragment != "" || expected.Hostname() == "" || actual.Scheme != scheme || !strings.EqualFold(actual.Hostname(), expected.Hostname()) {
+		return false
+	}
+	actualPort, expectedPort := actual.Port(), expected.Port()
+	if actualPort == "" {
+		if scheme == "https" {
+			actualPort = "443"
+		} else {
+			actualPort = "80"
+		}
+	}
+	if expectedPort == "" {
+		if scheme == "https" {
+			expectedPort = "443"
+		} else {
+			expectedPort = "80"
+		}
+	}
+	return actualPort == expectedPort
+}
+
 // handleAuthLogout godoc
 // @Summary Logout
-// @Description Clears the session cookie.
+// @Description Revokes the DB-backed session (when present) and clears both browser session cookies.
 // @Tags Auth
 // @Produce json
 // @Success 200 {object} map[string]interface{}
 // @Router /api/auth/logout [post]
 func (s *Service) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
+	if cookie, err := r.Cookie(authSessionCookieName); err == nil && strings.TrimSpace(cookie.Value) != "" {
+		s.initMu.RLock()
+		h := s.authHandlers
+		s.initMu.RUnlock()
+		if h == nil {
+			writeAuthJSONError(w, http.StatusServiceUnavailable, "auth store unavailable")
+			return
+		}
+		if !h.revokeBrowserSession(w, r) {
+			return
+		}
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     authSessionCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+	})
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
@@ -157,8 +264,6 @@ func (s *Service) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {string} string "unauthorized"
 // @Router /api/auth/me [get]
 func (s *Service) handleAuthMe(w http.ResponseWriter, r *http.Request) {
-	// This endpoint is exempt from auth middleware so the SPA can check auth status.
-	// We manually verify auth here and return the result.
 	authDisabled := isAuthDisabled()
 	if authDisabled {
 		writeJSON(w, map[string]any{
@@ -166,6 +271,8 @@ func (s *Service) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 			"role":          "admin",
 			"auth_disabled": true,
 			"source":        "auth-disabled",
+			"auth_source":   "auth-disabled",
+			"sso_active":    false,
 			"synthetic":     true,
 		})
 		return
@@ -173,53 +280,35 @@ func (s *Service) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 
 	role := getAuthRole(r)
 	if role != "" {
-		writeJSON(w, map[string]any{
+		response := map[string]any{
 			"authenticated": true,
 			"role":          role,
-			"auth_disabled": authDisabled,
-		})
+			"auth_disabled": false,
+		}
+		if id, ok := authpkg.IdentityFrom(r.Context()); ok {
+			credentialSource := s.authMeSource(r, id)
+			ssoActive := credentialSource == "authentik" || s.trustedAuthentikIngress(r)
+			response["auth_source"] = credentialSource
+			response["sso_active"] = ssoActive
+			response["source"] = credentialSource
+			if ssoActive && credentialSource != "authentik" && id.Source == authpkg.SourceSession {
+				response["source"] = credentialSource + "+authentik"
+			}
+			if subject, ok := id.SessionBrowserSubject(); ok {
+				if s.authHandlers == nil || s.authHandlers.users == nil {
+					http.Error(w, "auth store unavailable", http.StatusInternalServerError)
+					return
+				}
+				user, err := s.authHandlers.users.GetUserByID(subject.UserID)
+				if err != nil || user.Disabled {
+					http.Error(w, "unauthorized", http.StatusUnauthorized)
+					return
+				}
+				response["user"] = map[string]any{"id": user.ID, "email": user.Email, "role": user.Role}
+			}
+		}
+		writeJSON(w, response)
 		return
-	}
-
-	// Check HMAC session cookie (legacy token-based login)
-	if s.tokenAuth != nil {
-		s.tokenAuth.mu.RLock()
-		cookieKey := s.tokenAuth.cookieKey
-		s.tokenAuth.mu.RUnlock()
-
-		if cookie, err := r.Cookie("engram_session"); err == nil && len(cookieKey) > 0 {
-			parts := strings.SplitN(cookie.Value, ".", 2)
-			if len(parts) == 2 {
-				payload, _ := base64.RawURLEncoding.DecodeString(parts[0])
-				sig, _ := base64.RawURLEncoding.DecodeString(parts[1])
-				expectedSig := computeHMAC(payload, cookieKey)
-				if hmac.Equal(sig, expectedSig) {
-					writeJSON(w, map[string]any{
-						"authenticated": true,
-						"role":          "admin",
-						"auth_disabled": authDisabled,
-					})
-					return
-				}
-			}
-		}
-	}
-
-	// Check DB-backed auth session cookie (user/pass login)
-	if s.authHandlers != nil {
-		if cookie, err := r.Cookie("engram_auth"); err == nil && cookie.Value != "" {
-			if sess, err := s.authHandlers.sessions.GetSession(cookie.Value); err == nil {
-				if user, err := s.authHandlers.users.GetUserByID(sess.UserID); err == nil && !user.Disabled {
-					writeJSON(w, map[string]any{
-						"authenticated": true,
-						"role":          user.Role,
-						"auth_disabled": authDisabled,
-						"user":          map[string]any{"id": user.ID, "email": user.Email, "role": user.Role},
-					})
-					return
-				}
-			}
-		}
 	}
 
 	// Not authenticated
@@ -228,6 +317,28 @@ func (s *Service) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		"authenticated": false,
 		"auth_disabled": authDisabled,
 	})
+}
+
+// authMeSource identifies the credential selected by middleware, independent
+// of other upstream sessions that may remain active after local logout.
+func (s *Service) authMeSource(r *http.Request, id authpkg.Identity) string {
+	if subject, ok := id.SessionBrowserSubject(); ok {
+		if sessionID, ok := authenticatedBrowserSessionID(r.Context()); ok && sessionID == authentikBrowserSessionID(subject.UserID) {
+			return "authentik"
+		}
+		return "local"
+	}
+	return string(id.Source)
+}
+
+func (s *Service) trustedAuthentikIngress(r *http.Request) bool {
+	if s.tokenAuth == nil || r.Header.Get("X-Authentik-Email") == "" {
+		return false
+	}
+	s.tokenAuth.mu.RLock()
+	trusted := s.tokenAuth.authentikEnabled && isTrustedProxy(r, s.tokenAuth.authentikTrustedProxies)
+	s.tokenAuth.mu.RUnlock()
+	return trusted
 }
 
 // handleListTokens godoc

@@ -14,6 +14,7 @@ export default defineNuxtConfig({
   },
   runtimeConfig: {
     operatorApiTarget: process.env.NUXT_OPERATOR_API_TARGET || 'http://unleashed.lan:37777',
+    operatorPublicOrigin: process.env.NUXT_OPERATOR_PUBLIC_ORIGIN || '',
     public: {
       apiBase: process.env.NUXT_PUBLIC_API_BASE || '/api',
       apiDisplayHost: process.env.NUXT_PUBLIC_API_DISPLAY_HOST || '',
