@@ -778,3 +778,95 @@ for (const leaseStatus of [503, 403]) {
     }
   })
 }
+
+for (const { boundary, invalidated } of [
+  { boundary: 'status', invalidated: false },
+  { boundary: 'search', invalidated: false },
+  { boundary: 'contexts', invalidated: false },
+  { boundary: 'status', invalidated: true },
+] as const) {
+  test(`completed intent defers discovery through pending ${boundary}${invalidated ? ' then discards it after lease denial' : ' without replacing its historical pin'}`, async ({ page }) => {
+    let published = false
+    let held = false
+    let release: () => void = () => { }
+    let holdRead = false
+    const pins: string[] = []
+    const catalogProofs: string[] = []
+    const newer = { ...entry, indexed_snapshot: { label: 'Newly published snapshot' }, view_ref: 'new-view', selection_ref: 'new-selection' }
+    const intent = { intent_ref: 'publication-intent', state: 'queued', attempt: 1, retryable: false, created_at: '2026-09-15T00:00:00Z', updated_at: '2026-09-15T00:00:00Z' }
+    const context = { source_id: 'source-1', checkout_id: 'checkout-1', view_id: 'view-1', profile_id: 'profile-1', generation: 1 }
+    const item = { ref: { source_id: context.source_id, view_id: context.view_id, entity_key: 'old-result' }, path: 'src/old-view.ts', span: { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }, content_digest: 'old-digest', kind: 'function', language: 'typescript', excerpt: 'old result', match_sources: ['lexical'], score: 1 }
+    const envelope = { schema: 'engram.code-query/1', status: 'ok', contexts: [context], items: [item], warnings: [], retrieval: { mode: 'lexical' }, freshness: { state: 'historical' }, coverage: {}, truncated: false }
+    await page.clock.install({ time: new Date('2026-09-15T00:00:00Z') })
+    await page.route('**/api/auth/me', route => route.fulfill({ json: { auth_disabled: true } }))
+    await page.route('**/api/code/**', async route => {
+      const path = new URL(route.request().url()).pathname
+      if (path === '/api/code/tabs/handshake') await route.fulfill({ json: binding })
+      else if (path.endsWith('/lease')) await route.fulfill({ status: invalidated ? 403 : 204 })
+      else if (path === '/api/code/index-intents') await route.fulfill({ status: 202, json: intent })
+      else if (path === '/api/code/index-intents/publication-intent') {
+        published = true
+        await route.fulfill({ json: { ...intent, state: 'completed', result: { view_ref: 'new-view', generation: 2 } } })
+      } else if (path.endsWith('/context')) {
+        pins.push(route.request().postDataJSON().selection_ref)
+        await route.fulfill({ status: 204 })
+      } else if (path === '/api/code/contexts' || path === '/api/code/status' || path === '/api/code/search') {
+        const catalog = { contexts: [published ? newer : entry] }
+        if (path.endsWith('/contexts')) catalogProofs.push(route.request().postDataJSON().document_proof)
+        if (holdRead && path === `/api/code/${boundary}`) await new Promise<void>(resolve => { held = true; release = resolve })
+        await route.fulfill({ json: path.endsWith('/contexts') ? catalog : path.endsWith('/status') ? { total_chunks: 1, embedded_chunks: 1, embedding: { coverage: 'complete' }, freshness: { state: published ? 'historical' : 'observed_current' } } : envelope })
+      } else if (path === '/api/code/structure') await route.fulfill({ json: envelope })
+      else await route.fulfill({ status: 403 })
+    })
+    await page.goto('/code')
+    await page.getByTestId('code-context-snapshot').selectOption('selection')
+    await page.getByTestId('code-pin-context').click()
+    await expect(page.getByTestId('code-query-input')).toBeEnabled()
+    await page.clock.fastForward('00:50')
+    const storedPin = await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))
+    await page.getByTestId('index-intent-reindex').click()
+    await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'queued')
+    holdRead = true
+    if (boundary === 'search') {
+      await page.getByTestId('code-query-input').fill('old result')
+      await page.getByTestId('code-search-submit').click()
+    } else await page.getByRole('button', { name: boundary === 'status' ? 'Обновить статус' : 'Обновить разрешённые варианты', exact: true }).click()
+    await expect.poll(() => held).toBe(true)
+    await page.clock.fastForward('00:03')
+    await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'completed')
+    expect(catalogProofs).toHaveLength(boundary === 'contexts' ? 2 : 1)
+    await expect(page.getByTestId('code-context-pinned')).toContainText('Pinned snapshot')
+    expect(pins).toEqual(['selection'])
+    const heldResponse = page.waitForResponse(response => new URL(response.url()).pathname === `/api/code/${boundary}`)
+    if (invalidated) {
+      await page.clock.fastForward('00:08')
+      await expect(page.locator('.phase')).toHaveAttribute('data-state', 'denied')
+      await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+      holdRead = false
+      release()
+      await (await heldResponse).finished()
+      await page.clock.runFor(50)
+      await expect(page.locator('.phase')).toHaveAttribute('data-state', 'denied')
+      await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+      await expect(page.getByTestId('code-context-snapshot').getByRole('option', { name: 'Newly published snapshot' })).toHaveCount(0)
+      await expect(page.getByRole('button', { name: 'Обновить разрешённые варианты' })).toBeDisabled()
+      await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
+      expect(catalogProofs).toEqual(['proof'])
+      expect(pins).toEqual(['selection'])
+      return
+    }
+    holdRead = false
+    release()
+    await (await heldResponse).finished()
+    await expect(page.getByTestId('code-context-snapshot').getByRole('option', { name: 'Newly published snapshot' })).toHaveCount(1)
+    await expect(page.getByTestId('code-context-pinned')).toContainText('Pinned snapshot')
+    if (boundary === 'search') await expect(page.getByTestId('code-search-results')).toContainText('src/old-view.ts')
+    expect(await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))).toBe(storedPin)
+    expect(pins).toEqual(['selection'])
+    expect(catalogProofs).toEqual(boundary === 'contexts' ? ['proof', 'proof', 'proof'] : ['proof', 'proof'])
+    await page.getByTestId('code-context-snapshot').selectOption('new-selection')
+    await page.getByTestId('code-pin-context').click()
+    await expect(page.getByTestId('code-context-pinned')).toContainText('Newly published snapshot')
+    expect(pins).toEqual(['selection', 'new-selection'])
+  })
+}

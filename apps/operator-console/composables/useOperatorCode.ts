@@ -1,4 +1,4 @@
-import { onBeforeUnmount, onMounted, ref, unref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, unref, watch } from 'vue'
 import { operatorApiUrl } from './useOperatorApi'
 
 export type CodeBootstrapPhase = 'idle' | 'binding' | 'ready' | 'collision' | 'ambiguous' | 'reload-pending' | 'denied' | 'secure-origin-required' | 'identity-unavailable' | 'error'
@@ -895,6 +895,7 @@ export function useOperatorCode() {
   const sourceState = ref<CodePresentationState>(presentation('idle', 'Choose a released result to read an exact source span.'))
   const pending = ref(false)
   let contextualGeneration = 0
+  let deferredContextDiscovery: (() => boolean) | null = null
   const indexIntentState = ref<IndexIntentPresentationState>(indexIntentNotice('idle'))
   const indexIntentPending = ref(false)
   const indexIntentResume = ref<IndexIntentResume | null>(loadIndexIntentResume())
@@ -909,7 +910,7 @@ export function useOperatorCode() {
   let remountState: SpaRemount | null = null
 
   function bindingPayload(extra: Record<string, unknown> = {}): Record<string, unknown> | null {
-    if (unmounted || binding.value === null || bootstrapPhase.value !== 'ready' && bootstrapPhase.value !== 'collision') return null
+    if (unmounted || binding.value === null || bootstrapPhase.value !== 'ready' && bootstrapPhase.value !== 'collision' && bootstrapPhase.value !== 'ambiguous') return null
     return { tab_binding_id: binding.value.tabBindingId, document_proof: binding.value.documentProof, ...extra }
   }
 
@@ -920,6 +921,13 @@ export function useOperatorCode() {
     return () => !unmounted && generation === contextualGeneration && binding.value === current
       && (pinnedContext.value ?? remountState?.pinnedContext ?? null) === pinned
   }
+
+  watch(pending, (busy) => {
+    if (busy || deferredContextDiscovery === null) return
+    const ownsRequest = deferredContextDiscovery
+    deferredContextDiscovery = null
+    if (ownsRequest()) void discoverContext()
+  }, { flush: 'post' })
 
   function stopLeaseRenewal(): void {
     leaseRenewalGeneration += 1
@@ -1006,6 +1014,7 @@ export function useOperatorCode() {
 
   function clearContextualResults(): void {
     contextualGeneration += 1
+    deferredContextDiscovery = null
     pending.value = false
     status.value = null
     structureEnvelope.value = null
@@ -1076,7 +1085,13 @@ export function useOperatorCode() {
       return
     }
     stopIndexIntentPolling()
-    if (intent.state === 'completed') await discoverContext()
+    if (intent.state === 'completed') {
+      if (pending.value) {
+        const generation = contextualGeneration
+        const current = binding.value
+        deferredContextDiscovery = () => !unmounted && generation === contextualGeneration && binding.value === current
+      } else await discoverContext()
+    }
   }
 
   function scheduleIndexIntentPoll(): void {

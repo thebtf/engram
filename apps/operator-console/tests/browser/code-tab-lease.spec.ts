@@ -6,6 +6,7 @@ const DOCUMENT_PROOF = 'proof-current'
 test('Code Explorer renews its live tab lease and leaves no renewal timer after teardown', async ({ page }) => {
   const handshakePayloads: unknown[] = []
   const leasePayloads: unknown[] = []
+  let releaseLease: () => void = () => { }
 
   await page.clock.install({ time: new Date('2026-09-15T00:00:00Z') })
   await page.addInitScript(() => {
@@ -35,6 +36,7 @@ test('Code Explorer renews its live tab lease and leaves no renewal timer after 
     }
     if (pathname === `/api/code/tabs/${TAB_BINDING_ID}/lease`) {
       leasePayloads.push(route.request().postDataJSON())
+      await new Promise<void>(resolve => { releaseLease = resolve })
       await route.fulfill({ status: 204 })
       return
     }
@@ -50,13 +52,21 @@ test('Code Explorer renews its live tab lease and leaves no renewal timer after 
   await expect.poll(() => handshakePayloads).toHaveLength(1)
   expect(handshakePayloads[0]).not.toHaveProperty('ambiguous')
 
+  const firstLeaseResponse = page.waitForResponse(response => new URL(response.url()).pathname === `/api/code/tabs/${TAB_BINDING_ID}/lease`)
   await page.clock.fastForward('01:00')
   await expect.poll(() => leasePayloads).toEqual([{ document_proof: DOCUMENT_PROOF }])
+  releaseLease()
+  await firstLeaseResponse
+  await page.clock.runFor(50)
+  const secondLeaseResponse = page.waitForResponse(response => new URL(response.url()).pathname === `/api/code/tabs/${TAB_BINDING_ID}/lease`)
   await page.clock.fastForward('01:00')
   await expect.poll(() => leasePayloads).toEqual([
     { document_proof: DOCUMENT_PROOF },
     { document_proof: DOCUMENT_PROOF },
   ])
+  releaseLease()
+  await secondLeaseResponse
+  await page.clock.runFor(50)
 
   await page.goto('/settings')
   await page.clock.fastForward('04:00')
@@ -70,6 +80,10 @@ for (const navigationType of ['back_forward', 'unknown'] as const) {
   test(`Code Explorer treats ${navigationType} navigation as a fresh ambiguous binding`, async ({ page }) => {
     const handshakePayloads: Record<string, unknown>[] = []
     let resumes = 0
+    const pins: unknown[] = []
+    const contextualReads: string[] = []
+    const authorized = { source_ref: 'source-engram', checkout_ref: 'checkout-current', repository: 'Engram', working_copy: 'Operator desk', indexed_snapshot: { label: 'Authorized snapshot' }, view_ref: 'authorized-view', selection_ref: 'authorized-selection', index_intent_available: false }
+    await page.route('**/api/auth/me', route => route.fulfill({ json: { auth_disabled: true } }))
     await page.addInitScript((type) => {
       const original = performance.getEntriesByType.bind(performance)
       performance.getEntriesByType = (entryType) => entryType === 'navigation'
@@ -86,7 +100,13 @@ for (const navigationType of ['back_forward', 'unknown'] as const) {
         handshakePayloads.push(body)
         await route.fulfill({ json: { state: body.ambiguous ? 'TAB_BOOTSTRAP_AMBIGUOUS' : 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'new-resume', reload_token: 'new-reload' } })
       } else if (pathname === '/api/code/contexts') {
-        await route.fulfill({ json: { contexts: [] } })
+        await route.fulfill({ json: { contexts: [authorized] } })
+      } else if (pathname === `/api/code/tabs/${TAB_BINDING_ID}/context`) {
+        pins.push(route.request().postDataJSON())
+        await route.fulfill({ status: 204 })
+      } else if (pathname === '/api/code/status' || pathname === '/api/code/structure') {
+        contextualReads.push(pathname)
+        await route.fulfill(pathname.endsWith('/status') ? { json: { total_chunks: 0, embedded_chunks: 0, embedding: { coverage: 'none' } } } : { status: 403 })
       } else {
         await route.fulfill({ status: 500 })
       }
@@ -100,6 +120,20 @@ for (const navigationType of ['back_forward', 'unknown'] as const) {
     expect(handshakePayloads[0]).toHaveProperty('ambiguous', true)
     expect(handshakePayloads[0]).not.toHaveProperty('copied_tab_binding_id')
     expect(resumes).toBe(0)
+    const refresh = page.getByRole('button', { name: 'Обновить разрешённые варианты' })
+    await expect(refresh).toBeEnabled()
+    await expect(page.getByTestId('code-context-snapshot').getByRole('option', { name: 'Authorized snapshot' })).toHaveCount(1)
+    await expect(page.getByTestId('code-context-snapshot')).toHaveValue('')
+    await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
+    expect(pins).toEqual([])
+    expect(contextualReads).toEqual([])
+    await refresh.click()
+    await page.getByTestId('code-context-snapshot').selectOption('authorized-selection')
+    await page.getByTestId('code-pin-context').click()
+    await expect(page.getByTestId('code-context-pinned')).toContainText('Authorized snapshot')
+    await expect(page.getByTestId('code-status')).toBeVisible()
+    expect(pins).toEqual([{ document_proof: DOCUMENT_PROOF, selection_ref: 'authorized-selection' }])
+    expect(contextualReads).toContain('/api/code/status')
   })
 }
 
