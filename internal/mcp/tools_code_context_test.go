@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -275,6 +276,72 @@ func TestUCICodebaseContextSelectsRegisteredCheckoutWithoutView(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, bootstrap.Scope, checkout.Scope)
 	require.Equal(t, bootstrap.ProfileID, checkout.ProfileID)
+}
+
+func TestNoAuthCodeContextCallerUsesOnlyTechnicalScope(t *testing.T) {
+	ctx := auth.WithIdentity(ContextWithCodeClientInstance(ContextWithSession(context.Background(), "noauth-code-session"), "install-a"), auth.AuthDisabled())
+	input, err := codebaseContextCallerInput(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uci.NoAuthCodeRealm, input.AuthRealm)
+	require.Equal(t, uci.NoAuthCodePrincipal, input.Principal)
+	require.NotEqual(t, uci.NoAuthCodeWorkstation, input.WorkstationID)
+	require.Equal(t, "noauth-code-session", input.ClientSessionID)
+	other, err := codebaseContextCallerInput(auth.WithIdentity(ContextWithCodeClientInstance(ContextWithSession(context.Background(), "other-session"), "install-b"), auth.AuthDisabled()))
+	require.NoError(t, err)
+	require.NotEqual(t, input.WorkstationID, other.WorkstationID)
+	restarted, err := codebaseContextCallerInput(auth.WithIdentity(ContextWithCodeClientInstance(ContextWithSession(context.Background(), "restarted-session"), "install-a"), auth.AuthDisabled()))
+	require.NoError(t, err)
+	require.Equal(t, input.WorkstationID, restarted.WorkstationID)
+	_, err = codebaseContextCallerInput(auth.WithIdentity(ContextWithSession(context.Background(), "missing-install"), auth.AuthDisabled()))
+	require.Error(t, err)
+	authenticated, err := codebaseContextCallerInput(auth.WithIdentity(ContextWithCodeClientInstance(ContextWithSession(context.Background(), "authenticated"), "install-a"), auth.ClientWithPrincipal("read-write", "keycard-a", "browser-user/41", auth.PrincipalKindHuman)))
+	require.NoError(t, err)
+	require.NotEqual(t, uci.NoAuthCodeRealm, authenticated.AuthRealm)
+	require.NotEqual(t, uci.NoAuthCodePrincipal, authenticated.Principal)
+	require.NotEqual(t, input.WorkstationID, authenticated.WorkstationID)
+	_, err = codebaseContextCallerInput(auth.WithIdentity(ContextWithCodeClientInstance(ContextWithSession(context.Background(), "forged"), "install-a"), auth.Admin()))
+	require.Error(t, err)
+}
+
+func TestNoAuthCodeContextReconnectBoundsOwnersAndClearsDefaults(t *testing.T) {
+	fixture := newUCICodebaseContextFixture(t)
+	fixture.application.realm = uci.NoAuthCodeRealm
+	fixture.catalog.records[fixture.refA.CheckoutID] = uci.ContextRecord{Ref: fixture.refA, AuthRealm: uci.NoAuthCodeRealm}
+	fixture.authorizer.allowed[uci.NoAuthCodePrincipal] = map[string]bool{fixture.refA.CheckoutID: true}
+	workstation, valid := uci.NoAuthCodeWorkstationForInstance("reconnecting-install")
+	require.True(t, valid)
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = uci.IndexBinding{
+		Scope:     uci.IndexScope{SourceID: fixture.refA.SourceID, CheckoutID: fixture.refA.CheckoutID, IncarnationID: uciCodebaseContextTestIncarnationA},
+		ProfileID: fixture.refA.AnalysisProfileID, LocalRootID: "reconnecting-root", WorkstationID: workstation, Context: &fixture.refA,
+	}
+	caller := func(session string) context.Context {
+		return auth.WithIdentity(ContextWithCodeClientInstance(ContextWithSession(context.Background(), session), "reconnecting-install"), auth.AuthDisabled())
+	}
+	var activeHandle, oldestHandle string
+	for index := range codebaseContextMaxClients {
+		session := fmt.Sprintf("reconnect-%d", index)
+		payload := decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, caller(session), uciCodebaseContextSelectArgs(fixture.refA)))
+		if index == 0 {
+			activeHandle = payload["context_handle"].(string)
+		} else if index == 1 {
+			oldestHandle = payload["context_handle"].(string)
+		}
+	}
+	decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, caller("reconnect-0"), map[string]any{"action": "select", "context_handle": activeHandle}))
+	decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, caller("new-reconnect"), uciCodebaseContextSelectArgs(fixture.refA)))
+	require.Len(t, fixture.server.codebaseContextHandles, codebaseContextMaxClients)
+	_, selected := fixture.application.BoundSelector("reconnect-1")
+	require.False(t, selected, "eviction must clear the resolver default, not only opaque bytes")
+	_, selected = fixture.application.BoundSelector("reconnect-0")
+	require.True(t, selected, "an actively used client survives reconnect pressure")
+	requireUCICodebaseContextError(t, fixture, callUCICodebaseContext(t, fixture.server, caller("reconnect-1"), map[string]any{"action": "select", "context_handle": oldestHandle}), string(uci.ContextMismatch))
+	requireUCICodebaseContextError(t, fixture, callUCICodebaseContext(t, fixture.server, caller("reconnect-1"), map[string]any{"action": "resolve"}), string(uci.ContextRequired))
+	fixture.discovery.candidates["list-reconnect"] = []uci.ContextRef{fixture.refA}
+	requireUCICodebaseContextList(t, decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, caller("list-reconnect"), map[string]any{"action": "list"})), 1)
+	require.Len(t, fixture.server.codebaseContextHandles, codebaseContextMaxClients, "list-only reconnects use the same owner bound")
+	_, selected = fixture.application.BoundSelector("reconnect-2")
+	require.False(t, selected)
+	decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, caller("reconnect-0"), map[string]any{"action": "select", "context_handle": activeHandle}))
 }
 
 func uciCodebaseContextClient(sessionID, keycardID, principal string) context.Context {

@@ -35,6 +35,98 @@ func TestCanonicalUCILocalGitLocatorPreservesWorktreeBoundaries(t *testing.T) {
 	}
 }
 
+func TestRegisterLocalGitLabelsDistinguishRealmsWorktreesAndDevices(t *testing.T) {
+	for _, realm := range []string{uci.NoAuthCodeRealm, "client"} {
+		t.Run(realm, func(t *testing.T) {
+			db, store := openUCIContextMigrationStore(t)
+			ctx := context.Background()
+			principal := uci.NoAuthCodePrincipal
+			var ownerID int64
+			if realm == "client" {
+				owner := &User{Email: "chooser-" + uuid.NewString() + "@example.test", PasswordHash: "fixture-hash", Role: DashboardRoleOperator, CreatedAt: time.Now().UTC()}
+				require.NoError(t, db.Create(owner).Error)
+				ownerID, principal = owner.ID, fmt.Sprintf("browser-user/%d", owner.ID)
+			}
+			input := RegisterLocalGitInput{AuthRealm: realm, Principal: principal, WorkstationID: "device-one", SourceLabel: "repository", Locator: "file:///private/one/repo"}
+			first, err := store.RegisterLocalGit(ctx, input)
+			require.NoError(t, err)
+			input.Locator = "file:///private/two/repo"
+			second, err := store.RegisterLocalGit(ctx, input)
+			require.NoError(t, err)
+			input.Locator = "file:///private/one/repo"
+			input.WorkstationID = "device-two"
+			third, err := store.RegisterLocalGit(ctx, input)
+			require.NoError(t, err)
+			labels := make(map[string]string)
+			for _, registered := range []RegisteredLocalGit{first, second, third} {
+				var label string
+				require.NoError(t, db.Raw("SELECT COALESCE(display_name, '') FROM ci_checkouts WHERE checkout_id = ?", registered.CheckoutID).Scan(&label).Error)
+				require.NotEmpty(t, label)
+				labels[registered.CheckoutID] = label
+				require.True(t, validBrowserCodeCheckoutDisplayLabel(label))
+				require.NotContains(t, label, "/private/")
+				require.NotContains(t, label, principal)
+			}
+			require.Contains(t, labels[first.CheckoutID], "one › repo · Device ")
+			require.Contains(t, labels[second.CheckoutID], "two › repo · Device ")
+			require.NotEqual(t, labels[first.CheckoutID], labels[second.CheckoutID])
+			require.NotEqual(t, labels[first.CheckoutID], labels[third.CheckoutID])
+			if realm == uci.NoAuthCodeRealm {
+				entries, err := NewBrowserCodeContextStore(db).ListNoAuthCatalog(ctx)
+				require.NoError(t, err)
+				require.Len(t, entries, 3)
+				for _, entry := range entries {
+					require.Equal(t, labels[entry.CheckoutID], entry.CheckoutLabel)
+				}
+			} else {
+				grants := NewBrowserReadGrantStore(db)
+				choices, err := grants.ListOwnerChoices(ctx, ownerID, principal)
+				require.NoError(t, err)
+				require.Len(t, choices, 3)
+				for _, choice := range choices {
+					require.Equal(t, labels[choice.ChoiceRef], choice.WorkingCopyLabel)
+				}
+				_, err = grants.SetOwnerChoiceLabel(ctx, ownerID, principal, first.CheckoutID, "My studio worktree")
+				require.NoError(t, err)
+			}
+			input.WorkstationID = "device-one"
+			replayed, err := store.RegisterLocalGit(ctx, input)
+			require.NoError(t, err)
+			require.Equal(t, first, replayed)
+			input.SourceID, input.SourceLabel = first.SourceID, ""
+			replayedByID, err := store.RegisterLocalGit(ctx, input)
+			require.NoError(t, err)
+			require.Equal(t, first, replayedByID)
+			var after string
+			require.NoError(t, db.Raw("SELECT COALESCE(display_name, '') FROM ci_checkouts WHERE checkout_id = ?", first.CheckoutID).Scan(&after).Error)
+			if realm == "client" {
+				require.Equal(t, "My studio worktree", after)
+			} else {
+				require.Equal(t, labels[first.CheckoutID], after)
+			}
+		})
+	}
+}
+
+func TestRegisterLocalGitLabelBoundsUnsafeCanonicalComponents(t *testing.T) {
+	db, store := openUCIContextMigrationStore(t)
+	input := RegisterLocalGitInput{
+		AuthRealm: uci.NoAuthCodeRealm, Principal: uci.NoAuthCodePrincipal,
+		WorkstationID: "device-one", SourceLabel: "repository",
+		Locator: (&url.URL{Scheme: "file", Path: "/private/" + strings.Repeat("漫", 100) + "/repo\n\u202esecret"}).String(),
+	}
+	registered, err := store.RegisterLocalGit(context.Background(), input)
+	require.NoError(t, err)
+	var label string
+	require.NoError(t, db.Raw("SELECT COALESCE(display_name, '') FROM ci_checkouts WHERE checkout_id = ?", registered.CheckoutID).Scan(&label).Error)
+	require.True(t, validBrowserCodeCheckoutDisplayLabel(label))
+	require.LessOrEqual(t, len(label), 256)
+	require.Contains(t, label, "repo--secret")
+	require.NotContains(t, label, "\n")
+	require.NotContains(t, label, "\u202e")
+	require.NotContains(t, label, "/private/")
+}
+
 func TestRegisterLocalGitUnboundLegacyCheckoutRefusesRecovery(t *testing.T) {
 	for _, withWrongView := range []bool{false, true} {
 		name := "zero_views"
@@ -94,6 +186,219 @@ func TestRegisterLocalGitUnboundLegacyCheckoutRefusesRecovery(t *testing.T) {
 			require.Equal(t, newIdentity, replayed)
 		})
 	}
+}
+
+func TestRegisterLocalGitParserProfileAdmitsCrossHostSemanticArtifact(t *testing.T) {
+	db, store := openUCIContextMigrationStore(t)
+	ctx := context.Background()
+	parser := true
+	registered, err := store.RegisterLocalGit(ctx, RegisterLocalGitInput{
+		AuthRealm: "client", Principal: "browser-user/41", WorkstationID: "keycard-41",
+		SourceLabel: "cross-host-parser", Locator: "file:///worktrees/cross-host-parser", ParserBundle: &parser,
+	})
+	require.NoError(t, err)
+	var stored UCIAnalysisProfile
+	require.NoError(t, db.Where("profile_id = ?", registered.ProfileID).First(&stored).Error)
+	require.Equal(t, string(uci.TreeSitterSemanticContractDigest()), stored.ParserBundleDigest)
+
+	goProfile := uci.GoExtractionProfile{ProfileKey: "go-structure-v1", ParserKey: "go-parser-v1"}
+	profile, err := uci.GoIndexAdmissionArtifactProfile(goProfile)
+	require.NoError(t, err)
+	profile.ExtractionProfileDigest = uci.TreeSitterSemanticContractDigest()
+	body := []byte("package crosshost\n\nfunc First() {}\n")
+	artifact, err := uci.NewIndexAdmissionArtifactFromGo(registered.SourceID, profile, body, uci.ExtractGo(body, goProfile))
+	require.NoError(t, err)
+	frame := uci.IndexAdmissionFrame{
+		Version:   uci.IndexAdmissionFrameVersion,
+		Profile:   uci.IndexAdmissionProfile{ID: registered.ProfileID},
+		Artifacts: []uci.IndexAdmissionArtifact{artifact},
+		Memberships: []uci.IndexAdmissionMembership{{
+			PathKey: "first.go", DisplayPath: "first.go", Mode: "100644",
+			State: uci.IndexAdmissionMembershipPresent, ArtifactID: &artifact.ArtifactID,
+		}},
+	}
+	projection := NewUCIProjectionStore(db)
+	_, err = projection.AdmitIndexFrames(ctx, registered.SourceID, registered.ProfileID, []uci.IndexAdmissionFrame{frame})
+	require.NoError(t, err)
+	parserFrame := uciIndexAdmissionTypeScriptFixtureFrame(t, &uciPublicationFixture{
+		source: &UCISource{SourceID: registered.SourceID}, profile: &stored,
+	})
+	parserFrame.Artifacts[0].Profile.GrammarDigest = uci.TreeSitterBundleDigest()
+	badGrammarID, err := uci.DeriveIndexAdmissionArtifactID(registered.SourceID, parserFrame.Artifacts[0].ContentDigest, parserFrame.Artifacts[0].Profile)
+	require.NoError(t, err)
+	parserFrame.Artifacts[0].FactsDigest, err = uci.DigestIndexAdmissionArtifactFacts(parserFrame.Artifacts[0])
+	require.NoError(t, err)
+	parserFrame.Artifacts[0].ArtifactID = badGrammarID
+	parserFrame.Memberships[0].ArtifactID = &badGrammarID
+	_, err = projection.AdmitIndexFrames(ctx, registered.SourceID, registered.ProfileID, []uci.IndexAdmissionFrame{parserFrame})
+	require.ErrorContains(t, err, "artifact grammar does not match authorized parser contract")
+	validParserFrame := uciIndexAdmissionTypeScriptFixtureFrame(t, &uciPublicationFixture{
+		source: &UCISource{SourceID: registered.SourceID}, profile: &stored,
+	})
+	_, err = projection.AdmitIndexFrames(ctx, registered.SourceID, registered.ProfileID, []uci.IndexAdmissionFrame{validParserFrame})
+	require.NoError(t, err)
+	wrongProfile := profile
+	wrongProfile.ExtractionProfileDigest = uci.TreeSitterBundleDigest()
+	wrongArtifact, err := uci.NewIndexAdmissionArtifactFromGo(registered.SourceID, wrongProfile, body, uci.ExtractGo(body, goProfile))
+	require.NoError(t, err)
+	wrong := frame
+	wrong.Artifacts = []uci.IndexAdmissionArtifact{wrongArtifact}
+	wrong.Memberships = []uci.IndexAdmissionMembership{{
+		PathKey: "first.go", DisplayPath: "first.go", Mode: "100644",
+		State: uci.IndexAdmissionMembershipPresent, ArtifactID: &wrongArtifact.ArtifactID,
+	}}
+	_, err = projection.AdmitIndexFrames(ctx, registered.SourceID, registered.ProfileID, []uci.IndexAdmissionFrame{wrong})
+	require.ErrorContains(t, err, "artifact profile does not match authorized profile")
+}
+
+func TestRegisterLocalGitGoOnlyProfileStagesNativeArtifactAndView(t *testing.T) {
+	db, store := openUCIContextMigrationStore(t)
+	ctx := context.Background()
+	registered, err := store.RegisterLocalGit(ctx, RegisterLocalGitInput{
+		AuthRealm: "client", Principal: "browser-user/41", WorkstationID: "keycard-41",
+		SourceLabel: "native-go", Locator: "file:///worktrees/native-go",
+	})
+	require.NoError(t, err)
+	var stored UCIAnalysisProfile
+	require.NoError(t, db.Where("profile_id = ?", registered.ProfileID).First(&stored).Error)
+	goProfile := uci.GoExtractionProfile{ProfileKey: "go-structure-v1", ParserKey: "go-parser-v1"}
+	profile, err := uci.GoIndexAdmissionArtifactProfile(goProfile)
+	require.NoError(t, err)
+	require.Equal(t, string(profile.ExtractionProfileDigest), stored.ParserBundleDigest)
+	body := []byte("package native\nfunc Native() {}\n")
+	artifact, err := uci.NewIndexAdmissionArtifactFromGo(registered.SourceID, profile, body, uci.ExtractGo(body, goProfile))
+	require.NoError(t, err)
+	frame := uci.IndexAdmissionFrame{Version: uci.IndexAdmissionFrameVersion, Profile: uci.IndexAdmissionProfile{ID: registered.ProfileID}, Artifacts: []uci.IndexAdmissionArtifact{artifact}, Memberships: []uci.IndexAdmissionMembership{{PathKey: "native.go", DisplayPath: "native.go", Mode: "100644", State: uci.IndexAdmissionMembershipPresent, ArtifactID: &artifact.ArtifactID}}}
+	_, err = NewUCIProjectionStore(db).AdmitIndexFrames(ctx, registered.SourceID, registered.ProfileID, []uci.IndexAdmissionFrame{frame})
+	require.NoError(t, err)
+	checkout, err := store.GetCheckout(ctx, registered.CheckoutID)
+	require.NoError(t, err)
+	view, err := store.CreateView(ctx, newUCIContextMigrationViewInput(checkout, &stored, 1, uuid.NewString()))
+	require.NoError(t, err)
+	require.Equal(t, registered.ProfileID, view.ProfileID)
+}
+
+func TestRegisterLocalGitLegacyParserReplayPreservesPinnedViewAndStagesNewProfile(t *testing.T) {
+	db, store := openUCIContextMigrationStore(t)
+	ctx := context.Background()
+	parser := true
+	in := RegisterLocalGitInput{
+		AuthRealm: "client", Principal: "browser-user/41", WorkstationID: "keycard-41",
+		SourceLabel: "legacy-parser", Locator: "file:///worktrees/legacy-parser", ParserBundle: &parser,
+	}
+	original, err := store.RegisterLocalGit(ctx, in)
+	require.NoError(t, err)
+	legacyDigest := string(uci.TreeSitterBundleDigest())
+	require.NotEqual(t, string(uci.TreeSitterSemanticContractDigest()), legacyDigest)
+	require.NoError(t, db.Model(&UCIAnalysisProfile{}).Where("profile_id = ?", original.ProfileID).Update("parser_bundle_digest", legacyDigest).Error)
+	checkout, err := store.GetCheckout(ctx, original.CheckoutID)
+	require.NoError(t, err)
+	var legacyProfile UCIAnalysisProfile
+	require.NoError(t, db.Where("profile_id = ?", original.ProfileID).First(&legacyProfile).Error)
+	oldView, err := store.CreateView(ctx, newUCIContextMigrationViewInput(checkout, &legacyProfile, 1, uuid.NewString()))
+	require.NoError(t, err)
+
+	for index, replay := range []RegisterLocalGitInput{func() RegisterLocalGitInput {
+		omitted := in
+		omitted.ParserBundle = nil
+		omitted.DefaultParserBundle = true
+		return omitted
+	}(), in} {
+		updated, replayErr := store.RegisterLocalGit(ctx, replay)
+		require.NoError(t, replayErr)
+		require.Equal(t, original.SourceID, updated.SourceID)
+		require.Equal(t, original.CheckoutID, updated.CheckoutID)
+		require.Equal(t, original.IncarnationID, updated.IncarnationID)
+		require.NotEqual(t, original.ProfileID, updated.ProfileID)
+		var next UCIAnalysisProfile
+		require.NoError(t, db.Where("profile_id = ?", updated.ProfileID).First(&next).Error)
+		require.Equal(t, string(uci.TreeSitterSemanticContractDigest()), next.ParserBundleDigest)
+		var pinned UCIView
+		require.NoError(t, db.Where("view_id = ?", oldView.ViewID).First(&pinned).Error)
+		require.Equal(t, original.ProfileID, pinned.ProfileID)
+		var old UCIAnalysisProfile
+		require.NoError(t, db.Where("profile_id = ?", original.ProfileID).First(&old).Error)
+		require.Equal(t, legacyDigest, old.ParserBundleDigest)
+		if index != 0 {
+			continue
+		}
+		body := []byte("package legacy\nfunc NewVersion() {}\n")
+		goProfile := uci.GoExtractionProfile{ProfileKey: "go-structure-v1", ParserKey: "go-parser-v1"}
+		admission, profileErr := uci.GoIndexAdmissionArtifactProfile(goProfile)
+		require.NoError(t, profileErr)
+		admission.ExtractionProfileDigest = uci.TreeSitterSemanticContractDigest()
+		artifact, artifactErr := uci.NewIndexAdmissionArtifactFromGo(updated.SourceID, admission, body, uci.ExtractGo(body, goProfile))
+		require.NoError(t, artifactErr)
+		frame := uci.IndexAdmissionFrame{Version: uci.IndexAdmissionFrameVersion, Profile: uci.IndexAdmissionProfile{ID: updated.ProfileID}, Artifacts: []uci.IndexAdmissionArtifact{artifact}, Memberships: []uci.IndexAdmissionMembership{{PathKey: "new.go", DisplayPath: "new.go", Mode: "100644", State: uci.IndexAdmissionMembershipPresent, ArtifactID: &artifact.ArtifactID}}}
+		_, stageErr := NewUCIProjectionStore(db).AdmitIndexFrames(ctx, updated.SourceID, updated.ProfileID, []uci.IndexAdmissionFrame{frame})
+		require.NoError(t, stageErr)
+		checkout, checkoutErr := store.GetCheckout(ctx, updated.CheckoutID)
+		require.NoError(t, checkoutErr)
+		_, viewErr := store.CreateView(ctx, newUCIContextMigrationViewInput(checkout, &next, 2, uuid.NewString()))
+		require.NoError(t, viewErr)
+	}
+}
+
+func TestRegisterLocalGitLegacyParserTransitionPublishesOverPinnedView(t *testing.T) {
+	fixture := openUCIPublicationFixture(t)
+	ctx := context.Background()
+	legacyDigest := string(uci.TreeSitterBundleDigest())
+	require.NoError(t, fixture.db.Model(&UCIAnalysisProfile{}).Where("profile_id = ?", fixture.profile.ProfileID).Update("parser_bundle_digest", legacyDigest).Error)
+	fixture.profile.ParserBundleDigest = legacyDigest
+	require.NoError(t, fixture.db.Model(&UCICheckout{}).Where("checkout_id = ?", fixture.checkout.CheckoutID).Update("registration_profile_id", fixture.profile.ProfileID).Error)
+	legacy := fixture.admitArtifact(t, fixture.source.SourceID, "legacy", "func Legacy() {}\n", UCIParseArtifactComplete)
+	oldMembership := []uci.IndexMembership{uciPublicationPresentMembership("old.go", legacy)}
+	oldEdges := []uci.IndexEdgeReplacement{{SourcePath: "old.go"}}
+	oldDraft := newUCIPublicationDraft([]uci.IndexPart{uciPublicationPart([]uciPublicationArtifact{legacy}, oldMembership, nil, oldEdges)}, oldMembership, oldEdges)
+	caller := fixture.caller("legacy-owner")
+	_, pinned := fixture.publish(t, fixture.publisher, caller, fixture.publishInput("legacy-build", fixture.checkout, fixture.profile.ProfileID, nil, uci.IndexManifestFull, uci.IndexJobInitial, oldDraft))
+	parser := true
+	in := RegisterLocalGitInput{AuthRealm: fixture.realm, Principal: fixture.principal, WorkstationID: fixture.checkout.WorkstationID, SourceID: fixture.source.SourceID, Locator: fixture.checkout.LocatorRef, ParserBundle: &parser}
+	updated, err := fixture.context.RegisterLocalGit(ctx, in)
+	require.NoError(t, err)
+	require.NotEqual(t, fixture.profile.ProfileID, updated.ProfileID)
+	var semantic UCIAnalysisProfile
+	require.NoError(t, fixture.db.Where("profile_id = ?", updated.ProfileID).First(&semantic).Error)
+	require.Equal(t, string(uci.TreeSitterSemanticContractDigest()), semantic.ParserBundleDigest)
+	oldView, err := fixture.context.GetCurrentView(ctx, fixture.checkout.CheckoutID)
+	require.NoError(t, err)
+	require.Equal(t, pinned.Context.ViewID, oldView.ViewID)
+	require.Equal(t, fixture.profile.ProfileID, oldView.ProfileID)
+	var oldFact UCIParseArtifact
+	require.NoError(t, fixture.db.Where("artifact_id = ?", legacy.Artifact.ArtifactID).First(&oldFact).Error)
+	require.Equal(t, legacyDigest, oldFact.ExtractionProfileDigest)
+
+	forged := fixture.beginInput("forged-parent", fixture.checkout, updated.ProfileID, uciPublicationParent(pinned), uci.IndexManifestFull, uci.IndexJobReconcile)
+	forged.ExpectedParent.ViewID = uuid.NewString()
+	_, err = fixture.publisher.Begin(ctx, caller, forged)
+	require.Error(t, err)
+	forged = fixture.beginInput("forged-profile", fixture.checkout, updated.ProfileID, uciPublicationParent(pinned), uci.IndexManifestFull, uci.IndexJobReconcile)
+	forged.ExpectedParent.AnalysisProfileID = uuid.NewString()
+	_, err = fixture.publisher.Begin(ctx, caller, forged)
+	require.Error(t, err)
+
+	fixture.profile = &semantic
+	frame := uciIndexAdmissionFixtureFrame(t, fixture, "next.go", "package next\nfunc Next() {}\n")
+	_, err = fixture.projection.AdmitIndexFrames(ctx, updated.SourceID, updated.ProfileID, []uci.IndexAdmissionFrame{frame})
+	require.NoError(t, err)
+	nextArtifact := fixture.admitArtifact(t, fixture.source.SourceID, "successor", "func Successor() {}\n", UCIParseArtifactComplete)
+	nextMembership := []uci.IndexMembership{uciPublicationPresentMembership("next.go", nextArtifact)}
+	nextEdges := []uci.IndexEdgeReplacement{{SourcePath: "next.go"}}
+	nextDraft := newUCIPublicationDraft([]uci.IndexPart{uciPublicationPart([]uciPublicationArtifact{nextArtifact}, nextMembership, nil, nextEdges)}, nextMembership, nextEdges)
+	_, successor := fixture.publish(t, fixture.publisher, caller, fixture.publishInput("semantic-build", fixture.checkout, updated.ProfileID, uciPublicationParent(pinned), uci.IndexManifestFull, uci.IndexJobReconcile, nextDraft))
+	require.Equal(t, pinned.Context.Generation+1, successor.Context.Generation)
+	require.NotEqual(t, pinned.Context.ViewID, successor.Context.ViewID)
+	oldView, err = fixture.context.GetView(ctx, pinned.Context.ViewID)
+	require.NoError(t, err)
+	require.Equal(t, legacyDigest, oldFact.ExtractionProfileDigest)
+	var oldMembershipRow UCIMembership
+	require.NoError(t, fixture.db.Where("checkout_id = ? AND path_key = ? AND valid_from_generation <= ? AND (valid_to_generation IS NULL OR valid_to_generation > ?)", fixture.checkout.CheckoutID, "old.go", pinned.Context.Generation, pinned.Context.Generation).First(&oldMembershipRow).Error)
+	require.NotNil(t, oldMembershipRow.ArtifactID)
+	require.Equal(t, legacy.Artifact.ArtifactID, *oldMembershipRow.ArtifactID)
+	require.Equal(t, pinned.Context.AnalysisProfileID, oldView.ProfileID)
+	current, err := fixture.context.GetCurrentView(ctx, fixture.checkout.CheckoutID)
+	require.NoError(t, err)
+	require.Equal(t, successor.Context.ViewID, current.ViewID)
 }
 
 func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
@@ -198,7 +503,7 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	require.NoError(t, err)
 	var parserProfile UCIAnalysisProfile
 	require.NoError(t, db.Where("profile_id = ?", parserCheckout.ProfileID).First(&parserProfile).Error)
-	require.Equal(t, string(uci.TreeSitterBundleDigest()), parserProfile.ParserBundleDigest)
+	require.Equal(t, string(uci.TreeSitterSemanticContractDigest()), parserProfile.ParserBundleDigest)
 	legacyReplay := parserRequest
 	legacyReplay.ParserBundle = nil
 	replayedParser, err := store.RegisterLocalGit(ctx, legacyReplay)
@@ -212,7 +517,7 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	require.NoError(t, err)
 	var automaticProfile UCIAnalysisProfile
 	require.NoError(t, db.Where("profile_id = ?", automatic.ProfileID).First(&automaticProfile).Error)
-	require.Equal(t, string(uci.TreeSitterBundleDigest()), automaticProfile.ParserBundleDigest)
+	require.Equal(t, string(uci.TreeSitterSemanticContractDigest()), automaticProfile.ParserBundleDigest)
 	defaultParser.DefaultParserBundle = false
 	replayedAutomatic, err := store.RegisterLocalGit(ctx, defaultParser)
 	require.NoError(t, err)

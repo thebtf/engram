@@ -33,6 +33,7 @@ Engram решает эту проблему, оставляя только те 
 
 | Версия | Основное изменение |
 |--------|-------------------|
+| **Кандидат v6.50.1** | **Operator Workspace (Feature 011 D-A)** — путь Home → Workspace для настроенного однопользовательского HTTP LAN с отключённой авторизацией. Проверки исходников не подтверждают установку; см. [руководство оператора](docs/operating-engram.md). |
 | **v6.38.0** | **V7 Meta-memory Discovery (ENG-V7-S2)** — content-free MCP-инструмент `know_about`, S2 `CandidateProposer` и session-start `meta_summary` за v7-флагами. |
 | **v6.37.0** | **V7 State Subsystem (ENG-V7-S1)** — v7-адаптер `StateWriter` и усиленная проверка bounded native state resume. |
 | **v6.32.0** | **Usefulness / Noise Review Loop (CR-008, MPL-3)** — packet-centric bounded review queue с явными empty/gated/error/sparse состояниями, раздельные preview/apply, атомарный snapshot+audit-backed suppress/preserve, честные метрики. |
@@ -45,18 +46,11 @@ Engram решает эту проблему, оставляя только те 
 
 Полный список изменений — в разделе [Releases](https://github.com/thebtf/engram/releases).
 
-### Two-Tier Token Model (v6)
+### Режим авторизации
 
-Engram v6 разделяет две credential tiers, каждая жёстко привязана к своему host class:
+Текущий однопользовательский путь использует `ENGRAM_AUTH_DISABLED=true` на сервере и настроенный HTTP LAN origin. Для него не нужны вход в браузер, выпуск keycard, браузерные grants, HTTPS или обратный прокси. Используйте только доверенную сеть. В режиме с авторизацией разделение операторского токена и workstation keycard, браузерная личность и явные права чтения сохраняются; этот режим пока не входит в данное руководство по Workspace. Не передавайте операторский токен на рабочую станцию.
 
-| Tier | Name | Lives in | Purpose | Issuance |
-|---|---|---|---|---|
-| **1 — Operator key** | `ENGRAM_AUTH_ADMIN_TOKEN` | Только server-host environment (Docker, compose) | Admin-grade доступ для migrations, server-internal RPC и dashboard bootstrap | Оператор задаёт на сервере |
-| **2 — Worker keycard** | `ENGRAM_TOKEN` | Окружение рабочей станции или универсальная конфигурация плагина | Daemon ↔ server gRPC и обычные MCP tool calls | Выпускается через `/access` в авторизованной admin-сессии браузера |
-
-Operator key никогда не должен попадать на рабочую станцию. Worker keycard никогда не должен жить на серверном хосте.
-
-Кодовый Workspace: [включение, диагностика и проверка F1–F7](docs/operating-engram.md). Текущие MCP `codebase_*` работают через UCI и не являются устаревшими; они отдельно от браузерных grants. [Quickstart Feature 011](specs/011-operator-code-console/quickstart.md) готовит disposable acceptance-fixture и не заменяет инструкцию эксплуатации. Русский README в остальных разделах остаётся несинхронизированным с английским.
+Для кодового Workspace используйте [инструкцию по настройке и проверке F1–F7](docs/operating-engram.md). Текущие MCP-инструменты `codebase_*` работают через UCI. Остальные разделы этого перевода не заменяют английскую документацию по старым возможностям.
 <!-- redoc:end:whats-new -->
 
 ---
@@ -151,7 +145,7 @@ graph TB
 <!-- redoc:start:quick-start -->
 ## Быстрый старт
 
-Для сборки локального Compose-стека нужны Docker с Compose, пароль PostgreSQL и отдельный операторский токен. Три имени образов и версия сборки обязательны даже при сборке из исходников:
+Для локального Compose-стека нужны Docker с Compose и пароль PostgreSQL. Для однопользовательского HTTP LAN задайте `ENGRAM_AUTH_DISABLED=true` в `.env`. Три имени образов и версия сборки обязательны даже при сборке из исходников:
 
 ```bash
 git clone https://github.com/thebtf/engram.git
@@ -164,7 +158,7 @@ ENGRAM_OPERATOR_IMAGE=engram-local-operator-console
 ENGRAM_POSTGRES_IMAGE=engram-local-postgres
 ENGRAM_BUILD_VERSION=sha-$commit
 EOF
-# Перед запуском задайте в .env POSTGRES_PASSWORD и ENGRAM_AUTH_ADMIN_TOKEN.
+# Перед запуском задайте POSTGRES_PASSWORD и ENGRAM_AUTH_DISABLED=true в .env.
 docker compose up -d --build
 docker compose ps
 ```
@@ -188,16 +182,20 @@ docker compose logs --tail=100 server
 /plugin install engram
 ```
 
-Задайте переменные окружения (считываются Claude Code при запуске):
+Задайте рабочей станции `ENGRAM_URL` как настроенный адрес сервера без `/mcp`; для `ENGRAM_AUTH_DISABLED=true` токен не нужен:
 
 ```bash
-# Linux/macOS: добавьте в профиль shell
-# Windows: задайте как системные переменные окружения
-ENGRAM_URL=http://your-server:37777
-ENGRAM_TOKEN=engram_your_workstation_keycard
+export ENGRAM_URL=http://your-server:37777
 ```
 
-В авторизованной admin-сессии выпустите worker keycard в разделе `http://your-server:37777/access`. Настройте его через штатный `/engram:setup` или конфигурацию своего клиента и перезапустите именно этот клиент. Для кодового Workspace нужны дополнительные шаги из [операторского руководства](docs/operating-engram.md); наличие памяти не означает готовность индекса.
+Для нового Git-репозитория из его корня выполните `engram project init --name "Example Workspace"` **без подключения к серверу**. Затем явно выполните `git add -- .engram-project` и `git commit -m "Initialize Engram project anchor"`. Инициализация не добавляет файл в Git. Не заменяйте старый маркер: новая регистрация Source не переносит прежние memories и issues. Установленный плагин подключайте отдельно от старого клиента памяти.
+
+1. Настройте `ENGRAM_URL` как HTTP LAN-адрес сервера **без** `/mcp`. Для выбранного режима `ENGRAM_AUTH_DISABLED=true` токен, keycard, вход в браузер, grants, HTTPS и прокси не нужны. В новой обычной агентской сессии проверьте наличие шести инструментов: `codebase_context`, `codebase_index`, `codebase_status`, `codebase_search`, `codebase_graph`, `codebase_read`.
+2. В копии A вызовите `codebase_context` с `{"action":"register","source_label":"my-repository","locator":"file:///absolute/local/worktree-A"}`. Сохраните **выданный** `source_id` и `context_handle`. Для копии B вызовите `{"action":"register","source_id":"<source_id из ответа A>","locator":"file:///absolute/local/worktree-B"}`. Пути принадлежат локальному daemon; не вводите их в браузер. Не угадывайте идентификаторы.
+3. Для каждой копии вызовите `codebase_status` с её `context_handle`, затем `codebase_index` с `{"context_handle":"<выданный handle нужной копии>"}`. Ответ содержит `run_id`, а **не** готовый View. Следите за результатом через daemon-side `codebase_status` с `{"context_handle":"<handle>","after_barrier":{"token":"<run_id>","wait_ms":5000}}`. Дождитесь публикации View и готовности кодовых эмбеддингов. Провайдер `ENGRAM_EMBEDDING_URL` укажите базовым URL (допустим суффикс `/v1`), а `ENGRAM_EMBEDDING_MODEL` должен выдавать 1536-мерные векторы. Если job завершился ошибкой, проверьте её код, провайдер и установленную модель; старый опубликованный View не заменяйте.
+4. На настроенном HTTP LAN-адресе консоли откройте **Обзор → Рабочее место**. Выберите **Репозиторий → Рабочая копия → Снимок индекса** и нажмите **Закрепить выбранный View**. При одинаковых именах выбирайте репозиторий по числу индексированных копий, а копию по числу снимков. Для пустой копии используйте доступное **Индексировать копию**, затем обновите варианты и отдельно закрепите опубликованный снимок. В интерфейсе проверьте свежесть, покрытие, число готовых эмбеддингов и состояние job. Общее состояние сервера не означает готовность выбранного View.
+5. Задайте смысловой запрос без имени известной функции. В результатах проверьте режим `vector` или `hybrid`: `lexical` означает деградацию, а не доказательство семантики. Откройте **Факты графа**, выберите прямую или обратную связь, проверьте тип и точность доказательства, нажмите **Прочитать исходник** для того же закреплённого снимка. Отсутствие динамической связи не доказывает отсутствие зависимости; Go проверен отдельно от JS, TS и TSX, которым нужен установленный совместимый parser bundle. Доступность чтения текста не доказывает граф для языка.
+6. Откройте копию B в другой вкладке и закрепите её View. После изменения A обновите её варианты: старый снимок остаётся в первой вкладке до явного перехода к новому, B не должна измениться. После перезагрузки каждой вкладки проверьте отображаемую копию и снимок заново. Если появится «Ожидается reload», прежняя lease ещё активна: закройте прежний документ или дождитесь её истечения и нажмите **Повторить привязку вкладки**. Не используйте UUID из другой вкладки. Подробная диагностика, безопасный откат и проверка установки — в [руководстве оператора](docs/operating-engram.md).
 <!-- redoc:end:quick-start -->
 
 ---
@@ -210,9 +208,7 @@ ENGRAM_TOKEN=engram_your_workstation_keycard
 Плагин автоматически регистрирует MCP-сервер, hooks и slash-команды.
 
 ```bash
-# Сначала задайте переменные окружения
-ENGRAM_URL=http://your-server:37777
-ENGRAM_TOKEN=engram_your_workstation_keycard
+export ENGRAM_URL=http://your-server:37777
 ```
 
 ```
@@ -220,11 +216,11 @@ ENGRAM_TOKEN=engram_your_workstation_keycard
 /plugin install engram
 ```
 
-Перезапустите Claude Code и проверьте подключение MCP в новой сессии. Установка плагина не подтверждает готовность сервера, keycard, парсера и Workspace; порядок проверки описан в [операторском руководстве](docs/operating-engram.md).
+Перезапустите Claude Code и проверьте список MCP-инструментов в новой сессии. Установка плагина не подтверждает готовность сервера, парсера, кодовых embeddings и Workspace; порядок проверки описан в [руководстве оператора](docs/operating-engram.md).
 
 ### Docker Compose
 
-Для локальной сборки используйте команды из [быстрого старта](#быстрый-старт). `docker compose up -d` без обязательных `ENGRAM_SERVER_IMAGE`, `ENGRAM_OPERATOR_IMAGE`, `ENGRAM_POSTGRES_IMAGE` и `ENGRAM_BUILD_VERSION` не запускает стек. Задайте `POSTGRES_PASSWORD` и `ENGRAM_AUTH_ADMIN_TOKEN` до запуска.
+Для локальной сборки используйте команды из [быстрого старта](#быстрый-старт). `docker compose up -d` без обязательных `ENGRAM_SERVER_IMAGE`, `ENGRAM_OPERATOR_IMAGE`, `ENGRAM_POSTGRES_IMAGE` и `ENGRAM_BUILD_VERSION` не запускает стек. Для выбранного однопользовательского режима задайте `POSTGRES_PASSWORD` и `ENGRAM_AUTH_DISABLED=true`; операторский токен нужен только режиму с авторизацией.
 
 Для опубликованных образов укажите три digest-идентификатора из манифеста релиза и запустите [проверку и pull-only развёртывание](docs/DEPLOYMENT.md#immutable-image-selection). Если PostgreSQL уже развёрнут отдельно, задайте `DATABASE_DSN` для сервера и проверьте соответствие собственной конфигурации вместо слепого запуска только `server`: Compose-файл содержит зависимость от сервиса `postgres`.
 
@@ -248,14 +244,13 @@ chmod +x engram && sudo mv engram /usr/local/bin/
 
 ```bash
 export ENGRAM_URL=http://your-server:37777
-export ENGRAM_TOKEN=engram_your_workstation_keycard
 ```
 
 Проверка: `echo '{"jsonrpc":"2.0","id":1,"method":"ping"}' | engram`
 
 ### Ручная настройка MCP
 
-Если плагин не используется, настройте локальный `engram` как stdio-процесс в конфигурации своего agent host. Передайте `ENGRAM_URL` как origin сервера (`http://host:37777`), а `ENGRAM_TOKEN` как workstation keycard. Не добавляйте `/mcp` или `/sse`: текущий daemon общается с сервером по gRPC. Не записывайте operator key на рабочую станцию. Порядок проверки кодовых инструментов описан в [операторском руководстве](docs/operating-engram.md).
+Если плагин не используется, настройте локальный `engram` как stdio-процесс в конфигурации agent host. Передайте `ENGRAM_URL` как origin сервера; для `ENGRAM_AUTH_DISABLED=true` workstation keycard не нужен. Не добавляйте `/mcp` или `/sse`: daemon общается с сервером по gRPC. В режиме с авторизацией используется отдельный workstation keycard. Никогда не записывайте operator key на рабочую станцию.
 
 ### Сборка из исходников
 
@@ -438,7 +433,7 @@ vault(action="get", name="OPENAI_KEY")
 | MCP — отказ в подключении | Убедитесь, что сервер запущен: `curl http://your-server:37777/health`. Проверьте `ENGRAM_URL` в переменных окружения. |
 | Vault возвращает "encryption not configured" | Задайте `ENGRAM_ENCRYPTION_KEY` (64-символьная hex-строка = 32 байта AES-256). |
 | Dashboard не загружается | Убедитесь, что сборка выполнена через `make build` (включает dashboard). Проверьте консоль браузера на ошибки. |
-| Плагин не обнаружен после установки | Перезапустите Claude Code. Проверьте, что заданы `ENGRAM_URL` и `ENGRAM_TOKEN`, и что token — это workstation keycard, а не operator key. |
+| Плагин не обнаружен после установки | Перезапустите клиент и проверьте `ENGRAM_URL` и свежий список MCP-инструментов. В режиме `ENGRAM_AUTH_DISABLED=true` `ENGRAM_TOKEN` не нужен; в режиме с авторизацией используйте отдельный workstation keycard, но не operator key. |
 | Высокое потребление памяти | Уменьшите `DATABASE_MAX_CONNS`. Отключите консолидацию, если она не нужна. Проверьте `ENGRAM_EMBEDDING_DIMENSIONS`. |
 
 Логи сервера доступны по адресу `http://your-server:37777/api/logs`.

@@ -1493,10 +1493,19 @@ func (operatorCodeHTTPTestIndexTargets) Resolve(sourceID, checkoutID string) (uc
 	}, true
 }
 
+func (targets operatorCodeHTTPTestIndexTargets) IsLive(sourceID, checkoutID string) bool {
+	_, found := targets.Resolve(sourceID, checkoutID)
+	return found
+}
+
 type operatorCodeHTTPTestExpiredIndexTargets struct{}
 
 func (operatorCodeHTTPTestExpiredIndexTargets) Resolve(string, string) (uci.IndexBinding, bool) {
 	return uci.IndexBinding{}, false
+}
+
+func (operatorCodeHTTPTestExpiredIndexTargets) IsLive(string, string) bool {
+	return false
 }
 
 type operatorCodeHTTPTestGrants struct {
@@ -1551,6 +1560,14 @@ func (store *operatorCodeHTTPTestContextStore) ListCatalog(_ context.Context, _ 
 		return nil, store.listErr
 	}
 	return append([]gormdb.BrowserCodeContextCatalogEntry(nil), store.entries...), nil
+}
+
+func (store *operatorCodeHTTPTestContextStore) ListNoAuthCatalog(context.Context) ([]gormdb.BrowserCodeContextCatalogEntry, error) {
+	return append([]gormdb.BrowserCodeContextCatalogEntry(nil), store.entries...), store.listErr
+}
+
+func (store *operatorCodeHTTPTestContextStore) AuthorizeNoAuthIndexIntent(context.Context, string, string, string, bool) (gormdb.BrowserCodeIndexIntentBinding, error) {
+	return store.noViewBinding, store.initialTargetErr
 }
 
 func (store *operatorCodeHTTPTestContextStore) Pin(_ context.Context, pin gormdb.BrowserCodeContextPin) error {

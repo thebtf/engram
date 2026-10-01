@@ -10,6 +10,8 @@ import (
 	"path"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/uci"
@@ -56,10 +58,16 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 	in.Locator = locator
 	profileDigest := localGitGoProfileDigest()
 	if (in.ParserBundle != nil && *in.ParserBundle) || (in.ParserBundle == nil && in.DefaultParserBundle) {
-		profileDigest = uci.TreeSitterBundleDigest()
+		profileDigest = uci.TreeSitterSemanticContractDigest()
 	}
 	var out RegisteredLocalGit
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if in.AuthRealm == uci.NoAuthCodeRealm {
+			// One realm-wide lock serializes capacity checks across distinct Source and Checkout identities.
+			if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended('uci-noauth-code-catalog-capacity', 0))`).Error; err != nil {
+				return fmt.Errorf("register local git catalog lock: %w", err)
+			}
+		}
 		now := time.Now().UTC()
 		sourceID := in.SourceID
 		if sourceID == "" {
@@ -79,12 +87,11 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 				if matches[0].RegistrationProfileID == nil {
 					return uci.NewContextError(uci.RegistrationProfileUnbound, nil)
 				}
-				if in.ParserBundle != nil {
-					if err := localGitRegistrationProfileMatches(tx, *matches[0].RegistrationProfileID, profileDigest); err != nil {
-						return err
-					}
+				profileID, err := localGitRegistrationProfileForReplay(tx, &matches[0], profileDigest, in.ParserBundle != nil || in.DefaultParserBundle, in.ParserBundle != nil)
+				if err != nil {
+					return err
 				}
-				out = RegisteredLocalGit{matches[0].SourceID, matches[0].CheckoutID, matches[0].IncarnationID, *matches[0].RegistrationProfileID}
+				out = RegisteredLocalGit{matches[0].SourceID, matches[0].CheckoutID, matches[0].IncarnationID, profileID}
 				return nil
 			}
 			sourceID = uuid.NewString()
@@ -114,16 +121,34 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 			if existing.RegistrationProfileID == nil {
 				return uci.NewContextError(uci.RegistrationProfileUnbound, nil)
 			}
-			if in.ParserBundle != nil {
-				if err := localGitRegistrationProfileMatches(tx, *existing.RegistrationProfileID, profileDigest); err != nil {
-					return err
-				}
+			profileID, err := localGitRegistrationProfileForReplay(tx, &existing, profileDigest, in.ParserBundle != nil || in.DefaultParserBundle, in.ParserBundle != nil)
+			if err != nil {
+				return err
 			}
-			out = RegisteredLocalGit{sourceID, existing.CheckoutID, existing.IncarnationID, *existing.RegistrationProfileID}
+			out = RegisteredLocalGit{sourceID, existing.CheckoutID, existing.IncarnationID, profileID}
 			return nil
 		}
 		if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("register local git lookup: %w", result.Error)
+		}
+		if in.AuthRealm == uci.NoAuthCodeRealm && in.Principal == uci.NoAuthCodePrincipal {
+			var active int64
+			if err := tx.Raw(`
+				SELECT COUNT(*) FROM (
+					SELECT 1 FROM sources AS source
+					JOIN ci_checkouts AS checkout ON checkout.source_id = source.source_id
+					WHERE source.auth_realm = ? AND checkout.owner_principal = ?
+						AND source.state = ? AND checkout.state IN (?, ?, ?)
+					LIMIT ?
+				) AS active
+			`, uci.NoAuthCodeRealm, uci.NoAuthCodePrincipal, UCISourceActive,
+				UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp,
+				browserCodeCatalogMaxEntries).Scan(&active).Error; err != nil {
+				return fmt.Errorf("register local git catalog capacity: %w", err)
+			}
+			if active >= browserCodeCatalogMaxEntries {
+				return uci.ErrNoAuthCodeCatalogFull
+			}
 		}
 		profile := UCIAnalysisProfile{
 			ProfileID: uuid.NewString(), ParserBundleDigest: string(profileDigest),
@@ -142,6 +167,13 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 		if err := tx.Create(&checkout).Error; err != nil {
 			return fmt.Errorf("register local git checkout: %w", err)
 		}
+		label := localGitCheckoutDisplayLabel(in.Locator, in.WorkstationID)
+		if !validBrowserCodeCheckoutDisplayLabel(label) {
+			return uci.NewContextError(uci.ContextMismatch, nil)
+		}
+		if err := tx.Model(&UCICheckout{}).Where("checkout_id = ?", checkout.CheckoutID).Update("display_name", label).Error; err != nil {
+			return fmt.Errorf("register local git checkout label: %w", err)
+		}
 		out = RegisteredLocalGit{sourceID, checkout.CheckoutID, checkout.IncarnationID, profile.ProfileID}
 		return nil
 	})
@@ -151,20 +183,68 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 	return out, nil
 }
 
+func localGitCheckoutDisplayLabel(locator, workstationID string) string {
+	parsed, _ := url.Parse(locator) // Locator was canonicalized and validated before registration.
+	component := func(value string) string {
+		var label strings.Builder
+		for _, character := range value {
+			if !unicode.IsLetter(character) && !unicode.IsNumber(character) && !strings.ContainsRune(" ._-+()", character) {
+				character = '-'
+			}
+			if label.Len()+utf8.RuneLen(character) > 64 {
+				break
+			}
+			label.WriteRune(character)
+		}
+		return strings.TrimSpace(label.String())
+	}
+	parent := component(path.Base(path.Dir(parsed.Path)))
+	name := component(path.Base(parsed.Path))
+	fingerprint := sha256.Sum256([]byte(workstationID))
+	return fmt.Sprintf("Worktree · %s › %s · Device %x", parent, name, fingerprint[:4])
+}
+
 func localGitGoProfileDigest() uci.IndexDigest {
 	profile, _ := uci.GoIndexAdmissionArtifactProfile(uci.GoExtractionProfile{ProfileKey: "go-structure-v1", ParserKey: "go-parser-v1"})
 	return profile.ExtractionProfileDigest
 }
 
-func localGitRegistrationProfileMatches(tx *gorm.DB, profileID string, digest uci.IndexDigest) error {
+func localGitRegistrationProfileForReplay(tx *gorm.DB, checkout *UCICheckout, digest uci.IndexDigest, compare, explicit bool) (string, error) {
+	if !compare {
+		return *checkout.RegistrationProfileID, nil
+	}
+	var locked UCICheckout
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("checkout_id = ?", checkout.CheckoutID).First(&locked).Error; err != nil {
+		return "", fmt.Errorf("register local git checkout lock: %w", err)
+	}
+	if locked.RegistrationProfileID == nil {
+		return "", uci.NewContextError(uci.RegistrationProfileUnbound, nil)
+	}
 	var profile UCIAnalysisProfile
-	if err := tx.Where("profile_id = ?", profileID).First(&profile).Error; err != nil {
-		return fmt.Errorf("register local git profile lookup: %w", err)
+	if err := tx.Where("profile_id = ?", *locked.RegistrationProfileID).First(&profile).Error; err != nil {
+		return "", fmt.Errorf("register local git profile lookup: %w", err)
 	}
-	if profile.ParserBundleDigest != string(digest) {
-		return uci.NewContextError(uci.ContextMismatch, nil)
+	if profile.ParserBundleDigest == string(digest) {
+		return profile.ProfileID, nil
 	}
-	return nil
+	if !explicit && profile.ParserBundleDigest == string(localGitGoProfileDigest()) {
+		return profile.ProfileID, nil
+	}
+	if digest != uci.TreeSitterSemanticContractDigest() || profile.ParserBundleDigest == string(localGitGoProfileDigest()) {
+		return "", uci.NewContextError(uci.ContextMismatch, nil)
+	}
+	// Keep the prior profile and its pinned Views immutable; only this checkout
+	// selects a new semantic profile for its next complete publication.
+	profile.ProfileID = uuid.NewString()
+	profile.ParserBundleDigest = string(digest)
+	profile.CreatedAt = time.Now().UTC()
+	if err := tx.Create(&profile).Error; err != nil {
+		return "", fmt.Errorf("register local git semantic profile: %w", err)
+	}
+	if err := tx.Model(&locked).Update("registration_profile_id", profile.ProfileID).Error; err != nil {
+		return "", fmt.Errorf("register local git select semantic profile: %w", err)
+	}
+	return profile.ProfileID, nil
 }
 
 func localGitRegistrationDigest(value string) string {

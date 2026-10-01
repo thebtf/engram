@@ -68,6 +68,7 @@ type Server struct {
 	codebaseContextMu             sync.Mutex
 	codebaseContextApplication    CodebaseContextApplication
 	codebaseContextHandles        map[string]*codebaseContextClientHandles
+	codebaseContextUseCounter     uint64
 	codebaseContextEpoch          uint64
 	uciExposureRecorder           *uci.ExposureRecorder
 	ruleGovernanceStore           ruleGovernanceCandidateWriter
@@ -301,6 +302,7 @@ func (s *Server) SetCodebaseContextApplication(application CodebaseContextApplic
 
 	s.codebaseContextApplication = application
 	s.codebaseContextHandles = make(map[string]*codebaseContextClientHandles)
+	s.codebaseContextUseCounter = 0
 	s.codebaseContextEpoch++
 }
 

@@ -16,10 +16,15 @@ for manifest in plugin/engram/.claude-plugin/plugin.json plugin/engram/.codex-pl
   manifest_version="$(node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1], "utf8")).version; if (typeof value !== "string") process.exit(1); process.stdout.write(value)' "$manifest")"
   [[ "$manifest_version" == "$version" ]] || { echo "package manifest version differs from parser version: $manifest" >&2; exit 1; }
 done
+go_command="${ENGRAM_BOOTSTRAP_GO:-go}"
+parser_cc="${ENGRAM_PARSER_CC:-x86_64-w64-mingw32-gcc}"
+[[ "$("$go_command" version)" == 'go version go1.26.6 linux/amd64' ]] || { echo 'parser policy requires Go 1.26.6 Linux amd64 in the release goreleaser-cross:v1.25.9 image' >&2; exit 1; }
+compiler_version="$("$parser_cc" --version)"
+[[ "${compiler_version%%$'\n'*}" == 'x86_64-w64-mingw32-gcc (GCC) 13-win32' ]] || { echo 'parser policy requires the release goreleaser-cross:v1.25.9 GCC 13-win32 compiler' >&2; exit 1; }
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
-GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC="${ENGRAM_PARSER_CC:-x86_64-w64-mingw32-gcc}" \
-  "${ENGRAM_BOOTSTRAP_GO:-go}" build -trimpath -buildvcs=false -ldflags '-s -w -buildid=' \
+GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC="$parser_cc" \
+  "$go_command" build -trimpath -buildvcs=false -ldflags '-s -w -buildid=' \
   -o "$workdir/uci-parser-windows-amd64.exe" ./tools/uci-parser
 node - "$version" "$workdir/uci-parser-windows-amd64.exe" "$workdir/parser-targets.json" <<'NODE'
 const crypto = require('node:crypto');

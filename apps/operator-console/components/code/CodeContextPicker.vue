@@ -31,6 +31,31 @@ const repositories = computed(() => [...new Map(props.catalog.map((entry) => [en
 const workingCopies = computed(() => [...new Map(props.catalog.filter((entry) => entry.sourceRef === repository.value).map((entry) => [entry.checkoutRef, entry])).values()])
 const snapshotEntries = computed(() => workingCopyChosen.value ? props.catalog.filter((entry) => entry.sourceRef === repository.value && entry.checkoutRef === workingCopy.value && entry.view !== null) : [])
 const noViewEntry = computed(() => workingCopyChosen.value ? props.catalog.find((entry) => entry.sourceRef === repository.value && entry.checkoutRef === workingCopy.value && entry.view === null) ?? null : null)
+const duplicateRepositories = computed(() => new Set(repositories.value.filter((entry) => repositories.value.filter((other) => other.repository === entry.repository).length > 1).map((entry) => entry.repository)))
+const duplicateWorkingCopies = computed(() => new Set(workingCopies.value.filter((entry) => workingCopies.value.filter((other) => other.workingCopy === entry.workingCopy).length > 1).map((entry) => entry.workingCopy)))
+function indexedCopies(sourceRef: string): number { return new Set(props.catalog.filter((entry) => entry.sourceRef === sourceRef && entry.view !== null).map((entry) => entry.checkoutRef)).size }
+function indexedSnapshots(checkoutRef: string): number { return props.catalog.filter((entry) => entry.checkoutRef === checkoutRef && entry.view !== null).length }
+function uniquePrefix(ref: string, peers: string[]): string {
+  let length = 1
+  while (length < ref.length && peers.some((other) => other !== ref && other.startsWith(ref.slice(0, length)))) length++
+  if (length < ref.length) return ref.slice(0, length)
+  length = 1
+  while (length < ref.length && peers.some((other) => other !== ref && other.endsWith(ref.slice(-length)))) length++
+  return length < ref.length ? ref.slice(-length) : String(peers.indexOf(ref) + 1)
+}
+function repositoryLabel(entry: CodeCatalogEntry): string {
+  if (!duplicateRepositories.value.has(entry.repository)) return entry.repository
+  const count = indexedCopies(entry.sourceRef)
+  const peers = repositories.value.filter((other) => other.repository === entry.repository && indexedCopies(other.sourceRef) === count)
+  return `${entry.repository} · ${t('codeExplorer.context.indexedCopies', { count })}${peers.length > 1 ? ` · ${uniquePrefix(entry.sourceRef, peers.map((other) => other.sourceRef))}` : ''}`
+}
+function workingCopyLabel(entry: CodeCatalogEntry): string {
+  const label = entry.workingCopy || t('codeExplorer.context.unnamedWorkingCopy')
+  if (!duplicateWorkingCopies.value.has(entry.workingCopy)) return label
+  const count = indexedSnapshots(entry.checkoutRef)
+  const peers = workingCopies.value.filter((other) => other.workingCopy === entry.workingCopy && indexedSnapshots(other.checkoutRef) === count)
+  return `${label} · ${t('codeExplorer.context.indexedSnapshots', { count })}${peers.length > 1 ? ` · ${uniquePrefix(entry.checkoutRef, peers.map((other) => other.checkoutRef))}` : ''}`
+}
 const samePinned = computed(() => props.candidate?.selectionRef === props.pinned?.selectionRef)
 const phaseLabel = computed(() => t(`codeExplorer.context.phases.${props.phase}`))
 const phaseMessage = computed(() => {
@@ -51,7 +76,7 @@ watch([() => props.catalog, () => props.candidate, () => props.pinned], ([catalo
     return
   }
   if (candidate === null && previousCatalog !== undefined && catalog !== previousCatalog || snapshotRef.value !== '' && !snapshotEntries.value.some((entry) => entry.view?.selectionRef === snapshotRef.value)) snapshotRef.value = ''
-  repository.value = repositories.value[0]?.sourceRef ?? ''
+  repository.value = repositories.value.find((entry) => indexedCopies(entry.sourceRef) > 0)?.sourceRef ?? repositories.value[0]?.sourceRef ?? ''
   if (workingCopies.value.length === 1) {
     workingCopy.value = workingCopies.value[0]?.checkoutRef ?? ''
     workingCopyChosen.value = true
@@ -100,14 +125,14 @@ function chooseSnapshot(event: Event): void {
         <span>{{ t('workspace.repository') }}</span>
         <select :value="repository" :disabled="pending" data-testid="code-context-repository" @change="chooseRepository">
           <option value="" disabled>{{ t('codeExplorer.context.chooseRepository') }}</option>
-          <option v-for="entry in repositories" :key="entry.sourceRef" :value="entry.sourceRef">{{ entry.repository }}</option>
+          <option v-for="entry in repositories" :key="entry.sourceRef" :value="entry.sourceRef">{{ repositoryLabel(entry) }}</option>
         </select>
       </label>
       <label class="selector">
         <span>{{ t('workspace.workingCopy') }}</span>
         <select :value="workingCopyChosen ? workingCopy : ''" :disabled="pending || repository === ''" data-testid="code-context-working-copy" @change="chooseWorkingCopy">
           <option value="" disabled>{{ t('codeExplorer.context.chooseWorkingCopy') }}</option>
-          <option v-for="entry in workingCopies" :key="entry.checkoutRef" :value="entry.checkoutRef">{{ entry.workingCopy || t('codeExplorer.context.unnamedWorkingCopy') }}</option>
+          <option v-for="entry in workingCopies" :key="entry.checkoutRef" :value="entry.checkoutRef">{{ workingCopyLabel(entry) }}</option>
         </select>
       </label>
       <label class="selector">
@@ -145,8 +170,8 @@ function chooseSnapshot(event: Event): void {
     </dl>
 
     <div class="actions">
-      <button class="btn" type="button" :disabled="pending" @click="emit('refresh')">{{ t('codeExplorer.context.refresh') }}</button>
-      <button v-if="phase === 'reload-pending'" class="btn" type="button" :disabled="pending" data-testid="code-retry-reload" @click="emit('retry')">{{ t('codeExplorer.context.retryReload') }}</button>
+      <button class="btn" type="button" :disabled="pending || phase !== 'ready' && phase !== 'collision' && phase !== 'ambiguous'" @click="emit('refresh')">{{ t('codeExplorer.context.refresh') }}</button>
+      <button v-if="phase === 'reload-pending' || phase === 'identity-unavailable' || phase === 'error' && evidence.transition === 'TAB_LEASE_RENEWAL_FAILED'" class="btn" type="button" :disabled="pending" :data-testid="phase === 'reload-pending' ? 'code-retry-reload' : phase === 'error' ? 'code-retry-lease' : 'code-retry-identity'" @click="emit('retry')">{{ phase === 'reload-pending' ? t('codeExplorer.context.retryReload') : t('codeExplorer.context.retryIdentity') }}</button>
       <button class="btn primary" type="button" :disabled="pending || candidate === null || samePinned" data-testid="code-pin-context" @click="emit('pin')">
         {{ samePinned ? t('codeExplorer.context.pinned') : pinned === null ? t('codeExplorer.context.pin') : t('codeExplorer.context.switch') }}
       </button>
@@ -174,7 +199,7 @@ function chooseSnapshot(event: Event): void {
 h2 { margin:0; color:var(--fg); font-size:var(--text-sm); font-weight:800; }
 .section-head p, .message, .empty p, .no-view p, .pinned { margin:4px 0 0; color:var(--muted); font-size:var(--text-sm); }
 .phase { border:1px solid var(--border); border-radius:var(--radius-pill); padding:4px 8px; color:var(--fg-2); font-size:var(--text-xs); white-space:nowrap; }
-.phase[data-state='collision'], .phase[data-state='ambiguous'], .phase[data-state='reload-pending'] { border-color:color-mix(in oklab,var(--warn),transparent 35%); color:var(--warn); }
+.phase[data-state='collision'], .phase[data-state='ambiguous'], .phase[data-state='reload-pending'], .phase[data-state='identity-unavailable'] { border-color:color-mix(in oklab,var(--warn),transparent 35%); color:var(--warn); }
 .selectors { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
 .selector { display:grid; gap:5px; min-width:0; }
 .selector > span, dt { color:var(--muted); font-size:var(--text-xs); font-weight:700; letter-spacing:.04em; text-transform:uppercase; }

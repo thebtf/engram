@@ -383,7 +383,7 @@ func validUCIIndexIntentTarget(target *pb.CodeIndexIntentTarget) bool {
 
 func validUCIPollIndexIntentRequest(request *pb.PollCodeIndexIntentsRequest) bool {
 	return request != nil && validUCIMessage(request, maxUCITransportBeginBytes) && validUCIIndexIntentTarget(request.GetTarget()) &&
-		validUCIIdentifier(request.GetClientInstanceId(), maxUCITransportIdentifierBytes) && validUCIIdentifier(request.GetProcessNonce(), maxUCITransportIdentifierBytes)
+		uci.ValidCodeClientInstanceID(request.GetClientInstanceId()) && validUCIIdentifier(request.GetProcessNonce(), maxUCITransportIdentifierBytes)
 }
 
 func validUCIPollIndexIntentResponse(response *pb.PollCodeIndexIntentsResponse) bool {
@@ -410,7 +410,7 @@ func validUCIPollIndexIntentResponse(response *pb.PollCodeIndexIntentsResponse) 
 
 func validUCIUpdateIndexIntentRequest(request *pb.UpdateCodeIndexIntentRequest) bool {
 	if request == nil || !validUCIMessage(request, maxUCITransportBeginBytes) || !validUCIIndexIntentTarget(request.GetTarget()) ||
-		!validUCIIdentifier(request.GetClientInstanceId(), maxUCITransportIdentifierBytes) || !validUCIIdentifier(request.GetProcessNonce(), maxUCITransportIdentifierBytes) ||
+		!uci.ValidCodeClientInstanceID(request.GetClientInstanceId()) || !validUCIIdentifier(request.GetProcessNonce(), maxUCITransportIdentifierBytes) ||
 		!validUCIIdentifier(request.GetIntentRef(), maxUCITransportIdentifierBytes) || !validUCIIdentifier(request.GetOperationRef(), maxUCITransportIdentifierBytes) {
 		return false
 	}

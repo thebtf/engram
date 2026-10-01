@@ -337,12 +337,18 @@ func TestUCIIndexAdmissionStoresPinnedTypeScriptDefinitionAndRejectsCrossLanguag
 			frame := uciIndexAdmissionTypeScriptFixtureFrame(t, fixture)
 			artifact := &frame.Artifacts[0]
 			artifact.Definitions[0].LocalSymbolKey = test.localSymbolKey
+			artifact.Definitions[0].SymbolKey = "typescript:" + test.localSymbolKey
+			for i := range artifact.Chunks {
+				if artifact.Chunks[i].SymbolKey != nil {
+					artifact.Chunks[i].SymbolKey = &artifact.Definitions[0].LocalSymbolKey
+				}
+			}
 			factsDigest, err := ucidomain.DigestIndexAdmissionArtifactFacts(*artifact)
 			require.NoError(t, err)
 			artifact.FactsDigest = factsDigest
 
 			_, err = fixture.projection.AdmitIndexFrame(context.Background(), fixture.source.SourceID, fixture.profile.ProfileID, frame)
-			require.Error(t, err)
+			require.ErrorContains(t, err, "unparseable Tree-sitter definition key")
 			var artifacts int64
 			require.NoError(t, fixture.db.Model(&UCIParseArtifact{}).Where("artifact_id = ?", artifact.ArtifactID).Count(&artifacts).Error)
 			require.Zero(t, artifacts)
@@ -713,6 +719,14 @@ func uciIndexAdmissionTypeScriptFixtureFrame(t *testing.T, fixture *uciPublicati
 	}
 	artifact, err := ucidomain.NewIndexAdmissionArtifactFromTreeSitter(fixture.source.SourceID, profile, body, extracted)
 	require.NoError(t, err)
+	if bundleDigest != ucidomain.TreeSitterSemanticContractDigest() {
+		artifact.Profile.GrammarDigest = bundleDigest
+		artifact.Profile.ExtractionProfileDigest = bundleDigest
+		artifact.ArtifactID, err = ucidomain.DeriveIndexAdmissionArtifactID(fixture.source.SourceID, artifact.ContentDigest, artifact.Profile)
+		require.NoError(t, err)
+		artifact.FactsDigest, err = ucidomain.DigestIndexAdmissionArtifactFacts(artifact)
+		require.NoError(t, err)
+	}
 	artifactID := artifact.ArtifactID
 	return ucidomain.IndexAdmissionFrame{
 		Version:   ucidomain.IndexAdmissionFrameVersion,

@@ -2264,12 +2264,15 @@
       "chooseWorkingCopy": "Choose a working copy",
       "unnamedWorkingCopy": "Unnamed working copy",
       "chooseSnapshot": "Choose an indexed snapshot",
+      "indexedCopies": "{count} indexed working copies",
+      "indexedSnapshots": "{count} indexed snapshots",
       "revision": "Revision",
       "publishedAt": "Published",
       "selectPrompt": "Choose a server-authorized View. This document stays unpinned until you confirm it.",
       "selectedPrompt": "Review the selected View, then pin it explicitly for this document.",
       "refresh": "Refresh authorized choices",
-      "retryReload": "Retry reload binding",
+      "retryReload": "Retry tab binding",
+      "retryIdentity": "Retry server identity",
       "pin": "Pin selected View",
       "switch": "Switch to selected View",
       "pinned": "Pinned by server",
@@ -2301,6 +2304,7 @@
         "reload-pending": "Reload pending",
         "denied": "Binding denied",
         "secure-origin-required": "HTTPS required",
+        "identity-unavailable": "Server unavailable",
         "error": "Binding error"
       },
       "messages": {
@@ -2311,8 +2315,9 @@
         "ambiguous": "Bootstrap was ambiguous; the new binding starts unselected.",
         "reload-pending": "The prior document lease is still live. Retry after it closes or expires.",
         "denied": "The server denied this browser binding.",
-        "error": "The server could not establish a safe browser binding. If this is already HTTPS, check whether your browser supports crypto.randomUUID.",
-        "secure-origin-required": "This HTTP address cannot establish a safe browser binding. Open the console at a configured HTTPS address for this server and sign in as yourself. Indexing and reading require server-issued Source/Checkout grants; unsafe flags and hand-entered IDs cannot substitute."
+        "error": "The server could not establish a browser binding. Check the connection and browser cryptography support.",
+        "secure-origin-required": "This HTTP address cannot establish a safe browser binding. Open the console at a configured HTTPS address for this server and sign in as yourself. Indexing and reading require server-issued Source/Checkout grants; unsafe flags and hand-entered IDs cannot substitute.",
+        "identity-unavailable": "The server did not confirm its authentication mode. Check your connection and retry; no workspace binding was requested."
       }
     },
     "results": {
@@ -2577,6 +2582,31 @@
     "repository": "Repository",
     "workingCopy": "Working copy",
     "indexedSnapshot": "Indexed snapshot",
+    "embeddingState": "Code embeddings",
+    "embeddingError": "Reason",
+    "embeddingRecovery": "Embedding error: {reason}. Check the provider and model, then request indexing or reconciliation and refresh status. The pinned snapshot is unchanged.",
+    "coverage": {
+      "complete": "Complete",
+      "partial": "Partial",
+      "unavailable": "Unavailable"
+    },
+    "freshness": {
+      "observed_current": "Current",
+      "catching_up": "Updating",
+      "historical": "Older snapshot",
+      "offline": "Offline",
+      "failed": "Update failed",
+      "unknown": "Unknown"
+    },
+    "embeddingJobs": {
+      "queued": "Queued",
+      "running": "Running",
+      "retry_scheduled": "Retry scheduled",
+      "succeeded": "Completed",
+      "failed_terminal": "Failed",
+      "cancelled": "Cancelled",
+      "obsolete": "Superseded"
+    },
     "readiness": {
       "ready": {
         "title": "Index ready",
@@ -2594,6 +2624,10 @@
         "title": "Index failed",
         "body": "The last attempt did not finish. Any previously confirmed snapshot remains available."
       },
+      "offline": {
+        "title": "Snapshot offline",
+        "body": "The Source or Checkout is offline. The pinned snapshot remains available, but its freshness cannot be confirmed until the connection is restored."
+      },
       "unknown": {
         "title": "Freshness unknown",
         "body": "The server did not report whether this snapshot is current."
@@ -2601,6 +2635,10 @@
       "newer-snapshot": {
         "title": "Newer snapshot available",
         "body": "The current answer stays in its pinned snapshot until you explicitly switch."
+      },
+      "degraded": {
+        "title": "Semantic search not ready",
+        "body": "Code embeddings are incomplete or unavailable. Source and lexical search may still work; a result is not proof of semantic retrieval. Check the embedding state below and refresh status."
       }
     }
   },

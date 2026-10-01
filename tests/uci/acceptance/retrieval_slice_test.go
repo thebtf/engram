@@ -259,7 +259,7 @@ func newUCIRetrievalSliceFixture(t *testing.T) *uciRetrievalSliceFixture {
 		t.Fatalf("create local embedding client: %v", err)
 	}
 
-	treeSitter, bundleDigest := newUCIRetrievalSliceTreeSitterWorker(t)
+	treeSitter := newUCIRetrievalSliceTreeSitterWorker(t)
 	token := strings.ReplaceAll(uuid.NewString(), "-", "")
 	ctx := context.Background()
 	contextStore := gormstore.NewUCIContextStore(store.GetDB())
@@ -284,7 +284,7 @@ func newUCIRetrievalSliceFixture(t *testing.T) *uciRetrievalSliceFixture {
 		t.Fatalf("register retrieval checkout: %v", err)
 	}
 	profile, err := contextStore.CreateProfile(ctx, gormstore.CreateProfileInput{
-		ParserBundleDigest:   string(bundleDigest),
+		ParserBundleDigest:   string(uci.TreeSitterSemanticContractDigest()),
 		ResolverRevision:     "uci-retrieval-slice-resolver-v1",
 		ChunkerRevision:      "uci-retrieval-slice-chunker-v1",
 		IgnorePolicyDigest:   uciRetrievalSliceDigest("uci-retrieval-slice-ignore-v1"),
@@ -871,11 +871,6 @@ func (fixture *uciRetrievalSliceFixture) openAPIArtifact(t *testing.T, source []
 
 func (fixture *uciRetrievalSliceFixture) typeScriptArtifact(t *testing.T, source []byte) uci.IndexAdmissionArtifact {
 	t.Helper()
-	bundleDigest := uci.IndexDigest(fixture.profile.ParserBundleDigest)
-	admissionProfile, err := uci.TreeSitterIndexAdmissionArtifactProfile(uci.TreeSitterLanguageTypeScript, bundleDigest)
-	if err != nil {
-		t.Fatalf("derive TypeScript admission profile: %v", err)
-	}
 	parsed, err := fixture.treeSitter.Parse(fixture.context, uci.TreeSitterParseRequest{
 		Language:   uci.TreeSitterLanguageTypeScript,
 		ProfileKey: "uci-retrieval-slice-typescript",
@@ -886,6 +881,10 @@ func (fixture *uciRetrievalSliceFixture) typeScriptArtifact(t *testing.T, source
 	}
 	if parsed.Coverage != uci.IndexCoverageComplete {
 		t.Fatalf("TypeScript parser coverage = %q, want complete; diagnostics=%#v", parsed.Coverage, parsed.Diagnostics)
+	}
+	admissionProfile, err := uci.TreeSitterIndexAdmissionArtifactProfile(uci.TreeSitterLanguageTypeScript, parsed.BundleDigest)
+	if err != nil {
+		t.Fatalf("derive TypeScript admission profile: %v", err)
 	}
 	artifact, err := uci.NewIndexAdmissionArtifactFromTreeSitter(fixture.source.SourceID, admissionProfile, source, parsed)
 	if err != nil {
@@ -1057,7 +1056,7 @@ func openUCIRetrievalSliceStore(t *testing.T) *gormstore.Store {
 	return store
 }
 
-func newUCIRetrievalSliceTreeSitterWorker(t *testing.T) (*uci.TreeSitterWorker, uci.IndexDigest) {
+func newUCIRetrievalSliceTreeSitterWorker(t *testing.T) *uci.TreeSitterWorker {
 	t.Helper()
 	_, sourcePath, _, ok := runtime.Caller(0)
 	if !ok {
@@ -1100,13 +1099,12 @@ func newUCIRetrievalSliceTreeSitterWorker(t *testing.T) (*uci.TreeSitterWorker, 
 	if response.Version != uci.TreeSitterWorkerProtocolVersion {
 		t.Fatalf("TypeScript parser probe version = %q", response.Version)
 	}
-	admissionProfile, err := uci.TreeSitterIndexAdmissionArtifactProfile(uci.TreeSitterLanguageTypeScript, response.BundleDigest)
-	if err != nil {
-		t.Fatalf("validate TypeScript parser bundle identity: %v", err)
+	if response.BundleDigest == "" {
+		t.Fatal("TypeScript parser bundle identity is missing")
 	}
 	worker, err := uci.NewTreeSitterWorker(uci.TreeSitterWorkerConfig{
 		ExecutablePath:       executable,
-		ExpectedBundleDigest: admissionProfile.GrammarDigest,
+		ExpectedBundleDigest: response.BundleDigest,
 		MaxInputBytes:        1 << 20,
 		MaxOutputBytes:       1 << 20,
 		Timeout:              5 * time.Second,
@@ -1115,7 +1113,7 @@ func newUCIRetrievalSliceTreeSitterWorker(t *testing.T) (*uci.TreeSitterWorker, 
 	if err != nil {
 		t.Fatalf("configure TypeScript parser worker: %v", err)
 	}
-	return worker, admissionProfile.GrammarDigest
+	return worker
 }
 
 func uciRetrievalSliceParserEnvironment() []string {

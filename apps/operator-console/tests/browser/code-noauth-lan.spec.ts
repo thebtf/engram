@@ -1,0 +1,112 @@
+import { expect, test, type Route } from '@playwright/test'
+
+const bindingId = '60000000-0000-4000-8000-000000000041'
+const source = { source_ref: 'source-opaque', checkout_ref: 'checkout-opaque', repository: 'Engram', working_copy: 'Desk A', indexed_snapshot: { label: 'Snapshot A', revision: 'abc123', published_at: '2026-09-27T00:00:00Z' }, view_ref: 'view-opaque', selection_ref: 'selection-opaque', index_intent_available: false }
+const otherSource = { ...source, source_ref: 'source-b', checkout_ref: 'checkout-b', repository: 'Other', working_copy: 'Desk B', indexed_snapshot: { ...source.indexed_snapshot, label: 'Snapshot B' }, view_ref: 'view-b', selection_ref: 'selection-b' }
+
+for (const identity of [{ auth_disabled: true }, { authenticated: true, auth_disabled: false }, { auth_disabled: false }, {}, { authenticated: true }] as const) {
+  test(`HTTP LAN workspace honors server identity ${JSON.stringify(identity)}`, async ({ page, baseURL }) => {
+    if (!baseURL || /^http:\/\/(?:localhost|127\.|\[::1\])/.test(baseURL)) test.skip(true, 'Requires OPERATOR_CONSOLE_SMOKE_HOST with a real nonloopback interface')
+    const requests: string[] = []
+    const ids: string[] = []
+    await page.route('**/api/auth/me', async route => route.fulfill({ json: identity }))
+    await page.route('**/api/code/**', async (route: Route) => {
+      const { pathname } = new URL(route.request().url())
+      requests.push(pathname)
+      const requestId = route.request().headers()['x-engram-request-id']
+      if (requestId) ids.push(requestId)
+      if (pathname === '/api/code/tabs/handshake') {
+        expect(route.request().postDataJSON().document_nonce).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+      }
+      if (pathname === '/api/code/tabs/handshake') await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: bindingId, document_proof: 'proof', resume_nonce: 'resume', reload_token: 'reload' } })
+      else if (pathname === '/api/code/contexts') await route.fulfill({ json: { contexts: [source, otherSource] } })
+      else if (pathname === `/api/code/tabs/${bindingId}/context`) await route.fulfill({ status: 204 })
+      else if (pathname === '/api/code/status') await route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, freshness: { state: 'fresh' } } })
+      else await route.fulfill({ status: 500 })
+    })
+    if (identity.auth_disabled === true) {
+      await page.goto('/')
+      await page.getByTestId('overview-workspace-entry').click()
+    } else await page.goto('/code?auth_disabled=true')
+    expect(await page.evaluate(() => window.isSecureContext)).toBe(false)
+    if (identity.auth_disabled === true) {
+      await expect(page.getByTestId('code-context-working-copy').getByRole('option', { name: 'Desk A' })).toHaveCount(1)
+      await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
+      await page.getByTestId('code-context-repository').selectOption('source-opaque')
+      await page.getByTestId('code-context-working-copy').selectOption('checkout-opaque')
+      await page.getByTestId('code-context-snapshot').selectOption('selection-opaque')
+      await page.getByTestId('code-pin-context').click()
+      await expect(page.getByTestId('code-context-pinned')).toContainText('Desk A')
+      await page.getByTestId('code-context-repository').selectOption('source-b')
+      await page.getByTestId('code-context-working-copy').selectOption('checkout-b')
+      await page.getByTestId('code-context-snapshot').selectOption('selection-b')
+      await page.getByTestId('code-pin-context').click()
+      await expect(page.getByTestId('code-context-pinned')).toContainText('Desk B')
+      expect(requests).toContain('/api/code/status')
+      expect(ids.length).toBeGreaterThan(1)
+      expect(new Set(ids).size).toBe(ids.length)
+      expect(ids.every(id => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))).toBe(true)
+    } else {
+      await expect(page.locator('.phase')).toHaveAttribute('data-state', 'auth_disabled' in identity && identity.auth_disabled === false && 'authenticated' in identity && identity.authenticated === true ? 'secure-origin-required' : 'identity-unavailable')
+      await expect(page.getByTestId('code-context-working-copy')).toHaveCount(0)
+      await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
+      expect(requests).not.toContain('/api/code/tabs/handshake')
+      expect(requests).not.toContain('/api/code/contexts')
+    }
+  })
+}
+
+test('HTTP LAN waits for a confirmed noauth identity after transient 503', async ({ page, baseURL }) => {
+  if (!baseURL || /^http:\/\/(?:localhost|127\.|\[::1\])/.test(baseURL)) test.skip(true, 'Requires OPERATOR_CONSOLE_SMOKE_HOST with a real nonloopback interface')
+  let recovered = false
+  let identities = 0
+  const requests: string[] = []
+  await page.route('**/api/auth/me', async route => {
+    identities++
+    await route.fulfill(recovered ? { json: { auth_disabled: true } } : { status: 503 })
+  })
+  await page.route('**/api/code/**', async route => {
+    const pathname = new URL(route.request().url()).pathname
+    requests.push(pathname)
+    if (pathname === '/api/code/tabs/handshake') await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: bindingId, document_proof: 'proof', resume_nonce: 'resume', reload_token: 'reload' } })
+    else if (pathname === '/api/code/contexts') await route.fulfill({ json: { contexts: [source] } })
+    else await route.fulfill({ status: 500 })
+  })
+  await page.goto('/code?auth_disabled=true')
+  expect(await page.evaluate(() => window.isSecureContext)).toBe(false)
+  await expect(page.locator('.phase')).toHaveAttribute('data-state', 'identity-unavailable')
+  await expect(page.getByTestId('code-retry-identity')).toBeVisible()
+  expect(requests).toEqual([])
+  recovered = true
+  await page.getByTestId('code-retry-identity').click()
+  await expect(page.getByTestId('code-context-snapshot').getByRole('option', { name: 'Snapshot A' })).toHaveCount(1)
+  expect(identities).toBeGreaterThanOrEqual(2)
+  expect(requests).toEqual(['/api/code/tabs/handshake', '/api/code/contexts'])
+})
+
+test('HTTP LAN cannot rebound a saved noauth tab after server enables authentication', async ({ page, baseURL }) => {
+  if (!baseURL || /^http:\/\/(?:localhost|127\.|\[::1\])/.test(baseURL)) test.skip(true, 'Requires OPERATOR_CONSOLE_SMOKE_HOST with a real nonloopback interface')
+  let authDisabled = true
+  const requests: string[] = []
+  await page.route('**/api/auth/me', async route => route.fulfill({ json: { authenticated: true, auth_disabled: authDisabled } }))
+  await page.route('**/api/code/**', async route => {
+    const pathname = new URL(route.request().url()).pathname
+    requests.push(pathname)
+    if (pathname === '/api/code/tabs/handshake') await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: bindingId, document_proof: 'proof', resume_nonce: 'resume', reload_token: 'reload' } })
+    else if (pathname === '/api/code/contexts') await route.fulfill({ json: { contexts: [source] } })
+    else if (pathname === `/api/code/tabs/${bindingId}/context`) await route.fulfill({ status: 204 })
+    else if (pathname === '/api/code/status') await route.fulfill({ json: { total_chunks: 0, embedded_chunks: 0, embedding: { coverage: 'none', job_state: null, error_code: null } } })
+    else if (pathname === '/api/code/structure') await route.fulfill({ status: 403 })
+    else await route.fulfill({ status: 204 })
+  })
+  await page.goto('/code')
+  await page.getByTestId('code-context-snapshot').selectOption('selection-opaque')
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.getByTestId('code-context-pinned')).toBeVisible()
+  authDisabled = false
+  await page.reload()
+  await expect(page.locator('.phase')).toHaveAttribute('data-state', 'secure-origin-required')
+  await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+  expect(requests.filter(path => path === '/api/code/tabs/resume')).toHaveLength(0)
+  expect(requests.filter(path => path === '/api/code/tabs/handshake')).toHaveLength(1)
+})

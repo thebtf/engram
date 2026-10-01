@@ -6,6 +6,11 @@ export default defineNuxtConfig({
   },
   devtools: { enabled: true },
   css: ['./app/assets/css/main.css'],
+  postcss: {
+    plugins: {
+      tailwindcss: {},
+    },
+  },
   app: {
     head: {
       title: 'engram operator web',

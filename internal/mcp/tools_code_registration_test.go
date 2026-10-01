@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -19,6 +20,9 @@ type registrationContextApplication struct {
 func (app *registrationContextApplication) RegisterLocalGit(_ context.Context, input uci.ResolveContextInput, sourceID, label, locator string, parserBundle *bool) (uci.RegisteredCheckoutSelector, error) {
 	app.calls = append(app.calls, input)
 	app.parserBundles = append(app.parserBundles, parserBundle)
+	if label == "full" {
+		return uci.RegisteredCheckoutSelector{}, uci.ErrNoAuthCodeCatalogFull
+	}
 	if label == "legacy" {
 		return uci.RegisteredCheckoutSelector{}, uci.NewContextError(uci.RegistrationProfileUnbound, nil)
 	}
@@ -35,6 +39,19 @@ func (app *registrationContextApplication) RegisterLocalGit(_ context.Context, i
 	app.catalog.bindings[binding.Scope.CheckoutID] = binding
 	app.authorizer.allowed[input.Principal] = map[string]bool{binding.Scope.CheckoutID: true}
 	return uci.RegisteredCheckoutSelector{Scope: binding.Scope, ProfileID: binding.ProfileID}, nil
+}
+
+func TestRegisterCodebaseContextReportsNoAuthCatalogCapacity(t *testing.T) {
+	fixture := newUCICodebaseContextFixture(t)
+	fixture.server.SetCodebaseContextApplication(&registrationContextApplication{uciCodebaseContextApplicationFake: fixture.application})
+	caller := auth.WithIdentity(ContextWithCodeClientInstance(ContextWithSession(context.Background(), "noauth-capacity-session"), "install-capacity"), auth.AuthDisabled())
+	response := callUCICodebaseContext(t, fixture.server, caller, map[string]any{"action": "register", "source_label": "full", "locator": "file:///private/checkout-a"})
+	require.NotNil(t, response.Error)
+	require.Equal(t, "LOCAL_CODE_CATALOG_FULL: maximum 128 active checkouts", response.Error.Data)
+	require.NotContains(t, response.Error.Data, "/private/")
+	err := codebaseContextApplicationError(fmt.Errorf("register checkout: %w", uci.ErrNoAuthCodeCatalogFull))
+	require.EqualError(t, err, "LOCAL_CODE_CATALOG_FULL: maximum 128 active checkouts")
+	require.EqualError(t, codebaseContextApplicationError(fmt.Errorf("database unavailable")), "CONTEXT_MISMATCH")
 }
 
 func TestRegisterCodebaseContextIssuesNoViewTargetOnlyForAuthenticatedOwner(t *testing.T) {

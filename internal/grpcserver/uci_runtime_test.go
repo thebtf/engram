@@ -199,6 +199,31 @@ func TestIndexIntentTargetRegistryRequiresOneFreshNoViewDaemonTarget(t *testing.
 	require.False(t, found, "a stale daemon target must not authorize first-index admission")
 }
 
+func TestIndexIntentTargetRegistryPublishedOwnerExpiresAndRecovers(t *testing.T) {
+	registry := NewIndexIntentTargetRegistry()
+	now := time.Date(2026, time.September, 12, 12, 0, 0, 0, time.UTC)
+	registry.now = func() time.Time { return now }
+	binding := uciRuntimeTestBinding()
+	registry.Observe(binding)
+	require.True(t, registry.IsLive(binding.Scope.SourceID, binding.Scope.CheckoutID))
+	bootstrap, found := registry.Resolve(binding.Scope.SourceID, binding.Scope.CheckoutID)
+	require.True(t, found)
+	require.Equal(t, binding, bootstrap)
+	now = now.Add(indexIntentTargetAdvertisementTTL - time.Second)
+	binding.Context = &uci.ContextRef{SourceID: binding.Scope.SourceID, CheckoutID: binding.Scope.CheckoutID, ViewID: uuid.NewString(), AnalysisProfileID: binding.ProfileID, Generation: 1}
+	registry.Observe(binding)
+	now = now.Add(time.Second)
+	require.True(t, registry.IsLive(binding.Scope.SourceID, binding.Scope.CheckoutID), "publication must not stop refreshing the existing owner advertisement")
+	_, found = registry.Resolve(binding.Scope.SourceID, binding.Scope.CheckoutID)
+	require.False(t, found, "a published owner is not bootstrap/index authority")
+	now = now.Add(indexIntentTargetAdvertisementTTL - time.Second)
+	require.False(t, registry.IsLive(binding.Scope.SourceID, binding.Scope.CheckoutID), "a disconnected daemon becomes offline at the existing expiry boundary")
+	registry.Observe(binding)
+	require.True(t, registry.IsLive(binding.Scope.SourceID, binding.Scope.CheckoutID), "authenticated polling restores liveness without recreating durable identities")
+	restarted := NewIndexIntentTargetRegistry()
+	require.False(t, restarted.IsLive(binding.Scope.SourceID, binding.Scope.CheckoutID), "registration alone must not survive server restart as liveness")
+}
+
 func TestContextAwareUCIRuntimeErrorMappingPreservesOnlyClosedBridgeStatuses(t *testing.T) {
 	for _, test := range []struct {
 		name    string

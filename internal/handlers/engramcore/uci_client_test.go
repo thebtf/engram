@@ -2,9 +2,12 @@ package engramcore
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -47,7 +50,7 @@ const (
 
 func TestUCIClientForwardsBoundScopeAndBuild(t *testing.T) {
 	rpc := &uciClientRPCFake{stageStream: &uciClientStageStream{}}
-	client := newUCIClient(rpc)
+	client := newUCIClient(rpc, "fixture-daemon-install")
 	ctx := context.Background()
 	reference := uciClientTestContextA()
 
@@ -132,18 +135,74 @@ func TestUCIClientPropagatesSourceSessionMetadata(t *testing.T) {
 		return uciClientTestBindResponse(request), nil
 	}}
 	ctx := auditcontext.WithUCITransportSession(context.Background(), "client-a")
-	_, err := newUCIClient(rpc).Bind(ctx, &pb.BindCodeContextRequest{
+	_, err := newUCIClient(rpc, "fixture-daemon-install").Bind(ctx, &pb.BindCodeContextRequest{
 		ClientSessionId:  "client-a",
 		RequestedContext: uciClientTestContextA(),
 	})
 	require.NoError(t, err)
 }
 
+func TestUCILegacyModuleReachesAuthenticatedRPCWithoutInstallationAnchor(t *testing.T) {
+	server := &uciIndexAdapterGRPCServer{
+		bind: func(ctx context.Context, request *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {
+			incoming, ok := metadata.FromIncomingContext(ctx)
+			require.True(t, ok)
+			require.Equal(t, []string{"Bearer fixture-token"}, incoming.Get("authorization"))
+			require.Empty(t, incoming.Get(uci.NoAuthCodeClientInstanceMetadataKey))
+			return uciClientTestBindResponse(request), nil
+		},
+		call: func(ctx context.Context, _ *pb.CallToolRequest) (*pb.CallToolResponse, error) {
+			incoming, ok := metadata.FromIncomingContext(ctx)
+			require.True(t, ok)
+			require.Equal(t, []string{"Bearer fixture-token"}, incoming.Get("authorization"))
+			require.Empty(t, incoming.Get(uci.NoAuthCodeClientInstanceMetadataKey))
+			return &pb.CallToolResponse{ContentJson: []byte(`{"type":"text","text":"ok"}`)}, nil
+		},
+	}
+	serverURL := startUCIIndexAdapterGRPC(t, server)
+	mod := NewModule()
+	t.Cleanup(mod.pool.closeAll)
+	adapter := NewUCIIndexAdapter(mod)
+	ctx := auditcontext.WithUCITransportSession(context.Background(), "legacy-session")
+	ctx = metadata.AppendToOutgoingContext(ctx, uci.NoAuthCodeClientInstanceMetadataKey, "spoofed")
+	target, err := adapter.ResolveIndexTarget(ctx, uciClientTestProject(serverURL), "legacy-context-handle")
+	require.NoError(t, err)
+	_, err = adapter.ProxyHandleTool(ctx, target, "codebase_status", json.RawMessage(`{}`))
+	require.NoError(t, err)
+	require.Len(t, server.bindRequestsSnapshot(), 1)
+	require.Len(t, server.callRequestsSnapshot(), 1)
+}
+
+func TestUCIClientRejectsMalformedInstallationAnchor(t *testing.T) {
+	for _, instance := range []string{"invalid\r\nheader", " leading", "a/b", "a:b", string([]byte{0xff}), strings.Repeat("界", 257)} {
+		rpc := &uciClientRPCFake{}
+		client := newUCIClient(rpc, instance)
+		_, err := client.Bind(context.Background(), &pb.BindCodeContextRequest{ClientSessionId: "client-a"})
+		require.Error(t, err, "instance %q", instance)
+		_, err = client.Begin(context.Background(), uciClientTestBeginRequest(uciClientTestScopeA(), "daemon-a", "build-key-a"))
+		require.Error(t, err, "instance %q", instance)
+		_, err = client.Stage(context.Background(), []*pb.StageCodeIndexFrame{uciClientTestStageFrame(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, 0)})
+		require.Error(t, err, "instance %q", instance)
+		_, err = client.Finalize(context.Background(), uciClientTestFinalizeRequest(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, uciClientTestContextA(), uciClientTestAggregatePartsDigest))
+		require.Error(t, err, "instance %q", instance)
+		_, err = client.Query(context.Background(), uciClientTestQueryRequest(uciClientTestContextA()))
+		require.Error(t, err, "instance %q", instance)
+		_, err = client.Explore(context.Background(), uciClientTestExploreRequest(uciClientTestContextA()))
+		require.Error(t, err, "instance %q", instance)
+		require.Empty(t, rpc.bindRequests)
+		require.Empty(t, rpc.beginRequests)
+		require.Zero(t, rpc.stageOpenCalls)
+		require.Empty(t, rpc.finalizeRequests)
+		require.Empty(t, rpc.queryRequests)
+		require.Empty(t, rpc.exploreRequests)
+	}
+}
+
 func TestUCIClientAcceptsCompleteNoViewHandleBinding(t *testing.T) {
 	const contextHandle = "opaque-context-handle"
 	rpc := &uciClientRPCFake{}
 
-	bound, err := newUCIClient(rpc).Bind(context.Background(), &pb.BindCodeContextRequest{
+	bound, err := newUCIClient(rpc, "fixture-daemon-install").Bind(context.Background(), &pb.BindCodeContextRequest{
 		ClientSessionId: "client-a",
 		ContextHandle:   contextHandle,
 	})
@@ -166,7 +225,7 @@ func TestUCIClientForwardsUnboundBindRequest(t *testing.T) {
 		return response, nil
 	}}
 
-	bound, err := newUCIClient(rpc).Bind(context.Background(), &pb.BindCodeContextRequest{ClientSessionId: "client-a"})
+	bound, err := newUCIClient(rpc, "fixture-daemon-install").Bind(context.Background(), &pb.BindCodeContextRequest{ClientSessionId: "client-a"})
 	require.NoError(t, err)
 	require.Equal(t, "context-handle-client-a", bound.GetContextHandle())
 	requireUCIClientContextEqual(t, uciClientTestContextA(), bound.GetContext())
@@ -191,7 +250,7 @@ func TestUCIClientRejectsIncompleteOrMismatchedHandleBinding(t *testing.T) {
 				return response, nil
 			}}
 
-			_, err := newUCIClient(rpc).Bind(context.Background(), &pb.BindCodeContextRequest{
+			_, err := newUCIClient(rpc, "fixture-daemon-install").Bind(context.Background(), &pb.BindCodeContextRequest{
 				ClientSessionId: "client-a",
 				ContextHandle:   contextHandle,
 			})
@@ -202,7 +261,7 @@ func TestUCIClientRejectsIncompleteOrMismatchedHandleBinding(t *testing.T) {
 
 func TestUCIClientKeepsSessionsAndWorktreesIndependent(t *testing.T) {
 	rpc := &uciClientRPCFake{stageStream: &uciClientStageStream{}}
-	client := newUCIClient(rpc)
+	client := newUCIClient(rpc, "fixture-daemon-install")
 	ctx := context.Background()
 	contextA := uciClientTestContextA()
 	contextB := uciClientTestContextB()
@@ -281,7 +340,7 @@ func TestUCIClientRejectsInconsistentStageFrames(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			rpc := &uciClientRPCFake{stageStream: &uciClientStageStream{}}
 
-			_, err := newUCIClient(rpc).Stage(context.Background(), test.frames())
+			_, err := newUCIClient(rpc, "fixture-daemon-install").Stage(context.Background(), test.frames())
 			require.Error(t, err)
 			require.Zero(t, rpc.stageOpenCalls, "invalid frames must not open the generated client stream")
 		})
@@ -320,7 +379,7 @@ func TestUCIClientValidatesFinalizeObservation(t *testing.T) {
 			rpc := &uciClientRPCFake{}
 			request := newRequest()
 			test.mutate(request)
-			_, err := newUCIClient(rpc).Finalize(context.Background(), request)
+			_, err := newUCIClient(rpc, "fixture-daemon-install").Finalize(context.Background(), request)
 			require.Error(t, err)
 			require.Empty(t, rpc.finalizeRequests)
 		})
@@ -332,7 +391,7 @@ func TestUCIClientValidatesFinalizeObservation(t *testing.T) {
 		request.ObjectFormat = nil
 		request.RefLabel = nil
 		rpc := &uciClientRPCFake{}
-		_, err := newUCIClient(rpc).Finalize(context.Background(), request)
+		_, err := newUCIClient(rpc, "fixture-daemon-install").Finalize(context.Background(), request)
 		require.NoError(t, err)
 		require.Len(t, rpc.finalizeRequests, 1)
 	})
@@ -373,7 +432,7 @@ func TestUCIClientPropagatesCancellation(t *testing.T) {
 			cancel()
 			rpc := &uciClientRPCFake{stageStream: &uciClientStageStream{}}
 
-			err := test.invoke(newUCIClient(rpc), ctx)
+			err := test.invoke(newUCIClient(rpc, "fixture-daemon-install"), ctx)
 			require.ErrorIs(t, err, context.Canceled)
 			require.Zero(t, rpc.callCount(), "a canceled request must not reach the generated client")
 		})
@@ -385,7 +444,7 @@ func TestUCIClientRejectsNilOrMalformedResponses(t *testing.T) {
 		rpc := &uciClientRPCFake{bind: func(context.Context, *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {
 			return nil, nil
 		}}
-		_, err := newUCIClient(rpc).Bind(context.Background(), &pb.BindCodeContextRequest{ClientSessionId: "client-a", RequestedContext: uciClientTestContextA()})
+		_, err := newUCIClient(rpc, "fixture-daemon-install").Bind(context.Background(), &pb.BindCodeContextRequest{ClientSessionId: "client-a", RequestedContext: uciClientTestContextA()})
 		require.Error(t, err)
 	})
 
@@ -393,7 +452,7 @@ func TestUCIClientRejectsNilOrMalformedResponses(t *testing.T) {
 		rpc := &uciClientRPCFake{begin: func(_ context.Context, request *pb.BeginCodeIndexRequest) (*pb.BeginCodeIndexResponse, error) {
 			return &pb.BeginCodeIndexResponse{Scope: request.GetScope(), BuildId: uciClientTestServerBuildID}, nil
 		}}
-		_, err := newUCIClient(rpc).Begin(context.Background(), uciClientTestBeginRequest(uciClientTestScopeA(), "daemon-a", "build-key-a"))
+		_, err := newUCIClient(rpc, "fixture-daemon-install").Begin(context.Background(), uciClientTestBeginRequest(uciClientTestScopeA(), "daemon-a", "build-key-a"))
 		require.Error(t, err)
 	})
 
@@ -401,7 +460,7 @@ func TestUCIClientRejectsNilOrMalformedResponses(t *testing.T) {
 		rpc := &uciClientRPCFake{stageStream: &uciClientStageStream{close: func([]*pb.StageCodeIndexFrame) (*pb.StageCodeIndexResponse, error) {
 			return nil, nil
 		}}}
-		_, err := newUCIClient(rpc).Stage(context.Background(), []*pb.StageCodeIndexFrame{uciClientTestStageFrame(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, 0)})
+		_, err := newUCIClient(rpc, "fixture-daemon-install").Stage(context.Background(), []*pb.StageCodeIndexFrame{uciClientTestStageFrame(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, 0)})
 		require.Error(t, err)
 	})
 
@@ -413,7 +472,7 @@ func TestUCIClientRejectsNilOrMalformedResponses(t *testing.T) {
 				AcceptedFilesystemSequence: request.GetObservedFilesystemSequence(),
 			}, nil
 		}}
-		_, err := newUCIClient(rpc).Finalize(context.Background(), uciClientTestFinalizeRequest(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, uciClientTestContextA(), uciClientTestAggregatePartsDigest))
+		_, err := newUCIClient(rpc, "fixture-daemon-install").Finalize(context.Background(), uciClientTestFinalizeRequest(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, uciClientTestContextA(), uciClientTestAggregatePartsDigest))
 		require.Error(t, err)
 	})
 
@@ -421,7 +480,7 @@ func TestUCIClientRejectsNilOrMalformedResponses(t *testing.T) {
 		rpc := &uciClientRPCFake{query: func(_ context.Context, request *pb.QueryCodeRequest) (*pb.QueryCodeResponse, error) {
 			return &pb.QueryCodeResponse{Context: request.GetContext(), ResponseJson: []byte("[]")}, nil
 		}}
-		_, err := newUCIClient(rpc).Query(context.Background(), uciClientTestQueryRequest(uciClientTestContextA()))
+		_, err := newUCIClient(rpc, "fixture-daemon-install").Query(context.Background(), uciClientTestQueryRequest(uciClientTestContextA()))
 		require.Error(t, err)
 	})
 
@@ -429,7 +488,7 @@ func TestUCIClientRejectsNilOrMalformedResponses(t *testing.T) {
 		rpc := &uciClientRPCFake{explore: func(_ context.Context, _ *pb.ExploreCodeRequest) (*pb.ExploreCodeResponse, error) {
 			return &pb.ExploreCodeResponse{ResponseJson: []byte(`{"status":"ok"}`)}, nil
 		}}
-		_, err := newUCIClient(rpc).Explore(context.Background(), uciClientTestExploreRequest(uciClientTestContextA()))
+		_, err := newUCIClient(rpc, "fixture-daemon-install").Explore(context.Background(), uciClientTestExploreRequest(uciClientTestContextA()))
 		require.Error(t, err)
 	})
 }
@@ -443,7 +502,7 @@ func TestUCIClientRejectsMismatchedResponseBindings(t *testing.T) {
 			response.Context = responseContext
 			return response, nil
 		}}
-		_, err := newUCIClient(rpc).Bind(context.Background(), &pb.BindCodeContextRequest{ClientSessionId: "client-a", RequestedContext: uciClientTestContextA()})
+		_, err := newUCIClient(rpc, "fixture-daemon-install").Bind(context.Background(), &pb.BindCodeContextRequest{ClientSessionId: "client-a", RequestedContext: uciClientTestContextA()})
 		require.Error(t, err)
 	})
 
@@ -456,7 +515,7 @@ func TestUCIClientRejectsMismatchedResponseBindings(t *testing.T) {
 				LeaseExpiresAt: timestamppb.New(time.Now().Add(time.Hour)),
 			}, nil
 		}}
-		_, err := newUCIClient(rpc).Begin(context.Background(), uciClientTestBeginRequest(uciClientTestScopeA(), "daemon-a", "build-key-a"))
+		_, err := newUCIClient(rpc, "fixture-daemon-install").Begin(context.Background(), uciClientTestBeginRequest(uciClientTestScopeA(), "daemon-a", "build-key-a"))
 		require.Error(t, err)
 	})
 
@@ -469,7 +528,7 @@ func TestUCIClientRejectsMismatchedResponseBindings(t *testing.T) {
 				PartDigest:        uciClientTestAggregatePartsDigest,
 			}, nil
 		}}}
-		_, err := newUCIClient(rpc).Stage(context.Background(), []*pb.StageCodeIndexFrame{uciClientTestStageFrame(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, 0)})
+		_, err := newUCIClient(rpc, "fixture-daemon-install").Stage(context.Background(), []*pb.StageCodeIndexFrame{uciClientTestStageFrame(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, 0)})
 		require.Error(t, err)
 	})
 
@@ -482,7 +541,7 @@ func TestUCIClientRejectsMismatchedResponseBindings(t *testing.T) {
 				AcceptedFilesystemSequence: request.GetObservedFilesystemSequence(),
 			}, nil
 		}}
-		_, err := newUCIClient(rpc).Finalize(context.Background(), uciClientTestFinalizeRequest(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, uciClientTestContextA(), uciClientTestAggregatePartsDigest))
+		_, err := newUCIClient(rpc, "fixture-daemon-install").Finalize(context.Background(), uciClientTestFinalizeRequest(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, uciClientTestContextA(), uciClientTestAggregatePartsDigest))
 		require.Error(t, err)
 	})
 
@@ -490,7 +549,7 @@ func TestUCIClientRejectsMismatchedResponseBindings(t *testing.T) {
 		rpc := &uciClientRPCFake{query: func(context.Context, *pb.QueryCodeRequest) (*pb.QueryCodeResponse, error) {
 			return &pb.QueryCodeResponse{Context: uciClientTestContextB(), ResponseJson: []byte(`{"status":"ok"}`)}, nil
 		}}
-		_, err := newUCIClient(rpc).Query(context.Background(), uciClientTestQueryRequest(uciClientTestContextA()))
+		_, err := newUCIClient(rpc, "fixture-daemon-install").Query(context.Background(), uciClientTestQueryRequest(uciClientTestContextA()))
 		require.Error(t, err)
 	})
 
@@ -498,7 +557,7 @@ func TestUCIClientRejectsMismatchedResponseBindings(t *testing.T) {
 		rpc := &uciClientRPCFake{explore: func(context.Context, *pb.ExploreCodeRequest) (*pb.ExploreCodeResponse, error) {
 			return &pb.ExploreCodeResponse{Context: uciClientTestContextB(), ResponseJson: []byte(`{"status":"ok"}`)}, nil
 		}}
-		_, err := newUCIClient(rpc).Explore(context.Background(), uciClientTestExploreRequest(uciClientTestContextA()))
+		_, err := newUCIClient(rpc, "fixture-daemon-install").Explore(context.Background(), uciClientTestExploreRequest(uciClientTestContextA()))
 		require.Error(t, err)
 	})
 }
@@ -524,7 +583,7 @@ func TestUCIIndexAdapterBindsBeforeCollaboratorWithServerBinding(t *testing.T) {
 		result:        &IndexResult{Context: published, Embedded: 3, Deleted: 1, Uploaded: 4},
 		mutateBinding: true,
 	}
-	mod := NewModuleWithPreparedIndexCollaborator("", collaborator)
+	mod := NewModuleWithPreparedIndexCollaborator("fixture-daemon-install", collaborator)
 	t.Cleanup(mod.pool.closeAll)
 	adapter := NewUCIIndexAdapter(mod)
 	project := uciClientTestProject(serverURL)
@@ -569,7 +628,7 @@ func TestUCIIndexAdapterForwardsUnboundBindAndRetainsIssuedHandle(t *testing.T) 
 		},
 	}
 	serverURL := startUCIIndexAdapterGRPC(t, server)
-	mod := NewModuleWithClientInstanceID("")
+	mod := NewModuleWithClientInstanceID("fixture-daemon-install")
 	t.Cleanup(mod.pool.closeAll)
 	adapter := NewUCIIndexAdapter(mod)
 	ctx := auditcontext.WithUCITransportSession(context.Background(), clientSessionID)
@@ -600,7 +659,7 @@ func TestUCIIndexAdapterMapsUnboundContextRequiredToModuleError(t *testing.T) {
 		},
 	}
 	serverURL := startUCIIndexAdapterGRPC(t, server)
-	mod := NewModuleWithClientInstanceID("")
+	mod := NewModuleWithClientInstanceID("fixture-daemon-install")
 	t.Cleanup(mod.pool.closeAll)
 	ctx := auditcontext.WithUCITransportSession(context.Background(), "client-a")
 
@@ -626,7 +685,7 @@ func TestUCIIndexAdapterResolvesNoViewAndProxiesWithoutCollaborator(t *testing.T
 		},
 	}
 	serverURL := startUCIIndexAdapterGRPC(t, server)
-	mod := NewModuleWithClientInstanceID("")
+	mod := NewModuleWithClientInstanceID("fixture-daemon-install")
 	t.Cleanup(mod.pool.closeAll)
 	adapter := NewUCIIndexAdapter(mod)
 	ctx := auditcontext.WithUCITransportSession(context.Background(), clientSessionID)
@@ -646,14 +705,15 @@ func TestUCIIndexAdapterResolvesNoViewAndProxiesWithoutCollaborator(t *testing.T
 	require.Len(t, server.callRequestsSnapshot(), 1)
 }
 
-func TestUCIIndexAdapterForwardsTransportTagAcrossBindAndProxy(t *testing.T) {
+func TestUCIIndexAdapterForwardsV3InstallationAcrossAuthenticatedBindAndProxy(t *testing.T) {
 	const (
 		transportTag  = "transport-tag-a"
 		contextHandle = "transport-context-handle"
 	)
+	instance := strings.Repeat("界", 86)
 	server := &uciIndexAdapterGRPCServer{}
 	serverURL := startUCIIndexAdapterGRPC(t, server)
-	mod := NewModuleWithClientInstanceID("")
+	mod := NewModuleWithClientInstanceID(instance)
 	t.Cleanup(mod.pool.closeAll)
 	adapter := NewUCIIndexAdapter(mod)
 	ctx := auditcontext.WithUCITransportSession(context.Background(), transportTag)
@@ -672,12 +732,14 @@ func TestUCIIndexAdapterForwardsTransportTagAcrossBindAndProxy(t *testing.T) {
 	bindMetadata, callMetadata := server.metadataSnapshot()
 	require.Equal(t, []string{transportTag}, bindMetadata.Get(auditcontext.SourceSessionMetadataKey))
 	require.Equal(t, []string{transportTag}, callMetadata.Get(auditcontext.SourceSessionMetadataKey))
+	require.Equal(t, []string{"Bearer fixture-token"}, bindMetadata.Get("authorization"))
+	require.Equal(t, []string{"Bearer fixture-token"}, callMetadata.Get("authorization"))
 }
 
 func TestUCIIndexAdapterRejectsMissingTransportTagBeforeBind(t *testing.T) {
 	server := &uciIndexAdapterGRPCServer{}
 	serverURL := startUCIIndexAdapterGRPC(t, server)
-	mod := NewModuleWithClientInstanceID("")
+	mod := NewModuleWithClientInstanceID("fixture-daemon-install")
 	t.Cleanup(mod.pool.closeAll)
 	_, err := NewUCIIndexAdapter(mod).ResolveIndexTarget(context.Background(), uciClientTestProject(serverURL), "context-handle")
 	require.Error(t, err)
@@ -688,7 +750,7 @@ func TestUCIIndexAdapterRejectsMissingTransportTagForBoundTarget(t *testing.T) {
 	const transportTag = "transport-tag-a"
 	server := &uciIndexAdapterGRPCServer{}
 	serverURL := startUCIIndexAdapterGRPC(t, server)
-	mod := NewModuleWithClientInstanceID("")
+	mod := NewModuleWithClientInstanceID("fixture-daemon-install")
 	t.Cleanup(mod.pool.closeAll)
 	adapter := NewUCIIndexAdapter(mod)
 	project := uciClientTestProject(serverURL)
@@ -709,7 +771,7 @@ func TestUCIIndexAdapterRejectsMissingTransportTagForBoundTarget(t *testing.T) {
 func TestUCIIndexAdapterRejectsForeignTransportForResolvedTarget(t *testing.T) {
 	server := &uciIndexAdapterGRPCServer{}
 	serverURL := startUCIIndexAdapterGRPC(t, server)
-	mod := NewModuleWithClientInstanceID("")
+	mod := NewModuleWithClientInstanceID("fixture-daemon-install")
 	t.Cleanup(mod.pool.closeAll)
 	adapter := NewUCIIndexAdapter(mod)
 	project := uciClientTestProject(serverURL)
@@ -730,7 +792,7 @@ func TestUCIClientDiscardsResponseWhenCallCancelsContext(t *testing.T) {
 		return &pb.QueryCodeResponse{Context: request.GetContext(), ResponseJson: []byte(`{"status":"ok"}`)}, nil
 	}}
 
-	response, err := newUCIClient(rpc).Query(ctx, uciClientTestQueryRequest(uciClientTestContextA()))
+	response, err := newUCIClient(rpc, "fixture-daemon-install").Query(ctx, uciClientTestQueryRequest(uciClientTestContextA()))
 	require.Nil(t, response)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Len(t, rpc.queryRequests, 1)
@@ -744,7 +806,7 @@ func TestUCIClientRejectsUnknownQueryResponseWithoutReturningPrivatePayload(t *t
 		return response, nil
 	}}
 
-	response, err := newUCIClient(rpc).Query(context.Background(), uciClientTestQueryRequest(uciClientTestContextA()))
+	response, err := newUCIClient(rpc, "fixture-daemon-install").Query(context.Background(), uciClientTestQueryRequest(uciClientTestContextA()))
 	require.Nil(t, response)
 	require.ErrorIs(t, err, errUCIClientInvalidResponse)
 	require.NotContains(t, err.Error(), privatePayload)
@@ -767,7 +829,7 @@ func TestUCIClientReplacesSpoofedProvenanceMetadata(t *testing.T) {
 		return uciClientTestBindResponse(request), nil
 	}}
 
-	_, err := newUCIClient(rpc).Bind(ctx, &pb.BindCodeContextRequest{ClientSessionId: "client-a", RequestedContext: uciClientTestContextA()})
+	_, err := newUCIClient(rpc, "fixture-daemon-install").Bind(ctx, &pb.BindCodeContextRequest{ClientSessionId: "client-a", RequestedContext: uciClientTestContextA()})
 	require.NoError(t, err)
 }
 
@@ -778,7 +840,7 @@ func TestUCIClientMapsStageTransportFailurePhase(t *testing.T) {
 		rpc := &uciClientRPCFake{stageOpen: func(context.Context) (grpc.ClientStreamingClient[pb.StageCodeIndexFrame, pb.StageCodeIndexResponse], error) {
 			return nil, cause
 		}}
-		response, err := newUCIClient(rpc).Stage(context.Background(), frames)
+		response, err := newUCIClient(rpc, "fixture-daemon-install").Stage(context.Background(), frames)
 		require.Nil(t, response)
 		require.ErrorIs(t, err, cause)
 		require.ErrorContains(t, err, "UCI Stage open")
@@ -786,7 +848,7 @@ func TestUCIClientMapsStageTransportFailurePhase(t *testing.T) {
 	t.Run("sending frame", func(t *testing.T) {
 		cause := errors.New("send failed")
 		rpc := &uciClientRPCFake{stageStream: &uciClientStageStream{send: func(*pb.StageCodeIndexFrame) error { return cause }}}
-		response, err := newUCIClient(rpc).Stage(context.Background(), frames)
+		response, err := newUCIClient(rpc, "fixture-daemon-install").Stage(context.Background(), frames)
 		require.Nil(t, response)
 		require.ErrorIs(t, err, cause)
 		require.ErrorContains(t, err, "UCI Stage send")
@@ -796,19 +858,174 @@ func TestUCIClientMapsStageTransportFailurePhase(t *testing.T) {
 		rpc := &uciClientRPCFake{stageStream: &uciClientStageStream{close: func([]*pb.StageCodeIndexFrame) (*pb.StageCodeIndexResponse, error) {
 			return nil, cause
 		}}}
-		response, err := newUCIClient(rpc).Stage(context.Background(), frames)
+		response, err := newUCIClient(rpc, "fixture-daemon-install").Stage(context.Background(), frames)
 		require.Nil(t, response)
 		require.ErrorIs(t, err, cause)
 		require.ErrorContains(t, err, "UCI Stage close")
 	})
 }
 
+func TestUCIIndexAdapterOpaqueInstallationRoundTrip(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		instance string
+		valid    bool
+	}{
+		{name: "ASCII", instance: "fixture-daemon-install", valid: true},
+		{name: "Unicode", instance: "界", valid: true},
+		{name: "numeric-prefix opaque colon", instance: "1:install", valid: true},
+		{name: "non-scheme opaque colon", instance: "_opaque:install", valid: true},
+		{name: "Unicode-prefix opaque colon", instance: "界:install", valid: true},
+		{name: "ASCII rune limit", instance: strings.Repeat("a", 256), valid: true},
+		{name: "Unicode beyond former byte limit", instance: strings.Repeat("界", 86), valid: true},
+		{name: "Unicode rune limit", instance: strings.Repeat("界", 256), valid: true},
+		{name: "four-byte Unicode rune limit", instance: strings.Repeat("😀", 256), valid: true},
+		{name: "ASCII beyond rune limit", instance: strings.Repeat("a", 257)},
+		{name: "Unicode beyond rune limit", instance: strings.Repeat("界", 257)},
+		{name: "URL", instance: "https://example.test/install"},
+		{name: "file URL", instance: "file:///private/install"},
+		{name: "scheme", instance: "http:private"},
+		{name: "compound scheme", instance: "git+ssh:private"},
+		{name: "letter-prefix opaque-looking scheme", instance: "opaque1:install"},
+		{name: "drive path", instance: "C:private"},
+		{name: "slash path", instance: "private/install"},
+		{name: "backslash path", instance: `private\install`},
+		{name: "at sign", instance: "install@host"},
+		{name: "space", instance: "private install"},
+		{name: "Unicode space", instance: "private\u00a0install"},
+		{name: "control", instance: "install\x00"},
+		{name: "invalid UTF-8", instance: "install\xff"},
+		{name: "empty", instance: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			workstation, valid := uci.NoAuthCodeWorkstationForInstance(test.instance)
+			require.Equal(t, test.valid, valid)
+			if test.valid {
+				fingerprint := sha256.Sum256([]byte("engram/noauth-code/workstation/v1\x00" + test.instance))
+				require.Equal(t, fmt.Sprintf("noauth-code-%x", fingerprint), workstation)
+			}
+			authorize := func(ctx context.Context) error {
+				incoming, _ := metadata.FromIncomingContext(ctx)
+				values := incoming.Get(uci.NoAuthCodeClientInstanceMetadataKey)
+				if len(values) != 1 || values[0] != test.instance || len(incoming.Get("x-engram-uci-client-instance-id")) != 0 {
+					return status.Error(codes.FailedPrecondition, string(uci.ContextMismatch))
+				}
+				got, valid := uci.NoAuthCodeWorkstationForInstance(values[0])
+				if !valid || got != workstation {
+					return status.Error(codes.FailedPrecondition, string(uci.ContextMismatch))
+				}
+				return nil
+			}
+			server := &uciIndexAdapterGRPCServer{
+				bind: func(ctx context.Context, request *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {
+					if err := authorize(ctx); err != nil {
+						return nil, err
+					}
+					response := uciClientTestBindResponse(request)
+					response.WorkstationId = workstation
+					return response, nil
+				},
+				call: func(ctx context.Context, _ *pb.CallToolRequest) (*pb.CallToolResponse, error) {
+					return &pb.CallToolResponse{ContentJson: []byte(`{"type":"text","text":"ok"}`)}, authorize(ctx)
+				},
+				poll: func(ctx context.Context, request *pb.PollCodeIndexIntentsRequest) (*pb.PollCodeIndexIntentsResponse, error) {
+					if request.GetClientInstanceId() != test.instance {
+						return nil, status.Error(codes.FailedPrecondition, string(uci.ContextMismatch))
+					}
+					return &pb.PollCodeIndexIntentsResponse{}, authorize(ctx)
+				},
+				update: func(ctx context.Context, request *pb.UpdateCodeIndexIntentRequest) (*pb.UpdateCodeIndexIntentResponse, error) {
+					if request.GetClientInstanceId() != test.instance {
+						return nil, status.Error(codes.FailedPrecondition, string(uci.ContextMismatch))
+					}
+					return &pb.UpdateCodeIndexIntentResponse{IntentRef: request.GetIntentRef(), State: string(uci.IndexIntentAcknowledged), Attempt: 1}, authorize(ctx)
+				},
+			}
+			serverURL := startUCIIndexAdapterGRPC(t, server)
+			mod := NewModuleWithClientInstanceID(test.instance)
+			t.Cleanup(mod.pool.closeAll)
+			adapter := NewUCIIndexAdapter(mod)
+			ctx := auditcontext.WithUCITransportSession(context.Background(), "client-a")
+			ctx = metadata.AppendToOutgoingContext(ctx,
+				uci.NoAuthCodeClientInstanceMetadataKey, "spoofed", uci.NoAuthCodeClientInstanceMetadataKey, "duplicate",
+				"x-engram-uci-client-instance-id", "legacy-spoofed",
+			)
+			target, err := adapter.ResolveIndexTarget(ctx, uciClientTestProject(serverURL), "context-handle")
+			if !test.valid {
+				require.Error(t, err)
+				require.Empty(t, server.callRequestsSnapshot())
+				return
+			}
+			require.NoError(t, err)
+			configurationErr := mod.ConfigurePreparedIndexCollaborator(PreparedIndexConfiguration{
+				WorkstationID: workstation, ClientInstanceID: test.instance, ParserBundleDigest: uciClientTestFrameDigest,
+			}, &uciIndexCollaboratorFake{})
+			require.Equal(t, workstation, target.Binding.WorkstationID)
+			rebound, err := adapter.RebindIndexTarget(ctx, target)
+			require.NoError(t, err)
+			require.Equal(t, workstation, rebound.Binding.WorkstationID)
+			_, err = adapter.ProxyHandleTool(ctx, target, "codebase_status", json.RawMessage(`{}`))
+			require.NoError(t, err)
+			t.Run("poll with production owner", func(t *testing.T) {
+				_, err := adapter.PollIndexIntent(ctx, target, test.instance, "process-nonce")
+				require.NoError(t, err)
+			})
+			t.Run("update with production owner", func(t *testing.T) {
+				result, err := adapter.UpdateIndexIntent(ctx, target, test.instance, "process-nonce", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", uci.IndexIntentUpdate{OperationRef: "op-a", Operation: uci.IndexIntentAcknowledge})
+				require.NoError(t, err)
+				require.Equal(t, uci.IndexIntentAcknowledged, result.State)
+			})
+			require.NoError(t, configurationErr)
+		})
+	}
+}
+
+func TestUCIIndexAdapterRejectsInvalidIndexIntentOwners(t *testing.T) {
+	server := &uciIndexAdapterGRPCServer{
+		poll: func(context.Context, *pb.PollCodeIndexIntentsRequest) (*pb.PollCodeIndexIntentsResponse, error) {
+			return nil, status.Error(codes.Internal, "invalid owner reached transport")
+		},
+		update: func(context.Context, *pb.UpdateCodeIndexIntentRequest) (*pb.UpdateCodeIndexIntentResponse, error) {
+			return nil, status.Error(codes.Internal, "invalid owner reached transport")
+		},
+	}
+	serverURL := startUCIIndexAdapterGRPC(t, server)
+	mod := NewModuleWithClientInstanceID("fixture-daemon-install")
+	t.Cleanup(mod.pool.closeAll)
+	adapter := NewUCIIndexAdapter(mod)
+	ctx := auditcontext.WithUCITransportSession(context.Background(), "client-a")
+	target, err := adapter.ResolveIndexTarget(ctx, uciClientTestProject(serverURL), "context-handle")
+	require.NoError(t, err)
+	for _, test := range []struct {
+		name  string
+		owner string
+	}{
+		{name: "URL", owner: "https://example.test/install"},
+		{name: "scheme", owner: "opaque1:install"},
+		{name: "path", owner: "private/install"},
+		{name: "space", owner: "private install"},
+		{name: "control", owner: "install\x00"},
+		{name: "invalid UTF-8", owner: "install\xff"},
+		{name: "beyond rune limit", owner: strings.Repeat("界", 257)},
+		{name: "empty", owner: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := adapter.PollIndexIntent(ctx, target, test.owner, "process-nonce")
+			require.ErrorIs(t, err, errUCIClientInvalidRequest)
+			_, err = adapter.UpdateIndexIntent(ctx, target, test.owner, "process-nonce", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", uci.IndexIntentUpdate{OperationRef: "op-a", Operation: uci.IndexIntentAcknowledge})
+			require.ErrorIs(t, err, errUCIClientInvalidRequest)
+		})
+	}
+}
+
 type uciIndexAdapterGRPCServer struct {
 	pb.UnimplementedEngramServiceServer
 	mu sync.Mutex
 
-	bind func(context.Context, *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error)
-	call func(context.Context, *pb.CallToolRequest) (*pb.CallToolResponse, error)
+	bind   func(context.Context, *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error)
+	call   func(context.Context, *pb.CallToolRequest) (*pb.CallToolResponse, error)
+	poll   func(context.Context, *pb.PollCodeIndexIntentsRequest) (*pb.PollCodeIndexIntentsResponse, error)
+	update func(context.Context, *pb.UpdateCodeIndexIntentRequest) (*pb.UpdateCodeIndexIntentResponse, error)
 
 	bindRequests []*pb.BindCodeContextRequest
 	callRequests []*pb.CallToolRequest
@@ -840,6 +1057,14 @@ func (server *uciIndexAdapterGRPCServer) CallTool(ctx context.Context, request *
 		return call(ctx, request)
 	}
 	return &pb.CallToolResponse{}, nil
+}
+
+func (server *uciIndexAdapterGRPCServer) PollCodeIndexIntents(ctx context.Context, request *pb.PollCodeIndexIntentsRequest) (*pb.PollCodeIndexIntentsResponse, error) {
+	return server.poll(ctx, request)
+}
+
+func (server *uciIndexAdapterGRPCServer) UpdateCodeIndexIntent(ctx context.Context, request *pb.UpdateCodeIndexIntentRequest) (*pb.UpdateCodeIndexIntentResponse, error) {
+	return server.update(ctx, request)
 }
 
 func (server *uciIndexAdapterGRPCServer) bindRequestsSnapshot() []*pb.BindCodeContextRequest {

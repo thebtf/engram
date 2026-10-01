@@ -419,9 +419,8 @@ const QUIET_ENV_ALIASES = [
 ];
 
 const RUNTIME_CONFIG_ENV_KEYS = [
- 'ENGRAM_CONFIG_FILE', 'ENGRAM_DATA_DIR', 'CLAUDE_PLUGIN_DATA',
+ 'ENGRAM_CONFIG_FILE', 'ENGRAM_DATA_DIR', 'CLAUDE_PLUGIN_DATA', 'PLUGIN_DATA',
  'ENGRAM_URL', 'ENGRAM_SERVER_URL', 'CLAUDE_PLUGIN_OPTION_server_url',
- 'CLAUDE_PLUGIN_OPTION_SERVER_URL', 'ENGRAM_CLAUDE_USERCONFIG_URL',
  'ENGRAM_TOKEN', 'CLAUDE_PLUGIN_OPTION_api_token', 'CLAUDE_PLUGIN_OPTION_API_TOKEN',
  'ENGRAM_CLAUDE_USERCONFIG_TOKEN',
  'ENGRAM_CLIENT_INSTANCE_ID', 'CLAUDE_PLUGIN_OPTION_client_instance_id',
@@ -547,6 +546,19 @@ test('getEngramConfig resolves the explicit non-secret client instance ID', (t) 
   serverURL: 'http://env.example.test', token: 'env-token', clientInstanceID: 'env-install-alpha',
  });
 });
+
+test('tokenless URL provisions the same stable client instance used by the plugin wrapper', (t) => {
+ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-tokenless-instance-'));
+ t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+ setRuntimeConfigEnv(t, { ENGRAM_URL: 'http://127.0.0.1:37777', PLUGIN_DATA: dir, ENGRAM_CONFIG_FILE: path.join(dir, 'missing.json') });
+ const first = lib.getEngramConfig();
+ assert.equal(first.serverURL, 'http://127.0.0.1:37777');
+ assert.equal(first.token, '');
+ assert.ok(first.clientInstanceID);
+ assert.equal(lib.getEngramConfig().clientInstanceID, first.clientInstanceID);
+ assert.equal(fs.readFileSync(path.join(dir, 'client-instance-id'), 'utf8'), `${first.clientInstanceID}\n`);
+});
+
 test('config readers preserve raw V3 client IDs while normalizing URL and token', async (t) => {
  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-raw-client-instance-config-'));
  const configFile = path.join(dir, 'config.json');

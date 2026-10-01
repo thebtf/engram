@@ -1,5 +1,13 @@
 import { expect, test } from '@playwright/test'
 
+test.beforeEach(async ({ page }, testInfo) => {
+  await page.context().addCookies([{
+    name: 'mock-rule-session',
+    value: crypto.randomUUID(),
+    url: testInfo.project.use.baseURL!,
+  }])
+})
+
 test('behavioral rules apply selected-rule disable with an authoritative readback', async ({ page }) => {
   const consoleProblems: string[] = []
   const failedRequests: string[] = []
@@ -65,4 +73,37 @@ test('behavioral rules apply selected-rule disable with an authoritative readbac
   expect(failedRequests).toEqual([])
   expect(badResponses).toEqual([])
   expect(pageErrors).toEqual([])
+})
+
+test('a second browser session cannot replace a pending rule selection operation', async ({ page, browser }) => {
+  await page.goto('/rules')
+  const toggle = page.getByTestId('rule-enable-toggle-402')
+  await expect(toggle).toHaveAttribute('aria-checked', 'false')
+
+  const otherSession = await browser.newContext({ baseURL: test.info().project.use.baseURL })
+  try {
+    await otherSession.addCookies([{
+      name: 'mock-rule-session',
+      value: crypto.randomUUID(),
+      url: test.info().project.use.baseURL!,
+    }])
+    await page.route('**/api/rules', async (route) => {
+      if (route.request().method() === 'POST' && route.request().postDataJSON().action === 'enable') {
+        const competingSave = await otherSession.request.post('/api/collections/selection', {
+          data: { domain: 'rules', selection: { kind: 'explicit', targets: [{ id: '401' }] } },
+        })
+        expect(competingSave.ok()).toBe(true)
+      }
+      await route.continue()
+    })
+
+    const operation = page.waitForResponse((response) => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/rules')
+    await toggle.click()
+    const result = await operation
+    expect(result.status(), await result.text()).toBe(200)
+    await expect(toggle).toHaveAttribute('aria-checked', 'true')
+  } finally {
+    await otherSession.close()
+  }
 })

@@ -1,0 +1,586 @@
+package worker
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"testing"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/auth"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/grpcserver"
+	"github.com/thebtf/engram/internal/mcp"
+	"github.com/thebtf/engram/internal/uci"
+)
+
+type noAuthHTTPAuthority struct{ ref uci.ContextRef }
+
+func (a noAuthHTTPAuthority) AuthorizeOperatorCode(ctx context.Context, caller operatorCodeVerifiedCaller) (uci.AuthorizedContext, error) {
+	if !caller.NoAuth || caller.Context != a.ref {
+		return uci.AuthorizedContext{}, errors.New("scope denied")
+	}
+	resolver := uci.NewContextResolver(noAuthHTTPCatalog{a.ref}, noAuthHTTPAccess{a.ref}, nil)
+	return resolver.Authorize(ctx, uci.ResolveContextInput{ClientSessionID: "local-code/" + caller.BindingID, AuthRealm: uci.NoAuthCodeRealm, Principal: uci.NoAuthCodePrincipal, Ref: &a.ref})
+}
+
+type noAuthHTTPCatalog struct{ ref uci.ContextRef }
+
+func (c noAuthHTTPCatalog) LoadContext(_ context.Context, ref uci.ContextRef) (uci.ContextRecord, error) {
+	if ref != c.ref {
+		return uci.ContextRecord{}, errors.New("view denied")
+	}
+	return uci.ContextRecord{Ref: ref, AuthRealm: uci.NoAuthCodeRealm}, nil
+}
+
+type noAuthHTTPAccess struct{ ref uci.ContextRef }
+
+func (c noAuthHTTPAccess) AuthorizeContext(_ context.Context, access uci.ContextAccess) error {
+	if access.AuthRealm != uci.NoAuthCodeRealm || access.Principal != uci.NoAuthCodePrincipal || access.SourceID != c.ref.SourceID || access.CheckoutID != c.ref.CheckoutID {
+		return errors.New("owner denied")
+	}
+	return nil
+}
+
+func TestNoAuthOperatorCodeFirstUseAndAuthEnabledCannotForge(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	adapter.authority = noAuthHTTPAuthority{fixture.ref}
+	noauth := auth.AuthDisabled()
+	invoke := func(body string, id auth.Identity, handler func(http.ResponseWriter, *http.Request)) *httptest.ResponseRecorder {
+		request := operatorCodeHTTPTestRequest(t, body, id)
+		request.Header.Set("X-Engram-Auth-Disabled", "true")
+		recorder := httptest.NewRecorder()
+		handler(recorder, request)
+		return recorder
+	}
+	handshake := invoke(`{"document_nonce":"first-use"}`, noauth, adapter.HandleHandshake)
+	require.Equal(t, http.StatusOK, handshake.Code, handshake.Body.String())
+	var transition operatorCodeTransitionResponse
+	require.NoError(t, json.Unmarshal(handshake.Body.Bytes(), &transition))
+	proof := `{"tab_binding_id":"` + transition.TabBindingID + `","document_proof":"` + transition.DocumentProof + `"}`
+	catalog := invoke(proof, noauth, adapter.HandleContexts)
+	require.Equal(t, http.StatusOK, catalog.Code, catalog.Body.String())
+	var contexts operatorCodeContextsResponse
+	require.NoError(t, json.Unmarshal(catalog.Body.Bytes(), &contexts))
+	require.Len(t, contexts.Contexts, 1)
+	fixture.contexts.listErr = errors.New("catalog exceeds 128 active checkouts")
+	require.Equal(t, http.StatusServiceUnavailable, invoke(proof, noauth, adapter.HandleContexts).Code)
+	fixture.contexts.listErr = nil
+	require.NotEmpty(t, contexts.Contexts[0].SelectionRef)
+	pinRequest := operatorCodeHTTPTestRequest(t, `{"document_proof":"`+transition.DocumentProof+`","selection_ref":"`+contexts.Contexts[0].SelectionRef+`"}`, noauth)
+	route := chi.NewRouteContext()
+	route.URLParams.Add("tab_binding_id", transition.TabBindingID)
+	pinRequest = pinRequest.WithContext(context.WithValue(pinRequest.Context(), chi.RouteCtxKey, route))
+	pin := httptest.NewRecorder()
+	adapter.HandlePin(pin, pinRequest)
+	require.Equal(t, http.StatusNoContent, pin.Code, pin.Body.String())
+	adapter.indexTargets = operatorCodeHTTPTestExpiredIndexTargets{}
+	fixture.app.structure = operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalStructure)
+	(*fixture.app.structure.Items)[0].MatchSources = []uci.QueryMatchSource{uci.QueryMatchStructure}
+	structure := invoke(`{"tab_binding_id":"`+transition.TabBindingID+`","document_proof":"`+transition.DocumentProof+`","path_prefix":"internal","limit":1}`, noauth, adapter.HandleStructure)
+	require.Equal(t, http.StatusOK, structure.Code, structure.Body.String())
+	require.Contains(t, structure.Body.String(), `"excerpt":"package demo"`)
+	fixture.app.status = mcp.CodebaseStatusSnapshot{TotalChunks: 1, Embedding: uci.EmbeddingStatus{Coverage: uci.IndexCoverageUnavailable}}
+	status := invoke(proof, noauth, adapter.HandleStatus)
+	require.Equal(t, http.StatusOK, status.Code, status.Body.String())
+	fixture.app.search = operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalLexical)
+	search := invoke(`{"tab_binding_id":"`+transition.TabBindingID+`","document_proof":"`+transition.DocumentProof+`","query":"Fixture"}`, noauth, adapter.HandleSearch)
+	require.Equal(t, http.StatusOK, search.Code, search.Body.String())
+	require.Contains(t, search.Body.String(), `"excerpt":"package demo"`)
+	fixture.app.graph = operatorCodeHTTPTestGraphResponse(t, fixture.ref)
+	graph := invoke(`{"tab_binding_id":"`+transition.TabBindingID+`","document_proof":"`+transition.DocumentProof+`","action":"neighbors","target":{"entity_key":"Fixture.Symbol"}}`, noauth, adapter.HandleGraph)
+	require.Equal(t, http.StatusOK, graph.Code, graph.Body.String())
+	require.Contains(t, graph.Body.String(), `"navigation"`)
+	fixture.app.read = operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalExact)
+	read := invoke(`{"tab_binding_id":"`+transition.TabBindingID+`","document_proof":"`+transition.DocumentProof+`","entity_key":"Fixture.Symbol","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`, noauth, adapter.HandleVersionedRead)
+	require.Equal(t, http.StatusOK, read.Code, read.Body.String())
+	require.Contains(t, read.Body.String(), `"excerpt":"package demo"`)
+	missingCookie := operatorCodeHTTPTestRequest(t, proof, auth.SessionForBrowserUser("viewer", 41))
+	missingCookie.Header.Set("X-Engram-Auth-Disabled", "true")
+	missingCookie.Header.Del("Cookie")
+	denied := httptest.NewRecorder()
+	adapter.HandleStatus(denied, missingCookie)
+	require.Equal(t, http.StatusForbidden, denied.Code)
+	forged := invoke(proof, auth.SessionForBrowserUser("viewer", 42), adapter.HandleStatus)
+	require.NotEqual(t, http.StatusOK, forged.Code)
+}
+
+func TestNoAuthHTTPRealCatalogDerivesOfflineOwnerWithoutStateWriter(t *testing.T) {
+	store := openWorkerUCIContextCompositionStore(t)
+	ctx := context.Background()
+	contexts := gormdb.NewUCIContextStore(store.DB)
+	registered, err := contexts.RegisterLocalGit(ctx, gormdb.RegisterLocalGitInput{
+		AuthRealm: uci.NoAuthCodeRealm, Principal: uci.NoAuthCodePrincipal,
+		WorkstationID: "offline-device", SourceLabel: "offline repository", Locator: "file:///private/offline-copy",
+	})
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	view, err := contexts.CreateView(ctx, gormdb.CreateViewInput{
+		SourceID: registered.SourceID, CheckoutID: registered.CheckoutID,
+		IncarnationID: registered.IncarnationID, ProfileID: registered.ProfileID,
+		Generation: 1, ScanStart: now, ScanEnd: now.Add(time.Second),
+		ManifestDigest: fmt.Sprintf("sha256:%064x", 1), CoverageJSON: `{}`,
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.DB.Model(&gormdb.UCIView{}).Where("view_id = ?", view.ViewID).Updates(map[string]any{"state": gormdb.UCIViewPublished, "published_at": now}).Error)
+	require.NoError(t, store.DB.Model(&gormdb.UCICheckout{}).Where("checkout_id = ?", registered.CheckoutID).Update("current_view_id", view.ViewID).Error)
+	selector, err := uci.CheckoutIndexBindingSelector(uci.RegisteredCheckoutSelector{Scope: uci.IndexScope{SourceID: registered.SourceID, CheckoutID: registered.CheckoutID, IncarnationID: registered.IncarnationID}, ProfileID: registered.ProfileID})
+	require.NoError(t, err)
+	live, err := contexts.LoadIndexBinding(ctx, selector)
+	require.NoError(t, err)
+	targets := grpcserver.NewIndexIntentTargetRegistry()
+	targets.Observe(live)
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	adapter.contexts = gormdb.NewBrowserCodeContextStore(store.DB)
+	adapter.authority = newOperatorCodeServerAuthorizer(contexts, uci.NewContextResolver(contexts, gormdb.NewUCIContextAuthorizer(contexts), contexts))
+	adapter.indexTargets = targets
+	fixture.app.status = mcp.CodebaseStatusSnapshot{TotalChunks: 1, Embedding: uci.EmbeddingStatus{Coverage: uci.IndexCoverageUnavailable}}
+	identity := auth.AuthDisabled()
+	call := func(body string, handler func(http.ResponseWriter, *http.Request)) *httptest.ResponseRecorder {
+		request := operatorCodeHTTPTestRequest(t, body, identity)
+		request.Header.Set("X-Engram-Auth-Disabled", "true")
+		response := httptest.NewRecorder()
+		handler(response, request)
+		return response
+	}
+	handshake := call(`{"document_nonce":"offline-catalog"}`, adapter.HandleHandshake)
+	require.Equal(t, http.StatusOK, handshake.Code, handshake.Body.String())
+	var binding operatorCodeTransitionResponse
+	require.NoError(t, json.Unmarshal(handshake.Body.Bytes(), &binding))
+	proof := `{"tab_binding_id":"` + binding.TabBindingID + `","document_proof":"` + binding.DocumentProof + `"}`
+	previous := call(proof, adapter.HandleContexts)
+	require.Equal(t, http.StatusOK, previous.Code, previous.Body.String())
+	var selectable operatorCodeContextsResponse
+	require.NoError(t, json.Unmarshal(previous.Body.Bytes(), &selectable))
+	require.Len(t, selectable.Contexts, 1)
+	require.NotEmpty(t, selectable.Contexts[0].SelectionRef)
+	pinChoice := func(selection string) *httptest.ResponseRecorder {
+		request := operatorCodeHTTPTestRequest(t, `{"document_proof":"`+binding.DocumentProof+`","selection_ref":"`+selection+`"}`, identity)
+		request.Header.Set("X-Engram-Auth-Disabled", "true")
+		route := chi.NewRouteContext()
+		route.URLParams.Add("tab_binding_id", binding.TabBindingID)
+		request = request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, route))
+		pin := httptest.NewRecorder()
+		adapter.HandlePin(pin, request)
+		return pin
+	}
+	require.Equal(t, http.StatusNoContent, pinChoice(selectable.Contexts[0].SelectionRef).Code)
+	adapter.indexTargets = operatorCodeHTTPTestExpiredIndexTargets{}
+	var retained gormdb.UCICheckout
+	require.NoError(t, store.DB.Where("checkout_id = ?", registered.CheckoutID).First(&retained).Error)
+	require.Equal(t, gormdb.UCICheckoutRegistered, retained.State, "offline liveness must not retire durable registration")
+	require.Equal(t, view.ViewID, *retained.CurrentViewID, "owner loss must preserve the immutable published View")
+	response := call(proof, adapter.HandleContexts)
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	var catalog operatorCodeContextsResponse
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &catalog))
+	require.Len(t, catalog.Contexts, 1)
+	require.Equal(t, "offline repository", catalog.Contexts[0].Repository)
+	require.Contains(t, catalog.Contexts[0].WorkingCopy, "Offline")
+	t.Run("offline published choice remains selectable", func(t *testing.T) {
+		require.NotEmpty(t, catalog.Contexts[0].SelectionRef)
+		require.Equal(t, selectable.Contexts[0].ViewRef, catalog.Contexts[0].ViewRef)
+		require.Equal(t, selectable.Contexts[0].IndexedSnapshot, catalog.Contexts[0].IndexedSnapshot)
+	})
+	require.Empty(t, catalog.Contexts[0].IndexIntentSelectionRef)
+	require.False(t, catalog.Contexts[0].IndexIntentAvailable)
+	require.NotContains(t, response.Body.String(), "file://")
+
+	t.Run("prior published chooser can still pin", func(t *testing.T) {
+		require.Equal(t, http.StatusNoContent, pinChoice(selectable.Contexts[0].SelectionRef).Code)
+	})
+	t.Run("selected immutable View status and release remain authorized", func(t *testing.T) {
+		status := call(proof, adapter.HandleStatus)
+		require.Equal(t, http.StatusOK, status.Code, status.Body.String())
+	})
+	t.Run("fresh observer receives offline published choice", func(t *testing.T) {
+		handshake := call(`{"document_nonce":"fresh-offline-observer"}`, adapter.HandleHandshake)
+		require.Equal(t, http.StatusOK, handshake.Code, handshake.Body.String())
+		var observer operatorCodeTransitionResponse
+		require.NoError(t, json.Unmarshal(handshake.Body.Bytes(), &observer))
+		response := call(`{"tab_binding_id":"`+observer.TabBindingID+`","document_proof":"`+observer.DocumentProof+`"}`, adapter.HandleContexts)
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		var offered operatorCodeContextsResponse
+		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &offered))
+		require.Len(t, offered.Contexts, 1)
+		require.Contains(t, offered.Contexts[0].WorkingCopy, "Offline")
+		require.NotEmpty(t, offered.Contexts[0].SelectionRef)
+		require.Equal(t, selectable.Contexts[0].ViewRef, offered.Contexts[0].ViewRef)
+	})
+	adapter.indexTargets = targets
+	recovered := call(proof, adapter.HandleContexts)
+	require.Equal(t, http.StatusOK, recovered.Code)
+	var again operatorCodeContextsResponse
+	require.NoError(t, json.Unmarshal(recovered.Body.Bytes(), &again))
+	require.Len(t, again.Contexts, 1)
+	require.NotContains(t, again.Contexts[0].WorkingCopy, "Offline")
+	require.Equal(t, http.StatusNoContent, pinChoice(again.Contexts[0].SelectionRef).Code, "authenticated polling recovers the same durable checkout")
+	require.NoError(t, store.DB.Model(&gormdb.UCICheckout{}).Where("checkout_id = ?", registered.CheckoutID).Update("owner_principal", "different-owner").Error)
+	denied := pinChoice(again.Contexts[0].SelectionRef)
+	require.Equal(t, http.StatusForbidden, denied.Code, "offline is not denied, but changed durable owner authority denies a new pin")
+	require.Empty(t, denied.Body.String())
+}
+
+func TestNoAuthOfflineOwnerCannotReauthorizeBootstrapSelection(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	identity := auth.AuthDisabled()
+	transition, err := adapter.noAuthBindings.Handshake(context.Background(), identity, "", BrowserBindingHandshakeInput{DocumentNonce: "bootstrap-owner"})
+	require.NoError(t, err)
+	proof := BrowserBindingProof{TabBindingID: transition.TabBindingID, DocumentProof: transition.DocumentProof}
+	caller := operatorCodeRequestIdentity{identity: identity}
+	fixture.contexts.noViewBinding = gormdb.BrowserCodeIndexIntentBinding{Scope: uci.IndexScope{SourceID: fixture.ref.SourceID, CheckoutID: fixture.ref.CheckoutID, IncarnationID: operatorCodeHTTPTestIncarnationID}, ProfileID: fixture.ref.AnalysisProfileID, AuthRealm: uci.NoAuthCodeRealm}
+	requested := operatorCodeIndexIntentTargetRequest{SelectionRef: adapter.operatorCodeIndexSelectionRef(caller, fixture.ref.SourceID, fixture.ref.CheckoutID, fixture.ref.AnalysisProfileID)}
+	_, failure := adapter.authorizeNoViewIndexIntentMutation(context.Background(), caller, proof, requested, "", true)
+	require.Equal(t, uci.ReleaseFailureNone, failure)
+	adapter.indexTargets = operatorCodeHTTPTestExpiredIndexTargets{}
+	_, failure = adapter.authorizeNoViewIndexIntentMutation(context.Background(), caller, proof, requested, "", true)
+	require.Equal(t, uci.ReleaseFailurePermissionDenied, failure, "expired owner cannot bootstrap")
+	_, failure = adapter.authorizeNoViewIndexIntentMutation(context.Background(), caller, proof, requested, fixture.ref.AnalysisProfileID, false)
+	require.Equal(t, uci.ReleaseFailurePermissionDenied, failure, "retry/replay must not authorize a stale owner merely because the target remains registered")
+}
+
+func TestNoAuthFirstIndexDurableStatusAfterOwnerDisconnect(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	identity := auth.AuthDisabled()
+	fixture.contexts.noViewBinding = gormdb.BrowserCodeIndexIntentBinding{Scope: uci.IndexScope{SourceID: fixture.ref.SourceID, CheckoutID: fixture.ref.CheckoutID, IncarnationID: operatorCodeHTTPTestIncarnationID}, ProfileID: fixture.ref.AnalysisProfileID, AuthRealm: uci.NoAuthCodeRealm}
+	call := func(request *http.Request, handler func(http.ResponseWriter, *http.Request)) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		handler(response, request)
+		return response
+	}
+	handshake := call(operatorCodeHTTPTestRequest(t, `{"document_nonce":"durable-first-index"}`, identity), adapter.HandleHandshake)
+	require.Equal(t, http.StatusOK, handshake.Code, handshake.Body.String())
+	var binding operatorCodeTransitionResponse
+	require.NoError(t, json.Unmarshal(handshake.Body.Bytes(), &binding))
+	proof := `"tab_binding_id":"` + binding.TabBindingID + `","document_proof":"` + binding.DocumentProof + `"`
+	selection := adapter.operatorCodeIndexSelectionRef(operatorCodeRequestIdentity{identity: identity, sessionID: "local-code-document"}, fixture.ref.SourceID, fixture.ref.CheckoutID, fixture.ref.AnalysisProfileID)
+	body := `{` + proof + `,"request_ref":"durable-first-index","kind":"reindex","target":{"selection_ref":"` + selection + `"}}`
+	submitted := call(operatorCodeHTTPTestRequest(t, body, identity), adapter.HandleIndexIntentSubmit)
+	require.Equal(t, http.StatusAccepted, submitted.Code, submitted.Body.String())
+	intent := fixture.app.indexIntents["durable-first-index"]
+	statusRequest := func() *http.Request {
+		request := operatorCodeHTTPTestIndexIntentStatusRequest(t, intent.ID, "", identity)
+		request.Header.Set("X-Engram-Tab-Binding-ID", binding.TabBindingID)
+		request.Header.Set("X-Engram-Document-Proof", binding.DocumentProof)
+		return request
+	}
+	adapter.indexTargets = operatorCodeHTTPTestExpiredIndexTargets{}
+	t.Run("pending durable read is not completion", func(t *testing.T) {
+		response := call(statusRequest(), adapter.HandleIndexIntentStatus)
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		require.Equal(t, string(uci.IndexIntentSubmitted), operatorCodeHTTPTestIndexIntentResponse(t, response.Body.String())["state"])
+		operatorCodeHTTPTestRequireSafeIndexIntentResponse(t, response.Body.String(), false, fixture)
+	})
+	completed := operatorCodeHTTPTestNoViewIndexIntent(intent.Scope, intent.ProfileID, intent.RequestRef, intent.Kind, uci.IndexIntentCompleted)
+	completed.ID = intent.ID
+	claim, err := uci.NewIndexIntentClaim(completed.ID, "private-index-owner", 1, completed.CreatedAt)
+	require.NoError(t, err)
+	completed.Acknowledgement = &claim
+	fixture.app.indexIntents[intent.RequestRef] = completed
+	adapter.authority = noAuthHTTPAuthority{*completed.ResultView}
+	t.Run("completed result survives owner disconnect", func(t *testing.T) {
+		response := call(statusRequest(), adapter.HandleIndexIntentStatus)
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		status := operatorCodeHTTPTestIndexIntentResponse(t, response.Body.String())
+		require.Equal(t, string(uci.IndexIntentCompleted), status["state"])
+		require.Equal(t, map[string]any{"view_ref": completed.ResultView.ViewID, "generation": float64(completed.ResultView.Generation)}, status["result"])
+		operatorCodeHTTPTestRequireSafeIndexIntentResponse(t, response.Body.String(), true, fixture)
+	})
+	t.Run("read failure stays unavailable", func(t *testing.T) {
+		fixture.app.indexGetErr = errors.New("durable index read unavailable")
+		defer func() { fixture.app.indexGetErr = nil }()
+		response := call(statusRequest(), adapter.HandleIndexIntentStatus)
+		require.Equal(t, http.StatusServiceUnavailable, response.Code)
+		require.Empty(t, response.Body.String())
+	})
+	t.Run("invalid document cannot read", func(t *testing.T) {
+		request := statusRequest()
+		request.Header.Set("X-Engram-Document-Proof", "wrong-proof")
+		response := call(request, adapter.HandleIndexIntentStatus)
+		require.Equal(t, http.StatusForbidden, response.Code)
+		require.Empty(t, response.Body.String())
+	})
+	t.Run("auth enabled caller cannot borrow noauth document", func(t *testing.T) {
+		request := statusRequest()
+		request = request.WithContext(auth.WithIdentity(request.Context(), auth.SessionForBrowserUser("viewer", 42)))
+		request.Header.Set("X-Engram-Auth-Disabled", "true")
+		response := call(request, adapter.HandleIndexIntentStatus)
+		require.Equal(t, http.StatusForbidden, response.Code)
+		require.Empty(t, response.Body.String())
+	})
+	t.Run("durable target revocation still denies", func(t *testing.T) {
+		fixture.contexts.initialTargetErr = gormdb.ErrBrowserCodeContextDenied
+		defer func() { fixture.contexts.initialTargetErr = nil }()
+		response := call(statusRequest(), adapter.HandleIndexIntentStatus)
+		require.Equal(t, http.StatusForbidden, response.Code)
+		require.Empty(t, response.Body.String())
+	})
+	t.Run("published result still needs View authorization", func(t *testing.T) {
+		adapter.authority = noAuthHTTPAuthority{}
+		defer func() { adapter.authority = noAuthHTTPAuthority{*completed.ResultView} }()
+		response := call(statusRequest(), adapter.HandleIndexIntentStatus)
+		require.Equal(t, http.StatusOK, response.Code)
+		require.Equal(t, string(uci.IndexIntentCompleted), operatorCodeHTTPTestIndexIntentResponse(t, response.Body.String())["state"])
+		require.NotContains(t, response.Body.String(), `"result"`)
+	})
+	unavailable := operatorCodeHTTPTestNoViewIndexIntent(intent.Scope, intent.ProfileID, intent.RequestRef, intent.Kind, uci.IndexIntentUnavailable)
+	unavailable.ID = intent.ID
+	fixture.app.indexIntents[intent.RequestRef] = unavailable
+	t.Run("retryable durable read is not a mutation grant", func(t *testing.T) {
+		response := call(statusRequest(), adapter.HandleIndexIntentStatus)
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		status := operatorCodeHTTPTestIndexIntentResponse(t, response.Body.String())
+		require.Equal(t, string(uci.IndexIntentUnavailable), status["state"])
+		require.Equal(t, true, status["retryable"])
+		require.NotContains(t, response.Body.String(), `"result"`)
+	})
+	t.Run("offline mutations remain denied", func(t *testing.T) {
+		replay := call(operatorCodeHTTPTestRequest(t, body, identity), adapter.HandleIndexIntentSubmit)
+		require.Equal(t, http.StatusForbidden, replay.Code)
+		require.Empty(t, replay.Body.String())
+		fresh := call(operatorCodeHTTPTestRequest(t, `{`+proof+`,"request_ref":"offline-new","kind":"reindex","target":{"selection_ref":"`+selection+`"}}`, identity), adapter.HandleIndexIntentSubmit)
+		require.Equal(t, http.StatusForbidden, fresh.Code)
+		require.Empty(t, fresh.Body.String())
+		retryRequest := operatorCodeHTTPTestIndexIntentRetryRequest(t, intent.ID, identity)
+		retryRequest.Body = operatorCodeHTTPTestRequest(t, `{`+proof+`}`, identity).Body
+		retry := call(retryRequest, adapter.HandleIndexIntentRetry)
+		require.Equal(t, http.StatusForbidden, retry.Code)
+		require.Empty(t, retry.Body.String())
+		require.Equal(t, uci.IndexIntentUnavailable, fixture.app.indexIntents[intent.RequestRef].State)
+	})
+}
+
+func TestNoAuthOperatorCodePagehideCloseReloadResumesPinnedTab(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	adapter.authority = noAuthHTTPAuthority{fixture.ref}
+	noauth := auth.AuthDisabled()
+	call := func(body string, id auth.Identity, handler func(http.ResponseWriter, *http.Request)) *httptest.ResponseRecorder {
+		request := operatorCodeHTTPTestRequest(t, body, id)
+		request.Header.Set("X-Engram-Auth-Disabled", "true")
+		response := httptest.NewRecorder()
+		handler(response, request)
+		return response
+	}
+	first := call(`{"document_nonce":"first-document"}`, noauth, adapter.HandleHandshake)
+	require.Equal(t, http.StatusOK, first.Code, first.Body.String())
+	var original operatorCodeTransitionResponse
+	require.NoError(t, json.Unmarshal(first.Body.Bytes(), &original))
+	firstProof := `{"tab_binding_id":"` + original.TabBindingID + `","document_proof":"` + original.DocumentProof + `"}`
+	catalog := call(firstProof, noauth, adapter.HandleContexts)
+	require.Equal(t, http.StatusOK, catalog.Code, catalog.Body.String())
+	var contexts operatorCodeContextsResponse
+	require.NoError(t, json.Unmarshal(catalog.Body.Bytes(), &contexts))
+	require.Len(t, contexts.Contexts, 1)
+	pathCall := func(id string, body string, identity auth.Identity, handler func(http.ResponseWriter, *http.Request)) *httptest.ResponseRecorder {
+		request := operatorCodeHTTPTestRequest(t, body, identity)
+		request.Header.Set("X-Engram-Auth-Disabled", "true")
+		route := chi.NewRouteContext()
+		route.URLParams.Add("tab_binding_id", id)
+		request = request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, route))
+		response := httptest.NewRecorder()
+		handler(response, request)
+		return response
+	}
+	pin := pathCall(original.TabBindingID, `{"document_proof":"`+original.DocumentProof+`","selection_ref":"`+contexts.Contexts[0].SelectionRef+`"}`, noauth, adapter.HandlePin)
+	require.Equal(t, http.StatusNoContent, pin.Code, pin.Body.String())
+	resumeBody := `{"tab_binding_id":"` + original.TabBindingID + `","resume_nonce":"` + original.ResumeNonce + `","reload_token":"` + original.ReloadToken + `","document_nonce":"second-document"}`
+	pending := call(resumeBody, noauth, adapter.HandleResume)
+	require.Equal(t, http.StatusOK, pending.Code, pending.Body.String())
+	require.JSONEq(t, `{"state":"RELOAD_PENDING"}`, pending.Body.String())
+	closeResponse := pathCall(original.TabBindingID, `{"document_proof":"`+original.DocumentProof+`"}`, noauth, adapter.HandleClose)
+	require.Equal(t, http.StatusNoContent, closeResponse.Code, closeResponse.Body.String())
+	require.Equal(t, http.StatusForbidden, call(firstProof, noauth, adapter.HandleStatus).Code)
+	require.Equal(t, http.StatusForbidden, pathCall(original.TabBindingID, `{"document_proof":"`+original.DocumentProof+`"}`, noauth, adapter.HandleRenew).Code, "closed document cannot renew")
+	resumed := call(resumeBody, noauth, adapter.HandleResume)
+	require.Equal(t, http.StatusOK, resumed.Code, resumed.Body.String())
+	var second operatorCodeTransitionResponse
+	require.NoError(t, json.Unmarshal(resumed.Body.Bytes(), &second))
+	require.Equal(t, BrowserBindingReady, second.State)
+	require.Equal(t, original.TabBindingID, second.TabBindingID)
+	require.Equal(t, original.ResumeNonce, second.ResumeNonce)
+	require.NotEqual(t, original.DocumentProof, second.DocumentProof)
+	require.NotEqual(t, original.ReloadToken, second.ReloadToken)
+	secondProof := `{"tab_binding_id":"` + second.TabBindingID + `","document_proof":"` + second.DocumentProof + `"}`
+	fixture.app.status = mcp.CodebaseStatusSnapshot{TotalChunks: 1, Embedding: uci.EmbeddingStatus{Coverage: uci.IndexCoverageUnavailable}}
+	require.Equal(t, http.StatusOK, call(secondProof, noauth, adapter.HandleStatus).Code, "pinned selection survives pagehide and reload")
+	require.Equal(t, http.StatusForbidden, call(resumeBody, noauth, adapter.HandleResume).Code, "consumed reload token cannot replay")
+	other := call(`{"document_nonce":"other-tab","copied_tab_binding_id":"`+original.TabBindingID+`","copied_resume_nonce":"`+original.ResumeNonce+`"}`, noauth, adapter.HandleHandshake)
+	require.Equal(t, http.StatusOK, other.Code, other.Body.String())
+	var separate operatorCodeTransitionResponse
+	require.NoError(t, json.Unmarshal(other.Body.Bytes(), &separate))
+	require.NotEqual(t, original.TabBindingID, separate.TabBindingID, "copied tab gets no prior binding")
+	foreignPair := `{"tab_binding_id":"` + separate.TabBindingID + `","resume_nonce":"` + original.ResumeNonce + `","reload_token":"` + second.ReloadToken + `","document_nonce":"foreign-document"}`
+	require.Equal(t, http.StatusForbidden, call(foreignPair, noauth, adapter.HandleResume).Code, "another tab cannot borrow resume material")
+	require.Equal(t, http.StatusOK, call(secondProof, noauth, adapter.HandleStatus).Code, "foreign replay cannot revoke current tab")
+	require.Equal(t, http.StatusForbidden, call(secondProof, auth.SessionForBrowserUser("viewer", 42), adapter.HandleStatus).Code, "auth-enabled identity cannot forge noauth via header")
+}
+
+func TestNoAuthOperatorCodeRestartRequiresFreshHandshakeAndSelection(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	adapter.authority = noAuthHTTPAuthority{fixture.ref}
+	noauth := auth.AuthDisabled()
+	call := func(body string, handler func(http.ResponseWriter, *http.Request)) *httptest.ResponseRecorder {
+		request := operatorCodeHTTPTestRequest(t, body, noauth)
+		request.Header.Set("X-Engram-Auth-Disabled", "true")
+		response := httptest.NewRecorder()
+		handler(response, request)
+		return response
+	}
+	handshake := func(nonce string) operatorCodeTransitionResponse {
+		response := call(`{"document_nonce":"`+nonce+`"}`, adapter.HandleHandshake)
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		var transition operatorCodeTransitionResponse
+		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &transition))
+		return transition
+	}
+	pinSelection := func(transition operatorCodeTransitionResponse, selectionRef string) {
+		request := operatorCodeHTTPTestRequest(t, `{"document_proof":"`+transition.DocumentProof+`","selection_ref":"`+selectionRef+`"}`, noauth)
+		request.Header.Set("X-Engram-Auth-Disabled", "true")
+		route := chi.NewRouteContext()
+		route.URLParams.Add("tab_binding_id", transition.TabBindingID)
+		request = request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, route))
+		response := httptest.NewRecorder()
+		adapter.HandlePin(response, request)
+		require.Equal(t, http.StatusNoContent, response.Code, response.Body.String())
+	}
+	first := handshake("before-restart")
+	oldProof := `{"tab_binding_id":"` + first.TabBindingID + `","document_proof":"` + first.DocumentProof + `"}`
+	firstCatalog := call(oldProof, adapter.HandleContexts)
+	require.Equal(t, http.StatusOK, firstCatalog.Code, firstCatalog.Body.String())
+	var firstContexts operatorCodeContextsResponse
+	require.NoError(t, json.Unmarshal(firstCatalog.Body.Bytes(), &firstContexts))
+	require.Len(t, firstContexts.Contexts, 1)
+	pinSelection(first, firstContexts.Contexts[0].SelectionRef)
+	fixture.app.status = mcp.CodebaseStatusSnapshot{TotalChunks: 1, Embedding: uci.EmbeddingStatus{Coverage: uci.IndexCoverageUnavailable}}
+	require.Equal(t, http.StatusOK, call(oldProof, adapter.HandleStatus).Code, "selection is pinned before restart")
+
+	adapter.noAuthBindings = newNoAuthCodeBindings() // Simulate server restart; catalog remains durable.
+	resume := `{"tab_binding_id":"` + first.TabBindingID + `","resume_nonce":"` + first.ResumeNonce + `","reload_token":"` + first.ReloadToken + `","document_nonce":"after-restart"}`
+	require.Equal(t, http.StatusForbidden, call(resume, adapter.HandleResume).Code)
+	require.Equal(t, http.StatusForbidden, call(oldProof, adapter.HandleContexts).Code)
+
+	second := handshake("after-restart")
+	require.NotEqual(t, first.TabBindingID, second.TabBindingID)
+	newProof := `{"tab_binding_id":"` + second.TabBindingID + `","document_proof":"` + second.DocumentProof + `"}`
+	catalog := call(newProof, adapter.HandleContexts)
+	require.Equal(t, http.StatusOK, catalog.Code, catalog.Body.String())
+	var contexts operatorCodeContextsResponse
+	require.NoError(t, json.Unmarshal(catalog.Body.Bytes(), &contexts))
+	require.Len(t, contexts.Contexts, 1)
+	require.NotEmpty(t, contexts.Contexts[0].SelectionRef)
+	require.Equal(t, http.StatusForbidden, call(newProof, adapter.HandleStatus).Code, "new document has no inherited pin")
+	pinSelection(second, contexts.Contexts[0].SelectionRef)
+	require.Equal(t, http.StatusOK, call(newProof, adapter.HandleStatus).Code, "fresh catalog selection restores access")
+}
+
+func TestNoAuthOperatorCodeCapacityRecoversFromInactiveTabs(t *testing.T) {
+	adapter, _ := newOperatorCodeHTTPTestAdapter(t)
+	identity := auth.AuthDisabled()
+	call := func(body string, handler func(http.ResponseWriter, *http.Request)) *httptest.ResponseRecorder {
+		request := operatorCodeHTTPTestRequest(t, body, identity)
+		request.Header.Set("X-Engram-Auth-Disabled", "true")
+		response := httptest.NewRecorder()
+		handler(response, request)
+		return response
+	}
+	handshake := func(nonce string) operatorCodeTransitionResponse {
+		response := call(`{"document_nonce":"`+nonce+`"}`, adapter.HandleHandshake)
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		var transition operatorCodeTransitionResponse
+		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &transition))
+		return transition
+	}
+	active := handshake("active-tab")
+	closed := handshake("closed-tab")
+	expired := handshake("expired-lease-tab")
+	for len(adapter.noAuthBindings.tabs) < 1024 {
+		_, err := adapter.noAuthBindings.Handshake(context.Background(), identity, "", BrowserBindingHandshakeInput{DocumentNonce: "additional-tab"})
+		require.NoError(t, err)
+	}
+	require.Equal(t, http.StatusForbidden, call(`{"document_nonce":"full-capacity"}`, adapter.HandleHandshake).Code, "live tabs cannot be evicted")
+	require.Len(t, adapter.noAuthBindings.tabs, 1024)
+	activeProof := `{"tab_binding_id":"` + active.TabBindingID + `","document_proof":"` + active.DocumentProof + `"}`
+	require.Equal(t, http.StatusOK, call(activeProof, adapter.HandleContexts).Code, "capacity rejection preserves active proof")
+
+	closeRequest := operatorCodeHTTPTestRequest(t, `{"document_proof":"`+closed.DocumentProof+`"}`, identity)
+	closeRequest.Header.Set("X-Engram-Auth-Disabled", "true")
+	route := chi.NewRouteContext()
+	route.URLParams.Add("tab_binding_id", closed.TabBindingID)
+	closeRequest = closeRequest.WithContext(context.WithValue(closeRequest.Context(), chi.RouteCtxKey, route))
+	closeResponse := httptest.NewRecorder()
+	adapter.HandleClose(closeResponse, closeRequest)
+	require.Equal(t, http.StatusNoContent, closeResponse.Code)
+	handshake("after-close")
+	require.Len(t, adapter.noAuthBindings.tabs, 1024)
+	closedResume := `{"tab_binding_id":"` + closed.TabBindingID + `","resume_nonce":"` + closed.ResumeNonce + `","reload_token":"` + closed.ReloadToken + `","document_nonce":"reload-closed"}`
+	require.Equal(t, http.StatusForbidden, call(closedResume, adapter.HandleResume).Code, "evicted binding cannot resume")
+
+	tab := adapter.noAuthBindings.tabs[expired.TabBindingID]
+	tab.lease = time.Now().Add(-time.Second)
+	adapter.noAuthBindings.tabs[expired.TabBindingID] = tab
+	handshake("after-lease-expiry")
+	require.Len(t, adapter.noAuthBindings.tabs, 1024)
+	expiredResume := `{"tab_binding_id":"` + expired.TabBindingID + `","resume_nonce":"` + expired.ResumeNonce + `","reload_token":"` + expired.ReloadToken + `","document_nonce":"reload-expired"}`
+	require.Equal(t, http.StatusForbidden, call(expiredResume, adapter.HandleResume).Code, "evicted expired lease cannot resume")
+	require.Equal(t, http.StatusOK, call(activeProof, adapter.HandleContexts).Code, "recovery preserves active proof")
+	require.Equal(t, http.StatusForbidden, call(`{"document_nonce":"still-full"}`, adapter.HandleHandshake).Code, "all remaining tabs are live")
+}
+
+func TestNoAuthOperatorCodeCursorCapacityEvictsOldestAbandonedCursor(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	adapter.authority = noAuthHTTPAuthority{fixture.ref}
+	identity := auth.AuthDisabled()
+	ctx := context.Background()
+	abandoned, err := adapter.noAuthBindings.Handshake(ctx, identity, "", BrowserBindingHandshakeInput{DocumentNonce: "abandoned-tab"})
+	require.NoError(t, err)
+	active, err := adapter.noAuthBindings.Handshake(ctx, identity, "", BrowserBindingHandshakeInput{DocumentNonce: "active-tab"})
+	require.NoError(t, err)
+	activeProof := BrowserBindingProof{TabBindingID: active.TabBindingID, DocumentProof: active.DocumentProof}
+	require.NoError(t, adapter.noAuthBindings.Pin(ctx, identity, activeProof, fixture.ref))
+
+	oldBinding := gormdb.BrowserCodeContinuationBinding{AuthRealm: uci.NoAuthCodeRealm, TabBindingID: abandoned.TabBindingID}
+	now := time.Now()
+	for index := range 2048 {
+		deadline := now.Add(8 * time.Minute)
+		if index == 0 {
+			deadline = now.Add(time.Minute)
+		}
+		adapter.noAuthBindings.cursors["abandoned-"+strconv.Itoa(index)] = noAuthCodeCursor{binding: oldBinding, service: "service-cursor", expires: deadline}
+	}
+	adapter.noAuthBindings.cursors["abandoned-2047"] = noAuthCodeCursor{binding: oldBinding, service: "live-cursor", expires: now.Add(9 * time.Minute)}
+	serviceCursor := "usc1.00000000-0000-4000-8000-000000000001"
+	response := operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalLexical)
+	truncated := true
+	response.Truncated = &truncated
+	response.Continuation = &uci.QueryContinuation{Value: &serviceCursor}
+	fixture.app.search = response
+
+	request := operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+active.TabBindingID+`","document_proof":"`+active.DocumentProof+`","query":"Fixture","limit":1}`, identity)
+	request.Header.Set("X-Engram-Auth-Disabled", "true")
+	search := httptest.NewRecorder()
+	adapter.HandleSearch(search, request)
+	require.Equal(t, 1, fixture.app.searchCalls, "request reached cursor admission after tab authorization")
+	require.Equal(t, http.StatusOK, search.Code, search.Body.String())
+	require.Len(t, adapter.noAuthBindings.cursors, 2048)
+	_, err = adapter.noAuthBindings.cursor("abandoned-0", oldBinding)
+	require.ErrorIs(t, err, gormdb.ErrBrowserCodeContinuationDenied, "the oldest abandoned continuation is no longer usable")
+	value, err := adapter.noAuthBindings.cursor("abandoned-2047", oldBinding)
+	require.NoError(t, err)
+	require.Equal(t, "live-cursor", value, "recent continuation survives unrelated tab's search")
+	_, err = adapter.noAuthBindings.cursor("abandoned-2047", gormdb.BrowserCodeContinuationBinding{AuthRealm: uci.NoAuthCodeRealm, TabBindingID: active.TabBindingID})
+	require.ErrorIs(t, err, gormdb.ErrBrowserCodeContinuationDenied, "other tab cannot redeem an existing cursor")
+	require.NotContains(t, search.Body.String(), serviceCursor)
+	_, err = adapter.noAuthBindings.Guard(ctx, identity, "", activeProof)
+	require.NoError(t, err, "unrelated tab proof remains valid")
+	tab := adapter.noAuthBindings.tabs[active.TabBindingID]
+	tab.expires = now.Add(-time.Second)
+	adapter.noAuthBindings.tabs[active.TabBindingID] = tab
+	_, err = adapter.noAuthBindings.Guard(ctx, identity, "", activeProof)
+	require.ErrorIs(t, err, ErrBrowserBindingDenied, "expired tab proof cannot be extended by cursor eviction")
+}

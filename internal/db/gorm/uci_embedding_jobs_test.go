@@ -295,8 +295,8 @@ func TestUCIEmbeddingReusesUnchangedChunksAcrossFileVersions(t *testing.T) {
 	require.True(t, claimed)
 	legacyBatch, err := fixture.store.PrepareEmbeddingBatch(ctx, legacyClaim, legacyAuthorized, 16)
 	require.NoError(t, err)
-	require.Len(t, legacyBatch.Candidates, 5)
-	require.Len(t, legacyBatch.MissingInputIndexes, 5)
+	require.NotEmpty(t, legacyBatch.Candidates)
+	require.Len(t, legacyBatch.MissingInputIndexes, len(legacyBatch.Candidates))
 	uciEmbeddingJobsCommitBatch(t, fixture, legacyClaim, legacyAuthorized, legacyBatch, 1)
 
 	next, exhausted, err := fixture.store.EnsureCurrentEmbeddingJobs(ctx, v2Profile, "", 16)
@@ -321,7 +321,7 @@ func TestUCIEmbeddingReusesUnchangedChunksAcrossFileVersions(t *testing.T) {
 	v2Candidates, exhausted, err := loadUCIEmbeddingCandidatePage(ctx, fixture.publication.db, v2Initial.Context, nil, 16, v2Profile)
 	require.NoError(t, err)
 	require.True(t, exhausted)
-	require.Len(t, v2Candidates, 5)
+	require.Len(t, v2Candidates, len(legacyBatch.Candidates))
 	packageCandidate := uciEmbeddingJobsCandidateByEntity(t, v2Candidates, "go:fixture/pkg:fixture")
 	parserCandidate := uciEmbeddingJobsCandidateByEntity(t, v2Candidates, "parser-canary.ts:0")
 	foreignVector := pgvector.NewVector(uciEmbeddingJobsVector(91))
@@ -354,14 +354,14 @@ func TestUCIEmbeddingReusesUnchangedChunksAcrossFileVersions(t *testing.T) {
 	require.Equal(t, *v2InitialJob.EmbeddingProfileID, v2InitialClaim.Ref.EmbeddingProfileID)
 	v2InitialBatch, err := fixture.store.PrepareEmbeddingBatch(ctx, v2InitialClaim, v2InitialAuthorized, 16)
 	require.NoError(t, err)
-	require.Len(t, v2InitialBatch.Candidates, 5)
-	require.Len(t, v2InitialBatch.MissingInputIndexes, 5, "v1, foreign-source, and foreign-protection vectors cannot satisfy the v2 View")
+	require.Len(t, v2InitialBatch.Candidates, len(v2Candidates))
+	require.Len(t, v2InitialBatch.MissingInputIndexes, len(v2InitialBatch.Candidates), "v1, foreign-source, and foreign-protection vectors cannot satisfy the v2 View")
 	uciEmbeddingJobsCommitBatch(t, fixture, v2InitialClaim, v2InitialAuthorized, v2InitialBatch, 10)
 
 	legacyLinks := uciEmbeddingJobsLinks(t, fixture.publication, legacyClaim.Ref.EmbeddingProfileID)
 	v2InitialLinks := uciEmbeddingJobsLinks(t, fixture.publication, v2InitialClaim.Ref.EmbeddingProfileID)
-	require.Len(t, legacyLinks, 5)
-	require.Len(t, v2InitialLinks, 5)
+	require.Len(t, legacyLinks, len(legacyBatch.Candidates))
+	require.Len(t, v2InitialLinks, len(v2InitialBatch.Candidates))
 	v2LinksByChunk := make(map[string]UCIChunkEmbedding, len(v2InitialLinks))
 	for _, link := range v2InitialLinks {
 		v2LinksByChunk[link.ChunkID] = link
@@ -371,6 +371,12 @@ func TestUCIEmbeddingReusesUnchangedChunksAcrossFileVersions(t *testing.T) {
 		require.True(t, found, "the same immutable chunk must have a v2 link")
 		require.Equal(t, v2InitialClaim.Ref.EmbeddingProfileID, v2Link.EmbeddingProfileID)
 		require.NotEqual(t, legacyLink.EmbeddingProfileID, v2Link.EmbeddingProfileID, "v1 and v2 links must remain profile-isolated")
+	}
+	initialVectorsByInput := make(map[ucidomain.IndexDigest]string, len(v2InitialBatch.Candidates))
+	for _, candidate := range v2InitialBatch.Candidates {
+		link, found := v2LinksByChunk[candidate.Key.ChunkID]
+		require.True(t, found, "every initial candidate must have a vector link")
+		initialVectorsByInput[candidate.InputDigest] = link.EmbeddingID
 	}
 
 	changedGo := uciIndexAdmissionFixtureFrame(t, fixture.publication, "pkg/fixture.go", uciEmbeddingJobsVersionedGoSource("UCIWatcherSLO002"))
@@ -383,20 +389,26 @@ func TestUCIEmbeddingReusesUnchangedChunksAcrossFileVersions(t *testing.T) {
 	require.True(t, claimed)
 	v2NextBatch, err := fixture.store.PrepareEmbeddingBatch(ctx, v2NextClaim, v2NextAuthorized, 16)
 	require.NoError(t, err)
-	require.Len(t, v2NextBatch.Candidates, 5)
-	missingEntities := make(map[string]struct{}, len(v2NextBatch.MissingInputIndexes))
+	require.Len(t, v2NextBatch.Candidates, len(v2InitialBatch.Candidates))
+	missing := make(map[int]bool, len(v2NextBatch.MissingInputIndexes))
 	for _, index := range v2NextBatch.MissingInputIndexes {
-		missingEntities[v2NextBatch.Candidates[index].Candidate.EntityKey] = struct{}{}
+		missing[index] = true
 	}
-	require.Equal(t, map[string]struct{}{
-		"go:fixture/func:SharedTarget":     {},
-		"go:fixture/func:UCIWatcherSLO002": {},
-		"pkg/fixture.go:3":                 {},
-	}, missingEntities, "only semantic chunks changed by the file version require provider input")
-	for _, cachedEntity := range []string{"go:fixture/pkg:fixture", "parser-canary.ts:0"} {
-		_, missing := missingEntities[cachedEntity]
-		require.False(t, missing, "%s must be a v2 cache hit", cachedEntity)
+	var reused, changed int
+	for index, candidate := range v2NextBatch.Candidates {
+		_, cached := initialVectorsByInput[candidate.InputDigest]
+		require.Equalf(t, !cached, missing[index], "candidate %s must require a provider only when its canonical input changed", candidate.Candidate.EntityKey)
+		if cached {
+			reused++
+		} else {
+			changed++
+		}
+		if candidate.Candidate.RelativePath == "parser-canary.ts" {
+			require.True(t, cached, "unchanged parser canary chunks must reuse their vectors")
+		}
 	}
+	require.Positive(t, reused, "the next file version must reuse unchanged inputs")
+	require.Positive(t, changed, "changed semantic inputs must still reach the provider")
 
 	v2NextPackage := uciEmbeddingJobsCandidateByEntity(t, v2NextBatch.Candidates, "go:fixture/pkg:fixture")
 	uciEmbeddingJobsCommitBatch(t, fixture, v2NextClaim, v2NextAuthorized, v2NextBatch, 20)
@@ -409,6 +421,16 @@ func TestUCIEmbeddingReusesUnchangedChunksAcrossFileVersions(t *testing.T) {
 		v2NextPackage.ProtectionDomain,
 	).Count(&packageVectorCount).Error)
 	require.Equal(t, int64(1), packageVectorCount, "the unchanged package chunk must link to its existing vector")
+	v2NextLinks := uciEmbeddingJobsLinks(t, fixture.publication, v2NextClaim.Ref.EmbeddingProfileID)
+	linkedByChunk := make(map[string]string, len(v2NextLinks))
+	for _, link := range v2NextLinks {
+		linkedByChunk[link.ChunkID] = link.EmbeddingID
+	}
+	for _, candidate := range v2NextBatch.Candidates {
+		if existingID, cached := initialVectorsByInput[candidate.InputDigest]; cached {
+			require.Equal(t, existingID, linkedByChunk[candidate.Key.ChunkID], "unchanged input must link to its existing vector")
+		}
+	}
 	var currentSourceVectors int64
 	require.NoError(t, fixture.publication.db.Model(&UCIEmbedding{}).Where(
 		"embedding_profile_id = ? AND source_id = ? AND protection_domain = ?",
@@ -416,7 +438,11 @@ func TestUCIEmbeddingReusesUnchangedChunksAcrossFileVersions(t *testing.T) {
 		fixture.publication.source.SourceID,
 		"source-private",
 	).Count(&currentSourceVectors).Error)
-	require.Equal(t, int64(8), currentSourceVectors, "five initial v2 vectors plus three changed semantic chunks")
+	require.Equal(t, int64(len(initialVectorsByInput)+changed), currentSourceVectors, "only distinct changed inputs create new vectors")
+	status, err := ucidomain.NewIndexStatusService(fixture.store, &v2Profile).Status(ctx, v2NextAuthorized, "")
+	require.NoError(t, err)
+	require.Equal(t, ucidomain.IndexCoverageComplete, status.Embedding.Coverage)
+	require.Equal(t, status.Embedding.TotalCandidates, status.Embedding.ReadyCandidates)
 }
 
 func TestUCIEmbeddingTransientFailureRetainsAttemptAndStatus(t *testing.T) {

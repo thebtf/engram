@@ -4,11 +4,7 @@ Engram is persistent shared memory infrastructure for coding-agent workstations.
 It keeps memories, behavioral rules, issues, documents, and encrypted credentials
 in PostgreSQL while an agent host talks to a local MCP process over stdio.
 
-> **Canonical documentation:** this English README is the current public front
-> door. [Русский README](README.ru.md) and [中文 README](README.zh.md) remain in
-> the repository, but both are **stale / non-canonical**: they have not yet been
-> synchronized with this v5+ architecture. Do not treat them as equivalent setup
-> instructions until a later localization batch restores parity.
+> **Canonical documentation:** this English README describes the current source and the chosen no-auth HTTP LAN setup. [Русский README](README.ru.md) covers the same Workspace path; [中文 README](README.zh.md) remains stale and is not equivalent setup guidance.
 
 Engram fixes this by keeping only the memory primitives that proved reliable in production: explicit issues, documents, memories, behavioral rules, credentials, and API tokens. One server, multiple workstations, zero context loss.
 
@@ -24,7 +20,7 @@ Since then, the v6 line rebuilt governance on top of that stable core: per-works
 
 | Version | Highlight |
 |---------|-----------|
-| **v6.50.0 candidate** | **Operator Workspace (Feature 011 D-A).** The candidate source adds Home → Workspace and authorized working-copy investigation. Check the [installed-operator guide](docs/operating-engram.md) before claiming this UI is installed or accepted. |
+| **v6.50.1 candidate** | **Operator Workspace (Feature 011 D-A).** Current candidate source supports Home → Workspace on the configured single-user no-auth HTTP LAN origin. Follow the [operator guide](docs/operating-engram.md); source checks are not installed acceptance. |
 | **v6.38.0** | **V7 Meta-memory Discovery (ENG-V7-S2)** — content-free `know_about` MCP tool, S2 `CandidateProposer`, and session-start `meta_summary` behind v7 flags. |
 | **v6.37.0** | **V7 State Subsystem (ENG-V7-S1)** — v7 `StateWriter` adapter and bounded native state resume hardening. |
 | **v6.32.0** | **Usefulness / Noise Review Loop (CR-008, MPL-3)** — packet-centric bounded review queue with explicit empty/gated/error/sparse states, separate preview/apply, atomic snapshot+audit-backed suppress/preserve, honest metrics. |
@@ -38,18 +34,9 @@ Since then, the v6 line rebuilt governance on top of that stable core: per-works
 
 See [Releases](https://github.com/thebtf/engram/releases) for full changelog.
 
-### Two-Tier Token Model (v6)
+### Authentication mode
 
-Engram v6 separates two credential tiers, each pinned to a single host class:
-
-| Tier | Name | Lives in | Purpose | Issuance |
-|---|---|---|---|---|
-| **1 — Operator key** | `ENGRAM_AUTH_ADMIN_TOKEN` | Server-host environment ONLY (Docker, compose) | Admin-grade access for migrations, server-internal RPCs, dashboard bootstrap | Operator-managed (Docker env) |
-| **2 — Worker keycard** | `ENGRAM_TOKEN` | Workstation `~/.claude/settings.json` env | Daemon ↔ server gRPC, regular MCP tool calls | Generated from the dashboard `/access` Keycards panel (admin-only browser session) |
-
-Operator keys NEVER appear on workstations. Worker keycards NEVER appear on the server host. There is no `OR`-fallback between the two names — the daemon ignores the admin name; the server ignores the workstation name. Workstation startup with `ENGRAM_URL` set but `ENGRAM_TOKEN` empty exits non-zero with an actionable error. Keycard issuance requires a browser admin session — bearer callers get 403 on `/api/auth/tokens`.
-
-Migration from v5.x: open `<server-url>/access`, sign in as an admin in the browser, generate a keycard, then paste that keycard via `/engram:setup`. See [CHANGELOG.md](CHANGELOG.md) for full migration steps.
+The current single-user path uses `ENGRAM_AUTH_DISABLED=true`. Set `ENGRAM_URL` to the configured server origin and use the installed plugin without workstation keycard issuance, browser sign-in, HTTPS, or a reverse proxy. Keep this HTTP LAN deployment on a trusted network. Auth-enabled deployments retain the v6 operator-token and workstation-keycard separation, browser identities, and explicit code read grants; that path is deferred from this no-auth Workspace guide, not removed. Never place an admin credential on a workstation.
 <!-- redoc:end:whats-new -->
 
 ---
@@ -81,9 +68,7 @@ for the boundary details.
 
 ## Quick start: server
 
-Prerequisites: Docker with Compose, plus a secure password and an operator token
-for a real deployment. Docker Compose uses a Compose file to define and start a
-multi-container application; see the official [Docker Compose documentation](https://docs.docker.com/compose/).
+Prerequisites: Docker with Compose and a database password. For this trusted single-user HTTP LAN journey, configure `ENGRAM_AUTH_DISABLED=true` in `.env`. Production image selection and secrets have separate requirements in the [deployment guide](docs/DEPLOYMENT.md).
 
 ```bash
 git clone https://github.com/thebtf/engram.git
@@ -96,7 +81,7 @@ ENGRAM_OPERATOR_IMAGE=engram-local-operator-console
 ENGRAM_POSTGRES_IMAGE=engram-local-postgres
 ENGRAM_BUILD_VERSION=sha-$commit
 EOF
-# Also set POSTGRES_PASSWORD and ENGRAM_AUTH_ADMIN_TOKEN in .env before production use.
+# Set POSTGRES_PASSWORD and ENGRAM_AUTH_DISABLED=true in .env for the trusted no-auth LAN path.
 docker compose up -d --build
 docker compose ps
 ```
@@ -123,28 +108,13 @@ that port in these commands.
 
 ## Configure a workstation
 
-Keep credentials separated:
-
-| Location | Variable | Purpose |
-| --- | --- | --- |
-| Server host only | `ENGRAM_AUTH_ADMIN_TOKEN` | Operator credential for administrative API access. |
-| Workstation only | `ENGRAM_URL` | Bare server origin, for example `http://server.example:37777`. |
-| Workstation only | `ENGRAM_TOKEN` | Revocable per-workstation keycard used by the local daemon. |
-
-Never copy `ENGRAM_AUTH_ADMIN_TOKEN` into a plugin, agent-host configuration, or
-workstation environment. The daemon fails fast when a server URL is configured
-but `ENGRAM_TOKEN` is absent.
-
-Install or build the local daemon, then register it with your agent host as an
-MCP process that runs `engram` on stdio and receives `ENGRAM_URL` and
-`ENGRAM_TOKEN` in its environment. A host-agnostic process definition is:
+For a no-auth installation, set `ENGRAM_AUTH_DISABLED=true` on the server. Configure the **new installed plugin** with `ENGRAM_URL` as the bare configured server origin; no `ENGRAM_TOKEN` is required in this mode. The agent host launches the local `engram` MCP process over stdio. Do not add `/mcp` or `/sse` to the URL, and do not paste an admin credential into client configuration. An auth-enabled installation instead requires its own workstation keycard and browser authorization. A host-agnostic process definition is:
 
 ```text
 command: engram
 transport: stdio
 environment:
-  ENGRAM_URL: http://server.example:37777
-  ENGRAM_TOKEN: <per-workstation-keycard>
+  ENGRAM_URL: http://your-server:37777
 ```
 
 Direct launches create a stable, non-secret `client-instance-id` in
@@ -158,18 +128,7 @@ For a source checkout, build the binaries with:
 make build
 ```
 
-The exact agent-host configuration file is host-specific; the invariant is the
-command, stdio transport, and the two workstation variables above. Confirm the
-host lists Engram's tools before relying on it for session continuity.
-
-### Issue a workstation keycard
-
-1. In an authenticated admin browser session, open `<server-url>/access`.
-2. In **Workstation keycards**, set the workstation name, scope, principal, principal kind, and optional expiry; the server validates the final request.
-3. Copy the raw keycard immediately. It is returned once, does not appear in the keycard list, and must become the workstation's `ENGRAM_TOKEN`.
-4. Revoke the keycard from the same panel when that workstation is retired or compromised.
-
-The Access panel uses the browser-session-admin `GET`, `POST`, and `DELETE` routes at `/api/auth/tokens`. The operator credential remains only in server-host deployment configuration; never put `ENGRAM_AUTH_ADMIN_TOKEN` into the workstation environment, daemon, plugin, or agent-host setup.
+The exact agent-host configuration file is host-specific. Confirm the installed plugin's fresh MCP `tools/list` before relying on its code tools; a successful daemon process check alone does not prove registration.
 
 ## Use Engram
 
@@ -198,15 +157,13 @@ existing does not mean the workflow behind it is accepted** — read the ledger'
 
 ### Workspace
 
-From **Home**, open **Workspace** and choose a readable **Repository**, **Working copy**, then **Indexed snapshot**. These labels describe the existing UCI Source, Checkout, and immutable View. They do not grant code access.
+In a new Git repository, run `engram project init --name "Example Workspace"` offline from its Git root. Explicitly `git add -- .engram-project` and commit the V3 anchor; initialization does not stage or commit it. Do not replace a legacy marker or treat a new anchor as migration of old project memories and issues.
 
-The authenticated `/api/code` Workspace route keeps one investigation in the selected snapshot. Browse or search source, follow a direct or reverse derived relation, then open its released evidence.
+With the current `ENGRAM_AUTH_DISABLED=true` installation, open the configured HTTP LAN console and choose **Home → Workspace → Repository → Working copy → Indexed snapshot → Pin selected View**. No login, grants, HTTPS, or proxy are needed for this single-user path. Register A and B from the ordinary installed plugin's `codebase_context` tool, then index and check daemon-side `codebase_status` until each published View and its code embeddings are ready. If labels repeat, distinguish entries by their indexed working-copy and snapshot counts; never guess an internal ID. Set the embedding provider's `ENGRAM_EMBEDDING_URL` to its base URL (a trailing `/v1` is accepted) and use an `ENGRAM_EMBEDDING_MODEL` returning 1536-dimensional vectors.
 
-Only a source owner may issue or revoke an explicit Source-and-Checkout browser read grant for an authenticated browser subject. Each contextual request also needs its current tab binding and selected View. The UCI release authority reauthorizes the request and records non-content exposure before it returns contextual content. A role, name, path, old project label, or MCP keycard does not grant browser code access.
+Search with a conceptual query and confirm `vector` or `hybrid` retrieval rather than lexical fallback. Follow an automatically derived direct or reverse graph relation, inspect its evidence precision, and read the source in the same selected View. Workspace reports freshness, coverage, code-embedding job state and error reason; a newer View requires an explicit switch, including after a tab reload. Keep A and B pinned separately across tabs. An indexed Go example does not prove JS, TS, or TSX graph support; check the installed parser and a meaningful example for each language. Keep the older memory service and client separate from the new code client: a new V3 project or UCI Source does not migrate historical memory. Auth-enabled browser sign-in and Source/Checkout grants remain separate deferred behavior. The [operator guide](docs/operating-engram.md) gives the full F1–F7 installed verification path.
 
 Manual knowledge-graph writers and plaintext Book intake are retired. Historical graph and Book readers, records, documents, and provenance remain available. Historical graph records are not UCI code-graph facts.
-
-The `codebase_*` MCP tools are the current UCI agent path, separate from browser Workspace. Current source enables code intelligence by default unless `ENGRAM_CODE_INTEL_ENABLED` is exactly `false`; check the actual daemon and its advertised tools on older installations. An authorized opaque context is still required. The internal raw-project rollback reader alone is legacy. MCP handles do not create browser grants or tab bindings. Follow the [operator setup and F1–F7 verification guide](docs/operating-engram.md) before treating Workspace as installed and accepted.
 
 Known corrections from that ledger:
 
@@ -228,7 +185,7 @@ Known corrections from that ledger:
   land on `/settings` directly, immediately redirects to `/`. There is no
   separate settings screen; refreshing or deep-linking to `/settings` reopens
   the modal over the overview rather than showing a stable settings page.
-- **Graph, candidate queue, legacy MCP tools:** these existing routes and tools load at direct request, but their data operations depend on the relevant `ENGRAM_GRAPH_ENABLED`, `ENGRAM_VNEXT_F_ENABLED`, or code-intelligence setting. Unlike the other two flags, current source enables code intelligence by default unless `ENGRAM_CODE_INTEL_ENABLED` is exactly `false`. They are separate from the authenticated Workspace route. Flag presence is not the same as an accepted end-to-end workflow; the ledger records both separately.
+- **Graph, candidate queue, legacy MCP tools:** these routes and tools have their own feature settings. Current source enables code intelligence unless `ENGRAM_CODE_INTEL_ENABLED` is exactly `false`. They are separate from Workspace, which uses the configured auth realm and selected View. Route presence alone does not prove an installed journey.
 
 Use Workspace for browser investigation of authorized code. Use the console for operational overview, search, memory, rules, issues, documents, credentials, and access administration. Treat health, candidate queue, and settings per the corrections above.
 
@@ -244,8 +201,7 @@ Compose stack. Important defaults and boundaries:
 - `ENGRAM_RERANK_URL` is an optional source-wired recall path, not a default or
   advertised core capability. See the source classification in the ledger.
 - `ENGRAM_GRAPH_ENABLED` and `ENGRAM_VNEXT_F_ENABLED` enable distinct non-default surfaces. Current source enables code intelligence by default; `ENGRAM_CODE_INTEL_ENABLED=false` is its explicit stop.
-- `ENGRAM_AUTH_DISABLED=true` is a local smoke/debug choice, not a production
-  security setting.
+- `ENGRAM_AUTH_DISABLED=true` selects the deliberate trusted single-user HTTP LAN path. It is not a multi-user security boundary; auth-enabled installations retain their own credentials and grants.
 
 For a separate console host, set `ENGRAM_OPERATOR_CONSOLE_URL` on the server to
 an absolute URL. The server validates that this value includes a scheme and host
@@ -269,8 +225,7 @@ lifecycle hooks and lets the standalone installers validate the release
 bootstrap policy before installation. Windows-compatible Bash installs (Git
 Bash, MSYS2, or Cygwin) also require `unzip` on `PATH`.
 
-Install the marketplace plugin first, then run `/engram:setup` to create the
-universal `~/.engram/config.json` configuration and restart the host.
+Install the marketplace plugin, configure its server origin for the chosen auth mode, and restart the host. The no-auth path needs only `ENGRAM_URL`; auth-enabled setup uses its separate workstation keycard. Do not replace an existing client installation to test the new one.
 
 Claude Code:
 
@@ -299,11 +254,7 @@ Restart the agent host after configuration.
 
 ### Docker Compose
 
-```bash
-git clone https://github.com/thebtf/engram.git && cd engram
-cp .env.example .env   # edit DATABASE_DSN, tokens, embedding config
-docker compose up -d
-```
+For a local source build, use the [server quick start](#quick-start-server), including required image names and build version. For a digest-pinned deployment, use the [deployment guide](docs/DEPLOYMENT.md). Do not run `docker compose up` without its image variables.
 
 **Existing PostgreSQL?** Run only the server container:
 
@@ -328,10 +279,9 @@ chmod +x engram && sudo mv engram /usr/local/bin/
 # Windows (amd64) — download engram-windows-amd64.exe, add to PATH
 ```
 
-Set environment variables:
+Set the no-auth client server origin:
 ```bash
 export ENGRAM_URL=http://your-server:37777
-export ENGRAM_TOKEN=engram_your_workstation_keycard
 ```
 
 Verify: `echo '{"jsonrpc":"2.0","id":1,"method":"ping"}' | engram`
@@ -350,8 +300,7 @@ If not using the plugin, configure MCP directly in `~/.claude/settings.json`:
     "engram": {
       "command": "engram",
       "env": {
-        "ENGRAM_URL": "http://your-server:37777",
-        "ENGRAM_TOKEN": "${ENGRAM_TOKEN}"
+        "ENGRAM_URL": "http://your-server:37777"
       }
     }
   }
@@ -361,10 +310,10 @@ If not using the plugin, configure MCP directly in `~/.claude/settings.json`:
 **CLI shortcut:**
 
 ```bash
-claude mcp add-json engram '{"type":"stdio","command":"engram","env":{"ENGRAM_URL":"http://your-server:37777","ENGRAM_TOKEN":"${ENGRAM_TOKEN}"}}' -s user
+claude mcp add-json engram '{"type":"stdio","command":"engram","env":{"ENGRAM_URL":"http://your-server:37777"}}' -s user
 ```
 
-`ENGRAM_URL` must be the bare server origin (`http://host:37777`); do not append `/mcp`, `/sse`, or another MCP transport suffix — the server does not offer those, and the client uses the origin directly for daemon gRPC and hook REST calls. `ENGRAM_TOKEN` must always be the workstation keycard, never the operator key.
+`ENGRAM_URL` is the bare configured server origin; do not append `/mcp` or `/sse`. The auth-enabled path requires a separate workstation `ENGRAM_TOKEN`, never the operator credential.
 
 ### Build from Source
 

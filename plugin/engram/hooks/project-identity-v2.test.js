@@ -244,11 +244,17 @@ test('shared invalid vectors and wrong-type anchor sharing are rejected exactly'
   }), /PROJECT_IDENTITY_INVALID/);
 });
 
-test('SessionStart without credentials reaches setup before identity registration', (t) => {
+test('tokenless SessionStart honors auth-enabled server refusal without cached injection', (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-session-setup-'));
   const configPath = path.join(workspace, 'config.json');
   t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
   fs.writeFileSync(configPath, '{}');
+  fs.writeFileSync(path.join(workspace, '.engram-project'), JSON.stringify({
+    version: 3,
+    project_id: '33333333-3333-4333-8333-333333333333',
+    name: 'tokenless-auth-refusal',
+    scope: 'directory',
+  }));
 
   const childScript = `
     global.fetch = async () => ({
@@ -284,6 +290,7 @@ test('SessionStart without credentials reaches setup before identity registratio
       CLAUDE_PLUGIN_OPTION_API_TOKEN: '',
       ENGRAM_CLAUDE_USERCONFIG_TOKEN: '',
       ENGRAM_CONFIG_FILE: configPath,
+      PLUGIN_DATA: workspace,
     },
   });
 
@@ -291,8 +298,8 @@ test('SessionStart without credentials reaches setup before identity registratio
   assert.equal(result.status, 0, result.stderr);
   const response = JSON.parse(result.stdout.trim());
   const additionalContext = response.hookSpecificOutput && response.hookSpecificOutput.additionalContext || '';
-  assert.match(additionalContext, /<engram-setup>/);
-  assert.doesNotMatch(result.stderr, /HTTP 401/);
+  assert.doesNotMatch(additionalContext, /<engram-static-memories>|<engram-setup>/);
+  assert.match(result.stderr, /HTTP 401/);
 });
 
 test('non-SessionStart injection hook registration transport failure stays fail closed', (t) => {

@@ -35,7 +35,7 @@ function withClientInstance(t, value = clientInstanceID) {
 }
 
 const runtimeConfigEnvironmentKeys = Object.freeze([
-  'ENGRAM_CONFIG_FILE', 'ENGRAM_DATA_DIR', 'CLAUDE_PLUGIN_DATA',
+  'ENGRAM_CONFIG_FILE', 'ENGRAM_DATA_DIR', 'CLAUDE_PLUGIN_DATA', 'PLUGIN_DATA',
   'ENGRAM_URL', 'ENGRAM_SERVER_URL', 'CLAUDE_PLUGIN_OPTION_server_url',
   'CLAUDE_PLUGIN_OPTION_SERVER_URL', 'ENGRAM_CLAUDE_USERCONFIG_URL',
   'ENGRAM_TOKEN', 'CLAUDE_PLUGIN_OPTION_api_token', 'CLAUDE_PLUGIN_OPTION_API_TOKEN',
@@ -166,6 +166,24 @@ test('standard config without hap_01b delivers the OMP session-start relay', asy
   assert.ok(await extension.sessionStartMessage({ cwd: process.cwd(), sessionId: 'config-session' }, {}));
   assert.equal(calls[0].body.projectIdentityV3.client_instance_id, 'config-install-alpha');
   assert.deepEqual(calls.map(({ route }) => route), ['IDENTITY_REGISTRATION', 'SESSION_START_CONTEXT']);
+});
+
+test('tokenless config resolves a stable client identity and delivers server-selected memory', async (t) => {
+  withRuntimeConfig(t, { server_url: 'http://127.0.0.1:37777' });
+  const directory = path.dirname(process.env.ENGRAM_CONFIG_FILE);
+  process.env.PLUGIN_DATA = directory;
+  const calls = [];
+  const extension = runtimeConfigExtension({
+    relay: scriptedRelay([
+      relayResponse('IDENTITY_REGISTRATION'),
+      relayResponse('SESSION_START_CONTEXT'),
+    ], calls),
+  });
+  const message = await extension.sessionStartMessage({ cwd: process.cwd(), sessionId: 'tokenless-session' }, {});
+  assert.match(message.content, /memory delivered through relay/);
+  assert.deepEqual(calls.map(({ route }) => route), ['IDENTITY_REGISTRATION', 'SESSION_START_CONTEXT']);
+  assert.equal(calls[0].body.projectIdentityV3.client_instance_id,
+    fs.readFileSync(path.join(directory, 'client-instance-id'), 'utf8').trim());
 });
 
 test('OMP client identity follows canonical environment, option, then config precedence', async (t) => {

@@ -520,8 +520,15 @@ let ruleRows = [
   },
 ]
 
-let ruleSelectionVersion = 0
-let ruleSelection = { domain: 'rules', kind: 'none', selection_version: ruleSelectionVersion }
+const ruleSelections = new Map()
+
+function ruleSession(req) {
+  return /(?:^|;\s*)mock-rule-session=([^;]+)/.exec(req.headers.cookie || '')?.[1] || 'default'
+}
+
+function currentRuleSelection(req) {
+  return ruleSelections.get(ruleSession(req)) || { domain: 'rules', kind: 'none', selection_version: 0 }
+}
 
 let domainRows = [
   {
@@ -542,7 +549,7 @@ let domainRows = [
   },
 ]
 
-const vaultCredentials = [
+const initialVaultCredentials = [
   {
     id: 1,
     name: 'shared-token',
@@ -569,6 +576,15 @@ const vaultCredentials = [
     orphaned: true,
   },
 ]
+const vaultSessions = new Map()
+
+function vaultCredentialsFor(req) {
+  const session = /(?:^|;\s*)mock-vault-session=([^;]+)/.exec(req.headers.cookie || '')?.[1] || 'default'
+  if (!vaultSessions.has(session)) {
+    vaultSessions.set(session, initialVaultCredentials.map((credential) => ({ ...credential })))
+  }
+  return vaultSessions.get(session)
+}
 let issueRows = [
   {
     id: 701,
@@ -821,12 +837,13 @@ function ruleSelectionSnapshot(selection) {
   return { selection: { ...selection, ...(selection.targets ? { targets: selection.targets.map((target) => ({ ...target })) } : {}) } }
 }
 
-function saveRuleSelection(body) {
+function saveRuleSelection(body, req) {
   if (!body || body.domain !== 'rules' || !body.selection || typeof body.selection !== 'object') return null
   const selection = body.selection
   if (selection.kind === 'none') {
-    ruleSelection = { domain: 'rules', kind: 'none', selection_version: ++ruleSelectionVersion }
-    return ruleSelectionSnapshot(ruleSelection)
+    const next = { domain: 'rules', kind: 'none', selection_version: currentRuleSelection(req).selection_version + 1 }
+    ruleSelections.set(ruleSession(req), next)
+    return ruleSelectionSnapshot(next)
   }
   if (selection.kind !== 'explicit' || !Array.isArray(selection.targets) || !selection.targets.length) return null
 
@@ -837,8 +854,9 @@ function saveRuleSelection(body) {
     return { id: String(id), expected_version: Number.isInteger(target.expected_version) ? target.expected_version : rule.version }
   })
   if (targets.some((target) => target === null)) return null
-  ruleSelection = { domain: 'rules', kind: 'explicit', selection_version: ++ruleSelectionVersion, targets }
-  return ruleSelectionSnapshot(ruleSelection)
+  const next = { domain: 'rules', kind: 'explicit', selection_version: currentRuleSelection(req).selection_version + 1, targets }
+  ruleSelections.set(ruleSession(req), next)
+  return ruleSelectionSnapshot(next)
 }
 
 function ruleSelectionPage(body) {
@@ -854,11 +872,12 @@ function ruleSelectionPage(body) {
   }
 }
 
-function applyRuleSelectionOperation(body) {
-  if (!body || !['enable', 'disable'].includes(body.action) || body.selection?.selection_version !== ruleSelection.selection_version || ruleSelection.kind !== 'explicit') return null
+function applyRuleSelectionOperation(body, req) {
+  const selection = currentRuleSelection(req)
+  if (!body || !['enable', 'disable'].includes(body.action) || body.selection?.selection_version !== selection.selection_version || selection.kind !== 'explicit') return null
   const enabled = body.action === 'enable'
   const now = new Date().toISOString()
-  const targets = ruleSelection.targets.map((target) => Number(target.id))
+  const targets = selection.targets.map((target) => Number(target.id))
   if (targets.some((id) => !ruleRows.some((row) => row.id === id))) return null
 
   ruleRows = ruleRows.map((row) => !targets.includes(row.id)
@@ -1347,6 +1366,7 @@ const server = createServer(async (req, res) => {
   }
 
   if (req.method === 'DELETE' && path === '/api/vault/orphaned-credentials') {
+    const vaultCredentials = vaultCredentialsFor(req)
     const deleted = vaultCredentials.filter((credential) => credential.orphaned).length
     for (let index = vaultCredentials.length - 1; index >= 0; index -= 1) {
       if (vaultCredentials[index].orphaned) vaultCredentials.splice(index, 1)
@@ -1357,6 +1377,7 @@ const server = createServer(async (req, res) => {
 
   const vaultCredentialMatch = path.match(/^\/api\/vault\/credentials\/([^/]+)$/)
   if (vaultCredentialMatch) {
+    const vaultCredentials = vaultCredentialsFor(req)
     const name = decodeURIComponent(vaultCredentialMatch[1])
     const project = url.searchParams.get('project') || ''
     const cred = vaultCredentials.find((item) => item.name === name && (item.project || '') === project)
@@ -1411,7 +1432,7 @@ const server = createServer(async (req, res) => {
         json(res, 400, { error: 'rules selection domain is required' })
         return
       }
-      json(res, 200, ruleSelectionSnapshot(ruleSelection))
+      json(res, 200, ruleSelectionSnapshot(currentRuleSelection(req)))
     } catch (error) {
       json(res, 400, { error: error instanceof Error ? error.message : String(error) })
     }
@@ -1421,7 +1442,7 @@ const server = createServer(async (req, res) => {
   if (req.method === 'POST' && path === '/api/collections/selection') {
     try {
       const body = await readRequestJson(req)
-      const saved = body.domain === 'queue' ? saveCandidateSelection(body) : saveRuleSelection(body)
+      const saved = body.domain === 'queue' ? saveCandidateSelection(body) : saveRuleSelection(body, req)
       if (!saved) {
         json(res, 400, { error: 'invalid collection selection' })
         return
@@ -1464,7 +1485,7 @@ const server = createServer(async (req, res) => {
   if (req.method === 'POST' && path === '/api/rules') {
     try {
       const body = await readRequestJson(req)
-      const result = applyRuleSelectionOperation(body)
+      const result = applyRuleSelectionOperation(body, req)
       if (result) {
         json(res, 200, result)
         return
@@ -1931,10 +1952,10 @@ const server = createServer(async (req, res) => {
       }
       return
     case '/api/vault/credentials':
-      json(res, 200, vaultCredentials.map(({ value: _value, orphaned: _orphaned, ...item }) => item))
+      json(res, 200, vaultCredentialsFor(req).map(({ value: _value, orphaned: _orphaned, ...item }) => item))
       return
     case '/api/vault/status':
-      json(res, 200, { key_configured: true, fingerprint: 'abcddcba11223344', key_source: 'mock', credential_count: vaultCredentials.length })
+      json(res, 200, { key_configured: true, fingerprint: 'abcddcba11223344', key_source: 'mock', credential_count: vaultCredentialsFor(req).length })
       return
     case '/api/sessions/list':
       {

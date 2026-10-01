@@ -1,6 +1,10 @@
 import { expect, test, type Route } from '@playwright/test'
 
 const grant = (ref: string, reader: string, expires_at: string | null = null) => ({ grant_ref: ref, state: 'active', expires_at, repository: 'Engram', working_copy: 'checkout / feature', reader })
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { authenticated: true, auth_disabled: false } }))
+})
+
 
 test('Owner reload sees every paged active grant and revokes a reader without an identifier form', async ({ page }) => {
   let revoked = false

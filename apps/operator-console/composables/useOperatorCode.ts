@@ -1,7 +1,7 @@
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, unref, watch } from 'vue'
 import { operatorApiUrl } from './useOperatorApi'
 
-export type CodeBootstrapPhase = 'idle' | 'binding' | 'ready' | 'collision' | 'ambiguous' | 'reload-pending' | 'denied' | 'secure-origin-required' | 'error'
+export type CodeBootstrapPhase = 'idle' | 'binding' | 'ready' | 'collision' | 'ambiguous' | 'reload-pending' | 'denied' | 'secure-origin-required' | 'identity-unavailable' | 'error'
 export type CodePresentationKind = 'idle' | 'loading' | 'ready' | 'empty' | 'partial' | 'stale' | 'denied' | 'unsupported' | 'timeout' | 'offline' | 'error'
 
 export type CodeCatalogState = 'idle' | 'loading' | 'ready' | 'empty' | 'denied' | 'unavailable' | 'offline'
@@ -237,6 +237,7 @@ const INDEX_INTENT_MAX_POLLS = 30
 const TAB_LEASE_TTL_MS = 2 * 60_000
 const TAB_LEASE_RENEWAL_DELAY_MS = TAB_LEASE_TTL_MS / 2
 interface SpaRemount {
+  tabBindingId: string | null
   pinnedContext: CodeSafeContext | null
 }
 
@@ -448,7 +449,7 @@ function parseSourceDescriptor(value: unknown): CodeSourceDescriptor | null {
   const contentDigest = text(Reflect.get(value, 'content_digest'))
   const referenceSiteIdValue = Reflect.get(value, 'reference_site_id')
   const referenceSiteId = referenceSiteIdValue === undefined ? undefined : text(referenceSiteIdValue)
-  return entityKey === null || span === null || contentDigest === null || (referenceSiteIdValue !== undefined && referenceSiteId === null) ? null : { entityKey, span, contentDigest, ...(referenceSiteId === undefined ? {} : { referenceSiteId }) }
+  return entityKey === null || span === null || contentDigest === null || referenceSiteId === null ? null : { entityKey, span, contentDigest, ...(referenceSiteId === undefined ? {} : { referenceSiteId }) }
 }
 
 function parseGraphNavigation(value: unknown, context: CodeResponseContext, graph: CodeGraph): CodeGraphNavigation | null {
@@ -737,7 +738,13 @@ function navigationType(): string {
 }
 
 function requestId(): string | null {
-  return typeof globalThis.crypto?.randomUUID === 'function' ? globalThis.crypto.randomUUID() : null
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID()
+  if (typeof globalThis.crypto?.getRandomValues !== 'function') return null
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16))
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
 function loadResumePair(): CodeResumePair | null {
@@ -776,9 +783,21 @@ function clearResumePair(): void {
     // Storage failure removes only reload convenience; it never creates an authorization fallback.
   }
 }
-function loadPersistedPinCandidate(): string | null {
+function loadPersistedPinCandidate(): Pick<CodeSafeContext, 'sourceRef' | 'checkoutRef' | 'viewRef'> | string | null {
   try {
-    return text(sessionStorage.getItem(PINNED_CONTEXT_STORAGE_KEY))
+    const raw = sessionStorage.getItem(PINNED_CONTEXT_STORAGE_KEY)
+    if (raw === null) return null
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return text(raw)
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const sourceRef = text(Reflect.get(parsed, 'sourceRef'))
+    const checkoutRef = text(Reflect.get(parsed, 'checkoutRef'))
+    const viewRef = text(Reflect.get(parsed, 'viewRef'))
+    return sourceRef === null || checkoutRef === null || viewRef === null ? null : { sourceRef, checkoutRef, viewRef }
   } catch {
     return null
   }
@@ -786,7 +805,7 @@ function loadPersistedPinCandidate(): string | null {
 
 function persistPinnedContext(context: CodeSafeContext): boolean {
   try {
-    sessionStorage.setItem(PINNED_CONTEXT_STORAGE_KEY, context.viewRef)
+    sessionStorage.setItem(PINNED_CONTEXT_STORAGE_KEY, JSON.stringify({ sourceRef: context.sourceRef, checkoutRef: context.checkoutRef, viewRef: context.viewRef }))
     return true
   } catch {
     return false
@@ -852,6 +871,8 @@ function clearIndexIntentResume(): void {
 
 export function useOperatorCode() {
   const bootstrapPhase = ref<CodeBootstrapPhase>('idle')
+  const authDisabled = ref(false)
+  const canAdministerGrants = ref(false)
   const bootstrapEvidence = ref<CodeBootstrapEvidence>({ navigationType: 'unknown', openerBefore: false, openerAfter: null, transition: 'idle' })
   const binding = ref<CodeBinding | null>(null)
   const contextCatalog = ref<CodeCatalogEntry[]>([])
@@ -873,6 +894,8 @@ export function useOperatorCode() {
   const graphState = ref<CodePresentationState>(presentation('idle', 'Choose a released result to explore relationships.'))
   const sourceState = ref<CodePresentationState>(presentation('idle', 'Choose a released result to read an exact source span.'))
   const pending = ref(false)
+  let contextualGeneration = 0
+  let deferredContextDiscovery: (() => boolean) | null = null
   const indexIntentState = ref<IndexIntentPresentationState>(indexIntentNotice('idle'))
   const indexIntentPending = ref(false)
   const indexIntentResume = ref<IndexIntentResume | null>(loadIndexIntentResume())
@@ -882,11 +905,29 @@ export function useOperatorCode() {
   let leaseRenewalTimer: number | null = null
   let leaseRenewalAbort: AbortController | null = null
   let leaseRenewalGeneration = 0
+  let authProbeAbort: AbortController | null = null
+  let unmounted = false
+  let remountState: SpaRemount | null = null
 
   function bindingPayload(extra: Record<string, unknown> = {}): Record<string, unknown> | null {
-    if (binding.value === null) return null
+    if (unmounted || binding.value === null || bootstrapPhase.value !== 'ready' && bootstrapPhase.value !== 'collision' && bootstrapPhase.value !== 'ambiguous') return null
     return { tab_binding_id: binding.value.tabBindingId, document_proof: binding.value.documentProof, ...extra }
   }
+
+  function contextualRequestOwner(): () => boolean {
+    const generation = contextualGeneration
+    const current = binding.value
+    const pinned = pinnedContext.value ?? remountState?.pinnedContext ?? null
+    return () => !unmounted && generation === contextualGeneration && binding.value === current
+      && (pinnedContext.value ?? remountState?.pinnedContext ?? null) === pinned
+  }
+
+  watch(pending, (busy) => {
+    if (busy || deferredContextDiscovery === null) return
+    const ownsRequest = deferredContextDiscovery
+    deferredContextDiscovery = null
+    if (ownsRequest()) void discoverContext()
+  }, { flush: 'post' })
 
   function stopLeaseRenewal(): void {
     leaseRenewalGeneration += 1
@@ -972,6 +1013,9 @@ export function useOperatorCode() {
   }
 
   function clearContextualResults(): void {
+    contextualGeneration += 1
+    deferredContextDiscovery = null
+    pending.value = false
     status.value = null
     structureEnvelope.value = null
     searchEnvelope.value = null
@@ -986,6 +1030,14 @@ export function useOperatorCode() {
     searchState.value = presentation('idle', 'Pin an authorized view before searching.')
     graphState.value = presentation('idle', 'Choose a released result to explore relationships.')
     sourceState.value = presentation('idle', 'Choose a released result to read an exact source span.')
+  }
+
+  function clearPinnedContext(): void {
+    pinnedContext.value = null
+    remountState = null
+    clearContextualResults()
+    clearIndexIntent()
+    clearPersistedPinCandidate()
   }
 
   function matchesPinnedResponse(envelope: CodeEnvelope): boolean {
@@ -1033,7 +1085,13 @@ export function useOperatorCode() {
       return
     }
     stopIndexIntentPolling()
-    if (intent.state === 'completed') await discoverContext()
+    if (intent.state === 'completed') {
+      if (pending.value) {
+        const generation = contextualGeneration
+        const current = binding.value
+        deferredContextDiscovery = () => !unmounted && generation === contextualGeneration && binding.value === current
+      } else await discoverContext()
+    }
   }
 
   function scheduleIndexIntentPoll(): void {
@@ -1056,7 +1114,8 @@ export function useOperatorCode() {
     const requestGeneration = pollGeneration ?? indexIntentPollGeneration
     const current = binding.value
     const resume = indexIntentResume.value
-    if (current === null || resume?.intentRef === undefined || indexIntentPending.value) return
+    if (bindingPayload() === null || current === null || resume?.intentRef === undefined || indexIntentPending.value
+      || pinnedContext.value === null && remountState?.pinnedContext != null) return
     indexIntentPending.value = true
     const result = await request(`/code/index-intents/${encodeURIComponent(resume.intentRef)}`, 'GET', undefined, {
       'X-Engram-Tab-Binding-ID': current.tabBindingId,
@@ -1177,6 +1236,7 @@ export function useOperatorCode() {
     const renewedDocument = previousBinding?.documentProof !== transition.binding?.documentProof
     if (renewedDocument) stopLeaseRenewal()
     if (replaced) {
+      remountState = null
       clearIndexIntent()
       clearPersistedPinCandidate()
     }
@@ -1215,6 +1275,7 @@ export function useOperatorCode() {
     }
     if (ambiguous) body.ambiguous = true
     const result = await request('/code/tabs/handshake', 'POST', body)
+    if (unmounted) return false
     if (result.kind !== 'success') {
       bootstrapPhase.value = result.kind === 'denied' ? 'denied' : 'error'
       return false
@@ -1227,15 +1288,21 @@ export function useOperatorCode() {
     return applyTransition(transition, evidence)
   }
 
-  async function resume(documentNonce: string, pair: CodeResumePair, evidence: CodeBootstrapEvidence): Promise<boolean> {
+  async function resume(documentNonce: string, pair: CodeResumePair, evidence: CodeBootstrapEvidence): Promise<'resumed' | 'rebound' | false> {
     const result = await request('/code/tabs/resume', 'POST', {
       tab_binding_id: pair.tabBindingId,
       resume_nonce: pair.resumeNonce,
       reload_token: pair.reloadToken,
       document_nonce: documentNonce,
     })
+    if (unmounted) return false
     if (result.kind !== 'success') {
       clearResumePair()
+      if (result.kind === 'denied' || result.status === 409) remountState = null
+      if (result.status === 403 && authDisabled.value) {
+        clearIndexIntent()
+        return await handshake(documentNonce, null, false, evidence) ? 'rebound' : false
+      }
       bootstrapPhase.value = result.kind === 'denied' ? 'denied' : 'error'
       return false
     }
@@ -1245,7 +1312,7 @@ export function useOperatorCode() {
       bootstrapPhase.value = 'error'
       return false
     }
-    return applyTransition(transition, evidence)
+    return applyTransition(transition, evidence) ? 'resumed' : false
   }
 
   function refreshedContext(catalog: CodeCatalogEntry[], previous: CodeSafeContext): CodeSafeContext | null {
@@ -1254,23 +1321,28 @@ export function useOperatorCode() {
   }
 
   async function discoverContext(): Promise<void> {
+    const ownsRequest = contextualRequestOwner()
     const payload = bindingPayload()
+    if (payload === null || pending.value) return
     const selected = contextCandidate.value
+    const pinned = pinnedContext.value ?? remountState?.pinnedContext ?? null
+    const restoring = pinnedContext.value === null && pinned !== null
     contextCandidate.value = null
     contextCatalog.value = []
-    if (payload === null) { clearPersistedPinCandidate(); return }
     contextState.value = 'loading'
     pending.value = true
     const result = await request('/code/contexts', 'POST', payload)
+    if (!ownsRequest()) return
     pending.value = false
     if (result.kind !== 'success') {
-      clearPersistedPinCandidate()
+      if (result.kind === 'denied' || result.status === 409) clearPinnedContext()
+      else if (pinned === null) clearPersistedPinCandidate()
       contextState.value = result.kind === 'denied' ? 'denied' : result.kind === 'offline' ? 'offline' : 'unavailable'
       return
     }
     const catalog = parseCatalog(result.body)
     if (catalog === null) {
-      clearPersistedPinCandidate()
+      if (pinned === null) clearPersistedPinCandidate()
       contextState.value = 'unavailable'
       return
     }
@@ -1278,19 +1350,19 @@ export function useOperatorCode() {
     contextState.value = catalog.length === 0 ? 'empty' : 'ready'
     if (selected !== null) {
       contextCandidate.value = refreshedContext(catalog, selected)
-      if (contextCandidate.value === null) clearPersistedPinCandidate()
+      if (contextCandidate.value === null && pinned === null) clearPersistedPinCandidate()
     }
-    const pinned = pinnedContext.value
     if (pinned !== null) {
-      const refreshed = refreshedContext(catalog, pinned)
+      const refreshed = restoring ? null : refreshedContext(catalog, pinned)
       if (refreshed !== null) {
         pinnedContext.value = refreshed
         persistPinnedContext(refreshed)
       } else {
-        pinnedContext.value = null
-        clearContextualResults()
-        clearIndexIntent()
-        clearPersistedPinCandidate()
+        // The current-only catalog cannot authorize or revoke this tab's historical pin.
+        if (await refreshStatus() && ownsRequest() && (restoring || selected?.viewRef === pinned.viewRef)) {
+          contextCandidate.value = refreshedContext(catalog, pinned)
+            ?? catalog.find((entry) => entry.sourceRef === pinned.sourceRef && entry.checkoutRef === pinned.checkoutRef && entry.view !== null)?.view ?? null
+        }
       }
     }
   }
@@ -1301,23 +1373,58 @@ export function useOperatorCode() {
 
   function restorePersistedPinCandidate(): boolean {
     const stored = loadPersistedPinCandidate()
-    if (stored === null) return false
-    const matches = contextCatalog.value.flatMap((entry) => entry.view === null ? [] : [entry.view]).filter((entry) => entry.viewRef === stored)
+    if (stored === null) { clearPersistedPinCandidate(); return false }
+    const matches = contextCatalog.value.flatMap((entry) => entry.view === null ? [] : [entry.view]).filter((entry) =>
+      typeof stored === 'string' ? entry.viewRef === stored : entry.sourceRef === stored.sourceRef && entry.checkoutRef === stored.checkoutRef && entry.viewRef === stored.viewRef)
     if (matches.length !== 1) { clearPersistedPinCandidate(); return false }
-    const selected = matches[0]!
-    contextCandidate.value = selected
+    contextCandidate.value = matches[0]!
     return true
   }
 
   async function initialize(): Promise<void> {
     if (pending.value) return
     bootstrapPhase.value = 'binding'
-    const remount = spaRemount
-    spaRemount = null
-    if (!window.isSecureContext) {
+    authDisabled.value = false
+    canAdministerGrants.value = false
+    pending.value = true
+    const controller = new AbortController()
+    authProbeAbort = controller
+    const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+    try {
+      const response = await fetch(operatorApiUrl('/auth/me'), { credentials: 'include', cache: 'no-store', signal: controller.signal })
+      if (!response.ok && response.status !== 401) {
+        bootstrapPhase.value = 'identity-unavailable'
+        return
+      }
+      const identity: unknown = await response.json()
+      const authDisabledMode = identity !== null && typeof identity === 'object' && !Array.isArray(identity) ? Reflect.get(identity, 'auth_disabled') : null
+      const authenticated = identity !== null && typeof identity === 'object' && !Array.isArray(identity) ? Reflect.get(identity, 'authenticated') : null
+      if (response.status === 401) {
+        bootstrapPhase.value = authDisabledMode === false && authenticated === false ? 'denied' : 'identity-unavailable'
+        return
+      }
+      if (authDisabledMode !== true && (authDisabledMode !== false || authenticated !== true)) {
+        bootstrapPhase.value = 'identity-unavailable'
+        return
+      }
+      authDisabled.value = authDisabledMode
+      canAdministerGrants.value = authDisabledMode === false && window.isSecureContext
+    } catch {
+      bootstrapPhase.value = 'identity-unavailable'
+      return
+    } finally {
+      window.clearTimeout(timeout)
+      authProbeAbort = null
+      pending.value = false
+    }
+    if (unmounted) return
+    if (!window.isSecureContext && !authDisabled.value) {
       bootstrapPhase.value = 'secure-origin-required'
       return
     }
+    const remount = spaRemount ?? remountState
+    spaRemount = null
+    remountState = remount
     const documentNonce = requestId()
     if (documentNonce === null) {
       bootstrapPhase.value = 'error'
@@ -1348,62 +1455,84 @@ export function useOperatorCode() {
         : pair !== null
           ? await handshake(documentNonce, pair, false, evidence)
           : await handshake(documentNonce, null, false, evidence)
-    if (!established) return
+    if (unmounted || !established) return
+    if (established !== 'resumed' || unref(bootstrapPhase) !== 'ready' || binding.value?.tabBindingId !== remountState?.tabBindingId) remountState = null
     await discoverContext()
+    if (unmounted) return
     if (resumingBinding) {
-      restorePersistedPinCandidate()
-      const priorPinned = remount?.pinnedContext ?? null
-      if (priorPinned !== null) {
-        const pinned = refreshedContext(contextCatalog.value, priorPinned)
-        if (pinned !== null) {
-          contextCandidate.value = pinned
-          pinnedContext.value = pinned
-          await refreshStatus()
-          await requestStructure(null)
-        }
-      }
-      await refreshIndexIntent()
+      if (remount?.pinnedContext == null || established === 'rebound') restorePersistedPinCandidate()
+      if (established !== 'rebound' && remount?.pinnedContext == null) await refreshIndexIntent()
     }
   }
 
   async function pinContext(): Promise<void> {
     const selected = contextCandidate.value
     if (binding.value === null || contextState.value !== 'ready' || selected === null || pending.value) return
+    const ownsRequest = contextualRequestOwner()
     pending.value = true
     const result = await request(`/code/tabs/${encodeURIComponent(binding.value.tabBindingId)}/context`, 'PUT', {
       document_proof: binding.value.documentProof,
       selection_ref: selected.selectionRef,
     })
+    if (!ownsRequest()) return
     pending.value = false
     if (result.kind !== 'success' || result.status !== 204) {
       contextState.value = result.kind === 'denied' ? 'denied' : result.kind === 'offline' ? 'offline' : 'unavailable'
       return
     }
     clearIndexIntent()
+    remountState = null
     pinnedContext.value = selected
     persistPinnedContext(selected)
     clearContextualResults()
+    const ownsPin = contextualRequestOwner()
     await refreshStatus()
+    if (!ownsPin()) return
     await requestStructure(null)
 
   }
   async function refreshStatus(): Promise<boolean> {
+    const current = binding.value
     const payload = bindingPayload()
-    if (payload === null || pinnedContext.value === null) return false
+    const pinned = pinnedContext.value ?? remountState?.pinnedContext ?? null
+    const restoring = pinnedContext.value === null
+    if (payload === null || pinned === null || pending.value
+      || restoring && current?.tabBindingId !== remountState?.tabBindingId) return false
+    const ownsRequest = contextualRequestOwner()
     pending.value = true
     const result = await request('/code/status', 'POST', payload)
+    if (!ownsRequest()) return false
     pending.value = false
-    status.value = result.kind === 'success' ? parseStatus(result.body) : null
-    return status.value !== null
+    const checkedStatus = result.kind === 'success' ? parseStatus(result.body) : null
+    if (checkedStatus === null) {
+      if (result.kind === 'denied' || result.status === 409) clearPinnedContext()
+      contextState.value = result.kind === 'denied' ? 'denied' : result.kind === 'offline' ? 'offline' : 'unavailable'
+      return false
+    }
+    status.value = checkedStatus
+    if (contextCatalog.value.length > 0) contextState.value = 'ready'
+    if (restoring) {
+      pinnedContext.value = pinned
+      remountState = null
+      persistPinnedContext(pinned)
+      const ownsRestore = contextualRequestOwner()
+      await requestStructure(null)
+      if (!ownsRestore()) return false
+      await refreshIndexIntent()
+      if (!ownsRestore()) return false
+    }
+    return true
   }
 
   async function requestStructure(continuation: string | null): Promise<void> {
     const payload = bindingPayload({ path_prefix: '', limit: 10, ...(continuation === null ? {} : { continuation }) })
     if (payload === null || pinnedContext.value === null) return
+    const ownsRequest = contextualRequestOwner()
     pending.value = true
     structureState.value = presentation('loading', 'Waiting for the server to release the bounded structure.')
     structureContinuationNotice.value = null
     const result = await request('/code/structure', 'POST', payload)
+    if (!ownsRequest()) return
     pending.value = false
     if (result.kind !== 'success') {
       if (continuation !== null && result.kind === 'denied') structureContinuationNotice.value = 'denied'
@@ -1435,6 +1564,7 @@ export function useOperatorCode() {
       ...(continuation === null ? {} : { continuation }),
     })
     if (payload === null || pinned === null) return
+    const ownsRequest = contextualRequestOwner()
     pending.value = true
     searchState.value = presentation('loading', 'Waiting for the server to release the search result.')
     searchEnvelope.value = null
@@ -1442,6 +1572,7 @@ export function useOperatorCode() {
     sourceEnvelope.value = null
     searchContinuationNotice.value = null
     const result = await request('/code/search', 'POST', payload)
+    if (!ownsRequest()) return
     pending.value = false
     if (result.kind !== 'success') {
       if (continuation !== null && result.kind === 'denied') searchContinuationNotice.value = 'denied'
@@ -1485,10 +1616,12 @@ export function useOperatorCode() {
     })
     const pinned = pinnedContext.value
     const activeResults = searchEnvelope.value ?? structureEnvelope.value
-    if (payload === null || pinned === null || activeResults?.context === null || !sameView(pinnedResponseContext.value, activeResults.context)) return
+    if (payload === null || pinned === null || activeResults === null || activeResults.context === null || !sameView(pinnedResponseContext.value, activeResults.context)) return
+    const ownsRequest = contextualRequestOwner()
     pending.value = true
     graphState.value = presentation('loading', 'Waiting for the server to release graph evidence.')
     const result = await request('/code/graph', 'POST', payload)
+    if (!ownsRequest()) return
     pending.value = false
     if (result.kind !== 'success') {
       graphEnvelope.value = null
@@ -1539,9 +1672,11 @@ export function useOperatorCode() {
       ...(descriptor.referenceSiteId === undefined ? {} : { reference_site_id: descriptor.referenceSiteId }),
     })
     if (payload === null || pinnedContext.value === null) return
+    const ownsRequest = contextualRequestOwner()
     pending.value = true
     sourceState.value = presentation('loading', 'Waiting for the server to release the exact source span.')
     const result = await request('/code/source', 'POST', payload)
+    if (!ownsRequest()) return
     pending.value = false
     if (result.kind !== 'success') {
       sourceEnvelope.value = null
@@ -1576,13 +1711,23 @@ export function useOperatorCode() {
   })
 
   onBeforeUnmount(() => {
+    unmounted = true
+    authProbeAbort?.abort()
     stopLeaseRenewal()
-    if (!pageHiding) spaRemount = { pinnedContext: pinnedContext.value }
+    if (!pageHiding) {
+      const retained = spaRemount ?? remountState
+      spaRemount = {
+        tabBindingId: binding.value?.tabBindingId ?? retained?.tabBindingId ?? null,
+        pinnedContext: pinnedContext.value ?? retained?.pinnedContext ?? null,
+      }
+    }
     stopIndexIntentPolling()
     window.removeEventListener('pagehide', closeOnPageHide)
   })
 
   return {
+    authDisabled,
+    canAdministerGrants,
     bootstrapPhase,
     bootstrapEvidence,
     contextCatalog,

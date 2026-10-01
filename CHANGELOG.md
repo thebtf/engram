@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.50.1] - 2026-09-27
+
+### Fixed
+
+- Let an auth-disabled Engram server choose the active code repository, checkout, and indexed UCI View without requiring browser grants, while retaining grant-bound access on auth-enabled servers.
+- Distinguish Workspace working-copy labels that share a basename using their parent path and device identity, in both no-auth and grant-bound catalogs; retain stored labels in the active no-auth catalog instead of substituting opaque checkout hashes.
+- Refuse a 129th active no-auth working copy during registration, including concurrent registrations under different repositories, so the shared Workspace catalog remains complete for all browsers; replaying registered checkouts and authenticated registrations remain available.
+- Bootstrap Code Explorer on a LAN browser origin without a login session, and keep search, graph traversal, and source reads bound to the same selected View; verified semantic and graph source in separate working copies.
+- Keep confirmed Workspace historical pins, released results, and recovery state through unavailable or malformed status responses. Failed chooser refreshes remain retryable, and obsolete responses cannot clear a newer request's pending state. Returning from another console section restores the same bound historical View only after successful server reauthorization, even when the chooser lists a newer snapshot; access denial or context mismatch still clears the pin and recovery state.
+- Let the plugin connect without a keycard when the server disables authentication, leaving token decisions to the server and retaining keycards for auth-enabled servers.
+- Preserve opaque UTF-8 client installation IDs through binary gRPC metadata so no-auth context binding, search, exploration, and indexing use the same workstation identity. Apply the V3 limit of 256 Unicode runes, not UTF-8 bytes, without changing the original-byte workstation hash or authenticated authority; this no-auth transport requires the matching client and server, with no plaintext-header fallback.
+- Apply the same V3 256-rune installation-ID boundary to actual no-auth context owners, including multi-byte IDs beyond 256 UTF-8 bytes and opaque IDs such as `1:install`; preserve original-byte identity hashing and reject URI-scheme, path, whitespace, and control-character inputs without changing authenticated authority.
+- Admit V3-valid installation IDs at the production index-intent poll and update RPC boundaries, including 86- and 256-rune CJK IDs, without widening process nonces or other opaque identifiers; reuse the mapper's pure validation before ownership checks and preserve URL, invalid UTF-8, and control-character denial.
+- Derive same-file call, constructor, shadowing, reassignment and direct-eval edges from parsed lexical facts; ignore non-binding comment/string text and preserve binding-scope isolation.
+- Separate facts/v6 resolver-only lexical metadata from the 8192 published-reference budget, with an independent 16384 lexical-fact bound and honest partial coverage on exhaustion. Classify direct eval from the parsed callee, including parentheses, rather than text inside arguments; retain legal accessor, overload, and merged-declaration occurrences without resolving ambiguous graph targets. Parameters and aliases can hold intrinsic eval in sloppy scripts; strict modules reject parameter bindings named `eval`.
+- Bound transport-session context owners to 1024 with least-recently-used eviction; evicted opaque handles and defaults cannot authorize a later session.
+- Renew the two-minute daemon-target observation on successful published-View polling as well as first-index polling; expiry and restart still require a fresh target for bootstrap and index actions.
+- Preserve authorized published Workspace choices, historical pins, and immutable View reads while their daemon is offline. Daemon liveness gates bootstrap and index actions, not durable Source-and-Checkout registration or published-View authorization; genuine ownership and grant failures still deny access.
+- Reauthorize durable no-auth first-index status and completed View results after the owning daemon disconnects, while retaining current-document, Source-and-Checkout, and published-View checks. New admission, replay, and retry still require a live owner.
+- Align the cross-platform UCI parser semantic profile and initialize a tracked project anchor offline; update the no-auth Workspace setup and usage guidance.
+- Require the official release cross-toolchain when generating Windows parser policy and refuse noncanonical Go or MinGW producers, rather than authorizing non-equivalent native Windows output.
+- Emit facts/v8 aliases for named default-exported functions and classes and identifier-valued default exports in JavaScript, TypeScript, and TSX, including exports before their local definitions. Resolve graph edges only through existing unique lexical bindings; anonymous defaults and other expression exports remain non-binding. Recognize direct eval through parentheses and runtime-erased TypeScript assertions, `satisfies`, and non-null wrappers without losing lexical ownership; sequence, member, constructor, and optional calls remain non-direct. Preserve safe nonintrinsic shadows and reject unsafe rebound-eval edges.
+- Discard delayed Code Explorer search, structure, graph, source, and pin completions after context invalidation or replacement, so stale responses cannot restore a cleared historical pin or overwrite a newer View.
+- Allow a fresh ambiguous Code Explorer tab to discover authorized Workspace choices without inheriting a pin, and defer completed-index catalog discovery until pending contextual reads finish. Keep the historical View and released results until explicit selection; discard deferred discovery after binding or context invalidation.
+- Isolate mock vault credentials between parallel browser sessions so one Secrets delete cannot invalidate another session's reveal of a same-named project credential.
+- Update the shared server and operator-console OpenSSL runtime overlay to checksum-pinned Debian `libssl3t64` `3.5.7-1~deb13u3`, including its package metadata.
+- Align the production image fixture and both Compose files on a dedicated operator bridge and the console's exact trusted-proxy address. Optional subnet, dynamic-pool, and console-IP defaults preserve ordinary unset-variable configuration; deployment guidance covers coordinated overrides and network collisions. The overlap guard is confined to the canonical image acceptance gate, not ordinary startup.
+- Update only the operator-console's locked `brace-expansion` dependencies to compatible maintained patches (`2.1.7` and `5.0.12`), fixing nested-brace and comma-parser stack exhaustion and quadratic-time expansion without changing package requirements.
+
 ## [6.50.0] - 2026-09-26
 
 ### Added
@@ -2074,7 +2103,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.0...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.1...HEAD
+[6.50.1]: https://github.com/thebtf/engram/compare/v6.50.0...v6.50.1
 [6.50.0]: https://github.com/thebtf/engram/compare/v6.49.4...v6.50.0
 [6.49.3]: https://github.com/thebtf/engram/compare/v6.49.2...v6.49.3
 [6.49.2]: https://github.com/thebtf/engram/compare/v6.49.1...v6.49.2

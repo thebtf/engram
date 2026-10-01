@@ -1,7 +1,7 @@
 {
   "name": "engram",
-  "version": "6.50.0",
-  "description": "Persistent shared memory for Codex. Requires ENGRAM_URL and ENGRAM_TOKEN from a dashboard-issued worker keycard; the server operator key must stay on the server host.",
+  "version": "6.50.1",
+  "description": "Persistent shared memory for Codex. Configure ENGRAM_URL; use a dashboard-issued ENGRAM_TOKEN worker keycard only when the server requires authentication. The server operator key must stay on the server host.",
   "author": {
     "name": "thebtf"
   },
@@ -19,7 +19,7 @@
   "interface": {
     "displayName": "Engram",
     "shortDescription": "Persistent shared memory for Codex workspaces",
-    "longDescription": "Engram connects Codex to a shared PostgreSQL-backed memory service. Configure ENGRAM_URL and ENGRAM_TOKEN with a worker keycard issued from the Engram dashboard /tokens page; never use the server operator key on a workstation.",
+    "longDescription": "Engram connects Codex to a shared PostgreSQL-backed memory service. Configure ENGRAM_URL and, for auth-enabled servers, ENGRAM_TOKEN with a worker keycard issued from the Engram dashboard /access page; never use the server operator key on a workstation.",
     "developerName": "thebtf",
     "category": "Development",
     "capabilities": [
@@ -30,7 +30,7 @@
     "privacyPolicyURL": "https://github.com/thebtf/engram/blob/main/README.md",
     "termsOfServiceURL": "https://github.com/thebtf/engram/blob/main/LICENSE",
     "defaultPrompt": [
-      "Configure Engram for Codex by asking for the server URL and dashboard-issued worker keycard, then write ENGRAM_URL and ENGRAM_TOKEN to ~/.codex/config.toml under shell_environment_policy.set.",
+      "Configure Engram for Codex with the server URL and, when server authentication is enabled, a dashboard-issued worker keycard. Set ENGRAM_URL and optional ENGRAM_TOKEN using the supported Engram config file or Codex plugin authentication.",
       "Run Engram Doctor to verify the MCP connection and report the server version."
     ]
   }

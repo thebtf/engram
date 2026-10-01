@@ -95,31 +95,6 @@ const (
 	daemonConvergenceFail
 )
 
-// startupGate enforces FR-4 / Plan ADR-005. When the daemon process starts
-// with a configured server URL but no ENGRAM_TOKEN, exit non-zero with a
-// single user-actionable diagnostic. When no server URL is configured the
-// gate is silent — local-only flows (loom_*) continue to work without a
-// token. Returns true on pass; false (after writing stderr + os.Exit) is
-// unreachable from the caller's perspective.
-func startupGate() {
-	serverURL := os.Getenv(config.EnvServerURL)
-	if serverURL == "" {
-		serverURL = os.Getenv(config.EnvServerURLAlt)
-	}
-	if serverURL == "" {
-		// No back-end configured — local-only flows are allowed without token.
-		return
-	}
-	if os.Getenv(config.EnvWorkstationToken) != "" {
-		return
-	}
-	fmt.Fprintf(os.Stderr,
-		"[engram] FATAL: %s is empty. Generate a keycard at %s/tokens and run /engram:setup.\n",
-		config.EnvWorkstationToken, serverURL,
-	)
-	os.Exit(1)
-}
-
 func isMuxcoreDaemonMode() bool {
 	for _, arg := range os.Args[1:] {
 		if arg == muxcoreDaemonFlag {
@@ -1030,14 +1005,16 @@ func main() {
 		fmt.Println()
 		fmt.Println("Environment:")
 		fmt.Printf("  %-28s  Server URL (e.g. http://host:37777)\n", config.EnvServerURL)
-		fmt.Printf("  %-28s  Workstation keycard (issued via dashboard /tokens)\n", config.EnvWorkstationToken)
+		fmt.Printf("  %-28s  Workstation keycard (required when server auth is enabled)\n", config.EnvWorkstationToken)
 		os.Exit(0)
 	}
-
-	// FR-4 / ADR-005: fail-fast on missing workstation credential BEFORE
-	// any heavy initialisation. Loud failure beats silent loom_*-only
-	// graceful degradation that masked PR #203's regression for days.
-	startupGate()
+	if len(os.Args) > 1 && os.Args[1] == "project" {
+		if err := runProjectCommand(os.Args[2:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "[engram]", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	// Both the stdio shim and its daemon child must select the same installation namespace.
 	if err := configureMuxcoreInstallation(); err != nil {

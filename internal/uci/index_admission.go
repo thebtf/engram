@@ -105,6 +105,8 @@ type IndexAdmissionArtifactProfile struct {
 	ParserRevision          string                 `json:"parser_revision"`
 	GrammarDigest           IndexDigest            `json:"grammar_digest"`
 	ExtractionProfileDigest IndexDigest            `json:"extraction_profile_digest"`
+	// Only used while constructing an artifact; never part of wire or durable identity.
+	expectedBundleDigest IndexDigest
 }
 
 // IndexAdmissionFrame is a bounded private domain payload for one or more
@@ -132,6 +134,8 @@ type IndexAdmissionArtifact struct {
 	References    []IndexAdmissionReference     `json:"references"`
 	Chunks        []IndexAdmissionChunk         `json:"chunks"`
 	Diagnostics   []IndexAdmissionDiagnostic    `json:"diagnostics"`
+	// Construction-only resolver evidence; neither durable facts nor reference sites.
+	TreeSitterLexicalFacts []IndexAdmissionReference `json:"-"`
 }
 
 // IndexAdmissionDefinition is a normalized, source-grounded declaration.
@@ -866,9 +870,9 @@ func GoIndexAdmissionArtifactProfile(profile GoExtractionProfile) (IndexAdmissio
 	return result, nil
 }
 
-// TreeSitterIndexAdmissionArtifactProfile derives the fixed admission profile
-// for one installed Tree-sitter parser bundle. The bundle is both the grammar
-// and selected extraction contract, so every admitted worker result binds it.
+// TreeSitterIndexAdmissionArtifactProfile identifies the shared semantic
+// grammar contract. The caller's platform-specific bundle digest is verified
+// separately against the installed parser result before publication.
 func TreeSitterIndexAdmissionArtifactProfile(language TreeSitterLanguage, bundleDigest IndexDigest) (IndexAdmissionArtifactProfile, error) {
 	admissionLanguage, err := indexAdmissionTreeSitterLanguage(language)
 	if err != nil {
@@ -877,11 +881,13 @@ func TreeSitterIndexAdmissionArtifactProfile(language TreeSitterLanguage, bundle
 	if !isIndexDigest(bundleDigest) {
 		return IndexAdmissionArtifactProfile{}, fmt.Errorf("uci index admission: invalid Tree-sitter bundle digest")
 	}
+	semanticDigest := TreeSitterSemanticContractDigest()
 	result := IndexAdmissionArtifactProfile{
 		Language:                admissionLanguage,
 		ParserRevision:          TreeSitterWorkerProtocolVersion,
-		GrammarDigest:           bundleDigest,
-		ExtractionProfileDigest: bundleDigest,
+		GrammarDigest:           semanticDigest,
+		ExtractionProfileDigest: semanticDigest,
+		expectedBundleDigest:    bundleDigest,
 	}
 	if err := indexAdmissionValidateArtifactProfile(result); err != nil {
 		return IndexAdmissionArtifactProfile{}, err
@@ -1021,7 +1027,7 @@ func indexAdmissionGoChunks(source []byte, definitions []IndexAdmissionDefinitio
 	for _, definition := range definitions {
 		var limited bool
 		var err error
-		chunks, limited, err = indexAdmissionAppendGoDefinitionChunks(chunks, source, lineStarts, definition)
+		chunks, limited, err = indexAdmissionAppendDefinitionChunks(chunks, source, lineStarts, definition)
 		if err != nil {
 			return nil, false, err
 		}
@@ -1044,7 +1050,7 @@ func indexAdmissionGoChunks(source []byte, definitions []IndexAdmissionDefinitio
 	return chunks, false, nil
 }
 
-func indexAdmissionAppendGoDefinitionChunks(chunks []IndexAdmissionChunk, source []byte, lineStarts []int, definition IndexAdmissionDefinition) ([]IndexAdmissionChunk, bool, error) {
+func indexAdmissionAppendDefinitionChunks(chunks []IndexAdmissionChunk, source []byte, lineStarts []int, definition IndexAdmissionDefinition) ([]IndexAdmissionChunk, bool, error) {
 	for chunkStart := int(definition.Span.ByteStart); chunkStart < int(definition.Span.ByteEnd); {
 		if len(chunks) == indexAdmissionMaxChunksPerArtifact {
 			return chunks, true, nil
@@ -1099,9 +1105,18 @@ func indexAdmissionTreeSitterBuildInput(sourceID string, profile IndexAdmissionA
 	if err := indexAdmissionValidateTreeSitterProfile(profile, extracted); err != nil {
 		return indexAdmissionArtifactBuildInput{}, err
 	}
+	profile.expectedBundleDigest = ""
 	contentDigest, err := indexAdmissionTreeSitterProof(source, extracted)
 	if err != nil {
 		return indexAdmissionArtifactBuildInput{}, err
+	}
+	if err := treeSitterValidateLexicalFacts(source, goLineStarts(source), extracted.LexicalFacts); err != nil {
+		return indexAdmissionArtifactBuildInput{}, err
+	}
+	for _, reference := range extracted.References {
+		if strings.HasPrefix(reference.LocalKey, "lexical_") {
+			return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: resolver fact in reference inventory")
+		}
 	}
 	status, err := indexAdmissionStructuredStatus(extracted.Coverage, len(extracted.Diagnostics), "Tree-sitter")
 	if err != nil {
@@ -1132,7 +1147,7 @@ func indexAdmissionValidateTreeSitterProfile(profile IndexAdmissionArtifactProfi
 	if err := indexAdmissionValidateArtifactProfile(profile); err != nil {
 		return err
 	}
-	if profile.Language != expectedLanguage || profile.ParserRevision != TreeSitterWorkerProtocolVersion || profile.GrammarDigest != extracted.BundleDigest || profile.ExtractionProfileDigest != extracted.BundleDigest {
+	if profile.Language != expectedLanguage || profile.ParserRevision != TreeSitterWorkerProtocolVersion || profile.GrammarDigest != TreeSitterSemanticContractDigest() || profile.ExtractionProfileDigest != TreeSitterSemanticContractDigest() || !isIndexDigest(profile.expectedBundleDigest) || profile.expectedBundleDigest != extracted.BundleDigest {
 		return fmt.Errorf("uci index admission: Tree-sitter artifact profile does not match parser evidence")
 	}
 	return nil
@@ -1160,8 +1175,23 @@ func indexAdmissionBuildTreeSitterArtifact(input indexAdmissionArtifactBuildInpu
 		return IndexAdmissionArtifact{}, err
 	}
 	artifact.References = references
-	artifact.Chunks = indexAdmissionTreeSitterChunks(extracted.Chunks)
+	lexicalFacts, err := indexAdmissionTreeSitterReferences(input.source, extracted.LexicalFacts)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	artifact.TreeSitterLexicalFacts = lexicalFacts
 	artifact.Diagnostics = indexAdmissionTreeSitterDiagnostics(extracted.Diagnostics)
+	chunks, limited, err := indexAdmissionTreeSitterChunks(input.source, artifact.Definitions, extracted.Chunks)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	artifact.Chunks = chunks
+	if limited {
+		artifact.Status = IndexAdmissionArtifactPartial
+		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
+			Code: "CHUNK_LIMIT", Message: "symbol and source chunks exceeded the admission limit",
+		})
+	}
 	artifact.Diagnostics, err = indexAdmissionAddPartialDiagnostic(artifact.Diagnostics, input.status, "TREE_SITTER_PARTIAL_COVERAGE", "Tree-sitter parser coverage is partial")
 	if err != nil {
 		return IndexAdmissionArtifact{}, err
@@ -1216,18 +1246,26 @@ func indexAdmissionTreeSitterOwner(localKey string) *string {
 	return indexAdmissionStringPointer(localKey)
 }
 
-func indexAdmissionTreeSitterChunks(chunks []TreeSitterChunk) []IndexAdmissionChunk {
-	converted := make([]IndexAdmissionChunk, 0, len(chunks))
-	for index, chunk := range chunks {
+func indexAdmissionTreeSitterChunks(source []byte, definitions []IndexAdmissionDefinition, chunks []TreeSitterChunk) ([]IndexAdmissionChunk, bool, error) {
+	converted := make([]IndexAdmissionChunk, 0, len(chunks)+len(definitions))
+	for _, chunk := range chunks {
+		if len(converted) == indexAdmissionMaxChunksPerArtifact {
+			return converted, true, nil
+		}
 		converted = append(converted, IndexAdmissionChunk{
-			Ordinal:       index,
-			Kind:          "source",
-			Span:          chunk.Span,
-			ContentDigest: chunk.ContentDigest,
-			Text:          chunk.Text,
+			Ordinal: len(converted), Kind: "source", Span: chunk.Span, ContentDigest: chunk.ContentDigest, Text: chunk.Text,
 		})
 	}
-	return converted
+	lineStarts := indexAdmissionLineStarts(source)
+	for _, definition := range definitions {
+		var limited bool
+		var err error
+		converted, limited, err = indexAdmissionAppendDefinitionChunks(converted, source, lineStarts, definition)
+		if err != nil || limited {
+			return converted, limited, err
+		}
+	}
+	return converted, false, nil
 }
 
 func indexAdmissionTreeSitterDiagnostics(diagnostics []TreeSitterDiagnostic) []IndexAdmissionDiagnostic {
@@ -2759,6 +2797,7 @@ func indexAdmissionCloneArtifact(artifact IndexAdmissionArtifact) IndexAdmission
 	cloned.Body = indexAdmissionCloneBytes(artifact.Body)
 	cloned.Definitions = indexAdmissionCloneDefinitions(artifact.Definitions)
 	cloned.References = indexAdmissionCloneReferences(artifact.References)
+	cloned.TreeSitterLexicalFacts = indexAdmissionCloneReferences(artifact.TreeSitterLexicalFacts)
 	cloned.Chunks = indexAdmissionCloneChunks(artifact.Chunks)
 	cloned.Diagnostics = indexAdmissionCloneDiagnostics(artifact.Diagnostics)
 	return cloned
@@ -3091,7 +3130,7 @@ func indexAdmissionTreeSitterReferenceRelation(kind string) (IndexRelation, erro
 		return IndexRelation("exports"), nil
 	case "call":
 		return IndexRelation("calls"), nil
-	case "jsx_reference", "reference":
+	case "jsx_reference", "reference", "binding_write":
 		return IndexRelation("references"), nil
 	default:
 		return "", fmt.Errorf("uci index admission: unsupported Tree-sitter reference kind %q", kind)

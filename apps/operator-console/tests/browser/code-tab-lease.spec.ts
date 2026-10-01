@@ -6,6 +6,7 @@ const DOCUMENT_PROOF = 'proof-current'
 test('Code Explorer renews its live tab lease and leaves no renewal timer after teardown', async ({ page }) => {
   const handshakePayloads: unknown[] = []
   const leasePayloads: unknown[] = []
+  let releaseLease: () => void = () => { }
 
   await page.clock.install({ time: new Date('2026-09-15T00:00:00Z') })
   await page.addInitScript(() => {
@@ -35,6 +36,7 @@ test('Code Explorer renews its live tab lease and leaves no renewal timer after 
     }
     if (pathname === `/api/code/tabs/${TAB_BINDING_ID}/lease`) {
       leasePayloads.push(route.request().postDataJSON())
+      await new Promise<void>(resolve => { releaseLease = resolve })
       await route.fulfill({ status: 204 })
       return
     }
@@ -47,16 +49,24 @@ test('Code Explorer renews its live tab lease and leaves no renewal timer after 
 
   await page.goto('/code')
   await expect(page.getByTestId('code-context-empty')).toBeVisible()
-  expect(handshakePayloads).toHaveLength(1)
+  await expect.poll(() => handshakePayloads).toHaveLength(1)
   expect(handshakePayloads[0]).not.toHaveProperty('ambiguous')
 
+  const firstLeaseResponse = page.waitForResponse(response => new URL(response.url()).pathname === `/api/code/tabs/${TAB_BINDING_ID}/lease`)
   await page.clock.fastForward('01:00')
   await expect.poll(() => leasePayloads).toEqual([{ document_proof: DOCUMENT_PROOF }])
+  releaseLease()
+  await firstLeaseResponse
+  await page.clock.runFor(50)
+  const secondLeaseResponse = page.waitForResponse(response => new URL(response.url()).pathname === `/api/code/tabs/${TAB_BINDING_ID}/lease`)
   await page.clock.fastForward('01:00')
   await expect.poll(() => leasePayloads).toEqual([
     { document_proof: DOCUMENT_PROOF },
     { document_proof: DOCUMENT_PROOF },
   ])
+  releaseLease()
+  await secondLeaseResponse
+  await page.clock.runFor(50)
 
   await page.goto('/settings')
   await page.clock.fastForward('04:00')
@@ -70,6 +80,10 @@ for (const navigationType of ['back_forward', 'unknown'] as const) {
   test(`Code Explorer treats ${navigationType} navigation as a fresh ambiguous binding`, async ({ page }) => {
     const handshakePayloads: Record<string, unknown>[] = []
     let resumes = 0
+    const pins: unknown[] = []
+    const contextualReads: string[] = []
+    const authorized = { source_ref: 'source-engram', checkout_ref: 'checkout-current', repository: 'Engram', working_copy: 'Operator desk', indexed_snapshot: { label: 'Authorized snapshot' }, view_ref: 'authorized-view', selection_ref: 'authorized-selection', index_intent_available: false }
+    await page.route('**/api/auth/me', route => route.fulfill({ json: { auth_disabled: true } }))
     await page.addInitScript((type) => {
       const original = performance.getEntriesByType.bind(performance)
       performance.getEntriesByType = (entryType) => entryType === 'navigation'
@@ -86,7 +100,13 @@ for (const navigationType of ['back_forward', 'unknown'] as const) {
         handshakePayloads.push(body)
         await route.fulfill({ json: { state: body.ambiguous ? 'TAB_BOOTSTRAP_AMBIGUOUS' : 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'new-resume', reload_token: 'new-reload' } })
       } else if (pathname === '/api/code/contexts') {
-        await route.fulfill({ json: { contexts: [] } })
+        await route.fulfill({ json: { contexts: [authorized] } })
+      } else if (pathname === `/api/code/tabs/${TAB_BINDING_ID}/context`) {
+        pins.push(route.request().postDataJSON())
+        await route.fulfill({ status: 204 })
+      } else if (pathname === '/api/code/status' || pathname === '/api/code/structure') {
+        contextualReads.push(pathname)
+        await route.fulfill(pathname.endsWith('/status') ? { json: { total_chunks: 0, embedded_chunks: 0, embedding: { coverage: 'none' } } } : { status: 403 })
       } else {
         await route.fulfill({ status: 500 })
       }
@@ -100,6 +120,20 @@ for (const navigationType of ['back_forward', 'unknown'] as const) {
     expect(handshakePayloads[0]).toHaveProperty('ambiguous', true)
     expect(handshakePayloads[0]).not.toHaveProperty('copied_tab_binding_id')
     expect(resumes).toBe(0)
+    const refresh = page.getByRole('button', { name: 'Обновить разрешённые варианты' })
+    await expect(refresh).toBeEnabled()
+    await expect(page.getByTestId('code-context-snapshot').getByRole('option', { name: 'Authorized snapshot' })).toHaveCount(1)
+    await expect(page.getByTestId('code-context-snapshot')).toHaveValue('')
+    await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
+    expect(pins).toEqual([])
+    expect(contextualReads).toEqual([])
+    await refresh.click()
+    await page.getByTestId('code-context-snapshot').selectOption('authorized-selection')
+    await page.getByTestId('code-pin-context').click()
+    await expect(page.getByTestId('code-context-pinned')).toContainText('Authorized snapshot')
+    await expect(page.getByTestId('code-status')).toBeVisible()
+    expect(pins).toEqual([{ document_proof: DOCUMENT_PROOF, selection_ref: 'authorized-selection' }])
+    expect(contextualReads).toContain('/api/code/status')
   })
 }
 
@@ -219,47 +253,90 @@ test('Code Explorer resynchronizes a completed selection after catalog refresh w
   await expect(page.getByTestId('code-context-repository')).toHaveValue('source-other')
   await expect(page.getByTestId('code-context-working-copy')).toHaveValue('')
 })
-test('Code Explorer retains only the same uniquely identified pinned snapshot across rotated catalog references', async ({ page }) => {
-  let catalogReads = 0
-  let changedSnapshot = false
-  let pins = 0
-  const context = (ref: string) => ({
-    source_ref: `source-${ref}`, checkout_ref: `checkout-${ref}`,
-    repository: 'Engram', working_copy: 'operator desk',
-    view_ref: changedSnapshot ? 'view-new-generation' : 'view-stable',
-    selection_ref: `selection-${ref}`, index_intent_available: false,
-    indexed_snapshot: { label: 'Current snapshot', revision: changedSnapshot ? 'new-revision' : '1a9dad0', published_at: '2026-09-17T00:00:00Z' },
-  })
-  await page.route('**/api/code/**', async (route: Route) => {
-    const pathname = new URL(route.request().url()).pathname
-    if (pathname === '/api/code/tabs/handshake') {
-      await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'resume-current', reload_token: 'reload-current' } })
-    } else if (pathname === '/api/code/contexts') {
-      await route.fulfill({ json: { contexts: [context(catalogReads++ === 0 ? 'first' : 'fresh')] } })
-    } else if (pathname === `/api/code/tabs/${TAB_BINDING_ID}/context`) {
-      pins++
-      await route.fulfill({ status: 204 })
-    } else if (pathname === '/api/code/status') {
-      await route.fulfill({ json: { total_chunks: 0, embedded_chunks: 0, embedding: { coverage: 'none', job_state: null, error_code: null } } })
-    } else if (pathname === '/api/code/structure') {
-      await route.fulfill({ status: 403 })
-    } else {
-      await route.fulfill({ status: 500 })
-    }
+test('watcher publication keeps a server-authorized older pin and results while offering the new View', async ({ page }) => {
+  let published = false
+  const pins: string[] = []
+  const old = { source_ref: 'source', checkout_ref: 'checkout', repository: 'Engram', working_copy: 'Desk', indexed_snapshot: { label: 'Original View' }, view_ref: 'old-view', selection_ref: 'old-choice', index_intent_available: false }
+  const newer = { ...old, indexed_snapshot: { label: 'New View' }, view_ref: 'new-view', selection_ref: 'new-choice' }
+  const context = { source_id: 'source-1', checkout_id: 'checkout-1', view_id: 'view-1', profile_id: 'profile-1', generation: 1 }
+  const item = { ref: { source_id: 'source-1', view_id: 'view-1', entity_key: 'old-result' }, path: 'src/old-view.ts', span: { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }, content_digest: 'digest', kind: 'function', language: 'typescript', excerpt: 'old result', match_sources: ['lexical'], score: 1 }
+  const envelope = { schema: 'engram.code-query/1', status: 'ok', contexts: [context], items: [item], warnings: [], retrieval: { mode: 'lexical' }, freshness: { state: 'observed_current' }, coverage: {}, truncated: false }
+  await page.route('**/api/code/**', async route => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/code/tabs/handshake') await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'resume', reload_token: 'reload' } })
+    else if (path === '/api/code/contexts') await route.fulfill({ json: { contexts: published ? [newer] : [old] } })
+    else if (path.endsWith('/context')) { pins.push(route.request().postDataJSON().selection_ref); await route.fulfill({ status: 204 }) }
+    else if (path === '/api/code/status') await route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { coverage: 'complete' }, freshness: { state: published ? 'historical' : 'observed_current', newer_available: published } } })
+    else if (path === '/api/code/structure' || path === '/api/code/search') await route.fulfill({ json: envelope })
+    else await route.fulfill({ status: 500 })
   })
   await page.goto('/code')
-  await page.getByTestId('code-context-snapshot').selectOption('selection-first')
+  await page.getByTestId('code-context-snapshot').selectOption('old-choice')
   await page.getByTestId('code-pin-context').click()
-  await expect(page.getByTestId('code-context-pinned')).toBeVisible()
+  await page.getByTestId('code-query-input').fill('old result')
+  await page.getByTestId('code-search-submit').click()
+  await expect(page.getByTestId('code-search-results')).toContainText('src/old-view.ts')
+  await expect(page.getByTestId('code-status')).toContainText('Актуален')
+  published = true
   await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
-  await expect(page.getByTestId('code-context-pinned')).toBeVisible()
-  await expect(page.getByTestId('code-context-snapshot')).toHaveValue('selection-fresh')
-  expect(pins).toBe(1)
-  changedSnapshot = true
-  await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
-  await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
-  expect(pins).toBe(1)
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Original View')
+  await expect(page.getByTestId('code-search-results')).toContainText('src/old-view.ts')
+  await expect(page.getByTestId('code-context-snapshot').getByRole('option', { name: 'New View' })).toHaveCount(1)
+  await expect(page.getByTestId('code-status')).toContainText('Старый снимок')
+  await expect(page.locator('.readiness')).toHaveAttribute('data-state', 'newer-snapshot')
+  expect(pins).toEqual(['old-choice'])
+  await page.getByTestId('code-context-snapshot').selectOption('new-choice')
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.getByTestId('code-context-pinned')).toContainText('New View')
+  expect(pins).toEqual(['old-choice', 'new-choice'])
 })
+
+for (const rejectedStatus of ['denied', 'mismatch'] as const) {
+  test(`Code Explorer retains rotated references but drops a historical pin when server reauthorization is ${rejectedStatus}`, async ({ page }) => {
+    let catalogReads = 0
+    let changedSnapshot = false
+    let pins = 0
+    const context = (ref: string) => ({
+      source_ref: `source-${ref}`, checkout_ref: `checkout-${ref}`,
+      repository: 'Engram', working_copy: 'operator desk',
+      view_ref: changedSnapshot ? 'view-new-generation' : 'view-stable',
+      selection_ref: `selection-${ref}`, index_intent_available: false,
+      indexed_snapshot: { label: 'Current snapshot', revision: changedSnapshot ? 'new-revision' : '1a9dad0', published_at: '2026-09-17T00:00:00Z' },
+    })
+    await page.route('**/api/code/**', async (route: Route) => {
+      const pathname = new URL(route.request().url()).pathname
+      if (pathname === '/api/code/tabs/handshake') {
+        await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'resume-current', reload_token: 'reload-current' } })
+      } else if (pathname === '/api/code/contexts') {
+        await route.fulfill({ json: { contexts: [context(catalogReads++ === 0 ? 'first' : 'fresh')] } })
+      } else if (pathname === `/api/code/tabs/${TAB_BINDING_ID}/context`) {
+        pins++
+        await route.fulfill({ status: 204 })
+      } else if (pathname === '/api/code/status') {
+        if (changedSnapshot && rejectedStatus === 'denied') await route.fulfill({ status: 403 })
+        else if (changedSnapshot) await route.fulfill({ status: 409 })
+        else await route.fulfill({ json: { total_chunks: 0, embedded_chunks: 0, embedding: { coverage: 'none', job_state: null, error_code: null } } })
+      } else if (pathname === '/api/code/structure') {
+        await route.fulfill({ status: 403 })
+      } else {
+        await route.fulfill({ status: 500 })
+      }
+    })
+    await page.goto('/code')
+    await page.getByTestId('code-context-snapshot').selectOption('selection-first')
+    await page.getByTestId('code-pin-context').click()
+    await expect(page.getByTestId('code-context-pinned')).toBeVisible()
+    await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
+    await expect(page.getByTestId('code-context-pinned')).toBeVisible()
+    await expect(page.getByTestId('code-context-snapshot')).toHaveValue('selection-fresh')
+    expect(pins).toBe(1)
+    changedSnapshot = true
+    await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
+    await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+    expect(await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))).toBeNull()
+    expect(pins).toBe(1)
+  })
+}
 
 test('Failed and malformed catalog refresh revoke candidate pin authority until successful rebind', async ({ page }) => {
   let catalogMode: 'ready' | 'failed' | 'malformed' | 'rotated' = 'ready'
@@ -343,7 +420,7 @@ test('Reload restores only a unique View candidate, not a server pin, and uses t
   await page.getByTestId('code-context-snapshot').selectOption('old-a')
   await page.getByTestId('code-pin-context').click()
   await expect(page.getByTestId('code-context-pinned')).toBeVisible()
-  expect(await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))).toBe('view-a')
+  expect(JSON.parse((await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))) ?? 'null')).toEqual({ sourceRef: 'source', checkoutRef: 'checkout', viewRef: 'view-a' })
   rotated = true
   await page.reload()
   await expect(page.getByTestId('code-context-candidate')).toBeVisible()
@@ -357,6 +434,48 @@ test('Reload restores only a unique View candidate, not a server pin, and uses t
   await expect(page.getByTestId('code-context-candidate')).toHaveCount(0)
   await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
   expect(await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))).toBeNull()
+})
+
+for (const rotatedSource of [false, true]) test(`Lost noauth binding requires explicit re-pin with ${rotatedSource ? 'rotated' : 'unchanged'} Source/Checkout/View`, async ({ page }) => {
+  let restarted = false
+  const requests: string[] = []
+  const pins: unknown[] = []
+  const current = { source_ref: 'source-old', checkout_ref: 'checkout-old', repository: 'Engram', working_copy: 'Old desk', indexed_snapshot: { label: 'Old snapshot' }, view_ref: 'view-old', selection_ref: 'selection-old', index_intent_available: false }
+  const fresh = { ...current, ...(rotatedSource ? { source_ref: 'source-fresh', checkout_ref: 'checkout-fresh' } : {}), working_copy: 'Fresh desk', selection_ref: 'selection-fresh', indexed_snapshot: { label: 'Fresh snapshot' } }
+  await page.route('**/api/auth/me', async route => route.fulfill({ json: { auth_disabled: true } }))
+  await page.route('**/api/code/**', async (route: Route) => {
+    const pathname = new URL(route.request().url()).pathname
+    requests.push(pathname)
+    if (pathname === '/api/code/tabs/resume') await route.fulfill({ status: 403 })
+    else if (pathname === '/api/code/tabs/handshake') {
+      const body = route.request().postDataJSON()
+      if (restarted) expect(body).not.toHaveProperty('copied_tab_binding_id')
+      await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: restarted ? 'fresh-binding' : TAB_BINDING_ID, document_proof: restarted ? 'fresh-proof' : DOCUMENT_PROOF, resume_nonce: 'resume', reload_token: 'reload' } })
+    } else if (pathname === '/api/code/contexts') await route.fulfill({ json: { contexts: restarted ? [fresh] : [current] } })
+    else if (pathname.endsWith('/context')) { pins.push(route.request().postDataJSON()); await route.fulfill({ status: 204 }) }
+    else if (pathname === '/api/code/status') await route.fulfill({ json: { total_chunks: 0, embedded_chunks: 0, embedding: { coverage: 'none', job_state: null, error_code: null } } })
+    else if (pathname === '/api/code/structure') await route.fulfill({ status: 403 })
+    else await route.fulfill({ status: 204 })
+  })
+
+  await page.goto('/code')
+  await page.getByTestId('code-context-snapshot').selectOption('selection-old')
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Old desk')
+  restarted = true
+  await page.reload()
+  await expect(page.locator('.phase')).toHaveAttribute('data-state', 'ready')
+  await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+  await expect(page.getByTestId('code-context-candidate')).toHaveCount(rotatedSource ? 0 : 1)
+  await expect(page.getByTestId('code-context-working-copy').getByRole('option', { name: 'Fresh desk' })).toHaveCount(1)
+  if (rotatedSource) await expect.poll(() => page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))).toBeNull()
+  expect(requests.filter(path => path === '/api/code/tabs/resume')).toHaveLength(1)
+  expect(requests.filter(path => path === '/api/code/tabs/handshake')).toHaveLength(2)
+  expect(pins).toEqual([{ document_proof: DOCUMENT_PROOF, selection_ref: 'selection-old' }])
+  if (rotatedSource) await page.getByTestId('code-context-snapshot').selectOption('selection-fresh')
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Fresh desk')
+  expect(pins).toEqual([{ document_proof: DOCUMENT_PROOF, selection_ref: 'selection-old' }, { document_proof: 'fresh-proof', selection_ref: 'selection-fresh' }])
 })
 
 
@@ -550,21 +669,6 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
   await page.clock.fastForward('01:00')
   await expect.poll(() => leasePayloads).toEqual([{ document_proof: 'proof-resumed' }])
   await copied.close()
-})
-
-test('Workspace explains an insecure origin without creating a browser binding', async ({ page }) => {
-  const requests: string[] = []
-  await page.addInitScript(() => {
-    Object.defineProperty(window, 'isSecureContext', { value: false })
-  })
-  await page.route('**/api/code/**', async (route) => {
-    requests.push(route.request().url())
-    await route.fulfill({ status: 500 })
-  })
-  await page.goto('/code')
-  await expect(page.getByTestId('code-context-message')).toContainText('HTTPS')
-  await expect(page.getByTestId('code-context-empty')).toBeVisible()
-  expect(requests).toEqual([])
 })
 
 test('Home opens a no-View working copy, then follows its released index to search, relation and source', async ({ page }) => {
@@ -834,4 +938,58 @@ test('identical source and checkout labels retain separate first-index and publi
     await expect(page.getByTestId('code-pin-context')).toBeDisabled()
   }
   expect(pins).toEqual(['view-A', 'view-C', 'view-B'])
+})
+
+test('equal-count names expose minimal unique non-authorizing refs and offline freshness', async ({ page }) => {
+  const firstSource = 'source-prefix-111a-private'
+  const secondSource = 'source-prefix-111b-private'
+  const firstCopy = 'checkout-prefix-222a-private'
+  const secondCopy = 'checkout-prefix-222b-private'
+  const contexts = [
+    { source_ref: firstSource, checkout_ref: firstCopy, repository: 'Engram', working_copy: 'Desk', indexed_snapshot: { label: 'A' }, view_ref: 'view-a', selection_ref: 'selection-a' },
+    { source_ref: firstSource, checkout_ref: secondCopy, repository: 'Engram', working_copy: 'Desk', indexed_snapshot: { label: 'B' }, view_ref: 'view-b', selection_ref: 'selection-b' },
+    { source_ref: secondSource, checkout_ref: 'checkout-other', repository: 'Engram', working_copy: 'Desk', indexed_snapshot: { label: 'C' }, view_ref: 'view-c', selection_ref: 'selection-c' },
+    { source_ref: secondSource, checkout_ref: 'checkout-other-two', repository: 'Engram', working_copy: 'Desk', indexed_snapshot: { label: 'C2' }, view_ref: 'view-c2', selection_ref: 'selection-c2' },
+    { source_ref: 'source-unique', checkout_ref: 'checkout-unique', repository: 'Other', working_copy: 'Unique', indexed_snapshot: { label: 'D' }, view_ref: 'view-d', selection_ref: 'selection-d' },
+    { source_ref: 'source-twins-whole-a', checkout_ref: 'checkout-twin-a', repository: 'Twins', working_copy: 'Twin A', indexed_snapshot: { label: 'E' }, view_ref: 'view-e', selection_ref: 'selection-e' },
+    { source_ref: 'source-twins-whole-b', checkout_ref: 'checkout-twin-b', repository: 'Twins', working_copy: 'Twin B', indexed_snapshot: { label: 'F' }, view_ref: 'view-f', selection_ref: 'selection-f' },
+  ].map(entry => ({ ...entry, index_intent_available: false }))
+  await page.route('**/api/code/**', async route => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/code/tabs/handshake') await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'resume-current', reload_token: 'reload-current' } })
+    else if (pathname === '/api/code/contexts') await route.fulfill({ json: { contexts } })
+    else if (pathname === `/api/code/tabs/${TAB_BINDING_ID}/context`) await route.fulfill({ status: 204 })
+    else if (pathname === '/api/code/status') await route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { Coverage: 'complete' }, freshness: { state: 'offline' } } })
+    else await route.fulfill({ status: 500 })
+  })
+
+  await page.goto('/code')
+  const repositories = page.getByTestId('code-context-repository').locator('option:not([disabled])')
+  await expect(repositories).toHaveCount(5)
+  await expect(repositories.nth(0)).toContainText('· source-prefix-111a')
+  await expect(repositories.nth(1)).toContainText('· source-prefix-111b')
+  await expect(page.getByTestId('code-context-repository').getByRole('option', { name: /source-prefix-111a$/ })).toHaveCount(1)
+  await expect(page.getByTestId('code-context-repository').getByRole('option', { name: /source-prefix-111b$/ })).toHaveCount(1)
+  await expect(repositories.nth(0)).not.toContainText('private')
+  await expect(repositories.nth(2)).toHaveText('Other')
+  await expect(repositories.nth(3)).toContainText('· a')
+  await expect(repositories.nth(4)).toContainText('· b')
+  await expect(repositories.nth(3)).not.toContainText('source-twins-whole-a')
+  await expect(repositories.nth(4)).not.toContainText('source-twins-whole-b')
+  await page.getByTestId('code-context-repository').selectOption(firstSource)
+  const copies = page.getByTestId('code-context-working-copy').locator('option:not([disabled])')
+  await expect(copies).toHaveCount(2)
+  await expect(copies.nth(0)).toContainText('· checkout-prefix-222a')
+  await expect(copies.nth(1)).toContainText('· checkout-prefix-222b')
+  await expect(page.getByTestId('code-context-working-copy').getByRole('option', { name: /checkout-prefix-222a$/ })).toHaveCount(1)
+  await expect(page.getByTestId('code-context-working-copy').getByRole('option', { name: /checkout-prefix-222b$/ })).toHaveCount(1)
+  await expect(copies.nth(0)).not.toContainText('private')
+  await page.getByTestId('code-context-working-copy').selectOption(firstCopy)
+  await page.getByTestId('code-context-snapshot').selectOption('selection-a')
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.getByTestId('code-status').locator('div').nth(2).locator('dd')).toHaveText('Офлайн')
+  await page.locator('.lang').click()
+  await expect(page.getByTestId('code-status').locator('div').nth(2).locator('dd')).toHaveText('Offline')
+  await page.locator('.lang').click()
+  await expect(page.getByTestId('code-status').locator('div').nth(2).locator('dd')).toHaveText('离线')
 })

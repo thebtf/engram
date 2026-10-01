@@ -20,6 +20,7 @@ import (
 
 const (
 	codebaseContextMaxHandlesPerClient = 32
+	codebaseContextMaxClients          = 1024
 	codebaseContextListLimit           = 64
 )
 
@@ -207,6 +208,7 @@ type codebaseContextClientHandles struct {
 	bySelector map[codebaseContextSelectorKey]string
 	byScope    map[codebaseContextScopeKey]uint32
 	order      []string
+	lastUsed   uint64
 }
 
 type codebaseContextRefPayload struct {
@@ -333,7 +335,7 @@ func (s *Server) handleCodebaseContext(ctx context.Context, raw json.RawMessage)
 
 func (s *Server) registerCodebaseContext(ctx context.Context, input uci.ResolveContextInput, args codebaseContextArgs) (string, error) {
 	identity, found := auth.IdentityFrom(ctx)
-	if !found || identity.Source != auth.SourceClient || identity.Role != auth.RoleReadWrite || identity.PrincipalKind != auth.PrincipalKindHuman {
+	if !found || !(identity.Source == auth.SourceAuthDisabled || (identity.Source == auth.SourceClient && identity.Role == auth.RoleReadWrite && identity.PrincipalKind == auth.PrincipalKindHuman)) {
 		return "", codebaseContextClosedError(uci.PermissionDenied)
 	}
 	if args.Locator == nil || args.Checkout != nil || args.ContextHandle != nil || args.SpaceID != nil || args.CheckoutID != nil || args.ViewID != nil || args.AnalysisProfileID != nil || args.Generation != nil ||
@@ -680,6 +682,13 @@ func codebaseContextCallerInput(ctx context.Context) (uci.ResolveContextInput, e
 	}
 	sessionID := sessionFromContext(ctx)
 	identity, ok := auth.IdentityFrom(ctx)
+	if ok && identity.Source == auth.SourceAuthDisabled && codebaseContextIdentityText(sessionID) {
+		workstation, valid := uci.NoAuthCodeWorkstationForInstance(codeClientInstanceFromContext(ctx))
+		if !valid {
+			return uci.ResolveContextInput{}, errors.New("noauth code client instance required")
+		}
+		return uci.ResolveContextInput{ClientSessionID: sessionID, AuthRealm: uci.NoAuthCodeRealm, Principal: uci.NoAuthCodePrincipal, WorkstationID: workstation}, nil
+	}
 	authRealm := string(identity.Source)
 	if !ok || !codebaseContextIdentityText(sessionID) || !codebaseContextIdentityText(authRealm) || !codebaseContextIdentityText(identity.Principal) || !codebaseContextIdentityText(identity.WorkstationID()) {
 		return uci.ResolveContextInput{}, errors.New("invalid caller")
@@ -827,16 +836,20 @@ func codebaseExposureInput(ctx context.Context, operation uci.ExposureOperation,
 		return uci.ExposureInput{}, err
 	}
 	identity, ok := auth.IdentityFrom(ctx)
-	if !ok || !codebaseContextIdentityText(identity.WorkstationID()) {
+	if !ok || (identity.Source != auth.SourceAuthDisabled && !codebaseContextIdentityText(identity.WorkstationID())) {
 		return uci.ExposureInput{}, errors.New("invalid exposure caller")
 	}
 	request, ok := uciRequestIdentityFromContext(ctx)
 	if !ok {
 		return uci.ExposureInput{}, errors.New("missing request identity")
 	}
+	keycard := identity.WorkstationID()
+	if identity.Source == auth.SourceAuthDisabled {
+		keycard = caller.WorkstationID
+	}
 	return uci.ExposureInput{
 		AuthRealm:            caller.AuthRealm,
-		ClientKeycard:        identity.WorkstationID(),
+		ClientKeycard:        keycard,
 		ClientSession:        caller.ClientSessionID,
 		RequestID:            request.requestID,
 		RequestBindingDigest: request.bindingDigest,
@@ -880,6 +893,9 @@ func validCodebaseContextMetadata(metadata map[string]string) bool {
 }
 
 func codebaseContextApplicationError(err error) error {
+	if errors.Is(err, uci.ErrNoAuthCodeCatalogFull) {
+		return uci.ErrNoAuthCodeCatalogFull
+	}
 	var contextErr *uci.ContextError
 	if errors.As(err, &contextErr) {
 		if contextErr.Code() == uci.RegistrationProfileUnbound {
@@ -944,6 +960,7 @@ func (s *Server) codebaseContextSelectorForHandle(clientSessionID, handle string
 	if !found {
 		return nil, 0, uci.IndexBindingSelector{}, false
 	}
+	s.codebaseContextTouchClient(client)
 	return s.codebaseContextApplication, s.codebaseContextEpoch, entry.selector.Clone(), true
 }
 
@@ -957,8 +974,21 @@ func (s *Server) codebaseContextHandleForSelector(clientSessionID string, select
 	}
 
 	s.codebaseContextMu.Lock()
-	if s.codebaseContextEpoch != epoch {
+	application := s.codebaseContextApplication
+	evictedSession := ""
+	forgotten := false
+	defer func() {
 		s.codebaseContextMu.Unlock()
+		if indexApplication, ok := application.(codebaseContextIndexApplication); ok {
+			if evictedSession != "" {
+				indexApplication.ForgetClient(evictedSession)
+			}
+			if forgotten {
+				indexApplication.ForgetClient(clientSessionID)
+			}
+		}
+	}()
+	if s.codebaseContextEpoch != epoch {
 		return "", false
 	}
 	if s.codebaseContextHandles == nil {
@@ -966,6 +996,16 @@ func (s *Server) codebaseContextHandleForSelector(clientSessionID string, select
 	}
 	client := s.codebaseContextHandles[clientSessionID]
 	if client == nil {
+		if len(s.codebaseContextHandles) >= codebaseContextMaxClients {
+			// ponytail: scan at most 1024 owners on admission; use a queue only if this becomes hot.
+			var oldestUse uint64
+			for session, handles := range s.codebaseContextHandles {
+				if evictedSession == "" || handles.lastUsed < oldestUse {
+					evictedSession, oldestUse = session, handles.lastUsed
+				}
+			}
+			delete(s.codebaseContextHandles, evictedSession)
+		}
 		client = &codebaseContextClientHandles{
 			byHandle:   make(map[string]codebaseContextHandleEntry),
 			bySelector: make(map[codebaseContextSelectorKey]string),
@@ -973,15 +1013,14 @@ func (s *Server) codebaseContextHandleForSelector(clientSessionID string, select
 		}
 		s.codebaseContextHandles[clientSessionID] = client
 	}
+	s.codebaseContextTouchClient(client)
 	if handle, found := client.bySelector[key]; found {
 		if binding != nil {
 			s.codebaseContextSetEntryScope(client, handle, *binding)
 		}
-		s.codebaseContextMu.Unlock()
 		return handle, true
 	}
 
-	forgotten := false
 	if len(client.order) >= codebaseContextMaxHandlesPerClient {
 		oldest := client.order[0]
 		client.order = client.order[1:]
@@ -990,7 +1029,6 @@ func (s *Server) codebaseContextHandleForSelector(clientSessionID string, select
 	}
 	handle, err := newCodebaseContextHandle(client.byHandle)
 	if err != nil {
-		s.codebaseContextMu.Unlock()
 		return "", false
 	}
 	entry := codebaseContextHandleEntry{key: key, selector: selector.Clone()}
@@ -1000,17 +1038,13 @@ func (s *Server) codebaseContextHandleForSelector(clientSessionID string, select
 	if binding != nil {
 		s.codebaseContextSetEntryScope(client, handle, *binding)
 	}
-	application := s.codebaseContextApplication
-	s.codebaseContextMu.Unlock()
-
-	// A bounded registry eviction invalidates the same client's resolver default
-	// rather than allowing an evicted selection to remain an ambient authority.
-	if forgotten {
-		if indexApplication, ok := application.(codebaseContextIndexApplication); ok {
-			indexApplication.ForgetClient(clientSessionID)
-		}
-	}
 	return handle, true
+}
+
+// codebaseContextTouchClient is called only while the registry mutex is held.
+func (s *Server) codebaseContextTouchClient(client *codebaseContextClientHandles) {
+	s.codebaseContextUseCounter++
+	client.lastUsed = s.codebaseContextUseCounter
 }
 
 func (s *Server) codebaseContextSetEntryScope(client *codebaseContextClientHandles, handle string, binding uci.IndexBinding) {
@@ -1061,6 +1095,7 @@ func (s *Server) codebaseContextHandleSelector(clientSessionID, handle string) (
 	if !found {
 		return 0, uci.IndexBindingSelector{}, false
 	}
+	s.codebaseContextTouchClient(client)
 	return s.codebaseContextEpoch, entry.selector.Clone(), true
 }
 
@@ -1096,6 +1131,7 @@ func (s *Server) codebaseContextHandleStillCurrent(clientSessionID, handle strin
 	if binding != nil {
 		s.codebaseContextSetEntryScope(client, handle, *binding)
 	}
+	s.codebaseContextTouchClient(client)
 	return true
 }
 
@@ -1112,7 +1148,11 @@ func (s *Server) codebaseContextScopeAdmitted(clientSessionID string, scope code
 		return false
 	}
 	client := s.codebaseContextHandles[clientSessionID]
-	return client != nil && client.byScope[scope] > 0
+	if client == nil || client.byScope[scope] == 0 {
+		return false
+	}
+	s.codebaseContextTouchClient(client)
+	return true
 }
 
 func codebaseContextSelectorKeyFor(selector uci.IndexBindingSelector) (codebaseContextSelectorKey, bool) {

@@ -209,7 +209,7 @@ function getEngramConfig() {
    if (!clientInstanceID && cf.client_instance_id) clientInstanceID = cf.client_instance_id;
   }
  }
- if (!clientInstanceID && serverURL && token) {
+ if (!clientInstanceID && serverURL) {
   const pluginData = resolvePluginData(path.resolve(__dirname, '..'));
   clientInstanceID = installationClientInstanceID(pluginData);
  }
@@ -1231,7 +1231,7 @@ async function RunHook(hookName, handler) {
    context.RelativePath = gitResult ? gitResult.relativePath : '';
    context.ProjectIdentityV2 = resolveProjectIdentityV2(cwd);
   }
-  if (hookName !== 'SessionStart' || (runtimeEnv.serverURL && runtimeEnv.token)) {
+  if (hookName !== 'SessionStart' || runtimeEnv.serverURL) {
    try {
     await registerProjectIdentity(context);
    } catch (error) {

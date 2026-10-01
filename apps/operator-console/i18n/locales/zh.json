@@ -2259,12 +2259,15 @@
       "chooseWorkingCopy": "选择工作副本",
       "unnamedWorkingCopy": "未命名工作副本",
       "chooseSnapshot": "选择索引快照",
+      "indexedCopies": "已索引工作副本：{count}",
+      "indexedSnapshots": "索引快照：{count}",
       "revision": "修订版本",
       "publishedAt": "发布时间",
       "selectPrompt": "选择服务器授权的视图。确认前，此文档不会固定视图。",
       "selectedPrompt": "检查选中的视图，然后明确为此文档固定它。",
       "refresh": "刷新已授权的选项",
-      "retryReload": "重试重新加载绑定",
+      "retryReload": "重试标签页绑定",
+      "retryIdentity": "重试服务器身份检查",
       "pin": "固定选中的视图",
       "switch": "切换到选中的视图",
       "pinned": "已由服务器固定",
@@ -2296,6 +2299,7 @@
         "reload-pending": "等待重新加载",
         "denied": "绑定被拒绝",
         "secure-origin-required": "需要 HTTPS",
+        "identity-unavailable": "服务器不可用",
         "error": "绑定出错"
       },
       "messages": {
@@ -2306,8 +2310,9 @@
         "ambiguous": "启动状态不明确；新绑定从未选择状态开始。",
         "reload-pending": "先前的文档租约仍有效。请等待关闭或到期后重试。",
         "denied": "服务器拒绝此浏览器绑定。",
-        "error": "服务器无法建立安全的浏览器绑定。如果已使用 HTTPS，请检查浏览器是否支持 crypto.randomUUID。",
-        "secure-origin-required": "当前 HTTP 地址无法建立安全的浏览器绑定。请通过服务器配置的 HTTPS 地址打开控制台并以本人身份登录；索引和读取需要服务器授予的 Source/Checkout 权限。不安全的标志或手动输入的 ID 均不能代替授权。"
+        "error": "服务器无法建立浏览器绑定。请检查连接和浏览器加密功能。",
+        "secure-origin-required": "当前 HTTP 地址无法建立安全的浏览器绑定。请通过服务器配置的 HTTPS 地址打开控制台并以本人身份登录；索引和读取需要服务器授予的 Source/Checkout 权限。不安全的标志或手动输入的 ID 均不能代替授权。",
+        "identity-unavailable": "服务器未确认身份验证模式。请检查连接并重试；尚未请求工作区绑定。"
       }
     },
     "results": {
@@ -2572,6 +2577,31 @@
     "repository": "仓库",
     "workingCopy": "工作副本",
     "indexedSnapshot": "索引快照",
+    "embeddingState": "代码向量索引",
+    "embeddingError": "原因",
+    "embeddingRecovery": "向量索引错误：{reason}。检查提供方和模型，再请求重新索引或核对，并刷新状态。固定快照不会改变。",
+    "coverage": {
+      "complete": "完整",
+      "partial": "部分",
+      "unavailable": "不可用"
+    },
+    "freshness": {
+      "observed_current": "最新",
+      "catching_up": "正在更新",
+      "historical": "旧快照",
+      "offline": "离线",
+      "failed": "更新失败",
+      "unknown": "未知"
+    },
+    "embeddingJobs": {
+      "queued": "排队中",
+      "running": "运行中",
+      "retry_scheduled": "计划重试",
+      "succeeded": "已完成",
+      "failed_terminal": "失败",
+      "cancelled": "已取消",
+      "obsolete": "已替换"
+    },
     "readiness": {
       "ready": {
         "title": "索引已就绪",
@@ -2589,6 +2619,10 @@
         "title": "索引失败",
         "body": "上次尝试未完成。任何已确认的快照仍然保留。"
       },
+      "offline": {
+        "title": "快照离线",
+        "body": "源或工作副本处于离线状态。固定快照仍可用，但在连接恢复前无法确认其是否最新。"
+      },
       "unknown": {
         "title": "新鲜度未知",
         "body": "服务器没有说明此快照是否为当前状态。"
@@ -2596,6 +2630,10 @@
       "newer-snapshot": {
         "title": "有更新的快照",
         "body": "当前答案会保留在固定快照中，直到您明确切换。"
+      },
+      "degraded": {
+        "title": "语义搜索尚未就绪",
+        "body": "代码向量索引不完整或不可用。源代码和词法搜索可能仍可用，但不能证明语义检索。检查下方的向量索引状态，然后刷新状态。"
       }
     }
   },

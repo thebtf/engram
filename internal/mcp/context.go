@@ -14,6 +14,19 @@ const (
 	sessionContextKey contextKey = "engram-session"
 )
 
+// codeClientInstanceKey carries a V3 installation identifier only after the
+// transport has validated its project descriptor.
+const codeClientInstanceKey contextKey = "engram-code-client-instance"
+
+func ContextWithCodeClientInstance(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, codeClientInstanceKey, id)
+}
+
+func codeClientInstanceFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(codeClientInstanceKey).(string)
+	return id
+}
+
 // extractProjectFromHeader reads the X-Engram-Project header from an HTTP request.
 // Returns empty string if header is absent.
 func extractProjectFromHeader(r *http.Request) string {

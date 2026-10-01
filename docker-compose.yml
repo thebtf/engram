@@ -49,6 +49,7 @@ services:
       ENGRAM_WORKER_PORT: "37777"
       ENGRAM_AUTH_ADMIN_TOKEN: "${ENGRAM_AUTH_ADMIN_TOKEN:-}"
       ENGRAM_AUTH_DISABLED: "${ENGRAM_AUTH_DISABLED:-false}"
+      ENGRAM_AUTH_TRUSTED_PROXY: "${OPERATOR_CONSOLE_TRUSTED_PROXY_IP:-10.240.250.10}"
       ENGRAM_VAULT_KEY: "${ENGRAM_VAULT_KEY:-}"
       ENGRAM_EMBEDDING_URL: "${ENGRAM_EMBEDDING_URL:-}"
       ENGRAM_EMBEDDING_MODEL: "${ENGRAM_EMBEDDING_MODEL:-text-embedding}"
@@ -64,6 +65,9 @@ services:
       ENGRAM_CRYSTALLIZATION_ENABLED: "${ENGRAM_CRYSTALLIZATION_ENABLED:-false}"
     volumes:
       - engramdata:/var/lib/engram
+    networks:
+      default:
+      operator:
     depends_on:
       postgres:
         condition: service_healthy
@@ -89,6 +93,9 @@ services:
       NUXT_OPERATOR_API_TARGET: "http://server:37777"
       NUXT_PUBLIC_API_BASE: "/api"
       NUXT_PUBLIC_API_DISPLAY_HOST: "${OPERATOR_CONSOLE_API_DISPLAY_HOST:-}"
+    networks:
+      operator:
+        ipv4_address: "${OPERATOR_CONSOLE_TRUSTED_PROXY_IP:-10.240.250.10}"
     depends_on:
       server:
         condition: service_healthy
@@ -97,3 +104,11 @@ services:
 volumes:
   pgdata:
   engramdata:
+
+networks:
+  operator:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: "${OPERATOR_CONSOLE_NETWORK_SUBNET:-10.240.250.0/24}"
+          ip_range: "${OPERATOR_CONSOLE_NETWORK_IP_RANGE:-10.240.250.128/25}"

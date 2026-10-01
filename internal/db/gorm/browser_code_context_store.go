@@ -2,6 +2,7 @@ package gorm
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
@@ -28,10 +29,10 @@ var (
 	ErrBrowserCodeContinuationDenied = errors.New("browser code continuation denied")
 )
 
-// BrowserCodeContextCatalogEntry is one grant-authorized Source → Checkout →
-// published View choice. A nil Context is intentionally the only shape for a
-// registered checkout without a published View; it exposes an index-intent
-// affordance without inventing a ContextRef.
+// BrowserCodeContextCatalogEntry is a durable Source → Checkout catalog row.
+// A Context permits a published View choice only after transport authorization;
+// nil Context is a registered checkout awaiting its first View or non-authorizing
+// offline metadata. Registration alone does not prove a live daemon owner.
 type BrowserCodeContextCatalogEntry struct {
 	SourceID             string
 	SourceLabel          string
@@ -222,6 +223,87 @@ func (s *BrowserCodeContextStore) ListCatalog(ctx context.Context, subjectUserID
 	return entries, nil
 }
 
+// ListNoAuthCatalog returns durable registrations plus a bounded, non-authorizing
+// offline inventory. The transport additionally derives owner liveness from polling.
+func (s *BrowserCodeContextStore) ListNoAuthCatalog(ctx context.Context) ([]BrowserCodeContextCatalogEntry, error) {
+	if err := s.requireDB("list local code catalog"); err != nil {
+		return nil, err
+	}
+	if ctx == nil || ctx.Err() != nil {
+		return nil, ErrBrowserCodeContextDenied
+	}
+	var rows []browserCodeContextCatalogRow
+	err := s.db.WithContext(ctx).Raw(`
+		SELECT source.source_id, source.display_name AS source_label,
+			checkout.checkout_id, checkout.kind AS checkout_kind, checkout.state AS checkout_state,
+			COALESCE(checkout.display_name, '') AS checkout_label,
+			view_row.view_id, view_row.profile_id, view_row.generation,
+			CASE WHEN view_row.view_id IS NULL THEN NULL
+				WHEN view_row.ref_label IS NOT NULL THEN view_row.ref_label
+				WHEN view_row.head_oid IS NULL THEN 'unborn' ELSE 'detached' END AS view_label,
+			view_row.head_oid AS snapshot_revision, view_row.published_at AS snapshot_published_at
+		FROM sources AS source
+		JOIN ci_checkouts AS checkout ON checkout.source_id = source.source_id
+		LEFT JOIN LATERAL (
+			SELECT view_id, profile_id, generation, ref_label, head_oid, published_at
+			FROM ci_views WHERE checkout_id = checkout.checkout_id
+				AND source_id = checkout.source_id AND incarnation_id = checkout.incarnation_id
+				AND state IN (?, ?)
+			ORDER BY (view_id = checkout.current_view_id) DESC NULLS LAST, generation DESC, view_id
+			LIMIT 1
+		) AS view_row ON TRUE
+		WHERE source.auth_realm = ? AND checkout.owner_principal = ?
+			AND source.state = ? AND checkout.state IN (?, ?, ?)
+		ORDER BY source.source_id, checkout.checkout_id, view_row.generation DESC NULLS LAST, view_row.view_id
+		LIMIT ?
+	`, UCIViewPublished, UCIViewSuperseded, uci.NoAuthCodeRealm, uci.NoAuthCodePrincipal,
+		UCISourceActive, UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp,
+		browserCodeCatalogMaxEntries+1).Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("local code context catalog: %w", err)
+	}
+	if len(rows) > browserCodeCatalogMaxEntries {
+		return nil, fmt.Errorf("local code context catalog exceeds %d entries", browserCodeCatalogMaxEntries)
+	}
+	// Offline copies do not consume the 128 active-choice admission bound. Keep
+	// their inventory bounded separately so historical offline rows cannot turn
+	// a healthy active catalog into a service-wide 503.
+	var offline []browserCodeContextCatalogRow
+	err = s.db.WithContext(ctx).Raw(`
+		SELECT source.source_id, source.display_name AS source_label,
+			checkout.checkout_id, checkout.kind AS checkout_kind, checkout.state AS checkout_state,
+			COALESCE(checkout.display_name, '') AS checkout_label
+		FROM sources AS source
+		JOIN ci_checkouts AS checkout ON checkout.source_id = source.source_id
+		WHERE source.auth_realm = ? AND checkout.owner_principal = ?
+			AND source.state = ? AND checkout.state = ?
+		ORDER BY checkout.updated_at DESC, checkout.checkout_id
+		LIMIT ?
+	`, uci.NoAuthCodeRealm, uci.NoAuthCodePrincipal, UCISourceActive, UCICheckoutOffline,
+		browserCodeCatalogMaxEntries).Scan(&offline).Error
+	if err != nil {
+		return nil, fmt.Errorf("local code context offline catalog: %w", err)
+	}
+	rows = append(rows, offline...)
+	entries := make([]BrowserCodeContextCatalogEntry, 0, len(rows))
+	for _, row := range rows {
+		entry, err := row.catalogEntry()
+		if err != nil {
+			return nil, err
+		}
+		if entry.CheckoutLabel == "" {
+			fingerprint := sha256.Sum256([]byte(entry.CheckoutID))
+			entry.CheckoutLabel = fmt.Sprintf("Working copy · %x", fingerprint[:4])
+		}
+		if row.CheckoutState == UCICheckoutOffline {
+			entry.CheckoutLabel += " · Offline"
+			entry.IndexIntentAvailable = false
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
 // Pin atomically proves the live tab, exact active grant, exact published View
 // tuple, and audit append before writing the pin. Any refusal writes neither a
 // pin nor an audit row.
@@ -272,6 +354,38 @@ func (s *BrowserCodeContextStore) Pin(ctx context.Context, in BrowserCodeContext
 		}
 		return nil
 	})
+}
+
+// AuthorizeNoAuthIndexIntent checks the technical realm and exact checkout
+// owner without consulting the human grant or tab tables.
+func (s *BrowserCodeContextStore) AuthorizeNoAuthIndexIntent(ctx context.Context, sourceID, checkoutID, profileID string, requireNoView bool) (BrowserCodeIndexIntentBinding, error) {
+	if err := s.requireDB("authorize local code intent"); err != nil {
+		return BrowserCodeIndexIntentBinding{}, err
+	}
+	if ctx == nil || ctx.Err() != nil || validateUCIUUID("source_id", sourceID) != nil || validateUCIUUID("checkout_id", checkoutID) != nil || validateUCIUUID("profile_id", profileID) != nil {
+		return BrowserCodeIndexIntentBinding{}, ErrBrowserCodeContextDenied
+	}
+	var row struct {
+		IncarnationID string `gorm:"column:incarnation_id"`
+	}
+	query := `SELECT checkout.incarnation_id FROM sources AS source
+		JOIN ci_checkouts AS checkout ON checkout.source_id = source.source_id
+		JOIN ci_profiles AS profile ON profile.profile_id = ?
+		WHERE source.source_id = ? AND checkout.checkout_id = ?
+		AND source.auth_realm = ? AND checkout.owner_principal = ?
+		AND source.state = ? AND checkout.state IN (?, ?, ?)`
+	if requireNoView {
+		query += ` AND checkout.current_view_id IS NULL`
+	}
+	err := s.db.WithContext(ctx).Raw(query, profileID, sourceID, checkoutID, uci.NoAuthCodeRealm, uci.NoAuthCodePrincipal,
+		UCISourceActive, UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp).Scan(&row).Error
+	if err != nil {
+		return BrowserCodeIndexIntentBinding{}, fmt.Errorf("local code index target: %w", err)
+	}
+	if validateUCIUUID("incarnation_id", row.IncarnationID) != nil {
+		return BrowserCodeIndexIntentBinding{}, ErrBrowserCodeContextDenied
+	}
+	return BrowserCodeIndexIntentBinding{Scope: uci.IndexScope{SourceID: sourceID, CheckoutID: checkoutID, IncarnationID: row.IncarnationID}, ProfileID: profileID, AuthRealm: uci.NoAuthCodeRealm}, nil
 }
 
 // AuthorizeInitialIndexIntent atomically rechecks the current browser document,
@@ -427,17 +541,18 @@ func (s *BrowserCodeContextStore) AdvanceContinuation(ctx context.Context, curso
 }
 
 type browserCodeContextCatalogRow struct {
-	SourceID            string     `gorm:"column:source_id"`
-	SourceLabel         string     `gorm:"column:source_label"`
-	CheckoutID          string     `gorm:"column:checkout_id"`
-	CheckoutKind        string     `gorm:"column:checkout_kind"`
-	CheckoutLabel       string     `gorm:"column:checkout_label"`
-	ViewID              *string    `gorm:"column:view_id"`
-	ProfileID           *string    `gorm:"column:profile_id"`
-	Generation          *int64     `gorm:"column:generation"`
-	ViewLabel           *string    `gorm:"column:view_label"`
-	SnapshotRevision    *string    `gorm:"column:snapshot_revision"`
-	SnapshotPublishedAt *time.Time `gorm:"column:snapshot_published_at"`
+	SourceID            string           `gorm:"column:source_id"`
+	SourceLabel         string           `gorm:"column:source_label"`
+	CheckoutID          string           `gorm:"column:checkout_id"`
+	CheckoutKind        string           `gorm:"column:checkout_kind"`
+	CheckoutLabel       string           `gorm:"column:checkout_label"`
+	CheckoutState       UCICheckoutState `gorm:"column:checkout_state"`
+	ViewID              *string          `gorm:"column:view_id"`
+	ProfileID           *string          `gorm:"column:profile_id"`
+	Generation          *int64           `gorm:"column:generation"`
+	ViewLabel           *string          `gorm:"column:view_label"`
+	SnapshotRevision    *string          `gorm:"column:snapshot_revision"`
+	SnapshotPublishedAt *time.Time       `gorm:"column:snapshot_published_at"`
 }
 
 func (row browserCodeContextCatalogRow) catalogEntry() (BrowserCodeContextCatalogEntry, error) {
