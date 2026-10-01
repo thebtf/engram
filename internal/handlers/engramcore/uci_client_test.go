@@ -2,8 +2,10 @@ package engramcore
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -871,13 +873,20 @@ func TestUCIIndexAdapterOpaqueInstallationRoundTrip(t *testing.T) {
 	}{
 		{name: "ASCII", instance: "fixture-daemon-install", valid: true},
 		{name: "Unicode", instance: "界", valid: true},
-		{name: "ASCII byte limit", instance: strings.Repeat("a", 256), valid: true},
-		{name: "Unicode byte limit", instance: strings.Repeat("界", 85) + "a", valid: true},
-		{name: "Unicode beyond byte limit", instance: strings.Repeat("界", 86)},
+		{name: "ASCII rune limit", instance: strings.Repeat("a", 256), valid: true},
+		{name: "Unicode beyond former byte limit", instance: strings.Repeat("界", 86), valid: true},
+		{name: "Unicode rune limit", instance: strings.Repeat("界", 256), valid: true},
+		{name: "four-byte Unicode rune limit", instance: strings.Repeat("😀", 256), valid: true},
+		{name: "ASCII beyond rune limit", instance: strings.Repeat("a", 257)},
+		{name: "Unicode beyond rune limit", instance: strings.Repeat("界", 257)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			workstation, valid := uci.NoAuthCodeWorkstationForInstance(test.instance)
 			require.Equal(t, test.valid, valid)
+			if test.valid {
+				fingerprint := sha256.Sum256([]byte("engram/noauth-code/workstation/v1\x00" + test.instance))
+				require.Equal(t, fmt.Sprintf("noauth-code-%x", fingerprint), workstation)
+			}
 			authorize := func(ctx context.Context) error {
 				incoming, _ := metadata.FromIncomingContext(ctx)
 				values := incoming.Get(uci.NoAuthCodeClientInstanceMetadataKey)

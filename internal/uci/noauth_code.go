@@ -18,11 +18,13 @@ const (
 )
 
 func NoAuthCodeWorkstationForInstance(instance string) (string, bool) {
-	if len(instance) == 0 || len(instance) > 256 || !utf8.ValidString(instance) || strings.TrimSpace(instance) != instance || strings.ContainsAny(instance, "/\\@:") {
+	if len(instance) == 0 || !utf8.ValidString(instance) || strings.TrimSpace(instance) != instance || strings.ContainsAny(instance, "/\\@:") {
 		return "", false
 	}
+	runeCount := 0
 	for _, character := range instance {
-		if unicode.IsSpace(character) || unicode.IsControl(character) {
+		runeCount++
+		if runeCount > 256 || unicode.IsSpace(character) || unicode.IsControl(character) {
 			return "", false
 		}
 	}

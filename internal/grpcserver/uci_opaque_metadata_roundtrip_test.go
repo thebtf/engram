@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -27,13 +28,17 @@ func TestUCIContextIntegrationNoAuthOpaqueMetadataRoundTrip(t *testing.T) {
 	}{
 		{name: "ASCII", instance: "install-a"},
 		{name: "Unicode", instance: "界"},
-		{name: "ASCII byte limit", instance: strings.Repeat("a", 256)},
-		{name: "Unicode byte limit", instance: strings.Repeat("界", 85) + "a"},
+		{name: "ASCII rune limit", instance: strings.Repeat("a", 256)},
+		{name: "Unicode beyond former byte limit", instance: strings.Repeat("界", 86)},
+		{name: "Unicode rune limit", instance: strings.Repeat("界", 256)},
+		{name: "four-byte Unicode rune limit", instance: strings.Repeat("😀", 256)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newUCIContextIntegrationFixture(t)
 			workstation, valid := uci.NoAuthCodeWorkstationForInstance(test.instance)
 			require.True(t, valid)
+			fingerprint := sha256.Sum256([]byte("engram/noauth-code/workstation/v1\x00" + test.instance))
+			require.Equal(t, fmt.Sprintf("noauth-code-%x", fingerprint), workstation)
 			binding := fixture.bindingA.Clone()
 			binding.WorkstationID = workstation
 			fixture.runtime.bindings[uciContextIntegrationKey(fixture.refA)] = binding
@@ -144,8 +149,13 @@ func TestUCIContextIntegrationNoAuthMalformedMetadataRoundTrip(t *testing.T) {
 		{name: "Unicode whitespace", values: []string{"界\u2003"}},
 		{name: "control", values: []string{"install\x00a"}},
 		{name: "locator", values: []string{"file:///forged"}},
-		{name: "ASCII beyond byte limit", values: []string{strings.Repeat("a", 257)}},
-		{name: "Unicode beyond byte limit", values: []string{strings.Repeat("界", 86)}},
+		{name: "Unix locator", values: []string{"/private/install"}},
+		{name: "Windows locator", values: []string{"C:\\private\\install"}},
+		{name: "email locator", values: []string{"install@example.invalid"}},
+		{name: "scheme", values: []string{"https:private-install"}},
+		{name: "ASCII beyond rune limit", values: []string{strings.Repeat("a", 257)}},
+		{name: "Unicode beyond rune limit", values: []string{strings.Repeat("界", 257)}},
+		{name: "four-byte Unicode beyond rune limit", values: []string{strings.Repeat("😀", 257)}},
 		{name: "legacy only", legacy: "install-a"},
 		{name: "mixed schemes", values: []string{"install-a"}, legacy: "install-a"},
 	} {
@@ -180,7 +190,7 @@ func TestUCIOpaqueMetadataDoesNotChangeAuthenticatedAuthority(t *testing.T) {
 	incoming := metadata.Pairs(
 		auditcontext.SourceSessionMetadataKey, uciContextIntegrationClientA,
 		auditcontext.UCIRequestCorrelationMetadataKey, correlation.MetadataValue(),
-		uci.NoAuthCodeClientInstanceMetadataKey, strings.Repeat("界", 86),
+		uci.NoAuthCodeClientInstanceMetadataKey, strings.Repeat("界", 257),
 		uci.NoAuthCodeClientInstanceMetadataKey, "file:///forged",
 		"x-engram-uci-client-instance-id", "legacy-forged",
 	)
