@@ -565,6 +565,7 @@ for (const boundary of ['structure', 'search', 'graph', 'source'] as const) {
       let releaseCurrent: () => void = () => { }
       const pins: string[] = []
       const searches: string[] = []
+      const requests: string[] = []
       const recovered = { ...entry, selection_ref: 'recovered-selection', indexed_snapshot: { label: 'Recovered snapshot' }, view_ref: boundary === 'structure' ? 'new-view' : entry.view_ref }
       const released = (marker: string, current: boolean) => {
         const context = { source_id: 'source-1', checkout_id: 'checkout-1', view_id: current && boundary === 'structure' ? 'view-2' : 'view-1', profile_id: 'profile-1', generation: current && boundary === 'structure' ? 2 : 1 }
@@ -586,6 +587,7 @@ for (const boundary of ['structure', 'search', 'graph', 'source'] as const) {
       await page.route('**/api/auth/me', route => route.fulfill({ json: { auth_disabled: true } }))
       await page.route('**/api/code/**', async route => {
         const path = new URL(route.request().url()).pathname
+        requests.push(path)
         const body = route.request().postDataJSON()
         if (path === '/api/code/tabs/handshake') {
           handshakes++
@@ -639,26 +641,26 @@ for (const boundary of ['structure', 'search', 'graph', 'source'] as const) {
         ? page.waitForEvent('requestfailed', request => new URL(request.url()).pathname === `/api/code/${boundary}` && request.postDataJSON().document_proof === 'proof')
         : page.waitForResponse(response => new URL(response.url()).pathname === `/api/code/${boundary}` && response.request().postDataJSON().document_proof === 'proof')
       if (scenario.leaseStatus === 403) {
-        const boundaryState = () => page.locator('.code-page').evaluate((element, name) => {
-          const state = Reflect.get(Reflect.get(element, '__vueParentComponent'), 'setupState')
-          return {
-            envelope: Reflect.get(state, `${name}Envelope`),
-            presentation: Reflect.get(state, `${name}State`),
-            continuationNotice: name === 'structure' || name === 'search' ? Reflect.get(state, `${name}ContinuationNotice`) : null,
-          }
-        }, boundary)
-        const invalidatedState = await boundaryState()
+        const deniedRequests = [...requests]
+        await expect(page.getByTestId('code-results-unselected')).toBeVisible()
+        await expect(page.getByTestId('code-release-state')).toHaveAttribute('data-state', 'unselected')
         await expect(page.getByTestId('code-retry-lease')).toHaveCount(0)
         releaseOld()
-        await oldFinished
+        await (await oldFinished).finished()
         await page.clock.runFor(50)
-        expect(await boundaryState()).toEqual(invalidatedState)
+        await expect(page.getByTestId('code-results-unselected')).toBeVisible()
+        await expect(page.getByTestId('code-release-state')).toHaveAttribute('data-state', 'unselected')
+        await expect(page.locator('.result-grid')).toHaveCount(0)
+        await expect(page.getByText('obsolete-warning', { exact: true })).toHaveCount(0)
+        await expect(refresh).toBeDisabled()
+        await expect(page.getByRole('button', { name: 'Обновить статус', exact: true })).toBeDisabled()
         await expect(page.locator('.phase')).toHaveAttribute('data-state', 'denied')
         await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
         await expect(page.locator('.readiness')).toHaveCount(0)
         await expect(page.getByTestId('code-source-result')).toHaveCount(0)
         await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
         expect(await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))).toBeNull()
+        expect(requests).toEqual(deniedRequests)
         expect(pins).toEqual(['selection'])
         expect(handshakes).toBe(1)
         return
