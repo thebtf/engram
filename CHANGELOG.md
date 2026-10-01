@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Isolate mock vault credentials between parallel browser sessions so one Secrets delete cannot invalidate another session's reveal of a same-named project credential.
 - Update the shared server and operator-console OpenSSL runtime overlay to checksum-pinned Debian `libssl3t64` `3.5.7-1~deb13u3`, including its package metadata.
 - Align the production image fixture and both Compose files on a dedicated operator bridge and the console's exact trusted-proxy address. Optional subnet, dynamic-pool, and console-IP defaults preserve ordinary unset-variable configuration; deployment guidance covers coordinated overrides and network collisions. The overlap guard is confined to the canonical image acceptance gate, not ordinary startup.
+- Update only the operator-console's locked `brace-expansion` dependencies to compatible maintained patches (`2.1.7` and `5.0.12`), fixing nested-brace and comma-parser stack exhaustion and quadratic-time expansion without changing package requirements.
 
 ## [6.50.0] - 2026-09-26
 
