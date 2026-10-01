@@ -12,13 +12,17 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/config"
+	"github.com/thebtf/engram/internal/handlers/engramcore"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/uci"
 	pb "github.com/thebtf/engram/proto/engram/v1"
+	muxcore "github.com/thebtf/mcp-mux/muxcore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 func TestUCIContextIntegrationNoAuthOpaqueMetadataRoundTrip(t *testing.T) {
@@ -52,7 +56,7 @@ func TestUCIContextIntegrationNoAuthOpaqueMetadataRoundTrip(t *testing.T) {
 				uci.NewContextResolver(fixture.catalog, fixture.authorizer, fixture.runtime),
 				uci.NewAliasResolver(fixture.aliases.Lookup), fixture.runtime, port,
 			))
-			client := startUCIOpaqueMetadataGRPC(t, fixture.server)
+			client, serverURL := startUCIOpaqueMetadataGRPC(t, fixture.server)
 			ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(
 				auditcontext.SourceSessionMetadataKey, "noauth-index-session",
 				uci.NoAuthCodeClientInstanceMetadataKey, test.instance,
@@ -72,6 +76,46 @@ func TestUCIContextIntegrationNoAuthOpaqueMetadataRoundTrip(t *testing.T) {
 			scope := uciContextIntegrationScope(fixture.refA, uciContextIntegrationIncarnationA)
 			begin, err := client.BeginCodeIndex(ctx, uciContextIntegrationBeginRequest(scope))
 			require.NoError(t, err)
+			target := &pb.CodeIndexIntentTarget{
+				ClientSessionId: "noauth-index-session", ContextHandle: bound.GetContextHandle(), Scope: scope,
+				LocalRootId: bound.GetLocalRootId(), WorkstationId: bound.GetWorkstationId(),
+			}
+			t.Run("poll installation owner", func(t *testing.T) {
+				polled, err := client.PollCodeIndexIntents(ctx, &pb.PollCodeIndexIntentsRequest{
+					Target: target, ClientInstanceId: test.instance, ProcessNonce: "process-nonce",
+				})
+				require.NoError(t, err)
+				require.Nil(t, polled.GetOffer())
+			})
+			t.Run("update installation owner", func(t *testing.T) {
+				updated, err := client.UpdateCodeIndexIntent(ctx, &pb.UpdateCodeIndexIntentRequest{
+					Target: target, ClientInstanceId: test.instance, ProcessNonce: "process-nonce",
+					IntentRef: "90000000-0000-4000-8000-000000000001", Operation: string(uci.IndexIntentAcknowledge), OperationRef: "automatic-index/ack",
+				})
+				require.NoError(t, err)
+				require.Equal(t, string(uci.IndexIntentAcknowledged), updated.GetState())
+				require.Equal(t, uint64(1), updated.GetOwnerEpoch())
+				require.Equal(t, test.instance, fixture.runtime.updateRequests[len(fixture.runtime.updateRequests)-1].GetClientInstanceId())
+			})
+			t.Run("production module installation owner", func(t *testing.T) {
+				mod := engramcore.NewModuleWithClientInstanceID(test.instance)
+				t.Cleanup(func() { require.NoError(t, mod.Shutdown(context.Background())) })
+				adapter := engramcore.NewUCIIndexAdapter(mod)
+				moduleCtx := auditcontext.WithUCITransportSession(context.Background(), "noauth-index-session")
+				resolved, err := adapter.ResolveIndexTarget(moduleCtx, muxcore.ProjectContext{Env: map[string]string{config.EnvServerURL: "http://" + serverURL}}, bound.GetContextHandle())
+				require.NoError(t, err)
+				require.Equal(t, workstation, resolved.BindingClone().WorkstationID)
+				polled, err := adapter.PollIndexIntent(moduleCtx, resolved, test.instance, "process-nonce")
+				require.NoError(t, err)
+				require.Nil(t, polled)
+				updated, err := adapter.UpdateIndexIntent(moduleCtx, resolved, test.instance, "process-nonce", "90000000-0000-4000-8000-000000000001", uci.IndexIntentUpdate{
+					OperationRef: "automatic-index/module-ack", Operation: uci.IndexIntentAcknowledge,
+				})
+				require.NoError(t, err)
+				require.Equal(t, uci.IndexIntentAcknowledged, updated.State)
+				require.Equal(t, int64(1), updated.ClaimEpoch)
+				require.Equal(t, test.instance, fixture.runtime.updateRequests[len(fixture.runtime.updateRequests)-1].GetClientInstanceId())
+			})
 			stream, err := client.StageCodeIndex(ctx)
 			require.NoError(t, err)
 			require.NoError(t, stream.Send(uciContextIntegrationStageFrame(scope, begin.GetBuildId(), begin.GetLeaseEpoch())))
@@ -104,6 +148,86 @@ func TestUCIContextIntegrationNoAuthOpaqueMetadataRoundTrip(t *testing.T) {
 	}
 }
 
+func TestUCIContextIntegrationNoAuthIndexIntentOwnerDenials(t *testing.T) {
+	fixture := newUCIContextIntegrationFixture(t)
+	const instance = "intent-owner-install"
+	workstation, valid := uci.NoAuthCodeWorkstationForInstance(instance)
+	require.True(t, valid)
+	binding := fixture.bindingA.Clone()
+	binding.WorkstationID = workstation
+	fixture.runtime.bindings[uciContextIntegrationKey(fixture.refA)] = binding
+	fixture.catalog.records[uciContextIntegrationKey(fixture.refA)] = uci.ContextRecord{Ref: fixture.refA, AuthRealm: uci.NoAuthCodeRealm}
+	port, err := mcp.NewUCIContextHandlePort(mcp.NewServer(mcp.ServerOptions{Version: "intent-owner-test"}), fixture.runtime, fixture.authorizer)
+	require.NoError(t, err)
+	fixture.server.SetUCITransport(NewContextAwareUCITransport(uci.NewContextResolver(fixture.catalog, fixture.authorizer, fixture.runtime), uci.NewAliasResolver(fixture.aliases.Lookup), fixture.runtime, port))
+	client, _ := startUCIOpaqueMetadataGRPC(t, fixture.server)
+	ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(auditcontext.SourceSessionMetadataKey, "intent-owner-session", uci.NoAuthCodeClientInstanceMetadataKey, instance))
+	bound, err := client.BindCodeContext(ctx, &pb.BindCodeContextRequest{ClientSessionId: "intent-owner-session", RequestedContext: uciContextIntegrationProtoRef(fixture.refA)})
+	require.NoError(t, err)
+	target := &pb.CodeIndexIntentTarget{
+		ClientSessionId: "intent-owner-session", ContextHandle: bound.GetContextHandle(), Scope: bound.GetIndexScope(),
+		LocalRootId: bound.GetLocalRootId(), WorkstationId: bound.GetWorkstationId(),
+	}
+	for _, test := range []struct {
+		name     string
+		instance string
+		nonce    string
+	}{
+		{name: "empty"},
+		{name: "ASCII 257 runes", instance: strings.Repeat("a", 257)},
+		{name: "CJK 257 runes", instance: strings.Repeat("界", 257)},
+		{name: "four-byte 257 runes", instance: strings.Repeat("😀", 257)},
+		{name: "URL", instance: "https://example.invalid/install"},
+		{name: "file URL", instance: "file:///private/install"},
+		{name: "scheme", instance: "https:private-install"},
+		{name: "compound scheme", instance: "git+ssh:private-install"},
+		{name: "opaque-looking real scheme", instance: "opaque1:install"},
+		{name: "drive", instance: "C:private"},
+		{name: "path", instance: "private/install"},
+		{name: "backslash", instance: `private\install`},
+		{name: "email", instance: "install@example.invalid"},
+		{name: "whitespace", instance: "install a"},
+		{name: "Unicode whitespace", instance: "install\u2003a"},
+		{name: "control", instance: "install\x00a"},
+		{name: "invalid UTF-8", instance: "install\xff"},
+		{name: "noninstallation nonce byte bound", instance: instance, nonce: strings.Repeat("界", 86)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			nonce := test.nonce
+			if nonce == "" {
+				nonce = "process-nonce"
+			}
+			poll := &pb.PollCodeIndexIntentsRequest{Target: target, ClientInstanceId: test.instance, ProcessNonce: nonce}
+			update := &pb.UpdateCodeIndexIntentRequest{
+				Target: target, ClientInstanceId: test.instance, ProcessNonce: nonce,
+				IntentRef: "90000000-0000-4000-8000-000000000001", Operation: string(uci.IndexIntentAcknowledge), OperationRef: "automatic-index/ack",
+			}
+			_, err := fixture.server.PollCodeIndexIntents(context.Background(), poll)
+			require.Equal(t, codes.InvalidArgument, status.Code(err))
+			_, err = fixture.server.UpdateCodeIndexIntent(context.Background(), update)
+			require.Equal(t, codes.InvalidArgument, status.Code(err))
+			wireCode := codes.InvalidArgument
+			if test.name == "invalid UTF-8" {
+				wireCode = codes.Internal // Protobuf rejects invalid string encoding before server dispatch.
+			}
+			_, err = client.PollCodeIndexIntents(ctx, poll)
+			require.Equal(t, wireCode, status.Code(err))
+			_, err = client.UpdateCodeIndexIntent(ctx, update)
+			require.Equal(t, wireCode, status.Code(err))
+			require.Empty(t, fixture.runtime.updateRequests)
+		})
+	}
+	foreign := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(auditcontext.SourceSessionMetadataKey, "intent-owner-session", uci.NoAuthCodeClientInstanceMetadataKey, "foreign-install"))
+	_, err = client.PollCodeIndexIntents(foreign, &pb.PollCodeIndexIntentsRequest{Target: target, ClientInstanceId: instance, ProcessNonce: "process-nonce"})
+	requireUCIContextIntegrationClosedStatus(t, err, codes.FailedPrecondition, uci.ContextMismatch)
+	_, err = client.UpdateCodeIndexIntent(foreign, &pb.UpdateCodeIndexIntentRequest{
+		Target: target, ClientInstanceId: instance, ProcessNonce: "process-nonce", IntentRef: "90000000-0000-4000-8000-000000000001",
+		Operation: string(uci.IndexIntentAcknowledge), OperationRef: "automatic-index/ack",
+	})
+	requireUCIContextIntegrationClosedStatus(t, err, codes.FailedPrecondition, uci.ContextMismatch)
+	require.Empty(t, fixture.runtime.updateRequests)
+}
+
 func TestUCIContextIntegrationNoAuthFreshSessionsEvictOldHandle(t *testing.T) {
 	fixture := newUCIContextIntegrationFixture(t)
 	const instance = "reconnecting-install"
@@ -116,7 +240,7 @@ func TestUCIContextIntegrationNoAuthFreshSessionsEvictOldHandle(t *testing.T) {
 	port, err := mcp.NewUCIContextHandlePort(mcp.NewServer(mcp.ServerOptions{Version: "reconnect-test"}), fixture.runtime, fixture.authorizer)
 	require.NoError(t, err)
 	fixture.server.SetUCITransport(NewContextAwareUCITransport(uci.NewContextResolver(fixture.catalog, fixture.authorizer, fixture.runtime), uci.NewAliasResolver(fixture.aliases.Lookup), fixture.runtime, port))
-	client := startUCIOpaqueMetadataGRPC(t, fixture.server)
+	client, _ := startUCIOpaqueMetadataGRPC(t, fixture.server)
 	caller := func(session string) context.Context {
 		return metadata.NewOutgoingContext(context.Background(), metadata.Pairs(auditcontext.SourceSessionMetadataKey, session, uci.NoAuthCodeClientInstanceMetadataKey, instance))
 	}
@@ -164,7 +288,7 @@ func TestUCIContextIntegrationNoAuthMalformedMetadataRoundTrip(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newUCIContextIntegrationFixture(t)
-			client := startUCIOpaqueMetadataGRPC(t, fixture.server)
+			client, _ := startUCIOpaqueMetadataGRPC(t, fixture.server)
 			outgoing := metadata.Pairs(auditcontext.SourceSessionMetadataKey, "noauth-index-session")
 			if test.values != nil {
 				outgoing.Set(uci.NoAuthCodeClientInstanceMetadataKey, test.values...)
@@ -216,7 +340,7 @@ func TestUCIOpaqueMetadataDoesNotChangeAuthenticatedAuthority(t *testing.T) {
 	require.Equal(t, 1, handler.calls)
 }
 
-func startUCIOpaqueMetadataGRPC(t *testing.T, service *Server) pb.EngramServiceClient {
+func startUCIOpaqueMetadataGRPC(t *testing.T, service *Server) (pb.EngramServiceClient, string) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -233,5 +357,5 @@ func startUCIOpaqueMetadataGRPC(t *testing.T, service *Server) pb.EngramServiceC
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = connection.Close() })
-	return pb.NewEngramServiceClient(connection)
+	return pb.NewEngramServiceClient(connection), listener.Addr().String()
 }
