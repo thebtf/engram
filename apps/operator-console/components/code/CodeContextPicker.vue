@@ -171,7 +171,7 @@ function chooseSnapshot(event: Event): void {
 
     <div class="actions">
       <button class="btn" type="button" :disabled="pending || phase !== 'ready' && phase !== 'collision'" @click="emit('refresh')">{{ t('codeExplorer.context.refresh') }}</button>
-      <button v-if="phase === 'reload-pending' || phase === 'identity-unavailable'" class="btn" type="button" :disabled="pending" :data-testid="phase === 'identity-unavailable' ? 'code-retry-identity' : 'code-retry-reload'" @click="emit('retry')">{{ phase === 'identity-unavailable' ? t('codeExplorer.context.retryIdentity') : t('codeExplorer.context.retryReload') }}</button>
+      <button v-if="phase === 'reload-pending' || phase === 'identity-unavailable' || phase === 'error' && evidence.transition === 'TAB_LEASE_RENEWAL_FAILED'" class="btn" type="button" :disabled="pending" :data-testid="phase === 'reload-pending' ? 'code-retry-reload' : phase === 'error' ? 'code-retry-lease' : 'code-retry-identity'" @click="emit('retry')">{{ phase === 'reload-pending' ? t('codeExplorer.context.retryReload') : t('codeExplorer.context.retryIdentity') }}</button>
       <button class="btn primary" type="button" :disabled="pending || candidate === null || samePinned" data-testid="code-pin-context" @click="emit('pin')">
         {{ samePinned ? t('codeExplorer.context.pinned') : pinned === null ? t('codeExplorer.context.pin') : t('codeExplorer.context.switch') }}
       </button>

@@ -450,3 +450,99 @@ for (const reauthorization of ['ready', 'unavailable', 'malformed', 'denied', 'm
     expect(pins).toEqual(['selection'])
   })
 }
+
+for (const { boundary, leaseStatus } of [
+  { boundary: 'contexts', leaseStatus: 503 },
+  { boundary: 'status', leaseStatus: 503 },
+  { boundary: 'status', leaseStatus: 403 },
+] as const) {
+  test(`delayed ${boundary} after lease ${leaseStatus} preserves pending ownership and safe recovery`, async ({ page }) => {
+    let handshakes = 0
+    let holdOld = false
+    let oldHeld = false
+    let recoveryHeld = false
+    let releaseOld: () => void = () => { }
+    let releaseRecovery: () => void = () => { }
+    const pins: string[] = []
+    const contexts: string[] = []
+    const recovered = { ...entry, view_ref: 'recovered-view', selection_ref: 'recovered-selection', indexed_snapshot: { label: 'Recovered snapshot' } }
+    const stale = { ...entry, indexed_snapshot: { label: 'Stale response snapshot' } }
+    await page.clock.install({ time: new Date('2026-09-15T00:00:00Z') })
+    await page.route('**/api/auth/me', route => route.fulfill({ json: { auth_disabled: true } }))
+    await page.route('**/api/code/**', async route => {
+      const path = new URL(route.request().url()).pathname
+      if (path === '/api/code/tabs/handshake') {
+        handshakes++
+        await route.fulfill({ json: { ...binding, document_proof: handshakes === 1 ? 'proof' : 'recovered-proof' } })
+      } else if (path.endsWith('/lease')) await route.fulfill({ status: leaseStatus })
+      else if (path === '/api/code/contexts' || path === '/api/code/status') {
+        const proof = route.request().postDataJSON().document_proof
+        if (path === '/api/code/contexts') contexts.push(proof)
+        const obsolete = holdOld && proof === 'proof' && path === `/api/code/${boundary}`
+        if (obsolete) await new Promise<void>(resolve => { oldHeld = true; releaseOld = resolve })
+        else if (path === '/api/code/contexts' && proof === 'recovered-proof') {
+          await new Promise<void>(resolve => { recoveryHeld = true; releaseRecovery = resolve })
+        }
+        if (path === '/api/code/contexts') await route.fulfill({ json: { contexts: [obsolete ? stale : proof === 'proof' ? entry : recovered] } })
+        else await route.fulfill({ json: { total_chunks: obsolete ? 999 : 1, embedded_chunks: 1, embedding: { coverage: 'complete' } } })
+      } else if (path.endsWith('/context')) {
+        pins.push(route.request().postDataJSON().selection_ref)
+        await route.fulfill({ status: 204 })
+      } else await route.fulfill({ status: 403 })
+    })
+    await page.goto('/code')
+    await page.getByTestId('code-context-snapshot').selectOption('selection')
+    await page.getByTestId('code-pin-context').click()
+    const refresh = page.getByRole('button', { name: 'Обновить разрешённые варианты' })
+    const refreshStatus = page.getByRole('button', { name: 'Обновить статус', exact: true })
+    await expect(refreshStatus).toBeEnabled()
+    await page.clock.fastForward('00:50')
+    holdOld = true
+    await (boundary === 'contexts' ? refresh : refreshStatus).click()
+    await expect.poll(() => oldHeld).toBe(true)
+    await page.clock.fastForward('00:11')
+    await expect(page.locator('.phase')).toHaveAttribute('data-state', leaseStatus === 403 ? 'denied' : 'error')
+    await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+    await expect(refreshStatus).toBeDisabled()
+    await expect(refresh).toBeDisabled()
+    await refresh.dispatchEvent('click')
+    await page.getByTestId('code-pin-context').dispatchEvent('click')
+    expect(pins).toEqual(['selection'])
+    expect(contexts).toEqual(boundary === 'contexts' ? ['proof', 'proof'] : ['proof'])
+    const obsoleteResponse = page.waitForResponse(response => new URL(response.url()).pathname === `/api/code/${boundary}` && response.request().postDataJSON().document_proof === 'proof')
+    if (leaseStatus === 403) {
+      await expect(page.getByTestId('code-retry-lease')).toHaveCount(0)
+      await expect(page.getByTestId('code-context-snapshot')).toBeEnabled()
+      releaseOld()
+      await (await obsoleteResponse).finished()
+      await page.clock.runFor(50)
+      await expect(page.locator('.phase')).toHaveAttribute('data-state', 'denied')
+      await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+      await expect(page.getByTestId('code-status')).toHaveCount(0)
+      expect(handshakes).toBe(1)
+      return
+    }
+    await page.getByTestId('code-retry-lease').click()
+    await expect.poll(() => recoveryHeld).toBe(true)
+    await expect(page.locator('.phase')).toHaveAttribute('data-state', 'ready')
+    await expect(refresh).toBeDisabled()
+    releaseOld()
+    await (await obsoleteResponse).finished()
+    await page.clock.runFor(50)
+    await expect(refresh).toBeDisabled()
+    await expect(page.getByTestId('code-context-snapshot')).toHaveCount(0)
+    await expect(page.getByTestId('code-status')).toHaveCount(0)
+    releaseRecovery()
+    await expect(refresh).toBeEnabled()
+    await expect(page.getByTestId('code-context-snapshot').getByRole('option', { name: 'Recovered snapshot' })).toHaveCount(1)
+    await expect(page.getByTestId('code-context-snapshot').getByRole('option', { name: 'Stale response snapshot' })).toHaveCount(0)
+    await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+    await page.getByTestId('code-context-snapshot').selectOption('recovered-selection')
+    await page.getByTestId('code-pin-context').click()
+    await expect(page.getByTestId('code-context-pinned')).toContainText('Recovered snapshot')
+    await expect(refreshStatus).toBeEnabled()
+    await expect(page.getByTestId('code-status')).toContainText('1 / 1')
+    expect(pins).toEqual(['selection', 'recovered-selection'])
+    expect(handshakes).toBe(2)
+  })
+}

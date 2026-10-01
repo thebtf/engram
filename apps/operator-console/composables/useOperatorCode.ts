@@ -894,6 +894,7 @@ export function useOperatorCode() {
   const graphState = ref<CodePresentationState>(presentation('idle', 'Choose a released result to explore relationships.'))
   const sourceState = ref<CodePresentationState>(presentation('idle', 'Choose a released result to read an exact source span.'))
   const pending = ref(false)
+  let contextualGeneration = 0
   const indexIntentState = ref<IndexIntentPresentationState>(indexIntentNotice('idle'))
   const indexIntentPending = ref(false)
   const indexIntentResume = ref<IndexIntentResume | null>(loadIndexIntentResume())
@@ -996,6 +997,8 @@ export function useOperatorCode() {
   }
 
   function clearContextualResults(): void {
+    contextualGeneration += 1
+    pending.value = false
     status.value = null
     structureEnvelope.value = null
     searchEnvelope.value = null
@@ -1298,6 +1301,7 @@ export function useOperatorCode() {
     const current = binding.value
     const payload = bindingPayload()
     if (payload === null || pending.value) return
+    const requestGeneration = contextualGeneration
     const selected = contextCandidate.value
     const pinned = pinnedContext.value ?? remountState?.pinnedContext ?? null
     const restoring = pinnedContext.value === null && pinned !== null
@@ -1306,7 +1310,7 @@ export function useOperatorCode() {
     contextState.value = 'loading'
     pending.value = true
     const result = await request('/code/contexts', 'POST', payload)
-    if (unmounted || binding.value !== current) return
+    if (unmounted || requestGeneration !== contextualGeneration || binding.value !== current) return
     pending.value = false
     if (result.kind !== 'success') {
       if (result.kind === 'denied' || result.status === 409) clearPinnedContext()
@@ -1468,9 +1472,10 @@ export function useOperatorCode() {
     const restoring = pinnedContext.value === null
     if (payload === null || pinned === null || pending.value
       || restoring && current?.tabBindingId !== remountState?.tabBindingId) return false
+    const requestGeneration = contextualGeneration
     pending.value = true
     const result = await request('/code/status', 'POST', payload)
-    if (unmounted || binding.value !== current || (pinnedContext.value ?? remountState?.pinnedContext) !== pinned) return false
+    if (unmounted || requestGeneration !== contextualGeneration || binding.value !== current || (pinnedContext.value ?? remountState?.pinnedContext) !== pinned) return false
     pending.value = false
     const checkedStatus = result.kind === 'success' ? parseStatus(result.body) : null
     if (checkedStatus === null) {
