@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Let the plugin connect without a keycard when the server disables authentication, leaving token decisions to the server and retaining keycards for auth-enabled servers.
 - Preserve opaque UTF-8 client installation IDs through binary gRPC metadata so no-auth context binding, search, exploration, and indexing use the same workstation identity. The existing 256-byte no-auth limit and authenticated authority remain unchanged; this no-auth transport requires the matching client and server, with no plaintext-header fallback.
 - Derive same-file call, constructor, shadowing, reassignment and direct-eval edges from parsed lexical facts; ignore non-binding comment/string text and preserve binding-scope isolation.
+- Classify parenthesized direct eval from its parsed callee, distinguish proven non-intrinsic function shadows, retain legal accessor/overload/merged declaration occurrences, and keep bounded resolver-only lexical facts out of published source references.
 - Align the cross-platform UCI parser semantic profile and initialize a tracked project anchor offline; update the no-auth Workspace setup and usage guidance.
 - Isolate mock vault credentials between parallel browser sessions so one Secrets delete cannot invalidate another session's reveal of a same-named project credential.
 

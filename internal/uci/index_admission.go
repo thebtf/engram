@@ -134,6 +134,8 @@ type IndexAdmissionArtifact struct {
 	References    []IndexAdmissionReference     `json:"references"`
 	Chunks        []IndexAdmissionChunk         `json:"chunks"`
 	Diagnostics   []IndexAdmissionDiagnostic    `json:"diagnostics"`
+	// Construction-only resolver evidence; neither durable facts nor reference sites.
+	TreeSitterLexicalFacts []IndexAdmissionReference `json:"-"`
 }
 
 // IndexAdmissionDefinition is a normalized, source-grounded declaration.
@@ -1108,6 +1110,14 @@ func indexAdmissionTreeSitterBuildInput(sourceID string, profile IndexAdmissionA
 	if err != nil {
 		return indexAdmissionArtifactBuildInput{}, err
 	}
+	if err := treeSitterValidateLexicalFacts(source, goLineStarts(source), extracted.LexicalFacts); err != nil {
+		return indexAdmissionArtifactBuildInput{}, err
+	}
+	for _, reference := range extracted.References {
+		if strings.HasPrefix(reference.LocalKey, "lexical_") {
+			return indexAdmissionArtifactBuildInput{}, fmt.Errorf("uci index admission: resolver fact in reference inventory")
+		}
+	}
 	status, err := indexAdmissionStructuredStatus(extracted.Coverage, len(extracted.Diagnostics), "Tree-sitter")
 	if err != nil {
 		return indexAdmissionArtifactBuildInput{}, err
@@ -1165,6 +1175,11 @@ func indexAdmissionBuildTreeSitterArtifact(input indexAdmissionArtifactBuildInpu
 		return IndexAdmissionArtifact{}, err
 	}
 	artifact.References = references
+	lexicalFacts, err := indexAdmissionTreeSitterReferences(input.source, extracted.LexicalFacts)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	artifact.TreeSitterLexicalFacts = lexicalFacts
 	artifact.Diagnostics = indexAdmissionTreeSitterDiagnostics(extracted.Diagnostics)
 	chunks, limited, err := indexAdmissionTreeSitterChunks(input.source, artifact.Definitions, extracted.Chunks)
 	if err != nil {
@@ -2782,6 +2797,7 @@ func indexAdmissionCloneArtifact(artifact IndexAdmissionArtifact) IndexAdmission
 	cloned.Body = indexAdmissionCloneBytes(artifact.Body)
 	cloned.Definitions = indexAdmissionCloneDefinitions(artifact.Definitions)
 	cloned.References = indexAdmissionCloneReferences(artifact.References)
+	cloned.TreeSitterLexicalFacts = indexAdmissionCloneReferences(artifact.TreeSitterLexicalFacts)
 	cloned.Chunks = indexAdmissionCloneChunks(artifact.Chunks)
 	cloned.Diagnostics = indexAdmissionCloneDiagnostics(artifact.Diagnostics)
 	return cloned

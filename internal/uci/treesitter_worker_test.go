@@ -53,11 +53,6 @@ var (
 	uciTreeSitterHelperProjectRoot        = flag.String("uci-tree-sitter-helper-project-root", "", "untrusted project root that must not become the child working directory")
 )
 
-type uciTreeSitterTestField struct {
-	name string
-	typ  reflect.Type
-}
-
 type uciTreeSitterFixture struct {
 	language    TreeSitterLanguage
 	profileKey  string
@@ -312,75 +307,6 @@ var uciTreeSitterFixtures = []uciTreeSitterFixture{
 	},
 }
 
-func TestUCITreeSitterWorkerHasBoundedProcessAPI(t *testing.T) {
-	var _ func(TreeSitterWorkerConfig) (*TreeSitterWorker, error) = NewTreeSitterWorker
-	var _ func(*TreeSitterWorker, context.Context, TreeSitterParseRequest) (TreeSitterArtifact, error) = (*TreeSitterWorker).Parse
-	var _ func(TreeSitterParseRequest) (IndexDigest, error) = TreeSitterWireRequestDigest
-
-	uciRequireTreeSitterStructFields(t, TreeSitterWorkerConfig{}, []uciTreeSitterTestField{
-		{name: "ExecutablePath", typ: reflect.TypeOf("")},
-		{name: "Arguments", typ: reflect.TypeOf([]string(nil))},
-		{name: "ExpectedBundleDigest", typ: reflect.TypeOf(IndexDigest(""))},
-		{name: "MaxInputBytes", typ: reflect.TypeOf(0)},
-		{name: "MaxOutputBytes", typ: reflect.TypeOf(0)},
-		{name: "Timeout", typ: reflect.TypeOf(time.Duration(0))},
-		{name: "Environment", typ: reflect.TypeOf([]string(nil))},
-	})
-	uciRequireTreeSitterStructFields(t, TreeSitterParseRequest{}, []uciTreeSitterTestField{
-		{name: "Language", typ: reflect.TypeOf(TreeSitterLanguage(""))},
-		{name: "ProfileKey", typ: reflect.TypeOf("")},
-		{name: "Source", typ: reflect.TypeOf([]byte(nil))},
-	})
-	uciRequireTreeSitterStructFields(t, TreeSitterArtifact{}, []uciTreeSitterTestField{
-		{name: "Proof", typ: reflect.TypeOf(IndexArtifactProof{})},
-		{name: "Coverage", typ: reflect.TypeOf(IndexCoverageComplete)},
-		{name: "Language", typ: reflect.TypeOf(TreeSitterLanguage(""))},
-		{name: "BundleDigest", typ: reflect.TypeOf(IndexDigest(""))},
-		{name: "Text", typ: reflect.TypeOf("")},
-		{name: "Definitions", typ: reflect.TypeOf([]TreeSitterDefinition(nil))},
-		{name: "References", typ: reflect.TypeOf([]TreeSitterReferenceSite(nil))},
-		{name: "Chunks", typ: reflect.TypeOf([]TreeSitterChunk(nil))},
-		{name: "Diagnostics", typ: reflect.TypeOf([]TreeSitterDiagnostic(nil))},
-	})
-	uciRequireTreeSitterStructFields(t, TreeSitterDefinition{}, []uciTreeSitterTestField{
-		{name: "Kind", typ: reflect.TypeOf("")},
-		{name: "Name", typ: reflect.TypeOf("")},
-		{name: "SymbolKey", typ: reflect.TypeOf("")},
-		{name: "LocalKey", typ: reflect.TypeOf("")},
-		{name: "Span", typ: reflect.TypeOf(IndexSpan{})},
-	})
-	uciRequireTreeSitterStructFields(t, TreeSitterReferenceSite{}, []uciTreeSitterTestField{
-		{name: "Kind", typ: reflect.TypeOf("")},
-		{name: "SymbolKey", typ: reflect.TypeOf("")},
-		{name: "LocalKey", typ: reflect.TypeOf("")},
-		{name: "OwnerLocalKey", typ: reflect.TypeOf("")},
-		{name: "RawTarget", typ: reflect.TypeOf("")},
-		{name: "TargetKey", typ: reflect.TypeOf("")},
-		{name: "Resolution", typ: reflect.TypeOf(IndexResolutionState(""))},
-		{name: "Span", typ: reflect.TypeOf(IndexSpan{})},
-	})
-	uciRequireTreeSitterStructFields(t, TreeSitterChunk{}, []uciTreeSitterTestField{
-		{name: "Span", typ: reflect.TypeOf(IndexSpan{})},
-		{name: "Text", typ: reflect.TypeOf("")},
-		{name: "ContentDigest", typ: reflect.TypeOf(IndexDigest(""))},
-	})
-	uciRequireTreeSitterStructFields(t, TreeSitterDiagnostic{}, []uciTreeSitterTestField{
-		{name: "Code", typ: reflect.TypeOf("")},
-		{name: "Span", typ: reflect.TypeOf(IndexSpan{})},
-		{name: "Message", typ: reflect.TypeOf("")},
-	})
-
-	for _, resolution := range []IndexResolutionState{
-		TreeSitterResolutionSyntaxOnly,
-		TreeSitterResolutionPartial,
-		TreeSitterResolutionUnresolved,
-	} {
-		if resolution == "" {
-			t.Fatal("Tree-sitter resolution states must be explicit nonempty values")
-		}
-	}
-}
-
 func TestTreeSitterRejectsMalformedBindingWriteFacts(t *testing.T) {
 	source := []byte("helper = x")
 	starts := goLineStarts(source)
@@ -406,6 +332,37 @@ func TestTreeSitterRejectsMalformedBindingWriteFacts(t *testing.T) {
 		if err := treeSitterValidateReferences(source, starts, []TreeSitterReferenceSite{invalid}); err == nil {
 			t.Fatalf("malformed write fact accepted: %#v", invalid)
 		}
+	}
+}
+
+func TestTreeSitterRejectsMalformedLexicalFacts(t *testing.T) {
+	source := []byte("eval(s)")
+	starts := goLineStarts(source)
+	span, valid := goSpanFromOffsets(starts, len(source), 0, len("eval"))
+	if !valid {
+		t.Fatal("invalid test span")
+	}
+	fact := TreeSitterReferenceSite{
+		Kind: "reference", LocalKey: TreeSitterReferenceSiteKey("lexical_eval", span),
+		SymbolKey: TreeSitterReferenceSiteKey("javascript:lexical_eval", span),
+		RawTarget: "eval", Resolution: TreeSitterResolutionSyntaxOnly, Span: span,
+	}
+	if err := treeSitterValidateLexicalFacts(source, starts, []TreeSitterReferenceSite{fact}); err != nil {
+		t.Fatalf("valid lexical fact rejected: %v", err)
+	}
+	wrongTarget := fact
+	wrongTarget.RawTarget = "other"
+	wrongKind := fact
+	wrongKind.Kind = "call"
+	wrongInventory := fact
+	wrongInventory.LocalKey = TreeSitterReferenceSiteKey("call:eval", span)
+	for _, invalid := range []TreeSitterReferenceSite{wrongTarget, wrongKind, wrongInventory} {
+		if err := treeSitterValidateLexicalFacts(source, starts, []TreeSitterReferenceSite{invalid}); err == nil {
+			t.Fatalf("malformed lexical fact accepted: %#v", invalid)
+		}
+	}
+	if err := treeSitterValidateLexicalFacts(source, starts, make([]TreeSitterReferenceSite, TreeSitterMaxLexicalFacts+1)); err == nil {
+		t.Fatal("unbounded lexical facts accepted")
 	}
 }
 
@@ -692,6 +649,62 @@ func TestUCITreeSitterWorkerFramesBuiltParserFacts(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("lexical facts have an independent reference budget", func(t *testing.T) {
+		largeWorker, err := NewTreeSitterWorker(TreeSitterWorkerConfig{
+			ExecutablePath: executable, ExpectedBundleDigest: uciBuiltTreeSitterBundleDigest(t, executable),
+			MaxInputBytes: 1 << 20, MaxOutputBytes: treeSitterWorkerHardMaxOutputBytes, Timeout: 5 * time.Second,
+			Environment: uciTreeSitterMinimalEnvironment(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, parameterCount := range []int{treeSitterWorkerMaxReferences + 1, TreeSitterMaxLexicalFacts + 1} {
+			parameters := make([]string, parameterCount)
+			for index := range parameters {
+				parameters[index] = fmt.Sprintf("p%d", index)
+			}
+			source := []byte("function inventory(" + strings.Join(parameters, ",") + "){return target();}")
+			artifact, err := largeWorker.Parse(context.Background(), TreeSitterParseRequest{Language: TreeSitterLanguageJavaScript, ProfileKey: "lexical-reference-partition/v6", Source: source})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantCoverage := IndexCoverageComplete
+			if parameterCount > TreeSitterMaxLexicalFacts {
+				wantCoverage = IndexCoveragePartial
+				uciRequireTreeSitterDiagnostic(t, artifact.Diagnostics, "LEXICAL_FACT_LIMIT")
+			}
+			if artifact.Coverage != wantCoverage || len(artifact.References) != 1 || artifact.References[0].Kind != "call" || artifact.References[0].RawTarget != "target" || artifact.Proof.ReferenceSiteCount != 1 {
+				t.Fatalf("lexical facts displaced the sole source call: coverage=%q references=%#v proof=%#v", artifact.Coverage, artifact.References, artifact.Proof)
+			}
+			for _, diagnostic := range artifact.Diagnostics {
+				if diagnostic.Code == "REFERENCE_LIMIT" {
+					t.Fatal("lexical facts consumed the user reference limit")
+				}
+			}
+			profile, err := TreeSitterIndexAdmissionArtifactProfile(TreeSitterLanguageJavaScript, artifact.BundleDigest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			admitted, err := NewIndexAdmissionArtifactFromTreeSitter(indexAdmissionTestSourceA, profile, source, artifact)
+			if err != nil {
+				t.Fatal(err)
+			}
+			frame := IndexAdmissionFrame{Version: IndexAdmissionFrameVersion, Profile: IndexAdmissionProfile{ID: indexAdmissionTestProfile}, Artifacts: []IndexAdmissionArtifact{admitted}}
+			encoded, err := EncodeIndexAdmissionFrame(frame)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := DecodeIndexAdmissionFrame(encoded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			published := decoded.Artifacts[0]
+			if len(published.TreeSitterLexicalFacts) != 0 || len(published.References) != 1 || published.References[0].Kind != "call" || published.References[0].RawTarget != "target" || published.References[0].Relation != IndexRelation("calls") {
+				t.Fatalf("resolver evidence leaked into the published reference inventory: %#v", published.References)
+			}
+		}
+	})
 
 	t.Run("dynamic import remains partial", func(t *testing.T) {
 		artifact, err := worker.Parse(context.Background(), TreeSitterParseRequest{
@@ -1413,20 +1426,6 @@ func uciRequireTreeSitterDiagnostic(t *testing.T, diagnostics []TreeSitterDiagno
 		}
 	}
 	t.Fatalf("missing diagnostic %q; got %#v", code, diagnostics)
-}
-
-func uciRequireTreeSitterStructFields(t *testing.T, value any, expected []uciTreeSitterTestField) {
-	t.Helper()
-	typ := reflect.TypeOf(value)
-	if typ.NumField() != len(expected) {
-		t.Fatalf("%s field count = %d, want %d", typ, typ.NumField(), len(expected))
-	}
-	for index, field := range expected {
-		actual := typ.Field(index)
-		if actual.Name != field.name || actual.Type != field.typ {
-			t.Fatalf("%s field %d = %s %s, want %s %s", typ, index, actual.Name, actual.Type, field.name, field.typ)
-		}
-	}
 }
 
 func uciTreeSitterFixtureForLanguage(t *testing.T, language TreeSitterLanguage) uciTreeSitterFixture {

@@ -446,11 +446,24 @@ func TestUCIPreparedIndexBuiltParserDoesNotResolveDirectEvalCalls(t *testing.T) 
 		name, source string
 		language     uci.TreeSitterLanguage
 		unsafe       bool
+		direct       bool
 	}{
-		{"commented javascript eval", "export function helper(n) { return n; }\nexport function caller(n) { eval /* comment */ (\"helper = n\"); return helper(n); }", uci.TreeSitterLanguageJavaScript, true},
-		{"spaced typescript eval", "export function helper(n: number) { return n; }\nexport function caller(n: any) { eval  (\"helper = n\"); return helper(n); }", uci.TreeSitterLanguageTypeScript, true},
-		{"commented typescript eval", "export function helper(n: number) { return n; }\nexport function caller(n: any) { eval /* comment */ (\"helper = n\"); return helper(n); }", uci.TreeSitterLanguageTypeScript, true},
-		{"string is not eval", "export function helper(n) { return n; }\nexport function caller(n) { const note = 'eval('; return helper(n); }", uci.TreeSitterLanguageJavaScript, false},
+		{"commented javascript eval", "export function helper(n) { return n; }\nexport function caller(n) { eval /* comment */ (\"helper = n\"); return helper(n); }", uci.TreeSitterLanguageJavaScript, true, true},
+		{"spaced typescript eval", "export function helper(n: number) { return n; }\nexport function caller(n: any) { eval  (\"helper = n\"); return helper(n); }", uci.TreeSitterLanguageTypeScript, true, true},
+		{"commented typescript eval", "export function helper(n: number) { return n; }\nexport function caller(n: any) { eval /* comment */ (\"helper = n\"); return helper(n); }", uci.TreeSitterLanguageTypeScript, true, true},
+		{"string is not eval", "export function helper(n) { return n; }\nexport function caller(n) { const note = 'eval('; return helper(n); }", uci.TreeSitterLanguageJavaScript, false, false},
+		{"parenthesized javascript eval", "export function helper(){}; export function caller(s){ (eval)(s); return helper(); }", uci.TreeSitterLanguageJavaScript, true, true},
+		{"nested parenthesized typescript eval", "export function helper(){}; export function caller(s: string){ ((/* trivia */ eval /* trivia */))(s); return helper(); }", uci.TreeSitterLanguageTypeScript, true, true},
+		{"parenthesized tsx eval", "export function helper(){}; export function caller(s: string){ (eval)(s); return <span>{helper()}</span>; }", uci.TreeSitterLanguageTSX, true, true},
+		{"optional eval is indirect", "export function helper(){}; export function caller(s){ eval?.(s); return helper(); }", uci.TreeSitterLanguageJavaScript, false, false},
+		{"sequence eval is indirect", "export function helper(){}; export function caller(s){ (0, eval)(s); return helper(); }", uci.TreeSitterLanguageJavaScript, false, false},
+		{"eval constructor is not direct eval", "export function helper(){}; export function caller(s){ new eval(s); return helper(); }", uci.TreeSitterLanguageJavaScript, false, false},
+		{"known function eval shadow", "export function helper(){}; export function caller(s){ function eval(){}; eval(s); return helper(); }", uci.TreeSitterLanguageJavaScript, false, true},
+		{"known arrow eval shadow", "export function helper(){}; export function caller(s){ const eval = () => {}; (eval)(s); return helper(); }", uci.TreeSitterLanguageJavaScript, false, true},
+		{"parameter eval may be intrinsic", "export function helper(){}; export function caller(eval, s){ eval(s); return helper(); }", uci.TreeSitterLanguageJavaScript, true, true},
+		{"intrinsic eval alias", "export function helper(){}; export function caller(s){ const eval = globalThis.eval; (eval)(s); return helper(); }", uci.TreeSitterLanguageJavaScript, true, true},
+		{"function eval shadow rebound to intrinsic", "export function helper(){}; export function caller(s){ let eval = () => {}; eval = globalThis.eval; eval(s); return helper(); }", uci.TreeSitterLanguageJavaScript, true, true},
+		{"destructuring does not establish nonintrinsic eval", "export function helper(){}; export function caller(s){ const {eval} = function(){}; eval(s); return helper(); }", uci.TreeSitterLanguageJavaScript, true, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			body := []byte(test.source)
@@ -465,27 +478,28 @@ func TestUCIPreparedIndexBuiltParserDoesNotResolveDirectEvalCalls(t *testing.T) 
 			files := []uciPreparedAdmissionFile{{path: "calls.js", membership: uci.IndexAdmissionMembership{PathKey: "calls.js", DisplayPath: "calls.js", Mode: "100644", State: uci.IndexAdmissionMembershipPresent, ArtifactID: &id}, artifact: &artifact}}
 			unresolved, err := uciPreparedAddResolvedTreeSitterEdges(files)
 			require.NoError(t, err)
-			if test.unsafe {
-				var parsedEval bool
-				for _, reference := range artifact.References {
-					if strings.HasPrefix(reference.SiteKey, "call:eval@") {
-						parsedEval = true
-					}
-					require.NotEqual(t, "binding_write", reference.Kind)
+			var parsedEval bool
+			for _, fact := range artifact.TreeSitterLexicalFacts {
+				if strings.HasPrefix(fact.SiteKey, "lexical_eval@") {
+					parsedEval = true
 				}
-				require.True(t, parsedEval, "parser must recognize the direct eval callee")
+			}
+			require.Equal(t, test.direct, parsedEval, "direct eval classification must follow the actual callee AST")
+			var resolvedHelperCalls int
+			for _, edge := range files[0].edges {
+				if edge.Relation == uci.IndexRelation("calls") && edge.ResolutionState == uci.IndexResolutionState("resolved") && edge.Target != nil && edge.Target.SymbolKey != nil && *edge.Target.SymbolKey == "function:helper" {
+					resolvedHelperCalls++
+				}
 			}
 			if test.unsafe {
 				require.NotZero(t, unresolved)
-				for _, edge := range files[0].edges {
-					require.NotEqual(t, uci.IndexResolutionState("resolved"), edge.ResolutionState, "direct eval must not produce a resolved edge to helper")
-				}
+				require.Zero(t, resolvedHelperCalls, "potential intrinsic eval must not produce a resolved edge to helper")
 			} else {
-				require.Zero(t, unresolved)
-				require.Len(t, files[0].edges, 1)
-				require.Equal(t, uci.IndexResolutionState("resolved"), files[0].edges[0].ResolutionState)
-				require.Equal(t, "function:helper", *files[0].edges[0].Target.SymbolKey)
+				require.Equal(t, 1, resolvedHelperCalls)
 			}
+			frames, _, err := uciPreparedPackFrames("44444444-4444-4444-8444-444444444444", files)
+			require.NoError(t, err)
+			require.NoError(t, uci.ValidateIndexAdmissionFrames(frames))
 		})
 	}
 }
@@ -622,4 +636,68 @@ func TestUCIPreparedIndexBuiltParserRejectsNestedSameKeyCalls(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, part.EdgeReplacements, 1)
 	require.Empty(t, part.EdgeReplacements[0].Edges)
+}
+
+func TestUCIPreparedIndexBuiltParserRetainsLegalRepeatedDeclarations(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), "uci-parser")
+	if runtime.GOOS == "windows" {
+		executable += ".exe"
+	}
+	command := exec.Command("go", "build", "-o", executable, "./tools/uci-parser")
+	command.Dir = filepath.Clean(filepath.Join("..", "..", ".."))
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build isolated parser child: %v: %s", err, output)
+	}
+	parser, err := uci.NewTreeSitterWorker(uci.TreeSitterWorkerConfig{
+		ExecutablePath: executable, ExpectedBundleDigest: uci.TreeSitterBundleDigest(),
+		MaxInputBytes: 1 << 20, MaxOutputBytes: 1 << 20, Timeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+	for _, test := range []struct {
+		name, source, kind, binding string
+		language                    uci.TreeSitterLanguage
+		occurrences                 int
+	}{
+		{"javascript accessors", "class A { get x(){return 1;} set x(v){} }", "method", "A.x", uci.TreeSitterLanguageJavaScript, 2},
+		{"typescript overloads", "class A { x(v: string): string; x(v: number): number; x(v: any){return v;} }", "method", "A.x", uci.TreeSitterLanguageTypeScript, 3},
+		{"merged interfaces", "interface Merged { a: string; } interface Merged { b: number; }", "interface", "Merged", uci.TreeSitterLanguageTypeScript, 2},
+		{"merged namespaces", "namespace Merged { export const a = 1; } namespace Merged { export const b = 2; }", "namespace", "Merged", uci.TreeSitterLanguageTypeScript, 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body := []byte(test.source + "\nexport function helper(){return 1;} export function caller(){return helper();}")
+			parsed, err := parser.Parse(context.Background(), uci.TreeSitterParseRequest{Language: test.language, ProfileKey: "legal-repeated-declarations/v6", Source: body})
+			require.NoError(t, err)
+			require.Equal(t, uci.IndexCoverageComplete, parsed.Coverage, "%+v", parsed.Diagnostics)
+			var occurrences int
+			keys := make(map[string]struct{})
+			for _, definition := range parsed.Definitions {
+				if definition.Kind != test.kind {
+					continue
+				}
+				occurrences++
+				require.NotContains(t, keys, definition.LocalKey)
+				keys[definition.LocalKey] = struct{}{}
+				require.Contains(t, string(body[definition.Span.ByteStart:definition.Span.ByteEnd]), definition.Name)
+			}
+			require.Equal(t, test.occurrences, occurrences, "all legal declaration occurrences must remain navigable")
+			profile, err := uci.TreeSitterIndexAdmissionArtifactProfile(test.language, uci.TreeSitterBundleDigest())
+			require.NoError(t, err)
+			artifact, err := uci.NewIndexAdmissionArtifactFromTreeSitter("11111111-1111-4111-8111-111111111111", profile, body, parsed)
+			require.NoError(t, err)
+			id := artifact.ArtifactID
+			files := []uciPreparedAdmissionFile{{path: "decl.ts", membership: uci.IndexAdmissionMembership{PathKey: "decl.ts", DisplayPath: "decl.ts", Mode: "100644", State: uci.IndexAdmissionMembershipPresent, ArtifactID: &id}, artifact: &artifact}}
+			byPath, definitions := uciPreparedTreeSitterSources(files)
+			require.Len(t, definitions["decl.ts"][test.binding], test.occurrences)
+			_, resolved := uciPreparedTreeSitterModuleTarget(byPath, definitions, "consumer.ts", "./decl.ts", test.binding)
+			require.False(t, resolved, "occurrence identity must not invent a unique graph binding")
+			unresolved, err := uciPreparedAddResolvedTreeSitterEdges(files)
+			require.NoError(t, err)
+			require.Zero(t, unresolved)
+			require.Len(t, files[0].edges, 1)
+			require.Equal(t, "function:helper", *files[0].edges[0].Target.SymbolKey)
+			frames, _, err := uciPreparedPackFrames("44444444-4444-4444-8444-444444444444", files)
+			require.NoError(t, err)
+			require.NoError(t, uci.ValidateIndexAdmissionFrames(frames))
+		})
+	}
 }

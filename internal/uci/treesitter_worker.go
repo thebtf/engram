@@ -28,7 +28,7 @@ import (
 const (
 	// TreeSitterWorkerProtocolVersion is the single framed child-process protocol.
 	TreeSitterWorkerProtocolVersion           = "uci-tree-sitter/v2"
-	TreeSitterFactsExtractionContractRevision = "uci-tree-sitter-facts/v5"
+	TreeSitterFactsExtractionContractRevision = "uci-tree-sitter-facts/v6"
 	TreeSitterBundleSchemaRevision            = "uci-tree-sitter-bundle/v2"
 	treeSitterWorkerMaxIdentifierBytes        = 4 << 10
 	treeSitterWorkerHardMaxInputBytes         = 4 << 20
@@ -36,12 +36,14 @@ const (
 	treeSitterWorkerMaxProfileBytes           = 256
 	treeSitterWorkerMaxDefinitions            = 2_048
 	treeSitterWorkerMaxReferences             = 8_192
-	treeSitterWorkerMaxChunks                 = 64
-	treeSitterWorkerMaxChunkBytes             = 64 << 10
-	treeSitterWorkerMaxDiagnostics            = 16
-	treeSitterWorkerMaxDiagnosticBytes        = 512
-	treeSitterWorkerCacheEntries              = 16
-	treeSitterWorkerCacheMaxBytes             = 1 << 20
+	// TreeSitterMaxLexicalFacts bounds resolver evidence independently of user references.
+	TreeSitterMaxLexicalFacts          = 16_384
+	treeSitterWorkerMaxChunks          = 64
+	treeSitterWorkerMaxChunkBytes      = 64 << 10
+	treeSitterWorkerMaxDiagnostics     = 16
+	treeSitterWorkerMaxDiagnosticBytes = 512
+	treeSitterWorkerCacheEntries       = 16
+	treeSitterWorkerCacheMaxBytes      = 1 << 20
 	// treeSitterWorkerCacheWorkerReserveBytes is charged inside the total cache
 	// cap for preallocated map groups, map/slice headers, cacheOrder spare
 	// capacity, mutex, and worker/container storage not attributable to one
@@ -161,6 +163,7 @@ type TreeSitterArtifact struct {
 	Text         string
 	Definitions  []TreeSitterDefinition
 	References   []TreeSitterReferenceSite
+	LexicalFacts []TreeSitterReferenceSite
 	Chunks       []TreeSitterChunk
 	Diagnostics  []TreeSitterDiagnostic
 }
@@ -218,6 +221,7 @@ type TreeSitterWorkerWireResponse struct {
 	Text         string                    `json:"text"`
 	Definitions  []TreeSitterDefinition    `json:"definitions"`
 	References   []TreeSitterReferenceSite `json:"references"`
+	LexicalFacts []TreeSitterReferenceSite `json:"lexical_facts"`
 	Chunks       []TreeSitterChunk         `json:"chunks"`
 	Diagnostics  []TreeSitterDiagnostic    `json:"diagnostics"`
 }
@@ -370,6 +374,7 @@ func (worker *TreeSitterWorker) Parse(ctx context.Context, request TreeSitterPar
 		Text:         response.Text,
 		Definitions:  append([]TreeSitterDefinition(nil), response.Definitions...),
 		References:   append([]TreeSitterReferenceSite(nil), response.References...),
+		LexicalFacts: append([]TreeSitterReferenceSite(nil), response.LexicalFacts...),
 		Chunks:       append([]TreeSitterChunk(nil), response.Chunks...),
 		Diagnostics:  append([]TreeSitterDiagnostic(nil), response.Diagnostics...),
 	}
@@ -427,6 +432,7 @@ func treeSitterCloneArtifact(artifact TreeSitterArtifact) TreeSitterArtifact {
 	clone := artifact
 	clone.Definitions = append([]TreeSitterDefinition(nil), artifact.Definitions...)
 	clone.References = append([]TreeSitterReferenceSite(nil), artifact.References...)
+	clone.LexicalFacts = append([]TreeSitterReferenceSite(nil), artifact.LexicalFacts...)
 	clone.Chunks = append([]TreeSitterChunk(nil), artifact.Chunks...)
 	clone.Diagnostics = append([]TreeSitterDiagnostic(nil), artifact.Diagnostics...)
 	return clone
@@ -438,6 +444,7 @@ func treeSitterArtifactCacheBytes(artifact TreeSitterArtifact) int {
 	bytes := int(unsafe.Sizeof(TreeSitterArtifact{}))
 	bytes += cap(artifact.Definitions) * int(unsafe.Sizeof(TreeSitterDefinition{}))
 	bytes += cap(artifact.References) * int(unsafe.Sizeof(TreeSitterReferenceSite{}))
+	bytes += cap(artifact.LexicalFacts) * int(unsafe.Sizeof(TreeSitterReferenceSite{}))
 	bytes += cap(artifact.Chunks) * int(unsafe.Sizeof(TreeSitterChunk{}))
 	bytes += cap(artifact.Diagnostics) * int(unsafe.Sizeof(TreeSitterDiagnostic{}))
 	bytes += len(artifact.Proof.ArtifactID) + len(artifact.Proof.ContentDigest) + len(artifact.Proof.FactsDigest)
@@ -447,6 +454,9 @@ func treeSitterArtifactCacheBytes(artifact TreeSitterArtifact) int {
 	}
 	for _, reference := range artifact.References {
 		bytes += len(reference.Kind) + len(reference.SymbolKey) + len(reference.LocalKey) + len(reference.OwnerLocalKey) + len(reference.RawTarget) + len(reference.TargetKey) + len(reference.Resolution)
+	}
+	for _, fact := range artifact.LexicalFacts {
+		bytes += len(fact.Kind) + len(fact.SymbolKey) + len(fact.LocalKey) + len(fact.OwnerLocalKey) + len(fact.RawTarget) + len(fact.TargetKey) + len(fact.Resolution)
 	}
 	for _, chunk := range artifact.Chunks {
 		bytes += len(chunk.Text) + len(chunk.ContentDigest)
@@ -679,7 +689,31 @@ func treeSitterValidateArtifact(source []byte, artifact TreeSitterArtifact) erro
 	if err := treeSitterValidateReferences(source, lineStarts, artifact.References); err != nil {
 		return err
 	}
+	for _, reference := range artifact.References {
+		if strings.HasPrefix(reference.LocalKey, "lexical_") {
+			return fmt.Errorf("%w: resolver fact in reference inventory", ErrTreeSitterProtocol)
+		}
+	}
+	if err := treeSitterValidateLexicalFacts(source, lineStarts, artifact.LexicalFacts); err != nil {
+		return err
+	}
 	return treeSitterValidateDiagnostics(source, lineStarts, artifact.Diagnostics)
+}
+
+func treeSitterValidateLexicalFacts(source []byte, lineStarts []int, facts []TreeSitterReferenceSite) error {
+	if len(facts) > TreeSitterMaxLexicalFacts {
+		return fmt.Errorf("%w: child exceeded lexical fact bounds", ErrTreeSitterProtocol)
+	}
+	if err := treeSitterValidateReferences(source, lineStarts, facts); err != nil {
+		return err
+	}
+	for _, fact := range facts {
+		if fact.Kind != "reference" || fact.Resolution != TreeSitterResolutionSyntaxOnly || !strings.HasPrefix(fact.LocalKey, "lexical_") ||
+			!bytes.Equal(source[fact.Span.ByteStart:fact.Span.ByteEnd], []byte(fact.RawTarget)) {
+			return fmt.Errorf("%w: invalid lexical resolver fact", ErrTreeSitterProtocol)
+		}
+	}
+	return nil
 }
 
 func treeSitterValidateArtifactHeader(artifact TreeSitterArtifact) error {
@@ -689,7 +723,7 @@ func treeSitterValidateArtifactHeader(artifact TreeSitterArtifact) error {
 	if !treeSitterCoverageValid(artifact.Coverage) {
 		return fmt.Errorf("%w: child returned unsupported coverage", ErrTreeSitterProtocol)
 	}
-	if len(artifact.Definitions) > treeSitterWorkerMaxDefinitions || len(artifact.References) > treeSitterWorkerMaxReferences || len(artifact.Chunks) > treeSitterWorkerMaxChunks || len(artifact.Diagnostics) > treeSitterWorkerMaxDiagnostics {
+	if len(artifact.Definitions) > treeSitterWorkerMaxDefinitions || len(artifact.References) > treeSitterWorkerMaxReferences || len(artifact.LexicalFacts) > TreeSitterMaxLexicalFacts || len(artifact.Chunks) > treeSitterWorkerMaxChunks || len(artifact.Diagnostics) > treeSitterWorkerMaxDiagnostics {
 		return fmt.Errorf("%w: child exceeded fact count bounds", ErrTreeSitterProtocol)
 	}
 	return nil
@@ -878,6 +912,7 @@ func treeSitterReferenceSiteSuffix(span IndexSpan) string {
 func treeSitterFinalizeArtifact(source []byte, profileKey string, artifact TreeSitterArtifact) TreeSitterArtifact {
 	artifact.Definitions = append([]TreeSitterDefinition(nil), artifact.Definitions...)
 	artifact.References = append([]TreeSitterReferenceSite(nil), artifact.References...)
+	artifact.LexicalFacts = append([]TreeSitterReferenceSite(nil), artifact.LexicalFacts...)
 	artifact.Chunks = append([]TreeSitterChunk(nil), artifact.Chunks...)
 	artifact.Diagnostics = append([]TreeSitterDiagnostic(nil), artifact.Diagnostics...)
 	sort.Slice(artifact.Definitions, func(left, right int) bool {
@@ -885,6 +920,9 @@ func treeSitterFinalizeArtifact(source []byte, profileKey string, artifact TreeS
 	})
 	sort.Slice(artifact.References, func(left, right int) bool {
 		return treeSitterReferenceLess(artifact.References[left], artifact.References[right])
+	})
+	sort.Slice(artifact.LexicalFacts, func(left, right int) bool {
+		return treeSitterReferenceLess(artifact.LexicalFacts[left], artifact.LexicalFacts[right])
 	})
 	sort.Slice(artifact.Chunks, func(left, right int) bool {
 		return treeSitterChunkLess(artifact.Chunks[left], artifact.Chunks[right])
@@ -949,6 +987,17 @@ func treeSitterFactsDigest(profileKey string, artifact TreeSitterArtifact) Index
 		goWriteHashString(state, reference.TargetKey)
 		goWriteHashString(state, string(reference.Resolution))
 		goWriteHashSpan(state, reference.Span)
+	}
+	goWriteHashUint64(state, uint64(len(artifact.LexicalFacts)))
+	for _, fact := range artifact.LexicalFacts {
+		goWriteHashString(state, fact.Kind)
+		goWriteHashString(state, fact.SymbolKey)
+		goWriteHashString(state, fact.LocalKey)
+		goWriteHashString(state, fact.OwnerLocalKey)
+		goWriteHashString(state, fact.RawTarget)
+		goWriteHashString(state, fact.TargetKey)
+		goWriteHashString(state, string(fact.Resolution))
+		goWriteHashSpan(state, fact.Span)
 	}
 	goWriteHashUint64(state, uint64(len(artifact.Chunks)))
 	for _, chunk := range artifact.Chunks {

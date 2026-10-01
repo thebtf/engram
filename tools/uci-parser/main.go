@@ -29,6 +29,7 @@ const (
 	parserMaxProfileBytes      = 256
 	parserMaxDefinitions       = 2_048
 	parserMaxReferences        = 8_192
+	parserMaxLexicalFacts      = uci.TreeSitterMaxLexicalFacts
 	parserMaxChunks            = 64
 	parserMaxChunkBytes        = 64 << 10
 	parserMaxDiagnostics       = 16
@@ -161,6 +162,7 @@ func minimalOutputLimitedResponse(response uci.TreeSitterWorkerWireResponse) uci
 	response.Text = ""
 	response.Definitions = []uci.TreeSitterDefinition{}
 	response.References = []uci.TreeSitterReferenceSite{}
+	response.LexicalFacts = []uci.TreeSitterReferenceSite{}
 	response.Chunks = []uci.TreeSitterChunk{}
 	response.Diagnostics = []uci.TreeSitterDiagnostic{{
 		Code:    "OUTPUT_LIMIT",
@@ -217,6 +219,7 @@ func extract(request uci.TreeSitterWorkerWireRequest) uci.TreeSitterWorkerWireRe
 	collector.walk(cursor, parserScope{}, false)
 	response.Definitions = collector.definitions
 	response.References = collector.references
+	response.LexicalFacts = collector.lexicalFacts
 	response.Chunks, collector.chunksTruncated = sourceChunks(request.Source, collector.lineStarts, response.Definitions)
 	if collector.definitionCollision {
 		addDiagnostic(&response, "DUPLICATE_DEFINITION", uci.IndexSpan{}, "multiple declarations share a parser symbol key")
@@ -226,6 +229,9 @@ func extract(request uci.TreeSitterWorkerWireRequest) uci.TreeSitterWorkerWireRe
 	}
 	if collector.referencesTruncated {
 		addDiagnostic(&response, "REFERENCE_LIMIT", uci.IndexSpan{}, "syntax reference sites exceeded the bounded extraction limit")
+	}
+	if collector.lexicalFactsTruncated {
+		addDiagnostic(&response, "LEXICAL_FACT_LIMIT", uci.IndexSpan{}, "lexical resolver facts exceeded the bounded extraction limit")
 	}
 	if collector.chunksTruncated {
 		addDiagnostic(&response, "CHUNK_LIMIT", uci.IndexSpan{}, "source chunks exceeded the bounded extraction limit")
@@ -238,7 +244,7 @@ func extract(request uci.TreeSitterWorkerWireRequest) uci.TreeSitterWorkerWireRe
 		addDiagnostic(&response, "PARSE_ERROR", collector.errorSpan, "source could not be parsed completely as "+string(request.Language))
 	} else if collector.dynamicImport {
 		response.Coverage = uci.IndexCoveragePartial
-	} else if collector.definitionsTruncated || collector.referencesTruncated || collector.chunksTruncated || collector.definitionCollision {
+	} else if collector.definitionsTruncated || collector.referencesTruncated || collector.lexicalFactsTruncated || collector.chunksTruncated || collector.definitionCollision {
 		response.Coverage = uci.IndexCoveragePartial
 		addDiagnostic(&response, "PARTIAL_FACTS", uci.IndexSpan{}, "some source facts could not be represented within extraction bounds")
 	} else {
@@ -257,6 +263,7 @@ func baseResponse(request uci.TreeSitterWorkerWireRequest) uci.TreeSitterWorkerW
 		Text:         text,
 		Definitions:  []uci.TreeSitterDefinition{},
 		References:   []uci.TreeSitterReferenceSite{},
+		LexicalFacts: []uci.TreeSitterReferenceSite{},
 		Chunks:       []uci.TreeSitterChunk{},
 		Diagnostics:  []uci.TreeSitterDiagnostic{},
 	}
@@ -292,20 +299,22 @@ type parserScope struct {
 }
 
 type parserCollector struct {
-	language             uci.TreeSitterLanguage
-	source               []byte
-	lineStarts           []int
-	definitions          []uci.TreeSitterDefinition
-	references           []uci.TreeSitterReferenceSite
-	definitionKeys       map[string]uci.IndexSpan
-	referenceKeys        map[string]struct{}
-	dynamicImport        bool
-	dynamicImportSpan    uci.IndexSpan
-	definitionsTruncated bool
-	definitionCollision  bool
-	referencesTruncated  bool
-	chunksTruncated      bool
-	errorSpan            uci.IndexSpan
+	language              uci.TreeSitterLanguage
+	source                []byte
+	lineStarts            []int
+	definitions           []uci.TreeSitterDefinition
+	references            []uci.TreeSitterReferenceSite
+	lexicalFacts          []uci.TreeSitterReferenceSite
+	definitionKeys        map[string]uci.IndexSpan
+	referenceKeys         map[string]struct{}
+	dynamicImport         bool
+	dynamicImportSpan     uci.IndexSpan
+	definitionsTruncated  bool
+	definitionCollision   bool
+	referencesTruncated   bool
+	lexicalFactsTruncated bool
+	chunksTruncated       bool
+	errorSpan             uci.IndexSpan
 }
 
 func newCollector(language uci.TreeSitterLanguage, source []byte) *parserCollector {
@@ -315,6 +324,7 @@ func newCollector(language uci.TreeSitterLanguage, source []byte) *parserCollect
 		lineStarts:     lineStarts(source),
 		definitions:    []uci.TreeSitterDefinition{},
 		references:     []uci.TreeSitterReferenceSite{},
+		lexicalFacts:   []uci.TreeSitterReferenceSite{},
 		definitionKeys: make(map[string]uci.IndexSpan),
 		referenceKeys:  make(map[string]struct{}),
 	}
@@ -465,11 +475,16 @@ func (collector *parserCollector) definition(node *tree_sitter.Node, scope parse
 		return uci.TreeSitterDefinition{}, false
 	}
 	qualifiedName := qualified(scope.namespace, name)
+	localKey := kind + ":" + qualifiedName
+	// These declarations can share a name legally; retain each source occurrence.
+	if kind == "method" || kind == "interface" || kind == "namespace" {
+		localKey = uci.TreeSitterReferenceSiteKey(localKey, span)
+	}
 	return uci.TreeSitterDefinition{
 		Kind:      kind,
 		Name:      name,
-		SymbolKey: string(collector.language) + ":" + kind + ":" + qualifiedName,
-		LocalKey:  kind + ":" + qualifiedName,
+		SymbolKey: string(collector.language) + ":" + localKey,
+		LocalKey:  localKey,
 		Span:      span,
 	}, true
 }
@@ -492,8 +507,8 @@ func (collector *parserCollector) addDefinition(definition uci.TreeSitterDefinit
 	collector.definitions = append(collector.definitions, definition)
 }
 
-// Lexical facts use the existing syntax-reference envelope. Their scope offsets
-// identify a binding independently of the function that happens to use it.
+// Resolver-only facts share the syntax-site transport, but never the reference
+// inventory or its budget. Scope offsets identify the actual lexical binding.
 func (collector *parserCollector) collectLexicalFacts(node *tree_sitter.Node, scope parserScope) {
 	if parserFunctionNode(node.Kind()) {
 		owner := ""
@@ -501,34 +516,59 @@ func (collector *parserCollector) collectLexicalFacts(node *tree_sitter.Node, sc
 			owner = definition.LocalKey
 		}
 		collector.addLexicalScope("function", node, owner)
-		collector.addLexicalBindings(node.ChildByFieldName("parameters"), node)
-		collector.addLexicalBindings(node.ChildByFieldName("parameter"), node)
+		collector.addLexicalBindings(node.ChildByFieldName("parameters"), node, false)
+		collector.addLexicalBindings(node.ChildByFieldName("parameter"), node, false)
 		if node.Kind() == "function_expression" || node.Kind() == "generator_function" {
-			collector.addLexicalBindings(node.ChildByFieldName("name"), node)
+			collector.addLexicalBindings(node.ChildByFieldName("name"), node, false)
 		}
 	}
 	switch node.Kind() {
+	case "call_expression":
+		callee := node.ChildByFieldName("function")
+		if node.ChildByFieldName("optional_chain") != nil {
+			break
+		}
+		for callee != nil && callee.Kind() == "parenthesized_expression" {
+			var expression *tree_sitter.Node
+			for index := uint(0); index < callee.NamedChildCount(); index++ {
+				child := callee.NamedChild(index)
+				if child.Kind() != "comment" {
+					if expression != nil {
+						return
+					}
+					expression = child
+				}
+			}
+			callee = expression
+		}
+		if callee != nil && callee.Kind() == "identifier" && nodeText(callee, collector.source) == "eval" {
+			collector.addReference("reference", "lexical_eval", scope.ownerLocalKey, "eval", uci.TreeSitterResolutionSyntaxOnly, callee)
+		}
 	case "with_statement":
 		collector.addLexicalScope("with", node, scope.ownerLocalKey)
 	case "variable_declarator":
 		declaration := node.Parent()
 		if declaration != nil && isVariableDeclaration(declaration.Kind()) {
-			collector.addLexicalBindings(node.ChildByFieldName("name"), parserBindingScope(declaration.Parent(), variableKind(declaration) == "var"))
+			value := node.ChildByFieldName("value")
+			pattern := node.ChildByFieldName("name")
+			nonIntrinsic := pattern != nil && pattern.Kind() == "identifier" && value != nil &&
+				(value.Kind() == "function_expression" || value.Kind() == "generator_function" || value.Kind() == "arrow_function")
+			collector.addLexicalBindings(pattern, parserBindingScope(declaration.Parent(), variableKind(declaration) == "var"), nonIntrinsic)
 		}
 	case "function_declaration", "generator_function_declaration", "class_declaration", "abstract_class_declaration", "enum_declaration":
-		collector.addLexicalBindings(node.ChildByFieldName("name"), parserBindingScope(node.Parent(), false))
+		collector.addLexicalBindings(node.ChildByFieldName("name"), parserBindingScope(node.Parent(), false), parserFunctionNode(node.Kind()))
 	case "class":
-		collector.addLexicalBindings(node.ChildByFieldName("name"), node)
+		collector.addLexicalBindings(node.ChildByFieldName("name"), node, false)
 	case "catch_clause":
-		collector.addLexicalBindings(node.ChildByFieldName("parameter"), node)
+		collector.addLexicalBindings(node.ChildByFieldName("parameter"), node, false)
 	case "for_in_statement":
 		if kind := node.ChildByFieldName("kind"); kind != nil {
-			collector.addLexicalBindings(node.ChildByFieldName("left"), parserBindingScope(node, kind.Kind() == "var"))
+			collector.addLexicalBindings(node.ChildByFieldName("left"), parserBindingScope(node, kind.Kind() == "var"), false)
 		}
 	case "import_clause":
 		for index := uint(0); index < node.NamedChildCount(); index++ {
 			if binding := node.NamedChild(index); binding.Kind() == "identifier" {
-				collector.addLexicalBindings(binding, parserBindingScope(node.Parent(), true))
+				collector.addLexicalBindings(binding, parserBindingScope(node.Parent(), true), false)
 			}
 		}
 	case "import_specifier":
@@ -536,23 +576,27 @@ func (collector *parserCollector) collectLexicalFacts(node *tree_sitter.Node, sc
 		if binding == nil {
 			binding = node.ChildByFieldName("name")
 		}
-		collector.addLexicalBindings(binding, parserBindingScope(node.Parent(), true))
+		collector.addLexicalBindings(binding, parserBindingScope(node.Parent(), true), false)
 	case "namespace_import", "import_require_clause":
 		for index := uint(0); index < node.NamedChildCount(); index++ {
 			if binding := node.NamedChild(index); binding.Kind() == "identifier" {
-				collector.addLexicalBindings(binding, parserBindingScope(node.Parent(), true))
+				collector.addLexicalBindings(binding, parserBindingScope(node.Parent(), true), false)
 			}
 		}
 	}
 }
 
-func (collector *parserCollector) addLexicalBindings(pattern, scope *tree_sitter.Node) {
+func (collector *parserCollector) addLexicalBindings(pattern, scope *tree_sitter.Node, nonIntrinsic bool) {
 	if scope == nil {
 		return
 	}
 	for _, binding := range collector.bindingNodes(pattern) {
 		name := nodeText(binding, collector.source)
-		key := "lexical_binding:" + strconv.FormatUint(uint64(scope.StartByte()), 10) + ":" + strconv.FormatUint(uint64(scope.EndByte()), 10) + ":" + name
+		prefix := "lexical_binding:"
+		if name == "eval" && nonIntrinsic {
+			prefix = "lexical_function_binding:"
+		}
+		key := prefix + strconv.FormatUint(uint64(scope.StartByte()), 10) + ":" + strconv.FormatUint(uint64(scope.EndByte()), 10) + ":" + name
 		collector.addReference("reference", key, "", name, uci.TreeSitterResolutionSyntaxOnly, binding)
 	}
 }
@@ -736,23 +780,27 @@ func (collector *parserCollector) addReference(kind, localKey, ownerLocalKey, ra
 	if node == nil || localKey == "" || rawTarget == "" {
 		return
 	}
+	sites, truncated, maximum := &collector.references, &collector.referencesTruncated, parserMaxReferences
+	if strings.HasPrefix(localKey, "lexical_") {
+		sites, truncated, maximum = &collector.lexicalFacts, &collector.lexicalFactsTruncated, parserMaxLexicalFacts
+	}
 	span, valid := collector.span(node)
 	if !valid {
-		collector.referencesTruncated = true
+		*truncated = true
 		return
 	}
 	siteKey := uci.TreeSitterReferenceSiteKey(localKey, span)
 	symbolKey := uci.TreeSitterReferenceSiteKey(string(collector.language)+":"+localKey, span)
 	if _, exists := collector.referenceKeys[symbolKey]; exists {
-		collector.referencesTruncated = true
+		*truncated = true
 		return
 	}
-	if len(collector.references) >= parserMaxReferences {
-		collector.referencesTruncated = true
+	if len(*sites) >= maximum {
+		*truncated = true
 		return
 	}
 	collector.referenceKeys[symbolKey] = struct{}{}
-	collector.references = append(collector.references, uci.TreeSitterReferenceSite{
+	*sites = append(*sites, uci.TreeSitterReferenceSite{
 		Kind:          kind,
 		SymbolKey:     symbolKey,
 		LocalKey:      siteKey,
@@ -1059,6 +1107,12 @@ func sortResponse(response *uci.TreeSitterWorkerWireResponse) {
 			return response.References[left].Kind < response.References[right].Kind
 		}
 		return response.References[left].SymbolKey < response.References[right].SymbolKey
+	})
+	sort.Slice(response.LexicalFacts, func(left, right int) bool {
+		if comparison := compareSpans(response.LexicalFacts[left].Span, response.LexicalFacts[right].Span); comparison != 0 {
+			return comparison < 0
+		}
+		return response.LexicalFacts[left].SymbolKey < response.LexicalFacts[right].SymbolKey
 	})
 	sort.Slice(response.Chunks, func(left, right int) bool {
 		return compareSpans(response.Chunks[left].Span, response.Chunks[right].Span) < 0
