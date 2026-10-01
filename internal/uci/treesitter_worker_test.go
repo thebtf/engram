@@ -628,6 +628,10 @@ func TestUCITreeSitterWorkerFramesBuiltParserFacts(t *testing.T) {
 			exported     bool
 		}{
 			{"named default", "export default function helper(){}; export function caller(){helper()}", true},
+			{"identifier default", "function helper(){}; export default helper; export function caller(){helper()}", true},
+			{"forward identifier default", "export default helper; function helper(){}; export function caller(){helper()}", true},
+			{"default call expression", "function helper(){}; export default helper(); export function caller(){helper()}", false},
+			{"default object expression", "function helper(){}; export default {helper}; export function caller(){helper()}", false},
 			{"anonymous default", "export default function(){}; export function caller(){helper()}", false},
 			{"default expression", "export default (function helper(){}); export function caller(){helper()}", false},
 		} {
@@ -654,6 +658,54 @@ func TestUCITreeSitterWorkerFramesBuiltParserFacts(t *testing.T) {
 				}
 				if exports != wantExports {
 					t.Fatalf("helper default exports = %d, want %d", exports, wantExports)
+				}
+				if test.exported {
+					uciRequireBuiltDefinitionName(t, artifact.Definitions, "helper")
+					if len(artifact.Definitions) != 2 {
+						t.Fatalf("default alias must retain only the existing helper and caller definitions: %#v", artifact.Definitions)
+					}
+				}
+			})
+		}
+	}
+
+	for _, language := range []TreeSitterLanguage{TreeSitterLanguageTypeScript, TreeSitterLanguageTSX} {
+		for _, test := range []struct {
+			callee string
+			direct bool
+		}{
+			{"eval", true},
+			{"(eval as any)", true},
+			{"(eval satisfies any)", true},
+			{"eval!", true},
+			{"((/* trivia */ eval as any)!)", true},
+			{"(eval as any)?.", false},
+			{"((0, eval) as any)", false},
+			{"(globalThis.eval as any)", false},
+			{"new (eval as any)", false},
+		} {
+			t.Run("direct eval "+string(language)+"/"+test.callee, func(t *testing.T) {
+				source := []byte("export function caller(s: string){ " + test.callee + "(s); }")
+				artifact, err := worker.Parse(context.Background(), TreeSitterParseRequest{Language: language, ProfileKey: "direct-eval/v8", Source: source})
+				if err != nil || artifact.Coverage != IndexCoverageComplete {
+					t.Fatalf("built parser eval: err=%v coverage=%q diagnostics=%#v", err, artifact.Coverage, artifact.Diagnostics)
+				}
+				var evalSites int
+				for _, fact := range artifact.LexicalFacts {
+					if !strings.HasPrefix(fact.LocalKey, "lexical_eval@") {
+						continue
+					}
+					evalSites++
+					if fact.RawTarget != "eval" || fact.OwnerLocalKey != "function:caller" || fact.Resolution != TreeSitterResolutionSyntaxOnly || string(source[fact.Span.ByteStart:fact.Span.ByteEnd]) != "eval" {
+						t.Fatalf("eval evidence must identify the runtime identifier and lexical owner: %#v", fact)
+					}
+				}
+				wantSites := 0
+				if test.direct {
+					wantSites = 1
+				}
+				if evalSites != wantSites {
+					t.Fatalf("lexical eval sites = %d, want %d", evalSites, wantSites)
 				}
 			})
 		}

@@ -219,7 +219,7 @@ var (
 	expectedStaticInputs = []string{
 		"uci-tree-sitter-bundle/v2",
 		"uci-tree-sitter/v2",
-		"uci-tree-sitter-facts/v7",
+		"uci-tree-sitter-facts/v8",
 		"github.com/tree-sitter/go-tree-sitter@v0.25.0",
 		"github.com/tree-sitter/tree-sitter-javascript@v0.25.0",
 		"github.com/tree-sitter/tree-sitter-typescript@v0.23.2",
@@ -240,7 +240,7 @@ var (
 				ObservedProtocolRevision: "",
 				ObservedBundleDigest:     "",
 				ObservedCoverage:         "",
-				BlockerDetail:            "The prior source probe covered uci-tree-sitter/v1 and does not cover facts extraction contract uci-tree-sitter-facts/v7.",
+				BlockerDetail:            "The prior source probe covered uci-tree-sitter/v1 and does not cover facts extraction contract uci-tree-sitter-facts/v8.",
 			},
 		},
 		{
@@ -257,7 +257,7 @@ var (
 				ObservedProtocolRevision: "",
 				ObservedBundleDigest:     "",
 				ObservedCoverage:         "",
-				BlockerDetail:            "The prior source probe covered uci-tree-sitter/v1 and does not cover facts extraction contract uci-tree-sitter-facts/v7.",
+				BlockerDetail:            "The prior source probe covered uci-tree-sitter/v1 and does not cover facts extraction contract uci-tree-sitter-facts/v8.",
 			},
 		},
 		{
@@ -328,7 +328,7 @@ func assertManifestIdentity(t *testing.T, manifest parserManifest) {
 	if manifest.Component != "uci-parser" {
 		t.Fatalf("component = %q, want uci-parser", manifest.Component)
 	}
-	if manifest.ParserProtocolRevision != "uci-tree-sitter/v2" || manifest.FactsExtractionContractRevision != "uci-tree-sitter-facts/v7" || manifest.BundleSchemaRevision != "uci-tree-sitter-bundle/v2" {
+	if manifest.ParserProtocolRevision != "uci-tree-sitter/v2" || manifest.FactsExtractionContractRevision != "uci-tree-sitter-facts/v8" || manifest.BundleSchemaRevision != "uci-tree-sitter-bundle/v2" {
 		t.Fatalf("unexpected parser identity: protocol=%q facts=%q bundle=%q", manifest.ParserProtocolRevision, manifest.FactsExtractionContractRevision, manifest.BundleSchemaRevision)
 	}
 }

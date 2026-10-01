@@ -388,6 +388,15 @@ func parserTypeOnlyExport(node *tree_sitter.Node) bool {
 }
 
 func (collector *parserCollector) collectExportDefinition(exportNode *tree_sitter.Node, scope parserScope) {
+	if value := exportNode.ChildByFieldName("value"); value != nil && value.Kind() == "identifier" && scope.ownerLocalKey == "" && len(scope.namespace) == 0 {
+		for index := uint(0); index < exportNode.ChildCount(); index++ {
+			if exportNode.Child(index).Kind() == "default" {
+				name := nodeText(value, collector.source)
+				collector.addReference("export_alias", "export:"+name+":default", "", name, uci.TreeSitterResolutionSyntaxOnly, value)
+				return
+			}
+		}
+	}
 	declaration := exportNode.ChildByFieldName("declaration")
 	if declaration == nil {
 		for index := uint(0); index < exportNode.NamedChildCount(); index++ {
@@ -527,18 +536,28 @@ func (collector *parserCollector) collectLexicalFacts(node *tree_sitter.Node, sc
 	switch node.Kind() {
 	case "call_expression":
 		callee := node.ChildByFieldName("function")
-		if node.ChildByFieldName("optional_chain") != nil {
+		if parserOptionalCall(node) {
 			break
 		}
-		for callee != nil && callee.Kind() == "parenthesized_expression" {
+	unwrapEval:
+		for callee != nil {
+			kind := callee.Kind()
+			switch kind {
+			case "parenthesized_expression", "non_null_expression", "as_expression", "satisfies_expression", "type_assertion":
+			default:
+				break unwrapEval
+			}
 			var expression *tree_sitter.Node
 			for index := uint(0); index < callee.NamedChildCount(); index++ {
 				child := callee.NamedChild(index)
-				if child.Kind() != "comment" {
+				if child.Kind() != "comment" && (kind != "type_assertion" || child.Kind() != "type_arguments") {
 					if expression != nil {
 						return
 					}
 					expression = child
+					if kind == "as_expression" || kind == "satisfies_expression" {
+						break
+					}
 				}
 			}
 			callee = expression
@@ -639,6 +658,18 @@ func parserBindingScope(node *tree_sitter.Node, functionScoped bool) *tree_sitte
 	return nil
 }
 
+func parserOptionalCall(node *tree_sitter.Node) bool {
+	if node.ChildByFieldName("optional_chain") != nil {
+		return true
+	}
+	for index := uint(0); index < node.ChildCount(); index++ {
+		if node.Child(index).Kind() == "?." {
+			return true
+		}
+	}
+	return false
+}
+
 func (collector *parserCollector) collectReference(node *tree_sitter.Node, scope parserScope) {
 	switch node.Kind() {
 	case "import_statement":
@@ -702,7 +733,7 @@ func (collector *parserCollector) collectReference(node *tree_sitter.Node, scope
 				resolution = uci.TreeSitterResolutionPartial
 				collector.markDynamicImport(node)
 			}
-			if callee.Kind() == "identifier" && node.ChildByFieldName("optional_chain") == nil {
+			if callee.Kind() == "identifier" && !parserOptionalCall(node) {
 				collector.addReference("call", "call:"+raw, scope.ownerLocalKey, raw, resolution, callee)
 			} else {
 				collector.addReference("call", "call:"+raw, scope.ownerLocalKey, raw, resolution, node)

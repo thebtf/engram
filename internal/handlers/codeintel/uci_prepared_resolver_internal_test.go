@@ -245,6 +245,15 @@ func TestUCIPreparedIndexBuiltParserResolvesExportListCallsInPackedGraph(t *test
 		{"default caller javascript", "calls.js", "export function helper(){}; export default function caller(){helper()}", uci.TreeSitterLanguageJavaScript, true},
 		{"default caller typescript", "calls.ts", "export function helper(){}; export default function caller(){helper()}", uci.TreeSitterLanguageTypeScript, true},
 		{"default caller tsx", "calls.tsx", "export function helper(){}; export default function caller(){return <span>{helper()}</span>;}", uci.TreeSitterLanguageTSX, true},
+		{"identifier default javascript", "calls.js", "function helper(){}; export default helper; export function caller(){helper()}", uci.TreeSitterLanguageJavaScript, true},
+		{"identifier default typescript", "calls.ts", "function helper(){}; export default helper; export function caller(){helper()}", uci.TreeSitterLanguageTypeScript, true},
+		{"identifier default tsx", "calls.tsx", "function helper(){}; export default helper; export function caller(){return <span>{helper()}</span>;}", uci.TreeSitterLanguageTSX, true},
+		{"identifier default caller javascript", "calls.js", "export function helper(){}; function caller(){helper()}; export default caller", uci.TreeSitterLanguageJavaScript, true},
+		{"identifier default caller typescript", "calls.ts", "export function helper(){}; function caller(){helper()}; export default caller", uci.TreeSitterLanguageTypeScript, true},
+		{"identifier default caller tsx", "calls.tsx", "export function helper(){}; function caller(){return <span>{helper()}</span>;}; export default caller", uci.TreeSitterLanguageTSX, true},
+		{"forward identifier default", "calls.ts", "export default helper; function helper(){}; export function caller(){helper()}", uci.TreeSitterLanguageTypeScript, true},
+		{"default call expression", "calls.js", "function helper(){}; export default helper(); export function caller(){helper()}", uci.TreeSitterLanguageJavaScript, false},
+		{"default object expression", "calls.tsx", "function helper(){}; export default {helper}; export function caller(){helper()}", uci.TreeSitterLanguageTSX, false},
 		{"anonymous default target", "calls.js", "export default function(){}; export function caller(){helper()}", uci.TreeSitterLanguageJavaScript, false},
 		{"default function expression", "calls.js", "export default (function helper(){}); export function caller(){helper()}", uci.TreeSitterLanguageJavaScript, false},
 		{"default member call", "calls.ts", "export default function helper(){}; export function caller(n: any){n.helper()}", uci.TreeSitterLanguageTypeScript, false},
@@ -273,6 +282,8 @@ func TestUCIPreparedIndexBuiltParserResolvesExportListCallsInPackedGraph(t *test
 		{"arrow outside call scope", "calls.js", "export function helper(){}; export function caller(){ const nested = () => 1; return helper(); }", uci.TreeSitterLanguageJavaScript, true},
 		{"catch parameter shadows helper", "calls.js", "export function helper(){}; export function caller(){ try {} catch(helper){ return helper(); } }", uci.TreeSitterLanguageJavaScript, false},
 		{"optional call", "calls.js", "export function helper(){}; export function caller(){ return helper?.(); }", uci.TreeSitterLanguageJavaScript, false},
+		{"optional typescript call", "calls.ts", "export function helper(){}; export function caller(){ return helper?.(); }", uci.TreeSitterLanguageTypeScript, false},
+		{"optional tsx call", "calls.tsx", "export function helper(){}; export function caller(){ return <span>{helper?.()}</span>; }", uci.TreeSitterLanguageTSX, false},
 		{"dynamic member call", "calls.ts", "export function helper(){}; export function caller(n: any){ return n.helper(); }", uci.TreeSitterLanguageTypeScript, false},
 		{"dynamic constructor", "calls.tsx", "export function helper(){}; export function caller(n: any){ return new n.helper(); }", uci.TreeSitterLanguageTSX, false},
 		{"unknown call", "calls.js", "export function helper(){}; export function caller(){ return missing(); }", uci.TreeSitterLanguageJavaScript, false},
@@ -476,6 +487,22 @@ func TestUCIPreparedIndexBuiltParserDoesNotResolveDirectEvalCalls(t *testing.T) 
 		{"intrinsic eval alias", "export function helper(){}; export function caller(s){ const eval = globalThis.eval; (eval)(s); return helper(); }", uci.TreeSitterLanguageJavaScript, true, true},
 		{"function eval shadow rebound to intrinsic", "export function helper(){}; export function caller(s){ let eval = () => {}; eval = globalThis.eval; eval(s); return helper(); }", uci.TreeSitterLanguageJavaScript, true, true},
 		{"destructuring does not establish nonintrinsic eval", "export function helper(){}; export function caller(s){ const {eval} = function(){}; eval(s); return helper(); }", uci.TreeSitterLanguageJavaScript, true, true},
+		{"asserted typescript eval", "export function helper(){}; export function caller(s: string){ (eval as any)(s); return helper(); }", uci.TreeSitterLanguageTypeScript, true, true},
+		{"angle asserted typescript eval", "export function helper(){}; export function caller(s: string){ (<any>eval)(s); return helper(); }", uci.TreeSitterLanguageTypeScript, true, true},
+		{"satisfies typescript eval", "export function helper(){}; export function caller(s: string){ (eval satisfies any)(s); return helper(); }", uci.TreeSitterLanguageTypeScript, true, true},
+		{"non-null typescript eval", "export function helper(){}; export function caller(s: string){ eval!(s); return helper(); }", uci.TreeSitterLanguageTypeScript, true, true},
+		{"nested erased typescript eval", "export function helper(){}; export function caller(s: string){ ((/* trivia */ eval as any)!) (s); return helper(); }", uci.TreeSitterLanguageTypeScript, true, true},
+		{"asserted tsx eval", "export function helper(){}; export function caller(s: string){ (eval as any)(s); return <span>{helper()}</span>; }", uci.TreeSitterLanguageTSX, true, true},
+		{"satisfies tsx eval", "export function helper(){}; export function caller(s: string){ (eval satisfies any)(s); return <span>{helper()}</span>; }", uci.TreeSitterLanguageTSX, true, true},
+		{"non-null tsx eval", "export function helper(){}; export function caller(s: string){ eval!(s); return <span>{helper()}</span>; }", uci.TreeSitterLanguageTSX, true, true},
+		{"erased optional eval is indirect", "export function helper(){}; export function caller(s: string){ (eval as any)?.(s); return helper(); }", uci.TreeSitterLanguageTypeScript, false, false},
+		{"erased sequence eval is indirect", "export function helper(){}; export function caller(s: string){ ((0, eval) as any)(s); return helper(); }", uci.TreeSitterLanguageTypeScript, false, false},
+		{"erased member eval is indirect", "export function helper(){}; export function caller(s: string){ (globalThis.eval as any)(s); return helper(); }", uci.TreeSitterLanguageTypeScript, false, false},
+		{"erased constructor is not direct eval", "export function helper(){}; export function caller(s: string){ new (eval as any)(s); return helper(); }", uci.TreeSitterLanguageTypeScript, false, false},
+		{"erased eval can mutate sibling callee", "export function helper(){}; export function caller(){ return helper(); } function dynamic(s: string){ (eval as any)(s); }", uci.TreeSitterLanguageTypeScript, true, true},
+		{"erased eval shadow cannot mutate module callee", "export function helper(){}; export function caller(){ return helper(); } function dynamic(s: string){ let helper; (eval as any)(s); }", uci.TreeSitterLanguageTypeScript, false, true},
+		{"known function erased eval shadow", "export function helper(){}; export function caller(s: string){ function eval(){}; (eval as any)(s); return helper(); }", uci.TreeSitterLanguageTypeScript, false, true},
+		{"erased eval shadow rebound to intrinsic", "export function helper(){}; export function caller(s: string){ let eval = () => {}; eval = globalThis.eval; eval!(s); return helper(); }", uci.TreeSitterLanguageTypeScript, true, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			body := []byte(test.source)
@@ -496,11 +523,25 @@ func TestUCIPreparedIndexBuiltParserDoesNotResolveDirectEvalCalls(t *testing.T) 
 					parsedEval = true
 				}
 			}
-			require.Equal(t, test.direct, parsedEval, "direct eval classification must follow the actual callee AST")
 			var resolvedHelperCalls int
 			for _, edge := range files[0].edges {
 				if edge.Relation == uci.IndexRelation("calls") && edge.ResolutionState == uci.IndexResolutionState("resolved") && edge.Target != nil && edge.Target.SymbolKey != nil && *edge.Target.SymbolKey == "function:helper" {
 					resolvedHelperCalls++
+				}
+			}
+			frames, _, err := uciPreparedPackFrames("44444444-4444-4444-8444-444444444444", files)
+			require.NoError(t, err)
+			require.NoError(t, uci.ValidateIndexAdmissionFrames(frames))
+			for _, frame := range frames {
+				part, err := frame.PublicationPart()
+				require.NoError(t, err)
+				for _, replacement := range part.EdgeReplacements {
+					for _, edge := range replacement.Edges {
+						if edge.Relation == uci.IndexRelation("calls") && edge.ResolutionState == uci.IndexResolutionState("resolved") && edge.Target != nil && edge.Target.SymbolKey != nil && *edge.Target.SymbolKey == "function:helper" {
+							require.False(t, test.unsafe, "publication must not revive an eval-affected resolved edge")
+							require.Equal(t, "function:caller", *edge.SourceSymbolKey)
+						}
+					}
 				}
 			}
 			if test.unsafe {
@@ -509,9 +550,7 @@ func TestUCIPreparedIndexBuiltParserDoesNotResolveDirectEvalCalls(t *testing.T) 
 			} else {
 				require.Equal(t, 1, resolvedHelperCalls)
 			}
-			frames, _, err := uciPreparedPackFrames("44444444-4444-4444-8444-444444444444", files)
-			require.NoError(t, err)
-			require.NoError(t, uci.ValidateIndexAdmissionFrames(frames))
+			require.Equal(t, test.direct, parsedEval, "direct eval classification must follow the actual callee AST")
 		})
 	}
 }
