@@ -440,7 +440,7 @@ func (adapter *OperatorCodeHTTPAdapter) replayNoViewIndexIntentSubmit(w http.Res
 		operatorCodeWriteBodyless(w, http.StatusConflict)
 		return
 	}
-	target, failure := adapter.authorizeNoViewIndexIntent(r.Context(), identity, request.Proof(), *request.Target, existing.ProfileID, false)
+	target, failure := adapter.authorizeNoViewIndexIntentMutation(r.Context(), identity, request.Proof(), *request.Target, existing.ProfileID, false)
 	if failure != uci.ReleaseFailureNone {
 		operatorCodeWriteFailure(w, failure)
 		return
@@ -458,7 +458,7 @@ func (adapter *OperatorCodeHTTPAdapter) replayNoViewIndexIntentSubmit(w http.Res
 }
 
 func (adapter *OperatorCodeHTTPAdapter) submitNoViewIndexIntent(w http.ResponseWriter, r *http.Request, identity operatorCodeRequestIdentity, request operatorCodeIndexIntentSubmitRequest, application operatorCodeNoViewIndexIntentApplication) {
-	target, failure := adapter.authorizeNoViewIndexIntent(r.Context(), identity, request.Proof(), *request.Target, "", true)
+	target, failure := adapter.authorizeNoViewIndexIntentMutation(r.Context(), identity, request.Proof(), *request.Target, "", true)
 	if failure != uci.ReleaseFailureNone {
 		operatorCodeWriteFailure(w, failure)
 		return
@@ -615,7 +615,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleIndexIntentRetry(w http.ResponseWr
 		scope, profileID, err := application.NoViewIndexIntentTarget(r.Context(), intentRef)
 		if err == nil {
 			ref := adapter.operatorCodeIndexSelectionRef(identity, scope.SourceID, scope.CheckoutID, profileID)
-			target, failure := adapter.authorizeNoViewIndexIntent(r.Context(), identity, request.Proof(), operatorCodeIndexIntentTargetRequest{SelectionRef: ref}, profileID, false)
+			target, failure := adapter.authorizeNoViewIndexIntentMutation(r.Context(), identity, request.Proof(), operatorCodeIndexIntentTargetRequest{SelectionRef: ref}, profileID, false)
 			if failure != uci.ReleaseFailureNone {
 				operatorCodeWriteFailure(w, failure)
 				return
@@ -2083,6 +2083,17 @@ type operatorCodeNoViewIndexIntentRequest struct {
 	authRealm string
 }
 
+func (adapter *OperatorCodeHTTPAdapter) authorizeNoViewIndexIntentMutation(ctx context.Context, identity operatorCodeRequestIdentity, proof BrowserBindingProof, requested operatorCodeIndexIntentTargetRequest, profileID string, initial bool) (operatorCodeNoViewIndexIntentRequest, uci.ReleaseFailureCode) {
+	target, failure := adapter.authorizeNoViewIndexIntent(ctx, identity, proof, requested, profileID, initial)
+	if failure != uci.ReleaseFailureNone {
+		return operatorCodeNoViewIndexIntentRequest{}, failure
+	}
+	if identity.identity.Source == auth.SourceAuthDisabled && !adapter.noAuthCodeOwnerLive(target.scope.SourceID, target.scope.CheckoutID) {
+		return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailurePermissionDenied
+	}
+	return target, uci.ReleaseFailureNone
+}
+
 func (adapter *OperatorCodeHTTPAdapter) authorizeNoViewIndexIntent(ctx context.Context, identity operatorCodeRequestIdentity, proof BrowserBindingProof, requested operatorCodeIndexIntentTargetRequest, profileID string, initial bool) (operatorCodeNoViewIndexIntentRequest, uci.ReleaseFailureCode) {
 	if adapter == nil || adapter.contexts == nil {
 		return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailureExposureUnavailable
@@ -2100,9 +2111,6 @@ func (adapter *OperatorCodeHTTPAdapter) authorizeNoViewIndexIntent(ctx context.C
 			return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailureExposureUnavailable
 		}
 		if _, err := adapter.noAuthBindings.Guard(ctx, identity.identity, identity.sessionID, proof); err != nil {
-			return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailurePermissionDenied
-		}
-		if !adapter.noAuthCodeOwnerLive(selection.SourceID, selection.CheckoutID) {
 			return operatorCodeNoViewIndexIntentRequest{}, uci.ReleaseFailurePermissionDenied
 		}
 		binding, err := adapter.contexts.AuthorizeNoAuthIndexIntent(ctx, selection.SourceID, selection.CheckoutID, profileID, initial)

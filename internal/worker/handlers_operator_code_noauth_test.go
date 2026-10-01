@@ -236,13 +236,124 @@ func TestNoAuthOfflineOwnerCannotReauthorizeBootstrapSelection(t *testing.T) {
 	caller := operatorCodeRequestIdentity{identity: identity}
 	fixture.contexts.noViewBinding = gormdb.BrowserCodeIndexIntentBinding{Scope: uci.IndexScope{SourceID: fixture.ref.SourceID, CheckoutID: fixture.ref.CheckoutID, IncarnationID: operatorCodeHTTPTestIncarnationID}, ProfileID: fixture.ref.AnalysisProfileID, AuthRealm: uci.NoAuthCodeRealm}
 	requested := operatorCodeIndexIntentTargetRequest{SelectionRef: adapter.operatorCodeIndexSelectionRef(caller, fixture.ref.SourceID, fixture.ref.CheckoutID, fixture.ref.AnalysisProfileID)}
-	_, failure := adapter.authorizeNoViewIndexIntent(context.Background(), caller, proof, requested, "", true)
+	_, failure := adapter.authorizeNoViewIndexIntentMutation(context.Background(), caller, proof, requested, "", true)
 	require.Equal(t, uci.ReleaseFailureNone, failure)
 	adapter.indexTargets = operatorCodeHTTPTestExpiredIndexTargets{}
-	_, failure = adapter.authorizeNoViewIndexIntent(context.Background(), caller, proof, requested, "", true)
+	_, failure = adapter.authorizeNoViewIndexIntentMutation(context.Background(), caller, proof, requested, "", true)
 	require.Equal(t, uci.ReleaseFailurePermissionDenied, failure, "expired owner cannot bootstrap")
-	_, failure = adapter.authorizeNoViewIndexIntent(context.Background(), caller, proof, requested, fixture.ref.AnalysisProfileID, false)
-	require.Equal(t, uci.ReleaseFailurePermissionDenied, failure, "status/retry/replay must not authorize a stale owner merely because the target remains registered")
+	_, failure = adapter.authorizeNoViewIndexIntentMutation(context.Background(), caller, proof, requested, fixture.ref.AnalysisProfileID, false)
+	require.Equal(t, uci.ReleaseFailurePermissionDenied, failure, "retry/replay must not authorize a stale owner merely because the target remains registered")
+}
+
+func TestNoAuthFirstIndexDurableStatusAfterOwnerDisconnect(t *testing.T) {
+	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+	identity := auth.AuthDisabled()
+	fixture.contexts.noViewBinding = gormdb.BrowserCodeIndexIntentBinding{Scope: uci.IndexScope{SourceID: fixture.ref.SourceID, CheckoutID: fixture.ref.CheckoutID, IncarnationID: operatorCodeHTTPTestIncarnationID}, ProfileID: fixture.ref.AnalysisProfileID, AuthRealm: uci.NoAuthCodeRealm}
+	call := func(request *http.Request, handler func(http.ResponseWriter, *http.Request)) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		handler(response, request)
+		return response
+	}
+	handshake := call(operatorCodeHTTPTestRequest(t, `{"document_nonce":"durable-first-index"}`, identity), adapter.HandleHandshake)
+	require.Equal(t, http.StatusOK, handshake.Code, handshake.Body.String())
+	var binding operatorCodeTransitionResponse
+	require.NoError(t, json.Unmarshal(handshake.Body.Bytes(), &binding))
+	proof := `"tab_binding_id":"` + binding.TabBindingID + `","document_proof":"` + binding.DocumentProof + `"`
+	selection := adapter.operatorCodeIndexSelectionRef(operatorCodeRequestIdentity{identity: identity, sessionID: "local-code-document"}, fixture.ref.SourceID, fixture.ref.CheckoutID, fixture.ref.AnalysisProfileID)
+	body := `{` + proof + `,"request_ref":"durable-first-index","kind":"reindex","target":{"selection_ref":"` + selection + `"}}`
+	submitted := call(operatorCodeHTTPTestRequest(t, body, identity), adapter.HandleIndexIntentSubmit)
+	require.Equal(t, http.StatusAccepted, submitted.Code, submitted.Body.String())
+	intent := fixture.app.indexIntents["durable-first-index"]
+	statusRequest := func() *http.Request {
+		request := operatorCodeHTTPTestIndexIntentStatusRequest(t, intent.ID, "", identity)
+		request.Header.Set("X-Engram-Tab-Binding-ID", binding.TabBindingID)
+		request.Header.Set("X-Engram-Document-Proof", binding.DocumentProof)
+		return request
+	}
+	adapter.indexTargets = operatorCodeHTTPTestExpiredIndexTargets{}
+	t.Run("pending durable read is not completion", func(t *testing.T) {
+		response := call(statusRequest(), adapter.HandleIndexIntentStatus)
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		require.Equal(t, string(uci.IndexIntentSubmitted), operatorCodeHTTPTestIndexIntentResponse(t, response.Body.String())["state"])
+		operatorCodeHTTPTestRequireSafeIndexIntentResponse(t, response.Body.String(), false, fixture)
+	})
+	completed := operatorCodeHTTPTestNoViewIndexIntent(intent.Scope, intent.ProfileID, intent.RequestRef, intent.Kind, uci.IndexIntentCompleted)
+	completed.ID = intent.ID
+	claim, err := uci.NewIndexIntentClaim(completed.ID, "private-index-owner", 1, completed.CreatedAt)
+	require.NoError(t, err)
+	completed.Acknowledgement = &claim
+	fixture.app.indexIntents[intent.RequestRef] = completed
+	adapter.authority = noAuthHTTPAuthority{*completed.ResultView}
+	t.Run("completed result survives owner disconnect", func(t *testing.T) {
+		response := call(statusRequest(), adapter.HandleIndexIntentStatus)
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		status := operatorCodeHTTPTestIndexIntentResponse(t, response.Body.String())
+		require.Equal(t, string(uci.IndexIntentCompleted), status["state"])
+		require.Equal(t, map[string]any{"view_ref": completed.ResultView.ViewID, "generation": float64(completed.ResultView.Generation)}, status["result"])
+		operatorCodeHTTPTestRequireSafeIndexIntentResponse(t, response.Body.String(), true, fixture)
+	})
+	t.Run("read failure stays unavailable", func(t *testing.T) {
+		fixture.app.indexGetErr = errors.New("durable index read unavailable")
+		defer func() { fixture.app.indexGetErr = nil }()
+		response := call(statusRequest(), adapter.HandleIndexIntentStatus)
+		require.Equal(t, http.StatusServiceUnavailable, response.Code)
+		require.Empty(t, response.Body.String())
+	})
+	t.Run("invalid document cannot read", func(t *testing.T) {
+		request := statusRequest()
+		request.Header.Set("X-Engram-Document-Proof", "wrong-proof")
+		response := call(request, adapter.HandleIndexIntentStatus)
+		require.Equal(t, http.StatusForbidden, response.Code)
+		require.Empty(t, response.Body.String())
+	})
+	t.Run("auth enabled caller cannot borrow noauth document", func(t *testing.T) {
+		request := statusRequest()
+		request = request.WithContext(auth.WithIdentity(request.Context(), auth.SessionForBrowserUser("viewer", 42)))
+		request.Header.Set("X-Engram-Auth-Disabled", "true")
+		response := call(request, adapter.HandleIndexIntentStatus)
+		require.Equal(t, http.StatusForbidden, response.Code)
+		require.Empty(t, response.Body.String())
+	})
+	t.Run("durable target revocation still denies", func(t *testing.T) {
+		fixture.contexts.initialTargetErr = gormdb.ErrBrowserCodeContextDenied
+		defer func() { fixture.contexts.initialTargetErr = nil }()
+		response := call(statusRequest(), adapter.HandleIndexIntentStatus)
+		require.Equal(t, http.StatusForbidden, response.Code)
+		require.Empty(t, response.Body.String())
+	})
+	t.Run("published result still needs View authorization", func(t *testing.T) {
+		adapter.authority = noAuthHTTPAuthority{}
+		defer func() { adapter.authority = noAuthHTTPAuthority{*completed.ResultView} }()
+		response := call(statusRequest(), adapter.HandleIndexIntentStatus)
+		require.Equal(t, http.StatusOK, response.Code)
+		require.Equal(t, string(uci.IndexIntentCompleted), operatorCodeHTTPTestIndexIntentResponse(t, response.Body.String())["state"])
+		require.NotContains(t, response.Body.String(), `"result"`)
+	})
+	unavailable := operatorCodeHTTPTestNoViewIndexIntent(intent.Scope, intent.ProfileID, intent.RequestRef, intent.Kind, uci.IndexIntentUnavailable)
+	unavailable.ID = intent.ID
+	fixture.app.indexIntents[intent.RequestRef] = unavailable
+	t.Run("retryable durable read is not a mutation grant", func(t *testing.T) {
+		response := call(statusRequest(), adapter.HandleIndexIntentStatus)
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		status := operatorCodeHTTPTestIndexIntentResponse(t, response.Body.String())
+		require.Equal(t, string(uci.IndexIntentUnavailable), status["state"])
+		require.Equal(t, true, status["retryable"])
+		require.NotContains(t, response.Body.String(), `"result"`)
+	})
+	t.Run("offline mutations remain denied", func(t *testing.T) {
+		replay := call(operatorCodeHTTPTestRequest(t, body, identity), adapter.HandleIndexIntentSubmit)
+		require.Equal(t, http.StatusForbidden, replay.Code)
+		require.Empty(t, replay.Body.String())
+		fresh := call(operatorCodeHTTPTestRequest(t, `{`+proof+`,"request_ref":"offline-new","kind":"reindex","target":{"selection_ref":"`+selection+`"}}`, identity), adapter.HandleIndexIntentSubmit)
+		require.Equal(t, http.StatusForbidden, fresh.Code)
+		require.Empty(t, fresh.Body.String())
+		retryRequest := operatorCodeHTTPTestIndexIntentRetryRequest(t, intent.ID, identity)
+		retryRequest.Body = operatorCodeHTTPTestRequest(t, `{`+proof+`}`, identity).Body
+		retry := call(retryRequest, adapter.HandleIndexIntentRetry)
+		require.Equal(t, http.StatusForbidden, retry.Code)
+		require.Empty(t, retry.Body.String())
+		require.Equal(t, uci.IndexIntentUnavailable, fixture.app.indexIntents[intent.RequestRef].State)
+	})
 }
 
 func TestNoAuthOperatorCodePagehideCloseReloadResumesPinnedTab(t *testing.T) {
