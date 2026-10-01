@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Let an auth-disabled Engram server choose the active code repository, checkout, and indexed UCI View without requiring browser grants, while retaining grant-bound access on auth-enabled servers.
-- Distinguish Workspace working-copy labels that share a basename using their parent path and device identity, in both no-auth and grant-bound catalogs.
+- Distinguish Workspace working-copy labels that share a basename using their parent path and device identity, in both no-auth and grant-bound catalogs; retain stored labels in the active no-auth catalog instead of substituting opaque checkout hashes.
 - Refuse a 129th active no-auth working copy during registration, including concurrent registrations under different repositories, so the shared Workspace catalog remains complete for all browsers; replaying registered checkouts and authenticated registrations remain available.
 - Bootstrap Code Explorer on a LAN browser origin without a login session, and keep search, graph traversal, and source reads bound to the same selected View; verified semantic and graph source in separate working copies.
 - Let the plugin connect without a keycard when the server disables authentication, leaving token decisions to the server and retaining keycards for auth-enabled servers.

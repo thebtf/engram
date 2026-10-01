@@ -236,6 +236,7 @@ func (s *BrowserCodeContextStore) ListNoAuthCatalog(ctx context.Context) ([]Brow
 	err := s.db.WithContext(ctx).Raw(`
 		SELECT source.source_id, source.display_name AS source_label,
 			checkout.checkout_id, checkout.kind AS checkout_kind, checkout.state AS checkout_state,
+			COALESCE(checkout.display_name, '') AS checkout_label,
 			view_row.view_id, view_row.profile_id, view_row.generation,
 			CASE WHEN view_row.view_id IS NULL THEN NULL
 				WHEN view_row.ref_label IS NOT NULL THEN view_row.ref_label
