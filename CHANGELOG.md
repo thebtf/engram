@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.50.2] - 2026-10-01
+
+### Fixed
+
+- Update the operator-console's locked devalue dependency to 5.9.3, fixing shared-buffer disclosure, repeated-string serialization amplification, and unhandled asynchronous serialization rejections (GHSA-j22f-vq7h-c4qm, GHSA-mcm9-63f2-9j32, GHSA-x5rw-q4pp-hg5g).
+
 ## [6.50.1] - 2026-09-27
 
 ### Fixed
@@ -2103,7 +2109,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.1...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.2...HEAD
+[6.50.2]: https://github.com/thebtf/engram/compare/v6.50.1...v6.50.2
 [6.50.1]: https://github.com/thebtf/engram/compare/v6.50.0...v6.50.1
 [6.50.0]: https://github.com/thebtf/engram/compare/v6.49.4...v6.50.0
 [6.49.3]: https://github.com/thebtf/engram/compare/v6.49.2...v6.49.3
