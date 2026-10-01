@@ -18,12 +18,12 @@
     "type": "User"
   },
   "transition": {
-    "consumed_epoch": "authority-0063",
-    "event_base_sha": "11028fb7bba97e2cc7805c7ca493d759ff69d19f"
+    "consumed_epoch": "authority-0064",
+    "event_base_sha": "0298287abf135c2d0aa062dce938aa9c641fd679"
   },
   "active_epoch": {
-    "id": "authority-0064",
-    "label": "authority-maintenance:authority-0064",
+    "id": "authority-0065",
+    "label": "authority-maintenance:authority-0065",
     "exact_changes": [
       {
         "status": "M",
@@ -37,7 +37,7 @@
     "expected_head_blobs": [
       {
         "path": "scripts/production-gates/build-and-scan-images.ps1",
-        "git_blob": "3395fb81b64698ded684f4fe80c380943e2907cb"
+        "git_blob": "858e9683e6b4fcd956970cc51e73a17052b5ece4"
       }
     ]
   }

@@ -1884,11 +1884,37 @@ function Remove-PrefixedResources {
     }
 }
 
+function Assert-FixtureNetworkAvailable {
+    $networkIds = Invoke-CapturedNative -File 'docker' -Arguments @('network', 'ls', '-q')
+    $fixtureStart = ([uint64]10 -shl 24) + ([uint64]240 -shl 16) + ([uint64]250 -shl 8)
+    foreach ($id in @($networkIds -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }))
+    {
+        $network = Invoke-CapturedNative -File 'docker' -Arguments @('network', 'inspect', $id, '--format', '{{json .}}') | ConvertFrom-Json
+        foreach ($config in @($network.IPAM.Config))
+        {
+            if ($null -eq $config) { continue }
+            $subnet = [string]$config.Subnet
+            if ($subnet -notmatch '^((?:\d{1,3}\.){3}\d{1,3})/(\d|[12]\d|3[0-2])$')
+            { continue
+            }
+            $octets = ([Net.IPAddress]::Parse($Matches[1])).GetAddressBytes()
+            $address = ([uint64]$octets[0] -shl 24) + ([uint64]$octets[1] -shl 16) + ([uint64]$octets[2] -shl 8) + $octets[3]
+            $blockSize = [uint64]1 -shl (32 - [int]$Matches[2])
+            $start = [uint64]([math]::Floor($address / $blockSize) * $blockSize)
+            if ($start -le ($fixtureStart + 255) -and ($start + $blockSize - 1) -ge $fixtureStart)
+            {
+                throw "Image gate fixture subnet 10.240.250.0/24 overlaps existing Docker network $($network.Name) ($id) subnet $subnet; no existing network was removed."
+            }
+        }
+    }
+}
+
 $environmentNames = @(
     'ENGRAM_SERVER_IMAGE', 'ENGRAM_OPERATOR_IMAGE', 'ENGRAM_POSTGRES_IMAGE', 'ENGRAM_BUILD_VERSION',
     'ENGRAM_TEST_RESOURCE_PREFIX', 'POSTGRES_PASSWORD', 'ENGRAM_AUTH_DISABLED',
     'WORKER_BIND', 'WORKER_PORT', 'OPERATOR_CONSOLE_BIND', 'OPERATOR_CONSOLE_PORT',
     'OPERATOR_CONSOLE_TRUSTED_PROXY_IP', 'OPERATOR_CONSOLE_PUBLIC_ORIGIN',
+    'OPERATOR_CONSOLE_NETWORK_SUBNET', 'OPERATOR_CONSOLE_NETWORK_IP_RANGE',
     'DATABASE_DSN', 'ENGRAM_AUTH_ADMIN_TOKEN', 'ENGRAM_VAULT_KEY',
     'ENGRAM_EMBEDDING_URL', 'ENGRAM_EMBEDDING_MODEL', 'ENGRAM_EMBEDDING_API_KEY',
     'ENGRAM_VNEXT_ENABLED', 'ENGRAM_LIFECYCLE_ENABLED', 'ENGRAM_VNEXT_F_ENABLED',
@@ -1906,12 +1932,15 @@ $env:WORKER_BIND = '127.0.0.1'
 $env:WORKER_PORT = '0'
 $env:OPERATOR_CONSOLE_BIND = '127.0.0.1'
 $env:OPERATOR_CONSOLE_PORT = '0'
-$env:OPERATOR_CONSOLE_TRUSTED_PROXY_IP = '127.0.0.1'
+$env:OPERATOR_CONSOLE_TRUSTED_PROXY_IP = '10.240.250.10'
+$env:OPERATOR_CONSOLE_NETWORK_SUBNET = '10.240.250.0/24'
+$env:OPERATOR_CONSOLE_NETWORK_IP_RANGE = '10.240.250.128/25'
 $env:OPERATOR_CONSOLE_PUBLIC_ORIGIN = 'http://127.0.0.1'
 
 Push-Location $repoRoot
 try {
     $toolVersions.docker = Invoke-CapturedNative -File 'docker' -Arguments @('version', '--format', '{{.Client.Version}} client / {{.Server.Version}} server')
+    Assert-FixtureNetworkAvailable
     $toolVersions.buildx = Invoke-CapturedNative -File 'docker' -Arguments @('buildx', 'version')
     $toolVersions.trivy = Invoke-CapturedNative -File 'trivy' -Arguments @('--version')
     $toolVersions.go = Invoke-CapturedNative -File 'go' -Arguments @('version')
