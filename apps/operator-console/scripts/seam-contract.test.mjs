@@ -1,8 +1,50 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { runInNewContext } from 'node:vm'
+import { parse, stringify, stringifyAsync, uneval } from 'devalue'
+
+test('devalue serialization exposes only the visible Buffer bytes', async () => {
+  const backing = Buffer.alloc(4096, 0x61)
+  const visible = backing.subarray(16, 18)
+  visible.set([0x42, 0x43])
+  for (const restore of [
+    () => parse(stringify({ visible })),
+    async () => parse(await stringifyAsync({ visible })),
+    () => runInNewContext(`(${uneval({ visible })})`),
+  ]) {
+    const restored = await restore()
+    assert.deepEqual(Array.from(restored.visible), [0x42, 0x43])
+    assert.equal(restored.visible.buffer.byteLength, 2, 'serialization must not expose the backing allocation')
+  }
+})
+
+test('devalue serialization bounds repeated-string expansion and preserves script escaping', () => {
+  const text = '</script>\n'.repeat(256)
+  const compact = JSON.stringify([Array(128).fill(1), text])
+  const value = parse(compact)
+  const encoded = uneval(value)
+  assert.ok(encoded.length < compact.length * 4, 'compact payload must not expand quadratically')
+  assert.ok(!encoded.includes('<'), 'serialized script payload must escape markup')
+  assert.deepEqual(Array.from(runInNewContext(encoded)), value)
+})
+
+test('devalue serialization propagates caught async failures without terminating the process', () => {
+  execFileSync(process.execPath, ['--unhandled-rejections=strict', '--input-type=module', '--eval', `
+    import assert from 'node:assert/strict'
+    import { setTimeout as delay } from 'node:timers/promises'
+    import { parse, stringifyAsync } from ${JSON.stringify(import.meta.resolve('devalue'))}
+    const error = new Error('serialization fixture failure')
+    await assert.rejects(
+      stringifyAsync({ slow: delay(50, 42), failing: Promise.reject(error) }),
+      caught => caught === error,
+    )
+    assert.deepEqual(parse(await stringifyAsync({ healthy: Promise.resolve(42) })), { healthy: 42 })
+  `], { timeout: 5000, stdio: 'pipe' })
+})
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const nuxtConfigPath = join(root, 'nuxt.config.ts')
