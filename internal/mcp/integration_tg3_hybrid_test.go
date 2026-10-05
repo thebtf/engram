@@ -78,55 +78,20 @@ func TestHybridTG3_ConfidenceMin_FloorEnforced_T022(t *testing.T) {
 	result, err := srv.handleRecallMemory(context.Background(), args)
 	require.NoError(t, err, "handleRecallMemory must not error with confidence_min>0 in hybrid mode")
 
-	// Parse the items-format JSON response.
-	var out map[string]any
-	require.NoError(t, json.Unmarshal([]byte(result), &out), "response must be valid JSON")
+	// Decode the items response and verify both sides of the confidence floor.
+	var memories []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(result), &memories), "response must be valid items JSON")
 
-	memoriesAny, ok := out["memories"]
-	require.True(t, ok, "response must have 'memories' key")
-	memories, ok := memoriesAny.([]any)
-	require.True(t, ok, "'memories' must be an array")
-
-	// Every returned memory must have score or content indicating it passes the floor.
-	// Since the items format uses a compact hybridResult struct (not full Memory),
-	// we verify the low-confidence content is absent.
-	for _, memAny := range memories {
-		memObj, ok := memAny.(map[string]any)
-		require.True(t, ok, "each memory must be a JSON object")
-
-		content, _ := memObj["content"].(string)
+	contents := make([]string, 0, len(memories))
+	for _, memory := range memories {
+		content, ok := memory["content"].(string)
+		require.True(t, ok, "returned memory must have string content")
 		assert.NotContains(t, content, "low beta",
 			"memory below confidence_min=0.7 must not appear in hybrid results")
+		contents = append(contents, content)
 	}
-
-	// At least the high-confidence row must appear.
-	found := false
-	for _, memAny := range memories {
-		memObj, _ := memAny.(map[string]any)
-		if content, _ := memObj["content"].(string); content != "" {
-			if contains(content, "high alpha") {
-				found = true
-				break
-			}
-		}
-	}
-	// Best-effort check (FTS-dependent): log if not found but don't fail.
-	if !found {
-		t.Logf("high-confidence content not found (FTS may not have matched)")
-	}
-}
-
-// contains is a simple substring check helper for test assertions.
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
-		func() bool {
-			for i := 0; i <= len(s)-len(sub); i++ {
-				if s[i:i+len(sub)] == sub {
-					return true
-				}
-			}
-			return false
-		}())
+	assert.Contains(t, contents, "hybrid tg3 confidence high alpha",
+		"matching high-confidence fixture must appear in hybrid results")
 }
 
 // TestHybridTG3_IncludeSuperseded_StructuredError_T022b verifies that when
