@@ -18,6 +18,7 @@ This release candidate prepares the P0 installed-memory repair; source and gener
 - Bind cached legacy identity to the root Git locator, every intervening directory, and stable effective configuration dependencies captured before and after derivation. Included or conditional configuration remains cache-ineligible and is resolved afresh; unknown or changing dependencies refuse scoped requests instead of retaining an old selector.
 - Advance the OpenTelemetry SDK to the minimum fixed 1.45.0 version for GO-2026-6505 (CVE-2026-81870), with only its required minimum-version module closure. Keep the metric gRPC exporter at 1.43.0; the affected client and observability reachability scan reports no reachable vulnerabilities. Publication still requires the final candidate's applicable security gates.
 - Bound shared OMP session-start rendering by the final UTF-8 byte size, including escaped text, complete quoted records, enclosing markup and separators, so Cyrillic and emoji memory can reach the unchanged 12,000-byte hidden-context boundary without being discarded.
+- Run the environment-mutating project-retention test sequentially so Go permits its scoped retention override; keep the other reaper tests parallel and leave runtime retention behavior unchanged.
 
 ## [6.50.2] - 2026-10-01
 
