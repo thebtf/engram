@@ -8,13 +8,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/projectidentity"
-    "github.com/thebtf/engram/internal/proxy"
+	"github.com/thebtf/engram/internal/proxy"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
@@ -24,29 +25,89 @@ import (
 
 const daemonV3CanonicalProject = "11111111-1111-4111-8111-111111111111"
 
+func TestProxyLegacyColdScopeRefusesUntrackingDuringAdmission(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("real Git interposition requires a POSIX executable script")
+	}
+	srv := &mockEngramServer{initResp: &pb.InitializeResponse{}, callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
+	_, mod, project := buildContractDispatcher(t, startMockGRPC(t, srv))
+	project.Cwd = daemonV3Repository(t)
+	mod.v3ClientInstanceID = "fixture-daemon-install"
+	if err := os.WriteFile(filepath.Join(project.Cwd, ".engram-project"), []byte(`{"name":"engram"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	script := "#!/bin/sh\n\"$ENGRAM_TEST_REAL_GIT\" \"$@\"\nstatus=$?\nif [ \"$3\" = ls-files ] && [ \"$status\" -eq 0 ]; then\n  \"$ENGRAM_TEST_REAL_GIT\" -C \"$2\" update-index --force-remove -- .engram-project || exit $?\nfi\nexit \"$status\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ENGRAM_TEST_REAL_GIT", realGit)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if _, err := mod.ProxyTools(context.Background(), project); err == nil {
+		t.Fatal("marker untracked after admission reached legacy identity")
+	}
+	if output, err := exec.Command(realGit, "-C", project.Cwd, "ls-files", "--", ".engram-project").Output(); err != nil || len(output) != 0 {
+		t.Fatalf("real Git untracking did not occur: %v: %s", err, output)
+	}
+	if srv.initReq != nil {
+		t.Fatal("untracked marker reached Initialize")
+	}
+	key := cacheKey(project)
+	if _, ok := mod.cache.legacy[key]; ok {
+		t.Fatal("unstable admission retained legacy cache")
+	}
+	if _, ok := mod.cache.identities.Load(key); ok {
+		t.Fatal("unstable admission retained V2 identity")
+	}
+	for range 2 {
+		if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err == nil {
+			t.Fatal("untracked marker reused legacy authority")
+		}
+		if srv.callReq != nil {
+			t.Fatal("untracked marker reached memory scope")
+		}
+	}
+}
+
 func TestProxyLegacyColdScopeRefusesConfigTransition(t *testing.T) {
-    srv := &mockEngramServer{initResp: &pb.InitializeResponse{}, callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
-    _, mod, project := buildContractDispatcher(t, startMockGRPC(t, srv))
-    project.Cwd = daemonV3Repository(t)
-    mod.v3ClientInstanceID = "fixture-daemon-install"
-    if err := os.WriteFile(filepath.Join(project.Cwd, ".engram-project"), []byte(`{"name":"engram"}`), 0o600); err != nil { t.Fatal(err) }
-    original := resolveLegacyGitIdentity
-    t.Cleanup(func() { resolveLegacyGitIdentity = original })
-    changed := false
-    resolveLegacyGitIdentity = func(ctx context.Context, cwd, name string) (string, proxy.ProjectIdentityV2, error) {
-        slug, identity, err := original(ctx, cwd, name)
-        if err == nil && !changed {
-            changed = true
-            if output, err := exec.Command("git", "-C", cwd, "remote", "set-url", "origin", "https://git.example.test/new/repo.git").CombinedOutput(); err != nil { t.Fatalf("transition config: %v: %s", err, output) }
-        }
-        return slug, identity, err
-    }
-    if _, err := mod.ProxyTools(context.Background(), project); err == nil { t.Fatal("old cold identity accepted under new config fingerprints") }
-    if srv.initReq != nil { t.Fatal("unstable cold identity reached Initialize") }
-    for range 2 {
-        if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err != nil { t.Fatal(err) }
-        if srv.callReq.GetProjectIdentity().GetGitRemote() != "https://git.example.test/new/repo.git" { t.Fatal("subsequent request reused stale origin") }
-    }
+	srv := &mockEngramServer{initResp: &pb.InitializeResponse{}, callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
+	_, mod, project := buildContractDispatcher(t, startMockGRPC(t, srv))
+	project.Cwd = daemonV3Repository(t)
+	mod.v3ClientInstanceID = "fixture-daemon-install"
+	if err := os.WriteFile(filepath.Join(project.Cwd, ".engram-project"), []byte(`{"name":"engram"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	original := resolveLegacyGitIdentity
+	t.Cleanup(func() { resolveLegacyGitIdentity = original })
+	changed := false
+	resolveLegacyGitIdentity = func(ctx context.Context, cwd, name string) (string, proxy.ProjectIdentityV2, error) {
+		slug, identity, err := original(ctx, cwd, name)
+		if err == nil && !changed {
+			changed = true
+			if output, err := exec.Command("git", "-C", cwd, "remote", "set-url", "origin", "https://git.example.test/new/repo.git").CombinedOutput(); err != nil {
+				t.Fatalf("transition config: %v: %s", err, output)
+			}
+		}
+		return slug, identity, err
+	}
+	if _, err := mod.ProxyTools(context.Background(), project); err == nil {
+		t.Fatal("old cold identity accepted under new config fingerprints")
+	}
+	if srv.initReq != nil {
+		t.Fatal("unstable cold identity reached Initialize")
+	}
+	for range 2 {
+		if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+		if srv.callReq.GetProjectIdentity().GetGitRemote() != "https://git.example.test/new/repo.git" {
+			t.Fatal("subsequent request reused stale origin")
+		}
+	}
 }
 
 func TestProxyLegacyWarmScopeRejectsNearerRepository(t *testing.T) {

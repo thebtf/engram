@@ -246,9 +246,6 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return false, nil
 	}
-	if err := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "--error-unmatch", "--", ".engram-project").Run(); err != nil {
-		return false, ctx.Err()
-	}
 	paths, err := exec.CommandContext(ctx, "git", "-C", root, gitRevParse, "--path-format=absolute", "--git-path", "config", "--git-path", "index", "--git-path", "HEAD", "--git-path", "config.worktree").Output()
 	if err != nil {
 		return false, ctx.Err()
@@ -272,6 +269,9 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 	initial, err := legacyFileFingerprints(gitPaths)
 	if err != nil {
 		return false, nil
+	}
+	if err := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "--error-unmatch", "--", ".engram-project").Run(); err != nil {
+		return false, ctx.Err()
 	}
 	environment := legacyGitEnvironment()
 	dependencies, eligible, err := legacyConfigDependencies(ctx, root)

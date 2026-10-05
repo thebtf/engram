@@ -62,6 +62,38 @@ test('legacy cold derivation refuses a config change before capturing authority'
  }
 });
 
+test('legacy cold admission refuses a marker untracked after the tracked check', async (t) => {
+ const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-index-race-'));
+ t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+ execFileSync('git', ['init', '--quiet', repo]);
+ execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/thebtf/engram.git']);
+ const marker = path.join(repo, '.engram-project');
+ const raw = '{"name":"engram"}';
+ fs.writeFileSync(marker, raw);
+ execFileSync('git', ['-C', repo, 'add', '.engram-project']);
+ const childProcess = require('node:child_process');
+ const original = childProcess.execFile;
+ let changed = false;
+ childProcess.execFile = function(binary, args, options, callback) {
+  return original.call(this, binary, args, options, (error, stdout, stderr) => {
+   if (!error && args.join(' ') === 'ls-files --error-unmatch -- .engram-project' && !changed) {
+    changed = true;
+    execFileSync('git', ['-C', repo, 'update-index', '--force-remove', '--', '.engram-project']);
+   }
+   callback(error, stdout, stderr);
+  });
+ };
+ t.after(() => { childProcess.execFile = original; });
+ await assert.rejects(() => lib.resolveHookProjectContext(repo, 'hook-install-alpha'), /PROJECT_ANCHOR_INVALID|PROJECT_IDENTITY_UNAVAILABLE/);
+ assert.equal(changed, true);
+ assert.equal(execFileSync('git', ['-C', repo, 'ls-files', '--', '.engram-project'], { encoding: 'utf8' }), '');
+ assert.equal(fs.readFileSync(marker, 'utf8'), raw);
+ for (let request = 0; request < 2; request += 1) {
+  await assert.rejects(() => lib.resolveHookProjectContext(repo, 'hook-install-alpha'), /PROJECT_ANCHOR_INVALID/);
+ }
+});
+
+
 test('legacy name-only dispatch preserves the existing Git scope without marker writes', async (t) => {
  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-name-only-'));
  t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
@@ -125,6 +157,42 @@ test('legacy cold discovery is cancellable without synchronous Git', async (t) =
  assert.equal(calls, 1);
  assert.ok(performance.now() - started < 500);
 });
+
+test('V3 refuses original URL credentials while V2 sends redacted metadata', async (t) => {
+ const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-v3-remote-refusal-'));
+ t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+ execFileSync('git', ['init', '--quiet', repo]);
+ execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://git.example.test/Team/Repo.git']);
+ const marker = path.join(repo, '.engram-project');
+ const anchor = { version: 3, project_id: '11111111-1111-4111-8111-111111111111', name: 'hook-v3', scope: 'repository' };
+ for (const [source, safe] of [
+  ['https://fixture-user:fixture-password@Git.Example.test:443/Team/Repo.git', 'https://Git.Example.test:443/Team/Repo.git'],
+  ['ssh://fixture-user:fixture-password@Git.Example.test:2222/Team/Repo.git', 'ssh://Git.Example.test:2222/Team/Repo.git'],
+ ]) {
+  execFileSync('git', ['-C', repo, 'remote', 'set-url', 'origin', source]);
+  fs.writeFileSync(marker, '{"name":"engram"}');
+  execFileSync('git', ['-C', repo, 'add', '.engram-project']);
+  const context = await lib.resolveHookProjectContext(repo, 'hook-install-alpha');
+  assert.equal(context.Project, crypto.createHash('sha256').update(`${safe}/`).digest('hex').slice(0, 8));
+  let calls = 0;
+  await lib.registerProjectIdentity(context, async (method, endpoint, body) => {
+   calls += 1;
+   assert.equal(method, 'POST');
+   assert.equal(endpoint, '/api/context/inject');
+   assert.ok(body.git_remote === safe && body.project_identity.git_remote === safe, 'V2 outgoing remote must be redacted');
+   const wire = JSON.stringify(body);
+   assert.ok(!wire.includes('fixture-user') && !wire.includes('fixture-password'), 'V2 wire must not retain URL userinfo');
+   return { canonical_project: 'canonical-v2' };
+  });
+  assert.equal(calls, 1);
+  fs.writeFileSync(marker, JSON.stringify(anchor));
+  assert.throws(() => lib.resolveHookProjectDescriptorV3(repo, 'hook-install-alpha'), /PROJECT_DESCRIPTOR_INVALID: git remote is refused/);
+  await assert.rejects(() => lib.resolveHookProjectContext(repo, 'hook-install-alpha'), /PROJECT_DESCRIPTOR_INVALID: git remote is refused/);
+ }
+ execFileSync('git', ['-C', repo, 'remote', 'set-url', 'origin', 'https://Git.Example.test/Team/Repo.git']);
+ assert.deepEqual(lib.resolveHookProjectDescriptorV3(repo, 'hook-install-alpha').normalized_git_remotes, ['git.example.test/Team/Repo']);
+});
+
 
 test('V2 URL stripping preserves host case, explicit port and SCP Git spelling', async (t) => {
  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-remote-bytes-'));

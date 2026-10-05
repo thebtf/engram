@@ -887,10 +887,6 @@ async function resolveLegacyHookProjectContext(cwd, options = {}) {
   typeof anchor.name !== 'string' || anchor.name === '' || Array.from(anchor.name).length > 256 ||
   anchor.name.trim() !== anchor.name || PROJECT_IDENTITY_CONTROL.test(anchor.name) ||
   Buffer.from(anchor.name, 'utf8').toString('utf8') !== anchor.name) return null;
- try { await execGitFile(['ls-files', '--error-unmatch', '--', '.engram-project'], root, options); } catch (error) {
-  if (options.signal?.aborted) throw abortError();
-  throw new Error('PROJECT_ANCHOR_INVALID: legacy repository anchor must be tracked');
- }
  const gitPaths = (await execGitFile(['rev-parse', '--path-format=absolute', '--git-path', 'config', '--git-path', 'index', '--git-path', 'HEAD', '--git-path', 'config.worktree'], root, options)).split(/\r?\n/);
  if (gitPaths.length !== 4) throw new Error('PROJECT_IDENTITY_UNAVAILABLE: Git scope paths unavailable');
  gitPaths.push(path.join(root, '.git'));
@@ -899,6 +895,10 @@ async function resolveLegacyHookProjectContext(cwd, options = {}) {
   gitPaths.push(...files.split(/\r?\n/).filter(Boolean));
  }
  const initial = legacyFileFingerprints(gitPaths);
+ try { await execGitFile(['ls-files', '--error-unmatch', '--', '.engram-project'], root, options); } catch (error) {
+  if (options.signal?.aborted) throw abortError();
+  throw new Error('PROJECT_ANCHOR_INVALID: legacy repository anchor must be tracked');
+ }
  const environment = legacyGitEnvironment();
  const dependencies = await legacyConfigDependencies(root, options);
  const before = legacyFileFingerprints([...gitPaths, ...dependencies.paths]);
@@ -1016,8 +1016,18 @@ function resolveHookProjectDescriptorV3(cwd, clientInstanceID) {
  if (!anchor) {
   throw new Error('PROJECT_ONBOARDING_REQUIRED: no V3 project anchor exists at the selected scope');
  }
- const git = getGitRemoteID(repositoryRoot);
- const normalized = git ? projectIdentityV3.normalizeGitRemoteV3(git.gitRemote) : null;
+ let remoteURL;
+ try {
+  remoteURL = require('node:child_process').execFileSync('git', ['remote', 'get-url', 'origin'], {
+   cwd: repositoryRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 3000, windowsHide: true,
+   env: { ...process.env, LC_ALL: 'C', LANG: 'C' },
+  }).trim();
+ } catch (error) {
+  if (!isMissingGitIdentityError(error)) {
+   throw new Error('PROJECT_IDENTITY_UNAVAILABLE: git identity resolution failed', { cause: error });
+  }
+ }
+ const normalized = remoteURL ? projectIdentityV3.normalizeGitRemoteV3(remoteURL) : null;
  if (normalized?.disposition === 'refused') {
   throw new Error('PROJECT_DESCRIPTOR_INVALID: git remote is refused');
  }
