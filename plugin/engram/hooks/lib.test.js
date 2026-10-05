@@ -9,6 +9,141 @@ const { execFileSync, spawnSync } = require('node:child_process');
 const lib = require('./lib');
 const NODE_CHILD_TIMEOUT_MS = process.platform === 'win32' ? 10000 : 2000;
 
+test('legacy cache refuses nearer repositories and refreshes included origins', async (t) => {
+ const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-topology-'));
+ t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+ execFileSync('git', ['init', '--quiet', repo]);
+ execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/thebtf/engram.git']);
+ fs.writeFileSync(path.join(repo, '.engram-project'), '{"name":"engram"}');
+ execFileSync('git', ['-C', repo, 'add', '.engram-project']);
+ const nearer = path.join(repo, 'packages');
+ const selected = path.join(nearer, 'app');
+ fs.mkdirSync(selected, { recursive: true });
+ assert.ok((await lib.resolveHookProjectContext(selected, 'hook-install-alpha')).ProjectIdentityV2);
+ execFileSync('git', ['-C', nearer, 'init', '--quiet']);
+ for (let request = 0; request < 2; request += 1) {
+  await assert.rejects(() => lib.resolveHookProjectContext(selected, 'hook-install-alpha'), /PROJECT_ONBOARDING_REQUIRED/);
+ }
+ const included = path.join(repo, 'origin.gitconfig');
+ execFileSync('git', ['-C', repo, 'config', '--unset', 'remote.origin.url']);
+ execFileSync('git', ['-C', repo, 'config', 'include.path', included]);
+ fs.writeFileSync(included, '[remote "origin"]\nurl = https://github.com/thebtf/engram.git\n');
+ assert.equal((await lib.resolveHookProjectContext(repo, 'hook-install-alpha')).Project, '67e398f8');
+ fs.writeFileSync(included, '[remote "origin"]\nurl = https://git.example.test/new/repo.git\n');
+ for (let request = 0; request < 2; request += 1) {
+  assert.equal((await lib.resolveHookProjectContext(repo, 'hook-install-alpha')).GitRemote, 'https://git.example.test/new/repo.git');
+ }
+});
+
+test('legacy cold derivation refuses a config change before capturing authority', async (t) => {
+ const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-config-race-'));
+ t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+ execFileSync('git', ['init', '--quiet', repo]);
+ execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/thebtf/engram.git']);
+ fs.writeFileSync(path.join(repo, '.engram-project'), '{"name":"engram"}');
+ execFileSync('git', ['-C', repo, 'add', '.engram-project']);
+ const childProcess = require('node:child_process');
+ const original = childProcess.execFile;
+ let changed = false;
+ childProcess.execFile = function(binary, args, options, callback) {
+  return original.call(this, binary, args, options, (error, stdout, stderr) => {
+   if (!error && args.join(' ') === 'remote get-url origin' && !changed) {
+    changed = true;
+    execFileSync('git', ['-C', repo, 'remote', 'set-url', 'origin', 'https://git.example.test/new/repo.git']);
+   }
+   callback(error, stdout, stderr);
+  });
+ };
+ t.after(() => { childProcess.execFile = original; });
+ await assert.rejects(() => lib.resolveHookProjectContext(repo, 'hook-install-alpha'), /PROJECT_ANCHOR_INVALID|PROJECT_IDENTITY_UNAVAILABLE/);
+ assert.equal(changed, true);
+ for (let request = 0; request < 2; request += 1) {
+  assert.equal((await lib.resolveHookProjectContext(repo, 'hook-install-alpha')).GitRemote, 'https://git.example.test/new/repo.git');
+ }
+});
+
+test('legacy name-only dispatch preserves the existing Git scope without marker writes', async (t) => {
+ const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-name-only-'));
+ t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+ execFileSync('git', ['init', '--quiet', repo]);
+ execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/thebtf/engram.git']);
+ const marker = path.join(repo, '.engram-project');
+ const original = '{"name":"engram"}\n';
+ fs.writeFileSync(marker, original);
+ execFileSync('git', ['-C', repo, 'add', '.engram-project']);
+ const context = await lib.resolveHookProjectContext(repo, 'hook-install-alpha');
+ assert.equal(context.Project, '67e398f8');
+ assert.equal(context.ProjectDescriptorV3, undefined);
+ assert.equal(context.ProjectIdentityV2.version, 2);
+ assert.equal(context.ProjectIdentityV2.git_remote, 'https://github.com/thebtf/engram.git');
+ assert.equal(context.ProjectIdentityV2.relative_path, '');
+ assert.equal(fs.readFileSync(marker, 'utf8'), original);
+ assert.equal(fs.existsSync(path.join(repo, '.engram-project-v2.json')), false);
+ for (const raw of ['{}', 'null', '{', '{"name":""}', '{"name":42}', '{"name":" padded "}',
+  '{"name":"line\\nfeed"}', '{"name":"engram","extra":true}', '{"name":"engram","version":2}',
+  '{"name":"engram","version":3}', '{"name":"engram","project_id":"bad","scope":"repository","version":3}',
+  '{"name":"engram","name":"other"}', '{"name":"engram"} {}']) {
+  fs.writeFileSync(marker, raw);
+  await assert.rejects(() => lib.resolveHookProjectContext(repo, 'hook-install-alpha'), /PROJECT_ANCHOR_INVALID/, raw);
+ }
+ fs.writeFileSync(marker, JSON.stringify({ version: 3, project_id: '11111111-1111-4111-8111-111111111111', name: 'valid', scope: 'repository' }));
+ assert.equal((await lib.resolveHookProjectContext(repo, 'hook-install-alpha')).ProjectDescriptorV3.version, 3);
+ fs.writeFileSync(marker, original);
+ const nested = path.join(repo, 'nested');
+ fs.mkdirSync(nested);
+ fs.writeFileSync(path.join(nested, '.engram-project'), '{"version":3,"name":"partial"}');
+ await assert.rejects(() => lib.resolveHookProjectContext(nested, 'hook-install-alpha'), /PROJECT_ANCHOR_INVALID/);
+ execFileSync('git', ['-C', repo, 'remote', 'remove', 'origin']);
+ await assert.rejects(() => lib.resolveHookProjectContext(repo, 'hook-install-alpha'), /PROJECT_IDENTITY_UNAVAILABLE/);
+ assert.equal(fs.existsSync(path.join(repo, '.engram-project-v2.json')), false);
+});
+
+test('legacy name-only dispatch refuses an untracked repository marker', async (t) => {
+ const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-untracked-name-'));
+ t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+ execFileSync('git', ['init', '--quiet', repo]);
+ execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/thebtf/engram.git']);
+ fs.writeFileSync(path.join(repo, '.engram-project'), '{"name":"engram"}');
+ await assert.rejects(() => lib.resolveHookProjectContext(repo, 'hook-install-alpha'), /PROJECT_ANCHOR_INVALID/);
+});
+
+test('legacy cold discovery is cancellable without synchronous Git', async (t) => {
+ const childProcess = require('node:child_process');
+ const original = childProcess.execFile;
+ const controller = new AbortController();
+ let calls = 0;
+ childProcess.execFile = (_binary, _args, options, callback) => {
+  calls += 1;
+  assert.equal(options.signal, controller.signal);
+  options.signal.addEventListener('abort', () => callback(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
+ };
+ t.after(() => { childProcess.execFile = original; });
+ const started = performance.now();
+ const pending = lib.resolveLegacyHookProjectContext(path.join(os.tmpdir(), 'engram-cancelled-cold'), { signal: controller.signal, timeoutMs: 50 });
+ setTimeout(() => controller.abort(), 20);
+ await assert.rejects(() => pending, { name: 'AbortError' });
+ assert.equal(calls, 1);
+ assert.ok(performance.now() - started < 500);
+});
+
+test('V2 URL stripping preserves host case, explicit port and SCP Git spelling', async (t) => {
+ const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-remote-bytes-'));
+ t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+ execFileSync('git', ['init', '--quiet', repo]);
+ execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://fixture-user:fixture-password@Git.Example.test:443/Team/Repo.git']);
+ for (const [source, safe] of [
+  ['https://fixture-user:fixture-password@Git.Example.test:443/Team/Repo.git', 'https://Git.Example.test:443/Team/Repo.git'],
+  ['git@Git.Example.test:Team/Repo.git', 'git@Git.Example.test:Team/Repo.git'],
+ ]) {
+  execFileSync('git', ['-C', repo, 'remote', 'set-url', 'origin', source]);
+  const identity = await lib.getGitRemoteIDAsync(repo);
+  assert.equal(identity.gitRemote, safe);
+  assert.equal(identity.projectID, crypto.createHash('sha256').update(`${safe}/`).digest('hex').slice(0, 8));
+ }
+});
+
+
+
 test('assertSupportedNodeVersion requires a canonical Node 18+ version', () => {
  for (const version of ['16.20.2', '17.9.1', '018.0.0', '18.00.00', '18', '18.0', 'node-18.0.0', '18.0.0-beta']) {
   assert.throws(() => lib.assertSupportedNodeVersion(version), /Engram requires Node 18\+/);

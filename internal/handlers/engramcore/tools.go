@@ -64,7 +64,7 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 		return nil, err
 	}
 	token := m.envFor(p, config.EnvWorkstationToken)
-	v3Identity, v3Enabled, err := m.v3Identity(p)
+	v3Identity, v3Enabled, err := m.v3Identity(ctx, p)
 	if err != nil {
 		return nil, &module.RequiredProxyToolsError{Cause: err}
 	}
@@ -83,8 +83,7 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 		request.ProjectIdentityV3 = v3Identity
 		discoveryCtx = daemonComparisonContextV3(discoveryCtx)
 	} else if !v3Enabled {
-		project := m.cache.Resolve(ctx, p)
-		projectIdentity, identityErr := m.cache.ResolveIdentity(ctx, p)
+		project, projectIdentity, identityErr := m.proxyV2Identity(ctx, p)
 		if identityErr != nil {
 			return nil, &module.RequiredProxyToolsError{Cause: fmt.Errorf("project identity v2: %w", identityErr)}
 		}
@@ -156,7 +155,7 @@ func (m *Module) HandleTool(ctx context.Context, p muxcore.ProjectContext, name 
 		return nil, &module.ModuleError{Code: "tool_input_invalid", Message: "project_identity.register_v3 accepts no arguments"}
 	}
 
-	identity, v3Enabled, err := m.v3Identity(p)
+	identity, v3Enabled, err := m.v3Identity(ctx, p)
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +283,7 @@ func (m *Module) proxyToolCallContext(ctx context.Context, project muxcore.Proje
 		callCtx, err := uciClientOutgoingContext(ctx, m.v3ClientInstanceID)
 		return callCtx, nil, false, err
 	}
-	v3Identity, v3Enabled, err := m.v3Identity(project)
+	v3Identity, v3Enabled, err := m.v3Identity(ctx, project)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -295,8 +294,7 @@ func (m *Module) proxyToolCallContext(ctx context.Context, project muxcore.Proje
 		request.ProjectIdentityV3 = v3Identity
 		return daemonComparisonContextV3(ctx), v3Identity, true, nil
 	}
-	projectSlug := m.cache.Resolve(ctx, project)
-	projectIdentity, err := m.cache.ResolveIdentity(ctx, project)
+	projectSlug, projectIdentity, err := m.proxyV2Identity(ctx, project)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("project identity v2: %w", err)
 	}
@@ -314,10 +312,37 @@ func isUCIProxyTool(name string) bool {
 	}
 }
 
-// v3Identity selects V3 only when wiring supplied an explicit client instance
-// reference. Once selected, it never falls through to a local V2 selector.
-func (m *Module) v3Identity(p muxcore.ProjectContext) (*pb.ProjectIdentityV3, bool, error) {
+func (m *Module) proxyV2Identity(ctx context.Context, p muxcore.ProjectContext) (string, *pb.ProjectIdentityV2, error) {
 	if m.v3ClientInstanceID == "" {
+		slug := m.cache.Resolve(ctx, p)
+		identity, err := m.cache.ResolveIdentity(ctx, p)
+		return slug, identity, err
+	}
+	m.cache.mu.RLock()
+	defer m.cache.mu.RUnlock()
+	key := cacheKey(p)
+	if _, ok := m.cache.legacy[key]; !ok {
+		return "", nil, errors.New("legacy workspace identity invalidated")
+	}
+	slug, slugOK := m.cache.entries.Load(key)
+	identity, identityOK := m.cache.identities.Load(key)
+	if !slugOK || !identityOK {
+		return "", nil, errors.New("legacy workspace identity unavailable")
+	}
+	return slug.(resolvedSlug).id, identity.(*pb.ProjectIdentityV2), ctx.Err()
+}
+
+// v3Identity selects the existing V2 producer only for a tracked name-only
+// workspace. Every other configured scope remains exclusively V3.
+func (m *Module) v3Identity(ctx context.Context, p muxcore.ProjectContext) (*pb.ProjectIdentityV3, bool, error) {
+	if m.v3ClientInstanceID == "" {
+		return nil, false, nil
+	}
+	legacy, legacyErr := m.cache.resolveLegacyWorkspace(ctx, p)
+	if legacyErr != nil {
+		return nil, true, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: projectIdentityResolutionUnavailableMessage}
+	}
+	if legacy {
 		return nil, false, nil
 	}
 	identity, err := m.cache.ResolveIdentityV3(p, m.v3ClientInstanceID)

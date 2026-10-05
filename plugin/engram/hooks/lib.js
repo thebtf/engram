@@ -392,7 +392,7 @@ function getGitRemoteID(cwd) {
    timeout: 3000,
    env: { ...process.env, LC_ALL: 'C', LANG: 'C' },
   };
-  const remoteURL = execSync('git remote get-url origin', opts).toString().trim();
+  const remoteURL = normalizeLegacyGitRemote(execSync('git remote get-url origin', opts).toString().trim());
   if (!remoteURL) return null;
   const relativePath = execSync('git rev-parse --show-prefix', opts).toString().trim();
   const key = remoteURL + '/' + relativePath;
@@ -461,7 +461,7 @@ function execGitFile(args, cwd, options = {}) {
 
 async function getGitRemoteIDAsync(cwd, options = {}) {
  try {
-  const remoteURL = await execGitFile(['remote', 'get-url', 'origin'], cwd, options);
+  const remoteURL = normalizeLegacyGitRemote(await execGitFile(['remote', 'get-url', 'origin'], cwd, options));
   throwIfAborted(options.signal);
   if (!remoteURL) return null;
   const relativePath = await execGitFile(['rev-parse', '--show-prefix'], cwd, options);
@@ -772,6 +772,212 @@ function projectAnchorPublicationError(...errors) {
  const present = errors.filter(Boolean);
  if (present.length === 1) return present[0];
  return new Error(present.map((error) => error.message || String(error)).join('; '));
+}
+
+const legacyHookWorkspaces = new Map();
+
+function normalizeLegacyGitRemote(value) {
+ if (!/^(?:[a-z][a-z0-9+.-]*:)?\/\/[^/?#]*@/i.test(value)) return value;
+ try {
+  new URL(value.startsWith('//') ? `https:${value}` : value);
+  // Unlike URL.href, removing only authority userinfo preserves V2 host case,
+  // explicit ports and remote spelling instead of applying V3 normalization.
+  return value.replace(/^((?:[a-z][a-z0-9+.-]*:)?\/\/)[^/?#]*@/i, '$1');
+ } catch { throw new Error('PROJECT_IDENTITY_INVALID: Git remote URL is malformed'); }
+}
+
+function legacyFileFingerprint(filename) {
+ try {
+  const stat = fs.lstatSync(filename, { bigint: true });
+  if (stat.isDirectory()) return `directory:${stat.dev}:${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  if (!stat.isFile() || stat.size > 1024n * 1024n) throw new Error('PROJECT_IDENTITY_UNAVAILABLE: unsupported Git dependency');
+  return crypto.createHash('sha256').update(fs.readFileSync(filename)).digest('hex');
+ } catch (error) {
+  if (error?.code === 'ENOENT') return 'absent';
+  throw error;
+ }
+}
+
+function legacyFileFingerprints(paths) {
+ if (paths.length > 128) throw new Error('PROJECT_IDENTITY_UNAVAILABLE: Git dependency limit');
+ return new Map(paths.map((filename) => [filename, legacyFileFingerprint(filename)]));
+}
+
+function legacyFilesUnchanged(files) {
+ for (const [filename, before] of files) if (legacyFileFingerprint(filename) !== before) return false;
+ return true;
+}
+
+function legacyGitEnvironment() {
+ return crypto.createHash('sha256').update(Object.keys(process.env)
+  .filter((key) => key.startsWith('GIT_') || ['HOME', 'XDG_CONFIG_HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH'].includes(key))
+  .sort().map((key) => `${key}=${process.env[key]}`).join('\0')).digest('hex');
+}
+
+async function legacyConfigDependencies(root, options) {
+ const output = await execGitFile(['config', '--null', '--show-origin', '--includes', '--name-only', '--list'], root, options);
+ const fields = output.replace(/\0$/, '').split('\0');
+ if (fields.length % 2 !== 0 || fields.length > 8192) throw new Error('PROJECT_IDENTITY_UNAVAILABLE: Git config origins unsupported');
+ const paths = new Set();
+ let eligible = true;
+ for (let index = 0; index < fields.length; index += 2) {
+  const origin = fields[index];
+  const key = fields[index + 1].toLowerCase();
+  if (origin.startsWith('file:')) paths.add(path.resolve(root, origin.slice(5)));
+  else eligible = false;
+  if (key.startsWith('include.') || key.startsWith('includeif.')) eligible = false;
+ }
+ return { paths: [...paths].sort(), eligible };
+}
+
+function legacySelectedScopeUnchanged(selected, root) {
+ const same = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+ root = path.resolve(root);
+ while (!same(selected, root)) {
+  for (const marker of ['.engram-project', '.git']) {
+   try { fs.lstatSync(path.join(selected, marker)); return false; } catch (error) {
+    if (error?.code !== 'ENOENT') return false;
+   }
+  }
+  const parent = path.dirname(selected);
+  if (same(parent, selected)) return false;
+  selected = parent;
+ }
+ return true;
+}
+
+function readLegacyMarker(root) {
+ const bytes = fs.readFileSync(path.join(root, '.engram-project'));
+ const raw = bytes.toString('utf8');
+ if (!Buffer.from(raw, 'utf8').equals(bytes)) throw new Error('PROJECT_ANCHOR_INVALID: anchor UTF-8 is invalid');
+ return raw;
+}
+
+async function resolveLegacyHookProjectContext(cwd, options = {}) {
+ throwIfAborted(options.signal);
+ const selected = path.resolve(cwd || '');
+ const cached = legacyHookWorkspaces.get(selected);
+ if (cached) {
+  try {
+   if (cached.eligible && readLegacyMarker(cached.root) === cached.raw &&
+    legacyGitEnvironment() === cached.environment && legacyFilesUnchanged(cached.files) &&
+    legacySelectedScopeUnchanged(selected, cached.root)) return { ...cached.context };
+  } catch (error) {
+   if (/^PROJECT_ANCHOR_INVALID:/.test(error?.message || '')) { legacyHookWorkspaces.delete(selected); throw error; }
+  }
+  legacyHookWorkspaces.delete(selected);
+ }
+ let root;
+ try { root = await execGitFile(['rev-parse', '--show-toplevel'], selected, options); } catch (error) {
+  if (options.signal?.aborted) throw abortError();
+  if (isMissingGitIdentityError(error)) return null;
+  throw new Error('PROJECT_IDENTITY_UNAVAILABLE: git identity resolution failed');
+ }
+ if (!root || !legacySelectedScopeUnchanged(selected, root)) return null;
+ let raw;
+ try { raw = readLegacyMarker(root); } catch (error) {
+  if (error?.code === 'ENOENT') return null;
+  if (/^PROJECT_ANCHOR_INVALID:/.test(error?.message || '')) throw error;
+  throw new Error('PROJECT_ANCHOR_INVALID: anchor cannot be read');
+ }
+ if (!/^\s*\{\s*"(?:[^"\\]|\\.)*"\s*:\s*"(?:[^"\\]|\\.)*"\s*\}\s*$/.test(raw)) return null;
+ let anchor;
+ try { anchor = JSON.parse(raw); } catch { return null; }
+ if (Object.keys(anchor).length !== 1 || !Object.hasOwn(anchor, 'name') ||
+  typeof anchor.name !== 'string' || anchor.name === '' || Array.from(anchor.name).length > 256 ||
+  anchor.name.trim() !== anchor.name || PROJECT_IDENTITY_CONTROL.test(anchor.name) ||
+  Buffer.from(anchor.name, 'utf8').toString('utf8') !== anchor.name) return null;
+ try { await execGitFile(['ls-files', '--error-unmatch', '--', '.engram-project'], root, options); } catch (error) {
+  if (options.signal?.aborted) throw abortError();
+  throw new Error('PROJECT_ANCHOR_INVALID: legacy repository anchor must be tracked');
+ }
+ const gitPaths = (await execGitFile(['rev-parse', '--path-format=absolute', '--git-path', 'config', '--git-path', 'index', '--git-path', 'HEAD', '--git-path', 'config.worktree'], root, options)).split(/\r?\n/);
+ if (gitPaths.length !== 4) throw new Error('PROJECT_IDENTITY_UNAVAILABLE: Git scope paths unavailable');
+ gitPaths.push(path.join(root, '.git'));
+ for (const variable of ['GIT_CONFIG_SYSTEM', 'GIT_CONFIG_GLOBAL']) {
+  const files = await execGitFile(['var', variable], root, options);
+  gitPaths.push(...files.split(/\r?\n/).filter(Boolean));
+ }
+ const initial = legacyFileFingerprints(gitPaths);
+ const environment = legacyGitEnvironment();
+ const dependencies = await legacyConfigDependencies(root, options);
+ const before = legacyFileFingerprints([...gitPaths, ...dependencies.paths]);
+ if (!legacyFilesUnchanged(initial)) throw new Error('PROJECT_IDENTITY_UNAVAILABLE: Git config changed during discovery');
+ const git = await getGitRemoteIDAsync(selected, options);
+ if (!git) throw new Error('PROJECT_IDENTITY_UNAVAILABLE: legacy workspace Git identity is absent');
+ const identity = validateProjectIdentityV2(buildProjectIdentityV2({
+  legacy_project_id: LegacyProjectID(selected), display_name: anchor.name,
+  git_remote: git.gitRemote, relative_path: git.relativePath.replace(/\\/g, '/'),
+ }));
+ const context = {
+  Project: git.projectID, ProjectSelector: git.projectID,
+  LegacyProject: identity.legacy_project_id, GitRemote: identity.git_remote,
+  RelativePath: identity.relative_path, ProjectIdentityV2: identity
+ };
+ const afterDependencies = await legacyConfigDependencies(root, options);
+ throwIfAborted(options.signal);
+ if (readLegacyMarker(root) !== raw || !legacySelectedScopeUnchanged(selected, root) ||
+  environment !== legacyGitEnvironment() || !legacyFilesUnchanged(before) ||
+  dependencies.paths.join('\0') !== afterDependencies.paths.join('\0') || dependencies.eligible !== afterDependencies.eligible) {
+  throw new Error('PROJECT_ANCHOR_INVALID: selected scope changed during discovery');
+ }
+ if (legacyHookWorkspaces.size >= 64) legacyHookWorkspaces.delete(legacyHookWorkspaces.keys().next().value);
+ legacyHookWorkspaces.set(selected, { root, raw, files: before, environment, eligible: dependencies.eligible, context });
+ return { ...context };
+}
+
+async function resolveHookProjectContext(cwd, clientInstanceID, options = {}) {
+ if (clientInstanceID) {
+  projectIdentityV3.validateClientInstanceIDV3(clientInstanceID);
+  const legacy = await resolveLegacyHookProjectContext(cwd, options);
+  if (legacy) return legacy;
+  const descriptor = resolveHookProjectDescriptorV3(cwd, clientInstanceID);
+  return { Project: descriptor.anchor_project_id, ProjectSelector: descriptor.anchor_project_id, ProjectDescriptorV3: descriptor };
+ }
+ const git = getGitRemoteID(cwd);
+ const selector = ProjectIDWithName(cwd);
+ return {
+  Project: selector, ProjectSelector: selector, LegacyProject: LegacyProjectID(cwd),
+  GitRemote: git ? git.gitRemote : '', RelativePath: git ? git.relativePath : '',
+  ProjectIdentityV2: resolveProjectIdentityV2(cwd)
+ };
+}
+
+async function legacySessionStartContext(cwd, sessionID, timeoutMs) {
+ const deadline = Date.now() + timeoutMs;
+ const controller = new AbortController();
+ const timer = setTimeout(() => controller.abort(), timeoutMs);
+ try {
+  const context = await resolveLegacyHookProjectContext(cwd, { signal: controller.signal, timeoutMs });
+  if (!context) throw new Error('PROJECT_ANCHOR_INVALID: no tracked name-only workspace');
+  const registrationBudget = deadline - Date.now();
+  if (registrationBudget <= 0) throw abortError();
+  await registerProjectIdentityV2(context, request, { timeoutMs: registrationBudget, signal: controller.signal });
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw abortError();
+  const payload = await requestPost('/api/context/session-start', { project: context.Project, session_id: sessionID }, remaining, { signal: controller.signal });
+  return require('./session-start.js').buildSessionStartContext(payload, context.Project, { maxLength: 12000 });
+ } finally { clearTimeout(timer); }
+}
+
+async function legacyAmbientContext(cwd, sessionID, prompt, timeoutMs) {
+ const deadline = Date.now() + timeoutMs;
+ const controller = new AbortController();
+ const timer = setTimeout(() => controller.abort(), timeoutMs);
+ try {
+  const context = await resolveLegacyHookProjectContext(cwd, { signal: controller.signal, timeoutMs });
+  if (!context) throw new Error('PROJECT_ANCHOR_INVALID: no tracked name-only workspace');
+  const registrationBudget = deadline - Date.now();
+  if (registrationBudget <= 0) throw abortError();
+  await registerProjectIdentityV2(context, request, { timeoutMs: registrationBudget, signal: controller.signal });
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw abortError();
+  return require('./user-prompt.js').fetchAmbientAdditionalContext(context.Project, sessionID, prompt, remaining, { signal: controller.signal });
+ } finally { clearTimeout(timer); }
+}
+
+function getHookClientInstanceID() {
+ return getEngramConfig().clientInstanceID;
 }
 
 function resolveHookProjectDescriptorV3(cwd, clientInstanceID) {
@@ -1216,21 +1422,7 @@ async function RunHook(hookName, handler) {
    HookEventName: typeof input.hook_event_name === 'string' ? input.hook_event_name : hookName,
    RawInput: rawInput,
   };
-  if (runtimeEnv.clientInstanceID) {
-   const descriptor = resolveHookProjectDescriptorV3(cwd, runtimeEnv.clientInstanceID);
-   context.Project = descriptor.anchor_project_id;
-   context.ProjectSelector = descriptor.anchor_project_id;
-   context.ProjectDescriptorV3 = descriptor;
-  } else {
-   const gitResult = getGitRemoteID(cwd);
-   const projectSelector = ProjectIDWithName(cwd);
-   context.Project = projectSelector;
-   context.ProjectSelector = projectSelector;
-   context.LegacyProject = LegacyProjectID(cwd);
-   context.GitRemote = gitResult ? gitResult.gitRemote : '';
-   context.RelativePath = gitResult ? gitResult.relativePath : '';
-   context.ProjectIdentityV2 = resolveProjectIdentityV2(cwd);
-  }
+  Object.assign(context, await resolveHookProjectContext(cwd, runtimeEnv.clientInstanceID));
   if (hookName !== 'SessionStart' || runtimeEnv.serverURL) {
    try {
     await registerProjectIdentity(context);
@@ -1532,6 +1724,11 @@ module.exports = {
  validateProjectSelectorV2,
  resolveProjectIdentityV2,
  resolveHookProjectDescriptorV3,
+ resolveLegacyHookProjectContext,
+ resolveHookProjectContext,
+ legacySessionStartContext,
+ legacyAmbientContext,
+ getHookClientInstanceID,
  validateProjectDescriptorV3,
  registerProjectIdentity,
  registerProjectIdentityV2,

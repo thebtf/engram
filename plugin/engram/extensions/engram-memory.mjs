@@ -103,43 +103,57 @@ function isAmbientResponse(value) {
 export function createEngramMemoryExtension(options = {}) {
   const relay = options.relay ?? legacyRelay;
   const now = options.now ?? Date.now;
-  const resolveDescriptor = options.resolveHookProjectDescriptorV3 ?? lib.resolveHookProjectDescriptorV3;
+  const resolveContext = options.resolveHookProjectContext ?? lib.resolveHookProjectContext;
   const isQuiet = options.isQuiet ?? lib.isQuietMode;
   const cacheLimit = Number.isInteger(options.descriptorCacheLimit) && options.descriptorCacheLimit > 0
     ? options.descriptorCacheLimit
     : descriptorCacheLimit;
   const descriptors = new Map();
 
-  function rememberDescriptor(hostSessionRef, cwd, projectIdentityV3) {
+  function rememberDescriptor(hostSessionRef, cwd, projectIdentityV3, legacyClientInstanceID = '') {
     const canonicalScope = canonicalCwd(cwd);
     if (!canonicalScope) return false;
     descriptors.delete(hostSessionRef);
-    descriptors.set(hostSessionRef, Object.freeze({ cwd: canonicalScope, projectIdentityV3 }));
+    descriptors.set(hostSessionRef, Object.freeze({ cwd: canonicalScope, projectIdentityV3, legacyClientInstanceID }));
     while (descriptors.size > cacheLimit) descriptors.delete(descriptors.keys().next().value);
     return true;
   }
 
-  function sessionIdentity(event, ctx, deadlineUnixMs) {
+  async function sessionIdentity(event, ctx, deadlineUnixMs) {
     const facts = callbackFacts(event, ctx, true);
-    const clientInstanceID = lib.getEngramConfig().clientInstanceID;
+    const clientInstanceID = lib.getHookClientInstanceID();
     if (!facts || !clientInstanceID) return null;
-    let projectIdentityV3;
+    let context;
+    const controller = new AbortController();
+    const remaining = deadlineUnixMs - Math.floor(now());
+    if (remaining <= 0) return null;
+    const timer = setTimeout(() => controller.abort(), remaining);
     try {
-      projectIdentityV3 = normalizeProjectIdentityV3Descriptor(resolveDescriptor(facts.cwd, clientInstanceID));
+      context = await resolveContext(facts.cwd, clientInstanceID, { signal: controller.signal, timeoutMs: remaining });
     } catch {
       return null;
+    } finally {
+      clearTimeout(timer);
     }
-    if (!projectIdentityV3) return null;
     if (!deadlineActive(deadlineUnixMs, now)) return null;
+    if (context?.ProjectIdentityV2 && !context.ProjectDescriptorV3) {
+      if (!rememberDescriptor(facts.hostSessionRef, facts.cwd, null, clientInstanceID)) return null;
+      return { hostSessionRef: facts.hostSessionRef, legacyCwd: facts.cwd };
+    }
+    const projectIdentityV3 = normalizeProjectIdentityV3Descriptor(context?.ProjectDescriptorV3);
+    if (!projectIdentityV3) return null;
     if (!rememberDescriptor(facts.hostSessionRef, facts.cwd, projectIdentityV3)) return null;
     return { hostSessionRef: facts.hostSessionRef, projectIdentityV3 };
   }
 
   function ambientIdentity(event, ctx) {
     const facts = callbackFacts(event, ctx, true);
-    const clientInstanceID = lib.getEngramConfig().clientInstanceID;
+    const clientInstanceID = lib.getHookClientInstanceID();
     if (!facts || !clientInstanceID) return null;
     const cachedEntry = descriptors.get(facts.hostSessionRef);
+    if (cachedEntry?.legacyClientInstanceID === clientInstanceID && sameCwd(cachedEntry.cwd, facts.cwd)) {
+      return { hostSessionRef: facts.hostSessionRef, legacyCwd: facts.cwd };
+    }
     const cached = normalizeProjectIdentityV3Descriptor(cachedEntry?.projectIdentityV3);
     if (!cached || cached.client_instance_id !== clientInstanceID || !sameCwd(cachedEntry.cwd, facts.cwd)) {
       descriptors.delete(facts.hostSessionRef);
@@ -158,14 +172,29 @@ export function createEngramMemoryExtension(options = {}) {
     }
   }
 
+  async function legacyMessage(identity, deadlineUnixMs, queryText) {
+    try {
+      const remaining = deadlineUnixMs - Math.floor(now());
+      if (remaining <= 0) return null;
+      const rendered = queryText === undefined
+        ? await lib.legacySessionStartContext(identity.legacyCwd, identity.hostSessionRef, remaining)
+        : await lib.legacyAmbientContext(identity.legacyCwd, identity.hostSessionRef, queryText, remaining);
+      const content = boundedContext(rendered);
+      return content && deadlineActive(deadlineUnixMs, now) ? hiddenMessage(content) : null;
+    } catch {
+      return null;
+    }
+  }
+
   async function sessionStartMessage(event, ctx, timeoutMs = sessionStartTimeoutMs) {
     const deadlineUnixMs = callbackDeadlineUnixMs(
       Number.isInteger(timeoutMs) && timeoutMs > 0 ? timeoutMs : sessionStartTimeoutMs,
       now,
     );
     if (!deadlineActive(deadlineUnixMs, now) || isQuiet()) return null;
-    const identity = sessionIdentity(event, ctx, deadlineUnixMs);
+    const identity = await sessionIdentity(event, ctx, deadlineUnixMs);
     if (!identity || !deadlineActive(deadlineUnixMs, now)) return null;
+    if (identity.legacyCwd) return legacyMessage(identity, deadlineUnixMs);
     const registered = await call('IDENTITY_REGISTRATION', identity, deadlineUnixMs);
     if (!isIdentityResponse(registered)) return null;
     const context = await call('SESSION_START_CONTEXT', {
@@ -190,6 +219,7 @@ export function createEngramMemoryExtension(options = {}) {
     const identity = ambientIdentity(event, ctx);
     const queryText = boundedPrompt(event, ctx);
     if (!identity || !queryText || !deadlineActive(deadlineUnixMs, now)) return null;
+    if (identity.legacyCwd) return legacyMessage(identity, deadlineUnixMs, queryText);
     const registered = await call('IDENTITY_REGISTRATION', identity, deadlineUnixMs);
     if (!isIdentityResponse(registered)) return null;
     const ambient = await call('AMBIENT_CANDIDATES', {

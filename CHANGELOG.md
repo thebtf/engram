@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Restore native tools and OMP automatic memory for the current tracked name-only workspace using the existing V2 Git identity and normal server canonical resolution. This temporary single-install adapter refuses malformed or partial V3 anchors and never falls back from V3 resolution, authorization, or network errors; valid V3 continues through its existing private relay. Normal V2 metadata, audit and context-injection accounting still apply. Remove the adapter once canonical V3 binding, ordinary memory reads and automatic context have been accepted for this workspace.
+- Keep that adapter read-only in repository subdirectories, preserve their Git prefix across repeated memory requests, strip Git URL userinfo before constructing V2 selectors or outgoing metadata, and refuse invalid original UTF-8 marker bytes. Cache only bounded legacy workspace identity with marker and Git config/index freshness checks; warm memory requests avoid Git subprocesses and cold hook discovery observes the callback's cancellation budget.
+- Bind cached legacy identity to the root Git locator, every intervening directory, and stable effective configuration dependencies captured before and after derivation. Included or conditional configuration remains cache-ineligible and is resolved afresh; unknown or changing dependencies refuse scoped requests instead of retaining an old selector.
+
 ## [6.50.2] - 2026-10-01
 
 ### Fixed
