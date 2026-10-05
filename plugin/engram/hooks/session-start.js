@@ -320,7 +320,7 @@ function buildSessionStartContext(payload, project, options = {}) {
   let high = maxLength;
   while (low < high) {
     const records = Math.ceil((low + high) / 2);
-    if (renderBoundedSessionStartContext(payload, project, options, records, 0).length <= maxLength) {
+    if (Buffer.byteLength(renderBoundedSessionStartContext(payload, project, options, records, 0), 'utf8') <= maxLength) {
       low = records;
     } else {
       high = records - 1;
@@ -329,7 +329,7 @@ function buildSessionStartContext(payload, project, options = {}) {
 
   const maxRecords = low;
   const minimal = renderBoundedSessionStartContext(payload, project, options, maxRecords, 0);
-  if (minimal.length > maxLength) return '';
+  if (Buffer.byteLength(minimal, 'utf8') > maxLength) return '';
 
   low = 0;
   high = maxLength;
@@ -337,7 +337,7 @@ function buildSessionStartContext(payload, project, options = {}) {
   while (low <= high) {
     const stringUnits = Math.floor((low + high) / 2);
     const candidate = renderBoundedSessionStartContext(payload, project, options, maxRecords, stringUnits);
-    if (candidate.length <= maxLength) {
+    if (Buffer.byteLength(candidate, 'utf8') <= maxLength) {
       result = candidate;
       low = stringUnits + 1;
     } else {
