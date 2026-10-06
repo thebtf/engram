@@ -58,6 +58,7 @@ type resolvedSlug struct {
 
 type legacyWorkspace struct {
 	root          string
+	selected      os.FileInfo
 	marker        []byte
 	files         map[string]legacyFileState
 	environment   [32]byte
@@ -201,9 +202,13 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 	key := cacheKey(p)
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	selectedInfo, err := os.Stat(key.cwd)
+	if err != nil || !selectedInfo.IsDir() {
+		return false, ctx.Err()
+	}
 	if cached, ok := c.legacy[key]; ok {
 		raw, err := os.ReadFile(filepath.Join(cached.root, ".engram-project"))
-		if cached.cacheEligible && err == nil && bytes.Equal(raw, cached.marker) &&
+		if cached.cacheEligible && err == nil && bytes.Equal(raw, cached.marker) && os.SameFile(selectedInfo, cached.selected) &&
 			cached.environment == legacyGitEnvironment() && legacyFilesUnchanged(cached.files) &&
 			legacySelectedScopeUnchanged(key.cwd, cached.root) {
 			return true, ctx.Err()
@@ -288,7 +293,8 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 	}
 	afterDependencies, afterEligible, err := legacyConfigDependencies(ctx, root)
 	afterRaw, markerErr := os.ReadFile(filepath.Join(root, ".engram-project"))
-	if err != nil || markerErr != nil || !bytes.Equal(raw, afterRaw) ||
+	afterSelected, selectedErr := os.Stat(key.cwd)
+	if err != nil || markerErr != nil || selectedErr != nil || !os.SameFile(selectedInfo, afterSelected) || !bytes.Equal(raw, afterRaw) ||
 		strings.Join(dependencies, "\x00") != strings.Join(afterDependencies, "\x00") || eligible != afterEligible ||
 		environment != legacyGitEnvironment() || !legacyFilesUnchanged(before) || !legacySelectedScopeUnchanged(key.cwd, root) {
 		return false, v3InputError("PROJECT_ANCHOR_INVALID")
@@ -307,7 +313,7 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 			break
 		}
 	}
-	c.legacy[key] = legacyWorkspace{root: root, marker: raw, files: before, environment: environment, cacheEligible: eligible}
+	c.legacy[key] = legacyWorkspace{root: root, selected: selectedInfo, marker: raw, files: before, environment: environment, cacheEligible: eligible}
 	c.entries.Store(key, resolvedSlug{id: slug, announce: true})
 	c.identities.Store(key, &pb.ProjectIdentityV2{Version: identity.Version, LegacyProjectId: identity.LegacyProjectID, DisplayName: identity.DisplayName, GitRemote: identity.GitRemote, RelativePath: identity.RelativePath})
 	return true, nil
@@ -409,7 +415,22 @@ func legacyConfigDependencies(ctx context.Context, root string) ([]string, bool,
 
 func legacySelectedScopeUnchanged(selected, root string) bool {
 	selected, root = filepath.Clean(selected), filepath.Clean(root)
-	for selected != root {
+	selected, err := filepath.EvalSymlinks(selected)
+	if err != nil {
+		return false
+	}
+	rootInfo, err := os.Stat(root)
+	if err != nil || !rootInfo.IsDir() {
+		return false
+	}
+	for {
+		selectedInfo, err := os.Stat(selected)
+		if err != nil || !selectedInfo.IsDir() {
+			return false
+		}
+		if os.SameFile(selectedInfo, rootInfo) {
+			return true
+		}
 		for _, marker := range []string{".engram-project", ".git"} {
 			if _, err := os.Lstat(filepath.Join(selected, marker)); !errors.Is(err, os.ErrNotExist) {
 				return false
@@ -421,7 +442,6 @@ func legacySelectedScopeUnchanged(selected, root string) bool {
 		}
 		selected = parent
 	}
-	return true
 }
 
 func repositoryRootV3(cwd string) (string, error) {

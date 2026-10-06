@@ -9,6 +9,35 @@ const { execFileSync, spawnSync } = require('node:child_process');
 const lib = require('./lib');
 const NODE_CHILD_TIMEOUT_MS = process.platform === 'win32' ? 10000 : 2000;
 
+test('legacy name-only dispatch accepts filesystem aliases without changing Git scope', async (t) => {
+ const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-alias-'));
+ t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+ const repo = path.join(workspace, 'repository');
+ const alias = path.join(workspace, 'repository-alias');
+ fs.mkdirSync(repo);
+ execFileSync('git', ['init', '--quiet', repo]);
+ execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/thebtf/engram.git']);
+ fs.writeFileSync(path.join(repo, '.engram-project'), '{"name":"engram"}');
+ execFileSync('git', ['-C', repo, 'add', '.engram-project']);
+ fs.symlinkSync(repo, alias, process.platform === 'win32' ? 'junction' : 'dir');
+ assert.equal(fs.realpathSync.native(alias), fs.realpathSync.native(repo));
+ for (const suffix of ['', 'nested']) {
+  fs.mkdirSync(path.join(repo, suffix), { recursive: true });
+  const expected = await lib.resolveHookProjectContext(path.join(repo, suffix), 'hook-install-alpha');
+  for (let request = 0; request < 2; request += 1) {
+   const actual = await lib.resolveHookProjectContext(path.join(alias, suffix), 'hook-install-alpha');
+   assert.equal(actual.Project, expected.Project);
+   assert.equal(actual.ProjectDescriptorV3, undefined);
+   assert.equal(actual.ProjectIdentityV2.git_remote, expected.ProjectIdentityV2.git_remote);
+   assert.equal(actual.ProjectIdentityV2.relative_path, expected.ProjectIdentityV2.relative_path);
+  }
+ }
+ fs.unlinkSync(alias);
+ fs.symlinkSync(path.join(repo, 'nested'), alias, process.platform === 'win32' ? 'junction' : 'dir');
+ const retargeted = await lib.resolveHookProjectContext(alias, 'hook-install-alpha');
+ assert.equal(retargeted.ProjectIdentityV2.relative_path, 'nested/');
+});
+
 test('legacy cache refuses nearer repositories and refreshes included origins', async (t) => {
  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-topology-'));
  t.after(() => fs.rmSync(repo, { recursive: true, force: true }));

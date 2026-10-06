@@ -831,16 +831,18 @@ async function legacyConfigDependencies(root, options) {
 }
 
 function legacySelectedScopeUnchanged(selected, root) {
- const same = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
- root = path.resolve(root);
- while (!same(selected, root)) {
+ try {
+  selected = fs.realpathSync.native(selected);
+  root = fs.realpathSync.native(root);
+ } catch { return false; }
+ while (selected !== root) {
   for (const marker of ['.engram-project', '.git']) {
    try { fs.lstatSync(path.join(selected, marker)); return false; } catch (error) {
     if (error?.code !== 'ENOENT') return false;
    }
   }
   const parent = path.dirname(selected);
-  if (same(parent, selected)) return false;
+  if (parent === selected) return false;
   selected = parent;
  }
  return true;
@@ -859,7 +861,7 @@ async function resolveLegacyHookProjectContext(cwd, options = {}) {
  const cached = legacyHookWorkspaces.get(selected);
  if (cached) {
   try {
-   if (cached.eligible && readLegacyMarker(cached.root) === cached.raw &&
+   if (cached.eligible && fs.realpathSync.native(selected) === cached.selectedPath && readLegacyMarker(cached.root) === cached.raw &&
     legacyGitEnvironment() === cached.environment && legacyFilesUnchanged(cached.files) &&
     legacySelectedScopeUnchanged(selected, cached.root)) return { ...cached.context };
   } catch (error) {
@@ -874,6 +876,7 @@ async function resolveLegacyHookProjectContext(cwd, options = {}) {
   throw new Error('PROJECT_IDENTITY_UNAVAILABLE: git identity resolution failed');
  }
  if (!root || !legacySelectedScopeUnchanged(selected, root)) return null;
+ const selectedPath = fs.realpathSync.native(selected);
  let raw;
  try { raw = readLegacyMarker(root); } catch (error) {
   if (error?.code === 'ENOENT') return null;
@@ -916,13 +919,13 @@ async function resolveLegacyHookProjectContext(cwd, options = {}) {
  };
  const afterDependencies = await legacyConfigDependencies(root, options);
  throwIfAborted(options.signal);
- if (readLegacyMarker(root) !== raw || !legacySelectedScopeUnchanged(selected, root) ||
+ if (readLegacyMarker(root) !== raw || fs.realpathSync.native(selected) !== selectedPath || !legacySelectedScopeUnchanged(selected, root) ||
   environment !== legacyGitEnvironment() || !legacyFilesUnchanged(before) ||
   dependencies.paths.join('\0') !== afterDependencies.paths.join('\0') || dependencies.eligible !== afterDependencies.eligible) {
   throw new Error('PROJECT_ANCHOR_INVALID: selected scope changed during discovery');
  }
  if (legacyHookWorkspaces.size >= 64) legacyHookWorkspaces.delete(legacyHookWorkspaces.keys().next().value);
- legacyHookWorkspaces.set(selected, { root, raw, files: before, environment, eligible: dependencies.eligible, context });
+ legacyHookWorkspaces.set(selected, { root, selectedPath, raw, files: before, environment, eligible: dependencies.eligible, context });
  return { ...context };
 }
 

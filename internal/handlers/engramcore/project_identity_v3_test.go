@@ -25,6 +25,68 @@ import (
 
 const daemonV3CanonicalProject = "11111111-1111-4111-8111-111111111111"
 
+func TestLegacySelectedScopeAcceptsFilesystemAliases(t *testing.T) {
+	root := daemonV3Repository(t)
+	selectedRoot := strings.ToUpper(root)
+	if runtime.GOOS != "windows" {
+		selectedRoot = filepath.Join(t.TempDir(), "repository-alias")
+		if err := os.Symlink(root, selectedRoot); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rootInfo, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedInfo, err := os.Stat(selectedRoot)
+	if err != nil || !os.SameFile(rootInfo, selectedInfo) {
+		t.Fatalf("fixture alias is not the same directory: %v", err)
+	}
+	for _, suffix := range []string{"", "nested"} {
+		t.Run(suffix, func(t *testing.T) {
+			selected := filepath.Join(selectedRoot, suffix)
+			if err := os.MkdirAll(selected, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			output, err := exec.Command("git", "-C", selected, "rev-parse", "--show-toplevel").Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			gitRoot := strings.TrimSpace(string(output))
+			if filepath.Clean(selectedRoot) == filepath.Clean(gitRoot) {
+				t.Fatal("fixture did not produce distinct Git and selected root spellings")
+			}
+			if !legacySelectedScopeUnchanged(selected, gitRoot) {
+				t.Fatal("same filesystem repository was refused for a different path spelling")
+			}
+		})
+	}
+	if runtime.GOOS != "windows" {
+		srv := &mockEngramServer{initResp: &pb.InitializeResponse{}, callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
+		_, mod, project := buildContractDispatcher(t, startMockGRPC(t, srv))
+		project.Cwd = selectedRoot
+		mod.v3ClientInstanceID = "fixture-daemon-install"
+		if err := os.WriteFile(filepath.Join(root, ".engram-project"), []byte(`{"name":"engram"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := mod.ProxyTools(context.Background(), project); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(selectedRoot); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(root, "nested"), selectedRoot); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+		if srv.callReq.GetProjectIdentity().GetRelativePath() != "nested/" {
+			t.Fatal("retargeted filesystem alias reused the previous selected prefix")
+		}
+	}
+}
+
 func TestProxyLegacyColdScopeRefusesUntrackingDuringAdmission(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("real Git interposition requires a POSIX executable script")

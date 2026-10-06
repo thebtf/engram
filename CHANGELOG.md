@@ -21,6 +21,7 @@ This release candidate prepares the P0 installed-memory repair; source and gener
 - Bound shared OMP session-start rendering by the final UTF-8 byte size, including escaped text, complete quoted records, enclosing markup and separators, so Cyrillic and emoji memory can reach the unchanged 12,000-byte hidden-context boundary without being discarded.
 - Run the environment-mutating project-retention test sequentially so Go permits its scoped retention override; keep the other reaper tests parallel and leave runtime retention behavior unchanged.
 - Decode the hybrid confidence-floor regression's actual items array and require the matching high-confidence fixture while excluding the low-confidence fixture; leave runtime recall responses unchanged.
+- Preserve native and hook legacy Git workspace identity across filesystem-equivalent repository paths and refresh scoped identity when an alias is retargeted, while retaining tracked-marker, config/index freshness, cancellation and strict V3 refusal.
 
 ## [6.50.2] - 2026-10-01
 
