@@ -21,11 +21,26 @@ test('legacy name-only dispatch accepts filesystem aliases without changing Git 
  execFileSync('git', ['-C', repo, 'add', '.engram-project']);
  fs.symlinkSync(repo, alias, process.platform === 'win32' ? 'junction' : 'dir');
  assert.equal(fs.realpathSync.native(alias), fs.realpathSync.native(repo));
+ const marker = fs.readFileSync(path.join(repo, '.engram-project'));
+ const index = fs.readFileSync(path.join(repo, '.git', 'index'));
+ const nested = path.join(repo, 'nested');
+ fs.mkdirSync(nested);
+ if (process.platform !== 'win32') fs.chmodSync(nested, 0o555);
  for (const suffix of ['', 'nested']) {
-  fs.mkdirSync(path.join(repo, suffix), { recursive: true });
   const expected = await lib.resolveHookProjectContext(path.join(repo, suffix), 'hook-install-alpha');
   for (let request = 0; request < 2; request += 1) {
    const actual = await lib.resolveHookProjectContext(path.join(alias, suffix), 'hook-install-alpha');
+   const bindings = [];
+   for (const context of [expected, actual]) {
+    await lib.registerProjectIdentityV2({ ...context }, async (method, endpoint, body) => {
+     bindings.push({ method, endpoint, body });
+     return { canonical_project: 'alias-fixture-canonical' };
+    });
+   }
+   assert.deepEqual(bindings[1], bindings[0], JSON.stringify({ suffix, request, canonical: bindings[0], alias: bindings[1] }));
+   assert.equal(actual.LegacyProject, expected.LegacyProject);
+   assert.equal(actual.LegacyProject, lib.LegacyProjectID(fs.realpathSync.native(path.join(repo, suffix))));
+   assert.deepEqual(actual.ProjectIdentityV2, expected.ProjectIdentityV2);
    assert.equal(actual.Project, expected.Project);
    assert.equal(actual.ProjectDescriptorV3, undefined);
    assert.equal(actual.ProjectIdentityV2.git_remote, expected.ProjectIdentityV2.git_remote);
@@ -36,6 +51,14 @@ test('legacy name-only dispatch accepts filesystem aliases without changing Git 
  fs.symlinkSync(path.join(repo, 'nested'), alias, process.platform === 'win32' ? 'junction' : 'dir');
  const retargeted = await lib.resolveHookProjectContext(alias, 'hook-install-alpha');
  assert.equal(retargeted.ProjectIdentityV2.relative_path, 'nested/');
+ const expectedNested = await lib.resolveHookProjectContext(nested, 'hook-install-alpha');
+ assert.equal(retargeted.LegacyProject, expectedNested.LegacyProject);
+ assert.deepEqual(retargeted.ProjectIdentityV2, expectedNested.ProjectIdentityV2);
+ assert.equal(retargeted.ProjectDescriptorV3, undefined);
+ assert.deepEqual(fs.readFileSync(path.join(repo, '.engram-project')), marker);
+ assert.deepEqual(fs.readFileSync(path.join(repo, '.git', 'index')), index);
+ assert.deepEqual(fs.readdirSync(repo).sort(), ['.engram-project', '.git', 'nested']);
+ assert.deepEqual(fs.readdirSync(nested), []);
 });
 
 test('legacy cache refuses nearer repositories and refreshes included origins', async (t) => {

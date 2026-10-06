@@ -909,7 +909,7 @@ async function resolveLegacyHookProjectContext(cwd, options = {}) {
  const git = await getGitRemoteIDAsync(selected, options);
  if (!git) throw new Error('PROJECT_IDENTITY_UNAVAILABLE: legacy workspace Git identity is absent');
  const identity = validateProjectIdentityV2(buildProjectIdentityV2({
-  legacy_project_id: LegacyProjectID(selected), display_name: anchor.name,
+  legacy_project_id: LegacyProjectID(selectedPath), display_name: anchor.name,
   git_remote: git.gitRemote, relative_path: git.relativePath.replace(/\\/g, '/'),
  }));
  const context = {

@@ -22,6 +22,7 @@ This release candidate prepares the P0 installed-memory repair; source and gener
 - Run the environment-mutating project-retention test sequentially so Go permits its scoped retention override; keep the other reaper tests parallel and leave runtime retention behavior unchanged.
 - Decode the hybrid confidence-floor regression's actual items array and require the matching high-confidence fixture while excluding the low-confidence fixture; leave runtime recall responses unchanged.
 - Preserve native and hook legacy Git workspace identity across filesystem-equivalent repository paths and refresh scoped identity when an alias is retargeted, while retaining tracked-marker, config/index freshness, cancellation and strict V3 refusal.
+- Submit the tracked name-only hook adapter's physical selected-directory legacy ID in V2 registration, so a filesystem alias can retain a prior project known only by that path-based ID; keep nested Git scope, alias-retarget freshness and strict V3 handling unchanged.
 
 ## [6.50.2] - 2026-10-01
 
