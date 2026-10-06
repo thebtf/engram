@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	gormlib "gorm.io/gorm"
@@ -1815,7 +1816,18 @@ func (s *Server) handleRecallMemoryHybrid(
 	tg3ConfidenceMin float64,
 	tg3IncludeSuperseded bool,
 	tg3IncludeRationale bool,
-) (string, error) {
+) (result string, resultErr error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	defer func() {
+		if err := ctx.Err(); err != nil {
+			result = ""
+			if resultErr == nil {
+				resultErr = err
+			}
+		}
+	}()
 	expandGraph := coerceBool(m["expand_graph"], false)
 	minConfidence := coerceFloat64(m["min_confidence"], 0.0)
 	vecThreshold := coerceFloat64(m["vec_threshold"], 0.0) // translated from min_similarity by recall(similar)
@@ -1827,7 +1839,34 @@ func (s *Server) handleRecallMemoryHybrid(
 	// HybridSearch degrades gracefully to FTS-only.
 	var queryVec []float32
 	if s.embeddingClient != nil {
-		vecs, embErr := s.embeddingClient.Embed(ctx, []string{query})
+		embedCtx := ctx
+		var cancel context.CancelFunc
+		ftsAllowed := len(tierFilter) == 0
+		for _, tier := range tierFilter {
+			if tier == "tier1_fts" {
+				ftsAllowed = true
+				break
+			}
+		}
+		if deadline, ok := ctx.Deadline(); ok && ftsAllowed {
+			now := time.Now()
+			remaining := deadline.Sub(now)
+			if remaining <= 0 {
+				return "", context.DeadlineExceeded
+			}
+			// Optional embedding gets half; retrieval keeps the original caller context.
+			embedCtx, cancel = context.WithDeadline(ctx, now.Add(remaining/2))
+		}
+		vecs, embErr := s.embeddingClient.Embed(embedCtx, []string{query})
+		if cancel != nil {
+			if embErr == nil {
+				embErr = embedCtx.Err()
+			}
+			cancel()
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		if embErr == nil && len(vecs) > 0 {
 			queryVec = vecs[0]
 		}
@@ -1897,6 +1936,9 @@ func (s *Server) handleRecallMemoryHybrid(
 		gStore,
 		opts,
 	)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if err != nil {
 		return "", fmt.Errorf("recall_memory hybrid: %w", err)
 	}
@@ -2037,6 +2079,9 @@ func (s *Server) handleRecallMemoryHybrid(
 			gStore,
 			opts,
 		)
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		if err != nil {
 			return "", fmt.Errorf("recall_memory hybrid (tier0 fallthrough): %w", err)
 		}
@@ -2119,6 +2164,10 @@ func (s *Server) handleRecallMemoryHybrid(
 	scoredByID := make(map[int64]retrieval.ScoredMemory, len(scored))
 	for _, sm := range scored {
 		scoredByID[sm.Memory.ID] = sm
+	}
+
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 
 	// Reconsolidation: fire-and-forget lifecycle updates on the FINAL response set only

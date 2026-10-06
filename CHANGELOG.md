@@ -24,6 +24,7 @@ This release candidate prepares the P0 installed-memory repair; source and gener
 - Preserve native and hook legacy Git workspace identity across filesystem-equivalent repository paths and refresh scoped identity when an alias is retargeted, while retaining tracked-marker, config/index freshness, cancellation and strict V3 refusal.
 - Submit the tracked name-only hook adapter's physical selected-directory legacy ID in V2 registration, so a filesystem alias can retain a prior project known only by that path-based ID; keep nested Git scope, alias-retarget freshness and strict V3 handling unchanged.
 - Update the operator-console's locked seroval to 1.6.8, source-map-js to 1.2.2, and Vue with its matching 3.5.43 package closure for GHSA-jp82-f5mq-hwhp, GHSA-68fv-2mgg-jv7q, and GHSA-g2v6-rqmx-r4w6; require Vue 3.5.42 or newer within the existing major version. Other HIGH and CRITICAL dependency findings remain unresolved; this is not an all-clear security result.
+- Reserve half of a finite caller deadline for retrieval when hybrid recall permits FTS, cancelling optional query embedding before searching on the original context. Preserve vector-only and no-deadline embedding behavior, existing visibility filters and response formats; propagate caller cancellation instead of returning successful empty degradation. This source repair does not prove recovery of the previously observed live provider failure or deployment.
 
 ## [6.50.2] - 2026-10-01
 
