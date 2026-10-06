@@ -1,3 +1,16 @@
+import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { startedLoads } from './useConsolePreferences'
+
+let sharedHealthSettingsSelfcheck: SharedRef<OperatorLoadState<ApiSelfcheck>> | undefined
+let sharedHealthSettingsReady: SharedRef<OperatorLoadState<ApiReady>> | undefined
+let sharedHealthSettingsConfig: SharedRef<OperatorLoadState<ApiConfig>> | undefined
+let sharedHealthSettingsFlags: SharedRef<OperatorLoadState<ApiFlags>> | undefined
+let sharedHealthSettingsVnext: SharedRef<OperatorLoadState<ApiStatsVNext>> | undefined
+let sharedHealthSettingsVector: SharedRef<OperatorLoadState<ApiVectorMetrics>> | undefined
+let sharedHealthSettingsUpdateStatus: SharedRef<OperatorLoadState<ApiUpdateStatus>> | undefined
+let sharedHealthSettingsUpdateCheck: SharedRef<OperatorLoadState<ApiUpdateCheck>> | undefined
+let sharedHealthSettingsMigrations: SharedRef<OperatorLoadState<ApiMigrationState>> | undefined
+
 import type { ComputedRef } from 'vue'
 import type { OperatorLoadState } from './useOperatorApi'
 import { executeMutation, type MutationResult } from './useApi'
@@ -191,11 +204,11 @@ function percent(value?: number): string {
 }
 
 function startOnce(key: string, run: () => Promise<void>) {
-  const started = useState<boolean>(`live:${key}:started`, () => false)
-  if (import.meta.client && !started.value) {
-    started.value = true
+  const started = startedLoads.has(key)
+  if (typeof window !== 'undefined' && !started) {
+    startedLoads.add(key)
     void run().catch((error) => {
-      if (import.meta.dev) {
+      if (import.meta.env.DEV) {
         console.warn(`[useOperatorHealthSettings] ${key} live load failed`, error)
       }
     })
@@ -239,15 +252,15 @@ export function useOperatorHealthSettings(): {
   const migrationsEvidence = endpointEvidence('/api/migrations', 'migrations')
   const configSaveEvidence = endpointEvidence('/api/config', 'config-save')
 
-  const selfcheck = useState<OperatorLoadState<ApiSelfcheck>>('live:health-settings:selfcheck', () => pendingState(selfcheckEvidence))
-  const ready = useState<OperatorLoadState<ApiReady>>('live:health-settings:ready', () => pendingState(readyEvidence))
-  const config = useState<OperatorLoadState<ApiConfig>>('live:health-settings:config', () => pendingState(configEvidence))
-  const flags = useState<OperatorLoadState<ApiFlags>>('live:health-settings:flags', () => pendingState(flagsEvidence))
-  const vnext = useState<OperatorLoadState<ApiStatsVNext>>('live:health-settings:vnext', () => pendingState(vnextEvidence))
-  const vector = useState<OperatorLoadState<ApiVectorMetrics>>('live:health-settings:vector', () => pendingState(vectorEvidence))
-  const updateStatus = useState<OperatorLoadState<ApiUpdateStatus>>('live:health-settings:update-status', () => pendingState(updateStatusEvidence))
-  const updateCheck = useState<OperatorLoadState<ApiUpdateCheck>>('live:health-settings:update-check', () => pendingState(updateCheckEvidence))
-  const migrations = useState<OperatorLoadState<ApiMigrationState>>('live:health-settings:migrations', () => pendingState(migrationsEvidence))
+  const selfcheck = (sharedHealthSettingsSelfcheck ??= sharedRef<OperatorLoadState<ApiSelfcheck>>((() => pendingState(selfcheckEvidence))()))
+  const ready = (sharedHealthSettingsReady ??= sharedRef<OperatorLoadState<ApiReady>>((() => pendingState(readyEvidence))()))
+  const config = (sharedHealthSettingsConfig ??= sharedRef<OperatorLoadState<ApiConfig>>((() => pendingState(configEvidence))()))
+  const flags = (sharedHealthSettingsFlags ??= sharedRef<OperatorLoadState<ApiFlags>>((() => pendingState(flagsEvidence))()))
+  const vnext = (sharedHealthSettingsVnext ??= sharedRef<OperatorLoadState<ApiStatsVNext>>((() => pendingState(vnextEvidence))()))
+  const vector = (sharedHealthSettingsVector ??= sharedRef<OperatorLoadState<ApiVectorMetrics>>((() => pendingState(vectorEvidence))()))
+  const updateStatus = (sharedHealthSettingsUpdateStatus ??= sharedRef<OperatorLoadState<ApiUpdateStatus>>((() => pendingState(updateStatusEvidence))()))
+  const updateCheck = (sharedHealthSettingsUpdateCheck ??= sharedRef<OperatorLoadState<ApiUpdateCheck>>((() => pendingState(updateCheckEvidence))()))
+  const migrations = (sharedHealthSettingsMigrations ??= sharedRef<OperatorLoadState<ApiMigrationState>>((() => pendingState(migrationsEvidence))()))
 
   const selfcheckState = computed(() => selfcheck.value)
   const readyState = computed(() => ready.value)

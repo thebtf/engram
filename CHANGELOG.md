@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Replace the operator-console's Nuxt/Nitro build and unused Nuxt UI/devtools graph with supported static Vue 3.5.43, Vite 8.3.2, Vue Router 4.6.3 and Vue I18n 11.4.8. Keep every current page, shared state, theme/density preference, RU/EN/ZH locale, API/auth interaction, Go embedded-static output and separate console host. Retire obsolete framework writers and configuration rather than substituting vulnerable dependencies; update actual deployment, smoke and release-build consumers to the `ENGRAM_*` console settings and pinned Node 22.22.3.
+- Correct the standalone operator-web Compose environment for the static Vue host: preserve `OPERATOR_WEB_API_TARGET` and its `host.docker.internal:37777` default while passing `ENGRAM_OPERATOR_API_TARGET`; use `HOST`, `PORT` and `ENGRAM_PUBLIC_API_BASE` without retired Nuxt/Nitro aliases.
+
 ## [6.50.3-rc.1] - 2026-10-05
 
 This release candidate prepares the P0 installed-memory repair; source and generated artifacts are not proof of installation or restored automatic context. Ordinary installed-client memory reads and fresh OMP automatic-context acceptance remain required. No server rollout, migration, OpenClaw update, or stable/latest promotion is included.

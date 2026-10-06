@@ -55,14 +55,14 @@ The gate and permanent critical tests must prove:
 2. The server becomes healthy as UID/GID 65532 with a persistent writable
    `/var/lib/engram` volume and read-only root filesystem everywhere else.
 3. The operator console becomes healthy as UID/GID 65532 and proxies to the
-   exact `NUXT_OPERATOR_API_TARGET=http://server:37777` backend.
+   exact `ENGRAM_OPERATOR_API_TARGET=http://server:37777` backend.
 4. The PostgreSQL and server volume roots retain their required owner and mode:
    `70:70:700` and `65532:65532:700` respectively.
 5. The server-created `.engram/settings.json` remains `65532:65532:600` and
    byte-identical across container restart.
 6. Server `/health` is reachable as liveness.
 7. Direct and proxied `/api/ready` both return exact `{"status":"ready"}`.
-8. The operator root references generated Nuxt assets and at least one asset is
+8. The operator root references generated Vue assets and at least one asset is
    retrievable.
 9. Server and operator recover after restart.
 

@@ -1,3 +1,27 @@
+import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { startedLoads } from './useConsolePreferences'
+import { operatorConfig } from '../operator-config'
+
+let sharedIssues: SharedRef<Issue[]> | undefined
+let sharedIssuesPending: SharedRef<boolean> | undefined
+let sharedIssuesError: SharedRef<string | null> | undefined
+let sharedProjects: SharedRef<ProjectSummary[]> | undefined
+let sharedProjectsPending: SharedRef<boolean> | undefined
+let sharedProjectsError: SharedRef<string | null> | undefined
+let sharedServerConfig: SharedRef<ServerConfigSnapshot> | undefined
+let sharedServerConfigPending: SharedRef<boolean> | undefined
+let sharedServerConfigError: SharedRef<string | null> | undefined
+let sharedHealth: SharedRef<HealthSnapshot> | undefined
+let sharedHealthPending: SharedRef<boolean> | undefined
+let sharedHealthError: SharedRef<string | null> | undefined
+let sharedModels: SharedRef<ModelRow[]> | undefined
+let sharedModelsPending: SharedRef<boolean> | undefined
+let sharedModelsError: SharedRef<string | null> | undefined
+let sharedModelRegistry: SharedRef<ModelRegistrySnapshot> | undefined
+let sharedModelRegistryPending: SharedRef<boolean> | undefined
+let sharedModelRegistryError: SharedRef<string | null> | undefined
+let sharedServerInfo: SharedRef<{ host: string; version: string; uptime: string; health: string; noise: string }> | undefined
+
 /**
  * Mock data — the SEAM. This is the ONLY place the design scaffold invents data.
  * DEVELOPER: replace each function body with live data behind the same shapes. The page
@@ -15,502 +39,502 @@ import { useOperatorRules } from './useOperatorRules'
 import { useOperatorSecrets } from './useOperatorSecrets'
 
 export interface Memory {
-  id: string
-  content: string
-  tags: string[]
-  status: 'active' | 'flagged' | 'superseded' | 'archived'
-  tier: 'semantic' | 'episodic' | 'procedural'
-  type: string
-  project: string
-  conf: number
-  confidenceKnown: boolean
-  cite: number
-  inj: number
-  utilityKnown: boolean
-  age: string
-  ageDays: number | null
-  supersededBy?: string
-  sourceSessions: string[]
-  noise?: boolean
+ id: string
+ content: string
+ tags: string[]
+ status: 'active' | 'flagged' | 'superseded' | 'archived'
+ tier: 'semantic' | 'episodic' | 'procedural'
+ type: string
+ project: string
+ conf: number
+ confidenceKnown: boolean
+ cite: number
+ inj: number
+ utilityKnown: boolean
+ age: string
+ ageDays: number | null
+ supersededBy?: string
+ sourceSessions: string[]
+ noise?: boolean
 }
 
 export interface Issue {
-  id: number
-  title: string
-  status: 'open' | 'acknowledged' | 'reopened' | 'resolved' | 'closed'
-  priority: string
-  type: string
-  age: string
-  comments: number
+ id: number
+ title: string
+ status: 'open' | 'acknowledged' | 'reopened' | 'resolved' | 'closed'
+ priority: string
+ type: string
+ age: string
+ comments: number
 }
 
 export interface Cred {
-  id: string
-  project: string
-  scope: string
-  created: string
+ id: string
+ project: string
+ scope: string
+ created: string
 }
 
 export interface ModelRow {
-  id: string
-  role: string
-  provider: string
-  model: string
-  health: 'ok' | 'standby' | 'degraded'
-  costs: string
-  source: string
-  endpoint: string
-  configured: boolean
-  secretSet: boolean
-  message: string
+ id: string
+ role: string
+ provider: string
+ model: string
+ health: 'ok' | 'standby' | 'degraded'
+ costs: string
+ source: string
+ endpoint: string
+ configured: boolean
+ secretSet: boolean
+ message: string
 }
 
 export interface ModelRegistrySnapshot {
-  models: string[]
-  defaultModel: string
-  currentModel: string
+ models: string[]
+ defaultModel: string
+ currentModel: string
 }
 
 export interface RuleRow {
-  id: number
-  content: string
-  project: string
-  priority: number
-  version: number
-  updated: string
-  enabled: boolean
+ id: number
+ content: string
+ project: string
+ priority: number
+ version: number
+ updated: string
+ enabled: boolean
 }
 
 export interface RuleCreateInput {
-  content: string
-  priority?: number
-  project?: string
-  editedBy?: string
+ content: string
+ priority?: number
+ project?: string
+ editedBy?: string
 }
 
 export interface RuleUpdateInput {
-  content?: string
-  priority?: number
-  editedBy?: string
+ content?: string
+ priority?: number
+ editedBy?: string
 }
 
 export interface ProjectSummary {
-  id: string
-  sessions: number
-  last: string
+ id: string
+ sessions: number
+ last: string
 }
 
 export interface ServerConfigSnapshot {
-  injectUnified: boolean
-  telemetryEnabled: boolean
-  enforceSourceProject: boolean
-  contextObservations: string
-  contextMaxTokens: string
-  contextSessionCount: string
-  vectorStrategy: string
-  databaseMaxConns: string
-  logBufferSize: string
+ injectUnified: boolean
+ telemetryEnabled: boolean
+ enforceSourceProject: boolean
+ contextObservations: string
+ contextMaxTokens: string
+ contextSessionCount: string
+ vectorStrategy: string
+ databaseMaxConns: string
+ logBufferSize: string
 }
 
 export interface HealthSnapshot {
-  overall: string
-  components: Array<{ name: string; status: 'healthy' | 'degraded' | 'unhealthy' }>
-  embedding: {
-    chunkCount: string
-    withVectors: string
-    dimension: string
-    coverage: string
-  }
-  hasEmbedding: boolean
+ overall: string
+ components: Array<{ name: string; status: 'healthy' | 'degraded' | 'unhealthy' }>
+ embedding: {
+  chunkCount: string
+  withVectors: string
+  dimension: string
+  coverage: string
+ }
+ hasEmbedding: boolean
 }
 
 export const OPERATOR_DATA_AREAS = {
-  memory: {
-    owner: 'OC-1-CR-005 memory page lane',
-    exports: ['Memory', 'useMemories'],
-    source: 'useMockData.ts memory ownership section',
-  },
-  issues: {
-    owner: 'OC-1-CR-007 issues page lane',
-    exports: ['Issue', 'useIssues'],
-    source: 'useMockData.ts issues ownership section',
-  },
-  vault: {
-    owner: 'OC-1-CR-008 secrets page lane',
-    exports: ['Cred', 'useCreds', 'useVaultStatus'],
-    source: 'useMockData.ts vault ownership section',
-  },
-  rules: {
-    owner: 'OC-1-CR-006 rules page lane',
-    exports: ['RuleRow', 'RuleCreateInput', 'RuleUpdateInput', 'useRules'],
-    source: 'useMockData.ts rules ownership section',
-  },
-  projects: {
-    owner: 'OC-1-CR-009 projects page lane',
-    exports: ['ProjectSummary', 'useProjects'],
-    source: 'useMockData.ts projects ownership section',
-  },
-  health: {
-    owner: 'OC-1-CR-010 health/settings lane',
-    exports: ['HealthSnapshot', 'ServerConfigSnapshot', 'useHealthSnapshot', 'useServerConfigSnapshot'],
-    source: 'useMockData.ts health/settings ownership section',
-  },
-  serverInfo: {
-    owner: 'OC-1-CR-003 shell/overview lane',
-    exports: ['useServerInfo', 'useModels'],
-    source: 'useMockData.ts server-info/model ownership section',
-  },
+ memory: {
+  owner: 'OC-1-CR-005 memory page lane',
+  exports: ['Memory', 'useMemories'],
+  source: 'useMockData.ts memory ownership section',
+ },
+ issues: {
+  owner: 'OC-1-CR-007 issues page lane',
+  exports: ['Issue', 'useIssues'],
+  source: 'useMockData.ts issues ownership section',
+ },
+ vault: {
+  owner: 'OC-1-CR-008 secrets page lane',
+  exports: ['Cred', 'useCreds', 'useVaultStatus'],
+  source: 'useMockData.ts vault ownership section',
+ },
+ rules: {
+  owner: 'OC-1-CR-006 rules page lane',
+  exports: ['RuleRow', 'RuleCreateInput', 'RuleUpdateInput', 'useRules'],
+  source: 'useMockData.ts rules ownership section',
+ },
+ projects: {
+  owner: 'OC-1-CR-009 projects page lane',
+  exports: ['ProjectSummary', 'useProjects'],
+  source: 'useMockData.ts projects ownership section',
+ },
+ health: {
+  owner: 'OC-1-CR-010 health/settings lane',
+  exports: ['HealthSnapshot', 'ServerConfigSnapshot', 'useHealthSnapshot', 'useServerConfigSnapshot'],
+  source: 'useMockData.ts health/settings ownership section',
+ },
+ serverInfo: {
+  owner: 'OC-1-CR-003 shell/overview lane',
+  exports: ['useServerInfo', 'useModels'],
+  source: 'useMockData.ts server-info/model ownership section',
+ },
 } as const
 
 interface ApiIssueRow {
-  id: number
-  title: string
-  status: Issue['status']
-  priority: string
-  type: string
-  created_at: string
-  comment_count?: number
+ id: number
+ title: string
+ status: Issue['status']
+ priority: string
+ type: string
+ created_at: string
+ comment_count?: number
 }
 
 interface ApiIssueList {
-  issues?: ApiIssueRow[]
+ issues?: ApiIssueRow[]
 }
 
 
 interface ApiStats {
-  uptime?: string
+ uptime?: string
 }
 
 interface ApiSelfcheck {
-  version?: string
-  uptime?: string
-  overall?: 'healthy' | 'degraded' | 'unhealthy'
-  components?: Array<{ name?: string; status?: 'healthy' | 'degraded' | 'unhealthy' }>
+ version?: string
+ uptime?: string
+ overall?: 'healthy' | 'degraded' | 'unhealthy'
+ components?: Array<{ name?: string; status?: 'healthy' | 'degraded' | 'unhealthy' }>
 }
 
 interface ApiStatsVnext {
-  noise_ratio?: number
-  embedding?: {
-    chunk_count?: number
-    memories_with_chunks?: number
-    active_memory_count?: number
-    dimension?: number
-    embedding_coverage?: number
-  }
+ noise_ratio?: number
+ embedding?: {
+  chunk_count?: number
+  memories_with_chunks?: number
+  active_memory_count?: number
+  dimension?: number
+  embedding_coverage?: number
+ }
 }
 
 
 interface ApiSessionRow {
-  id?: number
-  project?: string
-  started_at?: string
-  status?: string
+ id?: number
+ project?: string
+ started_at?: string
+ status?: string
 }
 
 interface ApiSessionsList {
-  sessions?: ApiSessionRow[]
-  total?: number
+ sessions?: ApiSessionRow[]
+ total?: number
 }
 
 interface ApiConfig {
-  context?: {
-    observations?: number
-    max_tokens?: number
-    session_count?: number
-  }
-  memory?: {
-    inject_unified?: boolean
-  }
-  storage?: {
-    vector_strategy?: string
-    database_max_conns?: number
-    log_buffer_size?: number
-  }
-  features?: {
-    telemetry_enabled?: boolean
-    enforce_source_project?: boolean
-  }
+ context?: {
+  observations?: number
+  max_tokens?: number
+  session_count?: number
+ }
+ memory?: {
+  inject_unified?: boolean
+ }
+ storage?: {
+  vector_strategy?: string
+  database_max_conns?: number
+  log_buffer_size?: number
+ }
+ features?: {
+  telemetry_enabled?: boolean
+  enforce_source_project?: boolean
+ }
 }
 
 interface ApiModelHealthRow {
-  id?: string
-  role?: string
-  provider?: string
-  model?: string
-  health?: 'ok' | 'standby' | 'degraded'
-  source?: string
-  endpoint?: string
-  message?: string
-  configured?: boolean
-  secret_set?: boolean
+ id?: string
+ role?: string
+ provider?: string
+ model?: string
+ health?: 'ok' | 'standby' | 'degraded'
+ source?: string
+ endpoint?: string
+ message?: string
+ configured?: boolean
+ secret_set?: boolean
 }
 
 interface ApiModelHealthResponse {
-  rows?: ApiModelHealthRow[]
+ rows?: ApiModelHealthRow[]
 }
 
 interface ApiModelsResponse {
-  models?: unknown[]
-  default?: unknown
-  current?: unknown
+ models?: unknown[]
+ default?: unknown
+ current?: unknown
 }
 
 function apiBase(): string {
-  return operatorApiBase()
+ return operatorApiBase()
 }
 
 function displayHost(base: string, configuredHost?: string): string {
-  if (configuredHost && configuredHost.trim()) {
-    return configuredHost.trim()
+ if (configuredHost && configuredHost.trim()) {
+  return configuredHost.trim()
+ }
+
+ if (base.startsWith('/')) {
+  if (typeof window !== 'undefined' && typeof window !== 'undefined') {
+   return window.location.host
   }
 
-  if (base.startsWith('/')) {
-    if (import.meta.client && typeof window !== 'undefined') {
-      return window.location.host
-    }
+  return 'engram'
+ }
 
-    return 'engram'
-  }
-
-  try {
-    return new URL(base).host
-  } catch {
-    return base.replace(/^https?:\/\//, '').replace(/\/$/, '') || 'unleashed.lan:37777'
-  }
+ try {
+  return new URL(base).host
+ } catch {
+  return base.replace(/^https?:\/\//, '').replace(/\/$/, '') || 'unleashed.lan:37777'
+ }
 }
 
 function replaceArray<T>(target: T[], next: readonly T[]) {
-  target.splice(0, target.length, ...next)
+ target.splice(0, target.length, ...next)
 }
 
 function startOnce(key: string, run: () => Promise<void>) {
-  const started = useState<boolean>(`live:${key}:started`, () => false)
-  if (import.meta.client && !started.value) {
-    started.value = true
-    void run().catch((error) => {
-      if (import.meta.dev) {
-        console.warn(`[useMockData] ${key} live load failed`, error)
-      }
-    })
-  }
+ const started = startedLoads.has(key)
+ if (typeof window !== 'undefined' && !started) {
+  startedLoads.add(key)
+  void run().catch((error) => {
+   if (import.meta.env.DEV) {
+    console.warn(`[useMockData] ${key} live load failed`, error)
+   }
+  })
+ }
 }
 
 async function fetchApi(path: string, init: RequestInit = {}): Promise<Response> {
-  const response = await fetch(operatorApiUrl(path, apiBase()), {
-    credentials: 'include',
-    ...init,
-  })
+ const response = await fetch(operatorApiUrl(path, apiBase()), {
+  credentials: 'include',
+  ...init,
+ })
 
-  if (!response.ok) {
-    const text = await response.text()
-    const detail = text.trim() ? `: ${text.trim().slice(0, 240)}` : ''
-    throw new Error(`${response.status} ${response.statusText} for ${path}${detail}`)
-  }
+ if (!response.ok) {
+  const text = await response.text()
+  const detail = text.trim() ? `: ${text.trim().slice(0, 240)}` : ''
+  throw new Error(`${response.status} ${response.statusText} for ${path}${detail}`)
+ }
 
-  return response
+ return response
 }
 
 async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetchApi(path, init)
-  if (response.status === 204) {
-    return undefined as T
-  }
+ const response = await fetchApi(path, init)
+ if (response.status === 204) {
+  return undefined as T
+ }
 
-  const text = await response.text()
-  if (!text.trim()) {
-    return undefined as T
-  }
+ const text = await response.text()
+ if (!text.trim()) {
+  return undefined as T
+ }
 
-  const contentType = response.headers.get('content-type') || ''
-  if (!contentType.includes('application/json')) {
-    return text as T
-  }
+ const contentType = response.headers.get('content-type') || ''
+ if (!contentType.includes('application/json')) {
+  return text as T
+ }
 
-  try {
-    return JSON.parse(text) as T
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error)
-    throw new Error(`Invalid JSON from ${path}: ${detail}: ${text.trim().slice(0, 240)}`)
-  }
+ try {
+  return JSON.parse(text) as T
+ } catch (error) {
+  const detail = error instanceof Error ? error.message : String(error)
+  throw new Error(`Invalid JSON from ${path}: ${detail}: ${text.trim().slice(0, 240)}`)
+ }
 }
 
 function jsonInit(method: 'POST' | 'PATCH' | 'PUT' | 'DELETE', body?: unknown): RequestInit {
-  const init: RequestInit = { method }
-  if (body !== undefined) {
-    init.headers = { 'Content-Type': 'application/json' }
-    init.body = JSON.stringify(body)
-  }
-  return init
+ const init: RequestInit = { method }
+ if (body !== undefined) {
+  init.headers = { 'Content-Type': 'application/json' }
+  init.body = JSON.stringify(body)
+ }
+ return init
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+ return error instanceof Error ? error.message : String(error)
 }
 
 function compactAge(timestamp?: string): string {
-  if (!timestamp) return '—'
+ if (!timestamp) return '—'
 
-  const value = Date.parse(timestamp)
-  if (Number.isNaN(value)) return '—'
+ const value = Date.parse(timestamp)
+ if (Number.isNaN(value)) return '—'
 
-  const seconds = Math.max(0, Math.floor((Date.now() - value) / 1000))
-  if (seconds < 60) return `${seconds}с`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}м`
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}ч`
-  return `${Math.floor(seconds / 86400)}д`
+ const seconds = Math.max(0, Math.floor((Date.now() - value) / 1000))
+ if (seconds < 60) return `${seconds}с`
+ if (seconds < 3600) return `${Math.floor(seconds / 60)}м`
+ if (seconds < 86400) return `${Math.floor(seconds / 3600)}ч`
+ return `${Math.floor(seconds / 86400)}д`
 }
 
 function normalizeNoise(value?: number): string {
-  if (typeof value !== 'number' || Number.isNaN(value)) return '—'
-  return value.toFixed(2)
+ if (typeof value !== 'number' || Number.isNaN(value)) return '—'
+ return value.toFixed(2)
 }
 
 function normalizeProject(value?: string): string {
-  return value && value.trim() ? value.trim() : 'global'
+ return value && value.trim() ? value.trim() : 'global'
 }
 
 function displayValue(value: unknown): string {
-  if (typeof value === 'number' && !Number.isNaN(value)) {
-    return String(value)
-  }
-  if (typeof value === 'string' && value.trim()) {
-    return value
-  }
-  return '—'
+ if (typeof value === 'number' && !Number.isNaN(value)) {
+  return String(value)
+ }
+ if (typeof value === 'string' && value.trim()) {
+  return value
+ }
+ return '—'
 }
 
 function percentValue(value?: number): string {
-  if (typeof value !== 'number' || Number.isNaN(value)) {
-    return '—'
-  }
-  return `${Math.round(value)}%`
+ if (typeof value !== 'number' || Number.isNaN(value)) {
+  return '—'
+ }
+ return `${Math.round(value)}%`
 }
 
 
 function mapModelHealthRow(row: ApiModelHealthRow): ModelRow {
-  return {
-    id: row.id || row.role || 'unknown-model',
-    role: row.role || 'model',
-    provider: row.provider || 'OpenAI-compatible',
-    model: row.model || '—',
-    health: row.health || 'standby',
-    costs: row.source ? `${row.source}${row.secret_set ? ' · key set' : ''}` : '—',
-    source: row.source || 'unknown',
-    endpoint: row.endpoint || '—',
-    configured: Boolean(row.configured),
-    secretSet: Boolean(row.secret_set),
-    message: row.message || row.endpoint || '—',
-  }
+ return {
+  id: row.id || row.role || 'unknown-model',
+  role: row.role || 'model',
+  provider: row.provider || 'OpenAI-compatible',
+  model: row.model || '—',
+  health: row.health || 'standby',
+  costs: row.source ? `${row.source}${row.secret_set ? ' · key set' : ''}` : '—',
+  source: row.source || 'unknown',
+  endpoint: row.endpoint || '—',
+  configured: Boolean(row.configured),
+  secretSet: Boolean(row.secret_set),
+  message: row.message || row.endpoint || '—',
+ }
 }
 
 function modelRegistryName(value: unknown): string | null {
-  if (typeof value === 'string') {
-    const trimmed = value.trim()
-    return trimmed || null
-  }
+ if (typeof value === 'string') {
+  const trimmed = value.trim()
+  return trimmed || null
+ }
 
-  if (value && typeof value === 'object') {
-    const record = value as Record<string, unknown>
-    for (const key of ['id', 'name', 'model']) {
-      const candidate = record[key]
-      if (typeof candidate === 'string' && candidate.trim()) {
-        return candidate.trim()
-      }
-    }
+ if (value && typeof value === 'object') {
+  const record = value as Record<string, unknown>
+  for (const key of ['id', 'name', 'model']) {
+   const candidate = record[key]
+   if (typeof candidate === 'string' && candidate.trim()) {
+    return candidate.trim()
+   }
   }
+ }
 
-  return null
+ return null
 }
 
 function mapModelRegistry(payload: ApiModelsResponse | undefined): ModelRegistrySnapshot {
-  const rawModels = Array.isArray(payload?.models) ? payload.models : []
-  return {
-    models: [...new Set(rawModels.map(modelRegistryName).filter((value): value is string => Boolean(value)))],
-    defaultModel: modelRegistryName(payload?.default) || '—',
-    currentModel: modelRegistryName(payload?.current) || '—',
-  }
+ const rawModels = Array.isArray(payload?.models) ? payload.models : []
+ return {
+  models: [...new Set(rawModels.map(modelRegistryName).filter((value): value is string => Boolean(value)))],
+  defaultModel: modelRegistryName(payload?.default) || '—',
+  currentModel: modelRegistryName(payload?.current) || '—',
+ }
 }
 
 async function listProjects(): Promise<string[]> {
-  const projects = await fetchJson<string[]>('/api/projects')
-  return [...new Set((projects || []).filter((value) => typeof value === 'string' && value.trim()))]
+ const projects = await fetchJson<string[]>('/api/projects')
+ return [...new Set((projects || []).filter((value) => typeof value === 'string' && value.trim()))]
 }
 
 
 async function loadProjectSummaries(): Promise<ProjectSummary[]> {
-  const [projects, sessionsPayload] = await Promise.all([
-    listProjects(),
-    fetchJson<ApiSessionsList>('/api/sessions/list?limit=5000'),
-  ])
+ const [projects, sessionsPayload] = await Promise.all([
+  listProjects(),
+  fetchJson<ApiSessionsList>('/api/sessions/list?limit=5000'),
+ ])
 
-  const sessions = sessionsPayload.sessions || []
-  const perProject = new Map<string, { sessions: number; lastStamp: number; last: string }>()
+ const sessions = sessionsPayload.sessions || []
+ const perProject = new Map<string, { sessions: number; lastStamp: number; last: string }>()
 
-  for (const project of projects) {
-    perProject.set(project, { sessions: 0, lastStamp: 0, last: '—' })
+ for (const project of projects) {
+  perProject.set(project, { sessions: 0, lastStamp: 0, last: '—' })
+ }
+
+ for (const session of sessions) {
+  const project = normalizeProject(session.project)
+  const current = perProject.get(project) || { sessions: 0, lastStamp: 0, last: '—' }
+  current.sessions += 1
+  const stamp = Date.parse(session.started_at || '')
+  if (!Number.isNaN(stamp) && stamp >= current.lastStamp) {
+   current.lastStamp = stamp
+   current.last = compactAge(session.started_at)
   }
+  perProject.set(project, current)
+ }
 
-  for (const session of sessions) {
-    const project = normalizeProject(session.project)
-    const current = perProject.get(project) || { sessions: 0, lastStamp: 0, last: '—' }
-    current.sessions += 1
-    const stamp = Date.parse(session.started_at || '')
-    if (!Number.isNaN(stamp) && stamp >= current.lastStamp) {
-      current.lastStamp = stamp
-      current.last = compactAge(session.started_at)
-    }
-    perProject.set(project, current)
-  }
-
-  return [...perProject.entries()]
-    .map(([id, entry]) => ({
-      id,
-      sessions: entry.sessions,
-      last: entry.last,
-    }))
-    .sort((left, right) => {
-      if (left.sessions !== right.sessions) {
-        return right.sessions - left.sessions
-      }
-      return left.id.localeCompare(right.id)
-    })
+ return [...perProject.entries()]
+  .map(([id, entry]) => ({
+   id,
+   sessions: entry.sessions,
+   last: entry.last,
+  }))
+  .sort((left, right) => {
+   if (left.sessions !== right.sessions) {
+    return right.sessions - left.sessions
+   }
+   return left.id.localeCompare(right.id)
+  })
 }
 
 export const useMemories = () => {
-  return useOperatorMemoryLab().rows
+ return useOperatorMemoryLab().rows
 }
 
 export const useIssuesState = () => {
-  const state = useState<Issue[]>('live:issues', () => [])
-  const rows = state.value
-  const pending = useState<boolean>('live:issues:pending', () => false)
-  const error = useState<string | null>('live:issues:error', () => null)
+ const state = (sharedIssues ??= sharedRef<Issue[]>((() => [])()))
+ const rows = state.value
+ const pending = (sharedIssuesPending ??= sharedRef<boolean>((() => false)()))
+ const error = (sharedIssuesError ??= sharedRef<string | null>((() => null)()))
 
-  async function refresh() {
-    pending.value = true
-    error.value = null
-    try {
-      const payload = await fetchJson<ApiIssueList>('/api/issues?limit=50')
-      const liveRows = (payload.issues || []).map((issue) => ({
-        id: issue.id,
-        title: issue.title,
-        status: issue.status,
-        priority: issue.priority,
-        type: issue.type,
-        age: compactAge(issue.created_at),
-        comments: issue.comment_count ?? 0,
-      }))
-      replaceArray(rows, liveRows)
-    } catch (nextError) {
-      error.value = errorMessage(nextError)
-    } finally {
-      pending.value = false
-    }
+ async function refresh() {
+  pending.value = true
+  error.value = null
+  try {
+   const payload = await fetchJson<ApiIssueList>('/api/issues?limit=50')
+   const liveRows = (payload.issues || []).map((issue) => ({
+    id: issue.id,
+    title: issue.title,
+    status: issue.status,
+    priority: issue.priority,
+    type: issue.type,
+    age: compactAge(issue.created_at),
+    comments: issue.comment_count ?? 0,
+   }))
+   replaceArray(rows, liveRows)
+  } catch (nextError) {
+   error.value = errorMessage(nextError)
+  } finally {
+   pending.value = false
   }
+ }
 
-  startOnce('issues', refresh)
+ startOnce('issues', refresh)
 
-  return { rows, pending, error, refresh }
+ return { rows, pending, error, refresh }
 }
 
 export const useIssues = () => useIssuesState().rows
@@ -520,230 +544,228 @@ export const useCreds = () => useOperatorSecrets().creds
 export const useVaultStatus = () => useOperatorSecrets().vault
 
 export const useRules = () => {
-  const rules = useOperatorRules()
-  return {
-    rows: computed(() => rules.rows),
-    pending: rules.pending,
-    error: rules.error,
-    refresh: rules.refresh,
-    create: rules.createRule,
-    update: rules.updateRule,
-    remove: rules.deleteRule,
-  }
+ const rules = useOperatorRules()
+ return {
+  rows: computed(() => rules.rows),
+  pending: rules.pending,
+  error: rules.error,
+  refresh: rules.refresh,
+  create: rules.createRule,
+ }
 }
 
 export const useProjects = () => {
-  const rows = useState<ProjectSummary[]>('live:projects', () => [])
-  const pending = useState<boolean>('live:projects:pending', () => false)
-  const error = useState<string | null>('live:projects:error', () => null)
+ const rows = (sharedProjects ??= sharedRef<ProjectSummary[]>((() => [])()))
+ const pending = (sharedProjectsPending ??= sharedRef<boolean>((() => false)()))
+ const error = (sharedProjectsError ??= sharedRef<string | null>((() => null)()))
 
-  async function refresh() {
-    pending.value = true
-    error.value = null
-    try {
-      rows.value = await loadProjectSummaries()
-    } catch (nextError) {
-      error.value = errorMessage(nextError)
-    } finally {
-      pending.value = false
-    }
+ async function refresh() {
+  pending.value = true
+  error.value = null
+  try {
+   rows.value = await loadProjectSummaries()
+  } catch (nextError) {
+   error.value = errorMessage(nextError)
+  } finally {
+   pending.value = false
   }
+ }
 
-  startOnce('projects', refresh)
+ startOnce('projects', refresh)
 
-  return { rows, pending, error, refresh }
+ return { rows, pending, error, refresh }
 }
 
 export const useServerConfigSnapshot = () => {
-  const snapshot = useState<ServerConfigSnapshot>('live:server-config', () => ({
-    injectUnified: false,
-    telemetryEnabled: false,
-    enforceSourceProject: false,
-    contextObservations: '—',
-    contextMaxTokens: '—',
-    contextSessionCount: '—',
-    vectorStrategy: '—',
-    databaseMaxConns: '—',
-    logBufferSize: '—',
-  }))
-  const pending = useState<boolean>('live:server-config:pending', () => false)
-  const error = useState<string | null>('live:server-config:error', () => null)
+ const snapshot = (sharedServerConfig ??= sharedRef<ServerConfigSnapshot>((() => ({
+  injectUnified: false,
+  telemetryEnabled: false,
+  enforceSourceProject: false,
+  contextObservations: '—',
+  contextMaxTokens: '—',
+  contextSessionCount: '—',
+  vectorStrategy: '—',
+  databaseMaxConns: '—',
+  logBufferSize: '—',
+ }))()))
+ const pending = (sharedServerConfigPending ??= sharedRef<boolean>((() => false)()))
+ const error = (sharedServerConfigError ??= sharedRef<string | null>((() => null)()))
 
-  async function refresh() {
-    pending.value = true
-    error.value = null
-    try {
-      const payload = await fetchJson<ApiConfig>('/api/config')
-      snapshot.value = {
-        injectUnified: Boolean(payload.memory?.inject_unified),
-        telemetryEnabled: Boolean(payload.features?.telemetry_enabled),
-        enforceSourceProject: Boolean(payload.features?.enforce_source_project),
-        contextObservations: displayValue(payload.context?.observations),
-        contextMaxTokens: displayValue(payload.context?.max_tokens),
-        contextSessionCount: displayValue(payload.context?.session_count),
-        vectorStrategy: displayValue(payload.storage?.vector_strategy),
-        databaseMaxConns: displayValue(payload.storage?.database_max_conns),
-        logBufferSize: displayValue(payload.storage?.log_buffer_size),
-      }
-    } catch (nextError) {
-      error.value = errorMessage(nextError)
-    } finally {
-      pending.value = false
-    }
+ async function refresh() {
+  pending.value = true
+  error.value = null
+  try {
+   const payload = await fetchJson<ApiConfig>('/api/config')
+   snapshot.value = {
+    injectUnified: Boolean(payload.memory?.inject_unified),
+    telemetryEnabled: Boolean(payload.features?.telemetry_enabled),
+    enforceSourceProject: Boolean(payload.features?.enforce_source_project),
+    contextObservations: displayValue(payload.context?.observations),
+    contextMaxTokens: displayValue(payload.context?.max_tokens),
+    contextSessionCount: displayValue(payload.context?.session_count),
+    vectorStrategy: displayValue(payload.storage?.vector_strategy),
+    databaseMaxConns: displayValue(payload.storage?.database_max_conns),
+    logBufferSize: displayValue(payload.storage?.log_buffer_size),
+   }
+  } catch (nextError) {
+   error.value = errorMessage(nextError)
+  } finally {
+   pending.value = false
   }
+ }
 
-  startOnce('server-config', refresh)
+ startOnce('server-config', refresh)
 
-  return { snapshot, pending, error, refresh }
+ return { snapshot, pending, error, refresh }
 }
 
 export const useHealthSnapshot = () => {
-  const snapshot = useState<HealthSnapshot>('live:health', () => ({
-    overall: 'unknown',
-    components: [],
+ const snapshot = (sharedHealth ??= sharedRef<HealthSnapshot>((() => ({
+  overall: 'unknown',
+  components: [],
+  embedding: {
+   chunkCount: '—',
+   withVectors: '—',
+   dimension: '—',
+   coverage: '—',
+  },
+  hasEmbedding: false,
+ }))()))
+ const pending = (sharedHealthPending ??= sharedRef<boolean>((() => false)()))
+ const error = (sharedHealthError ??= sharedRef<string | null>((() => null)()))
+
+ async function refresh() {
+  pending.value = true
+  error.value = null
+  try {
+   const [selfcheck, vnext] = await Promise.all([
+    fetchJson<ApiSelfcheck>('/api/selfcheck'),
+    fetchJson<ApiStatsVnext>('/api/stats/vnext'),
+   ])
+
+   const embedding = vnext.embedding
+   snapshot.value = {
+    overall: selfcheck.overall || 'unknown',
+    components: (selfcheck.components || []).map((component) => ({
+     name: component.name || 'unknown',
+     status: component.status || 'unhealthy',
+    })),
     embedding: {
-      chunkCount: '—',
-      withVectors: '—',
-      dimension: '—',
-      coverage: '—',
+     chunkCount: displayValue(embedding?.chunk_count),
+     withVectors: displayValue(embedding?.memories_with_chunks ?? embedding?.active_memory_count),
+     dimension: displayValue(embedding?.dimension),
+     coverage: percentValue(embedding?.embedding_coverage),
     },
-    hasEmbedding: false,
-  }))
-  const pending = useState<boolean>('live:health:pending', () => false)
-  const error = useState<string | null>('live:health:error', () => null)
-
-  async function refresh() {
-    pending.value = true
-    error.value = null
-    try {
-      const [selfcheck, vnext] = await Promise.all([
-        fetchJson<ApiSelfcheck>('/api/selfcheck'),
-        fetchJson<ApiStatsVnext>('/api/stats/vnext'),
-      ])
-
-      const embedding = vnext.embedding
-      snapshot.value = {
-        overall: selfcheck.overall || 'unknown',
-        components: (selfcheck.components || []).map((component) => ({
-          name: component.name || 'unknown',
-          status: component.status || 'unhealthy',
-        })),
-        embedding: {
-          chunkCount: displayValue(embedding?.chunk_count),
-          withVectors: displayValue(embedding?.memories_with_chunks ?? embedding?.active_memory_count),
-          dimension: displayValue(embedding?.dimension),
-          coverage: percentValue(embedding?.embedding_coverage),
-        },
-        hasEmbedding: Boolean(embedding),
-      }
-    } catch (nextError) {
-      error.value = errorMessage(nextError)
-    } finally {
-      pending.value = false
-    }
+    hasEmbedding: Boolean(embedding),
+   }
+  } catch (nextError) {
+   error.value = errorMessage(nextError)
+  } finally {
+   pending.value = false
   }
+ }
 
-  startOnce('health', refresh)
+ startOnce('health', refresh)
 
-  return { snapshot, pending, error, refresh }
+ return { snapshot, pending, error, refresh }
 }
 
 export const useModelsState = () => {
-  const rows = useState<ModelRow[]>('live:models', () => [])
-  const pending = useState<boolean>('live:models:pending', () => false)
-  const error = useState<string | null>('live:models:error', () => null)
+ const rows = (sharedModels ??= sharedRef<ModelRow[]>((() => [])()))
+ const pending = (sharedModelsPending ??= sharedRef<boolean>((() => false)()))
+ const error = (sharedModelsError ??= sharedRef<string | null>((() => null)()))
 
-  async function refresh() {
-    pending.value = true
-    error.value = null
-    try {
-      const payload = await fetchJson<ApiModelHealthResponse>('/api/model-health')
-      replaceArray(rows.value, (payload.rows || []).map(mapModelHealthRow))
-    } catch (nextError) {
-      error.value = errorMessage(nextError)
-    } finally {
-      pending.value = false
-    }
+ async function refresh() {
+  pending.value = true
+  error.value = null
+  try {
+   const payload = await fetchJson<ApiModelHealthResponse>('/api/model-health')
+   replaceArray(rows.value, (payload.rows || []).map(mapModelHealthRow))
+  } catch (nextError) {
+   error.value = errorMessage(nextError)
+  } finally {
+   pending.value = false
   }
+ }
 
-  startOnce('models', refresh)
+ startOnce('models', refresh)
 
-  return { rows, pending, error, refresh }
+ return { rows, pending, error, refresh }
 }
 
 export const useModelRegistryState = () => {
-  const snapshot = useState<ModelRegistrySnapshot>('live:model-registry', () => ({
-    models: [],
-    defaultModel: '—',
-    currentModel: '—',
-  }))
-  const pending = useState<boolean>('live:model-registry:pending', () => false)
-  const error = useState<string | null>('live:model-registry:error', () => null)
+ const snapshot = (sharedModelRegistry ??= sharedRef<ModelRegistrySnapshot>((() => ({
+  models: [],
+  defaultModel: '—',
+  currentModel: '—',
+ }))()))
+ const pending = (sharedModelRegistryPending ??= sharedRef<boolean>((() => false)()))
+ const error = (sharedModelRegistryError ??= sharedRef<string | null>((() => null)()))
 
-  async function refresh() {
-    pending.value = true
-    error.value = null
-    try {
-      const payload = await fetchJson<ApiModelsResponse>('/api/models')
-      snapshot.value = mapModelRegistry(payload)
-    } catch (nextError) {
-      error.value = errorMessage(nextError)
-    } finally {
-      pending.value = false
-    }
+ async function refresh() {
+  pending.value = true
+  error.value = null
+  try {
+   const payload = await fetchJson<ApiModelsResponse>('/api/models')
+   snapshot.value = mapModelRegistry(payload)
+  } catch (nextError) {
+   error.value = errorMessage(nextError)
+  } finally {
+   pending.value = false
   }
+ }
 
-  startOnce('model-registry', refresh)
+ startOnce('model-registry', refresh)
 
-  return { snapshot, pending, error, refresh }
+ return { snapshot, pending, error, refresh }
 }
 
 export const useModels = () => useModelsState().rows.value
 
 export const useServerInfo = () => {
-  const config = useRuntimeConfig().public
-  const base = apiBase()
-  const state = useState('live:server-info', () => ({
-    host: displayHost(base, config.apiDisplayHost as string | undefined),
-    version: '—',
-    uptime: '—',
-    health: '—',
-    noise: '—',
-  }))
-  const info = state.value
+ const config = operatorConfig
+ const base = apiBase()
+ const state = (sharedServerInfo ??= sharedRef<{ host: string; version: string; uptime: string; health: string; noise: string }>((() => ({
+  host: displayHost(base, config.apiDisplayHost as string | undefined),
+  version: '—',
+  uptime: '—',
+  health: '—',
+  noise: '—',
+ }))()))
+ const info = state.value
 
-  startOnce('server-info', async () => {
-    const [statsResult, selfcheckResult, vnextResult] = await Promise.allSettled([
-      fetchJson<ApiStats>('/api/stats'),
-      fetchJson<ApiSelfcheck>('/api/selfcheck'),
-      fetchJson<ApiStatsVnext>('/api/stats/vnext'),
-    ])
+ startOnce('server-info', async () => {
+  const [statsResult, selfcheckResult, vnextResult] = await Promise.allSettled([
+   fetchJson<ApiStats>('/api/stats'),
+   fetchJson<ApiSelfcheck>('/api/selfcheck'),
+   fetchJson<ApiStatsVnext>('/api/stats/vnext'),
+  ])
 
-    const next = {
-      host: displayHost(base, config.apiDisplayHost as string | undefined),
-      version: '—',
-      uptime: '—',
-      health: '—' as string | number,
-      noise: '—' as string | number,
-    }
+  const next = {
+   host: displayHost(base, config.apiDisplayHost as string | undefined),
+   version: '—',
+   uptime: '—',
+   health: '—' as string | number,
+   noise: '—' as string | number,
+  }
 
-    if (statsResult.status === 'fulfilled' && statsResult.value.uptime) {
-      next.uptime = statsResult.value.uptime
-    }
+  if (statsResult.status === 'fulfilled' && statsResult.value.uptime) {
+   next.uptime = statsResult.value.uptime
+  }
 
-    if (selfcheckResult.status === 'fulfilled') {
-      next.version = selfcheckResult.value.version || next.version
-      next.uptime = selfcheckResult.value.uptime || next.uptime
-      const degraded = (selfcheckResult.value.components || []).filter((component) => component.status && component.status !== 'healthy').length
-      next.health = degraded
-    }
+  if (selfcheckResult.status === 'fulfilled') {
+   next.version = selfcheckResult.value.version || next.version
+   next.uptime = selfcheckResult.value.uptime || next.uptime
+   const degraded = (selfcheckResult.value.components || []).filter((component) => component.status && component.status !== 'healthy').length
+   next.health = degraded
+  }
 
-    if (vnextResult.status === 'fulfilled') {
-      next.noise = normalizeNoise(vnextResult.value.noise_ratio)
-    }
+  if (vnextResult.status === 'fulfilled') {
+   next.noise = normalizeNoise(vnextResult.value.noise_ratio)
+  }
 
-    Object.assign(info, next)
-  })
+  Object.assign(info, next)
+ })
 
-  return info
+ return info
 }

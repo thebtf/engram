@@ -1,3 +1,15 @@
+import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { startedLoads } from './useConsolePreferences'
+
+let sharedProjectsPageProjects: SharedRef<string[]> | undefined
+let sharedProjectsPageRecentSessions: SharedRef<OperatorSessionRow[]> | undefined
+let sharedProjectsPageSessions: SharedRef<OperatorSessionRow[]> | undefined
+let sharedProjectsPageSelectedProject: SharedRef<string> | undefined
+let sharedProjectsPageSelectedSession: SharedRef<OperatorSessionRow | null> | undefined
+let sharedProjectsPageProjectsState: SharedRef<OperatorLoadState<string[]>> | undefined
+let sharedProjectsPageSessionsState: SharedRef<OperatorLoadState<OperatorSessionRow[]>> | undefined
+let sharedProjectsPageDetailState: SharedRef<OperatorLoadState<OperatorSessionRow | null>> | undefined
+
 import type { ComputedRef, Ref } from 'vue'
 import { executeMutation, type MutationCurrentStateParser, type MutationResult } from './useApi'
 import {
@@ -137,11 +149,11 @@ function summarizeProject(project: string, sessions: OperatorSessionRow[]): Oper
 }
 
 function startOnce(key: string, run: () => Promise<void>) {
-  const started = useState<boolean>(`live:${key}:started`, () => false)
-  if (import.meta.client && !started.value) {
-    started.value = true
+  const started = startedLoads.has(key)
+  if (typeof window !== 'undefined' && !started) {
+    startedLoads.add(key)
     void run().catch((error) => {
-      if (import.meta.dev) {
+      if (import.meta.env.DEV) {
         console.warn(`[useOperatorProjects] ${key} live load failed`, error)
       }
     })
@@ -184,15 +196,15 @@ export function useOperatorProjects(): {
   const sessionsEvidence = endpointEvidence('/api/sessions/list?project={project}&limit=50', 'sessions-list')
   const detailEvidence = endpointEvidence('/api/sessions?claudeSessionId={id}', 'sessions-detail')
 
-  const projects = useState<string[]>('live:projects-page:projects', () => [])
-  const recentSessions = useState<OperatorSessionRow[]>('live:projects-page:recent-sessions', () => [])
-  const sessions = useState<OperatorSessionRow[]>('live:projects-page:sessions', () => [])
-  const selectedProject = useState<string>('live:projects-page:selected-project', () => '')
-  const selectedSession = useState<OperatorSessionRow | null>('live:projects-page:selected-session', () => null)
+  const projects = (sharedProjectsPageProjects ??= sharedRef<string[]>((() => [])()))
+  const recentSessions = (sharedProjectsPageRecentSessions ??= sharedRef<OperatorSessionRow[]>((() => [])()))
+  const sessions = (sharedProjectsPageSessions ??= sharedRef<OperatorSessionRow[]>((() => [])()))
+  const selectedProject = (sharedProjectsPageSelectedProject ??= sharedRef<string>((() => '')()))
+  const selectedSession = (sharedProjectsPageSelectedSession ??= sharedRef<OperatorSessionRow | null>((() => null)()))
 
-  const projectsStateValue = useState<OperatorLoadState<string[]>>('live:projects-page:projects-state', () => pendingState(projectsEvidence, projects.value))
-  const sessionsStateValue = useState<OperatorLoadState<OperatorSessionRow[]>>('live:projects-page:sessions-state', () => pendingState(sessionsEvidence, sessions.value))
-  const detailStateValue = useState<OperatorLoadState<OperatorSessionRow | null>>('live:projects-page:detail-state', () => emptyState(detailEvidence, null))
+  const projectsStateValue = (sharedProjectsPageProjectsState ??= sharedRef<OperatorLoadState<string[]>>((() => pendingState(projectsEvidence, projects.value))()))
+  const sessionsStateValue = (sharedProjectsPageSessionsState ??= sharedRef<OperatorLoadState<OperatorSessionRow[]>>((() => pendingState(sessionsEvidence, sessions.value))()))
+  const detailStateValue = (sharedProjectsPageDetailState ??= sharedRef<OperatorLoadState<OperatorSessionRow | null>>((() => emptyState(detailEvidence, null))()))
 
   const projectsState = computed(() => projectsStateValue.value)
   const sessionsState = computed(() => sessionsStateValue.value)

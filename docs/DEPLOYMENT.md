@@ -196,7 +196,7 @@ must be restricted by organization policy.
 - Server: UID/GID 65532, read-only root filesystem, persistent
   `HOME=/var/lib/engram`, semantic health probe on `/api/ready`.
 - Operator console: UID/GID 65532, read-only root filesystem,
-  `NUXT_OPERATOR_API_TARGET=http://server:37777`, semantic proxied readiness.
+  `ENGRAM_OPERATOR_API_TARGET=http://server:37777`, semantic proxied readiness.
 - Every service drops all capabilities and enables `no-new-privileges`;
   bounded tmpfs mounts cover runtime-only writable paths.
 

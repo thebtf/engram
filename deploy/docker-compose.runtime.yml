@@ -75,9 +75,9 @@ services:
     ports:
       - "${OPERATOR_CONSOLE_BIND:-0.0.0.0}:${OPERATOR_CONSOLE_PORT:-3000}:3000"
     environment:
-      NUXT_OPERATOR_API_TARGET: "http://server:37777"
-      NUXT_PUBLIC_API_BASE: "/api"
-      NUXT_PUBLIC_API_DISPLAY_HOST: "${OPERATOR_CONSOLE_API_DISPLAY_HOST:-}"
+      ENGRAM_OPERATOR_API_TARGET: "http://server:37777"
+      ENGRAM_PUBLIC_API_BASE: "/api"
+      ENGRAM_PUBLIC_API_DISPLAY_HOST: "${OPERATOR_CONSOLE_API_DISPLAY_HOST:-}"
     networks:
       operator:
         ipv4_address: "${OPERATOR_CONSOLE_TRUSTED_PROXY_IP:-10.240.250.10}"

@@ -7,8 +7,8 @@ if [[ "$(uname -s)/$(uname -m)" != Linux/x86_64 ]]; then
   exit 1
 fi
 
-node_version=22.19.0
-node_sha256=c0649af18e6a24f6fe5535a3e86b341dd49a8e71117c8b68bde973ef834f16f2
+node_version=22.22.3
+node_sha256=2e5d13569282d016861fae7c8f935e741693c269101a5bebcf761a5376d1f99f
 workdir="$(mktemp -d)"
 trap 'rm -r -- "$workdir"' EXIT
 archive="${ENGRAM_RELEASE_NODE_ARCHIVE:-$workdir/node.tar.xz}"
@@ -33,6 +33,5 @@ fi
   npm ci
   npm run parity
   npm run build
-  npm run generate
 )
 bash scripts/stage-release-operator-console.sh

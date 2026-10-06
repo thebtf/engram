@@ -1,3 +1,19 @@
+import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { startedLoads } from './useConsolePreferences'
+
+let sharedAccessProviders: SharedRef<OperatorAccessProvider[]> | undefined
+let sharedAccessInvitations: SharedRef<OperatorAccessInvitation[]> | undefined
+let sharedAccessUsers: SharedRef<OperatorAccessUser[]> | undefined
+let sharedAccessRoles: SharedRef<OperatorAccessRoleSummary[]> | undefined
+let sharedAccessSessions: SharedRef<OperatorAccessSession[]> | undefined
+let sharedAccessAudit: SharedRef<OperatorAccessAuditEntry[]> | undefined
+let sharedAccessSummary: SharedRef<OperatorAccessSummary> | undefined
+let sharedAccessSelectedUser: SharedRef<number | null> | undefined
+let sharedAccessDrilldown: SharedRef<OperatorAccessDrilldown> | undefined
+let sharedAccessState: SharedRef<OperatorLoadState<OperatorAccessSnapshot>> | undefined
+let sharedAccessHasProvenSnapshot: SharedRef<boolean> | undefined
+let sharedAccessDrilldownState: SharedRef<OperatorLoadState<OperatorAccessDrilldown>> | undefined
+
 import type { ComputedRef, Ref } from 'vue'
 import { computed } from 'vue'
 import { executeMutation, type MutationCurrentStateParser, type MutationResult } from './useApi'
@@ -270,11 +286,11 @@ function replaceArray<T>(target: T[], next: readonly T[]) {
 }
 
 function startOnce(key: string, run: () => Promise<void>) {
-  const started = useState<boolean>(`live:${key}:started`, () => false)
-  if (import.meta.client && !started.value) {
-    started.value = true
+  const started = startedLoads.has(key)
+  if (typeof window !== 'undefined' && !started) {
+    startedLoads.add(key)
     void run().catch((error) => {
-      if (import.meta.dev) {
+      if (import.meta.env.DEV) {
         console.warn(`[useOperatorAccess] ${key} live load failed`, error)
       }
     })
@@ -419,18 +435,18 @@ export function useOperatorAccess(): OperatorAccessComposable {
   const evidence = endpointEvidence('/api/access/*', 'access-page')
   const drilldownEvidence = endpointEvidence('/api/access/users/{id}', 'access-drilldown')
 
-  const providersState = useState<OperatorAccessProvider[]>('live:access:providers', () => [])
-  const invitationsState = useState<OperatorAccessInvitation[]>('live:access:invitations', () => [])
-  const usersState = useState<OperatorAccessUser[]>('live:access:users', () => [])
-  const rolesState = useState<OperatorAccessRoleSummary[]>('live:access:roles', () => [])
-  const sessionsState = useState<OperatorAccessSession[]>('live:access:sessions', () => [])
-  const auditState = useState<OperatorAccessAuditEntry[]>('live:access:audit', () => [])
-  const summaryState = useState<OperatorAccessSummary>('live:access:summary', emptySummary)
-  const selectedUserID = useState<number | null>('live:access:selected-user', () => null)
-  const drilldownData = useState<OperatorAccessDrilldown>('live:access:drilldown', emptyDrilldown)
-  const loadStateValue = useState<OperatorLoadState<OperatorAccessSnapshot>>('live:access:state', () => pendingState(evidence, currentSnapshot()))
-  const hasProvenSnapshotValue = useState<boolean>('live:access:has-proven-snapshot', () => false)
-  const drilldownStateValue = useState<OperatorLoadState<OperatorAccessDrilldown>>('live:access:drilldown-state', () => liveState(drilldownEvidence, emptyDrilldown()))
+  const providersState = (sharedAccessProviders ??= sharedRef<OperatorAccessProvider[]>((() => [])()))
+  const invitationsState = (sharedAccessInvitations ??= sharedRef<OperatorAccessInvitation[]>((() => [])()))
+  const usersState = (sharedAccessUsers ??= sharedRef<OperatorAccessUser[]>((() => [])()))
+  const rolesState = (sharedAccessRoles ??= sharedRef<OperatorAccessRoleSummary[]>((() => [])()))
+  const sessionsState = (sharedAccessSessions ??= sharedRef<OperatorAccessSession[]>((() => [])()))
+  const auditState = (sharedAccessAudit ??= sharedRef<OperatorAccessAuditEntry[]>((() => [])()))
+  const summaryState = (sharedAccessSummary ??= sharedRef<OperatorAccessSummary>((emptySummary)()))
+  const selectedUserID = (sharedAccessSelectedUser ??= sharedRef<number | null>((() => null)()))
+  const drilldownData = (sharedAccessDrilldown ??= sharedRef<OperatorAccessDrilldown>((emptyDrilldown)()))
+  const loadStateValue = (sharedAccessState ??= sharedRef<OperatorLoadState<OperatorAccessSnapshot>>((() => pendingState(evidence, currentSnapshot()))()))
+  const hasProvenSnapshotValue = (sharedAccessHasProvenSnapshot ??= sharedRef<boolean>((() => false)()))
+  const drilldownStateValue = (sharedAccessDrilldownState ??= sharedRef<OperatorLoadState<OperatorAccessDrilldown>>((() => liveState(drilldownEvidence, emptyDrilldown()))()))
 
   function currentSnapshot(): OperatorAccessSnapshot {
     return {

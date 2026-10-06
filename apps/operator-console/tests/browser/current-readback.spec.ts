@@ -380,7 +380,7 @@ test('documents create, history, readback, and export render through the current
  const exportRequests: Array<Record<string, unknown>> = []
  const artifactID = 'b857ebf7-c1cf-4a1f-a733-465ee492d3cb'
  const filename = `documents-export-${artifactID}.json`
- const apiBase = (process.env.NUXT_PUBLIC_API_BASE || '/api').replace(/\/+$/, '')
+ const apiBase = (process.env.ENGRAM_PUBLIC_API_BASE || '/api').replace(/\/+$/, '')
  const expectedDownloadURL = `${apiBase}/documents/exports/${artifactID}`
  await page.route('**/api/documents/selection', async (route: Route) => {
   selectionRequests.push(route.request().postDataJSON() as Record<string, unknown>)

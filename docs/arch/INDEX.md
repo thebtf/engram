@@ -11,7 +11,7 @@ comments, or a surviving symbol as proof that a feature is active.
 3. [Runtime components](COMPONENTS.md) — owners, configuration, and deployment forms.
 4. [Architecture rationale](architecture.md) — durable decisions and tombstones.
 5. [Current surface ledger](current-surface.json) — machine-readable claims,
-   feature gates, and a source-derived Nuxt page inventory.
+   feature gates, and a source-derived Vue page inventory.
 
 The canonical architecture diagram is in the README. Keeping one diagram avoids
 parallel descriptions drifting apart.
@@ -34,7 +34,7 @@ structure and technical claims have been refreshed from the accepted English
 source.
 
 The ledger records only repository-relative evidence. It is a claim inventory,
-not a user journey: a page file proves a route exists in the Nuxt application,
+not a user journey: a page file proves a route exists in the Vue application,
 not that every operation on that page is ready to teach as a setup workflow.
 Each console route entry separately records `page_source`, `deployment_forms`
 with a per-form `direct_load_status`, `capability_status`, and `journey_status`;

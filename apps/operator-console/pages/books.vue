@@ -14,7 +14,7 @@ const { t } = useI18n()
     <section role="status" aria-live="polite">
       <strong>{{ t('retirement.historicalData') }}</strong>
       <p>{{ t('retirement.books.actionsUnavailable') }}</p>
-      <NuxtLink :to="retirement.documentsHref">{{ t('retirement.documentsLink') }}</NuxtLink>
+      <RouterLink :to="retirement.documentsHref">{{ t('retirement.documentsLink') }}</RouterLink>
     </section>
   </main>
 </template>

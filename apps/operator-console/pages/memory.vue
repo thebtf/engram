@@ -150,7 +150,7 @@ watch([loadState, requestedProject, requestedMemory], async ([state, nextProject
   page.value = Math.floor(index / effectivePageSize.value) + 1
   openId.value = memory.id
   await nextTick()
-  if (import.meta.client) document.querySelector<HTMLElement>(`[data-testid="memory-row-${memory.id}"]`)?.scrollIntoView({ block: 'center' })
+  if (typeof window !== 'undefined') document.querySelector<HTMLElement>(`[data-testid="memory-row-${memory.id}"]`)?.scrollIntoView({ block: 'center' })
 }, { immediate: true })
 
 watch([filtered, pageSize], () => {

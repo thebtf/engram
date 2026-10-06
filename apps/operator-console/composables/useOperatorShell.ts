@@ -1,3 +1,11 @@
+import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { startedLoads } from './useConsolePreferences'
+import { operatorConfig } from '../operator-config'
+
+let sharedShellStatus: SharedRef<ShellInfo> | undefined
+let sharedShellStatusPending: SharedRef<boolean> | undefined
+let sharedShellStatusError: SharedRef<string | null> | undefined
+
 import { operatorApiBase, loadOperatorJson, type OperatorLoadState } from './useOperatorApi'
 
 interface AuthMe {
@@ -55,7 +63,7 @@ function displayHost(base: string, configuredHost?: string): string {
   }
 
   if (base.startsWith('/')) {
-    if (import.meta.client && typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && typeof window !== 'undefined') {
       return window.location.host
     }
 
@@ -95,7 +103,7 @@ function isLive<T>(state: OperatorLoadState<T>): state is Extract<OperatorLoadSt
 }
 
 function initialShellInfo(): ShellInfo {
-  const config = useRuntimeConfig().public
+  const config = operatorConfig
   const base = operatorApiBase()
   return {
     host: displayHost(base, config.apiDisplayHost as string | undefined),
@@ -118,11 +126,11 @@ function initialShellInfo(): ShellInfo {
 }
 
 function startOnce(key: string, run: () => Promise<void>) {
-  const started = useState<boolean>(`live:${key}:started`, () => false)
-  if (import.meta.client && !started.value) {
-    started.value = true
+  const started = startedLoads.has(key)
+  if (typeof window !== 'undefined' && !started) {
+    startedLoads.add(key)
     void run().catch((error) => {
-      if (import.meta.dev) {
+      if (import.meta.env.DEV) {
         console.warn(`[useOperatorShell] ${key} live load failed`, error)
       }
     })
@@ -130,9 +138,9 @@ function startOnce(key: string, run: () => Promise<void>) {
 }
 
 export function useOperatorShellStatus() {
-  const info = useState<ShellInfo>('live:shell-status', initialShellInfo)
-  const pending = useState<boolean>('live:shell-status:pending', () => false)
-  const error = useState<string | null>('live:shell-status:error', () => null)
+  const info = (sharedShellStatus ??= sharedRef<ShellInfo>((initialShellInfo)()))
+  const pending = (sharedShellStatusPending ??= sharedRef<boolean>((() => false)()))
+  const error = (sharedShellStatusError ??= sharedRef<string | null>((() => null)()))
 
   async function refresh() {
     pending.value = true

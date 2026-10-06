@@ -11,10 +11,13 @@
     "noEmit": true,
     "skipLibCheck": true,
     "strict": true,
+    "types": [
+      "vite/client"
+    ],
     "target": "ESNext"
   },
   "files": [
-    "./tests/composables/t010-nuxt-globals.d.ts",
+    "./tests/composables/t010-vue-globals.d.ts",
     "./composables/useApi.ts",
     "./composables/useOperatorApi.ts",
     "./composables/useOperatorAccess.ts",

@@ -10,8 +10,8 @@ on the server. Lifecycle hooks use REST because they are not MCP clients.
 
 cmux splits gRPC HTTP/2 from other HTTP traffic on the worker listener. It does
 not turn a browser URL into a gRPC address or an MCP URL. The server can serve an
-embedded generated Nuxt console or proxy browser requests to
-`ENGRAM_OPERATOR_CONSOLE_URL`; the Compose stack also exposes the Nuxt application
+embedded generated Vue console or proxy browser requests to
+`ENGRAM_OPERATOR_CONSOLE_URL`; the Compose stack also exposes the Vue application
 as a dedicated service. Each form consumes the server's HTTP API.
 
 ## Separate credentials

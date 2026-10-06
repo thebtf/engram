@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { density, theme, startedLoads } from '../composables/useConsolePreferences'
+import { locales, setLocale } from '../i18n/i18n.config'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useNav, type NavItem } from '../composables/useNav'
 import { operatorFetchJson } from '../composables/useOperatorApi'
@@ -9,13 +11,11 @@ const shell = useOperatorShellStatus()
 const info = shell.info
 const route = useRoute()
 const router = useRouter()
-const colorMode = useColorMode()
-const density = useState<'comfortable' | 'compact'>('density', () => 'compact')
-const { t, locale, locales, setLocale } = useI18n()
+const { t, locale } = useI18n()
 const { settingsModalOpen, settingsModalTab, openSettingsModal } = useSettingsModal()
 
 const NAV_COLLAPSE_KEY = 'engram.console.navCollapsed'
-const navCollapsed = useState<boolean>('nav-collapsed', () => false)
+const navCollapsed = ref<boolean>(false)
 const navPeek = ref(false)
 const peekSuppressed = ref(false)
 const mobileNavOpen = ref(false)
@@ -95,7 +95,7 @@ const logoutTitle = computed(() => {
 })
 
 onBeforeUnmount(() => {
-  if (!import.meta.client) return
+  if (typeof window === 'undefined') return
   window.removeEventListener('resize', syncViewport)
   window.removeEventListener('pointerdown', onDocumentPointerDown)
   window.removeEventListener('keydown', onDocumentKeydown)
@@ -107,7 +107,7 @@ onBeforeUnmount(() => {
 
 watch(() => route.fullPath, () => closeMobileNav())
 watch([mobileNavOpen, compactViewport], ([open, compact]) => {
-  if (!import.meta.client) return
+  if (typeof window === 'undefined') return
   if (open && compact) {
     if (previousBodyOverflow.value === null) previousBodyOverflow.value = document.body.style.overflow
     document.body.style.overflow = 'hidden'
@@ -142,7 +142,7 @@ function dotState(cls: string) {
 
 function setNavCollapsed(value: boolean) {
   navCollapsed.value = value
-  if (import.meta.client) window.localStorage.setItem(NAV_COLLAPSE_KEY, value ? '1' : '0')
+  if (typeof window !== 'undefined') window.localStorage.setItem(NAV_COLLAPSE_KEY, value ? '1' : '0')
   if (!value) {
     navPeek.value = false
     peekSuppressed.value = false
@@ -165,11 +165,11 @@ function onNavLeave() {
 }
 
 function toggleTheme() {
-  colorMode.preference = colorMode.value === 'dark' ? 'light' : 'dark'
+  theme.value = theme.value === 'dark' ? 'light' : 'dark'
 }
 
 function cycleLocale() {
-  const codes = locales.value.map((item: any) => item.code)
+  const codes = locales.map((item: any) => item.code)
   const next = codes[(codes.indexOf(locale.value) + 1) % codes.length]
   setLocale(next)
 }
@@ -277,10 +277,10 @@ function onDocumentKeydown(event: KeyboardEvent) {
       @pointerleave="onNavLeave"
     >
       <div class="navhead">
-        <NuxtLink to="/" class="navbrand" :title="t('shell.brandHome')" @click="closeMobileNav">
+        <RouterLink to="/" class="navbrand" :title="t('shell.brandHome')" @click="closeMobileNav">
           <span class="glyph">e</span>
           <span class="navbrand-wm">engram</span>
-        </NuxtLink>
+        </RouterLink>
         <button
           class="navcollapse"
           :aria-label="navCollapsed ? t('shell.expandNav') : t('shell.collapseNav')"
@@ -298,7 +298,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
       <div class="nav-scroll">
         <div v-for="group in NAV" :key="group.grpKey" class="nav-grp">
           <div class="gl">{{ t(`nav.groups.${group.grpKey}`) }}</div>
-          <NuxtLink
+          <RouterLink
             v-for="item in group.items"
             :key="item.id"
             :to="item.to"
@@ -314,7 +314,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
             <span v-if="item.cls === 'dormant'" class="flag">{{ item.evidence || t('shell.flag') }}</span>
             <span v-if="item.admin" class="lock">{{ t('common.admin') }}</span>
             <span v-if="item.count" class="cnt">{{ item.count }}</span>
-          </NuxtLink>
+          </RouterLink>
         </div>
       </div>
     </nav>
@@ -336,7 +336,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
         <button :aria-pressed="density === 'compact'" @click="density = 'compact'">{{ t('shell.densityCompact') }}</button>
       </div>
       <button class="tbtn lang topbar-secondary" :title="t('shell.language')" @click="cycleLocale">{{ String(locale).toUpperCase() }}</button>
-      <button class="tbtn topbar-secondary" @click="toggleTheme" :title="colorMode.value === 'dark' ? t('shell.themeToLight') : t('shell.themeToDark')">◐</button>
+      <button class="tbtn topbar-secondary" @click="toggleTheme" :title="theme === 'dark' ? t('shell.themeToLight') : t('shell.themeToDark')">◐</button>
       <div ref="identityMenuRef" class="identity-wrap">
         <button
           class="identity"
@@ -400,10 +400,10 @@ function onDocumentKeydown(event: KeyboardEvent) {
       <span class="si">{{ t('shell.postgres') }}</span>
       <span class="si">{{ currentArea }}</span>
       <span class="ssp" />
-      <NuxtLink to="/health" class="si warn"><span class="dot" />{{ t('shell.statusDegradation') }} <strong>{{ info.health }}</strong></NuxtLink>
+      <RouterLink to="/health" class="si warn"><span class="dot" />{{ t('shell.statusDegradation') }} <strong>{{ info.health }}</strong></RouterLink>
       <span class="si" data-testid="shell-memory-count" :data-count-state="activeMemoryCountState">{{ activeMemoryRecordsLabel }}</span>
-      <NuxtLink to="/noise" class="si warn"><span class="dot" />{{ t('shell.statusNoise') }} <strong>{{ info.noise }}</strong></NuxtLink>
-      <NuxtLink to="/queue" class="si" data-testid="shell-review-queue-count">{{ reviewQueueLabel }}</NuxtLink>
+      <RouterLink to="/noise" class="si warn"><span class="dot" />{{ t('shell.statusNoise') }} <strong>{{ info.noise }}</strong></RouterLink>
+      <RouterLink to="/queue" class="si" data-testid="shell-review-queue-count">{{ reviewQueueLabel }}</RouterLink>
 
       <span class="si">{{ t('shell.uptime', { value: info.uptime }) }}</span>
     </footer>

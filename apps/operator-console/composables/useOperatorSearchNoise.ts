@@ -1,3 +1,16 @@
+import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { startedLoads } from './useConsolePreferences'
+
+let sharedSearchNoiseProjects: SharedRef<string[]> | undefined
+let sharedSearchNoiseSelectedProject: SharedRef<string> | undefined
+let sharedSearchNoiseResults: SharedRef<OperatorSearchResult[]> | undefined
+let sharedSearchNoiseProjectsState: SharedRef<OperatorLoadState<string[]>> | undefined
+let sharedSearchNoiseSearchState: SharedRef<OperatorLoadState<OperatorSearchResult[]>> | undefined
+let sharedSearchNoiseRecentState: SharedRef<OperatorLoadState<ApiSearchRecent>> | undefined
+let sharedSearchNoiseAnalyticsState: SharedRef<OperatorLoadState<ApiSearchAnalytics>> | undefined
+let sharedSearchNoiseRetrievalState: SharedRef<OperatorLoadState<ApiRetrievalStats>> | undefined
+let sharedSearchNoiseVnextState: SharedRef<OperatorLoadState<ApiStatsVNext>> | undefined
+
 import type { ComputedRef, Ref } from 'vue'
 import type { OperatorLoadState } from './useOperatorApi'
 import {
@@ -178,11 +191,11 @@ function contextRows(payload: ApiContextSearch): OperatorSearchResult[] {
 }
 
 function startOnce(key: string, run: () => Promise<void>) {
-  const started = useState<boolean>(`live:${key}:started`, () => false)
-  if (import.meta.client && !started.value) {
-    started.value = true
+  const started = startedLoads.has(key)
+  if (typeof window !== 'undefined' && !started) {
+    startedLoads.add(key)
     void run().catch((error) => {
-      if (import.meta.dev) {
+      if (import.meta.env.DEV) {
         console.warn(`[useOperatorSearchNoise] ${key} live load failed`, error)
       }
     })
@@ -214,16 +227,16 @@ export function useOperatorSearchNoise(): {
   const retrievalEvidence = endpointEvidence('/api/stats/retrieval', 'retrieval-stats')
   const vnextEvidence = endpointEvidence('/api/stats/vnext', 'stats-vnext')
 
-  const projects = useState<string[]>('live:search-noise:projects', () => [])
-  const selectedProject = useState<string>('live:search-noise:selected-project', () => '')
-  const searchResults = useState<OperatorSearchResult[]>('live:search-noise:results', () => [])
+  const projects = (sharedSearchNoiseProjects ??= sharedRef<string[]>((() => [])()))
+  const selectedProject = (sharedSearchNoiseSelectedProject ??= sharedRef<string>((() => '')()))
+  const searchResults = (sharedSearchNoiseResults ??= sharedRef<OperatorSearchResult[]>((() => [])()))
 
-  const projectsStateValue = useState<OperatorLoadState<string[]>>('live:search-noise:projects-state', () => pendingState(projectsEvidence, projects.value))
-  const searchStateValue = useState<OperatorLoadState<OperatorSearchResult[]>>('live:search-noise:search-state', () => emptyState(searchEvidence, searchResults.value))
-  const recentStateValue = useState<OperatorLoadState<ApiSearchRecent>>('live:search-noise:recent-state', () => pendingState(recentEvidence))
-  const analyticsStateValue = useState<OperatorLoadState<ApiSearchAnalytics>>('live:search-noise:analytics-state', () => pendingState(analyticsEvidence))
-  const retrievalStateValue = useState<OperatorLoadState<ApiRetrievalStats>>('live:search-noise:retrieval-state', () => pendingState(retrievalEvidence))
-  const vnextStateValue = useState<OperatorLoadState<ApiStatsVNext>>('live:search-noise:vnext-state', () => pendingState(vnextEvidence))
+  const projectsStateValue = (sharedSearchNoiseProjectsState ??= sharedRef<OperatorLoadState<string[]>>((() => pendingState(projectsEvidence, projects.value))()))
+  const searchStateValue = (sharedSearchNoiseSearchState ??= sharedRef<OperatorLoadState<OperatorSearchResult[]>>((() => emptyState(searchEvidence, searchResults.value))()))
+  const recentStateValue = (sharedSearchNoiseRecentState ??= sharedRef<OperatorLoadState<ApiSearchRecent>>((() => pendingState(recentEvidence))()))
+  const analyticsStateValue = (sharedSearchNoiseAnalyticsState ??= sharedRef<OperatorLoadState<ApiSearchAnalytics>>((() => pendingState(analyticsEvidence))()))
+  const retrievalStateValue = (sharedSearchNoiseRetrievalState ??= sharedRef<OperatorLoadState<ApiRetrievalStats>>((() => pendingState(retrievalEvidence))()))
+  const vnextStateValue = (sharedSearchNoiseVnextState ??= sharedRef<OperatorLoadState<ApiStatsVNext>>((() => pendingState(vnextEvidence))()))
   let searchGeneration = 0
 
   const searchState = computed(() => searchStateValue.value)

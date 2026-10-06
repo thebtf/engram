@@ -1,3 +1,11 @@
+import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { startedLoads } from './useConsolePreferences'
+
+let sharedCandidateQueueRows: SharedRef<OperatorCandidate[]> | undefined
+let sharedCandidateQueueProjects: SharedRef<string[]> | undefined
+let sharedCandidateQueueSelectedProject: SharedRef<string> | undefined
+export const candidateQueueState = sharedRef<OperatorLoadState<OperatorCandidate[]>>(pendingState(endpointEvidence('/api/memory/candidates?project={project}&status=pending&limit=100', 'candidate-queue', { flag: 'ENGRAM_VNEXT_F_ENABLED' }), []))
+
 import type { ComputedRef, Ref } from 'vue'
 import type { OperatorLoadState } from './useOperatorApi'
 import { executeMutation, type MutationResult } from './useApi'
@@ -203,11 +211,11 @@ function parseCandidatePayload(payload: ApiCandidateListResponse, path: string):
 }
 
 function startOnce(key: string, run: () => Promise<void>) {
-  const started = useState<boolean>(`live:${key}:started`, () => false)
-  if (import.meta.client && !started.value) {
-    started.value = true
+  const started = startedLoads.has(key)
+  if (typeof window !== 'undefined' && !started) {
+    startedLoads.add(key)
     void run().catch((error) => {
-      if (import.meta.dev) {
+      if (import.meta.env.DEV) {
         console.warn(`[useOperatorQueue] ${key} live load failed`, error)
       }
     })
@@ -229,10 +237,10 @@ export function useOperatorQueue(): {
   const evidence = endpointEvidence(`/api/memory/candidates?project={project}&status=${QUEUE_STATUS}&limit=${QUEUE_LIMIT}`, 'candidate-queue', {
     flag: QUEUE_FLAG,
   })
-  const rowsState = useState<OperatorCandidate[]>('live:candidate-queue:rows', () => [])
-  const projectsState = useState<string[]>('live:candidate-queue:projects', () => [])
-  const selectedProject = useState<string>('live:candidate-queue:selected-project', () => QUEUE_ALL_PROJECTS)
-  const state = useState<OperatorLoadState<OperatorCandidate[]>>('live:candidate-queue:state', () => pendingState(evidence, rowsState.value))
+  const rowsState = (sharedCandidateQueueRows ??= sharedRef<OperatorCandidate[]>((() => [])()))
+  const projectsState = (sharedCandidateQueueProjects ??= sharedRef<string[]>((() => [])()))
+  const selectedProject = (sharedCandidateQueueSelectedProject ??= sharedRef<string>((() => QUEUE_ALL_PROJECTS)()))
+  const state = candidateQueueState
 
   const loadState = computed(() => state.value)
   const pending = computed(() => state.value.kind === 'pending')

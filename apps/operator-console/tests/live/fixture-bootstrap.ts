@@ -179,7 +179,7 @@ class LiveFixture implements FixtureController {
 
   async start(): Promise<void> {
     await assertLiveHarnessContract()
-    await assertFile(join(consoleRoot, '.output', 'server', 'index.mjs'), 'built Nuxt output')
+    await assertFile(join(consoleRoot, '.output', 'server', 'index.mjs'), 'built Vue output')
 
     this.fixtureRoot = await mkdtemp(join(tmpdir(), `${this.fixtureId}-`))
     this.statePath = join(this.fixtureRoot, 'fixture-state.json')
@@ -234,7 +234,7 @@ class LiveFixture implements FixtureController {
       const operatorCodeFirstIndex = await this.provisionNoViewOperatorCode(postgres.dsn, worktrees.c, this.browserEmail)
       const operatorCodeB = await this.provisionOperatorCode(postgres.dsn, worktrees.b, 'b', this.browserEmailB, this.browserPasswordB)
       const appUrl = await this.startConsole(apiUrl)
-      await this.awaitReady(`${appUrl}/settings`, this.console, 'built Nuxt console')
+      await this.awaitReady(`${appUrl}/settings`, this.console, 'built Vue console')
       const registrationKeycardFile = join(this.fixtureRoot, 'project-identity-registration.keycard')
       await writeFile(registrationKeycardFile, `${this.adminToken}\n`, { encoding: 'utf8', mode: 0o600 })
 
@@ -657,8 +657,8 @@ ${searchPages}`)
       ...fixtureEnvironment(),
       PORT: String(port),
       HOST: '127.0.0.1',
-      NUXT_OPERATOR_API_TARGET: apiUrl,
-      NUXT_PUBLIC_API_DISPLAY_HOST: `127.0.0.1:${port} `,
+      ENGRAM_OPERATOR_API_TARGET: apiUrl,
+      ENGRAM_PUBLIC_API_DISPLAY_HOST: `127.0.0.1:${port} `,
     })
     return `http://127.0.0.1:${port}`
   }
@@ -760,7 +760,7 @@ async function assertLiveHarnessContract(): Promise<void> {
     || !('test:browser:live' in manifestData.scripts)
     || typeof manifestData.scripts['test:browser:live'] !== 'string'
   ) {
-    throw new Error('test:browser:live must build Nuxt and must not start the mock API')
+    throw new Error('test:browser:live must build Vue and must not start the mock API')
   }
   if (manifestData.scripts['test:browser:live'].includes(FORBIDDEN_MOCK_COMMAND)) {
     throw new Error('test:browser:live must not start the mock API')

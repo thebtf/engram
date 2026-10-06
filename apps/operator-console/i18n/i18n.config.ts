@@ -1,4 +1,10 @@
-// Vue I18n base config, read by @nuxtjs/i18n at build time.
+import { createI18n } from 'vue-i18n'
+import { watch } from 'vue'
+import ru from './locales/ru.json'
+import en from './locales/en.json'
+import zh from './locales/zh.json'
+
+// Composition-mode translations and the existing locale cookie belong to the SPA.
 // Composition API mode (legacy:false) so pages use useI18n()/$t. ru is the fallback —
 // a missing en key shows the Russian contract string, never a raw key id. This makes
 // translation incremental: a half-translated en.json still renders a coherent console.
@@ -20,16 +26,16 @@
  *   3 slots:  "{n} секрет | {n} секрета | {n} секретов"                  (one|few|many)
  */
 function ruPluralRule(choice: number, choicesLength: number): number {
-  const mod10 = choice % 10
-  const mod100 = choice % 100
-  const isOne = mod10 === 1 && mod100 !== 11
-  const isFew = mod10 >= 2 && mod10 <= 4 && !(mod100 >= 12 && mod100 <= 14)
-  if (choicesLength >= 4) {
-    if (choice === 0) return 0
-    return isOne ? 1 : isFew ? 2 : 3
-  }
-  // 3-slot form: one | few | many
-  return isOne ? 0 : isFew ? 1 : 2
+ const mod10 = choice % 10
+ const mod100 = choice % 100
+ const isOne = mod10 === 1 && mod100 !== 11
+ const isFew = mod10 >= 2 && mod10 <= 4 && !(mod100 >= 12 && mod100 <= 14)
+ if (choicesLength >= 4) {
+  if (choice === 0) return 0
+  return isOne ? 1 : isFew ? 2 : 3
+ }
+ // 3-slot form: one | few | many
+ return isOne ? 0 : isFew ? 1 : 2
 }
 
 /**
@@ -42,20 +48,38 @@ function ruPluralRule(choice: number, choicesLength: number): number {
  *   1 slot:  "{n} 个密钥"             (other only)
  */
 function zhPluralRule(choice: number, choicesLength: number): number {
-  if (choicesLength <= 1) return 0
-  return choice === 0 ? 0 : choicesLength - 1
+ if (choicesLength <= 1) return 0
+ return choice === 0 ? 0 : choicesLength - 1
 }
 
-export default defineI18nConfig(() => ({
-  legacy: false,
-  fallbackLocale: 'ru',
-  // Missing-key warnings are noise during a long translation pass; the fallback covers UX.
-  missingWarn: false,
-  fallbackWarn: false,
-  // Per-locale plural rules. en uses the built-in 2-form rule; ru needs the Slavic one,
-  // zh needs the one-form rule (with a zero-form escape) above.
-  pluralRules: {
-    ru: ruPluralRule,
-    zh: zhPluralRule,
-  },
-}))
+export const locales = [
+ { code: 'ru', name: 'Русский' },
+ { code: 'en', name: 'English' },
+ { code: 'zh', name: '中文' },
+] as const
+const cookieLocale = document.cookie.split('; ').find((cookie) => cookie.startsWith('engram_console_lang='))?.split('=')[1]
+const preferred = cookieLocale || navigator.language.split('-')[0]
+export const i18n = createI18n({
+ legacy: false,
+ locale: locales.some((item) => item.code === preferred) ? preferred : 'ru',
+ fallbackLocale: 'ru',
+ messages: { ru, en, zh },
+ // Missing-key warnings are noise during a long translation pass; the fallback covers UX.
+ missingWarn: false,
+ fallbackWarn: false,
+ // Per-locale plural rules. en uses the built-in 2-form rule; ru needs the Slavic one,
+ // zh needs the one-form rule (with a zero-form escape) above.
+ pluralRules: {
+  ru: ruPluralRule,
+  zh: zhPluralRule,
+ },
+})
+
+export function setLocale(code: string) {
+ if (code !== 'ru' && code !== 'en' && code !== 'zh') return
+ i18n.global.locale.value = code
+ document.cookie = `engram_console_lang=${code}; Path=/; Max-Age=31536000; SameSite=Lax${location.protocol === 'https:' ? '; Secure' : ''}`
+}
+watch(i18n.global.locale, (locale) => {
+ document.documentElement.lang = locale === 'zh' ? 'zh-Hans' : locale
+}, { immediate: true })

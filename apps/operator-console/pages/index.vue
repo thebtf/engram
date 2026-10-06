@@ -238,14 +238,14 @@ function iconPath(icon: string) {
       </div>
     </section>
 
-    <NuxtLink to="/code" class="workspace-entry" data-testid="overview-workspace-entry">
+    <RouterLink to="/code" class="workspace-entry" data-testid="overview-workspace-entry">
       <svg class="workspace-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" v-html="iconPath('code')" />
       <span>
         <strong>{{ t('nav.items.code') }}</strong>
         <span>{{ t('overview.cards.code.sub') }}</span>
       </span>
       <span aria-hidden="true">→</span>
-    </NuxtLink>
+    </RouterLink>
 
     <section class="ov-attention">
       <h3>
@@ -255,11 +255,11 @@ function iconPath(icon: string) {
         {{ t('overview.attentionTitle') }}
       </h3>
       <div class="ov-att-list">
-        <NuxtLink v-for="item in attention" :key="item.text" :to="item.to" class="ov-att-row">
+        <RouterLink v-for="item in attention" :key="item.text" :to="item.to" class="ov-att-row">
           <span class="oa-dot" :style="{ background: item.color }" />
           <span>{{ item.text }}</span>
           <span class="oa-go">{{ item.label }}</span>
-        </NuxtLink>
+        </RouterLink>
       </div>
     </section>
 
@@ -317,7 +317,7 @@ function iconPath(icon: string) {
 
     <div class="ov-section-t">{{ t('overview.groups.memoryProduct') }}</div>
     <div class="ov-grid">
-      <NuxtLink v-for="card in memoryCards" :key="card.to" :to="card.to" class="ov-card">
+      <RouterLink v-for="card in memoryCards" :key="card.to" :to="card.to" class="ov-card">
         <div class="ov-top">
           <svg class="ov-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" v-html="iconPath(card.icon)" />
           <span class="ov-name">{{ card.name }}</span>
@@ -328,12 +328,12 @@ function iconPath(icon: string) {
         <div v-if="card.meta.length" class="ov-meta">
           <span v-for="meta in card.meta" :key="meta.text" class="bdg" :class="meta.cls">{{ meta.text }}</span>
         </div>
-      </NuxtLink>
+      </RouterLink>
     </div>
 
     <div class="ov-section-t">{{ t('overview.groups.behaviorWork') }}</div>
     <div class="ov-grid">
-      <NuxtLink v-for="card in workCards" :key="card.to" :to="card.to" class="ov-card">
+      <RouterLink v-for="card in workCards" :key="card.to" :to="card.to" class="ov-card">
         <div class="ov-top">
           <svg class="ov-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" v-html="iconPath(card.icon)" />
           <span class="ov-name">{{ card.name }}</span>
@@ -344,12 +344,12 @@ function iconPath(icon: string) {
         <div v-if="card.meta.length" class="ov-meta">
           <span v-for="meta in card.meta" :key="meta.text" class="bdg" :class="meta.cls">{{ meta.text }}</span>
         </div>
-      </NuxtLink>
+      </RouterLink>
     </div>
 
     <div class="ov-section-t">{{ t('overview.groups.service') }}</div>
     <div class="ov-grid">
-      <NuxtLink v-for="card in serviceCards" :key="card.to" :to="card.to" class="ov-card">
+      <RouterLink v-for="card in serviceCards" :key="card.to" :to="card.to" class="ov-card">
         <div class="ov-top">
           <svg class="ov-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" v-html="iconPath(card.icon)" />
           <span class="ov-name">{{ card.name }}</span>
@@ -360,7 +360,7 @@ function iconPath(icon: string) {
         <div v-if="card.meta.length" class="ov-meta">
           <span v-for="meta in card.meta" :key="meta.text" class="bdg" :class="meta.cls">{{ meta.text }}</span>
         </div>
-      </NuxtLink>
+      </RouterLink>
     </div>
   </div>
 </template>

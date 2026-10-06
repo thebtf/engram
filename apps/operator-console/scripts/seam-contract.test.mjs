@@ -1,53 +1,11 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
-import { runInNewContext } from 'node:vm'
-import { parse, stringify, stringifyAsync, uneval } from 'devalue'
-
-test('devalue serialization exposes only the visible Buffer bytes', async () => {
-  const backing = Buffer.alloc(4096, 0x61)
-  const visible = backing.subarray(16, 18)
-  visible.set([0x42, 0x43])
-  for (const restore of [
-    () => parse(stringify({ visible })),
-    async () => parse(await stringifyAsync({ visible })),
-    () => runInNewContext(`(${uneval({ visible })})`),
-  ]) {
-    const restored = await restore()
-    assert.deepEqual(Array.from(restored.visible), [0x42, 0x43])
-    assert.equal(restored.visible.buffer.byteLength, 2, 'serialization must not expose the backing allocation')
-  }
-})
-
-test('devalue serialization bounds repeated-string expansion and preserves script escaping', () => {
-  const text = '</script>\n'.repeat(256)
-  const compact = JSON.stringify([Array(128).fill(1), text])
-  const value = parse(compact)
-  const encoded = uneval(value)
-  assert.ok(encoded.length < compact.length * 4, 'compact payload must not expand quadratically')
-  assert.ok(!encoded.includes('<'), 'serialized script payload must escape markup')
-  assert.deepEqual(Array.from(runInNewContext(encoded)), value)
-})
-
-test('devalue serialization propagates caught async failures without terminating the process', () => {
-  execFileSync(process.execPath, ['--unhandled-rejections=strict', '--input-type=module', '--eval', `
-    import assert from 'node:assert/strict'
-    import { setTimeout as delay } from 'node:timers/promises'
-    import { parse, stringifyAsync } from ${JSON.stringify(import.meta.resolve('devalue'))}
-    const error = new Error('serialization fixture failure')
-    await assert.rejects(
-      stringifyAsync({ slow: delay(50, 42), failing: Promise.reject(error) }),
-      caught => caught === error,
-    )
-    assert.deepEqual(parse(await stringifyAsync({ healthy: Promise.resolve(42) })), { healthy: 42 })
-  `], { timeout: 5000, stdio: 'pipe' })
-})
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const nuxtConfigPath = join(root, 'nuxt.config.ts')
+const preferencesPath = join(root, 'composables', 'useConsolePreferences.ts')
 const seamPath = join(root, 'composables', 'useOperatorApi.ts')
 const compatibilityPath = join(root, 'composables', 'useMockData.ts')
 const memoryLabPath = join(root, 'composables', 'useOperatorMemoryLab.ts')
@@ -168,7 +126,7 @@ test('fetch seam uses runtime config, same-origin default, retryable source erro
   const source = read(seamPath)
 
   assert.match(source, /DEFAULT_OPERATOR_API_BASE\s*=\s*['"]\/api['"]/, 'same-origin /api must be the default base')
-  assert.match(source, /useRuntimeConfig\(\)\.public\.apiBase/, 'public apiBase runtime config must drive the wrapper')
+  assert.match(source, /operatorConfig\.apiBase/, 'public apiBase runtime config must drive the wrapper')
   assert.match(source, /credentials:\s*['"]include['"]/, 'fetch must keep operator cookies')
   assert.match(source, /if\s*\(\s*!response\.ok\s*\)/, 'wrapper must reject HTTP failures')
   assert.match(source, /status:\s*response\.status/, 'HTTP status must be captured')
@@ -658,27 +616,25 @@ test('transport failures are typed diagnosis categories localized at the present
 })
 
 
-test('Nuxt UI color-mode auto-registration stays disabled', () => {
-  const source = read(nuxtConfigPath)
-
-  assert.match(source, /ui:\s*{[\s\S]*colorMode:\s*false/, 'Nuxt UI color-mode auto-registration must remain disabled')
-  assert.match(source, /@nuxtjs\/color-mode/, 'the app still owns theme classes through @nuxtjs/color-mode')
+test('native Vue preferences own theme classes without a second framework writer', () => {
+  const source = read(preferencesPath)
+  assert.match(source, /document\.documentElement\.dataset\.theme = value/, 'theme must drive the existing token selector')
+  assert.match(source, /classList\.toggle\('dark'/, 'dark class must stay synchronized')
+  assert.match(source, /nuxt-color-mode/, 'existing saved theme must survive the cutover')
+  assert.match(source, /prefers-color-scheme: dark/, 'system preference must remain supported')
 })
 
-test('operator console recovers from stale Nuxt chunk errors after deploy', () => {
-  const configSource = read(nuxtConfigPath)
+test('operator console recovers from stale route chunk errors after deploy', () => {
   const source = read(chunkReloadPluginPath)
 
-  assert.match(configSource, /emitRouteChunkError:\s*['"]automatic-immediate['"]/, 'Nuxt must immediately recover from route chunk failures after deploy')
-  assert.doesNotMatch(source, /reloadNuxtApp/, 'chunk reload plugin must use URL replacement instead of reloading a possibly stale document')
-  assert.match(source, /app:chunkError/, 'Nuxt app chunk errors must be handled explicitly')
+  assert.match(source, /router\.onError/, 'router chunk failures must be handled explicitly')
   assert.match(source, /vite:preloadError/, 'Vite preload errors must be handled explicitly')
   assert.match(source, /unhandledrejection/, 'dynamic-import promise rejections must be handled explicitly')
-  assert.match(source, /window\.addEventListener\(['"]error['"],[\s\S]*\}, true\)/, 'module script error events must be handled in capture phase before Nuxt renders a 500 page')
+  assert.match(source, /window\.addEventListener\(['"]error['"],[\s\S]*\}, true\)/, 'module script error events must be handled in capture phase')
   assert.match(source, /failed to fetch dynamically imported module/, 'browser dynamic import error text must be recognized')
   assert.match(source, /failed to load module script/, 'Chrome module script failure text must be recognized')
-  assert.match(source, /isNuxtModuleScriptFailure/, 'filename-only Nuxt module script failures must be handled separately from text-pattern matching')
-  assert.match(source, /function isNuxtModuleScriptFailure[\s\S]*event\.filename[\s\S]*_nuxt/, 'filename-only Nuxt chunk errors must recognize /_nuxt/*.js URLs')
+  assert.match(source, /isModuleScriptFailure/, 'filename-only module script failures must be handled separately from text-pattern matching')
+  assert.match(source, /function isModuleScriptFailure[\s\S]*event\.filename[\s\S]*_nuxt/, 'filename-only chunk errors must retain /_nuxt/*.js output compatibility')
   assert.match(source, /RELOAD_TTL_MS\s*=\s*30_000/, 'reload guard must bound repeated reload attempts')
   assert.match(source, /sessionStorage\.setItem\(RELOAD_KEY/, 'reload guard must persist a short-lived retry marker')
   assert.match(source, /RELOAD_QUERY_PARAM\s*=\s*['"]engram_chunk_reload['"]/, 'reload guard must have a storage-disabled URL fallback')

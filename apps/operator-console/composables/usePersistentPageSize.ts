@@ -15,7 +15,7 @@ function normalizePageSize(value: unknown): OperatorPageSize | null {
 }
 
 function readPageSize(key: string): OperatorPageSize | null {
-  if (!import.meta.client) return null
+  if (typeof window === 'undefined') return null
 
   try {
     return normalizePageSize(window.localStorage.getItem(key))
@@ -25,7 +25,7 @@ function readPageSize(key: string): OperatorPageSize | null {
 }
 
 function writePageSize(key: string, size: OperatorPageSize) {
-  if (!import.meta.client) return
+  if (typeof window === 'undefined') return
 
   try {
     window.localStorage.setItem(key, String(size))

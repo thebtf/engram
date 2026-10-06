@@ -1,3 +1,11 @@
+import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { startedLoads } from './useConsolePreferences'
+
+let sharedSecretsPageCreds: SharedRef<OperatorCredential[]> | undefined
+let sharedSecretsPageVault: SharedRef<OperatorVaultStatus> | undefined
+let sharedSecretsPageState: SharedRef<OperatorLoadState<OperatorCredential[]>> | undefined
+let sharedSecretsPageVaultState: SharedRef<OperatorLoadState<OperatorVaultStatus>> | undefined
+
 import type { ComputedRef } from 'vue'
 import { executeMutation, type MutationCurrentStateParser, type MutationResult } from './useApi'
 import {
@@ -156,11 +164,11 @@ function mapVaultStatus(row: ApiVaultStatus): OperatorVaultStatus {
 }
 
 function startOnce(key: string, run: () => Promise<void>) {
-  const started = useState<boolean>(`live:${key}:started`, () => false)
-  if (import.meta.client && !started.value) {
-    started.value = true
+  const started = startedLoads.has(key)
+  if (typeof window !== 'undefined' && !started) {
+    startedLoads.add(key)
     void run().catch((error) => {
-      if (import.meta.dev) {
+      if (import.meta.env.DEV) {
         console.warn(`[useOperatorSecrets] ${key} live load failed`, error)
       }
     })
@@ -183,15 +191,15 @@ export function useOperatorSecrets(): {
 } {
   const credsEvidence = endpointEvidence('/api/vault/credentials', 'vault-credentials')
   const vaultEvidence = endpointEvidence('/api/vault/status', 'vault-status')
-  const credsState = useState<OperatorCredential[]>('live:secrets-page:creds', () => [])
-  const vaultStatus = useState<OperatorVaultStatus>('live:secrets-page:vault', () => ({
+  const credsState = (sharedSecretsPageCreds ??= sharedRef<OperatorCredential[]>((() => [])()))
+  const vaultStatus = (sharedSecretsPageVault ??= sharedRef<OperatorVaultStatus>((() => ({
     encrypted: false,
     fingerprint: '-',
     source: '-',
     count: 0,
-  }))
-  const loadStateValue = useState<OperatorLoadState<OperatorCredential[]>>('live:secrets-page:state', () => pendingState(credsEvidence, credsState.value))
-  const vaultStateValue = useState<OperatorLoadState<OperatorVaultStatus>>('live:secrets-page:vault-state', () => pendingState(vaultEvidence, vaultStatus.value))
+  }))()))
+  const loadStateValue = (sharedSecretsPageState ??= sharedRef<OperatorLoadState<OperatorCredential[]>>((() => pendingState(credsEvidence, credsState.value))()))
+  const vaultStateValue = (sharedSecretsPageVaultState ??= sharedRef<OperatorLoadState<OperatorVaultStatus>>((() => pendingState(vaultEvidence, vaultStatus.value))()))
 
   const loadState = computed(() => loadStateValue.value)
   const vaultState = computed(() => vaultStateValue.value)
