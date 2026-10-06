@@ -48,8 +48,8 @@ export default defineConfig({
       env: {
         PORT: appPort,
         HOST: process.env.OPERATOR_CONSOLE_SMOKE_DEV ? '0.0.0.0' : '127.0.0.1',
-        NUXT_OPERATOR_API_TARGET: apiUrl,
-        NUXT_PUBLIC_API_DISPLAY_HOST: `${appHost}:${appPort}`,
+        ENGRAM_OPERATOR_API_TARGET: apiUrl,
+        ENGRAM_PUBLIC_API_DISPLAY_HOST: `${appHost}:${appPort}`,
       },
       stdout: 'pipe',
       stderr: 'pipe',

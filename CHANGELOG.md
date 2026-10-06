@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Replace the operator-console's Nuxt/Nitro build and unused Nuxt UI/devtools graph with supported static Vue 3.5.43, Vite 8.3.2, Vue Router 4.6.3 and Vue I18n 11.4.8. Keep every current page, shared state, theme/density preference, RU/EN/ZH locale, API/auth interaction, Go embedded-static output and separate console host. Retire obsolete framework writers and configuration rather than substituting vulnerable dependencies; update actual deployment, smoke and release-build consumers to the `ENGRAM_*` console settings and pinned Node 22.22.3.
+- Correct the standalone operator-web Compose environment for the static Vue host: preserve `OPERATOR_WEB_API_TARGET` and its `host.docker.internal:37777` default while passing `ENGRAM_OPERATOR_API_TARGET`; use `HOST`, `PORT` and `ENGRAM_PUBLIC_API_BASE` without retired Nuxt/Nitro aliases.
+- Resolve Workspace index-intent controls through the static Vue component name, restoring first-index progress, status checks, retries and reindex actions without changing their server authorization or recovery behavior.
+- Keep queued index-intent polling available in historical-status browser fixtures, so their intentional status failures cannot introduce an unrelated index-intent failure.
+- Remove the retired Nuxt ClientOnly wrapper from queue timestamps; the browser-only Vue app renders the same timestamp content directly.
+- Pull the PostgreSQL image's unchanged, digest-pinned Wolfi base from Chainguard's maintained public Docker Hub repository instead of the inaccessible `cgr.dev` route. Preserve PostgreSQL 17.10, pgvector 0.8.1, every package pin, UID/GID 70 and the upstream initialization and persistence contract.
+- Bound PostgreSQL image-proof containers by memory, CPU and PID limits; run the standalone persistence/ownership contract without allocating a bridge network, while retaining the shared server fixture's PostgreSQL network alias.
+
+## [6.50.3-rc.1] - 2026-10-05
+
+This release candidate prepares the P0 installed-memory repair; source and generated artifacts are not proof of installation or restored automatic context. Ordinary installed-client memory reads and fresh OMP automatic-context acceptance remain required. No server rollout, migration, OpenClaw update, or stable/latest promotion is included.
+
+### Fixed
+
+- Add a temporary native-tool and OMP automatic-context bridge for the current tracked name-only workspace using the existing V2 Git identity and normal server canonical resolution. This single-install adapter refuses malformed or partial V3 anchors and never falls back from V3 resolution, authorization, or network errors; valid V3 continues through its existing private relay. Normal V2 metadata, audit and context-injection accounting still apply. Remove the adapter once canonical V3 binding, ordinary memory reads and automatic context have been accepted for this workspace.
+- Keep that adapter read-only in repository subdirectories, preserve their Git prefix across repeated memory requests, strip Git URL userinfo before constructing V2 selectors or outgoing metadata, and refuse invalid original UTF-8 marker bytes. Cache only bounded legacy workspace identity with marker and Git config/index freshness checks; warm memory requests avoid Git subprocesses and cold hook discovery observes the callback's cancellation budget.
+- Bind cached legacy identity to the root Git locator, every intervening directory, and stable effective configuration dependencies captured before and after derivation. Included or conditional configuration remains cache-ineligible and is resolved afresh; unknown or changing dependencies refuse scoped requests instead of retaining an old selector.
+- Refuse the tracked name-only workspace adapter if the Git index changes during admission, and validate original credential-bearing remote observations before V3 normalization while retaining redacted V2 selectors and outgoing metadata.
+- Advance the OpenTelemetry SDK to the minimum fixed 1.45.0 version for GO-2026-6505 (CVE-2026-81870), with only its required minimum-version module closure. Keep the metric gRPC exporter at 1.43.0; the affected client and observability reachability scan reports no reachable vulnerabilities. Publication still requires the final candidate's applicable security gates.
+- Bound shared OMP session-start rendering by the final UTF-8 byte size, including escaped text, complete quoted records, enclosing markup and separators, so Cyrillic and emoji memory can reach the unchanged 12,000-byte hidden-context boundary without being discarded.
+- Run the environment-mutating project-retention test sequentially so Go permits its scoped retention override; keep the other reaper tests parallel and leave runtime retention behavior unchanged.
+- Decode the hybrid confidence-floor regression's actual items array and require the matching high-confidence fixture while excluding the low-confidence fixture; leave runtime recall responses unchanged.
+- Preserve native and hook legacy Git workspace identity across filesystem-equivalent repository paths and refresh scoped identity when an alias is retargeted, while retaining tracked-marker, config/index freshness, cancellation and strict V3 refusal.
+- Submit the tracked name-only hook adapter's physical selected-directory legacy ID in V2 registration, so a filesystem alias can retain a prior project known only by that path-based ID; keep nested Git scope, alias-retarget freshness and strict V3 handling unchanged.
+- Update the operator-console's locked seroval to 1.6.8, source-map-js to 1.2.2, and Vue with its matching 3.5.43 package closure for GHSA-jp82-f5mq-hwhp, GHSA-68fv-2mgg-jv7q, and GHSA-g2v6-rqmx-r4w6; require Vue 3.5.42 or newer within the existing major version. Other HIGH and CRITICAL dependency findings remain unresolved; this is not an all-clear security result.
+- Reserve half of a finite caller deadline for retrieval when hybrid recall permits FTS, cancelling optional query embedding before searching on the original context. Preserve vector-only and no-deadline embedding behavior, existing visibility filters and response formats; propagate caller cancellation instead of returning successful empty degradation. This source repair does not prove recovery of the previously observed live provider failure or deployment.
+
 ## [6.50.2] - 2026-10-01
 
 ### Fixed
@@ -2109,7 +2140,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.2...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.3-rc.1...HEAD
+[6.50.3-rc.1]: https://github.com/thebtf/engram/compare/v6.50.2...v6.50.3-rc.1
 [6.50.2]: https://github.com/thebtf/engram/compare/v6.50.1...v6.50.2
 [6.50.1]: https://github.com/thebtf/engram/compare/v6.50.0...v6.50.1
 [6.50.0]: https://github.com/thebtf/engram/compare/v6.49.4...v6.50.0

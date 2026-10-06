@@ -1,4 +1,4 @@
-import { defineNuxtPlugin } from '#app'
+import type { Router } from 'vue-router'
 
 const RELOAD_KEY = 'engram:operator-console:chunk-error-reload'
 const RELOAD_TTL_MS = 30_000
@@ -88,7 +88,7 @@ function isChunkError(reason: unknown) {
   return CHUNK_ERROR_PATTERNS.some((pattern) => message.includes(pattern))
 }
 
-function isNuxtModuleScriptFailure(event: ErrorEvent) {
+function isModuleScriptFailure(event: ErrorEvent) {
   return event.error == null && typeof event.filename === 'string' && /\/_nuxt\/.+\.js(?:$|\?)/.test(event.filename)
 }
 
@@ -106,9 +106,9 @@ function reloadForChunkError(reason: unknown) {
   replaceWithFreshURL()
 }
 
-export default defineNuxtPlugin((nuxtApp) => {
-  nuxtApp.hook('app:chunkError', (payload) => {
-    reloadForChunkError(payload)
+export function installChunkRecovery(router: Router) {
+  router.onError((error) => {
+    if (isChunkError(error)) reloadForChunkError(error)
   })
 
   window.addEventListener('vite:preloadError', (event) => {
@@ -124,9 +124,9 @@ export default defineNuxtPlugin((nuxtApp) => {
 
   window.addEventListener('error', (event) => {
     const reason = event.error || event.message
-    const filenameOnlyChunkFailure = isNuxtModuleScriptFailure(event)
+    const filenameOnlyChunkFailure = isModuleScriptFailure(event)
     if (!filenameOnlyChunkFailure && !isChunkError(reason)) return
     event.preventDefault()
     reloadForChunkError(reason || event.filename || event)
   }, true)
-})
+}

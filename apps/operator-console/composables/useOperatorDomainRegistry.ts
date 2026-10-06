@@ -1,3 +1,8 @@
+import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { startedLoads } from './useConsolePreferences'
+
+let sharedDomainRegistryDomains: SharedRef<OperatorLoadState<OperatorMemoryDomain[]>> | undefined
+
 import type { ComputedRef } from 'vue'
 import { executeMutation, type MutationCurrentStateParser, type MutationResult } from './useApi'
 import {
@@ -83,11 +88,11 @@ function assertDomain(value: string) {
 }
 
 function startOnce(key: string, run: () => Promise<void>) {
-  const started = useState<boolean>(`live:${key}:started`, () => false)
-  if (import.meta.client && !started.value) {
-    started.value = true
+  const started = startedLoads.has(key)
+  if (typeof window !== 'undefined' && !started) {
+    startedLoads.add(key)
     void run().catch((error) => {
-      if (import.meta.dev) {
+      if (import.meta.env.DEV) {
         console.warn(`[useOperatorDomainRegistry] ${key} live load failed`, error)
       }
     })
@@ -134,10 +139,7 @@ export function useOperatorDomainRegistry(): {
   listEvidence: ReturnType<typeof endpointEvidence>
 } {
   const listEvidence = endpointEvidence('/api/memory-domains', 'memory-domain-registry')
-  const domainStateRef = useState<OperatorLoadState<OperatorMemoryDomain[]>>(
-    'live:domain-registry:domains',
-    () => pendingState(listEvidence, []),
-  )
+  const domainStateRef = (sharedDomainRegistryDomains ??= sharedRef<OperatorLoadState<OperatorMemoryDomain[]>>((() => pendingState(listEvidence, []))()))
 
   const domainState = computed(() => domainStateRef.value)
   const domains = computed(() => domainStateRef.value.data || [])

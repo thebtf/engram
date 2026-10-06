@@ -24,7 +24,7 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 watch(() => props.open, (isOpen) => {
-  if (!import.meta.client) return
+  if (typeof window === 'undefined') return
   if (isOpen) {
     if (previousBodyOverflow.value === null) {
       previousBodyOverflow.value = document.body.style.overflow
@@ -41,7 +41,7 @@ watch(() => props.open, (isOpen) => {
 }, { immediate: true })
 
 onBeforeUnmount(() => {
-  if (!import.meta.client) return
+  if (typeof window === 'undefined') return
   window.removeEventListener('keydown', onKeydown)
   if (previousBodyOverflow.value !== null) {
     document.body.style.overflow = previousBodyOverflow.value

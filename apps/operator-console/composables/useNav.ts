@@ -1,3 +1,9 @@
+import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { candidateQueueState } from './useOperatorQueue'
+
+let sharedNavQueueFlag: SharedRef<boolean | null> | undefined
+let sharedNavQueueFlagStarted: SharedRef<boolean> | undefined
+
 /**
  * Navigation model — single source of truth for sections, grouping, route, and honesty.
  * The shell sidebar and the Overview cards both read this, so a section can never drift
@@ -67,11 +73,10 @@ export const NAV: NavGroup[] = [
 /** Static structure with i18n KEYS. Use when you resolve labels yourself, or need the raw
  *  shape (routes, honesty class, ids) without a translation context. */
 export function useNav() {
- const queueState = useState<OperatorLoadState<OperatorCandidate[]>>('live:candidate-queue:state', () =>
-  pendingState(endpointEvidence('/api/memory/candidates?project={project}&status=pending&limit=100', 'candidate-queue', { flag: 'ENGRAM_VNEXT_F_ENABLED' })))
- const flag = useState<boolean | null>('live:nav:queue-flag', () => null)
- const flagStarted = useState<boolean>('live:nav:queue-flag-started', () => false)
- if (import.meta.client && !flagStarted.value) {
+ const queueState = candidateQueueState
+ const flag = (sharedNavQueueFlag ??= sharedRef<boolean | null>((() => null)()))
+ const flagStarted = (sharedNavQueueFlagStarted ??= sharedRef<boolean>((() => false)()))
+ if (typeof window !== 'undefined' && !flagStarted.value) {
   flagStarted.value = true
   void operatorFetchJson<{ flags?: Record<string, boolean> }>('/api/flags', undefined, 'nav-queue-flags')
    .then((result) => { flag.value = result.flags?.ENGRAM_VNEXT_F_ENABLED ?? null })

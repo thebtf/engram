@@ -4,6 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import http from 'node:http';
+import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import engramMemory, {
   createEngramMemoryExtension,
   hiddenMessage,
@@ -73,8 +76,8 @@ function withRuntimeConfig(t, config) {
 function runtimeConfigExtension(options = {}) {
   return createEngramMemoryExtension({
     now: () => 1_000,
-    resolveHookProjectDescriptorV3(cwd, clientID) {
-      return { ...projectIdentityV3, client_instance_id: clientID };
+    resolveHookProjectContext(cwd, clientID) {
+      return { ProjectDescriptorV3: { ...projectIdentityV3, client_instance_id: clientID } };
     },
     ...options,
   });
@@ -121,7 +124,7 @@ function createExtension(options = {}) {
   return createEngramMemoryExtension({
     now: () => 1_000,
     isQuiet: () => false,
-    resolveHookProjectDescriptorV3: () => projectIdentityV3,
+    resolveHookProjectContext: () => ({ ProjectDescriptorV3: projectIdentityV3 }),
     ...options,
   });
 }
@@ -238,9 +241,9 @@ test('session start performs relay identity then structured context with one abs
       relayResponse('IDENTITY_REGISTRATION'),
       relayResponse('SESSION_START_CONTEXT'),
     ], calls),
-    resolveHookProjectDescriptorV3(cwd, clientID) {
+    resolveHookProjectContext(cwd, clientID) {
       resolverCalls.push({ cwd, clientID });
-      return projectIdentityV3;
+      return { ProjectDescriptorV3: projectIdentityV3 };
     },
   });
 
@@ -292,9 +295,9 @@ test('ambient uses the session descriptor cache and refreshes identity without d
       relayResponse('IDENTITY_REGISTRATION'),
       relayResponse('AMBIENT_CANDIDATES'),
     ], calls),
-    resolveHookProjectDescriptorV3() {
+    resolveHookProjectContext() {
       resolverCalls += 1;
-      return projectIdentityV3;
+      return { ProjectDescriptorV3: projectIdentityV3 };
     },
   });
 
@@ -341,7 +344,7 @@ test('ambient safely omits when no valid cached descriptor exists', async (t) =>
   let resolverCalls = 0;
   const extension = createExtension({
     relay: { async call() { relayCalls += 1; return relayResponse('IDENTITY_REGISTRATION'); } },
-    resolveHookProjectDescriptorV3() { resolverCalls += 1; return projectIdentityV3; },
+    resolveHookProjectContext() { resolverCalls += 1; return { ProjectDescriptorV3: projectIdentityV3 }; },
   });
   assert.equal(await extension.ambientMessage({ cwd: process.cwd(), sessionId: 'missing-session', prompt: 'prompt' }, {}), null);
   assert.equal(relayCalls, 0);
@@ -417,9 +420,9 @@ test('descriptor resolution that crosses the callback deadline leaves no ambient
   let relayCalls = 0;
   const extension = createExtension({
     now: () => now,
-    resolveHookProjectDescriptorV3() {
+    resolveHookProjectContext() {
       now = 6_001;
-      return projectIdentityV3;
+      return { ProjectDescriptorV3: projectIdentityV3 };
     },
     relay: { async call() { relayCalls += 1; return relayResponse('IDENTITY_REGISTRATION'); } },
   });
@@ -439,7 +442,7 @@ test('quiet, missing client identity, invalid descriptors, and bounded inputs sa
   assert.equal(calls, 0);
 
   const invalidDescriptor = createExtension({
-    resolveHookProjectDescriptorV3() { return { project: 'not-v3' }; },
+    resolveHookProjectContext() { return { project: 'not-v3' }; },
     relay: { async call() { calls += 1; } },
   });
   assert.equal(await invalidDescriptor.sessionStartMessage({ cwd: process.cwd(), sessionId: 'invalid' }, {}), null);
@@ -485,15 +488,114 @@ test('ambient applies the relay additional context directly and preserves the 12
   assert.equal(await oversized.ambientMessage({ cwd: process.cwd(), sessionId: 'ambient-oversize', prompt: 'prompt' }, {}), null);
 });
 
-test('the new extension and private helper contain no normal credential transport path', () => {
-  const extension = fs.readFileSync(extensionPath, 'utf8');
-  const relay = fs.readFileSync(relayPath, 'utf8');
-  const forbidden = /resolveEngramRuntimeConfig|requestPost|fetch\b|Authorization|ENGRAM_(?:URL|TOKEN|CONFIG_FILE|DATA_DIR)|serverURL|api_token|server_url|registerProjectIdentityV2|resolveHookProjectIdentityV2/;
-  assert.doesNotMatch(extension, forbidden);
-  assert.doesNotMatch(relay, forbidden);
-  assert.match(extension, /resolveHookProjectDescriptorV3/);
-  assert.match(extension, /IDENTITY_REGISTRATION/);
-  assert.match(extension, /SESSION_START_CONTEXT/);
-  assert.match(extension, /AMBIENT_CANDIDATES/);
-  assert.match(extension, /deliverAs: 'nextTurn'/);
+test('legacy OMP uses real hook transport, canonical V2 scope and no V3 fallback', async (t) => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-omp-name-only-'));
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+  execFileSync('git', ['init', '--quiet', repo]);
+  execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/thebtf/engram.git']);
+  const marker = path.join(repo, '.engram-project');
+  fs.writeFileSync(marker, '{"name":"engram"}\n');
+  execFileSync('git', ['-C', repo, 'add', '.engram-project']);
+  const calls = [];
+  const canonical = 'p2g_00112233445566778899aabbccddeeff';
+  let registrationStatus = 200;
+  let malformedCanonical = false;
+  const server = http.createServer(async (request, response) => {
+    let raw = '';
+    for await (const chunk of request) raw += chunk;
+    calls.push({ endpoint: request.url, body: JSON.parse(raw) });
+    response.setHeader('Content-Type', 'application/json');
+    if (request.url === '/api/context/inject') {
+      response.statusCode = registrationStatus;
+      response.end(JSON.stringify({ canonical_project: malformedCanonical ? null : canonical }));
+    } else if (request.url === '/api/context/session-start') {
+      response.end(JSON.stringify({ memories: [{ content: 'existing scope memory' }], api_token: 'must-not-deliver', server_url: 'must-not-deliver' }));
+    } else if (request.url === '/api/hooks/ambient-candidates') {
+      response.end(JSON.stringify({ additional_context: 'existing scope ambient', api_token: 'must-not-deliver' }));
+    } else {
+      response.statusCode = 404;
+      response.end('{}');
+    }
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  withRuntimeConfig(t, { server_url: `http://127.0.0.1:${server.address().port}`, client_instance_id: clientInstanceID });
+  const childProcess = createRequire(import.meta.url)('node:child_process');
+  let gitCalls = 0;
+  for (const key of ['execFile', 'execFileSync', 'execSync']) {
+    const original = childProcess[key];
+    childProcess[key] = function(...args) {
+      if (args[0] === 'git' || /^git\s/.test(args[0])) gitCalls += 1;
+      return original.apply(this, args);
+    };
+    t.after(() => { childProcess[key] = original; });
+  }
+  let relayCalls = 0;
+  const extension = createEngramMemoryExtension({
+    isQuiet: () => false,
+    relay: { async call(route) { relayCalls += 1; return relayResponse(route); } },
+  });
+  const event = { cwd: repo, sessionId: 'legacy-omp-fixture' };
+  const message = await extension.sessionStartMessage(event, {}, 15000);
+  assert.match(message?.content || '', /existing scope memory/);
+  assert.doesNotMatch(message.content, /api_token|server_url|must-not-deliver/);
+  assert.equal(message.customType, 'engram-memory');
+  assert.equal(relayCalls, 0);
+  assert.equal(calls[0].body.project, '67e398f8');
+  assert.equal(calls[0].body.project_identity.version, 2);
+  assert.equal(calls[0].body.project_identity.relative_path, '');
+  assert.equal(calls[0].body.identity_only, true);
+  assert.equal(calls[0].body.project_descriptor, undefined);
+  assert.equal(calls[1].body.project, canonical);
+  assert.equal(calls[1].body.session_id, event.sessionId);
+  const ambient = await extension.ambientMessage({ ...event, prompt: 'memory query' }, {});
+  assert.equal(ambient?.content, 'existing scope ambient');
+  assert.equal(calls[3].body.project, canonical);
+  assert.equal(relayCalls, 0);
+  execFileSync('git', ['-C', repo, 'remote', 'set-url', 'origin', 'https://fixture-user:fixture-password@github.com/thebtf/engram.git']);
+  const privacyStart = calls.length;
+  assert.ok(await extension.sessionStartMessage(event, {}, 15000));
+  assert.equal(calls[privacyStart].body.project, '67e398f8', 'userinfo must be stripped before the V2 hash');
+  assert.equal(calls[privacyStart].body.git_remote, 'https://github.com/thebtf/engram.git');
+  assert.equal(calls[privacyStart].body.project_identity.git_remote, 'https://github.com/thebtf/engram.git');
+  assert.doesNotMatch(JSON.stringify(calls.slice(privacyStart)), /fixture-user|fixture-password/);
+  fs.writeFileSync(marker, Buffer.concat([Buffer.from('{"name":"'), Buffer.from([0xff]), Buffer.from('"}')]));
+  const invalidStart = calls.length;
+  assert.equal(await extension.sessionStartMessage(event, {}, 15000), null);
+  assert.equal(calls.length, invalidStart, 'original invalid UTF-8 must fail before transport');
+  fs.writeFileSync(marker, '{"name":"engram"}\n');
+  execFileSync('git', ['-C', repo, 'remote', 'set-url', 'origin', 'https://github.com/thebtf/engram.git']);
+  gitCalls = 0;
+  assert.ok(await extension.sessionStartMessage(event, {}, 15000));
+  assert.ok(gitCalls <= 9, `cold legacy classification repeated Git evidence: ${gitCalls}`);
+  gitCalls = 0;
+  const warmStarted = performance.now();
+  assert.equal((await extension.ambientMessage({ ...event, prompt: 'warm memory query' }, {}))?.content, 'existing scope ambient');
+  assert.equal(gitCalls, 0, 'warm legacy ambient must not perform Git round trips');
+  assert.ok(performance.now() - warmStarted < 500, 'warm ambient exceeded its actual callback budget');
+  for (const status of [401, 403, 503]) {
+    registrationStatus = status;
+    const before = calls.length;
+    assert.equal(await extension.sessionStartMessage(event, {}, 15000), null);
+    assert.equal(calls.length, before + 1, `HTTP ${status} must not fetch context or fall back`);
+  }
+  registrationStatus = 200;
+  malformedCanonical = true;
+  assert.equal(await extension.sessionStartMessage(event, {}, 15000), null);
+  malformedCanonical = false;
+  for (const raw of ['{}', '{"name":"engram","version":3}', '{"name":"engram","extra":true}', '{"version":3,"project_id":"bad","name":"engram","scope":"repository"}']) {
+    fs.writeFileSync(marker, raw);
+    const before = calls.length;
+    assert.equal(await extension.sessionStartMessage(event, {}, 15000), null);
+    assert.equal(calls.length, before);
+  }
+  fs.writeFileSync(marker, JSON.stringify({ version: 3, project_id: projectIdentityV3.anchor_project_id, name: 'engram', scope: 'repository' }));
+  const beforeV3 = calls.length;
+  assert.ok(await extension.sessionStartMessage(event, {}, 15000));
+  assert.equal(relayCalls, 2);
+  assert.equal(calls.length, beforeV3, 'V3 must never use normal hook credential transport');
+  const refusing = createEngramMemoryExtension({ isQuiet: () => false, relay: { async call() { return { kind: 'NO_DELIVERY', reason: 'SERVER_UNAVAILABLE' }; } } });
+  assert.equal(await refusing.sessionStartMessage(event, {}, 15000), null);
+  assert.equal(calls.length, beforeV3);
+  assert.equal(fs.existsSync(path.join(repo, '.engram-project-v2.json')), false);
 });

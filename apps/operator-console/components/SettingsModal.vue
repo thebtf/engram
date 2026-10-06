@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { density, theme, startedLoads } from '../composables/useConsolePreferences'
+import { locales, setLocale } from '../i18n/i18n.config'
 import { DOMAIN_OWNER_KINDS, DOMAIN_OWNER_MODES, useOperatorDomainRegistry } from '../composables/useOperatorDomainRegistry'
 import type { DomainRegistryDraft, OperatorMemoryDomain } from '../composables/useOperatorDomainRegistry'
 import { useModelRegistryState, useModelsState } from '../composables/useMockData'
@@ -21,9 +23,7 @@ interface SettingsTab {
 const open = defineModel<boolean>('open', { default: false })
 const activeTab = defineModel<string>('activeTab', { default: 'general' })
 
-const { t, locale, locales, setLocale } = useI18n()
-const colorMode = useColorMode()
-const density = useState<'comfortable' | 'compact'>('density', () => 'compact')
+const { t, locale } = useI18n()
 const shell = useOperatorShellStatus()
 const info = shell.info
 const {
@@ -55,8 +55,8 @@ const {
   listEvidence: domainListEvidence,
 } = useOperatorDomainRegistry()
 const { settingsModalCycle } = useSettingsModal()
-const modelHealthInitialLoad = !useState<boolean>('live:models:started', () => false).value
-const modelRegistryInitialLoad = !useState<boolean>('live:model-registry:started', () => false).value
+const modelHealthInitialLoad = !startedLoads.has('models')
+const modelRegistryInitialLoad = !startedLoads.has('model-registry')
 const modelHealthState = useModelsState()
 const modelRegistryState = useModelRegistryState()
 
@@ -319,7 +319,7 @@ function focusables() {
 }
 
 function restoreModalEnvironment() {
-  if (!import.meta.client) return
+  if (typeof window === 'undefined') return
   document.body.style.overflow = previousBodyOverflow.value ?? ''
   previousBodyOverflow.value = null
   const app = document.querySelector<HTMLElement>('.app')
@@ -338,7 +338,7 @@ function cycleLocaleTo(code: string) {
 }
 
 function setTheme(value: 'dark' | 'light') {
-  colorMode.preference = value
+  theme.value = value
 }
 
 async function confirmRestartServer() {
@@ -393,7 +393,7 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 watch(open, (isOpen) => {
-  if (!import.meta.client) return
+  if (typeof window === 'undefined') return
   if (isOpen) {
     previousTrigger.value = document.activeElement instanceof HTMLElement ? document.activeElement : null
     if (previousBodyOverflow.value === null) {
@@ -431,7 +431,7 @@ watch(() => route.fullPath, (_current, previous) => {
 })
 
 onBeforeUnmount(() => {
-  if (!import.meta.client) return
+  if (typeof window === 'undefined') return
   window.removeEventListener('keydown', onKeydown)
   restoreModalEnvironment()
 })
@@ -483,8 +483,8 @@ onBeforeUnmount(() => {
                     </div>
                     <div class="setting-control">
                       <div class="seg">
-                        <button type="button" :aria-pressed="colorMode.value === 'dark'" @click="setTheme('dark')">{{ t('settings.modal.general.theme.dark') }}</button>
-                        <button type="button" :aria-pressed="colorMode.value === 'light'" @click="setTheme('light')">{{ t('settings.modal.general.theme.light') }}</button>
+                        <button type="button" :aria-pressed="theme === 'dark'" @click="setTheme('dark')">{{ t('settings.modal.general.theme.dark') }}</button>
+                        <button type="button" :aria-pressed="theme === 'light'" @click="setTheme('light')">{{ t('settings.modal.general.theme.light') }}</button>
                       </div>
                     </div>
                   </div>
@@ -547,7 +547,7 @@ onBeforeUnmount(() => {
 
               <template v-else-if="selectedTab.kind === 'access'">
                 <section class="settings-section">
-                  <NuxtLink to="/access" class="tbtn primary" @click="closeModal">{{ t('settings.modal.access.action') }}</NuxtLink>
+                  <RouterLink to="/access" class="tbtn primary" @click="closeModal">{{ t('settings.modal.access.action') }}</RouterLink>
                   <details class="evidence-details">
                     <summary>{{ t('settings.modal.access.detailsTitle') }}</summary>
                     <p>{{ t('settings.modal.access.detailsBody') }}</p>
@@ -864,7 +864,7 @@ onBeforeUnmount(() => {
                     <div class="surface-card">
                       <b>{{ t('settings.modal.client.theme.title') }}</b>
                       <p>{{ t('settings.modal.client.theme.desc') }}</p>
-                      <div class="route">{{ colorMode.value }}</div>
+                      <div class="route">{{ theme }}</div>
                     </div>
                     <div class="surface-card">
                       <b>{{ t('settings.modal.client.density.title') }}</b>

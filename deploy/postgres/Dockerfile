@@ -2,7 +2,7 @@
 
 # Project-owned PostgreSQL image: fixed base, fixed database and extension
 # versions, and the upstream OCI initialization contract.
-FROM cgr.dev/chainguard/wolfi-base@sha256:02dab76bd852a70556b5b2002195c8a5fdab77d323c433bf6642aab080489795
+FROM docker.io/chainguard/wolfi-base@sha256:02dab76bd852a70556b5b2002195c8a5fdab77d323c433bf6642aab080489795
 
 RUN apk --repositories-file /dev/null --repository https://packages.wolfi.dev/os --no-cache add \
   bash=5.3-r12 \

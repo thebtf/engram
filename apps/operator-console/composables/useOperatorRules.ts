@@ -1,3 +1,10 @@
+import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { startedLoads } from './useConsolePreferences'
+
+let sharedRulesPageRows: SharedRef<RuleRow[]> | undefined
+let sharedRulesPageProjectOptions: SharedRef<string[]> | undefined
+let sharedRulesPageState: SharedRef<OperatorLoadState<RuleRow[]>> | undefined
+
 import { computed, type ComputedRef } from 'vue'
 import type { RuleCreateInput, RuleRow } from './useMockData'
 import type {
@@ -17,6 +24,7 @@ import {
   pendingState,
   unsupportedOperatorAction,
 } from './useOperatorApi'
+import { MutationItemOutcome, MutationResult, MutationCurrentStateParser, executeMutation } from './useApi'
 
 interface ApiRuleRow {
   id: number
@@ -479,11 +487,11 @@ function operationBody(input: RuleSelectionOperationInput, requestId: string): R
 }
 
 function startOnce(key: string, run: () => Promise<void>) {
-  const started = useState<boolean>(`live:${key}:started`, () => false)
-  if (import.meta.client && !started.value) {
-    started.value = true
+  const started = startedLoads.has(key)
+  if (typeof window !== 'undefined' && !started) {
+    startedLoads.add(key)
     void run().catch((error) => {
-      if (import.meta.dev) {
+      if (import.meta.env.DEV) {
         console.warn(`[useOperatorRules] ${key} live load failed`, error)
       }
     })
@@ -506,9 +514,9 @@ export function useOperatorRules(): {
   scopeChangeGap: OperatorUnsupportedAction
 } {
   const initialEvidence = endpointEvidence(ruleListPath('all'), 'rules-list')
-  const rowsState = useState<RuleRow[]>('live:rules-page:rows', () => [])
-  const projectOptions = useState<string[]>('live:rules-page:project-options', () => [])
-  const state = useState<OperatorLoadState<RuleRow[]>>('live:rules-page:state', () => pendingState(initialEvidence, rowsState.value))
+  const rowsState = (sharedRulesPageRows ??= sharedRef<RuleRow[]>((() => [])()))
+  const projectOptions = (sharedRulesPageProjectOptions ??= sharedRef<string[]>((() => [])()))
+  const state = (sharedRulesPageState ??= sharedRef<OperatorLoadState<RuleRow[]>>((() => pendingState(initialEvidence, rowsState.value))()))
 
   const loadState = computed(() => state.value)
   const scopeOptions = computed(() => ['global', ...projectOptions.value])
@@ -522,7 +530,7 @@ export function useOperatorRules(): {
     })
     if (result.kind === 'live' || result.kind === 'empty') {
       replaceArray(projectOptions.value, [...new Set(result.data.filter((project) => project.trim()))].sort())
-    } else if (result.kind === 'error' && import.meta.dev) {
+    } else if (result.kind === 'error' && import.meta.env.DEV) {
       console.warn('[useOperatorRules] project options unavailable', result.error.message)
     }
   }
@@ -554,9 +562,10 @@ export function useOperatorRules(): {
         },
       }, rowsState.value)
     } else {
+      const { data, ...status } = result
       state.value = {
-        ...result,
-        ...(result.data === undefined ? {} : { data: rowsState.value }),
+        ...status,
+        ...(data === undefined ? {} : { data: rowsState.value }),
       }
     }
   }

@@ -27,17 +27,17 @@ gRPC server while the remaining HTTP traffic reaches the REST router and browser
 console handler. `/health` distinguishes a reachable process from the service's
 readiness endpoint, `/api/ready`.
 
-The server image includes a generated Nuxt static bundle. `serveIndex` can instead
+The server image includes a generated Vue static bundle. `serveIndex` can instead
 proxy browser traffic to `ENGRAM_OPERATOR_CONSOLE_URL`. The supplied Compose file
-also runs the promoted Nuxt console as a separate service; it uses
-`NUXT_OPERATOR_API_TARGET=http://server:37777` and exposes port 3000 by default.
+also runs the static Vue console as a separate service; it uses
+`ENGRAM_OPERATOR_API_TARGET=http://server:37777` and exposes port 3000 by default.
 These are deployment forms of the same browser application, not an HTTP MCP
 transport.
 
 The embedded-server deployment form has one known route collision: the machine
 `/health` handler registers ahead of the SPA catch-all, so a direct browser load
 of `/health` at the server's own origin returns machine health JSON instead of
-`pages/health.vue`. The standalone Nuxt console (port 3000) has no such
+`pages/health.vue`. The standalone Vue console (port 3000) has no such
 collision. See [current-surface.json](current-surface.json) for the full
 per-deployment-form ledger entry; do not teach the embedded `/health` page as
 working until this is repaired.

@@ -1,3 +1,9 @@
+import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+
+let sharedAccessKeycards: SharedRef<OperatorKeycard[]> | undefined
+let sharedAccessKeycardsState: SharedRef<OperatorLoadState<OperatorKeycard[]>> | undefined
+let sharedAccessKeycardsStarted: SharedRef<boolean> | undefined
+
 import { computed, type ComputedRef } from 'vue'
 import { executeMutation, type MutationCurrentStateParser, type MutationResult } from './useApi'
 import {
@@ -161,12 +167,9 @@ function keycardCreateInit(input: OperatorKeycardCreateInput): RequestInit {
 
 export function useOperatorKeycards(): OperatorKeycardsComposable {
   const evidence = endpointEvidence(KEYCARDS_ENDPOINT, 'access-keycards')
-  const keycardsState = useState<OperatorKeycard[]>('live:access:keycards', () => [])
-  const loadStateValue = useState<OperatorLoadState<OperatorKeycard[]>>(
-    'live:access:keycards-state',
-    () => pendingState(evidence, [...keycardsState.value]),
-  )
-  const started = useState<boolean>('live:access:keycards-started', () => false)
+  const keycardsState = (sharedAccessKeycards ??= sharedRef<OperatorKeycard[]>((() => [])()))
+  const loadStateValue = (sharedAccessKeycardsState ??= sharedRef<OperatorLoadState<OperatorKeycard[]>>((() => pendingState(evidence, [...keycardsState.value]))()))
+  const started = (sharedAccessKeycardsStarted ??= sharedRef<boolean>((() => false)()))
 
   const loadState = computed(() => loadStateValue.value)
   const error = computed(() => loadStateValue.value.kind === 'error' ? loadStateValue.value.error : null)
@@ -214,7 +217,7 @@ export function useOperatorKeycards(): OperatorKeycardsComposable {
     )
   }
 
-  if (import.meta.client && !started.value) {
+  if (typeof window !== 'undefined' && !started.value) {
     started.value = true
     void refresh()
   }

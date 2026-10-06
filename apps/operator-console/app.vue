@@ -1,12 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-
-const { locale } = useI18n()
-useHead(computed(() => ({ htmlAttrs: { lang: locale.value === 'zh' ? 'zh-Hans' : locale.value } })))
+import DefaultLayout from './layouts/default.vue'
 </script>
 
 <template>
-  <NuxtLayout>
-    <NuxtPage />
-  </NuxtLayout>
+  <DefaultLayout>
+    <RouterView />
+  </DefaultLayout>
 </template>

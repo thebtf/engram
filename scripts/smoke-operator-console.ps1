@@ -30,39 +30,47 @@ $requiredOperatorConsoleSmokeHelpers = @(
   "deferred.ps1"
 )
 
-function Write-Step {
+function Write-Step
+{
   param([string]$Message)
   Write-Host "[operator-console-smoke] $Message"
 }
 
-function Invoke-OperatorConsoleParity {
+function Invoke-OperatorConsoleParity
+{
   Write-Step "Running operator-console parity gate"
   Push-Location $operatorConsoleRoot
-  try {
+  try
+  {
     & npm run parity
-    if ($LASTEXITCODE -ne 0) {
+    if ($LASTEXITCODE -ne 0)
+    {
       throw "operator-console parity failed with exit code $LASTEXITCODE"
     }
-  }
-  finally {
+  } finally
+  {
     Pop-Location
   }
 
   Write-Host "PARITY_STATUS=passed"
 }
 
-function Invoke-OperatorConsolePageSmokes {
+function Invoke-OperatorConsolePageSmokes
+{
   Write-Step "Running operator-console page smoke helper coverage"
 
-  foreach ($helper in $requiredOperatorConsoleSmokeHelpers) {
+  foreach ($helper in $requiredOperatorConsoleSmokeHelpers)
+  {
     $helperPath = Join-Path $operatorConsoleSmokeRoot $helper
-    if (-not (Test-Path -LiteralPath $helperPath)) {
+    if (-not (Test-Path -LiteralPath $helperPath))
+    {
       throw "Required operator-console smoke helper is missing: $helperPath"
     }
 
     Write-Step "Running helper $helper"
     & $helperPath
-    if ($LASTEXITCODE -ne 0) {
+    if ($LASTEXITCODE -ne 0)
+    {
       throw "operator-console smoke helper $helper failed with exit code $LASTEXITCODE"
     }
   }
@@ -70,7 +78,8 @@ function Invoke-OperatorConsolePageSmokes {
   Write-Host "SMOKE_HELPERS_STATUS=passed"
 }
 
-function Invoke-Compose {
+function Invoke-Compose
+{
   param(
     [Parameter(Mandatory = $true)]
     [string[]]$Arguments
@@ -81,39 +90,43 @@ function Invoke-Compose {
   $oldOperatorConsolePort = $env:OPERATOR_CONSOLE_PORT
   $oldAuthDisabled = $env:ENGRAM_AUTH_DISABLED
   $oldAdminToken = $env:ENGRAM_AUTH_ADMIN_TOKEN
-  $oldApiTarget = $env:NUXT_OPERATOR_API_TARGET
+  $oldApiTarget = $env:ENGRAM_OPERATOR_API_TARGET
 
-  try {
+  try
+  {
     $env:POSTGRES_PORT = [string]$PostgresPort
     $env:WORKER_PORT = [string]$WorkerPort
     $env:OPERATOR_CONSOLE_PORT = [string]$OperatorConsolePort
-    $env:NUXT_OPERATOR_API_TARGET = "http://server:37777"
+    $env:ENGRAM_OPERATOR_API_TARGET = "http://server:37777"
 
-    if ($Mode -eq "disabled") {
+    if ($Mode -eq "disabled")
+    {
       $env:ENGRAM_AUTH_DISABLED = "true"
       $env:ENGRAM_AUTH_ADMIN_TOKEN = ""
-    }
-    else {
+    } else
+    {
       $env:ENGRAM_AUTH_DISABLED = "false"
       $env:ENGRAM_AUTH_ADMIN_TOKEN = $AdminToken
     }
 
     & docker compose -p $composeProject @Arguments
-    if ($LASTEXITCODE -ne 0) {
+    if ($LASTEXITCODE -ne 0)
+    {
       throw "docker compose $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
     }
-  }
-  finally {
+  } finally
+  {
     $env:POSTGRES_PORT = $oldPostgresPort
     $env:WORKER_PORT = $oldWorkerPort
     $env:OPERATOR_CONSOLE_PORT = $oldOperatorConsolePort
     $env:ENGRAM_AUTH_DISABLED = $oldAuthDisabled
     $env:ENGRAM_AUTH_ADMIN_TOKEN = $oldAdminToken
-    $env:NUXT_OPERATOR_API_TARGET = $oldApiTarget
+    $env:ENGRAM_OPERATOR_API_TARGET = $oldApiTarget
   }
 }
 
-function Wait-Http {
+function Wait-Http
+{
   param(
     [Parameter(Mandatory = $true)]
     [string]$Url,
@@ -122,14 +135,17 @@ function Wait-Http {
     [int]$DelayMs = 1000
   )
 
-  for ($i = 0; $i -lt $Attempts; $i++) {
-    try {
+  for ($i = 0; $i -lt $Attempts; $i++)
+  {
+    try
+    {
       $response = Invoke-WebRequest -Uri $Url -MaximumRedirection 0 -SkipHttpErrorCheck
-      if ($ExpectedStatus -contains [int]$response.StatusCode) {
+      if ($ExpectedStatus -contains [int]$response.StatusCode)
+      {
         return $response
       }
-    }
-    catch {
+    } catch
+    {
       # Retry until attempts exhausted.
     }
 
@@ -139,7 +155,8 @@ function Wait-Http {
   throw "Timed out waiting for $($ExpectedStatus -join ', ') from $Url"
 }
 
-function Invoke-OperatorRequest {
+function Invoke-OperatorRequest
+{
   param(
     [Parameter(Mandatory = $true)]
     [string]$Method,
@@ -156,11 +173,13 @@ function Invoke-OperatorRequest {
     SkipHttpErrorCheck = $true
   }
 
-  if ($null -ne $Session) {
+  if ($null -ne $Session)
+  {
     $request.WebSession = $Session
   }
 
-  if ($null -ne $Body) {
+  if ($null -ne $Body)
+  {
     $request.ContentType = "application/json"
     $request.Body = $Body | ConvertTo-Json -Compress -Depth 10
   }
@@ -168,7 +187,8 @@ function Invoke-OperatorRequest {
   Invoke-WebRequest @request
 }
 
-function Assert-Status {
+function Assert-Status
+{
   param(
     [Parameter(Mandatory = $true)]
     [object]$Response,
@@ -178,12 +198,14 @@ function Assert-Status {
     [string]$Step
   )
 
-  if ($ExpectedStatus -notcontains [int]$Response.StatusCode) {
+  if ($ExpectedStatus -notcontains [int]$Response.StatusCode)
+  {
     throw "Expected $Step status $($ExpectedStatus -join ', '), got $($Response.StatusCode). Body: $($Response.Content)"
   }
 }
 
-function Read-JsonBody {
+function Read-JsonBody
+{
   param(
     [Parameter(Mandatory = $true)]
     [object]$Response,
@@ -191,43 +213,38 @@ function Read-JsonBody {
     [string]$Step
   )
 
-  try {
+  try
+  {
     $Response.Content | ConvertFrom-Json
-  }
-  catch {
+  } catch
+  {
     throw "$Step returned invalid JSON. Body: $($Response.Content)"
   }
 }
 
-function Get-HtmlTitle {
+function Get-HtmlTitle
+{
   param(
     [Parameter(Mandatory = $true)]
     [string]$Html
   )
 
   $match = [regex]::Match($Html, '<title>(.*?)</title>', 'IgnoreCase')
-  if (-not $match.Success) {
+  if (-not $match.Success)
+  {
     throw "HTML title not found in response body."
   }
 
   $match.Groups[1].Value.Trim()
 }
 
-function Get-LocaleProbePath {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string]$Html
-  )
-
-  $match = [regex]::Match($Html, 'path:"([^"]*i18n/locales/[^"]+\.json)"')
-  if (-not $match.Success) {
-    throw "Locale asset path not found in operator-console HTML."
-  }
-
-  $match.Groups[1].Value
+function Get-LocaleProbePath
+{
+  return "/i18n/locales/ru.json"
 }
 
-function Get-CspDirective {
+function Get-CspDirective
+{
   param(
     [Parameter(Mandatory = $true)]
     [string]$Csp,
@@ -235,9 +252,11 @@ function Get-CspDirective {
     [string]$Name
   )
 
-  foreach ($directive in ($Csp -split '[;,]')) {
+  foreach ($directive in ($Csp -split '[;,]'))
+  {
     $trimmed = $directive.Trim()
-    if ($trimmed.StartsWith("$Name ")) {
+    if ($trimmed.StartsWith("$Name "))
+    {
       return $trimmed
     }
   }
@@ -245,7 +264,8 @@ function Get-CspDirective {
   return ""
 }
 
-function Assert-NuxtInlineScriptCsp {
+function Assert-NuxtInlineScriptCsp
+{
   param(
     [Parameter(Mandatory = $true)]
     [object]$Response,
@@ -260,10 +280,12 @@ function Assert-NuxtInlineScriptCsp {
   )
   $csp = @($Response.Headers['Content-Security-Policy']) -join ','
   $inlineScripts = @()
-  foreach ($scriptMatch in $scriptMatches) {
+  foreach ($scriptMatch in $scriptMatches)
+  {
     $attrs = $scriptMatch.Groups[1].Value
     $content = $scriptMatch.Groups[2].Value
-    if ($attrs -match '\ssrc\s*=' -or $content.Length -eq 0) {
+    if ($attrs -match '\ssrc\s*=' -or $content.Length -eq 0)
+    {
       continue
     }
 
@@ -273,7 +295,8 @@ function Assert-NuxtInlineScriptCsp {
     }
   }
 
-  if ($inlineScripts.Count -eq 0 -or $csp -eq "") {
+  if ($inlineScripts.Count -eq 0 -or $csp -eq "")
+  {
     return [pscustomobject]@{
       InlineScriptCount = $inlineScripts.Count
       ScriptSrc = ""
@@ -281,36 +304,42 @@ function Assert-NuxtInlineScriptCsp {
   }
 
   $scriptSrc = Get-CspDirective -Csp $csp -Name "script-src"
-  if ($scriptSrc -eq "") {
+  if ($scriptSrc -eq "")
+  {
     $scriptSrc = Get-CspDirective -Csp $csp -Name "default-src"
   }
 
   $allowsInline = (
     $scriptSrc -match "'unsafe-inline'"
   )
-  if ($allowsInline) {
+  if ($allowsInline)
+  {
     return [pscustomobject]@{
       InlineScriptCount = $inlineScripts.Count
       ScriptSrc = $scriptSrc
     }
   }
 
-  for ($i = 0; $i -lt $inlineScripts.Count; $i++) {
+  for ($i = 0; $i -lt $inlineScripts.Count; $i++)
+  {
     $script = $inlineScripts[$i]
     $nonceMatch = [regex]::Match($script.Attrs, '\snonce\s*=\s*["'']?([^"''\s>]+)', 'IgnoreCase')
-    if ($nonceMatch.Success -and $scriptSrc.Contains("'nonce-$($nonceMatch.Groups[1].Value)'")) {
+    if ($nonceMatch.Success -and $scriptSrc.Contains("'nonce-$($nonceMatch.Groups[1].Value)'"))
+    {
       continue
     }
 
     $sha256 = [System.Security.Cryptography.SHA256]::Create()
-    try {
+    try
+    {
       $bytes = [System.Text.Encoding]::UTF8.GetBytes($script.Content)
       $hash = [Convert]::ToBase64String($sha256.ComputeHash($bytes))
-    }
-    finally {
+    } finally
+    {
       $sha256.Dispose()
     }
-    if ($scriptSrc.Contains("'sha256-$hash'")) {
+    if ($scriptSrc.Contains("'sha256-$hash'"))
+    {
       continue
     }
 
@@ -323,7 +352,8 @@ function Assert-NuxtInlineScriptCsp {
   }
 }
 
-function Assert-LocaleAsset {
+function Assert-LocaleAsset
+{
   param(
     [Parameter(Mandatory = $true)]
     [string]$Origin,
@@ -338,11 +368,13 @@ function Assert-LocaleAsset {
   Assert-Status -Response $localeResponse -ExpectedStatus @(200) -Step "locale asset"
 
   $contentType = @($localeResponse.Headers['Content-Type']) -join ','
-  if ($contentType -notmatch 'application/json') {
+  if ($contentType -notmatch 'application/json')
+  {
     throw "Locale asset returned unexpected content-type '$contentType' from $localeUrl"
   }
 
-  if (-not $localeResponse.Content -or $localeResponse.Content.TrimStart().StartsWith('<!DOCTYPE html>')) {
+  if (-not $localeResponse.Content -or $localeResponse.Content.TrimStart().StartsWith('<!DOCTYPE html>'))
+  {
     throw "Locale asset returned HTML or empty content instead of JSON from $localeUrl"
   }
 
@@ -376,15 +408,18 @@ $smokeRuleId = $null
 $smokeRunId = [guid]::NewGuid().ToString("N")
 $smokeComment = "operator-console smoke resolved mutation $smokeRunId"
 
-try {
+try
+{
   Invoke-OperatorConsoleParity
-  if ($ParityOnly) {
+  if ($ParityOnly)
+  {
     Write-Step "ParityOnly requested; skipping Docker smoke stack"
     return
   }
 
   Invoke-OperatorConsolePageSmokes
-  if ($PageSmokesOnly) {
+  if ($PageSmokesOnly)
+  {
     Write-Step "PageSmokesOnly requested; skipping Docker smoke stack"
     return
   }
@@ -398,24 +433,27 @@ try {
   Write-Step "Waiting for operator-console root"
   $rootResponse = Wait-Http -Url $rootUrl -ExpectedStatus @(200)
   $rootTitle = Get-HtmlTitle -Html $rootResponse.Content
-  if ($rootTitle -ne "engram · консоль оператора") {
+  if ($rootTitle -ne "engram · консоль оператора")
+  {
     throw "Expected promoted operator-console title on dedicated host, got '$rootTitle'"
   }
   $rootCspProbe = Assert-NuxtInlineScriptCsp -Response $rootResponse -Step "dedicated operator-console root"
-  $rootLocalePath = Get-LocaleProbePath -Html $rootResponse.Content
+  $rootLocalePath = Get-LocaleProbePath
   $rootLocaleResponse = Assert-LocaleAsset -Origin $origin -LocalePath $rootLocalePath
 
   Write-Step "Checking worker root is proxied to the promoted operator-console"
   $workerRootResponse = Wait-Http -Url $workerRootUrl -ExpectedStatus @(200)
   $workerRootTitle = Get-HtmlTitle -Html $workerRootResponse.Content
-  if ($workerRootTitle -ne "engram · консоль оператора") {
+  if ($workerRootTitle -ne "engram · консоль оператора")
+  {
     throw "Expected worker root to serve the promoted operator-console, got '$workerRootTitle'"
   }
   $workerRootCspProbe = Assert-NuxtInlineScriptCsp -Response $workerRootResponse -Step "worker root"
-  $workerLocalePath = Get-LocaleProbePath -Html $workerRootResponse.Content
+  $workerLocalePath = Get-LocaleProbePath
   $workerLocaleResponse = Assert-LocaleAsset -Origin $workerOrigin -LocalePath $workerLocalePath
 
-  if ($Mode -eq "disabled") {
+  if ($Mode -eq "disabled")
+  {
     Write-Step "Waiting for proxied selfcheck"
     $selfcheckResponse = Wait-Http -Url $selfcheckUrl -ExpectedStatus @(200)
 
@@ -435,14 +473,16 @@ try {
     $workerAuthBody = Read-JsonBody -Response $workerAuthResponse -Step "worker auth/me"
     $proxyAuthBody = Read-JsonBody -Response $proxyAuthResponse -Step "proxied auth/me"
 
-    if ($workerAuthBody.authenticated -ne $true -or $proxyAuthBody.authenticated -ne $true) {
+    if ($workerAuthBody.authenticated -ne $true -or $proxyAuthBody.authenticated -ne $true)
+    {
       throw "Expected auth-disabled auth/me to return authenticated=true. worker=$($workerAuthResponse.Content) proxy=$($proxyAuthResponse.Content)"
     }
-    if ($workerAuthBody.role -ne "admin" -or $proxyAuthBody.role -ne "admin") {
+    if ($workerAuthBody.role -ne "admin" -or $proxyAuthBody.role -ne "admin")
+    {
       throw "Expected auth-disabled auth/me role=admin. worker=$($workerAuthResponse.Content) proxy=$($proxyAuthResponse.Content)"
     }
-  }
-  else {
+  } else
+  {
     Write-Step "Checking pre-login auth/me is unauthorized"
     $preLoginAuthResponse = Wait-Http -Url $authMeUrl -ExpectedStatus @(401)
     Assert-Status -Response $preLoginAuthResponse -ExpectedStatus @(401) -Step "pre-login auth/me"
@@ -476,19 +516,20 @@ try {
     -Url $issuesUrl `
     -Session $session `
     -Body @{
-      title = "operator-console smoke $smokeRunId"
-      body = "Created by scripts/smoke-operator-console.ps1 to prove proxied issue mutations."
-      priority = "low"
-      type = "task"
-      source_project = "operator-console-smoke"
-      target_project = "operator-console-smoke"
-      source_agent = "smoke-script"
-      labels = @("operator-console", "smoke")
-    }
+    title = "operator-console smoke $smokeRunId"
+    body = "Created by scripts/smoke-operator-console.ps1 to prove proxied issue mutations."
+    priority = "low"
+    type = "task"
+    source_project = "operator-console-smoke"
+    target_project = "operator-console-smoke"
+    source_agent = "smoke-script"
+    labels = @("operator-console", "smoke")
+  }
   Assert-Status -Response $createIssueResponse -ExpectedStatus @(201) -Step "issue create"
 
   $createIssueBody = Read-JsonBody -Response $createIssueResponse -Step "issue create"
-  if ($null -eq $createIssueBody.id) {
+  if ($null -eq $createIssueBody.id)
+  {
     throw "Issue create response did not include id. Body: $($createIssueResponse.Content)"
   }
 
@@ -510,11 +551,11 @@ try {
     -Url $issueUrl `
     -Session $session `
     -Body @{
-      status = "resolved"
-      comment = $smokeComment
-      source_project = "operator-console-smoke"
-      source_agent = "smoke-script"
-    }
+    status = "resolved"
+    comment = $smokeComment
+    source_project = "operator-console-smoke"
+    source_agent = "smoke-script"
+  }
   Assert-Status -Response $resolveIssueResponse -ExpectedStatus @(200) -Step "issue resolve"
 
   Write-Step "Deleting smoke issue"
@@ -538,14 +579,15 @@ try {
     -Url $rulesUrl `
     -Session $session `
     -Body @{
-      content = "operator-console smoke rule $smokeRunId"
-      priority = 21
-      edited_by = "smoke-script"
-    }
+    content = "operator-console smoke rule $smokeRunId"
+    priority = 21
+    edited_by = "smoke-script"
+  }
   Assert-Status -Response $createRuleResponse -ExpectedStatus @(201) -Step "rule create"
 
   $createRuleBody = Read-JsonBody -Response $createRuleResponse -Step "rule create"
-  if ($null -eq $createRuleBody.id) {
+  if ($null -eq $createRuleBody.id)
+  {
     throw "Rule create response did not include id. Body: $($createRuleResponse.Content)"
   }
 
@@ -559,9 +601,9 @@ try {
     -Url $ruleUrl `
     -Session $session `
     -Body @{
-      priority = 34
-      edited_by = "smoke-script"
-    }
+    priority = 34
+    edited_by = "smoke-script"
+  }
   Assert-Status -Response $updateRuleResponse -ExpectedStatus @(200) -Step "rule update"
 
   Write-Step "Listing rules to verify smoke rule presence"
@@ -572,7 +614,8 @@ try {
   Assert-Status -Response $listRulesResponse -ExpectedStatus @(200) -Step "rule list"
   $listRulesBody = Read-JsonBody -Response $listRulesResponse -Step "rule list"
   $listedRule = $listRulesBody | Where-Object { $_.id -eq $createdRuleId }
-  if ($null -eq $listedRule) {
+  if ($null -eq $listedRule)
+  {
     throw "Smoke rule #$createdRuleId not found in list output. Body: $($listRulesResponse.Content)"
   }
 
@@ -590,7 +633,8 @@ try {
     -Session $session
   Assert-Status -Response $postDeleteRulesResponse -ExpectedStatus @(200) -Step "rule cleanup verification"
   $postDeleteRulesBody = Read-JsonBody -Response $postDeleteRulesResponse -Step "rule cleanup verification"
-  if ($postDeleteRulesBody | Where-Object { $_.id -eq $createdRuleId }) {
+  if ($postDeleteRulesBody | Where-Object { $_.id -eq $createdRuleId })
+  {
     throw "Smoke rule #$createdRuleId still present after delete. Body: $($postDeleteRulesResponse.Content)"
   }
   $createdRuleId = $null
@@ -615,11 +659,12 @@ try {
   Write-Host ("SELFCHECK_STATUS=" + $selfcheckResponse.StatusCode)
   Write-Host ("STATS_STATUS=" + $statsResponse.StatusCode)
   Write-Host ("STATS_VNEXT_STATUS=" + $statsVnextResponse.StatusCode)
-  if ($Mode -eq "disabled") {
+  if ($Mode -eq "disabled")
+  {
     Write-Host ("AUTH_ME_STATUS=" + $proxyAuthResponse.StatusCode)
     Write-Host ("AUTH_ME_BODY=" + $proxyAuthResponse.Content)
-  }
-  else {
+  } else
+  {
     Write-Host ("AUTH_LOGIN_STATUS=" + $loginResponse.StatusCode)
     Write-Host ("AUTH_ME_STATUS=" + $postLoginAuthResponse.StatusCode)
     Write-Host ("AUTH_ME_BODY=" + $postLoginAuthResponse.Content)
@@ -636,53 +681,61 @@ try {
   Write-Host ("RULE_LIST_STATUS=" + $listRulesResponse.StatusCode)
   Write-Host ("RULE_DELETE_STATUS=" + $deleteRuleResponse.StatusCode)
   Write-Host ("RULE_CLEANUP_LIST_STATUS=" + $postDeleteRulesResponse.StatusCode)
-}
-finally {
-  if ($null -ne $createdIssueId) {
+} finally
+{
+  if ($null -ne $createdIssueId)
+  {
     Write-Step "Cleaning up leftover smoke issue #$createdIssueId"
-    try {
+    try
+    {
       $cleanupIssueResponse = Invoke-OperatorRequest `
         -Method DELETE `
         -Url "$issuesUrl/$createdIssueId" `
         -Session $session
-      if (@(204, 404) -notcontains [int]$cleanupIssueResponse.StatusCode) {
+      if (@(204, 404) -notcontains [int]$cleanupIssueResponse.StatusCode)
+      {
         Write-Warning "Cleanup for smoke issue #$createdIssueId returned $($cleanupIssueResponse.StatusCode). Body: $($cleanupIssueResponse.Content)"
       }
-    }
-    catch {
+    } catch
+    {
       Write-Warning "Cleanup for smoke issue #$createdIssueId failed: $_"
     }
   }
 
-  if ($null -ne $createdRuleId) {
+  if ($null -ne $createdRuleId)
+  {
     Write-Step "Cleaning up leftover smoke rule #$createdRuleId"
-    try {
+    try
+    {
       $cleanupRuleResponse = Invoke-OperatorRequest `
         -Method DELETE `
         -Url "$rulesUrl/$createdRuleId" `
         -Session $session
-      if (@(200, 404) -notcontains [int]$cleanupRuleResponse.StatusCode) {
+      if (@(200, 404) -notcontains [int]$cleanupRuleResponse.StatusCode)
+      {
         Write-Warning "Cleanup for smoke rule #$createdRuleId returned $($cleanupRuleResponse.StatusCode). Body: $($cleanupRuleResponse.Content)"
       }
-    }
-    catch {
+    } catch
+    {
       Write-Warning "Cleanup for smoke rule #$createdRuleId failed: $_"
     }
   }
 
-  if ($ParityOnly -or $PageSmokesOnly) {
+  if ($ParityOnly -or $PageSmokesOnly)
+  {
     Write-Step "Local-only smoke completed; no Docker stack teardown needed"
-  }
-  elseif (-not $KeepStackUp) {
+  } elseif (-not $KeepStackUp)
+  {
     Write-Step "Tearing down stack"
-    try {
+    try
+    {
       Invoke-Compose -Arguments @("down", "-v")
-    }
-    catch {
+    } catch
+    {
       Write-Warning $_
     }
-  }
-  else {
+  } else
+  {
     Write-Step "Keeping stack up by request"
   }
 }

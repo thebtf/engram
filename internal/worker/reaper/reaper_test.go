@@ -118,8 +118,6 @@ func TestReaper_PreservesUnexpired(t *testing.T) {
 }
 
 func TestReaper_RespectsRetentionEnvVar(t *testing.T) {
-	t.Parallel()
-
 	db, cleanup := testReaperDB(t)
 	defer cleanup()
 

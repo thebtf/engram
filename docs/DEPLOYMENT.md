@@ -196,9 +196,22 @@ must be restricted by organization policy.
 - Server: UID/GID 65532, read-only root filesystem, persistent
   `HOME=/var/lib/engram`, semantic health probe on `/api/ready`.
 - Operator console: UID/GID 65532, read-only root filesystem,
-  `NUXT_OPERATOR_API_TARGET=http://server:37777`, semantic proxied readiness.
+  `ENGRAM_OPERATOR_API_TARGET=http://server:37777`, semantic proxied readiness.
 - Every service drops all capabilities and enables `no-new-privileges`;
   bounded tmpfs mounts cover runtime-only writable paths.
+
+The PostgreSQL build pulls the Wolfi base from Chainguard's [public Docker Hub
+repository](https://hub.docker.com/r/chainguard/wolfi-base), pinned to
+`docker.io/chainguard/wolfi-base@sha256:02dab76bd852a70556b5b2002195c8a5fdab77d323c433bf6642aab080489795`.
+This is the same upstream image index for Linux amd64 and arm64, not a different
+distribution or database image. The fixed packages, entrypoint and runtime
+ownership contract remain unchanged; no registry fallback runs at build time.
+
+The focused `TestPostgresImageContract` uses `docker exec` with networking
+disabled; it does not allocate a bridge subnet. Database proof containers are
+limited to 512 MiB, one CPU and 128 PIDs. Temporary ownership-migration helpers
+are limited to 64 MiB, 0.2 CPU and 32 PIDs. The shared server-image fixture still
+connects through its own network and the `postgres` alias.
 
 The server `/health` endpoint is liveness. During failed asynchronous
 initialization it can remain HTTP 200 while reporting an error. Docker health

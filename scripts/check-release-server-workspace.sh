@@ -36,15 +36,15 @@ for _ in $(seq 1 80); do
   sleep 0.5
 done
 if ! cmp -s "$static/index.html" "$workdir/index.html"; then
-  echo '/code did not serve generated Nuxt Workspace HTML' >&2
+  echo '/code did not serve generated Vue Workspace HTML' >&2
   exit 1
 fi
-if ! grep -q 'id="__NUXT_DATA__"' "$workdir/index.html"; then
-  echo '/code is not a Nuxt Workspace page' >&2
+if ! grep -q 'id="app"' "$workdir/index.html"; then
+  echo '/code is not a Vue Workspace page' >&2
   exit 1
 fi
-js="$(sed -nE 's/.*<script type="module" src="(\/_nuxt\/[^" ]+\.js)".*/\1/p' "$workdir/index.html")"
-css="$(sed -nE 's/.*<link rel="stylesheet" href="(\/_nuxt\/[^" ]+\.css)".*/\1/p' "$workdir/index.html")"
+js="$(sed -nE 's/.*<script type="module"[^>]*src="(\/_nuxt\/[^" ]+\.js)".*/\1/p' "$workdir/index.html")"
+css="$(sed -nE 's/.*<link rel="stylesheet"[^>]*href="(\/_nuxt\/[^" ]+\.css)".*/\1/p' "$workdir/index.html")"
 for asset in "$js" "$css"; do
   if [[ -z "$asset" || ! -f "$static${asset}" ]]; then
     echo 'generated Workspace JS/CSS reference missing' >&2
@@ -57,4 +57,4 @@ for asset in "$js" "$css"; do
   fi
   printf 'served %s (%s bytes)\n' "$asset" "$(wc -c < "$workdir/asset")"
 done
-printf 'served /code as canonical Nuxt Workspace HTML with byte-exact JS/CSS\n'
+printf 'served /code as canonical Vue Workspace HTML with byte-exact JS/CSS\n'

@@ -1,3 +1,22 @@
+import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { startedLoads } from './useConsolePreferences'
+
+let sharedDocumentsPageProjects: SharedRef<string[]> | undefined
+let sharedDocumentsPageDocuments: SharedRef<OperatorDocumentSummary[]> | undefined
+let sharedDocumentsPageHistory: SharedRef<OperatorDocumentVersion[]> | undefined
+let sharedDocumentsPageComments: SharedRef<OperatorDocumentComment[]> | undefined
+let sharedDocumentsPageSelectedProject: SharedRef<string> | undefined
+let sharedDocumentsPageSelectedPath: SharedRef<string> | undefined
+let sharedDocumentsPagePrimaryVersion: SharedRef<number | null> | undefined
+let sharedDocumentsPageSecondaryVersion: SharedRef<number | null> | undefined
+let sharedDocumentsPagePrimaryDocument: SharedRef<OperatorDocument | null> | undefined
+let sharedDocumentsPageSecondaryDocument: SharedRef<OperatorDocument | null> | undefined
+let sharedDocumentsPageDocumentsState: SharedRef<OperatorLoadState<OperatorDocumentSummary[]>> | undefined
+let sharedDocumentsPageHistoryState: SharedRef<OperatorLoadState<OperatorDocumentVersion[]>> | undefined
+let sharedDocumentsPagePrimaryState: SharedRef<OperatorLoadState<OperatorDocument | null>> | undefined
+let sharedDocumentsPageSecondaryState: SharedRef<OperatorLoadState<OperatorDocument | null>> | undefined
+let sharedDocumentsPageCommentsState: SharedRef<OperatorLoadState<OperatorDocumentComment[]>> | undefined
+
 import type { ComputedRef, Ref } from 'vue'
 import type { OperatorLoadState } from './useOperatorApi'
 import { parseOperatorSelectionSnapshot, type OperatorSelection } from './useOperatorSelection'
@@ -354,11 +373,11 @@ function parseDocumentCommentsPayload(payload: ApiDocumentCommentsResponse, path
 }
 
 function startOnce(key: string, run: () => Promise<void>) {
-  const started = useState<boolean>(`live:${key}:started`, () => false)
-  if (import.meta.client && !started.value) {
-    started.value = true
+  const started = startedLoads.has(key)
+  if (typeof window !== 'undefined' && !started) {
+    startedLoads.add(key)
     void run().catch((error) => {
-      if (import.meta.dev) {
+      if (import.meta.env.DEV) {
         console.warn(`[useOperatorDocuments] ${key} live load failed`, error)
       }
     })
@@ -398,22 +417,22 @@ export function useOperatorDocuments(): {
   const commentsEvidence = endpointEvidence('/api/documents/comments?document_id={id}', 'documents-comments')
   const route = useRoute()
 
-  const projects = useState<string[]>('live:documents-page:projects', () => [DEFAULT_DOCUMENT_PROJECT])
-  const documents = useState<OperatorDocumentSummary[]>('live:documents-page:documents', () => [])
-  const history = useState<OperatorDocumentVersion[]>('live:documents-page:history', () => [])
-  const comments = useState<OperatorDocumentComment[]>('live:documents-page:comments', () => [])
-  const selectedProject = useState<string>('live:documents-page:selected-project', () => DEFAULT_DOCUMENT_PROJECT)
-  const selectedPath = useState<string>('live:documents-page:selected-path', () => '')
-  const primaryVersion = useState<number | null>('live:documents-page:primary-version', () => null)
-  const secondaryVersion = useState<number | null>('live:documents-page:secondary-version', () => null)
-  const primaryDocumentValue = useState<OperatorDocument | null>('live:documents-page:primary-document', () => null)
-  const secondaryDocumentValue = useState<OperatorDocument | null>('live:documents-page:secondary-document', () => null)
+  const projects = (sharedDocumentsPageProjects ??= sharedRef<string[]>((() => [DEFAULT_DOCUMENT_PROJECT])()))
+  const documents = (sharedDocumentsPageDocuments ??= sharedRef<OperatorDocumentSummary[]>((() => [])()))
+  const history = (sharedDocumentsPageHistory ??= sharedRef<OperatorDocumentVersion[]>((() => [])()))
+  const comments = (sharedDocumentsPageComments ??= sharedRef<OperatorDocumentComment[]>((() => [])()))
+  const selectedProject = (sharedDocumentsPageSelectedProject ??= sharedRef<string>((() => DEFAULT_DOCUMENT_PROJECT)()))
+  const selectedPath = (sharedDocumentsPageSelectedPath ??= sharedRef<string>((() => '')()))
+  const primaryVersion = (sharedDocumentsPagePrimaryVersion ??= sharedRef<number | null>((() => null)()))
+  const secondaryVersion = (sharedDocumentsPageSecondaryVersion ??= sharedRef<number | null>((() => null)()))
+  const primaryDocumentValue = (sharedDocumentsPagePrimaryDocument ??= sharedRef<OperatorDocument | null>((() => null)()))
+  const secondaryDocumentValue = (sharedDocumentsPageSecondaryDocument ??= sharedRef<OperatorDocument | null>((() => null)()))
 
-  const documentsStateValue = useState<OperatorLoadState<OperatorDocumentSummary[]>>('live:documents-page:documents-state', () => pendingState(listEvidence, documents.value))
-  const historyStateValue = useState<OperatorLoadState<OperatorDocumentVersion[]>>('live:documents-page:history-state', () => emptyState(historyEvidence, history.value))
-  const primaryStateValue = useState<OperatorLoadState<OperatorDocument | null>>('live:documents-page:primary-state', () => emptyState(primaryEvidence, null))
-  const secondaryStateValue = useState<OperatorLoadState<OperatorDocument | null>>('live:documents-page:secondary-state', () => emptyState(secondaryEvidence, null))
-  const commentsStateValue = useState<OperatorLoadState<OperatorDocumentComment[]>>('live:documents-page:comments-state', () => emptyState(commentsEvidence, comments.value))
+  const documentsStateValue = (sharedDocumentsPageDocumentsState ??= sharedRef<OperatorLoadState<OperatorDocumentSummary[]>>((() => pendingState(listEvidence, documents.value))()))
+  const historyStateValue = (sharedDocumentsPageHistoryState ??= sharedRef<OperatorLoadState<OperatorDocumentVersion[]>>((() => emptyState(historyEvidence, history.value))()))
+  const primaryStateValue = (sharedDocumentsPagePrimaryState ??= sharedRef<OperatorLoadState<OperatorDocument | null>>((() => emptyState(primaryEvidence, null))()))
+  const secondaryStateValue = (sharedDocumentsPageSecondaryState ??= sharedRef<OperatorLoadState<OperatorDocument | null>>((() => emptyState(secondaryEvidence, null))()))
+  const commentsStateValue = (sharedDocumentsPageCommentsState ??= sharedRef<OperatorLoadState<OperatorDocumentComment[]>>((() => emptyState(commentsEvidence, comments.value))()))
 
   const activeDocument = computed(() => documents.value.find((row) => row.path === selectedPath.value) || null)
   const documentsState = computed(() => documentsStateValue.value)
@@ -459,7 +478,7 @@ export function useOperatorDocuments(): {
         selectedProject.value = DEFAULT_DOCUMENT_PROJECT
       }
     } catch (nextError) {
-      if (import.meta.dev) {
+      if (import.meta.env.DEV) {
         console.warn('[useOperatorDocuments] project list load failed', nextError)
       }
       if (!projects.value.length) {

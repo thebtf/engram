@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 
 # --- Operator console build stage ---
-FROM node:22-bookworm-slim@sha256:53ada149d435c38b14476cb57e4a7da73c15595aba79bd6971b547ceb6d018bf AS operator-console-build
+FROM node:22.22.3-bookworm-slim@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752 AS operator-console-build
 
 WORKDIR /workspace/apps/operator-console
 COPY apps/operator-console/package.json apps/operator-console/package-lock.json ./
@@ -12,10 +12,6 @@ COPY apps/operator-console/ ./
 # so copying only contracts/ leaves the manifest absent and the gate fails hard.
 COPY design/operator-console /workspace/design/operator-console
 RUN npm run parity && npm run build
-
-# --- Operator console static bundle for server embed ---
-FROM operator-console-build AS operator-console-static-build
-RUN npm run generate
 
 # --- Go build stage ---
 FROM golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36 AS builder
@@ -32,7 +28,7 @@ COPY . .
 
 # Copy generated operator-console static bundle into static/ for go:embed.
 # This keeps apps/operator-console as the single frontend source of truth.
-COPY --from=operator-console-static-build /workspace/apps/operator-console/.output/public/ internal/worker/static/
+COPY --from=operator-console-build /workspace/apps/operator-console/.output/public/ internal/worker/static/
 
 ARG VERSION
 ARG TARGETOS=linux
@@ -125,10 +121,10 @@ WORKDIR /app
 COPY --from=operator-console-build --chown=65532:65532 /workspace/apps/operator-console/.output ./.output
 COPY --from=builder --chown=65532:65532 --chmod=0755 /out/engram-healthcheck /usr/local/bin/engram-healthcheck
 
-ENV NITRO_HOST=0.0.0.0
-ENV NITRO_PORT=3000
-ENV NUXT_PUBLIC_API_BASE=/api
-ENV NUXT_OPERATOR_API_TARGET=http://server:37777
+ENV HOST=0.0.0.0
+ENV PORT=3000
+ENV ENGRAM_PUBLIC_API_BASE=/api
+ENV ENGRAM_OPERATOR_API_TARGET=http://server:37777
 
 EXPOSE 3000
 

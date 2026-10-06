@@ -10,7 +10,7 @@ if [[ ! -f "$static/placeholder.html" || -L "$static/placeholder.html" ]] ||
   exit 1
 fi
 if [[ ! -s "$public/index.html" ]]; then
-  echo 'generated Nuxt index.html is missing' >&2
+  echo 'generated operator-console index.html is missing' >&2
   exit 1
 fi
 cp -a "$public"/. "$static"/

@@ -1,3 +1,15 @@
+import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { startedLoads } from './useConsolePreferences'
+
+let sharedIssuesPageRows: SharedRef<OperatorIssue[]> | undefined
+let sharedIssuesPageComments: SharedRef<OperatorIssueComment[]> | undefined
+let sharedIssuesPageProjectNames: SharedRef<Record<string, string>> | undefined
+let sharedIssuesPageTrackedProjects: SharedRef<string[]> | undefined
+let sharedIssuesPageTotal: SharedRef<number> | undefined
+let sharedIssuesPageDetail: SharedRef<OperatorIssue | null> | undefined
+let sharedIssuesPageState: SharedRef<OperatorLoadState<OperatorIssue[]>> | undefined
+let sharedIssuesPageDetailState: SharedRef<OperatorLoadState<OperatorIssue | null>> | undefined
+
 import type { ComputedRef } from 'vue'
 import type { OperatorSelection, OperatorSelectionTarget } from './useOperatorSelection'
 import { parseOperatorSelectionSnapshot } from './useOperatorSelection'
@@ -386,11 +398,11 @@ function uniqueProjects(rows: OperatorIssue[], tracked: string[]) {
 }
 
 function startOnce(key: string, run: () => Promise<void>) {
- const started = useState<boolean>(`live:${key}:started`, () => false)
- if (import.meta.client && !started.value) {
-  started.value = true
+ const started = startedLoads.has(key)
+ if (typeof window !== 'undefined' && !started) {
+  startedLoads.add(key)
   void run().catch((error) => {
-   if (import.meta.dev) {
+   if (import.meta.env.DEV) {
     console.warn(`[useOperatorIssues] ${key} live load failed`, error)
    }
   })
@@ -426,14 +438,14 @@ export function useOperatorIssues(): {
 } {
  const listEvidence = endpointEvidence('/api/issues?limit=200', 'issues-list')
  const detailEvidence = endpointEvidence('/api/issues/{id}', 'issues-detail')
- const rowsState = useState<OperatorIssue[]>('live:issues-page:rows', () => [])
- const commentsState = useState<OperatorIssueComment[]>('live:issues-page:comments', () => [])
- const projectNamesState = useState<Record<string, string>>('live:issues-page:project-names', () => ({}))
- const trackedProjectsState = useState<string[]>('live:issues-page:tracked-projects', () => ['engram'])
- const totalCountState = useState<number>('live:issues-page:total', () => 0)
- const detailStateValue = useState<OperatorIssue | null>('live:issues-page:detail', () => null)
- const state = useState<OperatorLoadState<OperatorIssue[]>>('live:issues-page:state', () => pendingState(listEvidence, rowsState.value))
- const detailLoadState = useState<OperatorLoadState<OperatorIssue | null>>('live:issues-page:detail-state', () => emptyState(detailEvidence, null))
+ const rowsState = (sharedIssuesPageRows ??= sharedRef<OperatorIssue[]>((() => [])()))
+ const commentsState = (sharedIssuesPageComments ??= sharedRef<OperatorIssueComment[]>((() => [])()))
+ const projectNamesState = (sharedIssuesPageProjectNames ??= sharedRef<Record<string, string>>((() => ({}))()))
+ const trackedProjectsState = (sharedIssuesPageTrackedProjects ??= sharedRef<string[]>((() => ['engram'])()))
+ const totalCountState = (sharedIssuesPageTotal ??= sharedRef<number>((() => 0)()))
+ const detailStateValue = (sharedIssuesPageDetail ??= sharedRef<OperatorIssue | null>((() => null)()))
+ const state = (sharedIssuesPageState ??= sharedRef<OperatorLoadState<OperatorIssue[]>>((() => pendingState(listEvidence, rowsState.value))()))
+ const detailLoadState = (sharedIssuesPageDetailState ??= sharedRef<OperatorLoadState<OperatorIssue | null>>((() => emptyState(detailEvidence, null))()))
 
  const loadState = computed(() => state.value)
  const detailState = computed(() => detailLoadState.value)
@@ -453,7 +465,7 @@ export function useOperatorIssues(): {
    const payload = await operatorFetchJson<ApiTrackedProjects>('/api/issues/tracked-projects', undefined, 'issues-tracked-projects')
    replaceArray(trackedProjectsState.value, payload.projects?.length ? payload.projects : ['engram'])
   } catch (error) {
-   if (import.meta.dev) {
+   if (import.meta.env.DEV) {
     console.warn('[useOperatorIssues] tracked projects live load failed', error)
    }
   }

@@ -1,3 +1,15 @@
+import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { startedLoads } from './useConsolePreferences'
+
+let sharedPrincipalMemoryScope: SharedRef<PrincipalMemoryScope> | undefined
+let sharedPrincipalMemoryState: SharedRef<OperatorLoadState<OperatorPrincipalMemorySummary>> | undefined
+let sharedPrincipalMemoryBriefState: SharedRef<OperatorLoadState<OperatorPrincipalMemoryBrief>> | undefined
+let sharedPrincipalMemoryAttributionVisible: SharedRef<boolean> | undefined
+let sharedPrincipalMemoryRiskyConfirmation: SharedRef<boolean> | undefined
+let sharedPrincipalMemoryConfirmedPrincipal: SharedRef<string> | undefined
+let sharedMemoryLabRows: SharedRef<Memory[]> | undefined
+let sharedMemoryLabState: SharedRef<OperatorLoadState<Memory[]>> | undefined
+
 import type { ComputedRef, Ref } from 'vue'
 import type { Memory } from './useMockData'
 import type { OperatorLoadState, OperatorUnsupportedAction } from './useOperatorApi'
@@ -682,11 +694,11 @@ function parseMemoryArray(payload: unknown, path: string): ApiMemory[] {
 }
 
 function startOnce(key: string, run: () => Promise<void>) {
-  const started = useState<boolean>(`live:${key}:started`, () => false)
-  if (import.meta.client && !started.value) {
-    started.value = true
+  const started = startedLoads.has(key)
+  if (typeof window !== 'undefined' && !started) {
+    startedLoads.add(key)
     void run().catch((error) => {
-      if (import.meta.dev) {
+      if (import.meta.env.DEV) {
         console.warn(`[useOperatorMemoryLab] ${key} live load failed`, error)
       }
     })
@@ -732,20 +744,14 @@ export function useOperatorPrincipalMemorySurface(currentProject?: Ref<string>):
   refresh: () => Promise<void>
   refreshBrief: () => void
 } {
-  const scope = useState<PrincipalMemoryScope>('live:principal-memory:scope', blankPrincipalScope)
+  const scope = (sharedPrincipalMemoryScope ??= sharedRef<PrincipalMemoryScope>((blankPrincipalScope)()))
   const queryEvidence = endpointEvidence('/api/memories/principal?principal={principal}', 'principal-memory-query')
-  const state = useState<OperatorLoadState<OperatorPrincipalMemorySummary>>(
-    'live:principal-memory:state',
-    () => gatedState(queryEvidence, 'principal-select', 'Select a principal before issuing a scoped query.', emptyPrincipalSummary(scope.value)),
-  )
+  const state = (sharedPrincipalMemoryState ??= sharedRef<OperatorLoadState<OperatorPrincipalMemorySummary>>((() => gatedState(queryEvidence, 'principal-select', 'Select a principal before issuing a scoped query.', emptyPrincipalSummary(scope.value)))()))
   const briefEvidence = endpointEvidence('MCP get_memory_brief', 'principal-scoped-brief')
-  const briefStateRef = useState<OperatorLoadState<OperatorPrincipalMemoryBrief>>(
-    'live:principal-memory:brief-state',
-    () => mustBuildState<OperatorPrincipalMemoryBrief>(briefEvidence, PRINCIPAL_BRIEF_REASON, emptyPrincipalBrief(scope.value)),
-  )
-  const attributionVisible = useState<boolean>('live:principal-memory:attribution-visible', () => true)
-  const riskyConfirmation = useState<boolean>('live:principal-memory:risky-confirmation', () => false)
-  const confirmedPrincipal = useState<string>('live:principal-memory:confirmed-principal', () => '')
+  const briefStateRef = (sharedPrincipalMemoryBriefState ??= sharedRef<OperatorLoadState<OperatorPrincipalMemoryBrief>>((() => mustBuildState<OperatorPrincipalMemoryBrief>(briefEvidence, PRINCIPAL_BRIEF_REASON, emptyPrincipalBrief(scope.value)))()))
+  const attributionVisible = (sharedPrincipalMemoryAttributionVisible ??= sharedRef<boolean>((() => true)()))
+  const riskyConfirmation = (sharedPrincipalMemoryRiskyConfirmation ??= sharedRef<boolean>((() => false)()))
+  const confirmedPrincipal = (sharedPrincipalMemoryConfirmedPrincipal ??= sharedRef<string>((() => '')()))
 
   const loadState = computed(() => state.value)
   const briefState = computed(() => briefStateRef.value)
@@ -892,8 +898,8 @@ export function useOperatorMemoryLab(): {
   actionGaps: readonly MemoryActionGap[]
 } {
   const evidence = endpointEvidence(`/api/memories?project={project}&limit=${MEMORY_LIST_LIMIT}`, 'memory-list')
-  const rowsState = useState<Memory[]>('live:memory-lab:rows', () => [])
-  const state = useState<OperatorLoadState<Memory[]>>('live:memory-lab:state', () => pendingState(evidence, rowsState.value))
+  const rowsState = (sharedMemoryLabRows ??= sharedRef<Memory[]>((() => [])()))
+  const state = (sharedMemoryLabState ??= sharedRef<OperatorLoadState<Memory[]>>((() => pendingState(evidence, rowsState.value))()))
 
   const loadState = computed(() => state.value)
   const pending = computed(() => state.value.kind === 'pending')

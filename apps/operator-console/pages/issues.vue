@@ -384,7 +384,7 @@ async function toggleIssueLabel(label: string) {
 }
 
 function showIssueHover(issue: OperatorIssue, event: MouseEvent) {
-  if (activeIssue.value || !import.meta.client || window.matchMedia('(pointer: coarse)').matches) return
+  if (activeIssue.value || typeof window === 'undefined' || window.matchMedia('(pointer: coarse)').matches) return
   cancelIssueHoverClose()
   if (hoverOpenTimer) clearTimeout(hoverOpenTimer)
   const row = event.currentTarget as HTMLElement
@@ -569,7 +569,7 @@ async function applyBulkLabels() {
 }
 
 async function copyIssueLink() {
-  if (!activeIssue.value || !import.meta.client) return
+  if (!activeIssue.value || typeof window === 'undefined') return
   const url = `${window.location.origin}${window.location.pathname}#/issues/${activeIssue.value.id}`
   try {
     await navigator.clipboard?.writeText(url)

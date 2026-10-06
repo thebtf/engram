@@ -207,7 +207,7 @@ func TestOperatorConsoleRuntimeTargetContract(t *testing.T) {
 	repo := repositoryRoot(t)
 	requireFileContains(t, filepath.Join(repo, "Dockerfile"),
 		"gcr.io/distroless/nodejs22-debian13@sha256:412a5f8fce490bcff01fc2a73ec43bb62071e1b71dd847eeacaae7b8ecef1dc1",
-		"NUXT_OPERATOR_API_TARGET=http://server:37777",
+		"ENGRAM_OPERATOR_API_TARGET=http://server:37777",
 		"CMD [\".output/server/index.mjs\"]",
 		"http://127.0.0.1:3000/api/ready",
 	)
@@ -222,7 +222,7 @@ func TestOperatorConsoleRuntimeTargetContract(t *testing.T) {
 	requireFileContains(t, filepath.Join(repo, "deploy", "docker-compose.runtime.yml"),
 		"operator-console:",
 		"${ENGRAM_OPERATOR_IMAGE:?set ENGRAM_OPERATOR_IMAGE from the immutable release manifest}",
-		"NUXT_OPERATOR_API_TARGET: \"http://server:37777\"",
+		"ENGRAM_OPERATOR_API_TARGET: \"http://server:37777\"",
 		"ENGRAM_LLM_URL: \"${ENGRAM_LLM_URL:-}\"",
 		"ENGRAM_LLM_MODEL: \"${ENGRAM_LLM_MODEL:-chat-default}\"",
 		"ENGRAM_LLM_API_KEY: \"${ENGRAM_LLM_API_KEY:-}\"",
@@ -241,7 +241,7 @@ func TestOperatorConsoleRuntimeTargetContract(t *testing.T) {
 	if got := strings.Join(operatorConfig.Config.Cmd, " "); got != ".output/server/index.mjs" {
 		t.Fatalf("operator command mismatch: %q", got)
 	}
-	requireEnv(t, operatorConfig.Config.Env, "NUXT_OPERATOR_API_TARGET", "http://server:37777")
+	requireEnv(t, operatorConfig.Config.Env, "ENGRAM_OPERATOR_API_TARGET", "http://server:37777")
 	requireProvenanceLabels(t, operatorConfig.Config.Labels)
 	requireHealthCommand(t, operatorConfig.Config.Healthcheck, "/usr/local/bin/engram-healthcheck", "http://127.0.0.1:3000/api/ready")
 
@@ -255,7 +255,7 @@ func TestOperatorConsoleRuntimeTargetContract(t *testing.T) {
 		"--user", "65532:65532", "--read-only", "--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges:true",
 		"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,uid=65532,gid=65532,mode=0700,size=64m",
-		"-e", "NUXT_OPERATOR_API_TARGET=http://server:37777",
+		"-e", "ENGRAM_OPERATOR_API_TARGET=http://server:37777",
 		operatorImage,
 	)
 	waitHealthy(t, operator, 90*time.Second)
@@ -264,7 +264,7 @@ func TestOperatorConsoleRuntimeTargetContract(t *testing.T) {
 	baseURL := mappedURL(t, operator, "3000/tcp")
 	root := requireHTTP(t, baseURL+"/", http.StatusOK)
 	if !bytes.Contains(root, []byte("_nuxt/")) {
-		t.Fatal("operator root did not reference generated Nuxt assets")
+		t.Fatal("operator root did not reference generated Vue assets")
 	}
 	ready := requireHTTP(t, baseURL+"/api/ready", http.StatusOK)
 	if strings.TrimSpace(string(ready)) != `{"status":"ready"}` {
@@ -287,15 +287,14 @@ func TestOperatorConsoleRuntimeTargetContract(t *testing.T) {
 	wrongTarget := stack.prefix + "-operator-wrong-target"
 	t.Cleanup(func() { removeContainer(wrongTarget) })
 	runOperatorFixture(t, wrongTarget, stack.network,
-		"-e", "NUXT_OPERATOR_API_TARGET=http://missing-backend:37777",
-		"-e", "NUXT_ENGRAM_API_TARGET=http://server:37777",
+		"-e", "ENGRAM_OPERATOR_API_TARGET=http://missing-backend:37777",
 	)
 	waitNotHealthy(t, wrongTarget, 20*time.Second)
 
 	missingTarget := stack.prefix + "-operator-missing-target"
 	t.Cleanup(func() { removeContainer(missingTarget) })
 	runOperatorFixture(t, missingTarget, "none",
-		"-e", "NUXT_OPERATOR_API_TARGET=",
+		"-e", "ENGRAM_OPERATOR_API_TARGET=",
 	)
 	waitNotHealthy(t, missingTarget, 20*time.Second)
 
@@ -317,7 +316,7 @@ func TestOperatorConsoleRuntimeTargetContract(t *testing.T) {
 			})
 			startFakeNodeBackend(t, backend, stack.network, fixture.response)
 			runOperatorFixture(t, operator, stack.network,
-				"-e", "NUXT_OPERATOR_API_TARGET=http://"+backend+":37777",
+				"-e", "ENGRAM_OPERATOR_API_TARGET=http://"+backend+":37777",
 			)
 			waitNotHealthy(t, operator, 20*time.Second)
 		})

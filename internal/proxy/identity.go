@@ -172,6 +172,29 @@ func ResolveProjectIdentityV2(ctx context.Context, cwd string) (ProjectIdentityV
 	return identity, nil
 }
 
+// ResolveGitProjectIdentityV2 derives the existing Git-only V2 scope without
+// creating or staging either project marker. It never enters the non-Git path.
+func ResolveGitProjectIdentityV2(ctx context.Context, cwd, displayName string) (string, ProjectIdentityV2, error) {
+	resolved, err := filepath.Abs(cwd)
+	if err != nil {
+		return "", ProjectIdentityV2{}, err
+	}
+	remote, prefix, err := getGitInfo(ctx, resolved)
+	if err != nil {
+		return "", ProjectIdentityV2{}, err
+	}
+	identity := ProjectIdentityV2{
+		Version:         ProjectIdentityVersionV2,
+		LegacyProjectID: filepath.Base(resolved) + "_" + sha256Hex(resolved)[:6],
+		DisplayName:     displayName, GitRemote: remote,
+		RelativePath: strings.ReplaceAll(prefix, "\\", "/"),
+	}
+	if err := ValidateProjectIdentityV2(identity); err != nil {
+		return "", ProjectIdentityV2{}, err
+	}
+	return sha256Hex(remote + "/" + prefix)[:8], identity, nil
+}
+
 func readOrCreateProjectAnchorV2(dir string) (projectAnchorV2, error) {
 	anchorPath := filepath.Join(dir, projectIdentityV2File)
 	for {

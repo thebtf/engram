@@ -1,7 +1,13 @@
+import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+
+let sharedSettingsModalOpen: SharedRef<boolean> | undefined
+let sharedSettingsModalTab: SharedRef<string> | undefined
+let sharedSettingsModalOpenCycle: SharedRef<number> | undefined
+
 export function useSettingsModal() {
-  const settingsModalOpen = useState<boolean>('settings-modal-open', () => false)
-  const settingsModalTab = useState<string>('settings-modal-tab', () => 'general')
-  const settingsModalCycle = useState<number>('settings-modal-open-cycle', () => 0)
+  const settingsModalOpen = (sharedSettingsModalOpen ??= sharedRef<boolean>((() => false)()))
+  const settingsModalTab = (sharedSettingsModalTab ??= sharedRef<string>((() => 'general')()))
+  const settingsModalCycle = (sharedSettingsModalOpenCycle ??= sharedRef<number>((() => 0)()))
 
   function openSettingsModal(tab = 'general') {
     if (!settingsModalOpen.value) settingsModalCycle.value += 1

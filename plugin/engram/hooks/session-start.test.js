@@ -224,12 +224,35 @@ test('buildSessionStartContext keeps quoted records and enclosing tags complete 
     ],
   }), 'engram', { maxLength: 12000 });
 
-  assert.ok(result.length <= 12000);
+  assert.ok(Buffer.byteLength(result, 'utf8') <= 12000);
   assert.match(result, /<engram-static-memories>/);
   assert.match(result, /<\/engram-static-memories>\n$/);
   assert.match(result, /- content: "oversized 😀+/);
   assert.match(result, /- content: "[^"\n]*"\n/);
   assert.doesNotMatch(result, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+});
+
+test('buildSessionStartContext budgets final UTF8 bytes including escaped Cyrillic and complete wrappers', () => {
+  for (const content of ['Память 😀 ', 'Текст "\\\n<&> 😀 ']) {
+    const payload = buildCachedSessionStartPayload({ memories: [{ content: content.repeat(3000) }] });
+    for (const maxLength of [512, 12000]) {
+      const rendered = buildSessionStartContext(payload, '67e398f8', { maxLength });
+      assert.ok(rendered.length > 0);
+      assert.ok(Buffer.byteLength(rendered, 'utf8') <= maxLength);
+      assert.equal(Buffer.from(rendered, 'utf8').toString('utf8'), rendered);
+      assert.match(rendered, /^<engram-static-memories>\n/);
+      assert.match(rendered, /<\/engram-static-memories>\n$/);
+      const records = rendered.split('\n').filter((line) => line.startsWith('- content: '));
+      assert.equal(records.length, 1);
+      const quoted = records[0].slice('- content: '.length);
+      const decoded = JSON.parse(quoted);
+      assert.ok(decoded.startsWith(content.startsWith('Память') ? 'Память' : 'Текст'));
+      assert.ok(!quoted.includes('<') && !quoted.includes('>'));
+    }
+  }
+  const small = buildCachedSessionStartPayload({ memories: [{ content: 'Память 😀 "\\<&>' }] });
+  const complete = buildSessionStartContext(small, '67e398f8');
+  assert.equal(buildSessionStartContext(small, '67e398f8', { maxLength: Buffer.byteLength(complete, 'utf8') }), complete);
 });
 
 test('buildSessionStartContext bounds an oversized string issue ID', () => {
