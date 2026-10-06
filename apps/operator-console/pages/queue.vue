@@ -277,9 +277,7 @@ async function runAction(candidate: OperatorCandidate, action: CandidateAction) 
                   <span>{{ candidate.target }}</span>
                   <span>{{ candidate.tier }}</span>
                   <span>{{ candidateProjectsLabel(candidate) }}</span>
-                  <ClientOnly fallback="—">
-                    <span>{{ compactDate(candidate.createdAt) }}</span>
-                  </ClientOnly>
+                  <span>{{ compactDate(candidate.createdAt) }}</span>
                 </span>
               </span>
             </button>

@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Replace the operator-console's Nuxt/Nitro build and unused Nuxt UI/devtools graph with supported static Vue 3.5.43, Vite 8.3.2, Vue Router 4.6.3 and Vue I18n 11.4.8. Keep every current page, shared state, theme/density preference, RU/EN/ZH locale, API/auth interaction, Go embedded-static output and separate console host. Retire obsolete framework writers and configuration rather than substituting vulnerable dependencies; update actual deployment, smoke and release-build consumers to the `ENGRAM_*` console settings and pinned Node 22.22.3.
 - Correct the standalone operator-web Compose environment for the static Vue host: preserve `OPERATOR_WEB_API_TARGET` and its `host.docker.internal:37777` default while passing `ENGRAM_OPERATOR_API_TARGET`; use `HOST`, `PORT` and `ENGRAM_PUBLIC_API_BASE` without retired Nuxt/Nitro aliases.
+- Resolve Workspace index-intent controls through the static Vue component name, restoring first-index progress, status checks, retries and reindex actions without changing their server authorization or recovery behavior.
+- Keep queued index-intent polling available in historical-status browser fixtures, so their intentional status failures cannot introduce an unrelated index-intent failure.
+- Remove the retired Nuxt ClientOnly wrapper from queue timestamps; the browser-only Vue app renders the same timestamp content directly.
 
 ## [6.50.3-rc.1] - 2026-10-05
 

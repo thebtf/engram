@@ -323,6 +323,7 @@ for (const failure of ['unavailable', 'timeout', 'offline', 'malformed'] as cons
         else await route.fulfill({ status: failure === 'timeout' ? 408 : 503 })
       } else if (path === '/api/code/structure' || path === '/api/code/search' || path === '/api/code/source') await route.fulfill({ json: envelope })
       else if (path === '/api/code/index-intents') await route.fulfill({ status: 202, json: intent })
+      else if (path === '/api/code/index-intents/historical-intent') await route.fulfill({ json: intent })
       else await route.fulfill({ status: 500 })
     })
     await page.goto('/code')

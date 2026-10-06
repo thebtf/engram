@@ -75,7 +75,7 @@ onMounted(() => {
       @request-index="submitIndexIntent('reindex', $event)"
     />
 
-    <CodeIndexIntentStatus
+    <IndexIntentStatus
       :pinned="pinnedContext"
       :state="indexIntentState"
       :busy="indexIntentPending"
