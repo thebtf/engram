@@ -18,7 +18,7 @@
     "@playwright/test": "^1.61.0",
     "nuxt": "^3.13.0",
     "typescript": "^5.5.0",
-    "vue": "^3.4.0"
+    "vue": "^3.5.42"
   },
   "dependencies": {
     "@nuxt/ui": "^3.0.0",
