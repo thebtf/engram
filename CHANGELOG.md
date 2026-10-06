@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Resolve Workspace index-intent controls through the static Vue component name, restoring first-index progress, status checks, retries and reindex actions without changing their server authorization or recovery behavior.
 - Keep queued index-intent polling available in historical-status browser fixtures, so their intentional status failures cannot introduce an unrelated index-intent failure.
 - Remove the retired Nuxt ClientOnly wrapper from queue timestamps; the browser-only Vue app renders the same timestamp content directly.
+- Pull the PostgreSQL image's unchanged, digest-pinned Wolfi base from Chainguard's maintained public Docker Hub repository instead of the inaccessible `cgr.dev` route. Preserve PostgreSQL 17.10, pgvector 0.8.1, every package pin, UID/GID 70 and the upstream initialization and persistence contract.
+- Bound PostgreSQL image-proof containers by memory, CPU and PID limits; run the standalone persistence/ownership contract without allocating a bridge network, while retaining the shared server fixture's PostgreSQL network alias.
 
 ## [6.50.3-rc.1] - 2026-10-05
 

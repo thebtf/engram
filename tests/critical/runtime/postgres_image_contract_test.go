@@ -18,7 +18,7 @@ func TestPostgresImageContract(t *testing.T) {
 	repo := repositoryRoot(t)
 	dockerfile := filepath.Join(repo, "deploy", "postgres", "Dockerfile")
 	requireFileContains(t, dockerfile,
-		"cgr.dev/chainguard/wolfi-base@sha256:02dab76bd852a70556b5b2002195c8a5fdab77d323c433bf6642aab080489795",
+		"docker.io/chainguard/wolfi-base@sha256:02dab76bd852a70556b5b2002195c8a5fdab77d323c433bf6642aab080489795",
 		"apk --repositories-file /dev/null --repository https://packages.wolfi.dev/os --no-cache add",
 		"bash=5.3-r12",
 		"gosu=1.19-r13",
@@ -41,7 +41,7 @@ func TestPostgresImageContract(t *testing.T) {
 	requireHealthCommand(t, config.Config.Healthcheck, "pg_isready")
 
 	prefix := uniqueResource("engram-prc-postgres-test")
-	network := prefix + "-net"
+	network := "none"
 	volume := prefix + "-data"
 	first := prefix + "-first"
 	second := prefix + "-second"
@@ -53,9 +53,7 @@ func TestPostgresImageContract(t *testing.T) {
 		removeContainer(legacyBlocked)
 		removeContainer(third)
 		removeVolume(volume)
-		removeNetwork(network)
 	})
-	runDocker(t, nil, "network", "create", network)
 	runDocker(t, nil, "volume", "create", volume)
 	startPostgresContainer(t, first, network, volume)
 	waitHealthy(t, first, 90*time.Second)
@@ -105,6 +103,7 @@ func TestPostgresImageContract(t *testing.T) {
 		t.Cleanup(func() { removeContainer(name) })
 		runDocker(t, nil,
 			"run", "-d", "--name", name,
+			"--memory", "512m", "--cpus", "1", "--pids-limit", "128", "--network", "none",
 			"--user", "70:70", "--read-only", "--cap-drop", "ALL",
 			"--security-opt", "no-new-privileges:true",
 			"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,uid=70,gid=70,mode=0700,size=64m",
@@ -141,9 +140,12 @@ func TestPostgresImageContract(t *testing.T) {
 func startPostgresContainer(t *testing.T, name, network, volume string) {
 	t.Helper()
 	image := imageFromEnv("ENGRAM_POSTGRES_IMAGE", defaultPostgresImage)
-	runDocker(t, nil,
-		"run", "-d", "--name", name,
-		"--network", network, "--network-alias", "postgres",
+	args := []string{"run", "-d", "--name", name, "--network", network}
+	if network != "none" {
+		args = append(args, "--network-alias", "postgres")
+	}
+	args = append(args,
+		"--memory", "512m", "--cpus", "1", "--pids-limit", "128",
 		"--user", "70:70", "--read-only", "--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges:true",
 		"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,uid=70,gid=70,mode=0700,size=64m",
@@ -152,12 +154,14 @@ func startPostgresContainer(t *testing.T, name, network, volume string) {
 		"-e", "POSTGRES_DB=engram", "-e", "POSTGRES_USER=engram", "-e", "POSTGRES_PASSWORD=engram",
 		image,
 	)
+	runDocker(t, nil, args...)
 }
 
 func startPostgresTmpfs(t *testing.T, name, image string) {
 	t.Helper()
 	runDocker(t, nil,
 		"run", "-d", "--name", name,
+		"--memory", "512m", "--cpus", "1", "--pids-limit", "128", "--network", "none",
 		"--user", "70:70", "--read-only", "--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges:true",
 		"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,uid=70,gid=70,mode=0700,size=64m",
@@ -183,6 +187,7 @@ func rewriteVolumeOwnership(t *testing.T, volume, image, owner string) {
 	t.Helper()
 	runDocker(t, nil,
 		"run", "--rm", "--user", "0:0", "--entrypoint", "/bin/sh",
+		"--memory", "64m", "--cpus", "0.2", "--pids-limit", "32", "--network", "none",
 		"-v", volume+":/data", image,
 		"-c", "chown -R "+owner+" /data && chmod 0700 /data",
 	)
@@ -192,6 +197,7 @@ func migrateLegacyPostgresVolume(t *testing.T, volume, image string) {
 	t.Helper()
 	runDocker(t, nil,
 		"run", "--rm", "--user", "0:0",
+		"--memory", "64m", "--cpus", "0.2", "--pids-limit", "32", "--network", "none",
 		"--cap-drop", "ALL", "--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER",
 		"--security-opt", "no-new-privileges:true", "--entrypoint", "/bin/sh",
 		"-v", volume+":/var/lib/postgresql/data", image,
