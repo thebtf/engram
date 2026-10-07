@@ -92,11 +92,13 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 	}
 
 	resp, err := client.Initialize(discoveryCtx, request, grpc.WaitForReady(true))
+	if v3Enabled && !unscopedUCIDiscovery && isV3OnboardingRequired(err) {
+		request.ProjectIdentityV3 = nil
+		unscopedUCIDiscovery = true
+		resp, err = client.Initialize(discoveryCtx, request, grpc.WaitForReady(true))
+	}
 	if err != nil {
 		if v3Enabled {
-			if isV3OnboardingRequired(err) {
-				return nil, nil
-			}
 			return nil, &module.RequiredProxyToolsError{Cause: v3ProxyError(err)}
 		}
 		return nil, &module.RequiredProxyToolsError{Cause: fmt.Errorf("gRPC Initialize: %w", err)}
