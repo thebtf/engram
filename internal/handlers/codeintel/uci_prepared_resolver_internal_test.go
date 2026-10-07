@@ -245,6 +245,9 @@ func TestUCIPreparedIndexScopedDeclarationsPreserveDirectModuleCalls(t *testing.
 	}{
 		{name: "var stays inside class static blocks", body: []byte("class A{static{var value=1;}}class B{static{var value=2;}}export function helper(){return 1;}export function caller(){return helper();}"), caller: "caller", callee: "helper", coverage: uci.IndexCoverageComplete, resolved: true},
 		{name: "long scoped identifier remains accepted", body: []byte("export function helper(){return 1;}export function caller(){const " + strings.Repeat("x", 4070) + "=1;return helper();}"), caller: "caller", callee: "helper", coverage: uci.IndexCoverageComplete, resolved: true},
+		{name: "long nested method occurrence keys remain distinct", body: []byte("export function helper(){return 1;}export function caller(){class A{" + strings.Repeat("x", 4057) + "(){return 1;}" + strings.Repeat("x", 4057) + "(){return 2;}}return helper();}"), caller: "caller", callee: "helper", coverage: uci.IndexCoverageComplete, resolved: true},
+		{name: "long nested interface occurrence keys remain accepted", body: []byte("export function helper(){return 1;}export function caller(){interface " + strings.Repeat("x", 4057) + "{value:number;}return helper();}"), caller: "caller", callee: "helper", coverage: uci.IndexCoverageComplete, resolved: true},
+		{name: "long namespace occurrence keys remain accepted", body: []byte("namespace Outer{export namespace " + strings.Repeat("x", 4057) + "{}}export function helper(){return 1;}export function caller(){return helper();}"), caller: "caller", callee: "helper", coverage: uci.IndexCoverageComplete, resolved: true},
 		{name: "real formatter repeated function locals", body: body, caller: "safeDateFormat", callee: "formatRelativeTime", coverage: uci.IndexCoverageComplete, resolved: true},
 		{name: "independent sibling block locals", body: []byte("export function helper(){return 1;} export function caller(){if(true){const value=1;}if(false){const value=2;}return helper();}"), caller: "caller", callee: "helper", coverage: uci.IndexCoverageComplete, resolved: true},
 		{name: "nested sibling declarations", body: []byte("export function helper(){return 1;} export function caller(){function nested(){const value=1;return value;}return helper();} function sibling(){function nested(){const value=2;return value;}return nested();}"), caller: "caller", callee: "helper", coverage: uci.IndexCoverageComplete, resolved: true},
@@ -257,6 +260,15 @@ func TestUCIPreparedIndexScopedDeclarationsPreserveDirectModuleCalls(t *testing.
 			})
 			require.NoError(t, err)
 			require.Equal(t, test.coverage, parsed.Coverage, "%+v", parsed.Diagnostics)
+			if test.name == "long nested method occurrence keys remain distinct" {
+				keys := make(map[string]struct{})
+				for _, definition := range parsed.Definitions {
+					if definition.Kind == "method" && definition.Name == strings.Repeat("x", 4057) {
+						keys[definition.LocalKey] = struct{}{}
+					}
+				}
+				require.Len(t, keys, 2, "full final-key digests must retain distinct method source occurrences")
+			}
 			if test.name == "real formatter repeated function locals" {
 				locals := make(map[string]struct{})
 				for _, definition := range parsed.Definitions {
