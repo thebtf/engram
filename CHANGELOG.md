@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.50.3] - 2026-10-07
+
+Stable release of the accepted installed-memory repair in PR #550, including bounded UTF-8 automatic context and deadline-aware hybrid retrieval, plus the release-input repairs below. Preserve the published `v6.50.3-rc.1` tag and assets; this version alignment adds no product behavior, migration, or OpenClaw release. Publication does not establish Watchtower adoption or installed-client acceptance.
+
 ### Fixed
 
 - Replace the operator-console's Nuxt/Nitro build and unused Nuxt UI/devtools graph with supported static Vue 3.5.43, Vite 8.3.2, Vue Router 4.6.3 and Vue I18n 11.4.8. Keep every current page, shared state, theme/density preference, RU/EN/ZH locale, API/auth interaction, Go embedded-static output and separate console host. Retire obsolete framework writers and configuration rather than substituting vulnerable dependencies; update actual deployment, smoke and release-build consumers to the `ENGRAM_*` console settings and pinned Node 22.22.3.
@@ -2140,7 +2144,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.3-rc.1...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.3...HEAD
+[6.50.3]: https://github.com/thebtf/engram/compare/v6.50.3-rc.1...v6.50.3
 [6.50.3-rc.1]: https://github.com/thebtf/engram/compare/v6.50.2...v6.50.3-rc.1
 [6.50.2]: https://github.com/thebtf/engram/compare/v6.50.1...v6.50.2
 [6.50.1]: https://github.com/thebtf/engram/compare/v6.50.0...v6.50.1
