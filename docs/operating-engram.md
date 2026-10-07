@@ -257,6 +257,8 @@ Index admission returns `run_id`, not a completed View. On the **daemon-side** `
 
 The daemon-side `codebase_status` requires a handle; follow the schema advertised by the installed plugin. Wait for a completed run and a published View, then inspect coverage, omissions, supported languages, and **code-embedding** progress until ready. Configure the shared provider with `ENGRAM_EMBEDDING_URL` as its base URL, optionally ending in `/v1`; the client calls `/v1/embeddings`. Set `ENGRAM_EMBEDDING_MODEL` to a model that returns 1536-dimensional vectors, matching the UCI vector schema. Supply `ENGRAM_EMBEDDING_API_KEY` privately only if the provider requires one. A reachable provider or memory embeddings alone do not prove code embeddings. Preserve the last good View if a job fails.
 
+The code-job worker caps each request's estimated padded UTF-8 cost (`longest canonical input bytes × input count`) at 64 KiB while retaining the 128-input ceiling. A larger single input is sent alone, unchanged, within the existing input-capacity guard. This is a workload proxy, not a provider token limit or success guarantee; model/profile/cache identity and provider deadlines, retries, and concurrency stay unchanged.
+
 On the published View, call `codebase_search` with a conceptual query that does **not** contain the known function name, then follow a returned reference. For example, replace the query with one chosen for your corpus:
 
 ```json

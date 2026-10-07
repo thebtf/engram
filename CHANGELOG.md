@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Bound code-job embedding requests by a 64 KiB padded UTF-8 cost proxy while retaining the 128-input ceiling. Send an oversized canonical input alone without trimming or skipping text; preserve candidate order, vector mapping, cache/profile identity, provider deadlines/retries/concurrency, and exact-View coverage requirements. This source repair does not prove recovery of historical provider failures or deployment.
+
 ## [6.51.0] - 2026-10-07
 
 Ordinary Home → Workspace onboarding and representative-corpus capacity calibration. These source and release inputs do not establish publication, installed-client adoption, semantic retrieval or full-index acceptance; coordinated native/server delivery and ordinary consumer proof remain required.
