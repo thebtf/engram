@@ -5,7 +5,7 @@
 ## Preconditions
 
 1. Bind the implementation candidate's root, HEAD, tree, branch, and owned paths. Preserve unrelated primary and sibling worktree state.
-2. Use a disposable PostgreSQL database, real authenticated Go server, built console, real linked worktrees, and a concurrent ordinary MCP client. Do not use production data, disabled auth, direct grant rows, browser filesystem access, credentials, or hand-written ContextRefs.
+2. Use a disposable PostgreSQL database, the configured single-user no-auth HTTP LAN server/console, real linked worktrees, the ordinary installed plugin/native host, and a concurrent MCP client. Do not use production data, synthetic grant rows, browser filesystem access, credentials, hand-written ContextRefs, or hidden pre-registration. Auth-enabled negative checks are separate retained coverage, not a prerequisite for no-auth first use.
 3. Create two linked worktrees for one repository with distinct readable branch/device labels and divergent saved source markers. Create an eligible corpus with more than 50 candidates, one direct relation, one reverse relation, one off-page neighbor, and a documented unsupported/dynamic limitation. Provide one real provider for a non-lexical conceptual query; lexical or degraded output is `NOT_PROVEN`.
 4. Prepare historical graph rows, a book-produced versioned document with two versions and `source_book_job_id`, an accepted nonterminal legacy book job, Rules, Issues, and approved allowed/denied readers. Before residual-job transition in the existing single-container deployment, stop every old book-writer process; do not introduce a lease/heartbeat. Include `internal/retrieval/hybrid.go` Tier2 `Traverse`, historical graph reads, `/api/context/search`, `internal/graph`, and UCI graph in the retained-reader baseline.
 5. The operator scenario starts at the normal homepage. Fixture setup may prepare the disposable corpus through approved application seams, but it must not perform navigation, login, source selection, graph writes, or evidence opening on the operator's behalf.
@@ -26,12 +26,12 @@ Mock Playwright evidence proves only interaction. Confirm the live configuration
 ## DA01 — Homepage discovery and named identity
 
 1. Open the normal homepage in a fresh supported browser session.
-2. Complete only the visible, chosen supported sign-in/onboarding flow.
-3. Find Workspace through visible Home or navigation controls; do not use direct `/code` navigation.
+2. Find Workspace through visible Home or navigation controls; do not use direct `/code` navigation.
+3. With an empty browser catalog, open Add / connect repository and follow the Russian first-use procedure in `docs/operating-engram.md`. Run its visible task in the ordinary installed native host from the real Git root; do not prepare the registration in an author-only fixture.
 4. Select one Repository and Working copy by readable identity, then select or confirm its Indexed snapshot through the offered context.
-5. Repeat in a second tab with the other working copy and a denied subject.
+5. Repeat in a second tab with the other real worktree using the visible existing-repository task. Record independent dirty save/rename/delete and a supported owning-daemon restart; a client reconnect alone is not restart proof. Auth-enabled denied-subject checks remain separate.
 
-**Pass**: No UUID, direct hidden route, SQL, raw binding action, synthetic admin, or localhost substitution is needed. Empty source, no grant, no snapshot, and offline owner are distinguishable and do not disclose unavailable source details.
+**Pass**: No UUID, hidden route, SQL, browser local path, project-marker rewrite, raw binding action, hidden author registration, or localhost substitution is needed. Empty catalog, no snapshot, offline owner, and actual registration/indexing failure are distinguishable. Auth-enabled missing grants stay distinct and do not become a no-auth onboarding dependency.
 
 ## DA02 — Freshness, coverage, search, source, relation, and evidence
 

@@ -658,7 +658,6 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
 
   await expect(copied.getByTestId('code-bootstrap-evidence')).toContainText('TAB_BINDING_COLLISION')
   await expect(copied.getByTestId('code-context-pinned')).toHaveCount(0)
-  await expect(copied.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'idle')
   await expect(page.getByTestId('code-context-pinned')).toContainText('Current snapshot')
   expect(handshakePayloads).toHaveLength(2)
   expect(handshakePayloads[1]).toMatchObject({
@@ -992,4 +991,65 @@ test('equal-count names expose minimal unique non-authorizing refs and offline f
   await expect(page.getByTestId('code-status').locator('div').nth(2).locator('dd')).toHaveText('Offline')
   await page.locator('.lang').click()
   await expect(page.getByTestId('code-status').locator('div').nth(2).locator('dd')).toHaveText('离线')
+})
+
+test('Home first use offers a native task, reads back the catalog, and labels lexical evidence honestly', async ({ page }) => {
+  let catalogStage: 'empty' | 'registered' | 'published' = 'empty'
+  const requests: string[] = []
+  const checkout = { source_ref: 'source-task', checkout_ref: 'checkout-task', repository: 'My service', working_copy: 'Feature A · desk' }
+  const context = { source_id: 'source-task', checkout_id: 'checkout-task', view_id: 'view-task', profile_id: 'profile-task', generation: 1 }
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { auth_disabled: true } }))
+  await page.route('**/api/code/**', async route => {
+    const pathname = new URL(route.request().url()).pathname
+    requests.push(pathname)
+    if (pathname === '/api/code/tabs/handshake') {
+      await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'task-resume', reload_token: 'task-reload' } })
+    } else if (pathname === '/api/code/contexts') {
+      const contexts = catalogStage === 'empty' ? [] : catalogStage === 'registered'
+        ? [{ ...checkout, index_intent_available: false }]
+        : [{ ...checkout, indexed_snapshot: { label: 'Saved snapshot A' }, view_ref: 'view-task', selection_ref: 'selection-task', index_intent_available: false }]
+      await route.fulfill({ json: { contexts } })
+    } else if (pathname === `/api/code/tabs/${TAB_BINDING_ID}/context`) {
+      expect(route.request().postDataJSON().selection_ref).toBe('selection-task')
+      await route.fulfill({ status: 204 })
+    } else if (pathname === '/api/code/status') {
+      await route.fulfill({ json: { total_chunks: 60, embedded_chunks: 0, embedding: { coverage: 'unavailable' }, freshness: { state: 'observed_current' } } })
+    } else if (pathname === '/api/code/structure' || pathname === '/api/code/search') {
+      await route.fulfill({ json: { schema: 'engram.code-query/1', status: 'empty', contexts: [context], items: [], warnings: [], retrieval: { mode: 'lexical', vector_coverage: 0, degradation_reasons: ['embedding_provider_unavailable'] }, freshness: { state: 'observed_current' }, coverage: { structural: 'partial', unresolved_sites: 2, unsupported_files: 3 }, truncated: false } })
+    } else await route.fulfill({ status: 204 })
+  })
+
+  await page.goto('/')
+  await page.getByTestId('overview-workspace-entry').click()
+  await expect(page.getByTestId('code-context-empty')).toBeVisible()
+  await expect(page.locator('.phase')).toHaveText('Вкладка подключена')
+  await expect(page.getByTestId('code-pin-context')).not.toHaveText('Закреплено сервером')
+  await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+  await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
+  await page.locator('#code-connect-label').fill('My service')
+  await expect(page.getByTestId('code-connect-task')).toHaveValue(/codebase_context.*source_label.*locator.*codebase_index/)
+  await page.getByRole('button', { name: 'Выделить задачу', exact: true }).click()
+  await expect(page.getByTestId('code-connect-task')).toBeFocused()
+  expect(await page.getByTestId('code-connect-task').evaluate((field: HTMLTextAreaElement) => field.selectionEnd - field.selectionStart)).toBeGreaterThan(0)
+
+  catalogStage = 'registered'
+  await page.getByTestId('code-connect-readback').click()
+  await expect(page.getByTestId('code-context-empty')).toHaveCount(0)
+  await expect(page.getByTestId('code-context-index-affordance')).toBeVisible()
+  await expect(page.getByTestId('code-pin-context')).toBeDisabled()
+  await expect(page.getByTestId('code-context-index-affordance')).toContainText('локальный агент')
+  await expect(page.locator('#code-connect-kind option[value="worktree"]')).toHaveJSProperty('disabled', true)
+
+  catalogStage = 'published'
+  await page.getByTestId('code-connect-readback').click()
+  await expect(page.locator('#code-connect-kind option[value="worktree"]')).toHaveJSProperty('disabled', false)
+  await page.getByTestId('code-context-snapshot').selectOption('selection-task')
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Feature A · desk')
+  await page.getByTestId('code-query-input').fill('how is a working copy chosen')
+  await page.getByTestId('code-query-input').press('Enter')
+  await expect(page.getByTestId('code-query-evidence')).toContainText('только лексическим поиском')
+  await expect(page.getByTestId('code-query-evidence')).toContainText('embedding_provider_unavailable')
+  await expect(page.getByTestId('code-query-evidence')).toContainText('0%')
+  expect(requests.every(path => !path.includes('register') && !path.includes('grants'))).toBe(true)
 })

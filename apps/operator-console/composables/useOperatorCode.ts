@@ -123,6 +123,11 @@ export interface CodeEnvelope {
   navigation: CodeGraphNavigation | null
   warnings: string[]
   retrievalMode: string | null
+  vectorCoverage: number | null
+  degradationReasons: string[]
+  structuralCoverage: string | null
+  unresolvedSites: number | null
+  unsupportedFiles: number | null
   freshnessState: string | null
   continuation: string | null
 }
@@ -545,6 +550,11 @@ function parseEnvelope(value: unknown): CodeEnvelope | null {
   const retrievalMode = retrieval !== null && typeof retrieval === 'object' && !Array.isArray(retrieval)
     ? text(Reflect.get(retrieval, 'mode'))
     : null
+  const vectorCoverageValue = retrieval !== null && typeof retrieval === 'object' ? Reflect.get(retrieval, 'vector_coverage') : undefined
+  const vectorCoverage = vectorCoverageValue == null ? null : finiteNumber(vectorCoverageValue)
+  const degradationValue = retrieval !== null && typeof retrieval === 'object' ? Reflect.get(retrieval, 'degradation_reasons') : undefined
+  const degradationReasons = degradationValue === undefined ? [] : textList(degradationValue)
+  if (degradationReasons === null || vectorCoverageValue != null && (vectorCoverage === null || vectorCoverage < 0 || vectorCoverage > 1)) return null
   const freshness = Reflect.get(value, 'freshness')
   const freshnessState = freshness !== null && typeof freshness === 'object' && !Array.isArray(freshness)
     ? text(Reflect.get(freshness, 'state'))
@@ -560,6 +570,13 @@ function parseEnvelope(value: unknown): CodeEnvelope | null {
     || retrievalMode === null || freshnessState === null || coverage === null || typeof coverage !== 'object' || Array.isArray(coverage)
     || typeof truncated !== 'boolean' || truncated !== (continuation !== null)
   )) return null
+  const structuralCoverage = coverage !== null && typeof coverage === 'object' ? text(Reflect.get(coverage, 'structural')) : null
+  const unresolvedValue = coverage !== null && typeof coverage === 'object' ? Reflect.get(coverage, 'unresolved_sites') : undefined
+  const unsupportedValue = coverage !== null && typeof coverage === 'object' ? Reflect.get(coverage, 'unsupported_files') : undefined
+  const unresolvedSites = unresolvedValue == null ? null : finiteNumber(unresolvedValue)
+  const unsupportedFiles = unsupportedValue == null ? null : finiteNumber(unsupportedValue)
+  if (unresolvedValue != null && (unresolvedSites === null || !Number.isInteger(unresolvedSites) || unresolvedSites < 0)
+    || unsupportedValue != null && (unsupportedFiles === null || !Number.isInteger(unsupportedFiles) || unsupportedFiles < 0)) return null
   const context = contexts[0] ?? null
   if (context !== null && (
     !items.every((item) => item.ref.sourceId === context.sourceId && item.ref.viewId === context.viewId)
@@ -581,6 +598,11 @@ function parseEnvelope(value: unknown): CodeEnvelope | null {
     navigation,
     warnings,
     retrievalMode,
+    vectorCoverage,
+    degradationReasons,
+    structuralCoverage,
+    unresolvedSites,
+    unsupportedFiles,
     freshnessState,
     continuation,
   }

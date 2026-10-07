@@ -8,6 +8,9 @@ description: "Dependency-ordered implementation tasks for Feature 011 D-A"
 
 **Prerequisites**: The D-A amendment is accepted in the exact implementation candidate. Each owner rereads its candidate paths before modifying them. D-B and D-C work is not admitted by this task graph.
 
+**2026-10-07 ordering**: The accepted D-A source baseline and its historical checks below are not reopened by M1. Forward integration now prioritizes empty-catalog visible native onboarding and catalog readback, then two dirty worktrees, code embeddings/conceptual search, automatic typed relations, and same-View source on static Vue/Vite. The configured single-user no-auth HTTP LAN path is selected; browser grants are not its onboarding dependency. Preserve M0 installed-memory proof. M2 useful-data migration, M3 measured quality/language work, and M4 Book Context follow. Fresh-host automatic context remains independent. Installed M1 proof must start from the ordinary visible guide, not a pre-registered author fixture.
+
+
 **Tests**: Each task carries the smallest proof that distinguishes its claimed behavior. Mock browser tests are interaction evidence only. The acceptance task owns ordinary-user and retirement/history evidence; this documentation slice runs none of those tests.
 
 **Task convention**: Each task declares its sole writer zone, dependencies, focused proof, and an atomic commit. A `[P]` task has no incomplete task dependency and does not share a writable path with another ready task.
@@ -42,13 +45,13 @@ description: "Dependency-ordered implementation tasks for Feature 011 D-A"
 
 ## Phase 3: Independently recordable D-A source evidence
 
-**Goal**: Record journey and retirement evidence independently on the exact candidate. Composite D-A source acceptance exists only after both records are green; the release gate remains closed until the deployment decision and installed proof exist.
+**Goal**: Preserve the accepted source records in their original scope. Record the forward-integrated M1 journey on the exact candidate and actual installed no-auth components; historical source/retirement receipts do not certify this new installed first-use flow.
 
 - [ ] T008a Record DA01/DA02/DA04 journey source proof using existing live console/UCI fixtures. **Owner zone**: Integration/QA owner. **Depends on**: T006a, T007. **Proof**: normal Home discovery, two readable worktrees, coverage/freshness, direct/reverse off-page relation evidence, tab/grant/new-View isolation, accessibility/RU-EN, and one real-provider non-lexical conceptual query over more than 50 candidates. Lexical/degraded output is `NOT_PROVEN`. **Atomic commit**: `test(011): prove D-A workspace journey`. (SC-001–SC-004, SC-006)
 
 - [ ] T008b Record DA03 retirement source proof using the approved legacy writer consumer-map denominator. **Owner zone**: Integration/QA owner. **Depends on**: T006b. **Proof**: old writer negative calls/restart, single-container quiescence, idempotent failed-with-reason residual job, preserved `source_book_job_id`/partial documents, and named retained readers. **Atomic commit**: `test(011): prove D-A retirement preservation`. (SC-005)
 
-**Composite source acceptance**: Record D-A source acceptance only after both T008a and T008b are green. Keep release closed until the browser/origin decision and installed normal-homepage DA01–DA04 walkthrough are recorded. (SC-007)
+**Composite source acceptance**: Existing D-A source acceptance retains its recorded scope. M1 still requires actual installed Home → native connection → catalog → A/B index/vector/graph/source proof; the no-auth HTTP LAN origin decision is already selected, not a reason to reopen design or require grants. (SC-007)
 
 ## Dependency graph and writer serialization
 

@@ -187,26 +187,57 @@ The current client selects a muxcore daemon namespace from a hash of its persist
 
 For a legacy daemon that needs retirement, first identify its live control status, owner, process image, installed client path, and connected clients against the old marker. If ownership cannot be proven, leave it running and report the coexistence; do not claim exclusive installation. Only with operator authority for that exact daemon, coordinate old client disconnection and use its existing supported graceful control to shut it down. Confirm its status is no longer live and reconnect the intended new installation. Never kill a PID, delete a marker or control socket, or use an unverified process match as a substitute for ownership proof. If that platform or installation has no supported graceful control, stop and escalate retirement to its owner rather than forcing it.
 
-### Connect the ordinary client and register a source
+### Первый запуск: от меню до исходника
 
-For a new repository, run `engram project init --name "Example Workspace"` **offline from its Git root**, then explicitly track and commit the generated V3 anchor:
+Эта инструкция относится к существующей установке с `ENGRAM_AUTH_DISABLED=true` на её настроенном HTTP LAN-адресе. Не создавай логин, browser grant, HTTPS-прокси или новую конфигурацию ради этого пути. Браузер не видит локальный Git. Регистрацию и индексирование выполняет установленный агент на компьютере с кодом; сервер остаётся владельцем Source, Checkout и View.
 
-```bash
-engram project init --name "Example Workspace"
-git add -- .engram-project
-git commit -m "Initialize Engram project anchor"
-```
+1. Открой главную страницу установленной консоли.
+2. Выбери **Рабочее место** на Home или в основном меню.
+3. Открой **Добавить / подключить репозиторий**. При пустом каталоге этот раздел открыт сразу. Сообщение «Вкладка подключена» означает только связь вкладки с сервером, не готовый индекс.
+4. На компьютере с кодом открой обычный агент с установленным Engram из корня нужной Git-копии. Проверь, что агент использует тот же сервер, что и консоль. Не подменяй установленный клиент случайным `engram` из `PATH`.
+5. В консоли выбери **Новый репозиторий** и введи читаемое название. Путь и UUID не нужны.
+6. Нажми **Копировать задачу** и передай текст агенту. Если браузер на HTTP не разрешает буфер обмена, нажми **Выделить задачу**, затем скопируй текст обычной командой клавиатуры.
+7. Дождись ответа агента. Задача использует существующий native MCP: `codebase_context register` с `source_label`, без `locator`. Native host определяет настоящий Git-корень текущего каталога. Сервер выдаёт отдельный checkout-bound `context_handle`; до первого опубликованного View поле `context` остаётся `null`.
+8. В той же сессии агент вызывает `codebase_status`, `codebase_index` и `codebase_status` с `after_barrier.token` из `run_id` и `wait_ms:60000`. `started`, `already_running` и принятый index intent означают работу, не готовый снимок. Если ожидание не завершилось, агент сообщает состояние или ошибку, а не объявляет успех.
+9. Вернись в консоль и нажми **Подключение выполнено — обновить каталог**. Проверь реальные подписи **Репозиторий** и **Рабочая копия** в серверном каталоге. Копирование задачи само по себе не создаёт регистрацию.
+10. Если копия уже подключена, но не имеет View, выбери её. При свежем доступном daemon target появится **Индексировать рабочую копию**. Если кнопки нет, повтори задачу в локальном агенте этой копии, затем обнови каталог. Не создавай разрешение браузера и не отправляй файловый путь в HTTP API.
+11. После публикации выбери **Снимок индекса**, проверь ревизию и время, затем нажми **Закрепить выбранный View**. Новый снимок не подменяет прежний автоматически.
+12. Проверь свежесть, число эмбеддингов кода, покрытие, состояние задания и причину ошибки. Нулевое или частичное покрытие не означает готовый смысловой поиск.
+13. Введи запрос о поведении без известного имени функции. Например, для подходящего корпуса: «Как выбирается рабочая копия для поиска кода?». Нажми **Искать**.
+14. Проверь **Режим ответа**, **Покрытие векторами**, структурное покрытие, неподдерживаемые файлы, неразрешённые ссылки и причины деградации. `lexical` — полезный лексический ответ, но не доказательство смыслового поиска. Для концептуальной проверки нужен `hybrid` с реальным вкладом `vector` в найденный результат. Режим и полный индекс сами по себе не подтверждают качество ответа.
+15. У результата нажми **Исследовать граф**. Выбери входящие или исходящие связи. Чтобы пройти связи с клавиатуры без графического представления, выбери список.
+16. Выбери автоматически извлечённую связь. Проверь её тип, вид доказательства и precision. Открой исходник ссылки, если он выдан. Entity-level, heuristic и ambiguous — ограничения, не точное доказательство вызова.
+17. Нажми **Прочитать исходник** у результата или действие чтения в панели связи. Файл, строки, байты и digest относятся к тому же закреплённому View. Сегодняшний файл на диске не заменяет сохранённый фрагмент этого View.
 
-The command reports whether `.engram-project` is tracked; it does not stage or commit it. If a working copy already has a name-only or invalid marker, do not overwrite it or invent a project ID. Existing project-scoped memories and issues are a separate history: project initialization and UCI registration do not migrate them. Keep the old memory client and its data intact. An owner-approved migration of the existing project row is separate from this new-code journey; no synthetic no-auth identity authorizes a historical backfill.
+Каталог вкладки не является всей базой данных. Пустой ответ не доказывает отсутствие кода или исторических записей у других владельцев. При ошибке обновления подтверждённый View и уже выданные результаты сохраняются; повтори обновление. При отказе доступа или несовпадении контекста сервер может снять закрепление. Auth-enabled установка сохраняет свои проверки пользователя и grant; это отдельный путь, не способ обойти текущую авторизацию.
 
-1. Configure the **new installed plugin** for the same bare server origin as the browser (`ENGRAM_URL` for environment-based setups; no `/mcp` suffix). With `ENGRAM_AUTH_DISABLED=true`, neither a workstation keycard nor a browser login is a prerequisite. Keep any existing authenticated-client settings separate; never copy an admin credential to a workstation. Inspect the actual launcher and daemon configuration rather than assuming a new shell's environment reached an already running daemon.
-2. Check the server's effective `ENGRAM_CODE_INTEL_ENABLED` and the daemon's inherited setting. Current source enables code intelligence unless the value is exactly `false`. For JS, TS, and TSX indexing, verify that the installed daemon has a compatible parser executable and parser bundle digest; an executable file hash is not the bundle digest.
-3. Start a fresh ordinary agent session using the installed plugin. Inspect its MCP `tools/list` for `codebase_context`, `codebase_index`, `codebase_status`, `codebase_search`, `codebase_graph`, and `codebase_read`. The `codebase_*` tools use UCI; `project` on a public query is compatibility evidence, not a View selector.
-4. Register the local Git working copy with `codebase_context` using `{"action":"register","source_label":"my-repository","locator":"file:///absolute/local/worktree"}`. The daemon owns the local path and returns a checkout-bound `context_handle`, Source, Checkout, and profile identities. For a second worktree, use `{"action":"register","source_id":"<returned source_id>","locator":"file:///absolute/local/other-worktree"}`. Keep the returned handles distinct. Do not send local paths to the browser or invent IDs. If an older checkout lacks its durable registration profile, do not pretend a new registration restores its original identity; an eligible new Source has a distinct identity. A new checkout has no published View until indexed.
+### Две независимые dirty-копии
 
-If a later client session must explicitly reselect a **published** View, use a fresh `codebase_context` list or status response. Pass the complete server-returned typed `context` at the top level of `{"action":"select",...}` (`source_id`, `checkout_id`, `view_id`, `analysis_profile_id`, `generation`, and `space_id` when present). A same-session `context_handle` also works. For the latest View of a checkout, pass its server-returned `checkout` object without `view_id`. Do not combine `checkout` with `view_id`, reuse another session's handle, or invent a UUID; the server rejects the mixed selector with `CONTEXT_MISMATCH`.
+Используй собственный тестовый репозиторий и два настоящих Git worktree. Изменения можно сохранять без коммита: индекс отражает рабочую копию, а не только Git HEAD. Не выполняй rename/delete на полезных пользовательских файлах ради проверки.
 
-The daemon retains at most 1024 transport-session context owners using least-recently-used eviction. An evicted session's opaque handles and selected default no longer authorize requests. Start a fresh session and resolve the server-returned context again instead of reusing an old handle.
+1. Подключи и проиндексируй копию A по инструкции выше.
+2. Открой вторую вкладку консоли через Home → **Рабочее место**.
+3. Открой установленный агент из Git-корня копии B.
+4. В **Добавить / подключить репозиторий** выбери **Другую копию существующего репозитория** и нужный репозиторий по читаемой подписи.
+5. Передай агенту показанную задачу. Он получает свежий `codebase_context list`, выбирает единственный соответствующий Source по серверному ответу и вызывает `select`. Затем `register` берёт Source из возвращённого handle/серверной привязки, а Git-корень — из текущего native host. Оператор не вводит `source_id`. При одинаковых названиях агент должен показать неоднозначность, а не объединять Source по имени или remote URL.
+6. Дождись отдельного View B. Обнови каталог и закрепи B во второй вкладке. Проверь отличающиеся подписи рабочих копий; они не являются полномочием, но помогают не перепутать копии.
+7. Сохрани разные версии одного тестового механизма в A и B без коммита. Дождись публикации новых View через watcher; если нужна сверка, используй **Запросить сверку** в выбранной копии или native `codebase_index` с её handle.
+8. Обнови разрешённые варианты в A и явно переключись на новый снимок. Проверь новый текст A. B и старый закреплённый View A должны сохранить прежний текст.
+9. Переименуй только созданный для проверки файл в A. Дождись публикации и явно выбери новый View A. Поиск и исходник нового снимка должны показывать новый путь; B и старый View A — прежний путь.
+10. Удали только этот тестовый файл из A. После публикации выбери новый View A. В нём файл отсутствует; B и старый View A остаются независимыми и читаемыми.
+11. Для проверки перезапуска сначала подтверди владельца, установленный executable, PID и `daemon_generation` **точно этого** daemon через его поддерживаемый muxcore control. Уже существующий протокол: `{ "cmd":"status" }`, затем после совпадения с удержанной identity `{ "cmd":"shutdown", "drain_timeout_ms":2000 }`. Дождись недоступности этого control и выхода прежней generation, затем открой обычный установленный plugin заново. Это control-протокол, не команда `engram shutdown`: такой CLI здесь не заявлен. Не убивай PID, не удаляй marker/socket и не используй случайный тестовый controller на общем daemon. Если штатный host не предоставляет доступ к этому управлению, перезапуск выполняет владелец установки; отметь его отдельно от обычного переподключения.
+12. После подтверждённого перезапуска снова открой обычный клиент. Старый session handle больше не используй. Получи свежий серверный `list`/`select`, проверь каждую рабочую копию через `codebase_status`, затем обнови каталоги обеих вкладок. Подписи, разные тексты A/B, удаление/переименование в A и исторические View должны остаться различимыми.
+
+### Поддерживаемая область и восстановление
+
+- Go, JavaScript, TypeScript и TSX проверяй отдельными реальными примерами, включая приватный helper и входящую/исходящую связь. Для JS/TS/TSX установленный daemon должен иметь совместимый parser executable и bundle digest. Общий embedding coverage не сертифицирует язык; языки показанных фрагментов не являются полным списком поддерживаемых файлов.
+- C# и динамические вызовы не считаются проверенными по результату Go или TS. Неподдерживаемый файл, неоднозначная ссылка, ограниченный обход и частичная экстракция должны остаться видимыми ограничениями.
+- Если провайдер не работает, сохрани последний хороший View. Проверь существующую конфигурацию модели, размерность и причину задания; не меняй профиль, сеть или провайдер из задачи подключения. Code embeddings и memory embeddings — разные доказательства.
+- Когда daemon офлайн, опубликованный View может оставаться читаемым. Новая регистрация и запрос индекса требуют живого разрешённого владельца. Обновление каталога не создаёт Source само по себе.
+- Новая UCI-регистрация не мигрирует canonical project, память или Issues. `.engram-project` не нужно создавать или переписывать для этой задачи. Отдельный `engram project init` относится только к явно новой project identity; существующий name-only/invalid marker нельзя заменять ради кода.
+- Сохраняй установленный plugin-data и его `ENGRAM_CLIENT_INSTANCE_ID`, Vault key и полезную историю. Не делись ключами между независимыми установками и не выводи их в отчёт. Ограничение opaque handles: native daemon удерживает не более 1024 транспортных владельцев с LRU eviction; после вытеснения получи свежую серверную привязку.
+
+Рабочий продукт проверяет независимый инженер по этой инструкции на установленных компонентах. Source fixture, старые donor receipts, успешный memory recall и HTTP readiness не заменяют installed-путь: Home → подключение → два worktree → реальные векторы → типизированная связь → исходник того же View. Fresh-host automatic context — отдельная приёмка; инструкция не выдаёт её за выполненную.
 
 ### Index and inspect an authorized View
 
@@ -258,8 +289,8 @@ No-auth HTTP LAN access assumes a trusted single-user deployment; it is not an a
 
 Use an agreed disposable repository. Set expected answers before querying, and record installed component identities without secrets or private source in the record. A second operator should be able to follow this guide without private hints.
 
-1. **F1: first use.** From an offline Git root, initialize and explicitly commit its V3 anchor. In the ordinary new plugin client, discover six code tools and register a working copy without SQL or manual UUIDs. Enter Workspace from Home on the configured HTTP LAN origin without login or grants.
-2. **F2: two working copies.** Give A and B different saved versions of one mechanism. Search and read each in its own context. Change a disposable file in A; after watcher publication, verify that A changes while B and the browser's previously selected View remain unchanged until switched. Reconnect the new client and resolve its context again. Check old memory and its older client separately; neither is the code View.
+1. **F1: first use.** Follow **Первый запуск: от меню до исходника** from Home with an empty browser catalog. Use its visible task in the ordinary installed native host; do not pre-register the source as hidden fixture setup, initialize project identity, write SQL, or supply UUIDs.
+2. **F2: two working copies.** Follow **Две независимые dirty-копии**, including saved divergent code, rename, delete, explicit View switches, and the confirmed supported daemon restart. Record A/B isolation and historical View retention. A client reconnect alone is not daemon restart evidence. Preserve ordinary memory independently before and after rollout.
 3. **F3: semantic search.** Index more than 50 eligible candidates. Wait for code embeddings to become ready. Run exact-symbol, non-lexical conceptual, and negative queries. Inspect vector or hybrid retrieval, profile, source span, totals, and continuation; lexical fallback is not semantic success.
 4. **F4: graph and evidence.** Follow a derived direct and reverse relation to an off-page neighbor. Read its released evidence and exact span through the same View. If evidence is only partial or entity-level, report that limit. Do not write graph edges manually.
 5. **F5: recovery.** In an owned test environment, observe queued or unavailable indexing when the daemon is offline, then restore it and verify publication. Interrupt the test embedding provider and confirm an honest error or degraded state with the last good View intact. Authentication-enabled grant revocation is a separate deferred scenario.
@@ -294,7 +325,7 @@ The Windows amd64 (`win32-x64`) parser has been built and smoke-tested as a sour
 | Symptom | Check first |
 | --- | --- |
 | Workspace cannot open on HTTP LAN | Check the configured browser origin, installed console bundle, `/api/auth/me` auth mode, and browser errors. Do not substitute localhost, HTTPS, login, or a proxy. |
-| No working copy appears | Check that the installed new client registered and indexed the correct Source and Checkout in the no-auth realm; inspect catalog and index state before assuming a browser grant is missing. |
+| No working copy appears | From Home → Workspace open Add / connect repository; run its task in the ordinary installed agent at the correct Git root, then refresh the browser catalog. Check the agent's server and Source/Checkout response; no browser grant is required in the configured no-auth realm. |
 | `LOCAL_CODE_CATALOG_FULL` while registering a no-auth checkout | The shared Workspace catalog supports 128 active checkouts. Existing checkout registration replays still work; take a no-longer-needed checkout offline before registering another. Do not hide catalog entries or use another Source label to bypass the limit. |
 | API healthy but no code tools | Compare the server's `/api/flags` with the actual daemon path, plugin version, inherited `ENGRAM_CODE_INTEL_ENABLED`, and fresh `tools/list`. Current source is on unless exactly `false`; an older installed daemon may differ. |
 | No JS, TS, or TSX facts | Inspect the installed parser executable, bundle digest, and extraction diagnostics. Do not use a source path as a binary. |

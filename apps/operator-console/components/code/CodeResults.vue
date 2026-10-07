@@ -34,6 +34,8 @@ const query = ref('')
 const sourceItem = computed(() => props.source?.items[0] ?? null)
 const candidates = computed(() => props.search ?? props.structure)
 const copyNotice = ref<'copied' | 'unavailable' | null>(null)
+const queryEvidence = computed(() => props.search === null ? null : props.search.retrievalMode === 'hybrid' ? 'hybrid' : props.search.retrievalMode === 'lexical' ? 'lexical' : 'other')
+const pageLanguages = computed(() => [...new Set(props.search?.items.map(item => item.language) ?? [])].join(', '))
 const readiness = computed(() => {
   if (props.status === null) return null
   if (props.status.embeddingJobState === 'failed_terminal' || props.status.freshnessState === 'failed') return 'failed'
@@ -95,9 +97,10 @@ async function copy(value: string): Promise<void> {
     <form v-if="pinned !== null" class="search-form" @submit.prevent="submitSearch">
       <label for="code-query">{{ t('codeExplorer.search.label') }}</label>
       <div>
-        <input id="code-query" v-model="query" name="code-query" autocomplete="off" :placeholder="t('codeExplorer.search.placeholder')" :disabled="pending" data-testid="code-query-input">
+        <input id="code-query" v-model="query" name="code-query" autocomplete="off" :placeholder="t('codeExplorer.search.placeholder')" :disabled="pending" aria-describedby="code-query-help" data-testid="code-query-input">
         <button class="btn primary" type="submit" :disabled="pending || query.trim() === ''" data-testid="code-search-submit">{{ t('codeExplorer.search.action') }}</button>
       </div>
+      <p id="code-query-help" class="state-message">{{ t('workspace.query.help') }}</p>
     </form>
 
     <div v-else class="unselected" data-testid="code-results-unselected">
@@ -131,6 +134,18 @@ async function copy(value: string): Promise<void> {
       <article class="panel search-panel" aria-live="polite">
         <div class="panel-head"><h3>{{ t('codeExplorer.search.title') }}</h3><span :data-state="searchState.kind">{{ t(`codeExplorer.states.${searchState.kind}.label`) }}</span></div>
         <p class="state-message">{{ t(`codeExplorer.states.${searchState.kind}.search`) }}</p>
+        <div v-if="search !== null" class="query-evidence" data-testid="code-query-evidence">
+          <p class="state-message">{{ t(`workspace.query.${queryEvidence}`, { mode: search.retrievalMode ?? t('codeExplorer.status.unknown') }) }}</p>
+          <dl class="status">
+            <div><dt>{{ t('workspace.query.mode') }}</dt><dd>{{ search.retrievalMode ?? t('codeExplorer.status.unknown') }}</dd></div>
+            <div><dt>{{ t('workspace.query.vectorCoverage') }}</dt><dd>{{ search.vectorCoverage === null ? t('codeExplorer.status.unknown') : `${Math.round(search.vectorCoverage * 100)}%` }}</dd></div>
+            <div><dt>{{ t('workspace.query.structuralCoverage') }}</dt><dd>{{ search.structuralCoverage ?? t('codeExplorer.status.unknown') }}</dd></div>
+            <div><dt>{{ t('workspace.query.unresolved') }}</dt><dd>{{ search.unresolvedSites ?? t('codeExplorer.status.unknown') }}</dd></div>
+            <div><dt>{{ t('workspace.query.unsupported') }}</dt><dd>{{ search.unsupportedFiles ?? t('codeExplorer.status.unknown') }}</dd></div>
+          </dl>
+          <p class="state-message">{{ t('workspace.query.page', { count: search.items.length, languages: pageLanguages || t('codeExplorer.status.unknown') }) }}</p>
+          <ul v-if="search.degradationReasons.length > 0" class="warnings"><li v-for="reason in search.degradationReasons" :key="reason">{{ reason }}</li></ul>
+        </div>
         <ul v-if="search !== null && search.items.length > 0" class="items" data-testid="code-search-results">
           <li v-for="item in search.items" :key="`${item.ref.entityKey}:${item.span.byteStart}`">
             <div class="item-copy">
@@ -195,6 +210,7 @@ dd { margin:4px 0 0; color:var(--fg); font-family:var(--font-mono); font-size:va
 .readiness[data-state='updating'], .readiness[data-state='newer-snapshot'] { border-color:color-mix(in oklab,var(--warn),transparent 35%); }
 .readiness[data-state='failed'], .readiness[data-state='degraded'] { border-color:color-mix(in oklab,var(--danger),transparent 35%); }
 .diagnosis { margin:0; color:var(--danger); font-size:var(--text-sm); }
+.query-evidence { border-block:1px solid var(--border-soft); padding:10px 0; margin-top:10px; }.query-evidence .status { margin:10px 0; }
 .search-form { display:grid; gap:5px; }
 .search-form > label { color:var(--muted); font-size:var(--text-xs); font-weight:700; letter-spacing:.04em; text-transform:uppercase; }
 .search-form > div { display:flex; gap:8px; }

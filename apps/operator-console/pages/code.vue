@@ -59,6 +59,14 @@ onMounted(() => {
     </header>
 
     <CodeGrantChooser v-if="canAdministerGrants" />
+    <CodeRepositoryConnect
+      :catalog="contextCatalog"
+      :state="contextState"
+      :pending="pending || indexIntentPending"
+      :can-refresh="['ready', 'collision', 'ambiguous'].includes(bootstrapPhase)"
+      @refresh="discoverContext"
+    />
+
 
     <CodeContextPicker
       :phase="bootstrapPhase"
@@ -66,7 +74,7 @@ onMounted(() => {
       :catalog="contextCatalog"
       :candidate="contextCandidate"
       :pinned="pinnedContext"
-      :pending="pending"
+      :pending="pending || indexIntentPending || ['loading', 'submitted', 'queued', 'acknowledged', 'running'].includes(indexIntentState.kind)"
       :evidence="bootstrapEvidence"
       @refresh="discoverContext"
       @select="selectContext"
@@ -76,6 +84,7 @@ onMounted(() => {
     />
 
     <IndexIntentStatus
+      v-if="pinnedContext !== null || indexIntentState.kind !== 'idle'"
       :pinned="pinnedContext"
       :state="indexIntentState"
       :busy="indexIntentPending"
@@ -123,6 +132,7 @@ h1 { margin:0 0 4px; color:var(--fg); font-size:var(--text-xl); font-weight:700;
 .head p { max-width:78ch; margin:0; color:var(--muted); font-size:var(--text-sm); }
 .btn { min-height:36px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface); color:var(--fg); padding:8px 12px; font:inherit; font-size:var(--text-sm); font-weight:700; cursor:pointer; white-space:nowrap; }
 .btn:disabled { cursor:not-allowed; opacity:.55; }
+.btn:focus-visible, summary:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .release-note { display:grid; gap:6px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface-warm); padding:10px 12px; color:var(--fg-2); font-size:var(--text-sm); }.release-note summary { color:var(--fg); cursor:pointer; font-weight:700; }.release-note[data-state='partial'], .release-note[data-state='stale'] { border-color:color-mix(in oklab,var(--warn),transparent 35%); }
 @media (max-width: 720px) { .head { display:grid; }.btn { justify-self:start; white-space:normal; } }
 </style>

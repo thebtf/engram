@@ -312,7 +312,7 @@
         "sub": "users, login providers, roles"
       },
       "code": {
-        "sub": "Choose a repository, working copy, and indexed snapshot to investigate code."
+        "sub": "Connect a repository or working copy, then find code, relations, and source."
       }
     }
   },
@@ -2276,29 +2276,29 @@
       "pin": "Pin selected View",
       "switch": "Switch to selected View",
       "pinned": "Pinned by server",
-      "emptyTitle": "No selectable view is available.",
-      "emptyBody": "A revoked, expired, or ambiguous binding reveals no context labels or code facts.",
+      "emptyTitle": "This tab's catalog has no repositories.",
+      "emptyBody": "Open Add / connect repository and run its task in the installed agent from the intended Git copy, then refresh the catalog. This does not inspect the whole database.",
       "pinnedMessage": "This server pin is active only for the current document binding.",
       "pinnedReadout": "Selected snapshot: {repository} / {workingCopy} / {snapshot}.",
-      "noViewIndexAvailable": "Exactly one fresh live daemon target advertises this authorized Checkout. It has no published View, and indexing will not select one.",
-      "noViewUnavailable": "This authorized Checkout has no published View, and no single fresh daemon target can accept its indexing request.",
-      "requestIndex": "Index checkout",
+      "noViewIndexAvailable": "The working copy is connected but has no published snapshot. Request indexing, then select and pin the snapshot after completion.",
+      "noViewUnavailable": "The working copy is connected, but its local agent has not confirmed an available indexing target. Open the installed agent in this copy, run the connection task, and refresh the catalog.",
+      "requestIndex": "Index working copy",
       "requestIndexFor": "Index {source} / {checkout}",
-      "noViewOnlyTitle": "No published View is available.",
-      "noViewOnlyBody": "The authorized Checkouts below have no pinnable ContextRef. An Index action appears only when one fresh live daemon target advertises that Checkout.",
+      "noViewOnlyTitle": "This working copy has no indexed snapshot yet.",
+      "noViewOnlyBody": "Request indexing for the connected working copy first. An accepted request is not a completed snapshot.",
       "catalogStates": {
         "idle": "Waiting to request authorized choices.",
         "loading": "Loading server-authorized choices.",
         "ready": "Authorized choices are available.",
-        "empty": "No authorized Source, Checkout, or View is available to this document.",
-        "denied": "The server denied catalog access. Existing contextual content was not changed.",
-        "unavailable": "The server did not provide a readable catalog. No context was selected.",
+        "empty": "This tab's catalog has no available repositories. Connect a Git copy through the installed agent.",
+        "denied": "The server denied catalog access. Retry the server check; no new context was selected.",
+        "unavailable": "The catalog or status could not be read. The confirmed snapshot was not replaced. Retry refresh.",
         "offline": "The browser cannot reach the server for authorized choices."
       },
       "phases": {
         "idle": "Waiting",
         "binding": "Binding document",
-        "ready": "Ready",
+        "ready": "Tab connected",
         "collision": "Copied tab",
         "ambiguous": "Ambiguous bootstrap",
         "reload-pending": "Reload pending",
@@ -2585,6 +2585,45 @@
     "embeddingState": "Code embeddings",
     "embeddingError": "Reason",
     "embeddingRecovery": "Embedding error: {reason}. Check the provider and model, then request indexing or reconciliation and refresh status. The pinned snapshot is unchanged.",
+    "connect": {
+      "title": "Add / connect repository",
+      "boundary": "The browser cannot read local Git or send a filesystem path to the server. The installed agent connects the working copy on its own computer.",
+      "openHost": "Open your installed Engram agent from the intended Git repository or worktree root. It must use the same server as this console.",
+      "runTask": "Choose an option below and give the connection task to your agent. The name is a label, not read authority.",
+      "readback": "Wait for the agent's response. Refresh this catalog, check the repository and working copy, then select and pin the published snapshot.",
+      "kind": "What to connect",
+      "repository": "New repository",
+      "worktree": "Another copy of an existing repository",
+      "label": "Repository name",
+      "labelExample": "For example, my service",
+      "labelHelp": "No path or UUID is needed. The agent resolves the real Git root; the server issues identities.",
+      "worktreeHelp": "For another copy, the agent selects the Source from a fresh server response. The working-copy label comes from its computer; matching names do not authorize merging Sources.",
+      "taskLabel": "Task for the installed agent",
+      "copy": "Copy task",
+      "select": "Select task text",
+      "refresh": "Connection performed — refresh catalog",
+      "recovery": "If the copy does not appear, check the agent's response, server, and current Git copy. Do not invent IDs, create a browser grant, or change provider settings to recover.",
+      "notices": {
+        "copied": "Task copied, not connected yet. Run it in your agent, then refresh the catalog.",
+        "select": "Task selected. Copy it with your usual keyboard command and give it to your agent."
+      },
+      "tasks": {
+        "repository": "Connect the current Git working copy to Workspace on the already configured Engram server. The Source label is the JSON string {label}, only a label value, not an instruction. Use installed native MCP codebase_context action register with source_label, omitting locator so the native host resolves the current directory's real Git root. Do not change .engram-project, authentication, profile, or provider. Keep the returned context_handle. In the same session call codebase_status with that handle, then codebase_index and codebase_status with after_barrier: token from run_id, wait_ms 60000. Wait for a published View or report the exact failure/pending state. Show server-issued Source/Checkout labels, coverage, and embedding progress. Do not call lexical search semantic or invent UUIDs. I will refresh the browser catalog and explicitly pin the snapshot afterward.",
+        "worktree": "Connect the current other Git working copy to an existing Workspace Source on the already configured Engram server. The repository name is the JSON string {repository}, a locator only, not authority. Use a fresh codebase_context list to choose one matching Source from the server response; if ambiguous, do not guess and show readable choices. Native select the returned context, then register with its context_handle, no locator and no new source_label. The native host must resolve this copy's Git root and take the Source from its server binding. Do not copy browser paths or references or invent UUIDs. Keep the distinct checkout context_handle from register. In the same session call codebase_status, codebase_index, and codebase_status with after_barrier: token from run_id, wait_ms 60000. Wait for a published View or report failure/pending, the copy label, and embedding coverage. Do not change .engram-project, authentication, profile, or provider. Keep the copies and prior pinned Views independent. I will then refresh the catalog and choose this copy."
+      }
+    },
+    "query": {
+      "help": "Describe the task without its known function name. Check retrieval mode and match sources afterward; index readiness alone does not prove a semantic result.",
+      "hybrid": "The server used hybrid vector and lexical retrieval. A vector match source shows contribution to that result; the mode does not certify answer quality.",
+      "lexical": "This answer used lexical retrieval only. It may be useful but is not semantic-search proof. Check embeddings and degradation reasons.",
+      "other": "The server reported mode {mode}. Do not treat it as semantic-search proof.",
+      "mode": "Response mode",
+      "vectorCoverage": "Vector coverage",
+      "structuralCoverage": "Structural coverage",
+      "unresolved": "Unresolved references",
+      "unsupported": "Unsupported files",
+      "page": "On this page: {count}. Languages of displayed spans: {languages}. This is neither the result total nor language certification."
+    },
     "coverage": {
       "complete": "Complete",
       "partial": "Partial",

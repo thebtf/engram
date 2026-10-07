@@ -239,7 +239,7 @@ function iconPath(icon: string) {
     </section>
 
     <RouterLink to="/code" class="workspace-entry" data-testid="overview-workspace-entry">
-      <svg class="workspace-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" v-html="iconPath('code')" />
+      <svg class="workspace-icon" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" v-html="iconPath('code')" />
       <span>
         <strong>{{ t('nav.items.code') }}</strong>
         <span>{{ t('overview.cards.code.sub') }}</span>

@@ -225,6 +225,12 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 	if err != nil {
 		return nil, err
 	}
+	if name == "codebase_context" {
+		args, err = m.prepareNativeCodebaseRegistration(ctx, p, args)
+		if err != nil {
+			return nil, err
+		}
+	}
 	serverURL, err := m.requireServerURL(p)
 	if err != nil {
 		return nil, err

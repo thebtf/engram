@@ -103,6 +103,17 @@ func TestRegisterCodebaseContextIssuesNoViewTargetOnlyForAuthenticatedOwner(t *t
 	require.Equal(t, "CONTEXT_MISMATCH", malformed.Error.Data)
 	forbidden := callUCICodebaseContext(t, fixture.server, owner, map[string]any{"action": "register", "source_id": uciCodebaseContextTestSource, "locator": "file:///private/checkout-a", "checkout_id": uciCodebaseContextTestCheckoutA})
 	require.Equal(t, "CONTEXT_MISMATCH", forbidden.Error.Data)
+	beforeNativeOnlyInputs := len(application.calls)
+	for _, args := range []map[string]any{
+		{"action": "register", "source_label": "engram"},
+		{"action": "register"},
+		{"action": "register", "context_handle": payload["context_handle"], "locator": "file:///private/checkout-a"},
+	} {
+		refused := callUCICodebaseContext(t, fixture.server, owner, args)
+		require.NotNil(t, refused.Error)
+		require.Equal(t, "CONTEXT_MISMATCH", refused.Error.Data)
+	}
+	require.Len(t, application.calls, beforeNativeOnlyInputs, "direct server calls cannot derive native Git evidence or Source authority from a handle")
 
 	foreign := auth.WithIdentity(ContextWithSession(context.Background(), "foreign-session"), auth.ClientWithPrincipal("read-write", "keycard-99", "browser-user/99", auth.PrincipalKindAgent))
 	denied := callUCICodebaseContext(t, fixture.server, foreign, map[string]any{"action": "register", "source_id": uciCodebaseContextTestSource, "locator": "file:///private/checkout-a"})

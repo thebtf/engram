@@ -21,7 +21,7 @@ for (const identity of [{ auth_disabled: true }, { authenticated: true, auth_dis
       if (pathname === '/api/code/tabs/handshake') await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: bindingId, document_proof: 'proof', resume_nonce: 'resume', reload_token: 'reload' } })
       else if (pathname === '/api/code/contexts') await route.fulfill({ json: { contexts: [source, otherSource] } })
       else if (pathname === `/api/code/tabs/${bindingId}/context`) await route.fulfill({ status: 204 })
-      else if (pathname === '/api/code/status') await route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, freshness: { state: 'fresh' } } })
+      else if (pathname === '/api/code/status') await route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { coverage: 'complete', job_state: null, error_code: null }, freshness: { state: 'observed_current' } } })
       else await route.fulfill({ status: 500 })
     })
     if (identity.auth_disabled === true) {

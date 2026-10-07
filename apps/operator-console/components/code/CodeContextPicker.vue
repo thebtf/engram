@@ -56,12 +56,12 @@ function workingCopyLabel(entry: CodeCatalogEntry): string {
   const peers = workingCopies.value.filter((other) => other.workingCopy === entry.workingCopy && indexedSnapshots(other.checkoutRef) === count)
   return `${label} · ${t('codeExplorer.context.indexedSnapshots', { count })}${peers.length > 1 ? ` · ${uniquePrefix(entry.checkoutRef, peers.map((other) => other.checkoutRef))}` : ''}`
 }
-const samePinned = computed(() => props.candidate?.selectionRef === props.pinned?.selectionRef)
+const samePinned = computed(() => props.candidate !== null && props.pinned !== null && props.candidate.viewRef === props.pinned.viewRef)
 const phaseLabel = computed(() => t(`codeExplorer.context.phases.${props.phase}`))
 const phaseMessage = computed(() => {
   if (props.phase !== 'ready') return t(`codeExplorer.context.messages.${props.phase}`)
   if (props.state !== 'ready') return t(`codeExplorer.context.catalogStates.${props.state}`)
-  if (props.candidate === null) return noViewEntry.value === null ? t('codeExplorer.context.selectPrompt') : t('codeExplorer.context.noViewOnlyBody')
+  if (props.candidate === null) return props.pinned !== null ? t('codeExplorer.context.pinnedMessage') : noViewEntry.value === null ? t('codeExplorer.context.selectPrompt') : t('codeExplorer.context.noViewOnlyBody')
   return props.pinned === null ? t('codeExplorer.context.selectedPrompt') : t('codeExplorer.context.pinnedMessage')
 })
 
@@ -143,7 +143,7 @@ function chooseSnapshot(event: Event): void {
         </select>
       </label>
     </div>
-    <div v-else class="empty" data-testid="code-context-empty">
+    <div v-else-if="state === 'empty' && pinned === null" class="empty" data-testid="code-context-empty">
       <strong>{{ t('codeExplorer.context.emptyTitle') }}</strong>
       <p>{{ t('codeExplorer.context.emptyBody') }}</p>
     </div>
@@ -171,7 +171,7 @@ function chooseSnapshot(event: Event): void {
 
     <div class="actions">
       <button class="btn" type="button" :disabled="pending || phase !== 'ready' && phase !== 'collision' && phase !== 'ambiguous'" @click="emit('refresh')">{{ t('codeExplorer.context.refresh') }}</button>
-      <button v-if="phase === 'reload-pending' || phase === 'identity-unavailable' || phase === 'error' && evidence.transition === 'TAB_LEASE_RENEWAL_FAILED'" class="btn" type="button" :disabled="pending" :data-testid="phase === 'reload-pending' ? 'code-retry-reload' : phase === 'error' ? 'code-retry-lease' : 'code-retry-identity'" @click="emit('retry')">{{ phase === 'reload-pending' ? t('codeExplorer.context.retryReload') : t('codeExplorer.context.retryIdentity') }}</button>
+      <button v-if="phase === 'reload-pending' || phase === 'identity-unavailable' || phase === 'error' || phase === 'denied'" class="btn" type="button" :disabled="pending" :data-testid="phase === 'reload-pending' ? 'code-retry-reload' : phase === 'error' ? 'code-retry-lease' : 'code-retry-identity'" @click="emit('retry')">{{ phase === 'reload-pending' ? t('codeExplorer.context.retryReload') : t('codeExplorer.context.retryIdentity') }}</button>
       <button class="btn primary" type="button" :disabled="pending || candidate === null || samePinned" data-testid="code-pin-context" @click="emit('pin')">
         {{ samePinned ? t('codeExplorer.context.pinned') : pinned === null ? t('codeExplorer.context.pin') : t('codeExplorer.context.switch') }}
       </button>
