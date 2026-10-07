@@ -5,6 +5,24 @@ redaction rules, startup verification, and restart procedures.
 
 ---
 
+## Обычная запись памяти без principal
+
+В режиме `ENGRAM_AUTH_DISABLED=true` обычный вызов `store` не должен передавать
+`agent_visibility`. В существующей установке 6.50.3 для памяти проекта используй,
+например, `{"action":"create","content":"Решение по проекту","project":"nvmd-devops","privacy_scope":"project"}`.
+`privacy_scope` управляет видимостью проекта/рабочей станции, когда включён
+`ENGRAM_VNEXT_F_ENABLED`; его существующие ограничения сохраняются.
+
+Оба явных значения `agent_visibility`, `private` и `shared`, требуют principal
+из аутентифицированной серверной identity. `shared` — значение по умолчанию только
+для записи с владельцем. Аргументы `principal`, `owner_principal` и `session_id`
+не задают владельца. Без principal поле нужно опустить, а не подставлять identity
+сессии. Если нужна именно principal-private память, отсутствие аутентифицированного
+владельца остаётся отказом: не заменяй её обычной записью проекта. Отдельный
+`privacy_scope="private"` требует непустой workstation identity от SourceClient
+keycard; no-auth режим её не создаёт.
+
+
 ## Redaction Rules (EC-F5, EC-F9)
 
 ### Overview

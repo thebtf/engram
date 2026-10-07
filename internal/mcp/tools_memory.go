@@ -125,7 +125,7 @@ func applyPrincipalMemoryMetadata(ctx context.Context, mem *models.Memory, agent
 	mem.OwnerPrincipalKind = ownerPrincipalKind
 	if visibility != "" {
 		if mem.OwnerPrincipal == "" {
-			return fmt.Errorf("invalid_agent_visibility: principal is required for agent_visibility")
+			return fmt.Errorf("invalid_agent_visibility: both private and shared require an authenticated principal. For ordinary project/workstation visibility without a principal, omit agent_visibility and use privacy_scope. Ownership is server-derived; principal, owner_principal, and session_id arguments cannot supply it. Principal-private visibility requires authenticated ownership")
 		}
 		mem.AgentVisibility = visibility
 	} else if mem.OwnerPrincipal != "" {
