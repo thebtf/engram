@@ -654,17 +654,23 @@ func parserDefinitionLocalKey(kind, name string, bindingScope *tree_sitter.Node)
 		(parent.Kind() == "internal_module" || parent.Kind() == "module") {
 		return localKey
 	}
-	return localKey + "#scope:" + strconv.FormatUint(uint64(bindingScope.StartByte()), 10) + ":" + strconv.FormatUint(uint64(bindingScope.EndByte()), 10)
+	scopeKey := strconv.FormatUint(uint64(bindingScope.StartByte()), 10) + ":" + strconv.FormatUint(uint64(bindingScope.EndByte()), 10)
+	key := localKey + "#scope:" + scopeKey
+	if len(key) <= 4<<10-len("typescript:") {
+		return key
+	}
+	digest := sha256.Sum256([]byte(key))
+	return kind + ":#scope:" + hex.EncodeToString(digest[:])
 }
 
 func parserBindingScope(node *tree_sitter.Node, functionScoped bool) *tree_sitter.Node {
 	for current := node; current != nil; current = current.Parent() {
-		if current.Kind() == "program" || parserFunctionNode(current.Kind()) {
+		if current.Kind() == "program" || current.Kind() == "class_static_block" || parserFunctionNode(current.Kind()) {
 			return current
 		}
 		if !functionScoped {
 			switch current.Kind() {
-			case "statement_block", "switch_body", "for_statement", "for_in_statement", "catch_clause", "class_static_block":
+			case "statement_block", "switch_body", "for_statement", "for_in_statement", "catch_clause":
 				return current
 			}
 		}

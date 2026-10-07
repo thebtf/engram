@@ -243,6 +243,8 @@ func TestUCIPreparedIndexScopedDeclarationsPreserveDirectModuleCalls(t *testing.
 		coverage uci.IndexCoverageState
 		resolved bool
 	}{
+		{name: "var stays inside class static blocks", body: []byte("class A{static{var value=1;}}class B{static{var value=2;}}export function helper(){return 1;}export function caller(){return helper();}"), caller: "caller", callee: "helper", coverage: uci.IndexCoverageComplete, resolved: true},
+		{name: "long scoped identifier remains accepted", body: []byte("export function helper(){return 1;}export function caller(){const " + strings.Repeat("x", 4070) + "=1;return helper();}"), caller: "caller", callee: "helper", coverage: uci.IndexCoverageComplete, resolved: true},
 		{name: "real formatter repeated function locals", body: body, caller: "safeDateFormat", callee: "formatRelativeTime", coverage: uci.IndexCoverageComplete, resolved: true},
 		{name: "independent sibling block locals", body: []byte("export function helper(){return 1;} export function caller(){if(true){const value=1;}if(false){const value=2;}return helper();}"), caller: "caller", callee: "helper", coverage: uci.IndexCoverageComplete, resolved: true},
 		{name: "nested sibling declarations", body: []byte("export function helper(){return 1;} export function caller(){function nested(){const value=1;return value;}return helper();} function sibling(){function nested(){const value=2;return value;}return nested();}"), caller: "caller", callee: "helper", coverage: uci.IndexCoverageComplete, resolved: true},
