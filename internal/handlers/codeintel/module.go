@@ -63,6 +63,7 @@ const (
 
 	codebaseStatusAfterBarrierMaxTokenLength       = 2_048
 	codebaseStatusAfterBarrierMaxWaitMS      int64 = 60_000
+	codebaseStatusAfterBarrierWaitBudget           = 250 * time.Millisecond
 	indexRunRecordLimit                            = 256
 	indexRunTargetPathCount                  int64 = 1
 	indexIntentPollInterval                        = time.Second
@@ -378,7 +379,7 @@ func (m *Module) Tools() []module.ToolDef {
 					},
 					"wait_ms": map[string]any{
 						"type":        "integer",
-						"description": "Maximum barrier wait in milliseconds.",
+						"description": "Maximum willingness to wait in milliseconds. Each daemon-side call waits at most 250 ms; running/timed_out remains pending. Refresh with the same handle and token; do not start a replacement index or retry indefinitely.",
 						"minimum":     1,
 						"maximum":     codebaseStatusAfterBarrierMaxWaitMS,
 					},
@@ -395,7 +396,7 @@ func (m *Module) Tools() []module.ToolDef {
 		},
 		{
 			Name:        "codebase_status",
-			Description: "Report code index liveness and scoped server evidence for one resolved context. Requires ENGRAM_CODE_INTEL_ENABLED=true.",
+			Description: "Report code index liveness and scoped server evidence for one resolved context. A local after_barrier waits at most 250 ms per call; running/timed_out is pending, not a failed or completed index. Refresh with the same context_handle and token. Requires ENGRAM_CODE_INTEL_ENABLED=true.",
 			InputSchema: statusSchema,
 		},
 	}
@@ -1169,7 +1170,7 @@ func (m *Module) waitForIndexBarrier(ctx context.Context, key indexStateKey, bar
 		return snapshot, indexBarrierOutcomeForSnapshot(snapshot), nil
 	}
 
-	timer := time.NewTimer(time.Duration(barrier.WaitMS) * time.Millisecond)
+	timer := time.NewTimer(min(time.Duration(barrier.WaitMS)*time.Millisecond, codebaseStatusAfterBarrierWaitBudget))
 	defer func() {
 		if !timer.Stop() {
 			select {

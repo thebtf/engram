@@ -869,10 +869,16 @@ func TestCodebaseStatusBarrierReportsRunningBeforeInitialViewPublication(t *test
 	require.NoError(t, json.Unmarshal(raw, &started))
 	require.NotEmpty(t, started.RunID)
 
-	raw, err = h.CallToolWithProject(ctx, p, "codebase_status", testStatusArgsWithBarrier(contextHandle, started.RunID, 10))
+	boundedCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+	defer cancel()
+	before := time.Now()
+	raw, err = h.CallToolWithProject(boundedCtx, p, "codebase_status", testStatusArgsWithBarrier(contextHandle, started.RunID, 60_000))
+	elapsed := time.Since(before)
+	t.Logf("HandleTool no-View wait_ms=60000 elapsed_ms=%d raw=%s err=%v", elapsed.Milliseconds(), raw, err)
 	close(releaseIndex)
 	drainIndex(t, h, p)
 	require.NoError(t, err)
+	require.Less(t, elapsed, 750*time.Millisecond)
 	var status struct {
 		Status                string `json:"status"`
 		RunID                 string `json:"run_id"`

@@ -610,23 +610,45 @@ func TestUCICutoverStatusWaitsForLocalBarrierAndReplaysExactToken(t *testing.T) 
 }
 
 func TestUCICutoverStatusBarrierTimesOutWithoutClaimingCompletion(t *testing.T) {
-	fixture := newUCICutoverFixture(t)
-	started, err := fixture.start(fixture.ctxA, fixture.projectA, fixture.rootA, uciCutoverHandleA)
-	require.NoError(t, err)
-	fixture.core.awaitStarted(t, fixture.targetA)
+	for _, test := range []struct {
+		name   string
+		waitMS int64
+	}{
+		{name: "minimum", waitMS: 1},
+		{name: "maximum", waitMS: 60_000},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newUCICutoverFixture(t)
+			started, err := fixture.start(fixture.ctxA, fixture.projectA, fixture.rootA, uciCutoverHandleA)
+			require.NoError(t, err)
+			fixture.core.awaitStarted(t, fixture.targetA)
 
-	status, err := fixture.barrierStatus(fixture.ctxA, fixture.projectA, uciCutoverHandleA, uciCutoverAfterBarrier{Token: started.RunID, WaitMS: 1})
-	require.NoError(t, err)
-	require.Equal(t, "running", status.Status)
-	require.Equal(t, started.RunID, status.RunID)
-	require.Equal(t, fixture.statusA.Context, status.Context)
-	requireUCICutoverBarrierFreshness(t, status.Freshness, fixture.statusA.Freshness, 1, uci.QueryBarrierTimedOut)
-	calls := fixture.core.proxyCallsSnapshot()
-	require.Len(t, calls, 1)
-	requireUCICutoverProxyArgs(t, calls[0])
+			ctx, cancel := context.WithTimeout(fixture.ctxA, 750*time.Millisecond)
+			defer cancel()
+			before := time.Now()
+			status, err := fixture.barrierStatus(ctx, fixture.projectA, uciCutoverHandleA, uciCutoverAfterBarrier{Token: started.RunID, WaitMS: test.waitMS})
+			elapsed := time.Since(before)
+			t.Logf("HandleTool wait_ms=%d elapsed_ms=%d status=%+v err=%v", test.waitMS, elapsed.Milliseconds(), status, err)
+			require.NoError(t, err)
+			require.Less(t, elapsed, 750*time.Millisecond)
+			require.Equal(t, "running", status.Status)
+			require.Equal(t, started.RunID, status.RunID)
+			require.Equal(t, fixture.statusA.Context, status.Context)
+			requireUCICutoverBarrierFreshness(t, status.Freshness, fixture.statusA.Freshness, test.waitMS, uci.QueryBarrierTimedOut)
+			calls := fixture.core.proxyCallsSnapshot()
+			require.Len(t, calls, 1)
+			require.Equal(t, fixture.targetA, calls[0].Target)
+			requireUCICutoverProxyArgs(t, calls[0])
 
-	fixture.core.release(t, fixture.targetA)
-	fixture.core.awaitCompleted(t, fixture.targetA)
+			fixture.core.release(t, fixture.targetA)
+			fixture.waitForStatus(fixture.ctxA, fixture.projectA, uciCutoverHandleA, "idle")
+			replayed, err := fixture.barrierStatus(fixture.ctxA, fixture.projectA, uciCutoverHandleA, uciCutoverAfterBarrier{Token: started.RunID, WaitMS: test.waitMS})
+			require.NoError(t, err)
+			require.Equal(t, "idle", replayed.Status)
+			require.Equal(t, started.RunID, replayed.RunID)
+			requireUCICutoverBarrierFreshness(t, replayed.Freshness, fixture.statusA.Freshness, test.waitMS, uci.QueryBarrierSatisfied)
+		})
+	}
 }
 
 func TestUCICutoverStatusRejectsForeignAndStaleBarrierTokens(t *testing.T) {
