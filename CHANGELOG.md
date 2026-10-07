@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Keep empty catalogs, connected tabs, absent snapshots, indexing, failure, and historical pins distinct; null selections no longer render a server-pinned success. Preserve keyboard focus during connection readback and accessible graph controls/evidence warnings.
+- Calibrate the shared complete-build UCI admission/Stage budget to 384 MiB after a representative repository produced 296,433,353 bytes of unique complete facts and relationship evidence. Keep the 4 MiB frame, 1,024-frame, 1 MiB source-body and exact overflow guards; do not prune references, change identity, weaken atomic publication or introduce a new protocol. This source change requires coordinated native/server delivery and fresh installed indexing proof.
 
 
 ## [6.50.3] - 2026-10-07

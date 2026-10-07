@@ -347,6 +347,36 @@ func TestUCIClientRejectsInconsistentStageFrames(t *testing.T) {
 	}
 }
 
+func TestUCIClientStageCalibratedAggregateCapacity(t *testing.T) {
+	payload := make([]byte, 4<<20)
+	framesFor := func(total int) []*pb.StageCodeIndexFrame {
+		frames := make([]*pb.StageCodeIndexFrame, 0, (total+len(payload)-1)/len(payload))
+		for remaining := total; remaining > 0; {
+			frame := uciClientTestStageFrame(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, uint64(len(frames)))
+			frame.Payload = payload[:min(remaining, len(payload))]
+			frames = append(frames, frame)
+			remaining -= len(frame.Payload)
+		}
+		return frames
+	}
+	for _, test := range []struct {
+		name  string
+		bytes int
+		valid bool
+	}{
+		{name: "measured complete repository wire size", bytes: 296_433_353, valid: true},
+		{name: "exact aggregate bound", bytes: 384 << 20, valid: true},
+		{name: "one byte over aggregate bound", bytes: (384 << 20) + 1, valid: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.valid, validUCIClientStageFrames(framesFor(test.bytes)))
+		})
+	}
+	oversized := framesFor(1)
+	oversized[0].Payload = make([]byte, (4<<20)+1)
+	require.False(t, validUCIClientStageFrames(oversized), "aggregate calibration must not raise the per-frame bound")
+}
+
 func TestUCIClientValidatesFinalizeObservation(t *testing.T) {
 	newRequest := func() *pb.FinalizeCodeIndexRequest {
 		return uciClientTestFinalizeRequest(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, uciClientTestContextA(), uciClientTestAggregatePartsDigest)

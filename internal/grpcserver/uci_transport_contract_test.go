@@ -511,6 +511,46 @@ func TestUCITransportContractStagesOnlyValidatedConsistentFrames(t *testing.T) {
 	assertUCITransportValidStage(t, server, runtime)
 }
 
+func TestUCITransportStageCalibratedAggregateCapacity(t *testing.T) {
+	payload := make([]byte, 4<<20)
+	for _, test := range []struct {
+		name  string
+		bytes int
+		valid bool
+	}{
+		{name: "measured complete repository wire size", bytes: 296_433_353, valid: true},
+		{name: "exact aggregate bound", bytes: 384 << 20, valid: true},
+		{name: "one byte over aggregate bound", bytes: (384 << 20) + 1, valid: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			frames := make([]*pb.StageCodeIndexFrame, 0, (test.bytes+len(payload)-1)/len(payload))
+			for remaining := test.bytes; remaining > 0; {
+				frame := uciTransportContractStageFrame(uint64(len(frames)))
+				frame.Payload = payload[:min(remaining, len(payload))]
+				frames = append(frames, frame)
+				remaining -= len(frame.Payload)
+			}
+			runtime := &uciTransportContractFake{}
+			server := &Server{}
+			server.SetUCITransport(runtime)
+			stream := &uciTransportContractStageStream{ctx: context.Background(), frames: frames}
+			err := server.StageCodeIndex(stream)
+			if !test.valid {
+				if status.Code(err) != codes.InvalidArgument || runtime.stageCalls != 0 || stream.response != nil {
+					t.Fatalf("over-cap stream reached runtime or succeeded: error=%v calls=%d", err, runtime.stageCalls)
+				}
+				return
+			}
+			if err != nil || runtime.stageCalls != 1 || len(runtime.stageFrames) != len(frames) || stream.response == nil || stream.response.GetAcceptedPartCount() != uint64(len(frames)) {
+				t.Fatalf("complete bounded stream was not retained: error=%v calls=%d", err, runtime.stageCalls)
+			}
+		})
+	}
+	oversized := uciTransportContractStageFrame(0)
+	oversized.Payload = make([]byte, (4<<20)+1)
+	assertUCITransportInvalidStage(t, &Server{}, []*pb.StageCodeIndexFrame{oversized})
+}
+
 func uciTransportInvalidStageCases() []uciTransportInvalidStageCase {
 	return []uciTransportInvalidStageCase{
 		{name: "empty EOF", frames: nil},
