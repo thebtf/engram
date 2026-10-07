@@ -28,7 +28,7 @@ import (
 const (
 	// TreeSitterWorkerProtocolVersion is the single framed child-process protocol.
 	TreeSitterWorkerProtocolVersion           = "uci-tree-sitter/v2"
-	TreeSitterFactsExtractionContractRevision = "uci-tree-sitter-facts/v8"
+	TreeSitterFactsExtractionContractRevision = "uci-tree-sitter-facts/v9"
 	TreeSitterBundleSchemaRevision            = "uci-tree-sitter-bundle/v2"
 	treeSitterWorkerMaxIdentifierBytes        = 4 << 10
 	treeSitterWorkerHardMaxInputBytes         = 4 << 20
