@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.51.0] - 2026-10-07
+
+Ordinary Home → Workspace onboarding and representative-corpus capacity calibration. These source and release inputs do not establish publication, installed-client adoption, semantic retrieval or full-index acceptance; coordinated native/server delivery and ordinary consumer proof remain required.
+
 ### Added
 
 - Expose ordinary repository/worktree connection from Home → Workspace with localized native-agent tasks, real server catalog readback, and the existing authorized index/pinned-View flow. Local Git remains native-host owned; the browser does not submit filesystem paths, create no-auth grants, request UUIDs, or initialize project identity.
@@ -2155,7 +2159,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.3...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.51.0...HEAD
+[6.51.0]: https://github.com/thebtf/engram/compare/v6.50.3...v6.51.0
 [6.50.3]: https://github.com/thebtf/engram/compare/v6.50.3-rc.1...v6.50.3
 [6.50.3-rc.1]: https://github.com/thebtf/engram/compare/v6.50.2...v6.50.3-rc.1
 [6.50.2]: https://github.com/thebtf/engram/compare/v6.50.1...v6.50.2

@@ -1,6 +1,6 @@
 {
   "name": "engram",
-  "version": "6.50.3",
+  "version": "6.51.0",
   "description": "Persistent memory for Claude Code. Connect to a configured Engram server with its URL; a worker keycard is needed when server authentication is enabled. Never place the server operator key (ENGRAM_AUTH_ADMIN_TOKEN) on a workstation.",
   "author": {
     "name": "thebtf"
