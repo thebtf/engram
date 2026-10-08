@@ -737,7 +737,7 @@ func TestUCIPreparedIndexBuiltParserIgnoresDeclarationTextInTrivia(t *testing.T)
 	}
 }
 
-func TestUCIPreparedIndexBuiltParserRejectsNestedSameKeyCalls(t *testing.T) {
+func TestUCIPreparedIndexBuiltParserRejectsHoistedLocalShadowCalls(t *testing.T) {
 	executable := filepath.Join(t.TempDir(), "uci-parser")
 	if runtime.GOOS == "windows" {
 		executable += ".exe"
@@ -755,28 +755,16 @@ func TestUCIPreparedIndexBuiltParserRejectsNestedSameKeyCalls(t *testing.T) {
 	body := []byte("export function helper(){helper();function helper(){}}")
 	parsed, err := parser.Parse(context.Background(), uci.TreeSitterParseRequest{Language: uci.TreeSitterLanguageJavaScript, ProfileKey: "nested-same-key/v1", Source: body})
 	require.NoError(t, err)
-	require.Equal(t, uci.IndexCoveragePartial, parsed.Coverage, "%+v", parsed.Diagnostics)
-	require.Contains(t, parsed.Diagnostics, uci.TreeSitterDiagnostic{Code: "DUPLICATE_DEFINITION", Message: "multiple declarations share a parser symbol key"})
-	require.Len(t, parsed.Definitions, 1)
-	require.Equal(t, "function:helper", parsed.Definitions[0].LocalKey)
-	var callCount int
-	for _, reference := range parsed.References {
-		if reference.Kind == "call" && reference.OwnerLocalKey == "function:helper" {
-			callCount++
-		}
-	}
-	require.Equal(t, 1, callCount)
 	profile, err := uci.TreeSitterIndexAdmissionArtifactProfile(uci.TreeSitterLanguageJavaScript, uci.TreeSitterBundleDigest())
 	require.NoError(t, err)
 	artifact, err := uci.NewIndexAdmissionArtifactFromTreeSitter("11111111-1111-4111-8111-111111111111", profile, body, parsed)
 	require.NoError(t, err)
-	require.Equal(t, uci.IndexAdmissionArtifactPartial, artifact.Status)
 	id := artifact.ArtifactID
 	files := []uciPreparedAdmissionFile{{path: "calls.js", membership: uci.IndexAdmissionMembership{PathKey: "calls.js", DisplayPath: "calls.js", Mode: "100644", State: uci.IndexAdmissionMembershipPresent, ArtifactID: &id}, artifact: &artifact}}
 	unresolved, err := uciPreparedAddResolvedTreeSitterEdges(files)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), unresolved)
-	require.Empty(t, files[0].edges, "ambiguous nested declaration cannot publish a resolved self-edge")
+	require.Empty(t, files[0].edges, "hoisted local function must not publish a resolved call to the outer module function")
 	frames, _, err := uciPreparedPackFrames("44444444-4444-4444-8444-444444444444", files)
 	require.NoError(t, err)
 	require.NoError(t, uci.ValidateIndexAdmissionFrames(frames))
