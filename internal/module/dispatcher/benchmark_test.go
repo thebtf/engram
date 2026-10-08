@@ -251,20 +251,33 @@ func TestBenchmarkResults_OverheadWithinBudget(t *testing.T) {
 		t.Fatalf("recorder metric calls: got %d, want %d", calls, iterations)
 	}
 
+	zeroSamples := [2]int{}
+	for mode := range samples {
+		for index, duration := range samples[mode] {
+			if duration < 0 {
+				t.Fatalf("NFR-9: negative elapsed sample (mode=%d, index=%d, duration=%s)", mode, index, duration)
+			}
+			if duration == 0 {
+				zeroSamples[mode]++
+			}
+		}
+	}
 	baselineP50, baselineP99 := handleToolLatencyPercentiles(samples[0])
 	recorderP50, recorderP99 := handleToolLatencyPercentiles(samples[1])
-	if baselineP50 <= 0 {
-		t.Fatal("NFR-9: baseline p50 must be positive")
-	}
 	delta := recorderP50 - baselineP50
-	overhead := float64(delta) / float64(baselineP50)
-	t.Logf("baseline p50: %s; recorder p50: %s; overhead: %.3f%%; delta: %s", baselineP50, recorderP50, overhead*100, delta)
+	t.Logf("baseline p50: %s; recorder p50: %s; delta: %s", baselineP50, recorderP50, delta)
+	if baselineP50 == 0 {
+		t.Log("overhead percentage: undefined (baseline p50=0); enforcing the unchanged 50000 ns absolute budget")
+	} else {
+		t.Logf("overhead: %.3f%%", float64(delta)/float64(baselineP50)*100)
+	}
+	t.Logf("samples per mode: %d; baseline zero samples: %d; recorder zero samples: %d", iterations, zeroSamples[0], zeroSamples[1])
 	t.Logf("baseline p99: %s; recorder p99: %s; recorder metric calls: %d", baselineP99, recorderP99, cp.calls.Load())
 
 	// Keep the existing 5% OR 50 µs budget for the zero-work tool fixture.
 	if metricOverheadExceeded(baselineP50, recorderP50) {
-		t.Errorf("NFR-9 FAIL: metric overhead %.2f%% AND %d ns absolute delta exceeds both percentage (5%%) and absolute (50000 ns) budgets (baseline p50=%d ns, recorder p50=%d ns)",
-			overhead*100, delta.Nanoseconds(), baselineP50.Nanoseconds(), recorderP50.Nanoseconds())
+		t.Errorf("NFR-9 FAIL: %d ns absolute delta exceeds 50000 ns and is not within 5%% of baseline (baseline p50=%d ns, recorder p50=%d ns)",
+			delta.Nanoseconds(), baselineP50.Nanoseconds(), recorderP50.Nanoseconds())
 	}
 	if baselineP99 >= time.Second || recorderP99 >= time.Second {
 		t.Errorf("NFR-1 FAIL: p99 latency exceeds 1000 ms budget (baseline=%s, recorder=%s)", baselineP99, recorderP99)
@@ -290,8 +303,11 @@ func handleToolLatencyPercentiles(durations []time.Duration) (time.Duration, tim
 }
 
 func metricOverheadExceeded(baseline, recorder time.Duration) bool {
+	if baseline < 0 || recorder < 0 {
+		return true
+	}
 	delta := recorder - baseline
-	return delta > 50*time.Microsecond && float64(delta)/float64(baseline) > 0.05
+	return delta > 50*time.Microsecond && (baseline == 0 || float64(delta)/float64(baseline) > 0.05)
 }
 
 func restoreBenchProviderAfter(t testing.TB) {
@@ -309,6 +325,8 @@ func TestHandleToolLatencyPercentiles(t *testing.T) {
 		p50, p99 time.Duration
 	}{
 		{"submillisecond singleton", []time.Duration{37 * time.Nanosecond}, 37 * time.Nanosecond, 37 * time.Nanosecond},
+		{"zero singleton", []time.Duration{0}, 0, 0},
+		{"zero median with nonzero tail", []time.Duration{40 * time.Microsecond, 0, 0, 0, 10 * time.Microsecond}, 0, 40 * time.Microsecond},
 		{"odd with outlier", []time.Duration{90, 10, 70, 30, 20, 72 * time.Millisecond, 40, 80, 50, 60, 100}, 60, 72 * time.Millisecond},
 		{"even nearest rank", []time.Duration{4, 1, 3, 2}, 2, 4},
 	} {
@@ -327,6 +345,10 @@ func TestHandleToolLatencyPercentiles(t *testing.T) {
 	if p50, p99 := handleToolLatencyPercentiles(samples); p50 != 50 || p99 != 99 {
 		t.Fatalf("100-sample nearest ranks: got p50=%s p99=%s, want 50ns/99ns", p50, p99)
 	}
+	zeroSamples := make([]time.Duration, 1000)
+	if p50, p99 := handleToolLatencyPercentiles(zeroSamples); p50 != 0 || p99 != 0 {
+		t.Fatalf("1000 zero samples: got p50=%s p99=%s, want 0/0", p50, p99)
+	}
 }
 
 func TestMetricOverheadBudget(t *testing.T) {
@@ -341,6 +363,12 @@ func TestMetricOverheadBudget(t *testing.T) {
 		{"absolute allowance", 100 * time.Microsecond, 140 * time.Microsecond, false},
 		{"one ns over both", time.Millisecond, 1050*time.Microsecond + time.Nanosecond, true},
 		{"recorder faster", time.Millisecond, 900 * time.Microsecond, false},
+		{"both zero", 0, 0, false},
+		{"zero baseline absolute allowance", 0, 49 * time.Microsecond, false},
+		{"zero baseline absolute boundary", 0, 50 * time.Microsecond, false},
+		{"zero baseline absolute breach", 0, 50*time.Microsecond + time.Nanosecond, true},
+		{"negative baseline", -time.Nanosecond, 0, true},
+		{"negative recorder", 0, -time.Nanosecond, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := metricOverheadExceeded(test.baseline, test.recorder); got != test.wantExceeded {
