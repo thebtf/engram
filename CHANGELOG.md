@@ -28,6 +28,7 @@ Ordinary Home → Workspace onboarding and representative-corpus capacity calibr
 - Clarify the store tool's principal-visibility schema and `invalid_agent_visibility` guidance: both explicit `private` and `shared` require an authenticated principal. Document omission of `agent_visibility` for ordinary no-auth project memory, without accepting caller-supplied ownership, weakening private-memory checks, or changing persisted privacy semantics.
 - Read plain published-View status through the existing authenticated UCI read path without requiring index-workstation ownership; report unavailable local daemon liveness as `null`. Preserve owned unpublished-checkout preparation, index mutations and local token barriers under their stronger authority. Keep top-level status counts in conservative unique-chunk units while membership-candidate progress remains unchanged; shared chunk occurrences no longer invalidate readable snapshot status.
 - Validate the frozen release module graph with maintained `go mod tidy -diff`, rejecting any required module changes without rewriting `go.mod` or `go.sum` during packaging.
+- Measure dispatcher observability overhead with symmetric per-call timing and balanced provider batches, using actual nanosecond p50/p99 rather than mismatched averages or truncated milliseconds. Preserve the 5%/50 µs overhead budgets and 1-second p99 bound, and require one real recording per recorder-mode call; production dispatch and metric emission remain unchanged.
 
 
 ## [6.50.3] - 2026-10-07
