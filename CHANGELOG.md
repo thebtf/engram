@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.50.4] - 2026-10-08
+
+Prepare the accepted missing-anchor onboarding repair for the unified release. The actual merged PR number is pending. This version adds no migration, historical-memory adoption or OpenClaw release; publication alone does not prove installed-client recovery.
+
 ### Fixed
 
 - Keep V3 onboarding tools reachable in existing Git repositories that have no anchor. Distinguish genuine absence from malformed, untracked, unreadable, dangling-symlink and tracked-but-deleted anchors; retain those refusals, backend authentication, and the prohibition on unresolved project-scoped memory access. Discovery creates no project or anchor and does not migrate existing memory.
@@ -2148,7 +2152,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.3...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.4...HEAD
+[6.50.4]: https://github.com/thebtf/engram/compare/v6.50.3...v6.50.4
 [6.50.3]: https://github.com/thebtf/engram/compare/v6.50.3-rc.1...v6.50.3
 [6.50.3-rc.1]: https://github.com/thebtf/engram/compare/v6.50.2...v6.50.3-rc.1
 [6.50.2]: https://github.com/thebtf/engram/compare/v6.50.1...v6.50.2
