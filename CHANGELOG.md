@@ -7,15 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
 
-- Bound code-job embedding requests by a 64 KiB padded UTF-8 cost proxy while retaining the 128-input ceiling. Send an oversized canonical input alone without trimming or skipping text; preserve candidate order, vector mapping, cache/profile identity, provider deadlines/retries/concurrency, and exact-View coverage requirements. This source repair does not prove recovery of historical provider failures or deployment.
-- Qualify JS/TS/TSX local declaration identities by their actual lexical scope so repeated names in sibling functions or blocks no longer falsely downgrade a whole source file and suppress supported same-file calls. Preserve public module identities, strict partial/ambiguity/shadow guards, and wire protocol v2; advance the facts extraction contract to v9 so corrected facts do not reuse stale artifact/profile/cache identities.
-- Keep `var` declarations in separate class static blocks distinct and preserve valid long local, method, interface and namespace identifiers through parser, parent validation and publication. Apply the identity bound after the complete lexical scope and occurrence suffix are constructed; digest the full overlong key without collapsing distinct sites or shortening names. Derive the separate reference-identity allowance from fixed metadata and bounded offsets without raising source/name limits.
-- Clarify the store tool's principal-visibility schema and `invalid_agent_visibility` guidance: both explicit `private` and `shared` require an authenticated principal. Document omission of `agent_visibility` for ordinary no-auth project memory, without accepting caller-supplied ownership, weakening private-memory checks, or changing persisted privacy semantics.
-- Read plain published-View status through the existing authenticated UCI read path without requiring index-workstation ownership; report unavailable local daemon liveness as `null`. Preserve owned unpublished-checkout preparation, index mutations and local token barriers under their stronger authority. Keep top-level status counts in conservative unique-chunk units while membership-candidate progress remains unchanged; shared chunk occurrences no longer invalidate readable snapshot status.
-
-## [6.51.0] - 2026-10-07
+## [6.51.0] - 2026-10-08
 
 Ordinary Home → Workspace onboarding and representative-corpus capacity calibration. These source and release inputs do not establish publication, installed-client adoption, semantic retrieval or full-index acceptance; coordinated native/server delivery and ordinary consumer proof remain required.
 
@@ -28,6 +21,11 @@ Ordinary Home → Workspace onboarding and representative-corpus capacity calibr
 
 - Keep empty catalogs, connected tabs, absent snapshots, indexing, failure, and historical pins distinct; null selections no longer render a server-pinned success. Preserve keyboard focus during connection readback and accessible graph controls/evidence warnings.
 - Calibrate the shared complete-build UCI admission/Stage budget to 384 MiB after a representative repository produced 296,433,353 bytes of unique complete facts and relationship evidence. Keep the 4 MiB frame, 1,024-frame, 1 MiB source-body and exact overflow guards; do not prune references, change identity, weaken atomic publication or introduce a new protocol. This source change requires coordinated native/server delivery and fresh installed indexing proof.
+- Bound code-job embedding requests by a 64 KiB padded UTF-8 cost proxy while retaining the 128-input ceiling. Send an oversized canonical input alone without trimming or skipping text; preserve candidate order, vector mapping, cache/profile identity, provider deadlines/retries/concurrency, and exact-View coverage requirements. This source repair does not prove recovery of historical provider failures or deployment.
+- Qualify JS/TS/TSX local declaration identities by their actual lexical scope so repeated names in sibling functions or blocks no longer falsely downgrade a whole source file and suppress supported same-file calls. Preserve public module identities, strict partial/ambiguity/shadow guards, and wire protocol v2; advance the facts extraction contract to v9 so corrected facts do not reuse stale artifact/profile/cache identities.
+- Keep `var` declarations in separate class static blocks distinct and preserve valid long local, method, interface and namespace identifiers through parser, parent validation and publication. Apply the identity bound after the complete lexical scope and occurrence suffix are constructed; digest the full overlong key without collapsing distinct sites or shortening names. Derive the separate reference-identity allowance from fixed metadata and bounded offsets without raising source/name limits.
+- Clarify the store tool's principal-visibility schema and `invalid_agent_visibility` guidance: both explicit `private` and `shared` require an authenticated principal. Document omission of `agent_visibility` for ordinary no-auth project memory, without accepting caller-supplied ownership, weakening private-memory checks, or changing persisted privacy semantics.
+- Read plain published-View status through the existing authenticated UCI read path without requiring index-workstation ownership; report unavailable local daemon liveness as `null`. Preserve owned unpublished-checkout preparation, index mutations and local token barriers under their stronger authority. Keep top-level status counts in conservative unique-chunk units while membership-candidate progress remains unchanged; shared chunk occurrences no longer invalidate readable snapshot status.
 
 
 ## [6.50.3] - 2026-10-07

@@ -1285,17 +1285,17 @@ func TestCodebaseToolsFailClosedForUnavailableAndUnresolvableCore(t *testing.T) 
 			require.Nil(t, raw)
 			require.ErrorContains(t, err, "SOURCE_UNAVAILABLE")
 		})
-		t.Run("resolution failure "+test.name, func(t *testing.T) {
-			expected := errors.New("authoritative target unavailable")
-			core := &fakeCore{resolveErr: expected}
-			raw, err := newTestModule(core).HandleTool(ctx, p, test.tool, test.args)
-			require.Nil(t, raw)
-			require.ErrorIs(t, err, expected)
-			resolved, proxied := core.callCounts()
-			require.Equal(t, 1, resolved)
-			require.Zero(t, proxied)
-		})
 	}
+	t.Run("resolution failure index", func(t *testing.T) {
+		expected := errors.New("authoritative target unavailable")
+		core := &fakeCore{resolveErr: expected}
+		raw, err := newTestModule(core).HandleTool(ctx, p, "codebase_index", testIndexArgs(p))
+		require.Nil(t, raw)
+		require.ErrorIs(t, err, expected)
+		resolved, proxied := core.callCounts()
+		require.Equal(t, 1, resolved)
+		require.Zero(t, proxied)
+	})
 
 	raw, err := newTestModule(&fakeCore{}).HandleTool(ctx, p, "unknown", json.RawMessage(`{}`))
 	require.Nil(t, raw)
