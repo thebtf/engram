@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -228,6 +229,86 @@ func TestProjectInitRefusesExcessVisibleRefEvidence(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(root, ".engram-project")); !os.IsNotExist(err) {
 		t.Fatalf("bounded inspection created a replacement anchor: %v", err)
+	}
+}
+
+func TestProjectInitProtectsVisibleSiblingIndexAnchor(t *testing.T) {
+	for _, state := range []string{"indexed", "untracked", "index-error", "indexed-newline"} {
+		t.Run(state, func(t *testing.T) {
+			if state == "indexed-newline" && runtime.GOOS == "windows" {
+				t.Skip("Windows paths cannot contain newline characters")
+			}
+			root := t.TempDir()
+			gitProjectInit(t, root, "init", "--quiet")
+			gitProjectInit(t, root, "-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", "Existing repository")
+			name := "anchor sibling кириллица"
+			if state == "indexed-newline" {
+				name += "\nHEAD injected path line"
+			}
+			linked := filepath.Join(t.TempDir(), name)
+			gitProjectInit(t, root, "worktree", "add", "--quiet", "--detach", linked, "HEAD")
+			anchorBytes := []byte(`{"version":3,"project_id":"22222222-2222-4222-8222-222222222222","name":"existing","scope":"repository"}`)
+			if err := os.WriteFile(filepath.Join(linked, ".engram-project"), anchorBytes, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if strings.HasPrefix(state, "indexed") {
+				gitProjectInit(t, linked, "add", "--", ".engram-project")
+				anchor, err := projectidentity.DiscoverAnchorV3(linked, "repository")
+				if err != nil || anchor.ProjectID != "22222222-2222-4222-8222-222222222222" {
+					t.Fatalf("index-tracked producer acceptance = %+v: %v", anchor, err)
+				}
+				t.Log("actual producer accepts index-tracked anchor before commit")
+			} else if state == "index-error" {
+				index, err := exec.Command("git", "-C", linked, "rev-parse", "--git-path", "index").Output()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Remove(strings.TrimSpace(string(index))); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(strings.TrimSpace(string(index)), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			index, err := exec.Command("git", "-C", linked, "rev-parse", "--git-path", "index").Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var indexBefore []byte
+			if state != "index-error" {
+				indexBefore, err = os.ReadFile(strings.TrimSpace(string(index)))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			var output bytes.Buffer
+			err = runProjectInit([]string{"--name", "Replacement"}, root, &output)
+			if state == "untracked" {
+				if err != nil || !strings.Contains(output.String(), "Created") {
+					t.Fatalf("untracked sibling incorrectly blocked first use: %v: %q", err, output.String())
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), "refusing to replace") {
+					t.Fatalf("visible sibling %s initialization = %v, want refusal", state, err)
+				}
+				if _, err := os.Lstat(filepath.Join(root, ".engram-project")); !os.IsNotExist(err) {
+					t.Fatalf("sibling index admitted replacement UUID: %v", err)
+				}
+				if output.Len() != 0 {
+					t.Fatalf("refusal printed success: %q", output.String())
+				}
+			}
+			after, err := os.ReadFile(filepath.Join(linked, ".engram-project"))
+			if err != nil || !bytes.Equal(anchorBytes, after) {
+				t.Fatalf("inspection altered sibling anchor: %v", err)
+			}
+			if state != "index-error" {
+				indexAfter, err := os.ReadFile(strings.TrimSpace(string(index)))
+				if err != nil || !bytes.Equal(indexBefore, indexAfter) {
+					t.Fatalf("inspection altered sibling index: %v", err)
+				}
+			}
+		})
 	}
 }
 

@@ -219,7 +219,7 @@ func repositoryVisibleAnchorsAbsentV3(root, head string) bool {
 	if len(tips) > maxRepositoryAnchorEvidenceV3 {
 		return false
 	}
-	command := exec.Command("git", "-C", root, "worktree", "list", "--porcelain")
+	command := exec.Command("git", "-C", root, "worktree", "list", "--porcelain", "-z")
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return false
@@ -233,17 +233,48 @@ func repositoryVisibleAnchorsAbsentV3(root, head string) bool {
 	if err := command.Wait(); err != nil || readErr != nil || len(worktrees) > 128*1024 {
 		return false
 	}
+	if len(worktrees) == 0 || worktrees[len(worktrees)-1] != 0 {
+		return false
+	}
 	worktreeCount := 0
-	for _, line := range strings.Split(string(worktrees), "\n") {
-		if strings.HasPrefix(line, "worktree ") {
+	worktreePath := ""
+	bare := false
+	for _, field := range strings.Split(string(worktrees), "\x00") {
+		if field == "" {
+			if worktreePath != "" && !bare {
+				tracked, err := exec.Command("git", "-C", worktreePath, "ls-files", "-z", "--", anchorFilenameV3).Output()
+				if err != nil || len(tracked) != 0 {
+					return false
+				}
+			}
+			worktreePath = ""
+			bare = false
+			continue
+		}
+		if path, ok := strings.CutPrefix(field, "worktree "); ok {
 			worktreeCount++
-			if worktreeCount > maxRepositoryAnchorEvidenceV3 {
+			if worktreePath != "" || path == "" || !filepath.IsAbs(path) || worktreeCount > maxRepositoryAnchorEvidenceV3 {
 				return false
 			}
+			worktreePath = path
+			continue
 		}
-		if tip, ok := strings.CutPrefix(line, "HEAD "); ok && strings.Trim(tip, "0") != "" {
-			tips = append(tips, tip)
+		if worktreePath == "" {
+			return false
 		}
+		if field == "bare" {
+			bare = true
+		} else if tip, ok := strings.CutPrefix(field, "HEAD "); ok {
+			if strings.Trim(tip, "0") != "" {
+				tips = append(tips, tip)
+			}
+		} else if field != "detached" && field != "locked" && field != "prunable" &&
+			!strings.HasPrefix(field, "branch ") && !strings.HasPrefix(field, "locked ") && !strings.HasPrefix(field, "prunable ") {
+			return false
+		}
+	}
+	if worktreePath != "" {
+		return false
 	}
 	if worktreeCount == 0 {
 		return false

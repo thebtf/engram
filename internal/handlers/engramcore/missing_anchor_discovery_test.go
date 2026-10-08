@@ -17,6 +17,7 @@ import (
 	"github.com/thebtf/engram/internal/grpcserver"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/module"
+	"github.com/thebtf/engram/internal/projectidentity"
 )
 
 // This uses the production gRPC authentication/Initialize and MCP tool catalog,
@@ -31,7 +32,7 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 	go func() { _ = backend.Serve(listener) }()
 	t.Cleanup(backend.GracefulStop)
 
-	for _, state := range []string{"absent", "neveranchored-linked", "neveranchored-packed", "malformed", "untracked", "unreadable", "tracked-deletion", "staged-deletion", "git-index-error", "git-detached-head-error", "git-symbolic-head-error", "git-malformed-head-ref", "git-missing-head-ref", "visible-branch-anchor", "packed-branch-anchor", "linked-preanchor", "detached-sibling-anchor", "dangling-symlink", "unauthenticated"} {
+	for _, state := range []string{"absent", "neveranchored-linked", "neveranchored-packed", "neveranchored-untracked-sibling", "sibling-index-anchor", "sibling-index-error", "malformed", "untracked", "unreadable", "tracked-deletion", "staged-deletion", "git-index-error", "git-detached-head-error", "git-symbolic-head-error", "git-malformed-head-ref", "git-missing-head-ref", "visible-branch-anchor", "packed-branch-anchor", "linked-preanchor", "detached-sibling-anchor", "dangling-symlink", "unauthenticated"} {
 		t.Run(state, func(t *testing.T) {
 			root := t.TempDir()
 			git := func(args ...string) {
@@ -144,6 +145,33 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 			case "neveranchored-packed":
 				git("branch", "other-neveranchored")
 				git("pack-refs", "--all")
+			case "sibling-index-anchor", "sibling-index-error", "neveranchored-untracked-sibling":
+				linked := filepath.Join(t.TempDir(), "anchor sibling кириллица")
+				git("worktree", "add", "--quiet", "--detach", linked, "HEAD")
+				if err := os.WriteFile(filepath.Join(linked, ".engram-project"), validAnchor, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if state == "sibling-index-anchor" {
+					if out, err := exec.Command("git", "-C", linked, "add", "--", ".engram-project").CombinedOutput(); err != nil {
+						t.Fatalf("track sibling anchor: %v: %s", err, out)
+					}
+					anchor, err := projectidentity.DiscoverAnchorV3(linked, "repository")
+					if err != nil || anchor.ProjectID != "22222222-2222-4222-8222-222222222222" {
+						t.Fatalf("actual producer rejected index-tracked sibling: %+v: %v", anchor, err)
+					}
+					t.Log("actual DiscoverAnchorV3 accepts sibling anchor after git add, before commit")
+				} else if state == "sibling-index-error" {
+					index, err := exec.Command("git", "-C", linked, "rev-parse", "--git-path", "index").Output()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Remove(strings.TrimSpace(string(index))); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Mkdir(strings.TrimSpace(string(index)), 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
 			case "unreadable":
 				if err := os.Mkdir(anchorPath, 0o700); err != nil {
 					t.Fatal(err)
