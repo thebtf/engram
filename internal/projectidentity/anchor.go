@@ -173,16 +173,21 @@ func repositoryAnchorAbsentV3(root string) bool {
 	}
 	head, err := exec.Command("git", "-C", root, "rev-parse", "--verify", "HEAD^{commit}").Output()
 	if err == nil {
-		tracked, err := exec.Command("git", "-C", root, "ls-tree", "--name-only", strings.TrimSpace(string(head)), "--", anchorFilenameV3).Output()
-		return err == nil && len(tracked) == 0
+		return repositoryVisibleAnchorsAbsentV3(root, strings.TrimSpace(string(head)))
 	}
 	branch, err := exec.Command("git", "-C", root, "symbolic-ref", "--quiet", "HEAD").Output()
 	if err != nil || !strings.HasPrefix(string(branch), "refs/heads/") {
 		return false
 	}
-	var exitErr *exec.ExitError
-	err = exec.Command("git", "-C", root, "show-ref", "--exists", strings.TrimSpace(string(branch))).Run()
-	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 2 {
+	refPath, err := exec.Command("git", "-C", root, "rev-parse", "--git-path", strings.TrimSpace(string(branch))).Output()
+	if err != nil {
+		return false
+	}
+	path := strings.TrimSpace(string(refPath))
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 		return false
 	}
 	// A missing branch with a HEAD reflog is a lost existing identity, not
@@ -191,7 +196,7 @@ func repositoryAnchorAbsentV3(root string) bool {
 	if err != nil {
 		return false
 	}
-	path := strings.TrimSpace(string(logPath))
+	path = strings.TrimSpace(string(logPath))
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(root, path)
 	}
@@ -200,7 +205,70 @@ func repositoryAnchorAbsentV3(root string) bool {
 		return false
 	}
 	refs, err := exec.Command("git", "-C", root, "for-each-ref", "--count=1", "--format=%(refname)").Output()
-	return err == nil && len(refs) == 0
+	return err == nil && len(refs) == 0 && repositoryVisibleAnchorsAbsentV3(root, "")
+}
+
+const maxRepositoryAnchorEvidenceV3 = 128
+
+func repositoryVisibleAnchorsAbsentV3(root, head string) bool {
+	refs, err := exec.Command("git", "-C", root, "for-each-ref", "--count=129", "--format=%(objectname)").Output()
+	if err != nil {
+		return false
+	}
+	tips := strings.Fields(string(refs))
+	if len(tips) > maxRepositoryAnchorEvidenceV3 {
+		return false
+	}
+	command := exec.Command("git", "-C", root, "worktree", "list", "--porcelain")
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return false
+	}
+	if err := command.Start(); err != nil {
+		stdout.Close()
+		return false
+	}
+	worktrees, readErr := io.ReadAll(io.LimitReader(stdout, 128*1024+1))
+	stdout.Close()
+	if err := command.Wait(); err != nil || readErr != nil || len(worktrees) > 128*1024 {
+		return false
+	}
+	worktreeCount := 0
+	for _, line := range strings.Split(string(worktrees), "\n") {
+		if strings.HasPrefix(line, "worktree ") {
+			worktreeCount++
+			if worktreeCount > maxRepositoryAnchorEvidenceV3 {
+				return false
+			}
+		}
+		if tip, ok := strings.CutPrefix(line, "HEAD "); ok && strings.Trim(tip, "0") != "" {
+			tips = append(tips, tip)
+		}
+	}
+	if worktreeCount == 0 {
+		return false
+	}
+	if head != "" {
+		tips = append(tips, head)
+	}
+	seen := make(map[string]struct{}, len(tips))
+	for _, tip := range tips {
+		if len(tip) != 40 && len(tip) != 64 {
+			return false
+		}
+		if _, exists := seen[tip]; exists {
+			continue
+		}
+		if len(seen) == maxRepositoryAnchorEvidenceV3 {
+			return false
+		}
+		seen[tip] = struct{}{}
+		anchor, err := exec.Command("git", "-C", root, "ls-tree", "--name-only", tip, "--", anchorFilenameV3).Output()
+		if err != nil || len(anchor) != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func samePath(left, right string) bool {

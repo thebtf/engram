@@ -31,7 +31,7 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 	go func() { _ = backend.Serve(listener) }()
 	t.Cleanup(backend.GracefulStop)
 
-	for _, state := range []string{"absent", "malformed", "untracked", "unreadable", "tracked-deletion", "staged-deletion", "git-index-error", "git-detached-head-error", "git-symbolic-head-error", "git-malformed-head-ref", "git-missing-head-ref", "dangling-symlink", "unauthenticated"} {
+	for _, state := range []string{"absent", "neveranchored-linked", "neveranchored-packed", "malformed", "untracked", "unreadable", "tracked-deletion", "staged-deletion", "git-index-error", "git-detached-head-error", "git-symbolic-head-error", "git-malformed-head-ref", "git-missing-head-ref", "visible-branch-anchor", "packed-branch-anchor", "linked-preanchor", "detached-sibling-anchor", "dangling-symlink", "unauthenticated"} {
 		t.Run(state, func(t *testing.T) {
 			root := t.TempDir()
 			git := func(args ...string) {
@@ -82,6 +82,40 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
+			case "visible-branch-anchor", "packed-branch-anchor", "linked-preanchor", "detached-sibling-anchor":
+				git("branch", "pre-anchor")
+				if err := os.WriteFile(anchorPath, validAnchor, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				git("add", "--", ".engram-project")
+				if state == "detached-sibling-anchor" {
+					tree, err := exec.Command("git", "-C", root, "write-tree").Output()
+					if err != nil {
+						t.Fatal(err)
+					}
+					commit, err := exec.Command("git", "-C", root, "-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "commit-tree", strings.TrimSpace(string(tree)), "-p", "HEAD", "-m", "Visible detached anchor").Output()
+					if err != nil {
+						t.Fatal(err)
+					}
+					git("rm", "--cached", "--quiet", "--", ".engram-project")
+					if err := os.Remove(anchorPath); err != nil {
+						t.Fatal(err)
+					}
+					git("worktree", "add", "--quiet", "--detach", filepath.Join(t.TempDir(), "anchored"), strings.TrimSpace(string(commit)))
+				} else {
+					git("-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Tracked anchor")
+					if state == "linked-preanchor" {
+						linked := filepath.Join(t.TempDir(), "preanchor")
+						git("worktree", "add", "--quiet", linked, "pre-anchor")
+						root = linked
+						anchorPath = filepath.Join(root, ".engram-project")
+					} else {
+						git("checkout", "--quiet", "pre-anchor")
+						if state == "packed-branch-anchor" {
+							git("pack-refs", "--all")
+						}
+					}
+				}
 			case "git-index-error":
 				indexPath := filepath.Join(root, ".git", "index")
 				if err := os.Remove(indexPath); err != nil && !os.IsNotExist(err) {
@@ -102,6 +136,14 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
+			case "neveranchored-linked":
+				linked := filepath.Join(t.TempDir(), "neveranchored")
+				git("worktree", "add", "--quiet", "--detach", linked, "HEAD")
+				root = linked
+				anchorPath = filepath.Join(root, ".engram-project")
+			case "neveranchored-packed":
+				git("branch", "other-neveranchored")
+				git("pack-refs", "--all")
 			case "unreadable":
 				if err := os.Mkdir(anchorPath, 0o700); err != nil {
 					t.Fatal(err)
@@ -114,10 +156,18 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 					t.Skipf("symlinks unavailable: %v", err)
 				}
 			}
+			indexPath, err := exec.Command("git", "-C", root, "rev-parse", "--git-path", "index").Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			selectedIndex := strings.TrimSpace(string(indexPath))
+			if !filepath.IsAbs(selectedIndex) {
+				selectedIndex = filepath.Join(root, selectedIndex)
+			}
 			var before []byte
 			if state != "git-index-error" {
 				var err error
-				before, err = os.ReadFile(filepath.Join(root, ".git", "index"))
+				before, err = os.ReadFile(selectedIndex)
 				if err != nil && !os.IsNotExist(err) {
 					t.Fatal(err)
 				}
@@ -133,7 +183,7 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Logf("tools/list %s: %s", state, response)
-			if state == "absent" {
+			if state == "absent" || strings.HasPrefix(state, "neveranchored-") {
 				assertOnlyRegistrationTool(t, response)
 				_, callErr := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`))
 				var moduleErr *module.ModuleError
@@ -158,7 +208,7 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 				t.Fatal("discovery retained legacy project authority")
 			}
 			if state != "git-index-error" {
-				after, err := os.ReadFile(filepath.Join(root, ".git", "index"))
+				after, err := os.ReadFile(selectedIndex)
 				if err != nil && !os.IsNotExist(err) {
 					t.Fatal(err)
 				}

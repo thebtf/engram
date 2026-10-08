@@ -16,6 +16,7 @@ Prepare the accepted missing-anchor onboarding repair for the unified release. T
 - Keep V3 onboarding tools reachable in existing Git repositories that have no anchor. Distinguish genuine absence from malformed, untracked, unreadable, dangling-symlink and tracked-but-deleted anchors; retain those refusals, backend authentication, and the prohibition on unresolved project-scoped memory access. Discovery creates no project or anchor and does not migrate existing memory.
 - Refuse fresh onboarding and offline anchor replacement when a committed `.engram-project` has a staged deletion, even after it disappears from the index. Share the index/HEAD absence proof between discovery and initialization, and refuse initialization when Git inspection fails; preserve the existing UUID and repository index.
 - Verify a missing anchor against a resolved HEAD commit or a genuinely unborn branch without prior HEAD/reference history. A malformed branch ref or lost current-branch ref cannot make a committed repository look newly unonboarded, and offline initialization refuses a replacement UUID.
+- Refuse a new anchor when another visible ref tip or linked/detached worktree HEAD in the same Git repository carries `.engram-project`, including packed refs and pre-anchor branches. Inspect only bounded visible evidence, never copy or select the sibling identity automatically, and keep genuinely never-anchored repositories eligible for onboarding.
 
 ## [6.50.3] - 2026-10-07
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -122,6 +123,111 @@ func TestProjectInitRefusesUnresolvableHEADWithoutAnchor(t *testing.T) {
 				t.Fatalf("refusal printed success: %q", output.String())
 			}
 		})
+	}
+}
+
+func TestProjectInitRefusesVisibleSiblingAnchor(t *testing.T) {
+	for _, state := range []string{"branch", "packed-branch", "linked-preanchor", "detached-sibling"} {
+		t.Run(state, func(t *testing.T) {
+			root := t.TempDir()
+			gitProjectInit(t, root, "init", "--quiet")
+			gitProjectInit(t, root, "-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", "Existing repository")
+			gitProjectInit(t, root, "branch", "pre-anchor")
+			anchor := []byte(`{"version":3,"project_id":"22222222-2222-4222-8222-222222222222","name":"existing","scope":"repository"}`)
+			if err := os.WriteFile(filepath.Join(root, ".engram-project"), anchor, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			gitProjectInit(t, root, "add", "--", ".engram-project")
+			if state == "detached-sibling" {
+				tree, err := exec.Command("git", "-C", root, "write-tree").Output()
+				if err != nil {
+					t.Fatal(err)
+				}
+				commit, err := exec.Command("git", "-C", root, "-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "commit-tree", strings.TrimSpace(string(tree)), "-p", "HEAD", "-m", "Visible detached anchor").Output()
+				if err != nil {
+					t.Fatal(err)
+				}
+				gitProjectInit(t, root, "rm", "--cached", "--quiet", "--", ".engram-project")
+				if err := os.Remove(filepath.Join(root, ".engram-project")); err != nil {
+					t.Fatal(err)
+				}
+				gitProjectInit(t, root, "worktree", "add", "--quiet", "--detach", filepath.Join(t.TempDir(), "anchored"), strings.TrimSpace(string(commit)))
+			} else {
+				gitProjectInit(t, root, "-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Tracked anchor")
+				if state == "linked-preanchor" {
+					linked := filepath.Join(t.TempDir(), "preanchor")
+					gitProjectInit(t, root, "worktree", "add", "--quiet", linked, "pre-anchor")
+					root = linked
+				} else {
+					gitProjectInit(t, root, "checkout", "--quiet", "pre-anchor")
+					if state == "packed-branch" {
+						gitProjectInit(t, root, "pack-refs", "--all")
+					}
+				}
+			}
+			var output bytes.Buffer
+			err := runProjectInit([]string{"--name", "Replacement"}, root, &output)
+			if err == nil || !strings.Contains(err.Error(), "refusing to replace") {
+				t.Fatalf("project init with visible %s anchor = %v, want refusal", state, err)
+			}
+			if _, err := os.Lstat(filepath.Join(root, ".engram-project")); !os.IsNotExist(err) {
+				t.Fatalf("visible sibling anchor caused a replacement UUID: %v", err)
+			}
+			if output.Len() != 0 {
+				t.Fatalf("refusal printed success: %q", output.String())
+			}
+		})
+	}
+}
+
+func TestProjectInitAllowsNeverAnchoredLinkedAndPackedRepositories(t *testing.T) {
+	for _, state := range []string{"linked", "packed"} {
+		t.Run(state, func(t *testing.T) {
+			root := t.TempDir()
+			gitProjectInit(t, root, "init", "--quiet")
+			gitProjectInit(t, root, "-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", "Existing repository")
+			if state == "linked" {
+				linked := filepath.Join(t.TempDir(), "neveranchored")
+				gitProjectInit(t, root, "worktree", "add", "--quiet", "--detach", linked, "HEAD")
+				root = linked
+			} else {
+				gitProjectInit(t, root, "branch", "other-neveranchored")
+				gitProjectInit(t, root, "pack-refs", "--all")
+			}
+			var output bytes.Buffer
+			if err := runProjectInit([]string{"--name", "New logical project"}, root, &output); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(output.String(), "Created") || !strings.Contains(output.String(), "UNTRACKED") {
+				t.Fatalf("never-anchored initialization = %q", output.String())
+			}
+		})
+	}
+}
+
+func TestProjectInitRefusesExcessVisibleRefEvidence(t *testing.T) {
+	root := t.TempDir()
+	gitProjectInit(t, root, "init", "--quiet")
+	gitProjectInit(t, root, "-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", "Existing repository")
+	head, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var updates strings.Builder
+	for i := range 129 {
+		updates.WriteString("create refs/heads/evidence-" + strconv.Itoa(i) + " " + strings.TrimSpace(string(head)) + "\n")
+	}
+	command := exec.Command("git", "-C", root, "update-ref", "--stdin")
+	command.Stdin = strings.NewReader(updates.String())
+	if out, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("create owned ref evidence: %v: %s", err, out)
+	}
+	var output bytes.Buffer
+	if err := runProjectInit([]string{"--name", "Replacement"}, root, &output); err == nil {
+		t.Fatal("excess ref evidence admitted a new anchor")
+	}
+	if _, err := os.Lstat(filepath.Join(root, ".engram-project")); !os.IsNotExist(err) {
+		t.Fatalf("bounded inspection created a replacement anchor: %v", err)
 	}
 }
 
