@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep V3 onboarding tools reachable in existing Git repositories that have no anchor. Distinguish genuine absence from malformed, untracked, unreadable, dangling-symlink and tracked-but-deleted anchors; retain those refusals, backend authentication, and the prohibition on unresolved project-scoped memory access. Discovery creates no project or anchor and does not migrate existing memory.
+
 ## [6.50.3] - 2026-10-07
 
 Stable release of the accepted installed-memory repair in PR #550, including bounded UTF-8 automatic context and deadline-aware hybrid retrieval, plus the release-input repairs below. Preserve the published `v6.50.3-rc.1` tag and assets; this version alignment adds no product behavior, migration, or OpenClaw release. Publication does not establish Watchtower adoption or installed-client acceptance.

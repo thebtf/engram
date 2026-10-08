@@ -167,7 +167,7 @@ func (c *slugCache) ResolveIdentityV3(p muxcore.ProjectContext, clientInstanceID
 	}
 	anchor, err := projectidentity.DiscoverAnchorV3(root, "repository")
 	if err != nil {
-		if verifiedUnbornRepositoryV3(p.Cwd, root) {
+		if errors.Is(err, projectidentity.ErrAnchorMissingV3) {
 			return nil, nil
 		}
 		return nil, v3InputError("PROJECT_ANCHOR_INVALID")
@@ -451,34 +451,6 @@ func repositoryRootV3(cwd string) (string, error) {
 		return "", v3InputError("PROJECT_ANCHOR_INVALID")
 	}
 	return root, nil
-}
-
-func verifiedUnbornRepositoryV3(cwd, root string) bool {
-	prefix, err := exec.Command("git", "-C", cwd, gitRevParse, "--show-prefix").Output()
-	if err != nil || strings.TrimSpace(string(prefix)) != "" {
-		return false
-	}
-	if _, err := os.Lstat(filepath.Join(root, ".engram-project")); err == nil || !errors.Is(err, os.ErrNotExist) {
-		return false
-	}
-	parentRoot, err := exec.Command("git", "-C", filepath.Dir(root), gitRevParse, gitShowTopLevel).Output()
-	if err == nil && filepath.Clean(strings.TrimSpace(string(parentRoot))) != filepath.Clean(root) {
-		return false
-	}
-	objectFormat, err := exec.Command("git", "-C", root, gitRevParse, "--show-object-format").Output()
-	if err != nil || (strings.TrimSpace(string(objectFormat)) != "sha1" && strings.TrimSpace(string(objectFormat)) != "sha256") {
-		return false
-	}
-	head, err := exec.Command("git", "-C", root, gitRevParse, "--verify", "HEAD").Output()
-	if err == nil || strings.TrimSpace(string(head)) != "" {
-		return false
-	}
-	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) || (exitErr.ExitCode() != 1 && exitErr.ExitCode() != 128) {
-		return false
-	}
-	refLabel, err := exec.Command("git", "-C", root, "symbolic-ref", "--quiet", "--short", "HEAD").Output()
-	return err == nil && strings.TrimSpace(string(refLabel)) != ""
 }
 
 func verifiedAnchorlessDirectoryV3(cwd string) bool {

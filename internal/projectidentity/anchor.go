@@ -20,6 +20,8 @@ import (
 const anchorFilenameV3 = ".engram-project"
 
 var (
+	// ErrAnchorMissingV3 means no filesystem entry or tracked repository anchor exists.
+	ErrAnchorMissingV3     = errors.New("missing V3 project anchor")
 	errAnchorInvalidV3     = errors.New("invalid V3 project anchor")
 	errDescriptorInvalidV3 = errors.New("invalid V3 project descriptor")
 )
@@ -126,8 +128,20 @@ func DiscoverAnchorV3(root, scope string) (AnchorV3, error) {
 		return AnchorV3{}, errAnchorInvalidV3
 	}
 
-	raw, err := os.ReadFile(filepath.Join(selectedRoot, anchorFilenameV3))
+	anchorPath := filepath.Join(selectedRoot, anchorFilenameV3)
+	raw, err := os.ReadFile(anchorPath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if _, statErr := os.Lstat(anchorPath); errors.Is(statErr, os.ErrNotExist) {
+				if scope == "directory" {
+					return AnchorV3{}, ErrAnchorMissingV3
+				}
+				tracked, gitErr := exec.Command("git", "-C", selectedRoot, "ls-files", "--", anchorFilenameV3).Output()
+				if gitErr == nil && len(tracked) == 0 {
+					return AnchorV3{}, ErrAnchorMissingV3
+				}
+			}
+		}
 		return AnchorV3{}, errAnchorInvalidV3
 	}
 	anchor, err := ParseAnchorV3(raw)
