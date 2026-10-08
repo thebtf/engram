@@ -143,12 +143,13 @@ func TestNativeCodebaseRegistrationRefusesUnboundForeignAndChangedHandle(t *test
 	}
 }
 
-func TestNativeCodebaseRegistrationRefusesNonGitAndAmbiguousInputs(t *testing.T) {
+func TestNativeCodebaseRegistrationRefusesUnavailableGitAndAmbiguousInputs(t *testing.T) {
 	server := &uciIndexAdapterGRPCServer{}
 	mod := NewModuleWithClientInstanceID("fixture-daemon-install")
 	t.Cleanup(mod.pool.closeAll)
 	project := uciClientTestProject(startUCIIndexAdapterGRPC(t, server))
 	project.Cwd = t.TempDir()
+	t.Setenv("PATH", t.TempDir())
 	ctx := auditcontext.WithUCITransportSession(context.Background(), "native-input-session")
 	for _, raw := range []string{
 		`{"action":"register","source_label":"repository"}`,
