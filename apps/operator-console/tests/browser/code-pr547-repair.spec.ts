@@ -335,23 +335,33 @@ for (const failure of ['unavailable', 'timeout', 'offline', 'malformed'] as cons
     await expect(page.getByTestId('code-source-result')).toHaveText('old result')
     await page.getByTestId('index-intent-reindex').click()
     await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'queued')
+    await expect(page.getByTestId('index-intent-reindex')).toBeDisabled()
+    await expect(page.getByRole('button', { name: 'Обновить разрешённые варианты', exact: true })).toBeEnabled()
+    await expect(page.getByTestId('code-context-snapshot')).toBeEnabled()
     const stored = await page.evaluate(() => ({ pin: sessionStorage.getItem('engram.operator-code.view-candidate.v2'), intent: sessionStorage.getItem('engram.operator-code.index-intent.v1') }))
     published = true
     failStatus = true
     await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
-    await expect(page.getByTestId('code-context-message')).toContainText(/не выдал читаемый каталог|не может связаться/)
+    await expect(page.locator('main.code-page')).toHaveAttribute('data-catalog-state', failure === 'offline' ? 'offline' : 'unavailable')
     await expect(page.getByTestId('code-context-pinned')).toContainText('Pinned snapshot')
     await expect(page.getByTestId('code-search-results')).toContainText('src/old-view.ts')
     await expect(page.getByTestId('code-source-result')).toHaveText('old result')
     await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'queued')
     expect(await page.evaluate(() => ({ pin: sessionStorage.getItem('engram.operator-code.view-candidate.v2'), intent: sessionStorage.getItem('engram.operator-code.index-intent.v1') }))).toEqual(stored)
     failStatus = false
+    await expect(page.getByRole('button', { name: 'Обновить статус', exact: true })).toBeEnabled()
     await page.getByRole('button', { name: 'Обновить статус', exact: true }).click()
     await expect(page.getByTestId('code-status')).toContainText('Старый снимок')
     await expect(page.getByTestId('code-context-snapshot').getByRole('option', { name: 'Newer snapshot' })).toHaveCount(1)
     await expect(page.getByTestId('code-context-pinned')).toContainText('Pinned snapshot')
     await expect(page.getByTestId('code-search-results')).toContainText('src/old-view.ts')
     expect(pins).toEqual(['selection'])
+    await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'queued')
+    await page.getByTestId('code-context-snapshot').selectOption('newer-selection')
+    await expect(page.getByTestId('code-pin-context')).toBeEnabled()
+    await page.getByTestId('code-pin-context').click()
+    await expect(page.getByTestId('code-context-pinned')).toContainText('Newer snapshot')
+    expect(pins).toEqual(['selection', 'newer-selection'])
   })
 }
 
@@ -411,7 +421,7 @@ for (const reauthorization of ['ready', 'unavailable', 'malformed', 'denied', 'm
     await page.locator('a[href="/code"]').first().click()
     await expect(page).toHaveURL(/\/code$/)
     if (reauthorization !== 'ready') {
-      await expect(page.getByTestId('code-context-message')).toContainText(/не выдал читаемый каталог|отклонил доступ/)
+      await expect(page.locator('main.code-page')).toHaveAttribute('data-catalog-state', reauthorization === 'denied' ? 'denied' : 'unavailable')
       await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
       await expect(page.getByTestId('code-query-input')).toHaveCount(0)
       await expect(page.getByRole('button', { name: 'Обновить статус', exact: true })).toBeDisabled()
@@ -419,6 +429,7 @@ for (const reauthorization of ['ready', 'unavailable', 'malformed', 'denied', 'm
       expect(requests.slice(remountStart)).toEqual(['/api/code/tabs/resume', '/api/code/contexts', '/api/code/status'])
       expect(await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))).toBe(reauthorization === 'malformed' || reauthorization === 'unavailable' ? stored : null)
       statusMode = 'ready'
+      await expect(page.getByRole('button', { name: 'Обновить разрешённые варианты', exact: true })).toBeEnabled()
       await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
       if (reauthorization === 'denied' || reauthorization === 'mismatch') {
         await expect(page.getByTestId('code-context-snapshot').getByRole('option', { name: 'Newer snapshot' })).toHaveCount(1)
@@ -827,6 +838,8 @@ for (const { boundary, invalidated } of [
     const storedPin = await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))
     await page.getByTestId('index-intent-reindex').click()
     await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'queued')
+    await expect(page.getByTestId('index-intent-reindex')).toBeDisabled()
+    await expect(page.getByRole('button', { name: 'Обновить разрешённые варианты', exact: true })).toBeEnabled()
     holdRead = true
     if (boundary === 'search') {
       await page.getByTestId('code-query-input').fill('old result')

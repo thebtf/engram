@@ -49,7 +49,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <main class="code-page">
+  <main class="code-page" :data-catalog-state="contextState">
     <header class="head">
       <div>
         <h1>{{ t('workspace.title') }}</h1>
@@ -74,7 +74,7 @@ onMounted(() => {
       :catalog="contextCatalog"
       :candidate="contextCandidate"
       :pinned="pinnedContext"
-      :pending="pending || indexIntentPending || ['loading', 'submitted', 'queued', 'acknowledged', 'running'].includes(indexIntentState.kind)"
+      :pending="pending || indexIntentPending"
       :evidence="bootstrapEvidence"
       @refresh="discoverContext"
       @select="selectContext"

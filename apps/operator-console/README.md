@@ -47,6 +47,9 @@ The [responsive-layout receipt](../../specs/011-operator-code-console/acceptance
   rebind; an already server-confirmed pin may remain visible in the same binding. After
   a successful grant issue or revoke, failed inventory refresh preserves the mutation
   confirmation but hides stale revoke actions until the inventory is verified again.
+- Queued or running daemon indexing does not disable authorized catalog/status readback.
+  Only in-flight browser requests block those reads; publication never switches the pinned
+  snapshot without an explicit selection, and active intent controls still prevent duplicate jobs.
 - The default D-A path is keyboard-operable, has visible focus and state announcements,
   supports RU/EN task language, and leaves zh navigation intact.
 - A relation is evidence-led. It does not become a manual graph editor, and historical

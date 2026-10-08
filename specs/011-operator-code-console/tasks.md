@@ -84,11 +84,11 @@ flowchart LR
 | FR-005–FR-008, SC-002, SC-004 | T004, T006a, T007, T008a | Bounded structure/search, direct/reverse off-page neighbor, released evidence, real-provider non-lexical >50 proof, no direct storage/MCP/path escape. |
 | FR-009–FR-011, SC-005 | T005, T006b, T008b | Single-container quiescence, writer denial after route/tool/flag/restart, idempotent residual-job failure, and preserved historical consumers/data. |
 | FR-013, SC-006 | T001, T007, T008a | Promoted D-A source and accessible/RU-EN Workspace journey. |
-| FR-014, SC-007 | T008a + T008b | Composite source acceptance after both independent evidence records; release remains closed pending decision and installed DA01–DA04 proof. |
+| FR-014, SC-007 | T008a + T008b | Composite source acceptance after both independent evidence records; release remains closed pending installed DA01–DA04 proof on the already selected configured single-user no-auth HTTP LAN origin. |
 
 ## Implementation strategy
 
 1. Freeze D-A design and producer ports with T001–T005.
 2. Integrate the binding/catalog/read journey in T006a, then the retirement declarations in serialized T006b.
 3. Build the ordinary Workspace journey in T007 against T006a. Record T008a journey evidence without waiting for T006b, and record T008b retirement evidence after T006b.
-4. Record composite source acceptance only when T008a and T008b are green. Keep release closed until the origin decision and installed walkthrough. Do not start D-B/D-C, release, deployment, or broad test campaigns from this task graph.
+4. Record composite source acceptance only when T008a and T008b are green. Keep release closed until the installed walkthrough on the already selected configured single-user no-auth HTTP LAN origin. Do not start D-B/D-C, release, deployment, or broad test campaigns from this task graph.
