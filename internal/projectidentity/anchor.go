@@ -20,7 +20,7 @@ import (
 const anchorFilenameV3 = ".engram-project"
 
 var (
-	// ErrAnchorMissingV3 means no filesystem entry or tracked repository anchor exists.
+	// ErrAnchorMissingV3 means no filesystem entry or index/HEAD anchor exists.
 	ErrAnchorMissingV3     = errors.New("missing V3 project anchor")
 	errAnchorInvalidV3     = errors.New("invalid V3 project anchor")
 	errDescriptorInvalidV3 = errors.New("invalid V3 project descriptor")
@@ -136,8 +136,7 @@ func DiscoverAnchorV3(root, scope string) (AnchorV3, error) {
 				if scope == "directory" {
 					return AnchorV3{}, ErrAnchorMissingV3
 				}
-				tracked, gitErr := exec.Command("git", "-C", selectedRoot, "ls-files", "--", anchorFilenameV3).Output()
-				if gitErr == nil && len(tracked) == 0 {
+				if repositoryAnchorAbsentV3(selectedRoot) {
 					return AnchorV3{}, ErrAnchorMissingV3
 				}
 			}
@@ -165,6 +164,17 @@ func isSelectedGitRoot(root string) bool {
 
 func isTrackedAnchor(root string) bool {
 	return exec.Command("git", "-C", root, "ls-files", "--error-unmatch", "--", anchorFilenameV3).Run() == nil
+}
+
+func repositoryAnchorAbsentV3(root string) bool {
+	tracked, err := exec.Command("git", "-C", root, "ls-files", "--", anchorFilenameV3).Output()
+	if err != nil || len(tracked) != 0 {
+		return false
+	}
+	// Status compares the empty index selection with HEAD, including staged
+	// deletions, and supports unborn repositories without inventing a HEAD.
+	changes, err := exec.Command("git", "--no-optional-locks", "-C", root, "status", "--porcelain=v1", "--untracked-files=no", "--", anchorFilenameV3).Output()
+	return err == nil && len(changes) == 0
 }
 
 func samePath(left, right string) bool {

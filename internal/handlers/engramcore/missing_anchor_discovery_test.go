@@ -3,6 +3,7 @@ package engramcore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/grpcserver"
 	"github.com/thebtf/engram/internal/mcp"
+	"github.com/thebtf/engram/internal/module"
 )
 
 // This uses the production gRPC authentication/Initialize and MCP tool catalog,
@@ -29,7 +31,7 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 	go func() { _ = backend.Serve(listener) }()
 	t.Cleanup(backend.GracefulStop)
 
-	for _, state := range []string{"absent", "malformed", "untracked", "unreadable", "tracked-deletion", "dangling-symlink", "unauthenticated"} {
+	for _, state := range []string{"absent", "malformed", "untracked", "unreadable", "tracked-deletion", "staged-deletion", "git-index-error", "dangling-symlink", "unauthenticated"} {
 		t.Run(state, func(t *testing.T) {
 			root := t.TempDir()
 			git := func(args ...string) {
@@ -59,6 +61,21 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
+			case "staged-deletion":
+				if err := os.WriteFile(anchorPath, validAnchor, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				git("add", "--", ".engram-project")
+				git("-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Tracked anchor")
+				git("rm", "--quiet", "--", ".engram-project")
+			case "git-index-error":
+				indexPath := filepath.Join(root, ".git", "index")
+				if err := os.Remove(indexPath); err != nil && !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(indexPath, 0o700); err != nil {
+					t.Fatal(err)
+				}
 			case "unreadable":
 				if err := os.Mkdir(anchorPath, 0o700); err != nil {
 					t.Fatal(err)
@@ -71,9 +88,13 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 					t.Skipf("symlinks unavailable: %v", err)
 				}
 			}
-			before, err := os.ReadFile(filepath.Join(root, ".git", "index"))
-			if err != nil && !os.IsNotExist(err) {
-				t.Fatal(err)
+			var before []byte
+			if state != "git-index-error" {
+				var err error
+				before, err = os.ReadFile(filepath.Join(root, ".git", "index"))
+				if err != nil && !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
 			}
 			dispatcher, mod, project := buildV3ContractDispatcher(t, listener.Addr().String())
 			project.Cwd = root
@@ -89,8 +110,9 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 			if state == "absent" {
 				assertOnlyRegistrationTool(t, response)
 				_, callErr := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`))
-				if callErr == nil {
-					t.Fatal("missing anchor permitted scoped memory access")
+				var moduleErr *module.ModuleError
+				if !errors.As(callErr, &moduleErr) || moduleErr.Code != "PROJECT_ANCHOR_INVALID" {
+					t.Fatalf("missing-anchor scoped recall error=%v, want PROJECT_ANCHOR_INVALID", callErr)
 				}
 				if _, err := os.Lstat(anchorPath); !os.IsNotExist(err) {
 					t.Fatalf("discovery created an anchor: %v", err)
@@ -109,12 +131,14 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 			if mod.cache.HasEntry(project.ID) {
 				t.Fatal("discovery retained legacy project authority")
 			}
-			after, err := os.ReadFile(filepath.Join(root, ".git", "index"))
-			if err != nil && !os.IsNotExist(err) {
-				t.Fatal(err)
-			}
-			if string(before) != string(after) {
-				t.Fatal("discovery mutated the repository index")
+			if state != "git-index-error" {
+				after, err := os.ReadFile(filepath.Join(root, ".git", "index"))
+				if err != nil && !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
+				if string(before) != string(after) {
+					t.Fatal("discovery mutated the repository index")
+				}
 			}
 		})
 	}

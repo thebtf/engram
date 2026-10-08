@@ -38,8 +38,8 @@ func InitRepositoryAnchorV3(root, name string) (anchor AnchorV3, created, tracke
 	if !os.IsNotExist(statErr) {
 		return AnchorV3{}, false, false, fmt.Errorf("inspect %s: %w", path, statErr)
 	}
-	if isTrackedAnchor(selectedRoot) {
-		return AnchorV3{}, false, false, fmt.Errorf("%s is tracked but missing; refusing to replace it", path)
+	if !repositoryAnchorAbsentV3(selectedRoot) {
+		return AnchorV3{}, false, false, fmt.Errorf("%s is tracked but missing or Git inspection is unavailable; refusing to replace it", path)
 	}
 	anchor = AnchorV3{Version: 3, ProjectID: uuid.NewString(), Name: name, Scope: "repository"}
 	raw, err := json.Marshal(anchor)
