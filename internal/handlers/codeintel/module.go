@@ -17,9 +17,9 @@
 //
 // # codebase_status design decision
 //
-// This module reports daemon-side liveness and merges server-side scoped status
-// through the typed engramcore proxy. Server failure degrades only the server
-// payload; the daemon state remains authoritative for the resolved target.
+// Plain published-View status uses the server's read authorization and reports
+// no local daemon liveness. Unpublished owned checkouts and local barriers retain
+// their stronger index binding; read access never grants index authority.
 //
 // # Concurrency
 //
@@ -144,6 +144,7 @@ type CoreProvider interface {
 	ResolveIndexTarget(ctx context.Context, p muxcore.ProjectContext, contextHandle string) (ResolvedIndexTarget, error)
 	IndexCodebase(ctx context.Context, target ResolvedIndexTarget, root string) (*IndexResult, error)
 	ProxyHandleTool(ctx context.Context, target ResolvedIndexTarget, name string, args json.RawMessage) (json.RawMessage, error)
+	ReadCodebaseStatus(ctx context.Context, p muxcore.ProjectContext, contextHandle string) (json.RawMessage, error)
 }
 
 // IndexTargetRebinder is an optional production capability. It refreshes an
@@ -186,6 +187,10 @@ func (a *engramCoreAdapter) UpdateIndexIntent(ctx context.Context, target Resolv
 
 func (a *engramCoreAdapter) ProxyHandleTool(ctx context.Context, target ResolvedIndexTarget, name string, args json.RawMessage) (json.RawMessage, error) {
 	return a.adapter.ProxyHandleTool(ctx, target, name, args)
+}
+
+func (a *engramCoreAdapter) ReadCodebaseStatus(ctx context.Context, p muxcore.ProjectContext, contextHandle string) (json.RawMessage, error) {
+	return a.adapter.ReadCodebaseStatus(ctx, p, contextHandle)
 }
 
 // Module is the codeintel tenant of the engram modular daemon framework.
@@ -1244,6 +1249,37 @@ func (m *Module) indexContext(target ResolvedIndexTarget, request indexRunReques
 // handleStatus
 // -----------------------------------------------------------------------
 
+func serverStatusRequiresContext(err error) bool {
+	var proxyError *module.ProxyIsError
+	if !errors.As(err, &proxyError) {
+		return false
+	}
+	payload, decodeErr := decodeServerStatusPayload(proxyError.RawContent)
+	if decodeErr != nil {
+		return false
+	}
+	var code int
+	var data string
+	if json.Unmarshal(payload["code"], &code) != nil || json.Unmarshal(payload["data"], &data) != nil {
+		return false
+	}
+	return code == -32000 && data == string(uci.ContextRequired)
+}
+
+func selectedViewStatus(raw json.RawMessage) (json.RawMessage, error) {
+	payload, err := decodeServerStatusPayload(raw)
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]any{"status": nil, "server_counts_available": true}
+	for _, key := range []string{"total_chunks", "embedded_chunks", "last_indexed_at", "context", "rows", "edges", "embedding", "evidence_recorder", "freshness"} {
+		if value, found := payload[key]; found {
+			result[key] = value
+		}
+	}
+	return json.Marshal(result)
+}
+
 func (m *Module) handleStatus(ctx context.Context, p muxcore.ProjectContext, args json.RawMessage) (json.RawMessage, error) {
 	contextHandle, afterBarrier, err := parseStatusArgs(args)
 	if err != nil {
@@ -1256,12 +1292,26 @@ func (m *Module) handleStatus(ctx context.Context, p muxcore.ProjectContext, arg
 	if m.core == nil {
 		return nil, fmt.Errorf("SOURCE_UNAVAILABLE: typed code index core is unavailable")
 	}
+	var unpublishedError error
+	if afterBarrier == nil {
+		serverRaw, readErr := m.core.ReadCodebaseStatus(ctx, p, contextHandle)
+		if readErr == nil {
+			return selectedViewStatus(serverRaw)
+		}
+		if !serverStatusRequiresContext(readErr) {
+			return nil, readErr
+		}
+		unpublishedError = readErr
+	}
 	target, err := m.core.ResolveIndexTarget(ctx, p, contextHandle)
 	if err != nil {
 		return nil, err
 	}
 	if !requestedTargetMatches(target, clientSessionID, contextHandle) {
 		return nil, fmt.Errorf("codebase_status: resolved target does not match the requesting client handle")
+	}
+	if unpublishedError != nil && target.ContextClone() != nil {
+		return nil, unpublishedError
 	}
 	if m.runtime != nil && p.Cwd != "" {
 		root, prepareErr := m.runtime.Prepare(ctx, target, p.Cwd, p.Cwd)

@@ -508,6 +508,23 @@ func (a *UCIIndexAdapter) IndexCodebase(ctx context.Context, target ResolvedInde
 	return result, nil
 }
 
+// ReadCodebaseStatus uses the selected-View read authority, not an index binding.
+func (a *UCIIndexAdapter) ReadCodebaseStatus(ctx context.Context, project muxcore.ProjectContext, contextHandle string) (json.RawMessage, error) {
+	if a == nil || a.module == nil {
+		return nil, uciIndexSourceUnavailable(uciClientServerUnavailableMessage)
+	}
+	if !validUCIClientIdentifier(contextHandle, 128) {
+		return nil, uciIndexSourceUnavailable("resolved context handle is unavailable")
+	}
+	args, err := json.Marshal(struct {
+		ContextHandle string `json:"context_handle"`
+	}{ContextHandle: contextHandle})
+	if err != nil {
+		return nil, err
+	}
+	return a.module.ProxyHandleTool(ctx, project, "codebase_status", args)
+}
+
 // ProxyHandleTool forwards a typed target call without a raw project field.
 // The caller owns the typed context arguments; this method supplies only the
 // per-session provenance and connection established during resolution.
