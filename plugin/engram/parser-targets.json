@@ -5,8 +5,8 @@
     "win32-x64": {
       "version": "6.51.0",
       "asset": "uci-parser-windows-amd64.exe",
-      "size": 7941120,
-      "sha256": "361768217de71939b681387c02d9d93acde854d6842e0c6230907fc8926aa76e"
+      "size": 7943168,
+      "sha256": "9f9fcebc7eee38bbaadbd00f6c1d180e5bd02f6134e1cffcb88ea943a841e99e"
     },
     "linux-x64": null,
     "darwin-arm64": null
