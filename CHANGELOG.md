@@ -29,6 +29,7 @@ Ordinary Home → Workspace onboarding and representative-corpus capacity calibr
 - Read plain published-View status through the existing authenticated UCI read path without requiring index-workstation ownership; report unavailable local daemon liveness as `null`. Preserve owned unpublished-checkout preparation, index mutations and local token barriers under their stronger authority. Keep top-level status counts in conservative unique-chunk units while membership-candidate progress remains unchanged; shared chunk occurrences no longer invalidate readable snapshot status.
 - Validate the frozen release module graph with maintained `go mod tidy -diff`, rejecting any required module changes without rewriting `go.mod` or `go.sum` during packaging.
 - Measure dispatcher observability overhead with symmetric per-call timing and balanced provider batches, using actual nanosecond p50/p99 rather than mismatched averages or truncated milliseconds. Preserve the 5%/50 µs overhead budgets and 1-second p99 bound, and require one real recording per recorder-mode call; production dispatch and metric emission remain unchanged. Retain zero elapsed samples, report the undefined percentage for a zero baseline and enforce its unchanged absolute budget; reject negative elapsed samples.
+- Localize known structural-coverage states in Workspace using the existing RU/EN/zh messages while retaining unknown future values, and align current parser-release instructions with facts/v9 without relabeling historical facts/v8 evidence.
 
 
 ## [6.50.3] - 2026-10-07

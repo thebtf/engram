@@ -139,7 +139,7 @@ async function copy(value: string): Promise<void> {
           <dl class="status">
             <div><dt>{{ t('workspace.query.mode') }}</dt><dd>{{ search.retrievalMode ?? t('codeExplorer.status.unknown') }}</dd></div>
             <div><dt>{{ t('workspace.query.vectorCoverage') }}</dt><dd>{{ search.vectorCoverage === null ? t('codeExplorer.status.unknown') : `${Math.round(search.vectorCoverage * 100)}%` }}</dd></div>
-            <div><dt>{{ t('workspace.query.structuralCoverage') }}</dt><dd>{{ search.structuralCoverage ?? t('codeExplorer.status.unknown') }}</dd></div>
+            <div><dt>{{ t('workspace.query.structuralCoverage') }}</dt><dd>{{ search.structuralCoverage === 'complete' || search.structuralCoverage === 'partial' || search.structuralCoverage === 'unavailable' ? t(`workspace.coverage.${search.structuralCoverage}`) : search.structuralCoverage ?? t('codeExplorer.status.unknown') }}</dd></div>
             <div><dt>{{ t('workspace.query.unresolved') }}</dt><dd>{{ search.unresolvedSites ?? t('codeExplorer.status.unknown') }}</dd></div>
             <div><dt>{{ t('workspace.query.unsupported') }}</dt><dd>{{ search.unsupportedFiles ?? t('codeExplorer.status.unknown') }}</dd></div>
           </dl>
