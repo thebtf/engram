@@ -6,7 +6,7 @@ project_name: engram
 
 before:
   hooks:
-    - go mod tidy
+    - go mod tidy -diff
     # Build the same Nuxt static bundle as the server Docker image.
     - bash scripts/build-release-operator-console.sh
     - bash scripts/generate-plugin-config.sh
