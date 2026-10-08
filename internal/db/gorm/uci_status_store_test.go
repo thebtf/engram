@@ -94,11 +94,21 @@ func TestUCIStatusStoreReadsExactViewLifecycleAndScopedCounts(t *testing.T) {
 	siblingCandidate := uciSemanticCandidateAtPath(t, fixture.projection, siblingAuthorized, "sibling.go", siblingArtifact.Artifact.ArtifactID)
 	require.NoError(t, fixture.projection.StoreCandidateEmbedding(ctx, siblingAuthorized, semanticProfile, siblingCandidate, uciSemanticVector(0, 1)))
 
+	fixture.authorizer.allowedSources[fixture.foreign.SourceID] = true
+	foreignCheckout := fixture.registerCheckout(t, fixture.foreign, "foreign-status")
+	foreignArtifact := fixture.admitArtifact(t, fixture.foreign.SourceID, "status-foreign", sharedSource, UCIParseArtifactComplete)
+	foreignMemberships := []ucidomain.IndexMembership{uciPublicationPresentMembership("first.go", foreignArtifact)}
+	foreignDraft := uciEmbeddingJobsDraft([]uciPublicationArtifact{foreignArtifact}, foreignMemberships)
+	_, foreign := fixture.publish(t, fixture.publisher, fixture.caller("status-foreign"), fixture.publishInput("status-foreign", foreignCheckout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, foreignDraft))
+	foreignAuthorized := uciStatusStoreAuthorize(t, fixture, foreign.Context)
+	foreignCandidate := uciSemanticCandidateAtPath(t, fixture.projection, foreignAuthorized, "first.go", foreignArtifact.Artifact.ArtifactID)
+	require.NoError(t, fixture.projection.StoreCandidateEmbedding(ctx, foreignAuthorized, semanticProfile, foreignCandidate, uciSemanticVector(1, 0)))
+
 	isolated, err := store.LoadIndexStatus(ctx, initialAuthorized, &semanticProfile)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), isolated.ChunkCount, "another checkout's chunks must not contribute")
-	require.Equal(t, uint64(2), isolated.ReadyEmbeddingCount, "another checkout's ready embeddings must not contribute")
-	require.Equal(t, readyEmbedding, isolated.Embedding, "another checkout's embeddings must not contribute to the selected View")
+	require.Equal(t, uint64(2), isolated.ReadyEmbeddingCount, "another checkout or Source's ready embeddings must not contribute")
+	require.Equal(t, readyEmbedding, isolated.Embedding, "another checkout or Source's embeddings must not contribute to the selected View")
 
 	queuedJobID := uuid.NewString()
 	checkoutID := fixture.checkout.CheckoutID
@@ -196,6 +206,111 @@ func TestUCIStatusStoreReadsExactViewLifecycleAndScopedCounts(t *testing.T) {
 	require.Equal(t, ucidomain.IndexStatusSourceActive, checkoutOffline.SourceState)
 	require.Equal(t, ucidomain.IndexStatusCheckoutOffline, checkoutOffline.CheckoutState)
 	requireUCIStatusStoreFreshness(t, checkoutOffline.Freshness, ucidomain.QueryFreshnessOffline, ucidomain.QueryFreshnessNone, ucidomain.QueryEnrichmentUnavailable, 23, nil)
+}
+
+func TestUCIStatusStoreCountsReusedChunksWithoutCompletingPartialCandidates(t *testing.T) {
+	for _, test := range []struct {
+		name                string
+		includeRelativePath bool
+		partialReadyChunks  uint64
+	}{
+		{name: "path-sensitive", includeRelativePath: true, partialReadyChunks: 0},
+		{name: "path-independent", includeRelativePath: false, partialReadyChunks: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := openUCIEmbeddingJobsFixture(t)
+			fixture.profile.IncludeRelativePath = test.includeRelativePath
+			fixture.publisher = uciEmbeddingJobsPublisher(t, fixture.publication, fixture.profile)
+			ctx := context.Background()
+			artifact := fixture.publication.admitArtifact(t, fixture.publication.source.SourceID, "status-reused", "func StatusReused() {}\n", UCIParseArtifactComplete)
+			published := fixture.publish(t, "status-reused", fixture.publication.checkout, nil, ucidomain.IndexJobInitial,
+				[]uciPublicationArtifact{artifact},
+				[]ucidomain.IndexMembership{
+					uciPublicationPresentMembership("first.go", artifact),
+					uciPublicationPresentMembership("second.go", artifact),
+				},
+			)
+			authorized := uciStatusStoreAuthorize(t, fixture.publication, published.Context)
+			firstCandidate := uciSemanticCandidateAtPath(t, fixture.store, authorized, "first.go", artifact.Artifact.ArtifactID)
+			secondCandidate := uciSemanticCandidateAtPath(t, fixture.store, authorized, "second.go", artifact.Artifact.ArtifactID)
+
+			otherProfile := fixture.profile
+			otherProfile.PreprocessingRevision += "-other"
+			require.NoError(t, fixture.store.StoreCandidateEmbedding(ctx, authorized, otherProfile, firstCandidate, uciEmbeddingJobsVector(1)))
+			require.NoError(t, fixture.store.StoreCandidateEmbedding(ctx, authorized, otherProfile, secondCandidate, uciEmbeddingJobsVector(1)))
+			unconfigured, err := fixture.store.LoadIndexStatus(ctx, authorized, nil)
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), unconfigured.ChunkCount)
+			require.Zero(t, unconfigured.ReadyEmbeddingCount, "no configured profile must not count cached vectors")
+			require.Equal(t, ucidomain.IndexCoverageUnavailable, unconfigured.Embedding.Coverage)
+			uncached := fixture.status(t, authorized)
+			require.Equal(t, uint64(1), uncached.ChunkCount)
+			require.Zero(t, uncached.ReadyEmbeddingCount, "another preprocessing profile must not satisfy the selected profile")
+
+			claim, claimed, err := fixture.store.ClaimEmbeddingJob(ctx, fixture.profile, "status-reused-worker-"+fixture.publication.token, time.Minute)
+			require.NoError(t, err)
+			require.True(t, claimed)
+			firstBatch, err := fixture.store.PrepareEmbeddingBatch(ctx, claim, authorized, 1)
+			require.NoError(t, err)
+			require.Len(t, firstBatch.Candidates, 1)
+			require.Equal(t, artifact.Chunk.ChunkID, firstBatch.Candidates[0].Key.ChunkID)
+			require.Equal(t, []int{0}, firstBatch.MissingInputIndexes)
+			require.NoError(t, fixture.store.CommitEmbeddingBatch(ctx, claim, authorized, firstBatch, [][]float32{uciEmbeddingJobsVector(1)}))
+			partial := fixture.status(t, authorized)
+			require.Equal(t, uint64(1), partial.ChunkCount)
+			require.Equal(t, test.partialReadyChunks, partial.ReadyEmbeddingCount, "a unique chunk is ready only when every selected membership has a compatible input")
+			require.Equal(t, uint64(2), partial.Embedding.TotalCandidates)
+			require.Equal(t, uint64(1), partial.Embedding.ReadyCandidates)
+			require.Equal(t, ucidomain.IndexCoveragePartial, partial.Embedding.Coverage, "even unique 1/1 does not prove the candidate job is complete")
+			require.NoError(t, partial.Embedding.Validate())
+			t.Logf("partial storage counts: unique_ready=%d unique_total=%d candidate_ready=%d candidate_total=%d coverage=%s", partial.ReadyEmbeddingCount, partial.ChunkCount, partial.Embedding.ReadyCandidates, partial.Embedding.TotalCandidates, partial.Embedding.Coverage)
+
+			secondBatch, err := fixture.store.PrepareEmbeddingBatch(ctx, claim, authorized, 1)
+			require.NoError(t, err)
+			require.Len(t, secondBatch.Candidates, 1)
+			require.Equal(t, artifact.Chunk.ChunkID, secondBatch.Candidates[0].Key.ChunkID)
+			require.NotEqual(t, firstBatch.Candidates[0].Key.MembershipID, secondBatch.Candidates[0].Key.MembershipID)
+			var vectors [][]float32
+			if test.includeRelativePath {
+				require.Equal(t, []int{0}, secondBatch.MissingInputIndexes)
+				require.NotEqual(t, firstBatch.Candidates[0].InputDigest, secondBatch.Candidates[0].InputDigest)
+				vectors = [][]float32{uciEmbeddingJobsVector(1)}
+			} else {
+				require.Empty(t, secondBatch.MissingInputIndexes)
+				require.Equal(t, firstBatch.Candidates[0].InputDigest, secondBatch.Candidates[0].InputDigest)
+			}
+			require.NoError(t, fixture.store.CommitEmbeddingBatch(ctx, claim, authorized, secondBatch, vectors))
+			exhausted, err := fixture.store.PrepareEmbeddingBatch(ctx, claim, authorized, 1)
+			require.NoError(t, err)
+			require.True(t, exhausted.Exhausted)
+			require.Empty(t, exhausted.Candidates)
+			require.NoError(t, fixture.store.CompleteEmbeddingJob(ctx, claim, authorized))
+			complete := fixture.status(t, authorized)
+			require.Equal(t, uint64(1), complete.ChunkCount)
+			require.Equal(t, uint64(1), complete.ReadyEmbeddingCount)
+			require.Equal(t, uint64(2), complete.Embedding.TotalCandidates)
+			require.Equal(t, uint64(2), complete.Embedding.ReadyCandidates)
+			require.Equal(t, ucidomain.IndexCoverageComplete, complete.Embedding.Coverage)
+			require.NoError(t, complete.Embedding.Validate())
+			t.Logf("complete storage counts: unique_ready=%d unique_total=%d candidate_ready=%d candidate_total=%d coverage=%s", complete.ReadyEmbeddingCount, complete.ChunkCount, complete.Embedding.ReadyCandidates, complete.Embedding.TotalCandidates, complete.Embedding.Coverage)
+			job := uciEmbeddingJobsJob(t, fixture.publication, claim.Ref.JobID)
+			progress, err := parseUCIEmbeddingProgress(job.Counts)
+			require.NoError(t, err)
+			require.Equal(t, uint64(2), progress.Total)
+			require.Equal(t, uint64(2), progress.Ready)
+			require.True(t, progress.Exhausted)
+			total, ready, err := loadUCIEmbeddingCoverageSummary(ctx, fixture.publication.db, published.Context, claim.Ref.EmbeddingProfileID, fixture.profile)
+			require.NoError(t, err)
+			require.Equal(t, uint64(2), total, "the storage readiness projection keeps membership units")
+			require.Equal(t, uint64(2), ready)
+			cacheRows := uciEmbeddingJobsEmbeddings(t, fixture.publication, claim.Ref.EmbeddingProfileID)
+			if test.includeRelativePath {
+				require.Len(t, cacheRows, 2)
+			} else {
+				require.Len(t, cacheRows, 1, "cache rows are neither the chunk nor the candidate denominator")
+			}
+		})
+	}
 }
 
 func TestUCIStatusStoreReturnsClosedNotFoundForMismatchedTuple(t *testing.T) {
