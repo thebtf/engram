@@ -31,7 +31,7 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 	go func() { _ = backend.Serve(listener) }()
 	t.Cleanup(backend.GracefulStop)
 
-	for _, state := range []string{"absent", "malformed", "untracked", "unreadable", "tracked-deletion", "staged-deletion", "git-index-error", "dangling-symlink", "unauthenticated"} {
+	for _, state := range []string{"absent", "malformed", "untracked", "unreadable", "tracked-deletion", "staged-deletion", "git-index-error", "git-detached-head-error", "git-symbolic-head-error", "git-malformed-head-ref", "git-missing-head-ref", "dangling-symlink", "unauthenticated"} {
 		t.Run(state, func(t *testing.T) {
 			root := t.TempDir()
 			git := func(args ...string) {
@@ -61,13 +61,27 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-			case "staged-deletion":
+			case "staged-deletion", "git-malformed-head-ref", "git-missing-head-ref":
 				if err := os.WriteFile(anchorPath, validAnchor, 0o600); err != nil {
 					t.Fatal(err)
 				}
 				git("add", "--", ".engram-project")
 				git("-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Tracked anchor")
 				git("rm", "--quiet", "--", ".engram-project")
+				if state != "staged-deletion" {
+					branch, err := exec.Command("git", "-C", root, "symbolic-ref", "HEAD").Output()
+					if err != nil {
+						t.Fatal(err)
+					}
+					refPath := filepath.Join(root, ".git", filepath.FromSlash(strings.TrimSpace(string(branch))))
+					if state == "git-malformed-head-ref" {
+						if err := os.WriteFile(refPath, []byte("not-an-object\n"), 0o600); err != nil {
+							t.Fatal(err)
+						}
+					} else if err := os.Remove(refPath); err != nil {
+						t.Fatal(err)
+					}
+				}
 			case "git-index-error":
 				indexPath := filepath.Join(root, ".git", "index")
 				if err := os.Remove(indexPath); err != nil && !os.IsNotExist(err) {
@@ -75,6 +89,18 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 				}
 				if err := os.Mkdir(indexPath, 0o700); err != nil {
 					t.Fatal(err)
+				}
+			case "git-detached-head-error", "git-symbolic-head-error":
+				badObject := strings.Repeat("1", 40) + "\n"
+				if state == "git-detached-head-error" {
+					if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte(badObject), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					git("symbolic-ref", "HEAD", "refs/heads/broken-head")
+					if err := os.WriteFile(filepath.Join(root, ".git", "refs", "heads", "broken-head"), []byte(badObject), 0o600); err != nil {
+						t.Fatal(err)
+					}
 				}
 			case "unreadable":
 				if err := os.Mkdir(anchorPath, 0o700); err != nil {

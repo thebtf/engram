@@ -171,10 +171,36 @@ func repositoryAnchorAbsentV3(root string) bool {
 	if err != nil || len(tracked) != 0 {
 		return false
 	}
-	// Status compares the empty index selection with HEAD, including staged
-	// deletions, and supports unborn repositories without inventing a HEAD.
-	changes, err := exec.Command("git", "--no-optional-locks", "-C", root, "status", "--porcelain=v1", "--untracked-files=no", "--", anchorFilenameV3).Output()
-	return err == nil && len(changes) == 0
+	head, err := exec.Command("git", "-C", root, "rev-parse", "--verify", "HEAD^{commit}").Output()
+	if err == nil {
+		tracked, err := exec.Command("git", "-C", root, "ls-tree", "--name-only", strings.TrimSpace(string(head)), "--", anchorFilenameV3).Output()
+		return err == nil && len(tracked) == 0
+	}
+	branch, err := exec.Command("git", "-C", root, "symbolic-ref", "--quiet", "HEAD").Output()
+	if err != nil || !strings.HasPrefix(string(branch), "refs/heads/") {
+		return false
+	}
+	var exitErr *exec.ExitError
+	err = exec.Command("git", "-C", root, "show-ref", "--exists", strings.TrimSpace(string(branch))).Run()
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 2 {
+		return false
+	}
+	// A missing branch with a HEAD reflog is a lost existing identity, not
+	// verified first use. Git resolves this path for ordinary and linked roots.
+	logPath, err := exec.Command("git", "-C", root, "rev-parse", "--git-path", "logs/HEAD").Output()
+	if err != nil {
+		return false
+	}
+	path := strings.TrimSpace(string(logPath))
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+	_, err = os.Lstat(path)
+	if !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	refs, err := exec.Command("git", "-C", root, "for-each-ref", "--count=1", "--format=%(refname)").Output()
+	return err == nil && len(refs) == 0
 }
 
 func samePath(left, right string) bool {
