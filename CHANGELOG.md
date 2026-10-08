@@ -30,6 +30,7 @@ Ordinary Home → Workspace onboarding and representative-corpus capacity calibr
 - Validate the frozen release module graph with maintained `go mod tidy -diff`, rejecting any required module changes without rewriting `go.mod` or `go.sum` during packaging.
 - Measure dispatcher observability overhead with symmetric per-call timing and balanced provider batches, using actual nanosecond p50/p99 rather than mismatched averages or truncated milliseconds. Preserve the 5%/50 µs overhead budgets and 1-second p99 bound, and require one real recording per recorder-mode call; production dispatch and metric emission remain unchanged. Retain zero elapsed samples, report the undefined percentage for a zero baseline and enforce its unchanged absolute budget; reject negative elapsed samples.
 - Localize known structural-coverage states in Workspace using the existing RU/EN/zh messages while retaining unknown future values, and align current parser-release instructions with facts/v9 without relabeling historical facts/v8 evidence.
+- Keep Windows parser-worker cancellation tests synchronized with child-audit publication by retrying only native sharing violations within the existing readiness deadline; preserve rejection of other errors and the validated-child cancellation and Wait checks.
 
 
 ## [6.50.3] - 2026-10-07

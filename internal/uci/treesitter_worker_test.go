@@ -1,6 +1,7 @@
 package uci
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -16,6 +17,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -1768,26 +1770,149 @@ func uciWriteTreeSitterChildAudit(t *testing.T) {
 
 func uciRequireTreeSitterChildAudit(t *testing.T, auditFile string) uciTreeSitterWorkerAudit {
 	t.Helper()
+	audit, err := uciReadTreeSitterChildAudit(auditFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return audit
+}
+
+func uciReadTreeSitterChildAudit(auditFile string) (uciTreeSitterWorkerAudit, error) {
 	deadline := time.Now().Add(time.Second)
 	for {
 		encoded, err := os.ReadFile(auditFile)
 		if err == nil {
 			var audit uciTreeSitterWorkerAudit
 			if decodeErr := json.Unmarshal(encoded, &audit); decodeErr != nil {
-				t.Fatalf("decode Tree-sitter child audit: %v", decodeErr)
+				return uciTreeSitterWorkerAudit{}, fmt.Errorf("decode Tree-sitter child audit: %w", decodeErr)
 			}
 			if audit.PID <= 0 || audit.PID == os.Getpid() {
-				t.Fatalf("parser worker PID = %d; expected an external child process", audit.PID)
+				return uciTreeSitterWorkerAudit{}, fmt.Errorf("parser worker PID = %d; expected an external child process", audit.PID)
 			}
-			return audit
+			return audit, nil
 		}
-		if !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("read Tree-sitter child audit %q: %v", auditFile, err)
+		if !uciTreeSitterAuditReadRetryable(err) {
+			return uciTreeSitterWorkerAudit{}, fmt.Errorf("read Tree-sitter child audit %q: %w", auditFile, err)
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("Tree-sitter child did not create audit %q", auditFile)
+			return uciTreeSitterWorkerAudit{}, fmt.Errorf("Tree-sitter child audit %q was not readable before its deadline: %w", auditFile, err)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func uciTreeSitterAuditReadRetryable(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(32))
+}
+
+func TestUCITreeSitterChildAuditReadErrorClassification(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"not yet published", &os.PathError{Op: "open", Path: "child.json", Err: os.ErrNotExist}, true},
+		{"native sharing violation only", &os.PathError{Op: "open", Path: "child.json", Err: syscall.Errno(32)}, runtime.GOOS == "windows"},
+		{"broken pipe", &os.PathError{Op: "open", Path: "child.json", Err: syscall.EPIPE}, false},
+		{"permission denied", &os.PathError{Op: "open", Path: "child.json", Err: os.ErrPermission}, false},
+		{"unrelated read failure", errors.New("audit unavailable"), false},
+		{"no read failure", nil, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := uciTreeSitterAuditReadRetryable(test.err); got != test.want {
+				t.Fatalf("retryable audit read error %v = %t, want %t", test.err, got, test.want)
+			}
+		})
+	}
+}
+
+func TestUCITreeSitterChildAuditRejectsInvalidPublishedData(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		data string
+	}{
+		{"malformed JSON", "{"},
+		{"zero PID", `{"pid":0}`},
+		{"parent PID", fmt.Sprintf(`{"pid":%d}`, os.Getpid())},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			auditFile := filepath.Join(t.TempDir(), "child.json")
+			if err := os.WriteFile(auditFile, []byte(test.data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := uciReadTreeSitterChildAudit(auditFile); err == nil {
+				t.Fatal("accepted invalid published child audit")
+			}
+		})
+	}
+}
+
+func TestUCITreeSitterChildAuditWindowsSharingBoundary(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("requires the native Windows file-sharing boundary")
+	}
+	for _, persistent := range []bool{false, true} {
+		t.Run(fmt.Sprintf("persistent=%t", persistent), func(t *testing.T) {
+			auditFile := filepath.Join(t.TempDir(), "child.json")
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			script := "$ErrorActionPreference='Stop'; $f=[IO.File]::Open('" + strings.ReplaceAll(auditFile, "'", "''") + "',[IO.FileMode]::CreateNew,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None); try { $b=[Text.Encoding]::UTF8.GetBytes(('{\"pid\":'+$PID+'}')); $f.Write($b,0,$b.Length); $f.Flush(); [Console]::Out.WriteLine('locked'); [Console]::Out.Flush(); $null=[Console]::In.ReadLine() } finally { $f.Dispose() }"
+			command := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+			var stderr bytes.Buffer
+			command.Stderr = &stderr
+			stdout, err := command.StdoutPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			stdin, err := command.StdinPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := command.Start(); err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				cancel()
+				_ = command.Wait()
+			}()
+			ready, err := bufio.NewReader(stdout).ReadString('\n')
+			if err != nil || strings.TrimSpace(ready) != "locked" {
+				t.Fatalf("lock child readiness %q err=%v stderr=%s", ready, err, stderr.String())
+			}
+			if _, err := os.ReadFile(auditFile); !errors.Is(err, syscall.Errno(32)) {
+				t.Fatalf("native exclusive audit lock error = %v, want sharing violation", err)
+			}
+			type result struct {
+				audit uciTreeSitterWorkerAudit
+				err   error
+			}
+			done := make(chan result, 1)
+			started := time.Now()
+			go func() {
+				audit, err := uciReadTreeSitterChildAudit(auditFile)
+				done <- result{audit, err}
+			}()
+			if !persistent {
+				time.Sleep(20 * time.Millisecond)
+				if _, err := io.WriteString(stdin, "\n"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			observed := <-done
+			if persistent {
+				if !errors.Is(observed.err, syscall.Errno(32)) || time.Since(started) < time.Second {
+					t.Fatalf("persistent lock returned before readiness deadline or lost last error: %v", observed.err)
+				}
+				if _, err := io.WriteString(stdin, "\n"); err != nil {
+					t.Fatal(err)
+				}
+			} else if observed.err != nil || observed.audit.PID != command.Process.Pid {
+				t.Fatalf("released audit lock returned audit=%+v err=%v, want child PID %d", observed.audit, observed.err, command.Process.Pid)
+			}
+			if err := command.Wait(); err != nil {
+				t.Fatalf("owned lock child completion: %v stderr=%s", err, stderr.String())
+			}
+		})
 	}
 }
 
