@@ -143,7 +143,7 @@ func TestRepositoryGitEnvironmentV3PreservesConfiguration(t *testing.T) {
 	t.Setenv("GIT_CONFIG_COUNT", "1")
 	t.Setenv("GIT_CONFIG_KEY_0", "user.name")
 	t.Setenv("GIT_CONFIG_VALUE_0", "Preserved non-location configuration")
-	output, err := anchorGitCommandV3(root, "config", "--get", "user.name").Output()
+	output, err := anchorGitCommandV3(t.Context(), root, "config", "--get", "user.name").Output()
 	if err != nil || strings.TrimSpace(string(output)) != "Preserved non-location configuration" {
 		t.Fatalf("non-location Git configuration was lost: %v", err)
 	}

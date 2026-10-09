@@ -68,7 +68,7 @@ func TestUCIScannerExcludesTrackedProjectAnchorFromCodeAdmission(t *testing.T) {
 	if err := exec.CommandContext(t.Context(), "git", "-C", root, "add", "--", ".engram-project", "fixture.go").Run(); err != nil {
 		t.Fatalf("track repository fixture: %v", err)
 	}
-	if _, err := projectidentity.DiscoverAnchorV3(root, "repository"); err != nil {
+	if _, err := projectidentity.DiscoverAnchorV3(t.Context(), root, "repository"); err != nil {
 		t.Fatalf("resolve tracked V3 anchor: %v", err)
 	}
 	result, err := NewScanner(ExecGitRunner{}, OSScannerFileSystem{}, ScannerPolicy{}).Scan(t.Context(), AuthorizedRootEvidence{RootPath: root})

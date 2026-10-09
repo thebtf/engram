@@ -12,14 +12,20 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/thebtf/engram/internal/auditcontext"
+	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/config"
+	"github.com/thebtf/engram/internal/grpcserver"
 	loomhandler "github.com/thebtf/engram/internal/handlers/loom"
+	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/module/dispatcher"
 	"github.com/thebtf/engram/internal/module/lifecycle"
@@ -512,6 +518,96 @@ func TestContract_ToolsList_WaitsForDelayedGRPCReadiness(t *testing.T) {
 		if got.Result.Tools[i].Name != name {
 			t.Fatalf("tool[%d]=%q, want %q", i, got.Result.Tools[i].Name, name)
 		}
+	}
+}
+
+func TestContract_ToolsList_V3GitDiscoveryHonorsContext(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, _ := grpcserver.New(anchorDiscoveryHandler{mcp.NewServer(mcp.ServerOptions{Version: "discovery-context-test"})}, auth.NewValidator("context-fixture-token", nil))
+	go func() { _ = backend.Serve(listener) }()
+	t.Cleanup(backend.GracefulStop)
+	for _, mode := range []string{"cancel", "deadline"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			git := func(args ...string) {
+				t.Helper()
+				if output, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+					t.Fatalf("git %v: %v: %s", args, err, output)
+				}
+			}
+			git("init", "--quiet")
+			if err := os.WriteFile(filepath.Join(root, "tracked"), []byte("fixture"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			git("add", "--", "tracked")
+			marker := filepath.Join(root, ".git", "discovery-started")
+			hook := filepath.Join(root, ".git", "discovery-fsmonitor")
+			// The real Git index query blocks in its configured fsmonitor hook.
+			// Redirect the sleeping child so it cannot retain the client's pipes.
+			script := "#!/bin/sh\nprintf started > '" + strings.ReplaceAll(filepath.ToSlash(marker), "'", "'\\''") + "'\nexec sleep 4 >/dev/null 2>&1\n"
+			if err := os.WriteFile(hook, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			git("config", "core.fsmonitor", filepath.ToSlash(hook))
+			_, mod, project := buildV3ContractDispatcher(t, listener.Addr().String())
+			project.Cwd = root
+			project.Env[config.EnvWorkstationToken] = "context-fixture-token"
+			var ctx context.Context
+			var cancel context.CancelFunc
+			if mode == "deadline" {
+				ctx, cancel = context.WithTimeout(t.Context(), time.Second)
+			} else {
+				ctx, cancel = context.WithCancel(t.Context())
+			}
+			defer cancel()
+			cancelled := make(chan time.Time, 1)
+			go func() {
+				<-ctx.Done()
+				cancelled <- time.Now()
+			}()
+			if mode == "cancel" {
+				go func() {
+					ticker := time.NewTicker(5 * time.Millisecond)
+					defer ticker.Stop()
+					for {
+						select {
+						case <-ctx.Done():
+							return
+						case <-ticker.C:
+							if _, err := os.Stat(marker); err == nil {
+								cancel()
+								return
+							}
+						}
+					}
+				}()
+			}
+			started := time.Now()
+			tools, err := mod.ProxyTools(ctx, project)
+			elapsed := time.Since(started)
+			// Let the owned finite hook exit before removing its fixture.
+			t.Cleanup(func() {
+				if remaining := 4*time.Second - time.Since(started); remaining > 0 {
+					time.Sleep(remaining)
+				}
+			})
+			if mode == "cancel" {
+				if _, markerErr := os.Stat(marker); markerErr != nil {
+					t.Fatalf("actual Git index inspection did not reach fsmonitor: %v", markerErr)
+				}
+			}
+			if err == nil || len(tools) != 0 || ctx.Err() == nil {
+				t.Fatalf("Git discovery tools=%d error=%v context=%v elapsed=%s; want cancelled refusal", len(tools), err, ctx.Err(), elapsed)
+			}
+			cancellationLag := time.Since(<-cancelled)
+			if cancellationLag >= 2*time.Second {
+				t.Fatalf("Git discovery tools=%d context=%v cancellation lag=%s; want return before hook completes", len(tools), ctx.Err(), cancellationLag)
+			}
+			t.Logf("actual Git discovery %s: context=%v elapsed=%s cancellation lag=%s tools=%d", mode, ctx.Err(), elapsed, cancellationLag, len(tools))
+		})
 	}
 }
 

@@ -129,7 +129,7 @@ func TestProjectIdentityV3DescriptorSeamUsesFrozenVectors(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(parent, ".engram-project"), valid.Input.Anchor, 0o600); err != nil {
 		t.Fatalf("write parent anchor: %v", err)
 	}
-	if _, err := DiscoverAnchorV3(selectedRoot, "directory"); err == nil {
+	if _, err := DiscoverAnchorV3(t.Context(), selectedRoot, "directory"); err == nil {
 		t.Fatal("directory discovery searched upward from the selected root")
 	}
 }

@@ -1,6 +1,7 @@
 package projectidentity
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,7 +16,7 @@ import (
 // returns an existing valid repository anchor without changing it.
 func InitRepositoryAnchorV3(root, name string) (anchor AnchorV3, created, tracked bool, err error) {
 	selectedRoot, err := filepath.Abs(root)
-	if err != nil || !isSelectedGitRoot(selectedRoot) {
+	if err != nil || !isSelectedGitRoot(context.Background(), selectedRoot) {
 		return AnchorV3{}, false, false, fmt.Errorf("project init requires the current Git root")
 	}
 	path := filepath.Join(selectedRoot, anchorFilenameV3)
@@ -32,13 +33,13 @@ func InitRepositoryAnchorV3(root, name string) (anchor AnchorV3, created, tracke
 		if parseErr != nil || anchor.Scope != "repository" {
 			return AnchorV3{}, false, false, fmt.Errorf("%s already exists but is not a valid repository V3 anchor; refusing to overwrite", path)
 		}
-		_, discoveredErr := DiscoverAnchorV3(selectedRoot, "repository")
+		_, discoveredErr := DiscoverAnchorV3(context.Background(), selectedRoot, "repository")
 		return anchor, false, discoveredErr == nil, nil
 	}
 	if !os.IsNotExist(statErr) {
 		return AnchorV3{}, false, false, fmt.Errorf("inspect %s: %w", path, statErr)
 	}
-	if !repositoryAnchorAbsentV3(selectedRoot) {
+	if !repositoryAnchorAbsentV3(context.Background(), selectedRoot) {
 		return AnchorV3{}, false, false, fmt.Errorf("%s is tracked but missing or Git inspection is unavailable; refusing to replace it", path)
 	}
 	anchor = AnchorV3{Version: 3, ProjectID: uuid.NewString(), Name: name, Scope: "repository"}

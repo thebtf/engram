@@ -156,23 +156,29 @@ func v3InputError(code string) error { return &projectIdentityV3InputError{code:
 // reads nor retains a slug/identity cache: server resolution owns scoped state.
 // A nil descriptor with a nil error is a verified authority-free root usable
 // only for unscoped UCI discovery; it never grants scoped V3 authority.
-func (c *slugCache) ResolveIdentityV3(p muxcore.ProjectContext, clientInstanceID string) (*pb.ProjectIdentityV3, error) {
+func (c *slugCache) ResolveIdentityV3(ctx context.Context, p muxcore.ProjectContext, clientInstanceID string) (*pb.ProjectIdentityV3, error) {
 	c.Forget(p.ID)
-	root, err := repositoryRootV3(p.Cwd)
+	root, err := repositoryRootV3(ctx, p.Cwd)
 	if err != nil {
-		if verifiedAnchorlessDirectoryV3(p.Cwd) {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if verifiedAnchorlessDirectoryV3(ctx, p.Cwd) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	anchor, err := projectidentity.DiscoverAnchorV3(root, "repository")
+	anchor, err := projectidentity.DiscoverAnchorV3(ctx, root, "repository")
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if errors.Is(err, projectidentity.ErrAnchorMissingV3) {
 			return nil, nil
 		}
 		return nil, v3InputError("PROJECT_ANCHOR_INVALID")
 	}
-	remotes, err := normalizedGitRemotesV3(root)
+	remotes, err := normalizedGitRemotesV3(ctx, root)
 	if err != nil {
 		return nil, err
 	}
@@ -444,8 +450,8 @@ func legacySelectedScopeUnchanged(selected, root string) bool {
 	}
 }
 
-func repositoryRootV3(cwd string) (string, error) {
-	command := exec.Command("git", "-C", cwd, gitRevParse, gitShowTopLevel)
+func repositoryRootV3(ctx context.Context, cwd string) (string, error) {
+	command := exec.CommandContext(ctx, "git", "-C", cwd, gitRevParse, gitShowTopLevel)
 	command.Env = projectidentity.RepositoryGitEnvironmentV3()
 	output, err := command.Output()
 	root := strings.TrimSpace(string(output))
@@ -455,7 +461,7 @@ func repositoryRootV3(cwd string) (string, error) {
 	return root, nil
 }
 
-func verifiedAnchorlessDirectoryV3(cwd string) bool {
+func verifiedAnchorlessDirectoryV3(ctx context.Context, cwd string) bool {
 	root := filepath.Clean(strings.TrimSpace(cwd))
 	info, err := os.Stat(root)
 	if err != nil || !info.IsDir() {
@@ -466,14 +472,14 @@ func verifiedAnchorlessDirectoryV3(cwd string) bool {
 			return false
 		}
 	}
-	command := exec.Command("git", "-C", root, gitRevParse, gitShowTopLevel)
+	command := exec.CommandContext(ctx, "git", "-C", root, gitRevParse, gitShowTopLevel)
 	command.Env = projectidentity.RepositoryGitEnvironmentV3()
 	output, err := command.Output()
-	return err != nil && strings.TrimSpace(string(output)) == ""
+	return ctx.Err() == nil && err != nil && strings.TrimSpace(string(output)) == ""
 }
 
-func normalizedGitRemotesV3(root string) ([]string, error) {
-	command := exec.Command("git", "-C", root, "config", "--get-regexp", `^remote\..*\.url$`)
+func normalizedGitRemotesV3(ctx context.Context, root string) ([]string, error) {
+	command := exec.CommandContext(ctx, "git", "-C", root, "config", "--get-regexp", `^remote\..*\.url$`)
 	command.Env = projectidentity.RepositoryGitEnvironmentV3()
 	output, err := command.Output()
 	if err != nil {

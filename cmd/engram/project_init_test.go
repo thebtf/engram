@@ -33,11 +33,11 @@ func TestProjectInitCreatesUntrackedAndReusesTrackedAnchor(t *testing.T) {
 	if err != nil || anchor.Name != "Example Workspace" || anchor.Scope != "repository" {
 		t.Fatalf("created anchor = %+v, %v", anchor, err)
 	}
-	if _, err := projectidentity.DiscoverAnchorV3(root, "repository"); err == nil {
+	if _, err := projectidentity.DiscoverAnchorV3(t.Context(), root, "repository"); err == nil {
 		t.Fatal("untracked anchor was discovered")
 	}
 	gitProjectInit(t, root, "add", "--", ".engram-project")
-	if discovered, err := projectidentity.DiscoverAnchorV3(root, "repository"); err != nil || discovered != anchor {
+	if discovered, err := projectidentity.DiscoverAnchorV3(t.Context(), root, "repository"); err != nil || discovered != anchor {
 		t.Fatalf("tracked discovery = %+v, %v", discovered, err)
 	}
 	output.Reset()
@@ -254,7 +254,7 @@ func TestProjectInitProtectsVisibleSiblingIndexAnchor(t *testing.T) {
 			}
 			if strings.HasPrefix(state, "indexed") {
 				gitProjectInit(t, linked, "add", "--", ".engram-project")
-				anchor, err := projectidentity.DiscoverAnchorV3(linked, "repository")
+				anchor, err := projectidentity.DiscoverAnchorV3(t.Context(), linked, "repository")
 				if err != nil || anchor.ProjectID != "22222222-2222-4222-8222-222222222222" {
 					t.Fatalf("index-tracked producer acceptance = %+v: %v", anchor, err)
 				}
@@ -329,7 +329,7 @@ func TestProjectInitBindsGitEvidenceDespiteLocationOverrides(t *testing.T) {
 					t.Fatal(err)
 				}
 				gitProjectInit(t, linked, "add", "--", ".engram-project")
-				if _, err := projectidentity.DiscoverAnchorV3(linked, "repository"); err != nil {
+				if _, err := projectidentity.DiscoverAnchorV3(t.Context(), linked, "repository"); err != nil {
 					t.Fatal(err)
 				}
 			} else {
@@ -367,7 +367,7 @@ func TestProjectInitBindsGitEvidenceDespiteLocationOverrides(t *testing.T) {
 			t.Setenv("GIT_CONFIG_VALUE_0", "Preserved non-location configuration")
 			var output bytes.Buffer
 			if state == "accepted-anchor" {
-				observed, err := projectidentity.DiscoverAnchorV3(root, "repository")
+				observed, err := projectidentity.DiscoverAnchorV3(t.Context(), root, "repository")
 				if err != nil || observed.ProjectID != "22222222-2222-4222-8222-222222222222" {
 					t.Fatalf("selected accepted anchor was redirected: %v", err)
 				}
@@ -375,7 +375,7 @@ func TestProjectInitBindsGitEvidenceDespiteLocationOverrides(t *testing.T) {
 					t.Fatalf("accepted selected anchor replay = %v: %q", err, output.String())
 				}
 			} else {
-				_, discoveryErr := projectidentity.DiscoverAnchorV3(root, "repository")
+				_, discoveryErr := projectidentity.DiscoverAnchorV3(t.Context(), root, "repository")
 				initErr := runProjectInit([]string{"--name", "Replacement"}, root, &output)
 				t.Logf("selected-root discovery missing=%t initialization refused=%t", errors.Is(discoveryErr, projectidentity.ErrAnchorMissingV3), initErr != nil)
 				if discoveryErr == nil || errors.Is(discoveryErr, projectidentity.ErrAnchorMissingV3) {

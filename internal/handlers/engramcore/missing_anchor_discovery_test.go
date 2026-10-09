@@ -176,7 +176,7 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 					if out, err := exec.Command("git", "-C", linked, "add", "--", ".engram-project").CombinedOutput(); err != nil {
 						t.Fatalf("track sibling anchor: %v: %s", err, out)
 					}
-					anchor, err := projectidentity.DiscoverAnchorV3(linked, "repository")
+					anchor, err := projectidentity.DiscoverAnchorV3(t.Context(), linked, "repository")
 					if err != nil || anchor.ProjectID != "22222222-2222-4222-8222-222222222222" {
 						t.Fatalf("actual producer rejected index-tracked sibling: %+v: %v", anchor, err)
 					}
@@ -205,7 +205,9 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 					t.Skipf("symlinks unavailable: %v", err)
 				}
 			}
-			indexPath, err := exec.Command("git", "-C", root, "rev-parse", "--git-path", "index").Output()
+			indexCommand := exec.Command("git", "-C", root, "rev-parse", "--git-path", "index")
+			indexCommand.Env = projectidentity.RepositoryGitEnvironmentV3()
+			indexPath, err := indexCommand.Output()
 			if err != nil {
 				t.Fatal(err)
 			}
