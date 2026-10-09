@@ -41,11 +41,14 @@ function directInstallerFixture(temp, version = currentPolicyVersion, includeRel
     fs.copyFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), path.join(archiveRoot, "bootstrap-targets.json"));
   } else {
     const bytes = Buffer.from("trusted");
-    fs.writeFileSync(path.join(archiveRoot, "bootstrap-targets.json"), JSON.stringify(createPolicy(version, {
+    const policy = createPolicy(version, {
       "win32-x64": target(version, "engram-windows-amd64.exe", bytes),
       "linux-x64": target(version, "engram-linux-amd64", bytes),
       "darwin-arm64": target(version, "engram-darwin-arm64", bytes),
-    })));
+    });
+    const [major, minor, patch] = version.split("-", 1)[0].split(".").map(Number);
+    policy.build_contract.go_version = major > 6 || (major === 6 && (minor > 50 || (minor === 50 && patch >= 4))) ? "1.26.9" : major === 6 && (minor > 47 || (minor === 47 && patch >= 6)) ? "1.26.6" : "1.25.12";
+    fs.writeFileSync(path.join(archiveRoot, "bootstrap-targets.json"), JSON.stringify(policy));
   }
   if (version === currentPolicyVersion) fs.copyFileSync(path.join(root, "plugin", "engram", "parser-targets.json"), path.join(archiveRoot, "parser-targets.json"));
   const archive = path.join(temp, `release.${extension}`);
@@ -1871,7 +1874,7 @@ test("generator check mode and combined artifact gate accept only the shared tar
     const policyPath = path.join(temp, "bootstrap-targets.json");
     const parserPolicyPath = path.join(temp, "parser-targets.json");
     const dist = path.join(temp, "dist");
-    const currentVersion = parsePolicy(fs.readFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), "utf8")).package_version;
+    const currentVersion = JSON.parse(fs.readFileSync(path.join(root, "plugin", "engram", "package.json"), "utf8")).version;
     fs.mkdirSync(fakeBin, { recursive: true });
     fs.writeFileSync(fakeGo, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then echo 'go version go1.26.9 linux/amd64'; exit 0; fi\nfor arg in \"$@\"; do [[ $arg == ./tools/uci-parser ]] && parser=1; done\nwhile [[ $# -gt 0 ]]; do\n  if [[ $1 == -ldflags ]]; then [[ $2 == *-buildid=* ]] || exit 1; shift 2; continue; fi\n  if [[ $1 == -o ]]; then shift; if [[ ${parser:-0} == 1 ]]; then printf 'parser-windows-amd64' > \"$1\"; else printf '%s-%s' \"$GOOS\" \"$GOARCH\" > \"$1\"; fi; exit 0; fi\n  shift\ndone\nexit 1\n", { mode: 0o755 });
     const fakeCompiler = path.join(fakeBin, "cc");
