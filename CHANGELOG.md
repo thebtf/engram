@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve a truly nil unconfigured parser and derive UCI artifact extraction identity from the server-authorized selected analysis profile, not global parser availability. Add the server-owned `BindCodeContextResponse.extraction_profile_digest` at protobuf tag 6; validate and retain it through the native adapter and rebind. Missing or unrecognized profiles and parser-required mismatches refuse before index admission without changing schema, profile rows, parser policy or publication guards. This internal contract requires coordinated native-client/server delivery. Bounded Go-only QA proves publication, lexical query, a resolved call edge, stored source read and profile/artifact digest equality in one View; full browser, semantic parser/provider, installed memory/history and release remain unproven.
+
 
 ## [6.51.0] - 2026-10-08
 

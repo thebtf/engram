@@ -5963,8 +5963,10 @@ type BindCodeContextResponse struct {
 	IndexScope    *CodeIndexScope        `protobuf:"bytes,3,opt,name=index_scope,json=indexScope,proto3" json:"index_scope,omitempty"`
 	LocalRootId   string                 `protobuf:"bytes,4,opt,name=local_root_id,json=localRootId,proto3" json:"local_root_id,omitempty"`
 	WorkstationId string                 `protobuf:"bytes,5,opt,name=workstation_id,json=workstationId,proto3" json:"workstation_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Server-selected analysis profile's extraction contract; never client input.
+	ExtractionProfileDigest string `protobuf:"bytes,6,opt,name=extraction_profile_digest,json=extractionProfileDigest,proto3" json:"extraction_profile_digest,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *BindCodeContextResponse) Reset() {
@@ -6028,6 +6030,13 @@ func (x *BindCodeContextResponse) GetLocalRootId() string {
 func (x *BindCodeContextResponse) GetWorkstationId() string {
 	if x != nil {
 		return x.WorkstationId
+	}
+	return ""
+}
+
+func (x *BindCodeContextResponse) GetExtractionProfileDigest() string {
+	if x != nil {
+		return x.ExtractionProfileDigest
 	}
 	return ""
 }
@@ -7965,14 +7974,15 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\x16BindCodeContextRequest\x12*\n" +
 	"\x11client_session_id\x18\x01 \x01(\tR\x0fclientSessionId\x12B\n" +
 	"\x11requested_context\x18\x02 \x01(\v2\x15.engram.v1.ContextRefR\x10requestedContext\x12%\n" +
-	"\x0econtext_handle\x18\x03 \x01(\tR\rcontextHandle\"\xf8\x01\n" +
+	"\x0econtext_handle\x18\x03 \x01(\tR\rcontextHandle\"\xb4\x02\n" +
 	"\x17BindCodeContextResponse\x12%\n" +
 	"\x0econtext_handle\x18\x01 \x01(\tR\rcontextHandle\x12/\n" +
 	"\acontext\x18\x02 \x01(\v2\x15.engram.v1.ContextRefR\acontext\x12:\n" +
 	"\vindex_scope\x18\x03 \x01(\v2\x19.engram.v1.CodeIndexScopeR\n" +
 	"indexScope\x12\"\n" +
 	"\rlocal_root_id\x18\x04 \x01(\tR\vlocalRootId\x12%\n" +
-	"\x0eworkstation_id\x18\x05 \x01(\tR\rworkstationId\"\xe6\x01\n" +
+	"\x0eworkstation_id\x18\x05 \x01(\tR\rworkstationId\x12:\n" +
+	"\x19extraction_profile_digest\x18\x06 \x01(\tR\x17extractionProfileDigest\"\xe6\x01\n" +
 	"\x15CodeIndexIntentTarget\x12*\n" +
 	"\x11client_session_id\x18\x01 \x01(\tR\x0fclientSessionId\x12%\n" +
 	"\x0econtext_handle\x18\x02 \x01(\tR\rcontextHandle\x12/\n" +

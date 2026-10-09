@@ -6,7 +6,7 @@ Status: Working supporting contract for feature 010. The intake source remains r
 
 # API, внутренние интерфейсы и интеграция с агентами
 
-Все новые имена/поля в этом документе — проект контракта. Они ещё не зарегистрированы в runtime. Один существующий EngramService получает private additions; отдельный MCP HTTP server не появляется.
+Ниже сохранён проект контракта feature 010. Реализованные уточнения отмечены отдельно; остальные проектные имена/поля сами по себе не доказывают регистрацию в runtime. Один существующий EngramService получает private additions; отдельный MCP HTTP server не появляется.
 
 ## Один набор агентских инструментов
 
@@ -164,6 +164,20 @@ Parse products — untrusted computational input: server проверяет boun
 Существующий EngramService получает методы Bind/BeginIndex/StageIndex/FinalizeIndex/QueryCode/ExploreCode либо эквивалентные scoped additions. Точные protobuf номера выбираются по актуальному файлу; существующие field numbers не переиспользуются. Нет второго `.proto` service с дублированными identity/auth/receipt системами.
 Large data идут в bounded complete-record frames под caps; первый frame привязывает build/source/checkout/epoch, каждый следующий обязан совпадать. UCI admission v1 не дробит один artifact или один replace-all edge record и не продолжает build несколькими Stage batches: не представимый целиком record/build получает `INDEX_CAPACITY_EXCEEDED` без публикации. Финальный explicit manifest count+digest отделён от EOF. Cancellation/partial upload оставляют предыдущий published view неизменным.
 Index publication metadata — обычное состояние derived index, не новый IEP immutable decision receipt для каждой правки файла. Provenance сохраняется достаточно для воспроизводимости; ceremony-ledger не нужен.
+
+### Реализовано: выбранный extraction profile в Bind
+
+`BindCodeContextResponse.extraction_profile_digest` — строка с protobuf tag `6`. Сервер возвращает `ParserBundleDigest` уже загруженной неизменяемой строки `UCIAnalysisProfile` выбранного авторизованного контекста. Это метаданные ответа, не вход клиента, не новый selector и не digest исполняемого parser bundle. Существующие номера полей, schema, profile rows и admission guard не меняются.
+
+Адаптер принимает только `sha256:` с 64 строчными hex-символами и переносит значение в `IndexBinding.ExtractionProfileDigest` типа `IndexDigest`. Clone сохраняет значение; rebind отклоняет изменение выбранного digest вместе с остальными метаданными binding. Producer выбирает extraction contract по этому binding, а не по наличию глобального parser:
+
+- Поддержанный Go profile сохраняет Go extraction digest даже при доступном parser. Без настроенного parser конструктор оставляет parser interface действительно `nil`.
+- Выбранный Tree-sitter semantic contract требует ненулевой parser; проверка установленного bundle и startup Parse остаются обязательными. Файл, требующий parser, не публикуется под Go-only profile даже при доступном parser.
+- Отсутствующий, некорректный или неизвестный выбранный digest, а также требуемый, но отсутствующий parser прекращают подготовку до `BeginIndex`; `StageIndex` и `FinalizeIndex` не вызываются.
+
+Это внутренний контракт согласованной пары native client/server. Поле добавлено без перенумерации protobuf, но исправленный клиент отклоняет ответ старого сервера без digest. Доставлять клиент и сервер нужно вместе; fallback на локальную догадку о profile не предусмотрен.
+
+Положительное доказательство от 2026-10-09 ограничено Go-only native-путём: опубликованный View после barrier, lexical query, resolved call edge и stored source read относятся к одному View; реальная пара authorized profile/artifact digest совпала в собственной QA database. 11 выбранных тестов и две последовательные сборки относятся к тому же source snapshot. Это не доказательство full browser UI, реального semantic parser/provider, installed memory/history или release. Точная привязка входов и receipts хранится в существующем `uci-selected-profile-01a0db09-source-handoff.json`.
 
 ## REST и UI
 

@@ -1345,13 +1345,28 @@ func uciClientTestScope(checkoutID, incarnationID string) *pb.CodeIndexScope {
 	}
 }
 
+func TestUCIClientSelectedExtractionProfileBinding(t *testing.T) {
+	for _, digest := range []string{uciClientTestFrameDigest, "", "bad", "sha256:" + strings.Repeat("A", 64)} {
+		response := uciClientTestBindResponse(&pb.BindCodeContextRequest{ClientSessionId: "client-a"})
+		response.ExtractionProfileDigest = digest
+		binding, err := uciClientIndexBindingFromBindResponse(response)
+		if digest != uciClientTestFrameDigest {
+			require.Error(t, err)
+			continue
+		}
+		require.NoError(t, err)
+		require.Equal(t, uci.IndexDigest(digest), binding.ExtractionProfileDigest)
+	}
+}
+
 func uciClientTestBindResponse(request *pb.BindCodeContextRequest) *pb.BindCodeContextResponse {
 	response := &pb.BindCodeContextResponse{
-		ContextHandle: "context-handle-" + request.GetClientSessionId(),
-		Context:       request.GetRequestedContext(),
-		IndexScope:    uciClientTestScopeA(),
-		LocalRootId:   uciClientTestLocalRootID,
-		WorkstationId: uciClientTestWorkstationID,
+		ContextHandle:           "context-handle-" + request.GetClientSessionId(),
+		Context:                 request.GetRequestedContext(),
+		IndexScope:              uciClientTestScopeA(),
+		LocalRootId:             uciClientTestLocalRootID,
+		WorkstationId:           uciClientTestWorkstationID,
+		ExtractionProfileDigest: uciClientTestFrameDigest,
 	}
 	if request.GetContextHandle() != "" {
 		response.ContextHandle = request.GetContextHandle()
@@ -1383,9 +1398,10 @@ func uciClientTestIndexBinding(reference *pb.ContextRef) uci.IndexBinding {
 			CheckoutID:    scope.GetCheckoutId(),
 			IncarnationID: scope.GetIncarnationId(),
 		},
-		ProfileID:     scope.GetAnalysisProfileId(),
-		LocalRootID:   uciClientTestLocalRootID,
-		WorkstationID: uciClientTestWorkstationID,
+		ProfileID:               scope.GetAnalysisProfileId(),
+		LocalRootID:             uciClientTestLocalRootID,
+		WorkstationID:           uciClientTestWorkstationID,
+		ExtractionProfileDigest: uci.IndexDigest(uciClientTestFrameDigest),
 	}
 	if reference != nil {
 		contextRef := uciClientTestDomainContext(reference)

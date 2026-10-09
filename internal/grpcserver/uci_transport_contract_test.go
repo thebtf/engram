@@ -141,6 +141,7 @@ func TestUCITransportContractRequiresScopedAdditions(t *testing.T) {
 		uciTransportFieldSpec{name: "index_scope", number: 3, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "engram.v1.CodeIndexScope"},
 		uciTransportFieldSpec{name: "local_root_id", number: 4, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
 		uciTransportFieldSpec{name: "workstation_id", number: 5, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "extraction_profile_digest", number: 6, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
 	)
 	requireUCITransportFields(t, file, "CodeIndexIntentTarget",
 		uciTransportFieldSpec{name: "client_session_id", number: 1, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},

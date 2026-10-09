@@ -75,6 +75,8 @@ type IndexBinding struct {
 	ProfileID     string
 	LocalRootID   string
 	WorkstationID string
+	// ExtractionProfileDigest is server-owned analysis-profile metadata, not a selector.
+	ExtractionProfileDigest IndexDigest
 }
 
 // Clone returns a defensive copy of the index binding.

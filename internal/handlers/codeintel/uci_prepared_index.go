@@ -39,7 +39,7 @@ type UCIPreparedTreeSitterParser interface {
 var _ UCIPreparedTreeSitterParser = (*uci.TreeSitterWorker)(nil)
 
 // UCIPreparedIndexConfig binds one prepared index collaborator to the exact
-// daemon identity, selected server parser bundle, and local operational
+// daemon identity, installed parser bundle, and local operational
 // evidence it is allowed to use.
 type UCIPreparedIndexConfig struct {
 	WorkstationID      string
@@ -369,8 +369,15 @@ func (collaborator *UCIPreparedIndexCollaborator) prepareAdmissionPlan(ctx conte
 	if err != nil {
 		return uciPreparedAdmissionPlan{}, fmt.Errorf("uci prepared index: configure Go admission profile: %w", err)
 	}
-	if collaborator.treeSitterParser != nil {
-		goProfile.ExtractionProfileDigest = uci.TreeSitterSemanticContractDigest()
+	switch local.binding.ExtractionProfileDigest {
+	case goProfile.ExtractionProfileDigest:
+	case uci.TreeSitterSemanticContractDigest():
+		if collaborator.treeSitterParser == nil {
+			return uciPreparedAdmissionPlan{}, fmt.Errorf("uci prepared index: %s for selected semantic profile", uciPreparedTreeSitterUnavailableMessage)
+		}
+		goProfile.ExtractionProfileDigest = local.binding.ExtractionProfileDigest
+	default:
+		return uciPreparedAdmissionPlan{}, fmt.Errorf("uci prepared index: selected extraction profile is unavailable")
 	}
 
 	files := append([]uci.ScannerFile(nil), scan.Files...)
@@ -521,6 +528,9 @@ func uciPreparedPrepareGoAdmissionFile(collaborator *UCIPreparedIndexCollaborato
 }
 
 func uciPreparedPrepareTreeSitterAdmissionFile(collaborator *UCIPreparedIndexCollaborator, input uciPreparedAdmissionInput) (uciPreparedAdmissionFile, error) {
+	if input.goProfile.ExtractionProfileDigest != uci.TreeSitterSemanticContractDigest() {
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: %s for %q in selected extraction profile", uciPreparedTreeSitterUnavailableMessage, input.file.Path)
+	}
 	return collaborator.prepareTreeSitterAdmissionFile(input.ctx, input.sourceID, input.analysisProfileID, input.file, input.prepared, input.capability.treeSitterLanguage)
 }
 

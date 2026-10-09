@@ -332,10 +332,14 @@ func newUCIRuntime(core *engramcore.Module, configuration UCIRuntimeConfig) (*uc
 		}
 		core.ConfigureRegistrationParser()
 	}
+	var preparedParser UCIPreparedTreeSitterParser
+	if treeSitterParser != nil {
+		preparedParser = treeSitterParser
+	}
 	return &uciRuntime{
 		core:                     core,
 		config:                   configuration,
-		treeSitterParser:         treeSitterParser,
+		treeSitterParser:         preparedParser,
 		scannerAggregateObserver: newUCIPreparedScannerAggregateObserverFromEnvironment(),
 		authorizedTarget:         make(map[uciRuntimeAuthorizedTargetKey]uciRuntimeAuthorizedTarget),
 		watchers:                 make(map[string]uciRuntimeWatcher),

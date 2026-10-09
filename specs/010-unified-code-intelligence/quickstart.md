@@ -2,6 +2,14 @@
 
 This is a future implementation and acceptance guide, not an execution receipt. **No command in this document was run during the Phase 0/1 planning pass.** It must not be used to claim UCI implementation, installation, or release readiness before the described evidence exists.
 
+## Selected-profile repair: bounded evidence, 2026-10-09
+
+The owning Ops receipt `.agent/intake/engram-steering-2026-10-09-r1/ops/profile-repair-qa-r1/ROOT-TECHNICAL-ACCEPTANCE.json` records 11 selected tests passing in three packages, two serial native/server builds with exit 0, and real Go-only registration/indexing to a published View after the same-run barrier. Lexical query, a resolved call edge, and stored source read use that same View; a read-only observation in the own QA database confirms authorized profile/artifact extraction-digest equality and corpus conservation. The existing source handoff binds reuse to the exact base, retained patch and tested snapshot. Earlier failed or incomplete attempts remain historical evidence, not this positive proof.
+
+For the repaired indexing path, native client and server must both implement `BindCodeContextResponse.extraction_profile_digest` (protobuf tag 6). The server supplies the authorized selected profile's extraction contract; the client validates and retains it, and the producer must not infer it from global parser availability. A missing field from an older server is refused, not a Go or semantic fallback. See [the implemented Bind contract](supporting-contracts/api-contracts.md#реализовано-выбранный-extraction-profile-в-bind).
+
+This receipt proves only the bounded technical Go repair. It does not close full browser UI, real semantic parser/provider, installed memory/history, ordinary composed-consumer acceptance or release delivery. Do not repeat unchanged Ops tests/builds/runtime proof; changed executable inputs or environment require the owning evidence-impact decision. The gates below retain their own scope and are not marked complete by this repair.
+
 ## Safety Boundary
 
 - Use a disposable native Windows environment, an isolated PostgreSQL 17 fixture/database with pgvector, and disposable Git repositories/worktrees. Never point UCI migration, scanner, or recovery tests at production data.

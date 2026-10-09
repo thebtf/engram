@@ -580,6 +580,7 @@ func sameUCIResolvedIndexIdentity(previous, current uci.IndexBinding) bool {
 		previous.Scope.CheckoutID == current.Scope.CheckoutID &&
 		previous.Scope.IncarnationID == current.Scope.IncarnationID &&
 		previous.ProfileID == current.ProfileID &&
+		previous.ExtractionProfileDigest == current.ExtractionProfileDigest &&
 		previous.LocalRootID == current.LocalRootID &&
 		previous.WorkstationID == current.WorkstationID
 }
@@ -604,6 +605,9 @@ func uciClientIndexBindingFromBindResponse(response *pb.BindCodeContextResponse)
 	if response == nil {
 		return uci.IndexBinding{}, errUCIClientEmptyResponse
 	}
+	if !validUCIClientSHA256Digest(response.GetExtractionProfileDigest()) {
+		return uci.IndexBinding{}, errUCIClientInvalidResponse
+	}
 	scope := response.GetIndexScope()
 	binding := uci.IndexBinding{
 		Scope: uci.IndexScope{
@@ -611,9 +615,10 @@ func uciClientIndexBindingFromBindResponse(response *pb.BindCodeContextResponse)
 			CheckoutID:    scope.GetCheckoutId(),
 			IncarnationID: scope.GetIncarnationId(),
 		},
-		ProfileID:     scope.GetAnalysisProfileId(),
-		LocalRootID:   response.GetLocalRootId(),
-		WorkstationID: response.GetWorkstationId(),
+		ProfileID:               scope.GetAnalysisProfileId(),
+		LocalRootID:             response.GetLocalRootId(),
+		WorkstationID:           response.GetWorkstationId(),
+		ExtractionProfileDigest: uci.IndexDigest(response.GetExtractionProfileDigest()),
 	}
 	if context := response.GetContext(); context != nil {
 		contextRef := uci.ContextRef{
