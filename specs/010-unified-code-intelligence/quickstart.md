@@ -22,7 +22,7 @@ This receipt proves only the bounded technical Go repair. It does not close full
 Record the following before running the first RED fixture:
 
 1. Candidate source identity: feature branch and exact commit/tree.
-2. Go 1.26.6, Git, a supported Windows amd64 toolchain, and the project dependencies that exercise the existing daemon/server path. Typical inspection commands are:
+2. Go 1.26.9, Git, a supported Windows amd64 toolchain, and the project dependencies that exercise the existing daemon/server path. Typical inspection commands are:
 
    ```powershell
    go version

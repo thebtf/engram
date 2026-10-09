@@ -69,6 +69,21 @@ func TestInitRepositoryAnchorV3RefusesConflictingFilesystemAndGitState(t *testin
 				t.Fatal(err)
 			}
 		}, "tracked but missing"},
+		{"staged deletion", func(t *testing.T, root string) {
+			t.Helper()
+			if err := os.WriteFile(filepath.Join(root, anchorFilenameV3), []byte(validRepositoryAnchorV3), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runGit(t, root, "add", "--", anchorFilenameV3)
+			runGit(t, root, "-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Tracked anchor")
+			runGit(t, root, "rm", "--quiet", "--", anchorFilenameV3)
+		}, "tracked but missing"},
+		{"Git index unreadable", func(t *testing.T, root string) {
+			t.Helper()
+			if err := os.Mkdir(filepath.Join(root, ".git", "index"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}, "refusing to replace"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -76,6 +91,11 @@ func TestInitRepositoryAnchorV3RefusesConflictingFilesystemAndGitState(t *testin
 			tc.prepare(t, root)
 			if _, _, _, err := InitRepositoryAnchorV3(root, "new"); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("refusal = %v, want %s", err, tc.want)
+			}
+			if tc.name == "staged deletion" || tc.name == "Git index unreadable" {
+				if _, err := os.Lstat(filepath.Join(root, anchorFilenameV3)); !os.IsNotExist(err) {
+					t.Fatalf("refused initialization minted a replacement anchor: %v", err)
+				}
 			}
 		})
 	}
@@ -111,5 +131,23 @@ func TestInitRepositoryAnchorV3RefusesSymlink(t *testing.T) {
 	}
 	if _, _, _, err := InitRepositoryAnchorV3(root, "new"); err == nil || !strings.Contains(err.Error(), "not a regular file") {
 		t.Fatalf("symlink refusal = %v", err)
+	}
+}
+
+func TestRepositoryGitEnvironmentV3PreservesConfiguration(t *testing.T) {
+	root := t.TempDir()
+	runGit(t, root, "init", "--quiet")
+	for _, name := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE"} {
+		t.Setenv(name, "foreign-location")
+	}
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "user.name")
+	t.Setenv("GIT_CONFIG_VALUE_0", "Preserved non-location configuration")
+	output, err := anchorGitCommandV3(t.Context(), root, "config", "--get", "user.name").Output()
+	if err != nil || strings.TrimSpace(string(output)) != "Preserved non-location configuration" {
+		t.Fatalf("non-location Git configuration was lost: %v", err)
+	}
+	if os.Getenv("GIT_DIR") != "foreign-location" || os.Getenv("GIT_CONFIG_VALUE_0") != "Preserved non-location configuration" {
+		t.Fatal("Git proof mutated the process environment")
 	}
 }

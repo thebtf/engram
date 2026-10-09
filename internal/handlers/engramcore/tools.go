@@ -64,7 +64,9 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 		return nil, err
 	}
 	token := m.envFor(p, config.EnvWorkstationToken)
-	v3Identity, v3Enabled, err := m.v3Identity(ctx, p)
+	discoveryCtx, cancel := context.WithTimeout(ctx, proxyToolsDiscoveryTimeout)
+	defer cancel()
+	v3Identity, v3Enabled, err := m.v3Identity(discoveryCtx, p)
 	if err != nil {
 		return nil, &module.RequiredProxyToolsError{Cause: err}
 	}
@@ -74,8 +76,6 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 		return nil, &module.RequiredProxyToolsError{Cause: fmt.Errorf("gRPC connect: %w", err)}
 	}
 	client := pb.NewEngramServiceClient(conn)
-	discoveryCtx, cancel := context.WithTimeout(ctx, proxyToolsDiscoveryTimeout)
-	defer cancel()
 
 	request := &pb.InitializeRequest{ClientName: "engram-daemon", ClientVersion: daemonClientVersion}
 	unscopedUCIDiscovery := v3Enabled && v3Identity == nil
@@ -83,7 +83,7 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 		request.ProjectIdentityV3 = v3Identity
 		discoveryCtx = daemonComparisonContextV3(discoveryCtx)
 	} else if !v3Enabled {
-		project, projectIdentity, identityErr := m.proxyV2Identity(ctx, p)
+		project, projectIdentity, identityErr := m.proxyV2Identity(discoveryCtx, p)
 		if identityErr != nil {
 			return nil, &module.RequiredProxyToolsError{Cause: fmt.Errorf("project identity v2: %w", identityErr)}
 		}
@@ -353,7 +353,7 @@ func (m *Module) v3Identity(ctx context.Context, p muxcore.ProjectContext) (*pb.
 	if legacy {
 		return nil, false, nil
 	}
-	identity, err := m.cache.ResolveIdentityV3(p, m.v3ClientInstanceID)
+	identity, err := m.cache.ResolveIdentityV3(ctx, p, m.v3ClientInstanceID)
 	if err == nil {
 		return identity, true, nil
 	}

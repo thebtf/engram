@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Preserve a truly nil unconfigured parser and derive UCI artifact extraction identity from the server-authorized selected analysis profile, not global parser availability. Add the server-owned `BindCodeContextResponse.extraction_profile_digest` at protobuf tag 6; validate and retain it through the native adapter and rebind. Missing or unrecognized profiles and parser-required mismatches refuse before index admission without changing schema, profile rows, parser policy or publication guards. This internal contract requires coordinated native-client/server delivery. Bounded Go-only QA proves publication, lexical query, a resolved call edge, stored source read and profile/artifact digest equality in one View; full browser, semantic parser/provider, installed memory/history and release remain unproven.
+- Integrate the accepted v6.50.5 identity, cancellation, installer and Go 1.26.9 security inputs with the prospective 6.51.0 Core/console source. Preserve the v6.50.5 generated bootstrap/parser policies without relabeling their asset hashes; they remain incompatible with the prospective package until canonical regeneration from frozen source. This source-only composition is not a released or installable 6.51.0 package.
 
 
 ## [6.51.0] - 2026-10-08
@@ -36,6 +37,29 @@ Ordinary Home → Workspace onboarding and representative-corpus capacity calibr
 - Localize known structural-coverage states in Workspace using the existing RU/EN/zh messages while retaining unknown future values, and align current parser-release instructions with facts/v9 without relabeling historical facts/v8 evidence.
 - Keep Windows parser-worker cancellation tests synchronized with child-audit publication by retrying only native sharing violations within the existing readiness deadline; preserve rejection of other errors and the validated-child cancellation and Wait checks.
 
+## [6.50.5] - 2026-10-09
+
+Correct the release-specific historical-installer fixtures and regenerate the version-bound client/parser policies with Go 1.26.9. Carry forward the accepted onboarding and security repairs from the immutable failed `v6.50.4` tag without changing installer validation, dependencies, migrations or OpenClaw. Canonical raw-policy coherence and the full release Node gate are verified locally; publication and installed-memory recovery remain unproven.
+
+### Fixed
+
+- Build historical direct-installer test archives with their release-specific Go contract instead of the current policy factory's Go 1.26.9 tuple. Preserve the real shell and PowerShell boundary: a relay-less v6.48 archive is accepted, while v6.49 requires the OMP relay helper.
+- Bind the synthetic generator/archive gate to the current package version, so pending canonical policy regeneration cannot select a stale fixture version. Keep actual generated-policy, raw-asset and archive validation unchanged.
+
+## [6.50.4] - 2026-10-08
+
+The accepted missing-anchor onboarding and security repairs reached immutable tag `v6.50.4` at `59d8eebe4457df8dfff58d83666180bd766c6887`. Release workflow `37976473572` failed at "Test plugin scripts" (337 tests: 332 passed, 1 failed, 4 skipped), before policy verification, build/sign/upload or a GitHub release object. Preserve this failed tag and its evidence; v6.50.5 is the next patch. This version adds no migration, historical-memory adoption or OpenClaw release and does not establish installed-client recovery.
+
+### Fixed
+
+- Keep V3 onboarding tools reachable in existing Git repositories that have no anchor. Distinguish genuine absence from malformed, untracked, unreadable, dangling-symlink and tracked-but-deleted anchors; retain those refusals, backend authentication, and the prohibition on unresolved project-scoped memory access. Discovery creates no project or anchor and does not migrate existing memory.
+- Refuse fresh onboarding and offline anchor replacement when a committed `.engram-project` has a staged deletion, even after it disappears from the index. Share the index/HEAD absence proof between discovery and initialization, and refuse initialization when Git inspection fails; preserve the existing UUID and repository index.
+- Verify a missing anchor against a resolved HEAD commit or a genuinely unborn branch without prior HEAD/reference history. A malformed branch ref or lost current-branch ref cannot make a committed repository look newly unonboarded, and offline initialization refuses a replacement UUID.
+- Refuse a new anchor when another visible ref tip or linked/detached worktree HEAD in the same Git repository carries `.engram-project`, including packed refs and pre-anchor branches. Inspect only bounded visible evidence, never copy or select the sibling identity automatically, and keep genuinely never-anchored repositories eligible for onboarding.
+- Include index-tracked, not-yet-committed anchors in bounded sibling-worktree evidence, matching actual V3 discovery and registration input requirements. Preserve untracked-only sibling files, refuse unreadable indexes, and parse Git's NUL-delimited worktree paths without quoted/newline path confusion.
+- Bind V3 Git discovery, anchor tracking, ref/worktree/index evidence and descriptor remotes to the selected repository rather than inherited repository-location overrides. Remove only Git's directory, worktree, index, object-directory, alternate-object-directory, common-directory and namespace overrides from each child command; preserve other Git configuration and the original process environment.
+- Apply the existing tools/list discovery deadline before V3 identity inspection, and propagate request cancellation through selected-root, anchor, ref/worktree/index and remote Git commands. Cancelled or timed-out inspection refuses discovery without granting unscoped authority or changing identity evidence.
+- Raise the maintained Go 1.26 toolchain to 1.26.9 and `golang.org/x/net` to v0.60.0 for the twelve reachable advisories disclosed on 2026-10-08. Align canonical producer and installer contracts; retain release-specific validation of regenerated raw client/parser assets. Update only the dependency versions required by the upstream module graph, without changing V3 identity behavior or weakening security gates.
 
 ## [6.50.3] - 2026-10-07
 
@@ -2174,8 +2198,10 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.51.0...HEAD
-[6.51.0]: https://github.com/thebtf/engram/compare/v6.50.3...v6.51.0
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.5...HEAD
+[6.51.0]: https://github.com/thebtf/engram/compare/v6.50.5...v6.51.0
+[6.50.5]: https://github.com/thebtf/engram/compare/v6.50.4...v6.50.5
+[6.50.4]: https://github.com/thebtf/engram/compare/v6.50.3...v6.50.4
 [6.50.3]: https://github.com/thebtf/engram/compare/v6.50.3-rc.1...v6.50.3
 [6.50.3-rc.1]: https://github.com/thebtf/engram/compare/v6.50.2...v6.50.3-rc.1
 [6.50.2]: https://github.com/thebtf/engram/compare/v6.50.1...v6.50.2

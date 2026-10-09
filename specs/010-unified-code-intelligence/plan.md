@@ -19,7 +19,7 @@ After Source, Checkout, and View authorization, every code search, graph result,
 
 ## Technical Context
 
-**Language/Version**: Go 1.26.6. JavaScript hooks and the TypeScript/OpenClaw consumer are compatibility boundaries. UCI-1 parses Go, JavaScript, TypeScript, and TSX. Its structured/text minimum is Markdown headings/links, JSON/YAML keys and local references, SQL DDL as text only, and OpenAPI paths, operations, and local references without fetching external refs.
+**Language/Version**: Go 1.26.9. JavaScript hooks and the TypeScript/OpenClaw consumer are compatibility boundaries. UCI-1 parses Go, JavaScript, TypeScript, and TSX. Its structured/text minimum is Markdown headings/links, JSON/YAML keys and local references, SQL DDL as text only, and OpenAPI paths, operations, and local references without fetching external refs.
 
 **Primary Dependencies**: Existing GORM, pgx, `pgvector-go`, `fsnotify`, protobuf/gRPC, and the existing `internal/embedding` provider client. Go extraction uses the standard-library AST. JS/TS/TSX use the official `github.com/tree-sitter/go-tree-sitter` binding and pinned JavaScript/TypeScript grammars in a bundled local parser worker; their current upstream licenses are MIT. Parser/runtime/grammar/toolchain revisions become one `parser_bundle_digest`; no runtime `latest`, repository plugin, package install, source-script execution, Python daemon, graph server, Qdrant, or new network service is allowed.
 
