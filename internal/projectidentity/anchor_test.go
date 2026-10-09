@@ -40,7 +40,7 @@ func TestDiscoverAnchorV3UsesOnlySelectedRoot(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directoryRoot, anchorFilenameV3), []byte(`{"version":3,"project_id":"22222222-2222-4222-8222-222222222222","name":"directory-workspace","scope":"directory"}`), 0o600); err != nil {
 		t.Fatalf("write directory anchor: %v", err)
 	}
-	if _, err := DiscoverAnchorV3(directoryRoot, "directory"); err != nil {
+	if _, err := DiscoverAnchorV3(t.Context(), directoryRoot, "directory"); err != nil {
 		t.Fatalf("discover explicit directory anchor: %v", err)
 	}
 
@@ -48,7 +48,7 @@ func TestDiscoverAnchorV3UsesOnlySelectedRoot(t *testing.T) {
 	if err := os.Mkdir(selectedRoot, 0o700); err != nil {
 		t.Fatalf("make nested root: %v", err)
 	}
-	if _, err := DiscoverAnchorV3(selectedRoot, "directory"); err == nil {
+	if _, err := DiscoverAnchorV3(t.Context(), selectedRoot, "directory"); err == nil {
 		t.Fatal("directory discovery searched upward")
 	}
 }
@@ -60,7 +60,7 @@ func TestDiscoverAnchorV3RepositoryRequiresTrackedSelectedRoot(t *testing.T) {
 		t.Fatalf("write repository anchor: %v", err)
 	}
 	runGit(t, root, "add", anchorFilenameV3)
-	if _, err := DiscoverAnchorV3(root, "repository"); err != nil {
+	if _, err := DiscoverAnchorV3(t.Context(), root, "repository"); err != nil {
 		t.Fatalf("discover tracked repository anchor: %v", err)
 	}
 
@@ -68,7 +68,7 @@ func TestDiscoverAnchorV3RepositoryRequiresTrackedSelectedRoot(t *testing.T) {
 	if err := os.Mkdir(nested, 0o700); err != nil {
 		t.Fatalf("make nested directory: %v", err)
 	}
-	if _, err := DiscoverAnchorV3(nested, "repository"); err == nil {
+	if _, err := DiscoverAnchorV3(t.Context(), nested, "repository"); err == nil {
 		t.Fatal("repository discovery accepted a non-root selection")
 	}
 
@@ -77,7 +77,7 @@ func TestDiscoverAnchorV3RepositoryRequiresTrackedSelectedRoot(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(untrackedRoot, anchorFilenameV3), []byte(validRepositoryAnchorV3), 0o600); err != nil {
 		t.Fatalf("write untracked repository anchor: %v", err)
 	}
-	if _, err := DiscoverAnchorV3(untrackedRoot, "repository"); err == nil {
+	if _, err := DiscoverAnchorV3(t.Context(), untrackedRoot, "repository"); err == nil {
 		t.Fatal("repository discovery accepted an untracked anchor")
 	}
 }

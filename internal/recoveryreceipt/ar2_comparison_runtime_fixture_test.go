@@ -378,7 +378,7 @@ func TestAR2FixtureServerBuildPreflight(t *testing.T) {
 
 func TestAR2DaemonRepositoryBuildsAcceptedV3Descriptor(t *testing.T) {
 	repo := ar2DaemonRepository(t, t.TempDir())
-	anchor, err := projectidentity.DiscoverAnchorV3(repo, "repository")
+	anchor, err := projectidentity.DiscoverAnchorV3(t.Context(), repo, "repository")
 	if err != nil {
 		t.Fatalf("discover daemon repository V3 anchor: %v", err)
 	}

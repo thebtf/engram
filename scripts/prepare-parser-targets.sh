@@ -18,7 +18,7 @@ for manifest in plugin/engram/.claude-plugin/plugin.json plugin/engram/.codex-pl
 done
 go_command="${ENGRAM_BOOTSTRAP_GO:-go}"
 parser_cc="${ENGRAM_PARSER_CC:-x86_64-w64-mingw32-gcc}"
-[[ "$("$go_command" version)" == 'go version go1.26.6 linux/amd64' ]] || { echo 'parser policy requires Go 1.26.6 Linux amd64 in the release goreleaser-cross:v1.25.9 image' >&2; exit 1; }
+[[ "$("$go_command" version)" == 'go version go1.26.9 linux/amd64' ]] || { echo 'parser policy requires Go 1.26.9 Linux amd64 in the release goreleaser-cross:v1.25.9 image' >&2; exit 1; }
 compiler_version="$("$parser_cc" --version)"
 [[ "${compiler_version%%$'\n'*}" == 'x86_64-w64-mingw32-gcc (GCC) 13-win32' ]] || { echo 'parser policy requires the release goreleaser-cross:v1.25.9 GCC 13-win32 compiler' >&2; exit 1; }
 workdir="$(mktemp -d)"

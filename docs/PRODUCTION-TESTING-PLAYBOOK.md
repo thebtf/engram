@@ -9,7 +9,7 @@ critical suite or customer-mode release emulation.
 
 - Docker Engine and Compose v2
 - Trivy
-- Go 1.26.6+
+- Go 1.26.9+
 - Node.js 22+
 - PowerShell 7+
 

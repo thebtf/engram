@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.50.4] - 2026-10-08
+
+Prepare the accepted missing-anchor onboarding repair for the unified release. The actual merged PR number is pending. This version adds no migration, historical-memory adoption or OpenClaw release; publication alone does not prove installed-client recovery.
+
+### Fixed
+
+- Keep V3 onboarding tools reachable in existing Git repositories that have no anchor. Distinguish genuine absence from malformed, untracked, unreadable, dangling-symlink and tracked-but-deleted anchors; retain those refusals, backend authentication, and the prohibition on unresolved project-scoped memory access. Discovery creates no project or anchor and does not migrate existing memory.
+- Refuse fresh onboarding and offline anchor replacement when a committed `.engram-project` has a staged deletion, even after it disappears from the index. Share the index/HEAD absence proof between discovery and initialization, and refuse initialization when Git inspection fails; preserve the existing UUID and repository index.
+- Verify a missing anchor against a resolved HEAD commit or a genuinely unborn branch without prior HEAD/reference history. A malformed branch ref or lost current-branch ref cannot make a committed repository look newly unonboarded, and offline initialization refuses a replacement UUID.
+- Refuse a new anchor when another visible ref tip or linked/detached worktree HEAD in the same Git repository carries `.engram-project`, including packed refs and pre-anchor branches. Inspect only bounded visible evidence, never copy or select the sibling identity automatically, and keep genuinely never-anchored repositories eligible for onboarding.
+- Include index-tracked, not-yet-committed anchors in bounded sibling-worktree evidence, matching actual V3 discovery and registration input requirements. Preserve untracked-only sibling files, refuse unreadable indexes, and parse Git's NUL-delimited worktree paths without quoted/newline path confusion.
+- Bind V3 Git discovery, anchor tracking, ref/worktree/index evidence and descriptor remotes to the selected repository rather than inherited repository-location overrides. Remove only Git's directory, worktree, index, object-directory, alternate-object-directory, common-directory and namespace overrides from each child command; preserve other Git configuration and the original process environment.
+- Apply the existing tools/list discovery deadline before V3 identity inspection, and propagate request cancellation through selected-root, anchor, ref/worktree/index and remote Git commands. Cancelled or timed-out inspection refuses discovery without granting unscoped authority or changing identity evidence.
+- Raise the maintained Go 1.26 toolchain to 1.26.9 and `golang.org/x/net` to v0.60.0 for the twelve reachable advisories disclosed on 2026-10-08. Align canonical producer and installer contracts; retain release-specific validation of regenerated raw client/parser assets. Update only the dependency versions required by the upstream module graph, without changing V3 identity behavior or weakening security gates.
+
 ## [6.50.3] - 2026-10-07
 
 Stable release of the accepted installed-memory repair in PR #550, including bounded UTF-8 automatic context and deadline-aware hybrid retrieval, plus the release-input repairs below. Preserve the published `v6.50.3-rc.1` tag and assets; this version alignment adds no product behavior, migration, or OpenClaw release. Publication does not establish Watchtower adoption or installed-client acceptance.
@@ -2144,7 +2159,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.3...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.4...HEAD
+[6.50.4]: https://github.com/thebtf/engram/compare/v6.50.3...v6.50.4
 [6.50.3]: https://github.com/thebtf/engram/compare/v6.50.3-rc.1...v6.50.3
 [6.50.3-rc.1]: https://github.com/thebtf/engram/compare/v6.50.2...v6.50.3-rc.1
 [6.50.2]: https://github.com/thebtf/engram/compare/v6.50.1...v6.50.2

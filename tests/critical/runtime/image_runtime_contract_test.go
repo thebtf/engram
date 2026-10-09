@@ -607,7 +607,7 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 			t.Fatalf("image gate lacks unprivileged scanner contract %q", fragment)
 		}
 	}
-	goBuilder := "golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36"
+	goBuilder := "golang:1.26.9-bookworm@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c"
 	requireFileContains(t, filepath.Join(repo, "Dockerfile"), goBuilder)
 	if !strings.Contains(scanner, "go_builder = '"+goBuilder+"'") {
 		t.Fatal("image acceptance evidence records a Go builder that differs from the Dockerfile source")

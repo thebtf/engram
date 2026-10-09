@@ -77,7 +77,7 @@ func TestResolveProjectV3TopologyBehaviorMatrix(t *testing.T) {
 	resolve := func(vectorID, root, remoteName string) {
 		t.Helper()
 		vector := corpus.vector(t, vectorID)
-		anchor, err := DiscoverAnchorV3(root, "repository")
+		anchor, err := DiscoverAnchorV3(t.Context(), root, "repository")
 		if err != nil {
 			t.Fatalf("%s: discover anchor: %v", vectorID, err)
 		}
@@ -127,7 +127,7 @@ func TestResolveProjectV3TopologyBehaviorMatrix(t *testing.T) {
 		t.Fatalf("make nested repository: %v", err)
 	}
 	runGit(t, nested, "init")
-	if _, err := DiscoverAnchorV3(nested, "repository"); err == nil {
+	if _, err := DiscoverAnchorV3(t.Context(), nested, "repository"); err == nil {
 		t.Fatal("nested repository inherited its parent anchor")
 	}
 
@@ -139,7 +139,7 @@ func TestResolveProjectV3TopologyBehaviorMatrix(t *testing.T) {
 	if err := os.Mkdir(directoryChild, 0o700); err != nil {
 		t.Fatalf("make directory child: %v", err)
 	}
-	if _, err := DiscoverAnchorV3(directoryChild, "directory"); err == nil {
+	if _, err := DiscoverAnchorV3(t.Context(), directoryChild, "directory"); err == nil {
 		t.Fatal("directory discovery searched upward")
 	}
 

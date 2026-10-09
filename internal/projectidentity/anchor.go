@@ -2,6 +2,7 @@ package projectidentity
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -20,6 +22,8 @@ import (
 const anchorFilenameV3 = ".engram-project"
 
 var (
+	// ErrAnchorMissingV3 means no filesystem entry or index/HEAD anchor exists.
+	ErrAnchorMissingV3     = errors.New("missing V3 project anchor")
 	errAnchorInvalidV3     = errors.New("invalid V3 project anchor")
 	errDescriptorInvalidV3 = errors.New("invalid V3 project descriptor")
 )
@@ -110,7 +114,15 @@ func validUUID(raw string) bool {
 }
 
 // DiscoverAnchorV3 reads only the anchor directly under the explicitly selected root.
-func DiscoverAnchorV3(root, scope string) (AnchorV3, error) {
+func DiscoverAnchorV3(ctx context.Context, root, scope string) (anchor AnchorV3, err error) {
+	defer func() {
+		if contextErr := ctx.Err(); contextErr != nil {
+			anchor, err = AnchorV3{}, contextErr
+		}
+	}()
+	if err := ctx.Err(); err != nil {
+		return AnchorV3{}, err
+	}
 	if scope != "repository" && scope != "directory" {
 		return AnchorV3{}, errAnchorInvalidV3
 	}
@@ -122,26 +134,66 @@ func DiscoverAnchorV3(root, scope string) (AnchorV3, error) {
 	if err != nil || !info.IsDir() {
 		return AnchorV3{}, errAnchorInvalidV3
 	}
-	if scope == "repository" && !isSelectedGitRoot(selectedRoot) {
+	if scope == "repository" && !isSelectedGitRoot(ctx, selectedRoot) {
 		return AnchorV3{}, errAnchorInvalidV3
 	}
 
-	raw, err := os.ReadFile(filepath.Join(selectedRoot, anchorFilenameV3))
+	anchorPath := filepath.Join(selectedRoot, anchorFilenameV3)
+	raw, err := os.ReadFile(anchorPath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if _, statErr := os.Lstat(anchorPath); errors.Is(statErr, os.ErrNotExist) {
+				if scope == "directory" {
+					return AnchorV3{}, ErrAnchorMissingV3
+				}
+				if repositoryAnchorAbsentV3(ctx, selectedRoot) {
+					return AnchorV3{}, ErrAnchorMissingV3
+				}
+			}
+		}
 		return AnchorV3{}, errAnchorInvalidV3
 	}
-	anchor, err := ParseAnchorV3(raw)
+	anchor, err = ParseAnchorV3(raw)
 	if err != nil || anchor.Scope != scope {
 		return AnchorV3{}, errAnchorInvalidV3
 	}
-	if scope == "repository" && !isTrackedAnchor(selectedRoot) {
+	if scope == "repository" && !isTrackedAnchor(ctx, selectedRoot) {
 		return AnchorV3{}, errAnchorInvalidV3
 	}
 	return anchor, nil
 }
 
-func isSelectedGitRoot(root string) bool {
-	output, err := exec.Command("git", "-C", root, "rev-parse", "--show-toplevel").Output()
+// RepositoryGitEnvironmentV3 preserves configuration while removing inherited
+// overrides of the repository, worktree, index, object store and ref namespace.
+// Each Git command receives its own environment; the process is never changed.
+func RepositoryGitEnvironmentV3() []string {
+	environment := os.Environ()
+	selected := environment[:0]
+	for _, entry := range environment {
+		name, _, _ := strings.Cut(entry, "=")
+		locationOverride := false
+		for _, override := range [...]string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE"} {
+			if name == override || runtime.GOOS == "windows" && strings.EqualFold(name, override) {
+				locationOverride = true
+				break
+			}
+		}
+		if !locationOverride {
+			selected = append(selected, entry)
+		}
+	}
+	return selected
+}
+
+func anchorGitCommandV3(ctx context.Context, root string, args ...string) *exec.Cmd {
+	command := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
+	command.Env = RepositoryGitEnvironmentV3()
+	command.WaitDelay = 100 * time.Millisecond
+	return command
+}
+
+func isSelectedGitRoot(ctx context.Context, root string) bool {
+	output, err := anchorGitCommandV3(ctx, root, "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		return false
 	}
@@ -149,8 +201,144 @@ func isSelectedGitRoot(root string) bool {
 	return samePath(root, gitRoot)
 }
 
-func isTrackedAnchor(root string) bool {
-	return exec.Command("git", "-C", root, "ls-files", "--error-unmatch", "--", anchorFilenameV3).Run() == nil
+func isTrackedAnchor(ctx context.Context, root string) bool {
+	return anchorGitCommandV3(ctx, root, "ls-files", "--error-unmatch", "--", anchorFilenameV3).Run() == nil
+}
+
+func repositoryAnchorAbsentV3(ctx context.Context, root string) bool {
+	tracked, err := anchorGitCommandV3(ctx, root, "ls-files", "--", anchorFilenameV3).Output()
+	if err != nil || len(tracked) != 0 {
+		return false
+	}
+	head, err := anchorGitCommandV3(ctx, root, "rev-parse", "--verify", "HEAD^{commit}").Output()
+	if err == nil {
+		return repositoryVisibleAnchorsAbsentV3(ctx, root, strings.TrimSpace(string(head)))
+	}
+	branch, err := anchorGitCommandV3(ctx, root, "symbolic-ref", "--quiet", "HEAD").Output()
+	if err != nil || !strings.HasPrefix(string(branch), "refs/heads/") {
+		return false
+	}
+	refPath, err := anchorGitCommandV3(ctx, root, "rev-parse", "--git-path", strings.TrimSpace(string(branch))).Output()
+	if err != nil {
+		return false
+	}
+	path := strings.TrimSpace(string(refPath))
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	// A missing branch with a HEAD reflog is a lost existing identity, not
+	// verified first use. Git resolves this path for ordinary and linked roots.
+	logPath, err := anchorGitCommandV3(ctx, root, "rev-parse", "--git-path", "logs/HEAD").Output()
+	if err != nil {
+		return false
+	}
+	path = strings.TrimSpace(string(logPath))
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+	_, err = os.Lstat(path)
+	if !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	refs, err := anchorGitCommandV3(ctx, root, "for-each-ref", "--count=1", "--format=%(refname)").Output()
+	return err == nil && len(refs) == 0 && repositoryVisibleAnchorsAbsentV3(ctx, root, "")
+}
+
+const maxRepositoryAnchorEvidenceV3 = 128
+
+func repositoryVisibleAnchorsAbsentV3(ctx context.Context, root, head string) bool {
+	refs, err := anchorGitCommandV3(ctx, root, "for-each-ref", "--count=129", "--format=%(objectname)").Output()
+	if err != nil {
+		return false
+	}
+	tips := strings.Fields(string(refs))
+	if len(tips) > maxRepositoryAnchorEvidenceV3 {
+		return false
+	}
+	command := anchorGitCommandV3(ctx, root, "worktree", "list", "--porcelain", "-z")
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return false
+	}
+	if err := command.Start(); err != nil {
+		stdout.Close()
+		return false
+	}
+	worktrees, readErr := io.ReadAll(io.LimitReader(stdout, 128*1024+1))
+	stdout.Close()
+	if err := command.Wait(); err != nil || readErr != nil || len(worktrees) > 128*1024 {
+		return false
+	}
+	if len(worktrees) == 0 || worktrees[len(worktrees)-1] != 0 {
+		return false
+	}
+	worktreeCount := 0
+	worktreePath := ""
+	bare := false
+	for _, field := range strings.Split(string(worktrees), "\x00") {
+		if field == "" {
+			if worktreePath != "" && !bare {
+				tracked, err := anchorGitCommandV3(ctx, worktreePath, "ls-files", "-z", "--", anchorFilenameV3).Output()
+				if err != nil || len(tracked) != 0 {
+					return false
+				}
+			}
+			worktreePath = ""
+			bare = false
+			continue
+		}
+		if path, ok := strings.CutPrefix(field, "worktree "); ok {
+			worktreeCount++
+			if worktreePath != "" || path == "" || !filepath.IsAbs(path) || worktreeCount > maxRepositoryAnchorEvidenceV3 {
+				return false
+			}
+			worktreePath = path
+			continue
+		}
+		if worktreePath == "" {
+			return false
+		}
+		if field == "bare" {
+			bare = true
+		} else if tip, ok := strings.CutPrefix(field, "HEAD "); ok {
+			if strings.Trim(tip, "0") != "" {
+				tips = append(tips, tip)
+			}
+		} else if field != "detached" && field != "locked" && field != "prunable" &&
+			!strings.HasPrefix(field, "branch ") && !strings.HasPrefix(field, "locked ") && !strings.HasPrefix(field, "prunable ") {
+			return false
+		}
+	}
+	if worktreePath != "" {
+		return false
+	}
+	if worktreeCount == 0 {
+		return false
+	}
+	if head != "" {
+		tips = append(tips, head)
+	}
+	seen := make(map[string]struct{}, len(tips))
+	for _, tip := range tips {
+		if len(tip) != 40 && len(tip) != 64 {
+			return false
+		}
+		if _, exists := seen[tip]; exists {
+			continue
+		}
+		if len(seen) == maxRepositoryAnchorEvidenceV3 {
+			return false
+		}
+		seen[tip] = struct{}{}
+		anchor, err := anchorGitCommandV3(ctx, root, "ls-tree", "--name-only", tip, "--", anchorFilenameV3).Output()
+		if err != nil || len(anchor) != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func samePath(left, right string) bool {

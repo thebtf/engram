@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "package_version": "6.50.3",
+  "package_version": "6.50.4",
   "targets": {
     "win32-x64": {
-      "version": "6.50.3",
+      "version": "6.50.4",
       "asset": "uci-parser-windows-amd64.exe",
-      "size": 7941120,
-      "sha256": "361768217de71939b681387c02d9d93acde854d6842e0c6230907fc8926aa76e"
+      "size": 7944704,
+      "sha256": "6ba3f896ea35f6a195610cabe4c36270c3cca27486e3f115b81da6428328deba"
     },
     "linux-x64": null,
     "darwin-arm64": null
