@@ -2,8 +2,10 @@ package engramcore
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +19,7 @@ import (
 	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/proxy"
 	pb "github.com/thebtf/engram/proto/engram/v1"
+	muxcore "github.com/thebtf/mcp-mux/muxcore"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -146,8 +149,8 @@ func TestProxyLegacyColdScopeRefusesConfigTransition(t *testing.T) {
 	original := resolveLegacyGitIdentity
 	t.Cleanup(func() { resolveLegacyGitIdentity = original })
 	changed := false
-	resolveLegacyGitIdentity = func(ctx context.Context, cwd, name string) (string, proxy.ProjectIdentityV2, error) {
-		slug, identity, err := original(ctx, cwd, name)
+	resolveLegacyGitIdentity = func(ctx context.Context, cwd, name, prefix string) (string, proxy.ProjectIdentityV2, error) {
+		slug, identity, err := original(ctx, cwd, name, prefix)
 		if err == nil && !changed {
 			changed = true
 			if output, err := exec.Command("git", "-C", cwd, "remote", "set-url", "origin", "https://git.example.test/new/repo.git").CombinedOutput(); err != nil {
@@ -169,6 +172,165 @@ func TestProxyLegacyColdScopeRefusesConfigTransition(t *testing.T) {
 		if srv.callReq.GetProjectIdentity().GetGitRemote() != "https://git.example.test/new/repo.git" {
 			t.Fatal("subsequent request reused stale origin")
 		}
+	}
+}
+
+func TestLegacyBatchedMetadataPreservesSelectedScope(t *testing.T) {
+	root := daemonV3Repository(t)
+	if err := os.WriteFile(filepath.Join(root, ".engram-project"), []byte(`{"name":"engram"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"config", "user.name", "identity-fixture"},
+		{"config", "user.email", "identity@example.invalid"},
+		{"remote", "set-url", "origin", "fixture:repo.git"},
+		{"config", "url.https://fixture-user:fixture-credential@example.invalid/acme/.insteadOf", "fixture:"},
+		{"add", ".engram-project"},
+		{"commit", "--quiet", "-m", "identity fixture"},
+	} {
+		if output, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("fixture Git: %v: %s", err, output)
+		}
+	}
+	linked := filepath.Join(t.TempDir(), "linked")
+	if output, err := exec.Command("git", "-C", root, "worktree", "add", "--quiet", "--detach", linked, "HEAD").CombinedOutput(); err != nil {
+		t.Fatalf("fixture worktree: %v: %s", err, output)
+	}
+	for _, selectedRoot := range []string{root, linked} {
+		for _, prefix := range []string{"", "nested/"} {
+			t.Run(filepath.Base(selectedRoot)+"/"+prefix, func(t *testing.T) {
+				selected := filepath.Join(selectedRoot, prefix)
+				if err := os.MkdirAll(selected, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				index, err := exec.Command("git", "-C", selectedRoot, "rev-parse", "--path-format=absolute", "--git-path", "index").Output()
+				if err != nil {
+					t.Fatal(err)
+				}
+				indexPath := strings.TrimSpace(string(index))
+				before, err := os.ReadFile(indexPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				project := muxcore.ProjectContext{ID: "fixture", Cwd: selected}
+				mod := NewModuleWithClientInstanceID("fixture-daemon-install")
+				identity, enabled, err := mod.v3Identity(context.Background(), project)
+				if err != nil || enabled || identity != nil {
+					t.Fatalf("legacy classification: enabled=%t err=%v", enabled, err)
+				}
+				slug, metadata, err := mod.proxyV2Identity(context.Background(), project)
+				const remote = "https://example.invalid/acme/repo.git"
+				want := fmt.Sprintf("%x", sha256.Sum256([]byte(remote+"/"+prefix)))[:8]
+				if err != nil || slug != want || metadata.GetGitRemote() != remote || metadata.GetRelativePath() != prefix {
+					t.Fatalf("selected scope or normalized origin changed: slug=%s prefix=%q err=%v", slug, metadata.GetRelativePath(), err)
+				}
+				for _, name := range []string{"config", "index", "HEAD", "config.worktree"} {
+					output, err := exec.Command("git", "-C", selectedRoot, "rev-parse", "--path-format=absolute", "--git-path", name).Output()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, ok := mod.cache.legacy[cacheKey(project)].files[filepath.Clean(strings.TrimSpace(string(output)))]; !ok {
+						t.Fatalf("batched metadata lost %s dependency", name)
+					}
+				}
+				after, err := os.ReadFile(indexPath)
+				if err != nil || string(before) != string(after) {
+					t.Fatal("metadata resolution changed the index")
+				}
+				if prefix != "" {
+					for _, marker := range []string{".engram-project", ".engram-project-v2.json"} {
+						if _, err := os.Stat(filepath.Join(selected, marker)); !os.IsNotExist(err) {
+							t.Fatal("metadata resolution created a selected-directory marker")
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestLegacyConfigAbsenceCreationInvalidatesScope(t *testing.T) {
+	for _, variable := range []string{"GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL"} {
+		for _, phase := range []string{"warm", "during-resolution"} {
+			t.Run(variable+"/"+phase, func(t *testing.T) {
+				configDir := t.TempDir()
+				t.Setenv("GIT_CONFIG_NOSYSTEM", "0")
+				t.Setenv("GIT_CONFIG_SYSTEM", filepath.Join(configDir, "system.gitconfig"))
+				t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(configDir, "global.gitconfig"))
+				root := daemonV3Repository(t)
+				if err := os.WriteFile(filepath.Join(root, ".engram-project"), []byte(`{"name":"engram"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				project := muxcore.ProjectContext{ID: "fixture", Cwd: root}
+				mod := NewModuleWithClientInstanceID("fixture-daemon-install")
+				createConfig := func() {
+					if err := os.WriteFile(os.Getenv(variable), []byte("[url \"https://example.invalid/changed/\"]\n\tinsteadOf = https://git.example.test/Platform/\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if phase == "warm" {
+					if _, enabled, err := mod.v3Identity(context.Background(), project); err != nil || enabled {
+						t.Fatalf("initial legacy admission: %v", err)
+					}
+					createConfig()
+				} else {
+					original := resolveLegacyGitIdentity
+					t.Cleanup(func() { resolveLegacyGitIdentity = original })
+					resolveLegacyGitIdentity = func(ctx context.Context, cwd, name, prefix string) (string, proxy.ProjectIdentityV2, error) {
+						slug, identity, err := original(ctx, cwd, name, prefix)
+						if err == nil {
+							createConfig()
+						}
+						return slug, identity, err
+					}
+					if _, _, err := mod.v3Identity(context.Background(), project); err == nil {
+						t.Fatal("config created during resolution granted stale scope")
+					}
+					if _, ok := mod.cache.legacy[cacheKey(project)]; ok {
+						t.Fatal("unstable scope remained cached")
+					}
+					resolveLegacyGitIdentity = original
+				}
+				if _, enabled, err := mod.v3Identity(context.Background(), project); err != nil || enabled {
+					t.Fatalf("refreshed legacy admission: %v", err)
+				}
+				slug, identity, err := mod.proxyV2Identity(context.Background(), project)
+				const remote = "https://example.invalid/changed/Daemon.git"
+				want := fmt.Sprintf("%x", sha256.Sum256([]byte(remote+"/")))[:8]
+				if err != nil || slug != want || identity.GetGitRemote() != remote {
+					t.Fatalf("created config reused stale scope: slug=%s err=%v", slug, err)
+				}
+			})
+		}
+	}
+}
+
+func TestLegacyConfigDependenciesRequireFullDerivation(t *testing.T) {
+	root := daemonV3Repository(t)
+	if output, err := exec.Command("git", "-C", root, "config", "fixture.multiline", "first\nGIT_CONFIG_GLOBAL=not-a-path\nlast").CombinedOutput(); err != nil {
+		t.Fatalf("multiline config: %v: %s", err, output)
+	}
+	if _, eligible, err := legacyConfigDependencies(context.Background(), root); err != nil || !eligible {
+		t.Fatalf("file-only config is not complete: %v", err)
+	}
+	for _, key := range []string{"include.path", "includeIf.gitdir:/not-selected/.path"} {
+		t.Run(key, func(t *testing.T) {
+			if output, err := exec.Command("git", "-C", root, "config", key, filepath.Join(root, "absent.gitconfig")).CombinedOutput(); err != nil {
+				t.Fatalf("include config: %v: %s", err, output)
+			}
+			if _, eligible, err := legacyConfigDependencies(context.Background(), root); err != nil || eligible {
+				t.Fatalf("incomplete include config was reusable: eligible=%t err=%v", eligible, err)
+			}
+			if output, err := exec.Command("git", "-C", root, "config", "--unset", key).CombinedOutput(); err != nil {
+				t.Fatalf("remove fixture include: %v: %s", err, output)
+			}
+		})
+	}
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "fixture.command")
+	t.Setenv("GIT_CONFIG_VALUE_0", "value")
+	if _, eligible, err := legacyConfigDependencies(context.Background(), root); err != nil || eligible {
+		t.Fatalf("command-origin config was reusable: eligible=%t err=%v", eligible, err)
 	}
 }
 

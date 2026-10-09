@@ -223,10 +223,21 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 		c.entries.Delete(key)
 		c.identities.Delete(key)
 	}
-	output, err := exec.CommandContext(ctx, "git", "-C", key.cwd, gitRevParse, gitShowTopLevel).Output()
-	root := strings.TrimSpace(string(output))
-	if err != nil || root == "" {
+	environment := legacyGitEnvironment()
+	output, err := exec.CommandContext(ctx, "git", "-C", key.cwd, gitRevParse, "--path-format=absolute", gitShowTopLevel, "--show-prefix", "--git-path", "config", "--git-path", "index", "--git-path", "HEAD", "--git-path", "config.worktree").Output()
+	if err != nil {
 		return false, ctx.Err()
+	}
+	metadata := strings.Split(strings.TrimSuffix(string(output), "\n"), "\n")
+	if len(metadata) != 6 {
+		return false, nil
+	}
+	for index := range metadata {
+		metadata[index] = strings.TrimSpace(metadata[index])
+	}
+	root, prefix := metadata[0], metadata[1]
+	if root == "" {
+		return false, nil
 	}
 	if !legacySelectedScopeUnchanged(key.cwd, root) {
 		return false, nil
@@ -257,14 +268,7 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return false, nil
 	}
-	paths, err := exec.CommandContext(ctx, "git", "-C", root, gitRevParse, "--path-format=absolute", "--git-path", "config", "--git-path", "index", "--git-path", "HEAD", "--git-path", "config.worktree").Output()
-	if err != nil {
-		return false, ctx.Err()
-	}
-	gitPaths := strings.Split(strings.TrimSpace(string(paths)), "\n")
-	if len(gitPaths) != 4 {
-		return false, nil
-	}
+	gitPaths := metadata[2:]
 	gitPaths = append(gitPaths, filepath.Join(root, ".git"))
 	for _, variable := range []string{"GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL"} {
 		output, err := exec.CommandContext(ctx, "git", "-C", root, "var", variable).Output()
@@ -284,7 +288,6 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 	if err := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "--error-unmatch", "--", ".engram-project").Run(); err != nil {
 		return false, ctx.Err()
 	}
-	environment := legacyGitEnvironment()
 	dependencies, eligible, err := legacyConfigDependencies(ctx, root)
 	if err != nil {
 		return false, ctx.Err()
@@ -293,11 +296,16 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 	if err != nil || !legacyFilesUnchanged(initial) {
 		return false, v3InputError("PROJECT_ANCHOR_INVALID")
 	}
-	slug, identity, err := resolveLegacyGitIdentity(ctx, key.cwd, name)
+	slug, identity, err := resolveLegacyGitIdentity(ctx, key.cwd, name, prefix)
 	if err != nil {
 		return false, ctx.Err()
 	}
-	afterDependencies, afterEligible, err := legacyConfigDependencies(ctx, root)
+	// Without includes or non-file origins, the fingerprinted inputs fully
+	// determine the dependency set, including currently absent config files.
+	afterDependencies, afterEligible := dependencies, eligible
+	if !eligible {
+		afterDependencies, afterEligible, err = legacyConfigDependencies(ctx, root)
+	}
 	afterRaw, markerErr := os.ReadFile(filepath.Join(root, ".engram-project"))
 	afterSelected, selectedErr := os.Stat(key.cwd)
 	if err != nil || markerErr != nil || selectedErr != nil || !os.SameFile(selectedInfo, afterSelected) || !bytes.Equal(raw, afterRaw) ||
